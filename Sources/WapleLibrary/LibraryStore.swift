@@ -10,7 +10,11 @@ public final class LibraryStore {
     public init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
         self.indexURL = baseDirectory.appendingPathComponent("library.json")
-        try? FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        } catch {
+            NSLog("[Waple] failed to create library directory at \(baseDirectory.path): \(error)")
+        }
         load()
     }
 
@@ -33,8 +37,11 @@ public final class LibraryStore {
 
     private func save() {
         let idx = Index(entries: entries, selectedId: selectedId)
-        if let data = try? JSONEncoder().encode(idx) {
-            try? data.write(to: indexURL)
+        do {
+            let data = try JSONEncoder().encode(idx)
+            try data.write(to: indexURL, options: [.atomic])
+        } catch {
+            NSLog("[Waple] failed to save library index at \(indexURL.path): \(error)")
         }
     }
 
