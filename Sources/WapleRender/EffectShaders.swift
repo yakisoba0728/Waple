@@ -17,7 +17,14 @@ enum EffectShaders {
         case "tint":
             let col = c["color"] ?? [1, 0, 0]
             let r = col.count > 0 ? col[0] : 1, g = col.count > 1 ? col[1] : 0, b = col.count > 2 ? col[2] : 0
-            return [r, g, b, f("alpha", 1)]
+            return [r, g, b, f("alpha", 1), blendMode(c)]
+        case "waterripple":
+            // strength/scale 키: ui_editor_properties_* → 실제 씬 키(ripple_*) → 단축 키 → 기본값.
+            // 설계 문서 §2 정찰: 실제 오브젝트 constants 는 ratio, ripple_scale, ripple_strength.
+            let strength = c["ui_editor_properties_ripple_strength"]?.first ?? c["ripple_strength"]?.first ?? c["strength"]?.first ?? 0.1
+            let scale = c["ui_editor_properties_ripple_scale"]?.first ?? c["ripple_scale"]?.first ?? c["scale"]?.first ?? 1
+            let scrollSpeed = c["scrollspeed"]?.first ?? c["speed"]?.first ?? 0.05
+            return [strength, scale, scrollSpeed]
         case "scroll":
             let sc = c["scale"] ?? [1, 1]
             let sp = c["speed"] ?? c["scrollspeed"] ?? [0.05, 0]
@@ -30,6 +37,14 @@ enum EffectShaders {
         default:
             return nil
         }
+    }
+
+    /// tint 블렌드 모드 인덱스. 지원: 0=normal,1=multiply,2=add,3=screen,4=overlay. 미지원/미지정→0.
+    /// NOTE: WE 의 정확한 BLENDMODE enum 정수 매핑은 시각 게이트에서 확인 필요(현재는 인덱스 패스스루).
+    private static func blendMode(_ c: [String: [Float]]) -> Float {
+        let raw = c["blendmode"]?.first ?? c["ui_editor_properties_blend_mode"]?.first ?? 0
+        let idx = Int(raw.rounded())
+        return (0...4).contains(idx) ? Float(idx) : 0
     }
 
     private static let header = """
@@ -72,13 +87,38 @@ enum EffectShaders {
         """,
         "tint": """
         fragment float4 ef_main(EOut in [[stage_in]], texture2d<float> fb [[texture(0)]],
-                                texture2d<float> mask [[texture(1)]], constant float* P [[buffer(0)]]) {
+                                texture2d<float> mask [[texture(1)]], texture2d<float> t2 [[texture(2)]],
+                                constant float* P [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
             float4 c = fb.sample(s, in.uv);
             float m = mask.sample(s, in.uv).r;
+            float3 base = c.rgb;
             float3 tint = float3(P[1], P[2], P[3]);
-            c.rgb = mix(c.rgb, tint, P[4] * m);
+            // 블렌드 모드(P[5]): 0=normal,1=multiply,2=add,3=screen,4=overlay.
+            int mode = int(P[5] + 0.5);
+            float3 blended;
+            if (mode == 1) { blended = base * tint; }
+            else if (mode == 2) { blended = base + tint; }
+            else if (mode == 3) { blended = 1.0 - (1.0 - base) * (1.0 - tint); }
+            else if (mode == 4) {
+                blended = select(2.0 * base * tint, 1.0 - 2.0 * (1.0 - base) * (1.0 - tint), base >= 0.5);
+            } else { blended = tint; }
+            c.rgb = mix(base, blended, P[4] * m);
             return c;
+        }
+        """,
+        "waterripple": """
+        fragment float4 ef_main(EOut in [[stage_in]], texture2d<float> fb [[texture(0)]],
+                                texture2d<float> normalMap [[texture(1)]], texture2d<float> mask [[texture(2)]],
+                                constant float* P [[buffer(0)]]) {
+            constexpr sampler s(filter::linear, address::repeat);
+            constexpr sampler sc(filter::linear, address::clamp_to_edge);
+            // P[0]=time, P[1]=strength, P[2]=scale, P[3]=scrollSpeed.
+            float2 nUV = in.uv * P[2] + float2(P[0] * P[3], P[0] * P[3] * 0.5);
+            float3 n = normalMap.sample(s, nUV).rgb * 2.0 - 1.0;
+            float maskV = mask.sample(sc, in.uv).r;
+            float2 distort = n.xy * P[1] * maskV;
+            return fb.sample(sc, in.uv + distort);
         }
         """,
         "scroll": """
