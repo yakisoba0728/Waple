@@ -40,6 +40,7 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
     private func startCapture() async {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            guard running else { return }
             guard let display = content.displays.first else { feedZeros(); return }
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
@@ -54,6 +55,12 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
             let stream = SCStream(filter: filter, configuration: config, delegate: nil)
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue(label: "waple.audio"))
             try await stream.startCapture()
+            // stop() 이 await 도중 실행됐다면 self.stream 이 아직 nil 이라 stopCapture 가
+            // no-op 였다. 캡처가 주인 없이 계속 도는 것을 막기 위해 즉시 중단한다.
+            guard running else {
+                stream.stopCapture { _ in }
+                return
+            }
             self.stream = stream
         } catch {
             feedZeros()
