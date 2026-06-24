@@ -53,12 +53,13 @@ extension SceneDocument {
             if (obj["visible"] as? Bool) == false { continue }
             if let vis = obj["visible"] as? [String: Any], (vis["value"] as? Bool) == false { continue }
             guard let tex = resolveTexture(imagePath: imagePath, package: package) else { continue }
+            let angles = floats(obj["angles"] as? String)
             layers.append(SceneLayer(
                 textureEntryName: tex,
                 origin: vec2(obj["origin"] as? String) ?? Vec2(x: 0, y: 0),
                 size: vec2(obj["size"] as? String) ?? Vec2(x: Float(pw), y: Float(ph)),
                 scale: vec2(obj["scale"] as? String) ?? Vec2(x: 1, y: 1),
-                angleZ: floats(obj["angles"] as? String).count >= 3 ? floats(obj["angles"] as? String)[2] : 0,
+                angleZ: angles.count >= 3 ? angles[2] : 0,
                 alpha: float(obj["alpha"]) ?? 1,
                 color: vec3(obj["color"] as? String) ?? Vec3(x: 1, y: 1, z: 1),
                 brightness: float(obj["brightness"]) ?? 1,

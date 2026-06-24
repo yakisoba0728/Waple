@@ -64,6 +64,19 @@ final class SceneDocumentTests: XCTestCase {
         }
     }
 
+    /// angleZ 는 angles[2](Z 회전), scale 은 size 에 곱해지는 2D 스케일을 파싱해야 한다.
+    func testParsesAngleZAndScale() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"2 3 1",
+                     "angles":"10 20 30","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let layer = try XCTUnwrap(try SceneDocument.parse(package: p).layers.first)
+        XCTAssertEqual(layer.angleZ, 30, accuracy: 1e-6)
+        XCTAssertEqual(layer.scale, Vec2(x: 2, y: 3))
+    }
+
     func testParsesParallaxDepthAndGeneral() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0",
