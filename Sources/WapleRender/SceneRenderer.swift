@@ -215,7 +215,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             if layer.effects.isEmpty { displayTextures.append(layer.texture); continue }
             guard var current = makeOffscreen(layer.texWidth, layer.texHeight, device),
                   let evb = effectVertexBuffer else { displayTextures.append(layer.texture); continue }
-            blit(layer.texture, to: current, device: device, queue: queue)  // 베이스 복사
+            blit(layer.texture, to: current, queue: queue)  // 베이스 복사
             for eff in layer.effects {
                 guard let next = makeOffscreen(layer.texWidth, layer.texHeight, device) else { break }
                 applyEffect(eff, src: current, dst: next, evb: evb, time: time, cb: cb)
@@ -259,7 +259,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         cb.commit()
     }
 
-    private func blit(_ src: MTLTexture, to dst: MTLTexture, device: MTLDevice, queue: MTLCommandQueue) {
+    private func blit(_ src: MTLTexture, to dst: MTLTexture, queue: MTLCommandQueue) {
         guard let cb = queue.makeCommandBuffer(), let b = cb.makeBlitCommandEncoder() else { return }
         let w = min(src.width, dst.width), h = min(src.height, dst.height)
         b.copy(from: src, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
