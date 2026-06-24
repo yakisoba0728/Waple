@@ -1,0 +1,216 @@
+import Foundation
+import simd
+
+/// 한 파티클의 상태. 내부 `pos`/`vel`/`rotation` 은 물리 적분값(base).
+/// `size`/`alpha`/`color`/`pos`(반환 스냅샷) 는 age 기반 파생값으로 매 step 재계산된다.
+public struct Particle {
+    public var pos = SIMD3<Float>(0, 0, 0)        // 씬 로컬 좌표(Y-up)
+    public var vel = SIMD3<Float>(0, 0, 0)
+    public var color = SIMD3<Float>(1, 1, 1)      // 0..1
+    public var rotation = SIMD3<Float>(0, 0, 0)   // radians
+    public var angularVel = SIMD3<Float>(0, 0, 0)
+    public var size: Float = 1
+    public var alpha: Float = 1
+    public var age: Float = 0
+    public var lifetime: Float = 1
+    public var initialSize: Float = 1
+    public var initialAlpha: Float = 1
+    public var initialColor = SIMD3<Float>(1, 1, 1)
+    // 스폰 시 결정되는 진동 파라미터(절대식 평가).
+    var oscPosFreq: Float = 0, oscPosScale: Float = 0, oscPosPhase: Float = 0
+    var oscPosMask = SIMD3<Float>(0, 0, 0)
+    var oscAlphaFreq: Float = 0, oscAlphaScale: Float = 0, oscAlphaPhase: Float = 0
+    public init() {}
+}
+
+/// 순수 CPU 파티클 시뮬레이터(Metal/벽시계 無, 시드 결정적).
+public struct ParticleSimulator {
+    private let def: ParticleSystemDef
+    private var rng: SplitMix64
+    private var particles: [Particle] = []
+    private var acc: [Float]
+    private var time: Float = 0
+
+    // 파생 오퍼레이터(스폰 시/표시 시 참조) 캐시.
+    private let movements: [(gravity: SIMD3<Float>, drag: Float)]
+    private let angulars: [SIMD3<Float>]
+    private let sizeChange: (st: Float, sv: Float, ev: Float)?
+    private let colorChange: (st: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)?
+    private let alphaFade: (fin: Float, fout: Float)?
+    private let oscPosOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float, mask: SIMD3<Float>)?
+    private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float)?
+
+    public init(def: ParticleSystemDef, seed: UInt64) {
+        self.def = def
+        self.rng = SplitMix64(seed: seed)
+        self.acc = Array(repeating: 0, count: def.emitters.count)
+
+        var mv: [(SIMD3<Float>, Float)] = []
+        var ang: [SIMD3<Float>] = []
+        var sc: (Float, Float, Float)? = nil
+        var cc: (Float, SIMD3<Float>, SIMD3<Float>)? = nil
+        var af: (Float, Float)? = nil
+        var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
+        var oa: (Float, Float, Float, Float)? = nil
+        for op in def.operators {
+            switch op {
+            case let .movement(g, drag): mv.append((s3(g), drag))
+            case let .angularMovement(f): ang.append(s3(f))
+            case let .sizeChange(st, sv, ev): if sc == nil { sc = (st, sv, ev) }
+            case let .colorChange(st, sv, ev): if cc == nil { cc = (st, s3(sv), s3(ev)) }
+            case let .alphaFade(fin, fout): if af == nil { af = (fin, fout) }
+            case let .oscillatePosition(fmin, fmax, smin, smax, pmin, pmax, mask):
+                if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
+            case let .oscillateAlpha(fmin, fmax, smin, smax):
+                if oa == nil { oa = (fmin, fmax, smin, smax) }
+            }
+        }
+        movements = mv.map { (gravity: $0.0, drag: $0.1) }
+        angulars = ang
+        sizeChange = sc.map { (st: $0.0, sv: $0.1, ev: $0.2) }
+        colorChange = cc.map { (st: $0.0, sv: $0.1, ev: $0.2) }
+        alphaFade = af.map { (fin: $0.0, fout: $0.1) }
+        oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
+        oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3) }
+    }
+
+    public var liveCount: Int { particles.count }
+
+    /// dt 만큼 진행 후 살아있는 파티클의 표시 스냅샷을 반환.
+    public mutating func step(_ dt: Float) -> [Particle] {
+        time += dt
+        // 방출(starttime 이후).
+        if time >= def.startTime {
+            for i in def.emitters.indices {
+                acc[i] += def.emitters[i].rate * dt
+                while acc[i] >= 1, particles.count < def.maxCount {
+                    acc[i] -= 1
+                    particles.append(spawn(def.emitters[i]))
+                }
+                if particles.count >= def.maxCount { acc[i] = min(acc[i], 1) }  // 누적 폭주 방지
+            }
+        }
+        // 적분(movement/angularMovement) + 노화.
+        for k in particles.indices {
+            particles[k].age += dt
+            for m in movements {
+                particles[k].vel += m.gravity * dt
+                if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
+                particles[k].pos += particles[k].vel * dt
+            }
+            for f in angulars {
+                particles[k].angularVel += f * dt
+                particles[k].rotation += particles[k].angularVel * dt
+            }
+        }
+        // 컬.
+        particles.removeAll { $0.age > $0.lifetime }
+        // 표시 스냅샷.
+        return particles.map { display($0) }
+    }
+
+    // MARK: - 스폰
+
+    private mutating func spawn(_ emitter: Emitter) -> Particle {
+        var p = Particle()
+        switch emitter {
+        case let .sphere(origin, directions, dmin, dmax, _):
+            let u = randomUnitVector()
+            let dir = normalizeSafe(u * s3(directions))
+            p.pos = s3(origin) + dir * rng.range(dmin, dmax)
+        case let .box(origin, dmax, _):
+            let d = s3(dmax)
+            p.pos = s3(origin) + SIMD3(rng.range(-d.x, d.x), rng.range(-d.y, d.y), rng.range(-d.z, d.z))
+        }
+        for ini in def.initializers { apply(ini, to: &p) }
+        if let o = oscPosOp {
+            p.oscPosFreq = rng.range(o.fmin, o.fmax)
+            p.oscPosScale = rng.range(o.smin, o.smax)
+            p.oscPosPhase = rng.range(o.pmin, o.pmax) * 2 * .pi
+            p.oscPosMask = o.mask
+        }
+        if let o = oscAlphaOp {
+            p.oscAlphaFreq = rng.range(o.fmin, o.fmax)
+            p.oscAlphaScale = rng.range(o.smin, o.smax)
+            p.oscAlphaPhase = rng.nextFloat() * 2 * .pi
+        }
+        return p
+    }
+
+    private mutating func apply(_ ini: Initializer, to p: inout Particle) {
+        switch ini {
+        case let .lifetimeRandom(mn, mx): p.lifetime = max(0.0001, rng.range(mn, mx))
+        case let .sizeRandom(mn, mx): p.initialSize = rng.range(mn, mx); p.size = p.initialSize
+        case let .colorRandom(mn, mx):
+            let c = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z)) / 255
+            p.initialColor = c; p.color = c
+        case let .alphaRandom(mn, mx, exp):
+            let f = powf(rng.nextFloat(), max(0.0001, exp))
+            p.initialAlpha = mn + (mx - mn) * f; p.alpha = p.initialAlpha
+        case let .velocityRandom(mn, mx):
+            p.vel = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z))
+        case let .rotationRandom(mn, mx):
+            p.rotation = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z)) * (.pi / 180)
+        case let .angularVelocityRandom(mn, mx):
+            p.angularVel = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z)) * (.pi / 180)
+        case let .turbulentVelocityRandom(smin, smax, _, _):
+            p.vel += randomUnitVector() * rng.range(smin, smax)
+        }
+    }
+
+    // MARK: - 표시 파생
+
+    private func display(_ p: Particle) -> Particle {
+        var d = p
+        let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
+        // size
+        if let sc = sizeChange { d.size = p.initialSize * lerp(sc.sv, sc.ev, progress(n, sc.st)) }
+        else { d.size = p.initialSize }
+        // color
+        if let cc = colorChange { let t = progress(n, cc.st); d.color = p.initialColor * (cc.sv + (cc.ev - cc.sv) * t) }
+        else { d.color = p.initialColor }
+        // alpha
+        var a = p.initialAlpha
+        if let af = alphaFade { a *= fadeFactor(n, af.fin, af.fout) }
+        if p.oscAlphaScale > 0 {
+            let osc = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * p.age + p.oscAlphaPhase))
+            a *= max(0, 1 - p.oscAlphaScale * osc)
+        }
+        d.alpha = max(0, min(1, a))
+        // pos 진동 오프셋(절대식, base 에 비누적).
+        if p.oscPosScale > 0 {
+            let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * p.age + p.oscPosPhase)
+            d.pos = p.pos + p.oscPosMask * off
+        } else {
+            d.pos = p.pos
+        }
+        return d
+    }
+
+    // MARK: - 헬퍼
+
+    private mutating func randomUnitVector() -> SIMD3<Float> {
+        let z = rng.range(-1, 1)
+        let t = rng.range(0, 2 * .pi)
+        let r = sqrtf(max(0, 1 - z * z))
+        return SIMD3(r * cosf(t), r * sinf(t), z)
+    }
+}
+
+private func s3(_ v: Vec3) -> SIMD3<Float> { SIMD3(v.x, v.y, v.z) }
+private func normalizeSafe(_ v: SIMD3<Float>) -> SIMD3<Float> {
+    let len = simd_length(v)
+    return len > 1e-6 ? v / len : SIMD3(0, 0, 0)
+}
+private func lerp(_ a: Float, _ b: Float, _ t: Float) -> Float { a + (b - a) * t }
+/// 진행도: starttime 이전 0, 이후 [0,1] 선형. st>=1 이면 n>=st 일 때만 1.
+private func progress(_ n: Float, _ st: Float) -> Float {
+    if st >= 1 { return n >= st ? 1 : 0 }
+    return max(0, min(1, (n - st) / max(0.0001, 1 - st)))
+}
+/// alphaFade: fadeIn(수명 비율) 동안 0→1, fadeOut(말미 비율) 동안 1→0.
+private func fadeFactor(_ n: Float, _ fin: Float, _ fout: Float) -> Float {
+    let i = fin > 0 ? max(0, min(1, n / fin)) : 1
+    let o = fout > 0 ? max(0, min(1, (1 - n) / fout)) : 1
+    return i * o
+}
