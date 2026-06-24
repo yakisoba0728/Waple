@@ -89,9 +89,23 @@ public final class LibraryStore {
 
     public func resolveFolderURL(for entry: LibraryEntry) -> URL? {
         var stale = false
-        return try? URL(
-            resolvingBookmarkData: entry.bookmark,
-            options: [], relativeTo: nil, bookmarkDataIsStale: &stale
-        )
+        let resolved: URL
+        do {
+            resolved = try URL(
+                resolvingBookmarkData: entry.bookmark,
+                options: [], relativeTo: nil, bookmarkDataIsStale: &stale
+            )
+        } catch {
+            NSLog("[Waple] failed to resolve bookmark for entry \(entry.id) (\(entry.title)): \(error)")
+            return nil
+        }
+        // macOS 가 stale 을 표시하면 북마크를 재생성·영속화해야 향후 해석 실패를 막는다.
+        if stale, let fresh = try? resolved.bookmarkData(
+            options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
+           let idx = entries.firstIndex(where: { $0.id == entry.id }) {
+            entries[idx].bookmark = fresh
+            save()
+        }
+        return resolved
     }
 }

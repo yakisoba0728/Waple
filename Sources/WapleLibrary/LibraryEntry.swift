@@ -6,7 +6,7 @@ public struct LibraryEntry: Codable, Equatable {
     public let typeRaw: String
     public let fileName: String?
     public let previewName: String?
-    public let bookmark: Data
+    public var bookmark: Data
 
     public init(id: String, title: String, typeRaw: String,
                 fileName: String?, previewName: String?, bookmark: Data) {
