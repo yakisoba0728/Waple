@@ -21,12 +21,8 @@ final class RendererFactoryTests: XCTestCase {
         XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .video, file: "a.webm")) is WebRenderer)
     }
 
-    func testSceneNilByDefaultRendersWhenExperimentalEnabled() {
-        let scene = project(type: .scene, file: "scene.json")
-        XCTAssertNil(RendererFactory.makeRenderer(for: scene))   // default off
-        RendererFactory.experimentalSceneEnabled = true
-        defer { RendererFactory.experimentalSceneEnabled = false }
-        XCTAssertTrue(RendererFactory.makeRenderer(for: scene) is SceneRenderer)
+    func testSceneAlwaysReturnsSceneRenderer() {
+        XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .scene, file: "scene.json")) is SceneRenderer)
     }
 
     func testOtherUnsupportedReturnNil() {
