@@ -30,6 +30,10 @@ public struct TexImage {
         let format = i32(18)
         let texW = i32(26), texH = i32(30)
         let imgW = i32(34), imgH = i32(38)
+        // 차원은 무경계 UInt32 에서 옴. Metal 렌더 한계(16384) 를 넘으면 거부해 w*h*4 정수 오버플로 트랩(크래시) 차단.
+        let maxDim = 16384
+        guard texW >= 0, texH >= 0, imgW >= 0, imgH >= 0,
+              texW <= maxDim, texH <= maxDim, imgW <= maxDim, imgH <= maxDim else { return nil }
 
         func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?) -> TexImage {
             TexImage(width: imgW, height: imgH, format: format, payload: kind, payloadRange: range, mip: mip)
@@ -61,7 +65,8 @@ public struct TexImage {
         var p = ti + 9 + 4
         let limit = min(b.count - 4, ti + 9 + 4 + 80)
         while p <= limit {
-            if let k = i32(p), k > 0, p + 4 + k == b.count, let dec = i32(p - 4), dec > 0 {
+            // dec 는 공격자 제어 필드. 단일 mip 의 정당한 한계(512MB)를 넘으면 거부해 ~4GB 할당 DoS 차단.
+            if let k = i32(p), k > 0, p + 4 + k == b.count, let dec = i32(p - 4), dec > 0, dec <= 512 << 20 {
                 return CompressedMip(decodeWidth: decodeW, decodeHeight: decodeH,
                                      imageWidth: imgW, imageHeight: imgH,
                                      decompressedSize: dec, payloadRange: (p + 4)..<b.count)

@@ -11,15 +11,19 @@ public enum AudioResponse {
                                freqMin: Float, freqMax: Float,
                                bounds: SIMD2<Float>, power: Float, multiply: Float) -> Float {
         guard mode >= 1, mode <= 3 else { return 0 }
-        let lo = Int(freqMin), hi = max(Int(freqMin), Int(freqMax))
+        let channels: Float = (mode == 3) ? 2 : 1
+        let count = (mode == 2) ? right.count : left.count
+        // 범위를 유효 빈으로 클램프해 denom 이 실제 합산 빈 수와 일치하도록 한다(범위 밖 빈으로 평균 희석 방지).
+        let lo = max(0, Int(freqMin))
+        let hi = min(count - 1, max(Int(freqMin), Int(freqMax)))
         var sum: Float = 0
-        var channels: Float = 0
-        for a in lo...hi {
-            if mode == 1 || mode == 3, a >= 0, a < left.count { sum += left[a] }
-            if mode == 2 || mode == 3, a >= 0, a < right.count { sum += right[a] }
+        if lo <= hi {
+            for a in lo...hi {
+                if mode == 1 || mode == 3, a < left.count { sum += left[a] }
+                if mode == 2 || mode == 3, a < right.count { sum += right[a] }
+            }
         }
-        channels = (mode == 3) ? 2 : 1
-        let denom = Float(hi - lo + 1) * channels
+        let denom = Float(max(0, hi - lo + 1)) * channels
         var resp = denom > 0 ? sum / denom : 0
         resp = smoothstep(bounds.x, bounds.y, resp)
         resp = saturate(powf(max(0, resp), power)) * multiply

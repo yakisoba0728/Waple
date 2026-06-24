@@ -103,7 +103,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
         clearColor = MTLClearColor(red: Double(doc.clearColor.x), green: Double(doc.clearColor.y),
                                    blue: Double(doc.clearColor.z), alpha: 1)
-        projW = Float(doc.projectionWidth); projH = Float(max(1, doc.projectionHeight))
+        projW = Float(max(1, doc.projectionWidth)); projH = Float(max(1, doc.projectionHeight))
         projAspect = projW / projH
         layers = buildLayers(doc: doc, package: package, device: device)
         particleSystems = buildParticles(doc: doc, package: package, device: device)
@@ -439,24 +439,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
     }
 
-    private func blit(_ src: MTLTexture, to dst: MTLTexture, queue: MTLCommandQueue) {
-        guard let cb = queue.makeCommandBuffer(), let b = cb.makeBlitCommandEncoder() else { return }
-        let w = min(src.width, dst.width), h = min(src.height, dst.height)
-        b.copy(from: src, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-               sourceSize: MTLSize(width: w, height: h, depth: 1),
-               to: dst, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-        b.endEncoding(); cb.commit(); cb.waitUntilCompleted()
-    }
-
-    /// 효과가 있는 레이어는 오프스크린에 베이스 복사 후 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.
+    /// 효과가 있는 레이어는 원본 텍스처를 첫 src 로 삼아 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.
     /// 라이브 draw 와 헤드리스 captureFrames 가 공유.
     private func buildDisplayTextures(device: MTLDevice, queue: MTLCommandQueue, time: Float, cb: MTLCommandBuffer) -> [MTLTexture] {
         var out: [MTLTexture] = []
         for layer in layers {
             if layer.effects.isEmpty { out.append(layer.texture); continue }
-            guard var current = makeOffscreen(layer.texWidth, layer.texHeight, device),
-                  let evb = effectVertexBuffer else { out.append(layer.texture); continue }
-            blit(layer.texture, to: current, queue: queue)  // 베이스 복사
+            guard let evb = effectVertexBuffer else { out.append(layer.texture); continue }
+            // 베이스 복사 불필요: 원본 텍스처를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
+            var current = layer.texture
             for eff in layer.effects {
                 guard let next = makeOffscreen(layer.texWidth, layer.texHeight, device) else { break }
                 applyEffect(eff, src: current, dst: next, evb: evb, time: time, cb: cb)

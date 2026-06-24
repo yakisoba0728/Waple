@@ -14,7 +14,7 @@ public enum TexDecoder {
             return draw(img)
         case .rawRGBA8888:
             let w = tex.width, h = tex.height
-            guard w > 0, h > 0 else { return nil }
+            guard w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
             let need = w * h * 4
             let sub = data.subdata(in: tex.payloadRange)
             guard sub.count >= need else { return nil }

@@ -13,6 +13,8 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
     private let log2n: vDSP_Length
     private let fftSetup: FFTSetup
     private var window: [Float]
+    // running/stream 은 메인 스레드(start/stop), 캡처 Task, waple.audio 콜백 큐에서 동시 접근되므로 lock 으로 직렬화한다.
+    private let lock = NSLock()
     private var running = false
 
     public override init() {
@@ -26,21 +28,40 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
     deinit { vDSP_destroy_fftsetup(fftSetup) }
 
     public func start() {
-        guard !running else { return }
+        lock.lock()
+        if running { lock.unlock(); return }
         running = true
+        lock.unlock()
         Task { await startCapture() }
     }
 
     public func stop() {
+        lock.lock()
         running = false
-        stream?.stopCapture { _ in }
+        let s = stream
         stream = nil
+        lock.unlock()
+        // stopCapture 는 lock 밖에서 호출(콜백 큐와의 교착 방지).
+        s?.stopCapture { _ in }
+    }
+
+    private func isRunning() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return running
+    }
+
+    /// running 이면 stream 을 할당하고 true 반환, 아니면 할당 없이 false 반환(동기 임계 구역).
+    private func assignStreamIfRunning(_ s: SCStream) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard running else { return false }
+        stream = s
+        return true
     }
 
     private func startCapture() async {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            guard running else { return }
+            guard isRunning() else { return }
             guard let display = content.displays.first else {
                 NSLog("%@", "[Waple] audio capture: no displays available, feeding silence")
                 feedZeros(); return
@@ -59,12 +80,12 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue(label: "waple.audio"))
             try await stream.startCapture()
             // stop() 이 await 도중 실행됐다면 self.stream 이 아직 nil 이라 stopCapture 가
-            // no-op 였다. 캡처가 주인 없이 계속 도는 것을 막기 위해 즉시 중단한다.
-            guard running else {
+            // no-op 였다. running 확인과 self.stream 할당을 한 임계 구역(동기 헬퍼)에서 처리해 TOCTOU 를 닫는다.
+            if !assignStreamIfRunning(stream) {
+                // 캡처가 주인 없이 계속 도는 것을 막기 위해 즉시 중단한다.
                 stream.stopCapture { _ in }
                 return
             }
-            self.stream = stream
         } catch {
             // 화면 기록 권한 거부가 흔한 원인. 폴백(무음)은 유지하되 진단 가능하도록 로깅한다.
             NSLog("%@", "[Waple] audio capture failed (screen-recording permission?), feeding silence: \(error)")
@@ -78,7 +99,7 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
     }
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, running else { return }
+        guard type == .audio, isRunning() else { return }
         guard let samples = Self.floatSamples(from: sampleBuffer, maxCount: fftSize) else { return }
         let mags = magnitudes(from: samples)
         let bins = AudioSpectrum.spectrum(fromMagnitudes: mags, binCount: 64)

@@ -71,7 +71,10 @@ extension SceneDocument {
             if (obj["visible"] as? Bool) == false { continue }
             if let vis = obj["visible"] as? [String: Any], (vis["value"] as? Bool) == false { continue }
             if let imagePath = obj["image"] as? String {
-                guard let tex = resolveTexture(imagePath: imagePath, package: package) else { continue }
+                guard let tex = resolveTexture(imagePath: imagePath, package: package) else {
+                    NSLog("%@", "[Waple] image layer texture resolve failed: \(imagePath)")
+                    continue
+                }
                 let angles = floats(obj["angles"] as? String)
                 layers.append(SceneLayer(
                     textureEntryName: tex,

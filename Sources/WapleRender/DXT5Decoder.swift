@@ -3,8 +3,10 @@ import Foundation
 public enum DXT5Decoder {
     /// DXT5(BC3) 블록 → RGBA8888. blocks 크기는 ((w+3)/4)*((h+3)/4)*16 이어야 함.
     public static func decode(_ blocks: Data, width: Int, height: Int) -> Data? {
+        // bx/by 계산 전에 차원을 검증해야 bx*by*16 / width*height*4 정수 오버플로 트랩(크래시)을 방지한다.
+        guard width > 0, height > 0, width <= 16384, height <= 16384 else { return nil }
         let bx = (width + 3) / 4, by = (height + 3) / 4
-        guard blocks.count >= bx * by * 16, width > 0, height > 0 else { return nil }
+        guard blocks.count >= bx * by * 16 else { return nil }
         let src = [UInt8](blocks)
         var out = [UInt8](repeating: 0, count: width * height * 4)
 
