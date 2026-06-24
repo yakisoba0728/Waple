@@ -30,11 +30,25 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public override init() { super.init() }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
-        let pkgURL = pkgURL(in: project.folderURL)
-        guard let pkgURL, let data = try? Data(contentsOf: pkgURL),
-              let package = try? ScenePackage.parse(data),
-              let doc = try? SceneDocument.parse(package: package) else {
+        guard let pkgURL = pkgURL(in: project.folderURL) else {
+            NSLog("[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
             throw RendererError.assetMissing
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: pkgURL)
+        } catch {
+            NSLog("[Waple] scene mount: cannot read \(pkgURL.path): \(error)")
+            throw RendererError.assetMissing
+        }
+        let package: ScenePackage
+        let doc: SceneDocument
+        do {
+            package = try ScenePackage.parse(data)
+            doc = try SceneDocument.parse(package: package)
+        } catch {
+            NSLog("[Waple] scene mount: failed to parse \(pkgURL.path): \(error)")
+            throw error
         }
         // 비디오-텍스처 씬 → 내장 MP4 추출 후 VideoRenderer 위임.
         if let videoName = VideoTextureExtractor.videoLayer(in: doc, package: package),
