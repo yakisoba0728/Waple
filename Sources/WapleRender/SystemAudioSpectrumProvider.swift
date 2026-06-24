@@ -76,8 +76,8 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
         guard type == .audio, running else { return }
         guard let samples = Self.floatSamples(from: sampleBuffer, maxCount: fftSize) else { return }
         let mags = magnitudes(from: samples)
-        let bins = AudioSpectrum.spectrum(fromMagnitudes: mags, binCount: 128)
-        let frame = bins + bins   // WE 포맷: 128(64L + 64R). 모노를 좌우 복제.
+        let bins = AudioSpectrum.spectrum(fromMagnitudes: mags, binCount: 64)
+        let frame = bins + bins   // WE 포맷: 128(64L + 64R). 64bin 스펙트럼을 좌우 복제.
         let clamped = Array(frame.prefix(128))
         DispatchQueue.main.async { [weak self] in self?.onFrame?(clamped) }
     }
