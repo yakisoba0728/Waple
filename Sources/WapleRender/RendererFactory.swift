@@ -2,7 +2,9 @@ import Foundation
 import WapleCore
 
 public enum RendererFactory {
-    /// 타입 + 코덱으로 렌더러를 라우팅. MVP: video / web 지원, webm 등 미지원 코덱은 WebRenderer 폴백.
+    /// SP1: scene 은 실험 플래그 ON 일 때만 라우팅(부분 렌더 → 사용자 미노출).
+    public static var experimentalSceneEnabled = false
+
     public static func makeRenderer(for project: WallpaperProject) -> WallpaperRenderer? {
         switch project.type {
         case .web:
@@ -13,6 +15,8 @@ public enum RendererFactory {
                 return VideoRenderer.isSupportedContainer(url) ? VideoRenderer() : WebRenderer(mode: .videoFallback)
             }
             return VideoRenderer()
+        case .scene:
+            return experimentalSceneEnabled ? SceneRenderer() : nil
         default:
             return nil
         }
