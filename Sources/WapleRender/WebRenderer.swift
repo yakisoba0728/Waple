@@ -58,7 +58,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // didFinish 는 모든 main-frame 내비게이션마다 발생한다. 속성 주입/오디오 시작은
+        // 최초 로드 1회만 수행해야 하므로, 소비 후 pending 을 비워 멱등하게 만든다.
         guard let json = pendingUserPropertiesJSON else { return }
+        pendingUserPropertiesJSON = nil
         let js = """
         if (window.wallpaperPropertyListener && window.wallpaperPropertyListener.applyUserProperties) {
           window.wallpaperPropertyListener.applyUserProperties(\(json));
