@@ -68,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.title = "Waple"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 760, height: 500))
+            // 프로그램 생성 NSWindow 는 닫힐 때 기본적으로 release 되어, 강한 참조 프로퍼티가
+            // 댕글링되고 재오픈 시 use-after-free 가 된다. 프로퍼티가 수명을 관리하도록 막는다.
+            window.isReleasedWhenClosed = false
             libraryWindow = window
         }
         libraryWindow?.center()
