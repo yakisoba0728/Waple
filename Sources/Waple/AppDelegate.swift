@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.fitMenu = fitMenu
 
         libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) }
+        libraryVM.onError = { [weak self] message in self?.notify(message) }
 
         desktopController.rebuild()
 
