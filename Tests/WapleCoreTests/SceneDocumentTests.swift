@@ -121,7 +121,24 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(eff.name, "waterwaves")
         XCTAssertEqual(eff.constants["speed"], [3.97])
         XCTAssertEqual(eff.constants["scale"], [34.66])
-        XCTAssertEqual(eff.maskTextureName, "masks/wmask")
+        // slot0 = null (framebuffer), slot1 = mask
+        XCTAssertEqual(eff.textureNames, [nil, "masks/wmask"])
+    }
+
+    /// 3개 슬롯 효과: [null(framebuffer), "effects/x", "util/white"] 전체를 textureNames 로 캡처.
+    func testParsesThreeSlotEffectTextures() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true},
+                     "effects":[{"file":"effects/waterripple/effect.json",
+                       "passes":[{"constantshadervalues":{"ripple_strength":0.2},
+                                  "textures":[null,"effects/x","util/white"]}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let eff = try XCTUnwrap(try SceneDocument.parse(package: p).layers.first?.effects.first)
+        XCTAssertEqual(eff.name, "waterripple")
+        XCTAssertEqual(eff.textureNames, [nil, "effects/x", "util/white"])
     }
 
     func testParsesVectorEffectConstants() throws {

@@ -3,7 +3,9 @@ import Foundation
 public struct SceneEffect: Equatable {
     public let name: String
     public let constants: [String: [Float]]
-    public let maskTextureName: String?
+    /// object effect `textures[]` 슬롯 전체. slot0 은 보통 null(=framebuffer),
+    /// 이후 슬롯이 마스크/노멀맵 등 보조 텍스처. 각 원소는 이름 또는 null.
+    public let textureNames: [String?]
 }
 
 public struct SceneLayer: Equatable {
@@ -103,7 +105,7 @@ extension SceneDocument {
             let parts = file.split(separator: "/")
             let name = parts.count >= 2 ? String(parts[parts.count - 2]) : file
             var constants: [String: [Float]] = [:]
-            var mask: String? = nil
+            var textureNames: [String?] = []
             if let passes = e["passes"] as? [Any], let pass0 = passes.first as? [String: Any] {
                 if let cs = pass0["constantshadervalues"] as? [String: Any] {
                     for (k, v) in cs {
@@ -115,9 +117,12 @@ extension SceneDocument {
                         }
                     }
                 }
-                if let texs = pass0["textures"] as? [Any], texs.count >= 2, let m = texs[1] as? String { mask = m }
+                // textures 배열 전체를 슬롯 순서로 캡처. JSON null → nil, 문자열 → 이름.
+                if let texs = pass0["textures"] as? [Any] {
+                    textureNames = texs.map { $0 as? String }
+                }
             }
-            out.append(SceneEffect(name: name, constants: constants, maskTextureName: mask))
+            out.append(SceneEffect(name: name, constants: constants, textureNames: textureNames))
         }
         return out
     }

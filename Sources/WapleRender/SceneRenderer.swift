@@ -136,7 +136,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             for eff in layer.effects {
                 guard let src = EffectShaders.source(for: eff.name),
                       let params = EffectShaders.params(for: eff.name, constants: eff.constants),
-                      let mask = effectMask(eff.maskTextureName, package: package, device: device),
+                      let mask = effectMask(eff.textureNames.count > 1 ? eff.textureNames[1] : nil, package: package, device: device),
                       let pipe = effectPipeline(source: src, device: device) else { continue }
                 effects.append(EffectGPU(pipeline: pipe, mask: mask, params: params))
             }
