@@ -6,6 +6,9 @@ public final class ParallaxController {
 
     public init() {}
 
+    // teardown() 없이 해제돼도 전역 모니터가 프로세스 수명 동안 남지 않도록 하는 안전망.
+    deinit { stop() }
+
     public func start() {
         guard monitor == nil else { return }
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
