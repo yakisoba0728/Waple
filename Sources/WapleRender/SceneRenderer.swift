@@ -201,12 +201,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { view.needsDisplay = true }
 
     public func draw(in view: MTKView) {
+        // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
+        if hasEffects, view.window?.occlusionState.contains(.visible) == false { return }
         guard let device, let queue, let pipeline,
               let rpd = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
-        // 가림 시 애니메이션 정지(배터리).
-        if hasEffects, view.window?.occlusionState.contains(.visible) == false { return }
         let time = Float(CFAbsoluteTimeGetCurrent() - startTime)
 
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
