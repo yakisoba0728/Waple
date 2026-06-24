@@ -38,6 +38,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var effectVertexBuffer: MTLBuffer?
     private var particleSystems: [GPUParticleSystem] = []
     private var hasParticles = false
+    private var assetBaseDir: URL?  // WE 공유 에셋 폴백 디렉터리(설정), 패키지에 없는 .tex 용
     private var additivePipeline: MTLRenderPipelineState?
     private var translucentPipeline: MTLRenderPipelineState?
     private var fullscreenQuad: [SIMD2<Float>] = [SIMD2(-1,-1), SIMD2(1,-1), SIMD2(-1,1), SIMD2(1,1)]
@@ -82,6 +83,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
               let queue = device.makeCommandQueue() else { throw RendererError.unsupportedType }
         self.device = device
         self.queue = queue
+        self.assetBaseDir = BaseAssetsSettings.baseAssetsDirectory
 
         let library = try device.makeLibrary(source: QuadShaders.source, options: nil)
         let pdesc = MTLRenderPipelineDescriptor()
@@ -144,12 +146,27 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return nil
     }
 
+    /// 텍스처/에셋 바이트 로드: 패키지 우선, 없으면 공유 기본 에셋 디렉터리에서 폴백.
+    /// 공유에서 찾거나 둘 다 없을 때만 로그(in-pkg 일반 경로는 조용히).
+    private func assetData(_ name: String, package: ScenePackage) -> Data? {
+        if let d = package.data(for: name) { return d }
+        if let base = assetBaseDir {
+            let u = base.appendingPathComponent(name)
+            if let d = try? Data(contentsOf: u) {
+                NSLog("%@", "[Waple] asset from shared base: \(name)")
+                return d
+            }
+        }
+        NSLog("%@", "[Waple] asset missing (pkg+shared): \(name)")
+        return nil
+    }
+
     /// 레이어를 후→전 순서(JSON 순서)로 GPU 리소스화. 디코드 실패 레이어는 스킵.
     private func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPULayer] {
         let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
         var out: [GPULayer] = []
         for layer in doc.layers {
-            guard let texData = package.data(for: layer.textureEntryName),
+            guard let texData = assetData(layer.textureEntryName, package: package),
                   let tex = TexImage.parse(texData),
                   let decoded = TexDecoder.rgba(from: tex, data: texData),
                   let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else { continue }
@@ -190,7 +207,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private func resolveTexture(_ name: String?, package: ScenePackage, device: MTLDevice) -> MTLTexture? {
         if let name {
             let cand = name.hasSuffix(".tex") ? name : "materials/\(name).tex"
-            if let d = package.data(for: cand) ?? package.data(for: name),
+            if let d = assetData(cand, package: package) ?? assetData(name, package: package),
                let tex = TexImage.parse(d), let dec = TexDecoder.rgba(from: tex, data: d),
                let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return m }
         }
