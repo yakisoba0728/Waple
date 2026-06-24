@@ -9,12 +9,16 @@ public struct SceneLayer: Equatable {
     public let alpha: Float
     public let color: Vec3
     public let brightness: Float
+    public let parallaxDepth: Vec2
 }
 
 public struct SceneDocument: Equatable {
     public let projectionWidth: Int
     public let projectionHeight: Int
     public let clearColor: Vec3
+    public let parallaxEnabled: Bool
+    public let parallaxAmount: Float
+    public let parallaxMouseInfluence: Float
     public let layers: [SceneLayer]
 }
 
@@ -31,6 +35,9 @@ extension SceneDocument {
         let pw = (proj["width"] as? Int) ?? 1920
         let ph = (proj["height"] as? Int) ?? 1080
         let clear = vec3(general["clearcolor"] as? String) ?? Vec3(x: 0, y: 0, z: 0)
+        let parallaxEnabled = (general["cameraparallax"] as? Bool) ?? false
+        let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
+        let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
 
         var layers: [SceneLayer] = []
         for case let obj as [String: Any] in (scene["objects"] as? [Any] ?? []) {
@@ -45,10 +52,13 @@ extension SceneDocument {
                 angleZ: floats(obj["angles"] as? String).count >= 3 ? floats(obj["angles"] as? String)[2] : 0,
                 alpha: float(obj["alpha"]) ?? 1,
                 color: vec3(obj["color"] as? String) ?? Vec3(x: 1, y: 1, z: 1),
-                brightness: float(obj["brightness"]) ?? 1
+                brightness: float(obj["brightness"]) ?? 1,
+                parallaxDepth: vec2(obj["parallaxDepth"] as? String) ?? Vec2(x: 1, y: 1)
             ))
         }
-        return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear, layers: layers)
+        return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
+                             parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
+                             parallaxMouseInfluence: parallaxMouseInfluence, layers: layers)
     }
 
     /// image(model) → material → texture name → "materials/<name>.tex".

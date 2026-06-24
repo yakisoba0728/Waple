@@ -52,4 +52,33 @@ final class SceneDocumentTests: XCTestCase {
             XCTAssertEqual(e as? SceneDocumentError, .noScene)
         }
     }
+
+    func testParsesParallaxDepthAndGeneral() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0",
+                    "cameraparallax":true,"cameraparallaxamount":0.5,"cameraparallaxmouseinfluence":0.25},
+         "objects":[{"image":"models/x.json","origin":"960 540 0","size":"1920 1080","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,
+                     "parallaxDepth":"1.5 0.5","visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertTrue(doc.parallaxEnabled)
+        XCTAssertEqual(doc.parallaxAmount, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(doc.parallaxMouseInfluence, 0.25, accuracy: 1e-6)
+        XCTAssertEqual(doc.layers.first?.parallaxDepth, Vec2(x: 1.5, y: 0.5))
+    }
+
+    func testParallaxDefaultsWhenAbsent() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertFalse(doc.parallaxEnabled)
+        XCTAssertEqual(doc.parallaxAmount, 1, accuracy: 1e-6)
+        XCTAssertEqual(doc.layers.first?.parallaxDepth, Vec2(x: 1, y: 1))
+    }
 }
