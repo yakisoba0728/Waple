@@ -2,10 +2,8 @@ import AppKit
 import MetalKit
 import WapleCore
 
-private struct EffectUniforms { var direction: SIMD2<Float>; var time: Float; var speed: Float; var scale: Float; var strength: Float; var perspective: Float }
-
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
-    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let mask: MTLTexture; let constants: [String: Float] }
+    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let mask: MTLTexture; let params: [Float] }
     private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int }
 
     private var videoRenderer: VideoRenderer?
@@ -137,9 +135,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             var effects: [EffectGPU] = []
             for eff in layer.effects {
                 guard let src = EffectShaders.source(for: eff.name),
+                      let params = EffectShaders.params(for: eff.name, constants: eff.constants),
                       let mask = effectMask(eff.maskTextureName, package: package, device: device),
                       let pipe = effectPipeline(source: src, device: device) else { continue }
-                effects.append(EffectGPU(pipeline: pipe, mask: mask, constants: eff.constants))
+                effects.append(EffectGPU(pipeline: pipe, mask: mask, params: params))
             }
             if !effects.isEmpty { hasEffects = true }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
@@ -292,18 +291,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         enc.setVertexBuffer(evb, offset: 0, index: 0)
         enc.setFragmentTexture(src, index: 0)
         enc.setFragmentTexture(eff.mask, index: 1)
-        var u = effectUniforms(eff.constants, time: time)
-        enc.setFragmentBytes(&u, length: MemoryLayout<EffectUniforms>.stride, index: 0)
+        let buf = [time] + eff.params
+        buf.withUnsafeBytes { ptr in
+            enc.setFragmentBytes(ptr.baseAddress!, length: ptr.count, index: 0)
+        }
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
-    }
-
-    private func effectUniforms(_ c: [String: Float], time: Float) -> EffectUniforms {
-        let dirDeg = c["direction"] ?? 0
-        let a = dirDeg * .pi / 180
-        return EffectUniforms(direction: SIMD2<Float>(cos(a), sin(a)), time: time,
-                              speed: c["speed"] ?? 5, scale: c["scale"] ?? 200,
-                              strength: c["strength"] ?? 0.1, perspective: c["perspective"] ?? 0)
     }
 
     public func pause() { videoRenderer?.pause() }
