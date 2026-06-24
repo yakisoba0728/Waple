@@ -149,12 +149,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "ev_main")
         pd.fragmentFunction = lib.makeFunction(name: "ef_main")
-        pd.colorAttachments[0].pixelFormat = .bgra8Unorm
+        pd.colorAttachments[0].pixelFormat = .rgba8Unorm
         return try? device.makeRenderPipelineState(descriptor: pd)
     }
 
     private func makeOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: max(w,1), height: max(h,1), mipmapped: false)
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: max(w,1), height: max(h,1), mipmapped: false)
         d.usage = [.renderTarget, .shaderRead]
         return device.makeTexture(descriptor: d)
     }

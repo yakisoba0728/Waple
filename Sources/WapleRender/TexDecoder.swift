@@ -20,21 +20,49 @@ public enum TexDecoder {
             guard sub.count >= need else { return nil }
             return (sub.prefix(need), w, h)
         case .bc3:
-            guard let mip = tex.bc3 else { return nil }
-            let comp = data.subdata(in: mip.payloadRange)
-            var dst = [UInt8](repeating: 0, count: mip.decompressedSize)
-            let got = comp.withUnsafeBytes { srcp in
-                dst.withUnsafeMutableBytes { dstp in
-                    compression_decode_buffer(dstp.bindMemory(to: UInt8.self).baseAddress!, mip.decompressedSize,
-                                              srcp.bindMemory(to: UInt8.self).baseAddress!, comp.count, nil, COMPRESSION_LZ4_RAW)
-                }
-            }
-            guard got == mip.decompressedSize,
-                  let rgba = DXT5Decoder.decode(Data(dst), width: mip.width, height: mip.height) else { return nil }
-            return (rgba, mip.width, mip.height)
+            guard let mip = tex.mip,
+                  let dec = lz4(data.subdata(in: mip.payloadRange), expected: mip.decompressedSize),
+                  let rgba = DXT5Decoder.decode(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
+            return cropped(rgba, mip)
+        case .lz4RGBA:
+            guard let mip = tex.mip,
+                  let dec = lz4(data.subdata(in: mip.payloadRange), expected: mip.decompressedSize),
+                  dec.count >= mip.decodeWidth * mip.decodeHeight * 4 else { return nil }
+            return cropped(dec, mip)
         case .video, .unknown:
             return nil
         }
+    }
+
+    /// LZ4 raw 해제. 성공 시 정확히 expected 바이트 반환.
+    private static func lz4(_ comp: Data, expected: Int) -> Data? {
+        guard expected > 0 else { return nil }
+        var dst = [UInt8](repeating: 0, count: expected)
+        let got = comp.withUnsafeBytes { srcp -> Int in
+            dst.withUnsafeMutableBytes { dstp in
+                compression_decode_buffer(dstp.bindMemory(to: UInt8.self).baseAddress!, expected,
+                                          srcp.bindMemory(to: UInt8.self).baseAddress!, comp.count,
+                                          nil, COMPRESSION_LZ4_RAW)
+            }
+        }
+        return got == expected ? Data(dst) : nil
+    }
+
+    /// 패딩 텍스처(decode dims)에서 실제 이미지(top-left image dims)만 크롭.
+    private static func cropped(_ rgba: Data, _ mip: TexImage.CompressedMip) -> (Data, Int, Int) {
+        let dw = mip.decodeWidth, dh = mip.decodeHeight, iw = mip.imageWidth, ih = mip.imageHeight
+        if iw == dw && ih == dh { return (rgba, dw, dh) }
+        guard iw > 0, ih > 0, iw <= dw, ih <= dh, rgba.count >= dw * dh * 4 else { return (rgba, dw, dh) }
+        var out = Data(count: iw * ih * 4)
+        rgba.withUnsafeBytes { src in
+            out.withUnsafeMutableBytes { dst in
+                for y in 0..<ih {
+                    memcpy(dst.baseAddress!.advanced(by: y * iw * 4),
+                           src.baseAddress!.advanced(by: y * dw * 4), iw * 4)
+                }
+            }
+        }
+        return (out, iw, ih)
     }
 
     private static func draw(_ img: CGImage) -> (Data, Int, Int)? {
