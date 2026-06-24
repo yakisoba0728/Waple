@@ -1,5 +1,11 @@
 import Foundation
 
+public struct SceneEffect: Equatable {
+    public let name: String
+    public let constants: [String: Float]
+    public let maskTextureName: String?
+}
+
 public struct SceneLayer: Equatable {
     public let textureEntryName: String
     public let origin: Vec2
@@ -10,6 +16,7 @@ public struct SceneLayer: Equatable {
     public let color: Vec3
     public let brightness: Float
     public let parallaxDepth: Vec2
+    public let effects: [SceneEffect]
 }
 
 public struct SceneDocument: Equatable {
@@ -53,7 +60,8 @@ extension SceneDocument {
                 alpha: float(obj["alpha"]) ?? 1,
                 color: vec3(obj["color"] as? String) ?? Vec3(x: 1, y: 1, z: 1),
                 brightness: float(obj["brightness"]) ?? 1,
-                parallaxDepth: vec2(obj["parallaxDepth"] as? String) ?? Vec2(x: 1, y: 1)
+                parallaxDepth: vec2(obj["parallaxDepth"] as? String) ?? Vec2(x: 1, y: 1),
+                effects: parseEffects(obj["effects"])
             ))
         }
         return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
@@ -79,6 +87,27 @@ extension SceneDocument {
         if package.entries.contains(where: { $0.name == candidate }) { return candidate }
         if package.entries.contains(where: { $0.name == name }) { return name }
         return candidate
+    }
+
+    private static func parseEffects(_ raw: Any?) -> [SceneEffect] {
+        guard let arr = raw as? [Any] else { return [] }
+        var out: [SceneEffect] = []
+        for case let e as [String: Any] in arr {
+            let file = (e["file"] as? String) ?? ""
+            // "effects/<name>/effect.json" → name
+            let parts = file.split(separator: "/")
+            let name = parts.count >= 2 ? String(parts[parts.count - 2]) : file
+            var constants: [String: Float] = [:]
+            var mask: String? = nil
+            if let passes = e["passes"] as? [Any], let pass0 = passes.first as? [String: Any] {
+                if let cs = pass0["constantshadervalues"] as? [String: Any] {
+                    for (k, v) in cs { if let f = float(v) { constants[k] = f } }
+                }
+                if let texs = pass0["textures"] as? [Any], texs.count >= 2, let m = texs[1] as? String { mask = m }
+            }
+            out.append(SceneEffect(name: name, constants: constants, maskTextureName: mask))
+        }
+        return out
     }
 
     private static func floats(_ s: String?) -> [Float] {

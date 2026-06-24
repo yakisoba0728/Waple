@@ -69,6 +69,33 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers.first?.parallaxDepth, Vec2(x: 1.5, y: 0.5))
     }
 
+    func testParsesObjectEffects() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true},
+                     "effects":[{"file":"effects/waterwaves/effect.json",
+                       "passes":[{"constantshadervalues":{"speed":3.97,"scale":34.66},
+                                  "textures":[null,"masks/wmask"]}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let eff = try XCTUnwrap(try SceneDocument.parse(package: p).layers.first?.effects.first)
+        XCTAssertEqual(eff.name, "waterwaves")
+        XCTAssertEqual(eff.constants["speed"], 3.97)
+        XCTAssertEqual(eff.constants["scale"], 34.66)
+        XCTAssertEqual(eff.maskTextureName, "masks/wmask")
+    }
+
+    func testLayerWithoutEffectsHasEmptyArray() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        XCTAssertEqual(try SceneDocument.parse(package: p).layers.first?.effects.count, 0)
+    }
+
     func testParallaxDefaultsWhenAbsent() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
