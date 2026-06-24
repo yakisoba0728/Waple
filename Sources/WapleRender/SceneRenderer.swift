@@ -21,6 +21,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var parallaxMouseInfluence: Float = 1
     private let parallax = ParallaxController()
     private let maxShift: Float = 0.1
+    private var projAspect: Float = 16.0 / 9.0
     private var startTime = CFAbsoluteTimeGetCurrent()
     private var hasEffects = false
     private var effectVertexBuffer: MTLBuffer?
@@ -67,6 +68,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
         clearColor = MTLClearColor(red: Double(doc.clearColor.x), green: Double(doc.clearColor.y),
                                    blue: Double(doc.clearColor.z), alpha: 1)
+        projAspect = Float(doc.projectionWidth) / Float(max(1, doc.projectionHeight))
         layers = buildLayers(doc: doc, package: package, device: device)
 
         let view = MTKView(frame: container.bounds, device: device)
@@ -223,6 +225,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
 
         var camOffset = cameraOffset
+        // 종횡비 보정(aspect-fill/cover): 씬 종횡비 != 화면 종횡비일 때 왜곡 방지.
+        let ds = view.drawableSize
+        let viewAspect = Float(ds.width / max(1, ds.height))
+        var aspectScale: SIMD2<Float> = projAspect > viewAspect
+            ? SIMD2<Float>(projAspect / viewAspect, 1)
+            : SIMD2<Float>(1, viewAspect / projAspect)
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
@@ -233,6 +241,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
             enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
             enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+            enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
             enc.setFragmentTexture(displayTextures[i], index: 0)
             enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
