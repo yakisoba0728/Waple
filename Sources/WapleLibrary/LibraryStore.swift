@@ -97,6 +97,12 @@ public final class LibraryStore {
     @discardableResult
     public func importParent(_ parentURL: URL) -> [LibraryEntry] {
         let fm = FileManager.default
+        // 사용자가 상위 폴더가 아니라 개별 배경 폴더(project.json 포함)를 직접 고른 경우,
+        // 하위 폴더만 순회하면 아무것도 가져오지 못한다. 자신이 배경 폴더면 직접 가져온다.
+        if fm.fileExists(atPath: parentURL.appendingPathComponent("project.json").path) {
+            if let entry = try? importFolder(parentURL) { return [entry] }
+            return []
+        }
         let subs = (try? fm.contentsOfDirectory(
             at: parentURL,
             includingPropertiesForKeys: [.isDirectoryKey],

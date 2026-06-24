@@ -22,8 +22,11 @@ final class LibraryViewModel: ObservableObject {
     }
 
     func importParent(_ url: URL) {
-        store.importParent(url)
+        let imported = store.importParent(url)
         entries = store.entries
+        if imported.isEmpty {
+            onError?("가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요.")
+        }
     }
 
     func apply(_ entry: LibraryEntry) {

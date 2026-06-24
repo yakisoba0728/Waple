@@ -56,6 +56,15 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(Set(imported.map(\.id)), ["111", "222"])
     }
 
+    /// 상위 폴더가 아니라 개별 배경 폴더(project.json 포함)를 직접 고른 경우에도 가져와야 한다.
+    func testImportParentOnSingleWallpaperFolderImportsIt() throws {
+        let folder = try makeWallpaperFolder(id: "111")
+        let store = LibraryStore(baseDirectory: base())
+        let imported = store.importParent(folder)
+        XCTAssertEqual(imported.map(\.id), ["111"])
+        XCTAssertEqual(store.entries.map(\.id), ["111"])
+    }
+
     func testEntriesPersistAcrossInstances() throws {
         let folder = try makeWallpaperFolder(id: "111")
         let store1 = LibraryStore(baseDirectory: base())
