@@ -59,4 +59,36 @@ final class VideoTextureExtractorTests: XCTestCase {
         // mp4 박스: [size 4][ftyp...]
         XCTAssertEqual(Array(bytes[4..<8]), Array("ftyp".utf8))
     }
+
+    /// 크기가 일치하는 유효 캐시는 재사용한다(동일 URL, 동일 바이트).
+    func testReusesValidCache() throws {
+        let pkg = try scenePkg(videoTex: true)
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("WapleMP4-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let u1 = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "42", cacheDir: dir))
+        let first = try Data(contentsOf: u1)
+        let u2 = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "42", cacheDir: dir))
+        XCTAssertEqual(u1, u2)
+        XCTAssertEqual(try Data(contentsOf: u2), first)
+    }
+
+    /// 크기가 기대치와 다른 부분/오염 캐시는 무효화하고 재추출해야 한다.
+    func testReextractsStaleCache() throws {
+        let pkg = try scenePkg(videoTex: true)
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("WapleMP4-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let u1 = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "42", cacheDir: dir))
+        let good = try Data(contentsOf: u1)
+        // 잘린(부분 기록) 캐시로 오염시킨다.
+        try Data([0x00]).write(to: u1)
+        let u2 = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "42", cacheDir: dir))
+        XCTAssertEqual(try Data(contentsOf: u2), good)
+    }
+
+    func testExtractMP4NilForImageTex() throws {
+        let pkg = try scenePkg(videoTex: false)
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("WapleMP4-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        XCTAssertNil(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "x", cacheDir: dir))
+    }
 }
