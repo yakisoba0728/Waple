@@ -76,21 +76,40 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
     }
 
     /// CMSampleBuffer(PCM Float32) 첫 채널에서 최대 maxCount 샘플 추출.
+    /// non-interleaved 스테레오(버퍼 2개)도 처리하기 위해 필요한 크기를 먼저 조회해 할당한다.
     private static func floatSamples(from sampleBuffer: CMSampleBuffer, maxCount: Int) -> [Float]? {
+        var sizeNeeded = 0
+        let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &sizeNeeded,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: 0,
+            blockBufferOut: nil
+        )
+        guard sizeStatus == noErr, sizeNeeded > 0 else { return nil }
+
+        let ablMemory = UnsafeMutableRawPointer.allocate(
+            byteCount: sizeNeeded, alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { ablMemory.deallocate() }
+        let ablPtr = ablMemory.assumingMemoryBound(to: AudioBufferList.self)
+
         var blockBuffer: CMBlockBuffer?
-        var abl = AudioBufferList()
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
             bufferListSizeNeededOut: nil,
-            bufferListOut: &abl,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            bufferListOut: ablPtr,
+            bufferListSize: sizeNeeded,
             blockBufferAllocator: nil,
             blockBufferMemoryAllocator: nil,
             flags: 0,
             blockBufferOut: &blockBuffer
         )
         guard status == noErr else { return nil }
-        let buffers = UnsafeMutableAudioBufferListPointer(&abl)
+
+        let buffers = UnsafeMutableAudioBufferListPointer(ablPtr)
         guard let first = buffers.first, let data = first.mData else { return nil }
         let count = min(Int(first.mDataByteSize) / MemoryLayout<Float>.size, maxCount)
         guard count > 0 else { return nil }
