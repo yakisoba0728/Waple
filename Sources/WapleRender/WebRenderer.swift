@@ -71,7 +71,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
           window.wallpaperPropertyListener.applyGeneralProperties({ fps: 30 });
         }
         """
-        webView.evaluateJavaScript(js)
+        webView.evaluateJavaScript(js) { _, error in
+            if let error { NSLog("[Waple] property injection failed: \(error)") }
+        }
         audioProvider?.start()
     }
 
