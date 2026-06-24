@@ -29,6 +29,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) }
 
         desktopController.rebuild()
+
+        // 화면 구성 변경(모니터 연결/해제/해상도) 시 창 재구성 후 재적용.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screensChanged),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+
+        // 마지막 선택 배경 복원.
+        restoreLastWallpaper()
     }
 
     @objc private func openLibrary() {
@@ -62,6 +73,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             currentFolderURL = folderURL
         } catch {
             notify("적용 실패: \(error)")
+        }
+    }
+
+    private func restoreLastWallpaper() {
+        guard let id = store.selectedId,
+              let entry = store.entries.first(where: { $0.id == id }),
+              let folder = store.resolveFolderURL(for: entry) else { return }
+        apply(folderURL: folder)
+    }
+
+    @objc private func screensChanged() {
+        desktopController.rebuild()
+        if let folder = currentFolderURL {
+            apply(folderURL: folder)
         }
     }
 
