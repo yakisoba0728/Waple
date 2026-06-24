@@ -82,7 +82,9 @@ extension SceneDocument {
               let passes = material["passes"] as? [Any],
               let pass0 = passes.first as? [String: Any],
               let textures = pass0["textures"] as? [Any],
-              let name = textures.first as? String, !name.isEmpty else { return nil }
+              // 텍스처 배열은 빈 슬롯을 null 로 표기할 수 있으므로(예: [null, "real.tex"]),
+              // 첫 항목이 아니라 첫 non-null·non-empty 문자열을 사용한다.
+              let name = textures.compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) else { return nil }
         let candidate = name.contains("/") || name.hasSuffix(".tex") ? name : "materials/\(name).tex"
         // Prefer "materials/<name>.tex"; fall back to the raw name if that exact entry exists;
         // otherwise still return the preferred candidate so the texture name is resolved

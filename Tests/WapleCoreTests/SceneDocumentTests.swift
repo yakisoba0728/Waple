@@ -47,6 +47,20 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(try SceneDocument.parse(package: p).layers.count, 0)
     }
 
+    /// 베이스 머티리얼의 첫 텍스처 슬롯이 null 이어도 첫 non-null 텍스처로 레이어를 해석해야 한다.
+    func testResolvesTextureWhenFirstSlotIsNull() throws {
+        let materialNullFirst = #"{"passes":[{"shader":"genericimage2","textures":[null,"pic"]}]}"#
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", materialNullFirst)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertEqual(doc.layers[0].textureEntryName, "materials/pic.tex")
+    }
+
     func testSkipsLayerWithMissingModel() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
