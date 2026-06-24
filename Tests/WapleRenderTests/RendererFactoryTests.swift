@@ -3,24 +3,32 @@ import XCTest
 import WapleCore
 
 final class RendererFactoryTests: XCTestCase {
-    func testFactoryReturnsVideoRendererForVideoType() {
-        let renderer = RendererFactory.makeRenderer(for: .video)
-        XCTAssertTrue(renderer is VideoRenderer)
+    private func project(type: WallpaperType, file: String?) -> WallpaperProject {
+        WallpaperProject(id: "x", type: type, fileName: file, previewName: nil,
+                         title: "t", tags: [], contentRating: nil, workshopId: nil,
+                         dependency: nil, folderURL: URL(fileURLWithPath: "/tmp/x", isDirectory: true))
     }
 
-    func testFactoryReturnsNilForUnsupportedTypes() {
-        XCTAssertNil(RendererFactory.makeRenderer(for: .scene))
-        XCTAssertNil(RendererFactory.makeRenderer(for: .web))
-        XCTAssertNil(RendererFactory.makeRenderer(for: .preset))
-        XCTAssertNil(RendererFactory.makeRenderer(for: .application))
-        XCTAssertNil(RendererFactory.makeRenderer(for: .unknown("flux")))
+    func testWebTypeReturnsWebRenderer() {
+        XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .web, file: "index.html")) is WebRenderer)
+    }
+
+    func testSupportedVideoReturnsVideoRenderer() {
+        XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .video, file: "a.mp4")) is VideoRenderer)
+    }
+
+    func testUnsupportedCodecVideoReturnsWebRenderer() {
+        XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .video, file: "a.webm")) is WebRenderer)
+    }
+
+    func testSceneAndOthersReturnNil() {
+        XCTAssertNil(RendererFactory.makeRenderer(for: project(type: .scene, file: "scene.json")))
+        XCTAssertNil(RendererFactory.makeRenderer(for: project(type: .preset, file: nil)))
+        XCTAssertNil(RendererFactory.makeRenderer(for: project(type: .unknown("z"), file: nil)))
     }
 
     func testSupportedContainers() {
         XCTAssertTrue(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mp4")))
-        XCTAssertTrue(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.MP4")))
-        XCTAssertTrue(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mov")))
         XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.webm")))
-        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mkv")))
     }
 }

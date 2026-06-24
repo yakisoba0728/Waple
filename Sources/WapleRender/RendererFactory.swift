@@ -1,11 +1,20 @@
+import Foundation
 import WapleCore
 
 public enum RendererFactory {
-    /// MVP: video 만 지원. 나머지 타입은 nil(미지원).
-    public static func makeRenderer(for type: WallpaperType) -> WallpaperRenderer? {
-        switch type {
-        case .video: return VideoRenderer()
-        default: return nil
+    /// 타입 + 코덱으로 렌더러를 라우팅. MVP: video / web 지원, webm 등 미지원 코덱은 WebRenderer 폴백.
+    public static func makeRenderer(for project: WallpaperProject) -> WallpaperRenderer? {
+        switch project.type {
+        case .web:
+            return WebRenderer(mode: .web)
+        case .video:
+            if let file = project.fileName {
+                let url = project.folderURL.appendingPathComponent(file)
+                return VideoRenderer.isSupportedContainer(url) ? VideoRenderer() : WebRenderer(mode: .videoFallback)
+            }
+            return VideoRenderer()
+        default:
+            return nil
         }
     }
 }

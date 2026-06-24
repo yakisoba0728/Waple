@@ -59,14 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func apply(folderURL: URL) {
         do {
             let project = try ProjectJSONParser.parse(folderURL: folderURL)
-            guard RendererFactory.makeRenderer(for: project.type) != nil else {
+            guard RendererFactory.makeRenderer(for: project) != nil else {
                 notify("지원하지 않는 타입입니다: \(project.type.storageString)")
                 return
             }
             renderers.forEach { $0.teardown() }
             renderers.removeAll()
             for view in desktopController.contentViews {
-                guard let renderer = RendererFactory.makeRenderer(for: project.type) else { continue }
+                guard let renderer = RendererFactory.makeRenderer(for: project) else { continue }
                 try renderer.mount(in: view, project: project)
                 renderers.append(renderer)
             }

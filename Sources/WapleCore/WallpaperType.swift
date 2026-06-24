@@ -33,5 +33,5 @@ public enum WallpaperType: Equatable {
         }
     }
 
-    public var isSupportedInMVP: Bool { self == .video }
+    public var isSupportedInMVP: Bool { self == .video || self == .web }
 }
