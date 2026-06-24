@@ -17,7 +17,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var parallaxAmount: Float = 1
     private var parallaxMouseInfluence: Float = 1
     private let parallax = ParallaxController()
-    private let maxShift: Float = 0.04
+    private let maxShift: Float = 0.1
 
     public override init() { super.init() }
 
