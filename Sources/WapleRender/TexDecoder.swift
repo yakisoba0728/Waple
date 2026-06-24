@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import ImageIO
+import Compression
 import WapleCore
 
 public enum TexDecoder {
@@ -18,7 +19,20 @@ public enum TexDecoder {
             let sub = data.subdata(in: tex.payloadRange)
             guard sub.count >= need else { return nil }
             return (sub.prefix(need), w, h)
-        case .bc3, .video, .unknown:
+        case .bc3:
+            guard let mip = tex.bc3 else { return nil }
+            let comp = data.subdata(in: mip.payloadRange)
+            var dst = [UInt8](repeating: 0, count: mip.decompressedSize)
+            let got = comp.withUnsafeBytes { srcp in
+                dst.withUnsafeMutableBytes { dstp in
+                    compression_decode_buffer(dstp.bindMemory(to: UInt8.self).baseAddress!, mip.decompressedSize,
+                                              srcp.bindMemory(to: UInt8.self).baseAddress!, comp.count, nil, COMPRESSION_LZ4_RAW)
+                }
+            }
+            guard got == mip.decompressedSize,
+                  let rgba = DXT5Decoder.decode(Data(dst), width: mip.width, height: mip.height) else { return nil }
+            return (rgba, mip.width, mip.height)
+        case .video, .unknown:
             return nil
         }
     }
