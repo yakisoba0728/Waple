@@ -13,6 +13,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = LibraryStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private lazy var libraryVM = LibraryViewModel(store: store)
     private var libraryWindow: NSWindow?
+    private weak var fitMenu: NSMenu?
+
+    @objc private func setFitMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let mode = FitMode(rawValue: raw) else { return }
+        SceneRenderSettings.fitMode = mode
+        fitMenu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
+        if let folder = currentFolderURL { apply(folderURL: folder) }  // 현재 배경 재적용으로 즉시 반영
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -21,10 +29,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "라이브러리 열기",
                                 action: #selector(openLibrary), keyEquivalent: "l"))
+        let fitItem = NSMenuItem(title: "화면 맞춤", action: nil, keyEquivalent: "")
+        let fitMenu = NSMenu()
+        for mode in FitMode.allCases {
+            let item = NSMenuItem(title: mode.label, action: #selector(setFitMode(_:)), keyEquivalent: "")
+            item.representedObject = mode.rawValue
+            item.state = (SceneRenderSettings.fitMode == mode) ? .on : .off
+            fitMenu.addItem(item)
+        }
+        fitItem.submenu = fitMenu
+        menu.addItem(fitItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Waple",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
+        self.fitMenu = fitMenu
 
         libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) }
 

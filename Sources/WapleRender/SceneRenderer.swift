@@ -225,12 +225,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
 
         var camOffset = cameraOffset
-        // 종횡비 보정(aspect-fill/cover): 씬 종횡비 != 화면 종횡비일 때 왜곡 방지.
+        // 종횡비 보정 — FitMode 설정에 따라.
         let ds = view.drawableSize
         let viewAspect = Float(ds.width / max(1, ds.height))
-        var aspectScale: SIMD2<Float> = projAspect > viewAspect
-            ? SIMD2<Float>(projAspect / viewAspect, 1)
-            : SIMD2<Float>(1, viewAspect / projAspect)
+        var aspectScale: SIMD2<Float>
+        switch SceneRenderSettings.fitMode {
+        case .stretch:
+            aspectScale = SIMD2<Float>(1, 1)
+        case .fill:
+            aspectScale = projAspect > viewAspect
+                ? SIMD2<Float>(projAspect / viewAspect, 1) : SIMD2<Float>(1, viewAspect / projAspect)
+        case .fit:
+            aspectScale = projAspect > viewAspect
+                ? SIMD2<Float>(1, viewAspect / projAspect) : SIMD2<Float>(projAspect / viewAspect, 1)
+        }
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }

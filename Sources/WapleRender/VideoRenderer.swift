@@ -28,7 +28,11 @@ public final class VideoRenderer: WallpaperRenderer {
         queue.isMuted = true
 
         let layer = AVPlayerLayer(player: queue)
-        layer.videoGravity = .resizeAspectFill
+        switch SceneRenderSettings.fitMode {
+        case .fit: layer.videoGravity = .resizeAspect
+        case .fill: layer.videoGravity = .resizeAspectFill
+        case .stretch: layer.videoGravity = .resize
+        }
         container.wantsLayer = true
         layer.frame = container.bounds
         layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
