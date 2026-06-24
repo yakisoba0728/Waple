@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
         self.fitMenu = fitMenu
 
-        libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) }
+        libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) ?? false }
         libraryVM.onError = { [weak self] message in self?.notify(message) }
 
         desktopController.rebuild()
@@ -79,12 +79,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func apply(folderURL: URL) {
+    @discardableResult
+    private func apply(folderURL: URL) -> Bool {
         do {
             let project = try ProjectJSONParser.parse(folderURL: folderURL)
             guard RendererFactory.makeRenderer(for: project) != nil else {
                 notify("지원하지 않는 타입입니다: \(project.type.storageString)")
-                return
+                return false
             }
             var newRenderers: [WallpaperRenderer] = []
             do {
@@ -102,8 +103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             renderers.forEach { $0.teardown() }
             renderers = newRenderers
             currentFolderURL = folderURL
+            return true
         } catch {
             notify("적용 실패: \(error)")
+            return false
         }
     }
 

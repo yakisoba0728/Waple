@@ -7,8 +7,8 @@ final class LibraryViewModel: ObservableObject {
     @Published private(set) var entries: [LibraryEntry] = []
     @Published var selectedId: String?
 
-    /// 적용 요청을 AppDelegate 로 전달한다(폴더 URL).
-    var onApply: ((URL) -> Void)?
+    /// 적용 요청을 AppDelegate 로 전달한다(폴더 URL). 마운트 성공 여부를 반환한다.
+    var onApply: ((URL) -> Bool)?
 
     /// 사용자에게 보여줄 오류 메시지를 AppDelegate 로 전달한다.
     var onError: ((String) -> Void)?
@@ -34,9 +34,14 @@ final class LibraryViewModel: ObservableObject {
             onError?("‘\(entry.title)’의 폴더를 찾을 수 없습니다. 다시 가져오세요.")
             return
         }
+        // 적용(마운트) 성공이 확인된 뒤에만 선택을 영속·강조한다. 실패 시 기존 선택을 유지해
+        // 강조/저장된 선택이 항상 실제로 표시되는 배경과 일치하도록 한다.
+        guard onApply?(folder) == true else {
+            onError?("‘\(entry.title)’을(를) 적용하지 못했습니다.")
+            return
+        }
         store.select(entry.id)
         selectedId = entry.id
-        onApply?(folder)
     }
 
     func previewURL(for entry: LibraryEntry) -> URL? {
