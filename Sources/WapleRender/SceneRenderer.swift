@@ -321,6 +321,25 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return device.makeTexture(descriptor: d)
     }
 
+    // 효과 패스용 오프스크린 텍스처 풀: 매 프레임 신규 할당(30fps×효과수) 대신 크기별로 재사용.
+    // 프레임 내에서는 checkout 을 단조 증가시켜 항상 distinct 텍스처를 보장(src/dst 충돌 방지).
+    // 프레임 간 재사용은 비-heap tracked 텍스처라 Metal 자동 hazard tracking 이 동기화를 보장(무손상).
+    private var texturePool: [String: [MTLTexture]] = [:]
+    private var poolCheckout: [String: Int] = [:]
+
+    private func pooledOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
+        let key = "\(max(w,1))x\(max(h,1))"
+        let idx = poolCheckout[key, default: 0]
+        if idx < (texturePool[key]?.count ?? 0) {
+            poolCheckout[key] = idx + 1
+            return texturePool[key]![idx]
+        }
+        guard let t = makeOffscreen(w, h, device) else { return nil }
+        texturePool[key, default: []].append(t)
+        poolCheckout[key] = idx + 1
+        return t
+    }
+
     /// 헤드리스 캡처용 bgra8 타겟(라이브 파이프라인과 동일 포맷, getBytes 가능하도록 .shared).
     private func makeOffscreenBGRA(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: max(w,1), height: max(h,1), mipmapped: false)
@@ -442,6 +461,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 효과가 있는 레이어는 원본 텍스처를 첫 src 로 삼아 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.
     /// 라이브 draw 와 헤드리스 captureFrames 가 공유.
     private func buildDisplayTextures(device: MTLDevice, queue: MTLCommandQueue, time: Float, cb: MTLCommandBuffer) -> [MTLTexture] {
+        poolCheckout.removeAll(keepingCapacity: true)  // 프레임 시작: 모든 풀 텍스처를 재사용 가능 상태로
         var out: [MTLTexture] = []
         for layer in layers {
             if layer.effects.isEmpty { out.append(layer.texture); continue }
@@ -449,7 +469,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // 베이스 복사 불필요: 원본 텍스처를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
             var current = layer.texture
             for eff in layer.effects {
-                guard let next = makeOffscreen(layer.texWidth, layer.texHeight, device) else { break }
+                guard let next = pooledOffscreen(layer.texWidth, layer.texHeight, device) else { break }
                 applyEffect(eff, src: current, dst: next, evb: evb, time: time, cb: cb)
                 current = next
             }
@@ -563,6 +583,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
         additivePipeline = nil; translucentPipeline = nil
+        texturePool.removeAll(); poolCheckout.removeAll()
         pipeline = nil; queue = nil; device = nil
     }
 }

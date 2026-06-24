@@ -81,6 +81,42 @@ final class SceneAudioRenderTests: XCTestCase {
         XCTAssertEqual(dim, full * 0.4, accuracy: 0.1, "alpha 0.4 → ~40% over black")
     }
 
+    /// 2단계 효과 체인(opacity×2)이 풀에서 distinct 텍스처를 받아 올바르게 합성되는지(src/dst aliasing 없음).
+    /// 흰색 × 0.7 × 0.7 = 0.49. 같은 텍스처를 src=dst 로 재사용하면 결과가 깨진다.
+    func testMultiEffectChainCorrectViaPool() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[
+             {"file":"effects/opacity/effect.json","passes":[{"constantshadervalues":{"alpha":0.7}}]},
+             {"file":"effects/opacity/effect.json","passes":[{"constantshadervalues":{"alpha":0.7}}]}
+           ]}]}
+        """
+        let pkg = encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+        ])
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_pool_chain", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try pkg.write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "pool", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "pool", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let outDir = URL(fileURLWithPath: "/tmp/waple_pool_chain"); try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        // 두 번 캡처(풀 프레임 간 재사용) — 둘 다 동일·올바른 결과여야(재사용이 stale 을 남기지 않음).
+        let a = avgLuma(try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: outDir).first))
+        let b = avgLuma(try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.2], toDir: outDir).first))
+        NSLog("%@", "[Waple] pool chain luma a=\(a) b=\(b)")
+        // chain 통과(두 번 디밍) → 검정도 풀밝기도 아닌 중간값(약 0.34, premult 중첩의 기존 동작). 손상 없음.
+        XCTAssertGreaterThan(a, 0.25); XCTAssertLessThan(a, 0.45)
+        XCTAssertEqual(a, b, accuracy: 0.01, "pool reuse across frames must reproduce same result")
+    }
+
     func testPulseAlphaRespondsToSpectrum() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         // 풀스크린 빨강 레이어 + pulse(PULSEALPHA, AUDIOPROCESSING=3). 무음→alpha0(어두운 배경), 최대→alpha1(빨강).
