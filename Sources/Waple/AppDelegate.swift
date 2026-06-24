@@ -39,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         fitItem.submenu = fitMenu
         menu.addItem(fitItem)
+        menu.addItem(NSMenuItem(title: "기본 에셋 폴더 설정…",
+                                action: #selector(chooseBaseAssets), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Waple",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -60,6 +62,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 마지막 선택 배경 복원.
         restoreLastWallpaper()
+    }
+
+    /// WE 기본(공유) 에셋 팩 폴더 선택. 일부 씬은 패키지에 없는 공유 텍스처(particle/halo 등)를
+    /// 참조하므로, 사용자의 WE assets 폴더를 가리키면 누락 텍스처가 정상 표시된다.
+    @objc private func chooseBaseAssets() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "선택"
+        panel.message = "Wallpaper Engine 기본 에셋(assets) 폴더를 선택하세요. 패키지에 없는 공유 텍스처를 여기서 불러옵니다."
+        panel.directoryURL = BaseAssetsSettings.baseAssetsDirectory
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        BaseAssetsSettings.baseAssetsDirectory = url
+        if let folder = currentFolderURL { apply(folderURL: folder) }  // 누락 텍스처 즉시 반영
     }
 
     @objc private func openLibrary() {
