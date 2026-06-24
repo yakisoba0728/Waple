@@ -3,7 +3,7 @@ import MetalKit
 import WapleCore
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
-    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let mask: MTLTexture; let params: [Float] }
+    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let auxTextures: [MTLTexture]; let params: [Float] }
     private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int }
 
     private var videoRenderer: VideoRenderer?
@@ -136,9 +136,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             for eff in layer.effects {
                 guard let src = EffectShaders.source(for: eff.name),
                       let params = EffectShaders.params(for: eff.name, constants: eff.constants),
-                      let mask = effectMask(eff.textureNames.count > 1 ? eff.textureNames[1] : nil, package: package, device: device),
                       let pipe = effectPipeline(source: src, device: device) else { continue }
-                effects.append(EffectGPU(pipeline: pipe, mask: mask, params: params))
+                // slot0 은 framebuffer → aux 는 slot1.. 디코드. 디코드 실패는 흰색 1x1 폴백.
+                // 레거시 frag(mask=texture(1)) 와 waterripple(normal=1, mask=2) 모두 위해
+                // 최소 2개 슬롯을 흰색으로 채워 미바인드 텍스처를 방지한다.
+                var aux: [MTLTexture] = []
+                let auxNames = eff.textureNames.count > 1 ? Array(eff.textureNames[1...]) : []
+                for name in auxNames {
+                    guard let t = resolveTexture(name, package: package, device: device) else { continue }
+                    aux.append(t)
+                }
+                while aux.count < 2, let white = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) {
+                    aux.append(white)
+                }
+                effects.append(EffectGPU(pipeline: pipe, auxTextures: aux, params: params))
             }
             if !effects.isEmpty { hasEffects = true }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
@@ -148,8 +159,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return out
     }
 
-    private func effectMask(_ name: String?, package: ScenePackage, device: MTLDevice) -> MTLTexture? {
-        // 마스크 없거나 디코드 실패 → 흰색 1x1(=효과 전체 적용).
+    /// 효과 보조 텍스처 슬롯 이름 → MTLTexture. 이름 nil/디코드 실패 → 흰색 1x1 폴백
+    /// (마스크는 흰색=효과 전체 적용, 노멀맵은 흰색=무왜곡에 가까움).
+    /// "effects/X"/"masks/X" 같은 상대 이름은 "materials/<name>.tex" 로 해석, raw 이름도 시도.
+    private func resolveTexture(_ name: String?, package: ScenePackage, device: MTLDevice) -> MTLTexture? {
         if let name {
             let cand = name.hasSuffix(".tex") ? name : "materials/\(name).tex"
             if let d = package.data(for: cand) ?? package.data(for: name),
@@ -289,8 +302,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
         enc.setRenderPipelineState(eff.pipeline)
         enc.setVertexBuffer(evb, offset: 0, index: 0)
-        enc.setFragmentTexture(src, index: 0)
-        enc.setFragmentTexture(eff.mask, index: 1)
+        enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
+        for (i, aux) in eff.auxTextures.enumerated() {
+            enc.setFragmentTexture(aux, index: i + 1)  // aux slot i → texture(i+1)
+        }
         let buf = [time] + eff.params
         buf.withUnsafeBytes { ptr in
             enc.setFragmentBytes(ptr.baseAddress!, length: ptr.count, index: 0)
