@@ -119,9 +119,24 @@ final class SceneDocumentTests: XCTestCase {
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
         let eff = try XCTUnwrap(try SceneDocument.parse(package: p).layers.first?.effects.first)
         XCTAssertEqual(eff.name, "waterwaves")
-        XCTAssertEqual(eff.constants["speed"], 3.97)
-        XCTAssertEqual(eff.constants["scale"], 34.66)
+        XCTAssertEqual(eff.constants["speed"], [3.97])
+        XCTAssertEqual(eff.constants["scale"], [34.66])
         XCTAssertEqual(eff.maskTextureName, "masks/wmask")
+    }
+
+    func testParsesVectorEffectConstants() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true},
+                     "effects":[{"file":"effects/tint/effect.json",
+                       "passes":[{"constantshadervalues":{"color":"1 0 0","alpha":0.5}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let eff = try XCTUnwrap(try SceneDocument.parse(package: p).layers.first?.effects.first)
+        XCTAssertEqual(eff.name, "tint")
+        XCTAssertEqual(eff.constants["color"], [1, 0, 0])
+        XCTAssertEqual(eff.constants["alpha"], [0.5])
     }
 
     func testLayerWithoutEffectsHasEmptyArray() throws {

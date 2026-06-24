@@ -2,7 +2,7 @@ import Foundation
 
 public struct SceneEffect: Equatable {
     public let name: String
-    public let constants: [String: Float]
+    public let constants: [String: [Float]]
     public let maskTextureName: String?
 }
 
@@ -102,11 +102,18 @@ extension SceneDocument {
             // "effects/<name>/effect.json" → name
             let parts = file.split(separator: "/")
             let name = parts.count >= 2 ? String(parts[parts.count - 2]) : file
-            var constants: [String: Float] = [:]
+            var constants: [String: [Float]] = [:]
             var mask: String? = nil
             if let passes = e["passes"] as? [Any], let pass0 = passes.first as? [String: Any] {
                 if let cs = pass0["constantshadervalues"] as? [String: Any] {
-                    for (k, v) in cs { if let f = float(v) { constants[k] = f } }
+                    for (k, v) in cs {
+                        if let d = v as? Double { constants[k] = [Float(d)] }
+                        else if let i = v as? Int { constants[k] = [Float(i)] }
+                        else if let s = v as? String {
+                            let f = s.split(separator: " ").compactMap { Float($0) }
+                            if !f.isEmpty { constants[k] = f }
+                        }
+                    }
                 }
                 if let texs = pass0["textures"] as? [Any], texs.count >= 2, let m = texs[1] as? String { mask = m }
             }
