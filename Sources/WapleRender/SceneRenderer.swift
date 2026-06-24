@@ -2,8 +2,11 @@ import AppKit
 import MetalKit
 import WapleCore
 
+private struct EffectUniforms { var direction: SIMD2<Float>; var time: Float; var speed: Float; var scale: Float; var strength: Float; var perspective: Float }
+
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float> }
+    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let mask: MTLTexture; let constants: [String: Float] }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int }
 
     private var videoRenderer: VideoRenderer?
     private var mtkView: MTKView?
@@ -18,6 +21,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var parallaxMouseInfluence: Float = 1
     private let parallax = ParallaxController()
     private let maxShift: Float = 0.1
+    private var startTime = CFAbsoluteTimeGetCurrent()
+    private var hasEffects = false
+    private var effectVertexBuffer: MTLBuffer?
+    private var fullscreenQuad: [SIMD2<Float>] = [SIMD2(-1,-1), SIMD2(1,-1), SIMD2(-1,1), SIMD2(1,1)]
 
     public override init() { super.init() }
 
@@ -80,6 +87,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
             parallax.start()
         }
+
+        effectVertexBuffer = device.makeBuffer(bytes: fullscreenQuad, length: MemoryLayout<SIMD2<Float>>.stride * fullscreenQuad.count)
+        if hasEffects {
+            view.isPaused = false
+            view.enableSetNeedsDisplay = false
+            view.preferredFramesPerSecond = 30
+            startTime = CFAbsoluteTimeGetCurrent()
+        }
     }
 
     private func pkgURL(in folder: URL) -> URL? {
@@ -103,10 +118,45 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) else { continue }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
+            var effects: [EffectGPU] = []
+            for eff in layer.effects {
+                guard let src = EffectShaders.source(for: eff.name),
+                      let mask = effectMask(eff.maskTextureName, package: package, device: device),
+                      let pipe = effectPipeline(source: src, device: device) else { continue }
+                effects.append(EffectGPU(pipeline: pipe, mask: mask, constants: eff.constants))
+            }
+            if !effects.isEmpty { hasEffects = true }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
-                                parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y)))
+                                parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
+                                effects: effects, texWidth: decoded.width, texHeight: decoded.height))
         }
         return out
+    }
+
+    private func effectMask(_ name: String?, package: ScenePackage, device: MTLDevice) -> MTLTexture? {
+        // 마스크 없거나 디코드 실패 → 흰색 1x1(=효과 전체 적용).
+        if let name {
+            let cand = name.hasSuffix(".tex") ? name : "materials/\(name).tex"
+            if let d = package.data(for: cand) ?? package.data(for: name),
+               let tex = TexImage.parse(d), let dec = TexDecoder.rgba(from: tex, data: d),
+               let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return m }
+        }
+        return makeTexture(Data([255, 255, 255, 255]), 1, 1, device)
+    }
+
+    private func effectPipeline(source: String, device: MTLDevice) -> MTLRenderPipelineState? {
+        guard let lib = try? device.makeLibrary(source: source, options: nil) else { return nil }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "ev_main")
+        pd.fragmentFunction = lib.makeFunction(name: "ef_main")
+        pd.colorAttachments[0].pixelFormat = .bgra8Unorm
+        return try? device.makeRenderPipelineState(descriptor: pd)
+    }
+
+    private func makeOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: max(w,1), height: max(h,1), mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]
+        return device.makeTexture(descriptor: d)
     }
 
     private func makeTexture(_ rgba: Data, _ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
@@ -149,28 +199,80 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { view.needsDisplay = true }
 
     public func draw(in view: MTKView) {
-        guard let queue, let pipeline,
+        guard let device, let queue, let pipeline,
               let rpd = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
+        // 가림 시 애니메이션 정지(배터리).
+        if hasEffects, view.window?.occlusionState.contains(.visible) == false { return }
+        let time = Float(CFAbsoluteTimeGetCurrent() - startTime)
+
+        // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
+        var displayTextures: [MTLTexture] = []
+        for layer in layers {
+            if layer.effects.isEmpty { displayTextures.append(layer.texture); continue }
+            guard var current = makeOffscreen(layer.texWidth, layer.texHeight, device),
+                  let evb = effectVertexBuffer else { displayTextures.append(layer.texture); continue }
+            blit(layer.texture, to: current, device: device, queue: queue)  // 베이스 복사
+            for eff in layer.effects {
+                guard let next = makeOffscreen(layer.texWidth, layer.texHeight, device) else { break }
+                applyEffect(eff, src: current, dst: next, evb: evb, time: time, cb: cb)
+                current = next
+            }
+            displayTextures.append(current)
+        }
+
+        var camOffset = cameraOffset
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
         enc.setRenderPipelineState(pipeline)
-        var camOffset = cameraOffset
-        for layer in layers {
+        for (i, layer) in layers.enumerated() {
             var tint = layer.tint
             var depth = layer.parallaxDepth
             enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
             enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
             enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-            enc.setFragmentTexture(layer.texture, index: 0)
+            enc.setFragmentTexture(displayTextures[i], index: 0)
             enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
         }
         enc.endEncoding()
         cb.present(drawable)
         cb.commit()
+    }
+
+    private func blit(_ src: MTLTexture, to dst: MTLTexture, device: MTLDevice, queue: MTLCommandQueue) {
+        guard let cb = queue.makeCommandBuffer(), let b = cb.makeBlitCommandEncoder() else { return }
+        let w = min(src.width, dst.width), h = min(src.height, dst.height)
+        b.copy(from: src, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+               sourceSize: MTLSize(width: w, height: h, depth: 1),
+               to: dst, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        b.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+    }
+
+    private func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, evb: MTLBuffer, time: Float, cb: MTLCommandBuffer) {
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = dst
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+        enc.setRenderPipelineState(eff.pipeline)
+        enc.setVertexBuffer(evb, offset: 0, index: 0)
+        enc.setFragmentTexture(src, index: 0)
+        enc.setFragmentTexture(eff.mask, index: 1)
+        var u = effectUniforms(eff.constants, time: time)
+        enc.setFragmentBytes(&u, length: MemoryLayout<EffectUniforms>.stride, index: 0)
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        enc.endEncoding()
+    }
+
+    private func effectUniforms(_ c: [String: Float], time: Float) -> EffectUniforms {
+        let dirDeg = c["direction"] ?? 0
+        let a = dirDeg * .pi / 180
+        return EffectUniforms(direction: SIMD2<Float>(cos(a), sin(a)), time: time,
+                              speed: c["speed"] ?? 5, scale: c["scale"] ?? 200,
+                              strength: c["strength"] ?? 0.1, perspective: c["perspective"] ?? 0)
     }
 
     public func pause() { videoRenderer?.pause() }
