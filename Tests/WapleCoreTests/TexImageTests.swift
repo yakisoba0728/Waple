@@ -39,4 +39,29 @@ final class TexImageTests: XCTestCase {
     func testRejectsNonTex() {
         XCTAssertNil(TexImage.parse(Data("nope".utf8)))
     }
+
+    /// format=9 BC3 .tex: TEX 헤더 + "TEXB0003" + mipCount + 7 ints(decompressedSize 포함) + payload.
+    private func makeBC3Tex(w: Int, h: Int, payload: [UInt8]) -> Data {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
+        let dxt5 = ((w + 3) / 4) * ((h + 3) / 4) * 16
+        var b: [UInt8] = []
+        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32(9) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)   // format=9, dims
+        b += Array("TEXB0003".utf8) + [0]
+        b += i32(1)                       // mipCount
+        b += i32(-1) + i32(1) + i32(w) + i32(h) + i32(1)  // leading ints
+        b += i32(dxt5) + i32(payload.count)               // decompressedSize, compressedSize
+        b += payload
+        return Data(b)
+    }
+
+    func testParsesBC3Mip() {
+        let payload: [UInt8] = Array(0..<40)
+        let t = TexImage.parse(makeBC3Tex(w: 8, h: 8, payload: payload))
+        XCTAssertEqual(t?.payload, .bc3)
+        let mip = t?.bc3
+        XCTAssertEqual(mip?.width, 8); XCTAssertEqual(mip?.height, 8)
+        XCTAssertEqual(mip?.decompressedSize, 64)             // (8/4)*(8/4)*16 = 64
+        XCTAssertEqual(mip?.payloadRange.count, payload.count)
+    }
 }
