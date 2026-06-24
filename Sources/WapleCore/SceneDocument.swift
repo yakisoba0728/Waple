@@ -21,6 +21,13 @@ public struct SceneLayer: Equatable {
     public let effects: [SceneEffect]
 }
 
+/// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
+public struct SceneParticle: Equatable {
+    public let def: ParticleSystemDef
+    public let origin: Vec2
+    public let scale: Vec2
+}
+
 public struct SceneDocument: Equatable {
     public let projectionWidth: Int
     public let projectionHeight: Int
@@ -29,6 +36,7 @@ public struct SceneDocument: Equatable {
     public let parallaxAmount: Float
     public let parallaxMouseInfluence: Float
     public let layers: [SceneLayer]
+    public let particles: [SceneParticle]
 }
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
@@ -49,29 +57,33 @@ extension SceneDocument {
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
 
         var layers: [SceneLayer] = []
+        var particles: [SceneParticle] = []
         for case let obj as [String: Any] in (scene["objects"] as? [Any] ?? []) {
-            guard let imagePath = obj["image"] as? String else { continue }
             // `visible` 은 바인딩 객체 {"value": false} 또는 평문 불리언 false 두 형태로 온다.
             if (obj["visible"] as? Bool) == false { continue }
             if let vis = obj["visible"] as? [String: Any], (vis["value"] as? Bool) == false { continue }
-            guard let tex = resolveTexture(imagePath: imagePath, package: package) else { continue }
-            let angles = floats(obj["angles"] as? String)
-            layers.append(SceneLayer(
-                textureEntryName: tex,
-                origin: vec2(obj["origin"] as? String) ?? Vec2(x: 0, y: 0),
-                size: vec2(obj["size"] as? String) ?? Vec2(x: Float(pw), y: Float(ph)),
-                scale: vec2(obj["scale"] as? String) ?? Vec2(x: 1, y: 1),
-                angleZ: angles.count >= 3 ? angles[2] : 0,
-                alpha: float(obj["alpha"]) ?? 1,
-                color: vec3(obj["color"] as? String) ?? Vec3(x: 1, y: 1, z: 1),
-                brightness: float(obj["brightness"]) ?? 1,
-                parallaxDepth: vec2(obj["parallaxDepth"] as? String) ?? Vec2(x: 1, y: 1),
-                effects: parseEffects(obj["effects"])
-            ))
+            if let imagePath = obj["image"] as? String {
+                guard let tex = resolveTexture(imagePath: imagePath, package: package) else { continue }
+                let angles = floats(obj["angles"] as? String)
+                layers.append(SceneLayer(
+                    textureEntryName: tex,
+                    origin: vec2(obj["origin"] as? String) ?? Vec2(x: 0, y: 0),
+                    size: vec2(obj["size"] as? String) ?? Vec2(x: Float(pw), y: Float(ph)),
+                    scale: vec2(obj["scale"] as? String) ?? Vec2(x: 1, y: 1),
+                    angleZ: angles.count >= 3 ? angles[2] : 0,
+                    alpha: float(obj["alpha"]) ?? 1,
+                    color: vec3(obj["color"] as? String) ?? Vec3(x: 1, y: 1, z: 1),
+                    brightness: float(obj["brightness"]) ?? 1,
+                    parallaxDepth: vec2(obj["parallaxDepth"] as? String) ?? Vec2(x: 1, y: 1),
+                    effects: parseEffects(obj["effects"])
+                ))
+            } else if let particlePath = obj["particle"] as? String {
+                if let p = parseParticle(particlePath, obj: obj, package: package) { particles.append(p) }
+            }
         }
         return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                              parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
-                             parallaxMouseInfluence: parallaxMouseInfluence, layers: layers)
+                             parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles)
     }
 
     /// image(model) → material → texture name → "materials/<name>.tex".
@@ -94,6 +106,25 @@ extension SceneDocument {
         if package.entries.contains(where: { $0.name == candidate }) { return candidate }
         if package.entries.contains(where: { $0.name == name }) { return name }
         return candidate
+    }
+
+    /// scene object 의 `particle` 경로 → particles/X.json + material → SceneParticle.
+    /// origin/scale 은 씬 픽셀 좌표(첫 2성분). 로드/파싱 실패 → nil + 로그.
+    private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage) -> SceneParticle? {
+        guard let pData = package.data(for: path),
+              let pjson = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any] else {
+            NSLog("%@", "[Waple] SP4 particle load failed: \(path)")
+            return nil
+        }
+        var material: ParticleMaterial? = nil
+        if let matPath = pjson["material"] as? String, let mData = package.data(for: matPath),
+           let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any] {
+            material = ParticleMaterial.parse(mjson)
+        }
+        let def = ParticleSystemDef.parse(pjson, material: material)
+        return SceneParticle(def: def,
+                             origin: vec2(obj["origin"] as? String) ?? Vec2(x: 0, y: 0),
+                             scale: vec2(obj["scale"] as? String) ?? Vec2(x: 1, y: 1))
     }
 
     private static func parseEffects(_ raw: Any?) -> [SceneEffect] {

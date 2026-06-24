@@ -54,4 +54,17 @@ public struct ScenePackage {
         let start = blob.startIndex + blobBase + e.offset
         return blob.subdata(in: start ..< start + e.size)
     }
+
+    /// 엔트리 목록으로부터 패키지를 조립(파싱 결과와 동일 구조). 테스트/리패킹용.
+    public static func assemble(_ files: [(name: String, data: Data)]) -> ScenePackage {
+        var blob = Data()
+        var entries: [Entry] = []
+        var offset = 0
+        for (name, data) in files {
+            entries.append(Entry(name: name, offset: offset, size: data.count))
+            blob.append(data)
+            offset += data.count
+        }
+        return ScenePackage(entries: entries, blob: blob, blobBase: 0)
+    }
 }
