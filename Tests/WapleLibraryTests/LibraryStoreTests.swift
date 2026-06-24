@@ -101,6 +101,32 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertTrue(store2.entries.isEmpty)
     }
 
+    /// 존재하지 않는 id 를 select 해도 그대로 영속되며, 다음 인스턴스에서 해당 엔트리는 없다.
+    func testSelectUnknownIdPersistsButResolvesToNoEntry() throws {
+        let store = LibraryStore(baseDirectory: base())
+        store.select("ghost")
+        XCTAssertEqual(store.selectedId, "ghost")
+        let store2 = LibraryStore(baseDirectory: base())
+        XCTAssertEqual(store2.selectedId, "ghost")
+        XCTAssertNil(store2.entries.first(where: { $0.id == "ghost" }))
+    }
+
+    /// 기존 id 를 재가져오면 갱신된 필드를 반영하며 목록 맨 끝으로 이동한다.
+    func testReimportUpdatesEntryAndMovesToEnd() throws {
+        let a = try makeWallpaperFolder(id: "A")
+        let b = try makeWallpaperFolder(id: "B")
+        let store = LibraryStore(baseDirectory: base())
+        try store.importFolder(a)
+        try store.importFolder(b)
+        XCTAssertEqual(store.entries.map(\.id), ["A", "B"])
+        // A 의 title 을 바꿔 재가져오기.
+        let json = #"{"type":"video","file":"wallpaper.mp4","preview":"preview.jpg","title":"A-new"}"#
+        try Data(json.utf8).write(to: a.appendingPathComponent("project.json"))
+        try store.importFolder(a)
+        XCTAssertEqual(store.entries.map(\.id), ["B", "A"])
+        XCTAssertEqual(store.entries.last?.title, "A-new")
+    }
+
     func testResolveFolderURLReturnsOriginalLocation() throws {
         let folder = try makeWallpaperFolder(id: "111")
         let store = LibraryStore(baseDirectory: base())
