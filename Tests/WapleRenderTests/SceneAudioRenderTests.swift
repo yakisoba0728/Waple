@@ -46,6 +46,41 @@ final class SceneAudioRenderTests: XCTestCase {
         return n > 0 ? sum / Double(n) : -1
     }
 
+    /// opacity 효과(premultiplied 수정 검증): alpha 0.4 → 풀 대비 ~40% 밝기.
+    func testOpacityFades() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        func render(_ alpha: Double, _ name: String) throws -> Double {
+            let scene = """
+            {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+             "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+               "effects":[{"file":"effects/opacity/effect.json","passes":[{"constantshadervalues":{"alpha":\(alpha)}}]}]}]}
+            """
+            let pkg = encodePkg([
+                ("scene.json", scene.data(using: .utf8)!),
+                ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+                ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+                ("materials/w.tex", solidTex(255, 255, 255)),
+            ])
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_op_\(name)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try pkg.write(to: dir.appendingPathComponent("scene.pkg"))
+            let project = WallpaperProject(id: name, type: .scene, fileName: "scene.pkg", previewName: nil,
+                                           title: name, tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+            let r = SceneRenderer()
+            try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+            defer { r.teardown() }
+            let outDir = URL(fileURLWithPath: "/tmp/waple_op_\(name)")
+            try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+            let urls = r.captureFrames(width: 64, height: 36, times: [0.1], toDir: outDir)
+            return avgLuma(try XCTUnwrap(urls.first))
+        }
+        let full = try render(1.0, "full")
+        let dim = try render(0.4, "dim")
+        NSLog("%@", "[Waple] opacity luma full=\(full) dim=\(dim)")
+        XCTAssertGreaterThan(full, 0.8, "alpha 1 → near white")
+        XCTAssertEqual(dim, full * 0.4, accuracy: 0.1, "alpha 0.4 → ~40% over black")
+    }
+
     func testPulseAlphaRespondsToSpectrum() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         // 풀스크린 빨강 레이어 + pulse(PULSEALPHA, AUDIOPROCESSING=3). 무음→alpha0(어두운 배경), 최대→alpha1(빨강).

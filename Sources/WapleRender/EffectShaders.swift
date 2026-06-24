@@ -118,8 +118,9 @@ enum EffectShaders {
                                 texture2d<float> mask [[texture(1)]], constant float* P [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
             float4 c = fb.sample(s, in.uv);
-            c.a *= mask.sample(s, in.uv).r * P[1];
-            return c;
+            float a = c.a * mask.sample(s, in.uv).r * P[1];
+            // premultiplied 출력: 메인 컴포지터가 src=one 이므로 alpha 가 rgb 기여를 줄이도록.
+            return float4(c.rgb * a, a);
         }
         """,
         "tint": """
