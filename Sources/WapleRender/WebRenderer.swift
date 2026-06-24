@@ -72,7 +72,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         }
         """
         webView.evaluateJavaScript(js) { _, error in
-            if let error { NSLog("[Waple] property injection failed: \(error)") }
+            if let error { NSLog("%@", "[Waple] property injection failed: \(error)") }
         }
         audioProvider?.start()
     }

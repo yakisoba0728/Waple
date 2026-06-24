@@ -13,7 +13,7 @@ public final class LibraryStore {
         do {
             try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         } catch {
-            NSLog("[Waple] failed to create library directory at \(baseDirectory.path): \(error)")
+            NSLog("%@", "[Waple] failed to create library directory at \(baseDirectory.path): \(error)")
         }
         load()
     }
@@ -41,7 +41,7 @@ public final class LibraryStore {
             let data = try JSONEncoder().encode(idx)
             try data.write(to: indexURL, options: [.atomic])
         } catch {
-            NSLog("[Waple] failed to save library index at \(indexURL.path): \(error)")
+            NSLog("%@", "[Waple] failed to save library index at \(indexURL.path): \(error)")
         }
     }
 
@@ -96,7 +96,7 @@ public final class LibraryStore {
                 options: [], relativeTo: nil, bookmarkDataIsStale: &stale
             )
         } catch {
-            NSLog("[Waple] failed to resolve bookmark for entry \(entry.id) (\(entry.title)): \(error)")
+            NSLog("%@", "[Waple] failed to resolve bookmark for entry \(entry.id) (\(entry.title)): \(error)")
             return nil
         }
         // macOS 가 stale 을 표시하면 북마크를 재생성·영속화해야 향후 해석 실패를 막는다.

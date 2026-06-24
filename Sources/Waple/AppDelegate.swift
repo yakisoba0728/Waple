@@ -122,6 +122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func notify(_ message: String) {
-        NSLog("[Waple] \(message)")
+        NSLog("%@", "[Waple] \(message)")
     }
 }

@@ -28,7 +28,7 @@ public final class VideoRenderer: WallpaperRenderer {
         // status 를 관찰해 실패를 로깅함으로써 진단 가능하게 한다.
         statusObservation = item.observe(\.status, options: [.new]) { item, _ in
             if item.status == .failed {
-                NSLog("[Waple] video playback failed for \(url.path): \(String(describing: item.error))")
+                NSLog("%@", "[Waple] video playback failed for \(url.path): \(String(describing: item.error))")
             }
         }
         let queue = AVQueuePlayer()
