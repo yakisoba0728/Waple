@@ -40,9 +40,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
 
         switch mode {
         case .web:
+            guard let url = URL(string: base + encoded) else { throw RendererError.assetMissing }
             let props = (try? WallpaperProperties.parse(folderURL: project.folderURL)) ?? []
             pendingUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(props)
-            web.load(URLRequest(url: URL(string: base + encoded)!))
+            web.load(URLRequest(url: url))
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] frame in
                 let csv = frame.map { String(format: "%.3f", $0) }.joined(separator: ",")
@@ -50,8 +51,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             }
             audioProvider = provider
         case .videoFallback:
-            web.loadHTMLString(VideoFallbackHTML.html(forVideoFile: fileName),
-                               baseURL: URL(string: base)!)
+            guard let baseURL = URL(string: base) else { throw RendererError.assetMissing }
+            web.loadHTMLString(VideoFallbackHTML.html(forVideoFile: fileName), baseURL: baseURL)
         }
 
         self.webView = web
