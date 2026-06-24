@@ -3,6 +3,17 @@ import AppKit
 import WapleCore
 import WapleLibrary
 
+/// 미리보기 이미지 디코드 캐시(URL→NSImage). body 재평가마다의 반복 디스크 I/O 제거.
+private enum PreviewImageCache {
+    private static let cache = NSCache<NSURL, NSImage>()
+    static func image(_ url: URL) -> NSImage? {
+        if let c = cache.object(forKey: url as NSURL) { return c }
+        guard let img = NSImage(contentsOf: url) else { return nil }
+        cache.setObject(img, forKey: url as NSURL)
+        return img
+    }
+}
+
 struct LibraryView: View {
     @ObservedObject var viewModel: LibraryViewModel
 
@@ -75,7 +86,9 @@ struct LibraryView: View {
 
     @ViewBuilder
     private func previewImage(for entry: LibraryEntry) -> some View {
-        if let url = viewModel.previewURL(for: entry), let image = NSImage(contentsOf: url) {
+        // SwiftUI body 는 선택 변경 등으로 자주 재평가된다. 디코드된 이미지를 캐시해
+        // 매 렌더마다 디스크 읽기+디코드가 반복되지 않게 한다.
+        if let url = viewModel.previewURL(for: entry), let image = PreviewImageCache.image(url) {
             Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
         } else {
             Rectangle().fill(Color.gray.opacity(0.3))
