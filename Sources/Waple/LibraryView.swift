@@ -45,7 +45,7 @@ struct LibraryView: View {
                     .frame(maxWidth: .infinity)
                     .clipped()
                     .cornerRadius(8)
-                Text(supported ? entry.typeRaw : "지원 예정")
+                Text(badgeText(for: entry, supported: supported))
                     .font(.caption2)
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(supported ? Color.accentColor : Color.gray)
@@ -64,6 +64,11 @@ struct LibraryView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(viewModel.selectedId == entry.id ? Color.accentColor : Color.clear, lineWidth: 2)
         )
+    }
+
+    private func badgeText(for entry: LibraryEntry, supported: Bool) -> String {
+        guard supported else { return "지원 예정" }
+        return entry.typeRaw.lowercased() == "scene" ? "scene · 부분" : entry.typeRaw
     }
 
     @ViewBuilder
