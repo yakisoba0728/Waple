@@ -143,6 +143,10 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
                     }
                 }
                 vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
+                // packed-real FFT: split.imagp[0] 에는 Nyquist(fs/2) 항이 들어가 있다.
+                // 0 으로 만들지 않으면 mags[0] = DC² + Nyquist² 가 되어 최저 주파수(베이스) bin 이
+                // 최고 주파수와 섞여 오염된다. bin 0 = |DC| 가 되도록 Nyquist 항을 제거한다.
+                split.imagp[0] = 0
                 vDSP_zvmags(&split, 1, &mags, 1, vDSP_Length(half))
             }
         }
