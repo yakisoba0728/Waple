@@ -41,7 +41,16 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         switch mode {
         case .web:
             guard let url = URL(string: base + encoded) else { throw RendererError.assetMissing }
-            let props = (try? WallpaperProperties.parse(folderURL: project.folderURL)) ?? []
+            // 속성 부재(파일 없음)는 정상이지만, 파싱 오류는 사용자 커스터마이즈가 통째로
+            // 사라지므로 무음 폴백([])하되 로깅해 진단 가능하게 한다.
+            var props: [WallpaperProperty] = []
+            do {
+                props = try WallpaperProperties.parse(folderURL: project.folderURL)
+            } catch ProjectParseError.fileNotFound {
+                // project.json 없음/속성 없음 — 정상.
+            } catch {
+                NSLog("%@", "[Waple] failed to parse properties for \(project.folderURL.path): \(error)")
+            }
             pendingUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(props)
             web.load(URLRequest(url: url))
             let provider = SystemAudioSpectrumProvider()

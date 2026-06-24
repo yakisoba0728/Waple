@@ -41,7 +41,10 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             guard running else { return }
-            guard let display = content.displays.first else { feedZeros(); return }
+            guard let display = content.displays.first else {
+                NSLog("%@", "[Waple] audio capture: no displays available, feeding silence")
+                feedZeros(); return
+            }
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
             config.capturesAudio = true
@@ -63,6 +66,8 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
             }
             self.stream = stream
         } catch {
+            // 화면 기록 권한 거부가 흔한 원인. 폴백(무음)은 유지하되 진단 가능하도록 로깅한다.
+            NSLog("%@", "[Waple] audio capture failed (screen-recording permission?), feeding silence: \(error)")
             feedZeros()
         }
     }
