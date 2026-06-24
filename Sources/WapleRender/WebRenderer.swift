@@ -8,6 +8,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private let mode: Mode
     private var webView: WKWebView?
     private var pendingUserPropertiesJSON: String?
+    private var audioProvider: SystemAudioSpectrumProvider?
 
     public init(mode: Mode) {
         self.mode = mode
@@ -42,6 +43,12 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             let props = (try? WallpaperProperties.parse(folderURL: project.folderURL)) ?? []
             pendingUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(props)
             web.load(URLRequest(url: URL(string: base + encoded)!))
+            let provider = SystemAudioSpectrumProvider()
+            provider.onFrame = { [weak self] frame in
+                let csv = frame.map { String(format: "%.3f", $0) }.joined(separator: ",")
+                self?.webView?.evaluateJavaScript("if(window.__wapleAudio)window.__wapleAudio([\(csv)]);")
+            }
+            audioProvider = provider
         case .videoFallback:
             web.loadHTMLString(VideoFallbackHTML.html(forVideoFile: fileName),
                                baseURL: URL(string: base)!)
@@ -61,6 +68,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         }
         """
         webView.evaluateJavaScript(js)
+        audioProvider?.start()
     }
 
     public func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -70,14 +78,18 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     public func pause() {
         webView?.evaluateJavaScript(
             "if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.setPaused)window.wallpaperPropertyListener.setPaused(true);")
+        audioProvider?.stop()
     }
 
     public func resume() {
         webView?.evaluateJavaScript(
             "if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.setPaused)window.wallpaperPropertyListener.setPaused(false);")
+        audioProvider?.start()
     }
 
     public func teardown() {
+        audioProvider?.stop()
+        audioProvider = nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "waple")
         webView?.removeFromSuperview()
         webView = nil
