@@ -4,9 +4,13 @@ enum QuadShaders {
     #include <metal_stdlib>
     using namespace metal;
     struct VOut { float4 pos [[position]]; float2 uv; };
-    vertex VOut v_main(uint vid [[vertex_id]], const device float4* verts [[buffer(0)]]) {
+    vertex VOut v_main(uint vid [[vertex_id]],
+                       const device float4* verts [[buffer(0)]],
+                       constant float2& cameraOffset [[buffer(1)]],
+                       constant float2& parallaxDepth [[buffer(2)]]) {
         float4 v = verts[vid];
-        VOut o; o.pos = float4(v.x, v.y, 0.0, 1.0); o.uv = float2(v.z, v.w); return o;
+        float2 p = v.xy + cameraOffset * parallaxDepth;
+        VOut o; o.pos = float4(p.x, p.y, 0.0, 1.0); o.uv = float2(v.z, v.w); return o;
     }
     fragment float4 f_main(VOut in [[stage_in]],
                            texture2d<float> tex [[texture(0)]],

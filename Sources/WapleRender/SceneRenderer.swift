@@ -3,7 +3,7 @@ import MetalKit
 import WapleCore
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float> }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float> }
 
     private var videoRenderer: VideoRenderer?
     private var mtkView: MTKView?
@@ -12,6 +12,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var pipeline: MTLRenderPipelineState?
     private var layers: [GPULayer] = []
     private var clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+    private var cameraOffset = SIMD2<Float>(0, 0)
+    private var parallaxEnabled = false
+    private var parallaxAmount: Float = 1
+    private var parallaxMouseInfluence: Float = 1
+    private let parallax = ParallaxController()
+    private let maxShift: Float = 0.04
 
     public override init() { super.init() }
 
@@ -66,6 +72,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         container.addSubview(view)
         self.mtkView = view
         view.needsDisplay = true
+
+        parallaxEnabled = doc.parallaxEnabled
+        parallaxAmount = doc.parallaxAmount
+        parallaxMouseInfluence = doc.parallaxMouseInfluence
+        if parallaxEnabled {
+            parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
+            parallax.start()
+        }
     }
 
     private func pkgURL(in folder: URL) -> URL? {
@@ -89,7 +103,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) else { continue }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
-            out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint))
+            out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
+                                parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y)))
         }
         return out
     }
@@ -125,6 +140,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         ]
     }
 
+    private func updateParallax(_ off: CGPoint) {
+        let s = parallaxAmount * parallaxMouseInfluence * maxShift
+        cameraOffset = SIMD2<Float>(Float(off.x) * s, Float(off.y) * s)
+        mtkView?.needsDisplay = true
+    }
+
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { view.needsDisplay = true }
 
     public func draw(in view: MTKView) {
@@ -136,9 +157,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         rpd.colorAttachments[0].loadAction = .clear
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
         enc.setRenderPipelineState(pipeline)
+        var camOffset = cameraOffset
         for layer in layers {
             var tint = layer.tint
+            var depth = layer.parallaxDepth
             enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
+            enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
             enc.setFragmentTexture(layer.texture, index: 0)
             enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
@@ -154,6 +179,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
     public func teardown() {
         videoRenderer?.teardown(); videoRenderer = nil
+        parallax.stop()
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; pipeline = nil; queue = nil; device = nil
     }
