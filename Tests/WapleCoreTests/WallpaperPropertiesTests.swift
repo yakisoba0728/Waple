@@ -43,6 +43,22 @@ final class WallpaperPropertiesTests: XCTestCase {
         XCTAssertEqual(json, #"{"bg":{"type":"color","value":"0.6 0.4 0.3"},"x":{"type":"bool","value":true}}"#)
     }
 
+    func testWEUserPropertiesJSONNumberAndEmpty() {
+        let json = WallpaperProperties.weUserPropertiesJSON([
+            WallpaperProperty(key: "amt", type: "slider", value: .number(0.5), order: 0, condition: nil)
+        ])
+        XCTAssertEqual(json, #"{"amt":{"type":"slider","value":0.5}}"#)
+        XCTAssertEqual(WallpaperProperties.weUserPropertiesJSON([]), "{}")
+    }
+
+    /// .none 값은 "value" 키 없이 type 만 직렬화돼야 한다(null 을 내보내면 WE 가 오해할 수 있음).
+    func testWEUserPropertiesJSONNoneOmitsValueKey() {
+        let json = WallpaperProperties.weUserPropertiesJSON([
+            WallpaperProperty(key: "x", type: "color", value: .none, order: 0, condition: nil)
+        ])
+        XCTAssertEqual(json, #"{"x":{"type":"color"}}"#)
+    }
+
     func testParseFolderReadsGeneralProperties() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("WPProps-\(UUID().uuidString)", isDirectory: true)
