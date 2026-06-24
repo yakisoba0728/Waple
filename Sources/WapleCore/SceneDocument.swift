@@ -49,6 +49,8 @@ extension SceneDocument {
         var layers: [SceneLayer] = []
         for case let obj as [String: Any] in (scene["objects"] as? [Any] ?? []) {
             guard let imagePath = obj["image"] as? String else { continue }
+            // `visible` 은 바인딩 객체 {"value": false} 또는 평문 불리언 false 두 형태로 온다.
+            if (obj["visible"] as? Bool) == false { continue }
             if let vis = obj["visible"] as? [String: Any], (vis["value"] as? Bool) == false { continue }
             guard let tex = resolveTexture(imagePath: imagePath, package: package) else { continue }
             layers.append(SceneLayer(

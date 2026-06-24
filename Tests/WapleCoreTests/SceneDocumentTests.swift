@@ -36,6 +36,17 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(try SceneDocument.parse(package: p).layers.count, 0)
     }
 
+    /// `visible` 이 평문 불리언 false(바인딩 객체가 아님)일 때도 레이어를 숨겨야 한다.
+    func testSkipsLayerWithLiteralBoolVisibleFalse() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":false}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        XCTAssertEqual(try SceneDocument.parse(package: p).layers.count, 0)
+    }
+
     func testSkipsLayerWithMissingModel() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
