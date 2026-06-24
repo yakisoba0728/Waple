@@ -25,9 +25,14 @@ final class RendererFactoryTests: XCTestCase {
         XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .scene, file: "scene.json")) is SceneRenderer)
     }
 
+    func testVideoWithNilFileNameReturnsVideoRenderer() {
+        XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .video, file: nil)) is VideoRenderer)
+    }
+
     func testOtherUnsupportedReturnNil() {
         XCTAssertNil(RendererFactory.makeRenderer(for: project(type: .preset, file: nil)))
         XCTAssertNil(RendererFactory.makeRenderer(for: project(type: .unknown("z"), file: nil)))
+        XCTAssertNil(RendererFactory.makeRenderer(for: project(type: .application, file: "app.exe")))
     }
 
     func testSupportedContainers() {
