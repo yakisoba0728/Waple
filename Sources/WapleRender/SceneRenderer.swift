@@ -5,6 +5,7 @@ import WapleCore
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float> }
 
+    private var videoRenderer: VideoRenderer?
     private var mtkView: MTKView?
     private var device: MTLDevice?
     private var queue: MTLCommandQueue?
@@ -20,6 +21,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
               let package = try? ScenePackage.parse(data),
               let doc = try? SceneDocument.parse(package: package) else {
             throw RendererError.assetMissing
+        }
+        // 비디오-텍스처 씬 → 내장 MP4 추출 후 VideoRenderer 위임.
+        if let videoName = VideoTextureExtractor.videoLayer(in: doc, package: package),
+           let mp4URL = VideoTextureExtractor.extractMP4(textureEntryName: videoName, package: package,
+                                                         sceneID: project.id, cacheDir: VideoTextureExtractor.defaultCacheDir()) {
+            let synthetic = WallpaperProject(
+                id: project.id, type: .video, fileName: mp4URL.lastPathComponent, previewName: nil,
+                title: project.title, tags: [], contentRating: nil, workshopId: nil, dependency: nil,
+                folderURL: mp4URL.deletingLastPathComponent())
+            let vr = VideoRenderer()
+            try vr.mount(in: container, project: synthetic)
+            self.videoRenderer = vr
+            return
         }
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { throw RendererError.unsupportedType }
@@ -134,9 +148,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         cb.commit()
     }
 
-    public func pause() {}
-    public func resume() { mtkView?.needsDisplay = true }
+    public func pause() { videoRenderer?.pause() }
+    public func resume() {
+        if let videoRenderer { videoRenderer.resume() } else { mtkView?.needsDisplay = true }
+    }
     public func teardown() {
+        videoRenderer?.teardown(); videoRenderer = nil
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; pipeline = nil; queue = nil; device = nil
     }
