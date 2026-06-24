@@ -82,13 +82,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 notify("지원하지 않는 타입입니다: \(project.type.storageString)")
                 return
             }
-            renderers.forEach { $0.teardown() }
-            renderers.removeAll()
-            for view in desktopController.contentViews {
-                guard let renderer = RendererFactory.makeRenderer(for: project) else { continue }
-                try renderer.mount(in: view, project: project)
-                renderers.append(renderer)
+            var newRenderers: [WallpaperRenderer] = []
+            do {
+                for view in desktopController.contentViews {
+                    guard let renderer = RendererFactory.makeRenderer(for: project) else { continue }
+                    try renderer.mount(in: view, project: project)
+                    newRenderers.append(renderer)
+                }
+            } catch {
+                // 일부만 마운트된 렌더러를 정리해 화면별 비대칭/유령 렌더러를 방지. 기존 배경은 유지.
+                newRenderers.forEach { $0.teardown() }
+                throw error
             }
+            // 전부 성공한 뒤에만 기존 렌더러를 정리하고 교체한다.
+            renderers.forEach { $0.teardown() }
+            renderers = newRenderers
             currentFolderURL = folderURL
         } catch {
             notify("적용 실패: \(error)")
