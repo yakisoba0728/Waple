@@ -25,10 +25,11 @@ final class WallpaperTypeTests: XCTestCase {
         }
     }
 
-    func testVideoAndWebAreSupportedInMVP() {
+    func testVideoWebSceneAreSupportedInMVP() {
         XCTAssertTrue(WallpaperType.video.isSupportedInMVP)
         XCTAssertTrue(WallpaperType.web.isSupportedInMVP)
-        XCTAssertFalse(WallpaperType.scene.isSupportedInMVP)
+        XCTAssertTrue(WallpaperType.scene.isSupportedInMVP)
         XCTAssertFalse(WallpaperType.preset.isSupportedInMVP)
+        XCTAssertFalse(WallpaperType.application.isSupportedInMVP)
     }
 }
