@@ -6,6 +6,14 @@ public struct SceneEffect: Equatable {
     /// object effect `textures[]` 슬롯 전체. slot0 은 보통 null(=framebuffer),
     /// 이후 슬롯이 마스크/노멀맵 등 보조 텍스처. 각 원소는 이름 또는 null.
     public let textureNames: [String?]
+    /// passes[0].combos (예: AUDIOPROCESSING, BLENDMODE, PULSEALPHA, PULSECOLOR). 셰이더 변형 선택.
+    public let combos: [String: Int]
+    /// AUDIOPROCESSING 콤보(0=off,1=L,2=R,3=L+R). 오디오-반응 효과 식별.
+    public var audioMode: Int { combos["AUDIOPROCESSING"] ?? 0 }
+
+    public init(name: String, constants: [String: [Float]], textureNames: [String?], combos: [String: Int] = [:]) {
+        self.name = name; self.constants = constants; self.textureNames = textureNames; self.combos = combos
+    }
 }
 
 public struct SceneLayer: Equatable {
@@ -137,7 +145,14 @@ extension SceneDocument {
             let name = parts.count >= 2 ? String(parts[parts.count - 2]) : file
             var constants: [String: [Float]] = [:]
             var textureNames: [String?] = []
+            var combos: [String: Int] = [:]
             if let passes = e["passes"] as? [Any], let pass0 = passes.first as? [String: Any] {
+                if let cb = pass0["combos"] as? [String: Any] {
+                    for (k, v) in cb {
+                        if let i = v as? Int { combos[k] = i }
+                        else if let d = v as? Double { combos[k] = Int(d) }
+                    }
+                }
                 if let cs = pass0["constantshadervalues"] as? [String: Any] {
                     for (k, v) in cs {
                         if let d = v as? Double { constants[k] = [Float(d)] }
@@ -153,7 +168,7 @@ extension SceneDocument {
                     textureNames = texs.map { $0 as? String }
                 }
             }
-            out.append(SceneEffect(name: name, constants: constants, textureNames: textureNames))
+            out.append(SceneEffect(name: name, constants: constants, textureNames: textureNames, combos: combos))
         }
         return out
     }
