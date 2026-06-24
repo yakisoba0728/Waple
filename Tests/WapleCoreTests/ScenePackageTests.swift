@@ -36,4 +36,22 @@ final class ScenePackageTests: XCTestCase {
             XCTAssertEqual(e as? ScenePackageError, .malformed)
         }
     }
+
+    /// 헤더는 정상 파싱되지만 엔트리 size 가 blob 끝을 넘어가면 거부돼야 한다(entry-bounds loop).
+    func testRejectsEntryExtendingPastBlob() {
+        func i32(_ v: Int) -> [UInt8] {
+            let u = UInt32(truncatingIfNeeded: v)
+            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
+        }
+        let ver = Array("PKGV0001".utf8)
+        let nm = Array("a.json".utf8)
+        let body = Array("HI".utf8)  // 실제 2바이트
+        // 헤더는 정상이나 엔트리 size 를 999 로 선언 → blobBase+0+999 > b.count
+        var out = i32(ver.count) + ver + i32(1)
+        out += i32(nm.count) + nm + i32(0) + i32(999)
+        out += body
+        XCTAssertThrowsError(try ScenePackage.parse(Data(out))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+    }
 }
