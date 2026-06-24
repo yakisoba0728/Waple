@@ -67,6 +67,31 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(store2.selectedId, "111")
     }
 
+    /// 손상된 library.json 은 빈 라이브러리로 취급되지만, 다음 save() 가 덮어쓰기 전에
+    /// 원본을 .corrupt-* 로 백업해 데이터 손실을 막아야 한다.
+    func testCorruptIndexIsBackedUpNotClobbered() throws {
+        let storeDir = base()
+        try FileManager.default.createDirectory(at: storeDir, withIntermediateDirectories: true)
+        let indexURL = storeDir.appendingPathComponent("library.json")
+        let garbage = Data("{ this is not valid json".utf8)
+        try garbage.write(to: indexURL)
+
+        let store = LibraryStore(baseDirectory: storeDir)
+        XCTAssertTrue(store.entries.isEmpty)
+        // 다음 save() 트리거(select).
+        store.select("ghost")
+
+        // 원본 손상 파일은 백업으로 보존돼야 한다.
+        let backups = try FileManager.default.contentsOfDirectory(at: storeDir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("library.json.corrupt-") }
+        XCTAssertEqual(backups.count, 1)
+        XCTAssertEqual(try Data(contentsOf: backups[0]), garbage)
+        // 새 인덱스가 기록됐어야 한다(빈 entries + ghost selection).
+        let store2 = LibraryStore(baseDirectory: storeDir)
+        XCTAssertEqual(store2.selectedId, "ghost")
+        XCTAssertTrue(store2.entries.isEmpty)
+    }
+
     func testResolveFolderURLReturnsOriginalLocation() throws {
         let folder = try makeWallpaperFolder(id: "111")
         let store = LibraryStore(baseDirectory: base())
