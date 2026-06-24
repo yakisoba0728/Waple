@@ -13,9 +13,11 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
     private let log2n: vDSP_Length
     private let fftSetup: FFTSetup
     private var window: [Float]
-    // running/stream 은 메인 스레드(start/stop), 캡처 Task, waple.audio 콜백 큐에서 동시 접근되므로 lock 으로 직렬화한다.
+    // running/stream/generation 은 메인 스레드(start/stop), 캡처 Task, waple.audio 콜백 큐에서 동시 접근되므로 lock 으로 직렬화한다.
     private let lock = NSLock()
     private var running = false
+    // 매 start/stop 마다 증가. in-flight startCapture Task 는 자기 세대가 현재일 때만 stream 을 할당(급속 stop/start 시 고아 스트림 방지).
+    private var generation = 0
 
     public override init() {
         log2n = vDSP_Length(round(log2(Double(fftSize))))
@@ -31,13 +33,16 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
         lock.lock()
         if running { lock.unlock(); return }
         running = true
+        generation += 1
+        let gen = generation
         lock.unlock()
-        Task { await startCapture() }
+        Task { await startCapture(generation: gen) }
     }
 
     public func stop() {
         lock.lock()
         running = false
+        generation += 1   // 진행 중인 startCapture Task 를 무효화(고아 스트림 방지)
         let s = stream
         stream = nil
         lock.unlock()
@@ -50,18 +55,25 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
         return running
     }
 
-    /// running 이면 stream 을 할당하고 true 반환, 아니면 할당 없이 false 반환(동기 임계 구역).
-    private func assignStreamIfRunning(_ s: SCStream) -> Bool {
+    private func isCurrent(_ gen: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard running else { return false }
-        stream = s
-        return true
+        return running && gen == generation
     }
 
-    private func startCapture() async {
+    /// gen 이 현재 세대이고 running 이면 stream 을 교체하고 (이전 stream, true) 반환.
+    /// 아니면 (nil, false). 이전/거부된 stream 의 stopCapture 는 호출자가 lock 밖에서 수행.
+    private func swapStreamIfCurrent(_ s: SCStream, generation gen: Int) -> (old: SCStream?, assigned: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        guard running, gen == generation else { return (nil, false) }
+        let old = stream
+        stream = s
+        return (old, true)
+    }
+
+    private func startCapture(generation gen: Int) async {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            guard isRunning() else { return }
+            guard isCurrent(gen) else { return }
             guard let display = content.displays.first else {
                 NSLog("%@", "[Waple] audio capture: no displays available, feeding silence")
                 feedZeros(); return
@@ -79,10 +91,11 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
             let stream = SCStream(filter: filter, configuration: config, delegate: nil)
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: DispatchQueue(label: "waple.audio"))
             try await stream.startCapture()
-            // stop() 이 await 도중 실행됐다면 self.stream 이 아직 nil 이라 stopCapture 가
-            // no-op 였다. running 확인과 self.stream 할당을 한 임계 구역(동기 헬퍼)에서 처리해 TOCTOU 를 닫는다.
-            if !assignStreamIfRunning(stream) {
-                // 캡처가 주인 없이 계속 도는 것을 막기 위해 즉시 중단한다.
+            // 세대 확인 + stream 할당을 한 임계 구역에서. stop()/재start() 가 await 도중 일어났다면
+            // 이 Task 는 더 이상 현재 세대가 아니므로 방금 만든 stream 을 즉시 중단(고아 방지).
+            let (old, assigned) = swapStreamIfCurrent(stream, generation: gen)
+            old?.stopCapture { _ in }  // 이론상 nil(직전 stream 은 stop 이 정리). 방어적.
+            if !assigned {
                 stream.stopCapture { _ in }
                 return
             }
