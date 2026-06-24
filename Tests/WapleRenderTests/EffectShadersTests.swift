@@ -9,7 +9,7 @@ final class EffectShadersTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
         }
-        for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake"] {
+        for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake", "pulse"] {
             let src = try XCTUnwrap(EffectShaders.source(for: n), "source missing for \(n)")
             let lib = try device.makeLibrary(source: src, options: nil)
             XCTAssertNotNil(lib.makeFunction(name: "ev_main"), "\(n): no ev_main")
@@ -34,10 +34,27 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:]), [1, 0, 0, 1, 0])  // default red, alpha 1, normal
     }
     func testTintBlendModeMapping() {
-        // blendmode constant → mode slot (last element)
-        XCTAssertEqual(EffectShaders.params(for: "tint", constants: ["blendmode": [1]])?.last, 1)  // multiply
-        XCTAssertEqual(EffectShaders.params(for: "tint", constants: ["ui_editor_properties_blend_mode": [3]])?.last, 3)  // screen
-        XCTAssertEqual(EffectShaders.params(for: "tint", constants: ["blendmode": [999]])?.last, 0)  // unknown → normal
+        // BLENDMODE 은 콤보(WE 전체 enum). last 슬롯 = 모드.
+        XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:], combos: ["BLENDMODE": 2])?.last, 2)   // multiply
+        XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:], combos: ["BLENDMODE": 11])?.last, 11) // overlay (구버전엔 불가)
+        XCTAssertEqual(EffectShaders.params(for: "tint", constants: ["blendmode": [7]])?.last, 7)  // 폴백: constants
+        XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:])?.last, 0)  // 미지정 → Normal
+    }
+
+    func testPulseParams() {
+        // audio mode + PULSEALPHA + bounds.
+        let p = EffectShaders.params(for: "pulse", constants: ["amount": [1.5], "bounds": [0, 1]],
+                                     combos: ["AUDIOPROCESSING": 3, "PULSEALPHA": 1, "BLENDMODE": 9])
+        XCTAssertEqual(p?.count, 16)
+        XCTAssertEqual(p?[2], 1.5)   // amount
+        XCTAssertEqual(p?[6], 9)     // blendmode
+        XCTAssertEqual(p?[8], 1)     // pulseAlpha
+        XCTAssertEqual(p?[9], 3)     // audioMode
+        // defaults: pulseColor 1, speed 3
+        let d = EffectShaders.params(for: "pulse", constants: [:])
+        XCTAssertEqual(d?[0], 3)     // speed default
+        XCTAssertEqual(d?[7], 1)     // pulseColor default
+        XCTAssertEqual(d?[9], 0)     // audioMode default off
     }
     func testWaterrippleParams() {
         // order: strength, scale, scrollSpeed (time prepended at bind time)
@@ -71,7 +88,7 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertEqual(p?[2], 4); XCTAssertEqual(p?[3], 34)
     }
     func testSourcesExist() {
-        for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake"] {
+        for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake", "pulse"] {
             XCTAssertNotNil(EffectShaders.source(for: n))
             XCTAssertTrue(EffectShaders.source(for: n)!.contains("ef_main"))
         }

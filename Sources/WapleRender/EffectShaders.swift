@@ -8,8 +8,8 @@ enum EffectShaders {
         return header + vert + frag
     }
 
-    /// constantshadervalues → 효과별 파라미터 슬롯(기본값 포함). 미지원 nil.
-    static func params(for name: String, constants c: [String: [Float]]) -> [Float]? {
+    /// constantshadervalues(+combos) → 효과별 파라미터 슬롯(기본값 포함). 미지원 nil.
+    static func params(for name: String, constants c: [String: [Float]], combos cb: [String: Int] = [:]) -> [Float]? {
         func f(_ k: String, _ d: Float) -> Float { c[k]?.first ?? d }
         switch name {
         case "opacity":
@@ -17,7 +17,19 @@ enum EffectShaders {
         case "tint":
             let col = c["color"] ?? [1, 0, 0]
             let r = col.count > 0 ? col[0] : 1, g = col.count > 1 ? col[1] : 0, b = col.count > 2 ? col[2] : 0
-            return [r, g, b, f("alpha", 1), blendMode(c)]
+            // BLENDMODE 은 콤보(0..32). 없으면 0=Normal. (구버전 constants["blendmode"] 도 폴백.)
+            let mode = Float(cb["BLENDMODE"] ?? Int(c["blendmode"]?.first ?? 0))
+            return [r, g, b, f("alpha", 1), mode]
+        case "pulse":
+            // [speed,phase,amount,power,threshLo,threshHi, blendmode, pulseColor, pulseAlpha, audioMode, tintLo(3), tintHi(3)]
+            let bounds = c["bounds"] ?? [0, 1]
+            let tLo = c["tintlow"] ?? [1, 1, 1], tHi = c["tinthigh"] ?? [1, 1, 1]
+            func v3(_ a: [Float], _ i: Int) -> Float { i < a.count ? a[i] : 1 }
+            return [f("speed", 3), f("phase", 0), f("amount", 1), f("power", 1),
+                    bounds.count > 0 ? bounds[0] : 0, bounds.count > 1 ? bounds[1] : 1,
+                    Float(cb["BLENDMODE"] ?? 9), Float(cb["PULSECOLOR"] ?? 1), Float(cb["PULSEALPHA"] ?? 0),
+                    Float(cb["AUDIOPROCESSING"] ?? 0),
+                    v3(tLo, 0), v3(tLo, 1), v3(tLo, 2), v3(tHi, 0), v3(tHi, 1), v3(tHi, 2)]
         case "waterripple":
             // strength/scale 키: ui_editor_properties_* → 실제 씬 키(ripple_*) → 단축 키 → 기본값.
             // 설계 문서 §2 정찰: 실제 오브젝트 constants 는 ratio, ripple_scale, ripple_strength.
@@ -44,18 +56,38 @@ enum EffectShaders {
         }
     }
 
-    /// tint 블렌드 모드 인덱스. 지원: 0=normal,1=multiply,2=add,3=screen,4=overlay. 미지원/미지정→0.
-    /// NOTE: WE 의 정확한 BLENDMODE enum 정수 매핑은 시각 게이트에서 확인 필요(현재는 인덱스 패스스루).
-    private static func blendMode(_ c: [String: [Float]]) -> Float {
-        let raw = c["blendmode"]?.first ?? c["ui_editor_properties_blend_mode"]?.first ?? 0
-        let idx = Int(raw.rounded())
-        return (0...4).contains(idx) ? Float(idx) : 0
-    }
-
     private static let header = """
     #include <metal_stdlib>
     using namespace metal;
     struct EOut { float4 pos [[position]]; float2 uv; };
+
+    // WE common_blending.h 포팅(흔한 모드). applyBlending(mode, A=base, B=blend, o=opacity).
+    inline float3 we_overlay(float3 b, float3 s) { return select(2.0*b*s, 1.0-2.0*(1.0-b)*(1.0-s), b >= 0.5); }
+    inline float3 we_colorburn(float3 b, float3 s) { return select(max(1.0-(1.0-b)/max(s,1e-5), 0.0), float3(0.0), s == 0.0); }
+    inline float3 we_colordodge(float3 b, float3 s) { return select(min(b/max(1.0-s,1e-5), 1.0), float3(1.0), s == 1.0); }
+    inline float3 we_softlight(float3 b, float3 s) { return select(2.0*b*s + b*b*(1.0-2.0*s), sqrt(max(b,0.0))*(2.0*s-1.0)+2.0*b*(1.0-s), s >= 0.5); }
+    inline float3 applyBlending(int mode, float3 A, float3 B, float o) {
+        float3 r;
+        switch (mode) {
+            case 1:  r = min(A, B); break;                 // Darken
+            case 2:  r = A * B; break;                     // Multiply
+            case 3:  r = we_colorburn(A, B); break;        // ColorBurn
+            case 4:  r = max(A + B - 1.0, 0.0); break;     // Subtract
+            case 5:  return min(A, B);                     // Min (no opacity)
+            case 6:  r = max(A, B); break;                 // Lighten
+            case 7:  r = 1.0 - (1.0 - A) * (1.0 - B); break; // Screen
+            case 8:  r = we_colordodge(A, B); break;       // ColorDodge
+            case 9:  r = min(A + B, 1.0); break;           // Add
+            case 10: return max(A, B);                     // Max (no opacity)
+            case 11: r = we_overlay(A, B); break;          // Overlay
+            case 12: r = we_softlight(A, B); break;        // SoftLight
+            case 13: r = we_overlay(B, A); break;          // HardLight
+            case 30: r = max(A.x, max(A.y, A.z)) * B; break; // Tint
+            case 31: return A + B * o;                     // Additive (no mix)
+            default: r = B; break;                         // 0 = Normal
+        }
+        return mix(A, r, o);
+    }
 
     """
     private static let vert = """
@@ -97,18 +129,8 @@ enum EffectShaders {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
             float4 c = fb.sample(s, in.uv);
             float m = mask.sample(s, in.uv).r;
-            float3 base = c.rgb;
-            float3 tint = float3(P[1], P[2], P[3]);
-            // 블렌드 모드(P[5]): 0=normal,1=multiply,2=add,3=screen,4=overlay.
-            int mode = int(P[5] + 0.5);
-            float3 blended;
-            if (mode == 1) { blended = base * tint; }
-            else if (mode == 2) { blended = base + tint; }
-            else if (mode == 3) { blended = 1.0 - (1.0 - base) * (1.0 - tint); }
-            else if (mode == 4) {
-                blended = select(2.0 * base * tint, 1.0 - 2.0 * (1.0 - base) * (1.0 - tint), base >= 0.5);
-            } else { blended = tint; }
-            c.rgb = mix(base, blended, P[4] * m);
+            // BLENDMODE(P[5]) 은 WE 전체 enum(0..32). applyBlending 이 opacity(P[4]*mask) 로 믹스.
+            c.rgb = applyBlending(int(P[5] + 0.5), c.rgb, float3(P[1], P[2], P[3]), P[4] * m);
             return c;
         }
         """,
@@ -132,6 +154,30 @@ enum EffectShaders {
             constexpr sampler s(filter::linear, address::repeat);
             float2 uv = fract((in.uv + P[0] * float2(P[3], P[4])) * float2(P[1], P[2]));
             return fb.sample(s, uv);
+        }
+        """,
+        "pulse": """
+        fragment float4 ef_main(EOut in [[stage_in]], texture2d<float> fb [[texture(0)]],
+                                constant float* P [[buffer(0)]], constant float& audio [[buffer(1)]]) {
+            constexpr sampler s(filter::linear, address::clamp_to_edge);
+            // P[0]=time, P[1]=speed,P[2]=phase,P[3]=amount,P[4]=power,P[5]=threshLo,P[6]=threshHi,
+            //   P[7]=blendmode,P[8]=pulseColor,P[9]=pulseAlpha,P[10]=audioMode,P[11..13]=tintLo,P[14..16]=tintHi.
+            float4 c = fb.sample(s, in.uv);
+            float pulse;
+            if (P[10] > 0.5) {
+                pulse = audio;  // audioResponse (CPU 계산, buffer1)
+            } else {
+                pulse = smoothstep(P[5], P[6], sin(P[0] * P[1] + (P[2] - 0.25) * 6.28318530718) * 0.5 + 0.5) * P[3];
+                pulse = pow(max(pulse, 0.0), P[4]);
+            }
+            float3 albedo = c.rgb;
+            if (P[8] > 0.5) {
+                albedo = applyBlending(int(P[7] + 0.5), c.rgb * float3(P[11], P[12], P[13]), c.rgb * float3(P[14], P[15], P[16]), pulse);
+            }
+            float a = c.a;
+            if (P[9] > 0.5) { a *= pulse; }
+            // premultiplied 출력: 메인 컴포지터가 src=one(premultiplied over)이므로 alpha 가 rgb 기여를 줄이도록.
+            return float4(max(float3(0.0), albedo) * a, a);
         }
         """,
         "shake": """

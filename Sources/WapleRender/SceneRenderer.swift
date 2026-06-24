@@ -3,7 +3,8 @@ import MetalKit
 import WapleCore
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
-    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let auxTextures: [MTLTexture]; let params: [Float] }
+    private struct AudioParams { let mode: Int; let freqMin: Float; let freqMax: Float; let bounds: SIMD2<Float>; let power: Float; let multiply: Float }
+    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let auxTextures: [MTLTexture]; let params: [Float]; let audio: AudioParams? }
     private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int }
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -35,6 +36,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var startTime = CFAbsoluteTimeGetCurrent()
     private var lastFrameTime = CFAbsoluteTimeGetCurrent()
     private var hasEffects = false
+    private var hasAudio = false
+    private var currentSpectrum = AudioSpectrum16.silent
+    private var audioProvider: SystemAudioSpectrumProvider?
     private var effectVertexBuffer: MTLBuffer?
     private var particleSystems: [GPUParticleSystem] = []
     private var hasParticles = false
@@ -136,6 +140,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             startTime = CFAbsoluteTimeGetCurrent()
             lastFrameTime = startTime
         }
+        // 오디오-반응 효과가 있으면 시스템 오디오 스펙트럼 캡처 시작(Screen Recording 권한 필요).
+        if hasAudio {
+            let provider = SystemAudioSpectrumProvider()
+            provider.onFrame = { [weak self] spec in
+                let bins = AudioSpectrum16.downsample16(spec)
+                self?.currentSpectrum = AudioSpectrum16(left: bins, right: bins)
+            }
+            provider.start()
+            audioProvider = provider
+        }
     }
 
     private func pkgURL(in folder: URL) -> URL? {
@@ -177,8 +191,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             var effects: [EffectGPU] = []
             for eff in layer.effects {
                 guard let src = EffectShaders.source(for: eff.name),
-                      let params = EffectShaders.params(for: eff.name, constants: eff.constants),
+                      let params = EffectShaders.params(for: eff.name, constants: eff.constants, combos: eff.combos),
                       let pipe = effectPipeline(source: src, device: device) else { continue }
+                let audio = audioParams(for: eff)
+                if audio != nil { hasAudio = true }
                 // slot0 은 framebuffer → aux 는 slot1.. 디코드. 디코드 실패는 흰색 1x1 폴백.
                 // 레거시 frag(mask=texture(1)) 와 waterripple(normal=1, mask=2) 모두 위해
                 // 최소 2개 슬롯을 흰색으로 채워 미바인드 텍스처를 방지한다.
@@ -191,7 +207,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 while aux.count < 2, let white = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) {
                     aux.append(white)
                 }
-                effects.append(EffectGPU(pipeline: pipe, auxTextures: aux, params: params))
+                effects.append(EffectGPU(pipeline: pipe, auxTextures: aux, params: params, audio: audio))
             }
             if !effects.isEmpty { hasEffects = true }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
@@ -212,6 +228,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return m }
         }
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device)
+    }
+
+    /// 효과의 AUDIOPROCESSING 콤보 + 오디오 상수 → AudioParams(없으면 nil). draw 시 audioResponse 계산에 사용.
+    private func audioParams(for eff: SceneEffect) -> AudioParams? {
+        let mode = eff.audioMode
+        guard mode >= 1, mode <= 3 else { return nil }
+        let c = eff.constants
+        let bounds = c["audiobounds"] ?? [0.5, 1.0]
+        return AudioParams(
+            mode: mode,
+            freqMin: c["frequencymin"]?.first ?? 0,
+            freqMax: c["frequencymax"]?.first ?? 15,
+            bounds: SIMD2<Float>(bounds.count > 0 ? bounds[0] : 0.5, bounds.count > 1 ? bounds[1] : 1.0),
+            power: c["audioexponent"]?.first ?? 1,
+            multiply: c["audioamount"]?.first ?? 1)
     }
 
     /// 파티클 시스템별 텍스처/시뮬/블렌드 준비. 텍스처는 material 의 첫 텍스처(없으면 흰색 폴백).
@@ -350,19 +381,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
 
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
-        var displayTextures: [MTLTexture] = []
-        for layer in layers {
-            if layer.effects.isEmpty { displayTextures.append(layer.texture); continue }
-            guard var current = makeOffscreen(layer.texWidth, layer.texHeight, device),
-                  let evb = effectVertexBuffer else { displayTextures.append(layer.texture); continue }
-            blit(layer.texture, to: current, queue: queue)  // 베이스 복사
-            for eff in layer.effects {
-                guard let next = makeOffscreen(layer.texWidth, layer.texHeight, device) else { break }
-                applyEffect(eff, src: current, dst: next, evb: evb, time: time, cb: cb)
-                current = next
-            }
-            displayTextures.append(current)
-        }
+        let displayTextures = buildDisplayTextures(device: device, queue: queue, time: time, cb: cb)
 
         var camOffset = cameraOffset
         // 종횡비 보정 — FitMode 설정에 따라.
@@ -429,6 +448,25 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         b.endEncoding(); cb.commit(); cb.waitUntilCompleted()
     }
 
+    /// 효과가 있는 레이어는 오프스크린에 베이스 복사 후 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.
+    /// 라이브 draw 와 헤드리스 captureFrames 가 공유.
+    private func buildDisplayTextures(device: MTLDevice, queue: MTLCommandQueue, time: Float, cb: MTLCommandBuffer) -> [MTLTexture] {
+        var out: [MTLTexture] = []
+        for layer in layers {
+            if layer.effects.isEmpty { out.append(layer.texture); continue }
+            guard var current = makeOffscreen(layer.texWidth, layer.texHeight, device),
+                  let evb = effectVertexBuffer else { out.append(layer.texture); continue }
+            blit(layer.texture, to: current, queue: queue)  // 베이스 복사
+            for eff in layer.effects {
+                guard let next = makeOffscreen(layer.texWidth, layer.texHeight, device) else { break }
+                applyEffect(eff, src: current, dst: next, evb: evb, time: time, cb: cb)
+                current = next
+            }
+            out.append(current)
+        }
+        return out
+    }
+
     private func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, evb: MTLBuffer, time: Float, cb: MTLCommandBuffer) {
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = dst
@@ -445,9 +483,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         buf.withUnsafeBytes { ptr in
             enc.setFragmentBytes(ptr.baseAddress!, length: ptr.count, index: 0)
         }
+        // 오디오 응답(현재 스펙트럼 + 효과 오디오 파라미터) → buffer(1). pulse 등 오디오 효과가 소비.
+        var audioResp: Float = 0
+        if let a = eff.audio {
+            audioResp = AudioResponse.compute(left: currentSpectrum.left, right: currentSpectrum.right,
+                                              mode: a.mode, freqMin: a.freqMin, freqMax: a.freqMax,
+                                              bounds: a.bounds, power: a.power, multiply: a.multiply)
+        }
+        enc.setFragmentBytes(&audioResp, length: MemoryLayout<Float>.stride, index: 1)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
     }
+
+    /// 합성 스펙트럼 주입(헤드리스 검증/테스트용). 라이브에선 provider 가 갱신.
+    public func setSpectrum(_ spectrum: AudioSpectrum16) { currentSpectrum = spectrum }
 
     /// 헤드리스 시각 검증: 레이어(베이스, 효과 제외) + 파티클을 오프스크린에 렌더해 각 time 의 PNG 를 저장.
     /// 시뮬은 t=0 에서 새로 시작해 1/30 스텝으로 각 time 까지 진행(재현 가능). 데스크탑 가림과 무관.
@@ -460,23 +509,25 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var urls: [URL] = []
         var camOff = SIMD2<Float>(0, 0)
         var asp = SIMD2<Float>(1, 1)  // 타겟이 proj 비율과 같다고 가정 → 왜곡 없음
-        var depthOne = SIMD2<Float>(1, 1)
+        let depthOne = SIMD2<Float>(1, 1)
         for t in times.sorted() {
             while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in sims.indices { _ = sims[i].step(s) }; simTime += s }
+            guard let cb = queue.makeCommandBuffer() else { continue }
+            // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
+            let displayTextures = buildDisplayTextures(device: device, queue: queue, time: t, cb: cb)
             let rpd = MTLRenderPassDescriptor()
             rpd.colorAttachments[0].texture = target
             rpd.colorAttachments[0].loadAction = .clear
             rpd.colorAttachments[0].clearColor = clearColor
-            guard let cb = queue.makeCommandBuffer(), let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
-            // 레이어(베이스 텍스처, 효과 패스 제외).
+            guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
             enc.setRenderPipelineState(pipeline)
-            for layer in layers {
+            for (i, layer) in layers.enumerated() {
                 var tint = layer.tint, depth = depthOne
                 enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
                 enc.setVertexBytes(&camOff, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
                 enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
                 enc.setVertexBytes(&asp, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
-                enc.setFragmentTexture(layer.texture, index: 0)
+                enc.setFragmentTexture(displayTextures[i], index: 0)
                 enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
             }
@@ -517,6 +568,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func teardown() {
         videoRenderer?.teardown(); videoRenderer = nil
         parallax.stop()
+        audioProvider?.stop(); audioProvider = nil; hasAudio = false
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
         additivePipeline = nil; translucentPipeline = nil
