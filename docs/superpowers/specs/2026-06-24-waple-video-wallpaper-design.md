@@ -214,9 +214,10 @@ MVP 이후, 우선순위 순:
 
 ## 9. 미해결 리스크 / 검증 필요
 
-- **데스크탑 창 레벨**: 현재 환경은 신규 macOS(Darwin 27). `.desktopWindow` 레벨이
-  "아이콘 뒤·배경 위"를 만족하는지 **실측 검증** 필요. 오래된 블로그의 매직넘버 신뢰 금지.
-  기존 오픈소스 라이브-월페이퍼 저장소의 현행 인캔테이션 참고.
-- **Stage Manager / Mission Control** 상호작용.
+- **데스크탑 창 레벨**: ✅ **해결(Darwin 27 실측)**. `.desktopWindow`(−2147483623)는 시스템
+  정적 배경보다 아래로 묻혀 보이지 않았다. `.desktopIconWindow − 1`(−2147483604)로 변경 →
+  창 서버 조회로 정적 배경(−...623) 위·아이콘(−...603) 아래에 풀스크린·`alpha=1`·`onscreen=1`
+  확인. (`Sources/WapleRender/DesktopWindow.swift`)
+- **Stage Manager / Mission Control** 상호작용 — 아직 수동 확인 필요.
 - **샌드박스 vs 데스크탑 창**: App Store 샌드박스와 충돌 → Developer ID 경로 전제.
 - **codec 감지**: `ffprobe`는 이 Mac에 미설치. 앱 내부는 `AVAsset`/`AVURLAsset` 네이티브 판정 사용.
