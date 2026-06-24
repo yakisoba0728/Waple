@@ -34,6 +34,11 @@ enum EffectShaders {
         case "waterwaves":
             let a = f("direction", 0) * .pi / 180
             return [cos(a), sin(a), f("speed", 5), f("scale", 200), f("strength", 0.1), f("perspective", 0)]
+        case "shake":
+            // 단순화: flow/noise combo 없이 시간 기반 흔들림. amp/speed 키는 게이트서 확인.
+            let amp = c["amplitude"]?.first ?? c["amount"]?.first ?? c["strength"]?.first ?? 0.006
+            let spd = c["speed"]?.first ?? c["roughness"]?.first ?? 5
+            return [amp, spd]
         default:
             return nil
         }
@@ -127,6 +132,18 @@ enum EffectShaders {
             constexpr sampler s(filter::linear, address::repeat);
             float2 uv = fract((in.uv + P[0] * float2(P[3], P[4])) * float2(P[1], P[2]));
             return fb.sample(s, uv);
+        }
+        """,
+        "shake": """
+        fragment float4 ef_main(EOut in [[stage_in]], texture2d<float> fb [[texture(0)]],
+                                texture2d<float> flow [[texture(1)]], texture2d<float> mask [[texture(2)]],
+                                constant float* P [[buffer(0)]]) {
+            constexpr sampler s(filter::linear, address::clamp_to_edge);
+            // P[0]=time, P[1]=amplitude, P[2]=speed. flow map 은 단순화로 미사용.
+            float m = mask.sample(s, in.uv).r;
+            float t = P[0] * P[2];
+            float2 off = P[1] * float2(sin(t), cos(t * 1.37)) * m;
+            return fb.sample(s, in.uv + off);
         }
         """,
     ]

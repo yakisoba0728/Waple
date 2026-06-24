@@ -9,12 +9,16 @@ final class EffectShadersTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("no Metal device")
         }
-        for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple"] {
+        for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake"] {
             let src = try XCTUnwrap(EffectShaders.source(for: n), "source missing for \(n)")
             let lib = try device.makeLibrary(source: src, options: nil)
             XCTAssertNotNil(lib.makeFunction(name: "ev_main"), "\(n): no ev_main")
             XCTAssertNotNil(lib.makeFunction(name: "ef_main"), "\(n): no ef_main")
         }
+    }
+    func testShakeParams() {
+        XCTAssertEqual(EffectShaders.params(for: "shake", constants: ["amplitude": [0.02], "speed": [8]]), [0.02, 8])
+        XCTAssertEqual(EffectShaders.params(for: "shake", constants: [:])?.count, 2)  // defaults
     }
     func testUnknownEffect() {
         XCTAssertNil(EffectShaders.source(for: "nope"))
@@ -67,7 +71,7 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertEqual(p?[2], 4); XCTAssertEqual(p?[3], 34)
     }
     func testSourcesExist() {
-        for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple"] {
+        for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake"] {
             XCTAssertNotNil(EffectShaders.source(for: n))
             XCTAssertTrue(EffectShaders.source(for: n)!.contains("ef_main"))
         }
