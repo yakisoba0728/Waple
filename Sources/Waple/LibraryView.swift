@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WapleCore
 import WapleLibrary
 
 struct LibraryView: View {
@@ -68,7 +69,8 @@ struct LibraryView: View {
 
     private func badgeText(for entry: LibraryEntry, supported: Bool) -> String {
         guard supported else { return "지원 예정" }
-        return entry.typeRaw.lowercased() == "scene" ? "scene · 부분" : entry.typeRaw
+        let type = WallpaperType.from(entry.typeRaw)
+        return type == .scene ? "scene · 부분" : type.storageString
     }
 
     @ViewBuilder
