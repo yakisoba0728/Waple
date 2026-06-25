@@ -4,7 +4,13 @@ import WapleCore
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private struct AudioParams { let mode: Int; let freqMin: Float; let freqMax: Float; let bounds: SIMD2<Float>; let power: Float; let multiply: Float }
-    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let auxTextures: [MTLTexture]; let params: [Float]; let audio: AudioParams? }
+    /// 효과 바인딩: 손-포팅(기존 규약: float* P buffer(0) + aux texture(1+) + audioResp buffer(1))
+    /// 또는 GLSL→MSL 변환본(reflection 규약: float4* p buffer(0) + EngineU buffer(1) + slot 텍스처 + audioL/R buffer(2/3)).
+    private enum EffectBind {
+        case handPort(params: [Float], aux: [MTLTexture], audio: AudioParams?)
+        case translated(material: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], usesAudio: Bool, texW: Int, texH: Int)
+    }
+    private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
     private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int }
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -40,6 +46,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var currentSpectrum = AudioSpectrum16.silent
     private var audioProvider: SystemAudioSpectrumProvider?
     private var effectVertexBuffer: MTLBuffer?
+    private var effectQuadInterleaved: MTLBuffer?   // 변환 효과용 인터리브드 풀스크린 쿼드(pos.xyz + uv.xy)
     private var particleSystems: [GPUParticleSystem] = []
     private var hasParticles = false
     private var assetBaseDir: URL?  // WE 공유 에셋 폴백 디렉터리(설정), 패키지에 없는 .tex 용
@@ -133,6 +140,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
 
         effectVertexBuffer = device.makeBuffer(bytes: fullscreenQuad, length: MemoryLayout<SIMD2<Float>>.stride * fullscreenQuad.count)
+        // 변환 효과용 인터리브드 쿼드(triangleStrip): pos.xyz + uv.xy. uv 는 손-포팅 vert(ev_main)의
+        // ((p+1)*0.5, 1-(p+1)*0.5) 매핑과 동일하게 매칭(오라클 픽셀 일치 보장).
+        let interleaved: [Float] = [
+            -1, -1, 0,  0, 1,
+             1, -1, 0,  1, 1,
+            -1,  1, 0,  0, 0,
+             1,  1, 0,  1, 0,
+        ]
+        effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
         if hasEffects || hasParticles {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
@@ -190,24 +206,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                     layer.color.z * layer.brightness, layer.alpha)
             var effects: [EffectGPU] = []
             for eff in layer.effects {
-                guard let src = EffectShaders.source(for: eff.name),
-                      let params = EffectShaders.params(for: eff.name, constants: eff.constants, combos: eff.combos),
-                      let pipe = effectPipeline(source: src, device: device) else { continue }
-                let audio = audioParams(for: eff)
-                if audio != nil { hasAudio = true }
-                // slot0 은 framebuffer → aux 는 slot1.. 디코드. 디코드 실패는 흰색 1x1 폴백.
-                // 레거시 frag(mask=texture(1)) 와 waterripple(normal=1, mask=2) 모두 위해
-                // 최소 2개 슬롯을 흰색으로 채워 미바인드 텍스처를 방지한다.
-                var aux: [MTLTexture] = []
-                let auxNames = eff.textureNames.count > 1 ? Array(eff.textureNames[1...]) : []
-                for name in auxNames {
-                    guard let t = resolveTexture(name, package: package, device: device) else { continue }
-                    aux.append(t)
+                // 폴백 체인(무회귀): 손-포팅(검증된 스톡 7종) 우선 → 없으면 GLSL→MSL 변환(워크샵/미지원 이름,
+                // 현재 스킵되던 것 → 순수 이득) → 둘 다 실패 시 스킵+로그.
+                if let handPort = buildHandPortEffect(eff, package: package, device: device) {
+                    effects.append(handPort)
+                } else if let translated = buildTranslatedEffect(eff, package: package, device: device,
+                                                                 texW: decoded.width, texH: decoded.height) {
+                    effects.append(translated)
+                } else {
+                    NSLog("%@", "[Waple] effect skipped (no hand-port, no translatable GLSL): \(eff.name)")
                 }
-                while aux.count < 2, let white = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) {
-                    aux.append(white)
-                }
-                effects.append(EffectGPU(pipeline: pipe, auxTextures: aux, params: params, audio: audio))
             }
             if !effects.isEmpty { hasEffects = true }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
@@ -215,6 +223,119 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                 effects: effects, texWidth: decoded.width, texHeight: decoded.height))
         }
         return out
+    }
+
+    /// 손-포팅 효과(검증된 스톡 7종) 빌드. 미지원 이름이면 nil(→ 변환 경로 시도).
+    private func buildHandPortEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice) -> EffectGPU? {
+        guard let src = EffectShaders.source(for: eff.name),
+              let params = EffectShaders.params(for: eff.name, constants: eff.constants, combos: eff.combos),
+              let pipe = effectPipeline(source: src, device: device) else { return nil }
+        let audio = audioParams(for: eff)
+        if audio != nil { hasAudio = true }
+        // slot0 은 framebuffer → aux 는 slot1.. 디코드. 디코드 실패는 흰색 1x1 폴백.
+        // 레거시 frag(mask=texture(1)) 와 waterripple(normal=1, mask=2) 모두 위해
+        // 최소 2개 슬롯을 흰색으로 채워 미바인드 텍스처를 방지한다.
+        var aux: [MTLTexture] = []
+        let auxNames = eff.textureNames.count > 1 ? Array(eff.textureNames[1...]) : []
+        for name in auxNames {
+            guard let t = resolveTexture(name, package: package, device: device) else { continue }
+            aux.append(t)
+        }
+        while aux.count < 2, let white = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) {
+            aux.append(white)
+        }
+        return EffectGPU(pipeline: pipe, bind: .handPort(params: params, aux: aux, audio: audio))
+    }
+
+    /// GLSL→MSL 변환 효과 빌드. 셰이더 소스 로드(pkg→베이스에셋) → translate → MSL 컴파일 →
+    /// reflection 기반 머티리얼/텍스처/오디오 바인드 플랜. 어느 단계든 실패하면 nil(→ 스킵). 무회귀.
+    private func buildTranslatedEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice,
+                                       texW: Int, texH: Int) -> EffectGPU? {
+        guard let glsl = loadEffectGLSL(name: eff.name, package: package) else { return nil }
+        guard let t = GLSLTranslator.translate(vertex: glsl.vert, fragment: glsl.frag, combos: eff.combos) else {
+            NSLog("%@", "[Waple] GLSL translate failed: \(eff.name)")
+            return nil
+        }
+        guard let pipe = translatedPipeline(msl: t.msl, device: device) else {
+            NSLog("%@", "[Waple] translated MSL compile failed: \(eff.name)")
+            return nil
+        }
+        // 머티리얼 파라미터: sceneKey → constants(또는 default), 선언 순서대로 float4 슬롯에 패킹.
+        let material: [SIMD4<Float>] = t.materialParams.map { p in
+            let v = eff.constants[p.sceneKey] ?? p.defaultValue
+            return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
+                                v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
+        }
+        // 보조 텍스처: slot0=framebuffer(src, draw 시 바인드). slot>0 은 eff.textureNames[slot] 해석(폴백 흰색).
+        var aux: [(slot: Int, tex: MTLTexture)] = []
+        for slot in t.textureSlots where slot > 0 {
+            let name = slot < eff.textureNames.count ? eff.textureNames[slot] : nil
+            if let tex = resolveTexture(name, package: package, device: device) { aux.append((slot, tex)) }
+        }
+        if t.usesAudio { hasAudio = true }
+        NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (params=\(material.count) tex=\(t.textureSlots) audio=\(t.usesAudio))")
+        return EffectGPU(pipeline: pipe, bind: .translated(material: material, aux: aux,
+                                                           usesAudio: t.usesAudio, texW: texW, texH: texH))
+    }
+
+    /// 효과 GLSL(vert+frag) 로드. 셰이더 베이스 이름은 effect.json(passes[0].shader/material→shader)에서
+    /// 추출 시도, 실패 시 관례 "effects/<name>". "shaders/<base>.{vert,frag}" 를 pkg→베이스에셋에서 조용히 조회.
+    private func loadEffectGLSL(name: String, package: ScenePackage) -> (vert: String, frag: String)? {
+        let base = shaderBase(forEffect: name, package: package)
+        guard let vData = quietAssetData("shaders/\(base).vert", package: package),
+              let fData = quietAssetData("shaders/\(base).frag", package: package),
+              let vert = String(data: vData, encoding: .utf8),
+              let frag = String(data: fData, encoding: .utf8) else { return nil }
+        return (vert, frag)
+    }
+
+    /// effect.json passes[0].shader, 없으면 passes[0].material→material json passes[0].shader. 둘 다 없으면 관례.
+    private func shaderBase(forEffect name: String, package: ScenePackage) -> String {
+        if let eData = quietAssetData("effects/\(name)/effect.json", package: package),
+           let ejson = (try? JSONSerialization.jsonObject(with: eData)) as? [String: Any],
+           let passes = ejson["passes"] as? [Any], let p0 = passes.first as? [String: Any] {
+            if let shader = p0["shader"] as? String { return shader }
+            if let matPath = p0["material"] as? String, let mData = quietAssetData(matPath, package: package),
+               let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any],
+               let mpasses = mjson["passes"] as? [Any], let mp0 = mpasses.first as? [String: Any],
+               let shader = mp0["shader"] as? String { return shader }
+        }
+        return "effects/\(name)"
+    }
+
+    /// assetData 의 조용한 버전: pkg→베이스에셋 조회하되 미스에 로그 없음(소스 프로브는 미스가 정상).
+    private func quietAssetData(_ name: String, package: ScenePackage) -> Data? {
+        if let d = package.data(for: name) { return d }
+        if let base = assetBaseDir { return try? Data(contentsOf: base.appendingPathComponent(name)) }
+        return nil
+    }
+
+    /// 변환 효과 파이프라인. 정점 디스크립터: a_Position float3@0, a_TexCoord float2@12, stride 20,
+    /// 버퍼 인덱스 4(p=buffer0 / eng=buffer1 와 충돌 회피 — 스파이크 증명 규약).
+    private func translatedPipeline(msl: String, device: MTLDevice) -> MTLRenderPipelineState? {
+        guard let lib = try? device.makeLibrary(source: msl, options: nil) else { return nil }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "ev_main")
+        pd.fragmentFunction = lib.makeFunction(name: "ef_main")
+        let vd = MTLVertexDescriptor()
+        vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 4
+        vd.attributes[1].format = .float2; vd.attributes[1].offset = 12; vd.attributes[1].bufferIndex = 4
+        vd.layouts[4].stride = 20
+        pd.vertexDescriptor = vd
+        pd.colorAttachments[0].pixelFormat = .rgba8Unorm
+        return try? device.makeRenderPipelineState(descriptor: pd)
+    }
+
+    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,0,0,0) + texRes[8].
+    /// NOTE: texRes[N] 을 레이어 텍스처 dims 로 채움(div0 회피, 풀스크린 효과엔 충분). MASK on / 멀티텍스처에선
+    /// 슬롯 N 의 실제 dims 가 맞으나 현재 단계에선 동일 dims 로 근사(후속 보정 — 설계 §3.5).
+    private func engineUniform(time: Float, texW: Int, texH: Int) -> [Float] {
+        var e = [Float](repeating: 0, count: 16 + 4 + 32)
+        e[0] = 1; e[5] = 1; e[10] = 1; e[15] = 1   // identity mvp
+        e[16] = time                                // timeAndPad.x
+        let w = Float(max(1, texW)), h = Float(max(1, texH))
+        for n in 0..<8 { let o = 20 + n * 4; e[o] = w; e[o + 1] = h; e[o + 2] = 1 / w; e[o + 3] = 1 / h }
+        return e
     }
 
     /// 효과 보조 텍스처 슬롯 이름 → MTLTexture. 이름 nil/디코드 실패 → 흰색 1x1 폴백
@@ -465,12 +586,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var out: [MTLTexture] = []
         for layer in layers {
             if layer.effects.isEmpty { out.append(layer.texture); continue }
-            guard let evb = effectVertexBuffer else { out.append(layer.texture); continue }
             // 베이스 복사 불필요: 원본 텍스처를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
             var current = layer.texture
             for eff in layer.effects {
                 guard let next = pooledOffscreen(layer.texWidth, layer.texHeight, device) else { break }
-                applyEffect(eff, src: current, dst: next, evb: evb, time: time, cb: cb)
+                applyEffect(eff, src: current, dst: next, time: time, cb: cb)
                 current = next
             }
             out.append(current)
@@ -478,30 +598,50 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return out
     }
 
-    private func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, evb: MTLBuffer, time: Float, cb: MTLCommandBuffer) {
+    private func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, time: Float, cb: MTLCommandBuffer) {
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = dst
         rpd.colorAttachments[0].loadAction = .clear
         rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
         enc.setRenderPipelineState(eff.pipeline)
-        enc.setVertexBuffer(evb, offset: 0, index: 0)
-        enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
-        for (i, aux) in eff.auxTextures.enumerated() {
-            enc.setFragmentTexture(aux, index: i + 1)  // aux slot i → texture(i+1)
+        switch eff.bind {
+        case .handPort(let params, let aux, let audio):
+            enc.setVertexBuffer(effectVertexBuffer, offset: 0, index: 0)
+            enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
+            for (i, t) in aux.enumerated() { enc.setFragmentTexture(t, index: i + 1) }  // aux slot i → texture(i+1)
+            let buf = [time] + params
+            buf.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0) }
+            // 오디오 응답(현재 스펙트럼 + 효과 오디오 파라미터) → buffer(1). pulse 등 오디오 효과가 소비.
+            var audioResp: Float = 0
+            if let a = audio {
+                audioResp = AudioResponse.compute(left: currentSpectrum.left, right: currentSpectrum.right,
+                                                  mode: a.mode, freqMin: a.freqMin, freqMax: a.freqMax,
+                                                  bounds: a.bounds, power: a.power, multiply: a.multiply)
+            }
+            enc.setFragmentBytes(&audioResp, length: MemoryLayout<Float>.stride, index: 1)
+        case .translated(let material, let aux, let usesAudio, let texW, let texH):
+            // 변환본 규약: 인터리브드 쿼드 buffer(4), p buffer(0)·EngineU buffer(1) 는 vert+frag 양쪽, 텍스처는 선언 슬롯.
+            enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
+            if !material.isEmpty {  // 파라미터 0개면 셰이더 시그니처에 p 없음 → 바인드 생략.
+                material.withUnsafeBytes {
+                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
+                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
+                }
+            }
+            let eng = engineUniform(time: time, texW: texW, texH: texH)
+            eng.withUnsafeBytes {
+                enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
+                enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
+            }
+            enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
+            for (slot, tex) in aux { enc.setFragmentTexture(tex, index: slot) }
+            if usesAudio {  // g_AudioSpectrum16Left/Right → buffer(2)/(3). 단일 main 오디오 효과용.
+                let l = currentSpectrum.left, r = currentSpectrum.right
+                l.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2) }
+                r.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 3) }
+            }
         }
-        let buf = [time] + eff.params
-        buf.withUnsafeBytes { ptr in
-            enc.setFragmentBytes(ptr.baseAddress!, length: ptr.count, index: 0)
-        }
-        // 오디오 응답(현재 스펙트럼 + 효과 오디오 파라미터) → buffer(1). pulse 등 오디오 효과가 소비.
-        var audioResp: Float = 0
-        if let a = eff.audio {
-            audioResp = AudioResponse.compute(left: currentSpectrum.left, right: currentSpectrum.right,
-                                              mode: a.mode, freqMin: a.freqMin, freqMax: a.freqMax,
-                                              bounds: a.bounds, power: a.power, multiply: a.multiply)
-        }
-        enc.setFragmentBytes(&audioResp, length: MemoryLayout<Float>.stride, index: 1)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
     }
