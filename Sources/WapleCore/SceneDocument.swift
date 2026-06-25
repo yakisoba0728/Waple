@@ -2,6 +2,9 @@ import Foundation
 
 public struct SceneEffect: Equatable {
     public let name: String
+    /// 원본 effect.json 경로(예: "effects/workshop/<wsid>/<Name>/effect.json"). GLSL 셰이더 해석에 필요 —
+    /// 짧은 name 만으론 워크샵 wsid 경로가 유실된다. 스톡은 "effects/<name>/effect.json".
+    public let file: String
     public let constants: [String: [Float]]
     /// object effect `textures[]` 슬롯 전체. slot0 은 보통 null(=framebuffer),
     /// 이후 슬롯이 마스크/노멀맵 등 보조 텍스처. 각 원소는 이름 또는 null.
@@ -11,8 +14,8 @@ public struct SceneEffect: Equatable {
     /// AUDIOPROCESSING 콤보(0=off,1=L,2=R,3=L+R). 오디오-반응 효과 식별.
     public var audioMode: Int { combos["AUDIOPROCESSING"] ?? 0 }
 
-    public init(name: String, constants: [String: [Float]], textureNames: [String?], combos: [String: Int] = [:]) {
-        self.name = name; self.constants = constants; self.textureNames = textureNames; self.combos = combos
+    public init(name: String, constants: [String: [Float]], textureNames: [String?], combos: [String: Int] = [:], file: String = "") {
+        self.name = name; self.constants = constants; self.textureNames = textureNames; self.combos = combos; self.file = file
     }
 }
 
@@ -171,7 +174,7 @@ extension SceneDocument {
                     textureNames = texs.map { $0 as? String }
                 }
             }
-            out.append(SceneEffect(name: name, constants: constants, textureNames: textureNames, combos: combos))
+            out.append(SceneEffect(name: name, constants: constants, textureNames: textureNames, combos: combos, file: file))
         }
         return out
     }

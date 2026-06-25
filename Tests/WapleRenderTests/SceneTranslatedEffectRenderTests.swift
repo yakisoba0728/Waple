@@ -111,6 +111,51 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertEqual(luma, 0.4, accuracy: 0.1, "alpha 0.4 → ~40% over black via translated shader")
     }
 
+    /// 워크샵 효과 레이아웃(실측 확인): scene 의 effect file = "effects/workshop/<wsid>/<Name>/effect.json",
+    /// material = "materials/workshop/<wsid>/effects/<Name>.json"(shader="workshop/<wsid>/effects/<Name>"),
+    /// 셰이더 = "shaders/workshop/<wsid>/effects/<Name>.{vert,frag}". 짧은 이름만으론 wsid 경로 유실 → 발견 실패.
+    /// effect.json→material→shader 체인을 file 경로 기준으로 해석해야 translated 경로가 동작.
+    func testWorkshopEffectRendersViaTranslator() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform float g_UserAlpha; // {"material":"alpha","default":1.0}
+        void main() {
+            vec4 albedo = texSample2D(g_Texture0, v_TexCoord);
+            albedo.a *= g_UserAlpha;
+            gl_FragColor = albedo;
+        }
+        """
+        let ws = "2084198056", name = "Dimmer"
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/workshop/\(ws)/\(name)/effect.json","passes":[{"constantshadervalues":{"alpha":0.4}}]}]}]}
+        """
+        let effectJSON = #"{"passes":[{"material":"materials/workshop/\#(ws)/effects/\#(name).json"}]}"#
+        let materialJSON = #"{"passes":[{"shader":"workshop/\#(ws)/effects/\#(name)"}]}"#
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("effects/workshop/\(ws)/\(name)/effect.json", effectJSON.data(using: .utf8)!),
+            ("materials/workshop/\(ws)/effects/\(name).json", materialJSON.data(using: .utf8)!),
+            ("shaders/workshop/\(ws)/effects/\(name).vert", vert.data(using: .utf8)!),
+            ("shaders/workshop/\(ws)/effects/\(name).frag", frag.data(using: .utf8)!),
+        ], tag: "workshop")
+        NSLog("%@", "[Waple] translated workshop-effect luma=\(luma)")
+        XCTAssertLessThan(luma, 0.7, "workshop translated path must run (skip → ~1.0)")
+        XCTAssertEqual(luma, 0.4, accuracy: 0.1, "workshop effect dims via GLSL→MSL translator (resolved from file path)")
+    }
+
     /// 실제 WE opacity GLSL 을 비-스톡 이름 "opacitytest" 로 변환·렌더 → 핸드포팅 오라클(alpha 0.4 → ~0.4)과 수치 일치.
     /// 비-스톡 이름이라 번역이 깨지면 폴백이 가리지 못하고 ~1.0 → 실패.
     func testTranslatedOpacityMatchesHandPort() throws {

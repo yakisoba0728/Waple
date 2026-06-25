@@ -36,4 +36,23 @@ final class SceneEffectCombosTests: XCTestCase {
         XCTAssertEqual(e.audioMode, 0)
         XCTAssertTrue(e.combos.isEmpty)
     }
+
+    /// 워크샵 효과는 file 경로(wsid 포함)를 보존해야 셰이더 해석 가능.
+    /// 짧은 이름("Simple_Audio_Bars")만으론 "effects/workshop/<wsid>/.../" 경로가 유실된다.
+    func testEffectCapturesFilePath() {
+        let scene = """
+        {"objects":[{"id":1,"image":"models/x.json","origin":"0 0 0",
+          "effects":[{"file":"effects/workshop/2084198056/Simple_Audio_Bars/effect.json","passes":[{}]}]}]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        let eff = try! XCTUnwrap(doc.layers.first?.effects.first)
+        XCTAssertEqual(eff.name, "Simple_Audio_Bars")
+        XCTAssertEqual(eff.file, "effects/workshop/2084198056/Simple_Audio_Bars/effect.json")
+    }
 }

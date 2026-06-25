@@ -251,8 +251,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// reflection 기반 머티리얼/텍스처/오디오 바인드 플랜. 어느 단계든 실패하면 nil(→ 스킵). 무회귀.
     private func buildTranslatedEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice,
                                        texW: Int, texH: Int) -> EffectGPU? {
-        guard let glsl = loadEffectGLSL(name: eff.name, package: package) else { return nil }
-        guard let t = GLSLTranslator.translate(vertex: glsl.vert, fragment: glsl.frag, combos: eff.combos) else {
+        guard let glsl = loadEffectGLSL(eff, package: package) else { return nil }
+        // #include 리졸버: WE common.h 등은 pkg→베이스에셋에서 로드(보통 베이스팩 전용 → 베이스에셋 미설정 시 nil→드롭).
+        let include: (String) -> String? = { header in
+            for cand in ["shaders/\(header)", header] {
+                if let d = self.quietAssetData(cand, package: package), let s = String(data: d, encoding: .utf8) { return s }
+            }
+            return nil
+        }
+        guard let t = GLSLTranslator.translate(vertex: glsl.vert, fragment: glsl.frag, combos: eff.combos, include: include) else {
             NSLog("%@", "[Waple] GLSL translate failed: \(eff.name)")
             return nil
         }
@@ -278,10 +285,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                            usesAudio: t.usesAudio, texW: texW, texH: texH))
     }
 
-    /// 효과 GLSL(vert+frag) 로드. 셰이더 베이스 이름은 effect.json(passes[0].shader/material→shader)에서
-    /// 추출 시도, 실패 시 관례 "effects/<name>". "shaders/<base>.{vert,frag}" 를 pkg→베이스에셋에서 조용히 조회.
-    private func loadEffectGLSL(name: String, package: ScenePackage) -> (vert: String, frag: String)? {
-        let base = shaderBase(forEffect: name, package: package)
+    /// 효과 GLSL(vert+frag) 로드. 셰이더 베이스 이름을 effect.json 체인에서 해석 →
+    /// "shaders/<base>.{vert,frag}" 를 pkg→베이스에셋에서 조용히 조회.
+    private func loadEffectGLSL(_ eff: SceneEffect, package: ScenePackage) -> (vert: String, frag: String)? {
+        let base = shaderBase(eff, package: package)
         guard let vData = quietAssetData("shaders/\(base).vert", package: package),
               let fData = quietAssetData("shaders/\(base).frag", package: package),
               let vert = String(data: vData, encoding: .utf8),
@@ -289,9 +296,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return (vert, frag)
     }
 
-    /// effect.json passes[0].shader, 없으면 passes[0].material→material json passes[0].shader. 둘 다 없으면 관례.
-    private func shaderBase(forEffect name: String, package: ScenePackage) -> String {
-        if let eData = quietAssetData("effects/\(name)/effect.json", package: package),
+    /// 셰이더 베이스 이름 해석(실측 WE 레이아웃): eff.file(effect.json) → passes[0].material →
+    /// material json → passes[0].shader (예: 스톡 "effects/waterwaves", 워크샵 "workshop/<wsid>/effects/<Name>").
+    /// effect.json passes[0] 에 shader 직접 명시도 허용. 체인이 끊기면 관례 "effects/<name>" 폴백
+    /// (스톡 이름==경로라 동작; 워크샵은 체인 필요 — file 경로가 wsid 를 담는다).
+    private func shaderBase(_ eff: SceneEffect, package: ScenePackage) -> String {
+        let effectJSON = eff.file.isEmpty ? "effects/\(eff.name)/effect.json" : eff.file
+        if let eData = quietAssetData(effectJSON, package: package),
            let ejson = (try? JSONSerialization.jsonObject(with: eData)) as? [String: Any],
            let passes = ejson["passes"] as? [Any], let p0 = passes.first as? [String: Any] {
             if let shader = p0["shader"] as? String { return shader }
@@ -300,7 +311,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                let mpasses = mjson["passes"] as? [Any], let mp0 = mpasses.first as? [String: Any],
                let shader = mp0["shader"] as? String { return shader }
         }
-        return "effects/\(name)"
+        return "effects/\(eff.name)"
     }
 
     /// assetData 의 조용한 버전: pkg→베이스에셋 조회하되 미스에 로그 없음(소스 프로브는 미스가 정상).
