@@ -1,7 +1,15 @@
 import AppKit
 
 public final class DesktopWindow: NSWindow {
+    /// 모니터별 배경 할당의 안정 키(CGDirectDisplayID 기반; 실패 시 이름).
+    public let screenKey: String
+
     public init(screen: NSScreen) {
+        if let n = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
+            screenKey = "display-\(n.uint32Value)"
+        } else {
+            screenKey = "name-\(screen.localizedName)"
+        }
         super.init(
             contentRect: screen.frame,
             styleMask: .borderless,

@@ -13,9 +13,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var videoMenu: NSMenu?
 
     private let store = LibraryStore(baseDirectory: LibraryStore.defaultBaseDirectory())
-    private lazy var libraryVM = LibraryViewModel(store: store)
+    private let monitorStore = MonitorAssignmentStore(baseDirectory: LibraryStore.defaultBaseDirectory())
+    private let playlistStore = PlaylistStore(baseDirectory: LibraryStore.defaultBaseDirectory())
+    private var playlistTimer: Timer?
+    private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore)
     private var libraryWindow: NSWindow?
     private weak var fitMenu: NSMenu?
+    private weak var playlistMenu: NSMenu?
 
     @objc private func setFitMode(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let mode = FitMode(rawValue: raw) else { return }
@@ -61,6 +65,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         videoItem.submenu = videoMenu
         menu.addItem(videoItem)
         self.videoMenu = videoMenu
+        let plItem = NSMenuItem(title: "재생목록", action: nil, keyEquivalent: "")
+        let plMenu = NSMenu()
+        let plToggle = NSMenuItem(title: "자동 전환 사용", action: #selector(togglePlaylist), keyEquivalent: "")
+        plToggle.state = playlistStore.enabled ? .on : .off
+        plMenu.addItem(plToggle)
+        for minutes in [5, 15, 30, 60] {
+            let it = NSMenuItem(title: "\(minutes)분 간격", action: #selector(setPlaylistInterval(_:)), keyEquivalent: "")
+            it.representedObject = minutes
+            it.state = playlistStore.intervalMinutes == minutes ? .on : .off
+            plMenu.addItem(it)
+        }
+        let hint = NSMenuItem(title: "항목은 라이브러리 우클릭으로 추가", action: nil, keyEquivalent: "")
+        hint.isEnabled = false
+        plMenu.addItem(.separator()); plMenu.addItem(hint)
+        plItem.submenu = plMenu
+        menu.addItem(plItem)
+        self.playlistMenu = plMenu
         menu.addItem(NSMenuItem(title: "기본 에셋 폴더 설정…",
                                 action: #selector(chooseBaseAssets), keyEquivalent: ""))
         menu.addItem(.separator())
@@ -71,6 +92,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) ?? false }
         libraryVM.onError = { [weak self] message in self?.notify(message) }
+        libraryVM.screensProvider = { [weak self] in
+            self?.desktopController.screenViews.enumerated().map { i, sv in
+                (key: sv.screenKey, name: NSScreen.screens.indices.contains(i)
+                    ? NSScreen.screens[i].localizedName : sv.screenKey)
+            } ?? []
+        }
+        libraryVM.onAssignmentsChanged = { [weak self] in
+            guard let self, let folder = self.currentFolderURL else { return }
+            self.apply(folderURL: folder)  // 할당 변경 즉시 반영
+        }
+        libraryVM.onPlaylistChanged = { [weak self] in self?.schedulePlaylistTimer() }
+        schedulePlaylistTimer()
 
         desktopController.rebuild()
 
@@ -154,9 +187,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             var newRenderers: [WallpaperRenderer] = []
             do {
-                for view in desktopController.contentViews {
-                    guard let renderer = RendererFactory.makeRenderer(for: project) else { continue }
-                    try renderer.mount(in: view, project: project)
+                var projectCache: [URL: WallpaperProject] = [:]
+                for (screenKey, view) in desktopController.screenViews {
+                    // 모니터별 할당이 있으면 그 배경을, 없으면 전역 선택을 마운트.
+                    var screenProject = project
+                    if let assignedId = monitorStore.assignment(for: screenKey),
+                       let entry = store.entries.first(where: { $0.id == assignedId }),
+                       let assignedFolder = store.resolveFolderURL(for: entry) {
+                        if let cached = projectCache[assignedFolder] {
+                            screenProject = cached
+                        } else if let parsed = try? ProjectJSONParser.parse(folderURL: assignedFolder) {
+                            projectCache[assignedFolder] = parsed
+                            screenProject = parsed
+                        }
+                    }
+                    guard let renderer = RendererFactory.makeRenderer(for: screenProject) else { continue }
+                    try renderer.mount(in: view, project: screenProject)
                     newRenderers.append(renderer)
                 }
             } catch {
@@ -189,6 +235,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let folder = currentFolderURL {
             apply(folderURL: folder)
         }
+    }
+
+    @objc private func togglePlaylist() {
+        playlistStore.enabled.toggle()
+        playlistMenu?.items.first?.state = playlistStore.enabled ? .on : .off
+        schedulePlaylistTimer()
+    }
+
+    @objc private func setPlaylistInterval(_ sender: NSMenuItem) {
+        guard let m = sender.representedObject as? Int else { return }
+        playlistStore.intervalMinutes = m
+        playlistMenu?.items.forEach { if $0.representedObject != nil { $0.state = (($0.representedObject as? Int) == m) ? .on : .off } }
+        schedulePlaylistTimer()
+    }
+
+    /// 재생목록 타이머 재구성. 비활성/빈 목록 → 정지.
+    private func schedulePlaylistTimer() {
+        playlistTimer?.invalidate()
+        playlistTimer = nil
+        guard playlistStore.enabled, !playlistStore.ids.isEmpty else { return }
+        let interval = TimeInterval(playlistStore.intervalMinutes * 60)
+        playlistTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.advancePlaylist()
+        }
+    }
+
+    private func advancePlaylist() {
+        guard let nextId = playlistStore.next(after: store.selectedId),
+              let entry = store.entries.first(where: { $0.id == nextId }) else { return }
+        libraryVM.apply(entry)
     }
 
     private func notify(_ message: String) {

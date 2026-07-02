@@ -19,6 +19,11 @@ public final class DesktopWindowController {
         windows.compactMap { $0.contentView }
     }
 
+    /// 화면 키와 함께(모니터별 배경).
+    public var screenViews: [(screenKey: String, view: NSView)] {
+        windows.compactMap { w in w.contentView.map { (w.screenKey, $0) } }
+    }
+
     public func teardown() {
         windows.forEach { $0.orderOut(nil) }
         windows.removeAll()

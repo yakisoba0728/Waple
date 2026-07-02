@@ -17,11 +17,51 @@ final class LibraryViewModel: ObservableObject {
     var onError: ((String) -> Void)?
 
     private let store: LibraryStore
+    let playlist: PlaylistStore
+    let monitors: MonitorAssignmentStore
 
-    init(store: LibraryStore) {
+    /// 화면 목록 제공(키+표시명) — AppDelegate 주입.
+    var screensProvider: (() -> [(key: String, name: String)])?
+    /// 모니터 할당 변경 → 즉시 재적용 트리거.
+    var onAssignmentsChanged: (() -> Void)?
+    /// 재생목록 변경 → 타이머 재구성 트리거.
+    var onPlaylistChanged: (() -> Void)?
+
+    init(store: LibraryStore, playlist: PlaylistStore, monitors: MonitorAssignmentStore) {
         self.store = store
+        self.playlist = playlist
+        self.monitors = monitors
         self.entries = store.entries
         self.selectedId = store.selectedId
+    }
+
+    // MARK: - 재생목록/모니터별
+
+    func isInPlaylist(_ entry: LibraryEntry) -> Bool { playlist.ids.contains(entry.id) }
+
+    func togglePlaylist(_ entry: LibraryEntry) {
+        playlist.toggle(entry.id)
+        objectWillChange.send()
+        onPlaylistChanged?()
+    }
+
+    var screens: [(key: String, name: String)] { screensProvider?() ?? [] }
+
+    func assign(_ entry: LibraryEntry, toScreen key: String) {
+        monitors.setAssignment(entry.id, for: key)
+        objectWillChange.send()
+        onAssignmentsChanged?()
+    }
+
+    func clearAssignment(forScreen key: String) {
+        monitors.setAssignment(nil, for: key)
+        objectWillChange.send()
+        onAssignmentsChanged?()
+    }
+
+    func assignedEntryTitle(forScreen key: String) -> String? {
+        guard let id = monitors.assignment(for: key) else { return nil }
+        return entries.first(where: { $0.id == id })?.title
     }
 
     func importParent(_ url: URL) {

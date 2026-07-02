@@ -77,6 +77,24 @@ struct LibraryView: View {
         }
         .contextMenu {
             Button("속성 편집…") { viewModel.propertyEditorEntry = entry }
+            if supported {
+                Button(viewModel.isInPlaylist(entry) ? "재생목록에서 제거" : "재생목록에 추가") {
+                    viewModel.togglePlaylist(entry)
+                }
+                Menu("모니터에 적용") {
+                    ForEach(viewModel.screens, id: \.key) { screen in
+                        Button(screen.name + (viewModel.assignedEntryTitle(forScreen: screen.key).map { " (현재: \($0))" } ?? "")) {
+                            viewModel.assign(entry, toScreen: screen.key)
+                        }
+                    }
+                    if viewModel.screens.contains(where: { viewModel.assignedEntryTitle(forScreen: $0.key) != nil }) {
+                        Divider()
+                        ForEach(viewModel.screens.filter { viewModel.assignedEntryTitle(forScreen: $0.key) != nil }, id: \.key) { screen in
+                            Button("\(screen.name) 할당 해제") { viewModel.clearAssignment(forScreen: screen.key) }
+                        }
+                    }
+                }
+            }
         }
         .overlay(
             RoundedRectangle(cornerRadius: 8)
