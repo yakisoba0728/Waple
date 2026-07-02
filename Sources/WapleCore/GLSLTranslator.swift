@@ -53,9 +53,14 @@ public enum GLSLTranslator {
                                                defaultValue: u.annotationDefault ?? padDefault(u.type)))
             }
         }
+        // 본문/함수/const 스캔은 주석 제거본에서 — 주석 속 토큰(예: 죽은 코드의 g_AudioSpectrum16Left)이
+        // usesAudio 를 켜 TCC 프롬프트를 유발하거나, 주석 속 중괄호가 깊이 카운터를 깨는 것을 방지.
+        // (parseUniforms/varyings/attributes 는 JSON 어노테이션 주석이 필요해 원본 유지.)
+        let vClean = stripComments(vsrc)
+        let fClean = stripComments(fsrc)
         // 엔진 심볼은 선언이 common.h(베이스팩 전용, 대체로 부재)에 있어 파싱에 안 잡힌다 —
         // 본문 토큰 출현으로도 인식(Stage-2 gate 1). 텍스처 슬롯도 방어적으로 본문 스캔 병합.
-        let bodyIds = identifiers(in: vsrc).union(identifiers(in: fsrc))
+        let bodyIds = identifiers(in: vClean).union(identifiers(in: fClean))
         for id in bodyIds {
             if id.contains("AudioSpectrum16") { usesAudio = true }
             if id.hasPrefix("g_Texture"), !id.hasSuffix("Resolution"), let n = textureIndex(id) { textures.append(n) }
@@ -84,8 +89,8 @@ public enum GLSLTranslator {
         frag["gl_FragCoord"] = "in.gl_Position"  // [[position]] = 픽셀 좌표
 
         // 함수 파싱은 주석 제거본에서(annotation JSON 중괄호가 balance 를 깨지 않도록).
-        let vFns = parseFunctions(stripComments(vsrc))
-        let fFns = parseFunctions(stripComments(fsrc))
+        let vFns = parseFunctions(vClean)
+        let fFns = parseFunctions(fClean)
         guard let vertMainF = vFns.first(where: { $0.name == "main" }),
               let fragMainF = fFns.first(where: { $0.name == "main" }) else { return nil }
         // 헬퍼: vert+frag 합집합(이름 dedupe — 공용 헤더가 양 스테이지에 인라인되는 경우).
@@ -127,7 +132,7 @@ public enum GLSLTranslator {
         // 파일 스코프 const: vert/frag 합집합(이름 dedupe — 공용 헤더가 양쪽에 인라인되는 경우), 타입/매크로만 치환.
         var constNames = Set<String>()
         var consts: [String] = []
-        for line in fileScopeConsts(vsrc) + fileScopeConsts(fsrc) {
+        for line in fileScopeConsts(vClean) + fileScopeConsts(fClean) {
             let translated = replaceIdentifiers(line, typeAndMacroRenames())
             let name = translated.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
             if constNames.insert(name).inserted {

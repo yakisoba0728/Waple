@@ -362,6 +362,24 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertFalse(efSig.contains("audioL"), efSig)
     }
 
+    func testCommentsDoNotContaminateScans() throws {
+        // 리뷰 지적: 주석 속 토큰이 본문 스캔에 오염되면 (1) 주석 속 오디오 참조 → usesAudio=true →
+        // 불필요한 Screen-Recording TCC 프롬프트, (2) 주석 속 중괄호 → fileScopeConsts 깊이 카운터 붕괴.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        // debug: g_AudioSpectrum16Left[0] { old code
+        /* block comment with g_Time and a brace { */
+        const float K = 2.0;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * K;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertFalse(t.usesAudio, "주석 속 오디오 참조가 usesAudio 를 켜면 안 됨(TCC 프롬프트 유발)")
+        XCTAssertTrue(t.msl.contains("constant float K = 2.0;"), "주석 속 { 가 const 스캔을 깨면 안 됨: \(t.msl)")
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")
