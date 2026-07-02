@@ -10,7 +10,7 @@ public final class VideoRenderer: WallpaperRenderer {
         !unsupportedExtensions.contains(url.pathExtension.lowercased())
     }
 
-    private var player: AVQueuePlayer?
+    private(set) var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     private var playerLayer: AVPlayerLayer?
     private var statusObservation: NSKeyValueObservation?
@@ -31,9 +31,15 @@ public final class VideoRenderer: WallpaperRenderer {
                 NSLog("%@", "[Waple] video playback failed for \(url.path): \(String(describing: item.error))")
             }
         }
+        // 배속 변경 시 음정 유지(WE 동작과 유사).
+        item.audioTimePitchAlgorithm = .spectral
         let queue = AVQueuePlayer()
         let looper = AVPlayerLooper(player: queue, templateItem: item)
-        queue.isMuted = true
+        // 배경별 음량/배속(기본: 음소거, 1배속). defaultRate 는 루프 재시작에도 유지된다.
+        let volume = VideoSettings.volume(id: project.id)
+        queue.volume = volume
+        queue.isMuted = volume <= 0
+        queue.defaultRate = VideoSettings.rate(id: project.id)
 
         let layer = AVPlayerLayer(player: queue)
         switch SceneRenderSettings.fitMode {
