@@ -121,20 +121,45 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers[0].textureEntryName, "materials/util/white.tex")
     }
 
-    /// _rt_ 텍스처(프레임버퍼 참조 = 컴포지션 의미론)는 이번 단계 미지원 — 명시 스킵.
-    func testFrameBufferTextureLayerSkipped() throws {
+    /// _rt_ 텍스처(프레임버퍼 참조) → isFrameBuffer 레이어. fullscreen 모델은 size 지정과 무관하게
+    /// 프로젝션 전체를 덮는다(origin 중앙).
+    func testFrameBufferTextureLayerParsed() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
-         "objects":[{"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+         "objects":[{"image":"models/util/fullscreenlayer.json","origin":"10 20 0","size":"5 5",
+                     "alpha":1,"visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let assets: [String: String] = [
+            "models/util/fullscreenlayer.json": #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true,"passthrough":true}"#,
+            "materials/util/fullscreenlayer.json": #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#,
+        ]
+        let doc = try SceneDocument.parse(package: p, assets: { assets[$0].map { Data($0.utf8) } })
+        XCTAssertEqual(doc.layers.count, 1, "_rt_ 레이어는 컴포지션 레이어로 파스돼야")
+        let l = doc.layers[0]
+        XCTAssertTrue(l.isFrameBuffer)
+        XCTAssertEqual(l.textureEntryName, "")
+        XCTAssertEqual(l.size, Vec2(x: 1920, y: 1080), "fullscreen → 프로젝션 전체")
+        XCTAssertEqual(l.origin, Vec2(x: 960, y: 540), "fullscreen → 중앙")
+    }
+
+    /// composelayer(fullscreen 플래그 없음, size 있는 그룹 레이어)도 isFrameBuffer 로 파스, 지오메트리는 오브젝트 값 유지.
+    func testComposeLayerKeepsObjectGeometry() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/util/composelayer.json","origin":"400 300 0","size":"800 600",
                      "visible":{"value":true}}]}
         """
         let p = try pkg([("scene.json", scene)])
         let assets: [String: String] = [
-            "models/util/fullscreenlayer.json": #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true}"#,
-            "materials/util/fullscreenlayer.json": #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#,
+            "models/util/composelayer.json": #"{"material":"materials/util/composelayer.json"}"#,
+            "materials/util/composelayer.json": #"{"passes":[{"shader":"composelayer","textures":["_rt_FullFrameBuffer"]}]}"#,
         ]
         let doc = try SceneDocument.parse(package: p, assets: { assets[$0].map { Data($0.utf8) } })
-        XCTAssertEqual(doc.layers.count, 0, "_rt_ 레이어는 컴포지션 SP 전까지 스킵")
+        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertTrue(doc.layers[0].isFrameBuffer)
+        XCTAssertEqual(doc.layers[0].size, Vec2(x: 800, y: 600))
+        XCTAssertEqual(doc.layers[0].origin, Vec2(x: 400, y: 300))
     }
 
     func testSkipsLayerWithMissingModel() throws {

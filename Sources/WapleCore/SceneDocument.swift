@@ -32,6 +32,9 @@ public struct SceneLayer: Equatable {
     public let effects: [SceneEffect]
     /// scene.json objects[] 내 인덱스 — WE 는 오브젝트 순서대로 그린다(파티클과 인터리브).
     public var order: Int = 0
+    /// 컴포지션 레이어(_rt_FullFrameBuffer): 이 레이어의 소스는 "그 시점까지 합성된 프레임버퍼".
+    /// textureEntryName 은 "" 이고 렌더러가 스냅샷을 src 로 바인드한다(설계 2026-07-02 컴포지션).
+    public var isFrameBuffer: Bool = false
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -81,22 +84,39 @@ extension SceneDocument {
             if (obj["visible"] as? Bool) == false { continue }
             if let vis = obj["visible"] as? [String: Any], (vis["value"] as? Bool) == false { continue }
             if let imagePath = obj["image"] as? String {
-                guard let tex = resolveTexture(imagePath: imagePath, package: package, assets: assets) else {
-                    continue  // 사유별 로그는 resolveTexture 내부에서.
+                guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets) else {
+                    continue  // 사유별 로그는 resolveLayerTexture 내부에서.
                 }
                 let angles = floats(obj["angles"])
+                var origin = vec2(obj["origin"]) ?? Vec2(x: 0, y: 0)
+                var size = vec2(obj["size"]) ?? Vec2(x: Float(pw), y: Float(ph))
+                var scale = vec2(obj["scale"]) ?? Vec2(x: 1, y: 1)
+                let entryName: String
+                var isFB = false
+                switch resolved {
+                case .entry(let name): entryName = name
+                case .solid: entryName = ""
+                case .frameBuffer(let fullscreen):
+                    entryName = ""; isFB = true
+                    if fullscreen {  // fullscreen 모델은 오브젝트 size 와 무관하게 프로젝션 전체.
+                        origin = Vec2(x: Float(pw) / 2, y: Float(ph) / 2)
+                        size = Vec2(x: Float(pw), y: Float(ph))
+                        scale = Vec2(x: 1, y: 1)
+                    }
+                }
                 layers.append(SceneLayer(
-                    textureEntryName: tex,
-                    origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
-                    size: vec2(obj["size"]) ?? Vec2(x: Float(pw), y: Float(ph)),
-                    scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),
+                    textureEntryName: entryName,
+                    origin: origin,
+                    size: size,
+                    scale: scale,
                     angleZ: angles.count >= 3 ? angles[2] : 0,
                     alpha: float(obj["alpha"]) ?? 1,
                     color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
                     brightness: float(obj["brightness"]) ?? 1,
                     parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
                     effects: parseEffects(obj["effects"]),
-                    order: order
+                    order: order,
+                    isFrameBuffer: isFB
                 ))
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
@@ -110,9 +130,16 @@ extension SceneDocument {
                              parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles)
     }
 
-    /// image(model) → material → texture name → "materials/<name>.tex".
-    /// 반환: 텍스처 엔트리 이름 / ""(무텍스처 머티리얼 = 솔리드 필 마커) / nil(해석 실패 또는 _rt_ 게이트 → 드롭).
-    private static func resolveTexture(imagePath: String, package: ScenePackage, assets: ((String) -> Data?)? = nil) -> String? {
+    /// 레이어 소스 해석 결과.
+    private enum LayerTexture {
+        case entry(String)                    // 일반 텍스처 엔트리
+        case solid                            // 무텍스처 머티리얼(flat) → 솔리드 필
+        case frameBuffer(fullscreen: Bool)    // _rt_FullFrameBuffer → 컴포지션 레이어
+    }
+
+    /// image(model) → material → texture name → "materials/<name>.tex". nil = 해석 실패(드롭+로그).
+    private static func resolveLayerTexture(imagePath: String, package: ScenePackage,
+                                            assets: ((String) -> Data?)? = nil) -> LayerTexture? {
         func data(_ name: String) -> Data? { package.data(for: name) ?? assets?(name) }
         guard let modelData = data(imagePath),
               let model = (try? JSONSerialization.jsonObject(with: modelData)) as? [String: Any],
@@ -128,19 +155,19 @@ extension SceneDocument {
         // 첫 항목이 아니라 첫 non-null·non-empty 문자열을 사용한다.
         let textures = pass0["textures"] as? [Any] ?? []
         guard let name = textures.compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) else {
-            // 무텍스처 머티리얼(예: util/solidlayer 의 shader "flat") → 솔리드 필 마커.
-            return ""
+            // 무텍스처 머티리얼(예: util/solidlayer 의 shader "flat") → 솔리드 필.
+            return .solid
         }
         if name.hasPrefix("_rt_") {
-            // 프레임버퍼 참조(fullscreen/compose/project layer) = 컴포지션 의미론 — 다음 SP 게이트.
-            NSLog("%@", "[Waple] composition layer unsupported (skipped): \(imagePath) → \(name)")
-            return nil
+            // 프레임버퍼 참조(fullscreen/compose/project layer) → 컴포지션 레이어.
+            let fullscreen = (model["fullscreen"] as? Bool) ?? (model["autosize"] as? Bool) ?? false
+            return .frameBuffer(fullscreen: fullscreen)
         }
         // 머티리얼의 텍스처 이름은 materials/ 상대 + 무확장("util/white" → "materials/util/white.tex").
         // pkg 에 실제로 있는 후보를 우선하고, 없으면 관례 경로를 반환(렌더러가 base-assets 폴백 시도).
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
-        for c in candidates where package.entries.contains(where: { $0.name == c }) { return c }
-        return candidates[0]
+        for c in candidates where package.entries.contains(where: { $0.name == c }) { return .entry(c) }
+        return .entry(candidates[0])
     }
 
     /// scene object 의 `particle` 경로 → particles/X.json + material → SceneParticle.
