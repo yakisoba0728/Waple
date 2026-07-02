@@ -87,6 +87,52 @@ final class GLSLTranslatorTests: XCTestCase {
         for q in ["highp", "mediump", "lowp", "precision "] { XCTAssertFalse(t.msl.contains(q), q) }
     }
 
+    func testEngineSymbolsMappedWithoutDeclarations() throws {
+        // 실제 WE 효과의 엔진 유니폼/attribute 선언은 common.h(베이스팩 전용, 보통 부재)에 있다.
+        // 선언이 없어도 본문 출현만으로 매핑돼야 실제 워크샵 효과가 번역된다(Stage-2 gate 1).
+        let vert = """
+        #include "common.h"
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord * g_Texture1Resolution.zw;
+        }
+        """
+        let frag = """
+        #include "common.h"
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= abs(sin(g_Time));
+            c.rgb *= 1.0 + g_AudioSpectrum16Left[0];
+            vec2 px = gl_FragCoord.xy;
+            c.r += px.x * 0.0;
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.usesAudio, "audio use detected from body occurrence")
+        for expect in ["eng.mvp", "eng.timeAndPad.x", "vin.a_Position", "vin.a_TexCoord",
+                       "eng.texRes[1]", "audioL[0]", "in.gl_Position.xy"] {
+            XCTAssertTrue(t.msl.contains(expect), "\(expect) missing:\n\(t.msl)")
+        }
+        for absent in ["g_Time", "g_ModelViewProjectionMatrix", "g_AudioSpectrum16Left", "gl_FragCoord"] {
+            XCTAssertFalse(t.msl.contains(absent), absent)
+        }
+    }
+
+    func testUndeclaredTextureSlotRecognizedFromBody() throws {
+        // 방어: 텍스처 샘플러 선언이 헤더에 있어 유실돼도 본문 g_TextureN 출현으로 슬롯 인식.
+        let vert = "varying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }"
+        let frag = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * texSample2D(g_Texture2, v_TexCoord); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertEqual(t.textureSlots, [0, 2])
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

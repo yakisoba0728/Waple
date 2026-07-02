@@ -53,6 +53,13 @@ public enum GLSLTranslator {
                                                defaultValue: u.annotationDefault ?? padDefault(u.type)))
             }
         }
+        // 엔진 심볼은 선언이 common.h(베이스팩 전용, 대체로 부재)에 있어 파싱에 안 잡힌다 —
+        // 본문 토큰 출현으로도 인식(Stage-2 gate 1). 텍스처 슬롯도 방어적으로 본문 스캔 병합.
+        let bodyIds = identifiers(in: vsrc).union(identifiers(in: fsrc))
+        for id in bodyIds {
+            if id.contains("AudioSpectrum16") { usesAudio = true }
+            if id.hasPrefix("g_Texture"), !id.hasSuffix("Resolution"), let n = textureIndex(id) { textures.append(n) }
+        }
         textures = Array(Set(textures)).sorted()
 
         // 심볼 치환 사전 구축.
@@ -65,6 +72,16 @@ public enum GLSLTranslator {
             let rep = engineReplacement(u.name)
             frag[u.name] = rep; vert[u.name] = rep
         }
+        // 본문 출현 기반 엔진 심볼(선언 부재 시에도 매핑).
+        for id in bodyIds where isEngine(id) {
+            let rep = engineReplacement(id)
+            if frag[id] == nil { frag[id] = rep }
+            if vert[id] == nil { vert[id] = rep }
+        }
+        // 표준 attribute 는 VIn 에 상시 존재 — 선언 없이도 vertex 에서 매핑.
+        if vert["a_Position"] == nil { vert["a_Position"] = "vin.a_Position" }
+        if vert["a_TexCoord"] == nil { vert["a_TexCoord"] = "vin.a_TexCoord" }
+        frag["gl_FragCoord"] = "in.gl_Position"  // [[position]] = 픽셀 좌표
 
         guard let fragMain = extractMain(fsrc), let vertMain = extractMain(vsrc) else { return nil }
 
@@ -308,6 +325,18 @@ public enum GLSLTranslator {
             }
             out.append(c); i += 1
         }
+        return out
+    }
+
+    /// 소스의 식별자 토큰 집합(본문 출현 스캔용).
+    static func identifiers(in src: String) -> Set<String> {
+        var out = Set<String>()
+        var id = ""
+        for c in src {
+            if c.isLetter || c == "_" || (!id.isEmpty && c.isNumber) { id.append(c) }
+            else if !id.isEmpty { out.insert(id); id = "" }
+        }
+        if !id.isEmpty { out.insert(id) }
         return out
     }
 
