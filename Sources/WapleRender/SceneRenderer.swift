@@ -647,10 +647,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
             enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
             for (slot, tex) in aux { enc.setFragmentTexture(tex, index: slot) }
-            if usesAudio {  // g_AudioSpectrum16Left/Right → buffer(2)/(3). 단일 main 오디오 효과용.
+            if usesAudio {  // g_AudioSpectrum16Left/Right → buffer(2)/(3). 셰이더는 사용하는 스테이지에만
+                // 파라미터를 방출하므로 양쪽에 바인드(미사용 스테이지 바인드는 무해; 실제 pulse 는 vert 에서 소비).
                 let l = currentSpectrum.left, r = currentSpectrum.right
-                l.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2) }
-                r.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 3) }
+                l.withUnsafeBytes {
+                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 2)
+                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2)
+                }
+                r.withUnsafeBytes {
+                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 3)
+                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 3)
+                }
             }
         }
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)

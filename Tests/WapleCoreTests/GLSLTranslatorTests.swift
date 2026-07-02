@@ -328,6 +328,40 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, in.v_TexCoord, level(0.0))"), t.msl)
     }
 
+    func testVertexStageAudioParams() throws {
+        // 실제 WE pulse 는 .vert 에서 CreateAudioResponse(오디오 배열 참조)를 호출한다 — vertex 에도 audio 파라미터 필요.
+        let vert = """
+        varying vec2 v_TexCoord;
+        varying float v_Gain;
+        float CreateAudioResponse() { return g_AudioSpectrum16Left[0] + g_AudioSpectrum16Right[0]; }
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+            v_Gain = CreateAudioResponse();
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        varying float v_Gain;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= v_Gain;
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.usesAudio)
+        // ev_main 시그니처에 vertex 오디오 버퍼 파라미터가 있어야 한다.
+        let evSig = try XCTUnwrap(t.msl.range(of: "vertex Vary ev_main").map { String(t.msl[$0.lowerBound...].prefix(300)) })
+        XCTAssertTrue(evSig.contains("constant float* audioL [[buffer(2)]]"), evSig)
+        XCTAssertTrue(evSig.contains("constant float* audioR [[buffer(3)]]"), evSig)
+        XCTAssertTrue(t.msl.contains("CreateAudioResponse(audioL, audioR)"), t.msl)
+        // fragment 는 오디오 미사용 → ef_main 시그니처에 audioL 없어야 한다.
+        let efSig = try XCTUnwrap(t.msl.range(of: "fragment float4 ef_main").map { String(t.msl[$0.lowerBound...].prefix(300)) })
+        XCTAssertFalse(efSig.contains("audioL"), efSig)
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

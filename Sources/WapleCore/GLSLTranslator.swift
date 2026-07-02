@@ -135,8 +135,12 @@ public enum GLSLTranslator {
             }
         }
 
+        // 스테이지별 오디오 파라미터: 최종 본문에 audioL/R 참조가 남은 스테이지에만 방출(캡처 인자 포함).
+        let vertAudio = vertBody.contains("audioL") || vertBody.contains("audioR")
+        let fragAudio = fragBody.contains("audioL") || fragBody.contains("audioR")
         let msl = assemble(varyings: varyings, textures: textures, materialCount: materials.count,
-                           usesAudio: usesAudio, consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
+                           vertAudio: vertAudio, fragAudio: fragAudio,
+                           consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
                            vertBody: vertBody, fragBody: fragBody)
         return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio)
     }
@@ -543,7 +547,7 @@ public enum GLSLTranslator {
     }
 
     private static func assemble(varyings: [(type: GLSLType, name: String)], textures: [Int],
-                                 materialCount: Int, usesAudio: Bool, consts: [String] = [],
+                                 materialCount: Int, vertAudio: Bool, fragAudio: Bool, consts: [String] = [],
                                  helperProtos: [String] = [], helperDefs: [String] = [],
                                  vertBody: String, fragBody: String) -> String {
         var vary = "struct Vary {\n  float4 gl_Position [[position]];\n"
@@ -555,11 +559,12 @@ public enum GLSLTranslator {
         // fragment 텍스처 파라미터
         var fragTex = textures.map { "texture2d<float> g_Texture\($0) [[texture(\($0))]]" }.joined(separator: ",\n                        ")
         if !fragTex.isEmpty { fragTex = ",\n                        " + fragTex }
-        let audioFrag = usesAudio ? ",\n                        constant float* audioL [[buffer(2)]], constant float* audioR [[buffer(3)]]" : ""
+        let audioParams = ", constant float* audioL [[buffer(2)]], constant float* audioR [[buffer(3)]]"
+        let audioFrag = fragAudio ? ",\n                        constant float* audioL [[buffer(2)]], constant float* audioR [[buffer(3)]]" : ""
         let pFrag = materialCount > 0 ? ",\n                        constant float4* p [[buffer(0)]]" : ""
 
         let vertSig = """
-        vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]) {
+        vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(vertAudio ? audioParams : "")) {
             Vary out;
         \(indent(vertBody))
             return out;

@@ -162,4 +162,61 @@ final class SceneAudioRenderTests: XCTestCase {
         XCTAssertLessThan(loLuma, 0.1, "silent should be dark")
         XCTAssertGreaterThan(hiLuma, loLuma + 0.15, "full spectrum should brighten via pulse alpha")
     }
+
+    /// 변환 경로 vertex 오디오 end-to-end: 비-스톡 효과의 .vert 가 오디오 배열을 읽어 varying 으로 전달,
+    /// frag 가 곱한다(실제 WE pulse.vert 의 CreateAudioResponse 패턴). 렌더러가 vertex 스테이지에
+    /// buffer(2/3) 을 바인드하지 않으면 무음/최대 차이가 나지 않는다.
+    func testTranslatedVertexAudioEndToEnd() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        varying float v_Gain;
+        float CreateAudioResponse() { return g_AudioSpectrum16Left[0]; }
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+            v_Gain = CreateAudioResponse();
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        varying float v_Gain;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= v_Gain;
+            gl_FragColor = c;
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/vaud/effect.json","passes":[{}]}]}]}
+        """
+        let pkg = encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("shaders/effects/vaud.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/vaud.frag", frag.data(using: .utf8)!),
+        ])
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_vaud", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try pkg.write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "vaud", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "vaud", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_vaud")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        r.setSpectrum(.silent)
+        let lo = avgLuma(try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first))
+        r.setSpectrum(AudioSpectrum16(left: [Float](repeating: 1, count: 16), right: [Float](repeating: 1, count: 16)))
+        let hi = avgLuma(try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.2], toDir: out).first))
+        NSLog("%@", "[Waple] vertex-audio luma silent=\(lo) full=\(hi)")
+        XCTAssertLessThan(lo, 0.1, "silent → gain 0 → black (변환 경로가 스킵되면 1.0)")
+        XCTAssertGreaterThan(hi, 0.8, "full spectrum → gain 1 → white")
+    }
 }
