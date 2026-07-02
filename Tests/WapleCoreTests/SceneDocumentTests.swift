@@ -196,6 +196,30 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(t1.order, 2)
     }
 
+    /// 애니메이션 바인딩 → SceneLayer.animations 캡처(base 는 기존 value 언랩 유지).
+    func testCapturesPropertyAnimations() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json",
+            "origin":{"animation":{"c0":[{"frame":0,"value":0},{"frame":60,"value":100}],
+                                    "options":{"fps":30,"length":60,"mode":"loop"},"relative":true},
+                      "value":"960 540 0"},
+            "alpha":{"animation":{"c0":[{"frame":0,"value":1},{"frame":30,"value":0}],
+                                   "options":{"fps":30,"length":30,"mode":"single"}},"value":1.0},
+            "size":"10 10","visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.layers.count, 1)
+        let l = doc.layers[0]
+        XCTAssertEqual(l.origin, Vec2(x: 960, y: 540), "base 는 정적 value")
+        XCTAssertNotNil(l.animations["origin"])
+        XCTAssertEqual(l.animations["origin"]?.mode, "loop")
+        XCTAssertEqual(l.animations["origin"]?.relative, true)
+        XCTAssertNotNil(l.animations["alpha"])
+        XCTAssertNil(l.animations["scale"])
+    }
+
     func testSkipsLayerWithMissingModel() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},

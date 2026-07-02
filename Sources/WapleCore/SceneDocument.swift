@@ -35,6 +35,8 @@ public struct SceneLayer: Equatable {
     /// 컴포지션 레이어(_rt_FullFrameBuffer): 이 레이어의 소스는 "그 시점까지 합성된 프레임버퍼".
     /// textureEntryName 은 "" 이고 렌더러가 스냅샷을 src 로 바인드한다(설계 2026-07-02 컴포지션).
     public var isFrameBuffer: Bool = false
+    /// 프로퍼티 애니메이션(키: origin/scale/alpha/angles/color). base 는 위 정적 필드.
+    public var animations: [String: PropertyAnimation] = [:]
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -121,6 +123,12 @@ extension SceneDocument {
                         scale = Vec2(x: 1, y: 1)
                     }
                 }
+                var anims: [String: PropertyAnimation] = [:]
+                for key in ["origin", "scale", "alpha", "angles", "color"] {
+                    if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind) {
+                        anims[key] = a
+                    }
+                }
                 layers.append(SceneLayer(
                     textureEntryName: entryName,
                     origin: origin,
@@ -133,7 +141,8 @@ extension SceneDocument {
                     parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
                     effects: parseEffects(obj["effects"]),
                     order: order,
-                    isFrameBuffer: isFB
+                    isFrameBuffer: isFB,
+                    animations: anims
                 ))
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
