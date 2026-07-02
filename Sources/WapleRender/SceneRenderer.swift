@@ -16,6 +16,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let target: Int?
         let usesAudio: Bool
         let texRes: [SIMD4<Float>]
+        /// 상수 프로퍼티 스크립트(슬롯 → 엔진) — per-frame 평가로 material 갱신(컬러 사이클 등).
+        var scripts: [(slot: Int, engine: TextScriptEngine)] = []
     }
     private enum EffectBind {
         case handPort(params: [Float], aux: [MTLTexture], audio: AudioParams?)
@@ -398,6 +400,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
                                     v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
             }
+            var passScripts: [(slot: Int, engine: TextScriptEngine)] = []
+            for (slot, p) in t.materialParams.enumerated() {
+                if let src = scenePass.constantScripts[p.sceneKey], let engine = TextScriptEngine(script: src) {
+                    passScripts.append((slot, engine))
+                    hasAnimations = true  // 스크립트 상수는 시간 함수 — 연속 렌더 필요
+                }
+            }
             // 바인드: previous → -1, 이름 → fbo 인덱스(미지 이름은 전체 실패 → 폴백). 부재 시 관례 previous@0.
             var binds: [(slot: Int, source: Int)] = []
             for b in mp.binds {
@@ -432,7 +441,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             if mp.target != nil && target == nil { NSLog("%@", "[Waple] unknown target in \(eff.name)"); return nil }
             if t.usesAudio { anyAudio = true }
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: aux,
-                                         binds: binds, target: target, usesAudio: t.usesAudio, texRes: texRes))
+                                         binds: binds, target: target, usesAudio: t.usesAudio, texRes: texRes,
+                                         scripts: passScripts))
         }
         // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         guard passes.contains(where: { $0.target == nil }) else { return nil }
@@ -989,7 +999,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 passes = Array(passes.prefix(n))
                 let last = passes.removeLast()
                 passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
-                                             binds: last.binds, target: nil, usesAudio: last.usesAudio, texRes: last.texRes))
+                                             binds: last.binds, target: nil, usesAudio: last.usesAudio,
+                                             texRes: last.texRes, scripts: last.scripts))
             }
             // 멀티패스: 이름 있는 FBO(다운스케일)를 풀에서 할당하고, 각 패스를 target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
@@ -1009,7 +1020,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 // 변환본 규약: 인터리브드 쿼드 buffer(4), p buffer(0)·EngineU buffer(1) 는 vert+frag 양쪽.
                 enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
                 if !pass.material.isEmpty {
-                    pass.material.withUnsafeBytes {
+                    var mat = pass.material
+                    // 상수 프로퍼티 스크립트: update(현재값) → 슬롯 갱신(컬러 사이클 등 시간 함수).
+                    for sc in pass.scripts {
+                        sc.engine.setRuntime(Double(time))
+                        let cur = mat[sc.slot]
+                        if let v = sc.engine.evaluateVec(current: [cur.x, cur.y, cur.z]) {
+                            if v.count >= 3 { mat[sc.slot] = SIMD4(v[0], v[1], v[2], cur.w) }
+                            else if v.count == 1 { mat[sc.slot] = SIMD4(v[0], cur.y, cur.z, cur.w) }
+                        }
+                    }
+                    mat.withUnsafeBytes {
                         enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
                         enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                     }

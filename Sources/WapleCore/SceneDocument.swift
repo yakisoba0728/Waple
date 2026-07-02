@@ -3,6 +3,8 @@ import Foundation
 /// scene.json 효과 항목의 패스별 사용자 데이터(effect.json passes[] 와 인덱스 정렬).
 public struct SceneEffectPass: Equatable {
     public var constants: [String: [Float]] = [:]
+    /// 상수에 걸린 프로퍼티 스크립트(키 → JS 소스) — 렌더러가 per-frame 평가(컬러 사이클 등).
+    public var constantScripts: [String: String] = [:]
     public var textureNames: [String?] = []
     public var combos: [String: Int] = [:]
     public init() {}
@@ -283,6 +285,16 @@ extension SceneDocument {
                         else if let s = v as? String {
                             let f = s.split(separator: " ").compactMap { Float($0) }
                             if !f.isEmpty { p.constants[k] = f }
+                        }
+                        else if let dict = v as? [String: Any] {
+                            // 바인딩 객체 {script/user/value} — 정적 value 언랩 + 스크립트 캡처(per-frame 평가용).
+                            if let sc = dict["script"] as? String { p.constantScripts[k] = sc }
+                            if let d = dict["value"] as? Double { p.constants[k] = [Float(d)] }
+                            else if let i = dict["value"] as? Int { p.constants[k] = [Float(i)] }
+                            else if let sv = dict["value"] as? String {
+                                let f = sv.split(separator: " ").compactMap { Float($0) }
+                                if !f.isEmpty { p.constants[k] = f }
+                            }
                         }
                     }
                 }

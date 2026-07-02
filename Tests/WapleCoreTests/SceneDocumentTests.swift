@@ -162,6 +162,23 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers[0].origin, Vec2(x: 400, y: 300))
     }
 
+    /// 효과 상수의 바인딩 객체 {script/value} — 정적 value 언랩 + 스크립트 캡처(실물 3395777145 컬러 사이클).
+    func testEffectConstantBindingObjectUnwrapped() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","visible":{"value":true},
+           "effects":[{"file":"effects/e.json","passes":[{"constantshadervalues":
+             {"color":{"script":"export function update(v){return v;}","value":"1.00000 0.00000 0.00000"},
+              "alpha":0.5}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        let e = try XCTUnwrap(doc.layers.first?.effects.first)
+        XCTAssertEqual(e.constants["color"], [1, 0, 0], "바인딩 value 언랩")
+        XCTAssertEqual(e.constants["alpha"], [0.5])
+        XCTAssertTrue(e.passList.first?.constantScripts["color"]?.contains("update") == true, "스크립트 캡처")
+    }
+
     /// 퍼펫 모델: model json 의 "puppet" 키가 SceneLayer.puppet 으로 전달돼야(SP6).
     func testPuppetPathParsed() throws {
         let puppetModel = #"{"autosize":true,"material":"materials/m.json","puppet":"models/x_puppet.mdl"}"#

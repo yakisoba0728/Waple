@@ -82,3 +82,34 @@ final class TextRasterizerTests: XCTestCase {
         XCTAssertNil(TextRasterizer.render(text: "   ", fontData: nil, systemFontName: nil, pointSize: 32))
     }
 }
+
+/// 효과 상수 스크립트: WEColor 실심 + engine.runtime + evaluateVec (실물 컬러 사이클 패턴).
+final class ConstantScriptTests: XCTestCase {
+    private let hueCycle = """
+    export let scriptProperties = createScriptProperties()
+        .addSlider({ name: 'speed', value: 0.25, min: 0, max: 1 }).finish();
+    import * as WEColor from 'WEColor';
+    export function update(value) {
+        return WEColor.hsv2rgb({ x: engine.runtime * scriptProperties.speed, y: 1, z: 1 });
+    }
+    """
+
+    func testHueCycleUsesRuntimeAndWEColor() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: hueCycle))
+        e.setRuntime(0)
+        let red = try XCTUnwrap(e.evaluateVec(current: [1, 0, 0]))
+        XCTAssertEqual(red[0], 1, accuracy: 1e-4)
+        XCTAssertEqual(red[1], 0, accuracy: 1e-4)
+        e.setRuntime(2.0)  // hue = 0.5 → cyan
+        let cyan = try XCTUnwrap(e.evaluateVec(current: [1, 0, 0]))
+        XCTAssertEqual(cyan[0], 0, accuracy: 1e-4)
+        XCTAssertEqual(cyan[1], 1, accuracy: 1e-4)
+        XCTAssertEqual(cyan[2], 1, accuracy: 1e-4)
+    }
+
+    func testScalarScript() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: "export function update(v) { return v * 2 + engine.runtime; }"))
+        e.setRuntime(1)
+        XCTAssertEqual(try XCTUnwrap(e.evaluateVec(current: [3])).first ?? 0, 7, accuracy: 1e-4)
+    }
+}
