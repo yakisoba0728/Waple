@@ -45,6 +45,9 @@ struct LibraryView: View {
             }
         }
         .frame(minWidth: 640, minHeight: 420)
+        .sheet(item: $viewModel.propertyEditorEntry) { entry in
+            PropertyEditorView(entry: entry, viewModel: viewModel)
+        }
     }
 
     @ViewBuilder
@@ -71,6 +74,9 @@ struct LibraryView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             if supported { viewModel.apply(entry) }
+        }
+        .contextMenu {
+            Button("속성 편집…") { viewModel.propertyEditorEntry = entry }
         }
         .overlay(
             RoundedRectangle(cornerRadius: 8)

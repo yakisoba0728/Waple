@@ -55,7 +55,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             } catch {
                 NSLog("%@", "[Waple] failed to parse properties for \(project.folderURL.path): \(error)")
             }
-            pendingUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(props)
+            // 유저 오버라이드 병합(속성 편집 UI) — WE 의 "저장된 사용자 값" 의미론.
+            let effective = WallpaperProperties.applying(overrides: UserPropertyStore.overrides(id: project.id), to: props)
+            pendingUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effective)
             web.load(URLRequest(url: url))
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] frame in

@@ -98,7 +98,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             doc = try SceneDocument.parse(package: package, assets: { name in
                 guard let base = BaseAssetsSettings.baseAssetsDirectory else { return nil }
                 return try? Data(contentsOf: base.appendingPathComponent(name))
-            })
+            }, userProps: UserPropertyStore.rawOverrides(id: project.id))
         } catch {
             NSLog("%@", "[Waple] scene mount: failed to parse \(pkgURL.path): \(error)")
             throw error

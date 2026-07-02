@@ -2,10 +2,13 @@ import Foundation
 import Combine
 import WapleCore
 import WapleLibrary
+import WapleRender
 
 final class LibraryViewModel: ObservableObject {
     @Published private(set) var entries: [LibraryEntry] = []
     @Published var selectedId: String?
+    /// 속성 편집 시트 대상(nil = 닫힘).
+    @Published var propertyEditorEntry: LibraryEntry?
 
     /// 적용 요청을 AppDelegate 로 전달한다(폴더 URL). 마운트 성공 여부를 반환한다.
     var onApply: ((URL) -> Bool)?
@@ -52,5 +55,30 @@ final class LibraryViewModel: ObservableObject {
 
     func isSupported(_ entry: LibraryEntry) -> Bool {
         WallpaperType.from(entry.typeRaw).isSupportedInMVP
+    }
+
+    // MARK: - 유저 속성 편집
+
+    /// 편집 가능한 속성 목록(기본값 + 저장된 오버라이드 병합).
+    func editableProperties(for entry: LibraryEntry) -> [WallpaperProperty] {
+        guard let folder = store.resolveFolderURL(for: entry),
+              let props = try? WallpaperProperties.parse(folderURL: folder) else { return [] }
+        return WallpaperProperties.applying(overrides: UserPropertyStore.overrides(id: entry.id), to: props)
+    }
+
+    func setProperty(key: String, value: PropertyValue, for entry: LibraryEntry) {
+        UserPropertyStore.set(value, key: key, id: entry.id)
+        reapplyIfCurrent(entry)
+    }
+
+    func resetProperties(for entry: LibraryEntry) {
+        UserPropertyStore.reset(id: entry.id)
+        reapplyIfCurrent(entry)
+    }
+
+    /// 현재 적용 중인 배경이면 즉시 재적용(변경 반영 — fit-mode 패턴).
+    private func reapplyIfCurrent(_ entry: LibraryEntry) {
+        guard selectedId == entry.id, let folder = store.resolveFolderURL(for: entry) else { return }
+        _ = onApply?(folder)
     }
 }

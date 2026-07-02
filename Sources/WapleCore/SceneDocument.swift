@@ -80,10 +80,16 @@ public enum SceneDocumentError: Error, Equatable { case noScene }
 extension SceneDocument {
     /// - assets: 공유(base-assets) 리졸버 — pkg 에 없는 모델/머티리얼 JSON(models/util/solidlayer.json 등)의
     ///   폴백. WapleCore 는 순수하므로 파일 IO 는 호출자가 클로저로 주입한다(렌더러: BaseAssetsSettings 디렉터리).
-    public static func parse(package: ScenePackage, assets: ((String) -> Data?)? = nil) throws -> SceneDocument {
+    /// - userProps: 유저 속성 오버라이드(키 → 값). scene.json 의 `{"user": "키", "value": 기본}` 바인딩을
+    ///   파스 전에 트리 전체에서 일괄 해석한다(visible/alpha/color/effect 상수 등 모든 바인딩 지점 공통).
+    public static func parse(package: ScenePackage, assets: ((String) -> Data?)? = nil,
+                             userProps: [String: Any] = [:]) throws -> SceneDocument {
         guard let sceneData = package.data(for: "scene.json") ?? package.data(for: "gifscene.json"),
-              let scene = (try? JSONSerialization.jsonObject(with: sceneData)) as? [String: Any] else {
+              var scene = (try? JSONSerialization.jsonObject(with: sceneData)) as? [String: Any] else {
             throw SceneDocumentError.noScene
+        }
+        if !userProps.isEmpty {
+            scene = (resolveUserBindings(scene, userProps: userProps, depth: 0) as? [String: Any]) ?? scene
         }
         let general = scene["general"] as? [String: Any] ?? [:]
         let proj = general["orthogonalprojection"] as? [String: Any] ?? [:]
@@ -269,6 +275,22 @@ extension SceneDocument {
             out.append(SceneEffect(name: name, constants: constants, textureNames: textureNames, combos: combos, file: file))
         }
         return out
+    }
+
+    /// `{"user": "키", ...}` 바인딩의 value 를 유저 오버라이드로 치환(재귀, 깊이 제한).
+    private static func resolveUserBindings(_ node: Any, userProps: [String: Any], depth: Int) -> Any {
+        guard depth < 32 else { return node }
+        if var dict = node as? [String: Any] {
+            if let user = dict["user"] as? String, let override = userProps[user] {
+                dict["value"] = override
+            }
+            for (k, v) in dict { dict[k] = resolveUserBindings(v, userProps: userProps, depth: depth + 1) }
+            return dict
+        }
+        if let arr = node as? [Any] {
+            return arr.map { resolveUserBindings($0, userProps: userProps, depth: depth + 1) }
+        }
+        return node
     }
 
     /// 바인딩 객체 {"animation":..., "value": X} → X(정적 값), 아니면 원값.
