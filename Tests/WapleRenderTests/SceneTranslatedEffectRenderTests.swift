@@ -156,6 +156,57 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertEqual(luma, 0.4, accuracy: 0.1, "workshop effect dims via GLSL→MSL translator (resolved from file path)")
     }
 
+    /// Step 5(2026-07-02, 실물 검증 후 전환): 스톡 이름 효과도 pkg 가 GLSL 을 동봉하면 **translated 우선**.
+    /// 동봉 GLSL(고정 빨강)과 hand-port(디밍)가 다르게 렌더되도록 하여 어느 경로가 이겼는지 판별.
+    /// hand-port 가 이기면 흰색 계열, translated 가 이기면 빨강.
+    func testShippedGLSLWinsOverHandPort() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            gl_FragColor = vec4(c.a, 0.0, 0.0, c.a);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/opacity/effect.json","passes":[{"constantshadervalues":{"alpha":1.0}}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_flip", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let pkg = encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("shaders/effects/opacity.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/opacity.frag", frag.data(using: .utf8)!),
+        ])
+        try pkg.write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "flip", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "flip", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let outDir = URL(fileURLWithPath: "/tmp/waple_tr_flip")
+        try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: outDir).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] flip test px=(\(c.redComponent),\(c.greenComponent),\(c.blueComponent))")
+        XCTAssertGreaterThan(c.redComponent, 0.8, "동봉 GLSL(빨강)이 이겨야 — hand-port(흰색)가 이기면 게이트 미전환")
+        XCTAssertLessThan(c.greenComponent, 0.2, "hand-port 가 이기면 초록≈1")
+    }
+
     /// texRes per-slot(설계 §4): g_Texture1Resolution 은 aux 슬롯 1 텍스처의 실제 dims 여야 한다
     /// (레이어 dims 8x8 근사가 아니라). frag 가 x==4 를 검사해 백/흑으로 표출 — 4x2 aux 면 luma 1.
     func testAuxTextureResolutionPerSlot() throws {

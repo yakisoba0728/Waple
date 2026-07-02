@@ -216,15 +216,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                     layer.color.z * layer.brightness, layer.alpha)
             var effects: [EffectGPU] = []
             for eff in layer.effects {
-                // 폴백 체인(무회귀): 손-포팅(검증된 스톡 7종) 우선 → 없으면 GLSL→MSL 변환(워크샵/미지원 이름,
-                // 현재 스킵되던 것 → 순수 이득) → 둘 다 실패 시 스킵+로그.
-                if let handPort = buildHandPortEffect(eff, package: package, device: device) {
-                    effects.append(handPort)
-                } else if let translated = buildTranslatedEffect(eff, package: package, device: device,
-                                                                 texW: decoded.width, texH: decoded.height) {
+                // 폴백 체인(Step 5, 2026-07-02 실물 검증 후 전환): **translated 우선** — pkg 동봉 GLSL 은
+                // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
+                // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴백 → 둘 다 실패 시 스킵+로그.
+                if let translated = buildTranslatedEffect(eff, package: package, device: device,
+                                                          texW: decoded.width, texH: decoded.height) {
                     effects.append(translated)
+                } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
+                    effects.append(handPort)
                 } else {
-                    NSLog("%@", "[Waple] effect skipped (no hand-port, no translatable GLSL): \(eff.name)")
+                    NSLog("%@", "[Waple] effect skipped (no translatable GLSL, no hand-port): \(eff.name)")
                 }
             }
             if !effects.isEmpty { hasEffects = true }
@@ -262,13 +263,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// reflection 기반 머티리얼/텍스처/오디오 바인드 플랜. 어느 단계든 실패하면 nil(→ 스킵). 무회귀.
     private func buildTranslatedEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice,
                                        texW: Int, texH: Int) -> EffectGPU? {
+        // 디버그 바이섹션 스위치: 실물 씬에서 번역 효과만 끄고 A/B 비교(시각 아티팩트 책임 분리).
+        if ProcessInfo.processInfo.environment["WAPLE_DISABLE_TRANSLATED"] == "1" { return nil }
         guard let glsl = loadEffectGLSL(eff, package: package) else { return nil }
-        // #include 리졸버: WE common.h 등은 pkg→베이스에셋에서 로드(보통 베이스팩 전용 → 베이스에셋 미설정 시 nil→드롭).
+        // #include 리졸버: pkg→베이스에셋→내장(확정-의미 서브셋, common_blending.h) 순.
+        // common.h 는 내장 없음(추측 구현 금지) — 베이스에셋 미설정 시 드롭 → 해당 효과는 컴파일 실패 → 폴백.
         let include: (String) -> String? = { header in
             for cand in ["shaders/\(header)", header] {
                 if let d = self.quietAssetData(cand, package: package), let s = String(data: d, encoding: .utf8) { return s }
             }
-            return nil
+            return BuiltinShaderIncludes.lookup(header)
         }
         guard let t = GLSLTranslator.translate(vertex: glsl.vert, fragment: glsl.frag, combos: eff.combos, include: include) else {
             NSLog("%@", "[Waple] GLSL translate failed: \(eff.name)")
@@ -344,7 +348,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 변환 효과 파이프라인. 정점 디스크립터: a_Position float3@0, a_TexCoord float2@12, stride 20,
     /// 버퍼 인덱스 4(p=buffer0 / eng=buffer1 와 충돌 회피 — 스파이크 증명 규약).
     private func translatedPipeline(msl: String, device: MTLDevice) -> MTLRenderPipelineState? {
-        guard let lib = try? device.makeLibrary(source: msl, options: nil) else { return nil }
+        let lib: MTLLibrary
+        do {
+            lib = try device.makeLibrary(source: msl, options: nil)
+        } catch {
+            // 실패 원인 진단용: 첫 에러 줄만(대개 undefined identifier = common.h 함수 부재).
+            let first = "\(error)".split(separator: "\n").first(where: { $0.contains("error:") }) ?? ""
+            NSLog("%@", "[Waple] translated MSL compile error: \(first)")
+            return nil
+        }
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "ev_main")
         pd.fragmentFunction = lib.makeFunction(name: "ef_main")
