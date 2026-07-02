@@ -74,6 +74,25 @@ final class SceneCompositeConventionTests: XCTestCase {
      "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"}]}
     """
 
+    /// 솔리드 레이어(무텍스처 flat 머티리얼): 흰 bg 위 검정 α0.5 솔리드 → luma ≈ 0.5.
+    /// (솔리드 미지원이면 레이어 드롭 → 1.0.)
+    func testSolidLayerRendersColorFill() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/solidlayer.json","origin":"960 540 0","size":"1920 1080",
+            "alpha":0.5,"color":"0 0 0","visible":{"value":true}}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("models/util/solidlayer.json", #"{"material":"materials/util/solidlayer.json","solidlayer":true}"#.data(using: .utf8)!),
+            ("materials/util/solidlayer.json", #"{"passes":[{"shader":"flat","blending":"translucent"}]}"#.data(using: .utf8)!),
+        ], tag: "solid")
+        NSLog("%@", "[Waple] solid layer luma=\(luma)")
+        XCTAssertEqual(luma, 0.5, accuracy: 0.06, "검정 α0.5 솔리드가 흰 bg 를 절반 디밍해야 (드롭이면 1.0)")
+    }
+
     /// 알파 0.5 흰색 레이어(무-이펙트) over 검정 → luma ≈ 0.5. (straight 출력 + src=one 이면 1.0 이 됨.)
     func testSemiTransparentLayerCompositesCorrectly() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }

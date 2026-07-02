@@ -77,7 +77,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let doc: SceneDocument
         do {
             package = try ScenePackage.parse(data)
-            doc = try SceneDocument.parse(package: package)
+            // 공유(base-assets) 리졸버: pkg 에 없는 util 모델/머티리얼 JSON(솔리드 레이어 등) 폴백.
+            doc = try SceneDocument.parse(package: package, assets: { name in
+                guard let base = BaseAssetsSettings.baseAssetsDirectory else { return nil }
+                return try? Data(contentsOf: base.appendingPathComponent(name))
+            })
         } catch {
             NSLog("%@", "[Waple] scene mount: failed to parse \(pkgURL.path): \(error)")
             throw error
@@ -206,10 +210,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
         var out: [GPULayer] = []
         for layer in doc.layers {
-            guard let texData = assetData(layer.textureEntryName, package: package),
-                  let tex = TexImage.parse(texData),
-                  let decoded = TexDecoder.rgba(from: tex, data: texData),
-                  let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else { continue }
+            // 솔리드 마커(""): 무텍스처 flat 머티리얼 → 흰색 1x1 — 기존 tint 경로(color×brightness, alpha)가 필을 만든다.
+            let decoded: (pixels: Data, width: Int, height: Int)
+            if layer.textureEntryName.isEmpty {
+                decoded = (Data([255, 255, 255, 255]), 1, 1)
+            } else if let texData = assetData(layer.textureEntryName, package: package),
+                      let tex = TexImage.parse(texData),
+                      let d = TexDecoder.rgba(from: tex, data: texData) {
+                decoded = d
+            } else { continue }
+            guard let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else { continue }
             let verts = quadVertices(layer: layer, projW: w, projH: h)
             guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) else { continue }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
