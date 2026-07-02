@@ -162,6 +162,19 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers[0].origin, Vec2(x: 400, y: 300))
     }
 
+    /// 퍼펫 모델: model json 의 "puppet" 키가 SceneLayer.puppet 으로 전달돼야(SP6).
+    func testPuppetPathParsed() throws {
+        let puppetModel = #"{"autosize":true,"material":"materials/m.json","puppet":"models/x_puppet.mdl"}"#
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"960 540 0","size":"100 100","visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", puppetModel), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertEqual(doc.layers[0].puppet, "models/x_puppet.mdl")
+    }
+
     /// 텍스트 오브젝트: 평문 text 와 {"script": ...} 둘 다 SceneTextLayer 로 파스(씬 순서 order 공유).
     func testParsesTextObjects() throws {
         let scene = """

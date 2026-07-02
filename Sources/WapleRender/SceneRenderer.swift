@@ -23,7 +23,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case translated(passes: [TranslatedPass], fboScales: [Int])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */ }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil }
     private var hasAnimations = false
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -292,11 +292,22 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
             if !effects.isEmpty { hasEffects = true }
             if !layer.animations.isEmpty { hasAnimations = true }
+            // 퍼펫(.mdl): 스키닝 메시 — 로드 실패 시 정지 쿼드 폴백(로그).
+            var puppetModel: PuppetModel? = nil
+            if let pp = layer.puppet {
+                if let bytes = assetData(pp, package: package), let pm = PuppetModel.parse(bytes) {
+                    puppetModel = pm
+                    if !pm.animations.isEmpty { hasAnimations = true }
+                } else {
+                    NSLog("%@", "[Waple] puppet mdl load failed (static quad fallback): \(pp)")
+                }
+            }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
                                 effects: effects, texWidth: effW, texHeight: effH,
                                 order: layer.order, isFrameBuffer: layer.isFrameBuffer,
-                                def: layer.animations.isEmpty ? nil : layer))
+                                def: (layer.animations.isEmpty && puppetModel == nil) ? nil : layer,
+                                puppet: puppetModel))
         }
         return out
     }
@@ -676,6 +687,29 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         ]
     }
 
+    /// 퍼펫 스킨 정점 → NDC 삼각형 리스트(quadVertices 와 동일 규약: 씬 픽셀 y-down, uv 그대로).
+    /// 메시 좌표는 레이어 로컬 픽셀(원점 중심)·**y-up**(실측: 2809885105 프리뷰 대비 반전 확인) —
+    /// y 부호 반전 후 origin/scale/angleZ 적용, NDC 변환.
+    static func puppetVertices(model: PuppetModel, positions: [SIMD3<Float>],
+                               origin: Vec2, scale: Vec2, angleZ: Float,
+                               projW: Float, projH: Float) -> [SIMD4<Float>] {
+        let a = angleZ * .pi / 180
+        let ca = cos(a), sa = sin(a)
+        var out: [SIMD4<Float>] = []
+        out.reserveCapacity(model.indices.count)
+        for idx in model.indices {
+            let i = Int(idx)
+            guard i < positions.count else { continue }
+            let p = positions[i]
+            let lx = p.x * scale.x, ly = -p.y * scale.y
+            let sx = origin.x + lx * ca - ly * sa
+            let sy = origin.y + lx * sa + ly * ca
+            out.append(SIMD4<Float>(sx / projW * 2 - 1, 1 - sy / projH * 2,
+                                    model.vertices[i].uv.x, model.vertices[i].uv.y))
+        }
+        return out
+    }
+
     private func updateParallax(_ off: CGPoint) {
         pointerUV = SceneRenderer.pointerUV(fromNormalized: off)
         if parallaxEnabled {
@@ -781,6 +815,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 tint = SIMD4(c.x * def.brightness, c.y * def.brightness, c.z * def.brightness, a)
             }
         }
+        var vertexCount = 6
+        // 퍼펫: per-frame CPU 스키닝 → 메시 삼각형 리스트로 쿼드 대체.
+        if let pm = layer.puppet, let def = layer.def, let device {
+            let mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
+            let pos = PuppetPose.skinnedPositions(model: pm, matrices: mats)
+            let verts = SceneRenderer.puppetVertices(model: pm, positions: pos,
+                                                     origin: def.origin, scale: def.scale, angleZ: def.angleZ,
+                                                     projW: projW, projH: projH)
+            if !verts.isEmpty,
+               let b = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) {
+                vbuf = b
+                vertexCount = verts.count
+            }
+        }
         var depth = layer.parallaxDepth
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
@@ -789,7 +837,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         enc.setFragmentTexture(texture, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
     /// 텍스트 오브젝트 준비: 폰트 바이트(pkg→base-assets) + 스크립트 엔진 + 초기 텍스트 래스터.

@@ -47,6 +47,8 @@ public struct SceneLayer: Equatable {
     public var isFrameBuffer: Bool = false
     /// 프로퍼티 애니메이션(키: origin/scale/alpha/angles/color). base 는 위 정적 필드.
     public var animations: [String: PropertyAnimation] = [:]
+    /// 퍼펫 모델(.mdl) 경로 — model json 의 "puppet" 키(SP6 슬라이스 1). nil = 일반 쿼드.
+    public var puppet: String? = nil
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -145,6 +147,12 @@ extension SceneDocument {
                         anims[key] = a
                     }
                 }
+                // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
+                var puppetPath: String? = nil
+                if let md = package.data(for: imagePath) ?? assets?(imagePath),
+                   let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
+                    puppetPath = mj["puppet"] as? String
+                }
                 layers.append(SceneLayer(
                     textureEntryName: entryName,
                     origin: origin,
@@ -160,6 +168,7 @@ extension SceneDocument {
                     isFrameBuffer: isFB,
                     animations: anims
                 ))
+                layers[layers.count - 1].puppet = puppetPath
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
                     p.order = order
