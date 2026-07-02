@@ -112,8 +112,8 @@ final class SceneAudioRenderTests: XCTestCase {
         let a = avgLuma(try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: outDir).first))
         let b = avgLuma(try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.2], toDir: outDir).first))
         NSLog("%@", "[Waple] pool chain luma a=\(a) b=\(b)")
-        // chain 통과(두 번 디밍) → 검정도 풀밝기도 아닌 중간값(약 0.34, premult 중첩의 기존 동작). 손상 없음.
-        XCTAssertGreaterThan(a, 0.25); XCTAssertLessThan(a, 0.45)
+        // chain 통과(두 번 디밍) → 0.7×0.7 = 0.49 (straight 규약, 설계 §3 — 이중 premult 아님). 손상 없음.
+        XCTAssertEqual(a, 0.49, accuracy: 0.05)
         XCTAssertEqual(a, b, accuracy: 0.01, "pool reuse across frames must reproduce same result")
     }
 
