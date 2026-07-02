@@ -65,15 +65,27 @@ public enum TexDecoder {
         return (out, iw, ih)
     }
 
+    /// PNG/JPEG → straight-alpha RGBA. 디코더 출력 규약은 전 포맷 STRAIGHT 로 통일한다
+    /// (raw/BC3/LZ4 는 WE 저장 그대로 straight — PNG 경로만 CG 가 premultiplied 를 강제하므로 역변환).
+    /// 파이프라인 규약(설계 §3): 텍스처/이펙트 패스 straight, premultiply 는 최종 컴포지트에서 1회.
     private static func draw(_ img: CGImage) -> (Data, Int, Int)? {
         let w = img.width, h = img.height
         var pixels = Data(count: w * h * 4)
         let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
             guard let base = ptr.baseAddress,
+                  // CGContext 는 non-premultiplied 드로잉을 지원하지 않아 premultipliedLast 로 그린 뒤 역변환한다.
                   let ctx = CGContext(data: base, width: w, height: h, bitsPerComponent: 8,
                                       bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
             ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            let px = base.assumingMemoryBound(to: UInt8.self)
+            for i in stride(from: 0, to: w * h * 4, by: 4) {
+                let a = Int(px[i + 3])
+                if a == 0 || a == 255 { continue }
+                px[i]     = UInt8(min(255, Int(px[i])     * 255 / a))
+                px[i + 1] = UInt8(min(255, Int(px[i + 1]) * 255 / a))
+                px[i + 2] = UInt8(min(255, Int(px[i + 2]) * 255 / a))
+            }
             return true
         }
         return ok ? (pixels, w, h) : nil

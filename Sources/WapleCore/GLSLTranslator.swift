@@ -381,14 +381,35 @@ public enum GLSLTranslator {
         s = replaceIdentifiers(s, symbols)
         // 4) gl_Position / gl_FragColor
         if isFragment {
-            // gl_FragColor = EXPR;  →  premultiplied 반환
-            s = rewriteAssign(s, "gl_FragColor") { expr in
-                "{ float4 _frag = (\(expr)); _frag.rgb *= _frag.a; return _frag; }"
+            // gl_FragColor 로컬 변수 방식(설계 §3): 다중/스위즐 대입 + 조기 bare return 지원.
+            // straight-alpha 출력 — premultiply 주입 없음(WE GLSL 과 1:1; 컴포지트가 1회 premult).
+            if s.contains("gl_FragColor") {
+                s = rewriteBareReturns(s, with: "return gl_FragColor;")
+                s = "float4 gl_FragColor = float4(0.0);\n" + s + "\nreturn gl_FragColor;"
             }
         } else {
             s = s.replacingOccurrences(of: "gl_Position", with: "out.gl_Position")
         }
         return s
+    }
+
+    /// `return ;` / `return;`(값 없는 return)을 대체 문장으로 치환(fragment main 용).
+    static func rewriteBareReturns(_ src: String, with replacement: String) -> String {
+        let chars = Array(src); var out = ""; var i = 0
+        while i < chars.count {
+            if chars[i] == "r", matchWord(chars, i, "return"),
+               i + 6 <= chars.count, String(chars[i..<min(i + 6, chars.count)]) == "return" {
+                var j = i + 6
+                while j < chars.count, chars[j] == " " || chars[j] == "\t" { j += 1 }
+                if j < chars.count, chars[j] == ";" {
+                    out += replacement
+                    i = j + 1
+                    continue
+                }
+            }
+            out.append(chars[i]); i += 1
+        }
+        return out
     }
 
     // MARK: - 어셈블
@@ -580,17 +601,6 @@ public enum GLSLTranslator {
                 if let rep = transform(recArgs) { out += rep; i = j; continue }
             }
             out.append(chars[i]); i += 1
-        }
-        return out
-    }
-
-    /// `target = EXPR;` (단순 대입; target 에 스위즐 없는 경우) → transform(EXPR).
-    private static func rewriteAssign(_ src: String, _ target: String, _ transform: (String) -> String) -> String {
-        var out = src
-        while let r = out.range(of: target + " = ") {
-            guard let semi = out[r.upperBound...].firstIndex(of: ";") else { break }
-            let expr = String(out[r.upperBound..<semi]).trimmingCharacters(in: .whitespaces)
-            out.replaceSubrange(r.lowerBound...semi, with: transform(expr))
         }
         return out
     }

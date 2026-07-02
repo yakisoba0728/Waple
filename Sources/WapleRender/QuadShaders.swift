@@ -18,7 +18,10 @@ enum QuadShaders {
                            constant float4 &tint [[buffer(0)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
-        return float4(c.rgb * tint.rgb, c.a * tint.a);
+        // 파이프라인 규약(설계 §3): 입력(텍스처/이펙트 결과)은 straight-alpha.
+        // 블렌드가 src=one(premultiplied-over)이므로 여기서 단 한 번 premultiply 한다.
+        float a = c.a * tint.a;
+        return float4(c.rgb * tint.rgb * a, a);
     }
     """
 }

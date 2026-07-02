@@ -50,7 +50,8 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("vertex Vary ev_main"))
         XCTAssertTrue(t.msl.contains("fragment float4 ef_main"))
         XCTAssertTrue(t.msl.contains("p[0].x"), "g_UserAlpha → p[0].x")
-        XCTAssertTrue(t.msl.contains("_frag.rgb *= _frag.a"), "premultiplied inject")
+        XCTAssertTrue(t.msl.contains("float4 gl_FragColor = float4(0.0);"), "gl_FragColor 로컬 변수(straight, no premult)")
+        XCTAssertTrue(t.msl.contains("return gl_FragColor;"), "말미 return")
         XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp"), "texSample2D → .sample")
         XCTAssertTrue(t.msl.contains("eng.mvp"), "MVP engine uniform")
         XCTAssertTrue(t.msl.contains("float mask = 1.0;"), "MASK=0 branch")
@@ -284,6 +285,25 @@ final class GLSLTranslatorTests: XCTestCase {
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
         XCTAssertTrue(t.msl.contains("inline float vig(float2 v_TexCoord)"), t.msl)
         XCTAssertTrue(t.msl.contains("vig(in.v_TexCoord)"), t.msl)
+    }
+
+    func testFragColorLocalVarScheme() throws {
+        // 규약 전환(설계 §3): premult 주입 없음 + 다중 대입/스위즐 대입/조기 bare return 지원.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord);
+            gl_FragColor.rgb *= 0.5;
+            if (gl_FragColor.a < 0.01) { return; }
+            gl_FragColor.a *= 0.9;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float4 gl_FragColor = float4(0.0);"), t.msl)
+        XCTAssertTrue(t.msl.contains("if (gl_FragColor.a < 0.01) { return gl_FragColor; }"), "bare return → return gl_FragColor: \(t.msl)")
+        XCTAssertTrue(t.msl.hasSuffix("return gl_FragColor;\n}\n") || t.msl.contains("return gl_FragColor;"), t.msl)
+        XCTAssertFalse(t.msl.contains("_frag.rgb *= _frag.a"), "premult 주입 제거: \(t.msl)")
     }
 
     func testMulRewrite() {

@@ -3,8 +3,8 @@ import Metal
 @testable import WapleCore
 @testable import WapleRender
 
-/// 스파이크: 변환된 opacity 를 풀 경로(reflection→vertex descriptor + material float4 buffer + engine buffer + premult)로
-/// 렌더해 바인딩 계약을 검증. 흰색 입력 + alpha=0.5 → premultiplied (0.5,0.5,0.5,0.5).
+/// 스파이크: 변환된 opacity 를 풀 경로(reflection→vertex descriptor + material float4 buffer + engine buffer)로
+/// 렌더해 바인딩 계약을 검증. 흰색 입력 + alpha=0.5 → straight (1,1,1,0.5) (설계 §3: premult 는 컴포지트 1회).
 final class SpikeOpacityTranslatedTests: XCTestCase {
     func testTranslatedOpacityBindingContract() throws {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw XCTSkip("no Metal") }
@@ -105,10 +105,10 @@ final class SpikeOpacityTranslatedTests: XCTestCase {
         px.withUnsafeMutableBytes { ptr in
             target.getBytes(ptr.baseAddress!, bytesPerRow: 8 * 4, from: MTLRegionMake2D(0, 0, 8, 8), mipmapLevel: 0)
         }
-        // 중앙 픽셀(4,4): premultiplied (0.5,0.5,0.5,0.5) → ~128
+        // 중앙 픽셀(4,4): straight 출력(설계 §3) (1.0,1.0,1.0,0.5) → R 255, A 128.
         let o = (4 * 8 + 4) * 4
         NSLog("%@", "[Waple] spike opacity px = \(px[o]),\(px[o+1]),\(px[o+2]),\(px[o+3])")
-        XCTAssertEqual(Int(px[o]),   128, accuracy: 4, "premult R")
+        XCTAssertEqual(Int(px[o]),   255, accuracy: 4, "straight R (premult 는 컴포지트에서)")
         XCTAssertEqual(Int(px[o+3]), 128, accuracy: 4, "alpha")
     }
 }

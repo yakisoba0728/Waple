@@ -119,8 +119,8 @@ enum EffectShaders {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
             float4 c = fb.sample(s, in.uv);
             float a = c.a * mask.sample(s, in.uv).r * P[1];
-            // premultiplied 출력: 메인 컴포지터가 src=one 이므로 alpha 가 rgb 기여를 줄이도록.
-            return float4(c.rgb * a, a);
+            // straight 출력(설계 §3): premultiply 는 최종 컴포지트(f_main)에서 1회 — 체인 이중적용 방지.
+            return float4(c.rgb, a);
         }
         """,
         "tint": """
@@ -177,8 +177,8 @@ enum EffectShaders {
             }
             float a = c.a;
             if (P[9] > 0.5) { a *= pulse; }
-            // premultiplied 출력: 메인 컴포지터가 src=one(premultiplied over)이므로 alpha 가 rgb 기여를 줄이도록.
-            return float4(max(float3(0.0), albedo) * a, a);
+            // straight 출력(설계 §3): premultiply 는 최종 컴포지트(f_main)에서 1회.
+            return float4(max(float3(0.0), albedo), a);
         }
         """,
         "shake": """
