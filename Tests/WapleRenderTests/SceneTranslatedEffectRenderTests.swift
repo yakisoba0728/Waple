@@ -156,6 +156,41 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertEqual(luma, 0.4, accuracy: 0.1, "workshop effect dims via GLSL→MSL translator (resolved from file path)")
     }
 
+    /// texRes per-slot(설계 §4): g_Texture1Resolution 은 aux 슬롯 1 텍스처의 실제 dims 여야 한다
+    /// (레이어 dims 8x8 근사가 아니라). frag 가 x==4 를 검사해 백/흑으로 표출 — 4x2 aux 면 luma 1.
+    func testAuxTextureResolutionPerSlot() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform sampler2D g_Texture1;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            float ok = step(3.5, g_Texture1Resolution.x) * step(g_Texture1Resolution.x, 4.5);
+            gl_FragColor = vec4(c.rgb * ok, c.a);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/resprobe/effect.json","passes":[{"textures":[null,"m4"]}]}]}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("shaders/effects/resprobe.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/resprobe.frag", frag.data(using: .utf8)!),
+            ("materials/m4.tex", solidTex(255, 255, 255, w: 4, h: 2)),
+        ], tag: "resprobe")
+        NSLog("%@", "[Waple] aux texRes probe luma=\(luma)")
+        XCTAssertGreaterThan(luma, 0.9, "g_Texture1Resolution must be aux dims 4x2 (layer-dims 근사면 0)")
+    }
+
     /// 실제 WE opacity GLSL 을 비-스톡 이름 "opacitytest" 로 변환·렌더 → 핸드포팅 오라클(alpha 0.4 → ~0.4)과 수치 일치.
     /// 비-스톡 이름이라 번역이 깨지면 폴백이 가리지 못하고 ~1.0 → 실패.
     func testTranslatedOpacityMatchesHandPort() throws {

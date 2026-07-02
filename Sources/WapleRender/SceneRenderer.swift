@@ -8,7 +8,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 또는 GLSL→MSL 변환본(reflection 규약: float4* p buffer(0) + EngineU buffer(1) + slot 텍스처 + audioL/R buffer(2/3)).
     private enum EffectBind {
         case handPort(params: [Float], aux: [MTLTexture], audio: AudioParams?)
-        case translated(material: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], usesAudio: Bool, texW: Int, texH: Int)
+        // texRes: 슬롯별 (w,h,1/w,1/h) 8개 — slot0=framebuffer(레이어 dims), aux 슬롯은 실제 텍스처 dims.
+        case translated(material: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], usesAudio: Bool, texRes: [SIMD4<Float>])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
     private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int }
@@ -274,15 +275,24 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                 v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
         }
         // 보조 텍스처: slot0=framebuffer(src, draw 시 바인드). slot>0 은 eff.textureNames[slot] 해석(폴백 흰색).
+        // texRes 는 슬롯별 실제 dims(설계 §4) — 미바인드 슬롯/slot0 은 레이어(framebuffer) dims.
         var aux: [(slot: Int, tex: MTLTexture)] = []
+        let lw = Float(max(1, texW)), lh = Float(max(1, texH))
+        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, 1 / lw, 1 / lh), count: 8)
         for slot in t.textureSlots where slot > 0 {
             let name = slot < eff.textureNames.count ? eff.textureNames[slot] : nil
-            if let tex = resolveTexture(name, package: package, device: device) { aux.append((slot, tex)) }
+            if let tex = resolveTexture(name, package: package, device: device) {
+                aux.append((slot, tex))
+                if slot < 8 {
+                    let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
+                    texRes[slot] = SIMD4(w, h, 1 / w, 1 / h)
+                }
+            }
         }
         if t.usesAudio { hasAudio = true }
         NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (params=\(material.count) tex=\(t.textureSlots) audio=\(t.usesAudio))")
         return EffectGPU(pipeline: pipe, bind: .translated(material: material, aux: aux,
-                                                           usesAudio: t.usesAudio, texW: texW, texH: texH))
+                                                           usesAudio: t.usesAudio, texRes: texRes))
     }
 
     /// 효과 GLSL(vert+frag) 로드. 셰이더 베이스 이름을 effect.json 체인에서 해석 →
@@ -337,15 +347,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return try? device.makeRenderPipelineState(descriptor: pd)
     }
 
-    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,0,0,0) + texRes[8].
-    /// NOTE: texRes[N] 을 레이어 텍스처 dims 로 채움(div0 회피, 풀스크린 효과엔 충분). MASK on / 멀티텍스처에선
-    /// 슬롯 N 의 실제 dims 가 맞으나 현재 단계에선 동일 dims 로 근사(후속 보정 — 설계 §3.5).
-    private func engineUniform(time: Float, texW: Int, texH: Int) -> [Float] {
+    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,0,0,0) + texRes[8](슬롯별 실제 dims — 빌드 시 계산).
+    private func engineUniform(time: Float, texRes: [SIMD4<Float>]) -> [Float] {
         var e = [Float](repeating: 0, count: 16 + 4 + 32)
         e[0] = 1; e[5] = 1; e[10] = 1; e[15] = 1   // identity mvp
         e[16] = time                                // timeAndPad.x
-        let w = Float(max(1, texW)), h = Float(max(1, texH))
-        for n in 0..<8 { let o = 20 + n * 4; e[o] = w; e[o + 1] = h; e[o + 2] = 1 / w; e[o + 3] = 1 / h }
+        for n in 0..<8 {
+            let r = n < texRes.count ? texRes[n] : SIMD4<Float>(1, 1, 1, 1)
+            let o = 20 + n * 4
+            e[o] = r.x; e[o + 1] = r.y; e[o + 2] = r.z; e[o + 3] = r.w
+        }
         return e
     }
 
@@ -631,7 +642,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                   bounds: a.bounds, power: a.power, multiply: a.multiply)
             }
             enc.setFragmentBytes(&audioResp, length: MemoryLayout<Float>.stride, index: 1)
-        case .translated(let material, let aux, let usesAudio, let texW, let texH):
+        case .translated(let material, let aux, let usesAudio, let texRes):
             // 변환본 규약: 인터리브드 쿼드 buffer(4), p buffer(0)·EngineU buffer(1) 는 vert+frag 양쪽, 텍스처는 선언 슬롯.
             enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
             if !material.isEmpty {  // 파라미터 0개면 셰이더 시그니처에 p 없음 → 바인드 생략.
@@ -640,7 +651,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                 }
             }
-            let eng = engineUniform(time: time, texW: texW, texH: texH)
+            let eng = engineUniform(time: time, texRes: texRes)
             eng.withUnsafeBytes {
                 enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                 enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
