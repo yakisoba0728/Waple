@@ -61,6 +61,28 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers[0].textureEntryName, "materials/pic.tex")
     }
 
+    /// 실물(3147346398): origin/alpha 가 애니메이션 바인딩 객체 {"animation":{...},"value":X} 로 온다.
+    /// 정적 value 를 언랩해야 배치/투명도가 맞는다(애니메이션 재생은 후속 기능).
+    func testBindingObjectValueUnwrapped() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json",
+                     "origin":{"animation":{"fps":30},"value":"1920.5 673.6 0"},
+                     "size":"1000 256","scale":{"value":"1 0.5 1"},
+                     "alpha":{"animation":{},"value":0.25},"color":{"value":"0 1 0"},
+                     "brightness":1,"visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.layers.count, 1)
+        let l = doc.layers[0]
+        XCTAssertEqual(l.origin.x, 1920.5, accuracy: 0.01)
+        XCTAssertEqual(l.origin.y, 673.6, accuracy: 0.01)
+        XCTAssertEqual(l.scale, Vec2(x: 1, y: 0.5))
+        XCTAssertEqual(l.alpha, 0.25)
+        XCTAssertEqual(l.color, Vec3(x: 0, y: 1, z: 0))
+    }
+
     func testSkipsLayerWithMissingModel() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},

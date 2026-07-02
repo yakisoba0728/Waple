@@ -66,7 +66,7 @@ extension SceneDocument {
         let proj = general["orthogonalprojection"] as? [String: Any] ?? [:]
         let pw = (proj["width"] as? Int) ?? 1920
         let ph = (proj["height"] as? Int) ?? 1080
-        let clear = vec3(general["clearcolor"] as? String) ?? Vec3(x: 0, y: 0, z: 0)
+        let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let parallaxEnabled = (general["cameraparallax"] as? Bool) ?? false
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
@@ -83,17 +83,17 @@ extension SceneDocument {
                     NSLog("%@", "[Waple] image layer texture resolve failed: \(imagePath)")
                     continue
                 }
-                let angles = floats(obj["angles"] as? String)
+                let angles = floats(obj["angles"])
                 layers.append(SceneLayer(
                     textureEntryName: tex,
-                    origin: vec2(obj["origin"] as? String) ?? Vec2(x: 0, y: 0),
-                    size: vec2(obj["size"] as? String) ?? Vec2(x: Float(pw), y: Float(ph)),
-                    scale: vec2(obj["scale"] as? String) ?? Vec2(x: 1, y: 1),
+                    origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
+                    size: vec2(obj["size"]) ?? Vec2(x: Float(pw), y: Float(ph)),
+                    scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),
                     angleZ: angles.count >= 3 ? angles[2] : 0,
                     alpha: float(obj["alpha"]) ?? 1,
-                    color: vec3(obj["color"] as? String) ?? Vec3(x: 1, y: 1, z: 1),
+                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
                     brightness: float(obj["brightness"]) ?? 1,
-                    parallaxDepth: vec2(obj["parallaxDepth"] as? String) ?? Vec2(x: 1, y: 1),
+                    parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
                     effects: parseEffects(obj["effects"]),
                     order: order
                 ))
@@ -146,8 +146,8 @@ extension SceneDocument {
         }
         let def = ParticleSystemDef.parse(pjson, material: material)
         return SceneParticle(def: def,
-                             origin: vec2(obj["origin"] as? String) ?? Vec2(x: 0, y: 0),
-                             scale: vec2(obj["scale"] as? String) ?? Vec2(x: 1, y: 1))
+                             origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
+                             scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1))
     }
 
     private static func parseEffects(_ raw: Any?) -> [SceneEffect] {
@@ -188,18 +188,25 @@ extension SceneDocument {
         return out
     }
 
-    private static func floats(_ s: String?) -> [Float] {
-        (s ?? "").split(separator: " ").compactMap { Float($0) }
+    /// 바인딩 객체 {"animation":..., "value": X} → X(정적 값), 아니면 원값.
+    /// 실물 씬은 origin/alpha 등 대부분의 프로퍼티에 이 형태를 쓴다(애니메이션 재생은 후속 기능).
+    private static func unwrap(_ v: Any?) -> Any? {
+        if let d = v as? [String: Any], let inner = d["value"] { return inner }
+        return v
+    }
+    private static func floats(_ v: Any?) -> [Float] {
+        ((unwrap(v) as? String) ?? "").split(separator: " ").compactMap { Float($0) }
     }
     private static func float(_ v: Any?) -> Float? {
-        if let d = v as? Double { return Float(d) }
-        if let i = v as? Int { return Float(i) }
+        let u = unwrap(v)
+        if let d = u as? Double { return Float(d) }
+        if let i = u as? Int { return Float(i) }
         return nil
     }
-    private static func vec2(_ s: String?) -> Vec2? {
-        let f = floats(s); return f.count >= 2 ? Vec2(x: f[0], y: f[1]) : nil
+    private static func vec2(_ v: Any?) -> Vec2? {
+        let f = floats(v); return f.count >= 2 ? Vec2(x: f[0], y: f[1]) : nil
     }
-    private static func vec3(_ s: String?) -> Vec3? {
-        let f = floats(s); return f.count >= 3 ? Vec3(x: f[0], y: f[1], z: f[2]) : nil
+    private static func vec3(_ v: Any?) -> Vec3? {
+        let f = floats(v); return f.count >= 3 ? Vec3(x: f[0], y: f[1], z: f[2]) : nil
     }
 }
