@@ -57,10 +57,12 @@ public enum ShaderPreprocessor {
     /// `#if/#ifdef/#ifndef/#elif/#else/#endif` 평가. 활성 줄만 출력(지시문 줄 제거).
     /// `#define NAME VAL` 은 정수면 식 평가에 쓰고, object-like 정의는 모두 본문 텍스트 치환한다
     /// (combos 포함 — WE 는 combos 를 #define 으로 주입하므로 본문 참조가 합법).
-    /// 함수형 매크로(`#define F(x) ...`)는 v1 미지원: 정의 줄만 제거(호출부 원형 → 컴파일 실패 시 스킵 안전망).
+    /// 함수형 매크로(`#define F(x, y) body`)도 확장한다 — 실물 common_blending.h 의 Blend* 가 전부 이 형태.
+    /// 매크로가 매크로를 부르는 체인/별칭은 fixpoint 루프로 수렴시킨다.
     private static func evaluateConditionals(_ source: String, defines: [String: Int]) -> String {
         var d = defines
         var textDefines: [String: String] = [:]
+        var funcMacros: [String: (params: [String], body: String)] = [:]
         var out: [String] = []
         // 스택: (이 분기 출력중?, 이 #if 체인에서 이미 참 분기를 만났나?, 부모가 활성인가)
         struct Frame { var active: Bool; var taken: Bool; var parentActive: Bool }
@@ -93,29 +95,49 @@ public enum ShaderPreprocessor {
             } else if t == "#endif" {
                 if !stack.isEmpty { stack.removeLast() }
             } else if t.hasPrefix("#define "), emitting() {
-                let parts = t.dropFirst(8).split(separator: " ", maxSplits: 1)
-                let name = parts.count >= 1 ? String(parts[0]) : ""
-                if name.isEmpty || name.contains("(") {
-                    // 함수형 매크로 또는 빈 이름: 정의 줄만 제거.
-                } else if parts.count == 2 {
-                    let value = parts[1].trimmingCharacters(in: .whitespaces)
-                    if let v = Int(value) { d[name] = v }
-                    textDefines[name] = value
+                let decl = String(t.dropFirst(8))
+                let nameEnd = decl.firstIndex(where: { $0 == " " || $0 == "(" || $0 == "\t" }) ?? decl.endIndex
+                let name = String(decl[..<nameEnd])
+                if name.isEmpty {
+                    // 빈 이름: 정의 줄만 제거.
+                } else if nameEnd < decl.endIndex, decl[nameEnd] == "(" {
+                    // 함수형 매크로: `NAME(p1, p2) body` — 파라미터는 괄호 미포함 단순 목록.
+                    let afterName = decl[decl.index(after: nameEnd)...]
+                    if let close = afterName.firstIndex(of: ")") {
+                        let params = afterName[..<close].split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                        let body = afterName[afterName.index(after: close)...].trimmingCharacters(in: .whitespaces)
+                        if !body.isEmpty { funcMacros[name] = (params, body) }
+                    }
                 } else {
-                    d[name] = 1  // 값 없는 #define NAME → #ifdef 용, 본문 치환은 안 함(빈 치환은 위험)
+                    let value = decl[nameEnd...].trimmingCharacters(in: .whitespaces)
+                    if value.isEmpty {
+                        d[name] = 1  // 값 없는 #define NAME → #ifdef 용, 본문 치환은 안 함(빈 치환은 위험)
+                    } else {
+                        if let v = Int(value) { d[name] = v }
+                        textDefines[name] = value
+                    }
                 }
                 // #define 줄은 출력에서 제거
             } else if emitting() {
                 out.append(line)
             }
         }
-        // 본문 텍스트 치환: object-like 정의 + 정수 defines(combos 포함). 체인 정의는 fixpoint 까지(캡 8).
+        // 본문 매크로 확장: object-like 치환 + 함수형 매크로 호출 확장을 한 루프에서 fixpoint 까지(캡 12)
+        // — 별칭(#define A Bf)·매크로가 매크로를 부르는 체인(실물 Blend* 계열)이 수렴하도록.
         var subst = textDefines
         for (k, v) in d where subst[k] == nil { subst[k] = String(v) }
         var body = out.joined(separator: "\n")
-        guard !subst.isEmpty else { return body }
-        for _ in 0..<8 {
-            let next = substituteIdentifiers(body, subst)
+        guard !subst.isEmpty || !funcMacros.isEmpty else { return body }
+        for _ in 0..<12 {
+            var next = substituteIdentifiers(body, subst)
+            for (name, m) in funcMacros {
+                // balanced-paren 호출 인식/재작성은 GLSLTranslator 의 저수준 문자열 도구 재사용(동일 타깃).
+                next = GLSLTranslator.rewriteCall(next, name) { args in
+                    guard args.count == m.params.count else { return nil }
+                    return GLSLTranslator.replaceIdentifiers(m.body, Dictionary(uniqueKeysWithValues: zip(m.params, args)))
+                }
+            }
             if next == body { break }
             body = next
         }

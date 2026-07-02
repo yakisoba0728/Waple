@@ -489,6 +489,27 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("CreateAudioResponse(audioL, audioR)"), t.msl)
     }
 
+    func testHLSLTypeNamesAccepted() throws {
+        // WE 방언은 GLSL(vec2)과 HLSL(float2) 타입명을 혼용한다(실물 contrast_based_sharpness:
+        // `float rand_1_05(in float2 uv)`). 선언/헬퍼 시그니처 모두에서 수용해야 한다.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform float2 g_Shift; // {"material":"shift","default":"0 0"}
+        float rand_1_05(in float2 uv) {
+            float2 noise = frac(sin(dot(uv.yx, float2(12.9898, 78.233) * 2.0)) * 43758.5453);
+            return abs(noise.x + noise.y);
+        }
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + g_Shift) * rand_1_05(v_TexCoord);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertEqual(t.materialParams.first?.sceneKey, "shift")
+        XCTAssertEqual(t.materialParams.first?.type, .vec2)
+        XCTAssertTrue(t.msl.contains("inline float rand_1_05(float2 uv)"), t.msl)
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

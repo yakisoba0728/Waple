@@ -91,12 +91,29 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertTrue(r.contains("float v = 2.0;"), r)
     }
 
-    func testFunctionLikeDefineLeftAlone() {
-        // 함수형 매크로는 v1 미지원: 정의 줄만 제거, 호출부는 원형 유지(→ 컴파일 실패 시 스킵 안전망).
+    func testFunctionLikeMacroExpands() {
+        // 실물 common_blending.h 는 Blend* 를 전부 함수형 매크로로 정의한다 — 확장 필수.
         let src = "#define DOUBLE(x) ((x)*2.0)\nfloat v = DOUBLE(3.0);"
         let r = ShaderPreprocessor.preprocess(src, combos: [:])
         XCTAssertFalse(r.contains("#define"))
-        XCTAssertTrue(r.contains("DOUBLE(3.0)"), r)
+        XCTAssertTrue(r.contains("float v = ((3.0)*2.0);"), r)
+    }
+
+    func testFunctionLikeMacroChainsAndNesting() {
+        // 실물 패턴: 매크로가 매크로를 호출(BlendLinearLightf→BlendLinearBurnf), 인자에 중첩 괄호/콤마,
+        // 별칭(#define BlendDarken BlendDarkenf), 다인자.
+        let src = """
+        #define BlendLinearBurnf(base, blend) max(base + blend - 1.0, 0.0)
+        #define BlendLinearLightf(base, blend) (blend < 0.5 ? BlendLinearBurnf(base, (2.0 * blend)) : (base + blend))
+        #define BlendDarkenf(base, blend) min(blend, base)
+        #define BlendDarken BlendDarkenf
+        float a = BlendLinearLightf(x, y);
+        vec3 d = BlendDarken(f(p, q), c.rgb);
+        """
+        let r = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(r.contains("float a = (y < 0.5 ? max(x + (2.0 * y) - 1.0, 0.0) : (x + y));"), r)
+        XCTAssertTrue(r.contains("vec3 d = min(c.rgb, f(p, q));"), r)
+        XCTAssertFalse(r.contains("Blend"), "매크로가 전부 확장돼야: \(r)")
     }
 
     func testCRLFLineEndingsHandled() {

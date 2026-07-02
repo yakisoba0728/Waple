@@ -2,6 +2,16 @@ import Foundation
 
 public enum GLSLType: String, Equatable {
     case float, vec2, vec3, vec4, mat3, mat4, sampler2D
+
+    /// GLSL(vec2)·HLSL(float2) 타입명 겸용 해석 — WE 방언은 혼용한다(실물 rand_1_05(in float2 uv)).
+    public static func from(_ s: String) -> GLSLType? {
+        if let t = GLSLType(rawValue: s) { return t }
+        switch s {
+        case "float2": return .vec2; case "float3": return .vec3; case "float4": return .vec4
+        case "float3x3": return .mat3; case "float4x4": return .mat4
+        default: return nil
+        }
+    }
     var components: Int { switch self { case .float: return 1; case .vec2: return 2; case .vec3: return 3; case .vec4: return 4; default: return 0 } }
     var msl: String {
         switch self {
@@ -173,8 +183,8 @@ public enum GLSLTranslator {
     static func mslType(_ glsl: String) -> String? {
         switch glsl {
         case "void", "float", "int", "bool": return glsl
-        case "vec2": return "float2"; case "vec3": return "float3"; case "vec4": return "float4"
-        case "mat3": return "float3x3"; case "mat4": return "float4x4"
+        case "vec2", "float2": return "float2"; case "vec3", "float3": return "float3"; case "vec4", "float4": return "float4"
+        case "mat3", "float3x3": return "float3x3"; case "mat4", "float4x4": return "float4x4"
         case "sampler2D": return "texture2d<float>"
         default: return nil
         }
@@ -299,7 +309,7 @@ public enum GLSLTranslator {
             if t.hasPrefix("varying "), t.contains("[") {
                 let toks = t.dropFirst("varying ".count).split(separator: ";").first?
                     .split(separator: " ").map(String.init) ?? []
-                if toks.count >= 2, let type = GLSLType(rawValue: toks[0]),
+                if toks.count >= 2, let type = GLSLType.from(toks[0]),
                    let b = toks[1].firstIndex(of: "["), let e = toks[1].firstIndex(of: "]"),
                    b < e, let n = Int(toks[1][toks[1].index(after: b)..<e]), n > 0, n <= 64 {
                     let name = String(toks[1][..<b])
@@ -324,7 +334,7 @@ public enum GLSLTranslator {
             let afterKw = s.dropFirst("uniform ".count)
             let codePart = afterKw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? String(afterKw)
             let toks = codePart.split(separator: " ").map(String.init)
-            guard toks.count >= 2, let type = GLSLType(rawValue: toks[0]) else { continue }
+            guard toks.count >= 2, let type = GLSLType.from(toks[0]) else { continue }
             var name = toks[1]
             if let br = name.firstIndex(of: "[") { name = String(name[..<br]) }  // 배열 유니폼(g_AudioSpectrum16Left[16])
             // 주의: range 와 인덱싱 대상이 같은 문자열이어야 함(Substring `line` 에 직접 적용).
@@ -343,7 +353,7 @@ public enum GLSLTranslator {
             let s = line.trimmingCharacters(in: .whitespaces)
             guard s.hasPrefix("varying ") else { continue }
             let toks = s.dropFirst("varying ".count).split(separator: ";").first?.split(separator: " ").map(String.init) ?? []
-            guard toks.count >= 2, let type = GLSLType(rawValue: toks[0]) else { continue }
+            guard toks.count >= 2, let type = GLSLType.from(toks[0]) else { continue }
             let name = toks[1]
             if seen.insert(name).inserted { out.append((type, name)) }
         }
@@ -356,7 +366,7 @@ public enum GLSLTranslator {
             let s = line.trimmingCharacters(in: .whitespaces)
             guard s.hasPrefix("attribute ") else { continue }
             let toks = s.dropFirst("attribute ".count).split(separator: ";").first?.split(separator: " ").map(String.init) ?? []
-            guard toks.count >= 2, let type = GLSLType(rawValue: toks[0]) else { continue }
+            guard toks.count >= 2, let type = GLSLType.from(toks[0]) else { continue }
             out.append((type, toks[1]))
         }
         return out

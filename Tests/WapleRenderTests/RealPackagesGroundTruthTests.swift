@@ -19,6 +19,17 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         let outDir = URL(fileURLWithPath: "/tmp/waple_gt")
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
+        // WE base-assets(공유 텍스처 + common_*.h)가 있으면 연결 — common.h 헬퍼 의존 효과까지 실측.
+        // env WAPLE_BASE_ASSETS 우선, 기본 ~/Downloads/assets. 테스트 후 원복.
+        let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
+            ?? (NSHomeDirectory() + "/Downloads/assets")
+        let oldBase = BaseAssetsSettings.baseAssetsDirectory
+        if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
+            BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)
+            NSLog("%@", "[WapleGT] base-assets: \(assetsPath)")
+        }
+        defer { BaseAssetsSettings.baseAssetsDirectory = oldBase }
+
         var mounted = 0, captured = 0, failed: [String] = []
         let folders = (try FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil))
             .filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("scene.pkg").path)
