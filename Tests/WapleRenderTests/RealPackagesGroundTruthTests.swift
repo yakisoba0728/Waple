@@ -31,6 +31,7 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         defer { BaseAssetsSettings.baseAssetsDirectory = oldBase }
 
         var mounted = 0, captured = 0, failed: [String] = []
+        var lumas: [String: Float] = [:]
         let folders = (try FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil))
             .filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("scene.pkg").path)
                    || FileManager.default.fileExists(atPath: $0.appendingPathComponent("gifscene.pkg").path) }
@@ -49,6 +50,7 @@ final class RealPackagesGroundTruthTests: XCTestCase {
                     try? FileManager.default.removeItem(at: dst)
                     try? FileManager.default.moveItem(at: u, to: dst)
                     captured += 1
+                    if let l = Self.meanLuma(dst) { lumas[id] = l }
                 }
                 r.teardown()
             } catch {
@@ -57,7 +59,47 @@ final class RealPackagesGroundTruthTests: XCTestCase {
             }
         }
         NSLog("%@", "[WapleGT] SUMMARY mounted=\(mounted)/\(folders.count) captured=\(captured) failed=\(failed)")
+        // per-scene 평균 luma 기준선 비교(시각 회귀 조기 감지 — 2902406982 백화가 놓쳤던 클래스).
+        // 기준선이 없으면 생성. 초과 편차는 경고 로그(씬은 시간 함수라 하드 fail 은 오탐 위험).
+        let baseURL2 = outDir.appendingPathComponent("luma_baseline.json")
+        if let data = try? Data(contentsOf: baseURL2),
+           let base = try? JSONDecoder().decode([String: Float].self, from: data) {
+            var drifted: [String] = []
+            for (id, l) in lumas {
+                if let b = base[id], abs(b - l) > 0.15 {
+                    drifted.append("\(id): \(b) → \(l)")
+                }
+            }
+            if !drifted.isEmpty {
+                NSLog("%@", "[WapleGT] ⚠️ LUMA DRIFT (기준선 대비 >0.15): \(drifted) — 의도된 변화면 \(baseURL2.path) 삭제로 재생성")
+            }
+            // 신규 씬은 기준선에 병합
+            var merged = base
+            for (id, l) in lumas where merged[id] == nil { merged[id] = l }
+            if merged.count != base.count, let d = try? JSONEncoder().encode(merged) { try? d.write(to: baseURL2) }
+        } else if let d = try? JSONEncoder().encode(lumas) {
+            try? d.write(to: baseURL2)
+            NSLog("%@", "[WapleGT] luma 기준선 생성: \(baseURL2.path) (\(lumas.count)씬)")
+        }
         XCTAssertGreaterThan(mounted, 0, "실측 씬이 하나도 마운트되지 않음")
         XCTAssertEqual(failed.count, 0, "mount 실패: \(failed)")
+    }
+
+    /// PNG 평균 luma(0..1). 디코드 실패 → nil.
+    static func meanLuma(_ url: URL) -> Float? {
+        guard let img = NSImage(contentsOf: url),
+              let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let w = min(cg.width, 160), h = min(cg.height, 90)  // 다운샘플로 충분(평균)
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .low
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var sum: Double = 0
+        for i in stride(from: 0, to: px.count, by: 4) {
+            sum += 0.299 * Double(px[i]) + 0.587 * Double(px[i + 1]) + 0.114 * Double(px[i + 2])
+        }
+        return Float(sum / Double(w * h) / 255.0)
     }
 }
