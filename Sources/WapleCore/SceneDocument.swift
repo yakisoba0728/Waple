@@ -57,7 +57,9 @@ public struct SceneDocument: Equatable {
 public enum SceneDocumentError: Error, Equatable { case noScene }
 
 extension SceneDocument {
-    public static func parse(package: ScenePackage) throws -> SceneDocument {
+    /// - assets: 공유(base-assets) 리졸버 — pkg 에 없는 모델/머티리얼 JSON(models/util/solidlayer.json 등)의
+    ///   폴백. WapleCore 는 순수하므로 파일 IO 는 호출자가 클로저로 주입한다(렌더러: BaseAssetsSettings 디렉터리).
+    public static func parse(package: ScenePackage, assets: ((String) -> Data?)? = nil) throws -> SceneDocument {
         guard let sceneData = package.data(for: "scene.json") ?? package.data(for: "gifscene.json"),
               let scene = (try? JSONSerialization.jsonObject(with: sceneData)) as? [String: Any] else {
             throw SceneDocumentError.noScene
@@ -79,9 +81,8 @@ extension SceneDocument {
             if (obj["visible"] as? Bool) == false { continue }
             if let vis = obj["visible"] as? [String: Any], (vis["value"] as? Bool) == false { continue }
             if let imagePath = obj["image"] as? String {
-                guard let tex = resolveTexture(imagePath: imagePath, package: package) else {
-                    NSLog("%@", "[Waple] image layer texture resolve failed: \(imagePath)")
-                    continue
+                guard let tex = resolveTexture(imagePath: imagePath, package: package, assets: assets) else {
+                    continue  // 사유별 로그는 resolveTexture 내부에서.
                 }
                 let angles = floats(obj["angles"])
                 layers.append(SceneLayer(
@@ -110,25 +111,36 @@ extension SceneDocument {
     }
 
     /// image(model) → material → texture name → "materials/<name>.tex".
-    private static func resolveTexture(imagePath: String, package: ScenePackage) -> String? {
-        guard let modelData = package.data(for: imagePath),
+    /// 반환: 텍스처 엔트리 이름 / ""(무텍스처 머티리얼 = 솔리드 필 마커) / nil(해석 실패 또는 _rt_ 게이트 → 드롭).
+    private static func resolveTexture(imagePath: String, package: ScenePackage, assets: ((String) -> Data?)? = nil) -> String? {
+        func data(_ name: String) -> Data? { package.data(for: name) ?? assets?(name) }
+        guard let modelData = data(imagePath),
               let model = (try? JSONSerialization.jsonObject(with: modelData)) as? [String: Any],
               let materialPath = model["material"] as? String,
-              let materialData = package.data(for: materialPath),
+              let materialData = data(materialPath),
               let material = (try? JSONSerialization.jsonObject(with: materialData)) as? [String: Any],
               let passes = material["passes"] as? [Any],
-              let pass0 = passes.first as? [String: Any],
-              let textures = pass0["textures"] as? [Any],
-              // 텍스처 배열은 빈 슬롯을 null 로 표기할 수 있으므로(예: [null, "real.tex"]),
-              // 첫 항목이 아니라 첫 non-null·non-empty 문자열을 사용한다.
-              let name = textures.compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) else { return nil }
-        let candidate = name.contains("/") || name.hasSuffix(".tex") ? name : "materials/\(name).tex"
-        // Prefer "materials/<name>.tex"; fall back to the raw name if that exact entry exists;
-        // otherwise still return the preferred candidate so the texture name is resolved
-        // (the renderer skips layers whose texture data is missing). See plan Task 3 test.
-        if package.entries.contains(where: { $0.name == candidate }) { return candidate }
-        if package.entries.contains(where: { $0.name == name }) { return name }
-        return candidate
+              let pass0 = passes.first as? [String: Any] else {
+            NSLog("%@", "[Waple] image layer texture resolve failed: \(imagePath)")
+            return nil
+        }
+        // 텍스처 배열은 빈 슬롯을 null 로 표기할 수 있으므로(예: [null, "real.tex"]),
+        // 첫 항목이 아니라 첫 non-null·non-empty 문자열을 사용한다.
+        let textures = pass0["textures"] as? [Any] ?? []
+        guard let name = textures.compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) else {
+            // 무텍스처 머티리얼(예: util/solidlayer 의 shader "flat") → 솔리드 필 마커.
+            return ""
+        }
+        if name.hasPrefix("_rt_") {
+            // 프레임버퍼 참조(fullscreen/compose/project layer) = 컴포지션 의미론 — 다음 SP 게이트.
+            NSLog("%@", "[Waple] composition layer unsupported (skipped): \(imagePath) → \(name)")
+            return nil
+        }
+        // 머티리얼의 텍스처 이름은 materials/ 상대 + 무확장("util/white" → "materials/util/white.tex").
+        // pkg 에 실제로 있는 후보를 우선하고, 없으면 관례 경로를 반환(렌더러가 base-assets 폴백 시도).
+        let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
+        for c in candidates where package.entries.contains(where: { $0.name == c }) { return c }
+        return candidates[0]
     }
 
     /// scene object 의 `particle` 경로 → particles/X.json + material → SceneParticle.

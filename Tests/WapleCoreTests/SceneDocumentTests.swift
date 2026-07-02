@@ -83,6 +83,60 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(l.color, Vec3(x: 0, y: 1, z: 0))
     }
 
+    /// 공유(base-assets) 모델/머티리얼 JSON 폴백: pkg 에 없는 models/util/solidlayer.json 을 assets 리졸버가
+    /// 제공하면 레이어가 살아난다. 무텍스처 머티리얼(flat) → textureEntryName "" (솔리드 마커).
+    func testSolidLayerResolvedFromAssetsFallback() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/util/solidlayer.json","origin":"960 540 0","size":"1920 1080",
+                     "alpha":0.5,"color":"0 0 0","visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let assets: [String: String] = [
+            "models/util/solidlayer.json": #"{"material":"materials/util/solidlayer.json","solidlayer":true}"#,
+            "materials/util/solidlayer.json": #"{"passes":[{"shader":"flat","blending":"translucent"}]}"#,
+        ]
+        let doc = try SceneDocument.parse(package: p, assets: { assets[$0].map { Data($0.utf8) } })
+        XCTAssertEqual(doc.layers.count, 1, "solidlayer 는 assets 폴백으로 해석돼야")
+        XCTAssertEqual(doc.layers[0].textureEntryName, "", "무텍스처 머티리얼 → 솔리드 마커")
+        XCTAssertEqual(doc.layers[0].alpha, 0.5)
+    }
+
+    /// solid_instance 패턴: 모델은 pkg, 머티리얼은 assets(genericimage2 + util/white).
+    func testInstanceMaterialFromAssetsResolvesTexture() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/solid_instance_model_x.json","origin":"960 540 0","size":"256 256",
+                     "visible":{"value":true}}]}
+        """
+        let p = try pkg([
+            ("scene.json", scene),
+            ("models/solid_instance_model_x.json", #"{"instanced":true,"material":"materials/util/solidlayer_instance.json","solidlayer":true}"#),
+        ])
+        let assets: [String: String] = [
+            "materials/util/solidlayer_instance.json": #"{"passes":[{"shader":"genericimage2","textures":["util/white"]}]}"#,
+        ]
+        let doc = try SceneDocument.parse(package: p, assets: { assets[$0].map { Data($0.utf8) } })
+        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertEqual(doc.layers[0].textureEntryName, "materials/util/white.tex")
+    }
+
+    /// _rt_ 텍스처(프레임버퍼 참조 = 컴포지션 의미론)는 이번 단계 미지원 — 명시 스킵.
+    func testFrameBufferTextureLayerSkipped() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+                     "visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let assets: [String: String] = [
+            "models/util/fullscreenlayer.json": #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true}"#,
+            "materials/util/fullscreenlayer.json": #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#,
+        ]
+        let doc = try SceneDocument.parse(package: p, assets: { assets[$0].map { Data($0.utf8) } })
+        XCTAssertEqual(doc.layers.count, 0, "_rt_ 레이어는 컴포지션 SP 전까지 스킵")
+    }
+
     func testSkipsLayerWithMissingModel() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
