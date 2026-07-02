@@ -12,7 +12,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case translated(material: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], usesAudio: Bool, texRes: [SIMD4<Float>])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int }
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
         let def: ParticleSystemDef
@@ -22,7 +22,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let origin: SIMD2<Float>
         let scale: SIMD2<Float>
         let texRatio: Float   // texH/texW (스프라이트 세로 비율)
+        let order: Int        // scene objects[] 인덱스 — 레이어와 인터리브 z-순서
     }
+    /// 씬 오브젝트 순서의 병합 드로우 플랜(레이어/파티클 인터리브). mount 에서 1회 구성.
+    private struct DrawItem { let isParticle: Bool; let idx: Int }
+    private var drawPlan: [DrawItem] = []
 
     private var videoRenderer: VideoRenderer?
     private var mtkView: MTKView?
@@ -120,6 +124,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             additivePipeline = particlePipeline(additive: true, device: device)
             translucentPipeline = particlePipeline(additive: false, device: device)
         }
+        // 씬 오브젝트 순서(z-순서)대로 레이어·파티클을 인터리브 드로우.
+        drawPlan = (layers.enumerated().map { (i, l) in (l.order, DrawItem(isParticle: false, idx: i)) }
+                    + particleSystems.enumerated().map { (i, p) in (p.order, DrawItem(isParticle: true, idx: i)) })
+            .sorted { $0.0 < $1.0 }
+            .map { $0.1 }
 
         let view = MTKView(frame: container.bounds, device: device)
         view.autoresizingMask = [.width, .height]
@@ -221,7 +230,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             if !effects.isEmpty { hasEffects = true }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
-                                effects: effects, texWidth: decoded.width, texHeight: decoded.height))
+                                effects: effects, texWidth: decoded.width, texHeight: decoded.height,
+                                order: layer.order))
         }
         return out
     }
@@ -401,7 +411,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 sim: ParticleSimulator(def: sp.def, seed: seed), def: sp.def, seed: seed,
                 texture: tex, blendAdditive: sp.def.material?.blend == .additive,
                 origin: SIMD2<Float>(sp.origin.x, sp.origin.y),
-                scale: SIMD2<Float>(sp.scale.x, sp.scale.y), texRatio: ratio))
+                scale: SIMD2<Float>(sp.scale.x, sp.scale.y), texRatio: ratio, order: sp.order))
         }
         return out
     }
@@ -533,7 +543,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
         if hasEffects || hasParticles, view.window?.occlusionState.contains(.visible) == false { return }
-        guard let device, let queue, let pipeline,
+        guard let device, let queue, pipeline != nil,
               let rpd = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
@@ -563,42 +573,51 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
-        enc.setRenderPipelineState(pipeline)
-        for (i, layer) in layers.enumerated() {
-            var tint = layer.tint
-            var depth = layer.parallaxDepth
-            enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
-            enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-            enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-            enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
-            enc.setFragmentTexture(displayTextures[i], index: 0)
-            enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+        // 씬 오브젝트 순서대로 레이어·파티클 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
+        for item in drawPlan {
+            if item.isParticle {
+                let snapshot = particleSystems[item.idx].sim.step(dt)
+                encodeParticle(particleSystems[item.idx], snapshot: snapshot, into: enc, device: device,
+                               camOffset: &camOffset, aspectScale: &aspectScale)
+            } else {
+                encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
+                            camOffset: &camOffset, aspectScale: &aspectScale)
+            }
         }
-        encodeParticles(into: enc, device: device, dt: dt, camOffset: &camOffset, aspectScale: &aspectScale)
         enc.endEncoding()
         cb.present(drawable)
         cb.commit()
     }
 
-    /// 각 파티클 시스템을 dt 만큼 진행 후 빌보드 쿼드로 그린다(레이어 위, additive/translucent).
-    private func encodeParticles(into enc: MTLRenderCommandEncoder, device: MTLDevice, dt: Float,
-                                 camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
-        guard hasParticles else { return }
-        for i in particleSystems.indices {
-            let snapshot = particleSystems[i].sim.step(dt)
-            guard !snapshot.isEmpty else { continue }
-            let sys = particleSystems[i]
-            guard let pipe = sys.blendAdditive ? additivePipeline : translucentPipeline else { continue }
-            let verts = particleVertices(snapshot, sys)
-            guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { continue }
-            enc.setRenderPipelineState(pipe)
-            enc.setVertexBuffer(vbuf, offset: 0, index: 0)
-            enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-            enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-            enc.setFragmentTexture(sys.texture, index: 0)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: snapshot.count * 6)
-        }
+    /// 이미지 레이어 1개 드로우(메인 컴포지트 파이프라인).
+    private func encodeLayer(_ layer: GPULayer, texture: MTLTexture, into enc: MTLRenderCommandEncoder,
+                             camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+        guard let pipeline else { return }
+        var tint = layer.tint
+        var depth = layer.parallaxDepth
+        enc.setRenderPipelineState(pipeline)
+        enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
+        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        enc.setFragmentTexture(texture, index: 0)
+        enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+
+    /// 파티클 시스템 1개의 스냅샷을 빌보드 쿼드로 드로우(additive/translucent).
+    private func encodeParticle(_ sys: GPUParticleSystem, snapshot: [Particle], into enc: MTLRenderCommandEncoder,
+                                device: MTLDevice, camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+        guard !snapshot.isEmpty,
+              let pipe = sys.blendAdditive ? additivePipeline : translucentPipeline else { return }
+        let verts = particleVertices(snapshot, sys)
+        guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { return }
+        enc.setRenderPipelineState(pipe)
+        enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        enc.setFragmentTexture(sys.texture, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: snapshot.count * 6)
     }
 
     /// 효과가 있는 레이어는 원본 텍스처를 첫 src 로 삼아 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.
@@ -682,14 +701,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 시뮬은 t=0 에서 새로 시작해 1/30 스텝으로 각 time 까지 진행(재현 가능). 데스크탑 가림과 무관.
     @discardableResult
     public func captureFrames(width: Int, height: Int, times: [Float], toDir: URL) -> [URL] {
-        guard let device, let queue, let pipeline, let target = makeOffscreenBGRA(width, height, device) else { return [] }
+        guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
         var sims = particleSystems.map { ParticleSimulator(def: $0.def, seed: $0.seed) }
         var simTime: Float = 0
         let dt: Float = 1.0 / 30.0
         var urls: [URL] = []
         var camOff = SIMD2<Float>(0, 0)
         var asp = SIMD2<Float>(1, 1)  // 타겟이 proj 비율과 같다고 가정 → 왜곡 없음
-        let depthOne = SIMD2<Float>(1, 1)
         for t in times.sorted() {
             while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in sims.indices { _ = sims[i].step(s) }; simTime += s }
             guard let cb = queue.makeCommandBuffer() else { continue }
@@ -700,31 +718,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             rpd.colorAttachments[0].loadAction = .clear
             rpd.colorAttachments[0].clearColor = clearColor
             guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
-            enc.setRenderPipelineState(pipeline)
-            for (i, layer) in layers.enumerated() {
-                var tint = layer.tint, depth = depthOne
-                enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
-                enc.setVertexBytes(&camOff, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-                enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-                enc.setVertexBytes(&asp, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
-                enc.setFragmentTexture(displayTextures[i], index: 0)
-                enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
-            }
-            // 파티클(현재 스냅샷 — step(0) 으로 진행 없이 표시값만).
-            for i in sims.indices {
-                let snap = sims[i].step(0)
-                guard !snap.isEmpty else { continue }
-                let sys = particleSystems[i]
-                guard let pipe = sys.blendAdditive ? additivePipeline : translucentPipeline else { continue }
-                let verts = particleVertices(snap, sys)
-                guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { continue }
-                enc.setRenderPipelineState(pipe)
-                enc.setVertexBuffer(vbuf, offset: 0, index: 0)
-                enc.setVertexBytes(&camOff, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-                enc.setVertexBytes(&asp, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-                enc.setFragmentTexture(sys.texture, index: 0)
-                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: snap.count * 6)
+            // 라이브 draw 와 동일한 씬-순서 인터리브. 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
+            // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)
+            for item in drawPlan {
+                if item.isParticle {
+                    let snap = sims[item.idx].step(0)
+                    encodeParticle(particleSystems[item.idx], snapshot: snap, into: enc, device: device,
+                                   camOffset: &camOff, aspectScale: &asp)
+                } else {
+                    encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
+                                camOffset: &camOff, aspectScale: &asp)
+                }
             }
             enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
             // readback (BGRA → RGBA) → PNG.

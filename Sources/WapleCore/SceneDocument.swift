@@ -30,6 +30,8 @@ public struct SceneLayer: Equatable {
     public let brightness: Float
     public let parallaxDepth: Vec2
     public let effects: [SceneEffect]
+    /// scene.json objects[] 내 인덱스 — WE 는 오브젝트 순서대로 그린다(파티클과 인터리브).
+    public var order: Int = 0
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -37,6 +39,8 @@ public struct SceneParticle: Equatable {
     public let def: ParticleSystemDef
     public let origin: Vec2
     public let scale: Vec2
+    /// scene.json objects[] 내 인덱스(레이어와 공유하는 z-순서).
+    public var order: Int = 0
 }
 
 public struct SceneDocument: Equatable {
@@ -69,7 +73,8 @@ extension SceneDocument {
 
         var layers: [SceneLayer] = []
         var particles: [SceneParticle] = []
-        for case let obj as [String: Any] in (scene["objects"] as? [Any] ?? []) {
+        for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
+            guard let obj = any as? [String: Any] else { continue }
             // `visible` 은 바인딩 객체 {"value": false} 또는 평문 불리언 false 두 형태로 온다.
             if (obj["visible"] as? Bool) == false { continue }
             if let vis = obj["visible"] as? [String: Any], (vis["value"] as? Bool) == false { continue }
@@ -89,10 +94,14 @@ extension SceneDocument {
                     color: vec3(obj["color"] as? String) ?? Vec3(x: 1, y: 1, z: 1),
                     brightness: float(obj["brightness"]) ?? 1,
                     parallaxDepth: vec2(obj["parallaxDepth"] as? String) ?? Vec2(x: 1, y: 1),
-                    effects: parseEffects(obj["effects"])
+                    effects: parseEffects(obj["effects"]),
+                    order: order
                 ))
             } else if let particlePath = obj["particle"] as? String {
-                if let p = parseParticle(particlePath, obj: obj, package: package) { particles.append(p) }
+                if var p = parseParticle(particlePath, obj: obj, package: package) {
+                    p.order = order
+                    particles.append(p)
+                }
             }
         }
         return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
