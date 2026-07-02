@@ -133,6 +133,25 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertEqual(t.textureSlots, [0, 2])
     }
 
+    func testFileScopeConstEmitted() throws {
+        let vert = "varying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }"
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        const float SPEED = M_PI * 2.0;
+        const vec2 DIR = vec2(1.0, 0.5);
+        void main() {
+            const float localConst = 1.0;
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + DIR * SPEED * localConst * 0.0);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("constant float SPEED = 3.14159265359 * 2.0;"), t.msl)
+        XCTAssertTrue(t.msl.contains("constant float2 DIR = float2(1.0, 0.5);"), t.msl)
+        // 함수 내부 const 는 파일 스코프로 승격되면 안 된다.
+        XCTAssertFalse(t.msl.contains("constant float localConst"), t.msl)
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

@@ -89,8 +89,19 @@ public enum GLSLTranslator {
         let vertBody = translateBody(vertMain, symbols: vert, isFragment: false)
         guard let fragBody, let vertBody else { return nil }
 
+        // 파일 스코프 const: vert/frag 합집합(이름 dedupe — 공용 헤더가 양쪽에 인라인되는 경우), 타입/매크로만 치환.
+        var constNames = Set<String>()
+        var consts: [String] = []
+        for line in fileScopeConsts(vsrc) + fileScopeConsts(fsrc) {
+            let translated = replaceIdentifiers(line, typeAndMacroRenames())
+            let name = translated.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
+            if constNames.insert(name).inserted {
+                consts.append("constant " + translated.dropFirst("const ".count))
+            }
+        }
+
         let msl = assemble(varyings: varyings, textures: textures, materialCount: materials.count,
-                           usesAudio: usesAudio, vertBody: vertBody, fragBody: fragBody)
+                           usesAudio: usesAudio, consts: consts, vertBody: vertBody, fragBody: fragBody)
         return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio)
     }
 
@@ -188,6 +199,18 @@ public enum GLSLTranslator {
     }
     private static func padDefault(_ t: GLSLType) -> [Float] { Array(repeating: 0, count: max(1, t.components)) }
 
+    /// 파일 스코프(중괄호 깊이 0) `const <type> <name> = ...;` 줄 수집.
+    static func fileScopeConsts(_ src: String) -> [String] {
+        var out: [String] = []
+        var depth = 0
+        for line in src.split(separator: "\n", omittingEmptySubsequences: false) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if depth == 0, t.hasPrefix("const ") { out.append(t) }
+            for c in line { if c == "{" { depth += 1 } else if c == "}" { depth = max(0, depth - 1) } }
+        }
+        return out
+    }
+
     private enum Stage { case vertex, fragment }
     private static func symbolMap(materials: [MaterialParam], stage: Stage) -> [String: String] {
         var m: [String: String] = [:]
@@ -238,7 +261,8 @@ public enum GLSLTranslator {
     // MARK: - 어셈블
 
     private static func assemble(varyings: [(type: GLSLType, name: String)], textures: [Int],
-                                 materialCount: Int, usesAudio: Bool, vertBody: String, fragBody: String) -> String {
+                                 materialCount: Int, usesAudio: Bool, consts: [String] = [],
+                                 vertBody: String, fragBody: String) -> String {
         var vary = "struct Vary {\n  float4 gl_Position [[position]];\n"
         for v in varyings { vary += "  \(v.type.msl) \(v.name);\n" }
         vary += "};\n"
@@ -264,7 +288,8 @@ public enum GLSLTranslator {
         \(indent(fragBody))
         }
         """
-        return "#include <metal_stdlib>\nusing namespace metal;\n\(eng)\(vin)\(vary)\n\(vertSig)\n\n\(fragSig)\n"
+        let constBlock = consts.isEmpty ? "" : consts.joined(separator: "\n") + "\n"
+        return "#include <metal_stdlib>\nusing namespace metal;\n\(eng)\(vin)\(vary)\(constBlock)\n\(vertSig)\n\n\(fragSig)\n"
     }
 
     private static func indent(_ s: String) -> String {
