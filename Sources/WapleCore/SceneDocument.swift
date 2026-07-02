@@ -1,5 +1,13 @@
 import Foundation
 
+/// scene.json 효과 항목의 패스별 사용자 데이터(effect.json passes[] 와 인덱스 정렬).
+public struct SceneEffectPass: Equatable {
+    public var constants: [String: [Float]] = [:]
+    public var textureNames: [String?] = []
+    public var combos: [String: Int] = [:]
+    public init() {}
+}
+
 public struct SceneEffect: Equatable {
     public let name: String
     /// 원본 effect.json 경로(예: "effects/workshop/<wsid>/<Name>/effect.json"). GLSL 셰이더 해석에 필요 —
@@ -13,6 +21,8 @@ public struct SceneEffect: Equatable {
     public let combos: [String: Int]
     /// AUDIOPROCESSING 콤보(0=off,1=L,2=R,3=L+R). 오디오-반응 효과 식별.
     public var audioMode: Int { combos["AUDIOPROCESSING"] ?? 0 }
+    /// 전체 패스 사용자 데이터(멀티패스 효과용; [0]은 기존 constants/textureNames/combos 와 동일).
+    public var passList: [SceneEffectPass] = []
 
     public init(name: String, constants: [String: [Float]], textureNames: [String?], combos: [String: Int] = [:], file: String = "") {
         self.name = name; self.constants = constants; self.textureNames = textureNames; self.combos = combos; self.file = file
@@ -247,32 +257,37 @@ extension SceneDocument {
             // "effects/<name>/effect.json" → name
             let parts = file.split(separator: "/")
             let name = parts.count >= 2 ? String(parts[parts.count - 2]) : file
-            var constants: [String: [Float]] = [:]
-            var textureNames: [String?] = []
-            var combos: [String: Int] = [:]
-            if let passes = e["passes"] as? [Any], let pass0 = passes.first as? [String: Any] {
-                if let cb = pass0["combos"] as? [String: Any] {
+            // 전체 패스 사용자 데이터 파스(멀티패스 effect.json passes[] 와 인덱스 정렬).
+            var passList: [SceneEffectPass] = []
+            for case let passDict as [String: Any] in (e["passes"] as? [Any] ?? []) {
+                var p = SceneEffectPass()
+                if let cb = passDict["combos"] as? [String: Any] {
                     for (k, v) in cb {
-                        if let i = v as? Int { combos[k] = i }
-                        else if let d = v as? Double { combos[k] = Int(d) }
+                        if let i = v as? Int { p.combos[k] = i }
+                        else if let d = v as? Double { p.combos[k] = Int(d) }
                     }
                 }
-                if let cs = pass0["constantshadervalues"] as? [String: Any] {
+                if let cs = passDict["constantshadervalues"] as? [String: Any] {
                     for (k, v) in cs {
-                        if let d = v as? Double { constants[k] = [Float(d)] }
-                        else if let i = v as? Int { constants[k] = [Float(i)] }
+                        if let d = v as? Double { p.constants[k] = [Float(d)] }
+                        else if let i = v as? Int { p.constants[k] = [Float(i)] }
                         else if let s = v as? String {
                             let f = s.split(separator: " ").compactMap { Float($0) }
-                            if !f.isEmpty { constants[k] = f }
+                            if !f.isEmpty { p.constants[k] = f }
                         }
                     }
                 }
                 // textures 배열 전체를 슬롯 순서로 캡처. JSON null → nil, 문자열 → 이름.
-                if let texs = pass0["textures"] as? [Any] {
-                    textureNames = texs.map { $0 as? String }
+                if let texs = passDict["textures"] as? [Any] {
+                    p.textureNames = texs.map { $0 as? String }
                 }
+                passList.append(p)
             }
-            out.append(SceneEffect(name: name, constants: constants, textureNames: textureNames, combos: combos, file: file))
+            let p0 = passList.first ?? SceneEffectPass()
+            var eff = SceneEffect(name: name, constants: p0.constants, textureNames: p0.textureNames,
+                                  combos: p0.combos, file: file)
+            eff.passList = passList
+            out.append(eff)
         }
         return out
     }

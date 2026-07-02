@@ -207,6 +207,69 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertLessThan(c.greenComponent, 0.2, "hand-port 가 이기면 초록≈1")
     }
 
+    /// 멀티패스(fbos/target/bind — 실물 localcontrast 구조): 1패스가 fbo 에 순빨강을 쓰고
+    /// 2패스(타깃 없음=출력)가 fbo×0.5 를 출력 → 최종 (0.5,0,0). 단일패스(pass0만)면 순빨강 → 실패.
+    func testMultiPassEffectWithFBO() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let fragRed = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
+        """
+        let fragHalf = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * vec4(0.5, 0.5, 0.5, 1.0); }
+        """
+        let effectJSON = """
+        {"passes":[
+           {"material":"materials/effects/mp_red.json","target":"_rt_Half",
+            "bind":[{"name":"previous","index":0}]},
+           {"material":"materials/effects/mp_half.json",
+            "bind":[{"name":"_rt_Half","index":0}]}],
+         "fbos":[{"name":"_rt_Half","scale":2,"format":"rgba8888"}]}
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/mptest/effect.json","passes":[{},{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_mp", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("effects/mptest/effect.json", effectJSON.data(using: .utf8)!),
+            ("materials/effects/mp_red.json", #"{"passes":[{"shader":"effects/mp_red"}]}"#.data(using: .utf8)!),
+            ("materials/effects/mp_half.json", #"{"passes":[{"shader":"effects/mp_half"}]}"#.data(using: .utf8)!),
+            ("shaders/effects/mp_red.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/mp_red.frag", fragRed.data(using: .utf8)!),
+            ("shaders/effects/mp_half.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/mp_half.frag", fragHalf.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "mp", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "mp", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_mp")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] multipass px=(\(c.redComponent),\(c.greenComponent),\(c.blueComponent))")
+        XCTAssertEqual(Double(c.redComponent), 0.5, accuracy: 0.06, "2패스 결과 = fbo(빨강)×0.5 (pass0만 실행이면 1.0)")
+        XCTAssertLessThan(c.greenComponent, 0.1)
+    }
+
     /// texRes per-slot(설계 §4): g_Texture1Resolution 은 aux 슬롯 1 텍스처의 실제 dims 여야 한다
     /// (레이어 dims 8x8 근사가 아니라). frag 가 x==4 를 검사해 백/흑으로 표출 — 4x2 aux 면 luma 1.
     func testAuxTextureResolutionPerSlot() throws {

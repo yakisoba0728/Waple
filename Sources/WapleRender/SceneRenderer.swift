@@ -6,10 +6,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private struct AudioParams { let mode: Int; let freqMin: Float; let freqMax: Float; let bounds: SIMD2<Float>; let power: Float; let multiply: Float }
     /// 효과 바인딩: 손-포팅(기존 규약: float* P buffer(0) + aux texture(1+) + audioResp buffer(1))
     /// 또는 GLSL→MSL 변환본(reflection 규약: float4* p buffer(0) + EngineU buffer(1) + slot 텍스처 + audioL/R buffer(2/3)).
+    /// 변환 효과의 1개 패스(멀티패스: effect.json passes[] — target=fbo 인덱스(nil=효과 출력),
+    /// binds=(슬롯, 소스: -1=previous(효과 입력)|fbo 인덱스)).
+    private struct TranslatedPass {
+        let pipeline: MTLRenderPipelineState
+        let material: [SIMD4<Float>]
+        let aux: [(slot: Int, tex: MTLTexture)]
+        let binds: [(slot: Int, source: Int)]
+        let target: Int?
+        let usesAudio: Bool
+        let texRes: [SIMD4<Float>]
+    }
     private enum EffectBind {
         case handPort(params: [Float], aux: [MTLTexture], audio: AudioParams?)
-        // texRes: 슬롯별 (w,h,1/w,1/h) 8개 — slot0=framebuffer(레이어 dims), aux 슬롯은 실제 텍스처 dims.
-        case translated(material: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], usesAudio: Bool, texRes: [SIMD4<Float>])
+        // fboScales: 이름 있는 FBO 의 해상도 나눗수(effect.json fbos[].scale) — 실행 시 dst 크기/scale 로 풀 할당.
+        case translated(passes: [TranslatedPass], fboScales: [Int])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
     private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */ }
@@ -304,83 +315,112 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return EffectGPU(pipeline: pipe, bind: .handPort(params: params, aux: aux, audio: audio))
     }
 
-    /// GLSL→MSL 변환 효과 빌드. 셰이더 소스 로드(pkg→베이스에셋) → translate → MSL 컴파일 →
-    /// reflection 기반 머티리얼/텍스처/오디오 바인드 플랜. 어느 단계든 실패하면 nil(→ 스킵). 무회귀.
+    /// GLSL→MSL 변환 효과 빌드(멀티패스): effect.json 매니페스트(passes/fbos) → 패스별 셰이더 로드 →
+    /// translate → 파이프라인 → 바인드 플랜. 어느 단계든 실패하면 nil(→ 손-포팅 폴백 → 스킵). 무회귀.
     private func buildTranslatedEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice,
                                        texW: Int, texH: Int) -> EffectGPU? {
         // 디버그 바이섹션 스위치: 실물 씬에서 번역 효과만 끄고 A/B 비교(시각 아티팩트 책임 분리).
         if ProcessInfo.processInfo.environment["WAPLE_DISABLE_TRANSLATED"] == "1" { return nil }
-        guard let glsl = loadEffectGLSL(eff, package: package) else { return nil }
         // #include 리졸버: pkg→베이스에셋→내장(확정-의미 서브셋, common_blending.h) 순.
-        // common.h 는 내장 없음(추측 구현 금지) — 베이스에셋 미설정 시 드롭 → 해당 효과는 컴파일 실패 → 폴백.
         let include: (String) -> String? = { header in
             for cand in ["shaders/\(header)", header] {
                 if let d = self.quietAssetData(cand, package: package), let s = String(data: d, encoding: .utf8) { return s }
             }
             return BuiltinShaderIncludes.lookup(header)
         }
-        guard let t = GLSLTranslator.translate(vertex: glsl.vert, fragment: glsl.frag, combos: eff.combos, include: include) else {
-            NSLog("%@", "[Waple] GLSL translate failed: \(eff.name)")
-            return nil
+        // 매니페스트: effect.json 이 없으면 관례 단일 패스("effects/<name>" 셰이더).
+        let effectJSONPath = eff.file.isEmpty ? "effects/\(eff.name)/effect.json" : eff.file
+        let manifest: EffectManifest
+        if let d = quietAssetData(effectJSONPath, package: package), let m = EffectManifest.parse(d) {
+            manifest = m
+        } else {
+            manifest = EffectManifest(passes: [.init(material: nil, shader: nil, target: nil, binds: [])], fbos: [])
         }
-        guard let pipe = translatedPipeline(msl: t.msl, device: device) else {
-            NSLog("%@", "[Waple] translated MSL compile failed: \(eff.name)")
-            return nil
-        }
-        // 머티리얼 파라미터: sceneKey → constants(또는 default), 선언 순서대로 float4 슬롯에 패킹.
-        let material: [SIMD4<Float>] = t.materialParams.map { p in
-            let v = eff.constants[p.sceneKey] ?? p.defaultValue
-            return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
-                                v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
-        }
-        // 보조 텍스처: slot0=framebuffer(src, draw 시 바인드). slot>0 은 eff.textureNames[slot] 해석(폴백 흰색).
-        // texRes 는 슬롯별 실제 dims(설계 §4) — 미바인드 슬롯/slot0 은 레이어(framebuffer) dims.
-        var aux: [(slot: Int, tex: MTLTexture)] = []
+        let fboIndex = Dictionary(uniqueKeysWithValues: manifest.fbos.enumerated().map { ($1.name, $0) })
         let lw = Float(max(1, texW)), lh = Float(max(1, texH))
-        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, 1 / lw, 1 / lh), count: 8)
-        for slot in t.textureSlots where slot > 0 {
-            let name = slot < eff.textureNames.count ? eff.textureNames[slot] : nil
-            if let tex = resolveTexture(name, package: package, device: device) {
-                aux.append((slot, tex))
-                if slot < 8 {
-                    let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
-                    texRes[slot] = SIMD4(w, h, 1 / w, 1 / h)
+        var passes: [TranslatedPass] = []
+        var anyAudio = false
+        for (i, mp) in manifest.passes.enumerated() {
+            // 셰이더 이름 + 머티리얼 메타(combos/textures) 해석.
+            var shaderName = mp.shader
+            var matCombos: [String: Int] = [:]
+            var matTextures: [String?] = []
+            if shaderName == nil, let matPath = mp.material,
+               let mData = quietAssetData(matPath, package: package),
+               let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any],
+               let mp0 = (mjson["passes"] as? [Any])?.first as? [String: Any] {
+                shaderName = mp0["shader"] as? String
+                for (k, v) in (mp0["combos"] as? [String: Any]) ?? [:] {
+                    if let n = v as? Int { matCombos[k] = n }
+                    else if let d = v as? Double { matCombos[k] = Int(d) }
+                }
+                if let texs = mp0["textures"] as? [Any] { matTextures = texs.map { $0 as? String } }
+            }
+            let base = shaderName ?? "effects/\(eff.name)"
+            guard let vData = quietAssetData("shaders/\(base).vert", package: package),
+                  let fData = quietAssetData("shaders/\(base).frag", package: package),
+                  let vert = String(data: vData, encoding: .utf8),
+                  let frag = String(data: fData, encoding: .utf8) else { return nil }
+            let scenePass = i < eff.passList.count ? eff.passList[i] : SceneEffectPass()
+            // 콤보 우선순위: 머티리얼 기본 < scene 패스 지정.
+            var combos = matCombos
+            for (k, v) in scenePass.combos { combos[k] = v }
+            guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: include) else {
+                NSLog("%@", "[Waple] GLSL translate failed: \(eff.name) pass \(i)")
+                return nil
+            }
+            guard let pipe = translatedPipeline(msl: t.msl, device: device) else {
+                NSLog("%@", "[Waple] translated MSL compile failed: \(eff.name) pass \(i)")
+                return nil
+            }
+            let constants = scenePass.constants
+            let material: [SIMD4<Float>] = t.materialParams.map { p in
+                let v = constants[p.sceneKey] ?? p.defaultValue
+                return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
+                                    v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
+            }
+            // 바인드: previous → -1, 이름 → fbo 인덱스(미지 이름은 전체 실패 → 폴백). 부재 시 관례 previous@0.
+            var binds: [(slot: Int, source: Int)] = []
+            for b in mp.binds {
+                if b.name == "previous" { binds.append((b.index, -1)) }
+                else if let idx = fboIndex[b.name] { binds.append((b.index, idx)) }
+                else { NSLog("%@", "[Waple] unknown bind '\(b.name)' in \(eff.name)"); return nil }
+            }
+            if binds.isEmpty { binds = [(0, -1)] }
+            let bindSlots = Set(binds.map { $0.slot })
+            // texRes + 정적 aux: 바인드 슬롯은 소스 dims(fbo = 레이어/scale), 그 외 선언 슬롯은 텍스처 해석.
+            // WE 규약: g_TextureXResolution = (paddedW, paddedH, imageW, imageH) — .zw 는 역수가 아니라 실치수
+            // (gaussian 등이 g_Scale/…Resolution.z 로 텍셀 오프셋 계산; 역수면 오프셋 폭주 → 화면 백화).
+            var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 8)
+            for (slot, source) in binds where slot < 8 && source >= 0 {
+                let s = Float(manifest.fbos[source].scale)
+                texRes[slot] = SIMD4(lw / s, lh / s, lw / s, lh / s)
+            }
+            var aux: [(slot: Int, tex: MTLTexture)] = []
+            for slot in t.textureSlots where slot > 0 && !bindSlots.contains(slot) {
+                var name = slot < scenePass.textureNames.count ? scenePass.textureNames[slot] : nil
+                if name == nil, slot < matTextures.count { name = matTextures[slot] }
+                if let n = name, n.hasPrefix("_rt_") { continue }
+                if let tex = resolveTexture(name, package: package, device: device) {
+                    aux.append((slot, tex))
+                    if slot < 8 {
+                        let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
+                        texRes[slot] = SIMD4(w, h, w, h)
+                    }
                 }
             }
+            let target: Int? = mp.target.flatMap { fboIndex[$0] }
+            if mp.target != nil && target == nil { NSLog("%@", "[Waple] unknown target in \(eff.name)"); return nil }
+            if t.usesAudio { anyAudio = true }
+            passes.append(TranslatedPass(pipeline: pipe, material: material, aux: aux,
+                                         binds: binds, target: target, usesAudio: t.usesAudio, texRes: texRes))
         }
-        if t.usesAudio { hasAudio = true }
-        NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (params=\(material.count) tex=\(t.textureSlots) audio=\(t.usesAudio))")
-        return EffectGPU(pipeline: pipe, bind: .translated(material: material, aux: aux,
-                                                           usesAudio: t.usesAudio, texRes: texRes))
-    }
-
-    /// 효과 GLSL(vert+frag) 로드. 셰이더 베이스 이름을 effect.json 체인에서 해석 →
-    /// "shaders/<base>.{vert,frag}" 를 pkg→베이스에셋에서 조용히 조회.
-    private func loadEffectGLSL(_ eff: SceneEffect, package: ScenePackage) -> (vert: String, frag: String)? {
-        let base = shaderBase(eff, package: package)
-        guard let vData = quietAssetData("shaders/\(base).vert", package: package),
-              let fData = quietAssetData("shaders/\(base).frag", package: package),
-              let vert = String(data: vData, encoding: .utf8),
-              let frag = String(data: fData, encoding: .utf8) else { return nil }
-        return (vert, frag)
-    }
-
-    /// 셰이더 베이스 이름 해석(실측 WE 레이아웃): eff.file(effect.json) → passes[0].material →
-    /// material json → passes[0].shader (예: 스톡 "effects/waterwaves", 워크샵 "workshop/<wsid>/effects/<Name>").
-    /// effect.json passes[0] 에 shader 직접 명시도 허용. 체인이 끊기면 관례 "effects/<name>" 폴백
-    /// (스톡 이름==경로라 동작; 워크샵은 체인 필요 — file 경로가 wsid 를 담는다).
-    private func shaderBase(_ eff: SceneEffect, package: ScenePackage) -> String {
-        let effectJSON = eff.file.isEmpty ? "effects/\(eff.name)/effect.json" : eff.file
-        if let eData = quietAssetData(effectJSON, package: package),
-           let ejson = (try? JSONSerialization.jsonObject(with: eData)) as? [String: Any],
-           let passes = ejson["passes"] as? [Any], let p0 = passes.first as? [String: Any] {
-            if let shader = p0["shader"] as? String { return shader }
-            if let matPath = p0["material"] as? String, let mData = quietAssetData(matPath, package: package),
-               let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any],
-               let mpasses = mjson["passes"] as? [Any], let mp0 = mpasses.first as? [String: Any],
-               let shader = mp0["shader"] as? String { return shader }
-        }
-        return "effects/\(eff.name)"
+        // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
+        guard passes.contains(where: { $0.target == nil }) else { return nil }
+        if anyAudio { hasAudio = true }
+        NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (passes=\(passes.count) fbos=\(manifest.fbos.count) audio=\(anyAudio))")
+        return EffectGPU(pipeline: passes[0].pipeline,
+                         bind: .translated(passes: passes, fboScales: manifest.fbos.map { $0.scale }))
     }
 
     /// assetData 의 조용한 버전: pkg→베이스에셋 조회하되 미스에 로그 없음(소스 프로브는 미스가 정상).
@@ -860,14 +900,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     private func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, time: Float, cb: MTLCommandBuffer) {
-        let rpd = MTLRenderPassDescriptor()
-        rpd.colorAttachments[0].texture = dst
-        rpd.colorAttachments[0].loadAction = .clear
-        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
-        enc.setRenderPipelineState(eff.pipeline)
         switch eff.bind {
         case .handPort(let params, let aux, let audio):
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = dst
+            rpd.colorAttachments[0].loadAction = .clear
+            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+            enc.setRenderPipelineState(eff.pipeline)
             enc.setVertexBuffer(effectVertexBuffer, offset: 0, index: 0)
             enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
             for (i, t) in aux.enumerated() { enc.setFragmentTexture(t, index: i + 1) }  // aux slot i → texture(i+1)
@@ -881,37 +921,64 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                   bounds: a.bounds, power: a.power, multiply: a.multiply)
             }
             enc.setFragmentBytes(&audioResp, length: MemoryLayout<Float>.stride, index: 1)
-        case .translated(let material, let aux, let usesAudio, let texRes):
-            // 변환본 규약: 인터리브드 쿼드 buffer(4), p buffer(0)·EngineU buffer(1) 는 vert+frag 양쪽, 텍스처는 선언 슬롯.
-            enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
-            if !material.isEmpty {  // 파라미터 0개면 셰이더 시그니처에 p 없음 → 바인드 생략.
-                material.withUnsafeBytes {
-                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
-                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
-                }
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            enc.endEncoding()
+
+        case .translated(var passes, let fboScales):
+            // 디버그: WAPLE_MP_TRUNC=n → 앞 n개 패스만 실행(마지막은 dst 로 강제) — 패스별 이분용.
+            if let t = ProcessInfo.processInfo.environment["WAPLE_MP_TRUNC"], let n = Int(t), n > 0, n < passes.count {
+                passes = Array(passes.prefix(n))
+                let last = passes.removeLast()
+                passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
+                                             binds: last.binds, target: nil, usesAudio: last.usesAudio, texRes: last.texRes))
             }
-            let eng = engineUniform(time: time, texRes: texRes)
-            eng.withUnsafeBytes {
-                enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
-                enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
+            // 멀티패스: 이름 있는 FBO(다운스케일)를 풀에서 할당하고, 각 패스를 target(fbo|dst)에 순차 실행.
+            let baseW = max(1, dst.width), baseH = max(1, dst.height)
+            var fboTex: [MTLTexture] = []
+            for s in fboScales {
+                guard let t = pooledOffscreen(max(1, baseW / s), max(1, baseH / s), device!) else { return }
+                fboTex.append(t)
             }
-            enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
-            for (slot, tex) in aux { enc.setFragmentTexture(tex, index: slot) }
-            if usesAudio {  // 스펙트럼 버퍼(16:2/3, 32:5/6, 64:7/8 — GLSLTranslator.audioBufferNames).
-                // 셰이더는 사용하는 스테이지/해상도에만 파라미터를 방출하므로 전부 바인드해도 무해.
-                func bind(_ arr: [Float], _ idx: Int) {
-                    arr.withUnsafeBytes {
-                        enc.setVertexBytes($0.baseAddress!, length: $0.count, index: idx)
-                        enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: idx)
+            for pass in passes {
+                let target = pass.target.map { fboTex[$0] } ?? dst
+                let rpd = MTLRenderPassDescriptor()
+                rpd.colorAttachments[0].texture = target
+                rpd.colorAttachments[0].loadAction = .clear
+                rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+                enc.setRenderPipelineState(pass.pipeline)
+                // 변환본 규약: 인터리브드 쿼드 buffer(4), p buffer(0)·EngineU buffer(1) 는 vert+frag 양쪽.
+                enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
+                if !pass.material.isEmpty {
+                    pass.material.withUnsafeBytes {
+                        enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
+                        enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                     }
                 }
-                bind(currentSpectrum.left, 2); bind(currentSpectrum.right, 3)
-                bind(left32, 5); bind(right32, 6)
-                bind(left64, 7); bind(right64, 8)
+                let eng = engineUniform(time: time, texRes: pass.texRes)
+                eng.withUnsafeBytes {
+                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
+                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
+                }
+                for (slot, source) in pass.binds {
+                    enc.setFragmentTexture(source == -1 ? src : fboTex[source], index: slot)
+                }
+                for (slot, tex) in pass.aux { enc.setFragmentTexture(tex, index: slot) }
+                if pass.usesAudio {  // 스펙트럼 버퍼(16:2/3, 32:5/6, 64:7/8).
+                    func bind(_ arr: [Float], _ idx: Int) {
+                        arr.withUnsafeBytes {
+                            enc.setVertexBytes($0.baseAddress!, length: $0.count, index: idx)
+                            enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: idx)
+                        }
+                    }
+                    bind(currentSpectrum.left, 2); bind(currentSpectrum.right, 3)
+                    bind(left32, 5); bind(right32, 6)
+                    bind(left64, 7); bind(right64, 8)
+                }
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                enc.endEncoding()
             }
         }
-        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-        enc.endEncoding()
     }
 
     /// 합성 스펙트럼 주입(헤드리스 검증/테스트용). 라이브에선 provider 가 갱신.
