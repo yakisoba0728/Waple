@@ -169,6 +169,77 @@ final class SceneCompositeConventionTests: XCTestCase {
         XCTAssertEqual(luma, 1.0, accuracy: 0.03, "passthrough 컴포지션은 항등이어야")
     }
 
+    /// 프로퍼티 애니메이션(alpha 1→0, 2초 single): t=0 luma 1 → t=1 ≈0.5 → t=2 ≈0.
+    func testAlphaAnimationPlaysBack() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+            "alpha":{"animation":{"c0":[{"frame":0,"value":1},{"frame":60,"value":0}],
+                                   "options":{"fps":30,"length":60,"mode":"single"}},"value":1.0},
+            "visible":{"value":true}}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_animA", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "animA", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "animA", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_cc_animA")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 1.0, 2.0], toDir: out)
+        XCTAssertEqual(urls.count, 3)
+        let lumas = urls.sorted { $0.lastPathComponent < $1.lastPathComponent }.map { avgLuma($0) }
+        // 파일명 정렬: t0.0, t1.0, t2.0
+        XCTAssertEqual(lumas[0], 1.0, accuracy: 0.03, "t=0 → alpha 1")
+        XCTAssertEqual(lumas[1], 0.5, accuracy: 0.1, "t=1 → 중점 ≈0.5")
+        XCTAssertEqual(lumas[2], 0.0, accuracy: 0.03, "t=2 → alpha 0 (single 클램프)")
+    }
+
+    /// origin 애니메이션: 작은 사각형이 좌→우 이동(절대 키프레임). t=0 좌측 흰/우측 검, t=2 반대.
+    func testOriginAnimationMovesLayer() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","size":"480 1080",
+            "origin":{"animation":{"c0":[{"frame":0,"value":240},{"frame":60,"value":1680}],
+                                    "options":{"fps":30,"length":60,"mode":"single"}},
+                      "value":"240 540 0"},
+            "visible":{"value":true}}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_animO", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "animO", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "animO", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_cc_animO")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 2.0], toDir: out).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        func px(_ url: URL, _ x: Int) -> Double {
+            guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)), let c = rep.colorAt(x: x, y: 18) else { return -1 }
+            return c.redComponent
+        }
+        XCTAssertGreaterThan(px(urls[0], 8), 0.8, "t=0: 좌측(x=8/64) 흰색")
+        XCTAssertLessThan(px(urls[0], 56), 0.2, "t=0: 우측 검정")
+        XCTAssertGreaterThan(px(urls[1], 56), 0.8, "t=2: 우측 흰색")
+        XCTAssertLessThan(px(urls[1], 8), 0.2, "t=2: 좌측 검정")
+    }
+
     /// 텍스트 레이어: 검정 bg 중앙에 큰 흰색 "HELLO" → 중앙 행에 밝은 픽셀 존재(미지원이면 전부 검정).
     func testTextLayerRendersGlyphs() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }

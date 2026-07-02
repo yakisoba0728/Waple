@@ -12,7 +12,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case translated(material: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], usesAudio: Bool, texRes: [SIMD4<Float>])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */ }
+    private var hasAnimations = false
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
         let def: ParticleSystemDef
@@ -182,7 +183,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
              1,  1, 0,  1, 0,
         ]
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
-        if hasEffects || hasParticles || hasScriptedText {
+        if hasEffects || hasParticles || hasScriptedText || hasAnimations {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
             view.preferredFramesPerSecond = 30
@@ -263,10 +264,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 }
             }
             if !effects.isEmpty { hasEffects = true }
+            if !layer.animations.isEmpty { hasAnimations = true }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
                                 effects: effects, texWidth: effW, texHeight: effH,
-                                order: layer.order, isFrameBuffer: layer.isFrameBuffer))
+                                order: layer.order, isFrameBuffer: layer.isFrameBuffer,
+                                def: layer.animations.isEmpty ? nil : layer))
         }
         return out
     }
@@ -590,13 +593,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 씬 픽셀 좌표(좌상단 원점, Y-down 가정) → NDC. Y-flip은 Task 7에서 실측 보정.
     private func quadVertices(layer: SceneLayer, projW: Float, projH: Float) -> [SIMD4<Float>] {
-        let hw = layer.size.x * layer.scale.x * 0.5
-        let hh = layer.size.y * layer.scale.y * 0.5
-        let a = layer.angleZ * .pi / 180
+        quadVertices(origin: layer.origin, size: layer.size, scale: layer.scale, angleZ: layer.angleZ,
+                     projW: projW, projH: projH)
+    }
+
+    /// 명시 파라미터 변형 — 프로퍼티 애니메이션의 per-frame 재계산용.
+    private func quadVertices(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float,
+                              projW: Float, projH: Float) -> [SIMD4<Float>] {
+        let hw = size.x * scale.x * 0.5
+        let hh = size.y * scale.y * 0.5
+        let a = angleZ * .pi / 180
         let ca = cos(a), sa = sin(a)
         func corner(_ lx: Float, _ ly: Float) -> SIMD2<Float> {
             let rx = lx * ca - ly * sa, ry = lx * sa + ly * ca
-            return SIMD2<Float>(layer.origin.x + rx, layer.origin.y + ry)
+            return SIMD2<Float>(origin.x + rx, origin.y + ry)
         }
         func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> {
             SIMD2<Float>(p.x / projW * 2 - 1, 1 - p.y / projH * 2)
@@ -620,7 +630,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
-        if hasEffects || hasParticles || hasScriptedText, view.window?.occlusionState.contains(.visible) == false { return }
+        if hasEffects || hasParticles || hasScriptedText || hasAnimations, view.window?.occlusionState.contains(.visible) == false { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
@@ -672,7 +682,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 enc = next
             case .layer:
                 encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
-                            camOffset: &camOffset, aspectScale: &aspectScale)
+                            camOffset: &camOffset, aspectScale: &aspectScale, time: time, device: device)
             }
         }
         enc.endEncoding()
@@ -684,14 +694,37 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         cb.commit()
     }
 
-    /// 이미지 레이어 1개 드로우(메인 컴포지트 파이프라인).
+    /// 이미지 레이어 1개 드로우(메인 컴포지트 파이프라인). time/device 는 프로퍼티 애니메이션 평가용
+    /// (def 있는 레이어만 per-frame 재계산 — origin/scale/angles → 쿼드, alpha/color → tint).
     private func encodeLayer(_ layer: GPULayer, texture: MTLTexture, into enc: MTLRenderCommandEncoder,
-                             camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+                             camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
+                             time: Float = 0, device: MTLDevice? = nil) {
         guard let pipeline else { return }
         var tint = layer.tint
+        var vbuf = layer.vertexBuffer
+        if let def = layer.def, let device {
+            func animValue(_ key: String, _ comp: Int, _ base: Float) -> Float {
+                def.animations[key]?.value(component: comp, atTime: time, base: base) ?? base
+            }
+            let origin = Vec2(x: animValue("origin", 0, def.origin.x), y: animValue("origin", 1, def.origin.y))
+            let scale = Vec2(x: animValue("scale", 0, def.scale.x), y: animValue("scale", 1, def.scale.y))
+            let angle = animValue("angles", 2, def.angleZ)
+            if def.animations["origin"] != nil || def.animations["scale"] != nil || def.animations["angles"] != nil {
+                let verts = quadVertices(origin: origin, size: def.size, scale: scale, angleZ: angle,
+                                         projW: projW, projH: projH)
+                if let b = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) {
+                    vbuf = b
+                }
+            }
+            if def.animations["alpha"] != nil || def.animations["color"] != nil {
+                let a = animValue("alpha", 0, def.alpha)
+                let c = Vec3(x: animValue("color", 0, def.color.x), y: animValue("color", 1, def.color.y), z: animValue("color", 2, def.color.z))
+                tint = SIMD4(c.x * def.brightness, c.y * def.brightness, c.z * def.brightness, a)
+            }
+        }
         var depth = layer.parallaxDepth
         enc.setRenderPipelineState(pipeline)
-        enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
+        enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
@@ -916,7 +949,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     enc = next
                 case .layer:
                     encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
-                                camOffset: &camOff, aspectScale: &asp)
+                                camOffset: &camOff, aspectScale: &asp, time: t, device: device)
                 }
             }
             if aborted { cb.commit(); continue }
@@ -945,7 +978,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         audioProvider?.stop(); audioProvider = nil; hasAudio = false
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
-        textLayers = []; hasScriptedText = false
+        textLayers = []; hasScriptedText = false; hasAnimations = false
         additivePipeline = nil; translucentPipeline = nil
         texturePool.removeAll(); poolCheckout.removeAll()
         pipeline = nil; queue = nil; device = nil
