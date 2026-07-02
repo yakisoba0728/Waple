@@ -14,6 +14,10 @@ public final class VideoRenderer: WallpaperRenderer {
     private var looper: AVPlayerLooper?
     private var playerLayer: AVPlayerLayer?
     private var statusObservation: NSKeyValueObservation?
+    private weak var container: NSView?
+    private var occlusionObserver: NSObjectProtocol?
+    private var pausedByOcclusion = false
+    private var pausedManually = false
 
     public init() {}
 
@@ -56,12 +60,29 @@ public final class VideoRenderer: WallpaperRenderer {
         self.player = queue
         self.looper = looper
         self.playerLayer = layer
+        self.container = container
+
+        // 가림 시 정지(절전 — 씬 렌더러와 동일 동작). 창이 없으면(headless 테스트) no-op.
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let win = self.container?.window, (note.object as? NSWindow) === win else { return }
+            if win.occlusionState.contains(.visible) {
+                if self.pausedByOcclusion, !self.pausedManually { self.player?.play() }
+                self.pausedByOcclusion = false
+            } else if self.player?.rate != 0 {
+                self.pausedByOcclusion = true
+                self.player?.pause()
+            }
+        }
     }
 
-    public func pause() { player?.pause() }
-    public func resume() { player?.play() }
+    public func pause() { pausedManually = true; player?.pause() }
+    public func resume() { pausedManually = false; player?.play() }
 
     public func teardown() {
+        if let o = occlusionObserver { NotificationCenter.default.removeObserver(o) }
+        occlusionObserver = nil
         statusObservation?.invalidate()
         statusObservation = nil
         player?.pause()
@@ -69,5 +90,6 @@ public final class VideoRenderer: WallpaperRenderer {
         player = nil
         looper = nil
         playerLayer = nil
+        container = nil
     }
 }

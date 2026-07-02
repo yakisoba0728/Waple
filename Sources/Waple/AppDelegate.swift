@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let desktopController = DesktopWindowController()
     private var renderers: [WallpaperRenderer] = []
     private var currentFolderURL: URL?
+    private var currentProjectId: String?
+    private weak var videoMenu: NSMenu?
 
     private let store = LibraryStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private lazy var libraryVM = LibraryViewModel(store: store)
@@ -39,6 +41,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         fitItem.submenu = fitMenu
         menu.addItem(fitItem)
+        // 동영상 배경별 음량/배속(설계 2026-07-02 video-100). 현재 배경이 동영상이 아니면 no-op.
+        let videoItem = NSMenuItem(title: "동영상 설정", action: nil, keyEquivalent: "")
+        let videoMenu = NSMenu()
+        let muteItem = NSMenuItem(title: "음소거", action: #selector(setVideoVolume(_:)), keyEquivalent: "")
+        muteItem.representedObject = Float(0)
+        videoMenu.addItem(muteItem)
+        for v in [25, 50, 75, 100] {
+            let item = NSMenuItem(title: "음량 \(v)%", action: #selector(setVideoVolume(_:)), keyEquivalent: "")
+            item.representedObject = Float(v) / 100
+            videoMenu.addItem(item)
+        }
+        videoMenu.addItem(.separator())
+        for r in [0.5, 1.0, 1.5, 2.0] {
+            let item = NSMenuItem(title: "배속 \(r)x", action: #selector(setVideoRate(_:)), keyEquivalent: "")
+            item.representedObject = Float(r)
+            videoMenu.addItem(item)
+        }
+        videoItem.submenu = videoMenu
+        menu.addItem(videoItem)
+        self.videoMenu = videoMenu
         menu.addItem(NSMenuItem(title: "기본 에셋 폴더 설정…",
                                 action: #selector(chooseBaseAssets), keyEquivalent: ""))
         menu.addItem(.separator())
@@ -78,6 +100,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         BaseAssetsSettings.baseAssetsDirectory = url
         if let folder = currentFolderURL { apply(folderURL: folder) }  // 누락 텍스처 즉시 반영
+    }
+
+    /// 현재 배경(동영상)의 음량/배속 설정 → 저장 + 재적용(기존 fit-mode 패턴). 체크 상태 갱신.
+    @objc private func setVideoVolume(_ sender: NSMenuItem) {
+        guard let id = currentProjectId, let v = sender.representedObject as? Float else { return }
+        VideoSettings.setVolume(v, id: id)
+        updateVideoMenuStates()
+        if let folder = currentFolderURL { apply(folderURL: folder) }
+    }
+
+    @objc private func setVideoRate(_ sender: NSMenuItem) {
+        guard let id = currentProjectId, let r = sender.representedObject as? Float else { return }
+        VideoSettings.setRate(r, id: id)
+        updateVideoMenuStates()
+        if let folder = currentFolderURL { apply(folderURL: folder) }
+    }
+
+    private func updateVideoMenuStates() {
+        guard let id = currentProjectId, let menu = videoMenu else { return }
+        let vol = VideoSettings.volume(id: id), rate = VideoSettings.rate(id: id)
+        for item in menu.items {
+            guard let f = item.representedObject as? Float else { continue }
+            if item.action == #selector(setVideoVolume(_:)) { item.state = abs(f - vol) < 0.001 ? .on : .off }
+            if item.action == #selector(setVideoRate(_:)) { item.state = abs(f - rate) < 0.001 ? .on : .off }
+        }
     }
 
     @objc private func openLibrary() {
@@ -121,6 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             renderers.forEach { $0.teardown() }
             renderers = newRenderers
             currentFolderURL = folderURL
+            currentProjectId = project.id
+            updateVideoMenuStates()
             return true
         } catch {
             notify("적용 실패: \(error)")
