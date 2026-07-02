@@ -65,6 +65,28 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertFalse(t.msl.contains("float mask = 1.0;"))
     }
 
+    func testPrecisionQualifiersStripped() throws {
+        let vert = """
+        precision highp float;
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute highp vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying mediump vec2 v_TexCoord;
+        void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+        """
+        let frag = """
+        varying mediump vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform lowp float g_UserAlpha; // {"material":"alpha","default":1.0}
+        void main() { vec4 c = texSample2D(g_Texture0, v_TexCoord); c.a *= g_UserAlpha; gl_FragColor = c; }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertEqual(t.materialParams.count, 1, "lowp float uniform must still parse as material")
+        XCTAssertEqual(t.materialParams[0].sceneKey, "alpha")
+        XCTAssertTrue(t.msl.contains("float2 v_TexCoord"), "mediump varying must still parse: \(t.msl)")
+        for q in ["highp", "mediump", "lowp", "precision "] { XCTAssertFalse(t.msl.contains(q), q) }
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

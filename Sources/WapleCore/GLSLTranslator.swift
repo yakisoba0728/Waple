@@ -33,8 +33,8 @@ public struct TranslatedShader: Equatable {
 public enum GLSLTranslator {
     public static func translate(vertex: String, fragment: String, combos: [String: Int],
                                  include: (String) -> String? = { _ in nil }) -> TranslatedShader? {
-        let vsrc = ShaderPreprocessor.preprocess(vertex, combos: combos, include: include)
-        let fsrc = ShaderPreprocessor.preprocess(fragment, combos: combos, include: include)
+        let vsrc = stripPrecision(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include))
+        let fsrc = stripPrecision(ShaderPreprocessor.preprocess(fragment, combos: combos, include: include))
 
         // 유니폼/attribute/varying 수집(주석 어노테이션 보존 위해 본문 정리 전에).
         let vUniforms = parseUniforms(vsrc), fUniforms = parseUniforms(fsrc)
@@ -78,6 +78,14 @@ public enum GLSLTranslator {
     }
 
     // MARK: - 선언 파싱
+
+    /// precision 한정자 제거: `precision ...;` 문 전체 + highp/mediump/lowp 토큰(선언 파서가 타입으로 오인 방지).
+    static func stripPrecision(_ src: String) -> String {
+        let lines = src.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("precision ") }
+            .joined(separator: "\n")
+        return replaceIdentifiers(lines, ["highp": "", "mediump": "", "lowp": ""])
+    }
 
     struct Uniform { let type: GLSLType; let name: String; let annotationMaterial: String?; let annotationDefault: [Float]? }
 
