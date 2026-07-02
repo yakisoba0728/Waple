@@ -162,6 +162,40 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers[0].origin, Vec2(x: 400, y: 300))
     }
 
+    /// 텍스트 오브젝트: 평문 text 와 {"script": ...} 둘 다 SceneTextLayer 로 파스(씬 순서 order 공유).
+    func testParsesTextObjects() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"image":"models/x.json","origin":"960 540 0","size":"1920 1080","visible":{"value":true}},
+           {"text":"HELLO","name":"plain","font":"systemfont_arial","pointsize":32.0,
+            "color":"1 0 0","alpha":0.8,"horizontalalign":"center","verticalalign":"center",
+            "origin":"100 200 0","size":"2 2","visible":{"value":true}},
+           {"text":{"script":"export function update(v){return 'X';}"},"name":"scripted",
+            "font":"fonts/f.otf","pointsize":16.0,"origin":"5 6 0","visible":{"value":true}},
+           {"text":"nope","visible":false}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertEqual(doc.texts.count, 2, "visible=false 텍스트는 제외")
+        let t0 = doc.texts[0]
+        XCTAssertEqual(t0.text, "HELLO")
+        XCTAssertNil(t0.script)
+        XCTAssertEqual(t0.font, "systemfont_arial")
+        XCTAssertEqual(t0.pointSize, 32)
+        XCTAssertEqual(t0.color, Vec3(x: 1, y: 0, z: 0))
+        XCTAssertEqual(t0.alpha, 0.8)
+        XCTAssertEqual(t0.origin, Vec2(x: 100, y: 200))
+        XCTAssertEqual(t0.scale, Vec2(x: 2, y: 2))
+        XCTAssertEqual(t0.horizontalAlign, "center")
+        XCTAssertEqual(t0.order, 1, "objects[] 인덱스(레이어와 공유 z-순서)")
+        let t1 = doc.texts[1]
+        XCTAssertEqual(t1.text, "")
+        XCTAssertEqual(t1.script, "export function update(v){return 'X';}")
+        XCTAssertEqual(t1.order, 2)
+    }
+
     func testSkipsLayerWithMissingModel() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},

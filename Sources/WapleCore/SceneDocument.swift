@@ -46,6 +46,21 @@ public struct SceneParticle: Equatable {
     public var order: Int = 0
 }
 
+/// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
+public struct SceneTextLayer: Equatable {
+    public let text: String              // 평문(스크립트면 "")
+    public let script: String?           // {"script": ...} — update(value) 가 텍스트 반환
+    public let font: String              // "systemfont_arial" | "fonts/....otf" (pkg/base-assets)
+    public let pointSize: Float          // 씬 픽셀 단위 글자 크기
+    public let color: Vec3
+    public let alpha: Float
+    public let horizontalAlign: String   // left|center|right (origin 앵커 기준)
+    public let verticalAlign: String     // top|center|bottom
+    public let origin: Vec2
+    public let scale: Vec2               // 오브젝트 "size" 필드 = 배수(실측 "2 2")
+    public var order: Int = 0
+}
+
 public struct SceneDocument: Equatable {
     public let projectionWidth: Int
     public let projectionHeight: Int
@@ -55,6 +70,7 @@ public struct SceneDocument: Equatable {
     public let parallaxMouseInfluence: Float
     public let layers: [SceneLayer]
     public let particles: [SceneParticle]
+    public var texts: [SceneTextLayer] = []
 }
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
@@ -78,6 +94,7 @@ extension SceneDocument {
 
         var layers: [SceneLayer] = []
         var particles: [SceneParticle] = []
+        var texts: [SceneTextLayer] = []
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
             // `visible` 은 바인딩 객체 {"value": false} 또는 평문 불리언 false 두 형태로 온다.
@@ -123,11 +140,29 @@ extension SceneDocument {
                     p.order = order
                     particles.append(p)
                 }
+            } else if obj["text"] != nil {
+                // 텍스트: 평문 문자열 또는 {"script": JS} — 내용은 렌더러/스크립트 엔진이 채운다.
+                var plain = ""
+                var script: String? = nil
+                if let s = obj["text"] as? String { plain = s }
+                else if let d = obj["text"] as? [String: Any], let js = d["script"] as? String { script = js }
+                texts.append(SceneTextLayer(
+                    text: plain, script: script,
+                    font: (obj["font"] as? String) ?? "systemfont_arial",
+                    pointSize: float(obj["pointsize"]) ?? 16,
+                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+                    alpha: float(obj["alpha"]) ?? 1,
+                    horizontalAlign: (obj["horizontalalign"] as? String) ?? "center",
+                    verticalAlign: (obj["verticalalign"] as? String) ?? "center",
+                    origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
+                    scale: vec2(obj["size"]) ?? Vec2(x: 1, y: 1),
+                    order: order))
             }
         }
         return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                              parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
-                             parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles)
+                             parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
+                             texts: texts)
     }
 
     /// 레이어 소스 해석 결과.
