@@ -108,16 +108,33 @@ public enum GLSLTranslator {
         var helpers: [GLSLFunction] = []
         for h in vFns + fFns where h.name != "main" && helperSeen.insert(h.name).inserted { helpers.append(h) }
 
+        // Stage-3 phase 2: 식-레벨 타입체커 — HLSL-관용 벡터 크기 혼합을 절단 삽입으로 MSL 화.
+        // 확실한 크기만 개입(미지 0 = 무개입). 스테이지별 env(frag 는 frag 선언 varying 타입 우선).
+        var sizeEnv: [String: Int] = ["gl_FragColor": 4, "gl_FragCoord": 4, "gl_Position": 4,
+                                      "g_Time": 1, "g_PointerPosition": 2,
+                                      "a_TexCoord": 2, "a_Position": 3]
+        for vy in varyings { sizeEnv[vy.name] = vy.type.components }
+        for m in materials { sizeEnv[m.glslName] = m.type.components }
+        for id in bodyIds where isEngine(id) && id.hasSuffix("Resolution") { sizeEnv[id] = 4 }
+        var fnSizes: [String: Int] = [:]
+        for h in helpers { fnSizes[h.name] = GLSLTypeAdapter.typeSize(h.ret) ?? 0 }
+        var fragSizeEnv = sizeEnv
+        for vy in parseVaryings(fsrc) { fragSizeEnv[vy.name] = vy.type.components }
+        let fragMainBody = GLSLTypeAdapter.adapt(body: fragMainF.body,
+                                                 env: .init(vars: fragSizeEnv, functions: fnSizes))
+        let vertMainBody = GLSLTypeAdapter.adapt(body: vertMainF.body,
+                                                 env: .init(vars: sizeEnv, functions: fnSizes))
+
         // Stage-3 ①②: 지역 섀도잉(varying/머티리얼과 동명의 로컬 선언) → 해당 본문 맵에서 제외
         // (치환하면 `float4 in.x = ...` 로 깨짐); fragment 의 varying 대입 → 로컬 사본으로 승격.
-        let fragLocals = localDeclNames(in: fragMainF.body)
-        let vertLocals = localDeclNames(in: vertMainF.body)
+        let fragLocals = localDeclNames(in: fragMainBody)
+        let vertLocals = localDeclNames(in: vertMainBody)
         var fragMap = frag, vertMap = vert
         var fragVaryingPrelude = ""
         let fragVaryingTypes = Dictionary(parseVaryings(fsrc).map { ($0.name, $0.type) }, uniquingKeysWith: { a, _ in a })
         for vy in varyings {
             if fragLocals.contains(vy.name) { fragMap.removeValue(forKey: vy.name) }
-            else if isAssigned(vy.name, in: fragMainF.body) {
+            else if isAssigned(vy.name, in: fragMainBody) {
                 fragMap[vy.name] = vy.name
                 let ty = fragVaryingTypes[vy.name] ?? vy.type  // 스테이지 간 타입 불일치 시 frag 선언 우선
                 fragVaryingPrelude += "\(ty.msl) \(vy.name) = in.\(vy.name);\n"
@@ -128,8 +145,8 @@ public enum GLSLTranslator {
             if fragLocals.contains(m.glslName) { fragMap.removeValue(forKey: m.glslName) }
             if vertLocals.contains(m.glslName) { vertMap.removeValue(forKey: m.glslName) }
         }
-        guard let fragBodyT = translateBody(fragMainF.body, symbols: fragMap, isFragment: true),
-              let vertBodyT = translateBody(vertMainF.body, symbols: vertMap, isFragment: false) else { return nil }
+        guard let fragBodyT = translateBody(fragMainBody, symbols: fragMap, isFragment: true),
+              let vertBodyT = translateBody(vertMainBody, symbols: vertMap, isFragment: false) else { return nil }
         var fragBody = fragVaryingPrelude + fragBodyT
         var vertBody = vertBodyT
 
@@ -144,7 +161,11 @@ public enum GLSLTranslator {
         for h in helpers {
             let caps = captureOf[h.name] ?? []
             guard let sig = helperSignature(h, captures: caps, materials: materials) else { continue }  // 미지원 타입 → 스킵
-            let withCalls = appendCaptureArgs(h.body, helpers: helpers, captureOf: captureOf) { cap in
+            var helperEnv = sizeEnv
+            for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
+            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes),
+                                                    returnSize: GLSLTypeAdapter.typeSize(h.ret))
+            let withCalls = appendCaptureArgs(adaptedBody, helpers: helpers, captureOf: captureOf) { cap in
                 rawCaptureName(cap, materials: materials)
             }
             guard let body = translateBody(withCalls, symbols: typeAndMacroRenames(), isFragment: false) else { continue }
