@@ -580,6 +580,25 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("eng.timeAndPad.yz"), "g_PointerPosition → eng 패딩 슬롯: \(t.msl)")
     }
 
+    func testFileScopeConstWithEngineRefsDemotedToLocal() throws {
+        // 실물: `const vec2 K = vec2(g_Texture0Resolution.x, ...)` — 전역 constant 는 eng 파라미터
+        // 접근 불가 → main 로컬(const)로 강등돼야 한다(잔여 스킵 진단 클래스).
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        const vec2 K = vec2(g_Texture0Resolution.x * 0.5, 1.0);
+        const float PLAIN = 2.0;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord * K.x * PLAIN);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertFalse(t.msl.contains("constant float2 K"), "엔진 참조 const 는 전역 금지: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("const float2 K = float2(eng.texRes[0].x * 0.5, 1.0);"),
+                      "main 로컬로 강등 + 엔진 매핑: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("constant float PLAIN = 2.0;"), "순수 const 는 기존대로 전역: \(t.msl)")
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

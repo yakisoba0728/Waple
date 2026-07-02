@@ -190,15 +190,27 @@ public enum GLSLTranslator {
         }
 
         // 파일 스코프 const: vert/frag 합집합(이름 dedupe — 공용 헤더가 양쪽에 인라인되는 경우), 타입/매크로만 치환.
+        // 단, 엔진/머티리얼 심볼을 참조하는 const 는 전역 constant 가 될 수 없다(eng/p 는 함수 파라미터) —
+        // main 로컬(const)로 강등해 스테이지 맵으로 치환(잔여 스킵 진단 클래스 2026-07-03).
         var constNames = Set<String>()
         var consts: [String] = []
+        var fragLocalConsts = ""
+        var vertLocalConsts = ""
+        let materialNames = Set(materials.map { $0.glslName })
         for line in fileScopeConsts(vClean) + fileScopeConsts(fClean) {
-            let translated = replaceIdentifiers(line, typeAndMacroRenames())
-            let name = translated.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
-            if constNames.insert(name).inserted {
+            let refs = identifiers(in: line)
+            let name = line.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
+            guard constNames.insert(name).inserted else { continue }
+            if refs.contains(where: { isEngine($0) || materialNames.contains($0) }) {
+                if let f = translateBody(line, symbols: fragMap, isFragment: false) { fragLocalConsts += f + "\n" }
+                if let v = translateBody(line, symbols: vertMap, isFragment: false) { vertLocalConsts += v + "\n" }
+            } else {
+                let translated = replaceIdentifiers(line, typeAndMacroRenames())
                 consts.append("constant " + translated.dropFirst("const ".count))
             }
         }
+        fragBody = fragLocalConsts + fragBody
+        vertBody = vertLocalConsts + vertBody
 
         // 스테이지별 오디오 파라미터: 최종 본문에 남은 참조 이름별로 방출(word-정확; 16/32/64 해상도별 버퍼).
         let vertIds = identifiers(in: vertBody)
