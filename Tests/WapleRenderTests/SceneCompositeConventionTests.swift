@@ -74,6 +74,101 @@ final class SceneCompositeConventionTests: XCTestCase {
      "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"}]}
     """
 
+    /// 컴포지션(_rt_FullFrameBuffer) 레이어: 흰 bg + fullscreen 컴포지션 레이어에 tint(빨강, multiply) 효과
+    /// → 화면 전체가 빨강으로 물들어야(알파 1 유지 = 완전 교체). 미지원이면 흰색 유지.
+    /// (opacity 류는 컴포지션에선 수학적 항등 — 화면 복사본을 화면 위에 반투명 합성 = 원본. WE 동일.)
+    func testFrameBufferLayerAppliesEffectToScene() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "effects":[{"file":"effects/tint/effect.json","passes":[{"combos":{"BLENDMODE":2},
+              "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],
+            "visible":{"value":true}}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbtint", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true,"passthrough":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "fbtint", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "fbtint", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbtint")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] framebuffer tint px=(\(c.redComponent),\(c.greenComponent),\(c.blueComponent))")
+        XCTAssertGreaterThan(c.redComponent, 0.8, "컴포지션 tint 가 화면을 빨강으로")
+        XCTAssertLessThan(c.greenComponent, 0.2, "미지원이면 흰색(green=1)")
+    }
+
+    /// 컴포지션 방향 보존: 상단 절반만 빨간 씬 + passthrough 컴포지션 → 빨강은 상단에 남아야(Y-플립 회귀 방지).
+    func testFrameBufferPreservesOrientation() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0.2"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 270 0","size":"1920 540"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "effects":[{"file":"effects/tint/effect.json","passes":[{"combos":{"BLENDMODE":2},
+              "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],
+            "visible":{"value":true}}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbflip", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "fbflip", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "fbflip", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbflip")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let top = try XCTUnwrap(rep.colorAt(x: 32, y: 5))
+        let bottom = try XCTUnwrap(rep.colorAt(x: 32, y: 30))
+        NSLog("%@", "[Waple] fb orientation top=(\(top.redComponent)) bottom=(\(bottom.redComponent))")
+        XCTAssertGreaterThan(top.redComponent, 0.8, "상단 빨강 유지(플립이면 하단으로 감)")
+        XCTAssertLessThan(bottom.redComponent, 0.3, "하단은 어두워야")
+    }
+
+    /// 무효과 컴포지션 레이어(passthrough)는 화면을 그대로 유지해야 한다(이중 그리기/화이트아웃 없음).
+    func testFrameBufferPassthroughIsIdentity() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "visible":{"value":true}}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true,"passthrough":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+        ], tag: "fbpass")
+        NSLog("%@", "[Waple] framebuffer passthrough luma=\(luma)")
+        XCTAssertEqual(luma, 1.0, accuracy: 0.03, "passthrough 컴포지션은 항등이어야")
+    }
+
     /// 솔리드 레이어(무텍스처 flat 머티리얼): 흰 bg 위 검정 α0.5 솔리드 → luma ≈ 0.5.
     /// (솔리드 미지원이면 레이어 드롭 → 1.0.)
     func testSolidLayerRendersColorFill() throws {

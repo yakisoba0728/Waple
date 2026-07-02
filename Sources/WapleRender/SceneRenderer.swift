@@ -12,7 +12,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case translated(material: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], usesAudio: Bool, texRes: [SIMD4<Float>])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false }
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
         let def: ParticleSystemDef
@@ -137,6 +137,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let view = MTKView(frame: container.bounds, device: device)
         view.autoresizingMask = [.width, .height]
         view.colorPixelFormat = .bgra8Unorm
+        view.framebufferOnly = false  // 누적(acc) → drawable blit 대상이 되려면 필요(컴포지션 합성)
         view.isPaused = true
         view.enableSetNeedsDisplay = true
         view.delegate = self
@@ -211,8 +212,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var out: [GPULayer] = []
         for layer in doc.layers {
             // 솔리드 마커(""): 무텍스처 flat 머티리얼 → 흰색 1x1 — 기존 tint 경로(color×brightness, alpha)가 필을 만든다.
+            // 컴포지션(_rt_) 레이어: 텍스처는 런타임 스냅샷 — 여기선 placeholder + 효과 dims 를 프로젝션으로 근사
+            // (효과 texRes 는 주로 텍셀 오프셋 용도; 화면 크기는 draw 시 결정 — 설계 §3).
             let decoded: (pixels: Data, width: Int, height: Int)
-            if layer.textureEntryName.isEmpty {
+            if layer.textureEntryName.isEmpty {  // 솔리드/컴포지션 placeholder
                 decoded = (Data([255, 255, 255, 255]), 1, 1)
             } else if let texData = assetData(layer.textureEntryName, package: package),
                       let tex = TexImage.parse(texData),
@@ -220,6 +223,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 decoded = d
             } else { continue }
             guard let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else { continue }
+            // 컴포지션 레이어의 효과 dims 는 화면(프로젝션) 근사 — 실제 src 는 draw 시 스냅샷.
+            let effW = layer.isFrameBuffer ? Int(max(1, projW)) : decoded.width
+            let effH = layer.isFrameBuffer ? Int(max(1, projH)) : decoded.height
             let verts = quadVertices(layer: layer, projW: w, projH: h)
             guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) else { continue }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
@@ -230,7 +236,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
                 // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴백 → 둘 다 실패 시 스킵+로그.
                 if let translated = buildTranslatedEffect(eff, package: package, device: device,
-                                                          texW: decoded.width, texH: decoded.height) {
+                                                          texW: effW, texH: effH) {
                     effects.append(translated)
                 } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
                     effects.append(handPort)
@@ -241,8 +247,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             if !effects.isEmpty { hasEffects = true }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
-                                effects: effects, texWidth: decoded.width, texHeight: decoded.height,
-                                order: layer.order))
+                                effects: effects, texWidth: effW, texHeight: effH,
+                                order: layer.order, isFrameBuffer: layer.isFrameBuffer))
         }
         return out
     }
@@ -502,17 +508,49 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var texturePool: [String: [MTLTexture]] = [:]
     private var poolCheckout: [String: Int] = [:]
 
-    private func pooledOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
-        let key = "\(max(w,1))x\(max(h,1))"
+    private func pooledOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice, bgra: Bool = false) -> MTLTexture? {
+        let key = "\(bgra ? "b" : "")\(max(w,1))x\(max(h,1))"
         let idx = poolCheckout[key, default: 0]
         if idx < (texturePool[key]?.count ?? 0) {
             poolCheckout[key] = idx + 1
             return texturePool[key]![idx]
         }
-        guard let t = makeOffscreen(w, h, device) else { return nil }
+        guard let t = bgra ? makeOffscreenBGRA(w, h, device) : makeOffscreen(w, h, device) else { return nil }
         texturePool[key, default: []].append(t)
         poolCheckout[key] = idx + 1
         return t
+    }
+
+    /// 컴포지션(_rt_) 레이어 실행: 현재 encoder 를 닫고, acc 스냅샷(blit — 진행 중 타깃은 샘플 불가)에
+    /// 레이어의 효과 체인을 적용한 뒤, 새 encoder(.load)로 레이어 지오메트리에 결과를 그린다.
+    /// 반환된 encoder 로 나머지 drawPlan 을 계속한다. 실패 시 기존 흐름 유지 위해 새 encoder 만 연다.
+    private func runFrameBufferLayer(_ layer: GPULayer, acc: MTLTexture, cb: MTLCommandBuffer,
+                                     ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
+                                     camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        enc.endEncoding()
+        var srcTex: MTLTexture? = nil
+        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+           let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(from: acc, to: snap)
+            blit.endEncoding()
+            var current: MTLTexture = snap
+            for eff in layer.effects {
+                guard let next = pooledOffscreen(acc.width, acc.height, device) else { break }
+                applyEffect(eff, src: current, dst: next, time: time, cb: cb)
+                current = next
+            }
+            srcTex = current
+        }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = acc
+        rpd.colorAttachments[0].loadAction = .load
+        guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        if let srcTex {
+            // NOTE: acc 는 premultiplied 누적이라 스냅샷도 premult — straight 규약과의 미세 오차는
+            // 불투명 배경(일반 씬)에선 없음(설계 §4). fit/fill 시 aspectScale 이중 적용 에지도 §3 참고.
+            encodeLayer(layer, texture: srcTex, into: next, camOffset: &camOffset, aspectScale: &aspectScale)
+        }
+        return next
     }
 
     /// 헤드리스 캡처용 bgra8 타겟(라이브 파이프라인과 동일 포맷, getBytes 가능하도록 .shared).
@@ -566,7 +604,6 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
         if hasEffects || hasParticles, view.window?.occlusionState.contains(.visible) == false { return }
         guard let device, let queue, pipeline != nil,
-              let rpd = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
         let nowT = CFAbsoluteTimeGetCurrent()
@@ -592,21 +629,35 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             aspectScale = projAspect > viewAspect
                 ? SIMD2<Float>(1, viewAspect / projAspect) : SIMD2<Float>(projAspect / viewAspect, 1)
         }
+        // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
+        // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
+        guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { return }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+        guard var enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
         // 씬 오브젝트 순서대로 레이어·파티클 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
         for item in drawPlan {
             if item.isParticle {
                 let snapshot = particleSystems[item.idx].sim.step(dt)
                 encodeParticle(particleSystems[item.idx], snapshot: snapshot, into: enc, device: device,
                                camOffset: &camOffset, aspectScale: &aspectScale)
+            } else if layers[item.idx].isFrameBuffer {
+                guard let next = runFrameBufferLayer(layers[item.idx], acc: acc, cb: cb, ending: enc,
+                                                     device: device, time: time,
+                                                     camOffset: &camOffset, aspectScale: &aspectScale) else { return }
+                enc = next
             } else {
                 encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
                             camOffset: &camOffset, aspectScale: &aspectScale)
             }
         }
         enc.endEncoding()
+        if let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(from: acc, to: drawable.texture)
+            blit.endEncoding()
+        }
         cb.present(drawable)
         cb.commit()
     }
@@ -648,7 +699,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         poolCheckout.removeAll(keepingCapacity: true)  // 프레임 시작: 모든 풀 텍스처를 재사용 가능 상태로
         var out: [MTLTexture] = []
         for layer in layers {
-            if layer.effects.isEmpty { out.append(layer.texture); continue }
+            // 컴포지션 레이어의 효과는 사전 계산 불가(src = 그 시점 프레임버퍼 스냅샷) — draw 루프에서 처리.
+            if layer.effects.isEmpty || layer.isFrameBuffer { out.append(layer.texture); continue }
             // 베이스 복사 불필요: 원본 텍스처를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
             var current = layer.texture
             for eff in layer.effects {
@@ -739,19 +791,27 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             rpd.colorAttachments[0].texture = target
             rpd.colorAttachments[0].loadAction = .clear
             rpd.colorAttachments[0].clearColor = clearColor
-            guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
+            guard var enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
             // 라이브 draw 와 동일한 씬-순서 인터리브. 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
             // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)
+            // target 이 곧 누적(acc) — 컴포지션 레이어는 스냅샷 경유(runFrameBufferLayer).
+            var aborted = false
             for item in drawPlan {
                 if item.isParticle {
                     let snap = sims[item.idx].step(0)
                     encodeParticle(particleSystems[item.idx], snapshot: snap, into: enc, device: device,
                                    camOffset: &camOff, aspectScale: &asp)
+                } else if layers[item.idx].isFrameBuffer {
+                    guard let next = runFrameBufferLayer(layers[item.idx], acc: target, cb: cb, ending: enc,
+                                                         device: device, time: t,
+                                                         camOffset: &camOff, aspectScale: &asp) else { aborted = true; break }
+                    enc = next
                 } else {
                     encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
                                 camOffset: &camOff, aspectScale: &asp)
                 }
             }
+            if aborted { cb.commit(); continue }
             enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
             // readback (BGRA → RGBA) → PNG.
             var raw = [UInt8](repeating: 0, count: width * height * 4)
