@@ -52,6 +52,39 @@ final class GLSLTranslatorMSLTests: XCTestCase {
         catch { XCTFail("MASK=1 MSL failed: \(error)\n\(t.msl)") }
     }
 
+    /// builtin common_blending.h(확정 의미 — 이전 세션 실물 대조로 검증된 MSL 포트의 GLSL 판):
+    /// ApplyBlending/BlendSoftLight 를 쓰는 효과(실물 tint/pulse)가 include 리졸버에 builtin 을 물리면 컴파일된다.
+    func testBuiltinCommonBlendingUnblocksApplyBlending() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        #include "common_blending.h"
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform vec3 g_Color; // {"material":"color","default":"1 0 0"}
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb = ApplyBlending(BLENDMODE, c.rgb, g_Color, 0.5);
+            c.rgb = BlendSoftLight(c.rgb, g_Color);
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: ["BLENDMODE": 2],
+                                                       include: { BuiltinShaderIncludes.lookup($0) }))
+        do {
+            let lib = try device.makeLibrary(source: t.msl, options: nil)
+            XCTAssertNotNil(lib.makeFunction(name: "ef_main"))
+        } catch {
+            XCTFail("builtin common_blending MSL failed: \(error)\n\(t.msl)")
+        }
+    }
+
     /// Stage 2 총집합: common.h 스타일(선언 부재) + 헬퍼(순수/캡처/전이/텍스처/오디오/varying) + 파일 스코프 const
     /// + #define — 방출 MSL 이 실제 Metal 에서 컴파일돼야 한다.
     func testStage2HelperCaptureShaderCompiles() throws {

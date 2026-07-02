@@ -325,7 +325,7 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("atan(1.0)"), "1-인자 atan 유지: \(t.msl)")
         XCTAssertTrue(t.msl.contains("dfdx(in.v_TexCoord.x)"), t.msl)
         XCTAssertTrue(t.msl.contains("dfdy(in.v_TexCoord.y)"), t.msl)
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, in.v_TexCoord, level(0.0))"), t.msl)
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord), level(0.0))"), t.msl)
     }
 
     func testVertexStageAudioParams() throws {
@@ -378,6 +378,115 @@ final class GLSLTranslatorTests: XCTestCase {
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
         XCTAssertFalse(t.usesAudio, "주석 속 오디오 참조가 usesAudio 를 켜면 안 됨(TCC 프롬프트 유발)")
         XCTAssertTrue(t.msl.contains("constant float K = 2.0;"), "주석 속 { 가 const 스캔을 깨면 안 됨: \(t.msl)")
+    }
+
+    func testArrayVaryingsExpandToScalars() throws {
+        // 실물 localcontrast/blur 계열: `varying vec2 v_TexCoord[13];` — Metal 은 stage-in/반환 구조체에
+        // 배열 불가 → 스칼라 멤버(v_TexCoord_0..)로 확장하고 정수 인덱스 접근을 재작성한다.
+        let vert = """
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord[3];
+        void main() {
+            gl_Position = vec4(a_Position, 1.0);
+            v_TexCoord[0] = a_TexCoord;
+            v_TexCoord[1] = a_TexCoord + 0.1;
+            v_TexCoord[2] = a_TexCoord + 0.2;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord[3];
+        uniform sampler2D g_Texture0;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord[0])
+                         + texSample2D(g_Texture0, v_TexCoord[2]);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float2 v_TexCoord_0;"), "Vary 는 스칼라 멤버: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("float2 v_TexCoord_2;"), t.msl)
+        // 본문은 로컬 배열을 그대로 사용(변수 인덱스도 동작); vert 는 말미 복사, frag 는 진입 시 구성.
+        XCTAssertTrue(t.msl.contains("float2 v_TexCoord[3];"), "vert 로컬 배열 선언: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("out.v_TexCoord_1 = v_TexCoord[1];"), "vert 복사-백: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("float2 v_TexCoord[3] = { in.v_TexCoord_0, in.v_TexCoord_1, in.v_TexCoord_2 };"),
+                      "frag 로컬 배열 구성: \(t.msl)")
+    }
+
+    func testArrayVaryingVariableIndexLoop() throws {
+        // 실물 localcontrast_downsample4 패턴: for 루프의 변수 인덱스 접근도 로컬 배열로 동작해야 한다.
+        let vert = """
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord[4];
+        void main() {
+            gl_Position = vec4(a_Position, 1.0);
+            v_TexCoord[0] = a_TexCoord;
+            v_TexCoord[1] = a_TexCoord + 0.1;
+            v_TexCoord[2] = a_TexCoord + 0.2;
+            v_TexCoord[3] = a_TexCoord + 0.3;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord[4];
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 result = CAST4(0.0);
+            for (int i = 0; i < 4; ++i) {
+                vec4 s = texSample2D(g_Texture0, v_TexCoord[i]);
+                result += s;
+            }
+            gl_FragColor = result / 4.0;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("v_TexCoord[i]"), "변수 인덱스는 로컬 배열 접근으로 유지: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("float2 v_TexCoord[4] = {"), t.msl)
+    }
+
+    func testSampleUVImplicitTruncation() throws {
+        // WE GLSL(HLSL 방언)은 vec4 를 sample UV 로 그냥 넘긴다(암시적 절단) — 오버로드 헬퍼로 절단.
+        let frag = """
+        varying vec4 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord))"), t.msl)
+        XCTAssertTrue(t.msl.contains("inline float2 we_uv(float4 v) { return v.xy; }"), t.msl)
+    }
+
+    func testArrayParamsBecomeConstantPointers() throws {
+        // 실물 pulse.vert: `float CreateAudioResponse(float bufferLeft[16], float bufferRight[16])`.
+        // MSL 은 값-배열 파라미터 불가 → constant 포인터로 변환해야 호출부(audioL/audioR)와 정합.
+        let vert = """
+        varying vec2 v_TexCoord;
+        varying float v_Pulse;
+        float CreateAudioResponse(float bufferLeft[16], float bufferRight[16]) {
+            float r = 0.0;
+            for (int a = 0; a < 16; ++a) { r += bufferLeft[a] + bufferRight[a]; }
+            return r / 32.0;
+        }
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+            v_Pulse = CreateAudioResponse(g_AudioSpectrum16Left, g_AudioSpectrum16Right);
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        varying float v_Pulse;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            gl_FragColor = c * v_Pulse;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.usesAudio)
+        XCTAssertTrue(t.msl.contains("inline float CreateAudioResponse(constant float* bufferLeft, constant float* bufferRight)"), t.msl)
+        XCTAssertTrue(t.msl.contains("CreateAudioResponse(audioL, audioR)"), t.msl)
     }
 
     func testMulRewrite() {

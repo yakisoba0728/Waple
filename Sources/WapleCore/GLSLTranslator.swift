@@ -33,8 +33,8 @@ public struct TranslatedShader: Equatable {
 public enum GLSLTranslator {
     public static func translate(vertex: String, fragment: String, combos: [String: Int],
                                  include: (String) -> String? = { _ in nil }) -> TranslatedShader? {
-        let vsrc = stripPrecision(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include))
-        let fsrc = stripPrecision(ShaderPreprocessor.preprocess(fragment, combos: combos, include: include))
+        let (vsrc, vArrays) = expandArrayVaryings(stripPrecision(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include)))
+        let (fsrc, fArrays) = expandArrayVaryings(stripPrecision(ShaderPreprocessor.preprocess(fragment, combos: combos, include: include)))
 
         // 유니폼/attribute/varying 수집(주석 어노테이션 보존 위해 본문 정리 전에).
         let vUniforms = parseUniforms(vsrc), fUniforms = parseUniforms(fsrc)
@@ -128,6 +128,15 @@ public enum GLSLTranslator {
         vertBody = appendCaptureArgs(vertBody, helpers: helpers, captureOf: captureOf) { cap in
             captureCallArg(cap, isFragment: false, materials: materials)
         }
+        // 배열 varying 로컬 배열: frag 는 진입 시 Vary 스칼라 멤버로 구성, vert 는 선언 후 말미에 out 으로 복사.
+        for a in fArrays {
+            let init0 = (0..<a.count).map { "in.\(a.name)_\($0)" }.joined(separator: ", ")
+            fragBody = "\(a.type.msl) \(a.name)[\(a.count)] = { \(init0) };\n" + fragBody
+        }
+        for a in vArrays {
+            vertBody = "\(a.type.msl) \(a.name)[\(a.count)];\n" + vertBody
+            vertBody += "\n" + (0..<a.count).map { "out.\(a.name)_\($0) = \(a.name)[\($0)];" }.joined(separator: "\n")
+        }
 
         // 파일 스코프 const: vert/frag 합집합(이름 dedupe — 공용 헤더가 양쪽에 인라인되는 경우), 타입/매크로만 치환.
         var constNames = Set<String>()
@@ -157,7 +166,7 @@ public enum GLSLTranslator {
         let name: String
         let params: [Param]
         let body: String
-        struct Param: Equatable { let type: String; let byRef: Bool; let name: String }
+        struct Param: Equatable { let type: String; let byRef: Bool; let name: String; var array: Bool = false }
     }
 
     /// GLSL 타입 → MSL 타입(시그니처용). 미지원 타입 nil → 해당 헬퍼 스킵(사용 시 컴파일 실패 → 폴백 안전망).
@@ -255,7 +264,13 @@ public enum GLSLTranslator {
                 toks.removeFirst()
             }
             guard toks.count >= 2 else { continue }
-            out.append(GLSLFunction.Param(type: toks[0], byRef: byRef, name: toks[1]))
+            var name = toks[1]
+            var array = false
+            if let br = name.firstIndex(of: "[") {  // `float buf[16]` — 배열 파라미터(실물 pulse.vert)
+                name = String(name[..<br])
+                array = true
+            }
+            out.append(GLSLFunction.Param(type: toks[0], byRef: byRef, name: name, array: array))
         }
         return out
     }
@@ -268,6 +283,34 @@ public enum GLSLTranslator {
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("precision ") }
             .joined(separator: "\n")
         return replaceIdentifiers(lines, ["highp": "", "mediump": "", "lowp": ""])
+    }
+
+    struct ArrayVarying: Equatable { let type: GLSLType; let name: String; let count: Int }
+
+    /// 배열 varying(`varying vec2 v_TexCoord[13];` — 실물 blur/localcontrast 계열) 처리:
+    /// Metal 은 stage-in/반환 구조체에 배열을 허용하지 않으므로 선언을 스칼라 멤버(v_TexCoord_0..)로 펼친다.
+    /// 본문 접근은 재작성하지 않는다 — main 에 로컬 배열을 놓고(vert: 말미 out 복사, frag: 진입 시 구성)
+    /// 리터럴/변수 인덱스 모두 자연 동작(다운샘플 for-루프 등).
+    static func expandArrayVaryings(_ src: String) -> (source: String, arrays: [ArrayVarying]) {
+        var out: [String] = []
+        var arrays: [ArrayVarying] = []
+        for line in src.split(separator: "\n", omittingEmptySubsequences: false) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("varying "), t.contains("[") {
+                let toks = t.dropFirst("varying ".count).split(separator: ";").first?
+                    .split(separator: " ").map(String.init) ?? []
+                if toks.count >= 2, let type = GLSLType(rawValue: toks[0]),
+                   let b = toks[1].firstIndex(of: "["), let e = toks[1].firstIndex(of: "]"),
+                   b < e, let n = Int(toks[1][toks[1].index(after: b)..<e]), n > 0, n <= 64 {
+                    let name = String(toks[1][..<b])
+                    arrays.append(ArrayVarying(type: type, name: name, count: n))
+                    for k in 0..<n { out.append("varying \(toks[0]) \(name)_\(k);") }
+                    continue
+                }
+            }
+            out.append(String(line))
+        }
+        return (out.joined(separator: "\n"), arrays)
     }
 
     struct Uniform { let type: GLSLType; let name: String; let annotationMaterial: String?; let annotationDefault: [Float]? }
@@ -385,9 +428,10 @@ public enum GLSLTranslator {
         var s = body
         // 1) mul(a,b) → (b * a)
         s = rewriteCall(s, "mul") { args in args.count == 2 ? "(\(args[1]) * \(args[0]))" : nil }
-        // 2) texSample2DLod(t, uv, l) → t.sample(smp, uv, level(l)) / texSample2D(t, uv) → t.sample(smp, uv)
-        s = rewriteCall(s, "texSample2DLod") { args in args.count == 3 ? "\(args[0]).sample(smp, \(args[1]), level(\(args[2])))" : nil }
-        s = rewriteCall(s, "texSample2D") { args in args.count == 2 ? "\(args[0]).sample(smp, \(args[1]))" : nil }
+        // 2) texSample2DLod(t, uv, l) → t.sample(smp, uv, level(l)) / texSample2D(t, uv) → t.sample(smp, uv).
+        //    UV 는 we_uv() 로 절단 — WE GLSL(HLSL 방언)은 vec3/vec4 를 UV 로 암시적 절단해 넘기는 걸 허용한다.
+        s = rewriteCall(s, "texSample2DLod") { args in args.count == 3 ? "\(args[0]).sample(smp, we_uv(\(args[1])), level(\(args[2])))" : nil }
+        s = rewriteCall(s, "texSample2D") { args in args.count == 2 ? "\(args[0]).sample(smp, we_uv(\(args[1])))" : nil }
         // 2b) GLSL 2-인자 atan(y,x) → MSL atan2 (1-인자는 유지)
         s = rewriteCall(s, "atan") { args in args.count == 2 ? "atan2(\(args[0]), \(args[1]))" : nil }
         // 3) 식별자/타입 단일 패스 치환
@@ -545,7 +589,9 @@ public enum GLSLTranslator {
         var ps: [String] = []
         for p in h.params {
             guard let t = mslType(p.type) else { return nil }
-            ps.append(p.byRef ? "thread \(t)& \(p.name)" : "\(t) \(p.name)")
+            // 배열 파라미터는 constant 포인터(호출부의 audioL/캡처 배열과 정합; MSL 은 값-배열 불가).
+            if p.array { ps.append("constant \(t)* \(p.name)") }
+            else { ps.append(p.byRef ? "thread \(t)& \(p.name)" : "\(t) \(p.name)") }
         }
         ps.append(contentsOf: captures.map { captureParamDecl($0, materials: materials) })
         return "inline \(ret) \(h.name)(\(ps.joined(separator: ", ")))"
@@ -560,6 +606,14 @@ public enum GLSLTranslator {
         vary += "};\n"
         let vin = "struct VIn { float3 a_Position [[attribute(0)]]; float2 a_TexCoord [[attribute(1)]]; };\n"
         let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 texRes[8]; };\n"
+        // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
+        let uvHelpers = """
+        inline float2 we_uv(float2 v) { return v; }
+        inline float2 we_uv(float3 v) { return v.xy; }
+        inline float2 we_uv(float4 v) { return v.xy; }
+        inline float2 we_uv(float v) { return float2(v); }
+
+        """
 
         // fragment 텍스처 파라미터
         var fragTex = textures.map { "texture2d<float> g_Texture\($0) [[texture(\($0))]]" }.joined(separator: ",\n                        ")
@@ -584,7 +638,7 @@ public enum GLSLTranslator {
         let constBlock = consts.isEmpty ? "" : consts.joined(separator: "\n") + "\n"
         let protoBlock = helperProtos.isEmpty ? "" : helperProtos.joined(separator: "\n") + "\n"
         let defBlock = helperDefs.isEmpty ? "" : helperDefs.joined(separator: "\n\n") + "\n"
-        return "#include <metal_stdlib>\nusing namespace metal;\n\(eng)\(vin)\(vary)\(constBlock)\(protoBlock)\(defBlock)\n\(vertSig)\n\n\(fragSig)\n"
+        return "#include <metal_stdlib>\nusing namespace metal;\n\(eng)\(vin)\(vary)\(uvHelpers)\(constBlock)\(protoBlock)\(defBlock)\n\(vertSig)\n\n\(fragSig)\n"
     }
 
     private static func indent(_ s: String) -> String {
