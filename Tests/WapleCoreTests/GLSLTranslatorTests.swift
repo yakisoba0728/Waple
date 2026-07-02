@@ -152,6 +152,140 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertFalse(t.msl.contains("constant float localConst"), t.msl)
     }
 
+    // MARK: - Stage 2: 헬퍼 함수 방출
+
+    private let plainVert = "varying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }"
+
+    func testPureHelperFunctionEmitted() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        vec2 rotateVec2(vec2 v, float a) {
+            float s = sin(a); float c = cos(a);
+            return vec2(v.x * c - v.y * s, v.x * s + v.y * c);
+        }
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, rotateVec2(v_TexCoord, M_PI));
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float2 rotateVec2(float2 v, float a)"), t.msl)
+        XCTAssertTrue(t.msl.contains("rotateVec2(in.v_TexCoord, 3.14159265359)"), t.msl)
+        XCTAssertTrue(t.msl.contains("return float2(v.x * c - v.y * s, v.x * s + v.y * c);"), t.msl)
+    }
+
+    func testInoutParamBecomesReference() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void shift(inout vec2 uv, in float k) { uv.x += k; }
+        void main() {
+            vec2 uv = v_TexCoord;
+            shift(uv, 0.1);
+            gl_FragColor = texSample2D(g_Texture0, uv);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("void shift(thread float2& uv, float k)"), t.msl)
+    }
+
+    func testVoidMainWordBoundary() throws {
+        // "void mainImage" 가 main 으로 오인되면 안 된다(word-boundary).
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void mainImage(inout vec4 c) { c.r = 1.0; }
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            mainImage(c);
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("void mainImage(thread float4& c)"), t.msl)
+        XCTAssertTrue(t.msl.contains("mainImage(c);"), t.msl)
+    }
+
+    func testHelperCapturesEngineAndMaterial() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform float g_Strength; // {"material":"strength","default":1.0}
+        float wobble(float x) { return sin(x * g_Time) * g_Strength; }
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= wobble(2.0);
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("inline float wobble(float x, float g_Strength, float g_Time)"), t.msl)
+        XCTAssertTrue(t.msl.contains("wobble(2.0, p[0].x, eng.timeAndPad.x)"), t.msl)
+    }
+
+    func testTransitiveCaptureThroughCallGraph() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        float inner1() { return g_Time; }
+        float outer1(float k) { return inner1() * k; }
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= outer1(2.0);
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("inline float outer1(float k, float g_Time)"), t.msl)
+        XCTAssertTrue(t.msl.contains("inner1(g_Time) * k"), "헬퍼 내부 호출은 원 이름 전달: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("outer1(2.0, eng.timeAndPad.x)"), t.msl)
+    }
+
+    func testHelperCapturesTextureAndSampler() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        vec4 fetch(vec2 uv) { return texSample2D(g_Texture0, uv); }
+        void main() { gl_FragColor = fetch(v_TexCoord); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("inline float4 fetch(float2 uv, texture2d<float> g_Texture0, sampler smp)"), t.msl)
+        XCTAssertTrue(t.msl.contains("fetch(in.v_TexCoord, g_Texture0, smp)"), t.msl)
+    }
+
+    func testHelperCapturesAudioArray() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        float bass() { return g_AudioSpectrum16Left[0] + g_AudioSpectrum16Left[1]; }
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= bass();
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.usesAudio)
+        XCTAssertTrue(t.msl.contains("inline float bass(constant float* g_AudioSpectrum16Left)"), t.msl)
+        XCTAssertTrue(t.msl.contains("bass(audioL)"), t.msl)
+    }
+
+    func testHelperCapturesVarying() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        float vig() { return 1.0 - length(v_TexCoord - 0.5); }
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= vig();
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("inline float vig(float2 v_TexCoord)"), t.msl)
+        XCTAssertTrue(t.msl.contains("vig(in.v_TexCoord)"), t.msl)
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")
