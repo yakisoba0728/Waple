@@ -306,6 +306,28 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertFalse(t.msl.contains("_frag.rgb *= _frag.a"), "premult 주입 제거: \(t.msl)")
     }
 
+    func testDialectExtras() throws {
+        // GLSL atan(y,x) → MSL atan2 (1-인자 atan 은 유지), ddx/ddy → dfdx/dfdy, texSample2DLod → level().
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            float ang = atan(v_TexCoord.y, v_TexCoord.x);
+            float one = atan(1.0);
+            float dx = ddx(v_TexCoord.x);
+            float dy = ddy(v_TexCoord.y);
+            vec4 lod = texSample2DLod(g_Texture0, v_TexCoord, 0.0);
+            gl_FragColor = lod * (ang + one + dx + dy);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("atan2(in.v_TexCoord.y, in.v_TexCoord.x)"), t.msl)
+        XCTAssertTrue(t.msl.contains("atan(1.0)"), "1-인자 atan 유지: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("dfdx(in.v_TexCoord.x)"), t.msl)
+        XCTAssertTrue(t.msl.contains("dfdy(in.v_TexCoord.y)"), t.msl)
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, in.v_TexCoord, level(0.0))"), t.msl)
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

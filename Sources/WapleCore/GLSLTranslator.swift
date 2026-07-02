@@ -366,7 +366,8 @@ public enum GLSLTranslator {
     private static func typeAndMacroRenames() -> [String: String] {
         ["vec2": "float2", "vec3": "float3", "vec4": "float4", "mat3": "float3x3", "mat4": "float4x4",
          "CAST2": "float2", "CAST3": "float3", "CAST4": "float4",
-         "frac": "fract", "lerp": "mix", "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679", "M_PI_2": "6.28318530718"]
+         "frac": "fract", "lerp": "mix", "ddx": "dfdx", "ddy": "dfdy",
+         "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679", "M_PI_2": "6.28318530718"]
     }
 
     // MARK: - 본문 변환
@@ -375,8 +376,11 @@ public enum GLSLTranslator {
         var s = body
         // 1) mul(a,b) → (b * a)
         s = rewriteCall(s, "mul") { args in args.count == 2 ? "(\(args[1]) * \(args[0]))" : nil }
-        // 2) texSample2D(t, uv) → t.sample(smp, uv)
+        // 2) texSample2DLod(t, uv, l) → t.sample(smp, uv, level(l)) / texSample2D(t, uv) → t.sample(smp, uv)
+        s = rewriteCall(s, "texSample2DLod") { args in args.count == 3 ? "\(args[0]).sample(smp, \(args[1]), level(\(args[2])))" : nil }
         s = rewriteCall(s, "texSample2D") { args in args.count == 2 ? "\(args[0]).sample(smp, \(args[1]))" : nil }
+        // 2b) GLSL 2-인자 atan(y,x) → MSL atan2 (1-인자는 유지)
+        s = rewriteCall(s, "atan") { args in args.count == 2 ? "atan2(\(args[0]), \(args[1]))" : nil }
         // 3) 식별자/타입 단일 패스 치환
         s = replaceIdentifiers(s, symbols)
         // 4) gl_Position / gl_FragColor
