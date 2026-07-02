@@ -7,6 +7,10 @@ public enum ShaderPreprocessor {
     /// - include: `#include "name"` → 헤더 소스(없으면 nil → 빈 인라인).
     public static func preprocess(_ source: String, combos: [String: Int],
                                   include: (String) -> String? = { _ in nil }) -> String {
+        // 실물 WE 셰이더는 CRLF — 정규화하지 않으면 `#endif\r` 미인식으로 조건부 스택이 안 닫혀
+        // 첫 비활성 분기 이후 전체가 소실된다(실측 31씬 전 효과 폴백의 근본 원인).
+        let source = source.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
         var defines = combos
         // [COMBO] 기본값(명시 combos 가 없을 때만 채움)
         for (name, def) in parseComboDefaults(source) where defines[name] == nil { defines[name] = def }
@@ -35,7 +39,10 @@ public enum ShaderPreprocessor {
             if t.hasPrefix("#include") {
                 if let name = firstQuoted(t) {
                     if let header = include(name) {
-                        lines.append(inlineIncludes(header, include: include, depth: depth + 1))
+                        // 헤더 파일도 CRLF 일 수 있음 — 인라인 전 정규화.
+                        let normalized = header.replacingOccurrences(of: "\r\n", with: "\n")
+                            .replacingOccurrences(of: "\r", with: "\n")
+                        lines.append(inlineIncludes(normalized, include: include, depth: depth + 1))
                     } else {
                         NSLog("%@", "[Waple] GLSL include not found: \(name)")
                     }

@@ -99,6 +99,17 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertTrue(r.contains("DOUBLE(3.0)"), r)
     }
 
+    func testCRLFLineEndingsHandled() {
+        // 실물 WE 셰이더는 CRLF — `#endif\r` 이 인식 안 되면 조건부 스택이 안 닫혀 이후 전체가 소실된다
+        // (실측 31씬 전 효과 translate-nil 의 근본 원인, 2026-07-02).
+        let src = "#if MASK\r\nmasked\r\n#else\r\nunmasked\r\n#endif\r\nafter"
+        let r = ShaderPreprocessor.preprocess(src, combos: ["MASK": 0])
+        XCTAssertTrue(r.contains("unmasked"), r)
+        XCTAssertTrue(r.contains("after"), r)
+        XCTAssertFalse(r.contains("masked\r"), r)
+        XCTAssertFalse(r.contains("\r"), "출력은 LF 정규화: \(r)")
+    }
+
     func testExprEvalDirect() {
         XCTAssertEqual(ExprEval.eval("1 + 2 * 3", defines: [:]), 7)
         XCTAssertEqual(ExprEval.eval("(1 + 2) * 3", defines: [:]), 9)
