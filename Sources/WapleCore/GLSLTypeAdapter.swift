@@ -80,6 +80,7 @@ public enum GLSLTypeAdapter {
         let toks: [Tok]
         var pos = 0
         var env: Env
+        var intVars = Set<String>()   // int 선언 지역 — % 연산자 유지 판별용
         let returnSize: Int?
         var out = ""   // 재구성 출력
         init(_ toks: [Tok], env: Env, returnSize: Int?) { self.toks = toks; self.env = env; self.returnSize = returnSize }
@@ -159,12 +160,14 @@ public enum GLSLTypeAdapter {
 
     /// `<type> name = expr(, name2 = expr2)*;` — env 등록 + 초기화 절단.
     private static func declaration(_ p: P, declaredSize: Int) {
+        let typeTok = p.toks[p.pos].text
         p.out += p.advance().full  // type
         while true {
             guard p.pos < p.toks.count, p.toks[p.pos].isIdent else { break }
             let nameTok = p.advance()
             p.out += nameTok.full
             p.env.vars[nameTok.text] = declaredSize
+            if typeTok == "int" || typeTok == "uint" { p.intVars.insert(nameTok.text) }
             if p.peek() == "[" {  // 배열 선언 — 불투명 처리
                 p.env.vars[nameTok.text] = 0
                 while p.pos < p.toks.count, p.peek() != ";" { p.out += p.advance().full }
@@ -274,7 +277,39 @@ public enum GLSLTypeAdapter {
         return lhs
     }
     private static func addExpr(_ p: P) -> Node { binary(p, ops: ["+","-"], next: mulExpr, arithmetic: true) }
-    private static func mulExpr(_ p: P) -> Node { binary(p, ops: ["*","/"], next: unary, arithmetic: true) }
+    private static func mulExpr(_ p: P) -> Node {
+        var lhs = unary(p)
+        while let op = p.peek(), op == "*" || op == "/" || op == "%" {
+            let opTok = p.advance()
+            var rhs = unary(p)
+            if lhs.size > 1, rhs.size > 1, lhs.size != rhs.size {
+                if lhs.size > rhs.size { lhs = coerce(lhs, to: rhs.size) } else { rhs = coerce(rhs, to: lhs.size) }
+            }
+            let size = (lhs.size == 0 || rhs.size == 0) ? 0 : max(lhs.size, rhs.size)
+            if opTok.text == "%" {
+                // MSL 의 % 는 정수 전용(실물 Simple_Audio_Bars 의 float %) — 양쪽이 int 확실일 때만 유지.
+                func intish(_ n: Node) -> Bool {
+                    let t = n.text.trimmingCharacters(in: .whitespaces)
+                    return t.allSatisfy { $0.isNumber } || p.intVars.contains(t)
+                        || t.hasPrefix("int(") || t.hasPrefix("uint(")   // 명시 캐스트(실물 i % int(4))
+                }
+                if intish(lhs) && intish(rhs) {
+                    lhs = Node(text: lhs.text + opTok.full + rhs.text, size: size)
+                } else {
+                    // fmod 는 float 전용 — 정수 리터럴 인자는 실수 리터럴로 승격(모호성 방지).
+                    func lit(_ t: String) -> String {
+                        let c = t.trimmingCharacters(in: .whitespaces)
+                        return c.allSatisfy { $0.isNumber } ? c + ".0" : c
+                    }
+                    let (lead, core) = splitLead(lhs.text)
+                    lhs = Node(text: "\(lead)fmod(\(lit(core)), \(lit(rhs.text)))", size: size)
+                }
+            } else {
+                lhs = Node(text: lhs.text + opTok.full + rhs.text, size: size)
+            }
+        }
+        return lhs
+    }
 
     private static func unary(_ p: P) -> Node {
         if let t = p.peek(), ["-","!","+","~","++","--"].contains(t) {
@@ -323,18 +358,41 @@ public enum GLSLTypeAdapter {
         if tok.isIdent {
             // 호출?
             if p.peek() == "(" {
-                var text = tok.full + p.advance().full
+                let open = p.advance().full
+                var argTexts: [String] = []
+                var seps: [String] = []
                 var argSizes: [Int] = []
                 if p.peek() != ")" {
                     while true {
                         let a = expression(p)
-                        text += a.text
+                        argTexts.append(a.text)
                         argSizes.append(a.size)
-                        if p.peek() == "," { text += p.advance().full; continue }
+                        if p.peek() == "," { seps.append(p.advance().full); continue }
                         break
                     }
                 }
-                if p.peek() == ")" { text += p.advance().full }
+                let close = p.peek() == ")" ? p.advance().full : ""
+                // MSL 은 min/max/clamp 의 정수·실수 혼합 오버로드가 모호(실물 rounded_mask `max(1, x/y)`).
+                // 다른 인자가 실수/벡터면 정수 리터럴 인자를 실수 리터럴로 승격.
+                if ["min", "max", "clamp", "mix", "step", "pow", "mod"].contains(t), argTexts.count >= 2 {
+                    func isIntLiteral(_ x: String) -> Bool {
+                        let c = x.trimmingCharacters(in: .whitespaces)
+                        return !c.isEmpty && c.allSatisfy { $0.isNumber }
+                    }
+                    let anyNonInt = argTexts.contains { !isIntLiteral($0) }
+                    if anyNonInt {
+                        for i in argTexts.indices where isIntLiteral(argTexts[i]) {
+                            let lead = argTexts[i].prefix(while: { $0 == " " || $0 == "\t" })
+                            argTexts[i] = lead + argTexts[i].trimmingCharacters(in: .whitespaces) + ".0"
+                        }
+                    }
+                }
+                var text = tok.full + open
+                for (i, a) in argTexts.enumerated() {
+                    text += a
+                    if i < seps.count { text += seps[i] }
+                }
+                text += close
                 return Node(text: text, size: callSize(t, argSizes: argSizes, env: p.env))
             }
             if t.first!.isNumber { return Node(text: tok.full, size: 1) }

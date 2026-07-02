@@ -58,6 +58,15 @@ final class GLSLTypeAdapterTests: XCTestCase {
         XCTAssertEqual(out, body)
     }
 
+    func testFloatModRewrittenToFmod() {
+        // MSL % 는 정수 전용 — float 피연산자는 fmod 로(실물 Simple_Audio_Bars).
+        let out = GLSLTypeAdapter.adapt(body: "float y = x % 4;", env: env(["x": 1]))
+        XCTAssertEqual(out, "float y = fmod(x, 4.0);")
+        // 확실한 int 끼리는 유지.
+        let out2 = GLSLTypeAdapter.adapt(body: "int i = 5;\nint j = i % 2;", env: env())
+        XCTAssertTrue(out2.contains("i % 2"), out2)
+    }
+
     func testDotLengthScalarAndTernary() {
         let out = GLSLTypeAdapter.adapt(body: "float d = dot(a, b);", env: env(["a": 3, "b": 3]))
         XCTAssertEqual(out, "float d = dot(a, b);")

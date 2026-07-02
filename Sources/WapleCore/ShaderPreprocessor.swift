@@ -107,11 +107,20 @@ public enum ShaderPreprocessor {
                     if let close = afterName.firstIndex(of: ")") {
                         let params = afterName[..<close].split(separator: ",")
                             .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                        let body = afterName[afterName.index(after: close)...].trimmingCharacters(in: .whitespaces)
+                        var bodyRaw = String(afterName[afterName.index(after: close)...])
+                        // 객체형과 동일: 트레일링 주석이 본문에 들어가면 사용처의 ';' 를 삼킨다(실물 oscilloscope avg()).
+                        if let c = bodyRaw.range(of: "//") { bodyRaw = String(bodyRaw[..<c.lowerBound]) }
+                        if let c = bodyRaw.range(of: "/*") { bodyRaw = String(bodyRaw[..<c.lowerBound]) }
+                        let body = bodyRaw.trimmingCharacters(in: .whitespaces)
                         if !body.isEmpty { funcMacros[name] = (params, body) }
                     }
                 } else {
-                    let value = decl[nameEnd...].trimmingCharacters(in: .whitespaces)
+                    // 트레일링 주석은 치환값에서 제거 — `#define K 0.0625 // 1/16` 이 그대로 들어가면
+                    // 사용처의 세미콜론까지 주석에 삼켜진다(실물 oscilloscope).
+                    var raw = String(decl[nameEnd...])
+                    if let c = raw.range(of: "//") { raw = String(raw[..<c.lowerBound]) }
+                    if let c = raw.range(of: "/*") { raw = String(raw[..<c.lowerBound]) }
+                    let value = raw.trimmingCharacters(in: .whitespaces)
                     if value.isEmpty {
                         d[name] = 1  // 값 없는 #define NAME → #ifdef 용, 본문 치환은 안 함(빈 치환은 위험)
                     } else {

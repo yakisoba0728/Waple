@@ -66,8 +66,14 @@ public enum GLSLTranslator {
         // 본문/함수/const 스캔은 주석 제거본에서 — 주석 속 토큰(예: 죽은 코드의 g_AudioSpectrum16Left)이
         // usesAudio 를 켜 TCC 프롬프트를 유발하거나, 주석 속 중괄호가 깊이 카운터를 깨는 것을 방지.
         // (parseUniforms/varyings/attributes 는 JSON 어노테이션 주석이 필요해 원본 유지.)
-        let vClean = stripComments(vsrc)
-        let fClean = stripComments(fsrc)
+        // MSL 예약어가 GLSL 식별자(파라미터/지역 등)로 쓰이는 실물(test_shader 의 `vec2 fragment`) —
+        // 소스 수준에서 안전 리네임. 우리가 방출하는 `fragment float4 ef_main` 은 이후 생성이라 무관.
+        let reservedRenames = ["fragment": "we_fragment", "vertex": "we_vertex", "kernel": "we_kernel",
+                               "device": "we_device", "thread": "we_thread", "threadgroup": "we_threadgroup",
+                               "constant": "we_constant", "using": "we_using", "namespace": "we_namespace",
+                               "half": "we_half"]
+        let vClean = replaceIdentifiers(stripComments(vsrc), reservedRenames)
+        let fClean = replaceIdentifiers(stripComments(fsrc), reservedRenames)
         // 엔진 심볼은 선언이 common.h(베이스팩 전용, 대체로 부재)에 있어 파싱에 안 잡힌다 —
         // 본문 토큰 출현으로도 인식(Stage-2 gate 1). 텍스처 슬롯도 방어적으로 본문 스캔 병합.
         let bodyIds = identifiers(in: vClean).union(identifiers(in: fClean))
@@ -81,7 +87,17 @@ public enum GLSLTranslator {
         var frag = symbolMap(materials: materials, stage: .fragment)
         var vert = symbolMap(materials: materials, stage: .vertex)
         for (n, v) in typeAndMacroRenames() { frag[n] = v; vert[n] = v }
-        for vy in varyings { frag[vy.name] = "in.\(vy.name)"; vert[vy.name] = "out.\(vy.name)" }
+        let fragDeclaredV = Dictionary(parseVaryings(fsrc).map { ($0.name, $0.type) }, uniquingKeysWith: { a, _ in a })
+        for vy in varyings {
+            // 스테이지 간 varying 타입 불일치(실물 test_shader: vert vec4 / frag vec2) — Vary 멤버는
+            // union(선선언=vert) 타입이므로, frag 가 더 작게 선언했으면 치환에 스위즐을 붙인다.
+            var fragRef = "in.\(vy.name)"
+            if let ft = fragDeclaredV[vy.name], ft.components < vy.type.components, ft.components >= 1, ft.components <= 3 {
+                fragRef += ["", ".x", ".xy", ".xyz"][ft.components]
+            }
+            frag[vy.name] = fragRef
+            vert[vy.name] = "out.\(vy.name)"
+        }
         for a in parseAttributes(vsrc) { vert[a.name] = "vin.\(a.name)" }
         for u in allUniforms where isEngine(u.name) {
             let rep = engineReplacement(u.name)
@@ -106,7 +122,55 @@ public enum GLSLTranslator {
         // 헬퍼: vert+frag 합집합(이름 dedupe — 공용 헤더가 양 스테이지에 인라인되는 경우).
         var helperSeen = Set<String>()
         var helpers: [GLSLFunction] = []
-        for h in vFns + fFns where h.name != "main" && helperSeen.insert(h.name).inserted { helpers.append(h) }
+        var fragMainBodyPre = fragMainF.body
+        for h in vFns where h.name != "main" && helperSeen.insert(h.name).inserted { helpers.append(h) }
+        var fragHelperRenames: [String: String] = [:]
+        for h in fFns where h.name != "main" {
+            if helperSeen.insert(h.name).inserted {
+                helpers.append(h)
+            } else if let existing = helpers.first(where: { $0.name == h.name }),
+                      existing.params.map({ $0.type }) != h.params.map({ $0.type }) || existing.body != h.body {
+                // 동명이지만 다른 정의(실물 radial_blur: vert/frag 각자 computeUV) — frag 쪽 리네임.
+                let newName = h.name + "_f"
+                guard helperSeen.insert(newName).inserted else { continue }
+                var renamed = h
+                renamed.body = replaceIdentifiers(h.body, [h.name: newName])
+                helpers.append(GLSLFunction(ret: renamed.ret, name: newName, params: renamed.params, body: renamed.body))
+                fragHelperRenames[h.name] = newName
+            }
+        }
+        if !fragHelperRenames.isEmpty {
+            fragMainBodyPre = replaceIdentifiers(fragMainBodyPre, fragHelperRenames)
+            for i in helpers.indices where fFns.contains(where: { $0.name == helpers[i].name || helpers[i].name == $0.name + "_f" }) {
+                // frag 유래 헬퍼 본문 내 호출도 리네임(vert 유래 정의를 잘못 부르지 않도록).
+                if fFns.contains(where: { $0.name + "_f" == helpers[i].name }) || (fFns.contains(where: { $0.name == helpers[i].name }) && !vFns.contains(where: { $0.name == helpers[i].name })) {
+                    helpers[i].body = replaceIdentifiers(helpers[i].body, fragHelperRenames)
+                }
+            }
+        }
+
+        // 강등 대상 const(엔진/머티리얼 참조)를 참조하는 헬퍼 → 본문 선두에 const 선언 주입.
+        // 캡처 계산(computeCaptures) 전에 주입해야 const 우변의 엔진/머티리얼 심볼이 파라미터로 승격된다.
+        // (실물 radial_blur: `const vec2 type = ...(g_Texture0Resolution...)` 를 computeUV 가 사용.)
+        do {
+            let materialNames0 = Set(materials.map { $0.glslName })
+            var demoted: [(name: String, line: String)] = []
+            for line in fileScopeConsts(vClean) + fileScopeConsts(fClean) {
+                let name = line.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
+                guard !name.isEmpty, !demoted.contains(where: { $0.name == name }) else { continue }
+                if identifiers(in: line).contains(where: { isEngine($0) || materialNames0.contains($0) }) {
+                    demoted.append((name, line))
+                }
+            }
+            if !demoted.isEmpty {
+                for i in helpers.indices {
+                    let refs = identifiers(in: helpers[i].body)
+                    let needed = demoted.filter { refs.contains($0.name) }
+                    guard !needed.isEmpty else { continue }
+                    helpers[i].body = needed.map { $0.line }.joined(separator: "\n") + "\n" + helpers[i].body
+                }
+            }
+        }
 
         // Stage-3 phase 2: 식-레벨 타입체커 — HLSL-관용 벡터 크기 혼합을 절단 삽입으로 MSL 화.
         // 확실한 크기만 개입(미지 0 = 무개입). 스테이지별 env(frag 는 frag 선언 varying 타입 우선).
@@ -120,7 +184,7 @@ public enum GLSLTranslator {
         for h in helpers { fnSizes[h.name] = GLSLTypeAdapter.typeSize(h.ret) ?? 0 }
         var fragSizeEnv = sizeEnv
         for vy in parseVaryings(fsrc) { fragSizeEnv[vy.name] = vy.type.components }
-        let fragMainBody = GLSLTypeAdapter.adapt(body: fragMainF.body,
+        let fragMainBody = GLSLTypeAdapter.adapt(body: fragMainBodyPre,
                                                  env: .init(vars: fragSizeEnv, functions: fnSizes))
         let vertMainBody = GLSLTypeAdapter.adapt(body: vertMainF.body,
                                                  env: .init(vars: sizeEnv, functions: fnSizes))
@@ -229,7 +293,7 @@ public enum GLSLTranslator {
         let ret: String
         let name: String
         let params: [Param]
-        let body: String
+        var body: String
         struct Param: Equatable { let type: String; let byRef: Bool; let name: String; var array: Bool = false }
     }
 
@@ -470,9 +534,15 @@ public enum GLSLTranslator {
     static func fileScopeConsts(_ src: String) -> [String] {
         var out: [String] = []
         var depth = 0
+        var pending: String? = nil  // 여러 줄 const(실물 tone_mapping 의 mat3 리터럴) — ';' 까지 수집
         for line in src.split(separator: "\n", omittingEmptySubsequences: false) {
             let t = line.trimmingCharacters(in: .whitespaces)
-            if depth == 0, t.hasPrefix("const ") { out.append(t) }
+            if var acc = pending {
+                acc += " " + t
+                if t.contains(";") { out.append(acc); pending = nil } else { pending = acc }
+            } else if depth == 0, t.hasPrefix("const ") {
+                if t.contains(";") { out.append(t) } else { pending = t }
+            }
             for c in line { if c == "{" { depth += 1 } else if c == "}" { depth = max(0, depth - 1) } }
         }
         return out

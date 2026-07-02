@@ -599,6 +599,114 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("constant float PLAIN = 2.0;"), "순수 const 는 기존대로 전역: \(t.msl)")
     }
 
+    func testDefineValueTrailingCommentStripped() {
+        // 실물 oscilloscope: `#define ampNormalizer 0.0625 // 1 / 16` — 주석이 치환값에 포함되면
+        // `x * 0.0625 // ...;` 로 세미콜론이 삼켜진다.
+        let src = """
+        #define ampNormalizer 0.0625 // 1 / 16
+        void main() { gl_FragColor = vec4(ampNormalizer); }
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("vec4(0.0625)"), out)
+        XCTAssertFalse(out.contains("0.0625 //"), "치환값에 주석 금지: \(out)")
+    }
+
+    func testMultiLineFileScopeConst() throws {
+        // 실물 tone_mapping: 여러 줄 mat3 const — 첫 줄만 캡처하면 constant 전역이 깨진다.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        const mat3 m1 = mat3(
+            0.5, 0.1, 0.0,
+            0.0, 0.5, 0.0,
+            0.0, 0.0, 0.5);
+        void main() { gl_FragColor = vec4(m1 * vec3(v_TexCoord, 1.0), 1.0); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("constant float3x3 m1 = float3x3("), t.msl)
+        XCTAssertTrue(t.msl.contains("0.0, 0.0, 0.5);"), "다중 줄 본문 포함: \(t.msl)")
+    }
+
+    func testReservedKeywordIdentifierRenamed() throws {
+        // 실물 test_shader: 헬퍼 파라미터명이 `fragment`(MSL 예약어).
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        vec3 circleIllumination(vec2 fragment, float radius) {
+            return vec3(fragment.x, fragment.y, radius);
+        }
+        void main() { gl_FragColor = vec4(circleIllumination(v_TexCoord, 0.5), 1.0); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertFalse(t.msl.contains("float2 fragment,"), "예약어 파라미터는 리네임: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("fragment float4 ef_main"), "본래 fragment 속성은 유지: \(t.msl)")
+    }
+
+    func testDemotedConstVisibleInHelpers() throws {
+        // 실물 radial_blur: 엔진 참조 const 가 헬퍼에서도 사용 — main 로컬 강등만으론 헬퍼가 못 본다.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        const vec2 kType = vec2(g_Texture0Resolution.x / g_Texture0Resolution.y, 1.0);
+        vec2 computeUV(vec2 uv) {
+            return (uv - 0.5) * kType;
+        }
+        void main() { gl_FragColor = texSample2D(g_Texture0, computeUV(v_TexCoord)); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        // 헬퍼 본문 안에서 kType 이 선언되거나(프렐류드) 파라미터로 공급돼야 — 미선언 참조가 없어야 한다.
+        XCTAssertFalse(t.msl.contains("constant float2 kType"), "엔진 참조 const 는 전역 금지")
+        let helperBody = t.msl.range(of: "computeUV").map { String(t.msl[$0.lowerBound...]) } ?? ""
+        XCTAssertTrue(helperBody.contains("kType ="), "헬퍼에서 kType 가시(프렐류드 선언): \(t.msl)")
+    }
+
+    func testFuncMacroTrailingCommentAndCrossStageVaryingMismatch() throws {
+        // 실물 oscilloscope: 함수형 매크로 본문 트레일링 주석이 ';' 를 삼킴.
+        let pre = ShaderPreprocessor.preprocess("""
+        #define avg(f) float(f * 0.5) //comment
+        void main() { x = avg(3.0)
+        ; }
+        """, combos: [:])
+        XCTAssertFalse(pre.contains("//comment"), pre)
+        // 실물 test_shader: vert vec4 / frag vec2 동명 varying — frag 치환에 스위즐.
+        let vert = """
+        varying vec4 v_TexCoord;
+        void main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = vec4(a_TexCoord, 0.0, 1.0); }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() { vec2 uv = v_TexCoord; gl_FragColor = texSample2D(g_Texture0, uv); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float2 uv = in.v_TexCoord.xy;"), t.msl)
+    }
+
+    func testMinMaxIntLiteralPromotedToFloat() {
+        // 실물 rounded_mask: MSL 은 max(1, float) 모호 — 정수 리터럴 승격.
+        let out = GLSLTypeAdapter.adapt(body: "float s = max(1, a / b);",
+                                        env: .init(vars: ["a": 1, "b": 1]))
+        XCTAssertEqual(out, "float s = max(1.0, a / b);")
+    }
+
+    func testSameNameHelpersAcrossStagesRenamed() throws {
+        // 실물 radial_blur: vert/frag 각자 동명 computeUV(다른 본문) — frag 쪽 리네임으로 공존.
+        let vert = """
+        varying vec2 v_TexCoord;
+        vec2 tweak(vec2 uv) { return uv * 2.0; }
+        void main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = tweak(a_TexCoord); }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        vec2 tweak(vec2 uv) { return uv * 0.5; }
+        void main() { gl_FragColor = texSample2D(g_Texture0, tweak(v_TexCoord)); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("tweak_f"), "frag 쪽 리네임: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("uv * 2.0") && t.msl.contains("uv * 0.5"), "두 정의 공존: \(t.msl)")
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")
