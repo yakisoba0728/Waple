@@ -458,7 +458,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private func engineUniform(time: Float, texRes: [SIMD4<Float>]) -> [Float] {
         var e = [Float](repeating: 0, count: 16 + 4 + 32)
         e[0] = 1; e[5] = 1; e[10] = 1; e[15] = 1   // identity mvp
-        e[16] = time                                // timeAndPad.x
+        e[16] = time; e[17] = 0.5; e[18] = 0.5  // timeAndPad = (time, pointerX, pointerY, 0) — 포인터 중립(라이브 연동 후속)
         for n in 0..<8 {
             let r = n < texRes.count ? texRes[n] : SIMD4<Float>(1, 1, 1, 1)
             let o = 20 + n * 4

@@ -557,6 +557,29 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("we_mod(3.0, 2.0)"), "본문 호출도 리네임: \(t.msl)")
     }
 
+    func testLocalShadowingOfVaryingsAndPointer() throws {
+        // 실물 chromatic_aberration 패턴 3종:
+        // ① 지역변수가 varying 을 섀도잉(vec4 timer = ...) — 치환하면 `float4 in.timer` 로 깨짐 → 맵에서 제외
+        // ② fragment 에서 varying 에 대입(v_TexCoord +=) — stage_in 은 불변 → 로컬 사본으로 승격
+        // ③ g_PointerPosition(마우스) 엔진 유니폼 — eng.timeAndPad.yz 매핑
+        let frag = """
+        varying vec4 v_TexCoord;
+        varying vec4 timer;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 timer = texSample2D(g_Texture0, v_TexCoord.xy);
+            v_TexCoord += g_PointerPosition.x * 0.01;
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord.xy) * timer;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float4 timer = g_Texture0.sample"), "섀도잉 지역은 원 이름 유지: \(t.msl)")
+        XCTAssertFalse(t.msl.contains("in.timer"), "섀도잉된 varying 은 본문에서 미치환: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("float4 v_TexCoord = in.v_TexCoord;"), "대입되는 varying 은 로컬 사본: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("v_TexCoord +="), t.msl)
+        XCTAssertTrue(t.msl.contains("eng.timeAndPad.yz"), "g_PointerPosition → eng 패딩 슬롯: \(t.msl)")
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

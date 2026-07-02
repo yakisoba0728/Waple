@@ -108,9 +108,29 @@ public enum GLSLTranslator {
         var helpers: [GLSLFunction] = []
         for h in vFns + fFns where h.name != "main" && helperSeen.insert(h.name).inserted { helpers.append(h) }
 
-        guard let fragBodyT = translateBody(fragMainF.body, symbols: frag, isFragment: true),
-              let vertBodyT = translateBody(vertMainF.body, symbols: vert, isFragment: false) else { return nil }
-        var fragBody = fragBodyT
+        // Stage-3 ①②: 지역 섀도잉(varying/머티리얼과 동명의 로컬 선언) → 해당 본문 맵에서 제외
+        // (치환하면 `float4 in.x = ...` 로 깨짐); fragment 의 varying 대입 → 로컬 사본으로 승격.
+        let fragLocals = localDeclNames(in: fragMainF.body)
+        let vertLocals = localDeclNames(in: vertMainF.body)
+        var fragMap = frag, vertMap = vert
+        var fragVaryingPrelude = ""
+        let fragVaryingTypes = Dictionary(parseVaryings(fsrc).map { ($0.name, $0.type) }, uniquingKeysWith: { a, _ in a })
+        for vy in varyings {
+            if fragLocals.contains(vy.name) { fragMap.removeValue(forKey: vy.name) }
+            else if isAssigned(vy.name, in: fragMainF.body) {
+                fragMap[vy.name] = vy.name
+                let ty = fragVaryingTypes[vy.name] ?? vy.type  // 스테이지 간 타입 불일치 시 frag 선언 우선
+                fragVaryingPrelude += "\(ty.msl) \(vy.name) = in.\(vy.name);\n"
+            }
+            if vertLocals.contains(vy.name) { vertMap.removeValue(forKey: vy.name) }
+        }
+        for m in materials {
+            if fragLocals.contains(m.glslName) { fragMap.removeValue(forKey: m.glslName) }
+            if vertLocals.contains(m.glslName) { vertMap.removeValue(forKey: m.glslName) }
+        }
+        guard let fragBodyT = translateBody(fragMainF.body, symbols: fragMap, isFragment: true),
+              let vertBodyT = translateBody(vertMainF.body, symbols: vertMap, isFragment: false) else { return nil }
+        var fragBody = fragVaryingPrelude + fragBodyT
         var vertBody = vertBodyT
 
         // 헬퍼 캡처 분석: 본문이 참조하는 컨텍스트 심볼(머티리얼/엔진/varying/attribute/텍스처/오디오/샘플러)을
@@ -388,12 +408,13 @@ public enum GLSLTranslator {
         return Int(digits)
     }
     static func isEngine(_ name: String) -> Bool {
-        name == "g_Time" || name == "g_ModelViewProjectionMatrix"
+        name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
             || name.hasPrefix("g_AudioSpectrum")
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Resolution"))
     }
     static func engineReplacement(_ name: String) -> String {
         if name == "g_Time" { return "eng.timeAndPad.x" }
+        if name == "g_PointerPosition" { return "eng.timeAndPad.yz" }  // 마우스 UV(0..1), 미구동 시 0.5,0.5
         if name == "g_ModelViewProjectionMatrix" { return "eng.mvp" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
         if name == "g_AudioSpectrum16Right" { return "audioR" }
@@ -581,7 +602,8 @@ public enum GLSLTranslator {
         switch cap {
         case .material(let i): return "\(materials[i].type.msl) \(materials[i].glslName)"
         case .engine(let n):
-            let t = n == "g_ModelViewProjectionMatrix" ? "float4x4" : (n.hasSuffix("Resolution") ? "float4" : "float")
+            let t = n == "g_ModelViewProjectionMatrix" ? "float4x4"
+                : (n.hasSuffix("Resolution") ? "float4" : (n == "g_PointerPosition" ? "float2" : "float"))
             return "\(t) \(n)"
         case .varying(let n, let t): return "\(t.msl) \(n)"
         case .attribute(let n, let t): return "\(t.msl) \(n)"
@@ -734,6 +756,60 @@ public enum GLSLTranslator {
             out.append(c); i += 1
         }
         return out
+    }
+
+    /// 본문의 지역 선언 이름( `<type> NAME =|;|,` ) — varying/머티리얼 섀도잉 감지용(Stage-3 ①).
+    static func localDeclNames(in body: String) -> Set<String> {
+        var out = Set<String>()
+        let chars = Array(body); var i = 0
+        func ident(_ j: inout Int) -> String {
+            var s = ""
+            while j < chars.count, chars[j].isLetter || chars[j] == "_" || (!s.isEmpty && chars[j].isNumber) { s.append(chars[j]); j += 1 }
+            return s
+        }
+        while i < chars.count {
+            if chars[i].isLetter || chars[i] == "_" {
+                var j = i
+                let t1 = ident(&j)
+                if mslType(t1) != nil, t1 != "void" {
+                    while j < chars.count, chars[j] == " " || chars[j] == "\t" { j += 1 }
+                    var k = j
+                    let name = ident(&k)
+                    if !name.isEmpty {
+                        while k < chars.count, chars[k] == " " || chars[k] == "\t" { k += 1 }
+                        if k < chars.count, chars[k] == "=" || chars[k] == ";" || chars[k] == "," { out.insert(name) }
+                    }
+                }
+                i = max(j, i + 1)
+                continue
+            }
+            i += 1
+        }
+        return out
+    }
+
+    /// 본문에서 NAME(스위즐 허용)에 대입(=, +=, -=, *=, /=; == 제외)이 있는지 — varying 쓰기 감지(Stage-3 ②).
+    static func isAssigned(_ name: String, in body: String) -> Bool {
+        let chars = Array(body); var i = 0
+        let n = Array(name)
+        while i <= chars.count - n.count {
+            if chars[i] == n[0], matchWord(chars, i, name), Array(chars[i..<i+n.count]) == n {
+                var j = i + n.count
+                if j < chars.count, chars[j] == "." {  // 스위즐 스킵
+                    j += 1
+                    while j < chars.count, chars[j].isLetter { j += 1 }
+                }
+                while j < chars.count, chars[j] == " " || chars[j] == "\t" { j += 1 }
+                if j < chars.count {
+                    if chars[j] == "=", j + 1 < chars.count, chars[j+1] != "=" { return true }
+                    if "+-*/".contains(chars[j]), j + 1 < chars.count, chars[j+1] == "=" { return true }
+                }
+                i += n.count
+                continue
+            }
+            i += 1
+        }
+        return false
     }
 
     /// 소스의 식별자 토큰 집합(본문 출현 스캔용).
