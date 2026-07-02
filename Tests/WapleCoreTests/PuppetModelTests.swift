@@ -5,7 +5,8 @@ final class PuppetModelTests: XCTestCase {
     /// 실측 MDLV0013 레이아웃대로 합성 바이트 구성(설계 문서 참조).
     private func makeMDL(material: String, verts: [(SIMD3<Float>, SIMD4<UInt32>, SIMD4<Float>, SIMD2<Float>)],
                          indices: [UInt16],
-                         bones: [(String, Int32, [Float])] = [("", -1, [0, 0])]) -> Data {
+                         bones: [(String, Int32, [Float])] = [("", -1, [0, 0])],
+                         anim: SynthAnim? = nil) -> Data {
         var d = Data("MDLV0013".utf8)
         d.append(Data([0x00, 0x09, 0x00, 0x80, 0x01, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]))  // 13B 헤더
         d.append(Data(material.utf8)); d.append(0)
@@ -41,7 +42,30 @@ final class PuppetModelTests: XCTestCase {
         var bc = UInt32(boneRecords.count); withUnsafeBytes(of: &bc) { d.append(contentsOf: $0) }
         d.append(body)
         d.append(Data("MDLA0001".utf8))
+        // 애니(실측): u8 0 | u32 nextOff | u32 count | u32 id | u32 0 |
+        // cstring 이름 | cstring 모드 | f32 fps | u32 길이 | u32 0 | u32 본수 | u32 0 |
+        // 본별: u32 트랙크기 | 키×36B(pos3f rot3f scale3f) | u32 블롭2크기(0)
+        if let anim = anim {
+            var a = Data([0])
+            func u(_ v: UInt32) { var x = v; withUnsafeBytes(of: &x) { a.append(contentsOf: $0) } }
+            func f(_ v: Float) { var x = v; withUnsafeBytes(of: &x) { a.append(contentsOf: $0) } }
+            u(0); u(1); u(355); u(0)
+            a.append(Data(anim.name.utf8)); a.append(0)
+            a.append(Data(anim.mode.utf8)); a.append(0)
+            f(anim.fps); u(UInt32(anim.length)); u(0); u(UInt32(anim.tracks.count)); u(0)
+            for keys in anim.tracks {
+                u(UInt32(keys.count * 36))
+                for k in keys { for v in k { f(v) } }
+                u(0)
+            }
+            d.append(a)
+        }
         return d
+    }
+
+    struct SynthAnim {
+        let name: String; let mode: String; let fps: Float; let length: Int
+        let tracks: [[[Float]]]  // 본별 키 배열, 키 = 9f
     }
 
     func testParsesSyntheticMesh() throws {
@@ -77,6 +101,28 @@ final class PuppetModelTests: XCTestCase {
         XCTAssertEqual(m.bones[1].name, "arm")
     }
 
+    func testParsesAnimation() throws {
+        let key0: [Float] = [10, 20, 0, 0, 0, 0, 1, 1, 1]
+        let key1: [Float] = [15, 25, 0, 0, 0, 0.5, 1, 1, 1]
+        let mdl = makeMDL(material: "materials/b.json",
+                          verts: [(SIMD3(0, 0, 0), SIMD4(0, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(0, 0))],
+                          indices: [0, 0, 0],
+                          bones: [("", -1, [10, 20])],
+                          anim: SynthAnim(name: "arm", mode: "mirror", fps: 20, length: 1, tracks: [[key0, key1]]))
+        let m = try XCTUnwrap(PuppetModel.parse(mdl))
+        XCTAssertEqual(m.animations.count, 1)
+        let a = m.animations[0]
+        XCTAssertEqual(a.name, "arm")
+        XCTAssertEqual(a.mode, "mirror")
+        XCTAssertGreaterThan(a.fps, 0)
+        XCTAssertEqual(a.lengthFrames, 1)
+        XCTAssertEqual(a.tracks.count, 1)
+        XCTAssertEqual(a.tracks[0].count, 2)
+        XCTAssertEqual(a.tracks[0][0].position, SIMD3<Float>(10, 20, 0))
+        XCTAssertEqual(a.tracks[0][1].angles.z, 0.5)
+        XCTAssertEqual(a.tracks[0][1].scale, SIMD3<Float>(1, 1, 1))
+    }
+
     func testRejectsGarbage() {
         XCTAssertNil(PuppetModel.parse(Data("NOPE".utf8)))
         XCTAssertNil(PuppetModel.parse(Data("MDLV0013".utf8)))  // 트렁케이트
@@ -109,5 +155,25 @@ final class PuppetRealFileTests: XCTestCase {
             }
         }
         XCTAssertTrue(counts.contains(1406), "실측 1406 정점 모델 포함: \(counts)")
+    }
+
+    func testRealAnimationTracks() throws {
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"] ?? (NSHomeDirectory() + "/Downloads/backgrounds")
+        let pkgURL = URL(fileURLWithPath: base).appendingPathComponent("2809885105/scene.pkg")
+        guard let data = try? Data(contentsOf: pkgURL) else { throw XCTSkip("no real pkg") }
+        let pkg = try ScenePackage.parse(data)
+        for e in pkg.entries where e.name.hasSuffix("_puppet.mdl") {
+            let m = try XCTUnwrap(PuppetModel.parse(try XCTUnwrap(pkg.data(for: e.name))))
+            XCTAssertEqual(m.animations.count, 1, e.name)
+            let a = m.animations[0]
+            XCTAssertGreaterThan(a.fps, 0)
+            XCTAssertEqual(a.tracks.count, m.bones.count, "본당 트랙 1개")
+            for (i, t) in a.tracks.enumerated() where !t.isEmpty {
+                XCTAssertEqual(t.count, a.lengthFrames + 1, "프레임당 1키(0..길이 포함)")
+                // 첫 키 위치는 바인드 평행이동과 정합(실측 특성)
+                let bind = m.bones[i].bind.columns.3
+                XCTAssertEqual(t[0].position.x, bind.x, accuracy: 500, "본\(i) 키 위치 자릿수 sanity")
+            }
+        }
     }
 }

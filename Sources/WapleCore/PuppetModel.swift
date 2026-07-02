@@ -9,7 +9,10 @@ import simd
 /// u32 인덱스블롭크기 | u16 인덱스(트라이앵글 리스트)
 /// "MDLS0001" | u8 0 | u32 다음섹션오프셋(=MDLA 위치, 실측 일치 검증) | u32 본수 |
 ///   본별: cstring 이름 | u32 flags | i32 부모(-1=루트) | u32 행렬크기(64) | float4x4 바인드 | u8 0
-/// "MDLA0001" 애니메이션(phase 3) ...
+/// "MDLA0001" | u8 0 | u32 다음오프셋(=EOF-1, 실측 일치) | u32 애니수 | u32 id | u32 0 |
+///   애니별: cstring 이름 | cstring 모드(loop/mirror/single) | f32 fps | u32 길이(프레임) | u32 0 |
+///   u32 본수 | u32 0 | 본별: u32 트랙크기 | 키×36B(pos 3f, 각 3f, 스케일 3f — 프레임당 1키, 0..길이 포함) |
+///   u32 블롭2크기(관측 0) | 블롭2
 ///
 /// 미상 필드는 관용 처리: 정점 블롭은 cstring 이후 16바이트 내에서 `%52==0 && 잔여 이내` u32 를 탐색.
 public struct PuppetModel: Equatable {
@@ -26,10 +29,25 @@ public struct PuppetModel: Equatable {
         public let bind: simd_float4x4    // 바인드(모델→본) 행렬 — 실측: 평행이동 위주
     }
 
+    public struct Key: Equatable {
+        public let position: SIMD3<Float>
+        public let angles: SIMD3<Float>   // 라디안 추정(z 회전 위주)
+        public let scale: SIMD3<Float>
+    }
+
+    public struct Animation: Equatable {
+        public let name: String
+        public let mode: String           // loop | mirror | single (실측: "mirror")
+        public let fps: Float
+        public let lengthFrames: Int
+        public let tracks: [[Key]]        // 본 인덱스별 키 배열(프레임당 1키), 빈 배열 = 정적 본
+    }
+
     public let material: String
     public let vertices: [Vertex]
     public let indices: [UInt16]
     public var bones: [Bone] = []
+    public var animations: [Animation] = []
 
     public static func parse(_ data: Data) -> PuppetModel? {
         let bytes = [UInt8](data)
@@ -114,6 +132,50 @@ public struct PuppetModel: Equatable {
                                   bind: simd_float4x4(cols[0], cols[1], cols[2], cols[3])))
             }
             model.bones = bones
+        }
+
+        // 애니메이션(있으면): "MDLA0001". 실패는 애니 없이 반환(정지 포즈 렌더 가능).
+        if o + 8 <= bytes.count, String(bytes: bytes[o..<o+8], encoding: .utf8) == "MDLA0001" {
+            o += 8 + 1  // magic + u8(0)
+            guard let _ = u32(o), let animCount = u32(o + 4) else { return model }
+            o += 16  // nextOff, count, id, 0
+            var anims: [Animation] = []
+            for _ in 0..<animCount {
+                func cstr() -> String? {
+                    var s = ""
+                    while o < bytes.count, bytes[o] != 0 { s.append(Character(UnicodeScalar(bytes[o]))); o += 1 }
+                    guard o < bytes.count else { return nil }
+                    o += 1
+                    return s
+                }
+                guard let name = cstr(), let mode = cstr(),
+                      let fps = f32(o), let length = u32(o + 4), let boneCount = u32(o + 12) else { return model }
+                o += 20  // fps, length, 0, boneCount, 0
+                var tracks: [[Key]] = []
+                for _ in 0..<boneCount {
+                    guard let tSizeRaw = u32(o) else { return model }
+                    o += 4
+                    let tSize = Int(tSizeRaw)
+                    guard tSize % 36 == 0, o + tSize <= bytes.count else { return model }
+                    var keys: [Key] = []
+                    keys.reserveCapacity(tSize / 36)
+                    for k in stride(from: 0, to: tSize, by: 36) {
+                        guard let px = f32(o + k), let py = f32(o + k + 4), let pz = f32(o + k + 8),
+                              let ax = f32(o + k + 12), let ay = f32(o + k + 16), let az = f32(o + k + 20),
+                              let sx = f32(o + k + 24), let sy = f32(o + k + 28), let sz = f32(o + k + 32)
+                        else { return model }
+                        keys.append(Key(position: SIMD3(px, py, pz), angles: SIMD3(ax, ay, az),
+                                        scale: SIMD3(sx, sy, sz)))
+                    }
+                    o += tSize
+                    guard let blob2Raw = u32(o) else { return model }
+                    o += 4 + Int(blob2Raw)
+                    tracks.append(keys)
+                }
+                anims.append(Animation(name: name, mode: mode, fps: fps,
+                                       lengthFrames: Int(length), tracks: tracks))
+            }
+            model.animations = anims
         }
         return model
     }
