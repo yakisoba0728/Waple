@@ -48,9 +48,12 @@ public enum ShaderPreprocessor {
     }
 
     /// `#if/#ifdef/#ifndef/#elif/#else/#endif` 평가. 활성 줄만 출력(지시문 줄 제거).
-    /// `#define NAME VAL`(정수) 도 처리해 이후 식에서 사용.
+    /// `#define NAME VAL` 은 정수면 식 평가에 쓰고, object-like 정의는 모두 본문 텍스트 치환한다
+    /// (combos 포함 — WE 는 combos 를 #define 으로 주입하므로 본문 참조가 합법).
+    /// 함수형 매크로(`#define F(x) ...`)는 v1 미지원: 정의 줄만 제거(호출부 원형 → 컴파일 실패 시 스킵 안전망).
     private static func evaluateConditionals(_ source: String, defines: [String: Int]) -> String {
         var d = defines
+        var textDefines: [String: String] = [:]
         var out: [String] = []
         // 스택: (이 분기 출력중?, 이 #if 체인에서 이미 참 분기를 만났나?, 부모가 활성인가)
         struct Frame { var active: Bool; var taken: Bool; var parentActive: Bool }
@@ -84,15 +87,48 @@ public enum ShaderPreprocessor {
                 if !stack.isEmpty { stack.removeLast() }
             } else if t.hasPrefix("#define "), emitting() {
                 let parts = t.dropFirst(8).split(separator: " ", maxSplits: 1)
-                if parts.count == 2, let v = Int(parts[1].trimmingCharacters(in: .whitespaces)) {
-                    d[String(parts[0])] = v
+                let name = parts.count >= 1 ? String(parts[0]) : ""
+                if name.isEmpty || name.contains("(") {
+                    // 함수형 매크로 또는 빈 이름: 정의 줄만 제거.
+                } else if parts.count == 2 {
+                    let value = parts[1].trimmingCharacters(in: .whitespaces)
+                    if let v = Int(value) { d[name] = v }
+                    textDefines[name] = value
+                } else {
+                    d[name] = 1  // 값 없는 #define NAME → #ifdef 용, 본문 치환은 안 함(빈 치환은 위험)
                 }
-                // #define 줄은 출력에서 제거(매크로 본문은 식 평가에만 사용)
+                // #define 줄은 출력에서 제거
             } else if emitting() {
                 out.append(line)
             }
         }
-        return out.joined(separator: "\n")
+        // 본문 텍스트 치환: object-like 정의 + 정수 defines(combos 포함). 체인 정의는 fixpoint 까지(캡 8).
+        var subst = textDefines
+        for (k, v) in d where subst[k] == nil { subst[k] = String(v) }
+        var body = out.joined(separator: "\n")
+        guard !subst.isEmpty else { return body }
+        for _ in 0..<8 {
+            let next = substituteIdentifiers(body, subst)
+            if next == body { break }
+            body = next
+        }
+        return body
+    }
+
+    /// whole-word 식별자 치환(단일 패스).
+    private static func substituteIdentifiers(_ src: String, _ map: [String: String]) -> String {
+        let chars = Array(src); var out = ""; var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if c.isLetter || c == "_" {
+                var id = ""
+                while i < chars.count, chars[i].isLetter || chars[i].isNumber || chars[i] == "_" { id.append(chars[i]); i += 1 }
+                out += map[id] ?? id
+                continue
+            }
+            out.append(c); i += 1
+        }
+        return out
     }
 
     // MARK: - 작은 헬퍼
@@ -132,7 +168,7 @@ public enum ShaderPreprocessor {
 /// 다룬다. 함수 호출/문자열/부수효과 없음 → 셰이더 입력으로부터 코드 인젝션 불가.
 enum ExprEval {
     static func eval(_ expr: String, defines: [String: Int]) -> Int {
-        var toks = tokenize(expr)
+        let toks = tokenize(expr)
         var pos = 0
         func peek() -> String? { pos < toks.count ? toks[pos] : nil }
         func next() -> String? { defer { pos += 1 }; return peek() }
@@ -186,7 +222,6 @@ enum ExprEval {
             while peek() == "||" { pos += 1; let r = parseAnd(); v = (v != 0 || r != 0) ? 1 : 0 }
             return v
         }
-        _ = toks  // silence
         return parseOr()
     }
 

@@ -62,6 +62,43 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertTrue(ShaderPreprocessor.preprocess(src, combos: ["A": 9]).contains("other"))
     }
 
+    func testNonIntegerDefineSubstitutedInBody() {
+        let src = """
+        #define AMOUNT 0.5
+        #define OFFSET vec2(0.1, 0.2)
+        float x = AMOUNT;
+        vec2 o = OFFSET;
+        float y = AMOUNTX;
+        """
+        let r = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertFalse(r.contains("#define"))
+        XCTAssertTrue(r.contains("float x = 0.5;"), r)
+        XCTAssertTrue(r.contains("vec2 o = vec2(0.1, 0.2);"), r)
+        XCTAssertTrue(r.contains("float y = AMOUNTX;"), "whole-word only: \(r)")
+    }
+
+    func testIntegerDefineAndComboSubstitutedInBody() {
+        let src = "#define MODE 2\n#if MODE == 2\nyes\n#endif\nint m = MODE;\nint k = MASK;"
+        let r = ShaderPreprocessor.preprocess(src, combos: ["MASK": 1])
+        XCTAssertTrue(r.contains("yes"))
+        XCTAssertTrue(r.contains("int m = 2;"), r)
+        XCTAssertTrue(r.contains("int k = 1;"), "combos are macros in WE GLSL: \(r)")
+    }
+
+    func testChainedDefinesReachFixpoint() {
+        let src = "#define A B\n#define B 2.0\nfloat v = A;"
+        let r = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(r.contains("float v = 2.0;"), r)
+    }
+
+    func testFunctionLikeDefineLeftAlone() {
+        // 함수형 매크로는 v1 미지원: 정의 줄만 제거, 호출부는 원형 유지(→ 컴파일 실패 시 스킵 안전망).
+        let src = "#define DOUBLE(x) ((x)*2.0)\nfloat v = DOUBLE(3.0);"
+        let r = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertFalse(r.contains("#define"))
+        XCTAssertTrue(r.contains("DOUBLE(3.0)"), r)
+    }
+
     func testExprEvalDirect() {
         XCTAssertEqual(ExprEval.eval("1 + 2 * 3", defines: [:]), 7)
         XCTAssertEqual(ExprEval.eval("(1 + 2) * 3", defines: [:]), 9)
