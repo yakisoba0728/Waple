@@ -66,6 +66,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var hasEffects = false
     private var hasAudio = false
     private var currentSpectrum = AudioSpectrum16.silent
+    // 고해상 스펙트럼(오디오 바 시각화). provider 프레임(64L+64R)에서 유지, 32빈은 쌍평균 파생.
+    private var left64 = [Float](repeating: 0, count: 64)
+    private var right64 = [Float](repeating: 0, count: 64)
+    private var left32 = [Float](repeating: 0, count: 32)
+    private var right32 = [Float](repeating: 0, count: 32)
     private var audioProvider: SystemAudioSpectrumProvider?
     private var effectVertexBuffer: MTLBuffer?
     private var effectQuadInterleaved: MTLBuffer?   // 변환 효과용 인터리브드 풀스크린 쿼드(pos.xyz + uv.xy)
@@ -196,6 +201,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             provider.onFrame = { [weak self] spec in
                 let bins = AudioSpectrum16.downsample16(spec)
                 self?.currentSpectrum = AudioSpectrum16(left: bins, right: bins)
+                if spec.count >= 128 {
+                    self?.setSpectrum64(left: Array(spec[0..<64]), right: Array(spec[64..<128]))
+                }
             }
             provider.start()
             audioProvider = provider
@@ -889,17 +897,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
             enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
             for (slot, tex) in aux { enc.setFragmentTexture(tex, index: slot) }
-            if usesAudio {  // g_AudioSpectrum16Left/Right → buffer(2)/(3). 셰이더는 사용하는 스테이지에만
-                // 파라미터를 방출하므로 양쪽에 바인드(미사용 스테이지 바인드는 무해; 실제 pulse 는 vert 에서 소비).
-                let l = currentSpectrum.left, r = currentSpectrum.right
-                l.withUnsafeBytes {
-                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 2)
-                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2)
+            if usesAudio {  // 스펙트럼 버퍼(16:2/3, 32:5/6, 64:7/8 — GLSLTranslator.audioBufferNames).
+                // 셰이더는 사용하는 스테이지/해상도에만 파라미터를 방출하므로 전부 바인드해도 무해.
+                func bind(_ arr: [Float], _ idx: Int) {
+                    arr.withUnsafeBytes {
+                        enc.setVertexBytes($0.baseAddress!, length: $0.count, index: idx)
+                        enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: idx)
+                    }
                 }
-                r.withUnsafeBytes {
-                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 3)
-                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 3)
-                }
+                bind(currentSpectrum.left, 2); bind(currentSpectrum.right, 3)
+                bind(left32, 5); bind(right32, 6)
+                bind(left64, 7); bind(right64, 8)
             }
         }
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -908,6 +916,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 합성 스펙트럼 주입(헤드리스 검증/테스트용). 라이브에선 provider 가 갱신.
     public func setSpectrum(_ spectrum: AudioSpectrum16) { currentSpectrum = spectrum }
+
+    /// 고해상(64빈/채널) 스펙트럼 주입 — 32빈은 쌍평균 파생(오디오 바 효과용).
+    public func setSpectrum64(left: [Float], right: [Float]) {
+        left64 = Array(left.prefix(64)) + [Float](repeating: 0, count: max(0, 64 - left.count))
+        right64 = Array(right.prefix(64)) + [Float](repeating: 0, count: max(0, 64 - right.count))
+        left32 = (0..<32).map { (left64[$0 * 2] + left64[$0 * 2 + 1]) / 2 }
+        right32 = (0..<32).map { (right64[$0 * 2] + right64[$0 * 2 + 1]) / 2 }
+    }
 
     /// 헤드리스 시각 검증: 레이어(베이스, 효과 제외) + 파티클을 오프스크린에 렌더해 각 time 의 PNG 를 저장.
     /// 시뮬은 t=0 에서 새로 시작해 1/30 스텝으로 각 time 까지 진행(재현 가능). 데스크탑 가림과 무관.

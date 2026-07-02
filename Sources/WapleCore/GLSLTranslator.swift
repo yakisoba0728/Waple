@@ -72,7 +72,7 @@ public enum GLSLTranslator {
         // 본문 토큰 출현으로도 인식(Stage-2 gate 1). 텍스처 슬롯도 방어적으로 본문 스캔 병합.
         let bodyIds = identifiers(in: vClean).union(identifiers(in: fClean))
         for id in bodyIds {
-            if id.contains("AudioSpectrum16") { usesAudio = true }
+            if id.contains("AudioSpectrum") { usesAudio = true }
             if id.hasPrefix("g_Texture"), !id.hasSuffix("Resolution"), let n = textureIndex(id) { textures.append(n) }
         }
         textures = Array(Set(textures)).sorted()
@@ -159,11 +159,12 @@ public enum GLSLTranslator {
             }
         }
 
-        // 스테이지별 오디오 파라미터: 최종 본문에 audioL/R 참조가 남은 스테이지에만 방출(캡처 인자 포함).
-        let vertAudio = vertBody.contains("audioL") || vertBody.contains("audioR")
-        let fragAudio = fragBody.contains("audioL") || fragBody.contains("audioR")
+        // 스테이지별 오디오 파라미터: 최종 본문에 남은 참조 이름별로 방출(word-정확; 16/32/64 해상도별 버퍼).
+        let vertIds = identifiers(in: vertBody)
+        let fragIds = identifiers(in: fragBody)
         let msl = assemble(varyings: varyings, textures: textures, materialCount: materials.count,
-                           vertAudio: vertAudio, fragAudio: fragAudio,
+                           vertAudioNames: audioBufferNames.filter { vertIds.contains($0.name) },
+                           fragAudioNames: audioBufferNames.filter { fragIds.contains($0.name) },
                            consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
                            vertBody: vertBody, fragBody: fragBody)
         return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio)
@@ -396,6 +397,10 @@ public enum GLSLTranslator {
         if name == "g_ModelViewProjectionMatrix" { return "eng.mvp" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
         if name == "g_AudioSpectrum16Right" { return "audioR" }
+        if name == "g_AudioSpectrum32Left" { return "audioL32" }
+        if name == "g_AudioSpectrum32Right" { return "audioR32" }
+        if name == "g_AudioSpectrum64Left" { return "audioL64" }
+        if name == "g_AudioSpectrum64Right" { return "audioR64" }
         if name.hasPrefix("g_Texture"), name.hasSuffix("Resolution"),
            let n = Int(name.dropFirst("g_Texture".count).dropLast("Resolution".count)) {
             return "eng.texRes[\(n)]"
@@ -428,7 +433,7 @@ public enum GLSLTranslator {
     private static func typeAndMacroRenames() -> [String: String] {
         ["vec2": "float2", "vec3": "float3", "vec4": "float4", "mat3": "float3x3", "mat4": "float4x4",
          "CAST2": "float2", "CAST3": "float3", "CAST4": "float4",
-         "frac": "fract", "lerp": "mix", "ddx": "dfdx", "ddy": "dfdy",
+         "frac": "fract", "lerp": "mix", "ddx": "dfdx", "ddy": "dfdy", "inverse": "we_inverse", "mod": "we_mod",
          "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679", "M_PI_2": "6.28318530718"]
     }
 
@@ -528,7 +533,9 @@ public enum GLSLTranslator {
                 caps.append(.attribute(n, t))
             }
             for n in textures where refs.contains("g_Texture\(n)") { caps.append(.texture(n)) }
-            for n in ["g_AudioSpectrum16Left", "g_AudioSpectrum16Right"] where refs.contains(n) { caps.append(.audio(n)) }
+            for n in ["g_AudioSpectrum16Left", "g_AudioSpectrum16Right",
+                      "g_AudioSpectrum32Left", "g_AudioSpectrum32Right",
+                      "g_AudioSpectrum64Left", "g_AudioSpectrum64Right"] where refs.contains(n) { caps.append(.audio(n)) }
             // 텍스처 샘플링(자기 파라미터의 sampler2D 포함)엔 공용 샘플러가 필요.
             if refs.contains("texSample2D") || refs.contains("texSample2DLod")
                 || h.params.contains(where: { $0.type == "sampler2D" }) || caps.contains(where: { if case .texture = $0 { return true }; return false }) {
@@ -538,6 +545,11 @@ public enum GLSLTranslator {
         }
         return out
     }
+
+    /// 오디오 스펙트럼 파라미터 이름 ↔ 고정 버퍼 인덱스(양 스테이지 공통; 4 는 vertex 쿼드 버퍼라 회피).
+    static let audioBufferNames: [(name: String, buffer: Int)] = [
+        ("audioL", 2), ("audioR", 3), ("audioL32", 5), ("audioR32", 6), ("audioL64", 7), ("audioR64", 8),
+    ]
 
     /// 캡처 파라미터의 헬퍼 내부 이름(원 GLSL 이름 유지 — 다른 헬퍼 호출 시 그대로 전달).
     static func rawCaptureName(_ cap: Capture, materials: [MaterialParam]) -> String {
@@ -560,7 +572,7 @@ public enum GLSLTranslator {
         case .varying(let n, _): return isFragment ? "in.\(n)" : "out.\(n)"
         case .attribute(let n, _): return "vin.\(n)"  // fragment 에선 비합법 → 컴파일 실패 → 폴백(의도)
         case .texture(let n): return "g_Texture\(n)"
-        case .audio(let n): return n == "g_AudioSpectrum16Left" ? "audioL" : "audioR"
+        case .audio(let n): return engineReplacement(n)  // audioL/audioR/audioL32/... 매핑 공유
         case .sampler: return "smp"
         }
     }
@@ -608,7 +620,10 @@ public enum GLSLTranslator {
     }
 
     private static func assemble(varyings: [(type: GLSLType, name: String)], textures: [Int],
-                                 materialCount: Int, vertAudio: Bool, fragAudio: Bool, consts: [String] = [],
+                                 materialCount: Int,
+                                 vertAudioNames: [(name: String, buffer: Int)] = [],
+                                 fragAudioNames: [(name: String, buffer: Int)] = [],
+                                 consts: [String] = [],
                                  helperProtos: [String] = [], helperDefs: [String] = [],
                                  vertBody: String, fragBody: String) -> String {
         var vary = "struct Vary {\n  float4 gl_Position [[position]];\n"
@@ -622,18 +637,38 @@ public enum GLSLTranslator {
         inline float2 we_uv(float3 v) { return v.xy; }
         inline float2 we_uv(float4 v) { return v.xy; }
         inline float2 we_uv(float v) { return float2(v); }
+        // GLSL mod(x,y) = x - y*floor(x/y) — fmod 와 달리 음수에서 항상 y 부호(오프셋 스크롤 등에 중요).
+        inline float we_mod(float x, float y) { return x - y * metal::floor(x / y); }
+        inline float2 we_mod(float2 x, float y) { return x - y * metal::floor(x / y); }
+        inline float2 we_mod(float2 x, float2 y) { return x - y * metal::floor(x / y); }
+        inline float3 we_mod(float3 x, float y) { return x - y * metal::floor(x / y); }
+        inline float3 we_mod(float3 x, float3 y) { return x - y * metal::floor(x / y); }
+        inline float4 we_mod(float4 x, float y) { return x - y * metal::floor(x / y); }
+        inline float4 we_mod(float4 x, float4 y) { return x - y * metal::floor(x / y); }
+        // GLSL inverse() 대응(MSL 미내장) — 3x3 adjugate. det≈0 가드(항등 반환).
+        inline float3x3 we_inverse(float3x3 m) {
+            float3 r0 = cross(m[1], m[2]);
+            float3 r1 = cross(m[2], m[0]);
+            float3 r2 = cross(m[0], m[1]);
+            float det = dot(m[0], r0);
+            if (metal::abs(det) < 1e-12) { return float3x3(1.0); }
+            return transpose(float3x3(r0, r1, r2)) * (1.0 / det);
+        }
 
         """
 
         // fragment 텍스처 파라미터
         var fragTex = textures.map { "texture2d<float> g_Texture\($0) [[texture(\($0))]]" }.joined(separator: ",\n                        ")
         if !fragTex.isEmpty { fragTex = ",\n                        " + fragTex }
-        let audioParams = ", constant float* audioL [[buffer(2)]], constant float* audioR [[buffer(3)]]"
-        let audioFrag = fragAudio ? ",\n                        constant float* audioL [[buffer(2)]], constant float* audioR [[buffer(3)]]" : ""
+        func audioDecl(_ names: [(name: String, buffer: Int)], sep: String) -> String {
+            names.map { "\(sep)constant float* \($0.name) [[buffer(\($0.buffer))]]" }.joined()
+        }
+        let audioParams = audioDecl(vertAudioNames, sep: ", ")
+        let audioFrag = audioDecl(fragAudioNames, sep: ",\n                        ")
         let pFrag = materialCount > 0 ? ",\n                        constant float4* p [[buffer(0)]]" : ""
 
         let vertSig = """
-        vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(vertAudio ? audioParams : "")) {
+        vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(audioParams)) {
             Vary out;
         \(indent(vertBody))
             return out;

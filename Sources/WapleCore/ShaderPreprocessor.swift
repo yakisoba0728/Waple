@@ -86,13 +86,14 @@ public enum ShaderPreprocessor {
                 f.active = f.parentActive && cond
                 f.taken = f.taken || cond
                 stack.append(f)
-            } else if t == "#else" {
+            } else if t == "#else" || t.hasPrefix("#else ") || t.hasPrefix("#else//") {
+                // 꼬리 주석 허용(`#else // foo`) — 미인식 시 지시문이 출력에 남아 MSL 컴파일 실패.
                 guard !stack.isEmpty else { continue }
                 var f = stack.removeLast()
                 f.active = f.parentActive && !f.taken
                 f.taken = true
                 stack.append(f)
-            } else if t == "#endif" {
+            } else if t == "#endif" || t.hasPrefix("#endif ") || t.hasPrefix("#endif//") {
                 if !stack.isEmpty { stack.removeLast() }
             } else if t.hasPrefix("#define "), emitting() {
                 let decl = String(t.dropFirst(8))

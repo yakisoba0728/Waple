@@ -127,6 +127,17 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertFalse(r.contains("\r"), "출력은 LF 정규화: \(r)")
     }
 
+    func testDirectivesWithTrailingComments() {
+        // 실물: `#endif // MASK` / `#else // foo` — 꼬리 주석이 있어도 지시문으로 인식돼야 한다.
+        let src = "#if MASK\nmasked\n#else // fallback\nunmasked\n#endif // MASK\nafter"
+        let r = ShaderPreprocessor.preprocess(src, combos: ["MASK": 0])
+        XCTAssertTrue(r.contains("unmasked"), r)
+        XCTAssertTrue(r.contains("after"), r)
+        XCTAssertFalse(r.contains("#endif"), "지시문이 출력에 남으면 MSL 에서 '#endif without #if': \(r)")
+        XCTAssertFalse(r.split(separator: "\n").map(String.init).contains("masked"),
+                       "비활성 분기 줄 제외(‘unmasked’ 부분문자열 오탐 방지): \(r)")
+    }
+
     func testExprEvalDirect() {
         XCTAssertEqual(ExprEval.eval("1 + 2 * 3", defines: [:]), 7)
         XCTAssertEqual(ExprEval.eval("(1 + 2) * 3", defines: [:]), 9)

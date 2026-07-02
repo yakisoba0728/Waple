@@ -510,6 +510,53 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("inline float rand_1_05(float2 uv)"), t.msl)
     }
 
+    func testInverseAndHiResAudioSpectrum() throws {
+        // 실물 lightshafts: inverse(mat3) — MSL 미내장 → we_inverse 헬퍼. 오디오 바 효과: 32/64빈 스펙트럼.
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            mat3 m = mat3(1.0);
+            mat3 inv = inverse(m);
+            gl_Position = vec4(a_Position * inv[0][0], 1.0);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.r *= g_AudioSpectrum64Left[int(v_TexCoord.x * 64.0)];
+            c.g *= g_AudioSpectrum32Right[0];
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.usesAudio)
+        XCTAssertTrue(t.msl.contains("we_inverse("), "inverse → we_inverse 리네임: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("inline float3x3 we_inverse(float3x3"), "3x3 역행렬 헬퍼 방출")
+        XCTAssertTrue(t.msl.contains("audioL64[int(in.v_TexCoord.x * 64.0)]"), t.msl)
+        XCTAssertTrue(t.msl.contains("constant float* audioL64 [[buffer(7)]]"), t.msl)
+        XCTAssertTrue(t.msl.contains("constant float* audioR32 [[buffer(6)]]"), t.msl)
+        XCTAssertFalse(t.msl.contains("audioL [[buffer(2)]]"), "16빈 미사용이면 미방출: \(t.msl)")
+    }
+
+    func testGLSLModHelper() throws {
+        // GLSL mod(x,y) = x - y*floor(x/y) (음수에서 fmod 와 다름) → we_mod 헬퍼.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec2 uv = mod(v_TexCoord * 4.0, 1.0);
+            gl_FragColor = texSample2D(g_Texture0, uv) * mod(3.0, 2.0);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("we_mod(in.v_TexCoord * 4.0, 1.0)"), t.msl)
+        XCTAssertTrue(t.msl.contains("inline float we_mod(float x, float y)"), t.msl)
+        XCTAssertTrue(t.msl.contains("we_mod(3.0, 2.0)"), "본문 호출도 리네임: \(t.msl)")
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

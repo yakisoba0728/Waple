@@ -219,4 +219,54 @@ final class SceneAudioRenderTests: XCTestCase {
         XCTAssertLessThan(lo, 0.1, "silent → gain 0 → black (변환 경로가 스킵되면 1.0)")
         XCTAssertGreaterThan(hi, 0.8, "full spectrum → gain 1 → white")
     }
+
+    /// 64빈 스펙트럼(오디오 바 시각화) end-to-end: frag 가 g_AudioSpectrum64Left 로 밝기 결정.
+    func testHiResSpectrumEndToEnd() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= g_AudioSpectrum64Left[10] * g_AudioSpectrum32Right[5];
+            gl_FragColor = c;
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/bars/effect.json","passes":[{}]}]}]}
+        """
+        let pkg = encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("shaders/effects/bars.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/bars.frag", frag.data(using: .utf8)!),
+        ])
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_hires", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try pkg.write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "hires", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "hires", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_hires")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let lo = avgLuma(try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first))
+        r.setSpectrum64(left: [Float](repeating: 1, count: 64), right: [Float](repeating: 1, count: 64))
+        let hi = avgLuma(try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.2], toDir: out).first))
+        NSLog("%@", "[Waple] hi-res spectrum luma silent=\(lo) full=\(hi)")
+        XCTAssertLessThan(lo, 0.1, "무음 → 검정 (미지원이면 스킵 → 1.0)")
+        XCTAssertGreaterThan(hi, 0.8, "풀 스펙트럼 → 흰색")
+    }
 }
