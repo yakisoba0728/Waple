@@ -169,6 +169,36 @@ final class SceneCompositeConventionTests: XCTestCase {
         XCTAssertEqual(luma, 1.0, accuracy: 0.03, "passthrough 컴포지션은 항등이어야")
     }
 
+    /// 텍스트 레이어: 검정 bg 중앙에 큰 흰색 "HELLO" → 중앙 행에 밝은 픽셀 존재(미지원이면 전부 검정).
+    func testTextLayerRendersGlyphs() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"text":"HELLO","font":"systemfont_arial","pointsize":300.0,"color":"1 1 1","alpha":1,
+            "horizontalalign":"center","verticalalign":"center","origin":"960 540 0","size":"1 1",
+            "visible":{"value":true}}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_text", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([("scene.json", scene.data(using: .utf8)!)]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "text", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "text", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_cc_text")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 128, height: 72, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        var bright = 0
+        for x in stride(from: 0, to: 128, by: 2) {
+            if let c = rep.colorAt(x: x, y: 36), c.redComponent > 0.7 { bright += 1 }
+        }
+        NSLog("%@", "[Waple] text bright-px(center row)=\(bright) | \(url.path)")
+        XCTAssertGreaterThan(bright, 3, "중앙 행에 글리프 픽셀이 있어야(미지원이면 0)")
+    }
+
     /// 솔리드 레이어(무텍스처 flat 머티리얼): 흰 bg 위 검정 α0.5 솔리드 → luma ≈ 0.5.
     /// (솔리드 미지원이면 레이어 드롭 → 1.0.)
     func testSolidLayerRendersColorFill() throws {

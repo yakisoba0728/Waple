@@ -40,6 +40,20 @@ final class TextEngineTests: XCTestCase {
         XCTAssertEqual(engine.evaluate(current: ""), "okv")
     }
 
+    /// ES import 구문(실물 다수) → 바인딩을 no-op 프록시로 치환해 로드가 죽지 않아야 한다.
+    func testImportStatementsNeutralized() throws {
+        let script = """
+        'use strict';
+        import * as utils from './utils.js';
+        import helper from './helper.js';
+        import { a, b } from './ab.js';
+        export function update(value) { utils.doThing(); return 'ran' + a; }
+        """
+        let engine = try XCTUnwrap(TextScriptEngine(script: script), "import 가 로드를 막으면 안 됨")
+        // utils.doThing() 은 no-op 프록시로 통과; 'ran' + proxy → 문자열화
+        XCTAssertNotNil(engine.evaluate(current: ""))
+    }
+
     /// 깨진 스크립트/update 부재 → nil (텍스트 비움, graceful).
     func testBrokenScriptReturnsNil() {
         XCTAssertNil(TextScriptEngine(script: "syntax error here ((("))

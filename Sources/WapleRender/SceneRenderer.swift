@@ -24,8 +24,24 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let texRatio: Float   // texH/texW (스프라이트 세로 비율)
         let order: Int        // scene objects[] 인덱스 — 레이어와 인터리브 z-순서
     }
-    /// 씬 오브젝트 순서의 병합 드로우 플랜(레이어/파티클 인터리브). mount 에서 1회 구성.
-    private struct DrawItem { let isParticle: Bool; let idx: Int }
+    /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 스크립트는 초당 재평가 → 변경 시 재래스터.
+    private struct GPUText {
+        var texture: MTLTexture?
+        var vertexBuffer: MTLBuffer?
+        let tint: SIMD4<Float>
+        let order: Int
+        let engine: TextScriptEngine?
+        var lastText: String
+        let fontData: Data?
+        let systemFontName: String?
+        let def: SceneTextLayer
+    }
+    private var textLayers: [GPUText] = []
+    private var hasScriptedText = false
+    private var lastTextRefreshSecond = 0
+
+    /// 씬 오브젝트 순서의 병합 드로우 플랜(레이어/파티클/텍스트 인터리브). mount 에서 1회 구성.
+    private struct DrawItem { enum Kind { case layer, particle, text }; let kind: Kind; let idx: Int }
     private var drawPlan: [DrawItem] = []
 
     private var videoRenderer: VideoRenderer?
@@ -128,9 +144,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             additivePipeline = particlePipeline(additive: true, device: device)
             translucentPipeline = particlePipeline(additive: false, device: device)
         }
-        // 씬 오브젝트 순서(z-순서)대로 레이어·파티클을 인터리브 드로우.
-        drawPlan = (layers.enumerated().map { (i, l) in (l.order, DrawItem(isParticle: false, idx: i)) }
-                    + particleSystems.enumerated().map { (i, p) in (p.order, DrawItem(isParticle: true, idx: i)) })
+        textLayers = buildTexts(doc: doc, package: package, device: device)
+        // 씬 오브젝트 순서(z-순서)대로 레이어·파티클·텍스트를 인터리브 드로우.
+        drawPlan = (layers.enumerated().map { (i, l) in (l.order, DrawItem(kind: .layer, idx: i)) }
+                    + particleSystems.enumerated().map { (i, p) in (p.order, DrawItem(kind: .particle, idx: i)) }
+                    + textLayers.enumerated().map { (i, t) in (t.order, DrawItem(kind: .text, idx: i)) })
             .sorted { $0.0 < $1.0 }
             .map { $0.1 }
 
@@ -164,7 +182,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
              1,  1, 0,  1, 0,
         ]
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
-        if hasEffects || hasParticles {
+        if hasEffects || hasParticles || hasScriptedText {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
             view.preferredFramesPerSecond = 30
@@ -602,7 +620,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
-        if hasEffects || hasParticles, view.window?.occlusionState.contains(.visible) == false { return }
+        if hasEffects || hasParticles || hasScriptedText, view.window?.occlusionState.contains(.visible) == false { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
@@ -611,6 +629,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var dt = Float(nowT - lastFrameTime); lastFrameTime = nowT
         dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
 
+        refreshScriptedTexts(device: device)  // 초당 1회 update() 재평가(시계 등)
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
         let displayTextures = buildDisplayTextures(device: device, queue: queue, time: time, cb: cb)
 
@@ -637,18 +656,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
         guard var enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
-        // 씬 오브젝트 순서대로 레이어·파티클 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
+        // 씬 오브젝트 순서대로 레이어·파티클·텍스트 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
         for item in drawPlan {
-            if item.isParticle {
+            switch item.kind {
+            case .particle:
                 let snapshot = particleSystems[item.idx].sim.step(dt)
                 encodeParticle(particleSystems[item.idx], snapshot: snapshot, into: enc, device: device,
                                camOffset: &camOffset, aspectScale: &aspectScale)
-            } else if layers[item.idx].isFrameBuffer {
+            case .text:
+                encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale)
+            case .layer where layers[item.idx].isFrameBuffer:
                 guard let next = runFrameBufferLayer(layers[item.idx], acc: acc, cb: cb, ending: enc,
                                                      device: device, time: time,
                                                      camOffset: &camOffset, aspectScale: &aspectScale) else { return }
                 enc = next
-            } else {
+            case .layer:
                 encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
                             camOffset: &camOffset, aspectScale: &aspectScale)
             }
@@ -674,6 +696,89 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         enc.setFragmentTexture(texture, index: 0)
+        enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+
+    /// 텍스트 오브젝트 준비: 폰트 바이트(pkg→base-assets) + 스크립트 엔진 + 초기 텍스트 래스터.
+    private func buildTexts(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPUText] {
+        var out: [GPUText] = []
+        for t in doc.texts {
+            let isSystem = t.font.hasPrefix("systemfont_") || t.font.isEmpty
+            let fontData = isSystem ? nil : quietAssetData(t.font, package: package)
+            if !isSystem && fontData == nil { NSLog("%@", "[Waple] text font missing (system fallback): \(t.font)") }
+            let engine = t.script.flatMap { TextScriptEngine(script: $0) }
+            if t.script != nil && engine == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
+            let initial = engine != nil ? (engine!.evaluate(current: t.text) ?? "") : t.text
+            var g = GPUText(texture: nil, vertexBuffer: nil,
+                            tint: SIMD4(t.color.x, t.color.y, t.color.z, t.alpha),
+                            order: t.order, engine: engine, lastText: initial,
+                            fontData: fontData, systemFontName: isSystem ? t.font : nil, def: t)
+            rasterize(&g, device: device)
+            if engine != nil { hasScriptedText = true }
+            out.append(g)
+        }
+        return out
+    }
+
+    /// 텍스트 재래스터: lastText → 텍스처 + 앵커 정렬 쿼드. 빈 텍스트 → 텍스처 nil(드로우 스킵).
+    private func rasterize(_ g: inout GPUText, device: MTLDevice) {
+        guard let r = TextRasterizer.render(text: g.lastText, fontData: g.fontData,
+                                            systemFontName: g.systemFontName, pointSize: g.def.pointSize) else {
+            g.texture = nil; g.vertexBuffer = nil
+            return
+        }
+        g.texture = makeTexture(r.rgba, r.width, r.height, device)
+        let w = Float(r.width) * g.def.scale.x, h = Float(r.height) * g.def.scale.y
+        let x0: Float
+        switch g.def.horizontalAlign {
+        case "left": x0 = g.def.origin.x
+        case "right": x0 = g.def.origin.x - w
+        default: x0 = g.def.origin.x - w / 2
+        }
+        let y0: Float
+        switch g.def.verticalAlign {
+        case "top": y0 = g.def.origin.y
+        case "bottom": y0 = g.def.origin.y - h
+        default: y0 = g.def.origin.y - h / 2
+        }
+        func ndc(_ px: Float, _ py: Float) -> SIMD2<Float> { SIMD2(px / projW * 2 - 1, 1 - py / projH * 2) }
+        let tl = ndc(x0, y0), tr = ndc(x0 + w, y0), br = ndc(x0 + w, y0 + h), bl = ndc(x0, y0 + h)
+        let verts: [SIMD4<Float>] = [
+            SIMD4(tl.x, tl.y, 0, 0), SIMD4(tr.x, tr.y, 1, 0), SIMD4(br.x, br.y, 1, 1),
+            SIMD4(tl.x, tl.y, 0, 0), SIMD4(br.x, br.y, 1, 1), SIMD4(bl.x, bl.y, 0, 1),
+        ]
+        g.vertexBuffer = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count)
+    }
+
+    /// 스크립트 텍스트 초당 재평가(시계 등). 변경 시에만 재래스터.
+    private func refreshScriptedTexts(device: MTLDevice) {
+        guard hasScriptedText else { return }
+        let sec = Int(CFAbsoluteTimeGetCurrent())
+        guard sec != lastTextRefreshSecond else { return }
+        lastTextRefreshSecond = sec
+        for i in textLayers.indices {
+            guard let e = textLayers[i].engine else { continue }
+            let newText = e.evaluate(current: textLayers[i].lastText) ?? ""
+            if newText != textLayers[i].lastText {
+                textLayers[i].lastText = newText
+                rasterize(&textLayers[i], device: device)
+            }
+        }
+    }
+
+    /// 텍스트 1개 드로우(메인 컴포지트 파이프라인, parallaxDepth=1).
+    private func encodeText(_ t: GPUText, into enc: MTLRenderCommandEncoder,
+                            camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+        guard let pipeline, let tex = t.texture, let vbuf = t.vertexBuffer else { return }
+        var tint = t.tint
+        var depth = SIMD2<Float>(1, 1)
+        enc.setRenderPipelineState(pipeline)
+        enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        enc.setFragmentTexture(tex, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
@@ -797,16 +902,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // target 이 곧 누적(acc) — 컴포지션 레이어는 스냅샷 경유(runFrameBufferLayer).
             var aborted = false
             for item in drawPlan {
-                if item.isParticle {
+                switch item.kind {
+                case .particle:
                     let snap = sims[item.idx].step(0)
                     encodeParticle(particleSystems[item.idx], snapshot: snap, into: enc, device: device,
                                    camOffset: &camOff, aspectScale: &asp)
-                } else if layers[item.idx].isFrameBuffer {
+                case .text:
+                    encodeText(textLayers[item.idx], into: enc, camOffset: &camOff, aspectScale: &asp)
+                case .layer where layers[item.idx].isFrameBuffer:
                     guard let next = runFrameBufferLayer(layers[item.idx], acc: target, cb: cb, ending: enc,
                                                          device: device, time: t,
                                                          camOffset: &camOff, aspectScale: &asp) else { aborted = true; break }
                     enc = next
-                } else {
+                case .layer:
                     encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
                                 camOffset: &camOff, aspectScale: &asp)
                 }
@@ -837,6 +945,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         audioProvider?.stop(); audioProvider = nil; hasAudio = false
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
+        textLayers = []; hasScriptedText = false
         additivePipeline = nil; translucentPipeline = nil
         texturePool.removeAll(); poolCheckout.removeAll()
         pipeline = nil; queue = nil; device = nil

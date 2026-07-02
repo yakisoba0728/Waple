@@ -37,11 +37,17 @@ public final class TextScriptEngine {
         return out.toString()
     }
 
-    /// `export (let|var|const|function|class)` → 키워드만 남김. `export default` 는 드롭.
+    /// ES 모듈 구문 중화: `export` 키워드 제거, `import ...` 는 바인딩을 no-op 프록시 var 로 치환
+    /// (외부 유틸 모듈은 제공 불가 — 호출 시 프록시가 흡수, update 실패 시 nil → 빈 텍스트 graceful).
     static func stripModuleSyntax(_ src: String) -> String {
         var out: [String] = []
         for line in src.split(separator: "\n", omittingEmptySubsequences: false) {
             var s = String(line)
+            let t = s.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("import ") {
+                out.append(importReplacement(t))
+                continue
+            }
             if let r = s.range(of: "export default") { s.replaceSubrange(r, with: "var __default =") }
             else if let r = s.range(of: "export ") {
                 let before = s[..<r.lowerBound].trimmingCharacters(in: .whitespaces)
@@ -50,6 +56,31 @@ public final class TextScriptEngine {
             out.append(s)
         }
         return out.joined(separator: "\n")
+    }
+
+    /// `import * as X from ...` / `import X from ...` / `import {a, b} from ...` → no-op 프록시 바인딩.
+    private static func importReplacement(_ line: String) -> String {
+        guard let fromIdx = line.range(of: " from ") ?? line.range(of: " from\t") else { return "" }
+        let clause = line[line.index(line.startIndex, offsetBy: "import ".count)..<fromIdx.lowerBound]
+            .trimmingCharacters(in: .whitespaces)
+        var names: [String] = []
+        if clause.hasPrefix("*") {
+            if let asIdx = clause.range(of: " as ") {
+                names.append(clause[asIdx.upperBound...].trimmingCharacters(in: .whitespaces))
+            }
+        } else if clause.hasPrefix("{") {
+            let inner = clause.trimmingCharacters(in: CharacterSet(charactersIn: "{} "))
+            for piece in inner.split(separator: ",") {
+                let p = piece.trimmingCharacters(in: .whitespaces)
+                // "orig as alias" → alias
+                if let asIdx = p.range(of: " as ") { names.append(String(p[asIdx.upperBound...]).trimmingCharacters(in: .whitespaces)) }
+                else if !p.isEmpty { names.append(p) }
+            }
+        } else if !clause.isEmpty {
+            names.append(clause)
+        }
+        guard !names.isEmpty else { return "" }
+        return names.map { "var \($0) = __noopProxy();" }.joined(separator: " ")
     }
 
     /// createScriptProperties 빌더 + 엔진 API no-op Proxy 심.
