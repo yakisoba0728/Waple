@@ -180,7 +180,7 @@ extension SceneDocument {
                     horizontalAlign: (obj["horizontalalign"] as? String) ?? "center",
                     verticalAlign: (obj["verticalalign"] as? String) ?? "center",
                     origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
-                    scale: vec2(obj["size"]) ?? Vec2(x: 1, y: 1),
+                    scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),  // 배율은 scale 필드 — size 는 레이아웃 박스(오독 시 거대 글리프)
                     order: order))
             }
         }

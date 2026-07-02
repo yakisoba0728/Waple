@@ -170,7 +170,7 @@ final class SceneDocumentTests: XCTestCase {
            {"image":"models/x.json","origin":"960 540 0","size":"1920 1080","visible":{"value":true}},
            {"text":"HELLO","name":"plain","font":"systemfont_arial","pointsize":32.0,
             "color":"1 0 0","alpha":0.8,"horizontalalign":"center","verticalalign":"center",
-            "origin":"100 200 0","size":"2 2","visible":{"value":true}},
+            "origin":"100 200 0","size":"365 121","scale":"2 2 1","visible":{"value":true}},
            {"text":{"script":"export function update(v){return 'X';}"},"name":"scripted",
             "font":"fonts/f.otf","pointsize":16.0,"origin":"5 6 0","visible":{"value":true}},
            {"text":"nope","visible":false}]}
@@ -187,6 +187,8 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(t0.color, Vec3(x: 1, y: 0, z: 0))
         XCTAssertEqual(t0.alpha, 0.8)
         XCTAssertEqual(t0.origin, Vec2(x: 100, y: 200))
+        // 실물(2902406982 弹幕): size 는 레이아웃 박스(365×121px), 배율은 별도 scale 필드 —
+        // size 를 배율로 오독하면 365배 거대 글리프(화면 백화 회귀의 원인).
         XCTAssertEqual(t0.scale, Vec2(x: 2, y: 2))
         XCTAssertEqual(t0.horizontalAlign, "center")
         XCTAssertEqual(t0.order, 1, "objects[] 인덱스(레이어와 공유 z-순서)")
