@@ -79,6 +79,67 @@ public struct SceneTextLayer: Equatable {
     public var order: Int = 0
 }
 
+/// 3D 씬 카메라(2D 의 orthogonalprojection 대체). look-at 파라미터 + 원근 fov.
+/// WE 규약: eye→center 방향으로 보고, up 은 카메라 상방. fov 는 세로 화각(도), near/far 는 클립면.
+public struct SceneCamera3D: Equatable {
+    public let eye: Vec3       // 카메라 위치(월드)
+    public let center: Vec3    // 바라보는 지점(월드)
+    public let up: Vec3        // 상방 벡터
+    public let fov: Float      // 세로 화각(도)
+    public let nearZ: Float
+    public let farZ: Float
+    public init(eye: Vec3, center: Vec3, up: Vec3, fov: Float, nearZ: Float, farZ: Float) {
+        self.eye = eye; self.center = center; self.up = up
+        self.fov = fov; self.nearZ = nearZ; self.farZ = farZ
+    }
+}
+
+/// 3D 메시 오브젝트. 2D 레이어(image→json→puppet 인다이렉션)와 달리 `model` 키가 pkg 의
+/// `.mdl` 을 **직접** 참조한다. origin/angles/scale 은 모두 3성분(월드 좌표/오일러 라디안/축별 배율).
+public struct SceneObject3D: Equatable {
+    public let id: Int
+    public let name: String
+    public let model: String       // "models/.../X.mdl" — pkg 내 .mdl 직접 참조(2D image 우회)
+    public let origin: Vec3        // 월드 위치
+    public let angles: Vec3        // 오일러 X,Y,Z (라디안)
+    public let scale: Vec3         // 축별 배율
+    public let castShadow: Bool
+    public let parent: Int?        // 부모 오브젝트 id(트랜스폼 계층) — 렌더러가 월드행렬 합성. nil=루트
+    public let effects: [SceneEffect]
+    /// scene.json objects[] 내 인덱스 — 그리기/계층 순서 참조.
+    public var order: Int = 0
+    public init(id: Int, name: String, model: String, origin: Vec3, angles: Vec3, scale: Vec3,
+                castShadow: Bool, parent: Int?, effects: [SceneEffect], order: Int = 0) {
+        self.id = id; self.name = name; self.model = model
+        self.origin = origin; self.angles = angles; self.scale = scale
+        self.castShadow = castShadow; self.parent = parent; self.effects = effects; self.order = order
+    }
+}
+
+/// 3D 라이트 오브젝트. type: "lpoint"(점) | "ldirectional"(방향) | "lspot"(스팟).
+/// general.lightconfig 가 활성 라이트 종류/개수를 요약(point/directional/…shadow 카운트).
+public struct SceneLight3D: Equatable {
+    public let id: Int
+    public let name: String
+    public let type: String
+    public let origin: Vec3
+    public let angles: Vec3
+    public let color: Vec3
+    public let radius: Float
+    public let intensity: Float
+    public let exponent: Float
+    public let castShadow: Bool
+    public let parent: Int?
+    public var order: Int = 0
+    public init(id: Int, name: String, type: String, origin: Vec3, angles: Vec3, color: Vec3,
+                radius: Float, intensity: Float, exponent: Float, castShadow: Bool, parent: Int?, order: Int = 0) {
+        self.id = id; self.name = name; self.type = type
+        self.origin = origin; self.angles = angles; self.color = color
+        self.radius = radius; self.intensity = intensity; self.exponent = exponent
+        self.castShadow = castShadow; self.parent = parent; self.order = order
+    }
+}
+
 public struct SceneDocument: Equatable {
     public let projectionWidth: Int
     public let projectionHeight: Int
@@ -89,6 +150,12 @@ public struct SceneDocument: Equatable {
     public let layers: [SceneLayer]
     public let particles: [SceneParticle]
     public var texts: [SceneTextLayer] = []
+    /// 3D 씬 카메라 — orthogonalprojection 부재(null) + camera{eye,center,up} + fov 존재 시 세팅. 2D=nil.
+    public var camera3D: SceneCamera3D? = nil
+    /// 3D 메시 오브젝트(`.mdl` 직접 참조). 2D 씬에서는 빈 배열.
+    public var objects3D: [SceneObject3D] = []
+    /// 3D 라이트 오브젝트.
+    public var lights3D: [SceneLight3D] = []
 }
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
@@ -116,9 +183,23 @@ extension SceneDocument {
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
 
+        // 3D 카메라: orthogonalprojection 이 딕셔너리가 아니고(3D 씬은 null) camera{eye,center,up}+fov 존재.
+        // fov 는 float() 로 언랩 — 실물(젤다)은 {"script":...,"value":50} 스크립트 프로퍼티로 온다.
+        var camera3D: SceneCamera3D? = nil
+        if !(general["orthogonalprojection"] is [String: Any]),
+           let camDict = scene["camera"] as? [String: Any],
+           let eye = vec3(camDict["eye"]), let center = vec3(camDict["center"]),
+           let up = vec3(camDict["up"]), let fov = float(general["fov"]) {
+            camera3D = SceneCamera3D(eye: eye, center: center, up: up, fov: fov,
+                                     nearZ: float(general["nearz"]) ?? 0.01,
+                                     farZ: float(general["farz"]) ?? 10000)
+        }
+
         var layers: [SceneLayer] = []
         var particles: [SceneParticle] = []
         var texts: [SceneTextLayer] = []
+        var objects3D: [SceneObject3D] = []
+        var lights3D: [SceneLight3D] = []
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
             // `visible` 은 바인딩 객체 {"value": false} 또는 평문 불리언 false 두 형태로 온다.
@@ -200,12 +281,39 @@ extension SceneDocument {
                     origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
                     scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),  // 배율은 scale 필드 — size 는 레이아웃 박스(오독 시 거대 글리프)
                     order: order))
+            } else if let modelPath = obj["model"] as? String {
+                // 3D 메시: `.mdl` 직접 참조(2D image→json→puppet 인다이렉션 우회). angles 는 라디안.
+                objects3D.append(SceneObject3D(
+                    id: intVal(obj["id"]) ?? 0,
+                    name: (obj["name"] as? String) ?? "",
+                    model: modelPath,
+                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
+                    castShadow: (obj["castshadow"] as? Bool) ?? false,
+                    parent: intVal(obj["parent"]),
+                    effects: parseEffects(obj["effects"]),
+                    order: order))
+            } else if let lightType = obj["light"] as? String {
+                lights3D.append(SceneLight3D(
+                    id: intVal(obj["id"]) ?? 0,
+                    name: (obj["name"] as? String) ?? "",
+                    type: lightType,
+                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+                    radius: float(obj["radius"]) ?? 0,
+                    intensity: float(obj["intensity"]) ?? 1,
+                    exponent: float(obj["exponent"]) ?? 1,
+                    castShadow: (obj["castshadow"] as? Bool) ?? false,
+                    parent: intVal(obj["parent"]),
+                    order: order))
             }
         }
         return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                              parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
                              parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
-                             texts: texts)
+                             texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D)
     }
 
     /// 레이어 소스 해석 결과.
@@ -349,6 +457,12 @@ extension SceneDocument {
         let u = unwrap(v)
         if let d = u as? Double { return Float(d) }
         if let i = u as? Int { return Float(i) }
+        return nil
+    }
+    private static func intVal(_ v: Any?) -> Int? {
+        let u = unwrap(v)
+        if let i = u as? Int { return i }
+        if let d = u as? Double { return Int(d) }
         return nil
     }
     private static func vec2(_ v: Any?) -> Vec2? {
