@@ -43,6 +43,12 @@ public struct TranslatedShader: Equatable {
 public enum GLSLTranslator {
     public static func translate(vertex: String, fragment: String, combos: [String: Int],
                                  include: (String) -> String? = { _ in nil }) -> TranslatedShader? {
+        // [COMBO] 기본값은 스테이지 합집합 — vert 에만 선언된 콤보(실물 auto_sway 의 AA_VERSION)를
+        // frag 도 봐야 한다(WE 는 효과 단위로 콤보를 병합).
+        var combos = combos
+        for src in [vertex, fragment] {
+            for (k, v) in ShaderPreprocessor.parseComboDefaults(src) where combos[k] == nil { combos[k] = v }
+        }
         let (vsrc, vArrays) = expandArrayVaryings(stripPrecision(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include)))
         let (fsrc, fArrays) = expandArrayVaryings(stripPrecision(ShaderPreprocessor.preprocess(fragment, combos: combos, include: include)))
 
@@ -383,7 +389,8 @@ public enum GLSLTranslator {
     static func parseParams(_ text: String) -> [GLSLFunction.Param] {
         var out: [GLSLFunction.Param] = []
         for piece in text.split(separator: ",") {
-            var toks = piece.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+            // 여러 줄 시그니처(실물 dqss2 calcShadowMask): 개행 포함 공백류 전체로 분리.
+            var toks = piece.split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { !$0.isEmpty }
             var byRef = false
             while let first = toks.first, ["in", "out", "inout", "const"].contains(first) {
                 if first == "out" || first == "inout" { byRef = true }
