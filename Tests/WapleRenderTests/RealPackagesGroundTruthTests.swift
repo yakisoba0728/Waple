@@ -4,7 +4,7 @@ import Metal
 @testable import WapleCore
 @testable import WapleRender
 
-/// 실측 ground-truth 하네스: 사용자 제공 실제 WE 배경 폴더(기본 ~/Downloads/backgrounds,
+/// 실측 ground-truth 하네스: 사용자 제공 실제 WE 배경 폴더(기본 ~/Downloads/wallpaper_dev/backgrounds,
 /// WAPLE_REAL_PKGS 환경변수로 재지정)를 전수 마운트+캡처한다. 폴더가 없으면 skip — CI 안전.
 /// 하드 어서션은 "마운트가 크래시/스로우 없이 되고 PNG 가 나온다"까지만. 효과 번역 성공/폴백 통계는
 /// 렌더러의 NSLog 라인(effect via GLSL→MSL translator / translate failed / MSL compile failed / skipped)을
@@ -13,16 +13,16 @@ final class RealPackagesGroundTruthTests: XCTestCase {
     func testMountAndCaptureAllRealScenes() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
-            ?? (NSHomeDirectory() + "/Downloads/backgrounds")
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
         let baseURL = URL(fileURLWithPath: base)
         guard FileManager.default.fileExists(atPath: base) else { throw XCTSkip("no real pkgs dir: \(base)") }
         let outDir = URL(fileURLWithPath: "/tmp/waple_gt")
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
         // WE base-assets(공유 텍스처 + common_*.h)가 있으면 연결 — common.h 헬퍼 의존 효과까지 실측.
-        // env WAPLE_BASE_ASSETS 우선, 기본 ~/Downloads/assets. 테스트 후 원복.
+        // env WAPLE_BASE_ASSETS 우선, 기본 ~/Downloads/wallpaper_dev/assets. 테스트 후 원복.
         let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
-            ?? (NSHomeDirectory() + "/Downloads/assets")
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/assets")
         let oldBase = BaseAssetsSettings.baseAssetsDirectory
         if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
             BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)

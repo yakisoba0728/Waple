@@ -8,7 +8,7 @@ import AVFoundation
 final class RealVideosGroundTruthTests: XCTestCase {
     func testAllRealVideosPlay() throws {
         let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
-            ?? (NSHomeDirectory() + "/Downloads/backgrounds")
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
         guard FileManager.default.fileExists(atPath: base) else { throw XCTSkip("no real pkgs dir") }
         let folders = try FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: base), includingPropertiesForKeys: nil)
         var tested = 0, failed: [String] = []

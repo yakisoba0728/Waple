@@ -132,7 +132,7 @@ final class PuppetModelTests: XCTestCase {
 /// 실물 스모크(env-guarded): 2809885105 의 퍼펫 2개가 파스되고 실측 수치와 일치.
 final class PuppetRealFileTests: XCTestCase {
     func testParsesRealPuppets() throws {
-        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"] ?? (NSHomeDirectory() + "/Downloads/backgrounds")
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"] ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
         let pkgURL = URL(fileURLWithPath: base).appendingPathComponent("2809885105/scene.pkg")
         guard let data = try? Data(contentsOf: pkgURL) else { throw XCTSkip("no real pkg") }
         let pkg = try ScenePackage.parse(data)
@@ -158,7 +158,7 @@ final class PuppetRealFileTests: XCTestCase {
     }
 
     func testRealAnimationTracks() throws {
-        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"] ?? (NSHomeDirectory() + "/Downloads/backgrounds")
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"] ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
         let pkgURL = URL(fileURLWithPath: base).appendingPathComponent("2809885105/scene.pkg")
         guard let data = try? Data(contentsOf: pkgURL) else { throw XCTSkip("no real pkg") }
         let pkg = try ScenePackage.parse(data)
