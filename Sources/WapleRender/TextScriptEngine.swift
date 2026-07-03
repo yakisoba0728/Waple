@@ -1,14 +1,34 @@
 import Foundation
 import JavaScriptCore
 
+/// 씬 단위 공유 JSContext(SceneRenderer mount 당 1개): shims 를 1회 평가하고, 씬의 모든 프로퍼티
+/// 스크립트(레이어 color/alpha/visible, 효과 상수, 텍스트)가 이 컨텍스트를 공유한다 — `shared` 전역으로
+/// 스크립트 간 통신(실물 3394601417: visible 스크립트의 컨트롤러가 shared.a 를 세팅, 43개 스크립트가 분기).
+/// 각 스크립트는 IIFE 로 감싸므로 update/스크립트-로컬 상태는 클로저에 격리된다.
+public final class SceneScriptContext {
+    let context: JSContext
+
+    public init?() {
+        guard let ctx = JSContext() else { return nil }
+        context = ctx
+        ctx.exceptionHandler = { _, ex in
+            NSLog("%@", "[Waple] scene script context exception: \(ex?.toString() ?? "?")")
+        }
+        ctx.evaluateScript(TextScriptEngine.shims)
+    }
+}
+
 /// WE 텍스트 프로퍼티 스크립트 실행기(JavaScriptCore).
 /// 계약(실물): `createScriptProperties()` 빌더(.addCheckbox/.addText/... → .finish() = name→기본값 객체)
 /// + `export function update(value) → String`. engine/shared/thisScene 등 엔진 API 는 no-op Proxy 로 심 —
 /// 미디어류 스크립트는 데이터가 없어 자연히 빈 문자열을 반환(graceful).
 /// ES 모듈 export 구문은 평가 전에 제거(JSC 는 스크립트 평가에서 모듈 미지원).
+/// 두 모드: ① 단독 컨텍스트(웹/텍스트 호환 — update 필수) ② 씬 공유 컨텍스트(IIFE 격리 —
+/// update 없는 사이드이펙트 전용 스크립트도 로드: 실물 컨트롤러는 top-level 에서 shared 를 초기화하고
+/// cursorClick 만 export 한다).
 public final class TextScriptEngine {
     private let context: JSContext
-    private let updateFn: JSValue
+    private let updateFn: JSValue?
 
     public init?(script: String) {
         guard let ctx = JSContext() else { return nil }
@@ -26,8 +46,29 @@ public final class TextScriptEngine {
         updateFn = fn
     }
 
+    /// 씬 공유 컨텍스트 모드: 스크립트를 IIFE 로 감싸 평가(전역 오염/update 이름충돌 방지)하고
+    /// update 를 반환받아 보관. update 부재도 성공(nil update — top-level 사이드이펙트는 이미 실행됨).
+    /// 로드 예외(문법 오류 등) → nil, 공유 컨텍스트는 오염되지 않는다(IIFE 미실행).
+    public init?(script: String, scene: SceneScriptContext) {
+        context = scene.context
+        var hadException = false
+        context.exceptionHandler = { _, ex in
+            NSLog("%@", "[Waple] scene script load exception: \(ex?.toString() ?? "?")")
+            hadException = true
+        }
+        let cleaned = Self.stripModuleSyntax(script)
+        let wrapped = "(function(){\n\(cleaned)\n;return (typeof update !== 'undefined') ? update : null;\n})()"
+        let out = context.evaluateScript(wrapped)
+        guard !hadException else { return nil }
+        updateFn = (out?.isObject == true) ? out : nil
+    }
+
+    /// update 함수 보유 여부(false = 사이드이펙트 전용 스크립트 — evaluate 계열은 항상 nil).
+    public var hasUpdate: Bool { updateFn != nil }
+
     /// update(current) 호출 → 새 텍스트. 예외/비문자열 → nil.
     public func evaluate(current: String) -> String? {
+        guard let updateFn else { return nil }
         var failed = false
         context.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] text script update exception: \(ex?.toString() ?? "?")")
@@ -37,6 +78,20 @@ public final class TextScriptEngine {
         return out.toString()
     }
 
+    /// visible 스크립트용: update(current) → 부울(숫자는 0=false). 예외/부재/비해석 → nil(현상 유지).
+    public func evaluateBool(current: Bool) -> Bool? {
+        guard let updateFn else { return nil }
+        var failed = false
+        context.exceptionHandler = { _, ex in
+            NSLog("%@", "[Waple] visible script exception: \(ex?.toString() ?? "?")")
+            failed = true
+        }
+        guard let out = updateFn.call(withArguments: [current]), !failed else { return nil }
+        if out.isBoolean { return out.toBool() }
+        if out.isNumber { return out.toDouble() != 0 }
+        return nil
+    }
+
     /// 효과 상수 스크립트용: engine.runtime 갱신(초).
     public func setRuntime(_ t: Double) {
         context.evaluateScript("__engineState.runtime = \(t);")
@@ -44,6 +99,7 @@ public final class TextScriptEngine {
 
     /// update({x,y,z...}) 호출 → 수치 배열(스칼라는 1개). 예외/비수치 → nil.
     public func evaluateVec(current: [Float]) -> [Float]? {
+        guard let updateFn else { return nil }
         var failed = false
         context.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] constant script exception: \(ex?.toString() ?? "?")")
@@ -109,8 +165,8 @@ public final class TextScriptEngine {
         }.joined(separator: " ")
     }
 
-    /// createScriptProperties 빌더 + 엔진 API no-op Proxy 심.
-    private static let shims = """
+    /// createScriptProperties 빌더 + 엔진 API no-op Proxy 심(SceneScriptContext 와 공유).
+    static let shims = """
     'use strict';
     function createScriptProperties() {
         var props = {};
