@@ -1,14 +1,14 @@
 import Foundation
 
 public enum GLSLType: String, Equatable {
-    case float, vec2, vec3, vec4, mat3, mat4, sampler2D
+    case float, vec2, vec3, vec4, mat2, mat3, mat4, sampler2D
 
     /// GLSL(vec2)·HLSL(float2) 타입명 겸용 해석 — WE 방언은 혼용한다(실물 rand_1_05(in float2 uv)).
     public static func from(_ s: String) -> GLSLType? {
         if let t = GLSLType(rawValue: s) { return t }
         switch s {
         case "float2": return .vec2; case "float3": return .vec3; case "float4": return .vec4
-        case "float3x3": return .mat3; case "float4x4": return .mat4
+        case "float2x2": return .mat2; case "float3x3": return .mat3; case "float4x4": return .mat4
         default: return nil
         }
     }
@@ -16,7 +16,7 @@ public enum GLSLType: String, Equatable {
     var msl: String {
         switch self {
         case .float: return "float"; case .vec2: return "float2"; case .vec3: return "float3"
-        case .vec4: return "float4"; case .mat3: return "float3x3"; case .mat4: return "float4x4"
+        case .vec4: return "float4"; case .mat2: return "float2x2"; case .mat3: return "float3x3"; case .mat4: return "float4x4"
         case .sampler2D: return "texture2d<float>"
         }
     }
@@ -71,7 +71,9 @@ public enum GLSLTranslator {
         let reservedRenames = ["fragment": "we_fragment", "vertex": "we_vertex", "kernel": "we_kernel",
                                "device": "we_device", "thread": "we_thread", "threadgroup": "we_threadgroup",
                                "constant": "we_constant", "using": "we_using", "namespace": "we_namespace",
-                               "half": "we_half"]
+                               "half": "we_half",
+                               // 우리 방출 파라미터명과의 충돌(실물 geodraw: 지역 float2 p)
+                               "p": "we_p", "eng": "we_eng", "smp": "we_smp", "vin": "we_vin"]
         let vClean = replaceIdentifiers(stripComments(vsrc), reservedRenames)
         let fClean = replaceIdentifiers(stripComments(fsrc), reservedRenames)
         // 엔진 심볼은 선언이 common.h(베이스팩 전용, 대체로 부재)에 있어 파싱에 안 잡힌다 —
@@ -302,7 +304,7 @@ public enum GLSLTranslator {
         switch glsl {
         case "void", "float", "int", "bool": return glsl
         case "vec2", "float2": return "float2"; case "vec3", "float3": return "float3"; case "vec4", "float4": return "float4"
-        case "mat3", "float3x3": return "float3x3"; case "mat4", "float4x4": return "float4x4"
+        case "mat2", "float2x2": return "float2x2"; case "mat3", "float3x3": return "float3x3"; case "mat4", "float4x4": return "float4x4"
         case "sampler2D": return "texture2d<float>"
         default: return nil
         }
@@ -576,7 +578,7 @@ public enum GLSLTranslator {
         return m
     }
     private static func typeAndMacroRenames() -> [String: String] {
-        ["vec2": "float2", "vec3": "float3", "vec4": "float4", "mat3": "float3x3", "mat4": "float4x4",
+        ["vec2": "float2", "vec3": "float3", "vec4": "float4", "mat2": "float2x2", "mat3": "float3x3", "mat4": "float4x4",
          "CAST2": "float2", "CAST3": "float3", "CAST4": "float4",
          "frac": "fract", "lerp": "mix", "ddx": "dfdx", "ddy": "dfdy", "inverse": "we_inverse", "mod": "we_mod",
          "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679", "M_PI_2": "6.28318530718"]

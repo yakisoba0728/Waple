@@ -61,7 +61,7 @@ public enum GLSLTypeAdapter {
         case .some(.vec2): return 2
         case .some(.vec3): return 3
         case .some(.vec4): return 4
-        case .some(.mat3), .some(.mat4), .some(.sampler2D): return 0
+        case .some(.mat2), .some(.mat3), .some(.mat4), .some(.sampler2D): return 0
         case .none:
             return (name == "int" || name == "bool") ? 1 : nil
         }

@@ -12,9 +12,16 @@ public enum ShaderPreprocessor {
         let source = source.replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         var defines = combos
+        // WE 컴파일러 내장 캐스트 매크로(헤더에 없음 — 실물 depthparallax 의 CAST3X3 등).
+        // 소스가 자체 정의하면 그것이 우선(아래 builtinCasts 는 부재 시에만 주입).
         // [COMBO] 기본값(명시 combos 가 없을 때만 채움)
         for (name, def) in parseComboDefaults(source) where defines[name] == nil { defines[name] = def }
-        let included = inlineIncludes(source, include: include, depth: 0)
+        var included = inlineIncludes(source, include: include, depth: 0)
+        for (name, body) in [("CAST2", "vec2(x)"), ("CAST3", "vec3(x)"), ("CAST4", "vec4(x)"),
+                             ("CAST2X2", "mat2(x)"), ("CAST3X3", "mat3(x)"), ("CAST4X4", "mat4(x)")]
+        where !included.contains("#define \(name)") && included.contains(name) {
+            included = "#define \(name)(x) \(body)\n" + included
+        }
         // 인라인된 헤더의 [COMBO] 기본값도 반영
         for (name, def) in parseComboDefaults(included) where defines[name] == nil { defines[name] = def }
         return evaluateConditionals(included, defines: defines)
