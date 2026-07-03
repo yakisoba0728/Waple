@@ -113,11 +113,11 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
 
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio, isRunning() else { return }
-        guard let samples = Self.floatSamples(from: sampleBuffer, maxCount: fftSize) else { return }
-        let mags = magnitudes(from: samples)
-        let bins = AudioSpectrum.spectrum(fromMagnitudes: mags, binCount: 64)
-        let frame = bins + bins   // WE 포맷: 128(64L + 64R). 64bin 스펙트럼을 좌우 복제.
-        let clamped = Array(frame.prefix(128))
+        guard let (l, r) = Self.stereoSamples(from: sampleBuffer, maxCount: fftSize) else { return }
+        // WE 포맷: 128(64L + 64R) — 채널별 FFT 로 진짜 스테레오(이전: 첫 채널 복제).
+        let lBins = AudioSpectrum.spectrum(fromMagnitudes: magnitudes(from: l), binCount: 64)
+        let rBins = AudioSpectrum.spectrum(fromMagnitudes: magnitudes(from: r), binCount: 64)
+        let clamped = Array((lBins + rBins).prefix(128))
         DispatchQueue.main.async { [weak self] in self?.onFrame?(clamped) }
     }
 
@@ -161,6 +161,50 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
         guard count > 0 else { return nil }
         let ptr = data.assumingMemoryBound(to: Float.self)
         return Array(UnsafeBufferPointer(start: ptr, count: count))
+    }
+
+    /// 스테레오 채널별 샘플: non-interleaved(버퍼 2개) → 각 버퍼, interleaved(1버퍼 2채널) → 짝/홀 분리,
+    /// 모노 → (mono, mono). 반환 (L, R).
+    private static func stereoSamples(from sampleBuffer: CMSampleBuffer, maxCount: Int) -> ([Float], [Float])? {
+        var sizeNeeded = 0
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer, bufferListSizeNeededOut: &sizeNeeded, bufferListOut: nil, bufferListSize: 0,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil
+        ) == noErr, sizeNeeded > 0 else { return nil }
+        let ablMemory = UnsafeMutableRawPointer.allocate(
+            byteCount: sizeNeeded, alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { ablMemory.deallocate() }
+        let ablPtr = ablMemory.assumingMemoryBound(to: AudioBufferList.self)
+        var blockBuffer: CMBlockBuffer?
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer, bufferListSizeNeededOut: nil, bufferListOut: ablPtr, bufferListSize: sizeNeeded,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: &blockBuffer
+        ) == noErr else { return nil }
+        let buffers = UnsafeMutableAudioBufferListPointer(ablPtr)
+        func floats(_ b: AudioBuffer) -> [Float] {
+            guard let d = b.mData else { return [] }
+            let n = Int(b.mDataByteSize) / MemoryLayout<Float>.size
+            return Array(UnsafeBufferPointer(start: d.assumingMemoryBound(to: Float.self), count: n))
+        }
+        if buffers.count >= 2 {  // non-interleaved 스테레오
+            let l = floats(buffers[0]), r = floats(buffers[1])
+            guard !l.isEmpty else { return nil }
+            return (Array(l.prefix(maxCount)), Array((r.isEmpty ? l : r).prefix(maxCount)))
+        }
+        guard let first = buffers.first else { return nil }
+        let all = floats(first)
+        guard !all.isEmpty else { return nil }
+        if first.mNumberChannels >= 2 {  // interleaved 스테레오
+            var l: [Float] = []; var r: [Float] = []
+            l.reserveCapacity(min(all.count / 2, maxCount)); r.reserveCapacity(min(all.count / 2, maxCount))
+            var i = 0
+            while i + 1 < all.count, l.count < maxCount {
+                l.append(all[i]); r.append(all[i + 1]); i += 2
+            }
+            return (l, r)
+        }
+        let m = Array(all.prefix(maxCount))
+        return (m, m)
     }
 
     private func magnitudes(from samples: [Float]) -> [Float] {

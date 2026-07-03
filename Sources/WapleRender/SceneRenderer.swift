@@ -220,10 +220,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if hasAudio {
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] spec in
-                let bins = AudioSpectrum16.downsample16(spec)
-                self?.currentSpectrum = AudioSpectrum16(left: bins, right: bins)
+                // spec = 128(64L+64R, 채널별 FFT) — 16빈도 채널 분리 다운샘플.
                 if spec.count >= 128 {
-                    self?.setSpectrum64(left: Array(spec[0..<64]), right: Array(spec[64..<128]))
+                    let l = Array(spec[0..<64]), r = Array(spec[64..<128])
+                    self?.currentSpectrum = AudioSpectrum16(left: AudioSpectrum16.downsample16(l),
+                                                            right: AudioSpectrum16.downsample16(r))
+                    self?.setSpectrum64(left: l, right: r)
+                } else {
+                    let bins = AudioSpectrum16.downsample16(spec)
+                    self?.currentSpectrum = AudioSpectrum16(left: bins, right: bins)
                 }
             }
             provider.start()
