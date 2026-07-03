@@ -7,6 +7,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
 
     private let mode: Mode
     private var webView: WKWebView?
+    /// 테스트 전용 접근자(JS 상태 검증).
+    public var webViewForTesting: WKWebView? { webView }
     private var pendingUserPropertiesJSON: String?
     private var audioProvider: SystemAudioSpectrumProvider?
     private var occlusionObserver: NSObjectProtocol?
@@ -119,7 +121,55 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     public func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        // MVP: randomFile 등 메시지 수신만(랜덤 파일 소스 없음 → no-op).
+        guard let dict = message.body as? [String: Any], let type = dict["type"] as? String else { return }
+        if type == "mediaListen" {
+            startMediaPolling()
+        }
+    }
+
+    // MARK: - 미디어 연동(페이지가 wallpaperRegisterMedia* 를 등록한 경우에만 폴링)
+
+    /// 테스트 주입용. nil 이면 AppleScript(Music/Spotify) 프로바이더.
+    public var nowPlayingProvider: NowPlayingProvider?
+    private var mediaTimer: Timer?
+    private var lastMedia: NowPlayingInfo?
+
+    private func startMediaPolling() {
+        guard mediaTimer == nil else { return }
+        let provider = nowPlayingProvider ?? AppleScriptNowPlayingProvider()
+        // 5초 간격: AppleScript 비용(수십 ms)과 체감 실시간성의 균형. 타임라인은 틱마다 배달.
+        mediaTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.pollMedia(provider)
+        }
+        mediaTimer?.fire()
+    }
+
+    private func pollMedia(_ provider: NowPlayingProvider) {
+        // AppleScript 는 블로킹 — 백그라운드에서 fetch 후 메인에서 배달.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let info = provider.fetch() ?? NowPlayingInfo(state: .stopped)
+            DispatchQueue.main.async { self?.deliverMedia(info) }
+        }
+    }
+
+    private func deliverMedia(_ info: NowPlayingInfo) {
+        guard let webView else { return }
+        func js(_ kind: String, _ obj: String) {
+            webView.evaluateJavaScript("window.__wapleMedia && window.__wapleMedia('\(kind)', \(obj));", completionHandler: nil)
+        }
+        func q(_ s: String) -> String {
+            (try? String(data: JSONEncoder().encode(s), encoding: .utf8) ?? "\"\"") ?? "\"\""
+        }
+        if lastMedia?.state != info.state {
+            js("status", "{ state: \(info.state.rawValue) }")
+        }
+        if lastMedia?.title != info.title || lastMedia?.artist != info.artist || lastMedia?.album != info.album {
+            js("properties", "{ title: \(q(info.title)), artist: \(q(info.artist)), albumTitle: \(q(info.album)), subTitle: \(q(info.artist)) }")
+        }
+        if info.state == .playing {
+            js("timeline", "{ position: \(info.position), duration: \(info.duration) }")
+        }
+        lastMedia = info
     }
 
     public func pause() {
@@ -141,6 +191,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         mouseMonitor = nil
         audioProvider?.stop()
         audioProvider = nil
+        mediaTimer?.invalidate()
+        mediaTimer = nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "waple")
         webView?.removeFromSuperview()
         webView = nil

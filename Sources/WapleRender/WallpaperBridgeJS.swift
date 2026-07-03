@@ -38,11 +38,23 @@ enum WallpaperBridgeJS {
       window.wallpaperRequestRandomFileForProperty = function (name, cb) {
         try { window.webkit.messageHandlers.waple.postMessage({ type: 'randomFile', name: name }); } catch (e) {}
       };
-      var noop = function () {};
-      window.wallpaperRegisterMediaStatusListener = noop;
-      window.wallpaperRegisterMediaPropertiesListener = noop;
-      window.wallpaperRegisterMediaThumbnailListener = noop;
-      window.wallpaperRegisterMediaTimelineListener = noop;
+      // 미디어 연동: 리스너 등록 시 네이티브에 알리고(폴링 시작), __wapleMedia 로 배달받는다.
+      window.wallpaperMediaIntegration = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };
+      var mediaCbs = { status: null, properties: null, timeline: null, thumbnail: null };
+      function regMedia(kind) {
+        return function (cb) {
+          mediaCbs[kind] = cb;
+          try { window.webkit.messageHandlers.waple.postMessage({ type: 'mediaListen' }); } catch (e) {}
+        };
+      }
+      window.wallpaperRegisterMediaStatusListener = regMedia('status');
+      window.wallpaperRegisterMediaPropertiesListener = regMedia('properties');
+      window.wallpaperRegisterMediaThumbnailListener = regMedia('thumbnail');
+      window.wallpaperRegisterMediaTimelineListener = regMedia('timeline');
+      window.__wapleMedia = function (kind, obj) {
+        var cb = mediaCbs[kind];
+        if (cb) { try { cb(obj); } catch (e) {} }
+      };
       window.wallpaperRegisterMediaPlaybackListener = noop;
     })();
     """#
