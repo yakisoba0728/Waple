@@ -7,8 +7,9 @@ public enum GLSLTypeAdapter {
     public struct Env {
         public var vars: [String: Int]        // 이름 → 벡터 크기(1..4), 0 = 불투명
         public var functions: [String: Int]   // 함수 이름 → 반환 크기
-        public init(vars: [String: Int], functions: [String: Int] = [:]) {
-            self.vars = vars; self.functions = functions
+        public var functionParams: [String: [Int]]  // 호출 인자 절단용(0=불투명)
+        public init(vars: [String: Int], functions: [String: Int] = [:], functionParams: [String: [Int]] = [:]) {
+            self.vars = vars; self.functions = functions; self.functionParams = functionParams
         }
     }
 
@@ -320,19 +321,38 @@ public enum GLSLTypeAdapter {
         return postfix(p)
     }
 
+    private static func maxComponent(_ swz: String) -> Int {
+        var m = 0
+        for c in swz {
+            for set in ["xyzw", "rgba", "stpq"] {
+                if let i = set.firstIndex(of: c) { m = max(m, set.distance(from: set.startIndex, to: i)) }
+            }
+        }
+        return m
+    }
+
     private static func postfix(_ p: P) -> Node {
         var base = primary(p)
+        var preSwizzle: (text: String, size: Int)? = nil
         while let t = p.peek() {
             if t == "." {
                 let dotTok = p.advance()
                 guard p.pos < p.toks.count else { base.text += dotTok.full; break }
                 let member = p.advance()
                 if member.text.allSatisfy({ "xyzwrgbastpq".contains($0) }) {
+                    // 스위즐 체인 초과(실물 water_caustics `.xy.zw`): 직전 스위즐을 대체.
+                    if let pre = preSwizzle, base.size > 0, maxComponent(member.text) >= base.size {
+                        base = Node(text: pre.text + dotTok.full + member.full, size: member.text.count)
+                        continue
+                    }
+                    preSwizzle = (base.text, base.size)
                     base = Node(text: base.text + dotTok.full + member.full, size: member.text.count)
                 } else {
+                    preSwizzle = nil
                     base = Node(text: base.text + dotTok.full + member.full, size: 0)
                 }
             } else if t == "[" {
+                preSwizzle = nil
                 var text = base.text + p.advance().full
                 let idx = expression(p)
                 text += idx.text
@@ -385,6 +405,14 @@ public enum GLSLTypeAdapter {
                             let lead = argTexts[i].prefix(while: { $0 == " " || $0 == "\t" })
                             argTexts[i] = lead + argTexts[i].trimmingCharacters(in: .whitespaces) + ".0"
                         }
+                    }
+                }
+                // 알려진 헬퍼: 인자를 파라미터 크기로 절단(HLSL 관용 — 실물 shimmer).
+                if let ps = p.env.functionParams[t] {
+                    for i in argTexts.indices where i < ps.count && ps[i] > 0 && argSizes[i] > ps[i] {
+                        let node = coerce(Node(text: argTexts[i], size: argSizes[i]), to: ps[i])
+                        argTexts[i] = node.text
+                        argSizes[i] = ps[i]
                     }
                 }
                 var text = tok.full + open

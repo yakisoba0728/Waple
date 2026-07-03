@@ -89,15 +89,10 @@ public enum GLSLTranslator {
         var frag = symbolMap(materials: materials, stage: .fragment)
         var vert = symbolMap(materials: materials, stage: .vertex)
         for (n, v) in typeAndMacroRenames() { frag[n] = v; vert[n] = v }
-        let fragDeclaredV = Dictionary(parseVaryings(fsrc).map { ($0.name, $0.type) }, uniquingKeysWith: { a, _ in a })
         for vy in varyings {
-            // 스테이지 간 varying 타입 불일치(실물 test_shader: vert vec4 / frag vec2) — Vary 멤버는
-            // union(선선언=vert) 타입이므로, frag 가 더 작게 선언했으면 치환에 스위즐을 붙인다.
-            var fragRef = "in.\(vy.name)"
-            if let ft = fragDeclaredV[vy.name], ft.components < vy.type.components, ft.components >= 1, ft.components <= 3 {
-                fragRef += ["", ".x", ".xy", ".xyz"][ft.components]
-            }
-            frag[vy.name] = fragRef
+            // 스테이지 간 타입 불일치(vert vec4/frag vec2)는 타입어댑터가 union 크기로 coerce 한다 —
+            // 치환맵에 스위즐을 붙이면 사용처 자체 스위즐과 이중화(실물 water_caustics `.xy.zw`).
+            frag[vy.name] = "in.\(vy.name)"
             vert[vy.name] = "out.\(vy.name)"
         }
         for a in parseAttributes(vsrc) { vert[a.name] = "vin.\(a.name)" }
@@ -183,13 +178,16 @@ public enum GLSLTranslator {
         for m in materials { sizeEnv[m.glslName] = m.type.components }
         for id in bodyIds where isEngine(id) && id.hasSuffix("Resolution") { sizeEnv[id] = 4 }
         var fnSizes: [String: Int] = [:]
-        for h in helpers { fnSizes[h.name] = GLSLTypeAdapter.typeSize(h.ret) ?? 0 }
-        var fragSizeEnv = sizeEnv
-        for vy in parseVaryings(fsrc) { fragSizeEnv[vy.name] = vy.type.components }
+        var fnParamSizes: [String: [Int]] = [:]
+        for h in helpers {
+            fnSizes[h.name] = GLSLTypeAdapter.typeSize(h.ret) ?? 0
+            fnParamSizes[h.name] = h.params.map { $0.array ? 0 : (GLSLTypeAdapter.typeSize($0.type) ?? 0) }
+        }
+        let fragSizeEnv = sizeEnv  // varying 크기는 union(Vary 멤버 실타입) — frag 소형 선언은 어댑터가 coerce
         let fragMainBody = GLSLTypeAdapter.adapt(body: fragMainBodyPre,
-                                                 env: .init(vars: fragSizeEnv, functions: fnSizes))
+                                                 env: .init(vars: fragSizeEnv, functions: fnSizes, functionParams: fnParamSizes))
         let vertMainBody = GLSLTypeAdapter.adapt(body: vertMainF.body,
-                                                 env: .init(vars: sizeEnv, functions: fnSizes))
+                                                 env: .init(vars: sizeEnv, functions: fnSizes, functionParams: fnParamSizes))
 
         // Stage-3 ①②: 지역 섀도잉(varying/머티리얼과 동명의 로컬 선언) → 해당 본문 맵에서 제외
         // (치환하면 `float4 in.x = ...` 로 깨짐); fragment 의 varying 대입 → 로컬 사본으로 승격.
@@ -197,13 +195,11 @@ public enum GLSLTranslator {
         let vertLocals = localDeclNames(in: vertMainBody)
         var fragMap = frag, vertMap = vert
         var fragVaryingPrelude = ""
-        let fragVaryingTypes = Dictionary(parseVaryings(fsrc).map { ($0.name, $0.type) }, uniquingKeysWith: { a, _ in a })
         for vy in varyings {
             if fragLocals.contains(vy.name) { fragMap.removeValue(forKey: vy.name) }
             else if isAssigned(vy.name, in: fragMainBody) {
                 fragMap[vy.name] = vy.name
-                let ty = fragVaryingTypes[vy.name] ?? vy.type  // 스테이지 간 타입 불일치 시 frag 선언 우선
-                fragVaryingPrelude += "\(ty.msl) \(vy.name) = in.\(vy.name);\n"
+                fragVaryingPrelude += "\(vy.type.msl) \(vy.name) = in.\(vy.name);\n"
             }
             if vertLocals.contains(vy.name) { vertMap.removeValue(forKey: vy.name) }
         }
@@ -229,7 +225,7 @@ public enum GLSLTranslator {
             guard let sig = helperSignature(h, captures: caps, materials: materials) else { continue }  // 미지원 타입 → 스킵
             var helperEnv = sizeEnv
             for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
-            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes),
+            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes),
                                                     returnSize: GLSLTypeAdapter.typeSize(h.ret))
             let withCalls = appendCaptureArgs(adaptedBody, helpers: helpers, captureOf: captureOf) { cap in
                 rawCaptureName(cap, materials: materials)
@@ -474,8 +470,15 @@ public enum GLSLTranslator {
             guard s.hasPrefix("varying ") else { continue }
             let toks = s.dropFirst("varying ".count).split(separator: ";").first?.split(separator: " ").map(String.init) ?? []
             guard toks.count >= 2, let type = GLSLType.from(toks[0]) else { continue }
-            let name = toks[1]
-            if seen.insert(name).inserted { out.append((type, name)) }
+            // 실물 오타 관용: `varying vec4 v_Size.xy;` — 이름은 식별자까지만.
+            let name = String(toks[1].prefix(while: { $0.isLetter || $0.isNumber || $0 == "_" }))
+            guard !name.isEmpty else { continue }
+            if seen.insert(name).inserted {
+                out.append((type, name))
+            } else if let i = out.firstIndex(where: { $0.1 == name }), type.components > out[i].0.components {
+                // 스테이지 간 타입 불일치(vert vec2/frag vec4 등): 큰 쪽이 Vary 멤버 — 양쪽 접근 모두 유효.
+                out[i].0 = type
+            }
         }
         return out
     }
@@ -531,11 +534,14 @@ public enum GLSLTranslator {
         name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
             || name.hasPrefix("g_AudioSpectrum")
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Resolution"))
+            || (name.hasPrefix("g_") && name.hasSuffix("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder)
     }
     static func engineReplacement(_ name: String) -> String {
         if name == "g_Time" { return "eng.timeAndPad.x" }
         if name == "g_PointerPosition" { return "eng.timeAndPad.yz" }  // 마우스 UV(0..1), 미구동 시 0.5,0.5
-        if name == "g_ModelViewProjectionMatrix" { return "eng.mvp" }
+        if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
+        // 레이어 모델/기타 행렬: 효과 쿼드 기준 항등이 정답(레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확).
+        if name.hasPrefix("g_"), name.hasSuffix("Matrix") { return "float4x4(1.0)" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
         if name == "g_AudioSpectrum16Right" { return "audioR" }
         if name == "g_AudioSpectrum32Left" { return "audioL32" }

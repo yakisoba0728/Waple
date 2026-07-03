@@ -146,4 +146,44 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertEqual(ExprEval.eval("!0", defines: [:]), 1)
         XCTAssertEqual(ExprEval.eval("A || B", defines: ["A": 0, "B": 1]), 1)
     }
+
+    /// C 규약: #define 은 정의 이후 줄부터만 치환(실물 frame_builder — 정의 이전의 지역 `float res;` 가
+    /// `#define res g_Texture0Resolution.xy` 로 오염되던 근본 원인).
+    func testDefineAppliesOnlyAfterDefinition() {
+        let src = """
+        float res;
+        res = 1.0;
+        #define res g_Texture0Resolution.xy
+        vec2 q = res;
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("float res;"), out)
+        XCTAssertTrue(out.contains("res = 1.0;"), out)
+        XCTAssertTrue(out.contains("vec2 q = g_Texture0Resolution.xy;"), out)
+    }
+
+    /// 재정의: 이전 정의는 재정의 줄까지만 유효.
+    func testRedefinitionScopesRanges() {
+        let src = """
+        #define K 2.0
+        float a = K;
+        #define K 5.0
+        float b = K;
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("float a = 2.0;"), out)
+        XCTAssertTrue(out.contains("float b = 5.0;"), out)
+    }
+
+    /// 함수형 매크로도 정의 이후부터.
+    func testFuncMacroPositionAware() {
+        let src = """
+        float F;
+        #define F(x) (x * 2.0)
+        float y = F(3.0);
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("float F;"), out)
+        XCTAssertTrue(out.contains("float y = (3.0 * 2.0);"), out)
+    }
 }

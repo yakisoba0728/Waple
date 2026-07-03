@@ -679,7 +679,7 @@ final class GLSLTranslatorTests: XCTestCase {
         void main() { vec2 uv = v_TexCoord; gl_FragColor = texSample2D(g_Texture0, uv); }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("float2 uv = in.v_TexCoord.xy;"), t.msl)
+        XCTAssertTrue(t.msl.contains("float2 uv = (in.v_TexCoord).xy;"), "어댑터 절단 형태: \(t.msl.suffix(600))")
     }
 
     func testMinMaxIntLiteralPromotedToFloat() {

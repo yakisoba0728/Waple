@@ -70,6 +70,15 @@ public enum ShaderPreprocessor {
         var d = defines
         var textDefines: [String: String] = [:]
         var funcMacros: [String: (params: [String], body: String)] = [:]
+        // C 규약(위치-인지): 정의는 이후 줄부터, 재정의 시 이전 정의는 그 줄까지(실물 frame_builder).
+        struct MacroDef { let name: String; let value: String?; let fn: (params: [String], body: String)?
+                          let fromLine: Int; var toLine: Int = Int.max }
+        var macroDefs: [MacroDef] = []
+        func closePrev(_ name: String, at line: Int) {
+            for i in macroDefs.indices where macroDefs[i].name == name && macroDefs[i].toLine == Int.max {
+                macroDefs[i].toLine = line
+            }
+        }
         var out: [String] = []
         // 스택: (이 분기 출력중?, 이 #if 체인에서 이미 참 분기를 만났나?, 부모가 활성인가)
         struct Frame { var active: Bool; var taken: Bool; var parentActive: Bool }
@@ -78,7 +87,12 @@ public enum ShaderPreprocessor {
 
         for raw in source.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
-            let t = line.trimmingCharacters(in: .whitespaces)
+            var t = line.trimmingCharacters(in: .whitespaces)
+            // 지시문 줄 트레일링 주석 제거 — `#if C_TYPE == 4 // 설명` 이 식 평가를 깨면
+            // 관용 유지로 모든 분기가 방출된다(실물 frame_builder 의 offset 재정의 원인).
+            if t.hasPrefix("#"), let c = t.range(of: "//") {
+                t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces)
+            }
             if t.hasPrefix("#if ") || t.hasPrefix("#ifdef ") || t.hasPrefix("#ifndef ") {
                 let parentActive = emitting()
                 var cond = false
@@ -119,7 +133,11 @@ public enum ShaderPreprocessor {
                         if let c = bodyRaw.range(of: "//") { bodyRaw = String(bodyRaw[..<c.lowerBound]) }
                         if let c = bodyRaw.range(of: "/*") { bodyRaw = String(bodyRaw[..<c.lowerBound]) }
                         let body = bodyRaw.trimmingCharacters(in: .whitespaces)
-                        if !body.isEmpty { funcMacros[name] = (params, body) }
+                        if !body.isEmpty {
+                            funcMacros[name] = (params, body)
+                            closePrev(name, at: out.count)
+                            macroDefs.append(MacroDef(name: name, value: nil, fn: (params, body), fromLine: out.count))
+                        }
                     }
                 } else {
                     // 트레일링 주석은 치환값에서 제거 — `#define K 0.0625 // 1/16` 이 그대로 들어가면
@@ -133,6 +151,8 @@ public enum ShaderPreprocessor {
                     } else {
                         if let v = Int(value) { d[name] = v }
                         textDefines[name] = value
+                        closePrev(name, at: out.count)
+                        macroDefs.append(MacroDef(name: name, value: value, fn: nil, fromLine: out.count))
                     }
                 }
                 // #define 줄은 출력에서 제거
@@ -142,22 +162,34 @@ public enum ShaderPreprocessor {
         }
         // 본문 매크로 확장: object-like 치환 + 함수형 매크로 호출 확장을 한 루프에서 fixpoint 까지(캡 12)
         // — 별칭(#define A Bf)·매크로가 매크로를 부르는 체인(실물 Blend* 계열)이 수렴하도록.
-        var subst = textDefines
-        for (k, v) in d where subst[k] == nil { subst[k] = String(v) }
-        var body = out.joined(separator: "\n")
-        guard !subst.isEmpty || !funcMacros.isEmpty else { return body }
+        // combos/[COMBO] 기본값 등 소스 밖에서 온 정의는 전체 범위(fromLine 0).
+        for (k, v) in d where textDefines[k] == nil && funcMacros[k] == nil {
+            // 소스 밖(combos/[COMBO] 기본값/값없는 define)에서 온 정의 — 전체 범위.
+            macroDefs.append(MacroDef(name: k, value: String(v), fn: nil, fromLine: 0))
+        }
+        guard !macroDefs.isEmpty else { return out.joined(separator: "\n") }
+        var lines = out
         for _ in 0..<12 {
-            var next = substituteIdentifiers(body, subst)
-            for (name, m) in funcMacros {
-                // balanced-paren 호출 인식/재작성은 GLSLTranslator 의 저수준 문자열 도구 재사용(동일 타깃).
-                next = GLSLTranslator.rewriteCall(next, name) { args in
-                    guard args.count == m.params.count else { return nil }
-                    return GLSLTranslator.replaceIdentifiers(m.body, Dictionary(uniqueKeysWithValues: zip(m.params, args)))
+            var changed = false
+            for def in macroDefs {
+                let hi = min(def.toLine, lines.count)
+                guard def.fromLine < hi else { continue }
+                for i in def.fromLine..<hi {
+                    let before = lines[i]
+                    if let v = def.value {
+                        lines[i] = substituteIdentifiers(before, [def.name: v])
+                    } else if let m = def.fn {
+                        lines[i] = GLSLTranslator.rewriteCall(before, def.name) { args in
+                            guard args.count == m.params.count else { return nil }
+                            return GLSLTranslator.replaceIdentifiers(m.body, Dictionary(uniqueKeysWithValues: zip(m.params, args)))
+                        }
+                    }
+                    if lines[i] != before { changed = true }
                 }
             }
-            if next == body { break }
-            body = next
+            if !changed { break }
         }
+        let body = lines.joined(separator: "\n")
         return body
     }
 

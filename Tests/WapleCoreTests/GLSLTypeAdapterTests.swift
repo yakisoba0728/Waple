@@ -3,8 +3,9 @@ import XCTest
 
 /// Stage-3 phase 2: HLSL-관용 벡터 크기 혼합을 MSL 이 허용하도록 절단/브로드캐스트 삽입(실물 4클래스).
 final class GLSLTypeAdapterTests: XCTestCase {
-    private func env(_ vars: [String: Int] = [:], fns: [String: Int] = [:]) -> GLSLTypeAdapter.Env {
-        GLSLTypeAdapter.Env(vars: vars, functions: fns)
+    private func env(_ vars: [String: Int] = [:], fns: [String: Int] = [:],
+                     params: [String: [Int]] = [:]) -> GLSLTypeAdapter.Env {
+        GLSLTypeAdapter.Env(vars: vars, functions: fns, functionParams: params)
     }
 
     func testDeclarationTruncation() {
@@ -65,6 +66,21 @@ final class GLSLTypeAdapterTests: XCTestCase {
         // 확실한 int 끼리는 유지.
         let out2 = GLSLTypeAdapter.adapt(body: "int i = 5;\nint j = i % 2;", env: env())
         XCTAssertTrue(out2.contains("i % 2"), out2)
+    }
+
+    func testCallArgsCoercedToParamSizes() {
+        // 실물 shimmer: rotateVec2(vec2 uv, float a) 에 vec4 varying 전달 — HLSL 은 절단.
+        let out = GLSLTypeAdapter.adapt(body: "vec2 r = rotateVec2(v_TexCoord, 1.0);",
+                                        env: env(["v_TexCoord": 4], fns: ["rotateVec2": 2],
+                                                 params: ["rotateVec2": [2, 1]]))
+        XCTAssertEqual(out, "vec2 r = rotateVec2((v_TexCoord).xy, 1.0);")
+    }
+
+    func testSwizzleChainCollapsed() {
+        // 실물 water_caustics: v_TexCoord.xy.zw — 직전 스위즐을 대체(.zw 를 원본에 적용).
+        let out = GLSLTypeAdapter.adapt(body: "float m = tex(v_TexCoord.xy.zw);",
+                                        env: env(["v_TexCoord": 4]))
+        XCTAssertEqual(out, "float m = tex(v_TexCoord.zw);")
     }
 
     func testDotLengthScalarAndTernary() {
