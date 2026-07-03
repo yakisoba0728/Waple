@@ -1,5 +1,6 @@
 import AppKit
 import MetalKit
+import simd
 import WapleCore
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
@@ -112,6 +113,31 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var translucentPipeline: MTLRenderPipelineState?
     private var fullscreenQuad: [SIMD2<Float>] = [SIMD2(-1,-1), SIMD2(1,-1), SIMD2(-1,1), SIMD2(1,1)]
 
+    // ── 3D 씬(camera3D + .mdl 메시) 상태 ─────────────────────────────────────────
+    /// 서브메시 1개 = 드로우콜 1개. vbuf 는 pos3+normal3+uv2 인터리브(8 float/정점), ibuf 는 u16.
+    private struct GPU3DMesh {
+        let vbuf: MTLBuffer
+        let ibuf: MTLBuffer
+        let indexCount: Int
+        let texture: MTLTexture
+        let tint: SIMD4<Float>       // 머티리얼 Color × Alpha
+        let alphaCutoff: Float       // alphatocoverage → 0.5 (컷아웃 discard 근사), 그 외 0
+        let cullBack: Bool           // cullmode "normal" → 백페이스 컬, "nocull" → 양면
+        let additive: Bool
+        let depthTest: Bool
+        let depthWrite: Bool
+    }
+    private struct GPU3DObject { let meshes: [GPU3DMesh]; let world: simd_float4x4; let name: String
+        let center: SIMD3<Float>; let radius: Float }  // center/radius: 서브메시 AABB 합(월드) — 진단용
+    /// MSL 쪽 MeshU 와 레이아웃 일치(float4x4 + float4 + float4 = 96B).
+    private struct MeshUniform { var mvp: simd_float4x4; var tint: SIMD4<Float>; var misc: SIMD4<Float> }
+    private var meshObjects: [GPU3DObject] = []
+    private var camera3D: SceneCamera3D?
+    private var meshPipelineOver: MTLRenderPipelineState?      // premultiplied over(normal/translucent)
+    private var meshPipelineAdditive: MTLRenderPipelineState?
+    private var meshDepthStates: [String: MTLDepthStencilState] = [:]  // "test-write" 키
+    private var depthTextures: [String: MTLTexture] = [:]     // 크기별 재사용(.depth32Float)
+
     public override init() { super.init() }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
@@ -174,18 +200,28 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                    blue: Double(doc.clearColor.z), alpha: 1)
         projW = Float(max(1, doc.projectionWidth)); projH = Float(max(1, doc.projectionHeight))
         projAspect = projW / projH
+        // 3D 씬(camera3D + .mdl 오브젝트): 메시 경로 빌드. v1 은 메시만 그린다 — 병존하는 2D
+        // 레이어/파티클/텍스트(3D 씬의 빌보드)는 미구현 한계로 기록(태양계 이미지 346장 스킵).
+        // 메시가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
+        if let cam = doc.camera3D, !doc.objects3D.isEmpty {
+            camera3D = cam
+            build3D(doc: doc, package: package, device: device)
+        }
         // 씬 공유 JSContext — buildLayers/buildTexts/buildTranslatedEffect 의 모든 스크립트가 공유.
         // 엔진 생성은 scene objects[] 순서(buildLayers 가 doc.layers 순회) — 컨트롤러 top-level 이
         // 첫 프레임 평가 전에 실행된다(실물 3394601417: 'bt'.visible 이 shared.a=1 세팅).
         sceneScript = SceneScriptContext()
-        layers = buildLayers(doc: doc, package: package, device: device)
-        particleSystems = buildParticles(doc: doc, package: package, device: device)
-        if !particleSystems.isEmpty {
-            hasParticles = true
-            additivePipeline = particlePipeline(additive: true, device: device)
-            translucentPipeline = particlePipeline(additive: false, device: device)
+        if meshObjects.isEmpty {
+            camera3D = nil
+            layers = buildLayers(doc: doc, package: package, device: device)
+            particleSystems = buildParticles(doc: doc, package: package, device: device)
+            if !particleSystems.isEmpty {
+                hasParticles = true
+                additivePipeline = particlePipeline(additive: true, device: device)
+                translucentPipeline = particlePipeline(additive: false, device: device)
+            }
+            textLayers = buildTexts(doc: doc, package: package, device: device)
         }
-        textLayers = buildTexts(doc: doc, package: package, device: device)
         // 씬 오브젝트 순서(z-순서)대로 레이어·파티클·텍스트를 인터리브 드로우.
         drawPlan = (layers.enumerated().map { (i, l) in (l.order, DrawItem(kind: .layer, idx: i)) }
                     + particleSystems.enumerated().map { (i, p) in (p.order, DrawItem(kind: .particle, idx: i)) }
@@ -603,6 +639,226 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return try? device.makeRenderPipelineState(descriptor: pd)
     }
 
+    // ── 3D 씬(메시) 경로 ─────────────────────────────────────────────────────────
+
+    /// .mdl 로드 → 서브메시별 버퍼/텍스처/머티리얼 플래그 → 월드행렬(parent 계층 합성) 준비.
+    /// 실패 오브젝트는 스킵+로그(부분 렌더 우선). 조상 그룹이 정적 비가시면 서브트리 제외.
+    private func build3D(doc: SceneDocument, package: ScenePackage, device: MTLDevice) {
+        guard let lib = try? device.makeLibrary(source: Mesh3DShaders.source, options: nil) else {
+            NSLog("%@", "[Waple] 3D: mesh shader compile failed")
+            return
+        }
+        meshPipelineOver = mesh3DPipeline(lib: lib, additive: false, device: device)
+        meshPipelineAdditive = mesh3DPipeline(lib: lib, additive: true, device: device)
+        guard meshPipelineOver != nil else { return }
+        let nodeMap = Scene3DMath.nodeMap(objects: doc.objects3D, groups: doc.nodes3D)
+        var loaded = 0, skipped = 0
+        for obj in doc.objects3D {
+            guard let w = Scene3DMath.worldMatrix(id: obj.id, nodes: nodeMap) else { continue }
+            guard w.visible else { continue }  // 조상 그룹 비가시(젤다 link_adult 서브트리 등)
+            guard let mdlData = assetData(obj.model, package: package),
+                  let model = Model3D.parse(mdlData) else {
+                NSLog("%@", "[Waple] 3D: mdl load failed: \(obj.model)")
+                skipped += 1
+                continue
+            }
+            var meshes: [GPU3DMesh] = []
+            for mesh in model.meshes {
+                guard !mesh.vertices.isEmpty, !mesh.indices.isEmpty else { continue }
+                // pos3+normal3+uv2 재패킹(48/80 스트라이드의 tangent/bone 은 v1 미사용).
+                var packed = [Float]()
+                packed.reserveCapacity(mesh.vertices.count * 8)
+                for v in mesh.vertices {
+                    packed.append(contentsOf: [v.position.x, v.position.y, v.position.z,
+                                               v.normal.x, v.normal.y, v.normal.z,
+                                               v.uv.x, v.uv.y])
+                }
+                guard let vbuf = device.makeBuffer(bytes: packed, length: MemoryLayout<Float>.stride * packed.count),
+                      let ibuf = mesh.indices.withUnsafeBytes({ device.makeBuffer(bytes: $0.baseAddress!, length: $0.count) })
+                else { continue }
+                let mat = loadMesh3DMaterial(mesh.material, package: package, device: device)
+                meshes.append(GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
+                                        texture: mat.texture, tint: mat.tint, alphaCutoff: mat.alphaCutoff,
+                                        cullBack: mat.cullBack, additive: mat.additive,
+                                        depthTest: mat.depthTest, depthWrite: mat.depthWrite))
+            }
+            guard !meshes.isEmpty else { skipped += 1; continue }
+            // 진단용 월드 AABB(8코너 변환 합) — WAPLE3D_DEBUG 로그와 클립 판단에 사용.
+            var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+            var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+            for mesh in model.meshes {
+                for cx in [mesh.boundsMin.x, mesh.boundsMax.x] {
+                    for cy in [mesh.boundsMin.y, mesh.boundsMax.y] {
+                        for cz in [mesh.boundsMin.z, mesh.boundsMax.z] {
+                            let p = w.matrix * SIMD4<Float>(cx, cy, cz, 1)
+                            lo = simd_min(lo, SIMD3(p.x, p.y, p.z))
+                            hi = simd_max(hi, SIMD3(p.x, p.y, p.z))
+                        }
+                    }
+                }
+            }
+            let center = (lo + hi) / 2
+            meshObjects.append(GPU3DObject(meshes: meshes, world: w.matrix, name: obj.name,
+                                           center: center, radius: simd_length(hi - lo) / 2))
+            if ProcessInfo.processInfo.environment["WAPLE3D_DEBUG"] == "1" {
+                let texInfo = meshes.map { "\($0.texture.width)x\($0.texture.height)" }.joined(separator: ",")
+                NSLog("%@", "[Waple3D] obj '\(obj.name)' meshes=\(meshes.count) center=\(center) r=\(simd_length(hi - lo) / 2) tex=[\(texInfo)]")
+            }
+            loaded += 1
+        }
+        NSLog("%@", "[Waple] 3D scene: \(loaded) mesh objects (\(skipped) skipped), lights=\(doc.lights3D.count) [v1 unlit, 2D layers/billboards skipped]")
+    }
+
+    private struct Mesh3DMaterialInfo {
+        let texture: MTLTexture
+        let tint: SIMD4<Float>
+        let alphaCutoff: Float
+        let cullBack: Bool
+        let additive: Bool
+        let depthTest: Bool
+        let depthWrite: Bool
+    }
+
+    /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
+    /// 규약: textures[] 첫 non-null 이름 → "materials/<이름>.tex"(resolveTexture 폴백 포함).
+    private func loadMesh3DMaterial(_ path: String, package: ScenePackage, device: MTLDevice) -> Mesh3DMaterialInfo {
+        var texName: String? = nil
+        var color = SIMD3<Float>(1, 1, 1)
+        var alpha: Float = 1
+        var cullBack = true
+        var additive = false
+        var alphaCutoff: Float = 0
+        var depthTest = true, depthWrite = true
+        if let d = quietAssetData(path, package: package),
+           let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+           let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
+            texName = (p0["textures"] as? [Any])?.compactMap { $0 as? String }.first { !$0.isEmpty }
+            cullBack = (p0["cullmode"] as? String) != "nocull"
+            let blend = (p0["blending"] as? String) ?? "normal"
+            additive = blend == "additive"
+            if blend == "alphatocoverage" { alphaCutoff = 0.5 }  // MSAA 없는 컷아웃 근사(discard)
+            depthTest = (p0["depthtest"] as? String) != "disabled"
+            depthWrite = (p0["depthwrite"] as? String) != "disabled"
+            if let csv = p0["constantshadervalues"] as? [String: Any] {
+                func fvec(_ any: Any?) -> [Float]? {
+                    if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
+                    if let n = any as? Double { return [Float(n)] }
+                    if let i = any as? Int { return [Float(i)] }
+                    if let d = any as? [String: Any] { return fvec(d["value"]) }  // 스크립트 바인딩 → 초기값
+                    return nil
+                }
+                if let c = fvec(csv["Color"] ?? csv["color"]), c.count >= 3 { color = SIMD3(c[0], c[1], c[2]) }
+                if let a = fvec(csv["Alpha"] ?? csv["alpha"])?.first { alpha = a }
+            }
+        } else {
+            NSLog("%@", "[Waple] 3D: material json missing: \(path)")
+        }
+        let tex = resolveTexture(texName, package: package, device: device)
+            ?? makeTexture(Data([255, 255, 255, 255]), 1, 1, device)!
+        return Mesh3DMaterialInfo(texture: tex, tint: SIMD4(color.x, color.y, color.z, alpha),
+                                  alphaCutoff: alphaCutoff, cullBack: cullBack, additive: additive,
+                                  depthTest: depthTest, depthWrite: depthWrite)
+    }
+
+    /// 메시 파이프라인(bgra8 + depth32Float). 프래그먼트가 premultiplied 출력 → src=one,
+    /// over: dst=1-srcAlpha, additive: dst=one(가산).
+    private func mesh3DPipeline(lib: MTLLibrary, additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "mv_main")
+        pd.fragmentFunction = lib.makeFunction(name: "mf_main")
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = .bgra8Unorm
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? device.makeRenderPipelineState(descriptor: pd)
+    }
+
+    private func meshDepthState(test: Bool, write: Bool, device: MTLDevice) -> MTLDepthStencilState? {
+        let key = "\(test)-\(write)"
+        if let s = meshDepthStates[key] { return s }
+        let d = MTLDepthStencilDescriptor()
+        d.depthCompareFunction = test ? .less : .always
+        d.isDepthWriteEnabled = write
+        guard let s = device.makeDepthStencilState(descriptor: d) else { return nil }
+        meshDepthStates[key] = s
+        return s
+    }
+
+    /// 뎁스 텍스처(크기별 캐시). 메시 패스 전용 — 컬러 풀(pooledOffscreen)과 분리.
+    private func pooledDepth(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
+        let key = "\(max(w, 1))x\(max(h, 1))"
+        if let t = depthTextures[key] { return t }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float,
+                                                         width: max(w, 1), height: max(h, 1), mipmapped: false)
+        d.usage = [.renderTarget]
+        d.storageMode = .private
+        guard let t = device.makeTexture(descriptor: d) else { return nil }
+        depthTextures[key] = t
+        return t
+    }
+
+    /// 3D 메시 패스: target 에 clearColor 로 클리어 + 뎁스(.less) 붙여 씬 순서대로 드로우.
+    /// 실측 확정 규약(3737268876/3662790108/3706286085 A/B 캡처 vs preview, 2026-07-03):
+    ///   • 와인딩: front = CCW — 우수(RH) lookAt/proj 아래 CW 는 젤다 회랑이 인사이드아웃
+    ///     (근접 벽 컬링 → 뒤 외벽 노출), CCW 는 벽/바닥/아치가 preview 와 일치
+    ///   • UV 원점: 상단(v 플립 없음) — 플립 시 담쟁이/이끼가 벽 상단으로 감(Mesh3DShaders 주석)
+    ///   • fov: 세로축 — 젤다 회랑 상하 구도가 정합(가로 해석은 세로 화각 29° 로 좁아져 아치 잘림).
+    ///     코퍼스 3씬 전부 fov 50 이라 축 구분 실물 반례는 없음(표준 규약 채택)
+    ///   • 오일러: Rz·Ry·Rx (Scene3DMath.modelMatrix 주석 — 짐벌 동치 실측)
+    private func encode3D(into target: MTLTexture, cb: MTLCommandBuffer, device: MTLDevice) -> Bool {
+        guard let cam = camera3D, let over = meshPipelineOver,
+              let depthTex = pooledDepth(target.width, target.height, device) else { return false }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = target
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].clearColor = clearColor
+        rpd.depthAttachment.texture = depthTex
+        rpd.depthAttachment.loadAction = .clear
+        rpd.depthAttachment.clearDepth = 1.0
+        rpd.depthAttachment.storeAction = .dontCare
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
+        let aspect = Float(target.width) / Float(max(1, target.height))
+        let view = Scene3DMath.lookAt(eye: SIMD3(cam.eye.x, cam.eye.y, cam.eye.z),
+                                      center: SIMD3(cam.center.x, cam.center.y, cam.center.z),
+                                      up: SIMD3(cam.up.x, cam.up.y, cam.up.z))
+        let proj = Scene3DMath.perspective(fovYDegrees: cam.fov, aspect: aspect,
+                                           nearZ: cam.nearZ, farZ: cam.farZ)
+        let viewProj = proj * view
+        // 와인딩: front = CCW(A/B 실측 — CW 는 젤다 회랑이 인사이드아웃: 근접 벽이 컬링되어
+        // 뒤쪽 외벽이 보임). cullmode "normal" 메시가 CCW-front 백페이스 컬에서 preview 와 일치.
+        enc.setFrontFacing(.counterClockwise)
+        let debug3D = ProcessInfo.processInfo.environment["WAPLE3D_DEBUG"] == "1"
+        for obj in meshObjects {
+            if debug3D {
+                let c = viewProj * SIMD4<Float>(obj.center.x, obj.center.y, obj.center.z, 1)
+                NSLog("%@", "[Waple3D] draw '\(obj.name)' ndc=\(c.w != 0 ? SIMD3(c.x, c.y, c.z) / c.w : .zero) w=\(c.w) r=\(obj.radius)")
+            }
+            var u = MeshUniform(mvp: viewProj * obj.world, tint: SIMD4(1, 1, 1, 1),
+                                misc: SIMD4(0, 0, 0, 0))
+            for mesh in obj.meshes {
+                u.tint = mesh.tint
+                u.misc.x = mesh.alphaCutoff
+                enc.setRenderPipelineState(mesh.additive ? (meshPipelineAdditive ?? over) : over)
+                if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
+                    enc.setDepthStencilState(ds)
+                }
+                enc.setCullMode(mesh.cullBack ? .back : .none)
+                enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                enc.setFragmentTexture(mesh.texture, index: 0)
+                enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+                                          indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+            }
+        }
+        enc.endEncoding()
+        return true
+    }
+
     /// 파티클 스냅샷 → 인터리브드 쿼드 버텍스(정점당 8 float: ndc.xy, uv, rgba).
     /// 빌보드: world_px = origin + scale⊙local(로컬 Y-up → 픽셀 Y-down 부호 반전), half=size_px/2.
     private func particleVertices(_ snapshot: [Particle], _ sys: GPUParticleSystem) -> [Float] {
@@ -785,6 +1041,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let time = Float(nowT - startTime)
         var dt = Float(nowT - lastFrameTime); lastFrameTime = nowT
         dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
+
+        // 3D 씬: 메시 전용 패스(뎁스) → drawable blit. 2D drawPlan 은 v1 미병행(빌보드 한계).
+        if !meshObjects.isEmpty {
+            poolCheckout.removeAll(keepingCapacity: true)
+            guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
+                  encode3D(into: acc, cb: cb, device: device) else { return }
+            if let blit = cb.makeBlitCommandEncoder() {
+                blit.copy(from: acc, to: drawable.texture)
+                blit.endEncoding()
+            }
+            cb.present(drawable)
+            cb.commit()
+            return
+        }
 
         refreshScriptedTexts(device: device)  // 초당 1회 update() 재평가(시계 등)
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
@@ -1141,6 +1411,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     @discardableResult
     public func captureFrames(width: Int, height: Int, times: [Float], toDir: URL) -> [URL] {
         guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
+        // 3D 씬: 메시 전용 패스(뎁스). v1 정적(바인드 포즈 + t=0 트랜스폼)이라 시간 무관 동일 프레임.
+        if !meshObjects.isEmpty {
+            var urls: [URL] = []
+            for t in times.sorted() {
+                guard let cb = queue.makeCommandBuffer() else { continue }
+                poolCheckout.removeAll(keepingCapacity: true)
+                guard encode3D(into: target, cb: cb, device: device) else { continue }
+                cb.commit(); cb.waitUntilCompleted()
+                let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
+                if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
+            }
+            return urls
+        }
         var sims = particleSystems.map { ParticleSimulator(def: $0.def, seed: $0.seed) }
         var simTime: Float = 0
         let dt: Float = 1.0 / 30.0
@@ -1181,18 +1464,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
             if aborted { cb.commit(); continue }
             enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
-            // readback (BGRA → RGBA) → PNG.
-            var raw = [UInt8](repeating: 0, count: width * height * 4)
-            raw.withUnsafeMutableBytes { ptr in
-                target.getBytes(ptr.baseAddress!, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
-            }
-            for j in stride(from: 0, to: raw.count, by: 4) { raw.swapAt(j, j + 2) }
-            if let png = OffscreenCapture.png(rgba: raw, width: width, height: height) {
-                let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
-                if (try? png.write(to: url)) != nil { urls.append(url) }
-            }
+            let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
+            if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
         }
         return urls
+    }
+
+    /// bgra8 타겟 readback(BGRA→RGBA 스왑) → PNG 저장. 성공 여부 반환.
+    private func writeFramePNG(_ target: MTLTexture, width: Int, height: Int, to url: URL) -> Bool {
+        var raw = [UInt8](repeating: 0, count: width * height * 4)
+        raw.withUnsafeMutableBytes { ptr in
+            target.getBytes(ptr.baseAddress!, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0)
+        }
+        for j in stride(from: 0, to: raw.count, by: 4) { raw.swapAt(j, j + 2) }
+        guard let png = OffscreenCapture.png(rgba: raw, width: width, height: height) else { return false }
+        return (try? png.write(to: url)) != nil
     }
 
     public func pause() { videoRenderer?.pause() }
@@ -1208,6 +1494,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil
+        meshObjects = []; camera3D = nil
+        meshPipelineOver = nil; meshPipelineAdditive = nil
+        meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
         pipeline = nil; queue = nil; device = nil
     }

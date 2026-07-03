@@ -57,3 +57,24 @@ final class DXT5DecoderTests: XCTestCase {
         XCTAssertEqual([px[0], px[1], px[2]], [255, 255, 255])
     }
 }
+
+/// DXT1(BC1) — 4바이트 색상 팔레트 + 2비트 인덱스, c0<=c1 이면 인덱스 3 = 투명 검정.
+final class DXT1DecoderTests: XCTestCase {
+    /// 단색 블록: c0=c1=적색(565), 인덱스 전부 0 → 전 픽셀 불투명 적색... 단 c0==c1 은 3-색 모드.
+    func testSolidRedBlockOpaque() throws {
+        // c0 > c1 (4-색 모드): c0=적(0xF800), c1=흑(0x0000), 인덱스 전부 0 → 적색.
+        var block: [UInt8] = [0x00, 0xF8, 0x00, 0x00] + [0, 0, 0, 0]
+        let out = try XCTUnwrap(DXT5Decoder.decodeBC1(Data(block), width: 4, height: 4))
+        XCTAssertEqual(out.count, 64)
+        XCTAssertEqual(out[0], 255); XCTAssertEqual(out[1], 0); XCTAssertEqual(out[2], 0); XCTAssertEqual(out[3], 255)
+        // 3-색 모드(c0 <= c1): 인덱스 3 → 투명 검정.
+        block = [0x00, 0x00, 0x00, 0xF8] + [0xFF, 0xFF, 0xFF, 0xFF]  // 모든 인덱스 = 3
+        let t = try XCTUnwrap(DXT5Decoder.decodeBC1(Data(block), width: 4, height: 4))
+        XCTAssertEqual(t[3], 0, "3-색 모드 인덱스 3 은 투명")
+    }
+
+    func testBC1SizeGuard() {
+        XCTAssertNil(DXT5Decoder.decodeBC1(Data([0, 0]), width: 4, height: 4))  // 블록 부족
+        XCTAssertNil(DXT5Decoder.decodeBC1(Data(count: 8), width: 0, height: 4))
+    }
+}

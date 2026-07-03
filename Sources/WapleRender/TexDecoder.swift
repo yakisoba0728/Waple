@@ -20,18 +20,27 @@ public enum TexDecoder {
             guard sub.count >= need else { return nil }
             return (sub.prefix(need), w, h)
         case .bc3:
-            guard let mip = tex.mip,
-                  let dec = lz4(data.subdata(in: mip.payloadRange), expected: mip.decompressedSize),
+            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
                   let rgba = DXT5Decoder.decode(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
             return cropped(rgba, mip)
+        case .bc1:
+            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
+                  let rgba = DXT5Decoder.decodeBC1(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
+            return cropped(rgba, mip)
         case .lz4RGBA:
-            guard let mip = tex.mip,
-                  let dec = lz4(data.subdata(in: mip.payloadRange), expected: mip.decompressedSize),
+            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
                   dec.count >= mip.decodeWidth * mip.decodeHeight * 4 else { return nil }
             return cropped(dec, mip)
         case .video, .unknown:
             return nil
         }
+    }
+
+    /// mip0 페이로드 바이트: lz4 플래그면 해제, 아니면 그대로(TEXB0001 등 비압축).
+    private static func mipBytes(tex: TexImage, data: Data) -> Data? {
+        guard let mip = tex.mip else { return nil }
+        let payload = data.subdata(in: mip.payloadRange)
+        return mip.lz4 ? lz4(payload, expected: mip.decompressedSize) : payload
     }
 
     /// LZ4 raw 해제. 성공 시 정확히 expected 바이트 반환.

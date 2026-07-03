@@ -43,13 +43,58 @@ final class TexImageTests: XCTestCase {
         XCTAssertNil(TexImage.parse(Data("nope".utf8)))
     }
 
-    /// format=9 BC3 .tex: TEX 헤더 + "TEXB0003" + mipCount + 7 ints(decompressedSize 포함) + payload.
-    private func makeBC3Tex(w: Int, h: Int, payload: [UInt8]) -> Data {
+    /// 다중 mip(TEXB0004, 실측 DJK_1.tex mip 9개 클래스): mip0 payload 는 EOF 가 아니라
+    /// compressedSize 만큼 — 종전 EOF-스캔 휴리스틱은 이 클래스에서 nil(흰색 폴백)이었다.
+    func testParsesMultiMipTEXB0004() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
+        let mip0: [UInt8] = Array(repeating: 7, count: 24)
+        let mip1: [UInt8] = Array(repeating: 9, count: 12)
+        var b: [UInt8] = []
+        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32(4) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)      // format=4
+        b += Array("TEXB0004".utf8) + [0]
+        b += i32(1) + i32(-1) + i32(0)                                // imageCount, imageFormat, v4 필드
+        b += i32(2)                                                   // mipCount=2
+        b += i32(8) + i32(8) + i32(1) + i32(64) + i32(mip0.count) + mip0  // mip0
+        b += i32(4) + i32(4) + i32(1) + i32(16) + i32(mip1.count) + mip1  // mip1
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.payload, .bc3)
+        XCTAssertEqual(t?.mip?.decompressedSize, 64)
+        XCTAssertEqual(t?.mip?.payloadRange.count, mip0.count, "mip0 만 — EOF 까지 아님")
+        XCTAssertEqual(t?.mip?.lz4, true)
+    }
+
+    /// format=7 은 DXT1(BC1, 4bpp) — 태양계 스카이박스/태양/8k_earth 실측.
+    func testParsesFormat7AsBC1() {
+        let bc1 = ((8 + 3) / 4) * ((8 + 3) / 4) * 8
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
+        var b: [UInt8] = []
+        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32(7) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)
+        b += Array("TEXB0004".utf8) + [0]
+        b += i32(1) + i32(-1) + i32(0) + i32(1)                    // imageCount, fmt, v4, mipCount
+        b += i32(8) + i32(8) + i32(0) + i32(0) + i32(bc1)          // w, h, isLZ4=0(비압축), dec, comp
+        b += [UInt8](repeating: 0xAB, count: bc1)
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.payload, .bc1)
+        XCTAssertEqual(t?.mip?.lz4, false, "isLZ4=0 비압축(실물 2k_Sun surface map)")
+        XCTAssertEqual(t?.mip?.decompressedSize, bc1)
+    }
+
+    /// format=4 도 DXT5(BC3) — 3D 모델 텍스처 실측(250/252 가 fmt4, decompressedSize 8bpp 전수 일치).
+    func testParsesFormat4AsBC3() {
+        let t = TexImage.parse(makeBC3Tex(w: 8, h: 8, payload: Array(0..<40), format: 4))
+        XCTAssertEqual(t?.payload, .bc3)
+        XCTAssertEqual(t?.mip?.decompressedSize, 64)
+    }
+
+    /// BC3 .tex 합성: TEX 헤더 + "TEXB0003" + mipCount + 7 ints(decompressedSize 포함) + payload.
+    private func makeBC3Tex(w: Int, h: Int, payload: [UInt8], format: Int = 9) -> Data {
         func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         let dxt5 = ((w + 3) / 4) * ((h + 3) / 4) * 16
         var b: [UInt8] = []
         b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(9) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)   // format=9, dims
+        b += i32(format) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)
         b += Array("TEXB0003".utf8) + [0]
         b += i32(1)                       // mipCount
         b += i32(-1) + i32(1) + i32(w) + i32(h) + i32(1)  // leading ints

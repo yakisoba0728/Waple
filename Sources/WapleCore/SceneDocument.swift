@@ -120,6 +120,24 @@ public struct SceneObject3D: Equatable {
     }
 }
 
+/// 3D 트랜스폼-온리 노드(콘텐츠 키(image/model/particle/text/light) 없는 그룹 오브젝트).
+/// 실물 3D 씬의 `parent` 계층은 대부분 이런 빈 그룹을 경유한다(젤다 "Rupee Root"/"Link",
+/// 태양계 행성 피벗) — 렌더러가 월드행렬 합성과 서브트리 가시성 판정에 사용한다.
+public struct SceneNode3D: Equatable {
+    public let id: Int
+    public let origin: Vec3
+    public let angles: Vec3    // 오일러 라디안(SceneObject3D 와 동일 규약)
+    public let scale: Vec3
+    public let parent: Int?
+    /// 정적 가시성(스크립트 바인딩은 초기 value). false 그룹의 서브트리는 렌더 제외
+    /// (실물 3737268876: link_adult(false)/link_child(true) 교대 캐릭터).
+    public let visible: Bool
+    public init(id: Int, origin: Vec3, angles: Vec3, scale: Vec3, parent: Int?, visible: Bool) {
+        self.id = id; self.origin = origin; self.angles = angles
+        self.scale = scale; self.parent = parent; self.visible = visible
+    }
+}
+
 /// 3D 라이트 오브젝트. type: "lpoint"(점) | "ldirectional"(방향) | "lspot"(스팟).
 /// general.lightconfig 가 활성 라이트 종류/개수를 요약(point/directional/…shadow 카운트).
 public struct SceneLight3D: Equatable {
@@ -160,6 +178,8 @@ public struct SceneDocument: Equatable {
     public var objects3D: [SceneObject3D] = []
     /// 3D 라이트 오브젝트.
     public var lights3D: [SceneLight3D] = []
+    /// 트랜스폼-온리 그룹 노드(parent 계층 합성용). 비가시(false) 노드도 기록 — 서브트리 판정에 필요.
+    public var nodes3D: [SceneNode3D] = []
 }
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
@@ -204,6 +224,7 @@ extension SceneDocument {
         var texts: [SceneTextLayer] = []
         var objects3D: [SceneObject3D] = []
         var lights3D: [SceneLight3D] = []
+        var nodes3D: [SceneNode3D] = []
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
             // `visible` 은 평문 불리언 | 바인딩 객체 {"value":Bool, "script":JS} 두 형태. 스크립트가 있는
@@ -215,6 +236,19 @@ extension SceneDocument {
             else if let vis = obj["visible"] as? [String: Any] {
                 if let v = vis["value"] as? Bool { initialVisible = v }
                 visibleScript = vis["script"] as? String
+            }
+            // 트랜스폼-온리 그룹(콘텐츠 키 없음 + id 보유): 계층 노드로 기록(비가시도 포함 — 서브트리
+            // 가시성 판정에 필요)하고 다음으로. 종전에는 조용히 버려져 parent 참조가 끊겼다.
+            if !["image", "model", "particle", "text", "light"].contains(where: { obj[$0] != nil }),
+               let nodeID = intVal(obj["id"]) {
+                nodes3D.append(SceneNode3D(
+                    id: nodeID,
+                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
+                    parent: intVal(obj["parent"]),
+                    visible: initialVisible))
+                continue
             }
             if !initialVisible && (visibleScript == nil || !(obj["image"] is String)) { continue }
             if let imagePath = obj["image"] as? String {
@@ -327,7 +361,8 @@ extension SceneDocument {
         return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                              parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
                              parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
-                             texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D)
+                             texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
+                             nodes3D: nodes3D)
     }
 
     /// 레이어 소스 해석 결과.

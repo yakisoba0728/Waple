@@ -82,9 +82,12 @@ public struct Model3D: Equatable {
         }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
         func cstring(_ o: inout Int) -> String? {
-            var s = ""
-            while o < bytes.count, bytes[o] != 0 { s.append(Character(UnicodeScalar(bytes[o]))); o += 1 }
+            // UTF-8 디코드 필수: 실물 머티리얼 경로가 CJK("materials/models/太空球/…")를 포함 —
+            // 바이트별 UnicodeScalar(Latin-1) 해석은 mojibake 가 되어 pkg 엔트리 조회가 실패한다.
+            let start = o
+            while o < bytes.count, bytes[o] != 0 { o += 1 }
             guard o < bytes.count else { return nil }
+            let s = String(decoding: bytes[start..<o], as: UTF8.self)
             o += 1
             return s
         }

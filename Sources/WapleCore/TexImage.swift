@@ -1,10 +1,10 @@
 import Foundation
 
 public struct TexImage {
-    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, lz4RGBA, video, unknown }
+    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, bc1, lz4RGBA, video, unknown }
 
-    /// LZ4-compressed mip (TEXB0003/0004). `decode*` = padded texture dims(디코드 단위),
-    /// `image*` = 실제 이미지 dims(크롭 대상).
+    /// mip0 페이로드(TEXB0001~0004). `decode*` = padded texture dims(디코드 단위),
+    /// `image*` = 실제 이미지 dims(크롭 대상). lz4 == false 면 payload 는 비압축(그대로 사용).
     public struct CompressedMip: Equatable {
         public let decodeWidth: Int
         public let decodeHeight: Int
@@ -12,6 +12,14 @@ public struct TexImage {
         public let imageHeight: Int
         public let decompressedSize: Int
         public let payloadRange: Range<Int>
+        public let lz4: Bool
+
+        public init(decodeWidth: Int, decodeHeight: Int, imageWidth: Int, imageHeight: Int,
+                    decompressedSize: Int, payloadRange: Range<Int>, lz4: Bool = true) {
+            self.decodeWidth = decodeWidth; self.decodeHeight = decodeHeight
+            self.imageWidth = imageWidth; self.imageHeight = imageHeight
+            self.decompressedSize = decompressedSize; self.payloadRange = payloadRange; self.lz4 = lz4
+        }
     }
 
     public let width: Int   // 이미지 width (imgW)
@@ -44,9 +52,17 @@ public struct TexImage {
         if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, p..<b.count, nil) }
         if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (p - 4)..<b.count, nil) }
 
-        // 2) LZ4 압축 mip(TEXB0003/0004): RGBA(fmt0) 또는 DXT5(fmt9).
+        // 2) mip 컨테이너(TEXB0001~0004): RGBA(fmt0) | DXT5(fmt4/fmt9) | DXT1(fmt7).
+        // fmt4=DXT5, fmt7=DXT1 실측 근거(2026-07-03): 3D 모델 텍스처 decompressedSize 가 각각
+        // paddedW×H×1B(BC3 8bpp)/×0.5B(BC1 4bpp) 전수 일치, 디코드 결과가 preview 색과 일치(젤다/태양계).
         if let mip = parseMip(b, decodeW: texW, decodeH: texH, imgW: imgW, imgH: imgH) {
-            let kind: PayloadKind = (format == 9) ? .bc3 : (format == 0 ? .lz4RGBA : .unknown)
+            let kind: PayloadKind
+            switch format {
+            case 0: kind = .lz4RGBA
+            case 4, 9: kind = .bc3
+            case 7: kind = .bc1
+            default: kind = .unknown
+            }
             return make(kind, mip.payloadRange, mip)
         }
         // 3) 비압축 raw RGBA(드묾).
@@ -54,26 +70,41 @@ public struct TexImage {
         return make(.unknown, 0..<b.count, nil)
     }
 
-    /// "TEXB000N\0" + mipCount 다음 int 스트림에서 compressedSize K(= p+4+K == 파일끝)를 찾고,
-    /// 직전 int를 decompressedSize로 본다(버전·패딩 무관, ground truth 검증됨).
+    /// "TEXB000N\0" 컨테이너 파스(mip0 만 사용). 실측 레이아웃(RePKG TexReader + TEXB0004 hexdump
+    /// 교차검증, 2026-07-03 — 다중 mip 파일(DJK_1.tex mip 9개 등)은 종전 "compressedSize 가 EOF 에
+    /// 닿는 int 스캔" 휴리스틱이 실패해 3D 모델 텍스처 대부분이 흰색 폴백이 되던 것을 고침):
+    ///   i32 imageCount | (v3+) i32 imageFormat(실측 -1) | (v4) i32 미상(실측 0) |
+    ///   i32 mipCount | mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 decompressedSize | i32 comp | payload
     private static func parseMip(_ b: [UInt8], decodeW: Int, decodeH: Int, imgW: Int, imgH: Int) -> CompressedMip? {
-        guard let ti = indexOf(b, Array("TEXB".utf8)) else { return nil }
+        guard let ti = indexOf(b, Array("TEXB".utf8)), ti + 9 <= b.count else { return nil }
+        let version = Int(String(bytes: b[ti + 4..<ti + 8], encoding: .ascii) ?? "") ?? 0
+        guard version >= 1, version <= 4 else { return nil }
         func i32(_ o: Int) -> Int? {
             guard o >= 0, o + 4 <= b.count else { return nil }
-            return Int(UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24)
+            return Int(Int32(bitPattern: UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24))
         }
-        var p = ti + 9 + 4
-        let limit = min(b.count - 4, ti + 9 + 4 + 80)
-        while p <= limit {
-            // dec 는 공격자 제어 필드. 단일 mip 의 정당한 한계(512MB)를 넘으면 거부해 ~4GB 할당 DoS 차단.
-            if let k = i32(p), k > 0, p + 4 + k == b.count, let dec = i32(p - 4), dec > 0, dec <= 512 << 20 {
-                return CompressedMip(decodeWidth: decodeW, decodeHeight: decodeH,
-                                     imageWidth: imgW, imageHeight: imgH,
-                                     decompressedSize: dec, payloadRange: (p + 4)..<b.count)
-            }
-            p += 4
+        var p = ti + 9
+        p += 4                       // imageCount(첫 이미지의 mip0 만 사용)
+        if version >= 3 { p += 4 }   // imageFormat(FreeImage, 실측 -1)
+        if version >= 4 { p += 4 }   // 0004 추가 필드(실측 0)
+        guard let mipCount = i32(p), mipCount > 0 else { return nil }
+        p += 4
+        guard let w = i32(p), let h = i32(p + 4), w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
+        p += 8
+        var isLZ4 = 0, dec = 0
+        if version >= 2 {
+            guard let z = i32(p), let d = i32(p + 4) else { return nil }
+            isLZ4 = z; dec = d
+            p += 8
         }
-        return nil
+        guard let comp = i32(p), comp > 0, p + 4 + comp <= b.count else { return nil }
+        p += 4
+        if isLZ4 == 0 { dec = comp }  // 비압축: payload 그대로
+        // dec 는 공격자 제어 필드. 단일 mip 의 정당한 한계(512MB)를 넘으면 거부해 ~4GB 할당 DoS 차단.
+        guard dec > 0, dec <= 512 << 20 else { return nil }
+        return CompressedMip(decodeWidth: w, decodeHeight: h,
+                             imageWidth: imgW, imageHeight: imgH,
+                             decompressedSize: dec, payloadRange: p..<(p + comp), lz4: isLZ4 != 0)
     }
 
     private static func findSig(_ b: [UInt8], _ sig: [UInt8], limit: Int) -> Int? {
