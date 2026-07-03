@@ -25,7 +25,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case translated(passes: [TranslatedPass], fboScales: [Int])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = [] }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true }
     private var hasAnimations = false
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -53,6 +53,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var textLayers: [GPUText] = []
     private var hasScriptedText = false
     private var lastTextRefreshSecond = 0
+
+    /// 씬 공유 JSContext(mount 당 1개) — 모든 프로퍼티 스크립트가 `shared` 로 통신(주야 컨트롤러 등).
+    private var sceneScript: SceneScriptContext?
+    /// visible 스크립트의 최근 평가값(레이어 order → 표시 여부). update(current) 에 이전 값을 전달.
+    private var scriptVisible: [Int: Bool] = [:]
+
+    /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
+    private func makeScriptEngine(_ src: String) -> TextScriptEngine? {
+        if let scene = sceneScript { return TextScriptEngine(script: src, scene: scene) }
+        return TextScriptEngine(script: src)
+    }
 
     /// 씬 오브젝트 순서의 병합 드로우 플랜(레이어/파티클/텍스트 인터리브). mount 에서 1회 구성.
     private struct DrawItem { enum Kind { case layer, particle, text }; let kind: Kind; let idx: Int }
@@ -163,6 +174,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                    blue: Double(doc.clearColor.z), alpha: 1)
         projW = Float(max(1, doc.projectionWidth)); projH = Float(max(1, doc.projectionHeight))
         projAspect = projW / projH
+        // 씬 공유 JSContext — buildLayers/buildTexts/buildTranslatedEffect 의 모든 스크립트가 공유.
+        // 엔진 생성은 scene objects[] 순서(buildLayers 가 doc.layers 순회) — 컨트롤러 top-level 이
+        // 첫 프레임 평가 전에 실행된다(실물 3394601417: 'bt'.visible 이 shared.a=1 세팅).
+        sceneScript = SceneScriptContext()
         layers = buildLayers(doc: doc, package: package, device: device)
         particleSystems = buildParticles(doc: doc, package: package, device: device)
         if !particleSystems.isEmpty {
@@ -313,16 +328,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     NSLog("%@", "[Waple] puppet mdl load failed (static quad fallback): \(pp)")
                 }
             }
-            // 레이어 프로퍼티 스크립트(color/alpha — 미디어 컬러 전환 등): per-frame 평가.
+            // 레이어 프로퍼티 스크립트(visible/color/alpha): 씬 공유 컨텍스트에서 per-frame 평가.
+            // visible 을 먼저 로드 — 실물 컨트롤러(3394601417 'bt')의 top-level shared 초기화가
+            // 같은 오브젝트의 다른 스크립트보다 앞서도록. update 없는 스크립트(사이드이펙트 전용)도
+            // 로드는 하되 연속 렌더(hasAnimations)는 유발하지 않는다.
             var propScripts: [(key: String, engine: TextScriptEngine)] = []
-            for (key, src) in layer.propertyScripts where key == "color" || key == "alpha" {
-                // `shared` 는 씬 전체 공유 상태(주야 컨트롤러 등) — 엔진별 컨텍스트가 분리된 v1 에선
-                // undefined 분기로 오동작(실물 3394601417 백화). shared 참조 스크립트는 정적값 유지.
-                // v2: 씬 공유 JSContext 도입 시 해제.
-                guard !src.contains("shared") else { continue }
-                if let e = TextScriptEngine(script: src) {
+            for key in ["visible", "color", "alpha"] {
+                guard let src = layer.propertyScripts[key] else { continue }
+                if let e = makeScriptEngine(src) {
                     propScripts.append((key, e))
-                    hasAnimations = true
+                    if e.hasUpdate { hasAnimations = true }
                 }
             }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
@@ -330,7 +345,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                 effects: effects, texWidth: effW, texHeight: effH,
                                 order: layer.order, isFrameBuffer: layer.isFrameBuffer,
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty) ? nil : layer,
-                                puppet: puppetModel, propScripts: propScripts))
+                                puppet: puppetModel, propScripts: propScripts,
+                                initialVisible: layer.initialVisible))
         }
         return out
     }
@@ -430,9 +446,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
             var passScripts: [(slot: Int, engine: TextScriptEngine)] = []
             for (slot, p) in t.materialParams.enumerated() {
-                if let src = scenePass.constantScripts[p.sceneKey], let engine = TextScriptEngine(script: src) {
+                if let src = scenePass.constantScripts[p.sceneKey], let engine = makeScriptEngine(src) {
                     passScripts.append((slot, engine))
-                    hasAnimations = true  // 스크립트 상수는 시간 함수 — 연속 렌더 필요
+                    if engine.hasUpdate { hasAnimations = true }  // 스크립트 상수는 시간 함수 — 연속 렌더 필요
                 }
             }
             // 바인드: previous → -1, 이름 → fbo 인덱스(미지 이름은 전체 실패 → 폴백). 부재 시 관례 previous@0.
@@ -853,8 +869,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 tint = SIMD4(c.x * def.brightness, c.y * def.brightness, c.z * def.brightness, a)
             }
         }
-        // 프로퍼티 스크립트: update(현재값) → color/alpha 갱신(미디어 컬러 전환 등 — 이벤트 없으면
-        // 스크립트 초기 상태값이 정답: 실물 ColorTinter 는 Vec3(0,0,0) 시작 = 다크).
+        // 프로퍼티 스크립트: update(현재값) → visible/color/alpha 갱신(미디어 컬러 전환 등 — 이벤트
+        // 없으면 스크립트 초기 상태값이 정답: 실물 ColorTinter 는 Vec3(0,0,0) 시작 = 다크).
+        // 모든 스크립트를 먼저 평가(shared 사이드이펙트 보존)한 뒤 visible 이 거짓이면 draw 스킵.
         for sc in layer.propScripts {
             sc.engine.setRuntime(Double(time))
             if sc.key == "color", let v = sc.engine.evaluateVec(current: [tint.x, tint.y, tint.z]), v.count >= 3 {
@@ -862,8 +879,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 tint = SIMD4(v[0] * b, v[1] * b, v[2] * b, tint.w)
             } else if sc.key == "alpha", let v = sc.engine.evaluateVec(current: [tint.w]), let a = v.first {
                 tint.w = a
+            } else if sc.key == "visible" {
+                let cur = scriptVisible[layer.order] ?? layer.initialVisible
+                scriptVisible[layer.order] = sc.engine.evaluateBool(current: cur) ?? cur
             }
         }
+        // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(레이어는 유지 — 런타임 토글 가능).
+        if !(scriptVisible[layer.order] ?? layer.initialVisible) { return }
         var vertexCount = 6
         // 퍼펫: per-frame CPU 스키닝 → 메시 삼각형 리스트로 쿼드 대체.
         if let pm = layer.puppet, let def = layer.def, let device {
@@ -896,8 +918,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let isSystem = t.font.hasPrefix("systemfont_") || t.font.isEmpty
             let fontData = isSystem ? nil : quietAssetData(t.font, package: package)
             if !isSystem && fontData == nil { NSLog("%@", "[Waple] text font missing (system fallback): \(t.font)") }
-            let engine = t.script.flatMap { TextScriptEngine(script: $0) }
-            if t.script != nil && engine == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
+            // 씬 공유 컨텍스트 로드(top-level 사이드이펙트 실행). update 없는 스크립트는 텍스트 갱신에
+            // 못 쓰므로 엔진 nil 취급(정적 텍스트 유지) — 로드 자체는 shared 통신을 위해 수행.
+            let loaded = t.script.flatMap { makeScriptEngine($0) }
+            if t.script != nil && loaded == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
+            let engine = (loaded?.hasUpdate == true) ? loaded : nil
             let initial = engine != nil ? (engine!.evaluate(current: t.text) ?? "") : t.text
             var g = GPUText(texture: nil, vertexBuffer: nil,
                             tint: SIMD4(t.color.x, t.color.y, t.color.z, t.alpha),
@@ -1181,6 +1206,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
         textLayers = []; hasScriptedText = false; hasAnimations = false
+        sceneScript = nil; scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil
         texturePool.removeAll(); poolCheckout.removeAll()
         pipeline = nil; queue = nil; device = nil

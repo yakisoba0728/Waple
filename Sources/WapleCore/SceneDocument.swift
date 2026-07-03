@@ -51,8 +51,12 @@ public struct SceneLayer: Equatable {
     public var animations: [String: PropertyAnimation] = [:]
     /// 퍼펫 모델(.mdl) 경로 — model json 의 "puppet" 키(SP6 슬라이스 1). nil = 일반 쿼드.
     public var puppet: String? = nil
-    /// 프로퍼티 스크립트(color/alpha 등 — 키 → JS 소스). per-frame 평가(실물: 미디어 썸네일 컬러 전환).
+    /// 프로퍼티 스크립트(color/alpha/visible — 키 → JS 소스). per-frame 평가(실물: 미디어 썸네일 컬러
+    /// 전환, 주야 컨트롤러). visible 스크립트가 있는 레이어는 파스에서 드롭하지 않는다.
     public var propertyScripts: [String: String] = [:]
+    /// visible 의 정적 value(초기 표시). visible 스크립트가 있을 때만 false 로도 남는다 —
+    /// 스크립트 없는 정적 false 는 파스에서 레이어 자체가 드롭된다.
+    public var initialVisible: Bool = true
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -202,9 +206,17 @@ extension SceneDocument {
         var lights3D: [SceneLight3D] = []
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
-            // `visible` 은 바인딩 객체 {"value": false} 또는 평문 불리언 false 두 형태로 온다.
-            if (obj["visible"] as? Bool) == false { continue }
-            if let vis = obj["visible"] as? [String: Any], (vis["value"] as? Bool) == false { continue }
+            // `visible` 은 평문 불리언 | 바인딩 객체 {"value":Bool, "script":JS} 두 형태. 스크립트가 있는
+            // 이미지 레이어는 정적 false 여도 유지(런타임 토글 + 컨트롤러 top-level 사이드이펙트 —
+            // 실물 3394601417 'bt') — 그 외 오브젝트는 정적 false 시 기존대로 드롭.
+            var initialVisible = true
+            var visibleScript: String? = nil
+            if let b = obj["visible"] as? Bool { initialVisible = b }
+            else if let vis = obj["visible"] as? [String: Any] {
+                if let v = vis["value"] as? Bool { initialVisible = v }
+                visibleScript = vis["script"] as? String
+            }
+            if !initialVisible && (visibleScript == nil || !(obj["image"] is String)) { continue }
             if let imagePath = obj["image"] as? String {
                 guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets) else {
                     continue  // 사유별 로그는 resolveLayerTexture 내부에서.
@@ -236,6 +248,7 @@ extension SceneDocument {
                         propScripts[key] = sc  // 정적 value 는 기존 언랩이 처리 — 스크립트는 per-frame 재평가
                     }
                 }
+                if let vs = visibleScript { propScripts["visible"] = vs }
                 // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
                 var puppetPath: String? = nil
                 if let md = package.data(for: imagePath) ?? assets?(imagePath),
@@ -259,6 +272,7 @@ extension SceneDocument {
                 ))
                 layers[layers.count - 1].puppet = puppetPath
                 layers[layers.count - 1].propertyScripts = propScripts
+                layers[layers.count - 1].initialVisible = initialVisible
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
                     p.order = order
