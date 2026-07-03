@@ -89,6 +89,48 @@ final class Scene3DTests: XCTestCase {
         XCTAssertEqual(doc.objects3D[0].parent, 7)
     }
 
+    /// 트랜스폼-온리 그룹(콘텐츠 키 없음): nodes3D 로 기록 — 비가시 그룹도 포함(서브트리 판정용).
+    func testTransformOnlyNodesCaptured() throws {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":7,"name":"Root","origin":"0 10 0","angles":"0 1.5708 0","scale":"2 2 2"},
+           {"id":8,"name":"HiddenGroup","parent":7,"visible":false},
+           {"id":9,"name":"ScriptGroup","parent":8,
+            "visible":{"value":true,"script":"export function update(v){return v;}"}},
+           {"id":10,"name":"Child","model":"models/a.mdl","parent":7}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.nodes3D.count, 3)
+        let root = try XCTUnwrap(doc.nodes3D.first { $0.id == 7 })
+        XCTAssertEqual(root.origin, Vec3(x: 0, y: 10, z: 0))
+        XCTAssertEqual(root.angles, Vec3(x: 0, y: 1.5708, z: 0))
+        XCTAssertEqual(root.scale, Vec3(x: 2, y: 2, z: 2))
+        XCTAssertNil(root.parent)
+        XCTAssertTrue(root.visible)
+        let hidden = try XCTUnwrap(doc.nodes3D.first { $0.id == 8 })
+        XCTAssertFalse(hidden.visible, "정적 비가시 그룹도 기록(visible=false)")
+        XCTAssertEqual(hidden.parent, 7)
+        let scripted = try XCTUnwrap(doc.nodes3D.first { $0.id == 9 })
+        XCTAssertTrue(scripted.visible, "스크립트 바인딩은 초기 value")
+        // 모델 오브젝트는 nodes3D 가 아니라 objects3D 로.
+        XCTAssertEqual(doc.objects3D.count, 1)
+        XCTAssertEqual(doc.objects3D[0].parent, 7)
+    }
+
+    /// 2D 씬 무회귀: 그룹 노드 기록이 레이어/파티클 파싱에 영향 없음.
+    func test2DSceneUnaffectedByNodeCapture() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"name":"group"}]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([("scene.json", scene)]))
+        XCTAssertTrue(doc.layers.isEmpty)
+        XCTAssertEqual(doc.nodes3D.count, 1)
+    }
+
     /// 라이트 오브젝트(lpoint/ldirectional) 최소 파싱.
     func testParses3DLights() throws {
         let scene = """

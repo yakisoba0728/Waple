@@ -57,4 +57,53 @@ public enum DXT5Decoder {
         }
         return Data(out)
     }
+
+    /// DXT1(BC1) 블록 → RGBA8888. blocks 크기는 ((w+3)/4)*((h+3)/4)*8 이어야 함.
+    /// c0 <= c1 이면 3-색 + 인덱스 3 = 투명 검정(1비트 알파 변형).
+    /// 실측 근거(2026-07-03): .tex format 7 이 decompressedSize == w*h/2(4bpp) 전수 일치 —
+    /// 태양계 스카이박스/태양/행성(8k_earth_ps 등)이 이 포맷.
+    public static func decodeBC1(_ blocks: Data, width: Int, height: Int) -> Data? {
+        guard width > 0, height > 0, width <= 16384, height <= 16384 else { return nil }
+        let bx = (width + 3) / 4, by = (height + 3) / 4
+        guard blocks.count >= bx * by * 8 else { return nil }
+        let src = [UInt8](blocks)
+        var out = [UInt8](repeating: 0, count: width * height * 4)
+
+        func u16(_ o: Int) -> Int { Int(src[o]) | (Int(src[o + 1]) << 8) }
+        func color565(_ c: Int) -> (Int, Int, Int) {
+            let r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f
+            return (r * 255 / 31, g * 255 / 63, b * 255 / 31)
+        }
+
+        for byi in 0..<by {
+            for bxi in 0..<bx {
+                let o = (byi * bx + bxi) * 8
+                let c0 = u16(o), c1 = u16(o + 2)
+                let (r0, g0, b0) = color565(c0), (r1, g1, b1) = color565(c1)
+                var palette: [(Int, Int, Int, Int)]
+                if c0 > c1 {
+                    func lerp(_ x: Int, _ y: Int, _ t: Int) -> Int { (x * (3 - t) + y * t) / 3 }
+                    palette = [(r0, g0, b0, 255), (r1, g1, b1, 255),
+                               (lerp(r0, r1, 1), lerp(g0, g1, 1), lerp(b0, b1, 1), 255),
+                               (lerp(r0, r1, 2), lerp(g0, g1, 2), lerp(b0, b1, 2), 255)]
+                } else {
+                    palette = [(r0, g0, b0, 255), (r1, g1, b1, 255),
+                               ((r0 + r1) / 2, (g0 + g1) / 2, (b0 + b1) / 2, 255),
+                               (0, 0, 0, 0)]
+                }
+                let cbits = UInt32(src[o + 4]) | (UInt32(src[o + 5]) << 8) | (UInt32(src[o + 6]) << 16) | (UInt32(src[o + 7]) << 24)
+                for py in 0..<4 {
+                    for px in 0..<4 {
+                        let x = bxi * 4 + px, y = byi * 4 + py
+                        if x >= width || y >= height { continue }
+                        let ci = Int((cbits >> UInt32(2 * (py * 4 + px))) & 0x3)
+                        let (r, g, b, a) = palette[ci]
+                        let d = (y * width + x) * 4
+                        out[d] = UInt8(r); out[d + 1] = UInt8(g); out[d + 2] = UInt8(b); out[d + 3] = UInt8(a)
+                    }
+                }
+            }
+        }
+        return Data(out)
+    }
 }

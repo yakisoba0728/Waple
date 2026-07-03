@@ -75,6 +75,17 @@ final class Model3DTests: XCTestCase {
         XCTAssertTrue(m.bones.isEmpty)
     }
 
+    /// 머티리얼 경로 cstring 은 UTF-8 — 실물 태양계 모델이 CJK 경로("太空球")를 쓴다(Latin-1 해석 시
+    /// mojibake 로 pkg 엔트리 조회 실패 → 흰 텍스처 사고).
+    func testUTF8MaterialPath() throws {
+        let vert = SynthVert(pos: SIMD3(0, 0, 0), nrm: SIMD3(0, 0, 1), tan: SIMD4(1, 0, 0, 1), uv: SIMD2(0, 0))
+        let mesh = SynthMesh(material: "materials/models/太空球/DefaultMaterial.json",
+                             min: .zero, max: .zero, skinned: false,
+                             verts: [vert, vert, vert], indices: [0, 1, 2])
+        let m = try XCTUnwrap(Model3D.parse(makeModelU16([mesh])))
+        XCTAssertEqual(m.meshes[0].material, "materials/models/太空球/DefaultMaterial.json")
+    }
+
     func testParsesSkinnedVertexFields() throws {
         let verts = [
             SynthVert(pos: SIMD3(5, 6, 7), nrm: SIMD3(0, 1, 0), tan: SIMD4(1, 0, 0, 1), uv: SIMD2(0.25, 0.75),
