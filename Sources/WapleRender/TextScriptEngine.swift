@@ -134,6 +134,25 @@ public final class TextScriptEngine {
         get: function(t, k) { if (k in t) { return t[k]; } return __noopProxy(); },
         set: function(t, k, v) { t[k] = v; return true; }
     });
+    // WE 스크립트 표준 벡터(메서드 체이닝) — 레이어 컬러 스크립트가 사용.
+    function Vec3(x, y, z) {
+        if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; this.z = x.z || 0; }
+        else { this.x = x || 0; this.y = y || 0; this.z = z || 0; }
+    }
+    Vec3.prototype.add = function (o) { return (typeof o === 'number') ? new Vec3(this.x + o, this.y + o, this.z + o) : new Vec3(this.x + o.x, this.y + o.y, this.z + o.z); };
+    Vec3.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec3(this.x - o, this.y - o, this.z - o) : new Vec3(this.x - o.x, this.y - o.y, this.z - o.z); };
+    Vec3.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec3(this.x * o, this.y * o, this.z * o) : new Vec3(this.x * o.x, this.y * o.y, this.z * o.z); };
+    Vec3.prototype.divide = function (o) { return (typeof o === 'number') ? new Vec3(this.x / o, this.y / o, this.z / o) : new Vec3(this.x / o.x, this.y / o.y, this.z / o.z); };
+    Vec3.prototype.copy = function () { return new Vec3(this.x, this.y, this.z); };
+    Vec3.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); };
+    function Vec2(x, y) {
+        if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; }
+        else { this.x = x || 0; this.y = y || 0; }
+    }
+    Vec2.prototype.add = function (o) { return (typeof o === 'number') ? new Vec2(this.x + o, this.y + o) : new Vec2(this.x + o.x, this.y + o.y); };
+    Vec2.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec2(this.x - o, this.y - o) : new Vec2(this.x - o.x, this.y - o.y); };
+    Vec2.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec2(this.x * o, this.y * o) : new Vec2(this.x * o.x, this.y * o.y); };
+    Vec2.prototype.copy = function () { return new Vec2(this.x, this.y); };
     var __WEColor = {
         hsv2rgb: function(c) {
             var h = ((c.x % 1) + 1) % 1, s = c.y, v = c.z;

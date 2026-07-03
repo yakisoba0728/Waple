@@ -25,7 +25,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case translated(passes: [TranslatedPass], fboScales: [Int])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = [] }
     private var hasAnimations = false
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -284,7 +284,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
             var effects: [EffectGPU] = []
+            // 디버그: WAPLE_EFFECT_SKIP=이름,이름 → 해당 효과 제외(파리티 이분용, WAPLE_MP_TRUNC 와 세트).
+            let skipNames = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
+                .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
             for eff in layer.effects {
+                if skipNames.contains(eff.name) { continue }
                 // 폴백 체인(Step 5, 2026-07-02 실물 검증 후 전환): **translated 우선** — pkg 동봉 GLSL 은
                 // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
                 // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴백 → 둘 다 실패 시 스킵+로그.
@@ -309,12 +313,24 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     NSLog("%@", "[Waple] puppet mdl load failed (static quad fallback): \(pp)")
                 }
             }
+            // 레이어 프로퍼티 스크립트(color/alpha — 미디어 컬러 전환 등): per-frame 평가.
+            var propScripts: [(key: String, engine: TextScriptEngine)] = []
+            for (key, src) in layer.propertyScripts where key == "color" || key == "alpha" {
+                // `shared` 는 씬 전체 공유 상태(주야 컨트롤러 등) — 엔진별 컨텍스트가 분리된 v1 에선
+                // undefined 분기로 오동작(실물 3394601417 백화). shared 참조 스크립트는 정적값 유지.
+                // v2: 씬 공유 JSContext 도입 시 해제.
+                guard !src.contains("shared") else { continue }
+                if let e = TextScriptEngine(script: src) {
+                    propScripts.append((key, e))
+                    hasAnimations = true
+                }
+            }
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
                                 effects: effects, texWidth: effW, texHeight: effH,
                                 order: layer.order, isFrameBuffer: layer.isFrameBuffer,
-                                def: (layer.animations.isEmpty && puppetModel == nil) ? nil : layer,
-                                puppet: puppetModel))
+                                def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty) ? nil : layer,
+                                puppet: puppetModel, propScripts: propScripts))
         }
         return out
     }
@@ -828,6 +844,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 let a = animValue("alpha", 0, def.alpha)
                 let c = Vec3(x: animValue("color", 0, def.color.x), y: animValue("color", 1, def.color.y), z: animValue("color", 2, def.color.z))
                 tint = SIMD4(c.x * def.brightness, c.y * def.brightness, c.z * def.brightness, a)
+            }
+        }
+        // 프로퍼티 스크립트: update(현재값) → color/alpha 갱신(미디어 컬러 전환 등 — 이벤트 없으면
+        // 스크립트 초기 상태값이 정답: 실물 ColorTinter 는 Vec3(0,0,0) 시작 = 다크).
+        for sc in layer.propScripts {
+            sc.engine.setRuntime(Double(time))
+            if sc.key == "color", let v = sc.engine.evaluateVec(current: [tint.x, tint.y, tint.z]), v.count >= 3 {
+                let b = layer.def?.brightness ?? 1
+                tint = SIMD4(v[0] * b, v[1] * b, v[2] * b, tint.w)
+            } else if sc.key == "alpha", let v = sc.engine.evaluateVec(current: [tint.w]), let a = v.first {
+                tint.w = a
             }
         }
         var vertexCount = 6

@@ -51,6 +51,8 @@ public struct SceneLayer: Equatable {
     public var animations: [String: PropertyAnimation] = [:]
     /// 퍼펫 모델(.mdl) 경로 — model json 의 "puppet" 키(SP6 슬라이스 1). nil = 일반 쿼드.
     public var puppet: String? = nil
+    /// 프로퍼티 스크립트(color/alpha 등 — 키 → JS 소스). per-frame 평가(실물: 미디어 썸네일 컬러 전환).
+    public var propertyScripts: [String: String] = [:]
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -144,9 +146,13 @@ extension SceneDocument {
                     }
                 }
                 var anims: [String: PropertyAnimation] = [:]
+                var propScripts: [String: String] = [:]
                 for key in ["origin", "scale", "alpha", "angles", "color"] {
                     if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind) {
                         anims[key] = a
+                    }
+                    if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
+                        propScripts[key] = sc  // 정적 value 는 기존 언랩이 처리 — 스크립트는 per-frame 재평가
                     }
                 }
                 // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
@@ -171,6 +177,7 @@ extension SceneDocument {
                     animations: anims
                 ))
                 layers[layers.count - 1].puppet = puppetPath
+                layers[layers.count - 1].propertyScripts = propScripts
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
                     p.order = order
