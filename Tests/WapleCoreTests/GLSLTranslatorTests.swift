@@ -707,6 +707,23 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("uv * 2.0") && t.msl.contains("uv * 0.5"), "두 정의 공존: \(t.msl)")
     }
 
+    func testSamplerComboAnnotationsParsed() {
+        // WE 규약: 샘플러 주석의 "combo":"MASK" 는 그 슬롯에 텍스처가 바인딩되면 콤보 자동 활성
+        // (실물 reflection/waterwaves/shake 페인트 마스크 — 미적용 시 전화면 반사 사고).
+        let src = """
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        uniform sampler2D g_Texture1; // {"label":"mask","mode":"opacitymask","combo":"MASK","paintdefaultcolor":"0 0 0 1"}
+        uniform sampler2D g_Texture2; // {"combo":"NOISE","default":"util/noise"}
+        """
+        let m = GLSLTranslator.samplerCombos(src)
+        XCTAssertEqual(m[1], "MASK")
+        // 실물은 CRLF — "\r\n" 은 Swift 단일 grapheme 이라 "\n" split 이 안 걸리는 함정 회귀 방지.
+        let crlf = GLSLTranslator.samplerCombos(src.replacingOccurrences(of: "\n", with: "\r\n"))
+        XCTAssertEqual(crlf[1], "MASK")
+        XCTAssertEqual(m[2], "NOISE")
+        XCTAssertNil(m[0])
+    }
+
     func testMulRewrite() {
         let r = GLSLTranslator.rewriteCall("mul(a, b)", "mul") { $0.count == 2 ? "(\($0[1]) * \($0[0]))" : nil }
         XCTAssertEqual(r, "(b * a)")

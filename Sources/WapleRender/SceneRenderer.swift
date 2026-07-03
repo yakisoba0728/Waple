@@ -407,6 +407,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // 콤보 우선순위: 머티리얼 기본 < scene 패스 지정.
             var combos = matCombos
             for (k, v) in scenePass.combos { combos[k] = v }
+            // WE 규약: 샘플러 주석의 "combo":"X" 는 그 슬롯에 텍스처가 바인딩되면 자동 활성
+            // (실물 reflection/waterwaves/shake 의 페인트 마스크 — 미적용 시 마스크 무시 = 전화면 적용 사고).
+            for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
+                let sceneBound = slot < scenePass.textureNames.count && scenePass.textureNames[slot] != nil
+                let matBound = slot < matTextures.count && matTextures[slot] != nil
+                if sceneBound || matBound { combos[comboName] = 1 }
+            }
             guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: include) else {
                 NSLog("%@", "[Waple] GLSL translate failed: \(eff.name) pass \(i)")
                 return nil

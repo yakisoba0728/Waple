@@ -504,6 +504,27 @@ public enum GLSLTranslator {
         let digits = rest.prefix { $0.isNumber }
         return Int(digits)
     }
+    /// 샘플러 주석의 콤보 어노테이션: `uniform sampler2D g_TextureN; // {..."combo":"NAME"...}` → [N: NAME].
+    /// WE 규약: 해당 슬롯에 텍스처가 바인딩되면 콤보 자동 활성(페인트 마스크 등).
+    public static func samplerCombos(_ src: String) -> [Int: String] {
+        var out: [Int: String] = [:]
+        // 주의: 실물은 CRLF 이고 Swift 의 "\r\n" 은 단일 grapheme 이라 separator "\n" 에 안 걸린다.
+        for line in src.split(whereSeparator: { $0.isNewline }) {
+            guard line.contains("sampler2D"), line.contains("\"combo\""),
+                  let texRange = line.range(of: "g_Texture") else { continue }
+            let after = line[texRange.upperBound...]
+            let digits = after.prefix(while: { $0.isNumber })
+            guard let slot = Int(digits) else { continue }
+            guard let comboKey = line.range(of: "\"combo\"") else { continue }
+            let tail = line[comboKey.upperBound...]
+            guard let q1 = tail.firstIndex(of: "\"") else { continue }
+            let afterQ1 = tail[tail.index(after: q1)...]
+            guard let q2 = afterQ1.firstIndex(of: "\"") else { continue }
+            out[slot] = String(afterQ1[..<q2])
+        }
+        return out
+    }
+
     static func isEngine(_ name: String) -> Bool {
         name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
             || name.hasPrefix("g_AudioSpectrum")
