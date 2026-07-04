@@ -49,9 +49,42 @@ public struct PuppetModel: Equatable {
     public var bones: [Bone] = []
     public var animations: [Animation] = []
 
+    /// 매직으로 라우팅: MDLV0013 = 네이티브 2D 퍼펫; MDLV0023 = 3D 스키닝 모델로 저장된 2D 퍼펫
+    /// (예: Hollow Knight 3598808038 의 knight/sword/things — 종전엔 매직 불일치로 거부→흑화면).
+    /// 0023 은 Model3D 로 읽어 pos/boneIdx/wt/uv 만 취한 동형 모델로 변환(정적 바인드 포즈;
+    /// MDLA0006 애니는 미해독이라 v1 은 재생 안 함). Model3D/Mesh3DShaders 는 읽기 전용(변환은 여기서).
     public static func parse(_ data: Data) -> PuppetModel? {
         let bytes = [UInt8](data)
-        guard bytes.count > 30, String(bytes: bytes[0..<8], encoding: .utf8) == "MDLV0013" else { return nil }
+        guard bytes.count >= 8, let magic = String(bytes: bytes[0..<8], encoding: .utf8) else { return nil }
+        if magic == "MDLV0023" { return Model3D.parse(data).map(fromModel3D) }
+        guard magic == "MDLV0013" else { return nil }
+        return parseV0013(bytes)
+    }
+
+    /// MDLV0023(3D 스키닝 메시) → 2D 퍼펫 동형 변환. 서브메시를 정점 오프셋으로 이어붙여 단일 메시화
+    /// (HK 퍼펫은 전부 단일 스키닝 서브메시). 정점 좌표계는 이미 레이어-로컬 픽셀·y-up 이라 별도 변환 불요.
+    static func fromModel3D(_ m: Model3D) -> PuppetModel {
+        var verts: [Vertex] = []
+        var indices: [UInt16] = []
+        var baseVertex = 0
+        for mesh in m.meshes {
+            for v in mesh.vertices {
+                verts.append(Vertex(position: v.position, boneIndices: v.boneIndices, weights: v.weights, uv: v.uv))
+            }
+            for idx in mesh.indices {
+                let gi = Int(idx) + baseVertex
+                indices.append(gi <= 0xFFFF ? UInt16(gi) : 0)  // 2D 퍼펫은 정점 <65535 — 초과는 안전 클램프
+            }
+            baseVertex += mesh.vertices.count
+        }
+        var pm = PuppetModel(material: m.meshes.first?.material ?? "", vertices: verts, indices: indices)
+        // 본 규약(name/parent/bind)은 2D 퍼펫과 동형 — 그대로 이식(정적 스킨은 애니 부재 시 항등이라 무해).
+        pm.bones = m.bones.map { Bone(name: $0.name, parent: $0.parent, bind: $0.bind) }
+        return pm
+    }
+
+    private static func parseV0013(_ bytes: [UInt8]) -> PuppetModel? {
+        guard bytes.count > 30 else { return nil }
         func u32(_ o: Int) -> UInt32? {
             guard o + 4 <= bytes.count else { return nil }
             return UInt32(bytes[o]) | (UInt32(bytes[o + 1]) << 8) | (UInt32(bytes[o + 2]) << 16) | (UInt32(bytes[o + 3]) << 24)

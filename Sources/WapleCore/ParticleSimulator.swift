@@ -20,6 +20,8 @@ public struct Particle {
     var oscPosFreq: Float = 0, oscPosScale: Float = 0, oscPosPhase: Float = 0
     var oscPosMask = SIMD3<Float>(0, 0, 0)
     var oscAlphaFreq: Float = 0, oscAlphaScale: Float = 0, oscAlphaPhase: Float = 0
+    // 난류(turbulence): 스폰 시 결정되는 파티클별 속도/위상(노이즈 흐름장 이류에 사용).
+    var turbSpeed: Float = 0, turbPhase: Float = 0
     /// 트레일 렌더러용 최근 위치 히스토리(로컬 Y-up). oldest→newest, 마지막=현재 위치.
     /// 스프라이트 렌더러에서는 비어 있다(불필요 복사 회피).
     public var history: [SIMD3<Float>] = []
@@ -44,6 +46,10 @@ public struct ParticleSimulator {
     private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float)?
     private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>)]
     private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float, offset: SIMD3<Float>)]
+    // 난류 흐름장(첫 turbulence 오퍼레이터만; oscPos 와 동일한 "first wins" 규약).
+    // 파티클별 속도/위상 범위(smin/smax, pmin/pmax)는 스폰 시 뽑아 고정, 나머지는 장 파라미터.
+    private let turbulence: (smin: Float, smax: Float, scale: Float, timeScale: Float,
+                            mask: SIMD3<Float>, pmin: Float, pmax: Float)?
     // 트레일 히스토리 설정(스프라이트면 0 → 미기록).
     private let trailSamples: Int
     // controlpointattract/vortex 가 있으면 속도 상한(폭주 방지, px/s).
@@ -63,6 +69,7 @@ public struct ParticleSimulator {
         var oa: (Float, Float, Float, Float)? = nil
         var attr: [(Float, Float, SIMD3<Float>)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>)] = []
+        var turb: (Float, Float, Float, Float, SIMD3<Float>, Float, Float)? = nil
         for op in def.operators {
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
@@ -78,6 +85,8 @@ public struct ParticleSimulator {
                 attr.append((scale, threshold, s3(target)))
             case let .vortex(axis, dIn, dOut, sIn, sOut, offset):
                 vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset)))
+            case let .turbulence(smin, smax, scale, timeScale, mask, pmin, pmax):
+                if turb == nil { turb = (smin, smax, scale, timeScale, s3(mask), pmin, pmax) }
             }
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
@@ -89,6 +98,7 @@ public struct ParticleSimulator {
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3) }
         attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2) }
         vortices = vort.map { (axis: $0.0, dIn: $0.1, dOut: $0.2, sIn: $0.3, sOut: $0.4, offset: $0.5) }
+        turbulence = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
         trailSamples = def.renderer.trailSampleCount
         speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
     }
@@ -123,6 +133,13 @@ public struct ParticleSimulator {
                 particles[k].vel += m.gravity * dt
                 if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
                 particles[k].pos += particles[k].vel * dt
+            }
+            // 난류 이류(advection): 노이즈 흐름장 속도로 위치를 이동. vel 에 누적하지 않으므로
+            // |변위| ≤ turbSpeed·dt 로 유계(속도 상한 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
+            if let t = turbulence, particles[k].turbSpeed > 0 {
+                let v = turbulenceVelocity(t, pos: particles[k].pos, speed: particles[k].turbSpeed,
+                                           phase: particles[k].turbPhase, time: time)
+                particles[k].pos += v * dt
             }
             for f in angulars {
                 particles[k].angularVel += f * dt
@@ -166,6 +183,10 @@ public struct ParticleSimulator {
             p.oscAlphaFreq = rng.range(o.fmin, o.fmax)
             p.oscAlphaScale = rng.range(o.smin, o.smax)
             p.oscAlphaPhase = rng.nextFloat() * 2 * .pi
+        }
+        if let t = turbulence {
+            p.turbSpeed = rng.range(t.smin, t.smax)
+            p.turbPhase = rng.range(t.pmin, t.pmax)
         }
         if trailSamples > 0 { p.history = [p.pos] }  // 스폰 위치를 트레일 시작점으로.
         return p
@@ -251,6 +272,27 @@ public struct ParticleSimulator {
         return d
     }
 
+    // MARK: - 난류 흐름장
+
+    /// timescale(1..1000) → 노이즈 시간좌표 스케일. 중간값(~50)에서 ~0.5 cycle/s 의 부드러운 흐름이
+    /// 되도록 잡은 상수(bit-exact 아님 — 결정성/유계성/자연스러움만 요구). timeScale 부재(0)면 정적장.
+    private static let turbTimeK: Float = 0.01
+
+    /// 노이즈 흐름장 속도([-speed, +speed]^3, mask 게이트). pos·scale 로 공간 주파수, time·timeScale 로
+    /// 시간 진화, phase 로 파티클별 위상 오프셋을 준다. 세 성분은 큰 오프셋으로 탈상관한 값노이즈.
+    private func turbulenceVelocity(_ t: (smin: Float, smax: Float, scale: Float, timeScale: Float,
+                                         mask: SIMD3<Float>, pmin: Float, pmax: Float),
+                                    pos: SIMD3<Float>, speed: Float, phase: Float, time: Float) -> SIMD3<Float> {
+        let base = pos * t.scale + SIMD3(phase, phase, phase)
+        let tw = time * t.timeScale * Self.turbTimeK
+        let timeVec = SIMD3<Float>(tw * 0.7, tw * 1.3, tw)
+        // 성분별 탈상관 오프셋(임의 큰 상수).
+        let vx = valueNoise3(base + timeVec)
+        let vy = valueNoise3(base + timeVec + SIMD3(19.3, 71.7, 5.1))
+        let vz = valueNoise3(base + timeVec + SIMD3(53.2, 11.9, 97.4))
+        return SIMD3(vx * t.mask.x, vy * t.mask.y, vz * t.mask.z) * speed
+    }
+
     // MARK: - 헬퍼
 
     private mutating func randomUnitVector() -> SIMD3<Float> {
@@ -262,6 +304,39 @@ public struct ParticleSimulator {
 }
 
 private func s3(_ v: Vec3) -> SIMD3<Float> { SIMD3(v.x, v.y, v.z) }
+
+// MARK: - 결정적 값노이즈(외부 의존 無)
+
+/// 정수 격자 해시 → [-1,1]. 좌표 3성분을 정수 믹싱 후 xorshift finalize.
+private func hashLattice(_ ix: Int32, _ iy: Int32, _ iz: Int32) -> Float {
+    var h = UInt32(bitPattern: ix) &* 0x8da6_b343
+    h = h &+ UInt32(bitPattern: iy) &* 0xd816_3841
+    h = h &+ UInt32(bitPattern: iz) &* 0xcb1a_b31f
+    h ^= h >> 16; h = h &* 0x7feb_352d
+    h ^= h >> 15; h = h &* 0x846c_a68b
+    h ^= h >> 16
+    return Float(h) * (2.0 / Float(UInt32.max)) - 1.0  // [-1,1]
+}
+/// smootherstep(6t^5-15t^4+10t^3) — 1·2차 도함수 연속으로 격자 아티팩트 억제.
+private func fade5(_ t: Float) -> Float { t * t * t * (t * (t * 6 - 15) + 10) }
+/// 3D 값노이즈([-1,1] 근사). 정수 격자 8코너 삼선형 보간(fade5 가중).
+private func valueNoise3(_ raw: SIMD3<Float>) -> Float {
+    // Int32 변환 트랩(오버플로/NaN) 방지: 좌표를 안전 범위로 접는다(결정적, 시각적 무영향).
+    func wrap(_ v: Float) -> Float { v.isFinite ? v.truncatingRemainder(dividingBy: 1_000_000) : 0 }
+    let p = SIMD3<Float>(wrap(raw.x), wrap(raw.y), wrap(raw.z))
+    let fx = floorf(p.x), fy = floorf(p.y), fz = floorf(p.z)
+    let ix = Int32(fx), iy = Int32(fy), iz = Int32(fz)
+    let tx = fade5(p.x - fx), ty = fade5(p.y - fy), tz = fade5(p.z - fz)
+    func c(_ dx: Int32, _ dy: Int32, _ dz: Int32) -> Float { hashLattice(ix &+ dx, iy &+ dy, iz &+ dz) }
+    let x00 = c(0, 0, 0) + (c(1, 0, 0) - c(0, 0, 0)) * tx
+    let x10 = c(0, 1, 0) + (c(1, 1, 0) - c(0, 1, 0)) * tx
+    let x01 = c(0, 0, 1) + (c(1, 0, 1) - c(0, 0, 1)) * tx
+    let x11 = c(0, 1, 1) + (c(1, 1, 1) - c(0, 1, 1)) * tx
+    let y0 = x00 + (x10 - x00) * ty
+    let y1 = x01 + (x11 - x01) * ty
+    return y0 + (y1 - y0) * tz
+}
+
 private func normalizeSafe(_ v: SIMD3<Float>) -> SIMD3<Float> {
     let len = simd_length(v)
     return len > 1e-6 ? v / len : SIMD3(0, 0, 0)

@@ -1,7 +1,7 @@
 import Foundation
 
 public struct TexImage {
-    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, bc1, lz4RGBA, video, unknown }
+    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, bc1, r8, lz4RGBA, video, unknown }
 
     /// mip0 페이로드(TEXB0001~0004). `decode*` = padded texture dims(디코드 단위),
     /// `image*` = 실제 이미지 dims(크롭 대상). lz4 == false 면 payload 는 비압축(그대로 사용).
@@ -52,15 +52,19 @@ public struct TexImage {
         if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, p..<b.count, nil) }
         if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (p - 4)..<b.count, nil) }
 
-        // 2) mip 컨테이너(TEXB0001~0004): RGBA(fmt0) | DXT5(fmt4/fmt9) | DXT1(fmt7).
+        // 2) mip 컨테이너(TEXB0001~0004): RGBA(fmt0) | DXT5(fmt4) | DXT1(fmt7) | R8(fmt9).
         // fmt4=DXT5, fmt7=DXT1 실측 근거(2026-07-03): 3D 모델 텍스처 decompressedSize 가 각각
         // paddedW×H×1B(BC3 8bpp)/×0.5B(BC1 4bpp) 전수 일치, 디코드 결과가 preview 색과 일치(젤다/태양계).
+        // fmt9=R8 실측 근거(2026-07-04, 3598808038 opacity 마스크): LZ4 해제 후 raw 바이트가
+        // 부드러운 비네트 그라디언트(edge 255/center 0, 정확히 w×h 바이트) — DXT5 블록 구조가 아님.
+        // WE 포맷 enum: 8=RG88, 9=R8. 종전 코드가 9 를 4(DXT5)에 묶어 마스크가 전백(全白)→전화면 흑화면.
         if let mip = parseMip(b, decodeW: texW, decodeH: texH, imgW: imgW, imgH: imgH) {
             let kind: PayloadKind
             switch format {
             case 0: kind = .lz4RGBA
-            case 4, 9: kind = .bc3
+            case 4: kind = .bc3
             case 7: kind = .bc1
+            case 9: kind = .r8
             default: kind = .unknown
             }
             return make(kind, mip.payloadRange, mip)

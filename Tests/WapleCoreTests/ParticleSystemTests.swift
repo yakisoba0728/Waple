@@ -86,6 +86,20 @@ final class ParticleSystemTests: XCTestCase {
                                                    speedInner: 300, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))))
     }
 
+    func testParseTurbulence() {
+        // 실물 ember 인스턴스(2905844074): mask/phasemax/scale/speedmin/speedmax.
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"id":9,"mask":"1 0 0","name":"turbulence","phasemax":5,"scale":0.002,"speedmax":150,"speedmin":100}],"renderer":[{"name":"sprite"}],"maxcount":40}"#), material: nil)
+        XCTAssertTrue(d.operators.contains(.turbulence(speedMin: 100, speedMax: 150, scale: 0.002, timeScale: 0,
+                                                       mask: Vec3(x: 1, y: 0, z: 0), phaseMin: 0, phaseMax: 5)))
+    }
+
+    func testParseTurbulenceDefaults() {
+        // 최소 인스턴스({"name":"turbulence"}): speed 0(무동작), scale 0.01, timescale 0, mask (1,1,1).
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"id":8,"name":"turbulence"}],"renderer":[{"name":"sprite"}],"maxcount":10}"#), material: nil)
+        XCTAssertTrue(d.operators.contains(.turbulence(speedMin: 0, speedMax: 0, scale: 0.01, timeScale: 0,
+                                                       mask: Vec3(x: 1, y: 1, z: 1), phaseMin: 0, phaseMax: 0)))
+    }
+
     func testBoxEmitter() {
         let d = ParticleSystemDef.parse(json("""
         {"emitter":[{"distancemax":"950 100 0","origin":"0 700 0","name":"boxrandom","rate":1}],
