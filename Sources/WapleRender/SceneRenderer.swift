@@ -26,7 +26,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case translated(passes: [TranslatedPass], fboScales: [Int])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true }
     private var hasAnimations = false
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -58,7 +58,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 씬 공유 JSContext(mount 당 1개) — 모든 프로퍼티 스크립트가 `shared` 로 통신(주야 컨트롤러 등).
     private var sceneScript: SceneScriptContext?
-    /// visible 스크립트의 최근 평가값(레이어 order → 표시 여부). update(current) 에 이전 값을 전달.
+    /// visible 스크립트의 최근 평가값(레이어 고유 uid → 표시 여부). update(current) 에 이전 값을 전달.
+    /// 키는 GPULayer.uid(doc.layers 인덱스) — order 는 씬에서 중복될 수 있어 키로 부적합(충돌).
     private var scriptVisible: [Int: Bool] = [:]
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
@@ -511,7 +512,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPULayer] {
         let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
         var out: [GPULayer] = []
-        for layer in doc.layers {
+        for (uid, layer) in doc.layers.enumerated() {
             // 솔리드 마커(""): 무텍스처 flat 머티리얼 → 흰색 1x1 — 기존 tint 경로(color×brightness, alpha)가 필을 만든다.
             // 컴포지션(_rt_) 레이어: 텍스처는 런타임 스냅샷 — 여기선 placeholder + 효과 dims 를 프로젝션으로 근사
             // (효과 texRes 는 주로 텍셀 오프셋 용도; 화면 크기는 draw 시 결정 — 설계 §3).
@@ -576,7 +577,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
                                 effects: effects, texWidth: effW, texHeight: effH,
-                                order: layer.order, isFrameBuffer: layer.isFrameBuffer,
+                                order: layer.order, uid: uid, isFrameBuffer: layer.isFrameBuffer,
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 initialVisible: layer.initialVisible))
@@ -1651,12 +1652,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             } else if sc.key == "alpha", let v = sc.engine.evaluateVec(current: [tint.w]), let a = v.first {
                 tint.w = a
             } else if sc.key == "visible" {
-                let cur = scriptVisible[layer.order] ?? layer.initialVisible
-                scriptVisible[layer.order] = sc.engine.evaluateBool(current: cur) ?? cur
+                let cur = scriptVisible[layer.uid] ?? layer.initialVisible
+                scriptVisible[layer.uid] = sc.engine.evaluateBool(current: cur) ?? cur
             }
         }
         // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(레이어는 유지 — 런타임 토글 가능).
-        if !(scriptVisible[layer.order] ?? layer.initialVisible) { return }
+        if !(scriptVisible[layer.uid] ?? layer.initialVisible) { return }
         var vertexCount = 6
         // 퍼펫: per-frame CPU 스키닝 → 메시 삼각형 리스트로 쿼드 대체.
         if let pm = layer.puppet, let def = layer.def, let device {
