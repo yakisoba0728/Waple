@@ -173,6 +173,87 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertGreaterThan(a[0].vel.y, 0)  // cross(z, +x) = +y → 접선 속도 +y
     }
 
+    // MARK: - 난류(turbulence)
+
+    /// 정적 파티클(vel 0, gravity 0)에 turbulence 만 작용 — 이류 격리용. origin 은 격자 밖(0.25,0.25) 좌표.
+    private func turbDef(speedMin: Float = 100, speedMax: Float = 100, scale: Float = 0.01, timeScale: Float = 0,
+                         mask: Vec3 = Vec3(x: 1, y: 1, z: 1), phaseMin: Float = 0, phaseMax: Float = 0,
+                         origin: Vec3 = Vec3(x: 25, y: 25, z: 0), maxCount: Int = 1) -> ParticleSystemDef {
+        ParticleSystemDef(
+            emitters: [.box(origin: origin, distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            initializers: [.lifetimeRandom(min: 1000, max: 1000)],
+            operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
+                        .turbulence(speedMin: speedMin, speedMax: speedMax, scale: scale, timeScale: timeScale,
+                                    mask: mask, phaseMin: phaseMin, phaseMax: phaseMax)],
+            renderer: .sprite, maxCount: maxCount, startTime: 0, material: nil)
+    }
+
+    func testTurbulenceMovesStaticParticle() {
+        // vel/gravity 0 → turbulence 만이 유일한 이동원(ember 실물 패턴). 위치가 스폰에서 벗어나야.
+        var sim = ParticleSimulator(def: turbDef(speedMin: 100, speedMax: 100), seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<30 { last = sim.step(1.0 / 30.0) }
+        let d = simd_length(last[0].pos - SIMD3<Float>(25, 25, 0))
+        XCTAssertGreaterThan(d, 1.0)  // 눈에 띄게 이동
+        XCTAssertFalse(last[0].pos.x.isNaN)
+    }
+
+    func testTurbulenceZeroSpeedIsNoOp() {
+        var sim = ParticleSimulator(def: turbDef(speedMin: 0, speedMax: 0), seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<30 { last = sim.step(1.0 / 30.0) }
+        XCTAssertEqual(last[0].pos.x, 25, accuracy: 1e-4)  // 이동 없음
+        XCTAssertEqual(last[0].pos.y, 25, accuracy: 1e-4)
+    }
+
+    func testTurbulenceMaskGatesAxes() {
+        // mask (1,0,0) → x 만 섭동, y·z 는 스폰값 유지(ember mask "1 0 0" 실물).
+        var sim = ParticleSimulator(def: turbDef(speedMin: 150, speedMax: 150, mask: Vec3(x: 1, y: 0, z: 0)), seed: 2)
+        var last: [Particle] = []
+        for _ in 0..<30 { last = sim.step(1.0 / 30.0) }
+        XCTAssertEqual(last[0].pos.y, 25, accuracy: 1e-4)   // y 고정
+        XCTAssertEqual(last[0].pos.z, 0, accuracy: 1e-4)    // z 고정
+        XCTAssertNotEqual(last[0].pos.x, 25, accuracy: 0.5) // x 이동
+    }
+
+    func testTurbulenceDeterministic() {
+        let def = turbDef(speedMin: 50, speedMax: 200, timeScale: 50, phaseMin: 2, phaseMax: 8, maxCount: 20)
+        var a = ParticleSimulator(def: def, seed: 42)
+        var b = ParticleSimulator(def: def, seed: 42)
+        for _ in 0..<40 {
+            let pa = a.step(1.0 / 30.0), pb = b.step(1.0 / 30.0)
+            XCTAssertEqual(pa.count, pb.count)
+            if let x = pa.first, let y = pb.first {
+                XCTAssertEqual(x.pos.x, y.pos.x, accuracy: 1e-6)
+                XCTAssertEqual(x.pos.y, y.pos.y, accuracy: 1e-6)
+            }
+        }
+    }
+
+    func testTurbulenceBoundedBySpeed() {
+        // 이류는 vel 에 누적하지 않음 → 총 변위 ≤ speed·√3·T. 폭주/NaN 없음(유계성 증명).
+        let speed: Float = 300, T: Float = 5.0
+        var sim = ParticleSimulator(def: turbDef(speedMin: speed, speedMax: speed, timeScale: 200), seed: 3)
+        var last: [Particle] = []
+        let steps = 150
+        for _ in 0..<steps { last = sim.step(T / Float(steps)) }
+        let disp = simd_length(last[0].pos - SIMD3<Float>(25, 25, 0))
+        XCTAssertLessThanOrEqual(disp, speed * sqrtf(3) * T * 1.01)
+        XCTAssertFalse(last[0].pos.x.isNaN)
+        XCTAssertFalse(last[0].pos.y.isNaN)
+    }
+
+    func testTurbulenceSpeedScalesDisplacement() {
+        // 짧은 구간(경로 발산 전)에서 큰 speed → 큰 변위(파라미터 영향 증명).
+        func disp(_ s: Float) -> Float {
+            var sim = ParticleSimulator(def: turbDef(speedMin: s, speedMax: s), seed: 7)
+            var last: [Particle] = []
+            for _ in 0..<3 { last = sim.step(1.0 / 30.0) }
+            return simd_length(last[0].pos - SIMD3<Float>(25, 25, 0))
+        }
+        XCTAssertGreaterThan(disp(500), disp(20))
+    }
+
     func testColorNormalization() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],

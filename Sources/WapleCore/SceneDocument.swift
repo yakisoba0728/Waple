@@ -33,14 +33,18 @@ public struct SceneEffect: Equatable {
 
 public struct SceneLayer: Equatable {
     public let textureEntryName: String
-    public let origin: Vec2
+    /// scene.json objects[] 의 id(부모 트랜스폼 룩업용 — 퍼펫 레이어 parent 체인 합성에 사용).
+    public var id: Int = 0
+    /// origin/scale/angleZ 는 원래 로컬(부모 상대)값. 퍼펫 레이어는 parse 말미에 부모 체인을 합성한
+    /// 월드(프로젝션 픽셀) 트랜스폼으로 덮어쓴다(정적 부모 한정) — 그래서 var.
+    public var origin: Vec2
     /// origin 의 3성분째(월드 z) — 2D 씬에선 무시(origin 은 씬 픽셀 xy). 3D 씬 빌보드가 월드 위치로 사용.
     public var originZ: Float = 0
     /// 부모 오브젝트 id(3D 씬 빌보드의 트랜스폼 계층 — 태양계 이미지는 대부분 그룹 노드에 붙는다). nil=루트.
     public var parent: Int? = nil
     public let size: Vec2
-    public let scale: Vec2
-    public let angleZ: Float
+    public var scale: Vec2
+    public var angleZ: Float
     public let alpha: Float
     public let color: Vec3
     public let brightness: Float
@@ -326,6 +330,7 @@ extension SceneDocument {
                 let originFull = floats(obj["origin"])
                 layers[layers.count - 1].originZ = originFull.count >= 3 ? originFull[2] : 0
                 layers[layers.count - 1].parent = intVal(obj["parent"])
+                layers[layers.count - 1].id = intVal(obj["id"]) ?? 0
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
                     p.order = order
@@ -379,6 +384,49 @@ extension SceneDocument {
                     castShadow: (obj["castshadow"] as? Bool) ?? false,
                     parent: intVal(obj["parent"]),
                     order: order))
+            }
+        }
+        // 퍼펫 레이어 parent 체인 합성: 부모(대개 solid 그룹 레이어/노드)의 origin/scale/angle 을 이어붙여
+        // 로컬(부모 상대)좌표를 월드(프로젝션 픽셀)로 굽는다 — 예: Hollow Knight 3598808038 의 knight/sword 는
+        // 부모 "PUPPET"(origin 1920,1080/scale 0.72)에 붙어 있어, 미합성 시 로컬 (3,-163)/(−115,634)로
+        // 화면 밖에 렌더된다. **로드 가능한 퍼펫 레이어만** 대상 — 파스 실패(폴백 쿼드) 퍼펫은 종전 위치를
+        // 유지해 무관 씬(파싱 안 되는 MDLV0023 변종 사용)의 luma 드리프트를 막는다. 부모는 정적 가정.
+        func puppetLoads(_ path: String) -> Bool {
+            guard let d = package.data(for: path) ?? assets?(path) else { return false }
+            return PuppetModel.parse(d) != nil
+        }
+        // 합성 대상 레이어 인덱스(부모 있음 + 퍼펫이 실제 로드됨)를 1회 계산(퍼펫당 파스 1회).
+        let composeTargets = layers.indices.filter {
+            layers[$0].parent != nil && (layers[$0].puppet.map(puppetLoads) == true)
+        }
+        if !composeTargets.isEmpty {
+            var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
+            var parentOf: [Int: Int] = [:]
+            for l in layers where l.id != 0 {
+                localT[l.id] = (l.origin, l.scale, l.angleZ)
+                if let p = l.parent { parentOf[l.id] = p }
+            }
+            for n in nodes3D {
+                localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
+                if let p = n.parent { parentOf[n.id] = p }
+            }
+            // angle 은 도(°) 단위(레이어 규약; puppetVertices 가 렌더 시 라디안 변환) — 부모 오프셋 회전은
+            // 라디안으로 계산하되 합성 각은 도로 유지한다.
+            func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
+                guard depth < 32, let t = localT[id] else { return nil }
+                guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
+                let r = pw.angle * .pi / 180
+                let ca = cosf(r), sa = sinf(r)
+                let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
+                return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
+                        scale: Vec2(x: pw.scale.x * t.scale.x, y: pw.scale.y * t.scale.y),
+                        angle: pw.angle + t.angle)
+            }
+            for i in composeTargets {
+                guard let wt = world(layers[i].id, 0) else { continue }
+                layers[i].origin = wt.origin
+                layers[i].scale = wt.scale
+                layers[i].angleZ = wt.angle
             }
         }
         return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,

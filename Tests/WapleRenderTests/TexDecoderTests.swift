@@ -47,7 +47,32 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertEqual(out.pixels.count, 4)
     }
 
-    func testBC3ReturnsNil() throws {
+    /// format=9 R8(단일채널) → 그레이스케일 RGBA(v,v,v,255). 실측: 3598808038 opacity 비네트 마스크.
+    /// 종전(fmt9→BC3 오분류)엔 전백(全白)으로 디코드돼 마스크가 무효화→전화면 흑화면이었다.
+    func testDecodesR8AsGrayscale() throws {
+        func i32(_ v: Int) -> [UInt8] {
+            let u = UInt32(truncatingIfNeeded: v)
+            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
+        }
+        let r8: [UInt8] = (0..<64).map { UInt8($0 * 4) }   // 8x8 램프(0,4,8,…,252)
+        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32(9) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)
+        b += Array("TEXB0004".utf8) + [0] + i32(1) + i32(-1) + i32(0) + i32(1)
+        b += i32(8) + i32(8) + i32(0) + i32(64) + i32(r8.count) + r8   // isLZ4=0(비압축), dec=64
+        let data = Data(b)
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.payload, .r8)
+        let out = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data))
+        XCTAssertEqual(out.width, 8); XCTAssertEqual(out.height, 8)
+        let px = [UInt8](out.pixels)
+        // 픽셀0: 값 0 → (0,0,0,255)
+        XCTAssertEqual([px[0], px[1], px[2], px[3]], [0, 0, 0, 255])
+        // 픽셀10: 값 40 → (40,40,40,255) — r=g=b, alpha 불투명
+        XCTAssertEqual([px[40], px[41], px[42], px[43]], [40, 40, 40, 255])
+    }
+
+    /// mip 컨테이너가 없는(TEXB0001 헤더만) 압축 포맷은 .unknown → 디코드 nil(폴백은 호출부가 처리).
+    func testMalformedCompressedReturnsNil() throws {
         let data = Data(texHeader(format: 9, w: 4, h: 4)) + Data(repeating: 0, count: 16)
         let tex = try XCTUnwrap(TexImage.parse(data))
         XCTAssertNil(TexDecoder.rgba(from: tex, data: data))
@@ -94,7 +119,7 @@ final class TexDecoderTests: XCTestCase {
     /// BC3 페이로드가 손상돼 LZ4 디코드가 decompressedSize 와 다른 길이를 내면 nil.
     func testBC3WithCorruptLZ4ReturnsNil() throws {
         var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32bytes(9) + i32bytes(0) + i32bytes(4) + i32bytes(4) + i32bytes(4) + i32bytes(4)
+        b += i32bytes(4) + i32bytes(0) + i32bytes(4) + i32bytes(4) + i32bytes(4) + i32bytes(4)  // format=4=DXT5
         // decompressedSize=16 선언, 압축 body 는 디코드해도 16B 가 되지 않는 가비지.
         let garbage: [UInt8] = [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11]
         b += Array("TEXB0003".utf8) + [0] + i32bytes(1) + i32bytes(-1) + i32bytes(1)
@@ -121,7 +146,7 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertGreaterThan(n, 0)
         func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(9) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)
+        b += i32(4) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)   // format=4=DXT5
         b += Array("TEXB0003".utf8) + [0] + i32(1) + i32(-1) + i32(1) + i32(4) + i32(4) + i32(1) + i32(16) + i32(n)
         b += Array(comp[0..<n])
         let data = Data(b)

@@ -36,6 +36,18 @@ final class TexImageTests: XCTestCase {
     func testFormat9WithoutMipIsUnknown() {
         XCTAssertEqual(TexImage.parse(Self.makeTex(format: 9, w: 8, h: 8, payload: [0,0,0,0]))?.payload, .unknown)
     }
+    /// format=9 는 R8(단일채널 8bit) — 실측 근거 3598808038 opacity 마스크. mip 있는 fmt9 는 .r8.
+    func testParsesFormat9AsR8() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
+        let r8: [UInt8] = (0..<64).map { UInt8($0 * 4) }               // 8x8 그레이스케일 램프
+        var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
+        b += i32(9)+i32(0)+i32(8)+i32(8)+i32(8)+i32(8)                 // format=9
+        b += Array("TEXB0004".utf8)+[0]+i32(1)+i32(-1)+i32(0)+i32(1)   // imageCount, fmt, v4, mipCount
+        b += i32(8)+i32(8)+i32(0)+i32(64)+i32(r8.count)+r8            // w,h,isLZ4=0,dec=64,comp,payload
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.payload, .r8)
+        XCTAssertEqual(t?.mip?.decompressedSize, 64)                   // 8*8*1B
+    }
     func testDefaultsToRawRGBA() {
         XCTAssertEqual(TexImage.parse(Self.makeTex(format: 0, w: 2, h: 2, payload: [0,0,0,0]))?.payload, .rawRGBA8888)
     }
@@ -89,7 +101,8 @@ final class TexImageTests: XCTestCase {
     }
 
     /// BC3 .tex 합성: TEX 헤더 + "TEXB0003" + mipCount + 7 ints(decompressedSize 포함) + payload.
-    private func makeBC3Tex(w: Int, h: Int, payload: [UInt8], format: Int = 9) -> Data {
+    /// 기본 format=4(정본 DXT5) — fmt9 는 R8(단일채널)이라 별도 테스트.
+    private func makeBC3Tex(w: Int, h: Int, payload: [UInt8], format: Int = 4) -> Data {
         func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         let dxt5 = ((w + 3) / 4) * ((h + 3) / 4) * 16
         var b: [UInt8] = []

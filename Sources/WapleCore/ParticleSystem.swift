@@ -41,6 +41,11 @@ public enum ParticleOperator: Equatable {
     /// 축 기준 소용돌이. 실물키: axis, distanceinner/outer, speedinner/outer, offset(중심).
     case vortex(axis: Vec3, distanceInner: Float, distanceOuter: Float,
                 speedInner: Float, speedOuter: Float, offset: Vec3)
+    /// 결정적 노이즈 흐름장 난류. 실물키(정찰 55인스턴스): speedmin/speedmax(파티클별 속도 범위),
+    /// scale(공간 주파수, 기본 0.01), timescale(시간 진화 속도, 기본 0=정적장), mask(축별 게이트 "x y z"),
+    /// phasemin/phasemax(파티클별 위상 오프셋). 노이즈장 속도로 위치를 이류(advection)한다(vel 미누적 → 유계).
+    case turbulence(speedMin: Float, speedMax: Float, scale: Float, timeScale: Float,
+                    mask: Vec3, phaseMin: Float, phaseMax: Float)
 }
 
 /// 파티클 렌더러. sprite = 빌보드 쿼드. trail 계열(spriteTrail/rope/ropeTrail)은
@@ -198,6 +203,14 @@ public struct ParticleSystemDef: Equatable {
                                    speedInner: pfloat(o["speedinner"]) ?? 0,
                                    speedOuter: pfloat(o["speedouter"]) ?? 0,
                                    offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0)))
+            case "turbulence":
+                // 실물 기본값: speed 부재 → 0(무동작), scale 부재 → 0.01(공간 변동 확보),
+                // timescale 부재 → 0(정적장, 파티클 이동만으로 흔들림), mask 부재 → (1,1,1).
+                let smin = pfloat(o["speedmin"]) ?? 0
+                ops.append(.turbulence(speedMin: smin, speedMax: pfloat(o["speedmax"]) ?? smin,
+                                       scale: pfloat(o["scale"]) ?? 0.01, timeScale: pfloat(o["timescale"]) ?? 0,
+                                       mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1),
+                                       phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case let other:
                 NSLog("%@", "[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
             }

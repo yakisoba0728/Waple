@@ -127,6 +127,46 @@ final class PuppetModelTests: XCTestCase {
         XCTAssertNil(PuppetModel.parse(Data("NOPE".utf8)))
         XCTAssertNil(PuppetModel.parse(Data("MDLV0013".utf8)))  // 트렁케이트
     }
+
+    /// MDLV0023(3D 스키닝 모델로 저장된 2D 퍼펫 — Hollow Knight) → PuppetModel 로 라우팅·변환.
+    /// pos/boneIdx/wt/uv 만 이식하고 정적 바인드 포즈로 렌더 가능해야(애니 미해독).
+    func testRoutesMDLV0023SkinnedToPuppet() {
+        func f(_ v: Float, _ d: inout Data) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func u(_ v: UInt32, _ d: inout Data) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        var d = Data("MDLV0023".utf8); d.append(0)
+        u(0x0000000f, &d); u(1, &d); u(1, &d)                 // formatFlag, const 1, meshCount 1
+        d.append(Data("materials/knight.json".utf8)); d.append(0)
+        u(0, &d)
+        for _ in 0..<6 { f(0, &d) }                            // AABB min/max
+        u(0x0180000f, &d)                                     // 스키닝 메시(stride 80)
+        let verts: [(SIMD3<Float>, SIMD4<UInt32>, SIMD4<Float>, SIMD2<Float>)] = [
+            (SIMD3(-10, 0, 0), SIMD4(0, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(0, 1)),
+            (SIMD3(10, 0, 0), SIMD4(1, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(1, 1)),
+            (SIMD3(0, 20, 0), SIMD4(0, 0, 0, 0), SIMD4(0.5, 0.5, 0, 0), SIMD2(0.5, 0)),
+        ]
+        u(UInt32(verts.count * 80), &d)
+        for (pos, bi, w, uv) in verts {
+            f(pos.x, &d); f(pos.y, &d); f(pos.z, &d)
+            f(0, &d); f(0, &d); f(1, &d)                      // normal
+            f(1, &d); f(0, &d); f(0, &d); f(1, &d)            // tangent
+            u(bi.x, &d); u(bi.y, &d); u(bi.z, &d); u(bi.w, &d)
+            f(w.x, &d); f(w.y, &d); f(w.z, &d); f(w.w, &d)
+            f(uv.x, &d); f(uv.y, &d)
+        }
+        let indices: [UInt16] = [0, 1, 2]
+        u(UInt32(indices.count * 2), &d)
+        for i in indices { var v = i; withUnsafeBytes(of: &v) { d.append(contentsOf: $0) } }
+
+        let pm = PuppetModel.parse(d)
+        XCTAssertNotNil(pm)
+        XCTAssertEqual(pm?.material, "materials/knight.json")
+        XCTAssertEqual(pm?.vertices.count, 3)
+        XCTAssertEqual(pm?.indices, [0, 1, 2])
+        XCTAssertEqual(pm?.vertices[0].position, SIMD3(-10, 0, 0))   // 좌표계 이식(레이어-로컬 픽셀)
+        XCTAssertEqual(pm?.vertices[1].boneIndices, SIMD4<UInt32>(1, 0, 0, 0))
+        XCTAssertEqual(pm?.vertices[2].uv, SIMD2<Float>(0.5, 0))
+        XCTAssertTrue(pm?.animations.isEmpty ?? false)              // 정적 바인드 포즈
+    }
 }
 
 /// 실물 스모크(env-guarded): 2809885105 의 퍼펫 2개가 파스되고 실측 수치와 일치.

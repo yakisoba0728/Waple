@@ -27,6 +27,23 @@ public enum TexDecoder {
             guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
                   let rgba = DXT5Decoder.decodeBC1(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
             return cropped(rgba, mip)
+        case .r8:
+            // 단일 채널 8bit(WE fmt9). raw 바이트 = 픽셀당 값. 그레이스케일(v,v,v)+불투명(255)로 확장 —
+            // 소비처(opacity 마스크 등)는 .r 을 읽으므로 r=v 로 정확하고, 직접 표시 시에도 회색으로 자연스럽다.
+            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data) else { return nil }
+            let w = mip.decodeWidth, h = mip.decodeHeight
+            guard w > 0, h > 0, dec.count >= w * h else { return nil }
+            var rgba = Data(count: w * h * 4)
+            dec.withUnsafeBytes { (src: UnsafeRawBufferPointer) in
+                rgba.withUnsafeMutableBytes { (dst: UnsafeMutableRawBufferPointer) in
+                    let s = src.bindMemory(to: UInt8.self), d = dst.bindMemory(to: UInt8.self)
+                    for i in 0..<(w * h) {
+                        let v = s[i]
+                        d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = v; d[i * 4 + 3] = 255
+                    }
+                }
+            }
+            return cropped(rgba, mip)
         case .lz4RGBA:
             guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
                   dec.count >= mip.decodeWidth * mip.decodeHeight * 4 else { return nil }
