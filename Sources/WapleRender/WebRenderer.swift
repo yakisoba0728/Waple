@@ -131,45 +131,45 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
 
     /// 테스트 주입용. nil 이면 AppleScript(Music/Spotify) 프로바이더.
     public var nowPlayingProvider: NowPlayingProvider?
-    private var mediaTimer: Timer?
-    private var lastMedia: NowPlayingInfo?
+    private var mediaPoller: MediaPoller?
 
     private func startMediaPolling() {
-        guard mediaTimer == nil else { return }
-        let provider = nowPlayingProvider ?? AppleScriptNowPlayingProvider()
-        // 5초 간격: AppleScript 비용(수십 ms)과 체감 실시간성의 균형. 타임라인은 틱마다 배달.
-        mediaTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            self?.pollMedia(provider)
-        }
-        mediaTimer?.fire()
-    }
-
-    private func pollMedia(_ provider: NowPlayingProvider) {
-        // AppleScript 는 블로킹 — 백그라운드에서 fetch 후 메인에서 배달.
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let info = provider.fetch() ?? NowPlayingInfo(state: .stopped)
-            DispatchQueue.main.async { self?.deliverMedia(info) }
-        }
-    }
-
-    private func deliverMedia(_ info: NowPlayingInfo) {
-        guard let webView else { return }
-        func js(_ kind: String, _ obj: String) {
-            webView.evaluateJavaScript("window.__wapleMedia && window.__wapleMedia('\(kind)', \(obj));", completionHandler: nil)
+        guard mediaPoller == nil else { return }
+        // 5초 간격(MediaPoller): AppleScript 비용(수십 ms)과 체감 실시간성의 균형. 타임라인은 틱마다 배달.
+        let poller = MediaPoller(provider: nowPlayingProvider ?? AppleScriptNowPlayingProvider())
+        // weak self — poller 콜백이 self 를 소유하면 self→poller→콜백 순환(teardown 전 누수).
+        let js: (String, String) -> Void = { [weak self] kind, obj in
+            self?.webView?.evaluateJavaScript("window.__wapleMedia && window.__wapleMedia('\(kind)', \(obj));",
+                                              completionHandler: nil)
         }
         func q(_ s: String) -> String {
             (try? String(data: JSONEncoder().encode(s), encoding: .utf8) ?? "\"\"") ?? "\"\""
         }
-        if lastMedia?.state != info.state {
+        poller.onPlayback = { info in
             js("status", "{ state: \(info.state.rawValue) }")
+            js("playback", "{ state: \(info.state.rawValue) }")
         }
-        if lastMedia?.title != info.title || lastMedia?.artist != info.artist || lastMedia?.album != info.album {
+        poller.onProperties = { info in
             js("properties", "{ title: \(q(info.title)), artist: \(q(info.artist)), albumTitle: \(q(info.album)), subTitle: \(q(info.artist)) }")
         }
-        if info.state == .playing {
+        poller.onTimeline = { info in
             js("timeline", "{ position: \(info.position), duration: \(info.duration) }")
         }
-        lastMedia = info
+        // 썸네일(웹 규약 — 실물 3639973107 소비): thumbnail = dataURL 문자열, 색은 "#RRGGBB".
+        // 아트워크 실패 시 poller 가 이벤트 자체를 생략(graceful).
+        poller.onThumbnail = { _, artwork in
+            guard let p = ArtworkColors.palette(imageData: artwork) else { return }
+            let mime = artwork.starts(with: [0x89, 0x50]) ? "image/png" : "image/jpeg"
+            let dataURL = "data:\(mime);base64,\(artwork.base64EncodedString())"
+            let hx = ArtworkColors.hexString
+            js("thumbnail", """
+                { thumbnail: \(q(dataURL)), primaryColor: \(q(hx(p.primary))), \
+                secondaryColor: \(q(hx(p.secondary))), tertiaryColor: \(q(hx(p.tertiary))), \
+                textColor: \(q(hx(p.textColor))), highContrastColor: \(q(hx(p.highContrast))), hasThumbnail: true }
+                """)
+        }
+        poller.start()
+        mediaPoller = poller
     }
 
     public func pause() {
@@ -191,8 +191,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         mouseMonitor = nil
         audioProvider?.stop()
         audioProvider = nil
-        mediaTimer?.invalidate()
-        mediaTimer = nil
+        mediaPoller?.stop()
+        mediaPoller = nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "waple")
         webView?.removeFromSuperview()
         webView = nil

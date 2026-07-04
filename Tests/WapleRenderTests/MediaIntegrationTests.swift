@@ -79,4 +79,60 @@ final class WebMediaDeliveryTests: XCTestCase {
         XCTAssertEqual(got["artist"] as? String, "A1")
         XCTAssertEqual(got["pos"] as? Double ?? -1, 7, accuracy: 0.001)
     }
+
+    private struct FakeArtworkProvider: NowPlayingProvider, ArtworkProviding {
+        func fetch() -> NowPlayingInfo? {
+            NowPlayingInfo(state: .playing, title: "T2", artist: "A2", album: "L2", position: 3, duration: 90)
+        }
+        func fetchArtwork() -> Data? {
+            var px = [UInt8]()
+            for _ in 0..<64 { px.append(contentsOf: [255, 0, 0, 255]) }  // 순수 빨강 아트워크
+            return OffscreenCapture.png(rgba: px, width: 8, height: 8)
+        }
+    }
+
+    /// 썸네일 v2 + playback 리스너(웹): dataURL 썸네일과 #RRGGBB 주색(실물 3639973107 소비 규약).
+    func testThumbnailAndPlaybackListenersReceive() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_web_thumb", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let html = """
+        <html><body><script>
+        window.__got = {};
+        window.wallpaperRegisterMediaPlaybackListener(function(e) { window.__got.pbState = e.state; });
+        window.wallpaperRegisterMediaThumbnailListener(function(e) {
+            window.__got.thumb = e.thumbnail; window.__got.primary = e.primaryColor;
+            window.__got.text = e.textColor; window.__got.has = e.hasThumbnail;
+        });
+        </script></body></html>
+        """
+        try html.write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try #"{"title":"m","type":"web","file":"index.html"}"#
+            .write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let r = WebRenderer(mode: .web)
+        r.nowPlayingProvider = FakeArtworkProvider()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200)), project: project)
+        defer { r.teardown() }
+
+        let deadline = Date().addingTimeInterval(10)
+        var got: [String: Any] = [:]
+        while Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+            let sem = expectation(description: "js")
+            r.webViewForTesting?.evaluateJavaScript("JSON.stringify(window.__got)") { v, _ in
+                if let s = v as? String, let d = s.data(using: .utf8),
+                   let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { got = obj }
+                sem.fulfill()
+            }
+            wait(for: [sem], timeout: 2)
+            if got["thumb"] != nil, got["pbState"] != nil { break }
+        }
+        XCTAssertEqual(got["pbState"] as? Int, 1, "playback 리스너(과거 noop ReferenceError) 미배달")
+        XCTAssertEqual(got["has"] as? Bool, true)
+        XCTAssertEqual(got["primary"] as? String, "#FF0000", "빨강 아트워크 주색")
+        XCTAssertEqual(got["text"] as? String, "#FFFFFF", "어두운(적) primary → 흰 텍스트")
+        let thumb = got["thumb"] as? String ?? ""
+        XCTAssertTrue(thumb.hasPrefix("data:image/png;base64,"), "dataURL 썸네일이어야: \(thumb.prefix(40))")
+    }
 }

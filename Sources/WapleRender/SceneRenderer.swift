@@ -62,9 +62,100 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var scriptVisible: [Int: Bool] = [:]
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
+    /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
     private func makeScriptEngine(_ src: String) -> TextScriptEngine? {
-        if let scene = sceneScript { return TextScriptEngine(script: src, scene: scene) }
-        return TextScriptEngine(script: src)
+        let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0) } ?? TextScriptEngine(script: src)
+        if let e = engine, !e.hookNames.isEmpty { eventEngines.append(e) }
+        return engine
+    }
+
+    // ── 씬 이벤트(클릭/미디어) ───────────────────────────────────────────────
+    /// 이벤트 훅을 export 한 스크립트 엔진들(mount 중 수집). 훅 이벤트는 전 엔진 브로드캐스트
+    /// (WE 규약 — 스크립트가 worldPosition 으로 스스로 히트테스트한다: 실물 2902406982 드래그).
+    private var eventEngines: [TextScriptEngine] = []
+    private var clickMonitor: Any?
+    private var mediaPoller: MediaPoller?
+    /// 테스트 주입용(mount 전에 설정). nil 이면 AppleScript(Music/Spotify) 프로바이더.
+    public var nowPlayingProvider: NowPlayingProvider?
+    /// 미디어 배달 횟수(테스트 동기화용).
+    public var mediaDeliveryCountForTesting: Int { mediaPoller?.deliveryCount ?? 0 }
+
+    /// 훅 이벤트 배달: eventJS 를 각 엔진 컨텍스트에서 평가해 호출 후 1회 재렌더 요청.
+    private func dispatchSceneEvent(_ hook: String, eventJS: String) {
+        for e in eventEngines where e.hookNames.contains(hook) { e.callHook(hook, eventJS: eventJS) }
+        mtkView?.needsDisplay = true
+    }
+
+    /// cursorClick 시뮬레이션/배달(씬 픽셀 좌표, 상단 원점 — WE worldPosition 규약).
+    /// event 필드는 실물 역추출: worldPosition(Vec3 — .x/.subtract 체이닝), button(0=좌).
+    public func simulateCursorClick(x: Float, y: Float) {
+        dispatchSceneEvent("cursorClick",
+                           eventJS: "({ worldPosition: new Vec3(\(x), \(y), 0), button: 0 })")
+    }
+
+    /// 전역 leftMouseDown 모니터(데스크탑 창은 ignoresMouseEvents=true — 클릭은 다른 앱으로 가고
+    /// 전역 모니터가 관찰한다, ParallaxController 의 mouseMoved 와 동일 규약. 권한 불요).
+    private func startClickMonitorIfNeeded() {
+        guard clickMonitor == nil,
+              eventEngines.contains(where: { $0.hookNames.contains("cursorClick") }) else { return }
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
+            self?.deliverGlobalClick()
+        }
+    }
+
+    /// 화면 클릭 → 뷰 좌표 → 씬(프로젝션) 좌표. 창 밖 클릭은 무시. 헤드리스(창 없음)는 배달 불가 —
+    /// 테스트는 simulateCursorClick 사용.
+    private func deliverGlobalClick() {
+        guard let view = mtkView, let win = view.window else { return }
+        let inWindow = win.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let inView = view.convert(inWindow, from: nil)
+        guard view.bounds.contains(inView), view.bounds.width > 0, view.bounds.height > 0 else { return }
+        // AppKit 하단 원점 → WE 상단 원점. (FitMode 레터박스 보정은 미적용 — stretch 기준 근사.)
+        let sx = Float(inView.x / view.bounds.width) * projW
+        let sy = Float(1 - inView.y / view.bounds.height) * projH
+        simulateCursorClick(x: sx, y: sy)
+    }
+
+    /// 미디어 소비 스크립트(media*Changed export)가 있을 때만 폴링 시작(웹과 같은 5초 규약).
+    private func startMediaPollingIfNeeded() {
+        let mediaHooks: Set<String> = ["mediaPlaybackChanged", "mediaPropertiesChanged",
+                                       "mediaThumbnailChanged", "mediaTimelineChanged", "mediaStatusChanged"]
+        guard mediaPoller == nil,
+              eventEngines.contains(where: { !$0.hookNames.isDisjoint(with: mediaHooks) }) else { return }
+        func q(_ s: String) -> String {
+            (try? String(data: JSONEncoder().encode(s), encoding: .utf8) ?? "\"\"") ?? "\"\""
+        }
+        let poller = MediaPoller(provider: nowPlayingProvider ?? AppleScriptNowPlayingProvider())
+        poller.onPlayback = { [weak self] info in
+            self?.dispatchSceneEvent("mediaPlaybackChanged",
+                                     eventJS: "new MediaPlaybackEvent({ state: \(info.state.rawValue) })")
+            self?.dispatchSceneEvent("mediaStatusChanged",
+                                     eventJS: "new MediaStatusEvent({ enabled: \(info.state != .stopped) })")
+        }
+        poller.onProperties = { [weak self] info in
+            // albumArtist 는 별도 조회 불가(AppleScript 스코프) — artist 로 근사. subTitle=artist(WE 웹 규약과 동일).
+            self?.dispatchSceneEvent("mediaPropertiesChanged", eventJS: """
+                new MediaPropertiesEvent({ title: \(q(info.title)), artist: \(q(info.artist)), \
+                subTitle: \(q(info.artist)), albumTitle: \(q(info.album)), albumArtist: \(q(info.artist)), \
+                contentType: 'music' })
+                """)
+        }
+        poller.onTimeline = { [weak self] info in
+            self?.dispatchSceneEvent("mediaTimelineChanged",
+                                     eventJS: "new MediaTimelineEvent({ position: \(info.position), duration: \(info.duration) })")
+        }
+        poller.onThumbnail = { [weak self] _, artwork in
+            // 주색 추출 실패(디코드 불가)도 이벤트 생략 — 색 없는 썸네일 이벤트는 실물 소비자에 무의미.
+            guard let p = ArtworkColors.palette(imageData: artwork) else { return }
+            func v(_ c: SIMD3<Float>) -> String { "new Vec3(\(c.x), \(c.y), \(c.z))" }
+            self?.dispatchSceneEvent("mediaThumbnailChanged", eventJS: """
+                new MediaThumbnailEvent({ primaryColor: \(v(p.primary)), secondaryColor: \(v(p.secondary)), \
+                tertiaryColor: \(v(p.tertiary)), textColor: \(v(p.textColor)), \
+                highContrastColor: \(v(p.highContrast)), hasThumbnail: true })
+                """)
+        }
+        poller.start()
+        mediaPoller = poller
     }
 
     /// 씬 오브젝트 순서의 병합 드로우 플랜(레이어/파티클/텍스트 인터리브). mount 에서 1회 구성.
@@ -353,6 +444,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             startTime = CFAbsoluteTimeGetCurrent()
             lastFrameTime = startTime
         }
+        // 씬 이벤트 배선: cursorClick(전역 클릭 모니터) + 미디어(5초 폴링) — 소비 스크립트가 있을 때만.
+        startClickMonitorIfNeeded()
+        startMediaPollingIfNeeded()
         // 오디오-반응 효과가 있으면 시스템 오디오 스펙트럼 캡처 시작(Screen Recording 권한 필요).
         if hasAudio {
             let provider = SystemAudioSpectrumProvider()
@@ -1793,6 +1887,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func teardown() {
         videoRenderer?.teardown(); videoRenderer = nil
         parallax.stop()
+        if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
+        mediaPoller?.stop(); mediaPoller = nil
+        eventEngines = []
         audioProvider?.stop(); audioProvider = nil; hasAudio = false
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false

@@ -29,6 +29,14 @@ public final class SceneScriptContext {
 public final class TextScriptEngine {
     private let context: JSContext
     private let updateFn: JSValue?
+    /// export 된 이벤트 훅(name → 함수). update 외 실물 계약: cursorClick(3394601417 주야 토글),
+    /// media*Changed(뮤직 씬 — 2881558311 ColorTinter 등). cursorDown/Up/Move 는 보관만(배선은 추후).
+    private var hookFns: [String: JSValue] = [:]
+
+    /// 씬 스크립트가 export 할 수 있는 이벤트 훅 이름(실물 193패키지 역추출).
+    static let eventHookNames = ["cursorClick", "cursorDown", "cursorUp", "cursorMove",
+                                 "mediaPlaybackChanged", "mediaPropertiesChanged", "mediaThumbnailChanged",
+                                 "mediaTimelineChanged", "mediaStatusChanged"]
 
     public init?(script: String) {
         guard let ctx = JSContext() else { return nil }
@@ -44,10 +52,14 @@ public final class TextScriptEngine {
         guard !hadException,
               let fn = ctx.objectForKeyedSubscript("update"), fn.isObject else { return nil }
         updateFn = fn
+        for name in Self.eventHookNames {
+            if let f = ctx.objectForKeyedSubscript(name), f.isObject { hookFns[name] = f }
+        }
     }
 
     /// 씬 공유 컨텍스트 모드: 스크립트를 IIFE 로 감싸 평가(전역 오염/update 이름충돌 방지)하고
-    /// update 를 반환받아 보관. update 부재도 성공(nil update — top-level 사이드이펙트는 이미 실행됨).
+    /// {update, cursorClick, media*Changed...} 훅 딕셔너리를 반환받아 보관.
+    /// update/훅 부재도 성공(top-level 사이드이펙트는 이미 실행됨).
     /// 로드 예외(문법 오류 등) → nil, 공유 컨텍스트는 오염되지 않는다(IIFE 미실행).
     public init?(script: String, scene: SceneScriptContext) {
         context = scene.context
@@ -57,14 +69,42 @@ public final class TextScriptEngine {
             hadException = true
         }
         let cleaned = Self.stripModuleSyntax(script)
-        let wrapped = "(function(){\n\(cleaned)\n;return (typeof update !== 'undefined') ? update : null;\n})()"
+        let exports = (["update"] + Self.eventHookNames)
+            .map { "\($0): (typeof \($0) !== 'undefined') ? \($0) : null" }
+            .joined(separator: ", ")
+        let wrapped = "(function(){\n\(cleaned)\n;return { \(exports) };\n})()"
         let out = context.evaluateScript(wrapped)
         guard !hadException else { return nil }
-        updateFn = (out?.isObject == true) ? out : nil
+        if let out, out.isObject {
+            let u = out.objectForKeyedSubscript("update")
+            updateFn = (u?.isObject == true) ? u : nil
+            for name in Self.eventHookNames {
+                if let f = out.objectForKeyedSubscript(name), f.isObject { hookFns[name] = f }
+            }
+        } else {
+            updateFn = nil
+        }
     }
 
     /// update 함수 보유 여부(false = 사이드이펙트 전용 스크립트 — evaluate 계열은 항상 nil).
     public var hasUpdate: Bool { updateFn != nil }
+
+    /// export 된 이벤트 훅 이름들(update 제외). 비어 있으면 이벤트 배달 대상 아님.
+    public var hookNames: Set<String> { Set(hookFns.keys) }
+
+    /// 이벤트 훅 호출: eventJS(이벤트 생성식 — `new MediaPlaybackEvent({...})` / `({ worldPosition: new Vec3(..) })`)
+    /// 를 이 엔진의 컨텍스트에서 평가해 1개 인자로 전달. Vec3/Media*Event 는 shims 클래스라 스크립트가
+    /// 메서드 체이닝(subtract/multiply/add)을 그대로 쓸 수 있다. 미보유 훅/예외 → no-op(로깅, 컨텍스트 불오염).
+    public func callHook(_ name: String, eventJS: String) {
+        guard let fn = hookFns[name] else { return }
+        var failed = false
+        context.exceptionHandler = { _, ex in
+            NSLog("%@", "[Waple] \(name) hook exception: \(ex?.toString() ?? "?")")
+            failed = true
+        }
+        guard let ev = context.evaluateScript("(\(eventJS))"), !failed else { return }
+        fn.call(withArguments: [ev])
+    }
 
     /// update(current) 호출 → 새 텍스트. 예외/비문자열 → nil.
     public func evaluate(current: String) -> String? {
@@ -292,7 +332,8 @@ public final class TextScriptEngine {
         });
     }
     // engine: runtime 등 실수치 프로퍼티는 실제 타깃에 두고, 나머지는 no-op 흡수.
-    var __engineState = { runtime: 0.0, frameTime: 0.016 };
+    // frametime(소문자)이 실물 표기(818회/193pkg — 2881558311 ColorTinter 전환 타이머 등); frameTime 은 호환 보존.
+    var __engineState = { runtime: 0.0, frametime: 0.016, frameTime: 0.016 };
     var engine = new Proxy(__engineState, {
         get: function(t, k) { if (k in t) { return t[k]; } return __noopProxy(); },
         set: function(t, k, v) { t[k] = v; return true; }
@@ -345,6 +386,32 @@ public final class TextScriptEngine {
             return { x: h, y: mx === 0 ? 0 : d / mx, z: mx };
         }
     };
+    // 미디어 이벤트 클래스(실물 계약 — 필드는 193패키지 소비 역추출): 생성자는 기본값 채운 뒤
+    // 주어진 필드를 전부 복사(실물 스크립트가 여러 이벤트를 한 객체에 합쳐 쓰는 union 소비 허용).
+    // 상수 규약은 웹 wallpaperMediaIntegration 과 동일: STOPPED 0 / PLAYING 1 / PAUSED 2.
+    function __mediaEvent(defaults) {
+        return function (p) {
+            var k;
+            for (k in defaults) { this[k] = defaults[k]; }
+            if (p) { for (k in p) { this[k] = p[k]; } }
+        };
+    }
+    var MediaPlaybackEvent = __mediaEvent({ state: 0 });
+    MediaPlaybackEvent.PLAYBACK_STOPPED = 0;
+    MediaPlaybackEvent.PLAYBACK_PLAYING = 1;
+    MediaPlaybackEvent.PLAYBACK_PAUSED = 2;
+    var MediaPropertiesEvent = __mediaEvent({ title: '', artist: '', subTitle: '', albumTitle: '',
+                                              albumArtist: '', genres: '', contentType: '' });
+    var MediaTimelineEvent = __mediaEvent({ position: 0, duration: 0 });
+    var MediaStatusEvent = __mediaEvent({ enabled: false });
+    // 썸네일: 색 필드는 항상 Vec3(2881558311 ColorTinter 가 subtract/multiply/add 체이닝) — 인스턴스별 생성.
+    function MediaThumbnailEvent(p) {
+        this.thumbnail = null; this.hasThumbnail = false;
+        this.primaryColor = new Vec3(0, 0, 0); this.secondaryColor = new Vec3(0, 0, 0);
+        this.tertiaryColor = new Vec3(0, 0, 0);
+        this.textColor = new Vec3(1, 1, 1); this.highContrastColor = new Vec3(1, 1, 1);
+        if (p) { for (var k in p) { this[k] = p[k]; } }
+    }
     var shared = {};
     var thisScene = __noopProxy();
     var thisObject = __noopProxy();
