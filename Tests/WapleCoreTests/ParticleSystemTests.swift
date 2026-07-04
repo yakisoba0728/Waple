@@ -52,9 +52,38 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(d.maxCount, 500)
         XCTAssertTrue(d.initializers.contains(.alphaRandom(min: 0.1, max: 0.2, exponent: 2)))
         XCTAssertTrue(d.initializers.contains(.turbulentVelocityRandom(speedMin: 0, speedMax: 50, scale: 0.3, offset: -0.1)))
-        // controlpointattract 는 미지원 → 파싱 생존, operators 에 movement/alphafade 만.
-        XCTAssertEqual(d.operators.count, 2)
+        // movement/alphafade/controlpointattract 3종 모두 파싱.
+        XCTAssertEqual(d.operators.count, 3)
         XCTAssertTrue(d.operators.contains(.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0)))
+        XCTAssertTrue(d.operators.contains(.controlPointAttract(scale: -750, threshold: 64, target: Vec3(x: 0, y: 0, z: 0))))
+    }
+
+    // 실물 trail_1.json(rope) / wind-blur.json(spritetrail) / Shooting_Star(ropetrail) 스키마.
+    func testParseTrailRenderers() {
+        let rope = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"rope","subdivision":0}],"maxcount":128}"#), material: nil)
+        XCTAssertEqual(rope.renderer, .rope(subdivision: 0))
+        XCTAssertTrue(rope.renderer.isTrail)
+        XCTAssertEqual(rope.renderer.trailSampleCount, 16)
+
+        let spriteTrail = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"spritetrail","maxlength":20}],"maxcount":24}"#), material: nil)
+        XCTAssertEqual(spriteTrail.renderer, .spriteTrail(maxLength: 20, length: 0))
+        XCTAssertEqual(spriteTrail.renderer.trailSampleCount, 20)
+
+        let ropeTrail = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"ropetrail","length":0.4,"subdivision":2}],"maxcount":10}"#), material: nil)
+        XCTAssertEqual(ropeTrail.renderer, .ropeTrail(length: 0.4, subdivision: 2))
+        XCTAssertEqual(ropeTrail.renderer.trailSampleCount, 12)  // 0.4s × 30fps
+
+        // maxlength 없는 spritetrail → 기본 8샘플. sprite 는 트레일 아님.
+        let bare = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"spritetrail"}],"maxcount":10}"#), material: nil)
+        XCTAssertEqual(bare.renderer.trailSampleCount, 8)
+        XCTAssertFalse(RendererKind.sprite.isTrail)
+        XCTAssertEqual(RendererKind.sprite.trailSampleCount, 0)
+    }
+
+    func testParseVortex() {
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"vortex","axis":"0 0 1","distanceinner":0,"distanceouter":50,"speedinner":300,"speedouter":0,"offset":"0 0 0"}],"renderer":[{"name":"sprite"}],"maxcount":10}"#), material: nil)
+        XCTAssertTrue(d.operators.contains(.vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 50,
+                                                   speedInner: 300, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))))
     }
 
     func testBoxEmitter() {
@@ -78,7 +107,8 @@ final class ParticleSystemTests: XCTestCase {
     }
 
     func testUnsupportedRendererSurvives() {
-        let d = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"rope"}],"maxcount":10}"#), material: nil)
-        XCTAssertEqual(d.renderer, .unsupported("rope"))
+        // rope 는 이제 지원 → 진짜 미지원(예: 존재하지 않는 렌더러)만 unsupported.
+        let d = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"bogusrenderer"}],"maxcount":10}"#), material: nil)
+        XCTAssertEqual(d.renderer, .unsupported("bogusrenderer"))
     }
 }
