@@ -62,9 +62,15 @@ public final class TextScriptEngine {
     /// update/훅 부재도 성공(top-level 사이드이펙트는 이미 실행됨).
     /// 로드 예외(문법 오류 등) → nil, 공유 컨텍스트는 오염되지 않는다(IIFE 미실행).
     public init?(script: String, scene: SceneScriptContext) {
-        context = scene.context
+        let ctx = scene.context
+        context = ctx
         var hadException = false
-        context.exceptionHandler = { _, ex in
+        // 공유 컨텍스트의 기존 핸들러(SceneScriptContext 로깅)를 저장 후 복원 — 로드용 핸들러가
+        // 컨텍스트에 잔류해 이후 무관한 평가의 예외를 오귀속하지 않도록. (defer 는 로컬 ctx 사용 —
+        // init 실패 경로에서 self 접근 불가.)
+        let saved = ctx.exceptionHandler
+        defer { ctx.exceptionHandler = saved }
+        ctx.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] scene script load exception: \(ex?.toString() ?? "?")")
             hadException = true
         }
@@ -98,6 +104,10 @@ public final class TextScriptEngine {
     public func callHook(_ name: String, eventJS: String) {
         guard let fn = hookFns[name] else { return }
         var failed = false
+        // 공유 JSContext 규약: 호출용 핸들러는 저장/복원(교체 후 미복원 시 마지막 핸들러가 컨텍스트에
+        // 잔류해 다른 엔진/시점의 예외를 오귀속). evaluate/evaluateBool/evaluateVec 도 동일.
+        let saved = context.exceptionHandler
+        defer { context.exceptionHandler = saved }
         context.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] \(name) hook exception: \(ex?.toString() ?? "?")")
             failed = true
@@ -110,6 +120,8 @@ public final class TextScriptEngine {
     public func evaluate(current: String) -> String? {
         guard let updateFn else { return nil }
         var failed = false
+        let saved = context.exceptionHandler
+        defer { context.exceptionHandler = saved }
         context.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] text script update exception: \(ex?.toString() ?? "?")")
             failed = true
@@ -122,6 +134,8 @@ public final class TextScriptEngine {
     public func evaluateBool(current: Bool) -> Bool? {
         guard let updateFn else { return nil }
         var failed = false
+        let saved = context.exceptionHandler
+        defer { context.exceptionHandler = saved }
         context.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] visible script exception: \(ex?.toString() ?? "?")")
             failed = true
@@ -141,6 +155,8 @@ public final class TextScriptEngine {
     public func evaluateVec(current: [Float]) -> [Float]? {
         guard let updateFn else { return nil }
         var failed = false
+        let saved = context.exceptionHandler
+        defer { context.exceptionHandler = saved }
         context.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] constant script exception: \(ex?.toString() ?? "?")")
             failed = true
