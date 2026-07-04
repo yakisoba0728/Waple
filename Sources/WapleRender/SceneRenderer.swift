@@ -358,6 +358,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     public override init() { super.init() }
 
+    /// teardown 미호출 경로 안전망(비대칭 해소 — ParallaxController/MediaPoller 는 자체 deinit 보유).
+    /// 전역 클릭 모니터는 renderer 소멸 후에도 시스템에 남고(블록이 weak self 라 리테인 사이클은
+    /// 없지만 모니터 등록 자체가 누수), 오디오 캡처 스트림도 stop 없이는 계속 돈다.
+    deinit {
+        if let m = clickMonitor { NSEvent.removeMonitor(m) }
+        mediaPoller?.stop()
+        audioProvider?.stop()
+    }
+
     public func mount(in container: NSView, project: WallpaperProject) throws {
         guard let pkgURL = pkgURL(in: project.folderURL) else {
             NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
@@ -972,9 +981,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     }
                 }
                 guard let vbuf = device.makeBuffer(bytes: packed, length: MemoryLayout<Float>.stride * packed.count),
-                      let ibuf = mesh.indices.withUnsafeBytes({ device.makeBuffer(bytes: $0.baseAddress!, length: $0.count) })
+                      let ibuf = mesh.indices.withUnsafeBytes({ device.makeBuffer(bytes: $0.baseAddress!, length: $0.count) }),
+                      let mat = loadMesh3DMaterial(mesh.material, package: package, device: device)
                 else { continue }
-                let mat = loadMesh3DMaterial(mesh.material, package: package, device: device)
                 if skinned { anySkinned = true }
                 meshes.append(GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
                                         texture: mat.texture, tint: mat.tint, alphaCutoff: mat.alphaCutoff,
@@ -1068,7 +1077,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
     /// 규약: textures[] 첫 non-null 이름 → "materials/<이름>.tex"(resolveTexture 폴백 포함).
-    private func loadMesh3DMaterial(_ path: String, package: ScenePackage, device: MTLDevice) -> Mesh3DMaterialInfo {
+    /// nil = 디바이스 텍스처 생성 실패(흰색 1x1 폴백조차 불가)뿐 — 호출자는 서브메시 스킵.
+    private func loadMesh3DMaterial(_ path: String, package: ScenePackage, device: MTLDevice) -> Mesh3DMaterialInfo? {
         var texName: String? = nil
         var color = SIMD3<Float>(1, 1, 1)
         var alpha: Float = 1
@@ -1100,8 +1110,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         } else {
             NSLog("%@", "[Waple] 3D: material json missing: \(path)")
         }
-        let tex = resolveTexture(texName, package: package, device: device)
-            ?? makeTexture(Data([255, 255, 255, 255]), 1, 1, device)!
+        guard let tex = resolveTexture(texName, package: package, device: device) else { return nil }
         return Mesh3DMaterialInfo(texture: tex, tint: SIMD4(color.x, color.y, color.z, alpha),
                                   alphaCutoff: alphaCutoff, cullBack: cullBack, additive: additive,
                                   depthTest: depthTest, depthWrite: depthWrite)
@@ -1139,6 +1148,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private func pooledDepth(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
         let key = "\(max(w, 1))x\(max(h, 1))"
         if let t = depthTextures[key] { return t }
+        // 크기 변경(리사이즈/캡처) 시 이전 크기 evict — 뎁스는 패스 내 일시 자원(storeAction .dontCare)
+        // 이라 프레임 간 내용 지속이 없고, 한 시점엔 한 타깃 크기만 쓴다.
+        depthTextures.removeAll()
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float,
                                                          width: max(w, 1), height: max(h, 1), mipmapped: false)
         d.usage = [.renderTarget]
@@ -1411,6 +1423,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var texturePool: [String: [MTLTexture]] = [:]
     private var poolCheckout: [String: Int] = [:]
 
+    /// 프레임 시작: 풀 체크아웃 리셋 + **직전 프레임에 사용되지 않은 항목 evict**(크기키/초과분).
+    /// 화면 리사이즈/캡처 크기 변경 후 이전 크기의 오프스크린이 무기한 잔존하는 누수 방지.
+    /// 사용 중 크기(레이어/FBO/화면)는 매 프레임 체크아웃되므로 유지되고, 배열 prefix 트림이라
+    /// 반환 순서도 보존 — 프레임 간 지속 FBO(motionblur copy 누적)의 재사용 텍스처가 바뀌지 않는다.
+    private func beginFramePool() {
+        for (key, arr) in texturePool {
+            let used = poolCheckout[key] ?? 0
+            if used == 0 { texturePool.removeValue(forKey: key) }
+            else if used < arr.count { texturePool[key] = Array(arr.prefix(used)) }
+        }
+        poolCheckout.removeAll(keepingCapacity: true)
+    }
+
     private func pooledOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice, bgra: Bool = false) -> MTLTexture? {
         let key = "\(bgra ? "b" : "")\(max(w,1))x\(max(h,1))"
         let idx = poolCheckout[key, default: 0]
@@ -1560,7 +1585,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
         // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → drawable blit.
         if is3D {
-            poolCheckout.removeAll(keepingCapacity: true)
+            beginFramePool()
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
                   encode3D(into: acc, cb: cb, device: device, time: time) else { cb.commit(); return }
             if let blit = cb.makeBlitCommandEncoder() {
@@ -1822,7 +1847,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 효과가 있는 레이어는 원본 텍스처를 첫 src 로 삼아 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.
     /// 라이브 draw 와 헤드리스 captureFrames 가 공유.
     private func buildDisplayTextures(device: MTLDevice, queue: MTLCommandQueue, time: Float, cb: MTLCommandBuffer) -> [MTLTexture] {
-        poolCheckout.removeAll(keepingCapacity: true)  // 프레임 시작: 모든 풀 텍스처를 재사용 가능 상태로
+        beginFramePool()  // 프레임 시작: 모든 풀 텍스처를 재사용 가능 상태로 + 미사용 크기 evict
         var out: [MTLTexture] = []
         for layer in layers {
             // 컴포지션 레이어의 효과는 사전 계산 불가(src = 그 시점 프레임버퍼 스냅샷) — draw 루프에서 처리.
@@ -1865,6 +1890,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             enc.endEncoding()
 
         case .translated(var passes, let fboScales):
+            guard let device else { return }  // mount 이후 항상 존재 — 강제 언랩 제거(teardown 경합 안전)
             // 디버그: WAPLE_MP_TRUNC=n → 앞 n개 패스만 실행(마지막은 dst 로 강제) — 패스별 이분용.
             if let t = ProcessInfo.processInfo.environment["WAPLE_MP_TRUNC"], let n = Int(t), n > 0, n < passes.count {
                 passes = Array(passes.prefix(n))
@@ -1877,7 +1903,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
             var fboTex: [MTLTexture] = []
             for s in fboScales {
-                guard let t = pooledOffscreen(max(1, baseW / s), max(1, baseH / s), device!) else { return }
+                guard let t = pooledOffscreen(max(1, baseW / s), max(1, baseH / s), device) else { return }
                 fboTex.append(t)
             }
             for pass in passes {
@@ -1953,7 +1979,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             var urls: [URL] = []
             for t in times.sorted() {
                 guard let cb = queue.makeCommandBuffer() else { continue }
-                poolCheckout.removeAll(keepingCapacity: true)
+                beginFramePool()
                 guard encode3D(into: target, cb: cb, device: device, time: t) else { continue }
                 cb.commit(); cb.waitUntilCompleted()
                 let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
