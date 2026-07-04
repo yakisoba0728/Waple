@@ -9,6 +9,11 @@ import Metal
 /// 하드 어서션은 "마운트가 크래시/스로우 없이 되고 PNG 가 나온다"까지만. 효과 번역 성공/폴백 통계는
 /// 렌더러의 NSLog 라인(effect via GLSL→MSL translator / translate failed / MSL compile failed / skipped)을
 /// 러너 stderr 에서 수집해 판단한다(사람/에이전트가 grep).
+/// GT 실행용 스텁: 항상 "정지" — 폴러가 osascript 를 스폰하지 않는다.
+struct StoppedNowPlayingProvider: NowPlayingProvider {
+    func fetch() -> NowPlayingInfo? { nil }
+}
+
 final class RealPackagesGroundTruthTests: XCTestCase {
     func testMountAndCaptureAllRealScenes() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
@@ -42,6 +47,8 @@ final class RealPackagesGroundTruthTests: XCTestCase {
             do {
                 let project = try ProjectJSONParser.parse(folderURL: folder)
                 let r = SceneRenderer()
+                // 미디어 씬(media*Changed 소비)이 실제 AppleScript 폴링을 돌리지 않게 스텁 주입(결정적 + TCC 무).
+                r.nowPlayingProvider = StoppedNowPlayingProvider()
                 try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360)), project: project)
                 mounted += 1
                 let urls = r.captureFrames(width: 640, height: 360, times: [0.5], toDir: outDir)

@@ -40,7 +40,7 @@ enum WallpaperBridgeJS {
       };
       // 미디어 연동: 리스너 등록 시 네이티브에 알리고(폴링 시작), __wapleMedia 로 배달받는다.
       window.wallpaperMediaIntegration = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };
-      var mediaCbs = { status: null, properties: null, timeline: null, thumbnail: null };
+      var mediaCbs = { status: null, properties: null, timeline: null, thumbnail: null, playback: null };
       function regMedia(kind) {
         return function (cb) {
           mediaCbs[kind] = cb;
@@ -51,11 +51,11 @@ enum WallpaperBridgeJS {
       window.wallpaperRegisterMediaPropertiesListener = regMedia('properties');
       window.wallpaperRegisterMediaThumbnailListener = regMedia('thumbnail');
       window.wallpaperRegisterMediaTimelineListener = regMedia('timeline');
+      window.wallpaperRegisterMediaPlaybackListener = regMedia('playback');
       window.__wapleMedia = function (kind, obj) {
         var cb = mediaCbs[kind];
         if (cb) { try { cb(obj); } catch (e) {} }
       };
-      window.wallpaperRegisterMediaPlaybackListener = noop;
     })();
     """#
 }
