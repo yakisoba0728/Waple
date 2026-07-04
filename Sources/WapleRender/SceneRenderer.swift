@@ -127,6 +127,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let additive: Bool
         let depthTest: Bool
         let depthWrite: Bool
+        let skinned: Bool            // true → 16f 스트라이드 + mv_skin(본행렬 버퍼)
     }
     /// MSL 쪽 MeshU 와 레이아웃 일치(float4x4 + float4 + float4 = 96B).
     private struct MeshUniform { var mvp: simd_float4x4; var tint: SIMD4<Float>; var misc: SIMD4<Float> }
@@ -167,7 +168,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     /// 렌더 가능한 3D 메시(모델) — 변환은 동일 id 의 Node3D 에서.
-    private struct MeshRenderable { let id: Int; let meshes: [GPU3DMesh]; let order: Int; let name: String }
+    /// 스키닝 모델은 model(본+애니) + animIndex(활성 애니, -1=바인드포즈) + boneBuffer(프레임당 갱신) 보유.
+    private struct MeshRenderable {
+        let id: Int
+        let meshes: [GPU3DMesh]
+        let order: Int
+        let name: String
+        let model: Model3D?          // 스키닝: 본/애니 소스(정적 모델은 nil)
+        let animIndex: Int           // -1 = 정지(바인드 포즈)
+        let animRate: Float
+        let boneBuffer: MTLBuffer?   // boneCount×64B(skin=world×bindWorld⁻¹), 프레임당 memcpy
+    }
 
     /// 3D 씬의 2D 이미지 레이어를 카메라-페이싱 쿼드로(빌보드). 로컬 변환 + 부모 계층 + per-frame 스크립트.
     private final class Billboard3D {
@@ -175,6 +186,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let size: SIMD2<Float>           // 씬 픽셀 크기(월드 반경 = size×scale×부모스케일)
         let parent: Int?
         let order: Int
+        let additive: Bool               // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우)
         let baseOrigin: SIMD3<Float>
         let baseScale: SIMD2<Float>
         let baseTint: SIMD4<Float>
@@ -185,9 +197,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var scale: SIMD2<Float>
         var tint: SIMD4<Float>
         var visible: Bool
-        init(texture: MTLTexture, size: SIMD2<Float>, parent: Int?, order: Int,
+        init(texture: MTLTexture, size: SIMD2<Float>, parent: Int?, order: Int, additive: Bool,
              origin: SIMD3<Float>, scale: SIMD2<Float>, tint: SIMD4<Float>, visible: Bool) {
             self.texture = texture; self.size = size; self.parent = parent; self.order = order
+            self.additive = additive
             baseOrigin = origin; baseScale = scale; baseTint = tint; baseVisible = visible
             self.origin = origin; self.scale = scale; self.tint = tint; self.visible = visible
         }
@@ -221,6 +234,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var draw3DOrder: [(order: Int, bb: Bool, idx: Int)] = []
     private var meshPipelineOver: MTLRenderPipelineState?      // premultiplied over(normal/translucent)
     private var meshPipelineAdditive: MTLRenderPipelineState?
+    private var meshPipelineSkin: MTLRenderPipelineState?      // GPU 스키닝(mv_skin) over
+    private var meshPipelineSkinAdditive: MTLRenderPipelineState?
+    /// 카메라 프로퍼티 스크립트(eye/center/up/fov). per-frame 재평가로 카메라 애니.
+    private var cameraScripts: [Script3D] = []
     private var meshDepthStates: [String: MTLDepthStencilState] = [:]  // "test-write" 키
     private var depthTextures: [String: MTLTexture] = [:]     // 크기별 재사용(.depth32Float)
 
@@ -773,9 +790,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             NSLog("%@", "[Waple] 3D: mesh shader compile failed")
             return
         }
-        meshPipelineOver = mesh3DPipeline(lib: lib, additive: false, device: device)
-        meshPipelineAdditive = mesh3DPipeline(lib: lib, additive: true, device: device)
+        meshPipelineOver = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
+        meshPipelineAdditive = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
+        meshPipelineSkin = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: false, device: device)
+        meshPipelineSkinAdditive = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: true, device: device)
         guard meshPipelineOver != nil else { return }
+
+        // 카메라 프로퍼티 스크립트(eye/center/up/fov) 로드 — per-frame 재평가로 카메라 애니(젤다 fov 등).
+        for key in ["eye", "center", "up", "fov"] {
+            guard let src = doc.cameraScripts[key], let e = makeScriptEngine(src) else { continue }
+            cameraScripts.append(Script3D(key: key, engine: e))
+        }
 
         // ── 변환 계층 노드(그룹 + 모델 오브젝트). 모델도 다른 모델/빌보드의 부모가 될 수 있다. ──
         for g in doc.nodes3D {
@@ -807,28 +832,55 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 skipped += 1
                 continue
             }
+            let boneCount = model.bones.count
             var meshes: [GPU3DMesh] = []
+            var anySkinned = false
             for mesh in model.meshes {
                 guard !mesh.vertices.isEmpty, !mesh.indices.isEmpty else { continue }
-                // pos3+normal3+uv2 재패킹(48/80 스트라이드의 tangent/bone 은 v1 미사용).
+                // 스키닝 메시(v3): pos3+normal3+uv2+boneIdx4+weight4(16f) — GPU 정점 스키닝(mv_skin).
+                // 정적 메시: pos3+normal3+uv2(8f). 본 인덱스는 boneCount-1 로 clamp(셰이더 OOB 방지).
+                let skinned = mesh.skinned && boneCount > 0
                 var packed = [Float]()
-                packed.reserveCapacity(mesh.vertices.count * 8)
+                packed.reserveCapacity(mesh.vertices.count * (skinned ? 16 : 8))
                 for v in mesh.vertices {
                     packed.append(contentsOf: [v.position.x, v.position.y, v.position.z,
                                                v.normal.x, v.normal.y, v.normal.z,
                                                v.uv.x, v.uv.y])
+                    if skinned {
+                        let mx = UInt32(max(0, boneCount - 1))
+                        packed.append(contentsOf: [Float(min(v.boneIndices.x, mx)), Float(min(v.boneIndices.y, mx)),
+                                                   Float(min(v.boneIndices.z, mx)), Float(min(v.boneIndices.w, mx)),
+                                                   v.weights.x, v.weights.y, v.weights.z, v.weights.w])
+                    }
                 }
                 guard let vbuf = device.makeBuffer(bytes: packed, length: MemoryLayout<Float>.stride * packed.count),
                       let ibuf = mesh.indices.withUnsafeBytes({ device.makeBuffer(bytes: $0.baseAddress!, length: $0.count) })
                 else { continue }
                 let mat = loadMesh3DMaterial(mesh.material, package: package, device: device)
+                if skinned { anySkinned = true }
                 meshes.append(GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
                                         texture: mat.texture, tint: mat.tint, alphaCutoff: mat.alphaCutoff,
                                         cullBack: mat.cullBack, additive: mat.additive,
-                                        depthTest: mat.depthTest, depthWrite: mat.depthWrite))
+                                        depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned))
             }
             guard !meshes.isEmpty else { skipped += 1; continue }
-            meshRenderables.append(MeshRenderable(id: obj.id, meshes: meshes, order: obj.order, name: obj.name))
+            // 활성 애니(animationlayers) → 인덱스. 스키닝 모델만 bone 버퍼/모델 참조 보유.
+            var animIndex = -1
+            var boneBuffer: MTLBuffer? = nil
+            var keepModel: Model3D? = nil
+            if anySkinned {
+                keepModel = model
+                boneBuffer = device.makeBuffer(length: max(1, boneCount) * MemoryLayout<simd_float4x4>.stride,
+                                               options: .storageModeShared)
+                // WAPLE3D_BINDPOSE=1 → 애니 무시(skin=항등, 바인드 포즈) — 스키닝 배선 정합 게이트(v2 정적과 비교).
+                let bindPoseOnly = ProcessInfo.processInfo.environment["WAPLE3D_BINDPOSE"] == "1"
+                animIndex = (!bindPoseOnly && obj.animation != nil)
+                    ? Model3DPose.resolveAnimation(model: model, layerName: obj.animation?.name)
+                    : -1
+            }
+            meshRenderables.append(MeshRenderable(id: obj.id, meshes: meshes, order: obj.order, name: obj.name,
+                                                  model: keepModel, animIndex: animIndex,
+                                                  animRate: obj.animation?.rate ?? 1, boneBuffer: boneBuffer))
             loaded += 1
         }
 
@@ -846,6 +898,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                     layer.color.z * layer.brightness, layer.alpha)
             let bb = Billboard3D(texture: mtl, size: SIMD2(layer.size.x, layer.size.y),
                                  parent: layer.parent, order: layer.order,
+                                 additive: layer.blendMode == "additive",
                                  origin: SIMD3(layer.origin.x, layer.origin.y, layer.originZ),
                                  scale: SIMD2(layer.scale.x, layer.scale.y), tint: tint,
                                  visible: layer.initialVisible)
@@ -863,7 +916,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         for (i, m) in meshRenderables.enumerated() { drawItems.append((m.order, false, i)) }
         for (i, b) in billboards.enumerated() { drawItems.append((b.order, true, i)) }
         draw3DOrder = drawItems.sorted { $0.order < $1.order }
-        has3DScripts = !eval3DOrder.isEmpty
+        // 카메라 스크립트 또는 활성 애니(스키닝) 가 있으면 연속 렌더 필요.
+        let hasSkinAnim = meshRenderables.contains { $0.animIndex >= 0 }
+        has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim
 
         NSLog("%@", "[Waple] 3D scene: \(loaded) meshes (\(skipped) skipped), \(bbLoaded) billboards (\(bbSkipped) skipped), " +
               "\(nodes3D.count) nodes, \(eval3DOrder.count) scripted, lights=\(doc.lights3D.count)")
@@ -935,10 +990,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     /// 메시 파이프라인(bgra8 + depth32Float). 프래그먼트가 premultiplied 출력 → src=one,
-    /// over: dst=1-srcAlpha, additive: dst=one(가산).
-    private func mesh3DPipeline(lib: MTLLibrary, additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+    /// over: dst=1-srcAlpha, additive: dst=one(가산). vertex = "mv_main"(정적) | "mv_skin"(GPU 스키닝).
+    private func mesh3DPipeline(lib: MTLLibrary, vertex: String, additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
         let pd = MTLRenderPipelineDescriptor()
-        pd.vertexFunction = lib.makeFunction(name: "mv_main")
+        pd.vertexFunction = lib.makeFunction(name: vertex)
         pd.fragmentFunction = lib.makeFunction(name: "mf_main")
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
@@ -1008,11 +1063,23 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         rpd.depthAttachment.storeAction = .dontCare
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
         let aspect = Float(target.width) / Float(max(1, target.height))
-        let eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
-        let ctr = SIMD3(cam.center.x, cam.center.y, cam.center.z)
-        let upv = SIMD3(cam.up.x, cam.up.y, cam.up.z)
+        // 카메라 프로퍼티 스크립트 per-frame 재평가(eye/center/up → Vec3, fov → 스칼라). 무스크립트면 base 고정.
+        var eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
+        var ctr = SIMD3(cam.center.x, cam.center.y, cam.center.z)
+        var upv = SIMD3(cam.up.x, cam.up.y, cam.up.z)
+        var fov = cam.fov
+        for sc in cameraScripts {
+            sc.engine.setRuntime(Double(time))
+            switch sc.key {
+            case "eye":    if let v = sc.engine.evaluateVec(current: [eye.x, eye.y, eye.z]), v.count >= 3 { eye = SIMD3(v[0], v[1], v[2]) }
+            case "center": if let v = sc.engine.evaluateVec(current: [ctr.x, ctr.y, ctr.z]), v.count >= 3 { ctr = SIMD3(v[0], v[1], v[2]) }
+            case "up":     if let v = sc.engine.evaluateVec(current: [upv.x, upv.y, upv.z]), v.count >= 3 { upv = SIMD3(v[0], v[1], v[2]) }
+            case "fov":    if let v = sc.engine.evaluateVec(current: [fov]), let f = v.first, f > 0 { fov = f }
+            default: break
+            }
+        }
         let view = Scene3DMath.lookAt(eye: eye, center: ctr, up: upv)
-        let proj = Scene3DMath.perspective(fovYDegrees: cam.fov, aspect: aspect,
+        let proj = Scene3DMath.perspective(fovYDegrees: fov, aspect: aspect,
                                            nearZ: cam.nearZ, farZ: cam.farZ)
         let viewProj = proj * view
         // 빌보드 카메라-페이싱 축(월드): right/up(lookAt 과 동일 규약).
@@ -1035,16 +1102,33 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     NSLog("%@", "[Waple3D] draw '\(mr.name)' ndc=\(c.w != 0 ? SIMD3(c.x, c.y, c.z) / c.w : .zero) w=\(c.w)")
                 }
                 var u = MeshUniform(mvp: viewProj * w.matrix, tint: SIMD4(1, 1, 1, 1), misc: SIMD4(0, 0, 0, 0))
+                // 스키닝 모델: 프레임당 본행렬(skin=world(t)×bindWorld⁻¹) 계산 → boneBuffer memcpy(정적 애니는 항등).
+                var skinReady = false
+                if let model = mr.model, let bb = mr.boneBuffer, !model.bones.isEmpty {
+                    let mats = Model3DPose.skinMatrices(model: model, animation: mr.animIndex, time: time, rate: mr.animRate)
+                    if !mats.isEmpty {
+                        let bytes = min(bb.length, mats.count * MemoryLayout<simd_float4x4>.stride)
+                        mats.withUnsafeBytes { memcpy(bb.contents(), $0.baseAddress!, bytes) }
+                        skinReady = true
+                    }
+                }
                 for mesh in mr.meshes {
+                    // 스키닝 메시(16f 패킹)는 반드시 스키닝 파이프라인 필요 — 본버퍼 미준비면 스킵(8f 셰이더로 오독 방지).
+                    if mesh.skinned && !skinReady { continue }
                     u.tint = mesh.tint
                     u.misc.x = mesh.alphaCutoff
-                    enc.setRenderPipelineState(mesh.additive ? (meshPipelineAdditive ?? over) : over)
+                    let useSkin = mesh.skinned && skinReady
+                    let pipe: MTLRenderPipelineState
+                    if useSkin { pipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin ?? over) : (meshPipelineSkin ?? over) }
+                    else { pipe = mesh.additive ? (meshPipelineAdditive ?? over) : over }
+                    enc.setRenderPipelineState(pipe)
                     if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
                         enc.setDepthStencilState(ds)
                     }
                     enc.setCullMode(mesh.cullBack ? .back : .none)
                     enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
                     enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                    if useSkin, let bb = mr.boneBuffer { enc.setVertexBuffer(bb, offset: 0, index: 2) }
                     enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
                     enc.setFragmentTexture(mesh.texture, index: 0)
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
@@ -1089,7 +1173,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         verts += vtx(tl, 0, 0); verts += vtx(br, 1, 1); verts += vtx(bl, 0, 1)
         guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { return }
         var u2 = MeshUniform(mvp: viewProj, tint: bb.tint, misc: SIMD4(0, 0, 0, 0))
-        enc.setRenderPipelineState(over)
+        // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우 광량 복원). 그 외 premult-over.
+        enc.setRenderPipelineState(bb.additive ? (meshPipelineAdditive ?? over) : over)
         if let ds = meshDepthState(test: true, write: false, device: device) { enc.setDepthStencilState(ds) }
         enc.setCullMode(.none)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
@@ -1800,9 +1885,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneScript = nil; scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
-        nodes3D = []; meshRenderables = []; billboards = []
+        nodes3D = []; meshRenderables = []; billboards = []; cameraScripts = []
         eval3DOrder = []; draw3DOrder = []
         meshPipelineOver = nil; meshPipelineAdditive = nil
+        meshPipelineSkin = nil; meshPipelineSkinAdditive = nil
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
         pipeline = nil; queue = nil; device = nil

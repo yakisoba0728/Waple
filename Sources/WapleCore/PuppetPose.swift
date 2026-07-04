@@ -25,15 +25,20 @@ public enum PuppetPose {
 
     /// 키 → 로컬 행렬(T·Rz·Ry·Rx·S).
     static func localMatrix(_ k: PuppetModel.Key) -> simd_float4x4 {
-        let cz = cos(k.angles.z), sz = sin(k.angles.z)
-        let cy = cos(k.angles.y), sy = sin(k.angles.y)
-        let cx = cos(k.angles.x), sx = sin(k.angles.x)
+        localMatrix(position: k.position, angles: k.angles, scale: k.scale)
+    }
+
+    /// 성분 → 로컬 행렬(T·Rz·Ry·Rx·S). 2D 퍼펫·3D 모델(Model3DPose) 공용 — 오일러 순서 규약 단일 소스.
+    static func localMatrix(position: SIMD3<Float>, angles: SIMD3<Float>, scale: SIMD3<Float>) -> simd_float4x4 {
+        let cz = cos(angles.z), sz = sin(angles.z)
+        let cy = cos(angles.y), sy = sin(angles.y)
+        let cx = cos(angles.x), sx = sin(angles.x)
         let rz = simd_float4x4(SIMD4(cz, sz, 0, 0), SIMD4(-sz, cz, 0, 0), SIMD4(0, 0, 1, 0), SIMD4(0, 0, 0, 1))
         let ry = simd_float4x4(SIMD4(cy, 0, -sy, 0), SIMD4(0, 1, 0, 0), SIMD4(sy, 0, cy, 0), SIMD4(0, 0, 0, 1))
         let rx = simd_float4x4(SIMD4(1, 0, 0, 0), SIMD4(0, cx, sx, 0), SIMD4(0, -sx, cx, 0), SIMD4(0, 0, 0, 1))
-        let s = simd_float4x4(diagonal: SIMD4(k.scale.x, k.scale.y, k.scale.z, 1))
+        let s = simd_float4x4(diagonal: SIMD4(scale.x, scale.y, scale.z, 1))
         var m = rz * ry * rx * s
-        m.columns.3 = SIMD4(k.position.x, k.position.y, k.position.z, 1)
+        m.columns.3 = SIMD4(position.x, position.y, position.z, 1)
         return m
     }
 
