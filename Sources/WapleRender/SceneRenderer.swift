@@ -376,6 +376,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
 
+    /// command=copy 통과 파이프라인 캐시(빌드는 SceneRendererResources.passthroughEffectPipeline).
     var _passthroughPipeline: MTLRenderPipelineState?
 
 
