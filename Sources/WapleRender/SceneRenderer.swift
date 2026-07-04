@@ -356,6 +356,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private var meshDepthStates: [String: MTLDepthStencilState] = [:]  // "test-write" 키
     private var depthTextures: [String: MTLTexture] = [:]     // 크기별 재사용(.depth32Float)
 
+    /// 디버그 env 플래그: 신규 `WAPLE_3D_*` 표기 우선, 구 `WAPLE3D_*` 병행 인식(전환기 호환 — 추후 제거).
+    static func debugFlag(_ names: String...) -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        return names.contains { env[$0] == "1" }
+    }
+
     public override init() { super.init() }
 
     /// teardown 미호출 경로 안전망(비대칭 해소 — ParallaxController/MediaPoller 는 자체 deinit 보유).
@@ -999,8 +1005,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 keepModel = model
                 boneBuffer = device.makeBuffer(length: max(1, boneCount) * MemoryLayout<simd_float4x4>.stride,
                                                options: .storageModeShared)
-                // WAPLE3D_BINDPOSE=1 → 애니 무시(skin=항등, 바인드 포즈) — 스키닝 배선 정합 게이트(v2 정적과 비교).
-                let bindPoseOnly = ProcessInfo.processInfo.environment["WAPLE3D_BINDPOSE"] == "1"
+                // WAPLE_3D_BINDPOSE=1(구명 WAPLE3D_BINDPOSE 병행 인식) → 애니 무시(skin=항등, 바인드 포즈)
+                // — 스키닝 배선 정합 게이트(v2 정적과 비교).
+                let bindPoseOnly = Self.debugFlag("WAPLE_3D_BINDPOSE", "WAPLE3D_BINDPOSE")
                 animIndex = (!bindPoseOnly && obj.animation != nil)
                     ? Model3DPose.resolveAnimation(model: model, layerName: obj.animation?.name)
                     : -1
@@ -1219,7 +1226,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 와인딩: front = CCW(A/B 실측 — CW 는 젤다 회랑이 인사이드아웃: 근접 벽이 컬링되어
         // 뒤쪽 외벽이 보임). cullmode "normal" 메시가 CCW-front 백페이스 컬에서 preview 와 일치.
         enc.setFrontFacing(.counterClockwise)
-        let debug3D = ProcessInfo.processInfo.environment["WAPLE3D_DEBUG"] == "1"
+        let debug3D = Self.debugFlag("WAPLE_3D_DEBUG", "WAPLE3D_DEBUG")
         for item in draw3DOrder {
             if item.bb {
                 encodeBillboard(billboards[item.idx], viewProj: viewProj, right: right, up: camUp,
