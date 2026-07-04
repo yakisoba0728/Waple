@@ -34,6 +34,10 @@ public struct SceneEffect: Equatable {
 public struct SceneLayer: Equatable {
     public let textureEntryName: String
     public let origin: Vec2
+    /// origin 의 3성분째(월드 z) — 2D 씬에선 무시(origin 은 씬 픽셀 xy). 3D 씬 빌보드가 월드 위치로 사용.
+    public var originZ: Float = 0
+    /// 부모 오브젝트 id(3D 씬 빌보드의 트랜스폼 계층 — 태양계 이미지는 대부분 그룹 노드에 붙는다). nil=루트.
+    public var parent: Int? = nil
     public let size: Vec2
     public let scale: Vec2
     public let angleZ: Float
@@ -112,6 +116,10 @@ public struct SceneObject3D: Equatable {
     public let effects: [SceneEffect]
     /// scene.json objects[] 내 인덱스 — 그리기/계층 순서 참조.
     public var order: Int = 0
+    /// 프로퍼티 스크립트(origin/angles/scale/visible — 키 → JS 소스). 렌더러가 per-frame 평가해 로컬
+    /// 변환/가시성을 갱신(태양계 planet 은 부모 그룹 origin 스크립트가 궤도를 그린다). 정적 value 는
+    /// 위 필드에 이미 언랩됨 — 스크립트는 재평가용.
+    public var propertyScripts: [String: String] = [:]
     public init(id: Int, name: String, model: String, origin: Vec3, angles: Vec3, scale: Vec3,
                 castShadow: Bool, parent: Int?, effects: [SceneEffect], order: Int = 0) {
         self.id = id; self.name = name; self.model = model
@@ -132,6 +140,9 @@ public struct SceneNode3D: Equatable {
     /// 정적 가시성(스크립트 바인딩은 초기 value). false 그룹의 서브트리는 렌더 제외
     /// (실물 3737268876: link_adult(false)/link_child(true) 교대 캐릭터).
     public let visible: Bool
+    /// 프로퍼티 스크립트(origin/angles/scale/visible). 그룹 노드도 스크립트를 가진다 — 태양계 컨트롤러
+    /// (Main: visible 스크립트로 shared 궤도 파라미터 세팅), 월드 스케일/화면 회전 노드(scale/angles 스크립트)가 모두 그룹.
+    public var propertyScripts: [String: String] = [:]
     public init(id: Int, origin: Vec3, angles: Vec3, scale: Vec3, parent: Int?, visible: Bool) {
         self.id = id; self.origin = origin; self.angles = angles
         self.scale = scale; self.parent = parent; self.visible = visible
@@ -241,13 +252,17 @@ extension SceneDocument {
             // 가시성 판정에 필요)하고 다음으로. 종전에는 조용히 버려져 parent 참조가 끊겼다.
             if !["image", "model", "particle", "text", "light"].contains(where: { obj[$0] != nil }),
                let nodeID = intVal(obj["id"]) {
-                nodes3D.append(SceneNode3D(
+                var node = SceneNode3D(
                     id: nodeID,
                     origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
                     angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
                     scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
                     parent: intVal(obj["parent"]),
-                    visible: initialVisible))
+                    visible: initialVisible)
+                var ps = transformScripts(obj)
+                if let vs = visibleScript { ps["visible"] = vs }
+                node.propertyScripts = ps
+                nodes3D.append(node)
                 continue
             }
             if !initialVisible && (visibleScript == nil || !(obj["image"] is String)) { continue }
@@ -307,6 +322,10 @@ extension SceneDocument {
                 layers[layers.count - 1].puppet = puppetPath
                 layers[layers.count - 1].propertyScripts = propScripts
                 layers[layers.count - 1].initialVisible = initialVisible
+                // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
+                let originFull = floats(obj["origin"])
+                layers[layers.count - 1].originZ = originFull.count >= 3 ? originFull[2] : 0
+                layers[layers.count - 1].parent = intVal(obj["parent"])
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
                     p.order = order
@@ -331,7 +350,7 @@ extension SceneDocument {
                     order: order))
             } else if let modelPath = obj["model"] as? String {
                 // 3D 메시: `.mdl` 직접 참조(2D image→json→puppet 인다이렉션 우회). angles 는 라디안.
-                objects3D.append(SceneObject3D(
+                var o = SceneObject3D(
                     id: intVal(obj["id"]) ?? 0,
                     name: (obj["name"] as? String) ?? "",
                     model: modelPath,
@@ -341,7 +360,11 @@ extension SceneDocument {
                     castShadow: (obj["castshadow"] as? Bool) ?? false,
                     parent: intVal(obj["parent"]),
                     effects: parseEffects(obj["effects"]),
-                    order: order))
+                    order: order)
+                var ps = transformScripts(obj)
+                if let vs = visibleScript { ps["visible"] = vs }
+                o.propertyScripts = ps
+                objects3D.append(o)
             } else if let lightType = obj["light"] as? String {
                 lights3D.append(SceneLight3D(
                     id: intVal(obj["id"]) ?? 0,
@@ -491,6 +514,16 @@ extension SceneDocument {
             return arr.map { resolveUserBindings($0, userProps: userProps, depth: depth + 1) }
         }
         return node
+    }
+
+    /// 3D 오브젝트/그룹의 변환 프로퍼티 스크립트 추출(origin/angles/scale — 키 → JS 소스).
+    /// visible 은 호출부에서 별도 처리(평문 불리언 | 바인딩 객체 두 형태). 정적 value 는 이미 언랩됨.
+    private static func transformScripts(_ obj: [String: Any]) -> [String: String] {
+        var out: [String: String] = [:]
+        for key in ["origin", "angles", "scale"] {
+            if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { out[key] = sc }
+        }
+        return out
     }
 
     /// 바인딩 객체 {"animation":..., "value": X} → X(정적 값), 아니면 원값.

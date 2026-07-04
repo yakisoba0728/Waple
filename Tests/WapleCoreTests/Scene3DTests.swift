@@ -131,6 +131,76 @@ final class Scene3DTests: XCTestCase {
         XCTAssertEqual(doc.nodes3D.count, 1)
     }
 
+    // ── 3D v2: 프로퍼티 스크립트 바인딩 + 빌보드(레이어) originZ/parent ──────────────
+
+    /// 3D 오브젝트/그룹의 origin/angles/scale/visible 스크립트가 propertyScripts 로 캡처(정적 value 는 언랩 유지).
+    func testObjectAndNodePropertyScriptsCaptured() throws {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":5,"name":"Pivot","parent":9,
+            "origin":{"value":"0 0 0","script":"export function update(v){return v;}"},
+            "angles":{"value":"0 0 0","script":"export function update(v){return v;}"}},
+           {"id":6,"name":"Planet","model":"models/p.mdl","parent":5,
+            "scale":{"value":"0.02 0.02 0.02","script":"export function update(v){return v;}"},
+            "visible":{"value":true,"script":"export function update(v){return v;}"}}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([("scene.json", scene)]))
+        let pivot = try XCTUnwrap(doc.nodes3D.first { $0.id == 5 })
+        XCTAssertNotNil(pivot.propertyScripts["origin"])
+        XCTAssertNotNil(pivot.propertyScripts["angles"])
+        XCTAssertNil(pivot.propertyScripts["scale"], "스크립트 없는 키는 미포함")
+        let planet = try XCTUnwrap(doc.objects3D.first { $0.id == 6 })
+        XCTAssertNotNil(planet.propertyScripts["scale"])
+        XCTAssertNotNil(planet.propertyScripts["visible"])
+        // 정적 value 는 여전히 언랩되어 기본 트랜스폼에 반영.
+        XCTAssertEqual(planet.scale, Vec3(x: 0.02, y: 0.02, z: 0.02))
+    }
+
+    /// 3D 씬 이미지 레이어(빌보드): origin 의 z 성분과 parent 계층 보존.
+    func test3DBillboardLayerPreservesOriginZAndParent() throws {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":20,"name":"star","image":"models/star.json","parent":9,
+            "origin":"-2.5 1.5 0.3","size":"256 256","scale":"0.01 0.01 0.01",
+            "color":"1 1 1","alpha":1}
+         ]}
+        """
+        // star.json → material → texture 해석: 최소 머티리얼 동봉.
+        let doc = try SceneDocument.parse(package: pkg([
+            ("scene.json", scene),
+            ("models/star.json", "{\"material\":\"materials/star.json\"}"),
+            ("materials/star.json", "{\"passes\":[{\"textures\":[\"star\"]}]}"),
+        ]))
+        XCTAssertEqual(doc.layers.count, 1)
+        let l = doc.layers[0]
+        XCTAssertEqual(l.origin, Vec2(x: -2.5, y: 1.5))
+        XCTAssertEqual(l.originZ, 0.3, accuracy: 1e-6, "origin 3성분째(월드 z) 보존")
+        XCTAssertEqual(l.parent, 9, "빌보드 부모 계층 보존")
+    }
+
+    /// 2D 씬 무회귀: originZ 기본 0, parent 기본 nil(2D 경로는 origin.xy 만 사용).
+    func test2DLayerOriginZDefaultsZeroNoParent() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"bg","image":"models/bg.json","origin":"960 540","size":"1920 1080"}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([
+            ("scene.json", scene),
+            ("models/bg.json", "{\"material\":\"materials/bg.json\"}"),
+            ("materials/bg.json", "{\"passes\":[{\"textures\":[\"bg\"]}]}"),
+        ]))
+        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertEqual(doc.layers[0].originZ, 0)
+        XCTAssertNil(doc.layers[0].parent)
+    }
+
     /// 라이트 오브젝트(lpoint/ldirectional) 최소 파싱.
     func testParses3DLights() throws {
         let scene = """

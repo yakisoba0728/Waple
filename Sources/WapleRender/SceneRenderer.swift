@@ -128,12 +128,97 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let depthTest: Bool
         let depthWrite: Bool
     }
-    private struct GPU3DObject { let meshes: [GPU3DMesh]; let world: simd_float4x4; let name: String
-        let center: SIMD3<Float>; let radius: Float }  // center/radius: 서브메시 AABB 합(월드) — 진단용
     /// MSL 쪽 MeshU 와 레이아웃 일치(float4x4 + float4 + float4 = 96B).
     private struct MeshUniform { var mvp: simd_float4x4; var tint: SIMD4<Float>; var misc: SIMD4<Float> }
-    private var meshObjects: [GPU3DObject] = []
+    private struct Script3D { let key: String; let engine: TextScriptEngine }
+
+    /// 3D 변환 계층의 한 노드(그룹 or 모델 오브젝트) — per-frame 스크립트 평가로 로컬 변환/가시성 갱신.
+    /// id 로 부모 체인 합성(Scene3DMath.worldMatrix). 모델 오브젝트는 MeshRenderable 이 동일 id 로 지오메트리 참조.
+    private final class Node3D {
+        let id: Int
+        let parent: Int?
+        let baseOrigin, baseAngles, baseScale: SIMD3<Float>
+        let baseVisible: Bool
+        let order: Int
+        var scripts: [Script3D] = []
+        // per-frame 현재값(스크립트 없으면 base 고정)
+        var origin, angles, scale: SIMD3<Float>
+        var visible: Bool
+        init(id: Int, parent: Int?, origin: SIMD3<Float>, angles: SIMD3<Float>, scale: SIMD3<Float>, visible: Bool, order: Int) {
+            self.id = id; self.parent = parent; self.order = order
+            baseOrigin = origin; baseAngles = angles; baseScale = scale; baseVisible = visible
+            self.origin = origin; self.angles = angles; self.scale = scale; self.visible = visible
+        }
+        /// 변환은 매 프레임 base 에서 재계산(스크립트가 일부 성분만 덮어써도 결정적), visible 은 이전값을 이어 평가.
+        func evaluateScripts(time: Float) {
+            var o = baseOrigin, a = baseAngles, s = baseScale
+            for sc in scripts {
+                sc.engine.setRuntime(Double(time))
+                switch sc.key {
+                case "origin": if let v = sc.engine.evaluateVec(current: [o.x, o.y, o.z]), v.count >= 3 { o = SIMD3(v[0], v[1], v[2]) }
+                case "angles": if let v = sc.engine.evaluateVec(current: [a.x, a.y, a.z]), v.count >= 3 { a = SIMD3(v[0], v[1], v[2]) }
+                case "scale":  if let v = sc.engine.evaluateVec(current: [s.x, s.y, s.z]), v.count >= 3 { s = SIMD3(v[0], v[1], v[2]) }
+                case "visible": visible = sc.engine.evaluateBool(current: visible) ?? visible
+                default: break
+                }
+            }
+            origin = o; angles = a; scale = s
+        }
+    }
+
+    /// 렌더 가능한 3D 메시(모델) — 변환은 동일 id 의 Node3D 에서.
+    private struct MeshRenderable { let id: Int; let meshes: [GPU3DMesh]; let order: Int; let name: String }
+
+    /// 3D 씬의 2D 이미지 레이어를 카메라-페이싱 쿼드로(빌보드). 로컬 변환 + 부모 계층 + per-frame 스크립트.
+    private final class Billboard3D {
+        let texture: MTLTexture
+        let size: SIMD2<Float>           // 씬 픽셀 크기(월드 반경 = size×scale×부모스케일)
+        let parent: Int?
+        let order: Int
+        let baseOrigin: SIMD3<Float>
+        let baseScale: SIMD2<Float>
+        let baseTint: SIMD4<Float>
+        let baseVisible: Bool
+        var scripts: [Script3D] = []
+        // per-frame
+        var origin: SIMD3<Float>
+        var scale: SIMD2<Float>
+        var tint: SIMD4<Float>
+        var visible: Bool
+        init(texture: MTLTexture, size: SIMD2<Float>, parent: Int?, order: Int,
+             origin: SIMD3<Float>, scale: SIMD2<Float>, tint: SIMD4<Float>, visible: Bool) {
+            self.texture = texture; self.size = size; self.parent = parent; self.order = order
+            baseOrigin = origin; baseScale = scale; baseTint = tint; baseVisible = visible
+            self.origin = origin; self.scale = scale; self.tint = tint; self.visible = visible
+        }
+        func evaluateScripts(time: Float) {
+            var o = baseOrigin, s = baseScale, t = baseTint
+            for sc in scripts {
+                sc.engine.setRuntime(Double(time))
+                switch sc.key {
+                case "origin": if let v = sc.engine.evaluateVec(current: [o.x, o.y, o.z]), v.count >= 3 { o = SIMD3(v[0], v[1], v[2]) }
+                case "scale":  if let v = sc.engine.evaluateVec(current: [s.x, s.y, 1]), v.count >= 2 { s = SIMD2(v[0], v[1]) }
+                case "color":  if let v = sc.engine.evaluateVec(current: [t.x, t.y, t.z]), v.count >= 3 { t = SIMD4(v[0], v[1], v[2], t.w) }
+                case "alpha":  if let v = sc.engine.evaluateVec(current: [t.w]), let a = v.first { t.w = a }
+                case "visible": visible = sc.engine.evaluateBool(current: visible) ?? visible
+                default: break
+                }
+            }
+            origin = o; scale = s; tint = t
+        }
+    }
+
     private var camera3D: SceneCamera3D?
+    private var is3D = false
+    private var has3DScripts = false
+    private var nodes3D: [Node3D] = []                 // scene order(계층 합성 입력)
+    private var meshRenderables: [MeshRenderable] = []
+    private var billboards: [Billboard3D] = []
+    /// per-frame 스크립트 평가 순서(씬 order — 컨트롤러(Main)가 이를 읽는 스크립트보다 먼저 실행).
+    /// (order, isBillboard, idx). 스크립트 없는 노드/빌보드는 제외.
+    private var eval3DOrder: [(order: Int, bb: Bool, idx: Int)] = []
+    /// 그리기 순서(메시+빌보드 인터리브, order 오름차순). (order, isBillboard, idx).
+    private var draw3DOrder: [(order: Int, bb: Bool, idx: Int)] = []
     private var meshPipelineOver: MTLRenderPipelineState?      // premultiplied over(normal/translucent)
     private var meshPipelineAdditive: MTLRenderPipelineState?
     private var meshDepthStates: [String: MTLDepthStencilState] = [:]  // "test-write" 키
@@ -201,18 +286,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                    blue: Double(doc.clearColor.z), alpha: 1)
         projW = Float(max(1, doc.projectionWidth)); projH = Float(max(1, doc.projectionHeight))
         projAspect = projW / projH
-        // 3D 씬(camera3D + .mdl 오브젝트): 메시 경로 빌드. v1 은 메시만 그린다 — 병존하는 2D
-        // 레이어/파티클/텍스트(3D 씬의 빌보드)는 미구현 한계로 기록(태양계 이미지 346장 스킵).
-        // 메시가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
+        // 씬 공유 JSContext — 3D 오브젝트/빌보드 스크립트와 2D buildLayers/buildTexts/효과 스크립트가 공유.
+        // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
+        // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
+        sceneScript = SceneScriptContext()
+        // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
+        // 메시/빌보드가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
         if let cam = doc.camera3D, !doc.objects3D.isEmpty {
             camera3D = cam
             build3D(doc: doc, package: package, device: device)
+            is3D = !meshRenderables.isEmpty || !billboards.isEmpty
         }
-        // 씬 공유 JSContext — buildLayers/buildTexts/buildTranslatedEffect 의 모든 스크립트가 공유.
-        // 엔진 생성은 scene objects[] 순서(buildLayers 가 doc.layers 순회) — 컨트롤러 top-level 이
-        // 첫 프레임 평가 전에 실행된다(실물 3394601417: 'bt'.visible 이 shared.a=1 세팅).
-        sceneScript = SceneScriptContext()
-        if meshObjects.isEmpty {
+        if !is3D {
             camera3D = nil
             layers = buildLayers(doc: doc, package: package, device: device)
             particleSystems = buildParticles(doc: doc, package: package, device: device)
@@ -261,7 +346,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
              1,  1, 0,  1, 0,
         ]
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
-        if hasEffects || hasParticles || hasScriptedText || hasAnimations {
+        if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
             view.preferredFramesPerSecond = 30
@@ -643,8 +728,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     // ── 3D 씬(메시) 경로 ─────────────────────────────────────────────────────────
 
-    /// .mdl 로드 → 서브메시별 버퍼/텍스처/머티리얼 플래그 → 월드행렬(parent 계층 합성) 준비.
-    /// 실패 오브젝트는 스킵+로그(부분 렌더 우선). 조상 그룹이 정적 비가시면 서브트리 제외.
+    /// .mdl 로드 → 서브메시별 버퍼/텍스처 → MeshRenderable, 2D 이미지 레이어 → Billboard3D,
+    /// 그룹/모델 → Node3D(변환 계층). 프로퍼티 스크립트 엔진은 **씬 order** 로 로드(컨트롤러 top-level
+    /// 사이드이펙트가 이를 읽는 스크립트보다 먼저) 후 per-frame 평가. 실패 오브젝트는 스킵+로그.
     private func build3D(doc: SceneDocument, package: ScenePackage, device: MTLDevice) {
         guard let lib = try? device.makeLibrary(source: Mesh3DShaders.source, options: nil) else {
             NSLog("%@", "[Waple] 3D: mesh shader compile failed")
@@ -653,11 +739,31 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         meshPipelineOver = mesh3DPipeline(lib: lib, additive: false, device: device)
         meshPipelineAdditive = mesh3DPipeline(lib: lib, additive: true, device: device)
         guard meshPipelineOver != nil else { return }
-        let nodeMap = Scene3DMath.nodeMap(objects: doc.objects3D, groups: doc.nodes3D)
+
+        // ── 변환 계층 노드(그룹 + 모델 오브젝트). 모델도 다른 모델/빌보드의 부모가 될 수 있다. ──
+        for g in doc.nodes3D {
+            let n = Node3D(id: g.id, parent: g.parent,
+                           origin: SIMD3(g.origin.x, g.origin.y, g.origin.z),
+                           angles: SIMD3(g.angles.x, g.angles.y, g.angles.z),
+                           scale: SIMD3(g.scale.x, g.scale.y, g.scale.z),
+                           visible: g.visible, order: 0)
+            attachScripts(n, sources: g.propertyScripts)
+            nodes3D.append(n)
+        }
+        for o in doc.objects3D {
+            let n = Node3D(id: o.id, parent: o.parent,
+                           origin: SIMD3(o.origin.x, o.origin.y, o.origin.z),
+                           angles: SIMD3(o.angles.x, o.angles.y, o.angles.z),
+                           scale: SIMD3(o.scale.x, o.scale.y, o.scale.z),
+                           visible: true, order: o.order)
+            attachScripts(n, sources: o.propertyScripts)
+            nodes3D.append(n)
+        }
+
+        // ── 메시 지오메트리(모델). 정적 비가시(조상 그룹) 판정은 base 트랜스폼 기준으로 프리컬 — 스크립트로
+        //    다시 켜지는 서브트리는 드묾(젤다 link_adult 는 그룹 visible=false 고정). ──
         var loaded = 0, skipped = 0
         for obj in doc.objects3D {
-            guard let w = Scene3DMath.worldMatrix(id: obj.id, nodes: nodeMap) else { continue }
-            guard w.visible else { continue }  // 조상 그룹 비가시(젤다 link_adult 서브트리 등)
             guard let mdlData = assetData(obj.model, package: package),
                   let model = Model3D.parse(mdlData) else {
                 NSLog("%@", "[Waple] 3D: mdl load failed: \(obj.model)")
@@ -685,30 +791,59 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                         depthTest: mat.depthTest, depthWrite: mat.depthWrite))
             }
             guard !meshes.isEmpty else { skipped += 1; continue }
-            // 진단용 월드 AABB(8코너 변환 합) — WAPLE3D_DEBUG 로그와 클립 판단에 사용.
-            var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
-            var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
-            for mesh in model.meshes {
-                for cx in [mesh.boundsMin.x, mesh.boundsMax.x] {
-                    for cy in [mesh.boundsMin.y, mesh.boundsMax.y] {
-                        for cz in [mesh.boundsMin.z, mesh.boundsMax.z] {
-                            let p = w.matrix * SIMD4<Float>(cx, cy, cz, 1)
-                            lo = simd_min(lo, SIMD3(p.x, p.y, p.z))
-                            hi = simd_max(hi, SIMD3(p.x, p.y, p.z))
-                        }
-                    }
-                }
-            }
-            let center = (lo + hi) / 2
-            meshObjects.append(GPU3DObject(meshes: meshes, world: w.matrix, name: obj.name,
-                                           center: center, radius: simd_length(hi - lo) / 2))
-            if ProcessInfo.processInfo.environment["WAPLE3D_DEBUG"] == "1" {
-                let texInfo = meshes.map { "\($0.texture.width)x\($0.texture.height)" }.joined(separator: ",")
-                NSLog("%@", "[Waple3D] obj '\(obj.name)' meshes=\(meshes.count) center=\(center) r=\(simd_length(hi - lo) / 2) tex=[\(texInfo)]")
-            }
+            meshRenderables.append(MeshRenderable(id: obj.id, meshes: meshes, order: obj.order, name: obj.name))
             loaded += 1
         }
-        NSLog("%@", "[Waple] 3D scene: \(loaded) mesh objects (\(skipped) skipped), lights=\(doc.lights3D.count) [v1 unlit, 2D layers/billboards skipped]")
+
+        // ── 빌보드(2D 이미지 레이어). 텍스처 로딩은 2D 경로와 동일(assetData→TexImage→TexDecoder). ──
+        var bbLoaded = 0, bbSkipped = 0
+        for layer in doc.layers {
+            guard !layer.textureEntryName.isEmpty,
+                  let texData = assetData(layer.textureEntryName, package: package),
+                  let tex = TexImage.parse(texData),
+                  let dec = TexDecoder.rgba(from: tex, data: texData),
+                  let mtl = makeTexture(dec.pixels, dec.width, dec.height, device) else {
+                bbSkipped += 1; continue
+            }
+            let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
+                                    layer.color.z * layer.brightness, layer.alpha)
+            let bb = Billboard3D(texture: mtl, size: SIMD2(layer.size.x, layer.size.y),
+                                 parent: layer.parent, order: layer.order,
+                                 origin: SIMD3(layer.origin.x, layer.origin.y, layer.originZ),
+                                 scale: SIMD2(layer.scale.x, layer.scale.y), tint: tint,
+                                 visible: layer.initialVisible)
+            attachScripts(bb, sources: layer.propertyScripts)
+            billboards.append(bb)
+            bbLoaded += 1
+        }
+
+        // ── per-frame 평가/그리기 순서(씬 order). 평가는 스크립트 보유 노드/빌보드만. ──
+        var evalItems: [(order: Int, bb: Bool, idx: Int)] = []
+        for (i, n) in nodes3D.enumerated() where !n.scripts.isEmpty { evalItems.append((n.order, false, i)) }
+        for (i, b) in billboards.enumerated() where !b.scripts.isEmpty { evalItems.append((b.order, true, i)) }
+        eval3DOrder = evalItems.sorted { $0.order < $1.order }
+        var drawItems: [(order: Int, bb: Bool, idx: Int)] = []
+        for (i, m) in meshRenderables.enumerated() { drawItems.append((m.order, false, i)) }
+        for (i, b) in billboards.enumerated() { drawItems.append((b.order, true, i)) }
+        draw3DOrder = drawItems.sorted { $0.order < $1.order }
+        has3DScripts = !eval3DOrder.isEmpty
+
+        NSLog("%@", "[Waple] 3D scene: \(loaded) meshes (\(skipped) skipped), \(bbLoaded) billboards (\(bbSkipped) skipped), " +
+              "\(nodes3D.count) nodes, \(eval3DOrder.count) scripted, lights=\(doc.lights3D.count)")
+    }
+
+    /// 노드/빌보드에 프로퍼티 스크립트 엔진 부착(씬 공유 컨텍스트 — top-level 사이드이펙트가 로드 시점에 실행).
+    private func attachScripts(_ n: Node3D, sources: [String: String]) {
+        for key in ["visible", "origin", "angles", "scale"] {
+            guard let src = sources[key], let e = makeScriptEngine(src) else { continue }
+            n.scripts.append(Script3D(key: key, engine: e))
+        }
+    }
+    private func attachScripts(_ b: Billboard3D, sources: [String: String]) {
+        for key in ["visible", "origin", "scale", "color", "alpha"] {
+            guard let src = sources[key], let e = makeScriptEngine(src) else { continue }
+            b.scripts.append(Script3D(key: key, engine: e))
+        }
     }
 
     private struct Mesh3DMaterialInfo {
@@ -811,9 +946,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     ///   • fov: 세로축 — 젤다 회랑 상하 구도가 정합(가로 해석은 세로 화각 29° 로 좁아져 아치 잘림).
     ///     코퍼스 3씬 전부 fov 50 이라 축 구분 실물 반례는 없음(표준 규약 채택)
     ///   • 오일러: Rz·Ry·Rx (Scene3DMath.modelMatrix 주석 — 짐벌 동치 실측)
-    private func encode3D(into target: MTLTexture, cb: MTLCommandBuffer, device: MTLDevice) -> Bool {
+    private func encode3D(into target: MTLTexture, cb: MTLCommandBuffer, device: MTLDevice, time: Float) -> Bool {
         guard let cam = camera3D, let over = meshPipelineOver,
               let depthTex = pooledDepth(target.width, target.height, device) else { return false }
+        // per-frame 스크립트 평가(씬 order — 컨트롤러가 이를 읽는 스크립트보다 먼저) → 현재 로컬 변환/가시성.
+        for e in eval3DOrder {
+            if e.bb { billboards[e.idx].evaluateScripts(time: time) }
+            else { nodes3D[e.idx].evaluateScripts(time: time) }
+        }
+        // 현재 로컬 변환으로 계층 노드 맵 재구성(월드행렬 합성 입력).
+        var nmap: [Int: Scene3DMath.Node] = [:]
+        nmap.reserveCapacity(nodes3D.count)
+        for n in nodes3D {
+            nmap[n.id] = Scene3DMath.Node(origin: n.origin, angles: n.angles, scale: n.scale,
+                                          parent: n.parent, visible: n.visible)
+        }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = target
         rpd.colorAttachments[0].loadAction = .clear
@@ -824,42 +971,97 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         rpd.depthAttachment.storeAction = .dontCare
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
         let aspect = Float(target.width) / Float(max(1, target.height))
-        let view = Scene3DMath.lookAt(eye: SIMD3(cam.eye.x, cam.eye.y, cam.eye.z),
-                                      center: SIMD3(cam.center.x, cam.center.y, cam.center.z),
-                                      up: SIMD3(cam.up.x, cam.up.y, cam.up.z))
+        let eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
+        let ctr = SIMD3(cam.center.x, cam.center.y, cam.center.z)
+        let upv = SIMD3(cam.up.x, cam.up.y, cam.up.z)
+        let view = Scene3DMath.lookAt(eye: eye, center: ctr, up: upv)
         let proj = Scene3DMath.perspective(fovYDegrees: cam.fov, aspect: aspect,
                                            nearZ: cam.nearZ, farZ: cam.farZ)
         let viewProj = proj * view
+        // 빌보드 카메라-페이싱 축(월드): right/up(lookAt 과 동일 규약).
+        let fwd = simd_normalize(ctr - eye)
+        let right = simd_normalize(simd_cross(fwd, upv))
+        let camUp = simd_cross(right, fwd)
         // 와인딩: front = CCW(A/B 실측 — CW 는 젤다 회랑이 인사이드아웃: 근접 벽이 컬링되어
         // 뒤쪽 외벽이 보임). cullmode "normal" 메시가 CCW-front 백페이스 컬에서 preview 와 일치.
         enc.setFrontFacing(.counterClockwise)
         let debug3D = ProcessInfo.processInfo.environment["WAPLE3D_DEBUG"] == "1"
-        for obj in meshObjects {
-            if debug3D {
-                let c = viewProj * SIMD4<Float>(obj.center.x, obj.center.y, obj.center.z, 1)
-                NSLog("%@", "[Waple3D] draw '\(obj.name)' ndc=\(c.w != 0 ? SIMD3(c.x, c.y, c.z) / c.w : .zero) w=\(c.w) r=\(obj.radius)")
-            }
-            var u = MeshUniform(mvp: viewProj * obj.world, tint: SIMD4(1, 1, 1, 1),
-                                misc: SIMD4(0, 0, 0, 0))
-            for mesh in obj.meshes {
-                u.tint = mesh.tint
-                u.misc.x = mesh.alphaCutoff
-                enc.setRenderPipelineState(mesh.additive ? (meshPipelineAdditive ?? over) : over)
-                if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
-                    enc.setDepthStencilState(ds)
+        for item in draw3DOrder {
+            if item.bb {
+                encodeBillboard(billboards[item.idx], viewProj: viewProj, right: right, up: camUp,
+                                nmap: nmap, into: enc, device: device, over: over)
+            } else {
+                let mr = meshRenderables[item.idx]
+                guard let w = Scene3DMath.worldMatrix(id: mr.id, nodes: nmap), w.visible else { continue }
+                if debug3D {
+                    let c = viewProj * w.matrix * SIMD4<Float>(0, 0, 0, 1)
+                    NSLog("%@", "[Waple3D] draw '\(mr.name)' ndc=\(c.w != 0 ? SIMD3(c.x, c.y, c.z) / c.w : .zero) w=\(c.w)")
                 }
-                enc.setCullMode(mesh.cullBack ? .back : .none)
-                enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
-                enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                enc.setFragmentTexture(mesh.texture, index: 0)
-                enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
-                                          indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                var u = MeshUniform(mvp: viewProj * w.matrix, tint: SIMD4(1, 1, 1, 1), misc: SIMD4(0, 0, 0, 0))
+                for mesh in mr.meshes {
+                    u.tint = mesh.tint
+                    u.misc.x = mesh.alphaCutoff
+                    enc.setRenderPipelineState(mesh.additive ? (meshPipelineAdditive ?? over) : over)
+                    if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
+                        enc.setDepthStencilState(ds)
+                    }
+                    enc.setCullMode(mesh.cullBack ? .back : .none)
+                    enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                    enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                    enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                    enc.setFragmentTexture(mesh.texture, index: 0)
+                    enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+                                              indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                }
             }
         }
         enc.endEncoding()
         return true
     }
+
+    /// 카메라-페이싱 빌보드 1장: 월드 위치 = (부모월드 · 로컬변환) 원점, 반경 = size/2 × 합성 스케일.
+    /// 쿼드 4코너를 카메라 right/up 축으로 전개(월드 좌표) → mvp=viewProj. 뎁스 테스트 유지·미기록(투명),
+    /// 양면, over(premult) 블렌드. 부모 서브트리 비가시/자기 비가시면 스킵.
+    private func encodeBillboard(_ bb: Billboard3D, viewProj: simd_float4x4,
+                                 right: SIMD3<Float>, up: SIMD3<Float>, nmap: [Int: Scene3DMath.Node],
+                                 into enc: MTLRenderCommandEncoder, device: MTLDevice, over: MTLRenderPipelineState) {
+        var pWorld = matrix_identity_float4x4
+        if let pid = bb.parent {
+            guard let pw = Scene3DMath.worldMatrix(id: pid, nodes: nmap), pw.visible else { return }
+            pWorld = pw.matrix
+        }
+        if !bb.visible { return }
+        // 로컬: 이동(origin) + 스케일(빌보드는 카메라-페이싱이라 로컬 회전은 무시). 부모월드가 나머지 계층 폴드.
+        let local = Scene3DMath.modelMatrix(origin: bb.origin, angles: SIMD3<Float>(0, 0, 0),
+                                            scale: SIMD3(bb.scale.x, bb.scale.y, 1))
+        let m = pWorld * local
+        let center = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+        // 합성 스케일 크기(부모 스케일 포함) — 열 벡터 길이가 회전 무관하게 축별 배율을 준다.
+        let sx = simd_length(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z))
+        let sy = simd_length(SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z))
+        let hw = bb.size.x * 0.5 * sx
+        let hh = bb.size.y * 0.5 * sy
+        guard hw > 0, hh > 0, hw.isFinite, hh.isFinite else { return }
+        let r = right * hw, u = up * hh
+        // UV 상단 원점: 상단 = +up. TL(0,0) TR(1,0) BR(1,1) BL(0,1).
+        let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
+        func vtx(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] { [p.x, p.y, p.z, 0, 0, 0, uu, vv] }
+        var verts: [Float] = []
+        verts.reserveCapacity(48)
+        verts += vtx(tl, 0, 0); verts += vtx(tr, 1, 0); verts += vtx(br, 1, 1)
+        verts += vtx(tl, 0, 0); verts += vtx(br, 1, 1); verts += vtx(bl, 0, 1)
+        guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { return }
+        var u2 = MeshUniform(mvp: viewProj, tint: bb.tint, misc: SIMD4(0, 0, 0, 0))
+        enc.setRenderPipelineState(over)
+        if let ds = meshDepthState(test: true, write: false, device: device) { enc.setDepthStencilState(ds) }
+        enc.setCullMode(.none)
+        enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+        enc.setVertexBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
+        enc.setFragmentBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
+        enc.setFragmentTexture(bb.texture, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+
 
     /// 파티클 스냅샷 → 인터리브드 버텍스(정점당 8 float: ndc.xy, uv, rgba).
     /// sprite = 빌보드 쿼드. trail = 위치 히스토리 폴리라인을 두께 있는 리본(삼각 스트립)으로.
@@ -1105,11 +1307,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var dt = Float(nowT - lastFrameTime); lastFrameTime = nowT
         dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
 
-        // 3D 씬: 메시 전용 패스(뎁스) → drawable blit. 2D drawPlan 은 v1 미병행(빌보드 한계).
-        if !meshObjects.isEmpty {
+        // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → drawable blit.
+        if is3D {
             poolCheckout.removeAll(keepingCapacity: true)
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
-                  encode3D(into: acc, cb: cb, device: device) else { return }
+                  encode3D(into: acc, cb: cb, device: device, time: time) else { return }
             if let blit = cb.makeBlitCommandEncoder() {
                 blit.copy(from: acc, to: drawable.texture)
                 blit.endEncoding()
@@ -1477,13 +1679,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     @discardableResult
     public func captureFrames(width: Int, height: Int, times: [Float], toDir: URL) -> [URL] {
         guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
-        // 3D 씬: 메시 전용 패스(뎁스). v1 정적(바인드 포즈 + t=0 트랜스폼)이라 시간 무관 동일 프레임.
-        if !meshObjects.isEmpty {
+        // 3D 씬: 메시 + 빌보드 패스(뎁스). per-frame 스크립트 평가로 각 time 마다 갱신(궤도/인트로 애니).
+        if is3D {
             var urls: [URL] = []
             for t in times.sorted() {
                 guard let cb = queue.makeCommandBuffer() else { continue }
                 poolCheckout.removeAll(keepingCapacity: true)
-                guard encode3D(into: target, cb: cb, device: device) else { continue }
+                guard encode3D(into: target, cb: cb, device: device, time: t) else { continue }
                 cb.commit(); cb.waitUntilCompleted()
                 let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
                 if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
@@ -1560,7 +1762,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil
-        meshObjects = []; camera3D = nil
+        camera3D = nil; is3D = false; has3DScripts = false
+        nodes3D = []; meshRenderables = []; billboards = []
+        eval3DOrder = []; draw3DOrder = []
         meshPipelineOver = nil; meshPipelineAdditive = nil
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
