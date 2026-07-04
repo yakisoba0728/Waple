@@ -65,6 +65,43 @@ final class TranslatorResidualsTests: XCTestCase {
         try compile(t.msl)
     }
 
+    /// dot_matrix: GLSL struct 정의 + struct 반환 헬퍼 + C++ 예약어(`or`) 지역 변수 → MSL 컴파일.
+    func testStructDefinitionAndReservedToken() throws {
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        struct Grid {
+            vec2 cuv;
+            vec2 id;
+        };
+        Grid squareGrid(vec2 uv) {
+            Grid sg;
+            sg.cuv = uv - floor(uv) - 0.5;
+            sg.id = uv - sg.cuv;
+            return sg;
+        }
+        void main() {
+            Grid g = squareGrid(v_TexCoord * 8.0);
+            vec2 or = g.id + g.cuv;
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + or * 0.001);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("struct Grid"), "struct 정의가 방출되지 않음")
+        XCTAssertFalse(t.msl.contains("float2 or"), "예약어 'or' 가 리네임되지 않음(MSL 컴파일 불가)")
+        try compile(t.msl)
+    }
+
     /// 회귀 가드: CAST3X3(스칼라) = 대각 mat3(GLSL 단일 스칼라 생성자) 도 컴파일된다.
     func testCast3x3OfScalar() throws {
         let vert = """
