@@ -1527,7 +1527,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if is3D {
             poolCheckout.removeAll(keepingCapacity: true)
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
-                  encode3D(into: acc, cb: cb, device: device, time: time) else { return }
+                  encode3D(into: acc, cb: cb, device: device, time: time) else { cb.commit(); return }
             if let blit = cb.makeBlitCommandEncoder() {
                 blit.copy(from: acc, to: drawable.texture)
                 blit.endEncoding()
@@ -1558,38 +1558,58 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
-        guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { return }
+        guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { cb.commit(); return }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
-        guard var enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { cb.commit(); return }
         // 씬 오브젝트 순서대로 레이어·파티클·텍스트 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
-        for item in drawPlan {
-            switch item.kind {
-            case .particle:
-                let snapshot = particleSystems[item.idx].sim.step(dt)
-                encodeParticle(particleSystems[item.idx], snapshot: snapshot, into: enc, device: device,
-                               camOffset: &camOffset, aspectScale: &aspectScale)
-            case .text:
-                encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale)
-            case .layer where layers[item.idx].isFrameBuffer:
-                guard let next = runFrameBufferLayer(layers[item.idx], acc: acc, cb: cb, ending: enc,
-                                                     device: device, time: time,
-                                                     camOffset: &camOffset, aspectScale: &aspectScale) else { return }
-                enc = next
-            case .layer:
-                encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
-                            camOffset: &camOffset, aspectScale: &aspectScale, time: time, device: device)
-            }
-        }
-        enc.endEncoding()
+        guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: time,
+                                            displayTextures: displayTextures,
+                                            particleSnapshot: { particleSystems[$0].sim.step(dt) },
+                                            camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }
+        finalEnc.endEncoding()
         if let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: acc, to: drawable.texture)
             blit.endEncoding()
         }
         cb.present(drawable)
         cb.commit()
+    }
+
+    /// drawPlan 씬-순서 인터리브 인코딩(라이브 draw / 헤드리스 captureFrames 공용 단일 루프).
+    /// 컴포지션(_rt_) 레이어는 인코더 교체(runFrameBufferLayer)가 일어나며, 재개 실패 시 nil 반환 —
+    /// 이 시점엔 직전 인코더가 이미 endEncoding 된 상태이므로 호출자는 **추가 인코딩 없이**
+    /// cb.commit() 으로만 정리해야 한다. 성공 시 열린 최종 인코더 반환(호출자가 endEncoding).
+    /// 회귀 노트(2026-07-04): 과거 captureFrames 쪽 복제 루프는 이 실패를 switch-`break` 로만 탈출해
+    /// 이미 종료된 인코더에 나머지 아이템을 계속 인코딩했다(Metal 크래시 후보). draw 쪽은 return 으로
+    /// 고쳐져 있었는데 복제 루프가 발산한 것 — 루프 단일화로 구조적으로 제거(별도 목킹 불가로 RED
+    /// 재현 테스트 대신 본 서술로 회귀 방지 근거를 남긴다).
+    private func encodeDrawPlan(startingWith enc: MTLRenderCommandEncoder, acc: MTLTexture,
+                                cb: MTLCommandBuffer, device: MTLDevice, time: Float,
+                                displayTextures: [MTLTexture],
+                                particleSnapshot: (Int) -> [Particle],
+                                camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        var enc = enc
+        for item in drawPlan {
+            switch item.kind {
+            case .particle:
+                encodeParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx), into: enc,
+                               device: device, camOffset: &camOffset, aspectScale: &aspectScale)
+            case .text:
+                encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale)
+            case .layer where layers[item.idx].isFrameBuffer:
+                guard let next = runFrameBufferLayer(layers[item.idx], acc: acc, cb: cb, ending: enc,
+                                                     device: device, time: time,
+                                                     camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                enc = next
+            case .layer:
+                encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
+                            camOffset: &camOffset, aspectScale: &aspectScale, time: time, device: device)
+            }
+        }
+        return enc
     }
 
     /// 이미지 레이어 1개 드로우(메인 컴포지트 파이프라인). time/device 는 프로퍼티 애니메이션 평가용
@@ -1923,31 +1943,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             rpd.colorAttachments[0].texture = target
             rpd.colorAttachments[0].loadAction = .clear
             rpd.colorAttachments[0].clearColor = clearColor
-            guard var enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
-            // 라이브 draw 와 동일한 씬-순서 인터리브. 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
+            guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
+            // 라이브 draw 와 동일한 씬-순서 인터리브(encodeDrawPlan 공용 — 복제 루프 발산 방지).
+            // 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
             // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)
             // target 이 곧 누적(acc) — 컴포지션 레이어는 스냅샷 경유(runFrameBufferLayer).
-            var aborted = false
-            for item in drawPlan {
-                switch item.kind {
-                case .particle:
-                    let snap = sims[item.idx].step(0)
-                    encodeParticle(particleSystems[item.idx], snapshot: snap, into: enc, device: device,
-                                   camOffset: &camOff, aspectScale: &asp)
-                case .text:
-                    encodeText(textLayers[item.idx], into: enc, camOffset: &camOff, aspectScale: &asp)
-                case .layer where layers[item.idx].isFrameBuffer:
-                    guard let next = runFrameBufferLayer(layers[item.idx], acc: target, cb: cb, ending: enc,
-                                                         device: device, time: t,
-                                                         camOffset: &camOff, aspectScale: &asp) else { aborted = true; break }
-                    enc = next
-                case .layer:
-                    encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
-                                camOffset: &camOff, aspectScale: &asp, time: t, device: device)
-                }
-            }
-            if aborted { cb.commit(); continue }
-            enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+            guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: target, cb: cb, device: device, time: t,
+                                                displayTextures: displayTextures,
+                                                particleSnapshot: { sims[$0].step(0) },
+                                                camOffset: &camOff, aspectScale: &asp) else { cb.commit(); continue }
+            finalEnc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
             let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
             if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
         }
