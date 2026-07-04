@@ -62,6 +62,9 @@ public struct SceneLayer: Equatable {
     /// 프로퍼티 스크립트(color/alpha/visible — 키 → JS 소스). per-frame 평가(실물: 미디어 썸네일 컬러
     /// 전환, 주야 컨트롤러). visible 스크립트가 있는 레이어는 파스에서 드롭하지 않는다.
     public var propertyScripts: [String: String] = [:]
+    /// 머티리얼 블렌드 모드("normal"|"additive"|"alphatocoverage"…). 3D 씬 빌보드가 파이프라인 선택에 사용
+    /// (플레어/글로우 = additive). 2D 경로는 무시(단일 premult-over).
+    public var blendMode: String = "normal"
     /// visible 의 정적 value(초기 표시). visible 스크립트가 있을 때만 false 로도 남는다 —
     /// 스크립트 없는 정적 false 는 파스에서 레이어 자체가 드롭된다.
     public var initialVisible: Bool = true
@@ -106,6 +109,14 @@ public struct SceneCamera3D: Equatable {
     }
 }
 
+/// 3D 모델의 활성 애니메이션 선택(animationlayers 의 숫자 blend≥0.5 & visible 인 베이스 레이어).
+/// name = 레이어 이름("Idle" 등, 렌더러가 모델 애니 이름에 서브스트링 매칭), rate = 재생 배속.
+public struct AnimationSelection: Equatable {
+    public let name: String
+    public let rate: Float
+    public init(name: String, rate: Float) { self.name = name; self.rate = rate }
+}
+
 /// 3D 메시 오브젝트. 2D 레이어(image→json→puppet 인다이렉션)와 달리 `model` 키가 pkg 의
 /// `.mdl` 을 **직접** 참조한다. origin/angles/scale 은 모두 3성분(월드 좌표/오일러 라디안/축별 배율).
 public struct SceneObject3D: Equatable {
@@ -124,6 +135,8 @@ public struct SceneObject3D: Equatable {
     /// 변환/가시성을 갱신(태양계 planet 은 부모 그룹 origin 스크립트가 궤도를 그린다). 정적 value 는
     /// 위 필드에 이미 언랩됨 — 스크립트는 재평가용.
     public var propertyScripts: [String: String] = [:]
+    /// 활성 애니메이션(animationlayers 파스). nil = 정지(바인드 포즈). 렌더러가 이름 매칭 후 GPU 스키닝.
+    public var animation: AnimationSelection? = nil
     public init(id: Int, name: String, model: String, origin: Vec3, angles: Vec3, scale: Vec3,
                 castShadow: Bool, parent: Int?, effects: [SceneEffect], order: Int = 0) {
         self.id = id; self.name = name; self.model = model
@@ -189,6 +202,9 @@ public struct SceneDocument: Equatable {
     public var texts: [SceneTextLayer] = []
     /// 3D 씬 카메라 — orthogonalprojection 부재(null) + camera{eye,center,up} + fov 존재 시 세팅. 2D=nil.
     public var camera3D: SceneCamera3D? = nil
+    /// 카메라 프로퍼티 스크립트(키: eye/center/up/fov → JS 소스). 렌더러가 per-frame 재평가(카메라 애니).
+    /// 실물 젤다 fov 는 {"script":…,"value":50}; Sonic eye/center 는 정적 문자열(무스크립트). base 값은 camera3D.
+    public var cameraScripts: [String: String] = [:]
     /// 3D 메시 오브젝트(`.mdl` 직접 참조). 2D 씬에서는 빈 배열.
     public var objects3D: [SceneObject3D] = []
     /// 3D 라이트 오브젝트.
@@ -225,6 +241,7 @@ extension SceneDocument {
         // 3D 카메라: orthogonalprojection 이 딕셔너리가 아니고(3D 씬은 null) camera{eye,center,up}+fov 존재.
         // fov 는 float() 로 언랩 — 실물(젤다)은 {"script":...,"value":50} 스크립트 프로퍼티로 온다.
         var camera3D: SceneCamera3D? = nil
+        var cameraScripts: [String: String] = [:]
         if !(general["orthogonalprojection"] is [String: Any]),
            let camDict = scene["camera"] as? [String: Any],
            let eye = vec3(camDict["eye"]), let center = vec3(camDict["center"]),
@@ -232,6 +249,11 @@ extension SceneDocument {
             camera3D = SceneCamera3D(eye: eye, center: center, up: up, fov: fov,
                                      nearZ: float(general["nearz"]) ?? 0.01,
                                      farZ: float(general["farz"]) ?? 10000)
+            // 카메라 프로퍼티 스크립트 캡처(per-frame 재평가용). eye/center/up 은 scene.camera, fov 는 general.
+            for (key, src) in [("eye", camDict["eye"]), ("center", camDict["center"]), ("up", camDict["up"])] {
+                if let d = src as? [String: Any], let sc = d["script"] as? String { cameraScripts[key] = sc }
+            }
+            if let d = general["fov"] as? [String: Any], let sc = d["script"] as? String { cameraScripts["fov"] = sc }
         }
 
         var layers: [SceneLayer] = []
@@ -303,10 +325,19 @@ extension SceneDocument {
                 }
                 if let vs = visibleScript { propScripts["visible"] = vs }
                 // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
+                // 겸사겸사 머티리얼 blending 을 캡처(3D 빌보드 additive 파이프라인 선택 — 플레어/글로우).
                 var puppetPath: String? = nil
+                var blendMode = "normal"
                 if let md = package.data(for: imagePath) ?? assets?(imagePath),
                    let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
                     puppetPath = mj["puppet"] as? String
+                    if let matPath = mj["material"] as? String,
+                       let matD = package.data(for: matPath) ?? assets?(matPath),
+                       let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
+                       let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any],
+                       let bl = p0["blending"] as? String {
+                        blendMode = bl
+                    }
                 }
                 layers.append(SceneLayer(
                     textureEntryName: entryName,
@@ -326,6 +357,7 @@ extension SceneDocument {
                 layers[layers.count - 1].puppet = puppetPath
                 layers[layers.count - 1].propertyScripts = propScripts
                 layers[layers.count - 1].initialVisible = initialVisible
+                layers[layers.count - 1].blendMode = blendMode
                 // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
                 let originFull = floats(obj["origin"])
                 layers[layers.count - 1].originZ = originFull.count >= 3 ? originFull[2] : 0
@@ -369,6 +401,7 @@ extension SceneDocument {
                 var ps = transformScripts(obj)
                 if let vs = visibleScript { ps["visible"] = vs }
                 o.propertyScripts = ps
+                o.animation = parseAnimationLayers(obj["animationlayers"])
                 objects3D.append(o)
             } else if let lightType = obj["light"] as? String {
                 lights3D.append(SceneLight3D(
@@ -429,11 +462,33 @@ extension SceneDocument {
                 layers[i].angleZ = wt.angle
             }
         }
-        return SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
-                             parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
-                             parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
-                             texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
-                             nodes3D: nodes3D)
+        var out = SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
+                                parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
+                                parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
+                                texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
+                                nodes3D: nodes3D)
+        out.cameraScripts = cameraScripts
+        return out
+    }
+
+    /// animationlayers → 활성 베이스 애니(숫자 blend≥0.5 & visible 중 blend 최대). 나머지(딕셔너리 blend =
+    /// 스크립트/이벤트 제어, 시작≈0)는 무시 → 트리거 전 정지. 실물 젤다: "Idle"(blend 1.0)만 상시 재생.
+    private static func parseAnimationLayers(_ raw: Any?) -> AnimationSelection? {
+        guard let layers = raw as? [Any] else { return nil }
+        var best: (name: String, rate: Float, blend: Float)? = nil
+        for case let layer as [String: Any] in layers {
+            let visible = (layer["visible"] as? Bool) ?? true
+            guard visible else { continue }
+            let blend: Float?
+            if let d = layer["blend"] as? Double { blend = Float(d) }
+            else if let i = layer["blend"] as? Int { blend = Float(i) }
+            else { blend = nil }  // 딕셔너리 blend(스크립트/애니 커브) = 이벤트 트리거 → 제외
+            guard let bl = blend, bl >= 0.5 else { continue }
+            if best == nil || bl > best!.blend {
+                best = ((layer["name"] as? String) ?? "", float(layer["rate"]) ?? 1, bl)
+            }
+        }
+        return best.map { AnimationSelection(name: $0.name, rate: $0.rate) }
     }
 
     /// 레이어 소스 해석 결과.

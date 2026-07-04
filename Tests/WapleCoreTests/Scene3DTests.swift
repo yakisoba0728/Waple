@@ -266,5 +266,14 @@ final class Scene3DRealFileTests: XCTestCase {
         XCTAssertGreaterThan(doc.objects3D.count, 0)
         XCTAssertEqual(doc.objects3D.count, 40)
         XCTAssertEqual(doc.lights3D.count, 6)
+        // 카메라 fov 는 {"script":…,"value":50} → cameraScripts["fov"] 캡처(eye/center/up 은 정적).
+        XCTAssertNotNil(doc.cameraScripts["fov"], "젤다 fov 스크립트 캡처")
+        // animationlayers: 가시 스키닝 캐릭터는 활성 베이스 애니(Idle, blend 1.0) 를 가진다.
+        // (link_adult 는 visible=false 로 드롭 — 하이라이트 캐릭터가 아님. zelda_child 등 가시 캐릭터로 검증.)
+        let animated = doc.objects3D.filter { $0.animation != nil }
+        XCTAssertFalse(animated.isEmpty, "스키닝 캐릭터는 activationlayers 활성 애니 보유")
+        XCTAssertTrue(animated.contains { $0.animation?.name == "Idle" }, "Idle(blend 1.0) 베이스 애니 존재")
+        // rate 는 레이어별 상이(0.7~1.0) — 양수 검증.
+        XCTAssertTrue(animated.allSatisfy { ($0.animation?.rate ?? 0) > 0 }, "재생 rate 양수")
     }
 }

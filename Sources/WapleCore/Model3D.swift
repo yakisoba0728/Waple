@@ -9,7 +9,19 @@ import simd
 ///   • 멀티메시: 헤더가 meshCount 를 담고 서브메시가 반복(2D 는 단일 메시)
 ///   • 정점: 법선(normal 3f) + 탄젠트(tangent 4f, w=handedness) 추가. 스키닝 정점만 본/웨이트 보유.
 ///   • 스켈레톤 매직: "MDLS0004" (2D "MDLS0001"), 본별 말미가 u8 0 이 아니라 cstring props(대개 빈 문자열, 일부 IK JSON)
-///   • 애니: "MDLA0006" (+선행 "MDAT0001") — 존재만 탐지(미해독), 2D 는 "MDLA0001".
+///   • 애니: "MDLA0006" (+일부 모델은 선행 "MDAT0001" 어태치먼트) — 리버스 완료(2026-07-04, 아래 참조), 2D 는 "MDLA0001".
+///
+/// MDLA0006 애니 섹션(2026-07-04 헥스 리버스, 코퍼스: 3737268876/3706286085/3662790108 의 .mdl 33개 애니 전수):
+///   "MDLA0006" | u8 0 | u32 nextOff(=EOF-1) | u32 animCount | u32 baseId | u32 0 |
+///   애니×N: cstring 이름(예 "Link Adult_arm|idle_bone", UTF-8) | cstring 모드(loop/single/mirror/clamp) |
+///           f32 fps | u32 길이(프레임) | u32 0 | u32 본수(=스켈레톤 본수) | u32 0 |
+///           본별: u32 트랙크기 | 키×36B(pos 3f, 오일러각 3f 라디안, 스케일 3f) | u32 블롭2크기 | 블롭2 |
+///           트레일러(가변 32~39B): u16 0 | AABB 6f | u32 0 | u16 id(=baseId+1+i, 마지막 애니는 생략) | ...
+///   2D MDLA0001 과의 diff: ① 헤더 4번째 u32 는 animCount(2D 는 nextOff 직후 animCount|id|0 — 여기선 순서 동일하나
+///     link_adult 는 animCount=8 인데 실제 4개 → count 불신, 리싱크로 종료 판정) ② 애니 트레일러(AABB+id)가 신설(2D 없음)
+///     ③ 키 포맷/본 트랙 구조는 동일(36B 키). 트레일러 가변 → 다음 애니 헤더를 ≤256B 앞에서 리싱크로 스킵.
+///   확정(교차검증): 174 .mdl 중 33 애니모델 전수 파스 성공(0 실패); 본수==스켈레톤 본수(전수); 키0 로컬≈바인드 로컬은
+///     캐릭터별로 다름(바인드=T포즈, idle=이완포즈) — skin=world(t)×bindWorld⁻¹ 로 처리(2D 의 t=0 항등 가정 불성립이나 정상).
 ///
 /// 레이아웃(리틀엔디안):
 /// "MDLV0023" | u8 0 | u32 formatFlag | u32(=1, 미상 상수) | u32 meshCount
@@ -54,18 +66,40 @@ public struct Model3D: Equatable {
         public let indices: [UInt16]           // 트라이앵글 리스트(count % 3 == 0)
     }
 
-    /// 스켈레톤 본(스키닝 모델만). 좌표계·부모 규약은 2D 퍼펫과 동일.
+    /// 스켈레톤 본(스키닝 모델만). 좌표계·부모 규약은 2D 퍼펫과 동일. bind = 부모상대 로컬 레스트 변환
+    /// (부모 체인 합성 → bindWorld; 실측: 발밑↓/머리↑ 정상 스켈레톤 구도).
     public struct Bone: Equatable {
         public let name: String
         public let parent: Int32               // -1 = 루트
-        public let bind: simd_float4x4         // 바인드(모델→본) 행렬
+        public let bind: simd_float4x4         // 바인드(로컬 레스트) 행렬
         public let properties: String          // 대개 "" — 일부 본은 리깅툴 IK 설정 JSON
+    }
+
+    /// 애니 키(프레임당 1키). 2D PuppetModel.Key 와 동일 포맷: pos + 오일러각(라디안) + scale.
+    public struct Key: Equatable {
+        public let position: SIMD3<Float>
+        public let angles: SIMD3<Float>
+        public let scale: SIMD3<Float>
+        public init(position: SIMD3<Float>, angles: SIMD3<Float>, scale: SIMD3<Float>) {
+            self.position = position; self.angles = angles; self.scale = scale
+        }
+    }
+
+    /// 애니메이션(MDLA0006 애니 1개). tracks[boneIdx] = 프레임순 키 배열(본수 == 스켈레톤 본수).
+    public struct Animation: Equatable {
+        public let name: String                // "Link Adult_arm|idle_bone" 등
+        public let mode: String                // loop | single | mirror | clamp
+        public let fps: Float
+        public let lengthFrames: Int
+        public let tracks: [[Key]]             // 본 인덱스별 키(프레임당 1키)
     }
 
     public let meshes: [Mesh]
     public var bones: [Bone] = []
-    /// MDLA0006 애니 섹션 존재 여부(포맷 미해독 — 렌더러는 정적 포즈로 처리).
+    /// MDLA0006 애니 섹션 존재 여부(매직 탐지 — animations 가 비어도 마커는 true).
     public var hasAnimation: Bool = false
+    /// 파스된 애니메이션(순서 = 파일 순서). 렌더러가 animationlayers 로 활성 애니를 선택.
+    public var animations: [Animation] = []
 
     /// 스키닝 정점 포맷 비트(formatFlag & 이 마스크 != 0 → 본/웨이트 존재, stride 80).
     private static let skinMask: UInt32 = 0x0180_0000
@@ -190,11 +224,86 @@ public struct Model3D: Equatable {
                 }
                 if boneOK { model.bones = bones }
             }
-            // 애니 섹션(MDLA0006) 존재 여부만 표기 — 포맷 미해독.
-            if findMagic("MDLA0006", in: bytes, from: o) != nil { model.hasAnimation = true }
+        }
+
+        // 애니 섹션(MDLA0006) — 스켈레톤 유무와 무관하게 메시 끝 이후 탐색(스키닝 모델만 존재).
+        if let ai = findMagic("MDLA0006", in: bytes, from: o) {
+            model.hasAnimation = true
+            model.animations = parseAnimations(bytes: bytes, at: ai, boneCount: model.bones.count)
         }
 
         return model
+    }
+
+    private static let animModes: Set<String> = ["loop", "single", "mirror", "clamp"]
+
+    /// MDLA0006 애니 파스(리싱크 기반). 헤더 animCount 는 link_adult 반례로 불신 —
+    /// 각 애니 뒤 가변 트레일러(32~39B AABB+id)를 다음 유효 헤더 리싱크(≤256B)로 스킵하고,
+    /// 헤더 검증(모드∈집합, fps∈(0,240], 본수==skeleton)으로 종료를 판정한다.
+    private static func parseAnimations(bytes: [UInt8], at magicOff: Int, boneCount: Int) -> [Model3D.Animation] {
+        guard boneCount > 0 else { return [] }
+        func u32(_ o: Int) -> UInt32? {
+            guard o >= 0, o + 4 <= bytes.count else { return nil }
+            return UInt32(bytes[o]) | (UInt32(bytes[o + 1]) << 8) | (UInt32(bytes[o + 2]) << 16) | (UInt32(bytes[o + 3]) << 24)
+        }
+        func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
+        func cstring(_ o: Int) -> (String, Int)? {
+            var e = o
+            while e < bytes.count, bytes[e] != 0 { e += 1 }
+            guard e < bytes.count else { return nil }
+            return (String(decoding: bytes[o..<e], as: UTF8.self), e + 1)
+        }
+        // 애니 헤더 시도: 성공 시 (이름,모드,fps,길이,본수,본트랙시작오프셋).
+        func tryHeader(_ p: Int) -> (name: String, mode: String, fps: Float, length: Int, bc: Int, off: Int)? {
+            guard let (name, p2) = cstring(p), !name.isEmpty, name.utf8.count <= 96 else { return nil }
+            guard let (mode, p3) = cstring(p2), animModes.contains(mode) else { return nil }
+            guard let fps = f32(p3), fps > 0, fps <= 240 else { return nil }
+            guard let length = u32(p3 + 4), let bc = u32(p3 + 12), Int(bc) == boneCount else { return nil }
+            return (name, mode, fps, Int(length), Int(bc), p3 + 20)
+        }
+        // 헤더: magic(8)|u8 0|u32 nextOff|u32 animCount|u32 baseId|u32 0
+        var o = magicOff + 9
+        guard u32(o) != nil else { return [] }
+        o += 16
+        var anims: [Model3D.Animation] = []
+        while let h = tryHeader(o) {
+            o = h.off
+            var tracks: [[Key]] = []
+            tracks.reserveCapacity(h.bc)
+            var ok = true
+            for _ in 0..<h.bc {
+                guard let tsRaw = u32(o), tsRaw % 36 == 0, o + 4 + Int(tsRaw) <= bytes.count else { ok = false; break }
+                o += 4
+                let ts = Int(tsRaw)
+                var keys: [Key] = []
+                keys.reserveCapacity(ts / 36)
+                var k = 0
+                while k < ts {
+                    guard let px = f32(o + k), let py = f32(o + k + 4), let pz = f32(o + k + 8),
+                          let ax = f32(o + k + 12), let ay = f32(o + k + 16), let az = f32(o + k + 20),
+                          let sx = f32(o + k + 24), let sy = f32(o + k + 28), let sz = f32(o + k + 32) else { ok = false; break }
+                    keys.append(Key(position: SIMD3(px, py, pz), angles: SIMD3(ax, ay, az), scale: SIMD3(sx, sy, sz)))
+                    k += 36
+                }
+                if !ok { break }
+                o += ts
+                guard let blob2 = u32(o), o + 4 + Int(blob2) <= bytes.count else { ok = false; break }
+                o += 4 + Int(blob2)
+                tracks.append(keys)
+            }
+            guard ok, tracks.count == h.bc else { break }
+            anims.append(Animation(name: h.name, mode: h.mode, fps: h.fps, lengthFrames: h.length, tracks: tracks))
+            // 리싱크: 가변 트레일러를 건너뛰고 다음 유효 헤더로(≤256B). 없으면 종료.
+            var next: Int? = nil
+            var d = 0
+            while d <= 256 {
+                if tryHeader(o + d) != nil { next = o + d; break }
+                d += 1
+            }
+            guard let n = next else { break }
+            o = n
+        }
+        return anims
     }
 
     /// stride-2 인덱스 순회 헬퍼.
