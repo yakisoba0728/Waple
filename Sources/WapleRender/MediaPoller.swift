@@ -46,7 +46,8 @@ public final class MediaPoller {
         }
     }
 
-    private func deliver(_ info: NowPlayingInfo, artwork: Data?, trackKey: String) {
+    // internal(테스트 가능): 상태전이·dedupe 로직을 폴 타이밍 없이 직접 검증한다.
+    func deliver(_ info: NowPlayingInfo, artwork: Data?, trackKey: String) {
         if last?.state != info.state { onPlayback?(info) }
         if last?.title != info.title || last?.artist != info.artist || last?.album != info.album {
             onProperties?(info)
