@@ -15,5 +15,6 @@ let package = Package(
         .testTarget(name: "WapleCoreTests", dependencies: ["WapleCore"]),
         .testTarget(name: "WapleLibraryTests", dependencies: ["WapleLibrary", "WapleCore"]),
         .testTarget(name: "WapleRenderTests", dependencies: ["WapleRender", "WapleCore"]),
+        .testTarget(name: "WapleAppTests", dependencies: ["Waple", "WapleCore", "WapleLibrary", "WapleRender"]),
     ]
 )

@@ -177,47 +177,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 라이브러리 엔트리 id → 배경 폴더 URL(없거나 해석 실패 → nil). MonitorMapping 주입용.
+    private func folderForEntry(_ id: String) -> URL? {
+        guard let entry = store.entries.first(where: { $0.id == id }) else { return nil }
+        return store.resolveFolderURL(for: entry)
+    }
+
     @discardableResult
     private func apply(folderURL: URL) -> Bool {
+        let project: WallpaperProject
         do {
-            let project = try ProjectJSONParser.parse(folderURL: folderURL)
-            guard RendererFactory.makeRenderer(for: project) != nil else {
-                notify("지원하지 않는 타입입니다: \(project.type.storageString)")
-                return false
-            }
-            var newRenderers: [WallpaperRenderer] = []
-            do {
-                var projectCache: [URL: WallpaperProject] = [:]
-                for (screenKey, view) in desktopController.screenViews {
-                    // 모니터별 할당이 있으면 그 배경을, 없으면 전역 선택을 마운트.
-                    var screenProject = project
-                    if let assignedId = monitorStore.assignment(for: screenKey),
-                       let entry = store.entries.first(where: { $0.id == assignedId }),
-                       let assignedFolder = store.resolveFolderURL(for: entry) {
-                        if let cached = projectCache[assignedFolder] {
-                            screenProject = cached
-                        } else if let parsed = try? ProjectJSONParser.parse(folderURL: assignedFolder) {
-                            projectCache[assignedFolder] = parsed
-                            screenProject = parsed
-                        }
-                    }
-                    guard let renderer = RendererFactory.makeRenderer(for: screenProject) else { continue }
-                    try renderer.mount(in: view, project: screenProject)
-                    newRenderers.append(renderer)
-                }
-            } catch {
-                // 일부만 마운트된 렌더러를 정리해 화면별 비대칭/유령 렌더러를 방지. 기존 배경은 유지.
-                newRenderers.forEach { $0.teardown() }
-                throw error
-            }
-            // 전부 성공한 뒤에만 기존 렌더러를 정리하고 교체한다.
-            renderers.forEach { $0.teardown() }
+            project = try ProjectJSONParser.parse(folderURL: folderURL)
+        } catch {
+            notify("적용 실패: \(error)")
+            return false
+        }
+        guard RendererFactory.makeRenderer(for: project) != nil else {
+            notify("지원하지 않는 타입입니다: \(project.type.storageString)")
+            return false
+        }
+
+        // 화면별로 마운트할 프로젝트 결정(할당 있으면 그 폴더, 없으면 전역; 폴더당 1회 파스) — 추출 로직.
+        let screens = desktopController.screenViews
+        let projects = MonitorMapping.resolveProjects(
+            screenKeys: screens.map { $0.screenKey },
+            global: project,
+            assignedFolder: { key in
+                MonitorMapping.assignedFolder(
+                    screenKey: key,
+                    assignment: { self.monitorStore.assignment(for: $0) },
+                    folderForEntry: { self.folderForEntry($0) })
+            },
+            parse: { try? ProjectJSONParser.parse(folderURL: $0) }
+        )
+
+        // 전부 성공해야 교체, 하나라도 실패하면 부분 정리 후 롤백(기존 렌더러 유지) — 추출 로직.
+        let result = RendererSwap.apply(
+            screens: Array(zip(screens, projects)),
+            existing: renderers,
+            makeAndMount: { pair -> WallpaperRenderer? in
+                let (screen, proj) = pair
+                guard let renderer = RendererFactory.makeRenderer(for: proj) else { return nil }
+                try renderer.mount(in: screen.view, project: proj)
+                return renderer
+            },
+            teardown: { $0.teardown() }
+        )
+        switch result {
+        case .success(let newRenderers):
             renderers = newRenderers
             currentFolderURL = folderURL
             currentProjectId = project.id
             updateVideoMenuStates()
             return true
-        } catch {
+        case .failure(let error):
             notify("적용 실패: \(error)")
             return false
         }
@@ -250,19 +263,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         schedulePlaylistTimer()
     }
 
-    /// 재생목록 타이머 재구성. 비활성/빈 목록 → 정지.
+    /// 재생목록 타이머 재구성. 비활성/빈 목록 → 정지(스케줄 조건은 추출 로직).
     private func schedulePlaylistTimer() {
         playlistTimer?.invalidate()
         playlistTimer = nil
-        guard playlistStore.enabled, !playlistStore.ids.isEmpty else { return }
-        let interval = TimeInterval(playlistStore.intervalMinutes * 60)
+        guard PlaylistScheduling.shouldRun(enabled: playlistStore.enabled, ids: playlistStore.ids) else { return }
+        let interval = PlaylistScheduling.intervalSeconds(minutes: playlistStore.intervalMinutes)
         playlistTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.advancePlaylist()
         }
     }
 
     private func advancePlaylist() {
-        guard let nextId = playlistStore.next(after: store.selectedId),
+        guard let nextId = PlaylistScheduling.nextApplicableId(
+                  after: store.selectedId,
+                  next: { self.playlistStore.next(after: $0) },
+                  entryExists: { id in self.store.entries.contains(where: { $0.id == id }) }),
               let entry = store.entries.first(where: { $0.id == nextId }) else { return }
         libraryVM.apply(entry)
     }

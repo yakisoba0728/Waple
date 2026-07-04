@@ -1,0 +1,95 @@
+import XCTest
+@testable import Waple
+import WapleCore
+import WapleLibrary
+
+/// LibraryViewModel(Waple 내부 타입) 핵심 로직 검증 — 재생목록 토글 + 모니터 할당 표시.
+/// SwiftUI 뷰는 제외. 스토어는 임시 디렉터리로 실제 생성한다.
+final class LibraryViewModelTests: XCTestCase {
+
+    private func tempDir() -> URL {
+        let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    private func entry(id: String, title: String) -> LibraryEntry {
+        LibraryEntry(id: id, title: title, typeRaw: "scene",
+                     fileName: nil, previewName: nil, bookmark: Data())
+    }
+
+    /// library.json 을 미리 심어 LibraryStore.entries 를 채운다(북마크는 assignedEntryTitle 이 안 씀).
+    private struct SeedIndex: Codable { var entries: [LibraryEntry]; var selectedId: String? }
+    private func seedLibrary(_ dir: URL, entries: [LibraryEntry]) throws {
+        let data = try JSONEncoder().encode(SeedIndex(entries: entries, selectedId: nil))
+        try data.write(to: dir.appendingPathComponent("library.json"))
+    }
+
+    private func makeVM(dir: URL) -> LibraryViewModel {
+        LibraryViewModel(store: LibraryStore(baseDirectory: dir),
+                         playlist: PlaylistStore(baseDirectory: dir),
+                         monitors: MonitorAssignmentStore(baseDirectory: dir))
+    }
+
+    // MARK: - 재생목록 토글
+
+    func testTogglePlaylist_roundtripAndCallback() {
+        let dir = tempDir()
+        let vm = makeVM(dir: dir)
+        var changedCount = 0
+        vm.onPlaylistChanged = { changedCount += 1 }
+        let e = entry(id: "wp1", title: "Sunset")
+
+        XCTAssertFalse(vm.isInPlaylist(e))
+        vm.togglePlaylist(e)
+        XCTAssertTrue(vm.isInPlaylist(e), "토글 → 참여")
+        XCTAssertEqual(changedCount, 1, "onPlaylistChanged 콜백(타이머 재구성 트리거)")
+        vm.togglePlaylist(e)
+        XCTAssertFalse(vm.isInPlaylist(e), "재토글 → 제거")
+        XCTAssertEqual(changedCount, 2)
+    }
+
+    func testTogglePlaylist_persistsToStore() {
+        let dir = tempDir()
+        makeVM(dir: dir).togglePlaylist(entry(id: "wp1", title: "A"))
+        // 새 스토어로 재로드 → 영속 확인.
+        XCTAssertEqual(PlaylistStore(baseDirectory: dir).ids, ["wp1"])
+    }
+
+    // MARK: - 모니터 할당 표시
+
+    func testAssignedEntryTitle_reflectsAssignment() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset"),
+                                       entry(id: "wp2", title: "Ocean")])
+        let vm = makeVM(dir: dir)
+        XCTAssertEqual(vm.entries.count, 2, "심어둔 라이브러리 엔트리 로드")
+
+        XCTAssertNil(vm.assignedEntryTitle(forScreen: "disp1"), "미할당 화면 → nil")
+        vm.assign(vm.entries[0], toScreen: "disp1")
+        XCTAssertEqual(vm.assignedEntryTitle(forScreen: "disp1"), "Sunset", "할당 배경 제목 표시")
+
+        vm.clearAssignment(forScreen: "disp1")
+        XCTAssertNil(vm.assignedEntryTitle(forScreen: "disp1"), "해제 → nil")
+    }
+
+    func testAssign_persistsToMonitorStore() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset")])
+        let vm = makeVM(dir: dir)
+        vm.assign(vm.entries[0], toScreen: "disp9")
+        // 새 스토어로 재로드 → 영속 확인.
+        XCTAssertEqual(MonitorAssignmentStore(baseDirectory: dir).assignment(for: "disp9"), "wp1")
+    }
+
+    func testAssignmentCallbackFires() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset")])
+        let vm = makeVM(dir: dir)
+        var changed = 0
+        vm.onAssignmentsChanged = { changed += 1 }
+        vm.assign(vm.entries[0], toScreen: "disp1")
+        vm.clearAssignment(forScreen: "disp1")
+        XCTAssertEqual(changed, 2, "할당/해제 각각 즉시 재적용 트리거")
+    }
+}
