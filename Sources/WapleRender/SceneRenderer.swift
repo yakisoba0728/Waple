@@ -1285,7 +1285,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private func particleVertices(_ snapshot: [Particle], _ sys: GPUParticleSystem) -> [Float] {
         var verts: [Float] = []
         verts.reserveCapacity(snapshot.count * (sys.isTrail ? 200 : 48))
-        func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { (x / projW * 2 - 1, 1 - y / projH * 2) }
+        func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { let p = sceneToNDC(x, y); return (p.x, p.y) }
         func appendQuad(_ p: Particle) {
             let wx = sys.origin.x + sys.scale.x * p.pos.x
             let wy = sys.origin.y - sys.scale.y * p.pos.y
@@ -1320,7 +1320,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// ±half-width 오프셋해 삼각 스트립을 만든다.
     /// 붕괴(정지 rope, mouse-follow 헤드리스) 시 false 반환 → 호출자가 쿼드 폴백(NaN/블랭크 방지).
     private func appendRibbon(_ p: Particle, _ sys: GPUParticleSystem, into verts: inout [Float]) -> Bool {
-        func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { (x / projW * 2 - 1, 1 - y / projH * 2) }
+        func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { let p = sceneToNDC(x, y); return (p.x, p.y) }
         let h = p.history
         // 월드 px 로 변환.
         var pts: [(Float, Float)] = []
@@ -1450,6 +1450,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return t
     }
 
+    /// 씬 픽셀 좌표(좌상단 원점, y-down) → NDC(-1..1, y-up). px→NDC 변환의 단일 정의 —
+    /// 파티클/리본/쿼드/퍼펫/텍스트 경로가 공유(동일식 5중 중복 제거, 2026-07-04).
+    @inline(__always)
+    static func pxToNDC(_ x: Float, _ y: Float, projW: Float, projH: Float) -> SIMD2<Float> {
+        SIMD2(x / projW * 2 - 1, 1 - y / projH * 2)
+    }
+
+    /// pxToNDC 의 인스턴스 프로젝션 크기(projW/projH) 버전.
+    @inline(__always)
+    private func sceneToNDC(_ x: Float, _ y: Float) -> SIMD2<Float> {
+        Self.pxToNDC(x, y, projW: projW, projH: projH)
+    }
+
     /// 씬 픽셀 좌표(좌상단 원점, Y-down 가정) → NDC. Y-flip은 Task 7에서 실측 보정.
     private func quadVertices(layer: SceneLayer, projW: Float, projH: Float) -> [SIMD4<Float>] {
         quadVertices(origin: layer.origin, size: layer.size, scale: layer.scale, angleZ: layer.angleZ,
@@ -1467,9 +1480,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let rx = lx * ca - ly * sa, ry = lx * sa + ly * ca
             return SIMD2<Float>(origin.x + rx, origin.y + ry)
         }
-        func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> {
-            SIMD2<Float>(p.x / projW * 2 - 1, 1 - p.y / projH * 2)
-        }
+        func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> { Self.pxToNDC(p.x, p.y, projW: projW, projH: projH) }
         let tl = ndc(corner(-hw, -hh)), tr = ndc(corner(hw, -hh))
         let br = ndc(corner(hw, hh)), bl = ndc(corner(-hw, hh))
         // uv: TL(0,0) TR(1,0) BR(1,1) BL(0,1)
@@ -1496,8 +1507,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let lx = p.x * scale.x, ly = -p.y * scale.y
             let sx = origin.x + lx * ca - ly * sa
             let sy = origin.y + lx * sa + ly * ca
-            out.append(SIMD4<Float>(sx / projW * 2 - 1, 1 - sy / projH * 2,
-                                    model.vertices[i].uv.x, model.vertices[i].uv.y))
+            let ndc = pxToNDC(sx, sy, projW: projW, projH: projH)
+            out.append(SIMD4<Float>(ndc.x, ndc.y, model.vertices[i].uv.x, model.vertices[i].uv.y))
         }
         return out
     }
@@ -1728,8 +1739,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case "bottom": y0 = g.def.origin.y - h
         default: y0 = g.def.origin.y - h / 2
         }
-        func ndc(_ px: Float, _ py: Float) -> SIMD2<Float> { SIMD2(px / projW * 2 - 1, 1 - py / projH * 2) }
-        let tl = ndc(x0, y0), tr = ndc(x0 + w, y0), br = ndc(x0 + w, y0 + h), bl = ndc(x0, y0 + h)
+        let tl = sceneToNDC(x0, y0), tr = sceneToNDC(x0 + w, y0)
+        let br = sceneToNDC(x0 + w, y0 + h), bl = sceneToNDC(x0, y0 + h)
         let verts: [SIMD4<Float>] = [
             SIMD4(tl.x, tl.y, 0, 0), SIMD4(tr.x, tr.y, 1, 0), SIMD4(br.x, br.y, 1, 1),
             SIMD4(tl.x, tl.y, 0, 0), SIMD4(br.x, br.y, 1, 1), SIMD4(bl.x, bl.y, 0, 1),
