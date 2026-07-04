@@ -82,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         plItem.submenu = plMenu
         menu.addItem(plItem)
         self.playlistMenu = plMenu
+        menu.addItem(NSMenuItem(title: "웹 조작 창 열기",
+                                action: #selector(openWebInteraction), keyEquivalent: "i"))
         menu.addItem(NSMenuItem(title: "기본 에셋 폴더 설정…",
                                 action: #selector(chooseBaseAssets), keyEquivalent: ""))
         menu.addItem(.separator())
@@ -103,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.apply(folderURL: folder)  // 할당 변경 즉시 반영
         }
         libraryVM.onPlaylistChanged = { [weak self] in self?.schedulePlaylistTimer() }
+        libraryVM.onOpenInteraction = { [weak self] in self?.openWebInteraction() }
         schedulePlaylistTimer()
 
         desktopController.rebuild()
@@ -157,6 +160,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let f = item.representedObject as? Float else { continue }
             if item.action == #selector(setVideoVolume(_:)) { item.state = abs(f - vol) < 0.001 ? .on : .off }
             if item.action == #selector(setVideoRate(_:)) { item.state = abs(f - rate) < 0.001 ? .on : .off }
+        }
+    }
+
+    /// 현재 적용된 웹 월페이퍼의 조작 창(실입력 프록시 + 라이브 미러)을 연다.
+    @objc private func openWebInteraction() {
+        if let web = renderers.compactMap({ $0 as? WebRenderer }).first {
+            web.openInteractionPanel()
+        } else {
+            notify("웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요")
         }
     }
 

@@ -26,6 +26,8 @@ final class LibraryViewModel: ObservableObject {
     var onAssignmentsChanged: (() -> Void)?
     /// 재생목록 변경 → 타이머 재구성 트리거.
     var onPlaylistChanged: (() -> Void)?
+    /// 웹 조작 창 열기(적용된 웹 월페이퍼의 입력 프록시) — AppDelegate 주입.
+    var onOpenInteraction: (() -> Void)?
 
     init(store: LibraryStore, playlist: PlaylistStore, monitors: MonitorAssignmentStore) {
         self.store = store

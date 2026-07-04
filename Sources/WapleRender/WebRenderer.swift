@@ -14,6 +14,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var occlusionObserver: NSObjectProtocol?
     private var mouseMonitor: Any?
     private var clickMonitor: Any?
+    private var interactionWindow: NSWindow?
     private var lastMouseForward = CFAbsoluteTimeGetCurrent()
     private var pausedManually = false
 
@@ -100,16 +101,27 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 let x = Int(inView.x), y = Int(web.bounds.height - inView.y)
                 web.evaluateJavaScript("window.__wapleMouse(\(x), \(y));")
             }
-            // 클릭 전달(전역 leftMouseDown — 씬 cursorClick 과 동일 규약): 뷰 좌표 → 합성 click.
-            clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self, weak web] _ in
-                guard self != nil, let web, let win = web.window else { return }
-                let inWindow = win.convertPoint(fromScreen: NSEvent.mouseLocation)
-                let inView = web.convert(inWindow, from: nil)
-                guard web.bounds.contains(inView) else { return }
-                let x = Int(inView.x), y = Int(web.bounds.height - inView.y)
-                web.evaluateJavaScript("window.__wapleClick(\(x), \(y));")
-            }
+            // 바탕화면 직접 클릭 전달은 아이콘 클릭과 충돌해 혼란(실사용 피드백 2026-07-05) — 제거.
+            // 입력은 조작 창(openInteractionPanel)이 담당한다.
         }
+    }
+
+    /// 조작 창: 데스크탑 WKWebView 의 라이브 미리보기(스냅샷 미러) + 실입력 프록시.
+    /// 창에서의 마우스/휠/키 입력을 합성 DOM 이벤트로 데스크탑 인스턴스에 재게시 → 실시간 연동.
+    public func openInteractionPanel() {
+        guard let web = webView else { return }
+        if let existing = interactionWindow { existing.makeKeyAndOrderFront(nil); return }
+        let proxy = WebInputProxyView(target: web)
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 540),
+                           styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        win.title = "웹 월페이퍼 조작 (실시간 연동)"
+        win.contentView = proxy
+        win.isReleasedWhenClosed = false
+        win.center()
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        interactionWindow = win
+        proxy.start()
     }
 
     private func setPausedJS(_ paused: Bool) {
@@ -201,6 +213,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         mouseMonitor = nil
         if let c = clickMonitor { NSEvent.removeMonitor(c) }
         clickMonitor = nil
+        (interactionWindow?.contentView as? WebInputProxyView)?.stop()
+        interactionWindow?.orderOut(nil)
+        interactionWindow = nil
         audioProvider?.stop()
         audioProvider = nil
         mediaPoller?.stop()

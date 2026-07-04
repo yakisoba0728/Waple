@@ -77,6 +77,12 @@ struct LibraryView: View {
         }
         .contextMenu {
             Button("속성 편집…") { viewModel.propertyEditorEntry = entry }
+            if WallpaperType.from(entry.typeRaw) == .web {
+                Button("적용 + 조작 창 열기") {
+                    viewModel.apply(entry)
+                    viewModel.onOpenInteraction?()
+                }
+            }
             if supported {
                 Button(viewModel.isInPlaylist(entry) ? "재생목록에서 제거" : "재생목록에 추가") {
                     viewModel.togglePlaylist(entry)
