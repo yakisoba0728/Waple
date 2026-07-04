@@ -30,6 +30,16 @@ enum WallpaperBridgeJS {
         pendingProps = props; pendingGeneral = general; flush();
       };
       // 마우스 전달(WE 동작): 네이티브가 좌표를 밀어주면 DOM mousemove 로 재게시.
+      // 클릭 전달: 데스크탑 창은 실이벤트를 받지 않으므로(아이콘 보호) 합성 DOM 이벤트로 재게시.
+      window.__wapleClick = function (x, y) {
+        try {
+          var t = document.elementFromPoint(x, y) || document;
+          var o = { clientX: x, clientY: y, bubbles: true, cancelable: true, view: window, button: 0 };
+          t.dispatchEvent(new MouseEvent('mousedown', o));
+          t.dispatchEvent(new MouseEvent('mouseup', o));
+          t.dispatchEvent(new MouseEvent('click', o));
+        } catch (e) {}
+      };
       window.__wapleMouse = function (x, y) {
         try {
           document.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }));

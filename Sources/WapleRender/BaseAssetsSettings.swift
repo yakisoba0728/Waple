@@ -9,8 +9,20 @@ public enum BaseAssetsSettings {
 
     public static var baseAssetsDirectory: URL? {
         get {
-            guard let p = UserDefaults.standard.string(forKey: key), !p.isEmpty else { return nil }
-            return URL(fileURLWithPath: p, isDirectory: true)
+            if let p = UserDefaults.standard.string(forKey: key), !p.isEmpty {
+                return URL(fileURLWithPath: p, isDirectory: true)
+            }
+            // 미설정 자동 탐지 — 번들ID 없는 SPM 실행파일은 외부 `defaults write` 도메인을 못 읽어
+            // 실사용에서 에셋 실종("씬 개판" 2026-07-05 실증: common.h/util·particle tex 전부 미발견).
+            // 관례 위치에 유효한 팩(shaders/common.h 존재)이 있으면 그걸 쓴다. 메뉴 설정이 항상 우선.
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            for cand in [home.appendingPathComponent("Downloads/wallpaper_dev/assets"),
+                         home.appendingPathComponent("Downloads/assets")] {
+                if FileManager.default.fileExists(atPath: cand.appendingPathComponent("shaders/common.h").path) {
+                    return cand
+                }
+            }
+            return nil
         }
         set { UserDefaults.standard.set(newValue?.path, forKey: key) }
     }

@@ -39,3 +39,11 @@ final class WallpaperBridgeJSTests: XCTestCase {
         XCTAssertTrue(s.contains("PLAYBACK_PAUSED: \(NowPlayingInfo.State.paused.rawValue)"))
     }
 }
+
+extension WallpaperBridgeJSTests {
+    /// 클릭 재게시 진입점 존재(데스크탑 창은 실이벤트 차단 — 합성 click 규약).
+    func testClickDispatchEntryPointExists() {
+        XCTAssertTrue(WallpaperBridgeJS.source.contains("__wapleClick"))
+        XCTAssertTrue(WallpaperBridgeJS.source.contains("elementFromPoint"))
+    }
+}

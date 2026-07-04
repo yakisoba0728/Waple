@@ -13,6 +13,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var audioProvider: SystemAudioSpectrumProvider?
     private var occlusionObserver: NSObjectProtocol?
     private var mouseMonitor: Any?
+    private var clickMonitor: Any?
     private var lastMouseForward = CFAbsoluteTimeGetCurrent()
     private var pausedManually = false
 
@@ -98,6 +99,15 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 // 웹 좌표는 상단 원점 — AppKit 하단 원점에서 반전.
                 let x = Int(inView.x), y = Int(web.bounds.height - inView.y)
                 web.evaluateJavaScript("window.__wapleMouse(\(x), \(y));")
+            }
+            // 클릭 전달(전역 leftMouseDown — 씬 cursorClick 과 동일 규약): 뷰 좌표 → 합성 click.
+            clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self, weak web] _ in
+                guard self != nil, let web, let win = web.window else { return }
+                let inWindow = win.convertPoint(fromScreen: NSEvent.mouseLocation)
+                let inView = web.convert(inWindow, from: nil)
+                guard web.bounds.contains(inView) else { return }
+                let x = Int(inView.x), y = Int(web.bounds.height - inView.y)
+                web.evaluateJavaScript("window.__wapleClick(\(x), \(y));")
             }
         }
     }
@@ -189,6 +199,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         occlusionObserver = nil
         if let m = mouseMonitor { NSEvent.removeMonitor(m) }
         mouseMonitor = nil
+        if let c = clickMonitor { NSEvent.removeMonitor(c) }
+        clickMonitor = nil
         audioProvider?.stop()
         audioProvider = nil
         mediaPoller?.stop()
