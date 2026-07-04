@@ -521,6 +521,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var passes: [TranslatedPass] = []
         var anyAudio = false
         for (i, mp) in manifest.passes.enumerated() {
+            // 명령 패스(셰이더 없음): "copy" = source fbo → target fbo 지속(실물 motionblur 의 누적 버퍼).
+            // 통과(passthrough) 파이프라인으로 합성해 기존 멀티패스 실행 경로를 그대로 재사용(루프 무변경).
+            if mp.command == "copy" {
+                guard let srcName = mp.source, let srcIdx = fboIndex[srcName],
+                      let tgtName = mp.target, let tgtIdx = fboIndex[tgtName],
+                      let pipe = passthroughEffectPipeline(device: device) else {
+                    NSLog("%@", "[Waple] unresolved copy pass in \(eff.name)"); return nil
+                }
+                let dims = SIMD4<Float>(lw, lh, lw, lh)
+                passes.append(TranslatedPass(pipeline: pipe, material: [], aux: [],
+                                             binds: [(0, srcIdx)], target: tgtIdx, usesAudio: false,
+                                             texRes: [SIMD4<Float>](repeating: dims, count: 8), scripts: []))
+                continue
+            }
             // 셰이더 이름 + 머티리얼 메타(combos/textures) 해석.
             var shaderName = mp.shader
             var matCombos: [String: Int] = [:]
@@ -627,6 +641,29 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 변환 효과 파이프라인. 정점 디스크립터: a_Position float3@0, a_TexCoord float2@12, stride 20,
     /// 버퍼 인덱스 4(p=buffer0 / eng=buffer1 와 충돌 회피 — 스파이크 증명 규약).
+    /// command=copy 패스용 통과 파이프라인(g_Texture0 을 그대로 target 에 기록). translated 실행 규약과
+    /// 동일한 버텍스 디스크립터/버퍼 인덱스를 쓰도록 GLSL 통과 셰이더를 번역해 캐시.
+    private var _passthroughPipeline: MTLRenderPipelineState?
+    private func passthroughEffectPipeline(device: MTLDevice) -> MTLRenderPipelineState? {
+        if let p = _passthroughPipeline { return p }
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }
+        """
+        guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]),
+              let p = translatedPipeline(msl: t.msl, device: device) else { return nil }
+        _passthroughPipeline = p
+        return p
+    }
+
     private func translatedPipeline(msl: String, device: MTLDevice) -> MTLRenderPipelineState? {
         let lib: MTLLibrary
         do {

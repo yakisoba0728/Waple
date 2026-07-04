@@ -116,53 +116,160 @@ public final class TextScriptEngine {
         return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())]
     }
 
-    /// ES 모듈 구문 중화: `export` 키워드 제거, `import ...` 는 바인딩을 no-op 프록시 var 로 치환
-    /// (외부 유틸 모듈은 제공 불가 — 호출 시 프록시가 흡수, update 실패 시 nil → 빈 텍스트 graceful).
+    /// ES 모듈 구문 중화(토큰 인지 — minified 한 줄 소스 포함). 문자열/주석 밖의 `export` 키워드를 제거하고
+    /// (`export default X` → `var __default = X`, `export {..}`/`export * ..` 문 삭제), `import ... from '...'`
+    /// 문을 no-op 프록시 바인딩으로 치환한다. 동적 `import(...)`/`import.meta`, 문자열 리터럴 속 'export'/'import',
+    /// 멤버 접근 `x.export`/프로퍼티 키 `{export:..}` 는 불간섭. (JSC 는 스크립트 평가에서 ES 모듈 미지원 —
+    /// 실물 난독화 텍스트 스크립트가 한 줄에 mid-line export 를 흩뿌려 줄 단위 스트리퍼로는 로드 실패했다.)
     static func stripModuleSyntax(_ src: String) -> String {
-        var out: [String] = []
-        for line in src.split(separator: "\n", omittingEmptySubsequences: false) {
-            var s = String(line)
-            let t = s.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("import ") {
-                out.append(importReplacement(t))
+        let chars = Array(src)
+        let n = chars.count
+        var out: [Character] = []
+        out.reserveCapacity(n)
+        var i = 0
+        var prevSig: Character? = nil   // 마지막 비공백 코드 문자(멤버 접근 `.export` 판별)
+        func isIdent(_ c: Character) -> Bool { c == "_" || c == "$" || c.isLetter || c.isNumber }
+        func emit(_ c: Character) { out.append(c); if !c.isWhitespace { prevSig = c } }
+        func emitAll(_ s: [Character]) { for c in s { emit(c) } }
+        func nextNonWS(_ from: Int) -> Int { var k = from; while k < n && chars[k].isWhitespace { k += 1 }; return k }
+        // chars[at...] 가 word 로 시작하고 그 뒤가 경계면 그 word 길이, 아니면 0.
+        func matchWord(_ at: Int, _ word: [Character]) -> Bool {
+            guard at + word.count <= n, Array(chars[at..<at + word.count]) == word else { return false }
+            let after = at + word.count
+            return after == n || !isIdent(chars[after])
+        }
+
+        while i < n {
+            let c = chars[i]
+            // 문자열 리터럴(' " `): 이스케이프 인지, 원문 보존.
+            if c == "\"" || c == "'" || c == "`" {
+                emit(c); i += 1
+                while i < n {
+                    let d = chars[i]
+                    if d == "\\", i + 1 < n { emit(d); emit(chars[i + 1]); i += 2; continue }
+                    emit(d); i += 1
+                    if d == c { break }
+                }
                 continue
             }
-            if let r = s.range(of: "export default") { s.replaceSubrange(r, with: "var __default =") }
-            else if let r = s.range(of: "export ") {
-                let before = s[..<r.lowerBound].trimmingCharacters(in: .whitespaces)
-                if before.isEmpty { s.replaceSubrange(r, with: "") }
+            // 주석: 원문 보존 + prevSig 불변(주석은 코드 토큰 아님 — 주석 끝의 '.' 가 다음 export 를
+            // 멤버 접근으로 오판하지 않도록 raw append; 실물 `//...may break.\nexport let` 회귀).
+            if c == "/", i + 1 < n, chars[i + 1] == "/" {
+                while i < n && chars[i] != "\n" { out.append(chars[i]); i += 1 }
+                continue
             }
-            out.append(s)
+            if c == "/", i + 1 < n, chars[i + 1] == "*" {
+                out.append(c); out.append(chars[i + 1]); i += 2
+                while i < n {
+                    if chars[i] == "*", i + 1 < n, chars[i + 1] == "/" { out.append("*"); out.append("/"); i += 2; break }
+                    out.append(chars[i]); i += 1
+                }
+                continue
+            }
+            // 식별자 시작(문자/_/$): 전체 word 소비 — 항상 완전 토큰 경계에서만 진입.
+            if c.isLetter || c == "_" || c == "$" {
+                var j = i
+                while j < n && isIdent(chars[j]) { j += 1 }
+                let word = Array(chars[i..<j])
+                let isKeyword = (word == Array("export") || word == Array("import")) && prevSig != "."
+                if isKeyword {
+                    let after = nextNonWS(j)
+                    let ac: Character? = after < n ? chars[after] : nil
+                    if ac == ":" { emitAll(word); i = j; continue }  // 프로퍼티 키
+                    if word == Array("import") {
+                        if ac == "(" || ac == "." { emitAll(word); i = j; continue }  // 동적 import / import.meta
+                        i = neutralizeImport(chars, j, n, emit: emitAll); continue
+                    }
+                    // export
+                    if matchWord(after, Array("default")) {
+                        emitAll(Array("var __default =")); i = after + "default".count; continue
+                    }
+                    if ac == "{" || ac == "*" {
+                        // export {..} / export * .. — 문 전체(다음 ';' 까지) 삭제.
+                        var m = after
+                        while m < n && chars[m] != ";" && chars[m] != "\n" { m += 1 }
+                        if m < n && chars[m] == ";" { m += 1 }
+                        i = m; continue
+                    }
+                    // 일반 `export <decl>` — 키워드만 제거(뒤 공백/선언 유지).
+                    i = j; continue
+                }
+                emitAll(word); i = j; continue
+            }
+            // 숫자 리터럴 선두(16진수 0x.. 등): word 로 오인 안 되게 통째 소비.
+            if c.isNumber {
+                var j = i
+                while j < n && isIdent(chars[j]) { j += 1 }
+                emitAll(Array(chars[i..<j])); i = j; continue
+            }
+            emit(c); i += 1
         }
-        return out.joined(separator: "\n")
+        return String(out)
     }
 
-    /// `import * as X from ...` / `import X from ...` / `import {a, b} from ...` → no-op 프록시 바인딩.
-    private static func importReplacement(_ line: String) -> String {
-        guard let fromIdx = line.range(of: " from ") ?? line.range(of: " from\t") else { return "" }
-        let clause = line[line.index(line.startIndex, offsetBy: "import ".count)..<fromIdx.lowerBound]
-            .trimmingCharacters(in: .whitespaces)
-        var names: [String] = []
-        if clause.hasPrefix("*") {
-            if let asIdx = clause.range(of: " as ") {
-                names.append(clause[asIdx.upperBound...].trimmingCharacters(in: .whitespaces))
-            }
-        } else if clause.hasPrefix("{") {
-            let inner = clause.trimmingCharacters(in: CharacterSet(charactersIn: "{} "))
-            for piece in inner.split(separator: ",") {
-                let p = piece.trimmingCharacters(in: .whitespaces)
-                // "orig as alias" → alias
-                if let asIdx = p.range(of: " as ") { names.append(String(p[asIdx.upperBound...]).trimmingCharacters(in: .whitespaces)) }
-                else if !p.isEmpty { names.append(p) }
-            }
-        } else if !clause.isEmpty {
-            names.append(clause)
+    /// `import` 키워드 직후 인덱스 j 에서 시작하는 import 문을 소비하고 no-op 바인딩 코드를 emit,
+    /// 문 끝(모듈 문자열 + 선택 `;`) 다음 인덱스를 반환. 모듈 문자열 전에 `;` 를 만나면 미변형(리터럴 emit).
+    private static func neutralizeImport(_ chars: [Character], _ j: Int, _ n: Int,
+                                         emit: ([Character]) -> Void) -> Int {
+        // 모듈 지정자(첫 문자열 리터럴)까지 스캔 — 그 사이가 clause(+ 후행 from).
+        var m = j
+        while m < n, chars[m] != "'", chars[m] != "\"", chars[m] != "`" {
+            if chars[m] == ";" || chars[m] == "\n" { emit(Array("import")); return j }  // 문자열 없는 import → 원문
+            m += 1
         }
-        guard !names.isEmpty else { return "" }
-        return names.map { name in
-            // 실제 구현이 있는 모듈(WEColor)은 진짜 심으로 바인딩 — 컬러 사이클 스크립트가 동작한다.
+        guard m < n else { emit(Array("import")); return j }
+        var clause = String(chars[j..<m]).trimmingCharacters(in: .whitespaces)
+        // 후행 from 키워드 제거(`* as X from` → `* as X`; 부재 시 side-effect import).
+        if clause == "from" { clause = "" }
+        else if clause.hasSuffix("from") {
+            let before = clause.index(clause.endIndex, offsetBy: -4)
+            if before == clause.startIndex || !(clause[clause.index(before, offsetBy: -1)].isLetter
+                || clause[clause.index(before, offsetBy: -1)].isNumber
+                || clause[clause.index(before, offsetBy: -1)] == "_" || clause[clause.index(before, offsetBy: -1)] == "$") {
+                clause = String(clause[..<before]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        // 모듈 문자열 소비.
+        let quote = chars[m]
+        var s = m + 1
+        while s < n { if chars[s] == "\\", s + 1 < n { s += 2; continue }; let end = chars[s] == quote; s += 1; if end { break } }
+        // 선택 세미콜론.
+        var e = s
+        while e < n && chars[e].isWhitespace && chars[e] != "\n" { e += 1 }
+        if e < n && chars[e] == ";" { s = e + 1 }
+        emit(Array(importBindings(clause: clause)))
+        return s
+    }
+
+    /// import clause → no-op 프록시 var 선언 코드. 빈 clause(side-effect) → "".
+    /// `* as X` / `{a, b as c}` / `default` / `default, {..}`(콤보) 지원. WEColor 는 실심 바인딩.
+    private static func importBindings(clause: String) -> String {
+        let clause = clause.trimmingCharacters(in: .whitespaces)
+        guard !clause.isEmpty else { return "" }
+        func decl(_ name: String) -> String {
             name == "WEColor" ? "var WEColor = __WEColor;" : "var \(name) = __noopProxy();"
-        }.joined(separator: " ")
+        }
+        if clause.hasPrefix("*") {
+            guard let asIdx = clause.range(of: " as ") else { return "" }
+            let name = String(clause[asIdx.upperBound...]).trimmingCharacters(in: .whitespaces)
+            return name.isEmpty ? "" : decl(name)
+        }
+        if clause.hasPrefix("{") {
+            let inner = clause.trimmingCharacters(in: CharacterSet(charactersIn: "{} "))
+            let names = inner.split(separator: ",").compactMap { piece -> String? in
+                let p = piece.trimmingCharacters(in: .whitespaces)
+                if let asIdx = p.range(of: " as ") { return String(p[asIdx.upperBound...]).trimmingCharacters(in: .whitespaces) }
+                return p.isEmpty ? nil : p
+            }
+            return names.map(decl).joined(separator: " ")
+        }
+        // default(+ 콤보): `default, {named}` / `default, * as ns`.
+        if let comma = clause.firstIndex(of: ",") {
+            let def = String(clause[..<comma]).trimmingCharacters(in: .whitespaces)
+            let rest = importBindings(clause: String(clause[clause.index(after: comma)...]))
+            return ([def.isEmpty ? nil : decl(def), rest.isEmpty ? nil : rest].compactMap { $0 }).joined(separator: " ")
+        }
+        return decl(clause)
     }
 
     /// createScriptProperties 빌더 + 엔진 API no-op Proxy 심(SceneScriptContext 와 공유).

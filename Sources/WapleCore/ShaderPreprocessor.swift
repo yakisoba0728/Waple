@@ -17,8 +17,10 @@ public enum ShaderPreprocessor {
         // [COMBO] 기본값(명시 combos 가 없을 때만 채움)
         for (name, def) in parseComboDefaults(source) where defines[name] == nil { defines[name] = def }
         var included = inlineIncludes(source, include: include, depth: 0)
+        // CAST3X3(mat4) 는 GLSL 에선 상단 3x3 절단이지만 MSL 엔 float3x3(float4x4) 생성자가 없다 —
+        // 번역기 프리앰블의 오버로드 헬퍼 we_cast3x3(절단/통과) 로 위임(실물 depthparallax).
         for (name, body) in [("CAST2", "vec2(x)"), ("CAST3", "vec3(x)"), ("CAST4", "vec4(x)"),
-                             ("CAST2X2", "mat2(x)"), ("CAST3X3", "mat3(x)"), ("CAST4X4", "mat4(x)")]
+                             ("CAST2X2", "mat2(x)"), ("CAST3X3", "we_cast3x3(x)"), ("CAST4X4", "mat4(x)")]
         where !included.contains("#define \(name)") && included.contains(name) {
             included = "#define \(name)(x) \(body)\n" + included
         }

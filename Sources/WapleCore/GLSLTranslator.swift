@@ -78,10 +78,18 @@ public enum GLSLTranslator {
                                "device": "we_device", "thread": "we_thread", "threadgroup": "we_threadgroup",
                                "constant": "we_constant", "using": "we_using", "namespace": "we_namespace",
                                "half": "we_half",
+                               // C++ 대체 토큰(MSL 예약어)이 GLSL 식별자로 쓰이는 실물(dot_matrix 의 지역 `vec2 or`).
+                               "or": "we_or", "and": "we_and", "not": "we_not", "xor": "we_xor",
+                               "compl": "we_compl", "bitand": "we_bitand", "bitor": "we_bitor",
                                // 우리 방출 파라미터명과의 충돌(실물 geodraw: 지역 float2 p)
                                "p": "we_p", "eng": "we_eng", "smp": "we_smp", "vin": "we_vin"]
         let vClean = replaceIdentifiers(stripComments(vsrc), reservedRenames)
         let fClean = replaceIdentifiers(stripComments(fsrc), reservedRenames)
+        // 소스 정의 struct(실물 dot_matrix 의 `struct Grid`): 함수 파싱 전에 이름 등록(반환/파라미터 타입 통과).
+        var structDefs: [GLSLStruct] = []
+        var structSeen = Set<String>()
+        for s in parseStructs(vClean) + parseStructs(fClean) where structSeen.insert(s.name).inserted { structDefs.append(s) }
+        let structNames = structSeen
         // 엔진 심볼은 선언이 common.h(베이스팩 전용, 대체로 부재)에 있어 파싱에 안 잡힌다 —
         // 본문 토큰 출현으로도 인식(Stage-2 gate 1). 텍스처 슬롯도 방어적으로 본문 스캔 병합.
         let bodyIds = identifiers(in: vClean).union(identifiers(in: fClean))
@@ -118,8 +126,8 @@ public enum GLSLTranslator {
         frag["gl_FragCoord"] = "in.gl_Position"  // [[position]] = 픽셀 좌표
 
         // 함수 파싱은 주석 제거본에서(annotation JSON 중괄호가 balance 를 깨지 않도록).
-        let vFns = parseFunctions(vClean)
-        let fFns = parseFunctions(fClean)
+        let vFns = parseFunctions(vClean, structs: structNames)
+        let fFns = parseFunctions(fClean, structs: structNames)
         guard let vertMainF = vFns.first(where: { $0.name == "main" }),
               let fragMainF = fFns.first(where: { $0.name == "main" }) else { return nil }
         // 헬퍼: vert+frag 합집합(이름 dedupe — 공용 헤더가 양 스테이지에 인라인되는 경우).
@@ -197,8 +205,8 @@ public enum GLSLTranslator {
 
         // Stage-3 ①②: 지역 섀도잉(varying/머티리얼과 동명의 로컬 선언) → 해당 본문 맵에서 제외
         // (치환하면 `float4 in.x = ...` 로 깨짐); fragment 의 varying 대입 → 로컬 사본으로 승격.
-        let fragLocals = localDeclNames(in: fragMainBody)
-        let vertLocals = localDeclNames(in: vertMainBody)
+        let fragLocals = localDeclNames(in: fragMainBody, structs: structNames)
+        let vertLocals = localDeclNames(in: vertMainBody, structs: structNames)
         var fragMap = frag, vertMap = vert
         var fragVaryingPrelude = ""
         for vy in varyings {
@@ -228,7 +236,7 @@ public enum GLSLTranslator {
         var helperDefs: [String] = []
         for h in helpers {
             let caps = captureOf[h.name] ?? []
-            guard let sig = helperSignature(h, captures: caps, materials: materials) else { continue }  // 미지원 타입 → 스킵
+            guard let sig = helperSignature(h, captures: caps, materials: materials, structs: structNames) else { continue }  // 미지원 타입 → 스킵
             var helperEnv = sizeEnv
             for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
             let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes),
@@ -273,7 +281,7 @@ public enum GLSLTranslator {
                 if let f = translateBody(line, symbols: fragMap, isFragment: false) { fragLocalConsts += f + "\n" }
                 if let v = translateBody(line, symbols: vertMap, isFragment: false) { vertLocalConsts += v + "\n" }
             } else {
-                let translated = replaceIdentifiers(line, typeAndMacroRenames())
+                let translated = rewriteArrayConstructors(replaceIdentifiers(line, typeAndMacroRenames()))
                 consts.append("constant " + translated.dropFirst("const ".count))
             }
         }
@@ -283,11 +291,14 @@ public enum GLSLTranslator {
         // 스테이지별 오디오 파라미터: 최종 본문에 남은 참조 이름별로 방출(word-정확; 16/32/64 해상도별 버퍼).
         let vertIds = identifiers(in: vertBody)
         let fragIds = identifiers(in: fragBody)
+        // 소스 struct 정의: 멤버 타입 리네임(vec2→float2 등) 후 프리앰블 선두에 방출(헬퍼 시그니처가 참조).
+        let structBlock = structDefs.map { "struct \($0.name) {" + replaceIdentifiers($0.body, typeAndMacroRenames()) + "};" }
+            .joined(separator: "\n")
         let msl = assemble(varyings: varyings, textures: textures, materialCount: materials.count,
                            vertAudioNames: audioBufferNames.filter { vertIds.contains($0.name) },
                            fragAudioNames: audioBufferNames.filter { fragIds.contains($0.name) },
                            consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
-                           vertBody: vertBody, fragBody: fragBody)
+                           vertBody: vertBody, fragBody: fragBody, structs: structBlock)
         return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio)
     }
 
@@ -302,14 +313,54 @@ public enum GLSLTranslator {
     }
 
     /// GLSL 타입 → MSL 타입(시그니처용). 미지원 타입 nil → 해당 헬퍼 스킵(사용 시 컴파일 실패 → 폴백 안전망).
-    static func mslType(_ glsl: String) -> String? {
+    /// `structs`: 소스 정의 struct 이름(그대로 MSL 타입). 실물 dot_matrix 의 `struct Grid`.
+    static func mslType(_ glsl: String, structs: Set<String> = []) -> String? {
         switch glsl {
         case "void", "float", "int", "bool": return glsl
         case "vec2", "float2": return "float2"; case "vec3", "float3": return "float3"; case "vec4", "float4": return "float4"
         case "mat2", "float2x2": return "float2x2"; case "mat3", "float3x3": return "float3x3"; case "mat4", "float4x4": return "float4x4"
         case "sampler2D": return "texture2d<float>"
-        default: return nil
+        default: return structs.contains(glsl) ? glsl : nil
         }
+    }
+
+    struct GLSLStruct: Equatable { let name: String; let body: String }  // body = 원문 멤버 선언들(타입 리네임 전)
+
+    /// 파일 스코프 `struct <name> { <members> };` 파싱(주석 제거본 입력 가정). 함수 파싱 전에 이름을 등록해야
+    /// struct 반환/파라미터 헬퍼가 mslType 을 통과한다(실물 dot_matrix: `Grid squareGrid(vec2)`).
+    static func parseStructs(_ src: String) -> [GLSLStruct] {
+        let chars = Array(src)
+        var out: [GLSLStruct] = []
+        var i = 0, depth = 0
+        func skipWS(_ j: inout Int) { while j < chars.count, chars[j].isWhitespace { j += 1 } }
+        func readIdent(_ j: inout Int) -> String {
+            var s = ""
+            while j < chars.count, chars[j].isLetter || chars[j] == "_" || (!s.isEmpty && chars[j].isNumber) { s.append(chars[j]); j += 1 }
+            return s
+        }
+        while i < chars.count {
+            let c = chars[i]
+            if depth == 0, c == "s", i + 6 <= chars.count, String(chars[i..<i + 6]) == "struct",
+               i + 6 < chars.count, !(chars[i + 6].isLetter || chars[i + 6].isNumber || chars[i + 6] == "_") {
+                var j = i + 6
+                skipWS(&j)
+                let name = readIdent(&j)
+                skipWS(&j)
+                if !name.isEmpty, j < chars.count, chars[j] == "{" {
+                    var d = 0, body = ""
+                    while j < chars.count {
+                        if chars[j] == "{" { d += 1; if d == 1 { j += 1; continue } }
+                        if chars[j] == "}" { d -= 1; if d == 0 { j += 1; break } }
+                        body.append(chars[j]); j += 1
+                    }
+                    out.append(GLSLStruct(name: name, body: body))
+                    i = j; continue
+                }
+            }
+            if c == "{" { depth += 1 } else if c == "}" { depth = max(0, depth - 1) }
+            i += 1
+        }
+        return out
     }
 
     /// 주석 제거(`//` 줄 주석, `/* */` 블록). 함수 본문 balanced-brace 추출이 주석 속 중괄호
@@ -334,7 +385,7 @@ public enum GLSLTranslator {
 
     /// 파일 스코프 함수 정의 파싱(주석 제거본 입력 가정). `<type> <name>(<params>) { body }`.
     /// 프로토타입(`;`)은 무시. main 포함 전부 반환.
-    static func parseFunctions(_ src: String) -> [GLSLFunction] {
+    static func parseFunctions(_ src: String, structs: Set<String> = []) -> [GLSLFunction] {
         let chars = Array(src)
         var out: [GLSLFunction] = []
         var i = 0
@@ -362,7 +413,7 @@ public enum GLSLTranslator {
             if depth == 0, c.isLetter || c == "_" {
                 var j = i
                 let t1 = readIdent(&j)
-                if mslType(t1) != nil {
+                if mslType(t1, structs: structs) != nil {
                     skipWS(&j)
                     let t2 = readIdent(&j)
                     if !t2.isEmpty {
@@ -541,14 +592,16 @@ public enum GLSLTranslator {
         name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
             || name.hasPrefix("g_AudioSpectrum")
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Resolution"))
-            || (name.hasPrefix("g_") && name.hasSuffix("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder)
+            || (name.hasPrefix("g_") && name.contains("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder);
+                                                                   // ...MatrixInverse/...MatrixInverseTranspose 변형 포함(실물 depthparallax)
     }
     static func engineReplacement(_ name: String) -> String {
         if name == "g_Time" { return "eng.timeAndPad.x" }
         if name == "g_PointerPosition" { return "eng.timeAndPad.yz" }  // 마우스 UV(0..1), 미구동 시 0.5,0.5
         if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
-        // 레이어 모델/기타 행렬: 효과 쿼드 기준 항등이 정답(레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확).
-        if name.hasPrefix("g_"), name.hasSuffix("Matrix") { return "float4x4(1.0)" }
+        // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
+        // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
+        if name.hasPrefix("g_"), name.contains("Matrix") { return "float4x4(1.0)" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
         if name == "g_AudioSpectrum16Right" { return "audioR" }
         if name == "g_AudioSpectrum32Left" { return "audioL32" }
@@ -741,7 +794,7 @@ public enum GLSLTranslator {
         switch cap {
         case .material(let i): return "\(materials[i].type.msl) \(materials[i].glslName)"
         case .engine(let n):
-            let t = n == "g_ModelViewProjectionMatrix" ? "float4x4"
+            let t = n.contains("Matrix") ? "float4x4"
                 : (n.hasSuffix("Resolution") ? "float4" : (n == "g_PointerPosition" ? "float2" : "float"))
             return "\(t) \(n)"
         case .varying(let n, let t): return "\(t.msl) \(n)"
@@ -767,11 +820,12 @@ public enum GLSLTranslator {
     }
 
     /// 헬퍼 시그니처(MSL): 원 파라미터 + 캡처 파라미터. 미지원 타입 포함 시 nil.
-    static func helperSignature(_ h: GLSLFunction, captures: [Capture] = [], materials: [MaterialParam] = []) -> String? {
-        guard let ret = mslType(h.ret) else { return nil }
+    static func helperSignature(_ h: GLSLFunction, captures: [Capture] = [], materials: [MaterialParam] = [],
+                                structs: Set<String> = []) -> String? {
+        guard let ret = mslType(h.ret, structs: structs) else { return nil }
         var ps: [String] = []
         for p in h.params {
-            guard let t = mslType(p.type) else { return nil }
+            guard let t = mslType(p.type, structs: structs) else { return nil }
             // 배열 파라미터는 constant 포인터(호출부의 audioL/캡처 배열과 정합; MSL 은 값-배열 불가).
             if p.array { ps.append("constant \(t)* \(p.name)") }
             else { ps.append(p.byRef ? "thread \(t)& \(p.name)" : "\(t) \(p.name)") }
@@ -786,7 +840,7 @@ public enum GLSLTranslator {
                                  fragAudioNames: [(name: String, buffer: Int)] = [],
                                  consts: [String] = [],
                                  helperProtos: [String] = [], helperDefs: [String] = [],
-                                 vertBody: String, fragBody: String) -> String {
+                                 vertBody: String, fragBody: String, structs: String = "") -> String {
         var vary = "struct Vary {\n  float4 gl_Position [[position]];\n"
         for v in varyings { vary += "  \(v.type.msl) \(v.name);\n" }
         vary += "};\n"
@@ -798,6 +852,11 @@ public enum GLSLTranslator {
         inline float2 we_uv(float3 v) { return v.xy; }
         inline float2 we_uv(float4 v) { return v.xy; }
         inline float2 we_uv(float v) { return float2(v); }
+        // CAST3X3(x): GLSL mat3(x) 대응. mat4→상단 3x3 절단(MSL 엔 float3x3(float4x4) 생성자 부재),
+        // mat3→통과(실물 depthparallax 의 g_EffectTextureProjectionMatrixInverse 회전 추출).
+        inline float3x3 we_cast3x3(float4x4 m) { return float3x3(m[0].xyz, m[1].xyz, m[2].xyz); }
+        inline float3x3 we_cast3x3(float3x3 m) { return m; }
+        inline float3x3 we_cast3x3(float s) { return float3x3(s); }  // mat3(scalar)=대각(GLSL 단일 스칼라)
         // GLSL mod(x,y) = x - y*floor(x/y) — fmod 와 달리 음수에서 항상 y 부호(오프셋 스크롤 등에 중요).
         inline float we_mod(float x, float y) { return x - y * metal::floor(x / y); }
         inline float2 we_mod(float2 x, float y) { return x - y * metal::floor(x / y); }
@@ -841,14 +900,57 @@ public enum GLSLTranslator {
         \(indent(fragBody))
         }
         """
+        let structBlock = structs.isEmpty ? "" : structs + "\n"
         let constBlock = consts.isEmpty ? "" : consts.joined(separator: "\n") + "\n"
         let protoBlock = helperProtos.isEmpty ? "" : helperProtos.joined(separator: "\n") + "\n"
         let defBlock = helperDefs.isEmpty ? "" : helperDefs.joined(separator: "\n\n") + "\n"
-        return "#include <metal_stdlib>\nusing namespace metal;\n\(eng)\(vin)\(vary)\(uvHelpers)\(constBlock)\(protoBlock)\(defBlock)\n\(vertSig)\n\n\(fragSig)\n"
+        return "#include <metal_stdlib>\nusing namespace metal;\n\(structBlock)\(eng)\(vin)\(vary)\(uvHelpers)\(constBlock)\(protoBlock)\(defBlock)\n\(vertSig)\n\n\(fragSig)\n"
     }
 
     private static func indent(_ s: String) -> String {
         s.split(separator: "\n", omittingEmptySubsequences: false).map { "    " + $0 }.joined(separator: "\n")
+    }
+
+    /// GLSL 배열 생성자 `TYPE[N](e0, e1, ...)` → MSL brace-init `{ e0, e1, ... }`.
+    /// MSL 은 `float2[22](...)` 형식을 지원하지 않는다(실물 bokeh 의 커널 상수 배열). 선언 LHS(`x[22] =`)는
+    /// `]` 뒤가 `(` 가 아니라 미검출; 배열 인덱싱(`arr[i]`)도 `](` 인접이 아니라 안전. 중첩도 재귀 처리.
+    static func rewriteArrayConstructors(_ src: String) -> String {
+        let chars = Array(src)
+        var out: [Character] = []
+        var i = 0
+        let n = chars.count
+        func isIdent(_ c: Character) -> Bool { c == "_" || c.isLetter || c.isNumber }
+        while i < n {
+            let c = chars[i]
+            if (c.isLetter || c == "_"), out.isEmpty || !isIdent(out.last!) {
+                var j = i
+                while j < n && isIdent(chars[j]) { j += 1 }
+                var k = j
+                while k < n && chars[k] == " " { k += 1 }
+                if k < n && chars[k] == "[" {
+                    var depth = 1, m = k + 1
+                    while m < n && depth > 0 { if chars[m] == "[" { depth += 1 } else if chars[m] == "]" { depth -= 1 }; m += 1 }
+                    var q = m
+                    while q < n && chars[q] == " " { q += 1 }
+                    if depth == 0 && q < n && chars[q] == "(" {
+                        var pdepth = 1, r = q + 1
+                        while r < n && pdepth > 0 { if chars[r] == "(" { pdepth += 1 } else if chars[r] == ")" { pdepth -= 1 }; r += 1 }
+                        let inner = String(chars[(q + 1)..<(r - 1)])
+                        out.append(contentsOf: "{ ")
+                        out.append(contentsOf: rewriteArrayConstructors(inner))
+                        out.append(contentsOf: " }")
+                        i = r
+                        continue
+                    }
+                }
+                out.append(contentsOf: chars[i..<j])
+                i = j
+                continue
+            }
+            out.append(c)
+            i += 1
+        }
+        return String(out)
     }
 
     // MARK: - 저수준 문자열 도구
@@ -898,7 +1000,7 @@ public enum GLSLTranslator {
     }
 
     /// 본문의 지역 선언 이름( `<type> NAME =|;|,` ) — varying/머티리얼 섀도잉 감지용(Stage-3 ①).
-    static func localDeclNames(in body: String) -> Set<String> {
+    static func localDeclNames(in body: String, structs: Set<String> = []) -> Set<String> {
         var out = Set<String>()
         let chars = Array(body); var i = 0
         func ident(_ j: inout Int) -> String {
@@ -910,7 +1012,7 @@ public enum GLSLTranslator {
             if chars[i].isLetter || chars[i] == "_" {
                 var j = i
                 let t1 = ident(&j)
-                if mslType(t1) != nil, t1 != "void" {
+                if mslType(t1, structs: structs) != nil, t1 != "void" {
                     while j < chars.count, chars[j] == " " || chars[j] == "\t" { j += 1 }
                     var k = j
                     let name = ident(&k)
