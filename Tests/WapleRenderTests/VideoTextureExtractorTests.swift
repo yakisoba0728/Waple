@@ -91,4 +91,52 @@ final class VideoTextureExtractorTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         XCTAssertNil(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "x", cacheDir: dir))
     }
+
+    // MARK: - LRU eviction (상한 N=8)
+
+    /// 캐시 상한(N)까지 채운 뒤, 명시적 과거 mtime 을 부여하고 새 씬을 추출하면 가장 오래된 것이 evict 된다.
+    func testEvictsOldestBeyondCap() throws {
+        let pkg = try scenePkg(videoTex: true)
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("WapleMP4-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cap = VideoTextureExtractor.maxCachedVideos
+        let fm = FileManager.default
+        // cap 개(s0..s{cap-1}) 추출 — 여기까지는 evict 없음(count == cap).
+        for i in 0..<cap {
+            _ = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "s\(i)", cacheDir: dir))
+        }
+        // 과거 시각으로 mtime 을 s0(가장 오래됨) → s{cap-1}(가장 최근) 순으로 고정(결정적 순서).
+        for i in 0..<cap {
+            let u = dir.appendingPathComponent("s\(i).mp4")
+            try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1000 + Double(i))], ofItemAtPath: u.path)
+        }
+        // (cap+1)번째 추출 → 새 파일은 mtime=now(최신) → 가장 오래된 s0 evict.
+        _ = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "s\(cap)", cacheDir: dir))
+        let remaining = try fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil).filter { $0.pathExtension == "mp4" }
+        XCTAssertEqual(remaining.count, cap, "상한 유지")
+        XCTAssertFalse(fm.fileExists(atPath: dir.appendingPathComponent("s0.mp4").path), "가장 오래된 s0 는 evict")
+        XCTAssertTrue(fm.fileExists(atPath: dir.appendingPathComponent("s\(cap).mp4").path), "새 씬은 잔존")
+    }
+
+    /// 캐시 적중(재추출)은 mtime 을 갱신(touch)하므로, 그 뒤 evict 에서 최근 접근 파일이 보존된다.
+    func testCacheHitTouchProtectsFromEviction() throws {
+        let pkg = try scenePkg(videoTex: true)
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("WapleMP4-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let cap = VideoTextureExtractor.maxCachedVideos
+        let fm = FileManager.default
+        for i in 0..<cap {
+            _ = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "s\(i)", cacheDir: dir))
+        }
+        for i in 0..<cap {
+            let u = dir.appendingPathComponent("s\(i).mp4")
+            try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1000 + Double(i))], ofItemAtPath: u.path)
+        }
+        // s0 는 원래 가장 오래됨 — 캐시 적중으로 재추출하면 touch 되어 최신이 된다.
+        _ = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "s0", cacheDir: dir))
+        // 새 씬 추출 → 이제 가장 오래된 것은 s1. s0 는 보존.
+        _ = try XCTUnwrap(VideoTextureExtractor.extractMP4(textureEntryName: "materials/v.tex", package: pkg, sceneID: "s\(cap)", cacheDir: dir))
+        XCTAssertTrue(fm.fileExists(atPath: dir.appendingPathComponent("s0.mp4").path), "최근 접근한 s0 는 보존")
+        XCTAssertFalse(fm.fileExists(atPath: dir.appendingPathComponent("s1.mp4").path), "이제 가장 오래된 s1 이 evict")
+    }
 }
