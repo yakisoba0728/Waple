@@ -36,9 +36,46 @@ public enum ParticleOperator: Equatable {
     case oscillateAlpha(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float)
     case oscillatePosition(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
                            phaseMin: Float, phaseMax: Float, mask: Vec3)
+    /// 컨트롤포인트로의 인력/척력. 실물키: scale(가속, 음수=척력), threshold(근접 반경), origin(대상, 헤드리스=기본 0).
+    case controlPointAttract(scale: Float, threshold: Float, target: Vec3)
+    /// 축 기준 소용돌이. 실물키: axis, distanceinner/outer, speedinner/outer, offset(중심).
+    case vortex(axis: Vec3, distanceInner: Float, distanceOuter: Float,
+                speedInner: Float, speedOuter: Float, offset: Vec3)
 }
 
-public enum RendererKind: Equatable { case sprite; case unsupported(String) }
+/// 파티클 렌더러. sprite = 빌보드 쿼드. trail 계열(spriteTrail/rope/ropeTrail)은
+/// 파티클별 위치 히스토리를 두께 있는 리본(삼각 스트립)으로 그린다.
+public enum RendererKind: Equatable {
+    case sprite
+    case spriteTrail(maxLength: Float, length: Float)
+    case rope(subdivision: Int)
+    case ropeTrail(length: Float, subdivision: Int)
+    case unsupported(String)
+
+    /// 히스토리 리본으로 그리는 트레일 계열인가.
+    public var isTrail: Bool {
+        switch self {
+        case .spriteTrail, .rope, .ropeTrail: return true
+        default: return false
+        }
+    }
+
+    /// 리본에 보관할 위치 히스토리 샘플 수(step 당 1샘플, captureFrames=30fps 가정).
+    /// spriteTrail=maxlength(세그먼트 수 근사), ropeTrail=length(초)×30, rope=고정 16. 4..24 로 클램프.
+    public var trailSampleCount: Int {
+        func clamp(_ v: Int) -> Int { min(24, max(4, v)) }
+        switch self {
+        case let .spriteTrail(maxLength, _):
+            return maxLength > 0 ? clamp(Int(maxLength.rounded())) : 8
+        case .rope:
+            return 16
+        case let .ropeTrail(length, _):
+            return length > 0 ? clamp(Int((length * 30).rounded())) : 12
+        default:
+            return 0
+        }
+    }
+}
 
 public enum BlendKind: Equatable { case additive, translucent }
 
@@ -150,6 +187,17 @@ public struct ParticleSystemDef: Equatable {
                                               scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin,
                                               phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0,
                                               mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1)))
+            case "controlpointattract":
+                ops.append(.controlPointAttract(scale: pfloat(o["scale"]) ?? 0,
+                                                threshold: pfloat(o["threshold"]) ?? 0,
+                                                target: pvec3(o["origin"]) ?? Vec3(x: 0, y: 0, z: 0)))
+            case "vortex":
+                ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),
+                                   distanceInner: pfloat(o["distanceinner"]) ?? 0,
+                                   distanceOuter: pfloat(o["distanceouter"]) ?? 0,
+                                   speedInner: pfloat(o["speedinner"]) ?? 0,
+                                   speedOuter: pfloat(o["speedouter"]) ?? 0,
+                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0)))
             case let other:
                 NSLog("%@", "[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
             }
@@ -158,8 +206,17 @@ public struct ParticleSystemDef: Equatable {
         var renderer: RendererKind = .unsupported("none")
         if let r0 = (json["renderer"] as? [Any])?.first as? [String: Any] {
             let n = r0["name"] as? String ?? "none"
-            if n == "sprite" { renderer = .sprite }
-            else { renderer = .unsupported(n); NSLog("%@", "[Waple] SP4 unsupported renderer (drawn as sprite): \(n)") }
+            switch n {
+            case "sprite": renderer = .sprite
+            case "spritetrail":
+                renderer = .spriteTrail(maxLength: pfloat(r0["maxlength"]) ?? 0, length: pfloat(r0["length"]) ?? 0)
+            case "rope":
+                renderer = .rope(subdivision: pint(r0["subdivision"]) ?? 0)
+            case "ropetrail":
+                renderer = .ropeTrail(length: pfloat(r0["length"]) ?? 0, subdivision: pint(r0["subdivision"]) ?? 0)
+            default:
+                renderer = .unsupported(n); NSLog("%@", "[Waple] SP4 unsupported renderer (drawn as sprite): \(n)")
+            }
         }
 
         return ParticleSystemDef(

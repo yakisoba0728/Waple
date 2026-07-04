@@ -38,6 +38,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let scale: SIMD2<Float>
         let texRatio: Float   // texH/texW (스프라이트 세로 비율)
         let order: Int        // scene objects[] 인덱스 — 레이어와 인터리브 z-순서
+        let isTrail: Bool     // spritetrail/rope/ropetrail — 히스토리 리본으로 드로우
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 스크립트는 초당 재평가 → 변경 시 재래스터.
     private struct GPUText {
@@ -617,7 +618,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 sim: ParticleSimulator(def: sp.def, seed: seed), def: sp.def, seed: seed,
                 texture: tex, blendAdditive: sp.def.material?.blend == .additive,
                 origin: SIMD2<Float>(sp.origin.x, sp.origin.y),
-                scale: SIMD2<Float>(sp.scale.x, sp.scale.y), texRatio: ratio, order: sp.order))
+                scale: SIMD2<Float>(sp.scale.x, sp.scale.y), texRatio: ratio, order: sp.order,
+                isTrail: sp.def.renderer.isTrail))
         }
         return out
     }
@@ -859,20 +861,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return true
     }
 
-    /// 파티클 스냅샷 → 인터리브드 쿼드 버텍스(정점당 8 float: ndc.xy, uv, rgba).
-    /// 빌보드: world_px = origin + scale⊙local(로컬 Y-up → 픽셀 Y-down 부호 반전), half=size_px/2.
+    /// 파티클 스냅샷 → 인터리브드 버텍스(정점당 8 float: ndc.xy, uv, rgba).
+    /// sprite = 빌보드 쿼드. trail = 위치 히스토리 폴리라인을 두께 있는 리본(삼각 스트립)으로.
     private func particleVertices(_ snapshot: [Particle], _ sys: GPUParticleSystem) -> [Float] {
         var verts: [Float] = []
-        verts.reserveCapacity(snapshot.count * 48)
-        for p in snapshot {
+        verts.reserveCapacity(snapshot.count * (sys.isTrail ? 200 : 48))
+        func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { (x / projW * 2 - 1, 1 - y / projH * 2) }
+        func appendQuad(_ p: Particle) {
             let wx = sys.origin.x + sys.scale.x * p.pos.x
             let wy = sys.origin.y - sys.scale.y * p.pos.y
             let sizePx = p.size * sys.scale.x
             let hw = sizePx * 0.5, hh = sizePx * sys.texRatio * 0.5
             let ca = cos(p.rotation.z), sa = sin(p.rotation.z)
             func ndc(_ lx: Float, _ ly: Float) -> (Float, Float) {
-                let x = wx + lx * ca - ly * sa, y = wy + lx * sa + ly * ca
-                return (x / projW * 2 - 1, 1 - y / projH * 2)
+                return toNDC(wx + lx * ca - ly * sa, wy + lx * sa + ly * ca)
             }
             let tl = ndc(-hw, -hh), tr = ndc(hw, -hh), br = ndc(hw, hh), bl = ndc(-hw, hh)
             let r = p.color.x, g = p.color.y, b = p.color.z, al = p.alpha
@@ -882,7 +884,68 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             v(tl, 0, 0); v(tr, 1, 0); v(br, 1, 1)
             v(tl, 0, 0); v(br, 1, 1); v(bl, 0, 1)
         }
+        for p in snapshot {
+            if sys.isTrail {
+                // 리본이 붕괴(정지 rope 등)면 false → 쿼드 폴백. inout verts 를 클로저와 동시
+                // 접근하지 않도록 순차 호출(Swift 배타적 접근 위반 방지).
+                if !appendRibbon(p, sys, into: &verts) { appendQuad(p) }
+            } else {
+                appendQuad(p)
+            }
+        }
         return verts
+    }
+
+    /// 파티클 위치 히스토리(oldest→newest) → 두께 있는 리본. 폭 = size_px, 텍스처 u 는 길이 방향,
+    /// v 는 가로. 알파는 tail(oldest)=0 → head(newest)=full 로 코멧 페이드. 세그먼트 접선의 수직으로
+    /// ±half-width 오프셋해 삼각 스트립을 만든다.
+    /// 붕괴(정지 rope, mouse-follow 헤드리스) 시 false 반환 → 호출자가 쿼드 폴백(NaN/블랭크 방지).
+    private func appendRibbon(_ p: Particle, _ sys: GPUParticleSystem, into verts: inout [Float]) -> Bool {
+        func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { (x / projW * 2 - 1, 1 - y / projH * 2) }
+        let h = p.history
+        // 월드 px 로 변환.
+        var pts: [(Float, Float)] = []
+        pts.reserveCapacity(h.count)
+        for q in h { pts.append((sys.origin.x + sys.scale.x * q.x, sys.origin.y - sys.scale.y * q.y)) }
+        // 유효 스팬 판정: bbox 대각선이 1px 미만이면 붕괴 → 쿼드.
+        guard pts.count >= 2 else { return false }
+        var minX = pts[0].0, maxX = pts[0].0, minY = pts[0].1, maxY = pts[0].1
+        for pt in pts { minX = min(minX, pt.0); maxX = max(maxX, pt.0); minY = min(minY, pt.1); maxY = max(maxY, pt.1) }
+        if (maxX - minX) + (maxY - minY) < 1 { return false }
+
+        let n = pts.count
+        let hw = max(0.5, p.size * sys.scale.x * 0.5)  // 리본 반폭(px)
+        let r = p.color.x, g = p.color.y, b = p.color.z
+        // 접선(중앙차분, 끝은 편차). 0-길이는 직전 유효 접선 계승(NaN 방지 — normalizeSafe 미러).
+        var lastT: (Float, Float) = (1, 0)
+        func tangent(_ i: Int) -> (Float, Float) {
+            let a = pts[max(0, i - 1)], c = pts[min(n - 1, i + 1)]
+            let dx = c.0 - a.0, dy = c.1 - a.1
+            let len = sqrtf(dx * dx + dy * dy)
+            if len > 1e-4 { lastT = (dx / len, dy / len) }
+            return lastT
+        }
+        // 각 히스토리 포인트의 좌/우 엣지 정점(ndc, u, alpha).
+        var edges: [(a: (Float, Float), bEdge: (Float, Float), u: Float, alpha: Float)] = []
+        edges.reserveCapacity(n)
+        for i in 0..<n {
+            let t = tangent(i)
+            let nx = -t.1 * hw, ny = t.0 * hw            // 수직 오프셋(px)
+            let A = toNDC(pts[i].0 + nx, pts[i].1 + ny)
+            let B = toNDC(pts[i].0 - nx, pts[i].1 - ny)
+            let u = Float(i) / Float(n - 1)
+            edges.append((A, B, u, p.alpha * u))          // tail(u=0)=투명 → head=불투명
+        }
+        func push(_ pt: (Float, Float), _ u: Float, _ vv: Float, _ al: Float) {
+            verts.append(contentsOf: [pt.0, pt.1, u, vv, r, g, b, al])
+        }
+        for i in 0..<(n - 1) {
+            let e0 = edges[i], e1 = edges[i + 1]
+            // 쿼드 (A0,B0,B1,A1) → 삼각 2개. u 는 길이, v 는 가로(0/1).
+            push(e0.a, e0.u, 0, e0.alpha); push(e0.bEdge, e0.u, 1, e0.alpha); push(e1.bEdge, e1.u, 1, e1.alpha)
+            push(e0.a, e0.u, 0, e0.alpha); push(e1.bEdge, e1.u, 1, e1.alpha); push(e1.a, e1.u, 0, e1.alpha)
+        }
+        return true
     }
 
     private func effectPipeline(source: String, device: MTLDevice) -> MTLRenderPipelineState? {
@@ -1273,13 +1336,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         guard !snapshot.isEmpty,
               let pipe = sys.blendAdditive ? additivePipeline : translucentPipeline else { return }
         let verts = particleVertices(snapshot, sys)
-        guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { return }
+        // 트레일은 파티클당 정점 수가 가변(붕괴 시 0) — 빈 버텍스면 드로우 스킵.
+        let vertexCount = verts.count / 8
+        guard vertexCount > 0,
+              let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { return }
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setFragmentTexture(sys.texture, index: 0)
-        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: snapshot.count * 6)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
     /// 효과가 있는 레이어는 원본 텍스처를 첫 src 로 삼아 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.

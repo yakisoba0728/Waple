@@ -88,6 +88,91 @@ final class ParticleSimulatorTests: XCTestCase {
         }
     }
 
+    // MARK: - 트레일 히스토리 / 힘 오퍼레이터
+
+    private func trailDef(renderer: RendererKind, velocity: Vec3 = Vec3(x: 100, y: 0, z: 0),
+                          operators extra: [ParticleOperator] = [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0)]) -> ParticleSystemDef {
+        ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .sizeRandom(min: 5, max: 5),
+                           .velocityRandom(min: velocity, max: velocity), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: extra, renderer: renderer, maxCount: 1, startTime: 0, material: nil)
+    }
+
+    func testTrailHistoryAccumulatesAndCaps() {
+        // rope → 16 샘플. 이동하는 파티클의 히스토리가 궤적을 따라 쌓이고 상한에서 클램프.
+        var sim = ParticleSimulator(def: trailDef(renderer: .rope(subdivision: 0)), seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<30 { last = sim.step(1.0 / 30.0) }
+        let p = last[0]
+        XCTAssertEqual(p.history.count, 16)                 // 상한 클램프
+        // oldest→newest 정렬, 마지막=현재 위치.
+        XCTAssertEqual(p.history.last!.x, p.pos.x, accuracy: 1e-4)
+        XCTAssertLessThan(p.history.first!.x, p.history.last!.x)  // 이동 방향(+x) 으로 단조 증가
+    }
+
+    func testSpriteRendererHasNoHistory() {
+        var sim = ParticleSimulator(def: trailDef(renderer: .sprite), seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<10 { last = sim.step(0.1) }
+        XCTAssertTrue(last[0].history.isEmpty)  // 스프라이트는 히스토리 미기록
+    }
+
+    func testStepZeroDoesNotDuplicateHistory() {
+        var sim = ParticleSimulator(def: trailDef(renderer: .rope(subdivision: 0)), seed: 1)
+        _ = sim.step(1.0 / 30.0)
+        let a = sim.step(1.0 / 30.0)[0].history.count
+        let b = sim.step(0)[0].history.count   // step(0) 는 히스토리 미기록
+        XCTAssertEqual(a, b)
+    }
+
+    func testControlPointAttractPullsTowardTarget() {
+        // 대상=원점, 파티클을 +x 로 스폰(velocityrandom 로 이동해 원점에서 멀어짐) 대신
+        // 원점에서 velocity 0, scale>0 인력 → 원점에 붙어 있으면 힘 0. 오프셋 스폰이 필요하므로
+        // box origin 을 x=100 에 두고 대상=0(기본) → -x 로 당겨져야.
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 100, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
+                        .controlPointAttract(scale: 1000, threshold: 0, target: Vec3(x: 0, y: 0, z: 0))],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<10 { last = sim.step(0.05) }
+        XCTAssertLessThan(last[0].vel.x, 0)       // 원점(-x) 방향으로 가속
+        XCTAssertLessThan(last[0].pos.x, 100)     // 실제로 원점 쪽으로 이동
+    }
+
+    func testControlPointAttractRepelsWithNegativeScale() {
+        // scale<0 → 대상에서 밀려남(원점 근처 스폰 → +로 밀림). 유계(속도 상한 미붕괴).
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 10, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
+                        .controlPointAttract(scale: -800, threshold: 64, target: Vec3(x: 0, y: 0, z: 0))],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<50 { last = sim.step(0.05) }
+        XCTAssertGreaterThan(last[0].pos.x, 10)                    // 대상에서 멀어짐(+x)
+        XCTAssertLessThan(simd_length(last[0].vel), 5001)         // 속도 상한으로 유계
+        XCTAssertFalse(last[0].pos.x.isNaN)
+    }
+
+    func testVortexAddsTangentialVelocity() {
+        // z축 소용돌이, 중심=원점, x=50 에 스폰(반경 50). speedInner=200 → +y 접선(axis×radial).
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 50, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
+                        .vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 0,
+                                speedInner: 200, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        let a = sim.step(0.05)
+        XCTAssertGreaterThan(a[0].vel.y, 0)  // cross(z, +x) = +y → 접선 속도 +y
+    }
+
     func testColorNormalization() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],

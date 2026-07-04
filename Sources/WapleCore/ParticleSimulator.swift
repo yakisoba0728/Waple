@@ -20,6 +20,9 @@ public struct Particle {
     var oscPosFreq: Float = 0, oscPosScale: Float = 0, oscPosPhase: Float = 0
     var oscPosMask = SIMD3<Float>(0, 0, 0)
     var oscAlphaFreq: Float = 0, oscAlphaScale: Float = 0, oscAlphaPhase: Float = 0
+    /// 트레일 렌더러용 최근 위치 히스토리(로컬 Y-up). oldest→newest, 마지막=현재 위치.
+    /// 스프라이트 렌더러에서는 비어 있다(불필요 복사 회피).
+    public var history: [SIMD3<Float>] = []
     public init() {}
 }
 
@@ -39,6 +42,12 @@ public struct ParticleSimulator {
     private let alphaFade: (fin: Float, fout: Float)?
     private let oscPosOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float, mask: SIMD3<Float>)?
     private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float)?
+    private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>)]
+    private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float, offset: SIMD3<Float>)]
+    // 트레일 히스토리 설정(스프라이트면 0 → 미기록).
+    private let trailSamples: Int
+    // controlpointattract/vortex 가 있으면 속도 상한(폭주 방지, px/s).
+    private let speedCap: Float?
 
     public init(def: ParticleSystemDef, seed: UInt64) {
         self.def = def
@@ -52,6 +61,8 @@ public struct ParticleSimulator {
         var af: (Float, Float)? = nil
         var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
         var oa: (Float, Float, Float, Float)? = nil
+        var attr: [(Float, Float, SIMD3<Float>)] = []
+        var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>)] = []
         for op in def.operators {
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
@@ -63,6 +74,10 @@ public struct ParticleSimulator {
                 if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
             case let .oscillateAlpha(fmin, fmax, smin, smax):
                 if oa == nil { oa = (fmin, fmax, smin, smax) }
+            case let .controlPointAttract(scale, threshold, target):
+                attr.append((scale, threshold, s3(target)))
+            case let .vortex(axis, dIn, dOut, sIn, sOut, offset):
+                vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset)))
             }
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
@@ -72,6 +87,10 @@ public struct ParticleSimulator {
         alphaFade = af.map { (fin: $0.0, fout: $0.1) }
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3) }
+        attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2) }
+        vortices = vort.map { (axis: $0.0, dIn: $0.1, dOut: $0.2, sIn: $0.3, sOut: $0.4, offset: $0.5) }
+        trailSamples = def.renderer.trailSampleCount
+        speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
     }
 
     public var liveCount: Int { particles.count }
@@ -90,9 +109,16 @@ public struct ParticleSimulator {
                 if particles.count >= def.maxCount { acc[i] = min(acc[i], 1) }  // 누적 폭주 방지
             }
         }
-        // 적분(movement/angularMovement) + 노화.
+        // 적분(controlpointattract/vortex 힘 → movement/angularMovement) + 노화.
         for k in particles.indices {
             particles[k].age += dt
+            // 힘 오퍼레이터는 movement 적분 전에 속도를 갱신(같은 step 위치에 반영).
+            for a in attractors { applyAttract(a, to: &particles[k].vel, pos: particles[k].pos, dt: dt) }
+            for v in vortices { applyVortex(v, to: &particles[k].vel, pos: particles[k].pos, dt: dt) }
+            if let cap = speedCap {
+                let sp = simd_length(particles[k].vel)
+                if sp > cap { particles[k].vel *= cap / sp }
+            }
             for m in movements {
                 particles[k].vel += m.gravity * dt
                 if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
@@ -101,6 +127,13 @@ public struct ParticleSimulator {
             for f in angulars {
                 particles[k].angularVel += f * dt
                 particles[k].rotation += particles[k].angularVel * dt
+            }
+            // 트레일 위치 히스토리(dt>0 만 — step(0) 스냅샷 중복 방지). 링버퍼로 trailSamples 유지.
+            if trailSamples > 0, dt > 0 {
+                particles[k].history.append(particles[k].pos)
+                if particles[k].history.count > trailSamples {
+                    particles[k].history.removeFirst(particles[k].history.count - trailSamples)
+                }
             }
         }
         // 컬.
@@ -134,7 +167,38 @@ public struct ParticleSimulator {
             p.oscAlphaScale = rng.range(o.smin, o.smax)
             p.oscAlphaPhase = rng.nextFloat() * 2 * .pi
         }
+        if trailSamples > 0 { p.history = [p.pos] }  // 스폰 위치를 트레일 시작점으로.
         return p
+    }
+
+    // MARK: - 힘 오퍼레이터(가정: 실물 파라미터명에서 도출 — 물리 정밀 불요, 유계성 우선)
+
+    /// controlpointattract: 대상(헤드리스=origin, 기본 0)을 향한(scale>0)/반대(scale<0) 가속.
+    /// 감쇠 = min(1, threshold/dist) → 근접 시 최대, 멀수록 1/r 로 약화(폭주 억제). |scale|=px/s^2.
+    private func applyAttract(_ a: (scale: Float, threshold: Float, target: SIMD3<Float>),
+                              to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) {
+        let d = a.target - pos
+        let dist = simd_length(d)
+        guard dist > 1e-4 else { return }
+        let dir = d / dist
+        let atten: Float = a.threshold > 0 ? min(1, a.threshold / dist) : 1
+        vel += dir * (a.scale * atten) * dt
+    }
+
+    /// vortex: axis 를 회전축, offset 를 중심으로 하는 소용돌이. 회전면 반경 dist 에 따라
+    /// speedInner(distanceInner)→speedOuter(distanceOuter) 보간한 접선 속도를 가속으로 부여.
+    private func applyVortex(_ v: (axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float, offset: SIMD3<Float>),
+                             to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) {
+        let axisN = normalizeSafe(v.axis)
+        guard simd_length(axisN) > 1e-6 else { return }
+        let rel = pos - v.offset
+        let radial = rel - axisN * simd_dot(rel, axisN)
+        let dist = simd_length(radial)
+        guard dist > 1e-4 else { return }
+        let t: Float = v.dOut > v.dIn ? max(0, min(1, (dist - v.dIn) / (v.dOut - v.dIn))) : 0
+        let speed = v.sIn + (v.sOut - v.sIn) * t
+        let tangent = normalizeSafe(simd_cross(axisN, radial))
+        vel += tangent * speed * dt
     }
 
     private mutating func apply(_ ini: Initializer, to p: inout Particle) {
