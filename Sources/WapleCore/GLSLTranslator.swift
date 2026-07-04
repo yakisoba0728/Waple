@@ -726,10 +726,10 @@ public enum GLSLTranslator {
         while changed {
             changed = false
             for h in helpers {
-                var refs = refsOf[h.name]!
+                var refs = refsOf[h.name] ?? []
                 for g in helpers where g.name != h.name && refs.contains(g.name) {
                     let before = refs.count
-                    refs.formUnion(refsOf[g.name]!.subtracting(helperNames))
+                    refs.formUnion((refsOf[g.name] ?? []).subtracting(helperNames))
                     if refs.count != before { changed = true }
                 }
                 refsOf[h.name] = refs
@@ -737,7 +737,7 @@ public enum GLSLTranslator {
         }
         var out: [String: [Capture]] = [:]
         for h in helpers {
-            let refs = refsOf[h.name]!
+            let refs = refsOf[h.name] ?? []
             var caps: [Capture] = []
             for (i, m) in materials.enumerated() where refs.contains(m.glslName) { caps.append(.material(i)) }
             for name in refs.filter({ isEngine($0) && !$0.contains("AudioSpectrum") }).sorted() { caps.append(.engine(name)) }
