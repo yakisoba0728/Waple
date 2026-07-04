@@ -3,6 +3,28 @@ import MetalKit
 import simd
 import WapleCore
 
+/// per-frame 갱신 정점의 재사용 버퍼(3-슬롯 링). 매 프레임 makeBuffer 신규 할당(30fps × 레이어/
+/// 파티클 수) 대신 기존 버퍼에 memcpy 하고 **크기 부족 시에만 재할당**. 슬롯 로테이션은 in-flight
+/// GPU 프레임(MTKView drawable 최대 3장)이 아직 읽고 있는 버퍼를 CPU 가 덮어쓰는 경합을 회피한다
+/// (setVertexBytes 와 달리 setVertexBuffer 는 GPU 실행 시점에 내용을 읽는다).
+final class DynamicVertexBuffer {
+    private var slots: [MTLBuffer?] = [nil, nil, nil]
+    private var cursor = 0
+    /// data 를 다음 슬롯 버퍼에 적재해 반환(부족 시에만 재할당). 빈 배열 → nil.
+    func load<T>(_ data: [T], device: MTLDevice) -> MTLBuffer? {
+        let length = MemoryLayout<T>.stride * data.count
+        guard length > 0 else { return nil }
+        cursor = (cursor + 1) % slots.count
+        if let b = slots[cursor], b.length >= length {
+            data.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, length) }
+            return b
+        }
+        let b = data.withUnsafeBytes { device.makeBuffer(bytes: $0.baseAddress!, length: length) }
+        slots[cursor] = b
+        return b
+    }
+}
+
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     private struct AudioParams { let mode: Int; let freqMin: Float; let freqMax: Float; let bounds: SIMD2<Float>; let power: Float; let multiply: Float }
     /// 효과 바인딩: 손-포팅(기존 규약: float* P buffer(0) + aux texture(1+) + audioResp buffer(1))
@@ -26,7 +48,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         case translated(passes: [TranslatedPass], fboScales: [Int])
     }
     private struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
-    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true }
+    private struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용 */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
     private var hasAnimations = false
     private struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -39,6 +61,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let texRatio: Float   // texH/texW (스프라이트 세로 비율)
         let order: Int        // scene objects[] 인덱스 — 레이어와 인터리브 z-순서
         let isTrail: Bool     // spritetrail/rope/ropetrail — 히스토리 리본으로 드로우
+        let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 스크립트는 초당 재평가 → 변경 시 재래스터.
     private struct GPUText {
@@ -1642,7 +1665,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             if def.animations["origin"] != nil || def.animations["scale"] != nil || def.animations["angles"] != nil {
                 let verts = quadVertices(origin: origin, size: def.size, scale: scale, angleZ: angle,
                                          projW: projW, projH: projH)
-                if let b = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) {
+                if let b = layer.scratchQuad.load(verts, device: device) {
                     vbuf = b
                 }
             }
@@ -1677,8 +1700,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let verts = SceneRenderer.puppetVertices(model: pm, positions: pos,
                                                      origin: def.origin, scale: def.scale, angleZ: def.angleZ,
                                                      projW: projW, projH: projH)
-            if !verts.isEmpty,
-               let b = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) {
+            if !verts.isEmpty, let b = layer.scratchSkin.load(verts, device: device) {
                 vbuf = b
                 vertexCount = verts.count
             }
@@ -1788,8 +1810,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let verts = particleVertices(snapshot, sys)
         // 트레일은 파티클당 정점 수가 가변(붕괴 시 0) — 빈 버텍스면 드로우 스킵.
         let vertexCount = verts.count / 8
-        guard vertexCount > 0,
-              let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { return }
+        guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { return }
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
