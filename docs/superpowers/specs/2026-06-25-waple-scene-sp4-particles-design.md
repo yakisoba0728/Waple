@@ -7,11 +7,21 @@
 
 ---
 
+## 상태(2026-07-04) — 파티클 z-순서 인터리브로 개선됨
+
+SP4 본체(파싱·시뮬레이터·헤드리스 PNG 하니스·렌더 통합)는 구현·병합됨. 갱신 요점:
+
+- **파티클 z-순서 [완료/변경]**: §3.3·§5 는 파티클을 "이미지 레이어 위, present 전"에 그린다고 명시(= 항상 최상단). 이후 `2026-07-02-…glsl-stage2-design.md` §"파티클 z-순서"에서 **씬 오브젝트 순서를 보존해 레이어·파티클을 인터리브 드로우**하도록 수정됨(SceneDocument 가 오브젝트 순서 보존, 렌더러가 order 로 정렬). 이제 전경 레이어가 파티클을 가릴 수 있다. 따라서 §3.3/§5 의 "파티클이 항상 이미지 레이어 위" 서술은 폐기.
+- **실측 GT 경로**: §1 의 `~/Downloads/assets` 는 현재 `~/Downloads/wallpaper_dev/assets`(공유 에셋 팩). 씬 코퍼스는 `~/Downloads/wallpaper_dev/backgrounds`.
+- 후속 operator(turbulence 등)·spritetrail/rope 는 별도 사이클에서 진행.
+
+---
+
 ## 0. 핵심 발견: 데스크탑 없이 시각 자체검증 가능
 오프스크린 `MTLTexture`에 렌더 → `getBytes` → `NSBitmapImageRep`로 PNG 인코드 → `/tmp/*.png` → Read 도구로 확인.
 라이브 데스크탑을 건드리지 않으므로 가림 여부와 무관. **이 헤드리스 렌더 하니스를 Task 1로 먼저 구축**하고, 이후 모든 단계에서 "눈사람이 아래로 떨어지나" 같은 실제 시각 확인을 **에이전트가 직접** 수행한다(사용자 개입 불필요). t≈0 은 비어 있으므로 t≈2/5/10s 덤프.
 
-## 1. 정찰 결과 (실제 데이터, /Users/yakisoba/Downloads/assets)
+## 1. 정찰 결과 (실제 데이터, /Users/yakisoba/Downloads/assets) [경로 갱신 2026-07-04: 현 공유 에셋 `~/Downloads/wallpaper_dev/assets`]
 - 씬 오브젝트(파티클): `{name, particle:"particles/X.json", origin, scale, id, instanceoverride}` — `image` 대신 `particle` 키.
 - 파티클 JSON: `{emitter:[…], initializer:[…], operator:[…], renderer:[…], material:"materials/…json", maxcount, starttime, controlpoint:[…]}`.
 - 빈도 census(presets 전체):
@@ -52,7 +62,7 @@
 ### 3.3 렌더 (WapleRender, Metal)
 - `ParticleShaders`(MSL): vert `pv_main`(per-vertex: posNDCpx, uv, rgba; camOffset/aspectScale 유니폼 — 기존 패턴), frag `pf_main`(albedo×color, alpha). 별도 라이브러리.
 - `SceneRenderer` 통합: `struct GPUParticleSystem { var sim:ParticleSimulator; let texture:MTLTexture; let blendAdditive:Bool; let origin:SIMD2<Float>; let scale:SIMD2<Float> }`.
-  - 매 프레임: `sim.step(dt)` → 살아있는 파티클을 CPU에서 쿼드 6버텍스로 전개(billboard: half=size_px/2, 세로 half=size_px*texRatio/2, z회전), 씬 px→NDC, rgba 포함 → 동적 vertex buffer. additive/translucent 파이프라인으로 그림(이미지 레이어 위, present 전).
+  - 매 프레임: `sim.step(dt)` → 살아있는 파티클을 CPU에서 쿼드 6버텍스로 전개(billboard: half=size_px/2, 세로 half=size_px*texRatio/2, z회전), 씬 px→NDC, rgba 포함 → 동적 vertex buffer. additive/translucent 파이프라인으로 그림(이미지 레이어 위, present 전). [폐기 2026-07-04: 씬 순서로 레이어·파티클 인터리브 드로우로 변경 — glsl-stage2 참조]
   - 파티클 존재 시 `hasParticles=true` → 뷰 unpause(effects 와 동일 경로). dt 는 프레임 간 실시간 델타(상한 클램프).
 - 블렌딩: additive(`src=one, dst=one`), translucent(`src=srcAlpha, dst=oneMinusSrcAlpha`).
 

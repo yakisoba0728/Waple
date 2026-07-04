@@ -37,7 +37,7 @@ Wallpaper Engine(Windows)에서 받은 배경화면 폴더를 macOS로 가져와
 
 ## 3. 정찰 결과 (Ground Truth)
 
-실제 자산 두 폴더를 분석해 확정한 사실. (`/Users/yakisoba/Downloads/assets`, `/Users/yakisoba/Downloads/packages`)
+실제 자산 두 폴더를 분석해 확정한 사실. (`/Users/yakisoba/Downloads/assets`, `/Users/yakisoba/Downloads/packages`) [경로 갱신 2026-07-04: 현 위치 `~/Downloads/wallpaper_dev/assets`(공유 에셋), `~/Downloads/wallpaper_dev/backgrounds`(배경 코퍼스)]
 
 ### 3.1 `assets/` = WE 엔진 내장 공유 자산
 사용자 배경이 아님. 셰이더·머티리얼·파티클·폰트·에디터 씬. **동영상 0개.**

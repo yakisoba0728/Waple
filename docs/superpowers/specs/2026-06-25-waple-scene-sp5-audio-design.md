@@ -7,6 +7,15 @@
 
 ---
 
+## 상태(2026-07-04) — 본체 구현 + "보류"였던 트랜스파일러도 완료
+
+SP5 본체(AudioResponse 리듀서·16빈 스펙트럼·pulse·applyBlending·tint 수정)는 구현·병합됨. 갱신 요점:
+
+- **§5 "GLSL→MSL 트랜스파일러(다개월 규모)로 보류" [완료]**: 범위 밖으로 미룬 트랜스파일러가 이후 실제로 **구현되었다** — `2026-06-25-…glsl-to-msl-design.md`(Stage 1) + `2026-07-02-…glsl-stage2-design.md`(Stage 2). 임의 워크샵 GLSL 효과는 이제 전처리기·콤보·include·헬퍼 캡처를 거쳐 MSL 로 번역되고, 실패 시에만 손-포팅/스킵 폴백한다(`Sources/WapleCore/{ShaderPreprocessor,GLSLTranslator}.swift`). "프로젝트 성격을 바꾸는 다개월 분기 → 사용자 결정 보류" 판단은 무효.
+- 나머지(오디오 식·blend enum·라이브 TCC 권한)는 유효.
+
+---
+
 ## 1. 정찰 결과(실데이터: effects/pulse stock 셰이더)
 - 오디오-반응은 scene.json 효과 패스의 `combos.AUDIOPROCESSING`(0=off,1=L,2=R,3=L+R평균) + constants(audioamount/audiobounds/audioexponent, frequencymin/max)로 선언. 18개 씬에서 사용.
 - 스펙트럼 유니폼: `g_AudioSpectrum16Left[16]`, `g_AudioSpectrum16Right[16]` (채널당 16빈).
@@ -60,5 +69,5 @@
 - 권한 거부/무오디오 → 0 스펙트럼(배경 계속 렌더). audioMode 미지원 효과 → 무시. 무크래시.
 
 ## 5. 범위 밖 (FYI — 전략적 천장)
-- **임의 워크샵 GLSL 셰이더**(audio_responsive_oscilloscope 27KB 등)는 pkg에 GLSL 소스로 존재하나, 렌더하려면 **GLSL→MSL 트랜스파일러**(SPIRV-Cross + WE 전처리기/콤보/include 재구현, 다개월 규모)가 필요. 이는 프로젝트 성격을 바꾸는 분기 → 사용자 결정 사항으로 보류. 스톡 효과(effects/*)는 손-포팅으로 커버 가능(러닝웨이 충분).
+- **임의 워크샵 GLSL 셰이더** — [완료 2026-07-04: 트랜스파일러 구현됨, glsl-to-msl(Stage 1)+glsl-stage2(Stage 2)]: (audio_responsive_oscilloscope 27KB 등)는 pkg에 GLSL 소스로 존재하나, 렌더하려면 **GLSL→MSL 트랜스파일러**(SPIRV-Cross + WE 전처리기/콤보/include 재구현, 다개월 규모)가 필요. 이는 프로젝트 성격을 바꾸는 분기 → 사용자 결정 사항으로 보류. 스톡 효과(effects/*)는 손-포팅으로 커버 가능(러닝웨이 충분).
 - 스크립트 기반 속성(constantshadervalues/*/script JS), 스테레오 분리, 전체 32 blend mode(흔한 것만), 다른 스톡 오디오 효과(이후).

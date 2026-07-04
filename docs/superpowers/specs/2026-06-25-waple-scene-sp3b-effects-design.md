@@ -57,5 +57,5 @@ SP3a 효과 프레임워크에 흔한 스톡 효과 3종(scroll/opacity/tint)을
   - waterwaves: **풀-마스크 씬(예 2842323353)** 에서 물결이 뚜렷한지(마스크 정확성 검증).
 
 ## 8. 범위 밖
-- waterripple/shake(추가 텍스처 슬롯: 노멀/flow, 마스크 g_Texture2), tint 블렌드모드 다양화, common_blending.h/combo, 사용자 효과-강도 설정 → SP3c+.
+- waterripple/shake(추가 텍스처 슬롯: 노멀/flow, 마스크 g_Texture2), tint 블렌드모드 다양화, common_blending.h/combo, 사용자 효과-강도 설정 → SP3c+. [완료 2026-07-04: waterripple(SP3c)·shake(EffectShaders) 모두 구현됨]
 - 파티클(SP4)·오디오(SP5)·퍼펫(SP6).

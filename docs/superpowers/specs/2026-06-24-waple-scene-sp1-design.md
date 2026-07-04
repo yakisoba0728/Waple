@@ -7,6 +7,16 @@
 
 ---
 
+## 상태(2026-07-04) — 구현이 본 설계를 초과함
+
+이 문서는 SP1 착수 시점의 설계다. 이후 SP1.5–SP6 구현이 본 범위를 크게 넘어섰다. 현행 요점:
+
+- **experimental 게이트 [폐기]**: `RendererFactory.experimentalSceneEnabled` 플래그는 **코드에 존재하지 않는다**(SP1.5 에서 제거 — `2026-06-24-…sp1_5-design.md` §4). `.scene` 은 항상 `SceneRenderer` 로 라우팅되는 **정식 경로**다(`Sources/WapleRender/RendererFactory.swift`: `case .scene: return SceneRenderer()`). 따라서 §4 다이어그램·§5.6·§6·§8 마지막 행·§11 의 "실험 플래그 ON일 때만 / 사용자 미노출 / 부분 렌더 방지 게이트" 서술은 폐기.
+- **SP 로드맵 [완료]**: §2 의 SP2(BC3/패럴랙스)·SP3(효과+shake)·SP4(파티클)·SP5(오디오)·SP6(퍼펫/3D) 전부 구현됨. §10 "향후" 대부분 완료.
+- **실측 GT 경로**: §3 의 `~/Downloads/packages` 코퍼스는 현재 `~/Downloads/wallpaper_dev/backgrounds` 로 이동, 공유 에셋 팩은 `~/Downloads/wallpaper_dev/assets`.
+
+---
+
 ## 1. 개요 / 목표
 
 Wallpaper Engine `type:"scene"` 중 **정적 이미지 씬**을 macOS 데스크탑에 렌더한다.
@@ -34,7 +44,7 @@ Wallpaper Engine `type:"scene"` 중 **정적 이미지 씬**을 macOS 데스크�
 
 ## 3. 정찰 결과 (Ground Truth)
 
-`/Users/yakisoba/Downloads/packages` 31개 씬 + 실제 타깃 분석으로 확정.
+`/Users/yakisoba/Downloads/packages` 31개 씬 + 실제 타깃 분석으로 확정. [경로 갱신 2026-07-04: 현 코퍼스 `~/Downloads/wallpaper_dev/backgrounds`]
 
 ### 3.1 `.pkg` 포맷 (전 버전 0001~0024 동일, 31개 검증)
 리틀엔디언:
@@ -142,7 +152,7 @@ SceneRenderer (MTKView, WallpaperRenderer)
 - `MTKView`는 `isPaused=true` + `enableSetNeedsDisplay=true`(정적 온디맨드 드로우 → 가림 스로틀링 무관).
 - `pause/resume/teardown` 구현(정적이라 pause는 no-op 수준, teardown은 뷰·리소스 해제).
 
-### 5.6 `RendererFactory` 확장
+### 5.6 `RendererFactory` 확장  — [폐기 2026-07-04: 플래그 미채택, `.scene` 은 항상 SceneRenderer 정식 라우팅]
 - `static var experimentalSceneEnabled = false`. true일 때만 `.scene` → `SceneRenderer`.
 - 기본(false)에선 `.scene`은 기존대로 nil(라이브러리에 "지원 예정"). **SP1은 사용자 미노출**(부분 렌더 방지).
 
