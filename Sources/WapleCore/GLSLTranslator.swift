@@ -273,7 +273,7 @@ public enum GLSLTranslator {
                 if let f = translateBody(line, symbols: fragMap, isFragment: false) { fragLocalConsts += f + "\n" }
                 if let v = translateBody(line, symbols: vertMap, isFragment: false) { vertLocalConsts += v + "\n" }
             } else {
-                let translated = replaceIdentifiers(line, typeAndMacroRenames())
+                let translated = rewriteArrayConstructors(replaceIdentifiers(line, typeAndMacroRenames()))
                 consts.append("constant " + translated.dropFirst("const ".count))
             }
         }
@@ -541,14 +541,16 @@ public enum GLSLTranslator {
         name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
             || name.hasPrefix("g_AudioSpectrum")
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Resolution"))
-            || (name.hasPrefix("g_") && name.hasSuffix("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder)
+            || (name.hasPrefix("g_") && name.contains("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder);
+                                                                   // ...MatrixInverse/...MatrixInverseTranspose 변형 포함(실물 depthparallax)
     }
     static func engineReplacement(_ name: String) -> String {
         if name == "g_Time" { return "eng.timeAndPad.x" }
         if name == "g_PointerPosition" { return "eng.timeAndPad.yz" }  // 마우스 UV(0..1), 미구동 시 0.5,0.5
         if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
-        // 레이어 모델/기타 행렬: 효과 쿼드 기준 항등이 정답(레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확).
-        if name.hasPrefix("g_"), name.hasSuffix("Matrix") { return "float4x4(1.0)" }
+        // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
+        // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
+        if name.hasPrefix("g_"), name.contains("Matrix") { return "float4x4(1.0)" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
         if name == "g_AudioSpectrum16Right" { return "audioR" }
         if name == "g_AudioSpectrum32Left" { return "audioL32" }
@@ -741,7 +743,7 @@ public enum GLSLTranslator {
         switch cap {
         case .material(let i): return "\(materials[i].type.msl) \(materials[i].glslName)"
         case .engine(let n):
-            let t = n == "g_ModelViewProjectionMatrix" ? "float4x4"
+            let t = n.contains("Matrix") ? "float4x4"
                 : (n.hasSuffix("Resolution") ? "float4" : (n == "g_PointerPosition" ? "float2" : "float"))
             return "\(t) \(n)"
         case .varying(let n, let t): return "\(t.msl) \(n)"
@@ -798,6 +800,11 @@ public enum GLSLTranslator {
         inline float2 we_uv(float3 v) { return v.xy; }
         inline float2 we_uv(float4 v) { return v.xy; }
         inline float2 we_uv(float v) { return float2(v); }
+        // CAST3X3(x): GLSL mat3(x) 대응. mat4→상단 3x3 절단(MSL 엔 float3x3(float4x4) 생성자 부재),
+        // mat3→통과(실물 depthparallax 의 g_EffectTextureProjectionMatrixInverse 회전 추출).
+        inline float3x3 we_cast3x3(float4x4 m) { return float3x3(m[0].xyz, m[1].xyz, m[2].xyz); }
+        inline float3x3 we_cast3x3(float3x3 m) { return m; }
+        inline float3x3 we_cast3x3(float s) { return float3x3(s); }  // mat3(scalar)=대각(GLSL 단일 스칼라)
         // GLSL mod(x,y) = x - y*floor(x/y) — fmod 와 달리 음수에서 항상 y 부호(오프셋 스크롤 등에 중요).
         inline float we_mod(float x, float y) { return x - y * metal::floor(x / y); }
         inline float2 we_mod(float2 x, float y) { return x - y * metal::floor(x / y); }
@@ -849,6 +856,48 @@ public enum GLSLTranslator {
 
     private static func indent(_ s: String) -> String {
         s.split(separator: "\n", omittingEmptySubsequences: false).map { "    " + $0 }.joined(separator: "\n")
+    }
+
+    /// GLSL 배열 생성자 `TYPE[N](e0, e1, ...)` → MSL brace-init `{ e0, e1, ... }`.
+    /// MSL 은 `float2[22](...)` 형식을 지원하지 않는다(실물 bokeh 의 커널 상수 배열). 선언 LHS(`x[22] =`)는
+    /// `]` 뒤가 `(` 가 아니라 미검출; 배열 인덱싱(`arr[i]`)도 `](` 인접이 아니라 안전. 중첩도 재귀 처리.
+    static func rewriteArrayConstructors(_ src: String) -> String {
+        let chars = Array(src)
+        var out: [Character] = []
+        var i = 0
+        let n = chars.count
+        func isIdent(_ c: Character) -> Bool { c == "_" || c.isLetter || c.isNumber }
+        while i < n {
+            let c = chars[i]
+            if (c.isLetter || c == "_"), out.isEmpty || !isIdent(out.last!) {
+                var j = i
+                while j < n && isIdent(chars[j]) { j += 1 }
+                var k = j
+                while k < n && chars[k] == " " { k += 1 }
+                if k < n && chars[k] == "[" {
+                    var depth = 1, m = k + 1
+                    while m < n && depth > 0 { if chars[m] == "[" { depth += 1 } else if chars[m] == "]" { depth -= 1 }; m += 1 }
+                    var q = m
+                    while q < n && chars[q] == " " { q += 1 }
+                    if depth == 0 && q < n && chars[q] == "(" {
+                        var pdepth = 1, r = q + 1
+                        while r < n && pdepth > 0 { if chars[r] == "(" { pdepth += 1 } else if chars[r] == ")" { pdepth -= 1 }; r += 1 }
+                        let inner = String(chars[(q + 1)..<(r - 1)])
+                        out.append(contentsOf: "{ ")
+                        out.append(contentsOf: rewriteArrayConstructors(inner))
+                        out.append(contentsOf: " }")
+                        i = r
+                        continue
+                    }
+                }
+                out.append(contentsOf: chars[i..<j])
+                i = j
+                continue
+            }
+            out.append(c)
+            i += 1
+        }
+        return String(out)
     }
 
     // MARK: - 저수준 문자열 도구
