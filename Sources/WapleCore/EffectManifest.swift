@@ -14,8 +14,12 @@ public struct EffectManifest: Equatable {
         public let shader: String?     // 직지정 스타일(passes[0].shader)
         public let target: String?     // fbo 이름 | nil(효과 출력)
         public let binds: [Bind]
-        public init(material: String?, shader: String?, target: String?, binds: [Bind]) {
+        public let command: String?    // "copy" 등 셰이더 없는 명령 패스(실물 motionblur 의 buffer 지속)
+        public let source: String?     // command=copy 의 원본 fbo 이름
+        public init(material: String?, shader: String?, target: String?, binds: [Bind],
+                    command: String? = nil, source: String? = nil) {
             self.material = material; self.shader = shader; self.target = target; self.binds = binds
+            self.command = command; self.source = source
         }
     }
     public struct FBO: Equatable {
@@ -42,7 +46,9 @@ public struct EffectManifest: Equatable {
             passes.append(Pass(material: p["material"] as? String,
                                shader: p["shader"] as? String,
                                target: p["target"] as? String,
-                               binds: binds))
+                               binds: binds,
+                               command: p["command"] as? String,
+                               source: p["source"] as? String))
         }
         var fbos: [FBO] = []
         for f in (obj["fbos"] as? [[String: Any]]) ?? [] {

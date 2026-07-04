@@ -41,4 +41,16 @@ final class EffectManifestTests: XCTestCase {
         XCTAssertNil(m.passes[0].material)
         XCTAssertTrue(m.fbos.isEmpty)
     }
+
+    /// 실물 motionblur 의 command=copy 패스(셰이더 없이 source fbo → target fbo 지속).
+    func testCopyCommandPass() throws {
+        let json = #"{"passes":[{"material":"m.json","target":"_b2"},{"command":"copy","target":"_b1","source":"_b2"},{"material":"c.json"}],"fbos":[{"name":"_b1","scale":1},{"name":"_b2","scale":1}]}"#
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.passes.count, 3)
+        XCTAssertEqual(m.passes[1].command, "copy")
+        XCTAssertEqual(m.passes[1].source, "_b2")
+        XCTAssertEqual(m.passes[1].target, "_b1")
+        XCTAssertNil(m.passes[1].material)
+        XCTAssertNil(m.passes[0].command)
+    }
 }
