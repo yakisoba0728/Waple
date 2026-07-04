@@ -1,6 +1,9 @@
 import Foundation
 
 public enum DXT5Decoder {
+    /// 565 엔드포인트 채널 정수 보간(4-색 팔레트 슬롯 t=1,2). BC3/BC1 공용.
+    private static func lerp3(_ x: Int, _ y: Int, _ t: Int) -> Int { (x * (3 - t) + y * t) / 3 }
+
     /// DXT5(BC3) 블록 → RGBA8888. blocks 크기는 ((w+3)/4)*((h+3)/4)*16 이어야 함.
     public static func decode(_ blocks: Data, width: Int, height: Int) -> Data? {
         // bx/by 계산 전에 차원을 검증해야 bx*by*16 / width*height*4 정수 오버플로 트랩(크래시)을 방지한다.
@@ -34,11 +37,10 @@ public enum DXT5Decoder {
                 // --- color (BC1, DXT5 always 4-color) ---
                 let c0 = u16(o + 8), c1 = u16(o + 10)
                 let (r0, g0, b0) = color565(c0), (r1, g1, b1) = color565(c1)
-                func lerp(_ x: Int, _ y: Int, _ t: Int) -> Int { (x * (3 - t) + y * t) / 3 }
                 let palette: [(Int, Int, Int)] = [
                     (r0, g0, b0), (r1, g1, b1),
-                    (lerp(r0, r1, 1), lerp(g0, g1, 1), lerp(b0, b1, 1)),
-                    (lerp(r0, r1, 2), lerp(g0, g1, 2), lerp(b0, b1, 2)),
+                    (lerp3(r0, r1, 1), lerp3(g0, g1, 1), lerp3(b0, b1, 1)),
+                    (lerp3(r0, r1, 2), lerp3(g0, g1, 2), lerp3(b0, b1, 2)),
                 ]
                 let cbits = UInt32(src[o + 12]) | (UInt32(src[o + 13]) << 8) | (UInt32(src[o + 14]) << 16) | (UInt32(src[o + 15]) << 24)
                 for py in 0..<4 {
@@ -82,10 +84,9 @@ public enum DXT5Decoder {
                 let (r0, g0, b0) = color565(c0), (r1, g1, b1) = color565(c1)
                 var palette: [(Int, Int, Int, Int)]
                 if c0 > c1 {
-                    func lerp(_ x: Int, _ y: Int, _ t: Int) -> Int { (x * (3 - t) + y * t) / 3 }
                     palette = [(r0, g0, b0, 255), (r1, g1, b1, 255),
-                               (lerp(r0, r1, 1), lerp(g0, g1, 1), lerp(b0, b1, 1), 255),
-                               (lerp(r0, r1, 2), lerp(g0, g1, 2), lerp(b0, b1, 2), 255)]
+                               (lerp3(r0, r1, 1), lerp3(g0, g1, 1), lerp3(b0, b1, 1), 255),
+                               (lerp3(r0, r1, 2), lerp3(g0, g1, 2), lerp3(b0, b1, 2), 255)]
                 } else {
                     palette = [(r0, g0, b0, 255), (r1, g1, b1, 255),
                                ((r0 + r1) / 2, (g0 + g1) / 2, (b0 + b1) / 2, 255),

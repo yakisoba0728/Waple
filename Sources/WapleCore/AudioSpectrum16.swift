@@ -9,16 +9,8 @@ public struct AudioSpectrum16: Equatable {
                                                right: [Float](repeating: 0, count: 16))
 
     /// 임의 길이 스펙트럼 → 16빈(연속 그룹 평균). 라이브 모노 FFT(128빈) → 16빈 L=R 근사에 사용.
+    /// 공용 비닝 프리미티브(AudioSpectrum.bin)로 위임 — 인덱스/평균 공식은 비트 동일.
     public static func downsample16(_ spectrum: [Float]) -> [Float] {
-        guard !spectrum.isEmpty else { return [Float](repeating: 0, count: 16) }
-        var out = [Float](repeating: 0, count: 16)
-        let n = spectrum.count
-        for b in 0..<16 {
-            let lo = b * n / 16, hi = max(lo + 1, (b + 1) * n / 16)
-            var s: Float = 0
-            for i in lo..<min(hi, n) { s += spectrum[i] }
-            out[b] = s / Float(max(1, min(hi, n) - lo))
-        }
-        return out
+        AudioSpectrum.bin(spectrum, binCount: 16)
     }
 }

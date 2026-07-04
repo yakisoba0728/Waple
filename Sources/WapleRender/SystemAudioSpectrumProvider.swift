@@ -11,7 +11,8 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
     private var stream: SCStream?
     private let fftSize = 1024
     private let log2n: vDSP_Length
-    private let fftSetup: FFTSetup
+    // create_fftsetup 실패(극히 드묾) 시 nil — 강제 언랩 대신 무음 폴백. let 이라 lock 없이 안전.
+    private let fftSetup: FFTSetup?
     private var window: [Float]
     // running/stream/generation 은 메인 스레드(start/stop), 캡처 Task, waple.audio 콜백 큐에서 동시 접근되므로 lock 으로 직렬화한다.
     private let lock = NSLock()
@@ -21,15 +22,21 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
 
     public override init() {
         log2n = vDSP_Length(round(log2(Double(fftSize))))
-        fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))!
+        let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
+        fftSetup = setup
         window = [Float](repeating: 0, count: fftSize)
         vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
         super.init()
+        if setup == nil {
+            NSLog("%@", "[Waple] FFT setup 생성 실패 — 오디오 스펙트럼은 무음으로 폴백")
+        }
     }
 
-    deinit { vDSP_destroy_fftsetup(fftSetup) }
+    deinit { if let fftSetup { vDSP_destroy_fftsetup(fftSetup) } }
 
     public func start() {
+        // FFT setup 이 없으면 캡처를 띄우지 않고 무음만 공급(배경은 계속 렌더).
+        guard fftSetup != nil else { feedZeros(); return }
         lock.lock()
         if running { lock.unlock(); return }
         running = true
@@ -208,8 +215,18 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
     }
 
     private func magnitudes(from samples: [Float]) -> [Float] {
+        guard let setup = fftSetup else { return [Float](repeating: 0, count: fftSize / 2) }
+        return Self.magnitudes(from: samples, fftSize: fftSize, window: window, log2n: log2n, setup: setup)
+    }
+
+    /// 실수 FFT 진폭(순수 — 커버리지 가능한 계산부). 반환 길이 = fftSize/2.
+    /// window/log2n/setup 은 fftSize 와 정합해야 함(fftSize 는 2의 거듭제곱). samples 는 fftSize 로
+    /// 제로패딩(짧으면)·절단(길면)된다.
+    static func magnitudes(from samples: [Float], fftSize: Int, window: [Float],
+                           log2n: vDSP_Length, setup: FFTSetup) -> [Float] {
         var input = samples
         if input.count < fftSize { input += [Float](repeating: 0, count: fftSize - input.count) }
+        else if input.count > fftSize { input = Array(input.prefix(fftSize)) }
         var windowed = [Float](repeating: 0, count: fftSize)
         vDSP_vmul(input, 1, window, 1, &windowed, 1, vDSP_Length(fftSize))
 
@@ -225,7 +242,7 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
                         vDSP_ctoz(cp, 2, &split, 1, vDSP_Length(half))
                     }
                 }
-                vDSP_fft_zrip(fftSetup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
+                vDSP_fft_zrip(setup, &split, 1, log2n, FFTDirection(FFT_FORWARD))
                 // packed-real FFT: split.imagp[0] 에는 Nyquist(fs/2) 항이 들어가 있다.
                 // 0 으로 만들지 않으면 mags[0] = DC² + Nyquist² 가 되어 최저 주파수(베이스) bin 이
                 // 최고 주파수와 섞여 오염된다. bin 0 = |DC| 가 되도록 Nyquist 항을 제거한다.
@@ -236,5 +253,15 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
         var result = [Float](repeating: 0, count: half)
         vvsqrtf(&result, mags, [Int32(half)])
         return result
+    }
+
+    /// 테스트/일회성용 편의: 자체 Hann 창 + FFT setup 을 생성·해제하며 진폭 계산. setup 생성 실패 → nil.
+    static func magnitudes(from samples: [Float], fftSize: Int) -> [Float]? {
+        let log2n = vDSP_Length(round(log2(Double(fftSize))))
+        guard let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { return nil }
+        defer { vDSP_destroy_fftsetup(setup) }
+        var window = [Float](repeating: 0, count: fftSize)
+        vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
+        return magnitudes(from: samples, fftSize: fftSize, window: window, log2n: log2n, setup: setup)
     }
 }

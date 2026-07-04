@@ -25,4 +25,19 @@ final class AudioSpectrum16Tests: XCTestCase {
         XCTAssertEqual(out.count, 16)
         XCTAssertTrue(out.allSatisfy { $0 == 1 })  // 모든 빈이 같은 값으로 매핑
     }
+
+    /// downsample16 은 공용 프리미티브 AudioSpectrum.bin(_, 16) 로 위임 — 전 입력에서 비트 동일해야 한다.
+    func testDownsample16DelegatesToBin() {
+        let cases: [[Float]] = [[], [1, 1, 1, 1], (0..<128).map { Float($0) },
+                                (1...5).map { Float($0) }, (0..<200).map { Float($0 % 7) }]
+        for spec in cases {
+            XCTAssertEqual(AudioSpectrum16.downsample16(spec), AudioSpectrum.bin(spec, binCount: 16))
+        }
+    }
+
+    func testBinEdgeCases() {
+        XCTAssertTrue(AudioSpectrum.bin([1, 2, 3], binCount: 0).isEmpty)        // binCount<=0 → []
+        XCTAssertEqual(AudioSpectrum.bin([], binCount: 8), [Float](repeating: 0, count: 8))  // 빈 입력 → 0
+        XCTAssertEqual(AudioSpectrum.bin([2, 4, 6, 8], binCount: 2), [3, 7])   // 그룹 평균, 정규화 없음
+    }
 }

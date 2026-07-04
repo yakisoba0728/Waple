@@ -136,7 +136,7 @@ public struct ParticleSystemDef: Equatable {
                     distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
                     rate: pfloat(e["rate"]) ?? 0))
             case let other:
-                NSLog("%@", "[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
+                WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
             }
         }
 
@@ -163,7 +163,7 @@ public struct ParticleSystemDef: Equatable {
                 inits.append(.turbulentVelocityRandom(speedMin: pfloat(i["speedmin"]) ?? 0, speedMax: pfloat(i["speedmax"]) ?? 0,
                                                       scale: pfloat(i["scale"]) ?? 1, offset: pfloat(i["offset"]) ?? 0))
             case let other:
-                NSLog("%@", "[Waple] SP4 unsupported initializer dropped: \(other ?? "nil")")
+                WapleLog.warn("[Waple] SP4 unsupported initializer dropped: \(other ?? "nil")")
             }
         }
 
@@ -212,7 +212,7 @@ public struct ParticleSystemDef: Equatable {
                                        mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1),
                                        phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case let other:
-                NSLog("%@", "[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
+                WapleLog.warn("[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
             }
         }
 
@@ -228,7 +228,7 @@ public struct ParticleSystemDef: Equatable {
             case "ropetrail":
                 renderer = .ropeTrail(length: pfloat(r0["length"]) ?? 0, subdivision: pint(r0["subdivision"]) ?? 0)
             default:
-                renderer = .unsupported(n); NSLog("%@", "[Waple] SP4 unsupported renderer (drawn as sprite): \(n)")
+                renderer = .unsupported(n); WapleLog.warn("[Waple] SP4 unsupported renderer (drawn as sprite): \(n)")
             }
         }
 
