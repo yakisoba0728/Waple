@@ -53,7 +53,7 @@ public enum ShaderPreprocessor {
                             .replacingOccurrences(of: "\r", with: "\n")
                         lines.append(inlineIncludes(normalized, include: include, depth: depth + 1))
                     } else {
-                        NSLog("%@", "[Waple] GLSL include not found: \(name)")
+                        WapleLog.warn("[Waple] GLSL include not found: \(name)")
                     }
                 }
                 continue

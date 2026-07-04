@@ -509,7 +509,7 @@ extension SceneDocument {
               let material = (try? JSONSerialization.jsonObject(with: materialData)) as? [String: Any],
               let passes = material["passes"] as? [Any],
               let pass0 = passes.first as? [String: Any] else {
-            NSLog("%@", "[Waple] image layer texture resolve failed: \(imagePath)")
+            WapleLog.warn("[Waple] image layer texture resolve failed: \(imagePath)")
             return nil
         }
         // 텍스처 배열은 빈 슬롯을 null 로 표기할 수 있으므로(예: [null, "real.tex"]),
@@ -536,7 +536,7 @@ extension SceneDocument {
     private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage) -> SceneParticle? {
         guard let pData = package.data(for: path),
               let pjson = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any] else {
-            NSLog("%@", "[Waple] SP4 particle load failed: \(path)")
+            WapleLog.warn("[Waple] SP4 particle load failed: \(path)")
             return nil
         }
         var material: ParticleMaterial? = nil
