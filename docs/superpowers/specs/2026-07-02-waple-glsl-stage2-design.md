@@ -2,6 +2,10 @@
 
 날짜: 2026-07-02. 브랜치: `feat/glsl-stage2`. 선행: Stage 1 (Steps 0–4, main 머지).
 
+## 상태(2026-07-04) — 구현됨, 실측 코퍼스 재이전
+
+Stage 2 (엔진 심볼 상시 매핑·헬퍼 방출·straight-alpha premult 전환·파티클 z-순서 인터리브)는 구현·병합됨. §25 의 "이전 세션 실측 데이터(~/Downloads/packages)는 디스크에서 삭제됨(2026-07-02)"는 당시 사실 기록으로 유지한다 — 이후 실측 코퍼스는 `~/Downloads/wallpaper_dev/backgrounds`(공유 에셋 팩 `~/Downloads/wallpaper_dev/assets`)로 재구성되었다. §3 의 premult 규약 전환과 §"파티클 z-순서"는 각각 glsl-to-msl §3.5·sp4 문서의 폐기 마킹과 연결된다.
+
 ## 배경 / 목표
 
 Stage 1 결론(26개 실측 pkg): 실제 워크샵/스톡 효과는 전부 graceful fallback.

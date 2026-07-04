@@ -7,6 +7,15 @@
 
 ---
 
+## 상태(2026-07-04) — shake 구현됨
+
+SP3c 본체(다중 텍스처 슬롯·waterripple·tint 블렌드 모드)는 구현·병합됨. 갱신 요점:
+
+- **shake [완료]**: SP3b·SP3c 가 "범위 밖 / 다음"으로 미룬 shake 효과는 이후 손-포팅되었다 — `Sources/WapleRender/EffectShaders.swift`(`case "shake":` 파라미터 매핑 + shake frag MSL). 따라서 §6·§8 의 "shake 는 별도/범위 밖" 서술과 SP3b §8 의 동일 항목은 폐기.
+- 나머지(specular 생략·전체 블렌드모드~30종 미구현)는 유효.
+
+---
+
 ## 1. 개요 / 목표
 효과 프레임워크가 framebuffer + 마스크 1장만 바인딩 → **임의 개수 텍스처 슬롯**으로 일반화(노멀/flow 맵 등). 이를 활용해 waterripple(노멀맵 기반 물결+specular)을 추가하고, tint에 흔한 블렌드 모드를 더한다.
 
@@ -50,4 +59,4 @@
 - **수동/자율 게이트(best-effort)**: waterripple 씬(1412044563)에서 노멀맵 물결, tint 블렌드 모드 씬(2902406982/3395777145). 스모크(무크래시). 시각 정밀 검증은 데스크탑 가시 시.
 
 ## 8. 범위 밖
-- **shake**(common.h+noise/direction combo+flow map — 별도), waterripple specular, 전체 블렌드모드(~30종), 파티클(SP4)·오디오반응(SP5)·퍼펫/3D(SP6).
+- **shake** — [완료 2026-07-04: EffectShaders 에 손-포팅됨]: (common.h+noise/direction combo+flow map — 별도), waterripple specular, 전체 블렌드모드(~30종), 파티클(SP4)·오디오반응(SP5)·퍼펫/3D(SP6).

@@ -7,6 +7,15 @@
 
 ---
 
+## 상태(2026-07-04) — premultiply 주입 규약 폐기, Stage 2 로 대체
+
+Stage 1 은 구현·병합됨(전처리기/번역기/reflection 은 WapleCore). 이후 Stage 2(`2026-07-02-…glsl-stage2-design.md`)가 본 문서의 핵심 결정 하나를 **뒤집었다**:
+
+- **§3.5 "Premultiplied 주입(필수)" [폐기]**: 변환기가 frag 출력에 `c.rgb *= c.a` 를 주입한다는 규약은 채택되지 않았다. 대신 **straight-alpha in/out** 규약으로 전환하고 premultiply 는 **최종 컴포지트에서 단 한 번**만 한다(Stage 2 §3). 근거: 효과를 체인하면 premult 가 이중 적용되어 `0.7² ≠ 0.49` 버그. 현행 코드: `Sources/WapleCore/GLSLTranslator.swift` — "straight-alpha 출력 — premultiply 주입 없음(WE GLSL 과 1:1; 컴포지트가 1회 premult)". 따라서 §3.5 첫 항목과 §4 Step 0 의 "premult 주입" 문구는 폐기.
+- **선언 없는 엔진 심볼 / 헬퍼 함수**: §2.2 의 "선언 파싱 기반 심볼 맵"은 Stage 2 §1–2 에서 **본문 토큰 스캔 + 파일스코프 헬퍼 방출 + 컨텍스트 캡처**로 확장됨(common.h 미포함 효과도 번역). 본 문서의 나머지(전처리기/reflection/폴백 무회귀)는 유효.
+
+---
+
 ## 0. 핵심 통찰 / 위험 관리
 - WE 셰이더는 **한정된 방언**(범용 GLSL 아님): 고정 인클루드 집합 + 고정 엔진 매크로 + 고정 유니폼 규약. → 범용 컴파일러 대신 **방언 전용 소스-투-소스 변환기**로 충분.
 - **무회귀 원칙**: 변환 실패/미지원 구문 → 기존 손-포팅(EffectShaders) 또는 스킵으로 폴백. 커버리지만 증가, 절대 깨지지 않음.
@@ -56,7 +65,7 @@
 | SceneRenderer 변환 경로+폴백 | WapleRender | **MSL 컴파일** + **PNG 오라클 비교**(opacity/scroll/tint/waterwaves vs 손-포팅) + 라이브 |
 
 ## 3.5 결정 사항 (advisor 반영)
-- **Premultiplied 주입(필수)**: WE frag 는 straight alpha(`gl_FragColor = albedo`) 출력. 우리 컴포지터는 premultiplied(src=one). 변환기는 frag 의 모든 출력 지점에 `c.rgb *= c.a` 를 주입(a=1 효과는 no-op, 알파 효과는 교정). 안 하면 pulse/opacity 에서 고친 버그가 전 효과에 재발.
+- **Premultiplied 주입(필수)** — [폐기 2026-07-04: straight-alpha 규약으로 전환, premult 는 최종 컴포지트 1회. Stage 2 §3 참조]: WE frag 는 straight alpha(`gl_FragColor = albedo`) 출력. 우리 컴포지터는 premultiplied(src=one). 변환기는 frag 의 모든 출력 지점에 `c.rgb *= c.a` 를 주입(a=1 효과는 no-op, 알파 효과는 교정). 안 하면 pulse/opacity 에서 고친 버그가 전 효과에 재발.
 - **파라미터 패킹 = 파라미터당 float4 1개**: `constant float4* p [[buffer(0)]]`, 변환기가 `g_X` → `p[i].x/.xy/.xyz/.xyzw`(선언 타입별)로 재작성. 혼합 float/float3 정렬 손상 클래스 제거.
 - **엔진 유니폼 = 고정 struct(buffer(1))**: `mvp(float4x4)`, `time(float)`, `texRes[N](float4)`, (오디오는 buffer(2)). 변환기가 `g_ModelViewProjectionMatrix→eng.mvp`, `g_Time→eng.time`, `g_Texture{N}Resolution→eng.texRes[N]` 재작성. 효과는 MVP=항등 + a_Position=NDC 코너 → vert 통과(mul 규약은 3D 단계에서만 문제).
 - **주석 먼저 추출**: `// {"material":...,"default":...}` 어노테이션을 reflection 으로 먼저 파싱한 뒤 본문에서 주석 제거(`{}":` 가 토크나이저 방해).

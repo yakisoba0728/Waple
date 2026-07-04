@@ -3,6 +3,13 @@
 날짜: 2026-07-02. 브랜치 `feat/solid-layers`. 근거: 실측 31씬에서 util 모델 레이어 60개 드롭
 (solidlayer 18, fullscreenlayer 9, projectlayer 2, solid_instance 6, composelayer 25).
 
+## 상태(2026-07-04) — `_rt_` 스킵은 컴포지션 레이어로 대체됨
+
+솔리드/폴백/바인딩-언랩은 이 문서대로 구현·병합됨. 단 하나가 뒤집힘:
+
+- **§3.3 "`_rt_` 텍스처 레이어는 파스 단계에서 명시 스킵" [폐기]**: `_rt_FullFrameBuffer`(fullscreen/compose/project 레이어)는 이후 `2026-07-02-…composition-layers-design.md` 에서 **실제 컴포지션 레이어로 구현**되었다(스킵 아님). 파서가 `SceneLayer.isFrameBuffer` 마커를 만들고(`Sources/WapleCore/SceneDocument.swift`: `_rt_` → `frameBuffer(fullscreen:)`), 렌더러는 누적(acc) 프레임버퍼를 blit 스냅샷해 그 레이어의 효과 체인 입력으로 넘긴다(`Sources/WapleRender/SceneRenderer.swift` 컴포지션 실행부). 따라서 §3.3 과 §실측 구조의 "컴포지션 의미론 = 다음 SP(이번엔 스킵 유지)" 서술은 폐기.
+- 나머지(솔리드 마커·assets 폴백·바인딩 값 언랩)는 유효.
+
 ## 실측 구조 (assets 팩 + pkg 대조)
 
 - `models/util/solidlayer.json` = `{material: materials/util/solidlayer.json, solidlayer: true}`;
@@ -22,7 +29,7 @@
    SceneRenderer 가 BaseAssetsSettings 디렉터리 파일 읽기 클로저를 전달.
 2. **무텍스처 머티리얼 → 솔리드 마커**: 유효 텍스처 이름이 없으면 `textureEntryName = ""` 로 레이어 생성.
    렌더러 buildLayers 는 "" → 흰색 1x1 텍스처(기존 tint 경로가 color×brightness, alpha 적용 = 솔리드 필).
-3. **`_rt_` 텍스처 레이어는 파스 단계에서 명시 스킵** + "composition layer unsupported" 로그(다음 SP 게이트).
+3. **`_rt_` 텍스처 레이어는 파스 단계에서 명시 스킵** + "composition layer unsupported" 로그(다음 SP 게이트). [폐기 2026-07-04: composition-layers 에서 실제 컴포지션 레이어로 구현, 스킵 아님]
 4. **바인딩 값 언랩**: float/vec2/vec3 게터가 `{"value": ...}` 객체도 수용(visible 은 기존 처리).
 
 ## 검증

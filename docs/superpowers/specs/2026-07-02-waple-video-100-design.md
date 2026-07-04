@@ -26,6 +26,6 @@ schemecolor(UI 색, 렌더링 무관)뿐.
 ## 검증
 
 - 단위: VideoSettings 영속/기본값; VideoRenderer 가 설정을 player 에 반영(@testable).
-- **실물 GT(env-guarded)**: ~/Downloads/backgrounds 의 video 타입 전수(지원 컨테이너) —
+- **실물 GT(env-guarded)**: ~/Downloads/backgrounds 의 video 타입 전수(지원 컨테이너) — [경로 갱신 2026-07-04: 현 코퍼스 `~/Downloads/wallpaper_dev/backgrounds`]
   headless mount → RunLoop 스핀 → item readyToPlay && rate>0 어서션(진짜 디코드·재생 확인).
 - 스위트/릴리스 그린, ff-merge.
