@@ -83,6 +83,19 @@ final class GLSLTypeAdapterTests: XCTestCase {
         XCTAssertEqual(out, "float m = tex(v_TexCoord.zw);")
     }
 
+    func testTruncatedInputDoesNotCrash() {
+        // 잘린 셰이더(for-init 에서 토큰 소진) → advance() 가 EOF 를 넘어 인덱싱하던 배열 범위 밖 트랩.
+        // 번역기는 제3자(신뢰 불가) 셰이더를 파싱하므로 마운트 중 앱 크래시로 이어졌다.
+        XCTAssertEqual(GLSLTypeAdapter.adapt(body: "for(", env: env()), "for(")
+        XCTAssertEqual(GLSLTypeAdapter.adapt(body: "vec2 a = b +", env: env(["b": 2])), "vec2 a = b +")
+    }
+
+    func testOverlongSwizzleDoesNotCrash() {
+        // 5성분 스위즐(비정상 GLSL)을 vec4 로 절단 시 ["",".x",".xy",".xyz"][want=4] 가 범위 밖 트랩하던 회귀.
+        let out = GLSLTypeAdapter.adapt(body: "vec4 d = foo.xyzwx;", env: env(["foo": 4]))
+        XCTAssertTrue(out.contains("foo.xyzwx"), out)  // 크래시 없이 통과
+    }
+
     func testDotLengthScalarAndTernary() {
         let out = GLSLTypeAdapter.adapt(body: "float d = dot(a, b);", env: env(["a": 3, "b": 3]))
         XCTAssertEqual(out, "float d = dot(a, b);")

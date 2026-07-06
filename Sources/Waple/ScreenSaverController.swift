@@ -29,6 +29,15 @@ enum ScreenSaverLogic {
         guard videoExtensions.contains(url.pathExtension.lowercased()) else { return nil }
         return url.path
     }
+
+    /// enable 시 현재 시스템 선택(moduleDict)을 백업해 둘지 판정.
+    /// 사용자의 실제 화면보호기일 때만 true — disable 이 이 백업을 원복한다.
+    /// 이미 Waple(재활성)이면 첫 enable 때 만든 원본 백업을 덮어쓰지 않도록 false,
+    /// 선택 없음(nil)이면 복원=제거가 원상("없음")복구이므로 백업 불필요 → false.
+    static func shouldBackup(current: [String: Any]?) -> Bool {
+        guard let current else { return false }
+        return (current["moduleName"] as? String) != saverName
+    }
 }
 
 /// 설치/선택/해제 부수효과. 메뉴 토글과 AppDelegate.apply 훅에서 호출한다.
@@ -38,6 +47,8 @@ enum ScreenSaverController {
     /// 시스템 화면보호기 선택 도메인(ByHost).
     private static let systemDomain = "com.apple.screensaver" as CFString
     private static let moduleDictKey = "moduleDict" as CFString
+    /// enable 이 덮어쓰기 전에 사용자의 원래 화면보호기 선택을 보관하는 키(앱 소유 도메인).
+    private static let backupKey = "backupModuleDict" as CFString
 
     static var screenSaversDirectory: URL {
         FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
@@ -66,6 +77,15 @@ enum ScreenSaverController {
         if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }  // 버전 갱신 시 덮어쓰기
         try fm.copyItem(at: bundled, to: dest)
 
+        // 덮어쓰기 전에 사용자의 원래 선택을 백업(disable 이 원복). 이미 Waple 이면 원본 백업 보존.
+        let current = CFPreferencesCopyValue(moduleDictKey, systemDomain,
+                                             kCFPreferencesCurrentUser, kCFPreferencesCurrentHost) as? [String: Any]
+        if ScreenSaverLogic.shouldBackup(current: current) {
+            CFPreferencesSetValue(backupKey, current as CFDictionary?, saverDomain,
+                                  kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+            CFPreferencesSynchronize(saverDomain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        }
+
         CFPreferencesSetValue(moduleDictKey,
                               ScreenSaverLogic.moduleDict(installedPath: dest.path) as CFDictionary,
                               systemDomain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
@@ -73,11 +93,19 @@ enum ScreenSaverController {
         syncVideoPath(for: currentProject)
     }
 
-    /// 끄기: 시스템 선택 해제(moduleDict 제거). 설치 파일은 남긴다(재활성 대비, 무해).
+    /// 끄기: 백업된 사용자 화면보호기가 있으면 원복(백업 소거), 없으면 선택 제거.
+    /// 설치 파일은 남긴다(재활성 대비, 무해). enable 이 사용자 원본을 backupKey 에 보관해 둔다.
     static func disable() {
-        CFPreferencesSetValue(moduleDictKey, nil, systemDomain,
+        let backup = CFPreferencesCopyValue(backupKey, saverDomain,
+                                            kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String: Any]
+        CFPreferencesSetValue(moduleDictKey, backup as CFDictionary?, systemDomain,
                               kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
         CFPreferencesSynchronize(systemDomain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
+        if backup != nil {  // 원복했으면 백업 소거(다음 enable/disable 사이클 오염 방지)
+            CFPreferencesSetValue(backupKey, nil, saverDomain,
+                                  kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+            CFPreferencesSynchronize(saverDomain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        }
     }
 
     /// 현재 배경이 동영상이면 그 경로를 saver 도메인에 기록. 아니면 기존 값 유지

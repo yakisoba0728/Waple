@@ -63,7 +63,8 @@ public enum PuppetPose {
         // 바인드 월드(부모 체인 합성)
         var bindWorld = [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
         for (i, b) in model.bones.enumerated() {
-            bindWorld[i] = b.parent >= 0 ? bindWorld[Int(b.parent)] * b.bind : b.bind
+            let p = Int(b.parent)
+            bindWorld[i] = (b.parent >= 0 && p < i) ? bindWorld[p] * b.bind : b.bind  // 부모가 자신 이후/범위 밖이면 루트
         }
         guard animation >= 0, animation < model.animations.count else {
             return [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
@@ -73,7 +74,8 @@ public enum PuppetPose {
         var world = [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
         for (i, b) in model.bones.enumerated() {
             let local = (i < anim.tracks.count ? sampledLocal(anim.tracks[i], frame: f) : nil) ?? b.bind
-            world[i] = b.parent >= 0 ? world[Int(b.parent)] * local : local
+            let p = Int(b.parent)
+            world[i] = (b.parent >= 0 && p < i) ? world[p] * local : local  // 부모가 자신 이후/범위 밖이면 루트
         }
         return (0..<n).map { world[$0] * bindWorld[$0].inverse }
     }

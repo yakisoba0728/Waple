@@ -86,7 +86,8 @@ public enum GLSLTypeAdapter {
         var out = ""   // 재구성 출력
         init(_ toks: [Tok], env: Env, returnSize: Int?) { self.toks = toks; self.env = env; self.returnSize = returnSize }
         func peek(_ k: Int = 0) -> String? { pos + k < toks.count ? toks[pos + k].text : nil }
-        func advance() -> Tok { defer { pos += 1 }; return toks[pos] }
+        // EOF 를 넘어 호출돼도(잘린 입력) 빈 토큰 반환 — toks[pos] 무한계 인덱싱 트랩 방지. 유효 입력엔 무영향.
+        func advance() -> Tok { defer { pos += 1 }; return pos < toks.count ? toks[pos] : Tok(trivia: "", text: "") }
     }
 
     private struct Node { var text: String; var size: Int }  // size 0 = 불투명
@@ -342,11 +343,11 @@ public enum GLSLTypeAdapter {
                 if member.text.allSatisfy({ "xyzwrgbastpq".contains($0) }) {
                     // 스위즐 체인 초과(실물 water_caustics `.xy.zw`): 직전 스위즐을 대체.
                     if let pre = preSwizzle, base.size > 0, maxComponent(member.text) >= base.size {
-                        base = Node(text: pre.text + dotTok.full + member.full, size: member.text.count)
+                        base = Node(text: pre.text + dotTok.full + member.full, size: min(member.text.count, 4))
                         continue
                     }
                     preSwizzle = (base.text, base.size)
-                    base = Node(text: base.text + dotTok.full + member.full, size: member.text.count)
+                    base = Node(text: base.text + dotTok.full + member.full, size: min(member.text.count, 4))  // 스위즐 크기 상한 4 (coerce 룩업 범위 밖 방지)
                 } else {
                     preSwizzle = nil
                     base = Node(text: base.text + dotTok.full + member.full, size: 0)

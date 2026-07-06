@@ -75,13 +75,34 @@ enum PlaylistScheduling {
         TimeInterval(max(1, minutes) * 60)
     }
 
-    /// 다음에 적용할 엔트리 id. `next` 로 순환 후보를 구하고, 실제 존재하는 엔트리일 때만 반환.
-    static func nextApplicableId(
-        after selected: String?,
+    /// 재생목록 전진: `selected` 다음 후보부터 순환하며 `apply` 가 성공하는 첫 id 를 적용하고 그 id 를 반환.
+    /// `apply` 실패 후보(라이브러리에서 삭제됐거나 폴더 해석/마운트 실패)는 건너뛴다 — 한 바퀴(count) 한도.
+    /// 종전 nextApplicableId 는 첫 후보 하나만 보고 실패 시 nil 을 반환해, 그 지점에서 재생목록이 영구
+    /// 정지했다(외장 드라이브 분리·폴더 이동·엔트리 삭제 등). 모두 실패 → nil(기존 배경 유지).
+    static func advance(
+        from selected: String?,
+        count: Int,
         next: (String?) -> String?,
-        entryExists: (String) -> Bool
+        apply: (String) -> Bool
     ) -> String? {
-        guard let id = next(selected), entryExists(id) else { return nil }
-        return id
+        var anchor = selected
+        for _ in 0..<Swift.max(count, 0) {
+            guard let id = next(anchor) else { return nil }
+            anchor = id
+            if apply(id) { return id }
+        }
+        return nil
+    }
+}
+
+/// 속성 편집 UI 결정(순수).
+enum PropertyControl {
+    /// 슬라이더 범위. min>max·min==max·음수 상한 등 비정상 경계에서도 항상 유효한 오름차순 범위를 만든다.
+    /// ClosedRange 는 lower<=upper 를 요구하므로(위반 시 트랩=앱 크래시), 제3자 콘텐츠의 뒤집힌/축퇴
+    /// 경계를 하한 기준으로 클램프한다. 상한 부재 시 하한+1.
+    static func sliderRange(min: Double?, max: Double?) -> ClosedRange<Double> {
+        let lo = min ?? 0
+        let hi = Swift.max(lo + 0.0001, max ?? (lo + 1))
+        return lo...hi
     }
 }

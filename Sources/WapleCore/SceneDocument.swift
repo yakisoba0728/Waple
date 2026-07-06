@@ -268,23 +268,8 @@ extension SceneDocument {
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
 
-        // 3D 카메라: orthogonalprojection 이 딕셔너리가 아니고(3D 씬은 null) camera{eye,center,up}+fov 존재.
-        // fov 는 float() 로 언랩 — 실물(젤다)은 {"script":...,"value":50} 스크립트 프로퍼티로 온다.
-        var camera3D: SceneCamera3D? = nil
-        var cameraScripts: [String: String] = [:]
-        if !(general["orthogonalprojection"] is [String: Any]),
-           let camDict = scene["camera"] as? [String: Any],
-           let eye = vec3(camDict["eye"]), let center = vec3(camDict["center"]),
-           let up = vec3(camDict["up"]), let fov = float(general["fov"]) {
-            camera3D = SceneCamera3D(eye: eye, center: center, up: up, fov: fov,
-                                     nearZ: float(general["nearz"]) ?? 0.01,
-                                     farZ: float(general["farz"]) ?? 10000)
-            // 카메라 프로퍼티 스크립트 캡처(per-frame 재평가용). eye/center/up 은 scene.camera, fov 는 general.
-            for (key, src) in [("eye", camDict["eye"]), ("center", camDict["center"]), ("up", camDict["up"])] {
-                if let d = src as? [String: Any], let sc = d["script"] as? String { cameraScripts[key] = sc }
-            }
-            if let d = general["fov"] as? [String: Any], let sc = d["script"] as? String { cameraScripts["fov"] = sc }
-        }
+        // 3D 카메라(orthogonalprojection 이 딕셔너리가 아닌 3D 씬 + camera{eye,center,up}+fov 존재 시). 2D=nil.
+        let (camera3D, cameraScripts) = parseCamera(scene: scene, general: general)
 
         var layers: [SceneLayer] = []
         var particles: [SceneParticle] = []
@@ -297,22 +282,8 @@ extension SceneDocument {
             guard let obj = any as? [String: Any] else { continue }
             // 사운드 오브젝트("sound" 키): 트랜스폼/계층 무시(전역 재생), 실측 필드만 파스.
             // 콘텐츠 키(image/model/…)가 없어 아래 그룹-노드 분기로 새면 nodes3D 로 오분류되므로 먼저 처리.
-            if let soundArr = obj["sound"] as? [Any] {
-                let paths = soundArr.compactMap { $0 as? String }
-                if !paths.isEmpty {
-                    sounds.append(SceneSound(
-                        id: intVal(obj["id"]) ?? 0,
-                        sounds: paths,
-                        volume: float(obj["volume"]) ?? 1,   // float() 가 숫자/{value} 바인딩 공통 언랩
-                        playbackMode: (obj["playbackmode"] as? String) ?? "single",
-                        startSilent: (obj["startsilent"] as? Bool) ?? false,
-                        minTime: float(obj["mintime"]) ?? 0,
-                        maxTime: float(obj["maxtime"]) ?? 0))
-                    // 미반영 필드는 로그로만 남긴다(추측 금지 — 파스만).
-                    if paths.count > 1 || (obj["startsilent"] as? Bool) == true {
-                        WapleLog.warn("[Waple] scene sound parsed (unhandled: multi=\(paths.count), startsilent=\((obj["startsilent"] as? Bool) ?? false)): id \(intVal(obj["id"]) ?? 0)")
-                    }
-                }
+            if obj["sound"] is [Any] {
+                if let s = parseSound(obj) { sounds.append(s) }
                 continue
             }
             // `visible` 은 평문 불리언 | 바인딩 객체 {"value":Bool, "script":JS} 두 형태. 스크립트가 있는
@@ -327,160 +298,242 @@ extension SceneDocument {
             }
             // 트랜스폼-온리 그룹(콘텐츠 키 없음 + id 보유): 계층 노드로 기록(비가시도 포함 — 서브트리
             // 가시성 판정에 필요)하고 다음으로. 종전에는 조용히 버려져 parent 참조가 끊겼다.
-            if !["image", "model", "particle", "text", "light"].contains(where: { obj[$0] != nil }),
-               let nodeID = intVal(obj["id"]) {
-                var node = SceneNode3D(
-                    id: nodeID,
-                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    parent: intVal(obj["parent"]),
-                    visible: initialVisible)
-                var ps = transformScripts(obj)
-                if let vs = visibleScript { ps["visible"] = vs }
-                node.propertyScripts = ps
+            if let node = parseNode(obj, initialVisible: initialVisible, visibleScript: visibleScript) {
                 nodes3D.append(node)
                 continue
             }
             if !initialVisible && (visibleScript == nil || !(obj["image"] is String)) { continue }
             if let imagePath = obj["image"] as? String {
-                guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets) else {
-                    continue  // 사유별 로그는 resolveLayerTexture 내부에서.
+                if let layer = parseLayer(obj, imagePath: imagePath, order: order, pw: pw, ph: ph,
+                                          package: package, assets: assets,
+                                          visibleScript: visibleScript, initialVisible: initialVisible) {
+                    layers.append(layer)
                 }
-                let angles = floats(obj["angles"])
-                var origin = vec2(obj["origin"]) ?? Vec2(x: 0, y: 0)
-                var size = vec2(obj["size"]) ?? Vec2(x: Float(pw), y: Float(ph))
-                var scale = vec2(obj["scale"]) ?? Vec2(x: 1, y: 1)
-                let entryName: String
-                var isFB = false
-                switch resolved {
-                case .entry(let name): entryName = name
-                case .solid: entryName = ""
-                case .frameBuffer(let fullscreen):
-                    entryName = ""; isFB = true
-                    if fullscreen {  // fullscreen 모델은 오브젝트 size 와 무관하게 프로젝션 전체.
-                        origin = Vec2(x: Float(pw) / 2, y: Float(ph) / 2)
-                        size = Vec2(x: Float(pw), y: Float(ph))
-                        scale = Vec2(x: 1, y: 1)
-                    }
-                }
-                var anims: [String: PropertyAnimation] = [:]
-                var propScripts: [String: String] = [:]
-                for key in ["origin", "scale", "alpha", "angles", "color"] {
-                    if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind) {
-                        anims[key] = a
-                    }
-                    if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
-                        propScripts[key] = sc  // 정적 value 는 기존 언랩이 처리 — 스크립트는 per-frame 재평가
-                    }
-                }
-                if let vs = visibleScript { propScripts["visible"] = vs }
-                // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
-                // 겸사겸사 머티리얼 blending 을 캡처(3D 빌보드 additive 파이프라인 선택 — 플레어/글로우).
-                var puppetPath: String? = nil
-                var blendMode = "normal"
-                if let md = package.data(for: imagePath) ?? assets?(imagePath),
-                   let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
-                    puppetPath = mj["puppet"] as? String
-                    if let matPath = mj["material"] as? String,
-                       let matD = package.data(for: matPath) ?? assets?(matPath),
-                       let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
-                       let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any],
-                       let bl = p0["blending"] as? String {
-                        blendMode = bl
-                    }
-                }
-                layers.append(SceneLayer(
-                    textureEntryName: entryName,
-                    origin: origin,
-                    size: size,
-                    scale: scale,
-                    angleZ: angles.count >= 3 ? angles[2] : 0,
-                    alpha: float(obj["alpha"]) ?? 1,
-                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    brightness: float(obj["brightness"]) ?? 1,
-                    parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
-                    effects: parseEffects(obj["effects"]),
-                    order: order,
-                    isFrameBuffer: isFB,
-                    animations: anims
-                ))
-                layers[layers.count - 1].puppet = puppetPath
-                layers[layers.count - 1].propertyScripts = propScripts
-                layers[layers.count - 1].initialVisible = initialVisible
-                layers[layers.count - 1].blendMode = blendMode
-                layers[layers.count - 1].colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
-                // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
-                let originFull = floats(obj["origin"])
-                layers[layers.count - 1].originZ = originFull.count >= 3 ? originFull[2] : 0
-                layers[layers.count - 1].parent = intVal(obj["parent"])
-                layers[layers.count - 1].id = intVal(obj["id"]) ?? 0
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
                     p.order = order
                     particles.append(p)
                 }
             } else if obj["text"] != nil {
-                // 텍스트: 평문 문자열 또는 {"script": JS} — 내용은 렌더러/스크립트 엔진이 채운다.
-                var plain = ""
-                var script: String? = nil
-                if let s = obj["text"] as? String { plain = s }
-                else if let d = obj["text"] as? [String: Any], let js = d["script"] as? String { script = js }
-                texts.append(SceneTextLayer(
-                    text: plain, script: script,
-                    font: (obj["font"] as? String) ?? "systemfont_arial",
-                    pointSize: float(obj["pointsize"]) ?? 16,
-                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    alpha: float(obj["alpha"]) ?? 1,
-                    horizontalAlign: (obj["horizontalalign"] as? String) ?? "center",
-                    verticalAlign: (obj["verticalalign"] as? String) ?? "center",
-                    origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
-                    scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),  // 배율은 scale 필드 — size 는 레이아웃 박스(오독 시 거대 글리프)
-                    order: order))
+                texts.append(parseText(obj, order: order))
             } else if let modelPath = obj["model"] as? String {
-                // 3D 메시: `.mdl` 직접 참조(2D image→json→puppet 인다이렉션 우회). angles 는 라디안.
-                var o = SceneObject3D(
-                    id: intVal(obj["id"]) ?? 0,
-                    name: (obj["name"] as? String) ?? "",
-                    model: modelPath,
-                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    castShadow: (obj["castshadow"] as? Bool) ?? false,
-                    parent: intVal(obj["parent"]),
-                    effects: parseEffects(obj["effects"]),
-                    order: order)
-                var ps = transformScripts(obj)
-                if let vs = visibleScript { ps["visible"] = vs }
-                o.propertyScripts = ps
-                o.animation = parseAnimationLayers(obj["animationlayers"])
-                objects3D.append(o)
+                objects3D.append(parseModel(obj, modelPath: modelPath, order: order, visibleScript: visibleScript))
             } else if let lightType = obj["light"] as? String {
-                lights3D.append(SceneLight3D(
-                    id: intVal(obj["id"]) ?? 0,
-                    name: (obj["name"] as? String) ?? "",
-                    type: lightType,
-                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    radius: float(obj["radius"]) ?? 0,
-                    intensity: float(obj["intensity"]) ?? 1,
-                    exponent: float(obj["exponent"]) ?? 1,
-                    castShadow: (obj["castshadow"] as? Bool) ?? false,
-                    parent: intVal(obj["parent"]),
-                    order: order))
+                lights3D.append(parseLight(obj, lightType: lightType, order: order))
             }
         }
-        // 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여
-        // 로컬(부모 상대)좌표를 월드(프로젝션 픽셀)로 굽는다 — 예: Hollow Knight 3598808038 의 knight/sword 는
-        // 부모 "PUPPET"(origin 1920,1080/scale 0.72)에 붙고, 3577990983 의 '背景'(origin 부재)은
-        // 그룹 노드(1920,1080)에 붙는다(미합성 시 (0,0) → 흑화면). 부모는 정적 가정.
-        // 2026-07-06 일반화: 종전 '로드되는 퍼펫 레이어만' 게이트를 전 레이어로 확장 —
-        // 퍼펫 파스 실패(폴백 쿼드) 레이어만 종전 위치 유지(luma 가드 유지).
-        // **2D 한정**: 3D 씬(camera3D)의 이미지 레이어는 빌보드 — 렌더러(encodeBillboard)가 부모
-        // 월드행렬을 매 프레임 합성하므로 파스-시 합성은 이중 적용이 된다(실물 3662790108 의
-        // scale 0.1 그룹 체인 + 라디안 각을 도(°)로 오독하는 단위 문제 포함 — 회귀 테스트
-        // test3DBillboardLayerKeepsLocalTransformWithExistingParent).
+        // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다).
+        composeParentTransforms(layers: &layers, nodes3D: nodes3D, camera3D: camera3D, package: package, assets: assets)
+        var out = SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
+                                parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
+                                parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
+                                texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
+                                nodes3D: nodes3D)
+        out.cameraScripts = cameraScripts
+        out.sounds = sounds
+        return out
+    }
+
+    /// 이미지 레이어("image": .tex 엔트리 | solid | framebuffer). resolveLayerTexture 실패 시 nil(레이어 없음).
+    /// 애니(PropertyAnimation)·프로퍼티 스크립트·퍼펫·블렌드·부모/id/originZ 를 obj 에서 채운다.
+    private static func parseLayer(_ obj: [String: Any], imagePath: String, order: Int, pw: Int, ph: Int,
+                                   package: ScenePackage, assets: ((String) -> Data?)?,
+                                   visibleScript: String?, initialVisible: Bool) -> SceneLayer? {
+        guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets) else {
+            return nil  // 사유별 로그는 resolveLayerTexture 내부에서.
+        }
+        let angles = floats(obj["angles"])
+        var origin = vec2(obj["origin"]) ?? Vec2(x: 0, y: 0)
+        var size = vec2(obj["size"]) ?? Vec2(x: Float(pw), y: Float(ph))
+        var scale = vec2(obj["scale"]) ?? Vec2(x: 1, y: 1)
+        let entryName: String
+        var isFB = false
+        switch resolved {
+        case .entry(let name): entryName = name
+        case .solid: entryName = ""
+        case .frameBuffer(let fullscreen):
+            entryName = ""; isFB = true
+            if fullscreen {  // fullscreen 모델은 오브젝트 size 와 무관하게 프로젝션 전체.
+                origin = Vec2(x: Float(pw) / 2, y: Float(ph) / 2)
+                size = Vec2(x: Float(pw), y: Float(ph))
+                scale = Vec2(x: 1, y: 1)
+            }
+        }
+        var anims: [String: PropertyAnimation] = [:]
+        var propScripts: [String: String] = [:]
+        for key in ["origin", "scale", "alpha", "angles", "color"] {
+            if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind) {
+                anims[key] = a
+            }
+            if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
+                propScripts[key] = sc  // 정적 value 는 기존 언랩이 처리 — 스크립트는 per-frame 재평가
+            }
+        }
+        if let vs = visibleScript { propScripts["visible"] = vs }
+        // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
+        // 겸사겸사 머티리얼 blending 을 캡처(3D 빌보드 additive 파이프라인 선택 — 플레어/글로우).
+        var puppetPath: String? = nil
+        var blendMode = "normal"
+        if let md = package.data(for: imagePath) ?? assets?(imagePath),
+           let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
+            puppetPath = mj["puppet"] as? String
+            if let matPath = mj["material"] as? String,
+               let matD = package.data(for: matPath) ?? assets?(matPath),
+               let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
+               let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any],
+               let bl = p0["blending"] as? String {
+                blendMode = bl
+            }
+        }
+        var layer = SceneLayer(
+            textureEntryName: entryName,
+            origin: origin,
+            size: size,
+            scale: scale,
+            angleZ: angles.count >= 3 ? angles[2] : 0,
+            alpha: float(obj["alpha"]) ?? 1,
+            color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+            brightness: float(obj["brightness"]) ?? 1,
+            parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
+            effects: parseEffects(obj["effects"]),
+            order: order,
+            isFrameBuffer: isFB,
+            animations: anims
+        )
+        layer.puppet = puppetPath
+        layer.propertyScripts = propScripts
+        layer.initialVisible = initialVisible
+        layer.blendMode = blendMode
+        layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
+        // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
+        let originFull = floats(obj["origin"])
+        layer.originZ = originFull.count >= 3 ? originFull[2] : 0
+        layer.parent = intVal(obj["parent"])
+        layer.id = intVal(obj["id"]) ?? 0
+        return layer
+    }
+
+    /// 3D 카메라 + 프로퍼티 스크립트. orthogonalprojection 이 딕셔너리가 아니고(3D 씬은 null)
+    /// camera{eye,center,up} + general.fov 가 있을 때만 카메라 반환(2D=nil). fov 는 float() 언랩 —
+    /// 실물(젤다)은 {"script":…,"value":50} 스크립트 프로퍼티. eye/center/up 은 scene.camera, fov 는 general.
+    private static func parseCamera(scene: [String: Any], general: [String: Any]) -> (camera: SceneCamera3D?, scripts: [String: String]) {
+        guard !(general["orthogonalprojection"] is [String: Any]),
+              let camDict = scene["camera"] as? [String: Any],
+              let eye = vec3(camDict["eye"]), let center = vec3(camDict["center"]),
+              let up = vec3(camDict["up"]), let fov = float(general["fov"]) else { return (nil, [:]) }
+        let camera = SceneCamera3D(eye: eye, center: center, up: up, fov: fov,
+                                   nearZ: float(general["nearz"]) ?? 0.01,
+                                   farZ: float(general["farz"]) ?? 10000)
+        var scripts: [String: String] = [:]
+        // 카메라 프로퍼티 스크립트 캡처(per-frame 재평가용).
+        for (key, src) in [("eye", camDict["eye"]), ("center", camDict["center"]), ("up", camDict["up"])] {
+            if let d = src as? [String: Any], let sc = d["script"] as? String { scripts[key] = sc }
+        }
+        if let d = general["fov"] as? [String: Any], let sc = d["script"] as? String { scripts["fov"] = sc }
+        return (camera, scripts)
+    }
+
+    /// 사운드 오브젝트("sound" 배열) → SceneSound. 빈 경로면 nil(호출부는 sound 키 존재 시 항상 continue).
+    private static func parseSound(_ obj: [String: Any]) -> SceneSound? {
+        let paths = (obj["sound"] as? [Any])?.compactMap { $0 as? String } ?? []
+        guard !paths.isEmpty else { return nil }
+        // 미반영 필드는 로그로만 남긴다(추측 금지 — 파스만).
+        if paths.count > 1 || (obj["startsilent"] as? Bool) == true {
+            WapleLog.warn("[Waple] scene sound parsed (unhandled: multi=\(paths.count), startsilent=\((obj["startsilent"] as? Bool) ?? false)): id \(intVal(obj["id"]) ?? 0)")
+        }
+        return SceneSound(
+            id: intVal(obj["id"]) ?? 0,
+            sounds: paths,
+            volume: float(obj["volume"]) ?? 1,   // float() 가 숫자/{value} 바인딩 공통 언랩
+            playbackMode: (obj["playbackmode"] as? String) ?? "single",
+            startSilent: (obj["startsilent"] as? Bool) ?? false,
+            minTime: float(obj["mintime"]) ?? 0,
+            maxTime: float(obj["maxtime"]) ?? 0)
+    }
+
+    /// 트랜스폼-온리 그룹 노드: 콘텐츠 키 없음 + id 보유 시 SceneNode3D(비가시도 포함 — 서브트리 판정에 필요).
+    /// 콘텐츠 키가 있거나 id 없으면 nil(호출부가 레이어/컨텐츠 분기로 진행).
+    private static func parseNode(_ obj: [String: Any], initialVisible: Bool, visibleScript: String?) -> SceneNode3D? {
+        guard !["image", "model", "particle", "text", "light"].contains(where: { obj[$0] != nil }),
+              let nodeID = intVal(obj["id"]) else { return nil }
+        var node = SceneNode3D(
+            id: nodeID,
+            origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+            angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+            scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
+            parent: intVal(obj["parent"]),
+            visible: initialVisible)
+        var ps = transformScripts(obj)
+        if let vs = visibleScript { ps["visible"] = vs }
+        node.propertyScripts = ps
+        return node
+    }
+
+    /// 텍스트 레이어("text": 평문 문자열 또는 {"script": JS}). 내용은 렌더러/스크립트 엔진이 채운다.
+    private static func parseText(_ obj: [String: Any], order: Int) -> SceneTextLayer {
+        var plain = ""
+        var script: String? = nil
+        if let s = obj["text"] as? String { plain = s }
+        else if let d = obj["text"] as? [String: Any], let js = d["script"] as? String { script = js }
+        return SceneTextLayer(
+            text: plain, script: script,
+            font: (obj["font"] as? String) ?? "systemfont_arial",
+            pointSize: float(obj["pointsize"]) ?? 16,
+            color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+            alpha: float(obj["alpha"]) ?? 1,
+            horizontalAlign: (obj["horizontalalign"] as? String) ?? "center",
+            verticalAlign: (obj["verticalalign"] as? String) ?? "center",
+            origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
+            scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),  // 배율은 scale 필드 — size 는 레이아웃 박스(오독 시 거대 글리프)
+            order: order)
+    }
+
+    /// 3D 메시 오브젝트("model": `.mdl` 직접 참조 — 2D image→json→puppet 인다이렉션 우회). angles 는 라디안.
+    private static func parseModel(_ obj: [String: Any], modelPath: String, order: Int, visibleScript: String?) -> SceneObject3D {
+        var o = SceneObject3D(
+            id: intVal(obj["id"]) ?? 0,
+            name: (obj["name"] as? String) ?? "",
+            model: modelPath,
+            origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+            angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+            scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
+            castShadow: (obj["castshadow"] as? Bool) ?? false,
+            parent: intVal(obj["parent"]),
+            effects: parseEffects(obj["effects"]),
+            order: order)
+        var ps = transformScripts(obj)
+        if let vs = visibleScript { ps["visible"] = vs }
+        o.propertyScripts = ps
+        o.animation = parseAnimationLayers(obj["animationlayers"])
+        return o
+    }
+
+    /// 3D 라이트 오브젝트("light": 타입 문자열 + 위치/색/반경/강도 등).
+    private static func parseLight(_ obj: [String: Any], lightType: String, order: Int) -> SceneLight3D {
+        SceneLight3D(
+            id: intVal(obj["id"]) ?? 0,
+            name: (obj["name"] as? String) ?? "",
+            type: lightType,
+            origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+            angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+            color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+            radius: float(obj["radius"]) ?? 0,
+            intensity: float(obj["intensity"]) ?? 1,
+            exponent: float(obj["exponent"]) ?? 1,
+            castShadow: (obj["castshadow"] as? Bool) ?? false,
+            parent: intVal(obj["parent"]),
+            order: order)
+    }
+
+    /// 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여
+    /// 로컬(부모 상대)좌표를 월드(프로젝션 픽셀)로 굽는다 — 예: Hollow Knight 3598808038 의 knight/sword 는
+    /// 부모 "PUPPET"(origin 1920,1080/scale 0.72)에 붙고, 3577990983 의 '背景'(origin 부재)은
+    /// 그룹 노드(1920,1080)에 붙는다(미합성 시 (0,0) → 흑화면). 부모는 정적 가정.
+    /// 퍼펫 파스 실패(폴백 쿼드) 레이어만 종전 위치 유지(luma 가드). **2D 한정**: 3D 씬(camera3D)의
+    /// 이미지 레이어는 빌보드 — 렌더러(encodeBillboard)가 부모 월드행렬을 매 프레임 합성(파스-시 합성은 이중 적용 → 제외).
+    private static func composeParentTransforms(layers: inout [SceneLayer], nodes3D: [SceneNode3D],
+                                                camera3D: SceneCamera3D?, package: ScenePackage,
+                                                assets: ((String) -> Data?)?) {
         func puppetLoads(_ path: String) -> Bool {
             guard let d = package.data(for: path) ?? assets?(path) else { return false }
             return PuppetModel.parse(d) != nil || Model3D.parse(d) != nil
@@ -490,44 +543,35 @@ extension SceneDocument {
             if let pp = layers[$0].puppet { return puppetLoads(pp) }
             return true
         }
-        if !composeTargets.isEmpty {
-            var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
-            var parentOf: [Int: Int] = [:]
-            for l in layers where l.id != 0 {
-                localT[l.id] = (l.origin, l.scale, l.angleZ)
-                if let p = l.parent { parentOf[l.id] = p }
-            }
-            for n in nodes3D {
-                localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
-                if let p = n.parent { parentOf[n.id] = p }
-            }
-            // angle 은 도(°) 단위(레이어 규약; puppetVertices 가 렌더 시 라디안 변환) — 부모 오프셋 회전은
-            // 라디안으로 계산하되 합성 각은 도로 유지한다.
-            func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
-                guard depth < 32, let t = localT[id] else { return nil }
-                guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
-                let r = pw.angle * .pi / 180
-                let ca = cosf(r), sa = sinf(r)
-                let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
-                return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
-                        scale: Vec2(x: pw.scale.x * t.scale.x, y: pw.scale.y * t.scale.y),
-                        angle: pw.angle + t.angle)
-            }
-            for i in composeTargets {
-                guard let wt = world(layers[i].id, 0) else { continue }
-                layers[i].origin = wt.origin
-                layers[i].scale = wt.scale
-                layers[i].angleZ = wt.angle
-            }
+        guard !composeTargets.isEmpty else { return }
+        var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
+        var parentOf: [Int: Int] = [:]
+        for l in layers where l.id != 0 {
+            localT[l.id] = (l.origin, l.scale, l.angleZ)
+            if let p = l.parent { parentOf[l.id] = p }
         }
-        var out = SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
-                                parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
-                                parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
-                                texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
-                                nodes3D: nodes3D)
-        out.cameraScripts = cameraScripts
-        out.sounds = sounds
-        return out
+        for n in nodes3D {
+            localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
+            if let p = n.parent { parentOf[n.id] = p }
+        }
+        // angle 은 도(°) 단위(레이어 규약; puppetVertices 가 렌더 시 라디안 변환) — 부모 오프셋 회전은
+        // 라디안으로 계산하되 합성 각은 도로 유지한다.
+        func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
+            guard depth < 32, let t = localT[id] else { return nil }
+            guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
+            let r = pw.angle * .pi / 180
+            let ca = cosf(r), sa = sinf(r)
+            let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
+            return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
+                    scale: Vec2(x: pw.scale.x * t.scale.x, y: pw.scale.y * t.scale.y),
+                    angle: pw.angle + t.angle)
+        }
+        for i in composeTargets {
+            guard let wt = world(layers[i].id, 0) else { continue }
+            layers[i].origin = wt.origin
+            layers[i].scale = wt.scale
+            layers[i].angleZ = wt.angle
+        }
     }
 
     /// animationlayers → 활성 베이스 애니(숫자 blend≥0.5 & visible 중 blend 최대). 나머지(딕셔너리 blend =

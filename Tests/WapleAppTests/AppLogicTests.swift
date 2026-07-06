@@ -152,16 +152,45 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(PlaylistScheduling.intervalSeconds(minutes: 0), 60, "최소 1분 하한")
     }
 
-    func testNextApplicableId() {
-        // 다음 후보가 실제 존재하는 엔트리면 반환.
+    func testAdvance_skipsUnapplicableCandidates() {
+        let ids = ["a", "b", "c"]
+        func next(_ cur: String?) -> String? {  // a→b→c→a 순환
+            guard let cur, let i = ids.firstIndex(of: cur) else { return ids.first }
+            return ids[(i + 1) % ids.count]
+        }
+        // b 적용 실패(삭제/폴더 이동) → c 로 건너뛴다. 종전(nextApplicableId)엔 b 에서 영구 정지했다.
         XCTAssertEqual(
-            PlaylistScheduling.nextApplicableId(after: "a", next: { _ in "b" }, entryExists: { $0 == "b" }),
-            "b")
-        // 순환 후보 없음(빈 목록) → nil.
+            PlaylistScheduling.advance(from: "a", count: ids.count, next: next, apply: { $0 == "c" }), "c")
+        // 첫 후보 성공 → 그대로.
+        XCTAssertEqual(
+            PlaylistScheduling.advance(from: "a", count: ids.count, next: next, apply: { _ in true }), "b")
+        // 전부 실패 → nil(적용 없음 — 기존 배경 유지).
         XCTAssertNil(
-            PlaylistScheduling.nextApplicableId(after: "a", next: { _ in nil }, entryExists: { _ in true }))
-        // 후보가 삭제된 엔트리(존재 안 함) → nil.
+            PlaylistScheduling.advance(from: "a", count: ids.count, next: next, apply: { _ in false }))
+        // 빈 목록 → nil(무한 루프 없음).
         XCTAssertNil(
-            PlaylistScheduling.nextApplicableId(after: "a", next: { _ in "gone" }, entryExists: { _ in false }))
+            PlaylistScheduling.advance(from: nil, count: 0, next: { _ in "x" }, apply: { _ in true }))
+    }
+
+    // MARK: - PropertyControl.sliderRange (뒤집힌/축퇴 경계에서도 ClosedRange 트랩 금지)
+
+    func testSliderRange_invertedBounds_valid() {
+        // min>max (제3자 워크샵 콘텐츠) → 종전 (min…max) 는 ClosedRange 트랩(속성 시트 열 때 앱 크래시).
+        let r = PropertyControl.sliderRange(min: 5, max: 2)
+        XCTAssertLessThanOrEqual(r.lowerBound, r.upperBound)
+        XCTAssertEqual(r.lowerBound, 5)
+    }
+
+    func testSliderRange_degenerateAndNegative_valid() {
+        let eq = PropertyControl.sliderRange(min: 0, max: 0)       // 축퇴(0폭) → NaN 썸 회피
+        XCTAssertLessThan(eq.lowerBound, eq.upperBound)
+        let neg = PropertyControl.sliderRange(min: nil, max: -1)   // 0…(-1) → 종전 트랩
+        XCTAssertLessThanOrEqual(neg.lowerBound, neg.upperBound)
+    }
+
+    func testSliderRange_normalBounds_preserved() {
+        let r = PropertyControl.sliderRange(min: 0, max: 1)        // 정상 경계는 그대로
+        XCTAssertEqual(r.lowerBound, 0)
+        XCTAssertEqual(r.upperBound, 1)
     }
 }

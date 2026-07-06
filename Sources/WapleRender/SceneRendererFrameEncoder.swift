@@ -20,7 +20,7 @@ final class DynamicVertexBuffer {
         guard length > 0 else { return nil }
         cursor = (cursor + 1) % slots.count
         if let b = slots[cursor], b.length >= length {
-            data.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, length) }
+            data.withUnsafeBytes { _ = memcpy(b.contents(), $0.baseAddress!, length) }
             return b
         }
         let b = data.withUnsafeBytes { device.makeBuffer(bytes: $0.baseAddress!, length: length) }
