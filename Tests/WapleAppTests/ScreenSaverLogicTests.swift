@@ -56,4 +56,27 @@ final class ScreenSaverLogicTests: XCTestCase {
         XCTAssertNil(ScreenSaverLogic.videoPath(for: project(type: .video, fileName: nil)))
         XCTAssertNil(ScreenSaverLogic.videoPath(for: nil))
     }
+
+    // MARK: - enable 시 사용자 원본 화면보호기 백업 판정
+    // (disable 이 무조건 제거해 사용자의 원래 화면보호기를 잃던 회귀의 방지선)
+
+    func testShouldBackup_userSaver_true() {
+        // 사용자가 고른 다른 화면보호기 → 백업해야 disable 시 원복 가능.
+        XCTAssertTrue(ScreenSaverLogic.shouldBackup(current: ["moduleName": "Flurry", "path": "/x", "type": 0]))
+    }
+
+    func testShouldBackup_alreadyWaple_false() {
+        // 이미 Waple(재활성) → 첫 enable 때 만든 원본 백업을 덮어쓰면 안 됨.
+        XCTAssertFalse(ScreenSaverLogic.shouldBackup(current: ["moduleName": ScreenSaverLogic.saverName]))
+    }
+
+    func testShouldBackup_noSelection_false() {
+        // 선택 없음 → disable 의 복원(=제거)이 원상("없음")복구이므로 백업 불필요.
+        XCTAssertFalse(ScreenSaverLogic.shouldBackup(current: nil))
+    }
+
+    func testShouldBackup_malformedDict_true() {
+        // moduleName 없는 비정상 dict 도 데이터 보존 차원에서 백업(원복 시 그대로 되돌림).
+        XCTAssertTrue(ScreenSaverLogic.shouldBackup(current: ["path": "/x"]))
+    }
 }
