@@ -75,6 +75,113 @@ final class SceneSharedScriptTests: XCTestCase {
         a.setRuntime(2)
         XCTAssertEqual(try XCTUnwrap(a.evaluateVec(current: [1])).first ?? 0, 3, accuracy: 1e-4)
     }
+
+    func testInitRunsOnceBeforeFirstUpdateInSharedContext() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        var initCount = 0;
+        var seed = new Vec3(0, 0, 0);
+        export function init(value) {
+            initCount += 1;
+            seed = value.copy();
+            value.x = 99;
+        }
+        export function update(value) {
+            return new Vec3(seed.x + value.x + initCount,
+                            seed.y + value.y + initCount,
+                            seed.z + value.z + initCount);
+        }
+        """, scene: scene))
+
+        XCTAssertEqual(try XCTUnwrap(e.evaluateVec(current: [1, 2, 3])), [3, 5, 7])
+        XCTAssertEqual(try XCTUnwrap(e.evaluateVec(current: [4, 5, 6])), [6, 8, 10])
+    }
+
+    func testSceneLayerDescriptorsBackEnumerateLayersAndThisLayer() throws {
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [
+            SceneScriptLayerDescriptor(name: "owner"),
+            SceneScriptLayerDescriptor(name: "playerbounds", visible: true, alpha: 0.42),
+            SceneScriptLayerDescriptor(name: "playeroutlineanim", visible: true, alpha: 1),
+            SceneScriptLayerDescriptor(name: "playerhidden", visible: false, alpha: 1),
+            SceneScriptLayerDescriptor(name: "tracktitle", visible: true, text: "Song")
+        ]))
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        let playerLayers = [];
+        let appearAnim = thisScene.getLayer("playeroutlineanim").getTextureAnimation();
+        export function init(value) {
+            thisScene.enumerateLayers().forEach(element => {
+                if (element.name.includes("player") && element.visible) {
+                    playerLayers.push(element);
+                }
+            });
+            thisScene.getLayer("tracktitle").text = "Changed";
+            appearAnim.setFrame(3);
+        }
+        export function update(value) {
+            shared.uiopacity = playerLayers[0].alpha;
+            return new Vec3(playerLayers.length, shared.uiopacity, thisLayer.name === "owner" ? appearAnim.getFrame() : -1);
+        }
+        """, scene: scene, currentLayerName: "owner"))
+
+        let out = try XCTUnwrap(e.evaluateVec(current: [0, 0, 0]))
+
+        XCTAssertEqual(out[0], 2, accuracy: 1e-4)
+        XCTAssertEqual(out[1], 0.42, accuracy: 1e-4)
+        XCTAssertEqual(out[2], 3, accuracy: 1e-4)
+    }
+
+    func testCameraTransformsAndAnimationStateMatch3DScripts() throws {
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [
+            SceneScriptLayerDescriptor(name: "3D Camera", visible: true),
+            SceneScriptLayerDescriptor(name: "link_child"),
+            SceneScriptLayerDescriptor(name: "owner", origin: [2, 0, 0])
+        ]))
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(value) {
+            const camera = thisScene.getCameraTransforms();
+            const delta = camera.center.subtract(camera.eye);
+            const surprise = thisScene.getLayer("link_child")
+                .getAnimationLayer("Surprise")
+                .getAnimation("surprise")
+                .isPlaying();
+            const targetAngle = Math.atan2(camera.eye.x - thisLayer.origin.x,
+                                           camera.eye.z - thisLayer.origin.z);
+            return new Vec3(delta.z, surprise ? 1 : 0, targetAngle);
+        }
+        """, scene: scene, currentLayerName: "owner"))
+
+        let out = try XCTUnwrap(e.evaluateVec(current: [0, 0, 0]))
+
+        XCTAssertEqual(out[0], -1, accuracy: 1e-4)
+        XCTAssertEqual(out[1], 1, accuracy: 1e-4)
+        XCTAssertTrue(out[2].isFinite)
+    }
+}
+
+final class SceneVisibleScriptClassificationTests: XCTestCase {
+    func testVectorValuedVisibleScriptsAreDetected() {
+        XCTAssertTrue(SceneRenderer.isVectorValuedVisibleScript("""
+        export function update(value) {
+            value.x = 1;
+            value.y = 2;
+            return value;
+        }
+        """))
+
+        XCTAssertTrue(SceneRenderer.isVectorValuedVisibleScript("""
+        export function update(value) {
+            return new Vec3(value.x, value.y, value.z);
+        }
+        """))
+    }
+
+    func testBoolVisibleScriptsRemainEligible() {
+        XCTAssertFalse(SceneRenderer.isVectorValuedVisibleScript("""
+        shared.a = 1;
+        export function cursorClick(event) { shared.a = shared.a ? 0 : 1; }
+        export function update(value) { return shared.a === 1 ? true : value; }
+        """))
+    }
 }
 
 /// 렌더 통합: visible 스크립트 레이어(draw 스킵/부활) + shared 컨트롤러→소비자(실물 3394601417 축소판).

@@ -81,6 +81,34 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(try SceneDocument.parse(package: p).layers.count, 0)
     }
 
+    func testPreservesInvisibleImageLayerReferencedByRuntimeComposite() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":42,"image":"models/face.json","origin":"50 50 0","size":"10 10","visible":false},
+           {"id":77,"image":"models/unused.json","origin":"50 50 0","size":"10 10","visible":false}
+         ]}
+        """
+        let faceModel = #"{"material":"materials/face.json"}"#
+        let faceMaterial = #"{"passes":[{"textures":["face"]}]}"#
+        let consumerMaterial = #"{"passes":[{"textures":["_rt_imageLayerComposite_42_a"]}]}"#
+        let p = try pkg([
+            ("scene.json", scene),
+            ("models/face.json", faceModel),
+            ("models/unused.json", model),
+            ("materials/face.json", faceMaterial),
+            ("materials/face.tex", "tex"),
+            ("materials/m.json", material),
+            ("materials/consumer.json", consumerMaterial)
+        ])
+
+        let doc = try SceneDocument.parse(package: p)
+
+        XCTAssertEqual(doc.layers.map(\.id), [42])
+        XCTAssertFalse(doc.layers[0].initialVisible)
+        XCTAssertEqual(doc.layers[0].textureEntryName, "materials/face.tex")
+    }
+
     /// 베이스 머티리얼의 첫 텍스처 슬롯이 null 이어도 첫 non-null 텍스처로 레이어를 해석해야 한다.
     func testResolvesTextureWhenFirstSlotIsNull() throws {
         let materialNullFirst = #"{"passes":[{"shader":"genericimage2","textures":[null,"pic"]}]}"#

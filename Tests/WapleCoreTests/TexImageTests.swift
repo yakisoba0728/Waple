@@ -76,6 +76,24 @@ final class TexImageTests: XCTestCase {
         XCTAssertEqual(t?.mip?.lz4, true)
     }
 
+    func testParsesTEXB0004WithConditionJSONBeforeMipTable() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
+        let payload: [UInt8] = Array(repeating: 0x44, count: 20)
+        let condition = #"{"op":"==","lhs":"mode.value","rhs":true}"#
+        var b: [UInt8] = []
+        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32(4) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)
+        b += Array("TEXB0004".utf8) + [0]
+        b += i32(1) + i32(-1) + i32(0) + i32(1)                    // imageCount, fmt, v4, mipCount
+        b += i32(1) + i32(2) + Array(condition.utf8) + [0] + i32(1) // v4 condition block prefix
+        b += i32(8) + i32(8) + i32(1) + i32(64) + i32(payload.count) + payload
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.payload, .bc3)
+        XCTAssertEqual(t?.mip?.decompressedSize, 64)
+        XCTAssertEqual(t?.mip?.payloadRange.count, payload.count)
+        XCTAssertEqual(t?.mip?.lz4, true)
+    }
+
     /// format=7 은 DXT1(BC1, 4bpp) — 태양계 스카이박스/태양/8k_earth 실측.
     func testParsesFormat7AsBC1() {
         let bc1 = ((8 + 3) / 4) * ((8 + 3) / 4) * 8

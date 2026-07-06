@@ -36,6 +36,13 @@ extension SceneRenderer {
             let u = folder.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: u.path) { return u }
         }
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) {
+            for expected in ["scene.pkg", "gifscene.pkg"] {
+                if let actual = names.first(where: { $0.caseInsensitiveCompare(expected) == .orderedSame }) {
+                    return folder.appendingPathComponent(actual)
+                }
+            }
+        }
         return nil
     }
 
@@ -119,7 +126,12 @@ extension SceneRenderer {
             var propScripts: [(key: String, engine: TextScriptEngine)] = []
             for key in ["visible", "color", "alpha"] {
                 guard let src = layer.propertyScripts[key] else { continue }
-                if let e = makeScriptEngine(src) {
+                if key == "visible", Self.isVectorValuedVisibleScript(src) {
+                    NSLog("%@", "[Waple] skipped vector-valued visible script")
+                    continue
+                }
+                let ownerName = layer.name.isEmpty ? nil : layer.name
+                if let e = makeScriptEngine(src, layerName: ownerName) {
                     propScripts.append((key, e))
                     if e.hasUpdate { hasAnimations = true }
                 }
@@ -134,6 +146,15 @@ extension SceneRenderer {
                                 colorBlendMode: layer.colorBlendMode))
         }
         return out
+    }
+
+    static func isVectorValuedVisibleScript(_ source: String) -> Bool {
+        let compact = source.replacingOccurrences(of: "\r", with: "\n")
+        let valueMutationPatterns = ["value.x =", "value.y =", "value.z =", "value.x=", "value.y=", "value.z="]
+        if valueMutationPatterns.contains(where: { compact.contains($0) }) { return true }
+        if compact.range(of: #"return\s+new\s+Vec[234]?\b"#, options: .regularExpression) != nil { return true }
+        if compact.range(of: #"value\s*=\s*new\s+Vec[234]?\b"#, options: .regularExpression) != nil { return true }
+        return false
     }
 
     /// 손-포팅 효과(검증된 스톡 7종) 빌드. 미지원 이름이면 nil(→ 변환 경로 시도).
@@ -555,7 +576,7 @@ extension SceneRenderer {
             if !isSystem && fontData == nil { NSLog("%@", "[Waple] text font missing (system fallback): \(t.font)") }
             // 씬 공유 컨텍스트 로드(top-level 사이드이펙트 실행). update 없는 스크립트는 텍스트 갱신에
             // 못 쓰므로 엔진 nil 취급(정적 텍스트 유지) — 로드 자체는 shared 통신을 위해 수행.
-            let loaded = t.script.flatMap { makeScriptEngine($0) }
+            let loaded = t.script.flatMap { makeScriptEngine($0, layerName: t.name.isEmpty ? nil : t.name) }
             if t.script != nil && loaded == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
             let engine = (loaded?.hasUpdate == true) ? loaded : nil
             let initial = engine != nil ? (engine!.evaluate(current: t.text) ?? "") : t.text

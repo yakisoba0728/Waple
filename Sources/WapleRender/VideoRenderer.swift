@@ -3,11 +3,13 @@ import AVFoundation
 import WapleCore
 
 public final class VideoRenderer: WallpaperRenderer {
-    /// AVFoundation 이 디코드하지 못하는 컨테이너 확장자. ffmpeg 변환 대상(FFmpegConverter.convertExtensions).
-    public static let unsupportedExtensions: Set<String> = ["webm", "mkv", "avi"]
+    /// Conservative AVFoundation-native containers used directly without conversion.
+    public static let nativeVideoExtensions: Set<String> = ["mp4", "m4v", "mov"]
+    /// Common non-native containers routed through ffmpeg conversion when available.
+    public static let unsupportedExtensions: Set<String> = ["webm", "mkv", "avi", "wmv", "flv", "ogv", "mpg", "mpeg"]
 
     public static func isSupportedContainer(_ url: URL) -> Bool {
-        !unsupportedExtensions.contains(url.pathExtension.lowercased())
+        nativeVideoExtensions.contains(url.pathExtension.lowercased())
     }
 
     private(set) var player: AVQueuePlayer?
@@ -59,7 +61,11 @@ public final class VideoRenderer: WallpaperRenderer {
             try attachPlayer(url: url, container: container, project: project)
             return
         }
-        // 미지원 컨테이너(mkv/avi/webm): ffmpeg 로 mp4 변환 후 장착(비동기 — 메인스레드 블록 금지).
+        guard FFmpegConverter.needsConversion(url) else {
+            lastError = RendererError.unsupportedCodec
+            throw RendererError.unsupportedCodec
+        }
+        // 미지원 컨테이너: ffmpeg 로 mp4 변환 후 장착(비동기 — 메인스레드 블록 금지).
         // ffmpeg 부재 시 팩토리가 WebRenderer 폴백을 고르므로 여기 도달 = 변환 가능. 방어적으로 재확인.
         guard converterAvailable() else {
             lastError = RendererError.unsupportedCodec
@@ -87,13 +93,21 @@ public final class VideoRenderer: WallpaperRenderer {
     /// 재생 가능한 컨테이너(mp4 등)를 실제 장착·재생. mount 가 직접 또는 ffmpeg 변환 완료 후 호출.
     private func attachPlayer(url: URL, container: NSView, project: WallpaperProject) throws {
         stopPlayback()
+        let token = mountToken
         projectId = project.id
         let item = AVPlayerItem(url: url)
         // 코덱/손상/DRM 실패는 AVFoundation 내부에서 비동기로 발생해 mount 성공 후 검은 화면이 된다.
         // status 를 관찰해 실패를 로깅함으로써 진단 가능하게 한다.
-        statusObservation = item.observe(\.status, options: [.new]) { item, _ in
+        statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             if item.status == .failed {
-                NSLog("%@", "[Waple] video playback failed for \(url.path): \(String(describing: item.error))")
+                self?.recordPlayerItemFailure(item.error, url: url, token: token)
+            }
+        }
+        item.asset.loadValuesAsynchronously(forKeys: ["playable"]) { [weak self] in
+            var error: NSError?
+            let status = item.asset.statusOfValue(forKey: "playable", error: &error)
+            if status == .failed || !item.asset.isPlayable {
+                self?.recordPlayerItemFailure(item.error ?? error, url: url, token: token)
             }
         }
         // 배속 변경 시 음정 유지(WE 동작과 유사).
@@ -137,6 +151,14 @@ public final class VideoRenderer: WallpaperRenderer {
                 self.pausedByOcclusion = true
                 self.player?.pause()
             }
+        }
+    }
+
+    private func recordPlayerItemFailure(_ error: Error?, url: URL, token: UInt64) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.mountToken == token else { return }
+            self.lastError = error ?? RendererError.unsupportedCodec
+            NSLog("%@", "[Waple] video playback failed for \(url.path): \(String(describing: error))")
         }
     }
 

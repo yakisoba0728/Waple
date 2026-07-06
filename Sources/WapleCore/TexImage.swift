@@ -97,8 +97,9 @@ public struct TexImage {
     /// "TEXB000N\0" 컨테이너 파스(mip0 만 사용). 실측 레이아웃(RePKG TexReader + TEXB0004 hexdump
     /// 교차검증, 2026-07-03 — 다중 mip 파일(DJK_1.tex mip 9개 등)은 종전 "compressedSize 가 EOF 에
     /// 닿는 int 스캔" 휴리스틱이 실패해 3D 모델 텍스처 대부분이 흰색 폴백이 되던 것을 고침):
-    ///   i32 imageCount | (v3+) i32 imageFormat(실측 -1) | (v4) i32 미상(실측 0) |
-    ///   i32 mipCount | mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 decompressedSize | i32 comp | payload
+    ///   i32 imageCount | (v3+) i32 imageFormat(실측 -1) | (v4) i32 미상/플래그(실측 0/1) |
+    ///   i32 mipCount | (v4 조건부) i32 1 | i32 2 | condition JSON NUL | i32 1 |
+    ///   mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 decompressedSize | i32 comp | payload
     private static func parseMip(_ b: [UInt8], decodeW: Int, decodeH: Int, imgW: Int, imgH: Int) -> CompressedMip? {
         guard let ti = indexOf(b, Array("TEXB".utf8)), ti + 9 <= b.count else { return nil }
         let version = Int(String(bytes: b[ti + 4..<ti + 8], encoding: .ascii) ?? "") ?? 0
@@ -110,9 +111,12 @@ public struct TexImage {
         var p = ti + 9
         p += 4                       // imageCount(첫 이미지의 mip0 만 사용)
         if version >= 3 { p += 4 }   // imageFormat(FreeImage, 실측 -1)
-        if version >= 4 { p += 4 }   // 0004 추가 필드(실측 0)
+        if version >= 4 { p += 4 }   // 0004 추가 필드/플래그(실측 0/1)
         guard let mipCount = i32(p), mipCount > 0 else { return nil }
         p += 4
+        if version >= 4, let conditionEnd = texb0004ConditionBlockEnd(b, from: p, i32: i32) {
+            p = conditionEnd
+        }
         guard let w = i32(p), let h = i32(p + 4), w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
         p += 8
         var isLZ4 = 0, dec = 0
@@ -129,6 +133,22 @@ public struct TexImage {
         return CompressedMip(decodeWidth: w, decodeHeight: h,
                              imageWidth: imgW, imageHeight: imgH,
                              decompressedSize: dec, payloadRange: p..<(p + comp), lz4: isLZ4 != 0)
+    }
+
+    /// TEXB0004 may insert a small NUL-terminated condition JSON block before the first mip record.
+    /// Keep the scan bounded so malformed files cannot make parsing walk an arbitrary payload.
+    private static func texb0004ConditionBlockEnd(_ b: [UInt8], from p: Int, i32: (Int) -> Int?) -> Int? {
+        let maxConditionBytes = 64 * 1024
+        guard let marker1 = i32(p), let marker2 = i32(p + 4), marker1 == 1, marker2 == 2 else { return nil }
+        let jsonStart = p + 8
+        guard jsonStart < b.count, b[jsonStart] == 0x7B || b[jsonStart] == 0x5B else { return nil } // "{" or "["
+        let upper = min(b.count, jsonStart + maxConditionBytes)
+        var jsonEnd = jsonStart
+        while jsonEnd < upper, b[jsonEnd] != 0 {
+            jsonEnd += 1
+        }
+        guard jsonEnd < upper, let marker3 = i32(jsonEnd + 1), marker3 == 1 else { return nil }
+        return jsonEnd + 5
     }
 
     /// TEXS 스프라이트시트 섹션 파스(파일 꼬리에서 역방향 탐색 — LZ4 페이로드 내 우연 일치 회피).

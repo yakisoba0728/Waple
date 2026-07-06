@@ -47,6 +47,17 @@ final class GLSLTypeAdapterTests: XCTestCase {
         XCTAssertEqual(out2, "vec2 q = (noise3(x)).xy;")
     }
 
+    func testCutoutVignetteVectorCoercions() {
+        // wallpaper_dev cutout_vignette: sample vec4 assigned to vec3, then vec3 mixed with vec2 arithmetic.
+        let body = """
+        vec3 color = texSample2D(g_Texture0, uv);
+        vec2 delta = color - uv;
+        """
+        let out = GLSLTypeAdapter.adapt(body: body, env: env(["uv": 2]))
+        XCTAssertTrue(out.contains("vec3 color = (texSample2D(g_Texture0, uv)).xyz;"), out)
+        XCTAssertTrue(out.contains("vec2 delta = (color).xy - uv;"), out)
+    }
+
     func testControlFlowAndUnknownsPassThrough() {
         // 미지 심볼(크기 0)은 무개입; for/if 구조 보존.
         let body = """

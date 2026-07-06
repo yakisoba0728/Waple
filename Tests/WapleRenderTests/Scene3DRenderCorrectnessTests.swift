@@ -95,4 +95,21 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertEqual(mirrorValue(solid, "effects", as: [SceneRenderer.EffectGPU].self)?.count, 1)
         XCTAssertEqual(mirrorValue(renderer.billboards[1], "isFrameBuffer", as: Bool.self), true)
     }
+
+    func test3DMaterialRuntimeCompositeUsesReferencedImageTexture() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let package = try pkg([
+            ("materials/mesh.json", #"{"passes":[{"textures":["_rt_imageLayerComposite_42_a"]}]}"#.data(using: .utf8)!),
+            ("materials/face.tex", solidTex(255, 0, 0, w: 8, h: 2))
+        ])
+        let renderer = SceneRenderer()
+
+        let material = try XCTUnwrap(renderer.loadMesh3DMaterial("materials/mesh.json",
+                                                                 package: package,
+                                                                 device: device,
+                                                                 compositeImageTextures: [42: "materials/face.tex"]))
+
+        XCTAssertEqual(material.texture.width, 8)
+        XCTAssertEqual(material.texture.height, 2)
+    }
 }

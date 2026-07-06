@@ -33,6 +33,7 @@ public struct SceneEffect: Equatable {
 
 public struct SceneLayer: Equatable {
     public let textureEntryName: String
+    public var name: String = ""
     /// scene.json objects[] 의 id(부모 트랜스폼 룩업용 — 퍼펫 레이어 parent 체인 합성에 사용).
     public var id: Int = 0
     /// origin/scale/angleZ 는 원래 로컬(부모 상대)값. 퍼펫 레이어는 parse 말미에 부모 체인을 합성한
@@ -87,6 +88,7 @@ public struct SceneParticle: Equatable {
 
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
 public struct SceneTextLayer: Equatable {
+    public var name: String = ""
     public let text: String              // 평문(스크립트면 "")
     public let script: String?           // {"script": ...} — update(value) 가 텍스트 반환
     public let font: String              // "systemfont_arial" | "fonts/....otf" (pkg/base-assets)
@@ -281,6 +283,7 @@ extension SceneDocument {
         var lights3D: [SceneLight3D] = []
         var nodes3D: [SceneNode3D] = []
         var sounds: [SceneSound] = []
+        let imageLayerCompositeIDs = referencedImageLayerCompositeIDs(in: package)
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
             // 사운드 오브젝트("sound" 키): 트랜스폼/계층 무시(전역 재생), 실측 필드만 파스.
@@ -305,7 +308,8 @@ extension SceneDocument {
                 nodes3D.append(node)
                 continue
             }
-            if !initialVisible && (visibleScript == nil || !(obj["image"] is String)) { continue }
+            let objectID = intVal(obj["id"]) ?? 0
+            if !initialVisible && visibleScript == nil && !imageLayerCompositeIDs.contains(objectID) { continue }
             if let imagePath = obj["image"] as? String {
                 if let layer = parseLayer(obj, imagePath: imagePath, order: order, pw: pw, ph: ph,
                                           package: package, assets: assets,
@@ -334,6 +338,26 @@ extension SceneDocument {
                                 nodes3D: nodes3D)
         out.cameraScripts = cameraScripts
         out.sounds = sounds
+        return out
+    }
+
+    /// Runtime composite materials reference hidden image layers by `_rt_imageLayerComposite_<id>_a`.
+    /// Those source layers are usually `visible:false`, but their texture is still needed by 3D materials.
+    private static func referencedImageLayerCompositeIDs(in package: ScenePackage) -> Set<Int> {
+        var out: Set<Int> = []
+        let pattern = #"_rt_imageLayerComposite_(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return out }
+        for entry in package.entries where entry.name.hasSuffix(".json") {
+            guard let data = package.data(for: entry.name),
+                  let text = String(data: data, encoding: .utf8),
+                  text.contains("_rt_imageLayerComposite_") else { continue }
+            let ns = NSRange(text.startIndex..<text.endIndex, in: text)
+            for match in regex.matches(in: text, range: ns) where match.numberOfRanges > 1 {
+                guard let range = Range(match.range(at: 1), in: text),
+                      let id = Int(text[range]) else { continue }
+                out.insert(id)
+            }
+        }
         return out
     }
 
@@ -406,6 +430,7 @@ extension SceneDocument {
             isFrameBuffer: isFB,
             animations: anims
         )
+        layer.name = (obj["name"] as? String) ?? ""
         layer.puppet = puppetPath
         layer.propertyScripts = propScripts
         layer.initialVisible = initialVisible
@@ -484,6 +509,7 @@ extension SceneDocument {
         if let s = obj["text"] as? String { plain = s }
         else if let d = obj["text"] as? [String: Any], let js = d["script"] as? String { script = js }
         return SceneTextLayer(
+            name: (obj["name"] as? String) ?? "",
             text: plain, script: script,
             font: (obj["font"] as? String) ?? "systemfont_arial",
             pointSize: float(obj["pointsize"]) ?? 16,
@@ -635,7 +661,7 @@ extension SceneDocument {
         // 머티리얼의 텍스처 이름은 materials/ 상대 + 무확장("util/white" → "materials/util/white.tex").
         // pkg 에 실제로 있는 후보를 우선하고, 없으면 관례 경로를 반환(렌더러가 base-assets 폴백 시도).
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
-        for c in candidates where package.entries.contains(where: { $0.name == c }) { return .entry(c) }
+        for c in candidates where package.data(for: c) != nil { return .entry(c) }
         return .entry(candidates[0])
     }
 

@@ -13,16 +13,23 @@ public struct ScenePackage {
     private let blob: Data
     private let blobBase: Int
     private let entryByName: [String: Entry]
+    private let entryByNormalizedName: [String: Entry]
 
     private init(entries: [Entry], blob: Data, blobBase: Int) {
         self.entries = entries
         self.blob = blob
         self.blobBase = blobBase
         var index: [String: Entry] = [:]
+        var normalizedIndex: [String: Entry] = [:]
         for entry in entries where index[entry.name] == nil {
             index[entry.name] = entry
         }
+        for entry in entries {
+            let key = Self.normalizedLookupKey(entry.name)
+            if normalizedIndex[key] == nil { normalizedIndex[key] = entry }
+        }
         self.entryByName = index
+        self.entryByNormalizedName = normalizedIndex
     }
 
     public static func parse(_ data: Data) throws -> ScenePackage {
@@ -58,9 +65,14 @@ public struct ScenePackage {
     }
 
     public func data(for name: String) -> Data? {
-        guard let e = entryByName[name] else { return nil }
+        let e = entryByName[name] ?? entryByNormalizedName[Self.normalizedLookupKey(name)]
+        guard let e else { return nil }
         let start = blob.startIndex + blobBase + e.offset
         return blob.subdata(in: start ..< start + e.size)
+    }
+
+    private static func normalizedLookupKey(_ name: String) -> String {
+        name.replacingOccurrences(of: "\\", with: "/").lowercased()
     }
 
     /// 엔트리 목록으로부터 패키지를 조립(파싱 결과와 동일 구조). 테스트/리패킹용.

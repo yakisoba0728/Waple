@@ -131,4 +131,44 @@ final class GLSLTranslatorMSLTests: XCTestCase {
             XCTFail("Stage-2 MSL failed to compile: \(error)\n--- MSL ---\n\(t.msl)")
         }
     }
+
+    func testRealAudioResponsiveOscilloscopeCompiles() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let url = URL(fileURLWithPath: "/Users/yakisoba/Downloads/wallpaper_dev/backgrounds/3629379075/scene.pkg")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("real wallpaper package not installed")
+        }
+        let package = try ScenePackage.parse(Data(contentsOf: url))
+        func string(_ path: String) throws -> String {
+            let data = try XCTUnwrap(package.data(for: path), "\(path) missing")
+            return try XCTUnwrap(String(data: data, encoding: .utf8), "\(path) is not UTF-8")
+        }
+        let vert = try string("shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.vert")
+        let frag = try string("shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag")
+        let combos: [String: Int] = [:]
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: { header in
+            package.data(for: "shaders/\(header)").flatMap { String(data: $0, encoding: .utf8) }
+                ?? package.data(for: header).flatMap { String(data: $0, encoding: .utf8) }
+                ?? BuiltinShaderIncludes.lookup(header)
+        }))
+        do {
+            let lib = try device.makeLibrary(source: t.msl, options: nil)
+            let pd = MTLRenderPipelineDescriptor()
+            pd.vertexFunction = lib.makeFunction(name: "ev_main")
+            pd.fragmentFunction = lib.makeFunction(name: "ef_main")
+            let vd = MTLVertexDescriptor()
+            vd.attributes[0].format = .float3
+            vd.attributes[0].offset = 0
+            vd.attributes[0].bufferIndex = 4
+            vd.attributes[1].format = .float2
+            vd.attributes[1].offset = 12
+            vd.attributes[1].bufferIndex = 4
+            vd.layouts[4].stride = 20
+            pd.vertexDescriptor = vd
+            pd.colorAttachments[0].pixelFormat = .rgba8Unorm
+            _ = try device.makeRenderPipelineState(descriptor: pd)
+        } catch {
+            XCTFail("audio_responsive_oscilloscope pipeline failed: \(error)\n--- MSL ---\n\(t.msl)")
+        }
+    }
 }

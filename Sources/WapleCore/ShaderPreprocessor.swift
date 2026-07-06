@@ -213,12 +213,39 @@ public enum ShaderPreprocessor {
             if c.isLetter || c == "_" {
                 var id = ""
                 while i < chars.count, chars[i].isLetter || chars[i].isNumber || chars[i] == "_" { id.append(chars[i]); i += 1 }
-                out += map[id] ?? id
+                out += map[id].map(bodyMacroReplacement) ?? id
                 continue
             }
             out.append(c); i += 1
         }
         return out
+    }
+
+    private static func bodyMacroReplacement(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return isNegativeNumericLiteral(trimmed) ? "(\(trimmed))" : value
+    }
+
+    private static func isNegativeNumericLiteral(_ value: String) -> Bool {
+        let chars = Array(value)
+        guard chars.first == "-" else { return false }
+        var i = 1
+        var hasDigit = false
+        while i < chars.count, chars[i].isNumber { hasDigit = true; i += 1 }
+        if i < chars.count, chars[i] == "." {
+            i += 1
+            while i < chars.count, chars[i].isNumber { hasDigit = true; i += 1 }
+        }
+        guard hasDigit else { return false }
+        if i < chars.count, chars[i] == "e" || chars[i] == "E" {
+            i += 1
+            if i < chars.count, chars[i] == "+" || chars[i] == "-" { i += 1 }
+            var exponentDigits = false
+            while i < chars.count, chars[i].isNumber { exponentDigits = true; i += 1 }
+            guard exponentDigits else { return false }
+        }
+        if i < chars.count, chars[i] == "f" || chars[i] == "F" { i += 1 }
+        return i == chars.count
     }
 
     // MARK: - 작은 헬퍼

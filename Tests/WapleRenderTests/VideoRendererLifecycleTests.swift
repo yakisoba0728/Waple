@@ -74,6 +74,29 @@ final class VideoRendererLifecycleTests: XCTestCase {
         renderer.teardown()
     }
 
+    func testCommonNonNativeContainersStartConversionInsteadOfNativePlayer() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        for ext in ["webm", "mkv", "avi", "wmv", "flv", "ogv", "mpg"] {
+            let fileName = "movie.\(ext)"
+            let source = dir.appendingPathComponent(fileName)
+            try Data([0x01]).write(to: source)
+            var requestedConversion: URL?
+            let renderer = VideoRenderer(
+                converterAvailable: { true },
+                convert: { url, _ in requestedConversion = url })
+            let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))
+
+            try renderer.mount(in: container, project: project(id: ext, fileName: fileName, dir: dir))
+
+            XCTAssertEqual(requestedConversion, source, "\(ext) should enter the ffmpeg conversion path")
+            XCTAssertNil(renderer.player, "\(ext) should not attach AVFoundation before conversion completes")
+            XCTAssertTrue(playerLayers(in: container).isEmpty)
+            renderer.teardown()
+        }
+    }
+
     func testConversionFailureIsRecordedAndDoesNotAttachLayer() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -92,6 +115,24 @@ final class VideoRendererLifecycleTests: XCTestCase {
         XCTAssertEqual(renderer.lastError as? RendererError, .unsupportedCodec)
         XCTAssertNil(renderer.player)
         XCTAssertTrue(playerLayers(in: container).isEmpty)
+        renderer.teardown()
+    }
+
+    func testNativePlayerItemFailureIsRecorded() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data([0x00, 0x01, 0x02]).write(to: dir.appendingPathComponent("broken.mp4"))
+
+        let renderer = VideoRenderer()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))
+        try renderer.mount(in: container, project: project(id: "broken-native", fileName: "broken.mp4", dir: dir))
+
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while renderer.lastError == nil && Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+
+        XCTAssertNotNil(renderer.lastError, "async AVPlayerItem failures must be exposed through lastError")
         renderer.teardown()
     }
 

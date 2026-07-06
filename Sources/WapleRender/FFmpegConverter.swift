@@ -1,8 +1,9 @@
+import AVFoundation
 import CryptoKit
 import Foundation
 import WapleCore
 
-/// 로컬 ffmpeg 로 AVFoundation 미지원 컨테이너(mkv/avi/webm)를 mp4(H.264/AAC)로 변환해 네이티브 재생을
+/// 로컬 ffmpeg 로 AVFoundation 미지원 컨테이너를 mp4(H.264/AAC)로 변환해 네이티브 재생을
 /// 가능케 한다. 변환 결과는 ~/Library/Application Support/Waple/converted/<원본경로 sha256>.mp4 로 캐시(재사용).
 /// ffmpeg 부재 시 nil 반환 + 로그(호출부가 기존 WKWebView 폴백 유지).
 public enum FFmpegConverter {
@@ -94,8 +95,12 @@ public enum FFmpegConverter {
                               completion: @escaping (URL?) -> Void) {
         let out = cachedURL(for: source)
         if FileManager.default.fileExists(atPath: out.path) {
-            completeOnMain(completion, out)
-            return
+            if isReusableConvertedOutput(out) {
+                completeOnMain(completion, out)
+                return
+            }
+            WapleLog.warn("[Waple] ignoring invalid ffmpeg cache output: \(out.path)")
+            try? FileManager.default.removeItem(at: out)
         }
         guard let ff = executableURL else {
             WapleLog.warn("[Waple] ffmpeg not found — 'brew install ffmpeg' to play \(source.lastPathComponent)")
@@ -112,6 +117,13 @@ public enum FFmpegConverter {
         DispatchQueue.main.async { completion(result) }
     }
 
+    static func isReusableConvertedOutput(_ url: URL) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? NSNumber,
+              size.int64Value > 0 else { return false }
+        return AVURLAsset(url: url).isPlayable
+    }
+
     /// 실제 변환(백그라운드). videotoolbox 실패 시 libx264 재시도. 부분 파일이 캐시로 남지 않도록
     /// 임시 파일에 쓰고 exit 0 에만 캐시 경로로 원자적 이동.
     private static func run(ff: URL, source: URL, output: URL, timeout: TimeInterval) -> URL? {
@@ -120,7 +132,7 @@ public enum FFmpegConverter {
         defer { try? FileManager.default.removeItem(at: tmp) }
         for useVT in [true, false] {
             guard runOnce(ff: ff, args: arguments(input: source, output: tmp, useVideotoolbox: useVT), timeout: timeout),
-                  FileManager.default.fileExists(atPath: tmp.path) else {
+                  isReusableConvertedOutput(tmp) else {
                 try? FileManager.default.removeItem(at: tmp)   // 다음 시도 위해 정리
                 continue
             }

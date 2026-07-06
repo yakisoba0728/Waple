@@ -53,4 +53,17 @@ final class SceneRendererPathFallbackTests: XCTestCase {
         XCTAssertNil(renderer.assetData("link/secret.bin", package: package))
         XCTAssertNil(renderer.quietAssetData("link/secret.bin", package: package))
     }
+
+    func testScenePackageDiscoveryIsCaseInsensitive() throws {
+        let fm = FileManager.default
+        let folder = fm.temporaryDirectory.appendingPathComponent("waple-scene-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: folder) }
+        let packageURL = folder.appendingPathComponent("Scene.pkg")
+        try Data("pkg".utf8).write(to: packageURL)
+
+        let found = try XCTUnwrap(SceneRenderer().pkgURL(in: folder))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: found.path))
+        XCTAssertEqual(found.lastPathComponent.lowercased(), "scene.pkg")
+    }
 }

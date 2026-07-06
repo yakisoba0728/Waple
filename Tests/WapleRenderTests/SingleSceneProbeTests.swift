@@ -22,7 +22,8 @@ final class SingleSceneProbeTests: XCTestCase {
         let project = try ProjectJSONParser.parse(folderURL: folder)
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360)), project: project)
-        let urls = r.captureFrames(width: 640, height: 360, times: [0.5], toDir: out)
+        let time = Float(ProcessInfo.processInfo.environment["WAPLE_PROBE_TIME"] ?? "") ?? 6.0
+        let urls = r.captureFrames(width: 640, height: 360, times: [time], toDir: out)
         for u in urls {
             let tag = ProcessInfo.processInfo.environment["WAPLE_PROBE_TAG"] ?? "probe"
             let dst = out.appendingPathComponent("\(id)_\(tag).png")

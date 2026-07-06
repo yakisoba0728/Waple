@@ -31,6 +31,16 @@ final class ScenePackageTests: XCTestCase {
         XCTAssertNil(p.data(for: "nope"))
     }
 
+    func testDataLookupFallsBackToCaseInsensitiveWindowsSeparators() throws {
+        let model = Data(#"{"material":"materials/Foo.json"}"#.utf8)
+        let pkg = Self.makePkg([("Models\\Foo.JSON", model)])
+        let p = try ScenePackage.parse(pkg)
+
+        XCTAssertEqual(p.data(for: "Models\\Foo.JSON"), model, "exact package path still wins")
+        XCTAssertEqual(p.data(for: "models/foo.json"), model)
+        XCTAssertEqual(p.data(for: "models\\foo.json"), model)
+    }
+
     func testMalformedThrows() {
         XCTAssertThrowsError(try ScenePackage.parse(Data([0x08, 0x00]))) { e in
             XCTAssertEqual(e as? ScenePackageError, .malformed)

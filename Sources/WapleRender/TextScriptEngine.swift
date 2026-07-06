@@ -1,6 +1,35 @@
 import Foundation
 import JavaScriptCore
 
+public struct SceneScriptLayerDescriptor {
+    public var name: String
+    public var visible: Bool
+    public var alpha: Float
+    public var origin: SIMD3<Float>
+    public var scale: SIMD3<Float>
+    public var angles: SIMD3<Float>
+    public var size: SIMD2<Float>
+    public var solid: Bool
+    public var text: String
+
+    public init(name: String, visible: Bool = true, alpha: Float = 1,
+                origin: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
+                scale: SIMD3<Float> = SIMD3<Float>(1, 1, 1),
+                angles: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
+                size: SIMD2<Float> = SIMD2<Float>(1, 1),
+                solid: Bool = false, text: String = "") {
+        self.name = name
+        self.visible = visible
+        self.alpha = alpha
+        self.origin = origin
+        self.scale = scale
+        self.angles = angles
+        self.size = size
+        self.solid = solid
+        self.text = text
+    }
+}
+
 /// 씬 단위 공유 JSContext(SceneRenderer mount 당 1개): shims 를 1회 평가하고, 씬의 모든 프로퍼티
 /// 스크립트(레이어 color/alpha/visible, 효과 상수, 텍스트)가 이 컨텍스트를 공유한다 — `shared` 전역으로
 /// 스크립트 간 통신(실물 3394601417: visible 스크립트의 컨트롤러가 shared.a 를 세팅, 43개 스크립트가 분기).
@@ -8,13 +37,38 @@ import JavaScriptCore
 public final class SceneScriptContext {
     let context: JSContext
 
-    public init?() {
+    public init?(layers: [SceneScriptLayerDescriptor] = []) {
         guard let ctx = JSContext() else { return nil }
         context = ctx
         ctx.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] scene script context exception: \(ex?.toString() ?? "?")")
         }
         ctx.evaluateScript(TextScriptEngine.shims)
+        if !layers.isEmpty {
+            ctx.evaluateScript("__setSceneLayers(\(Self.layersJSONArray(layers)));")
+        }
+    }
+
+    private static func layersJSONArray(_ layers: [SceneScriptLayerDescriptor]) -> String {
+        let objects = layers.map { l -> [String: Any] in
+            [
+                "name": l.name,
+                "visible": l.visible,
+                "alpha": Double(l.alpha),
+                "origin": [Double(l.origin.x), Double(l.origin.y), Double(l.origin.z)],
+                "scale": [Double(l.scale.x), Double(l.scale.y), Double(l.scale.z)],
+                "angles": [Double(l.angles.x), Double(l.angles.y), Double(l.angles.z)],
+                "size": [Double(l.size.x), Double(l.size.y)],
+                "solid": l.solid,
+                "text": l.text
+            ]
+        }
+        guard JSONSerialization.isValidJSONObject(objects),
+              let data = try? JSONSerialization.data(withJSONObject: objects),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
     }
 }
 
@@ -29,12 +83,16 @@ public final class SceneScriptContext {
 public final class TextScriptEngine {
     private let context: JSContext
     private let updateFn: JSValue?
+    private let initFn: JSValue?
+    private var didCallInit = false
     /// export 된 이벤트 훅(name → 함수). update 외 실물 계약: cursorClick(3394601417 주야 토글),
     /// media*Changed(뮤직 씬 — 2881558311 ColorTinter 등). cursorDown/Up/Move 는 보관만(배선은 추후).
     private var hookFns: [String: JSValue] = [:]
 
     /// 씬 스크립트가 export 할 수 있는 이벤트 훅 이름(실물 193패키지 역추출).
-    static let eventHookNames = ["cursorClick", "cursorDown", "cursorUp", "cursorMove",
+    static let eventHookNames = ["init", "applyUserProperties",
+                                 "cursorClick", "cursorDown", "cursorUp", "cursorMove",
+                                 "cursorEnter", "cursorLeave", "animationEvent",
                                  "mediaPlaybackChanged", "mediaPropertiesChanged", "mediaThumbnailChanged",
                                  "mediaTimelineChanged", "mediaStatusChanged"]
     private static let maxScriptCharacters = 512_000
@@ -54,6 +112,8 @@ public final class TextScriptEngine {
         guard !hadException,
               let fn = ctx.objectForKeyedSubscript("update"), fn.isObject else { return nil }
         updateFn = fn
+        let i = ctx.objectForKeyedSubscript("init")
+        initFn = (i?.isObject == true) ? i : nil
         for name in Self.eventHookNames {
             if let f = ctx.objectForKeyedSubscript(name), f.isObject { hookFns[name] = f }
         }
@@ -63,7 +123,7 @@ public final class TextScriptEngine {
     /// {update, cursorClick, media*Changed...} 훅 딕셔너리를 반환받아 보관.
     /// update/훅 부재도 성공(top-level 사이드이펙트는 이미 실행됨).
     /// 로드 예외(문법 오류 등) → nil, 공유 컨텍스트는 오염되지 않는다(IIFE 미실행).
-    public init?(script: String, scene: SceneScriptContext) {
+    public init?(script: String, scene: SceneScriptContext, currentLayerName: String? = nil) {
         guard Self.passesPracticalSafetyChecks(script) else { return nil }
         let ctx = scene.context
         context = ctx
@@ -81,17 +141,29 @@ public final class TextScriptEngine {
         let exports = (["update"] + Self.eventHookNames)
             .map { "\($0): (typeof \($0) !== 'undefined') ? \($0) : null" }
             .joined(separator: ", ")
-        let wrapped = "(function(){\n\(cleaned)\n;return { \(exports) };\n})()"
+        let layerArg = currentLayerName.map(Self.javascriptStringLiteral) ?? "null"
+        let wrapped = """
+        (function(__wapleThisLayer){
+        var __wapleGlobal = Function('return this')();
+        var thisLayer = __wapleThisLayer || __wapleGlobal.thisLayer;
+        var thisObject = thisLayer;
+        \(cleaned)
+        ;return { \(exports) };
+        })(__wapleLayerForScript(\(layerArg)))
+        """
         let out = context.evaluateScript(wrapped)
         guard !hadException else { return nil }
         if let out, out.isObject {
             let u = out.objectForKeyedSubscript("update")
             updateFn = (u?.isObject == true) ? u : nil
+            let i = out.objectForKeyedSubscript("init")
+            initFn = (i?.isObject == true) ? i : nil
             for name in Self.eventHookNames {
                 if let f = out.objectForKeyedSubscript(name), f.isObject { hookFns[name] = f }
             }
         } else {
             updateFn = nil
+            initFn = nil
         }
     }
 
@@ -129,6 +201,8 @@ public final class TextScriptEngine {
             NSLog("%@", "[Waple] text script update exception: \(ex?.toString() ?? "?")")
             failed = true
         }
+        callInitIfNeeded(argument: current)
+        guard !failed else { return nil }
         guard let out = updateFn.call(withArguments: [current]), !failed, out.isString else { return nil }
         return out.toString()
     }
@@ -143,6 +217,8 @@ public final class TextScriptEngine {
             NSLog("%@", "[Waple] visible script exception: \(ex?.toString() ?? "?")")
             failed = true
         }
+        callInitIfNeeded(argument: current)
+        guard !failed else { return nil }
         guard let out = updateFn.call(withArguments: [current]), !failed else { return nil }
         if out.isBoolean { return out.toBool() }
         if out.isNumber { return out.toDouble() != 0 }
@@ -164,14 +240,9 @@ public final class TextScriptEngine {
             NSLog("%@", "[Waple] constant script exception: \(ex?.toString() ?? "?")")
             failed = true
         }
-        let arg: Any
-        if current.count >= 3 {
-            arg = ["x": current[0], "y": current[1], "z": current[2]]
-        } else if current.count >= 2 {
-            arg = ["x": current[0], "y": current[1]]
-        } else {
-            arg = current.first.map(Double.init) ?? 0
-        }
+        guard let arg = vecArgument(current), !failed else { return nil }
+        callInitIfNeeded(argument: arg)
+        guard !failed else { return nil }
         guard let out = updateFn.call(withArguments: [arg]), !failed else { return nil }
         if out.isNumber { return [Float(out.toDouble())] }
         guard out.isObject else { return nil }
@@ -179,6 +250,40 @@ public final class TextScriptEngine {
         guard let x, let y, x.isNumber, y.isNumber else { return nil }
         if let z, z.isNumber { return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())] }
         return [Float(x.toDouble()), Float(y.toDouble())]
+    }
+
+    private func callInitIfNeeded(argument: Any) {
+        guard !didCallInit else { return }
+        didCallInit = true
+        guard let initFn else { return }
+        initFn.call(withArguments: [initArgument(from: argument)])
+    }
+
+    private func initArgument(from argument: Any) -> Any {
+        guard let value = argument as? JSValue,
+              value.isObject,
+              let copy = value.objectForKeyedSubscript("copy"),
+              copy.isObject,
+              let copied = value.invokeMethod("copy", withArguments: []),
+              !copied.isUndefined,
+              !copied.isNull
+        else { return argument }
+        return copied
+    }
+
+    private func vecArgument(_ current: [Float]) -> JSValue? {
+        if current.count >= 3 {
+            return context.evaluateScript("new Vec3(\(Self.jsNumber(current[0])), \(Self.jsNumber(current[1])), \(Self.jsNumber(current[2])))")
+        }
+        if current.count >= 2 {
+            return context.evaluateScript("new Vec2(\(Self.jsNumber(current[0])), \(Self.jsNumber(current[1])))")
+        }
+        return JSValue(double: Double(current.first ?? 0), in: context)
+    }
+
+    private static func jsNumber(_ value: Float) -> String {
+        let d = Double(value)
+        return d.isFinite ? String(d) : "0"
     }
 
     /// ES 모듈 구문 중화(토큰 인지 — minified 한 줄 소스 포함). 문자열/주석 밖의 `export` 키워드를 제거하고
@@ -442,6 +547,14 @@ public final class TextScriptEngine {
         return decl(clause)
     }
 
+    private static func javascriptStringLiteral(_ s: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [s]),
+              let json = String(data: data, encoding: .utf8) else {
+            return "null"
+        }
+        return String(json.dropFirst().dropLast())
+    }
+
     /// createScriptProperties 빌더 + 엔진 API no-op Proxy 심(SceneScriptContext 와 공유).
     static let shims = """
     'use strict';
@@ -474,9 +587,22 @@ public final class TextScriptEngine {
             construct: function() { return __noopProxy(); }
         });
     }
+    function __zeroArray(n) {
+        var a = new Array(n);
+        for (var i = 0; i < n; i += 1) { a[i] = 0; }
+        return a;
+    }
+    var __audioBuffer = {
+        left: __zeroArray(64), right: __zeroArray(64),
+        left16: __zeroArray(16), right16: __zeroArray(16),
+        left32: __zeroArray(32), right32: __zeroArray(32),
+        left64: __zeroArray(64), right64: __zeroArray(64),
+        spectrum: __zeroArray(64), waveform: __zeroArray(64)
+    };
     // engine: runtime 등 실수치 프로퍼티는 실제 타깃에 두고, 나머지는 no-op 흡수.
     // frametime(소문자)이 실물 표기(818회/193pkg — 2881558311 ColorTinter 전환 타이머 등); frameTime 은 호환 보존.
-    var __engineState = { runtime: 0.0, frametime: 0.016, frameTime: 0.016 };
+    var __engineState = { runtime: 0.0, frametime: 0.016, frameTime: 0.016,
+                          audio: __audioBuffer, audioBuffer: __audioBuffer };
     var engine = new Proxy(__engineState, {
         get: function(t, k) { if (k in t) { return t[k]; } return __noopProxy(); },
         set: function(t, k, v) { t[k] = v; return true; }
@@ -490,6 +616,12 @@ public final class TextScriptEngine {
     Vec3.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec3(this.x - o, this.y - o, this.z - o) : new Vec3(this.x - o.x, this.y - o.y, this.z - o.z); };
     Vec3.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec3(this.x * o, this.y * o, this.z * o) : new Vec3(this.x * o.x, this.y * o.y, this.z * o.z); };
     Vec3.prototype.divide = function (o) { return (typeof o === 'number') ? new Vec3(this.x / o, this.y / o, this.z / o) : new Vec3(this.x / o.x, this.y / o.y, this.z / o.z); };
+    Vec3.prototype.mix = function (o, t) {
+        t = Number(t) || 0;
+        return new Vec3(this.x + ((o.x || 0) - this.x) * t,
+                        this.y + ((o.y || 0) - this.y) * t,
+                        this.z + ((o.z || 0) - this.z) * t);
+    };
     Vec3.prototype.copy = function () { return new Vec3(this.x, this.y, this.z); };
     Vec3.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); };
     function Vec2(x, y) {
@@ -499,7 +631,14 @@ public final class TextScriptEngine {
     Vec2.prototype.add = function (o) { return (typeof o === 'number') ? new Vec2(this.x + o, this.y + o) : new Vec2(this.x + o.x, this.y + o.y); };
     Vec2.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec2(this.x - o, this.y - o) : new Vec2(this.x - o.x, this.y - o.y); };
     Vec2.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec2(this.x * o, this.y * o) : new Vec2(this.x * o.x, this.y * o.y); };
+    Vec2.prototype.divide = function (o) { return (typeof o === 'number') ? new Vec2(this.x / o, this.y / o) : new Vec2(this.x / o.x, this.y / o.y); };
+    Vec2.prototype.mix = function (o, t) {
+        t = Number(t) || 0;
+        return new Vec2(this.x + ((o.x || 0) - this.x) * t,
+                        this.y + ((o.y || 0) - this.y) * t);
+    };
     Vec2.prototype.copy = function () { return new Vec2(this.x, this.y); };
+    Vec2.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y); };
     var __WEColor = {
         hsv2rgb: function(c) {
             var h = ((c.x % 1) + 1) % 1, s = c.y, v = c.z;
@@ -514,7 +653,7 @@ public final class TextScriptEngine {
                 case 4: r = t2; g = p; b = v; break;
                 default: r = v; g = p; b = q; break;
             }
-            return { x: r, y: g, z: b };
+            return new Vec3(r, g, b);
         },
         rgb2hsv: function(c) {
             var r = c.x, g = c.y, b = c.z;
@@ -526,7 +665,7 @@ public final class TextScriptEngine {
                 else { h = (r - g) / d + 4; }
                 h /= 6; if (h < 0) { h += 1; }
             }
-            return { x: h, y: mx === 0 ? 0 : d / mx, z: mx };
+            return new Vec3(h, mx === 0 ? 0 : d / mx, mx);
         }
     };
     // 미디어 이벤트 클래스(실물 계약 — 필드는 193패키지 소비 역추출): 생성자는 기본값 채운 뒤
@@ -555,11 +694,252 @@ public final class TextScriptEngine {
         this.textColor = new Vec3(1, 1, 1); this.highContrastColor = new Vec3(1, 1, 1);
         if (p) { for (var k in p) { this[k] = p[k]; } }
     }
-    var shared = {};
-    var thisScene = __noopProxy();
-    var thisObject = __noopProxy();
-    var thisLayer = __noopProxy();
+    var AnimationEvent = __mediaEvent({ name: '', frame: 0, progress: 0, finished: false });
+    function __makeTextureAnimation() {
+        return {
+            frame: 0, frameCount: 1, fps: 0, rate: 1, duration: 0, paused: false,
+            getFrame: function() { return this.frame; },
+            setFrame: function(v) { this.frame = Number(v) || 0; return this; },
+            getFrameCount: function() { return this.frameCount; },
+            getRate: function() { return this.rate; },
+            setRate: function(v) { this.rate = Number(v) || 0; return this; },
+            getDuration: function() { return this.duration; },
+            getProgress: function() { return this.frameCount > 0 ? this.frame / this.frameCount : 0; },
+            setProgress: function(v) { this.frame = (Number(v) || 0) * this.frameCount; return this; },
+            isPlaying: function() { return !this.paused; },
+            isPaused: function() { return !!this.paused; },
+            play: function() { this.paused = false; return this; },
+            pause: function() { this.paused = true; return this; },
+            stop: function() { this.paused = true; this.frame = 0; return this; }
+        };
+    }
+    function __makeTexture() {
+        var anim = __makeTextureAnimation();
+        return {
+            width: 1, height: 1, size: new Vec2(1, 1), animation: anim,
+            getAnimation: function() { return anim; },
+            getFrame: function() { return anim.frame; },
+            setFrame: function(v) { anim.setFrame(v); return this; },
+            play: function() { anim.play(); return this; },
+            pause: function() { anim.pause(); return this; },
+            stop: function() { anim.stop(); return this; }
+        };
+    }
+    function __makeCamera() {
+        return {
+            position: new Vec3(0, 0, 0), eye: new Vec3(0, 0, 0),
+            center: new Vec3(0, 0, -1), target: new Vec3(0, 0, -1),
+            up: new Vec3(0, 1, 0), direction: new Vec3(0, 0, -1),
+            fov: 45, near: 0.1, far: 1000,
+            project: function(v) { return new Vec3(v); },
+            unproject: function(v) { return new Vec3(v); },
+            lookAt: function() { return this; }
+        };
+    }
+    function __makeCameraTransforms() {
+        return {
+            position: new Vec3(0, 0, 0), targetPosition: new Vec3(0, 0, -1),
+            eye: new Vec3(0, 0, 0), center: new Vec3(0, 0, -1),
+            angles: new Vec3(0, 0, 0), targetAngles: new Vec3(0, 0, 0),
+            target: new Vec3(0, 0, -1), up: new Vec3(0, 1, 0),
+            distance: 0, targetDistance: 0, fov: 45
+        };
+    }
+    function __makeAnimationLayer() {
+        var anim = __makeTextureAnimation();
+        return {
+            name: '', blend: 1, weight: 1, animation: anim,
+            getTextureAnimation: function() { return anim; },
+            getAnimation: function() { return anim; },
+            getBlend: function() { return this.blend; },
+            setBlend: function(v) { this.blend = Number(v) || 0; return this; },
+            getWeight: function() { return this.weight; },
+            setWeight: function(v) { this.weight = Number(v) || 0; return this; },
+            play: function() { anim.play(); return this; },
+            pause: function() { anim.pause(); return this; },
+            stop: function() { anim.stop(); return this; }
+        };
+    }
+    var __rootLayer = null;
+    function __makeLayer() {
+        var tex = __makeTexture();
+        var animLayer = __makeAnimationLayer();
+        var layer = {
+            name: '', visible: true, alpha: 1,
+            origin: new Vec3(0, 0, 0), angles: new Vec3(0, 0, 0), scale: new Vec3(1, 1, 1),
+            size: new Vec2(1, 1), color: new Vec3(1, 1, 1),
+            text: '', solid: false, texture: tex, textures: [tex], parent: null, children: [],
+            getTexture: function(i) { return this.textures[i || 0] || tex; },
+            getTextureAnimation: function() { return tex.animation; },
+            getAnimation: function() { return tex.animation; },
+            getAnimationLayer: function() { return animLayer; },
+            createAnimationLayer: function() { return animLayer; },
+            setAnimationFrame: function(v) { tex.animation.setFrame(v); return this; },
+            playAnimation: function() { tex.animation.play(); return this; },
+            pauseAnimation: function() { tex.animation.pause(); return this; },
+            stopAnimation: function() { tex.animation.stop(); return this; },
+            getParent: function() { return this.parent || __rootLayer; },
+            setParent: function(p) { this.parent = p || null; return this; },
+            getChildren: function() { return this.children.slice(); },
+            addChild: function(c) { if (c) { this.children.push(c); c.parent = this; } return this; },
+            getName: function() { return this.name; },
+            setName: function(v) { this.name = String(v || ''); return this; },
+            getOrigin: function() { return this.origin; },
+            setOrigin: function(v) { this.origin = new Vec3(v); return this; },
+            getAngles: function() { return this.angles; },
+            setAngles: function(v) { this.angles = new Vec3(v); return this; },
+            getScale: function() { return this.scale; },
+            setScale: function(v) { this.scale = new Vec3(v); return this; },
+            getVisible: function() { return this.visible; },
+            setVisible: function(v) { this.visible = !!v; return this; },
+            getAlpha: function() { return this.alpha; },
+            setAlpha: function(v) { this.alpha = Number(v) || 0; return this; },
+            getText: function() { return this.text; },
+            setText: function(v) { this.text = String(v || ''); return this; },
+            getEffect: function() { return __noopProxy(); }
+        };
+        return layer;
+    }
+    function __makeRootLayer() {
+        var root = {
+            name: '', visible: true, alpha: 1, parent: null, children: [],
+            origin: new Vec3(0, 0, 0), angles: new Vec3(0, 0, 0), scale: new Vec3(1, 1, 1),
+            size: new Vec2(1, 1), color: new Vec3(1, 1, 1),
+            getParent: function() { return root; },
+            setParent: function() { return root; },
+            getChildren: function() { return root.children.slice(); },
+            addChild: function(c) { if (c) { root.children.push(c); c.parent = root; } return root; },
+            getName: function() { return root.name; },
+            setName: function(v) { root.name = String(v || ''); return root; },
+            getVisible: function() { return root.visible; },
+            setVisible: function(v) { root.visible = !!v; return root; },
+            getOrigin: function() { return root.origin; },
+            getAngles: function() { return root.angles; },
+            getScale: function() { return root.scale; },
+            getTexture: function() { return __makeTexture(); },
+            getTextureAnimation: function() { return __makeTextureAnimation(); },
+            getAnimation: function() { return __makeTextureAnimation(); },
+            getAnimationLayer: function() { return __makeAnimationLayer(); },
+            createAnimationLayer: function() { return __makeAnimationLayer(); },
+            getEffect: function() { return __noopProxy(); }
+        };
+        root.parent = root;
+        return root;
+    }
+    function __makeScene(layer) {
+        var camera = __makeCamera();
+        var transforms = __makeCameraTransforms();
+        var fallbackLayers = {};
+        function fallbackLayer(name) {
+            name = String(name || '');
+            if (!fallbackLayers[name]) {
+                var l = __makeLayer();
+                l.name = name;
+                l.alpha = 1;
+                l.visible = true;
+                l.solid = true;
+                fallbackLayers[name] = l;
+            }
+            return fallbackLayers[name];
+        }
+        return {
+            size: new Vec2(1920, 1080), screenSize: new Vec2(1920, 1080), resolution: new Vec2(1920, 1080),
+            camera: camera, layers: [layer],
+            getCamera: function() { return camera; },
+            getCameraTransforms: function() { return transforms; },
+            setCameraTransforms: function(v) { if (v) { transforms = v; } return this; },
+            getLayer: function(i) {
+                if (typeof i === 'string') {
+                    for (var n = 0; n < this.layers.length; n += 1) {
+                        if (this.layers[n].name === i) { return this.layers[n]; }
+                    }
+                    return fallbackLayer(i);
+                }
+                return this.layers[i || 0] || layer;
+            },
+            getLayerIndex: function(l) {
+                var idx = this.layers.indexOf(l);
+                return idx < 0 ? 0 : idx;
+            },
+            enumerateLayers: function() {
+                var out = this.layers.slice();
+                var hasNamed = false;
+                for (var i = 0; i < out.length; i += 1) {
+                    if (out[i].name) { hasNamed = true; break; }
+                }
+                if (!hasNamed) { out.push(fallbackLayer('player')); }
+                for (var k in fallbackLayers) {
+                    if (out.indexOf(fallbackLayers[k]) < 0) { out.push(fallbackLayers[k]); }
+                }
+                return out;
+            },
+            createLayer: function(name) {
+                var l = __makeLayer();
+                l.name = String(name || '');
+                this.layers.push(l);
+                return l;
+            },
+            sortLayer: function() { return this; },
+            getInitialLayerConfig: function() { return { origin: new Vec3(0, 0, 0), angles: new Vec3(0, 0, 0), scale: new Vec3(1, 1, 1) }; },
+            getObject: function(i) { return this.getLayer(i); },
+            getTexture: function(i) { return layer.getTexture(i); }
+        };
+    }
+    function __num(v, fallback) {
+        v = Number(v);
+        return isFinite(v) ? v : fallback;
+    }
+    function __vec3FromArray(v, fallback) {
+        fallback = fallback || [0, 0, 0];
+        return new Vec3(__num(v && v[0], fallback[0]), __num(v && v[1], fallback[1]), __num(v && v[2], fallback[2]));
+    }
+    function __vec2FromArray(v, fallback) {
+        fallback = fallback || [0, 0];
+        return new Vec2(__num(v && v[0], fallback[0]), __num(v && v[1], fallback[1]));
+    }
+    function __layerFromDescriptor(d) {
+        var l = __makeLayer();
+        d = d || {};
+        l.name = String(d.name || '');
+        l.visible = d.visible !== false;
+        l.alpha = __num(d.alpha, 1);
+        l.origin = __vec3FromArray(d.origin, [0, 0, 0]);
+        l.scale = __vec3FromArray(d.scale, [1, 1, 1]);
+        l.angles = __vec3FromArray(d.angles, [0, 0, 0]);
+        l.size = __vec2FromArray(d.size, [1, 1]);
+        l.solid = !!d.solid;
+        l.text = String(d.text || '');
+        return l;
+    }
+    __rootLayer = __makeRootLayer();
+    var thisLayer = __makeLayer();
+    var thisObject = thisLayer;
+    var thisScene = __makeScene(thisLayer);
+    function __setSceneLayers(descriptors) {
+        if (!descriptors || !descriptors.length) { return; }
+        var layers = [];
+        for (var i = 0; i < descriptors.length; i += 1) {
+            layers.push(__layerFromDescriptor(descriptors[i]));
+        }
+        if (layers.length > 0) {
+            thisScene.layers = layers;
+            thisLayer = layers[0];
+            thisObject = thisLayer;
+        }
+    }
+    function __wapleLayerForScript(name) {
+        if (typeof name !== 'string' || name.length === 0) { return thisLayer; }
+        return thisScene.getLayer(name);
+    }
+    var shared = { camera: thisScene.getCameraTransforms(), miTextContainerScale: new Vec2(1, 1) };
     var input = __noopProxy();
+    var audioBuffer = __audioBuffer;
+    var g_AudioSpectrum16Left = __audioBuffer.left16;
+    var g_AudioSpectrum16Right = __audioBuffer.right16;
+    var g_AudioSpectrum32Left = __audioBuffer.left32;
+    var g_AudioSpectrum32Right = __audioBuffer.right32;
+    var g_AudioSpectrum64Left = __audioBuffer.left64;
+    var g_AudioSpectrum64Right = __audioBuffer.right64;
     var console = { log: function(){}, error: function(){} };
     """
 }

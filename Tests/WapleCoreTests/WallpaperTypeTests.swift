@@ -29,7 +29,7 @@ final class WallpaperTypeTests: XCTestCase {
         XCTAssertTrue(WallpaperType.video.isSupportedInMVP)
         XCTAssertTrue(WallpaperType.web.isSupportedInMVP)
         XCTAssertTrue(WallpaperType.scene.isSupportedInMVP)
-        XCTAssertFalse(WallpaperType.preset.isSupportedInMVP)
+        XCTAssertTrue(WallpaperType.preset.isSupportedInMVP)
         XCTAssertFalse(WallpaperType.application.isSupportedInMVP)
     }
 }

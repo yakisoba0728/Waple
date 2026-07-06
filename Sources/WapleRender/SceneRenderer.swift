@@ -51,10 +51,38 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
-    func makeScriptEngine(_ src: String) -> TextScriptEngine? {
-        let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0) } ?? TextScriptEngine(script: src)
+    func makeScriptEngine(_ src: String, layerName: String? = nil) -> TextScriptEngine? {
+        let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName) }
+            ?? TextScriptEngine(script: src)
         if let e = engine, !e.hookNames.isEmpty { eventEngines.append(e) }
         return engine
+    }
+
+    static func sceneScriptLayers(from doc: SceneDocument) -> [SceneScriptLayerDescriptor] {
+        let imageLayers = doc.layers.map { layer in
+            SceneScriptLayerDescriptor(
+                name: layer.name,
+                visible: layer.initialVisible,
+                alpha: layer.alpha,
+                origin: SIMD3<Float>(layer.origin.x, layer.origin.y, layer.originZ),
+                scale: SIMD3<Float>(layer.scale.x, layer.scale.y, 1),
+                angles: SIMD3<Float>(0, 0, layer.angleZ),
+                size: SIMD2<Float>(layer.size.x, layer.size.y),
+                solid: layer.textureEntryName.isEmpty
+            )
+        }
+        let textLayers = doc.texts.map { text in
+            SceneScriptLayerDescriptor(
+                name: text.name,
+                visible: true,
+                alpha: text.alpha,
+                origin: SIMD3<Float>(text.origin.x, text.origin.y, 0),
+                scale: SIMD3<Float>(text.scale.x, text.scale.y, 1),
+                size: SIMD2<Float>(0, 0),
+                text: text.text
+            )
+        }
+        return imageLayers + textLayers
     }
 
     // ── 씬 이벤트(클릭/미디어) ───────────────────────────────────────────────
@@ -351,7 +379,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 씬 공유 JSContext — 3D 오브젝트/빌보드 스크립트와 2D buildLayers/buildTexts/효과 스크립트가 공유.
         // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
         // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
-        sceneScript = SceneScriptContext()
+        sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc))
         // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
         // 메시/빌보드가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
         if let cam = doc.camera3D, !doc.objects3D.isEmpty {

@@ -9,7 +9,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var webView: WKWebView?
     /// 테스트 전용 접근자(JS 상태 검증).
     public var webViewForTesting: WKWebView? { webView }
-    private var pendingUserPropertiesJSON: String?
+    private var userPropertiesJSON: String?
+    private var userPropertiesByKey: [String: WallpaperProperty] = [:]
+    private var projectRootURL: URL?
     private var audioProvider: SystemAudioSpectrumProvider?
     private var occlusionObserver: NSObjectProtocol?
     private var mouseMonitor: Any?
@@ -36,7 +38,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                                    forURLScheme: WallpaperSchemeHandler.scheme)
         let ucc = WKUserContentController()
         ucc.addUserScript(WKUserScript(source: WallpaperBridgeJS.source,
-                                       injectionTime: .atDocumentStart, forMainFrameOnly: true))
+                                       injectionTime: .atDocumentStart, forMainFrameOnly: false))
         ucc.add(self, name: "waple")
         config.userContentController = ucc
 
@@ -45,6 +47,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         web.autoresizingMask = [.width, .height]
         container.wantsLayer = true
         container.addSubview(web)
+        self.webView = web
 
         let encoded = fileName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fileName
         let base = "\(WallpaperSchemeHandler.scheme)://\(WallpaperSchemeHandler.host)/"
@@ -64,7 +67,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             }
             // 유저 오버라이드 병합(속성 편집 UI) — WE 의 "저장된 사용자 값" 의미론.
             let effective = WallpaperProperties.applying(overrides: UserPropertyStore.overrides(id: project.id), to: props)
-            pendingUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effective)
+            userPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effective)
+            userPropertiesByKey = Dictionary(uniqueKeysWithValues: effective.map { ($0.key, $0) })
+            projectRootURL = project.folderURL.standardizedFileURL
             web.load(URLRequest(url: url))
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] frame in
@@ -76,8 +81,6 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             guard let baseURL = URL(string: base) else { throw RendererError.assetMissing }
             web.loadHTMLString(VideoFallbackHTML.html(forVideoFile: fileName), baseURL: baseURL)
         }
-
-        self.webView = web
 
         // 가림 시 정지(절전 — 씬/동영상과 동일). 창 없음(headless) → no-op.
         occlusionObserver = NotificationCenter.default.addObserver(
@@ -134,10 +137,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard Self.isAllowedTopFrameURL(webView.url) else { return }
-        // didFinish 는 모든 main-frame 내비게이션마다 발생한다. 속성 주입/오디오 시작은
-        // 최초 로드 1회만 수행해야 하므로, 소비 후 pending 을 비워 멱등하게 만든다.
-        guard let json = pendingUserPropertiesJSON else { return }
-        pendingUserPropertiesJSON = nil
+        // didFinish 는 모든 허용 main-frame 내비게이션마다 발생한다. WE 는 문서가 다시 로드될 때도
+        // 저장된 사용자 속성을 다시 전달하므로 JSON 을 소비하지 않는다.
+        guard let json = userPropertiesJSON else { return }
         // 브리지 pending/flush 경유 — 리스너가 나중에 등록돼도 세터 훅이 전달(WE 의미론).
         let js = "window.__wapleApplyProps(\(json), { fps: 30 });"
         webView.evaluateJavaScript(js) { _, error in
@@ -158,10 +160,15 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     public func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard Self.isAllowedTopFrameURL(webView?.url) else { return }
+        guard Self.isAllowedBridgeMessage(message, topURL: webView?.url) else { return }
         guard let dict = message.body as? [String: Any], let type = dict["type"] as? String else { return }
         if type == "mediaListen" {
             startMediaPolling()
+        } else if type == "randomFile",
+                  let name = dict["name"] as? String,
+                  let requestID = dict["requestId"] as? String {
+            let path = randomFilePath(forProperty: name) ?? ""
+            deliverRandomFileResponse(requestID: requestID, propertyName: name, filePath: path)
         }
     }
 
@@ -169,6 +176,80 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         guard let url else { return false }
         if url.scheme == "about", url.absoluteString == "about:blank" { return true }
         return url.scheme == WallpaperSchemeHandler.scheme && url.host == WallpaperSchemeHandler.host
+    }
+
+    private static func isAllowedBridgeMessage(_ message: WKScriptMessage, topURL: URL?) -> Bool {
+        if isAllowedAssetURL(message.frameInfo.request.url) { return true }
+        return message.frameInfo.isMainFrame && isAllowedTopFrameURL(topURL)
+    }
+
+    private static func isAllowedAssetURL(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return url.scheme == WallpaperSchemeHandler.scheme && url.host == WallpaperSchemeHandler.host
+    }
+
+    private func randomFilePath(forProperty name: String) -> String? {
+        guard let root = projectRootURL,
+              let property = userPropertiesByKey[name],
+              case .string(let rawPath) = property.value else { return nil }
+        let type = property.type.lowercased()
+        guard type == "directory" || type == "file" else { return nil }
+        let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return nil }
+
+        if type == "file" {
+            guard let fileURL = WallpaperPathSecurity.containedFileURL(path, root: root),
+                  isContainedRegularFile(fileURL, root: root) else { return nil }
+            return fileURL.resolvingSymlinksInPath().path
+        }
+
+        guard let directoryURL = WallpaperPathSecurity.containedFileURL(path, root: root),
+              isContainedDirectory(directoryURL, root: root) else { return nil }
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: directoryURL,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        var candidates: [URL] = []
+        for case let url as URL in enumerator {
+            if isContainedRegularFile(url, root: root) {
+                candidates.append(url)
+            }
+        }
+        return candidates.sorted { $0.path < $1.path }.randomElement()?.resolvingSymlinksInPath().path
+    }
+
+    private func isContainedDirectory(_ url: URL, root: URL) -> Bool {
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return false }
+        let realRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let realURL = url.resolvingSymlinksInPath().standardizedFileURL
+        return WallpaperPathSecurity.contains(realURL, in: realRoot)
+    }
+
+    private func isContainedRegularFile(_ url: URL, root: URL) -> Bool {
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return false }
+        let realRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        let realURL = url.resolvingSymlinksInPath().standardizedFileURL
+        return WallpaperPathSecurity.contains(realURL, in: realRoot)
+    }
+
+    private func deliverRandomFileResponse(requestID: String, propertyName: String, filePath: String) {
+        let js = "window.__wapleRandomFileResponse && window.__wapleRandomFileResponse(\(Self.jsStringLiteral(requestID)), \(Self.jsStringLiteral(propertyName)), \(Self.jsStringLiteral(filePath)));"
+        webView?.evaluateJavaScript(js) { _, error in
+            if let error { NSLog("%@", "[Waple] random file callback failed: \(error)") }
+        }
+    }
+
+    private static func jsStringLiteral(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let string = String(data: data, encoding: .utf8) else { return "\"\"" }
+        return string
     }
 
     // MARK: - 미디어 연동(페이지가 wallpaperRegisterMedia* 를 등록한 경우에만 폴링)
@@ -242,6 +323,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         audioProvider = nil
         mediaPoller?.stop()
         mediaPoller = nil
+        userPropertiesJSON = nil
+        userPropertiesByKey = [:]
+        projectRootURL = nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "waple")
         webView?.removeFromSuperview()
         webView = nil

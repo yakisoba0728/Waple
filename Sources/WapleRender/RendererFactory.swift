@@ -11,7 +11,8 @@ public enum RendererFactory {
                 return nil
             }
             if VideoRenderer.isSupportedContainer(url) { return VideoRenderer() }
-            // mkv/avi/webm: ffmpeg 있으면 네이티브 변환 경유(VideoRenderer), 없으면 WKWebView 폴백(기존 동작).
+            guard FFmpegConverter.needsConversion(url) else { return nil }
+            // Common non-native containers: ffmpeg 있으면 네이티브 변환 경유(VideoRenderer), 없으면 WKWebView 폴백.
             return FFmpegConverter.isAvailable ? VideoRenderer() : WebRenderer(mode: .videoFallback)
         case .scene:
             return SceneRenderer()

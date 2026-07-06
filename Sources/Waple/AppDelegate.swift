@@ -246,13 +246,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return store.resolveFolderURL(for: entry)
     }
 
+    private func projectForMount(folderURL: URL) -> WallpaperProject? {
+        guard let project = try? ProjectJSONParser.parse(folderURL: folderURL) else { return nil }
+        return PresetResolver.resolve(
+            project: project,
+            originalFolder: folderURL,
+            dependencyFolder: { self.folderForEntry($0) },
+            parse: { try? ProjectJSONParser.parse(folderURL: $0) }
+        )
+    }
+
     @discardableResult
     private func apply(folderURL: URL) -> Bool {
-        let project: WallpaperProject
-        do {
-            project = try ProjectJSONParser.parse(folderURL: folderURL)
-        } catch {
-            notify("적용 실패: \(error)")
+        guard let project = projectForMount(folderURL: folderURL) else {
+            notify("적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다")
             return false
         }
         guard RendererFactory.makeRenderer(for: project) != nil else {
@@ -283,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     assignment: { self.monitorStore.assignment(for: $0) },
                     folderForEntry: { self.folderForEntry($0) })
             },
-            parse: { try? ProjectJSONParser.parse(folderURL: $0) }
+            parse: { self.projectForMount(folderURL: $0) }
         )
         let screenProjects = Array(zip(screens, projectSlots)).compactMap { screen, project -> (screenKey: String, view: NSView, project: WallpaperProject)? in
             guard let project else { return nil }
@@ -420,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 배경 창은 아이콘 레벨 아래라, 라이브 창이 떠 있는 동안 정지 배경은 그 뒤의 폴백 레이어다.
     @objc private func setStillWallpaper() {
         guard let folder = currentFolderURL,
-              let project = try? ProjectJSONParser.parse(folderURL: folder) else {
+              let project = projectForMount(folderURL: folder) else {
             notify("적용된 배경이 없습니다"); return
         }
         guard let source = StillWallpaper.source(for: project) else {
@@ -507,7 +514,7 @@ extension AppDelegate {
             return
         }
         do {
-            let project = currentFolderURL.flatMap { try? ProjectJSONParser.parse(folderURL: $0) }
+            let project = currentFolderURL.flatMap { projectForMount(folderURL: $0) }
             try ScreenSaverController.enable(currentProject: project)
             sender.state = .on
             ScreenSaverController.openSettings()  // 사용자가 바로 확인할 수 있게 잠금 화면 패널 열기

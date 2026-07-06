@@ -84,6 +84,17 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertTrue(r.contains("float y = AMOUNTX;"), "whole-word only: \(r)")
     }
 
+    func testNegativeNumericDefineDoesNotFuseWithMinusOperator() {
+        // wallpaper_dev: `x-MACRO` with `#define MACRO -1.3` became `x--1.3`, which MSL parses as `--`.
+        let src = """
+        #define OFFSET -1.3
+        float x = uv.x-OFFSET;
+        """
+        let r = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(r.contains("float x = uv.x-(-1.3);"), r)
+        XCTAssertFalse(r.contains("--1.3"), r)
+    }
+
     func testIntegerDefineAndComboSubstitutedInBody() {
         let src = "#define MODE 2\n#if MODE == 2\nyes\n#endif\nint m = MODE;\nint k = MASK;"
         let r = ShaderPreprocessor.preprocess(src, combos: ["MASK": 1])

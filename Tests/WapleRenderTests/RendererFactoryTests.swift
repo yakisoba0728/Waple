@@ -18,12 +18,13 @@ final class RendererFactoryTests: XCTestCase {
     }
 
     func testUnsupportedCodecVideoRoutesByFFmpegAvailability() {
-        // mkv/avi/webm: ffmpeg 있으면 네이티브 변환(VideoRenderer), 없으면 WKWebView 폴백(WebRenderer).
-        let r = RendererFactory.makeRenderer(for: project(type: .video, file: "a.webm"))
-        if FFmpegConverter.isAvailable {
-            XCTAssertTrue(r is VideoRenderer)
-        } else {
-            XCTAssertTrue(r is WebRenderer)
+        for ext in ["webm", "mkv", "avi", "wmv", "flv", "ogv", "mpg"] {
+            let r = RendererFactory.makeRenderer(for: project(type: .video, file: "a.\(ext)"))
+            if FFmpegConverter.isAvailable {
+                XCTAssertTrue(r is VideoRenderer, "\(ext) should route to VideoRenderer for ffmpeg conversion")
+            } else {
+                XCTAssertTrue(r is WebRenderer, "\(ext) should fall back to WebRenderer when ffmpeg is unavailable")
+            }
         }
     }
 
@@ -47,8 +48,14 @@ final class RendererFactoryTests: XCTestCase {
 
     func testSupportedContainers() {
         XCTAssertTrue(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mp4")))
+        XCTAssertTrue(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.m4v")))
+        XCTAssertTrue(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mov")))
         XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.webm")))
         XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mkv")))
-        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.avi")))  // ffmpeg 변환 대상
+        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.avi")))
+        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.wmv")))
+        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.flv")))
+        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.ogv")))
+        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mpg")))
     }
 }

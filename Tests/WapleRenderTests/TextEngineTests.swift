@@ -214,4 +214,130 @@ final class ConstantScriptTests: XCTestCase {
 
         XCTAssertEqual(out, [4, 12])
     }
+
+    func testEvaluateVecPassesVecObjectsWithCopyAndMultiply() throws {
+        let vec2 = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            return v.copy().multiply(new Vec2(2, 3));
+        }
+        """))
+        XCTAssertEqual(try XCTUnwrap(vec2.evaluateVec(current: [2, 4])), [4, 12])
+
+        let vec3 = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            return v.copy().multiply(new Vec3(2, 3, 4));
+        }
+        """))
+        XCTAssertEqual(try XCTUnwrap(vec3.evaluateVec(current: [2, 4, 6])), [4, 12, 24])
+    }
+
+    func testInitReceivesCopiedVecAndRunsOnceBeforeFirstStandaloneUpdate() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        var initCount = 0;
+        var seeded = new Vec3(0, 0, 0);
+        export function init(value) {
+            initCount += 1;
+            seeded = value.copy().multiply(new Vec3(2, 3, 4));
+            value.x = 99;
+        }
+        export function update(value) {
+            return new Vec3(seeded.x + value.x + initCount,
+                            seeded.y + value.y + initCount,
+                            seeded.z + value.z + initCount);
+        }
+        """))
+
+        let first = try XCTUnwrap(e.evaluateVec(current: [1, 2, 3]))
+        XCTAssertEqual(first, [4, 9, 16])
+
+        let second = try XCTUnwrap(e.evaluateVec(current: [4, 5, 6]))
+        XCTAssertEqual(second, [7, 12, 19])
+    }
+
+    func testBasicWallpaperEngineSceneTextureCameraAudioShims() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(value) {
+            var camera = thisScene.getCamera();
+            var texture = thisLayer.getTexture(0);
+            texture.animation.setFrame(3);
+            return new Vec3(camera.position.copy().x + texture.size.x,
+                            thisScene.size.copy().y + texture.animation.frame,
+                            engine.audio.left[0] + audioBuffer.right[0]);
+        }
+        """))
+
+        let out = try XCTUnwrap(e.evaluateVec(current: [0, 0, 0]))
+
+        XCTAssertEqual(out, [1, 1083, 0])
+    }
+
+    func testWallpaperEngineSceneLayerCompatibilityShims() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(value) {
+            shared.camera.targetPosition = new Vec3(0, 0.82, 0);
+            shared.miTextContainerScale.x = 2;
+            var created = thisScene.createLayer("child");
+            created.getTextureAnimation().setFrame(5);
+            created.getAnimationLayer("Surprise").setBlend(0.5).getTextureAnimation().setRate(2);
+            thisLayer.addChild(created);
+            var camera = thisScene.getCameraTransforms();
+            camera.targetAngles = new Vec3(1, 2, 3);
+            thisScene.setCameraTransforms(camera);
+            return new Vec3(thisScene.getLayerIndex(thisLayer) + thisScene.enumerateLayers().length,
+                            created.getParent() === thisLayer ? created.getTextureAnimation().getFrame() : -1,
+                            shared.miTextContainerScale.x + thisScene.getCameraTransforms().targetAngles.z);
+        }
+        """))
+
+        let out = try XCTUnwrap(e.evaluateVec(current: [0, 0, 0]))
+
+        XCTAssertEqual(out, [2, 5, 5])
+    }
+
+    func testColorMixAndRootParentCompatibilityShims() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        import * as WEColor from 'WEColor';
+        shared.miPrimaryColor = WEColor.hsv2rgb({ x: 0, y: 1, z: 1 });
+        shared.miTextBgColor = new Vec3(0, 0, 1);
+        export function update(value) {
+            var mixed = shared.miPrimaryColor.mix(shared.miTextBgColor, 0.25);
+            var parent = thisLayer.getParent().getParent();
+            return new Vec3(mixed.x, mixed.z, parent.visible ? 1 : 0);
+        }
+        """))
+
+        let out = try XCTUnwrap(e.evaluateVec(current: [0, 0, 0]))
+
+        XCTAssertEqual(out[0], 0.75, accuracy: 1e-4)
+        XCTAssertEqual(out[1], 0.25, accuracy: 1e-4)
+        XCTAssertEqual(out[2], 1, accuracy: 1e-4)
+    }
+
+    func testNamedLayerFallbacksForMusicPlayerScripts() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        let playerLayers = [];
+        let playerExceptions = [];
+        let appearAnim = thisScene.getLayer("playeroutlineanim").getTextureAnimation();
+        export function init(value) {
+            thisScene.enumerateLayers().forEach(element => {
+                if (element.name.includes("player") && element.visible) {
+                    if (element.name.includes("exception")) {
+                        playerExceptions.push(element);
+                    }
+                    playerLayers.push(element);
+                }
+            });
+            appearAnim.setFrame(3);
+        }
+        export function update(value) {
+            playerLayers.forEach(element => { element.alpha = Math.max(element.alpha - 0.25, 0); });
+            shared.uiopacity = playerLayers[0].alpha;
+            return value + shared.uiopacity + appearAnim.getFrame();
+        }
+        """))
+
+        let out = try XCTUnwrap(e.evaluateVec(current: [1]))
+
+        XCTAssertEqual(out[0], 4.75, accuracy: 1e-4)
+    }
 }

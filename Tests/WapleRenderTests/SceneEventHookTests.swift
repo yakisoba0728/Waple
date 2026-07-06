@@ -155,4 +155,26 @@ final class SceneEventHookTests: XCTestCase {
         e.callHook("mediaPropertiesChanged", eventJS: "new MediaPropertiesEvent({ artist: 'AR' })")
         XCTAssertEqual(e.evaluate(current: ""), "AR")
     }
+
+    func testWallpaperEngineLifecycleAndAnimationHooksCaptured() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        var t = '';
+        export function init(value) {}
+        export function update(value) { return t; }
+        export function applyUserProperties(props) { t += props.mode.value; }
+        export function cursorEnter(event) { t += ':enter'; }
+        export function cursorLeave(event) { t += ':leave'; }
+        export function animationEvent(event) { t += ':' + event.name + ':' + event.frame; }
+        """))
+        let expected: Set<String> = ["init", "applyUserProperties", "cursorEnter", "cursorLeave", "animationEvent"]
+
+        XCTAssertTrue(expected.isSubset(of: e.hookNames), "missing hooks: \(expected.subtracting(e.hookNames))")
+
+        e.callHook("applyUserProperties", eventJS: "({ mode: { value: 'dark' } })")
+        e.callHook("cursorEnter", eventJS: "({ worldPosition: new Vec3(1, 2, 0) })")
+        e.callHook("cursorLeave", eventJS: "({ worldPosition: new Vec3(3, 4, 0) })")
+        e.callHook("animationEvent", eventJS: "new AnimationEvent({ name: 'intro', frame: 2 })")
+
+        XCTAssertEqual(e.evaluate(current: ""), "dark:enter:leave:intro:2")
+    }
 }

@@ -10,6 +10,10 @@ final class FFmpegConverterTests: XCTestCase {
         XCTAssertTrue(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.mkv")))
         XCTAssertTrue(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.avi")))
         XCTAssertTrue(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.webm")))
+        XCTAssertTrue(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.wmv")))
+        XCTAssertTrue(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.flv")))
+        XCTAssertTrue(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.ogv")))
+        XCTAssertTrue(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.mpg")))
         XCTAssertFalse(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.mp4")))
         XCTAssertFalse(FFmpegConverter.needsConversion(URL(fileURLWithPath: "/a/x.mov")))
     }
@@ -56,7 +60,7 @@ final class FFmpegConverterTests: XCTestCase {
         try Data([0x01, 0x02, 0x03]).write(to: source)
         let cached = FFmpegConverter.cachedURL(for: source)
         try FileManager.default.createDirectory(at: cached.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data([0x00]).write(to: cached)
+        try makeTinyMP4(at: cached)
         defer { try? FileManager.default.removeItem(at: cached) }
 
         let exp = expectation(description: "cache hit callback")
@@ -73,6 +77,30 @@ final class FFmpegConverterTests: XCTestCase {
 
         XCTAssertEqual(callbackURL, cached)
         XCTAssertTrue(callbackWasMain, "all converter completions should enter renderer/app code on main")
+    }
+
+    func testConvertDoesNotReuseZeroByteCacheHit() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let source = dir.appendingPathComponent("cached.webm")
+        try Data([0x01, 0x02, 0x03]).write(to: source)
+        let cached = FFmpegConverter.cachedURL(for: source)
+        try FileManager.default.createDirectory(at: cached.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: cached)
+        defer { try? FileManager.default.removeItem(at: cached) }
+
+        let exp = expectation(description: "invalid cache ignored")
+        var callbackURL: URL?
+        FFmpegConverter.convert(source, timeout: 5) { url in
+            callbackURL = url
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 10)
+
+        XCTAssertNil(callbackURL, "zero-byte converted cache entries should not be reused")
     }
 
     func testArgumentsVideotoolboxThenLibx264() {
@@ -161,5 +189,35 @@ final class FFmpegConverterTests: XCTestCase {
         FFmpegConverter.convert(src, timeout: 60) { again = $0; exp2.fulfill() }
         wait(for: [exp2], timeout: 5)
         XCTAssertEqual(again, mp4)
+    }
+
+    private func makeTinyMP4(at url: URL) throws {
+        try? FileManager.default.removeItem(at: url)
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 64,
+            AVVideoHeightKey: 64,
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: 64,
+            kCVPixelBufferHeightKey as String: 64,
+        ])
+        writer.add(input)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+        for i in 0..<4 {
+            while !input.isReadyForMoreMediaData {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+            }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &buffer)
+            adaptor.append(buffer!, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: 10))
+        }
+        input.markAsFinished()
+        let sem = DispatchSemaphore(value: 0)
+        writer.finishWriting { sem.signal() }
+        sem.wait()
     }
 }

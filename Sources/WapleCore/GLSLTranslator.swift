@@ -55,7 +55,6 @@ public enum GLSLTranslator {
         // 유니폼/attribute/varying 수집(주석 어노테이션 보존 위해 본문 정리 전에).
         let vUniforms = parseUniforms(vsrc), fUniforms = parseUniforms(fsrc)
         let vVaryings = parseVaryings(vsrc)
-        let fVaryings = parseVaryings(fsrc)
         let varyings = parseVaryings(vsrc + "\n" + fsrc)   // 합집합
         let vVaryingTypes = Dictionary(uniqueKeysWithValues: vVaryings.map { ($0.name, $0.type) })
         let allUniforms = mergeUniforms(vUniforms + fUniforms)
@@ -133,10 +132,18 @@ public enum GLSLTranslator {
         frag["gl_FragCoord"] = "in.gl_Position"  // [[position]] = 픽셀 좌표
 
         // 함수 파싱은 주석 제거본에서(annotation JSON 중괄호가 balance 를 깨지 않도록).
-        let vFns = parseFunctions(vClean, structs: structNames)
-        let fFns = parseFunctions(fClean, structs: structNames)
-        guard !hasUnsupportedSameStageOverloads(vFns),
-              !hasUnsupportedSameStageOverloads(fFns) else { return nil }
+        var vFns = parseFunctions(vClean, structs: structNames)
+        var fFns = parseFunctions(fClean, structs: structNames)
+        var overloadSizeEnv: [String: Int] = ["gl_FragColor": 4, "gl_FragCoord": 4, "gl_Position": 4,
+                                              "g_Time": 1, "g_PointerPosition": 2,
+                                              "a_TexCoord": 2, "a_Position": 3]
+        for vy in varyings { overloadSizeEnv[vy.name] = vy.type.components }
+        for m in materials { overloadSizeEnv[m.glslName] = m.type.components }
+        for id in bodyIds where isEngine(id) && id.hasSuffix("Resolution") { overloadSizeEnv[id] = 4 }
+        var vertexOverloadSizeEnv = overloadSizeEnv
+        for (name, type) in vVaryingTypes where type.components > 0 { vertexOverloadSizeEnv[name] = type.components }
+        vFns = rewriteSameStageOverloads(vFns, baseEnv: vertexOverloadSizeEnv)
+        fFns = rewriteSameStageOverloads(fFns, baseEnv: overloadSizeEnv)
         guard let vertMainF = vFns.first(where: { $0.name == "main" }),
               let fragMainF = fFns.first(where: { $0.name == "main" }) else { return nil }
         // 헬퍼: vert+frag 합집합(이름 dedupe — 공용 헤더가 양 스테이지에 인라인되는 경우).
@@ -470,15 +477,350 @@ public enum GLSLTranslator {
         return out
     }
 
-    static func hasUnsupportedSameStageOverloads(_ fns: [GLSLFunction]) -> Bool {
-        var signatures: [String: String] = [:]
-        for fn in fns where fn.name != "main" {
-            let sig = ([fn.ret] + fn.params.map { "\($0.byRef ? "&" : "")\($0.type)\($0.array ? "[]" : "")" })
-                .joined(separator: "|")
-            if let existing = signatures[fn.name], existing != sig { return true }
-            signatures[fn.name] = sig
+    private struct OverloadCandidate {
+        let mangledName: String
+        let paramSizes: [Int]
+    }
+
+    /// Same-stage GLSL helper overloads are legal in WE shaders, but emitted MSL helpers live in a C-style namespace.
+    /// Mangle only real overload sets and rewrite calls when argument sizes identify one candidate.
+    private static func rewriteSameStageOverloads(_ fns: [GLSLFunction], baseEnv: [String: Int]) -> [GLSLFunction] {
+        let grouped = Dictionary(grouping: fns.filter { $0.name != "main" }, by: { $0.name })
+        var overloads: [String: [OverloadCandidate]] = [:]
+        var renameByNameAndKey: [String: [String: String]] = [:]
+        var usedNames = Set(fns.map { $0.name })
+        for (name, group) in grouped {
+            let paramKeys = Set(group.map { overloadParamKey($0.params) })
+            guard paramKeys.count > 1 else { continue }
+            var candidates: [OverloadCandidate] = []
+            var byKey: [String: String] = [:]
+            for fn in group {
+                let key = overloadParamKey(fn.params)
+                if let existing = byKey[key] {
+                    candidates.append(OverloadCandidate(mangledName: existing, paramSizes: overloadParamSizes(fn.params)))
+                    continue
+                }
+                let base = "\(name)_\(overloadSuffix(fn.params))"
+                var mangled = base
+                var n = 2
+                while usedNames.contains(mangled) {
+                    mangled = "\(base)_\(n)"
+                    n += 1
+                }
+                usedNames.insert(mangled)
+                byKey[key] = mangled
+                candidates.append(OverloadCandidate(mangledName: mangled, paramSizes: overloadParamSizes(fn.params)))
+            }
+            overloads[name] = candidates
+            renameByNameAndKey[name] = byKey
         }
-        return false
+        guard !overloads.isEmpty else { return fns }
+
+        var functionReturns: [String: Int] = [:]
+        for fn in fns where fn.name != "main" {
+            let emittedName = renameByNameAndKey[fn.name]?[overloadParamKey(fn.params)] ?? fn.name
+            functionReturns[emittedName] = GLSLTypeAdapter.typeSize(fn.ret) ?? 0
+        }
+
+        return fns.map { fn in
+            var env = baseEnv
+            for p in fn.params { env[p.name] = p.array ? 0 : (GLSLTypeAdapter.typeSize(p.type) ?? 0) }
+            for (name, size) in localTypeSizes(in: fn.body) { env[name] = size }
+            let body = rewriteOverloadCalls(fn.body, overloads: overloads, env: env, functionReturns: functionReturns)
+            let emittedName = renameByNameAndKey[fn.name]?[overloadParamKey(fn.params)] ?? fn.name
+            return GLSLFunction(ret: fn.ret, name: emittedName, params: fn.params, body: body)
+        }
+    }
+
+    private static func overloadParamKey(_ params: [GLSLFunction.Param]) -> String {
+        params.map { "\($0.byRef ? "&" : "")\(canonicalOverloadType($0.type))\($0.array ? "[]" : "")" }
+            .joined(separator: "|")
+    }
+
+    private static func overloadSuffix(_ params: [GLSLFunction.Param]) -> String {
+        guard !params.isEmpty else { return "void" }
+        return params.map {
+            var s = canonicalOverloadType($0.type)
+            if $0.byRef { s = "ref_\(s)" }
+            if $0.array { s += "_array" }
+            return s.map { $0.isLetter || $0.isNumber ? String($0) : "_" }.joined()
+        }.joined(separator: "_")
+    }
+
+    private static func canonicalOverloadType(_ type: String) -> String {
+        GLSLType.from(type)?.rawValue ?? type
+    }
+
+    private static func overloadParamSizes(_ params: [GLSLFunction.Param]) -> [Int] {
+        params.map { $0.array ? 0 : (GLSLTypeAdapter.typeSize($0.type) ?? 0) }
+    }
+
+    private static func rewriteOverloadCalls(_ body: String, overloads: [String: [OverloadCandidate]],
+                                             env: [String: Int], functionReturns: [String: Int]) -> String {
+        var out = body
+        let names = overloads.keys.sorted { $0.count > $1.count }
+        for _ in 0..<4 {
+            let beforePass = out
+            for name in names {
+                guard let candidates = overloads[name] else { continue }
+                out = rewriteCall(out, name) { args in
+                    let argSizes = args.map { inferExpressionSize($0, vars: env, functionReturns: functionReturns) }
+                    let matches = candidates.filter { candidate in
+                        guard candidate.paramSizes.count == argSizes.count else { return false }
+                        for (want, got) in zip(candidate.paramSizes, argSizes) where want == 0 || got == 0 || want != got {
+                            return false
+                        }
+                        return true
+                    }
+                    guard matches.count == 1 else { return nil }
+                    return "\(matches[0].mangledName)(\(args.joined(separator: ", ")))"
+                }
+            }
+            if out == beforePass { break }
+        }
+        return out
+    }
+
+    private static func localTypeSizes(in body: String) -> [String: Int] {
+        let chars = Array(body)
+        var out: [String: Int] = [:]
+        var i = 0
+        func readIdent(_ j: inout Int) -> String {
+            var s = ""
+            while j < chars.count, chars[j].isLetter || chars[j] == "_" || (!s.isEmpty && chars[j].isNumber) {
+                s.append(chars[j])
+                j += 1
+            }
+            return s
+        }
+        func skipWS(_ j: inout Int) {
+            while j < chars.count, chars[j].isWhitespace { j += 1 }
+        }
+        func skipInitializer(_ j: inout Int) {
+            var depth = 0
+            while j < chars.count {
+                if chars[j] == "(" || chars[j] == "[" || chars[j] == "{" { depth += 1 }
+                else if chars[j] == ")" || chars[j] == "]" || chars[j] == "}" { depth = max(0, depth - 1) }
+                else if depth == 0, chars[j] == "," || chars[j] == ";" { return }
+                j += 1
+            }
+        }
+        while i < chars.count {
+            guard chars[i].isLetter || chars[i] == "_" else { i += 1; continue }
+            var j = i
+            let type = readIdent(&j)
+            guard type != "void", let size = GLSLTypeAdapter.typeSize(type) else {
+                i = max(j, i + 1)
+                continue
+            }
+            skipWS(&j)
+            var foundName = false
+            while j < chars.count {
+                skipWS(&j)
+                guard j < chars.count, chars[j].isLetter || chars[j] == "_" else { break }
+                let name = readIdent(&j)
+                out[name] = size
+                foundName = true
+                skipWS(&j)
+                if j < chars.count, chars[j] == "[" { out[name] = 0; skipInitializer(&j) }
+                if j < chars.count, chars[j] == "=" { j += 1; skipInitializer(&j) }
+                skipWS(&j)
+                if j < chars.count, chars[j] == "," { j += 1; continue }
+                break
+            }
+            i = foundName ? j : max(j, i + 1)
+        }
+        return out
+    }
+
+    private static func inferExpressionSize(_ expr: String, vars: [String: Int], functionReturns: [String: Int]) -> Int {
+        let s = stripOuterParens(expr.trimmingCharacters(in: .whitespaces))
+        guard !s.isEmpty else { return 0 }
+        if isNumericLiteral(s) || s == "true" || s == "false" { return 1 }
+        if let (base, size) = trailingSwizzle(s) {
+            let baseSize = inferExpressionSize(base, vars: vars, functionReturns: functionReturns)
+            return baseSize > 0 ? size : 0
+        }
+        if let (lhs, rhs) = splitTopLevelBinary(s, ops: ["+", "-"])
+            ?? splitTopLevelBinary(s, ops: ["*", "/", "%"]) {
+            let l = inferExpressionSize(lhs, vars: vars, functionReturns: functionReturns)
+            let r = inferExpressionSize(rhs, vars: vars, functionReturns: functionReturns)
+            if l > 1, r > 1, l != r { return min(l, r) }
+            if l == 0 || r == 0 { return 0 }
+            return max(l, r)
+        }
+        if let (name, args) = wholeCall(s) {
+            if let n = GLSLTypeAdapter.typeSize(name), n > 0 { return n }
+            if name == "texSample2D" || name == "texSample2DLod" { return 4 }
+            if ["dot", "distance", "length"].contains(name) { return 1 }
+            if let r = functionReturns[name] { return r }
+            let argSizes = args.map { inferExpressionSize($0, vars: vars, functionReturns: functionReturns) }.filter { $0 > 0 }
+            if ["sin", "cos", "tan", "abs", "floor", "ceil", "fract", "frac", "sqrt", "normalize", "min", "max",
+                "mix", "lerp", "clamp", "pow", "mod", "we_mod"].contains(name), !argSizes.isEmpty {
+                return argSizes.max() ?? 0
+            }
+        }
+        if let (base, _) = trailingIndex(s) {
+            return inferExpressionSize(base, vars: vars, functionReturns: functionReturns) > 1 ? 1 : 0
+        }
+        return isIdentifier(s) ? (vars[s] ?? 0) : 0
+    }
+
+    private static func stripOuterParens(_ s: String) -> String {
+        var current = s
+        while current.hasPrefix("("), current.hasSuffix(")") {
+            let chars = Array(current)
+            var depth = 0
+            var wraps = true
+            for i in chars.indices {
+                if chars[i] == "(" { depth += 1 }
+                else if chars[i] == ")" {
+                    depth -= 1
+                    if depth == 0, i != chars.count - 1 { wraps = false; break }
+                }
+                if depth < 0 { wraps = false; break }
+            }
+            guard wraps, chars.count >= 2 else { break }
+            current = String(chars[1..<(chars.count - 1)]).trimmingCharacters(in: .whitespaces)
+        }
+        return current
+    }
+
+    private static func trailingSwizzle(_ s: String) -> (base: String, size: Int)? {
+        let chars = Array(s)
+        guard !chars.isEmpty else { return nil }
+        var depth = 0
+        var i = chars.count - 1
+        while i >= 0 {
+            if chars[i] == ")" || chars[i] == "]" { depth += 1 }
+            else if chars[i] == "(" || chars[i] == "[" { depth = max(0, depth - 1) }
+            else if depth == 0, chars[i] == "." {
+                let member = String(chars[(i + 1)..<chars.count])
+                guard !member.isEmpty, member.allSatisfy({ "xyzwrgbastpq".contains($0) }) else { return nil }
+                return (String(chars[..<i]), min(member.count, 4))
+            }
+            i -= 1
+        }
+        return nil
+    }
+
+    private static func trailingIndex(_ s: String) -> (base: String, index: String)? {
+        let chars = Array(s)
+        guard chars.last == "]" else { return nil }
+        var depth = 0
+        var i = chars.count - 1
+        while i >= 0 {
+            if chars[i] == "]" { depth += 1 }
+            else if chars[i] == "[" {
+                depth -= 1
+                if depth == 0 {
+                    return (String(chars[..<i]), String(chars[(i + 1)..<(chars.count - 1)]))
+                }
+            }
+            i -= 1
+        }
+        return nil
+    }
+
+    private static func splitTopLevelBinary(_ s: String, ops: Set<Character>) -> (String, String)? {
+        let chars = Array(s)
+        guard !chars.isEmpty else { return nil }
+        var depth = 0
+        var i = chars.count - 1
+        while i >= 0 {
+            let c = chars[i]
+            if c == ")" || c == "]" { depth += 1 }
+            else if c == "(" || c == "[" { depth = max(0, depth - 1) }
+            else if depth == 0, ops.contains(c), !isUnaryOperator(chars, at: i) {
+                return (String(chars[..<i]), String(chars[(i + 1)..<chars.count]))
+            }
+            i -= 1
+        }
+        return nil
+    }
+
+    private static func isUnaryOperator(_ chars: [Character], at i: Int) -> Bool {
+        if chars[i] == "+" || chars[i] == "-", i > 0, chars[i - 1] == "e" || chars[i - 1] == "E" { return true }
+        var j = i - 1
+        while j >= 0, chars[j].isWhitespace { j -= 1 }
+        guard j >= 0 else { return true }
+        return "([,{?:+-*/%<>=!".contains(chars[j])
+    }
+
+    private static func wholeCall(_ s: String) -> (name: String, args: [String])? {
+        let chars = Array(s)
+        var i = 0
+        guard i < chars.count, chars[i].isLetter || chars[i] == "_" else { return nil }
+        var name = ""
+        while i < chars.count, chars[i].isLetter || chars[i] == "_" || (!name.isEmpty && chars[i].isNumber) {
+            name.append(chars[i])
+            i += 1
+        }
+        while i < chars.count, chars[i].isWhitespace { i += 1 }
+        guard i < chars.count, chars[i] == "(" else { return nil }
+        let open = i
+        var depth = 0
+        while i < chars.count {
+            if chars[i] == "(" { depth += 1 }
+            else if chars[i] == ")" {
+                depth -= 1
+                if depth == 0 {
+                    let close = i
+                    i += 1
+                    while i < chars.count, chars[i].isWhitespace { i += 1 }
+                    guard i == chars.count else { return nil }
+                    return (name, splitArguments(String(chars[(open + 1)..<close])))
+                }
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    private static func splitArguments(_ s: String) -> [String] {
+        let chars = Array(s)
+        var args: [String] = []
+        var cur = ""
+        var depth = 0
+        for c in chars {
+            if c == "(" || c == "[" || c == "{" { depth += 1 }
+            else if c == ")" || c == "]" || c == "}" { depth = max(0, depth - 1) }
+            if c == ",", depth == 0 {
+                args.append(cur.trimmingCharacters(in: .whitespaces))
+                cur = ""
+            } else {
+                cur.append(c)
+            }
+        }
+        let tail = cur.trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty || !args.isEmpty { args.append(tail) }
+        return args
+    }
+
+    private static func isIdentifier(_ s: String) -> Bool {
+        guard let first = s.first, first.isLetter || first == "_" else { return false }
+        return s.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
+    private static func isNumericLiteral(_ s: String) -> Bool {
+        var chars = Array(s)
+        if chars.first == "+" || chars.first == "-" { chars.removeFirst() }
+        guard chars.contains(where: { $0.isNumber }) else { return false }
+        var i = 0
+        while i < chars.count, chars[i].isNumber { i += 1 }
+        if i < chars.count, chars[i] == "." {
+            i += 1
+            while i < chars.count, chars[i].isNumber { i += 1 }
+        }
+        if i < chars.count, chars[i] == "e" || chars[i] == "E" {
+            i += 1
+            if i < chars.count, chars[i] == "+" || chars[i] == "-" { i += 1 }
+            var exponentDigits = false
+            while i < chars.count, chars[i].isNumber { exponentDigits = true; i += 1 }
+            guard exponentDigits else { return false }
+        }
+        if i < chars.count, chars[i] == "f" || chars[i] == "F" { i += 1 }
+        return i == chars.count
     }
 
     // MARK: - 선언 파싱
@@ -509,14 +851,30 @@ public enum GLSLTranslator {
                    let b = toks[1].firstIndex(of: "["), let e = toks[1].firstIndex(of: "]"),
                    b < e, let n = Int(toks[1][toks[1].index(after: b)..<e]), n > 0, n <= 64 {
                     let name = String(toks[1][..<b])
-                    arrays.append(ArrayVarying(type: type, name: name, count: n))
-                    for k in 0..<n { out.append("varying \(toks[0]) \(name)_\(k);") }
+                    let expandedCount = packedVec4VaryingCount(name: name, declaredCount: n, source: src) ?? n
+                    arrays.append(ArrayVarying(type: type, name: name, count: expandedCount))
+                    for k in 0..<expandedCount { out.append("varying \(toks[0]) \(name)_\(k);") }
                     continue
                 }
             }
             out.append(String(line))
         }
         return (out.joined(separator: "\n"), arrays)
+    }
+
+    private static func packedVec4VaryingCount(name: String, declaredCount: Int, source: String) -> Int? {
+        guard declaredCount > 4 else { return nil }
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        let packedPatterns = [
+            #"\#(escaped)\s*\[\s*uint\s*\([^)]*\)\s*/\s*uint\s*\(\s*4\s*\)\s*\]"#,
+            #"\#(escaped)\s*\[\s*int\s*\([^)]*\*\s*0\.25[^)]*\)\s*\]"#
+        ]
+        for pattern in packedPatterns {
+            if source.range(of: pattern, options: .regularExpression) != nil {
+                return max(1, (declaredCount + 3) / 4)
+            }
+        }
+        return nil
     }
 
     struct Uniform { let type: GLSLType; let name: String; let annotationMaterial: String?; let annotationDefault: [Float]? }

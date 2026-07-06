@@ -780,15 +780,26 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("uv * 2.0") && t.msl.contains("uv * 0.5"), "두 정의 공존: \(t.msl)")
     }
 
-    func testSameStageOverloadsFailGracefully() {
+    func testSameStageHelperOverloadsAreMangledAndCallsRewritten() throws {
         let frag = """
         varying vec2 v_TexCoord;
         uniform sampler2D g_Texture0;
-        float shape(float x) { return x; }
-        vec2 shape(vec2 uv) { return uv; }
-        void main() { gl_FragColor = texSample2D(g_Texture0, shape(v_TexCoord)); }
+        float noise(float x) { return x; }
+        float noise(vec2 uv) { return uv.x + uv.y; }
+        float TnSin(float x) { return sin(x); }
+        vec4 TnSin(vec4 v) { return vec4(TnSin(v.x), TnSin(v.y), TnSin(v.z), TnSin(v.w)); }
+        void main() {
+            float n = noise(v_TexCoord);
+            vec4 wave = TnSin(vec4(n));
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * wave;
+        }
         """
-        XCTAssertNil(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        for expect in ["noise_float", "noise_vec2", "TnSin_float", "TnSin_vec4",
+                       "noise_vec2(in.v_TexCoord)", "TnSin_vec4(float4(n))",
+                       "TnSin_float(v.x)"] {
+            XCTAssertTrue(t.msl.contains(expect), "\(expect) missing:\n\(t.msl)")
+        }
     }
 
     func testReverseCrossStageVaryingMismatchUsesVertexSwizzleAndZeroInit() throws {

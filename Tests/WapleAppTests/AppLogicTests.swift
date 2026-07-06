@@ -163,6 +163,57 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(out, [project("A"), global])
     }
 
+    func testPresetResolverUsesDependencyProjectFromLibrary() {
+        let preset = WallpaperProject(
+            id: "preset1", type: .preset, fileName: nil, previewName: "preset.jpg",
+            title: "Preset Title", tags: ["Relax"], contentRating: nil, workshopId: nil,
+            dependency: "dep1", folderURL: URL(fileURLWithPath: "/lib/preset1", isDirectory: true))
+        let depFolder = URL(fileURLWithPath: "/lib/dep1", isDirectory: true)
+        let resolved = PresetResolver.resolve(
+            project: preset,
+            originalFolder: preset.folderURL,
+            dependencyFolder: { $0 == "dep1" ? depFolder : nil },
+            parse: { folder in
+                folder == depFolder
+                ? WallpaperProject(id: "dep1", type: .scene, fileName: "scene.json", previewName: "dep.jpg",
+                                   title: "Dep", tags: [], contentRating: nil, workshopId: nil,
+                                   dependency: nil, folderURL: folder)
+                : nil
+            })
+
+        guard let project = resolved else { return XCTFail("preset should resolve through dependency") }
+        XCTAssertEqual(project.id, "preset1")
+        XCTAssertEqual(project.type, .scene)
+        XCTAssertEqual(project.fileName, "scene.json")
+        XCTAssertEqual(project.previewName, "preset.jpg")
+        XCTAssertEqual(project.folderURL, depFolder)
+        XCTAssertEqual(project.dependency, "dep1")
+    }
+
+    func testPresetResolverFallsBackToSiblingDependencyFolder() {
+        let presetFolder = URL(fileURLWithPath: "/wallpapers/preset1", isDirectory: true)
+        let sibling = URL(fileURLWithPath: "/wallpapers/dep1", isDirectory: true)
+        let preset = WallpaperProject(
+            id: "preset1", type: .preset, fileName: nil, previewName: nil,
+            title: "Preset", tags: [], contentRating: nil, workshopId: nil,
+            dependency: "dep1", folderURL: presetFolder)
+
+        let resolved = PresetResolver.resolve(
+            project: preset,
+            originalFolder: presetFolder,
+            dependencyFolder: { _ in nil },
+            parse: { folder in
+                folder == sibling
+                ? WallpaperProject(id: "dep1", type: .web, fileName: "index.html", previewName: nil,
+                                   title: "Dep", tags: [], contentRating: nil, workshopId: nil,
+                                   dependency: nil, folderURL: folder)
+                : nil
+            })
+
+        XCTAssertEqual(resolved?.type, .web)
+        XCTAssertEqual(resolved?.folderURL, sibling)
+    }
+
     func testScreenChangeDetachesRenderersBeforeWindowRebuild() {
         var existing = [Tok("old1"), Tok("old2")]
         var tornDown: [String] = []

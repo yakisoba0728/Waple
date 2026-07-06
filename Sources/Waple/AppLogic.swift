@@ -52,6 +52,41 @@ enum MonitorMapping {
     }
 }
 
+enum PresetResolver {
+    static func resolve(
+        project: WallpaperProject,
+        originalFolder: URL,
+        dependencyFolder: (String) -> URL?,
+        parse: (URL) -> WallpaperProject?
+    ) -> WallpaperProject? {
+        guard project.type == .preset else { return project }
+        guard let dependency = project.dependency, !dependency.isEmpty else { return nil }
+
+        var candidates: [URL] = []
+        if let fromLibrary = dependencyFolder(dependency) { candidates.append(fromLibrary) }
+        candidates.append(originalFolder.deletingLastPathComponent().appendingPathComponent(dependency, isDirectory: true))
+
+        var seen = Set<String>()
+        for folder in candidates {
+            let key = folder.standardizedFileURL.path
+            guard seen.insert(key).inserted, let target = parse(folder), target.type != .preset else { continue }
+            return WallpaperProject(
+                id: project.id,
+                type: target.type,
+                fileName: target.fileName,
+                previewName: project.previewName ?? target.previewName,
+                title: project.title,
+                tags: project.tags,
+                contentRating: project.contentRating ?? target.contentRating,
+                workshopId: project.workshopId ?? target.workshopId,
+                dependency: dependency,
+                folderURL: target.folderURL
+            )
+        }
+        return nil
+    }
+}
+
 enum ScreenChangeLifecycle {
     static func detachRenderersBeforeRebuild<R>(
         existing: inout [R],

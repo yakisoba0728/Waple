@@ -63,7 +63,7 @@ final class Scene3DTests: XCTestCase {
          ]}
         """
         let doc = try SceneDocument.parse(package: pkg([("scene.json", scene)]))
-        XCTAssertEqual(doc.objects3D.count, 1, "invisible 모델은 제외")
+        XCTAssertEqual(doc.objects3D.count, 1, "스크립트 없는 invisible 모델은 제외")
         let o = doc.objects3D[0]
         XCTAssertEqual(o.id, 42)
         XCTAssertEqual(o.name, "Sonic")
@@ -159,6 +159,23 @@ final class Scene3DTests: XCTestCase {
         XCTAssertEqual(planet.scale, Vec3(x: 0.02, y: 0.02, z: 0.02))
     }
 
+    /// visible=false 여도 visible 스크립트가 있으면 런타임 토글 대상이므로 3D 모델을 파싱에서 보존한다.
+    func testHiddenScripted3DModelIsPreserved() throws {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":6,"name":"AltCharacter","model":"models/alt.mdl",
+            "visible":{"value":false,"script":"export function update(v){ return shared.showAlt === true; }"},
+            "origin":"0 0 0","angles":"0 0 0","scale":"1 1 1"}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([("scene.json", scene)]))
+        let model = try XCTUnwrap(doc.objects3D.first)
+        XCTAssertEqual(model.name, "AltCharacter")
+        XCTAssertNotNil(model.propertyScripts["visible"])
+    }
+
     /// 3D 씬 이미지 레이어(빌보드): origin 의 z 성분과 parent 계층 보존.
     func test3DBillboardLayerPreservesOriginZAndParent() throws {
         let scene = """
@@ -248,7 +265,7 @@ final class Scene3DTests: XCTestCase {
 }
 
 /// 실물 스모크(env-guarded): 3개 3D 씬 파스 성공 + camera3D non-nil + 모델 오브젝트 > 0.
-/// 실측(2026-07-03): 3662790108=70모델/1라이트, 3706286085=9모델/2라이트, 3737268876=40모델/6라이트.
+/// 실측(2026-07-07): 3662790108=70모델/1라이트, 3706286085=9모델/2라이트, 3737268876=148모델/6라이트.
 final class Scene3DRealFileTests: XCTestCase {
     private func realPkg(_ id: String) throws -> ScenePackage {
         let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"] ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
@@ -290,12 +307,12 @@ final class Scene3DRealFileTests: XCTestCase {
         let cam = try XCTUnwrap(doc.camera3D, "스크립트 fov 도 camera3D 세팅")
         XCTAssertEqual(cam.fov, 50.0)
         XCTAssertGreaterThan(doc.objects3D.count, 0)
-        XCTAssertEqual(doc.objects3D.count, 40)
+        XCTAssertEqual(doc.objects3D.count, 148)
         XCTAssertEqual(doc.lights3D.count, 6)
         // 카메라 fov 는 {"script":…,"value":50} → cameraScripts["fov"] 캡처(eye/center/up 은 정적).
         XCTAssertNotNil(doc.cameraScripts["fov"], "젤다 fov 스크립트 캡처")
         // animationlayers: 가시 스키닝 캐릭터는 활성 베이스 애니(Idle, blend 1.0) 를 가진다.
-        // (link_adult 는 visible=false 로 드롭 — 하이라이트 캐릭터가 아님. zelda_child 등 가시 캐릭터로 검증.)
+        // visible=false 여도 스크립트가 붙은 3D 모델은 런타임 표시 전환을 위해 보존된다.
         let animated = doc.objects3D.filter { $0.animation != nil }
         XCTAssertFalse(animated.isEmpty, "스키닝 캐릭터는 activationlayers 활성 애니 보유")
         XCTAssertTrue(animated.contains { $0.animation?.name == "Idle" }, "Idle(blend 1.0) 베이스 애니 존재")

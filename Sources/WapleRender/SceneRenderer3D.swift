@@ -170,6 +170,10 @@ extension SceneRenderer {
 
         // ── 메시 지오메트리(모델). 정적 비가시(조상 그룹) 판정은 base 트랜스폼 기준으로 프리컬 — 스크립트로
         //    다시 켜지는 서브트리는 드묾(젤다 link_adult 는 그룹 visible=false 고정). ──
+        let compositeImageTextures = doc.layers.reduce(into: [Int: String]()) { acc, layer in
+            guard layer.id != 0, !layer.textureEntryName.isEmpty else { return }
+            acc[layer.id] = layer.textureEntryName
+        }
         var loaded = 0, skipped = 0
         for obj in doc.objects3D {
             guard let mdlData = assetData(obj.model, package: package),
@@ -201,7 +205,8 @@ extension SceneRenderer {
                 }
                 guard let vbuf = device.makeBuffer(bytes: packed, length: MemoryLayout<Float>.stride * packed.count),
                       let ibuf = mesh.indices.withUnsafeBytes({ device.makeBuffer(bytes: $0.baseAddress!, length: $0.count) }),
-                      let mat = loadMesh3DMaterial(mesh.material, package: package, device: device)
+                      let mat = loadMesh3DMaterial(mesh.material, package: package, device: device,
+                                                   compositeImageTextures: compositeImageTextures)
                 else { continue }
                 if skinned { anySkinned = true }
                 meshes.append(GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
@@ -325,7 +330,8 @@ extension SceneRenderer {
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
     /// 규약: textures[] 첫 non-null 이름 → "materials/<이름>.tex"(resolveTexture 폴백 포함).
     /// nil = 디바이스 텍스처 생성 실패(흰색 1x1 폴백조차 불가)뿐 — 호출자는 서브메시 스킵.
-    func loadMesh3DMaterial(_ path: String, package: ScenePackage, device: MTLDevice) -> Mesh3DMaterialInfo? {
+    func loadMesh3DMaterial(_ path: String, package: ScenePackage, device: MTLDevice,
+                            compositeImageTextures: [Int: String] = [:]) -> Mesh3DMaterialInfo? {
         var texName: String? = nil
         var color = SIMD3<Float>(1, 1, 1)
         var alpha: Float = 1
@@ -357,10 +363,27 @@ extension SceneRenderer {
         } else {
             NSLog("%@", "[Waple] 3D: material json missing: \(path)")
         }
+        if let name = texName, let id = imageLayerCompositeID(name) {
+            texName = compositeImageTextures[id]
+            if texName == nil {
+                return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map {
+                    Mesh3DMaterialInfo(texture: $0, tint: SIMD4(color.x, color.y, color.z, alpha),
+                                       alphaCutoff: alphaCutoff, cullBack: cullBack, additive: additive,
+                                       depthTest: depthTest, depthWrite: depthWrite)
+                }
+            }
+        }
         guard let tex = resolveTexture(texName, package: package, device: device) else { return nil }
         return Mesh3DMaterialInfo(texture: tex, tint: SIMD4(color.x, color.y, color.z, alpha),
                                   alphaCutoff: alphaCutoff, cullBack: cullBack, additive: additive,
                                   depthTest: depthTest, depthWrite: depthWrite)
+    }
+
+    private func imageLayerCompositeID(_ name: String) -> Int? {
+        guard name.hasPrefix("_rt_imageLayerComposite_") else { return nil }
+        let rest = name.dropFirst("_rt_imageLayerComposite_".count)
+        let digits = rest.prefix { $0.isNumber }
+        return digits.isEmpty ? nil : Int(digits)
     }
 
     /// 메시 파이프라인(bgra8 + depth32Float). 프래그먼트가 premultiplied 출력 → src=one,
