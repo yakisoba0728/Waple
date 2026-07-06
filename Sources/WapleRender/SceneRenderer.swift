@@ -67,34 +67,49 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView?.needsDisplay = true
     }
 
-    /// cursorClick 시뮬레이션/배달(씬 픽셀 좌표, 상단 원점 — WE worldPosition 규약).
+    /// 포인터 이벤트 배달(씬 픽셀 좌표, 상단 원점 — WE worldPosition 규약).
     /// event 필드는 실물 역추출: worldPosition(Vec3 — .x/.subtract 체이닝), button(0=좌).
-    public func simulateCursorClick(x: Float, y: Float) {
-        dispatchSceneEvent("cursorClick",
-                           eventJS: "({ worldPosition: new Vec3(\(x), \(y), 0), button: 0 })")
+    func dispatchPointerEvent(hook: String, x: Float, y: Float) {
+        dispatchSceneEvent(hook, eventJS: "({ worldPosition: new Vec3(\(x), \(y), 0), button: 0 })")
     }
 
-    /// 전역 leftMouseDown 모니터(데스크탑 창은 ignoresMouseEvents=true — 클릭은 다른 앱으로 가고
+    /// cursorClick 시뮬레이션(테스트/헤드리스 e2e 용).
+    public func simulateCursorClick(x: Float, y: Float) {
+        dispatchPointerEvent(hook: "cursorClick", x: x, y: y)
+    }
+
+    /// 전역 leftMouseDown/Up 모니터(데스크탑 창은 ignoresMouseEvents=true — 클릭은 다른 앱으로 가고
     /// 전역 모니터가 관찰한다, ParallaxController 의 mouseMoved 와 동일 규약. 권한 불요).
+    /// WE 규약: down 시 cursorDown+cursorClick(기존 e2e 검증 타이밍 유지), up 시 cursorUp.
     func startClickMonitorIfNeeded() {
+        let hooks: Set<String> = ["cursorClick", "cursorDown", "cursorUp"]
         guard clickMonitor == nil,
-              eventEngines.contains(where: { $0.hookNames.contains("cursorClick") }) else { return }
-        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
-            self?.deliverGlobalClick()
+              eventEngines.contains(where: { !$0.hookNames.isDisjoint(with: hooks) }) else { return }
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] ev in
+            self?.deliverGlobalMouse(isDown: ev.type == .leftMouseDown)
         }
     }
 
-    /// 화면 클릭 → 뷰 좌표 → 씬(프로젝션) 좌표. 창 밖 클릭은 무시. 헤드리스(창 없음)는 배달 불가 —
-    /// 테스트는 simulateCursorClick 사용.
-    func deliverGlobalClick() {
-        guard let view = mtkView, let win = view.window else { return }
+    /// 화면 포인터 위치 → 뷰 좌표 → 씬(프로젝션) 좌표(FitMode 보정 포함). 창 밖/레터박스는 nil.
+    /// 헤드리스(창 없음)는 배달 불가 — 테스트는 simulateCursorClick 사용.
+    func pointerSceneCoords() -> SIMD2<Float>? {
+        guard let view = mtkView, let win = view.window else { return nil }
         let inWindow = win.convertPoint(fromScreen: NSEvent.mouseLocation)
         let inView = view.convert(inWindow, from: nil)
-        guard view.bounds.contains(inView), view.bounds.width > 0, view.bounds.height > 0 else { return }
-        // AppKit 하단 원점 → WE 상단 원점. (FitMode 레터박스 보정은 미적용 — stretch 기준 근사.)
-        let sx = Float(inView.x / view.bounds.width) * projW
-        let sy = Float(1 - inView.y / view.bounds.height) * projH
-        simulateCursorClick(x: sx, y: sy)
+        guard view.bounds.contains(inView) else { return nil }
+        return SceneRenderer.sceneCoords(viewPoint: inView, viewSize: view.bounds.size,
+                                         projW: projW, projH: projH,
+                                         fitMode: SceneRenderSettings.fitMode)
+    }
+
+    func deliverGlobalMouse(isDown: Bool) {
+        guard let p = pointerSceneCoords() else { return }
+        if isDown {
+            dispatchPointerEvent(hook: "cursorDown", x: p.x, y: p.y)
+            dispatchPointerEvent(hook: "cursorClick", x: p.x, y: p.y)
+        } else {
+            dispatchPointerEvent(hook: "cursorUp", x: p.x, y: p.y)
+        }
     }
 
     /// 미디어 소비 스크립트(media*Changed export)가 있을 때만 폴링 시작(웹과 같은 5초 규약).
@@ -157,10 +172,40 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     let parallax = ParallaxController()
     /// WE 포인터 UV(0..1, 상단 원점). 마우스 미구동/헤드리스 = 중앙(0.5,0.5).
     var pointerUV = SIMD2<Float>(0.5, 0.5)
+    /// cursorMove 훅 보유 씬만 이동 이벤트 배달(마운트 시 캐시 — 매 마우스무브 스캔 회피).
+    var hasCursorMoveHook = false
+    var lastCursorMoveAt: CFAbsoluteTime = 0
 
     /// 정규화 오프셋(중심 0, 가장자리 ±1, AppKit y-up) → WE 포인터 UV(0..1, y-down). (순수)
     static func pointerUV(fromNormalized off: CGPoint) -> SIMD2<Float> {
         SIMD2(Float(off.x + 1) / 2, 1 - Float(off.y + 1) / 2)
+    }
+
+    /// FitMode 별 콘텐츠 NDC 배율(정점에 곱하는 값) — draw 와 클릭 역매핑의 단일 소스. (순수)
+    static func aspectScale(projAspect: Float, viewAspect: Float, fitMode: FitMode) -> SIMD2<Float> {
+        switch fitMode {
+        case .stretch:
+            return SIMD2(1, 1)
+        case .fill:
+            return projAspect > viewAspect
+                ? SIMD2(projAspect / viewAspect, 1) : SIMD2(1, viewAspect / projAspect)
+        case .fit:
+            return projAspect > viewAspect
+                ? SIMD2(1, viewAspect / projAspect) : SIMD2(projAspect / viewAspect, 1)
+        }
+    }
+
+    /// 뷰 좌표(AppKit 하단원점) → 씬 픽셀(WE 상단원점). aspectScale 역적용으로 fit 레터박스/
+    /// fill 크롭 보정 — fit 레터박스 밖 클릭은 nil(대응하는 씬 좌표가 없음). (순수)
+    static func sceneCoords(viewPoint: CGPoint, viewSize: CGSize, projW: Float, projH: Float,
+                            fitMode: FitMode) -> SIMD2<Float>? {
+        guard viewSize.width > 0, viewSize.height > 0, projW > 0, projH > 0 else { return nil }
+        let s = aspectScale(projAspect: projW / projH,
+                            viewAspect: Float(viewSize.width / viewSize.height), fitMode: fitMode)
+        let nx = Float(viewPoint.x / viewSize.width * 2 - 1) / s.x
+        let ny = Float(viewPoint.y / viewSize.height * 2 - 1) / s.y
+        guard abs(nx) <= 1, abs(ny) <= 1 else { return nil }
+        return SIMD2((nx + 1) / 2 * projW, (1 - (ny + 1) / 2) * projH)
     }
     let maxShift: Float = 0.1
     var projAspect: Float = 16.0 / 9.0
@@ -352,8 +397,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             startTime = CFAbsoluteTimeGetCurrent()
             lastFrameTime = startTime
         }
-        // 씬 이벤트 배선: cursorClick(전역 클릭 모니터) + 미디어(5초 폴링) — 소비 스크립트가 있을 때만.
+        // 씬 이벤트 배선: cursorClick/Down/Up(전역 클릭 모니터) + cursorMove(마우스 모니터 공용,
+        // 시차/효과 없어도 훅 있으면 기동) + 미디어(5초 폴링) — 소비 스크립트가 있을 때만.
         startClickMonitorIfNeeded()
+        hasCursorMoveHook = eventEngines.contains(where: { $0.hookNames.contains("cursorMove") })
+        if hasCursorMoveHook {
+            parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
+            parallax.start()  // 이미 켜져 있으면 no-op(내부 nil 가드)
+        }
         startMediaPollingIfNeeded()
         // 오디오-반응 효과가 있으면 시스템 오디오 스펙트럼 캡처 시작(Screen Recording 권한 필요).
         if hasAudio {
@@ -393,6 +444,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let s = parallaxAmount * parallaxMouseInfluence * maxShift
             cameraOffset = SIMD2<Float>(Float(off.x) * s, Float(off.y) * s)
         }
+        // cursorMove 훅 배달 — 30Hz 스로틀(웹 전달과 동일 규약, JS 평가 비용 절제).
+        if hasCursorMoveHook {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastCursorMoveAt >= 1.0 / 30, let p = pointerSceneCoords() {
+                lastCursorMoveAt = now
+                dispatchPointerEvent(hook: "cursorMove", x: p.x, y: p.y)
+            }
+        }
         mtkView?.needsDisplay = true
     }
 
@@ -428,20 +487,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let displayTextures = buildDisplayTextures(device: device, queue: queue, time: time, cb: cb)
 
         var camOffset = cameraOffset
-        // 종횡비 보정 — FitMode 설정에 따라.
+        // 종횡비 보정 — FitMode 설정에 따라(클릭 역매핑과 동일 공식 = sceneCoords 정합 보장).
         let ds = view.drawableSize
         let viewAspect = Float(ds.width / max(1, ds.height))
-        var aspectScale: SIMD2<Float>
-        switch SceneRenderSettings.fitMode {
-        case .stretch:
-            aspectScale = SIMD2<Float>(1, 1)
-        case .fill:
-            aspectScale = projAspect > viewAspect
-                ? SIMD2<Float>(projAspect / viewAspect, 1) : SIMD2<Float>(1, viewAspect / projAspect)
-        case .fit:
-            aspectScale = projAspect > viewAspect
-                ? SIMD2<Float>(1, viewAspect / projAspect) : SIMD2<Float>(projAspect / viewAspect, 1)
-        }
+        var aspectScale = SceneRenderer.aspectScale(projAspect: projAspect, viewAspect: viewAspect,
+                                                    fitMode: SceneRenderSettings.fitMode)
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
         guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { cb.commit(); return }
@@ -536,6 +586,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         mediaPoller?.stop(); mediaPoller = nil
         eventEngines = []
+        hasCursorMoveHook = false
         audioProvider?.stop(); audioProvider = nil; hasAudio = false
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
