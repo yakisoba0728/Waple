@@ -395,13 +395,19 @@ extension SceneRenderer {
     /// (마스크는 흰색=효과 전체 적용, 노멀맵은 흰색=무왜곡에 가까움).
     /// "effects/X"/"masks/X" 같은 상대 이름은 "materials/<name>.tex" 로 해석, raw 이름도 시도.
     func resolveTexture(_ name: String?, package: ScenePackage, device: MTLDevice) -> MTLTexture? {
+        resolveTextureWithFrames(name, package: package, device: device)?.texture
+    }
+
+    /// 텍스처 + 스프라이트시트 프레임(TEXS). 파티클이 프레임 UV 서브렉트에 사용(레이어는 texture 만).
+    func resolveTextureWithFrames(_ name: String?, package: ScenePackage, device: MTLDevice)
+        -> (texture: MTLTexture, frames: [TexImage.TexFrame])? {
         if let name {
             let cand = name.hasSuffix(".tex") ? name : "materials/\(name).tex"
             if let d = assetData(cand, package: package) ?? assetData(name, package: package),
                let tex = TexImage.parse(d), let dec = TexDecoder.rgba(from: tex, data: d),
-               let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return m }
+               let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return (m, tex.frames) }
         }
-        return makeTexture(Data([255, 255, 255, 255]), 1, 1, device)
+        return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }
     }
 
     /// 효과의 AUDIOPROCESSING 콤보 + 오디오 상수 → AudioParams(없으면 nil). draw 시 audioResponse 계산에 사용.
@@ -420,20 +426,36 @@ extension SceneRenderer {
     }
 
     /// 파티클 시스템별 텍스처/시뮬/블렌드 준비. 텍스처는 material 의 첫 텍스처(없으면 흰색 폴백).
+    /// 자식 링크는 부모 직후에 자체 머티리얼의 GPU 시스템으로 추가(드로우는 부모 sim.childDisplay).
     func buildParticles(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPUParticleSystem] {
         var out: [GPUParticleSystem] = []
-        for (i, sp) in doc.particles.enumerated() {
-            let tex = resolveTexture(sp.def.material?.textureName, package: package, device: device)
-                ?? makeTexture(Data([255, 255, 255, 255]), 1, 1, device)
-            guard let tex else { continue }
-            let ratio = Float(tex.height) / Float(max(1, tex.width))
-            let seed = UInt64(0x9E37_79B9_7F4A_7C15 &+ UInt64(i))
-            out.append(GPUParticleSystem(
-                sim: ParticleSimulator(def: sp.def, seed: seed), def: sp.def, seed: seed,
-                texture: tex, blendAdditive: sp.def.material?.blend == .additive,
+        func makeSystem(def: ParticleSystemDef, seed: UInt64, sp: SceneParticle,
+                        childOf: (parent: Int, link: Int)? = nil) -> GPUParticleSystem? {
+            guard let (tex, frames) = resolveTextureWithFrames(def.material?.textureName,
+                                                               package: package, device: device) else { return nil }
+            let mirror = def.initializers.contains {
+                if case .mapSequence(_, true, _) = $0 { return true }; return false
+            }
+            return GPUParticleSystem(
+                sim: ParticleSimulator(def: def, seed: seed), def: def, seed: seed,
+                texture: tex, blendAdditive: def.material?.blend == .additive,
                 origin: SIMD2<Float>(sp.origin.x, sp.origin.y),
-                scale: SIMD2<Float>(sp.scale.x, sp.scale.y), texRatio: ratio, order: sp.order,
-                isTrail: sp.def.renderer.isTrail))
+                scale: SIMD2<Float>(sp.scale.x, sp.scale.y),
+                texRatio: Float(tex.height) / Float(max(1, tex.width)), order: sp.order,
+                isTrail: def.renderer.isTrail, childOf: childOf,
+                frames: frames, mapSeqMirror: mirror)
+        }
+        for (i, sp) in doc.particles.enumerated() {
+            let seed = UInt64(0x9E37_79B9_7F4A_7C15 &+ UInt64(i))
+            guard let parent = makeSystem(def: sp.def, seed: seed, sp: sp) else { continue }
+            let parentIdx = out.count
+            out.append(parent)
+            for (li, link) in sp.def.children.enumerated() {
+                if let child = makeSystem(def: link.def, seed: seed &+ UInt64(li) &+ 1, sp: sp,
+                                          childOf: (parent: parentIdx, link: li)) {
+                    out.append(child)
+                }
+            }
         }
         return out
     }

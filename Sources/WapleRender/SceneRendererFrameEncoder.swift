@@ -53,7 +53,25 @@ extension SceneRenderer {
             let wx = sys.origin.x + sys.scale.x * p.pos.x
             let wy = sys.origin.y - sys.scale.y * p.pos.y
             let sizePx = p.size * sys.scale.x
-            let hw = sizePx * 0.5, hh = sizePx * sys.texRatio * 0.5
+            // 스프라이트시트(TEXS): mapsequence 는 스폰 확정 시퀀스, 아니면 age/frametime gif 애니.
+            var u0: Float = 0, v0: Float = 0, u1: Float = 1, v1: Float = 1
+            var ratio = sys.texRatio
+            if !sys.frames.isEmpty {
+                let fc = sys.frames.count
+                let idx: Int
+                if p.frame >= 0 {
+                    idx = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
+                } else {
+                    let ft = max(0.016, sys.frames[0].time)
+                    idx = Int(p.age / ft) % fc
+                }
+                let fr = sys.frames[max(0, min(fc - 1, idx))]
+                let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
+                u0 = fr.x / tw; v0 = fr.y / th
+                u1 = min(1, (fr.x + fr.width) / tw); v1 = min(1, (fr.y + fr.height) / th)
+                ratio = fr.height / max(1, fr.width)
+            }
+            let hw = sizePx * 0.5, hh = sizePx * ratio * 0.5
             let ca = cos(p.rotation.z), sa = sin(p.rotation.z)
             func ndc(_ lx: Float, _ ly: Float) -> (Float, Float) {
                 return toNDC(wx + lx * ca - ly * sa, wy + lx * sa + ly * ca)
@@ -63,8 +81,8 @@ extension SceneRenderer {
             func v(_ pt: (Float, Float), _ u: Float, _ vv: Float) {
                 verts.append(contentsOf: [pt.0, pt.1, u, vv, r, g, b, al])
             }
-            v(tl, 0, 0); v(tr, 1, 0); v(br, 1, 1)
-            v(tl, 0, 0); v(br, 1, 1); v(bl, 0, 1)
+            v(tl, u0, v0); v(tr, u1, v0); v(br, u1, v1)
+            v(tl, u0, v0); v(br, u1, v1); v(bl, u0, v1)
         }
         for p in snapshot {
             if sys.isTrail {
@@ -121,11 +139,25 @@ extension SceneRenderer {
         func push(_ pt: (Float, Float), _ u: Float, _ vv: Float, _ al: Float) {
             verts.append(contentsOf: [pt.0, pt.1, u, vv, r, g, b, al])
         }
+        // 스프라이트시트: 선택 프레임 렉트로 u(길이)/v(가로) 재매핑(discharge rope 등 —
+        // 미적용 시 시트 전 프레임이 리본에 통째로 늘어난다).
+        var fu0: Float = 0, fu1: Float = 1, fv0: Float = 0, fv1: Float = 1
+        if !sys.frames.isEmpty {
+            let fc = sys.frames.count
+            let idx = p.frame >= 0
+                ? sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
+                : Int(p.age / max(0.016, sys.frames[0].time)) % fc
+            let fr = sys.frames[max(0, min(fc - 1, idx))]
+            let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
+            fu0 = fr.x / tw; fu1 = min(1, (fr.x + fr.width) / tw)
+            fv0 = fr.y / th; fv1 = min(1, (fr.y + fr.height) / th)
+        }
         for i in 0..<(n - 1) {
             let e0 = edges[i], e1 = edges[i + 1]
             // 쿼드 (A0,B0,B1,A1) → 삼각 2개. u 는 길이, v 는 가로(0/1).
-            push(e0.a, e0.u, 0, e0.alpha); push(e0.bEdge, e0.u, 1, e0.alpha); push(e1.bEdge, e1.u, 1, e1.alpha)
-            push(e0.a, e0.u, 0, e0.alpha); push(e1.bEdge, e1.u, 1, e1.alpha); push(e1.a, e1.u, 0, e1.alpha)
+            func U(_ u: Float) -> Float { fu0 + (fu1 - fu0) * u }
+            push(e0.a, U(e0.u), fv0, e0.alpha); push(e0.bEdge, U(e0.u), fv1, e0.alpha); push(e1.bEdge, U(e1.u), fv1, e1.alpha)
+            push(e0.a, U(e0.u), fv0, e0.alpha); push(e1.bEdge, U(e1.u), fv1, e1.alpha); push(e1.a, U(e1.u), fv0, e1.alpha)
         }
         return true
     }

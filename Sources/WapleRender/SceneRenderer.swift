@@ -18,6 +18,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let texRatio: Float   // texH/texW (스프라이트 세로 비율)
         let order: Int        // scene objects[] 인덱스 — 레이어와 인터리브 z-순서
         let isTrail: Bool     // spritetrail/rope/ropetrail — 히스토리 리본으로 드로우
+        /// 자식 링크(부모 particleSystems 인덱스, 링크 인덱스). 자식은 자체 sim 을 스텝하지 않고
+        /// 부모 sim.childDisplay(link) 를 그린다(sim 필드는 미사용 더미 — 드로우 파이프라인 공용 위해 유지).
+        var childOf: (parent: Int, link: Int)? = nil
+        /// 스프라이트시트 프레임(TEXS). 비면 전체 텍스처 1프레임.
+        var frames: [TexImage.TexFrame] = []
+        /// mapsequence limitbehavior=mirror(시퀀스 → 시트 폴드 방식).
+        var mapSeqMirror: Bool = false
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 스크립트는 초당 재평가 → 변경 시 재래스터.
@@ -353,11 +360,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             textLayers = buildTexts(doc: doc, package: package, device: device)
         }
         // 씬 오브젝트 순서(z-순서)대로 레이어·파티클·텍스트를 인터리브 드로우.
+        // 안정 정렬(order 동률 시 삽입 순서 유지) — 파티클 자식이 부모 뒤에 오도록 보장
+        // (자식 스냅샷은 같은 프레임에 부모가 먼저 스텝된 캐시를 읽는다).
         drawPlan = (layers.enumerated().map { (i, l) in (l.order, DrawItem(kind: .layer, idx: i)) }
                     + particleSystems.enumerated().map { (i, p) in (p.order, DrawItem(kind: .particle, idx: i)) }
                     + textLayers.enumerated().map { (i, t) in (t.order, DrawItem(kind: .text, idx: i)) })
-            .sorted { $0.0 < $1.0 }
-            .map { $0.1 }
+            .enumerated()
+            .sorted { ($0.1.0, $0.0) < ($1.1.0, $1.0) }
+            .map { $0.1.1 }
 
         let view = MTKView(frame: container.bounds, device: device)
         view.autoresizingMask = [.width, .height]
@@ -503,7 +513,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 씬 오브젝트 순서대로 레이어·파티클·텍스트 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
         guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: time,
                                             displayTextures: displayTextures,
-                                            particleSnapshot: { particleSystems[$0].sim.step(dt) },
+                                            particleSnapshot: { [self] idx in
+                                                // 자식은 부모 sim 캐시를 그린다(drawPlan 이 부모를 먼저 스텝).
+                                                if let c = particleSystems[idx].childOf {
+                                                    return particleSystems[c.parent].sim.childDisplay(c.link)
+                                                }
+                                                return particleSystems[idx].sim.step(dt)
+                                            },
                                             camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }
         finalEnc.endEncoding()
         if let blit = cb.makeBlitCommandEncoder() {
@@ -550,8 +566,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var urls: [URL] = []
         var camOff = SIMD2<Float>(0, 0)
         var asp = SIMD2<Float>(1, 1)  // 타겟이 proj 비율과 같다고 가정 → 왜곡 없음
+        // 자식 GPU 시스템의 로컬 sim 은 더미 — 부모 sim 이 자식을 구동하므로 웜업/스텝에서 제외.
+        let rootIdxs = sims.indices.filter { particleSystems[$0].childOf == nil }
         for t in times.sorted() {
-            while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in sims.indices { _ = sims[i].step(s) }; simTime += s }
+            while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in rootIdxs { _ = sims[i].step(s) }; simTime += s }
             guard let cb = queue.makeCommandBuffer() else { continue }
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
             let displayTextures = buildDisplayTextures(device: device, queue: queue, time: t, cb: cb)
@@ -566,7 +584,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // target 이 곧 누적(acc) — 컴포지션 레이어는 스냅샷 경유(runFrameBufferLayer).
             guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: target, cb: cb, device: device, time: t,
                                                 displayTextures: displayTextures,
-                                                particleSnapshot: { sims[$0].step(0) },
+                                                particleSnapshot: { [self] idx in
+                                                    if let c = particleSystems[idx].childOf {
+                                                        return sims[c.parent].childDisplay(c.link)
+                                                    }
+                                                    return sims[idx].step(0)
+                                                },
                                                 camOffset: &camOff, aspectScale: &asp) else { cb.commit(); continue }
             finalEnc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
             let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")

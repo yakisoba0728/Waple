@@ -31,7 +31,7 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(d.maxCount, 360)
         XCTAssertEqual(d.startTime, 15)
         XCTAssertEqual(d.renderer, .sprite)
-        guard case let .sphere(_, dirs, dmin, dmax, rate) = d.emitters.first else { return XCTFail("no sphere") }
+        guard case let .sphere(_, dirs, dmin, dmax, rate, _, _) = d.emitters.first else { return XCTFail("no sphere") }
         XCTAssertEqual(rate, 25); XCTAssertEqual(dmin, 10); XCTAssertEqual(dmax, 1000)
         XCTAssertEqual(dirs, Vec3(x: 1, y: 0.03, z: 1))
         XCTAssertTrue(d.initializers.contains(.lifetimeRandom(min: 8, max: 20)))
@@ -105,7 +105,7 @@ final class ParticleSystemTests: XCTestCase {
         {"emitter":[{"distancemax":"950 100 0","origin":"0 700 0","name":"boxrandom","rate":1}],
          "renderer":[{"name":"sprite"}],"maxcount":50}
         """), material: nil)
-        guard case let .box(origin, dmax, rate) = d.emitters.first else { return XCTFail("no box") }
+        guard case let .box(origin, dmax, rate, _) = d.emitters.first else { return XCTFail("no box") }
         XCTAssertEqual(origin, Vec3(x: 0, y: 700, z: 0))
         XCTAssertEqual(dmax, Vec3(x: 950, y: 100, z: 0))
         XCTAssertEqual(rate, 1)

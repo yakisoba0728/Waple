@@ -13,6 +13,11 @@ public struct Particle {
     public var alpha: Float = 1
     public var age: Float = 0
     public var lifetime: Float = 1
+    /// 스폰 순 고유 id(자식 인스턴스 ↔ 부모 파티클 연동용).
+    public var uid: Int = 0
+    /// 스프라이트시트 시퀀스 인덱스(mapsequence 이니셜라이저가 스폰 시 확정). -1 = 미지정
+    /// (시트가 있으면 렌더러가 age/frametime 으로 gif 애니).
+    public var frame: Float = -1
     public var initialSize: Float = 1
     public var initialAlpha: Float = 1
     public var initialColor = SIMD3<Float>(1, 1, 1)
@@ -20,8 +25,11 @@ public struct Particle {
     var oscPosFreq: Float = 0, oscPosScale: Float = 0, oscPosPhase: Float = 0
     var oscPosMask = SIMD3<Float>(0, 0, 0)
     var oscAlphaFreq: Float = 0, oscAlphaScale: Float = 0, oscAlphaPhase: Float = 0
+    var oscSizeFreq: Float = 0, oscSizePhase: Float = 0
     // 난류(turbulence): 스폰 시 결정되는 파티클별 속도/위상(노이즈 흐름장 이류에 사용).
     var turbSpeed: Float = 0, turbPhase: Float = 0
+    // remapvalue 노이즈 입력의 파티클별 위상(탈동기 — 전 파티클 동일 곡선 방지).
+    var remapPhase: Float = 0
     /// 트레일 렌더러용 최근 위치 히스토리(로컬 Y-up). oldest→newest, 마지막=현재 위치.
     /// 스프라이트 렌더러에서는 비어 있다(불필요 복사 회피).
     public var history: [SIMD3<Float>] = []
@@ -44,6 +52,13 @@ public struct ParticleSimulator {
     private let alphaFade: (fin: Float, fout: Float)?
     private let oscPosOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float, mask: SIMD3<Float>)?
     private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float)?
+    private let oscSizeOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float)?
+    private let alphaChangeOp: (st: Float, et: Float, sv: Float, ev: Float)?
+    private enum CachedRemap {
+        case velocity(min: SIMD3<Float>, max: SIMD3<Float>, fbm: Bool, scale: Float)
+        case speed(min: Float, max: Float, fbm: Bool, scale: Float)
+    }
+    private let remaps: [CachedRemap]
     private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>)]
     private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float, offset: SIMD3<Float>)]
     // 난류 흐름장(첫 turbulence 오퍼레이터만; oscPos 와 동일한 "first wins" 규약).
@@ -54,6 +69,22 @@ public struct ParticleSimulator {
     private let trailSamples: Int
     // controlpointattract/vortex 가 있으면 속도 상한(폭주 방지, px/s).
     private let speedCap: Float?
+
+    // MARK: 자식 시스템 상태 (부모 sim 이 링크별 자식 sim 인스턴스를 구동)
+
+    private struct ChildInstance {
+        var sim: ParticleSimulator
+        let parentUID: Int          // 0 = always(부모 파티클 무관)
+        let oneShot: Bool           // spawnBurst/deathBurst — 첫 스텝 후 방출 정지
+        var fired: Bool = false
+    }
+    private var childStates: [[ChildInstance]]
+    private var childDisplaysCache: [[Particle]]
+    private let parentSeed: UInt64
+    private var nextUID = 1
+    /// 자식 인스턴스 제어(부모 sim 이 설정): 스폰 위치 오프셋 / 방출 정지(고아·원샷).
+    var emitOrigin = SIMD3<Float>(0, 0, 0)
+    var emissionPaused = false
 
     public init(def: ParticleSystemDef, seed: UInt64) {
         self.def = def
@@ -70,6 +101,9 @@ public struct ParticleSimulator {
         var attr: [(Float, Float, SIMD3<Float>)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>)] = []
         var turb: (Float, Float, Float, Float, SIMD3<Float>, Float, Float)? = nil
+        var osz: (Float, Float, Float, Float, Float, Float)? = nil
+        var ac: (Float, Float, Float, Float)? = nil
+        var rms: [CachedRemap] = []
         for op in def.operators {
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
@@ -87,6 +121,15 @@ public struct ParticleSimulator {
                 vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset)))
             case let .turbulence(smin, smax, scale, timeScale, mask, pmin, pmax):
                 if turb == nil { turb = (smin, smax, scale, timeScale, s3(mask), pmin, pmax) }
+            case let .oscillateSize(fmin, fmax, smin, smax, pmin, pmax):
+                if osz == nil { osz = (fmin, fmax, smin, smax, pmin, pmax) }
+            case let .alphaChange(st, et, sv, ev):
+                if ac == nil { ac = (st, et, sv, ev) }
+            case let .remapValue(output, fbm, scale):
+                switch output {
+                case let .velocity(mn, mx): rms.append(.velocity(min: s3(mn), max: s3(mx), fbm: fbm, scale: scale))
+                case let .speed(mn, mx): rms.append(.speed(min: mn, max: mx, fbm: fbm, scale: scale))
+                }
             }
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
@@ -99,8 +142,37 @@ public struct ParticleSimulator {
         attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2) }
         vortices = vort.map { (axis: $0.0, dIn: $0.1, dOut: $0.2, sIn: $0.3, sOut: $0.4, offset: $0.5) }
         turbulence = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
+        oscSizeOp = osz.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
+        alphaChangeOp = ac.map { (st: $0.0, et: $0.1, sv: $0.2, ev: $0.3) }
+        remaps = rms
         trailSamples = def.renderer.trailSampleCount
         speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
+        parentSeed = seed
+        childStates = def.children.map { _ in [] }
+        childDisplaysCache = def.children.map { _ in [] }
+        // 상시(always) 링크는 즉시 1인스턴스 기동(링크 origin 고정 앰비언트).
+        for (li, link) in def.children.enumerated() where link.trigger == .always {
+            if rollProbability(link.probability) {
+                childStates[li].append(makeInstance(link, li: li, uid: 0, origin: s3(link.origin)))
+            }
+        }
+    }
+
+    /// 링크별 자식 표시 스냅샷(직전 step 에서 캐시). 렌더러가 링크별 머티리얼로 드로우.
+    public func childDisplay(_ li: Int) -> [Particle] {
+        li >= 0 && li < childDisplaysCache.count ? childDisplaysCache[li] : []
+    }
+
+    private mutating func rollProbability(_ p: Float) -> Bool {
+        p >= 1 || rng.nextFloat() < p
+    }
+
+    private func makeInstance(_ link: ChildLink, li: Int, uid: Int, origin: SIMD3<Float>) -> ChildInstance {
+        let mix = UInt64(UInt(bitPattern: uid &* 31 &+ li &+ 1))
+        var s = ParticleSimulator(def: link.def, seed: parentSeed &+ 0x9E37_79B9_7F4A_7C15 &* mix)
+        s.emitOrigin = origin
+        return ChildInstance(sim: s, parentUID: uid,
+                             oneShot: link.trigger == .spawnBurst || link.trigger == .deathBurst)
     }
 
     public var liveCount: Int { particles.count }
@@ -108,15 +180,40 @@ public struct ParticleSimulator {
     /// dt 만큼 진행 후 살아있는 파티클의 표시 스냅샷을 반환.
     public mutating func step(_ dt: Float) -> [Particle] {
         time += dt
-        // 방출(starttime 이후).
-        if time >= def.startTime {
+        let countBeforeEmission = particles.count
+        // 방출(starttime 이후, 자식 원샷/고아는 정지). burst(실물 instantaneous)는 rate 대신 일괄 스폰.
+        if !emissionPaused, time >= def.startTime {
+            let wasEmpty = particles.isEmpty  // 버스트 재발화 판정은 스텝 진입 시점 기준(다중 이미터 동시 발화)
             for i in def.emitters.indices {
-                acc[i] += def.emitters[i].rate * dt
-                while acc[i] >= 1, particles.count < def.maxCount {
-                    acc[i] -= 1
-                    particles.append(spawn(def.emitters[i]))
+                let e = def.emitters[i]
+                if e.burst > 0 {
+                    // ponytail: 전멸 시 재버스트 루프 — 실 WE 는 자식(eventfollow) 트리거가 주 용법,
+                    // Stage B(children)에서 트리거 발화로 대체 예정.
+                    if wasEmpty {
+                        for _ in 0..<min(e.burst, def.maxCount - particles.count) {
+                            particles.append(spawn(e))
+                        }
+                    }
+                } else {
+                    acc[i] += e.rate * dt
+                    while acc[i] >= 1, particles.count < def.maxCount {
+                        acc[i] -= 1
+                        particles.append(spawn(e))
+                    }
+                    if particles.count >= def.maxCount { acc[i] = min(acc[i], 1) }  // 누적 폭주 방지
                 }
-                if particles.count >= def.maxCount { acc[i] = min(acc[i], 1) }  // 누적 폭주 방지
+            }
+        }
+        // 신규 스폰 → follow/spawnBurst 자식 인스턴스 생성(스폰 위치 기준, 링크 캡/확률).
+        if !def.children.isEmpty, particles.count > countBeforeEmission {
+            for li in def.children.indices {
+                let link = def.children[li]
+                guard link.trigger == .follow || link.trigger == .spawnBurst else { continue }
+                for p in particles[countBeforeEmission...] {
+                    guard childStates[li].count < link.maxInstances else { break }
+                    guard rollProbability(link.probability) else { continue }
+                    childStates[li].append(makeInstance(link, li: li, uid: p.uid, origin: p.pos + s3(link.origin)))
+                }
             }
         }
         // 적분(controlpointattract/vortex 힘 → movement/angularMovement) + 노화.
@@ -129,10 +226,28 @@ public struct ParticleSimulator {
                 let sp = simd_length(particles[k].vel)
                 if sp > cap { particles[k].vel *= cap / sp }
             }
+            // remapvalue: velocity 는 매 스텝 덮어쓰기(작가가 낙하속도를 노이즈로 직접 기술),
+            // speed 는 이번 스텝 적분에만 곱하는 비파괴 배수(저장 vel 불변 → 복리 폭주 없음).
+            var speedFactor: Float = 1
+            if !remaps.isEmpty {
+                let base = (particles[k].remapPhase + particles[k].age) * Self.remapInputK
+                for r in remaps {
+                    switch r {
+                    case let .velocity(mn, mx, fbm, scale):
+                        let x = base * scale
+                        let t = SIMD3(remapNoise01(fbm, x, SIMD3(0, 0, 0)),
+                                      remapNoise01(fbm, x, SIMD3(19.3, 71.7, 5.1)),
+                                      remapNoise01(fbm, x, SIMD3(53.2, 11.9, 97.4)))
+                        particles[k].vel = mn + (mx - mn) * t
+                    case let .speed(mn, mx, fbm, scale):
+                        speedFactor *= mn + (mx - mn) * remapNoise01(fbm, base * scale, SIMD3(7.7, 33.1, 61.9))
+                    }
+                }
+            }
             for m in movements {
                 particles[k].vel += m.gravity * dt
                 if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
-                particles[k].pos += particles[k].vel * dt
+                particles[k].pos += particles[k].vel * speedFactor * dt
             }
             // 난류 이류(advection): 노이즈 흐름장 속도로 위치를 이동. vel 에 누적하지 않으므로
             // |변위| ≤ turbSpeed·dt 로 유계(속도 상한 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
@@ -153,10 +268,50 @@ public struct ParticleSimulator {
                 }
             }
         }
-        // 컬.
+        // 컬(+deathBurst 자식은 사망 위치에서 발화).
+        let hasDeathLinks = def.children.contains { $0.trigger == .deathBurst }
+        var dying: [Particle] = []
+        if hasDeathLinks { dying = particles.filter { $0.age > $0.lifetime } }
         particles.removeAll { $0.age > $0.lifetime }
+        if !dying.isEmpty {
+            for li in def.children.indices where def.children[li].trigger == .deathBurst {
+                let link = def.children[li]
+                for p in dying {
+                    guard childStates[li].count < link.maxInstances else { break }
+                    guard rollProbability(link.probability) else { continue }
+                    childStates[li].append(makeInstance(link, li: li, uid: p.uid, origin: p.pos + s3(link.origin)))
+                }
+            }
+        }
+        stepChildren(dt)
         // 표시 스냅샷.
         return particles.map { display($0) }
+    }
+
+    /// 자식 인스턴스 일괄 스텝: follow 는 부모 현재 위치로 방출 원점 갱신(부모 사망 → 방출 정지 후 드레인),
+    /// 원샷(spawn/death 버스트)은 첫 스텝 후 방출 정지. 드레인 완료 인스턴스는 제거.
+    private mutating func stepChildren(_ dt: Float) {
+        guard !def.children.isEmpty else { return }
+        var uidPos: [Int: SIMD3<Float>] = [:]
+        if childStates.enumerated().contains(where: { !$0.1.isEmpty && def.children[$0.0].trigger == .follow }) {
+            for p in particles { uidPos[p.uid] = p.pos }
+        }
+        for li in def.children.indices {
+            let link = def.children[li]
+            var displays: [Particle] = []
+            var keep: [ChildInstance] = []
+            for var inst in childStates[li] {
+                if link.trigger == .follow {
+                    if let pp = uidPos[inst.parentUID] { inst.sim.emitOrigin = pp + s3(link.origin) }
+                    else { inst.sim.emissionPaused = true }   // 고아 — 드레인만
+                }
+                displays.append(contentsOf: inst.sim.step(dt))
+                if inst.oneShot, !inst.fired { inst.fired = true; inst.sim.emissionPaused = true }
+                if !(inst.sim.emissionPaused && inst.sim.liveCount == 0) { keep.append(inst) }
+            }
+            childStates[li] = keep
+            childDisplaysCache[li] = displays
+        }
     }
 
     // MARK: - 스폰
@@ -164,14 +319,21 @@ public struct ParticleSimulator {
     private mutating func spawn(_ emitter: Emitter) -> Particle {
         var p = Particle()
         switch emitter {
-        case let .sphere(origin, directions, dmin, dmax, _):
+        case let .sphere(origin, directions, dmin, dmax, _, _, sign):
             let u = randomUnitVector()
-            let dir = normalizeSafe(u * s3(directions))
+            var dir = normalizeSafe(u * s3(directions))
+            // sign: 축별 반구 강제(실물 rain splash "sign":"0 1 0" = 위로만 튐).
+            let sg = s3(sign)
+            if sg.x != 0 { dir.x = sg.x > 0 ? abs(dir.x) : -abs(dir.x) }
+            if sg.y != 0 { dir.y = sg.y > 0 ? abs(dir.y) : -abs(dir.y) }
+            if sg.z != 0 { dir.z = sg.z > 0 ? abs(dir.z) : -abs(dir.z) }
             p.pos = s3(origin) + dir * rng.range(dmin, dmax)
-        case let .box(origin, dmax, _):
+        case let .box(origin, dmax, _, _):
             let d = s3(dmax)
             p.pos = s3(origin) + SIMD3(rng.range(-d.x, d.x), rng.range(-d.y, d.y), rng.range(-d.z, d.z))
         }
+        p.pos += emitOrigin   // 자식 인스턴스: 부모 위치(또는 링크 origin) 오프셋. 루트는 0.
+        p.uid = nextUID; nextUID += 1
         for ini in def.initializers { apply(ini, to: &p) }
         if let o = oscPosOp {
             p.oscPosFreq = rng.range(o.fmin, o.fmax)
@@ -184,10 +346,15 @@ public struct ParticleSimulator {
             p.oscAlphaScale = rng.range(o.smin, o.smax)
             p.oscAlphaPhase = rng.nextFloat() * 2 * .pi
         }
+        if let o = oscSizeOp {
+            p.oscSizeFreq = rng.range(o.fmin, o.fmax)
+            p.oscSizePhase = rng.range(o.pmin, o.pmax) * 2 * .pi
+        }
         if let t = turbulence {
             p.turbSpeed = rng.range(t.smin, t.smax)
             p.turbPhase = rng.range(t.pmin, t.pmax)
         }
+        if !remaps.isEmpty { p.remapPhase = rng.range(0, 100) }
         if trailSamples > 0 { p.history = [p.pos] }  // 스폰 위치를 트레일 시작점으로.
         return p
     }
@@ -240,6 +407,26 @@ public struct ParticleSimulator {
             p.angularVel = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z)) * (.pi / 180)
         case let .turbulentVelocityRandom(smin, smax, _, _):
             p.vel += randomUnitVector() * rng.range(smin, smax)
+        case let .colorList(colors):
+            guard !colors.isEmpty else { break }
+            let idx = min(colors.count - 1, Int(rng.nextFloat() * Float(colors.count)))
+            let c = s3(colors[idx])   // 0..1 스케일(실측 — colorrandom 의 /255 와 다름)
+            p.initialColor = c; p.color = c
+        case let .mapSequence(count, _, between):
+            // 시퀀스 위치 t(0..1) → frame = t·count. 시트 폴드(mirror/loop)는 렌더 시 sheetFrameIndex.
+            let t: Float
+            if between {
+                // CP0→CP1 구간 투영(클램프). 구간 퇴화 시 0.
+                let a = s3(def.controlPoints[0]), bb = s3(def.controlPoints[1])
+                let d = bb - a
+                let len2 = simd_length_squared(d)
+                t = len2 > 1e-8 ? max(0, min(1, simd_dot(p.pos - a, d) / len2)) : 0
+            } else {
+                // CP0 기준 각도(0..2π → 0..1).
+                let rel = p.pos - s3(def.controlPoints[0])
+                t = (atan2(rel.y, rel.x) + .pi) / (2 * .pi)
+            }
+            p.frame = t * max(0, count)
         }
     }
 
@@ -251,12 +438,21 @@ public struct ParticleSimulator {
         // size
         if let sc = sizeChange { d.size = p.initialSize * lerp(sc.sv, sc.ev, progress(n, sc.st)) }
         else { d.size = p.initialSize }
+        if let os = oscSizeOp {
+            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscSizeFreq * p.age + p.oscSizePhase))
+            d.size *= lerp(os.smin, os.smax, osc01)
+        }
         // color
         if let cc = colorChange { let t = progress(n, cc.st); d.color = p.initialColor * (cc.sv + (cc.ev - cc.sv) * t) }
         else { d.color = p.initialColor }
         // alpha
         var a = p.initialAlpha
         if let af = alphaFade { a *= fadeFactor(n, af.fin, af.fout) }
+        if let ac = alphaChangeOp {   // 초 단위 램프(st..et 사이 sv→ev, 밖은 홀드)
+            let t: Float = ac.et > ac.st ? max(0, min(1, (p.age - ac.st) / (ac.et - ac.st)))
+                                         : (p.age >= ac.st ? 1 : 0)
+            a *= lerp(ac.sv, ac.ev, t)
+        }
         if p.oscAlphaScale > 0 {
             let osc = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * p.age + p.oscAlphaPhase))
             a *= max(0, 1 - p.oscAlphaScale * osc)
@@ -270,6 +466,24 @@ public struct ParticleSimulator {
             d.pos = p.pos
         }
         return d
+    }
+
+    // MARK: - remapvalue 노이즈
+
+    /// 노이즈 입력 시간 배율: (위상+age)·K·inputScale. 실물 inputScale ~8-10 에서 부드러운
+    /// 초당 ~1유닛 진행이 되게 잡은 상수(bit-exact 불요 — 유계·결정성·자연스러움만 요구).
+    private static let remapInputK: Float = 0.1
+
+    /// [0,1] 노이즈. fbm = 3옥타브 값노이즈(계수합 정규화), 아니면 단일 값노이즈. salt 로 성분 탈상관.
+    private func remapNoise01(_ fbm: Bool, _ x: Float, _ salt: SIMD3<Float>) -> Float {
+        let p = SIMD3<Float>(x, 0, 0) + salt
+        let n: Float
+        if fbm {
+            n = (valueNoise3(p) + 0.5 * valueNoise3(p * 2) + 0.25 * valueNoise3(p * 4)) / 1.75
+        } else {
+            n = valueNoise3(p)
+        }
+        return 0.5 * (1 + max(-1, min(1, n)))
     }
 
     // MARK: - 난류 흐름장

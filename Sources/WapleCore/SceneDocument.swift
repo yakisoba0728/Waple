@@ -533,10 +533,21 @@ extension SceneDocument {
 
     /// scene object 의 `particle` 경로 → particles/X.json + material → SceneParticle.
     /// origin/scale 은 씬 픽셀 좌표(첫 2성분). 로드/파싱 실패 → nil + 로그.
+    /// children[] 링크는 재귀 리졸브(순환/깊이 4 가드) — 자식도 자체 material 포함 완전한 def.
     private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage) -> SceneParticle? {
+        guard let def = parseParticleDef(path, package: package, visited: [path]) else {
+            WapleLog.warn("[Waple] SP4 particle load failed: \(path)")
+            return nil
+        }
+        return SceneParticle(def: def,
+                             origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
+                             scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1))
+    }
+
+    private static func parseParticleDef(_ path: String, package: ScenePackage,
+                                         visited: Set<String>) -> ParticleSystemDef? {
         guard let pData = package.data(for: path),
               let pjson = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any] else {
-            WapleLog.warn("[Waple] SP4 particle load failed: \(path)")
             return nil
         }
         var material: ParticleMaterial? = nil
@@ -544,10 +555,13 @@ extension SceneDocument {
            let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any] {
             material = ParticleMaterial.parse(mjson)
         }
-        let def = ParticleSystemDef.parse(pjson, material: material)
-        return SceneParticle(def: def,
-                             origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
-                             scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1))
+        return ParticleSystemDef.parse(pjson, material: material) { childPath in
+            guard !visited.contains(childPath), visited.count < 4 else {
+                WapleLog.warn("[Waple] particle child cycle/depth cap, dropped: \(childPath)")
+                return nil
+            }
+            return parseParticleDef(childPath, package: package, visited: visited.union([childPath]))
+        }
     }
 
     private static func parseEffects(_ raw: Any?) -> [SceneEffect] {

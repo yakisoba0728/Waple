@@ -22,12 +22,28 @@ public struct TexImage {
         }
     }
 
+    /// 스프라이트시트 프레임(TEXS 섹션). 좌표는 이미지 픽셀 공간(imgW×imgH — 디코더가 패딩 크롭 후와 일치).
+    /// 실측(2026-07-06, "particles 256x1280".tex): "TEXS0003\0" | i32 count | (v3) i32 gifW | i32 gifH |
+    /// 프레임×32B: i32 imageId | f32 frametime | f32 x | f32 y | f32 width | f32 unk | f32 unk | f32 height.
+    /// 1280×256 가로 스트립에서 x=0,256,…,1024 로 확정(전 프레임 frametime 0.2).
+    public struct TexFrame: Equatable {
+        public let imageId: Int
+        public let time: Float
+        public let x: Float, y: Float, width: Float, height: Float
+        public init(imageId: Int, time: Float, x: Float, y: Float, width: Float, height: Float) {
+            self.imageId = imageId; self.time = time
+            self.x = x; self.y = y; self.width = width; self.height = height
+        }
+    }
+
     public let width: Int   // 이미지 width (imgW)
     public let height: Int
     public let format: Int
     public let payload: PayloadKind
     public let payloadRange: Range<Int>
     public let mip: CompressedMip?
+    /// 스프라이트시트 프레임 목록(TEXS 부재 시 []).
+    public var frames: [TexFrame] = []
 
     public static func parse(_ data: Data) -> TexImage? {
         let b = [UInt8](data)
@@ -44,7 +60,9 @@ public struct TexImage {
               texW <= maxDim, texH <= maxDim, imgW <= maxDim, imgH <= maxDim else { return nil }
 
         func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?) -> TexImage {
-            TexImage(width: imgW, height: imgH, format: format, payload: kind, payloadRange: range, mip: mip)
+            var t = TexImage(width: imgW, height: imgH, format: format, payload: kind, payloadRange: range, mip: mip)
+            t.frames = parseFrames(b)
+            return t
         }
 
         // 1) 내장 이미지/비디오 시그니처 우선(작은 윈도우에서만 — LZ4 데이터의 우연 일치 방지).
@@ -109,6 +127,45 @@ public struct TexImage {
         return CompressedMip(decodeWidth: w, decodeHeight: h,
                              imageWidth: imgW, imageHeight: imgH,
                              decompressedSize: dec, payloadRange: p..<(p + comp), lz4: isLZ4 != 0)
+    }
+
+    /// TEXS 스프라이트시트 섹션 파스(파일 꼬리에서 역방향 탐색 — LZ4 페이로드 내 우연 일치 회피).
+    /// 이상 감지 시 [] (프레임 없음 = 전체 텍스처 1프레임과 동등).
+    private static func parseFrames(_ b: [UInt8]) -> [TexFrame] {
+        let sig = Array("TEXS000".utf8)
+        guard b.count > sig.count + 6 else { return [] }
+        var ti = -1
+        var i = b.count - sig.count - 2
+        while i >= 0 {  // 마지막 출현 탐색
+            if Array(b[i..<i + sig.count]) == sig { ti = i; break }
+            i -= 1
+        }
+        guard ti >= 0 else { return [] }
+        let version = Int(b[ti + 7]) - 0x30
+        guard version >= 1, version <= 3 else { return [] }
+        func i32(_ o: Int) -> Int? {
+            guard o >= 0, o + 4 <= b.count else { return nil }
+            return Int(Int32(bitPattern: UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24))
+        }
+        func f32(_ o: Int) -> Float? {
+            guard o >= 0, o + 4 <= b.count else { return nil }
+            return Float(bitPattern: UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24)
+        }
+        var p = ti + 9
+        guard let count = i32(p), count > 0, count <= 4096 else { return [] }
+        p += 4
+        if version >= 3 { p += 8 }   // gifWidth, gifHeight
+        guard p + count * 32 <= b.count else { return [] }
+        var out: [TexFrame] = []
+        out.reserveCapacity(count)
+        for _ in 0..<count {
+            guard let id = i32(p), let t = f32(p + 4), let x = f32(p + 8), let y = f32(p + 12),
+                  let w = f32(p + 16), let h = f32(p + 28),
+                  w > 0, h > 0, x >= 0, y >= 0, x.isFinite, y.isFinite else { return [] }
+            out.append(TexFrame(imageId: id, time: t, x: x, y: y, width: w, height: h))
+            p += 32
+        }
+        return out
     }
 
     private static func findSig(_ b: [UInt8], _ sig: [UInt8], limit: Int) -> Int? {

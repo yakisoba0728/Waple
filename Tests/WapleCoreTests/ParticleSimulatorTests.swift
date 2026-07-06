@@ -9,7 +9,7 @@ final class ParticleSimulatorTests: XCTestCase {
                            gravity: Vec3 = Vec3(x: 0, y: 0, z: 0), drag: Float = 0,
                            operators extra: [ParticleOperator] = []) -> ParticleSystemDef {
         ParticleSystemDef(
-            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: lifetime, max: lifetime),
                            .sizeRandom(min: 5, max: 5),
                            .velocityRandom(min: velocity, max: velocity),
@@ -93,7 +93,7 @@ final class ParticleSimulatorTests: XCTestCase {
     private func trailDef(renderer: RendererKind, velocity: Vec3 = Vec3(x: 100, y: 0, z: 0),
                           operators extra: [ParticleOperator] = [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0)]) -> ParticleSystemDef {
         ParticleSystemDef(
-            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 100, max: 100), .sizeRandom(min: 5, max: 5),
                            .velocityRandom(min: velocity, max: velocity), .alphaRandom(min: 1, max: 1, exponent: 1)],
             operators: extra, renderer: renderer, maxCount: 1, startTime: 0, material: nil)
@@ -131,7 +131,7 @@ final class ParticleSimulatorTests: XCTestCase {
         // 원점에서 velocity 0, scale>0 인력 → 원점에 붙어 있으면 힘 0. 오프셋 스폰이 필요하므로
         // box origin 을 x=100 에 두고 대상=0(기본) → -x 로 당겨져야.
         let def = ParticleSystemDef(
-            emitters: [.box(origin: Vec3(x: 100, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            emitters: [.box(origin: Vec3(x: 100, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 100, max: 100)],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
                         .controlPointAttract(scale: 1000, threshold: 0, target: Vec3(x: 0, y: 0, z: 0))],
@@ -146,7 +146,7 @@ final class ParticleSimulatorTests: XCTestCase {
     func testControlPointAttractRepelsWithNegativeScale() {
         // scale<0 → 대상에서 밀려남(원점 근처 스폰 → +로 밀림). 유계(속도 상한 미붕괴).
         let def = ParticleSystemDef(
-            emitters: [.box(origin: Vec3(x: 10, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            emitters: [.box(origin: Vec3(x: 10, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 100, max: 100)],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
                         .controlPointAttract(scale: -800, threshold: 64, target: Vec3(x: 0, y: 0, z: 0))],
@@ -162,7 +162,7 @@ final class ParticleSimulatorTests: XCTestCase {
     func testVortexAddsTangentialVelocity() {
         // z축 소용돌이, 중심=원점, x=50 에 스폰(반경 50). speedInner=200 → +y 접선(axis×radial).
         let def = ParticleSystemDef(
-            emitters: [.box(origin: Vec3(x: 50, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            emitters: [.box(origin: Vec3(x: 50, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 100, max: 100)],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
                         .vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 0,
@@ -180,7 +180,7 @@ final class ParticleSimulatorTests: XCTestCase {
                          mask: Vec3 = Vec3(x: 1, y: 1, z: 1), phaseMin: Float = 0, phaseMax: Float = 0,
                          origin: Vec3 = Vec3(x: 25, y: 25, z: 0), maxCount: Int = 1) -> ParticleSystemDef {
         ParticleSystemDef(
-            emitters: [.box(origin: origin, distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            emitters: [.box(origin: origin, distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 1000, max: 1000)],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
                         .turbulence(speedMin: speedMin, speedMax: speedMax, scale: scale, timeScale: timeScale,
@@ -256,7 +256,7 @@ final class ParticleSimulatorTests: XCTestCase {
 
     func testColorNormalization() {
         let def = ParticleSystemDef(
-            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000)],
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 100, max: 100), .colorRandom(min: Vec3(x: 255, y: 0, z: 0), max: Vec3(x: 255, y: 0, z: 0))],
             operators: [], renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 7)
