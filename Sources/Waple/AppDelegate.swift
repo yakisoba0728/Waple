@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 import WapleCore
 import WapleLibrary
@@ -20,6 +21,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var libraryWindow: NSWindow?
     private weak var fitMenu: NSMenu?
     private weak var playlistMenu: NSMenu?
+
+    // 데스크탑 가림 자동 일시정지(옵션, UserDefaults 영속, 기본 꺼짐 — 기존 동작 보존).
+    private let visibilityMonitor = DesktopVisibilityMonitor()
+    private var occlusionTimer: Timer?
+    private var pausedByOcclusion = false   // 이 모니터가 정지시켰는지(수동 정지와 사유 분리)
+    private weak var occlusionToggleItem: NSMenuItem?
+
+    private static let pauseWhenOccludedKey = "pauseWhenOccluded"
+    private var pauseWhenOccluded: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.pauseWhenOccludedKey) }   // 기본 false
+        set { UserDefaults.standard.set(newValue, forKey: Self.pauseWhenOccludedKey) }
+    }
 
     @objc private func setFitMode(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let mode = FitMode(rawValue: raw) else { return }
@@ -82,10 +95,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         plItem.submenu = plMenu
         menu.addItem(plItem)
         self.playlistMenu = plMenu
+        // 데스크탑이 다른 창에 가려지면 렌더러 일시정지(옵션, 기본 꺼짐).
+        let occItem = NSMenuItem(title: "가려지면 일시정지",
+                                 action: #selector(toggleOcclusionPause), keyEquivalent: "")
+        occItem.state = pauseWhenOccluded ? .on : .off
+        menu.addItem(occItem)
+        self.occlusionToggleItem = occItem
         menu.addItem(NSMenuItem(title: "웹 조작 창 열기",
                                 action: #selector(openWebInteraction), keyEquivalent: "i"))
+        menu.addItem(NSMenuItem(title: "정지 배경으로 설정",
+                                action: #selector(setStillWallpaper), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "기본 에셋 폴더 설정…",
                                 action: #selector(chooseBaseAssets), keyEquivalent: ""))
+        // 로그인 시 자동 시작(등록 실패는 조용히 — 체크는 실제 status 반영).
+        let loginItem = NSMenuItem(title: "로그인 시 시작",
+                                   action: #selector(toggleLoginItem(_:)), keyEquivalent: "")
+        loginItem.state = LoginItemController.isEnabled ? .on : .off
+        menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Waple",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -120,6 +146,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 마지막 선택 배경 복원.
         restoreLastWallpaper()
+
+        // 가림 자동 일시정지 폴링 시작(꺼져 있으면 no-op).
+        scheduleOcclusionTimer()
     }
 
     /// WE 기본(공유) 에셋 팩 폴더 선택. 일부 씬은 패키지에 없는 공유 텍스처(particle/halo 등)를
@@ -241,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             currentFolderURL = folderURL
             currentProjectId = project.id
             updateVideoMenuStates()
+            if pausedByOcclusion { renderers.forEach { $0.pause() } }  // 가림 정지 중 교체된 렌더러도 정지 유지
             return true
         case .failure(let error):
             notify("적용 실패: \(error)")
@@ -293,6 +323,109 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   entryExists: { id in self.store.entries.contains(where: { $0.id == id }) }),
               let entry = store.entries.first(where: { $0.id == nextId }) else { return }
         libraryVM.apply(entry)
+    }
+
+    // MARK: - 데스크탑 가림 자동 일시정지 (작업 2)
+
+    @objc private func toggleOcclusionPause() {
+        pauseWhenOccluded.toggle()
+        occlusionToggleItem?.state = pauseWhenOccluded ? .on : .off
+        scheduleOcclusionTimer()
+    }
+
+    /// 폴링 타이머 재구성. 켜짐 → 1초 폴링(.common 모드). 꺼짐 → 정지하고, 가림 정지 중이었으면 해제.
+    private func scheduleOcclusionTimer() {
+        occlusionTimer?.invalidate()
+        occlusionTimer = nil
+        guard pauseWhenOccluded else {
+            if pausedByOcclusion { resumeFromOcclusion() }  // 끄면 정지 상태를 남기지 않는다
+            return
+        }
+        // .common 모드 — 메뉴 트래킹 중에도 폴링(scheduledTimer 는 .default 만 등록).
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.checkOcclusion() }
+        RunLoop.main.add(timer, forMode: .common)
+        occlusionTimer = timer
+    }
+
+    private func checkOcclusion() {
+        let visible = visibilityMonitor.isDesktopVisible()
+        if !visible, !pausedByOcclusion {
+            renderers.forEach { $0.pause() }
+            pausedByOcclusion = true
+        } else if visible, pausedByOcclusion {
+            resumeFromOcclusion()
+        }
+    }
+
+    private func resumeFromOcclusion() {
+        renderers.forEach { $0.resume() }
+        pausedByOcclusion = false
+    }
+
+    // MARK: - 정지 배경으로 설정 (작업 3)
+
+    /// 현재 배경에서 정지 이미지를 만들어 전 스크린 데스크탑 배경으로 지정.
+    /// 배경 창은 아이콘 레벨 아래라, 라이브 창이 떠 있는 동안 정지 배경은 그 뒤의 폴백 레이어다.
+    @objc private func setStillWallpaper() {
+        guard let folder = currentFolderURL,
+              let project = try? ProjectJSONParser.parse(folderURL: folder) else {
+            notify("적용된 배경이 없습니다"); return
+        }
+        guard let source = StillWallpaper.source(for: project) else {
+            notify("정지 배경을 만들 수 없습니다 — preview 이미지가 없습니다"); return
+        }
+        let stillDir = LibraryStore.defaultBaseDirectory().appendingPathComponent("still", isDirectory: true)
+        try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
+        let output = StillWallpaper.outputURL(projectId: project.id, stillDir: stillDir)
+
+        let imageURL: URL?
+        switch source {
+        case .videoFrame(let videoURL): imageURL = extractVideoFrame(from: videoURL, to: output)
+        case .sceneCapture:             imageURL = captureSceneStill(to: stillDir)
+        case .previewImage(let url):    imageURL = url   // preview 파일 그대로 사용
+        }
+        guard let image = imageURL else { notify("정지 배경 추출에 실패했습니다"); return }
+        for screen in NSScreen.screens {
+            try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
+        }
+        notify("정지 배경으로 설정했습니다")
+    }
+
+    /// 동영상 t=1s 프레임 → PNG(실패 시 t=0 폴백). 실패 → nil.
+    private func extractVideoFrame(from videoURL: URL, to output: URL) -> URL? {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: videoURL))
+        generator.appliesPreferredTrackTransform = true
+        let cg: CGImage
+        do {
+            cg = try generator.copyCGImage(at: CMTime(seconds: 1, preferredTimescale: 600), actualTime: nil)
+        } catch {
+            guard let zero = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return nil }
+            cg = zero
+        }
+        guard let data = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]),
+              (try? data.write(to: output, options: .atomic)) != nil else { return nil }
+        return output
+    }
+
+    /// 활성 씬 렌더러로 1프레임(t=1s) 캡처. 씬이 없으면 nil.
+    private func captureSceneStill(to dir: URL) -> URL? {
+        guard let scene = renderers.compactMap({ $0 as? SceneRenderer }).first else { return nil }
+        let size = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        return scene.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
+                                   times: [1.0], toDir: dir).first
+    }
+
+    // MARK: - 로그인 시 시작 (작업 4)
+
+    @objc private func toggleLoginItem(_ sender: NSMenuItem) {
+        do {
+            try LoginItemController.setEnabled(!LoginItemController.isEnabled)
+        } catch {
+            // SPM 단독 실행 파일은 등록 실패 가능 — 알럿 없이 로깅만, 체크는 실제 status 로 재조회.
+            notify("로그인 항목 설정 실패: \(error.localizedDescription)")
+        }
+        sender.state = LoginItemController.isEnabled ? .on : .off
     }
 
     private func notify(_ message: String) {
