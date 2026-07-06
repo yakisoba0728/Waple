@@ -86,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(openWebInteraction), keyEquivalent: "i"))
         menu.addItem(NSMenuItem(title: "기본 에셋 폴더 설정…",
                                 action: #selector(chooseBaseAssets), keyEquivalent: ""))
+        menu.addItem(screenSaverMenuItem())  // 화면보호기 토글(feat/screensaver — 구현은 파일 끝 확장)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Waple",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -241,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             currentFolderURL = folderURL
             currentProjectId = project.id
             updateVideoMenuStates()
+            ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
             return true
         case .failure(let error):
             notify("적용 실패: \(error)")
@@ -297,5 +299,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func notify(_ message: String) {
         NSLog("%@", "[Waple] \(message)")
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MARK: - 화면보호기 (feat/screensaver)
+// 다른 브랜치와의 충돌을 최소화하기 위해 본문을 건드리지 않고 확장으로 분리했다.
+// 배선: 메뉴 1항목(applicationDidFinishLaunching) + apply 성공 경로 1줄(syncVideoPath).
+// ═════════════════════════════════════════════════════════════════════════════
+extension AppDelegate {
+    /// "화면보호기로 사용" 토글 메뉴 항목. 체크 상태 = 시스템에 Waple 이 선택되어 있는가.
+    func screenSaverMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "화면보호기로 사용",
+                              action: #selector(toggleScreenSaver(_:)), keyEquivalent: "")
+        item.state = ScreenSaverController.isSelected ? .on : .off
+        return item
+    }
+
+    /// 켜기 = saver 설치 + 시스템 선택 + 현재 동영상 경로 기록 + 설정 패널 열기. 끄기 = 선택 해제.
+    @objc func toggleScreenSaver(_ sender: NSMenuItem) {
+        if ScreenSaverController.isSelected {
+            ScreenSaverController.disable()
+            sender.state = .off
+            return
+        }
+        do {
+            let project = currentFolderURL.flatMap { try? ProjectJSONParser.parse(folderURL: $0) }
+            try ScreenSaverController.enable(currentProject: project)
+            sender.state = .on
+            ScreenSaverController.openSettings()  // 사용자가 바로 확인할 수 있게 잠금 화면 패널 열기
+        } catch {
+            notify("화면보호기 설치 실패: \(error.localizedDescription)")
+        }
     }
 }
