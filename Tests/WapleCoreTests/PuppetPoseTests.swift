@@ -55,6 +55,25 @@ final class PuppetPoseTests: XCTestCase {
         XCTAssertEqual(pos[0].x, 50, accuracy: 1e-3)
     }
 
+    func testOutOfBoundsBoneParentTreatedAsRoot() {
+        // 부모 인덱스가 본 개수 밖(비정상/손상 데이터)이어도 크래시하지 않고 루트(항등)로 처리 —
+        // 3D 형제 Model3DPose 와 동일 규약(p < i 게이트). 종전엔 bindWorld[Int(b.parent)] /
+        // world[Int(b.parent)] 가 무한계 인덱싱이라 배열 범위 밖 트랩(앱 전체 크래시).
+        var m = PuppetModel(
+            material: "m",
+            vertices: [.init(position: SIMD3(1, 2, 0), boneIndices: SIMD4(1, 0, 0, 0),
+                             weights: SIMD4(1, 0, 0, 0), uv: SIMD2(0, 0))],
+            indices: [0])
+        m.bones = [
+            .init(name: "root", parent: -1, bind: matrix_identity_float4x4),
+            .init(name: "bad", parent: 99, bind: matrix_identity_float4x4),  // 범위 밖 부모
+        ]
+        m.animations = [.init(name: "a", mode: "single", fps: 30, lengthFrames: 1, tracks: [])]
+        let mats = PuppetPose.skinMatrices(model: m, animation: 0, time: 0)  // 수정 전: 트랩
+        XCTAssertEqual(mats.count, 2)
+        XCTAssertEqual(mats[1], matrix_identity_float4x4, "범위 밖 부모 본은 루트(항등)로 처리")
+    }
+
     func testChildRotationAboutOwnOrigin() {
         // child 만 z 90° 회전(위치 키는 바인드 유지) → child 정점(바인드에서 본과 동일 위치)은 제자리,
         // 본에서 +x 로 떨어진 점이 있다면 회전. 여기선 정점1이 정확히 child 원점에 있으므로 불변이 핵심.
