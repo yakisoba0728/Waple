@@ -1,17 +1,35 @@
 import Foundation
 
+/// 손상된 스토어 JSON 을 덮어쓰기 전 1회 백업(rename). 복구 가능한 사용자 설정의 무음 파괴를 막는다.
+/// LibraryStore.indexCorrupt 백업과 동일 규약 — Playlist/Monitor 스토어가 공유한다.
+func backupCorruptStoreFile(_ url: URL, _ corrupt: inout Bool) {
+    guard corrupt else { return }
+    corrupt = false
+    let backup = url.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
+    do {
+        try FileManager.default.moveItem(at: url, to: backup)
+        NSLog("%@", "[Waple] backed up corrupt \(url.lastPathComponent) to \(backup.path)")
+    } catch {
+        NSLog("%@", "[Waple] failed to back up corrupt \(url.lastPathComponent): \(error)")
+    }
+}
+
 /// 모니터별 배경 할당(화면 키 → 라이브러리 엔트리 id). 미할당 화면은 전역 선택을 따른다.
 /// 화면 키는 CGDirectDisplayID 문자열(앱 쪽에서 생성) — 디스플레이 재연결에도 안정적.
 public final class MonitorAssignmentStore {
     private let fileURL: URL
     private var map: [String: String] = [:]
+    /// 로드 시 손상(파일은 있으나 디코드 실패) 발견 → 다음 save() 가 덮어쓰기 전에 백업(데이터 손실 방지).
+    private var corrupt = false
 
     public init(baseDirectory: URL) {
         fileURL = baseDirectory.appendingPathComponent("monitors.json")
-        if let data = try? Data(contentsOf: fileURL),
-           let m = try? JSONDecoder().decode([String: String].self, from: data) {
-            map = m
-        }
+        let data: Data
+        do { data = try Data(contentsOf: fileURL) }
+        catch CocoaError.fileReadNoSuchFile { return }  // 최초 실행: 파일 없음(정상)
+        catch { NSLog("%@", "[Waple] monitors.json unreadable — preserving, starting empty: \(error)"); corrupt = true; return }
+        do { map = try JSONDecoder().decode([String: String].self, from: data) }
+        catch { NSLog("%@", "[Waple] monitors.json corrupt — preserving, starting empty: \(error)"); corrupt = true }
     }
 
     public func assignment(for screenKey: String) -> String? { map[screenKey] }
@@ -25,6 +43,7 @@ public final class MonitorAssignmentStore {
     public var all: [String: String] { map }
 
     private func save() {
+        backupCorruptStoreFile(fileURL, &corrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
         do {
             let data = try JSONEncoder().encode(map)
             try data.write(to: fileURL, options: .atomic)
