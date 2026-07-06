@@ -297,22 +297,8 @@ extension SceneDocument {
             guard let obj = any as? [String: Any] else { continue }
             // 사운드 오브젝트("sound" 키): 트랜스폼/계층 무시(전역 재생), 실측 필드만 파스.
             // 콘텐츠 키(image/model/…)가 없어 아래 그룹-노드 분기로 새면 nodes3D 로 오분류되므로 먼저 처리.
-            if let soundArr = obj["sound"] as? [Any] {
-                let paths = soundArr.compactMap { $0 as? String }
-                if !paths.isEmpty {
-                    sounds.append(SceneSound(
-                        id: intVal(obj["id"]) ?? 0,
-                        sounds: paths,
-                        volume: float(obj["volume"]) ?? 1,   // float() 가 숫자/{value} 바인딩 공통 언랩
-                        playbackMode: (obj["playbackmode"] as? String) ?? "single",
-                        startSilent: (obj["startsilent"] as? Bool) ?? false,
-                        minTime: float(obj["mintime"]) ?? 0,
-                        maxTime: float(obj["maxtime"]) ?? 0))
-                    // 미반영 필드는 로그로만 남긴다(추측 금지 — 파스만).
-                    if paths.count > 1 || (obj["startsilent"] as? Bool) == true {
-                        WapleLog.warn("[Waple] scene sound parsed (unhandled: multi=\(paths.count), startsilent=\((obj["startsilent"] as? Bool) ?? false)): id \(intVal(obj["id"]) ?? 0)")
-                    }
-                }
+            if obj["sound"] is [Any] {
+                if let s = parseSound(obj) { sounds.append(s) }
                 continue
             }
             // `visible` 은 평문 불리언 | 바인딩 객체 {"value":Bool, "script":JS} 두 형태. 스크립트가 있는
@@ -327,18 +313,7 @@ extension SceneDocument {
             }
             // 트랜스폼-온리 그룹(콘텐츠 키 없음 + id 보유): 계층 노드로 기록(비가시도 포함 — 서브트리
             // 가시성 판정에 필요)하고 다음으로. 종전에는 조용히 버려져 parent 참조가 끊겼다.
-            if !["image", "model", "particle", "text", "light"].contains(where: { obj[$0] != nil }),
-               let nodeID = intVal(obj["id"]) {
-                var node = SceneNode3D(
-                    id: nodeID,
-                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    parent: intVal(obj["parent"]),
-                    visible: initialVisible)
-                var ps = transformScripts(obj)
-                if let vs = visibleScript { ps["visible"] = vs }
-                node.propertyScripts = ps
+            if let node = parseNode(obj, initialVisible: initialVisible, visibleScript: visibleScript) {
                 nodes3D.append(node)
                 continue
             }
@@ -528,6 +503,42 @@ extension SceneDocument {
         out.cameraScripts = cameraScripts
         out.sounds = sounds
         return out
+    }
+
+    /// 사운드 오브젝트("sound" 배열) → SceneSound. 빈 경로면 nil(호출부는 sound 키 존재 시 항상 continue).
+    private static func parseSound(_ obj: [String: Any]) -> SceneSound? {
+        let paths = (obj["sound"] as? [Any])?.compactMap { $0 as? String } ?? []
+        guard !paths.isEmpty else { return nil }
+        // 미반영 필드는 로그로만 남긴다(추측 금지 — 파스만).
+        if paths.count > 1 || (obj["startsilent"] as? Bool) == true {
+            WapleLog.warn("[Waple] scene sound parsed (unhandled: multi=\(paths.count), startsilent=\((obj["startsilent"] as? Bool) ?? false)): id \(intVal(obj["id"]) ?? 0)")
+        }
+        return SceneSound(
+            id: intVal(obj["id"]) ?? 0,
+            sounds: paths,
+            volume: float(obj["volume"]) ?? 1,   // float() 가 숫자/{value} 바인딩 공통 언랩
+            playbackMode: (obj["playbackmode"] as? String) ?? "single",
+            startSilent: (obj["startsilent"] as? Bool) ?? false,
+            minTime: float(obj["mintime"]) ?? 0,
+            maxTime: float(obj["maxtime"]) ?? 0)
+    }
+
+    /// 트랜스폼-온리 그룹 노드: 콘텐츠 키 없음 + id 보유 시 SceneNode3D(비가시도 포함 — 서브트리 판정에 필요).
+    /// 콘텐츠 키가 있거나 id 없으면 nil(호출부가 레이어/컨텐츠 분기로 진행).
+    private static func parseNode(_ obj: [String: Any], initialVisible: Bool, visibleScript: String?) -> SceneNode3D? {
+        guard !["image", "model", "particle", "text", "light"].contains(where: { obj[$0] != nil }),
+              let nodeID = intVal(obj["id"]) else { return nil }
+        var node = SceneNode3D(
+            id: nodeID,
+            origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+            angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+            scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
+            parent: intVal(obj["parent"]),
+            visible: initialVisible)
+        var ps = transformScripts(obj)
+        if let vs = visibleScript { ps["visible"] = vs }
+        node.propertyScripts = ps
+        return node
     }
 
     /// animationlayers → 활성 베이스 애니(숫자 blend≥0.5 & visible 중 blend 최대). 나머지(딕셔너리 blend =
