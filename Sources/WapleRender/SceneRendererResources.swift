@@ -126,7 +126,8 @@ extension SceneRenderer {
                                 order: layer.order, uid: uid, isFrameBuffer: layer.isFrameBuffer,
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
-                                initialVisible: layer.initialVisible))
+                                initialVisible: layer.initialVisible,
+                                colorBlendMode: layer.colorBlendMode))
         }
         return out
     }

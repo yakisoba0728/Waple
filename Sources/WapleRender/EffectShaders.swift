@@ -61,35 +61,7 @@ enum EffectShaders {
     using namespace metal;
     struct EOut { float4 pos [[position]]; float2 uv; };
 
-    // WE common_blending.h 포팅(흔한 모드). applyBlending(mode, A=base, B=blend, o=opacity).
-    inline float3 we_overlay(float3 b, float3 s) { return select(2.0*b*s, 1.0-2.0*(1.0-b)*(1.0-s), b >= 0.5); }
-    inline float3 we_colorburn(float3 b, float3 s) { return select(max(1.0-(1.0-b)/max(s,1e-5), 0.0), float3(0.0), s == 0.0); }
-    inline float3 we_colordodge(float3 b, float3 s) { return select(min(b/max(1.0-s,1e-5), 1.0), float3(1.0), s == 1.0); }
-    inline float3 we_softlight(float3 b, float3 s) { return select(2.0*b*s + b*b*(1.0-2.0*s), sqrt(max(b,0.0))*(2.0*s-1.0)+2.0*b*(1.0-s), s >= 0.5); }
-    inline float3 applyBlending(int mode, float3 A, float3 B, float o) {
-        float3 r;
-        switch (mode) {
-            case 1:  r = min(A, B); break;                 // Darken
-            case 2:  r = A * B; break;                     // Multiply
-            case 3:  r = we_colorburn(A, B); break;        // ColorBurn
-            case 4:  r = max(A + B - 1.0, 0.0); break;     // Subtract
-            case 5:  return min(A, B);                     // Min (no opacity)
-            case 6:  r = max(A, B); break;                 // Lighten
-            case 7:  r = 1.0 - (1.0 - A) * (1.0 - B); break; // Screen
-            case 8:  r = we_colordodge(A, B); break;       // ColorDodge
-            case 9:  r = min(A + B, 1.0); break;           // Add
-            case 10: return max(A, B);                     // Max (no opacity)
-            case 11: r = we_overlay(A, B); break;          // Overlay
-            case 12: r = we_softlight(A, B); break;        // SoftLight
-            case 13: r = we_overlay(B, A); break;          // HardLight
-            case 30: r = max(A.x, max(A.y, A.z)) * B; break; // Tint
-            case 31: return A + B * o;                     // Additive (no mix)
-            default: r = B; break;                         // 0 = Normal
-        }
-        return mix(A, r, o);
-    }
-
-    """
+    """ + BlendMSL.source
     private static let vert = """
     vertex EOut ev_main(uint vid [[vertex_id]], const device float2* verts [[buffer(0)]]) {
         float2 p = verts[vid];

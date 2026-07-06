@@ -65,6 +65,9 @@ public struct SceneLayer: Equatable {
     /// 머티리얼 블렌드 모드("normal"|"additive"|"alphatocoverage"…). 3D 씬 빌보드가 파이프라인 선택에 사용
     /// (플레어/글로우 = additive). 2D 경로는 무시(단일 premult-over).
     public var blendMode: String = "normal"
+    /// 오브젝트 colorBlendMode(common_blending.h ApplyBlending enum 0-32; 0=normal).
+    /// != 0 이면 렌더러가 acc 스냅샷 대비 블렌드 합성(컴포지션 스냅샷 패턴). 코퍼스 121레이어/30씬.
+    public var colorBlendMode: Int = 0
     /// visible 의 정적 value(초기 표시). visible 스크립트가 있을 때만 false 로도 남는다 —
     /// 스크립트 없는 정적 false 는 파스에서 레이어 자체가 드롭된다.
     public var initialVisible: Bool = true
@@ -358,6 +361,7 @@ extension SceneDocument {
                 layers[layers.count - 1].propertyScripts = propScripts
                 layers[layers.count - 1].initialVisible = initialVisible
                 layers[layers.count - 1].blendMode = blendMode
+                layers[layers.count - 1].colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
                 // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
                 let originFull = floats(obj["origin"])
                 layers[layers.count - 1].originZ = originFull.count >= 3 ? originFull[2] : 0

@@ -5,7 +5,7 @@ import WapleCore
 
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용 */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용 */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
     var hasAnimations = false
     struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -170,6 +170,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var device: MTLDevice?
     var queue: MTLCommandQueue?
     var pipeline: MTLRenderPipelineState?
+    var blendPipeline: MTLRenderPipelineState?
     var layers: [GPULayer] = []
     var clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
     var cameraOffset = SIMD2<Float>(0, 0)
@@ -332,6 +333,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         att.sourceRGBBlendFactor = .one; att.sourceAlphaBlendFactor = .one
         att.destinationRGBBlendFactor = .oneMinusSourceAlpha; att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         self.pipeline = try device.makeRenderPipelineState(descriptor: pdesc)
+        // colorBlendMode 레이어: dst 스냅샷 대비 블렌드를 셰이더에서 계산 → HW 블렌딩 OFF.
+        let bdesc = MTLRenderPipelineDescriptor()
+        bdesc.vertexFunction = library.makeFunction(name: "v_main")
+        bdesc.fragmentFunction = library.makeFunction(name: "f_blend")
+        bdesc.colorAttachments[0]!.pixelFormat = .bgra8Unorm
+        self.blendPipeline = try? device.makeRenderPipelineState(descriptor: bdesc)
 
         clearColor = MTLClearColor(red: Double(doc.clearColor.x), green: Double(doc.clearColor.y),
                                    blue: Double(doc.clearColor.z), alpha: 1)

@@ -220,6 +220,28 @@ extension SceneRenderer {
         return next
     }
 
+    /// colorBlendMode 레이어: acc 스냅샷(dst) 확보 → f_blend 로 레이어 쿼드 드로우 → 새 인코더 반환.
+    /// runFrameBufferLayer 와 같은 인코더 분할 패턴(효과 체인은 displayTextures 에서 이미 처리 — 미실행).
+    func runBlendModeLayer(_ layer: GPULayer, texture: MTLTexture, acc: MTLTexture, cb: MTLCommandBuffer,
+                           ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
+                           camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        enc.endEncoding()
+        var snapshot: MTLTexture? = nil
+        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+           let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(from: acc, to: snap)
+            blit.endEncoding()
+            snapshot = snap
+        }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = acc
+        rpd.colorAttachments[0].loadAction = .load
+        guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        encodeLayer(layer, texture: texture, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
+                    time: time, device: device, blendSnapshot: snapshot)
+        return next
+    }
+
     /// 씬 픽셀 좌표(좌상단 원점, y-down) → NDC(-1..1, y-up). px→NDC 변환의 단일 정의 —
     /// 파티클/리본/쿼드/퍼펫/텍스트 경로가 공유(동일식 5중 중복 제거, 2026-07-04).
     @inline(__always)
@@ -309,6 +331,13 @@ extension SceneRenderer {
                                                      device: device, time: time,
                                                      camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
                 enc = next
+            case .layer where layers[item.idx].colorBlendMode != 0:
+                // colorBlendMode: 그 시점까지의 acc 스냅샷을 dst 로 셰이더 블렌드(컴포지션과 동일한
+                // 인코더 분할 패턴 — 진행 중 타깃은 샘플 불가). 효과는 displayTextures 에 이미 적용됨.
+                guard let next = runBlendModeLayer(layers[item.idx], texture: displayTextures[item.idx],
+                                                   acc: acc, cb: cb, ending: enc, device: device, time: time,
+                                                   camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                enc = next
             case .layer:
                 encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
                             camOffset: &camOffset, aspectScale: &aspectScale, time: time, device: device)
@@ -321,7 +350,8 @@ extension SceneRenderer {
     /// (def 있는 레이어만 per-frame 재계산 — origin/scale/angles → 쿼드, alpha/color → tint).
     func encodeLayer(_ layer: GPULayer, texture: MTLTexture, into enc: MTLRenderCommandEncoder,
                              camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
-                             time: Float = 0, device: MTLDevice? = nil) {
+                             time: Float = 0, device: MTLDevice? = nil,
+                             blendSnapshot: MTLTexture? = nil) {
         guard let pipeline else { return }
         var tint = layer.tint
         var vbuf = layer.vertexBuffer
@@ -376,7 +406,15 @@ extension SceneRenderer {
             }
         }
         var depth = layer.parallaxDepth
-        enc.setRenderPipelineState(pipeline)
+        // colorBlendMode: 스냅샷 dst 대비 셰이더 블렌드(f_blend). 스냅샷 없으면 일반 합성 폴백.
+        if let blendSnapshot, let blendPipeline, layer.colorBlendMode != 0 {
+            enc.setRenderPipelineState(blendPipeline)
+            enc.setFragmentTexture(blendSnapshot, index: 1)
+            var mode = Int32(layer.colorBlendMode)
+            enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
+        } else {
+            enc.setRenderPipelineState(pipeline)
+        }
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
