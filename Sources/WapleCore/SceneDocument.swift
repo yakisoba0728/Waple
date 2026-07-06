@@ -304,77 +304,11 @@ extension SceneDocument {
             }
             if !initialVisible && (visibleScript == nil || !(obj["image"] is String)) { continue }
             if let imagePath = obj["image"] as? String {
-                guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets) else {
-                    continue  // 사유별 로그는 resolveLayerTexture 내부에서.
+                if let layer = parseLayer(obj, imagePath: imagePath, order: order, pw: pw, ph: ph,
+                                          package: package, assets: assets,
+                                          visibleScript: visibleScript, initialVisible: initialVisible) {
+                    layers.append(layer)
                 }
-                let angles = floats(obj["angles"])
-                var origin = vec2(obj["origin"]) ?? Vec2(x: 0, y: 0)
-                var size = vec2(obj["size"]) ?? Vec2(x: Float(pw), y: Float(ph))
-                var scale = vec2(obj["scale"]) ?? Vec2(x: 1, y: 1)
-                let entryName: String
-                var isFB = false
-                switch resolved {
-                case .entry(let name): entryName = name
-                case .solid: entryName = ""
-                case .frameBuffer(let fullscreen):
-                    entryName = ""; isFB = true
-                    if fullscreen {  // fullscreen 모델은 오브젝트 size 와 무관하게 프로젝션 전체.
-                        origin = Vec2(x: Float(pw) / 2, y: Float(ph) / 2)
-                        size = Vec2(x: Float(pw), y: Float(ph))
-                        scale = Vec2(x: 1, y: 1)
-                    }
-                }
-                var anims: [String: PropertyAnimation] = [:]
-                var propScripts: [String: String] = [:]
-                for key in ["origin", "scale", "alpha", "angles", "color"] {
-                    if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind) {
-                        anims[key] = a
-                    }
-                    if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
-                        propScripts[key] = sc  // 정적 value 는 기존 언랩이 처리 — 스크립트는 per-frame 재평가
-                    }
-                }
-                if let vs = visibleScript { propScripts["visible"] = vs }
-                // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
-                // 겸사겸사 머티리얼 blending 을 캡처(3D 빌보드 additive 파이프라인 선택 — 플레어/글로우).
-                var puppetPath: String? = nil
-                var blendMode = "normal"
-                if let md = package.data(for: imagePath) ?? assets?(imagePath),
-                   let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
-                    puppetPath = mj["puppet"] as? String
-                    if let matPath = mj["material"] as? String,
-                       let matD = package.data(for: matPath) ?? assets?(matPath),
-                       let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
-                       let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any],
-                       let bl = p0["blending"] as? String {
-                        blendMode = bl
-                    }
-                }
-                layers.append(SceneLayer(
-                    textureEntryName: entryName,
-                    origin: origin,
-                    size: size,
-                    scale: scale,
-                    angleZ: angles.count >= 3 ? angles[2] : 0,
-                    alpha: float(obj["alpha"]) ?? 1,
-                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    brightness: float(obj["brightness"]) ?? 1,
-                    parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
-                    effects: parseEffects(obj["effects"]),
-                    order: order,
-                    isFrameBuffer: isFB,
-                    animations: anims
-                ))
-                layers[layers.count - 1].puppet = puppetPath
-                layers[layers.count - 1].propertyScripts = propScripts
-                layers[layers.count - 1].initialVisible = initialVisible
-                layers[layers.count - 1].blendMode = blendMode
-                layers[layers.count - 1].colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
-                // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
-                let originFull = floats(obj["origin"])
-                layers[layers.count - 1].originZ = originFull.count >= 3 ? originFull[2] : 0
-                layers[layers.count - 1].parent = intVal(obj["parent"])
-                layers[layers.count - 1].id = intVal(obj["id"]) ?? 0
             } else if let particlePath = obj["particle"] as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
                     p.order = order
@@ -398,6 +332,85 @@ extension SceneDocument {
         out.cameraScripts = cameraScripts
         out.sounds = sounds
         return out
+    }
+
+    /// 이미지 레이어("image": .tex 엔트리 | solid | framebuffer). resolveLayerTexture 실패 시 nil(레이어 없음).
+    /// 애니(PropertyAnimation)·프로퍼티 스크립트·퍼펫·블렌드·부모/id/originZ 를 obj 에서 채운다.
+    private static func parseLayer(_ obj: [String: Any], imagePath: String, order: Int, pw: Int, ph: Int,
+                                   package: ScenePackage, assets: ((String) -> Data?)?,
+                                   visibleScript: String?, initialVisible: Bool) -> SceneLayer? {
+        guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets) else {
+            return nil  // 사유별 로그는 resolveLayerTexture 내부에서.
+        }
+        let angles = floats(obj["angles"])
+        var origin = vec2(obj["origin"]) ?? Vec2(x: 0, y: 0)
+        var size = vec2(obj["size"]) ?? Vec2(x: Float(pw), y: Float(ph))
+        var scale = vec2(obj["scale"]) ?? Vec2(x: 1, y: 1)
+        let entryName: String
+        var isFB = false
+        switch resolved {
+        case .entry(let name): entryName = name
+        case .solid: entryName = ""
+        case .frameBuffer(let fullscreen):
+            entryName = ""; isFB = true
+            if fullscreen {  // fullscreen 모델은 오브젝트 size 와 무관하게 프로젝션 전체.
+                origin = Vec2(x: Float(pw) / 2, y: Float(ph) / 2)
+                size = Vec2(x: Float(pw), y: Float(ph))
+                scale = Vec2(x: 1, y: 1)
+            }
+        }
+        var anims: [String: PropertyAnimation] = [:]
+        var propScripts: [String: String] = [:]
+        for key in ["origin", "scale", "alpha", "angles", "color"] {
+            if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind) {
+                anims[key] = a
+            }
+            if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
+                propScripts[key] = sc  // 정적 value 는 기존 언랩이 처리 — 스크립트는 per-frame 재평가
+            }
+        }
+        if let vs = visibleScript { propScripts["visible"] = vs }
+        // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
+        // 겸사겸사 머티리얼 blending 을 캡처(3D 빌보드 additive 파이프라인 선택 — 플레어/글로우).
+        var puppetPath: String? = nil
+        var blendMode = "normal"
+        if let md = package.data(for: imagePath) ?? assets?(imagePath),
+           let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
+            puppetPath = mj["puppet"] as? String
+            if let matPath = mj["material"] as? String,
+               let matD = package.data(for: matPath) ?? assets?(matPath),
+               let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
+               let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any],
+               let bl = p0["blending"] as? String {
+                blendMode = bl
+            }
+        }
+        var layer = SceneLayer(
+            textureEntryName: entryName,
+            origin: origin,
+            size: size,
+            scale: scale,
+            angleZ: angles.count >= 3 ? angles[2] : 0,
+            alpha: float(obj["alpha"]) ?? 1,
+            color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+            brightness: float(obj["brightness"]) ?? 1,
+            parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
+            effects: parseEffects(obj["effects"]),
+            order: order,
+            isFrameBuffer: isFB,
+            animations: anims
+        )
+        layer.puppet = puppetPath
+        layer.propertyScripts = propScripts
+        layer.initialVisible = initialVisible
+        layer.blendMode = blendMode
+        layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
+        // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
+        let originFull = floats(obj["origin"])
+        layer.originZ = originFull.count >= 3 ? originFull[2] : 0
+        layer.parent = intVal(obj["parent"])
+        layer.id = intVal(obj["id"]) ?? 0
+        return layer
     }
 
     /// 3D 카메라 + 프로퍼티 스크립트. orthogonalprojection 이 딕셔너리가 아니고(3D 씬은 null)
