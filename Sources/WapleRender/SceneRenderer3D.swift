@@ -445,7 +445,7 @@ extension SceneRenderer {
                     let mats = Model3DPose.skinMatrices(model: model, animation: mr.animIndex, time: time, rate: mr.animRate)
                     if !mats.isEmpty {
                         let bytes = min(bb.length, mats.count * MemoryLayout<simd_float4x4>.stride)
-                        mats.withUnsafeBytes { memcpy(bb.contents(), $0.baseAddress!, bytes) }
+                        mats.withUnsafeBytes { _ = memcpy(bb.contents(), $0.baseAddress!, bytes) }
                         skinReady = true
                     }
                 }
