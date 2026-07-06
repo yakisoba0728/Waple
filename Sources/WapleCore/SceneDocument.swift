@@ -268,23 +268,8 @@ extension SceneDocument {
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
 
-        // 3D 카메라: orthogonalprojection 이 딕셔너리가 아니고(3D 씬은 null) camera{eye,center,up}+fov 존재.
-        // fov 는 float() 로 언랩 — 실물(젤다)은 {"script":...,"value":50} 스크립트 프로퍼티로 온다.
-        var camera3D: SceneCamera3D? = nil
-        var cameraScripts: [String: String] = [:]
-        if !(general["orthogonalprojection"] is [String: Any]),
-           let camDict = scene["camera"] as? [String: Any],
-           let eye = vec3(camDict["eye"]), let center = vec3(camDict["center"]),
-           let up = vec3(camDict["up"]), let fov = float(general["fov"]) {
-            camera3D = SceneCamera3D(eye: eye, center: center, up: up, fov: fov,
-                                     nearZ: float(general["nearz"]) ?? 0.01,
-                                     farZ: float(general["farz"]) ?? 10000)
-            // 카메라 프로퍼티 스크립트 캡처(per-frame 재평가용). eye/center/up 은 scene.camera, fov 는 general.
-            for (key, src) in [("eye", camDict["eye"]), ("center", camDict["center"]), ("up", camDict["up"])] {
-                if let d = src as? [String: Any], let sc = d["script"] as? String { cameraScripts[key] = sc }
-            }
-            if let d = general["fov"] as? [String: Any], let sc = d["script"] as? String { cameraScripts["fov"] = sc }
-        }
+        // 3D 카메라(orthogonalprojection 이 딕셔너리가 아닌 3D 씬 + camera{eye,center,up}+fov 존재 시). 2D=nil.
+        let (camera3D, cameraScripts) = parseCamera(scene: scene, general: general)
 
         var layers: [SceneLayer] = []
         var particles: [SceneParticle] = []
@@ -460,6 +445,26 @@ extension SceneDocument {
         out.cameraScripts = cameraScripts
         out.sounds = sounds
         return out
+    }
+
+    /// 3D 카메라 + 프로퍼티 스크립트. orthogonalprojection 이 딕셔너리가 아니고(3D 씬은 null)
+    /// camera{eye,center,up} + general.fov 가 있을 때만 카메라 반환(2D=nil). fov 는 float() 언랩 —
+    /// 실물(젤다)은 {"script":…,"value":50} 스크립트 프로퍼티. eye/center/up 은 scene.camera, fov 는 general.
+    private static func parseCamera(scene: [String: Any], general: [String: Any]) -> (camera: SceneCamera3D?, scripts: [String: String]) {
+        guard !(general["orthogonalprojection"] is [String: Any]),
+              let camDict = scene["camera"] as? [String: Any],
+              let eye = vec3(camDict["eye"]), let center = vec3(camDict["center"]),
+              let up = vec3(camDict["up"]), let fov = float(general["fov"]) else { return (nil, [:]) }
+        let camera = SceneCamera3D(eye: eye, center: center, up: up, fov: fov,
+                                   nearZ: float(general["nearz"]) ?? 0.01,
+                                   farZ: float(general["farz"]) ?? 10000)
+        var scripts: [String: String] = [:]
+        // 카메라 프로퍼티 스크립트 캡처(per-frame 재평가용).
+        for (key, src) in [("eye", camDict["eye"]), ("center", camDict["center"]), ("up", camDict["up"])] {
+            if let d = src as? [String: Any], let sc = d["script"] as? String { scripts[key] = sc }
+        }
+        if let d = general["fov"] as? [String: Any], let sc = d["script"] as? String { scripts["fov"] = sc }
+        return (camera, scripts)
     }
 
     /// 사운드 오브젝트("sound" 배열) → SceneSound. 빈 경로면 nil(호출부는 sound 키 존재 시 항상 continue).
