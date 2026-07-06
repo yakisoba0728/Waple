@@ -69,7 +69,7 @@ struct PropertyEditorView: View {
                 Slider(value: Binding(
                     get: { if case .number(let n) = props[i].value { return n }; return 0 },
                     set: { commit(i, .number($0)) }),
-                    in: (p.min ?? 0)...(p.max ?? Swift.max(1, (p.min ?? 0) + 1)))
+                    in: PropertyControl.sliderRange(min: p.min, max: p.max))
             }
         case "combo":
             Picker(label(p), selection: Binding(

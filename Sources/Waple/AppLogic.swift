@@ -85,3 +85,15 @@ enum PlaylistScheduling {
         return id
     }
 }
+
+/// 속성 편집 UI 결정(순수).
+enum PropertyControl {
+    /// 슬라이더 범위. min>max·min==max·음수 상한 등 비정상 경계에서도 항상 유효한 오름차순 범위를 만든다.
+    /// ClosedRange 는 lower<=upper 를 요구하므로(위반 시 트랩=앱 크래시), 제3자 콘텐츠의 뒤집힌/축퇴
+    /// 경계를 하한 기준으로 클램프한다. 상한 부재 시 하한+1.
+    static func sliderRange(min: Double?, max: Double?) -> ClosedRange<Double> {
+        let lo = min ?? 0
+        let hi = Swift.max(lo + 0.0001, max ?? (lo + 1))
+        return lo...hi
+    }
+}

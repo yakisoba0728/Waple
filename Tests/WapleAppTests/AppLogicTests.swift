@@ -164,4 +164,26 @@ final class AppLogicTests: XCTestCase {
         XCTAssertNil(
             PlaylistScheduling.nextApplicableId(after: "a", next: { _ in "gone" }, entryExists: { _ in false }))
     }
+
+    // MARK: - PropertyControl.sliderRange (뒤집힌/축퇴 경계에서도 ClosedRange 트랩 금지)
+
+    func testSliderRange_invertedBounds_valid() {
+        // min>max (제3자 워크샵 콘텐츠) → 종전 (min…max) 는 ClosedRange 트랩(속성 시트 열 때 앱 크래시).
+        let r = PropertyControl.sliderRange(min: 5, max: 2)
+        XCTAssertLessThanOrEqual(r.lowerBound, r.upperBound)
+        XCTAssertEqual(r.lowerBound, 5)
+    }
+
+    func testSliderRange_degenerateAndNegative_valid() {
+        let eq = PropertyControl.sliderRange(min: 0, max: 0)       // 축퇴(0폭) → NaN 썸 회피
+        XCTAssertLessThan(eq.lowerBound, eq.upperBound)
+        let neg = PropertyControl.sliderRange(min: nil, max: -1)   // 0…(-1) → 종전 트랩
+        XCTAssertLessThanOrEqual(neg.lowerBound, neg.upperBound)
+    }
+
+    func testSliderRange_normalBounds_preserved() {
+        let r = PropertyControl.sliderRange(min: 0, max: 1)        // 정상 경계는 그대로
+        XCTAssertEqual(r.lowerBound, 0)
+        XCTAssertEqual(r.upperBound, 1)
+    }
 }
