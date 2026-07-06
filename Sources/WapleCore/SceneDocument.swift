@@ -396,54 +396,11 @@ extension SceneDocument {
                     particles.append(p)
                 }
             } else if obj["text"] != nil {
-                // 텍스트: 평문 문자열 또는 {"script": JS} — 내용은 렌더러/스크립트 엔진이 채운다.
-                var plain = ""
-                var script: String? = nil
-                if let s = obj["text"] as? String { plain = s }
-                else if let d = obj["text"] as? [String: Any], let js = d["script"] as? String { script = js }
-                texts.append(SceneTextLayer(
-                    text: plain, script: script,
-                    font: (obj["font"] as? String) ?? "systemfont_arial",
-                    pointSize: float(obj["pointsize"]) ?? 16,
-                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    alpha: float(obj["alpha"]) ?? 1,
-                    horizontalAlign: (obj["horizontalalign"] as? String) ?? "center",
-                    verticalAlign: (obj["verticalalign"] as? String) ?? "center",
-                    origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
-                    scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),  // 배율은 scale 필드 — size 는 레이아웃 박스(오독 시 거대 글리프)
-                    order: order))
+                texts.append(parseText(obj, order: order))
             } else if let modelPath = obj["model"] as? String {
-                // 3D 메시: `.mdl` 직접 참조(2D image→json→puppet 인다이렉션 우회). angles 는 라디안.
-                var o = SceneObject3D(
-                    id: intVal(obj["id"]) ?? 0,
-                    name: (obj["name"] as? String) ?? "",
-                    model: modelPath,
-                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    castShadow: (obj["castshadow"] as? Bool) ?? false,
-                    parent: intVal(obj["parent"]),
-                    effects: parseEffects(obj["effects"]),
-                    order: order)
-                var ps = transformScripts(obj)
-                if let vs = visibleScript { ps["visible"] = vs }
-                o.propertyScripts = ps
-                o.animation = parseAnimationLayers(obj["animationlayers"])
-                objects3D.append(o)
+                objects3D.append(parseModel(obj, modelPath: modelPath, order: order, visibleScript: visibleScript))
             } else if let lightType = obj["light"] as? String {
-                lights3D.append(SceneLight3D(
-                    id: intVal(obj["id"]) ?? 0,
-                    name: (obj["name"] as? String) ?? "",
-                    type: lightType,
-                    origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
-                    radius: float(obj["radius"]) ?? 0,
-                    intensity: float(obj["intensity"]) ?? 1,
-                    exponent: float(obj["exponent"]) ?? 1,
-                    castShadow: (obj["castshadow"] as? Bool) ?? false,
-                    parent: intVal(obj["parent"]),
-                    order: order))
+                lights3D.append(parseLight(obj, lightType: lightType, order: order))
             }
         }
         // 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여
@@ -539,6 +496,62 @@ extension SceneDocument {
         if let vs = visibleScript { ps["visible"] = vs }
         node.propertyScripts = ps
         return node
+    }
+
+    /// 텍스트 레이어("text": 평문 문자열 또는 {"script": JS}). 내용은 렌더러/스크립트 엔진이 채운다.
+    private static func parseText(_ obj: [String: Any], order: Int) -> SceneTextLayer {
+        var plain = ""
+        var script: String? = nil
+        if let s = obj["text"] as? String { plain = s }
+        else if let d = obj["text"] as? [String: Any], let js = d["script"] as? String { script = js }
+        return SceneTextLayer(
+            text: plain, script: script,
+            font: (obj["font"] as? String) ?? "systemfont_arial",
+            pointSize: float(obj["pointsize"]) ?? 16,
+            color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+            alpha: float(obj["alpha"]) ?? 1,
+            horizontalAlign: (obj["horizontalalign"] as? String) ?? "center",
+            verticalAlign: (obj["verticalalign"] as? String) ?? "center",
+            origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
+            scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),  // 배율은 scale 필드 — size 는 레이아웃 박스(오독 시 거대 글리프)
+            order: order)
+    }
+
+    /// 3D 메시 오브젝트("model": `.mdl` 직접 참조 — 2D image→json→puppet 인다이렉션 우회). angles 는 라디안.
+    private static func parseModel(_ obj: [String: Any], modelPath: String, order: Int, visibleScript: String?) -> SceneObject3D {
+        var o = SceneObject3D(
+            id: intVal(obj["id"]) ?? 0,
+            name: (obj["name"] as? String) ?? "",
+            model: modelPath,
+            origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+            angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+            scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
+            castShadow: (obj["castshadow"] as? Bool) ?? false,
+            parent: intVal(obj["parent"]),
+            effects: parseEffects(obj["effects"]),
+            order: order)
+        var ps = transformScripts(obj)
+        if let vs = visibleScript { ps["visible"] = vs }
+        o.propertyScripts = ps
+        o.animation = parseAnimationLayers(obj["animationlayers"])
+        return o
+    }
+
+    /// 3D 라이트 오브젝트("light": 타입 문자열 + 위치/색/반경/강도 등).
+    private static func parseLight(_ obj: [String: Any], lightType: String, order: Int) -> SceneLight3D {
+        SceneLight3D(
+            id: intVal(obj["id"]) ?? 0,
+            name: (obj["name"] as? String) ?? "",
+            type: lightType,
+            origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+            angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+            color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+            radius: float(obj["radius"]) ?? 0,
+            intensity: float(obj["intensity"]) ?? 1,
+            exponent: float(obj["exponent"]) ?? 1,
+            castShadow: (obj["castshadow"] as? Bool) ?? false,
+            parent: intVal(obj["parent"]),
+            order: order)
     }
 
     /// animationlayers → 활성 베이스 애니(숫자 blend≥0.5 & visible 중 blend 최대). 나머지(딕셔너리 blend =
