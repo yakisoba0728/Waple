@@ -183,6 +183,32 @@ final class Scene3DTests: XCTestCase {
         XCTAssertEqual(l.parent, 9, "빌보드 부모 계층 보존")
     }
 
+    /// 3D 씬 빌보드는 파스에서 부모 트랜스폼을 **합성하지 않는다** — 렌더러(encodeBillboard)가
+    /// 부모 월드행렬을 매 프레임 적용하므로, 파스-시 합성은 이중 적용이 된다(실물 3662790108:
+    /// scale 0.1 그룹 체인 아래 hud/ruler 빌보드 + 라디안 각을 도(°)로 오독하는 단위 문제 포함).
+    func test3DBillboardLayerKeepsLocalTransformWithExistingParent() throws {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":5,"name":"pivot","origin":"3 4 0","angles":"0 1.5708 0","scale":"0.1 0.1 0.1"},
+           {"id":20,"name":"hud","image":"models/star.json","parent":5,
+            "origin":"2 0 0.5","size":"256 256","scale":"1 1 1","color":"1 1 1","alpha":1}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([
+            ("scene.json", scene),
+            ("models/star.json", "{\"material\":\"materials/star.json\"}"),
+            ("materials/star.json", "{\"passes\":[{\"textures\":[\"star\"]}]}"),
+        ]))
+        XCTAssertNotNil(doc.camera3D)
+        let l = try XCTUnwrap(doc.layers.first)
+        XCTAssertEqual(l.parent, 5, "부모 계층은 보존(렌더러가 합성)")
+        XCTAssertEqual(l.origin, Vec2(x: 2, y: 0), "3D 빌보드 origin 은 로컬 유지(파스 합성 금지)")
+        XCTAssertEqual(l.scale, Vec2(x: 1, y: 1), "3D 빌보드 scale 은 로컬 유지(파스 합성 금지)")
+        XCTAssertEqual(l.originZ, 0.5, accuracy: 1e-6)
+    }
+
     /// 2D 씬 무회귀: originZ 기본 0, parent 기본 nil(2D 경로는 origin.xy 만 사용).
     func test2DLayerOriginZDefaultsZeroNoParent() throws {
         let scene = """

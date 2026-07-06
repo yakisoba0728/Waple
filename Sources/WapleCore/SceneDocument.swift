@@ -477,11 +477,15 @@ extension SceneDocument {
         // 그룹 노드(1920,1080)에 붙는다(미합성 시 (0,0) → 흑화면). 부모는 정적 가정.
         // 2026-07-06 일반화: 종전 '로드되는 퍼펫 레이어만' 게이트를 전 레이어로 확장 —
         // 퍼펫 파스 실패(폴백 쿼드) 레이어만 종전 위치 유지(luma 가드 유지).
+        // **2D 한정**: 3D 씬(camera3D)의 이미지 레이어는 빌보드 — 렌더러(encodeBillboard)가 부모
+        // 월드행렬을 매 프레임 합성하므로 파스-시 합성은 이중 적용이 된다(실물 3662790108 의
+        // scale 0.1 그룹 체인 + 라디안 각을 도(°)로 오독하는 단위 문제 포함 — 회귀 테스트
+        // test3DBillboardLayerKeepsLocalTransformWithExistingParent).
         func puppetLoads(_ path: String) -> Bool {
             guard let d = package.data(for: path) ?? assets?(path) else { return false }
             return PuppetModel.parse(d) != nil || Model3D.parse(d) != nil
         }
-        let composeTargets = layers.indices.filter {
+        let composeTargets = camera3D != nil ? [] : layers.indices.filter {
             guard layers[$0].parent != nil else { return false }
             if let pp = layers[$0].puppet { return puppetLoads(pp) }
             return true
