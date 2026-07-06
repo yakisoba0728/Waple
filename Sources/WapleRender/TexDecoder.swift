@@ -44,6 +44,24 @@ public enum TexDecoder {
                 }
             }
             return cropped(rgba, mip)
+        case .rg88:
+            // 2채널 8bit(WE fmt8). 실물 규약(common_fragment.h ConvertTexture0Format): .rrrg —
+            // r=루마(회색), g=알파. rain_drops_sheet 등 파티클 시트가 이 포맷(종전 미디코드 → 흰 사각형).
+            // 마스크 소비(.r)도 r 그대로라 양쪽 정확. (REFRACT 의 스크린 굴절 곱은 항등 근사 — 별도 미구현.)
+            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data) else { return nil }
+            let w = mip.decodeWidth, h = mip.decodeHeight
+            guard w > 0, h > 0, dec.count >= w * h * 2 else { return nil }
+            var rgba = Data(count: w * h * 4)
+            dec.withUnsafeBytes { (src: UnsafeRawBufferPointer) in
+                rgba.withUnsafeMutableBytes { (dst: UnsafeMutableRawBufferPointer) in
+                    let s = src.bindMemory(to: UInt8.self), d = dst.bindMemory(to: UInt8.self)
+                    for i in 0..<(w * h) {
+                        let r = s[i * 2], g = s[i * 2 + 1]
+                        d[i * 4] = r; d[i * 4 + 1] = r; d[i * 4 + 2] = r; d[i * 4 + 3] = g
+                    }
+                }
+            }
+            return cropped(rgba, mip)
         case .lz4RGBA:
             guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
                   dec.count >= mip.decodeWidth * mip.decodeHeight * 4 else { return nil }

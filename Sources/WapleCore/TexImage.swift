@@ -1,7 +1,7 @@
 import Foundation
 
 public struct TexImage {
-    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, bc1, r8, lz4RGBA, video, unknown }
+    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, bc1, r8, rg88, lz4RGBA, video, unknown }
 
     /// mip0 페이로드(TEXB0001~0004). `decode*` = padded texture dims(디코드 단위),
     /// `image*` = 실제 이미지 dims(크롭 대상). lz4 == false 면 payload 는 비압축(그대로 사용).
@@ -82,6 +82,7 @@ public struct TexImage {
             case 0: kind = .lz4RGBA
             case 4: kind = .bc3
             case 7: kind = .bc1
+            case 8: kind = .rg88   // 2B/px (r=루마, g=알파 — 실물 common_fragment.h ConvertTexture0Format .rrrg)
             case 9: kind = .r8
             default: kind = .unknown
             }
