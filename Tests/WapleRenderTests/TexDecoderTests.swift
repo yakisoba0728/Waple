@@ -131,6 +131,61 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertNil(TexDecoder.rgba(from: tex, data: data))
     }
 
+    /// fmt6=BC2 → .bc2 매핑 + LZ4 라운드트립 디코드를 end-to-end 검증(코퍼스 없이도 CI 에서 배선 보증).
+    func testDecodesBC2ViaLZ4RoundTrip() throws {
+        // 4x4 BC2 블록: 픽셀0 알파 니블 8(→136), 컬러 c0=c1=white → 픽셀0=(255,255,255,136).
+        var block = [UInt8](repeating: 0, count: 16)
+        block[0] = 0x08                                            // 픽셀0 알파 니블 = 8
+        block[8] = 0xFF; block[9] = 0xFF; block[10] = 0xFF; block[11] = 0xFF  // c0=c1=white
+        let raw = Data(block)
+        var comp = [UInt8](repeating: 0, count: 256)
+        let n = raw.withUnsafeBytes { srcp in
+            comp.withUnsafeMutableBytes { dstp in
+                compression_encode_buffer(dstp.bindMemory(to: UInt8.self).baseAddress!, 256,
+                                          srcp.bindMemory(to: UInt8.self).baseAddress!, raw.count, nil, COMPRESSION_LZ4_RAW)
+            }
+        }
+        XCTAssertGreaterThan(n, 0)
+        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32bytes(6) + i32bytes(0) + i32bytes(4) + i32bytes(4) + i32bytes(4) + i32bytes(4)   // format=6=DXT3/BC2
+        b += Array("TEXB0003".utf8) + [0] + i32bytes(1) + i32bytes(-1) + i32bytes(1) + i32bytes(4) + i32bytes(4) + i32bytes(1) + i32bytes(16) + i32bytes(n)
+        b += Array(comp[0..<n])
+        let data = Data(b)
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.payload, .bc2)
+        let out = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data))
+        XCTAssertEqual(out.width, 4); XCTAssertEqual(out.height, 4)
+        let px = [UInt8](out.pixels)
+        XCTAssertEqual([px[0], px[1], px[2], px[3]], [255, 255, 255, 136])  // white, 명시 알파 136
+    }
+
+    /// 실물 태양계 씬(3662790108)의 fmt6 텍스처 sun-1.tex 를 실제로 디코드 — 흰 폴백(nil) 회귀 방지.
+    /// 코퍼스 부재 시 skip(Real* 하네스와 동일 규약). 하드 어서션: fmt6→.bc2, 비-nil, 실 이미지 치수,
+    /// 픽셀 변이(단색 폴백 아님). 알파 어서션은 실측값에 맞춰 확정(BC2 컬러맵은 대개 불투명).
+    func testDecodesRealSunFmt6BC2() throws {
+        let pkgPath = NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds/3662790108/scene.pkg"
+        guard FileManager.default.fileExists(atPath: pkgPath) else { throw XCTSkip("no corpus: \(pkgPath)") }
+        let pkg = try ScenePackage.parse(Data(contentsOf: URL(fileURLWithPath: pkgPath)))
+        let texData = try XCTUnwrap(pkg.data(for: "materials/sun-1.tex"), "sun-1.tex 부재")
+        let tex = try XCTUnwrap(TexImage.parse(texData))
+        XCTAssertEqual(tex.format, 6)
+        XCTAssertEqual(tex.payload, .bc2)
+        let out = try XCTUnwrap(TexDecoder.rgba(from: tex, data: texData), "fmt6 디코드 실패(흰 폴백)")
+        XCTAssertEqual(out.width, 501); XCTAssertEqual(out.height, 489)   // imgW/H 로 크롭
+        let px = [UInt8](out.pixels)
+        XCTAssertEqual(px.count, 501 * 489 * 4)
+        // 실 이미지 변이(단색 폴백이면 전부 동일). RGB 다양성 + 알파 범위 측정.
+        var aMin = 255, aMax = 0
+        var firstRGB = (px[0], px[1], px[2]); var rgbVaries = false
+        for i in stride(from: 0, to: px.count, by: 4) {
+            let a = Int(px[i + 3]); aMin = min(aMin, a); aMax = max(aMax, a)
+            if (px[i], px[i + 1], px[i + 2]) != firstRGB { rgbVaries = true }
+        }
+        NSLog("%@", "[BC2 sun-1] alpha=[\(aMin)..\(aMax)] rgbVaries=\(rgbVaries)")
+        XCTAssertTrue(rgbVaries, "디코드가 단색(폴백류)")
+        XCTAssertLessThan(aMin, 255, "불투명 아님 — BC2 명시 알파 존재(실측 alpha=[0..255])")
+    }
+
     func testDecodesBC3ViaLZ4RoundTrip() throws {
         // 4x4 단색 흰 DXT5 블록(16B)을 LZ4_RAW로 압축해 BC3 .tex 합성 → 디코드.
         var block = [UInt8](repeating: 0, count: 16)

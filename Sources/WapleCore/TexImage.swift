@@ -1,7 +1,7 @@
 import Foundation
 
 public struct TexImage {
-    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, bc1, r8, rg88, lz4RGBA, video, unknown }
+    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, bc2, bc1, r8, rg88, lz4RGBA, video, unknown }
 
     /// mip0 페이로드(TEXB0001~0004). `decode*` = padded texture dims(디코드 단위),
     /// `image*` = 실제 이미지 dims(크롭 대상). lz4 == false 면 payload 는 비압축(그대로 사용).
@@ -81,6 +81,7 @@ public struct TexImage {
             switch format {
             case 0: kind = .lz4RGBA
             case 4: kind = .bc3
+            case 6: kind = .bc2   // DXT3(BC2): 명시 4bit 알파 + 4-색 컬러. 실측(2026-07-06): 태양계 fmt6 16개
             case 7: kind = .bc1
             case 8: kind = .rg88   // 2B/px (r=루마, g=알파 — 실물 common_fragment.h ConvertTexture0Format .rrrg)
             case 9: kind = .r8
@@ -157,11 +158,15 @@ public struct TexImage {
         p += 4
         if version >= 3 { p += 8 }   // gifWidth, gifHeight
         guard p + count * 32 <= b.count else { return [] }
+        // TEXS0001(v1) 은 x/y/w/h 지오메트리가 f32 가 아니라 i32 정수형이다(RePKG
+        // TexFrameInfoContainerReader 실측 — id 는 i32, frametime 은 v1/v2/v3 모두 f32).
+        // v2/v3 은 f32 유지. 레코드 크기(32B)·필드 순서는 전 버전 동일 → 지오메트리 읽기만 분기.
+        let geom: (Int) -> Float? = version == 1 ? { i32($0).map { Float($0) } } : { f32($0) }
         var out: [TexFrame] = []
         out.reserveCapacity(count)
         for _ in 0..<count {
-            guard let id = i32(p), let t = f32(p + 4), let x = f32(p + 8), let y = f32(p + 12),
-                  let w = f32(p + 16), let h = f32(p + 28),
+            guard let id = i32(p), let t = f32(p + 4),
+                  let x = geom(p + 8), let y = geom(p + 12), let w = geom(p + 16), let h = geom(p + 28),
                   w > 0, h > 0, x >= 0, y >= 0, x.isFinite, y.isFinite else { return [] }
             out.append(TexFrame(imageId: id, time: t, x: x, y: y, width: w, height: h))
             p += 32
