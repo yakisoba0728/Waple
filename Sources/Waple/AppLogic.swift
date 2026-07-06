@@ -75,14 +75,23 @@ enum PlaylistScheduling {
         TimeInterval(max(1, minutes) * 60)
     }
 
-    /// 다음에 적용할 엔트리 id. `next` 로 순환 후보를 구하고, 실제 존재하는 엔트리일 때만 반환.
-    static func nextApplicableId(
-        after selected: String?,
+    /// 재생목록 전진: `selected` 다음 후보부터 순환하며 `apply` 가 성공하는 첫 id 를 적용하고 그 id 를 반환.
+    /// `apply` 실패 후보(라이브러리에서 삭제됐거나 폴더 해석/마운트 실패)는 건너뛴다 — 한 바퀴(count) 한도.
+    /// 종전 nextApplicableId 는 첫 후보 하나만 보고 실패 시 nil 을 반환해, 그 지점에서 재생목록이 영구
+    /// 정지했다(외장 드라이브 분리·폴더 이동·엔트리 삭제 등). 모두 실패 → nil(기존 배경 유지).
+    static func advance(
+        from selected: String?,
+        count: Int,
         next: (String?) -> String?,
-        entryExists: (String) -> Bool
+        apply: (String) -> Bool
     ) -> String? {
-        guard let id = next(selected), entryExists(id) else { return nil }
-        return id
+        var anchor = selected
+        for _ in 0..<Swift.max(count, 0) {
+            guard let id = next(anchor) else { return nil }
+            anchor = id
+            if apply(id) { return id }
+        }
+        return nil
     }
 }
 

@@ -152,17 +152,24 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(PlaylistScheduling.intervalSeconds(minutes: 0), 60, "최소 1분 하한")
     }
 
-    func testNextApplicableId() {
-        // 다음 후보가 실제 존재하는 엔트리면 반환.
+    func testAdvance_skipsUnapplicableCandidates() {
+        let ids = ["a", "b", "c"]
+        func next(_ cur: String?) -> String? {  // a→b→c→a 순환
+            guard let cur, let i = ids.firstIndex(of: cur) else { return ids.first }
+            return ids[(i + 1) % ids.count]
+        }
+        // b 적용 실패(삭제/폴더 이동) → c 로 건너뛴다. 종전(nextApplicableId)엔 b 에서 영구 정지했다.
         XCTAssertEqual(
-            PlaylistScheduling.nextApplicableId(after: "a", next: { _ in "b" }, entryExists: { $0 == "b" }),
-            "b")
-        // 순환 후보 없음(빈 목록) → nil.
+            PlaylistScheduling.advance(from: "a", count: ids.count, next: next, apply: { $0 == "c" }), "c")
+        // 첫 후보 성공 → 그대로.
+        XCTAssertEqual(
+            PlaylistScheduling.advance(from: "a", count: ids.count, next: next, apply: { _ in true }), "b")
+        // 전부 실패 → nil(적용 없음 — 기존 배경 유지).
         XCTAssertNil(
-            PlaylistScheduling.nextApplicableId(after: "a", next: { _ in nil }, entryExists: { _ in true }))
-        // 후보가 삭제된 엔트리(존재 안 함) → nil.
+            PlaylistScheduling.advance(from: "a", count: ids.count, next: next, apply: { _ in false }))
+        // 빈 목록 → nil(무한 루프 없음).
         XCTAssertNil(
-            PlaylistScheduling.nextApplicableId(after: "a", next: { _ in "gone" }, entryExists: { _ in false }))
+            PlaylistScheduling.advance(from: nil, count: 0, next: { _ in "x" }, apply: { _ in true }))
     }
 
     // MARK: - PropertyControl.sliderRange (뒤집힌/축퇴 경계에서도 ClosedRange 트랩 금지)

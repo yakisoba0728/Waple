@@ -74,19 +74,22 @@ final class LibraryViewModel: ObservableObject {
         }
     }
 
-    func apply(_ entry: LibraryEntry) {
+    /// 마운트 성공 시 true. 재생목록 전진(advancePlaylist)이 실패 후보를 건너뛰는 데 이 반환을 쓴다.
+    @discardableResult
+    func apply(_ entry: LibraryEntry) -> Bool {
         guard let folder = store.resolveFolderURL(for: entry) else {
             onError?("‘\(entry.title)’의 폴더를 찾을 수 없습니다. 다시 가져오세요.")
-            return
+            return false
         }
         // 적용(마운트) 성공이 확인된 뒤에만 선택을 영속·강조한다. 실패 시 기존 선택을 유지해
         // 강조/저장된 선택이 항상 실제로 표시되는 배경과 일치하도록 한다.
         guard onApply?(folder) == true else {
             onError?("‘\(entry.title)’을(를) 적용하지 못했습니다.")
-            return
+            return false
         }
         store.select(entry.id)
         selectedId = entry.id
+        return true
     }
 
     func previewURL(for entry: LibraryEntry) -> URL? {

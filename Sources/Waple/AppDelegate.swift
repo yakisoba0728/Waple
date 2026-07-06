@@ -319,12 +319,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func advancePlaylist() {
-        guard let nextId = PlaylistScheduling.nextApplicableId(
-                  after: store.selectedId,
-                  next: { self.playlistStore.next(after: $0) },
-                  entryExists: { id in self.store.entries.contains(where: { $0.id == id }) }),
-              let entry = store.entries.first(where: { $0.id == nextId }) else { return }
-        libraryVM.apply(entry)
+        // 후보를 순서대로 시도하고 실제 적용에 성공하는 첫 배경으로 전진(삭제/폴더 이동 등 실패 후보는 건너뜀).
+        _ = PlaylistScheduling.advance(
+            from: store.selectedId,
+            count: playlistStore.ids.count,
+            next: { self.playlistStore.next(after: $0) },
+            apply: { id in
+                guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
+                return self.libraryVM.apply(entry)
+            })
     }
 
     // MARK: - 데스크탑 가림 자동 일시정지 (작업 2)
