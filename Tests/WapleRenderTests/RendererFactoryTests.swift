@@ -17,8 +17,14 @@ final class RendererFactoryTests: XCTestCase {
         XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .video, file: "a.mp4")) is VideoRenderer)
     }
 
-    func testUnsupportedCodecVideoReturnsWebRenderer() {
-        XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .video, file: "a.webm")) is WebRenderer)
+    func testUnsupportedCodecVideoRoutesByFFmpegAvailability() {
+        // mkv/avi/webm: ffmpeg 있으면 네이티브 변환(VideoRenderer), 없으면 WKWebView 폴백(WebRenderer).
+        let r = RendererFactory.makeRenderer(for: project(type: .video, file: "a.webm"))
+        if FFmpegConverter.isAvailable {
+            XCTAssertTrue(r is VideoRenderer)
+        } else {
+            XCTAssertTrue(r is WebRenderer)
+        }
     }
 
     func testSceneAlwaysReturnsSceneRenderer() {
@@ -38,5 +44,7 @@ final class RendererFactoryTests: XCTestCase {
     func testSupportedContainers() {
         XCTAssertTrue(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mp4")))
         XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.webm")))
+        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.mkv")))
+        XCTAssertFalse(VideoRenderer.isSupportedContainer(URL(fileURLWithPath: "/a/x.avi")))  // ffmpeg 변환 대상
     }
 }

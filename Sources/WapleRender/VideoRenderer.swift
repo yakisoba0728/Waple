@@ -3,8 +3,8 @@ import AVFoundation
 import WapleCore
 
 public final class VideoRenderer: WallpaperRenderer {
-    /// AVFoundation 이 디코드하지 못하는 컨테이너 확장자.
-    public static let unsupportedExtensions: Set<String> = ["webm", "mkv"]
+    /// AVFoundation 이 디코드하지 못하는 컨테이너 확장자. ffmpeg 변환 대상(FFmpegConverter.convertExtensions).
+    public static let unsupportedExtensions: Set<String> = ["webm", "mkv", "avi"]
 
     public static func isSupportedContainer(_ url: URL) -> Bool {
         !unsupportedExtensions.contains(url.pathExtension.lowercased())
@@ -25,8 +25,28 @@ public final class VideoRenderer: WallpaperRenderer {
         guard let fileName = project.fileName else { throw RendererError.assetMissing }
         let url = project.folderURL.appendingPathComponent(fileName)
         guard FileManager.default.fileExists(atPath: url.path) else { throw RendererError.assetMissing }
-        guard VideoRenderer.isSupportedContainer(url) else { throw RendererError.unsupportedCodec }
+        if VideoRenderer.isSupportedContainer(url) {
+            try attachPlayer(url: url, container: container, project: project)
+            return
+        }
+        // 미지원 컨테이너(mkv/avi/webm): ffmpeg 로 mp4 변환 후 장착(비동기 — 메인스레드 블록 금지).
+        // ffmpeg 부재 시 팩토리가 WebRenderer 폴백을 고르므로 여기 도달 = 변환 가능. 방어적으로 재확인.
+        guard FFmpegConverter.isAvailable else { throw RendererError.unsupportedCodec }
+        self.container = container   // teardown 이 nil 로 만들면 완료 콜백이 스킵(취소 신호)
+        NSLog("%@", "[Waple] converting \(url.lastPathComponent) via ffmpeg…")
+        FFmpegConverter.convert(url) { [weak self] mp4 in
+            guard let self, let container = self.container else { return }
+            guard let mp4 else {
+                NSLog("%@", "[Waple] video conversion failed, no playback: \(url.path)")
+                return
+            }
+            do { try self.attachPlayer(url: mp4, container: container, project: project) }
+            catch { NSLog("%@", "[Waple] converted video mount failed: \(error)") }
+        }
+    }
 
+    /// 재생 가능한 컨테이너(mp4 등)를 실제 장착·재생. mount 가 직접 또는 ffmpeg 변환 완료 후 호출.
+    private func attachPlayer(url: URL, container: NSView, project: WallpaperProject) throws {
         let item = AVPlayerItem(url: url)
         // 코덱/손상/DRM 실패는 AVFoundation 내부에서 비동기로 발생해 mount 성공 후 검은 화면이 된다.
         // status 를 관찰해 실패를 로깅함으로써 진단 가능하게 한다.

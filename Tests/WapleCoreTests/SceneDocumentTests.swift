@@ -36,6 +36,40 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(try SceneDocument.parse(package: p).layers.count, 0)
     }
 
+    /// 실측 스키마(3629379075 등): sound[], volume {user,value} 또는 숫자, playbackmode, startsilent, min/maxtime.
+    func testParsesSceneSoundFields() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"id":927,"sound":["sounds/a.mp3"],"volume":{"user":"p","value":0.6},
+            "playbackmode":"loop","startsilent":true,"mintime":1.0,"maxtime":5.0},
+           {"id":5,"sound":["sounds/b.wav"],"volume":0.5,"playbackmode":"single","startsilent":false}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.sounds.count, 2)
+        let a = doc.sounds[0]
+        XCTAssertEqual(a.id, 927)
+        XCTAssertEqual(a.sounds, ["sounds/a.mp3"])
+        XCTAssertEqual(a.volume, 0.6, accuracy: 1e-5)   // {value} 바인딩 언랩
+        XCTAssertTrue(a.loop)                            // playbackmode == loop
+        XCTAssertTrue(a.startSilent)
+        XCTAssertEqual(a.maxTime, 5.0, accuracy: 1e-5)
+        XCTAssertEqual(doc.sounds[1].volume, 0.5, accuracy: 1e-5)  // 숫자 볼륨
+        XCTAssertFalse(doc.sounds[1].loop)               // single
+    }
+
+    /// 콘텐츠 키 없는 sound 오브젝트가 nodes3D 그룹으로 오분류되지 않아야 한다(회귀 가드).
+    func testSoundObjectNotMisclassifiedAsNode() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"sound":["sounds/a.mp3"],"volume":0.5,"playbackmode":"loop"}]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.sounds.count, 1)
+        XCTAssertTrue(doc.nodes3D.isEmpty)
+    }
+
     /// `visible` 이 평문 불리언 false(바인딩 객체가 아님)일 때도 레이어를 숨겨야 한다.
     func testSkipsLayerWithLiteralBoolVisibleFalse() throws {
         let scene = """

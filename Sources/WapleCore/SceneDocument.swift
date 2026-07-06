@@ -193,6 +193,31 @@ public struct SceneLight3D: Equatable {
     }
 }
 
+/// 씬 sound 오브젝트(scene.json objects[] 중 "sound" 키 보유). 실측(코퍼스 52씬 / 165오브젝트):
+/// - playbackmode ∈ {loop 92, single 71, random 2}
+/// - volume 은 숫자(52) 또는 {user,value} 바인딩(113) — parse 에서 float() 가 둘 다 언랩
+/// - sound 배열은 대개 1개(146/165), 일부 다중(최대 18)
+/// - startsilent(true 104 / false 60), mintime/maxtime(비-loop 재트리거 간격 추정) 은 파스만 하고 미반영.
+public struct SceneSound: Equatable {
+    public let id: Int
+    /// pkg 상대 경로 배열(예: "sounds/x.mp3"). 재생기는 이 중 1개만 선택.
+    public let sounds: [String]
+    /// 오서 볼륨 0…1. 재생 시 VideoSettings 배경별 설정과 곱해 최종 음량이 된다.
+    public let volume: Float
+    public let playbackMode: String    // "loop" | "single" | "random"
+    public var loop: Bool { playbackMode == "loop" }
+    /// 실측되나 현재 미반영(파스+로그) — true 가 다수(104/165)라 반영 시 대다수 무음이 되어 보류.
+    public let startSilent: Bool
+    /// 비-loop 재트리거 간격(초) 추정 — 파스만, 스케줄링 미구현.
+    public let minTime: Float
+    public let maxTime: Float
+    public init(id: Int, sounds: [String], volume: Float, playbackMode: String,
+                startSilent: Bool, minTime: Float, maxTime: Float) {
+        self.id = id; self.sounds = sounds; self.volume = volume; self.playbackMode = playbackMode
+        self.startSilent = startSilent; self.minTime = minTime; self.maxTime = maxTime
+    }
+}
+
 public struct SceneDocument: Equatable {
     public let projectionWidth: Int
     public let projectionHeight: Int
@@ -214,6 +239,8 @@ public struct SceneDocument: Equatable {
     public var lights3D: [SceneLight3D] = []
     /// 트랜스폼-온리 그룹 노드(parent 계층 합성용). 비가시(false) 노드도 기록 — 서브트리 판정에 필요.
     public var nodes3D: [SceneNode3D] = []
+    /// 씬 sound 오브젝트. 2D/3D 무관 전역 재생(트랜스폼/공간화는 미반영). 렌더러(SceneAudioPlayer)가 재생.
+    public var sounds: [SceneSound] = []
 }
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
@@ -265,8 +292,29 @@ extension SceneDocument {
         var objects3D: [SceneObject3D] = []
         var lights3D: [SceneLight3D] = []
         var nodes3D: [SceneNode3D] = []
+        var sounds: [SceneSound] = []
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
+            // 사운드 오브젝트("sound" 키): 트랜스폼/계층 무시(전역 재생), 실측 필드만 파스.
+            // 콘텐츠 키(image/model/…)가 없어 아래 그룹-노드 분기로 새면 nodes3D 로 오분류되므로 먼저 처리.
+            if let soundArr = obj["sound"] as? [Any] {
+                let paths = soundArr.compactMap { $0 as? String }
+                if !paths.isEmpty {
+                    sounds.append(SceneSound(
+                        id: intVal(obj["id"]) ?? 0,
+                        sounds: paths,
+                        volume: float(obj["volume"]) ?? 1,   // float() 가 숫자/{value} 바인딩 공통 언랩
+                        playbackMode: (obj["playbackmode"] as? String) ?? "single",
+                        startSilent: (obj["startsilent"] as? Bool) ?? false,
+                        minTime: float(obj["mintime"]) ?? 0,
+                        maxTime: float(obj["maxtime"]) ?? 0))
+                    // 미반영 필드는 로그로만 남긴다(추측 금지 — 파스만).
+                    if paths.count > 1 || (obj["startsilent"] as? Bool) == true {
+                        WapleLog.warn("[Waple] scene sound parsed (unhandled: multi=\(paths.count), startsilent=\((obj["startsilent"] as? Bool) ?? false)): id \(intVal(obj["id"]) ?? 0)")
+                    }
+                }
+                continue
+            }
             // `visible` 은 평문 불리언 | 바인딩 객체 {"value":Bool, "script":JS} 두 형태. 스크립트가 있는
             // 이미지 레이어는 정적 false 여도 유지(런타임 토글 + 컨트롤러 top-level 사이드이펙트 —
             // 실물 3394601417 'bt') — 그 외 오브젝트는 정적 false 시 기존대로 드롭.
@@ -474,6 +522,7 @@ extension SceneDocument {
                                 texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
                                 nodes3D: nodes3D)
         out.cameraScripts = cameraScripts
+        out.sounds = sounds
         return out
     }
 

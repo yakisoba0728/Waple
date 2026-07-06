@@ -166,6 +166,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var drawPlan: [DrawItem] = []
 
     var videoRenderer: VideoRenderer?
+    /// 씬 sound 레이어 재생기(라이브 mount 한정 — 헤드리스에선 미생성). pause/resume/teardown 에 연동.
+    var sceneAudio: SceneAudioPlayer?
     var mtkView: MTKView?
     var device: MTLDevice?
     var queue: MTLCommandQueue?
@@ -276,6 +278,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if let m = clickMonitor { NSEvent.removeMonitor(m) }
         mediaPoller?.stop()
         audioProvider?.stop()
+        sceneAudio?.teardown()
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
@@ -440,6 +443,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
             provider.start()
             audioProvider = provider
+        }
+        // 씬 sound 레이어 재생 — 라이브 한정. 헤드리스(캡처/테스트)는 container.window == nil → 스킵(결정성).
+        // 음량은 VideoSettings(배경별) 재사용 → 동영상 설정 메뉴의 음소거/음량이 씬 오디오에도 적용.
+        if container.window != nil, !doc.sounds.isEmpty {
+            let audio = SceneAudioPlayer()
+            audio.start(sounds: doc.sounds, package: package,
+                        settingVolume: VideoSettings.volume(id: project.id))
+            sceneAudio = audio
         }
     }
 
@@ -606,12 +617,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
 
-    public func pause() { videoRenderer?.pause() }
+    public func pause() { videoRenderer?.pause(); sceneAudio?.pause() }
     public func resume() {
         if let videoRenderer { videoRenderer.resume() } else { mtkView?.needsDisplay = true }
+        sceneAudio?.resume()
     }
     public func teardown() {
         videoRenderer?.teardown(); videoRenderer = nil
+        sceneAudio?.teardown(); sceneAudio = nil
         parallax.stop()
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         mediaPoller?.stop(); mediaPoller = nil
