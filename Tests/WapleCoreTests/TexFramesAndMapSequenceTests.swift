@@ -42,6 +42,35 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         if let tex = TexImage.parse(d) { XCTAssertTrue(tex.frames.isEmpty) }
     }
 
+    /// TEXS0001(v1): 지오메트리가 i32 정수형(RePKG 실측 — frametime 만 f32, gifW/H 없음).
+    /// v3 와 달리 x/y/w/h 를 정수 바이트로 넣는다.
+    private func makeTexWithFramesV1() -> Data {
+        var b = [UInt8]()
+        func i32(_ v: Int32) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
+        func f32(_ v: Float) { withUnsafeBytes(of: v.bitPattern.littleEndian) { b.append(contentsOf: $0) } }
+        b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
+        b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
+        i32(0); i32(0)          // format 0(raw RGBA), unk
+        i32(2); i32(1)          // texW, texH
+        i32(2); i32(1)          // imgW, imgH
+        b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])   // 2x1 RGBA
+        b.append(contentsOf: Array("TEXS0001".utf8)); b.append(0)
+        i32(2)                  // frameCount (v1: gifW/H 없음)
+        // v1 프레임 32B: i32 id | f32 frametime | i32 x | i32 y | i32 w | i32 widthY | i32 heightX | i32 h
+        i32(0); f32(0.2); i32(0);   i32(0); i32(256); i32(0); i32(0); i32(256)
+        i32(0); f32(0.2); i32(256); i32(0); i32(256); i32(0); i32(0); i32(256)
+        return Data(b)
+    }
+
+    func testTexFramesParseV1_integerGeometry() {
+        guard let tex = TexImage.parse(makeTexWithFramesV1()) else { return XCTFail("parse nil") }
+        XCTAssertEqual(tex.frames.count, 2)
+        XCTAssertEqual(tex.frames[0].time, 0.2, accuracy: 1e-5)  // frametime 은 v1 도 f32
+        // 정수 지오메트리를 f32 로 오독하면 x=256 이 ≈0(denormal)이 되어 실패 — i32 경로 실측.
+        XCTAssertEqual(tex.frames[0].x, 0); XCTAssertEqual(tex.frames[0].width, 256)
+        XCTAssertEqual(tex.frames[1].x, 256); XCTAssertEqual(tex.frames[1].height, 256)
+    }
+
     func testSheetFrameIndex_mirrorPingpong() {
         // fc=5, mirror: 주기 8 — 0,1,2,3,4,3,2,1,0,1…
         let expect = [0, 1, 2, 3, 4, 3, 2, 1, 0, 1]

@@ -78,3 +78,48 @@ final class DXT1DecoderTests: XCTestCase {
         XCTAssertNil(DXT5Decoder.decodeBC1(Data(count: 8), width: 0, height: 4))
     }
 }
+
+/// DXT3(BC2) — 앞 8B 픽셀당 4bit 명시 알파(v*17), 뒤 8B 컬러(항상 4-색).
+final class BC2DecoderTests: XCTestCase {
+    /// 명시 알파 니블 + 4-색 컬러 보간을 동시 실측. 컬러 팔레트는 BC3(decode)와 동일 공식이므로
+    /// RGB 기댓값은 기존 testDecodesInterpolatedColors 와 일치, 여기선 알파 니블 확장이 핵심.
+    func testDecodesAlphaNibblesAndColor() throws {
+        var block = [UInt8](repeating: 0, count: 16)
+        // 알파(8B, 픽셀당 4bit LE): 픽셀0=0(→0), 픽셀1=15(→255), 픽셀2=8(→136), 픽셀3=1(→17).
+        block[0] = 0xF0   // 픽셀0=low nibble 0, 픽셀1=high nibble F
+        block[1] = 0x18   // 픽셀2=low nibble 8, 픽셀3=high nibble 1
+        // 컬러(8B): c0=red 565(0xF800 LE), c1=blue 565(0x001F LE)
+        block[8] = 0x00; block[9] = 0xF8
+        block[10] = 0x1F; block[11] = 0x00
+        block[12] = 0xE4  // color indices: 픽셀0=0,1=1,2=2,3=3
+        let out = try XCTUnwrap(DXT5Decoder.decodeBC2(Data(block), width: 4, height: 4))
+        XCTAssertEqual(out.count, 4 * 4 * 4)
+        let px = [UInt8](out)
+        // 픽셀0 = red,   알파 0
+        XCTAssertEqual([px[0], px[1], px[2], px[3]], [255, 0, 0, 0])
+        // 픽셀1 = blue,  알파 255
+        XCTAssertEqual([px[4], px[5], px[6], px[7]], [0, 0, 255, 255])
+        // 픽셀2 = lerp1/3, 알파 136(=8*17)
+        XCTAssertEqual([px[8], px[9], px[10], px[11]], [170, 0, 85, 136])
+        // 픽셀3 = lerp2/3, 알파 17(=1*17)
+        XCTAssertEqual([px[12], px[13], px[14], px[15]], [85, 0, 170, 17])
+    }
+
+    /// BC2 는 color0<=color1 이어도 항상 4-색 모드(BC1 의 3색+투명 없음). c0=blue<=c1=red 로
+    /// 인덱스3 을 찍어, BC1 이라면 투명 검정(0,0,0,0)이 될 자리가 불투명 보간색인지 확인.
+    func testAlwaysFourColorWhenC0LessEqualC1() throws {
+        var block = [UInt8](repeating: 0xFF, count: 16)  // 알파 전부 255
+        block[8] = 0x1F; block[9] = 0x00   // c0 = blue 565 (0x001F)
+        block[10] = 0x00; block[11] = 0xF8 // c1 = red 565  (0xF800) → c0 <= c1
+        block[12] = 0x03; block[13] = 0; block[14] = 0; block[15] = 0  // 픽셀0 인덱스=3, 나머지 0
+        let out = try XCTUnwrap(DXT5Decoder.decodeBC2(Data(block), width: 4, height: 4))
+        let px = [UInt8](out)
+        // 4-색 palette[3] = lerp2/3 blue→red = (170,0,85), 알파 255(투명 아님 — BC1 이면 0).
+        XCTAssertEqual([px[0], px[1], px[2], px[3]], [170, 0, 85, 255])
+    }
+
+    func testSizeGuard() {
+        XCTAssertNil(DXT5Decoder.decodeBC2(Data([0, 0]), width: 4, height: 4))   // 블록 부족(<16)
+        XCTAssertNil(DXT5Decoder.decodeBC2(Data(count: 16), width: 0, height: 4))
+    }
+}

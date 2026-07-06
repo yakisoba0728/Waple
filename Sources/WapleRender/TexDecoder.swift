@@ -23,6 +23,10 @@ public enum TexDecoder {
             guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
                   let rgba = DXT5Decoder.decode(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
             return cropped(rgba, mip)
+        case .bc2:
+            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
+                  let rgba = DXT5Decoder.decodeBC2(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
+            return cropped(rgba, mip)
         case .bc1:
             guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
                   let rgba = DXT5Decoder.decodeBC1(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
