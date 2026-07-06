@@ -28,6 +28,28 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(b[0].pos.x, 20, accuracy: 0.001)
     }
 
+    func testVelocityInitializerMovesWithoutMovementOperator() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100),
+                           .velocityRandom(min: Vec3(x: 10, y: 0, z: 0), max: Vec3(x: 10, y: 0, z: 0))],
+            operators: [], renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+
+        let parts = sim.step(1.0)
+
+        XCTAssertEqual(parts[0].pos.x, 10, accuracy: 0.001)
+    }
+
+    func testMultipleMovementOperatorsIntegratePositionOnce() {
+        let def = linearDef(operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0)])
+        var sim = ParticleSimulator(def: def, seed: 1)
+
+        let parts = sim.step(1.0)
+
+        XCTAssertEqual(parts[0].pos.x, 10, accuracy: 0.001)
+    }
+
     func testGravityAccelerates() {
         var sim = ParticleSimulator(def: linearDef(velocity: Vec3(x: 0, y: 0, z: 0), gravity: Vec3(x: 0, y: -10, z: 0)), seed: 2)
         let a = sim.step(1.0)            // vel.y = -10, pos.y = -10

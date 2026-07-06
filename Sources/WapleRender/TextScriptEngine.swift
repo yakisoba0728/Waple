@@ -161,15 +161,21 @@ public final class TextScriptEngine {
             NSLog("%@", "[Waple] constant script exception: \(ex?.toString() ?? "?")")
             failed = true
         }
-        let arg: Any = current.count >= 3
-            ? ["x": current[0], "y": current[1], "z": current[2]]
-            : (current.first.map { Double($0) } ?? 0)
+        let arg: Any
+        if current.count >= 3 {
+            arg = ["x": current[0], "y": current[1], "z": current[2]]
+        } else if current.count >= 2 {
+            arg = ["x": current[0], "y": current[1]]
+        } else {
+            arg = current.first.map(Double.init) ?? 0
+        }
         guard let out = updateFn.call(withArguments: [arg]), !failed else { return nil }
         if out.isNumber { return [Float(out.toDouble())] }
         guard out.isObject else { return nil }
         let x = out.objectForKeyedSubscript("x"), y = out.objectForKeyedSubscript("y"), z = out.objectForKeyedSubscript("z")
-        guard let x, let y, let z, x.isNumber, y.isNumber, z.isNumber else { return nil }
-        return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())]
+        guard let x, let y, x.isNumber, y.isNumber else { return nil }
+        if let z, z.isNumber { return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())] }
+        return [Float(x.toDouble()), Float(y.toDouble())]
     }
 
     /// ES 모듈 구문 중화(토큰 인지 — minified 한 줄 소스 포함). 문자열/주석 밖의 `export` 키워드를 제거하고

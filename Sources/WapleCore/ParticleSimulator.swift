@@ -247,8 +247,8 @@ public struct ParticleSimulator {
             for m in movements {
                 particles[k].vel += m.gravity * dt
                 if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
-                particles[k].pos += particles[k].vel * speedFactor * dt
             }
+            particles[k].pos += particles[k].vel * speedFactor * dt
             // 난류 이류(advection): 노이즈 흐름장 속도로 위치를 이동. vel 에 누적하지 않으므로
             // |변위| ≤ turbSpeed·dt 로 유계(속도 상한 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
             if let t = turbulence, particles[k].turbSpeed > 0 {

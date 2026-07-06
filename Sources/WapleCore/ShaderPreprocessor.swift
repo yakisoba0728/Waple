@@ -86,6 +86,8 @@ public enum ShaderPreprocessor {
         struct Frame { var active: Bool; var taken: Bool; var parentActive: Bool }
         var stack: [Frame] = []
         func emitting() -> Bool { stack.allSatisfy { $0.active } }
+        func definedNames() -> Set<String> { Set(d.keys).union(textDefines.keys).union(funcMacros.keys) }
+        func isDefined(_ name: String) -> Bool { definedNames().contains(name) }
 
         for raw in source.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
@@ -98,14 +100,14 @@ public enum ShaderPreprocessor {
             if t.hasPrefix("#if ") || t.hasPrefix("#ifdef ") || t.hasPrefix("#ifndef ") {
                 let parentActive = emitting()
                 var cond = false
-                if t.hasPrefix("#ifdef ") { cond = d[token(after: "#ifdef", t)] != nil }
-                else if t.hasPrefix("#ifndef ") { cond = d[token(after: "#ifndef", t)] == nil }
-                else { cond = ExprEval.eval(String(t.dropFirst(3)), defines: d) != 0 }
+                if t.hasPrefix("#ifdef ") { cond = isDefined(token(after: "#ifdef", t)) }
+                else if t.hasPrefix("#ifndef ") { cond = !isDefined(token(after: "#ifndef", t)) }
+                else { cond = ExprEval.eval(String(t.dropFirst(3)), defines: d, definedNames: definedNames()) != 0 }
                 stack.append(Frame(active: parentActive && cond, taken: cond, parentActive: parentActive))
             } else if t.hasPrefix("#elif ") {
                 guard !stack.isEmpty else { continue }
                 var f = stack.removeLast()
-                let cond = !f.taken && ExprEval.eval(String(t.dropFirst(5)), defines: d) != 0
+                let cond = !f.taken && ExprEval.eval(String(t.dropFirst(5)), defines: d, definedNames: definedNames()) != 0
                 f.active = f.parentActive && cond
                 f.taken = f.taken || cond
                 stack.append(f)
@@ -247,8 +249,9 @@ public enum ShaderPreprocessor {
 /// 정수 리터럴 + 식별자(defines 룩업, 미정의=0) + `!  *  /  +  -  <  >  <=  >=  ==  !=  &&  ||` + 괄호만
 /// 다룬다. 함수 호출/문자열/부수효과 없음 → 셰이더 입력으로부터 코드 인젝션 불가.
 enum ExprEval {
-    static func eval(_ expr: String, defines: [String: Int]) -> Int {
+    static func eval(_ expr: String, defines: [String: Int], definedNames: Set<String>? = nil) -> Int {
         let toks = tokenize(expr)
+        let knownNames = definedNames ?? Set(defines.keys)
         var pos = 0
         func peek() -> String? { pos < toks.count ? toks[pos] : nil }
         func next() -> String? { defer { pos += 1 }; return peek() }
@@ -259,6 +262,15 @@ enum ExprEval {
             if t == "(" { let v = parseOr(); if peek() == ")" { pos += 1 }; return v }
             if t == "!" { return parsePrimary() == 0 ? 1 : 0 }
             if t == "-" { return -parsePrimary() }
+            if t == "defined" {
+                if peek() == "(" {
+                    pos += 1
+                    let name = next() ?? ""
+                    if peek() == ")" { pos += 1 }
+                    return knownNames.contains(name) ? 1 : 0
+                }
+                return knownNames.contains(next() ?? "") ? 1 : 0
+            }
             if let n = Int(t) { return n }
             return defines[t] ?? 0
         }

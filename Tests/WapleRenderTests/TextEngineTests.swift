@@ -154,4 +154,12 @@ final class ConstantScriptTests: XCTestCase {
         e.setRuntime(1)
         XCTAssertEqual(try XCTUnwrap(e.evaluateVec(current: [3])).first ?? 0, 7, accuracy: 1e-4)
     }
+
+    func testVec2ScriptReturnsTwoComponents() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: "export function update(v) { return new Vec2(v.x * 2, v.y * 3); }"))
+
+        let out = try XCTUnwrap(e.evaluateVec(current: [2, 4, 1]))
+
+        XCTAssertEqual(out, [4, 12])
+    }
 }

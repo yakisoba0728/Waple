@@ -647,7 +647,7 @@ public enum GLSLTranslator {
         ["vec2": "float2", "vec3": "float3", "vec4": "float4", "mat2": "float2x2", "mat3": "float3x3", "mat4": "float4x4",
          "CAST2": "float2", "CAST3": "float3", "CAST4": "float4",
          "frac": "fract", "lerp": "mix", "ddx": "dfdx", "ddy": "dfdy", "inverse": "we_inverse", "mod": "we_mod",
-         "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679", "M_PI_2": "6.28318530718"]
+         "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679", "M_PI_2": "1.57079632679"]
     }
 
     // MARK: - 본문 변환
@@ -685,7 +685,7 @@ public enum GLSLTranslator {
             if chars[i] == "r", matchWord(chars, i, "return"),
                i + 6 <= chars.count, String(chars[i..<min(i + 6, chars.count)]) == "return" {
                 var j = i + 6
-                while j < chars.count, chars[j] == " " || chars[j] == "\t" { j += 1 }
+                while j < chars.count, chars[j].isWhitespace { j += 1 }
                 if j < chars.count, chars[j] == ";" {
                     out += replacement
                     i = j + 1

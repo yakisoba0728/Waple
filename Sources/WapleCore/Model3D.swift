@@ -157,6 +157,7 @@ public struct Model3D: Equatable {
                       inferred >= (skinned ? 76 : 48) else { return nil }
                 stride = inferred
             }
+            guard vSize % stride == 0 else { return nil }
             let vCount = vSize / stride
 
             var vertices: [Vertex] = []
@@ -193,6 +194,7 @@ public struct Model3D: Equatable {
             for k in stride16(iSize) {
                 indices.append(UInt16(bytes[o + k]) | (UInt16(bytes[o + k + 1]) << 8))
             }
+            if let maxIndex = indices.max(), Int(maxIndex) >= vCount { return nil }
             o += iSize
 
             meshes.append(Mesh(material: material,

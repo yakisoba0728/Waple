@@ -175,6 +175,19 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("return float2(v.x * c - v.y * s, v.x * s + v.y * c);"), t.msl)
     }
 
+    func testPiOverTwoMacroUsesStandardValue() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * M_PI_2;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("* 1.57079632679"), t.msl)
+        XCTAssertFalse(t.msl.contains("6.28318530718"), t.msl)
+    }
+
     func testInoutParamBecomesReference() throws {
         let frag = """
         varying vec2 v_TexCoord;
@@ -304,6 +317,23 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("if (gl_FragColor.a < 0.01) { return gl_FragColor; }"), "bare return → return gl_FragColor: \(t.msl)")
         XCTAssertTrue(t.msl.hasSuffix("return gl_FragColor;\n}\n") || t.msl.contains("return gl_FragColor;"), t.msl)
         XCTAssertFalse(t.msl.contains("_frag.rgb *= _frag.a"), "premult 주입 제거: \(t.msl)")
+    }
+
+    func testBareReturnWithNewlineRewritten() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord);
+            if (gl_FragColor.a < 0.01) {
+                return
+                ;
+            }
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("return gl_FragColor"), t.msl)
+        XCTAssertFalse(t.msl.contains("return\n"), t.msl)
     }
 
     func testDialectExtras() throws {

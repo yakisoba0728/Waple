@@ -75,6 +75,19 @@ final class Model3DTests: XCTestCase {
         XCTAssertTrue(m.bones.isEmpty)
     }
 
+    func testRejectsMeshWithVertexIndexOutOfRange() {
+        let verts = [
+            SynthVert(pos: SIMD3(-1, 0, 0), nrm: SIMD3(0, 0, 1), tan: SIMD4(1, 0, 0, -1), uv: SIMD2(0, 1)),
+            SynthVert(pos: SIMD3(1, 0, 0), nrm: SIMD3(0, 0, 1), tan: SIMD4(1, 0, 0, -1), uv: SIMD2(1, 1)),
+            SynthVert(pos: SIMD3(0, 2, 0), nrm: SIMD3(0, 0, 1), tan: SIMD4(1, 0, 0, -1), uv: SIMD2(0.5, 0)),
+        ]
+        let mesh = SynthMesh(material: "materials/models/lock/Mod.json",
+                             min: SIMD3(-1, 0, 0), max: SIMD3(1, 2, 0), skinned: false,
+                             verts: verts, indices: [0, 1, 3])
+
+        XCTAssertNil(Model3D.parse(makeModelU16([mesh])))
+    }
+
     /// 머티리얼 경로 cstring 은 UTF-8 — 실물 태양계 모델이 CJK 경로("太空球")를 쓴다(Latin-1 해석 시
     /// mojibake 로 pkg 엔트리 조회 실패 → 흰 텍스처 사고).
     func testUTF8MaterialPath() throws {

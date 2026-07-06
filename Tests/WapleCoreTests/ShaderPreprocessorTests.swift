@@ -40,6 +40,13 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertTrue(ShaderPreprocessor.preprocess(src, combos: ["A": 3, "B": 1]).contains("no"))
     }
 
+    func testDefinedOperatorInIfExpression() {
+        let src = "#if defined(A) || defined B\nyes\n#else\nno\n#endif"
+        XCTAssertTrue(ShaderPreprocessor.preprocess(src, combos: ["A": 1]).contains("yes"))
+        XCTAssertTrue(ShaderPreprocessor.preprocess(src, combos: ["B": 1]).contains("yes"))
+        XCTAssertTrue(ShaderPreprocessor.preprocess(src, combos: [:]).contains("no"))
+    }
+
     func testNestedConditionals() {
         let src = "#if A\n#if B\nAB\n#endif\nAonly\n#endif\nbase"
         let r = ShaderPreprocessor.preprocess(src, combos: ["A": 1, "B": 0])
