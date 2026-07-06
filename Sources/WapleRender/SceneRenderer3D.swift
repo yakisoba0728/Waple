@@ -69,7 +69,7 @@ extension SceneRenderer {
         let model: Model3D?          // 스키닝: 본/애니 소스(정적 모델은 nil)
         let animIndex: Int           // -1 = 정지(바인드 포즈)
         let animRate: Float
-        let boneBuffer: MTLBuffer?   // boneCount×64B(skin=world×bindWorld⁻¹), 프레임당 memcpy
+        let boneRing: DynamicVertexBuffer?   // 3슬롯 링: skin=world×bindWorld⁻¹, 프레임마다 다음 슬롯에 적재(경합 회피)
     }
 
     /// 3D 씬의 2D 이미지 레이어를 카메라-페이싱 쿼드로(빌보드). 로컬 변환 + 부모 계층 + per-frame 스크립트.
@@ -199,12 +199,13 @@ extension SceneRenderer {
             guard !meshes.isEmpty else { skipped += 1; continue }
             // 활성 애니(animationlayers) → 인덱스. 스키닝 모델만 bone 버퍼/모델 참조 보유.
             var animIndex = -1
-            var boneBuffer: MTLBuffer? = nil
+            var boneRing: DynamicVertexBuffer? = nil
             var keepModel: Model3D? = nil
             if anySkinned {
                 keepModel = model
-                boneBuffer = device.makeBuffer(length: max(1, boneCount) * MemoryLayout<simd_float4x4>.stride,
-                                               options: .storageModeShared)
+                // 단일 공유 버퍼를 매 프레임 memcpy 하면 in-flight GPU 프레임(최대 3장)이 읽는 도중 CPU 가
+                // 덮어써 본행렬이 찢긴다. 3슬롯 링(DynamicVertexBuffer)으로 슬롯을 로테이션해 경합을 회피.
+                boneRing = DynamicVertexBuffer()
                 // WAPLE_3D_BINDPOSE=1(구명 WAPLE3D_BINDPOSE 병행 인식) → 애니 무시(skin=항등, 바인드 포즈)
                 // — 스키닝 배선 정합 게이트(v2 정적과 비교).
                 let bindPoseOnly = Self.debugFlag("WAPLE_3D_BINDPOSE", "WAPLE3D_BINDPOSE")
@@ -214,7 +215,7 @@ extension SceneRenderer {
             }
             meshRenderables.append(MeshRenderable(id: obj.id, meshes: meshes, order: obj.order, name: obj.name,
                                                   model: keepModel, animIndex: animIndex,
-                                                  animRate: obj.animation?.rate ?? 1, boneBuffer: boneBuffer))
+                                                  animRate: obj.animation?.rate ?? 1, boneRing: boneRing))
             loaded += 1
         }
 
@@ -441,12 +442,12 @@ extension SceneRenderer {
                 var u = MeshUniform(mvp: viewProj * w.matrix, tint: SIMD4(1, 1, 1, 1), misc: SIMD4(0, 0, 0, 0))
                 // 스키닝 모델: 프레임당 본행렬(skin=world(t)×bindWorld⁻¹) 계산 → boneBuffer memcpy(정적 애니는 항등).
                 var skinReady = false
-                if let model = mr.model, let bb = mr.boneBuffer, !model.bones.isEmpty {
+                var boneBuf: MTLBuffer? = nil
+                if let model = mr.model, let ring = mr.boneRing, !model.bones.isEmpty {
                     let mats = Model3DPose.skinMatrices(model: model, animation: mr.animIndex, time: time, rate: mr.animRate)
                     if !mats.isEmpty {
-                        let bytes = min(bb.length, mats.count * MemoryLayout<simd_float4x4>.stride)
-                        mats.withUnsafeBytes { _ = memcpy(bb.contents(), $0.baseAddress!, bytes) }
-                        skinReady = true
+                        boneBuf = ring.load(mats, device: device)   // 다음 슬롯에 적재(크기 부족 시에만 재할당)
+                        skinReady = boneBuf != nil
                     }
                 }
                 for mesh in mr.meshes {
@@ -465,7 +466,7 @@ extension SceneRenderer {
                     enc.setCullMode(mesh.cullBack ? .back : .none)
                     enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
                     enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                    if useSkin, let bb = mr.boneBuffer { enc.setVertexBuffer(bb, offset: 0, index: 2) }
+                    if useSkin, let bb = boneBuf { enc.setVertexBuffer(bb, offset: 0, index: 2) }
                     enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
                     enc.setFragmentTexture(mesh.texture, index: 0)
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
