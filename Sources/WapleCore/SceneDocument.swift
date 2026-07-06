@@ -423,18 +423,20 @@ extension SceneDocument {
                     order: order))
             }
         }
-        // 퍼펫 레이어 parent 체인 합성: 부모(대개 solid 그룹 레이어/노드)의 origin/scale/angle 을 이어붙여
+        // 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여
         // 로컬(부모 상대)좌표를 월드(프로젝션 픽셀)로 굽는다 — 예: Hollow Knight 3598808038 의 knight/sword 는
-        // 부모 "PUPPET"(origin 1920,1080/scale 0.72)에 붙어 있어, 미합성 시 로컬 (3,-163)/(−115,634)로
-        // 화면 밖에 렌더된다. **로드 가능한 퍼펫 레이어만** 대상 — 파스 실패(폴백 쿼드) 퍼펫은 종전 위치를
-        // 유지해 무관 씬(파싱 안 되는 MDLV0023 변종 사용)의 luma 드리프트를 막는다. 부모는 정적 가정.
+        // 부모 "PUPPET"(origin 1920,1080/scale 0.72)에 붙고, 3577990983 의 '背景'(origin 부재)은
+        // 그룹 노드(1920,1080)에 붙는다(미합성 시 (0,0) → 흑화면). 부모는 정적 가정.
+        // 2026-07-06 일반화: 종전 '로드되는 퍼펫 레이어만' 게이트를 전 레이어로 확장 —
+        // 퍼펫 파스 실패(폴백 쿼드) 레이어만 종전 위치 유지(luma 가드 유지).
         func puppetLoads(_ path: String) -> Bool {
             guard let d = package.data(for: path) ?? assets?(path) else { return false }
-            return PuppetModel.parse(d) != nil
+            return PuppetModel.parse(d) != nil || Model3D.parse(d) != nil
         }
-        // 합성 대상 레이어 인덱스(부모 있음 + 퍼펫이 실제 로드됨)를 1회 계산(퍼펫당 파스 1회).
         let composeTargets = layers.indices.filter {
-            layers[$0].parent != nil && (layers[$0].puppet.map(puppetLoads) == true)
+            guard layers[$0].parent != nil else { return false }
+            if let pp = layers[$0].puppet { return puppetLoads(pp) }
+            return true
         }
         if !composeTargets.isEmpty {
             var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
@@ -660,12 +662,14 @@ extension SceneDocument {
         let u = unwrap(v)
         if let d = u as? Double { return Float(d) }
         if let i = u as? Int { return Float(i) }
+        if let s = u as? String { return Float(s) }   // 문자열 숫자 관용(문자열 id 씬과 동급 방어)
         return nil
     }
     private static func intVal(_ v: Any?) -> Int? {
         let u = unwrap(v)
         if let i = u as? Int { return i }
         if let d = u as? Double { return Int(d) }
+        if let s = u as? String { return Int(s) }   // 실물 3577990983: id/parent 가 "35" 문자열 타입
         return nil
     }
     private static func vec2(_ v: Any?) -> Vec2? {

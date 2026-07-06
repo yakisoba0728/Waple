@@ -86,6 +86,46 @@ final class Model3DTests: XCTestCase {
         XCTAssertEqual(m.meshes[0].material, "materials/models/太空球/DefaultMaterial.json")
     }
 
+    /// 변종 스트라이드(실물 3577990983 sl_puppet.mdl = 84 = 80+미상4B, 플래그 0x181000e):
+    /// 표 스트라이드로 안 나눠지면 인덱스 maxIndex+1 로 자기기술 추론, 필드는 꼬리 고정
+    /// (bones@-40, weights@-24, uv@-8). 미상 4B 는 tangent 뒤에 위치(실측 중간 영역).
+    func testParsesVariantStride84() throws {
+        var d = Data("MDLV0023".utf8)
+        d.append(0); u(0x0181000e, into: &d); u(1, into: &d); u(1, into: &d)
+        d.append(Data("materials/sl.json".utf8)); d.append(0)
+        u(0x100c, into: &d)                       // 실물: 0 이 아닌 미상값 — 관용 스킵 확인
+        for _ in 0..<6 { f(0, into: &d) }         // AABB 전부 0(실물 그대로)
+        u(0x0181000e, into: &d)                   // per-mesh flags
+        let verts: [(SIMD3<Float>, SIMD4<UInt32>, SIMD4<Float>, SIMD2<Float>)] = [
+            (SIMD3(172.5, 488.0, 0), SIMD4(52, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(0.531, 0.110)),
+            (SIMD3(178.9, 480.7, 0), SIMD4(52, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(0.533, 0.113)),
+            (SIMD3(175.5, 486.0, 0), SIMD4(7, 3, 0, 0), SIMD4(0.6, 0.4, 0, 0), SIMD2(0.532, 0.111)),
+        ]
+        u(UInt32(verts.count * 84), into: &d)     // vSize = 84 스트라이드 (80 표값으로 나눠지지 않음)
+        for v in verts {
+            f(v.0.x, into: &d); f(v.0.y, into: &d); f(v.0.z, into: &d)   // pos
+            f(0, into: &d); f(0, into: &d); f(0, into: &d)               // normal(실물 0)
+            f(1, into: &d); f(1, into: &d); f(0, into: &d); f(0, into: &d) // tangent
+            f(1, into: &d)                                                // 미상 +4B
+            u(v.1.x, into: &d); u(v.1.y, into: &d); u(v.1.z, into: &d); u(v.1.w, into: &d)  // bones @-40
+            f(v.2.x, into: &d); f(v.2.y, into: &d); f(v.2.z, into: &d); f(v.2.w, into: &d)  // weights @-24
+            f(v.3.x, into: &d); f(v.3.y, into: &d)                                          // uv @-8
+        }
+        u(6, into: &d)                            // iSize = 3 인덱스 × 2B
+        for i: UInt16 in [0, 1, 2] { var x = i; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+
+        let m = try XCTUnwrap(Model3D.parse(d), "변종 84 스트라이드 파스 실패")
+        XCTAssertEqual(m.meshes.count, 1)
+        let mm = m.meshes[0]
+        XCTAssertTrue(mm.skinned)
+        XCTAssertEqual(mm.vertices.count, 3)
+        XCTAssertEqual(mm.vertices[0].position.x, 172.5, accuracy: 1e-4)
+        XCTAssertEqual(mm.vertices[0].boneIndices, SIMD4<UInt32>(52, 0, 0, 0))
+        XCTAssertEqual(mm.vertices[2].weights.x, 0.6, accuracy: 1e-5)
+        XCTAssertEqual(mm.vertices[0].uv.x, 0.531, accuracy: 1e-5)
+        XCTAssertEqual(mm.indices, [0, 1, 2])
+    }
+
     func testParsesSkinnedVertexFields() throws {
         let verts = [
             SynthVert(pos: SIMD3(5, 6, 7), nrm: SIMD3(0, 1, 0), tan: SIMD4(1, 0, 0, 1), uv: SIMD2(0.25, 0.75),

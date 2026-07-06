@@ -143,11 +143,20 @@ public struct Model3D: Equatable {
             guard let formatFlag = u32(o) else { return nil }
             o += 4
             let skinned = (formatFlag & skinMask) != 0
-            let stride = skinned ? skinnedStride : staticStride
+            var stride = skinned ? skinnedStride : staticStride
             guard let vSizeRaw = u32(o) else { return nil }
             o += 4
             let vSize = Int(vSizeRaw)
-            guard vSize > 0, vSize % stride == 0, o + vSize <= bytes.count else { return nil }
+            guard vSize > 0, o + vSize <= bytes.count else { return nil }
+            // 변종 스트라이드 자기기술 추론(2026-07-06, 실물 sl_puppet.mdl = 84 = 기지 80 + 미상 4B,
+            // 플래그 0x181000e): 표 스트라이드로 안 나눠지면 인덱스 블롭의 maxIndex+1 을 정점 수로 보고
+            // vSize/count 가 정수(44..96)면 채택. 필드는 꼬리 고정(uv@-8, weights@-24, bones@-40 —
+            // 기지 80/48 과 동일 오프셋이라 무회귀), 중간(normal/tangent)은 고전 오프셋(unlit 미사용).
+            if vSize % stride != 0 {
+                guard let inferred = inferStride(bytes: bytes, indexBlobAt: o + vSize, vSize: vSize),
+                      inferred >= (skinned ? 76 : 48) else { return nil }
+                stride = inferred
+            }
             let vCount = vSize / stride
 
             var vertices: [Vertex] = []
@@ -162,13 +171,14 @@ public struct Model3D: Equatable {
                 let nrm = SIMD3<Float>(nx, ny, nz)
                 let tan = SIMD4<Float>(tx, ty, tz, tw)
                 if skinned {
-                    guard let b0 = u32(b + 40), let b1 = u32(b + 44), let b2 = u32(b + 48), let b3 = u32(b + 52),
-                          let w0 = f32(b + 56), let w1 = f32(b + 60), let w2 = f32(b + 64), let w3 = f32(b + 68),
-                          let u = f32(b + 72), let v = f32(b + 76) else { return nil }
+                    let bo = b + stride - 40, wo = b + stride - 24, uo = b + stride - 8
+                    guard let b0 = u32(bo), let b1 = u32(bo + 4), let b2 = u32(bo + 8), let b3 = u32(bo + 12),
+                          let w0 = f32(wo), let w1 = f32(wo + 4), let w2 = f32(wo + 8), let w3 = f32(wo + 12),
+                          let u = f32(uo), let v = f32(uo + 4) else { return nil }
                     vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v),
                                            boneIndices: SIMD4(b0, b1, b2, b3), weights: SIMD4(w0, w1, w2, w3)))
                 } else {
-                    guard let u = f32(b + 40), let v = f32(b + 44) else { return nil }
+                    guard let u = f32(b + stride - 8), let v = f32(b + stride - 4) else { return nil }
                     vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v)))
                 }
             }
@@ -308,6 +318,28 @@ public struct Model3D: Equatable {
 
     /// stride-2 인덱스 순회 헬퍼.
     private static func stride16(_ size: Int) -> StrideTo<Int> { stride(from: 0, to: size, by: 2) }
+
+    /// 변종 정점 스트라이드 추론: 정점 블롭 직후의 인덱스 블롭(u32 크기 + u16 인덱스)에서
+    /// maxIndex+1 = 정점 수로 보고 vSize/count. 정수가 아니거나 범위(44..96) 밖이면 nil(안전 실패).
+    private static func inferStride(bytes: [UInt8], indexBlobAt p: Int, vSize: Int) -> Int? {
+        func u32(_ o: Int) -> Int? {
+            guard o >= 0, o + 4 <= bytes.count else { return nil }
+            return Int(UInt32(bytes[o]) | (UInt32(bytes[o + 1]) << 8) | (UInt32(bytes[o + 2]) << 16) | (UInt32(bytes[o + 3]) << 24))
+        }
+        guard let iSize = u32(p), iSize > 0, iSize % 2 == 0, p + 4 + iSize <= bytes.count else { return nil }
+        var maxIdx = 0
+        var k = p + 4
+        let end = p + 4 + iSize
+        while k + 1 < end {
+            let v = Int(bytes[k]) | (Int(bytes[k + 1]) << 8)
+            if v > maxIdx { maxIdx = v }
+            k += 2
+        }
+        let count = maxIdx + 1
+        guard count > 0, vSize % count == 0 else { return nil }
+        let s = vSize / count
+        return (44...96).contains(s) ? s : nil
+    }
 
     private static func findMagic(_ magic: String, in bytes: [UInt8], from: Int) -> Int? {
         let m = [UInt8](magic.utf8)

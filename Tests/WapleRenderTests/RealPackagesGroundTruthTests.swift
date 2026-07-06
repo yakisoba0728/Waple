@@ -51,7 +51,9 @@ final class RealPackagesGroundTruthTests: XCTestCase {
                 r.nowPlayingProvider = StoppedNowPlayingProvider()
                 try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360)), project: project)
                 mounted += 1
-                let urls = r.captureFrames(width: 640, height: 360, times: [0.5], toDir: outDir)
+                // t=6.0: 인트로 페이드(검정 커버 알파 애니 — 실물 3577990983 류)가 끝난 정상상태 캡처.
+                // t=0.5 는 다수 씬이 페이드 중이라 preview 파리티가 계통적으로 저평가된다(2026-07-06 실증).
+                let urls = r.captureFrames(width: 640, height: 360, times: [6.0], toDir: outDir)
                 if let u = urls.first {
                     let dst = outDir.appendingPathComponent("\(id).png")
                     try? FileManager.default.removeItem(at: dst)
