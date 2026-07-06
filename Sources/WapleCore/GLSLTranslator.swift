@@ -54,7 +54,10 @@ public enum GLSLTranslator {
 
         // 유니폼/attribute/varying 수집(주석 어노테이션 보존 위해 본문 정리 전에).
         let vUniforms = parseUniforms(vsrc), fUniforms = parseUniforms(fsrc)
+        let vVaryings = parseVaryings(vsrc)
+        let fVaryings = parseVaryings(fsrc)
         let varyings = parseVaryings(vsrc + "\n" + fsrc)   // 합집합
+        let vVaryingTypes = Dictionary(uniqueKeysWithValues: vVaryings.map { ($0.name, $0.type) })
         let allUniforms = mergeUniforms(vUniforms + fUniforms)
 
         var textures: [Int] = []
@@ -107,7 +110,11 @@ public enum GLSLTranslator {
             // 스테이지 간 타입 불일치(vert vec4/frag vec2)는 타입어댑터가 union 크기로 coerce 한다 —
             // 치환맵에 스위즐을 붙이면 사용처 자체 스위즐과 이중화(실물 water_caustics `.xy.zw`).
             frag[vy.name] = "in.\(vy.name)"
-            vert[vy.name] = "out.\(vy.name)"
+            if let vt = vVaryingTypes[vy.name], vt.components > 0, vt.components < vy.type.components {
+                vert[vy.name] = "out.\(vy.name)\(swizzle(vt.components))"
+            } else {
+                vert[vy.name] = "out.\(vy.name)"
+            }
         }
         for a in parseAttributes(vsrc) { vert[a.name] = "vin.\(a.name)" }
         for u in allUniforms where isEngine(u.name) {
@@ -128,6 +135,8 @@ public enum GLSLTranslator {
         // 함수 파싱은 주석 제거본에서(annotation JSON 중괄호가 balance 를 깨지 않도록).
         let vFns = parseFunctions(vClean, structs: structNames)
         let fFns = parseFunctions(fClean, structs: structNames)
+        guard !hasUnsupportedSameStageOverloads(vFns),
+              !hasUnsupportedSameStageOverloads(fFns) else { return nil }
         guard let vertMainF = vFns.first(where: { $0.name == "main" }),
               let fragMainF = fFns.first(where: { $0.name == "main" }) else { return nil }
         // 헬퍼: vert+frag 합집합(이름 dedupe — 공용 헤더가 양 스테이지에 인라인되는 경우).
@@ -197,11 +206,13 @@ public enum GLSLTranslator {
             fnSizes[h.name] = GLSLTypeAdapter.typeSize(h.ret) ?? 0
             fnParamSizes[h.name] = h.params.map { $0.array ? 0 : (GLSLTypeAdapter.typeSize($0.type) ?? 0) }
         }
+        var vertSizeEnv = sizeEnv
+        for (name, type) in vVaryingTypes where type.components > 0 { vertSizeEnv[name] = type.components }
         let fragSizeEnv = sizeEnv  // varying 크기는 union(Vary 멤버 실타입) — frag 소형 선언은 어댑터가 coerce
         let fragMainBody = GLSLTypeAdapter.adapt(body: fragMainBodyPre,
                                                  env: .init(vars: fragSizeEnv, functions: fnSizes, functionParams: fnParamSizes))
         let vertMainBody = GLSLTypeAdapter.adapt(body: vertMainF.body,
-                                                 env: .init(vars: sizeEnv, functions: fnSizes, functionParams: fnParamSizes))
+                                                 env: .init(vars: vertSizeEnv, functions: fnSizes, functionParams: fnParamSizes))
 
         // Stage-3 ①②: 지역 섀도잉(varying/머티리얼과 동명의 로컬 선언) → 해당 본문 맵에서 제외
         // (치환하면 `float4 in.x = ...` 로 깨짐); fragment 의 varying 대입 → 로컬 사본으로 승격.
@@ -459,6 +470,17 @@ public enum GLSLTranslator {
         return out
     }
 
+    static func hasUnsupportedSameStageOverloads(_ fns: [GLSLFunction]) -> Bool {
+        var signatures: [String: String] = [:]
+        for fn in fns where fn.name != "main" {
+            let sig = ([fn.ret] + fn.params.map { "\($0.byRef ? "&" : "")\($0.type)\($0.array ? "[]" : "")" })
+                .joined(separator: "|")
+            if let existing = signatures[fn.name], existing != sig { return true }
+            signatures[fn.name] = sig
+        }
+        return false
+    }
+
     // MARK: - 선언 파싱
 
     /// precision 한정자 제거: `precision ...;` 문 전체 + highp/mediump/lowp 토큰(선언 파서가 타입으로 오인 방지).
@@ -507,15 +529,19 @@ public enum GLSLTranslator {
             // "uniform <type> <name>[...]; // {ann}"
             let afterKw = s.dropFirst("uniform ".count)
             let codePart = afterKw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? String(afterKw)
-            let toks = codePart.split(separator: " ").map(String.init)
-            guard toks.count >= 2, let type = GLSLType.from(toks[0]) else { continue }
-            var name = toks[1]
-            if let br = name.firstIndex(of: "[") { name = String(name[..<br]) }  // 배열 유니폼(g_AudioSpectrum16Left[16])
+            let parts = codePart.split(maxSplits: 1, whereSeparator: { $0.isWhitespace }).map(String.init)
+            guard parts.count >= 2, let type = GLSLType.from(parts[0]) else { continue }
             // 주의: range 와 인덱싱 대상이 같은 문자열이어야 함(Substring `line` 에 직접 적용).
             let ann = line.range(of: "//").map { String(line[$0.upperBound...]) } ?? ""
-            out.append(Uniform(type: type, name: name,
-                               annotationMaterial: jsonStr(ann, "material"),
-                               annotationDefault: jsonFloats(ann, "default")))
+            let names = parts[1].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            for (idx, rawName) in names.enumerated() {
+                var name = rawName
+                if let br = name.firstIndex(of: "[") { name = String(name[..<br]) }  // 배열 유니폼(g_AudioSpectrum16Left[16])
+                guard !name.isEmpty else { continue }
+                out.append(Uniform(type: type, name: name,
+                                   annotationMaterial: idx == 0 ? jsonStr(ann, "material") : nil,
+                                   annotationDefault: idx == 0 ? jsonFloats(ann, "default") : nil))
+            }
         }
         return out
     }
@@ -618,6 +644,14 @@ public enum GLSLTranslator {
         name.hasPrefix("g_") ? String(name.dropFirst(2)).lowercased() : name.lowercased()
     }
     private static func padDefault(_ t: GLSLType) -> [Float] { Array(repeating: 0, count: max(1, t.components)) }
+    private static func swizzle(_ components: Int) -> String {
+        switch components {
+        case 1: return ".x"
+        case 2: return ".xy"
+        case 3: return ".xyz"
+        default: return ""
+        }
+    }
 
     /// 파일 스코프(중괄호 깊이 0) `const <type> <name> = ...;` 줄 수집.
     static func fileScopeConsts(_ src: String) -> [String] {
@@ -664,6 +698,7 @@ public enum GLSLTranslator {
         s = rewriteCall(s, "atan") { args in args.count == 2 ? "atan2(\(args[0]), \(args[1]))" : nil }
         // 3) 식별자/타입 단일 패스 치환
         s = replaceIdentifiers(s, symbols)
+        s = rewriteDiscardStatements(s)
         // 4) gl_Position / gl_FragColor
         if isFragment {
             // gl_FragColor 로컬 변수 방식(설계 §3): 다중/스위즐 대입 + 조기 bare return 지원.
@@ -676,6 +711,27 @@ public enum GLSLTranslator {
             s = s.replacingOccurrences(of: "gl_Position", with: "out.gl_Position")
         }
         return s
+    }
+
+    static func rewriteDiscardStatements(_ src: String) -> String {
+        let chars = Array(src)
+        var out = ""
+        var i = 0
+        while i < chars.count {
+            if matchWord(chars, i, "discard"), i + "discard".count <= chars.count,
+               String(chars[i..<i + "discard".count]) == "discard" {
+                var j = i + "discard".count
+                while j < chars.count && chars[j].isWhitespace { j += 1 }
+                if j < chars.count && chars[j] == ";" {
+                    out += "discard_fragment();"
+                    i = j + 1
+                    continue
+                }
+            }
+            out.append(chars[i])
+            i += 1
+        }
+        return out
     }
 
     /// `return ;` / `return;`(값 없는 return)을 대체 문장으로 치환(fragment main 용).
@@ -889,7 +945,7 @@ public enum GLSLTranslator {
 
         let vertSig = """
         vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(audioParams)) {
-            Vary out;
+            Vary out = {};
         \(indent(vertBody))
             return out;
         }
@@ -960,11 +1016,16 @@ public enum GLSLTranslator {
         let chars = Array(src)
         var out = ""
         var i = 0
-        let pat = Array(name + "(")
         while i < chars.count {
-            if matchWord(chars, i, name), i + pat.count <= chars.count, Array(chars[i..<i + pat.count]) == pat {
+            if matchWord(chars, i, name), i + name.count <= chars.count,
+               String(chars[i..<i + name.count]) == name {
+                var open = i + name.count
+                while open < chars.count && chars[open].isWhitespace { open += 1 }
+                guard open < chars.count, chars[open] == "(" else {
+                    out.append(chars[i]); i += 1; continue
+                }
                 // 인자 추출(balanced)
-                var depth = 0; var j = i + name.count; var args: [String] = []; var cur = ""
+                var depth = 0; var j = open; var args: [String] = []; var cur = ""
                 while j < chars.count {
                     let c = chars[j]
                     if c == "(" { depth += 1; if depth == 1 { j += 1; continue } }

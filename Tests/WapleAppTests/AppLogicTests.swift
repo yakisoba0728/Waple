@@ -121,20 +121,70 @@ final class AppLogicTests: XCTestCase {
         XCTAssertFalse(tornDown.contains("old1"), "이전 렌더러는 유지(롤백)")
     }
 
-    func testRendererSwap_nilMountIsSkippedNotFailure() {
+    func testRendererSwap_nilMountFailsAndKeepsExisting() {
         var mountCalls = 0
+        var tornDown: [String] = []
+        let existing = [Tok("old1")]
         let result = RendererSwap.apply(
             screens: ["a", "skip", "c"],
-            existing: [Tok](),
+            existing: existing,
             makeAndMount: { s -> Tok? in
                 mountCalls += 1
-                return s == "skip" ? nil : Tok(s)   // 지원 안 함 → 스킵
+                return s == "skip" ? nil : Tok(s)
             },
-            teardown: { _ in })
+            teardown: { tornDown.append($0.id) })
 
-        guard case .success(let made) = result else { return XCTFail("nil 은 스킵, 실패 아님") }
-        XCTAssertEqual(made.map { $0.id }, ["a", "c"], "nil 화면은 제외")
-        XCTAssertEqual(mountCalls, 3)
+        guard case .failure = result else { return XCTFail("nil renderer는 성공으로 취급하면 안 됨") }
+        XCTAssertEqual(mountCalls, 2)
+        XCTAssertEqual(tornDown, ["a"], "nil 발생 전 만든 새 렌더러만 정리")
+        XCTAssertFalse(tornDown.contains("old1"), "이전 렌더러는 유지")
+    }
+
+    func testResolveProjectSlotsAllowsGlobalLessMonitorAssignments() {
+        let folderA = URL(fileURLWithPath: "/lib/A")
+        let out = MonitorMapping.resolveProjectSlots(
+            screenKeys: ["s1", "s2"],
+            global: nil,
+            assignedFolder: { $0 == "s1" ? folderA : nil },
+            parse: { $0 == folderA ? self.project("A") : nil })
+
+        XCTAssertEqual(out, [project("A"), nil], "assigned screens can mount without a global wallpaper")
+    }
+
+    func testResolveProjectSlotsFallsBackToGlobalForUnassignedScreens() {
+        let global = project("global")
+        let folderA = URL(fileURLWithPath: "/lib/A")
+        let out = MonitorMapping.resolveProjectSlots(
+            screenKeys: ["s1", "s2"],
+            global: global,
+            assignedFolder: { $0 == "s1" ? folderA : nil },
+            parse: { $0 == folderA ? self.project("A") : nil })
+
+        XCTAssertEqual(out, [project("A"), global])
+    }
+
+    func testScreenChangeDetachesRenderersBeforeWindowRebuild() {
+        var existing = [Tok("old1"), Tok("old2")]
+        var tornDown: [String] = []
+
+        ScreenChangeLifecycle.detachRenderersBeforeRebuild(
+            existing: &existing,
+            teardown: { tornDown.append($0.id) })
+
+        XCTAssertTrue(existing.isEmpty)
+        XCTAssertEqual(tornDown.sorted(), ["old1", "old2"])
+    }
+
+    func testVideoSettingsTargetsActiveVideoRenderersBeforeCurrentProject() {
+        XCTAssertEqual(
+            VideoSettingsTarget.projectIds(currentProjectId: "global-scene", activeVideoProjectIds: ["assigned-video"]),
+            ["assigned-video"])
+        XCTAssertEqual(
+            VideoSettingsTarget.projectIds(currentProjectId: "global-video", activeVideoProjectIds: []),
+            ["global-video"])
+        XCTAssertEqual(
+            VideoSettingsTarget.projectIds(currentProjectId: nil, activeVideoProjectIds: ["a", "a", "b"]),
+            ["a", "b"])
     }
 
     // MARK: - PlaylistScheduling

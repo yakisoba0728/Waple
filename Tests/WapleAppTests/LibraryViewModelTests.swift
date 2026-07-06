@@ -92,4 +92,22 @@ final class LibraryViewModelTests: XCTestCase {
         vm.clearAssignment(forScreen: "disp1")
         XCTAssertEqual(changed, 2, "할당/해제 각각 즉시 재적용 트리거")
     }
+
+    func testPropertyEditForAssignedNonSelectedEntryTriggersAssignmentReapply() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Assigned"),
+                                       entry(id: "wp2", title: "Selected")])
+        let vm = makeVM(dir: dir)
+        vm.assign(vm.entries[0], toScreen: "disp1")
+
+        var assignmentReapplyCount = 0
+        var globalApplyCount = 0
+        vm.onAssignmentsChanged = { assignmentReapplyCount += 1 }
+        vm.onApply = { _ in globalApplyCount += 1; return true }
+
+        vm.setProperty(key: "enabled-\(UUID().uuidString)", value: .bool(true), for: vm.entries[0])
+
+        XCTAssertEqual(assignmentReapplyCount, 1, "assigned wallpaper edits should update live assigned renderers")
+        XCTAssertEqual(globalApplyCount, 0, "assigned-only edits must not promote that wallpaper to the global selection")
+    }
 }

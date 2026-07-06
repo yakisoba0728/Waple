@@ -12,17 +12,49 @@ public enum FFmpegConverter {
         convertExtensions.contains(url.pathExtension.lowercased())
     }
 
-    /// ffmpeg 실행파일 경로(최초 1회 탐지, 캐시). 고정 경로 우선 → PATH 폴백.
+    /// ffmpeg 실행파일 경로(최초 1회 탐지, 캐시). 명시 opt-in → 고정 경로 → opt-in PATH 순.
     public static let executableURL: URL? = detectExecutable()
     public static var isAvailable: Bool { executableURL != nil }
 
-    private static func detectExecutable() -> URL? {
-        var candidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
-            candidates += path.split(separator: ":").map { "\($0)/ffmpeg" }
+    static let explicitExecutableEnv = "WAPLE_FFMPEG_PATH"
+    static let trustPathEnv = "WAPLE_FFMPEG_TRUST_PATH"
+    static let fixedExecutablePaths = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+
+    static func detectExecutable(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        knownExecutablePaths: [String] = fixedExecutablePaths,
+        isExecutable: (String) -> Bool = defaultExecutableCheck
+    ) -> URL? {
+        if let explicit = environment[explicitExecutableEnv],
+           isAbsoluteExecutablePath(explicit),
+           isExecutable(explicit) {
+            return URL(fileURLWithPath: explicit)
         }
-        let fm = FileManager.default
-        return candidates.first { fm.isExecutableFile(atPath: $0) }.map { URL(fileURLWithPath: $0) }
+
+        if let known = knownExecutablePaths.first(where: isExecutable) {
+            return URL(fileURLWithPath: known)
+        }
+
+        guard environment[trustPathEnv] == "1",
+              let path = environment["PATH"] else { return nil }
+        for entry in path.split(separator: ":") {
+            let dir = String(entry)
+            guard dir.hasPrefix("/") else { continue }
+            let candidate = URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent("ffmpeg").path
+            if isExecutable(candidate) { return URL(fileURLWithPath: candidate) }
+        }
+        return nil
+    }
+
+    private static func defaultExecutableCheck(_ path: String) -> Bool {
+        var isDirectory = ObjCBool(false)
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+            && !isDirectory.boolValue
+            && FileManager.default.isExecutableFile(atPath: path)
+    }
+
+    private static func isAbsoluteExecutablePath(_ path: String) -> Bool {
+        !path.isEmpty && !path.contains("\0") && path.hasPrefix("/")
     }
 
     /// 변환 캐시 디렉터리(~/Library/Application Support/Waple/converted).
@@ -31,11 +63,22 @@ public enum FFmpegConverter {
         return base.appendingPathComponent("Waple/converted", isDirectory: true)
     }
 
-    /// 원본 경로 → 캐시 mp4 경로(절대경로 sha256 — 서로 다른 원본 충돌 방지, 같은 원본 재사용).
+    /// 원본 경로+파일 상태 → 캐시 mp4 경로. 같은 경로의 원본이 교체되면 stale 변환물을 재사용하지 않는다.
     public static func cachedURL(for source: URL) -> URL {
-        let hash = SHA256.hash(data: Data(source.standardizedFileURL.path.utf8))
+        let hash = SHA256.hash(data: cacheKeyData(for: source))
             .map { String(format: "%02x", $0) }.joined()
         return cacheDir().appendingPathComponent("\(hash).mp4")
+    }
+
+    private static func cacheKeyData(for source: URL) -> Data {
+        var parts = [source.standardizedFileURL.path]
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: source.path) {
+            if let size = attrs[.size] { parts.append("size:\(size)") }
+            if let mtime = attrs[.modificationDate] as? Date {
+                parts.append(String(format: "mtime:%.9f", mtime.timeIntervalSince1970))
+            }
+        }
+        return Data(parts.joined(separator: "\u{0}").utf8)
     }
 
     /// ffmpeg 인자 조립(순수 — 테스트 대상). videotoolbox 우선, 폴백은 libx264. 오디오는 aac.
@@ -50,15 +93,23 @@ public enum FFmpegConverter {
     public static func convert(_ source: URL, timeout: TimeInterval = 300,
                               completion: @escaping (URL?) -> Void) {
         let out = cachedURL(for: source)
-        if FileManager.default.fileExists(atPath: out.path) { completion(out); return }
+        if FileManager.default.fileExists(atPath: out.path) {
+            completeOnMain(completion, out)
+            return
+        }
         guard let ff = executableURL else {
             WapleLog.warn("[Waple] ffmpeg not found — 'brew install ffmpeg' to play \(source.lastPathComponent)")
-            completion(nil); return
+            completeOnMain(completion, nil)
+            return
         }
         DispatchQueue.global(qos: .utility).async {
             let result = run(ff: ff, source: source, output: out, timeout: timeout)
-            DispatchQueue.main.async { completion(result) }
+            completeOnMain(completion, result)
         }
+    }
+
+    private static func completeOnMain(_ completion: @escaping (URL?) -> Void, _ result: URL?) {
+        DispatchQueue.main.async { completion(result) }
     }
 
     /// 실제 변환(백그라운드). videotoolbox 실패 시 libx264 재시도. 부분 파일이 캐시로 남지 않도록

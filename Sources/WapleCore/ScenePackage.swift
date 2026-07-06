@@ -12,15 +12,22 @@ public struct ScenePackage {
     public let entries: [Entry]
     private let blob: Data
     private let blobBase: Int
+    private let entryByName: [String: Entry]
 
     private init(entries: [Entry], blob: Data, blobBase: Int) {
         self.entries = entries
         self.blob = blob
         self.blobBase = blobBase
+        var index: [String: Entry] = [:]
+        for entry in entries where index[entry.name] == nil {
+            index[entry.name] = entry
+        }
+        self.entryByName = index
     }
 
     public static func parse(_ data: Data) throws -> ScenePackage {
         let b = [UInt8](data)
+        let maxEntries = 65_536
         func i32(_ o: Int) throws -> Int {
             guard o >= 0, o + 4 <= b.count else { throw ScenePackageError.malformed }
             return Int(UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24)
@@ -30,8 +37,9 @@ public struct ScenePackage {
         guard vlen >= 0, p + vlen <= b.count else { throw ScenePackageError.malformed }
         p += vlen
         let count = try i32(p); p += 4
-        guard count >= 0, count < 1_000_000 else { throw ScenePackageError.malformed }
+        guard count >= 0, count <= maxEntries else { throw ScenePackageError.malformed }
         var entries: [Entry] = []
+        entries.reserveCapacity(count)
         for _ in 0..<count {
             let nlen = try i32(p); p += 4
             guard nlen >= 0, p + nlen <= b.count else { throw ScenePackageError.malformed }
@@ -50,7 +58,7 @@ public struct ScenePackage {
     }
 
     public func data(for name: String) -> Data? {
-        guard let e = entries.first(where: { $0.name == name }) else { return nil }
+        guard let e = entryByName[name] else { return nil }
         let start = blob.startIndex + blobBase + e.offset
         return blob.subdata(in: start ..< start + e.size)
     }

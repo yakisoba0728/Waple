@@ -18,35 +18,76 @@ public final class VideoRenderer: WallpaperRenderer {
     private var occlusionObserver: NSObjectProtocol?
     private var pausedByOcclusion = false
     private var pausedManually = false
+    private var mountToken: UInt64 = 0
+    private let converterAvailable: () -> Bool
+    private let convert: (URL, @escaping (URL?) -> Void) -> Void
 
-    public init() {}
+    private(set) var projectId: String?
+    private(set) var lastError: Error?
+
+    public init() {
+        self.converterAvailable = { FFmpegConverter.isAvailable }
+        self.convert = { url, completion in FFmpegConverter.convert(url, completion: completion) }
+    }
+
+    init(converterAvailable: @escaping () -> Bool,
+         convert: @escaping (URL, @escaping (URL?) -> Void) -> Void) {
+        self.converterAvailable = converterAvailable
+        self.convert = convert
+    }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
-        guard let fileName = project.fileName else { throw RendererError.assetMissing }
-        let url = project.folderURL.appendingPathComponent(fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { throw RendererError.assetMissing }
+        mountToken &+= 1
+        let token = mountToken
+        lastError = nil
+        projectId = project.id
+        pausedByOcclusion = false
+        pausedManually = false
+        stopPlayback()
+        self.container = container
+
+        guard let fileName = WallpaperPathSecurity.normalizedRelativePath(project.fileName),
+              let url = WallpaperPathSecurity.containedFileURL(fileName, root: project.folderURL) else {
+            lastError = RendererError.assetMissing
+            throw RendererError.assetMissing
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            lastError = RendererError.assetMissing
+            throw RendererError.assetMissing
+        }
         if VideoRenderer.isSupportedContainer(url) {
             try attachPlayer(url: url, container: container, project: project)
             return
         }
         // 미지원 컨테이너(mkv/avi/webm): ffmpeg 로 mp4 변환 후 장착(비동기 — 메인스레드 블록 금지).
         // ffmpeg 부재 시 팩토리가 WebRenderer 폴백을 고르므로 여기 도달 = 변환 가능. 방어적으로 재확인.
-        guard FFmpegConverter.isAvailable else { throw RendererError.unsupportedCodec }
+        guard converterAvailable() else {
+            lastError = RendererError.unsupportedCodec
+            throw RendererError.unsupportedCodec
+        }
         self.container = container   // teardown 이 nil 로 만들면 완료 콜백이 스킵(취소 신호)
         NSLog("%@", "[Waple] converting \(url.lastPathComponent) via ffmpeg…")
-        FFmpegConverter.convert(url) { [weak self] mp4 in
-            guard let self, let container = self.container else { return }
-            guard let mp4 else {
-                NSLog("%@", "[Waple] video conversion failed, no playback: \(url.path)")
-                return
+        convert(url) { [weak self] mp4 in
+            DispatchQueue.main.async {
+                guard let self, self.mountToken == token, let container = self.container else { return }
+                guard let mp4 else {
+                    self.lastError = RendererError.unsupportedCodec
+                    NSLog("%@", "[Waple] video conversion failed, no playback: \(url.path)")
+                    return
+                }
+                do { try self.attachPlayer(url: mp4, container: container, project: project) }
+                catch {
+                    self.lastError = error
+                    NSLog("%@", "[Waple] converted video mount failed: \(error)")
+                }
             }
-            do { try self.attachPlayer(url: mp4, container: container, project: project) }
-            catch { NSLog("%@", "[Waple] converted video mount failed: \(error)") }
         }
     }
 
     /// 재생 가능한 컨테이너(mp4 등)를 실제 장착·재생. mount 가 직접 또는 ffmpeg 변환 완료 후 호출.
     private func attachPlayer(url: URL, container: NSView, project: WallpaperProject) throws {
+        stopPlayback()
+        projectId = project.id
         let item = AVPlayerItem(url: url)
         // 코덱/손상/DRM 실패는 AVFoundation 내부에서 비동기로 발생해 mount 성공 후 검은 화면이 된다.
         // status 를 관찰해 실패를 로깅함으로써 진단 가능하게 한다.
@@ -75,7 +116,9 @@ public final class VideoRenderer: WallpaperRenderer {
         layer.frame = container.bounds
         layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         container.layer?.addSublayer(layer)
-        queue.play()
+        if !pausedManually && !pausedByOcclusion {
+            queue.play()
+        }
 
         self.player = queue
         self.looper = looper
@@ -101,6 +144,13 @@ public final class VideoRenderer: WallpaperRenderer {
     public func resume() { pausedManually = false; player?.play() }
 
     public func teardown() {
+        mountToken &+= 1
+        stopPlayback()
+        container = nil
+        projectId = nil
+    }
+
+    private func stopPlayback() {
         if let o = occlusionObserver { NotificationCenter.default.removeObserver(o) }
         occlusionObserver = nil
         statusObservation?.invalidate()
@@ -110,6 +160,5 @@ public final class VideoRenderer: WallpaperRenderer {
         player = nil
         looper = nil
         playerLayer = nil
-        container = nil
     }
 }

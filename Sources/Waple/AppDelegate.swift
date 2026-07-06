@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var renderers: [WallpaperRenderer] = []
     private var currentFolderURL: URL?
     private var currentProjectId: String?
+    private var activeVideoProjectIds: [String] = []
     private weak var videoMenu: NSMenu?
 
     private let store = LibraryStore(baseDirectory: LibraryStore.defaultBaseDirectory())
@@ -128,8 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } ?? []
         }
         libraryVM.onAssignmentsChanged = { [weak self] in
-            guard let self, let folder = self.currentFolderURL else { return }
-            self.apply(folderURL: folder)  // 할당 변경 즉시 반영
+            guard let self else { return }
+            _ = self.applyCurrentSelection()  // 할당 변경 즉시 반영
         }
         libraryVM.onPlaylistChanged = { [weak self] in self?.schedulePlaylistTimer() }
         libraryVM.onOpenInteraction = { [weak self] in self?.openWebInteraction() }
@@ -170,26 +171,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 현재 배경(동영상)의 음량/배속 설정 → 저장 + 재적용(기존 fit-mode 패턴). 체크 상태 갱신.
     @objc private func setVideoVolume(_ sender: NSMenuItem) {
-        guard let id = currentProjectId, let v = sender.representedObject as? Float else { return }
-        VideoSettings.setVolume(v, id: id)
+        guard let v = sender.representedObject as? Float else { return }
+        let ids = VideoSettingsTarget.projectIds(currentProjectId: currentProjectId,
+                                                 activeVideoProjectIds: activeVideoProjectIds)
+        guard !ids.isEmpty else { return }
+        ids.forEach { VideoSettings.setVolume(v, id: $0) }
         updateVideoMenuStates()
-        if let folder = currentFolderURL { apply(folderURL: folder) }
+        _ = applyCurrentSelection()
     }
 
     @objc private func setVideoRate(_ sender: NSMenuItem) {
-        guard let id = currentProjectId, let r = sender.representedObject as? Float else { return }
-        VideoSettings.setRate(r, id: id)
+        guard let r = sender.representedObject as? Float else { return }
+        let ids = VideoSettingsTarget.projectIds(currentProjectId: currentProjectId,
+                                                 activeVideoProjectIds: activeVideoProjectIds)
+        guard !ids.isEmpty else { return }
+        ids.forEach { VideoSettings.setRate(r, id: $0) }
         updateVideoMenuStates()
-        if let folder = currentFolderURL { apply(folderURL: folder) }
+        _ = applyCurrentSelection()
     }
 
     private func updateVideoMenuStates() {
-        guard let id = currentProjectId, let menu = videoMenu else { return }
+        guard let menu = videoMenu else { return }
+        let ids = VideoSettingsTarget.projectIds(
+            currentProjectId: currentProjectId,
+            activeVideoProjectIds: activeVideoProjectIds
+        )
+        guard let id = ids.first else {
+            menu.items.forEach { $0.state = .off }
+            return
+        }
         let vol = VideoSettings.volume(id: id), rate = VideoSettings.rate(id: id)
+        let sameVolume = ids.allSatisfy { abs(VideoSettings.volume(id: $0) - vol) < 0.001 }
+        let sameRate = ids.allSatisfy { abs(VideoSettings.rate(id: $0) - rate) < 0.001 }
         for item in menu.items {
             guard let f = item.representedObject as? Float else { continue }
-            if item.action == #selector(setVideoVolume(_:)) { item.state = abs(f - vol) < 0.001 ? .on : .off }
-            if item.action == #selector(setVideoRate(_:)) { item.state = abs(f - rate) < 0.001 ? .on : .off }
+            if item.action == #selector(setVideoVolume(_:)) {
+                item.state = sameVolume && abs(f - vol) < 0.001 ? .on : .off
+            }
+            if item.action == #selector(setVideoRate(_:)) {
+                item.state = sameRate && abs(f - rate) < 0.001 ? .on : .off
+            }
         }
     }
 
@@ -238,10 +259,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             notify("지원하지 않는 타입입니다: \(project.type.storageString)")
             return false
         }
+        return applyResolved(global: project, folderURL: folderURL)
+    }
 
+    @discardableResult
+    private func applyCurrentSelection() -> Bool {
+        if let folder = currentFolderURL {
+            return apply(folderURL: folder)
+        }
+        return applyResolved(global: nil, folderURL: nil)
+    }
+
+    @discardableResult
+    private func applyResolved(global project: WallpaperProject?, folderURL: URL?) -> Bool {
         // 화면별로 마운트할 프로젝트 결정(할당 있으면 그 폴더, 없으면 전역; 폴더당 1회 파스) — 추출 로직.
         let screens = desktopController.screenViews
-        let projects = MonitorMapping.resolveProjects(
+        let projectSlots = MonitorMapping.resolveProjectSlots(
             screenKeys: screens.map { $0.screenKey },
             global: project,
             assignedFolder: { key in
@@ -252,15 +285,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             parse: { try? ProjectJSONParser.parse(folderURL: $0) }
         )
+        let screenProjects = Array(zip(screens, projectSlots)).compactMap { screen, project -> (screenKey: String, view: NSView, project: WallpaperProject)? in
+            guard let project else { return nil }
+            return (screen.screenKey, screen.view, project)
+        }
 
         // 전부 성공해야 교체, 하나라도 실패하면 부분 정리 후 롤백(기존 렌더러 유지) — 추출 로직.
         let result = RendererSwap.apply(
-            screens: Array(zip(screens, projects)),
+            screens: screenProjects,
             existing: renderers,
             makeAndMount: { pair -> WallpaperRenderer? in
-                let (screen, proj) = pair
-                guard let renderer = RendererFactory.makeRenderer(for: proj) else { return nil }
-                try renderer.mount(in: screen.view, project: proj)
+                guard let renderer = RendererFactory.makeRenderer(for: pair.project) else { return nil }
+                try renderer.mount(in: pair.view, project: pair.project)
                 return renderer
             },
             teardown: { $0.teardown() }
@@ -269,9 +305,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(let newRenderers):
             renderers = newRenderers
             currentFolderURL = folderURL
-            currentProjectId = project.id
+            currentProjectId = project?.id
+            activeVideoProjectIds = screenProjects
+                .filter { $0.project.type == .video }
+                .map { $0.project.id }
             updateVideoMenuStates()
-            ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
+            if let project {
+                ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
+            }
             if pausedByOcclusion { renderers.forEach { $0.pause() } }  // 가림 정지 중 교체된 렌더러도 정지 유지
             return true
         case .failure(let error):
@@ -283,15 +324,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func restoreLastWallpaper() {
         guard let id = store.selectedId,
               let entry = store.entries.first(where: { $0.id == id }),
-              let folder = store.resolveFolderURL(for: entry) else { return }
+              let folder = store.resolveFolderURL(for: entry) else {
+            _ = applyCurrentSelection()
+            return
+        }
         apply(folderURL: folder)
     }
 
     @objc private func screensChanged() {
+        ScreenChangeLifecycle.detachRenderersBeforeRebuild(
+            existing: &renderers,
+            teardown: { $0.teardown() }
+        )
+        activeVideoProjectIds = []
         desktopController.rebuild()
-        if let folder = currentFolderURL {
-            apply(folderURL: folder)
-        }
+        _ = applyCurrentSelection()
     }
 
     @objc private func togglePlaylist() {

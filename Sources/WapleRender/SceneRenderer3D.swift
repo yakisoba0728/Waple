@@ -79,29 +79,42 @@ extension SceneRenderer {
         let parent: Int?
         let order: Int
         let additive: Bool               // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우)
+        let depthTest: Bool
+        let depthWrite: Bool
+        let effects: [EffectGPU]
+        let texWidth: Int
+        let texHeight: Int
+        let isFrameBuffer: Bool
         let baseOrigin: SIMD3<Float>
         let baseScale: SIMD2<Float>
+        let baseAngleZ: Float
         let baseTint: SIMD4<Float>
         let baseVisible: Bool
         var scripts: [Script3D] = []
         // per-frame
         var origin: SIMD3<Float>
         var scale: SIMD2<Float>
+        var angleZ: Float
         var tint: SIMD4<Float>
         var visible: Bool
         init(texture: MTLTexture, size: SIMD2<Float>, parent: Int?, order: Int, additive: Bool,
-             origin: SIMD3<Float>, scale: SIMD2<Float>, tint: SIMD4<Float>, visible: Bool) {
+             depthTest: Bool, depthWrite: Bool, effects: [EffectGPU], texWidth: Int, texHeight: Int,
+             isFrameBuffer: Bool, origin: SIMD3<Float>, scale: SIMD2<Float>, angleZ: Float,
+             tint: SIMD4<Float>, visible: Bool) {
             self.texture = texture; self.size = size; self.parent = parent; self.order = order
             self.additive = additive
-            baseOrigin = origin; baseScale = scale; baseTint = tint; baseVisible = visible
-            self.origin = origin; self.scale = scale; self.tint = tint; self.visible = visible
+            self.depthTest = depthTest; self.depthWrite = depthWrite; self.effects = effects
+            self.texWidth = texWidth; self.texHeight = texHeight; self.isFrameBuffer = isFrameBuffer
+            baseOrigin = origin; baseScale = scale; baseAngleZ = angleZ; baseTint = tint; baseVisible = visible
+            self.origin = origin; self.scale = scale; self.angleZ = angleZ; self.tint = tint; self.visible = visible
         }
         func evaluateScripts(time: Float) {
-            var o = baseOrigin, s = baseScale, t = baseTint
+            var o = baseOrigin, s = baseScale, a = baseAngleZ, t = baseTint
             for sc in scripts {
                 sc.engine.setRuntime(Double(time))
                 switch sc.key {
                 case "origin": if let v = sc.engine.evaluateVec(current: [o.x, o.y, o.z]), v.count >= 3 { o = SIMD3(v[0], v[1], v[2]) }
+                case "angles": if let v = sc.engine.evaluateVec(current: [0, 0, a]), v.count >= 3 { a = v[2] }
                 case "scale":  if let v = sc.engine.evaluateVec(current: [s.x, s.y, 1]), v.count >= 2 { s = SIMD2(v[0], v[1]) }
                 case "color":  if let v = sc.engine.evaluateVec(current: [t.x, t.y, t.z]), v.count >= 3 { t = SIMD4(v[0], v[1], v[2], t.w) }
                 case "alpha":  if let v = sc.engine.evaluateVec(current: [t.w]), let a = v.first { t.w = a }
@@ -109,7 +122,7 @@ extension SceneRenderer {
                 default: break
                 }
             }
-            origin = o; scale = s; tint = t
+            origin = o; scale = s; angleZ = a; tint = t
         }
     }
 
@@ -222,20 +235,46 @@ extension SceneRenderer {
         // ── 빌보드(2D 이미지 레이어). 텍스처 로딩은 2D 경로와 동일(assetData→TexImage→TexDecoder). ──
         var bbLoaded = 0, bbSkipped = 0
         for layer in doc.layers {
-            guard !layer.textureEntryName.isEmpty,
-                  let texData = assetData(layer.textureEntryName, package: package),
-                  let tex = TexImage.parse(texData),
-                  let dec = TexDecoder.rgba(from: tex, data: texData),
-                  let mtl = makeTexture(dec.pixels, dec.width, dec.height, device) else {
-                bbSkipped += 1; continue
+            let decoded: (pixels: Data, width: Int, height: Int)
+            if layer.textureEntryName.isEmpty {
+                decoded = (Data([255, 255, 255, 255]), 1, 1)
+            } else if let texData = assetData(layer.textureEntryName, package: package),
+                      let tex = TexImage.parse(texData),
+                      let dec = TexDecoder.rgba(from: tex, data: texData) {
+                decoded = dec
+            } else {
+                bbSkipped += 1
+                continue
             }
+            guard let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
+                bbSkipped += 1
+                continue
+            }
+            let effW = layer.isFrameBuffer ? Int(max(1, projW)) : decoded.width
+            let effH = layer.isFrameBuffer ? Int(max(1, projH)) : decoded.height
+            var effects: [EffectGPU] = []
+            for eff in layer.effects {
+                if let translated = buildTranslatedEffect(eff, package: package, device: device,
+                                                          texW: effW, texH: effH) {
+                    effects.append(translated)
+                } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
+                    effects.append(handPort)
+                } else {
+                    NSLog("%@", "[Waple] 3D billboard effect skipped: \(eff.name)")
+                }
+            }
+            if !effects.isEmpty { hasEffects = true }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
             let bb = Billboard3D(texture: mtl, size: SIMD2(layer.size.x, layer.size.y),
                                  parent: layer.parent, order: layer.order,
                                  additive: layer.blendMode == "additive",
+                                 depthTest: layer.depthTest, depthWrite: layer.depthWrite,
+                                 effects: effects, texWidth: effW, texHeight: effH,
+                                 isFrameBuffer: layer.isFrameBuffer,
                                  origin: SIMD3(layer.origin.x, layer.origin.y, layer.originZ),
-                                 scale: SIMD2(layer.scale.x, layer.scale.y), tint: tint,
+                                 scale: SIMD2(layer.scale.x, layer.scale.y), angleZ: layer.angleZ,
+                                 tint: tint,
                                  visible: layer.initialVisible)
             attachScripts(bb, sources: layer.propertyScripts)
             billboards.append(bb)
@@ -267,7 +306,7 @@ extension SceneRenderer {
         }
     }
     func attachScripts(_ b: Billboard3D, sources: [String: String]) {
-        for key in ["visible", "origin", "scale", "color", "alpha"] {
+        for key in ["visible", "origin", "angles", "scale", "color", "alpha"] {
             guard let src = sources[key], let e = makeScriptEngine(src) else { continue }
             b.scripts.append(Script3D(key: key, engine: e))
         }
@@ -391,6 +430,17 @@ extension SceneRenderer {
             nmap[n.id] = Scene3DMath.Node(origin: n.origin, angles: n.angles, scale: n.scale,
                                           parent: n.parent, visible: n.visible)
         }
+        var billboardTextures: [Int: MTLTexture] = [:]
+        for (i, bb) in billboards.enumerated() where !bb.effects.isEmpty && !bb.isFrameBuffer {
+            var current = bb.texture
+            for eff in bb.effects {
+                guard let next = pooledOffscreen(bb.texWidth, bb.texHeight, device) else { break }
+                applyEffect(eff, src: current, dst: next, time: time, cb: cb)
+                current = next
+            }
+            billboardTextures[i] = current
+        }
+        let needsDepthStore = billboards.contains { $0.isFrameBuffer }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = target
         rpd.colorAttachments[0].loadAction = .clear
@@ -398,8 +448,8 @@ extension SceneRenderer {
         rpd.depthAttachment.texture = depthTex
         rpd.depthAttachment.loadAction = .clear
         rpd.depthAttachment.clearDepth = 1.0
-        rpd.depthAttachment.storeAction = .dontCare
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
+        rpd.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
+        guard var enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
         let aspect = Float(target.width) / Float(max(1, target.height))
         // 카메라 프로퍼티 스크립트 per-frame 재평가(eye/center/up → Vec3, fov → 스칼라). 무스크립트면 base 고정.
         var eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
@@ -430,8 +480,39 @@ extension SceneRenderer {
         let debug3D = Self.debugFlag("WAPLE_3D_DEBUG", "WAPLE3D_DEBUG")
         for item in draw3DOrder {
             if item.bb {
-                encodeBillboard(billboards[item.idx], viewProj: viewProj, right: right, up: camUp,
-                                nmap: nmap, into: enc, device: device, over: over)
+                let bb = billboards[item.idx]
+                if bb.isFrameBuffer {
+                    enc.endEncoding()
+                    var srcTex: MTLTexture? = nil
+                    if let snap = pooledOffscreen(target.width, target.height, device, bgra: true),
+                       let blit = cb.makeBlitCommandEncoder() {
+                        blit.copy(from: target, to: snap)
+                        blit.endEncoding()
+                        var current: MTLTexture = snap
+                        for eff in bb.effects {
+                            guard let next = pooledOffscreen(target.width, target.height, device) else { break }
+                            applyEffect(eff, src: current, dst: next, time: time, cb: cb)
+                            current = next
+                        }
+                        srcTex = current
+                    }
+                    let nextRPD = MTLRenderPassDescriptor()
+                    nextRPD.colorAttachments[0].texture = target
+                    nextRPD.colorAttachments[0].loadAction = .load
+                    nextRPD.depthAttachment.texture = depthTex
+                    nextRPD.depthAttachment.loadAction = .load
+                    nextRPD.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
+                    guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
+                    enc = nextEnc
+                    enc.setFrontFacing(.counterClockwise)
+                    if let srcTex {
+                        encodeBillboard(bb, overrideTexture: srcTex, viewProj: viewProj, right: right, up: camUp,
+                                        nmap: nmap, into: enc, device: device, over: over)
+                    }
+                } else {
+                    encodeBillboard(bb, overrideTexture: billboardTextures[item.idx], viewProj: viewProj, right: right, up: camUp,
+                                    nmap: nmap, into: enc, device: device, over: over)
+                }
             } else {
                 let mr = meshRenderables[item.idx]
                 guard let w = Scene3DMath.worldMatrix(id: mr.id, nodes: nmap), w.visible else { continue }
@@ -481,7 +562,7 @@ extension SceneRenderer {
     /// 카메라-페이싱 빌보드 1장: 월드 위치 = (부모월드 · 로컬변환) 원점, 반경 = size/2 × 합성 스케일.
     /// 쿼드 4코너를 카메라 right/up 축으로 전개(월드 좌표) → mvp=viewProj. 뎁스 테스트 유지·미기록(투명),
     /// 양면, over(premult) 블렌드. 부모 서브트리 비가시/자기 비가시면 스킵.
-    func encodeBillboard(_ bb: Billboard3D, viewProj: simd_float4x4,
+    func encodeBillboard(_ bb: Billboard3D, overrideTexture: MTLTexture? = nil, viewProj: simd_float4x4,
                                  right: SIMD3<Float>, up: SIMD3<Float>, nmap: [Int: Scene3DMath.Node],
                                  into enc: MTLRenderCommandEncoder, device: MTLDevice, over: MTLRenderPipelineState) {
         var pWorld = matrix_identity_float4x4
@@ -501,7 +582,10 @@ extension SceneRenderer {
         let hw = bb.size.x * 0.5 * sx
         let hh = bb.size.y * 0.5 * sy
         guard hw > 0, hh > 0, hw.isFinite, hh.isFinite else { return }
-        let r = right * hw, u = up * hh
+        let ca = cos(bb.angleZ), sa = sin(bb.angleZ)
+        let rollRight = right * ca + up * sa
+        let rollUp = -right * sa + up * ca
+        let r = rollRight * hw, u = rollUp * hh
         // UV 상단 원점: 상단 = +up. TL(0,0) TR(1,0) BR(1,1) BL(0,1).
         let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
         func vtx(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] { [p.x, p.y, p.z, 0, 0, 0, uu, vv] }
@@ -513,12 +597,12 @@ extension SceneRenderer {
         var u2 = MeshUniform(mvp: viewProj, tint: bb.tint, misc: SIMD4(0, 0, 0, 0))
         // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우 광량 복원). 그 외 premult-over.
         enc.setRenderPipelineState(bb.additive ? (meshPipelineAdditive ?? over) : over)
-        if let ds = meshDepthState(test: true, write: false, device: device) { enc.setDepthStencilState(ds) }
+        if let ds = meshDepthState(test: bb.depthTest, write: bb.depthWrite, device: device) { enc.setDepthStencilState(ds) }
         enc.setCullMode(.none)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
         enc.setFragmentBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
-        enc.setFragmentTexture(bb.texture, index: 0)
+        enc.setFragmentTexture(overrideTexture ?? bb.texture, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 }

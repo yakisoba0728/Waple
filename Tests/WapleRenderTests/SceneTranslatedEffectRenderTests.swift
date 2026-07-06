@@ -305,6 +305,42 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertGreaterThan(luma, 0.9, "g_Texture1Resolution must be aux dims 4x2 (layer-dims 근사면 0)")
     }
 
+    /// _rt_ 컴포지션 레이어의 g_Texture0Resolution 은 프로젝트 크기가 아니라 실제 누적 framebuffer 크기여야 한다.
+    func testFrameBufferResolutionUniformUsesCaptureTargetSize() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            float ok = step(63.5, g_Texture0Resolution.x) * step(g_Texture0Resolution.x, 64.5);
+            gl_FragColor = vec4(c.rgb * ok, c.a);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "effects":[{"file":"effects/fbres/effect.json","passes":[{}]}]}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+            ("shaders/effects/fbres.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/fbres.frag", frag.data(using: .utf8)!),
+        ], tag: "fbres")
+        NSLog("%@", "[Waple] framebuffer texRes probe luma=\(luma)")
+        XCTAssertGreaterThan(luma, 0.9, "g_Texture0Resolution.x must be actual capture width 64, not projection width 1920")
+    }
+
     /// 실제 WE opacity GLSL 을 비-스톡 이름 "opacitytest" 로 변환·렌더 → 핸드포팅 오라클(alpha 0.4 → ~0.4)과 수치 일치.
     /// 비-스톡 이름이라 번역이 깨지면 폴백이 가리지 못하고 ~1.0 → 실패.
     func testTranslatedOpacityMatchesHandPort() throws {

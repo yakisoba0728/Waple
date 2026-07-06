@@ -53,4 +53,16 @@ final class EffectManifestTests: XCTestCase {
         XCTAssertNil(m.passes[1].material)
         XCTAssertNil(m.passes[0].command)
     }
+
+    func testRejectsNegativeBindSlots() throws {
+        let json = #"{"passes":[{"shader":"effects/foo","bind":[{"name":"previous","index":-1},{"name":"mask","index":0}]}]}"#
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.passes[0].binds, [EffectManifest.Bind(name: "mask", index: 0)])
+    }
+
+    func testHugeFBOScaleDefaultsInsteadOfTrapping() throws {
+        let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","scale":1e300}]}"#
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.fbos, [EffectManifest.FBO(name: "_rt", scale: 1)])
+    }
 }

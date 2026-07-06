@@ -167,7 +167,9 @@ public struct TexImage {
         for _ in 0..<count {
             guard let id = i32(p), let t = f32(p + 4),
                   let x = geom(p + 8), let y = geom(p + 12), let w = geom(p + 16), let h = geom(p + 28),
-                  w > 0, h > 0, x >= 0, y >= 0, x.isFinite, y.isFinite else { return [] }
+                  t.isFinite, t > 0,
+                  w > 0, h > 0, x >= 0, y >= 0,
+                  x.isFinite, y.isFinite, w.isFinite, h.isFinite else { return [] }
             out.append(TexFrame(imageId: id, time: t, x: x, y: y, width: w, height: h))
             p += 32
         }

@@ -125,4 +125,20 @@ final class ParticleSystemTests: XCTestCase {
         let d = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"bogusrenderer"}],"maxcount":10}"#), material: nil)
         XCTAssertEqual(d.renderer, .unsupported("bogusrenderer"))
     }
+
+    func testHugeNumericParticleValuesDefaultInsteadOfTrapping() {
+        let d = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"sphererandom","instantaneous":1e300,"rate":1e300}],
+         "renderer":[{"name":"rope","subdivision":1e300}],
+         "maxcount":1e300,"starttime":1e300}
+        """), material: nil)
+        XCTAssertEqual(d.maxCount, 100)
+        XCTAssertEqual(d.startTime, 0)
+        guard case let .sphere(_, _, _, _, rate, burst, _) = d.emitters.first else {
+            return XCTFail("no sphere")
+        }
+        XCTAssertEqual(rate, 0)
+        XCTAssertEqual(burst, 0)
+        XCTAssertEqual(d.renderer, .rope(subdivision: 0))
+    }
 }

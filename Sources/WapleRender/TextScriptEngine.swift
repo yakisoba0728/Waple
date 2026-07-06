@@ -37,8 +37,10 @@ public final class TextScriptEngine {
     static let eventHookNames = ["cursorClick", "cursorDown", "cursorUp", "cursorMove",
                                  "mediaPlaybackChanged", "mediaPropertiesChanged", "mediaThumbnailChanged",
                                  "mediaTimelineChanged", "mediaStatusChanged"]
+    private static let maxScriptCharacters = 512_000
 
     public init?(script: String) {
+        guard Self.passesPracticalSafetyChecks(script) else { return nil }
         guard let ctx = JSContext() else { return nil }
         context = ctx
         var hadException = false
@@ -62,6 +64,7 @@ public final class TextScriptEngine {
     /// update/훅 부재도 성공(top-level 사이드이펙트는 이미 실행됨).
     /// 로드 예외(문법 오류 등) → nil, 공유 컨텍스트는 오염되지 않는다(IIFE 미실행).
     public init?(script: String, scene: SceneScriptContext) {
+        guard Self.passesPracticalSafetyChecks(script) else { return nil }
         let ctx = scene.context
         context = ctx
         var hadException = false
@@ -190,8 +193,15 @@ public final class TextScriptEngine {
         out.reserveCapacity(n)
         var i = 0
         var prevSig: Character? = nil   // 마지막 비공백 코드 문자(멤버 접근 `.export` 판별)
+        var lastKeywordAllowsRegex = false
         func isIdent(_ c: Character) -> Bool { c == "_" || c == "$" || c.isLetter || c.isNumber }
-        func emit(_ c: Character) { out.append(c); if !c.isWhitespace { prevSig = c } }
+        func emit(_ c: Character) {
+            out.append(c)
+            if !c.isWhitespace {
+                prevSig = c
+                if !"({[=,:;!?&|+-*%^~<>".contains(c) { lastKeywordAllowsRegex = false }
+            }
+        }
         func emitAll(_ s: [Character]) { for c in s { emit(c) } }
         func nextNonWS(_ from: Int) -> Int { var k = from; while k < n && chars[k].isWhitespace { k += 1 }; return k }
         // chars[at...] 가 word 로 시작하고 그 뒤가 경계면 그 word 길이, 아니면 0.
@@ -228,11 +238,29 @@ public final class TextScriptEngine {
                 }
                 continue
             }
+            // 정규식 리터럴: 문자열처럼 원문 보존. `/export\s+default/` 내부 키워드를 모듈 구문으로
+            // 오인하면 패턴이 조용히 깨진다. 완전한 JS lexer 는 아니지만 return/=/( 등 식 시작 위치를 처리한다.
+            if c == "/", i + 1 < n,
+               lastKeywordAllowsRegex || prevSig == nil || "({[=,:;!?&|+-*%^~<>".contains(prevSig!) {
+                emit(c); i += 1
+                var inClass = false
+                while i < n {
+                    let d = chars[i]
+                    if d == "\\", i + 1 < n { emit(d); emit(chars[i + 1]); i += 2; continue }
+                    if d == "[" { inClass = true }
+                    if d == "]" { inClass = false }
+                    emit(d); i += 1
+                    if d == "/" && !inClass { break }
+                }
+                while i < n && isIdent(chars[i]) { emit(chars[i]); i += 1 }
+                continue
+            }
             // 식별자 시작(문자/_/$): 전체 word 소비 — 항상 완전 토큰 경계에서만 진입.
             if c.isLetter || c == "_" || c == "$" {
                 var j = i
                 while j < n && isIdent(chars[j]) { j += 1 }
                 let word = Array(chars[i..<j])
+                let wordString = String(word)
                 let isKeyword = (word == Array("export") || word == Array("import")) && prevSig != "."
                 if isKeyword {
                     let after = nextNonWS(j)
@@ -256,7 +284,9 @@ public final class TextScriptEngine {
                     // 일반 `export <decl>` — 키워드만 제거(뒤 공백/선언 유지).
                     i = j; continue
                 }
-                emitAll(word); i = j; continue
+                emitAll(word)
+                lastKeywordAllowsRegex = ["return", "throw", "case", "delete", "typeof", "void", "new", "yield"].contains(wordString)
+                i = j; continue
             }
             // 숫자 리터럴 선두(16진수 0x.. 등): word 로 오인 안 되게 통째 소비.
             if c.isNumber {
@@ -267,6 +297,84 @@ public final class TextScriptEngine {
             emit(c); i += 1
         }
         return String(out)
+    }
+
+    private static func passesPracticalSafetyChecks(_ script: String) -> Bool {
+        guard script.count <= maxScriptCharacters else {
+            NSLog("%@", "[Waple] text script rejected: source too large (\(script.count) chars)")
+            return false
+        }
+        if containsObviousUnboundedLoop(script) {
+            NSLog("%@", "[Waple] text script rejected: obvious unbounded loop")
+            return false
+        }
+        return true
+    }
+
+    private static func containsObviousUnboundedLoop(_ src: String) -> Bool {
+        let chars = Array(src)
+        let n = chars.count
+        var i = 0
+        func isIdent(_ c: Character) -> Bool { c == "_" || c == "$" || c.isLetter || c.isNumber }
+        func skipWS(_ p: inout Int) { while p < n && chars[p].isWhitespace { p += 1 } }
+        func word(at p: Int, _ w: String) -> Bool {
+            let a = Array(w)
+            guard p + a.count <= n, Array(chars[p..<p + a.count]) == a else { return false }
+            let beforeOK = p == 0 || !isIdent(chars[p - 1])
+            let after = p + a.count
+            let afterOK = after == n || !isIdent(chars[after])
+            return beforeOK && afterOK
+        }
+        while i < n {
+            let c = chars[i]
+            if c == "\"" || c == "'" || c == "`" {
+                i += 1
+                while i < n {
+                    if chars[i] == "\\", i + 1 < n { i += 2; continue }
+                    let done = chars[i] == c
+                    i += 1
+                    if done { break }
+                }
+                continue
+            }
+            if c == "/", i + 1 < n, chars[i + 1] == "/" {
+                while i < n && chars[i] != "\n" { i += 1 }
+                continue
+            }
+            if c == "/", i + 1 < n, chars[i + 1] == "*" {
+                i += 2
+                while i + 1 < n, !(chars[i] == "*" && chars[i + 1] == "/") { i += 1 }
+                i = min(i + 2, n)
+                continue
+            }
+            if word(at: i, "while") {
+                var p = i + "while".count
+                skipWS(&p)
+                if p < n, chars[p] == "(" {
+                    p += 1
+                    skipWS(&p)
+                    if word(at: p, "true") {
+                        p += "true".count
+                        skipWS(&p)
+                        if p < n, chars[p] == ")" { return true }
+                    }
+                }
+            } else if word(at: i, "for") {
+                var p = i + "for".count
+                skipWS(&p)
+                if p < n, chars[p] == "(" {
+                    p += 1
+                    skipWS(&p)
+                    if p < n, chars[p] == ";" {
+                        p += 1
+                        skipWS(&p)
+                        if p < n, chars[p] == ";" { return true }
+                    }
+                }
+            }
+            i += 1
+        }
+        return false
     }
 
     /// `import` 키워드 직후 인덱스 j 에서 시작하는 import 문을 소비하고 no-op 바인딩 코드를 emit,
@@ -341,7 +449,20 @@ public final class TextScriptEngine {
         var props = {};
         var builder = {};
         function add(d) { if (d && d.name !== undefined) { props[d.name] = d.value; } return builder; }
-        ['addCheckbox','addText','addSlider','addCombo','addColor','addTextInput','addFile'].forEach(function(k){ builder[k] = add; });
+        function firstOptionValue(options) {
+            if (!options || !options.length) { return undefined; }
+            var first = options[0];
+            return first && typeof first === 'object' && first.value !== undefined ? first.value : first;
+        }
+        ['addCheckbox','addText','addSlider','addColor','addTextInput','addFile'].forEach(function(k){ builder[k] = add; });
+        builder.addCombo = function(d) {
+            if (d && d.name !== undefined) {
+                props[d.name] = d.value !== undefined ? d.value
+                    : (d.default !== undefined ? d.default
+                    : (d.defaultValue !== undefined ? d.defaultValue : firstOptionValue(d.options)));
+            }
+            return builder;
+        };
         builder.finish = function() { return props; };
         return builder;
     }

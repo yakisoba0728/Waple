@@ -120,6 +120,14 @@ public enum ShaderPreprocessor {
                 stack.append(f)
             } else if t == "#endif" || t.hasPrefix("#endif ") || t.hasPrefix("#endif//") {
                 if !stack.isEmpty { stack.removeLast() }
+            } else if t.hasPrefix("#undef ") {
+                if emitting() {
+                    let name = token(after: "#undef", t)
+                    d.removeValue(forKey: name)
+                    textDefines.removeValue(forKey: name)
+                    funcMacros.removeValue(forKey: name)
+                    closePrev(name, at: out.count)
+                }
             } else if t.hasPrefix("#define "), emitting() {
                 let decl = String(t.dropFirst(8))
                 let nameEnd = decl.firstIndex(where: { $0 == " " || $0 == "(" || $0 == "\t" }) ?? decl.endIndex

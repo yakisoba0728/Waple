@@ -80,6 +80,12 @@ public struct PuppetModel: Equatable {
         var pm = PuppetModel(material: m.meshes.first?.material ?? "", vertices: verts, indices: indices)
         // 본 규약(name/parent/bind)은 2D 퍼펫과 동형 — 그대로 이식(정적 스킨은 애니 부재 시 항등이라 무해).
         pm.bones = m.bones.map { Bone(name: $0.name, parent: $0.parent, bind: $0.bind) }
+        pm.animations = m.animations.map { anim in
+            Animation(name: anim.name, mode: anim.mode, fps: anim.fps, lengthFrames: anim.lengthFrames,
+                      tracks: anim.tracks.map { track in
+                          track.map { Key(position: $0.position, angles: $0.angles, scale: $0.scale) }
+                      })
+        }
         return pm
     }
 

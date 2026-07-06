@@ -5,11 +5,15 @@ import Compression
 import WapleCore
 
 public enum TexDecoder {
+    private static let maxEmbeddedImageDimension = 8192
+    private static let maxEmbeddedImageBytes = 256 << 20
+
     public static func rgba(from tex: TexImage, data: Data) -> (pixels: Data, width: Int, height: Int)? {
         switch tex.payload {
         case .png, .jpeg:
             let sub = data.subdata(in: tex.payloadRange)
-            guard let src = CGImageSourceCreateWithData(sub as CFData, nil),
+            guard embeddedImagePropertiesAreWithinLimits(sub),
+                  let src = CGImageSourceCreateWithData(sub as CFData, nil),
                   let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
             return draw(img)
         case .rawRGBA8888:
@@ -118,6 +122,7 @@ public enum TexDecoder {
     /// 파이프라인 규약(설계 §3): 텍스처/이펙트 패스 straight, premultiply 는 최종 컴포지트에서 1회.
     private static func draw(_ img: CGImage) -> (Data, Int, Int)? {
         let w = img.width, h = img.height
+        guard imageDimensionsAreWithinLimits(width: w, height: h) else { return nil }
         var pixels = Data(count: w * h * 4)
         let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
             guard let base = ptr.baseAddress,
@@ -137,5 +142,18 @@ public enum TexDecoder {
             return true
         }
         return ok ? (pixels, w, h) : nil
+    }
+
+    private static func embeddedImagePropertiesAreWithinLimits(_ data: Data) -> Bool {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int,
+              let h = props[kCGImagePropertyPixelHeight] as? Int else { return false }
+        return imageDimensionsAreWithinLimits(width: w, height: h)
+    }
+
+    private static func imageDimensionsAreWithinLimits(width w: Int, height h: Int) -> Bool {
+        guard w > 0, h > 0, w <= maxEmbeddedImageDimension, h <= maxEmbeddedImageDimension else { return false }
+        return w <= maxEmbeddedImageBytes / max(1, h * 4)
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreText
 import CoreGraphics
 
@@ -6,12 +7,14 @@ import CoreGraphics
 /// 색/알파는 레이어 tint 경로가 적용하므로 여기선 항상 흰색(규약 일관 — QuadShaders f_main).
 public enum TextRasterizer {
     public struct Raster { public let rgba: Data; public let width: Int; public let height: Int }
+    private static let maxPointSize: Float = 8192
+    private static let maxRasterBytes = 256 << 20
 
     /// - fontData: pkg/base-assets 의 .otf/.ttf 바이트(전역 등록 없이 디스크립터로 생성).
     /// - systemFontName: "systemfont_arial" 류의 이름 매핑(없거나 실패 시 시스템 폰트).
     public static func render(text: String, fontData: Data?, systemFontName: String?, pointSize: Float) -> Raster? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, pointSize > 0 else { return nil }
+        guard !trimmed.isEmpty, pointSize.isFinite, pointSize > 0, pointSize <= maxPointSize else { return nil }
         let font = makeFont(fontData: fontData, systemFontName: systemFontName, pointSize: CGFloat(pointSize))
         let attr = NSAttributedString(string: text, attributes: [
             .font: font,
@@ -20,9 +23,14 @@ public enum TextRasterizer {
         let line = CTLineCreateWithAttributedString(attr)
         var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
         let advance = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
-        let w = max(1, Int(ceil(advance)) + 2)
-        let h = max(1, Int(ceil(ascent + descent)) + 2)
-        guard w <= 8192, h <= 8192 else { return nil }
+        guard advance.isFinite, ascent.isFinite, descent.isFinite else { return nil }
+        let rawW = ceil(advance)
+        let rawH = ceil(ascent + descent)
+        guard rawW.isFinite, rawH.isFinite, rawW >= 0, rawH >= 0,
+              rawW <= CGFloat(Int.max - 2), rawH <= CGFloat(Int.max - 2) else { return nil }
+        let w = max(1, Int(rawW) + 2)
+        let h = max(1, Int(rawH) + 2)
+        guard w <= 8192, h <= 8192, w <= maxRasterBytes / max(1, h * 4) else { return nil }
         var pixels = Data(count: w * h * 4)
         let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
             guard let base = ptr.baseAddress,

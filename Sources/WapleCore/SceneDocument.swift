@@ -65,6 +65,9 @@ public struct SceneLayer: Equatable {
     /// 머티리얼 블렌드 모드("normal"|"additive"|"alphatocoverage"…). 3D 씬 빌보드가 파이프라인 선택에 사용
     /// (플레어/글로우 = additive). 2D 경로는 무시(단일 premult-over).
     public var blendMode: String = "normal"
+    /// 3D 씬 빌보드용 머티리얼 depth 플래그. 2D 경로는 무시.
+    public var depthTest: Bool = true
+    public var depthWrite: Bool = true
     /// 오브젝트 colorBlendMode(common_blending.h ApplyBlending enum 0-32; 0=normal).
     /// != 0 이면 렌더러가 acc 스냅샷 대비 블렌드 합성(컴포지션 스냅샷 패턴). 코퍼스 121레이어/30씬.
     public var colorBlendMode: Int = 0
@@ -261,8 +264,8 @@ extension SceneDocument {
         }
         let general = scene["general"] as? [String: Any] ?? [:]
         let proj = general["orthogonalprojection"] as? [String: Any] ?? [:]
-        let pw = (proj["width"] as? Int) ?? 1920
-        let ph = (proj["height"] as? Int) ?? 1080
+        let pw = intVal(proj["width"]) ?? 1920
+        let ph = intVal(proj["height"]) ?? 1080
         let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let parallaxEnabled = (general["cameraparallax"] as? Bool) ?? false
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
@@ -374,15 +377,18 @@ extension SceneDocument {
         // 겸사겸사 머티리얼 blending 을 캡처(3D 빌보드 additive 파이프라인 선택 — 플레어/글로우).
         var puppetPath: String? = nil
         var blendMode = "normal"
+        var depthTest = true
+        var depthWrite = true
         if let md = package.data(for: imagePath) ?? assets?(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
             if let matPath = mj["material"] as? String,
                let matD = package.data(for: matPath) ?? assets?(matPath),
                let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
-               let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any],
-               let bl = p0["blending"] as? String {
-                blendMode = bl
+               let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any] {
+                if let bl = p0["blending"] as? String { blendMode = bl }
+                depthTest = (p0["depthtest"] as? String) != "disabled"
+                depthWrite = (p0["depthwrite"] as? String) != "disabled"
             }
         }
         var layer = SceneLayer(
@@ -404,6 +410,8 @@ extension SceneDocument {
         layer.propertyScripts = propScripts
         layer.initialVisible = initialVisible
         layer.blendMode = blendMode
+        layer.depthTest = depthTest
+        layer.depthWrite = depthWrite
         layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])
@@ -582,10 +590,7 @@ extension SceneDocument {
         for case let layer as [String: Any] in layers {
             let visible = (layer["visible"] as? Bool) ?? true
             guard visible else { continue }
-            let blend: Float?
-            if let d = layer["blend"] as? Double { blend = Float(d) }
-            else if let i = layer["blend"] as? Int { blend = Float(i) }
-            else { blend = nil }  // 딕셔너리 blend(스크립트/애니 커브) = 이벤트 트리거 → 제외
+            let blend = float(layer["blend"])  // 딕셔너리 blend(스크립트/애니 커브) = 이벤트 트리거 → 제외
             guard let bl = blend, bl >= 0.5 else { continue }
             if best == nil || bl > best!.blend {
                 best = ((layer["name"] as? String) ?? "", float(layer["rate"]) ?? 1, bl)
@@ -681,25 +686,22 @@ extension SceneDocument {
                 var p = SceneEffectPass()
                 if let cb = passDict["combos"] as? [String: Any] {
                     for (k, v) in cb {
-                        if let i = v as? Int { p.combos[k] = i }
-                        else if let d = v as? Double { p.combos[k] = Int(d) }
+                        if let i = intVal(v) { p.combos[k] = i }
                     }
                 }
                 if let cs = passDict["constantshadervalues"] as? [String: Any] {
                     for (k, v) in cs {
-                        if let d = v as? Double { p.constants[k] = [Float(d)] }
-                        else if let i = v as? Int { p.constants[k] = [Float(i)] }
+                        if let f = float(v) { p.constants[k] = [f] }
                         else if let s = v as? String {
-                            let f = s.split(separator: " ").compactMap { Float($0) }
+                            let f = floatList(s)
                             if !f.isEmpty { p.constants[k] = f }
                         }
                         else if let dict = v as? [String: Any] {
                             // 바인딩 객체 {script/user/value} — 정적 value 언랩 + 스크립트 캡처(per-frame 평가용).
                             if let sc = dict["script"] as? String { p.constantScripts[k] = sc }
-                            if let d = dict["value"] as? Double { p.constants[k] = [Float(d)] }
-                            else if let i = dict["value"] as? Int { p.constants[k] = [Float(i)] }
+                            if let f = float(dict["value"]) { p.constants[k] = [f] }
                             else if let sv = dict["value"] as? String {
-                                let f = sv.split(separator: " ").compactMap { Float($0) }
+                                let f = floatList(sv)
                                 if !f.isEmpty { p.constants[k] = f }
                             }
                         }
@@ -753,21 +755,37 @@ extension SceneDocument {
         return v
     }
     private static func floats(_ v: Any?) -> [Float] {
-        ((unwrap(v) as? String) ?? "").split(separator: " ").compactMap { Float($0) }
+        floatList((unwrap(v) as? String) ?? "")
+    }
+    private static func floatList(_ s: String) -> [Float] {
+        s.split(separator: " ").compactMap { safeFloat(String($0)) }
     }
     private static func float(_ v: Any?) -> Float? {
         let u = unwrap(v)
-        if let d = u as? Double { return Float(d) }
+        if let d = u as? Double { return safeFloat(d) }
         if let i = u as? Int { return Float(i) }
-        if let s = u as? String { return Float(s) }   // 문자열 숫자 관용(문자열 id 씬과 동급 방어)
+        if let s = u as? String { return safeFloat(s) }   // 문자열 숫자 관용(문자열 id 씬과 동급 방어)
         return nil
     }
     private static func intVal(_ v: Any?) -> Int? {
         let u = unwrap(v)
         if let i = u as? Int { return i }
-        if let d = u as? Double { return Int(d) }
+        if let d = u as? Double { return safeInt(d) }
         if let s = u as? String { return Int(s) }   // 실물 3577990983: id/parent 가 "35" 문자열 타입
         return nil
+    }
+    private static func safeFloat(_ s: String) -> Float? {
+        guard let f = Float(s), f.isFinite else { return nil }
+        return f
+    }
+    private static func safeFloat(_ d: Double) -> Float? {
+        guard d.isFinite, d >= -Double(Float.greatestFiniteMagnitude),
+              d <= Double(Float.greatestFiniteMagnitude) else { return nil }
+        return Float(d)
+    }
+    private static func safeInt(_ d: Double) -> Int? {
+        guard d.isFinite, d >= Double(Int.min), d < Double(Int.max) else { return nil }
+        return Int(d)
     }
     private static func vec2(_ v: Any?) -> Vec2? {
         let f = floats(v); return f.count >= 2 ? Vec2(x: f[0], y: f[1]) : nil

@@ -24,6 +24,57 @@ final class FFmpegConverterTests: XCTestCase {
         XCTAssertTrue(a1.path.contains("Waple/converted"))
     }
 
+    func testCachedURLChangesWhenExistingSourceChanges() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let source = dir.appendingPathComponent("clip.webm")
+        try Data([0x01]).write(to: source)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1000)],
+            ofItemAtPath: source.path)
+        let first = FFmpegConverter.cachedURL(for: source)
+
+        try Data([0x02]).write(to: source)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 2000)],
+            ofItemAtPath: source.path)
+        let second = FFmpegConverter.cachedURL(for: source)
+
+        XCTAssertNotEqual(first, second, "same-path source changes must not reuse stale ffmpeg output")
+    }
+
+    func testConvertCacheHitCompletionRunsOnMainThread() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let source = dir.appendingPathComponent("cached.webm")
+        try Data([0x01, 0x02, 0x03]).write(to: source)
+        let cached = FFmpegConverter.cachedURL(for: source)
+        try FileManager.default.createDirectory(at: cached.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([0x00]).write(to: cached)
+        defer { try? FileManager.default.removeItem(at: cached) }
+
+        let exp = expectation(description: "cache hit callback")
+        var callbackURL: URL?
+        var callbackWasMain = false
+        DispatchQueue.global(qos: .utility).async {
+            FFmpegConverter.convert(source) { url in
+                callbackURL = url
+                callbackWasMain = Thread.isMainThread
+                exp.fulfill()
+            }
+        }
+        wait(for: [exp], timeout: 5)
+
+        XCTAssertEqual(callbackURL, cached)
+        XCTAssertTrue(callbackWasMain, "all converter completions should enter renderer/app code on main")
+    }
+
     func testArgumentsVideotoolboxThenLibx264() {
         let inp = URL(fileURLWithPath: "/a/in.mkv"), out = URL(fileURLWithPath: "/b/out.mp4")
         let vt = FFmpegConverter.arguments(input: inp, output: out, useVideotoolbox: true)
@@ -36,6 +87,43 @@ final class FFmpegConverterTests: XCTestCase {
         let sw = FFmpegConverter.arguments(input: inp, output: out, useVideotoolbox: false)
         XCTAssertTrue(sw.contains("libx264"))                           // 폴백 코덱
         XCTAssertFalse(sw.contains("h264_videotoolbox"))
+    }
+
+    func testDetectExecutableIgnoresPathByDefault() {
+        let env = ["PATH": "/tmp/attacker"]
+        let found = FFmpegConverter.detectExecutable(
+            environment: env,
+            knownExecutablePaths: [],
+            isExecutable: { $0 == "/tmp/attacker/ffmpeg" })
+
+        XCTAssertNil(found)
+    }
+
+    func testDetectExecutableUsesKnownFixedPath() {
+        let found = FFmpegConverter.detectExecutable(
+            environment: ["PATH": "/tmp/attacker"],
+            knownExecutablePaths: ["/opt/homebrew/bin/ffmpeg"],
+            isExecutable: { $0 == "/opt/homebrew/bin/ffmpeg" || $0 == "/tmp/attacker/ffmpeg" })
+
+        XCTAssertEqual(found?.path, "/opt/homebrew/bin/ffmpeg")
+    }
+
+    func testDetectExecutableUsesExplicitOptInExecutablePath() {
+        let found = FFmpegConverter.detectExecutable(
+            environment: [FFmpegConverter.explicitExecutableEnv: "/tmp/custom/ffmpeg", "PATH": "/tmp/attacker"],
+            knownExecutablePaths: [],
+            isExecutable: { $0 == "/tmp/custom/ffmpeg" || $0 == "/tmp/attacker/ffmpeg" })
+
+        XCTAssertEqual(found?.path, "/tmp/custom/ffmpeg")
+    }
+
+    func testDetectExecutableUsesPathOnlyWhenOptedIn() {
+        let found = FFmpegConverter.detectExecutable(
+            environment: [FFmpegConverter.trustPathEnv: "1", "PATH": "/tmp/attacker:relative"],
+            knownExecutablePaths: [],
+            isExecutable: { $0 == "/tmp/attacker/ffmpeg" || $0 == "relative/ffmpeg" })
+
+        XCTAssertEqual(found?.path, "/tmp/attacker/ffmpeg")
     }
 
     // ── ffmpeg 실존 시 라운드트립(부재 시 skip) ─────────────────────────────

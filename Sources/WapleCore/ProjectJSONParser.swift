@@ -26,8 +26,8 @@ public enum ProjectJSONParser {
         return WallpaperProject(
             id: id,
             type: type,
-            fileName: obj["file"] as? String,
-            previewName: obj["preview"] as? String,
+            fileName: WallpaperPathSecurity.normalizedRelativePath(obj["file"] as? String),
+            previewName: WallpaperPathSecurity.normalizedRelativePath(obj["preview"] as? String),
             title: title,
             tags: tags,
             contentRating: obj["contentrating"] as? String,

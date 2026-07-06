@@ -182,6 +182,26 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertTrue(out.contains("float b = 5.0;"), out)
     }
 
+    func testUndefRemovesMacroForConditionalsAndSubstitution() {
+        let src = """
+        #define ENABLED 1
+        float before = ENABLED;
+        #undef ENABLED
+        #ifdef ENABLED
+        enabled
+        #else
+        disabled
+        #endif
+        float after = ENABLED;
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("float before = 1;"), out)
+        XCTAssertTrue(out.contains("disabled"), out)
+        XCTAssertFalse(out.contains("enabled\n"), out)
+        XCTAssertTrue(out.contains("float after = ENABLED;"), out)
+        XCTAssertFalse(out.contains("#undef"), out)
+    }
+
     /// 함수형 매크로도 정의 이후부터.
     func testFuncMacroPositionAware() {
         let src = """

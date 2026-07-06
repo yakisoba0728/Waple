@@ -1,4 +1,6 @@
 import XCTest
+import Metal
+@testable import WapleCore
 @testable import WapleRender
 
 final class TextEngineTests: XCTestCase {
@@ -102,6 +104,56 @@ final class TextEngineTests: XCTestCase {
         let out = TextScriptEngine.stripModuleSyntax(script)
         XCTAssertFalse(out.contains("export "), "export 키워드가 남음")
         XCTAssertTrue(out.contains("may break."), "주석 원문은 보존")
+    }
+
+    func testRegexLiteralContainingModuleKeywordsPreserved() throws {
+        let script = """
+        export function update(v) {
+            return /export\\s+default/.test(v) ? 'hit' : 'miss';
+        }
+        """
+        let e = try XCTUnwrap(TextScriptEngine(script: script))
+        XCTAssertEqual(e.evaluate(current: "export default"), "hit")
+    }
+
+    func testComboWithoutValueUsesDefaultOrFirstOption() throws {
+        let script = """
+        export var scriptProperties = createScriptProperties()
+            .addCombo({ name: 'quality', options: [{ value: 'low' }, { value: 'high' }], default: 'high' })
+            .addCombo({ name: 'mode', options: ['soft', 'hard'] })
+            .finish();
+        export function update(v) { return scriptProperties.quality + '/' + scriptProperties.mode; }
+        """
+        let e = try XCTUnwrap(TextScriptEngine(script: script))
+        XCTAssertEqual(e.evaluate(current: ""), "high/soft")
+    }
+
+    func testObviousUnboundedLoopsRejectedBeforeUpdateCanHang() {
+        XCTAssertNil(TextScriptEngine(script: "export function update(v) { while (true) { } return 'x'; }"))
+        XCTAssertNil(TextScriptEngine(script: "export function update(v) { for (;;) { } return 'x'; }"))
+    }
+}
+
+final class ScriptedTextRuntimeTests: XCTestCase {
+    func testRefreshScriptedTextsUpdatesEngineRuntime() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let engine = try XCTUnwrap(TextScriptEngine(script: "export function update(v) { return String(parseInt(engine.runtime)); }"))
+        let def = SceneTextLayer(text: "", script: nil, font: "systemfont_arial", pointSize: 16,
+                                 color: Vec3(x: 1, y: 1, z: 1), alpha: 1,
+                                 horizontalAlign: "center", verticalAlign: "center",
+                                 origin: Vec2(x: 0, y: 0), scale: Vec2(x: 1, y: 1))
+        let renderer = SceneRenderer()
+        renderer.hasScriptedText = true
+        renderer.lastTextRefreshSecond = -1
+        renderer.textLayers = [SceneRenderer.GPUText(texture: nil, vertexBuffer: nil,
+                                                     tint: SIMD4<Float>(1, 1, 1, 1), order: 0,
+                                                     engine: engine, lastText: "0",
+                                                     fontData: nil, systemFontName: "systemfont_arial",
+                                                     def: def)]
+
+        renderer.refreshScriptedTexts(device: device, time: 3.2)
+
+        XCTAssertEqual(renderer.textLayers.first?.lastText, "3")
     }
 }
 

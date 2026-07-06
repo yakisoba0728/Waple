@@ -42,8 +42,9 @@ public enum Initializer: Equatable {
 
 /// 시퀀스 인덱스(스폰 시 0..count) → 시트 프레임 인덱스. mirror=핑퐁(주기 2N-2), 아니면 순환.
 public func sheetFrameIndex(sequence: Float, frameCount: Int, mirror: Bool) -> Int {
-    guard frameCount > 0 else { return 0 }
-    let s = max(0, Int(sequence.rounded(.down)))
+    guard frameCount > 0, sequence.isFinite else { return 0 }
+    let rounded = sequence.rounded(.down)
+    let s = rounded <= 0 ? 0 : (rounded >= Float(Int.max) ? Int.max : Int(rounded))
     guard frameCount > 1 else { return 0 }
     if mirror {
         let period = 2 * frameCount - 2
@@ -108,13 +109,18 @@ public enum RendererKind: Equatable {
     /// spriteTrail=maxlength(세그먼트 수 근사), ropeTrail=length(초)×30, rope=고정 16. 4..24 로 클램프.
     public var trailSampleCount: Int {
         func clamp(_ v: Int) -> Int { min(24, max(4, v)) }
+        func clampedRounded(_ value: Float) -> Int? {
+            guard value.isFinite, value > 0 else { return nil }
+            if value >= 24 { return 24 }
+            return clamp(Int(value.rounded()))
+        }
         switch self {
         case let .spriteTrail(maxLength, _):
-            return maxLength > 0 ? clamp(Int(maxLength.rounded())) : 8
+            return clampedRounded(maxLength) ?? 8
         case .rope:
             return 16
         case let .ropeTrail(length, _):
-            return length > 0 ? clamp(Int((length * 30).rounded())) : 12
+            return clampedRounded(length * 30) ?? 12
         default:
             return 0
         }
@@ -378,18 +384,28 @@ public struct ParticleSystemDef: Equatable {
 // MARK: - 파싱 헬퍼
 
 private func pfloat(_ v: Any?) -> Float? {
-    if let d = v as? Double { return Float(d) }
+    if let d = v as? Double {
+        guard d.isFinite, d >= -Double(Float.greatestFiniteMagnitude),
+              d <= Double(Float.greatestFiniteMagnitude) else { return nil }
+        return Float(d)
+    }
     if let i = v as? Int { return Float(i) }
     return nil
 }
 private func pint(_ v: Any?) -> Int? {
     if let i = v as? Int { return i }
-    if let d = v as? Double { return Int(d) }
+    if let d = v as? Double {
+        guard d.isFinite, d >= Double(Int.min), d < Double(Int.max) else { return nil }
+        return Int(d)
+    }
     return nil
 }
 private func pvec3(_ v: Any?) -> Vec3? {
     guard let s = v as? String else { return nil }
-    let f = s.split(separator: " ").compactMap { Float($0) }
+    let f = s.split(separator: " ").compactMap { part -> Float? in
+        guard let value = Float(part), value.isFinite else { return nil }
+        return value
+    }
     return f.count >= 3 ? Vec3(x: f[0], y: f[1], z: f[2]) : nil
 }
 /// "x y z" 벡터 또는 단일 스칼라(브로드캐스트).

@@ -25,6 +25,22 @@ enum MonitorMapping {
         assignedFolder: (String) -> URL?,
         parse: (URL) -> WallpaperProject?
     ) -> [WallpaperProject] {
+        resolveProjectSlots(
+            screenKeys: screenKeys,
+            global: global,
+            assignedFolder: assignedFolder,
+            parse: parse
+        ).map { $0 ?? global }
+    }
+
+    /// 화면 순서대로 마운트할 프로젝트 슬롯. `global == nil` 이면 미할당 화면은 의도적으로 비운다.
+    /// 할당 폴더는 `parse` 로 **폴더당 1회만** 파싱한다.
+    static func resolveProjectSlots(
+        screenKeys: [String],
+        global: WallpaperProject?,
+        assignedFolder: (String) -> URL?,
+        parse: (URL) -> WallpaperProject?
+    ) -> [WallpaperProject?] {
         var cache: [URL: WallpaperProject] = [:]
         return screenKeys.map { key in
             guard let folder = assignedFolder(key) else { return global }
@@ -36,12 +52,44 @@ enum MonitorMapping {
     }
 }
 
+enum ScreenChangeLifecycle {
+    static func detachRenderersBeforeRebuild<R>(
+        existing: inout [R],
+        teardown: (R) -> Void
+    ) {
+        let old = existing
+        existing.removeAll()
+        old.forEach(teardown)
+    }
+}
+
+enum VideoSettingsTarget {
+    static func projectIds(currentProjectId: String?, activeVideoProjectIds: [String]) -> [String] {
+        let active = unique(activeVideoProjectIds)
+        if !active.isEmpty { return active }
+        return unique(currentProjectId.map { [$0] } ?? [])
+    }
+
+    private static func unique(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for id in ids where seen.insert(id).inserted {
+            out.append(id)
+        }
+        return out
+    }
+}
+
 /// 마운트 트랜잭션: 전부 성공해야 교체, 하나라도 실패하면 부분 정리 후 롤백(이전 렌더러 유지).
 enum RendererSwap {
+    enum SwapError: Error {
+        case unsupportedRenderer
+    }
+
     /// `screens` 를 순서대로 mount 시도.
     /// - 전부 성공 → `existing` 을 teardown 하고 새 렌더러 세트를 `.success` 로 반환.
     /// - mount 가 throw → 지금까지 만든 새 렌더러만 teardown, `existing` 은 건드리지 않고 에러를 `.failure` 로 전파.
-    /// - `makeAndMount` 가 nil 반환(지원 안 하는 화면) → **스킵**(continue). throw 와 구분한다.
+    /// - `makeAndMount` 가 nil 반환(지원 안 하는 화면) → `.failure`; 기존 렌더러는 유지한다.
     static func apply<S, R>(
         screens: [S],
         existing: [R],
@@ -51,7 +99,10 @@ enum RendererSwap {
         var made: [R] = []
         for s in screens {
             do {
-                guard let r = try makeAndMount(s) else { continue }  // 지원 안 함 → 스킵
+                guard let r = try makeAndMount(s) else {
+                    made.forEach(teardown)
+                    return .failure(SwapError.unsupportedRenderer)
+                }
                 made.append(r)
             } catch {
                 made.forEach(teardown)   // 부분 정리(이 실행에서 만든 것만)

@@ -134,6 +134,20 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertEqual(t.textureSlots, [0, 2])
     }
 
+    func testCommaSeparatedUniformsParsed() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform float g_Amount, g_Offset; // {"material":"amount","default":0.5}
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * (g_Amount + g_Offset);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertEqual(t.materialParams.map(\.glslName), ["g_Amount", "g_Offset"])
+        XCTAssertTrue(t.msl.contains("p[0].x + p[1].x"), t.msl)
+    }
+
     func testFileScopeConstEmitted() throws {
         let vert = "varying vec2 v_TexCoord;\nvoid main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }"
         let frag = """
@@ -356,6 +370,35 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("dfdx(in.v_TexCoord.x)"), t.msl)
         XCTAssertTrue(t.msl.contains("dfdy(in.v_TexCoord.y)"), t.msl)
         XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord), level(0.0))"), t.msl)
+    }
+
+    func testWhitespaceBeforeFunctionCallsRewritten() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            gl_FragColor = texSample2D (g_Texture0, v_TexCoord) + texSample2DLod
+                (g_Texture0, v_TexCoord, 0.0);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord))"), t.msl)
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord), level(0.0))"), t.msl)
+        XCTAssertFalse(t.msl.contains("texSample2D"), t.msl)
+    }
+
+    func testDiscardTranslatedForMetal() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            if (v_TexCoord.x < 0.5) { discard; }
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("discard_fragment();"), t.msl)
+        XCTAssertFalse(t.msl.contains("discard;"), t.msl)
     }
 
     func testVertexStageAudioParams() throws {
@@ -735,6 +778,33 @@ final class GLSLTranslatorTests: XCTestCase {
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
         XCTAssertTrue(t.msl.contains("tweak_f"), "frag 쪽 리네임: \(t.msl)")
         XCTAssertTrue(t.msl.contains("uv * 2.0") && t.msl.contains("uv * 0.5"), "두 정의 공존: \(t.msl)")
+    }
+
+    func testSameStageOverloadsFailGracefully() {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        float shape(float x) { return x; }
+        vec2 shape(vec2 uv) { return uv; }
+        void main() { gl_FragColor = texSample2D(g_Texture0, shape(v_TexCoord)); }
+        """
+        XCTAssertNil(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+    }
+
+    func testReverseCrossStageVaryingMismatchUsesVertexSwizzleAndZeroInit() throws {
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() { gl_Position = vec4(a_Position, 1.0); v_TexCoord = a_TexCoord; }
+        """
+        let frag = """
+        varying vec4 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() { vec4 uv = v_TexCoord; gl_FragColor = texSample2D(g_Texture0, uv.xy); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("Vary out = {};"), t.msl)
+        XCTAssertTrue(t.msl.contains("out.v_TexCoord.xy = vin.a_TexCoord;"), t.msl)
+        XCTAssertTrue(t.msl.contains("float4 uv = in.v_TexCoord;"), t.msl)
     }
 
     func testSamplerComboAnnotationsParsed() {

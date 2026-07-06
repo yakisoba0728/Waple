@@ -30,7 +30,7 @@ final class DynamicVertexBuffer {
 }
 
 extension SceneRenderer {
-    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,0,0,0) + texRes[8](슬롯별 실제 dims — 빌드 시 계산).
+    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,0,0,0) + texRes[8](슬롯별 실제 dims).
     func engineUniform(time: Float, texRes: [SIMD4<Float>]) -> [Float] {
         var e = [Float](repeating: 0, count: 16 + 4 + 32)
         e[0] = 1; e[5] = 1; e[10] = 1; e[15] = 1   // identity mvp
@@ -41,6 +41,21 @@ extension SceneRenderer {
             e[o] = r.x; e[o + 1] = r.y; e[o + 2] = r.z; e[o + 3] = r.w
         }
         return e
+    }
+
+    func runtimeTexRes(for pass: TranslatedPass, src: MTLTexture, fboTex: [MTLTexture]) -> [SIMD4<Float>] {
+        var texRes = pass.texRes
+        func set(_ slot: Int, _ tex: MTLTexture) {
+            guard slot >= 0, slot < 8 else { return }
+            let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
+            texRes[slot] = SIMD4(w, h, w, h)
+        }
+        for (slot, source) in pass.binds {
+            if source == -1 { set(slot, src) }
+            else if source >= 0, source < fboTex.count { set(slot, fboTex[source]) }
+        }
+        for (slot, tex) in pass.aux { set(slot, tex) }
+        return texRes
     }
 
     /// 파티클 스냅샷 → 인터리브드 버텍스(정점당 8 float: ndc.xy, uv, rgba).
@@ -425,13 +440,14 @@ extension SceneRenderer {
     }
 
     /// 스크립트 텍스트 초당 재평가(시계 등). 변경 시에만 재래스터.
-    func refreshScriptedTexts(device: MTLDevice) {
+    func refreshScriptedTexts(device: MTLDevice, time: Float) {
         guard hasScriptedText else { return }
         let sec = Int(CFAbsoluteTimeGetCurrent())
         guard sec != lastTextRefreshSecond else { return }
         lastTextRefreshSecond = sec
         for i in textLayers.indices {
             guard let e = textLayers[i].engine else { continue }
+            e.setRuntime(Double(time))
             let newText = e.evaluate(current: textLayers[i].lastText) ?? ""
             if newText != textLayers[i].lastText {
                 textLayers[i].lastText = newText
@@ -561,7 +577,7 @@ extension SceneRenderer {
                         enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                     }
                 }
-                let eng = engineUniform(time: time, texRes: pass.texRes)
+                let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: src, fboTex: fboTex))
                 eng.withUnsafeBytes {
                     enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)

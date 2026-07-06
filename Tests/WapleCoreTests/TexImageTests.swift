@@ -144,4 +144,20 @@ final class TexImageTests: XCTestCase {
         XCTAssertEqual(t?.mip?.decompressedSize, 4 * 4 * 4)
         XCTAssertEqual(t?.mip?.payloadRange.count, payload.count)
     }
+
+    func testRejectsNonPositiveTEXSFrameTime() {
+        func i32(_ v: Int) -> [UInt8] {
+            let u = UInt32(truncatingIfNeeded: v)
+            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
+        }
+        func f32(_ v: Float) -> [UInt8] {
+            let u = v.bitPattern
+            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
+        }
+        var texs: [UInt8] = Array("TEXS0003".utf8) + [0]
+        texs += i32(1) + i32(4) + i32(4)
+        texs += i32(0) + f32(0) + f32(0) + f32(0) + f32(4) + f32(0) + f32(0) + f32(4)
+        let t = TexImage.parse(Self.makeTex(format: 0, w: 4, h: 4, payload: [0, 0, 0, 0] + texs))
+        XCTAssertEqual(t?.frames, [])
+    }
 }

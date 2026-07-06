@@ -24,11 +24,14 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
-        guard let fileName = project.fileName else { throw RendererError.assetMissing }
-        let fileURL = project.folderURL.appendingPathComponent(fileName)
+        guard let fileName = WallpaperPathSecurity.normalizedRelativePath(project.fileName),
+              let fileURL = WallpaperPathSecurity.containedFileURL(fileName, root: project.folderURL) else {
+            throw RendererError.assetMissing
+        }
         guard FileManager.default.fileExists(atPath: fileURL.path) else { throw RendererError.assetMissing }
 
         let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
         config.setURLSchemeHandler(WallpaperSchemeHandler(rootURL: project.folderURL),
                                    forURLScheme: WallpaperSchemeHandler.scheme)
         let ucc = WKUserContentController()
@@ -130,6 +133,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard Self.isAllowedTopFrameURL(webView.url) else { return }
         // didFinish 는 모든 main-frame 내비게이션마다 발생한다. 속성 주입/오디오 시작은
         // 최초 로드 1회만 수행해야 하므로, 소비 후 pending 을 비워 멱등하게 만든다.
         guard let json = pendingUserPropertiesJSON else { return }
@@ -142,11 +146,29 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         audioProvider?.start()
     }
 
+    public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if navigationAction.targetFrame?.isMainFrame != false {
+            guard Self.isAllowedTopFrameURL(navigationAction.request.url) else {
+                decisionHandler(.cancel)
+                return
+            }
+        }
+        decisionHandler(.allow)
+    }
+
     public func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard Self.isAllowedTopFrameURL(webView?.url) else { return }
         guard let dict = message.body as? [String: Any], let type = dict["type"] as? String else { return }
         if type == "mediaListen" {
             startMediaPolling()
         }
+    }
+
+    static func isAllowedTopFrameURL(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        if url.scheme == "about", url.absoluteString == "about:blank" { return true }
+        return url.scheme == WallpaperSchemeHandler.scheme && url.host == WallpaperSchemeHandler.host
     }
 
     // MARK: - 미디어 연동(페이지가 wallpaperRegisterMedia* 를 등록한 경우에만 폴링)

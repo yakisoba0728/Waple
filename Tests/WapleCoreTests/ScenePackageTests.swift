@@ -54,4 +54,11 @@ final class ScenePackageTests: XCTestCase {
             XCTAssertEqual(e as? ScenePackageError, .malformed)
         }
     }
+
+    func testRejectsExcessiveEntryCount() {
+        let files = (0..<65_537).map { ("e\($0)", Data()) }
+        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg(files))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+    }
 }

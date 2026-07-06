@@ -403,4 +403,27 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.parallaxAmount, 1, accuracy: 1e-6)
         XCTAssertEqual(doc.layers.first?.parallaxDepth, Vec2(x: 1, y: 1))
     }
+
+    func testHugeNumericSceneValuesDefaultInsteadOfTrapping() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"text":"SAFE","pointsize":1e300,"origin":"0 0 0","visible":{"value":true}},
+           {"image":"models/x.json","id":1e300,"colorBlendMode":1e300,
+            "origin":"50 50 0","size":"10 10","visible":{"value":true},
+            "effects":[{"file":"effects/tint/effect.json",
+              "passes":[{"combos":{"AUDIOPROCESSING":1e300},
+                         "constantshadervalues":{"bad":1e300}}]}]}
+         ]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.texts.first?.pointSize, 16)
+        let layer = try XCTUnwrap(doc.layers.first)
+        XCTAssertEqual(layer.id, 0)
+        XCTAssertEqual(layer.colorBlendMode, 0)
+        let effect = try XCTUnwrap(layer.effects.first)
+        XCTAssertEqual(effect.audioMode, 0)
+        XCTAssertNil(effect.constants["bad"])
+    }
 }

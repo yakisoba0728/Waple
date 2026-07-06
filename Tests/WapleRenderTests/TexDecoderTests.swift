@@ -17,10 +17,10 @@ final class TexDecoderTests: XCTestCase {
             + Array("TEXB0001".utf8) + [0]
     }
 
-    /// ImageIO로 2x2 PNG 생성(손으로 친 바이트 위험 회피).
-    private func png2x2() -> Data {
+    /// ImageIO로 PNG 생성(손으로 친 바이트 위험 회피).
+    private func png(width: Int = 2, height: Int = 2) -> Data {
         let cs = CGColorSpace(name: CGColorSpace.sRGB)!
-        let ctx = CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0,
+        let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                             space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
         let img = ctx.makeImage()!
@@ -31,11 +31,18 @@ final class TexDecoderTests: XCTestCase {
     }
 
     func testDecodesEmbeddedPNG() throws {
-        let data = Data(texHeader(format: 0, w: 2, h: 2)) + png2x2()
+        let data = Data(texHeader(format: 0, w: 2, h: 2)) + png()
         let tex = try XCTUnwrap(TexImage.parse(data))
         let out = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data))
         XCTAssertEqual(out.width, 2); XCTAssertEqual(out.height, 2)
         XCTAssertEqual(out.pixels.count, 2 * 2 * 4)
+    }
+
+    func testRejectsOversizedEmbeddedPNGDecode() throws {
+        let data = Data(texHeader(format: 0, w: 8193, h: 1)) + png(width: 8193, height: 1)
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.payload, .png)
+        XCTAssertNil(TexDecoder.rgba(from: tex, data: data))
     }
 
     func testDecodesRawRGBA() throws {

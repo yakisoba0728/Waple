@@ -299,8 +299,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             package = try ScenePackage.parse(data)
             // 공유(base-assets) 리졸버: pkg 에 없는 util 모델/머티리얼 JSON(솔리드 레이어 등) 폴백.
             doc = try SceneDocument.parse(package: package, assets: { name in
-                guard let base = BaseAssetsSettings.baseAssetsDirectory else { return nil }
-                return try? Data(contentsOf: base.appendingPathComponent(name))
+                guard let base = BaseAssetsSettings.baseAssetsDirectory,
+                      let url = WallpaperPathSecurity.containedFileURL(name, root: base) else { return nil }
+                return try? Data(contentsOf: url)
             }, userProps: UserPropertyStore.rawOverrides(id: project.id))
         } catch {
             NSLog("%@", "[Waple] scene mount: failed to parse \(pkgURL.path): \(error)")
@@ -510,7 +511,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             return
         }
 
-        refreshScriptedTexts(device: device)  // 초당 1회 update() 재평가(시계 등)
+        refreshScriptedTexts(device: device, time: time)  // 초당 1회 update() 재평가(시계 등)
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
         let displayTextures = buildDisplayTextures(device: device, queue: queue, time: time, cb: cb)
 
@@ -583,7 +584,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let dt: Float = 1.0 / 30.0
         var urls: [URL] = []
         var camOff = SIMD2<Float>(0, 0)
-        var asp = SIMD2<Float>(1, 1)  // 타겟이 proj 비율과 같다고 가정 → 왜곡 없음
+        var asp = SceneRenderer.aspectScale(projAspect: projAspect,
+                                            viewAspect: Float(width) / Float(max(1, height)),
+                                            fitMode: SceneRenderSettings.fitMode)
         // 자식 GPU 시스템의 로컬 sim 은 더미 — 부모 sim 이 자식을 구동하므로 웜업/스텝에서 제외.
         let rootIdxs = sims.indices.filter { particleSystems[$0].childOf == nil }
         for t in times.sorted() {

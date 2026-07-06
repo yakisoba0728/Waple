@@ -16,6 +16,24 @@ final class ProjectJSONParserTests: XCTestCase {
         XCTAssertEqual(p.id, "123")
     }
 
+    func testRejectsEscapingFileAndPreviewPaths() throws {
+        let p = try parse(#"{"type":"video","file":"../outside.mp4","preview":"/tmp/private.jpg","title":"Test"}"#)
+        XCTAssertNil(p.fileName)
+        XCTAssertNil(p.previewName)
+    }
+
+    func testNormalizesRelativeAssetPaths() throws {
+        let p = try parse(#"{"type":"video","file":"./movies/wallpaper.mp4","preview":"images/./preview.jpg","title":"Test"}"#)
+        XCTAssertEqual(p.fileName, "movies/wallpaper.mp4")
+        XCTAssertEqual(p.previewName, "images/preview.jpg")
+    }
+
+    func testRejectsPercentEncodedTraversalFileAndPreviewPaths() throws {
+        let p = try parse(#"{"type":"web","file":"%2e%2e/secret.html","preview":"assets/%2e%2e/preview.jpg"}"#)
+        XCTAssertNil(p.fileName)
+        XCTAssertNil(p.previewName)
+    }
+
     func testParsesCapitalSceneType() throws {
         let p = try parse(#"{"type":"Scene","file":"scene.json","preview":"preview.gif","title":"S"}"#)
         XCTAssertEqual(p.type, .scene)

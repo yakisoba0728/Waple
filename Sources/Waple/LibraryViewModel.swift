@@ -94,8 +94,8 @@ final class LibraryViewModel: ObservableObject {
 
     func previewURL(for entry: LibraryEntry) -> URL? {
         guard let folder = store.resolveFolderURL(for: entry),
-              let preview = entry.previewName else { return nil }
-        return folder.appendingPathComponent(preview)
+              let preview = WallpaperPathSecurity.containedFileURL(entry.previewName, root: folder) else { return nil }
+        return preview
     }
 
     func isSupported(_ entry: LibraryEntry) -> Bool {
@@ -123,7 +123,13 @@ final class LibraryViewModel: ObservableObject {
 
     /// 현재 적용 중인 배경이면 즉시 재적용(변경 반영 — fit-mode 패턴).
     private func reapplyIfCurrent(_ entry: LibraryEntry) {
-        guard selectedId == entry.id, let folder = store.resolveFolderURL(for: entry) else { return }
-        _ = onApply?(folder)
+        if selectedId == entry.id {
+            guard let folder = store.resolveFolderURL(for: entry) else { return }
+            _ = onApply?(folder)
+            return
+        }
+        if monitors.all.values.contains(entry.id) {
+            onAssignmentsChanged?()
+        }
     }
 }

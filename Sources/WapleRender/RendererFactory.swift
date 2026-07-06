@@ -7,13 +7,12 @@ public enum RendererFactory {
         case .web:
             return WebRenderer(mode: .web)
         case .video:
-            if let file = project.fileName {
-                let url = project.folderURL.appendingPathComponent(file)
-                if VideoRenderer.isSupportedContainer(url) { return VideoRenderer() }
-                // mkv/avi/webm: ffmpeg 있으면 네이티브 변환 경유(VideoRenderer), 없으면 WKWebView 폴백(기존 동작).
-                return FFmpegConverter.isAvailable ? VideoRenderer() : WebRenderer(mode: .videoFallback)
+            guard let url = WallpaperPathSecurity.containedFileURL(project.fileName, root: project.folderURL) else {
+                return nil
             }
-            return VideoRenderer()
+            if VideoRenderer.isSupportedContainer(url) { return VideoRenderer() }
+            // mkv/avi/webm: ffmpeg 있으면 네이티브 변환 경유(VideoRenderer), 없으면 WKWebView 폴백(기존 동작).
+            return FFmpegConverter.isAvailable ? VideoRenderer() : WebRenderer(mode: .videoFallback)
         case .scene:
             return SceneRenderer()
         default:

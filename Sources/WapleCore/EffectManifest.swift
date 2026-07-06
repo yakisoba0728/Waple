@@ -40,7 +40,7 @@ public struct EffectManifest: Equatable {
         for p in rawPasses {
             var binds: [Bind] = []
             for b in (p["bind"] as? [[String: Any]]) ?? [] {
-                guard let name = b["name"] as? String, let idx = b["index"] as? Int else { continue }
+                guard let name = b["name"] as? String, let idx = safeInt(b["index"]), idx >= 0 else { continue }
                 binds.append(Bind(name: name, index: idx))
             }
             passes.append(Pass(material: p["material"] as? String,
@@ -53,9 +53,18 @@ public struct EffectManifest: Equatable {
         var fbos: [FBO] = []
         for f in (obj["fbos"] as? [[String: Any]]) ?? [] {
             guard let name = f["name"] as? String else { continue }
-            let scale = (f["scale"] as? Int) ?? Int(f["scale"] as? Double ?? 1)
+            let scale = safeInt(f["scale"]) ?? 1
             fbos.append(FBO(name: name, scale: Swift.max(1, scale)))
         }
         return EffectManifest(passes: passes, fbos: fbos)
+    }
+
+    private static func safeInt(_ v: Any?) -> Int? {
+        if let i = v as? Int { return i }
+        if let d = v as? Double {
+            guard d.isFinite, d >= Double(Int.min), d < Double(Int.max) else { return nil }
+            return Int(d)
+        }
+        return nil
     }
 }

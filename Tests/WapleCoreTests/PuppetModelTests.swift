@@ -167,6 +167,72 @@ final class PuppetModelTests: XCTestCase {
         XCTAssertEqual(pm?.vertices[2].uv, SIMD2<Float>(0.5, 0))
         XCTAssertTrue(pm?.animations.isEmpty ?? false)              // 정적 바인드 포즈
     }
+
+    /// MDLV0023 퍼펫은 Model3D 가 이미 MDLA0006 애니를 파싱하므로, PuppetModel 변환도 트랙을 보존해야 한다.
+    func testRoutesMDLV0023AnimationsToPuppet() throws {
+        func f(_ v: Float, _ d: inout Data) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func u(_ v: UInt32, _ d: inout Data) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func appendKey(_ p: SIMD3<Float>, _ a: SIMD3<Float>, _ s: SIMD3<Float>, to d: inout Data) {
+            f(p.x, &d); f(p.y, &d); f(p.z, &d)
+            f(a.x, &d); f(a.y, &d); f(a.z, &d)
+            f(s.x, &d); f(s.y, &d); f(s.z, &d)
+        }
+
+        var d = Data("MDLV0023".utf8); d.append(0)
+        u(0x0180000f, &d); u(1, &d); u(1, &d)
+        d.append(Data("materials/knight.json".utf8)); d.append(0)
+        u(0, &d)
+        for _ in 0..<6 { f(0, &d) }
+        u(0x0180000f, &d)
+        u(UInt32(3 * 80), &d)
+        for i in 0..<3 {
+            f(Float(i), &d); f(0, &d); f(0, &d)
+            f(0, &d); f(0, &d); f(1, &d)
+            f(1, &d); f(0, &d); f(0, &d); f(1, &d)
+            u(UInt32(min(i, 1)), &d); u(0, &d); u(0, &d); u(0, &d)
+            f(1, &d); f(0, &d); f(0, &d); f(0, &d)
+            f(Float(i) / 2, &d); f(0, &d)
+        }
+        u(6, &d)
+        for i: UInt16 in [0, 1, 2] { var v = i; withUnsafeBytes(of: &v) { d.append(contentsOf: $0) } }
+
+        d.append(Data("MDLS0004".utf8)); d.append(0)
+        u(0, &d); u(2, &d)
+        func appendBone(_ name: String, _ parent: Int32, _ tx: Float) {
+            d.append(Data(name.utf8)); d.append(0)
+            u(1, &d)
+            var pr = parent; withUnsafeBytes(of: &pr) { d.append(contentsOf: $0) }
+            u(64, &d)
+            let mat: [Float] = [1,0,0,0, 0,1,0,0, 0,0,1,0, tx,0,0,1]
+            for x in mat { f(x, &d) }
+            d.append(0)
+        }
+        appendBone("Root", -1, 0)
+        appendBone("Arm", 0, 3)
+
+        d.append(Data("MDLA0006".utf8)); d.append(0)
+        u(0, &d); u(1, &d); u(100, &d); u(0, &d)
+        d.append(Data("knight|idle_bone".utf8)); d.append(0)
+        d.append(Data("loop".utf8)); d.append(0)
+        f(24, &d); u(1, &d); u(0, &d); u(2, &d); u(0, &d)
+        u(72, &d)
+        appendKey(SIMD3(0, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1), to: &d)
+        appendKey(SIMD3(0, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1), to: &d)
+        u(0, &d)
+        u(72, &d)
+        appendKey(SIMD3(3, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1), to: &d)
+        appendKey(SIMD3(3, 0, 0), SIMD3(0, 0, 0.75), SIMD3(1, 1, 1), to: &d)
+        u(0, &d)
+
+        let pm = try XCTUnwrap(PuppetModel.parse(d))
+        XCTAssertEqual(pm.bones.count, 2)
+        XCTAssertEqual(pm.animations.count, 1)
+        XCTAssertEqual(pm.animations[0].name, "knight|idle_bone")
+        XCTAssertEqual(pm.animations[0].mode, "loop")
+        XCTAssertEqual(pm.animations[0].fps, 24)
+        XCTAssertEqual(pm.animations[0].tracks.count, 2)
+        XCTAssertEqual(pm.animations[0].tracks[1][1].angles.z, 0.75, accuracy: 1e-6)
+    }
 }
 
 /// 실물 스모크(env-guarded): 2809885105 의 퍼펫 2개가 파스되고 실측 수치와 일치.

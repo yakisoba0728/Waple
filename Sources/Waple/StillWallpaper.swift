@@ -18,8 +18,7 @@ enum StillWallpaper {
     static func source(for project: WallpaperProject) -> Source? {
         switch project.type {
         case .video:
-            if let file = project.fileName {
-                let url = project.folderURL.appendingPathComponent(file)
+            if let url = WallpaperPathSecurity.containedFileURL(project.fileName, root: project.folderURL) {
                 // AVFoundation 이 못 읽는 컨테이너(webm/mkv)는 preview 로 폴백.
                 if VideoRenderer.isSupportedContainer(url) { return .videoFrame(url) }
             }
@@ -33,8 +32,8 @@ enum StillWallpaper {
 
     /// preview 파일이 있으면 그 URL, 없으면 nil.
     private static func previewSource(for project: WallpaperProject) -> Source? {
-        guard let name = project.previewName, !name.isEmpty else { return nil }
-        return .previewImage(project.folderURL.appendingPathComponent(name))
+        guard let url = WallpaperPathSecurity.containedFileURL(project.previewName, root: project.folderURL) else { return nil }
+        return .previewImage(url)
     }
 
     /// 추출 결과 PNG 경로(배경 id 기준, 파일명 안전화).
