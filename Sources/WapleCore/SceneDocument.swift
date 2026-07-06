@@ -388,55 +388,8 @@ extension SceneDocument {
                 lights3D.append(parseLight(obj, lightType: lightType, order: order))
             }
         }
-        // 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여
-        // 로컬(부모 상대)좌표를 월드(프로젝션 픽셀)로 굽는다 — 예: Hollow Knight 3598808038 의 knight/sword 는
-        // 부모 "PUPPET"(origin 1920,1080/scale 0.72)에 붙고, 3577990983 의 '背景'(origin 부재)은
-        // 그룹 노드(1920,1080)에 붙는다(미합성 시 (0,0) → 흑화면). 부모는 정적 가정.
-        // 2026-07-06 일반화: 종전 '로드되는 퍼펫 레이어만' 게이트를 전 레이어로 확장 —
-        // 퍼펫 파스 실패(폴백 쿼드) 레이어만 종전 위치 유지(luma 가드 유지).
-        // **2D 한정**: 3D 씬(camera3D)의 이미지 레이어는 빌보드 — 렌더러(encodeBillboard)가 부모
-        // 월드행렬을 매 프레임 합성하므로 파스-시 합성은 이중 적용이 된다(실물 3662790108 의
-        // scale 0.1 그룹 체인 + 라디안 각을 도(°)로 오독하는 단위 문제 포함 — 회귀 테스트
-        // test3DBillboardLayerKeepsLocalTransformWithExistingParent).
-        func puppetLoads(_ path: String) -> Bool {
-            guard let d = package.data(for: path) ?? assets?(path) else { return false }
-            return PuppetModel.parse(d) != nil || Model3D.parse(d) != nil
-        }
-        let composeTargets = camera3D != nil ? [] : layers.indices.filter {
-            guard layers[$0].parent != nil else { return false }
-            if let pp = layers[$0].puppet { return puppetLoads(pp) }
-            return true
-        }
-        if !composeTargets.isEmpty {
-            var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
-            var parentOf: [Int: Int] = [:]
-            for l in layers where l.id != 0 {
-                localT[l.id] = (l.origin, l.scale, l.angleZ)
-                if let p = l.parent { parentOf[l.id] = p }
-            }
-            for n in nodes3D {
-                localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
-                if let p = n.parent { parentOf[n.id] = p }
-            }
-            // angle 은 도(°) 단위(레이어 규약; puppetVertices 가 렌더 시 라디안 변환) — 부모 오프셋 회전은
-            // 라디안으로 계산하되 합성 각은 도로 유지한다.
-            func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
-                guard depth < 32, let t = localT[id] else { return nil }
-                guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
-                let r = pw.angle * .pi / 180
-                let ca = cosf(r), sa = sinf(r)
-                let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
-                return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
-                        scale: Vec2(x: pw.scale.x * t.scale.x, y: pw.scale.y * t.scale.y),
-                        angle: pw.angle + t.angle)
-            }
-            for i in composeTargets {
-                guard let wt = world(layers[i].id, 0) else { continue }
-                layers[i].origin = wt.origin
-                layers[i].scale = wt.scale
-                layers[i].angleZ = wt.angle
-            }
-        }
+        // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다).
+        composeParentTransforms(layers: &layers, nodes3D: nodes3D, camera3D: camera3D, package: package, assets: assets)
         var out = SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                                 parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
                                 parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
@@ -557,6 +510,55 @@ extension SceneDocument {
             castShadow: (obj["castshadow"] as? Bool) ?? false,
             parent: intVal(obj["parent"]),
             order: order)
+    }
+
+    /// 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여
+    /// 로컬(부모 상대)좌표를 월드(프로젝션 픽셀)로 굽는다 — 예: Hollow Knight 3598808038 의 knight/sword 는
+    /// 부모 "PUPPET"(origin 1920,1080/scale 0.72)에 붙고, 3577990983 의 '背景'(origin 부재)은
+    /// 그룹 노드(1920,1080)에 붙는다(미합성 시 (0,0) → 흑화면). 부모는 정적 가정.
+    /// 퍼펫 파스 실패(폴백 쿼드) 레이어만 종전 위치 유지(luma 가드). **2D 한정**: 3D 씬(camera3D)의
+    /// 이미지 레이어는 빌보드 — 렌더러(encodeBillboard)가 부모 월드행렬을 매 프레임 합성(파스-시 합성은 이중 적용 → 제외).
+    private static func composeParentTransforms(layers: inout [SceneLayer], nodes3D: [SceneNode3D],
+                                                camera3D: SceneCamera3D?, package: ScenePackage,
+                                                assets: ((String) -> Data?)?) {
+        func puppetLoads(_ path: String) -> Bool {
+            guard let d = package.data(for: path) ?? assets?(path) else { return false }
+            return PuppetModel.parse(d) != nil || Model3D.parse(d) != nil
+        }
+        let composeTargets = camera3D != nil ? [] : layers.indices.filter {
+            guard layers[$0].parent != nil else { return false }
+            if let pp = layers[$0].puppet { return puppetLoads(pp) }
+            return true
+        }
+        guard !composeTargets.isEmpty else { return }
+        var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
+        var parentOf: [Int: Int] = [:]
+        for l in layers where l.id != 0 {
+            localT[l.id] = (l.origin, l.scale, l.angleZ)
+            if let p = l.parent { parentOf[l.id] = p }
+        }
+        for n in nodes3D {
+            localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
+            if let p = n.parent { parentOf[n.id] = p }
+        }
+        // angle 은 도(°) 단위(레이어 규약; puppetVertices 가 렌더 시 라디안 변환) — 부모 오프셋 회전은
+        // 라디안으로 계산하되 합성 각은 도로 유지한다.
+        func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
+            guard depth < 32, let t = localT[id] else { return nil }
+            guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
+            let r = pw.angle * .pi / 180
+            let ca = cosf(r), sa = sinf(r)
+            let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
+            return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
+                    scale: Vec2(x: pw.scale.x * t.scale.x, y: pw.scale.y * t.scale.y),
+                    angle: pw.angle + t.angle)
+        }
+        for i in composeTargets {
+            guard let wt = world(layers[i].id, 0) else { continue }
+            layers[i].origin = wt.origin
+            layers[i].scale = wt.scale
+            layers[i].angleZ = wt.angle
+        }
     }
 
     /// animationlayers → 활성 베이스 애니(숫자 blend≥0.5 & visible 중 blend 최대). 나머지(딕셔너리 blend =
