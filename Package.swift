@@ -12,6 +12,10 @@ let package = Package(
             name: "Waple",
             dependencies: ["WapleCore", "WapleLibrary", "WapleRender"]
         ),
+        .executableTarget(
+            name: "WapleCompat",
+            dependencies: ["WapleCore"]
+        ),
         .testTarget(name: "WapleCoreTests", dependencies: ["WapleCore"]),
         .testTarget(name: "WapleLibraryTests", dependencies: ["WapleLibrary", "WapleCore"]),
         .testTarget(name: "WapleRenderTests", dependencies: ["WapleRender", "WapleCore"]),
