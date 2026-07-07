@@ -17,7 +17,7 @@ public struct WallpaperProperty: Equatable {
     public let key: String
     public let type: String
     public var value: PropertyValue
-    public let order: Int?
+    public let order: Double?
     public let condition: String?
     // 편집 UI 메타(project.json 원문): 라벨/슬라이더 범위/콤보 옵션.
     public var text: String? = nil
@@ -25,10 +25,13 @@ public struct WallpaperProperty: Equatable {
     public var max: Double? = nil
     public var step: Double? = nil
     public var options: [Option]? = nil
+    public var index: Int? = nil
+    public var mode: String? = nil
+    public var fileType: String? = nil
 
-    public init(key: String, type: String, value: PropertyValue, order: Int?, condition: String?,
+    public init(key: String, type: String, value: PropertyValue, order: Double?, condition: String?,
                 text: String? = nil, min: Double? = nil, max: Double? = nil, step: Double? = nil,
-                options: [Option]? = nil) {
+                options: [Option]? = nil, index: Int? = nil, mode: String? = nil, fileType: String? = nil) {
         self.key = key
         self.type = type
         self.value = value
@@ -39,53 +42,75 @@ public struct WallpaperProperty: Equatable {
         self.max = max
         self.step = step
         self.options = options
+        self.index = index
+        self.mode = mode
+        self.fileType = fileType
     }
 }
 
 public enum WallpaperProperties {
     public static func parse(generalProperties: [String: Any]) -> [WallpaperProperty] {
+        parse(generalProperties: generalProperties, localization: nil)
+    }
+
+    public static func parse(generalProperties: [String: Any],
+                             localization: [String: Any]?,
+                             localeIdentifier: String = Locale.preferredLanguages.first ?? Locale.current.identifier) -> [WallpaperProperty] {
+        let localized = localizationTable(localization, localeIdentifier: localeIdentifier)
         var result: [WallpaperProperty] = []
         for (key, raw) in generalProperties {
             guard let dict = raw as? [String: Any] else { continue }
             let type = (dict["type"] as? String) ?? ""
             var options: [WallpaperProperty.Option]? = nil
             if let opts = dict["options"] as? [[String: Any]] {
-                options = opts.map { WallpaperProperty.Option(label: ($0["label"] as? String) ?? "",
+                options = opts.map { WallpaperProperty.Option(label: localizedString(($0["label"] as? String) ?? "", table: localized) ?? "",
                                                               value: parseValue($0["value"], type: "")) }
-            }
-            func dbl(_ v: Any?) -> Double? {
-                if let d = v as? Double { return d }
-                if let i = v as? Int { return Double(i) }
-                return nil
             }
             result.append(WallpaperProperty(
                 key: key,
                 type: type,
                 value: parseValue(dict["value"], type: type),
-                order: dict["order"] as? Int,
+                order: parseNumber(dict["order"]),
                 condition: dict["condition"] as? String,
-                text: dict["text"] as? String,
-                min: dbl(dict["min"]), max: dbl(dict["max"]), step: dbl(dict["step"]),
-                options: options
+                text: localizedString(dict["text"] as? String, table: localized),
+                min: parseNumber(dict["min"]), max: parseNumber(dict["max"]), step: parseNumber(dict["step"]),
+                options: options,
+                index: parseInt(dict["index"]),
+                mode: dict["mode"] as? String,
+                fileType: dict["fileType"] as? String
             ))
         }
         return result.sorted {
-            ($0.order ?? Int.max, $0.key) < ($1.order ?? Int.max, $1.key)
+            ($0.order ?? Double.greatestFiniteMagnitude, $0.key) < ($1.order ?? Double.greatestFiniteMagnitude, $1.key)
         }
     }
 
     private static func parseValue(_ raw: Any?, type: String) -> PropertyValue {
-        switch type {
+        switch type.lowercased() {
         case "bool", "checkbox":
             return .bool((raw as? Bool) ?? false)
         case "slider":
-            return .number((raw as? Double) ?? 0)
+            return .number(parseNumber(raw) ?? 0)
         default:
             if let s = raw as? String { return .string(s) }
             if let b = raw as? Bool { return .bool(b) }
-            if let n = raw as? Double { return .number(n) }
+            if let n = parseNumber(raw) { return .number(n) }
             return .none
         }
+    }
+
+    private static func parseNumber(_ raw: Any?) -> Double? {
+        if let d = raw as? Double { return d }
+        if let i = raw as? Int { return Double(i) }
+        if let n = raw as? NSNumber { return n.doubleValue }
+        return nil
+    }
+
+    private static func parseInt(_ raw: Any?) -> Int? {
+        if let i = raw as? Int { return i }
+        if let d = raw as? Double { return Int(d) }
+        if let n = raw as? NSNumber { return n.intValue }
+        return nil
     }
 
     public static func parse(folderURL: URL) throws -> [WallpaperProperty] {
@@ -94,8 +119,10 @@ public enum WallpaperProperties {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw ProjectParseError.invalidJSON
         }
-        let general = (obj["general"] as? [String: Any])?["properties"] as? [String: Any] ?? [:]
-        return parse(generalProperties: general)
+        let generalObject = obj["general"] as? [String: Any]
+        let general = generalObject?["properties"] as? [String: Any] ?? [:]
+        let localization = generalObject?["localization"] as? [String: Any]
+        return parse(generalProperties: general, localization: localization)
     }
 
     /// 유저 오버라이드를 기본값 위에 병합한 효과값 목록(순수).
@@ -123,5 +150,46 @@ public enum WallpaperProperties {
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
               let s = String(data: data, encoding: .utf8) else { return "{}" }
         return s
+    }
+
+    private static func localizationTable(_ localization: [String: Any]?,
+                                          localeIdentifier: String) -> [String: String] {
+        guard let localization else { return [:] }
+        let normalized = localeIdentifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        let language = normalized.split(separator: "-").first.map(String.init)
+        let candidates = [
+            normalized,
+            language,
+            "en-us",
+            "en"
+        ].compactMap { $0 }
+
+        for candidate in candidates {
+            if let table = exactLocalizationTable(localization, key: candidate) { return table }
+            if candidate.count == 2,
+               let key = localization.keys.first(where: { $0.lowercased().hasPrefix(candidate + "-") }),
+               let table = exactLocalizationTable(localization, key: key) {
+                return table
+            }
+        }
+
+        for key in localization.keys.sorted() {
+            if let table = exactLocalizationTable(localization, key: key) { return table }
+        }
+        return [:]
+    }
+
+    private static func exactLocalizationTable(_ localization: [String: Any], key: String) -> [String: String]? {
+        guard let raw = localization.first(where: { $0.key.lowercased() == key.lowercased() })?.value as? [String: Any] else {
+            return nil
+        }
+        return raw.reduce(into: [String: String]()) { out, pair in
+            if let value = pair.value as? String { out[pair.key] = value }
+        }
+    }
+
+    private static func localizedString(_ raw: String?, table: [String: String]) -> String? {
+        guard let raw else { return nil }
+        return table[raw] ?? raw
     }
 }

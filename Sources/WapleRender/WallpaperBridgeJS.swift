@@ -28,6 +28,33 @@ enum WallpaperBridgeJS {
       function post(message) {
         try { window.webkit.messageHandlers.waple.postMessage(message); } catch (e) {}
       }
+      function installServiceWorkerShim() {
+        function registration() {
+          return {
+            installing: null, waiting: null, active: null, scope: String(window.location.href),
+            unregister: function () { return Promise.resolve(true); },
+            update: function () { return Promise.resolve(); }
+          };
+        }
+        var serviceWorkerShim = {
+          controller: null,
+          ready: Promise.resolve(registration()),
+          register: function () { return Promise.resolve(registration()); },
+          getRegistration: function () { return Promise.resolve(registration()); },
+          getRegistrations: function () { return Promise.resolve([registration()]); },
+          addEventListener: function () {},
+          removeEventListener: function () {},
+          dispatchEvent: function () { return true; }
+        };
+        try {
+          Object.defineProperty(window.navigator, 'serviceWorker', {
+            value: serviceWorkerShim, writable: false, configurable: true
+          });
+        } catch (e) {
+          try { window.navigator.serviceWorker = serviceWorkerShim; } catch (_) {}
+        }
+      }
+      installServiceWorkerShim();
       function forEachChild(fn) {
         for (var i = 0; i < window.frames.length; i++) {
           try {
@@ -39,6 +66,7 @@ enum WallpaperBridgeJS {
       var audioCb = null;
       defineFixed('wallpaperRegisterAudioListener', function (cb) {
         audioCb = (typeof cb === 'function') ? cb : null;
+        post({ type: audioCb ? 'audioListen' : 'audioUnlisten' });
       });
       defineFixed('__wapleAudio', function (arr) {
         if (audioCb) { try { audioCb(arr); } catch (e) {} }
@@ -46,6 +74,7 @@ enum WallpaperBridgeJS {
       // WE 의미론: wallpaperPropertyListener 는 "등록 즉시" 속성을 받는다 — 문서 로드 후(async)
       // 등록해도 유실되지 않도록 세터 훅 + pending/flush. (__waplePropsDelivered 는 GT 검증용.)
       var listener; var pendingProps = null; var pendingGeneral = null; var lastProps = null; var lastGeneral = null;
+      var pendingDirectoryAdds = [];
       window.__waplePropsDelivered = false;
       function flush() {
         if (!listener) { return; }
@@ -56,6 +85,15 @@ enum WallpaperBridgeJS {
         if (pendingGeneral && listener.applyGeneralProperties) {
           try { listener.applyGeneralProperties(pendingGeneral); } catch (e) {}
           pendingGeneral = null;
+        }
+        flushDirectoryAdds();
+      }
+      function flushDirectoryAdds() {
+        if (!listener || !listener.userDirectoryFilesAddedOrChanged) { return; }
+        var pending = pendingDirectoryAdds;
+        pendingDirectoryAdds = [];
+        for (var i = 0; i < pending.length; i++) {
+          try { listener.userDirectoryFilesAddedOrChanged(pending[i].name, pending[i].files); } catch (e) {}
         }
       }
       function propagateProps(props, general) {
@@ -92,6 +130,18 @@ enum WallpaperBridgeJS {
         lastProps = props; lastGeneral = general;
         pendingProps = props; pendingGeneral = general; flush();
         propagateProps(props, general);
+      });
+      defineBridge('__wapleDirectoryFilesAddedOrChanged', function (name, files) {
+        var event = { name: String(name), files: Array.isArray(files) ? files : [] };
+        pendingDirectoryAdds.push(event);
+        flushDirectoryAdds();
+        forEachChild(function (child) {
+          try {
+            if (typeof child.__wapleDirectoryFilesAddedOrChanged === 'function') {
+              child.__wapleDirectoryFilesAddedOrChanged(event.name, event.files);
+            }
+          } catch (e) {}
+        });
       });
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', installFrameObserver);
@@ -157,10 +207,16 @@ enum WallpaperBridgeJS {
       // 미디어 연동: 리스너 등록 시 네이티브에 알리고(폴링 시작), __wapleMedia 로 배달받는다.
       window.wallpaperMediaIntegration = { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 };
       var mediaCbs = { status: null, properties: null, timeline: null, thumbnail: null, playback: null };
+      var lastMedia = {};
       function regMedia(kind) {
         return function (cb) {
           mediaCbs[kind] = cb;
           post({ type: 'mediaListen' });
+          if (typeof cb === 'function' && Object.prototype.hasOwnProperty.call(lastMedia, kind)) {
+            setTimeout(function () {
+              try { cb(lastMedia[kind]); } catch (e) {}
+            }, 0);
+          }
         };
       }
       defineBridge('wallpaperRegisterMediaStatusListener', regMedia('status'));
@@ -169,6 +225,7 @@ enum WallpaperBridgeJS {
       defineBridge('wallpaperRegisterMediaTimelineListener', regMedia('timeline'));
       defineBridge('wallpaperRegisterMediaPlaybackListener', regMedia('playback'));
       defineBridge('__wapleMedia', function (kind, obj) {
+        lastMedia[kind] = obj;
         var cb = mediaCbs[kind];
         if (cb) { try { cb(obj); } catch (e) {} }
       });

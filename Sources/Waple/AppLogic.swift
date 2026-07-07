@@ -80,7 +80,9 @@ enum PresetResolver {
                 contentRating: project.contentRating ?? target.contentRating,
                 workshopId: project.workshopId ?? target.workshopId,
                 dependency: dependency,
-                folderURL: target.folderURL
+                folderURL: target.folderURL,
+                presetOverrides: project.presetOverrides,
+                presetFolderURL: project.folderURL
             )
         }
         return nil
@@ -183,6 +185,38 @@ enum PlaylistScheduling {
 
 /// 속성 편집 UI 결정(순수).
 enum PropertyControl {
+    enum Kind: Equatable {
+        case toggle
+        case slider
+        case picker
+        case color
+        case textInput
+        case file
+        case directory
+        case displayOnly
+    }
+
+    static func kind(forType type: String) -> Kind {
+        switch type.lowercased() {
+        case "bool", "checkbox":
+            return .toggle
+        case "slider":
+            return .slider
+        case "combo":
+            return .picker
+        case "color":
+            return .color
+        case "textinput":
+            return .textInput
+        case "file", "scenetexture":
+            return .file
+        case "directory":
+            return .directory
+        default:
+            return .displayOnly
+        }
+    }
+
     /// 슬라이더 범위. min>max·min==max·음수 상한 등 비정상 경계에서도 항상 유효한 오름차순 범위를 만든다.
     /// ClosedRange 는 lower<=upper 를 요구하므로(위반 시 트랩=앱 크래시), 제3자 콘텐츠의 뒤집힌/축퇴
     /// 경계를 하한 기준으로 클램프한다. 상한 부재 시 하한+1.

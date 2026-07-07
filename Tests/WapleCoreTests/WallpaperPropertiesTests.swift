@@ -26,6 +26,88 @@ final class WallpaperPropertiesTests: XCTestCase {
         XCTAssertEqual(props.map(\.key), ["z", "a"])
     }
 
+    func testPreservesFractionalOrderAndSortsByIt() {
+        let general: [String: Any] = [
+            "whole": ["type": "bool", "value": false, "order": 1],
+            "fraction": ["type": "bool", "value": false, "order": 0.5],
+            "none": ["type": "bool", "value": false],
+        ]
+        let props = WallpaperProperties.parse(generalProperties: general)
+        XCTAssertEqual(props.map(\.key), ["fraction", "whole", "none"])
+        XCTAssertEqual(props.first { $0.key == "fraction" }?.order, 0.5)
+    }
+
+    func testParsesIntegerSliderValuesAsNumbers() {
+        let props = WallpaperProperties.parse(generalProperties: [
+            "amount": ["type": "slider", "value": 2, "order": 0]
+        ])
+        XCTAssertEqual(props.first?.value, .number(2))
+    }
+
+    func testPreservesCorpusPropertyTypes() {
+        let general: [String: Any] = [
+            "file": ["type": "file", "value": "image.png", "order": 0],
+            "dir": ["type": "directory", "value": "/tmp/images", "order": 1, "mode": "fetchall"],
+            "tex": ["type": "scenetexture", "value": "user.tex", "order": 2],
+            "shortcut": ["type": "usershortcut", "value": "", "order": 3],
+            "group": ["type": "group", "text": "Group", "order": 4],
+            "label": ["type": "label", "text": "Label", "order": 5],
+            "title": ["type": "", "text": "Title", "order": 6],
+            "upper": ["type": "Text", "text": "Upper", "order": 7],
+        ]
+        let props = WallpaperProperties.parse(generalProperties: general)
+        let byKey = Dictionary(uniqueKeysWithValues: props.map { ($0.key, $0) })
+        XCTAssertEqual(byKey["file"]?.value, .string("image.png"))
+        XCTAssertEqual(byKey["dir"]?.value, .string("/tmp/images"))
+        XCTAssertEqual(byKey["tex"]?.value, .string("user.tex"))
+        XCTAssertEqual(byKey["shortcut"]?.value, .string(""))
+        XCTAssertEqual(byKey["group"]?.text, "Group")
+        XCTAssertEqual(byKey["label"]?.text, "Label")
+        XCTAssertEqual(byKey["title"]?.type, "")
+        XCTAssertEqual(byKey["upper"]?.type, "Text")
+    }
+
+    func testPreservesResourcePropertyMetadata() {
+        let general: [String: Any] = [
+            "file": ["type": "file", "value": "image.png", "order": 0, "fileType": "image"],
+            "dir": ["type": "directory", "value": "slides", "order": 1, "mode": "fetchall"],
+            "tex": ["type": "scenetexture", "value": "custom.png", "order": 2, "index": 4],
+        ]
+        let props = WallpaperProperties.parse(generalProperties: general)
+        let byKey = Dictionary(uniqueKeysWithValues: props.map { ($0.key, $0) })
+
+        XCTAssertEqual(byKey["file"]?.fileType, "image")
+        XCTAssertEqual(byKey["dir"]?.mode, "fetchall")
+        XCTAssertEqual(byKey["tex"]?.index, 4)
+    }
+
+    func testAppliesLocalizationToTextAndOptionLabels() {
+        let props = WallpaperProperties.parse(
+            generalProperties: [
+                "mode": [
+                    "type": "combo",
+                    "text": "ui_mode",
+                    "value": 1,
+                    "options": [
+                        ["label": "ui_mode_0", "value": 0],
+                        ["label": "ui_mode_1", "value": 1],
+                    ],
+                ]
+            ],
+            localization: [
+                "en-us": [
+                    "ui_mode": "Mode",
+                    "ui_mode_0": "Off",
+                    "ui_mode_1": "On",
+                ]
+            ],
+            localeIdentifier: "en-US"
+        )
+
+        XCTAssertEqual(props.first?.text, "Mode")
+        XCTAssertEqual(props.first?.options?.map(\.label), ["Off", "On"])
+    }
+
     func testPreservesCondition() {
         let general: [String: Any] = [
             "x": ["type": "bool", "value": true, "condition": "y.value == true"]

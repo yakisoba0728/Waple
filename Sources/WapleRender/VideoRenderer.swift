@@ -21,6 +21,7 @@ public final class VideoRenderer: WallpaperRenderer {
     private var pausedByOcclusion = false
     private var pausedManually = false
     private var mountToken: UInt64 = 0
+    private var attemptedPlaybackRecovery = false
     private let converterAvailable: () -> Bool
     private let convert: (URL, @escaping (URL?) -> Void) -> Void
 
@@ -42,6 +43,7 @@ public final class VideoRenderer: WallpaperRenderer {
         mountToken &+= 1
         let token = mountToken
         lastError = nil
+        attemptedPlaybackRecovery = false
         projectId = project.id
         pausedByOcclusion = false
         pausedManually = false
@@ -93,6 +95,7 @@ public final class VideoRenderer: WallpaperRenderer {
     /// 재생 가능한 컨테이너(mp4 등)를 실제 장착·재생. mount 가 직접 또는 ffmpeg 변환 완료 후 호출.
     private func attachPlayer(url: URL, container: NSView, project: WallpaperProject) throws {
         stopPlayback()
+        lastError = nil
         let token = mountToken
         projectId = project.id
         let item = AVPlayerItem(url: url)
@@ -159,6 +162,37 @@ public final class VideoRenderer: WallpaperRenderer {
             guard let self, self.mountToken == token else { return }
             self.lastError = error ?? RendererError.unsupportedCodec
             NSLog("%@", "[Waple] video playback failed for \(url.path): \(String(describing: error))")
+            self.recoverPlaybackFailureIfPossible(url: url, token: token)
+        }
+    }
+
+    private func recoverPlaybackFailureIfPossible(url: URL, token: UInt64) {
+        guard !attemptedPlaybackRecovery, converterAvailable(), container != nil else { return }
+        attemptedPlaybackRecovery = true
+        NSLog("%@", "[Waple] attempting ffmpeg recovery for native video: \(url.lastPathComponent)")
+        convert(url) { [weak self] mp4 in
+            DispatchQueue.main.async {
+                guard let self, self.mountToken == token, let container = self.container else { return }
+                guard let mp4 else { return }
+                do {
+                    let project = WallpaperProject(
+                        id: self.projectId ?? url.deletingPathExtension().lastPathComponent,
+                        type: .video,
+                        fileName: mp4.lastPathComponent,
+                        previewName: nil,
+                        title: mp4.deletingPathExtension().lastPathComponent,
+                        tags: [],
+                        contentRating: nil,
+                        workshopId: nil,
+                        dependency: nil,
+                        folderURL: mp4.deletingLastPathComponent()
+                    )
+                    try self.attachPlayer(url: mp4, container: container, project: project)
+                } catch {
+                    self.lastError = error
+                    NSLog("%@", "[Waple] ffmpeg recovery mount failed: \(error)")
+                }
+            }
         }
     }
 

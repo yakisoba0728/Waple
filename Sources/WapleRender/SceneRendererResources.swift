@@ -80,6 +80,8 @@ extension SceneRenderer {
                       let tex = TexImage.parse(texData),
                       let d = TexDecoder.rgba(from: tex, data: texData) {
                 decoded = d
+            } else if let d = bitmapRGBAFile(layer.textureEntryName) {
+                decoded = d
             } else { continue }
             guard let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else { continue }
             // 컴포지션 레이어의 효과 dims 는 화면(프로젝션) 근사 — 실제 src 는 draw 시 스냅샷.
@@ -565,6 +567,27 @@ extension SceneRenderer {
             t.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0, withBytes: ptr.baseAddress!, bytesPerRow: w * 4)
         }
         return t
+    }
+
+    private func bitmapRGBAFile(_ path: String) -> (pixels: Data, width: Int, height: Int)? {
+        guard path.hasPrefix("/"),
+              let image = NSImage(contentsOfFile: path),
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              cg.width > 0, cg.height > 0 else { return nil }
+        let width = cg.width
+        let height = cg.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let ctx = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return (Data(pixels), width, height)
     }
 
     /// 텍스트 오브젝트 준비: 폰트 바이트(pkg→base-assets) + 스크립트 엔진 + 초기 텍스트 래스터.

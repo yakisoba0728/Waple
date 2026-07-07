@@ -18,6 +18,11 @@ final class SceneAudioPlayerTests: XCTestCase {
                    startSilent: false, minTime: 0, maxTime: 0)
     }
 
+    private func silentSound(_ paths: [String], mode: String = "loop") -> SceneSound {
+        SceneSound(id: 1, sounds: paths, volume: 0.5, playbackMode: mode,
+                   startSilent: true, minTime: 0, maxTime: 0)
+    }
+
     func testPickReturnsSingleEntry() {
         let pkg = ScenePackage.assemble([(name: "sounds/a.mp3", data: Data([1, 2, 3]))])
         let r = SceneAudioPlayer.pick(sound(["sounds/a.mp3"]), package: pkg)
@@ -52,6 +57,15 @@ final class SceneAudioPlayerTests: XCTestCase {
         XCTAssertEqual(player.playerCount, 1)   // 플레이어 장착됨
         XCTAssertTrue(player.isPlaying)          // 재생 시작됨(음소거여도 play)
         player.teardown()
+        XCTAssertFalse(player.isPlaying)
+    }
+
+    func testStartSilentSoundsDoNotAutoPlay() {
+        let pkg = ScenePackage.assemble([(name: "sounds/t.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [silentSound(["sounds/t.wav"])], package: pkg, settingVolume: 1)
+
+        XCTAssertEqual(player.playerCount, 0)
         XCTAssertFalse(player.isPlaying)
     }
 

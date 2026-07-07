@@ -23,6 +23,7 @@ public enum ProjectJSONParser {
         let rawTitle = obj["title"] as? String
         let title = (rawTitle?.isEmpty == false) ? rawTitle! : id
         let tags = (obj["tags"] as? [String]) ?? []
+        let presetOverrides = parsePresetOverrides(obj["preset"])
         return WallpaperProject(
             id: id,
             type: type,
@@ -33,7 +34,38 @@ public enum ProjectJSONParser {
             contentRating: obj["contentrating"] as? String,
             workshopId: obj["workshopid"] as? String,
             dependency: obj["dependency"] as? String,
-            folderURL: folderURL
+            folderURL: folderURL,
+            presetOverrides: presetOverrides,
+            presetFolderURL: type == .preset ? folderURL : nil
         )
+    }
+
+    private static func parsePresetOverrides(_ value: Any?) -> [String: PropertyValue] {
+        guard let raw = value as? [String: Any] else { return [:] }
+        var out: [String: PropertyValue] = [:]
+        for (key, value) in raw {
+            if value is NSNull { continue }
+            if let bool = value as? Bool {
+                out[key] = .bool(bool)
+            } else if let number = parseNumber(value) {
+                out[key] = .number(number)
+            } else if let string = value as? String {
+                out[key] = .string(string)
+            }
+        }
+        return out
+    }
+
+    private static func parseNumber(_ value: Any) -> Double? {
+        switch value {
+        case let double as Double:
+            return double
+        case let int as Int:
+            return Double(int)
+        case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID():
+            return number.doubleValue
+        default:
+            return nil
+        }
     }
 }

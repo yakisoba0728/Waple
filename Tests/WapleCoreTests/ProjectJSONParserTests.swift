@@ -44,6 +44,16 @@ final class ProjectJSONParserTests: XCTestCase {
         XCTAssertEqual(p.type, .preset)
         XCTAssertEqual(p.dependency, "2593802559")
         XCTAssertNil(p.fileName)
+        XCTAssertEqual(p.presetFolderURL, URL(fileURLWithPath: "/tmp/123", isDirectory: true))
+    }
+
+    func testParsesPresetOverrideValues() throws {
+        let p = try parse(#"{"dependency":"2593802559","preset":{"enabled":true,"amount":2,"name":"Yeezus","unset":null}}"#)
+        XCTAssertEqual(p.type, .preset)
+        XCTAssertEqual(p.presetOverrides["enabled"], .bool(true))
+        XCTAssertEqual(p.presetOverrides["amount"], .number(2))
+        XCTAssertEqual(p.presetOverrides["name"], .string("Yeezus"))
+        XCTAssertNil(p.presetOverrides["unset"], "null preset values do not override dependency defaults")
     }
 
     func testMissingTitleFallsBackToFolderName() throws {

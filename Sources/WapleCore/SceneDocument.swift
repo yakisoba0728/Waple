@@ -312,7 +312,7 @@ extension SceneDocument {
             if !initialVisible && visibleScript == nil && !imageLayerCompositeIDs.contains(objectID) { continue }
             if let imagePath = obj["image"] as? String {
                 if let layer = parseLayer(obj, imagePath: imagePath, order: order, pw: pw, ph: ph,
-                                          package: package, assets: assets,
+                                          package: package, assets: assets, userProps: userProps,
                                           visibleScript: visibleScript, initialVisible: initialVisible) {
                     layers.append(layer)
                 }
@@ -365,8 +365,9 @@ extension SceneDocument {
     /// 애니(PropertyAnimation)·프로퍼티 스크립트·퍼펫·블렌드·부모/id/originZ 를 obj 에서 채운다.
     private static func parseLayer(_ obj: [String: Any], imagePath: String, order: Int, pw: Int, ph: Int,
                                    package: ScenePackage, assets: ((String) -> Data?)?,
+                                   userProps: [String: Any],
                                    visibleScript: String?, initialVisible: Bool) -> SceneLayer? {
-        guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets) else {
+        guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets, userProps: userProps) else {
             return nil  // 사유별 로그는 resolveLayerTexture 내부에서.
         }
         let angles = floats(obj["angles"])
@@ -634,7 +635,8 @@ extension SceneDocument {
 
     /// image(model) → material → texture name → "materials/<name>.tex". nil = 해석 실패(드롭+로그).
     private static func resolveLayerTexture(imagePath: String, package: ScenePackage,
-                                            assets: ((String) -> Data?)? = nil) -> LayerTexture? {
+                                            assets: ((String) -> Data?)? = nil,
+                                            userProps: [String: Any] = [:]) -> LayerTexture? {
         func data(_ name: String) -> Data? { package.data(for: name) ?? assets?(name) }
         guard let modelData = data(imagePath),
               let model = (try? JSONSerialization.jsonObject(with: modelData)) as? [String: Any],
@@ -648,7 +650,16 @@ extension SceneDocument {
         }
         // 텍스처 배열은 빈 슬롯을 null 로 표기할 수 있으므로(예: [null, "real.tex"]),
         // 첫 항목이 아니라 첫 non-null·non-empty 문자열을 사용한다.
-        let textures = pass0["textures"] as? [Any] ?? []
+        var textures = pass0["textures"] as? [Any] ?? []
+        if let userTextures = pass0["usertextures"] as? [Any] {
+            for (slot, rawUserKey) in userTextures.enumerated() {
+                guard let userKey = rawUserKey as? String,
+                      let override = userProps[userKey] as? String,
+                      !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                while textures.count <= slot { textures.append(NSNull()) }
+                textures[slot] = override
+            }
+        }
         guard let name = textures.compactMap({ $0 as? String }).first(where: { !$0.isEmpty }) else {
             // 무텍스처 머티리얼(예: util/solidlayer 의 shader "flat") → 솔리드 필.
             return .solid
@@ -657,6 +668,9 @@ extension SceneDocument {
             // 프레임버퍼 참조(fullscreen/compose/project layer) → 컴포지션 레이어.
             let fullscreen = (model["fullscreen"] as? Bool) ?? (model["autosize"] as? Bool) ?? false
             return .frameBuffer(fullscreen: fullscreen)
+        }
+        if name.hasPrefix("/") {
+            return .entry(name)
         }
         // 머티리얼의 텍스처 이름은 materials/ 상대 + 무확장("util/white" → "materials/util/white.tex").
         // pkg 에 실제로 있는 후보를 우선하고, 없으면 관례 경로를 반환(렌더러가 base-assets 폴백 시도).

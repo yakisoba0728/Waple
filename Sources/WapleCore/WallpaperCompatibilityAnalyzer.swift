@@ -130,7 +130,9 @@ public struct WallpaperCompatibilityReport: Codable, Equatable {
 
 public enum WallpaperCompatibilityAnalyzer {
     private static let currentPropertyTypes: Set<String> = [
-        "bool", "checkbox", "slider", "combo", "color", "textinput", "text"
+        "bool", "checkbox", "slider", "combo", "color", "textinput", "text",
+        "file", "directory", "scenetexture", "texture", "usershortcut", "group", "label",
+        "boo4", "uwu"
     ]
 
     private static let nativeVideoExtensions: Set<String> = [
@@ -319,14 +321,6 @@ public enum WallpaperCompatibilityAnalyzer {
                     projectID: project.id
                 ))
             }
-            if raw["preset"] != nil {
-                issues.append(WallpaperCompatibilityIssue(
-                    severity: .warning,
-                    code: .presetOverridesNotApplied,
-                    message: "Preset override payload is present; Waple currently resolves preset dependencies but does not fully merge preset values into properties.",
-                    projectID: project.id
-                ))
-            }
         }
 
         checkPreview(project: project, raw: raw, folderURL: folderURL, issues: &issues)
@@ -424,14 +418,6 @@ public enum WallpaperCompatibilityAnalyzer {
                                           projectID: String,
                                           issues: inout [WallpaperCompatibilityIssue]) -> [String: Int] {
         guard let general = raw["general"] as? [String: Any] else { return [:] }
-        if general["localization"] != nil {
-            issues.append(WallpaperCompatibilityIssue(
-                severity: .warning,
-                code: .localizedProperties,
-                message: "Property localization metadata is present; current property UI does not localize labels.",
-                projectID: projectID
-            ))
-        }
         guard let properties = general["properties"] as? [String: Any] else { return [:] }
         var counts: [String: Int] = [:]
         for key in properties.keys.sorted() {
@@ -447,29 +433,12 @@ public enum WallpaperCompatibilityAnalyzer {
                     propertyKey: key
                 ))
             }
-            if isFractionalNumber(property["order"]) {
-                issues.append(WallpaperCompatibilityIssue(
-                    severity: .warning,
-                    code: .fractionalPropertyOrder,
-                    message: "Property order is fractional; current WallpaperProperty.order is Int-based.",
-                    projectID: projectID,
-                    propertyKey: key
-                ))
-            }
-            if property["condition"] != nil {
+            if let condition = property["condition"] as? String,
+               !PropertyConditionEvaluator.canEvaluate(condition) {
                 issues.append(WallpaperCompatibilityIssue(
                     severity: .warning,
                     code: .propertyDisplayCondition,
-                    message: "Display condition is present; current property UI preserves but does not evaluate it.",
-                    projectID: projectID,
-                    propertyKey: key
-                ))
-            }
-            if type == "directory", stringValue(property["mode"]) == "fetchall" || boolValue(property["fetchall"]) == true {
-                issues.append(WallpaperCompatibilityIssue(
-                    severity: .warning,
-                    code: .directoryFetchAll,
-                    message: "Directory property uses fetchall mode; Web bridge needs add/change/remove event delivery for parity.",
+                    message: "Display condition is present but not supported by Waple's property condition evaluator.",
                     projectID: projectID,
                     propertyKey: key
                 ))
@@ -502,19 +471,19 @@ public enum WallpaperCompatibilityAnalyzer {
         }
 
         if html.range(of: "serviceWorker", options: .caseInsensitive) != nil {
-            add("serviceWorker", .webServiceWorker, .warning, "Web wallpaper references a service worker; WKWebView support and asset-scheme scope need verification.")
+            features.insert("serviceWorker")
         }
         if html.contains("wallpaperRequestRandomFileForProperty") {
             add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.")
         }
         if html.contains("wallpaperRegisterAudioListener") {
-            add("audioListener", .webAudioListener, .warning, "Web wallpaper registers an audio listener; provider should start lazily and throttle to Wallpaper Engine cadence.")
+            features.insert("audioListener")
         }
         if html.contains("wallpaperRegisterMedia") || html.contains("wallpaperMedia") {
-            add("mediaIntegration", .webMediaIntegration, .warning, "Web wallpaper uses media integration callbacks; Now Playing mapping needs parity verification.")
+            features.insert("mediaIntegration")
         }
         if html.range(of: #"https?://"#, options: [.regularExpression, .caseInsensitive]) != nil {
-            add("remoteNetwork", .remoteNetworkReference, .warning, "Web wallpaper references remote network resources; sandbox/CSP policy should decide whether this is allowed.")
+            features.insert("remoteNetwork")
         }
         return Array(features)
     }

@@ -12,13 +12,16 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var userPropertiesJSON: String?
     private var userPropertiesByKey: [String: WallpaperProperty] = [:]
     private var projectRootURL: URL?
-    private var audioProvider: SystemAudioSpectrumProvider?
+    var audioProviderFactory: () -> AudioSpectrumProviding = { SystemAudioSpectrumProvider() }
+    private var audioProvider: AudioSpectrumProviding?
+    private var hasAudioListener = false
     private var occlusionObserver: NSObjectProtocol?
     private var mouseMonitor: Any?
     private var clickMonitor: Any?
     private var interactionWindow: NSWindow?
     private var lastMouseForward = CFAbsoluteTimeGetCurrent()
     private var pausedManually = false
+    private var userSelectedResourceOverrides: [String: String] = [:]
 
     public init(mode: Mode) {
         self.mode = mode
@@ -66,12 +69,21 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 NSLog("%@", "[Waple] failed to parse properties for \(project.folderURL.path): \(error)")
             }
             // 유저 오버라이드 병합(속성 편집 UI) — WE 의 "저장된 사용자 값" 의미론.
-            let effective = WallpaperProperties.applying(overrides: UserPropertyStore.overrides(id: project.id), to: props)
+            let userOverrides = UserPropertyStore.overrides(id: project.id)
+            let effective = WallpaperProperties.applying(
+                overrides: UserPropertyStore.overrides(
+                    id: project.id,
+                    presetOverrides: project.presetOverrides,
+                    presetResourceRoot: project.presetFolderURL
+                ),
+                to: props
+            )
             userPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effective)
             userPropertiesByKey = Dictionary(uniqueKeysWithValues: effective.map { ($0.key, $0) })
+            userSelectedResourceOverrides = Self.absoluteResourceOverrides(from: userOverrides)
             projectRootURL = project.folderURL.standardizedFileURL
             web.load(URLRequest(url: url))
-            let provider = SystemAudioSpectrumProvider()
+            let provider = audioProviderFactory()
             provider.onFrame = { [weak self] frame in
                 let csv = frame.map { String(format: "%.3f", $0) }.joined(separator: ",")
                 self?.webView?.evaluateJavaScript("if(window.__wapleAudio)window.__wapleAudio([\(csv)]);")
@@ -145,7 +157,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         webView.evaluateJavaScript(js) { _, error in
             if let error { NSLog("%@", "[Waple] property injection failed: \(error)") }
         }
-        audioProvider?.start()
+        deliverFetchAllDirectories()
     }
 
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -162,7 +174,13 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     public func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard Self.isAllowedBridgeMessage(message, topURL: webView?.url) else { return }
         guard let dict = message.body as? [String: Any], let type = dict["type"] as? String else { return }
-        if type == "mediaListen" {
+        if type == "audioListen" {
+            hasAudioListener = true
+            if !pausedManually { audioProvider?.start() }
+        } else if type == "audioUnlisten" {
+            hasAudioListener = false
+            audioProvider?.stop()
+        } else if type == "mediaListen" {
             startMediaPolling()
         } else if type == "randomFile",
                   let name = dict["name"] as? String,
@@ -198,42 +216,82 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         guard !path.isEmpty else { return nil }
 
         if type == "file" {
-            guard let fileURL = WallpaperPathSecurity.containedFileURL(path, root: root),
-                  isContainedRegularFile(fileURL, root: root) else { return nil }
+            guard let fileURL = resourceURL(for: property, rawPath: path, projectRoot: root),
+                  isRegularFile(fileURL, containedIn: path.hasPrefix("/") ? nil : root) else { return nil }
             return fileURL.resolvingSymlinksInPath().path
         }
 
-        guard let directoryURL = WallpaperPathSecurity.containedFileURL(path, root: root),
-              isContainedDirectory(directoryURL, root: root) else { return nil }
+        guard let directoryURL = resourceURL(for: property, rawPath: path, projectRoot: root),
+              isDirectory(directoryURL, containedIn: path.hasPrefix("/") ? nil : root) else { return nil }
+        return randomFilePath(in: directoryURL)
+    }
+
+    private func deliverFetchAllDirectories() {
+        for key in userPropertiesByKey.keys.sorted() {
+            guard let property = userPropertiesByKey[key],
+                  property.type.lowercased() == "directory",
+                  property.mode?.lowercased() == "fetchall",
+                  let files = directoryFiles(for: property) else { continue }
+            deliverDirectoryFilesAddedOrChanged(propertyName: key, files: files)
+        }
+    }
+
+    private func directoryFiles(for property: WallpaperProperty) -> [String]? {
+        guard let root = projectRootURL,
+              case .string(let rawPath) = property.value else { return nil }
+        let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty,
+              let directoryURL = resourceURL(for: property, rawPath: path, projectRoot: root),
+              isDirectory(directoryURL, containedIn: path.hasPrefix("/") ? nil : root) else { return nil }
+
+        return regularFiles(in: directoryURL).map { $0.resolvingSymlinksInPath().path }
+    }
+
+    private func randomFilePath(in directoryURL: URL) -> String? {
+        regularFiles(in: directoryURL).randomElement()?.resolvingSymlinksInPath().path
+    }
+
+    private func regularFiles(in directoryURL: URL) -> [URL] {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
         guard let enumerator = FileManager.default.enumerator(
             at: directoryURL,
             includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles]
-        ) else { return nil }
+        ) else { return [] }
 
         var candidates: [URL] = []
         for case let url as URL in enumerator {
-            if isContainedRegularFile(url, root: root) {
+            if isRegularFile(url, containedIn: directoryURL) {
                 candidates.append(url)
             }
         }
-        return candidates.sorted { $0.path < $1.path }.randomElement()?.resolvingSymlinksInPath().path
+        return candidates.sorted { $0.path < $1.path }
     }
 
-    private func isContainedDirectory(_ url: URL, root: URL) -> Bool {
+    private func resourceURL(for property: WallpaperProperty, rawPath: String, projectRoot: URL) -> URL? {
+        if rawPath.hasPrefix("/") {
+            let selected = URL(fileURLWithPath: rawPath).standardizedFileURL.path
+            guard userSelectedResourceOverrides[property.key] == selected else { return nil }
+            return URL(fileURLWithPath: rawPath)
+        }
+        return WallpaperPathSecurity.containedFileURL(rawPath, root: projectRoot)
+    }
+
+    private func isDirectory(_ url: URL, containedIn root: URL?) -> Bool {
         var isDirectory = ObjCBool(false)
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               isDirectory.boolValue else { return false }
+        guard let root else { return true }
         let realRoot = root.resolvingSymlinksInPath().standardizedFileURL
         let realURL = url.resolvingSymlinksInPath().standardizedFileURL
         return WallpaperPathSecurity.contains(realURL, in: realRoot)
     }
 
-    private func isContainedRegularFile(_ url: URL, root: URL) -> Bool {
+    private func isRegularFile(_ url: URL, containedIn root: URL?) -> Bool {
         var isDirectory = ObjCBool(false)
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return false }
+        guard let root else { return true }
         let realRoot = root.resolvingSymlinksInPath().standardizedFileURL
         let realURL = url.resolvingSymlinksInPath().standardizedFileURL
         return WallpaperPathSecurity.contains(realURL, in: realRoot)
@@ -246,10 +304,34 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         }
     }
 
+    private func deliverDirectoryFilesAddedOrChanged(propertyName: String, files: [String]) {
+        let js = "window.__wapleDirectoryFilesAddedOrChanged && window.__wapleDirectoryFilesAddedOrChanged(\(Self.jsStringLiteral(propertyName)), \(Self.jsArrayLiteral(files)));"
+        webView?.evaluateJavaScript(js) { _, error in
+            if let error { NSLog("%@", "[Waple] directory fetchall callback failed: \(error)") }
+        }
+    }
+
     private static func jsStringLiteral(_ value: String) -> String {
         guard let data = try? JSONEncoder().encode(value),
               let string = String(data: data, encoding: .utf8) else { return "\"\"" }
         return string
+    }
+
+    private static func jsArrayLiteral(_ value: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let string = String(data: data, encoding: .utf8) else { return "[]" }
+        return string
+    }
+
+    private static func absoluteResourceOverrides(from overrides: [String: PropertyValue]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (key, value) in overrides {
+            guard case .string(let rawPath) = value else { continue }
+            let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard path.hasPrefix("/") else { continue }
+            out[key] = URL(fileURLWithPath: path).standardizedFileURL.path
+        }
+        return out
     }
 
     // MARK: - 미디어 연동(페이지가 wallpaperRegisterMedia* 를 등록한 경우에만 폴링)
@@ -306,7 +388,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     public func resume() {
         pausedManually = false
         setPausedJS(false)
-        audioProvider?.start()
+        if hasAudioListener { audioProvider?.start() }
     }
 
     public func teardown() {
@@ -323,8 +405,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         audioProvider = nil
         mediaPoller?.stop()
         mediaPoller = nil
+        hasAudioListener = false
         userPropertiesJSON = nil
         userPropertiesByKey = [:]
+        userSelectedResourceOverrides = [:]
         projectRootURL = nil
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "waple")
         webView?.removeFromSuperview()

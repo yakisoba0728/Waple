@@ -136,6 +136,28 @@ final class VideoRendererLifecycleTests: XCTestCase {
         renderer.teardown()
     }
 
+    func testNativePlayerItemFailureAttemptsFfmpegRecovery() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("broken.mp4")
+        try Data([0x00, 0x01, 0x02]).write(to: source)
+
+        var requestedConversion: URL?
+        let renderer = VideoRenderer(
+            converterAvailable: { true },
+            convert: { url, _ in requestedConversion = url })
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))
+        try renderer.mount(in: container, project: project(id: "broken-native-recover", fileName: "broken.mp4", dir: dir))
+
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while requestedConversion == nil && Date() < deadline {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+
+        XCTAssertEqual(requestedConversion, source)
+        renderer.teardown()
+    }
+
     private func project(id: String, fileName: String, dir: URL) -> WallpaperProject {
         WallpaperProject(id: id, type: .video, fileName: fileName, previewName: nil,
                          title: id, tags: [], contentRating: nil, workshopId: nil,

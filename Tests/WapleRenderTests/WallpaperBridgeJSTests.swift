@@ -20,6 +20,7 @@ final class WallpaperBridgeJSTests: XCTestCase {
             "wallpaperRegisterMediaThumbnailListener",
             "wallpaperRegisterMediaTimelineListener",
             "wallpaperRegisterMediaPlaybackListener",
+            "__wapleDirectoryFilesAddedOrChanged",
             // 미디어 상수
             "wallpaperMediaIntegration",
             "PLAYBACK_STOPPED", "PLAYBACK_PLAYING", "PLAYBACK_PAUSED",
@@ -37,6 +38,15 @@ final class WallpaperBridgeJSTests: XCTestCase {
         XCTAssertTrue(s.contains("PLAYBACK_STOPPED: \(NowPlayingInfo.State.stopped.rawValue)"))
         XCTAssertTrue(s.contains("PLAYBACK_PLAYING: \(NowPlayingInfo.State.playing.rawValue)"))
         XCTAssertTrue(s.contains("PLAYBACK_PAUSED: \(NowPlayingInfo.State.paused.rawValue)"))
+    }
+
+    func testBridgeShimsCorpusWebFeatures() {
+        let s = WallpaperBridgeJS.source
+        XCTAssertTrue(s.contains("audioListen"))
+        XCTAssertTrue(s.contains("audioUnlisten"))
+        XCTAssertTrue(s.contains("lastMedia"))
+        XCTAssertTrue(s.contains("serviceWorker"))
+        XCTAssertTrue(s.contains("register: function"))
     }
 }
 

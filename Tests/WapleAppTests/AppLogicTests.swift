@@ -167,7 +167,8 @@ final class AppLogicTests: XCTestCase {
         let preset = WallpaperProject(
             id: "preset1", type: .preset, fileName: nil, previewName: "preset.jpg",
             title: "Preset Title", tags: ["Relax"], contentRating: nil, workshopId: nil,
-            dependency: "dep1", folderURL: URL(fileURLWithPath: "/lib/preset1", isDirectory: true))
+            dependency: "dep1", folderURL: URL(fileURLWithPath: "/lib/preset1", isDirectory: true),
+            presetOverrides: ["amount": .number(0.75), "enabled": .bool(true)])
         let depFolder = URL(fileURLWithPath: "/lib/dep1", isDirectory: true)
         let resolved = PresetResolver.resolve(
             project: preset,
@@ -188,6 +189,9 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(project.previewName, "preset.jpg")
         XCTAssertEqual(project.folderURL, depFolder)
         XCTAssertEqual(project.dependency, "dep1")
+        XCTAssertEqual(project.presetFolderURL, preset.folderURL)
+        XCTAssertEqual(project.presetOverrides["amount"], .number(0.75))
+        XCTAssertEqual(project.presetOverrides["enabled"], .bool(true))
     }
 
     func testPresetResolverFallsBackToSiblingDependencyFolder() {
@@ -293,5 +297,18 @@ final class AppLogicTests: XCTestCase {
         let r = PropertyControl.sliderRange(min: 0, max: 1)        // 정상 경계는 그대로
         XCTAssertEqual(r.lowerBound, 0)
         XCTAssertEqual(r.upperBound, 1)
+    }
+
+    func testPropertyControlKindHandlesCorpusTypesCaseInsensitively() {
+        XCTAssertEqual(PropertyControl.kind(forType: "Text"), .displayOnly)
+        XCTAssertEqual(PropertyControl.kind(forType: ""), .displayOnly)
+        XCTAssertEqual(PropertyControl.kind(forType: "group"), .displayOnly)
+        XCTAssertEqual(PropertyControl.kind(forType: "label"), .displayOnly)
+        XCTAssertEqual(PropertyControl.kind(forType: "usershortcut"), .displayOnly)
+        XCTAssertEqual(PropertyControl.kind(forType: "boo4"), .displayOnly)
+        XCTAssertEqual(PropertyControl.kind(forType: "uwu"), .displayOnly)
+        XCTAssertEqual(PropertyControl.kind(forType: "file"), .file)
+        XCTAssertEqual(PropertyControl.kind(forType: "scenetexture"), .file)
+        XCTAssertEqual(PropertyControl.kind(forType: "directory"), .directory)
     }
 }

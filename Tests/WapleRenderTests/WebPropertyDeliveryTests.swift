@@ -215,6 +215,152 @@ final class WebPropertyDeliveryTests: XCTestCase {
         XCTAssertEqual(got["filePath"] as? String, expectedPath)
     }
 
+    func testRandomFileRequestAllowsUserSelectedExternalDirectoryOverride() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_web_external_\(UUID().uuidString)", isDirectory: true)
+        let external = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_external_pick_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        defer {
+            UserPropertyStore.reset(id: dir.lastPathComponent)
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: external)
+        }
+        let expected = external.appendingPathComponent("chosen.txt")
+        let expectedPath = expected.resolvingSymlinksInPath().path
+        try "ok".write(to: expected, atomically: true, encoding: .utf8)
+        UserPropertyStore.set(.string(external.path), key: "images", id: dir.lastPathComponent)
+        try """
+        <html><body><script>
+        window.__random = null;
+        window.wallpaperRequestRandomFileForProperty('images', function(name, filePath) {
+          window.__random = { name: name, filePath: filePath };
+        });
+        </script></body></html>
+        """.write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try """
+        {"type":"web","file":"index.html","title":"random","general":{"properties":{"images":{"type":"directory","value":""}}}}
+        """.write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { renderer.teardown() }
+
+        let got = try waitForJSON(renderer.webViewForTesting, script: "JSON.stringify(window.__random)") { obj in
+            obj["filePath"] as? String == expectedPath
+        }
+        XCTAssertEqual(got["filePath"] as? String, expectedPath)
+        XCTAssertFalse(WallpaperPathSecurity.contains(URL(fileURLWithPath: expectedPath),
+                                                      in: dir.resolvingSymlinksInPath()))
+    }
+
+    func testFetchAllDirectoryDeliversInitialFiles() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_web_fetchall_\(UUID().uuidString)", isDirectory: true)
+        let assets = dir.appendingPathComponent("assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let expected = assets.appendingPathComponent("first.txt")
+        let expectedPath = expected.resolvingSymlinksInPath().path
+        try "ok".write(to: expected, atomically: true, encoding: .utf8)
+        try """
+        <html><body><script>
+        window.__directory = null;
+        window.wallpaperPropertyListener = {
+          userDirectoryFilesAddedOrChanged: function(name, files) {
+            window.__directory = { name: name, files: files };
+          }
+        };
+        </script></body></html>
+        """.write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try """
+        {"type":"web","file":"index.html","title":"fetchall","general":{"properties":{"images":{"type":"directory","value":"assets","mode":"fetchall"}}}}
+        """.write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { renderer.teardown() }
+
+        let got = try waitForJSON(renderer.webViewForTesting, script: "JSON.stringify(window.__directory)") { obj in
+            (obj["files"] as? [String])?.contains(expectedPath) == true
+        }
+        XCTAssertEqual(got["name"] as? String, "images")
+        XCTAssertTrue((got["files"] as? [String])?.contains(expectedPath) == true)
+    }
+
+    func testAudioCaptureStartsOnlyAfterAudioListenerRegistration() throws {
+        final class FakeAudioProvider: AudioSpectrumProviding {
+            var onFrame: (([Float]) -> Void)?
+            var startCount = 0
+            var stopCount = 0
+            func start() { startCount += 1 }
+            func stop() { stopCount += 1 }
+        }
+
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_web_audio_lazy_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "<html><body>audio</body></html>".write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try #"{"type":"web","file":"index.html","title":"audio"}"#
+            .write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let renderer = WebRenderer(mode: .web)
+        let provider = FakeAudioProvider()
+        renderer.audioProviderFactory = { provider }
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { renderer.teardown() }
+
+        _ = try waitForJSON(renderer.webViewForTesting, script: "JSON.stringify({ ready: !!window.wallpaperRegisterAudioListener })") { obj in
+            obj["ready"] as? Bool == true
+        }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        XCTAssertEqual(provider.startCount, 0)
+
+        renderer.webViewForTesting?.evaluateJavaScript("window.wallpaperRegisterAudioListener(function(){});", completionHandler: nil)
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while Date() < deadline, provider.startCount == 0 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+        XCTAssertEqual(provider.startCount, 1)
+
+        renderer.webViewForTesting?.evaluateJavaScript("window.wallpaperRegisterAudioListener(null);", completionHandler: nil)
+        let stopDeadline = Date(timeIntervalSinceNow: 2)
+        while Date() < stopDeadline, provider.stopCount == 0 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+        XCTAssertEqual(provider.stopCount, 1)
+    }
+
+    func testServiceWorkerRegisterIsHarmlessNoopOnAssetScheme() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_web_sw_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        <html><body><script>
+        window.__sw = "pending";
+        navigator.serviceWorker.register("sw.js").then(function() {
+          window.__sw = "ok";
+        }).catch(function(e) {
+          window.__sw = "fail:" + e.name;
+        });
+        </script></body></html>
+        """.write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try "self.addEventListener('fetch', function(){});".write(to: dir.appendingPathComponent("sw.js"), atomically: true, encoding: .utf8)
+        try #"{"type":"web","file":"index.html","title":"sw"}"#
+            .write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { renderer.teardown() }
+
+        let got = try waitForJSON(renderer.webViewForTesting, script: "JSON.stringify({ sw: window.__sw })") { obj in
+            obj["sw"] as? String == "ok"
+        }
+        XCTAssertEqual(got["sw"] as? String, "ok")
+    }
+
     private func waitForJSON(_ web: WKWebView?, script: String,
                              timeout: TimeInterval = 5,
                              until predicate: ([String: Any]) -> Bool) throws -> [String: Any] {

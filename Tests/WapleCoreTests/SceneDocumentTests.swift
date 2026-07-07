@@ -123,6 +123,20 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers[0].textureEntryName, "materials/pic.tex")
     }
 
+    func testUserTextureOverrideReplacesMaterialTextureSlot() throws {
+        let materialUserTexture = #"{"passes":[{"shader":"genericimage2","textures":["pic"],"usertextures":["customimage"]}]}"#
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+                     "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", materialUserTexture)])
+        let doc = try SceneDocument.parse(package: p, userProps: ["customimage": "/tmp/yeezus.jpg"])
+
+        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertEqual(doc.layers[0].textureEntryName, "/tmp/yeezus.jpg")
+    }
+
     /// 실물(3147346398): origin/alpha 가 애니메이션 바인딩 객체 {"animation":{...},"value":X} 로 온다.
     /// 정적 value 를 언랩해야 배치/투명도가 맞는다(애니메이션 재생은 후속 기능).
     func testBindingObjectValueUnwrapped() throws {

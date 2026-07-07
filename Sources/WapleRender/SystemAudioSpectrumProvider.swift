@@ -3,9 +3,15 @@ import ScreenCaptureKit
 import AVFoundation
 import Accelerate
 
+protocol AudioSpectrumProviding: AnyObject {
+    var onFrame: (([Float]) -> Void)? { get set }
+    func start()
+    func stop()
+}
+
 /// 시스템 출력 오디오를 SCStream 으로 캡처해 FFT 스펙트럼(128 bin)을 onFrame 으로 전달.
 /// 권한 거부/실패 시 0 배열을 공급(배경은 계속 렌더). 메인 스레드 콜백.
-public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput {
+public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput, AudioSpectrumProviding {
     public var onFrame: (([Float]) -> Void)?
 
     private var stream: SCStream?

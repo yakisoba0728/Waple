@@ -64,21 +64,21 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
         XCTAssertEqual(report.projects.map(\.id), ["100", "200", "300", "400"])
 
         XCTAssertTrue(report.containsIssue(.unsupportedApplicationType, projectID: "200"))
-        XCTAssertTrue(report.containsIssue(.unsupportedPropertyType, projectID: "100", propertyKey: "pick"))
-        XCTAssertTrue(report.containsIssue(.unsupportedPropertyType, projectID: "100", propertyKey: "gallery"))
-        XCTAssertTrue(report.containsIssue(.fractionalPropertyOrder, projectID: "100", propertyKey: "amount"))
-        XCTAssertTrue(report.containsIssue(.propertyDisplayCondition, projectID: "100", propertyKey: "amount"))
-        XCTAssertTrue(report.containsIssue(.localizedProperties, projectID: "100"))
-        XCTAssertTrue(report.containsIssue(.directoryFetchAll, projectID: "100", propertyKey: "gallery"))
-        XCTAssertTrue(report.containsIssue(.webServiceWorker, projectID: "100"))
+        XCTAssertFalse(report.containsIssue(.unsupportedPropertyType, projectID: "100", propertyKey: "pick"))
+        XCTAssertFalse(report.containsIssue(.unsupportedPropertyType, projectID: "100", propertyKey: "gallery"))
+        XCTAssertFalse(report.containsIssue(.fractionalPropertyOrder, projectID: "100", propertyKey: "amount"))
+        XCTAssertFalse(report.containsIssue(.propertyDisplayCondition, projectID: "100", propertyKey: "amount"))
+        XCTAssertFalse(report.containsIssue(.localizedProperties, projectID: "100"))
+        XCTAssertFalse(report.containsIssue(.directoryFetchAll, projectID: "100", propertyKey: "gallery"))
+        XCTAssertFalse(report.containsIssue(.webServiceWorker, projectID: "100"))
         XCTAssertTrue(report.containsIssue(.webRandomFileBridge, projectID: "100"))
-        XCTAssertTrue(report.containsIssue(.presetOverridesNotApplied, projectID: "300"))
+        XCTAssertFalse(report.containsIssue(.presetOverridesNotApplied, projectID: "300"))
         XCTAssertTrue(report.containsIssue(.nonNativeVideoContainer, projectID: "400"))
 
         let markdown = report.markdown()
         XCTAssertTrue(markdown.contains("Wallpaper Compatibility Report"))
         XCTAssertTrue(markdown.contains("unsupportedApplicationType"))
-        XCTAssertTrue(markdown.contains("presetOverridesNotApplied"))
+        XCTAssertFalse(markdown.contains("presetOverridesNotApplied"))
     }
 
     func testReportsMissingRequiredFilesAndDependencies() throws {

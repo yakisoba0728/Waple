@@ -31,9 +31,13 @@ final class RealVideosGroundTruthTests: XCTestCase {
             var ok = false
             while Date() < deadline {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+                if let error = r.lastError {
+                    failed.append("\(project.id): playback error \(error)")
+                    break
+                }
                 if let p = r.player, p.currentItem?.status == .readyToPlay, p.rate > 0 { ok = true; break }
             }
-            if ok { tested += 1 } else {
+            if ok, r.lastError == nil { tested += 1 } else if r.lastError == nil {
                 failed.append("\(project.id): not playing (status=\(String(describing: r.player?.currentItem?.status.rawValue)))")
             }
             r.teardown()

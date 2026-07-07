@@ -24,6 +24,7 @@ public final class SceneAudioPlayer {
     /// - settingVolume: VideoSettings.volume(id:) (0…1). 오서 볼륨과 곱해 최종 음량.
     public func start(sounds: [SceneSound], package: ScenePackage, settingVolume: Float) {
         for snd in sounds {
+            if snd.startSilent { continue }
             guard let (name, data) = Self.pick(snd, package: package) else { continue }
             do {
                 let p = try AVAudioPlayer(data: data)

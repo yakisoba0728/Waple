@@ -251,6 +251,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var projH: Float = 1080
     var startTime = CFAbsoluteTimeGetCurrent()
     var lastFrameTime = CFAbsoluteTimeGetCurrent()
+    var shouldAnimate = false
+    var scenePausedAt: CFAbsoluteTime?
     var hasEffects = false
     var hasAudio = false
     var currentSpectrum = AudioSpectrum16.silent
@@ -310,6 +312,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
+        scenePausedAt = nil
+        shouldAnimate = false
         guard let pkgURL = pkgURL(in: project.folderURL) else {
             NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
             throw RendererError.assetMissing
@@ -330,7 +334,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 guard let base = BaseAssetsSettings.baseAssetsDirectory,
                       let url = WallpaperPathSecurity.containedFileURL(name, root: base) else { return nil }
                 return try? Data(contentsOf: url)
-            }, userProps: UserPropertyStore.rawOverrides(id: project.id))
+            }, userProps: UserPropertyStore.rawOverrides(
+                id: project.id,
+                presetOverrides: project.presetOverrides,
+                presetResourceRoot: project.presetFolderURL
+            ))
         } catch {
             NSLog("%@", "[Waple] scene mount: failed to parse \(pkgURL.path): \(error)")
             throw error
@@ -439,7 +447,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
              1,  1, 0,  1, 0,
         ]
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
-        if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts {
+        shouldAnimate = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts
+        if shouldAnimate {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
             view.preferredFramesPerSecond = 30
@@ -648,9 +657,33 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
 
-    public func pause() { videoRenderer?.pause(); sceneAudio?.pause() }
+    public func pause() {
+        videoRenderer?.pause()
+        sceneAudio?.pause()
+        audioProvider?.stop()
+        parallax.stop()
+        if scenePausedAt == nil { scenePausedAt = CFAbsoluteTimeGetCurrent() }
+        mtkView?.isPaused = true
+        mtkView?.enableSetNeedsDisplay = true
+    }
+
     public func resume() {
-        if let videoRenderer { videoRenderer.resume() } else { mtkView?.needsDisplay = true }
+        if let pausedAt = scenePausedAt {
+            let now = CFAbsoluteTimeGetCurrent()
+            startTime += now - pausedAt
+            lastFrameTime = now
+            scenePausedAt = nil
+        }
+        if let videoRenderer {
+            videoRenderer.resume()
+        } else if shouldAnimate {
+            mtkView?.isPaused = false
+            mtkView?.enableSetNeedsDisplay = false
+        } else {
+            mtkView?.needsDisplay = true
+        }
+        if hasAudio { audioProvider?.start() }
+        if parallaxEnabled || hasEffects { parallax.start() }
         sceneAudio?.resume()
     }
     public func teardown() {

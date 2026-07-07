@@ -10,6 +10,16 @@ public enum UserPropertyStore {
         UserDefaults.standard.dictionary(forKey: key(id)) ?? [:]
     }
 
+    public static func rawOverrides(id: String, presetOverrides: [String: PropertyValue]) -> [String: Any] {
+        rawOverrides(id: id, presetOverrides: presetOverrides, presetResourceRoot: nil)
+    }
+
+    public static func rawOverrides(id: String, presetOverrides: [String: PropertyValue], presetResourceRoot: URL?) -> [String: Any] {
+        var raw = rawDictionary(from: resolvingPresetResources(presetOverrides, root: presetResourceRoot))
+        raw.merge(rawOverrides(id: id)) { _, user in user }
+        return raw
+    }
+
     public static func overrides(id: String) -> [String: PropertyValue] {
         var out: [String: PropertyValue] = [:]
         for (k, v) in rawOverrides(id: id) {
@@ -18,6 +28,16 @@ public enum UserPropertyStore {
             else if let i = v as? Int { out[k] = .number(Double(i)) }
             else if let s = v as? String { out[k] = .string(s) }
         }
+        return out
+    }
+
+    public static func overrides(id: String, presetOverrides: [String: PropertyValue]) -> [String: PropertyValue] {
+        overrides(id: id, presetOverrides: presetOverrides, presetResourceRoot: nil)
+    }
+
+    public static func overrides(id: String, presetOverrides: [String: PropertyValue], presetResourceRoot: URL?) -> [String: PropertyValue] {
+        var out = resolvingPresetResources(presetOverrides, root: presetResourceRoot).filter { _, value in value != .none }
+        out.merge(overrides(id: id)) { _, user in user }
         return out
     }
 
@@ -34,5 +54,36 @@ public enum UserPropertyStore {
 
     public static func reset(id: String) {
         UserDefaults.standard.removeObject(forKey: key(id))
+    }
+
+    private static func rawDictionary(from overrides: [String: PropertyValue]) -> [String: Any] {
+        var raw: [String: Any] = [:]
+        for (key, value) in overrides {
+            switch value {
+            case .bool(let bool):
+                raw[key] = bool
+            case .number(let number):
+                raw[key] = number
+            case .string(let string):
+                raw[key] = string
+            case .none:
+                break
+            }
+        }
+        return raw
+    }
+
+    private static func resolvingPresetResources(_ overrides: [String: PropertyValue], root: URL?) -> [String: PropertyValue] {
+        guard let root else { return overrides }
+        var out = overrides
+        for (key, value) in overrides {
+            guard case .string(let rawPath) = value else { continue }
+            let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !path.isEmpty, !path.hasPrefix("/"),
+                  let url = WallpaperPathSecurity.containedFileURL(path, root: root),
+                  FileManager.default.fileExists(atPath: url.path) else { continue }
+            out[key] = .string(url.path)
+        }
+        return out
     }
 }
