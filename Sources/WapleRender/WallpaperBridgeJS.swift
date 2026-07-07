@@ -75,6 +75,7 @@ enum WallpaperBridgeJS {
       // WE 의미론: wallpaperPropertyListener 는 "등록 즉시" 속성을 받는다 — 문서 로드 후(async)
       // 등록해도 유실되지 않도록 세터 훅 + pending/flush. (__waplePropsDelivered 는 GT 검증용.)
       var listener; var pendingProps = null; var pendingGeneral = null; var lastProps = null; var lastGeneral = null;
+      var lastPaused = null;
       var pendingDirectoryAdds = [];
       window.__waplePropsDelivered = false;
       function flush() {
@@ -102,6 +103,15 @@ enum WallpaperBridgeJS {
           try {
             if (typeof child.__wapleApplyProps === 'function') {
               child.__wapleApplyProps(props, general);
+            }
+          } catch (e) {}
+        });
+      }
+      function propagatePaused(paused) {
+        forEachChild(function (child) {
+          try {
+            if (typeof child.__wapleSetPaused === 'function') {
+              child.__wapleSetPaused(paused);
             }
           } catch (e) {}
         });
@@ -134,6 +144,8 @@ enum WallpaperBridgeJS {
       });
       defineBridge('__wapleSetPaused', function (paused) {
         paused = !!paused;
+        if (lastPaused === paused) { return; }
+        lastPaused = paused;
         if (listener && listener.setPaused) {
           try { listener.setPaused(paused); } catch (e) {}
         }
@@ -141,6 +153,7 @@ enum WallpaperBridgeJS {
         if (typeof lifecycle === 'function') {
           try { lifecycle(); } catch (e) {}
         }
+        propagatePaused(paused);
       });
       defineBridge('__wapleDirectoryFilesAddedOrChanged', function (name, files) {
         var event = { name: String(name), files: Array.isArray(files) ? files : [] };

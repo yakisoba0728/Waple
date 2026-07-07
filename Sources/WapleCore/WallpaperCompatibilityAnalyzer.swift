@@ -238,7 +238,7 @@ public enum WallpaperCompatibilityAnalyzer {
         analyzeTypeAndFiles(project, raw: raw, folderURL: folderURL, knownProjectIDs: knownProjectIDs, issues: &issues)
         let propertyTypes = analyzeProperties(raw: raw, projectID: project.id, issues: &issues)
         var features = Set(analyzeWebFeatures(project: project, folderURL: folderURL, issues: &issues))
-        features.formUnion(analyzeSceneFeatures(project: project, folderURL: folderURL))
+        features.formUnion(analyzeSceneFeatures(project: project, folderURL: folderURL, issues: &issues))
 
         return WallpaperCompatibilityProjectReport(
             id: project.id,
@@ -293,6 +293,14 @@ public enum WallpaperCompatibilityAnalyzer {
                 }
             }
         case .scene:
+            if raw["file"] is String, project.fileName == nil {
+                issues.append(WallpaperCompatibilityIssue(
+                    severity: .error,
+                    code: .unsafeWallpaperFilePath,
+                    message: "Main file path is absolute, escapes the project folder, or uses a URL scheme.",
+                    projectID: project.id
+                ))
+            }
             let hasScenePackage = FileManager.default.fileExists(atPath: folderURL.appendingPathComponent("scene.pkg").path)
                 || FileManager.default.fileExists(atPath: folderURL.appendingPathComponent("gifscene.pkg").path)
             if !hasScenePackage, !existingMainFile(project: project, folderURL: folderURL, issues: &issues) {
@@ -502,10 +510,24 @@ public enum WallpaperCompatibilityAnalyzer {
         return Array(features)
     }
 
-    private static func analyzeSceneFeatures(project: WallpaperProject, folderURL: URL) -> [String] {
+    private static func analyzeSceneFeatures(project: WallpaperProject,
+                                             folderURL: URL,
+                                             issues: inout [WallpaperCompatibilityIssue]) -> [String] {
         guard project.type == .scene,
-              let packageURL = scenePackageURL(in: folderURL),
-              let package = try? ScenePackage.parse(Data(contentsOf: packageURL)) else { return [] }
+              let packageURL = scenePackageURL(in: folderURL) else { return [] }
+        let package: ScenePackage
+        do {
+            package = try ScenePackage.parse(Data(contentsOf: packageURL))
+        } catch {
+            issues.append(WallpaperCompatibilityIssue(
+                severity: .error,
+                code: .missingScenePackage,
+                message: "Scene package exists but could not be parsed by Waple: \(error)",
+                projectID: project.id,
+                relativePath: packageURL.lastPathComponent
+            ))
+            return []
+        }
         var features: Set<String> = ["scenePackage"]
 
         if package.entries.contains(where: { $0.name.hasPrefix("effects/") && $0.name.hasSuffix("effect.json") }) {
@@ -556,18 +578,22 @@ public enum WallpaperCompatibilityAnalyzer {
         var queue = [entryPath]
         var seen: Set<String> = []
         var totalBytes = 0
+        var processed = 0
         var sources: [WebFeatureSource] = []
 
-        while !queue.isEmpty, sources.count < maxFiles, totalBytes < maxBytes {
+        while !queue.isEmpty, sources.count < maxFiles, processed < maxFiles * 4 {
             let relativePath = queue.removeFirst()
             guard let normalized = WallpaperPathSecurity.normalizedRelativePath(relativePath),
                   !seen.contains(normalized),
                   let url = WallpaperPathSecurity.containedFileURL(normalized, root: folderURL) else { continue }
             seen.insert(normalized)
+            processed += 1
+            guard isWebFeatureTextPath(normalized) else { continue }
             guard let data = try? Data(contentsOf: url), !data.isEmpty else { continue }
-            totalBytes += data.count
-            guard totalBytes <= maxBytes,
+            guard data.count <= maxBytes,
+                  totalBytes + data.count <= maxBytes,
                   let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { continue }
+            totalBytes += data.count
             sources.append(WebFeatureSource(text: text))
 
             for reference in localWebReferences(in: text, basePath: normalized) {
@@ -579,10 +605,16 @@ public enum WallpaperCompatibilityAnalyzer {
         return sources
     }
 
+    private static func isWebFeatureTextPath(_ path: String) -> Bool {
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        return ext.isEmpty || ["html", "htm", "js", "mjs", "css", "json", "txt", "svg", "xml"].contains(ext)
+    }
+
     private static func localWebReferences(in text: String, basePath: String) -> [String] {
         let patterns = [
             #"(?:src|href)\s*=\s*["']([^"']+)["']"#,
             #"(?:new\s+Worker|importScripts|import)\s*\(\s*["']([^"']+)["']"#,
+            #"\bimport\s+(?:[^"']+\s+from\s+)?["']([^"']+)["']"#,
         ]
         var out: [String] = []
         for pattern in patterns {

@@ -106,11 +106,23 @@ public final class VideoRenderer: WallpaperRenderer {
                 self?.recordPlayerItemFailure(item.error, url: url, token: token)
             }
         }
-        item.asset.loadValuesAsynchronously(forKeys: ["playable"]) { [weak self] in
+        item.asset.loadValuesAsynchronously(forKeys: ["playable", "tracks", "duration"]) { [weak self] in
             var error: NSError?
             let status = item.asset.statusOfValue(forKey: "playable", error: &error)
-            if status == .failed || !item.asset.isPlayable {
+            if status == .failed {
                 self?.recordPlayerItemFailure(item.error ?? error, url: url, token: token)
+                return
+            }
+            var tracksError: NSError?
+            let tracksStatus = item.asset.statusOfValue(forKey: "tracks", error: &tracksError)
+            if tracksStatus == .failed || item.asset.tracks.isEmpty {
+                self?.recordPlayerItemFailure(item.error ?? tracksError, url: url, token: token)
+                return
+            }
+            var durationError: NSError?
+            let durationStatus = item.asset.statusOfValue(forKey: "duration", error: &durationError)
+            if durationStatus == .failed {
+                self?.recordPlayerItemFailure(item.error ?? durationError, url: url, token: token)
             }
         }
         // 배속 변경 시 음정 유지(WE 동작과 유사).

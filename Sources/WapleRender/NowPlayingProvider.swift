@@ -86,7 +86,7 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
     }
 
     /// osascript 실행 → stdout(성공 시). 실패/비정상 종료 → nil.
-    static func runOSAScript(_ source: String) -> String? {
+    static func runOSAScript(_ source: String, timeout: TimeInterval = 2) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         p.arguments = ["-e", source]
@@ -95,8 +95,17 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
         p.standardError = Pipe()
         do {
             try p.run()
-            p.waitUntilExit()
         } catch {
+            return nil
+        }
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            p.waitUntilExit()
+            finished.signal()
+        }
+        guard finished.wait(timeout: .now() + timeout) == .success else {
+            p.terminate()
+            _ = finished.wait(timeout: .now() + 0.5)
             return nil
         }
         guard p.terminationStatus == 0 else { return nil }

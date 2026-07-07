@@ -100,16 +100,20 @@ public enum WallpaperProperties {
     }
 
     private static func parseNumber(_ raw: Any?) -> Double? {
+        if let n = raw as? NSNumber {
+            return CFGetTypeID(n) == CFBooleanGetTypeID() ? nil : n.doubleValue
+        }
         if let d = raw as? Double { return d }
         if let i = raw as? Int { return Double(i) }
-        if let n = raw as? NSNumber { return n.doubleValue }
         return nil
     }
 
     private static func parseInt(_ raw: Any?) -> Int? {
+        if let n = raw as? NSNumber {
+            return CFGetTypeID(n) == CFBooleanGetTypeID() ? nil : n.intValue
+        }
         if let i = raw as? Int { return i }
         if let d = raw as? Double { return Int(d) }
-        if let n = raw as? NSNumber { return n.intValue }
         return nil
     }
 

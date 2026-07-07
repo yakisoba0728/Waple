@@ -106,9 +106,27 @@ final class LibraryViewModel: ObservableObject {
 
     /// 편집 가능한 속성 목록(기본값 + 저장된 오버라이드 병합).
     func editableProperties(for entry: LibraryEntry) -> [WallpaperProperty] {
-        guard let folder = store.resolveFolderURL(for: entry),
-              let props = try? WallpaperProperties.parse(folderURL: folder) else { return [] }
-        return WallpaperProperties.applying(overrides: UserPropertyStore.overrides(id: entry.id), to: props)
+        guard let folder = store.resolveFolderURL(for: entry) else { return [] }
+        let parsed = try? ProjectJSONParser.parse(folderURL: folder)
+        let resolved = parsed.flatMap { project in
+            PresetResolver.resolve(
+                project: project,
+                originalFolder: folder,
+                dependencyFolder: { dependency in
+                    guard let dependencyEntry = store.entries.first(where: { $0.id == dependency }) else { return nil }
+                    return store.resolveFolderURL(for: dependencyEntry)
+                },
+                parse: { try? ProjectJSONParser.parse(folderURL: $0) }
+            )
+        }
+        let propertyRoot = resolved?.folderURL ?? folder
+        guard let props = try? WallpaperProperties.parse(folderURL: propertyRoot) else { return [] }
+        let overrides = UserPropertyStore.overrides(
+            id: entry.id,
+            presetOverrides: resolved?.presetOverrides ?? [:],
+            presetResourceRoot: resolved?.presetFolderURL
+        )
+        return WallpaperProperties.applying(overrides: overrides, to: props)
     }
 
     func setProperty(key: String, value: PropertyValue, for entry: LibraryEntry) {

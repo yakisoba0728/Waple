@@ -29,6 +29,13 @@ final class NowPlayingParseTests: XCTestCase {
         XCTAssertEqual(AppleScriptNowPlayingProvider.runningPlayer(bundleIds: ["com.apple.Music"]), "Music")
         XCTAssertNil(AppleScriptNowPlayingProvider.runningPlayer(bundleIds: ["com.other.app"]))
     }
+
+    func testRunOSAScriptTimesOutWhenProcessStalls() {
+        let started = Date()
+        let output = AppleScriptNowPlayingProvider.runOSAScript("delay 3\nreturn \"done\"")
+        XCTAssertNil(output)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2.8)
+    }
 }
 
 /// 정적 프로바이더 주입 → 웹 페이지의 미디어 리스너가 상태/속성/타임라인을 실제로 수신하는지.

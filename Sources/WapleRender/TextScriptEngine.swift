@@ -462,6 +462,10 @@ public final class TextScriptEngine {
                         p += "true".count
                         skipWS(&p)
                         if p < n, chars[p] == ")" { return true }
+                    } else if let literal = numericLiteral(at: p), literal.isTruthy {
+                        p += literal.length
+                        skipWS(&p)
+                        if p < n, chars[p] == ")" { return true }
                     }
                 }
             } else if word(at: i, "for") {
@@ -474,12 +478,59 @@ public final class TextScriptEngine {
                         p += 1
                         skipWS(&p)
                         if p < n, chars[p] == ";" { return true }
+                    } else if forLoopHasHugeBound(start: p) {
+                        return true
                     }
                 }
             }
             i += 1
         }
         return false
+
+        func numericLiteral(at p: Int) -> (length: Int, isTruthy: Bool)? {
+            var q = p
+            var hasDigit = false
+            while q < n, chars[q].isNumber {
+                hasDigit = true
+                q += 1
+            }
+            guard hasDigit else { return nil }
+            if q < n, chars[q] == "." {
+                q += 1
+                while q < n, chars[q].isNumber { q += 1 }
+            }
+            if q < n, chars[q] == "e" || chars[q] == "E" {
+                q += 1
+                if q < n, chars[q] == "+" || chars[q] == "-" { q += 1 }
+                var hasExponent = false
+                while q < n, chars[q].isNumber {
+                    hasExponent = true
+                    q += 1
+                }
+                if !hasExponent { return nil }
+            }
+            let raw = String(chars[p..<q])
+            return (q - p, (Double(raw) ?? 0) != 0)
+        }
+
+        func forLoopHasHugeBound(start: Int) -> Bool {
+            var p = start
+            var semicolons = 0
+            var condition: [Character] = []
+            while p < n, chars[p] != ")" {
+                if chars[p] == ";" {
+                    semicolons += 1
+                    p += 1
+                    if semicolons == 2 { break }
+                    continue
+                }
+                if semicolons == 1 { condition.append(chars[p]) }
+                p += 1
+            }
+            guard semicolons >= 2 else { return false }
+            let text = String(condition)
+            return text.range(of: #"(?:\d{8,}|1e\d{2,})"#, options: [.regularExpression, .caseInsensitive]) != nil
+        }
     }
 
     /// `import` 키워드 직후 인덱스 j 에서 시작하는 import 문을 소비하고 no-op 바인딩 코드를 emit,

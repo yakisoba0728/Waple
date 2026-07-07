@@ -61,10 +61,11 @@ enum PresetResolver {
     ) -> WallpaperProject? {
         guard project.type == .preset else { return project }
         guard let dependency = project.dependency, !dependency.isEmpty else { return nil }
+        guard let safeDependency = WallpaperPathSecurity.normalizedPathComponent(dependency) else { return nil }
 
         var candidates: [URL] = []
-        if let fromLibrary = dependencyFolder(dependency) { candidates.append(fromLibrary) }
-        candidates.append(originalFolder.deletingLastPathComponent().appendingPathComponent(dependency, isDirectory: true))
+        if let fromLibrary = dependencyFolder(safeDependency) { candidates.append(fromLibrary) }
+        candidates.append(originalFolder.deletingLastPathComponent().appendingPathComponent(safeDependency, isDirectory: true))
 
         var seen = Set<String>()
         for folder in candidates {
@@ -79,7 +80,7 @@ enum PresetResolver {
                 tags: project.tags,
                 contentRating: project.contentRating ?? target.contentRating,
                 workshopId: project.workshopId ?? target.workshopId,
-                dependency: dependency,
+                dependency: safeDependency,
                 folderURL: target.folderURL,
                 presetOverrides: project.presetOverrides,
                 presetFolderURL: project.folderURL

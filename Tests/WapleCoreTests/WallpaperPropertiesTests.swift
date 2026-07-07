@@ -44,6 +44,28 @@ final class WallpaperPropertiesTests: XCTestCase {
         XCTAssertEqual(props.first?.value, .number(2))
     }
 
+    func testJSONBooleansAreNotCoercedIntoNumericFields() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WPPropsBoolNumber-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let json = """
+        {"type":"web","general":{"properties":{
+          "amount":{"type":"slider","value":true,"order":true,"min":false,"max":true,"step":true,"index":true}
+        }}}
+        """
+        try Data(json.utf8).write(to: dir.appendingPathComponent("project.json"))
+
+        let prop = try XCTUnwrap(WallpaperProperties.parse(folderURL: dir).first)
+
+        XCTAssertEqual(prop.value, .number(0))
+        XCTAssertNil(prop.order)
+        XCTAssertNil(prop.min)
+        XCTAssertNil(prop.max)
+        XCTAssertNil(prop.step)
+        XCTAssertNil(prop.index)
+    }
+
     func testPreservesCorpusPropertyTypes() {
         let general: [String: Any] = [
             "file": ["type": "file", "value": "image.png", "order": 0],

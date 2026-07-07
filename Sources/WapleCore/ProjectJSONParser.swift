@@ -33,7 +33,7 @@ public enum ProjectJSONParser {
             tags: tags,
             contentRating: obj["contentrating"] as? String,
             workshopId: parseStringOrNumber(obj["workshopid"]),
-            dependency: obj["dependency"] as? String,
+            dependency: WallpaperPathSecurity.normalizedPathComponent(obj["dependency"] as? String),
             folderURL: folderURL,
             presetOverrides: presetOverrides,
             presetFolderURL: type == .preset ? folderURL : nil

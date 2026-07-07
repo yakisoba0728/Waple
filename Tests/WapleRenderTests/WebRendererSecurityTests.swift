@@ -75,6 +75,24 @@ final class WebRendererSecurityTests: XCTestCase {
         XCTAssertNotEqual(task.responseHeaders["Access-Control-Allow-Origin"], "*")
     }
 
+    func testSchemeHandlerStreamsLargeFilesInChunks() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("waple-web-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let payload = Data(repeating: 0x7a, count: 200_000)
+        try payload.write(to: root.appendingPathComponent("large.bin"))
+
+        let handler = WallpaperSchemeHandler(rootURL: root)
+        let task = FakeSchemeTask(url: URL(string: "waple-asset://wallpaper/large.bin")!)
+        handler.webView(WKWebView(), start: task)
+        waitForTask(task)
+
+        XCTAssertEqual(task.statusCode, 200)
+        XCTAssertEqual(task.receivedData, payload)
+        XCTAssertGreaterThan(task.dataEventCount, 1)
+    }
+
     private func makeWebProject(html: String, extraFiles: [String: String] = [:]) throws -> URL {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("waple-web-\(UUID().uuidString)", isDirectory: true)
@@ -101,6 +119,7 @@ private final class FakeSchemeTask: NSObject, WKURLSchemeTask {
     let request: URLRequest
     private(set) var response: URLResponse?
     private(set) var receivedData = Data()
+    private(set) var dataEventCount = 0
     private(set) var finished = false
     private(set) var failedError: Error?
 
@@ -123,6 +142,7 @@ private final class FakeSchemeTask: NSObject, WKURLSchemeTask {
     }
 
     func didReceive(_ data: Data) {
+        dataEventCount += 1
         receivedData.append(data)
     }
 

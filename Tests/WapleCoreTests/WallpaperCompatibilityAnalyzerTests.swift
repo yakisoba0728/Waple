@@ -123,6 +123,38 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
         XCTAssertFalse(report.containsIssue(.missingWallpaperFile, projectID: "unsafe-web"))
     }
 
+    func testSceneReportsUnsafeRawFilePathEvenWhenScenePackageExists() throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let folder = root.appendingPathComponent("unsafe-scene", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(#"{"type":"scene","file":"../outside.json"}"#.utf8)
+            .write(to: folder.appendingPathComponent("project.json"))
+        try ScenePackageTests.makePkg([("scene.json", Data(#"{"objects":[]}"#.utf8))])
+            .write(to: folder.appendingPathComponent("scene.pkg"))
+
+        let report = try WallpaperCompatibilityAnalyzer.scan(rootURL: root)
+
+        XCTAssertTrue(report.containsIssue(.unsafeWallpaperFilePath, projectID: "unsafe-scene"))
+    }
+
+    func testMalformedScenePackageBlocksProject() throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let folder = root.appendingPathComponent("bad-scene", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(#"{"type":"scene","file":"scene.pkg"}"#.utf8)
+            .write(to: folder.appendingPathComponent("project.json"))
+        try Data("not-a-pkg".utf8).write(to: folder.appendingPathComponent("scene.pkg"))
+
+        let report = try WallpaperCompatibilityAnalyzer.scan(rootURL: root)
+
+        XCTAssertTrue(report.containsIssue(.missingScenePackage, projectID: "bad-scene"))
+        XCTAssertEqual(report.summary.blockedProjects, 1)
+    }
+
     func testWebFeatureScanFollowsLocalScripts() throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -160,6 +192,32 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
         XCTAssertTrue(features.contains("fileURL"), features.description)
         XCTAssertTrue(features.contains("remoteNetwork"), features.description)
         XCTAssertTrue(report.containsIssue(.webRandomFileBridge, projectID: "linked-web"))
+    }
+
+    func testWebFeatureScanFollowsStaticImportsAfterOversizedAssets() throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeProject(
+            id: "module-web",
+            in: root,
+            json: #"{"type":"web","file":"index.html"}"#,
+            files: [
+                "index.html": #"""
+                <script src="vendor/p5.js"></script>
+                <script type="module" src="js/main.js"></script>
+                """#,
+                "vendor/p5.js": String(repeating: "/* vendor */\n", count: 220_000),
+                "js/main.js": #"import "./feature.js";"#,
+                "js/feature.js": #"wallpaperRequestRandomFileForProperty("gallery", function() {});"#
+            ]
+        )
+
+        let report = try WallpaperCompatibilityAnalyzer.scan(rootURL: root)
+        let features = try XCTUnwrap(report.projects.first { $0.id == "module-web" }?.detectedFeatures)
+
+        XCTAssertTrue(features.contains("randomFile"), features.description)
+        XCTAssertTrue(report.containsIssue(.webRandomFileBridge, projectID: "module-web"))
     }
 
     func testScenePackageFeaturesAreDetected() throws {

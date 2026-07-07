@@ -130,7 +130,9 @@ final class TextEngineTests: XCTestCase {
 
     func testObviousUnboundedLoopsRejectedBeforeUpdateCanHang() {
         XCTAssertNil(TextScriptEngine(script: "export function update(v) { while (true) { } return 'x'; }"))
+        XCTAssertNil(TextScriptEngine(script: "export function update(v) { while (1) { } return 'x'; }"))
         XCTAssertNil(TextScriptEngine(script: "export function update(v) { for (;;) { } return 'x'; }"))
+        XCTAssertNil(TextScriptEngine(script: "export function update(v) { for (let i = 0; i < 1e12; i++) {} return 'x'; }"))
     }
 }
 

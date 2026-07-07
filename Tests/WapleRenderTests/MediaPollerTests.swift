@@ -15,6 +15,26 @@ final class MediaPollerTests: XCTestCase {
         func fetchArtwork() -> Data? { art }
     }
 
+    private final class SlowProvider: NowPlayingProvider {
+        private let lock = NSLock()
+        private(set) var active = 0
+        private(set) var maxActive = 0
+
+        func fetch() -> NowPlayingInfo? {
+            lock.lock()
+            active += 1
+            maxActive = max(maxActive, active)
+            lock.unlock()
+
+            Thread.sleep(forTimeInterval: 6)
+
+            lock.lock()
+            active -= 1
+            lock.unlock()
+            return NowPlayingInfo(state: .stopped)
+        }
+    }
+
     func testStateTransitionAndPropertyDedupe() {
         let poller = MediaPoller(provider: FixedProvider(info: nil))
         var playback = 0, props = 0, timeline = 0, thumb = 0
@@ -74,5 +94,16 @@ final class MediaPollerTests: XCTestCase {
         poller.start()  // fire() 로 즉시 1회 poll — 반복 간격 5s 라 wait(3s) 중 재발 없음
         wait(for: [gotProps, gotThumb], timeout: 3)
         poller.stop()
+    }
+
+    func testTimerDoesNotStartOverlappingFetchesWhenProviderStalls() {
+        let provider = SlowProvider()
+        let poller = MediaPoller(provider: provider)
+
+        poller.start()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 5.4))
+        poller.stop()
+
+        XCTAssertEqual(provider.maxActive, 1)
     }
 }

@@ -163,6 +163,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             if let error { NSLog("%@", "[Waple] property injection failed: \(error)") }
         }
         deliverFetchAllDirectories()
+        if pausedManually { setPausedJS(true) }
     }
 
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -385,12 +386,14 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     public func pause() {
+        guard !pausedManually else { return }
         pausedManually = true
         setPausedJS(true)
         audioProvider?.stop()
     }
 
     public func resume() {
+        guard pausedManually else { return }
         pausedManually = false
         setPausedJS(false)
         if hasAudioListener { audioProvider?.start() }

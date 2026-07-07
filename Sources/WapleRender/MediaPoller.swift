@@ -15,6 +15,8 @@ public final class MediaPoller {
     private var timer: Timer?
     private var last: NowPlayingInfo?
     private var lastTrackKey: String?
+    private let pollLock = NSLock()
+    private var pollInFlight = false
 
     public init(provider: NowPlayingProvider) { self.provider = provider }
     deinit { stop() }
@@ -33,6 +35,14 @@ public final class MediaPoller {
     }
 
     private func poll() {
+        pollLock.lock()
+        guard !pollInFlight else {
+            pollLock.unlock()
+            return
+        }
+        pollInFlight = true
+        pollLock.unlock()
+
         let prevKey = lastTrackKey
         // AppleScript 는 블로킹 — 백그라운드에서 fetch(+아트워크) 후 메인에서 배달.
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -42,8 +52,18 @@ public final class MediaPoller {
             if info.state != .stopped, key != prevKey {
                 artwork = (self?.provider as? ArtworkProviding)?.fetchArtwork()
             }
-            DispatchQueue.main.async { self?.deliver(info, artwork: artwork, trackKey: key) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.deliver(info, artwork: artwork, trackKey: key)
+                self.finishPoll()
+            }
         }
+    }
+
+    private func finishPoll() {
+        pollLock.lock()
+        pollInFlight = false
+        pollLock.unlock()
     }
 
     // internal(테스트 가능): 상태전이·dedupe 로직을 폴 타이밍 없이 직접 검증한다.

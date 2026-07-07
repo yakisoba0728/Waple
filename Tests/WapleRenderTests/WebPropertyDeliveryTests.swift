@@ -435,6 +435,128 @@ final class WebPropertyDeliveryTests: XCTestCase {
         XCTAssertEqual(got["paused"] as? [Bool], [true, false])
     }
 
+    func testRepeatedPauseResumeOnlyDispatchesLifecycleOnStateChanges() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_web_lifecycle_dedupe_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        <html><body><script>
+        window.__background = 0;
+        window.__foreground = 0;
+        window.__paused = [];
+        window.wallpaperWillGoBackground = function() { window.__background += 1; };
+        window.wallpaperWillGoForeground = function() { window.__foreground += 1; };
+        window.wallpaperPropertyListener = {
+          setPaused: function(value) { window.__paused.push(value); }
+        };
+        </script></body></html>
+        """.write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try #"{"type":"web","file":"index.html","title":"lifecycle"}"#
+            .write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                           project: ProjectJSONParser.parse(folderURL: dir))
+        defer { renderer.teardown() }
+
+        _ = try waitForJSON(renderer.webViewForTesting, script: "JSON.stringify({ ready: Array.isArray(window.__paused) })") {
+            $0["ready"] as? Bool == true
+        }
+        renderer.pause()
+        renderer.pause()
+        renderer.resume()
+        renderer.resume()
+
+        let got = try waitForJSON(renderer.webViewForTesting, script: """
+        JSON.stringify({ background: window.__background, foreground: window.__foreground, paused: window.__paused })
+        """) { obj in
+            (obj["background"] as? Int ?? 0) >= 1 && (obj["foreground"] as? Int ?? 0) >= 1
+        }
+        XCTAssertEqual(got["background"] as? Int, 1)
+        XCTAssertEqual(got["foreground"] as? Int, 1)
+        XCTAssertEqual(got["paused"] as? [Bool], [true, false])
+    }
+
+    func testPauseBeforeLoadIsReplayedAfterDocumentReady() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_web_lifecycle_preload_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        <html><body><script>
+        window.__background = 0;
+        window.__paused = [];
+        window.wallpaperWillGoBackground = function() { window.__background += 1; };
+        window.wallpaperPropertyListener = {
+          setPaused: function(value) { window.__paused.push(value); }
+        };
+        </script></body></html>
+        """.write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try #"{"type":"web","file":"index.html","title":"lifecycle"}"#
+            .write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                           project: ProjectJSONParser.parse(folderURL: dir))
+        defer { renderer.teardown() }
+        renderer.pause()
+
+        let got = try waitForJSON(renderer.webViewForTesting, script: """
+        JSON.stringify({ background: window.__background, paused: window.__paused })
+        """) { obj in
+            (obj["background"] as? Int ?? 0) == 1 && (obj["paused"] as? [Bool]) == [true]
+        }
+        XCTAssertEqual(got["background"] as? Int, 1)
+        XCTAssertEqual(got["paused"] as? [Bool], [true])
+    }
+
+    func testPauseResumeLifecyclePropagatesToSameOriginFrames() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_web_lifecycle_frame_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try #"<html><body><iframe id="child" src="child.html"></iframe></body></html>"#
+            .write(to: dir.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+        try """
+        <html><body><script>
+        window.__background = 0;
+        window.__foreground = 0;
+        window.__paused = [];
+        window.wallpaperWillGoBackground = function() { window.__background += 1; };
+        window.wallpaperWillGoForeground = function() { window.__foreground += 1; };
+        window.wallpaperPropertyListener = {
+          setPaused: function(value) { window.__paused.push(value); }
+        };
+        </script></body></html>
+        """.write(to: dir.appendingPathComponent("child.html"), atomically: true, encoding: .utf8)
+        try #"{"type":"web","file":"index.html","title":"lifecycle"}"#
+            .write(to: dir.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                           project: ProjectJSONParser.parse(folderURL: dir))
+        defer { renderer.teardown() }
+        _ = try waitForJSON(renderer.webViewForTesting, script: """
+        JSON.stringify((function() {
+          var w = document.getElementById('child').contentWindow;
+          return { ready: Array.isArray(w.__paused) };
+        })())
+        """) { $0["ready"] as? Bool == true }
+
+        renderer.pause()
+        renderer.resume()
+
+        let got = try waitForJSON(renderer.webViewForTesting, script: """
+        JSON.stringify((function() {
+          var w = document.getElementById('child').contentWindow;
+          return { background: w.__background, foreground: w.__foreground, paused: w.__paused };
+        })())
+        """) { obj in
+            (obj["background"] as? Int ?? 0) == 1 && (obj["foreground"] as? Int ?? 0) == 1
+        }
+        XCTAssertEqual(got["background"] as? Int, 1)
+        XCTAssertEqual(got["foreground"] as? Int, 1)
+        XCTAssertEqual(got["paused"] as? [Bool], [true, false])
+    }
+
     private func waitForJSON(_ web: WKWebView?, script: String,
                              timeout: TimeInterval = 5,
                              until predicate: ([String: Any]) -> Bool) throws -> [String: Any] {

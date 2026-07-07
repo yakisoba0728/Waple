@@ -110,4 +110,40 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertEqual(assignmentReapplyCount, 1, "assigned wallpaper edits should update live assigned renderers")
         XCTAssertEqual(globalApplyCount, 0, "assigned-only edits must not promote that wallpaper to the global selection")
     }
+
+    func testEditablePropertiesForPresetComeFromDependencyWithPresetOverrides() throws {
+        let storeDir = tempDir()
+        defer { try? FileManager.default.removeItem(at: storeDir) }
+        let corpus = tempDir()
+        defer { try? FileManager.default.removeItem(at: corpus) }
+
+        let dependency = corpus.appendingPathComponent("dep1", isDirectory: true)
+        try FileManager.default.createDirectory(at: dependency, withIntermediateDirectories: true)
+        try """
+        {"type":"web","file":"index.html","title":"Dependency","general":{"properties":{
+          "amount":{"type":"slider","value":0.5,"order":0},
+          "enabled":{"type":"bool","value":false,"order":1}
+        }}}
+        """.write(to: dependency.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+        try "<html></html>".write(to: dependency.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
+
+        let preset = corpus.appendingPathComponent("preset1", isDirectory: true)
+        try FileManager.default.createDirectory(at: preset, withIntermediateDirectories: true)
+        try """
+        {"type":"preset","title":"Preset","dependency":"dep1","preset":{"amount":0.75,"enabled":true}}
+        """.write(to: preset.appendingPathComponent("project.json"), atomically: true, encoding: .utf8)
+
+        let store = LibraryStore(baseDirectory: storeDir)
+        store.importParent(corpus)
+        let vm = LibraryViewModel(store: store,
+                                  playlist: PlaylistStore(baseDirectory: storeDir),
+                                  monitors: MonitorAssignmentStore(baseDirectory: storeDir))
+        let presetEntry = try XCTUnwrap(vm.entries.first { $0.id == "preset1" })
+
+        let props = vm.editableProperties(for: presetEntry)
+        let byKey = Dictionary(uniqueKeysWithValues: props.map { ($0.key, $0) })
+
+        XCTAssertEqual(byKey["amount"]?.value, .number(0.75))
+        XCTAssertEqual(byKey["enabled"]?.value, .bool(true))
+    }
 }

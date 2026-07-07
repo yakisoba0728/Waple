@@ -23,6 +23,12 @@ public enum WallpaperPathSecurity {
         return parts.joined(separator: "/")
     }
 
+    public static func normalizedPathComponent(_ raw: String?) -> String? {
+        guard let path = normalizedRelativePath(raw),
+              !path.contains("/") else { return nil }
+        return path
+    }
+
     public static func containedFileURL(_ relativePath: String?, root: URL) -> URL? {
         guard let path = normalizedRelativePath(relativePath) else { return nil }
         let rootURL = root.standardizedFileURL

@@ -218,6 +218,29 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(resolved?.folderURL, sibling)
     }
 
+    func testPresetResolverRejectsUnsafeSiblingDependencyPath() {
+        let presetFolder = URL(fileURLWithPath: "/wallpapers/preset1", isDirectory: true)
+        let outside = URL(fileURLWithPath: "/outside", isDirectory: true)
+        let preset = WallpaperProject(
+            id: "preset1", type: .preset, fileName: nil, previewName: nil,
+            title: "Preset", tags: [], contentRating: nil, workshopId: nil,
+            dependency: "../outside", folderURL: presetFolder)
+
+        let resolved = PresetResolver.resolve(
+            project: preset,
+            originalFolder: presetFolder,
+            dependencyFolder: { _ in nil },
+            parse: { folder in
+                folder.standardizedFileURL == outside
+                ? WallpaperProject(id: "outside", type: .web, fileName: "index.html", previewName: nil,
+                                   title: "Outside", tags: [], contentRating: nil, workshopId: nil,
+                                   dependency: nil, folderURL: folder)
+                : nil
+            })
+
+        XCTAssertNil(resolved)
+    }
+
     func testScreenChangeDetachesRenderersBeforeWindowRebuild() {
         var existing = [Tok("old1"), Tok("old2")]
         var tornDown: [String] = []
