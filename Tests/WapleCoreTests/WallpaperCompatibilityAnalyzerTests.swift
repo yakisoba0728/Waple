@@ -123,6 +123,80 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
         XCTAssertFalse(report.containsIssue(.missingWallpaperFile, projectID: "unsafe-web"))
     }
 
+    func testWebFeatureScanFollowsLocalScripts() throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeProject(
+            id: "linked-web",
+            in: root,
+            json: #"{"type":"web","file":"index.html"}"#,
+            files: [
+                "index.html": #"<script src="js/runtime.js"></script>"#,
+                "js/runtime.js": """
+                navigator.serviceWorker.register('sw.js');
+                window.wallpaperPropertyListener = {};
+                window.wallpaperWillGoBackground = function() {};
+                wallpaperRegisterAudioListener(function(){});
+                wallpaperRequestRandomFileForProperty('gallery', function(){});
+                wallpaperRegisterMediaStatusListener(function(){});
+                document.createElement('canvas').getContext('webgl');
+                var local = 'file:///tmp/picked.png';
+                fetch('https://example.invalid/data.json');
+                """
+            ]
+        )
+
+        let report = try WallpaperCompatibilityAnalyzer.scan(rootURL: root)
+        let features = try XCTUnwrap(report.projects.first { $0.id == "linked-web" }?.detectedFeatures)
+
+        XCTAssertTrue(features.contains("propertyListener"), features.description)
+        XCTAssertTrue(features.contains("webLifecycle"), features.description)
+        XCTAssertTrue(features.contains("serviceWorker"), features.description)
+        XCTAssertTrue(features.contains("audioListener"), features.description)
+        XCTAssertTrue(features.contains("randomFile"), features.description)
+        XCTAssertTrue(features.contains("mediaIntegration"), features.description)
+        XCTAssertTrue(features.contains("webGL"), features.description)
+        XCTAssertTrue(features.contains("fileURL"), features.description)
+        XCTAssertTrue(features.contains("remoteNetwork"), features.description)
+        XCTAssertTrue(report.containsIssue(.webRandomFileBridge, projectID: "linked-web"))
+    }
+
+    func testScenePackageFeaturesAreDetected() throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let folder = root.appendingPathComponent("scene-rich", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(#"{"type":"scene","file":"scene.json"}"#.utf8).write(to: folder.appendingPathComponent("project.json"))
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"image":"models/layer.json","effects":[{"file":"effects/shake/effect.json"}]},
+           {"particle":"particles/rain.json"},
+           {"text":{"script":"return 'clock';"}},
+           {"sound":["sounds/a.mp3"]},
+           {"model":"models/ship.mdl"},
+           {"light":"lpoint"}
+         ]}
+        """
+        let pkg = ScenePackageTests.makePkg([("scene.json", Data(scene.utf8))])
+        try pkg.write(to: folder.appendingPathComponent("scene.pkg"))
+
+        let report = try WallpaperCompatibilityAnalyzer.scan(rootURL: root)
+        let features = try XCTUnwrap(report.projects.first { $0.id == "scene-rich" }?.detectedFeatures)
+
+        XCTAssertTrue(features.contains("scenePackage"), features.description)
+        XCTAssertTrue(features.contains("sceneLayer"), features.description)
+        XCTAssertTrue(features.contains("sceneEffect"), features.description)
+        XCTAssertTrue(features.contains("sceneParticle"), features.description)
+        XCTAssertTrue(features.contains("sceneText"), features.description)
+        XCTAssertTrue(features.contains("sceneScript"), features.description)
+        XCTAssertTrue(features.contains("sceneSound"), features.description)
+        XCTAssertTrue(features.contains("scene3DModel"), features.description)
+        XCTAssertTrue(features.contains("sceneLight"), features.description)
+    }
+
     func testRealWallpaperDevCorpusCanBeSummarizedWhenAvailable() throws {
         let path = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS_ROOT"]
             ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev")

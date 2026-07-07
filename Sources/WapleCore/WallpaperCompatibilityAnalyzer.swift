@@ -237,7 +237,8 @@ public enum WallpaperCompatibilityAnalyzer {
 
         analyzeTypeAndFiles(project, raw: raw, folderURL: folderURL, knownProjectIDs: knownProjectIDs, issues: &issues)
         let propertyTypes = analyzeProperties(raw: raw, projectID: project.id, issues: &issues)
-        let features = analyzeWebFeatures(project: project, folderURL: folderURL, issues: &issues)
+        var features = Set(analyzeWebFeatures(project: project, folderURL: folderURL, issues: &issues))
+        features.formUnion(analyzeSceneFeatures(project: project, folderURL: folderURL))
 
         return WallpaperCompatibilityProjectReport(
             id: project.id,
@@ -248,7 +249,7 @@ public enum WallpaperCompatibilityAnalyzer {
             previewName: project.previewName,
             dependency: project.dependency,
             propertyTypes: propertyTypes,
-            detectedFeatures: features.sorted(),
+            detectedFeatures: Array(features).sorted(),
             issues: issues.sorted(by: issueSort)
         )
     }
@@ -451,16 +452,14 @@ public enum WallpaperCompatibilityAnalyzer {
                                            folderURL: URL,
                                            issues: inout [WallpaperCompatibilityIssue]) -> [String] {
         guard project.type == .web,
-              let fileName = project.fileName,
-              let fileURL = WallpaperPathSecurity.containedFileURL(fileName, root: folderURL),
-              let html = try? String(contentsOf: fileURL, encoding: .utf8) else { return [] }
+              let fileName = project.fileName else { return [] }
 
         var features: Set<String> = []
         func add(_ feature: String,
                  _ code: WallpaperCompatibilityIssueCode,
                  _ severity: WallpaperCompatibilitySeverity,
                  _ message: String) {
-            features.insert(feature)
+            guard features.insert(feature).inserted else { return }
             issues.append(WallpaperCompatibilityIssue(
                 severity: severity,
                 code: code,
@@ -470,22 +469,165 @@ public enum WallpaperCompatibilityAnalyzer {
             ))
         }
 
-        if html.range(of: "serviceWorker", options: .caseInsensitive) != nil {
-            features.insert("serviceWorker")
-        }
-        if html.contains("wallpaperRequestRandomFileForProperty") {
-            add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.")
-        }
-        if html.contains("wallpaperRegisterAudioListener") {
-            features.insert("audioListener")
-        }
-        if html.contains("wallpaperRegisterMedia") || html.contains("wallpaperMedia") {
-            features.insert("mediaIntegration")
-        }
-        if html.range(of: #"https?://"#, options: [.regularExpression, .caseInsensitive]) != nil {
-            features.insert("remoteNetwork")
+        for source in webFeatureSources(entryPath: fileName, folderURL: folderURL) {
+            let text = source.text
+            if text.contains("wallpaperPropertyListener") {
+                features.insert("propertyListener")
+            }
+            if text.contains("wallpaperWillGoBackground") || text.contains("wallpaperWillGoForeground") {
+                features.insert("webLifecycle")
+            }
+            if text.range(of: "serviceWorker", options: .caseInsensitive) != nil {
+                features.insert("serviceWorker")
+            }
+            if text.contains("wallpaperRequestRandomFileForProperty") {
+                add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.")
+            }
+            if text.contains("wallpaperRegisterAudioListener") {
+                features.insert("audioListener")
+            }
+            if text.contains("wallpaperRegisterMedia") || text.contains("wallpaperMedia") {
+                features.insert("mediaIntegration")
+            }
+            if text.range(of: #"\bwebgl\b|OES_"#, options: [.regularExpression, .caseInsensitive]) != nil {
+                features.insert("webGL")
+            }
+            if text.range(of: #"file:///"#, options: [.caseInsensitive]) != nil {
+                features.insert("fileURL")
+            }
+            if text.range(of: #"https?://"#, options: [.regularExpression, .caseInsensitive]) != nil {
+                features.insert("remoteNetwork")
+            }
         }
         return Array(features)
+    }
+
+    private static func analyzeSceneFeatures(project: WallpaperProject, folderURL: URL) -> [String] {
+        guard project.type == .scene,
+              let packageURL = scenePackageURL(in: folderURL),
+              let package = try? ScenePackage.parse(Data(contentsOf: packageURL)) else { return [] }
+        var features: Set<String> = ["scenePackage"]
+
+        if package.entries.contains(where: { $0.name.hasPrefix("effects/") && $0.name.hasSuffix("effect.json") }) {
+            features.insert("sceneEffect")
+        }
+        if package.entries.contains(where: { $0.name.hasSuffix(".mdl") }) {
+            features.insert("scene3DModel")
+        }
+        if package.entries.contains(where: { $0.name.hasPrefix("sounds/") }) {
+            features.insert("sceneSound")
+        }
+
+        guard let sceneData = package.data(for: "scene.json") ?? package.data(for: "gifscene.json"),
+              let scene = try? JSONSerialization.jsonObject(with: sceneData) as? [String: Any] else {
+            return Array(features)
+        }
+        let sceneText = String(data: sceneData, encoding: .utf8) ?? ""
+        if sceneText.contains(#""script""#) { features.insert("sceneScript") }
+
+        for case let object as [String: Any] in scene["objects"] as? [Any] ?? [] {
+            if object["image"] != nil { features.insert("sceneLayer") }
+            if object["particle"] != nil { features.insert("sceneParticle") }
+            if object["text"] != nil { features.insert("sceneText") }
+            if object["sound"] != nil { features.insert("sceneSound") }
+            if object["model"] != nil { features.insert("scene3DModel") }
+            if object["light"] != nil { features.insert("sceneLight") }
+            if object["effects"] != nil { features.insert("sceneEffect") }
+        }
+
+        return Array(features)
+    }
+
+    private static func scenePackageURL(in folderURL: URL) -> URL? {
+        for name in ["scene.pkg", "gifscene.pkg"] {
+            let url = folderURL.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
+    private struct WebFeatureSource {
+        let text: String
+    }
+
+    private static func webFeatureSources(entryPath: String, folderURL: URL) -> [WebFeatureSource] {
+        let maxFiles = 64
+        let maxBytes = 2_000_000
+        var queue = [entryPath]
+        var seen: Set<String> = []
+        var totalBytes = 0
+        var sources: [WebFeatureSource] = []
+
+        while !queue.isEmpty, sources.count < maxFiles, totalBytes < maxBytes {
+            let relativePath = queue.removeFirst()
+            guard let normalized = WallpaperPathSecurity.normalizedRelativePath(relativePath),
+                  !seen.contains(normalized),
+                  let url = WallpaperPathSecurity.containedFileURL(normalized, root: folderURL) else { continue }
+            seen.insert(normalized)
+            guard let data = try? Data(contentsOf: url), !data.isEmpty else { continue }
+            totalBytes += data.count
+            guard totalBytes <= maxBytes,
+                  let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { continue }
+            sources.append(WebFeatureSource(text: text))
+
+            for reference in localWebReferences(in: text, basePath: normalized) {
+                guard !seen.contains(reference), queue.count + sources.count < maxFiles else { continue }
+                queue.append(reference)
+            }
+        }
+
+        return sources
+    }
+
+    private static func localWebReferences(in text: String, basePath: String) -> [String] {
+        let patterns = [
+            #"(?:src|href)\s*=\s*["']([^"']+)["']"#,
+            #"(?:new\s+Worker|importScripts|import)\s*\(\s*["']([^"']+)["']"#,
+        ]
+        var out: [String] = []
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            for match in regex.matches(in: text, range: range) {
+                guard match.numberOfRanges > 1,
+                      let refRange = Range(match.range(at: 1), in: text),
+                      let resolved = resolveLocalWebReference(String(text[refRange]), basePath: basePath) else { continue }
+                out.append(resolved)
+            }
+        }
+        return out
+    }
+
+    private static func resolveLocalWebReference(_ raw: String, basePath: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !trimmed.hasPrefix("#"),
+              trimmed.range(of: #"^[a-zA-Z][a-zA-Z0-9+.-]*:"#,
+                            options: .regularExpression) == nil,
+              !trimmed.hasPrefix("//") else { return nil }
+        let withoutFragment = trimmed.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? trimmed
+        let withoutQuery = withoutFragment.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? withoutFragment
+        guard !withoutQuery.isEmpty else { return nil }
+
+        var parts: [String]
+        if withoutQuery.hasPrefix("/") {
+            parts = []
+        } else {
+            parts = basePath.split(separator: "/").dropLast().map(String.init)
+        }
+
+        for component in withoutQuery.split(separator: "/", omittingEmptySubsequences: false).map(String.init) {
+            if component.isEmpty || component == "." { continue }
+            if component == ".." {
+                guard !parts.isEmpty else { return nil }
+                parts.removeLast()
+            } else {
+                parts.append(component)
+            }
+        }
+
+        guard !parts.isEmpty else { return nil }
+        return WallpaperPathSecurity.normalizedRelativePath(parts.joined(separator: "/"))
     }
 
     private static func rawProjectJSON(folderURL: URL) -> [String: Any]? {
@@ -530,26 +672,6 @@ public enum WallpaperCompatibilityAnalyzer {
     private static func rawHasStringFile(_ fileName: String?) -> Bool {
         guard let fileName else { return false }
         return !fileName.isEmpty
-    }
-
-    private static func stringValue(_ raw: Any?) -> String? {
-        raw as? String
-    }
-
-    private static func boolValue(_ raw: Any?) -> Bool? {
-        raw as? Bool
-    }
-
-    private static func isFractionalNumber(_ raw: Any?) -> Bool {
-        guard let value = doubleValue(raw) else { return false }
-        return value.rounded(.towardZero) != value
-    }
-
-    private static func doubleValue(_ raw: Any?) -> Double? {
-        if let double = raw as? Double { return double }
-        if let int = raw as? Int { return Double(int) }
-        if let number = raw as? NSNumber { return number.doubleValue }
-        return nil
     }
 
     private static func unicodeEquivalentURL(for relativePath: String, root: URL) -> URL? {

@@ -32,7 +32,7 @@ public enum ProjectJSONParser {
             title: title,
             tags: tags,
             contentRating: obj["contentrating"] as? String,
-            workshopId: obj["workshopid"] as? String,
+            workshopId: parseStringOrNumber(obj["workshopid"]),
             dependency: obj["dependency"] as? String,
             folderURL: folderURL,
             presetOverrides: presetOverrides,
@@ -67,5 +67,12 @@ public enum ProjectJSONParser {
         default:
             return nil
         }
+    }
+
+    private static func parseStringOrNumber(_ value: Any?) -> String? {
+        if let string = value as? String { return string }
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return number.stringValue
     }
 }

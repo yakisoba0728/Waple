@@ -20,6 +20,7 @@ final class WallpaperBridgeJSTests: XCTestCase {
             "wallpaperRegisterMediaThumbnailListener",
             "wallpaperRegisterMediaTimelineListener",
             "wallpaperRegisterMediaPlaybackListener",
+            "wallpaperReady",
             "__wapleDirectoryFilesAddedOrChanged",
             // 미디어 상수
             "wallpaperMediaIntegration",
@@ -47,6 +48,12 @@ final class WallpaperBridgeJSTests: XCTestCase {
         XCTAssertTrue(s.contains("lastMedia"))
         XCTAssertTrue(s.contains("serviceWorker"))
         XCTAssertTrue(s.contains("register: function"))
+    }
+
+    func testBridgeContainsLifecycleCallbackNames() {
+        let s = WallpaperBridgeJS.source
+        XCTAssertTrue(s.contains("wallpaperWillGoBackground"))
+        XCTAssertTrue(s.contains("wallpaperWillGoForeground"))
     }
 }
 

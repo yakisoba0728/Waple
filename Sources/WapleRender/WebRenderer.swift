@@ -143,8 +143,13 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     private func setPausedJS(_ paused: Bool) {
-        webView?.evaluateJavaScript(
-            "if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.setPaused)window.wallpaperPropertyListener.setPaused(\(paused));")
+        webView?.evaluateJavaScript("""
+            if (window.__wapleSetPaused) {
+              window.__wapleSetPaused(\(paused));
+            } else if (window.wallpaperPropertyListener && window.wallpaperPropertyListener.setPaused) {
+              window.wallpaperPropertyListener.setPaused(\(paused));
+            }
+            """)
     }
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

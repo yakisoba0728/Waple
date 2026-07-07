@@ -68,6 +68,12 @@ final class ProjectJSONParserTests: XCTestCase {
         XCTAssertEqual(p.workshopId, "2913506072")
     }
 
+    func testParsesNumericWorkshopIdAsString() throws {
+        let p = try parse(#"{"type":"video","workshopid":1108426854}"#)
+
+        XCTAssertEqual(p.workshopId, "1108426854")
+    }
+
     func testInvalidJSONThrows() {
         XCTAssertThrowsError(try parse("not json {")) { error in
             XCTAssertEqual(error as? ProjectParseError, .invalidJSON)

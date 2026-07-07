@@ -71,6 +71,7 @@ enum WallpaperBridgeJS {
       defineFixed('__wapleAudio', function (arr) {
         if (audioCb) { try { audioCb(arr); } catch (e) {} }
       });
+      defineBridge('wallpaperReady', function () {});
       // WE 의미론: wallpaperPropertyListener 는 "등록 즉시" 속성을 받는다 — 문서 로드 후(async)
       // 등록해도 유실되지 않도록 세터 훅 + pending/flush. (__waplePropsDelivered 는 GT 검증용.)
       var listener; var pendingProps = null; var pendingGeneral = null; var lastProps = null; var lastGeneral = null;
@@ -130,6 +131,16 @@ enum WallpaperBridgeJS {
         lastProps = props; lastGeneral = general;
         pendingProps = props; pendingGeneral = general; flush();
         propagateProps(props, general);
+      });
+      defineBridge('__wapleSetPaused', function (paused) {
+        paused = !!paused;
+        if (listener && listener.setPaused) {
+          try { listener.setPaused(paused); } catch (e) {}
+        }
+        var lifecycle = paused ? window.wallpaperWillGoBackground : window.wallpaperWillGoForeground;
+        if (typeof lifecycle === 'function') {
+          try { lifecycle(); } catch (e) {}
+        }
       });
       defineBridge('__wapleDirectoryFilesAddedOrChanged', function (name, files) {
         var event = { name: String(name), files: Array.isArray(files) ? files : [] };
