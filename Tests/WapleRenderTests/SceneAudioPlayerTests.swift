@@ -56,6 +56,31 @@ final class SceneAudioPlayerTests: XCTestCase {
         XCTAssertNil(SceneAudioPlayer.nextIndex(mode: "random", current: 0, count: 0))
     }
 
+    // ── random 곡 간 간격(mintime/maxtime) ──────────────────────────────────
+
+    /// random 만 대기; loop/single 은 즉시(0).
+    func testGapSecondsOnlyRandom() {
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "loop", minTime: 2, maxTime: 5), 0)
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "single", minTime: 2, maxTime: 5), 0)
+        for _ in 0..<50 {
+            let g = SceneAudioPlayer.gapSeconds(mode: "random", minTime: 2, maxTime: 5)
+            XCTAssertGreaterThanOrEqual(g, 2); XCTAssertLessThanOrEqual(g, 5)
+        }
+    }
+
+    /// 경계: min>max 스왑, 미지정(0,0)→0, 음수 클램프, min==max→고정.
+    func testGapSecondsBoundaries() {
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "random", minTime: 0, maxTime: 0), 0)   // 미지정
+        for _ in 0..<50 {
+            let swap = SceneAudioPlayer.gapSeconds(mode: "random", minTime: 5, maxTime: 2)       // min>max 스왑
+            XCTAssertGreaterThanOrEqual(swap, 2); XCTAssertLessThanOrEqual(swap, 5)
+            let neg = SceneAudioPlayer.gapSeconds(mode: "random", minTime: -3, maxTime: 4)        // 음수 하한 클램프
+            XCTAssertGreaterThanOrEqual(neg, 0); XCTAssertLessThanOrEqual(neg, 4)
+        }
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "random", minTime: 3, maxTime: 3), 3)    // 고정
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "random", minTime: -5, maxTime: -1), 0)  // 전부 음수→0
+    }
+
     // ── 재생 통합(mute) ─────────────────────────────────────────────────────
 
     /// 유효한 무음 WAV 를 pkg 에서 추출해 AVAudioPlayer 로 재생 시작하는지(설정 음량 0=mute, TCC 불요).
