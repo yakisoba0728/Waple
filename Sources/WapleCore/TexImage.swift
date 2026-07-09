@@ -23,16 +23,41 @@ public struct TexImage {
     }
 
     /// 스프라이트시트 프레임(TEXS 섹션). 좌표는 이미지 픽셀 공간(imgW×imgH — 디코더가 패딩 크롭 후와 일치).
-    /// 실측(2026-07-06, "particles 256x1280".tex): "TEXS0003\0" | i32 count | (v3) i32 gifW | i32 gifH |
-    /// 프레임×32B: i32 imageId | f32 frametime | f32 x | f32 y | f32 width | f32 unk | f32 unk | f32 height.
-    /// 1280×256 가로 스트립에서 x=0,256,…,1024 로 확정(전 프레임 frametime 0.2).
+    /// 필드 순서(RePKG TexFrameInfoContainerReader 확정): i32 imageId | f32 frametime |
+    /// f32 x | f32 y | f32 width | f32 widthY | f32 heightX | f32 height (v1 은 지오메트리 i32).
+    /// 회전 프레임(아틀라스 패킹이 스프라이트를 돌려 넣음): Width 또는 Height 가 0 이고 유효 크기는
+    /// HeightX/WidthY 에서 온다 — atlas* 프로퍼티가 실제 서브렉트(top-left+extent)와 회전을 도출한다.
     public struct TexFrame: Equatable {
         public let imageId: Int
         public let time: Float
         public let x: Float, y: Float, width: Float, height: Float
-        public init(imageId: Int, time: Float, x: Float, y: Float, width: Float, height: Float) {
+        public let widthY: Float, heightX: Float
+        public init(imageId: Int, time: Float, x: Float, y: Float, width: Float, height: Float,
+                    widthY: Float = 0, heightX: Float = 0) {
             self.imageId = imageId; self.time = time
             self.x = x; self.y = y; self.width = width; self.height = height
+            self.widthY = widthY; self.heightX = heightX
+        }
+
+        /// RePKG TexToImageConverter: 부호 있는 유효 폭/높이(width==0 이면 heightX, height==0 이면 widthY).
+        /// 회전각·서브렉트 원점 도출에 부호가 필요하다. 비회전 프레임은 signedW=width, signedH=height.
+        private var signedW: Float { width != 0 ? width : heightX }
+        private var signedH: Float { height != 0 ? height : widthY }
+        /// 아틀라스 서브렉트 top-left(부호 있는 extent 로 min 보정) + 절대 extent.
+        public var atlasX: Float { Swift.min(x, x + signedW) }
+        public var atlasY: Float { Swift.min(y, y + signedH) }
+        public var atlasWidth: Float { abs(signedW) }
+        public var atlasHeight: Float { abs(signedH) }
+        /// 서브렉트를 똑바로 세우기 위한 시계방향 90° 회전 수(0/1/2/3). RePKG 각도식
+        /// -(atan2(sign h, sign w) - π/4) 을 90° 단위로: (+,+)→0 (+,-)→1 (-,-)→2 (-,+)→3.
+        /// 비회전(+,+)은 항상 0 → 기존 UV 경로와 byte-identical(코퍼스 무회귀). 방향(CW)은 스펙 도출값
+        /// — 코퍼스에 회전 프레임 실물이 없어 육안 검증 불가(ponytail: 반례 발견 시 부호 반전).
+        public var rotationQuarters: Int {
+            let sw = signedW >= 0, sh = signedH >= 0
+            if sw && sh { return 0 }
+            if sw && !sh { return 1 }
+            if !sw && !sh { return 2 }
+            return 3
         }
     }
 
@@ -195,11 +220,17 @@ public struct TexImage {
         out.reserveCapacity(count)
         for _ in 0..<count {
             guard let id = i32(p), let t = f32(p + 4),
-                  let x = geom(p + 8), let y = geom(p + 12), let w = geom(p + 16), let h = geom(p + 28),
+                  let x = geom(p + 8), let y = geom(p + 12),
+                  let w = geom(p + 16), let wy = geom(p + 20), let hx = geom(p + 24), let h = geom(p + 28),
                   t.isFinite, t > 0,
-                  w > 0, h > 0, x >= 0, y >= 0,
-                  x.isFinite, y.isFinite, w.isFinite, h.isFinite else { return [] }
-            out.append(TexFrame(imageId: id, time: t, x: x, y: y, width: w, height: h))
+                  x >= 0, y >= 0, x.isFinite, y.isFinite,
+                  w.isFinite, h.isFinite, wy.isFinite, hx.isFinite else { return [] }
+            // 회전 프레임(RePKG): Width|Height 가 0 → 유효 크기는 HeightX/WidthY 에서. 양 축 모두 0(퇴화)이면
+            // 프레임 전체 드롭(종전 w>0,h>0 안전망 유지) — 단 회전 시트는 더는 통째로 버리지 않는다.
+            let effW = w != 0 ? w : hx
+            let effH = h != 0 ? h : wy
+            guard abs(effW) > 0, abs(effH) > 0 else { return [] }
+            out.append(TexFrame(imageId: id, time: t, x: x, y: y, width: w, height: h, widthY: wy, heightX: hx))
             p += 32
         }
         return out
