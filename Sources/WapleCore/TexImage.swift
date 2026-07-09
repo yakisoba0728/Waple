@@ -114,6 +114,8 @@ public struct TexImage {
         if let (mips, imageFormat) = container {
             let mip = mips[0]
             switch imageFormat {
+            case -1 where flags & 0x20 != 0:                                     // TEXB0003 비디오: imageFormat 부재(-1)라 IsVideoTexture
+                return make(.video, mip.payloadRange, mip)                       // 플래그 직독(실측 2958411739 등 14페이지: flags=0x22, payload=ftyp mp4).
             case -1: break                                                       // raw → format 기반 디코드(아래 3)
             case 35: return make(.video, mip.payloadRange, mip)                  // MP4(ponytail: LZ4-mp4 는 추출기 해제 미지원 — 보류)
             default: return make(.embeddedImage, mip.payloadRange, mip)          // 인코딩 파일(JPEG=2 PNG=13 GIF=25 …) — ImageIO 가 내용으로 판별

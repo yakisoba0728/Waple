@@ -70,6 +70,21 @@ final class TexImageTests: XCTestCase {
         XCTAssertNil(TexImage.parse(Data("nope".utf8)))
     }
 
+    /// TEXB0003 비디오 텍스처(실측 2958411739/materials/Untitled.tex 클래스): imageFormat=-1 이지만
+    /// flags bit5(IsVideoTexture) 세트 + payload 가 raw mp4(ftyp). format 기반 디코드(.lz4RGBA)로
+    /// 떨어지면 크기 불일치로 실패한다 — 플래그 직독으로 .video 라우팅이 정답.
+    func testVideoFlagWithRawContainerRoutesToVideo() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
+        let mp4ish: [UInt8] = [0,0,0,0x20] + Array("ftypisom".utf8) + Array(repeating: 0, count: 8)
+        var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
+        b += i32(0)+i32(0x22)+i32(8)+i32(8)+i32(8)+i32(8)                 // format=0, flags=ClampUV|IsVideoTexture
+        b += Array("TEXB0003".utf8)+[0]+i32(1)+i32(-1)+i32(1)             // imageCount, imageFormat=-1, mipCount
+        b += i32(8)+i32(8)+i32(0)+i32(0)+i32(mp4ish.count)+mp4ish         // w,h,isLZ4=0,dec=0,comp,payload
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.payload, .video)
+        XCTAssertEqual(t?.isVideoTexture, true)
+    }
+
     /// flags@22(RePKG TexFlags): bit0 NoInterp, bit1 ClampUV, bit2 IsGif, bit5 IsVideoTexture.
     func testParsesFlags() {
         func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
