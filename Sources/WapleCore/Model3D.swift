@@ -1,8 +1,11 @@
 import Foundation
 import simd
 
-/// WE 3D 모델(MDLV0023) 파서 — 실측 리버스(설계 2026-07-03).
+/// WE 3D 모델(MDLV0016/0017/0019/0021/0023) 파서 — 실측 리버스(설계 2026-07-03, 구버전 2026-07-09).
 /// 코퍼스: 3737268876(젤다 OoT/MM, 100개), 3706286085(Sonic, 5개), 3662790108(태양계, 69개) — 174개 전수 MDLV0023.
+/// 구버전 퍼펫(전부 *_puppet.mdl): 2885492021(V0016 6개), 3113287126(V0017 2개), 3189665546(V0019 7개) —
+/// 메시 레이아웃은 V0023 과 동일하되 V0016 은 AABB 부재 + 정점 플래그 0x…09(stride 52), 스켈레톤 매직이
+/// MDLS0002(레코드 동일 + 13+80×본수 꼬리), 애니 매직이 MDLA0003/0004/0005(레이아웃 동일).
 ///
 /// 2D 퍼펫(MDLV0013)과의 diff:
 ///   • 매직: "MDLV0023" (2D "MDLV0013")
@@ -101,17 +104,23 @@ public struct Model3D: Equatable {
     /// 파스된 애니메이션(순서 = 파일 순서). 렌더러가 animationlayers 로 활성 애니를 선택.
     public var animations: [Animation] = []
 
-    /// 스키닝 정점 포맷 비트(formatFlag & 이 마스크 != 0 → 본/웨이트 존재, stride 80).
+    /// 스키닝 정점 포맷 비트(formatFlag & 이 마스크 != 0 → 스키닝 선언 — 실제 본/웨이트 필드 존재는
+    /// 스트라이드 여유(skinFieldsFit)로 최종 판정).
     private static let skinMask: UInt32 = 0x0180_0000
-    private static let staticStride = 48
-    private static let skinnedStride = 80
+
+    /// 수용 버전(전부 실물 바이트 대조 완료 2026-07-09): 0023 정본; 0021 동일 레이아웃(3367988661 전수);
+    /// 0017/0019 는 메시가 0023 과 동일하고 스켈레톤 매직만 MDLS0002(WLOP 2/2, 3189665546 7/7 대조);
+    /// 0016 은 메시에 AABB 가 없고 정점 포맷 플래그가 0x…09(normal/tangent 없는 stride 52 = V0013 정점 레이아웃,
+    /// 2885492021 6/6 대조 — weights 합 1.0, uv∈[0,1], maxIdx==vCount-1 전수 일치).
+    /// 미목격 버전(0018/0020/0022 등)은 거부 — 추측 파스로 이상 렌더를 만드느니 스킵이 낫다.
+    private static let acceptedMagics: Set<String> = ["MDLV0016", "MDLV0017", "MDLV0019", "MDLV0021", "MDLV0023"]
 
     public static func parse(_ data: Data) -> Model3D? {
         let bytes = [UInt8](data)
-        // MDLV0023 정본. MDLV0021 은 헤더·메시 레이아웃이 동일(실측 2026-07-09, 3367988661 전수: u8 0 |
-        // formatFlag 0x1800009 | const 1 | meshCount | material cstring 가 0023 과 일치) — 동일 경로로 수용.
         let magic = String(bytes: bytes[0..<min(8, bytes.count)], encoding: .utf8)
-        guard bytes.count > 21, magic == "MDLV0023" || magic == "MDLV0021" else { return nil }
+        guard bytes.count > 21, let magic, acceptedMagics.contains(magic) else { return nil }
+        let version = Int(magic.suffix(4)) ?? 23
+        let hasAABB = version >= 17   // V0016 은 메시 헤더에 AABB 24B 가 없다(실측)
 
         func u32(_ o: Int) -> UInt32? {
             guard o >= 0, o + 4 <= bytes.count else { return nil }
@@ -137,44 +146,65 @@ public struct Model3D: Equatable {
 
         for mi in 0..<Int(meshCount) {
             guard let material = cstring(&o) else { return nil }
-            guard let _ = u32(o) else { return nil }             // u32(=0)
+            guard let _ = u32(o) else { return nil }             // u32(관측 0, Kirby mesh1 은 2 — 값 미사용)
             o += 4
-            // AABB(min xyz, max xyz)
-            guard let minx = f32(o), let miny = f32(o + 4), let minz = f32(o + 8),
-                  let maxx = f32(o + 12), let maxy = f32(o + 16), let maxz = f32(o + 20) else { return nil }
-            o += 24
+            // AABB(min xyz, max xyz) — V0017+ 만. V0016 은 부재(스킵 시 fmtflag 를 0 으로 읽어 전멸).
+            var minx: Float = 0, miny: Float = 0, minz: Float = 0
+            var maxx: Float = 0, maxy: Float = 0, maxz: Float = 0
+            if hasAABB {
+                guard let a = f32(o), let b = f32(o + 4), let c = f32(o + 8),
+                      let d = f32(o + 12), let e = f32(o + 16), let f = f32(o + 20) else { return nil }
+                (minx, miny, minz, maxx, maxy, maxz) = (a, b, c, d, e, f)
+                o += 24
+            }
             guard let formatFlag = u32(o) else { return nil }
             o += 4
+            // 정점 포맷 플래그(실측 4종 대조로 확정): bit1(0x2)=normal 3f, bit2(0x4)=tangent 4f,
+            // skinMask=본/웨이트. pos 3f 와 uv 2f 는 전 변형 공통(bit0/bit3 semantics 미상 — 무시).
+            //   0x0f(48/80)  0x09(52, V0016)  0x0e(sl_puppet 84 변종)  0x21(Kirby channelmap 44).
             let skinned = (formatFlag & skinMask) != 0
-            var stride = skinned ? skinnedStride : staticStride
+            let hasNormal = formatFlag & 0x2 != 0
+            let hasTangent = formatFlag & 0x4 != 0
+            var stride = 12 + (hasNormal ? 12 : 0) + (hasTangent ? 16 : 0) + (skinned ? 32 : 0) + 8
             guard let vSizeRaw = u32(o) else { return nil }
             o += 4
             let vSize = Int(vSizeRaw)
             guard vSize > 0, o + vSize <= bytes.count else { return nil }
             // 변종 스트라이드 자기기술 추론(2026-07-06, 실물 sl_puppet.mdl = 84 = 기지 80 + 미상 4B,
             // 플래그 0x181000e): 표 스트라이드로 안 나눠지면 인덱스 블롭의 maxIndex+1 을 정점 수로 보고
-            // vSize/count 가 정수(44..96)면 채택. 필드는 꼬리 고정(uv@-8, weights@-24, bones@-40 —
+            // vSize/count 가 정수(20..96)면 채택. 필드는 꼬리 고정(uv@-8, weights@-24, bones@-40 —
             // 기지 80/48 과 동일 오프셋이라 무회귀), 중간(normal/tangent)은 고전 오프셋(unlit 미사용).
             if vSize % stride != 0 {
                 guard let inferred = inferStride(bytes: bytes, indexBlobAt: o + vSize, vSize: vSize),
-                      inferred >= (skinned ? 76 : 48) else { return nil }
+                      inferred >= 20 else { return nil }   // pos(12)+uv(8) 최소
                 stride = inferred
             }
             guard vSize % stride == 0 else { return nil }
             let vCount = vSize / stride
+            // 본/웨이트 필드는 스트라이드에 실제 자리가 있을 때만 읽는다. 스키닝 선언이라도 자리가 없으면
+            // (Kirby channelmap: flag 0x00800021, stride 44 = pos+미상24B+uv) pos+uv 만 — 가중 0 스킨 합성으로
+            // 정점이 원점 붕괴하는 것보다 정적 메시가 낫다(graceful degradation).
+            let skinFieldsFit = skinned && stride >= 12 + (hasNormal ? 12 : 0) + (hasTangent ? 16 : 0) + 40
 
             var vertices: [Vertex] = []
             vertices.reserveCapacity(vCount)
             for vi in 0..<vCount {
                 let b = o + vi * stride
-                guard let px = f32(b), let py = f32(b + 4), let pz = f32(b + 8),
-                      let nx = f32(b + 12), let ny = f32(b + 16), let nz = f32(b + 20),
-                      let tx = f32(b + 24), let ty = f32(b + 28), let tz = f32(b + 32), let tw = f32(b + 36)
-                else { return nil }
+                guard let px = f32(b), let py = f32(b + 4), let pz = f32(b + 8) else { return nil }
                 let pos = SIMD3<Float>(px, py, pz)
-                let nrm = SIMD3<Float>(nx, ny, nz)
-                let tan = SIMD4<Float>(tx, ty, tz, tw)
-                if skinned {
+                var nrm = SIMD3<Float>(0, 0, 1)                       // 부재 시 기본(2D 퍼펫은 미사용)
+                if hasNormal {
+                    guard let nx = f32(b + 12), let ny = f32(b + 16), let nz = f32(b + 20) else { return nil }
+                    nrm = SIMD3(nx, ny, nz)
+                }
+                var tan = SIMD4<Float>(1, 0, 0, 1)
+                if hasTangent {
+                    let to = b + 12 + (hasNormal ? 12 : 0)
+                    guard let tx = f32(to), let ty = f32(to + 4), let tz = f32(to + 8), let tw = f32(to + 12)
+                    else { return nil }
+                    tan = SIMD4(tx, ty, tz, tw)
+                }
+                if skinFieldsFit {
                     let bo = b + stride - 40, wo = b + stride - 24, uo = b + stride - 8
                     guard let b0 = u32(bo), let b1 = u32(bo + 4), let b2 = u32(bo + 8), let b3 = u32(bo + 12),
                           let w0 = f32(wo), let w1 = f32(wo + 4), let w2 = f32(wo + 8), let w3 = f32(wo + 12),
@@ -202,7 +232,7 @@ public struct Model3D: Equatable {
 
             meshes.append(Mesh(material: material,
                                boundsMin: SIMD3(minx, miny, minz), boundsMax: SIMD3(maxx, maxy, maxz),
-                               skinned: skinned, vertices: vertices, indices: indices))
+                               skinned: skinFieldsFit, vertices: vertices, indices: indices))
 
             // 메시 사이 6바이트 구분자(실측 전수 0). 마지막 메시 뒤에는 없음.
             if mi < Int(meshCount) - 1 { o += 6 }
@@ -211,9 +241,13 @@ public struct Model3D: Equatable {
         var model = Model3D(meshes: meshes)
 
         // 스켈레톤(스키닝 모델). 선행 0 패딩 스킵. 실패는 본 없이 반환(정적 메시 렌더 가능).
+        // MDLS0002(V0016/17/19)는 본 레코드가 0004 와 동일(cstring|flags|parent|64|mat4|props cstring —
+        // WLOP GIRL 64본 props JSON 실측)하고, 레코드 뒤에 13+80×본수 바이트 꼬리가 더 있을 뿐이다.
+        // 꼬리는 파스하지 않는다 — 다음 섹션(MDLA)은 아래 매직 스캔이 찾는다.
         var p = o
         while p < bytes.count, bytes[p] == 0 { p += 1 }
-        if p + 9 <= bytes.count, String(bytes: bytes[p..<p+8], encoding: .utf8) == "MDLS0004" {
+        let skelMagic = p + 9 <= bytes.count ? String(bytes: bytes[p..<p+8], encoding: .utf8) : nil
+        if skelMagic == "MDLS0004" || skelMagic == "MDLS0002" {
             p += 8 + 1  // magic + lead u8(0)
             if let _ = u32(p), let boneCount = u32(p + 4), boneCount < 100_000 {
                 p += 8
@@ -241,8 +275,11 @@ public struct Model3D: Equatable {
             }
         }
 
-        // 애니 섹션(MDLA0006) — 스켈레톤 유무와 무관하게 메시 끝 이후 탐색(스키닝 모델만 존재).
-        if let ai = findMagic("MDLA0006", in: bytes, from: o) {
+        // 애니 섹션(MDLA000N) — 스켈레톤 유무와 무관하게 메시 끝 이후 탐색(스키닝 모델만 존재).
+        // 버전별 매직: 0016→MDLA0003, 0017→0004, 0019→0005, 0023→0006(실측). 헤더·레코드 레이아웃은
+        // 전 버전 동일(36B 키, 코퍼스 전수 트레이스 일치) — 숫자만 다르니 접두 스캔으로 통합.
+        if let ai = findMagic("MDLA000", in: bytes, from: o),
+           ai + 8 <= bytes.count, (0x31...0x39).contains(bytes[ai + 7]) {
             model.hasAnimation = true
             model.animations = parseAnimations(bytes: bytes, at: ai, boneCount: model.bones.count)
         }
@@ -325,7 +362,7 @@ public struct Model3D: Equatable {
     private static func stride16(_ size: Int) -> StrideTo<Int> { stride(from: 0, to: size, by: 2) }
 
     /// 변종 정점 스트라이드 추론: 정점 블롭 직후의 인덱스 블롭(u32 크기 + u16 인덱스)에서
-    /// maxIndex+1 = 정점 수로 보고 vSize/count. 정수가 아니거나 범위(44..96) 밖이면 nil(안전 실패).
+    /// maxIndex+1 = 정점 수로 보고 vSize/count. 정수가 아니거나 범위(20..96) 밖이면 nil(안전 실패).
     private static func inferStride(bytes: [UInt8], indexBlobAt p: Int, vSize: Int) -> Int? {
         func u32(_ o: Int) -> Int? {
             guard o >= 0, o + 4 <= bytes.count else { return nil }
@@ -343,7 +380,7 @@ public struct Model3D: Equatable {
         let count = maxIdx + 1
         guard count > 0, vSize % count == 0 else { return nil }
         let s = vSize / count
-        return (44...96).contains(s) ? s : nil
+        return (20...96).contains(s) ? s : nil
     }
 
     private static func findMagic(_ magic: String, in bytes: [UInt8], from: Int) -> Int? {

@@ -28,8 +28,8 @@ final class Model3DTests: XCTestCase {
         f(v.uv.x, into: &d); f(v.uv.y, into: &d)
     }
 
-    private func makeModelU16(_ meshes: [SynthMesh]) -> Data {
-        var d = Data("MDLV0023".utf8)
+    private func makeModelU16(_ meshes: [SynthMesh], magic: String = "MDLV0023") -> Data {
+        var d = Data(magic.utf8)
         d.append(0); u(0x0000000f, into: &d); u(1, into: &d); u(UInt32(meshes.count), into: &d)
         for (mi, m) in meshes.enumerated() {
             d.append(Data(m.material.utf8)); d.append(0)
@@ -282,6 +282,116 @@ final class Model3DTests: XCTestCase {
         XCTAssertNil(Model3D.parse(Data("MDLV0013".utf8)))  // 2D 퍼펫은 거부
         XCTAssertNil(Model3D.parse(Data("NOPE".utf8)))
         XCTAssertNil(Model3D.parse(Data("MDLV0023".utf8)))  // 트렁케이트
+        // 미목격 버전은 거부(추측 파스 금지) — 0023 과 같은 바이트라도 매직만 0018 이면 nil.
+        let v18 = makeModelU16([SynthMesh(material: "materials/x.json", min: .zero, max: .zero, skinned: false,
+                                          verts: [SynthVert(pos: .zero, nrm: SIMD3(0, 0, 1), tan: SIMD4(1, 0, 0, 1), uv: .zero)],
+                                          indices: [0, 0, 0])], magic: "MDLV0018")
+        XCTAssertNil(Model3D.parse(v18))
+    }
+
+    /// V0017/V0019: 메시·스켈레톤 레코드가 V0023 과 동일(실측 WLOP/3189665546 전수) — 매직 수용 +
+    /// MDLS0002 스켈레톤 + MDLA0005 애니(레이아웃 동일, 숫자만 다름)까지 한 파일로 검증.
+    func testParsesV0017AndV0019WithMDLS0002AndOldAnimMagic() throws {
+        let vSkin = SynthVert(pos: SIMD3(1, 2, 0), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(0.5, 0.5),
+                              bones: SIMD4(0, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
+        let mesh = SynthMesh(material: "materials/1.json", min: .zero, max: .zero,
+                             skinned: true, verts: [vSkin, vSkin, vSkin], indices: [0, 1, 2])
+        for (magic, animMagic) in [("MDLV0017", "MDLA0004"), ("MDLV0019", "MDLA0005")] {
+            var d = makeModelU16([mesh], magic: magic)
+            // MDLS0002: 레코드는 0004 와 동일(name|flags|parent|64|mat4|props) + 뒤에 13+80×본수 꼬리.
+            d.append(Data("MDLS0002".utf8)); d.append(0)
+            u(0, into: &d); u(1, into: &d)
+            d.append(0)                                       // bone0 name "" (빈 cstring)
+            u(1, into: &d)
+            var pr: Int32 = -1; withUnsafeBytes(of: &pr) { d.append(contentsOf: $0) }
+            u(64, into: &d)
+            let mat: [Float] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, -3, 0, 1]
+            for x in mat { f(x, into: &d) }
+            d.append(0)                                       // props ""
+            d.append(Data(repeating: 0, count: 11)); d.append(1)          // 꼬리 헤더(실측 11×0 + u8 1)
+            d.append(Data(repeating: 0xAB, count: 80))                    // 본당 80B 미상 블록
+            // 구버전 애니 매직 + 애니 1개(레이아웃은 MDLA0006 과 동일)
+            d.append(Data(animMagic.utf8)); d.append(0)
+            u(0, into: &d); u(1, into: &d); u(134, into: &d); u(0, into: &d)
+            d.append(Data("Animación 1".utf8)); d.append(0)
+            d.append(Data("loop".utf8)); d.append(0)
+            f(30, into: &d); u(1, into: &d); u(0, into: &d); u(1, into: &d); u(0, into: &d)
+            u(72, into: &d)                                   // 본0 트랙 2키 × 36B
+            for _ in 0..<2 { for x: Float in [0, 0, 0, 0, 0, 0.5, 1, 1, 1] { f(x, into: &d) } }
+            u(0, into: &d)                                    // blob2
+            let m = try XCTUnwrap(Model3D.parse(d), "\(magic) 파스 실패")
+            XCTAssertEqual(m.meshes.count, 1)
+            XCTAssertTrue(m.meshes[0].skinned)
+            XCTAssertEqual(m.bones.count, 1, "\(magic): MDLS0002 본")
+            XCTAssertEqual(m.bones[0].bind.columns.3.x, 5)
+            XCTAssertEqual(m.animations.count, 1, "\(magic): \(animMagic) 애니")
+            XCTAssertEqual(m.animations[0].tracks[0].count, 2)
+            XCTAssertEqual(m.animations[0].tracks[0][1].angles.z, 0.5, accuracy: 1e-6)
+            XCTAssertNotNil(PuppetModel.parse(d), "\(magic): 퍼펫 라우팅")
+        }
+    }
+
+    /// V0016(2885492021 전수 실측): AABB 부재 + 정점 플래그 0x01800009(normal/tangent 없는 stride 52
+    /// = pos|bones4|weights4|uv — V0013 정점 레이아웃) + MDLS0002 + MDLA0003.
+    func testParsesV0016NoAABBStride52() throws {
+        var d = Data("MDLV0016".utf8)
+        d.append(0); u(0x01800009, into: &d); u(1, into: &d); u(1, into: &d)   // hdr flag, const, meshCount
+        d.append(Data("materials/图层 5.json".utf8)); d.append(0)
+        u(0, into: &d)                                        // z — AABB 없음(바로 fmtflag)
+        u(0x01800009, into: &d)                               // per-mesh flag: skin, normal/tangent 없음
+        let verts: [(SIMD3<Float>, SIMD4<UInt32>, SIMD4<Float>, SIMD2<Float>)] = [
+            (SIMD3(22.02, -10.35, 0), SIMD4(0, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(0.9685, 0.7465)),
+            (SIMD3(21.22, -11.39, 0), SIMD4(0, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(0.5, 0.5)),
+            (SIMD3(0, 1, 0), SIMD4(0, 0, 0, 0), SIMD4(0.6, 0.4, 0, 0), SIMD2(0, 1)),
+        ]
+        u(UInt32(verts.count * 52), into: &d)
+        for v in verts {
+            f(v.0.x, into: &d); f(v.0.y, into: &d); f(v.0.z, into: &d)
+            u(v.1.x, into: &d); u(v.1.y, into: &d); u(v.1.z, into: &d); u(v.1.w, into: &d)
+            f(v.2.x, into: &d); f(v.2.y, into: &d); f(v.2.z, into: &d); f(v.2.w, into: &d)
+            f(v.3.x, into: &d); f(v.3.y, into: &d)
+        }
+        u(6, into: &d)
+        for i: UInt16 in [0, 1, 2] { var x = i; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        // MDLS0002 + 1본 + 꼬리, MDLA0003 + 1애니
+        d.append(Data("MDLS0002".utf8)); d.append(0)
+        u(0, into: &d); u(1, into: &d)
+        d.append(0); u(1, into: &d)
+        var pr: Int32 = -1; withUnsafeBytes(of: &pr) { d.append(contentsOf: $0) }
+        u(64, into: &d)
+        for x: [Float] in [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [-37.03, 105.14, 0, 1]] { for v in x { f(v, into: &d) } }
+        d.append(0)
+        d.append(Data(repeating: 0, count: 11)); d.append(1)
+        d.append(Data(repeating: 0xCD, count: 80))
+        d.append(Data("MDLA0003".utf8)); d.append(0)
+        u(0, into: &d); u(1, into: &d); u(0, into: &d); u(0, into: &d)
+        d.append(Data("动画 1".utf8)); d.append(0)
+        d.append(Data("loop".utf8)); d.append(0)
+        f(30, into: &d); u(150, into: &d); u(0, into: &d); u(1, into: &d); u(0, into: &d)
+        u(36, into: &d)
+        for x: Float in [1, 2, 0, 0, 0, 0, 1, 1, 1] { f(x, into: &d) }
+        u(0, into: &d)
+
+        let m = try XCTUnwrap(Model3D.parse(d), "MDLV0016 파스 실패")
+        let mm = m.meshes[0]
+        XCTAssertTrue(mm.skinned)
+        XCTAssertEqual(mm.vertices.count, 3)
+        XCTAssertEqual(mm.vertices[0].position.x, 22.02, accuracy: 1e-4)
+        XCTAssertEqual(mm.vertices[0].uv, SIMD2(0.9685, 0.7465))
+        XCTAssertEqual(mm.vertices[2].weights.x, 0.6, accuracy: 1e-6)
+        XCTAssertEqual(mm.vertices[0].normal, SIMD3(0, 0, 1), "normal 부재 → 기본값")
+        XCTAssertEqual(mm.vertices[0].tangent, SIMD4(1, 0, 0, 1), "tangent 부재 → 기본값")
+        XCTAssertEqual(m.bones.count, 1)
+        XCTAssertEqual(m.bones[0].bind.columns.3.x, -37.03, accuracy: 1e-4)
+        XCTAssertEqual(m.animations.count, 1, "MDLA0003 애니")
+        XCTAssertEqual(m.animations[0].name, "动画 1")
+        XCTAssertEqual(m.animations[0].lengthFrames, 150)
+        // 퍼펫 라우팅(렌더 경로): pos/bones/weights/uv 가 그대로 이식
+        let pm = try XCTUnwrap(PuppetModel.parse(d), "V0016 퍼펫 라우팅 실패")
+        XCTAssertEqual(pm.vertices.count, 3)
+        XCTAssertEqual(pm.vertices[0].uv, SIMD2(0.9685, 0.7465))
+        XCTAssertEqual(pm.bones.count, 1)
+        XCTAssertEqual(pm.animations.count, 1)
     }
 }
 
@@ -446,5 +556,36 @@ final class Model3DRealFileTests: XCTestCase {
         }
         print("[Model3D] MDLV0021 전수: \(total)개 파스·정합 OK")
         if total == 0 { throw XCTSkip("코퍼스에 MDLV0021 부재") }
+    }
+
+    /// 구버전 퍼펫(MDLV0016/0017/0019) 실물 전수: 파스 + 인덱스/본/애니 정합 + 퍼펫 라우팅(렌더 경로 입구).
+    /// 실패 시 해당 버전 레이아웃 가정이 무너진 것 — 수용 철회 신호.
+    func testParsesOldVersionPuppetModels() throws {
+        let expected = ["2885492021": "MDLV0016", "3113287126": "MDLV0017", "3189665546": "MDLV0019"]
+        var total = 0
+        for (id, wantMagic) in expected {
+            let pkg: ScenePackage
+            do { pkg = try loadPkg(id) } catch { continue }   // 없으면 스킵
+            for e in pkg.entries where e.name.hasSuffix(".mdl") {
+                guard let raw = pkg.data(for: e.name),
+                      String(bytes: raw.prefix(8), encoding: .utf8) == wantMagic else { continue }
+                total += 1
+                guard let m = Model3D.parse(raw) else { XCTFail("\(id)/\(e.name): \(wantMagic) 파스 실패"); continue }
+                for mesh in m.meshes {
+                    XCTAssertEqual(mesh.indices.count % 3, 0, "\(id)/\(e.name): 트라이앵글 리스트")
+                    if let mx = mesh.indices.max() {
+                        XCTAssertLessThan(Int(mx), mesh.vertices.count, "\(id)/\(e.name): 인덱스 범위")
+                    }
+                }
+                XCTAssertFalse(m.bones.isEmpty, "\(id)/\(e.name): MDLS0002 본")
+                XCTAssertFalse(m.animations.isEmpty, "\(id)/\(e.name): 구버전 MDLA 애니")
+                for a in m.animations {
+                    XCTAssertEqual(a.tracks.count, m.bones.count, "\(id)/\(e.name)/\(a.name): 트랙수==본수")
+                }
+                XCTAssertNotNil(PuppetModel.parse(raw), "\(id)/\(e.name): 퍼펫 라우팅(렌더 경로)")
+            }
+        }
+        print("[Model3D] 구버전 퍼펫 전수: \(total)개 OK")
+        if total == 0 { throw XCTSkip("코퍼스에 구버전 퍼펫 부재") }
     }
 }
