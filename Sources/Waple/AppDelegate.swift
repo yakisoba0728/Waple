@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var playlistTimer: Timer?
     private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore)
     private var libraryWindow: NSWindow?
+    private var workshopWindow: NSWindow?   // 워크샵 창(강한 참조 — isReleasedWhenClosed=false 로 재오픈 안전)
     private weak var fitMenu: NSMenu?
     private weak var playlistMenu: NSMenu?
 
@@ -62,6 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "라이브러리 열기",
                                 action: #selector(openLibrary), keyEquivalent: "l"))
+        menu.addItem(NSMenuItem(title: "워크샵 열기",
+                                action: #selector(openWorkshop), keyEquivalent: "w"))
         menu.addItem(recentMenuItem())  // 최근 배경 서브메뉴(작업 6 — 구현은 확장)
         let fitItem = NSMenuItem(title: "화면 맞춤", action: nil, keyEquivalent: "")
         let fitMenu = NSMenu()
@@ -753,5 +756,28 @@ extension AppDelegate: NSMenuDelegate {
         guard let id = sender.representedObject as? String,
               let entry = store.entries.first(where: { $0.id == id }) else { return }
         _ = libraryVM.apply(entry)   // 기존 적용 경로 재사용(선택 영속·강조 포함)
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MARK: - 워크샵 (feat/workshop)
+// 다른 브랜치와의 충돌을 최소화하기 위해 확장으로 분리(본문은 메뉴 1항목 + 창 프로퍼티 1개만 추가).
+// ═════════════════════════════════════════════════════════════════════════════
+extension AppDelegate {
+    /// 워크샵 창을 연다. libraryWindow 와 동일한 수명 규약(isReleasedWhenClosed=false + 강한 프로퍼티)으로
+    /// 재오픈 시 use-after-free 를 막는다. 다운로드→임포트→적용은 기존 libraryVM(importDownloaded/apply) 재사용.
+    @objc func openWorkshop() {
+        if workshopWindow == nil {
+            let hosting = NSHostingController(rootView: WorkshopView(library: libraryVM))
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "Waple 워크샵"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 820, height: 560))
+            window.isReleasedWhenClosed = false
+            workshopWindow = window
+        }
+        workshopWindow?.center()
+        workshopWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

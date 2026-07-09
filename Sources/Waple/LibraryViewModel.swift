@@ -93,6 +93,17 @@ final class LibraryViewModel: ObservableObject {
         entries = store.entries
     }
 
+    /// 워크샵 다운로드로 받은 배경 폴더 1개를 라이브러리에 가져온다(기존 importFolder 재사용). 실패 → nil.
+    @discardableResult
+    func importDownloaded(_ folderURL: URL) -> LibraryEntry? {
+        guard let entry = try? store.importFolder(folderURL) else {
+            onError?("다운로드한 폴더를 가져오지 못했습니다: \(folderURL.lastPathComponent)")
+            return nil
+        }
+        entries = store.entries
+        return entry
+    }
+
     /// 마운트 성공 시 true. 재생목록 전진(advancePlaylist)이 실패 후보를 건너뛰는 데 이 반환을 쓴다.
     @discardableResult
     func apply(_ entry: LibraryEntry) -> Bool {
