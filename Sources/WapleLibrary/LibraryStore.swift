@@ -117,6 +117,38 @@ public final class LibraryStore {
         return imported
     }
 
+    /// zip 을 임시 디렉터리에 풀어, 담긴 모든 배경을 가져온다(작업 4).
+    /// 배경 폴더는 관리 위치(base/imported/<폴더명>)로 **이동**해 북마크가 임시 정리 후에도 유효하게 한다
+    /// (importFolder 는 폴더를 그 자리에서 북마크만 하므로, 임시 해제물을 지우면 엔트리가 깨진다).
+    /// `extract` 주입으로 테스트 가능(기본 ditto). 가져온 엔트리 반환.
+    @discardableResult
+    public func importZip(_ zipURL: URL,
+                          extract: (URL, URL) -> Bool = ZipImporter.dittoExtract) -> [LibraryEntry] {
+        let fm = FileManager.default
+        let temp = fm.temporaryDirectory.appendingPathComponent("WapleZip-\(UUID().uuidString)", isDirectory: true)
+        guard (try? fm.createDirectory(at: temp, withIntermediateDirectories: true)) != nil,
+              extract(zipURL, temp) else {
+            try? fm.removeItem(at: temp)
+            return []
+        }
+        defer { try? fm.removeItem(at: temp) }   // 임시 해제 작업공간 정리
+
+        let importedDir = baseDirectory.appendingPathComponent("imported", isDirectory: true)
+        try? fm.createDirectory(at: importedDir, withIntermediateDirectories: true)
+
+        var imported: [LibraryEntry] = []
+        for root in ZipImporter.findProjectRoots(in: temp, fileManager: fm) {
+            // ponytail: 관리 폴더명=원본 폴더명(=WE 워크샵 id) 유지로 project id 안정.
+            // 동명 충돌(재import/서로 다른 zip 의 동일 폴더명)은 덮어씀 — WE id 는 유일하므로 실질 재import.
+            let dest = importedDir.appendingPathComponent(root.lastPathComponent, isDirectory: true)
+            try? fm.removeItem(at: dest)
+            guard (try? fm.moveItem(at: root, to: dest)) != nil,
+                  let entry = try? importFolder(dest) else { continue }
+            imported.append(entry)
+        }
+        return imported
+    }
+
     public func select(_ id: String) {
         selectedId = id
         save()

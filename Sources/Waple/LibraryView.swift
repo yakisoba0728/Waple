@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import WapleCore
 import WapleLibrary
 
@@ -128,11 +129,16 @@ struct LibraryView: View {
     private func importFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
-        panel.canChooseFiles = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.folder, .zip]  // 폴더 또는 .zip(작업 4)
         panel.allowsMultipleSelection = false
-        panel.message = "Wallpaper Engine 폴더(또는 여러 배경을 담은 상위 폴더)를 선택하세요."
+        panel.message = "Wallpaper Engine 폴더(또는 여러 배경을 담은 상위 폴더)나 .zip 을 선택하세요."
         if panel.runModal() == .OK, let url = panel.url {
-            viewModel.importParent(url)
+            if url.pathExtension.lowercased() == "zip" {
+                viewModel.importZip(url)
+            } else {
+                viewModel.importParent(url)
+            }
         }
     }
 }

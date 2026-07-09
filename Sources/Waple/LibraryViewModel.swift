@@ -74,6 +74,15 @@ final class LibraryViewModel: ObservableObject {
         }
     }
 
+    /// zip 가져오기(작업 4) — 해제 후 담긴 배경들을 관리 위치로 옮겨 가져온다.
+    func importZip(_ url: URL) {
+        let imported = store.importZip(url)
+        entries = store.entries
+        if imported.isEmpty {
+            onError?("zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요.")
+        }
+    }
+
     /// 마운트 성공 시 true. 재생목록 전진(advancePlaylist)이 실패 후보를 건너뛰는 데 이 반환을 쓴다.
     @discardableResult
     func apply(_ entry: LibraryEntry) -> Bool {
