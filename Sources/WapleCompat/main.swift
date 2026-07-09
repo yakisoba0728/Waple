@@ -5,6 +5,8 @@ struct WapleCompatCLI {
     var rootPath: String = NSHomeDirectory() + "/Downloads/wallpaper_dev"
     var outputJSON = false
     var strict = false
+    var deep = false
+    var only: String? = nil
 
     mutating func parse(arguments: [String]) throws {
         var iterator = arguments.dropFirst().makeIterator()
@@ -14,6 +16,10 @@ struct WapleCompatCLI {
                 outputJSON = true
             case "--strict":
                 strict = true
+            case "--deep":
+                deep = true
+            case "--only":
+                only = iterator.next()
             case "--help", "-h":
                 printUsage()
                 Foundation.exit(0)
@@ -27,6 +33,10 @@ struct WapleCompatCLI {
     }
 
     func run() throws {
+        if deep {
+            print(DeepScan.run(rootPath: rootPath, only: only))
+            return
+        }
         let report = try WallpaperCompatibilityAnalyzer.scan(
             rootURL: URL(fileURLWithPath: NSString(string: rootPath).expandingTildeInPath, isDirectory: true)
         )
