@@ -148,38 +148,53 @@ public struct Model3D: Equatable {
             guard let material = cstring(&o) else { return nil }
             guard let _ = u32(o) else { return nil }             // u32(관측 0, Kirby mesh1 은 2 — 값 미사용)
             o += 4
-            // AABB(min xyz, max xyz) — V0017+ 만. V0016 은 부재(스킵 시 fmtflag 를 0 으로 읽어 전멸).
-            var minx: Float = 0, miny: Float = 0, minz: Float = 0
-            var maxx: Float = 0, maxy: Float = 0, maxz: Float = 0
-            if hasAABB {
-                guard let a = f32(o), let b = f32(o + 4), let c = f32(o + 8),
-                      let d = f32(o + 12), let e = f32(o + 16), let f = f32(o + 20) else { return nil }
-                (minx, miny, minz, maxx, maxy, maxz) = (a, b, c, d, e, f)
-                o += 24
-            }
-            guard let formatFlag = u32(o) else { return nil }
-            o += 4
+            // 메시 헤더 프레이밍 프로브: z 뒤에 여분 u32 가 0..2개 올 수 있다(실측: 전 코퍼스 0개,
+            // Kirby_puppet mesh1 만 1개(=1)). extra=0 이 기존 경로라 최우선 — vSize/스트라이드 정합
+            // (표 나눗셈 or 인덱스 maxIndex+1 추론)이 성립하는 첫 프레이밍을 채택한다.
+            //
             // 정점 포맷 플래그(실측 4종 대조로 확정): bit1(0x2)=normal 3f, bit2(0x4)=tangent 4f,
             // skinMask=본/웨이트. pos 3f 와 uv 2f 는 전 변형 공통(bit0/bit3 semantics 미상 — 무시).
             //   0x0f(48/80)  0x09(52, V0016)  0x0e(sl_puppet 84 변종)  0x21(Kirby channelmap 44).
+            // 변종 스트라이드 자기기술 추론(2026-07-06, 실물 sl_puppet.mdl = 84 = 기지 80 + 미상 4B):
+            // 표 스트라이드로 안 나눠지면 인덱스 블롭의 maxIndex+1 을 정점 수로 보고 vSize/count 가
+            // 정수(20..96)면 채택. 필드는 꼬리 고정(uv@-8, weights@-24, bones@-40), 중간은 고전 오프셋.
+            var minx: Float = 0, miny: Float = 0, minz: Float = 0
+            var maxx: Float = 0, maxy: Float = 0, maxz: Float = 0
+            var formatFlag: UInt32 = 0
+            var stride = 0
+            var vSize = 0
+            var framed = false
+            probe: for extra in 0...2 {
+                var q = o + extra * 4
+                var box: [Float] = [0, 0, 0, 0, 0, 0]
+                if hasAABB {
+                    for k in 0..<6 {
+                        guard let v = f32(q + k * 4) else { continue probe }
+                        box[k] = v
+                    }
+                    q += 24
+                }
+                guard let flag = u32(q), let vsRaw = u32(q + 4) else { continue }
+                let vs = Int(vsRaw)
+                guard vs > 0, q + 8 + vs <= bytes.count else { continue }
+                let skin = (flag & skinMask) != 0
+                var s = 12 + (flag & 0x2 != 0 ? 12 : 0) + (flag & 0x4 != 0 ? 16 : 0) + (skin ? 32 : 0) + 8
+                if vs % s != 0 {
+                    guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 8 + vs, vSize: vs),
+                          inferred >= 20 else { continue }   // pos(12)+uv(8) 최소
+                    s = inferred
+                }
+                (minx, miny, minz) = (box[0], box[1], box[2])
+                (maxx, maxy, maxz) = (box[3], box[4], box[5])
+                formatFlag = flag; stride = s; vSize = vs
+                o = q + 8
+                framed = true
+                break
+            }
+            guard framed, stride > 0, vSize % stride == 0 else { return nil }
             let skinned = (formatFlag & skinMask) != 0
             let hasNormal = formatFlag & 0x2 != 0
             let hasTangent = formatFlag & 0x4 != 0
-            var stride = 12 + (hasNormal ? 12 : 0) + (hasTangent ? 16 : 0) + (skinned ? 32 : 0) + 8
-            guard let vSizeRaw = u32(o) else { return nil }
-            o += 4
-            let vSize = Int(vSizeRaw)
-            guard vSize > 0, o + vSize <= bytes.count else { return nil }
-            // 변종 스트라이드 자기기술 추론(2026-07-06, 실물 sl_puppet.mdl = 84 = 기지 80 + 미상 4B,
-            // 플래그 0x181000e): 표 스트라이드로 안 나눠지면 인덱스 블롭의 maxIndex+1 을 정점 수로 보고
-            // vSize/count 가 정수(20..96)면 채택. 필드는 꼬리 고정(uv@-8, weights@-24, bones@-40 —
-            // 기지 80/48 과 동일 오프셋이라 무회귀), 중간(normal/tangent)은 고전 오프셋(unlit 미사용).
-            if vSize % stride != 0 {
-                guard let inferred = inferStride(bytes: bytes, indexBlobAt: o + vSize, vSize: vSize),
-                      inferred >= 20 else { return nil }   // pos(12)+uv(8) 최소
-                stride = inferred
-            }
-            guard vSize % stride == 0 else { return nil }
             let vCount = vSize / stride
             // 본/웨이트 필드는 스트라이드에 실제 자리가 있을 때만 읽는다. 스키닝 선언이라도 자리가 없으면
             // (Kirby channelmap: flag 0x00800021, stride 44 = pos+미상24B+uv) pos+uv 만 — 가중 0 스킨 합성으로
@@ -234,8 +249,11 @@ public struct Model3D: Equatable {
                                boundsMin: SIMD3(minx, miny, minz), boundsMax: SIMD3(maxx, maxy, maxz),
                                skinned: skinFieldsFit, vertices: vertices, indices: indices))
 
-            // 메시 사이 6바이트 구분자(실측 전수 0). 마지막 메시 뒤에는 없음.
-            if mi < Int(meshCount) - 1 { o += 6 }
+            // 메시 사이 트레일러: u8 0 | u8 count | count×(u32 size | size 바이트) | u32 tail.
+            // 실측: 전 코퍼스 count=0(= 종전 '6바이트 0 구분자'와 바이트 동일), Kirby_puppet 만
+            // count=1(16B 블롭, 총 26B — 스킵하면 mesh1 'Kirby_channelmap' 이 정상 파스).
+            // 구조 불일치 시 종전 +6 폴백(무회귀). 마지막 메시 뒤에는 없음.
+            if mi < Int(meshCount) - 1 { o = meshTrailerEnd(bytes: bytes, at: o) ?? (o + 6) }
         }
 
         var model = Model3D(meshes: meshes)
@@ -360,6 +378,22 @@ public struct Model3D: Equatable {
 
     /// stride-2 인덱스 순회 헬퍼.
     private static func stride16(_ size: Int) -> StrideTo<Int> { stride(from: 0, to: size, by: 2) }
+
+    /// 메시 간 트레일러 파스: u8 0 | u8 count(≤16) | count×(u32 size | size 바이트) | u32 tail → 끝 오프셋.
+    /// count=0 이면 정확히 6바이트(종전 구분자와 동일). 패턴 불일치는 nil(호출측 +6 폴백).
+    private static func meshTrailerEnd(bytes: [UInt8], at p: Int) -> Int? {
+        guard p + 6 <= bytes.count, bytes[p] == 0 else { return nil }
+        let count = Int(bytes[p + 1])
+        guard count <= 16 else { return nil }
+        var q = p + 2
+        for _ in 0..<count {
+            guard q + 4 <= bytes.count else { return nil }
+            let size = Int(UInt32(bytes[q]) | (UInt32(bytes[q + 1]) << 8) | (UInt32(bytes[q + 2]) << 16) | (UInt32(bytes[q + 3]) << 24))
+            guard size >= 0, size <= bytes.count - q - 8 else { return nil }
+            q += 4 + size
+        }
+        return q + 4
+    }
 
     /// 변종 정점 스트라이드 추론: 정점 블롭 직후의 인덱스 블롭(u32 크기 + u16 인덱스)에서
     /// maxIndex+1 = 정점 수로 보고 vSize/count. 정수가 아니거나 범위(20..96) 밖이면 nil(안전 실패).

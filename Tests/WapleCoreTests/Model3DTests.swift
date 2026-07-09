@@ -278,6 +278,52 @@ final class Model3DTests: XCTestCase {
         XCTAssertEqual(mats.count, 2)
     }
 
+    /// Kirby_puppet.mdl(3441873795) 클래스: 스킨드 멀티메시 + 메시 간 26B 트레일러(u8 0|u8 1|u32 16|
+    /// 16B|u32 0) + mesh1 헤더에 여분 u32 1개 + channelmap 정점 stride 44(pos|미상 24B|uv, 본/웨이트 없음).
+    /// 종전 고정 '+6 스킵'은 mesh1 cstring 중간에 착지해 전체 파스 실패(377/378 의 마지막 1).
+    func testParsesSkinnedMultiMeshWithStructuredTrailerAndStride44() throws {
+        let vSkin = SynthVert(pos: SIMD3(1, 1, 0), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
+                              bones: SIMD4(0, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
+        var d = makeModelU16([SynthMesh(material: "materials/Kirby.json", min: .zero, max: .zero,
+                                        skinned: true, verts: [vSkin, vSkin, vSkin], indices: [0, 1, 2])])
+        d.replaceSubrange(17..<21, with: withUnsafeBytes(of: UInt32(2)) { Data($0) })  // meshCount = 2 로 패치
+        // 트레일러: u8 0 | u8 1 | u32 16 | 16B(12×0 + u32 1824) | u32 0 (실물 26B 그대로)
+        d.append(0); d.append(1)
+        u(16, into: &d)
+        d.append(Data(repeating: 0, count: 12)); u(1824, into: &d)
+        u(0, into: &d)
+        // mesh1: cstring | z=2 | 여분 u32=1 | AABB(0) | flag 0x00800021 | stride 44 정점 8개 | 인덱스
+        d.append(Data("materials/Kirby_channelmap.json".utf8)); d.append(0)
+        u(2, into: &d)                                       // z(실물 값 2)
+        u(1, into: &d)                                       // 여분 u32(실물 값 1)
+        for _ in 0..<6 { f(0, into: &d) }                    // AABB 전부 0(실물)
+        u(0x00800021, into: &d)
+        let positions: [SIMD3<Float>] = (0..<8).map { SIMD3(Float(443 + $0), Float(650 - $0), 0) }
+        u(UInt32(8 * 44), into: &d)
+        for (i, p) in positions.enumerated() {
+            f(p.x, into: &d); f(p.y, into: &d); f(p.z, into: &d)
+            for _ in 0..<6 { f(0, into: &d) }                // 미상 24B(실물 대부분 0)
+            f(Float(i) / 8, into: &d); f(0.5, into: &d)      // uv @stride-8
+        }
+        let idx: [UInt16] = [0, 1, 2, 2, 3, 4, 4, 5, 6, 6, 7, 0]
+        u(UInt32(idx.count * 2), into: &d)
+        for i in idx { var x = i; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+
+        let m = try XCTUnwrap(Model3D.parse(d), "Kirby 클래스 멀티메시 파스 실패")
+        XCTAssertEqual(m.meshes.count, 2)
+        XCTAssertTrue(m.meshes[0].skinned)
+        XCTAssertEqual(m.meshes[0].vertices.count, 3)
+        let m1 = m.meshes[1]
+        XCTAssertEqual(m1.material, "materials/Kirby_channelmap.json")
+        XCTAssertFalse(m1.skinned, "stride 44 에는 본/웨이트 자리가 없음 — 정적 처리(가중 0 붕괴 방지)")
+        XCTAssertEqual(m1.vertices.count, 8)
+        XCTAssertEqual(m1.vertices[0].position, SIMD3(443, 650, 0))
+        XCTAssertEqual(m1.vertices[3].uv.x, 3.0 / 8, accuracy: 1e-6)
+        XCTAssertEqual(m1.vertices[0].boneIndices, SIMD4<UInt32>(0, 0, 0, 0))
+        XCTAssertEqual(m1.indices.count, 12)
+        XCTAssertNotNil(PuppetModel.parse(d), "퍼펫 라우팅(Kirby 는 퍼펫 레이어)")
+    }
+
     func testRejectsWrongMagic() {
         XCTAssertNil(Model3D.parse(Data("MDLV0013".utf8)))  // 2D 퍼펫은 거부
         XCTAssertNil(Model3D.parse(Data("NOPE".utf8)))
