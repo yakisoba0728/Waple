@@ -114,16 +114,22 @@ public struct TexImage {
         if let (mips, imageFormat) = container {
             let mip = mips[0]
             switch imageFormat {
-            case 2, 13, 25: return make(.embeddedImage, mip.payloadRange, mip)   // JPEG=2 PNG=13 GIF=25 (LZ4 가능)
+            case -1: break                                                       // raw → format 기반 디코드(아래 3)
             case 35: return make(.video, mip.payloadRange, mip)                  // MP4(ponytail: LZ4-mp4 는 추출기 해제 미지원 — 보류)
-            default: break                                                       // -1(raw) → 시그니처/format 경로로
+            default: return make(.embeddedImage, mip.payloadRange, mip)          // 인코딩 파일(JPEG=2 PNG=13 GIF=25 …) — ImageIO 가 내용으로 판별
             }
         }
 
-        // 2) 내장 이미지/비디오 시그니처(비압축 임베디드 — TEXB0001/0002 는 imageFormat 필드 없음, 작은 윈도우만).
-        if let p = findSig(b, [0x89, 0x50, 0x4E, 0x47], limit: 512) { return make(.png, p..<b.count, nil) }
-        if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, p..<b.count, nil) }
-        if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (p - 4)..<b.count, nil) }
+        // 2) 내장 이미지/비디오 시그니처 — 컨테이너 파스 **실패** 시에만(TEXB0001/0002 imageFormat 필드 부재,
+        //    lut/* 등 파스 불가 v4 변형). 컨테이너가 파스됐고 imageFormat=-1 이면 payload 는 raw(format 기반)로
+        //    확정인데, 종전엔 LZ4 압축 바이트에 우연히 낀 0xFFD8FF 를 이 스캔이 .jpeg 로 오라우팅해 압축
+        //    바이트를 그대로 ImageIO 에 넘겼다(실측 2026-07-09: embedded-jpeg 버킷 0/8 전멸 — assets
+        //    sharp_halo(fmt0)/hose_4_bright(fmt8)/circle_flame(fmt9) 및 pkg 4종, 전부 isLZ4=1 imageFormat=-1).
+        if container == nil {
+            if let p = findSig(b, [0x89, 0x50, 0x4E, 0x47], limit: 512) { return make(.png, p..<b.count, nil) }
+            if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, p..<b.count, nil) }
+            if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (p - 4)..<b.count, nil) }
+        }
 
         // 3) mip 컨테이너 format-based 디코드: RGBA(fmt0) | DXT5(fmt4) | DXT1(fmt7) | R8(fmt9).
         // fmt4=DXT5, fmt7=DXT1 실측 근거(2026-07-03): 3D 모델 텍스처 decompressedSize 가 각각
@@ -154,8 +160,8 @@ public struct TexImage {
     /// "TEXB000N\0" 컨테이너 파스. 모든 image 의 **mip0** 을 순차 수집한다(다중 image = 스프라이트시트
     /// 아틀라스 페이지, frame.imageId 가 페이지 인덱스 — RePKG TexToImageConverter.ConvertToGif). 실측
     /// 레이아웃(RePKG TexReader + TEXB0004 hexdump 교차검증, 2026-07-03):
-    ///   i32 imageCount | (v3+) i32 imageFormat(-1=raw) | (v4) i32 isVideoMp4 |
-    ///   image별: i32 mipCount | mip별: (v4 조건 JSON) i32 w | i32 h | (v2+) i32 isLZ4 | i32 dec | i32 comp | payload
+    ///   i32 imageCount | (v3+) i32 imageFormat(-1=raw) | (v4) i32 isVideoMp4/변형수 |
+    ///   image별: (v4 조건 변형 체인 ×N) i32 mipCount | mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 dec | i32 comp | payload
     /// (mip0 외 mip 은 크기만큼 스킵). 종전 "compressedSize 가 EOF 에 닿는 int 스캔" 휴리스틱은 다중 mip
     /// 파일(DJK_1.tex mip 9개 등)에서 실패해 3D 모델 텍스처 대부분이 흰색 폴백이었다.
     private static func parseMip(_ b: [UInt8], decodeW: Int, decodeH: Int, imgW: Int, imgH: Int) -> (mips: [CompressedMip], imageFormat: Int)? {
@@ -166,10 +172,9 @@ public struct TexImage {
             guard o >= 0, o + 4 <= b.count else { return nil }
             return Int(Int32(bitPattern: UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24))
         }
-        /// 단일 mip 레코드 파스: (v4 조건 블록) w | h | (v2+) isLZ4 | dec | comp | payload → (mip, 다음 오프셋).
+        /// 단일 mip 레코드 파스: w | h | (v2+) isLZ4 | dec | comp | payload → (mip, 다음 오프셋).
         func readMip(_ start: Int) -> (CompressedMip, Int)? {
             var q = start
-            if version >= 4, let conditionEnd = texb0004ConditionBlockEnd(b, from: q, i32: i32) { q = conditionEnd }
             guard let w = i32(q), let h = i32(q + 4), w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
             q += 8
             var isLZ4 = 0, dec = 0
@@ -191,9 +196,11 @@ public struct TexImage {
         guard let imageCount = i32(p), imageCount > 0, imageCount <= 1024 else { return nil }
         p += 4
         if version >= 3 { imageFormat = i32(p) ?? -1; p += 4 }   // imageFormat 직독(RePKG: !=-1 이면 인코딩 파일)
-        if version >= 4 { p += 4 }   // 0004 추가 필드/플래그(실측 0/1 = isVideoMp4)
+        if version >= 4 { p += 4 }   // 0004 추가 필드(실측 0/1 = isVideoMp4; 조건 변형 텍스처는 변형 수 1/3)
         var mips: [CompressedMip] = []
         for _ in 0..<imageCount {
+            // v4 조건 변형 체인 스킵: [i32 1][i32 idx][i32 0][json NUL] × N 이 mipCount 앞에 온다.
+            if version >= 4 { while let e = conditionVariantEnd(b, from: p, i32: i32) { p = e } }
             guard let mipCount = i32(p), mipCount > 0 else { break }
             p += 4
             guard let (mip0, after0) = readMip(p) else { break }   // 페이지의 mip0 = 아틀라스 페이지 픽셀
@@ -209,20 +216,28 @@ public struct TexImage {
         return mips.isEmpty ? nil : (mips, imageFormat)
     }
 
-    /// TEXB0004 may insert a small NUL-terminated condition JSON block before the first mip record.
-    /// Keep the scan bounded so malformed files cannot make parsing walk an arbitrary payload.
-    private static func texb0004ConditionBlockEnd(_ b: [UInt8], from p: Int, i32: (Int) -> Int?) -> Int? {
+    /// TEXB0004 조건 변형 블록 1개: [i32 1][i32 variantIdx][i32 0][condition JSON NUL]. 프로퍼티 값(예
+    /// tuniccolor)으로 텍스처 변형을 고르는 파일 — 변형 블록 N개가 연속한 뒤 mip 테이블이 온다.
+    /// 실측(2026-07-09, 전 코퍼스 460종 sweep): 조건 tex 는 zelda 8개뿐, 전부 이 레이아웃(v4 필드 = 변형 수
+    /// 1/3). 종전 "[1][2][json][1]" 프레이밍은 단일 변형에서 mipCount(항상 1)를 블록 선두로 오독한 우연 —
+    /// 다변형(childlink_01, 변형 3)에서 붕괴해 unknown-fmt4 로 전락했다.
+    /// 반환 = 블록 끝(다음 블록 또는 mipCount 위치). 패턴 불일치 시 nil(mip 테이블 직행).
+    /// ponytail: 디코드는 항상 첫 변형의 mip 세트 — 프로퍼티 연동 변형 선택은 미지원(2번째 이후 mip 세트 무시).
+    private static func conditionVariantEnd(_ b: [UInt8], from p: Int, i32: (Int) -> Int?) -> Int? {
         let maxConditionBytes = 64 * 1024
-        guard let marker1 = i32(p), let marker2 = i32(p + 4), marker1 == 1, marker2 == 2 else { return nil }
-        let jsonStart = p + 8
+        // idx 상한 64: 실제 mip 레코드(w|h|isLZ4|dec)와의 오인 차단 — w==1 && h≤64 && isLZ4==0 && dec 첫바이트
+        // '{' 를 동시에 만족하는 정상 텍스처는 존재 불가(dec=w×h×bpp 조합이 홀수 0x7B 를 만들 수 없음).
+        guard let m1 = i32(p), m1 == 1, let idx = i32(p + 4), (1...64).contains(idx),
+              let z = i32(p + 8), z == 0 else { return nil }
+        let jsonStart = p + 12
         guard jsonStart < b.count, b[jsonStart] == 0x7B || b[jsonStart] == 0x5B else { return nil } // "{" or "["
         let upper = min(b.count, jsonStart + maxConditionBytes)
         var jsonEnd = jsonStart
         while jsonEnd < upper, b[jsonEnd] != 0 {
             jsonEnd += 1
         }
-        guard jsonEnd < upper, let marker3 = i32(jsonEnd + 1), marker3 == 1 else { return nil }
-        return jsonEnd + 5
+        guard jsonEnd < upper else { return nil }
+        return jsonEnd + 1
     }
 
     /// TEXS 스프라이트시트 섹션 파스(파일 꼬리에서 역방향 탐색 — LZ4 페이로드 내 우연 일치 회피).
