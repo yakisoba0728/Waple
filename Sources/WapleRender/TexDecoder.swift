@@ -39,6 +39,23 @@ public enum TexDecoder {
         }
     }
 
+    /// 조건 변형(TEXB0004) 선택 디코드: tex.variants 가 있으면 프로퍼티 값으로 mip 선택 후 디코드,
+    /// 없으면(또는 미매치=기본 mip 선택 시) 기존 rgba(from:data:). 변형 mip 은 기본과 동일 포맷(파일
+    /// format 기반 DXT/raw)이라 decodeMip 재사용. 젤다 튜닉색(tuniccolor) 등 프로퍼티 연동 텍스처용.
+    public static func rgba(from tex: TexImage, data: Data, properties: [String: PropertyValue])
+        -> (pixels: Data, width: Int, height: Int)? {
+        guard !tex.variants.isEmpty,
+              let mip = tex.selectedMip(properties: properties), mip != tex.mip else {
+            return rgba(from: tex, data: data)
+        }
+        switch tex.payload {
+        case .bc3, .bc2, .bc1, .r8, .rg88, .lz4RGBA:
+            return decodeMip(payload: tex.payload, mip: mip, data: data)
+        default:
+            return rgba(from: tex, data: data)   // 변형이나 mip 기반 아님(미관측) — 안전 폴백
+        }
+    }
+
     /// 특정 아틀라스 페이지(image index) 디코드. 다중 image = GIF 스프라이트 페이지(각 자체 mip0,
     /// frame.imageId 가 페이지 인덱스 — RePKG ConvertToGif). index 0/단일 image/범위 밖은 mip0(=rgba) 로.
     /// mip 기반(raw/DXT) 포맷에만 의미(임베디드 이미지 페이지는 단일이라 rgba 사용).

@@ -61,6 +61,50 @@ public struct TexImage {
         }
     }
 
+    /// TEXB0004 조건 변형: 프로퍼티 값에 따라 다른 mip 페이로드를 고르는 텍스처(실측 젤다 튜닉색).
+    /// 조건 JSON 실물 문법(전 코퍼스 8종 확정, 2026-07-09):
+    ///   {"condition":{"condition":"<value>","name":"<propertyKey>"}}
+    /// 예: {"condition":{"condition":"2","name":"tuniccolor"}} = tuniccolor 값이 "2"일 때 이 변형.
+    /// PropertyConditionEvaluator(JS식 표현) 와 문법이 달라(구조화 JSON) 전용 최소 평가기 — 단일 값 동등비교.
+    public struct VariantCondition: Equatable {
+        public let name: String    // 프로퍼티 키(예 tuniccolor)
+        public let value: String   // 이 변형이 선택될 프로퍼티 값(예 "2")
+
+        public init(name: String, value: String) { self.name = name; self.value = value }
+
+        /// mip 앞 체인의 인라인 JSON 파스. 값이 문자열/숫자가 아니거나(표현식·범위 등 미관측) 구조가
+        /// 다르면 nil → 해당 변형은 절대 매치 안 됨(안전 폴백: 기본 image 사용).
+        public init?(json: String) {
+            guard let data = json.data(using: .utf8),
+                  let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let inner = root["condition"] as? [String: Any],
+                  let name = inner["name"] as? String else { return nil }
+            self.name = name
+            if let s = inner["condition"] as? String { self.value = s }
+            else if let n = inner["condition"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() {
+                self.value = n.stringValue
+            } else { return nil }
+        }
+
+        /// 프로퍼티 값과 대조(문자열/숫자 동등). 콤보 값은 문자열("0".."3")이라 문자열 비교가 정본.
+        public func matches(_ values: [String: PropertyValue]) -> Bool {
+            guard let pv = values[name] else { return false }
+            switch pv {
+            case .string(let s): return s == value
+            case .number(let n): return Double(value) == n
+            case .bool(let b): return (value == "true" || value == "1") == b
+            case .none: return false
+            }
+        }
+    }
+
+    /// 조건 변형 1개 = (조건, mip). mip 은 기본 image 와 동일 포맷(파일 format 기반 DXT/raw).
+    public struct Variant: Equatable {
+        public let condition: VariantCondition
+        public let mip: CompressedMip
+        public init(condition: VariantCondition, mip: CompressedMip) { self.condition = condition; self.mip = mip }
+    }
+
     public let width: Int   // 이미지 width (imgW)
     public let height: Int
     public let format: Int
@@ -75,11 +119,21 @@ public struct TexImage {
     public var imageCount: Int { max(mips.count, mip == nil ? 0 : 1) }
     /// 스프라이트시트 프레임 목록(TEXS 부재 시 []).
     public var frames: [TexFrame] = []
+    /// TEXB0004 조건 변형 목록(비-조건 텍스처는 []). 소비처는 variants.isEmpty 로 분기 —
+    /// 빈 목록이면 기존 mip 경로 그대로(하위호환). 선택은 selectedMip(properties:).
+    public var variants: [Variant] = []
 
     public var noInterpolation: Bool { flags & 0x1 != 0 }
     public var clampUVs: Bool { flags & 0x2 != 0 }
     public var isGif: Bool { flags & 0x4 != 0 }
     public var isVideoTexture: Bool { flags & 0x20 != 0 }
+
+    /// 프로퍼티 값으로 변형 선택: 첫 매치 변형의 mip, 미매치 시 기본(mip). variants 없으면 항상 기본.
+    /// 순수 — 렌더 배선이 이 결과로 디코드(TexDecoder.rgba(from:data:properties:)).
+    public func selectedMip(properties: [String: PropertyValue]) -> CompressedMip? {
+        for v in variants where v.condition.matches(properties) { return v.mip }
+        return mip
+    }
 
     public static func parse(_ data: Data) -> TexImage? {
         let b = [UInt8](data)
@@ -96,10 +150,12 @@ public struct TexImage {
         guard texW >= 0, texH >= 0, imgW >= 0, imgH >= 0,
               texW <= maxDim, texH <= maxDim, imgW <= maxDim, imgH <= maxDim else { return nil }
 
-        func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?, mips: [CompressedMip] = []) -> TexImage {
+        func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?,
+                  mips: [CompressedMip] = [], variants: [Variant] = []) -> TexImage {
             var t = TexImage(width: imgW, height: imgH, format: format, payload: kind, payloadRange: range, mip: mip)
             t.flags = flags
             t.mips = mips
+            t.variants = variants
             t.frames = parseFrames(b)
             return t
         }
@@ -110,8 +166,8 @@ public struct TexImage {
         //    압축 바이트를 PNG 로 디코드 실패하기 때문. 실측(2026-07-09): 코퍼스 임베디드 35개는 전부 비압축
         //    이고 v4 서브레이아웃이 둘 — splash_*(표준 mip → 여기서 .embeddedImage) 와 lut/*(mip 에 여분 int
         //    → parseMip 실패 → 아래 fast-path .png). 둘 다 정상 디코드(어느 쪽도 payloadRange 오정렬 없음).
-        let container = parseMip(b, decodeW: texW, decodeH: texH, imgW: imgW, imgH: imgH)
-        if let (mips, imageFormat) = container {
+        let container = parseMip(b, decodeW: texW, decodeH: texH, imgW: imgW, imgH: imgH, format: format)
+        if let (mips, imageFormat, _) = container {
             let mip = mips[0]
             switch imageFormat {
             case -1 where flags & 0x20 != 0:                                     // TEXB0003 비디오: imageFormat 부재(-1)라 IsVideoTexture
@@ -139,7 +195,7 @@ public struct TexImage {
         // fmt9=R8 실측 근거(2026-07-04, 3598808038 opacity 마스크): LZ4 해제 후 raw 바이트가
         // 부드러운 비네트 그라디언트(edge 255/center 0, 정확히 w×h 바이트) — DXT5 블록 구조가 아님.
         // WE 포맷 enum: 8=RG88, 9=R8. 종전 코드가 9 를 4(DXT5)에 묶어 마스크가 전백(全白)→전화면 흑화면.
-        if let (mips, _) = container {
+        if let (mips, _, variants) = container {
             let mip = mips[0]
             let kind: PayloadKind
             switch format {
@@ -152,7 +208,8 @@ public struct TexImage {
             default: kind = .unknown
             }
             // 다중 image(아틀라스 페이지)는 format-based(raw/DXT) 페이로드에만 의미 — mips 전체 보존.
-            return make(kind, mip.payloadRange, mip, mips: mips)
+            // 조건 변형(variants)도 여기서만 유효(전부 imageFormat=-1 → format 기반 디코드).
+            return make(kind, mip.payloadRange, mip, mips: mips, variants: variants)
         }
         // 4) 비압축 raw RGBA(드묾).
         if format == 0 { return make(.rawRGBA8888, 0..<b.count, nil) }
@@ -166,7 +223,7 @@ public struct TexImage {
     ///   image별: (v4 조건 변형 체인 ×N) i32 mipCount | mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 dec | i32 comp | payload
     /// (mip0 외 mip 은 크기만큼 스킵). 종전 "compressedSize 가 EOF 에 닿는 int 스캔" 휴리스틱은 다중 mip
     /// 파일(DJK_1.tex mip 9개 등)에서 실패해 3D 모델 텍스처 대부분이 흰색 폴백이었다.
-    private static func parseMip(_ b: [UInt8], decodeW: Int, decodeH: Int, imgW: Int, imgH: Int) -> (mips: [CompressedMip], imageFormat: Int)? {
+    private static func parseMip(_ b: [UInt8], decodeW: Int, decodeH: Int, imgW: Int, imgH: Int, format: Int) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant])? {
         guard let ti = indexOf(b, Array("TEXB".utf8)), ti + 9 <= b.count else { return nil }
         let version = Int(String(bytes: b[ti + 4..<ti + 8], encoding: .ascii) ?? "") ?? 0
         guard version >= 1, version <= 4 else { return nil }
@@ -200,9 +257,14 @@ public struct TexImage {
         if version >= 3 { imageFormat = i32(p) ?? -1; p += 4 }   // imageFormat 직독(RePKG: !=-1 이면 인코딩 파일)
         if version >= 4 { p += 4 }   // 0004 추가 필드(실측 0/1 = isVideoMp4; 조건 변형 텍스처는 변형 수 1/3)
         var mips: [CompressedMip] = []
+        var chain: [(idx: Int, json: String)] = []   // v4 조건 변형 블록(idx, 조건 JSON) — mipCount 앞 체인
         for _ in 0..<imageCount {
-            // v4 조건 변형 체인 스킵: [i32 1][i32 idx][i32 0][json NUL] × N 이 mipCount 앞에 온다.
-            if version >= 4 { while let e = conditionVariantEnd(b, from: p, i32: i32) { p = e } }
+            // v4 조건 변형 체인: [i32 1][i32 idx][i32 0][json NUL] × N 이 mipCount 앞에 온다 — idx/JSON 보존.
+            if version >= 4 {
+                while let blk = conditionVariantBlock(b, from: p, i32: i32) {
+                    chain.append((blk.idx, blk.json)); p = blk.end
+                }
+            }
             guard let mipCount = i32(p), mipCount > 0 else { break }
             p += 4
             guard let (mip0, after0) = readMip(p) else { break }   // 페이지의 mip0 = 아틀라스 페이지 픽셀
@@ -215,17 +277,22 @@ public struct TexImage {
             }
             if !ok { break }
         }
-        return mips.isEmpty ? nil : (mips, imageFormat)
+        // v4 조건 변형: 기본 image(위) 뒤에 [imageCount][변형수] 헤더 + 변형별 image 가 온다(실측 8종 전부
+        // imageCount==1). 파스 실패/미일치 시 variants=[](기본 mip 경로 무회귀 — 0xEE 잔재 픽스처 등 방어).
+        var variants: [Variant] = []
+        if version >= 4, imageCount == 1, !chain.isEmpty {
+            variants = parseVariantSection(b, from: p, chain: chain, format: format,
+                                           imgW: imgW, imgH: imgH, i32: i32)
+        }
+        return mips.isEmpty ? nil : (mips, imageFormat, variants)
     }
 
     /// TEXB0004 조건 변형 블록 1개: [i32 1][i32 variantIdx][i32 0][condition JSON NUL]. 프로퍼티 값(예
-    /// tuniccolor)으로 텍스처 변형을 고르는 파일 — 변형 블록 N개가 연속한 뒤 mip 테이블이 온다.
-    /// 실측(2026-07-09, 전 코퍼스 460종 sweep): 조건 tex 는 zelda 8개뿐, 전부 이 레이아웃(v4 필드 = 변형 수
-    /// 1/3). 종전 "[1][2][json][1]" 프레이밍은 단일 변형에서 mipCount(항상 1)를 블록 선두로 오독한 우연 —
-    /// 다변형(childlink_01, 변형 3)에서 붕괴해 unknown-fmt4 로 전락했다.
-    /// 반환 = 블록 끝(다음 블록 또는 mipCount 위치). 패턴 불일치 시 nil(mip 테이블 직행).
-    /// ponytail: 디코드는 항상 첫 변형의 mip 세트 — 프로퍼티 연동 변형 선택은 미지원(2번째 이후 mip 세트 무시).
-    private static func conditionVariantEnd(_ b: [UInt8], from p: Int, i32: (Int) -> Int?) -> Int? {
+    /// tuniccolor)으로 텍스처 변형을 고르는 파일 — 조건 블록 N개가 연속한 뒤 기본 mip 테이블, 그 뒤 변형 섹션.
+    /// 실측(2026-07-09, 전 코퍼스 460종 sweep + 8종 디코드 검증): 조건 tex 는 zelda 8개뿐, 전부 이 레이아웃.
+    /// 반환 = (블록 끝(다음 블록 또는 mipCount 위치), idx, condition JSON). 패턴 불일치 시 nil(mip 테이블 직행).
+    private static func conditionVariantBlock(_ b: [UInt8], from p: Int, i32: (Int) -> Int?)
+        -> (end: Int, idx: Int, json: String)? {
         let maxConditionBytes = 64 * 1024
         // idx 상한 64: 실제 mip 레코드(w|h|isLZ4|dec)와의 오인 차단 — w==1 && h≤64 && isLZ4==0 && dec 첫바이트
         // '{' 를 동시에 만족하는 정상 텍스처는 존재 불가(dec=w×h×bpp 조합이 홀수 0x7B 를 만들 수 없음).
@@ -239,7 +306,53 @@ public struct TexImage {
             jsonEnd += 1
         }
         guard jsonEnd < upper else { return nil }
-        return jsonEnd + 1
+        return (jsonEnd + 1, idx, String(decoding: b[jsonStart..<jsonEnd], as: UTF8.self))
+    }
+
+    /// 기본 image 뒤 변형 섹션 파스(실측 레이아웃, 2026-07-09 전 코퍼스 8종 디코드 검증 — childlink 튜닉색
+    /// 초록/파랑/빨강/검정이 idx 로 분리 확인):
+    ///   [i32 imageCount][i32 변형수] | 변형별: [i32 1][i32 idx][i32 0][i32 0][i32 w][i32 h][i32 13][i32 comp][payload]
+    /// dec(해제 크기)는 파일 format+w,h 로 계산(변형 image 엔 dec 필드 부재), isLZ4 는 comp==dec 면 비압축
+    /// (WE 는 압축이 이득일 때만 LZ4 저장). idx 로 조건 체인과 짝지음. 어떤 검증이든 실패하면 [](기본 mip 무회귀).
+    private static func parseVariantSection(_ b: [UInt8], from start: Int,
+                                            chain: [(idx: Int, json: String)],
+                                            format: Int, imgW: Int, imgH: Int,
+                                            i32: (Int) -> Int?) -> [Variant] {
+        var q = start
+        guard let sImageCount = i32(q), sImageCount >= 1, sImageCount <= 1024,
+              let sVariantCount = i32(q + 4), sVariantCount == chain.count else { return [] }
+        q += 8
+        var byIdx: [Int: CompressedMip] = [:]
+        for _ in 0..<sVariantCount {
+            guard let m1 = i32(q), m1 == 1, let idx = i32(q + 4), (1...64).contains(idx),
+                  let z0 = i32(q + 8), z0 == 0, let z1 = i32(q + 12), z1 == 0,
+                  let w = i32(q + 16), let h = i32(q + 20), w > 0, h > 0, w <= 16384, h <= 16384,
+                  i32(q + 24) != nil, let comp = i32(q + 28), comp > 0, q + 32 + comp <= b.count else { return [] }
+            q += 32
+            let dec = mipByteSize(format: format, w: w, h: h)
+            guard dec > 0, dec <= 512 << 20 else { return [] }
+            byIdx[idx] = CompressedMip(decodeWidth: w, decodeHeight: h, imageWidth: imgW, imageHeight: imgH,
+                                       decompressedSize: dec, payloadRange: q..<(q + comp), lz4: comp != dec)
+            q += comp
+        }
+        var out: [Variant] = []
+        for (idx, json) in chain {
+            guard let cond = VariantCondition(json: json), let mip = byIdx[idx] else { continue }
+            out.append(Variant(condition: cond, mip: mip))
+        }
+        return out
+    }
+
+    /// mip 해제 크기(byte) = format 별 픽셀/블록 크기 × dims. 변형 image 는 dec 필드가 없어 계산해야
+    /// LZ4 해제 크기를 안다(기본 mip 은 dec 명시). WE format: 0=RGBA 4=DXT5 6=DXT3 7=DXT1 8=RG88 9=R8.
+    private static func mipByteSize(format: Int, w: Int, h: Int) -> Int {
+        switch format {
+        case 4, 6: return ((w + 3) / 4) * ((h + 3) / 4) * 16   // BC3/BC2 16B/block
+        case 7:    return ((w + 3) / 4) * ((h + 3) / 4) * 8    // BC1 8B/block
+        case 8:    return w * h * 2                             // RG88
+        case 9:    return w * h                                // R8
+        default:   return w * h * 4                            // RGBA(0) 및 미지 포맷
+        }
     }
 
     /// TEXS 스프라이트시트 섹션 파스(파일 꼬리에서 역방향 탐색 — LZ4 페이로드 내 우연 일치 회피).
