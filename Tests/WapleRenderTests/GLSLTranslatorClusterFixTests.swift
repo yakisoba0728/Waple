@@ -145,4 +145,23 @@ final class GLSLTranslatorClusterFixTests: XCTestCase {
         """
         assertCompiles(vertex: trivialVert, fragment: frag)
     }
+
+    // MARK: Cluster 7 — "cannot have global constructors"
+    // 실물 audio_responsive_oscilloscope: const float x = pow(...); 이 파일 스코프 constant 로 방출되면
+    // pow 는 컴파일타임 상수가 아니라 전역 생성자가 필요 → makeLibrary 링크 거부. 함수 스코프로 강등해야 한다.
+    func testGlobalConstWithRuntimeCallDemoted() {
+        let frag = """
+        uniform sampler2D g_Texture0;
+        uniform float u_x; // {"material":"x","default":2.0}
+        const float resolution = float(32);
+        const float ratio = pow(resolution / 16.0, 2.0);
+        varying vec2 v_TexCoord;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= ratio * u_x;
+            gl_FragColor = c;
+        }
+        """
+        assertCompiles(vertex: trivialVert, fragment: frag)
+    }
 }
