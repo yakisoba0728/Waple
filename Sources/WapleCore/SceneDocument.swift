@@ -77,6 +77,10 @@ public struct SceneLayer: Equatable {
     /// visible 의 정적 value(초기 표시). visible 스크립트가 있을 때만 false 로도 남는다 —
     /// 스크립트 없는 정적 false 는 파스에서 레이어 자체가 드롭된다.
     public var initialVisible: Bool = true
+    /// 머티리얼 패스에 SPRITESHEET 콤보가 있으면 true → 이 이미지 레이어는 .tex TEXS 프레임을 시간축
+    /// 재생(gif). 렌더러가 이 게이트로만 프레임 전진(콤보 없는 genericimage2/4 는 정지 = 무회귀).
+    /// 콤보 키는 대/소문자 혼재(실씬 "SPRITESHEET", 엔진 예제 "spritesheet") — 대소문자 무시 매치.
+    public var spritesheet: Bool = false
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -473,6 +477,7 @@ extension SceneDocument {
         var blendMode = "normal"
         var depthTest = true
         var depthWrite = true
+        var spritesheetCombo = false
         if let md = package.data(for: imagePath) ?? assets?(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
@@ -483,6 +488,10 @@ extension SceneDocument {
                 if let bl = p0["blending"] as? String { blendMode = bl }
                 depthTest = (p0["depthtest"] as? String) != "disabled"
                 depthWrite = (p0["depthwrite"] as? String) != "disabled"
+                // SPRITESHEET 콤보(대/소문자 무시, 값 !=0) → 이 레이어는 .tex TEXS 프레임 시간축 재생.
+                if let combos = p0["combos"] as? [String: Any] {
+                    spritesheetCombo = combos.contains { $0.key.lowercased() == "spritesheet" && (intVal($0.value) ?? 0) != 0 }
+                }
             }
         }
         var layer = SceneLayer(
@@ -508,6 +517,7 @@ extension SceneDocument {
         layer.blendMode = blendMode
         layer.depthTest = depthTest
         layer.depthWrite = depthWrite
+        layer.spritesheet = spritesheetCombo
         layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])

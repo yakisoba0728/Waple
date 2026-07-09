@@ -135,6 +135,28 @@ public struct TexImage {
         return mip
     }
 
+    /// 씬 시간(초) → 스프라이트시트 프레임 인덱스. 프레임별 **가변** frametime 을 누적해 총 재생길이로
+    /// 모듈로 랩(무한 루프)한다. 시간 정본은 TexFrame.time(TEXS0003 per-frame frametime) — 코퍼스
+    /// 실측(2026-07-10, SPRITESHEET 37씬 전수): material/model/scene image 체인에 fps/framerate/
+    /// frametime/loop/autoplay 필드 0건, 재생속도(0.03~1.0s)는 오직 .tex TEXS 에만 존재. loop·autoplay
+    /// 는 암묵(WE 는 스프라이트 이미지를 자동재생·무한루프). 프레임 ≤1 이면 항상 0(정지 = 무프레임과 동등).
+    /// 파티클 gif 경로(frames[0].time 상수 가정)와 달리 프레임별 time 을 존중 — 가변 시트 정확.
+    public static func spriteFrameIndex(frames: [TexFrame], time: Float) -> Int {
+        let n = frames.count
+        guard n > 1 else { return 0 }
+        var total: Float = 0
+        for f in frames { total += max(1e-4, f.time) }
+        guard total > 1e-4, time.isFinite else { return 0 }
+        var t = time.truncatingRemainder(dividingBy: total)
+        if t < 0 { t += total }            // 음수 시간 방어(일시정지 되감기 등)
+        var acc: Float = 0
+        for i in 0..<n {
+            acc += max(1e-4, frames[i].time)
+            if t < acc { return i }
+        }
+        return n - 1                        // 부동소수 경계 폴백
+    }
+
     public static func parse(_ data: Data) -> TexImage? {
         let b = [UInt8](data)
         guard b.count > 42, b[0..<8].elementsEqual(Array("TEXV0005".utf8)) else { return nil }
