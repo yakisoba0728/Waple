@@ -146,6 +146,47 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
         XCTAssertLessThan(abs(day - day2), 0.02, "재클릭 → 원상 복귀: \(day) → \(day2)")
     }
 
+    // MARK: - cursorClick → 사운드 트리거
+
+    /// 합성 씬(실물 2955378002/3146703458 축소판): startsilent 사운드 오브젝트 name='dial.wav' +
+    /// cursorClick 스크립트 `getLayer('dial.wav').play()`. 헤드리스 mount(오디오 미생성)라 트랜스포트를
+    /// 수동 연결(캡처 결정성 유지) 후 simulateCursorClick → 실 dispatch 경로로 트랜스포트 재생 단언.
+    func testSimulatedClickTriggersSoundTransport() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080",
+            "visible":{"value":true,"script":"'use strict';\\nexport function cursorClick(event){ thisScene.getLayer('dial.wav').play(); }"}},
+           {"id":2,"name":"dial.wav","sound":["sounds/dial.wav"],"playbackmode":"single","startsilent":true,"volume":1}
+         ]}
+        """
+        var files: [(String, Data)] = [("scene.json", scene.data(using: .utf8)!)]
+        files.append(("models/bg.json", Data(#"{"material":"materials/bg.json"}"#.utf8)))
+        files.append(("materials/bg.json", Data(#"{"passes":[{"textures":["bg"]}]}"#.utf8)))
+        files.append(("materials/bg.tex", solidTex(255, 255, 255)))
+        files.append(("sounds/dial.wav", SceneAudioPlayerTests.silentWAV()))
+
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                    project: try makeProject(files, id: "waple_sound_e2e"))
+        defer { r.teardown() }
+
+        // 헤드리스라 sceneAudio 는 미생성 → 트랜스포트 수동 연결(라이브 배선과 동일 seam).
+        let audio = SceneAudioPlayer()
+        let pkg = ScenePackage.assemble([(name: "sounds/dial.wav", data: SceneAudioPlayerTests.silentWAV())])
+        audio.start(sounds: [SceneSound(id: 2, name: "dial.wav", sounds: ["sounds/dial.wav"], volume: 1,
+                                        playbackMode: "single", startSilent: true, minTime: 0, maxTime: 0)],
+                    package: pkg, settingVolume: 0)   // mute — 무음 재생(상태만 검증, 실청취 불가)
+        r.sceneScript?.soundTransport = audio
+
+        XCTAssertFalse(audio.isPlaying(name: "dial.wav"), "클릭 전 startsilent 무음")
+        r.simulateCursorClick(x: 960, y: 540)
+        XCTAssertTrue(audio.isPlaying(name: "dial.wav"),
+                      "cursorClick → getLayer('dial.wav').play() → 트랜스포트 재생 전이 실패")
+        audio.teardown()
+    }
+
     // MARK: - 미디어 → 씬 배달
 
     private struct FakeMediaProvider: NowPlayingProvider, ArtworkProviding {

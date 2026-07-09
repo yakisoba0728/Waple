@@ -36,17 +36,49 @@ public struct SceneScriptLayerDescriptor {
 /// 각 스크립트는 IIFE 로 감싸므로 update/스크립트-로컬 상태는 클로저에 격리된다.
 public final class SceneScriptContext {
     let context: JSContext
+    /// 사운드 트리거 트랜스포트(라이브 mount 시 SceneRenderer 가 연결). nil 이면 __wapleSound 브리지는 no-op —
+    /// 헤드리스/캡처(오디오 미생성)에서 getLayer(사운드).play() 는 안전 무시된다.
+    public weak var soundTransport: SceneAudioPlayer?
 
-    public init?(layers: [SceneScriptLayerDescriptor] = []) {
+    public init?(layers: [SceneScriptLayerDescriptor] = [], soundNames: [String] = []) {
         guard let ctx = JSContext() else { return nil }
         context = ctx
         ctx.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] scene script context exception: \(ex?.toString() ?? "?")")
         }
         ctx.evaluateScript(TextScriptEngine.shims)
+        installSoundBridge(ctx)
         if !layers.isEmpty {
             ctx.evaluateScript("__setSceneLayers(\(Self.layersJSONArray(layers)));")
         }
+        let named = soundNames.filter { !$0.isEmpty }
+        if !named.isEmpty {
+            ctx.evaluateScript("__setSoundLayers(\(Self.stringJSONArray(named)));")
+        }
+    }
+
+    /// JS __wapleSound 가 호출하는 네이티브 전역을 트랜스포트에 연결. [weak self] 로 캡처(JSContext 가
+    /// 블록을 보유 — self 강참조면 순환 참조). 값 타입 브리징: Bool/Double 은 JSC 가 그대로 왕복.
+    private func installSoundBridge(_ ctx: JSContext) {
+        let play: @convention(block) (String) -> Void = { [weak self] n in self?.soundTransport?.play(name: n) }
+        let stop: @convention(block) (String) -> Void = { [weak self] n in self?.soundTransport?.stop(name: n) }
+        let pause: @convention(block) (String) -> Void = { [weak self] n in self?.soundTransport?.pause(name: n) }
+        let isPlaying: @convention(block) (String) -> Bool = { [weak self] n in self?.soundTransport?.isPlaying(name: n) ?? false }
+        let getVolume: @convention(block) (String) -> Double = { [weak self] n in Double(self?.soundTransport?.volume(name: n) ?? 0) }
+        let setVolume: @convention(block) (String, Double) -> Void = { [weak self] n, v in self?.soundTransport?.setVolume(name: n, Float(v)) }
+        ctx.setObject(play, forKeyedSubscript: "__wapleSoundPlay" as NSString)
+        ctx.setObject(stop, forKeyedSubscript: "__wapleSoundStop" as NSString)
+        ctx.setObject(pause, forKeyedSubscript: "__wapleSoundPause" as NSString)
+        ctx.setObject(isPlaying, forKeyedSubscript: "__wapleSoundIsPlaying" as NSString)
+        ctx.setObject(getVolume, forKeyedSubscript: "__wapleSoundGetVolume" as NSString)
+        ctx.setObject(setVolume, forKeyedSubscript: "__wapleSoundSetVolume" as NSString)
+    }
+
+    private static func stringJSONArray(_ names: [String]) -> String {
+        guard JSONSerialization.isValidJSONObject(names),
+              let data = try? JSONSerialization.data(withJSONObject: names),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
     }
 
     private static func layersJSONArray(_ layers: [SceneScriptLayerDescriptor]) -> String {
@@ -896,6 +928,7 @@ public final class TextScriptEngine {
         return {
             size: new Vec2(1920, 1080), screenSize: new Vec2(1920, 1080), resolution: new Vec2(1920, 1080),
             camera: camera, layers: [layer],
+            __soundLayers: {},   // name → 사운드 레이어(getLayer/enumerateLayers 로 노출 — 트리거/주크박스)
             getCamera: function() { return camera; },
             getCameraTransforms: function() { return transforms; },
             setCameraTransforms: function(v) { if (v) { transforms = v; } return this; },
@@ -904,6 +937,7 @@ public final class TextScriptEngine {
                     for (var n = 0; n < this.layers.length; n += 1) {
                         if (this.layers[n].name === i) { return this.layers[n]; }
                     }
+                    if (this.__soundLayers[i]) { return this.__soundLayers[i]; }   // 사운드 레이어 이름 매칭(트리거)
                     return fallbackLayer(i);
                 }
                 return this.layers[i || 0] || layer;
@@ -921,6 +955,10 @@ public final class TextScriptEngine {
                 if (!hasNamed) { out.push(fallbackLayer('player')); }
                 for (var k in fallbackLayers) {
                     if (out.indexOf(fallbackLayers[k]) < 0) { out.push(fallbackLayers[k]); }
+                }
+                // 사운드 레이어도 열거(주크박스는 name.includes('.mp3') 등으로 자체 필터 — 별도 마커 불요).
+                for (var sk in this.__soundLayers) {
+                    if (out.indexOf(this.__soundLayers[sk]) < 0) { out.push(this.__soundLayers[sk]); }
                 }
                 return out;
             },
@@ -966,6 +1004,39 @@ public final class TextScriptEngine {
     var thisLayer = __makeLayer();
     var thisObject = thisLayer;
     var thisScene = __makeScene(thisLayer);
+    // 사운드 트리거 브리지: 네이티브 전역(__wapleSound* — SceneScriptContext 가 씬 컨텍스트에만 설치)로 위임.
+    // 미설치(단독/웹 컨텍스트)면 typeof 가드로 안전 no-op. 실제 트랜스포트는 SceneAudioPlayer.
+    var __wapleSound = {
+        play: function(n){ if (typeof __wapleSoundPlay === 'function') { __wapleSoundPlay(String(n)); } },
+        stop: function(n){ if (typeof __wapleSoundStop === 'function') { __wapleSoundStop(String(n)); } },
+        pause: function(n){ if (typeof __wapleSoundPause === 'function') { __wapleSoundPause(String(n)); } },
+        isPlaying: function(n){ return (typeof __wapleSoundIsPlaying === 'function') ? !!__wapleSoundIsPlaying(String(n)) : false; },
+        getVolume: function(n){ return (typeof __wapleSoundGetVolume === 'function') ? Number(__wapleSoundGetVolume(String(n))) : 0; },
+        setVolume: function(n, v){ if (typeof __wapleSoundSetVolume === 'function') { __wapleSoundSetVolume(String(n), Number(v)); } }
+    };
+    // 사운드 레이어 = 시각 레이어 슈퍼셋(color/setAlpha 등 no-op 보존 → enumerateLayers 소비자 무회귀)
+    // + play/stop/pause/isPlaying 메서드 + .volume 세터/게터. getLayer(name)/enumerateLayers 로 노출.
+    function __makeSoundLayer(name) {
+        var layer = __makeLayer();
+        layer.name = String(name || '');
+        layer.solid = false;
+        layer.play = function(){ __wapleSound.play(this.name); return this; };
+        layer.stop = function(){ __wapleSound.stop(this.name); return this; };
+        layer.pause = function(){ __wapleSound.pause(this.name); return this; };
+        layer.isPlaying = function(){ return __wapleSound.isPlaying(this.name); };
+        Object.defineProperty(layer, 'volume', {
+            get: function(){ return __wapleSound.getVolume(layer.name); },
+            set: function(v){ __wapleSound.setVolume(layer.name, v); }
+        });
+        return layer;
+    }
+    function __setSoundLayers(names) {
+        if (!names || !names.length) { return; }
+        for (var i = 0; i < names.length; i += 1) {
+            var nm = String(names[i] || '');
+            if (nm.length > 0) { thisScene.__soundLayers[nm] = __makeSoundLayer(nm); }
+        }
+    }
     function __setSceneLayers(descriptors) {
         if (!descriptors || !descriptors.length) { return; }
         var layers = [];

@@ -26,29 +26,54 @@ public final class SceneAudioPlayer {
     static let unsupportedExtensions: Set<String> = []
 
     private var playlists: [Playlist] = []
+    /// 이름 주소(name-addressable) 트리거 레지스트리: 씬 스크립트의 `getLayer(name).play()/stop()/isPlaying()/.volume`
+    /// 대상. 이름 있는 사운드만 등록(playlists 배열의 같은 객체 참조 — pause/resume/teardown 이 함께 커버).
+    private var named: [String: Playlist] = [:]
 
     public init() {}
 
     /// 재생 시작. 각 sound 오브젝트 → 플레이리스트 1개(한 번에 한 곡).
     /// - settingVolume: VideoSettings.volume(id:) (0…1). 오서 볼륨과 곱해 최종 음량.
+    /// 이름 있는 사운드는 startsilent 여도 트리거 레지스트리에 등록(재생은 play(name:) 트리거 대기).
+    /// 자동재생은 비-startsilent 만(startsilent 은 기존 정책대로 시작 무음 — 클래스 주석 참조).
     public func start(sounds: [SceneSound], package: ScenePackage, settingVolume: Float) {
         for snd in sounds {
-            if snd.startSilent { continue }   // 확정: 트리거 대기 사운드 — 시작 자동재생 없음(클래스 주석 참조)
             let entries = Self.playableEntries(snd)
             guard !entries.isEmpty else {
                 WapleLog.warn("[Waple] scene sound: no playable entry in \(snd.sounds)")
                 continue
             }
+            let triggerable = !snd.name.isEmpty
+            // startsilent 이고 이름도 없으면 재생 경로 전무(자동재생X·트리거X) → 스킵(기존 no-op 계약 유지).
+            if snd.startSilent && !triggerable { continue }
             let pl = Playlist(entries: entries, mode: snd.playbackMode, package: package,
-                              volume: Self.effectiveVolume(author: snd.volume, setting: settingVolume),
+                              authorVolume: snd.volume, settingVolume: settingVolume,
                               minTime: snd.minTime, maxTime: snd.maxTime)
-            if pl.startFirstPlayable() { playlists.append(pl) }
+            // 자동재생 실패(전 후보 디코드 불가)면 미등록 — 단, 트리거 가능 사운드는 나중에 pkg 데이터가
+            // 없을 리 없으니 그대로 등록(트리거 시 재시도). startsilent 은 애초에 자동재생 안 함.
+            if !snd.startSilent {
+                guard pl.startFirstPlayable() else { continue }
+            }
+            playlists.append(pl)
+            if triggerable { named[snd.name] = pl }
         }
     }
 
+    // ── 이름 주소 트랜스포트(씬 스크립트 브리지 __wapleSound 배후) ─────────────────
+    /// 트리거 재생(재트리거 시 처음부터 재시작 — 클릭 SFX 규약). 미등록 이름은 안전 no-op.
+    public func play(name: String) { named[name]?.trigger() }
+    public func stop(name: String) { named[name]?.stop() }
+    /// 일시정지(현재 플레이어). 재생 재개는 play(name:) 트리거(처음부터) — 3596485909 getChildren 경로 한정 사용.
+    public func pause(name: String) { named[name]?.pause() }
+    /// 실재생 상태(주크박스 폴링용) — 곡 자연종료 시 false 로 떨어진다.
+    public func isPlaying(name: String) -> Bool { named[name]?.isPlaying ?? false }
+    /// 스크립트 관점 볼륨(오서 볼륨, 0…1). 실제 출력은 VideoSettings 배수와 곱해진다.
+    public func volume(name: String) -> Float { named[name]?.scriptVolume ?? 0 }
+    public func setVolume(name: String, _ v: Float) { named[name]?.setVolume(v) }
+
     public func pause() { playlists.forEach { $0.pause() } }
     public func resume() { playlists.forEach { $0.resume() } }
-    public func teardown() { playlists.forEach { $0.stop() }; playlists.removeAll() }
+    public func teardown() { playlists.forEach { $0.stop() }; playlists.removeAll(); named.removeAll() }
 
     /// 하나라도 재생 중인지(통합테스트 검증용).
     public var isPlaying: Bool { playlists.contains { $0.isPlaying } }
@@ -101,7 +126,9 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
     private let entries: [String]
     private let mode: String
     private let package: ScenePackage
-    private let volume: Float
+    /// 오서(스크립트) 볼륨 0…1 — 스크립트가 `.volume` 로 덮어쓰면 갱신. 실제 출력은 settingVolume 배수와 곱.
+    private var authorVolume: Float
+    private let settingVolume: Float
     private let minTime: Float
     private let maxTime: Float
     private var index = 0
@@ -111,9 +138,24 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
     /// 곡 간 대기(random gap) 중 일시정지되면 여기 다음 인덱스를 보관 → resume 이 재개(정지 중 재생 방지).
     private var pendingNext: Int?
 
-    init(entries: [String], mode: String, package: ScenePackage, volume: Float, minTime: Float, maxTime: Float) {
-        self.entries = entries; self.mode = mode; self.package = package; self.volume = volume
+    init(entries: [String], mode: String, package: ScenePackage,
+         authorVolume: Float, settingVolume: Float, minTime: Float, maxTime: Float) {
+        self.entries = entries; self.mode = mode; self.package = package
+        self.authorVolume = authorVolume; self.settingVolume = settingVolume
         self.minTime = minTime; self.maxTime = maxTime
+    }
+
+    /// 최종 출력 볼륨(오서 × 설정, 클램프). play(at:) 마다 적용 → 다음 곡에도 스크립트가 세팅한 볼륨이 지속.
+    private var effectiveVolume: Float { SceneAudioPlayer.effectiveVolume(author: authorVolume, setting: settingVolume) }
+    /// 스크립트가 읽어가는 볼륨(오서 관점). 세팅 배수는 감춘다(주크박스 페이드 로직이 세팅한 값을 그대로 회수).
+    var scriptVolume: Float { authorVolume }
+    func setVolume(_ v: Float) { authorVolume = v; player?.volume = effectiveVolume }
+
+    /// 트리거 재생: 정지/일시정지 플래그 리셋 후 처음부터 재시작(재트리거 = 재시작).
+    func trigger() {
+        stopped = false; paused = false; pendingNext = nil
+        player?.stop()
+        _ = startFirstPlayable()
     }
 
     /// 시작 곡부터 재생 시도, 실패(pkg 누락/디코드) 시 다음 후보로 폴백. 전부 실패 = false.
@@ -145,7 +187,7 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
             let p = try AVAudioPlayer(data: data)
             // 단곡 loop 는 네이티브 무한루프(심리스, delegate 불요). 그 외는 delegate 로 다음 곡 결정.
             if mode == "loop" && entries.count == 1 { p.numberOfLoops = -1 } else { p.delegate = self }
-            p.volume = volume
+            p.volume = effectiveVolume
             p.prepareToPlay()
             p.play()
             player = p

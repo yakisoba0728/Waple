@@ -207,6 +207,9 @@ public struct SceneLight3D: Equatable {
 ///   single·parent 보유에 집중). mintime/maxtime(비-loop 재트리거 간격 추정)은 파스만 하고 미반영.
 public struct SceneSound: Equatable {
     public let id: Int
+    /// scene.json objects[] 의 "name"(트리거 스크립트의 `thisScene.getLayer(name).play()` 대상 — 실측: 사운드
+    /// 오브젝트도 레이어처럼 name 으로 주소지정, 이름 없으면 파일 basename 근사). 빈 문자열이면 트리거 불가(자동재생 전용).
+    public let name: String
     /// pkg 상대 경로 배열(예: "sounds/x.mp3"). 다중이면 플레이리스트(한 번에 한 곡).
     public let sounds: [String]
     /// 오서 볼륨 0…1. 재생 시 VideoSettings 배경별 설정과 곱해 최종 음량이 된다.
@@ -218,9 +221,9 @@ public struct SceneSound: Equatable {
     /// 비-loop 재트리거 간격(초) 추정 — 파스만, 스케줄링 미구현.
     public let minTime: Float
     public let maxTime: Float
-    public init(id: Int, sounds: [String], volume: Float, playbackMode: String,
+    public init(id: Int, name: String = "", sounds: [String], volume: Float, playbackMode: String,
                 startSilent: Bool, minTime: Float, maxTime: Float) {
-        self.id = id; self.sounds = sounds; self.volume = volume; self.playbackMode = playbackMode
+        self.id = id; self.name = name; self.sounds = sounds; self.volume = volume; self.playbackMode = playbackMode
         self.startSilent = startSilent; self.minTime = minTime; self.maxTime = maxTime
     }
 }
@@ -476,6 +479,7 @@ extension SceneDocument {
         // multi(플레이리스트)/startsilent(트리거 대기)는 의미 확정·재생기 반영(2026-07-09) — "unhandled" 로그 제거.
         return SceneSound(
             id: intVal(obj["id"]) ?? 0,
+            name: (obj["name"] as? String) ?? "",
             sounds: paths,
             volume: float(obj["volume"]) ?? 1,   // float() 가 숫자/{value} 바인딩 공통 언랩
             playbackMode: (obj["playbackmode"] as? String) ?? "single",

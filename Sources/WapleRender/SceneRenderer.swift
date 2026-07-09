@@ -398,7 +398,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 씬 공유 JSContext — 3D 오브젝트/빌보드 스크립트와 2D buildLayers/buildTexts/효과 스크립트가 공유.
         // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
         // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
-        sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc))
+        sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc),
+                                         soundNames: doc.sounds.map { $0.name })
         // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
         // 메시/빌보드가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
         if let cam = doc.camera3D, !doc.objects3D.isEmpty {
@@ -500,6 +501,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             audio.start(sounds: doc.sounds, package: package,
                         settingVolume: VideoSettings.volume(id: project.id))
             sceneAudio = audio
+            // 씬 스크립트 사운드 트리거(getLayer(name).play()/isPlaying()/.volume)를 실제 트랜스포트에 배선.
+            // 헤드리스(오디오 미생성)에선 미연결 → 브리지가 안전 no-op(트리거는 무시, 캡처 결정성 유지).
+            sceneScript?.soundTransport = audio
         }
     }
 
