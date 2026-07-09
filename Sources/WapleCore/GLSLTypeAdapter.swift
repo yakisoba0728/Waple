@@ -8,8 +8,10 @@ public enum GLSLTypeAdapter {
         public var vars: [String: Int]        // 이름 → 벡터 크기(1..4), 0 = 불투명
         public var functions: [String: Int]   // 함수 이름 → 반환 크기
         public var functionParams: [String: [Int]]  // 호출 인자 절단용(0=불투명)
-        public init(vars: [String: Int], functions: [String: Int] = [:], functionParams: [String: [Int]] = [:]) {
-            self.vars = vars; self.functions = functions; self.functionParams = functionParams
+        public var intVars: Set<String>       // int/uint 로 알려진 이름(헬퍼 파라미터 등) — min/max 모호성 해소용
+        public init(vars: [String: Int], functions: [String: Int] = [:], functionParams: [String: [Int]] = [:],
+                    intVars: Set<String> = []) {
+            self.vars = vars; self.functions = functions; self.functionParams = functionParams; self.intVars = intVars
         }
     }
 
@@ -84,7 +86,9 @@ public enum GLSLTypeAdapter {
         var intVars = Set<String>()   // int 선언 지역 — % 연산자 유지 판별용
         let returnSize: Int?
         var out = ""   // 재구성 출력
-        init(_ toks: [Tok], env: Env, returnSize: Int?) { self.toks = toks; self.env = env; self.returnSize = returnSize }
+        init(_ toks: [Tok], env: Env, returnSize: Int?) {
+            self.toks = toks; self.env = env; self.returnSize = returnSize; self.intVars = env.intVars
+        }
         func peek(_ k: Int = 0) -> String? { pos + k < toks.count ? toks[pos + k].text : nil }
         // EOF 를 넘어 호출돼도(잘린 입력) 빈 토큰 반환 — toks[pos] 무한계 인덱싱 트랩 방지. 유효 입력엔 무영향.
         func advance() -> Tok { defer { pos += 1 }; return pos < toks.count ? toks[pos] : Tok(trivia: "", text: "") }
@@ -416,6 +420,25 @@ public enum GLSLTypeAdapter {
                         let node = coerce(Node(text: argTexts[i], size: argSizes[i]), to: minVec)
                         argTexts[i] = node.text
                         argSizes[i] = minVec
+                    }
+                }
+                // MSL min/max/clamp 은 (int, float) 오버로드가 모호(실물 multistage_wave 의 max(overflowable /*int
+                // 파라미터*/, step()*step() /*float*/)). int 변수 인자와 non-int 인자가 섞이면 int 인자를 float() 로
+                // 캐스트. 정수 리터럴은 위 블록에서 이미 .0 승격되어 여기선 intVar 만 대상.
+                if ["min", "max", "clamp"].contains(t) {
+                    func isIntVar(_ x: String) -> Bool {
+                        let c = x.trimmingCharacters(in: .whitespaces)
+                        return p.intVars.contains(c) || c.hasPrefix("int(") || c.hasPrefix("uint(")
+                    }
+                    func isIntish(_ x: String) -> Bool {
+                        let c = x.trimmingCharacters(in: .whitespaces)
+                        return isIntVar(x) || (!c.isEmpty && c.allSatisfy { $0.isNumber })
+                    }
+                    if argTexts.contains(where: isIntVar), argTexts.contains(where: { !isIntish($0) }) {
+                        for i in argTexts.indices where isIntVar(argTexts[i]) {
+                            let lead = argTexts[i].prefix(while: { $0 == " " || $0 == "\t" })
+                            argTexts[i] = lead + "float(" + argTexts[i].trimmingCharacters(in: .whitespaces) + ")"
+                        }
                     }
                 }
                 // 알려진 헬퍼: 인자를 파라미터 크기로 절단(HLSL 관용 — 실물 shimmer).

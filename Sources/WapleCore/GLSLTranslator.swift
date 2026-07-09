@@ -257,7 +257,9 @@ public enum GLSLTranslator {
             guard let sig = helperSignature(h, captures: caps, materials: materials, structs: structNames) else { continue }  // 미지원 타입 → 스킵
             var helperEnv = sizeEnv
             for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
-            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes),
+            // int/uint 파라미터명은 어댑터에 int 로 알려 min/max(int,float) 모호성 해소(실물 multistage_wave).
+            let intParams = Set(h.params.filter { $0.type == "int" || $0.type == "uint" }.map { $0.name })
+            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes, intVars: intParams),
                                                     returnSize: GLSLTypeAdapter.typeSize(h.ret))
             let withCalls = appendCaptureArgs(adaptedBody, helpers: helpers, captureOf: captureOf) { cap in
                 rawCaptureName(cap, materials: materials)

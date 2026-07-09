@@ -103,4 +103,24 @@ final class GLSLTranslatorClusterFixTests: XCTestCase {
         """
         assertCompiles(vertex: trivialVert, fragment: frag)
     }
+
+    // MARK: Cluster 4 — "call to 'max' is ambiguous"
+    // 실물 multistage_wave: int unfeatheredMask = max(overflowable /*int 파라미터*/, step()*step() /*float*/).
+    // MSL 은 max(int,float) 오버로드가 모호. int 파라미터 인자를 float() 로 캐스트해 해소.
+    func testMaxIntParamMixedWithFloat() {
+        let frag = """
+        uniform sampler2D g_Texture0;
+        varying vec2 v_TexCoord;
+        float computeMask(int overflowable, float e) {
+            int unfeatheredMask = max(overflowable, step(0.5, e) * step(e, 0.9));
+            return float(unfeatheredMask);
+        }
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb *= computeMask(0, c.r);
+            gl_FragColor = c;
+        }
+        """
+        assertCompiles(vertex: trivialVert, fragment: frag)
+    }
 }
