@@ -73,20 +73,37 @@ extension SceneRenderer {
             // 솔리드 마커(""): 무텍스처 flat 머티리얼 → 흰색 1x1 — 기존 tint 경로(color×brightness, alpha)가 필을 만든다.
             // 컴포지션(_rt_) 레이어: 텍스처는 런타임 스냅샷 — 여기선 placeholder + 효과 dims 를 프로젝션으로 근사
             // (효과 texRes 는 주로 텍셀 오프셋 용도; 화면 크기는 draw 시 결정 — 설계 §3).
-            let decoded: (pixels: Data, width: Int, height: Int)
+            // 텍스처 + (스프라이트시트면) TEXS 프레임. effW/effH = 효과 dst 크기(스프라이트는 프레임 dims —
+            // 효과는 시트가 아니라 프레임 1장에 적용, buildDisplayTextures 가 프레임 추출 후 체인).
+            let mtl: MTLTexture
+            let effW: Int, effH: Int
+            var frames: [TexImage.TexFrame] = []
             if layer.textureEntryName.isEmpty {  // 솔리드/컴포지션 placeholder
-                decoded = (Data([255, 255, 255, 255]), 1, 1)
+                guard let t = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) else { continue }
+                mtl = t
+                effW = layer.isFrameBuffer ? Int(max(1, projW)) : 1   // 컴포지션 효과 dims 는 화면 근사
+                effH = layer.isFrameBuffer ? Int(max(1, projH)) : 1
+            } else if layer.spritesheet,
+                      let sprite = resolveTextureWithFrames(layer.textureEntryName, package: package, device: device),
+                      sprite.frames.count > 1 {
+                // SPRITESHEET 콤보 + TEXS 다중 프레임 → gif 애니. resolveTextureWithFrames 가 아틀라스
+                // (멀티페이지는 세로 스택 + frame.y 페이지 오프셋) + 프레임을 준다. 단일 프레임(count≤1)은
+                // 정지 이미지와 동등 → 아래 일반 경로로(무-프레임, 상시 리드로 유발 안 함).
+                mtl = sprite.texture
+                frames = sprite.frames
+                effW = max(1, Int(sprite.frames[0].atlasWidth.rounded()))
+                effH = max(1, Int(sprite.frames[0].atlasHeight.rounded()))
             } else if let texData = assetData(layer.textureEntryName, package: package),
                       let tex = TexImage.parse(texData),
                       let d = TexDecoder.rgba(from: tex, data: texData, properties: variantProperties) {
-                decoded = d
+                guard let t = makeTexture(d.pixels, d.width, d.height, device) else { continue }
+                mtl = t; effW = d.width; effH = d.height
             } else if let d = bitmapRGBAFile(layer.textureEntryName) {
-                decoded = d
+                guard let t = makeTexture(d.pixels, d.width, d.height, device) else { continue }
+                mtl = t; effW = d.width; effH = d.height
             } else { continue }
-            guard let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else { continue }
-            // 컴포지션 레이어의 효과 dims 는 화면(프로젝션) 근사 — 실제 src 는 draw 시 스냅샷.
-            let effW = layer.isFrameBuffer ? Int(max(1, projW)) : decoded.width
-            let effH = layer.isFrameBuffer ? Int(max(1, projH)) : decoded.height
+            // 스프라이트 프레임 있으면 상시 리드로 필요(gif 재생) — needsDisplay 정책은 shouldAnimate 로.
+            if !frames.isEmpty { hasAnimations = true }
             let verts = quadVertices(layer: layer, projW: w, projH: h)
             guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) else { continue }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
@@ -145,7 +162,7 @@ extension SceneRenderer {
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 initialVisible: layer.initialVisible,
-                                colorBlendMode: layer.colorBlendMode))
+                                colorBlendMode: layer.colorBlendMode, frames: frames))
         }
         return out
     }
@@ -476,10 +493,15 @@ extension SceneRenderer {
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }
     }
 
-    /// 이슈4: 다중 image 아틀라스 페이지를 **세로로 이어붙인 단일 텍스처**로 합치고 frame.y 에 페이지
-    /// 오프셋(page*pageHeight)을 더한다 — GPUParticleSystem.texture 단일 유지(프레임 인코더 무변경).
-    /// 페이지 크기 불일치/디코드 실패 시 nil → 호출자가 단일-이미지 경로로 폴백. 코퍼스에 다중 image .tex
-    /// 실물 0(RePKG 규약은 확정 — 합성 테스트로 배선 보증). ponytail: 텍스처 배열 대신 세로 스택(최소 변경).
+    /// 다중 image 아틀라스 페이지를 **세로로 이어붙인 단일 텍스처**로 합치고 frame.y 에 페이지별 누적
+    /// y-오프셋을 더한다(frame.imageId = 페이지). GPUParticleSystem/GPULayer.texture 단일 유지 → 프레임
+    /// 인코더/blit 무변경. 실측(2026-07-10, 코퍼스 멀티페이지 7종): 페이지 dims 가 **불균일**하다(예
+    /// 鸟_00020: page0 7680×7920, page1 5760×2880) — 종전 same-dims 가드는 여기서 nil 폴백해 page1
+    /// 프레임을 오프셋 없이(atlasY=0) 렌더했다(조용한 오프레임 — advisor #1). 이제 max-width × sum-height
+    /// 로 패딩 스택하고 각 페이지를 (0, 누적y)에 행-복사한다. **균일 페이지는 종전과 byte-identical 배치**
+    /// (maxW=pw, 누적y=page*ph) → 파티클 무회귀. 디코드 실패/과대 dims 만 nil → 호출자가 단일-이미지 폴백.
+    /// 레이어/파티클 공용(resolveTextureWithFrames). ponytail: 텍스처 배열 대신 패딩 세로 스택(폭 작은
+    /// 페이지 우측 패딩은 UV 밖이라 무해; 최소 변경으로 downstream 단일 텍스처 규약 유지).
     private func stackedAtlas(tex: TexImage, data: Data, device: MTLDevice)
         -> (texture: MTLTexture, frames: [TexImage.TexFrame])? {
         var pages: [(pixels: Data, width: Int, height: Int)] = []
@@ -487,17 +509,31 @@ extension SceneRenderer {
             guard let p = TexDecoder.rgba(from: tex, data: data, imageIndex: i) else { return nil }
             pages.append(p)
         }
-        guard let first = pages.first,
-              pages.allSatisfy({ $0.width == first.width && $0.height == first.height }) else { return nil }
-        let pw = first.width, ph = first.height
-        var stacked = Data(); stacked.reserveCapacity(pw * ph * 4 * pages.count)
-        for p in pages { stacked.append(p.pixels) }
+        guard !pages.isEmpty else { return nil }
+        let maxW = pages.map { $0.width }.max() ?? 0
+        let totalH = pages.map { $0.height }.reduce(0, +)
+        guard maxW > 0, totalH > 0, maxW <= 16384, totalH <= 16384 else { return nil }  // Metal 한계 + 정수 오버플로 가드
+        var yOff: [Int] = []; var cy = 0                     // 페이지별 누적 y(균일이면 page*ph)
+        for p in pages { yOff.append(cy); cy += p.height }
+        var stacked = Data(count: maxW * totalH * 4)          // 제로 버퍼(폭 작은 페이지 우측은 0 잔존)
+        stacked.withUnsafeMutableBytes { dstRaw in
+            guard let dst = dstRaw.baseAddress else { return }
+            for (i, p) in pages.enumerated() {
+                p.pixels.withUnsafeBytes { srcRaw in
+                    guard let src = srcRaw.baseAddress else { return }
+                    let rowBytes = p.width * 4
+                    for row in 0..<p.height {                  // 행 단위 복사(불균일 폭 → dst stride=maxW)
+                        memcpy(dst + ((yOff[i] + row) * maxW) * 4, src + row * rowBytes, rowBytes)
+                    }
+                }
+            }
+        }
         let adjusted = tex.frames.map { fr -> TexImage.TexFrame in
             let page = max(0, min(pages.count - 1, fr.imageId))   // imageId = 페이지 인덱스(범위 클램프)
-            return TexImage.TexFrame(imageId: fr.imageId, time: fr.time, x: fr.x, y: fr.y + Float(page * ph),
+            return TexImage.TexFrame(imageId: fr.imageId, time: fr.time, x: fr.x, y: fr.y + Float(yOff[page]),
                                      width: fr.width, height: fr.height, widthY: fr.widthY, heightX: fr.heightX)
         }
-        guard let m = makeTexture(stacked, pw, ph * pages.count, device) else { return nil }
+        guard let m = makeTexture(stacked, maxW, totalH, device) else { return nil }
         return (m, adjusted)
     }
 
