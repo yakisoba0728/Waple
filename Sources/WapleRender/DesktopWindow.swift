@@ -4,12 +4,17 @@ public final class DesktopWindow: NSWindow {
     /// 모니터별 배경 할당의 안정 키(CGDirectDisplayID 기반; 실패 시 이름).
     public let screenKey: String
 
-    public init(screen: NSScreen) {
+    /// NSScreen → 안정 키(CGDirectDisplayID 기반; 실패 시 이름). 정적 배경 동기화가
+    /// 화면별 원본을 같은 키로 저장·복원하도록 init 과 공유한다.
+    public static func screenKey(for screen: NSScreen) -> String {
         if let n = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
-            screenKey = "display-\(n.uint32Value)"
-        } else {
-            screenKey = "name-\(screen.localizedName)"
+            return "display-\(n.uint32Value)"
         }
+        return "name-\(screen.localizedName)"
+    }
+
+    public init(screen: NSScreen) {
+        screenKey = DesktopWindow.screenKey(for: screen)
         super.init(
             contentRect: screen.frame,
             styleMask: .borderless,

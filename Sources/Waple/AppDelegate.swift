@@ -29,6 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pausedByOcclusion = false   // 이 모니터가 정지시켰는지(수동 정지와 사유 분리)
     private weak var occlusionToggleItem: NSMenuItem?
 
+    // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
+    private var stillSyncWork: DispatchWorkItem?
+
     private static let pauseWhenOccludedKey = "pauseWhenOccluded"
     private var pauseWhenOccluded: Bool {
         get { UserDefaults.standard.bool(forKey: Self.pauseWhenOccludedKey) }   // 기본 false
@@ -106,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 action: #selector(openWebInteraction), keyEquivalent: "i"))
         menu.addItem(NSMenuItem(title: "정지 배경으로 설정",
                                 action: #selector(setStillWallpaper), keyEquivalent: ""))
+        menu.addItem(desktopStillSyncMenuItem())  // 정적 배경 동기화 토글(작업 1 — 구현은 확장)
         menu.addItem(NSMenuItem(title: "기본 에셋 폴더 설정…",
                                 action: #selector(chooseBaseAssets), keyEquivalent: ""))
         menu.addItem(screenSaverMenuItem())  // 화면보호기 토글(feat/screensaver — 구현은 파일 끝 확장)
@@ -321,6 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
             }
             if pausedByOcclusion { renderers.forEach { $0.pause() } }  // 가림 정지 중 교체된 렌더러도 정지 유지
+            scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
             return true
         case .failure(let error):
             notify("적용 실패: \(error)")
@@ -423,31 +428,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 정지 배경으로 설정 (작업 3)
 
-    /// 현재 배경에서 정지 이미지를 만들어 전 스크린 데스크탑 배경으로 지정.
+    /// 현재 배경에서 정지 이미지를 만들어 전 스크린 데스크탑 배경으로 지정(수동 1회).
     /// 배경 창은 아이콘 레벨 아래라, 라이브 창이 떠 있는 동안 정지 배경은 그 뒤의 폴백 레이어다.
+    /// 원본 보존/복원은 자동 동기화(작업 1) 전용 — 수동 설정은 사용자의 명시적 1회 액션이라 백업 없음.
     @objc private func setStillWallpaper() {
-        guard let folder = currentFolderURL,
-              let project = projectForMount(folderURL: folder) else {
-            notify("적용된 배경이 없습니다"); return
+        guard currentFolderURL != nil else { notify("적용된 배경이 없습니다"); return }
+        guard let image = generateStillImage() else {
+            notify("정지 배경을 만들 수 없습니다"); return
         }
-        guard let source = StillWallpaper.source(for: project) else {
-            notify("정지 배경을 만들 수 없습니다 — preview 이미지가 없습니다"); return
-        }
-        let stillDir = LibraryStore.defaultBaseDirectory().appendingPathComponent("still", isDirectory: true)
-        try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
-        let output = StillWallpaper.outputURL(projectId: project.id, stillDir: stillDir)
-
-        let imageURL: URL?
-        switch source {
-        case .videoFrame(let videoURL): imageURL = extractVideoFrame(from: videoURL, to: output)
-        case .sceneCapture:             imageURL = captureSceneStill(to: stillDir)
-        case .previewImage(let url):    imageURL = url   // preview 파일 그대로 사용
-        }
-        guard let image = imageURL else { notify("정지 배경 추출에 실패했습니다"); return }
         for screen in NSScreen.screens {
             try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
         }
         notify("정지 배경으로 설정했습니다")
+    }
+
+    /// still 산출 디렉터리(라이브러리 베이스/still).
+    private func stillDirectory() -> URL {
+        LibraryStore.defaultBaseDirectory().appendingPathComponent("still", isDirectory: true)
+    }
+
+    /// 현재 배경 → 정지 이미지 파일(공통). 소스 없음/추출 실패 → nil. (수동 설정·자동 동기화 공유)
+    private func generateStillImage() -> URL? {
+        guard let folder = currentFolderURL,
+              let project = projectForMount(folderURL: folder),
+              let source = StillWallpaper.source(for: project) else { return nil }
+        let stillDir = stillDirectory()
+        try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
+        let output = StillWallpaper.outputURL(projectId: project.id, stillDir: stillDir)
+        switch source {
+        case .videoFrame(let videoURL): return extractVideoFrame(from: videoURL, to: output)
+        case .sceneCapture:             return captureSceneStill(to: stillDir)
+        case .previewImage(let url):    return url   // preview 파일 그대로 사용
+        }
     }
 
     /// 동영상 t=1s 프레임 → PNG(실패 시 t=0 폴백). 실패 → nil.
@@ -521,5 +533,93 @@ extension AppDelegate {
         } catch {
             notify("화면보호기 설치 실패: \(error.localizedDescription)")
         }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MARK: - 정적 배경 동기화 (작업 1)
+// 배경 적용 성공 시 현재 배경의 정지 이미지를 실제 macOS 바탕화면에 자동 설정한다.
+// 목적: 메뉴바/Dock 틴트 매칭, Mission Control 축소뷰, 스크린샷/화면공유, 앱 미실행 폴백.
+// 기본 꺼짐 — 사용자 바탕화면을 말없이 바꾸는 건 침습적이라 옵트인.
+// 배선: 메뉴 1항목 + apply 성공 경로 1줄(scheduleDesktopStillSync) + applicationWillTerminate.
+// ═════════════════════════════════════════════════════════════════════════════
+extension AppDelegate {
+    private static var desktopStillSyncKey: String { "desktopStillSync" }
+    private static var desktopOriginalsKey: String { "waple.desktopSync.originals" }
+
+    /// 동기화 사용 여부(UserDefaults 영속, 기본 false).
+    var desktopStillSync: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.desktopStillSyncKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.desktopStillSyncKey) }
+    }
+
+    /// 화면키 → 최초 덮어쓰기 직전 원본 바탕화면 경로(UserDefaults 영속).
+    /// 인메모리가 아니라 영속시켜 terminate 없이 크래시해도 복원 가능하게 한다.
+    private var desktopOriginals: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: Self.desktopOriginalsKey) as? [String: String] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.desktopOriginalsKey) }
+    }
+
+    func desktopStillSyncMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "정적 배경 동기화",
+                              action: #selector(toggleDesktopStillSync(_:)), keyEquivalent: "")
+        item.state = desktopStillSync ? .on : .off
+        return item
+    }
+
+    @objc func toggleDesktopStillSync(_ sender: NSMenuItem) {
+        desktopStillSync.toggle()
+        sender.state = desktopStillSync ? .on : .off
+        if desktopStillSync {
+            scheduleDesktopStillSync()      // 켜면 현재 배경을 즉시(지연 후) 동기화
+        } else {
+            stillSyncWork?.cancel()
+            restoreDesktopOriginals()       // 끄면 원본 복원
+        }
+    }
+
+    /// 적용 성공 후 스틸 생성/설정 예약. 첫 프레임 안정화를 위해 수 초 지연 + 디바운스
+    /// (연속 재적용 — fit/속성/화면변경 — 은 취소·재예약으로 흡수). 꺼져 있으면 no-op.
+    func scheduleDesktopStillSync() {
+        stillSyncWork?.cancel()
+        guard desktopStillSync else { return }
+        let work = DispatchWorkItem { [weak self] in self?.syncDesktopStill() }
+        stillSyncWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+    }
+
+    /// 현재 배경 스틸을 전 스크린 바탕화면으로 설정. 최초 덮어쓰기 직전 원본을 화면별로 백업(가드).
+    /// 실패는 조용히 — 이 기능은 폴백일 뿐이다.
+    private func syncDesktopStill() {
+        guard desktopStillSync, let image = generateStillImage() else { return }
+        var originals = desktopOriginals
+        let stillPath = stillDirectory().path
+        for screen in NSScreen.screens {
+            let key = DesktopWindow.screenKey(for: screen)
+            let current = NSWorkspace.shared.desktopImageURL(for: screen)?.path
+            if StillDesktopSync.shouldBackupOriginal(
+                currentPath: current, stillDirPath: stillPath, hasBackup: originals[key] != nil) {
+                originals[key] = current
+            }
+            try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
+        }
+        desktopOriginals = originals
+    }
+
+    /// 백업된 원본 바탕화면 복원(파일이 아직 존재하는 화면만). 복원 후 백업 비움.
+    func restoreDesktopOriginals() {
+        let originals = desktopOriginals
+        guard !originals.isEmpty else { return }
+        for screen in NSScreen.screens {
+            guard let path = originals[DesktopWindow.screenKey(for: screen)],
+                  FileManager.default.fileExists(atPath: path) else { continue }
+            try? NSWorkspace.shared.setDesktopImageURL(URL(fileURLWithPath: path), for: screen, options: [:])
+        }
+        desktopOriginals = [:]
+    }
+
+    /// 종료 시 원본 복원(force-quit 엔 호출 안 됨 — 토글 오프도 복원 경로라 최선 노력으로 충분).
+    public func applicationWillTerminate(_ notification: Notification) {
+        restoreDesktopOriginals()
     }
 }

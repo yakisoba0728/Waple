@@ -322,6 +322,41 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(r.upperBound, 1)
     }
 
+    // MARK: - StillDesktopSync (정적 배경 동기화 — 원본 백업 판정)
+
+    func testStillBackup_freshScreen_backsUp() {
+        XCTAssertTrue(StillDesktopSync.shouldBackupOriginal(
+            currentPath: "/Users/x/wall.jpg", stillDirPath: "/lib/still", hasBackup: false),
+            "백업 없음 + 외부 경로 → 원본 저장")
+    }
+
+    func testStillBackup_alreadyBackedUp_skips() {
+        XCTAssertFalse(StillDesktopSync.shouldBackupOriginal(
+            currentPath: "/Users/x/wall.jpg", stillDirPath: "/lib/still", hasBackup: true),
+            "이미 백업 있음 → 유지(덮어쓰지 않음)")
+    }
+
+    func testStillBackup_selfPollutionGuard_skips() {
+        // 우리 스틸이 이미 깔린 상태(재실행)에서 그걸 '원본'으로 저장하면 복원이 무의미해진다.
+        XCTAssertFalse(StillDesktopSync.shouldBackupOriginal(
+            currentPath: "/lib/still/wp1.png", stillDirPath: "/lib/still", hasBackup: false),
+            "현재값이 still 디렉터리 내부 → 자기 오염 방지로 백업 안 함")
+    }
+
+    func testStillBackup_nilOrEmptyCurrent_skips() {
+        XCTAssertFalse(StillDesktopSync.shouldBackupOriginal(
+            currentPath: nil, stillDirPath: "/lib/still", hasBackup: false))
+        XCTAssertFalse(StillDesktopSync.shouldBackupOriginal(
+            currentPath: "", stillDirPath: "/lib/still", hasBackup: false))
+    }
+
+    func testStillIsUnder_prefixBoundary() {
+        XCTAssertTrue(StillDesktopSync.isUnder("/lib/still/a.png", dir: "/lib/still"))
+        XCTAssertTrue(StillDesktopSync.isUnder("/lib/still", dir: "/lib/still"), "동일 경로")
+        XCTAssertFalse(StillDesktopSync.isUnder("/lib/stillage/a.png", dir: "/lib/still"),
+            "형제 프리픽스(stillage)는 내부 아님")
+    }
+
     func testPropertyControlKindHandlesCorpusTypesCaseInsensitively() {
         XCTAssertEqual(PropertyControl.kind(forType: "Text"), .displayOnly)
         XCTAssertEqual(PropertyControl.kind(forType: ""), .displayOnly)
