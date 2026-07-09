@@ -70,7 +70,7 @@ public enum GLSLTypeAdapter {
 
     private static let scalarFns: Set<String> = ["dot", "distance", "length"]
     private static let broadcastFns: Set<String> = [
-        "sin","cos","tan","asin","acos","atan","atan2","abs","floor","ceil","fract","frac","exp","exp2","log","log2",
+        "sin","cos","tan","asin","acos","atan","atan2","abs","floor","ceil","round","trunc","fract","frac","exp","exp2","log","log2",
         "sqrt","rsqrt","normalize","saturate","pow","min","max","mix","lerp","clamp","step","smoothstep",
         "reflect","refract","sign","mod","we_mod",
     ]

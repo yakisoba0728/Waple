@@ -70,4 +70,20 @@ final class GLSLTranslatorClusterFixTests: XCTestCase {
         """
         assertCompiles(vertex: trivialVert, fragment: frag)
     }
+
+    // MARK: Cluster 5 — "implicit conversions between vector types (float2 vs float4)"
+    // 실물 pixelate: round(v_PixelCoord /*vec2*/) * v_PixelSize /*vec4*/. round 가 크기표에 없어
+    // 결과 크기 미지(0) → 곱셈 절단이 안 걸려 float2*float4 가 그대로 방출됐다.
+    func testRoundResultKnownSizeTruncatesMul() {
+        let frag = """
+        varying vec2 v_PixelCoord;
+        varying vec4 v_PixelSize;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec2 uv = round(v_PixelCoord) * v_PixelSize;
+            gl_FragColor = texSample2D(g_Texture0, uv);
+        }
+        """
+        assertCompiles(vertex: trivialVert, fragment: frag)
+    }
 }
