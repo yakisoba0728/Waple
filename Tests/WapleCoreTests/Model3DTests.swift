@@ -420,4 +420,31 @@ final class Model3DRealFileTests: XCTestCase {
             XCTAssertEqual(ok, mdls.count, "pkg \(id) 전수 파스")
         }
     }
+
+    /// 이슈7: MDLV0021(코퍼스 7개 pkg 에 17개 실존)이 0023 과 동일 레이아웃임을 실물 전수로 검증 —
+    /// 파스 성공 + 인덱스/트라이앵글/머티리얼 정합. 실패 시 0021 은 별도 레이아웃이므로 수용 철회 신호.
+    /// (3189665546 은 MDLV0019 도 섞여 있어 0021 매직 모델만 대상 — 0019 는 미지원.)
+    func testParsesMDLV0021Models() throws {
+        let ids = ["3189665546", "3367988661", "3384019940", "3404976219", "3400879974", "3417957645", "3409595232"]
+        var total = 0
+        for id in ids {
+            let pkg: ScenePackage
+            do { pkg = try loadPkg(id) } catch { continue }   // 없으면 스킵
+            for e in pkg.entries where e.name.hasSuffix(".mdl") {
+                guard let raw = pkg.data(for: e.name),
+                      String(bytes: raw.prefix(8), encoding: .utf8) == "MDLV0021" else { continue }
+                total += 1
+                guard let m = Model3D.parse(raw) else { XCTFail("\(id)/\(e.name): MDLV0021 파스 실패"); continue }
+                for mesh in m.meshes {
+                    XCTAssertEqual(mesh.indices.count % 3, 0, "\(id)/\(e.name): 트라이앵글 리스트")
+                    if let mx = mesh.indices.max() {
+                        XCTAssertLessThan(Int(mx), mesh.vertices.count, "\(id)/\(e.name): 인덱스 범위")
+                    }
+                    XCTAssertTrue(mesh.material.hasPrefix("materials/"), "\(id)/\(e.name): 머티리얼 규약 \(mesh.material)")
+                }
+            }
+        }
+        print("[Model3D] MDLV0021 전수: \(total)개 파스·정합 OK")
+        if total == 0 { throw XCTSkip("코퍼스에 MDLV0021 부재") }
+    }
 }
