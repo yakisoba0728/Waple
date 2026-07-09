@@ -97,6 +97,11 @@ public enum ShaderPreprocessor {
             if t.hasPrefix("#"), let c = t.range(of: "//") {
                 t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces)
             }
+            // `#if(cond)`/`#elif(cond)` — `#if`/`#elif` 뒤 공백 없이 `(` 가 오면 아래 prefix 검사가 놓쳐
+            // 지시문이 MSL 에 그대로 방출되고 짝 `#endif` 만 소비돼 미종결 조건부가 된다(실물 halftone).
+            // 공백을 끼워 정규화(다운스트림 dropFirst 카운트 불변).
+            if t.hasPrefix("#if(") { t = "#if " + t.dropFirst(3) }
+            else if t.hasPrefix("#elif(") { t = "#elif " + t.dropFirst(5) }
             if t.hasPrefix("#if ") || t.hasPrefix("#ifdef ") || t.hasPrefix("#ifndef ") {
                 let parentActive = emitting()
                 var cond = false
