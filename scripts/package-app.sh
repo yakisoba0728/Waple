@@ -60,3 +60,15 @@ PLIST
 # --deep 이 중첩 번들(saver)까지 ad-hoc 서명한다.
 codesign --force --deep --sign - --identifier kr.yaki.waple "$APP"
 echo "Built $APP"
+
+# ── 배포용 DMG ──────────────────────────────────────────────────────────
+# 외부 의존성 없이(zero-dep) hdiutil 로 압축 DMG(UDZO) 생성. 스테이징 폴더에
+# 앱 + /Applications 심볼릭 링크를 넣어 드래그 설치 UX 를 준다.
+DMG="$PWD/Waple.dmg"
+rm -f "$DMG"
+STAGING="$(mktemp -d)"
+cp -R "$APP" "$STAGING/"
+ln -s /Applications "$STAGING/Applications"
+hdiutil create -volname "Waple" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
+rm -rf "$STAGING"
+echo "Built $DMG"
