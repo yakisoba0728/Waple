@@ -114,16 +114,22 @@ public struct TexImage {
         if let (mips, imageFormat) = container {
             let mip = mips[0]
             switch imageFormat {
-            case 2, 13, 25: return make(.embeddedImage, mip.payloadRange, mip)   // JPEG=2 PNG=13 GIF=25 (LZ4 가능)
+            case -1: break                                                       // raw → format 기반 디코드(아래 3)
             case 35: return make(.video, mip.payloadRange, mip)                  // MP4(ponytail: LZ4-mp4 는 추출기 해제 미지원 — 보류)
-            default: break                                                       // -1(raw) → 시그니처/format 경로로
+            default: return make(.embeddedImage, mip.payloadRange, mip)          // 인코딩 파일(JPEG=2 PNG=13 GIF=25 …) — ImageIO 가 내용으로 판별
             }
         }
 
-        // 2) 내장 이미지/비디오 시그니처(비압축 임베디드 — TEXB0001/0002 는 imageFormat 필드 없음, 작은 윈도우만).
-        if let p = findSig(b, [0x89, 0x50, 0x4E, 0x47], limit: 512) { return make(.png, p..<b.count, nil) }
-        if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, p..<b.count, nil) }
-        if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (p - 4)..<b.count, nil) }
+        // 2) 내장 이미지/비디오 시그니처 — 컨테이너 파스 **실패** 시에만(TEXB0001/0002 imageFormat 필드 부재,
+        //    lut/* 등 파스 불가 v4 변형). 컨테이너가 파스됐고 imageFormat=-1 이면 payload 는 raw(format 기반)로
+        //    확정인데, 종전엔 LZ4 압축 바이트에 우연히 낀 0xFFD8FF 를 이 스캔이 .jpeg 로 오라우팅해 압축
+        //    바이트를 그대로 ImageIO 에 넘겼다(실측 2026-07-09: embedded-jpeg 버킷 0/8 전멸 — assets
+        //    sharp_halo(fmt0)/hose_4_bright(fmt8)/circle_flame(fmt9) 및 pkg 4종, 전부 isLZ4=1 imageFormat=-1).
+        if container == nil {
+            if let p = findSig(b, [0x89, 0x50, 0x4E, 0x47], limit: 512) { return make(.png, p..<b.count, nil) }
+            if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, p..<b.count, nil) }
+            if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (p - 4)..<b.count, nil) }
+        }
 
         // 3) mip 컨테이너 format-based 디코드: RGBA(fmt0) | DXT5(fmt4) | DXT1(fmt7) | R8(fmt9).
         // fmt4=DXT5, fmt7=DXT1 실측 근거(2026-07-03): 3D 모델 텍스처 decompressedSize 가 각각

@@ -51,6 +51,21 @@ final class TexImageTests: XCTestCase {
     func testDefaultsToRawRGBA() {
         XCTAssertEqual(TexImage.parse(Self.makeTex(format: 0, w: 2, h: 2, payload: [0,0,0,0]))?.payload, .rawRGBA8888)
     }
+
+    /// LZ4 페이로드에 우연히 낀 0xFFD8FF 가 .jpeg 로 오라우팅되면 안 된다(실측 assets sharp_halo.tex 클래스:
+    /// TEXB0004, imageFormat=-1, isLZ4=1, fmt0 — 압축 바이트가 512B 스캔 윈도우에서 JPEG 시그니처 흉내).
+    /// 컨테이너 파스 성공 + imageFormat=-1 → format 기반(.lz4RGBA)이 정답.
+    func testLZ4PayloadWithFakeJPEGSignatureIsNotEmbeddedJPEG() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
+        let lz4ish: [UInt8] = [0xFF, 0xD8, 0xFF, 0xE0] + Array(repeating: 0x11, count: 16)  // 압축 스트림 흉내
+        var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
+        b += i32(0)+i32(0)+i32(8)+i32(8)+i32(8)+i32(8)                    // format=0
+        b += Array("TEXB0004".utf8)+[0]+i32(1)+i32(-1)+i32(0)+i32(1)      // imageCount, imageFormat=-1, v4, mipCount
+        b += i32(8)+i32(8)+i32(1)+i32(256)+i32(lz4ish.count)+lz4ish       // w,h,isLZ4=1,dec=8*8*4,comp,payload
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.payload, .lz4RGBA, "imageFormat=-1 raw 컨테이너는 시그니처 스캔을 타면 안 됨")
+        XCTAssertEqual(t?.mip?.lz4, true)
+    }
     func testRejectsNonTex() {
         XCTAssertNil(TexImage.parse(Data("nope".utf8)))
     }
