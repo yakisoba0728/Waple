@@ -138,6 +138,33 @@ final class SpriteSheetLayerRenderTests: XCTestCase {
         XCTAssertEqual(res.frames.first { $0.imageId == 0 }?.atlasY, 0, "page0 프레임은 오프셋 0")
     }
 
+    /// 초대형 멀티페이지(스택 높이 20000 > Metal 16384): stackedAtlas 가 디코드 전 조기 거부 →
+    /// resolveTextureWithFrames 가 **정지 폴백(frames=[])** 으로 "조용한 오프레임 애니" 대신 page 0
+    /// 정지. 실코퍼스 6씬(3379048027 7페이지 sumH 52920 등)의 CI 안전 미러(1×10000 ×2페이지).
+    func testTallMultipageFallsBackToStaticNotWrongFrames() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        func f32(_ v: Float) -> Data { var b = v.bitPattern.littleEndian; return Data(bytes: &b, count: 4) }
+        let ph = 10000
+        let page = Data(repeating: 128, count: ph * 4)   // 1×10000 raw RGBA
+        var tex = Data("TEXV0005".utf8); tex.append(0); tex.append(Data("TEXI0001".utf8)); tex.append(0)
+        tex.append(i32(0)); tex.append(i32(0)); tex.append(i32(1)); tex.append(i32(ph)); tex.append(i32(1)); tex.append(i32(ph))  // fmt0, 1×10000
+        tex.append(Data("TEXB0003".utf8)); tex.append(0); tex.append(i32(2)); tex.append(i32(-1))                                  // imageCount=2
+        for _ in 0..<2 {   // 2 페이지, 각 1×10000 → 스택 높이 20000
+            tex.append(i32(1)); tex.append(i32(1)); tex.append(i32(ph)); tex.append(i32(0)); tex.append(i32(ph * 4)); tex.append(i32(ph * 4)); tex.append(page)
+        }
+        tex.append(Data("TEXS0003".utf8)); tex.append(0)
+        tex.append(i32(2)); tex.append(i32(1)); tex.append(i32(ph))
+        tex.append(i32(0)); tex.append(f32(0.2)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(1)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(Float(ph)))  // f0 id0
+        tex.append(i32(1)); tex.append(f32(0.2)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(1)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(Float(ph)))  // f1 id1
+        let package = try ScenePackage.parse(encodePkg([("materials/tall.tex", tex)]))
+        let r = SceneRenderer()
+        guard let res = r.resolveTextureWithFrames("materials/tall.tex", package: package, device: device) else {
+            return XCTFail("resolveTextureWithFrames nil")
+        }
+        XCTAssertTrue(res.frames.isEmpty, "스택 높이>16384 → 정지 폴백(imageId≥1 조용한 오프레임 금지)")
+        XCTAssertEqual(res.texture.height, ph, "폴백은 page 0 텍스처(정지 표시)")
+    }
+
     // MARK: 실코퍼스(폴더 있을 때만 — CI 안전 skip)
 
     private func realScene(_ id: String) throws -> WallpaperProject {

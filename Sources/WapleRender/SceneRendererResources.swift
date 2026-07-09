@@ -483,11 +483,20 @@ extension SceneRenderer {
             if let d = assetData(cand, package: package) ?? assetData(name, package: package),
                let tex = TexImage.parse(d) {
                 // 다중 image = 아틀라스 페이지: 세로로 이어붙인 단일 텍스처 + frame.y 페이지 오프셋(아래 헬퍼).
-                if tex.imageCount > 1, !tex.frames.isEmpty,
+                let multipage = tex.imageCount > 1
+                if multipage, !tex.frames.isEmpty,
                    let stacked = stackedAtlas(tex: tex, data: d, device: device) { return stacked }
                 // 조건 변형(예 3D 모델 튜닉색): variantProperties 로 mip 선택. 비-변형은 기존 경로 그대로.
                 if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties),
-                   let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return (m, tex.frames) }
+                   let m = makeTexture(dec.pixels, dec.width, dec.height, device) {
+                    // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
+                    // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백
+                    // (page 0 표시)해 "틀린 애니" 대신 "정지"로 명예로운 실패(advisor). 단일 image 는 frames
+                    // 정상(전부 id0, 오프셋 무관). 영향 실측 6씬(3379048027 7페이지/420프레임 sumH 52920,
+                    // 3363252053·3448877775 7페이지, 3577990983 5페이지, 3000562427 day/night 3페이지).
+                    // ponytail: 진짜 고침 = 페이지별 텍스처 또는 온디맨드 프레임 스트리밍(초대형 시트 ~1.7GB) — 재설계.
+                    return (m, multipage ? [] : tex.frames)
+                }
             }
         }
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }
@@ -499,11 +508,18 @@ extension SceneRenderer {
     /// 鸟_00020: page0 7680×7920, page1 5760×2880) — 종전 same-dims 가드는 여기서 nil 폴백해 page1
     /// 프레임을 오프셋 없이(atlasY=0) 렌더했다(조용한 오프레임 — advisor #1). 이제 max-width × sum-height
     /// 로 패딩 스택하고 각 페이지를 (0, 누적y)에 행-복사한다. **균일 페이지는 종전과 byte-identical 배치**
-    /// (maxW=pw, 누적y=page*ph) → 파티클 무회귀. 디코드 실패/과대 dims 만 nil → 호출자가 단일-이미지 폴백.
+    /// (maxW=pw, 누적y=page*ph) → 파티클 무회귀. 스택 높이/폭이 Metal 한계(16384) 초과면 nil → 호출자가
+    /// 정지 폴백(frames=[], 조용한 오프레임 대신 명예로운 정지). **디코드 전 조기 거부**: 패딩 decodeHeight
+    /// 합으로 먼저 검사해 초대형 시트(7페이지 sumH 52920 등, 1.7GB)의 무의미한 전-페이지 디코드를 회피.
     /// 레이어/파티클 공용(resolveTextureWithFrames). ponytail: 텍스처 배열 대신 패딩 세로 스택(폭 작은
-    /// 페이지 우측 패딩은 UV 밖이라 무해; 최소 변경으로 downstream 단일 텍스처 규약 유지).
+    /// 페이지 우측 패딩은 UV 밖이라 무해). 16384 초과 시트의 진짜 고침 = 페이지별 텍스처/온디맨드 스트리밍(재설계).
     private func stackedAtlas(tex: TexImage, data: Data, device: MTLDevice)
         -> (texture: MTLTexture, frames: [TexImage.TexFrame])? {
+        // 조기 거부(디코드 전): 패딩 decodeHeight 합 = 스택 높이 상한(실제 크롭 후는 ≤). 초과면 초대형
+        // 디코드 착수 전 nil. decodeWidth/Height 는 무경계 UInt32 유래라 오버플로도 함께 차단.
+        let padH = tex.mips.reduce(0) { $0 + $1.decodeHeight }
+        let padW = tex.mips.map { $0.decodeWidth }.max() ?? 0
+        guard padW > 0, padH > 0, padW <= 16384, padH <= 16384 else { return nil }
         var pages: [(pixels: Data, width: Int, height: Int)] = []
         for i in 0..<tex.imageCount {
             guard let p = TexDecoder.rgba(from: tex, data: data, imageIndex: i) else { return nil }
@@ -512,7 +528,7 @@ extension SceneRenderer {
         guard !pages.isEmpty else { return nil }
         let maxW = pages.map { $0.width }.max() ?? 0
         let totalH = pages.map { $0.height }.reduce(0, +)
-        guard maxW > 0, totalH > 0, maxW <= 16384, totalH <= 16384 else { return nil }  // Metal 한계 + 정수 오버플로 가드
+        guard maxW > 0, totalH > 0, maxW <= 16384, totalH <= 16384 else { return nil }  // 실제 크롭 후 재확인(방어)
         var yOff: [Int] = []; var cy = 0                     // 페이지별 누적 y(균일이면 page*ph)
         for p in pages { yOff.append(cy); cy += p.height }
         var stacked = Data(count: maxW * totalH * 4)          // 제로 버퍼(폭 작은 페이지 우측은 0 잔존)
