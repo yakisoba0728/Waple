@@ -13,38 +13,47 @@ final class SceneAudioPlayerTests: XCTestCase {
         XCTAssertEqual(SceneAudioPlayer.effectiveVolume(author: -1, setting: 0.5), 0.0)    // 하한 클램프
     }
 
-    private func sound(_ paths: [String], mode: String = "loop") -> SceneSound {
+    private func sound(_ paths: [String], mode: String = "loop", startSilent: Bool = false) -> SceneSound {
         SceneSound(id: 1, sounds: paths, volume: 0.5, playbackMode: mode,
-                   startSilent: false, minTime: 0, maxTime: 0)
+                   startSilent: startSilent, minTime: 0, maxTime: 0)
     }
 
-    private func silentSound(_ paths: [String], mode: String = "loop") -> SceneSound {
-        SceneSound(id: 1, sounds: paths, volume: 0.5, playbackMode: mode,
-                   startSilent: true, minTime: 0, maxTime: 0)
+    func testPlayableEntriesFiltersOggKeepsOrder() {
+        XCTAssertEqual(SceneAudioPlayer.playableEntries(sound(["a.ogg", "b.mp3", "c.wav"])), ["b.mp3", "c.wav"])
+        XCTAssertEqual(SceneAudioPlayer.playableEntries(sound(["a.OGG"])), [])   // 대소문자 무시
     }
 
-    func testPickReturnsSingleEntry() {
-        let pkg = ScenePackage.assemble([(name: "sounds/a.mp3", data: Data([1, 2, 3]))])
-        let r = SceneAudioPlayer.pick(sound(["sounds/a.mp3"]), package: pkg)
-        XCTAssertEqual(r?.name, "sounds/a.mp3")
-        XCTAssertEqual(r?.data, Data([1, 2, 3]))
+    func testFirstIndexSequentialModesStartAtZero() {
+        XCTAssertEqual(SceneAudioPlayer.firstIndex(mode: "loop", count: 3), 0)
+        XCTAssertEqual(SceneAudioPlayer.firstIndex(mode: "single", count: 3), 0)
+        XCTAssertNil(SceneAudioPlayer.firstIndex(mode: "loop", count: 0))
+        for _ in 0..<20 {
+            let r = SceneAudioPlayer.firstIndex(mode: "random", count: 3)
+            XCTAssertNotNil(r); XCTAssertTrue((0..<3).contains(r!))
+        }
     }
 
-    func testPickSkipsOggAndFallsBackToPlayable() {
-        // ogg 는 미지원 → 스킵, 재생가능(mp3)만 남는다.
-        let pkg = ScenePackage.assemble([(name: "sounds/b.mp3", data: Data([9]))])
-        let r = SceneAudioPlayer.pick(sound(["sounds/a.ogg", "sounds/b.mp3"]), package: pkg)
-        XCTAssertEqual(r?.name, "sounds/b.mp3")
+    /// 다중 엔트리 = 플레이리스트(실측: 33오브젝트 전부 상이한 곡 목록). loop 는 순차 순환.
+    func testNextIndexLoopCyclesPlaylist() {
+        XCTAssertEqual(SceneAudioPlayer.nextIndex(mode: "loop", current: 0, count: 3), 1)
+        XCTAssertEqual(SceneAudioPlayer.nextIndex(mode: "loop", current: 2, count: 3), 0)   // 끝 → 처음
+        XCTAssertEqual(SceneAudioPlayer.nextIndex(mode: "loop", current: 0, count: 1), 0)   // 단곡 반복
     }
 
-    func testPickReturnsNilWhenAllUnsupported() {
-        let pkg = ScenePackage.assemble([(name: "sounds/a.ogg", data: Data([1]))])
-        XCTAssertNil(SceneAudioPlayer.pick(sound(["sounds/a.ogg"]), package: pkg))
+    /// single 은 목록을 순차 1회 재생 후 종료(nil).
+    func testNextIndexSingleEndsAfterOnePass() {
+        XCTAssertEqual(SceneAudioPlayer.nextIndex(mode: "single", current: 0, count: 3), 1)
+        XCTAssertNil(SceneAudioPlayer.nextIndex(mode: "single", current: 2, count: 3))
+        XCTAssertNil(SceneAudioPlayer.nextIndex(mode: "single", current: 0, count: 1))
     }
 
-    func testPickReturnsNilWhenPkgEntryMissing() {
-        let pkg = ScenePackage.assemble([(name: "other.txt", data: Data([1]))])
-        XCTAssertNil(SceneAudioPlayer.pick(sound(["sounds/a.mp3"]), package: pkg))
+    /// random 은 곡 종료마다 무작위 재선곡(셔플 연속 재생 — 실측: 랜덤 9오브젝트 전부 다중 목록).
+    func testNextIndexRandomAlwaysContinues() {
+        for _ in 0..<20 {
+            let r = SceneAudioPlayer.nextIndex(mode: "random", current: 1, count: 4)
+            XCTAssertNotNil(r); XCTAssertTrue((0..<4).contains(r!))
+        }
+        XCTAssertNil(SceneAudioPlayer.nextIndex(mode: "random", current: 0, count: 0))
     }
 
     // ── 재생 통합(mute) ─────────────────────────────────────────────────────
@@ -60,11 +69,41 @@ final class SceneAudioPlayerTests: XCTestCase {
         XCTAssertFalse(player.isPlaying)
     }
 
+    /// startsilent=true(확정: 트리거 대기) → 시작 시 자동재생 없음.
     func testStartSilentSoundsDoNotAutoPlay() {
         let pkg = ScenePackage.assemble([(name: "sounds/t.wav", data: Self.silentWAV())])
         let player = SceneAudioPlayer()
-        player.start(sounds: [silentSound(["sounds/t.wav"])], package: pkg, settingVolume: 1)
+        player.start(sounds: [sound(["sounds/t.wav"], startSilent: true)], package: pkg, settingVolume: 1)
 
+        XCTAssertEqual(player.playerCount, 0)
+        XCTAssertFalse(player.isPlaying)
+    }
+
+    /// 다중 엔트리는 동시 재생이 아니라 플레이리스트 — 오브젝트당 플레이어 1개.
+    func testMultiEntryMountsSinglePlayer() {
+        let pkg = ScenePackage.assemble([(name: "sounds/a.wav", data: Self.silentWAV()),
+                                         (name: "sounds/b.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/a.wav", "sounds/b.wav"])], package: pkg, settingVolume: 0)
+        XCTAssertEqual(player.playerCount, 1)
+        XCTAssertTrue(player.isPlaying)
+        player.teardown()
+    }
+
+    /// 첫 엔트리 pkg 누락/디코드 실패 시 다음 후보로 폴백해 재생.
+    func testStartFallsBackToNextPlayableEntry() {
+        let pkg = ScenePackage.assemble([(name: "sounds/b.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/missing.mp3", "sounds/b.wav"])], package: pkg, settingVolume: 0)
+        XCTAssertEqual(player.playerCount, 1)
+        XCTAssertTrue(player.isPlaying)
+        player.teardown()
+    }
+
+    func testAllEntriesUnplayableMountsNothing() {
+        let pkg = ScenePackage.assemble([(name: "sounds/a.ogg", data: Data([1]))])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/a.ogg"])], package: pkg, settingVolume: 1)
         XCTAssertEqual(player.playerCount, 0)
         XCTAssertFalse(player.isPlaying)
     }
