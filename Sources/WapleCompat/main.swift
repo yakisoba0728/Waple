@@ -11,6 +11,7 @@ struct WapleCompatCLI {
     var decodeOggIn: String? = nil       // dev 하니스: ogg → 원시 float32 인터리브 PCM(stdout)
     var decodeNaive = false
     var captureOut: String? = nil        // --capture <outDir>: 씬 스냅샷 캡처 + 매니페스트
+    var compareBaseline: String? = nil   // --compare <baselineDir>: 현재 빌드 캡처 vs 베이스라인 diff
     var label: String? = nil             // --label <name>: 베이스라인 폴더명(기본 git sha)
 
     mutating func parse(arguments: [String]) throws {
@@ -31,6 +32,8 @@ struct WapleCompatCLI {
                 decodeNaive = true
             case "--capture":
                 captureOut = iterator.next()
+            case "--compare":
+                compareBaseline = iterator.next()
             case "--label":
                 label = iterator.next()
             case "--help", "-h":
@@ -49,6 +52,10 @@ struct WapleCompatCLI {
         let root = NSString(string: rootPath).expandingTildeInPath
         if let out = captureOut {
             let code = SnapshotPipeline.runCapture(root: root, outDir: URL(fileURLWithPath: NSString(string: out).expandingTildeInPath), label: label)
+            Foundation.exit(code)
+        }
+        if let baseline = compareBaseline {
+            let code = SnapshotPipeline.runCompare(root: root, baselineDir: URL(fileURLWithPath: NSString(string: baseline).expandingTildeInPath))
             Foundation.exit(code)
         }
         if let inPath = decodeOggIn {
