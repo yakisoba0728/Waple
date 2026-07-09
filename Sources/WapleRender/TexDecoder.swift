@@ -16,6 +16,14 @@ public enum TexDecoder {
                   let src = CGImageSourceCreateWithData(sub as CFData, nil),
                   let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
             return draw(img)
+        case .embeddedImage:
+            // imageFormat 이 인코딩 이미지(PNG/JPEG/GIF)로 지정한 mip. LZ4 해제(mipBytes) 후 CGImageSource 디코드
+            // — fast-path 512B 스캔이 놓치는 LZ4 압축 임베디드 이미지 경로. straight-alpha 규약은 draw 가 유지.
+            guard let dec = mipBytes(tex: tex, data: data),
+                  embeddedImagePropertiesAreWithinLimits(dec),
+                  let src = CGImageSourceCreateWithData(dec as CFData, nil),
+                  let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+            return draw(img)
         case .rawRGBA8888:
             let w = tex.width, h = tex.height
             guard w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
