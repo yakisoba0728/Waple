@@ -78,7 +78,7 @@ extension SceneRenderer {
                 decoded = (Data([255, 255, 255, 255]), 1, 1)
             } else if let texData = assetData(layer.textureEntryName, package: package),
                       let tex = TexImage.parse(texData),
-                      let d = TexDecoder.rgba(from: tex, data: texData) {
+                      let d = TexDecoder.rgba(from: tex, data: texData, properties: variantProperties) {
                 decoded = d
             } else if let d = bitmapRGBAFile(layer.textureEntryName) {
                 decoded = d
@@ -468,7 +468,8 @@ extension SceneRenderer {
                 // 다중 image = 아틀라스 페이지: 세로로 이어붙인 단일 텍스처 + frame.y 페이지 오프셋(아래 헬퍼).
                 if tex.imageCount > 1, !tex.frames.isEmpty,
                    let stacked = stackedAtlas(tex: tex, data: d, device: device) { return stacked }
-                if let dec = TexDecoder.rgba(from: tex, data: d),
+                // 조건 변형(예 3D 모델 튜닉색): variantProperties 로 mip 선택. 비-변형은 기존 경로 그대로.
+                if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties),
                    let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return (m, tex.frames) }
             }
         }

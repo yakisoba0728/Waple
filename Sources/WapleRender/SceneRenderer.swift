@@ -267,6 +267,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var particleSystems: [GPUParticleSystem] = []
     var hasParticles = false
     var assetBaseDir: URL?  // WE 공유 에셋 폴백 디렉터리(설정), 패키지에 없는 .tex 용
+    /// 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 값(기본값+유저/프리셋 오버라이드).
+    /// mount 시 스냅샷 — 프로퍼티 변경은 reapply(=remount)로 반영(LibraryViewModel.setProperty→onApply).
+    var variantProperties: [String: PropertyValue] = [:]
     var additivePipeline: MTLRenderPipelineState?
     var translucentPipeline: MTLRenderPipelineState?
     var fullscreenQuad: [SIMD2<Float>] = [SIMD2(-1,-1), SIMD2(1,-1), SIMD2(-1,1), SIMD2(1,1)]
@@ -343,6 +346,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             NSLog("%@", "[Waple] scene mount: failed to parse \(pkgURL.path): \(error)")
             throw error
         }
+        // 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 스냅샷:
+        // project.json 기본값 + 유저/프리셋 오버라이드(LibraryViewModel 유효값 계산과 동형).
+        // 값 부재/미매치는 기본 image 로 폴백 → 무회귀. 변경은 reapply(remount)로 새 스냅샷.
+        let baseProps = (try? WallpaperProperties.parse(folderURL: project.folderURL)) ?? []
+        let overrides = UserPropertyStore.overrides(id: project.id, presetOverrides: project.presetOverrides,
+                                                    presetResourceRoot: project.presetFolderURL)
+        variantProperties = Dictionary(WallpaperProperties.applying(overrides: overrides, to: baseProps)
+            .map { ($0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
         // 비디오-텍스처 씬 → 내장 MP4 추출 후 VideoRenderer 위임.
         if let videoName = VideoTextureExtractor.videoLayer(in: doc, package: package),
            let mp4URL = VideoTextureExtractor.extractMP4(textureEntryName: videoName, package: package,

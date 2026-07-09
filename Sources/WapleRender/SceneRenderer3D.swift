@@ -245,7 +245,7 @@ extension SceneRenderer {
                 decoded = (Data([255, 255, 255, 255]), 1, 1)
             } else if let texData = assetData(layer.textureEntryName, package: package),
                       let tex = TexImage.parse(texData),
-                      let dec = TexDecoder.rgba(from: tex, data: texData) {
+                      let dec = TexDecoder.rgba(from: tex, data: texData, properties: variantProperties) {
                 decoded = dec
             } else {
                 bbSkipped += 1
