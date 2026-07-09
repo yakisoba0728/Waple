@@ -187,6 +187,96 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
         audio.teardown()
     }
 
+    // MARK: - cursorEnter/cursorLeave 호버 + animationEvent
+
+    /// 합성 씬: 호버존 레이어(name=hoverzone, 200×200@480,270)의 cursorEnter/Leave 가 shared.h 토글,
+    /// 빨강 오버레이가 shared.h 로 on/off. simulateCursorMove 로 경계 진입/이탈 시 픽셀 변화 검증.
+    /// (엔진이 바인드 레이어를 히트테스트 — 스크립트는 좌표를 안 본다.)
+    func testCursorEnterLeaveHoverTogglesScene() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"name":"hoverzone","image":"models/ctrl.json","origin":"480 270 0","size":"200 200",
+            "visible":{"value":true,"script":"'use strict';\\nshared.h=0;\\nexport function cursorEnter(event){ shared.h=1; }\\nexport function cursorLeave(event){ shared.h=0; }"}},
+           {"id":3,"image":"models/red.json","origin":"960 540 0","size":"1920 1080",
+            "alpha":{"value":1,"script":"'use strict';\\nexport function update(v){ return shared.h==1 ? 1 : 0; }"}}
+         ]}
+        """
+        var files: [(String, Data)] = [("scene.json", scene.data(using: .utf8)!)]
+        for (name, tex) in [("bg", solidTex(255, 255, 255)), ("ctrl", solidTex(255, 255, 255)),
+                            ("red", solidTex(255, 0, 0))] {
+            files.append(("models/\(name).json", Data(#"{"material":"materials/\#(name).json"}"#.utf8)))
+            files.append(("materials/\(name).json", Data(#"{"passes":[{"textures":["\#(name)"]}]}"#.utf8)))
+            files.append(("materials/\(name).tex", tex))
+        }
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                    project: try makeProject(files, id: "waple_hover_e2e"))
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_hover_e2e")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        func capture(_ tag: String) throws -> (r: Double, g: Double, b: Double) {
+            let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.5], toDir: out).first)
+            let dst = out.appendingPathComponent("\(tag).png")
+            try? FileManager.default.removeItem(at: dst); try FileManager.default.moveItem(at: url, to: dst)
+            return try meanRGB(dst)
+        }
+        let before = try capture("before")
+        XCTAssertGreaterThan(before.g, 0.8, "호버 전: 빨강 오버레이 off(흰): \(before)")
+
+        r.simulateCursorMove(x: 480, y: 270)   // 호버존(380..580, 170..370) 내부 → cursorEnter
+        let enter = try capture("enter")
+        XCTAssertGreaterThan(enter.r, 0.8, "진입 → 오버레이 on(빨강): \(enter)")
+        XCTAssertLessThan(enter.g, 0.2)
+
+        r.simulateCursorMove(x: 1400, y: 900)  // 경계 밖 → cursorLeave
+        let leave = try capture("leave")
+        XCTAssertGreaterThan(leave.g, 0.8, "이탈 → 오버레이 off(흰): \(leave)")
+    }
+
+    /// animationEvent 발송 진입점(발화원 대체): simulateAnimationEvent('go') → 훅이 shared 토글 → 픽셀 변화.
+    /// (실 발화원인 타임라인/퍼펫 마커는 수정 금지 파일 소관 — 여기선 스크립트 측 배선만 검증.)
+    func testSimulateAnimationEventTogglesScene() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"name":"ctrlx","image":"models/ctrl.json","origin":"4 4 0","size":"2 2",
+            "visible":{"value":true,"script":"'use strict';\\nshared.a=0;\\nexport function animationEvent(event){ if(event.name=='go'){ shared.a=1; } }"}},
+           {"id":3,"image":"models/red.json","origin":"960 540 0","size":"1920 1080",
+            "alpha":{"value":1,"script":"'use strict';\\nexport function update(v){ return shared.a==1 ? 1 : 0; }"}}
+         ]}
+        """
+        var files: [(String, Data)] = [("scene.json", scene.data(using: .utf8)!)]
+        for (name, tex) in [("bg", solidTex(255, 255, 255)), ("ctrl", solidTex(128, 128, 128)),
+                            ("red", solidTex(255, 0, 0))] {
+            files.append(("models/\(name).json", Data(#"{"material":"materials/\#(name).json"}"#.utf8)))
+            files.append(("materials/\(name).json", Data(#"{"passes":[{"textures":["\#(name)"]}]}"#.utf8)))
+            files.append(("materials/\(name).tex", tex))
+        }
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                    project: try makeProject(files, id: "waple_animevt_e2e"))
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_animevt_e2e")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        func capture(_ tag: String) throws -> (r: Double, g: Double, b: Double) {
+            let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.5], toDir: out).first)
+            let dst = out.appendingPathComponent("\(tag).png")
+            try? FileManager.default.removeItem(at: dst); try FileManager.default.moveItem(at: url, to: dst)
+            return try meanRGB(dst)
+        }
+        let before = try capture("before")
+        XCTAssertGreaterThan(before.g, 0.8, "이벤트 전: off(흰): \(before)")
+        r.simulateAnimationEvent(name: "go")
+        let after = try capture("after")
+        XCTAssertGreaterThan(after.r, 0.8, "animationEvent('go') → shared.a=1 → 오버레이 on(빨강): \(after)")
+        XCTAssertLessThan(after.g, 0.2)
+    }
+
     // MARK: - 미디어 → 씬 배달
 
     private struct FakeMediaProvider: NowPlayingProvider, ArtworkProviding {
