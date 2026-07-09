@@ -123,4 +123,26 @@ final class GLSLTranslatorClusterFixTests: XCTestCase {
         """
         assertCompiles(vertex: trivialVert, fragment: frag)
     }
+
+    // MARK: Cluster 1 — "array initializer must be an initializer list" (+ "array subscript is not an integer")
+    // 실물 simple_gradient_audio_bar: float left[32] = g_AudioSpectrum32Left;(전체 배열 복사 — MSL 은 오디오
+    // 버퍼가 constant float* 라 리스트 초기화 필요) + float i 로 left[i] 첨자(MSL 은 정수 첨자 요구).
+    func testArrayCopyInitAndFloatIndex() {
+        let frag = """
+        uniform sampler2D g_Texture0;
+        uniform float g_AudioSpectrum32Left[32];
+        uniform float g_AudioSpectrum32Right[32];
+        varying vec2 v_TexCoord;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            float left[32] = g_AudioSpectrum32Left;
+            float right[32] = g_AudioSpectrum32Right;
+            float i = floor(v_TexCoord.x * 32.0);
+            float l = mix(left[i], right[i], 0.5);
+            c.rgb *= l;
+            gl_FragColor = c;
+        }
+        """
+        assertCompiles(vertex: trivialVert, fragment: frag)
+    }
 }

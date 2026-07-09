@@ -174,8 +174,23 @@ public enum GLSLTypeAdapter {
             p.out += nameTok.full
             p.env.vars[nameTok.text] = declaredSize
             if typeTok == "int" || typeTok == "uint" { p.intVars.insert(nameTok.text) }
-            if p.peek() == "[" {  // 배열 선언 — 불투명 처리
+            if p.peek() == "[" {  // 배열 선언 — 크기 파싱 후 불투명 등록
                 p.env.vars[nameTok.text] = 0
+                p.out += p.advance().full  // '['
+                var sizeText = ""
+                while p.pos < p.toks.count, p.peek() != "]" { let tk = p.advance(); sizeText += tk.text; p.out += tk.full }
+                if p.peek() == "]" { p.out += p.advance().full }  // ']'
+                // `T name[N] = <arrayIdent>;` 전체 배열 복사(실물 audio bar 의 float left[32] = g_AudioSpectrum32Left;)
+                // — MSL 은 배열 초기화에 리스트만 허용(오디오 버퍼는 constant float*). RHS 가 단일 식별자고 N 이
+                // 정수 리터럴이면 { rhs[0], …, rhs[N-1] } 로 전개(식별자 치환은 이후 translateBody 가 처리).
+                if p.peek() == "=", let count = Int(sizeText.trimmingCharacters(in: .whitespaces)), count > 0,
+                   p.pos + 1 < p.toks.count, p.toks[p.pos + 1].isIdent,
+                   p.pos + 2 < p.toks.count, p.toks[p.pos + 2].text == ";" {
+                    let eq = p.advance()     // '='
+                    let rhs = p.advance()    // 단일 식별자
+                    let list = (0..<count).map { "\(rhs.text)[\($0)]" }.joined(separator: ", ")
+                    p.out += eq.full + rhs.trivia + "{ " + list + " }"
+                }
                 while p.pos < p.toks.count, p.peek() != ";" { p.out += p.advance().full }
                 break
             }
@@ -358,9 +373,21 @@ public enum GLSLTypeAdapter {
                 }
             } else if t == "[" {
                 preSwizzle = nil
-                var text = base.text + p.advance().full
+                let open = p.advance().full
                 let idx = expression(p)
-                text += idx.text
+                // MSL 첨자는 정수여야 한다(실물 simple_gradient_audio_bar 의 float i 로 left[i]).
+                // 크기 1(스칼라)이면서 정수 확실치 않은 인덱스는 int() 로 감싼다 — 정수 리터럴/intVar/int()캐스트는 제외.
+                var idxText = idx.text
+                if idx.size == 1 {
+                    let c = idxText.trimmingCharacters(in: .whitespaces)
+                    let isIntish = (!c.isEmpty && c.allSatisfy { $0.isNumber }) || p.intVars.contains(c)
+                        || c.hasPrefix("int(") || c.hasPrefix("uint(")
+                    if !isIntish {
+                        let (lead, core) = splitLead(idxText)
+                        idxText = "\(lead)int(\(core))"
+                    }
+                }
+                var text = base.text + open + idxText
                 if p.peek() == "]" { text += p.advance().full }
                 base = Node(text: text, size: base.size > 1 ? 1 : 0)
             } else if t == "++" || t == "--" {
