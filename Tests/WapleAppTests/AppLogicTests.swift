@@ -357,6 +357,29 @@ final class AppLogicTests: XCTestCase {
             "형제 프리픽스(stillage)는 내부 아님")
     }
 
+    // MARK: - GeneratedUID (잠금화면 스틸 — dscl 출력 파싱)
+
+    func testGeneratedUID_sameLine() {
+        XCTAssertEqual(
+            GeneratedUID.parse(dsclOutput: "GeneratedUID: ABCD1234-5678-90AB-CDEF-1234567890AB\n"),
+            "ABCD1234-5678-90AB-CDEF-1234567890AB")
+    }
+
+    func testGeneratedUID_valueOnNextLine() {
+        // dscl 은 값이 다음 줄에 오는 형식도 낸다.
+        XCTAssertEqual(
+            GeneratedUID.parse(dsclOutput: "GeneratedUID:\n ABCD1234-5678\n"),
+            "ABCD1234-5678")
+    }
+
+    func testGeneratedUID_missingOrEmpty_nil() {
+        XCTAssertNil(GeneratedUID.parse(dsclOutput: "No such key: GeneratedUID\n"),
+            "라벨 없음 → nil")
+        XCTAssertNil(GeneratedUID.parse(dsclOutput: "GeneratedUID:\n"),
+            "라벨만 있고 값 없음 → nil")
+        XCTAssertNil(GeneratedUID.parse(dsclOutput: ""))
+    }
+
     func testPropertyControlKindHandlesCorpusTypesCaseInsensitively() {
         XCTAssertEqual(PropertyControl.kind(forType: "Text"), .displayOnly)
         XCTAssertEqual(PropertyControl.kind(forType: ""), .displayOnly)

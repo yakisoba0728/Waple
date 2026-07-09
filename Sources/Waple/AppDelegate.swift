@@ -537,7 +537,7 @@ extension AppDelegate {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// MARK: - 정적 배경 동기화 (작업 1)
+// MARK: - 정적 배경 동기화 + 잠금화면 스틸 (작업 1·2)
 // 배경 적용 성공 시 현재 배경의 정지 이미지를 실제 macOS 바탕화면에 자동 설정한다.
 // 목적: 메뉴바/Dock 틴트 매칭, Mission Control 축소뷰, 스크린샷/화면공유, 앱 미실행 폴백.
 // 기본 꺼짐 — 사용자 바탕화면을 말없이 바꾸는 건 침습적이라 옵트인.
@@ -604,6 +604,45 @@ extension AppDelegate {
             try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
         }
         desktopOriginals = originals
+        writeLockscreenStill(image)  // 작업 2: 잠금화면 스틸 갱신(graceful)
+    }
+
+    // MARK: - 잠금화면 스틸 (작업 2)
+
+    /// dscl 로 현재 사용자 GeneratedUID 조회(잠금화면 스틸 경로 키). 실행 실패 → nil.
+    private func currentUserGeneratedUID() -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/dscl")
+        process.arguments = [".", "-read", "/Users/\(NSUserName())", "GeneratedUID"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return GeneratedUID.parse(dsclOutput: String(decoding: data, as: UTF8.self))
+    }
+
+    /// 잠금화면 스틸을 /Library/Caches/Desktop Pictures/<UID>/lockscreen.png 에 PNG 로 기록.
+    /// 디렉터리 부재(신규 macOS 등)/권한 실패는 조용히 스킵(graceful) — 폴백 기능일 뿐.
+    /// ⚠️ macOS 26+ 는 비공개 WallpaperExtensionKit 확장으로 잠금화면을 관리 — 범위 외(별도 SP).
+    private func writeLockscreenStill(_ image: URL) {
+        guard let uid = currentUserGeneratedUID() else { return }
+        let dir = URL(fileURLWithPath: "/Library/Caches/Desktop Pictures/\(uid)", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: dir.path) else { return }  // 디렉터리 부재 → 스킵
+        // 원본이 PNG 가 아닐 수 있어(preview.jpg 등) PNG 로 재인코딩.
+        guard let nsImage = NSImage(contentsOf: image),
+              let tiff = nsImage.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+        do {
+            try png.write(to: dir.appendingPathComponent("lockscreen.png"), options: .atomic)
+        } catch {
+            notify("잠금화면 스틸 기록 실패(무시): \(error.localizedDescription)")
+        }
     }
 
     /// 백업된 원본 바탕화면 복원(파일이 아직 존재하는 화면만). 복원 후 백업 비움.

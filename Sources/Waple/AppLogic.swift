@@ -205,6 +205,19 @@ enum StillDesktopSync {
     }
 }
 
+/// 잠금화면 스틸(작업 2): `dscl . -read /Users/<user> GeneratedUID` 출력 파싱(순수).
+enum GeneratedUID {
+    /// dscl 출력에서 UID 추출. 형식은 "GeneratedUID: <uuid>"(같은 줄) 또는 값이 다음 줄일 수 있어
+    /// 라벨 이후의 첫 공백 구분 토큰을 UID 로 본다. 라벨 부재/값 없음 → nil.
+    static func parse(dsclOutput: String) -> String? {
+        guard let range = dsclOutput.range(of: "GeneratedUID:") else { return nil }
+        let after = dsclOutput[range.upperBound...]
+        guard let uid = after.split(whereSeparator: { $0.isWhitespace }).first.map(String.init),
+              !uid.isEmpty else { return nil }
+        return uid
+    }
+}
+
 /// 속성 편집 UI 결정(순수).
 enum PropertyControl {
     enum Kind: Equatable {
