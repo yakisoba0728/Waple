@@ -46,6 +46,7 @@ struct LibraryView: View {
             }
         }
         .frame(minWidth: 640, minHeight: 420)
+        .onDrop(of: [.fileURL], isTargeted: nil) { handleDrop($0) }  // 폴더/zip/동영상 드롭(작업 5)
         .sheet(item: $viewModel.propertyEditorEntry) { entry in
             PropertyEditorView(entry: entry, viewModel: viewModel)
         }
@@ -130,15 +131,37 @@ struct LibraryView: View {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
-        panel.allowedContentTypes = [.folder, .zip]  // 폴더 또는 .zip(작업 4)
+        panel.allowedContentTypes = [.folder, .zip, .movie]  // 폴더 / .zip(작업 4) / 동영상(작업 5)
         panel.allowsMultipleSelection = false
-        panel.message = "Wallpaper Engine 폴더(또는 여러 배경을 담은 상위 폴더)나 .zip 을 선택하세요."
+        panel.message = "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요."
         if panel.runModal() == .OK, let url = panel.url {
-            if url.pathExtension.lowercased() == "zip" {
-                viewModel.importZip(url)
-            } else {
-                viewModel.importParent(url)
+            routeImport(url)
+        }
+    }
+
+    /// 폴더/zip/동영상 공용 가져오기 진입점(패널·드롭 공유, 작업 4·5).
+    private func routeImport(_ url: URL) {
+        if url.pathExtension.lowercased() == "zip" {
+            viewModel.importZip(url)
+        } else if VideoImport.isVideoFile(url) {
+            viewModel.importVideoFile(url)
+        } else {
+            viewModel.importParent(url)   // 폴더(또는 상위 폴더)
+        }
+    }
+
+    /// 파인더에서 드롭한 파일 URL 들을 공용 진입점으로 라우팅(작업 5).
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileURL = UTType.fileURL.identifier
+        var handled = false
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(fileURL) {
+            handled = true
+            provider.loadItem(forTypeIdentifier: fileURL, options: nil) { item, _ in
+                guard let data = item as? Data,
+                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                DispatchQueue.main.async { self.routeImport(url) }
             }
         }
+        return handled
     }
 }

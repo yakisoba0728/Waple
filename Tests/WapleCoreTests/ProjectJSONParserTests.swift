@@ -7,6 +7,16 @@ final class ProjectJSONParserTests: XCTestCase {
         return try ProjectJSONParser.parse(data: Data(json.utf8), folderURL: url)
     }
 
+    // 작업 5: 원시 동영상 임포트 최소 project.json 은 파서로 왕복 가능해야 한다.
+    func testProjectJSONBuilderVideoRoundTrips() throws {
+        let json = ProjectJSONBuilder.videoProject(file: "clip.mp4", preview: "preview.jpg", title: "My Clip")
+        let p = try parse(json, folder: "/tmp/clip")
+        XCTAssertEqual(p.type, .video)
+        XCTAssertEqual(p.fileName, "clip.mp4")
+        XCTAssertEqual(p.previewName, "preview.jpg")
+        XCTAssertEqual(p.title, "My Clip")
+    }
+
     func testParsesVideoProject() throws {
         let p = try parse(#"{"type":"video","file":"wallpaper.mp4","preview":"preview.jpg","title":"Test"}"#)
         XCTAssertEqual(p.type, .video)

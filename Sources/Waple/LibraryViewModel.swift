@@ -83,6 +83,16 @@ final class LibraryViewModel: ObservableObject {
         }
     }
 
+    /// 원시 mp4/mov 가져오기(작업 5) — 최소 project.json 배경으로 감싸 가져온다.
+    func importVideoFile(_ url: URL) {
+        guard let folder = VideoImport.prepare(from: url),
+              (try? store.importFolder(folder)) != nil else {
+            onError?("동영상 가져오기에 실패했습니다: \(url.lastPathComponent)")
+            return
+        }
+        entries = store.entries
+    }
+
     /// 마운트 성공 시 true. 재생목록 전진(advancePlaylist)이 실패 후보를 건너뛰는 데 이 반환을 쓴다.
     @discardableResult
     func apply(_ entry: LibraryEntry) -> Bool {

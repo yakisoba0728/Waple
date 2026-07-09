@@ -357,6 +357,37 @@ final class AppLogicTests: XCTestCase {
             "형제 프리픽스(stillage)는 내부 아님")
     }
 
+    // MARK: - VideoImport (작업 5: 원시 동영상 → 최소 project.json 배경)
+
+    func testVideoImportPreparesManagedFolderAndProjectJSON() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WapleVI-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let base = tmp.appendingPathComponent("base", isDirectory: true)
+        let fake = tmp.appendingPathComponent("myclip.mp4")
+        try Data("not-really-a-video".utf8).write(to: fake)  // 미리보기 추출은 실패하지만 prepare 는 성공해야
+
+        guard let folder = VideoImport.prepare(from: fake, baseDirectory: base) else {
+            return XCTFail("prepare 는 관리 폴더 URL 을 반환해야 한다")
+        }
+        let fm = FileManager.default
+        XCTAssertEqual(folder.lastPathComponent, "myclip")
+        XCTAssertTrue(fm.fileExists(atPath: folder.appendingPathComponent("myclip.mp4").path), "동영상 복사")
+        XCTAssertTrue(fm.fileExists(atPath: folder.appendingPathComponent("project.json").path), "project.json 기록")
+        let project = try ProjectJSONParser.parse(folderURL: folder)
+        XCTAssertEqual(project.type, .video)
+        XCTAssertEqual(project.fileName, "myclip.mp4")
+        XCTAssertEqual(project.previewName, "preview.jpg")
+    }
+
+    func testVideoImportIsVideoFile() {
+        XCTAssertTrue(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.MP4")))
+        XCTAssertTrue(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.mov")))
+        XCTAssertFalse(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.webm")))
+        XCTAssertFalse(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/folder")))
+    }
+
     // MARK: - OcclusionMode (가림 임계값 라디오 ↔ 상태)
 
     func testOcclusionModeDecode() {
