@@ -205,6 +205,16 @@ enum StillDesktopSync {
     }
 }
 
+/// 최근 배경 목록(작업 6): 적용 성공 id 를 선두 삽입·중복 제거·상한 유지(순수).
+enum RecentWallpapers {
+    static func push(_ id: String, into list: [String], max: Int = 10) -> [String] {
+        var out = list.filter { $0 != id }   // 중복 제거
+        out.insert(id, at: 0)                // 선두 삽입(최신)
+        if out.count > max { out.removeLast(out.count - max) }
+        return out
+    }
+}
+
 /// 가림 일시정지 모드(작업 3): 라디오 선택값 ↔ (사용 여부, 커버 임계값).
 enum OcclusionMode {
     /// represented 값(-1=사용안함, 0=기존 즉시, 0.3/0.5/0.8=커버 비율)을 (enabled, threshold) 로.

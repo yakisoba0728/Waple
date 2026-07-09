@@ -32,6 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
     private var stillSyncWork: DispatchWorkItem?
 
+    // 최근 배경 서브메뉴(작업 6): 열 때마다 최신 목록으로 다시 채운다(NSMenuDelegate).
+    private weak var recentMenu: NSMenu?
+
     private static let pauseWhenOccludedKey = "pauseWhenOccluded"
     private var pauseWhenOccluded: Bool {
         get { UserDefaults.standard.bool(forKey: Self.pauseWhenOccludedKey) }   // 기본 false
@@ -59,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "라이브러리 열기",
                                 action: #selector(openLibrary), keyEquivalent: "l"))
+        menu.addItem(recentMenuItem())  // 최근 배경 서브메뉴(작업 6 — 구현은 확장)
         let fitItem = NSMenuItem(title: "화면 맞춤", action: nil, keyEquivalent: "")
         let fitMenu = NSMenu()
         for mode in FitMode.allCases {
@@ -331,6 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if pausedByOcclusion { renderers.forEach { $0.pause() } }  // 가림 정지 중 교체된 렌더러도 정지 유지
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
+            pushRecent(project?.id)     // 최근 배경 목록 갱신(nil = 무선택 → no-op)
             return true
         case .failure(let error):
             notify("적용 실패: \(error)")
@@ -696,5 +701,57 @@ extension AppDelegate {
     /// 종료 시 원본 복원(force-quit 엔 호출 안 됨 — 토글 오프도 복원 경로라 최선 노력으로 충분).
     public func applicationWillTerminate(_ notification: Notification) {
         restoreDesktopOriginals()
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MARK: - 최근 배경 (작업 6)
+// 적용 성공 시 id 를 최근 목록(최대 10)에 push. 상태바 서브메뉴에서 제목을 보여주고
+// 클릭 시 기존 적용 경로를 재사용한다. 라이브러리에서 삭제된 id 는 열 때 자동 제외.
+// ═════════════════════════════════════════════════════════════════════════════
+extension AppDelegate: NSMenuDelegate {
+    private static var recentIdsKey: String { "waple.recentWallpaperIds" }
+    private var recentWallpaperIds: [String] {
+        get { UserDefaults.standard.stringArray(forKey: Self.recentIdsKey) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: Self.recentIdsKey) }
+    }
+
+    /// 적용 성공 id 를 최근 목록에 반영(중복 제거·선두·최대 10). nil → no-op.
+    func pushRecent(_ id: String?) {
+        guard let id else { return }
+        recentWallpaperIds = RecentWallpapers.push(id, into: recentWallpaperIds)
+    }
+
+    func recentMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "최근 배경", action: nil, keyEquivalent: "")
+        let m = NSMenu()
+        m.delegate = self          // 열 때마다 menuNeedsUpdate 로 최신화
+        item.submenu = m
+        recentMenu = m
+        return item
+    }
+
+    /// 서브메뉴를 열 때 최신 목록으로 다시 채운다(그 사이 삭제된 id 는 제외).
+    public func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === recentMenu else { return }
+        menu.removeAllItems()
+        let entries = recentWallpaperIds.compactMap { id in store.entries.first(where: { $0.id == id }) }
+        guard !entries.isEmpty else {
+            let empty = NSMenuItem(title: "(없음)", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+            return
+        }
+        for entry in entries {
+            let it = NSMenuItem(title: entry.title, action: #selector(applyRecent(_:)), keyEquivalent: "")
+            it.representedObject = entry.id
+            menu.addItem(it)
+        }
+    }
+
+    @objc func applyRecent(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let entry = store.entries.first(where: { $0.id == id }) else { return }
+        _ = libraryVM.apply(entry)   // 기존 적용 경로 재사용(선택 영속·강조 포함)
     }
 }

@@ -357,6 +357,23 @@ final class AppLogicTests: XCTestCase {
             "형제 프리픽스(stillage)는 내부 아님")
     }
 
+    // MARK: - RecentWallpapers (작업 6: 최근 목록 push)
+
+    func testRecentPush_frontInsertAndDedup() {
+        XCTAssertEqual(RecentWallpapers.push("a", into: []), ["a"])
+        XCTAssertEqual(RecentWallpapers.push("b", into: ["a"]), ["b", "a"], "선두 삽입")
+        XCTAssertEqual(RecentWallpapers.push("a", into: ["b", "a"]), ["a", "b"],
+                       "재적용 → 중복 제거 후 선두")
+    }
+
+    func testRecentPush_capsAtMax() {
+        let ten = (0..<10).map { "id\($0)" }
+        let out = RecentWallpapers.push("new", into: ten)
+        XCTAssertEqual(out.count, 10)
+        XCTAssertEqual(out.first, "new")
+        XCTAssertFalse(out.contains("id9"), "가장 오래된 것이 밀려남")
+    }
+
     // MARK: - VideoImport (작업 5: 원시 동영상 → 최소 project.json 배경)
 
     func testVideoImportPreparesManagedFolderAndProjectJSON() throws {
