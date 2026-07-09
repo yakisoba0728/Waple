@@ -36,6 +36,40 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(try SceneDocument.parse(package: p).layers.count, 0)
     }
 
+    /// 퍼펫 layer 의 animationlayers 다층 파스(additive/blend/rate/visible + 키프레임 dict 언랩).
+    func testParsesPuppetAnimationLayers() throws {
+        let puppetModel = #"{"width":100,"height":100,"material":"materials/m.json","puppet":"models/p.mdl"}"#
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+           "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true,
+           "animationlayers":[
+             {"name":"Idle","animation":10,"additive":false,"blend":1.0,"rate":12.0,"visible":true},
+             {"name":"Wave","animation":20,"additive":true,"blend":{"value":0.5,"animation":{}},"rate":1.0,"visible":true}
+           ]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", puppetModel), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.layers.count, 1)
+        let al = doc.layers[0].animationLayers
+        XCTAssertEqual(al.count, 2)
+        XCTAssertEqual(al[0].name, "Idle"); XCTAssertFalse(al[0].additive)
+        XCTAssertEqual(al[0].blend, 1.0, accuracy: 1e-6); XCTAssertEqual(al[0].rate, 12.0, accuracy: 1e-6)
+        XCTAssertTrue(al[1].additive)
+        XCTAssertEqual(al[1].blend, 0.5, accuracy: 1e-6, "키프레임 dict {value} 언랩")
+    }
+
+    /// 비-퍼펫 이미지 레이어는 animationLayers 빈 배열(파스 오버헤드/오분류 없음).
+    func testNonPuppetLayerHasNoAnimationLayers() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+           "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        XCTAssertTrue(try SceneDocument.parse(package: p).layers[0].animationLayers.isEmpty)
+    }
+
     /// 실측 스키마(3629379075 등): sound[], volume {user,value} 또는 숫자, playbackmode, startsilent, min/maxtime.
     func testParsesSceneSoundFields() throws {
         let scene = """

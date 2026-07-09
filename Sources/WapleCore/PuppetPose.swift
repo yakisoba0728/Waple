@@ -80,6 +80,73 @@ public enum PuppetPose {
         return (0..<n).map { world[$0] * bindWorld[$0].inverse }
     }
 
+    /// 두 로컬 행렬 성분별 lerp(캐스케이드 절대 블렌드). t=0→a, t=1→b 정확, 중간=보간.
+    /// 회전 slerp 미사용(2D 퍼펫은 z회전·평행이동 위주 — 성분 블렌드로 충분; WE 도 근사).
+    static func mixLocal(_ a: simd_float4x4, _ b: simd_float4x4, _ t: Float) -> simd_float4x4 {
+        simd_float4x4(a.columns.0 + (b.columns.0 - a.columns.0) * t,
+                      a.columns.1 + (b.columns.1 - a.columns.1) * t,
+                      a.columns.2 + (b.columns.2 - a.columns.2) * t,
+                      a.columns.3 + (b.columns.3 - a.columns.3) * t)
+    }
+
+    /// 레이어 이름 → 애니 클립 인덱스(서브스트링 매칭, 실패 시 fallback 위치 클램프). 애니 없음 → 0.
+    public static func clipIndex(model: PuppetModel, name: String, fallback: Int) -> Int {
+        let count = model.animations.count
+        guard count > 0 else { return 0 }
+        let ln = name.lowercased()
+        if !ln.isEmpty, let i = model.animations.firstIndex(where: {
+            let cn = $0.name.lowercased(); return cn.contains(ln) || ln.contains(cn)
+        }) { return i }
+        return min(max(fallback, 0), count - 1)
+    }
+
+    /// 다층 animationlayers 캐스케이드 블렌드 스킨 행렬(순수). `layers` 순서 = 합성 순서.
+    /// 각 본 로컬은 bind 에서 시작해 레이어 순차 합성:
+    ///   - 절대(additive=false): `local = lerp(local, clip, weight)` — 캐스케이드(첫 절대·weight=1 = 그 클립).
+    ///   - 가산(additive=true):  `local = (clip × clipFrame0⁻¹) × local` — 델타 합성(기준=클립 프레임0).
+    /// 이후 부모체인 world → `skin = world × bindWorld⁻¹`(skinMatrices 와 동일).
+    /// 단일 절대 레이어 weight=1 → `skinMatrices(animation:)` 와 동일(= 단층 무회귀 보장).
+    /// ⚠️ 가산 델타 기준(클립 프레임0)·정규화·성분 lerp 는 WE C++ 내부 규약의 근사 — SP 리포트 참조.
+    public static func blendedSkinMatrices(model: PuppetModel,
+                                           layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
+                                           time: Float) -> [simd_float4x4] {
+        let n = model.bones.count
+        guard n > 0, !layers.isEmpty else {
+            return [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
+        }
+        var bindWorld = [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
+        for (i, b) in model.bones.enumerated() {
+            let p = Int(b.parent)
+            bindWorld[i] = (b.parent >= 0 && p < i) ? bindWorld[p] * b.bind : b.bind
+        }
+        // 레이어별 프레임(자기 클립의 fps/mode/length + rate 배속).
+        let frames: [Float] = layers.map { L in
+            guard L.anim >= 0, L.anim < model.animations.count else { return 0 }
+            let a = model.animations[L.anim]
+            return frame(time: time * L.rate, fps: a.fps, length: a.lengthFrames, mode: a.mode)
+        }
+        var world = [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
+        for (i, b) in model.bones.enumerated() {
+            var local = b.bind
+            for (li, L) in layers.enumerated() {
+                guard L.anim >= 0, L.anim < model.animations.count else { continue }
+                let tracks = model.animations[L.anim].tracks
+                let clip = (i < tracks.count ? sampledLocal(tracks[i], frame: frames[li]) : nil) ?? b.bind
+                if L.additive {
+                    let ref = (i < tracks.count ? sampledLocal(tracks[i], frame: 0) : nil) ?? b.bind
+                    // 가중 델타: weight 0 → 항등(무기여), 1 → 전체 델타.
+                    let wdelta = mixLocal(matrix_identity_float4x4, clip * ref.inverse, L.weight)
+                    local = wdelta * local
+                } else {
+                    local = mixLocal(local, clip, L.weight)
+                }
+            }
+            let p = Int(b.parent)
+            world[i] = (b.parent >= 0 && p < i) ? world[p] * local : local
+        }
+        return (0..<n).map { world[$0] * bindWorld[$0].inverse }
+    }
+
     /// CPU 스키닝: p' = Σ wᵏ · skin[idxᵏ] · p. 가중치 합 0 → 원위치.
     public static func skinnedPositions(model: PuppetModel, matrices: [simd_float4x4]) -> [SIMD3<Float>] {
         model.vertices.map { v in

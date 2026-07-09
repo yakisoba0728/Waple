@@ -420,7 +420,18 @@ extension SceneRenderer {
         var vertexCount = 6
         // 퍼펫: per-frame CPU 스키닝 → 메시 삼각형 리스트로 쿼드 대체.
         if let pm = layer.puppet, let def = layer.def, let device {
-            let mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
+            // 다층 animationlayers → 캐스케이드 블렌드(2+ 활성 레이어). 0/1 = 기존 단일 경로(무회귀).
+            let eff = def.animationLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
+            let mats: [simd_float4x4]
+            if eff.count >= 2 {
+                let resolved = eff.map { (pos, L) in
+                    (anim: PuppetPose.clipIndex(model: pm, name: L.name, fallback: pos),
+                     additive: L.additive, weight: L.blend, rate: L.rate)
+                }
+                mats = PuppetPose.blendedSkinMatrices(model: pm, layers: resolved, time: time)
+            } else {
+                mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
+            }
             let pos = PuppetPose.skinnedPositions(model: pm, matrices: mats)
             let verts = SceneRenderer.puppetVertices(model: pm, positions: pos,
                                                      origin: def.origin, scale: def.scale, angleZ: def.angleZ,

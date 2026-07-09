@@ -60,6 +60,8 @@ public struct SceneLayer: Equatable {
     public var animations: [String: PropertyAnimation] = [:]
     /// 퍼펫 모델(.mdl) 경로 — model json 의 "puppet" 키(SP6 슬라이스 1). nil = 일반 쿼드.
     public var puppet: String? = nil
+    /// 퍼펫 animationlayers(다층 캐스케이드 블렌드). 2+ 레이어면 렌더러가 포즈 합성, 0/1 이면 기존 단일 경로.
+    public var animationLayers: [AnimationLayer] = []
     /// 프로퍼티 스크립트(color/alpha/visible — 키 → JS 소스). per-frame 평가(실물: 미디어 썸네일 컬러
     /// 전환, 주야 컨트롤러). visible 스크립트가 있는 레이어는 파스에서 드롭하지 않는다.
     public var propertyScripts: [String: String] = [:]
@@ -123,6 +125,24 @@ public struct AnimationSelection: Equatable {
     public let name: String
     public let rate: Float
     public init(name: String, rate: Float) { self.name = name; self.rate = rate }
+}
+
+/// animationlayers 의 개별 레이어(다층 캐스케이드 블렌드용 — 실측 확정 2026-07):
+/// - name: 모델 애니 클립에 서브스트링 매칭할 레이어 이름(레이어 name ≈ 클립 name).
+/// - additive: false = 절대 포즈(캐스케이드 lerp), true = 델타 가산(bind/이전 포즈 위에 클립 델타).
+/// - blend: 블렌드 가중치(대개 1.0, 분수/키프레임 존재 — 키프레임은 초기값). 0..1 클램프 안 함.
+/// - rate: 재생 배속(대개 1.0).
+/// - visible: 레이어 활성(키프레임 가능 — 정적 초기값만 반영).
+public struct AnimationLayer: Equatable {
+    public let name: String
+    public let additive: Bool
+    public let blend: Float
+    public let rate: Float
+    public let visible: Bool
+    public init(name: String, additive: Bool, blend: Float, rate: Float, visible: Bool) {
+        self.name = name; self.additive = additive; self.blend = blend
+        self.rate = rate; self.visible = visible
+    }
 }
 
 /// 3D 메시 오브젝트. 2D 레이어(image→json→puppet 인다이렉션)와 달리 `model` 키가 pkg 의
@@ -198,6 +218,44 @@ public struct SceneLight3D: Equatable {
     }
 }
 
+public extension SceneLight3D {
+    /// WE 라이트 셰이더 유니폼 팩(generic.vert / genericimage2.frag 규약 — 실측 확정 2026-07):
+    /// - `g_LightsPosition[4]`(vec3): 라이트 월드 위치(origin). 4 미만은 0 패딩.
+    /// - `g_LightsColorPremultiplied[3]`(vec4): 4개 라이트의 (color×intensity)를 3×vec4 로 팩 —
+    ///   라이트 0..2 는 `[i].rgb`, 라이트 3 은 `[0..2].w` 3채널에 분산(`[0].w,[1].w,[2].w = L3.r,g,b`).
+    ///   ("Premultiplied" = color × intensity; 별도 intensity/radius 유니폼 없음.)
+    /// - `ambient`: `general.ambientcolor`.
+    ///
+    /// > ⚠️ **현재 런타임 소비처 없음.** Waple 의 2D 레이어는 QuadShaders(텍스처×tint), 3D 메시는 고정
+    /// > unlit `Mesh3DShaders` 로 그린다. 라이트를 참조하는 머티리얼 셰이더(generic*/genericimage2)는
+    /// > 로드·번역되지 않으며, 번역되는 이펙트 셰이더는 코퍼스 전체 0건이 이 유니폼을 참조한다. 따라서
+    /// > 이 팩을 읽는 셰이더가 없어 값을 공급해도 화면 변화가 없다. 이 함수는 향후 forward-lighting(PBR)
+    /// > 도입 시 소비될 **확정 규약**을 유닛으로 고정해 두는 것이 목적(SP 리포트 참조).
+    struct PackedUniforms: Equatable {
+        public var positions: [SIMD3<Float>]           // g_LightsPosition[4]
+        public var colorsPremultiplied: [SIMD4<Float>] // g_LightsColorPremultiplied[3]
+        public var ambient: SIMD3<Float>               // g_LightAmbientColor
+    }
+
+    /// 라이트 배열 → 셰이더 유니폼 팩. 4개 초과 시 앞 4개(WE 는 오브젝트별 relevance 4개 선택 —
+    /// 현행은 씬 순서 근사; 정확한 선택은 소비처와 함께 도입).
+    static func packUniforms(_ lights: [SceneLight3D], ambient: Vec3 = Vec3(x: 0, y: 0, z: 0)) -> PackedUniforms {
+        var positions = [SIMD3<Float>](repeating: .zero, count: 4)
+        var premult = [SIMD3<Float>](repeating: .zero, count: 4)  // color×intensity, L0..L3
+        for (i, l) in lights.prefix(4).enumerated() {
+            positions[i] = SIMD3(l.origin.x, l.origin.y, l.origin.z)
+            premult[i] = SIMD3(l.color.x, l.color.y, l.color.z) * l.intensity
+        }
+        let colors = [
+            SIMD4(premult[0].x, premult[0].y, premult[0].z, premult[3].x),  // [0].rgb=L0, .w=L3.r
+            SIMD4(premult[1].x, premult[1].y, premult[1].z, premult[3].y),  // [1].rgb=L1, .w=L3.g
+            SIMD4(premult[2].x, premult[2].y, premult[2].z, premult[3].z),  // [2].rgb=L2, .w=L3.b
+        ]
+        return PackedUniforms(positions: positions, colorsPremultiplied: colors,
+                              ambient: SIMD3(ambient.x, ambient.y, ambient.z))
+    }
+}
+
 /// 씬 sound 오브젝트(scene.json objects[] 중 "sound" 키 보유). 실측(코퍼스 460종 / 382오브젝트, 2026-07-09):
 /// - playbackmode ∈ {loop 215, single 158, random 9}
 /// - volume 은 숫자 또는 {user,value}/{script,value} 바인딩 — parse 에서 float() 가 언랩
@@ -235,6 +293,9 @@ public struct SceneDocument: Equatable {
     public let parallaxEnabled: Bool
     public let parallaxAmount: Float
     public let parallaxMouseInfluence: Float
+    /// WE `cameraparallaxdelay` — 카메라 시차 지연 시상수(초). 렌더러가 프레임 dt 기반 지수 스무딩에 사용.
+    /// 0 = 즉시 반영(스무딩 없음). 실측 기본 0.1, 범위 0.03..2.0(전 코퍼스 >0).
+    public let parallaxDelay: Float
     public let layers: [SceneLayer]
     public let particles: [SceneParticle]
     public var texts: [SceneTextLayer] = []
@@ -277,6 +338,8 @@ extension SceneDocument {
         let parallaxEnabled = (general["cameraparallax"] as? Bool) ?? false
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
+        // 부재 시 0(즉시) — 무회귀. 실물은 전부 필드 보유(기본 0.1).
+        let parallaxDelay = max(0, float(general["cameraparallaxdelay"]) ?? 0)
 
         // 3D 카메라(orthogonalprojection 이 딕셔너리가 아닌 3D 씬 + camera{eye,center,up}+fov 존재 시). 2D=nil.
         let (camera3D, cameraScripts) = parseCamera(scene: scene, general: general)
@@ -338,7 +401,8 @@ extension SceneDocument {
         composeParentTransforms(layers: &layers, nodes3D: nodes3D, camera3D: camera3D, package: package, assets: assets)
         var out = SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                                 parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
-                                parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
+                                parallaxMouseInfluence: parallaxMouseInfluence, parallaxDelay: parallaxDelay,
+                                layers: layers, particles: particles,
                                 texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
                                 nodes3D: nodes3D)
         out.cameraScripts = cameraScripts
@@ -438,6 +502,7 @@ extension SceneDocument {
         )
         layer.name = (obj["name"] as? String) ?? ""
         layer.puppet = puppetPath
+        if puppetPath != nil { layer.animationLayers = parseAllAnimationLayers(obj["animationlayers"]) }
         layer.propertyScripts = propScripts
         layer.initialVisible = initialVisible
         layer.blendMode = blendMode
@@ -627,6 +692,22 @@ extension SceneDocument {
             }
         }
         return best.map { AnimationSelection(name: $0.name, rate: $0.rate) }
+    }
+
+    /// animationlayers → 전 레이어(다층 블렌드용, 순서 보존). visible/blend 는 정적 초기값
+    /// (키프레임은 float()/value 언랩 후 초기값만 — 런타임 키프레임 토글은 미반영).
+    private static func parseAllAnimationLayers(_ raw: Any?) -> [AnimationLayer] {
+        guard let layers = raw as? [Any] else { return [] }
+        return layers.compactMap { any in
+            guard let l = any as? [String: Any] else { return nil }
+            let visible = (l["visible"] as? Bool)
+                ?? ((l["visible"] as? [String: Any])?["value"] as? Bool) ?? true
+            return AnimationLayer(name: (l["name"] as? String) ?? "",
+                                  additive: (l["additive"] as? Bool) ?? false,
+                                  blend: float(l["blend"]) ?? 1,
+                                  rate: float(l["rate"]) ?? 1,
+                                  visible: visible)
+        }
     }
 
     /// 레이어 소스 해석 결과.

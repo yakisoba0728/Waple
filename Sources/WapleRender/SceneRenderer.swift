@@ -273,9 +273,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var layers: [GPULayer] = []
     var clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
     var cameraOffset = SIMD2<Float>(0, 0)
+    /// 마우스가 지정한 목표 시차 오프셋. cameraOffset 는 delay 시상수로 여기로 프레임마다 수렴(WE 스무딩).
+    var targetCameraOffset = SIMD2<Float>(0, 0)
     var parallaxEnabled = false
     var parallaxAmount: Float = 1
     var parallaxMouseInfluence: Float = 1
+    /// WE cameraparallaxdelay(초). 0 = 즉시. >0 = 프레임 dt 기반 지수 스무딩.
+    var parallaxDelay: Float = 0
     let parallax = ParallaxController()
     /// WE 포인터 UV(0..1, 상단 원점). 마우스 미구동/헤드리스 = 중앙(0.5,0.5).
     var pointerUV = SIMD2<Float>(0.5, 0.5)
@@ -512,6 +516,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         parallaxEnabled = doc.parallaxEnabled
         parallaxAmount = doc.parallaxAmount
         parallaxMouseInfluence = doc.parallaxMouseInfluence
+        parallaxDelay = doc.parallaxDelay
         // 마우스 모니터는 시차 + 포인터 유니폼(g_PointerPosition — 커서 반응 효과) 공용.
         if parallaxEnabled || hasEffects {
             parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
@@ -593,7 +598,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         pointerUV = SceneRenderer.pointerUV(fromNormalized: off)
         if parallaxEnabled {
             let s = parallaxAmount * parallaxMouseInfluence * maxShift
-            cameraOffset = SIMD2<Float>(Float(off.x) * s, Float(off.y) * s)
+            targetCameraOffset = SIMD2<Float>(Float(off.x) * s, Float(off.y) * s)
+            // delay<=0 = 즉시(기존 동작 무회귀). delay>0 = draw() 가 프레임 dt 로 target 에 지수 수렴.
+            if parallaxDelay <= 0 { cameraOffset = targetCameraOffset }
         }
         // cursorMove 훅 배달 — 30Hz 스로틀(웹 전달과 동일 규약, JS 평가 비용 절제).
         if hasCursorMoveHook {
@@ -620,6 +627,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let time = Float(nowT - startTime)
         var dt = Float(nowT - lastFrameTime); lastFrameTime = nowT
         dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
+
+        // 시차 지연 스무딩(WE cameraparallaxdelay): cameraOffset 를 target 으로 프레임 dt 기반 지수 수렴.
+        // 온디맨드(비애니) 씬은 마우스 정지 후에도 정착 전까지 프레임을 스스로 요청(안 하면 lerp 중간 정지).
+        if parallaxEnabled, parallaxDelay > 0 {
+            cameraOffset = ParallaxController.smoothed(current: cameraOffset, target: targetCameraOffset,
+                                                       dt: dt, delay: parallaxDelay)
+            if !shouldAnimate {
+                let d = targetCameraOffset - cameraOffset
+                if d.x * d.x + d.y * d.y > 1e-10 { view.needsDisplay = true }
+            }
+        }
 
         // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → drawable blit.
         if is3D {
