@@ -60,6 +60,8 @@ public struct SceneLayer: Equatable {
     public var animations: [String: PropertyAnimation] = [:]
     /// 퍼펫 모델(.mdl) 경로 — model json 의 "puppet" 키(SP6 슬라이스 1). nil = 일반 쿼드.
     public var puppet: String? = nil
+    /// 퍼펫 animationlayers(다층 캐스케이드 블렌드). 2+ 레이어면 렌더러가 포즈 합성, 0/1 이면 기존 단일 경로.
+    public var animationLayers: [AnimationLayer] = []
     /// 프로퍼티 스크립트(color/alpha/visible — 키 → JS 소스). per-frame 평가(실물: 미디어 썸네일 컬러
     /// 전환, 주야 컨트롤러). visible 스크립트가 있는 레이어는 파스에서 드롭하지 않는다.
     public var propertyScripts: [String: String] = [:]
@@ -123,6 +125,24 @@ public struct AnimationSelection: Equatable {
     public let name: String
     public let rate: Float
     public init(name: String, rate: Float) { self.name = name; self.rate = rate }
+}
+
+/// animationlayers 의 개별 레이어(다층 캐스케이드 블렌드용 — 실측 확정 2026-07):
+/// - name: 모델 애니 클립에 서브스트링 매칭할 레이어 이름(레이어 name ≈ 클립 name).
+/// - additive: false = 절대 포즈(캐스케이드 lerp), true = 델타 가산(bind/이전 포즈 위에 클립 델타).
+/// - blend: 블렌드 가중치(대개 1.0, 분수/키프레임 존재 — 키프레임은 초기값). 0..1 클램프 안 함.
+/// - rate: 재생 배속(대개 1.0).
+/// - visible: 레이어 활성(키프레임 가능 — 정적 초기값만 반영).
+public struct AnimationLayer: Equatable {
+    public let name: String
+    public let additive: Bool
+    public let blend: Float
+    public let rate: Float
+    public let visible: Bool
+    public init(name: String, additive: Bool, blend: Float, rate: Float, visible: Bool) {
+        self.name = name; self.additive = additive; self.blend = blend
+        self.rate = rate; self.visible = visible
+    }
 }
 
 /// 3D 메시 오브젝트. 2D 레이어(image→json→puppet 인다이렉션)와 달리 `model` 키가 pkg 의
@@ -479,6 +499,7 @@ extension SceneDocument {
         )
         layer.name = (obj["name"] as? String) ?? ""
         layer.puppet = puppetPath
+        if puppetPath != nil { layer.animationLayers = parseAllAnimationLayers(obj["animationlayers"]) }
         layer.propertyScripts = propScripts
         layer.initialVisible = initialVisible
         layer.blendMode = blendMode
@@ -667,6 +688,22 @@ extension SceneDocument {
             }
         }
         return best.map { AnimationSelection(name: $0.name, rate: $0.rate) }
+    }
+
+    /// animationlayers → 전 레이어(다층 블렌드용, 순서 보존). visible/blend 는 정적 초기값
+    /// (키프레임은 float()/value 언랩 후 초기값만 — 런타임 키프레임 토글은 미반영).
+    private static func parseAllAnimationLayers(_ raw: Any?) -> [AnimationLayer] {
+        guard let layers = raw as? [Any] else { return [] }
+        return layers.compactMap { any in
+            guard let l = any as? [String: Any] else { return nil }
+            let visible = (l["visible"] as? Bool)
+                ?? ((l["visible"] as? [String: Any])?["value"] as? Bool) ?? true
+            return AnimationLayer(name: (l["name"] as? String) ?? "",
+                                  additive: (l["additive"] as? Bool) ?? false,
+                                  blend: float(l["blend"]) ?? 1,
+                                  rate: float(l["rate"]) ?? 1,
+                                  visible: visible)
+        }
     }
 
     /// 레이어 소스 해석 결과.
