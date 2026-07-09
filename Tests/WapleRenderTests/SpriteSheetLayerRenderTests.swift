@@ -109,6 +109,35 @@ final class SpriteSheetLayerRenderTests: XCTestCase {
         XCTAssertEqual(a, b, "콤보 없으면 t=0 과 t=0.3 픽셀 동일(정지)")
     }
 
+    /// 합성 불균일 멀티페이지(page0 2×1, page1 1×1) — 실코퍼스 멀티페이지 테스트(gated)의 CI 안전 미러.
+    /// stackedAtlas 가 max-width(2)×sum-height(2)로 스택하고 imageId=1 프레임에 누적 y-오프셋(page0
+    /// 높이=1)을 주는지 확정. 종전 same-dims 가드였다면 nil 폴백 → atlasY=0 이 되어 실패(조용한 오프레임).
+    func testStackedAtlasNonUniformPagesOffset() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        func f32(_ v: Float) -> Data { var b = v.bitPattern.littleEndian; return Data(bytes: &b, count: 4) }
+        var tex = Data("TEXV0005".utf8); tex.append(0); tex.append(Data("TEXI0001".utf8)); tex.append(0)
+        tex.append(i32(0)); tex.append(i32(0)); tex.append(i32(2)); tex.append(i32(1)); tex.append(i32(2)); tex.append(i32(1))  // fmt0, texW2 texH1 imgW2 imgH1
+        tex.append(Data("TEXB0003".utf8)); tex.append(0); tex.append(i32(2)); tex.append(i32(-1))               // imageCount=2, imageFormat=-1(raw)
+        tex.append(i32(1)); tex.append(i32(2)); tex.append(i32(1)); tex.append(i32(0)); tex.append(i32(8)); tex.append(i32(8))  // page0: mipCount1, w2 h1 isLZ4=0 dec8 comp8
+        tex.append(Data([255, 0, 0, 255, 0, 0, 255, 255]))                                                       // page0 2×1: red, blue
+        tex.append(i32(1)); tex.append(i32(1)); tex.append(i32(1)); tex.append(i32(0)); tex.append(i32(4)); tex.append(i32(4))  // page1: mipCount1, w1 h1 isLZ4=0 dec4 comp4
+        tex.append(Data([0, 255, 0, 255]))                                                                       // page1 1×1: green
+        tex.append(Data("TEXS0003".utf8)); tex.append(0)
+        tex.append(i32(2)); tex.append(i32(2)); tex.append(i32(2))                                               // frameCount, gifW, gifH
+        tex.append(i32(0)); tex.append(f32(0.2)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(2)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(1))  // f0 id0 x0y0 w2 h1
+        tex.append(i32(1)); tex.append(f32(0.2)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(1)); tex.append(f32(0)); tex.append(f32(0)); tex.append(f32(1))  // f1 id1 x0y0 w1 h1
+        let package = try ScenePackage.parse(encodePkg([("materials/mp.tex", tex)]))
+        let r = SceneRenderer()
+        guard let res = r.resolveTextureWithFrames("materials/mp.tex", package: package, device: device) else {
+            return XCTFail("resolveTextureWithFrames nil")
+        }
+        XCTAssertEqual(res.frames.count, 2)
+        XCTAssertEqual(res.texture.width, 2, "maxW = max(2,1)")
+        XCTAssertEqual(res.texture.height, 2, "sumH = 1+1")
+        XCTAssertEqual(res.frames.first { $0.imageId == 1 }?.atlasY, 1, "page1 프레임 누적 y-오프셋 = page0 높이(1)")
+        XCTAssertEqual(res.frames.first { $0.imageId == 0 }?.atlasY, 0, "page0 프레임은 오프셋 0")
+    }
+
     // MARK: 실코퍼스(폴더 있을 때만 — CI 안전 skip)
 
     private func realScene(_ id: String) throws -> WallpaperProject {
