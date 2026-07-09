@@ -34,6 +34,34 @@ final class SceneEventHookTests: XCTestCase {
         XCTAssertEqual(consumer.evaluateVec(current: [0])?.first, 1, "재클릭 → 복귀")
     }
 
+    /// 실물 3394601417(낮/밤) 회귀: 훅이 thisScene.getAnimation(name).play() 를 라이브 호출한다 —
+    /// 심이 없으면 TypeError 로 훅이 중단돼 cl 토글이 영구히 깨진다(shared.a 복귀 불가).
+    /// getAnimation 은 이름별 캐시 no-op 애니메이션(초기 정지, play 후 isPlaying=true)이어야 한다.
+    func testCursorClickHookSurvivesSceneGetAnimation() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let controller = """
+        'use strict';
+        let cl=false;
+        shared.a=1;
+        export function cursorClick(event) {
+            if(cl==false){ shared.a=0; thisScene.getAnimation("2chu").play(); cl=true; }
+            else { shared.a=1; thisScene.getAnimation("3chu").play(); cl=false; }
+        }
+        """
+        let ctrl = try XCTUnwrap(TextScriptEngine(script: controller, scene: scene))
+        let consumer = try XCTUnwrap(TextScriptEngine(
+            script: "export function update(v){ return shared.a==1 ? 1 : 0; }", scene: scene))
+        ctrl.callHook("cursorClick", eventJS: "({ worldPosition: new Vec3(0, 0, 0), button: 0 })")
+        XCTAssertEqual(consumer.evaluateVec(current: [0])?.first, 0, "클릭 → 밤(getAnimation 예외 없이 완주)")
+        ctrl.callHook("cursorClick", eventJS: "({ worldPosition: new Vec3(0, 0, 0), button: 0 })")
+        XCTAssertEqual(consumer.evaluateVec(current: [0])?.first, 1, "재클릭 → 낮 복귀(cl 토글 생존)")
+        // 이름별 캐시 + 상태 일관: play 된 "2chu" 는 isPlaying, 미재생 이름은 정지 상태.
+        let probe = try XCTUnwrap(TextScriptEngine(
+            script: "export function update(v){ return (thisScene.getAnimation('2chu').isPlaying() ? 1 : 0) + (thisScene.getAnimation('nope').isPlaying() ? 10 : 0); }",
+            scene: scene))
+        XCTAssertEqual(probe.evaluateVec(current: [0])?.first, 1)
+    }
+
     /// cursorClick event.worldPosition 은 Vec3 — 실물 드래그 스크립트가 .x/.subtract 를 사용한다.
     func testCursorClickEventWorldPositionIsVec3() throws {
         let scene = try XCTUnwrap(SceneScriptContext())

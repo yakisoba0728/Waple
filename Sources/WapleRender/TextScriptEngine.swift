@@ -932,6 +932,19 @@ public final class TextScriptEngine {
             getCamera: function() { return camera; },
             getCameraTransforms: function() { return transforms; },
             setCameraTransforms: function(v) { if (v) { transforms = v; } return this; },
+            __animations: {},   // name → 타임라인 애니메이션 no-op 심(이름별 캐시 — isPlaying 재조회 일관)
+            // WE SceneScript thisScene.getAnimation(name): 명명 타임라인 애니메이션. Waple 은 씬 타임라인을
+            // 렌더하지 않으므로 no-op 심(초기 정지) — 작가 스크립트의 .play() 체인이 예외 없이 완주해
+            // shared 토글 등 후속 로직이 살게 하는 것이 목적(실물 3394601417 낮/밤: getAnimation("2chu") 라이브 호출).
+            getAnimation: function(name) {
+                var key = String(name || '');
+                if (!this.__animations[key]) {
+                    var a = __makeTextureAnimation();
+                    a.paused = true;   // 타임라인은 play() 전 정지 상태가 규약
+                    this.__animations[key] = a;
+                }
+                return this.__animations[key];
+            },
             getLayer: function(i) {
                 if (typeof i === 'string') {
                     for (var n = 0; n < this.layers.length; n += 1) {
