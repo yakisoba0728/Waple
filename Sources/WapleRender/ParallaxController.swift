@@ -33,4 +33,15 @@ public final class ParallaxController {
         let ny = (mouse.y - screenFrame.midY) / (screenFrame.height / 2)
         return CGPoint(x: min(max(nx, -1), 1), y: min(max(ny, -1), 1))
     }
+
+    /// 카메라 시차 지수 스무딩 한 스텝(프레임 dt 기반). WE `cameraparallaxdelay` 재현.
+    /// delay = 시상수(초). delay<=0 또는 dt<=0 → 즉시 target 반환(기존 즉시 반영 = 무회귀).
+    /// 그 외 alpha = 1 - exp(-dt/delay) 로 target 쪽 지수 수렴 — framerate 독립(dt 배분과 무관하게 동일 곡선).
+    /// (순수 — 유닛 테스트 대상. 상태는 호출자 renderer 가 프레임마다 current 를 갱신.)
+    public static func smoothed(current: SIMD2<Float>, target: SIMD2<Float>,
+                                dt: Float, delay: Float) -> SIMD2<Float> {
+        guard delay > 0, dt > 0 else { return target }
+        let alpha = 1 - exp(-dt / delay)
+        return current + (target - current) * alpha
+    }
 }

@@ -232,6 +232,9 @@ public struct SceneDocument: Equatable {
     public let parallaxEnabled: Bool
     public let parallaxAmount: Float
     public let parallaxMouseInfluence: Float
+    /// WE `cameraparallaxdelay` — 카메라 시차 지연 시상수(초). 렌더러가 프레임 dt 기반 지수 스무딩에 사용.
+    /// 0 = 즉시 반영(스무딩 없음). 실측 기본 0.1, 범위 0.03..2.0(전 코퍼스 >0).
+    public let parallaxDelay: Float
     public let layers: [SceneLayer]
     public let particles: [SceneParticle]
     public var texts: [SceneTextLayer] = []
@@ -274,6 +277,8 @@ extension SceneDocument {
         let parallaxEnabled = (general["cameraparallax"] as? Bool) ?? false
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
+        // 부재 시 0(즉시) — 무회귀. 실물은 전부 필드 보유(기본 0.1).
+        let parallaxDelay = max(0, float(general["cameraparallaxdelay"]) ?? 0)
 
         // 3D 카메라(orthogonalprojection 이 딕셔너리가 아닌 3D 씬 + camera{eye,center,up}+fov 존재 시). 2D=nil.
         let (camera3D, cameraScripts) = parseCamera(scene: scene, general: general)
@@ -335,7 +340,8 @@ extension SceneDocument {
         composeParentTransforms(layers: &layers, nodes3D: nodes3D, camera3D: camera3D, package: package, assets: assets)
         var out = SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                                 parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
-                                parallaxMouseInfluence: parallaxMouseInfluence, layers: layers, particles: particles,
+                                parallaxMouseInfluence: parallaxMouseInfluence, parallaxDelay: parallaxDelay,
+                                layers: layers, particles: particles,
                                 texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
                                 nodes3D: nodes3D)
         out.cameraScripts = cameraScripts
