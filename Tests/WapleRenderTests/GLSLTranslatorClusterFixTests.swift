@@ -49,4 +49,25 @@ final class GLSLTranslatorClusterFixTests: XCTestCase {
         """
         assertCompiles(vertex: trivialVert, fragment: frag, combos: ["GRIDX": 1])
     }
+
+    // MARK: Cluster 6 — "use of undeclared identifier 'radians'"
+    // MSL 엔 radians()/degrees() 가 없다(실물 color_grading 의 cos(radians(u_hueShift))). 헬퍼/메인 양쪽에서.
+    func testRadiansAndDegrees() {
+        let frag = """
+        uniform sampler2D g_Texture0;
+        uniform float u_hue; // {"material":"hue","default":45.0}
+        varying vec2 v_TexCoord;
+        vec3 rotate(vec3 color, float deg) {
+            float a = radians(deg);
+            return color * cos(a);
+        }
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb = rotate(c.rgb, u_hue);
+            c.r = degrees(u_hue) * 0.001;
+            gl_FragColor = c;
+        }
+        """
+        assertCompiles(vertex: trivialVert, fragment: frag)
+    }
 }

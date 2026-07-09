@@ -1054,6 +1054,9 @@ public enum GLSLTranslator {
         s = rewriteCall(s, "texSample2D") { args in args.count == 2 ? "\(args[0]).sample(smp, we_uv(\(args[1])))" : nil }
         // 2b) GLSL 2-인자 atan(y,x) → MSL atan2 (1-인자는 유지)
         s = rewriteCall(s, "atan") { args in args.count == 2 ? "atan2(\(args[0]), \(args[1]))" : nil }
+        // 2c) radians()/degrees() 는 MSL 미내장(실물 color_grading 의 radians(u_hueShift)) — 상수 곱으로 치환(π/180, 180/π).
+        s = rewriteCall(s, "radians") { args in args.count == 1 ? "((\(args[0])) * 0.017453292519943295)" : nil }
+        s = rewriteCall(s, "degrees") { args in args.count == 1 ? "((\(args[0])) * 57.29577951308232)" : nil }
         // 3) 식별자/타입 단일 패스 치환
         s = replaceIdentifiers(s, symbols)
         s = rewriteDiscardStatements(s)
