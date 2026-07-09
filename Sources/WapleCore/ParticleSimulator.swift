@@ -394,7 +394,13 @@ public struct ParticleSimulator {
         case let .lifetimeRandom(mn, mx): p.lifetime = max(0.0001, rng.range(mn, mx))
         case let .sizeRandom(mn, mx): p.initialSize = rng.range(mn, mx); p.size = p.initialSize
         case let .colorRandom(mn, mx):
-            let c = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z)) / 255
+            // 단일 난수 t 로 3채널 동시 보간 — min→max 직선 위 색만(채널독립 박스 아님).
+            // 판정(2026-07-09, KDE catsout 대조 + 코퍼스 오서 의도): colorrandom min/max 가 그라디언트형
+            // (흰→주황 255,255,255→255,181,63 / 적→청 255,130,130→134,132,255 / 흰→회 255,255,255→95,98,100)
+            // 이라 직선 보간이 자연 — 박스는 축외 색(노랑·마젠타)을 섞어 오서 의도와 어긋난다.
+            // 되돌릴 조건: 실물이 채널독립임을 보이는 반증(축을 넓게 벌린 스프레드형 min/max 코퍼스 다수) 확보 시.
+            let t = rng.nextFloat()
+            let c = SIMD3(mn.x + (mx.x - mn.x) * t, mn.y + (mx.y - mn.y) * t, mn.z + (mx.z - mn.z) * t) / 255
             p.initialColor = c; p.color = c
         case let .alphaRandom(mn, mx, exp):
             let f = powf(rng.nextFloat(), max(0.0001, exp))

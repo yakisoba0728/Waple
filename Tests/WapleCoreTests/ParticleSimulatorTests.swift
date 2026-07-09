@@ -286,4 +286,21 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(a[0].color.x, 1.0, accuracy: 0.001)  // 255/255
         XCTAssertEqual(a[0].color.y, 0.0, accuracy: 0.001)
     }
+
+    /// colorrandom 은 단일 난수 t 로 3채널 동시 보간(min→max 직선). min=(255,0,0)→max=(0,255,0)
+    /// 이면 모든 파티클이 c.x+c.y==1, c.z==0 (채널독립 박스였다면 합이 1 에서 벗어난다).
+    func testColorRandomSingleTStaysOnLine() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100),
+                           .colorRandom(min: Vec3(x: 255, y: 0, z: 0), max: Vec3(x: 0, y: 255, z: 0))],
+            operators: [], renderer: .sprite, maxCount: 64, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 99)
+        let ps = sim.step(0.1)
+        XCTAssertGreaterThan(ps.count, 4)
+        for p in ps {
+            XCTAssertEqual(p.color.x + p.color.y, 1.0, accuracy: 0.001)   // min→max 직선 위
+            XCTAssertEqual(p.color.z, 0.0, accuracy: 0.001)
+        }
+    }
 }
