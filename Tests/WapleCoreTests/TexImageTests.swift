@@ -55,6 +55,21 @@ final class TexImageTests: XCTestCase {
         XCTAssertNil(TexImage.parse(Data("nope".utf8)))
     }
 
+    /// flags@22(RePKG TexFlags): bit0 NoInterp, bit1 ClampUV, bit2 IsGif, bit5 IsVideoTexture.
+    func testParsesFlags() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
+        // flags = 0x25 = bit0(NoInterp) | bit2(Gif) | bit5(Video)
+        var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
+        b += i32(0) + i32(0x25) + i32(4) + i32(4) + i32(4) + i32(4)
+        b += Array("TEXB0001".utf8)+[0] + [0,0,0,0]
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.flags, 0x25)
+        XCTAssertEqual(t?.noInterpolation, true)
+        XCTAssertEqual(t?.clampUVs, false)         // bit1 미설정
+        XCTAssertEqual(t?.isGif, true)
+        XCTAssertEqual(t?.isVideoTexture, true)
+    }
+
     /// 다중 mip(TEXB0004, 실측 DJK_1.tex mip 9개 클래스): mip0 payload 는 EOF 가 아니라
     /// compressedSize 만큼 — 종전 EOF-스캔 휴리스틱은 이 클래스에서 nil(흰색 폴백)이었다.
     func testParsesMultiMipTEXB0004() {

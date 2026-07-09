@@ -39,11 +39,18 @@ public struct TexImage {
     public let width: Int   // 이미지 width (imgW)
     public let height: Int
     public let format: Int
+    /// TexHeader flags@22(RePKG TexFlags 확정): bit0 NoInterpolation, bit1 ClampUVs, bit2 IsGif, bit5 IsVideoTexture.
+    public var flags: Int = 0
     public let payload: PayloadKind
     public let payloadRange: Range<Int>
     public let mip: CompressedMip?
     /// 스프라이트시트 프레임 목록(TEXS 부재 시 []).
     public var frames: [TexFrame] = []
+
+    public var noInterpolation: Bool { flags & 0x1 != 0 }
+    public var clampUVs: Bool { flags & 0x2 != 0 }
+    public var isGif: Bool { flags & 0x4 != 0 }
+    public var isVideoTexture: Bool { flags & 0x20 != 0 }
 
     public static func parse(_ data: Data) -> TexImage? {
         let b = [UInt8](data)
@@ -52,6 +59,7 @@ public struct TexImage {
             Int(UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24)
         }
         let format = i32(18)
+        let flags = i32(22)          // TexFlags(bit0 NoInterp, bit1 ClampUV, bit2 Gif, bit5 Video) — 노출만, 동작 무변경
         let texW = i32(26), texH = i32(30)
         let imgW = i32(34), imgH = i32(38)
         // 차원은 무경계 UInt32 에서 옴. Metal 렌더 한계(16384) 를 넘으면 거부해 w*h*4 정수 오버플로 트랩(크래시) 차단.
@@ -61,6 +69,7 @@ public struct TexImage {
 
         func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?) -> TexImage {
             var t = TexImage(width: imgW, height: imgH, format: format, payload: kind, payloadRange: range, mip: mip)
+            t.flags = flags
             t.frames = parseFrames(b)
             return t
         }
