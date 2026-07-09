@@ -176,26 +176,44 @@ public enum GLSLTranslator {
             }
         }
 
-        // 강등 대상 const(엔진/머티리얼 참조)를 참조하는 헬퍼 → 본문 선두에 const 선언 주입.
-        // 캡처 계산(computeCaptures) 전에 주입해야 const 우변의 엔진/머티리얼 심볼이 파라미터로 승격된다.
-        // (실물 radial_blur: `const vec2 type = ...(g_Texture0Resolution...)` 를 computeUV 가 사용.)
-        do {
-            let materialNames0 = Set(materials.map { $0.glslName })
-            var demoted: [(name: String, line: String)] = []
-            for line in fileScopeConsts(vClean) + fileScopeConsts(fClean) {
-                let name = line.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
-                guard !name.isEmpty, !demoted.contains(where: { $0.name == name }) else { continue }
-                if identifiers(in: line).contains(where: { isEngine($0) || materialNames0.contains($0) }) {
-                    demoted.append((name, line))
+        // 파일 스코프 const 중 전역 MSL `constant` 가 될 수 없어 함수 스코프로 강등해야 하는 것들(mustDemote):
+        //  ① 엔진/머티리얼 심볼 참조(eng/p 는 함수 파라미터라 전역에서 안 보임) 또는
+        //  ② 비-constexpr 초기화 — pow/sin 등 런타임 호출은 전역 생성자(llvm.global_ctors)가 필요해 makeLibrary
+        //     가 거부(실물 audio_responsive_oscilloscope 의 pow(userBalance.x/userBalance.y, 2.0)). 또는
+        //  ③ ①②에 해당하는 다른 const 참조(전이 폐쇄 — 전역 const 가 로컬 강등 const 를 못 봄).
+        let materialNames0 = Set(materials.map { $0.glslName })
+        var constByName: [String: String] = [:]      // 이름 → 선언 줄(dedupe)
+        var constOrder: [String] = []                // 소스 순서(강등 로컬 방출 시 의존성 순서 보존)
+        for line in fileScopeConsts(vClean) + fileScopeConsts(fClean) {
+            let n = constDeclName(line)
+            guard !n.isEmpty, constByName[n] == nil else { continue }
+            constByName[n] = line; constOrder.append(n)
+        }
+        var mustDemote = Set<String>()
+        for n in constOrder {
+            let line = constByName[n]!
+            if identifiers(in: line).contains(where: { isEngine($0) || materialNames0.contains($0) })
+                || constInitHasRuntimeCall(line) { mustDemote.insert(n) }
+        }
+        var demoteChanged = true
+        while demoteChanged {
+            demoteChanged = false
+            for n in constOrder where !mustDemote.contains(n) {
+                if identifiers(in: constByName[n]!).contains(where: { $0 != n && mustDemote.contains($0) }) {
+                    mustDemote.insert(n); demoteChanged = true
                 }
             }
-            if !demoted.isEmpty {
-                for i in helpers.indices {
-                    let refs = identifiers(in: helpers[i].body)
-                    let needed = demoted.filter { refs.contains($0.name) }
-                    guard !needed.isEmpty else { continue }
-                    helpers[i].body = needed.map { $0.line }.joined(separator: "\n") + "\n" + helpers[i].body
-                }
+        }
+
+        // 강등 const 를 참조하는 헬퍼 → 본문 선두에 const 선언 주입(캡처 계산 전 — 우변 엔진/머티리얼 심볼이
+        // 파라미터로 승격되도록). 실물 radial_blur: `const vec2 type = ...(g_Texture0Resolution...)` 를 computeUV 가 사용.
+        if !mustDemote.isEmpty {
+            let demoted = constOrder.filter { mustDemote.contains($0) }.map { (name: $0, line: constByName[$0]!) }
+            for i in helpers.indices {
+                let refs = identifiers(in: helpers[i].body)
+                let needed = demoted.filter { refs.contains($0.name) }
+                guard !needed.isEmpty else { continue }
+                helpers[i].body = needed.map { $0.line }.joined(separator: "\n") + "\n" + helpers[i].body
             }
         }
 
@@ -257,7 +275,9 @@ public enum GLSLTranslator {
             guard let sig = helperSignature(h, captures: caps, materials: materials, structs: structNames) else { continue }  // 미지원 타입 → 스킵
             var helperEnv = sizeEnv
             for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
-            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes),
+            // int/uint 파라미터명은 어댑터에 int 로 알려 min/max(int,float) 모호성 해소(실물 multistage_wave).
+            let intParams = Set(h.params.filter { $0.type == "int" || $0.type == "uint" }.map { $0.name })
+            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes, intVars: intParams),
                                                     returnSize: GLSLTypeAdapter.typeSize(h.ret))
             let withCalls = appendCaptureArgs(adaptedBody, helpers: helpers, captureOf: captureOf) { cap in
                 rawCaptureName(cap, materials: materials)
@@ -290,12 +310,11 @@ public enum GLSLTranslator {
         var consts: [String] = []
         var fragLocalConsts = ""
         var vertLocalConsts = ""
-        let materialNames = Set(materials.map { $0.glslName })
         for line in fileScopeConsts(vClean) + fileScopeConsts(fClean) {
-            let refs = identifiers(in: line)
-            let name = line.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
+            let name = constDeclName(line)
             guard constNames.insert(name).inserted else { continue }
-            if refs.contains(where: { isEngine($0) || materialNames.contains($0) }) {
+            if mustDemote.contains(name) {
+                // 함수 로컬 강등(스테이지별) — 소스 순서 유지로 강등 const 간 의존성 보존.
                 if let f = translateBody(line, symbols: fragMap, isFragment: false) { fragLocalConsts += f + "\n" }
                 if let v = translateBody(line, symbols: vertMap, isFragment: false) { vertLocalConsts += v + "\n" }
             } else {
@@ -1029,6 +1048,36 @@ public enum GLSLTranslator {
         return out
     }
 
+    /// `const <type> <name> ...` 에서 <name> 추출(기존 인라인 추출과 동일 규약).
+    static func constDeclName(_ line: String) -> String {
+        line.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
+    }
+
+    /// const 초기화 우변(`= …`)에 non-constructor 함수 호출이 있으면 컴파일타임 상수가 아니다 →
+    /// 전역 `constant` 로 두면 전역 생성자(llvm.global_ctors)가 필요해 makeLibrary 가 거부한다.
+    /// 벡터/행렬/스칼라 생성자 캐스트(float2(…) 등)는 constexpr 이라 제외.
+    static func constInitHasRuntimeCall(_ line: String) -> Bool {
+        guard let eq = line.firstIndex(of: "=") else { return false }
+        let constructors: Set<String> = ["float", "int", "uint", "bool", "half",
+            "vec2", "vec3", "vec4", "float2", "float3", "float4", "half2", "half3", "half4",
+            "ivec2", "ivec3", "ivec4", "mat2", "mat3", "mat4",
+            "float2x2", "float3x3", "float4x4", "we_cast3x3"]
+        let chars = Array(line[line.index(after: eq)...])
+        var i = 0
+        while i < chars.count {
+            if chars[i].isLetter || chars[i] == "_" {
+                var j = i
+                while j < chars.count, chars[j].isLetter || chars[j].isNumber || chars[j] == "_" { j += 1 }
+                let name = String(chars[i..<j])
+                var k = j
+                while k < chars.count, chars[k] == " " { k += 1 }
+                if k < chars.count, chars[k] == "(", !constructors.contains(name) { return true }
+                i = j
+            } else { i += 1 }
+        }
+        return false
+    }
+
     private enum Stage { case vertex, fragment }
     private static func symbolMap(materials: [MaterialParam], stage: Stage) -> [String: String] {
         var m: [String: String] = [:]
@@ -1054,6 +1103,9 @@ public enum GLSLTranslator {
         s = rewriteCall(s, "texSample2D") { args in args.count == 2 ? "\(args[0]).sample(smp, we_uv(\(args[1])))" : nil }
         // 2b) GLSL 2-인자 atan(y,x) → MSL atan2 (1-인자는 유지)
         s = rewriteCall(s, "atan") { args in args.count == 2 ? "atan2(\(args[0]), \(args[1]))" : nil }
+        // 2c) radians()/degrees() 는 MSL 미내장(실물 color_grading 의 radians(u_hueShift)) — 상수 곱으로 치환(π/180, 180/π).
+        s = rewriteCall(s, "radians") { args in args.count == 1 ? "((\(args[0])) * 0.017453292519943295)" : nil }
+        s = rewriteCall(s, "degrees") { args in args.count == 1 ? "((\(args[0])) * 57.29577951308232)" : nil }
         // 3) 식별자/타입 단일 패스 치환
         s = replaceIdentifiers(s, symbols)
         s = rewriteDiscardStatements(s)

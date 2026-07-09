@@ -198,20 +198,22 @@ public struct SceneLight3D: Equatable {
     }
 }
 
-/// 씬 sound 오브젝트(scene.json objects[] 중 "sound" 키 보유). 실측(코퍼스 52씬 / 165오브젝트):
-/// - playbackmode ∈ {loop 92, single 71, random 2}
-/// - volume 은 숫자(52) 또는 {user,value} 바인딩(113) — parse 에서 float() 가 둘 다 언랩
-/// - sound 배열은 대개 1개(146/165), 일부 다중(최대 18)
-/// - startsilent(true 104 / false 60), mintime/maxtime(비-loop 재트리거 간격 추정) 은 파스만 하고 미반영.
+/// 씬 sound 오브젝트(scene.json objects[] 중 "sound" 키 보유). 실측(코퍼스 460종 / 382오브젝트, 2026-07-09):
+/// - playbackmode ∈ {loop 215, single 158, random 9}
+/// - volume 은 숫자 또는 {user,value}/{script,value} 바인딩 — parse 에서 float() 가 언랩
+/// - sound 배열은 대개 1개(349/382), 다중(33개, 2~18)은 전부 상이한 곡의 플레이리스트(순차/셔플 재생,
+///   동시 아님 — 재생 의미는 SceneAudioPlayer 참조)
+/// - startsilent(true 224 / false 157): true = 씬 시작 시 자동재생 안 함(WE 트리거/SceneScript 기동 대기;
+///   single·parent 보유에 집중). mintime/maxtime(비-loop 재트리거 간격 추정)은 파스만 하고 미반영.
 public struct SceneSound: Equatable {
     public let id: Int
-    /// pkg 상대 경로 배열(예: "sounds/x.mp3"). 재생기는 이 중 1개만 선택.
+    /// pkg 상대 경로 배열(예: "sounds/x.mp3"). 다중이면 플레이리스트(한 번에 한 곡).
     public let sounds: [String]
     /// 오서 볼륨 0…1. 재생 시 VideoSettings 배경별 설정과 곱해 최종 음량이 된다.
     public let volume: Float
     public let playbackMode: String    // "loop" | "single" | "random"
     public var loop: Bool { playbackMode == "loop" }
-    /// 실측되나 현재 미반영(파스+로그) — true 가 다수(104/165)라 반영 시 대다수 무음이 되어 보류.
+    /// true = 씬 시작 시 자동재생 안 함(트리거/스크립트 기동 대기). Waple 은 트리거 미지원 → 재생기가 스킵.
     public let startSilent: Bool
     /// 비-loop 재트리거 간격(초) 추정 — 파스만, 스케줄링 미구현.
     public let minTime: Float
@@ -471,10 +473,7 @@ extension SceneDocument {
     private static func parseSound(_ obj: [String: Any]) -> SceneSound? {
         let paths = (obj["sound"] as? [Any])?.compactMap { $0 as? String } ?? []
         guard !paths.isEmpty else { return nil }
-        // 미반영 필드는 로그로만 남긴다(추측 금지 — 파스만).
-        if paths.count > 1 || (obj["startsilent"] as? Bool) == true {
-            WapleLog.warn("[Waple] scene sound parsed (unhandled: multi=\(paths.count), startsilent=\((obj["startsilent"] as? Bool) ?? false)): id \(intVal(obj["id"]) ?? 0)")
-        }
+        // multi(플레이리스트)/startsilent(트리거 대기)는 의미 확정·재생기 반영(2026-07-09) — "unhandled" 로그 제거.
         return SceneSound(
             id: intVal(obj["id"]) ?? 0,
             sounds: paths,
