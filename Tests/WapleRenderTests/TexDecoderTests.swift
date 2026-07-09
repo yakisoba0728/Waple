@@ -172,6 +172,24 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertEqual([px[0], px[1], px[2], px[3]], [10, 20, 30, 40])  // 패딩 stride 에서 올바로 복사
     }
 
+    /// 이슈4: 다중 image(아틀라스 페이지) → 페이지별 decode-by-index. 두 페이지가 서로 다른 픽셀로 디코드.
+    func testDecodesMultiImagePagesByIndex() throws {
+        let page0: [UInt8] = [10, 20, 30, 40]
+        let page1: [UInt8] = [200, 150, 100, 50]
+        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32bytes(0) + i32bytes(0) + i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(1)   // fmt0, 1x1
+        b += Array("TEXB0003".utf8) + [0] + i32bytes(2) + i32bytes(-1)                            // imageCount=2
+        b += i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(0) + i32bytes(4) + i32bytes(4) + page0
+        b += i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(0) + i32bytes(4) + i32bytes(4) + page1
+        let data = Data(b)
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.imageCount, 2)
+        let p0 = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data, imageIndex: 0))
+        let p1 = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data, imageIndex: 1))
+        XCTAssertEqual([UInt8](p0.pixels), page0)
+        XCTAssertEqual([UInt8](p1.pixels), page1)   // 종전엔 첫 페이지만 — 페이지1 이 별도 디코드됨
+    }
+
     /// BC3 페이로드가 손상돼 LZ4 디코드가 decompressedSize 와 다른 길이를 내면 nil.
     func testBC3WithCorruptLZ4ReturnsNil() throws {
         var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
