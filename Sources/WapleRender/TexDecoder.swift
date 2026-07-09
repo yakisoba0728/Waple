@@ -53,8 +53,11 @@ public enum TexDecoder {
             }
             return cropped(rgba, mip)
         case .rg88:
-            // 2채널 8bit(WE fmt8). 실물 규약(common_fragment.h ConvertTexture0Format): .rrrg —
-            // r=루마(회색), g=알파. rain_drops_sheet 등 파티클 시트가 이 포맷(종전 미디코드 → 흰 사각형).
+            // 2채널 8bit(WE fmt8): byte0→루마(r=g=b), byte1→알파. 판정(2026-07-09, RePKG 대조):
+            // 실물 셰이더 common_fragment.h:98 ConvertTexture0Format(RG88)=`.rrrg` — GL_RG8 샘플은 .r=byte0/.g=byte1
+            // 이므로 (byte0,byte0,byte0,byte1). HLSL_SM30 경로 `.rrra`(A8L8 에뮬)도 동일 결론 → 아래 코드가 정본.
+            // ⚠️ RePKG RG88.cs:40 은 정반대(`Rgba32(G,G,G,R)` = byte1→루마, byte0→알파)지만, 실제 렌더 규약은
+            // 셰이더이므로 Waple 이 옳다(RePKG 를 보고 뒤집지 말 것). rain_drops_sheet 등 파티클 시트가 이 포맷.
             // 마스크 소비(.r)도 r 그대로라 양쪽 정확. (REFRACT 의 스크린 굴절 곱은 항등 근사 — 별도 미구현.)
             guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data) else { return nil }
             let w = mip.decodeWidth, h = mip.decodeHeight
