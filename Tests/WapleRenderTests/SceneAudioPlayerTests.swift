@@ -18,9 +18,10 @@ final class SceneAudioPlayerTests: XCTestCase {
                    startSilent: startSilent, minTime: 0, maxTime: 0)
     }
 
-    func testPlayableEntriesFiltersOggKeepsOrder() {
-        XCTAssertEqual(SceneAudioPlayer.playableEntries(sound(["a.ogg", "b.mp3", "c.wav"])), ["b.mp3", "c.wav"])
-        XCTAssertEqual(SceneAudioPlayer.playableEntries(sound(["a.OGG"])), [])   // 대소문자 무시
+    /// ogg 는 이제 자체 디코드로 재생 가능 → 필터되지 않고 순서 보존(전 포맷 통과).
+    func testPlayableEntriesKeepsAllSupportedFormats() {
+        XCTAssertEqual(SceneAudioPlayer.playableEntries(sound(["a.ogg", "b.mp3", "c.wav", "d.flac"])),
+                       ["a.ogg", "b.mp3", "c.wav", "d.flac"])
     }
 
     func testFirstIndexSequentialModesStartAtZero() {
@@ -125,12 +126,23 @@ final class SceneAudioPlayerTests: XCTestCase {
         player.teardown()
     }
 
+    /// 깨진 ogg(1바이트)는 디코드 실패 → 폴백 후보 없음 → 아무것도 마운트 안 함.
     func testAllEntriesUnplayableMountsNothing() {
         let pkg = ScenePackage.assemble([(name: "sounds/a.ogg", data: Data([1]))])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/a.ogg"])], package: pkg, settingVolume: 1)
         XCTAssertEqual(player.playerCount, 0)
         XCTAssertFalse(player.isPlaying)
+    }
+
+    /// 실물 ogg(Vorbis) 엔트리 → 디코드 → WAV → AVAudioPlayer 장착·재생(mute). 전 경로 검증.
+    func testOggEntryDecodesAndPlays() {
+        let pkg = ScenePackage.assemble([(name: "sounds/a.ogg", data: TinyOgg.data)])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/a.ogg"])], package: pkg, settingVolume: 0)
+        XCTAssertEqual(player.playerCount, 1)   // ogg 가 디코드되어 플레이어 장착됨
+        XCTAssertTrue(player.isPlaying)
+        player.teardown()
     }
 
     /// PCM 16-bit mono 무음 WAV(RIFF) — AVAudioPlayer 가 디코드 가능한 최소 합성 오디오.
