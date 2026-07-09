@@ -106,22 +106,50 @@ final class TexImageTests: XCTestCase {
         XCTAssertEqual(t?.mip?.lz4, true)
     }
 
+    /// 조건 변형 단일(실측 link_f01/p_tex01 클래스, 코퍼스 sweep 확정 레이아웃):
+    /// [imageCount][fmt=-1][v4=변형수 1] | [1][idx=1][0][json NUL] | mipCount | mip.
     func testParsesTEXB0004WithConditionJSONBeforeMipTable() {
         func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         let payload: [UInt8] = Array(repeating: 0x44, count: 20)
-        let condition = #"{"op":"==","lhs":"mode.value","rhs":true}"#
+        let condition = #"{"condition":{"condition":"3","name":"tuniccolor"}}"#
         var b: [UInt8] = []
         b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
         b += i32(4) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)
         b += Array("TEXB0004".utf8) + [0]
-        b += i32(1) + i32(-1) + i32(0) + i32(1)                    // imageCount, fmt, v4, mipCount
-        b += i32(1) + i32(2) + Array(condition.utf8) + [0] + i32(1) // v4 condition block prefix
+        b += i32(1) + i32(-1) + i32(1)                             // imageCount, fmt, v4(변형수 1)
+        b += i32(1) + i32(1) + i32(0) + Array(condition.utf8) + [0]  // 변형 블록: [1][idx][0][json]
+        b += i32(1)                                                // mipCount
         b += i32(8) + i32(8) + i32(1) + i32(64) + i32(payload.count) + payload
         let t = TexImage.parse(Data(b))
         XCTAssertEqual(t?.payload, .bc3)
         XCTAssertEqual(t?.mip?.decompressedSize, 64)
         XCTAssertEqual(t?.mip?.payloadRange.count, payload.count)
         XCTAssertEqual(t?.mip?.lz4, true)
+    }
+
+    /// 조건 변형 다중(실측 childlink_01.tex: v4=3, tuniccolor 1/2/3): 변형 블록 3개 연속 후 mipCount.
+    /// 종전 프레이밍(블록 선두 [1] 을 mipCount 로 오독)은 다변형에서 붕괴 → unknown-fmt4 0/8 의 마지막 1페이지.
+    func testParsesTEXB0004MultiVariantConditionChain() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
+        let payload: [UInt8] = Array(repeating: 0x24, count: 2048)     // 64×32 BC3 = 2048B
+        func cond(_ v: Int) -> [UInt8] { Array(#"{"condition":{"condition":"\#(v)","name":"tuniccolor"}}"#.utf8) }
+        var b: [UInt8] = []
+        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32(4) + i32(0) + i32(64) + i32(32) + i32(64) + i32(32)
+        b += Array("TEXB0004".utf8) + [0]
+        b += i32(1) + i32(-1) + i32(3)                                 // imageCount, fmt=-1, v4(변형수 3)
+        b += i32(1) + i32(1) + i32(0) + cond(2) + [0]                  // 변형1
+        b += i32(1) + i32(2) + i32(0) + cond(1) + [0]                  // 변형2
+        b += i32(1) + i32(3) + i32(0) + cond(3) + [0]                  // 변형3
+        b += i32(1)                                                    // mipCount(변형1의 mip 세트)
+        b += i32(64) + i32(32) + i32(0) + i32(0) + i32(payload.count) + payload  // isLZ4=0
+        b += Array(repeating: 0xEE, count: 64)                         // 변형2/3 mip 세트 잔재(무시 대상)
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.payload, .bc3, "fmt4 → BC3 (변형 체인 스킵 후 첫 변형 mip 파스)")
+        XCTAssertEqual(t?.mip?.decodeWidth, 64)
+        XCTAssertEqual(t?.mip?.lz4, false)
+        XCTAssertEqual(t?.mip?.decompressedSize, 2048)
+        XCTAssertEqual(t?.mip?.payloadRange.count, 2048)
     }
 
     /// 다중 image = 아틀라스 페이지(RePKG ConvertToGif): 각 image 의 mip0 을 순차 수집.
