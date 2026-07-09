@@ -18,9 +18,10 @@ final class SceneAudioPlayerTests: XCTestCase {
                    startSilent: startSilent, minTime: 0, maxTime: 0)
     }
 
-    func testPlayableEntriesFiltersOggKeepsOrder() {
-        XCTAssertEqual(SceneAudioPlayer.playableEntries(sound(["a.ogg", "b.mp3", "c.wav"])), ["b.mp3", "c.wav"])
-        XCTAssertEqual(SceneAudioPlayer.playableEntries(sound(["a.OGG"])), [])   // 대소문자 무시
+    /// ogg 는 이제 자체 디코드로 재생 가능 → 필터되지 않고 순서 보존(전 포맷 통과).
+    func testPlayableEntriesKeepsAllSupportedFormats() {
+        XCTAssertEqual(SceneAudioPlayer.playableEntries(sound(["a.ogg", "b.mp3", "c.wav", "d.flac"])),
+                       ["a.ogg", "b.mp3", "c.wav", "d.flac"])
     }
 
     func testFirstIndexSequentialModesStartAtZero() {
@@ -54,6 +55,31 @@ final class SceneAudioPlayerTests: XCTestCase {
             XCTAssertNotNil(r); XCTAssertTrue((0..<4).contains(r!))
         }
         XCTAssertNil(SceneAudioPlayer.nextIndex(mode: "random", current: 0, count: 0))
+    }
+
+    // ── random 곡 간 간격(mintime/maxtime) ──────────────────────────────────
+
+    /// random 만 대기; loop/single 은 즉시(0).
+    func testGapSecondsOnlyRandom() {
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "loop", minTime: 2, maxTime: 5), 0)
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "single", minTime: 2, maxTime: 5), 0)
+        for _ in 0..<50 {
+            let g = SceneAudioPlayer.gapSeconds(mode: "random", minTime: 2, maxTime: 5)
+            XCTAssertGreaterThanOrEqual(g, 2); XCTAssertLessThanOrEqual(g, 5)
+        }
+    }
+
+    /// 경계: min>max 스왑, 미지정(0,0)→0, 음수 클램프, min==max→고정.
+    func testGapSecondsBoundaries() {
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "random", minTime: 0, maxTime: 0), 0)   // 미지정
+        for _ in 0..<50 {
+            let swap = SceneAudioPlayer.gapSeconds(mode: "random", minTime: 5, maxTime: 2)       // min>max 스왑
+            XCTAssertGreaterThanOrEqual(swap, 2); XCTAssertLessThanOrEqual(swap, 5)
+            let neg = SceneAudioPlayer.gapSeconds(mode: "random", minTime: -3, maxTime: 4)        // 음수 하한 클램프
+            XCTAssertGreaterThanOrEqual(neg, 0); XCTAssertLessThanOrEqual(neg, 4)
+        }
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "random", minTime: 3, maxTime: 3), 3)    // 고정
+        XCTAssertEqual(SceneAudioPlayer.gapSeconds(mode: "random", minTime: -5, maxTime: -1), 0)  // 전부 음수→0
     }
 
     // ── 재생 통합(mute) ─────────────────────────────────────────────────────
@@ -100,12 +126,23 @@ final class SceneAudioPlayerTests: XCTestCase {
         player.teardown()
     }
 
+    /// 깨진 ogg(1바이트)는 디코드 실패 → 폴백 후보 없음 → 아무것도 마운트 안 함.
     func testAllEntriesUnplayableMountsNothing() {
         let pkg = ScenePackage.assemble([(name: "sounds/a.ogg", data: Data([1]))])
         let player = SceneAudioPlayer()
         player.start(sounds: [sound(["sounds/a.ogg"])], package: pkg, settingVolume: 1)
         XCTAssertEqual(player.playerCount, 0)
         XCTAssertFalse(player.isPlaying)
+    }
+
+    /// 실물 ogg(Vorbis) 엔트리 → 디코드 → WAV → AVAudioPlayer 장착·재생(mute). 전 경로 검증.
+    func testOggEntryDecodesAndPlays() {
+        let pkg = ScenePackage.assemble([(name: "sounds/a.ogg", data: TinyOgg.data)])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/a.ogg"])], package: pkg, settingVolume: 0)
+        XCTAssertEqual(player.playerCount, 1)   // ogg 가 디코드되어 플레이어 장착됨
+        XCTAssertTrue(player.isPlaying)
+        player.teardown()
     }
 
     /// PCM 16-bit mono 무음 WAV(RIFF) — AVAudioPlayer 가 디코드 가능한 최소 합성 오디오.

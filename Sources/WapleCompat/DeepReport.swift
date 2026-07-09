@@ -143,6 +143,12 @@ enum Report {
         p("## Scene audio (sound layers)")
         p("- referenced sound files present in pkg: \(agg.soundPresent)/\(agg.soundRefs) (\(pct(agg.soundPresent, agg.soundRefs)))")
         p("- by extension: " + agg.soundByExt.keys.sorted().map { "\($0)=\(agg.soundByExt[$0]!)" }.joined(separator: ", "))
+        if agg.oggRefs > 0 {
+            p("- ogg(Vorbis) pure-Swift decode: \(agg.oggDecodeOK)/\(agg.oggRefs) OK (\(pct(agg.oggDecodeOK, agg.oggRefs))), fail=\(agg.oggDecodeFail), NaN/Inf=\(agg.oggNaN), silent=\(agg.oggSilent)")
+            p("  - channels: " + agg.oggChannels.keys.sorted().map { "\($0)ch=\(agg.oggChannels[$0]!)" }.joined(separator: ", ")
+              + " | rates: " + agg.oggRates.keys.sorted().map { "\($0)=\(agg.oggRates[$0]!)" }.joined(separator: ", "))
+            if !agg.oggFailSamples.isEmpty { p("  - flagged: " + agg.oggFailSamples.joined(separator: ", ")) }
+        }
         p("")
 
         // ---- properties ----

@@ -1,5 +1,6 @@
 import Foundation
 import WapleCore
+import WapleRender
 
 struct WapleCompatCLI {
     var rootPath: String = NSHomeDirectory() + "/Downloads/wallpaper_dev"
@@ -7,6 +8,8 @@ struct WapleCompatCLI {
     var strict = false
     var deep = false
     var only: String? = nil
+    var decodeOggIn: String? = nil       // dev 하니스: ogg → 원시 float32 인터리브 PCM(stdout)
+    var decodeNaive = false
 
     mutating func parse(arguments: [String]) throws {
         var iterator = arguments.dropFirst().makeIterator()
@@ -20,6 +23,10 @@ struct WapleCompatCLI {
                 deep = true
             case "--only":
                 only = iterator.next()
+            case "--decode-ogg":
+                decodeOggIn = iterator.next()
+            case "--naive":
+                decodeNaive = true
             case "--help", "-h":
                 printUsage()
                 Foundation.exit(0)
@@ -33,6 +40,13 @@ struct WapleCompatCLI {
     }
 
     func run() throws {
+        if let inPath = decodeOggIn {
+            let data = try Data(contentsOf: URL(fileURLWithPath: inPath))
+            let audio = try OggVorbisDecoder.decode(data, useFastIMDCT: !decodeNaive)
+            fputs("ch=\(audio.channels) sr=\(audio.sampleRate) frames=\(audio.frameCount)\n", stderr)
+            audio.samples.withUnsafeBytes { FileHandle.standardOutput.write(Data($0)) }
+            return
+        }
         if deep {
             print(DeepScan.run(rootPath: rootPath, only: only))
             return

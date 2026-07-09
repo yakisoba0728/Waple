@@ -74,6 +74,10 @@ final class DeepAgg {
     // audio / sounds
     var soundRefs = 0, soundPresent = 0
     var soundByExt: [String: Int] = [:]
+    // ogg(Vorbis) 순수 Swift 디코드 전수 검증(참조 파일별): 에러 0 / 헤더 정합 / 비무음 / NaN 없음.
+    var oggRefs = 0, oggDecodeOK = 0, oggDecodeFail = 0, oggSilent = 0, oggNaN = 0
+    var oggChannels: [Int: Int] = [:], oggRates: [Int: Int] = [:]
+    var oggFailSamples: [String] = []
 
     // presets
     var presetTotal = 0, presetResolved = 0
@@ -538,12 +542,36 @@ enum DeepScan {
         for sound in doc.sounds {
             for path in sound.sounds {
                 let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
-                let present = package.data(for: path) != nil
+                let data = package.data(for: path)
+                let present = data != nil
                 agg.sync {
                     agg.soundRefs += 1; if present { agg.soundPresent += 1 }
                     if !ext.isEmpty { agg.soundByExt[ext, default: 0] += 1 }
                 }
+                // ogg(Vorbis) 전수 디코드 검증 — 순수 Swift 디코더로 실제 PCM 화까지 확인.
+                if ext == "ogg", let data {
+                    verifyOgg(data, path: path, agg: agg)
+                }
             }
+        }
+    }
+
+    /// ogg 1개를 실제 디코드해 정합성 집계: 에러 0 / 채널·레이트 기록 / RMS 비무음 / NaN·Inf 없음.
+    static func verifyOgg(_ data: Data, path: String, agg: DeepAgg) {
+        guard let audio = try? OggVorbisDecoder.decode(data), audio.frameCount > 0 else {
+            agg.sync { agg.oggRefs += 1; agg.oggDecodeFail += 1; agg.addSample2(&agg.oggFailSamples, "decode:\(path)") }
+            return
+        }
+        var sumSq = 0.0
+        var bad = false
+        for s in audio.samples { if s.isNaN || s.isInfinite { bad = true; break }; sumSq += Double(s) * Double(s) }
+        let rms = bad ? 0 : (audio.samples.isEmpty ? 0 : (sumSq / Double(audio.samples.count)).squareRoot())
+        agg.sync {
+            agg.oggRefs += 1; agg.oggDecodeOK += 1
+            agg.oggChannels[audio.channels, default: 0] += 1
+            agg.oggRates[audio.sampleRate, default: 0] += 1
+            if bad { agg.oggNaN += 1; agg.addSample2(&agg.oggFailSamples, "NaN:\(path)") }
+            else if rms < 1e-6 { agg.oggSilent += 1; agg.addSample2(&agg.oggFailSamples, "silent:\(path)") }
         }
     }
 

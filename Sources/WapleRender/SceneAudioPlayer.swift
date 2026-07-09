@@ -14,14 +14,16 @@ import WapleCore
 /// - 음량은 (오서 볼륨 × VideoSettings 배경별 설정)으로 합성 — 동영상 설정 메뉴의 음소거/음량이 그대로
 ///   씬 오디오에도 적용된다(메뉴 변경 시 AppDelegate 가 배경을 재-mount → start 가 최신 설정을 재독). 기본
 ///   VideoSettings.volume 은 0(음소거)이라 사용자가 명시적으로 올리기 전엔 소리 나지 않는다.
-/// - ogg 는 AVAudioPlayer 미지원(코퍼스 3개)이라 스킵+로그.
-/// - mintime/maxtime(비-loop 재트리거 간격 추정)은 파스만 — random 모드 곡 간 무음 간격 미구현(즉시 다음 곡).
+/// - ogg(Vorbis)는 AVAudioPlayer 미디코드 → 순수 Swift 디코더(OggVorbisDecoder)로 PCM 화 후 재생(play(at:)).
+///   mp3/wav/flac 은 Core Audio 네이티브. 코퍼스 참조 오디오 전 포맷 재생 가능.
+/// - mintime/maxtime: random 모드 곡 종료 후 [mintime,maxtime]초 무작위 대기 후 다음 곡(gapSeconds). loop/single 은 즉시.
 ///
 /// 헤드리스(캡처/테스트)에선 SceneRenderer 가 이 객체를 아예 생성하지 않는다(창 없는 mount → 스킵, 결정성).
 /// 이 클래스 자체는 항상 재생 가능 — 통합테스트가 직접 구동한다.
 public final class SceneAudioPlayer {
-    /// AVAudioPlayer 가 디코드 못 하는 확장자(코퍼스: ogg 3개). 스킵 대상.
-    static let unsupportedExtensions: Set<String> = ["ogg"]
+    /// 재생 불가로 미리 걸러낼 확장자. 코퍼스 전 포맷(mp3/wav/flac 네이티브 + ogg 자체 디코드) 지원 → 비어 있음.
+    /// (미지원 확장자는 이 집합에 넣으면 playableEntries 가 사전 제외 — 폴백 로직과 별개의 안전장치.)
+    static let unsupportedExtensions: Set<String> = []
 
     private var playlists: [Playlist] = []
 
@@ -38,7 +40,8 @@ public final class SceneAudioPlayer {
                 continue
             }
             let pl = Playlist(entries: entries, mode: snd.playbackMode, package: package,
-                              volume: Self.effectiveVolume(author: snd.volume, setting: settingVolume))
+                              volume: Self.effectiveVolume(author: snd.volume, setting: settingVolume),
+                              minTime: snd.minTime, maxTime: snd.maxTime)
             if pl.startFirstPlayable() { playlists.append(pl) }
         }
     }
@@ -80,6 +83,16 @@ public final class SceneAudioPlayer {
         default: return current + 1 < count ? current + 1 : nil
         }
     }
+
+    /// random 모드 곡 간 무작위 대기(초). WE: random 재생목록은 곡 종료 후 [mintime,maxtime]초 쉬고 다음 곡.
+    /// 그 외 모드(loop/single)는 0(즉시 다음 곡). 경계: min>max 스왑, 음수 클램프, 둘 다 0/미지정 → 0.
+    static func gapSeconds(mode: String, minTime: Float, maxTime: Float) -> Double {
+        guard mode == "random" else { return 0 }
+        let lo = max(0, min(minTime, maxTime))
+        let hi = max(0, max(minTime, maxTime))
+        guard hi > 0 else { return 0 }
+        return Double(Float.random(in: lo...hi))
+    }
 }
 
 /// sound 오브젝트 1개 = 플레이리스트 1개. 곡 종료 delegate 로 다음 곡을 건다(트랙별 라이브 루프).
@@ -89,12 +102,18 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
     private let mode: String
     private let package: ScenePackage
     private let volume: Float
+    private let minTime: Float
+    private let maxTime: Float
     private var index = 0
     private var player: AVAudioPlayer?
     private var stopped = false
+    private var paused = false
+    /// 곡 간 대기(random gap) 중 일시정지되면 여기 다음 인덱스를 보관 → resume 이 재개(정지 중 재생 방지).
+    private var pendingNext: Int?
 
-    init(entries: [String], mode: String, package: ScenePackage, volume: Float) {
+    init(entries: [String], mode: String, package: ScenePackage, volume: Float, minTime: Float, maxTime: Float) {
         self.entries = entries; self.mode = mode; self.package = package; self.volume = volume
+        self.minTime = minTime; self.maxTime = maxTime
     }
 
     /// 시작 곡부터 재생 시도, 실패(pkg 누락/디코드) 시 다음 후보로 폴백. 전부 실패 = false.
@@ -106,9 +125,21 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
 
     private func play(at i: Int) -> Bool {
         let name = entries[i]
-        guard let data = package.data(for: name) else {
+        guard let raw = package.data(for: name) else {
             WapleLog.warn("[Waple] scene sound: pkg entry missing: \(name)")
             return false
+        }
+        // ogg(Vorbis)는 AVAudioPlayer 미디코드 → 순수 Swift 디코더로 PCM WAV 화. 그 외는 원본 그대로.
+        // ponytail: mount 스레드에서 동기 디코드. 대형 곡(수 MB)이 히치되면 백그라운드 디코드로 승격.
+        let data: Data
+        if (name as NSString).pathExtension.lowercased() == "ogg" {
+            guard let decoded = try? OggVorbisDecoder.decode(raw), decoded.frameCount > 0 else {
+                WapleLog.warn("[Waple] scene sound: ogg decode failed/empty: \(name)")
+                return false
+            }
+            data = decoded.pcm16WAV()
+        } else {
+            data = raw
         }
         do {
             let p = try AVAudioPlayer(data: data)
@@ -129,13 +160,24 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ p: AVAudioPlayer, successfully flag: Bool) {
         guard !stopped,
               let next = SceneAudioPlayer.nextIndex(mode: mode, current: index, count: entries.count) else { return }
+        // random 모드는 곡 사이 [mintime,maxtime]초 대기 후 다음 곡(WE 셔플 간격). 그 외 gap=0(즉시).
         // 다음 곡 실패 시 이 플레이리스트만 종료(코퍼스는 참조 파일 전부 존재 — 실사용에선 발생 안 함).
-        _ = play(at: next)
+        let gap = SceneAudioPlayer.gapSeconds(mode: mode, minTime: minTime, maxTime: maxTime)
+        guard gap > 0 else { _ = play(at: next); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + gap) { [weak self] in
+            guard let self, !self.stopped else { return }
+            if self.paused { self.pendingNext = next }   // 정지 중이면 보류 → resume 이 재개
+            else { _ = self.play(at: next) }
+        }
     }
 
-    func pause() { player?.pause() }
-    func resume() { if let p = player, !p.isPlaying { p.play() } }
-    func stop() { stopped = true; player?.stop(); player = nil }
+    func pause() { paused = true; player?.pause() }
+    func resume() {
+        paused = false
+        if let next = pendingNext { pendingNext = nil; _ = play(at: next); return }  // gap 중 정지됐던 다음 곡
+        if let p = player, !p.isPlaying { p.play() }
+    }
+    func stop() { stopped = true; pendingNext = nil; player?.stop(); player = nil }
     var isPlaying: Bool { player?.isPlaying ?? false }
     var hasPlayer: Bool { player != nil }
 }
