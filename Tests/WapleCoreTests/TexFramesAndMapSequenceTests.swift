@@ -36,6 +36,61 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         XCTAssertEqual(tex.frames[1].x, 256); XCTAssertEqual(tex.frames[1].height, 256)
     }
 
+    /// 회전 프레임(RePKG): Width=0, HeightX 가 (부호 있는) 유효 폭. 종전 w>0 가드였다면 프레임 목록
+    /// 전체가 [] 로 버려졌다 — 이제 유효 크기 기준으로 살아남고 atlas*/rotationQuarters 가 도출된다.
+    private func makeTexWithRotatedFrame() -> Data {
+        var b = [UInt8]()
+        func i32(_ v: Int32) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
+        func f32(_ v: Float) { withUnsafeBytes(of: v.bitPattern.littleEndian) { b.append(contentsOf: $0) } }
+        b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
+        b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
+        i32(0); i32(0); i32(2); i32(1); i32(2); i32(1)
+        b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])
+        b.append(contentsOf: Array("TEXS0003".utf8)); b.append(0)
+        i32(1)              // frameCount
+        i32(256); i32(256)  // gifW, gifH
+        // id0, t0.2, x256, y0, Width0, WidthY0, HeightX(-256), Height128 → 90/270° 회전
+        i32(0); f32(0.2); f32(256); f32(0); f32(0); f32(0); f32(-256); f32(128)
+        return Data(b)
+    }
+
+    func testRotatedFrameNotDropped() {
+        guard let tex = TexImage.parse(makeTexWithRotatedFrame()) else { return XCTFail("parse nil") }
+        XCTAssertEqual(tex.frames.count, 1, "회전 프레임이 드롭되지 않음")
+        let fr = tex.frames[0]
+        XCTAssertEqual(fr.width, 0)           // raw Width==0
+        XCTAssertEqual(fr.heightX, -256)      // raw HeightX(부호)
+        XCTAssertEqual(fr.atlasWidth, 256)    // |HeightX|
+        XCTAssertEqual(fr.atlasHeight, 128)   // |Height|
+        XCTAssertEqual(fr.atlasX, 0)          // min(256, 256+(-256))
+        XCTAssertEqual(fr.atlasY, 0)
+        XCTAssertEqual(fr.rotationQuarters, 3)  // signedW<0, signedH>0 → (-,+)
+    }
+
+    /// 비회전 프레임은 rotationQuarters==0, atlas*==raw — 기존 UV 경로와 동일(무회귀 보증).
+    func testNonRotatedFrameIdentityMapping() {
+        guard let tex = TexImage.parse(makeTexWithFrames()) else { return XCTFail("parse nil") }
+        let fr = tex.frames[0]
+        XCTAssertEqual(fr.rotationQuarters, 0)
+        XCTAssertEqual(fr.atlasX, fr.x); XCTAssertEqual(fr.atlasY, fr.y)
+        XCTAssertEqual(fr.atlasWidth, fr.width); XCTAssertEqual(fr.atlasHeight, fr.height)
+    }
+
+    /// 양 축 모두 0(퇴화)이면 프레임 목록 전체 드롭(안전망 유지).
+    func testDegenerateZeroFrameDropped() {
+        var b = [UInt8]()
+        func i32(_ v: Int32) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
+        func f32(_ v: Float) { withUnsafeBytes(of: v.bitPattern.littleEndian) { b.append(contentsOf: $0) } }
+        b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
+        b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
+        i32(0); i32(0); i32(2); i32(1); i32(2); i32(1)
+        b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])
+        b.append(contentsOf: Array("TEXS0003".utf8)); b.append(0)
+        i32(1); i32(256); i32(256)
+        i32(0); f32(0.2); f32(0); f32(0); f32(0); f32(0); f32(0); f32(0)  // Width=Height=HeightX=WidthY=0
+        if let tex = TexImage.parse(Data(b)) { XCTAssertEqual(tex.frames, []) }
+    }
+
     func testTexWithoutFramesHasEmptyFrames() {
         var d = makeTexWithFrames()
         d = d.prefix(50)   // TEXS 섹션 절단

@@ -1,7 +1,7 @@
 import Foundation
 
 public struct TexImage {
-    public enum PayloadKind: Equatable { case png, jpeg, rawRGBA8888, bc3, bc2, bc1, r8, rg88, lz4RGBA, video, unknown }
+    public enum PayloadKind: Equatable { case png, jpeg, embeddedImage, rawRGBA8888, bc3, bc2, bc1, r8, rg88, lz4RGBA, video, unknown }
 
     /// mip0 페이로드(TEXB0001~0004). `decode*` = padded texture dims(디코드 단위),
     /// `image*` = 실제 이미지 dims(크롭 대상). lz4 == false 면 payload 는 비압축(그대로 사용).
@@ -23,27 +23,63 @@ public struct TexImage {
     }
 
     /// 스프라이트시트 프레임(TEXS 섹션). 좌표는 이미지 픽셀 공간(imgW×imgH — 디코더가 패딩 크롭 후와 일치).
-    /// 실측(2026-07-06, "particles 256x1280".tex): "TEXS0003\0" | i32 count | (v3) i32 gifW | i32 gifH |
-    /// 프레임×32B: i32 imageId | f32 frametime | f32 x | f32 y | f32 width | f32 unk | f32 unk | f32 height.
-    /// 1280×256 가로 스트립에서 x=0,256,…,1024 로 확정(전 프레임 frametime 0.2).
+    /// 필드 순서(RePKG TexFrameInfoContainerReader 확정): i32 imageId | f32 frametime |
+    /// f32 x | f32 y | f32 width | f32 widthY | f32 heightX | f32 height (v1 은 지오메트리 i32).
+    /// 회전 프레임(아틀라스 패킹이 스프라이트를 돌려 넣음): Width 또는 Height 가 0 이고 유효 크기는
+    /// HeightX/WidthY 에서 온다 — atlas* 프로퍼티가 실제 서브렉트(top-left+extent)와 회전을 도출한다.
     public struct TexFrame: Equatable {
         public let imageId: Int
         public let time: Float
         public let x: Float, y: Float, width: Float, height: Float
-        public init(imageId: Int, time: Float, x: Float, y: Float, width: Float, height: Float) {
+        public let widthY: Float, heightX: Float
+        public init(imageId: Int, time: Float, x: Float, y: Float, width: Float, height: Float,
+                    widthY: Float = 0, heightX: Float = 0) {
             self.imageId = imageId; self.time = time
             self.x = x; self.y = y; self.width = width; self.height = height
+            self.widthY = widthY; self.heightX = heightX
+        }
+
+        /// RePKG TexToImageConverter: 부호 있는 유효 폭/높이(width==0 이면 heightX, height==0 이면 widthY).
+        /// 회전각·서브렉트 원점 도출에 부호가 필요하다. 비회전 프레임은 signedW=width, signedH=height.
+        private var signedW: Float { width != 0 ? width : heightX }
+        private var signedH: Float { height != 0 ? height : widthY }
+        /// 아틀라스 서브렉트 top-left(부호 있는 extent 로 min 보정) + 절대 extent.
+        public var atlasX: Float { Swift.min(x, x + signedW) }
+        public var atlasY: Float { Swift.min(y, y + signedH) }
+        public var atlasWidth: Float { abs(signedW) }
+        public var atlasHeight: Float { abs(signedH) }
+        /// 서브렉트를 똑바로 세우기 위한 시계방향 90° 회전 수(0/1/2/3). RePKG 각도식
+        /// -(atan2(sign h, sign w) - π/4) 을 90° 단위로: (+,+)→0 (+,-)→1 (-,-)→2 (-,+)→3.
+        /// 비회전(+,+)은 항상 0 → 기존 UV 경로와 byte-identical(코퍼스 무회귀). 방향(CW)은 스펙 도출값
+        /// — 코퍼스에 회전 프레임 실물이 없어 육안 검증 불가(ponytail: 반례 발견 시 부호 반전).
+        public var rotationQuarters: Int {
+            let sw = signedW >= 0, sh = signedH >= 0
+            if sw && sh { return 0 }
+            if sw && !sh { return 1 }
+            if !sw && !sh { return 2 }
+            return 3
         }
     }
 
     public let width: Int   // 이미지 width (imgW)
     public let height: Int
     public let format: Int
+    /// TexHeader flags@22(RePKG TexFlags 확정): bit0 NoInterpolation, bit1 ClampUVs, bit2 IsGif, bit5 IsVideoTexture.
+    public var flags: Int = 0
     public let payload: PayloadKind
     public let payloadRange: Range<Int>
     public let mip: CompressedMip?
+    /// 모든 image 의 mip0(다중 image = 아틀라스 페이지, frame.imageId 가 페이지 인덱스). 단일 image 면 [mip].
+    /// 비-mip 페이로드(.png/.video 등)는 []. `mip` 은 mips.first(호환) — 소비처는 imageCount 로 다중 판정.
+    public var mips: [CompressedMip] = []
+    public var imageCount: Int { max(mips.count, mip == nil ? 0 : 1) }
     /// 스프라이트시트 프레임 목록(TEXS 부재 시 []).
     public var frames: [TexFrame] = []
+
+    public var noInterpolation: Bool { flags & 0x1 != 0 }
+    public var clampUVs: Bool { flags & 0x2 != 0 }
+    public var isGif: Bool { flags & 0x4 != 0 }
+    public var isVideoTexture: Bool { flags & 0x20 != 0 }
 
     public static func parse(_ data: Data) -> TexImage? {
         let b = [UInt8](data)
@@ -52,6 +88,7 @@ public struct TexImage {
             Int(UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24)
         }
         let format = i32(18)
+        let flags = i32(22)          // TexFlags(bit0 NoInterp, bit1 ClampUV, bit2 Gif, bit5 Video) — 노출만, 동작 무변경
         let texW = i32(26), texH = i32(30)
         let imgW = i32(34), imgH = i32(38)
         // 차원은 무경계 UInt32 에서 옴. Metal 렌더 한계(16384) 를 넘으면 거부해 w*h*4 정수 오버플로 트랩(크래시) 차단.
@@ -59,24 +96,43 @@ public struct TexImage {
         guard texW >= 0, texH >= 0, imgW >= 0, imgH >= 0,
               texW <= maxDim, texH <= maxDim, imgW <= maxDim, imgH <= maxDim else { return nil }
 
-        func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?) -> TexImage {
+        func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?, mips: [CompressedMip] = []) -> TexImage {
             var t = TexImage(width: imgW, height: imgH, format: format, payload: kind, payloadRange: range, mip: mip)
+            t.flags = flags
+            t.mips = mips
             t.frames = parseFrames(b)
             return t
         }
 
-        // 1) 내장 이미지/비디오 시그니처 우선(작은 윈도우에서만 — LZ4 데이터의 우연 일치 방지).
+        // 1) mip 컨테이너를 먼저 파스(순수 함수). imageFormat(FreeImage) != -1 이면 mip payload = 그 타입
+        //    인코딩 파일이며 texFormat 은 무시한다(RePKG TexMipmapFormatGetter 규약). 스캔보다 우선하는 이유:
+        //    LZ4 압축 임베디드 이미지는 첫 literal 로 시그니처가 누출돼 아래 512B 스캔이 .png 로 오라우팅한 뒤
+        //    압축 바이트를 PNG 로 디코드 실패하기 때문. 실측(2026-07-09): 코퍼스 임베디드 35개는 전부 비압축
+        //    이고 v4 서브레이아웃이 둘 — splash_*(표준 mip → 여기서 .embeddedImage) 와 lut/*(mip 에 여분 int
+        //    → parseMip 실패 → 아래 fast-path .png). 둘 다 정상 디코드(어느 쪽도 payloadRange 오정렬 없음).
+        let container = parseMip(b, decodeW: texW, decodeH: texH, imgW: imgW, imgH: imgH)
+        if let (mips, imageFormat) = container {
+            let mip = mips[0]
+            switch imageFormat {
+            case 2, 13, 25: return make(.embeddedImage, mip.payloadRange, mip)   // JPEG=2 PNG=13 GIF=25 (LZ4 가능)
+            case 35: return make(.video, mip.payloadRange, mip)                  // MP4(ponytail: LZ4-mp4 는 추출기 해제 미지원 — 보류)
+            default: break                                                       // -1(raw) → 시그니처/format 경로로
+            }
+        }
+
+        // 2) 내장 이미지/비디오 시그니처(비압축 임베디드 — TEXB0001/0002 는 imageFormat 필드 없음, 작은 윈도우만).
         if let p = findSig(b, [0x89, 0x50, 0x4E, 0x47], limit: 512) { return make(.png, p..<b.count, nil) }
         if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, p..<b.count, nil) }
         if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (p - 4)..<b.count, nil) }
 
-        // 2) mip 컨테이너(TEXB0001~0004): RGBA(fmt0) | DXT5(fmt4) | DXT1(fmt7) | R8(fmt9).
+        // 3) mip 컨테이너 format-based 디코드: RGBA(fmt0) | DXT5(fmt4) | DXT1(fmt7) | R8(fmt9).
         // fmt4=DXT5, fmt7=DXT1 실측 근거(2026-07-03): 3D 모델 텍스처 decompressedSize 가 각각
         // paddedW×H×1B(BC3 8bpp)/×0.5B(BC1 4bpp) 전수 일치, 디코드 결과가 preview 색과 일치(젤다/태양계).
         // fmt9=R8 실측 근거(2026-07-04, 3598808038 opacity 마스크): LZ4 해제 후 raw 바이트가
         // 부드러운 비네트 그라디언트(edge 255/center 0, 정확히 w×h 바이트) — DXT5 블록 구조가 아님.
         // WE 포맷 enum: 8=RG88, 9=R8. 종전 코드가 9 를 4(DXT5)에 묶어 마스크가 전백(全白)→전화면 흑화면.
-        if let mip = parseMip(b, decodeW: texW, decodeH: texH, imgW: imgW, imgH: imgH) {
+        if let (mips, _) = container {
+            let mip = mips[0]
             let kind: PayloadKind
             switch format {
             case 0: kind = .lz4RGBA
@@ -87,20 +143,22 @@ public struct TexImage {
             case 9: kind = .r8
             default: kind = .unknown
             }
-            return make(kind, mip.payloadRange, mip)
+            // 다중 image(아틀라스 페이지)는 format-based(raw/DXT) 페이로드에만 의미 — mips 전체 보존.
+            return make(kind, mip.payloadRange, mip, mips: mips)
         }
-        // 3) 비압축 raw RGBA(드묾).
+        // 4) 비압축 raw RGBA(드묾).
         if format == 0 { return make(.rawRGBA8888, 0..<b.count, nil) }
         return make(.unknown, 0..<b.count, nil)
     }
 
-    /// "TEXB000N\0" 컨테이너 파스(mip0 만 사용). 실측 레이아웃(RePKG TexReader + TEXB0004 hexdump
-    /// 교차검증, 2026-07-03 — 다중 mip 파일(DJK_1.tex mip 9개 등)은 종전 "compressedSize 가 EOF 에
-    /// 닿는 int 스캔" 휴리스틱이 실패해 3D 모델 텍스처 대부분이 흰색 폴백이 되던 것을 고침):
-    ///   i32 imageCount | (v3+) i32 imageFormat(실측 -1) | (v4) i32 미상/플래그(실측 0/1) |
-    ///   i32 mipCount | (v4 조건부) i32 1 | i32 2 | condition JSON NUL | i32 1 |
-    ///   mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 decompressedSize | i32 comp | payload
-    private static func parseMip(_ b: [UInt8], decodeW: Int, decodeH: Int, imgW: Int, imgH: Int) -> CompressedMip? {
+    /// "TEXB000N\0" 컨테이너 파스. 모든 image 의 **mip0** 을 순차 수집한다(다중 image = 스프라이트시트
+    /// 아틀라스 페이지, frame.imageId 가 페이지 인덱스 — RePKG TexToImageConverter.ConvertToGif). 실측
+    /// 레이아웃(RePKG TexReader + TEXB0004 hexdump 교차검증, 2026-07-03):
+    ///   i32 imageCount | (v3+) i32 imageFormat(-1=raw) | (v4) i32 isVideoMp4 |
+    ///   image별: i32 mipCount | mip별: (v4 조건 JSON) i32 w | i32 h | (v2+) i32 isLZ4 | i32 dec | i32 comp | payload
+    /// (mip0 외 mip 은 크기만큼 스킵). 종전 "compressedSize 가 EOF 에 닿는 int 스캔" 휴리스틱은 다중 mip
+    /// 파일(DJK_1.tex mip 9개 등)에서 실패해 3D 모델 텍스처 대부분이 흰색 폴백이었다.
+    private static func parseMip(_ b: [UInt8], decodeW: Int, decodeH: Int, imgW: Int, imgH: Int) -> (mips: [CompressedMip], imageFormat: Int)? {
         guard let ti = indexOf(b, Array("TEXB".utf8)), ti + 9 <= b.count else { return nil }
         let version = Int(String(bytes: b[ti + 4..<ti + 8], encoding: .ascii) ?? "") ?? 0
         guard version >= 1, version <= 4 else { return nil }
@@ -108,31 +166,47 @@ public struct TexImage {
             guard o >= 0, o + 4 <= b.count else { return nil }
             return Int(Int32(bitPattern: UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24))
         }
+        /// 단일 mip 레코드 파스: (v4 조건 블록) w | h | (v2+) isLZ4 | dec | comp | payload → (mip, 다음 오프셋).
+        func readMip(_ start: Int) -> (CompressedMip, Int)? {
+            var q = start
+            if version >= 4, let conditionEnd = texb0004ConditionBlockEnd(b, from: q, i32: i32) { q = conditionEnd }
+            guard let w = i32(q), let h = i32(q + 4), w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
+            q += 8
+            var isLZ4 = 0, dec = 0
+            if version >= 2 {
+                guard let z = i32(q), let d = i32(q + 4) else { return nil }
+                isLZ4 = z; dec = d; q += 8
+            }
+            guard let comp = i32(q), comp > 0, q + 4 + comp <= b.count else { return nil }
+            q += 4
+            if isLZ4 == 0 { dec = comp }  // 비압축: payload 그대로
+            // dec 는 공격자 제어 필드. 단일 mip 의 정당한 한계(512MB)를 넘으면 거부해 ~4GB 할당 DoS 차단.
+            guard dec > 0, dec <= 512 << 20 else { return nil }
+            let mip = CompressedMip(decodeWidth: w, decodeHeight: h, imageWidth: imgW, imageHeight: imgH,
+                                    decompressedSize: dec, payloadRange: q..<(q + comp), lz4: isLZ4 != 0)
+            return (mip, q + comp)
+        }
         var p = ti + 9
-        p += 4                       // imageCount(첫 이미지의 mip0 만 사용)
-        if version >= 3 { p += 4 }   // imageFormat(FreeImage, 실측 -1)
-        if version >= 4 { p += 4 }   // 0004 추가 필드/플래그(실측 0/1)
-        guard let mipCount = i32(p), mipCount > 0 else { return nil }
+        var imageFormat = -1         // FreeImage enum(v3+): -1=raw(texFormat 사용), 2=JPEG 13=PNG 25=GIF 35=MP4
+        guard let imageCount = i32(p), imageCount > 0, imageCount <= 1024 else { return nil }
         p += 4
-        if version >= 4, let conditionEnd = texb0004ConditionBlockEnd(b, from: p, i32: i32) {
-            p = conditionEnd
+        if version >= 3 { imageFormat = i32(p) ?? -1; p += 4 }   // imageFormat 직독(RePKG: !=-1 이면 인코딩 파일)
+        if version >= 4 { p += 4 }   // 0004 추가 필드/플래그(실측 0/1 = isVideoMp4)
+        var mips: [CompressedMip] = []
+        for _ in 0..<imageCount {
+            guard let mipCount = i32(p), mipCount > 0 else { break }
+            p += 4
+            guard let (mip0, after0) = readMip(p) else { break }   // 페이지의 mip0 = 아틀라스 페이지 픽셀
+            mips.append(mip0)
+            p = after0
+            var ok = true
+            for _ in 1..<mipCount {                                // mip0 외 mip 은 스킵(다음 image 위치까지 전진)
+                guard let (_, afterK) = readMip(p) else { ok = false; break }
+                p = afterK
+            }
+            if !ok { break }
         }
-        guard let w = i32(p), let h = i32(p + 4), w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
-        p += 8
-        var isLZ4 = 0, dec = 0
-        if version >= 2 {
-            guard let z = i32(p), let d = i32(p + 4) else { return nil }
-            isLZ4 = z; dec = d
-            p += 8
-        }
-        guard let comp = i32(p), comp > 0, p + 4 + comp <= b.count else { return nil }
-        p += 4
-        if isLZ4 == 0 { dec = comp }  // 비압축: payload 그대로
-        // dec 는 공격자 제어 필드. 단일 mip 의 정당한 한계(512MB)를 넘으면 거부해 ~4GB 할당 DoS 차단.
-        guard dec > 0, dec <= 512 << 20 else { return nil }
-        return CompressedMip(decodeWidth: w, decodeHeight: h,
-                             imageWidth: imgW, imageHeight: imgH,
-                             decompressedSize: dec, payloadRange: p..<(p + comp), lz4: isLZ4 != 0)
+        return mips.isEmpty ? nil : (mips, imageFormat)
     }
 
     /// TEXB0004 may insert a small NUL-terminated condition JSON block before the first mip record.
@@ -186,11 +260,17 @@ public struct TexImage {
         out.reserveCapacity(count)
         for _ in 0..<count {
             guard let id = i32(p), let t = f32(p + 4),
-                  let x = geom(p + 8), let y = geom(p + 12), let w = geom(p + 16), let h = geom(p + 28),
+                  let x = geom(p + 8), let y = geom(p + 12),
+                  let w = geom(p + 16), let wy = geom(p + 20), let hx = geom(p + 24), let h = geom(p + 28),
                   t.isFinite, t > 0,
-                  w > 0, h > 0, x >= 0, y >= 0,
-                  x.isFinite, y.isFinite, w.isFinite, h.isFinite else { return [] }
-            out.append(TexFrame(imageId: id, time: t, x: x, y: y, width: w, height: h))
+                  x >= 0, y >= 0, x.isFinite, y.isFinite,
+                  w.isFinite, h.isFinite, wy.isFinite, hx.isFinite else { return [] }
+            // 회전 프레임(RePKG): Width|Height 가 0 → 유효 크기는 HeightX/WidthY 에서. 양 축 모두 0(퇴화)이면
+            // 프레임 전체 드롭(종전 w>0,h>0 안전망 유지) — 단 회전 시트는 더는 통째로 버리지 않는다.
+            let effW = w != 0 ? w : hx
+            let effH = h != 0 ? h : wy
+            guard abs(effW) > 0, abs(effH) > 0 else { return [] }
+            out.append(TexFrame(imageId: id, time: t, x: x, y: y, width: w, height: h, widthY: wy, heightX: hx))
             p += 32
         }
         return out

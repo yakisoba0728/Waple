@@ -69,7 +69,9 @@ extension SceneRenderer {
             let wy = sys.origin.y - sys.scale.y * p.pos.y
             let sizePx = p.size * sys.scale.x
             // 스프라이트시트(TEXS): mapsequence 는 스폰 확정 시퀀스, 아니면 age/frametime gif 애니.
-            var u0: Float = 0, v0: Float = 0, u1: Float = 1, v1: Float = 1
+            // UV = 프레임 서브렉트의 4코너(TL,TR,BR,BL). 회전 프레임이면 코너 배정을 rotationQuarters 만큼
+            // 회전(비회전 q=0 은 종전과 byte-identical — 코퍼스 무회귀).
+            var uv: [(Float, Float)] = [(0, 0), (1, 0), (1, 1), (0, 1)]
             var ratio = sys.texRatio
             if !sys.frames.isEmpty {
                 let fc = sys.frames.count
@@ -82,9 +84,15 @@ extension SceneRenderer {
                 }
                 let fr = sys.frames[max(0, min(fc - 1, idx))]
                 let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
-                u0 = fr.x / tw; v0 = fr.y / th
-                u1 = min(1, (fr.x + fr.width) / tw); v1 = min(1, (fr.y + fr.height) / th)
-                ratio = fr.height / max(1, fr.width)
+                let u0 = fr.atlasX / tw, v0 = fr.atlasY / th
+                let u1 = min(1, (fr.atlasX + fr.atlasWidth) / tw), v1 = min(1, (fr.atlasY + fr.atlasHeight) / th)
+                let corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+                let q = fr.rotationQuarters
+                uv = (0..<4).map { corners[($0 + q) % 4] }
+                // 똑바로 세운 스프라이트 종횡비(90/270°는 축 스왑).
+                let upW = q % 2 == 0 ? fr.atlasWidth : fr.atlasHeight
+                let upH = q % 2 == 0 ? fr.atlasHeight : fr.atlasWidth
+                ratio = upH / max(1, upW)
             }
             let hw = sizePx * 0.5, hh = sizePx * ratio * 0.5
             let ca = cos(p.rotation.z), sa = sin(p.rotation.z)
@@ -93,11 +101,11 @@ extension SceneRenderer {
             }
             let tl = ndc(-hw, -hh), tr = ndc(hw, -hh), br = ndc(hw, hh), bl = ndc(-hw, hh)
             let r = p.color.x, g = p.color.y, b = p.color.z, al = p.alpha
-            func v(_ pt: (Float, Float), _ u: Float, _ vv: Float) {
-                verts.append(contentsOf: [pt.0, pt.1, u, vv, r, g, b, al])
+            func v(_ pt: (Float, Float), _ u: (Float, Float)) {
+                verts.append(contentsOf: [pt.0, pt.1, u.0, u.1, r, g, b, al])
             }
-            v(tl, u0, v0); v(tr, u1, v0); v(br, u1, v1)
-            v(tl, u0, v0); v(br, u1, v1); v(bl, u0, v1)
+            v(tl, uv[0]); v(tr, uv[1]); v(br, uv[2])
+            v(tl, uv[0]); v(br, uv[2]); v(bl, uv[3])
         }
         for p in snapshot {
             if sys.isTrail {
@@ -164,8 +172,10 @@ extension SceneRenderer {
                 : Int(p.age / max(0.016, sys.frames[0].time)) % fc
             let fr = sys.frames[max(0, min(fc - 1, idx))]
             let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
-            fu0 = fr.x / tw; fu1 = min(1, (fr.x + fr.width) / tw)
-            fv0 = fr.y / th; fv1 = min(1, (fr.y + fr.height) / th)
+            // 서브렉트는 atlas*(회전 프레임의 실제 extent). ponytail: 리본은 rotationQuarters 미반영 —
+            // spritetrail/rope 가 회전 아틀라스를 쓰는 실물이 코퍼스에 없어 보류(발견 시 코너 회전 이식).
+            fu0 = fr.atlasX / tw; fu1 = min(1, (fr.atlasX + fr.atlasWidth) / tw)
+            fv0 = fr.atlasY / th; fv1 = min(1, (fr.atlasY + fr.atlasHeight) / th)
         }
         for i in 0..<(n - 1) {
             let e0 = edges[i], e1 = edges[i + 1]

@@ -16,6 +16,14 @@ public enum TexDecoder {
                   let src = CGImageSourceCreateWithData(sub as CFData, nil),
                   let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
             return draw(img)
+        case .embeddedImage:
+            // imageFormat 이 인코딩 이미지(PNG/JPEG/GIF)로 지정한 mip. LZ4 해제(mipBytes) 후 CGImageSource 디코드
+            // — fast-path 512B 스캔이 놓치는 LZ4 압축 임베디드 이미지 경로. straight-alpha 규약은 draw 가 유지.
+            guard let mip = tex.mip, let dec = mipBytes(mip: mip, data: data),
+                  embeddedImagePropertiesAreWithinLimits(dec),
+                  let src = CGImageSourceCreateWithData(dec as CFData, nil),
+                  let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+            return draw(img)
         case .rawRGBA8888:
             let w = tex.width, h = tex.height
             guard w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
@@ -23,23 +31,40 @@ public enum TexDecoder {
             let sub = data.subdata(in: tex.payloadRange)
             guard sub.count >= need else { return nil }
             return (sub.prefix(need), w, h)
+        case .bc3, .bc2, .bc1, .r8, .rg88, .lz4RGBA:
+            guard let mip = tex.mip else { return nil }
+            return decodeMip(payload: tex.payload, mip: mip, data: data)
+        case .video, .unknown:
+            return nil
+        }
+    }
+
+    /// 특정 아틀라스 페이지(image index) 디코드. 다중 image = GIF 스프라이트 페이지(각 자체 mip0,
+    /// frame.imageId 가 페이지 인덱스 — RePKG ConvertToGif). index 0/단일 image/범위 밖은 mip0(=rgba) 로.
+    /// mip 기반(raw/DXT) 포맷에만 의미(임베디드 이미지 페이지는 단일이라 rgba 사용).
+    public static func rgba(from tex: TexImage, data: Data, imageIndex: Int) -> (pixels: Data, width: Int, height: Int)? {
+        guard imageIndex > 0, imageIndex < tex.mips.count else { return rgba(from: tex, data: data) }
+        return decodeMip(payload: tex.payload, mip: tex.mips[imageIndex], data: data)
+    }
+
+    /// mip 기반(raw/DXT) 포맷 1장 디코드 + 패딩 크롭. 단일/다중 페이지 공용(mip 인자로 페이지 선택).
+    private static func decodeMip(payload: TexImage.PayloadKind, mip: TexImage.CompressedMip, data: Data)
+        -> (pixels: Data, width: Int, height: Int)? {
+        guard let dec = mipBytes(mip: mip, data: data) else { return nil }
+        let w = mip.decodeWidth, h = mip.decodeHeight
+        switch payload {
         case .bc3:
-            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
-                  let rgba = DXT5Decoder.decode(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
+            guard let rgba = DXT5Decoder.decode(dec, width: w, height: h) else { return nil }
             return cropped(rgba, mip)
         case .bc2:
-            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
-                  let rgba = DXT5Decoder.decodeBC2(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
+            guard let rgba = DXT5Decoder.decodeBC2(dec, width: w, height: h) else { return nil }
             return cropped(rgba, mip)
         case .bc1:
-            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
-                  let rgba = DXT5Decoder.decodeBC1(dec, width: mip.decodeWidth, height: mip.decodeHeight) else { return nil }
+            guard let rgba = DXT5Decoder.decodeBC1(dec, width: w, height: h) else { return nil }
             return cropped(rgba, mip)
         case .r8:
             // 단일 채널 8bit(WE fmt9). raw 바이트 = 픽셀당 값. 그레이스케일(v,v,v)+불투명(255)로 확장 —
             // 소비처(opacity 마스크 등)는 .r 을 읽으므로 r=v 로 정확하고, 직접 표시 시에도 회색으로 자연스럽다.
-            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data) else { return nil }
-            let w = mip.decodeWidth, h = mip.decodeHeight
             guard w > 0, h > 0, dec.count >= w * h else { return nil }
             var rgba = Data(count: w * h * 4)
             dec.withUnsafeBytes { (src: UnsafeRawBufferPointer) in
@@ -53,11 +78,12 @@ public enum TexDecoder {
             }
             return cropped(rgba, mip)
         case .rg88:
-            // 2채널 8bit(WE fmt8). 실물 규약(common_fragment.h ConvertTexture0Format): .rrrg —
-            // r=루마(회색), g=알파. rain_drops_sheet 등 파티클 시트가 이 포맷(종전 미디코드 → 흰 사각형).
+            // 2채널 8bit(WE fmt8): byte0→루마(r=g=b), byte1→알파. 판정(2026-07-09, RePKG 대조):
+            // 실물 셰이더 common_fragment.h:98 ConvertTexture0Format(RG88)=`.rrrg` — GL_RG8 샘플은 .r=byte0/.g=byte1
+            // 이므로 (byte0,byte0,byte0,byte1). HLSL_SM30 경로 `.rrra`(A8L8 에뮬)도 동일 결론 → 아래 코드가 정본.
+            // ⚠️ RePKG RG88.cs:40 은 정반대(`Rgba32(G,G,G,R)` = byte1→루마, byte0→알파)지만, 실제 렌더 규약은
+            // 셰이더이므로 Waple 이 옳다(RePKG 를 보고 뒤집지 말 것). rain_drops_sheet 등 파티클 시트가 이 포맷.
             // 마스크 소비(.r)도 r 그대로라 양쪽 정확. (REFRACT 의 스크린 굴절 곱은 항등 근사 — 별도 미구현.)
-            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data) else { return nil }
-            let w = mip.decodeWidth, h = mip.decodeHeight
             guard w > 0, h > 0, dec.count >= w * h * 2 else { return nil }
             var rgba = Data(count: w * h * 4)
             dec.withUnsafeBytes { (src: UnsafeRawBufferPointer) in
@@ -71,17 +97,15 @@ public enum TexDecoder {
             }
             return cropped(rgba, mip)
         case .lz4RGBA:
-            guard let mip = tex.mip, let dec = mipBytes(tex: tex, data: data),
-                  dec.count >= mip.decodeWidth * mip.decodeHeight * 4 else { return nil }
+            guard dec.count >= w * h * 4 else { return nil }
             return cropped(dec, mip)
-        case .video, .unknown:
+        default:
             return nil
         }
     }
 
-    /// mip0 페이로드 바이트: lz4 플래그면 해제, 아니면 그대로(TEXB0001 등 비압축).
-    private static func mipBytes(tex: TexImage, data: Data) -> Data? {
-        guard let mip = tex.mip else { return nil }
+    /// mip 페이로드 바이트: lz4 플래그면 해제, 아니면 그대로(TEXB0001 등 비압축).
+    private static func mipBytes(mip: TexImage.CompressedMip, data: Data) -> Data? {
         let payload = data.subdata(in: mip.payloadRange)
         return mip.lz4 ? lz4(payload, expected: mip.decompressedSize) : payload
     }

@@ -108,7 +108,10 @@ public struct Model3D: Equatable {
 
     public static func parse(_ data: Data) -> Model3D? {
         let bytes = [UInt8](data)
-        guard bytes.count > 21, String(bytes: bytes[0..<8], encoding: .utf8) == "MDLV0023" else { return nil }
+        // MDLV0023 정본. MDLV0021 은 헤더·메시 레이아웃이 동일(실측 2026-07-09, 3367988661 전수: u8 0 |
+        // formatFlag 0x1800009 | const 1 | meshCount | material cstring 가 0023 과 일치) — 동일 경로로 수용.
+        let magic = String(bytes: bytes[0..<min(8, bytes.count)], encoding: .utf8)
+        guard bytes.count > 21, magic == "MDLV0023" || magic == "MDLV0021" else { return nil }
 
         func u32(_ o: Int) -> UInt32? {
             guard o >= 0, o + 4 <= bytes.count else { return nil }

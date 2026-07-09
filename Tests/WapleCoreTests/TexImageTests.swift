@@ -55,6 +55,21 @@ final class TexImageTests: XCTestCase {
         XCTAssertNil(TexImage.parse(Data("nope".utf8)))
     }
 
+    /// flags@22(RePKG TexFlags): bit0 NoInterp, bit1 ClampUV, bit2 IsGif, bit5 IsVideoTexture.
+    func testParsesFlags() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
+        // flags = 0x25 = bit0(NoInterp) | bit2(Gif) | bit5(Video)
+        var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
+        b += i32(0) + i32(0x25) + i32(4) + i32(4) + i32(4) + i32(4)
+        b += Array("TEXB0001".utf8)+[0] + [0,0,0,0]
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.flags, 0x25)
+        XCTAssertEqual(t?.noInterpolation, true)
+        XCTAssertEqual(t?.clampUVs, false)         // bit1 미설정
+        XCTAssertEqual(t?.isGif, true)
+        XCTAssertEqual(t?.isVideoTexture, true)
+    }
+
     /// 다중 mip(TEXB0004, 실측 DJK_1.tex mip 9개 클래스): mip0 payload 는 EOF 가 아니라
     /// compressedSize 만큼 — 종전 EOF-스캔 휴리스틱은 이 클래스에서 nil(흰색 폴백)이었다.
     func testParsesMultiMipTEXB0004() {
@@ -92,6 +107,25 @@ final class TexImageTests: XCTestCase {
         XCTAssertEqual(t?.mip?.decompressedSize, 64)
         XCTAssertEqual(t?.mip?.payloadRange.count, payload.count)
         XCTAssertEqual(t?.mip?.lz4, true)
+    }
+
+    /// 다중 image = 아틀라스 페이지(RePKG ConvertToGif): 각 image 의 mip0 을 순차 수집.
+    /// imageCount=2, 각 1 mip → mips.count==2, 페이지별 payloadRange 가 서로 다름.
+    func testParsesMultiImagePages() {
+        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
+        let page0: [UInt8] = [10, 20, 30, 40]
+        let page1: [UInt8] = [200, 150, 100, 50]
+        var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
+        b += i32(0) + i32(0) + i32(1) + i32(1) + i32(1) + i32(1)      // fmt0, 1x1
+        b += Array("TEXB0003".utf8)+[0] + i32(2) + i32(-1)           // imageCount=2, imageFormat=-1
+        b += i32(1) + i32(1) + i32(1) + i32(0) + i32(4) + i32(4) + page0   // image0: mipCount1, w,h,isLZ4=0,dec,comp,payload
+        b += i32(1) + i32(1) + i32(1) + i32(0) + i32(4) + i32(4) + page1   // image1
+        let t = TexImage.parse(Data(b))
+        XCTAssertEqual(t?.payload, .lz4RGBA)
+        XCTAssertEqual(t?.imageCount, 2)
+        XCTAssertEqual(t?.mips.count, 2)
+        XCTAssertNotEqual(t?.mips[0].payloadRange, t?.mips[1].payloadRange, "페이지별 mip0 분리")
+        XCTAssertEqual(t?.mip?.payloadRange, t?.mips[0].payloadRange, "mip == 페이지0(호환)")
     }
 
     /// format=7 은 DXT1(BC1, 4bpp) — 태양계 스카이박스/태양/8k_earth 실측.

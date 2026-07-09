@@ -464,10 +464,40 @@ extension SceneRenderer {
         if let name {
             let cand = name.hasSuffix(".tex") ? name : "materials/\(name).tex"
             if let d = assetData(cand, package: package) ?? assetData(name, package: package),
-               let tex = TexImage.parse(d), let dec = TexDecoder.rgba(from: tex, data: d),
-               let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return (m, tex.frames) }
+               let tex = TexImage.parse(d) {
+                // 다중 image = 아틀라스 페이지: 세로로 이어붙인 단일 텍스처 + frame.y 페이지 오프셋(아래 헬퍼).
+                if tex.imageCount > 1, !tex.frames.isEmpty,
+                   let stacked = stackedAtlas(tex: tex, data: d, device: device) { return stacked }
+                if let dec = TexDecoder.rgba(from: tex, data: d),
+                   let m = makeTexture(dec.pixels, dec.width, dec.height, device) { return (m, tex.frames) }
+            }
         }
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }
+    }
+
+    /// 이슈4: 다중 image 아틀라스 페이지를 **세로로 이어붙인 단일 텍스처**로 합치고 frame.y 에 페이지
+    /// 오프셋(page*pageHeight)을 더한다 — GPUParticleSystem.texture 단일 유지(프레임 인코더 무변경).
+    /// 페이지 크기 불일치/디코드 실패 시 nil → 호출자가 단일-이미지 경로로 폴백. 코퍼스에 다중 image .tex
+    /// 실물 0(RePKG 규약은 확정 — 합성 테스트로 배선 보증). ponytail: 텍스처 배열 대신 세로 스택(최소 변경).
+    private func stackedAtlas(tex: TexImage, data: Data, device: MTLDevice)
+        -> (texture: MTLTexture, frames: [TexImage.TexFrame])? {
+        var pages: [(pixels: Data, width: Int, height: Int)] = []
+        for i in 0..<tex.imageCount {
+            guard let p = TexDecoder.rgba(from: tex, data: data, imageIndex: i) else { return nil }
+            pages.append(p)
+        }
+        guard let first = pages.first,
+              pages.allSatisfy({ $0.width == first.width && $0.height == first.height }) else { return nil }
+        let pw = first.width, ph = first.height
+        var stacked = Data(); stacked.reserveCapacity(pw * ph * 4 * pages.count)
+        for p in pages { stacked.append(p.pixels) }
+        let adjusted = tex.frames.map { fr -> TexImage.TexFrame in
+            let page = max(0, min(pages.count - 1, fr.imageId))   // imageId = 페이지 인덱스(범위 클램프)
+            return TexImage.TexFrame(imageId: fr.imageId, time: fr.time, x: fr.x, y: fr.y + Float(page * ph),
+                                     width: fr.width, height: fr.height, widthY: fr.widthY, heightX: fr.heightX)
+        }
+        guard let m = makeTexture(stacked, pw, ph * pages.count, device) else { return nil }
+        return (m, adjusted)
     }
 
     /// 효과의 AUDIOPROCESSING 콤보 + 오디오 상수 → AudioParams(없으면 nil). draw 시 audioResponse 계산에 사용.

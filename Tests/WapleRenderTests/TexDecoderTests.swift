@@ -45,6 +45,55 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertNil(TexDecoder.rgba(from: tex, data: data))
     }
 
+    /// 이슈2: imageFormat=13(PNG) 이고 mip 이 LZ4 압축된 임베디드 PNG. fast-path 512B 스캔은
+    /// 압축된(누출) 시그니처를 오검하므로 imageFormat 라우팅이 우선 → .embeddedImage → LZ4 해제 후 디코드.
+    func testDecodesLZ4WrappedEmbeddedPNG() throws {
+        let raw = [UInt8](png())                         // 2x2 PNG 파일 바이트
+        let cap = raw.count * 2 + 64
+        var comp = [UInt8](repeating: 0, count: cap)
+        let n = Data(raw).withUnsafeBytes { srcp in
+            comp.withUnsafeMutableBytes { dstp in
+                compression_encode_buffer(dstp.bindMemory(to: UInt8.self).baseAddress!, cap,
+                                          srcp.bindMemory(to: UInt8.self).baseAddress!, raw.count, nil, COMPRESSION_LZ4_RAW)
+            }
+        }
+        XCTAssertGreaterThan(n, 0)
+        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32bytes(0) + i32bytes(0) + i32bytes(2) + i32bytes(2) + i32bytes(2) + i32bytes(2)  // texFormat 무시됨
+        b += Array("TEXB0003".utf8) + [0] + i32bytes(1) + i32bytes(13) + i32bytes(1)            // imageCount, imageFormat=PNG, mipCount
+        b += i32bytes(2) + i32bytes(2) + i32bytes(1) + i32bytes(raw.count) + i32bytes(n)        // w,h,isLZ4=1,dec,comp
+        b += Array(comp[0..<n])
+        let data = Data(b)
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.payload, .embeddedImage)      // fast-path .png 오라우팅이 아님
+        let out = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data))
+        XCTAssertEqual(out.width, 2); XCTAssertEqual(out.height, 2)
+        XCTAssertEqual(out.pixels.count, 2 * 2 * 4)
+    }
+
+    /// 이슈2 실물 검증: 코퍼스에 v4 임베디드 PNG 서브레이아웃이 둘 있다 — splash_*(표준 mip → imageFormat
+    /// 라우팅 .embeddedImage) 와 lut/*(mip 에 여분 int → parseMip 실패 → fast-path .png). 둘 다 정상 디코드
+    /// 해야 무회귀(재정렬로 어느 것도 흰 폴백이 되지 않음). 코퍼스 부재 시 skip(Real* 하네스 규약).
+    func testDecodesRealEmbeddedImages() throws {
+        let base = NSHomeDirectory() + "/Downloads/wallpaper_dev/assets/materials/"
+        let splash = base + "particle/water/splash_5.tex"
+        guard FileManager.default.fileExists(atPath: splash) else { throw XCTSkip("no corpus: \(splash)") }
+        // splash_5: imageFormat 라우팅 → .embeddedImage 로 실물 경로를 직접 검증.
+        let sData = try Data(contentsOf: URL(fileURLWithPath: splash))
+        let sTex = try XCTUnwrap(TexImage.parse(sData))
+        XCTAssertEqual(sTex.payload, .embeddedImage, "표준 v4 임베디드 PNG → imageFormat 라우팅")
+        let sOut = try XCTUnwrap(TexDecoder.rgba(from: sTex, data: sData), "splash 디코드 실패(흰 폴백)")
+        XCTAssertGreaterThan(sOut.width, 0); XCTAssertEqual(sOut.pixels.count, sOut.width * sOut.height * 4)
+        // lut/westernf: 여분-int v4 레이아웃 → parseMip 실패 → fast-path .png. 그래도 디코드 성공(무회귀).
+        let lut = base + "lut/lutx32_westernf.tex"
+        if FileManager.default.fileExists(atPath: lut) {
+            let lData = try Data(contentsOf: URL(fileURLWithPath: lut))
+            let lTex = try XCTUnwrap(TexImage.parse(lData))
+            let lOut = try XCTUnwrap(TexDecoder.rgba(from: lTex, data: lData), "LUT 디코드 실패(흰 폴백)")
+            XCTAssertGreaterThan(lOut.width, 0); XCTAssertEqual(lOut.pixels.count, lOut.width * lOut.height * 4)
+        }
+    }
+
     func testDecodesRawRGBA() throws {
         let raw: [UInt8] = Array(repeating: 0, count: 1 * 1 * 4)  // 1x1
         let data = Data(texHeader(format: 0, w: 1, h: 1)) + Data(raw)
@@ -121,6 +170,24 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertEqual(out.pixels.count, iw * ih * 4)
         let px = [UInt8](out.pixels)
         XCTAssertEqual([px[0], px[1], px[2], px[3]], [10, 20, 30, 40])  // 패딩 stride 에서 올바로 복사
+    }
+
+    /// 이슈4: 다중 image(아틀라스 페이지) → 페이지별 decode-by-index. 두 페이지가 서로 다른 픽셀로 디코드.
+    func testDecodesMultiImagePagesByIndex() throws {
+        let page0: [UInt8] = [10, 20, 30, 40]
+        let page1: [UInt8] = [200, 150, 100, 50]
+        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
+        b += i32bytes(0) + i32bytes(0) + i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(1)   // fmt0, 1x1
+        b += Array("TEXB0003".utf8) + [0] + i32bytes(2) + i32bytes(-1)                            // imageCount=2
+        b += i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(0) + i32bytes(4) + i32bytes(4) + page0
+        b += i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(0) + i32bytes(4) + i32bytes(4) + page1
+        let data = Data(b)
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.imageCount, 2)
+        let p0 = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data, imageIndex: 0))
+        let p1 = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data, imageIndex: 1))
+        XCTAssertEqual([UInt8](p0.pixels), page0)
+        XCTAssertEqual([UInt8](p1.pixels), page1)   // 종전엔 첫 페이지만 — 페이지1 이 별도 디코드됨
     }
 
     /// BC3 페이로드가 손상돼 LZ4 디코드가 decompressedSize 와 다른 길이를 내면 nil.
