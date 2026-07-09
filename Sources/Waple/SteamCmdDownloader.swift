@@ -174,6 +174,11 @@ enum SteamCmdDownloader {
                 DispatchQueue.main.async { progress(p) }
             }
         }
+        // 마지막 줄이 개행 없이 EOF 로 끝날 수 있다 — 남은 버퍼도 파싱(성공 신호를 놓치지 않게).
+        if let line = String(data: buffer, encoding: .utf8), let p = parse(line: line) {
+            if p == .success { sawSuccess = true }
+            DispatchQueue.main.async { progress(p) }
+        }
         proc.waitUntilExit()
         killer.cancel()
         return sawSuccess
