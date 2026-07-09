@@ -198,6 +198,44 @@ public struct SceneLight3D: Equatable {
     }
 }
 
+public extension SceneLight3D {
+    /// WE 라이트 셰이더 유니폼 팩(generic.vert / genericimage2.frag 규약 — 실측 확정 2026-07):
+    /// - `g_LightsPosition[4]`(vec3): 라이트 월드 위치(origin). 4 미만은 0 패딩.
+    /// - `g_LightsColorPremultiplied[3]`(vec4): 4개 라이트의 (color×intensity)를 3×vec4 로 팩 —
+    ///   라이트 0..2 는 `[i].rgb`, 라이트 3 은 `[0..2].w` 3채널에 분산(`[0].w,[1].w,[2].w = L3.r,g,b`).
+    ///   ("Premultiplied" = color × intensity; 별도 intensity/radius 유니폼 없음.)
+    /// - `ambient`: `general.ambientcolor`.
+    ///
+    /// > ⚠️ **현재 런타임 소비처 없음.** Waple 의 2D 레이어는 QuadShaders(텍스처×tint), 3D 메시는 고정
+    /// > unlit `Mesh3DShaders` 로 그린다. 라이트를 참조하는 머티리얼 셰이더(generic*/genericimage2)는
+    /// > 로드·번역되지 않으며, 번역되는 이펙트 셰이더는 코퍼스 전체 0건이 이 유니폼을 참조한다. 따라서
+    /// > 이 팩을 읽는 셰이더가 없어 값을 공급해도 화면 변화가 없다. 이 함수는 향후 forward-lighting(PBR)
+    /// > 도입 시 소비될 **확정 규약**을 유닛으로 고정해 두는 것이 목적(SP 리포트 참조).
+    struct PackedUniforms: Equatable {
+        public var positions: [SIMD3<Float>]           // g_LightsPosition[4]
+        public var colorsPremultiplied: [SIMD4<Float>] // g_LightsColorPremultiplied[3]
+        public var ambient: SIMD3<Float>               // g_LightAmbientColor
+    }
+
+    /// 라이트 배열 → 셰이더 유니폼 팩. 4개 초과 시 앞 4개(WE 는 오브젝트별 relevance 4개 선택 —
+    /// 현행은 씬 순서 근사; 정확한 선택은 소비처와 함께 도입).
+    static func packUniforms(_ lights: [SceneLight3D], ambient: Vec3 = Vec3(x: 0, y: 0, z: 0)) -> PackedUniforms {
+        var positions = [SIMD3<Float>](repeating: .zero, count: 4)
+        var premult = [SIMD3<Float>](repeating: .zero, count: 4)  // color×intensity, L0..L3
+        for (i, l) in lights.prefix(4).enumerated() {
+            positions[i] = SIMD3(l.origin.x, l.origin.y, l.origin.z)
+            premult[i] = SIMD3(l.color.x, l.color.y, l.color.z) * l.intensity
+        }
+        let colors = [
+            SIMD4(premult[0].x, premult[0].y, premult[0].z, premult[3].x),  // [0].rgb=L0, .w=L3.r
+            SIMD4(premult[1].x, premult[1].y, premult[1].z, premult[3].y),  // [1].rgb=L1, .w=L3.g
+            SIMD4(premult[2].x, premult[2].y, premult[2].z, premult[3].z),  // [2].rgb=L2, .w=L3.b
+        ]
+        return PackedUniforms(positions: positions, colorsPremultiplied: colors,
+                              ambient: SIMD3(ambient.x, ambient.y, ambient.z))
+    }
+}
+
 /// 씬 sound 오브젝트(scene.json objects[] 중 "sound" 키 보유). 실측(코퍼스 460종 / 382오브젝트, 2026-07-09):
 /// - playbackmode ∈ {loop 215, single 158, random 9}
 /// - volume 은 숫자 또는 {user,value}/{script,value} 바인딩 — parse 에서 float() 가 언랩
