@@ -408,6 +408,16 @@ public enum GLSLTypeAdapter {
                         }
                     }
                 }
+                // broadcast 빌트인(mix/clamp/min/max/step/pow/…)의 벡터 인자 크기 불일치 → 최소 벡터 크기로
+                // 절단(HLSL 관용 — 실물 shift_hue 의 mix(albedo /*4*/, newAlbedo /*3*/, mask)). 스칼라(1)·미지(0)
+                // 는 min 계산·절단에서 제외. 기존 컴파일 셰이더는 벡터 인자가 이미 일치하므로 무개입(no-op).
+                if broadcastFns.contains(t), let minVec = argSizes.filter({ $0 > 1 }).min() {
+                    for i in argTexts.indices where argSizes[i] > minVec {
+                        let node = coerce(Node(text: argTexts[i], size: argSizes[i]), to: minVec)
+                        argTexts[i] = node.text
+                        argSizes[i] = minVec
+                    }
+                }
                 // 알려진 헬퍼: 인자를 파라미터 크기로 절단(HLSL 관용 — 실물 shimmer).
                 if let ps = p.env.functionParams[t] {
                     for i in argTexts.indices where i < ps.count && ps[i] > 0 && argSizes[i] > ps[i] {

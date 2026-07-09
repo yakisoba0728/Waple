@@ -86,4 +86,21 @@ final class GLSLTranslatorClusterFixTests: XCTestCase {
         """
         assertCompiles(vertex: trivialVert, fragment: frag)
     }
+
+    // MARK: Cluster 2 — "no matching function for call to 'mix'"
+    // 실물 shift_hue/hue_shift/old_film: mix(albedo /*vec4*/, newAlbedo /*vec3*/, mask). broadcast 빌트인의
+    // 벡터 인자 크기 불일치를 최소 벡터 크기로 절단(HLSL 관용)해야 MSL 오버로드가 매칭된다.
+    func testMixMismatchedVectorArgs() {
+        let frag = """
+        uniform sampler2D g_Texture0;
+        varying vec2 v_TexCoord;
+        void main() {
+            vec4 albedo = texSample2D(g_Texture0, v_TexCoord);
+            vec3 tint = vec3(1.0, 0.5, 0.0);
+            albedo.rgb = mix(albedo, tint, 0.5);
+            gl_FragColor = albedo;
+        }
+        """
+        assertCompiles(vertex: trivialVert, fragment: frag)
+    }
 }
