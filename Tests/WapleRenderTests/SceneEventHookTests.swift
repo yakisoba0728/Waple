@@ -1,5 +1,6 @@
 import XCTest
 @testable import WapleRender
+import WapleCore
 
 /// 씬 스크립트 이벤트 훅(cursorClick/media*Changed): IIFE 반환을 update 단일에서 훅 딕셔너리로 확장.
 /// 이벤트 스키마는 실물 역추출(193패키지 스캔):
@@ -154,6 +155,66 @@ final class SceneEventHookTests: XCTestCase {
         XCTAssertTrue(e.hookNames.contains("mediaPropertiesChanged"))
         e.callHook("mediaPropertiesChanged", eventJS: "new MediaPropertiesEvent({ artist: 'AR' })")
         XCTAssertEqual(e.evaluate(current: ""), "AR")
+    }
+
+    // MARK: - 사운드 트리거 브리지(getLayer/enumerateLayers → 네이티브 트랜스포트)
+
+    private func soundScene(_ names: [String]) throws -> (SceneScriptContext, SceneAudioPlayer) {
+        let scene = try XCTUnwrap(SceneScriptContext(soundNames: names))
+        let pkg = ScenePackage.assemble([(name: "sounds/s.wav", data: SceneAudioPlayerTests.silentWAV())])
+        let audio = SceneAudioPlayer()
+        audio.start(sounds: names.map {
+            SceneSound(id: 1, name: $0, sounds: ["sounds/s.wav"], volume: 0.5,
+                       playbackMode: "single", startSilent: true, minTime: 0, maxTime: 0)
+        }, package: pkg, settingVolume: 0)
+        scene.soundTransport = audio
+        return (scene, audio)
+    }
+
+    /// getLayer(사운드명) 이 사운드 레이어를 반환하고 .play() 가 실제 트랜스포트로 위임된다(단독 트리거).
+    func testGetLayerSoundTriggerPlaysTransport() throws {
+        let (scene, audio) = try soundScene(["dial.wav"])
+        let e = try XCTUnwrap(TextScriptEngine(
+            script: "export function cursorClick(ev){ thisScene.getLayer('dial.wav').play(); }", scene: scene))
+        XCTAssertFalse(audio.isPlaying(name: "dial.wav"))
+        e.callHook("cursorClick", eventJS: "({ worldPosition: new Vec3(0,0,0), button: 0 })")
+        XCTAssertTrue(audio.isPlaying(name: "dial.wav"), "getLayer('dial.wav').play() → 트랜스포트 재생")
+        audio.teardown()
+    }
+
+    /// 주크박스 패턴: enumerateLayers().filter(name.includes('.mp3')) → play/isPlaying/.volume 세터가
+    /// 전부 네이티브 트랜스포트로 왕복(상태가 진짜 — play 전 isPlaying false, 후 true).
+    func testEnumerateLayersJukeboxPattern() throws {
+        let (scene, audio) = try soundScene(["song1.mp3"])
+        let js = """
+        var found = null;
+        export function update(v){
+            thisScene.enumerateLayers().forEach(function(el){ if (el.name.indexOf('.mp3') >= 0) { found = el; } });
+            if (!found) { return 'none'; }
+            var before = found.isPlaying() ? '1' : '0';
+            found.play();
+            found.volume = 0.3;
+            return before + (found.isPlaying() ? '1' : '0');
+        }
+        """
+        let e = try XCTUnwrap(TextScriptEngine(script: js, scene: scene))
+        XCTAssertEqual(e.evaluate(current: ""), "01", "enumerate 로 곡 발견, play 전 미재생→후 재생")
+        XCTAssertTrue(audio.isPlaying(name: "song1.mp3"))
+        XCTAssertEqual(audio.volume(name: "song1.mp3"), 0.3, accuracy: 1e-6, "스크립트 .volume 세터가 트랜스포트 반영")
+        audio.teardown()
+    }
+
+    /// 트랜스포트 미연결(헤드리스/캡처)이면 getLayer(사운드).play() 는 안전 no-op(예외/크래시 없음).
+    func testSoundTriggerWithoutTransportIsSafeNoOp() throws {
+        let scene = try XCTUnwrap(SceneScriptContext(soundNames: ["x.wav"]))   // soundTransport 미연결
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v){
+            var l = thisScene.getLayer('x.wav');
+            l.play(); l.stop(); l.volume = 0.5;
+            return l.isPlaying() ? 'playing' : 'silent';
+        }
+        """, scene: scene))
+        XCTAssertEqual(e.evaluate(current: ""), "silent", "미연결 브리지는 isPlaying false, 크래시 없음")
     }
 
     func testWallpaperEngineLifecycleAndAnimationHooksCaptured() throws {

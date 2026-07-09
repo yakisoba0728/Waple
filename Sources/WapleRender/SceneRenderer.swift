@@ -54,7 +54,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     func makeScriptEngine(_ src: String, layerName: String? = nil) -> TextScriptEngine? {
         let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName) }
             ?? TextScriptEngine(script: src)
-        if let e = engine, !e.hookNames.isEmpty { eventEngines.append(e) }
+        if let e = engine, !e.hookNames.isEmpty {
+            eventEngines.append(e)
+            // cursorEnter/Leave 는 엔진이 바인드 레이어를 히트테스트(WE 규약 — 스크립트는 반응만).
+            // 레이어명을 기억했다가 mount 말미에 AABB 로 해석(buildHoverTargets).
+            if let ln = layerName, !e.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
+                hoverEngineLayers.append((e, ln))
+            }
+        }
         return engine
     }
 
@@ -89,6 +96,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 이벤트 훅을 export 한 스크립트 엔진들(mount 중 수집). 훅 이벤트는 전 엔진 브로드캐스트
     /// (WE 규약 — 스크립트가 worldPosition 으로 스스로 히트테스트한다: 실물 2902406982 드래그).
     var eventEngines: [TextScriptEngine] = []
+    /// cursorEnter/Leave 훅을 export 한 (엔진, 바인드 레이어명) — mount 중 수집, buildHoverTargets 가 AABB 해석.
+    var hoverEngineLayers: [(engine: TextScriptEngine, layerName: String)] = []
+    /// 호버 히트테스트 타깃: 엔진 + 레이어 스크린 AABB(씬 픽셀) + 현재 내부 여부(경계 넘을 때만 발송).
+    struct HoverTarget { let engine: TextScriptEngine; let bounds: CGRect; var inside: Bool }
+    var hoverTargets: [HoverTarget] = []
     var clickMonitor: Any?
     var mediaPoller: MediaPoller?
     /// 테스트 주입용(mount 전에 설정). nil 이면 AppleScript(Music/Spotify) 프로바이더.
@@ -112,6 +124,63 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func simulateCursorClick(x: Float, y: Float) {
         dispatchPointerEvent(hook: "cursorClick", x: x, y: y)
     }
+
+    // ── cursorEnter/cursorLeave (레이어 호버 — 코퍼스 47패키지) ────────────────────
+    /// 레이어 스크린 AABB(씬 픽셀 y-down, pointerSceneCoords 와 동일 공간). origin=중심, 반너비=|size×scale|/2.
+    /// 회전(angleZ)은 무시 — 축정렬 근사(호버 존은 대개 축정렬 UI). scale 은 mount 정적 스냅샷(퍼펫 합성 후 값).
+    static func layerHitRect(origin: Vec2, size: Vec2, scale: Vec2) -> CGRect {
+        let hw = abs(size.x * scale.x) * 0.5, hh = abs(size.y * scale.y) * 0.5
+        return CGRect(x: Double(origin.x - hw), y: Double(origin.y - hh), width: Double(2 * hw), height: Double(2 * hh))
+    }
+
+    /// mount 말미: 수집한 (엔진, 레이어명) → 레이어 AABB 로 호버 타깃 구성(이름 매칭 레이어 없으면 드롭).
+    func buildHoverTargets(doc: SceneDocument) {
+        guard !hoverEngineLayers.isEmpty else { return }
+        var rects: [String: CGRect] = [:]
+        for l in doc.layers where !l.name.isEmpty {
+            rects[l.name] = Self.layerHitRect(origin: l.origin, size: l.size, scale: l.scale)
+        }
+        hoverTargets = hoverEngineLayers.compactMap { pair in
+            rects[pair.layerName].map { HoverTarget(engine: pair.engine, bounds: $0, inside: false) }
+        }
+    }
+
+    /// 포인터가 바인드 레이어 경계를 넘을 때만 cursorEnter/Leave 발송(WE 규약 — 엔진이 히트테스트).
+    /// p=nil(창 밖)이면 내부였던 타깃 전부 이탈. 상태 변화 없으면 no-op(프레임마다 폴링해도 저비용).
+    func updateHover(at p: SIMD2<Float>?) {
+        guard !hoverTargets.isEmpty else { return }
+        var changed = false
+        for i in hoverTargets.indices {
+            let inside = p.map { hoverTargets[i].bounds.contains(CGPoint(x: Double($0.x), y: Double($0.y))) } ?? false
+            guard inside != hoverTargets[i].inside else { continue }
+            hoverTargets[i].inside = inside
+            let pos = p ?? SIMD2<Float>(0, 0)
+            hoverTargets[i].engine.callHook(inside ? "cursorEnter" : "cursorLeave",
+                eventJS: "({ worldPosition: new Vec3(\(pos.x), \(pos.y), 0), button: 0 })")
+            changed = true
+        }
+        if changed { mtkView?.needsDisplay = true }
+    }
+
+    /// cursorMove + cursorEnter/Leave 시뮬(테스트/헤드리스 — 씬 픽셀 좌표 직접 주입).
+    public func simulateCursorMove(x: Float, y: Float) {
+        updateHover(at: SIMD2<Float>(x, y))
+        dispatchPointerEvent(hook: "cursorMove", x: x, y: y)
+    }
+
+    // ── animationEvent (스크립트 측 배선 진입점 — 코퍼스 5패키지) ────────────────────
+    /// 애니메이션 마커 발송 진입점. WE 규약: 타임라인/퍼펫-워프가 명명된 마커에 도달하면
+    /// animationEvent(event{name}, value) 를 호출(실물 3737268876 Zelda: "surprise" 마커에 SFX 트리거).
+    /// **발화원(마커 검출)은 PuppetModel/SceneRenderer3D(수정 금지 파일)에 있어 여기선 진입점만 제공** —
+    /// 그쪽이 이 메서드를 호출하면 side-effect 훅이 발송된다(현재 호출자 없음). 프로퍼티-반환 의미(값 갱신)는
+    /// callHook 이 반환값을 쓰지 않아 미반영 — 프로퍼티 평가 루프 통합 필요(한계, 보고 참조).
+    func dispatchAnimationEvent(name: String) {
+        let q = (try? String(data: JSONEncoder().encode(name), encoding: .utf8) ?? "\"\"") ?? "\"\""
+        dispatchSceneEvent("animationEvent", eventJS: "new AnimationEvent({ name: \(q) })")
+    }
+
+    /// animationEvent 시뮬(테스트/헤드리스 — 발화원 대체).
+    public func simulateAnimationEvent(name: String) { dispatchAnimationEvent(name: name) }
 
     /// 전역 leftMouseDown/Up 모니터(데스크탑 창은 ignoresMouseEvents=true — 클릭은 다른 앱으로 가고
     /// 전역 모니터가 관찰한다, ParallaxController 의 mouseMoved 와 동일 규약. 권한 불요).
@@ -398,7 +467,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 씬 공유 JSContext — 3D 오브젝트/빌보드 스크립트와 2D buildLayers/buildTexts/효과 스크립트가 공유.
         // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
         // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
-        sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc))
+        sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc),
+                                         soundNames: doc.sounds.map { $0.name })
         // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
         // 메시/빌보드가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
         if let cam = doc.camera3D, !doc.objects3D.isEmpty {
@@ -470,7 +540,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 시차/효과 없어도 훅 있으면 기동) + 미디어(5초 폴링) — 소비 스크립트가 있을 때만.
         startClickMonitorIfNeeded()
         hasCursorMoveHook = eventEngines.contains(where: { $0.hookNames.contains("cursorMove") })
-        if hasCursorMoveHook {
+        buildHoverTargets(doc: doc)   // cursorEnter/Leave 레이어 AABB 해석
+        if hasCursorMoveHook || !hoverTargets.isEmpty {
             parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
             parallax.start()  // 이미 켜져 있으면 no-op(내부 nil 가드)
         }
@@ -500,6 +571,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             audio.start(sounds: doc.sounds, package: package,
                         settingVolume: VideoSettings.volume(id: project.id))
             sceneAudio = audio
+            // 씬 스크립트 사운드 트리거(getLayer(name).play()/isPlaying()/.volume)를 실제 트랜스포트에 배선.
+            // 헤드리스(오디오 미생성)에선 미연결 → 브리지가 안전 no-op(트리거는 무시, 캡처 결정성 유지).
+            sceneScript?.soundTransport = audio
         }
     }
 
@@ -529,6 +603,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 dispatchPointerEvent(hook: "cursorMove", x: p.x, y: p.y)
             }
         }
+        // cursorEnter/Leave: 경계 교차 시에만 발송(스로틀 불요 — 전이는 드물고 히트테스트는 저비용).
+        if !hoverTargets.isEmpty { updateHover(at: pointerSceneCoords()) }
         mtkView?.needsDisplay = true
     }
 
@@ -704,6 +780,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         mediaPoller?.stop(); mediaPoller = nil
         eventEngines = []
+        hoverEngineLayers = []; hoverTargets = []
         hasCursorMoveHook = false
         audioProvider?.stop(); audioProvider = nil; hasAudio = false
         mtkView?.removeFromSuperview()

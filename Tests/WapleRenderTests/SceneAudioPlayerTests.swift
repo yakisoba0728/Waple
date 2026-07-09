@@ -13,9 +13,18 @@ final class SceneAudioPlayerTests: XCTestCase {
         XCTAssertEqual(SceneAudioPlayer.effectiveVolume(author: -1, setting: 0.5), 0.0)    // 하한 클램프
     }
 
-    private func sound(_ paths: [String], mode: String = "loop", startSilent: Bool = false) -> SceneSound {
-        SceneSound(id: 1, sounds: paths, volume: 0.5, playbackMode: mode,
+    private func sound(_ paths: [String], mode: String = "loop", startSilent: Bool = false,
+                       name: String = "") -> SceneSound {
+        SceneSound(id: 1, name: name, sounds: paths, volume: 0.5, playbackMode: mode,
                    startSilent: startSilent, minTime: 0, maxTime: 0)
+    }
+
+    /// isPlaying(name:) 이 조건을 만족할 때까지 메인 런루프를 최대 deadline 초 스핀(자연종료 대기).
+    private func spin(until predicate: () -> Bool, timeout: TimeInterval = 3) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !predicate(), Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
     }
 
     /// ogg 는 이제 자체 디코드로 재생 가능 → 필터되지 않고 순서 보존(전 포맷 통과).
@@ -142,6 +151,89 @@ final class SceneAudioPlayerTests: XCTestCase {
         player.start(sounds: [sound(["sounds/a.ogg"])], package: pkg, settingVolume: 0)
         XCTAssertEqual(player.playerCount, 1)   // ogg 가 디코드되어 플레이어 장착됨
         XCTAssertTrue(player.isPlaying)
+        player.teardown()
+    }
+
+    // ── 이름 주소 트리거 트랜스포트(사운드 트리거 시스템) ────────────────────────
+
+    /// 이름 있는 startsilent 사운드: start 후엔 미재생(등록만) → play(name:) 트리거 시 재생.
+    func testNamedStartSilentRegistersButTriggersOnPlay() {
+        let pkg = ScenePackage.assemble([(name: "sounds/dial.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/dial.wav"], mode: "single", startSilent: true, name: "dial.wav")],
+                     package: pkg, settingVolume: 0)
+        XCTAssertFalse(player.isPlaying(name: "dial.wav"), "startsilent 은 시작 시 무음")
+        XCTAssertEqual(player.playerCount, 0)
+
+        player.play(name: "dial.wav")
+        XCTAssertTrue(player.isPlaying(name: "dial.wav"), "트리거 후 재생 상태")
+        XCTAssertEqual(player.playerCount, 1)
+        player.teardown()
+        XCTAssertFalse(player.isPlaying(name: "dial.wav"))
+    }
+
+    /// 상태가 진짜다: 곡 자연종료 시 isPlaying(name:) 이 false 로 떨어진다(주크박스 폴링 계약).
+    func testTriggeredSoundReportsNotPlayingAfterNaturalEnd() {
+        let pkg = ScenePackage.assemble([(name: "sounds/sfx.wav", data: Self.silentWAV(seconds: 0.15))])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/sfx.wav"], mode: "single", startSilent: true, name: "sfx")],
+                     package: pkg, settingVolume: 0)
+        player.play(name: "sfx")
+        XCTAssertTrue(player.isPlaying(name: "sfx"))
+        spin(until: { !player.isPlaying(name: "sfx") })
+        XCTAssertFalse(player.isPlaying(name: "sfx"), "0.15초 곡 자연종료 후 isPlaying false 이어야")
+        player.teardown()
+    }
+
+    /// stop(name:) → 즉시 정지.
+    func testStopByNameHaltsPlayback() {
+        let pkg = ScenePackage.assemble([(name: "sounds/loop.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/loop.wav"], mode: "loop", startSilent: true, name: "bgm")],
+                     package: pkg, settingVolume: 0)
+        player.play(name: "bgm")
+        XCTAssertTrue(player.isPlaying(name: "bgm"))
+        player.stop(name: "bgm")
+        XCTAssertFalse(player.isPlaying(name: "bgm"))
+        player.teardown()
+    }
+
+    /// .volume 게터/세터: 스크립트가 세팅한 오서 볼륨이 그대로 회수된다(설정 배수는 감춤).
+    func testVolumeGetterSetterRoundTrips() {
+        let pkg = ScenePackage.assemble([(name: "sounds/m.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/m.wav"], mode: "loop", startSilent: true, name: "music")],
+                     package: pkg, settingVolume: 0.5)
+        XCTAssertEqual(player.volume(name: "music"), 0.5, accuracy: 1e-6)   // 오서 볼륨(sound helper 0.5)
+        player.setVolume(name: "music", 0.25)
+        XCTAssertEqual(player.volume(name: "music"), 0.25, accuracy: 1e-6)
+        player.play(name: "music")
+        player.setVolume(name: "music", 0.8)   // 재생 중 변경도 안전
+        XCTAssertEqual(player.volume(name: "music"), 0.8, accuracy: 1e-6)
+        player.teardown()
+    }
+
+    /// 미등록 이름은 전 트랜스포트 연산이 안전 no-op(스크립트 오타/부재 레이어 방어).
+    func testUnknownNameIsSafeNoOp() {
+        let player = SceneAudioPlayer()
+        player.play(name: "nope")
+        player.stop(name: "nope")
+        player.setVolume(name: "nope", 0.5)
+        XCTAssertFalse(player.isPlaying(name: "nope"))
+        XCTAssertEqual(player.volume(name: "nope"), 0)
+    }
+
+    /// 재트리거는 처음부터 재시작(클릭 SFX 반복 클릭 규약) — 여전히 재생 상태.
+    func testRetriggerRestartsPlayback() {
+        let pkg = ScenePackage.assemble([(name: "sounds/click.wav", data: Self.silentWAV())])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/click.wav"], mode: "single", startSilent: true, name: "click")],
+                     package: pkg, settingVolume: 0)
+        player.play(name: "click")
+        XCTAssertTrue(player.isPlaying(name: "click"))
+        player.play(name: "click")   // 재트리거
+        XCTAssertTrue(player.isPlaying(name: "click"), "재트리거 후에도 재생 중")
+        XCTAssertEqual(player.playerCount, 1)
         player.teardown()
     }
 
