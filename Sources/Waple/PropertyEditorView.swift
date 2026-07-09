@@ -31,7 +31,7 @@ struct PropertyEditorView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        ForEach(PropertyConditionEvaluator.visibleIndices(in: props), id: \.self) { i in
+                        ForEach(PropertyDecoration.visibleIndices(in: props), id: \.self) { i in
                             control(for: i)
                         }
                     }
