@@ -184,6 +184,64 @@ enum PlaylistScheduling {
     }
 }
 
+/// 정적 배경 동기화(작업 1): 실제 macOS 바탕화면을 현재 배경 스틸로 덮어쓸 때의 순수 결정 로직.
+enum StillDesktopSync {
+    /// 이 화면의 현재 바탕화면을 '원본'으로 백업할지.
+    /// - 이미 백업이 있으면 유지(false) — 최초 덮어쓰기 직전 값만 원본으로 본다.
+    /// - 현재 경로가 우리 still 디렉터리 내부면 자기 오염이므로 백업 안 함(false):
+    ///   앱이 스틸을 깐 채 재실행됐을 때(예: 크래시 후) 우리 스틸을 '원본'으로 저장해
+    ///   복원을 영구 무의미화하는 것을 막는 핵심 가드.
+    static func shouldBackupOriginal(currentPath: String?, stillDirPath: String, hasBackup: Bool) -> Bool {
+        guard !hasBackup, let currentPath, !currentPath.isEmpty else { return false }
+        return !isUnder(currentPath, dir: stillDirPath)
+    }
+
+    /// path 가 dir 내부(또는 동일)인가 — 표준화 후 경로 프리픽스 비교.
+    static func isUnder(_ path: String, dir: String) -> Bool {
+        let p = (path as NSString).standardizingPath
+        let d = (dir as NSString).standardizingPath
+        if p == d { return true }
+        return p.hasPrefix(d.hasSuffix("/") ? d : d + "/")
+    }
+}
+
+/// 최근 배경 목록(작업 6): 적용 성공 id 를 선두 삽입·중복 제거·상한 유지(순수).
+enum RecentWallpapers {
+    static func push(_ id: String, into list: [String], max: Int = 10) -> [String] {
+        var out = list.filter { $0 != id }   // 중복 제거
+        out.insert(id, at: 0)                // 선두 삽입(최신)
+        if out.count > max { out.removeLast(out.count - max) }
+        return out
+    }
+}
+
+/// 가림 일시정지 모드(작업 3): 라디오 선택값 ↔ (사용 여부, 커버 임계값).
+enum OcclusionMode {
+    /// represented 값(-1=사용안함, 0=기존 즉시, 0.3/0.5/0.8=커버 비율)을 (enabled, threshold) 로.
+    static func decode(_ mode: Double) -> (enabled: Bool, threshold: Double) {
+        mode < 0 ? (false, 0) : (true, mode)
+    }
+
+    /// 현재 상태가 이 라디오 값과 일치하는가(체크 표시용).
+    static func isSelected(_ mode: Double, enabled: Bool, threshold: Double) -> Bool {
+        if mode < 0 { return !enabled }
+        return enabled && abs(threshold - mode) < 0.001
+    }
+}
+
+/// 잠금화면 스틸(작업 2): `dscl . -read /Users/<user> GeneratedUID` 출력 파싱(순수).
+enum GeneratedUID {
+    /// dscl 출력에서 UID 추출. 형식은 "GeneratedUID: <uuid>"(같은 줄) 또는 값이 다음 줄일 수 있어
+    /// 라벨 이후의 첫 공백 구분 토큰을 UID 로 본다. 라벨 부재/값 없음 → nil.
+    static func parse(dsclOutput: String) -> String? {
+        guard let range = dsclOutput.range(of: "GeneratedUID:") else { return nil }
+        let after = dsclOutput[range.upperBound...]
+        guard let uid = after.split(whereSeparator: { $0.isWhitespace }).first.map(String.init),
+              !uid.isEmpty else { return nil }
+        return uid
+    }
+}
+
 /// 속성 편집 UI 결정(순수).
 enum PropertyControl {
     enum Kind: Equatable {

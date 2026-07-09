@@ -127,6 +127,58 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(store.entries.last?.title, "A-new")
     }
 
+    // MARK: - 작업 4: zip 가져오기
+
+    func testFindProjectRootsRecursesAndStopsAtRoot() throws {
+        let tree = tmp.appendingPathComponent("tree", isDirectory: true)
+        let wrapped = tree.appendingPathComponent("wrap/111", isDirectory: true)   // 중첩된 배경
+        let top = tree.appendingPathComponent("222", isDirectory: true)
+        let nested = wrapped.appendingPathComponent("assets", isDirectory: true)   // 배경 내부 하위(무시 대상)
+        for d in [wrapped, top, nested] {
+            try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: d.appendingPathComponent("project.json"))
+        }
+        let roots = ZipImporter.findProjectRoots(in: tree)
+        XCTAssertEqual(Set(roots.map(\.lastPathComponent)), ["111", "222"],
+                       "중첩 wrapper 는 찾되, 배경 루트 내부 하위 폴더는 무시")
+    }
+
+    func testImportZipExtractsMovesAndImports() throws {
+        // wrapper/111/project.json 구조를 --keepParent zip 으로 만들어 재귀 탐색·이동 검증.
+        let pkg = tmp.appendingPathComponent("pkg", isDirectory: true)
+        let inner = pkg.appendingPathComponent("111", isDirectory: true)
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let json = #"{"type":"video","file":"wallpaper.mp4","preview":"preview.jpg","title":"zipwp"}"#
+        try Data(json.utf8).write(to: inner.appendingPathComponent("project.json"))
+        try Data("dummy".utf8).write(to: inner.appendingPathComponent("wallpaper.mp4"))
+
+        let zipURL = tmp.appendingPathComponent("wp.zip")
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-c", "-k", "--keepParent", pkg.path, zipURL.path]
+        try ditto.run(); ditto.waitUntilExit()
+        XCTAssertEqual(ditto.terminationStatus, 0, "픽스처 zip 생성")
+
+        let store = LibraryStore(baseDirectory: base())
+        let imported = store.importZip(zipURL)
+        XCTAssertEqual(imported.map(\.id), ["111"])
+        XCTAssertEqual(store.entries.map(\.id), ["111"])
+
+        // 관리 위치로 옮겨져, 임시 정리 후에도 북마크가 유효해야 한다.
+        let resolved = store.resolveFolderURL(for: imported[0])
+        XCTAssertNotNil(resolved)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: resolved!.appendingPathComponent("project.json").path))
+    }
+
+    func testImportZipExtractionFailureReturnsEmpty() throws {
+        let store = LibraryStore(baseDirectory: base())
+        let imported = store.importZip(tmp.appendingPathComponent("nope.zip"),
+                                       extract: { _, _ in false })
+        XCTAssertTrue(imported.isEmpty)
+        XCTAssertTrue(store.entries.isEmpty)
+    }
+
     func testResolveFolderURLReturnsOriginalLocation() throws {
         let folder = try makeWallpaperFolder(id: "111")
         let store = LibraryStore(baseDirectory: base())

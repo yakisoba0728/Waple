@@ -322,6 +322,130 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(r.upperBound, 1)
     }
 
+    // MARK: - StillDesktopSync (정적 배경 동기화 — 원본 백업 판정)
+
+    func testStillBackup_freshScreen_backsUp() {
+        XCTAssertTrue(StillDesktopSync.shouldBackupOriginal(
+            currentPath: "/Users/x/wall.jpg", stillDirPath: "/lib/still", hasBackup: false),
+            "백업 없음 + 외부 경로 → 원본 저장")
+    }
+
+    func testStillBackup_alreadyBackedUp_skips() {
+        XCTAssertFalse(StillDesktopSync.shouldBackupOriginal(
+            currentPath: "/Users/x/wall.jpg", stillDirPath: "/lib/still", hasBackup: true),
+            "이미 백업 있음 → 유지(덮어쓰지 않음)")
+    }
+
+    func testStillBackup_selfPollutionGuard_skips() {
+        // 우리 스틸이 이미 깔린 상태(재실행)에서 그걸 '원본'으로 저장하면 복원이 무의미해진다.
+        XCTAssertFalse(StillDesktopSync.shouldBackupOriginal(
+            currentPath: "/lib/still/wp1.png", stillDirPath: "/lib/still", hasBackup: false),
+            "현재값이 still 디렉터리 내부 → 자기 오염 방지로 백업 안 함")
+    }
+
+    func testStillBackup_nilOrEmptyCurrent_skips() {
+        XCTAssertFalse(StillDesktopSync.shouldBackupOriginal(
+            currentPath: nil, stillDirPath: "/lib/still", hasBackup: false))
+        XCTAssertFalse(StillDesktopSync.shouldBackupOriginal(
+            currentPath: "", stillDirPath: "/lib/still", hasBackup: false))
+    }
+
+    func testStillIsUnder_prefixBoundary() {
+        XCTAssertTrue(StillDesktopSync.isUnder("/lib/still/a.png", dir: "/lib/still"))
+        XCTAssertTrue(StillDesktopSync.isUnder("/lib/still", dir: "/lib/still"), "동일 경로")
+        XCTAssertFalse(StillDesktopSync.isUnder("/lib/stillage/a.png", dir: "/lib/still"),
+            "형제 프리픽스(stillage)는 내부 아님")
+    }
+
+    // MARK: - RecentWallpapers (작업 6: 최근 목록 push)
+
+    func testRecentPush_frontInsertAndDedup() {
+        XCTAssertEqual(RecentWallpapers.push("a", into: []), ["a"])
+        XCTAssertEqual(RecentWallpapers.push("b", into: ["a"]), ["b", "a"], "선두 삽입")
+        XCTAssertEqual(RecentWallpapers.push("a", into: ["b", "a"]), ["a", "b"],
+                       "재적용 → 중복 제거 후 선두")
+    }
+
+    func testRecentPush_capsAtMax() {
+        let ten = (0..<10).map { "id\($0)" }
+        let out = RecentWallpapers.push("new", into: ten)
+        XCTAssertEqual(out.count, 10)
+        XCTAssertEqual(out.first, "new")
+        XCTAssertFalse(out.contains("id9"), "가장 오래된 것이 밀려남")
+    }
+
+    // MARK: - VideoImport (작업 5: 원시 동영상 → 최소 project.json 배경)
+
+    func testVideoImportPreparesManagedFolderAndProjectJSON() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WapleVI-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let base = tmp.appendingPathComponent("base", isDirectory: true)
+        let fake = tmp.appendingPathComponent("myclip.mp4")
+        try Data("not-really-a-video".utf8).write(to: fake)  // 미리보기 추출은 실패하지만 prepare 는 성공해야
+
+        guard let folder = VideoImport.prepare(from: fake, baseDirectory: base) else {
+            return XCTFail("prepare 는 관리 폴더 URL 을 반환해야 한다")
+        }
+        let fm = FileManager.default
+        XCTAssertEqual(folder.lastPathComponent, "myclip")
+        XCTAssertTrue(fm.fileExists(atPath: folder.appendingPathComponent("myclip.mp4").path), "동영상 복사")
+        XCTAssertTrue(fm.fileExists(atPath: folder.appendingPathComponent("project.json").path), "project.json 기록")
+        let project = try ProjectJSONParser.parse(folderURL: folder)
+        XCTAssertEqual(project.type, .video)
+        XCTAssertEqual(project.fileName, "myclip.mp4")
+        XCTAssertEqual(project.previewName, "preview.jpg")
+    }
+
+    func testVideoImportIsVideoFile() {
+        XCTAssertTrue(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.MP4")))
+        XCTAssertTrue(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.mov")))
+        XCTAssertFalse(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.webm")))
+        XCTAssertFalse(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/folder")))
+    }
+
+    // MARK: - OcclusionMode (가림 임계값 라디오 ↔ 상태)
+
+    func testOcclusionModeDecode() {
+        XCTAssertFalse(OcclusionMode.decode(-1).enabled, "사용 안 함")
+        XCTAssertTrue(OcclusionMode.decode(0).enabled)
+        XCTAssertEqual(OcclusionMode.decode(0).threshold, 0, "기존 = 켜짐 + 임계값 0")
+        XCTAssertEqual(OcclusionMode.decode(0.5).threshold, 0.5)
+    }
+
+    func testOcclusionModeIsSelected() {
+        XCTAssertTrue(OcclusionMode.isSelected(-1, enabled: false, threshold: 0), "꺼짐 → '사용 안 함' 체크")
+        XCTAssertFalse(OcclusionMode.isSelected(-1, enabled: true, threshold: 0))
+        XCTAssertTrue(OcclusionMode.isSelected(0, enabled: true, threshold: 0), "켜짐+0 → '기존' 체크")
+        XCTAssertFalse(OcclusionMode.isSelected(0, enabled: false, threshold: 0))
+        XCTAssertTrue(OcclusionMode.isSelected(0.5, enabled: true, threshold: 0.5))
+        XCTAssertFalse(OcclusionMode.isSelected(0.5, enabled: true, threshold: 0.3))
+    }
+
+    // MARK: - GeneratedUID (잠금화면 스틸 — dscl 출력 파싱)
+
+    func testGeneratedUID_sameLine() {
+        XCTAssertEqual(
+            GeneratedUID.parse(dsclOutput: "GeneratedUID: ABCD1234-5678-90AB-CDEF-1234567890AB\n"),
+            "ABCD1234-5678-90AB-CDEF-1234567890AB")
+    }
+
+    func testGeneratedUID_valueOnNextLine() {
+        // dscl 은 값이 다음 줄에 오는 형식도 낸다.
+        XCTAssertEqual(
+            GeneratedUID.parse(dsclOutput: "GeneratedUID:\n ABCD1234-5678\n"),
+            "ABCD1234-5678")
+    }
+
+    func testGeneratedUID_missingOrEmpty_nil() {
+        XCTAssertNil(GeneratedUID.parse(dsclOutput: "No such key: GeneratedUID\n"),
+            "라벨 없음 → nil")
+        XCTAssertNil(GeneratedUID.parse(dsclOutput: "GeneratedUID:\n"),
+            "라벨만 있고 값 없음 → nil")
+        XCTAssertNil(GeneratedUID.parse(dsclOutput: ""))
+    }
+
     func testPropertyControlKindHandlesCorpusTypesCaseInsensitively() {
         XCTAssertEqual(PropertyControl.kind(forType: "Text"), .displayOnly)
         XCTAssertEqual(PropertyControl.kind(forType: ""), .displayOnly)

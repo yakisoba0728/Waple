@@ -26,6 +26,73 @@ struct DesktopVisibilityMonitor {
         !windows.contains { isBlocking($0, currentProcessId: currentProcessId, screenFrames: screenFrames) }
     }
 
+    /// 커버 비율 임계값 판정(작업 3). `threshold<=0` 이면 기존 동작(차단 창 1개라도 있으면 가림).
+    /// `threshold>0` 이면 차단 창 합집합 커버 비율이 임계값 미만일 때만 데스크탑이 보인다고 본다
+    /// (WaifuX 30–100% 관행 — 살짝 가린 정도로는 일시정지하지 않음).
+    static func isDesktopVisible(
+        windows: [WindowSnapshot],
+        currentProcessId: Int,
+        screenFrames: [CGRect],
+        threshold: Double
+    ) -> Bool {
+        guard threshold > 0 else {
+            return isDesktopVisible(windows: windows, currentProcessId: currentProcessId, screenFrames: screenFrames)
+        }
+        let blocking = windows
+            .filter { isBlocking($0, currentProcessId: currentProcessId, screenFrames: screenFrames) }
+            .map(\.bounds)
+        return coverageRatio(blocking: blocking, screenFrames: screenFrames) < threshold
+    }
+
+    /// 차단 창들의 합집합 면적(화면에 클리핑) / 전체 화면 면적. 0…1. 화면 면적 0 → 0.
+    /// 화면은 서로 겹치지 않으므로(타일링) 화면별 클리핑 후 합산이 곧 전역 커버 면적이다.
+    static func coverageRatio(blocking: [CGRect], screenFrames: [CGRect]) -> Double {
+        let screenArea = screenFrames.reduce(0.0) { $0 + area($1) }
+        guard screenArea > 0 else { return 0 }
+        var covered = 0.0
+        for screen in screenFrames {
+            let clipped = blocking.map { $0.intersection(screen) }.filter { !$0.isNull && !$0.isEmpty }
+            covered += unionArea(clipped)
+        }
+        return min(1.0, covered / screenArea)
+    }
+
+    /// 사각형 합집합 면적(좌표 압축 — 정확, 겹침 중복 없음).
+    /// ponytail: x-슬랩마다 y-구간 합집합을 재는 O(n²) 스윕. 창 수 n 이 작아 충분.
+    static func unionArea(_ rects: [CGRect]) -> Double {
+        let xs = Set(rects.flatMap { [Double($0.minX), Double($0.maxX)] }).sorted()
+        guard xs.count >= 2 else { return 0 }
+        var total = 0.0
+        for i in 0..<(xs.count - 1) {
+            let x0 = xs[i], x1 = xs[i + 1]
+            let width = x1 - x0
+            guard width > 0 else { continue }
+            let midX = (x0 + x1) / 2
+            let intervals = rects
+                .filter { Double($0.minX) <= midX && midX <= Double($0.maxX) }
+                .map { (Double($0.minY), Double($0.maxY)) }
+            total += width * unionLength(intervals)
+        }
+        return total
+    }
+
+    /// 1D 구간 합집합 길이.
+    static func unionLength(_ intervals: [(Double, Double)]) -> Double {
+        let sorted = intervals.filter { $0.1 > $0.0 }.sorted { $0.0 < $1.0 }
+        guard let first = sorted.first else { return 0 }
+        var total = 0.0
+        var curLo = first.0, curHi = first.1
+        for (lo, hi) in sorted.dropFirst() {
+            if lo > curHi {
+                total += curHi - curLo
+                curLo = lo; curHi = hi
+            } else {
+                curHi = Swift.max(curHi, hi)
+            }
+        }
+        return total + (curHi - curLo)
+    }
+
     /// 창 하나가 데스크탑을 가리는가.
     static func isBlocking(
         _ w: WindowSnapshot,
@@ -53,12 +120,13 @@ struct DesktopVisibilityMonitor {
 
     // MARK: - 라이브 스냅샷 (통합 지점)
 
-    /// 현재 화면 상태로 데스크탑 가림 여부를 판정.
-    func isDesktopVisible() -> Bool {
+    /// 현재 화면 상태로 데스크탑 가림 여부를 판정. `threshold` 기본 0 = 기존 동작(무회귀).
+    func isDesktopVisible(threshold: Double = 0) -> Bool {
         Self.isDesktopVisible(
             windows: currentSnapshots(),
             currentProcessId: Int(ProcessInfo.processInfo.processIdentifier),
-            screenFrames: NSScreen.screens.map(\.frame)
+            screenFrames: NSScreen.screens.map(\.frame),
+            threshold: threshold
         )
     }
 
