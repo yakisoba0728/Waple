@@ -126,6 +126,37 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         XCTAssertEqual(tex.frames[1].x, 256); XCTAssertEqual(tex.frames[1].height, 256)
     }
 
+    /// 이미지 레이어 스프라이트 재생: 씬 시간 → 프레임 인덱스(가변 frametime 누적 + 루프 랩).
+    /// 파티클 sheetFrameIndex(시퀀스→시트 폴드)와 별개 — 이쪽은 시간축 재생 클럭(정본 TexFrame.time).
+    func testSpriteFrameIndex_constantFrametimeLoops() {
+        let f = { (t: Float) in TexImage.TexFrame(imageId: 0, time: t, x: 0, y: 0, width: 1, height: 1) }
+        let frames = [f(0.2), f(0.2), f(0.2)]   // total 0.6
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.0), 0)
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.1), 0)
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.25), 1)
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.5), 2)
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.65), 0, "wrap: 0.65 mod 0.6 = 0.05")
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 1.25), 0, "wrap: 1.25 mod 0.6 = 0.05")
+    }
+
+    func testSpriteFrameIndex_variableFrametime() {
+        let f = { (t: Float) in TexImage.TexFrame(imageId: 0, time: t, x: 0, y: 0, width: 1, height: 1) }
+        let frames = [f(0.1), f(0.3), f(0.1)]   // 경계 0.1 / 0.4 / 0.5 (total 0.5)
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.05), 0)
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.1), 1, "긴 중간 프레임 진입")
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.39), 1)
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.4), 2)
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: frames, time: 0.55), 0, "wrap → 0.05 → frame0")
+    }
+
+    func testSpriteFrameIndex_edgeCases() {
+        let f = { (t: Float) in TexImage.TexFrame(imageId: 0, time: t, x: 0, y: 0, width: 1, height: 1) }
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: [], time: 1.0), 0, "무프레임 → 0")
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: [f(0.2)], time: 5.0), 0, "1프레임 정지 → 항상 0")
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: [f(0.2), f(0.2)], time: -0.1), 1, "음수: -0.1 mod 0.4 = 0.3 → frame1")
+        XCTAssertEqual(TexImage.spriteFrameIndex(frames: [f(0.2), f(0.2)], time: .infinity), 0, "비유한 → 0")
+    }
+
     func testSheetFrameIndex_mirrorPingpong() {
         // fc=5, mirror: 주기 8 — 0,1,2,3,4,3,2,1,0,1…
         let expect = [0, 1, 2, 3, 4, 3, 2, 1, 0, 1]

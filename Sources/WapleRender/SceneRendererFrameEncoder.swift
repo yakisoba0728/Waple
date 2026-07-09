@@ -510,16 +510,47 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
+    /// 스프라이트시트 레이어(SPRITESHEET 콤보 + TEXS 다중 프레임)의 **현재 프레임**을 프레임 크기
+    /// 텍스처로 추출한다(raw blit). 씬 시간 → 프레임 인덱스 → 아틀라스 서브렉트(멀티페이지는 frame.y 에
+    /// 페이지 오프셋 반영됨)를 새 텍스처로 복사. 이 텍스처가 하류(효과 체인 src, 또는 무효과 시
+    /// displayTexture)가 되어 효과·컴포지트 쿼드는 시트를 모른 채 프레임 1장만 다룬다 — 효과+스프라이트가
+    /// 자연히 맞물린다(그래서 UV-서브렉트-쿼드가 아니라 프레임 추출로 통일). **반드시 raw blit** — 셰이더
+    /// 드로우로 뽑으면 tint/premultiply 가 걸려 straight-alpha 규약(§3, 최종 합성서 1회 premult) 위반.
+    /// ponytail: blit 은 회전 미지원(코퍼스 회전 프레임 0건) + 프레임 dims 균일 가정(가변 시 효과 dst 스트레치,
+    /// 코퍼스 균일). 경계는 엄격 클램프 — 잘못된 TEXS 렉트라도 blit validation 크래시 없이 잘라낸다.
+    func spriteFrameTexture(_ layer: GPULayer, time: Float, device: MTLDevice, cb: MTLCommandBuffer) -> MTLTexture {
+        let atlas = layer.texture
+        let aw = atlas.width, ah = atlas.height
+        let fr = layer.frames[TexImage.spriteFrameIndex(frames: layer.frames, time: time)]
+        let sx = max(0, min(aw - 1, Int(fr.atlasX.rounded())))
+        let sy = max(0, min(ah - 1, Int(fr.atlasY.rounded())))
+        let fw = max(1, min(aw - sx, Int(fr.atlasWidth.rounded())))
+        let fh = max(1, min(ah - sy, Int(fr.atlasHeight.rounded())))
+        guard let dst = pooledOffscreen(fw, fh, device),
+              let blit = cb.makeBlitCommandEncoder() else { return atlas }
+        blit.copy(from: atlas, sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: sx, y: sy, z: 0),
+                  sourceSize: MTLSize(width: fw, height: fh, depth: 1),
+                  to: dst, destinationSlice: 0, destinationLevel: 0,
+                  destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+        return dst
+    }
+
     /// 효과가 있는 레이어는 원본 텍스처를 첫 src 로 삼아 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.
-    /// 라이브 draw 와 헤드리스 captureFrames 가 공유.
+    /// 스프라이트시트 레이어는 원본 대신 **현재 프레임 텍스처**를 base 로 삼는다(효과 유무 공통 — 프레임
+    /// 선택이 효과 체인 앞에 오므로 효과+스프라이트가 정상). 라이브 draw 와 헤드리스 captureFrames 가 공유.
     func buildDisplayTextures(device: MTLDevice, queue: MTLCommandQueue, time: Float, cb: MTLCommandBuffer) -> [MTLTexture] {
         beginFramePool()  // 프레임 시작: 모든 풀 텍스처를 재사용 가능 상태로 + 미사용 크기 evict
         var out: [MTLTexture] = []
         for layer in layers {
+            // 스프라이트: 현재 프레임 추출(무프레임 레이어는 원본 그대로 — 무회귀).
+            let base = layer.frames.isEmpty ? layer.texture
+                                            : spriteFrameTexture(layer, time: time, device: device, cb: cb)
             // 컴포지션 레이어의 효과는 사전 계산 불가(src = 그 시점 프레임버퍼 스냅샷) — draw 루프에서 처리.
-            if layer.effects.isEmpty || layer.isFrameBuffer { out.append(layer.texture); continue }
-            // 베이스 복사 불필요: 원본 텍스처를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
-            var current = layer.texture
+            if layer.effects.isEmpty || layer.isFrameBuffer { out.append(base); continue }
+            // 베이스 복사 불필요: base 를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
+            var current = base
             for eff in layer.effects {
                 guard let next = pooledOffscreen(layer.texWidth, layer.texHeight, device) else { break }
                 applyEffect(eff, src: current, dst: next, time: time, cb: cb)
