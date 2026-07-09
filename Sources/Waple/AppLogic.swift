@@ -205,6 +205,20 @@ enum StillDesktopSync {
     }
 }
 
+/// 가림 일시정지 모드(작업 3): 라디오 선택값 ↔ (사용 여부, 커버 임계값).
+enum OcclusionMode {
+    /// represented 값(-1=사용안함, 0=기존 즉시, 0.3/0.5/0.8=커버 비율)을 (enabled, threshold) 로.
+    static func decode(_ mode: Double) -> (enabled: Bool, threshold: Double) {
+        mode < 0 ? (false, 0) : (true, mode)
+    }
+
+    /// 현재 상태가 이 라디오 값과 일치하는가(체크 표시용).
+    static func isSelected(_ mode: Double, enabled: Bool, threshold: Double) -> Bool {
+        if mode < 0 { return !enabled }
+        return enabled && abs(threshold - mode) < 0.001
+    }
+}
+
 /// 잠금화면 스틸(작업 2): `dscl . -read /Users/<user> GeneratedUID` 출력 파싱(순수).
 enum GeneratedUID {
     /// dscl 출력에서 UID 추출. 형식은 "GeneratedUID: <uuid>"(같은 줄) 또는 값이 다음 줄일 수 있어

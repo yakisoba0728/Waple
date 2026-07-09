@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let visibilityMonitor = DesktopVisibilityMonitor()
     private var occlusionTimer: Timer?
     private var pausedByOcclusion = false   // 이 모니터가 정지시켰는지(수동 정지와 사유 분리)
-    private weak var occlusionToggleItem: NSMenuItem?
+    private weak var occlusionMenu: NSMenu?
 
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
     private var stillSyncWork: DispatchWorkItem?
@@ -36,6 +36,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pauseWhenOccluded: Bool {
         get { UserDefaults.standard.bool(forKey: Self.pauseWhenOccludedKey) }   // 기본 false
         set { UserDefaults.standard.set(newValue, forKey: Self.pauseWhenOccludedKey) }
+    }
+
+    // 가림 커버 임계값(작업 3): 0=기존(창 존재 시 즉시), 0.3/0.5/0.8=합집합 커버 비율. 기본 0.
+    private static let occlusionThresholdKey = "occlusionCoverageThreshold"
+    private var occlusionCoverageThreshold: Double {
+        get { UserDefaults.standard.double(forKey: Self.occlusionThresholdKey) }   // 기본 0
+        set { UserDefaults.standard.set(newValue, forKey: Self.occlusionThresholdKey) }
     }
 
     @objc private func setFitMode(_ sender: NSMenuItem) {
@@ -99,12 +106,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         plItem.submenu = plMenu
         menu.addItem(plItem)
         self.playlistMenu = plMenu
-        // 데스크탑이 다른 창에 가려지면 렌더러 일시정지(옵션, 기본 꺼짐).
-        let occItem = NSMenuItem(title: "가려지면 일시정지",
-                                 action: #selector(toggleOcclusionPause), keyEquivalent: "")
-        occItem.state = pauseWhenOccluded ? .on : .off
+        // 데스크탑이 다른 창에 가려지면 렌더러 일시정지(옵션, 기본 꺼짐). 서브메뉴로 커버 임계값 선택(작업 3).
+        let occItem = NSMenuItem(title: "가려지면 일시정지", action: nil, keyEquivalent: "")
+        occItem.submenu = makeOcclusionMenu()
         menu.addItem(occItem)
-        self.occlusionToggleItem = occItem
         menu.addItem(NSMenuItem(title: "웹 조작 창 열기",
                                 action: #selector(openWebInteraction), keyEquivalent: "i"))
         menu.addItem(NSMenuItem(title: "정지 배경으로 설정",
@@ -391,9 +396,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 데스크탑 가림 자동 일시정지 (작업 2)
 
-    @objc private func toggleOcclusionPause() {
-        pauseWhenOccluded.toggle()
-        occlusionToggleItem?.state = pauseWhenOccluded ? .on : .off
+    /// 커버 임계값 라디오 서브메뉴. represented 값: -1=사용안함, 0=기존(즉시), 0.3/0.5/0.8=비율.
+    private func makeOcclusionMenu() -> NSMenu {
+        let m = NSMenu()
+        let options: [(String, Double)] = [
+            ("사용 안 함", -1),
+            ("창이 뜨면 즉시(기존)", 0),
+            ("30% 이상 가려지면", 0.30),
+            ("50% 이상 가려지면", 0.50),
+            ("80% 이상 가려지면", 0.80),
+        ]
+        for (title, mode) in options {
+            let it = NSMenuItem(title: title, action: #selector(setOcclusionMode(_:)), keyEquivalent: "")
+            it.representedObject = mode
+            m.addItem(it)
+        }
+        occlusionMenu = m
+        updateOcclusionMenuStates()
+        return m
+    }
+
+    private func updateOcclusionMenuStates() {
+        occlusionMenu?.items.forEach {
+            guard let mode = $0.representedObject as? Double else { return }
+            $0.state = OcclusionMode.isSelected(mode, enabled: pauseWhenOccluded,
+                                                threshold: occlusionCoverageThreshold) ? .on : .off
+        }
+    }
+
+    @objc private func setOcclusionMode(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? Double else { return }
+        let (enabled, threshold) = OcclusionMode.decode(mode)
+        pauseWhenOccluded = enabled
+        occlusionCoverageThreshold = threshold
+        updateOcclusionMenuStates()
         scheduleOcclusionTimer()
     }
 
@@ -412,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkOcclusion() {
-        let visible = visibilityMonitor.isDesktopVisible()
+        let visible = visibilityMonitor.isDesktopVisible(threshold: occlusionCoverageThreshold)
         if !visible, !pausedByOcclusion {
             renderers.forEach { $0.pause() }
             pausedByOcclusion = true

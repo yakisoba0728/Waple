@@ -66,6 +66,63 @@ final class DesktopIntegrationTests: XCTestCase {
         XCTAssertFalse(visible([snap(owner: "Finder", w: 1000, h: 700)], screens: [screen]))
     }
 
+    // MARK: - 작업 3(신규): 커버 비율 임계값 (기존 판정 무회귀 + 합집합 면적)
+
+    func testUnionArea_disjointRectsSum() {
+        let a = CGRect(x: 0, y: 0, width: 10, height: 10)
+        let b = CGRect(x: 20, y: 0, width: 10, height: 10)
+        XCTAssertEqual(DesktopVisibilityMonitor.unionArea([a, b]), 200, accuracy: 0.001)
+    }
+
+    func testUnionArea_overlapNotDoubleCounted() {
+        let a = CGRect(x: 0, y: 0, width: 10, height: 10)   // 100
+        let b = CGRect(x: 5, y: 5, width: 10, height: 10)   // 100, 겹침 25
+        XCTAssertEqual(DesktopVisibilityMonitor.unionArea([a, b]), 175, accuracy: 0.001)
+    }
+
+    func testUnionArea_containedRectAbsorbed() {
+        let big = CGRect(x: 0, y: 0, width: 10, height: 10)
+        let small = CGRect(x: 2, y: 2, width: 3, height: 3)
+        XCTAssertEqual(DesktopVisibilityMonitor.unionArea([big, small]), 100, accuracy: 0.001)
+    }
+
+    func testCoverageRatio_halfScreen() {
+        let screen = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let win = CGRect(x: 0, y: 0, width: 50, height: 100)   // 50%
+        XCTAssertEqual(DesktopVisibilityMonitor.coverageRatio(blocking: [win], screenFrames: [screen]),
+                       0.5, accuracy: 0.001)
+    }
+
+    func testCoverageRatio_clipsWindowToScreen() {
+        let screen = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let win = CGRect(x: 50, y: 0, width: 200, height: 100)  // 화면 밖 초과분은 클립 → 50%
+        XCTAssertEqual(DesktopVisibilityMonitor.coverageRatio(blocking: [win], screenFrames: [screen]),
+                       0.5, accuracy: 0.001)
+    }
+
+    func testThreshold_belowStaysVisible() {
+        // 800x600(=480k) on 1920x1080(=2.07M) ≈ 23% < 30% → 데스크탑 보임(정지 안 함).
+        let screen = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        XCTAssertTrue(DesktopVisibilityMonitor.isDesktopVisible(
+            windows: [snap(w: 800, h: 600)], currentProcessId: 1, screenFrames: [screen], threshold: 0.30))
+    }
+
+    func testThreshold_aboveHides() {
+        let screen = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+        XCTAssertFalse(DesktopVisibilityMonitor.isDesktopVisible(
+            windows: [snap(w: 600, h: 1000)], currentProcessId: 1, screenFrames: [screen], threshold: 0.30),
+            "60% > 30% → 가림")
+    }
+
+    func testThreshold_zeroMatchesLegacyBehavior() {
+        // threshold 0 → 기존 판정(차단 창 1개라도 있으면 가림). 무회귀.
+        XCTAssertFalse(DesktopVisibilityMonitor.isDesktopVisible(
+            windows: [snap()], currentProcessId: 1, screenFrames: [], threshold: 0))
+        XCTAssertTrue(DesktopVisibilityMonitor.isDesktopVisible(
+            windows: [snap(pid: 1)], currentProcessId: 1, screenFrames: [], threshold: 0),
+            "자기 창은 threshold 0 에서도 가림 아님")
+    }
+
     // MARK: - 작업 3: 정지 배경 소스·경로
 
     private func proj(_ type: WallpaperType, file: String? = nil, preview: String? = nil,

@@ -357,6 +357,24 @@ final class AppLogicTests: XCTestCase {
             "형제 프리픽스(stillage)는 내부 아님")
     }
 
+    // MARK: - OcclusionMode (가림 임계값 라디오 ↔ 상태)
+
+    func testOcclusionModeDecode() {
+        XCTAssertFalse(OcclusionMode.decode(-1).enabled, "사용 안 함")
+        XCTAssertTrue(OcclusionMode.decode(0).enabled)
+        XCTAssertEqual(OcclusionMode.decode(0).threshold, 0, "기존 = 켜짐 + 임계값 0")
+        XCTAssertEqual(OcclusionMode.decode(0.5).threshold, 0.5)
+    }
+
+    func testOcclusionModeIsSelected() {
+        XCTAssertTrue(OcclusionMode.isSelected(-1, enabled: false, threshold: 0), "꺼짐 → '사용 안 함' 체크")
+        XCTAssertFalse(OcclusionMode.isSelected(-1, enabled: true, threshold: 0))
+        XCTAssertTrue(OcclusionMode.isSelected(0, enabled: true, threshold: 0), "켜짐+0 → '기존' 체크")
+        XCTAssertFalse(OcclusionMode.isSelected(0, enabled: false, threshold: 0))
+        XCTAssertTrue(OcclusionMode.isSelected(0.5, enabled: true, threshold: 0.5))
+        XCTAssertFalse(OcclusionMode.isSelected(0.5, enabled: true, threshold: 0.3))
+    }
+
     // MARK: - GeneratedUID (잠금화면 스틸 — dscl 출력 파싱)
 
     func testGeneratedUID_sameLine() {
