@@ -8,32 +8,6 @@ import Metal
 /// - 반투명 텍스처 레이어(무-이펙트)가 올바르게 합성되는지 (기존엔 straight 출력 + src=one 이라 과다 밝음)
 /// - 알파 감소 효과 체인이 이중 premult 없이 곱해지는지 (0.7×0.7 → 0.49; 기존 버그 0.343)
 final class SceneCompositeConventionTests: XCTestCase {
-    private func i32(_ n: Int) -> Data { var v = UInt32(n).littleEndian; return Data(bytes: &v, count: 4) }
-
-    private func encodePkg(_ files: [(String, Data)]) -> Data {
-        var out = Data()
-        let version = "PKGV0001"
-        out.append(i32(version.utf8.count)); out.append(version.data(using: .utf8)!)
-        out.append(i32(files.count))
-        var offset = 0
-        for (name, data) in files {
-            out.append(i32(name.utf8.count)); out.append(name.data(using: .utf8)!)
-            out.append(i32(offset)); out.append(i32(data.count)); offset += data.count
-        }
-        for (_, data) in files { out.append(data) }
-        return out
-    }
-
-    private func solidTex(_ r: UInt8, _ g: UInt8, _ b: UInt8, alpha: UInt8 = 255, w: Int = 8, h: Int = 8) -> Data {
-        var px = [UInt8](); px.reserveCapacity(w * h * 4)
-        for _ in 0..<(w * h) { px.append(contentsOf: [r, g, b, alpha]) }
-        let png = OffscreenCapture.png(rgba: px, width: w, height: h)!
-        var tex = Data("TEXV0005".utf8)
-        tex.append(Data(repeating: 0, count: 34))
-        tex.append(png)
-        return tex
-    }
-
     private func avgLuma(_ url: URL) -> Double {
         guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)) else { return -1 }
         var sum = 0.0; var n = 0

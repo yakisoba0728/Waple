@@ -8,32 +8,6 @@ import Metal
 /// 썸네일 주색이 레이어 색에 반영). 실물 검증(3394601417 주야 토글, 2881558311 ColorTinter)은
 /// 실물 패키지 폴더가 있을 때만(없으면 skip — CI 안전).
 final class SceneInteractionMediaE2ETests: XCTestCase {
-    private func i32(_ n: Int) -> Data { var v = UInt32(n).littleEndian; return Data(bytes: &v, count: 4) }
-
-    private func encodePkg(_ files: [(String, Data)]) -> Data {
-        var out = Data()
-        let version = "PKGV0001"
-        out.append(i32(version.utf8.count)); out.append(version.data(using: .utf8)!)
-        out.append(i32(files.count))
-        var offset = 0
-        for (name, data) in files {
-            out.append(i32(name.utf8.count)); out.append(name.data(using: .utf8)!)
-            out.append(i32(offset)); out.append(i32(data.count)); offset += data.count
-        }
-        for (_, data) in files { out.append(data) }
-        return out
-    }
-
-    private func solidTex(_ r: UInt8, _ g: UInt8, _ b: UInt8, w: Int = 8, h: Int = 8) -> Data {
-        var px = [UInt8](); px.reserveCapacity(w * h * 4)
-        for _ in 0..<(w * h) { px.append(contentsOf: [r, g, b, 255]) }
-        let png = OffscreenCapture.png(rgba: px, width: w, height: h)!
-        var tex = Data("TEXV0005".utf8)
-        tex.append(Data(repeating: 0, count: 34))
-        tex.append(png)
-        return tex
-    }
-
     private func makeProject(_ files: [(String, Data)], id: String) throws -> WallpaperProject {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(id, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

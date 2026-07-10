@@ -5,23 +5,6 @@ import Metal
 @testable import WapleRender
 
 final class SceneParticleRenderTests: XCTestCase {
-    /// 실제 .pkg 바이너리 인코드(ScenePackage.parse 와 동일 구조).
-    private func encodePkg(_ files: [(String, Data)]) -> Data {
-        func i32(_ n: Int) -> Data { var v = UInt32(n).littleEndian; return Data(bytes: &v, count: 4) }
-        var out = Data()
-        let version = "PKGV0001"
-        out.append(i32(version.utf8.count)); out.append(version.data(using: .utf8)!)
-        out.append(i32(files.count))
-        var offset = 0
-        for (name, data) in files {
-            out.append(i32(name.utf8.count)); out.append(name.data(using: .utf8)!)
-            out.append(i32(offset)); out.append(i32(data.count))
-            offset += data.count
-        }
-        for (_, data) in files { out.append(data) }
-        return out
-    }
-
     private func snowScenePkg() -> Data {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0.1"},

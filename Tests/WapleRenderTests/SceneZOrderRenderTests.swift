@@ -7,32 +7,6 @@ import Metal
 /// 파티클 z-순서(설계 §4): WE 는 씬 오브젝트 순서대로 그린다 — bg 레이어 → 파티클 → fg 레이어면
 /// fg 가 파티클을 가려야 한다. (기존: 파티클이 항상 전 레이어 위 → fg 위에 빨강이 뜸.)
 final class SceneZOrderRenderTests: XCTestCase {
-    private func i32(_ n: Int) -> Data { var v = UInt32(n).littleEndian; return Data(bytes: &v, count: 4) }
-
-    private func encodePkg(_ files: [(String, Data)]) -> Data {
-        var out = Data()
-        let version = "PKGV0001"
-        out.append(i32(version.utf8.count)); out.append(version.data(using: .utf8)!)
-        out.append(i32(files.count))
-        var offset = 0
-        for (name, data) in files {
-            out.append(i32(name.utf8.count)); out.append(name.data(using: .utf8)!)
-            out.append(i32(offset)); out.append(i32(data.count)); offset += data.count
-        }
-        for (_, data) in files { out.append(data) }
-        return out
-    }
-
-    private func solidTex(_ r: UInt8, _ g: UInt8, _ b: UInt8, w: Int = 8, h: Int = 8) -> Data {
-        var px = [UInt8](); px.reserveCapacity(w * h * 4)
-        for _ in 0..<(w * h) { px.append(contentsOf: [r, g, b, 255]) }
-        let png = OffscreenCapture.png(rgba: px, width: w, height: h)!
-        var tex = Data("TEXV0005".utf8)
-        tex.append(Data(repeating: 0, count: 34))
-        tex.append(png)
-        return tex
-    }
-
     func testParticleInterleavesBetweenLayers() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         // 오브젝트 순서: bg 흰색(전체) → 빨강 파티클(x=300 부근, 30px 사각) → fg 초록(중앙 960x540).

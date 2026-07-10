@@ -1,16 +1,30 @@
 import Foundation
 
 /// 손상된 스토어 JSON 을 덮어쓰기 전 1회 백업(rename). 복구 가능한 사용자 설정의 무음 파괴를 막는다.
-/// LibraryStore.indexCorrupt 백업과 동일 규약 — Playlist/Monitor 스토어가 공유한다.
+/// Library/Playlist/Monitor 스토어가 공유한다.
 func backupCorruptStoreFile(_ url: URL, _ corrupt: inout Bool) {
     guard corrupt else { return }
     corrupt = false
-    let backup = url.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
+    // ms 해상도: 같은 초 내 재손상 시 백업 파일명 충돌 → moveItem 실패 → 원본 유실 방지.
+    let backup = url.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970 * 1000))")
     do {
         try FileManager.default.moveItem(at: url, to: backup)
         NSLog("%@", "[Waple] backed up corrupt \(url.lastPathComponent) to \(backup.path)")
     } catch {
         NSLog("%@", "[Waple] failed to back up corrupt \(url.lastPathComponent): \(error)")
+    }
+}
+
+/// 스토어 파일 load 3분기 공통 규약: 파일없음=정상(최초 실행) / 읽기실패=corrupt / 성공=Data.
+/// 디코드 실패(=corrupt) 분기는 타입이 제각각이라 호출자 몫. 읽기실패 시 corrupt 표시 —
+/// 다음 save() 가 backupCorruptStoreFile 로 원본을 보존한 뒤 덮어쓴다.
+func readStoreFile(_ url: URL, what: String, note: String, corrupt: inout Bool) -> Data? {
+    do { return try Data(contentsOf: url) }
+    catch CocoaError.fileReadNoSuchFile { return nil }  // 최초 실행: 파일 없음(정상)
+    catch {
+        NSLog("%@", "[Waple] \(what) unreadable — preserving, \(note): \(error)")
+        corrupt = true
+        return nil
     }
 }
 
@@ -24,10 +38,7 @@ public final class MonitorAssignmentStore {
 
     public init(baseDirectory: URL) {
         fileURL = baseDirectory.appendingPathComponent("monitors.json")
-        let data: Data
-        do { data = try Data(contentsOf: fileURL) }
-        catch CocoaError.fileReadNoSuchFile { return }  // 최초 실행: 파일 없음(정상)
-        catch { NSLog("%@", "[Waple] monitors.json unreadable — preserving, starting empty: \(error)"); corrupt = true; return }
+        guard let data = readStoreFile(fileURL, what: "monitors.json", note: "starting empty", corrupt: &corrupt) else { return }
         do { map = try JSONDecoder().decode([String: String].self, from: data) }
         catch { NSLog("%@", "[Waple] monitors.json corrupt — preserving, starting empty: \(error)"); corrupt = true }
     }

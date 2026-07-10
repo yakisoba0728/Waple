@@ -8,22 +8,6 @@ import Metal
 /// - 합성(항상 실행): 콤보 씬은 t=0 vs t>frametime 이 다르고, 콤보 없는 씬은 시간 무관 동일(무회귀 게이트).
 /// - 실코퍼스(있을 때만): 효과+스프라이트가 전진하는지, 멀티페이지 아틀라스가 세로 스택으로 성공했는지.
 final class SpriteSheetLayerRenderTests: XCTestCase {
-    private func i32(_ n: Int) -> Data { var v = UInt32(truncatingIfNeeded: n).littleEndian; return Data(bytes: &v, count: 4) }
-
-    private func encodePkg(_ files: [(String, Data)]) -> Data {
-        var out = Data()
-        let version = "PKGV0001"
-        out.append(i32(version.utf8.count)); out.append(version.data(using: .utf8)!)
-        out.append(i32(files.count))
-        var offset = 0
-        for (name, data) in files {
-            out.append(i32(name.utf8.count)); out.append(name.data(using: .utf8)!)
-            out.append(i32(offset)); out.append(i32(data.count)); offset += data.count
-        }
-        for (_, data) in files { out.append(data) }
-        return out
-    }
-
     /// 2프레임 가로 스프라이트시트 .tex: 2×1 아틀라스(픽셀0=빨강 프레임, 픽셀1=초록 프레임) + TEXS0003.
     /// 프레임0 서브렉트=(0,0,1,1) 빨강, 프레임1=(1,0,1,1) 초록, frametime=ft. blit 이 1×1 프레임을 추출.
     private func twoFrameSpriteTex(ft: Float = 0.2) -> Data {
