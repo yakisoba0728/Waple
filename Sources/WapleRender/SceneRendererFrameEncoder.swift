@@ -307,6 +307,15 @@ extension SceneRenderer {
         ]
     }
 
+    /// 포워드 라이팅용 레이어 월드 사각형 — f_lit 이 uv→월드 재구성에 쓰는 (ox,oy,hw,hh)+(cosA,sinA,z,0).
+    /// hw/hh/angle 규약은 quadVertices 와 동일(정합 필수). z = 레이어 originZ(2D 라이트 감쇠의 z 성분).
+    func litRect(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, originZ: Float) -> (SIMD4<Float>, SIMD4<Float>) {
+        let hw = size.x * scale.x * 0.5
+        let hh = size.y * scale.y * 0.5
+        let a = angleZ * .pi / 180
+        return (SIMD4(origin.x, origin.y, hw, hh), SIMD4(cos(a), sin(a), originZ, 0))
+    }
+
     /// 퍼펫 스킨 정점 → NDC 삼각형 리스트(quadVertices 와 동일 규약: 씬 픽셀 y-down, uv 그대로).
     /// 메시 좌표는 레이어 로컬 픽셀(원점 중심)·**y-up**(실측: 2809885105 프리뷰 대비 반전 확인) —
     /// y 부호 반전 후 origin/scale/angleZ 적용, NDC 변환.
@@ -380,6 +389,7 @@ extension SceneRenderer {
         guard let pipeline else { return }
         var tint = layer.tint
         var vbuf = layer.vertexBuffer
+        var litRect0 = layer.litRect.0, litRect1 = layer.litRect.1  // 애니 레이어는 아래서 재계산
         if let def = layer.def, let device {
             func animValue(_ key: String, _ comp: Int, _ base: Float) -> Float {
                 def.animations[key]?.value(component: comp, atTime: time, base: base) ?? base
@@ -392,6 +402,11 @@ extension SceneRenderer {
                                          projW: projW, projH: projH)
                 if let b = layer.scratchQuad.load(verts, device: device) {
                     vbuf = b
+                }
+                // 라이트 레이어: 애니 지오메트리에 맞춰 월드 사각형도 재계산(f_lit 정합).
+                if layer.isLit {
+                    let r = litRect(origin: origin, size: def.size, scale: scale, angleZ: angle, originZ: def.originZ)
+                    litRect0 = r.0; litRect1 = r.1
                 }
             }
             if def.animations["alpha"] != nil || def.animations["color"] != nil {
@@ -442,8 +457,12 @@ extension SceneRenderer {
             }
         }
         var depth = layer.parallaxDepth
-        // colorBlendMode: 스냅샷 dst 대비 셰이더 블렌드(f_blend). 스냅샷 없으면 일반 합성 폴백.
-        if let blendSnapshot, let blendPipeline, layer.colorBlendMode != 0 {
+        // 파이프라인 선택: 라이트 레이어(f_lit) > colorBlendMode(f_blend) > 일반(f_main).
+        // 라이트 레이어는 게이트상 colorBlendMode==0 이라 상호배타(무회귀 — 라이트 씬만 여기 진입).
+        if layer.isLit, let litPipeline {
+            enc.setRenderPipelineState(litPipeline)
+        } else if let blendSnapshot, let blendPipeline, layer.colorBlendMode != 0 {
+            // colorBlendMode: 스냅샷 dst 대비 셰이더 블렌드(f_blend). 스냅샷 없으면 일반 합성 폴백.
             enc.setRenderPipelineState(blendPipeline)
             enc.setFragmentTexture(blendSnapshot, index: 1)
             var mode = Int32(layer.colorBlendMode)
@@ -457,6 +476,15 @@ extension SceneRenderer {
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         enc.setFragmentTexture(texture, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+        // f_lit 유니폼: rect(uv→월드) + 라이트 위치/색·반경 + 앰비언트(씬 상수). 라이트 레이어만.
+        if layer.isLit, litPipeline != nil {
+            var rect = [litRect0, litRect1]
+            rect.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
+            lightPositions.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2) }
+            lightColorRadius.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 3) }
+            var amb = lightAmbient
+            enc.setFragmentBytes(&amb, length: MemoryLayout<SIMD4<Float>>.stride, index: 4)
+        }
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 

@@ -41,5 +41,44 @@ enum QuadShaders {
         float3 r = applyBlending(mode, d.rgb, c.rgb * tint.rgb, o);
         return float4(r, d.a);
     }
+    // 2D 포워드 라이팅(라이트 씬의 LIGHTING:1 레이어 전용). 수식 정본 =
+    // assets/shaders/common_fragment.h::ComputeLight(diffuse) + generic.vert(반구 앰비언트).
+    //   worldPos: uv → 레이어 월드 사각형 재구성(quadVertices 와 동일 규약). N=+Z(평면 레이어).
+    //   light = ambient + Σ color·saturate(dot(normalize(lightPos-world), N))·attn²,
+    //           attn = saturate((radius-dist)/radius). albedo *= tint(color×brightness) *= light.
+    //   미사용 슬롯/짧은반경 라이트는 radius≤0 로 스킵(count 유니폼 불필요).
+    //   블로아웃: bgra8Unorm 이 [0,1] 클램프 = 고강도(HDR)는 white(HDR/톤맵 패스 전까지 — 보고).
+    fragment float4 f_lit(VOut in [[stage_in]],
+                          texture2d<float> tex [[texture(0)]],
+                          constant float4 &tint [[buffer(0)]],
+                          constant float4 *rect [[buffer(1)]],      // [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,_)
+                          constant float4 *lightPos [[buffer(2)]],  // [4] xyz=world
+                          constant float4 *lightCol [[buffer(3)]],  // [4] rgb=color×intensity, w=radius
+                          constant float4 &ambient [[buffer(4)]]) { // xyz=(skylight+ambient)/2
+        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        float4 c = tex.sample(s, in.uv);
+        // uv(0..1) → 레이어 로컬(-hw..hw) → 회전 → 월드 픽셀(quadVertices 역산). z = 레이어 originZ.
+        float lx = (in.uv.x * 2.0 - 1.0) * rect[0].z;
+        float ly = (in.uv.y * 2.0 - 1.0) * rect[0].w;
+        float ca = rect[1].x, sa = rect[1].y;
+        float3 world = float3(rect[0].x + lx * ca - ly * sa, rect[0].y + lx * sa + ly * ca, rect[1].z);
+        float3 N = float3(0.0, 0.0, 1.0);
+        float3 light = ambient.xyz;
+        for (int i = 0; i < 4; i++) {
+            float radius = lightCol[i].w;
+            if (radius <= 0.0) continue;
+            float3 delta = lightPos[i].xyz - world;
+            float dist = length(delta);
+            if (dist < 1e-5) continue;
+            float attn = clamp((radius - dist) / radius, 0.0, 1.0);
+            float ndl = max(0.0, dot(delta / dist, N));
+            light += lightCol[i].xyz * (ndl * attn * attn);
+        }
+        // WE genericimage*/generic2: albedo *= g_TintColor(=color×brightness), albedo.rgb *= light.
+        // f_main 규약대로 straight→premultiplied 를 마지막에 단 한 번(블렌드 src=one).
+        float3 lit = c.rgb * tint.rgb * light;
+        float a = c.a * tint.a;
+        return float4(lit * a, a);
+    }
     """
 }

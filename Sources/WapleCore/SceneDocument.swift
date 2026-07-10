@@ -81,6 +81,9 @@ public struct SceneLayer: Equatable {
     /// 재생(gif). 렌더러가 이 게이트로만 프레임 전진(콤보 없는 genericimage2/4 는 정지 = 무회귀).
     /// 콤보 키는 대/소문자 혼재(실씬 "SPRITESHEET", 엔진 예제 "spritesheet") — 대소문자 무시 매치.
     public var spritesheet: Bool = false
+    /// 머티리얼 패스에 LIGHTING 콤보(!=0)가 있으면 true → 이 레이어는 씬 라이트에 반응(포워드 라이팅).
+    /// 2D 씬 + 라이트 존재 시에만 소비(SceneDocument.forwardLit2D). LIGHTING:0/부재는 기존 unlit 경로(무회귀).
+    public var lighting: Bool = false
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -258,6 +261,61 @@ public extension SceneLight3D {
         return PackedUniforms(positions: positions, colorsPremultiplied: colors,
                               ambient: SIMD3(ambient.x, ambient.y, ambient.z))
     }
+
+    /// 포워드 라이팅(2D)용 유니폼 — **실물 셰이더 규약** `common_fragment.h::ComputeLight` /
+    /// `generic.vert` 소비 형태에 맞춘 별도 팩. 위 `packUniforms` 는 radius 없는 규약 스냅샷(소비처
+    /// 없음)이라 감쇠에 못 쓴다 — 이 팩이 실 소비처(QuadShaders f_lit).
+    /// - `positions[i]`: 라이트 월드 위치(프로젝션 픽셀), `.w`=활성(1)/미사용(0).
+    /// - `colorRadius[i]`: `rgb = color × intensity`, `w = radius`(선형 감쇠 반경).
+    ///   ⚠️ **`color × intensity` 는 직전 라운드 추정 규약** — 셰이더 소스에 C++ 유니폼 피드가 없고
+    ///   코퍼스 번역 이펙트 0건이 이 유니폼을 참조해 미확정. 블로아웃(고강도 씬)의 최대 레버(보고 참조).
+    /// - `ambientTerm`: 평면 레이어(N=+Z, up=(0,1,0)→dot 0) 반구 앰비언트 = `(skylight+ambient)/2`.
+    struct ForwardUniforms: Equatable {
+        public var positions: [SIMD4<Float>]   // xyz=world, w=active
+        public var colorRadius: [SIMD4<Float>] // rgb=color×intensity, w=radius
+        public var ambientTerm: SIMD3<Float>
+        public var count: Int
+        public init(positions: [SIMD4<Float>], colorRadius: [SIMD4<Float>],
+                    ambientTerm: SIMD3<Float>, count: Int) {
+            self.positions = positions; self.colorRadius = colorRadius
+            self.ambientTerm = ambientTerm; self.count = count
+        }
+    }
+
+    /// 라이트 배열 → 포워드 유니폼. 4개 초과 시 앞 4개(현행 근사 — WE 오브젝트별 relevance 선택은 미구현).
+    static func forwardUniforms(_ lights: [SceneLight3D], ambient: Vec3, skylight: Vec3) -> ForwardUniforms {
+        var pos = [SIMD4<Float>](repeating: .zero, count: 4)
+        var cr = [SIMD4<Float>](repeating: .zero, count: 4)
+        let used = lights.prefix(4)
+        for (i, l) in used.enumerated() {
+            pos[i] = SIMD4(l.origin.x, l.origin.y, l.origin.z, 1)
+            cr[i] = SIMD4(l.color.x * l.intensity, l.color.y * l.intensity, l.color.z * l.intensity, l.radius)
+        }
+        let amb = (SIMD3(ambient.x, ambient.y, ambient.z) + SIMD3(skylight.x, skylight.y, skylight.z)) * 0.5
+        return ForwardUniforms(positions: pos, colorRadius: cr, ambientTerm: amb, count: used.count)
+    }
+
+    /// 테스트 오라클 — QuadShaders `f_lit` 프래그먼트와 **동일 수식**(감쇠·합산·앰비언트 바닥).
+    /// 런타임 미사용(셰이더가 정본). radius≤0 라이트는 기여 0(0나눗셈 회피).
+    /// ponytail: 셰이더 정본의 8줄 미러 — 감쇠/합산 유닛 검증 + 손계산 대조용.
+    static func evaluateLighting(at world: SIMD3<Float>, _ u: ForwardUniforms,
+                                 normal: SIMD3<Float> = SIMD3(0, 0, 1)) -> SIMD3<Float> {
+        var light = u.ambientTerm
+        for i in 0..<min(u.count, 4) {
+            let lp = u.positions[i]
+            let radius = u.colorRadius[i].w
+            guard radius > 0 else { continue }
+            let delta = SIMD3(lp.x, lp.y, lp.z) - world
+            let dist = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).squareRoot()
+            guard dist > 1e-5 else { continue }
+            let attn = max(0, min(1, (radius - dist) / radius))
+            let nd = delta / dist
+            let d = max(0, nd.x * normal.x + nd.y * normal.y + nd.z * normal.z)
+            let c = SIMD3(u.colorRadius[i].x, u.colorRadius[i].y, u.colorRadius[i].z)
+            light += c * (d * attn * attn)
+        }
+        return light
+    }
 }
 
 /// 씬 sound 오브젝트(scene.json objects[] 중 "sound" 키 보유). 실측(코퍼스 460종 / 382오브젝트, 2026-07-09):
@@ -316,6 +374,15 @@ public struct SceneDocument: Equatable {
     public var nodes3D: [SceneNode3D] = []
     /// 씬 sound 오브젝트. 2D/3D 무관 전역 재생(트랜스폼/공간화는 미반영). 렌더러(SceneAudioPlayer)가 재생.
     public var sounds: [SceneSound] = []
+    /// `general.ambientcolor` — 포워드 라이팅의 앰비언트 바닥(라이트 미도달 영역이 전흑되지 않게).
+    public var ambientColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    /// `general.skylightcolor` — 반구 앰비언트의 상단(부재 시 ambientcolor 로 폴백). 평면 레이어에선
+    /// dot(N=+Z, up=(0,1,0))=0 → mix(skylight, ambient, 0.5) = (skylight+ambient)/2 로 소비.
+    public var skylightColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
+
+    /// 2D 포워드 라이팅 활성 조건: 2D 오르토 씬(camera3D==nil) + 라이트 존재. 3D(원근) 씬은 메시
+    /// 라이팅 경로 담당(현행 미구현 — 보고). 개별 레이어는 `SceneLayer.lighting`(LIGHTING 콤보)로 추가 게이트.
+    public var forwardLit2D: Bool { camera3D == nil && !lights3D.isEmpty }
 }
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
@@ -339,6 +406,8 @@ extension SceneDocument {
         let pw = intVal(proj["width"]) ?? 1920
         let ph = intVal(proj["height"]) ?? 1080
         let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
+        let ambientColor = vec3(general["ambientcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
+        let skylightColor = vec3(general["skylightcolor"]) ?? ambientColor
         let parallaxEnabled = (general["cameraparallax"] as? Bool) ?? false
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
@@ -411,6 +480,8 @@ extension SceneDocument {
                                 nodes3D: nodes3D)
         out.cameraScripts = cameraScripts
         out.sounds = sounds
+        out.ambientColor = ambientColor
+        out.skylightColor = skylightColor
         return out
     }
 
@@ -478,6 +549,7 @@ extension SceneDocument {
         var depthTest = true
         var depthWrite = true
         var spritesheetCombo = false
+        var lightingCombo = false
         if let md = package.data(for: imagePath) ?? assets?(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
@@ -489,8 +561,10 @@ extension SceneDocument {
                 depthTest = (p0["depthtest"] as? String) != "disabled"
                 depthWrite = (p0["depthwrite"] as? String) != "disabled"
                 // SPRITESHEET 콤보(대/소문자 무시, 값 !=0) → 이 레이어는 .tex TEXS 프레임 시간축 재생.
+                // LIGHTING 콤보(!=0) → 포워드 라이팅 대상(씬 라이트에 반응). 둘 다 대소문자 무시 매치.
                 if let combos = p0["combos"] as? [String: Any] {
                     spritesheetCombo = combos.contains { $0.key.lowercased() == "spritesheet" && (intVal($0.value) ?? 0) != 0 }
+                    lightingCombo = combos.contains { $0.key.lowercased() == "lighting" && (intVal($0.value) ?? 0) != 0 }
                 }
             }
         }
@@ -518,6 +592,7 @@ extension SceneDocument {
         layer.depthTest = depthTest
         layer.depthWrite = depthWrite
         layer.spritesheet = spritesheetCombo
+        layer.lighting = lightingCombo
         layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])

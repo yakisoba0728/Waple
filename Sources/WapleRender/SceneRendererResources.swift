@@ -155,6 +155,15 @@ extension SceneRenderer {
                     if e.hasUpdate { hasAnimations = true }
                 }
             }
+            // 포워드 라이팅 대상 게이트(좁게): 씬 라이트(forwardLit) + LIGHTING:1 콤보 + 일반 이미지
+            // 레이어만(퍼펫/컴포지션/colorBlend 는 별도 특수 경로라 제외 → 무회귀). base litRect 산출,
+            // 애니 레이어는 encodeLayer 가 per-frame 재계산.
+            let layerLit = forwardLit && layer.lighting && !layer.isFrameBuffer
+                && puppetModel == nil && layer.colorBlendMode == 0
+            let lrect = layerLit
+                ? litRect(origin: layer.origin, size: layer.size, scale: layer.scale,
+                          angleZ: layer.angleZ, originZ: layer.originZ)
+                : (SIMD4<Float>.zero, SIMD4<Float>.zero)
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
                                 effects: effects, texWidth: effW, texHeight: effH,
@@ -162,7 +171,8 @@ extension SceneRenderer {
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 initialVisible: layer.initialVisible,
-                                colorBlendMode: layer.colorBlendMode, frames: frames))
+                                colorBlendMode: layer.colorBlendMode, frames: frames,
+                                isLit: layerLit, litRect: lrect))
         }
         return out
     }
