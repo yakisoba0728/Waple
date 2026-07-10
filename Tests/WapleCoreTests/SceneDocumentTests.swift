@@ -57,6 +57,40 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(al[0].blend, 1.0, accuracy: 1e-6); XCTAssertEqual(al[0].rate, 12.0, accuracy: 1e-6)
         XCTAssertTrue(al[1].additive)
         XCTAssertEqual(al[1].blend, 0.5, accuracy: 1e-6, "키프레임 dict {value} 언랩")
+        XCTAssertTrue(al[0].scripts.isEmpty); XCTAssertTrue(al[0].eventTimelines.isEmpty)
+    }
+
+    /// animationlayers blend/visible 바인딩의 스크립트 + 이벤트 타임라인 파스
+    /// (실물 3737268876 젤다 blend 핸들러/surprise 마커, 3396722575 visible 핸들러 축소판).
+    func testParsesAnimationLayerScriptsAndEventTimelines() throws {
+        let puppetModel = #"{"width":100,"height":100,"material":"materials/m.json","puppet":"models/p.mdl"}"#
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+           "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true,
+           "animationlayers":[
+             {"name":"Surprise","animation":30,"additive":true,"rate":1.0,"visible":true,
+              "blend":{"value":0,
+                       "script":"export function animationEvent(e,v){}",
+                       "animation":{"c0":[{"frame":0,"value":0},{"frame":30,"value":1}],
+                                    "options":{"fps":30,"length":30,"mode":"single","name":"surprise",
+                                               "events":[{"frame":0,"name":"surprise"},
+                                                         {"frame":21,"name":"regular"}]}}}},
+             {"name":"Head","animation":510,"additive":false,"rate":1.0,
+              "visible":{"value":true,"script":"export function animationEvent(e,v){}"}}
+           ]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", puppetModel), ("materials/m.json", material)])
+        let al = try SceneDocument.parse(package: p).layers[0].animationLayers
+        XCTAssertEqual(al.count, 2)
+        XCTAssertNotNil(al[0].scripts["blend"], "젤다 패턴: blend 스크립트")
+        XCTAssertEqual(al[0].eventTimelines.count, 1)
+        XCTAssertEqual(al[0].eventTimelines[0].events,
+                       [AnimationMarker(name: "surprise", frame: 0), AnimationMarker(name: "regular", frame: 21)])
+        XCTAssertEqual(al[0].eventTimelines[0].mode, "single")
+        XCTAssertEqual(al[0].blend, 0, accuracy: 1e-6, "정적 blend 초기값({value:0} 언랩) 무회귀")
+        XCTAssertNotNil(al[1].scripts["visible"], "3396722575 패턴: visible 스크립트")
+        XCTAssertTrue(al[1].eventTimelines.isEmpty, "events 없는 바인딩 애니는 미보관")
     }
 
     /// 비-퍼펫 이미지 레이어는 animationLayers 빈 배열(파스 오버헤드/오분류 없음).
