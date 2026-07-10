@@ -209,9 +209,12 @@ public struct ParticleSimulator {
             for li in def.children.indices {
                 let link = def.children[li]
                 guard link.trigger == .follow || link.trigger == .spawnBurst else { continue }
-                for p in particles[countBeforeEmission...] {
+                // 인덱스 순회(슬라이스 버퍼 보유 회피). guard 순서 유지 필수 — rollProbability 의
+                // RNG 호출 순서가 바뀌면 시드 결정성(GT luma 기준선)이 깨진다.
+                for pi in countBeforeEmission..<particles.count {
                     guard childStates[li].count < link.maxInstances else { break }
                     guard rollProbability(link.probability) else { continue }
+                    let p = particles[pi]
                     childStates[li].append(makeInstance(link, li: li, uid: p.uid, origin: p.pos + s3(link.origin)))
                 }
             }
@@ -220,8 +223,15 @@ public struct ParticleSimulator {
         for k in particles.indices {
             particles[k].age += dt
             // 힘 오퍼레이터는 movement 적분 전에 속도를 갱신(같은 step 위치에 반영).
-            for a in attractors { applyAttract(a, to: &particles[k].vel, pos: particles[k].pos, dt: dt) }
-            for v in vortices { applyVortex(v, to: &particles[k].vel, pos: particles[k].pos, dt: dt) }
+            // vel/pos 로컬 호이스트: `&particles[k].vel` inout 과 같은 배열 읽기가 한 호출에 겹치면
+            // 호출마다 배열 전체가 COW 복사된다(attractor×particle×step — 무거운 씬 실측 병목).
+            if !attractors.isEmpty || !vortices.isEmpty {
+                var vel = particles[k].vel
+                let pos = particles[k].pos
+                for a in attractors { applyAttract(a, to: &vel, pos: pos, dt: dt) }
+                for v in vortices { applyVortex(v, to: &vel, pos: pos, dt: dt) }
+                particles[k].vel = vel
+            }
             if let cap = speedCap {
                 let sp = simd_length(particles[k].vel)
                 if sp > cap { particles[k].vel *= cap / sp }
@@ -299,17 +309,20 @@ public struct ParticleSimulator {
         for li in def.children.indices {
             let link = def.children[li]
             var displays: [Particle] = []
-            var keep: [ChildInstance] = []
-            for var inst in childStates[li] {
+            // take-패턴 인플레이스 변이: `for var inst`(값 복사→keep 재조립)는 버퍼 공유 탓에
+            // 인스턴스마다 파티클 배열 전체를 매 스텝 COW 복사한다 — GT 스위트 실측 병목.
+            var insts = childStates[li]
+            childStates[li] = []   // 원본 참조 해제 → insts 버퍼 unique → 변이가 제자리
+            for i in insts.indices {
                 if link.trigger == .follow {
-                    if let pp = uidPos[inst.parentUID] { inst.sim.emitOrigin = pp + s3(link.origin) }
-                    else { inst.sim.emissionPaused = true }   // 고아 — 드레인만
+                    if let pp = uidPos[insts[i].parentUID] { insts[i].sim.emitOrigin = pp + s3(link.origin) }
+                    else { insts[i].sim.emissionPaused = true }   // 고아 — 드레인만
                 }
-                displays.append(contentsOf: inst.sim.step(dt))
-                if inst.oneShot, !inst.fired { inst.fired = true; inst.sim.emissionPaused = true }
-                if !(inst.sim.emissionPaused && inst.sim.liveCount == 0) { keep.append(inst) }
+                displays.append(contentsOf: insts[i].sim.step(dt))
+                if insts[i].oneShot, !insts[i].fired { insts[i].fired = true; insts[i].sim.emissionPaused = true }
             }
-            childStates[li] = keep
+            insts.removeAll { $0.sim.emissionPaused && $0.sim.liveCount == 0 }
+            childStates[li] = insts
             childDisplaysCache[li] = displays
         }
     }
