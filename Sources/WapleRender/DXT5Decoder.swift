@@ -3,6 +3,13 @@ import Foundation
 public enum DXT5Decoder {
     /// 565 엔드포인트 채널 정수 보간(4-색 팔레트 슬롯 t=1,2). BC3/BC1 공용.
     private static func lerp3(_ x: Int, _ y: Int, _ t: Int) -> Int { (x * (3 - t) + y * t) / 3 }
+    /// 565 → RGB8(정수). BC1/BC2/BC3 공용.
+    private static func color565(_ c: Int) -> (Int, Int, Int) {
+        let r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f
+        return (r * 255 / 31, g * 255 / 63, b * 255 / 31)
+    }
+    /// 리틀엔디안 u16(블록 엔드포인트 읽기 — 픽셀 루프 밖이라 정적 호출 무해).
+    private static func u16(_ src: [UInt8], _ o: Int) -> Int { Int(src[o]) | (Int(src[o + 1]) << 8) }
 
     /// DXT5(BC3) 블록 → RGBA8888. blocks 크기는 ((w+3)/4)*((h+3)/4)*16 이어야 함.
     public static func decode(_ blocks: Data, width: Int, height: Int) -> Data? {
@@ -12,12 +19,6 @@ public enum DXT5Decoder {
         guard blocks.count >= bx * by * 16 else { return nil }
         let src = [UInt8](blocks)
         var out = [UInt8](repeating: 0, count: width * height * 4)
-
-        func u16(_ o: Int) -> Int { Int(src[o]) | (Int(src[o + 1]) << 8) }
-        func color565(_ c: Int) -> (Int, Int, Int) {
-            let r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f
-            return (r * 255 / 31, g * 255 / 63, b * 255 / 31)
-        }
 
         for byi in 0..<by {
             for bxi in 0..<bx {
@@ -35,7 +36,7 @@ public enum DXT5Decoder {
                 var abits: UInt64 = 0
                 for i in 0..<6 { abits |= UInt64(src[o + 2 + i]) << (8 * i) }
                 // --- color (BC1, DXT5 always 4-color) ---
-                let c0 = u16(o + 8), c1 = u16(o + 10)
+                let c0 = u16(src, o + 8), c1 = u16(src, o + 10)
                 let (r0, g0, b0) = color565(c0), (r1, g1, b1) = color565(c1)
                 let palette: [(Int, Int, Int)] = [
                     (r0, g0, b0), (r1, g1, b1),
@@ -71,16 +72,10 @@ public enum DXT5Decoder {
         let src = [UInt8](blocks)
         var out = [UInt8](repeating: 0, count: width * height * 4)
 
-        func u16(_ o: Int) -> Int { Int(src[o]) | (Int(src[o + 1]) << 8) }
-        func color565(_ c: Int) -> (Int, Int, Int) {
-            let r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f
-            return (r * 255 / 31, g * 255 / 63, b * 255 / 31)
-        }
-
         for byi in 0..<by {
             for bxi in 0..<bx {
                 let o = (byi * bx + bxi) * 8
-                let c0 = u16(o), c1 = u16(o + 2)
+                let c0 = u16(src, o), c1 = u16(src, o + 2)
                 let (r0, g0, b0) = color565(c0), (r1, g1, b1) = color565(c1)
                 var palette: [(Int, Int, Int, Int)]
                 if c0 > c1 {
@@ -121,12 +116,6 @@ public enum DXT5Decoder {
         let src = [UInt8](blocks)
         var out = [UInt8](repeating: 0, count: width * height * 4)
 
-        func u16(_ o: Int) -> Int { Int(src[o]) | (Int(src[o + 1]) << 8) }
-        func color565(_ c: Int) -> (Int, Int, Int) {
-            let r = (c >> 11) & 0x1f, g = (c >> 5) & 0x3f, b = c & 0x1f
-            return (r * 255 / 31, g * 255 / 63, b * 255 / 31)
-        }
-
         for byi in 0..<by {
             for bxi in 0..<bx {
                 let o = (byi * bx + bxi) * 16
@@ -134,7 +123,7 @@ public enum DXT5Decoder {
                 var abits: UInt64 = 0
                 for i in 0..<8 { abits |= UInt64(src[o + i]) << (8 * i) }
                 // --- color (BC1 블록, 단 BC2 는 항상 4-색 — BC3 와 동일 팔레트) ---
-                let c0 = u16(o + 8), c1 = u16(o + 10)
+                let c0 = u16(src, o + 8), c1 = u16(src, o + 10)
                 let (r0, g0, b0) = color565(c0), (r1, g1, b1) = color565(c1)
                 let palette: [(Int, Int, Int)] = [
                     (r0, g0, b0), (r1, g1, b1),

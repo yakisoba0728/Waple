@@ -160,13 +160,11 @@ public struct TexImage {
     public static func parse(_ data: Data) -> TexImage? {
         let b = [UInt8](data)
         guard b.count > 42, b[0..<8].elementsEqual(Array("TEXV0005".utf8)) else { return nil }
-        func i32(_ o: Int) -> Int {
-            Int(UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24)
-        }
-        let format = i32(18)
-        let flags = i32(22)          // TexFlags(bit0 NoInterp, bit1 ClampUV, bit2 Gif, bit5 Video) — 노출만, 동작 무변경
-        let texW = i32(26), texH = i32(30)
-        let imgW = i32(34), imgH = i32(38)
+        func i32(_ o: Int) -> Int? { readU32LE(b, at: o).map { Int($0) } }
+        // 헤더 6필드 경계검사(종전 b.count>42 암묵 의존 제거). 고정 오프셋이라 정상 파일은 항상 성립.
+        guard let format = i32(18), let flags = i32(22),   // flags: TexFlags 노출만(동작 무변경)
+              let texW = i32(26), let texH = i32(30),
+              let imgW = i32(34), let imgH = i32(38) else { return nil }
         // 차원은 무경계 UInt32 에서 옴. Metal 렌더 한계(16384) 를 넘으면 거부해 w*h*4 정수 오버플로 트랩(크래시) 차단.
         let maxDim = 16384
         guard texW >= 0, texH >= 0, imgW >= 0, imgH >= 0,
@@ -188,7 +186,7 @@ public struct TexImage {
         //    압축 바이트를 PNG 로 디코드 실패하기 때문. 실측(2026-07-09): 코퍼스 임베디드 35개는 전부 비압축
         //    이고 v4 서브레이아웃이 둘 — splash_*(표준 mip → 여기서 .embeddedImage) 와 lut/*(mip 에 여분 int
         //    → parseMip 실패 → 아래 fast-path .png). 둘 다 정상 디코드(어느 쪽도 payloadRange 오정렬 없음).
-        let container = parseMip(b, decodeW: texW, decodeH: texH, imgW: imgW, imgH: imgH, format: format)
+        let container = parseMip(b, imgW: imgW, imgH: imgH, format: format)
         if let (mips, imageFormat, _) = container {
             let mip = mips[0]
             switch imageFormat {
@@ -245,7 +243,7 @@ public struct TexImage {
     ///   image별: (v4 조건 변형 체인 ×N) i32 mipCount | mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 dec | i32 comp | payload
     /// (mip0 외 mip 은 크기만큼 스킵). 종전 "compressedSize 가 EOF 에 닿는 int 스캔" 휴리스틱은 다중 mip
     /// 파일(DJK_1.tex mip 9개 등)에서 실패해 3D 모델 텍스처 대부분이 흰색 폴백이었다.
-    private static func parseMip(_ b: [UInt8], decodeW: Int, decodeH: Int, imgW: Int, imgH: Int, format: Int) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant])? {
+    private static func parseMip(_ b: [UInt8], imgW: Int, imgH: Int, format: Int) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant])? {
         guard let ti = indexOf(b, Array("TEXB".utf8)), ti + 9 <= b.count else { return nil }
         let version = Int(String(bytes: b[ti + 4..<ti + 8], encoding: .ascii) ?? "") ?? 0
         guard version >= 1, version <= 4 else { return nil }

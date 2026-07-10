@@ -128,6 +128,19 @@ final class PuppetModelTests: XCTestCase {
         XCTAssertNil(PuppetModel.parse(Data("MDLV0013".utf8)))  // 트렁케이트
     }
 
+    /// 실물 머티리얼/본 경로는 UTF-8 CJK("materials/太空球/…")를 포함 — 종전 바이트누적
+    /// Latin-1 디코드는 mojibake 를 만들어 pkg 조회가 실패했다(감사 §1 medium). UTF-8 라운드트립 검증.
+    func testDecodesCJKStringsAsUTF8() throws {
+        let mat = "materials/太空球/body.json"
+        let mdl = makeMDL(material: mat,
+                          verts: [(SIMD3(0, 0, 0), SIMD4(0, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(0, 0))],
+                          indices: [0, 0, 0],
+                          bones: [("骨_root", -1, [0, 0])])
+        let m = try XCTUnwrap(PuppetModel.parse(mdl))
+        XCTAssertEqual(m.material, mat)            // spot 1: 머티리얼 cstring
+        XCTAssertEqual(m.bones.first?.name, "骨_root")  // spot 2: 본 이름 cstring
+    }
+
     /// MDLV0023(3D 스키닝 모델로 저장된 2D 퍼펫 — Hollow Knight) → PuppetModel 로 라우팅·변환.
     /// pos/boneIdx/wt/uv 만 이식하고 정적 바인드 포즈로 렌더 가능해야(애니 미해독).
     func testRoutesMDLV0023SkinnedToPuppet() {

@@ -126,20 +126,12 @@ public struct Model3D: Equatable {
         let version = Int(magic.suffix(4)) ?? 23
         let hasAABB = version >= 17   // V0016 은 메시 헤더에 AABB 24B 가 없다(실측)
 
-        func u32(_ o: Int) -> UInt32? {
-            guard o >= 0, o + 4 <= bytes.count else { return nil }
-            return UInt32(bytes[o]) | (UInt32(bytes[o + 1]) << 8) | (UInt32(bytes[o + 2]) << 16) | (UInt32(bytes[o + 3]) << 24)
-        }
+        func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
         func cstring(_ o: inout Int) -> String? {
-            // UTF-8 디코드 필수: 실물 머티리얼 경로가 CJK("materials/models/太空球/…")를 포함 —
-            // 바이트별 UnicodeScalar(Latin-1) 해석은 mojibake 가 되어 pkg 엔트리 조회가 실패한다.
-            let start = o
-            while o < bytes.count, bytes[o] != 0 { o += 1 }
-            guard o < bytes.count else { return nil }
-            let s = String(decoding: bytes[start..<o], as: UTF8.self)
-            o += 1
-            return s
+            guard let r = readCString(bytes, at: o) else { return nil }
+            o = r.next
+            return r.value
         }
 
         // 헤더: magic(8) | u8 0 | u32 formatFlag(9) | u32(=1, 13) | u32 meshCount(17)
@@ -316,17 +308,9 @@ public struct Model3D: Equatable {
     /// 헤더 검증(모드∈집합, fps∈(0,240], 본수==skeleton)으로 종료를 판정한다.
     private static func parseAnimations(bytes: [UInt8], at magicOff: Int, boneCount: Int) -> [Model3D.Animation] {
         guard boneCount > 0 else { return [] }
-        func u32(_ o: Int) -> UInt32? {
-            guard o >= 0, o + 4 <= bytes.count else { return nil }
-            return UInt32(bytes[o]) | (UInt32(bytes[o + 1]) << 8) | (UInt32(bytes[o + 2]) << 16) | (UInt32(bytes[o + 3]) << 24)
-        }
+        func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
-        func cstring(_ o: Int) -> (String, Int)? {
-            var e = o
-            while e < bytes.count, bytes[e] != 0 { e += 1 }
-            guard e < bytes.count else { return nil }
-            return (String(decoding: bytes[o..<e], as: UTF8.self), e + 1)
-        }
+        func cstring(_ o: Int) -> (value: String, next: Int)? { readCString(bytes, at: o) }
         // 애니 헤더 시도: 성공 시 (이름,모드,fps,길이,본수,본트랙시작오프셋).
         // 모드 빈 문자열 = **디렉토리 레코드**(실측 link/talon: 본클립 뒤에 짧은 이름("Glance"/"Sleep")
         // + 빈 모드 + flags(0x401) 레코드 — 트랙 포맷은 동일, 씬 노출 애니 단위로 이벤트 마커를 보유).
@@ -442,11 +426,9 @@ public struct Model3D: Equatable {
     /// 변종 정점 스트라이드 추론: 정점 블롭 직후의 인덱스 블롭(u32 크기 + u16 인덱스)에서
     /// maxIndex+1 = 정점 수로 보고 vSize/count. 정수가 아니거나 범위(20..96) 밖이면 nil(안전 실패).
     private static func inferStride(bytes: [UInt8], indexBlobAt p: Int, vSize: Int) -> Int? {
-        func u32(_ o: Int) -> Int? {
-            guard o >= 0, o + 4 <= bytes.count else { return nil }
-            return Int(UInt32(bytes[o]) | (UInt32(bytes[o + 1]) << 8) | (UInt32(bytes[o + 2]) << 16) | (UInt32(bytes[o + 3]) << 24))
-        }
-        guard let iSize = u32(p), iSize > 0, iSize % 2 == 0, p + 4 + iSize <= bytes.count else { return nil }
+        guard let iSizeU = readU32LE(bytes, at: p), iSizeU > 0, iSizeU % 2 == 0 else { return nil }
+        let iSize = Int(iSizeU)
+        guard p + 4 + iSize <= bytes.count else { return nil }
         var maxIdx = 0
         var k = p + 4
         let end = p + 4 + iSize

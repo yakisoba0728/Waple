@@ -96,22 +96,14 @@ public struct PuppetModel: Equatable {
 
     private static func parseV0013(_ bytes: [UInt8]) -> PuppetModel? {
         guard bytes.count > 30 else { return nil }
-        func u32(_ o: Int) -> UInt32? {
-            guard o + 4 <= bytes.count else { return nil }
-            return UInt32(bytes[o]) | (UInt32(bytes[o + 1]) << 8) | (UInt32(bytes[o + 2]) << 16) | (UInt32(bytes[o + 3]) << 24)
-        }
+        func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
 
-        // 13B 헤더 스킵 → cstring 머티리얼.
+        // 13B 헤더 스킵 → cstring 머티리얼(UTF-8 — CJK 경로 보존, 종전 Latin-1 은 mojibake).
         var o = 8 + 13
-        guard o < bytes.count else { return nil }
-        var mat = ""
-        while o < bytes.count, bytes[o] != 0 {
-            mat.append(Character(UnicodeScalar(bytes[o])))
-            o += 1
-        }
-        guard o < bytes.count else { return nil }
-        o += 1  // '\0'
+        guard let c = readCString(bytes, at: o) else { return nil }
+        let mat = c.value
+        o = c.next
 
         // 정점 블롭 크기: 이후 16바이트 내 관용 탐색(%52==0, 0<size≤잔여). 미상 u32(0) 등을 건너뛴다.
         var vSize: Int? = nil
@@ -158,10 +150,9 @@ public struct PuppetModel: Equatable {
             o += 8
             var bones: [Bone] = []
             for _ in 0..<boneCount {
-                var name = ""
-                while o < bytes.count, bytes[o] != 0 { name.append(Character(UnicodeScalar(bytes[o]))); o += 1 }
-                guard o < bytes.count else { return model }
-                o += 1
+                guard let n = readCString(bytes, at: o) else { return model }
+                let name = n.value
+                o = n.next
                 guard let _ = u32(o), let parentRaw = u32(o + 4), let msz = u32(o + 8), msz == 64,
                       o + 12 + 64 + 1 <= bytes.count else { return model }
                 o += 12
@@ -186,11 +177,9 @@ public struct PuppetModel: Equatable {
             var anims: [Animation] = []
             for _ in 0..<animCount {
                 func cstr() -> String? {
-                    var s = ""
-                    while o < bytes.count, bytes[o] != 0 { s.append(Character(UnicodeScalar(bytes[o]))); o += 1 }
-                    guard o < bytes.count else { return nil }
-                    o += 1
-                    return s
+                    guard let c = readCString(bytes, at: o) else { return nil }
+                    o = c.next
+                    return c.value
                 }
                 guard let name = cstr(), let mode = cstr(),
                       let fps = f32(o), let length = u32(o + 4), let boneCount = u32(o + 12) else { return model }
