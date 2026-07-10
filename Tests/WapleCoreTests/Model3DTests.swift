@@ -244,17 +244,22 @@ final class Model3DTests: XCTestCase {
         appendEvents([(31.0 / 30, "Look Left"), (10.0 / 30, "Look Right")])   // 실물 link_adult 값
         appendAnim("test|nod_bone", "loop", 240)
         appendEvents([(1.0, "点头错帧")])                                      // 실물 3396722575 값(UTF-8)
+        // 디렉토리 레코드(실측 두-패밀리: 짧은 이름 + 빈 모드) — 이벤트는 이름 매칭 본클립에 병합,
+        // 렌더 클립 목록엔 미포함.
+        appendAnim("Glance", "", 84)
+        appendEvents([(2.0 / 30, "dir_evt")])
 
         let m = try XCTUnwrap(Model3D.parse(d))
-        XCTAssertEqual(m.animations.count, 2)
+        XCTAssertEqual(m.animations.count, 2, "디렉토리 레코드는 클립 목록 미포함(포즈 선택 무회귀)")
         XCTAssertEqual(m.animations[0].events,
-                       [AnimationMarker(name: "Look Left", frame: 31), AnimationMarker(name: "Look Right", frame: 10)],
-                       "트레일러 JSON {frame,name} 파스(파일 순서 보존)")
+                       [AnimationMarker(name: "Look Left", frame: 31), AnimationMarker(name: "Look Right", frame: 10),
+                        AnimationMarker(name: "dir_evt", frame: 2)],
+                       "본클립 트레일러 이벤트 + 디렉토리('Glance') 이벤트 병합(파일 순서 보존)")
         XCTAssertEqual(m.animations[1].events, [AnimationMarker(name: "点头错帧", frame: 30)],
                        "마지막 애니 트레일러 + UTF-8 이름")
         // PuppetModel 변환(MDLV0023 컨테이너 퍼펫)에도 이벤트가 이식된다.
         let pm = try XCTUnwrap(PuppetModel.parse(d))
-        XCTAssertEqual(pm.animations[0].events.map(\.name), ["Look Left", "Look Right"])
+        XCTAssertEqual(pm.animations[0].events.map(\.name), ["Look Left", "Look Right", "dir_evt"])
     }
 
     /// MDLA0006 애니 파스: 헤더 + 2 애니(리싱크 트레일러 경유) + 본별 키 트랙. 실측 레이아웃.
