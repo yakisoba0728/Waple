@@ -60,7 +60,7 @@ defaults write kr.yaki.waple waple.baseAssetsPath /path/to/wallpaper_engine/asse
 
 ```bash
 swift run Waple            # 메뉴바 유틸리티로 실행
-swift test                 # 전체 테스트(523개) + 실물 씬 그라운드-트루스
+swift test                 # 전체 테스트(800+개) + 실물 씬 그라운드-트루스
 swift build -c release     # 릴리스 빌드
 bash scripts/package-app.sh  # Waple.app 번들 생성(화면보호기 .saver 포함)
 ```
@@ -81,7 +81,7 @@ Sources/
   WapleRender/   Metal 렌더러, 셰이더, 텍스처 디코드, 오디오/비디오/웹 렌더러
   WapleLibrary/  워크샵 폴더 스캔·가져오기·라이브러리 저장
   Waple/         메뉴바 앱(AppKit), 데스크톱 창, 화면보호기, 설정
-Tests/           4개 타깃 · 523 테스트(합성 단위 + 실물 코퍼스 그라운드-트루스)
+Tests/           5개 타깃 · 800+ 테스트(합성 단위 + 실물 코퍼스 그라운드-트루스)
 scripts/         package-app.sh (앱/화면보호기 번들)
 ```
 
