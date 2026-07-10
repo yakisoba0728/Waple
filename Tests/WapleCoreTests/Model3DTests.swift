@@ -203,6 +203,60 @@ final class Model3DTests: XCTestCase {
         }
     }
 
+    /// MDLA0006 이벤트 마커 파스: 애니 트레일러의 `…ffffffff | u32 count | count×(f32 초 + JSON cstring)`
+    /// (실측 레이아웃: 3737268876 talon/link, 3351179520/3396722575 — UTF-8 이름 포함). 마지막 애니
+    /// (다음 헤더 없음)의 트레일러도 스캔된다.
+    func testParsesMDLA0006EventMarkers() throws {
+        let vSkin = SynthVert(pos: SIMD3(1, 1, 1), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
+                              bones: SIMD4(1, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
+        let m0 = SynthMesh(material: "materials/a.json", min: SIMD3(0, 0, 0), max: SIMD3(1, 1, 1),
+                           skinned: true, verts: [vSkin, vSkin, vSkin], indices: [0, 1, 2])
+        var d = makeModelU16([m0])
+        d.append(Data("MDLS0004".utf8)); d.append(0)
+        u(0, into: &d); u(1, into: &d)
+        d.append(Data("Root".utf8)); d.append(0)
+        u(1, into: &d)
+        var pr: Int32 = -1; withUnsafeBytes(of: &pr) { d.append(contentsOf: $0) }
+        u(64, into: &d)
+        for x: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(x, into: &d) }
+        d.append(0)
+        d.append(Data("MDLA0006".utf8)); d.append(0)
+        u(0, into: &d); u(2, into: &d); u(100, into: &d); u(0, into: &d)
+        func appendAnim(_ name: String, _ mode: String, _ length: Int) {
+            d.append(Data(name.utf8)); d.append(0)
+            d.append(Data(mode.utf8)); d.append(0)
+            f(30, into: &d); u(UInt32(length), into: &d); u(0, into: &d); u(1, into: &d); u(0, into: &d)
+            u(36, into: &d)   // 본0 트랙: 1 키
+            for x: Float in [0, 0, 0, 0, 0, 0, 1, 1, 1] { f(x, into: &d) }
+            u(0, into: &d)    // blob2
+        }
+        func appendEvents(_ events: [(Float, String)]) {
+            // 실측 트레일러: [AABB 등 잡동사니] ffffffff | u32 count | count×(f32 초 | JSON cstring)
+            u(0, into: &d); u(0xFFFF_FFFF, into: &d)
+            u(UInt32(events.count), into: &d)
+            for (t, name) in events {
+                f(t, into: &d)
+                d.append(Data("{\"frame\":\(Int(t * 30)),\"name\":\"\(name)\"}".utf8)); d.append(0)
+            }
+            d.append(0)
+        }
+        appendAnim("test|glance_bone", "loop", 84)
+        appendEvents([(31.0 / 30, "Look Left"), (10.0 / 30, "Look Right")])   // 실물 link_adult 값
+        appendAnim("test|nod_bone", "loop", 240)
+        appendEvents([(1.0, "点头错帧")])                                      // 실물 3396722575 값(UTF-8)
+
+        let m = try XCTUnwrap(Model3D.parse(d))
+        XCTAssertEqual(m.animations.count, 2)
+        XCTAssertEqual(m.animations[0].events,
+                       [AnimationMarker(name: "Look Left", frame: 31), AnimationMarker(name: "Look Right", frame: 10)],
+                       "트레일러 JSON {frame,name} 파스(파일 순서 보존)")
+        XCTAssertEqual(m.animations[1].events, [AnimationMarker(name: "点头错帧", frame: 30)],
+                       "마지막 애니 트레일러 + UTF-8 이름")
+        // PuppetModel 변환(MDLV0023 컨테이너 퍼펫)에도 이벤트가 이식된다.
+        let pm = try XCTUnwrap(PuppetModel.parse(d))
+        XCTAssertEqual(pm.animations[0].events.map(\.name), ["Look Left", "Look Right"])
+    }
+
     /// MDLA0006 애니 파스: 헤더 + 2 애니(리싱크 트레일러 경유) + 본별 키 트랙. 실측 레이아웃.
     func testParsesMDLA0006Animations() throws {
         let vSkin = SynthVert(pos: SIMD3(1, 1, 1), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
@@ -268,6 +322,7 @@ final class Model3DTests: XCTestCase {
         XCTAssertEqual(a0.tracks.count, 2)
         XCTAssertEqual(a0.tracks[0].count, 2)
         XCTAssertEqual(a0.tracks[1][1].angles.z, 1, accuracy: 1e-6)
+        XCTAssertTrue(a0.events.isEmpty, "이벤트 없는 트레일러 → 마커 오검출 없음")
         XCTAssertEqual(m.animations[1].name, "test|glance_bone")
         XCTAssertEqual(m.animations[1].mode, "single")
         XCTAssertEqual(m.animations[1].tracks[1][0].scale, SIMD3(2, 2, 2))
@@ -542,6 +597,11 @@ final class Model3DRealFileTests: XCTestCase {
         XCTAssertEqual(link.bones.count, 31)
         XCTAssertEqual(link.animations.count, 4, "link_adult 4 애니(헤더 count 불신, 리싱크)")
         XCTAssertTrue(link.animations.contains { $0.name.lowercased().contains("idle") }, "idle 존재")
+        // 이벤트 마커(실측 hex 확정): glance 애니 트레일러에 Look Left@31, Look Right@10.
+        let glance = try XCTUnwrap(link.animations.first { $0.name.lowercased().contains("glance") })
+        XCTAssertEqual(glance.events, [AnimationMarker(name: "Look Left", frame: 31),
+                                       AnimationMarker(name: "Look Right", frame: 10)],
+                       "MDLA0006 트레일러 이벤트(objects/247 글랜스 훅이 소비)")
         XCTAssertEqual(Model3DPose.resolveAnimation(model: link, layerName: "Idle"),
                        link.animations.firstIndex { $0.name.lowercased().contains("idle") })
         // 스킨 행렬: 바인드 포즈(애니=-1) 항등, 애니 t>0 은 비항등(모션).

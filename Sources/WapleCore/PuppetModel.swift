@@ -41,6 +41,9 @@ public struct PuppetModel: Equatable {
         public let fps: Float
         public let lengthFrames: Int
         public let tracks: [[Key]]        // 본 인덱스별 키 배열(프레임당 1키), 빈 배열 = 정적 본
+        /// 이벤트 마커(MDLV0023 컨테이너 퍼펫의 MDLA0006 트레일러 — Model3D.Animation.events 이식).
+        /// 네이티브 MDLV0013(MDLA0001)은 코퍼스 이벤트 실측 0 — 항상 빈 배열.
+        public var events: [AnimationMarker] = []
     }
 
     public let material: String
@@ -81,10 +84,12 @@ public struct PuppetModel: Equatable {
         // 본 규약(name/parent/bind)은 2D 퍼펫과 동형 — 그대로 이식(정적 스킨은 애니 부재 시 항등이라 무해).
         pm.bones = m.bones.map { Bone(name: $0.name, parent: $0.parent, bind: $0.bind) }
         pm.animations = m.animations.map { anim in
-            Animation(name: anim.name, mode: anim.mode, fps: anim.fps, lengthFrames: anim.lengthFrames,
-                      tracks: anim.tracks.map { track in
-                          track.map { Key(position: $0.position, angles: $0.angles, scale: $0.scale) }
-                      })
+            var a = Animation(name: anim.name, mode: anim.mode, fps: anim.fps, lengthFrames: anim.lengthFrames,
+                              tracks: anim.tracks.map { track in
+                                  track.map { Key(position: $0.position, angles: $0.angles, scale: $0.scale) }
+                              })
+            a.events = anim.events
+            return a
         }
         return pm
     }
