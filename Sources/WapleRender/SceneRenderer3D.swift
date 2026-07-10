@@ -283,6 +283,7 @@ extension SceneRenderer {
                                  visible: layer.initialVisible)
             attachScripts(bb, sources: layer.propertyScripts)
             billboards.append(bb)
+            billboardDefs.append(layer)   // 록스텝(이벤트 마커 결속 — buildAnimationEventTargets)
             bbLoaded += 1
         }
 

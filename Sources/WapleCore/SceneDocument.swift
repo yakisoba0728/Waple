@@ -175,6 +175,12 @@ public struct SceneObject3D: Equatable {
     public var propertyScripts: [String: String] = [:]
     /// 활성 애니메이션(animationlayers 파스). nil = 정지(바인드 포즈). 렌더러가 이름 매칭 후 GPU 스키닝.
     public var animation: AnimationSelection? = nil
+    /// animationlayers 전 레이어(스크립트·이벤트 타임라인 — 실물 젤다 blend 의 animationEvent 훅 서식지).
+    /// 포즈 선택은 종전 `animation`(최고 blend 단일) 그대로 — 이 목록은 이벤트 발화·엔진 생성 전용(무회귀).
+    public var animationLayers: [AnimationLayer] = []
+    /// 프로퍼티 바인딩(origin/angles/scale/alpha/color)의 이벤트 마커 타임라인(options.events 보유분만).
+    /// 값 구동은 미구현(3D 변환은 스크립트 경로) — 마커 발화 클록 전용(실물 젤다 walk_end/blink/change).
+    public var eventTimelines: [PropertyAnimation] = []
     public init(id: Int, name: String, model: String, origin: Vec3, angles: Vec3, scale: Vec3,
                 castShadow: Bool, parent: Int?, effects: [SceneEffect], order: Int = 0) {
         self.id = id; self.name = name; self.model = model
@@ -624,6 +630,12 @@ extension SceneDocument {
         if let vs = visibleScript { ps["visible"] = vs }
         o.propertyScripts = ps
         o.animation = parseAnimationLayers(obj["animationlayers"])
+        o.animationLayers = parseAllAnimationLayers(obj["animationlayers"])
+        for key in ["origin", "angles", "scale", "alpha", "color"] {
+            if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind), !a.events.isEmpty {
+                o.eventTimelines.append(a)
+            }
+        }
         return o
     }
 
