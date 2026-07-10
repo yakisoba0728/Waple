@@ -186,32 +186,6 @@ final class SceneVisibleScriptClassificationTests: XCTestCase {
 
 /// 렌더 통합: visible 스크립트 레이어(draw 스킵/부활) + shared 컨트롤러→소비자(실물 3394601417 축소판).
 final class SceneVisibleScriptRenderTests: XCTestCase {
-    private func i32(_ n: Int) -> Data { var v = UInt32(n).littleEndian; return Data(bytes: &v, count: 4) }
-
-    private func encodePkg(_ files: [(String, Data)]) -> Data {
-        var out = Data()
-        let version = "PKGV0001"
-        out.append(i32(version.utf8.count)); out.append(version.data(using: .utf8)!)
-        out.append(i32(files.count))
-        var offset = 0
-        for (name, data) in files {
-            out.append(i32(name.utf8.count)); out.append(name.data(using: .utf8)!)
-            out.append(i32(offset)); out.append(i32(data.count)); offset += data.count
-        }
-        for (_, data) in files { out.append(data) }
-        return out
-    }
-
-    private func solidTex(_ r: UInt8, _ g: UInt8, _ b: UInt8, w: Int = 8, h: Int = 8) -> Data {
-        var px = [UInt8](); px.reserveCapacity(w * h * 4)
-        for _ in 0..<(w * h) { px.append(contentsOf: [r, g, b, 255]) }
-        let png = OffscreenCapture.png(rgba: px, width: w, height: h)!
-        var tex = Data("TEXV0005".utf8)
-        tex.append(Data(repeating: 0, count: 34))
-        tex.append(png)
-        return tex
-    }
-
     /// 오브젝트: 흰 bg → 초록(alpha 스크립트: shared.a==1 → 1) → 컨트롤러(visible 스크립트 top-level 이
     /// shared.a=1, update 없음) → 빨강 풀스크린(visible 스크립트 false → draw 스킵)
     /// → 파랑 좌반(정적 visible false + 스크립트 true → 부활).

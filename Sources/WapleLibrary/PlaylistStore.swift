@@ -15,10 +15,7 @@ public final class PlaylistStore {
 
     public init(baseDirectory: URL) {
         fileURL = baseDirectory.appendingPathComponent("playlist.json")
-        let data: Data
-        do { data = try Data(contentsOf: fileURL) }
-        catch CocoaError.fileReadNoSuchFile { return }  // 최초 실행: 파일 없음(정상)
-        catch { NSLog("%@", "[Waple] playlist.json unreadable — preserving, starting default: \(error)"); corrupt = true; return }
+        guard let data = readStoreFile(fileURL, what: "playlist.json", note: "starting default", corrupt: &corrupt) else { return }
         // init 내 직접 대입이라 didSet(save) 미발동 — 로드가 파일을 되쓰지 않는다.
         do { model = try JSONDecoder().decode(Model.self, from: data) }
         catch { NSLog("%@", "[Waple] playlist.json corrupt — preserving, starting default: \(error)"); corrupt = true }

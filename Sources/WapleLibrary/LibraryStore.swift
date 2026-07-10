@@ -33,16 +33,8 @@ public final class LibraryStore {
     private var indexCorrupt = false
 
     private func load() {
-        let data: Data
-        do {
-            data = try Data(contentsOf: indexURL)
-        } catch CocoaError.fileReadNoSuchFile {
-            return  // 최초 실행: 인덱스 없음(정상).
-        } catch {
-            NSLog("%@", "[Waple] library index unreadable at \(indexURL.path): \(error) — preserving file, starting empty")
-            indexCorrupt = true
-            return
-        }
+        guard let data = readStoreFile(indexURL, what: "library index at \(indexURL.path)",
+                                       note: "starting empty", corrupt: &indexCorrupt) else { return }
         do {
             let idx = try JSONDecoder().decode(Index.self, from: data)
             entries = idx.entries
@@ -54,17 +46,7 @@ public final class LibraryStore {
     }
 
     private func save() {
-        // 손상된 인덱스를 덮어쓰기 전에 1회 백업(데이터 손실 방지).
-        if indexCorrupt {
-            let backup = indexURL.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970))")
-            do {
-                try FileManager.default.moveItem(at: indexURL, to: backup)
-                NSLog("%@", "[Waple] backed up corrupt library index to \(backup.path)")
-            } catch {
-                NSLog("%@", "[Waple] failed to back up corrupt library index at \(indexURL.path): \(error)")
-            }
-            indexCorrupt = false
-        }
+        backupCorruptStoreFile(indexURL, &indexCorrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
         let idx = Index(entries: entries, selectedId: selectedId)
         do {
             let data = try JSONEncoder().encode(idx)
