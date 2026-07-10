@@ -5,7 +5,7 @@ import WapleCore
 
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
     var hasAnimations = false
     struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -270,6 +270,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var queue: MTLCommandQueue?
     var pipeline: MTLRenderPipelineState?
     var blendPipeline: MTLRenderPipelineState?
+    /// 2D 포워드 라이팅 파이프라인(f_lit) — 라이트 씬의 LIGHTING:1 레이어 전용. nil 이면 미사용.
+    var litPipeline: MTLRenderPipelineState?
+    /// 씬당 라이트 유니폼(상수) — forwardLit=false(라이트 씬 아님)면 전 레이어 f_main(무회귀).
+    var forwardLit = false
+    var lightPositions = [SIMD4<Float>](repeating: .zero, count: 4)    // [4] xyz=world, w=active
+    var lightColorRadius = [SIMD4<Float>](repeating: .zero, count: 4)  // [4] rgb=color×intensity, w=radius
+    var lightAmbient = SIMD4<Float>(0, 0, 0, 0)                        // xyz=(skylight+ambient)/2
     var layers: [GPULayer] = []
     var clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
     var cameraOffset = SIMD2<Float>(0, 0)
@@ -463,6 +470,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         bdesc.fragmentFunction = library.makeFunction(name: "f_blend")
         bdesc.colorAttachments[0]!.pixelFormat = .bgra8Unorm
         self.blendPipeline = try? device.makeRenderPipelineState(descriptor: bdesc)
+        // 포워드 라이팅(f_lit): f_main 과 동일 프리멀티 오버 블렌드 — 라이트 반응만 다르다.
+        let ldesc = MTLRenderPipelineDescriptor()
+        ldesc.vertexFunction = library.makeFunction(name: "v_main")
+        ldesc.fragmentFunction = library.makeFunction(name: "f_lit")
+        let latt = ldesc.colorAttachments[0]!
+        latt.pixelFormat = .bgra8Unorm
+        latt.isBlendingEnabled = true
+        latt.rgbBlendOperation = .add; latt.alphaBlendOperation = .add
+        latt.sourceRGBBlendFactor = .one; latt.sourceAlphaBlendFactor = .one
+        latt.destinationRGBBlendFactor = .oneMinusSourceAlpha; latt.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        self.litPipeline = try? device.makeRenderPipelineState(descriptor: ldesc)
 
         clearColor = MTLClearColor(red: Double(doc.clearColor.x), green: Double(doc.clearColor.y),
                                    blue: Double(doc.clearColor.z), alpha: 1)
@@ -473,6 +491,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
         sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc),
                                          soundNames: doc.sounds.map { $0.name })
+        forwardLit = false  // 마운트 재사용 대비 기본값(2D 브랜치에서만 활성화)
         // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
         // 메시/빌보드가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
         if let cam = doc.camera3D, !doc.objects3D.isEmpty {
@@ -482,6 +501,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         if !is3D {
             camera3D = nil
+            // 2D 포워드 라이팅: 씬 라이트 유니폼(상수) 산출. 게이트(forwardLit2D)=2D+라이트 존재.
+            // buildLayers 보다 먼저 — 레이어별 litRect 산출 게이트가 이 값을 참조.
+            forwardLit = doc.forwardLit2D && litPipeline != nil
+            if forwardLit {
+                let u = SceneLight3D.forwardUniforms(doc.lights3D, ambient: doc.ambientColor, skylight: doc.skylightColor)
+                lightPositions = u.positions
+                lightColorRadius = u.colorRadius
+                lightAmbient = SIMD4(u.ambientTerm.x, u.ambientTerm.y, u.ambientTerm.z, 0)
+            }
             layers = buildLayers(doc: doc, package: package, device: device)
             particleSystems = buildParticles(doc: doc, package: package, device: device)
             if !particleSystems.isEmpty {
@@ -803,6 +831,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         audioProvider?.stop(); audioProvider = nil; hasAudio = false
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
+        forwardLit = false; litPipeline = nil  // 라이트 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil
