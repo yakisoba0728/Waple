@@ -146,6 +146,12 @@ public struct AnimationLayer: Equatable {
     public let blend: Float
     public let rate: Float
     public let visible: Bool
+    /// blend/visible 바인딩의 프로퍼티 스크립트(키 → JS 소스) — 실물 animationEvent 훅의 주 서식지
+    /// (3737268876 젤다 blend 핸들러 19개, 3351179520/3396722575 visible 핸들러). 렌더러가 엔진 생성.
+    public var scripts: [String: String] = [:]
+    /// blend/visible 바인딩의 이벤트 마커 타임라인(options.events 보유분만 — 젤다 "surprise" 등).
+    /// 값 구동(blend 키프레임 적용)은 미구현 — 마커 발화 클록으로만 사용(정적 blend 무회귀).
+    public var eventTimelines: [PropertyAnimation] = []
     public init(name: String, additive: Bool, blend: Float, rate: Float, visible: Bool) {
         self.name = name; self.additive = additive; self.blend = blend
         self.rate = rate; self.visible = visible
@@ -172,6 +178,12 @@ public struct SceneObject3D: Equatable {
     public var propertyScripts: [String: String] = [:]
     /// 활성 애니메이션(animationlayers 파스). nil = 정지(바인드 포즈). 렌더러가 이름 매칭 후 GPU 스키닝.
     public var animation: AnimationSelection? = nil
+    /// animationlayers 전 레이어(스크립트·이벤트 타임라인 — 실물 젤다 blend 의 animationEvent 훅 서식지).
+    /// 포즈 선택은 종전 `animation`(최고 blend 단일) 그대로 — 이 목록은 이벤트 발화·엔진 생성 전용(무회귀).
+    public var animationLayers: [AnimationLayer] = []
+    /// 프로퍼티 바인딩(origin/angles/scale/alpha/color)의 이벤트 마커 타임라인(options.events 보유분만).
+    /// 값 구동은 미구현(3D 변환은 스크립트 경로) — 마커 발화 클록 전용(실물 젤다 walk_end/blink/change).
+    public var eventTimelines: [PropertyAnimation] = []
     public init(id: Int, name: String, model: String, origin: Vec3, angles: Vec3, scale: Vec3,
                 castShadow: Bool, parent: Int?, effects: [SceneEffect], order: Int = 0) {
         self.id = id; self.name = name; self.model = model
@@ -693,6 +705,12 @@ extension SceneDocument {
         if let vs = visibleScript { ps["visible"] = vs }
         o.propertyScripts = ps
         o.animation = parseAnimationLayers(obj["animationlayers"])
+        o.animationLayers = parseAllAnimationLayers(obj["animationlayers"])
+        for key in ["origin", "angles", "scale", "alpha", "color"] {
+            if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind), !a.events.isEmpty {
+                o.eventTimelines.append(a)
+            }
+        }
         return o
     }
 
@@ -787,11 +805,19 @@ extension SceneDocument {
             guard let l = any as? [String: Any] else { return nil }
             let visible = (l["visible"] as? Bool)
                 ?? ((l["visible"] as? [String: Any])?["value"] as? Bool) ?? true
-            return AnimationLayer(name: (l["name"] as? String) ?? "",
-                                  additive: (l["additive"] as? Bool) ?? false,
-                                  blend: float(l["blend"]) ?? 1,
-                                  rate: float(l["rate"]) ?? 1,
-                                  visible: visible)
+            var al = AnimationLayer(name: (l["name"] as? String) ?? "",
+                                    additive: (l["additive"] as? Bool) ?? false,
+                                    blend: float(l["blend"]) ?? 1,
+                                    rate: float(l["rate"]) ?? 1,
+                                    visible: visible)
+            // blend/visible 바인딩의 스크립트·이벤트 타임라인(실물: 젤다 blend 의 animationEvent 훅 +
+            // options.events 마커, 3396722575 visible 의 훅). 값 구동은 종전대로 정적 초기값만.
+            for key in ["blend", "visible"] {
+                guard let bind = l[key] as? [String: Any] else { continue }
+                if let sc = bind["script"] as? String { al.scripts[key] = sc }
+                if let a = PropertyAnimation.parse(bind), !a.events.isEmpty { al.eventTimelines.append(a) }
+            }
+            return al
         }
     }
 

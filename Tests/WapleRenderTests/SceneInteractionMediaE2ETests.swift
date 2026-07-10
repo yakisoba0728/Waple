@@ -277,6 +277,78 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
         XCTAssertLessThan(after.g, 0.2)
     }
 
+    /// 실 발화원(타임라인 마커 검출): options.events{frame:15,"go"} 타임라인이 재생 클록으로
+    /// 마커를 **넘는 순간** 훅 발화 — simulateAnimationEvent 아닌 tickAnimationEvents(라이브 draw 가
+    /// 매 프레임 호출하는 검출 경로) 로 시간 전진. 마커 전은 미발화(타이밍 검증).
+    func testTimelineMarkerFiresAnimationEventOnRealPlaybackPath() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"name":"ctrlx","image":"models/ctrl.json","size":"2 2",
+            "origin":{"value":"4 4 0",
+                      "animation":{"c0":[{"frame":0,"value":0},{"frame":30,"value":0}],
+                                   "relative":true,
+                                   "options":{"fps":30,"length":30,"mode":"single",
+                                              "events":[{"frame":15,"name":"go"}]}}},
+            "visible":{"value":true,"script":"'use strict';\\nshared.a=0;\\nexport function animationEvent(event){ if(event.name=='go'){ shared.a=1; } }"}},
+           {"id":3,"image":"models/red.json","origin":"960 540 0","size":"1920 1080",
+            "alpha":{"value":1,"script":"'use strict';\\nexport function update(v){ return shared.a==1 ? 1 : 0; }"}}
+         ]}
+        """
+        var files: [(String, Data)] = [("scene.json", scene.data(using: .utf8)!)]
+        for (name, tex) in [("bg", solidTex(255, 255, 255)), ("ctrl", solidTex(128, 128, 128)),
+                            ("red", solidTex(255, 0, 0))] {
+            files.append(("models/\(name).json", Data(#"{"material":"materials/\#(name).json"}"#.utf8)))
+            files.append(("materials/\(name).json", Data(#"{"passes":[{"textures":["\#(name)"]}]}"#.utf8)))
+            files.append(("materials/\(name).tex", tex))
+        }
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                    project: try makeProject(files, id: "waple_animevt_marker_e2e"))
+        defer { r.teardown() }
+        XCTAssertEqual(r.animEventTargets.count, 1, "이벤트 타깃: ctrl 오브젝트 1개(타임라인+훅 엔진)")
+        let out = URL(fileURLWithPath: "/tmp/waple_animevt_marker_e2e")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        func capture(_ tag: String) throws -> (r: Double, g: Double, b: Double) {
+            let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.5], toDir: out).first)
+            let dst = out.appendingPathComponent("\(tag).png")
+            try? FileManager.default.removeItem(at: dst); try FileManager.default.moveItem(at: url, to: dst)
+            return try meanRGB(dst)
+        }
+        r.tickAnimationEvents(time: 0.1)   // frame 3 < 마커 15 — 미발화
+        let before = try capture("before")
+        XCTAssertGreaterThan(before.g, 0.8, "마커(frame 15) 전: off(흰): \(before)")
+        r.tickAnimationEvents(time: 1.0)   // frame 30 — (3, 30] 이 15 를 통과 → 발화
+        let after = try capture("after")
+        XCTAssertGreaterThan(after.r, 0.8, "마커 통과 → animationEvent('go') → 오버레이 on(빨강): \(after)")
+        XCTAssertLessThan(after.g, 0.2)
+    }
+
+    /// 통합(실물 3737268876 젤다): mount → 시간 전진(tickAnimationEvents = 라이브 draw 검출 경로) →
+    /// animationlayers blend 타임라인의 "surprise" 마커(frame 0)가 같은 오브젝트 핸들러에 배달돼
+    /// shared.guestBlink=3(surprise 핸들러 전용 값) — 이후 눈꺼풀 타임라인 half@0→blink@2→half@6→open@8
+    /// 순차 발화로 0 복귀(시각순·오브젝트 스코프 검증).
+    func testRealZeldaSurpriseMarkerFiresOnPlayback() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)),
+                    project: try realProject("3737268876"))
+        defer { r.teardown() }
+        XCTAssertFalse(r.animEventTargets.isEmpty, "젤다: 이벤트 타깃(타임라인+훅 엔진) 수집돼야")
+        let probe = try XCTUnwrap(TextScriptEngine(
+            script: "export function update(v){ return shared.guestBlink === undefined ? -1 : shared.guestBlink; }",
+            scene: try XCTUnwrap(r.sceneScript)))
+        XCTAssertEqual(probe.evaluateVec(current: [0])?.first, 0, "mount 직후: 훅 미발화(스크립트 초기값 0)")
+        r.tickAnimationEvents(time: 1.0 / 60)   // 최초 틱: frame 0 마커(surprise 등) 발화
+        XCTAssertEqual(probe.evaluateVec(current: [0])?.first, 3,
+                       "'surprise' 훅 수신 — guestBlink=3 은 surprise 핸들러 전용 값")
+        r.tickAnimationEvents(time: 0.5)        // frame 15: 눈꺼풀 blink@2→half@6→open@8 시각순 발화
+        XCTAssertEqual(probe.evaluateVec(current: [0])?.first, 0,
+                       "blink 타임라인 완주(open@8 이 마지막) → 0 복귀")
+    }
+
     // MARK: - 미디어 → 씬 배달
 
     private struct FakeMediaProvider: NowPlayingProvider, ArtworkProviding {

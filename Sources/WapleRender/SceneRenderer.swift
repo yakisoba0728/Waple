@@ -168,19 +168,179 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         dispatchPointerEvent(hook: "cursorMove", x: x, y: y)
     }
 
-    // ── animationEvent (스크립트 측 배선 진입점 — 코퍼스 5패키지) ────────────────────
-    /// 애니메이션 마커 발송 진입점. WE 규약: 타임라인/퍼펫-워프가 명명된 마커에 도달하면
-    /// animationEvent(event{name}, value) 를 호출(실물 3737268876 Zelda: "surprise" 마커에 SFX 트리거).
-    /// **발화원(마커 검출)은 PuppetModel/SceneRenderer3D(수정 금지 파일)에 있어 여기선 진입점만 제공** —
-    /// 그쪽이 이 메서드를 호출하면 side-effect 훅이 발송된다(현재 호출자 없음). 프로퍼티-반환 의미(값 갱신)는
-    /// callHook 이 반환값을 쓰지 않아 미반영 — 프로퍼티 평가 루프 통합 필요(한계, 보고 참조).
+    // ── animationEvent (발화원: 타임라인/퍼펫 마커 검출 — 코퍼스 5패키지) ────────────────
+    /// 발화원 = tickAnimationEvents(라이브 draw 전용 — 캡처/헤드리스 경로는 미호출, 결정성 유지).
+    /// 마커 저장 위치(실측 2026-07-10): ① scene.json 프로퍼티 애니 options.events{frame,name}
+    /// (젤다 40지점 — origin/scale/angles + animationlayers blend), ② 퍼펫 .mdl MDLA0006 트레일러
+    /// JSON cstring(젤다 talon/link, 3351179520/3396722575). 배달은 **오브젝트(레이어) 스코프** —
+    /// 브로드캐스트면 젤다의 "open"(궤짝↔눈꺼풀)·"surprise"(게스트 다수) 이름 충돌이 오발화한다.
+    /// 한계(코퍼스 근거): ① 프로퍼티-반환 의미(값 갱신) 미반영 — 발화 가능한 3패키지(젤다·3351179520·
+    /// 3396722575)의 전 핸들러가 side-effect 전용(반환문 없음)이고, 반환값을 쓰는 2패키지(3596044309/
+    /// 3641860575 mInfo/mTitleUpdate)는 패키지 내 발화원(마커 정의) 자체가 0 이라 사문 — callHook 반환
+    /// 미사용 유지. ② startpaused/play()/pause() 런타임 제어 미구현: 값 평가와 동일 클록(마운트부터
+    /// 전 타임라인 재생)으로 발화(일관 근사 — getAnimation(name).play() 는 심 상태만). ③ effect
+    /// constantshadervalues·재질 JSON 애니 마커(젤다 4지점)는 해당 스크립트/애니 평가 자체가 미구현.
     func dispatchAnimationEvent(name: String) {
-        let q = (try? String(data: JSONEncoder().encode(name), encoding: .utf8) ?? "\"\"") ?? "\"\""
-        dispatchSceneEvent("animationEvent", eventJS: "new AnimationEvent({ name: \(q) })")
+        dispatchSceneEvent("animationEvent", eventJS: Self.animationEventJS(name: name))
     }
 
-    /// animationEvent 시뮬(테스트/헤드리스 — 발화원 대체).
+    static func animationEventJS(name: String) -> String {
+        let q = (try? String(data: JSONEncoder().encode(name), encoding: .utf8) ?? "\"\"") ?? "\"\""
+        return "new AnimationEvent({ name: \(q) })"
+    }
+
+    /// animationEvent 시뮬(테스트/헤드리스 — 브로드캐스트 배달, 실 발화원은 오브젝트 스코프).
     public func simulateAnimationEvent(name: String) { dispatchAnimationEvent(name: name) }
+
+    /// 마커 타임라인 1개: 클록 파라미터 + 마커들. lastF = 단조 누적 프레임(초×fps×rate)의 직전 틱 값 —
+    /// 초기 -1 로 frame 0 마커가 최초 틱에 발화(PropertyAnimation.firedMarkers 규약).
+    struct AnimEventTimeline {
+        let events: [AnimationMarker]
+        let fps: Float
+        let length: Float
+        let mode: String
+        let rate: Float
+        var lastF: Float = -1
+    }
+    /// 오브젝트(레이어) 단위 발화 타깃: 마커 타임라인들 + 같은 오브젝트의 animationEvent 훅 엔진들.
+    struct AnimEventTarget {
+        var timelines: [AnimEventTimeline]
+        let engines: [TextScriptEngine]
+    }
+    var animEventTargets: [AnimEventTarget] = []
+
+    /// mount 말미: 오브젝트별로 ① 이벤트 마커 타임라인(프로퍼티 애니 + animationlayers 바인딩 +
+    /// 퍼펫/모델 .mdl 재생 클립 — 렌더 경로의 재생 클립 선택과 동일 규칙)과 ② animationEvent 훅 엔진
+    /// (기존 스크립트 엔진 + animationlayers blend/visible 스크립트, 후자는 여기서 생성)을 수집.
+    /// 2D(GPULayer)·3D(objects3D/Node3D/MeshRenderable) 양 경로 공용. 어느 한쪽이라도 없으면 타깃 제외.
+    /// def(SceneLayer)의 이벤트 타임라인: 프로퍼티 애니(options.events) + animationlayers 바인딩.
+    private func defEventTimelines(_ def: SceneLayer) -> [AnimEventTimeline] {
+        var timelines: [AnimEventTimeline] = []
+        for a in def.animations.values where !a.events.isEmpty {
+            timelines.append(AnimEventTimeline(events: a.events, fps: a.fps, length: a.length,
+                                               mode: a.mode, rate: 1))
+        }
+        for al in def.animationLayers {
+            for a in al.eventTimelines {   // events 보유분만 파스됨(SceneDocument)
+                timelines.append(AnimEventTimeline(events: a.events, fps: a.fps, length: a.length,
+                                                   mode: a.mode, rate: 1))
+            }
+        }
+        return timelines
+    }
+
+    /// def 의 animationlayers blend/visible 스크립트 → 엔진(여기서 생성 — Resources 는 layer 키만 취급).
+    private func animLayerEngines(_ def: SceneLayer) -> [TextScriptEngine] {
+        var engines: [TextScriptEngine] = []
+        for al in def.animationLayers {
+            for src in al.scripts.values {
+                if let e = makeScriptEngine(src, layerName: def.name.isEmpty ? nil : def.name) {
+                    engines.append(e)
+                }
+            }
+        }
+        return engines
+    }
+
+    func buildAnimationEventTargets(doc: SceneDocument) {
+        animEventTargets = []
+        for gl in layers {
+            guard let def = gl.def else { continue }
+            var timelines = defEventTimelines(def)
+            // 퍼펫 .mdl 클립 마커: 재생 중 클립만(FrameEncoder 규칙 — 2+ 활성 레이어면 이름 매칭
+            // 캐스케이드(각자 rate), 0/1 이면 클립 0 고정). 클립 클록 = PuppetPose.frame 과 동일 파라미터.
+            if let pm = gl.puppet, !pm.animations.isEmpty {
+                let eff = def.animationLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
+                let playing: [(clip: Int, rate: Float)] = eff.count >= 2
+                    ? eff.map { (PuppetPose.clipIndex(model: pm, name: $0.element.name, fallback: $0.offset), $0.element.rate) }
+                    : [(0, 1)]
+                for (ci, rate) in playing {
+                    guard ci >= 0, ci < pm.animations.count else { continue }
+                    let clip = pm.animations[ci]
+                    guard !clip.events.isEmpty else { continue }
+                    timelines.append(AnimEventTimeline(events: clip.events, fps: clip.fps,
+                                                       length: Float(clip.lengthFrames), mode: clip.mode, rate: rate))
+                }
+            }
+            // 엔진: 레이어 propScripts + animationlayers 스크립트.
+            let engines = gl.propScripts.map(\.engine) + animLayerEngines(def)
+            let hookEngines = engines.filter { $0.hookNames.contains("animationEvent") }
+            guard !timelines.isEmpty, !hookEngines.isEmpty else { continue }
+            animEventTargets.append(AnimEventTarget(timelines: timelines, engines: hookEngines))
+        }
+        // 3D 씬 빌보드(2D 이미지 레이어 — 실물 젤다 눈꺼풀 blink 가 이 경로): 록스텝 def 로 결속.
+        for (i, bb) in billboards.enumerated() where i < billboardDefs.count {
+            let def = billboardDefs[i]
+            let timelines = defEventTimelines(def)
+            let engines = bb.scripts.map(\.engine) + animLayerEngines(def)
+            let hookEngines = engines.filter { $0.hookNames.contains("animationEvent") }
+            guard !timelines.isEmpty, !hookEngines.isEmpty else { continue }
+            animEventTargets.append(AnimEventTarget(timelines: timelines, engines: hookEngines))
+        }
+        // 3D 씬 모델(실물 젤다 게스트/워커): 오브젝트 id 로 노드 스크립트 엔진·활성 클립을 결속.
+        guard !doc.objects3D.isEmpty else { return }
+        let nodeScripts = Dictionary(nodes3D.map { ($0.id, $0.scripts) }, uniquingKeysWith: { a, _ in a })
+        let renderableByID = Dictionary(meshRenderables.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for obj in doc.objects3D {
+            var timelines: [AnimEventTimeline] = obj.eventTimelines.map {
+                AnimEventTimeline(events: $0.events, fps: $0.fps, length: $0.length, mode: $0.mode, rate: 1)
+            }
+            for al in obj.animationLayers {
+                for a in al.eventTimelines {
+                    timelines.append(AnimEventTimeline(events: a.events, fps: a.fps, length: a.length,
+                                                       mode: a.mode, rate: 1))
+                }
+            }
+            // 모델 활성 클립 마커(.mdl MDLA0006 트레일러 — 젤다 talon snore, link Look Left/Right).
+            if let mr = renderableByID[obj.id], let model = mr.model,
+               mr.animIndex >= 0, mr.animIndex < model.animations.count {
+                let clip = model.animations[mr.animIndex]
+                if !clip.events.isEmpty {
+                    timelines.append(AnimEventTimeline(events: clip.events, fps: clip.fps,
+                                                       length: Float(clip.lengthFrames), mode: clip.mode,
+                                                       rate: mr.animRate))
+                }
+            }
+            var engines = nodeScripts[obj.id]?.map(\.engine) ?? []
+            for al in obj.animationLayers {
+                for src in al.scripts.values {
+                    if let e = makeScriptEngine(src, layerName: obj.name.isEmpty ? nil : obj.name) {
+                        engines.append(e)
+                    }
+                }
+            }
+            let hookEngines = engines.filter { $0.hookNames.contains("animationEvent") }
+            guard !timelines.isEmpty, !hookEngines.isEmpty else { continue }
+            animEventTargets.append(AnimEventTarget(timelines: timelines, engines: hookEngines))
+        }
+    }
+
+    /// 라이브 draw 틱: 각 타임라인의 누적 프레임이 (직전, 현재] 로 전진하며 지나친 마커를
+    /// **같은 오브젝트의** 훅 엔진에만 발송. 일시정지 중엔 호출부가 차단(needsDisplay 재드로 방어).
+    func tickAnimationEvents(time: Float) {
+        guard !animEventTargets.isEmpty else { return }
+        var fired = false
+        for ti in animEventTargets.indices {
+            for li in animEventTargets[ti].timelines.indices {
+                let tl = animEventTargets[ti].timelines[li]
+                let prev = tl.lastF
+                let f = time * tl.fps * tl.rate
+                guard f > prev else { continue }
+                animEventTargets[ti].timelines[li].lastF = f
+                let names = PropertyAnimation.firedMarkers(events: tl.events, length: tl.length,
+                                                           mode: tl.mode, prevF: prev, curF: f)
+                for name in names {
+                    fired = true
+                    if ProcessInfo.processInfo.environment["WAPLE_ANIMEVT_LOG"] != nil {
+                        NSLog("%@", "[WapleAnimEvt] t=\(time) target=\(ti) fired=\(name) (prev=\(prev) cur=\(f) fps=\(tl.fps) len=\(tl.length) mode=\(tl.mode))")
+                    }
+                    let js = Self.animationEventJS(name: name)
+                    for e in animEventTargets[ti].engines { e.callHook("animationEvent", eventJS: js) }
+                }
+            }
+        }
+        if fired { mtkView?.needsDisplay = true }
+    }
 
     /// 전역 leftMouseDown/Up 모니터(데스크탑 창은 ignoresMouseEvents=true — 클릭은 다른 앱으로 가고
     /// 전역 모니터가 관찰한다, ParallaxController 의 mouseMoved 와 동일 규약. 권한 불요).
@@ -362,6 +522,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var nodes3D: [Node3D] = []                 // scene order(계층 합성 입력)
     var meshRenderables: [MeshRenderable] = []
     var billboards: [Billboard3D] = []
+    /// billboards[i] 의 원본 SceneLayer(록스텝 — build3D 가 같은 지점에서 append).
+    /// 이벤트 마커 타임라인(def.animations 의 options.events — 젤다 눈꺼풀 blink 등) 결속용.
+    var billboardDefs: [SceneLayer] = []
     /// per-frame 스크립트 평가 순서(씬 order — 컨트롤러(Main)가 이를 읽는 스크립트보다 먼저 실행).
     /// (order, isBillboard, idx). 스크립트 없는 노드/빌보드는 제외.
     var eval3DOrder: [(order: Int, bb: Bool, idx: Int)] = []
@@ -574,6 +737,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         startClickMonitorIfNeeded()
         hasCursorMoveHook = eventEngines.contains(where: { $0.hookNames.contains("cursorMove") })
         buildHoverTargets(doc: doc)   // cursorEnter/Leave 레이어 AABB 해석
+        buildAnimationEventTargets(doc: doc)  // 타임라인/퍼펫 마커 → animationEvent 발화 타깃(오브젝트 스코프)
         if hasCursorMoveHook || !hoverTargets.isEmpty {
             parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
             parallax.start()  // 이미 켜져 있으면 no-op(내부 nil 가드)
@@ -655,6 +819,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let time = Float(nowT - startTime)
         var dt = Float(nowT - lastFrameTime); lastFrameTime = nowT
         dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
+
+        // 애니메이션 이벤트 마커(라이브 재생 전용): 일시정지 중엔 발화 금지 —
+        // pause() 후에도 needsDisplay 재드로(호버/리사이즈)가 여길 지나므로 명시 가드.
+        if scenePausedAt == nil { tickAnimationEvents(time: time) }
 
         // 시차 지연 스무딩(WE cameraparallaxdelay): cameraOffset 를 target 으로 프레임 dt 기반 지수 수렴.
         // 온디맨드(비애니) 씬은 마우스 정지 후에도 정착 전까지 프레임을 스스로 요청(안 하면 lerp 중간 정지).
@@ -827,6 +995,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mediaPoller?.stop(); mediaPoller = nil
         eventEngines = []
         hoverEngineLayers = []; hoverTargets = []
+        animEventTargets = []
         hasCursorMoveHook = false
         audioProvider?.stop(); audioProvider = nil; hasAudio = false
         mtkView?.removeFromSuperview()
@@ -836,7 +1005,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneScript = nil; scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
-        nodes3D = []; meshRenderables = []; billboards = []; cameraScripts = []
+        nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
         eval3DOrder = []; draw3DOrder = []
         meshPipelineOver = nil; meshPipelineAdditive = nil
         meshPipelineSkin = nil; meshPipelineSkinAdditive = nil

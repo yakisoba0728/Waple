@@ -95,6 +95,10 @@ public struct Model3D: Equatable {
         public let fps: Float
         public let lengthFrames: Int
         public let tracks: [[Key]]             // 본 인덱스별 키(프레임당 1키)
+        /// 이벤트 마커(실측 2026-07-10): 트랙 뒤 트레일러에 `u32 count | count×(f32 초 + NUL종단
+        /// JSON cstring {"frame":N,"name":"…"})`. 재생이 frame 을 지나면 animationEvent 발화
+        /// (3351179520/3396722575 错帧 동기, 젤다 talon snore·link Look Left/Right).
+        public var events: [AnimationMarker] = []
     }
 
     public let meshes: [Mesh]
@@ -324,9 +328,11 @@ public struct Model3D: Equatable {
             return (String(decoding: bytes[o..<e], as: UTF8.self), e + 1)
         }
         // 애니 헤더 시도: 성공 시 (이름,모드,fps,길이,본수,본트랙시작오프셋).
+        // 모드 빈 문자열 = **디렉토리 레코드**(실측 link/talon: 본클립 뒤에 짧은 이름("Glance"/"Sleep")
+        // + 빈 모드 + flags(0x401) 레코드 — 트랙 포맷은 동일, 씬 노출 애니 단위로 이벤트 마커를 보유).
         func tryHeader(_ p: Int) -> (name: String, mode: String, fps: Float, length: Int, bc: Int, off: Int)? {
             guard let (name, p2) = cstring(p), !name.isEmpty, name.utf8.count <= 96 else { return nil }
-            guard let (mode, p3) = cstring(p2), animModes.contains(mode) else { return nil }
+            guard let (mode, p3) = cstring(p2), animModes.contains(mode) || mode.isEmpty else { return nil }
             guard let fps = f32(p3), fps > 0, fps <= 240 else { return nil }
             guard let length = u32(p3 + 4), let bc = u32(p3 + 12), Int(bc) == boneCount else { return nil }
             return (name, mode, fps, Int(length), Int(bc), p3 + 20)
@@ -362,7 +368,6 @@ public struct Model3D: Equatable {
                 tracks.append(keys)
             }
             guard ok, tracks.count == h.bc else { break }
-            anims.append(Animation(name: h.name, mode: h.mode, fps: h.fps, lengthFrames: h.length, tracks: tracks))
             // 리싱크: 가변 트레일러를 건너뛰고 다음 유효 헤더로(≤256B). 없으면 종료.
             var next: Int? = nil
             var d = 0
@@ -370,10 +375,49 @@ public struct Model3D: Equatable {
                 if tryHeader(o + d) != nil { next = o + d; break }
                 d += 1
             }
+            // 이벤트 마커는 이 레코드 트레일러(트랙 끝 o ~ 다음 헤더) 안의 JSON cstring —
+            // 트레일러 정밀 레이아웃(AABB+id 32~39B 가변) 대신 패턴 스캔(레이아웃 변화에 강건,
+            // 선행 f32 초 값은 JSON frame 과 중복이라 무시). 마지막 레코드는 섹션 끝까지 최대 512B.
+            let events = Self.trailerEvents(bytes: bytes, from: o, to: next ?? min(o + 512, bytes.count))
+            if h.mode.isEmpty {
+                // 디렉토리 레코드: 렌더 클립 목록엔 미포함(포즈/클립 선택 무회귀) — 이벤트만
+                // 이름 매칭 본클립("Glance" ⊂ "Link Adult_arm|glance_bone")에 병합(실측: fps/len 동일).
+                if !events.isEmpty {
+                    let dn = h.name.lowercased()
+                    if let i = anims.firstIndex(where: {
+                        let cn = $0.name.lowercased(); return cn.contains(dn) || dn.contains(cn)
+                    }) {
+                        anims[i].events.append(contentsOf: events)
+                    }
+                }
+            } else {
+                var anim = Animation(name: h.name, mode: h.mode, fps: h.fps, lengthFrames: h.length, tracks: tracks)
+                anim.events = events
+                anims.append(anim)
+            }
             guard let n = next else { break }
             o = n
         }
         return anims
+    }
+
+    /// 트레일러 구간 [from, to) 에서 `{"frame":N,"name":"…"}` NUL종단 JSON cstring 마커 추출(파일 순서).
+    static func trailerEvents(bytes: [UInt8], from: Int, to: Int) -> [AnimationMarker] {
+        let pat = [UInt8]("{\"frame\"".utf8)
+        var out: [AnimationMarker] = []
+        var i = from
+        while i + pat.count <= to {
+            guard bytes[i] == pat[0], Array(bytes[i ..< i + pat.count]) == pat else { i += 1; continue }
+            var e = i
+            let cap = min(bytes.count, i + 256)   // 이벤트 이름은 짧다(실측 ≤ 32B) — 폭주 방지 캡
+            while e < cap, bytes[e] != 0 { e += 1 }
+            if let obj = (try? JSONSerialization.jsonObject(with: Data(bytes[i ..< e]))) as? [String: Any],
+               let name = obj["name"] as? String, let frame = (obj["frame"] as? NSNumber)?.floatValue {
+                out.append(AnimationMarker(name: name, frame: frame))
+            }
+            i = e + 1
+        }
+        return out
     }
 
     /// stride-2 인덱스 순회 헬퍼.
