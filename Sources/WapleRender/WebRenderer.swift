@@ -17,7 +17,6 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var hasAudioListener = false
     private var occlusionObserver: NSObjectProtocol?
     private var mouseMonitor: Any?
-    private var clickMonitor: Any?
     private var interactionWindow: NSWindow?
     private var lastMouseForward = CFAbsoluteTimeGetCurrent()
     private var pausedManually = false
@@ -404,8 +403,6 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         occlusionObserver = nil
         if let m = mouseMonitor { NSEvent.removeMonitor(m) }
         mouseMonitor = nil
-        if let c = clickMonitor { NSEvent.removeMonitor(c) }
-        clickMonitor = nil
         (interactionWindow?.contentView as? WebInputProxyView)?.stop()
         interactionWindow?.orderOut(nil)
         interactionWindow = nil

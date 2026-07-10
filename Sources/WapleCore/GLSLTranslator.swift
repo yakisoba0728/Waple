@@ -102,8 +102,8 @@ public enum GLSLTranslator {
         textures = Array(Set(textures)).sorted()
 
         // 심볼 치환 사전 구축.
-        var frag = symbolMap(materials: materials, stage: .fragment)
-        var vert = symbolMap(materials: materials, stage: .vertex)
+        var frag = symbolMap(materials: materials)
+        var vert = symbolMap(materials: materials)
         for (n, v) in typeAndMacroRenames() { frag[n] = v; vert[n] = v }
         for vy in varyings {
             // 스테이지 간 타입 불일치(vert vec4/frag vec2)는 타입어댑터가 union 크기로 coerce 한다 —
@@ -1078,8 +1078,7 @@ public enum GLSLTranslator {
         return false
     }
 
-    private enum Stage { case vertex, fragment }
-    private static func symbolMap(materials: [MaterialParam], stage: Stage) -> [String: String] {
+    private static func symbolMap(materials: [MaterialParam]) -> [String: String] {
         var m: [String: String] = [:]
         for (i, p) in materials.enumerated() { m[p.glslName] = "p[\(i)]\(p.type.swizzle)" }
         return m
@@ -1128,7 +1127,7 @@ public enum GLSLTranslator {
         var out = ""
         var i = 0
         while i < chars.count {
-            if matchWord(chars, i, "discard"), i + "discard".count <= chars.count,
+            if isWordStart(chars, i), i + "discard".count <= chars.count,
                String(chars[i..<i + "discard".count]) == "discard" {
                 var j = i + "discard".count
                 while j < chars.count && chars[j].isWhitespace { j += 1 }
@@ -1148,7 +1147,7 @@ public enum GLSLTranslator {
     static func rewriteBareReturns(_ src: String, with replacement: String) -> String {
         let chars = Array(src); var out = ""; var i = 0
         while i < chars.count {
-            if chars[i] == "r", matchWord(chars, i, "return"),
+            if chars[i] == "r", isWordStart(chars, i),
                i + 6 <= chars.count, String(chars[i..<min(i + 6, chars.count)]) == "return" {
                 var j = i + 6
                 while j < chars.count, chars[j].isWhitespace { j += 1 }
@@ -1427,7 +1426,7 @@ public enum GLSLTranslator {
         var out = ""
         var i = 0
         while i < chars.count {
-            if matchWord(chars, i, name), i + name.count <= chars.count,
+            if isWordStart(chars, i), i + name.count <= chars.count,
                String(chars[i..<i + name.count]) == name {
                 var open = i + name.count
                 while open < chars.count && chars[open].isWhitespace { open += 1 }
@@ -1458,11 +1457,9 @@ public enum GLSLTranslator {
         while i < chars.count {
             let c = chars[i]
             if c.isLetter || c == "_" {
-                var id = ""; let start = i
+                var id = ""
                 while i < chars.count, chars[i].isLetter || chars[i].isNumber || chars[i] == "_" { id.append(chars[i]); i += 1 }
-                // 함수 호출(뒤가 '(')이면서 사전에 없으면 그대로(내장 함수 등)
-                out += map[id] ?? id
-                _ = start
+                out += map[id] ?? id   // 사전에 없으면 그대로(내장 함수·미지 식별자)
                 continue
             }
             out.append(c); i += 1
@@ -1505,7 +1502,7 @@ public enum GLSLTranslator {
         let chars = Array(body); var i = 0
         let n = Array(name)
         while i <= chars.count - n.count {
-            if chars[i] == n[0], matchWord(chars, i, name), Array(chars[i..<i+n.count]) == n {
+            if chars[i] == n[0], isWordStart(chars, i), Array(chars[i..<i+n.count]) == n {
                 var j = i + n.count
                 if j < chars.count, chars[j] == "." {  // 스위즐 스킵
                     j += 1
@@ -1536,7 +1533,8 @@ public enum GLSLTranslator {
         return out
     }
 
-    private static func matchWord(_ chars: [Character], _ i: Int, _ name: String) -> Bool {
+    /// i 가 단어 시작 위치인지(직전 문자가 식별자 문자가 아님). 단어 본문 일치는 호출부가 확인.
+    private static func isWordStart(_ chars: [Character], _ i: Int) -> Bool {
         if i > 0, let p = chars[safe: i - 1], p.isLetter || p.isNumber || p == "_" { return false }
         return true
     }

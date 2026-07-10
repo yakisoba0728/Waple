@@ -134,48 +134,6 @@ public final class SystemAudioSpectrumProvider: NSObject, SCStreamOutput, AudioS
         DispatchQueue.main.async { [weak self] in self?.onFrame?(clamped) }
     }
 
-    /// CMSampleBuffer(PCM Float32) 첫 채널에서 최대 maxCount 샘플 추출.
-    /// non-interleaved 스테레오(버퍼 2개)도 처리하기 위해 필요한 크기를 먼저 조회해 할당한다.
-    private static func floatSamples(from sampleBuffer: CMSampleBuffer, maxCount: Int) -> [Float]? {
-        var sizeNeeded = 0
-        let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: &sizeNeeded,
-            bufferListOut: nil,
-            bufferListSize: 0,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: 0,
-            blockBufferOut: nil
-        )
-        guard sizeStatus == noErr, sizeNeeded > 0 else { return nil }
-
-        let ablMemory = UnsafeMutableRawPointer.allocate(
-            byteCount: sizeNeeded, alignment: MemoryLayout<AudioBufferList>.alignment)
-        defer { ablMemory.deallocate() }
-        let ablPtr = ablMemory.assumingMemoryBound(to: AudioBufferList.self)
-
-        var blockBuffer: CMBlockBuffer?
-        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: ablPtr,
-            bufferListSize: sizeNeeded,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: 0,
-            blockBufferOut: &blockBuffer
-        )
-        guard status == noErr else { return nil }
-
-        let buffers = UnsafeMutableAudioBufferListPointer(ablPtr)
-        guard let first = buffers.first, let data = first.mData else { return nil }
-        let count = min(Int(first.mDataByteSize) / MemoryLayout<Float>.size, maxCount)
-        guard count > 0 else { return nil }
-        let ptr = data.assumingMemoryBound(to: Float.self)
-        return Array(UnsafeBufferPointer(start: ptr, count: count))
-    }
-
     /// 스테레오 채널별 샘플: non-interleaved(버퍼 2개) → 각 버퍼, interleaved(1버퍼 2채널) → 짝/홀 분리,
     /// 모노 → (mono, mono). 반환 (L, R).
     private static func stereoSamples(from sampleBuffer: CMSampleBuffer, maxCount: Int) -> ([Float], [Float])? {

@@ -205,56 +205,52 @@ public final class TextScriptEngine {
     /// export 된 이벤트 훅 이름들(update 제외). 비어 있으면 이벤트 배달 대상 아님.
     public var hookNames: Set<String> { Set(hookFns.keys) }
 
+    /// 공유 JSContext 규약: 호출용 예외 핸들러는 저장/복원(교체 후 미복원 시 마지막 핸들러가 컨텍스트에
+    /// 잔류해 다른 엔진/시점의 예외를 오귀속). 예외 → "[Waple] <tag>: …" 로깅 + body 의 failed() 가 true.
+    private func withExceptionCapture<T>(_ tag: String, _ body: (_ failed: () -> Bool) -> T?) -> T? {
+        var failed = false
+        let saved = context.exceptionHandler
+        defer { context.exceptionHandler = saved }
+        context.exceptionHandler = { _, ex in
+            NSLog("%@", "[Waple] \(tag): \(ex?.toString() ?? "?")")
+            failed = true
+        }
+        return body { failed }
+    }
+
     /// 이벤트 훅 호출: eventJS(이벤트 생성식 — `new MediaPlaybackEvent({...})` / `({ worldPosition: new Vec3(..) })`)
     /// 를 이 엔진의 컨텍스트에서 평가해 1개 인자로 전달. Vec3/Media*Event 는 shims 클래스라 스크립트가
     /// 메서드 체이닝(subtract/multiply/add)을 그대로 쓸 수 있다. 미보유 훅/예외 → no-op(로깅, 컨텍스트 불오염).
     public func callHook(_ name: String, eventJS: String) {
         guard let fn = hookFns[name] else { return }
-        var failed = false
-        // 공유 JSContext 규약: 호출용 핸들러는 저장/복원(교체 후 미복원 시 마지막 핸들러가 컨텍스트에
-        // 잔류해 다른 엔진/시점의 예외를 오귀속). evaluate/evaluateBool/evaluateVec 도 동일.
-        let saved = context.exceptionHandler
-        defer { context.exceptionHandler = saved }
-        context.exceptionHandler = { _, ex in
-            NSLog("%@", "[Waple] \(name) hook exception: \(ex?.toString() ?? "?")")
-            failed = true
+        _ = withExceptionCapture("\(name) hook exception") { failed -> JSValue? in
+            guard let ev = context.evaluateScript("(\(eventJS))"), !failed() else { return nil }
+            return fn.call(withArguments: [ev])
         }
-        guard let ev = context.evaluateScript("(\(eventJS))"), !failed else { return }
-        fn.call(withArguments: [ev])
     }
 
     /// update(current) 호출 → 새 텍스트. 예외/비문자열 → nil.
     public func evaluate(current: String) -> String? {
         guard let updateFn else { return nil }
-        var failed = false
-        let saved = context.exceptionHandler
-        defer { context.exceptionHandler = saved }
-        context.exceptionHandler = { _, ex in
-            NSLog("%@", "[Waple] text script update exception: \(ex?.toString() ?? "?")")
-            failed = true
+        return withExceptionCapture("text script update exception") { failed -> String? in
+            callInitIfNeeded(argument: current)
+            guard !failed() else { return nil }
+            guard let out = updateFn.call(withArguments: [current]), !failed(), out.isString else { return nil }
+            return out.toString()
         }
-        callInitIfNeeded(argument: current)
-        guard !failed else { return nil }
-        guard let out = updateFn.call(withArguments: [current]), !failed, out.isString else { return nil }
-        return out.toString()
     }
 
     /// visible 스크립트용: update(current) → 부울(숫자는 0=false). 예외/부재/비해석 → nil(현상 유지).
     public func evaluateBool(current: Bool) -> Bool? {
         guard let updateFn else { return nil }
-        var failed = false
-        let saved = context.exceptionHandler
-        defer { context.exceptionHandler = saved }
-        context.exceptionHandler = { _, ex in
-            NSLog("%@", "[Waple] visible script exception: \(ex?.toString() ?? "?")")
-            failed = true
+        return withExceptionCapture("visible script exception") { failed -> Bool? in
+            callInitIfNeeded(argument: current)
+            guard !failed() else { return nil }
+            guard let out = updateFn.call(withArguments: [current]), !failed() else { return nil }
+            if out.isBoolean { return out.toBool() }
+            if out.isNumber { return out.toDouble() != 0 }
+            return nil
         }
-        callInitIfNeeded(argument: current)
-        guard !failed else { return nil }
-        guard let out = updateFn.call(withArguments: [current]), !failed else { return nil }
-        if out.isBoolean { return out.toBool() }
-        if out.isNumber { return out.toDouble() != 0 }
-        return nil
     }
 
     /// 효과 상수 스크립트용: engine.runtime 갱신(초).
@@ -265,23 +261,18 @@ public final class TextScriptEngine {
     /// update({x,y,z...}) 호출 → 수치 배열(스칼라는 1개). 예외/비수치 → nil.
     public func evaluateVec(current: [Float]) -> [Float]? {
         guard let updateFn else { return nil }
-        var failed = false
-        let saved = context.exceptionHandler
-        defer { context.exceptionHandler = saved }
-        context.exceptionHandler = { _, ex in
-            NSLog("%@", "[Waple] constant script exception: \(ex?.toString() ?? "?")")
-            failed = true
+        return withExceptionCapture("constant script exception") { failed -> [Float]? in
+            guard let arg = vecArgument(current), !failed() else { return nil }
+            callInitIfNeeded(argument: arg)
+            guard !failed() else { return nil }
+            guard let out = updateFn.call(withArguments: [arg]), !failed() else { return nil }
+            if out.isNumber { return [Float(out.toDouble())] }
+            guard out.isObject else { return nil }
+            let x = out.objectForKeyedSubscript("x"), y = out.objectForKeyedSubscript("y"), z = out.objectForKeyedSubscript("z")
+            guard let x, let y, x.isNumber, y.isNumber else { return nil }
+            if let z, z.isNumber { return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())] }
+            return [Float(x.toDouble()), Float(y.toDouble())]
         }
-        guard let arg = vecArgument(current), !failed else { return nil }
-        callInitIfNeeded(argument: arg)
-        guard !failed else { return nil }
-        guard let out = updateFn.call(withArguments: [arg]), !failed else { return nil }
-        if out.isNumber { return [Float(out.toDouble())] }
-        guard out.isObject else { return nil }
-        let x = out.objectForKeyedSubscript("x"), y = out.objectForKeyedSubscript("y"), z = out.objectForKeyedSubscript("z")
-        guard let x, let y, x.isNumber, y.isNumber else { return nil }
-        if let z, z.isNumber { return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())] }
-        return [Float(x.toDouble()), Float(y.toDouble())]
     }
 
     private func callInitIfNeeded(argument: Any) {

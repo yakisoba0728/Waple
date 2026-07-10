@@ -539,10 +539,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var meshDepthStates: [String: MTLDepthStencilState] = [:]  // "test-write" 키
     var depthTextures: [String: MTLTexture] = [:]     // 크기별 재사용(.depth32Float)
 
-    /// 디버그 env 플래그: 신규 `WAPLE_3D_*` 표기 우선, 구 `WAPLE3D_*` 병행 인식(전환기 호환 — 추후 제거).
-    static func debugFlag(_ names: String...) -> Bool {
-        let env = ProcessInfo.processInfo.environment
-        return names.contains { env[$0] == "1" }
+    /// 디버그 env 플래그(`WAPLE_3D_*`).
+    static func debugFlag(_ name: String) -> Bool {
+        ProcessInfo.processInfo.environment[name] == "1"
     }
 
     public override init() { super.init() }
@@ -851,7 +850,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
         refreshScriptedTexts(device: device, time: time)  // 초당 1회 update() 재평가(시계 등)
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
-        let displayTextures = buildDisplayTextures(device: device, queue: queue, time: time, cb: cb)
+        let displayTextures = buildDisplayTextures(device: device, time: time, cb: cb)
 
         var camOffset = cameraOffset
         // 종횡비 보정 — FitMode 설정에 따라(클릭 역매핑과 동일 공식 = sceneCoords 정합 보장).
@@ -931,7 +930,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in rootIdxs { _ = sims[i].step(s) }; simTime += s }
             guard let cb = queue.makeCommandBuffer() else { continue }
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
-            let displayTextures = buildDisplayTextures(device: device, queue: queue, time: t, cb: cb)
+            let displayTextures = buildDisplayTextures(device: device, time: t, cb: cb)
             let rpd = MTLRenderPassDescriptor()
             rpd.colorAttachments[0].texture = target
             rpd.colorAttachments[0].loadAction = .clear

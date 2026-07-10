@@ -20,8 +20,8 @@ public enum AudioSpectrum {
         return out
     }
 
-    /// FFT 크기 배열을 binCount 개로 평균·정규화(최댓값=1)한다. WE audio listener 입력용.
-    public static func spectrum(fromMagnitudes magnitudes: [Float], binCount: Int = 128) -> [Float] {
+    /// FFT 크기 배열을 binCount 개로 평균·정규화(최댓값=1)한다. WE audio listener 입력용(채널당 64빈).
+    public static func spectrum(fromMagnitudes magnitudes: [Float], binCount: Int = 64) -> [Float] {
         var out = bin(magnitudes, binCount: binCount)
         if let m = out.max(), m > 0 {
             for i in 0..<out.count { out[i] /= m }

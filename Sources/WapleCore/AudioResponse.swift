@@ -19,7 +19,9 @@ public enum AudioResponse {
         var sum: Float = 0
         if lo <= hi {
             for a in lo...hi {
-                if mode == 1 || mode == 3, a < left.count { sum += left[a] }
+                // hi 는 기준 채널(count) 크기로 클램프됨 — left 는 mode 1/3 모두 기준 채널이라 추가 가드 불필요.
+                // right 는 mode 3 에서 비대칭 입력(right < left)이 가능해 가드 유지.
+                if mode == 1 || mode == 3 { sum += left[a] }
                 if mode == 2 || mode == 3, a < right.count { sum += right[a] }
             }
         }

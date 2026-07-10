@@ -104,7 +104,7 @@ Metal NDC(z 0..1). 실측 확정(3662790108 태양계 / 3737268876 젤다 렌더
 ### 4.3 애니메이션 선택 (animationlayers)
 - 파스(`SceneDocument`): objects 의 `animationlayers` 에서 **숫자 blend ≥ 0.5 & visible 인 베이스 레이어**를 골라 `AnimationSelection{name, rate}`. nil = 정지(바인드 포즈).
 - 매칭(`Model3DPose.resolveAnimation`): 레이어 이름(예 "Idle")을 모델 애니 이름에 **소문자 서브스트링 매칭**(→ "..._arm|idle_bone") → 폴백 "idle" → 폴백 인덱스 0. 애니 없음 → -1.
-- 게이트: 환경변수 `WAPLE3D_BINDPOSE=1` → 애니 무시(skin=항등) — 스키닝 배선 정합 확인용.
+- 게이트: 환경변수 `WAPLE_3D_BINDPOSE=1` → 애니 무시(skin=항등) — 스키닝 배선 정합 확인용.
 
 ### 4.4 빌보드 (3D 씬 안의 2D 이미지)
 - `encodeBillboard`: 오브젝트 월드행렬의 위치를 중심으로 카메라 right/up 축에 정렬한 쿼드(size, z회전) → 카메라를 향한 스프라이트.

@@ -206,9 +206,8 @@ public enum GLSLTypeAdapter {
         if p.peek() == ";" { p.out += p.advance().full }
     }
 
-    /// lvalue 대입 문장이면 처리하고 true. 아니면 위치 복원 후 false.
+    /// lvalue 대입 문장이면 소비·처리 후 true. 아니면 아무것도 소비하지 않고 false(판정은 전부 lookahead).
     private static func assignment(_ p: P) -> Bool {
-        let start = p.pos
         guard p.pos < p.toks.count, p.toks[p.pos].isIdent else { return false }
         let name = p.toks[p.pos].text
         var look = p.pos + 1
@@ -227,7 +226,6 @@ public enum GLSLTypeAdapter {
         if lvalSize > 0 { e = coerce(e, to: lvalSize) }
         p.out += e.text
         if p.peek() == ";" { p.out += p.advance().full }
-        _ = start
         return true
     }
 

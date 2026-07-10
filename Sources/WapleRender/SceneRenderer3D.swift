@@ -224,9 +224,9 @@ extension SceneRenderer {
                 // 단일 공유 버퍼를 매 프레임 memcpy 하면 in-flight GPU 프레임(최대 3장)이 읽는 도중 CPU 가
                 // 덮어써 본행렬이 찢긴다. 3슬롯 링(DynamicVertexBuffer)으로 슬롯을 로테이션해 경합을 회피.
                 boneRing = DynamicVertexBuffer()
-                // WAPLE_3D_BINDPOSE=1(구명 WAPLE3D_BINDPOSE 병행 인식) → 애니 무시(skin=항등, 바인드 포즈)
+                // WAPLE_3D_BINDPOSE=1 → 애니 무시(skin=항등, 바인드 포즈)
                 // — 스키닝 배선 정합 게이트(v2 정적과 비교).
-                let bindPoseOnly = Self.debugFlag("WAPLE_3D_BINDPOSE", "WAPLE3D_BINDPOSE")
+                let bindPoseOnly = Self.debugFlag("WAPLE_3D_BINDPOSE")
                 animIndex = (!bindPoseOnly && obj.animation != nil)
                     ? Model3DPose.resolveAnimation(model: model, layerName: obj.animation?.name)
                     : -1
@@ -501,7 +501,7 @@ extension SceneRenderer {
         // 와인딩: front = CCW(A/B 실측 — CW 는 젤다 회랑이 인사이드아웃: 근접 벽이 컬링되어
         // 뒤쪽 외벽이 보임). cullmode "normal" 메시가 CCW-front 백페이스 컬에서 preview 와 일치.
         enc.setFrontFacing(.counterClockwise)
-        let debug3D = Self.debugFlag("WAPLE_3D_DEBUG", "WAPLE3D_DEBUG")
+        let debug3D = Self.debugFlag("WAPLE_3D_DEBUG")
         for item in draw3DOrder {
             if item.bb {
                 let bb = billboards[item.idx]
