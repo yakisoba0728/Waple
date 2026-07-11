@@ -53,6 +53,11 @@ public struct PropertyAnimation: Equatable {
         if mode == "loop", length > 0 {
             frame = frame.truncatingRemainder(dividingBy: length)
             if frame < 0 { frame += length }
+        } else if mode == "mirror", length > 0 {
+            // 왕복: 2L 주기 폴드 — firedMarkers/PuppetPose.frame 과 동일 규약(감사 V01).
+            frame = frame.truncatingRemainder(dividingBy: 2 * length)
+            if frame < 0 { frame += 2 * length }
+            if frame > length { frame = 2 * length - frame }
         } else {
             frame = max(0, min(frame, length))
         }

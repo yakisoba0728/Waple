@@ -161,6 +161,16 @@ final class PropertyAnimationTests: XCTestCase {
                                                       prevF: 136, curF: 181), ["pause_off"])
     }
 
+    func testMirrorValueFoldsBackInsteadOfClamping() {
+        // 감사 V01: mode="mirror" 가 클램프로 흐르던 회귀 — 2L 주기 왕복 폴드.
+        let anim = PropertyAnimation(tracks: [[kf(0, 0, enabled: false), kf(30, 30, enabled: false)]],
+                                     fps: 30, length: 30, mode: "mirror", relative: false)
+        // t=1.5s → frame 45 = 1.5L → 폴드 2L−45 = 15(하행 중간값). 클램프였다면 30.
+        XCTAssertEqual(anim.value(component: 0, atTime: 1.5, base: 0), 15, accuracy: 0.01)
+        // t=2s → frame 60 = 2L → 원점 복귀 0.
+        XCTAssertEqual(anim.value(component: 0, atTime: 2.0, base: 0), 0, accuracy: 0.01)
+    }
+
     func testFiredMarkersSameFrameKeepDefinitionOrder() {
         // 실물 deku 186: emerge@0 + surprise_start@0 — 같은 프레임은 정의 순서 유지.
         let ev = [AnimationMarker(name: "emerge", frame: 0), AnimationMarker(name: "surprise_start", frame: 0)]

@@ -55,4 +55,16 @@ final class AudioResponseTests: XCTestCase {
                                       bounds: SIMD2(0.5, 1), power: 1, multiply: 1)
         XCTAssertEqual(r, 0, accuracy: 1e-5)
     }
+
+    func testHugeFiniteFreqRangeNoTrap() {
+        // 감사 V05: ±1e19(Float 유한, Int 범위 밖)가 Int() 변환에서 트랩하던 회귀.
+        let r = AudioResponse.compute(left: ones, right: ones, mode: 3, freqMin: -1e19, freqMax: 1e19,
+                                      bounds: SIMD2(0, 1), power: 1, multiply: 1)
+        XCTAssertTrue(r.isFinite)
+        XCTAssertEqual(r, 1, accuracy: 1e-5, "클램프 후 전 빈 평균 = 1")
+        // 전범위 위(lo > hi): 빈 구간 → 0, 무트랩.
+        let r2 = AudioResponse.compute(left: ones, right: ones, mode: 3, freqMin: 1e19, freqMax: 1e19,
+                                       bounds: SIMD2(0, 1), power: 1, multiply: 1)
+        XCTAssertEqual(r2, 0, accuracy: 1e-5)
+    }
 }
