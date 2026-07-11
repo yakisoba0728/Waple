@@ -684,7 +684,7 @@ git commit -m "기능(ui): 우측 상시 패널 — 프리뷰/액션/속성 인�
 - Consumes: `WallpaperGridView`(4), `SelectionPanelView`(5), `DisplaysTabView`(3), `WorkshopView(library:)`(기존), `filteredEntries/searchText/typeFilter/sortOrder/appliedTitle`(1)
 - Produces: `struct MainWindowView: View` (`init(viewModel: LibraryViewModel, screenFrames: @escaping () -> [CGRect])`), VM 콜백 `onAdvancePlaylist: (() -> Void)?`, `onTogglePause: (() -> Bool)?`, `@Published var isPaused: Bool`
 
-- [ ] **Step 1: VM 콜백 추가** — `Sources/Waple/LibraryViewModel.swift` 주입 콜백 블록(30행 인근)에 추가:
+- [x] **Step 1: VM 콜백 추가** — `Sources/Waple/LibraryViewModel.swift` 주입 콜백 블록(30행 인근)에 추가:
 
 ```swift
     /// 하단 바: 재생목록 다음으로 — AppDelegate 주입.
@@ -694,7 +694,7 @@ git commit -m "기능(ui): 우측 상시 패널 — 프리뷰/액션/속성 인�
     @Published var isPaused = false
 ```
 
-- [ ] **Step 2: 구현** — `Sources/Waple/MainWindowView.swift`
+- [x] **Step 2: 구현** — `Sources/Waple/MainWindowView.swift`
 
 ```swift
 import SwiftUI
@@ -798,7 +798,7 @@ struct MainWindowView: View {
 }
 ```
 
-- [ ] **Step 3: 빌드 + 커밋**
+- [x] **Step 3: 빌드 + 커밋**
 
 Run: `swift build 2>&1 | tail -2` → 에러 0.
 ```bash
