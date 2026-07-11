@@ -252,6 +252,9 @@ public struct ParticleSystemDef: Equatable {
         }
 
         var ops: [ParticleOperator] = []
+        // controlpointattract 의 CP id — controlpoint 배열이 오퍼레이터보다 뒤에 파스되므로
+        // (ops 인덱스, cpid)만 보관했다가 def 조립 직전에 target 재조립(감사 V04).
+        var attractCPIds: [(op: Int, cp: Int)] = []
         for case let o as [String: Any] in (json["operator"] as? [Any] ?? []) {
             switch o["name"] as? String {
             case "movement":
@@ -267,16 +270,23 @@ public struct ParticleSystemDef: Equatable {
             case "angularmovement":
                 ops.append(.angularMovement(force: pvec3(o["force"]) ?? Vec3(x: 0, y: 0, z: 0)))
             case "oscillatealpha":
+                // fmax 부재 시 fmin 승계(scaleMax 와 동일 패턴) — 역범위 rng.range(fmin, 0) 방지(감사 V03).
                 let smin = pfloat(o["scalemin"]) ?? 0
-                ops.append(.oscillateAlpha(frequencyMin: pfloat(o["frequencymin"]) ?? 0, frequencyMax: pfloat(o["frequencymax"]) ?? 0,
+                let fmin = pfloat(o["frequencymin"]) ?? 0
+                ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? fmin,
                                            scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin))
             case "oscillateposition":
                 let smin = pfloat(o["scalemin"]) ?? 0
-                ops.append(.oscillatePosition(frequencyMin: pfloat(o["frequencymin"]) ?? 0, frequencyMax: pfloat(o["frequencymax"]) ?? 0,
+                let fmin = pfloat(o["frequencymin"]) ?? 0
+                ops.append(.oscillatePosition(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? fmin,
                                               scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin,
                                               phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0,
                                               mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1)))
             case "controlpointattract":
+                // CP 지정(범위 내) 시 CP offset 이 target, 미지정 시 origin 유지(무회귀).
+                if let cpid = pint(o["controlpoint"]), cpid >= 0, cpid < 8 {
+                    attractCPIds.append((op: ops.count, cp: cpid))
+                }
                 ops.append(.controlPointAttract(scale: pfloat(o["scale"]) ?? 0,
                                                 threshold: pfloat(o["threshold"]) ?? 0,
                                                 target: pvec3(o["origin"]) ?? Vec3(x: 0, y: 0, z: 0)))
@@ -297,7 +307,8 @@ public struct ParticleSystemDef: Equatable {
                                        phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "oscillatesize":
                 let smin = pfloat(o["scalemin"]) ?? 1
-                ops.append(.oscillateSize(frequencyMin: pfloat(o["frequencymin"]) ?? 0, frequencyMax: pfloat(o["frequencymax"]) ?? 0,
+                let fmin = pfloat(o["frequencymin"]) ?? 0
+                ops.append(.oscillateSize(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? fmin,
                                           scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin,
                                           phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "alphachange":
@@ -340,7 +351,8 @@ public struct ParticleSystemDef: Equatable {
             }
         }
 
-        let maxCount = pint(json["maxcount"]) ?? 100
+        // 음수 maxcount 가 시뮬 버스트 Range 상한으로 흘러 트랩 — 0 하한 클램프(감사 V02).
+        let maxCount = max(0, pint(json["maxcount"]) ?? 100)
 
         var children: [ChildLink] = []
         if let resolve = resolveChild {
@@ -368,15 +380,23 @@ public struct ParticleSystemDef: Equatable {
             }
         }
 
+        var controlPoints = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
+        for case let cp as [String: Any] in (json["controlpoint"] as? [Any] ?? []) {
+            if let id = pint(cp["id"]), id >= 0, id < 8, let off = pvec3(cp["offset"]) {
+                controlPoints[id] = off
+            }
+        }
+        for (i, cpid) in attractCPIds {
+            if case let .controlPointAttract(scale, threshold, _) = ops[i] {
+                ops[i] = .controlPointAttract(scale: scale, threshold: threshold, target: controlPoints[cpid])
+            }
+        }
+
         var def = ParticleSystemDef(
             emitters: emitters, initializers: inits, operators: ops, renderer: renderer,
             maxCount: maxCount, startTime: pfloat(json["starttime"]) ?? 0, material: material,
             children: children)
-        for case let cp as [String: Any] in (json["controlpoint"] as? [Any] ?? []) {
-            if let id = pint(cp["id"]), id >= 0, id < 8, let off = pvec3(cp["offset"]) {
-                def.controlPoints[id] = off
-            }
-        }
+        def.controlPoints = controlPoints
         return def
     }
 }

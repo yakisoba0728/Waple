@@ -141,4 +141,39 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(burst, 0)
         XCTAssertEqual(d.renderer, .rope(subdivision: 0))
     }
+
+    func testNegativeMaxCountClampsAndBurstStepNoTrap() {
+        // 감사 V02: 음수 maxcount 가 버스트 스폰 Range 상한(0..<음수)으로 흘러 트랩하던 회귀.
+        let d = ParticleSystemDef.parse(json(
+            #"{"emitter":[{"name":"sphererandom","instantaneous":10}],"renderer":[{"name":"sprite"}],"maxcount":-1}"#),
+            material: nil)
+        XCTAssertEqual(d.maxCount, 0)
+        var sim = ParticleSimulator(def: d, seed: 7)
+        XCTAssertTrue(sim.step(0.1).isEmpty)  // 완주 자체가 무트랩 증명
+    }
+
+    func testOscillateFrequencyMaxDefaultsToFrequencyMin() {
+        // 감사 V03: fmax 부재 시 0 대신 fmin 승계(scaleMax 패턴과 일치) — 역범위 랜덤 방지. 3종 모두.
+        let d = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"oscillatesize","frequencymin":2.5},
+                     {"name":"oscillatealpha","frequencymin":1.5},
+                     {"name":"oscillateposition","frequencymin":3.5}],"maxcount":10}
+        """), material: nil)
+        guard case let .oscillateSize(sf0, sf1, _, _, _, _) = d.operators[0] else { return XCTFail("no oscillatesize") }
+        XCTAssertEqual(sf0, 2.5); XCTAssertEqual(sf1, 2.5)
+        guard case let .oscillateAlpha(af0, af1, _, _) = d.operators[1] else { return XCTFail("no oscillatealpha") }
+        XCTAssertEqual(af0, 1.5); XCTAssertEqual(af1, 1.5)
+        guard case let .oscillatePosition(pf0, pf1, _, _, _, _, _) = d.operators[2] else { return XCTFail("no oscillateposition") }
+        XCTAssertEqual(pf0, 3.5); XCTAssertEqual(pf1, 3.5)
+    }
+
+    func testControlPointAttractConsumesControlPointId() {
+        // 감사 V04: controlpoint 키(CP id)가 controlpoint 배열의 offset 을 target 으로 소비.
+        let d = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"controlpointattract","controlpoint":1,"scale":-750,"threshold":64}],
+         "controlpoint":[{"id":1,"offset":"100 200 0"}],"maxcount":10}
+        """), material: nil)
+        XCTAssertTrue(d.operators.contains(
+            .controlPointAttract(scale: -750, threshold: 64, target: Vec3(x: 100, y: 200, z: 0))))
+    }
 }

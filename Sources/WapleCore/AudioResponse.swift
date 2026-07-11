@@ -14,8 +14,12 @@ public enum AudioResponse {
         let channels: Float = (mode == 3) ? 2 : 1
         let count = (mode == 2) ? right.count : left.count
         // 범위를 유효 빈으로 클램프해 denom 이 실제 합산 빈 수와 일치하도록 한다(범위 밖 빈으로 평균 희석 방지).
-        let lo = max(0, Int(freqMin))
-        let hi = min(count - 1, max(Int(freqMin), Int(freqMax)))
+        // Int 변환은 Float 도메인에서 [-1, count] 클램프 후 — 1e19 같은 유한 거대값 변환 트랩 방지(감사 V05).
+        // -1 하한이라 전음수 범위는 여전히 빈 구간(hi < lo)으로 떨어져 기존 의미 보존.
+        let fcount = Float(count)
+        func bin(_ x: Float) -> Int { Int(min(max(x, -1), fcount)) }
+        let lo = max(0, bin(freqMin))
+        let hi = min(count - 1, max(bin(freqMin), bin(freqMax)))
         var sum: Float = 0
         if lo <= hi {
             for a in lo...hi {
