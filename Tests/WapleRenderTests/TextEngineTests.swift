@@ -1,5 +1,6 @@
 import XCTest
 import Metal
+import CoreText
 @testable import WapleCore
 @testable import WapleRender
 
@@ -207,6 +208,41 @@ final class TextRasterizerTests: XCTestCase {
     func testEmptyTextReturnsNil() {
         XCTAssertNil(TextRasterizer.render(text: "", fontData: nil, systemFontName: nil, pointSize: 32))
         XCTAssertNil(TextRasterizer.render(text: "   ", fontData: nil, systemFontName: nil, pointSize: 32))
+    }
+
+    private func family(_ f: CTFont) -> String { CTFontCopyFamilyName(f) as String }
+
+    func testComicSansAliasResolvesRealFamily() {
+        // 번들 스모크: Comic Sans MS 미설치 환경이면 단언 완화(비-"Comicsans" 실폰트만 확인)
+        let smoke = CTFontCreateWithName("Comic Sans MS" as CFString, 12, nil)
+        let f = TextRasterizer.resolveSystemFont("systemfont_comicsans", pointSize: 16)
+        if family(smoke) == "Comic Sans MS" {
+            XCTAssertEqual(family(f), "Comic Sans MS")
+        } else {
+            XCTAssertNotEqual(family(f).lowercased(), "comicsans")
+        }
+    }
+
+    func testSansserifResolvesRealSystemFont() {
+        let fam = family(TextRasterizer.resolveSystemFont("systemfont_sansserif", pointSize: 16))
+        XCTAssertFalse(fam.isEmpty)
+        XCTAssertNotEqual(fam.lowercased(), "sansserif", "비실존 'Sansserif' 이름이 그대로 새면 안 됨")
+    }
+
+    func testUnknownNameDemotesToSystemFallback() throws {
+        // 미설치명: 조용한 오폰트 대신 명시적 시스템 폴백 — 크래시/빈 렌더 없음
+        let fam = family(TextRasterizer.resolveSystemFont("systemfont_notarealfontxyz", pointSize: 16))
+        XCTAssertNotEqual(fam.lowercased(), "notarealfontxyz")
+        let r = try XCTUnwrap(TextRasterizer.render(
+            text: "Hi", fontData: nil, systemFontName: "systemfont_notarealfontxyz", pointSize: 32))
+        XCTAssertGreaterThan(r.width, 4)
+        XCTAssertGreaterThan(r.height, 4)
+    }
+
+    func testArialNoRegression() {
+        XCTAssertEqual(family(TextRasterizer.resolveSystemFont("systemfont_arial", pointSize: 16)), "Arial")
+        // 별칭 외 설치 폰트(예: menlo)도 검증 통과로 유지되는지 — 강등 오탐 방지
+        XCTAssertEqual(family(TextRasterizer.resolveSystemFont("systemfont_menlo", pointSize: 16)), "Menlo")
     }
 }
 

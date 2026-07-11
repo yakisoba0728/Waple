@@ -62,12 +62,40 @@ public enum TextRasterizer {
            let desc = CTFontManagerCreateFontDescriptorFromData(data as CFData) {
             return CTFontCreateWithFontDescriptor(desc, pointSize, nil)
         }
-        if let name = systemFontName {
-            // "systemfont_arial" → "Arial" 류 관례 매핑; 실패 시 아래 시스템 폴백.
-            let candidate = name.hasPrefix("systemfont_") ? String(name.dropFirst("systemfont_".count)) : name
-            let ct = CTFontCreateWithName(candidate.capitalized as CFString, pointSize, nil)
-            return ct
+        if let name = systemFontName { return resolveSystemFont(name, pointSize: pointSize) }
+        return fallbackFont(pointSize)
+    }
+
+    /// 코퍼스 실측(~211인스턴스) 별칭: 소문자 키 → 실제 폰트명. macOS 미번들(MS 계열)은 동계열 번들 폰트로 대체.
+    static let systemFontAliases: [String: String] = [
+        "arial": "Arial",
+        "verdana": "Verdana",
+        "comicsans": "Comic Sans MS",
+        "consolas": "Menlo",     // 미번들 모노스페이스 → 대체
+        "cambria": "Georgia",    // 미번들 세리프 → 대체
+        "calibri": "Helvetica",  // 미번들 산세리프 → 대체
+    ]
+    /// 시스템 폰트로 직행하는 이름(시스템 산세리프 요청 취지).
+    static let systemFontDirectNames: Set<String> = ["sansserif", "segoe"]
+
+    /// "systemfont_arial" 류 이름 → CTFont. 별칭 히트는 신뢰, 미지 이름은 기존 관례(.capitalized) 시도 후
+    /// 실명(패밀리/PostScript)이 요청과 무관하면 미설치로 보고 시스템 폰트로 명시 강등
+    /// (CTFontCreateWithName 은 미설치 폰트에서 nil 대신 조용히 엉뚱한 폴백 페이스를 반환하므로).
+    static func resolveSystemFont(_ name: String, pointSize: CGFloat) -> CTFont {
+        let key = (name.hasPrefix("systemfont_") ? String(name.dropFirst("systemfont_".count)) : name).lowercased()
+        guard !key.isEmpty, !systemFontDirectNames.contains(key) else { return fallbackFont(pointSize) }
+        if let real = systemFontAliases[key] { return CTFontCreateWithName(real as CFString, pointSize, nil) }
+        let ct = CTFontCreateWithName(key.capitalized as CFString, pointSize, nil)
+        // ponytail: 공백 제거 소문자 부분일치 — ps명 "ArialMT"·패밀리 "Comic Sans MS" 류 변형 흡수엔 충분.
+        let want = key.replacingOccurrences(of: " ", with: "")
+        let matched = [CTFontCopyFamilyName(ct) as String, CTFontCopyPostScriptName(ct) as String].contains { actual in
+            let got = actual.lowercased().replacingOccurrences(of: " ", with: "")
+            return got.contains(want) || want.contains(got)
         }
-        return CTFontCreateUIFontForLanguage(.system, pointSize, nil) ?? CTFontCreateWithName("Helvetica" as CFString, pointSize, nil)
+        return matched ? ct : fallbackFont(pointSize)
+    }
+
+    private static func fallbackFont(_ pointSize: CGFloat) -> CTFont {
+        CTFontCreateUIFontForLanguage(.system, pointSize, nil) ?? CTFontCreateWithName("Helvetica" as CFString, pointSize, nil)
     }
 }
