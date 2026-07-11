@@ -157,7 +157,7 @@ git commit -m "기능(ui): 라이브러리 브라우즈 상태 + 검색/타입/�
 **Interfaces:**
 - Produces: `PreviewMedia.isAnimated(_ url: URL) -> Bool`, `struct AnimatedPreviewView: View` (`init(url: URL, animating: Bool)`) — 그리드 타일·우측 패널 공용.
 
-- [ ] **Step 1: 실패하는 테스트** — `Tests/WapleAppTests/PreviewMediaTests.swift`
+- [x] **Step 1: 실패하는 테스트** — `Tests/WapleAppTests/PreviewMediaTests.swift`
 
 ```swift
 import XCTest
@@ -173,9 +173,9 @@ final class PreviewMediaTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: 실패 확인** — `swift test --filter PreviewMediaTests 2>&1 | tail -3` → 컴파일 실패.
+- [x] **Step 2: 실패 확인** — `swift test --filter PreviewMediaTests 2>&1 | tail -3` → 컴파일 실패.
 
-- [ ] **Step 3: 구현** — `Sources/Waple/AnimatedPreviewView.swift`
+- [x] **Step 3: 구현** — `Sources/Waple/AnimatedPreviewView.swift`
 
 ```swift
 import SwiftUI
@@ -213,7 +213,7 @@ struct AnimatedPreviewView: NSViewRepresentable {
 }
 ```
 
-- [ ] **Step 4: 통과 확인 + 커밋**
+- [x] **Step 4: 통과 확인 + 커밋**
 
 Run: `swift test --filter PreviewMediaTests 2>&1 | tail -3` → PASS, `swift build 2>&1 | tail -2` → 에러 0.
 ```bash
