@@ -61,14 +61,18 @@ final class WebInputProxyView: NSView {
     }
 
     /// 뷰 좌표(하단 원점) → 웹 CSS 좌표(상단 원점). fit 사각형 밖이면 nil.
-    func webPoint(from viewPoint: NSPoint) -> (x: Int, y: Int)? {
+    /// clampToFit: 밖이어도 경계 안쪽으로 클램프해 항상 반환 — 드래그 릴리즈(mouseup) 소실 방지(감사 W-B3).
+    func webPoint(from viewPoint: NSPoint, clampToFit: Bool = false) -> (x: Int, y: Int)? {
         guard let web = target else { return nil }
         let webSize = web.bounds.size
         let r = fitRect(for: lastImage?.size ?? webSize)
-        guard r.width > 0, r.height > 0, r.contains(viewPoint) else { return nil }
-        let nx = (viewPoint.x - r.minX) / r.width
-        let ny = (viewPoint.y - r.minY) / r.height
-        return (Int(nx * webSize.width), Int((1 - ny) * webSize.height))
+        guard r.width > 0, r.height > 0 else { return nil }
+        if !clampToFit, !r.contains(viewPoint) { return nil }
+        let nx = min(max((viewPoint.x - r.minX) / r.width, 0), 1)
+        let ny = min(max((viewPoint.y - r.minY) / r.height, 0), 1)
+        // 클램프된 nx==1 이 뷰포트 밖(x==width)으로 매핑되지 않게 상한은 width-1.
+        return (min(Int(nx * webSize.width), max(Int(webSize.width) - 1, 0)),
+                min(Int((1 - ny) * webSize.height), max(Int(webSize.height) - 1, 0)))
     }
 
     private func send(_ kind: String, _ p: (x: Int, y: Int), a: String = "0", b: String = "0") {
@@ -90,8 +94,11 @@ final class WebInputProxyView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        let wasDragging = dragging
         dragging = false
-        guard let p = webPoint(from: convert(event.locationInWindow, from: nil)) else { return }
+        // 드래그 릴리즈는 fit 밖이어도 클램프 좌표로 반드시 전달 — 미전송 시 웹이 buttons=1(드래그 중)로
+        // 고착된다(감사 W-B3). 드래그가 아니었으면 종전대로 fit 안에서만.
+        guard let p = webPoint(from: convert(event.locationInWindow, from: nil), clampToFit: wasDragging) else { return }
         send("mouseup", p)
     }
 

@@ -389,7 +389,12 @@ public final class TextScriptEngine {
                 while j < n && isIdent(chars[j]) { j += 1 }
                 let word = Array(chars[i..<j])
                 let wordString = String(word)
-                let isKeyword = (word == Array("export") || word == Array("import")) && prevSig != "."
+                // prevSig "/" 제외(감사 W-B4): 유효 JS 에서 `/` 직후 식별자 위치의 export/import 는
+                // 정규식 리터럴 내부뿐(나눗셈 우변의 예약어는 비합법) — `if (ok) /export /` 처럼 위의
+                // 정규식 시작 판정이 놓친 경우의 오폭 방지. `)`/`}` 를 정규식 시작 집합에 추가하는 방식은
+                // 나눗셈 `(a+b)/2` 를 정규식으로 오파괴하므로 불가.
+                let isKeyword = (word == Array("export") || word == Array("import"))
+                    && prevSig != "." && prevSig != "/"
                 if isKeyword {
                     let after = nextNonWS(j)
                     let ac: Character? = after < n ? chars[after] : nil
@@ -541,13 +546,26 @@ public final class TextScriptEngine {
             var semicolons = 0
             var condition: [Character] = []
             while p < n, chars[p] != ")" {
-                if chars[p] == ";" {
+                let c = chars[p]
+                // 문자열 리터럴은 통째로 스킵(외곽 스캐너와 동일, 감사 W-B6) — 문자열 속 숫자
+                // (`table["16094592"]`)나 `;`/`)` 가 조건 수집을 오염해 정상 스크립트를 오탐했다.
+                if c == "\"" || c == "'" || c == "`" {
+                    p += 1
+                    while p < n {
+                        if chars[p] == "\\", p + 1 < n { p += 2; continue }
+                        let done = chars[p] == c
+                        p += 1
+                        if done { break }
+                    }
+                    continue
+                }
+                if c == ";" {
                     semicolons += 1
                     p += 1
                     if semicolons == 2 { break }
                     continue
                 }
-                if semicolons == 1 { condition.append(chars[p]) }
+                if semicolons == 1 { condition.append(c) }
                 p += 1
             }
             guard semicolons >= 2 else { return false }
@@ -599,8 +617,11 @@ public final class TextScriptEngine {
             name == "WEColor" ? "var WEColor = __WEColor;" : "var \(name) = __noopProxy();"
         }
         if clause.hasPrefix("*") {
-            guard let asIdx = clause.range(of: " as ") else { return "" }
-            let name = String(clause[asIdx.upperBound...]).trimmingCharacters(in: .whitespaces)
+            // minified `import*as e from"m"` 대응(감사 W-B5): as 주변 공백을 강제하지 않는다.
+            // 단 `as` 직후는 공백 경계여야 함(아니면 `asdf` 같은 한 식별자 — 비합법 clause).
+            let rest = String(clause.dropFirst()).trimmingCharacters(in: .whitespaces)
+            guard rest.hasPrefix("as"), let boundary = rest.dropFirst(2).first, boundary.isWhitespace else { return "" }
+            let name = String(rest.dropFirst(2)).trimmingCharacters(in: .whitespaces)
             return name.isEmpty ? "" : decl(name)
         }
         if clause.hasPrefix("{") {

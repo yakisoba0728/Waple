@@ -133,6 +133,37 @@ final class TextEngineTests: XCTestCase {
         XCTAssertNil(TextScriptEngine(script: "export function update(v) { while (1) { } return 'x'; }"))
         XCTAssertNil(TextScriptEngine(script: "export function update(v) { for (;;) { } return 'x'; }"))
         XCTAssertNil(TextScriptEngine(script: "export function update(v) { for (let i = 0; i < 1e12; i++) {} return 'x'; }"))
+        // 문자열을 스킵해도(감사 W-B6) 조건식 자체의 거대 상한은 여전히 거부.
+        XCTAssertNil(TextScriptEngine(script: "export function update(v) { for (var i = 0; i < \"x\".length + 99999999; i++) {} return 'x'; }"))
+    }
+
+    /// 감사 W-B4 회귀: `)` 뒤 정규식 리터럴(`if (ok) /export /`)은 렉서의 정규식 판정이 놓치는 위치 —
+    /// 내부 export 를 키워드로 삭제하면 `/ /` 오염이 생긴다. 원문이 그대로 보존돼야 한다.
+    func testRegexLiteralAfterParenKeepsExportInside() {
+        let src = "if (ok) /export /.test(s) && run();"
+        XCTAssertEqual(TextScriptEngine.stripModuleSyntax(src), src)
+    }
+
+    /// 감사 W-B5 회귀: minified `import*as e from"m"` (as 주변 공백 없음)도 네임스페이스 바인딩을 만든다.
+    func testMinifiedNamespaceImportKeepsBinding() {
+        let out = TextScriptEngine.stripModuleSyntax("import*as e from\"m\";e.x();")
+        XCTAssertTrue(out.contains("var e = __noopProxy();"), "바인딩 소실: \(out)")
+        XCTAssertTrue(out.contains("e.x();"), out)
+    }
+
+    /// 감사 W-B6 회귀: for 조건의 문자열 리터럴 속 8자리 숫자(`table["16094592"]`)는
+    /// 무한루프 오탐 사유가 아니다 — 정상 스크립트가 로드·실행돼야 한다.
+    func testForLoopBoundInsideStringLiteralNotRejected() throws {
+        let script = """
+        export function update(v) {
+            var table = { "16094592": ["a", "b"] };
+            var s = "";
+            for (var i = 0; i < table["16094592"].length; i++) { s += table["16094592"][i]; }
+            return s;
+        }
+        """
+        let e = try XCTUnwrap(TextScriptEngine(script: script), "문자열 속 숫자를 루프 상한으로 오탐")
+        XCTAssertEqual(e.evaluate(current: ""), "ab")
     }
 }
 
