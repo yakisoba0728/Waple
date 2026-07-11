@@ -437,6 +437,30 @@ final class Model3DTests: XCTestCase {
         }
     }
 
+    /// MDLV0021 짝 스켈레톤 MDLS0003: 본 레코드가 0004 와 바이트 동형(코퍼스 17퍼펫 실측) — 매직 수용.
+    /// 실물(3384019940 5/5)은 마지막 메시와 스켈레톤 사이에 비제로 부가 블록이 있어 매직 스캔 필수 — 재현.
+    func testParsesV0021WithMDLS0003Skeleton() throws {
+        let vSkin = SynthVert(pos: SIMD3(1, 2, 0), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(0.5, 0.5),
+                              bones: SIMD4(0, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
+        let mesh = SynthMesh(material: "materials/1.json", min: .zero, max: .zero,
+                             skinned: true, verts: [vSkin, vSkin, vSkin], indices: [0, 1, 2])
+        var d = makeModelU16([mesh], magic: "MDLV0021")
+        d.append(Data(repeating: 0x55, count: 24))        // 메시-스켈레톤 사이 비제로 부가 블록(실물 재현)
+        d.append(Data("MDLS0003".utf8)); d.append(0)
+        u(0, into: &d); u(1, into: &d)
+        d.append(0)                                       // bone0 name ""
+        u(1, into: &d)
+        var pr: Int32 = -1; withUnsafeBytes(of: &pr) { d.append(contentsOf: $0) }
+        u(64, into: &d)
+        let mat: [Float] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 7, -2, 0, 1]
+        for x in mat { f(x, into: &d) }
+        d.append(0)                                       // props ""
+        let m = try XCTUnwrap(Model3D.parse(d), "MDLV0021+MDLS0003 파스 실패")
+        XCTAssertEqual(m.bones.count, 1, "MDLS0003 본 수용(MDLV0021 짝)")
+        XCTAssertEqual(m.bones[0].bind.columns.3.x, 7)
+        XCTAssertEqual(m.bones[0].parent, -1)
+    }
+
     /// V0016(2885492021 전수 실측): AABB 부재 + 정점 플래그 0x01800009(normal/tangent 없는 stride 52
     /// = pos|bones4|weights4|uv — V0013 정점 레이아웃) + MDLS0002 + MDLA0003.
     func testParsesV0016NoAABBStride52() throws {

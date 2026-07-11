@@ -420,7 +420,8 @@ extension SceneDocument {
         let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let ambientColor = vec3(general["ambientcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let skylightColor = vec3(general["skylightcolor"]) ?? ambientColor
-        let parallaxEnabled = (general["cameraparallax"] as? Bool) ?? false
+        // {"user":…,"value":Bool} 바인딩 형태(실물 21씬)는 unwrap 이 value 를 꺼낸다(평문 Bool 은 그대로).
+        let parallaxEnabled = (unwrap(general["cameraparallax"]) as? Bool) ?? false
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
         // 부재 시 0(즉시) — 무회귀. 실물은 전부 필드 보유(기본 0.1).
@@ -462,23 +463,38 @@ extension SceneDocument {
                 continue
             }
             let objectID = intVal(obj["id"]) ?? 0
-            if !initialVisible && visibleScript == nil && !imageLayerCompositeIDs.contains(objectID) { continue }
-            if let imagePath = obj["image"] as? String {
+            if !initialVisible && visibleScript == nil && !imageLayerCompositeIDs.contains(objectID) {
+                // V06: 정적 비가시 콘텐츠 오브젝트도 id 가 있으면 트랜스폼을 비가시 노드로 보존 —
+                // 가시 자식의 parent 체인 합성(2D composeParentTransforms localT·3D nodeMap)이 끊기지
+                // 않게 한다. 렌더 대상(layers/objects3D/…)에는 계속 미포함(무회귀).
+                if intVal(obj["id"]) != nil {
+                    nodes3D.append(SceneNode3D(
+                        id: objectID,
+                        origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                        angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
+                        scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
+                        parent: intVal(obj["parent"]),
+                        visible: false))
+                }
+                continue
+            }
+            // 콘텐츠 키 접근은 contentValue 로 NSNull 정규화(존재 판정과 동일 규약).
+            if let imagePath = contentValue(obj["image"]) as? String {
                 if let layer = parseLayer(obj, imagePath: imagePath, order: order, pw: pw, ph: ph,
                                           package: package, assets: assets, userProps: userProps,
                                           visibleScript: visibleScript, initialVisible: initialVisible) {
                     layers.append(layer)
                 }
-            } else if let particlePath = obj["particle"] as? String {
+            } else if let particlePath = contentValue(obj["particle"]) as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package) {
                     p.order = order
                     particles.append(p)
                 }
-            } else if obj["text"] != nil {
+            } else if contentValue(obj["text"]) != nil {
                 texts.append(parseText(obj, order: order))
-            } else if let modelPath = obj["model"] as? String {
+            } else if let modelPath = contentValue(obj["model"]) as? String {
                 objects3D.append(parseModel(obj, modelPath: modelPath, order: order, visibleScript: visibleScript))
-            } else if let lightType = obj["light"] as? String {
+            } else if let lightType = contentValue(obj["light"]) as? String {
                 lights3D.append(parseLight(obj, lightType: lightType, order: order))
             }
         }
@@ -653,7 +669,7 @@ extension SceneDocument {
     /// 트랜스폼-온리 그룹 노드: 콘텐츠 키 없음 + id 보유 시 SceneNode3D(비가시도 포함 — 서브트리 판정에 필요).
     /// 콘텐츠 키가 있거나 id 없으면 nil(호출부가 레이어/컨텐츠 분기로 진행).
     private static func parseNode(_ obj: [String: Any], initialVisible: Bool, visibleScript: String?) -> SceneNode3D? {
-        guard !["image", "model", "particle", "text", "light"].contains(where: { obj[$0] != nil }),
+        guard !["image", "model", "particle", "text", "light"].contains(where: { contentValue(obj[$0]) != nil }),
               let nodeID = intVal(obj["id"]) else { return nil }
         var node = SceneNode3D(
             id: nodeID,
@@ -668,12 +684,16 @@ extension SceneDocument {
         return node
     }
 
-    /// 텍스트 레이어("text": 평문 문자열 또는 {"script": JS}). 내용은 렌더러/스크립트 엔진이 채운다.
+    /// 텍스트 레이어("text": 평문 문자열 | {"value": 초기값, "script": JS} 바인딩 — 둘 다 보유 가능).
+    /// script 는 update(current) 로 갱신되므로 value 는 초기 표시값으로도 쓰인다(실물 29씬/136오브젝트).
     private static func parseText(_ obj: [String: Any], order: Int) -> SceneTextLayer {
         var plain = ""
         var script: String? = nil
         if let s = obj["text"] as? String { plain = s }
-        else if let d = obj["text"] as? [String: Any], let js = d["script"] as? String { script = js }
+        else if let d = obj["text"] as? [String: Any] {
+            script = d["script"] as? String
+            plain = (d["value"] as? String) ?? ""
+        }
         return SceneTextLayer(
             name: (obj["name"] as? String) ?? "",
             text: plain, script: script,
@@ -982,6 +1002,10 @@ extension SceneDocument {
         }
         return out
     }
+
+    /// NSNull → nil 정규화(콘텐츠 키 존재 판정·접근 공통) — 실물 21오브젝트가 image/model 에 JSON null 을
+    /// 쓴다. NSNull 을 "있음"으로 오판하면 그룹-노드 분기도 콘텐츠 분기도 못 타 계층에서 통째로 유실된다.
+    private static func contentValue(_ v: Any?) -> Any? { v is NSNull ? nil : v }
 
     /// 바인딩 객체 {"animation":..., "value": X} → X(정적 값), 아니면 원값.
     /// 실물 씬은 origin/alpha 등 대부분의 프로퍼티에 이 형태를 쓴다(애니메이션 재생은 후속 기능).

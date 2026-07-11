@@ -536,4 +536,71 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(effect.audioMode, 0)
         XCTAssertNil(effect.constants["bad"])
     }
+
+    /// cameraparallax 가 {"user","value"} 바인딩 dict 인 씬(실물 21씬) — value 언랩해 활성화.
+    func testCameraParallaxUserBindingDict() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},
+          "cameraparallax":{"user":"k","value":true},"cameraparallaxamount":0.5},
+         "objects":[]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertTrue(doc.parallaxEnabled, "{user,value:true} dict 는 true 로 언랩")
+        XCTAssertEqual(doc.parallaxAmount, 0.5, accuracy: 1e-6)
+    }
+
+    /// text 가 {"user","value"(,"script")} 바인딩 dict(실물 29씬/136오브젝트) — value 를 초기 표시값으로.
+    func testTextUserValueBinding() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"text":{"user":"t","value":"Hello"},"origin":"0 0 0","visible":true},
+           {"text":{"user":"u","value":"World","script":"return v;"},"origin":"0 0 0","visible":true}
+         ]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.texts.count, 2)
+        XCTAssertEqual(doc.texts[0].text, "Hello")
+        XCTAssertNil(doc.texts[0].script)
+        XCTAssertEqual(doc.texts[1].text, "World", "script 와 value 동시 보유 시 둘 다 채움")
+        XCTAssertEqual(doc.texts[1].script, "return v;")
+    }
+
+    /// 콘텐츠 키가 JSON null(NSNull) 인 오브젝트(실물 21오브젝트) — 트랜스폼-온리 노드로 계층 보존.
+    func testNSNullContentKeyPreservesNode() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":7,"image":null,"origin":"5 6 0","angles":"0 0 0","scale":"1 1 1","visible":true}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let doc = try SceneDocument.parse(package: p)
+        let node = try XCTUnwrap(doc.nodes3D.first(where: { $0.id == 7 }), "image:null 은 그룹 노드로 분류")
+        XCTAssertEqual(node.origin, Vec3(x: 5, y: 6, z: 0))
+        XCTAssertTrue(node.visible)
+        XCTAssertTrue(doc.layers.isEmpty)
+    }
+
+    /// V06: 정적 visible:false 콘텐츠 부모(id 보유)의 트랜스폼이 비가시 노드로 남아
+    /// 가시 자식의 parent 체인 합성이 끊기지 않는다(월드 좌표 반영).
+    func testInvisibleContentParentChainPreserved() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":10,"image":"models/x.json","origin":"100 200 0","size":"10 10","scale":"2 2 1",
+            "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":false},
+           {"id":11,"parent":10,"image":"models/x.json","origin":"10 0 0","size":"10 10","scale":"1 1 1",
+            "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true}
+         ]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.layers.count, 1, "비가시 부모는 렌더 레이어 미포함(무회귀)")
+        let node = try XCTUnwrap(doc.nodes3D.first(where: { $0.id == 10 }), "비가시 부모 트랜스폼 노드 보존")
+        XCTAssertFalse(node.visible)
+        let child = doc.layers[0]
+        XCTAssertEqual(child.origin, Vec2(x: 120, y: 200), "부모 origin(100,200)+scale(2)×로컬(10,0)")
+        XCTAssertEqual(child.scale, Vec2(x: 2, y: 2))
+    }
 }
