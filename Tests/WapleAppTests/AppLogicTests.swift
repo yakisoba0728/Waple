@@ -357,6 +357,35 @@ final class AppLogicTests: XCTestCase {
             "형제 프리픽스(stillage)는 내부 아님")
     }
 
+    // MARK: - StillDesktopSync.restorePass (P-D1: 분리 모니터 백업 보존)
+
+    func testRestorePass_preservesDisconnectedKeys() {
+        let out = StillDesktopSync.restorePass(
+            originals: ["s1": "/a.jpg", "s2": "/b.jpg"],
+            connectedKeys: ["s1"],
+            fileExists: { _ in true },
+            restore: { _, _ in true })
+        XCTAssertEqual(out, ["s2": "/b.jpg"], "연결 안 된 화면(s2) 백업 보존 — 종전 전체 소거 버그")
+    }
+
+    func testRestorePass_missingFile_consumesBackup() {
+        let out = StillDesktopSync.restorePass(
+            originals: ["s1": "/gone.jpg"],
+            connectedKeys: ["s1"],
+            fileExists: { _ in false },
+            restore: { _, _ in XCTFail("파일 부재면 복원 시도 없음"); return false })
+        XCTAssertTrue(out.isEmpty, "파일 부재 = 복원 불가 확정 → 백업 제거")
+    }
+
+    func testRestorePass_failedRestore_keepsBackup() {
+        let out = StillDesktopSync.restorePass(
+            originals: ["s1": "/a.jpg"],
+            connectedKeys: ["s1"],
+            fileExists: { _ in true },
+            restore: { _, _ in false })
+        XCTAssertEqual(out, ["s1": "/a.jpg"], "복원 실패 키는 보존(다음 경로에서 재시도)")
+    }
+
     // MARK: - RecentWallpapers (작업 6: 최근 목록 push)
 
     func testRecentPush_frontInsertAndDedup() {
@@ -396,6 +425,34 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(project.type, .video)
         XCTAssertEqual(project.fileName, "myclip.mp4")
         XCTAssertEqual(project.previewName, "preview.jpg")
+    }
+
+    func testUniqueFolderName_noCollision_keepsBase() {
+        XCTAssertEqual(VideoImport.uniqueFolderName(base: "clip") { _ in false }, "clip")
+    }
+
+    func testUniqueFolderName_collision_suffixesFromTwo() {
+        let taken: Set<String> = ["clip", "clip-2"]
+        XCTAssertEqual(VideoImport.uniqueFolderName(base: "clip") { taken.contains($0) }, "clip-3")
+    }
+
+    func testVideoImportSecondImportDoesNotOverwrite() throws {
+        // P-D2: imports/<이름> 충돌 시 무경고 덮어쓰기 금지 — suffix 폴더로 회피.
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WapleVI-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let base = tmp.appendingPathComponent("base", isDirectory: true)
+        let fake = tmp.appendingPathComponent("myclip.mp4")
+        try Data("v1".utf8).write(to: fake)
+
+        let first = VideoImport.prepare(from: fake, baseDirectory: base)
+        let second = VideoImport.prepare(from: fake, baseDirectory: base)
+        XCTAssertEqual(first?.lastPathComponent, "myclip")
+        XCTAssertEqual(second?.lastPathComponent, "myclip-2", "충돌 → suffix, 기존 폴더 보존")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: base.appendingPathComponent("imports/myclip/project.json").path),
+            "첫 가져오기 폴더는 그대로 남는다")
     }
 
     func testVideoImportIsVideoFile() {

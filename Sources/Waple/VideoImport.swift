@@ -18,8 +18,12 @@ enum VideoImport {
                         baseDirectory: URL = LibraryStore.defaultBaseDirectory()) -> URL? {
         let fm = FileManager.default
         let name = videoURL.deletingPathExtension().lastPathComponent
-        let folder = baseDirectory.appendingPathComponent("imports", isDirectory: true)
-            .appendingPathComponent(name.isEmpty ? "video" : name, isDirectory: true)
+        let importsDir = baseDirectory.appendingPathComponent("imports", isDirectory: true)
+        // 폴더명 충돌 시 -2, -3 … 회피 — 기존 가져오기를 말없이 덮어쓰지 않는다(P-D2).
+        let unique = uniqueFolderName(base: name.isEmpty ? "video" : name) {
+            fm.fileExists(atPath: importsDir.appendingPathComponent($0, isDirectory: true).path)
+        }
+        let folder = importsDir.appendingPathComponent(unique, isDirectory: true)
         guard (try? fm.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
 
         let fileName = videoURL.lastPathComponent
@@ -33,6 +37,16 @@ enum VideoImport {
         guard (try? Data(json.utf8).write(to: folder.appendingPathComponent("project.json"), options: .atomic)) != nil
         else { return nil }
         return folder
+    }
+
+    /// 충돌 없는 폴더명(순수): base 가 없으면 그대로, 있으면 "base-2", "base-3" … 첫 빈 이름.
+    /// ponytail: '같은 원본 재가져오기' 판별(내용 비교)은 생략 — 존재하면 무조건 suffix.
+    /// 다른 배경을 말없이 덮어쓰는 유실보다 중복 폴더가 낫다. 필요해지면 원본 파일 크기 비교로 승급.
+    static func uniqueFolderName(base: String, existing: (String) -> Bool) -> String {
+        guard existing(base) else { return base }
+        var n = 2
+        while existing("\(base)-\(n)") { n += 1 }
+        return "\(base)-\(n)"
     }
 
     /// t=1s 프레임(실패 시 t=0)을 JPEG preview 로. 실패는 조용히 — 미리보기는 폴백일 뿐.

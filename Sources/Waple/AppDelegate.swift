@@ -53,7 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let raw = sender.representedObject as? String, let mode = FitMode(rawValue: raw) else { return }
         SceneRenderSettings.fitMode = mode
         fitMenu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
-        if let folder = currentFolderURL { apply(folderURL: folder) }  // 현재 배경 재적용으로 즉시 반영
+        _ = applyCurrentSelection()  // 현재 선택 재적용으로 즉시 반영(할당-전용 표시 중에도 — P-B4)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -182,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         BaseAssetsSettings.baseAssetsDirectory = url
-        if let folder = currentFolderURL { apply(folderURL: folder) }  // 누락 텍스처 즉시 반영
+        _ = applyCurrentSelection()  // 누락 텍스처 즉시 반영(할당-전용 표시 중에도 — P-B4)
     }
 
     /// 현재 배경(동영상)의 음량/배속 설정 → 저장 + 재적용(기존 fit-mode 패턴). 체크 상태 갱신.
@@ -501,7 +501,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let output = StillWallpaper.outputURL(projectId: project.id, stillDir: stillDir)
         switch source {
         case .videoFrame(let videoURL): return extractVideoFrame(from: videoURL, to: output)
-        case .sceneCapture:             return captureSceneStill(to: stillDir)
+        case .sceneCapture:             return captureSceneStill(to: stillDir, output: output)
         case .previewImage(let url):    return url   // preview 파일 그대로 사용
         }
     }
@@ -522,13 +522,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return output
     }
 
-    /// 활성 씬 렌더러로 1프레임(t=1s) 캡처. 씬이 없으면 nil.
-    private func captureSceneStill(to dir: URL) -> URL? {
+    /// 활성 씬 렌더러로 1프레임(t=1s) 캡처 → 프로젝트별 output 으로 복사. 씬 없음/실패 → nil.
+    /// captureFrames 는 고정 파일명(frame_t1.0.png)이라 그대로 반환하면 씬 전환 때마다 같은 URL 이
+    /// 재설정돼 macOS 배경 캐시가 갱신을 무시한다(P-B2) — 프로젝트별 경로로 복사해 URL 을 구분.
+    private func captureSceneStill(to dir: URL, output: URL) -> URL? {
         guard let scene = renderers.compactMap({ $0 as? SceneRenderer }).first else { return nil }
         let size = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
         let scale = NSScreen.main?.backingScaleFactor ?? 2
-        return scene.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
-                                   times: [1.0], toDir: dir).first
+        guard let captured = scene.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
+                                                 times: [1.0], toDir: dir).first else { return nil }
+        let fm = FileManager.default
+        try? fm.removeItem(at: output)   // safeName 은 영숫자만 남기므로 captured 와 충돌 불가
+        guard (try? fm.copyItem(at: captured, to: output)) != nil else { return nil }
+        return output
     }
 
     // MARK: - 로그인 시 시작 (작업 4)
@@ -689,16 +695,22 @@ extension AppDelegate {
         }
     }
 
-    /// 백업된 원본 바탕화면 복원(파일이 아직 존재하는 화면만). 복원 후 백업 비움.
+    /// 백업된 원본 바탕화면 복원. 복원 성공/파일 부재(복원 불가 확정) 키만 백업에서 제거하고
+    /// 연결 안 된 화면 키는 보존한다 — 종전 전체 소거(= [:])가 분리 모니터 백업을 유실했다(P-D1).
     func restoreDesktopOriginals() {
         let originals = desktopOriginals
         guard !originals.isEmpty else { return }
-        for screen in NSScreen.screens {
-            guard let path = originals[DesktopWindow.screenKey(for: screen)],
-                  FileManager.default.fileExists(atPath: path) else { continue }
-            try? NSWorkspace.shared.setDesktopImageURL(URL(fileURLWithPath: path), for: screen, options: [:])
-        }
-        desktopOriginals = [:]
+        let screens = NSScreen.screens.map { (key: DesktopWindow.screenKey(for: $0), screen: $0) }
+        desktopOriginals = StillDesktopSync.restorePass(
+            originals: originals,
+            connectedKeys: screens.map(\.key),
+            fileExists: { FileManager.default.fileExists(atPath: $0) },
+            restore: { key, path in
+                guard let screen = screens.first(where: { $0.key == key })?.screen else { return false }
+                return (try? NSWorkspace.shared.setDesktopImageURL(
+                    URL(fileURLWithPath: path), for: screen, options: [:])) != nil
+            }
+        )
     }
 
     /// 종료 시 원본 복원(force-quit 엔 호출 안 됨 — 토글 오프도 복원 경로라 최선 노력으로 충분).

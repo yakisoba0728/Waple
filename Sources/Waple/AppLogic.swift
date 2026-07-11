@@ -196,6 +196,26 @@ enum StillDesktopSync {
         return !isUnder(currentPath, dir: stillDirPath)
     }
 
+    /// 복원 패스(P-D1): 연결된 화면 키만 복원 시도하고, 소비한 키를 제거한 백업 dict 를 반환.
+    /// - 파일 부재 → 복원 불가 확정이므로 제거(보존해도 영원히 못 쓴다).
+    /// - restore 성공 → 제거. 실패 → 보존(다음 복원 경로에서 재시도).
+    /// - 연결 안 된 화면 키는 건드리지 않는다 — 종전 전체 소거(= [:])가 분리 모니터 백업을 유실했다.
+    static func restorePass(
+        originals: [String: String],
+        connectedKeys: [String],
+        fileExists: (String) -> Bool,
+        restore: (String, String) -> Bool
+    ) -> [String: String] {
+        var remaining = originals
+        for key in connectedKeys {
+            guard let path = remaining[key] else { continue }
+            if !fileExists(path) || restore(key, path) {
+                remaining.removeValue(forKey: key)
+            }
+        }
+        return remaining
+    }
+
     /// path 가 dir 내부(또는 동일)인가 — 표준화 후 경로 프리픽스 비교.
     static func isUnder(_ path: String, dir: String) -> Bool {
         let p = (path as NSString).standardizingPath

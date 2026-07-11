@@ -123,6 +123,42 @@ final class DesktopIntegrationTests: XCTestCase {
             "자기 창은 threshold 0 에서도 가림 아님")
     }
 
+    // MARK: - 좌표계 플립 (P-B1: CG 창 bounds ↔ Cocoa screenFrames)
+
+    func testCocoaFlipped_mapsCGWindowIntoCocoa() {
+        // 주화면(높이 1080) 상단에 붙은 CG 창 (0,0,800,600) → Cocoa 에선 y=480 (위쪽).
+        XCTAssertEqual(
+            DesktopVisibilityMonitor.cocoaFlipped(CGRect(x: 0, y: 0, width: 800, height: 600),
+                                                  mainScreenHeight: 1080),
+            CGRect(x: 0, y: 480, width: 800, height: 600))
+    }
+
+    func testCoverage_verticalMonitors_flipMakesSecondaryCount() {
+        // 주화면 Cocoa (0,0,1920,1080) + '위' 보조화면 Cocoa (0,1080,1920,1080).
+        let screens = [CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                       CGRect(x: 0, y: 1080, width: 1920, height: 1080)]
+        // 보조화면 전체를 덮는 창의 CG bounds 는 (0,-1080,1920,1080).
+        let cg = CGRect(x: 0, y: -1080, width: 1920, height: 1080)
+        XCTAssertEqual(DesktopVisibilityMonitor.coverageRatio(blocking: [cg], screenFrames: screens),
+                       0, accuracy: 0.001, "무플립 = 어느 화면과도 교차 못 함(종전 버그 재현)")
+        let flipped = DesktopVisibilityMonitor.cocoaFlipped(cg, mainScreenHeight: 1080)
+        XCTAssertEqual(flipped, CGRect(x: 0, y: 1080, width: 1920, height: 1080), "= 보조화면 전체")
+        XCTAssertEqual(DesktopVisibilityMonitor.coverageRatio(blocking: [flipped], screenFrames: screens),
+                       0.5, accuracy: 0.001, "보조화면 전체 = 전역 커버리지 50%")
+    }
+
+    func testThreshold_verticalMonitors_flippedWindowPausesAtHalf() {
+        let screens = [CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                       CGRect(x: 0, y: 1080, width: 1920, height: 1080)]
+        let flipped = DesktopVisibilityMonitor.cocoaFlipped(
+            CGRect(x: 0, y: -1080, width: 1920, height: 1080), mainScreenHeight: 1080)
+        let win = DesktopVisibilityMonitor.WindowSnapshot(
+            ownerName: "Google Chrome", processId: 999, layer: 0, alpha: 1, bounds: flipped)
+        XCTAssertFalse(DesktopVisibilityMonitor.isDesktopVisible(
+            windows: [win], currentProcessId: 1, screenFrames: screens, threshold: 0.5),
+            "플립 후 커버리지 0.5 ≥ 임계 0.5 → 가림(일시정지) 판정")
+    }
+
     // MARK: - 작업 3: 정지 배경 소스·경로
 
     private func proj(_ type: WallpaperType, file: String? = nil, preview: String? = nil,
