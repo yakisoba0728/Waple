@@ -40,13 +40,17 @@ public final class SceneScriptContext {
     /// 헤드리스/캡처(오디오 미생성)에서 getLayer(사운드).play() 는 안전 무시된다.
     public weak var soundTransport: SceneAudioPlayer?
 
-    public init?(layers: [SceneScriptLayerDescriptor] = [], soundNames: [String] = []) {
+    /// width/height = 프로젝션(캔버스) 크기 — thisScene.size/screenSize/resolution·engine.canvasSize 의
+    /// 실값(기본 1920×1080: 기존 호출부 무회귀). SceneRenderer mount 가 doc.projectionWidth/Height 전달.
+    public init?(layers: [SceneScriptLayerDescriptor] = [], soundNames: [String] = [],
+                 width: Float = 1920, height: Float = 1080) {
         guard let ctx = JSContext() else { return nil }
         context = ctx
         ctx.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] scene script context exception: \(ex?.toString() ?? "?")")
         }
         ctx.evaluateScript(TextScriptEngine.shims)
+        ctx.evaluateScript("__setCanvasSize(\(TextScriptEngine.jsNumber(width)), \(TextScriptEngine.jsNumber(height)));")
         installSoundBridge(ctx)
         if !layers.isEmpty {
             ctx.evaluateScript("__setSceneLayers(\(Self.layersJSONArray(layers)));")
@@ -72,6 +76,17 @@ public final class SceneScriptContext {
         ctx.setObject(isPlaying, forKeyedSubscript: "__wapleSoundIsPlaying" as NSString)
         ctx.setObject(getVolume, forKeyedSubscript: "__wapleSoundGetVolume" as NSString)
         ctx.setObject(setVolume, forKeyedSubscript: "__wapleSoundSetVolume" as NSString)
+    }
+
+    /// 오디오 스펙트럼 실데이터 주입(채널당 64빈): __audioBuffer 를 제자리 갱신(left/right·16/32/64·spectrum)
+    /// 후 registerAudioBuffers 콜백 발화. 라이브 오디오 provider onFrame(30fps, main 큐)에서만 호출 —
+    /// 캡처/헤드리스는 미호출로 버퍼 0 유지(스냅샷 결정성). 64빈 미만 입력은 JS 쪽 __num 이 0 폴백.
+    public func setAudio(left64: [Float], right64: [Float]) {
+        context.evaluateScript("__setAudioData(\(Self.floatArrayLiteral(left64)), \(Self.floatArrayLiteral(right64)));")
+    }
+
+    private static func floatArrayLiteral(_ values: [Float]) -> String {
+        "[" + values.map(TextScriptEngine.jsNumber).joined(separator: ",") + "]"
     }
 
     private static func stringJSONArray(_ names: [String]) -> String {
@@ -253,9 +268,10 @@ public final class TextScriptEngine {
         }
     }
 
-    /// 효과 상수 스크립트용: engine.runtime 갱신(초).
+    /// 효과 상수 스크립트용: engine.runtime 갱신(초) + engine.setTimeout 만기 큐 펌프.
+    /// 공유 씬 컨텍스트에선 여러 엔진이 같은 t 로 재호출 — 펌프는 멱등(만기분은 1회만 발화).
     public func setRuntime(_ t: Double) {
-        context.evaluateScript("__engineState.runtime = \(t);")
+        context.evaluateScript("__engineState.runtime = \(t); __pumpTimeouts();")
     }
 
     /// update({x,y,z...}) 호출 → 수치 배열(스칼라는 1개). 예외/비수치 → nil.
@@ -304,7 +320,7 @@ public final class TextScriptEngine {
         return JSValue(double: Double(current.first ?? 0), in: context)
     }
 
-    private static func jsNumber(_ value: Float) -> String {
+    static func jsNumber(_ value: Float) -> String {  // SceneScriptContext 도 사용(비유한 → "0" 가드)
         let d = Double(value)
         return d.isFinite ? String(d) : "0"
     }
@@ -694,10 +710,76 @@ public final class TextScriptEngine {
         left64: __zeroArray(64), right64: __zeroArray(64),
         spectrum: __zeroArray(64), waveform: __zeroArray(64)
     };
+    // 프로젝션(캔버스) 크기 — thisScene.size/screenSize/resolution·engine.canvasSize 가 이 한 인스턴스를
+    // 공유(별칭). __setCanvasSize 는 제자리 갱신이라 스크립트가 보관한 참조도 함께 갱신된다.
+    // (Vec2/__num 은 함수 선언 호이스팅으로 이 시점 사용 가능.)
+    var __canvasSize = new Vec2(1920, 1080);
+    function __setCanvasSize(w, h) {
+        __canvasSize.x = __num(w, 1920);
+        __canvasSize.y = __num(h, 1080);
+    }
+    // engine.setTimeout: 벽시계가 아닌 runtime 클록 기반 만기 큐(결정적 — 캡처 t 주입 시 동일 발화).
+    // 펌프는 setRuntime(= __engineState.runtime 갱신) 이 수행.
+    var __timeoutQueue = [];   // {id, at(초), cb}
+    var __timeoutSeq = 0;
+    function __pumpTimeouts() {
+        var now = __engineState.runtime;
+        var cutoff = __timeoutSeq;   // 콜백 내 재등록(0ms 체인)은 다음 틱으로 — 동일 틱 무한루프 방지
+        for (;;) {
+            var best = -1;
+            for (var i = 0; i < __timeoutQueue.length; i += 1) {   // ponytail: 선형 스캔 — 씬당 타이머는 한 자릿수
+                var e = __timeoutQueue[i];
+                if (e.at > now || e.id > cutoff) { continue; }
+                if (best < 0 || e.at < __timeoutQueue[best].at
+                    || (e.at === __timeoutQueue[best].at && e.id < __timeoutQueue[best].id)) { best = i; }
+            }
+            if (best < 0) { return; }
+            var entry = __timeoutQueue.splice(best, 1)[0];
+            entry.cb();   // 예외 → evaluateScript 예외(기존 exceptionHandler 로깅). 잔여 만기분은 다음 틱에.
+        }
+    }
+    // engine.audio/audioBuffer 실데이터: 네이티브 setAudio 가 호출. 배열은 제자리 갱신 —
+    // 스크립트가 보관한 audioBuffer/g_AudioSpectrum* 별칭이 살아 있어야 한다. waveform 은 데이터원 없음(0 유지).
+    var __audioCallbacks = [];
+    function __setAudioData(l, r) {
+        function avg(src, dst, group) {
+            for (var i = 0; i < dst.length; i += 1) {
+                var s = 0;
+                for (var j = 0; j < group; j += 1) { s += src[i * group + j]; }
+                dst[i] = s / group;
+            }
+        }
+        for (var i = 0; i < 64; i += 1) {
+            var lv = __num(l && l[i], 0), rv = __num(r && r[i], 0);
+            __audioBuffer.left[i] = lv;   __audioBuffer.right[i] = rv;
+            __audioBuffer.left64[i] = lv; __audioBuffer.right64[i] = rv;
+            __audioBuffer.spectrum[i] = (lv + rv) / 2;
+        }
+        avg(__audioBuffer.left64, __audioBuffer.left32, 2);
+        avg(__audioBuffer.right64, __audioBuffer.right32, 2);
+        avg(__audioBuffer.left64, __audioBuffer.left16, 4);
+        avg(__audioBuffer.right64, __audioBuffer.right16, 4);
+        for (var k = 0; k < __audioCallbacks.length; k += 1) { __audioCallbacks[k](__audioBuffer); }
+    }
     // engine: runtime 등 실수치 프로퍼티는 실제 타깃에 두고, 나머지는 no-op 흡수.
     // frametime(소문자)이 실물 표기(818회/193pkg — 2881558311 ColorTinter 전환 타이머 등); frameTime 은 호환 보존.
     var __engineState = { runtime: 0.0, frametime: 0.016, frameTime: 0.016,
-                          audio: __audioBuffer, audioBuffer: __audioBuffer };
+                          audio: __audioBuffer, audioBuffer: __audioBuffer,
+                          canvasSize: __canvasSize,
+                          setTimeout: function(cb, ms) {
+                              if (typeof cb !== 'function') { return 0; }
+                              var id = ++__timeoutSeq;
+                              __timeoutQueue.push({ id: id, at: __engineState.runtime + __num(ms, 0) / 1000, cb: cb });
+                              return id;
+                          },
+                          clearTimeout: function(id) {
+                              for (var i = 0; i < __timeoutQueue.length; i += 1) {
+                                  if (__timeoutQueue[i].id === id) { __timeoutQueue.splice(i, 1); return; }
+                              }
+                          },
+                          registerAudioBuffers: function(cb) {
+                              if (typeof cb === 'function') { __audioCallbacks.push(cb); }
+                          } };
     var engine = new Proxy(__engineState, {
         get: function(t, k) { if (k in t) { return t[k]; } return __noopProxy(); },
         set: function(t, k, v) { t[k] = v; return true; }
@@ -938,7 +1020,7 @@ public final class TextScriptEngine {
             return fallbackLayers[name];
         }
         return {
-            size: new Vec2(1920, 1080), screenSize: new Vec2(1920, 1080), resolution: new Vec2(1920, 1080),
+            size: __canvasSize, screenSize: __canvasSize, resolution: __canvasSize,
             camera: camera, layers: [layer],
             __soundLayers: {},   // name → 사운드 레이어(getLayer/enumerateLayers 로 노출 — 트리거/주크박스)
             getCamera: function() { return camera; },

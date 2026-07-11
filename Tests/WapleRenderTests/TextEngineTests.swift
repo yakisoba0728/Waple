@@ -152,6 +152,65 @@ final class TextEngineTests: XCTestCase {
         XCTAssertTrue(out.contains("e.x();"), out)
     }
 
+    // ── 씬 스크립트 실데이터 주입(canvasSize/setTimeout/audio — 감사 O5/백로그) ────────
+
+    /// 주입한 프로젝션 크기가 engine.canvasSize·thisScene.size/screenSize 로 보인다.
+    /// 미주입(기본) 컨텍스트는 1920×1080 유지(무회귀).
+    func testCanvasSizeReflectsInjectedProjectionSize() throws {
+        let scene = try XCTUnwrap(SceneScriptContext(width: 2560, height: 1440))
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            return engine.canvasSize.x + 'x' + engine.canvasSize.y + '/' + thisScene.size.y + '/' + thisScene.screenSize.x;
+        }
+        """, scene: scene))
+        XCTAssertEqual(e.evaluate(current: ""), "2560x1440/1440/2560")
+
+        let def = try XCTUnwrap(SceneScriptContext())
+        let d = try XCTUnwrap(TextScriptEngine(
+            script: "export function update(v) { return engine.canvasSize.x + '/' + thisScene.size.y; }",
+            scene: def))
+        XCTAssertEqual(d.evaluate(current: ""), "1920/1080")
+    }
+
+    /// engine.setTimeout: runtime 0→2 전진 시 만기순(동일 만기는 등록순) 1회 발화, clearTimeout 은 취소.
+    func testEngineSetTimeoutFiresOnRuntimeAdvance() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        var fired = [];
+        engine.setTimeout(function(){ fired.push('a'); }, 500);
+        engine.setTimeout(function(){ fired.push('b'); }, 500);
+        engine.setTimeout(function(){ fired.push('c'); }, 1000);
+        var dead = engine.setTimeout(function(){ fired.push('x'); }, 100);
+        engine.clearTimeout(dead);
+        export function update(v) { return fired.join(''); }
+        """, scene: scene))
+        XCTAssertEqual(e.evaluate(current: ""), "")     // runtime 0 — 미발화
+        e.setRuntime(2.0)
+        XCTAssertEqual(e.evaluate(current: ""), "abc")  // 0.5s 2개 등록순 → 1.0s, x 는 취소
+        e.setRuntime(3.0)
+        XCTAssertEqual(e.evaluate(current: ""), "abc")  // 재발화 없음(1회)
+    }
+
+    /// setAudio: 스크립트가 audioBuffer.left16/engine.audio.left64/g_AudioSpectrum32Left 실값을 읽고,
+    /// registerAudioBuffers 콜백이 setAudio 시 발화한다. (검사값은 2의 거듭제곱 분수 — 문자열 비교 안전)
+    func testSetAudioFillsBuffersAndFiresRegisteredCallback() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        var cb = -1;
+        engine.registerAudioBuffers(function(buf) { cb = buf.right64[0]; });
+        export function update(v) {
+            return [audioBuffer.left16[0], engine.audio.left64[3], g_AudioSpectrum32Left[0], cb].join(',');
+        }
+        """, scene: scene))
+        XCTAssertEqual(e.evaluate(current: ""), "0,0,0,-1")  // 주입 전: 버퍼 0, 콜백 미발화
+        var l = [Float](repeating: 0, count: 64)
+        l[0] = 0.25; l[1] = 0.75; l[2] = 0.25; l[3] = 0.75   // left16[0]=0.5, left32[0]=0.5
+        var r = [Float](repeating: 0, count: 64)
+        r[0] = 0.5
+        scene.setAudio(left64: l, right64: r)
+        XCTAssertEqual(e.evaluate(current: ""), "0.5,0.75,0.5,0.5")
+    }
+
     /// 감사 W-B6 회귀: for 조건의 문자열 리터럴 속 8자리 숫자(`table["16094592"]`)는
     /// 무한루프 오탐 사유가 아니다 — 정상 스크립트가 로드·실행돼야 한다.
     func testForLoopBoundInsideStringLiteralNotRejected() throws {

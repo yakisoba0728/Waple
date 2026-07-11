@@ -52,6 +52,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
     func makeScriptEngine(_ src: String, layerName: String? = nil) -> TextScriptEngine? {
+        // 오디오 소비 스크립트 게이팅: 참조가 보이면 hasAudio 승격 → mount 말미의 provider 기동
+        // (기존엔 셰이더 오디오 효과만 켰다). 모든 스크립트 로드는 mount 의 기동 검사보다 앞선다.
+        if !hasAudio, Self.scriptWantsAudio(src) { hasAudio = true }
         let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName) }
             ?? TextScriptEngine(script: src)
         if let e = engine, !e.hookNames.isEmpty {
@@ -63,6 +66,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
         }
         return engine
+    }
+
+    /// 스크립트 소스의 오디오 API 참조 스캔(문자열 contains — mount 시 스크립트당 1회).
+    static func scriptWantsAudio(_ src: String) -> Bool {
+        src.contains("engine.audio") || src.contains("audioBuffer")
+            || src.contains("registerAudioBuffers") || src.contains("g_AudioSpectrum")
     }
 
     static func sceneScriptLayers(from doc: SceneDocument) -> [SceneScriptLayerDescriptor] {
@@ -652,7 +661,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
         // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
         sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc),
-                                         soundNames: doc.sounds.map { $0.name })
+                                         soundNames: doc.sounds.map { $0.name },
+                                         width: projW, height: projH)
         forwardLit = false  // 마운트 재사용 대비 기본값(2D 브랜치에서만 활성화)
         // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
         // 메시/빌보드가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
@@ -754,9 +764,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     self?.currentSpectrum = AudioSpectrum16(left: AudioSpectrum16.downsample16(l),
                                                             right: AudioSpectrum16.downsample16(r))
                     self?.setSpectrum64(left: l, right: r)
+                    self?.sceneScript?.setAudio(left64: l, right64: r)  // 씬 스크립트 engine.audio 실데이터
                 } else {
                     let bins = AudioSpectrum16.downsample16(spec)
                     self?.currentSpectrum = AudioSpectrum16(left: bins, right: bins)
+                    self?.sceneScript?.setAudio(left64: spec, right64: spec)  // 모노 폴백(64빈 미만은 JS 가 0 채움)
                 }
             }
             provider.start()
