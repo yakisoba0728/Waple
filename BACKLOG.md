@@ -18,8 +18,8 @@
 
 - **PuppetModel 2D cstring Latin-1 3곳** → CJK 머티리얼 경로 mojibake·흑화면 ([PuppetModel.swift](Sources/WapleCore/PuppetModel.swift):110,162,190). `String(decoding:as: UTF8.self)` 통합으로 해소. 코퍼스 현재 0건
 - **combo Picker 값-타입 불일치** → 편집기 무선택 표시 ([WallpaperProperties.swift:67](Sources/WapleCore/WallpaperProperties.swift:67) — 옵션만 `type:""` 파싱)
-- **textinput 포커스 이탈 시 커밋 유실** ([PropertyEditorView.swift:102](Sources/Waple/PropertyEditorView.swift:102) — `.onSubmit`만)
-- **빌보드 per-frame `makeBuffer`** ([SceneRenderer3D.swift:620](Sources/WapleRender/SceneRenderer3D.swift:620)) → 빌보드 다수 씬에서 스터터 관찰되면 `DynamicVertexBuffer`(3슬롯 링, 같은 파일에 기존 패턴) 재사용
+- **GLSL vert/frag 공용 헬퍼의 스테이지별 하위 헬퍼 호출 리네임 누락** ([GLSLTranslator.swift:155](Sources/WapleCore/GLSLTranslator.swift:155)) — 2026-07-11 리뷰 #11, 추정 단계(재현 셰이더 미확보). 공용 헬퍼가 radial_blur식 스테이지별 computeUV 를 부르는 셰이더에서 frag 가 vert 버전을 받으면 조용한 오렌더 — 실물에서 관찰되면 착수
+- **셰이더 멀티라인 매크로 "호출" 미확장** ([ShaderPreprocessor.swift](Sources/WapleCore/ShaderPreprocessor.swift) `spliceDefineContinuations` ponytail 주석) — `#define` 줄연속은 2026-07-11 해소, 인자가 여러 줄에 걸친 호출은 실입력 미확인이라 유보
 - **FFmpeg `converted/` 캐시 무한 증가** ([FFmpegConverter.swift](Sources/WapleRender/FFmpegConverter.swift)) → 디스크가 차면 `VideoTextureExtractor.evictOldest` 재사용
 - **볼륨/배속 변경 = 렌더러 전체 재장착**(재생 리셋) ([AppDelegate.swift:196](Sources/Waple/AppDelegate.swift:196)) → mkv/webm 실사용에서 거슬리면 `queue.volume`/`defaultRate` 라이브 반영으로
 - **LibraryStore.remove 부재** — 삭제 기능 추가 시 playlist/monitor orphan id 정리 동반
