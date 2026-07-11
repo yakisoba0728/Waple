@@ -202,9 +202,17 @@ private final class VorbisStream {
         for i in 0...max(0, maxClass) where maxClass >= 0 {
             f.classDimensions[i] = Int(r.read(3)) + 1
             f.classSubclasses[i] = Int(r.read(2))
-            if f.classSubclasses[i] > 0 { f.classMasterbooks[i] = Int(r.read(8)) }
+            if f.classSubclasses[i] > 0 {
+                f.classMasterbooks[i] = Int(r.read(8))
+                // 손상 스트림의 masterbook OOB → decodeFloor1 트랩 방지(residue classbook 검증과 동형)
+                guard f.classMasterbooks[i] < codebooks.count else { throw VorbisError.corrupt("floor1 masterbook oob") }
+            }
             let sub = 1 << f.classSubclasses[i]
-            f.subclassBooks[i] = (0..<sub).map { _ in Int(r.read(8)) - 1 }
+            f.subclassBooks[i] = try (0..<sub).map { _ in
+                let b = Int(r.read(8)) - 1   // -1 = 책 없음(허용)
+                guard b < codebooks.count else { throw VorbisError.corrupt("floor1 subclass book oob") }
+                return b
+            }
         }
         f.multiplier = Int(r.read(2)) + 1
         let rangebits = Int(r.read(4))
@@ -218,6 +226,10 @@ private final class VorbisStream {
         guard f.values <= 65 else { throw VorbisError.corrupt("floor1 values \(f.values)") }
         // sorted order + neighbors 사전계산
         f.sortedOrder = Array(0..<f.values).sorted { xList[$0] < xList[$1] }
+        // X 중복은 명세 §7.2.2 상 undecodable — neighbor 부재(-1 인덱스)·predictPoint 0나눗셈의 근원을 여기서 차단
+        for q in 1..<f.values where xList[f.sortedOrder[q]] == xList[f.sortedOrder[q - 1]] {
+            throw VorbisError.corrupt("floor1 xList duplicate")
+        }
         f.neighborsLow = [Int](repeating: 0, count: f.values)
         f.neighborsHigh = [Int](repeating: 0, count: f.values)
         for j in 0..<f.values {
@@ -307,7 +319,8 @@ private final class VorbisStream {
             var r = VorbisBitReader(packet)
             guard r.readBit() == 0 else { continue }   // 오디오 패킷이 아님(헤더류) → 스킵
             let modeNumber = Int(r.read(ilog(modes.count - 1)))
-            if r.endOfPacket || modeNumber >= modes.count { break }
+            // 무효 mode·EOP(런트 패킷 — 어차피 그 패킷엔 더 읽을 게 없음)는 해당 패킷만 버림. break 는 정상 트랙을 절단(A-B5)
+            if r.endOfPacket || modeNumber >= modes.count { continue }
             let mode = modes[modeNumber]
             let blockflag = mode.blockflag
             let n = blockflag ? blocksize1 : blocksize0
