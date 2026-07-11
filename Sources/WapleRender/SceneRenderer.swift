@@ -733,10 +733,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         // 씬 이벤트 배선: cursorClick/Down/Up(전역 클릭 모니터) + cursorMove(마우스 모니터 공용,
         // 시차/효과 없어도 훅 있으면 기동) + 미디어(5초 폴링) — 소비 스크립트가 있을 때만.
+        // buildAnimationEventTargets 가 animationlayers 스크립트 엔진을 새로 등록(eventEngines/
+        // hoverEngineLayers 경유)하므로 아래 배선 스캔들보다 먼저 호출(의존 리소스는 위에서 이미 완성).
+        buildAnimationEventTargets(doc: doc)  // 타임라인/퍼펫 마커 → animationEvent 발화 타깃(오브젝트 스코프)
         startClickMonitorIfNeeded()
         hasCursorMoveHook = eventEngines.contains(where: { $0.hookNames.contains("cursorMove") })
         buildHoverTargets(doc: doc)   // cursorEnter/Leave 레이어 AABB 해석
-        buildAnimationEventTargets(doc: doc)  // 타임라인/퍼펫 마커 → animationEvent 발화 타깃(오브젝트 스코프)
         if hasCursorMoveHook || !hoverTargets.isEmpty {
             parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
             parallax.start()  // 이미 켜져 있으면 no-op(내부 nil 가드)
@@ -810,11 +812,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
-        if hasEffects || hasParticles || hasScriptedText || hasAnimations, view.window?.occlusionState.contains(.visible) == false { return }
+        if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts, view.window?.occlusionState.contains(.visible) == false { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
-        let nowT = CFAbsoluteTimeGetCurrent()
+        // 일시정지 중 재드로(호버/리사이즈/이벤트 needsDisplay)는 정지 시점 프레임을 재렌더(시간 동결 —
+        // 미래 시간 렌더 후 resume 되감김 점프 방지). dt: 첫 재드로 = pausedAt−직전프레임 ≥ 0, 이후
+        // lastFrameTime == pausedAt 이라 0 — 아래 max(0,·) 클램프로 충분, 추가 보정 불요.
+        let nowT = scenePausedAt ?? CFAbsoluteTimeGetCurrent()
         let time = Float(nowT - startTime)
         var dt = Float(nowT - lastFrameTime); lastFrameTime = nowT
         dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
@@ -983,26 +988,28 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             mtkView?.needsDisplay = true
         }
         if hasAudio { audioProvider?.start() }
-        if parallaxEnabled || hasEffects { parallax.start() }
+        // mount 의 두 기동 게이트 합집합과 동일 — 호버/cursorMove 전용 씬도 pause 가 멈춘 마우스 모니터 재기동.
+        if parallaxEnabled || hasEffects || hasCursorMoveHook || !hoverTargets.isEmpty { parallax.start() }
         sceneAudio?.resume()
     }
     public func teardown() {
         videoRenderer?.teardown(); videoRenderer = nil
         sceneAudio?.teardown(); sceneAudio = nil
         parallax.stop()
+        cameraOffset = .zero; targetCameraOffset = .zero  // 마운트 재사용 대비 시차 리셋(mount :656 과 일관)
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         mediaPoller?.stop(); mediaPoller = nil
         eventEngines = []
         hoverEngineLayers = []; hoverTargets = []
         animEventTargets = []
         hasCursorMoveHook = false
-        audioProvider?.stop(); audioProvider = nil; hasAudio = false
+        audioProvider?.stop(); audioProvider = nil; hasAudio = false; hasEffects = false
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
         forwardLit = false; litPipeline = nil  // 라이트 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; scriptVisible.removeAll()
-        additivePipeline = nil; translucentPipeline = nil
+        additivePipeline = nil; translucentPipeline = nil; _passthroughPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
         eval3DOrder = []; draw3DOrder = []
