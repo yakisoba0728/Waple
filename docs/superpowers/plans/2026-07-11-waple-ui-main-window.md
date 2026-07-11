@@ -817,7 +817,7 @@ git commit -m "기능(ui): 통합 메인창 셸 — 탭/검색/필터 TopBar + �
 - Consumes: `MainWindowView(viewModel:screenFrames:)`(6)
 - Produces: 통합 `openMainWindow()`, `toggleGlobalPause() -> Bool`
 
-- [ ] **Step 1: openLibrary() 개편** — AppDelegate:242 `openLibrary()`를 다음으로 교체(메뉴 셀렉터 이름 유지 — 참조 지점 최소 변경):
+- [x] **Step 1: openLibrary() 개편** — AppDelegate:242 `openLibrary()`를 다음으로 교체(메뉴 셀렉터 이름 유지 — 참조 지점 최소 변경):
 
 ```swift
     @objc private func openLibrary() {
@@ -841,9 +841,9 @@ git commit -m "기능(ui): 통합 메인창 셸 — 탭/검색/필터 TopBar + �
 
 **주의**: `screenFrames`의 키 순서는 `screensProvider`(viewModel.screens)와 동일해야 다이어그램-이름 매칭이 맞는다. AppDelegate에서 `screensProvider`가 어떤 순서로 화면을 나열하는지 확인하고(NSScreen.screens 순서 기반인지), 다르면 같은 소스에서 (key, name, frame)을 한 번에 뽑는 provider 하나로 통일하라.
 
-- [ ] **Step 2: 워크샵 별창 제거** — `workshopWindow` 프로퍼티(23행), `openWorkshop()`(781행)과 상태바 메뉴의 "워크샵 열기" 항목(67행) 삭제. "라이브러리 열기" 메뉴 타이틀을 "Waple 열기"로 변경. `WorkshopView` 참조는 MainWindowView가 유일해짐을 `grep -rn "WorkshopView(" Sources/`로 확인.
+- [x] **Step 2: 워크샵 별창 제거** — `workshopWindow` 프로퍼티(23행), `openWorkshop()`(781행)과 상태바 메뉴의 "워크샵 열기" 항목(67행) 삭제. "라이브러리 열기" 메뉴 타이틀을 "Waple 열기"로 변경. `WorkshopView` 참조는 MainWindowView가 유일해짐을 `grep -rn "WorkshopView(" Sources/`로 확인.
 
-- [ ] **Step 3: 전역 일시정지 + 하단 바 콜백 배선** — AppDelegate에 추가(기존 `pausedByOcclusion` 로직과 독립된 수동 정지; `resumeFromOcclusion()` 인근):
+- [x] **Step 3: 전역 일시정지 + 하단 바 콜백 배선** — AppDelegate에 추가(기존 `pausedByOcclusion` 로직과 독립된 수동 정지; `resumeFromOcclusion()` 인근):
 
 ```swift
     private var manualGlobalPause = false
@@ -869,7 +869,7 @@ viewModel 콜백 주입부(기존 `libraryVM.onApply = …` 블록)에 추가:
 
 `advancePlaylist()`가 `private`이면 그대로 두고 클로저로 호출(같은 타입 내부라 접근 가능). 렌더러 교체 경로(applyResolved 등)에서 `pausedByOcclusion` 정지 유지를 하는 지점(339행)에 `|| manualGlobalPause` 조건을 추가해 수동 정지도 교체 후 유지되게 한다.
 
-- [ ] **Step 4: 전체 검증 + 커밋**
+- [x] **Step 4: 전체 검증 + 커밋**
 
 Run: `swift build 2>&1 | tail -2` → 에러 0. `swift test 2>&1 | tail -5` → 전 타깃 green(렌더 스위트 포함 — 오래 걸리면 `--filter WapleAppTests` 먼저, 전체는 마지막 1회).
 ```bash

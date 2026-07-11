@@ -20,7 +20,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var playlistTimer: Timer?
     private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore)
     private var libraryWindow: NSWindow?
-    private var workshopWindow: NSWindow?   // 워크샵 창(강한 참조 — isReleasedWhenClosed=false 로 재오픈 안전)
     private weak var fitMenu: NSMenu?
     private weak var playlistMenu: NSMenu?
 
@@ -28,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let visibilityMonitor = DesktopVisibilityMonitor()
     private var occlusionTimer: Timer?
     private var pausedByOcclusion = false   // 이 모니터가 정지시켰는지(수동 정지와 사유 분리)
+    private var manualGlobalPause = false   // 하단 바 수동 일시정지(가림 정지와 독립)
     private weak var occlusionMenu: NSMenu?
 
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
@@ -61,10 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.title = "🖼"
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "라이브러리 열기",
+        menu.addItem(NSMenuItem(title: "Waple 열기",
                                 action: #selector(openLibrary), keyEquivalent: "l"))
-        menu.addItem(NSMenuItem(title: "워크샵 열기",
-                                action: #selector(openWorkshop), keyEquivalent: "w"))
         menu.addItem(recentMenuItem())  // 최근 배경 서브메뉴(작업 6 — 구현은 확장)
         let fitItem = NSMenuItem(title: "화면 맞춤", action: nil, keyEquivalent: "")
         let fitMenu = NSMenu()
@@ -150,6 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         libraryVM.onPlaylistChanged = { [weak self] in self?.schedulePlaylistTimer() }
         libraryVM.onOpenInteraction = { [weak self] in self?.openWebInteraction() }
+        libraryVM.onAdvancePlaylist = { [weak self] in self?.advancePlaylist() }
+        libraryVM.onTogglePause = { [weak self] in self?.toggleGlobalPause() ?? false }
         schedulePlaylistTimer()
 
         desktopController.rebuild()
@@ -241,11 +241,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openLibrary() {
         if libraryWindow == nil {
-            let hosting = NSHostingController(rootView: WallpaperGridView(viewModel: libraryVM))
+            let root = MainWindowView(viewModel: libraryVM,
+                                      screenFrames: { NSScreen.screens.map(\.frame) })
+            let hosting = NSHostingController(rootView: root)
             let window = NSWindow(contentViewController: hosting)
             window.title = "Waple"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.setContentSize(NSSize(width: 760, height: 500))
+            window.setContentSize(NSSize(width: 1100, height: 700))
+            window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
             // 프로그램 생성 NSWindow 는 닫힐 때 기본적으로 release 되어, 강한 참조 프로퍼티가
             // 댕글링되고 재오픈 시 use-after-free 가 된다. 프로퍼티가 수명을 관리하도록 막는다.
             window.isReleasedWhenClosed = false
@@ -336,7 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let project {
                 ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
             }
-            if pausedByOcclusion { renderers.forEach { $0.pause() } }  // 가림 정지 중 교체된 렌더러도 정지 유지
+            if pausedByOcclusion || manualGlobalPause { renderers.forEach { $0.pause() } }  // 가림/수동 정지 중 교체된 렌더러도 정지 유지
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
             pushRecent(project?.id)     // 최근 배경 목록 갱신(nil = 무선택 → no-op)
             return true
@@ -466,8 +469,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func resumeFromOcclusion() {
-        renderers.forEach { $0.resume() }
         pausedByOcclusion = false
+        // 수동 정지(하단 바)가 남아 있으면 재개하지 않는다 — 둘 중 하나라도 있으면 정지 유지.
+        guard !manualGlobalPause else { return }
+        renderers.forEach { $0.resume() }
+    }
+
+    // MARK: - 전역 일시정지 (메인창 하단 바)
+
+    /// 하단 바 일시정지 토글 — 새 상태 반환. 가림 정지와 독립(둘 중 하나라도 있으면 정지 유지).
+    func toggleGlobalPause() -> Bool {
+        manualGlobalPause.toggle()
+        if manualGlobalPause {
+            renderers.forEach { $0.pause() }
+        } else if !pausedByOcclusion {
+            renderers.forEach { $0.resume() }
+        }
+        return manualGlobalPause
     }
 
     // MARK: - 정지 배경으로 설정 (작업 3)
@@ -771,25 +789,3 @@ extension AppDelegate: NSMenuDelegate {
     }
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// MARK: - 워크샵 (feat/workshop)
-// 다른 브랜치와의 충돌을 최소화하기 위해 확장으로 분리(본문은 메뉴 1항목 + 창 프로퍼티 1개만 추가).
-// ═════════════════════════════════════════════════════════════════════════════
-extension AppDelegate {
-    /// 워크샵 창을 연다. libraryWindow 와 동일한 수명 규약(isReleasedWhenClosed=false + 강한 프로퍼티)으로
-    /// 재오픈 시 use-after-free 를 막는다. 다운로드→임포트→적용은 기존 libraryVM(importDownloaded/apply) 재사용.
-    @objc func openWorkshop() {
-        if workshopWindow == nil {
-            let hosting = NSHostingController(rootView: WorkshopView(library: libraryVM))
-            let window = NSWindow(contentViewController: hosting)
-            window.title = "Waple 워크샵"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.setContentSize(NSSize(width: 820, height: 560))
-            window.isReleasedWhenClosed = false
-            workshopWindow = window
-        }
-        workshopWindow?.center()
-        workshopWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-}
