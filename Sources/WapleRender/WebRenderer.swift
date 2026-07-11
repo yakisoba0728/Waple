@@ -20,6 +20,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var interactionWindow: NSWindow?
     private var lastMouseForward = CFAbsoluteTimeGetCurrent()
     private var pausedManually = false
+    /// 가림으로 자동 정지했는지 — visible 복귀 시 자동 재개 판단(수동 pause 와 구분, VideoRenderer 패턴).
+    private(set) var pausedByOcclusion = false
     private var userSelectedResourceOverrides: [String: String] = [:]
 
     public init(mode: Mode) {
@@ -98,11 +100,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main
         ) { [weak self, weak web] note in
             guard let self, let win = web?.window, (note.object as? NSWindow) === win else { return }
-            if win.occlusionState.contains(.visible) {
-                if !self.pausedManually { self.resume() }
-            } else {
-                self.setPausedJS(true); self.audioProvider?.stop()
-            }
+            self.occlusionChanged(visible: win.occlusionState.contains(.visible))
         }
         // 마우스 전달(WE 동작): 전역 mouseMoved(권한 불요) → 뷰 좌표 → DOM mousemove. ~30Hz 스로틀.
         if mode == .web {
@@ -396,6 +394,24 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         pausedManually = false
         setPausedJS(false)
         if hasAudioListener { audioProvider?.start() }
+    }
+
+    /// 가림 상태 전이(옵저버 클로저에서 분리 — webView 창 없이도 테스트 가능). 가림 정지는 수동 pause 와
+    /// 별개 플래그로 추적: 종전에는 복귀 분기가 resume() 을 불렀지만 resume() 은 `guard pausedManually`
+    /// 전제라 즉시 반환 → JS/오디오가 영구 정지되는 데드패스였다(감사 W-B1). 수동 pause 중이면 복귀해도
+    /// 재개하지 않는다(수동 정지가 우선 — resume() 으로만 해제).
+    func occlusionChanged(visible: Bool) {
+        if visible {
+            if pausedByOcclusion, !pausedManually {
+                setPausedJS(false)
+                if hasAudioListener { audioProvider?.start() }
+            }
+            pausedByOcclusion = false
+        } else {
+            pausedByOcclusion = true
+            setPausedJS(true)
+            audioProvider?.stop()
+        }
     }
 
     public func teardown() {

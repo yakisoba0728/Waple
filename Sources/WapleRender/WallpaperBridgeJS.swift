@@ -185,8 +185,9 @@ enum WallpaperBridgeJS {
             t.dispatchEvent(new WheelEvent('wheel', { clientX: x, clientY: y, deltaX: a || 0, deltaY: b || 0, bubbles: true, cancelable: true, view: window }));
           } else if (kind === 'keydown' || kind === 'keyup') {
             var ko = { key: a, code: b || a, bubbles: true, cancelable: true, view: window };
+            // activeElement 발 이벤트는 bubbles:true 로 document 까지 버블 — document 재발화를 겹치면
+            // 리스너가 2회 수신한다(감사 W-B2). 1회만 발화.
             (document.activeElement || document).dispatchEvent(new KeyboardEvent(kind, ko));
-            document.dispatchEvent(new KeyboardEvent(kind, ko));
           } else {
             t.dispatchEvent(new MouseEvent(kind, o));
             if (kind === 'mouseup') { t.dispatchEvent(new MouseEvent('click', o)); }
