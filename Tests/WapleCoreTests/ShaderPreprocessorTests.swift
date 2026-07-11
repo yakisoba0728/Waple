@@ -2,6 +2,25 @@ import XCTest
 @testable import WapleCore
 
 final class ShaderPreprocessorTests: XCTestCase {
+    // T-B7: 악성 `#if` 리터럴의 오버플로가 트랩(크래시)하면 안 된다 — 랩 값이면 충분(분기 결정만 하면 됨).
+    func testExprEvalOverflowDoesNotTrap() {
+        XCTAssertEqual(ExprEval.eval("9223372036854775807 + 1", defines: [:]), Int.min)     // &+ 랩
+        XCTAssertEqual(ExprEval.eval("9223372036854775807 * 2", defines: [:]), -2)          // &* 랩
+        XCTAssertEqual(ExprEval.eval("0 - 9223372036854775807 - 2", defines: [:]), Int.max) // &- 랩
+        XCTAssertEqual(ExprEval.eval("1 / 0", defines: [:]), 0)                             // 0 나눗셈 가드(기존)
+        XCTAssertEqual(ExprEval.eval("A / -1", defines: ["A": Int.min]), 0)                 // Int.min / -1 가드
+        XCTAssertEqual(ExprEval.eval("-A", defines: ["A": Int.min]), Int.min)               // 단항 랩
+    }
+
+    // T-B2: 지시문 줄의 트레일링 블록 주석이 ExprEval 에 `/`·`*` 로 새면 오평가된다.
+    func testDirectiveTrailingBlockComment() {
+        let src = "#if AUDIO /* mic */\nyes\n#else\nno\n#endif"
+        let on = ShaderPreprocessor.preprocess(src, combos: ["AUDIO": 1])
+        XCTAssertTrue(on.contains("yes"), on)
+        XCTAssertFalse(on.contains("no"), on)
+        XCTAssertTrue(ShaderPreprocessor.preprocess(src, combos: ["AUDIO": 0]).contains("no"))
+    }
+
     func testIfElseEndifTakesActiveBranch() {
         let src = """
         a

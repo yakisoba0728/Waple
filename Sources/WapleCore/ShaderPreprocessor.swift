@@ -94,8 +94,10 @@ public enum ShaderPreprocessor {
             var t = line.trimmingCharacters(in: .whitespaces)
             // 지시문 줄 트레일링 주석 제거 — `#if C_TYPE == 4 // 설명` 이 식 평가를 깨면
             // 관용 유지로 모든 분기가 방출된다(실물 frame_builder 의 offset 재정의 원인).
-            if t.hasPrefix("#"), let c = t.range(of: "//") {
-                t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces)
+            // `/* */` 도 절단 — 잔존 시 ExprEval 이 `/`·`*` 를 연산자로 토큰화해 오평가(`#if AUDIO /* mic */`).
+            if t.hasPrefix("#") {
+                if let c = t.range(of: "//") { t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces) }
+                if let c = t.range(of: "/*") { t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces) }
             }
             // `#if(cond)`/`#elif(cond)` — `#if`/`#elif` 뒤 공백 없이 `(` 가 오면 아래 prefix 검사가 놓쳐
             // 지시문이 MSL 에 그대로 방출되고 짝 `#endif` 만 소비돼 미종결 조건부가 된다(실물 halftone).
@@ -301,7 +303,7 @@ enum ExprEval {
             guard let t = next() else { return 0 }
             if t == "(" { let v = parseOr(); if peek() == ")" { pos += 1 }; return v }
             if t == "!" { return parsePrimary() == 0 ? 1 : 0 }
-            if t == "-" { return -parsePrimary() }
+            if t == "-" { return 0 &- parsePrimary() }  // 랩핑 — defines 에 Int.min 이 실릴 수 있음
             if t == "defined" {
                 if peek() == "(" {
                     pos += 1
@@ -314,18 +316,20 @@ enum ExprEval {
             if let n = Int(t) { return n }
             return defines[t] ?? 0
         }
+        // 산술은 랩핑(&*, &+, &-) + 나눗셈 트랩 가드 — #if 는 분기 결정만 하면 되므로 근사면 충분하고,
+        // 악성 리터럴(`#if 9223372036854775807+1`)의 오버플로 트랩(크래시) 방지가 우선.
         func parseMul() -> Int {
             var v = parsePrimary()
             while let op = peek(), op == "*" || op == "/" {
                 pos += 1; let r = parsePrimary()
-                v = op == "*" ? v * r : (r == 0 ? 0 : v / r)
+                v = op == "*" ? v &* r : (r == 0 ? 0 : (v == Int.min && r == -1 ? 0 : v / r))
             }
             return v
         }
         func parseAdd() -> Int {
             var v = parseMul()
             while let op = peek(), op == "+" || op == "-" {
-                pos += 1; let r = parseMul(); v = op == "+" ? v + r : v - r
+                pos += 1; let r = parseMul(); v = op == "+" ? v &+ r : v &- r
             }
             return v
         }
