@@ -93,6 +93,15 @@ struct DesktopVisibilityMonitor {
         return total + (curHi - curLo)
     }
 
+    /// CG 창 bounds(주화면 좌상단 원점·y 아래) → Cocoa(주화면 좌하단 원점·y 위) 플립.
+    /// CGWindowList 는 CG 좌표, NSScreen.frame 은 Cocoa 좌표 — 무플립 교차는 주화면 위에 놓인
+    /// 수직·혼합높이 멀티모니터에서 커버리지를 오산한다(P-B1). mainScreenHeight 는 '주화면' 높이
+    /// (= NSScreen.screens.first frame.maxY = CGDisplayBounds(CGMainDisplayID()).height 규약).
+    static func cocoaFlipped(_ bounds: CGRect, mainScreenHeight: CGFloat) -> CGRect {
+        CGRect(x: bounds.origin.x, y: mainScreenHeight - bounds.origin.y - bounds.height,
+               width: bounds.width, height: bounds.height)
+    }
+
     /// 창 하나가 데스크탑을 가리는가.
     static func isBlocking(
         _ w: WindowSnapshot,
@@ -130,12 +139,18 @@ struct DesktopVisibilityMonitor {
         )
     }
 
-    /// 온스크린 창 목록(데스크탑 요소 제외)을 스냅샷으로.
+    /// 온스크린 창 목록(데스크탑 요소 제외)을 스냅샷으로. bounds 는 Cocoa 로 플립해 담는다 —
+    /// screenFrames(NSScreen.frame)와 같은 좌표계여야 교차·커버리지가 맞는다. threshold==0 경로는
+    /// 면적/변 길이만 보므로 플립 무영향(무회귀).
     private func currentSnapshots() -> [WindowSnapshot] {
         guard let list = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] else { return [] }
-        return list.map(WindowSnapshot.init)
+        let mainH = NSScreen.screens.first?.frame.maxY ?? 0
+        return list.map(WindowSnapshot.init).map {
+            WindowSnapshot(ownerName: $0.ownerName, processId: $0.processId, layer: $0.layer,
+                           alpha: $0.alpha, bounds: Self.cocoaFlipped($0.bounds, mainScreenHeight: mainH))
+        }
     }
 }
 
