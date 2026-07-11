@@ -241,7 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openLibrary() {
         if libraryWindow == nil {
-            let hosting = NSHostingController(rootView: LibraryView(viewModel: libraryVM))
+            let hosting = NSHostingController(rootView: WallpaperGridView(viewModel: libraryVM))
             let window = NSWindow(contentViewController: hosting)
             window.title = "Waple"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

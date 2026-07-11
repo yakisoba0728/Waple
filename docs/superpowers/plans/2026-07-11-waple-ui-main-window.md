@@ -377,7 +377,7 @@ git commit -m "기능(ui): 디스플레이 탭 — 모니터 다이어그램 배
 - Consumes: `filteredEntries/focusedId/apply/isSupported/previewURL/screens/assign/togglePlaylist/isInPlaylist/onOpenInteraction` (Task 1), `AnimatedPreviewView/PreviewMedia` (Task 2)
 - Produces: `struct WallpaperGridView: View` (`init(viewModel: LibraryViewModel)`) — 임포트 패널·드롭 로직 포함(기존 LibraryView에서 이동).
 
-- [ ] **Step 1: 구현** — `Sources/Waple/WallpaperGridView.swift` 생성. 기존 `LibraryView.swift`에서 `PreviewImageCache`, `importFolder()/routeImport()/handleDrop()` 을 그대로 옮기고, 뷰 본문을 다음으로 교체(상단 헤더·sheet 제거 — TopBar/패널이 대체):
+- [x] **Step 1: 구현** — `Sources/Waple/WallpaperGridView.swift` 생성. 기존 `LibraryView.swift`에서 `PreviewImageCache`, `importFolder()/routeImport()/handleDrop()` 을 그대로 옮기고, 뷰 본문을 다음으로 교체(상단 헤더·sheet 제거 — TopBar/패널이 대체):
 
 ```swift
 import SwiftUI
@@ -552,9 +552,9 @@ struct WallpaperGridView: View {
 }
 ```
 
-- [ ] **Step 2: LibraryView.swift 삭제** — `git rm Sources/Waple/LibraryView.swift`. 참조 지점은 AppDelegate:244(`LibraryView(viewModel:)`) 하나 — **컴파일이 깨지므로 이 태스크에서는 임시로** AppDelegate:244를 `WallpaperGridView(viewModel: libraryVM)`로 치환(Task 6에서 MainWindowView로 재치환).
+- [x] **Step 2: LibraryView.swift 삭제** — `git rm Sources/Waple/LibraryView.swift`. 참조 지점은 AppDelegate:244(`LibraryView(viewModel:)`) 하나 — **컴파일이 깨지므로 이 태스크에서는 임시로** AppDelegate:244를 `WallpaperGridView(viewModel: libraryVM)`로 치환(Task 6에서 MainWindowView로 재치환).
 
-- [ ] **Step 3: 빌드·기존 테스트 확인 + 커밋**
+- [x] **Step 3: 빌드·기존 테스트 확인 + 커밋**
 
 Run: `swift build 2>&1 | tail -2` → 에러 0. `swift test --filter WapleAppTests 2>&1 | tail -3` → PASS.
 ```bash
