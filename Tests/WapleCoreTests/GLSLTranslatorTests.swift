@@ -894,4 +894,38 @@ final class GLSLTranslatorTests: XCTestCase {
         let r = GLSLTranslator.replaceIdentifiers("g_UserAlpha + g_UserAlphaX", ["g_UserAlpha": "p[0].x"])
         XCTAssertEqual(r, "p[0].x + g_UserAlphaX")
     }
+
+    func testBuiltinCommonBlendingModes14to29() throws {
+        // 내장 common_blending.h 의 14-29 모드(VividLight~Luminosity) — 이전엔 default 로 흘러 조용히
+        // Normal 이 되던 갭. 정본은 WapleRender/BlendMSL.swift(파리티는 식 대조로 유지, 감사 O2).
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        #include "common_blending.h"
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform vec3 g_Color; // {"material":"color","default":"1 0 0"}
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            c.rgb = ApplyBlending(15, c.rgb, g_Color, 0.5);
+            c.rgb = ApplyBlending(26, c.rgb, g_Color, 1.0);
+            gl_FragColor = c;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:],
+                                                       include: { BuiltinShaderIncludes.lookup($0) }))
+        // 신규 헬퍼가 MSL 로 방출됐는지(시그니처) + 체인이 29까지 확장됐는지.
+        for sig in ["inline float3 BlendVividLightEx(float3", "inline float3 BlendLinearLightEx(float3",
+                    "inline float3 BlendPinLightEx(float3", "inline float3 BlendHardMixEx(float3",
+                    "inline float3 BlendReflectEx(float3", "inline float3 rgb2hsl(float3",
+                    "inline float hue2rgb(float", "inline float3 hsl2rgb(float3"] {
+            XCTAssertTrue(t.msl.contains(sig), "방출 MSL 에 없음: \(sig)")
+        }
+        XCTAssertTrue(t.msl.contains("mode == 29"), "ApplyBlending 체인에 29 모드 없음")
+    }
 }
