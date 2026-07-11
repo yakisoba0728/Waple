@@ -10,6 +10,19 @@ final class LibraryViewModel: ObservableObject {
     /// 속성 편집 시트 대상(nil = 닫힘).
     @Published var propertyEditorEntry: LibraryEntry?
 
+    // MARK: - 브라우즈 상태(메인창 UI) — selectedId(=적용됨)와 구분되는 패널 포커스.
+    @Published var focusedId: String?
+    @Published var searchText = ""
+    @Published var typeFilter: LibraryTypeFilter = .all
+    @Published var sortOrder: LibrarySortOrder = .recentFirst
+
+    var filteredEntries: [LibraryEntry] {
+        LibraryFiltering.apply(entries, search: searchText, type: typeFilter, sort: sortOrder)
+    }
+    var focusedEntry: LibraryEntry? { entries.first { $0.id == focusedId } }
+    /// 하단 바 "현재:" 표시용 — 적용된(selectedId) 배경 제목.
+    var appliedTitle: String? { entries.first { $0.id == selectedId }?.title }
+
     /// 적용 요청을 AppDelegate 로 전달한다(폴더 URL). 마운트 성공 여부를 반환한다.
     var onApply: ((URL) -> Bool)?
 

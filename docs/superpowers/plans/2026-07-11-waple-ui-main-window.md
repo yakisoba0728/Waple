@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces: `enum LibraryTypeFilter: String, CaseIterable { case all, scene, video, web }`, `enum LibrarySortOrder: String, CaseIterable { case recentFirst, name }`, `LibraryFiltering.apply(_:search:type:sort:) -> [LibraryEntry]`, `LibraryViewModel.focusedId/searchText/typeFilter/sortOrder/filteredEntries/focusedEntry`
 
-- [ ] **Step 1: 실패하는 테스트 작성** — `Tests/WapleAppTests/LibraryFilteringTests.swift`
+- [x] **Step 1: 실패하는 테스트 작성** — `Tests/WapleAppTests/LibraryFilteringTests.swift`
 
 ```swift
 import XCTest
@@ -66,12 +66,12 @@ final class LibraryFilteringTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: 실패 확인**
+- [x] **Step 2: 실패 확인**
 
 Run: `swift test --filter LibraryFilteringTests 2>&1 | tail -5`
 Expected: 컴파일 실패("cannot find 'LibraryFiltering'").
 
-- [ ] **Step 3: 최소 구현** — `Sources/Waple/LibraryFiltering.swift`
+- [x] **Step 3: 최소 구현** — `Sources/Waple/LibraryFiltering.swift`
 
 ```swift
 import Foundation
@@ -121,7 +121,7 @@ enum LibraryFiltering {
 }
 ```
 
-- [ ] **Step 4: LibraryViewModel에 브라우즈 상태 추가** — `Sources/Waple/LibraryViewModel.swift`의 `@Published var propertyEditorEntry` 아래에 추가(`propertyEditorEntry`는 Task 5에서 제거):
+- [x] **Step 4: LibraryViewModel에 브라우즈 상태 추가** — `Sources/Waple/LibraryViewModel.swift`의 `@Published var propertyEditorEntry` 아래에 추가(`propertyEditorEntry`는 Task 5에서 제거):
 
 ```swift
     // MARK: - 브라우즈 상태(메인창 UI) — selectedId(=적용됨)와 구분되는 패널 포커스.
@@ -138,7 +138,7 @@ enum LibraryFiltering {
     var appliedTitle: String? { entries.first { $0.id == selectedId }?.title }
 ```
 
-- [ ] **Step 5: 통과 확인 + 커밋**
+- [x] **Step 5: 통과 확인 + 커밋**
 
 Run: `swift test --filter LibraryFilteringTests 2>&1 | tail -3` → PASS(5 tests)
 ```bash
