@@ -401,33 +401,11 @@ public struct ParticleSystemDef: Equatable {
     }
 }
 
-// MARK: - 파싱 헬퍼
+// MARK: - 파싱 헬퍼 (공용 JSONNumerics 위임 — 파티클 규약: 문자열 스칼라 거부, 언랩 없음)
 
-private func pfloat(_ v: Any?) -> Float? {
-    if let d = v as? Double {
-        guard d.isFinite, d >= -Double(Float.greatestFiniteMagnitude),
-              d <= Double(Float.greatestFiniteMagnitude) else { return nil }
-        return Float(d)
-    }
-    if let i = v as? Int { return Float(i) }
-    return nil
-}
-private func pint(_ v: Any?) -> Int? {
-    if let i = v as? Int { return i }
-    if let d = v as? Double {
-        guard d.isFinite, d >= Double(Int.min), d < Double(Int.max) else { return nil }
-        return Int(d)
-    }
-    return nil
-}
-private func pvec3(_ v: Any?) -> Vec3? {
-    guard let s = v as? String else { return nil }
-    let f = s.split(separator: " ").compactMap { part -> Float? in
-        guard let value = Float(part), value.isFinite else { return nil }
-        return value
-    }
-    return f.count >= 3 ? Vec3(x: f[0], y: f[1], z: f[2]) : nil
-}
+private func pfloat(_ v: Any?) -> Float? { strictFloat(v) }
+private func pint(_ v: Any?) -> Int? { strictInt(v) }
+private func pvec3(_ v: Any?) -> Vec3? { stringVec3(v) }
 /// "x y z" 벡터 또는 단일 스칼라(브로드캐스트).
 private func pvec3OrScalar(_ v: Any?) -> Vec3? {
     if let vec = pvec3(v) { return vec }
