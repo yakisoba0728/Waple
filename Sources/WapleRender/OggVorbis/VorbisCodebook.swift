@@ -44,7 +44,9 @@ struct VorbisCodebook {
         guard sync == 0x564342 else { throw VorbisError.corrupt("codebook sync \(String(sync, radix: 16))") }
         let dimensions = Int(r.read(16))
         let entries = Int(r.read(24))
-        guard dimensions > 0, entries > 0, entries <= 1 << 24 else {
+        // 곱 상한: multiplicands/vqFlat 이 entries*dimensions 크기 — 미검증 시 거대 할당 폭발(A-B4).
+        // 16bit×24bit 라 Int 곱 자체는 안전. 상한값은 기존 entries 상한(1<<24)과 일관.
+        guard dimensions > 0, entries > 0, entries <= 1 << 24, dimensions * entries <= 1 << 24 else {
             throw VorbisError.corrupt("codebook dim/entries \(dimensions)/\(entries)")
         }
 

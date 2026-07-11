@@ -50,6 +50,16 @@ final class OggVorbisDecoderTests: XCTestCase {
         XCTAssertEqual(VorbisCodebook.bitReverse(0x8000_0000), 1)
     }
 
+    /// A-B4: dims×entries 곱 상한. entries=0xFFFFFF 는 단독 상한(1<<24)은 통과하지만
+    /// dims=0xFFFF 와의 곱이 상한 초과 → 거대 할당 전에 parse 초입에서 .corrupt throw.
+    func testCodebookRejectsHugeDimTimesEntries() {
+        // LSB-first: read(24)=0x564342("BCV") ← [0x42,0x43,0x56], read(16)=0xFFFF, read(24)=0xFFFFFF
+        var r = VorbisBitReader([0x42, 0x43, 0x56, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+        XCTAssertThrowsError(try VorbisCodebook.parse(&r)) { e in
+            guard case VorbisError.corrupt = e else { return XCTFail("expected .corrupt, got \(e)") }
+        }
+    }
+
     // ── FFT vs naive DFT ────────────────────────────────────────────────────
     func testFFTMatchesNaiveDFT() {
         for n in [64, 128, 512, 1024] {
