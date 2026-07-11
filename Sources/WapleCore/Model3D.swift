@@ -112,7 +112,8 @@ public struct Model3D: Equatable {
     /// 스트라이드 여유(skinFieldsFit)로 최종 판정).
     private static let skinMask: UInt32 = 0x0180_0000
 
-    /// 수용 버전(전부 실물 바이트 대조 완료 2026-07-09): 0023 정본; 0021 동일 레이아웃(3367988661 전수);
+    /// 수용 버전(전부 실물 바이트 대조 완료 2026-07-09): 0023 정본; 0021 동일 레이아웃(3367988661 전수,
+    /// 스켈레톤 매직은 MDLS0003 — 본 레코드는 0004 와 바이트 동형, 코퍼스 17퍼펫 matrix size 64 전수);
     /// 0017/0019 는 메시가 0023 과 동일하고 스켈레톤 매직만 MDLS0002(WLOP 2/2, 3189665546 7/7 대조);
     /// 0016 은 메시에 AABB 가 없고 정점 포맷 플래그가 0x…09(normal/tangent 없는 stride 52 = V0013 정점 레이아웃,
     /// 2885492021 6/6 대조 — weights 합 1.0, uv∈[0,1], maxIdx==vCount-1 전수 일치).
@@ -254,15 +255,17 @@ public struct Model3D: Equatable {
 
         var model = Model3D(meshes: meshes)
 
-        // 스켈레톤(스키닝 모델). 선행 0 패딩 스킵. 실패는 본 없이 반환(정적 메시 렌더 가능).
+        // 스켈레톤(스키닝 모델). MDLA 와 동일하게 메시 끝 이후 매직 스캔으로 찾는다 — V0021(MDLS0003)은
+        // 마지막 메시와 스켈레톤 사이에 비제로 부가 블록이 있어(실물 3384019940 5/5 실측) 종전
+        // '제로-스킵 후 정확 착지'로는 도달 불가였다. 실패/구조 불일치는 본 없이 반환(정적 메시 렌더 가능).
         // MDLS0002(V0016/17/19)는 본 레코드가 0004 와 동일(cstring|flags|parent|64|mat4|props cstring —
         // WLOP GIRL 64본 props JSON 실측)하고, 레코드 뒤에 13+80×본수 바이트 꼬리가 더 있을 뿐이다.
+        // MDLS0003(MDLV0021 짝)도 본 레코드 바이트 동형(코퍼스 17퍼펫/7씬 matrix size 64 전수 실측).
         // 꼬리는 파스하지 않는다 — 다음 섹션(MDLA)은 아래 매직 스캔이 찾는다.
-        var p = o
-        while p < bytes.count, bytes[p] == 0 { p += 1 }
-        let skelMagic = p + 9 <= bytes.count ? String(bytes: bytes[p..<p+8], encoding: .utf8) : nil
-        if skelMagic == "MDLS0004" || skelMagic == "MDLS0002" {
-            p += 8 + 1  // magic + lead u8(0)
+        // 수용 버전 0002/0003/0004 — 미목격 버전은 계속 거부(추측 파스 금지).
+        if let si = findMagic("MDLS000", in: bytes, from: o), si + 9 <= bytes.count,
+           (UInt8(ascii: "2")...UInt8(ascii: "4")).contains(bytes[si + 7]) {
+            var p = si + 8 + 1  // magic + lead u8(0)
             if let _ = u32(p), let boneCount = u32(p + 4), boneCount < 100_000 {
                 p += 8
                 var bones: [Bone] = []
