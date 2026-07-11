@@ -189,7 +189,8 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("return float2(v.x * c - v.y * s, v.x * s + v.y * c);"), t.msl)
     }
 
-    func testPiOverTwoMacroUsesStandardValue() throws {
+    func testPiTwoMacroIsTwoPi() throws {
+        // WE 관용: 실물 common.h 는 `#define M_PI_2 6.28318530718`(2π) — π/2 는 M_PI_HALF.
         let frag = """
         varying vec2 v_TexCoord;
         uniform sampler2D g_Texture0;
@@ -198,8 +199,56 @@ final class GLSLTranslatorTests: XCTestCase {
         }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("* 1.57079632679"), t.msl)
-        XCTAssertFalse(t.msl.contains("6.28318530718"), t.msl)
+        XCTAssertTrue(t.msl.contains("* 6.28318530718"), t.msl)
+        XCTAssertFalse(t.msl.contains("M_PI_2"), t.msl)
+    }
+
+    // T-B1: frag 가 varying 에 대입(→로컬 승격)한 뒤 그 varying 을 읽는 헬퍼를 호출하면,
+    // 캡처 인자는 `in.<n>`(대입 전 보간값)이 아니라 로컬 사본이어야 한다.
+    func testPromotedVaryingPassedToHelperAsLocal() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        vec2 warp() { return v_TexCoord * 2.0; }
+        void main() {
+            v_TexCoord = fract(v_TexCoord + 0.5);
+            gl_FragColor = texSample2D(g_Texture0, warp());
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float2 v_TexCoord = in.v_TexCoord;"), t.msl)  // 승격 프리앰블
+        XCTAssertTrue(t.msl.contains("warp(v_TexCoord)"), t.msl)                    // 로컬 사본 전달
+        XCTAssertFalse(t.msl.contains("warp(in.v_TexCoord)"), t.msl)
+    }
+
+    // T-B4: 블록 주석 속 죽은 선언은 실선언으로 파싱되면 안 되고(usesAudio 오점화/유령 슬롯),
+    // `//` JSON 어노테이션 파스는 계속 살아야 한다.
+    func testBlockCommentedDeclarationsIgnored() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        /*
+        uniform float g_AudioSpectrum16Left[16];
+        uniform float g_Dead; // {"material":"dead","default":0.5}
+        */
+        uniform float g_Alive; // {"material":"alive","default":0.25}
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * g_Alive;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertFalse(t.usesAudio, "블록 주석 속 g_AudioSpectrum16Left 가 usesAudio 를 켜면 안 됨")
+        XCTAssertEqual(t.materialParams.map(\.glslName), ["g_Alive"], "유령 슬롯(g_Dead) 금지")
+        XCTAssertEqual(t.materialParams[0].sceneKey, "alive")
+        XCTAssertEqual(t.materialParams[0].defaultValue, [0.25])
+    }
+
+    // T-B10: 비인용 지수 표기 기본값(`1e-3`)이 1000× 오독되면 안 된다.
+    func testExponentDefaultAnnotation() {
+        let us = GLSLTranslator.parseUniforms(#"uniform float g_Eps; // {"material":"eps","default":1e-3}"#)
+        XCTAssertEqual(us.first?.annotationDefault, [0.001])
+        let us2 = GLSLTranslator.parseUniforms(#"uniform float g_Big; // {"material":"big","default":2E+2}"#)
+        XCTAssertEqual(us2.first?.annotationDefault, [200.0])
     }
 
     func testInoutParamBecomesReference() throws {

@@ -49,8 +49,10 @@ public enum GLSLTranslator {
         for src in [vertex, fragment] {
             for (k, v) in ShaderPreprocessor.parseComboDefaults(src) where combos[k] == nil { combos[k] = v }
         }
-        let (vsrc, vArrays) = expandArrayVaryings(stripPrecision(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include)))
-        let (fsrc, fArrays) = expandArrayVaryings(stripPrecision(ShaderPreprocessor.preprocess(fragment, combos: combos, include: include)))
+        // 블록 주석은 여기서 제거(`//` 어노테이션은 보존) — `/* uniform ... */` 속 죽은 선언이
+        // 줄 단위 선언 파서에 실선언으로 잡히면 usesAudio 오점화(불필요 TCC 프롬프트)/유령 슬롯이 생긴다.
+        let (vsrc, vArrays) = expandArrayVaryings(stripPrecision(stripBlockComments(ShaderPreprocessor.preprocess(vertex, combos: combos, include: include))))
+        let (fsrc, fArrays) = expandArrayVaryings(stripPrecision(stripBlockComments(ShaderPreprocessor.preprocess(fragment, combos: combos, include: include))))
 
         // 유니폼/attribute/varying 수집(주석 어노테이션 보존 위해 본문 정리 전에).
         let vUniforms = parseUniforms(vsrc), fUniforms = parseUniforms(fsrc)
@@ -73,7 +75,7 @@ public enum GLSLTranslator {
         }
         // 본문/함수/const 스캔은 주석 제거본에서 — 주석 속 토큰(예: 죽은 코드의 g_AudioSpectrum16Left)이
         // usesAudio 를 켜 TCC 프롬프트를 유발하거나, 주석 속 중괄호가 깊이 카운터를 깨는 것을 방지.
-        // (parseUniforms/varyings/attributes 는 JSON 어노테이션 주석이 필요해 원본 유지.)
+        // (parseUniforms/varyings/attributes 는 `//` JSON 어노테이션이 필요해 줄 주석만 보존 — 블록 주석은 위에서 제거.)
         // MSL 예약어가 GLSL 식별자(파라미터/지역 등)로 쓰이는 실물(test_shader 의 `vec2 fragment`) —
         // 소스 수준에서 안전 리네임. 우리가 방출하는 `fragment float4 ef_main` 은 이후 생성이라 무관.
         let reservedRenames = ["fragment": "we_fragment", "vertex": "we_vertex", "kernel": "we_kernel",
@@ -245,11 +247,13 @@ public enum GLSLTranslator {
         let vertLocals = localDeclNames(in: vertMainBody, structs: structNames)
         var fragMap = frag, vertMap = vert
         var fragVaryingPrelude = ""
+        var promotedVaryings = Set<String>()  // frag 대입→로컬 승격된 varying(헬퍼 캡처 인자 결정용)
         for vy in varyings {
             if fragLocals.contains(vy.name) { fragMap.removeValue(forKey: vy.name) }
             else if isAssigned(vy.name, in: fragMainBody) {
                 fragMap[vy.name] = vy.name
                 fragVaryingPrelude += "\(vy.type.msl) \(vy.name) = in.\(vy.name);\n"
+                promotedVaryings.insert(vy.name)
             }
             if vertLocals.contains(vy.name) { vertMap.removeValue(forKey: vy.name) }
         }
@@ -288,7 +292,10 @@ public enum GLSLTranslator {
         }
         // main 본문의 헬퍼 호출: 스테이지별 매핑 값으로 캡처 인자 전달.
         fragBody = appendCaptureArgs(fragBody, helpers: helpers, captureOf: captureOf) { cap in
-            captureCallArg(cap, isFragment: true, materials: materials)
+            // 승격 varying 은 로컬 사본을 전달 — `in.<n>` 은 대입 전 보간값이라 헬퍼가 낡은 값을 읽는다.
+            // (GLSL 에서 varying 은 전역: main 의 대입을 헬퍼가 봐야 한다.)
+            if case .varying(let n, _) = cap, promotedVaryings.contains(n) { return n }
+            return captureCallArg(cap, isFragment: true, materials: materials)
         }
         vertBody = appendCaptureArgs(vertBody, helpers: helpers, captureOf: captureOf) { cap in
             captureCallArg(cap, isFragment: false, materials: materials)
@@ -412,6 +419,29 @@ public enum GLSLTranslator {
             if chars[i] == "/", i + 1 < chars.count, chars[i + 1] == "*" {
                 i += 2
                 while i + 1 < chars.count, !(chars[i] == "*" && chars[i + 1] == "/") { i += 1 }
+                i = min(i + 2, chars.count)
+                continue
+            }
+            out.append(chars[i]); i += 1
+        }
+        return out
+    }
+
+    /// 블록 주석(`/* */`)만 제거, `//` 줄 주석은 보존 — 선언 파서는 `//` JSON 어노테이션이 필요하다.
+    /// `//` 주석 내부의 `/*` 는 텍스트로 취급(그 줄 통과), 주석 내부 개행은 보존해 줄 구조 불변.
+    static func stripBlockComments(_ src: String) -> String {
+        let chars = Array(src); var out = ""; var i = 0
+        while i < chars.count {
+            if chars[i] == "/", i + 1 < chars.count, chars[i + 1] == "/" {
+                while i < chars.count, chars[i] != "\n" { out.append(chars[i]); i += 1 }
+                continue
+            }
+            if chars[i] == "/", i + 1 < chars.count, chars[i + 1] == "*" {
+                i += 2
+                while i + 1 < chars.count, !(chars[i] == "*" && chars[i + 1] == "/") {
+                    if chars[i] == "\n" { out.append("\n") }
+                    i += 1
+                }
                 i = min(i + 2, chars.count)
                 continue
             }
@@ -1087,7 +1117,8 @@ public enum GLSLTranslator {
         ["vec2": "float2", "vec3": "float3", "vec4": "float4", "mat2": "float2x2", "mat3": "float3x3", "mat4": "float4x4",
          "CAST2": "float2", "CAST3": "float3", "CAST4": "float4",
          "frac": "fract", "lerp": "mix", "ddx": "dfdx", "ddy": "dfdy", "inverse": "we_inverse", "mod": "we_mod",
-         "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679", "M_PI_2": "1.57079632679"]
+         "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679",
+         "M_PI_2": "6.28318530718"]  // WE 관용: M_PI_2 = 2π(실물 common.h 대조; π/2 는 M_PI_HALF 담당)
     }
 
     // MARK: - 본문 변환
@@ -1562,7 +1593,14 @@ public enum GLSLTranslator {
             }
         }
         var num = ""
-        for ch in after { if ch == "," || ch == "}" { break }; if ch.isNumber || ch == "." || ch == "-" { num.append(ch) } else if !ch.isWhitespace && !num.isEmpty { break } }
+        for ch in after {
+            if ch == "," || ch == "}" { break }
+            // 지수 표기 허용(`1e-3`) — e/E 는 숫자 뒤에서만, `+` 는 e/E 뒤에서만(isNegativeNumericLiteral 과 동일 규칙).
+            if ch.isNumber || ch == "." || ch == "-"
+                || ((ch == "e" || ch == "E") && (num.last?.isNumber ?? false))
+                || (ch == "+" && (num.last == "e" || num.last == "E")) { num.append(ch) }
+            else if !ch.isWhitespace && !num.isEmpty { break }
+        }
         return Float(num).map { [$0] }
     }
 }
