@@ -806,7 +806,9 @@ extension SceneDocument {
         guard let layers = raw as? [Any] else { return nil }
         var best: (name: String, rate: Float, blend: Float)? = nil
         for case let layer as [String: Any] in layers {
-            let visible = (layer["visible"] as? Bool) ?? true
+            // 바인딩 객체 {"value":false,...} 언랩 — parseAllAnimationLayers 와 동일 해석(숨긴 클립 오선택 방지)
+            let visible = (layer["visible"] as? Bool)
+                ?? ((layer["visible"] as? [String: Any])?["value"] as? Bool) ?? true
             guard visible else { continue }
             let blend = float(layer["blend"])  // 딕셔너리 blend(스크립트/애니 커브) = 이벤트 트리거 → 제외
             guard let bl = blend, bl >= 0.5 else { continue }

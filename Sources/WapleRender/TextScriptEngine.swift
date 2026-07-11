@@ -595,13 +595,23 @@ public final class TextScriptEngine {
     private static func neutralizeImport(_ chars: [Character], _ j: Int, _ n: Int,
                                          emit: ([Character]) -> Void) -> Int {
         // 모듈 지정자(첫 문자열 리터럴)까지 스캔 — 그 사이가 clause(+ 후행 from).
+        // clause 구성 문자(식별자/{},*·공백·개행)만 통과 — 멀티라인 import 도 중화하되,
+        // 그 외 문자(`.`=import.meta, `(`=동적 import, `;`=문자열 없는 문)는 원문 emit(오소비 방지).
         var m = j
         while m < n, chars[m] != "'", chars[m] != "\"", chars[m] != "`" {
-            if chars[m] == ";" || chars[m] == "\n" { emit(Array("import")); return j }  // 문자열 없는 import → 원문
+            let c = chars[m]
+            guard c.isLetter || c.isNumber || c == "_" || c == "$"
+                    || c == "{" || c == "}" || c == "," || c == "*" || c.isWhitespace else {
+                emit(Array("import")); return j
+            }
             m += 1
         }
         guard m < n else { emit(Array("import")); return j }
-        var clause = String(chars[j..<m]).trimmingCharacters(in: .whitespaces)
+        // importBindings 는 개행 비인지(.whitespaces) — clause 의 개행을 공백으로 정규화.
+        var clause = String(chars[j..<m])
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespaces)
         // 후행 from 키워드 제거(`* as X from` → `* as X`; 부재 시 side-effect import).
         if clause == "from" { clause = "" }
         else if clause.hasSuffix("from") {

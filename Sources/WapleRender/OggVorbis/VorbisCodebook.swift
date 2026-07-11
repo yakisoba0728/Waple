@@ -66,6 +66,9 @@ struct VorbisCodebook {
             var currentEntry = 0
             var currentLength = Int(r.read(5)) + 1
             while currentEntry < entries {
+                // 길이 상한 가드(stb_vorbis 동형): 절단 패킷(read→0, currentEntry 정체)의 무한루프와
+                // 길이 33+ 의 buildTrie available[33] OOB 를 여기서 차단. codeword 최대 길이는 32(명세).
+                guard currentLength <= 32 else { throw VorbisError.corrupt("ordered codebook length > 32") }
                 let bits = ilog(entries - currentEntry)
                 let number = Int(r.read(bits))
                 guard currentEntry + number <= entries else { throw VorbisError.corrupt("ordered codebook overflow") }

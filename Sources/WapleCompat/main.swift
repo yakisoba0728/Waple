@@ -16,6 +16,11 @@ struct WapleCompatCLI {
 
     mutating func parse(arguments: [String]) throws {
         var iterator = arguments.dropFirst().makeIterator()
+        // 값 누락 시 조용한 무시 금지 — CI 의 `--capture`(outDir 누락)가 기본 스캔 후 exit 0 으로 오인됨.
+        func value(for option: String) throws -> String {
+            guard let v = iterator.next() else { throw CLIError.missingValue(option) }
+            return v
+        }
         while let arg = iterator.next() {
             switch arg {
             case "--json":
@@ -25,17 +30,17 @@ struct WapleCompatCLI {
             case "--deep":
                 deep = true
             case "--only":
-                only = iterator.next()
+                only = try value(for: "--only")
             case "--decode-ogg":
-                decodeOggIn = iterator.next()
+                decodeOggIn = try value(for: "--decode-ogg")
             case "--naive":
                 decodeNaive = true
             case "--capture":
-                captureOut = iterator.next()
+                captureOut = try value(for: "--capture")
             case "--compare":
-                compareBaseline = iterator.next()
+                compareBaseline = try value(for: "--compare")
             case "--label":
-                label = iterator.next()
+                label = try value(for: "--label")
             case "--help", "-h":
                 printUsage()
                 Foundation.exit(0)
@@ -99,11 +104,14 @@ struct WapleCompatCLI {
 
     enum CLIError: Error, CustomStringConvertible {
         case unknownOption(String)
+        case missingValue(String)
 
         var description: String {
             switch self {
             case .unknownOption(let option):
                 return "unknown option: \(option)"
+            case .missingValue(let option):
+                return "missing value for option: \(option)"
             }
         }
     }

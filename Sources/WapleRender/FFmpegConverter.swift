@@ -90,24 +90,24 @@ public enum FFmpegConverter {
     }
 
     /// 비동기 변환. 완료 콜백은 메인 큐에서 호출(성공=mp4 URL, 실패/부재/타임아웃=nil + 로그).
-    /// 캐시 히트 시 즉시 콜백. 메인스레드를 블록하지 않는다.
+    /// 캐시 히트 검사(AVURLAsset.isPlayable 동기 로드)까지 백그라운드 — 메인스레드를 블록하지 않는다.
     public static func convert(_ source: URL, timeout: TimeInterval = 300,
                               completion: @escaping (URL?) -> Void) {
-        let out = cachedURL(for: source)
-        if FileManager.default.fileExists(atPath: out.path) {
-            if isReusableConvertedOutput(out) {
-                completeOnMain(completion, out)
+        DispatchQueue.global(qos: .utility).async {
+            let out = cachedURL(for: source)
+            if FileManager.default.fileExists(atPath: out.path) {
+                if isReusableConvertedOutput(out) {
+                    completeOnMain(completion, out)
+                    return
+                }
+                WapleLog.warn("[Waple] ignoring invalid ffmpeg cache output: \(out.path)")
+                try? FileManager.default.removeItem(at: out)
+            }
+            guard let ff = executableURL else {
+                WapleLog.warn("[Waple] ffmpeg not found — 'brew install ffmpeg' to play \(source.lastPathComponent)")
+                completeOnMain(completion, nil)
                 return
             }
-            WapleLog.warn("[Waple] ignoring invalid ffmpeg cache output: \(out.path)")
-            try? FileManager.default.removeItem(at: out)
-        }
-        guard let ff = executableURL else {
-            WapleLog.warn("[Waple] ffmpeg not found — 'brew install ffmpeg' to play \(source.lastPathComponent)")
-            completeOnMain(completion, nil)
-            return
-        }
-        DispatchQueue.global(qos: .utility).async {
             let result = run(ff: ff, source: source, output: out, timeout: timeout)
             completeOnMain(completion, result)
         }

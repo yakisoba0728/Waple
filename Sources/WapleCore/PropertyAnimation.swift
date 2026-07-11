@@ -163,10 +163,13 @@ public struct PropertyAnimation: Equatable {
         }
         var tracks: [[PropertyKeyframe]] = []
         for key in ["c0", "c1", "c2"] {
-            guard a[key] != nil else { break }
+            // 누락 성분은 빈 트랙으로 자리 유지(value(component:) 가 위치 인덱싱) — break 는
+            // c1/c2 만 있는 애니를 통째 드롭하고 c0+c2 에서 c2 를 유실한다.
+            guard a[key] != nil else { tracks.append([]); continue }
             guard let t = keyframes(a[key]) else { return nil }
             tracks.append(t)
         }
+        while tracks.last?.isEmpty == true { tracks.removeLast() }
         guard !tracks.isEmpty else { return nil }
         let opts = a["options"] as? [String: Any] ?? [:]
         // 이벤트 마커: options.events[] = {frame, name}(실물 3737268876). 형식 이상 항목은 드롭.

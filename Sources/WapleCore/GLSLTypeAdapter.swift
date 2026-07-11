@@ -28,7 +28,7 @@ public enum GLSLTypeAdapter {
         let chars = Array(s)
         var out: [Tok] = []
         var i = 0
-        let two: Set<String> = ["==","!=","<=",">=","&&","||","+=","-=","*=","/=","++","--"]
+        let two: Set<String> = ["==","!=","<=",">=","&&","||","+=","-=","*=","/=","%=","++","--"]
         while i < chars.count {
             var trivia = ""
             while i < chars.count, chars[i] == " " || chars[i] == "\t" || chars[i] == "\n" || chars[i] == "\r" {
@@ -219,7 +219,8 @@ public enum GLSLTypeAdapter {
                 look += 2
             } else { return false }
         }
-        guard look < p.toks.count, ["=", "+=", "-=", "*=", "/="].contains(p.toks[look].text) else { return false }
+        // %= 포함 — 미인식 시 [%][=] 두 토큰으로 갈라져 % 이항의 fmod 재조립이 `fmod(x, =)` 를 방출.
+        guard look < p.toks.count, ["=", "+=", "-=", "*=", "/=", "%="].contains(p.toks[look].text) else { return false }
         // 소비: lvalue + op
         while p.pos <= look { p.out += p.advance().full }
         var e = expression(p)
@@ -482,10 +483,8 @@ public enum GLSLTypeAdapter {
                 text += close
                 return Node(text: text, size: callSize(t, argSizes: argSizes, env: p.env))
             }
-            if t.first!.isNumber { return Node(text: tok.full, size: 1) }
             if t == "true" || t == "false" { return Node(text: tok.full, size: 1) }
-            let size = p.env.vars[t] ?? (typeSize(t) != nil ? 0 : 0)
-            return Node(text: tok.full, size: size)
+            return Node(text: tok.full, size: p.env.vars[t] ?? 0)
         }
         if t.first?.isNumber == true || (t.first == "." && t.count > 1) {
             return Node(text: tok.full, size: 1)

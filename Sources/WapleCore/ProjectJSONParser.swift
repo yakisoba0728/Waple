@@ -45,10 +45,11 @@ public enum ProjectJSONParser {
         var out: [String: PropertyValue] = [:]
         for (key, value) in raw {
             if value is NSNull { continue }
-            if let bool = value as? Bool {
-                out[key] = .bool(bool)
-            } else if let number = parseNumber(value) {
+            // parseNumber는 CFBoolean을 배제하므로 숫자 검사를 먼저 — NSNumber(0/1)의 as? Bool 둔갑 방지
+            if let number = parseNumber(value) {
                 out[key] = .number(number)
+            } else if let bool = value as? Bool {
+                out[key] = .bool(bool)
             } else if let string = value as? String {
                 out[key] = .string(string)
             }
@@ -57,12 +58,15 @@ public enum ProjectJSONParser {
     }
 
     private static func parseNumber(_ value: Any) -> Double? {
+        // CFBoolean 선배제 — 아래 as Double/Int 브리징이 CFBoolean도 1.0/0.0 으로 통과시키므로
+        // NSNumber 케이스의 where 만으론 불충분(JSON true 가 number 로 둔갑).
+        if let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
         switch value {
         case let double as Double:
             return double
         case let int as Int:
             return Double(int)
-        case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID():
+        case let number as NSNumber:
             return number.doubleValue
         default:
             return nil

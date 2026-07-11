@@ -18,7 +18,7 @@ public enum PropertyConditionEvaluator {
 
     public static func evaluate(_ condition: String, values: [String: PropertyValue]) -> Bool? {
         let normalized = normalize(condition, values: values)
-        let tokens = Tokenizer(normalized).tokens()
+        guard let tokens = Tokenizer(normalized).tokens() else { return nil }
         guard !tokens.isEmpty else { return true }
         var parser = Parser(tokens: tokens, values: values)
         guard let value = parser.parseExpression(), parser.isAtEnd else { return nil }
@@ -112,18 +112,21 @@ private enum ConditionToken: Equatable {
 private struct Tokenizer {
     let input: [Character]
     var index = 0
+    /// 미지 문자(+,* 등) 조우 — 잔여 토큰을 조용히 버리는 대신 조건 전체를 파스 실패로
+    /// (nil → 호출측 visible 유지 폴백; "a+b>1" 이 "a" 만으로 확정 평가되는 것 방지).
+    var failed = false
 
     init(_ string: String) {
         input = Array(string.replacingOccurrences(of: ";", with: " "))
     }
 
-    func tokens() -> [ConditionToken] {
+    func tokens() -> [ConditionToken]? {
         var tokenizer = self
         var tokens: [ConditionToken] = []
         while let token = tokenizer.nextToken() {
             tokens.append(token)
         }
-        return tokens
+        return tokenizer.failed ? nil : tokens
     }
 
     private mutating func nextToken() -> ConditionToken? {
@@ -194,6 +197,7 @@ private struct Tokenizer {
             index += op.count
             return .op(op)
         }
+        failed = true   // 미지 토큰 — 부분 평가 대신 전체 파스 실패
         index += 1
         return nil
     }

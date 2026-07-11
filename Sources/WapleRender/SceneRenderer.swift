@@ -712,6 +712,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         container.addSubview(view)
         self.mtkView = view
         view.needsDisplay = true
+        // 시차/포인터 정규화는 렌더 뷰가 실제 속한 화면 기준(보조 모니터 지원). 마운트 시점엔
+        // window 가 아직 nil 일 수 있어 매 emit 시 지연 평가.
+        parallax.screenProvider = { [weak view] in view?.window?.screen }
 
         parallaxEnabled = doc.parallaxEnabled
         parallaxAmount = doc.parallaxAmount

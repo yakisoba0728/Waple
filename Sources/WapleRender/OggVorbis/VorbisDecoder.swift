@@ -150,7 +150,14 @@ private final class VorbisStream {
         // 코드북
         let cbCount = Int(r.read(8)) + 1
         codebooks.reserveCapacity(cbCount)
-        for _ in 0..<cbCount { codebooks.append(try VorbisCodebook.parse(&r)) }
+        // 코드북 개별 상한(2^24 셀)만으로는 256개 합산 시 수십 GB — 총량도 같은 상한으로 캡(OOM 방어).
+        var totalCells = 0
+        for _ in 0..<cbCount {
+            let book = try VorbisCodebook.parse(&r)
+            totalCells += book.entries * max(1, book.dimensions)
+            guard totalCells <= 1 << 24 else { throw VorbisError.corrupt("codebooks total size \(totalCells)") }
+            codebooks.append(book)
+        }
 
         // time domain transforms (placeholder, 전부 0)
         let timeCount = Int(r.read(6)) + 1
@@ -310,7 +317,9 @@ private final class VorbisStream {
 
     func decodeAll(finalGranule: Int64) throws -> DecodedAudio {
         var output = [[Float]](repeating: [], count: channels)
-        for ch in 0..<channels { output[ch].reserveCapacity(max(0, Int(finalGranule))) }
+        // granulepos 는 파일 제어값 — 실제 산출 가능한 최대 프레임 수(패킷수×최대블록)로 clamp(거대 예약 방지).
+        let frameCapacity = min(max(0, Int(clamping: finalGranule)), audioPackets.count * blocksize1)
+        for ch in 0..<channels { output[ch].reserveCapacity(frameCapacity) }
 
         var prevWindow = [[Float]](repeating: [], count: channels)
         var prevLength = 0
@@ -344,7 +353,8 @@ private final class VorbisStream {
                 if eop { floorEOP = true; break }
                 if used { finalYs[ch] = fy } else { zeroChannel[ch] = true }
             }
-            if floorEOP { break }
+            // EOP 는 해당 패킷만 폐기(참조 구현 동작) — break 는 손상 패킷 1개로 이후 트랙 전부 절단.
+            if floorEOP { continue }
 
             // 커플드 채널 재활성(둘 중 하나라도 살아있으면 둘 다 디코드)
             let reallyZero = zeroChannel
@@ -443,7 +453,9 @@ private final class VorbisStream {
         guard r.readBit() == 1 else { return (false, [], false) }
         let rangeTable = [256, 128, 86, 64]
         let range = rangeTable[f.multiplier - 1]
-        let nbits = ilog(range) - 1
+        // 명세 §7.2.3: ilog(range-1) 비트. 2의 거듭제곱 range 는 ilog(range)-1 과 동치지만
+        // range 86(multiplier 3)은 7비트가 맞다(ilog(86)-1=6 은 0..85 표현 불가 — 오디코드).
+        let nbits = ilog(range - 1)
         var finalY = [Int](repeating: 0, count: f.values)
         finalY[0] = Int(r.read(nbits))
         finalY[1] = Int(r.read(nbits))

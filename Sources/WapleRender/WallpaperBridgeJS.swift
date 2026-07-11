@@ -70,6 +70,12 @@ enum WallpaperBridgeJS {
       });
       defineFixed('__wapleAudio', function (arr) {
         if (audioCb) { try { audioCb(arr); } catch (e) {} }
+        // 네이티브는 메인 프레임에서만 evaluateJS — 동일출처 자식 프레임 리스너에도 전파(props 와 동일 패턴).
+        forEachChild(function (child) {
+          try {
+            if (typeof child.__wapleAudio === 'function') { child.__wapleAudio(arr); }
+          } catch (e) {}
+        });
       });
       defineBridge('wallpaperReady', function () {});
       // WE 의미론: wallpaperPropertyListener 는 "등록 즉시" 속성을 받는다 — 문서 로드 후(async)
@@ -253,6 +259,12 @@ enum WallpaperBridgeJS {
         lastMedia[kind] = obj;
         var cb = mediaCbs[kind];
         if (cb) { try { cb(obj); } catch (e) {} }
+        // 자식 프레임 전파(__wapleAudio 와 동일 — 자식의 lastMedia/재생 콜백도 채운다).
+        forEachChild(function (child) {
+          try {
+            if (typeof child.__wapleMedia === 'function') { child.__wapleMedia(kind, obj); }
+          } catch (e) {}
+        });
       });
     })();
     """#

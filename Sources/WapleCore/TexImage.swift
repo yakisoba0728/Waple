@@ -382,8 +382,12 @@ public struct TexImage {
         guard b.count > sig.count + 6 else { return [] }
         var ti = -1
         var i = b.count - sig.count - 2
-        while i >= 0 {  // 마지막 출현 탐색
-            if Array(b[i..<i + sig.count]) == sig { ti = i; break }
+        while i >= 0 {  // 마지막 출현 탐색 — 첫바이트 선비교 무할당(Model3D.findMagic 동형).
+            if b[i] == sig[0] {   // TEXS 없는 일반 텍스처의 전체 역스캔에서 반복 할당 방지
+                var match = true
+                for j in 1..<sig.count where b[i + j] != sig[j] { match = false; break }
+                if match { ti = i; break }
+            }
             i -= 1
         }
         guard ti >= 0 else { return [] }

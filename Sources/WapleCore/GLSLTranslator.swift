@@ -686,10 +686,8 @@ public enum GLSLTranslator {
         let s = stripOuterParens(expr.trimmingCharacters(in: .whitespaces))
         guard !s.isEmpty else { return 0 }
         if isNumericLiteral(s) || s == "true" || s == "false" { return 1 }
-        if let (base, size) = trailingSwizzle(s) {
-            let baseSize = inferExpressionSize(base, vars: vars, functionReturns: functionReturns)
-            return baseSize > 0 ? size : 0
-        }
+        // 이항 분해를 트레일링 스위즐보다 먼저 — `a+b.x` 를 `(a+b).x` 로 오판하지 않도록
+        // (스위즐이 최상위인 `(a+b).x` 는 괄호 깊이 때문에 여기서 분해되지 않고 아래로 떨어진다).
         if let (lhs, rhs) = splitTopLevelBinary(s, ops: ["+", "-"])
             ?? splitTopLevelBinary(s, ops: ["*", "/", "%"]) {
             let l = inferExpressionSize(lhs, vars: vars, functionReturns: functionReturns)
@@ -697,6 +695,10 @@ public enum GLSLTranslator {
             if l > 1, r > 1, l != r { return min(l, r) }
             if l == 0 || r == 0 { return 0 }
             return max(l, r)
+        }
+        if let (base, size) = trailingSwizzle(s) {
+            let baseSize = inferExpressionSize(base, vars: vars, functionReturns: functionReturns)
+            return baseSize > 0 ? size : 0
         }
         if let (name, args) = wholeCall(s) {
             if let n = GLSLTypeAdapter.typeSize(name), n > 0 { return n }
@@ -789,7 +791,17 @@ public enum GLSLTranslator {
     }
 
     private static func isUnaryOperator(_ chars: [Character], at i: Int) -> Bool {
-        if chars[i] == "+" || chars[i] == "-", i > 0, chars[i - 1] == "e" || chars[i - 1] == "E" { return true }
+        // 지수 부호(1e-5)는 앞이 숫자 리터럴일 때만 — 'e' 로 끝나는 식별자(value-1 등) 뒤 부호 오판 방지.
+        if chars[i] == "+" || chars[i] == "-", i >= 2, chars[i - 1] == "e" || chars[i - 1] == "E",
+           i + 1 < chars.count, chars[i + 1].isNumber {
+            var j = i - 2
+            var sawDigit = false
+            while j >= 0, chars[j].isNumber || chars[j] == "." {
+                if chars[j].isNumber { sawDigit = true }
+                j -= 1
+            }
+            if sawDigit, j < 0 || !(chars[j].isLetter || chars[j] == "_") { return true }
+        }
         var j = i - 1
         while j >= 0, chars[j].isWhitespace { j -= 1 }
         guard j >= 0 else { return true }
@@ -1005,14 +1017,19 @@ public enum GLSLTranslator {
     public static func samplerCombos(_ src: String) -> [Int: String] {
         var out: [Int: String] = [:]
         // 주의: 실물은 CRLF 이고 Swift 의 "\r\n" 은 단일 grapheme 이라 separator "\n" 에 안 걸린다.
-        for line in src.split(whereSeparator: { $0.isNewline }) {
-            guard line.contains("sampler2D"), line.contains("\"combo\""),
-                  let texRange = line.range(of: "g_Texture") else { continue }
-            let after = line[texRange.upperBound...]
+        // 선언은 코드부, 어노테이션은 후행 `//` 주석부에서만 인정 — 주석 처리된(죽은) 샘플러 선언이
+        // 콤보를 등록해 의도치 않은 #if 분기를 켜는 것 방지. 블록 주석 속 선언도 제외.
+        for line in stripBlockComments(src).split(whereSeparator: { $0.isNewline }) {
+            guard let commentStart = line.range(of: "//") else { continue }
+            let code = line[..<commentStart.lowerBound]
+            let comment = line[commentStart.upperBound...]
+            guard code.contains("sampler2D"),
+                  let texRange = code.range(of: "g_Texture") else { continue }
+            let after = code[texRange.upperBound...]
             let digits = after.prefix(while: { $0.isNumber })
             guard let slot = Int(digits) else { continue }
-            guard let comboKey = line.range(of: "\"combo\"") else { continue }
-            let tail = line[comboKey.upperBound...]
+            guard let comboKey = comment.range(of: "\"combo\"") else { continue }
+            let tail = comment[comboKey.upperBound...]
             guard let q1 = tail.firstIndex(of: "\"") else { continue }
             let afterQ1 = tail[tail.index(after: q1)...]
             guard let q2 = afterQ1.firstIndex(of: "\"") else { continue }
@@ -1042,7 +1059,8 @@ public enum GLSLTranslator {
         if name == "g_AudioSpectrum64Left" { return "audioL64" }
         if name == "g_AudioSpectrum64Right" { return "audioR64" }
         if name.hasPrefix("g_Texture"), name.hasSuffix("Resolution"),
-           let n = Int(name.dropFirst("g_Texture".count).dropLast("Resolution".count)) {
+           let n = Int(name.dropFirst("g_Texture".count).dropLast("Resolution".count)),
+           (0..<8).contains(n) {   // EngineU.texRes 는 [8] 고정 — N≥8 은 미치환(컴파일 실패→폴백)
             return "eng.texRes[\(n)]"
         }
         return name
@@ -1490,7 +1508,13 @@ public enum GLSLTranslator {
             if c.isLetter || c == "_" {
                 var id = ""
                 while i < chars.count, chars[i].isLetter || chars[i].isNumber || chars[i] == "_" { id.append(chars[i]); i += 1 }
-                out += map[id] ?? id   // 사전에 없으면 그대로(내장 함수·미지 식별자)
+                // 스위즐 문맥(직전 '.', xyzwrgbastpq 조합 ≤4)은 멤버 접근이라 리네임 제외 —
+                // 예약어 맵의 "p" 가 stpq 스위즐 `.p` 를 `.we_p` 로 변형(MSL 컴파일 실패)하는 것 방지.
+                if out.last == ".", id.count <= 4, !id.isEmpty, id.allSatisfy({ "xyzwrgbastpq".contains($0) }) {
+                    out += id
+                } else {
+                    out += map[id] ?? id   // 사전에 없으면 그대로(내장 함수·미지 식별자)
+                }
                 continue
             }
             out.append(c); i += 1

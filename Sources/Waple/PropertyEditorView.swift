@@ -10,6 +10,10 @@ struct PropertyEditorView: View {
     let entry: LibraryEntry
     @ObservedObject var viewModel: LibraryViewModel
     @State private var props: [WallpaperProperty] = []
+    /// textInput 미커밋 편집 추적 — Enter 없이 포커스 이동/시트 닫힘 시에도 커밋(변경 유실 방지).
+    /// (키스트로크 커밋은 부적절: setProperty 가 현재 배경 리마운트를 유발.)
+    @FocusState private var focusedText: Int?
+    @State private var dirtyText = Set<Int>()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,6 +45,16 @@ struct PropertyEditorView: View {
         }
         .frame(minWidth: 420, minHeight: 320)
         .onAppear { props = viewModel.editableProperties(for: entry) }
+        .onChange(of: focusedText) { newValue in
+            for i in dirtyText where i != newValue { commitDirtyText(i) }   // 포커스 이탈 커밋
+        }
+        .onDisappear { for i in dirtyText { commitDirtyText(i) } }   // 시트 닫힘 시 잔여 커밋
+    }
+
+    /// 편집된(dirty) textInput 만 영속화 — 무변경 커밋의 불필요한 리마운트 방지.
+    private func commitDirtyText(_ i: Int) {
+        guard dirtyText.remove(i) != nil, props.indices.contains(i) else { return }
+        viewModel.setProperty(key: props[i].key, value: props[i].value, for: entry)
     }
 
     private func label(_ p: WallpaperProperty) -> String {
@@ -98,8 +112,9 @@ struct PropertyEditorView: View {
                 Text(label(p)).font(.caption)
                 TextField("", text: Binding(
                     get: { if case .string(let s) = props[i].value { return s }; return "" },
-                    set: { props[i].value = .string($0) }))
-                .onSubmit { viewModel.setProperty(key: props[i].key, value: props[i].value, for: entry) }
+                    set: { props[i].value = .string($0); dirtyText.insert(i) }))
+                .focused($focusedText, equals: i)
+                .onSubmit { commitDirtyText(i) }
             }
         case .file:
             resourcePicker(for: i, directory: false)

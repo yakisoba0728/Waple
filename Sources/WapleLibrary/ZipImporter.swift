@@ -15,13 +15,15 @@ public enum ZipImporter {
                 return  // 배경 루트 발견 → 하위 탐색 중단
             }
             let subs = (try? fileManager.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.isDirectoryKey],
+                at: dir, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
                 options: [.skipsHiddenFiles])) ?? []
             for sub in subs {
-                var isDir: ObjCBool = false
-                if fileManager.fileExists(atPath: sub.path, isDirectory: &isDir), isDir.boolValue {
-                    walk(sub)
-                }
+                // 심링크 미추종(fileExists 는 링크를 따라간다) — 악성 zip 의 절대링크(evil→/)로
+                // 전체 디스크를 걷거나, 외부 경로의 project.json 을 배경 루트로 오인해
+                // importZip 이 외부 원본 폴더를 imported/ 로 이동(파괴)하는 것 방지.
+                let rv = try? sub.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard rv?.isSymbolicLink != true, rv?.isDirectory == true else { continue }
+                walk(sub)
             }
         }
         walk(root)

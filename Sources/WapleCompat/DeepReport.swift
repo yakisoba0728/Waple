@@ -35,7 +35,7 @@ enum Report {
         p("| **ALL** | **\(totalAll)** | **\(supAll)** | **\(pct(supAll, totalAll))** |")
         p("")
         p("project.json parsed: \(agg.projectJSONOK)/\(agg.projectJSONTotal) (\(pct(agg.projectJSONOK, agg.projectJSONTotal)))")
-        p("properties parsed: \(agg.propsOK)/\(agg.propsProjects); display conditions evaluable: \(agg.conditionsEvaluable)/\(agg.conditionsTotal) (\(pct(agg.conditionsEvaluable, agg.conditionsTotal)))")
+        p("properties parsed: \(agg.propsProjects); display conditions evaluable: \(agg.conditionsEvaluable)/\(agg.conditionsTotal) (\(pct(agg.conditionsEvaluable, agg.conditionsTotal)))")
         p("")
 
         // ---- scenes ----

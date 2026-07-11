@@ -45,7 +45,7 @@ struct VorbisBitReader {
         return result
     }
 
-    /// n 비트 부호 정수(2의 보수). floor 등에서 쓰임.
+    /// n 비트 부호 정수(2의 보수). 현재 프로덕션 미사용 — 테스트(OggVorbisDecoderTests)가 규약을 검증.
     mutating func readSigned(_ n: Int) -> Int32 {
         let v = read(n)
         guard n > 0, n < 32 else { return Int32(bitPattern: v) }

@@ -91,6 +91,8 @@ extension SceneRenderer {
         let baseTint: SIMD4<Float>
         let baseVisible: Bool
         var scripts: [Script3D] = []
+        /// per-frame 정점 재사용(3슬롯 링 — 레이어/파티클/본과 동일 패턴, 매프레임 makeBuffer 방지).
+        let scratchQuad = DynamicVertexBuffer()
         // per-frame
         var origin: SIMD3<Float>
         var scale: SIMD2<Float>
@@ -291,11 +293,12 @@ extension SceneRenderer {
         var evalItems: [(order: Int, bb: Bool, idx: Int)] = []
         for (i, n) in nodes3D.enumerated() where !n.scripts.isEmpty { evalItems.append((n.order, false, i)) }
         for (i, b) in billboards.enumerated() where !b.scripts.isEmpty { evalItems.append((b.order, true, i)) }
-        eval3DOrder = evalItems.sorted { $0.order < $1.order }
+        // 안정 정렬(order, 삽입순) — 2D 경로와 동일 규약. 동률 order 의 상대 순서 고정.
+        eval3DOrder = evalItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
         var drawItems: [(order: Int, bb: Bool, idx: Int)] = []
         for (i, m) in meshRenderables.enumerated() { drawItems.append((m.order, false, i)) }
         for (i, b) in billboards.enumerated() { drawItems.append((b.order, true, i)) }
-        draw3DOrder = drawItems.sorted { $0.order < $1.order }
+        draw3DOrder = drawItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
         // 카메라 스크립트 또는 활성 애니(스키닝) 가 있으면 연속 렌더 필요.
         let hasSkinAnim = meshRenderables.contains { $0.animIndex >= 0 }
         has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim
@@ -617,7 +620,7 @@ extension SceneRenderer {
         verts.reserveCapacity(48)
         verts += vtx(tl, 0, 0); verts += vtx(tr, 1, 0); verts += vtx(br, 1, 1)
         verts += vtx(tl, 0, 0); verts += vtx(br, 1, 1); verts += vtx(bl, 0, 1)
-        guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<Float>.stride * verts.count) else { return }
+        guard let vbuf = bb.scratchQuad.load(verts, device: device) else { return }
         var u2 = MeshUniform(mvp: viewProj, tint: bb.tint, misc: SIMD4(0, 0, 0, 0))
         // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우 광량 복원). 그 외 premult-over.
         enc.setRenderPipelineState(bb.additive ? (meshPipelineAdditive ?? over) : over)

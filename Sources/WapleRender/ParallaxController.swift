@@ -2,6 +2,9 @@ import AppKit
 
 public final class ParallaxController {
     public var onOffset: ((CGPoint) -> Void)?
+    /// 정규화 기준 화면(렌더러 뷰가 속한 화면). 미설정/nil 반환 시 NSScreen.main 폴백 —
+    /// 보조 모니터 씬이 주모니터 기준으로 ±1 포화 고착되는 문제 방지. 매 emit 시 평가(창 이동 추종).
+    public var screenProvider: (() -> NSScreen?)?
     private var monitor: Any?
 
     public init() {}
@@ -22,7 +25,8 @@ public final class ParallaxController {
     }
 
     private func emit() {
-        let frame = NSScreen.main?.frame ?? .zero
+        let screen = screenProvider.flatMap { $0() } ?? NSScreen.main
+        let frame = screen?.frame ?? .zero
         onOffset?(ParallaxController.normalizedOffset(mouse: NSEvent.mouseLocation, screenFrame: frame))
     }
 

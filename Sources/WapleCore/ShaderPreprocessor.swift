@@ -26,7 +26,26 @@ public enum ShaderPreprocessor {
         }
         // 인라인된 헤더의 [COMBO] 기본값도 반영
         for (name, def) in parseComboDefaults(included) where defines[name] == nil { defines[name] = def }
-        return evaluateConditionals(included, defines: defines)
+        return evaluateConditionals(spliceDefineContinuations(included), defines: defines)
+    }
+
+    /// C 줄연속(`\` + 개행) 스플라이스 — `#define` 지시문 한정. 일반 코드/주석 줄의 트레일링
+    /// 백슬래시(Windows 경로 주석 등)가 다음 줄을 삼키지 않도록 지시문 밖은 건드리지 않는다.
+    /// ponytail: 멀티라인 매크로 "호출"의 줄단위 미확장은 별도(실입력 미확인 — 필요 시 확장).
+    static func spliceDefineContinuations(_ source: String) -> String {
+        guard source.contains("\\\n") else { return source }
+        var out: [String] = []
+        var iter = source.split(separator: "\n", omittingEmptySubsequences: false).makeIterator()
+        while let line = iter.next() {
+            var s = String(line)
+            if s.trimmingCharacters(in: .whitespaces).hasPrefix("#define") {
+                while s.hasSuffix("\\"), let next = iter.next() {
+                    s = String(s.dropLast()) + " " + String(next)
+                }
+            }
+            out.append(s)
+        }
+        return out.joined(separator: "\n")
     }
 
     /// `// [COMBO] {"combo":"NAME","default":N,...}` → [NAME: N].
@@ -72,6 +91,7 @@ public enum ShaderPreprocessor {
         var d = defines
         var textDefines: [String: String] = [:]
         var funcMacros: [String: (params: [String], body: String)] = [:]
+        var flagDefines = Set<String>()   // 값 없는 소스 #define — #ifdef 전용, 본문 "1" 치환 금지
         // C 규약(위치-인지): 정의는 이후 줄부터, 재정의 시 이전 정의는 그 줄까지(실물 frame_builder).
         struct MacroDef { let name: String; let value: String?; let fn: (params: [String], body: String)?
                           let fromLine: Int; var toLine: Int = Int.max }
@@ -133,6 +153,7 @@ public enum ShaderPreprocessor {
                     d.removeValue(forKey: name)
                     textDefines.removeValue(forKey: name)
                     funcMacros.removeValue(forKey: name)
+                    flagDefines.remove(name)
                     closePrev(name, at: out.count)
                 }
             } else if t.hasPrefix("#define "), emitting() {
@@ -167,6 +188,7 @@ public enum ShaderPreprocessor {
                     let value = raw.trimmingCharacters(in: .whitespaces)
                     if value.isEmpty {
                         d[name] = 1  // 값 없는 #define NAME → #ifdef 용, 본문 치환은 안 함(빈 치환은 위험)
+                        flagDefines.insert(name)
                     } else {
                         if let v = Int(value) { d[name] = v }
                         textDefines[name] = value
@@ -182,8 +204,9 @@ public enum ShaderPreprocessor {
         // 본문 매크로 확장: object-like 치환 + 함수형 매크로 호출 확장을 한 루프에서 fixpoint 까지(캡 12)
         // — 별칭(#define A Bf)·매크로가 매크로를 부르는 체인(실물 Blend* 계열)이 수렴하도록.
         // combos/[COMBO] 기본값 등 소스 밖에서 온 정의는 전체 범위(fromLine 0).
-        for (k, v) in d where textDefines[k] == nil && funcMacros[k] == nil {
-            // 소스 밖(combos/[COMBO] 기본값/값없는 define)에서 온 정의 — 전체 범위.
+        for (k, v) in d where textDefines[k] == nil && funcMacros[k] == nil && !flagDefines.contains(k) {
+            // 소스 밖(combos/[COMBO] 기본값)에서 온 정의 — 전체 범위. 값 없는 소스 define 은
+            // 위 주석대로 본문 치환 제외(여기 걸리면 본문 NAME 이 "1" 로 둔갑 — C 빈치환과 다름).
             macroDefs.append(MacroDef(name: k, value: String(v), fn: nil, fromLine: 0))
         }
         guard !macroDefs.isEmpty else { return out.joined(separator: "\n") }

@@ -23,6 +23,7 @@ final class WebInputProxyView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     func start() {
+        guard timer == nil else { return }
         // ~12fps 미러 — takeSnapshot 은 메인큐 콜백(WKWebView 규약). 조작 창이 열려있는 동안만.
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
             guard let self, let web = self.target, self.window?.isVisible == true else { return }

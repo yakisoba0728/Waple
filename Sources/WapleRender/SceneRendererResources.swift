@@ -81,8 +81,10 @@ extension SceneRenderer {
             if layer.textureEntryName.isEmpty {  // 솔리드/컴포지션 placeholder
                 guard let t = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) else { continue }
                 mtl = t
-                effW = layer.isFrameBuffer ? Int(max(1, projW)) : 1   // 컴포지션 효과 dims 는 화면 근사
-                effH = layer.isFrameBuffer ? Int(max(1, projH)) : 1
+                // 컴포지션 효과 dims 는 화면 근사, 솔리드는 레이어 크기 — 1×1 이면 공간 가변 효과
+                // (waterwaves/scroll 등) 체인 전체가 1픽셀 타깃으로 퇴화(단색화).
+                effW = layer.isFrameBuffer ? Int(max(1, projW)) : max(1, Int(layer.size.x.rounded()))
+                effH = layer.isFrameBuffer ? Int(max(1, projH)) : max(1, Int(layer.size.y.rounded()))
             } else if layer.spritesheet,
                       let sprite = resolveTextureWithFrames(layer.textureEntryName, package: package, device: device),
                       sprite.frames.count > 1 {
@@ -197,7 +199,8 @@ extension SceneRenderer {
         // 레거시 frag(mask=texture(1)) 와 waterripple(normal=1, mask=2) 모두 위해
         // 최소 2개 슬롯을 흰색으로 채워 미바인드 텍스처를 방지한다.
         var aux: [MTLTexture] = []
-        let auxNames = eff.textureNames.count > 1 ? Array(eff.textureNames[1...]) : []
+        // slot0=framebuffer 라 aux 는 index i+1 로 바인드 — 126개 캡(Metal 텍스처 인자테이블 128 상한).
+        let auxNames = eff.textureNames.count > 1 ? Array(eff.textureNames[1...].prefix(126)) : []
         for name in auxNames {
             guard let t = resolveTexture(name, package: package, device: device) else { continue }
             aux.append(t)
@@ -363,6 +366,11 @@ extension SceneRenderer {
         -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], target: Int?)? {
         var binds: [(slot: Int, source: Int)] = []
         for b in mp.binds {
+            // 신뢰불가 effect.json index — Metal frag 텍스처 인자테이블 상한(macOS 128) 밖이면
+            // setFragmentTexture assertion 크래시. 미지 바인드와 동일하게 효과 전체 폴백.
+            guard (0..<128).contains(b.index) else {
+                NSLog("%@", "[Waple] bind index oob \(b.index) in \(effName)"); return nil
+            }
             if b.name == "previous" { binds.append((b.index, -1)) }
             else if let idx = fboIndex[b.name] { binds.append((b.index, idx)) }
             else { NSLog("%@", "[Waple] unknown bind '\(b.name)' in \(effName)"); return nil }
@@ -375,7 +383,7 @@ extension SceneRenderer {
             texRes[slot] = SIMD4(lw / s, lh / s, lw / s, lh / s)
         }
         var aux: [(slot: Int, tex: MTLTexture)] = []
-        for slot in t.textureSlots where slot > 0 && !bindSlots.contains(slot) {
+        for slot in t.textureSlots where slot > 0 && slot < 128 && !bindSlots.contains(slot) {
             var name = slot < scenePass.textureNames.count ? scenePass.textureNames[slot] : nil
             if name == nil, slot < matTextures.count { name = matTextures[slot] }
             if let n = name, n.hasPrefix("_rt_") { continue }

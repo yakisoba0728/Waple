@@ -2,7 +2,8 @@ import AppKit
 import WebKit
 import WapleCore
 
-public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegate, WKScriptMessageHandler {
+public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegate, WKScriptMessageHandler,
+                                NSWindowDelegate {
     public enum Mode { case web; case videoFallback }
 
     private let mode: Mode
@@ -70,18 +71,17 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 NSLog("%@", "[Waple] failed to parse properties for \(project.folderURL.path): \(error)")
             }
             // 유저 오버라이드 병합(속성 편집 UI) — WE 의 "저장된 사용자 값" 의미론.
-            let userOverrides = UserPropertyStore.overrides(id: project.id)
-            let effective = WallpaperProperties.applying(
-                overrides: UserPropertyStore.overrides(
-                    id: project.id,
-                    presetOverrides: project.presetOverrides,
-                    presetResourceRoot: project.presetFolderURL
-                ),
-                to: props
+            let mergedOverrides = UserPropertyStore.overrides(
+                id: project.id,
+                presetOverrides: project.presetOverrides,
+                presetResourceRoot: project.presetFolderURL
             )
+            let effective = WallpaperProperties.applying(overrides: mergedOverrides, to: props)
             userPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effective)
             userPropertiesByKey = Dictionary(uniqueKeysWithValues: effective.map { ($0.key, $0) })
-            userSelectedResourceOverrides = Self.absoluteResourceOverrides(from: userOverrides)
+            // 절대경로 허용목록은 effective 에 실제 반영된 병합 오버라이드 기준 — 유저 직접 선택 외에
+            // 프리셋 리소스 해석(resolvingPresetResources, 프리셋 폴더 봉쇄 검증 완료)의 절대경로도 포함.
+            userSelectedResourceOverrides = Self.absoluteResourceOverrides(from: mergedOverrides)
             projectRootURL = project.folderURL.standardizedFileURL
             web.load(URLRequest(url: url))
             let provider = audioProviderFactory()
@@ -112,8 +112,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 let inWindow = win.convertPoint(fromScreen: NSEvent.mouseLocation)
                 let inView = web.convert(inWindow, from: nil)
                 guard web.bounds.contains(inView) else { return }
-                // 웹 좌표는 상단 원점 — AppKit 하단 원점에서 반전.
-                let x = Int(inView.x), y = Int(web.bounds.height - inView.y)
+                // WKWebView 는 flipped(상단 원점) — convert 결과가 이미 웹 좌표계라 재반전 금지
+                // (비교: WebInputProxyView 는 non-flipped NSView 라 (1-ny) 반전이 필요).
+                let x = Int(inView.x), y = Int(inView.y)
                 web.evaluateJavaScript("window.__wapleMouse(\(x), \(y));")
             }
             // 바탕화면 직접 클릭 전달은 아이콘 클릭과 충돌해 혼란(실사용 피드백 2026-07-05) — 제거.
@@ -125,18 +126,30 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     /// 창에서의 마우스/휠/키 입력을 합성 DOM 이벤트로 데스크탑 인스턴스에 재게시 → 실시간 연동.
     public func openInteractionPanel() {
         guard let web = webView else { return }
-        if let existing = interactionWindow { existing.makeKeyAndOrderFront(nil); return }
+        if let existing = interactionWindow {
+            // 닫힘(windowWillClose)으로 멈춘 미러 타이머 재시작(start 는 멱등).
+            (existing.contentView as? WebInputProxyView)?.start()
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
         let proxy = WebInputProxyView(target: web)
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 540),
                            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         win.title = "웹 월페이퍼 조작 (실시간 연동)"
         win.contentView = proxy
         win.isReleasedWhenClosed = false
+        win.delegate = self
         win.center()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         interactionWindow = win
         proxy.start()
+    }
+
+    /// 조작 창 닫힘 — 12Hz 미러 타이머 정지(teardown 까지 상주하던 낭비 제거). 창은 보존(재오픈 재사용).
+    public func windowWillClose(_ notification: Notification) {
+        guard let win = notification.object as? NSWindow, win === interactionWindow else { return }
+        (win.contentView as? WebInputProxyView)?.stop()
     }
 
     private func setPausedJS(_ paused: Bool) {
@@ -160,7 +173,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             if let error { NSLog("%@", "[Waple] property injection failed: \(error)") }
         }
         deliverFetchAllDirectories()
-        if pausedManually { setPausedJS(true) }
+        // 가림 자동정지 중 페이지 자체 재로드 시에도 정지 상태를 재동기화.
+        if pausedManually || pausedByOcclusion { setPausedJS(true) }
     }
 
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -378,7 +392,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 textColor: \(q(hx(p.textColor))), highContrastColor: \(q(hx(p.highContrast))), hasThumbnail: true }
                 """)
         }
-        poller.start()
+        // 정지 중 등록되면 폴링은 재개 시점(resume/가림 해제)에 시작.
+        if !pausedManually, !pausedByOcclusion { poller.start() }
         mediaPoller = poller
     }
 
@@ -387,6 +402,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         pausedManually = true
         setPausedJS(true)
         audioProvider?.stop()
+        mediaPoller?.stop()
     }
 
     public func resume() {
@@ -394,6 +410,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         pausedManually = false
         setPausedJS(false)
         if hasAudioListener { audioProvider?.start() }
+        if !pausedByOcclusion { mediaPoller?.start() }
     }
 
     /// 가림 상태 전이(옵저버 클로저에서 분리 — webView 창 없이도 테스트 가능). 가림 정지는 수동 pause 와
@@ -405,12 +422,14 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             if pausedByOcclusion, !pausedManually {
                 setPausedJS(false)
                 if hasAudioListener { audioProvider?.start() }
+                mediaPoller?.start()
             }
             pausedByOcclusion = false
         } else {
             pausedByOcclusion = true
             setPausedJS(true)
             audioProvider?.stop()
+            mediaPoller?.stop()
         }
     }
 

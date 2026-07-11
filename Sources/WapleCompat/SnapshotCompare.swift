@@ -22,6 +22,11 @@ extension SnapshotPipeline {
             fputs("[snap] 베이스라인 매니페스트를 읽을 수 없음: \(baselineDir.path)/manifest.json\n", stderr)
             return 2
         }
+        // 썸네일 크기 불일치 = 구 베이스라인 — min-길이 쓰레기 비교(무증상 대량 오탐 FAIL) 대신 명시 에러.
+        guard baseline.thumbWidth == thumbW, baseline.thumbHeight == thumbH else {
+            fputs("[snap] 베이스라인 썸네일 크기 \(baseline.thumbWidth)x\(baseline.thumbHeight) ≠ 현재 \(thumbW)x\(thumbH) — --capture 로 베이스라인 재생성 필요\n", stderr)
+            return 2
+        }
         let baseThumbs = baselineDir.appendingPathComponent("thumbs", isDirectory: true)
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_snap_cmp", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)

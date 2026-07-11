@@ -129,7 +129,8 @@ public struct WallpaperCompatibilityReport: Codable, Equatable {
 }
 
 public enum WallpaperCompatibilityAnalyzer {
-    private static let currentPropertyTypes: Set<String> = [
+    /// 지원 속성 타입 단일 소스 — DeepScan 의 known 목록도 이걸 참조(스캐너 간 불일치 방지).
+    public static let currentPropertyTypes: Set<String> = [
         "bool", "checkbox", "slider", "combo", "color", "textinput", "text",
         "file", "directory", "scenetexture", "texture", "usershortcut", "group", "label",
         "boo4", "uwu"

@@ -16,7 +16,7 @@ public enum PuppetPose {
         case "mirror":
             let cycle = f.truncatingRemainder(dividingBy: 2 * L)
             return cycle <= L ? cycle : 2 * L - cycle
-        case "single":
+        case "single", "clamp":   // clamp: 마지막 프레임 유지(Model3D animModes·PropertyAnimation 과 일관)
             return min(f, L)
         default:  // loop
             return f.truncatingRemainder(dividingBy: L)

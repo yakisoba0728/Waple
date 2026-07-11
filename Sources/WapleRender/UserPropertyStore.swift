@@ -23,9 +23,11 @@ public enum UserPropertyStore {
     public static func overrides(id: String) -> [String: PropertyValue] {
         var out: [String: PropertyValue] = [:]
         for (k, v) in rawOverrides(id: id) {
-            if let b = v as? Bool { out[k] = .bool(b) }
-            else if let d = v as? Double { out[k] = .number(d) }
-            else if let i = v as? Int { out[k] = .number(Double(i)) }
+            // CFBoolean 판별 — NSNumber(0/1)의 as? Bool 둔갑 방지 (ProjectJSONParser.parseNumber와 동일 규칙)
+            if let n = v as? NSNumber {
+                if CFGetTypeID(n) == CFBooleanGetTypeID() { out[k] = .bool(n.boolValue) }
+                else { out[k] = .number(n.doubleValue) }
+            }
             else if let s = v as? String { out[k] = .string(s) }
         }
         return out

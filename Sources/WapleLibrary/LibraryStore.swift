@@ -119,10 +119,20 @@ public final class LibraryStore {
         try? fm.createDirectory(at: importedDir, withIntermediateDirectories: true)
 
         var imported: [LibraryEntry] = []
+        var usedNames = Set<String>()   // 이번 zip 안의 동명 루트(WE export 관례 `Wallpaper/`) 상호 덮어쓰기 방지
         for root in ZipImporter.findProjectRoots(in: temp, fileManager: fm) {
             // ponytail: 관리 폴더명=원본 폴더명(=WE 워크샵 id) 유지로 project id 안정.
-            // 동명 충돌(재import/서로 다른 zip 의 동일 폴더명)은 덮어씀 — WE id 는 유일하므로 실질 재import.
-            let dest = importedDir.appendingPathComponent(root.lastPathComponent, isDirectory: true)
+            // 콜 간 동명 충돌(재import)은 덮어씀 — WE id 는 유일하므로 실질 재import.
+            // 단 한 zip 에 동명 루트가 2개+면 서로 다른 배경 — 접미(-2,-3)로 유일화.
+            var name = root.lastPathComponent
+            if usedNames.contains(name) {
+                var n = 2
+                while usedNames.contains("\(name)-\(n)")
+                        || fm.fileExists(atPath: importedDir.appendingPathComponent("\(name)-\(n)").path) { n += 1 }
+                name = "\(name)-\(n)"
+            }
+            usedNames.insert(name)
+            let dest = importedDir.appendingPathComponent(name, isDirectory: true)
             try? fm.removeItem(at: dest)
             guard (try? fm.moveItem(at: root, to: dest)) != nil,
                   let entry = try? importFolder(dest) else { continue }

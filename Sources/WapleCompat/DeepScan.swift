@@ -23,7 +23,7 @@ final class DeepAgg {
     var projTypeTotal: [String: Int] = [:]
     var projTypeSupported: [String: Int] = [:]
     var projectJSONTotal = 0, projectJSONOK = 0
-    var propsProjects = 0, propsOK = 0
+    var propsProjects = 0
     var conditionsTotal = 0, conditionsEvaluable = 0
     var propertyTypeCounts: [String: Int] = [:]
     var unsupportedPropertyTypes: [String: Int] = [:]
@@ -118,6 +118,10 @@ struct PkgAssets {
             guard WallpaperPathSecurity.contains(current, in: rootURL) else { return nil }
         }
         guard FileManager.default.fileExists(atPath: current.path) else { return nil }
+        // 렌더러 baseAssetURL 과 동일한 realpath 재검증 — 심링크 경유 탈출 차단(사본 간 divergence 해소).
+        let realRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
+        let realCurrent = current.resolvingSymlinksInPath().standardizedFileURL
+        guard WallpaperPathSecurity.contains(realCurrent, in: realRoot) else { return nil }
         return current
     }
 
@@ -219,8 +223,7 @@ enum DeepScan {
         var condTotal = 0, condOK = 0
         var typeCounts: [String: Int] = [:]
         var unsupported: [String: Int] = [:]
-        let known: Set<String> = ["bool", "checkbox", "slider", "combo", "color", "textinput", "text",
-                                  "file", "directory", "scenetexture", "texture", "usershortcut", "group", "label"]
+        let known = WallpaperCompatibilityAnalyzer.currentPropertyTypes   // 단일 소스(analyzer 와 일치)
         for p in parsed {
             let t = p.type.lowercased()
             if !t.isEmpty { typeCounts[t, default: 0] += 1; if !known.contains(t) { unsupported[t, default: 0] += 1 } }
@@ -230,7 +233,7 @@ enum DeepScan {
             }
         }
         agg.sync {
-            agg.propsProjects += 1; agg.propsOK += 1
+            agg.propsProjects += 1
             agg.conditionsTotal += condTotal; agg.conditionsEvaluable += condOK
             for (k, v) in typeCounts { agg.propertyTypeCounts[k, default: 0] += v }
             for (k, v) in unsupported { agg.unsupportedPropertyTypes[k, default: 0] += v }
@@ -269,7 +272,7 @@ enum DeepScan {
         // 2) TEX: every .tex entry in the package (decode all image pages)
         var texAllOK = true
         for entry in package.entries where entry.name.lowercased().hasSuffix(".tex") {
-            if !decodeTex(name: entry.name, data: pkgData, res: res, provenance: "\(project.id)/\(entry.name)", agg: agg, asset: false) {
+            if !decodeTex(name: entry.name, res: res, provenance: "\(project.id)/\(entry.name)", agg: agg, asset: false) {
                 texAllOK = false
             }
         }
@@ -305,7 +308,7 @@ enum DeepScan {
     // MARK: TEX decode
 
     /// Returns true if TexImage.parse succeeded AND every image page decoded. Buckets by format.
-    static func decodeTex(name: String, data pkgData: Data, res: PkgAssets, provenance: String, agg: DeepAgg, asset: Bool) -> Bool {
+    static func decodeTex(name: String, res: PkgAssets, provenance: String, agg: DeepAgg, asset: Bool) -> Bool {
         return autoreleasepool { () -> Bool in
             guard let texData = asset ? try? Data(contentsOf: URL(fileURLWithPath: name)) : res.pkgData(name) else {
                 return false
@@ -375,7 +378,7 @@ enum DeepScan {
         var texFiles: [URL] = []
         for case let u as URL in en where u.pathExtension.lowercased() == "tex" { texFiles.append(u) }
         DispatchQueue.concurrentPerform(iterations: texFiles.count) { i in
-            _ = decodeTex(name: texFiles[i].path, data: Data(), res: PkgAssets(package: ScenePackage.assemble([]), assetsDir: nil),
+            _ = decodeTex(name: texFiles[i].path, res: PkgAssets(package: ScenePackage.assemble([]), assetsDir: nil),
                           provenance: texFiles[i].lastPathComponent, agg: agg, asset: true)
         }
     }

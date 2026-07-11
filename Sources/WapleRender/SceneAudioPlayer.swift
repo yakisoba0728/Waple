@@ -121,7 +121,8 @@ public final class SceneAudioPlayer {
 }
 
 /// sound 오브젝트 1개 = 플레이리스트 1개. 곡 종료 delegate 로 다음 곡을 건다(트랙별 라이브 루프).
-/// AVAudioPlayer delegate 콜백은 메인 스레드 — mount/teardown 도 메인이라 락 불요(stopped 플래그만).
+/// AVAudioPlayer delegate 콜백 스레드는 문서상 미보장 — didFinishPlaying 은 메인으로 홉해
+/// 상태(player/index/paused)를 메인 전용으로 직렬화(mount/teardown 도 메인 — 락 불요).
 private final class Playlist: NSObject, AVAudioPlayerDelegate {
     private let entries: [String]
     private let mode: String
@@ -200,6 +201,11 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
     }
 
     func audioPlayerDidFinishPlaying(_ p: AVAudioPlayer, successfully flag: Bool) {
+        // 콜백 스레드 미보장(Apple 문서) — 상태 갱신은 메인으로 홉(비메인이면 pause/teardown 과 경합).
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in self?.audioPlayerDidFinishPlaying(p, successfully: flag) }
+            return
+        }
         guard !stopped,
               let next = SceneAudioPlayer.nextIndex(mode: mode, current: index, count: entries.count) else { return }
         // random 모드는 곡 사이 [mintime,maxtime]초 대기 후 다음 곡(WE 셔플 간격). 그 외 gap=0(즉시).

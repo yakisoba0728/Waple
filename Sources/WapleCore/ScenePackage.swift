@@ -33,15 +33,19 @@ public struct ScenePackage {
     }
 
     public static func parse(_ data: Data) throws -> ScenePackage {
-        let b = [UInt8](data)
+        // Data 직접 인덱싱 — 종전 [UInt8](data) 전량 복사는 700MB pkg 의 mappedIfSafe(비상주) 이점을
+        // 무효화(DeepScan 동시 스캔 OOM 방지 설계). 헤더만 순차 판독, blob 은 원본 Data 참조 유지.
+        let base = data.startIndex   // Data 슬라이스는 startIndex 0 이 아닐 수 있음
+        let total = data.count
         let maxEntries = 65_536
         func i32(_ o: Int) throws -> Int {
-            guard o >= 0, o + 4 <= b.count else { throw ScenePackageError.malformed }
-            return Int(UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24)
+            guard o >= 0, o + 4 <= total else { throw ScenePackageError.malformed }
+            let i = base + o
+            return Int(UInt32(data[i]) | UInt32(data[i + 1]) << 8 | UInt32(data[i + 2]) << 16 | UInt32(data[i + 3]) << 24)
         }
         var p = 0
         let vlen = try i32(p); p += 4
-        guard vlen >= 0, p + vlen <= b.count else { throw ScenePackageError.malformed }
+        guard vlen >= 0, p + vlen <= total else { throw ScenePackageError.malformed }
         p += vlen
         let count = try i32(p); p += 4
         guard count >= 0, count <= maxEntries else { throw ScenePackageError.malformed }
@@ -49,15 +53,15 @@ public struct ScenePackage {
         entries.reserveCapacity(count)
         for _ in 0..<count {
             let nlen = try i32(p); p += 4
-            guard nlen >= 0, p + nlen <= b.count else { throw ScenePackageError.malformed }
-            let name = String(decoding: b[p..<p + nlen], as: UTF8.self); p += nlen
+            guard nlen >= 0, p + nlen <= total else { throw ScenePackageError.malformed }
+            let name = String(decoding: data[(base + p)..<(base + p + nlen)], as: UTF8.self); p += nlen
             let off = try i32(p); p += 4
             let sz = try i32(p); p += 4
             entries.append(Entry(name: name, offset: off, size: sz))
         }
         let blobBase = p
         for e in entries {
-            guard e.offset >= 0, e.size >= 0, blobBase + e.offset + e.size <= b.count else {
+            guard e.offset >= 0, e.size >= 0, blobBase + e.offset + e.size <= total else {
                 throw ScenePackageError.malformed
             }
         }

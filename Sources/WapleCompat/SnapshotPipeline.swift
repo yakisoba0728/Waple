@@ -67,7 +67,7 @@ enum SnapshotPipeline {
 
     static func runCapture(root: String, outDir: URL, label: String?) -> Int32 {
         let start = Date()
-        let sha = gitSHA(root: root)
+        let sha = gitSHA()
         let lbl = label ?? sha
         let dst = outDir.appendingPathComponent(lbl, isDirectory: true)
         let thumbs = dst.appendingPathComponent("thumbs", isDirectory: true)
@@ -91,6 +91,10 @@ enum SnapshotPipeline {
                     guard case let .pixels(rgba1, png1) = try captureFrame(project: project, into: tmp) else {
                         empties.append(id); return
                     }
+                    // 썸네일 복사는 2차 캡처 전에 — 캡처 파일명이 고정(frame_t6.0.png)이라 셀프체크가
+                    // png1 을 덮어쓰면 썸네일(2차)과 manifest hash/meanLuma(1차 rgba1)가 영구 불일치.
+                    try? fm.removeItem(at: thumbs.appendingPathComponent("\(id).png"))
+                    try? fm.copyItem(at: png1, to: thumbs.appendingPathComponent("\(id).png"))
                     // 셀프체크: 독립 재마운트로 두 번째 캡처 → 프레임 산출 씬만 2× (empty/fail 은 1×).
                     var deterministic = true, selfMax = 0, note: String? = nil
                     if case let .pixels(rgba2, _) = (try? captureFrame(project: project, into: tmp)) ?? .empty {
@@ -101,8 +105,6 @@ enum SnapshotPipeline {
                     } else {
                         deterministic = false; note = "second capture empty"; nonDet.append(id)
                     }
-                    try? fm.removeItem(at: thumbs.appendingPathComponent("\(id).png"))
-                    try? fm.copyItem(at: png1, to: thumbs.appendingPathComponent("\(id).png"))
                     entries.append(SnapshotEntry(id: id, width: thumbW, height: thumbH,
                                                  hash: fnv1a(rgba1), meanLuma: meanLuma(rgba: rgba1),
                                                  deterministic: deterministic, selfMaxDiff: selfMax, note: note))
@@ -149,8 +151,9 @@ enum SnapshotPipeline {
         return { SceneRenderSettings.fitMode = oldFit; BaseAssetsSettings.baseAssetsDirectory = oldBase }
     }
 
-    /// cwd 의 git HEAD 단축 sha(레이블 기본값용). 리포 밖에서 실행하면 "unknown" — 그럴 땐 --label 로 지정.
-    static func gitSHA(root: String) -> String {
+    /// cwd 의 git HEAD 단축 sha(레이블 기본값용 — 코드 리포 버전이 의도, 코퍼스 root 와 무관).
+    /// 리포 밖에서 실행하면 "unknown" — 그럴 땐 --label 로 지정.
+    static func gitSHA() -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         p.arguments = ["rev-parse", "--short", "HEAD"]
