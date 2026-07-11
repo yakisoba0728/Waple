@@ -233,7 +233,7 @@ git commit -m "기능(ui): preview.gif 네이티브 애니 컴포넌트 (WE식 �
 - Consumes: `LibraryViewModel.screens/assignedEntryTitle(forScreen:)/assign(_:toScreen:)/clearAssignment(forScreen:)/focusedEntry` (Task 1)
 - Produces: `DisplayDiagramLayout.rects(screenFrames:container:padding:) -> [CGRect]` (입력 순서 보존), `struct DisplaysTabView: View`
 
-- [ ] **Step 1: 실패하는 테스트** — `Tests/WapleAppTests/DisplayDiagramLayoutTests.swift`
+- [x] **Step 1: 실패하는 테스트** — `Tests/WapleAppTests/DisplayDiagramLayoutTests.swift`
 
 ```swift
 import XCTest
@@ -267,9 +267,9 @@ final class DisplayDiagramLayoutTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: 실패 확인** — `swift test --filter DisplayDiagramLayoutTests 2>&1 | tail -3` → 컴파일 실패.
+- [x] **Step 2: 실패 확인** — `swift test --filter DisplayDiagramLayoutTests 2>&1 | tail -3` → 컴파일 실패.
 
-- [ ] **Step 3: 구현** — `Sources/Waple/DisplaysTabView.swift`
+- [x] **Step 3: 구현** — `Sources/Waple/DisplaysTabView.swift`
 
 ```swift
 import SwiftUI
@@ -357,7 +357,7 @@ struct DisplaysTabView: View {
 }
 ```
 
-- [ ] **Step 4: 통과 확인 + 커밋**
+- [x] **Step 4: 통과 확인 + 커밋**
 
 Run: `swift test --filter DisplayDiagramLayoutTests 2>&1 | tail -3` → PASS(3), `swift build` 에러 0.
 ```bash
