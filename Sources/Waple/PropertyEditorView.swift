@@ -24,7 +24,6 @@ struct PropertyEditorView: View {
                     viewModel.resetProperties(for: entry)
                     props = viewModel.editableProperties(for: entry)
                 }
-                Button("닫기") { viewModel.propertyEditorEntry = nil }
             }
             .padding()
             Divider()
@@ -43,7 +42,6 @@ struct PropertyEditorView: View {
                 }
             }
         }
-        .frame(minWidth: 420, minHeight: 320)
         .onAppear { props = viewModel.editableProperties(for: entry) }
         .onChange(of: focusedText) { newValue in
             for i in dirtyText where i != newValue { commitDirtyText(i) }   // 포커스 이탈 커밋

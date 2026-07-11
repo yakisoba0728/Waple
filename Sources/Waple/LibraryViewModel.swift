@@ -7,9 +7,6 @@ import WapleRender
 final class LibraryViewModel: ObservableObject {
     @Published private(set) var entries: [LibraryEntry] = []
     @Published var selectedId: String?
-    /// 속성 편집 시트 대상(nil = 닫힘).
-    @Published var propertyEditorEntry: LibraryEntry?
-
     // MARK: - 브라우즈 상태(메인창 UI) — selectedId(=적용됨)와 구분되는 패널 포커스.
     @Published var focusedId: String?
     @Published var searchText = ""

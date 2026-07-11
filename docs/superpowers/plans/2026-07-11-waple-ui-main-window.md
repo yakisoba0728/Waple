@@ -574,11 +574,11 @@ git commit -m "기능(ui): WE식 그리드 타일 — 클릭 선택/더블클릭
 - Consumes: `focusedEntry/apply/isSupported/previewURL/screens/assign/togglePlaylist/isInPlaylist/onOpenInteraction` (Task 1·4), `AnimatedPreviewView` (Task 2), `PropertyEditorView(entry:viewModel:)` (기존)
 - Produces: `struct SelectionPanelView: View` (`init(viewModel: LibraryViewModel)`) — 고정폭 300.
 
-- [ ] **Step 1: PropertyEditorView 임베드화** — `Sources/Waple/PropertyEditorView.swift`에서 시트 전용 요소 제거: `body`의 `.frame(minWidth: 420, minHeight: 320)` 을 삭제하고, 상단에 닫기 버튼이 있으면 삭제(패널이 항상 표시). `onDisappear` 커밋 로직(2026-07-11 수정분)은 유지.
+- [x] **Step 1: PropertyEditorView 임베드화** — `Sources/Waple/PropertyEditorView.swift`에서 시트 전용 요소 제거: `body`의 `.frame(minWidth: 420, minHeight: 320)` 을 삭제하고, 상단에 닫기 버튼이 있으면 삭제(패널이 항상 표시). `onDisappear` 커밋 로직(2026-07-11 수정분)은 유지.
 
-- [ ] **Step 2: LibraryViewModel에서 `propertyEditorEntry` 제거** — 선언(11행 인근) 삭제. 컴파일러가 잡는 참조(구 LibraryView는 Task 4에서 삭제됨)를 모두 제거.
+- [x] **Step 2: LibraryViewModel에서 `propertyEditorEntry` 제거** — 선언(11행 인근) 삭제. 컴파일러가 잡는 참조(구 LibraryView는 Task 4에서 삭제됨)를 모두 제거.
 
-- [ ] **Step 3: 구현** — `Sources/Waple/SelectionPanelView.swift`
+- [x] **Step 3: 구현** — `Sources/Waple/SelectionPanelView.swift`
 
 ```swift
 import SwiftUI
@@ -664,7 +664,7 @@ struct SelectionPanelView: View {
 }
 ```
 
-- [ ] **Step 4: 빌드·테스트 + 커밋**
+- [x] **Step 4: 빌드·테스트 + 커밋**
 
 Run: `swift build 2>&1 | tail -2` → 에러 0. `swift test --filter WapleAppTests 2>&1 | tail -3` → PASS.
 ```bash
