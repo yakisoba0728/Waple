@@ -1009,42 +1009,16 @@ extension SceneDocument {
 
     /// 바인딩 객체 {"animation":..., "value": X} → X(정적 값), 아니면 원값.
     /// 실물 씬은 origin/alpha 등 대부분의 프로퍼티에 이 형태를 쓴다(애니메이션 재생은 후속 기능).
-    private static func unwrap(_ v: Any?) -> Any? {
-        if let d = v as? [String: Any], let inner = d["value"] { return inner }
-        return v
-    }
+    /// (공용 JSONNumerics 위임 — 씬 규약: {value} 언랩 경유 + 문자열 숫자 관용)
+    private static func unwrap(_ v: Any?) -> Any? { unwrapValue(v) }
     private static func floats(_ v: Any?) -> [Float] {
         floatList((unwrap(v) as? String) ?? "")
     }
-    private static func floatList(_ s: String) -> [Float] {
-        s.split(separator: " ").compactMap { safeFloat(String($0)) }
-    }
     private static func float(_ v: Any?) -> Float? {
-        let u = unwrap(v)
-        if let d = u as? Double { return safeFloat(d) }
-        if let i = u as? Int { return Float(i) }
-        if let s = u as? String { return safeFloat(s) }   // 문자열 숫자 관용(문자열 id 씬과 동급 방어)
-        return nil
+        lenientFloat(unwrap(v))   // 문자열 숫자 관용(문자열 id 씬과 동급 방어)
     }
     private static func intVal(_ v: Any?) -> Int? {
-        let u = unwrap(v)
-        if let i = u as? Int { return i }
-        if let d = u as? Double { return safeInt(d) }
-        if let s = u as? String { return Int(s) }   // 실물 3577990983: id/parent 가 "35" 문자열 타입
-        return nil
-    }
-    private static func safeFloat(_ s: String) -> Float? {
-        guard let f = Float(s), f.isFinite else { return nil }
-        return f
-    }
-    private static func safeFloat(_ d: Double) -> Float? {
-        guard d.isFinite, d >= -Double(Float.greatestFiniteMagnitude),
-              d <= Double(Float.greatestFiniteMagnitude) else { return nil }
-        return Float(d)
-    }
-    private static func safeInt(_ d: Double) -> Int? {
-        guard d.isFinite, d >= Double(Int.min), d < Double(Int.max) else { return nil }
-        return Int(d)
+        lenientInt(unwrap(v))   // 실물 3577990983: id/parent 가 "35" 문자열 타입
     }
     private static func vec2(_ v: Any?) -> Vec2? {
         let f = floats(v); return f.count >= 2 ? Vec2(x: f[0], y: f[1]) : nil

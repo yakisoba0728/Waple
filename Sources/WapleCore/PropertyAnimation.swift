@@ -142,11 +142,9 @@ public struct PropertyAnimation: Equatable {
     /// 바인딩 딕셔너리 {"animation": {...}, "value": ...} → PropertyAnimation. 형식 이상 → nil.
     public static func parse(_ binding: [String: Any]) -> PropertyAnimation? {
         guard let a = binding["animation"] as? [String: Any] else { return nil }
-        func f(_ v: Any?) -> Float? {
-            if let d = v as? Double { return Float(d) }
-            if let i = v as? Int { return Float(i) }
-            return nil
-        }
+        // 공용 유한-검사 파서(Double/Int 만 — 키프레임 규약). NaN/Inf/Float 범위 밖 → nil → 바인딩 드롭.
+        // (종전 로컬 구현은 isFinite 미검사였으나 JSON 표준상 NaN/Inf 리터럴 불가라 실입력 도달 희박.)
+        func f(_ v: Any?) -> Float? { strictFloat(v) }
         func keyframes(_ arr: Any?) -> [PropertyKeyframe]? {
             guard let list = arr as? [[String: Any]] else { return nil }
             var out: [PropertyKeyframe] = []
