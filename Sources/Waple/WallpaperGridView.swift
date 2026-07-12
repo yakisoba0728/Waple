@@ -15,12 +15,13 @@ private enum PreviewImageCache {
     }
 }
 
-/// 설치됨 탭 좌측 그리드: 클릭=선택(패널), 더블클릭=적용, 호버=gif 재생+제목. WE 브라우저 재현.
+/// 네이티브 그리드: underPage 우물 + 라운드 썸네일 타일(제목 아래) + 호버 라이브 프리뷰/리프트 +
+/// 적용 중 액센트 링. 클릭=선택, 더블클릭=적용(기존 UX 유지).
 struct WallpaperGridView: View {
     @ObservedObject var viewModel: LibraryViewModel
     @State private var hoveredId: String?
 
-    private let columns = [GridItem(.adaptive(minimum: 180), spacing: 12)]
+    private let columns = [GridItem(.adaptive(minimum: Layout.tileWidth), spacing: Layout.gridSpacing)]
 
     var body: some View {
         Group {
@@ -28,28 +29,31 @@ struct WallpaperGridView: View {
                 emptyState
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 12) {
+                    LazyVGrid(columns: columns, spacing: Layout.gridSpacing + 6) {
                         ForEach(viewModel.filteredEntries, id: \.id) { entry in
                             tile(for: entry)
                         }
                     }
-                    .padding(12)
+                    .padding(20)
                 }
-                .background(WETheme.Colors.window)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .underPageBackgroundColor))
         .onDrop(of: [.fileURL], isTargeted: nil) { handleDrop($0) }
     }
 
-    @ViewBuilder
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Text("라이브러리가 비어 있습니다").font(.title3)
-            Text("Wallpaper Engine 폴더·zip·동영상을 드래그하거나 가져오세요.").foregroundColor(.secondary)
-            Button("폴더 가져오기…") { importFolder() }
+            Image(systemName: "photo.stack").font(.system(size: 44)).foregroundStyle(.tertiary)
+            Text("라이브러리가 비어 있습니다").font(.title3.weight(.semibold))
+            Text("Wallpaper Engine 폴더·zip·동영상을 드래그하거나 가져오세요")
+                .font(.callout).foregroundStyle(.secondary)
+            Button("배경화면 가져오기…") { importFolder() }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("o")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WETheme.Colors.window)
     }
 
     @ViewBuilder
@@ -58,27 +62,42 @@ struct WallpaperGridView: View {
         let focused = viewModel.focusedId == entry.id
         let applied = viewModel.selectedId == entry.id
         let hovered = hoveredId == entry.id
-        ZStack(alignment: .bottomLeading) {
-            preview(for: entry, animating: hovered)
-                .frame(height: 110).frame(maxWidth: .infinity).clipped()
-            // 하단 그라데이션 + 제목(WE 타일) — 호버/포커스에서만 노출.
-            if hovered || focused {
-                LinearGradient(colors: [.clear, .black.opacity(0.75)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 44).frame(maxHeight: .infinity, alignment: .bottom)
-                Text(entry.title).font(.caption).bold().foregroundColor(.white)
-                    .lineLimit(1).padding(6)
+
+        VStack(alignment: .leading, spacing: 6) {
+            ZStack {
+                preview(for: entry, animating: hovered)
+                    .frame(height: Layout.tileThumbHeight)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
             }
-            // 타입/상태 뱃지(우상단)
-            VStack(alignment: .trailing, spacing: 3) {
-                badge(badgeText(for: entry, supported: supported), color: supported ? Color.accentColor : .gray)
-                if applied { badge("적용됨", color: .green) }
+            .clipShape(RoundedRectangle(cornerRadius: Layout.tileCorner))
+            .overlay(
+                RoundedRectangle(cornerRadius: Layout.tileCorner)
+                    .stroke(applied ? Color.accentColor : (focused ? Color.secondary.opacity(0.6) : .clear),
+                            lineWidth: applied ? 2.5 : 1.5)
+            )
+            .overlay(alignment: .topTrailing) { typeBadge(for: entry, supported: supported) }
+            .overlay(alignment: .bottomLeading) {
+                if applied {
+                    Image(systemName: "play.circle.fill")
+                        .font(.body)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.accentColor)
+                        .padding(6)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(5)
+            .saturation(supported ? 1 : 0.4)
+            .opacity(supported ? 1 : 0.55)
+
+            Text(entry.title)
+                .font(.caption)
+                .foregroundStyle(focused ? .primary : .secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 2)
         }
-        .cornerRadius(8)
-        .opacity(supported ? 1.0 : 0.5)
-        .overlay(RoundedRectangle(cornerRadius: 8)
-            .stroke(focused ? Color.accentColor : (applied ? Color.green.opacity(0.7) : Color.clear), lineWidth: 2))
+        .scaleEffect(hovered ? 1.02 : 1)
+        .shadow(color: .black.opacity(hovered ? 0.45 : 0), radius: 9, y: 5)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: hovered)
         .contentShape(Rectangle())
         .onHover { hoveredId = $0 ? entry.id : (hoveredId == entry.id ? nil : hoveredId) }
         .onTapGesture(count: 2) { if supported { _ = viewModel.apply(entry) } }
@@ -86,16 +105,25 @@ struct WallpaperGridView: View {
         .contextMenu { contextMenu(for: entry, supported: supported) }
     }
 
-    private func badge(_ text: String, color: Color) -> some View {
-        Text(text).font(.caption2)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(color).foregroundColor(.white).cornerRadius(4)
+    private func typeBadge(for entry: LibraryEntry, supported: Bool) -> some View {
+        Label(supported ? NowPlayingSubtitle.typeLabel(entry.typeRaw) : "지원 예정",
+              systemImage: typeSymbol(entry.typeRaw))
+            .font(.caption2)
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(6)
     }
 
-    private func badgeText(for entry: LibraryEntry, supported: Bool) -> String {
-        guard supported else { return "지원 예정" }
-        let type = WallpaperType.from(entry.typeRaw)
-        return type == .scene ? "scene · 부분" : type.storageString
+    private func typeSymbol(_ raw: String) -> String {
+        switch WallpaperType.from(raw) {
+        case .scene: return "sparkles"
+        case .video: return "play.rectangle.fill"
+        case .web: return "globe"
+        case .preset: return "square.stack"
+        case .application, .unknown: return "questionmark.circle"
+        }
     }
 
     @ViewBuilder
@@ -106,10 +134,17 @@ struct WallpaperGridView: View {
             } else if let image = PreviewImageCache.image(url) {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
-                Rectangle().fill(Color.gray.opacity(0.3))
+                placeholderThumb
             }
         } else {
-            Rectangle().fill(Color.gray.opacity(0.3))
+            placeholderThumb
+        }
+    }
+
+    private var placeholderThumb: some View {
+        ZStack {
+            Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.3))
+            Image(systemName: "photo").foregroundStyle(.tertiary)
         }
     }
 
@@ -138,7 +173,7 @@ struct WallpaperGridView: View {
         }
     }
 
-    // MARK: 임포트(기존 LibraryView에서 이동 — 로직 무변경)
+    // MARK: 임포트(로직 무변경)
 
     func importFolder() {
         let panel = NSOpenPanel()
