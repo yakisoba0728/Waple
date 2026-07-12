@@ -16,6 +16,12 @@ struct AnimatedPreviewView: NSViewRepresentable {
         v.imageScaling = .scaleProportionallyUpOrDown
         v.animates = animating
         v.image = NSImage(contentsOf: url)
+        // 고유 크기(원본 픽셀)가 SwiftUI 프레임을 밀어내지 않게 — LazyVGrid 셀 폭이
+        // gif 원본 폭으로 부풀어 타일 폭이 불균일해지는 오버플로 방지(SP1′ 판정 캡처 실측).
+        v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        v.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        v.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        v.setContentHuggingPriority(.defaultLow, for: .vertical)
         return v
     }
 
