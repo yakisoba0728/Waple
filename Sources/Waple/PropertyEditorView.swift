@@ -5,6 +5,25 @@ import WapleLibrary
 
 extension LibraryEntry: Identifiable {}
 
+/// 속성 라벨 표시(순수): HTML 태그 제거 + 미번역 로컬라이즈 키(ui_*/스네이크 케이스) 정돈.
+enum PropertyLabel {
+    static func pretty(text: String?, key: String) -> String {
+        var raw = (text?.isEmpty == false ? text! : key)
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // 미번역 키 감지: 공백 없이 [a-z0-9_] 만이고 '_' 포함 — 접두 제거 후 사람이 읽게.
+        let keyLike = raw.range(of: #"^[a-z0-9_]+$"#, options: .regularExpression) != nil && raw.contains("_")
+        guard keyLike else { return raw }
+        for prefix in ["ui_browse_properties_", "ui_properties_", "ui_"] where raw.hasPrefix(prefix) {
+            raw = String(raw.dropFirst(prefix.count))
+            break
+        }
+        let words = raw.split(separator: "_").map(String.init)
+        guard let first = words.first else { return raw }
+        return ([first.prefix(1).uppercased() + first.dropFirst()] + words.dropFirst()).joined(separator: " ")
+    }
+}
+
 /// 배경별 유저 속성 편집 시트(WE 속성 패널 대응). 변경 즉시 저장 + 현재 배경이면 재적용.
 struct PropertyEditorView: View {
     let entry: LibraryEntry
@@ -17,16 +36,6 @@ struct PropertyEditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("\(entry.title) — 속성").font(.headline)
-                Spacer()
-                Button("초기화") {
-                    viewModel.resetProperties(for: entry)
-                    props = viewModel.editableProperties(for: entry)
-                }
-            }
-            .padding()
-            Divider()
             if props.isEmpty {
                 Spacer()
                 Text("이 배경에는 편집 가능한 속성이 없습니다.").foregroundColor(.secondary)
@@ -56,10 +65,7 @@ struct PropertyEditorView: View {
     }
 
     private func label(_ p: WallpaperProperty) -> String {
-        // WE 라벨은 HTML 조각을 담기도 한다 — 태그 제거해 평문 표시.
-        let raw = p.text ?? p.key
-        return raw.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        PropertyLabel.pretty(text: p.text, key: p.key)
     }
 
     private func commit(_ i: Int, _ value: PropertyValue) {
