@@ -23,6 +23,7 @@ enum MainTab: String, CaseIterable {
 /// WE 2.8.42 셸: 타이틀 스트립 → 탭줄 → (탭 콘텐츠) → 하단 바. 수치는 전부 WETheme.
 struct MainWindowView: View {
     @ObservedObject var viewModel: LibraryViewModel
+    @ObservedObject var banner: StatusBannerModel
     var screenFrames: () -> [CGRect]
     @State private var tab: MainTab = .installed
     @State private var showDisplays = false
@@ -40,6 +41,7 @@ struct MainWindowView: View {
         }
         .background(WETheme.Colors.window)
         .ignoresSafeArea()   // fullSizeContentView — 타이틀바 영역까지 우리가 그린다
+        .overlay(alignment: .top) { WEStatusBanner(model: banner) }
         .sheet(isPresented: $showDisplays) {
             DisplaysTabView(viewModel: viewModel, screenFrames: screenFrames)
                 .frame(minWidth: 900, minHeight: 560)

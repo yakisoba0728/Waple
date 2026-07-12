@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let playlistStore = PlaylistStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private var playlistTimer: Timer?
     private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore)
+    private let bannerModel = StatusBannerModel()
     private var libraryWindow: NSWindow?
     private weak var fitMenu: NSMenu?
     private weak var playlistMenu: NSMenu?
@@ -246,7 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openLibrary() {
         if libraryWindow == nil {
-            let root = MainWindowView(viewModel: libraryVM,
+            let root = MainWindowView(viewModel: libraryVM, banner: bannerModel,
                                       screenFrames: { NSScreen.screens.map(\.frame) })
             let hosting = NSHostingController(rootView: root)
             let window = NSWindow(contentViewController: hosting)
@@ -578,6 +579,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func notify(_ message: String) {
         NSLog("%@", "[Waple] \(message)")
+        if let w = libraryWindow, w.isVisible {
+            bannerModel.show(message)
+        }
     }
 }
 
