@@ -167,6 +167,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 가림 자동 일시정지 폴링 시작(꺼져 있으면 no-op).
         scheduleOcclusionTimer()
+
+        // 스모크 확인용: 실행 시 메인창 자동 오픈(WAPLE_SMOKE=1). 평상시 no-op.
+        if ProcessInfo.processInfo.environment["WAPLE_SMOKE"] != nil {
+            DispatchQueue.main.async { [weak self] in self?.openLibrary() }
+        }
     }
 
     /// WE 기본(공유) 에셋 팩 폴더 선택. 일부 씬은 패키지에 없는 공유 텍스처(particle/halo 등)를
@@ -246,8 +251,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let hosting = NSHostingController(rootView: root)
             let window = NSWindow(contentViewController: hosting)
             window.title = "Waple"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.setContentSize(NSSize(width: 1100, height: 700))
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.backgroundColor = .weWindowBackground
+            window.setContentSize(NSSize(width: 1456, height: 1000))   // WE 실측 창 크기(실측표 확인)
+            window.minSize = NSSize(width: 1100, height: 700)
             window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
             // 프로그램 생성 NSWindow 는 닫힐 때 기본적으로 release 되어, 강한 참조 프로퍼티가
             // 댕글링되고 재오픈 시 use-after-free 가 된다. 프로퍼티가 수명을 관리하도록 막는다.
