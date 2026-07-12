@@ -20,7 +20,7 @@ struct MainWindowView: View {
     @ObservedObject var banner: StatusBannerModel
     var screenFrames: () -> [CGRect]
     @State private var tab: MainTab = .installed
-    @State private var showDisplays = false
+    @State private var showDisplays = ProcessInfo.processInfo.environment["WAPLE_SMOKE_DISPLAYS"] != nil
     @State private var showFilters = ProcessInfo.processInfo.environment["WAPLE_SMOKE"] != nil  // 스모크 캡처용 기본 노출
     @State private var panelVisible = true
 
@@ -33,15 +33,7 @@ struct MainWindowView: View {
         .overlay(alignment: .top) { StatusBanner(model: banner) }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showDisplays) {
-            VStack(spacing: 0) {
-                DisplaysTabView(viewModel: viewModel, screenFrames: screenFrames)
-                HStack {
-                    Spacer()
-                    Button("닫기") { showDisplays = false }.keyboardShortcut(.cancelAction)
-                }
-                .padding()
-            }
-            .frame(minWidth: 860, minHeight: 540)
+            DisplaysView(viewModel: viewModel, screenFrames: screenFrames)
         }
     }
 

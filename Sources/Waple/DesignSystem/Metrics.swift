@@ -23,4 +23,8 @@ enum Metrics {
     // 창
     static let windowDefault = NSSize(width: 1280, height: 820)
     static let windowMin = NSSize(width: 1024, height: 680)
+    static let displaysMin = NSSize(width: 860, height: 560)
+
+    // 공통 간격
+    static let gap: CGFloat = 8
 }
