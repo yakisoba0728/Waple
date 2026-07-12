@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// 네이티브 재설계 치수 상수. 색 토큰 없음 — 색은 시맨틱 컬러/시스템 재질만 쓴다(스펙 §2).
-enum Layout {
+enum Metrics {
     // 그리드 타일(16:10 썸네일 + 아래 제목)
     static let tileWidth: CGFloat = 200
     static let tileThumbHeight: CGFloat = 125

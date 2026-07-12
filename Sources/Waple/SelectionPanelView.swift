@@ -20,7 +20,7 @@ struct SelectionPanelView: View {
                 }
             }
         }
-        .frame(width: Layout.panelWidth)
+        .frame(width: Metrics.panelWidth)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -39,7 +39,7 @@ struct SelectionPanelView: View {
                         }
                     }
                 }
-                .frame(height: Layout.heroHeight)
+                .frame(height: Metrics.heroHeight)
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 10))

@@ -81,7 +81,7 @@ struct NowPlayingBar: View {
             .help("Wallpaper Engine 폴더·zip·동영상 가져오기")
         }
         .padding(.horizontal, 16)
-        .frame(height: Layout.nowPlayingHeight)
+        .frame(height: Metrics.nowPlayingHeight)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
     }
@@ -98,7 +98,7 @@ struct NowPlayingBar: View {
                     .background(Color(nsColor: .quaternaryLabelColor).opacity(0.3))
             }
         }
-        .frame(width: Layout.nowPlayingThumb, height: Layout.nowPlayingThumb)
+        .frame(width: Metrics.nowPlayingThumb, height: Metrics.nowPlayingThumb)
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 

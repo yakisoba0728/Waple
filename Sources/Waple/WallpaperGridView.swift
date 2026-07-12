@@ -21,7 +21,7 @@ struct WallpaperGridView: View {
     @ObservedObject var viewModel: LibraryViewModel
     @State private var hoveredId: String?
 
-    private let columns = [GridItem(.adaptive(minimum: Layout.tileWidth), spacing: Layout.gridSpacing)]
+    private let columns = [GridItem(.adaptive(minimum: Metrics.tileWidth), spacing: Metrics.gridSpacing)]
 
     var body: some View {
         Group {
@@ -29,7 +29,7 @@ struct WallpaperGridView: View {
                 emptyState
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: Layout.gridSpacing + 6) {
+                    LazyVGrid(columns: columns, spacing: Metrics.gridSpacing + 6) {
                         ForEach(viewModel.filteredEntries, id: \.id) { entry in
                             tile(for: entry)
                         }
@@ -66,13 +66,13 @@ struct WallpaperGridView: View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack {
                 preview(for: entry, animating: hovered)
-                    .frame(height: Layout.tileThumbHeight)
+                    .frame(height: Metrics.tileThumbHeight)
                     .frame(maxWidth: .infinity)
                     .clipped()
             }
-            .clipShape(RoundedRectangle(cornerRadius: Layout.tileCorner))
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.tileCorner))
             .overlay(
-                RoundedRectangle(cornerRadius: Layout.tileCorner)
+                RoundedRectangle(cornerRadius: Metrics.tileCorner)
                     .stroke(applied ? Color.accentColor : (focused ? Color.secondary.opacity(0.6) : .clear),
                             lineWidth: applied ? 2.5 : 1.5)
             )

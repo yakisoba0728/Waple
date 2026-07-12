@@ -169,9 +169,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 가림 자동 일시정지 폴링 시작(꺼져 있으면 no-op).
         scheduleOcclusionTimer()
 
-        // 스모크 확인용: 실행 시 메인창 자동 오픈(WAPLE_SMOKE=1). 평상시 no-op.
+        // 스모크 확인용: 실행 시 메인창 자동 오픈 + 첫 항목 포커스(상세 패널이 채워진 상태로
+        // 캡처되도록 — 판정 게이트용). WAPLE_SMOKE=1 아닐 땐 no-op.
         if ProcessInfo.processInfo.environment["WAPLE_SMOKE"] != nil {
-            DispatchQueue.main.async { [weak self] in self?.openLibrary() }
+            DispatchQueue.main.async { [weak self] in
+                self?.openLibrary()
+                self?.libraryVM.focusedId = self?.libraryVM.entries.first?.id
+            }
         }
     }
 
@@ -257,8 +261,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.title = "Waple"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.toolbarStyle = .unified
-            window.setContentSize(Layout.windowDefault)
-            window.minSize = Layout.windowMin
+            window.setContentSize(Metrics.windowDefault)
+            window.minSize = Metrics.windowMin
             window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
             // 프로그램 생성 NSWindow 는 닫힐 때 기본적으로 release 되어, 강한 참조 프로퍼티가
             // 댕글링되고 재오픈 시 use-after-free 가 된다. 프로퍼티가 수명을 관리하도록 막는다.

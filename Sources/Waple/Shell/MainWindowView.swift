@@ -29,7 +29,7 @@ struct MainWindowView: View {
             content
             NowPlayingBar(viewModel: viewModel)
         }
-        .frame(minWidth: Layout.windowMin.width, minHeight: Layout.windowMin.height)
+        .frame(minWidth: Metrics.windowMin.width, minHeight: Metrics.windowMin.height)
         .overlay(alignment: .top) { StatusBanner(model: banner) }
         .toolbar { toolbarContent }
         .sheet(isPresented: $showDisplays) {
