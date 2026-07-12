@@ -19,7 +19,7 @@ struct SelectionPanelView: View {
             }
         }
         .frame(width: 300)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.6))
+        .background(WETheme.Colors.panel)
     }
 
     @ViewBuilder
