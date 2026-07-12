@@ -25,13 +25,14 @@ struct MainWindowView: View {
     @State private var tab: MainTab = .installed
     @State private var showDisplays = false
     @State private var panelVisible = true
+    @State private var showFilterPopover = false
 
     var body: some View {
         VStack(spacing: 0) {
             titleStrip
             tabRow
+            if tab == .installed { searchRow }
             content
-            // 하단 바는 Task 7에서 추가
         }
         .background(WETheme.Colors.window)
         .ignoresSafeArea()   // fullSizeContentView — 타이틀바 영역까지 우리가 그린다
@@ -91,6 +92,42 @@ struct MainWindowView: View {
         .padding(.horizontal, WETheme.Metrics.hPad)
         .frame(height: WETheme.Metrics.tabRowH)
         .background(WETheme.Colors.tabRow)
+    }
+
+    private var searchRow: some View {
+        HStack(spacing: WETheme.Metrics.gap) {
+            WESearchField(text: $viewModel.searchText)
+                .frame(width: 240)
+            Button {
+                showFilterPopover.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                    Text("필터 적용 결과")
+                }
+            }
+            .buttonStyle(WEButtonStyle(kind: .accent))
+            .popover(isPresented: $showFilterPopover) {
+                // 임시(SP2에서 필터 사이드바로 대체): 기존 타입 필터만 노출해 기능 무후퇴.
+                Picker("유형", selection: $viewModel.typeFilter) {
+                    ForEach(LibraryTypeFilter.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+                .padding()
+                .background(WETheme.Colors.panel)
+            }
+            Spacer()
+            Button {} label: { Image(systemName: "arrowtriangle.up.fill").font(.system(size: 9)) }
+                .buttonStyle(WEButtonStyle(kind: .toolbar))
+                .disabled(true).opacity(0.55)
+                .help("정렬 방향은 SP2에서 제공됩니다")
+            WEComboBox(selection: $viewModel.sortOrder,
+                       options: Array(LibrarySortOrder.allCases),
+                       label: { $0 == .name ? "이름" : "최근 추가순" })
+        }
+        .padding(.horizontal, WETheme.Metrics.hPad)
+        .frame(height: WETheme.Metrics.searchRowH)
+        .background(WETheme.Colors.window)
     }
 
     @ViewBuilder
