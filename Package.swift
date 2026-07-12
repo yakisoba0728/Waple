@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Waple",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     targets: [
         .target(name: "WapleCore"),
         .target(name: "WapleLibrary", dependencies: ["WapleCore"]),

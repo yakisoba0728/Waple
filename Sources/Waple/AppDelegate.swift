@@ -254,9 +254,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let root = MainWindowView(viewModel: libraryVM, banner: bannerModel,
                                       screenFrames: { NSScreen.screens.map(\.frame) })
             let hosting = NSHostingController(rootView: root)
-            // SwiftUI .toolbar → NSToolbar 브리징. sceneBridgingOptions 는 macOS 14+ 전용이라
-            // 배포 타깃(macOS 13)에서 무조건 호출 불가 → 가용성 가드(13에서는 미브리징, 스펙 폴백).
-            if #available(macOS 14, *) { hosting.sceneBridgingOptions = [.toolbars] }
+            // SwiftUI .toolbar → NSToolbar 브리징(macOS 14+ 전용 — 그래서 배포 타깃도 14).
+            hosting.sceneBridgingOptions = [.toolbars]
             let window = NSWindow(contentViewController: hosting)
             window.title = "Waple"
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

@@ -40,7 +40,7 @@ Engine 워크샵 프로젝트(`scene.pkg`, 동영상, 웹, 이미지)를 데스�
 
 ## 요구 사항
 
-- macOS 13 이상, Apple Silicon
+- macOS 14 이상, Apple Silicon (화면보호기 번들은 13+)
 - Swift 5.9 이상 toolchain (Xcode command line tools)
 - 선택: `.webm`/`.mkv`/`.avi` 변환용 `ffmpeg` (`brew install ffmpeg`)
 
