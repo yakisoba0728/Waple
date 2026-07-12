@@ -149,6 +149,14 @@ public final class LibraryStore {
         save()
     }
 
+    /// 엔트리 제거(파일은 건드리지 않음 — 인덱스 등록 해제). 선택 중이었으면 선택 해제.
+    /// 스토어 간 orphan 정리는 호출자(LibraryViewModel.remove)가 오케스트레이션한다.
+    public func remove(id: String) {
+        entries.removeAll { $0.id == id }
+        if selectedId == id { selectedId = nil }
+        save()
+    }
+
     public func resolveFolderURL(for entry: LibraryEntry) -> URL? {
         var stale = false
         let resolved: URL

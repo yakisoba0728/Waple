@@ -28,7 +28,9 @@ final class LibraryViewModelTests: XCTestCase {
     private func makeVM(dir: URL) -> LibraryViewModel {
         LibraryViewModel(store: LibraryStore(baseDirectory: dir),
                          playlist: PlaylistStore(baseDirectory: dir),
-                         monitors: MonitorAssignmentStore(baseDirectory: dir))
+                         monitors: MonitorAssignmentStore(baseDirectory: dir),
+                         favorites: FavoritesStore(baseDirectory: dir),
+                         folders: FolderStore(baseDirectory: dir))
     }
 
     // MARK: - 재생목록 토글
@@ -137,7 +139,9 @@ final class LibraryViewModelTests: XCTestCase {
         store.importParent(corpus)
         let vm = LibraryViewModel(store: store,
                                   playlist: PlaylistStore(baseDirectory: storeDir),
-                                  monitors: MonitorAssignmentStore(baseDirectory: storeDir))
+                                  monitors: MonitorAssignmentStore(baseDirectory: storeDir),
+                                  favorites: FavoritesStore(baseDirectory: storeDir),
+                                  folders: FolderStore(baseDirectory: storeDir))
         let presetEntry = try XCTUnwrap(vm.entries.first { $0.id == "preset1" })
 
         let props = vm.editableProperties(for: presetEntry)

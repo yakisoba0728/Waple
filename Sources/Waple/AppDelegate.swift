@@ -17,8 +17,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = LibraryStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private let monitorStore = MonitorAssignmentStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private let playlistStore = PlaylistStore(baseDirectory: LibraryStore.defaultBaseDirectory())
+    private let favoritesStore = FavoritesStore(baseDirectory: LibraryStore.defaultBaseDirectory())
+    private let folderStore = FolderStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private var playlistTimer: Timer?
-    private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore)
+    private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore,
+                                                  favorites: favoritesStore, folders: folderStore)
     private let bannerModel = StatusBannerModel()
     private var libraryWindow: NSWindow?
     private weak var fitMenu: NSMenu?

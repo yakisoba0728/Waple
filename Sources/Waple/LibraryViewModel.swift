@@ -29,6 +29,8 @@ final class LibraryViewModel: ObservableObject {
     private let store: LibraryStore
     let playlist: PlaylistStore
     let monitors: MonitorAssignmentStore
+    let favorites: FavoritesStore
+    let folders: FolderStore
 
     /// 화면 목록 제공(키+표시명) — AppDelegate 주입.
     var screensProvider: (() -> [(key: String, name: String)])?
@@ -44,10 +46,13 @@ final class LibraryViewModel: ObservableObject {
     var onTogglePause: (() -> Bool)?
     @Published var isPaused = false
 
-    init(store: LibraryStore, playlist: PlaylistStore, monitors: MonitorAssignmentStore) {
+    init(store: LibraryStore, playlist: PlaylistStore, monitors: MonitorAssignmentStore,
+         favorites: FavoritesStore, folders: FolderStore) {
         self.store = store
         self.playlist = playlist
         self.monitors = monitors
+        self.favorites = favorites
+        self.folders = folders
         self.entries = store.entries
         self.selectedId = store.selectedId
     }
@@ -79,6 +84,31 @@ final class LibraryViewModel: ObservableObject {
     func assignedEntryTitle(forScreen key: String) -> String? {
         guard let id = monitors.assignment(for: key) else { return nil }
         return entries.first(where: { $0.id == id })?.title
+    }
+
+    // MARK: - 즐겨찾기/제거
+
+    func isFavorite(_ entry: LibraryEntry) -> Bool { favorites.isFavorite(entry.id) }
+
+    func toggleFavorite(_ entry: LibraryEntry) {
+        favorites.toggle(entry.id)
+        objectWillChange.send()
+    }
+
+    /// 라이브러리에서 제거(파일 보존) + 전 스토어 orphan 정리. 적용 중 배경은 계속 재생된다
+    /// (렌더러는 폴더를 직접 들고 있음) — Now Playing 표시는 '적용된 배경 없음'으로 떨어진다.
+    func remove(_ entry: LibraryEntry) {
+        let hadAssignment = monitors.all.values.contains(entry.id)
+        store.remove(id: entry.id)
+        playlist.remove(entry.id)
+        monitors.removeAssignments(entryId: entry.id)
+        favorites.remove(entry.id)
+        folders.removeEntry(entry.id)
+        entries = store.entries
+        if selectedId == entry.id { selectedId = nil }
+        if focusedId == entry.id { focusedId = nil }
+        onPlaylistChanged?()
+        if hadAssignment { onAssignmentsChanged?() }
     }
 
     func importParent(_ url: URL) {
