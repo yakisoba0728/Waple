@@ -10,11 +10,28 @@ final class LibraryViewModel: ObservableObject {
     // MARK: - 브라우즈 상태(메인창 UI) — selectedId(=적용됨)와 구분되는 패널 포커스.
     @Published var focusedId: String?
     @Published var searchText = ""
-    @Published var typeFilter: LibraryTypeFilter = .all
+    @Published var criteria = LibraryFilterCriteria()
+    @Published var activeFolder: String?
     @Published var sortOrder: LibrarySortOrder = .recentFirst
 
     var filteredEntries: [LibraryEntry] {
-        LibraryFiltering.apply(entries, search: searchText, type: typeFilter, sort: sortOrder)
+        // 필터/검색 활성 시 폴더 스코프를 벗어나 전체에서 찾는다(사이드바 폴더 타일도 이때 숨김).
+        let scopeAll = activeFolder == nil && (!searchText.isEmpty || criteria.isActive)
+        let scoped = scopeAll ? entries
+            : LibraryFolders.visible(entries: entries, folders: folders.folders, active: activeFolder).entries
+        return LibraryFiltering.apply(scoped, search: searchText, criteria: criteria,
+                                      sort: sortOrder, isFavorite: { self.favorites.isFavorite($0) })
+    }
+    /// 루트에서만 노출되는 폴더 타일 목록(검색/필터 중엔 숨김 — 결과에 집중).
+    var visibleFolders: [FolderStore.Folder] {
+        guard activeFolder == nil, searchText.isEmpty, !criteria.isActive else { return [] }
+        return folders.folders
+    }
+    var availableTags: [String] {
+        Array(Set(entries.flatMap { $0.tags ?? [] })).sorted()
+    }
+    var availableRatings: [String] {
+        Array(Set(entries.compactMap(\.contentRating))).sorted()
     }
     var focusedEntry: LibraryEntry? { entries.first { $0.id == focusedId } }
     /// 하단 바 "현재:" 표시용 — 적용된(selectedId) 배경 제목.
@@ -92,6 +109,11 @@ final class LibraryViewModel: ObservableObject {
 
     func toggleFavorite(_ entry: LibraryEntry) {
         favorites.toggle(entry.id)
+        objectWillChange.send()
+    }
+
+    func moveToFolder(_ entry: LibraryEntry, folder: String?) {
+        folders.move(entry.id, to: folder)
         objectWillChange.send()
     }
 

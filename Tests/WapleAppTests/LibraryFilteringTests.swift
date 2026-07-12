@@ -3,31 +3,55 @@ import WapleLibrary
 @testable import Waple
 
 final class LibraryFilteringTests: XCTestCase {
-    private func entry(_ id: String, _ title: String, _ type: String) -> LibraryEntry {
-        LibraryEntry(id: id, title: title, typeRaw: type, fileName: nil, previewName: nil, bookmark: Data())
+    private func entry(_ id: String, _ title: String, _ type: String,
+                       tags: [String] = [], rating: String? = nil) -> LibraryEntry {
+        LibraryEntry(id: id, title: title, typeRaw: type, fileName: nil, previewName: nil,
+                     bookmark: Data(), tags: tags, contentRating: rating)
     }
     private var sample: [LibraryEntry] {
-        [entry("1", "바다", "scene"), entry("2", "Alps", "video"), entry("3", "네온", "web"),
-         entry("4", "바다 야경", "video")]
+        [entry("1", "바다", "scene", tags: ["Nature"], rating: "Everyone"),
+         entry("2", "Alps", "video", tags: ["Nature", "4K"], rating: "Everyone"),
+         entry("3", "네온", "web", tags: ["City"], rating: "Mature"),
+         entry("4", "바다 야경", "video", tags: ["City"])]
+    }
+    private func apply(_ search: String = "", _ c: LibraryFilterCriteria = .init(),
+                       sort: LibrarySortOrder = .recentFirst,
+                       favorites: Set<String> = []) -> [String] {
+        LibraryFiltering.apply(sample, search: search, criteria: c, sort: sort,
+                               isFavorite: { favorites.contains($0) }).map(\.id)
     }
 
-    func testRecentFirstIsReversedInsertionOrder() {
-        let out = LibraryFiltering.apply(sample, search: "", type: .all, sort: .recentFirst)
-        XCTAssertEqual(out.map(\.id), ["4", "3", "2", "1"])
+    func testNoCriteriaKeepsAll() { XCTAssertEqual(apply(), ["4", "3", "2", "1"]) }
+    func testNameSortLocaleIndependent() {
+        XCTAssertEqual(apply("", .init(), sort: .name), ["2", "3", "1", "4"])  // Alps, 네온, 바다, 바다 야경
     }
-    func testNameSortUsesLocalizedCompare() {
-        let out = LibraryFiltering.apply(sample, search: "", type: .all, sort: .name)
-        XCTAssertEqual(out.map(\.title), ["Alps", "네온", "바다", "바다 야경"])
+    func testSearchComposesWithType() {
+        var c = LibraryFilterCriteria(); c.types = [.video]
+        XCTAssertEqual(apply("바다", c), ["4"])
     }
-    func testSearchMatchesTitleCaseInsensitive() {
-        XCTAssertEqual(LibraryFiltering.apply(sample, search: "바다", type: .all, sort: .name).count, 2)
-        XCTAssertEqual(LibraryFiltering.apply(sample, search: "alps", type: .all, sort: .name).map(\.id), ["2"])
+    func testTypeMultiSelect() {
+        var c = LibraryFilterCriteria(); c.types = [.video, .web]
+        XCTAssertEqual(apply("", c), ["4", "3", "2"])
     }
-    func testTypeFilter() {
-        XCTAssertEqual(LibraryFiltering.apply(sample, search: "", type: .video, sort: .recentFirst).map(\.id), ["4", "2"])
-        XCTAssertEqual(LibraryFiltering.apply(sample, search: "", type: .web, sort: .recentFirst).map(\.id), ["3"])
+    func testTagFilterAnyMatch() {
+        var c = LibraryFilterCriteria(); c.tags = ["City"]
+        XCTAssertEqual(apply("", c), ["4", "3"])
     }
-    func testSearchAndTypeCompose() {
-        XCTAssertEqual(LibraryFiltering.apply(sample, search: "바다", type: .video, sort: .recentFirst).map(\.id), ["4"])
+    func testRatingFilterTreatsNilAsNoMatch() {
+        var c = LibraryFilterCriteria(); c.ratings = ["Everyone"]
+        XCTAssertEqual(apply("", c), ["2", "1"])
+    }
+    func testFavoritesOnly() {
+        var c = LibraryFilterCriteria(); c.favoritesOnly = true
+        XCTAssertEqual(apply("", c, favorites: ["3"]), ["3"])
+    }
+    func testFolderVisibilityRootHidesFolderedEntries() {
+        let folders = [FolderStore.Folder(name: "메인", ids: ["1", "3"])]
+        let root = LibraryFolders.visible(entries: sample, folders: folders, active: nil)
+        XCTAssertEqual(root.folders.map(\.name), ["메인"])
+        XCTAssertEqual(root.entries.map(\.id), ["2", "4"])
+        let inside = LibraryFolders.visible(entries: sample, folders: folders, active: "메인")
+        XCTAssertTrue(inside.folders.isEmpty)
+        XCTAssertEqual(inside.entries.map(\.id), ["1", "3"])
     }
 }

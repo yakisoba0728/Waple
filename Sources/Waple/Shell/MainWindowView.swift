@@ -59,19 +59,11 @@ struct MainWindowView: View {
                 TextField("검색", text: $viewModel.searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 190)
-                Button { showFilters.toggle() } label: {
-                    Label("필터", systemImage: "line.3.horizontal.decrease.circle")
+                Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { showFilters.toggle() } } label: {
+                    Label("필터", systemImage: viewModel.criteria.isActive
+                          ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                 }
-                .help("유형 필터")
-                .popover(isPresented: $showFilters, arrowEdge: .bottom) {
-                    // 임시(SP2′에서 필터 사이드바로 대체) — 기능 무후퇴용 최소 노출.
-                    Picker("유형", selection: $viewModel.typeFilter) {
-                        ForEach(LibraryTypeFilter.allCases, id: \.self) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                    .padding(12)
-                }
+                .help("필터 사이드바")
                 Picker("정렬", selection: $viewModel.sortOrder) {
                     ForEach(LibrarySortOrder.allCases, id: \.self) { Text($0.label).tag($0) }
                 }

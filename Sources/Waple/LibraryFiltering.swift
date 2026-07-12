@@ -16,17 +16,36 @@ enum LibrarySortOrder: String, CaseIterable {
     var label: String { self == .recentFirst ? "최근 추가순" : "이름순" }
 }
 
+/// 필터 기준(사이드바 상태). 빈 집합 = 그 축 무필터.
+struct LibraryFilterCriteria: Equatable {
+    var types: Set<LibraryTypeFilter> = []
+    var tags: Set<String> = []
+    var ratings: Set<String> = []
+    var favoritesOnly = false
+    var isActive: Bool { !types.isEmpty || !tags.isEmpty || !ratings.isEmpty || favoritesOnly }
+}
+
 /// 그리드 표시용 순수 필터/정렬 — 스토어 순서(추가순)를 입력으로 받는다.
 enum LibraryFiltering {
     static func apply(_ entries: [LibraryEntry], search: String,
-                      type: LibraryTypeFilter, sort: LibrarySortOrder) -> [LibraryEntry] {
+                      criteria: LibraryFilterCriteria, sort: LibrarySortOrder,
+                      isFavorite: (String) -> Bool) -> [LibraryEntry] {
         var out = entries
         let q = search.trimmingCharacters(in: .whitespaces)
         if !q.isEmpty {
             out = out.filter { $0.title.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
         }
-        if type != .all {
-            out = out.filter { entryType($0) == type }
+        if !criteria.types.isEmpty {
+            out = out.filter { criteria.types.contains(entryType($0)) }
+        }
+        if !criteria.tags.isEmpty {
+            out = out.filter { !(criteria.tags.isDisjoint(with: $0.tags ?? [])) }
+        }
+        if !criteria.ratings.isEmpty {
+            out = out.filter { $0.contentRating.map { criteria.ratings.contains($0) } ?? false }
+        }
+        if criteria.favoritesOnly {
+            out = out.filter { isFavorite($0.id) }
         }
         switch sort {
         case .recentFirst: return out.reversed()   // 스토어는 import 순 append — 역순 = 최신순
@@ -38,12 +57,26 @@ enum LibraryFiltering {
         }
     }
 
-    private static func entryType(_ e: LibraryEntry) -> LibraryTypeFilter {
+    static func entryType(_ e: LibraryEntry) -> LibraryTypeFilter {
         switch WallpaperType.from(e.typeRaw) {
         case .scene: return .scene
         case .video: return .video
         case .web: return .web
         default: return .all   // preset 등 — 타입 필터에 안 걸리고 '전체'에만 표시
         }
+    }
+}
+
+/// 폴더 가시성(WE 참조): 루트 = 폴더 타일 + 미소속 항목, 폴더 안 = 그 폴더 항목만.
+enum LibraryFolders {
+    static func visible(entries: [LibraryEntry], folders: [FolderStore.Folder],
+                        active: String?) -> (folders: [FolderStore.Folder], entries: [LibraryEntry]) {
+        if let active {
+            let ids = folders.first { $0.name == active }?.ids ?? []
+            let inFolder = entries.filter { ids.contains($0.id) }
+            return ([], inFolder)
+        }
+        let foldered = Set(folders.flatMap(\.ids))
+        return (folders, entries.filter { !foldered.contains($0.id) })
     }
 }
