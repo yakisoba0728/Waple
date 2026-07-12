@@ -13,22 +13,19 @@ final class StatusBannerModel: ObservableObject {
     func dismiss() { message = nil }
 }
 
-/// WE식 상단 배너 — 어두운 패널 + 파랑 보더, 4초 후 자동 소멸.
-struct WEStatusBanner: View {
+/// 네이티브 상태 배너 — 캡슐 재질, 4초 후 자동 소멸.
+struct StatusBanner: View {
     @ObservedObject var model: StatusBannerModel
 
     var body: some View {
         if let msg = model.message {
-            Text(msg)
-                .font(WETheme.Fonts.body)
-                .foregroundColor(WETheme.Colors.textPrimary)
-                .padding(.horizontal, WETheme.Metrics.hPad * 2)
+            Label(msg, systemImage: "info.circle")
+                .font(.callout)
+                .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(WETheme.Colors.panel)
-                .overlay(RoundedRectangle(cornerRadius: WETheme.Metrics.corner)
-                    .stroke(WETheme.Colors.accent, lineWidth: 1))
-                .cornerRadius(WETheme.Metrics.corner)
-                .padding(.top, WETheme.Metrics.titlebarH + 8)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(Color(nsColor: .separatorColor), lineWidth: 1))
+                .padding(.top, 10)
                 .task(id: model.generation) {
                     try? await Task.sleep(nanoseconds: 4_000_000_000)
                     model.dismiss()
