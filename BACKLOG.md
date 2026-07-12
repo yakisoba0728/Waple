@@ -5,6 +5,16 @@
 > **트리거가 오면 할 일**이다. 트리거 전에는 하지 않는다. 상세 근거는 [AUDIT.md](AUDIT.md)(감사
 > 리포트, 2026-07-06)와 각 파일 위치 참조.
 
+## UI 네이티브 재구축 (2026-07-12, 명시 요청으로 수행) — 상태
+
+SP1′~3′ **완료·판정 통과**: 통합 툴바 셸·그리드·상세 패널·Now Playing 바 / 필터 사이드바 +
+즐겨찾기·폴더·평점·제거·메타 백필 / 디스플레이 화면(썸네일 모니터 박스). macOS 최소 **14** 상향
+(`sceneBridgingOptions` 요구). 스펙: [2026-07-12-native-ui-redesign](docs/superpowers/specs/2026-07-12-native-ui-redesign.md).
+
+트리거 대기(명시 요청 시 착수):
+- **SP4′ 검색·창작마당 탭** — Steam 쿼리 행 조합(디스커버)·페이지네이션·다운로드 UI 네이티브 재작성·타일 평점. Steam Web API 키 필요.
+- **SP5′ 설정 창 + 트레이 축소** — 메뉴바에 흩어진 설정(fit·가림 정지·base assets·화면보호기 등)을 설정 창으로 통합.
+
 ## 시각 충실도 — 트리거: 해당 씬을 실제 배경으로 쓸 때
 
 | 항목 | 영향 | 메모 |
@@ -21,13 +31,13 @@
 - **GLSL vert/frag 공용 헬퍼의 스테이지별 하위 헬퍼 호출 리네임 누락** ([GLSLTranslator.swift:155](Sources/WapleCore/GLSLTranslator.swift:155)) — 2026-07-11 리뷰 #11, 추정 단계(재현 셰이더 미확보). 공용 헬퍼가 radial_blur식 스테이지별 computeUV 를 부르는 셰이더에서 frag 가 vert 버전을 받으면 조용한 오렌더 — 실물에서 관찰되면 착수
 - **셰이더 멀티라인 매크로 "호출" 미확장** ([ShaderPreprocessor.swift](Sources/WapleCore/ShaderPreprocessor.swift) `spliceDefineContinuations` ponytail 주석) — `#define` 줄연속은 2026-07-11 해소, 인자가 여러 줄에 걸친 호출은 실입력 미확인이라 유보
 - **FFmpeg `converted/` 캐시 무한 증가** ([FFmpegConverter.swift](Sources/WapleRender/FFmpegConverter.swift)) → 디스크가 차면 `VideoTextureExtractor.evictOldest` 재사용
-- **볼륨/배속 변경 = 렌더러 전체 재장착**(재생 리셋) ([AppDelegate.swift:196](Sources/Waple/AppDelegate.swift:196)) → mkv/webm 실사용에서 거슬리면 `queue.volume`/`defaultRate` 라이브 반영으로
-- **LibraryStore.remove 부재** — 삭제 기능 추가 시 playlist/monitor orphan id 정리 동반
+- **볼륨/배속 변경 = 렌더러 전체 재장착**(재생 리셋) ([AppDelegate.swift](Sources/Waple/AppDelegate.swift) setVideoVolume/Rate) → mkv/webm 실사용에서 거슬리면 `queue.volume`/`defaultRate` 라이브 반영으로
+- ~~LibraryStore.remove 부재~~ → **해소(2026-07-12 SP2′)** — `remove(id:)` + 재생목록/모니터/즐겨찾기/폴더 orphan 정리
 - 기타 low 항목은 [AUDIT.md](AUDIT.md) §1–3 참조 (inferStride 재검증, 리싱크 오인, LE 리더/cstring 중복 등)
 
 ## 제품화 — 트리거: 배포 결심
 
-1. **`notify()` NSLog-only → NSAlert/UNUserNotification** ([AppDelegate.swift:546](Sources/Waple/AppDelegate.swift:546)) — 앱 전역 유일 피드백 경로라 이 한 함수가 UX 최대 지렛대
+1. ~~notify() NSLog-only~~ → **부분 해소(2026-07-12 SP1′)**: 메인창 열림 시 창 내 배너(StatusBanner)로 표시. 잔여: 창 닫힘 상태의 오류는 여전히 NSLog only → UNUserNotification 승격은 배포 결심 시
 2. 최초 실행 온보딩 + base-assets/ffmpeg 미설정 안내 (현재 조용한 저하)
 3. CI 구축 — 현재 저장소에 CI 자체가 없음. `.saver`(WapleSaverView.m) clang 컴파일 스텝 포함(현재 `swift test` 커버리지 밖)
 4. LICENSE 결정 (README "미정")

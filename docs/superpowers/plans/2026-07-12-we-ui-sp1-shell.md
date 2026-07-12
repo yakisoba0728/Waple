@@ -1,5 +1,7 @@
 # SP1: WE 디자인 시스템 + 창 셸 Implementation Plan
 
+> 상태: 실행 완료 후 **폐기** — 네이티브 피벗(SP1′)이 스킨(WETheme/WEControls)을 제거. 이력 보존용.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Waple 메인창을 실제 Wallpaper Engine 2.8.42의 셸(통합 다크 타이틀바·탭 3개+우상단 버튼 3개·검색줄·하단 재생목록 바)과 시각적으로 동일하게 재구축하고, 모든 수치의 단일 출처인 WETheme 토큰을 확립한다.

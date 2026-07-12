@@ -79,8 +79,8 @@ bash scripts/package-app.sh  # Waple.app 번들 생성(화면보호기 .saver �
 Sources/
   WapleCore/     씬 파서, .tex/.mdl 디코더, GLSL 트랜스파일러, 파티클 시뮬레이터 (순수, 테스트 가능)
   WapleRender/   Metal 렌더러, 셰이더, 텍스처 디코드, 오디오/비디오/웹 렌더러
-  WapleLibrary/  워크샵 폴더 스캔·가져오기·라이브러리 저장
-  Waple/         메뉴바 앱(AppKit), 데스크톱 창, 화면보호기, 설정
+  WapleLibrary/  워크샵 폴더 스캔·가져오기·라이브러리/즐겨찾기/폴더/재생목록 저장
+  Waple/         메뉴바 앱 + SwiftUI 네이티브 메인창(DesignSystem·Shell·Surfaces), 데스크톱 창, 화면보호기
 Tests/           5개 타깃 · 800+ 테스트(합성 단위 + 실물 코퍼스 그라운드-트루스)
 scripts/         package-app.sh (앱/화면보호기 번들)
 ```

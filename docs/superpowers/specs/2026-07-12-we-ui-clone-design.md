@@ -1,5 +1,8 @@
 # Waple UI/UX — 실제 Wallpaper Engine 완전 복제 (2026-07-12)
 
+> 상태: **폐기(2026-07-12)** — 사용자 피벗("WE는 참고만, 네이티브 유지")으로
+> [2026-07-12-native-ui-redesign.md](2026-07-12-native-ui-redesign.md)가 대체. 이력 보존용.
+
 승인된 설계. [2026-07-11-waple-ui-design.md](2026-07-11-waple-ui-design.md)("픽셀 클론 아님" — 레이아웃·다크만 차용)를
 **대체**한다. 이번 목표는 실제 Wallpaper Engine(이하 WE)과 **시각·상호작용 모두 동일한 수준**의 재현이다.
 데이터 계층(스토어·ViewModel 콜백 계약·렌더러)은 보존하고 뷰 계층을 갈아엎는다.

@@ -1,5 +1,7 @@
 # SP1′: 메인창 전체 네이티브 재구축 Implementation Plan
 
+> 상태: **완료·판정 통과(2026-07-12)** + 후속 수정 3건(Metrics 개명·gif 셀 오버플로·scaledToFill).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** WE 픽셀 클론 스킨을 걷어내고, 메인창 전체(툴바 크롬·그리드·상세 패널·Now Playing 바·배너)를 네이티브 SwiftUI/macOS 디자인(항상 다크)으로 재구축한다. WE는 배치 참고만.

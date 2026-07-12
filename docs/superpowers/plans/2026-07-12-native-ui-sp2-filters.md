@@ -1,5 +1,7 @@
 # SP2′: 필터 사이드바 + 라이브러리 백엔드 Implementation Plan
 
+> 상태: **완료·판정 통과(2026-07-12)**.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) 구문.
 
 **Goal:** 설치됨 탭에 접이식 필터 사이드바(즐겨찾기·유형·나이 등급·태그)와 그 백엔드(즐겨찾기·폴더·평점·라이브러리 제거·메타 백필)를 붙이고, 상세 패널 액션과 속성 편집기를 정돈한다.

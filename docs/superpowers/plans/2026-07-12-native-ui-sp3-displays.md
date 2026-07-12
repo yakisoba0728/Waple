@@ -1,5 +1,7 @@
 # SP3′: 디스플레이 화면 네이티브 승격 Implementation Plan
 
+> 상태: **완료·판정 통과(2026-07-12)** — 썸네일 합성은 할당 임시 시드로 실렌더 검증(원복 완료).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) 구문.
 
 **Goal:** 디스플레이 시트를 WE 디스플레이 선택 화면의 네이티브 번역으로 승격 — 모니터 박스에 **할당 배경 썸네일**을 채우고, 선택/할당/해제를 한 화면에서.
