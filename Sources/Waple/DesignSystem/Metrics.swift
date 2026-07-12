@@ -9,6 +9,9 @@ enum Metrics {
     static let tileCorner: CGFloat = 8
     static let gridSpacing: CGFloat = 14
 
+    // 좌측 필터 사이드바
+    static let sidebarWidth: CGFloat = 220
+
     // 우측 상세 패널
     static let panelWidth: CGFloat = 300
     static let heroHeight: CGFloat = 170

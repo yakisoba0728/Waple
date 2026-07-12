@@ -20,6 +20,8 @@ private enum PreviewImageCache {
 struct WallpaperGridView: View {
     @ObservedObject var viewModel: LibraryViewModel
     @State private var hoveredId: String?
+    @State private var newFolderName = ""
+    @State private var folderPromptEntry: LibraryEntry?
 
     private let columns = [GridItem(.adaptive(minimum: Metrics.tileWidth), spacing: Metrics.gridSpacing)]
 
@@ -30,6 +32,12 @@ struct WallpaperGridView: View {
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: Metrics.gridSpacing + 6) {
+                        if let active = viewModel.activeFolder {
+                            backTile(active)
+                        }
+                        ForEach(viewModel.visibleFolders, id: \.name) { folder in
+                            folderTile(folder)
+                        }
                         ForEach(viewModel.filteredEntries, id: \.id) { entry in
                             tile(for: entry)
                         }
@@ -41,6 +49,57 @@ struct WallpaperGridView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .underPageBackgroundColor))
         .onDrop(of: [.fileURL], isTargeted: nil) { handleDrop($0) }
+        .alert("새 폴더", isPresented: Binding(get: { folderPromptEntry != nil },
+                                              set: { if !$0 { folderPromptEntry = nil } })) {
+            TextField("폴더 이름", text: $newFolderName)
+            Button("만들기") {
+                if let e = folderPromptEntry, !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty {
+                    viewModel.moveToFolder(e, folder: newFolderName)
+                }
+                newFolderName = ""; folderPromptEntry = nil
+            }
+            Button("취소", role: .cancel) { newFolderName = ""; folderPromptEntry = nil }
+        }
+    }
+
+    private func folderTile(_ folder: FolderStore.Folder) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: Metrics.tileCorner)
+                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(height: Metrics.tileThumbHeight)
+            Text("\(folder.name)  ·  \(folder.ids.count)")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .padding(.horizontal, 2)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { viewModel.activeFolder = folder.name }
+        .contextMenu {
+            Button("폴더 삭제(항목은 유지)") {
+                viewModel.folders.removeFolder(folder.name)
+                viewModel.objectWillChange.send()
+            }
+        }
+    }
+
+    private func backTile(_ name: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: Metrics.tileCorner)
+                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.15))
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 32)).foregroundStyle(.secondary)
+            }
+            .frame(height: Metrics.tileThumbHeight)
+            Text("뒤로 — \(name)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .padding(.horizontal, 2)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { viewModel.activeFolder = nil }
     }
 
     private var emptyState: some View {
@@ -157,6 +216,17 @@ struct WallpaperGridView: View {
         }
         if supported {
             Button(viewModel.isInPlaylist(entry) ? "재생목록에서 제거" : "재생목록에 추가") { viewModel.togglePlaylist(entry) }
+            Menu("폴더로 이동") {
+                Button("새 폴더…") { folderPromptEntry = entry }
+                if !viewModel.folders.folders.isEmpty { Divider() }
+                ForEach(viewModel.folders.folders, id: \.name) { f in
+                    Button(f.name) { viewModel.moveToFolder(entry, folder: f.name) }
+                }
+                if viewModel.folders.folderName(of: entry.id) != nil {
+                    Divider()
+                    Button("폴더에서 제거") { viewModel.moveToFolder(entry, folder: nil) }
+                }
+            }
             Menu("모니터에 적용") {
                 ForEach(viewModel.screens, id: \.key) { screen in
                     Button(screen.name + (viewModel.assignedEntryTitle(forScreen: screen.key).map { " (현재: \($0))" } ?? "")) {

@@ -21,7 +21,7 @@ struct MainWindowView: View {
     var screenFrames: () -> [CGRect]
     @State private var tab: MainTab = .installed
     @State private var showDisplays = false
-    @State private var showFilters = false      // SP2′에서 사이드바로 승격 — 지금은 popover
+    @State private var showFilters = ProcessInfo.processInfo.environment["WAPLE_SMOKE"] != nil  // 스모크 캡처용 기본 노출
     @State private var panelVisible = true
 
     var body: some View {
@@ -90,6 +90,11 @@ struct MainWindowView: View {
         switch tab {
         case .installed:
             HStack(spacing: 0) {
+                if showFilters {
+                    FilterSidebarView(viewModel: viewModel)
+                        .transition(.move(edge: .leading))
+                    Divider()
+                }
                 WallpaperGridView(viewModel: viewModel)
                 if panelVisible {
                     Divider()
