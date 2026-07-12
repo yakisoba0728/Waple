@@ -53,6 +53,14 @@ public final class MonitorAssignmentStore {
     /// 현재 할당 전체(설정 UI 표시용).
     public var all: [String: String] { map }
 
+    /// 라이브러리 제거 연동: 이 엔트리를 가리키는 화면 할당 전부 해제(orphan 정리).
+    public func removeAssignments(entryId: String) {
+        let keys = map.filter { $0.value == entryId }.map(\.key)
+        guard !keys.isEmpty else { return }
+        for k in keys { map.removeValue(forKey: k) }
+        save()
+    }
+
     private func save() {
         backupCorruptStoreFile(fileURL, &corrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
         do {

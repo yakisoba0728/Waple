@@ -52,6 +52,12 @@ public final class PlaylistStore {
         }
     }
 
+    /// 라이브러리 제거 연동: 해당 id 전부 제거(orphan 정리).
+    public func remove(_ id: String) {
+        guard model.ids.contains(id) else { return }
+        model.ids.removeAll { $0 == id }
+    }
+
     private func save() {
         backupCorruptStoreFile(fileURL, &corrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
         do {
