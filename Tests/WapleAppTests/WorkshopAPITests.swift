@@ -115,4 +115,22 @@ final class WorkshopAPITests: XCTestCase {
         XCTAssertEqual(WorkshopResponseParser.parse("not json".data(using: .utf8)!).count, 0)
         XCTAssertEqual(WorkshopResponseParser.parse("{\"response\":{}}".data(using: .utf8)!).count, 0)
     }
+
+    func testSearchURLRequestsVoteData() {
+        let url = WorkshopQuery.searchURL(apiKey: "K", page: 1, numPerPage: 10, searchText: "", sort: .trend)
+        XCTAssertEqual(queryDict(url)["return_vote_data"], "true")
+    }
+
+    func testParseExtractsVoteScore() {
+        let json = """
+        {"response":{"publishedfiledetails":[
+          {"publishedfileid":"7","title":"T","vote_data":{"score":0.91,"votes_up":10,"votes_down":1}},
+          {"publishedfileid":"8","title":"U"}
+        ]}}
+        """
+        let items = WorkshopResponseParser.parse(Data(json.utf8))
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0].voteScore, 0.91)
+        XCTAssertNil(items[1].voteScore)
+    }
 }

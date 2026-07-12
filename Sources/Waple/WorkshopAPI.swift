@@ -34,6 +34,7 @@ struct WorkshopItem: Identifiable, Equatable {
     let subscriptions: Int?
     let tags: [String]
     let fileSize: Int?
+    let voteScore: Double?    // vote_data.score 0…1(다운로드 시 라이브러리 평점으로 저장)
 }
 
 /// URL 조립 + query_type 결정(순수). appid 431960 = Wallpaper Engine 고정.
@@ -62,6 +63,7 @@ enum WorkshopQuery {
             .init(name: "return_previews", value: "true"),
             .init(name: "return_metadata", value: "true"),
             .init(name: "return_short_description", value: "true"),
+            .init(name: "return_vote_data", value: "true"),
         ]
         return comps.url
     }
@@ -88,13 +90,15 @@ enum WorkshopResponseParser {
         guard let id = lenientString(obj["publishedfileid"]), !id.isEmpty else { return nil }
         let title = lenientString(obj["title"]) ?? id
         let preview = lenientString(obj["preview_url"]).flatMap(URL.init(string:))
+        let vote = (obj["vote_data"] as? [String: Any]).flatMap { lenientDouble($0["score"]) }
         return WorkshopItem(
             id: id,
             title: title,
             previewURL: preview,
             subscriptions: lenientInt(obj["subscriptions"]),
             tags: parseTags(obj["tags"]),
-            fileSize: lenientInt(obj["file_size"])
+            fileSize: lenientInt(obj["file_size"]),
+            voteScore: vote
         )
     }
 
@@ -116,6 +120,12 @@ enum WorkshopResponseParser {
     private static func lenientInt(_ value: Any?) -> Int? {
         if let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return n.intValue }
         if let s = value as? String { return Int(s) }
+        return nil
+    }
+
+    private static func lenientDouble(_ value: Any?) -> Double? {
+        if let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return n.doubleValue }
+        if let s = value as? String { return Double(s) }
         return nil
     }
 }

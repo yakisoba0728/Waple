@@ -160,6 +160,12 @@ final class LibraryViewModel: ObservableObject {
         entries = store.entries
     }
 
+    /// 워크샵 다운로드 직후 평점 반영(0…1). 표시용 메타 — 실패 무해.
+    func setRating(_ score: Double, for entry: LibraryEntry) {
+        store.setRating(score, id: entry.id)
+        entries = store.entries
+    }
+
     /// 워크샵 다운로드로 받은 배경 폴더 1개를 라이브러리에 가져온다(기존 importFolder 재사용). 실패 → nil.
     @discardableResult
     func importDownloaded(_ folderURL: URL) -> LibraryEntry? {

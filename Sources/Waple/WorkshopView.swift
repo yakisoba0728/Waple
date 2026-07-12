@@ -113,6 +113,7 @@ final class WorkshopViewModel: ObservableObject {
             downloads[item.id] = DownloadUIState(phase: .failed, entryId: nil)
             return
         }
+        if let score = item.voteScore { library.setRating(score, for: entry) }
         downloads[item.id] = DownloadUIState(phase: .done, entryId: entry.id)
     }
 
