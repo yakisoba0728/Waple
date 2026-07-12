@@ -16,6 +16,7 @@ public final class LibraryStore {
             NSLog("%@", "[Waple] failed to create library directory at \(baseDirectory.path): \(error)")
         }
         load()
+        backfillMetadataIfNeeded()
     }
 
     public static func defaultBaseDirectory() -> URL {
@@ -68,7 +69,9 @@ public final class LibraryStore {
             typeRaw: project.type.storageString,
             fileName: project.fileName,
             previewName: project.previewName,
-            bookmark: bookmark
+            bookmark: bookmark,
+            tags: project.tags,
+            contentRating: project.contentRating
         )
         entries.removeAll { $0.id == entry.id }
         entries.append(entry)
@@ -166,5 +169,29 @@ public final class LibraryStore {
             save()
         }
         return resolved
+    }
+
+    /// 워크샵 평점 저장(0…1). 미존재 id 는 no-op.
+    public func setRating(_ rating: Double, id: String) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].rating = rating
+        save()
+    }
+
+    /// 구버전 인덱스(tags==nil) 엔트리의 tags/contentRating 을 디스크 project.json 에서 1회 백필.
+    /// 폴더 해석 실패 엔트리는 빈 값([])으로 마킹해 매 실행 재시도 I/O 를 막는다.
+    func backfillMetadataIfNeeded() {
+        var changed = false
+        for i in entries.indices where entries[i].tags == nil {
+            changed = true
+            guard let folder = resolveFolderURL(for: entries[i]),
+                  let project = try? ProjectJSONParser.parse(folderURL: folder) else {
+                entries[i].tags = []
+                continue
+            }
+            entries[i].tags = project.tags
+            entries[i].contentRating = project.contentRating
+        }
+        if changed { save() }
     }
 }
