@@ -150,4 +150,16 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertEqual(byKey["amount"]?.value, .number(0.75))
         XCTAssertEqual(byKey["enabled"]?.value, .bool(true))
     }
+
+    func testAssignedEntryLookup() throws {
+        let dir = tempDir()
+        let e = entry(id: "wp9", title: "Aurora")
+        try seedLibrary(dir, entries: [e])
+        let vm = makeVM(dir: dir)
+        vm.assign(e, toScreen: "display-7")
+        XCTAssertEqual(vm.assignedEntry(forScreen: "display-7")?.id, "wp9")
+        XCTAssertNil(vm.assignedEntry(forScreen: "display-none"))
+        vm.clearAssignment(forScreen: "display-7")
+        XCTAssertNil(vm.assignedEntry(forScreen: "display-7"))
+    }
 }

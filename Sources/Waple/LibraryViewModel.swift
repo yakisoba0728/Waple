@@ -103,6 +103,12 @@ final class LibraryViewModel: ObservableObject {
         return entries.first(where: { $0.id == id })?.title
     }
 
+    /// 화면에 할당된 라이브러리 엔트리(썸네일 로딩용). 미할당/유실 id → nil(전역 배경).
+    func assignedEntry(forScreen key: String) -> LibraryEntry? {
+        guard let id = monitors.assignment(for: key) else { return nil }
+        return entries.first { $0.id == id }
+    }
+
     // MARK: - 즐겨찾기/제거
 
     func isFavorite(_ entry: LibraryEntry) -> Bool { favorites.isFavorite(entry.id) }
