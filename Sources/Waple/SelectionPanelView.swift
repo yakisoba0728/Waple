@@ -31,7 +31,7 @@ struct SelectionPanelView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Group {
                     if let url = viewModel.previewURL(for: entry) {
-                        AnimatedPreviewView(url: url, animating: true)
+                        AnimatedPreviewView(url: url, animating: true).scaledToFill()
                     } else {
                         ZStack {
                             Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.3))

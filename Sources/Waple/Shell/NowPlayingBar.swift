@@ -90,7 +90,7 @@ struct NowPlayingBar: View {
     private var thumb: some View {
         Group {
             if let e = appliedEntry, let url = viewModel.previewURL(for: e) {
-                AnimatedPreviewView(url: url, animating: !viewModel.isPaused)
+                AnimatedPreviewView(url: url, animating: !viewModel.isPaused).scaledToFill()
             } else {
                 Image(systemName: "photo")
                     .foregroundStyle(.secondary)

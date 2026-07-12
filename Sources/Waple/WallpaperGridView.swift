@@ -130,7 +130,7 @@ struct WallpaperGridView: View {
     private func preview(for entry: LibraryEntry, animating: Bool) -> some View {
         if let url = viewModel.previewURL(for: entry) {
             if PreviewMedia.isAnimated(url) {
-                AnimatedPreviewView(url: url, animating: animating)
+                AnimatedPreviewView(url: url, animating: animating).scaledToFill()
             } else if let image = PreviewImageCache.image(url) {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
