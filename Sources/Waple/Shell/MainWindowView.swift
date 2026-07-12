@@ -2,138 +2,95 @@ import SwiftUI
 import AppKit
 import WapleCore
 import WapleLibrary
-import WapleRender
 
-enum MainTab: String, CaseIterable {
+enum MainTab: String, CaseIterable, Identifiable {
     case installed, discover, workshop
+    var id: String { rawValue }
     var label: String {
         switch self {
         case .installed: return "설치됨"; case .discover: return "검색"; case .workshop: return "창작마당"
         }
     }
-    var icon: String {
-        switch self {
-        case .installed: return "square.and.arrow.down.fill"
-        case .discover: return "safari"
-        case .workshop: return "globe"
-        }
-    }
 }
 
-/// WE 2.8.42 셸: 타이틀 스트립 → 탭줄 → (탭 콘텐츠) → 하단 바. 수치는 전부 WETheme.
+/// 네이티브 메인창: 통합 툴바(탭 세그먼트·검색·필터·정렬·패널 토글) + 콘텐츠 + Now Playing 바.
+/// WE는 배치 참고만 — 컨트롤·색·재질은 전부 시스템(스펙 2026-07-12 네이티브 재설계).
 struct MainWindowView: View {
     @ObservedObject var viewModel: LibraryViewModel
     @ObservedObject var banner: StatusBannerModel
     var screenFrames: () -> [CGRect]
     @State private var tab: MainTab = .installed
     @State private var showDisplays = false
+    @State private var showFilters = false      // SP2′에서 사이드바로 승격 — 지금은 popover
     @State private var panelVisible = true
-    @State private var showFilterPopover = false
-    @State private var showPlaylistConfig = false
 
     var body: some View {
         VStack(spacing: 0) {
-            titleStrip
-            tabRow
-            if tab == .installed { searchRow }
             content
-            bottomBar
+            NowPlayingBar(viewModel: viewModel)
         }
-        .background(WETheme.Colors.window)
-        .ignoresSafeArea()   // fullSizeContentView — 타이틀바 영역까지 우리가 그린다
+        .frame(minWidth: Layout.windowMin.width, minHeight: Layout.windowMin.height)
         .overlay(alignment: .top) { WEStatusBanner(model: banner) }
+        .toolbar { toolbarContent }
         .sheet(isPresented: $showDisplays) {
-            DisplaysTabView(viewModel: viewModel, screenFrames: screenFrames)
-                .frame(minWidth: 900, minHeight: 560)
-                .background(WETheme.Colors.panel)
-        }
-    }
-
-    /// WE 타이틀바: 좌 상태 텍스트(신호등 우측) · 중앙 타이틀 · 우측 » 패널 토글.
-    private var titleStrip: some View {
-        ZStack {
-            Text("Waple — Wallpaper Engine 호환")
-                .font(WETheme.Fonts.title)
-                .foregroundColor(WETheme.Colors.textSecondary)
-            HStack(spacing: 0) {
-                if !SteamCmdDownloader.isAvailable {
-                    Text("steamcmd를 사용할 수 없습니다.")
-                        .font(WETheme.Fonts.caption)
-                        .foregroundColor(WETheme.Colors.danger)
-                        .padding(.leading, WETheme.Metrics.trafficLightInset)
+            VStack(spacing: 0) {
+                DisplaysTabView(viewModel: viewModel, screenFrames: screenFrames)
+                HStack {
+                    Spacer()
+                    Button("닫기") { showDisplays = false }.keyboardShortcut(.cancelAction)
                 }
-                Spacer()
-                Button {
-                    panelVisible.toggle()
-                } label: {
-                    Image(systemName: panelVisible ? "chevron.right.2" : "chevron.left.2")
-                        .font(WETheme.Fonts.body)
-                        .foregroundColor(WETheme.Colors.textPrimary)
-                        .frame(width: 34, height: WETheme.Metrics.titlebarH - 8)
-                        .background(WETheme.Colors.accent)
-                        .cornerRadius(WETheme.Metrics.corner)
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, WETheme.Metrics.hPad)
-            }
-        }
-        .frame(height: WETheme.Metrics.titlebarH)
-        .background(WETheme.Colors.titlebar)
-    }
-
-    /// 탭 3개(좌) + 모바일/디스플레이/설정 버튼(우).
-    private var tabRow: some View {
-        HStack(spacing: 4) {
-            ForEach(MainTab.allCases, id: \.self) { t in
-                WETabButton(title: t.label, systemImage: t.icon, isActive: tab == t,
-                            hasDropdown: t == .installed) { tab = t }
-            }
-            Spacer()
-            WETopButton(title: "모바일", systemImage: "iphone",
-                        disabledHint: "모바일 페어링은 지원하지 않습니다") {}
-            WETopButton(title: "디스플레이", systemImage: "display") { showDisplays = true }
-            WETopButton(title: "설정", systemImage: "gearshape.fill",
-                        disabledHint: "설정 창은 곧 제공됩니다(SP5)") {}
-        }
-        .padding(.horizontal, WETheme.Metrics.hPad)
-        .frame(height: WETheme.Metrics.tabRowH)
-        .background(WETheme.Colors.tabRow)
-    }
-
-    private var searchRow: some View {
-        HStack(spacing: WETheme.Metrics.gap) {
-            WESearchField(text: $viewModel.searchText)
-                .frame(width: 240)
-            Button {
-                showFilterPopover.toggle()
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "line.3.horizontal.decrease")
-                    Text("필터 적용 결과")
-                }
-            }
-            .buttonStyle(WEButtonStyle(kind: .accent))
-            .popover(isPresented: $showFilterPopover) {
-                // 임시(SP2에서 필터 사이드바로 대체): 기존 타입 필터만 노출해 기능 무후퇴.
-                Picker("유형", selection: $viewModel.typeFilter) {
-                    ForEach(LibraryTypeFilter.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.inline)
                 .padding()
-                .background(WETheme.Colors.panel)
             }
-            Spacer()
-            Button {} label: { Image(systemName: "arrowtriangle.up.fill").font(.system(size: 9)) }
-                .buttonStyle(WEButtonStyle(kind: .toolbar))
-                .disabled(true).opacity(0.55)
-                .help("정렬 방향은 SP2에서 제공됩니다")
-            WEComboBox(selection: $viewModel.sortOrder,
-                       options: Array(LibrarySortOrder.allCases),
-                       label: { $0 == .name ? "이름" : "최근 추가순" })
+            .frame(minWidth: 860, minHeight: 540)
         }
-        .padding(.horizontal, WETheme.Metrics.hPad)
-        .frame(height: WETheme.Metrics.searchRowH)
-        .background(WETheme.Colors.window)
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Picker("보기", selection: $tab) {
+                ForEach(MainTab.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        ToolbarItemGroup {
+            if tab == .installed {
+                TextField("검색", text: $viewModel.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 190)
+                Button { showFilters.toggle() } label: {
+                    Label("필터", systemImage: "line.3.horizontal.decrease.circle")
+                }
+                .help("유형 필터")
+                .popover(isPresented: $showFilters, arrowEdge: .bottom) {
+                    // 임시(SP2′에서 필터 사이드바로 대체) — 기능 무후퇴용 최소 노출.
+                    Picker("유형", selection: $viewModel.typeFilter) {
+                        ForEach(LibraryTypeFilter.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                    .padding(12)
+                }
+                Picker("정렬", selection: $viewModel.sortOrder) {
+                    ForEach(LibrarySortOrder.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .help("정렬")
+            }
+            Button {} label: { Label("모바일", systemImage: "iphone") }
+                .disabled(true)
+                .help("모바일 페어링은 지원하지 않습니다")
+            Button { showDisplays = true } label: { Label("디스플레이", systemImage: "display") }
+                .help("모니터별 배경 할당")
+            Button {} label: { Label("설정", systemImage: "gearshape") }
+                .disabled(true)
+                .help("설정 창은 곧 제공됩니다(SP5′)")
+            Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { panelVisible.toggle() } } label: {
+                Label("정보 패널", systemImage: "sidebar.trailing")
+            }
+            .help(panelVisible ? "정보 패널 숨기기" : "정보 패널 보기")
+        }
     }
 
     @ViewBuilder
@@ -141,100 +98,25 @@ struct MainWindowView: View {
         switch tab {
         case .installed:
             HStack(spacing: 0) {
-                WallpaperGridView(viewModel: viewModel)   // SP2에서 WE 그리드로 교체
+                WallpaperGridView(viewModel: viewModel)
                 if panelVisible {
-                    Divider().overlay(WETheme.Colors.border)
-                    SelectionPanelView(viewModel: viewModel)  // SP2에서 WE 패널로 교체
+                    Divider()
+                    SelectionPanelView(viewModel: viewModel)
+                        .transition(.move(edge: .trailing))
                 }
             }
         case .discover:
-            VStack {
+            VStack(spacing: 8) {
                 Spacer()
-                Text("검색(디스커버) 탭은 SP4에서 제공됩니다")
-                    .font(WETheme.Fonts.body).foregroundColor(WETheme.Colors.textSecondary)
+                Image(systemName: "safari").font(.system(size: 40)).foregroundStyle(.tertiary)
+                Text("검색 탭은 준비 중입니다").font(.title3)
+                Text("창작마당 탭에서 Steam 워크샵을 검색할 수 있습니다")
+                    .font(.callout).foregroundStyle(.secondary)
                 Spacer()
             }
             .frame(maxWidth: .infinity)
         case .workshop:
-            WorkshopView(library: viewModel)   // SP4에서 WE 창작마당으로 교체
+            WorkshopView(library: viewModel)
         }
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: WETheme.Metrics.gap) {
-                Text("재생목록").font(WETheme.Fonts.sectionBold)
-                    .foregroundColor(WETheme.Colors.textPrimary)
-                Button { } label: { Label("불러오기", systemImage: "folder.fill") }
-                    .buttonStyle(WEButtonStyle()).disabled(true).opacity(0.55)
-                    .help("명명 재생목록은 지원 예정입니다")
-                Button { } label: { Label("저장", systemImage: "square.and.arrow.down.fill") }
-                    .buttonStyle(WEButtonStyle()).disabled(true).opacity(0.55)
-                    .help("명명 재생목록은 지원 예정입니다")
-                Button { showPlaylistConfig.toggle() } label: { Label("구성", systemImage: "gearshape.2.fill") }
-                    .buttonStyle(WEButtonStyle())
-                    .popover(isPresented: $showPlaylistConfig) { playlistConfig }
-                Button {
-                    if let entry = viewModel.focusedEntry { viewModel.togglePlaylist(entry) }
-                } label: {
-                    Label(playlistAddLabel, systemImage: "plus")
-                }
-                .buttonStyle(WEButtonStyle(kind: .accent))
-                .disabled(viewModel.focusedEntry == nil)
-                Spacer()
-            }
-            HStack(spacing: WETheme.Metrics.gap) {
-                Button { } label: { Label("배경화면 편집기", systemImage: "scissors") }
-                    .buttonStyle(WEButtonStyle(kind: .largeAccent)).disabled(true).opacity(0.55)
-                    .help("에디터는 지원하지 않습니다")
-                Button { openWallpaperPanel() } label: { Label("배경화면 열기", systemImage: "square.and.arrow.up") }
-                    .buttonStyle(WEButtonStyle(kind: .large))
-            }
-        }
-        .padding(.horizontal, WETheme.Metrics.hPad)
-        .padding(.vertical, 8)
-        .background(WETheme.Colors.bottomBar)
-    }
-
-    private var playlistAddLabel: String {
-        guard let e = viewModel.focusedEntry else { return "배경화면 추가" }
-        return viewModel.isInPlaylist(e) ? "재생목록에서 제거" : "배경화면 추가"
-    }
-
-    /// 기존 하단바 기능(자동 전환·다음·일시정지)을 WE '구성' popover로 수용 — 기능 무후퇴.
-    private var playlistConfig: some View {
-        VStack(alignment: .leading, spacing: WETheme.Metrics.gap) {
-            Toggle("자동 전환 사용", isOn: Binding(
-                get: { viewModel.playlist.enabled },
-                set: { viewModel.playlist.enabled = $0; viewModel.onPlaylistChanged?() }))
-            Stepper("간격: \(viewModel.playlist.intervalMinutes)분", value: Binding(
-                get: { viewModel.playlist.intervalMinutes },
-                set: { viewModel.playlist.intervalMinutes = $0; viewModel.onPlaylistChanged?() }), in: 1...240)
-            HStack {
-                Button("다음 배경") { viewModel.onAdvancePlaylist?() }
-                    .buttonStyle(WEButtonStyle())
-                    .disabled(viewModel.playlist.ids.count < 2)
-                Button(viewModel.isPaused ? "재개" : "일시정지") {
-                    if let p = viewModel.onTogglePause?() { viewModel.isPaused = p }
-                }
-                .buttonStyle(WEButtonStyle())
-            }
-        }
-        .padding()
-        .frame(width: 260)
-        .background(WETheme.Colors.panel)
-    }
-
-    /// WE '배경화면 열기' = 디스크에서 임포트(기존 라우팅 재사용: 폴더/zip/동영상).
-    private func openWallpaperPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        if url.pathExtension.lowercased() == "zip" { viewModel.importZip(url) }
-        else if VideoImport.isVideoFile(url) { viewModel.importVideoFile(url) }
-        else { viewModel.importParent(url) }
     }
 }

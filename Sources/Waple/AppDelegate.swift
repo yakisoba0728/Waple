@@ -250,14 +250,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let root = MainWindowView(viewModel: libraryVM, banner: bannerModel,
                                       screenFrames: { NSScreen.screens.map(\.frame) })
             let hosting = NSHostingController(rootView: root)
+            // SwiftUI .toolbar → NSToolbar 브리징. sceneBridgingOptions 는 macOS 14+ 전용이라
+            // 배포 타깃(macOS 13)에서 무조건 호출 불가 → 가용성 가드(13에서는 미브리징, 스펙 폴백).
+            if #available(macOS 14, *) { hosting.sceneBridgingOptions = [.toolbars] }
             let window = NSWindow(contentViewController: hosting)
             window.title = "Waple"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            window.backgroundColor = .weWindowBackground
-            window.setContentSize(NSSize(width: 1456, height: 1000))   // WE 실측 창 크기(실측표 확인)
-            window.minSize = NSSize(width: 1100, height: 700)
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.toolbarStyle = .unified
+            window.setContentSize(Layout.windowDefault)
+            window.minSize = Layout.windowMin
             window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
             // 프로그램 생성 NSWindow 는 닫힐 때 기본적으로 release 되어, 강한 참조 프로퍼티가
             // 댕글링되고 재오픈 시 use-after-free 가 된다. 프로퍼티가 수명을 관리하도록 막는다.
