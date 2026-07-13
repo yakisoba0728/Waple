@@ -7,13 +7,18 @@
 
 ## UI 네이티브 재구축 (2026-07-12, 명시 요청으로 수행) — 상태
 
-SP1′~3′ **완료·판정 통과**: 통합 툴바 셸·그리드·상세 패널·Now Playing 바 / 필터 사이드바 +
-즐겨찾기·폴더·평점·제거·메타 백필 / 디스플레이 화면(썸네일 모니터 박스). macOS 최소 **14** 상향
-(`sceneBridgingOptions` 요구). 스펙: [2026-07-12-native-ui-redesign](docs/superpowers/specs/2026-07-12-native-ui-redesign.md).
+SP1′~4′ **완료**: 통합 툴바 셸·그리드·상세 패널·Now Playing 바 / 필터 사이드바 +
+즐겨찾기·폴더·평점·제거·메타 백필 / 디스플레이 화면(썸네일 모니터 박스) / 검색 탭(디스커버 레일
+4종: 트렌드·최신·구독순·평점순) + 창작마당 탭(무한 스크롤·다운로드 진행 UI·타일 평점, 레거시
+WorkshopView 제거). macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
+스펙: [2026-07-12-native-ui-redesign](docs/superpowers/specs/2026-07-12-native-ui-redesign.md),
+SP4′ 플랜: [2026-07-13-sp4-discover-workshop](docs/superpowers/plans/2026-07-13-sp4-discover-workshop.md).
 
 트리거 대기(명시 요청 시 착수):
-- **SP4′ 검색·창작마당 탭** — Steam 쿼리 행 조합(디스커버)·페이지네이션·다운로드 UI 네이티브 재작성·타일 평점. Steam Web API 키 필요.
 - **SP5′ 설정 창 + 트레이 축소** — 메뉴바에 흩어진 설정(fit·가림 정지·base assets·화면보호기 등)을 설정 창으로 통합.
+- **SP4′ 실데이터 검증**(트리거: Steam Web API 키 확보) — 두 탭 실검증(레일 4행 로드·무한 스크롤·평점 배지·다운로드). 2026-07-13 판정은 키 게이트 캡처+단위 테스트 9개 기준(키 발급 불가로 유보).
+- "이미 설치됨" 배지(창작마당 타일) — publishedfileid ≠ project.json id 라 대조 키 부재로 스코프아웃. 필요 시 다운로드 시점 매핑 저장부터.
+- [PropertyEditorView.swift:55](Sources/Waple/PropertyEditorView.swift:55) deprecated 1-파라미터 `onChange` 1건(SP4′ 이전부터 존재) — 기회 시.
 
 ## 시각 충실도 — 트리거: 해당 씬을 실제 배경으로 쓸 때
 
