@@ -2,38 +2,6 @@ import SwiftUI
 import AppKit
 import WapleLibrary
 
-// MARK: - 프리뷰 이미지(URLSession 비동기 로드 + NSCache — LazyVGrid 셀 재활용 시 재다운로드 방지)
-
-private enum WorkshopPreviewCache {
-    static let cache = NSCache<NSURL, NSImage>()
-}
-
-private struct WorkshopPreview: View {
-    let url: URL?
-    @State private var image: NSImage?
-
-    var body: some View {
-        ZStack {
-            if let image {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                Rectangle().fill(Color.gray.opacity(0.25))
-            }
-        }
-        .task(id: url) { await load() }
-    }
-
-    private func load() async {
-        image = nil
-        guard let url else { return }
-        if let cached = WorkshopPreviewCache.cache.object(forKey: url as NSURL) { image = cached; return }
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let img = NSImage(data: data) else { return }
-        WorkshopPreviewCache.cache.setObject(img, forKey: url as NSURL)
-        image = img
-    }
-}
-
 // MARK: - 창
 
 struct WorkshopView: View {

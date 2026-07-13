@@ -25,6 +25,13 @@ enum Metrics {
     static let windowMin = NSSize(width: 1024, height: 680)
     static let displaysMin = NSSize(width: 860, height: 560)
 
+    // 검색·창작마당 탭 (SP4′)
+    static let searchFieldWidth: CGFloat = 190     // 툴바 검색 필드(설치됨 탭 기존 하드코딩 190 승격)
+    static let usernameFieldWidth: CGFloat = 180
+    static let downloadBarWidth: CGFloat = 90
+    static let keyGateFieldWidth: CGFloat = 320
+    static let keyGateTextWidth: CGFloat = 420
+
     // 공통 간격
     static let gap: CGFloat = 8
 }
