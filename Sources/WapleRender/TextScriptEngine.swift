@@ -718,8 +718,10 @@ public final class TextScriptEngine {
         left16: __zeroArray(16), right16: __zeroArray(16),
         left32: __zeroArray(32), right32: __zeroArray(32),
         left64: __zeroArray(64), right64: __zeroArray(64),
+        average16: __zeroArray(16), average32: __zeroArray(32), average64: __zeroArray(64),
         spectrum: __zeroArray(64), waveform: __zeroArray(64)
     };
+    __audioBuffer.average = __audioBuffer.average64;   // engine.audio.average 직접 접근용(res 미지정=64), average64 별칭
     // 프로젝션(캔버스) 크기 — thisScene.size/screenSize/resolution·engine.canvasSize 가 이 한 인스턴스를
     // 공유(별칭). __setCanvasSize 는 제자리 갱신이라 스크립트가 보관한 참조도 함께 갱신된다.
     // (Vec2/__num 은 함수 선언 호이스팅으로 이 시점 사용 가능.)
@@ -769,6 +771,10 @@ public final class TextScriptEngine {
         avg(__audioBuffer.right64, __audioBuffer.right32, 2);
         avg(__audioBuffer.left64, __audioBuffer.left16, 4);
         avg(__audioBuffer.right64, __audioBuffer.right16, 4);
+        // H4: WE AudioBuffers.average = 좌우 평균(res 별). registerAudioBuffers 반환 버퍼가 이 배열을 별칭 참조.
+        for (var m = 0; m < 64; m += 1) { __audioBuffer.average64[m] = (__audioBuffer.left64[m] + __audioBuffer.right64[m]) / 2; }
+        for (var m = 0; m < 32; m += 1) { __audioBuffer.average32[m] = (__audioBuffer.left32[m] + __audioBuffer.right32[m]) / 2; }
+        for (var m = 0; m < 16; m += 1) { __audioBuffer.average16[m] = (__audioBuffer.left16[m] + __audioBuffer.right16[m]) / 2; }
         for (var k = 0; k < __audioCallbacks.length; k += 1) { __audioCallbacks[k](__audioBuffer); }
     }
     // engine: runtime 등 실수치 프로퍼티는 실제 타깃에 두고, 나머지는 no-op 흡수.
@@ -787,8 +793,15 @@ public final class TextScriptEngine {
                                   if (__timeoutQueue[i].id === id) { __timeoutQueue.splice(i, 1); return; }
                               }
                           },
-                          registerAudioBuffers: function(cb) {
-                              if (typeof cb === 'function') { __audioCallbacks.push(cb); }
+                          AUDIO_RESOLUTION_16: 16, AUDIO_RESOLUTION_32: 32, AUDIO_RESOLUTION_64: 64,
+                          registerAudioBuffers: function(res) {
+                              // H4: WE 계약은 registerAudioBuffers(resolution): AudioBuffers{left,right,average}(res 길이) 동기반환.
+                              // 반환 배열은 __audioBuffer 제자리 배열의 별칭 → 매 프레임 setAudio 갱신이 반영된다.
+                              // function 인자는 하위호환(콜백 등록도 계속 지원, __audioBuffer 반환).
+                              if (typeof res === 'function') { __audioCallbacks.push(res); return __audioBuffer; }
+                              var n = __num(res, 64);
+                              if (n !== 16 && n !== 32 && n !== 64) { n = 64; }
+                              return { left: __audioBuffer['left' + n], right: __audioBuffer['right' + n], average: __audioBuffer['average' + n] };
                           } };
     var engine = new Proxy(__engineState, {
         get: function(t, k) { if (k in t) { return t[k]; } return __noopProxy(); },

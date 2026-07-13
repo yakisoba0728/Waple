@@ -33,6 +33,23 @@ final class TextEngineTests: XCTestCase {
         XCTAssertTrue(out == now || out == oneMinuteEarlier, "got \(out), expected \(now) or \(oneMinuteEarlier)")
     }
 
+    /// H4: engine.registerAudioBuffers(res) 는 AudioBuffers{left,right,average}(res 길이) 동기반환, engine.audio.average
+    /// 도 접근 가능해야 한다. 종전엔 registerAudioBuffers 가 콜백-등록(undefined 반환)이고 average 키가 없어
+    /// buffers.average / audio.average.[i] 접근이 TypeError → 오디오응답 스크립트가 런타임에 죽었다(capture.log 30회).
+    func testRegisterAudioBuffersAndAverageAvailable() throws {
+        let script = """
+        'use strict';
+        export var scriptProperties = createScriptProperties().addText({name:'x', value:'v'}).finish();
+        var buffers = engine.registerAudioBuffers(engine.AUDIO_RESOLUTION_64);
+        export function update(value) {
+            return String(buffers.average.length) + "," + String(engine.audio.average.length);
+        }
+        """
+        let engine = try XCTUnwrap(TextScriptEngine(script: script))
+        let out = try XCTUnwrap(engine.evaluate(current: ""))
+        XCTAssertEqual(out, "64,64")
+    }
+
     /// engine/shared 등 엔진 API 참조가 있어도(no-op 심) 죽지 않아야 한다.
     func testEngineAPIShimsDoNotCrash() throws {
         let script = """
