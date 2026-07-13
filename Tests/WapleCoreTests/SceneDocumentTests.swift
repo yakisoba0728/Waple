@@ -603,4 +603,32 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(child.origin, Vec2(x: 120, y: 200), "부모 origin(100,200)+scale(2)×로컬(10,0)")
         XCTAssertEqual(child.scale, Vec2(x: 2, y: 2))
     }
+
+    /// H2 규명(2026-07-13, 무회귀 봉인). ortho=dict + camera{eye,center,up} + fov 는 WE 규약상
+    /// 여전히 2D(직교) 씬이다 — 공식 ICamera 문서: fov="For 3D scenes only", 2D 카메라는 zoom 만
+    /// (`lib.sceneScript.d.ts:1953-1962`). 코퍼스 170씬 실측: empty 24씬 전부 ortho=dict(2D 경로,
+    /// camera3D=nil)이고 21/24는 카메라가 trivial — 즉 카메라는 emptiness 원인이 아니다.
+    /// parseCamera 가 이 조합을 3D 카메라로 승격하면 (1) camera3D!=nil → forwardLit2D 게이트 소실 +
+    /// 2D 레이어 미렌더, (2) 팬/원근으로 오브젝트가 화면 밖 이동(코퍼스 2955378002 콘텐츠가시 43%→15%)
+    /// → 카메라 보유 ~160씬 대량 회귀. 이 테스트가 그 회귀를 봉인한다(제안된 오수정 시 RED).
+    func testOrthoDictSceneWithCameraAndFovStays2D() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},
+                    "fov":{"script":"cam","value":50.0},"nearz":0.01,"farz":10000.0,
+                    "ambientcolor":"0.3 0.3 0.3"},
+         "camera":{"eye":"293.217 -286.201 0.0","center":"293.217 -286.201 -1.0","up":"0.0 1.0 0.0"},
+         "objects":[
+           {"image":"models/x.json","origin":"960 540 0","size":"1920 1080","scale":"1 1 1",
+            "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true},
+           {"light":"point","origin":"960 540 0","color":"1 1 1"}
+         ]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertNil(doc.camera3D,
+            "ortho=dict 는 2D 경로 — camera+fov 가 있어도 3D 카메라 승격 금지(WE: fov=3D 전용). 승격 시 RED")
+        XCTAssertEqual(doc.layers.count, 1, "2D 이미지 레이어 그대로 렌더(3D 승격 시 소실)")
+        XCTAssertFalse(doc.lights3D.isEmpty, "라이트 파스")
+        XCTAssertTrue(doc.forwardLit2D, "2D 포워드 라이팅 게이트(camera3D==nil) 유지 — 3D 승격 시 소실")
+    }
 }
