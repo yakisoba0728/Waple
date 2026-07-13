@@ -305,3 +305,45 @@ enum PropertyControl {
         return lo...hi
     }
 }
+
+// MARK: - 설정 창 표시 카탈로그 (SP5′)
+
+/// 설정 창의 스텝 목록·상태 라벨 — 순수. 값은 기존 트레이 메뉴와 동일해야 저장값이 호환된다.
+enum SettingsPresentation {
+    static let volumeSteps: [(label: String, value: Float)] = [
+        ("음소거", 0), ("25%", 0.25), ("50%", 0.5), ("75%", 0.75), ("100%", 1),
+    ]
+    static let rateSteps: [(label: String, value: Float)] = [
+        ("0.5×", 0.5), ("1×", 1), ("1.5×", 1.5), ("2×", 2),
+    ]
+    static let playlistIntervalMinutes = [5, 15, 30, 60]
+
+    /// 가림 정지 옵션(raw: -1=사용 안 함, 0=창 뜨면 즉시, 0.3/0.5/0.8=커버 비율) — 트레이 서브메뉴에서 이관.
+    static let occlusionOptions: [(label: String, raw: Double)] = [
+        ("사용 안 함", -1),
+        ("창이 뜨면 즉시", 0),
+        ("30% 이상 가려지면", 0.30),
+        ("50% 이상 가려지면", 0.50),
+        ("80% 이상 가려지면", 0.80),
+    ]
+
+    /// 영속 상태(enabled+threshold) → Picker 선택 raw 역산. 미일치는 방어 폴백(-1).
+    static func currentOcclusionRaw(enabled: Bool, threshold: Double) -> Double {
+        occlusionOptions.first {
+            OcclusionMode.isSelected($0.raw, enabled: enabled, threshold: threshold)
+        }?.raw ?? -1
+    }
+
+    /// 화면보호기 행 상태. bundled = 앱 번들에 Waple.saver 존재(패키징 앱에서만 true).
+    static func saverStatus(bundled: Bool, selected: Bool) -> (label: String, canToggle: Bool) {
+        guard bundled else {
+            return ("패키징된 앱에서만 사용 가능 — scripts/package-app.sh", false)
+        }
+        return (selected ? "화면보호기로 사용 중" : "사용 안 함", true)
+    }
+
+    static func ffmpegStatus(available: Bool, path: String?) -> String {
+        available ? "사용 가능 — \(path ?? "")"
+                  : "미설치 — mkv/webm 동영상 변환에 필요합니다 (brew install ffmpeg)"
+    }
+}
