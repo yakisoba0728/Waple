@@ -43,6 +43,75 @@ final class WebRendererSecurityTests: XCTestCase {
         XCTAssertEqual(web.url?.host, WallpaperSchemeHandler.host)
     }
 
+    /// 감사 S1: 서브프레임(isMainFrame == false)은 톱프레임과 별도로 게이팅해야 한다 — 아니면
+    /// <iframe src="https://…"> 가 무검증 로드된다. 실제 http(s) 도메인은 도달 불가/도달 시 모두
+    /// about:blank 로 남아 차단 여부를 구분 못 하므로(네트워크 비결정), 같은 waple-asset 스킴의
+    /// 다른 호스트로 대신한다 — isAllowedSubframeURL 이 검사하는 것과 동일한 불허 분기이며 로컬/결정적.
+    func testWebRendererBlocksSubframeNavigationToDisallowedHost() throws {
+        let html = """
+        <html><body>top<iframe id="f" src="waple-asset://evil/other.html"></iframe></body></html>
+        """
+        let dir = try makeWebProject(html: html, extraFiles: ["other.html": "<html><body>evil</body></html>"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let renderer = WebRenderer(mode: .web)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36))
+
+        try renderer.mount(in: container, project: project)
+        defer { renderer.teardown() }
+        let web = try XCTUnwrap(renderer.webViewForTesting)
+
+        let deadline = Date(timeIntervalSinceNow: 3)
+        while Date() < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+
+        // 차단되면 서브프레임은 최초 about:blank 그대로(동일 출처라 .href 읽기 가능). 차단되지 않으면
+        // waple-asset://evil/... 로 커밋되어(스킴핸들러가 호스트 불일치로 404 를 주더라도 내비게이션
+        // 자체는 커밋) 교차 출처가 되므로 .href 읽기가 실패(nil)하거나 다른 값이 되어 단언이 깨진다.
+        let href = pumpEvalJS(web, "document.getElementById('f').contentWindow.location.href")
+        XCTAssertEqual(href as? String, "about:blank")
+    }
+
+    /// 감사 S1 짝: 허용된 로컬(에셋) 서브프레임 내비게이션은 여전히 정상 로드돼야 한다(과차단 방지).
+    func testWebRendererAllowsLocalAssetSubframeNavigation() throws {
+        let html = """
+        <html><body>top<iframe id="f" src="waple-asset://wallpaper/other.html"></iframe></body></html>
+        """
+        let dir = try makeWebProject(html: html, extraFiles: ["other.html": "<html><body id=\"ok\">subframe-ok</body></html>"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let project = try ProjectJSONParser.parse(folderURL: dir)
+        let renderer = WebRenderer(mode: .web)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36))
+
+        try renderer.mount(in: container, project: project)
+        defer { renderer.teardown() }
+        let web = try XCTUnwrap(renderer.webViewForTesting)
+
+        let deadline = Date(timeIntervalSinceNow: 3)
+        var text: String?
+        while text != "subframe-ok", Date() < deadline {
+            text = pumpEvalJS(web, """
+                document.getElementById('f').contentDocument && \
+                document.getElementById('f').contentDocument.getElementById('ok') && \
+                document.getElementById('f').contentDocument.getElementById('ok').textContent
+                """) as? String
+        }
+        XCTAssertEqual(text, "subframe-ok")
+    }
+
+    /// isAllowedSubframeURL 순수 함수 단위 검증(WebKit 불요, 결정적) — 특히 이번에 새로 추가된
+    /// data: 분기는 위 통합 테스트로는 커버되지 않는 유일한 신규 로직이라 여기서 직접 확인한다.
+    func testIsAllowedSubframeURLGate() {
+        XCTAssertFalse(WebRenderer.isAllowedSubframeURL(URL(string: "https://attacker.example/evil.html")))
+        XCTAssertFalse(WebRenderer.isAllowedSubframeURL(URL(string: "wss://attacker.example/socket")))
+        XCTAssertFalse(WebRenderer.isAllowedSubframeURL(URL(string: "waple-asset://evil/other.html")))
+        XCTAssertFalse(WebRenderer.isAllowedSubframeURL(nil))
+        XCTAssertTrue(WebRenderer.isAllowedSubframeURL(URL(string: "data:text/plain,hi")))
+        XCTAssertTrue(WebRenderer.isAllowedSubframeURL(URL(string: "about:blank")))
+        XCTAssertTrue(WebRenderer.isAllowedSubframeURL(URL(string: "waple-asset://wallpaper/index.html")))
+    }
+
     func testSchemeHandlerRejectsUnexpectedHost() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("waple-web-\(UUID().uuidString)", isDirectory: true)

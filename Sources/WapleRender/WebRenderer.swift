@@ -30,6 +30,12 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         super.init()
     }
 
+    /// teardown 미호출 경로 안전망(SceneRenderer.deinit 과 동일 패턴 — 감사 L1). teardown() 은 각 필드를
+    /// 옵셔널 해제로 정리해 멱등이라 마운트 전/teardown 후 재호출도 안전.
+    deinit {
+        teardown()
+    }
+
     public func mount(in container: NSView, project: WallpaperProject) throws {
         guard let fileName = WallpaperPathSecurity.normalizedRelativePath(project.fileName),
               let fileURL = WallpaperPathSecurity.containedFileURL(fileName, root: project.folderURL) else {
@@ -184,6 +190,13 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 decisionHandler(.cancel)
                 return
             }
+        } else {
+            // 서브프레임(iframe 등) — 메인프레임만 게이팅하면 <iframe src="https://…"> 로 원격 콘텐츠가
+            // 무검증 로드된다(egress/IP 유출, 감사 S1). 로컬(에셋/about:blank/data:)만 허용.
+            guard Self.isAllowedSubframeURL(navigationAction.request.url) else {
+                decisionHandler(.cancel)
+                return
+            }
         }
         decisionHandler(.allow)
     }
@@ -211,6 +224,14 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         guard let url else { return false }
         if url.scheme == "about", url.absoluteString == "about:blank" { return true }
         return url.scheme == WallpaperSchemeHandler.scheme && url.host == WallpaperSchemeHandler.host
+    }
+
+    /// 서브프레임 게이트: 톱프레임 허용목록 + data: (인라인, 원격 fetch 없이 자체완결).
+    /// http(s)/ws(s) 등 그 외 스킴은 전부 차단(허용목록 방식 — 미지 스킴을 기본 거부).
+    static func isAllowedSubframeURL(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        if url.scheme == "data" { return true }
+        return isAllowedTopFrameURL(url)
     }
 
     private static func isAllowedBridgeMessage(_ message: WKScriptMessage, topURL: URL?) -> Bool {
