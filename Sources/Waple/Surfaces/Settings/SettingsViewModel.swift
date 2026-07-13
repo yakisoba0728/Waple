@@ -6,7 +6,8 @@ import WapleRender
 /// 설정 창 상태 미러 + 배선. 저장은 기존 전역 스토어를 직접 읽고 쓰되,
 /// 적용 side-effect(리마운트·타이머·복원·saver 설치)는 전부 AppDelegate 주입 클로저로 위임한다
 /// (LibraryViewModel.on* 전례 — 뷰가 AppDelegate 내부에 직접 손대지 않는다).
-@MainActor
+/// 비-@MainActor: 동기 전용이고 nonisolated AppDelegate 가 소유·구성한다(LibraryViewModel 과 동일 규약).
+/// 오프메인 콜백이 있는 Workshop/Discover VM 과 달리 @MainActor 불필요.
 final class SettingsViewModel: ObservableObject {
     @Published var fitMode: FitMode = SceneRenderSettings.fitMode
     @Published var occlusionRaw: Double = -1

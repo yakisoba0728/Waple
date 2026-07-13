@@ -12,7 +12,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentFolderURL: URL?
     private var currentProjectId: String?
     private var activeVideoProjectIds: [String] = []
-    private weak var videoMenu: NSMenu?
 
     private let store = LibraryStore(baseDirectory: LibraryStore.defaultBaseDirectory())
     private let monitorStore = MonitorAssignmentStore(baseDirectory: LibraryStore.defaultBaseDirectory())
@@ -22,23 +21,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var playlistTimer: Timer?
     private lazy var libraryVM = LibraryViewModel(store: store, playlist: playlistStore, monitors: monitorStore,
                                                   favorites: favoritesStore, folders: folderStore)
+    private lazy var settingsVM: SettingsViewModel = {
+        let vm = SettingsViewModel(playlist: playlistStore)
+        vm.onApplySelection = { [weak self] in _ = self?.applyCurrentSelection() }
+        vm.onSetOcclusion = { [weak self] raw in self?.setOcclusionMode(raw: raw) }
+        vm.onSetStillSync = { [weak self] on in self?.setDesktopStillSync(on) }
+        vm.onPlaylistChanged = { [weak self] in self?.schedulePlaylistTimer() }
+        vm.onChooseBaseAssets = { [weak self] in self?.chooseBaseAssets() }
+        vm.onSetStillWallpaper = { [weak self] in self?.setStillWallpaper() }
+        vm.onToggleSaver = { [weak self] in self?.toggleScreenSaverCore() ?? false }
+        vm.videoTargetIds = { [weak self] in
+            guard let self else { return [] }
+            return VideoSettingsTarget.projectIds(currentProjectId: self.currentProjectId,
+                                                  activeVideoProjectIds: self.activeVideoProjectIds)
+        }
+        vm.occlusionState = { [weak self] in
+            guard let self else { return (false, 0) }
+            return (self.pauseWhenOccluded, self.occlusionCoverageThreshold)
+        }
+        vm.stillSyncEnabled = { [weak self] in self?.desktopStillSync ?? false }
+        return vm
+    }()
     private let bannerModel = StatusBannerModel()
     private var libraryWindow: NSWindow?
-    private weak var fitMenu: NSMenu?
-    private weak var playlistMenu: NSMenu?
 
     // 데스크탑 가림 자동 일시정지(옵션, UserDefaults 영속, 기본 꺼짐 — 기존 동작 보존).
     private let visibilityMonitor = DesktopVisibilityMonitor()
     private var occlusionTimer: Timer?
     private var pausedByOcclusion = false   // 이 모니터가 정지시켰는지(수동 정지와 사유 분리)
     private var manualGlobalPause = false   // 하단 바 수동 일시정지(가림 정지와 독립)
-    private weak var occlusionMenu: NSMenu?
 
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
     private var stillSyncWork: DispatchWorkItem?
 
     // 최근 배경 서브메뉴(작업 6): 열 때마다 최신 목록으로 다시 채운다(NSMenuDelegate).
     private weak var recentMenu: NSMenu?
+
+    // 설정 창 + 축소된 트레이(SP5′): 설정 창 강한 참조·일시정지 항목·상태바 메뉴 참조.
+    private var settingsWindow: NSWindow?
+    private weak var pauseMenuItem: NSMenuItem?
+    private weak var statusMenu: NSMenu?
 
     private static let pauseWhenOccludedKey = "pauseWhenOccluded"
     private var pauseWhenOccluded: Bool {
@@ -53,90 +75,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         set { UserDefaults.standard.set(newValue, forKey: Self.occlusionThresholdKey) }
     }
 
-    @objc private func setFitMode(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let mode = FitMode(rawValue: raw) else { return }
-        SceneRenderSettings.fitMode = mode
-        fitMenu?.items.forEach { $0.state = (($0.representedObject as? String) == raw) ? .on : .off }
-        _ = applyCurrentSelection()  // 현재 선택 재적용으로 즉시 반영(할당-전용 표시 중에도 — P-B4)
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.title = "🖼"
 
+        // 트레이 축소(SP5′): 설정은 전부 설정 창으로 — 창 없이 필요한 동작만 남긴다.
         let menu = NSMenu()
+        menu.delegate = self   // 열 때마다 일시정지 항목 제목 최신화(menuNeedsUpdate)
         menu.addItem(NSMenuItem(title: "Waple 열기",
                                 action: #selector(openLibrary), keyEquivalent: "l"))
         menu.addItem(recentMenuItem())  // 최근 배경 서브메뉴(작업 6 — 구현은 확장)
-        let fitItem = NSMenuItem(title: "화면 맞춤", action: nil, keyEquivalent: "")
-        let fitMenu = NSMenu()
-        for mode in FitMode.allCases {
-            let item = NSMenuItem(title: mode.label, action: #selector(setFitMode(_:)), keyEquivalent: "")
-            item.representedObject = mode.rawValue
-            item.state = (SceneRenderSettings.fitMode == mode) ? .on : .off
-            fitMenu.addItem(item)
-        }
-        fitItem.submenu = fitMenu
-        menu.addItem(fitItem)
-        // 동영상 배경별 음량/배속(설계 2026-07-02 video-100). 현재 배경이 동영상이 아니면 no-op.
-        let videoItem = NSMenuItem(title: "동영상 설정", action: nil, keyEquivalent: "")
-        let videoMenu = NSMenu()
-        let muteItem = NSMenuItem(title: "음소거", action: #selector(setVideoVolume(_:)), keyEquivalent: "")
-        muteItem.representedObject = Float(0)
-        videoMenu.addItem(muteItem)
-        for v in [25, 50, 75, 100] {
-            let item = NSMenuItem(title: "음량 \(v)%", action: #selector(setVideoVolume(_:)), keyEquivalent: "")
-            item.representedObject = Float(v) / 100
-            videoMenu.addItem(item)
-        }
-        videoMenu.addItem(.separator())
-        for r in [0.5, 1.0, 1.5, 2.0] {
-            let item = NSMenuItem(title: "배속 \(r)x", action: #selector(setVideoRate(_:)), keyEquivalent: "")
-            item.representedObject = Float(r)
-            videoMenu.addItem(item)
-        }
-        videoItem.submenu = videoMenu
-        menu.addItem(videoItem)
-        self.videoMenu = videoMenu
-        let plItem = NSMenuItem(title: "재생목록", action: nil, keyEquivalent: "")
-        let plMenu = NSMenu()
-        let plToggle = NSMenuItem(title: "자동 전환 사용", action: #selector(togglePlaylist), keyEquivalent: "")
-        plToggle.state = playlistStore.enabled ? .on : .off
-        plMenu.addItem(plToggle)
-        for minutes in [5, 15, 30, 60] {
-            let it = NSMenuItem(title: "\(minutes)분 간격", action: #selector(setPlaylistInterval(_:)), keyEquivalent: "")
-            it.representedObject = minutes
-            it.state = playlistStore.intervalMinutes == minutes ? .on : .off
-            plMenu.addItem(it)
-        }
-        let hint = NSMenuItem(title: "항목은 라이브러리 우클릭으로 추가", action: nil, keyEquivalent: "")
-        hint.isEnabled = false
-        plMenu.addItem(.separator()); plMenu.addItem(hint)
-        plItem.submenu = plMenu
-        menu.addItem(plItem)
-        self.playlistMenu = plMenu
-        // 데스크탑이 다른 창에 가려지면 렌더러 일시정지(옵션, 기본 꺼짐). 서브메뉴로 커버 임계값 선택(작업 3).
-        let occItem = NSMenuItem(title: "가려지면 일시정지", action: nil, keyEquivalent: "")
-        occItem.submenu = makeOcclusionMenu()
-        menu.addItem(occItem)
-        menu.addItem(NSMenuItem(title: "웹 조작 창 열기",
-                                action: #selector(openWebInteraction), keyEquivalent: "i"))
-        menu.addItem(NSMenuItem(title: "정지 배경으로 설정",
-                                action: #selector(setStillWallpaper), keyEquivalent: ""))
-        menu.addItem(desktopStillSyncMenuItem())  // 정적 배경 동기화 토글(작업 1 — 구현은 확장)
-        menu.addItem(NSMenuItem(title: "기본 에셋 폴더 설정…",
-                                action: #selector(chooseBaseAssets), keyEquivalent: ""))
-        menu.addItem(screenSaverMenuItem())  // 화면보호기 토글(feat/screensaver — 구현은 파일 끝 확장)
-        // 로그인 시 자동 시작(등록 실패는 조용히 — 체크는 실제 status 반영).
-        let loginItem = NSMenuItem(title: "로그인 시 시작",
-                                   action: #selector(toggleLoginItem(_:)), keyEquivalent: "")
-        loginItem.state = LoginItemController.isEnabled ? .on : .off
-        menu.addItem(loginItem)
+        let pause = NSMenuItem(title: "일시정지",
+                               action: #selector(togglePauseFromMenu), keyEquivalent: "p")
+        menu.addItem(pause)
+        pauseMenuItem = pause
+        menu.addItem(NSMenuItem(title: "설정…",
+                                action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Waple",
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
-        self.fitMenu = fitMenu
+        statusMenu = menu
 
         libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) ?? false }
         libraryVM.onError = { [weak self] message in self?.notify(message) }
@@ -152,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         libraryVM.onPlaylistChanged = { [weak self] in self?.schedulePlaylistTimer() }
         libraryVM.onOpenInteraction = { [weak self] in self?.openWebInteraction() }
+        libraryVM.onOpenSettings = { [weak self] in self?.openSettings() }
         libraryVM.onAdvancePlaylist = { [weak self] in self?.advancePlaylist() }
         libraryVM.onTogglePause = { [weak self] in self?.toggleGlobalPause() ?? false }
         schedulePlaylistTimer()
@@ -180,6 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.libraryVM.focusedId = self?.libraryVM.entries.first?.id
             }
         }
+
+        // 설정 창 캡처용(판정 게이트): WAPLE_SMOKE_SETTINGS=1 이면 설정 창 자동 오픈.
+        if ProcessInfo.processInfo.environment["WAPLE_SMOKE_SETTINGS"] != nil {
+            DispatchQueue.main.async { [weak self] in self?.openSettings() }
+        }
     }
 
     /// WE 기본(공유) 에셋 팩 폴더 선택. 일부 씬은 패키지에 없는 공유 텍스처(particle/halo 등)를
@@ -196,51 +161,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         BaseAssetsSettings.baseAssetsDirectory = url
         _ = applyCurrentSelection()  // 누락 텍스처 즉시 반영(할당-전용 표시 중에도 — P-B4)
-    }
-
-    /// 현재 배경(동영상)의 음량/배속 설정 → 저장 + 재적용(기존 fit-mode 패턴). 체크 상태 갱신.
-    @objc private func setVideoVolume(_ sender: NSMenuItem) {
-        guard let v = sender.representedObject as? Float else { return }
-        let ids = VideoSettingsTarget.projectIds(currentProjectId: currentProjectId,
-                                                 activeVideoProjectIds: activeVideoProjectIds)
-        guard !ids.isEmpty else { return }
-        ids.forEach { VideoSettings.setVolume(v, id: $0) }
-        updateVideoMenuStates()
-        _ = applyCurrentSelection()
-    }
-
-    @objc private func setVideoRate(_ sender: NSMenuItem) {
-        guard let r = sender.representedObject as? Float else { return }
-        let ids = VideoSettingsTarget.projectIds(currentProjectId: currentProjectId,
-                                                 activeVideoProjectIds: activeVideoProjectIds)
-        guard !ids.isEmpty else { return }
-        ids.forEach { VideoSettings.setRate(r, id: $0) }
-        updateVideoMenuStates()
-        _ = applyCurrentSelection()
-    }
-
-    private func updateVideoMenuStates() {
-        guard let menu = videoMenu else { return }
-        let ids = VideoSettingsTarget.projectIds(
-            currentProjectId: currentProjectId,
-            activeVideoProjectIds: activeVideoProjectIds
-        )
-        guard let id = ids.first else {
-            menu.items.forEach { $0.state = .off }
-            return
-        }
-        let vol = VideoSettings.volume(id: id), rate = VideoSettings.rate(id: id)
-        let sameVolume = ids.allSatisfy { abs(VideoSettings.volume(id: $0) - vol) < 0.001 }
-        let sameRate = ids.allSatisfy { abs(VideoSettings.rate(id: $0) - rate) < 0.001 }
-        for item in menu.items {
-            guard let f = item.representedObject as? Float else { continue }
-            if item.action == #selector(setVideoVolume(_:)) {
-                item.state = sameVolume && abs(f - vol) < 0.001 ? .on : .off
-            }
-            if item.action == #selector(setVideoRate(_:)) {
-                item.state = sameRate && abs(f - rate) < 0.001 ? .on : .off
-            }
-        }
     }
 
     /// 현재 적용된 웹 월페이퍼의 조작 창(실입력 프록시 + 라이브 미러)을 연다.
@@ -273,6 +193,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         libraryWindow?.center()
         libraryWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 설정 창(SP5′) — openLibrary 와 같은 수명 규약: darkAqua·isReleasedWhenClosed=false·강한 참조.
+    @objc func openSettings() {
+        if settingsWindow == nil {
+            let hosting = NSHostingController(rootView: SettingsView(vm: settingsVM))
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "Waple 설정"
+            window.styleMask = [.titled, .closable]
+            window.setContentSize(Metrics.settingsSize)
+            window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
+            window.isReleasedWhenClosed = false
+            settingsWindow = window
+        }
+        settingsVM.refresh()
+        settingsWindow?.center()
+        settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -352,7 +290,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activeVideoProjectIds = screenProjects
                 .filter { $0.project.type == .video }
                 .map { $0.project.id }
-            updateVideoMenuStates()
             if let project {
                 ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
             }
@@ -386,19 +323,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = applyCurrentSelection()
     }
 
-    @objc private func togglePlaylist() {
-        playlistStore.enabled.toggle()
-        playlistMenu?.items.first?.state = playlistStore.enabled ? .on : .off
-        schedulePlaylistTimer()
-    }
-
-    @objc private func setPlaylistInterval(_ sender: NSMenuItem) {
-        guard let m = sender.representedObject as? Int else { return }
-        playlistStore.intervalMinutes = m
-        playlistMenu?.items.forEach { if $0.representedObject != nil { $0.state = (($0.representedObject as? Int) == m) ? .on : .off } }
-        schedulePlaylistTimer()
-    }
-
     /// 재생목록 타이머 재구성. 비활성/빈 목록 → 정지(스케줄 조건은 추출 로직).
     private func schedulePlaylistTimer() {
         playlistTimer?.invalidate()
@@ -424,41 +348,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 데스크탑 가림 자동 일시정지 (작업 2)
 
-    /// 커버 임계값 라디오 서브메뉴. represented 값: -1=사용안함, 0=기존(즉시), 0.3/0.5/0.8=비율.
-    private func makeOcclusionMenu() -> NSMenu {
-        let m = NSMenu()
-        let options: [(String, Double)] = [
-            ("사용 안 함", -1),
-            ("창이 뜨면 즉시(기존)", 0),
-            ("30% 이상 가려지면", 0.30),
-            ("50% 이상 가려지면", 0.50),
-            ("80% 이상 가려지면", 0.80),
-        ]
-        for (title, mode) in options {
-            let it = NSMenuItem(title: title, action: #selector(setOcclusionMode(_:)), keyEquivalent: "")
-            it.representedObject = mode
-            m.addItem(it)
-        }
-        occlusionMenu = m
-        updateOcclusionMenuStates()
-        return m
-    }
-
-    private func updateOcclusionMenuStates() {
-        occlusionMenu?.items.forEach {
-            guard let mode = $0.representedObject as? Double else { return }
-            $0.state = OcclusionMode.isSelected(mode, enabled: pauseWhenOccluded,
-                                                threshold: occlusionCoverageThreshold) ? .on : .off
-        }
-    }
-
-    @objc private func setOcclusionMode(_ sender: NSMenuItem) {
-        guard let mode = sender.representedObject as? Double else { return }
-        let (enabled, threshold) = OcclusionMode.decode(mode)
+    /// 가림 정지 설정(설정 창 경유). raw: -1=끔, 0=즉시, 0.3/0.5/0.8=커버 비율.
+    func setOcclusionMode(raw: Double) {
+        let (enabled, threshold) = OcclusionMode.decode(raw)
         pauseWhenOccluded = enabled
         occlusionCoverageThreshold = threshold
-        updateOcclusionMenuStates()
         scheduleOcclusionTimer()
+    }
+
+    /// 트레이 일시정지 항목 — 하단 바와 같은 toggleGlobalPause 를 태운다(상태 공유).
+    @objc private func togglePauseFromMenu() {
+        _ = toggleGlobalPause()
     }
 
     /// 폴링 타이머 재구성. 켜짐 → 1초 폴링(.common 모드). 꺼짐 → 정지하고, 가림 정지 중이었으면 해제.
@@ -572,18 +472,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return output
     }
 
-    // MARK: - 로그인 시 시작 (작업 4)
-
-    @objc private func toggleLoginItem(_ sender: NSMenuItem) {
-        do {
-            try LoginItemController.setEnabled(!LoginItemController.isEnabled)
-        } catch {
-            // SPM 단독 실행 파일은 등록 실패 가능 — 알럿 없이 로깅만, 체크는 실제 status 로 재조회.
-            notify("로그인 항목 설정 실패: \(error.localizedDescription)")
-        }
-        sender.state = LoginItemController.isEnabled ? .on : .off
-    }
-
     private func notify(_ message: String) {
         NSLog("%@", "[Waple] \(message)")
         if let w = libraryWindow, w.isVisible {
@@ -598,28 +486,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // 배선: 메뉴 1항목(applicationDidFinishLaunching) + apply 성공 경로 1줄(syncVideoPath).
 // ═════════════════════════════════════════════════════════════════════════════
 extension AppDelegate {
-    /// "화면보호기로 사용" 토글 메뉴 항목. 체크 상태 = 시스템에 Waple 이 선택되어 있는가.
-    func screenSaverMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "화면보호기로 사용",
-                              action: #selector(toggleScreenSaver(_:)), keyEquivalent: "")
-        item.state = ScreenSaverController.isSelected ? .on : .off
-        return item
-    }
-
-    /// 켜기 = saver 설치 + 시스템 선택 + 현재 동영상 경로 기록 + 설정 패널 열기. 끄기 = 선택 해제.
-    @objc func toggleScreenSaver(_ sender: NSMenuItem) {
+    /// 켜기 = saver 설치 + 시스템 선택 + 설정 패널 열기 / 끄기 = 선택 해제. 반환 = 토글 후 선택 상태.
+    func toggleScreenSaverCore() -> Bool {
         if ScreenSaverController.isSelected {
             ScreenSaverController.disable()
-            sender.state = .off
-            return
+            return false
         }
         do {
             let project = currentFolderURL.flatMap { projectForMount(folderURL: $0) }
             try ScreenSaverController.enable(currentProject: project)
-            sender.state = .on
             ScreenSaverController.openSettings()  // 사용자가 바로 확인할 수 있게 잠금 화면 패널 열기
+            return true
         } catch {
             notify("화면보호기 설치 실패: \(error.localizedDescription)")
+            return false
         }
     }
 }
@@ -648,21 +528,14 @@ extension AppDelegate {
         set { UserDefaults.standard.set(newValue, forKey: Self.desktopOriginalsKey) }
     }
 
-    func desktopStillSyncMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "정적 배경 동기화",
-                              action: #selector(toggleDesktopStillSync(_:)), keyEquivalent: "")
-        item.state = desktopStillSync ? .on : .off
-        return item
-    }
-
-    @objc func toggleDesktopStillSync(_ sender: NSMenuItem) {
-        desktopStillSync.toggle()
-        sender.state = desktopStillSync ? .on : .off
-        if desktopStillSync {
-            scheduleDesktopStillSync()      // 켜면 현재 배경을 즉시(지연 후) 동기화
+    /// 정적 배경 동기화 설정(설정 창 경유). 켜면 즉시(지연 후) 동기화, 끄면 원본 복원.
+    func setDesktopStillSync(_ enabled: Bool) {
+        desktopStillSync = enabled
+        if enabled {
+            scheduleDesktopStillSync()
         } else {
             stillSyncWork?.cancel()
-            restoreDesktopOriginals()       // 끄면 원본 복원
+            restoreDesktopOriginals()
         }
     }
 
@@ -786,6 +659,10 @@ extension AppDelegate: NSMenuDelegate {
 
     /// 서브메뉴를 열 때 최신 목록으로 다시 채운다(그 사이 삭제된 id 는 제외).
     public func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === statusMenu {
+            pauseMenuItem?.title = manualGlobalPause ? "재개" : "일시정지"
+            return
+        }
         guard menu === recentMenu else { return }
         menu.removeAllItems()
         let entries = recentWallpaperIds.compactMap { id in store.entries.first(where: { $0.id == id }) }

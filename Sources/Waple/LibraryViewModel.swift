@@ -57,6 +57,8 @@ final class LibraryViewModel: ObservableObject {
     var onPlaylistChanged: (() -> Void)?
     /// 웹 조작 창 열기(적용된 웹 월페이퍼의 입력 프록시) — AppDelegate 주입.
     var onOpenInteraction: (() -> Void)?
+    /// 툴바 설정 버튼 → AppDelegate.openSettings (SP5′).
+    var onOpenSettings: (() -> Void)?
     /// 하단 바: 재생목록 다음으로 — AppDelegate 주입.
     var onAdvancePlaylist: (() -> Void)?
     /// 하단 바: 전역 일시정지 토글(새 상태 반환) — AppDelegate 주입.

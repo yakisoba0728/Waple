@@ -94,9 +94,8 @@ struct MainWindowView: View {
                 .help("모바일 페어링은 지원하지 않습니다")
             Button { showDisplays = true } label: { Label("디스플레이", systemImage: "display") }
                 .help("모니터별 배경 할당")
-            Button {} label: { Label("설정", systemImage: "gearshape") }
-                .disabled(true)
-                .help("설정 창은 곧 제공됩니다(SP5′)")
+            Button { viewModel.onOpenSettings?() } label: { Label("설정", systemImage: "gearshape") }
+                .help("설정")
             if tab == .installed {
                 Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { panelVisible.toggle() } } label: {
                     Label("정보 패널", systemImage: "sidebar.trailing")
