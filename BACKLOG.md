@@ -5,20 +5,22 @@
 > **트리거가 오면 할 일**이다. 트리거 전에는 하지 않는다. 상세 근거는 [AUDIT.md](AUDIT.md)(감사
 > 리포트, 2026-07-06)와 각 파일 위치 참조.
 
-## UI 네이티브 재구축 (2026-07-12, 명시 요청으로 수행) — 상태
+## UI 네이티브 재구축 (2026-07-12~13, 명시 요청으로 수행) — **완료·트랙 마감**
 
-SP1′~4′ **완료**: 통합 툴바 셸·그리드·상세 패널·Now Playing 바 / 필터 사이드바 +
+SP1′~5′ **전부 완료·판정 통과**: 통합 툴바 셸·그리드·상세 패널·Now Playing 바 / 필터 사이드바 +
 즐겨찾기·폴더·평점·제거·메타 백필 / 디스플레이 화면(썸네일 모니터 박스) / 검색 탭(디스커버 레일
-4종: 트렌드·최신·구독순·평점순) + 창작마당 탭(무한 스크롤·다운로드 진행 UI·타일 평점, 레거시
-WorkshopView 제거). macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
+4종) + 창작마당 탭(무한 스크롤·다운로드 진행 UI·타일 평점, 레거시 WorkshopView 제거) / 설정 창
+(grouped Form 5섹션) + 트레이 6항목 축소(일시정지 신설). 부수 수정: 액세서리 앱 mainMenu 부재로
+전 텍스트 필드 ⌘V 불가 → 최소 편집 메뉴 장착. SP4′ 실데이터는 사용자 키 입력 후 실사용 확인.
+macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 스펙: [2026-07-12-native-ui-redesign](docs/superpowers/specs/2026-07-12-native-ui-redesign.md),
-SP4′ 플랜: [2026-07-13-sp4-discover-workshop](docs/superpowers/plans/2026-07-13-sp4-discover-workshop.md).
+플랜: [SP4′](docs/superpowers/plans/2026-07-13-sp4-discover-workshop.md) ·
+[SP5′](docs/superpowers/plans/2026-07-13-sp5-settings-tray.md).
 
-트리거 대기(명시 요청 시 착수):
-- **SP5′ 설정 창 + 트레이 축소** — 메뉴바에 흩어진 설정(fit·가림 정지·base assets·화면보호기 등)을 설정 창으로 통합.
-- **SP4′ 실데이터 검증**(트리거: Steam Web API 키 확보) — 두 탭 실검증(레일 4행 로드·무한 스크롤·평점 배지·다운로드). 2026-07-13 판정은 키 게이트 캡처+단위 테스트 9개 기준(키 발급 불가로 유보).
+잔여 소항목 — 트리거: 해당 기능 사용 중 체감 시:
 - "이미 설치됨" 배지(창작마당 타일) — publishedfileid ≠ project.json id 라 대조 키 부재로 스코프아웃. 필요 시 다운로드 시점 매핑 저장부터.
-- [PropertyEditorView.swift:55](Sources/Waple/PropertyEditorView.swift:55) deprecated 1-파라미터 `onChange` 1건(SP4′ 이전부터 존재) — 기회 시.
+- 설정 창이 열려 있는 동안 적용 전환으로 바뀐 동영상 대상은 미러링하지 않음(재오픈 시 refresh) — 표시 문제, 체감 시.
+- [PropertyEditorView.swift:55](Sources/Waple/PropertyEditorView.swift:55) deprecated 1-파라미터 `onChange` 1건(재구축 이전부터 존재) — 기회 시.
 
 ## 시각 충실도 — 트리거: 해당 씬을 실제 배경으로 쓸 때
 
