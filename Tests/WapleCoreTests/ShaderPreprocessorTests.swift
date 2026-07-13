@@ -2,6 +2,33 @@ import XCTest
 @testable import WapleCore
 
 final class ShaderPreprocessorTests: XCTestCase {
+    // S5: `#if ((((…))))` 류 병리적 중첩이 재귀 파서를 스택 오버플로시키면 안 된다 — 캡(256) 초과는
+    // 그레이스풀 0(미정의 취급)으로 폴백. 5000 중첩은 캡을 한참 넘어 안쪽 리터럴에 닿지 못하므로 0 이 맞다.
+    func testExprEvalDeepNestingDoesNotCrash() {
+        let deep = String(repeating: "(", count: 5000) + "1" + String(repeating: ")", count: 5000)
+        XCTAssertEqual(ExprEval.eval(deep, defines: [:]), 0)   // 캡 초과 — 안쪽 리터럴 미도달, 그레이스풀 0
+        // `!` 체인은 캡 경계에서 홀/짝 반전이 섞여 정확한 값은 구현 세부(오프바이원)에 민감 —
+        // 여기선 "크래시 없이 반환"만 증명(값은 불문).
+        let deepBang = String(repeating: "!", count: 5000) + "0"
+        _ = ExprEval.eval(deepBang, defines: [:])
+    }
+
+    // S5: 정상 규모 중첩(≪ 256)은 캡의 영향을 받지 않고 그대로 평가돼야 한다(무회귀).
+    func testExprEvalNormalNestingStillEvaluatesCorrectly() {
+        let normal = String(repeating: "(", count: 10) + "1 + 2" + String(repeating: ")", count: 10)
+        XCTAssertEqual(ExprEval.eval(normal, defines: [:]), 3)
+        XCTAssertEqual(ExprEval.eval("((A))", defines: ["A": 5]), 5)
+        XCTAssertEqual(ExprEval.eval("!!!!!0", defines: [:]), 1)   // 홀수 개 부정 — 0(거짓)의 반전은 1
+    }
+
+    // S5: 전체 파이프라인(`#if` → ExprEval) 레벨에서도 병리적 중첩이 크래시하지 않는다(티켓 예시 그대로).
+    func testPreprocessDeepNestedIfDoesNotCrash() {
+        let deep = "#if " + String(repeating: "(", count: 5000) + "1" + String(repeating: ")", count: 5000)
+            + "\nyes\n#endif"
+        let out = ShaderPreprocessor.preprocess(deep, combos: [:])
+        XCTAssertFalse(out.contains("yes"), "캡 초과로 안쪽 리터럴 미도달 → 조건 거짓")
+    }
+
     // T-B7: 악성 `#if` 리터럴의 오버플로가 트랩(크래시)하면 안 된다 — 랩 값이면 충분(분기 결정만 하면 됨).
     func testExprEvalOverflowDoesNotTrap() {
         XCTAssertEqual(ExprEval.eval("9223372036854775807 + 1", defines: [:]), Int.min)     // &+ 랩

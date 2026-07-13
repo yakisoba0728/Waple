@@ -75,6 +75,23 @@ final class Model3DTests: XCTestCase {
         XCTAssertTrue(m.bones.isEmpty)
     }
 
+    /// T3: line 242 의 `maxIndex >= vCount` 가드가 정확히 경계에서 작동함을 증명 — 동일 정점수·구조에서
+    /// 인덱스 값만 1 차이나는 두 블롭을 대비해, nil 이 가드에서 오는 것이지 무관한 구조 결함이 아님을 확인.
+    func testVertexIndexGuardRejectsExactlyAtBoundary() {
+        func mesh(indices: [UInt16]) -> SynthMesh {
+            let verts = [
+                SynthVert(pos: SIMD3(-1, 0, 0), nrm: SIMD3(0, 0, 1), tan: SIMD4(1, 0, 0, -1), uv: SIMD2(0, 1)),
+                SynthVert(pos: SIMD3(1, 0, 0), nrm: SIMD3(0, 0, 1), tan: SIMD4(1, 0, 0, -1), uv: SIMD2(1, 1)),
+            ]
+            return SynthMesh(material: "materials/x.json", min: .zero, max: .zero, skinned: false,
+                             verts: verts, indices: indices)
+        }
+        // 경계 안(maxIndex == vCount-1 == 1): 파스 성공.
+        XCTAssertNotNil(Model3D.parse(makeModelU16([mesh(indices: [0, 1, 0])])))
+        // 경계 밖(maxIndex == vCount == 2): 인덱스만 1 초과 → nil(242 가드).
+        XCTAssertNil(Model3D.parse(makeModelU16([mesh(indices: [0, 1, 2])])))
+    }
+
     func testRejectsMeshWithVertexIndexOutOfRange() {
         let verts = [
             SynthVert(pos: SIMD3(-1, 0, 0), nrm: SIMD3(0, 0, 1), tan: SIMD4(1, 0, 0, -1), uv: SIMD2(0, 1)),

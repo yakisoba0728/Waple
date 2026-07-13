@@ -223,6 +223,10 @@ private struct Parser {
     let tokens: [ConditionToken]
     let values: [String: PropertyValue]
     var index = 0
+    // parsePrimary 자기재귀(괄호·`!` 중첩) 깊이 — 악성 중첩 입력의 스택 오버플로 방지.
+    // 256 은 SceneDocument.world() 의 32 캡을 본떴으되 넉넉히 잡음(실제 조건식은 10 미만 중첩).
+    var depth = 0
+    private static let maxDepth = 256
 
     var isAtEnd: Bool { index >= tokens.count }
 
@@ -259,6 +263,9 @@ private struct Parser {
     }
 
     private mutating func parsePrimary() -> ConditionValue? {
+        depth += 1
+        defer { depth -= 1 }
+        guard depth <= Self.maxDepth else { return nil }  // 캡 초과 — 기존 파스실패 경로(nil) 재사용
         guard let token = advance() else { return nil }
         switch token {
         case .bool(let value):

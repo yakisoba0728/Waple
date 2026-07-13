@@ -88,9 +88,19 @@ public enum WallpaperProperties {
     private static func parseValue(_ raw: Any?, type: String) -> PropertyValue {
         switch type.lowercased() {
         case "bool", "checkbox":
-            return .bool((raw as? Bool) ?? false)
+            // WE project.json 은 종종 bool 을 문자열로 싣는다("1"/"true") — 네이티브 Bool 경로(무회귀)
+            // 다음에만 문자열을 관용 파스. 숫자 NSNumber(0/1)의 as? Bool 둔갑은 기존 동작 그대로 보존.
+            if let b = raw as? Bool { return .bool(b) }
+            if let s = raw as? String { return .bool(s == "true" || (lenientFloat(s) ?? 0) != 0) }
+            return .bool(false)
         case "slider":
-            return .number(parseNumber(raw) ?? 0)
+            // 마찬가지로 문자열 숫자("0.5") 관용 — parseNumber(무회귀, Double 정밀도 보존) 우선 시도 후
+            // 실패(비숫자·String)할 때만 lenientFloat 폴백. lenientFloat(raw) 를 바로 쓰지 않는 이유:
+            // NSNumber(bool) 이 Swift 에서 `as? Double` 로도 브리지되어(1.0/0.0) parseNumber 의 CFBoolean
+            // 배제를 무력화한다 — 문자열로 이미 좁힌 값에만 적용해 그 함정을 피한다.
+            if let n = parseNumber(raw) { return .number(n) }
+            if let s = raw as? String, let f = lenientFloat(s) { return .number(Double(f)) }
+            return .number(0)
         default:
             if let s = raw as? String { return .string(s) }
             if let b = raw as? Bool { return .bool(b) }

@@ -86,6 +86,8 @@ public enum GLSLTypeAdapter {
         var intVars = Set<String>()   // int 선언 지역 — % 연산자 유지 판별용
         let returnSize: Int?
         var out = ""   // 재구성 출력
+        // ternary/unary/primary 공유 재귀 깊이 — 악성 중첩(괄호·`!!!!…`·`?:` 체인)의 스택 오버플로 방지.
+        var exprDepth = 0
         init(_ toks: [Tok], env: Env, returnSize: Int?) {
             self.toks = toks; self.env = env; self.returnSize = returnSize; self.intVars = env.intVars
         }
@@ -93,6 +95,10 @@ public enum GLSLTypeAdapter {
         // EOF 를 넘어 호출돼도(잘린 입력) 빈 토큰 반환 — toks[pos] 무한계 인덱싱 트랩 방지. 유효 입력엔 무영향.
         func advance() -> Tok { defer { pos += 1 }; return pos < toks.count ? toks[pos] : Tok(trivia: "", text: "") }
     }
+
+    /// 재귀 하강 최대 중첩(ternary/unary/primary 공유). SceneDocument.world() 의 32 캡을 본떴으되
+    /// 넉넉히 잡음 — 실제 셰이더 식은 10 미만 중첩(합법 입력은 절대 걸리지 않음).
+    private static let maxExprDepth = 256
 
     private struct Node { var text: String; var size: Int }  // size 0 = 불투명
 
@@ -253,6 +259,9 @@ public enum GLSLTypeAdapter {
     private static func expression(_ p: P) -> Node { ternary(p) }
 
     private static func ternary(_ p: P) -> Node {
+        p.exprDepth += 1
+        defer { p.exprDepth -= 1 }
+        guard p.exprDepth <= maxExprDepth else { return Node(text: "", size: 0) }  // 캡 초과 — 무개입 폴백
         var cond = orExpr(p)
         guard p.peek() == "?" else { return cond }
         cond.text += p.advance().full
@@ -332,6 +341,9 @@ public enum GLSLTypeAdapter {
     }
 
     private static func unary(_ p: P) -> Node {
+        p.exprDepth += 1
+        defer { p.exprDepth -= 1 }
+        guard p.exprDepth <= maxExprDepth else { return Node(text: "", size: 0) }  // 캡 초과 — 무개입 폴백
         if let t = p.peek(), ["-","!","+","~","++","--"].contains(t) {
             let opTok = p.advance()
             let e = unary(p)
@@ -397,6 +409,9 @@ public enum GLSLTypeAdapter {
     }
 
     private static func primary(_ p: P) -> Node {
+        p.exprDepth += 1
+        defer { p.exprDepth -= 1 }
+        guard p.exprDepth <= maxExprDepth else { return Node(text: "", size: 0) }  // 캡 초과 — 무개입 폴백
         guard p.pos < p.toks.count else { return Node(text: "", size: 0) }
         let tok = p.advance()
         let t = tok.text
