@@ -130,10 +130,13 @@ extension SceneRenderer {
             }
             if !effects.isEmpty { hasEffects = true }
             if !layer.animations.isEmpty { hasAnimations = true }
-            // 퍼펫(.mdl): 스키닝 메시 — 로드 실패 시 정지 쿼드 폴백(로그).
+            // 퍼펫(.mdl): 스키닝 메시. WE 규약(changelog: "Only load puppet ref if file exists on
+            // global file system") — ref 부재는 정상(기본 models/1x1.json 의 미베이크 puppet 등, 실측
+            // 2955378002 에서만 50 레이어)이라 조용히 일반 쿼드. 다른 선택적 에셋과 동일하게 quietAssetData
+            // 로 로드하고, **바이트는 있으나 파싱 실패**한 실결함만 로그(과침묵 방지).
             var puppetModel: PuppetModel? = nil
-            if let pp = layer.puppet {
-                if let bytes = assetData(pp, package: package), let pm = PuppetModel.parse(bytes) {
+            if let pp = layer.puppet, let bytes = quietAssetData(pp, package: package) {
+                if let pm = PuppetModel.parse(bytes) {
                     puppetModel = pm
                     if !pm.animations.isEmpty { hasAnimations = true }
                 } else {
