@@ -21,6 +21,16 @@ final class DiscoverViewModelTests: XCTestCase {
         }
     }
 
+    private final class KeyBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _v: String?
+        init(_ v: String?) { _v = v }
+        var value: String? {
+            get { lock.lock(); defer { lock.unlock() }; return _v }
+            set { lock.lock(); _v = newValue; lock.unlock() }
+        }
+    }
+
     private func itemsJSON(count: Int) -> Data {
         let details = (1...count).map { "{\"publishedfileid\":\"\($0)\",\"title\":\"t\($0)\"}" }
             .joined(separator: ",")
@@ -77,6 +87,28 @@ final class DiscoverViewModelTests: XCTestCase {
         await vm.reload(.latest)
         guard case .loaded(let items) = vm.rows[1].state else { return XCTFail("재시도 후 로드돼야 함") }
         XCTAssertEqual(items.count, 2)
+    }
+
+    /// 키 클리어 후 재입력(계정/키 변경) → 낡은 레일을 버리고 재로드해야 한다. 같은 키 재진입은 스킵.
+    func testKeyChangeReloadsRailsButSameKeySkips() async {
+        let recorder = URLRecorder()
+        let key = KeyBox("K1")
+        let vm = DiscoverViewModel(client: WorkshopClient(transport: { url in
+            recorder.record(url); return (self.itemsJSON(count: 1), 200)
+        }), keyProvider: { key.value })
+
+        await vm.loadIfNeeded()
+        XCTAssertEqual(recorder.urls.count, 4, "첫 로드: 4행")
+
+        await vm.loadIfNeeded()
+        XCTAssertEqual(recorder.urls.count, 4, "같은 키 재진입은 재로드하지 않는다")
+
+        key.value = "K2"   // 키 변경(클리어 후 재입력 시뮬레이트)
+        await vm.loadIfNeeded()
+        XCTAssertEqual(recorder.urls.count, 8, "키 변경 시 4행 재로드")
+        for row in vm.rows {
+            guard case .loaded = row.state else { return XCTFail("재로드 후 로드 상태여야 함: \(row.state)") }
+        }
     }
 
     func testLoadIfNeededRunsOnce() async {

@@ -26,6 +26,9 @@ final class WorkshopViewModel: ObservableObject {
     private let keyProvider: () -> String?
     private var page = 1
     private var attemptedInitialLoad = false
+    // 요청 세대. 정렬 급변경마다 새 search 가 뜨고 응답이 경합한다 — 시작 시 증가·캡처하고,
+    // 응답 적용 직전에 최신 세대와 비교해 낡은 응답(다른 정렬/이전 검색)을 폐기한다.
+    private var searchEpoch = 0
 
     struct DownloadUIState: Equatable {
         enum Phase: Equatable {
@@ -75,18 +78,24 @@ final class WorkshopViewModel: ObservableObject {
 
     func search() async {
         guard let key = keyProvider() else { hasAPIKey = false; return }
+        searchEpoch &+= 1
+        let epoch = searchEpoch
         attemptedInitialLoad = true
         isSearching = true
         statusMessage = nil
         page = 1
         canLoadMore = false
-        defer { isSearching = false }
+        // 최신 세대만 isSearching 을 내린다 — 낡은 search 가 먼저 끝나도 스피너를 끄지 않게.
+        defer { if epoch == searchEpoch { isSearching = false } }
         do {
-            results = try await client.search(apiKey: key, page: page, numPerPage: pageSize,
-                                              searchText: searchText, sort: sort)
-            canLoadMore = results.count == pageSize
-            if results.isEmpty { statusMessage = "결과가 없습니다." }
+            let fetched = try await client.search(apiKey: key, page: 1, numPerPage: pageSize,
+                                                  searchText: searchText, sort: sort)
+            guard epoch == searchEpoch else { return }   // 더 새 검색이 떴다 → 이 응답 폐기
+            results = fetched
+            canLoadMore = fetched.count == pageSize
+            if fetched.isEmpty { statusMessage = "결과가 없습니다." }
         } catch {
+            guard epoch == searchEpoch else { return }
             results = []
             statusMessage = (error as? LocalizedError)?.errorDescription ?? "검색 실패: \(error.localizedDescription)"
         }
@@ -95,17 +104,22 @@ final class WorkshopViewModel: ObservableObject {
     /// 그리드 마지막 타일 onAppear 에서 호출 — 다음 페이지를 append(중복 id 는 버린다: ForEach id 충돌 방지).
     func loadMore() async {
         guard canLoadMore, !isLoadingMore, !isSearching, let key = keyProvider() else { return }
+        let epoch = searchEpoch
         isLoadingMore = true
-        defer { isLoadingMore = false }
-        page += 1
+        defer { isLoadingMore = false }   // 이 loadMore 단독 소유 플래그 — 무조건 해제(폐기돼도 재개통해야 함)
+        // page 는 append 가 실제 반영될 때만 올린다 — 검색이 끼어들어 폐기되면 page 를 건드리지 않아
+        // pagination gap(중간 페이지 건너뜀)을 원천 차단한다. 실패 시에도 page 미변경이라 재시도가 같은 페이지.
+        let nextPage = page + 1
         do {
-            let batch = try await client.search(apiKey: key, page: page, numPerPage: pageSize,
+            let batch = try await client.search(apiKey: key, page: nextPage, numPerPage: pageSize,
                                                 searchText: searchText, sort: sort)
+            guard epoch == searchEpoch else { return }   // 검색이 끼어든 응답 → page/results 미변경 후 폐기
+            page = nextPage
             let known = Set(results.map(\.id))
             results.append(contentsOf: batch.filter { !known.contains($0.id) })
             canLoadMore = batch.count == pageSize
         } catch {
-            page -= 1   // 다음 loadMore 가 같은 페이지를 재시도
+            guard epoch == searchEpoch else { return }
             statusMessage = (error as? LocalizedError)?.errorDescription ?? "더 불러오기 실패: \(error.localizedDescription)"
         }
     }
