@@ -496,7 +496,7 @@ extension SceneRenderer {
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         // f_lit 유니폼: rect(uv→월드) + 라이트 위치/색·반경 + 앰비언트(씬 상수). 라이트 레이어만.
         if layer.isLit, litPipeline != nil {
-            var rect = [litRect0, litRect1]
+            let rect = [litRect0, litRect1]
             rect.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
             lightPositions.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2) }
             lightColorRadius.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 3) }
