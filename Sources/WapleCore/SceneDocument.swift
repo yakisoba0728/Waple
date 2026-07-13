@@ -396,6 +396,19 @@ public struct SceneDocument: Equatable {
     /// dot(N=+Z, up=(0,1,0))=0 → mix(skylight, ambient, 0.5) = (skylight+ambient)/2 로 소비.
     public var skylightColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
 
+    /// `general.hdr` — HDR 씬 플래그. true 면 렌더러가 float(rgba16Float) 누적 버퍼 + 톤맵 패스로
+    /// >1.0 합을 [0,1] 로 압축한다(종전 bgra8 하드클램프 = 밝은 영역 순백 "백화" 방지).
+    /// WE combine_srgb/hdr_upsample 경로 대응(lane-04 §1.2). 부재 시 false = 종전 LDR 경로(무회귀).
+    public var hdr: Bool = false
+    /// `general.bloom` — 블룸(밝은영역 광륜 확산) 플래그. **현재 파싱만** — 확산 패스는 후속(톤맵 우선).
+    public var bloom: Bool = false
+    /// 블룸 파라미터(파싱만, 미소비). WE `bloomstrength`/`bloomthreshold` + hdr 변형(lane-04 §1.1).
+    /// 향후 블룸 패스가 threshold 로 밝은영역 추출, strength 로 가산 스케일에 사용.
+    public var bloomStrength: Float = 0
+    public var bloomThreshold: Float = 0
+    public var bloomHDRStrength: Float = 0
+    public var bloomHDRThreshold: Float = 0
+
     /// 2D 포워드 라이팅 활성 조건: 2D 오르토 씬(camera3D==nil) + 라이트 존재. 3D(원근) 씬은 메시
     /// 라이팅 경로 담당(현행 미구현 — 보고). 개별 레이어는 `SceneLayer.lighting`(LIGHTING 콤보)로 추가 게이트.
     public var forwardLit2D: Bool { camera3D == nil && !lights3D.isEmpty }
@@ -424,6 +437,9 @@ extension SceneDocument {
         let clear = vec3(general["clearcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let ambientColor = vec3(general["ambientcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         let skylightColor = vec3(general["skylightcolor"]) ?? ambientColor
+        // HDR/블룸 플래그 — 종전 조용히 폐기(lane-04 §2.1). {"user":…,"value":Bool} 바인딩은 unwrap 이 처리.
+        let hdr = (unwrap(general["hdr"]) as? Bool) ?? false
+        let bloom = (unwrap(general["bloom"]) as? Bool) ?? false
         // {"user":…,"value":Bool} 바인딩 형태(실물 21씬)는 unwrap 이 value 를 꺼낸다(평문 Bool 은 그대로).
         let parallaxEnabled = (unwrap(general["cameraparallax"]) as? Bool) ?? false
         let parallaxAmount = float(general["cameraparallaxamount"]) ?? 1
@@ -514,6 +530,13 @@ extension SceneDocument {
         out.sounds = sounds
         out.ambientColor = ambientColor
         out.skylightColor = skylightColor
+        out.hdr = hdr
+        out.bloom = bloom
+        // bloom 파라미터는 파싱만(float 는 문자열/숫자/{value} 바인딩 관용) — 미부재 시 0.
+        out.bloomStrength = float(general["bloomstrength"]) ?? 0
+        out.bloomThreshold = float(general["bloomthreshold"]) ?? 0
+        out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 0
+        out.bloomHDRThreshold = float(general["bloomhdrthreshold"]) ?? 0
         return out
     }
 

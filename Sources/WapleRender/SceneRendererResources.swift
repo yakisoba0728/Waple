@@ -632,7 +632,7 @@ extension SceneRenderer {
         pd.vertexFunction = lib.makeFunction(name: "pv_main")
         pd.fragmentFunction = lib.makeFunction(name: "pf_main")
         let a = pd.colorAttachments[0]!
-        a.pixelFormat = .bgra8Unorm
+        a.pixelFormat = accPixelFormat   // A2: acc 를 타깃으로 하므로 acc 포맷과 일치(HDR=float)
         a.isBlendingEnabled = true
         a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
@@ -652,6 +652,13 @@ extension SceneRenderer {
 
     func makeOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: max(w,1), height: max(h,1), mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]
+        return device.makeTexture(descriptor: d)
+    }
+
+    /// A2 HDR: float(rgba16Float) 누적 타깃 — >1.0 합 보존(bgra8 하드클램프 백화 방지). 톤맵 패스 입력.
+    func makeOffscreenHDR(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: max(w,1), height: max(h,1), mipmapped: false)
         d.usage = [.renderTarget, .shaderRead]
         return device.makeTexture(descriptor: d)
     }

@@ -25,6 +25,30 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers[0].size, Vec2(x: 1920, y: 1080))
     }
 
+    /// A2: general.hdr/bloom + 블룸 파라미터 파싱(종전 조용히 폐기 — lane-04 §2.1).
+    func testParsesHDRAndBloomFlags() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},
+          "hdr":true,"bloom":true,"bloomstrength":3.37,"bloomthreshold":0.36,
+          "bloomhdrstrength":1.4,"bloomhdrthreshold":0.70},"objects":[]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertTrue(doc.hdr)
+        XCTAssertTrue(doc.bloom)
+        XCTAssertEqual(doc.bloomStrength, 3.37, accuracy: 1e-4)
+        XCTAssertEqual(doc.bloomThreshold, 0.36, accuracy: 1e-4)
+        XCTAssertEqual(doc.bloomHDRStrength, 1.4, accuracy: 1e-4)
+        XCTAssertEqual(doc.bloomHDRThreshold, 0.70, accuracy: 1e-4)
+    }
+
+    /// hdr/bloom 부재 시 기본 false(종전 LDR 경로 유지 = 무회귀).
+    func testHDRBloomDefaultFalseWhenAbsent() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertFalse(doc.hdr)
+        XCTAssertFalse(doc.bloom)
+    }
+
     func testSkipsSoundAndInvisibleObjects() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},

@@ -201,13 +201,17 @@ extension SceneRenderer {
     }
 
     func pooledOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice, bgra: Bool = false) -> MTLTexture? {
-        let key = "\(bgra ? "b" : "")\(max(w,1))x\(max(h,1))"
+        // A2 HDR: bgra 요청(acc·합성 스냅샷)은 HDR 씬에서 float(rgba16Float)로 승격 — runFrameBufferLayer/
+        // runBlendModeLayer 본문 무수정으로 스냅샷이 float acc 와 동일 포맷(blit copy 정합)이 되게 한다.
+        let hdrBGRA = bgra && hdrActive
+        let key = "\(hdrBGRA ? "h" : (bgra ? "b" : ""))\(max(w,1))x\(max(h,1))"
         let idx = poolCheckout[key, default: 0]
         if idx < (texturePool[key]?.count ?? 0) {
             poolCheckout[key] = idx + 1
             return texturePool[key]![idx]
         }
-        guard let t = bgra ? makeOffscreenBGRA(w, h, device) : makeOffscreen(w, h, device) else { return nil }
+        guard let t = hdrBGRA ? makeOffscreenHDR(w, h, device)
+                              : (bgra ? makeOffscreenBGRA(w, h, device) : makeOffscreen(w, h, device)) else { return nil }
         texturePool[key, default: []].append(t)
         poolCheckout[key] = idx + 1
         return t
