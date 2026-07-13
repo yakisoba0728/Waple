@@ -356,9 +356,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleOcclusionTimer()
     }
 
-    /// 트레이 일시정지 항목 — 하단 바와 같은 toggleGlobalPause 를 태운다(상태 공유).
+    /// 트레이 일시정지 항목 — 하단 바와 같은 toggleGlobalPause 를 태우고, 하단 바 미러(isPaused)도 동기화
+    /// (안 하면 트레이로 토글한 상태가 하단 바 라벨/프리뷰 애니에 반영되지 않는다).
     @objc private func togglePauseFromMenu() {
-        _ = toggleGlobalPause()
+        libraryVM.isPaused = toggleGlobalPause()
     }
 
     /// 폴링 타이머 재구성. 켜짐 → 1초 폴링(.common 모드). 꺼짐 → 정지하고, 가림 정지 중이었으면 해제.
