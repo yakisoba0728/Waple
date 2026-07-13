@@ -26,6 +26,22 @@ final class WorkshopPagingTests: XCTestCase {
         }
     }
 
+    /// 1회성 래치 — transport 의 진입/재개를 결정적으로 인터리브한다.
+    private actor Latch {
+        private var signaled = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        func wait() async {
+            if signaled { return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        func signal() {
+            guard !signaled else { return }
+            signaled = true
+            waiters.forEach { $0.resume() }
+            waiters.removeAll()
+        }
+    }
+
     private func itemsJSON(ids: ClosedRange<Int>) -> Data {
         let details = ids.map { "{\"publishedfileid\":\"\($0)\",\"title\":\"t\($0)\"}" }
             .joined(separator: ",")
@@ -122,6 +138,31 @@ final class WorkshopPagingTests: XCTestCase {
         await vm.loadMore()                       // 같은 2페이지 재요청 → 성공
         XCTAssertEqual(queryValue(recorder.urls[2], "page"), "2")
         XCTAssertEqual(vm.results.count, 60)
+    }
+
+    /// 정렬 급변경 경합: 낡은 검색 응답이 늦게 도착해도 최신 검색 결과를 덮어쓰지 않아야 한다(요청 에폭).
+    func testStaleSearchIsDiscardedWhenNewerSearchWins() async {
+        let entered = Latch()   // 낡은 검색이 transport 에 진입(epoch=1 확정)했음을 알린다
+        let proceed = Latch()   // 최신 검색이 적용된 뒤 낡은 검색을 재개시킨다
+        let vm = makeVM { url in
+            // 정렬로 두 응답 구분: subscriptions(query_type 9)=낡은 검색, latest(1)=최신 검색
+            if self.queryValue(url, "query_type") == "9" {
+                await entered.signal()
+                await proceed.wait()
+                return (self.itemsJSON(ids: 1...5), 200)      // 낡은 데이터 — 반영되면 안 됨
+            }
+            return (self.itemsJSON(ids: 100...105), 200)       // 최신 데이터 — 반영돼야 함
+        }
+        vm.sort = .subscriptions
+        let stale = Task { await vm.search() }   // 첫(낡은) 검색 — transport 에서 붙잡힘
+        await entered.wait()                       // epoch=1·URL(정렬9) 확정 후에만 진행
+        vm.sort = .latest
+        await vm.search()                          // 최신 검색 — 즉시 완료·적용(epoch=2)
+        XCTAssertEqual(vm.results.map(\.id), (100...105).map(String.init), "최신 검색 결과가 반영된다")
+        await proceed.signal()                     // 낡은 검색 재개
+        await stale.value                          // 낡은 응답 도착 — epoch 불일치로 폐기돼야 함
+        XCTAssertEqual(vm.results.map(\.id), (100...105).map(String.init), "낡은 응답이 최신을 덮어쓰지 않는다")
+        XCTAssertFalse(vm.isSearching, "최신 검색 종료 후 스피너 내려감(낡은 검색 defer 가 건드리지 않음)")
     }
 
     func testSearchIfNeededRunsOnceAndSkipsWithoutKey() async {

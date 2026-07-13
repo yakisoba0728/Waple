@@ -32,6 +32,8 @@ final class DiscoverViewModel: ObservableObject {
     private let client: WorkshopClient
     private let keyProvider: () -> String?
     private var attemptedLoad = false
+    /// 마지막으로 로드한 키. 키가 바뀌면(재발급/계정 변경) 낡은 레일을 버리고 재로드한다.
+    private var loadedKey: String?
 
     init(client: WorkshopClient = .live(),
          keyProvider: @escaping () -> String? = { SteamAPIKeyStore.load() }) {
@@ -39,10 +41,15 @@ final class DiscoverViewModel: ObservableObject {
         self.keyProvider = keyProvider
     }
 
-    /// 탭 진입 시 1회 로드(키 게이트 통과 후 호출된다). 4행 동시 — 행이 끝나는 대로 개별 갱신.
+    /// 탭 진입 시 로드(키 게이트 통과 후 호출된다). 4행 동시 — 행이 끝나는 대로 개별 갱신.
+    /// 같은 키로의 재진입은 스킵하되, 키가 바뀌었으면 낡은 레일을 비우고 재로드한다.
     func loadIfNeeded() async {
-        guard !attemptedLoad else { return }
+        let key = keyProvider()
+        guard key != nil else { return }              // 키 없으면 로드 안 함(뷰가 이미 게이트)
+        guard !attemptedLoad || key != loadedKey else { return }
         attemptedLoad = true
+        loadedKey = key
+        rows = Self.rowSorts.map { Row(sort: $0) }    // 재로드 시 이전 결과 비우고 .loading 으로
         await withTaskGroup(of: Void.self) { group in
             for index in rows.indices {
                 group.addTask { @MainActor in await self.loadRow(at: index) }

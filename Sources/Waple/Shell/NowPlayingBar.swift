@@ -105,12 +105,14 @@ struct NowPlayingBar: View {
     /// 재생목록 관리: 자동 전환·간격 + 선택 항목 추가/제거 + 목록.
     private var playlistPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // playlist(PlaylistStore)는 @Published 가 아니라 직접 mutate 만으로는 body(간격 라벨·부제)가
+            // 재평가되지 않는다 — togglePlaylist 전례처럼 owning VM 에 objectWillChange 를 쏘아 갱신을 건다.
             Toggle("자동 전환", isOn: Binding(
                 get: { viewModel.playlist.enabled },
-                set: { viewModel.playlist.enabled = $0; viewModel.onPlaylistChanged?() }))
+                set: { viewModel.playlist.enabled = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }))
             Stepper("간격: \(viewModel.playlist.intervalMinutes)분", value: Binding(
                 get: { viewModel.playlist.intervalMinutes },
-                set: { viewModel.playlist.intervalMinutes = $0; viewModel.onPlaylistChanged?() }), in: 1...240)
+                set: { viewModel.playlist.intervalMinutes = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }), in: 1...240)
             if let focused = viewModel.focusedEntry {
                 Button(viewModel.isInPlaylist(focused) ? "'\(focused.title)' 제거" : "'\(focused.title)' 추가") {
                     viewModel.togglePlaylist(focused)
