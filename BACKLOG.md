@@ -27,9 +27,16 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 | 항목 | 영향 | 메모 |
 | --- | --- | --- |
 | 3D 메시 라이팅 | 코퍼스 5씬 | 2D 포워드 라이팅(`f_lit`)은 완료. 3D 메시는 unlit(Mesh3DShaders). 실물 규약 유니폼 팩(SceneLight3D.packUniforms)은 이미 있음 |
-| HDR/톤맵 | 라이트 씬 일부 | intensity>1(실측 최대 9.84) LDR 클램프 백화. 2D 라이팅 커밋에 한계 기록 |
+| HDR/톤맵 | 대부분 해소 | **2D 씬 HDR ACES 톤맵 완료**(2026-07-13 Wave3, [HDRPostPass.swift](Sources/WapleRender/HDRPostPass.swift)) — 백화 해소(2802·2899 실측 정상). 잔여: ①이펙트-헤비 씬 빨강(2881, 아래) ②블룸 확산(파싱만) ③3D 씬 HDR ④라이트 intensity>1(실측 9.84) |
 | 원근 태양계 라이팅·노멀맵 1건·스팟 콘 | 각 1씬 내외 | 2D 라이팅 SP 잔여 목록 |
 | 파리티 상위 각개 진단 | 2902406982(0.37) 등 | 방법: rank.py 랭킹 → drawPlan prefix 이분 → SKIP 노브 |
+
+**Scene Wave3 티어1 후속** (2026-07-13, 명시요청 수행 — B1 텍스트·A2 HDR톤맵·E1 composelayer·A4 유니폼 완료·main 머지). 잔여:
+- ~~2881 이펙트-헤비 HDR 빨강~~ **해소** — 원인은 이펙트가 아니라 `f_compose` 파이프라인 포맷 불일치(bgra8 하드코딩 vs float acc)였고 [SceneRenderer.swift:674](Sources/WapleRender/SceneRenderer.swift:674) `accPixelFormat` 으로 수정(2026-07-13 리뷰 Critical). 11개 hdr+compose 씬(2881·2902 등)의 빨강/분홍 아티팩트 제거. 잔여 충실도만: 2881 오디오무입력 캡처 어두움·이펙트, 2902 삼각마스크(아래 항목)
+- **E1 composelayer 삼각마스크 미재현** — 2902406982: 회색덩어리는 해소(화면좌표 f_compose), 그러나 三角模块N `_rt_imageLayerComposite_<id>` 그룹 자식 RT + clipping_mask 레이어간 샘플링 미구현
+- **A2 블룸 확산 패스** — general `bloom*` 파싱만(미소비); 밝은영역 추출→블러→가산 후속
+- **B1 텍스트 잔여** — 4.17× DPI로 8192px 래스터 가드 강화 → 긴 미줄바꿈 텍스트 소실(조용) 가능; 워드랩·MSDF·per-line 정렬·크기/위치 미세조정
+- **A4 g_Color1~4 계열** — 그라디언트/파티클 다중색 유니폼(중립값 비단순), exact-name 스코프서 제외됨. 필요시 검토
 
 ## 잠재 결함 — 트리거: 실제 파일/사용에서 물릴 때
 
