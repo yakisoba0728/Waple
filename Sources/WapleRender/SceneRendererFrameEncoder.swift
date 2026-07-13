@@ -293,7 +293,7 @@ extension SceneRenderer {
                               projW: Float, projH: Float) -> [SIMD4<Float>] {
         let hw = size.x * scale.x * 0.5
         let hh = size.y * scale.y * 0.5
-        let a = angleZ * .pi / 180
+        let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
         let ca = cos(a), sa = sin(a)
         func corner(_ lx: Float, _ ly: Float) -> SIMD2<Float> {
             let rx = lx * ca - ly * sa, ry = lx * sa + ly * ca
@@ -314,7 +314,7 @@ extension SceneRenderer {
     func litRect(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, originZ: Float) -> (SIMD4<Float>, SIMD4<Float>) {
         let hw = size.x * scale.x * 0.5
         let hh = size.y * scale.y * 0.5
-        let a = angleZ * .pi / 180
+        let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
         return (SIMD4(origin.x, origin.y, hw, hh), SIMD4(cos(a), sin(a), originZ, 0))
     }
 
@@ -324,7 +324,7 @@ extension SceneRenderer {
     static func puppetVertices(model: PuppetModel, positions: [SIMD3<Float>],
                                origin: Vec2, scale: Vec2, angleZ: Float,
                                projW: Float, projH: Float) -> [SIMD4<Float>] {
-        let a = angleZ * .pi / 180
+        let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
         let ca = cos(a), sa = sin(a)
         var out: [SIMD4<Float>] = []
         out.reserveCapacity(model.indices.count)

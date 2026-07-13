@@ -35,4 +35,21 @@ final class PuppetVerticesTests: XCTestCase {
         XCTAssertEqual(v[1].x, (1160.0/1920)*2 - 1, accuracy: 1e-4)
         XCTAssertEqual(v[1].y, 1 - (440.0/1080)*2, accuracy: 1e-4)
     }
+
+    /// A1 회귀: scene.json `angles` 는 이미 라디안(코퍼스 전부 ≤π 확정)이므로 quad/lit/puppetVertices 가
+    /// 라디안 그대로 회전해야 한다. 종전 `*.pi/180` 은 라디안을 도(°)로 오인해 회전을 57× 축소했다.
+    /// angleZ=π/2 면 로컬 (+x=100,0) 정점이 (0,+100) 으로 90° 회전 → NDC(-1,0). 버그였다면 ~0.9° 만
+    /// 돌아 NDC(0,1) 근처(=angleZ 0 과 사실상 동일)에 머문다.
+    func testAngleZIsRadiansNotDegrees() {
+        var m = PuppetModel(material: "m",
+                            vertices: [.init(position: SIMD3(100, 0, 0), boneIndices: SIMD4(0, 0, 0, 0),
+                                             weights: SIMD4(1, 0, 0, 0), uv: SIMD2(0, 0))],
+                            indices: [0])
+        m.bones = []
+        let v = SceneRenderer.puppetVertices(model: m, positions: [SIMD3(100, 0, 0)],
+                                             origin: Vec2(x: 0, y: 0), scale: Vec2(x: 1, y: 1),
+                                             angleZ: .pi / 2, projW: 200, projH: 200)
+        XCTAssertEqual(v[0].x, -1, accuracy: 1e-3)
+        XCTAssertEqual(v[0].y, 0, accuracy: 1e-3)
+    }
 }
