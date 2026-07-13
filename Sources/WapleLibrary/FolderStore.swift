@@ -11,16 +11,23 @@ public final class FolderStore {
     private let fileURL: URL
     public private(set) var folders: [Folder] = []
     private var corrupt = false
+    /// 로드 시 읽기 자체가 실패(권한·잠금 등 일시적) → 원본이 멀쩡할 수 있어 save() 를 건너뛴다.
+    private var loadFailed = false
 
     public init(baseDirectory: URL) {
         fileURL = baseDirectory.appendingPathComponent("folders.json")
-        guard let data = readStoreFile(fileURL, what: "folders.json", note: "starting empty", corrupt: &corrupt) else { return }
+        guard let data = readStoreFile(fileURL, what: "folders.json", note: "starting empty", loadFailed: &loadFailed) else { return }
         do { folders = try JSONDecoder().decode([Folder].self, from: data) }
         catch { NSLog("%@", "[Waple] folders.json corrupt — preserving, starting empty: \(error)"); corrupt = true }
     }
 
+    /// 폴더명 정규화(트림) — createFolder·move 가 공유해 끝공백만 다른 이름이 별개 폴더로 중복 생성되는 걸 막는다.
+    private func normalizedFolderName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespaces)
+    }
+
     public func createFolder(_ name: String) {
-        let n = name.trimmingCharacters(in: .whitespaces)
+        let n = normalizedFolderName(name)
         guard !n.isEmpty, !folders.contains(where: { $0.name == n }) else { return }
         folders.append(Folder(name: n, ids: []))
         save()
@@ -29,7 +36,8 @@ public final class FolderStore {
     /// 항목을 폴더로 이동(nil=루트로). 미존재 폴더명은 생성. 기존 소속은 해제.
     public func move(_ id: String, to folderName: String?) {
         for i in folders.indices { folders[i].ids.removeAll { $0 == id } }
-        if let name = folderName {
+        if let raw = folderName {
+            let name = normalizedFolderName(raw)
             if !folders.contains(where: { $0.name == name }) {
                 folders.append(Folder(name: name, ids: []))
             }
@@ -58,6 +66,10 @@ public final class FolderStore {
     }
 
     private func save() {
+        guard !loadFailed else {
+            NSLog("%@", "[Waple] folders.json save skipped — earlier read failed transiently, avoiding clobber")
+            return
+        }
         backupCorruptStoreFile(fileURL, &corrupt)
         do { try JSONEncoder().encode(folders).write(to: fileURL, options: .atomic) }
         catch { NSLog("%@", "[Waple] folders save failed: \(error)") }

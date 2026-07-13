@@ -35,6 +35,17 @@ final class FavoritesFolderStoreTests: XCTestCase {
         XCTAssertNil(s.folderName(of: "w2"))
     }
 
+    /// P4: move 는 createFolder 와 달리 대상 이름을 트림하지 않아, 끝공백만 다른 이름이
+    /// 별개 폴더로 취급돼 중복 생성됐다. "Foo " 로 move 해도 기존 "Foo" 로 합쳐져야 한다.
+    func testMoveTrimsTargetNameNoDuplicateFolder() {
+        let base = tempDir()
+        let s = FolderStore(baseDirectory: base)
+        s.createFolder("Foo")
+        s.move("w1", to: "Foo ")  // 끝공백
+        XCTAssertEqual(s.folders.count, 1, "끝공백 트림 실패로 중복 폴더 생성됨(회귀)")
+        XCTAssertEqual(s.folderName(of: "w1"), "Foo")
+    }
+
     func testOrphanAPIs() {
         let base = tempDir()
         let pl = PlaylistStore(baseDirectory: base)
