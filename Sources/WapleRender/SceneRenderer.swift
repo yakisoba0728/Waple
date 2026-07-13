@@ -671,7 +671,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         cdesc.vertexFunction = library.makeFunction(name: "v_main")
         cdesc.fragmentFunction = library.makeFunction(name: "f_compose")
         let catt = cdesc.colorAttachments[0]!
-        catt.pixelFormat = .bgra8Unorm
+        catt.pixelFormat = accPixelFormat   // HDR 씬은 float acc — f_main/f_blend/f_lit 와 동일 포맷(불일치=Metal 크래시/미정의). f_compose 는 float4 출력이라 LDR/HDR 양쪽 정상
         catt.isBlendingEnabled = true
         catt.rgbBlendOperation = .add; catt.alphaBlendOperation = .add
         catt.sourceRGBBlendFactor = .one; catt.sourceAlphaBlendFactor = .one
