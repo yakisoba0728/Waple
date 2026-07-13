@@ -37,7 +37,15 @@ public enum TextRasterizer {
               rawW <= CGFloat(Int.max - 2), rawH <= CGFloat(Int.max - 2) else { return nil }
         let w = max(1, Int(rawW) + 2)
         let h = max(1, Int(rawH) + 2)
-        guard w <= 8192, h <= 8192, w <= maxRasterBytes / max(1, h * 4) else { return nil }
+        // 8192/바이트 상한 초과 시 nil(=드로우 스킵=조용한 텍스트 소실) 대신 pointSize 를 축소해 재시도 —
+        // 4.17× DPI 스케일이 이 가드를 조기 격발하므로(장문 단일줄·대형 폰트), 최악이라도 pre-B1 의
+        // 작은 크기로 수렴시켜 "작게 보임"을 지킨다(회귀 방지). 워드랩(진짜 해결)은 별건(BACKLOG).
+        if w > 8192 || h > 8192 || w > maxRasterBytes / max(1, h * 4) {
+            let scale = 8192.0 / Double(max(w, h))
+            let reduced = pointSize * Float(min(0.95, scale))
+            guard reduced > 0, reduced < pointSize else { return nil }
+            return render(text: text, fontData: fontData, systemFontName: systemFontName, pointSize: reduced)
+        }
         var pixels = Data(count: w * h * 4)
         let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
             guard let base = ptr.baseAddress,

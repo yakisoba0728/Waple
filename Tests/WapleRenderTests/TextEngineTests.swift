@@ -352,6 +352,18 @@ final class TextRasterizerTests: XCTestCase {
         XCTAssertGreaterThan(Float(r.height), ps * 3, "텍스트가 너무 작음(300-DPI 스케일 미적용)")
         XCTAssertLessThan(Float(r.height), ps * 10, "스케일 과대(팩터 오적용)")
     }
+
+    /// 회귀 가드(2026-07-13 리뷰 Important): 4.17× DPI 스케일이 8192 래스터 상한을 조기 격발하는
+    /// 장문/대형 텍스트가 nil(=드로우 스킵=조용한 소실) 이 아니라 축소 raster 로 수렴해야 한다.
+    /// 종전(가드가 nil 반환)엔 XCTUnwrap 이 red — 텍스트가 통째로 사라졌다.
+    func testOversizedTextScalesDownNotSilentlyLost() throws {
+        let long = String(repeating: "A", count: 400)   // ps300×4.17DPI 면 폭 수십만 px = 8192 초과
+        let r = try XCTUnwrap(TextRasterizer.render(text: long, fontData: nil, systemFontName: nil, pointSize: 300),
+                              "장문 대형 텍스트가 nil(소실) 이 아니라 축소 raster 여야")
+        XCTAssertLessThanOrEqual(r.width, 8192)
+        XCTAssertLessThanOrEqual(r.height, 8192)
+        XCTAssertGreaterThan(r.width, 1)
+    }
 }
 
 /// 효과 상수 스크립트: WEColor 실심 + engine.runtime + evaluateVec (실물 컬러 사이클 패턴).
