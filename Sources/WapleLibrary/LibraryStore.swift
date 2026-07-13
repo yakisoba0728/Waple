@@ -32,10 +32,12 @@ public final class LibraryStore {
     /// load() 가 손상된 인덱스를 발견하면 true. 다음 save() 는 덮어쓰기 전에 원본을 백업해
     /// 복구 가능한 파일을 무음으로 파괴하는 것을 막는다.
     private var indexCorrupt = false
+    /// load() 에서 읽기 자체가 실패(권한·잠금 등 일시적) → 원본이 멀쩡할 수 있어 save() 를 건너뛴다.
+    private var indexLoadFailed = false
 
     private func load() {
         guard let data = readStoreFile(indexURL, what: "library index at \(indexURL.path)",
-                                       note: "starting empty", corrupt: &indexCorrupt) else { return }
+                                       note: "starting empty", loadFailed: &indexLoadFailed) else { return }
         do {
             let idx = try JSONDecoder().decode(Index.self, from: data)
             entries = idx.entries
@@ -47,6 +49,10 @@ public final class LibraryStore {
     }
 
     private func save() {
+        guard !indexLoadFailed else {
+            NSLog("%@", "[Waple] library index save skipped at \(indexURL.path) — earlier read failed transiently, avoiding clobber")
+            return
+        }
         backupCorruptStoreFile(indexURL, &indexCorrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
         let idx = Index(entries: entries, selectedId: selectedId)
         do {

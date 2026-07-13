@@ -15,17 +15,28 @@ func backupCorruptStoreFile(_ url: URL, _ corrupt: inout Bool) {
     }
 }
 
-/// 스토어 파일 load 3분기 공통 규약: 파일없음=정상(최초 실행) / 읽기실패=corrupt / 성공=Data.
-/// 디코드 실패(=corrupt) 분기는 타입이 제각각이라 호출자 몫. 읽기실패 시 corrupt 표시 —
-/// 다음 save() 가 backupCorruptStoreFile 로 원본을 보존한 뒤 덮어쓴다.
-func readStoreFile(_ url: URL, what: String, note: String, corrupt: inout Bool) -> Data? {
+/// 스토어 파일 load 3분기 공통 규약: 파일없음=정상(최초 실행) / 읽기실패=일시적일 수 있음(loadFailed) / 성공=Data.
+/// 디코드 실패(=corrupt, 타입이 제각각이라 호출자 몫)만 진짜 손상이다 — 읽기실패(권한·잠금 등)는 원본이
+/// 멀쩡할 수 있으므로 corrupt 로 오판하지 않는다. loadFailed 를 세우면 호출자는 save() 를 건너뛰어,
+/// 비어있는 메모리 상태로 멀쩡한 원본을 덮어쓰는 걸 막아야 한다.
+func readStoreFile(_ url: URL, what: String, note: String, loadFailed: inout Bool) -> Data? {
     do { return try Data(contentsOf: url) }
     catch CocoaError.fileReadNoSuchFile { return nil }  // 최초 실행: 파일 없음(정상)
     catch {
-        NSLog("%@", "[Waple] \(what) unreadable — preserving, \(note): \(error)")
-        corrupt = true
+        NSLog("%@", "[Waple] \(what) unreadable — \(note): \(error)")
+        loadFailed = true
         return nil
     }
+}
+
+/// 구버전 호출부(FavoritesStore, 이 그룹 작업 범위 밖) 호환용 — 읽기실패를 곧장 corrupt 로 취급해
+/// 종전과 동일하게 백업 후 재작성 경로를 탄다. 신규 호출부는 위 loadFailed 버전을 써서
+/// 일시적 읽기실패와 진짜 디코드 손상을 구분한다.
+func readStoreFile(_ url: URL, what: String, note: String, corrupt: inout Bool) -> Data? {
+    var loadFailed = false
+    let data = readStoreFile(url, what: what, note: note, loadFailed: &loadFailed)
+    if loadFailed { corrupt = true }
+    return data
 }
 
 /// 모니터별 배경 할당(화면 키 → 라이브러리 엔트리 id). 미할당 화면은 전역 선택을 따른다.
@@ -35,10 +46,12 @@ public final class MonitorAssignmentStore {
     private var map: [String: String] = [:]
     /// 로드 시 손상(파일은 있으나 디코드 실패) 발견 → 다음 save() 가 덮어쓰기 전에 백업(데이터 손실 방지).
     private var corrupt = false
+    /// 로드 시 읽기 자체가 실패(권한·잠금 등 일시적) → 원본이 멀쩡할 수 있어 save() 를 건너뛴다.
+    private var loadFailed = false
 
     public init(baseDirectory: URL) {
         fileURL = baseDirectory.appendingPathComponent("monitors.json")
-        guard let data = readStoreFile(fileURL, what: "monitors.json", note: "starting empty", corrupt: &corrupt) else { return }
+        guard let data = readStoreFile(fileURL, what: "monitors.json", note: "starting empty", loadFailed: &loadFailed) else { return }
         do { map = try JSONDecoder().decode([String: String].self, from: data) }
         catch { NSLog("%@", "[Waple] monitors.json corrupt — preserving, starting empty: \(error)"); corrupt = true }
     }
@@ -62,6 +75,10 @@ public final class MonitorAssignmentStore {
     }
 
     private func save() {
+        guard !loadFailed else {
+            NSLog("%@", "[Waple] monitors.json save skipped — earlier read failed transiently, avoiding clobber")
+            return
+        }
         backupCorruptStoreFile(fileURL, &corrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
         do {
             let data = try JSONEncoder().encode(map)

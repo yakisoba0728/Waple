@@ -6,16 +6,30 @@ public final class PlaylistStore {
         var enabled = false
         var intervalMinutes = 30
         var ids: [String] = []
+
+        init() {}
+
+        /// 합성 init(from:) 는 누락 키에서 throw 한다(= default 는 memberwise init 전용, decode 는 미적용) —
+        /// 향후 필드 추가 시 구버전 JSON 전부가 corrupt 오판으로 초기화되는 걸 막기 위해 누락 키는
+        /// 각 필드의 기본값으로 폴백한다. 기본값은 위 프로퍼티 선언과 동일하게 유지할 것.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+            intervalMinutes = try c.decodeIfPresent(Int.self, forKey: .intervalMinutes) ?? 30
+            ids = try c.decodeIfPresent([String].self, forKey: .ids) ?? []
+        }
     }
 
     private let fileURL: URL
     private var model = Model() { didSet { save() } }
     /// 로드 시 손상(파일은 있으나 디코드 실패) 발견 → 다음 save() 가 덮어쓰기 전에 백업(데이터 손실 방지).
     private var corrupt = false
+    /// 로드 시 읽기 자체가 실패(권한·잠금 등 일시적) → 원본이 멀쩡할 수 있어 save() 를 건너뛴다.
+    private var loadFailed = false
 
     public init(baseDirectory: URL) {
         fileURL = baseDirectory.appendingPathComponent("playlist.json")
-        guard let data = readStoreFile(fileURL, what: "playlist.json", note: "starting default", corrupt: &corrupt) else { return }
+        guard let data = readStoreFile(fileURL, what: "playlist.json", note: "starting default", loadFailed: &loadFailed) else { return }
         // init 내 직접 대입이라 didSet(save) 미발동 — 로드가 파일을 되쓰지 않는다.
         do { model = try JSONDecoder().decode(Model.self, from: data) }
         catch { NSLog("%@", "[Waple] playlist.json corrupt — preserving, starting default: \(error)"); corrupt = true }
@@ -59,6 +73,10 @@ public final class PlaylistStore {
     }
 
     private func save() {
+        guard !loadFailed else {
+            NSLog("%@", "[Waple] playlist.json save skipped — earlier read failed transiently, avoiding clobber")
+            return
+        }
         backupCorruptStoreFile(fileURL, &corrupt)  // 손상 원본을 덮어쓰기 전 1회 백업
         do {
             let data = try JSONEncoder().encode(model)

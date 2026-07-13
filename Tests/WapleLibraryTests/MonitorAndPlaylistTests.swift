@@ -46,6 +46,29 @@ final class MonitorAssignmentStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: backups[0]), garbage, "손상 원본 바이트 보존")
         XCTAssertEqual(MonitorAssignmentStore(baseDirectory: dir).assignment(for: "x"), "a", "새 데이터는 정상 저장")
     }
+
+    /// P2: 일시적 읽기오류(권한·잠금 등)는 디코드 실패(corrupt)가 아니다 — 원본이 멀쩡할 수 있으므로
+    /// corrupt-백업 경로를 타면 안 되고, 다음 save() 가 그 원본을 덮어써서도 안 된다.
+    /// ENOENT 가 아닌 읽기오류를 결정적으로 재현하기 위해 파일 자리에 디렉터리를 둔다
+    /// (Data(contentsOf:) 가 "Is a directory" 로 실패 — CocoaError.fileReadNoSuchFile 이 아님).
+    func testTransientReadErrorDoesNotClobberOrBackup() throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("monitors.json")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+
+        let s = MonitorAssignmentStore(baseDirectory: dir)
+        XCTAssertNil(s.assignment(for: "x"), "읽기실패 시 빈 상태로 시작")
+        s.setAssignment("a", for: "x")  // 저장 트리거 — 원본을 덮어쓰면 안 된다
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "원본(디렉터리) 자리가 유지돼야 함")
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        XCTAssertTrue(isDir.boolValue, "일시적 읽기오류로 원본이 덮어써짐(회귀) — 디렉터리 그대로여야 함")
+
+        let backups = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("monitors.json.corrupt") }
+        XCTAssertTrue(backups.isEmpty, "일시적 읽기오류는 corrupt 오판이 아니므로 백업이 생기면 안 됨")
+    }
 }
 
 final class PlaylistStoreTests: XCTestCase {
@@ -105,5 +128,24 @@ final class PlaylistStoreTests: XCTestCase {
         XCTAssertEqual(backups.count, 1, "손상 원본이 백업 없이 파괴됨(회귀)")
         XCTAssertEqual(try Data(contentsOf: backups[0]), garbage, "손상 원본 바이트 보존")
         XCTAssertTrue(PlaylistStore(baseDirectory: dir).enabled, "새 데이터는 정상 저장")
+    }
+
+    /// P1: 합성 init(from:) 는 누락 키에서 throw 하므로, 향후 필드가 추가되면 구버전 JSON 전부가
+    /// corrupt 로 오판돼 초기화된다. intervalMinutes 필드가 없는 구버전 모양 JSON 을 기본값으로
+    /// 폴백 디코드해야 하며(성공, corrupt 아님), 나머지 필드는 정상 로드돼야 한다.
+    func testOldShapeJSONMissingFieldDecodesWithDefault() throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("playlist.json")
+        try Data(#"{"enabled":true,"ids":["a","b"]}"#.utf8).write(to: url)
+
+        let p = PlaylistStore(baseDirectory: dir)
+        XCTAssertTrue(p.enabled, "존재하는 필드는 정상 로드")
+        XCTAssertEqual(p.ids, ["a", "b"], "존재하는 필드는 정상 로드")
+        XCTAssertEqual(p.intervalMinutes, 30, "누락 필드는 기본값 폴백(throw 금지)")
+
+        p.ids = ["a", "b", "c"]  // 저장 트리거 — corrupt 오판이었다면 백업 파일이 생겼을 것
+        let backups = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("playlist.json.corrupt") }
+        XCTAssertTrue(backups.isEmpty, "누락 필드=corrupt 오판이면 안 됨")
     }
 }
