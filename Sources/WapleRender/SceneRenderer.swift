@@ -432,6 +432,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var drawPlan: [DrawItem] = []
 
     var videoRenderer: VideoRenderer?
+    /// 비디오-백드 씬(mount 가 VideoRenderer 에 위임)에서 추출한 mp4 캐시 URL. 설정 시 captureFrames 는
+    /// Metal 경로 대신 이 mp4 에서 프레임을 뽑는다(헤드리스 캡처가 빈 프레임이 되지 않게). 비-비디오 씬=nil.
+    var videoTextureMP4URL: URL?
     /// 씬 sound 레이어 재생기(라이브 mount 한정 — 헤드리스에선 미생성). pause/resume/teardown 에 연동.
     var sceneAudio: SceneAudioPlayer?
     var mtkView: MTKView?
@@ -568,6 +571,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func mount(in container: NSView, project: WallpaperProject) throws {
         scenePausedAt = nil
         shouldAnimate = false
+        videoTextureMP4URL = nil   // 마운트 재사용: 이전 비디오-백드 상태가 비-비디오 씬 캡처로 새지 않게.
         guard let pkgURL = pkgURL(in: project.folderURL) else {
             NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
             throw RendererError.assetMissing
@@ -616,6 +620,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let vr = VideoRenderer()
             try vr.mount(in: container, project: synthetic)
             self.videoRenderer = vr
+            self.videoTextureMP4URL = mp4URL   // 헤드리스 captureFrames 가 이 mp4 에서 프레임을 뽑도록.
             return
         }
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -922,6 +927,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 시뮬은 t=0 에서 새로 시작해 1/30 스텝으로 각 time 까지 진행(재현 가능). 데스크탑 가림과 무관.
     @discardableResult
     public func captureFrames(width: Int, height: Int, times: [Float], toDir: URL) -> [URL] {
+        // 비디오-백드 씬(mount 가 VideoRenderer 에 위임 → Metal device/queue/pipeline 미설정): 그대로 두면
+        // 아래 guard 에서 [] 를 반환해 빈 프레임이 된다(스냅샷 empties·still 배경 실패). 추출된 mp4 에서
+        // AVFoundation 으로 해당 시각 프레임을 뽑아 유효 프레임을 낸다.
+        if let mp4 = videoTextureMP4URL {
+            var urls: [URL] = []
+            for t in times.sorted() {
+                let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
+                if VideoTextureExtractor.captureFramePNG(mp4URL: mp4, at: Double(t), width: width, height: height, to: url) {
+                    urls.append(url)
+                }
+            }
+            return urls
+        }
         guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
         // 3D 씬: 메시 + 빌보드 패스(뎁스). per-frame 스크립트 평가로 각 time 마다 갱신(궤도/인트로 애니).
         if is3D {

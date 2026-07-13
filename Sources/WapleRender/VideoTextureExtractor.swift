@@ -1,4 +1,7 @@
 import Foundation
+import AVFoundation
+import AppKit
+import CoreGraphics
 import WapleCore
 
 public enum VideoTextureExtractor {
@@ -74,5 +77,57 @@ public enum VideoTextureExtractor {
     public static func defaultCacheDir() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Waple/cache", isDirectory: true)
+    }
+
+    // MARK: 헤드리스 프레임 캡처 (비디오-백드 씬)
+
+    /// 요청 시각 t 를 [0, duration) 로 클램프. duration 미상(비유한/0 이하)이면 max(0,t) 그대로 두고
+    /// 디코드 실패는 호출부 폴백(.zero)에 맡긴다. 짧은 루프(예 4s)에 t=6 을 요청해도 끝 근처 프레임을 얻는다.
+    static func clampCaptureTime(_ t: Double, duration: Double) -> Double {
+        guard duration.isFinite, duration > 0 else { return max(0, t) }
+        return min(max(0, t), max(0, duration - 0.05))
+    }
+
+    /// 비디오-백드 씬의 헤드리스 캡처: mount 가 이미 추출해 둔 mp4 에서 시각 t(클램프) 프레임을 **정확
+    /// 디코드**(tolerance=0 → 스냅샷 셀프체크 2× 결정성)해 width×height PNG(aspect-fill, 라이브 .fill
+    /// videoGravity 와 동형)로 기록한다. 디코드 실패 시 t=0 폴백(AppDelegate.extractVideoFrame 관례).
+    /// 성공=true(url 기록). AVFoundation 이 못 읽는 컨테이너(webm 등)는 false → 호출부가 빈 프레임 처리.
+    @discardableResult
+    public static func captureFramePNG(mp4URL: URL, at t: Double, width: Int, height: Int, to url: URL) -> Bool {
+        guard width > 0, height > 0 else { return false }
+        let asset = AVURLAsset(url: mp4URL)
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.requestedTimeToleranceBefore = .zero
+        gen.requestedTimeToleranceAfter = .zero
+        let clamped = clampCaptureTime(t, duration: asset.duration.seconds)
+        let cg: CGImage
+        do {
+            cg = try gen.copyCGImage(at: CMTime(seconds: clamped, preferredTimescale: 600), actualTime: nil)
+        } catch {
+            guard let zero = try? gen.copyCGImage(at: .zero, actualTime: nil) else {
+                NSLog("%@", "[Waple] video-backed frame capture failed for \(mp4URL.lastPathComponent): \(error)")
+                return false
+            }
+            cg = zero
+        }
+        return writeScaledPNG(cg, width: width, height: height, to: url)
+    }
+
+    /// CGImage → width×height aspect-fill(센터-크롭) PNG 기록. 결정적(동일 입력→동일 출력).
+    private static func writeScaledPNG(_ cg: CGImage, width: Int, height: Int, to url: URL) -> Bool {
+        guard cg.width > 0, cg.height > 0,
+              let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        let sw = CGFloat(cg.width), sh = CGFloat(cg.height)
+        let scale = max(CGFloat(width) / sw, CGFloat(height) / sh)   // fill: 큰 축 기준
+        let dw = sw * scale, dh = sh * scale
+        ctx.interpolationQuality = .high
+        ctx.draw(cg, in: CGRect(x: (CGFloat(width) - dw) / 2, y: (CGFloat(height) - dh) / 2, width: dw, height: dh))
+        guard let out = ctx.makeImage(),
+              let png = NSBitmapImageRep(cgImage: out).representation(using: .png, properties: [:]) else { return false }
+        do { try png.write(to: url, options: .atomic); return true }
+        catch { NSLog("%@", "[Waple] video-backed frame PNG write failed \(url.path): \(error)"); return false }
     }
 }
