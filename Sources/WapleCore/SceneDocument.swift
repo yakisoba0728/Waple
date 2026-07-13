@@ -984,12 +984,21 @@ extension SceneDocument {
         return out
     }
 
-    /// `{"user": "키", ...}` 바인딩의 value 를 유저 오버라이드로 치환(재귀, 깊이 제한).
+    /// `{"user": …, ...}` 바인딩의 value 를 유저 오버라이드로 치환(재귀, 깊이 제한). 두 문법:
+    ///   (a) bare-string `{"user":"키"}` (bool) → userProps[키] 로 value 교체.
+    ///   (b) nested `{"user":{"condition":"<옵션값>","name":"<콤보키>"}}` (combo) → value =
+    ///       (현재 콤보값 == 옵션값). TEXB0004 TexImage.VariantCondition 과 동형 그래머(동등비교).
+    /// 둘 다 userProps 에 키가 있을 때만 갱신 — 없으면(미변경) 저작 스냅샷 유지(동일 계약, 무회귀).
     private static func resolveUserBindings(_ node: Any, userProps: [String: Any], depth: Int) -> Any {
         guard depth < 32 else { return node }
         if var dict = node as? [String: Any] {
             if let user = dict["user"] as? String, let override = userProps[user] {
                 dict["value"] = override
+            } else if let user = dict["user"] as? [String: Any],
+                      let name = user["name"] as? String,
+                      let condition = comboLiteral(user["condition"]),
+                      let current = comboLiteral(userProps[name]) {
+                dict["value"] = (current == condition)
             }
             for (k, v) in dict { dict[k] = resolveUserBindings(v, userProps: userProps, depth: depth + 1) }
             return dict
@@ -998,6 +1007,15 @@ extension SceneDocument {
             return arr.map { resolveUserBindings($0, userProps: userProps, depth: depth + 1) }
         }
         return node
+    }
+
+    /// combo 바인딩 조건/현재값 → 문자열 정규화: 문자열이 정본(옵션 value 는 "0".."19"/"12h"/"动态"
+    /// 등), 숫자 관용(NSNumber→문자열, bool 제외). 불리언/부재/기타는 nil → 평가 불가로 fail-closed
+    /// (저작 스냅샷 유지). 이 fail-closed 가드가 non-combo·미상 키에 Bool 오기록을 막는다.
+    private static func comboLiteral(_ v: Any?) -> String? {
+        if let s = v as? String { return s }
+        if let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() { return n.stringValue }
+        return nil
     }
 
     /// 3D 오브젝트/그룹의 변환 프로퍼티 스크립트 추출(origin/angles/scale — 키 → JS 소스).
