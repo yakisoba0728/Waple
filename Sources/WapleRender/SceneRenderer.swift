@@ -444,6 +444,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var blendPipeline: MTLRenderPipelineState?
     /// 2D 포워드 라이팅 파이프라인(f_lit) — 라이트 씬의 LIGHTING:1 레이어 전용. nil 이면 미사용.
     var litPipeline: MTLRenderPipelineState?
+    /// A2 HDR: 씬 general.hdr && 톤맵 파이프라인 빌드 성공 시에만 true(빌드 실패 시 종전 LDR 폴백).
+    /// 참이면 acc/합성 스냅샷을 float(rgba16Float)로, acc→타깃 blit 을 톤맵 패스로 대체한다.
+    var sceneIsHDR = false
+    /// HDR 톤맵 포스트 패스(최종 합성 float 버퍼 → LDR 압축). sceneIsHDR 일 때만 존재.
+    var hdrPost: HDRPostPass?
+    /// HDR 경로 실효 게이트. 3D 씬은 별도 파이프라인(bgra8, 다른 lane)이라 제외 — 3D-HDR 은 종전 LDR 유지.
+    var hdrActive: Bool { sceneIsHDR && !is3D }
+    /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
+    /// HDR 이면 float(>1 보존) — mount 에서 sceneIsHDR 확정 후 파이프라인 생성에 사용.
+    var accPixelFormat: MTLPixelFormat { sceneIsHDR ? .rgba16Float : .bgra8Unorm }
     /// 씬당 라이트 유니폼(상수) — forwardLit=false(라이트 씬 아님)면 전 레이어 f_main(무회귀).
     var forwardLit = false
     var lightPositions = [SIMD4<Float>](repeating: .zero, count: 4)    // [4] xyz=world, w=active
@@ -629,12 +639,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         self.queue = queue
         self.assetBaseDir = BaseAssetsSettings.baseAssetsDirectory
 
+        // A2 HDR: 톤맵 파이프라인이 빌드돼야 sceneIsHDR 활성(실패 시 종전 LDR 폴백 = 무회귀).
+        // 아래 파이프라인 생성보다 먼저 확정해야 accPixelFormat 이 float 로 잡힌다.
+        if doc.hdr, let post = HDRPostPass(device: device, outputFormat: .bgra8Unorm) {
+            self.sceneIsHDR = true
+            self.hdrPost = post
+        }
+
         let library = try device.makeLibrary(source: QuadShaders.source, options: nil)
         let pdesc = MTLRenderPipelineDescriptor()
         pdesc.vertexFunction = library.makeFunction(name: "v_main")
         pdesc.fragmentFunction = library.makeFunction(name: "f_main")
         let att = pdesc.colorAttachments[0]!
-        att.pixelFormat = .bgra8Unorm
+        att.pixelFormat = accPixelFormat   // A2: HDR 씬은 float(>1 보존), 그 외 bgra8(무회귀)
         att.isBlendingEnabled = true
         att.rgbBlendOperation = .add; att.alphaBlendOperation = .add
         att.sourceRGBBlendFactor = .one; att.sourceAlphaBlendFactor = .one
@@ -644,14 +661,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let bdesc = MTLRenderPipelineDescriptor()
         bdesc.vertexFunction = library.makeFunction(name: "v_main")
         bdesc.fragmentFunction = library.makeFunction(name: "f_blend")
-        bdesc.colorAttachments[0]!.pixelFormat = .bgra8Unorm
+        bdesc.colorAttachments[0]!.pixelFormat = accPixelFormat
         self.blendPipeline = try? device.makeRenderPipelineState(descriptor: bdesc)
         // 포워드 라이팅(f_lit): f_main 과 동일 프리멀티 오버 블렌드 — 라이트 반응만 다르다.
         let ldesc = MTLRenderPipelineDescriptor()
         ldesc.vertexFunction = library.makeFunction(name: "v_main")
         ldesc.fragmentFunction = library.makeFunction(name: "f_lit")
         let latt = ldesc.colorAttachments[0]!
-        latt.pixelFormat = .bgra8Unorm
+        latt.pixelFormat = accPixelFormat
         latt.isBlendingEnabled = true
         latt.rgbBlendOperation = .add; latt.alphaBlendOperation = .add
         latt.sourceRGBBlendFactor = .one; latt.sourceAlphaBlendFactor = .one
@@ -903,7 +920,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                             },
                                             camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }
         finalEnc.endEncoding()
-        if let blit = cb.makeBlitCommandEncoder() {
+        // A2: HDR 씬은 float acc 를 톤맵해 drawable(bgra8)로(>1 압축 = 백화 해소). 그 외는 종전 raw blit.
+        if hdrActive, let hdrPost {
+            hdrPost.encode(cb: cb, src: acc, dst: drawable.texture)
+        } else if let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: acc, to: drawable.texture)
             blit.endEncoding()
         }
@@ -968,9 +988,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in rootIdxs { _ = sims[i].step(s) }; simTime += s }
             guard let cb = queue.makeCommandBuffer() else { continue }
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
-            let displayTextures = buildDisplayTextures(device: device, time: t, cb: cb)
+            let displayTextures = buildDisplayTextures(device: device, time: t, cb: cb)  // beginFramePool 포함
+            // A2: HDR 씬은 float acc 에 합성 후 톤맵 → target(bgra8). 그 외는 종전대로 target 에 직접 합성.
+            // (풀 할당은 beginFramePool 이후여야 하므로 buildDisplayTextures 다음.)
+            let acc = hdrActive ? (pooledOffscreen(width, height, device, bgra: true) ?? target) : target
             let rpd = MTLRenderPassDescriptor()
-            rpd.colorAttachments[0].texture = target
+            rpd.colorAttachments[0].texture = acc
             rpd.colorAttachments[0].loadAction = .clear
             rpd.colorAttachments[0].clearColor = clearColor
             guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
@@ -978,7 +1001,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
             // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)
             // target 이 곧 누적(acc) — 컴포지션 레이어는 스냅샷 경유(runFrameBufferLayer).
-            guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: target, cb: cb, device: device, time: t,
+            guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: t,
                                                 displayTextures: displayTextures,
                                                 particleSnapshot: { [self] idx in
                                                     if let c = particleSystems[idx].childOf {
@@ -987,7 +1010,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                     return sims[idx].step(0)
                                                 },
                                                 camOffset: &camOff, aspectScale: &asp) else { cb.commit(); continue }
-            finalEnc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+            finalEnc.endEncoding()
+            if hdrActive, acc !== target, let hdrPost { hdrPost.encode(cb: cb, src: acc, dst: target) }
+            cb.commit(); cb.waitUntilCompleted()
             let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
             if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
         }
