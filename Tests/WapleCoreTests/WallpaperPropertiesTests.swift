@@ -66,6 +66,54 @@ final class WallpaperPropertiesTests: XCTestCase {
         XCTAssertNil(prop.index)
     }
 
+    // C1: 네이티브 숫자/Bool 값은 기존과 동일하게 파싱돼야 한다(무회귀) — 문자열 관용 폴백을 타지 않음.
+    // flagNum(숫자 1)이 bool 로 true 가 되는 것은 NSNumber 의 기존 `as? Bool` 브리징 동작(이 수정과 무관, 불변).
+    func testSliderAndBoolNumericValuesUnchanged() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WPPropsNumUnchanged-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let json = """
+        {"type":"web","general":{"properties":{
+          "amt":{"type":"slider","value":0.5,"order":0},
+          "flagTrue":{"type":"bool","value":true,"order":1},
+          "flagNum":{"type":"bool","value":1,"order":2}
+        }}}
+        """
+        try Data(json.utf8).write(to: dir.appendingPathComponent("project.json"))
+        let props = try WallpaperProperties.parse(folderURL: dir)
+        let byKey = Dictionary(uniqueKeysWithValues: props.map { ($0.key, $0) })
+        XCTAssertEqual(byKey["amt"]?.value, .number(0.5))
+        XCTAssertEqual(byKey["flagTrue"]?.value, .bool(true))
+        XCTAssertEqual(byKey["flagNum"]?.value, .bool(true))
+    }
+
+    // C1: WE project.json 은 슬라이더/불 값을 문자열로 싣기도 한다("value":"0.5"/"1"/"true") — 수정 전엔
+    // parseNumber/`as? Bool` 이 String 을 거부해 0/false 로 붕괴했다.
+    func testSliderAndBoolStringEncodedValuesParse() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WPPropsStrEncoded-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let json = """
+        {"type":"web","general":{"properties":{
+          "amt":{"type":"slider","value":"0.5","order":0},
+          "flagOne":{"type":"bool","value":"1","order":1},
+          "flagTrue":{"type":"checkbox","value":"true","order":2},
+          "flagFalse":{"type":"bool","value":"false","order":3},
+          "flagZero":{"type":"bool","value":"0","order":4}
+        }}}
+        """
+        try Data(json.utf8).write(to: dir.appendingPathComponent("project.json"))
+        let props = try WallpaperProperties.parse(folderURL: dir)
+        let byKey = Dictionary(uniqueKeysWithValues: props.map { ($0.key, $0) })
+        XCTAssertEqual(byKey["amt"]?.value, .number(0.5))
+        XCTAssertEqual(byKey["flagOne"]?.value, .bool(true))
+        XCTAssertEqual(byKey["flagTrue"]?.value, .bool(true))
+        XCTAssertEqual(byKey["flagFalse"]?.value, .bool(false))
+        XCTAssertEqual(byKey["flagZero"]?.value, .bool(false))
+    }
+
     func testPreservesCorpusPropertyTypes() {
         let general: [String: Any] = [
             "file": ["type": "file", "value": "image.png", "order": 0],

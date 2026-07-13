@@ -318,11 +318,18 @@ enum ExprEval {
         let toks = tokenize(expr)
         let knownNames = definedNames ?? Set(defines.keys)
         var pos = 0
+        // 중첩 깊이(괄호 `(`·단항 `!`/`-` 재귀 공용) — 악성 중첩 입력(`#if ((((…))))`)의 스택
+        // 오버플로 방지. 256 은 SceneDocument.world() 의 32 캡을 본떴으되 넉넉히 잡음(실제 식은 10 미만 중첩).
+        var depth = 0
+        let maxDepth = 256
         func peek() -> String? { pos < toks.count ? toks[pos] : nil }
         func next() -> String? { defer { pos += 1 }; return peek() }
 
         // 재귀 하강(우선순위: || , && , 비교 , 가감 , 곱나눗 , 단항)
         func parsePrimary() -> Int {
+            depth += 1
+            defer { depth -= 1 }
+            guard depth <= maxDepth else { return 0 }   // 캡 초과 — 그레이스풀 0(미정의 취급), 크래시 대신
             guard let t = next() else { return 0 }
             if t == "(" { let v = parseOr(); if peek() == ")" { pos += 1 }; return v }
             if t == "!" { return parsePrimary() == 0 ? 1 : 0 }

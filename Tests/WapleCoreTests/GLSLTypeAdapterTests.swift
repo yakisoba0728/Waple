@@ -107,6 +107,32 @@ final class GLSLTypeAdapterTests: XCTestCase {
         XCTAssertTrue(out.contains("foo.xyzwx"), out)  // 크래시 없이 통과
     }
 
+    // S5: Pratt 파서는 세 갈래로 재귀한다 — 괄호/함수인자/첨자(primary↔expression), 단항 체인(unary
+    // 자기재귀), 삼항 체인(ternary 자기재귀). 셋 다 병리적 중첩에서 스택 오버플로 없이 그레이스풀해야
+    // 한다(캡 256, exprDepth 공유). 5000 은 캡을 한참 초과하므로 각 케이스 모두 크래시만 없으면 통과.
+    func testDeepParenNestingDoesNotCrash() {
+        let deep = String(repeating: "(", count: 5000) + "x" + String(repeating: ")", count: 5000) + ";"
+        _ = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1]))
+    }
+
+    func testDeepUnaryChainDoesNotCrash() {
+        let deep = String(repeating: "!", count: 5000) + "x;"
+        _ = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1]))
+    }
+
+    func testDeepTernaryChainDoesNotCrash() {
+        let deep = String(repeating: "x?y:", count: 5000) + "z;"
+        _ = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1, "y": 1, "z": 1]))
+    }
+
+    // S5: 정상 규모 중첩(≪ 256)은 캡의 영향을 받지 않고 절단이 정확히 삽입돼야 한다(무회귀).
+    func testModerateNestingStillAdaptsCorrectly() {
+        let out = GLSLTypeAdapter.adapt(body: "vec2 r = (((a)));", env: env(["a": 4]))
+        XCTAssertEqual(out, "vec2 r = ((((a)))).xy;")   // coerce 가 절단용 괄호 한 겹을 더 씌운다
+        let out2 = GLSLTypeAdapter.adapt(body: String(repeating: "!", count: 5) + "x;", env: env(["x": 1]))
+        XCTAssertEqual(out2, String(repeating: "!", count: 5) + "x;")
+    }
+
     func testDotLengthScalarAndTernary() {
         let out = GLSLTypeAdapter.adapt(body: "float d = dot(a, b);", env: env(["a": 3, "b": 3]))
         XCTAssertEqual(out, "float d = dot(a, b);")
