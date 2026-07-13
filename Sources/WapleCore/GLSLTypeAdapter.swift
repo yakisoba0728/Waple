@@ -86,7 +86,8 @@ public enum GLSLTypeAdapter {
         var intVars = Set<String>()   // int 선언 지역 — % 연산자 유지 판별용
         let returnSize: Int?
         var out = ""   // 재구성 출력
-        // ternary/unary/primary 공유 재귀 깊이 — 악성 중첩(괄호·`!!!!…`·`?:` 체인)의 스택 오버플로 방지.
+        // 재귀 하강 공유 깊이 — 식 파서(ternary/unary/primary: 괄호·`!!!!…`·`?:`)와
+        // 문장 파서(statements⇄statement: `{{{…}}}`·중첩 for) 양쪽의 스택 오버플로 방지.
         var exprDepth = 0
         init(_ toks: [Tok], env: Env, returnSize: Int?) {
             self.toks = toks; self.env = env; self.returnSize = returnSize; self.intVars = env.intVars
@@ -96,8 +97,8 @@ public enum GLSLTypeAdapter {
         func advance() -> Tok { defer { pos += 1 }; return pos < toks.count ? toks[pos] : Tok(trivia: "", text: "") }
     }
 
-    /// 재귀 하강 최대 중첩(ternary/unary/primary 공유). SceneDocument.world() 의 32 캡을 본떴으되
-    /// 넉넉히 잡음 — 실제 셰이더 식은 10 미만 중첩(합법 입력은 절대 걸리지 않음).
+    /// 재귀 하강 최대 중첩(식+문장 파서 공유). SceneDocument.world() 의 32 캡을 본떴으되
+    /// 넉넉히 잡음 — 실제 셰이더는 식·블록 모두 10 미만 중첩(합법 입력은 절대 걸리지 않음).
     private static let maxExprDepth = 256
 
     private struct Node { var text: String; var size: Int }  // size 0 = 불투명
@@ -118,6 +119,12 @@ public enum GLSLTypeAdapter {
     }
 
     private static func statement(_ p: P) {
+        p.exprDepth += 1
+        defer { p.exprDepth -= 1 }
+        // 캡 초과: 한 토큰만 소비하고 반환(재귀 없이). advance() 가 pos 를 무조건 증가시켜
+        // 상위 statements 루프의 전진을 보장한다 — bare return 이면 루프가 무한히 돈다(행). 초과분
+        // `{` 는 이렇게 평탄 소비되고, 짝 `}` 는 언와인드 시 정상 소비돼 균형·토큰 보존(베스트에포트).
+        guard p.exprDepth <= maxExprDepth else { p.out += p.advance().full; return }
         guard let t = p.peek() else { p.out += p.advance().full; return }
         switch t {
         case "{":
