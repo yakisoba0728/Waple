@@ -70,7 +70,7 @@ public enum GLSLTranslator {
             else if u.type != .sampler2D {
                 let key = u.annotationMaterial ?? defaultKey(u.name)
                 materials.append(MaterialParam(glslName: u.name, type: u.type, sceneKey: key,
-                                               defaultValue: u.annotationDefault ?? padDefault(u.type)))
+                                               defaultValue: u.annotationDefault ?? engineNeutralDefault(u.name, u.type)))
             }
         }
         // 본문/함수/const 스캔은 주석 제거본에서 — 주석 속 토큰(예: 죽은 코드의 g_AudioSpectrum16Left)이
@@ -1069,6 +1069,19 @@ public enum GLSLTranslator {
         name.hasPrefix("g_") ? String(name.dropFirst(2)).lowercased() : name.lowercased()
     }
     private static func padDefault(_ t: GLSLType) -> [Float] { Array(repeating: 0, count: max(1, t.components)) }
+    /// WE 엔진 빌트인 레이어 상수(g_Alpha=레이어 알파, g_Color=틴트, g_Brightness=밝기, g_UserAlpha=유저 알파)를
+    /// 머티리얼 어노테이션 없이(bare) 선언한 셰이더 — 엔진이 매 프레임 주입하는 값이라 씬 constantshadervalues 에
+    /// 키가 없어 padDefault=0 으로 떨어지면 레이어가 투명(alpha=0)/검정(color=0,0,0)이 된다. WE 중립값(항등)으로 폴백:
+    /// alpha·brightness·useralpha=1, color=(1,1,1). 어노테이션이 있으면 이 함수는 안 탐(annotationDefault 우선).
+    /// 실제 레이어 알파/색은 컴포지터가 별도 적용(base 이미지는 QuadShaders 하드포트) — 라이브 값 주입은
+    /// 렌더 파이프라인 밖이라 스코프 아웃(중립값이면 이중적용도 없음).
+    private static func engineNeutralDefault(_ name: String, _ t: GLSLType) -> [Float] {
+        switch name {
+        case "g_Alpha", "g_UserAlpha", "g_Brightness", "g_Color":
+            return Array(repeating: 1, count: max(1, t.components))
+        default: return padDefault(t)
+        }
+    }
     private static func swizzle(_ components: Int) -> String {
         switch components {
         case 1: return ".x"

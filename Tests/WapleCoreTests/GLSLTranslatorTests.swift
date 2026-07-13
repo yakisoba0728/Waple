@@ -928,4 +928,39 @@ final class GLSLTranslatorTests: XCTestCase {
         }
         XCTAssertTrue(t.msl.contains("mode == 29"), "ApplyBlending 체인에 29 모드 없음")
     }
+
+    func testBareEngineBuiltinAlphaColorNeutralDefault() throws {
+        // WE 엔진 빌트인 g_Alpha(레이어 알파)·g_Color(틴트)를 머티리얼 어노테이션 없이(bare) 선언한 실물
+        // (assets/shaders/flat.frag) — isEngine 화이트리스트 밖이라 머티리얼로 분류되고 default 가
+        // padDefault=0 으로 떨어져 레이어가 투명(alpha=0)/검정(color=0,0,0)이 되던 갭.
+        // bare 엔진 빌트인은 WE 중립값으로 폴백: g_Alpha=1(불투명), g_Color=(1,1,1)(무-틴트).
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        // (A) 실물 flat.frag 본문 — g_Alpha + g_Color 둘 다 bare.
+        let bareFrag = """
+        uniform mediump float g_Alpha;
+        uniform mediump vec3 g_Color;
+        void main() { gl_FragColor = vec4(g_Color, g_Alpha); }
+        """
+        let tBare = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: bareFrag, combos: [:]))
+        let bareAlpha = try XCTUnwrap(tBare.materialParams.first { $0.glslName == "g_Alpha" }, "g_Alpha 미분류")
+        let bareColor = try XCTUnwrap(tBare.materialParams.first { $0.glslName == "g_Color" }, "g_Color 미분류")
+        XCTAssertEqual(bareAlpha.defaultValue, [1], "bare g_Alpha 중립 default 는 1(불투명) — 0 이면 레이어 투명")
+        XCTAssertEqual(bareColor.defaultValue, [1, 1, 1], "bare g_Color 중립 default 는 (1,1,1) 무-틴트 — 0 이면 검정")
+
+        // (B) 경계 잠금: 어노테이션이 있으면 여전히 머티리얼(어노테이션 default 우선, 중립 아님).
+        let annFrag = """
+        uniform vec3 g_Color; // {"material":"color","default":"1 0 0"}
+        void main() { gl_FragColor = vec4(g_Color, 1.0); }
+        """
+        let tAnn = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: annFrag, combos: [:]))
+        let annColor = try XCTUnwrap(tAnn.materialParams.first { $0.glslName == "g_Color" }, "g_Color 미분류")
+        XCTAssertEqual(annColor.defaultValue, [1, 0, 0], "어노테이션 default 가 중립값에 우선해야 함")
+        XCTAssertEqual(annColor.sceneKey, "color", "어노테이션 material 키 유지")
+    }
 }
