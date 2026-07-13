@@ -125,6 +125,20 @@ final class GLSLTypeAdapterTests: XCTestCase {
         _ = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1, "y": 1, "z": 1]))
     }
 
+    // S5(문장 레벨): statements ⇄ statement 상호재귀도 병리적 `{{{…}}}` 중첩에서 스택 오버플로 없이
+    // 끝나야 한다(식 파서와 별개 벡터). 캡 초과 시 한 토큰씩 소비하며 전진하므로 크래시도 무한루프도 없다
+    // — 이 테스트는 반환하기만 하면(행 없음) 통과.
+    func testDeepBlockNestingDoesNotCrash() {
+        let deep = String(repeating: "{", count: 5000) + String(repeating: "}", count: 5000)
+        _ = GLSLTypeAdapter.adapt(body: deep, env: env())
+    }
+
+    // S5(문장 레벨): 정상 2중 블록(≪ 256)은 캡의 영향 없이 내부 선언 절단이 그대로 삽입돼야 한다(무회귀).
+    func testModerateBlockNestingStillTranslates() {
+        let out = GLSLTypeAdapter.adapt(body: "{ { vec2 a = vec4(1.0, 2.0, 3.0, 4.0); } }", env: env())
+        XCTAssertEqual(out, "{ { vec2 a = (vec4(1.0, 2.0, 3.0, 4.0)).xy; } }")
+    }
+
     // S5: 정상 규모 중첩(≪ 256)은 캡의 영향을 받지 않고 절단이 정확히 삽입돼야 한다(무회귀).
     func testModerateNestingStillAdaptsCorrectly() {
         let out = GLSLTypeAdapter.adapt(body: "vec2 r = (((a)));", env: env(["a": 4]))
