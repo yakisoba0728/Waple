@@ -20,6 +20,11 @@ final class WebInputProxyView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    /// stop() 미호출 안전망 — 미호출 시 타이머가 nil self 로 계속 발화(감사 L1). stop() 은 멱등.
+    deinit {
+        stop()
+    }
+
     override var acceptsFirstResponder: Bool { true }
 
     func start() {

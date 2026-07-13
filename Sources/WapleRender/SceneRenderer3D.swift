@@ -493,6 +493,14 @@ extension SceneRenderer {
             default: break
             }
         }
+        // eye/center 는 fov(f > 0)처럼 개별검증할 수 없다 — 둘 다 유효한 유한값이어도 조합(eye==center)이
+        // 퇴화할 수 있어 루프 종료 후 합쳐서 검사. 퇴화/비유한 시 lookAt 이 영벡터를 정규화해 NaN 이
+        // viewProj 전체로 전파(빈 프레임, 감사 C2) — 그 프레임만 스크립트 적용 전 베이스 카메라로 폴백.
+        let lookLen = simd_length(ctr - eye)
+        if !lookLen.isFinite || lookLen < 1e-4 {
+            eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
+            ctr = SIMD3(cam.center.x, cam.center.y, cam.center.z)
+        }
         let view = Scene3DMath.lookAt(eye: eye, center: ctr, up: upv)
         let proj = Scene3DMath.perspective(fovYDegrees: fov, aspect: aspect,
                                            nearZ: cam.nearZ, farZ: cam.farZ)

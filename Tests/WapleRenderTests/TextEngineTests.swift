@@ -26,8 +26,11 @@ final class TextEngineTests: XCTestCase {
         let out = try XCTUnwrap(engine.evaluate(current: ""))
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let now = f.string(from: Date())
-        let oneMinuteLater = f.string(from: Date(timeIntervalSinceNow: 60))
-        XCTAssertTrue(out == now || out == oneMinuteLater, "got \(out), expected \(now)")
+        // out(JS, L26)은 now(Swift, L28)보다 항상 먼저 읽힌다 — 그 사이에 분 경계를 넘으면 out 은
+        // "이전" 분을 가리킨다. 따라서 물리적으로 도달 가능한 창은 {now-1, now}뿐이고 now+1 은 불가능
+        // (감사 T4 — 종전엔 반대 방향(now+1)을 허용하고 실제로 발생하는 now-1 은 안 잡아 드물게 spurious FAIL).
+        let oneMinuteEarlier = f.string(from: Date(timeIntervalSinceNow: -60))
+        XCTAssertTrue(out == now || out == oneMinuteEarlier, "got \(out), expected \(now) or \(oneMinuteEarlier)")
     }
 
     /// engine/shared 등 엔진 API 참조가 있어도(no-op 심) 죽지 않아야 한다.
