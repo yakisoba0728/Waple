@@ -13,16 +13,28 @@ enum MainTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// 네이티브 메인창: 통합 툴바(탭 세그먼트·검색·필터·정렬·패널 토글) + 콘텐츠 + Now Playing 바.
+/// 네이티브 메인창: 통합 툴바(탭 세그먼트·탭별 검색/정렬·패널 토글) + 콘텐츠 + Now Playing 바.
 /// WE는 배치 참고만 — 컨트롤·색·재질은 전부 시스템(스펙 2026-07-12 네이티브 재설계).
 struct MainWindowView: View {
     @ObservedObject var viewModel: LibraryViewModel
     @ObservedObject var banner: StatusBannerModel
     var screenFrames: () -> [CGRect]
-    @State private var tab: MainTab = .installed
+    // 워크샵/디스커버 VM 은 창이 소유 — 탭을 오가도 결과·다운로드 진행 상태가 유지된다.
+    @StateObject private var workshopVM: WorkshopViewModel
+    @StateObject private var discoverVM = DiscoverViewModel()
+    // WAPLE_SMOKE_TAB=discover|workshop — 캡처용 초기 탭 강제(스모크 규약, MainTab.rawValue)
+    @State private var tab: MainTab =
+        ProcessInfo.processInfo.environment["WAPLE_SMOKE_TAB"].flatMap(MainTab.init(rawValue:)) ?? .installed
     @State private var showDisplays = ProcessInfo.processInfo.environment["WAPLE_SMOKE_DISPLAYS"] != nil
     @State private var showFilters = ProcessInfo.processInfo.environment["WAPLE_SMOKE"] != nil  // 스모크 캡처용 기본 노출
     @State private var panelVisible = true
+
+    init(viewModel: LibraryViewModel, banner: StatusBannerModel, screenFrames: @escaping () -> [CGRect]) {
+        self.viewModel = viewModel
+        self.banner = banner
+        self.screenFrames = screenFrames
+        _workshopVM = StateObject(wrappedValue: WorkshopViewModel(library: viewModel))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,10 +59,11 @@ struct MainWindowView: View {
             .labelsHidden()
         }
         ToolbarItemGroup {
-            if tab == .installed {
+            switch tab {
+            case .installed:
                 TextField("검색", text: $viewModel.searchText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 190)
+                    .frame(width: Metrics.searchFieldWidth)
                 Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { showFilters.toggle() } } label: {
                     Label("필터", systemImage: viewModel.criteria.isActive
                           ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
@@ -61,6 +74,20 @@ struct MainWindowView: View {
                 }
                 .pickerStyle(.menu)
                 .help("정렬")
+            case .workshop:
+                TextField("워크샵 검색", text: $workshopVM.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: Metrics.searchFieldWidth)
+                    .onSubmit { Task { await workshopVM.search() } }
+                    .disabled(!workshopVM.hasAPIKey)
+                Picker("정렬", selection: $workshopVM.sort) {
+                    ForEach(WorkshopSort.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .disabled(!workshopVM.hasAPIKey)
+                .help("정렬")
+            case .discover:
+                EmptyView()   // 디스커버는 큐레이션 레일 — 텍스트 검색은 창작마당 탭 전담
             }
             Button {} label: { Label("모바일", systemImage: "iphone") }
                 .disabled(true)
@@ -70,10 +97,12 @@ struct MainWindowView: View {
             Button {} label: { Label("설정", systemImage: "gearshape") }
                 .disabled(true)
                 .help("설정 창은 곧 제공됩니다(SP5′)")
-            Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { panelVisible.toggle() } } label: {
-                Label("정보 패널", systemImage: "sidebar.trailing")
+            if tab == .installed {
+                Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { panelVisible.toggle() } } label: {
+                    Label("정보 패널", systemImage: "sidebar.trailing")
+                }
+                .help(panelVisible ? "정보 패널 숨기기" : "정보 패널 보기")
             }
-            .help(panelVisible ? "정보 패널 숨기기" : "정보 패널 보기")
         }
     }
 
@@ -95,17 +124,9 @@ struct MainWindowView: View {
                 }
             }
         case .discover:
-            VStack(spacing: 8) {
-                Spacer()
-                Image(systemName: "safari").font(.system(size: 40)).foregroundStyle(.tertiary)
-                Text("검색 탭은 준비 중입니다").font(.title3)
-                Text("창작마당 탭에서 Steam 워크샵을 검색할 수 있습니다")
-                    .font(.callout).foregroundStyle(.secondary)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity)
+            DiscoverView(vm: discoverVM, workshopVM: workshopVM)
         case .workshop:
-            WorkshopView(library: viewModel)
+            WorkshopTabView(vm: workshopVM)
         }
     }
 }

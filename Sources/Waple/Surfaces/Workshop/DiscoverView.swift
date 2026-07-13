@@ -1,0 +1,75 @@
+import SwiftUI
+import AppKit
+
+/// 검색(디스커버) 탭 — 정렬 4종 가로 레일. 키 게이트·다운로드 상태는 워크샵 VM 을 공유한다
+/// (다운로드가 어느 탭에서 시작됐든 같은 진행 상태가 보인다).
+struct DiscoverView: View {
+    @ObservedObject var vm: DiscoverViewModel
+    @ObservedObject var workshopVM: WorkshopViewModel
+
+    var body: some View {
+        Group {
+            if workshopVM.hasAPIKey { rails } else { APIKeyGateView(vm: workshopVM) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .underPageBackgroundColor))
+        .task(id: workshopVM.hasAPIKey) {
+            if workshopVM.hasAPIKey { await vm.loadIfNeeded() }
+        }
+    }
+
+    private var rails: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: Metrics.gridSpacing + 6) {
+                if let message = workshopVM.statusMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 20)
+                }
+                ForEach(vm.rows) { row in section(row) }
+            }
+            .padding(.vertical, 20)
+        }
+    }
+
+    @ViewBuilder
+    private func section(_ row: DiscoverViewModel.Row) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.gap) {
+            Text(row.title)
+                .font(.title3.weight(.semibold))
+                .padding(.horizontal, 20)
+            switch row.state {
+            case .loading:
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: Metrics.tileThumbHeight)
+            case .failed(let message):
+                HStack(spacing: Metrics.gap) {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                    Button("다시 시도") { Task { await vm.reload(row.sort) } }
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, 20)
+            case .loaded(let items):
+                if items.isEmpty {
+                    Text("항목이 없습니다").font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 20)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: Metrics.gridSpacing) {
+                            ForEach(items) { item in
+                                RemoteTileView(item: item,
+                                               download: workshopVM.downloads[item.id],
+                                               steamcmdAvailable: workshopVM.steamcmdAvailable,
+                                               onDownload: { workshopVM.download(item) },
+                                               onApply: { workshopVM.apply(item) })
+                                    .frame(width: Metrics.tileWidth)   // 레일은 고정폭 타일
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, Metrics.gap)   // 호버 리프트 그림자 클리핑 여유
+                    }
+                }
+            }
+        }
+    }
+}
