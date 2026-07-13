@@ -323,6 +323,35 @@ final class TextRasterizerTests: XCTestCase {
         // 별칭 외 설치 폰트(예: menlo)도 검증 통과로 유지되는지 — 강등 오탐 방지
         XCTAssertEqual(family(TextRasterizer.resolveSystemFont("systemfont_menlo", pointSize: 16)), "Menlo")
     }
+
+    // ── B1: 멀티라인 세로 쌓기 + pointSize 300-DPI 스케일 (lane-01-text-raster) ──
+
+    /// D-A: `\n` 분리 텍스트는 세로로 쌓여야 한다(단일 baseline 붕괴 금지).
+    /// 붕괴 시 "A\nB\nC" → `\n` 제로폭 → "ABC" 한 줄(높이=1줄, 폭≈3배). 스케일 무관 비율로 단언.
+    func testMultilineStacksVerticallyNotCollapsed() throws {
+        let one = try XCTUnwrap(TextRasterizer.render(text: "A", fontData: nil, systemFontName: nil, pointSize: 24))
+        let three = try XCTUnwrap(TextRasterizer.render(text: "A\nB\nC", fontData: nil, systemFontName: nil, pointSize: 24))
+        XCTAssertGreaterThan(three.height, one.height * 2,
+                             "3줄 높이가 1줄의 <2배 — 세로로 안 쌓임(baseline 붕괴)")
+        XCTAssertLessThan(three.width, one.width * 2,
+                          "3줄 폭이 1줄의 ≥2배 — 가로로 이어붙음(붕괴 증상)")
+    }
+
+    /// D-A: 빈 줄(`\n\n`, 앵커 2867182492 "Small Text" 실내용)도 한 줄 높이를 차지해야 한다.
+    func testBlankLineOccupiesRow() throws {
+        let two = try XCTUnwrap(TextRasterizer.render(text: "A\nB", fontData: nil, systemFontName: nil, pointSize: 24))
+        let blank = try XCTUnwrap(TextRasterizer.render(text: "A\n\nB", fontData: nil, systemFontName: nil, pointSize: 24))
+        XCTAssertGreaterThan(blank.height, two.height, "빈 줄이 높이에 반영되지 않음")
+    }
+
+    /// D-B: pointSize 는 300-DPI 규약(≈×300/72≈4.17) — 화면 픽셀로 pointSize 의 ~5배 높이.
+    /// 미적용 시 ~1.3배(asc+desc+lead)라 WE 대비 4~5배 작다. 하한 3×·상한 10×로 팩터를 괄호(정확값은 컨트롤러 픽셀대조).
+    func testPointSizeScaledForWEDPI() throws {
+        let ps: Float = 24
+        let r = try XCTUnwrap(TextRasterizer.render(text: "A", fontData: nil, systemFontName: nil, pointSize: ps))
+        XCTAssertGreaterThan(Float(r.height), ps * 3, "텍스트가 너무 작음(300-DPI 스케일 미적용)")
+        XCTAssertLessThan(Float(r.height), ps * 10, "스케일 과대(팩터 오적용)")
+    }
 }
 
 /// 효과 상수 스크립트: WEColor 실심 + engine.runtime + evaluateVec (실물 컬러 사이클 패턴).

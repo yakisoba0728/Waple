@@ -10,22 +10,29 @@ public enum TextRasterizer {
     private static let maxPointSize: Float = 8192
     private static let maxRasterBytes = 256 << 20
 
+    /// ITextLayer.pointsize 는 "300 DPI 기준 point"(lib.sceneScript.d.ts:1606). 72DPI 1:1 컨텍스트로
+    /// 래스터하므로 실효 폰트크기에 300/72(≈4.17)를 곱해 WE 화면 크기에 맞춘다(미적용 시 4~5배 작음).
+    private static let weRenderDPI: CGFloat = 300
+
     /// - fontData: pkg/base-assets 의 .otf/.ttf 바이트(전역 등록 없이 디스크립터로 생성).
     /// - systemFontName: "systemfont_arial" 류의 이름 매핑(없거나 실패 시 시스템 폰트).
     public static func render(text: String, fontData: Data?, systemFontName: String?, pointSize: Float) -> Raster? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, pointSize.isFinite, pointSize > 0, pointSize <= maxPointSize else { return nil }
-        let font = makeFont(fontData: fontData, systemFontName: systemFontName, pointSize: CGFloat(pointSize))
-        let attr = NSAttributedString(string: text, attributes: [
-            .font: font,
-            .foregroundColor: CGColor(red: 1, green: 1, blue: 1, alpha: 1),
-        ])
-        let line = CTLineCreateWithAttributedString(attr)
-        var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
-        let advance = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
-        guard advance.isFinite, ascent.isFinite, descent.isFinite else { return nil }
-        let rawW = ceil(advance)
-        let rawH = ceil(ascent + descent)
+        let font = makeFont(fontData: fontData, systemFontName: systemFontName,
+                            pointSize: CGFloat(pointSize) * weRenderDPI / 72)
+        let white = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
+        // `\n` 마다 줄 분리 → 줄별 CTLine. (단일 CTLine 은 `\n` 을 제로폭 글리프로 뭉개 한 줄로 붕괴시킨다.)
+        let lines = text.components(separatedBy: "\n").map { s in
+            CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: white]))
+        }
+        // 줄 높이는 폰트 메트릭(빈 줄도 한 행 차지) — 폭은 줄별 실측 최대치.
+        let ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font), leading = CTFontGetLeading(font)
+        let lineH = ceil(ascent + descent + leading)
+        let maxW = lines.map { CTLineGetTypographicBounds($0, nil, nil, nil) }.max() ?? 0
+        guard ascent.isFinite, descent.isFinite, lineH.isFinite, lineH > 0, maxW.isFinite else { return nil }
+        let rawW = ceil(maxW)
+        let rawH = lineH * CGFloat(lines.count)
         guard rawW.isFinite, rawH.isFinite, rawW >= 0, rawH >= 0,
               rawW <= CGFloat(Int.max - 2), rawH <= CGFloat(Int.max - 2) else { return nil }
         let w = max(1, Int(rawW) + 2)
@@ -37,8 +44,11 @@ public enum TextRasterizer {
                   let ctx = CGContext(data: base, width: w, height: h, bitsPerComponent: 8,
                                       bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
-            ctx.textPosition = CGPoint(x: 1, y: descent + 1)
-            CTLineDraw(line, ctx)
+            // 하단원점 컨텍스트: 첫 줄을 위(높은 y)에 그린다 → 마지막 전체 상하반전으로 텍스처 규약(row0=top) 정합.
+            for (i, line) in lines.enumerated() {
+                ctx.textPosition = CGPoint(x: 1, y: CGFloat(h) - 1 - ascent - CGFloat(i) * lineH)
+                CTLineDraw(line, ctx)
+            }
             // premultiplied → straight (흰색 글리프라 rgb=alpha; 255 로 통일해 tint 가 온전히 색을 결정)
             let px = base.assumingMemoryBound(to: UInt8.self)
             for i in stride(from: 0, to: w * h * 4, by: 4) where px[i + 3] > 0 {
