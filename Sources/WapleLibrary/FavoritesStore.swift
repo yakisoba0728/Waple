@@ -5,10 +5,11 @@ public final class FavoritesStore {
     private let fileURL: URL
     public private(set) var ids: Set<String> = []
     private var corrupt = false
+    private var loadFailed = false
 
     public init(baseDirectory: URL) {
         fileURL = baseDirectory.appendingPathComponent("favorites.json")
-        guard let data = readStoreFile(fileURL, what: "favorites.json", note: "starting empty", corrupt: &corrupt) else { return }
+        guard let data = readStoreFile(fileURL, what: "favorites.json", note: "starting empty", loadFailed: &loadFailed) else { return }
         do { ids = try JSONDecoder().decode(Set<String>.self, from: data) }
         catch { NSLog("%@", "[Waple] favorites.json corrupt — preserving, starting empty: \(error)"); corrupt = true }
     }
@@ -26,6 +27,10 @@ public final class FavoritesStore {
     }
 
     private func save() {
+        guard !loadFailed else {
+            NSLog("%@", "[Waple] favorites.json save skipped — earlier read failed transiently, avoiding clobber")
+            return
+        }
         backupCorruptStoreFile(fileURL, &corrupt)
         do { try JSONEncoder().encode(ids).write(to: fileURL, options: .atomic) }
         catch { NSLog("%@", "[Waple] favorites save failed: \(error)") }

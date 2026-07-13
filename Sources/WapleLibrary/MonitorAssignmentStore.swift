@@ -29,16 +29,6 @@ func readStoreFile(_ url: URL, what: String, note: String, loadFailed: inout Boo
     }
 }
 
-/// 구버전 호출부(FavoritesStore, 이 그룹 작업 범위 밖) 호환용 — 읽기실패를 곧장 corrupt 로 취급해
-/// 종전과 동일하게 백업 후 재작성 경로를 탄다. 신규 호출부는 위 loadFailed 버전을 써서
-/// 일시적 읽기실패와 진짜 디코드 손상을 구분한다.
-func readStoreFile(_ url: URL, what: String, note: String, corrupt: inout Bool) -> Data? {
-    var loadFailed = false
-    let data = readStoreFile(url, what: what, note: note, loadFailed: &loadFailed)
-    if loadFailed { corrupt = true }
-    return data
-}
-
 /// 모니터별 배경 할당(화면 키 → 라이브러리 엔트리 id). 미할당 화면은 전역 선택을 따른다.
 /// 화면 키는 CGDirectDisplayID 문자열(앱 쪽에서 생성) — 디스플레이 재연결에도 안정적.
 public final class MonitorAssignmentStore {
