@@ -4,9 +4,14 @@
 **"그려지는 픽셀이 변하지 않았는가"**를 지키는 게이트는 없었다. 포워드 라이팅 등
 위험한 렌더 작업 전에 이 스냅샷 회귀 게이트를 통과시켜 시각 회귀를 조기 검출한다.
 
-대상은 **scene 170종**(2D/3D/파티클/텍스트 — Metal 오프스크린 경로). video/web 은
-제외(AVFoundation/WebKit 비결정, 범위 밖). 비디오-백드 씬(`type=scene` 이지만 내부가
-mp4 텍스처 → AVFoundation 위임)은 캡처 시 픽셀이 없어 `empties` 버킷으로 자동 제외된다.
+대상은 **scene 170종**(2D/3D/파티클/텍스트 — Metal 오프스크린 경로). web 은
+제외(WebKit 비결정, 범위 밖). 비디오-백드 씬(`type=scene` 이지만 내부가 mp4 텍스처 →
+mount 가 VideoRenderer 에 위임)은 과거 캡처 시 픽셀이 없어 `empties` 로 자동 제외됐으나,
+이제 추출 mp4 에서 고정 t 프레임을 **정확 디코드**(AVAssetImageGenerator, tolerance=0 →
+셀프체크 2× 결정성)해 `entries` 로 캡처된다(H1 수정, `VideoTextureExtractor.captureFramePNG`).
+단, 이 프레임은 비디오 콘텐츠 자체이며 씬 오버레이(clock/logo 등)는 포함하지 않는다 —
+VideoRenderer 위임이 다른 레이어를 그리지 않기 때문(전체화면 비디오 근사). 다음 베이스라인
+재생성부터 이 24종이 `entries` 에 포함된다(기존 `--compare` 는 베이스라인 `entries` 만 캡처하므로 무영향).
 
 ## 도구
 
@@ -74,9 +79,15 @@ meanLuma, deterministic, selfMaxDiff, note?`.
 self-diff 를 잰다. `selfConsistent` 임계 초과 씬은 `deterministic:false` + 사유를
 매니페스트에 기록(비교 시 관대 임계). empty/실패 씬은 1×(자기 diff 무의미).
 
-**③ 측정 결과**(코퍼스 460종 중 scene 170): 캡처 146 / empty 24 / fail 0.
+**③ 측정 결과**(코퍼스 460종 중 scene 170, H1 수정 이전): 캡처 146 / empty 24 / fail 0.
 캡처된 146종 **전부 결정**(self-diff maxAbsDiff=0), **비결정 0**. 고정 조건이
 잔여 비결정(JS `Math.random`/wall-clock 등)을 남기지 않음을 실측 확인.
+H1 수정 후 비디오-백드 24종도 프레임을 낸다(다음 재생성 시 대부분 `empties`→`entries`).
+표본 3종은 empty→비단색 콘텐츠+같은-머신 결정성 실측(`VideoBackedSceneCaptureTests`),
+나머지는 동일 브랜치를 타되 개별 디코드 미검증 — 디코드 불가 페이로드는 graceful 하게 empty
+로 폴백하므로 최악도 무회귀(≤ 기존 empties). 주의: 이 24종 픽셀은 AVFoundation(H.264)+CG
+스케일 산출이라 **머신 간** 재현이 Metal 경로만큼 보장되진 않는다 — 코디네이터가 이들을 포함해
+베이스라인을 재생성한 뒤 `strict` 가 머신 간 불안정하면 `lax` 버킷으로 내려야 한다(관측 전 선반영 불필요).
 
 ## 임계
 
@@ -95,7 +106,7 @@ self-diff 를 잰다. `selfConsistent` 임계 초과 씬은 `deterministic:false
 - `--capture`(셀프체크 2×): 146 캡처 + 24 empty, **≈611s (10.2분)**. 베이스라인 생성은
   드물게 수행(코디네이터).
 - 1× 캡처 패스: **≈360s (6.0분)**. 느린 꼬리는 대용량 비디오-백드 pkg(52–679MB)가
-  차지 — 이들은 empty 로 제외되지만 마운트 로드 비용은 발생.
+  차지 — mp4 추출·로드 비용이 크다(H1 후 프레임 디코드는 추가되나 1프레임이라 경미).
 - `--compare`: 베이스라인 `entries`(146)만 1회 캡처 → 비디오-백드 empty 24종은
   건너뛰므로 게이트가 더 빠름. 피크 RSS ≈3.9GB.
 
