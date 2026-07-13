@@ -77,6 +77,10 @@ public struct SceneLayer: Equatable {
     /// visible 의 정적 value(초기 표시). visible 스크립트가 있을 때만 false 로도 남는다 —
     /// 스크립트 없는 정적 false 는 파스에서 레이어 자체가 드롭된다.
     public var initialVisible: Bool = true
+    /// 이미지 정렬(9점 앵커, WE IImageLayer.alignment): center(기본)/top/bottom/left/right/
+    /// topleft/topright/bottomleft/bottomright. origin 이 사각형의 어느 앵커점인지 결정 — 렌더러
+    /// quadVertices/litRect 가 앵커 기준으로 코너 산출. center 는 origin=중심(기존 동작, 무회귀).
+    public var alignment: String = "center"
     /// 머티리얼 패스에 SPRITESHEET 콤보가 있으면 true → 이 이미지 레이어는 .tex TEXS 프레임을 시간축
     /// 재생(gif). 렌더러가 이 게이트로만 프레임 전진(콤보 없는 genericimage2/4 는 정지 = 무회귀).
     /// 콤보 키는 대/소문자 혼재(실씬 "SPRITESHEET", 엔진 예제 "spritesheet") — 대소문자 무시 매치.
@@ -627,6 +631,7 @@ extension SceneDocument {
         layer.originZ = originFull.count >= 3 ? originFull[2] : 0
         layer.parent = intVal(obj["parent"])
         layer.id = intVal(obj["id"]) ?? 0
+        layer.alignment = (obj["alignment"] as? String) ?? "center"
         return layer
     }
 

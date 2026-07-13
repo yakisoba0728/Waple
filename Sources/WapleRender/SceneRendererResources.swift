@@ -106,7 +106,7 @@ extension SceneRenderer {
             } else { continue }
             // 스프라이트 프레임 있으면 상시 리드로 필요(gif 재생) — needsDisplay 정책은 shouldAnimate 로.
             if !frames.isEmpty { hasAnimations = true }
-            let verts = quadVertices(layer: layer, projW: w, projH: h)
+            let verts = Self.quadVertices(layer: layer, projW: w, projH: h)
             guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) else { continue }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
@@ -163,8 +163,8 @@ extension SceneRenderer {
             let layerLit = forwardLit && layer.lighting && !layer.isFrameBuffer
                 && puppetModel == nil && layer.colorBlendMode == 0
             let lrect = layerLit
-                ? litRect(origin: layer.origin, size: layer.size, scale: layer.scale,
-                          angleZ: layer.angleZ, originZ: layer.originZ)
+                ? Self.litRect(origin: layer.origin, size: layer.size, scale: layer.scale,
+                          angleZ: layer.angleZ, alignment: layer.alignment, originZ: layer.originZ)
                 : (SIMD4<Float>.zero, SIMD4<Float>.zero)
             out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),

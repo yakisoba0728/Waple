@@ -282,22 +282,36 @@ extension SceneRenderer {
         Self.pxToNDC(x, y, projW: projW, projH: projH)
     }
 
+    /// alignment(9점 앵커) → origin 을 앵커점으로 삼는 유효 중심. WE IImageLayer.alignment:
+    ///   left/right → 앵커가 좌/우변(사각형은 반대쪽으로 뻗음), top/bottom → 상/하변, center=중심.
+    /// effectiveCenter = origin − rotate(alignX,alignY) 이므로 기존 코너식(rotate(local)+center)·
+    /// litRect 셰이더 재구성(center 가정)이 수식 변경 없이 그대로 앵커 정렬을 재현한다(회전 선형성).
+    /// y-down 씬픽셀: top=−hh(위=y작음)·bottom=+hh·left=−hw·right=+hw. center/미지정=이동 0(무회귀).
+    @inline(__always)
+    static func alignedCenter(origin: Vec2, alignment: String, hw: Float, hh: Float, ca: Float, sa: Float) -> Vec2 {
+        let ax: Float = alignment.contains("left") ? -hw : (alignment.contains("right") ? hw : 0)
+        let ay: Float = alignment.contains("top") ? -hh : (alignment.contains("bottom") ? hh : 0)
+        if ax == 0 && ay == 0 { return origin }  // center/미지정: 중심 그대로(무회귀)
+        return Vec2(x: origin.x - (ax * ca - ay * sa), y: origin.y - (ax * sa + ay * ca))
+    }
+
     /// 씬 픽셀 좌표(좌상단 원점, Y-down 가정) → NDC. Y-flip은 Task 7에서 실측 보정.
-    func quadVertices(layer: SceneLayer, projW: Float, projH: Float) -> [SIMD4<Float>] {
+    static func quadVertices(layer: SceneLayer, projW: Float, projH: Float) -> [SIMD4<Float>] {
         quadVertices(origin: layer.origin, size: layer.size, scale: layer.scale, angleZ: layer.angleZ,
-                     projW: projW, projH: projH)
+                     alignment: layer.alignment, projW: projW, projH: projH)
     }
 
     /// 명시 파라미터 변형 — 프로퍼티 애니메이션의 per-frame 재계산용.
-    func quadVertices(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float,
+    static func quadVertices(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, alignment: String,
                               projW: Float, projH: Float) -> [SIMD4<Float>] {
         let hw = size.x * scale.x * 0.5
         let hh = size.y * scale.y * 0.5
         let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
         let ca = cos(a), sa = sin(a)
+        let c = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
         func corner(_ lx: Float, _ ly: Float) -> SIMD2<Float> {
             let rx = lx * ca - ly * sa, ry = lx * sa + ly * ca
-            return SIMD2<Float>(origin.x + rx, origin.y + ry)
+            return SIMD2<Float>(c.x + rx, c.y + ry)
         }
         func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> { Self.pxToNDC(p.x, p.y, projW: projW, projH: projH) }
         let tl = ndc(corner(-hw, -hh)), tr = ndc(corner(hw, -hh))
@@ -311,11 +325,13 @@ extension SceneRenderer {
 
     /// 포워드 라이팅용 레이어 월드 사각형 — f_lit 이 uv→월드 재구성에 쓰는 (ox,oy,hw,hh)+(cosA,sinA,z,0).
     /// hw/hh/angle 규약은 quadVertices 와 동일(정합 필수). z = 레이어 originZ(2D 라이트 감쇠의 z 성분).
-    func litRect(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, originZ: Float) -> (SIMD4<Float>, SIMD4<Float>) {
+    static func litRect(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, alignment: String, originZ: Float) -> (SIMD4<Float>, SIMD4<Float>) {
         let hw = size.x * scale.x * 0.5
         let hh = size.y * scale.y * 0.5
         let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
-        return (SIMD4(origin.x, origin.y, hw, hh), SIMD4(cos(a), sin(a), originZ, 0))
+        let ca = cos(a), sa = sin(a)
+        let c = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
+        return (SIMD4(c.x, c.y, hw, hh), SIMD4(ca, sa, originZ, 0))
     }
 
     /// 퍼펫 스킨 정점 → NDC 삼각형 리스트(quadVertices 와 동일 규약: 씬 픽셀 y-down, uv 그대로).
@@ -400,14 +416,14 @@ extension SceneRenderer {
             let scale = Vec2(x: animValue("scale", 0, def.scale.x), y: animValue("scale", 1, def.scale.y))
             let angle = animValue("angles", 2, def.angleZ)
             if def.animations["origin"] != nil || def.animations["scale"] != nil || def.animations["angles"] != nil {
-                let verts = quadVertices(origin: origin, size: def.size, scale: scale, angleZ: angle,
-                                         projW: projW, projH: projH)
+                let verts = Self.quadVertices(origin: origin, size: def.size, scale: scale, angleZ: angle,
+                                         alignment: def.alignment, projW: projW, projH: projH)
                 if let b = layer.scratchQuad.load(verts, device: device) {
                     vbuf = b
                 }
                 // 라이트 레이어: 애니 지오메트리에 맞춰 월드 사각형도 재계산(f_lit 정합).
                 if layer.isLit {
-                    let r = litRect(origin: origin, size: def.size, scale: scale, angleZ: angle, originZ: def.originZ)
+                    let r = Self.litRect(origin: origin, size: def.size, scale: scale, angleZ: angle, alignment: def.alignment, originZ: def.originZ)
                     litRect0 = r.0; litRect1 = r.1
                 }
             }

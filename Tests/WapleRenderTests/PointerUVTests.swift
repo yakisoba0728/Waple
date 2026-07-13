@@ -53,3 +53,49 @@ final class PuppetVerticesTests: XCTestCase {
         XCTAssertEqual(v[0].y, 0, accuracy: 1e-3)
     }
 }
+
+final class QuadAlignmentTests: XCTestCase {
+    // NDC → 씬픽셀 역변환(pxToNDC 의 역): x=(ndcX+1)/2·proj, y=(1−ndcY)/2·proj.
+    private func scenePixels(_ v: [SIMD4<Float>], proj: Float) -> (xs: [Float], ys: [Float]) {
+        (v.map { ($0.x + 1) / 2 * proj }, v.map { (1 - $0.y) / 2 * proj })
+    }
+
+    /// D2: alignment="bottomleft" 는 origin 이 좌하단 앵커여야 한다 — 사각형이 origin 기준 우측(+x)·
+    /// 위쪽(y-down 에서 −y)으로만 뻗는다(오디오 이퀄라이저 바: y=하단선 고정한 채 위로만 자람).
+    /// 종전(미반영)엔 origin 이 항상 중심이라 좌·아래로도 절반 편이 → 이 assert 가 red.
+    func testBottomLeftAnchorsOriginAtBottomLeft() {
+        let v = SceneRenderer.quadVertices(origin: Vec2(x: 100, y: 200), size: Vec2(x: 40, y: 80),
+                                           scale: Vec2(x: 1, y: 1), angleZ: 0, alignment: "bottomleft",
+                                           projW: 1000, projH: 1000)
+        let (xs, ys) = scenePixels(v, proj: 1000)
+        XCTAssertEqual(xs.min()!, 100, accuracy: 1e-2)   // 좌변 = origin.x (우측으로만)
+        XCTAssertEqual(xs.max()!, 140, accuracy: 1e-2)   // origin.x + w
+        XCTAssertEqual(ys.min()!, 120, accuracy: 1e-2)   // 상단 = origin.y − h
+        XCTAssertEqual(ys.max()!, 200, accuracy: 1e-2)   // 하변 = origin.y (위로만)
+    }
+
+    /// 반대 부호 가지(right→+hw, top→−hh) 잠금 — topright 는 origin 이 우상단 앵커여야:
+    /// 사각형이 좌측(−x)·아래(y-down 에서 +y)로만 뻗는다(bottomleft 와 대칭).
+    func testTopRightAnchorsOriginAtTopRight() {
+        let v = SceneRenderer.quadVertices(origin: Vec2(x: 100, y: 200), size: Vec2(x: 40, y: 80),
+                                           scale: Vec2(x: 1, y: 1), angleZ: 0, alignment: "topright",
+                                           projW: 1000, projH: 1000)
+        let (xs, ys) = scenePixels(v, proj: 1000)
+        XCTAssertEqual(xs.min()!, 60, accuracy: 1e-2)    // origin.x − w
+        XCTAssertEqual(xs.max()!, 100, accuracy: 1e-2)   // 우변 = origin.x (좌측으로만)
+        XCTAssertEqual(ys.min()!, 200, accuracy: 1e-2)   // 상단 = origin.y (아래로만)
+        XCTAssertEqual(ys.max()!, 280, accuracy: 1e-2)   // origin.y + h
+    }
+
+    /// alignment="center"(기본) 는 origin=중심 — 앵커 도입 전 정점과 완전 동일(무회귀).
+    func testCenterAlignmentUnchanged() {
+        let v = SceneRenderer.quadVertices(origin: Vec2(x: 100, y: 200), size: Vec2(x: 40, y: 80),
+                                           scale: Vec2(x: 1, y: 1), angleZ: 0, alignment: "center",
+                                           projW: 1000, projH: 1000)
+        let (xs, ys) = scenePixels(v, proj: 1000)
+        XCTAssertEqual(xs.min()!, 80, accuracy: 1e-2)    // 중심 ± hw(20)
+        XCTAssertEqual(xs.max()!, 120, accuracy: 1e-2)
+        XCTAssertEqual(ys.min()!, 160, accuracy: 1e-2)   // 중심 ± hh(40)
+        XCTAssertEqual(ys.max()!, 240, accuracy: 1e-2)
+    }
+}
