@@ -475,7 +475,7 @@ extension SceneRenderer {
             }
         }
         var depth = layer.parallaxDepth
-        // 파이프라인 선택: 라이트 레이어(f_lit) > colorBlendMode(f_blend) > 일반(f_main).
+        // 파이프라인 선택: 라이트 레이어(f_lit) > colorBlendMode(f_blend) > 컴포지션(f_compose) > 일반(f_main).
         // 라이트 레이어는 게이트상 colorBlendMode==0 이라 상호배타(무회귀 — 라이트 씬만 여기 진입).
         if layer.isLit, let litPipeline {
             enc.setRenderPipelineState(litPipeline)
@@ -485,6 +485,10 @@ extension SceneRenderer {
             enc.setFragmentTexture(blendSnapshot, index: 1)
             var mode = Int32(layer.colorBlendMode)
             enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
+        } else if layer.isFrameBuffer, let composePipeline {
+            // 컴포지션(_rt_FullFrameBuffer): texture=프레임버퍼 스냅샷을 화면좌표로 샘플(f_compose).
+            // 부분 쿼드도 뒤 화면을 1:1 통과 → stretch 회색 덩어리 제거(E1). 나머지 바인딩은 f_main 동일.
+            enc.setRenderPipelineState(composePipeline)
         } else {
             enc.setRenderPipelineState(pipeline)
         }

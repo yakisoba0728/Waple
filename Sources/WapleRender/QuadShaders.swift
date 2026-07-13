@@ -25,6 +25,19 @@ enum QuadShaders {
         float a = c.a * tint.a;
         return float4(c.rgb * tint.rgb * a, a);
     }
+    // 컴포지션(_rt_FullFrameBuffer) 레이어 전용: 프레임버퍼 스냅샷(tex)을 **화면좌표**로 샘플한다
+    // (f_blend 의 dst 샘플과 동일 규약 — in.pos = 렌더타깃 픽셀좌표, y-flip 없음이 정본:
+    // BlendModeLayerTests 로 검증됨). f_main 처럼 로컬 UV(0-1) 로 샘플하면 전체 화면이 부분 쿼드에
+    // stretch 되어 회색 삼각형 덩어리가 됨(E1). tint/premult 규약은 f_main 동일(스트레이트→프리멀티 1회).
+    fragment float4 f_compose(VOut in [[stage_in]],
+                              texture2d<float> tex [[texture(0)]],
+                              constant float4 &tint [[buffer(0)]]) {
+        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        float2 uv = float2(in.pos.x / float(tex.get_width()), in.pos.y / float(tex.get_height()));
+        float4 c = tex.sample(s, uv);
+        float a = c.a * tint.a;
+        return float4(c.rgb * tint.rgb * a, a);
+    }
     // 레이어 colorBlendMode 합성: dst = acc 스냅샷(화면좌표 샘플), src = 레이어 텍스처×tint.
     // 블렌딩은 셰이더에서 계산(HW 블렌딩 OFF, 결과 rgb 직기록·dst 알파 보존).
     // acc 는 premultiplied 누적 — 불투명 배경(일반 씬)에선 straight 와 동일(컴포지션과 같은 전제).

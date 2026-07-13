@@ -442,6 +442,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var queue: MTLCommandQueue?
     var pipeline: MTLRenderPipelineState?
     var blendPipeline: MTLRenderPipelineState?
+    /// 컴포지션(_rt_FullFrameBuffer) 레이어 파이프라인(f_compose) — 프레임버퍼를 화면좌표로 샘플.
+    /// nil(컴파일 실패)이면 encodeLayer 가 f_main 폴백(종전 stretch 동작 — 무크래시).
+    var composePipeline: MTLRenderPipelineState?
     /// 2D 포워드 라이팅 파이프라인(f_lit) — 라이트 씬의 LIGHTING:1 레이어 전용. nil 이면 미사용.
     var litPipeline: MTLRenderPipelineState?
     /// 씬당 라이트 유니폼(상수) — forwardLit=false(라이트 씬 아님)면 전 레이어 f_main(무회귀).
@@ -646,6 +649,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         bdesc.fragmentFunction = library.makeFunction(name: "f_blend")
         bdesc.colorAttachments[0]!.pixelFormat = .bgra8Unorm
         self.blendPipeline = try? device.makeRenderPipelineState(descriptor: bdesc)
+        // 컴포지션(f_compose): 프레임버퍼를 화면좌표로 샘플 — f_main 과 동일 프리멀티 오버 블렌드.
+        let cdesc = MTLRenderPipelineDescriptor()
+        cdesc.vertexFunction = library.makeFunction(name: "v_main")
+        cdesc.fragmentFunction = library.makeFunction(name: "f_compose")
+        let catt = cdesc.colorAttachments[0]!
+        catt.pixelFormat = .bgra8Unorm
+        catt.isBlendingEnabled = true
+        catt.rgbBlendOperation = .add; catt.alphaBlendOperation = .add
+        catt.sourceRGBBlendFactor = .one; catt.sourceAlphaBlendFactor = .one
+        catt.destinationRGBBlendFactor = .oneMinusSourceAlpha; catt.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        self.composePipeline = try? device.makeRenderPipelineState(descriptor: cdesc)
         // 포워드 라이팅(f_lit): f_main 과 동일 프리멀티 오버 블렌드 — 라이트 반응만 다르다.
         let ldesc = MTLRenderPipelineDescriptor()
         ldesc.vertexFunction = library.makeFunction(name: "v_main")

@@ -143,6 +143,50 @@ final class SceneCompositeConventionTests: XCTestCase {
         XCTAssertEqual(luma, 1.0, accuracy: 0.03, "passthrough 컴포지션은 항등이어야")
     }
 
+    /// 부분(비-fullscreen) 컴포지션 레이어(_rt_FullFrameBuffer)는 프레임버퍼를 **화면좌표**로 샘플해야 —
+    /// 전체 acc 를 레이어 쿼드에 로컬 UV(0-1)로 stretch 하면 안 됨(E1 회색-삼각형-덩어리 원인).
+    /// 씬: 좌측 25% 흰띠 + 나머지 검정. 컴포지션 레이어(passthrough, 무효과)는 **우측 절반**(전부 검정 bg 위).
+    /// - 올바름(화면좌표): 컴포지션 영역은 뒤 검정을 1:1 로 통과 → 검정 유지.
+    /// - 버그(stretch): 전체 화면(흰띠+검정)을 우측 절반 쿼드에 눌러담음 → 쿼드 좌측 가장자리에 흰띠가 나타남.
+    func testFrameBufferPartialLayerSamplesScreenSpaceNotStretched() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"240 540 0","size":"480 1080"},
+           {"id":2,"image":"models/util/composelayer.json","origin":"1440 540 0","size":"960 1080",
+            "visible":{"value":true}}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbpartial", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("models/util/composelayer.json", #"{"material":"materials/util/composelayer.json","passthrough":true}"#.data(using: .utf8)!),
+            ("materials/util/composelayer.json", #"{"passes":[{"shader":"composelayer","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "fbpartial", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "fbpartial", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbpartial")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        // 컨트롤: 좌측(캡처 x=8 = 화면 240) = 흰띠 → 씬이 실제로 렌더됐음을 보증.
+        let control = try XCTUnwrap(rep.colorAt(x: 8, y: 18))
+        // 판별자: 캡처 x=34(화면 x≈1020, 컴포지션 영역 좌측·검정 bg 위).
+        //   stretch 버그면 쿼드 로컬 UV.x≈0.06 → srcTex x≈120 = 흰띠 샘플 → 흰색.
+        //   화면좌표 샘플이면 뒤 검정 통과 → 검정.
+        let inside = try XCTUnwrap(rep.colorAt(x: 34, y: 18))
+        NSLog("%@", "[Waple] fb partial control(x8)=\(control.redComponent) inside(x34)=\(inside.redComponent)")
+        XCTAssertGreaterThan(control.redComponent, 0.8, "좌측 흰띠(씬 렌더 컨트롤)")
+        XCTAssertLessThan(inside.redComponent, 0.3, "컴포지션 영역은 화면좌표로 뒤 검정을 통과해야(stretch면 흰띠가 눌려 나타남)")
+    }
+
     /// 프로퍼티 애니메이션(alpha 1→0, 2초 single): t=0 luma 1 → t=1 ≈0.5 → t=2 ≈0.
     func testAlphaAnimationPlaysBack() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
