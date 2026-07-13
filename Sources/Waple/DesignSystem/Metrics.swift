@@ -33,7 +33,7 @@ enum Metrics {
     static let keyGateTextWidth: CGFloat = 420
 
     // 설정 창 (SP5′)
-    static let settingsSize = NSSize(width: 560, height: 640)
+    static let settingsSize = NSSize(width: 560, height: 820)   // 5섹션+푸터가 스크롤 없이 한눈에
 
     // 공통 간격
     static let gap: CGFloat = 8
