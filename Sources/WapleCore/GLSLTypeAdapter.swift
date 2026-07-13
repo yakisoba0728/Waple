@@ -114,7 +114,13 @@ public enum GLSLTypeAdapter {
     private static func statements(_ p: P, until: String?) {
         while p.pos < p.toks.count {
             if let u = until, p.peek() == u { return }
+            let before = p.pos
             statement(p)
+            // 무전진 방지: statement 가 깊은 중첩(예: 253~255 `{` 뒤 비선언 식)에서 자체 캡은 통과하나
+            // 내부 식 파서가 무소비 폴백해 한 토큰도 못 삼키는 경우 — 강제 1토큰 소비로 루프 전진 보장
+            // (bare return 이면 같은 토큰 무한 재시도로 CPU 폭주). 유효 입력은 매 statement 가 반드시
+            // 소비하므로 이 폴백은 병리 입력에서만 발화(무회귀, 베스트에포트 패스스루).
+            if p.pos == before { p.out += p.advance().full }
         }
     }
 

@@ -133,6 +133,17 @@ final class GLSLTypeAdapterTests: XCTestCase {
         _ = GLSLTypeAdapter.adapt(body: deep, env: env())
     }
 
+    // S5(문장 무전진 폴백): 253~255개 `{` 뒤 비선언 식 토큰(` x`) — statement 자체 캡(depth≥257)은
+    // 통과하나, 그 토큰을 소비하는 primary 가 식 캡(depth≥257)에 걸려 무소비 폴백 → statement 가
+    // 아무 토큰도 못 삼키고 반환 → statements 루프가 같은 토큰을 영원히 재시도하던 행(hang, CPU 폭주).
+    // statements 의 무전진 감지 강제소비로 종료 보장(전 브레이스 테스트는 매 statement 가 `{`/`}` 를
+    // 소비하므로 이 창을 못 잡는다). 종료 자체가 요점.
+    func testDeepBlockThenBareExpressionTerminates() {
+        let input = String(repeating: "{", count: 255) + " x"
+        let out = GLSLTypeAdapter.adapt(body: input, env: env(["x": 1]))
+        XCTAssertFalse(out.isEmpty)   // 여기 도달 = 행 없이 종료(값은 베스트에포트 패스스루)
+    }
+
     // S5(문장 레벨): 정상 2중 블록(≪ 256)은 캡의 영향 없이 내부 선언 절단이 그대로 삽입돼야 한다(무회귀).
     func testModerateBlockNestingStillTranslates() {
         let out = GLSLTypeAdapter.adapt(body: "{ { vec2 a = vec4(1.0, 2.0, 3.0, 4.0); } }", env: env())
