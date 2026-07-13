@@ -13,7 +13,7 @@ struct WorkshopTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .underPageBackgroundColor))
-        .task { await vm.searchIfNeeded() }
+        .task(id: vm.hasAPIKey) { await vm.searchIfNeeded() }  // 키 게이트에서 저장 직후에도 자동 로드(디스커버와 동일 규약)
         .onChange(of: vm.sort) { _, _ in Task { await vm.search() } }
     }
 
