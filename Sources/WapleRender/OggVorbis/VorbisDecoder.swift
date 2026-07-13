@@ -575,7 +575,9 @@ private final class VorbisStream {
             let rend = min(res.end, vlen)
             let nRead = rend - rbegin
             let partsToRead = res.partitionSize > 0 ? nRead / res.partitionSize : 0
-            if partsToRead == 0 { return }
+            // begin>end(미검증 24bit) → nRead 음수 → partsToRead 음수. <=0 로 막지 않으면
+            // 아래 count 가 음수라 트랩. 우아히 반환 = 잔차 없음(채널 버퍼 0 유지)이라 정합.
+            if partsToRead <= 0 { return }
             var V = [Float](repeating: 0, count: vlen)
             var cls = [Int](repeating: 0, count: partsToRead + classwords)
             for pass in 0..<8 {
@@ -610,7 +612,8 @@ private final class VorbisStream {
         let rend = min(res.end, n2)
         let nRead = rend - rbegin
         let partsToRead = res.partitionSize > 0 ? nRead / res.partitionSize : 0
-        if partsToRead == 0 { return }
+        // begin>end → partsToRead 음수 → 아래 count(partsToRead+classwords) 음수 트랩. type2 사이트와 동형.
+        if partsToRead <= 0 { return }
         var cls = [[Int]](repeating: [Int](repeating: 0, count: partsToRead + classwords), count: ch)
         for pass in 0..<8 {
             var pcount = 0
@@ -651,6 +654,8 @@ private final class VorbisStream {
 
     /// type 1/2: 코드북 벡터를 연속 배치(+=). EOP 시 false.
     private func decodeVectorContig(_ book: VorbisCodebook, _ buf: inout [Float], _ offset: Int, _ n: Int, _ r: inout VorbisBitReader) -> Bool {
+        // VQ 테이블 없는 책(lookupType0)은 벡터 기여 불가 → vqFlat[..] OOB 트랩 대신 EOP형 실패로 처리.
+        guard !book.vqFlat.isEmpty else { return false }
         let dim = book.dimensions
         var k = 0, off = offset
         while k < n {
@@ -664,6 +669,8 @@ private final class VorbisStream {
 
     /// type 0: step=n/dim 회 읽어 dim 값을 stride=step 로 산포(+=). EOP 시 false.
     private func decodeVectorScatter(_ book: VorbisCodebook, _ buf: inout [Float], _ offset: Int, _ n: Int, _ r: inout VorbisBitReader) -> Bool {
+        // VQ 테이블 없는 책(lookupType0)은 벡터 기여 불가 → vqFlat[..] OOB 트랩 대신 EOP형 실패로 처리.
+        guard !book.vqFlat.isEmpty else { return false }
         let dim = book.dimensions
         let step = n / dim
         for s in 0..<step {
