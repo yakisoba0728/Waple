@@ -103,6 +103,27 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertEqual(material.specularTint, SIMD3(0.2, 0.4, 0.6))
     }
 
+    func test3DMeshLightingComboZeroParsesAsUnlit() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let renderer = SceneRenderer()
+        func unlit(_ materialJSON: String) throws -> Bool {
+            let package = try pkg([
+                ("materials/mesh.json", Data(materialJSON.utf8)),
+                ("materials/white.tex", solidTex(255, 255, 255, w: 1, h: 1)),
+            ])
+            return try XCTUnwrap(renderer.loadMesh3DMaterial(
+                "materials/mesh.json", package: package, device: device)).unlit
+        }
+        // combos.LIGHTING=0 → unlit(풀브라이트 albedo, generic4.frag:124-125)
+        XCTAssertTrue(try unlit(#"{"passes":[{"textures":["white"],"combos":{"LIGHTING":0}}]}"#))
+        // 키 대소문자 무시(2D SceneDocument:646 규약)
+        XCTAssertTrue(try unlit(#"{"passes":[{"textures":["white"],"combos":{"lighting":0}}]}"#))
+        // 미명시 → lit(WE 기본 LIGHTING=1)
+        XCTAssertFalse(try unlit(#"{"passes":[{"textures":["white"]}]}"#))
+        // 명시 1 → lit
+        XCTAssertFalse(try unlit(#"{"passes":[{"textures":["white"],"combos":{"LIGHTING":1}}]}"#))
+    }
+
     func test3DBillboardKeepsLightingAndPBRMaterialState() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let scene = """
