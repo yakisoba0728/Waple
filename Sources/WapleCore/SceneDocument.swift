@@ -233,14 +233,20 @@ public struct SceneLight3D: Equatable {
     public let radius: Float
     public let intensity: Float
     public let exponent: Float
+    /// lspot 콘 전각(도). WE 에디터 "Inner/Outer cone". lpoint/ldirectional 은 미사용(0).
+    public let innerCone: Float
+    public let outerCone: Float
     public let castShadow: Bool
     public let parent: Int?
     public var order: Int = 0
     public init(id: Int, name: String, type: String, origin: Vec3, angles: Vec3, color: Vec3,
-                radius: Float, intensity: Float, exponent: Float, castShadow: Bool, parent: Int?, order: Int = 0) {
+                radius: Float, intensity: Float, exponent: Float,
+                innerCone: Float = 0, outerCone: Float = 0,
+                castShadow: Bool, parent: Int?, order: Int = 0) {
         self.id = id; self.name = name; self.type = type
         self.origin = origin; self.angles = angles; self.color = color
         self.radius = radius; self.intensity = intensity; self.exponent = exponent
+        self.innerCone = innerCone; self.outerCone = outerCone
         self.castShadow = castShadow; self.parent = parent; self.order = order
     }
 }
@@ -806,6 +812,8 @@ extension SceneDocument {
             radius: float(obj["radius"]) ?? 0,
             intensity: float(obj["intensity"]) ?? 1,
             exponent: float(obj["exponent"]) ?? 1,
+            innerCone: float(obj["innercone"]) ?? 0,
+            outerCone: float(obj["outercone"]) ?? 0,
             castShadow: (obj["castshadow"] as? Bool) ?? false,
             parent: intVal(obj["parent"]),
             order: order)
