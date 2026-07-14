@@ -467,6 +467,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneIsHDR = false
     /// HDR 톤맵 포스트 패스(최종 합성 float 버퍼 → LDR 압축). sceneIsHDR 일 때만 존재.
     var hdrPost: HDRPostPass?
+    /// Authored gate, kept separate from pass availability so construction failure can raw-fallback.
+    var sceneWantsLDRBloom = false
+    var ldrBloomParameters = LDRBloomParameters.defaults
+    var ldrBloomPass: LDRBloomEncoding?
     /// HDR 경로 실효 게이트. 3D 씬은 별도 파이프라인(bgra8, 다른 lane)이라 제외 — 3D-HDR 은 종전 LDR 유지.
     var hdrActive: Bool { sceneIsHDR && !is3D }
     /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
@@ -620,7 +624,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         hasMissingRequiredSharedAssets = false
         scenePausedAt = nil
         shouldAnimate = false
-        videoTextureMP4URL = nil
+        videoTextureMP4URL = nil   // 마운트 재사용: 이전 비디오-백드 상태가 비-비디오 씬 캡처로 새지 않게.
+        sceneWantsLDRBloom = false
+        ldrBloomParameters = .defaults
+        ldrBloomPass = nil
         guard let pkgURL = pkgURL(in: project.folderURL) else {
             NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
             throw RendererError.assetMissing
@@ -692,6 +699,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if doc.hdr, let post = HDRPostPass(device: device, outputFormat: .bgra8Unorm) {
             self.sceneIsHDR = true
             self.hdrPost = post
+        }
+        // LDR bloom is authored-policy gated, not HDR-pipeline-availability gated.
+        sceneWantsLDRBloom = doc.bloom && !doc.hdr
+        ldrBloomParameters = LDRBloomParameters(
+            strength: doc.bloomStrength,
+            threshold: doc.bloomThreshold,
+            tint: SIMD3(doc.bloomTint.x, doc.bloomTint.y, doc.bloomTint.z))
+        if sceneWantsLDRBloom {
+            ldrBloomPass = LDRBloomPass(device: device)
         }
 
         let library = try device.makeLibrary(source: QuadShaders.source, options: nil)
@@ -939,14 +955,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
         }
 
-        // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → drawable blit.
+        // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → scene-global finalizer.
         if is3D {
             beginFramePool()
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
                   encode3D(into: acc, cb: cb, device: device, time: time) else { cb.commit(); return }
-            if let blit = cb.makeBlitCommandEncoder() {
-                blit.copy(from: acc, to: drawable.texture)
-                blit.endEncoding()
+            guard finalizeScene(
+                source: acc,
+                destination: drawable.texture,
+                commandBuffer: cb,
+                device: device) else {
+                cb.commit()
+                return
             }
             cb.present(drawable)
             cb.commit()
@@ -983,12 +1003,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                             },
                                             camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }
         finalEnc.endEncoding()
-        // A2: HDR 씬은 float acc 를 톤맵해 drawable(bgra8)로(>1 압축 = 백화 해소). 그 외는 종전 raw blit.
-        if hdrActive, let hdrPost {
-            hdrPost.encode(cb: cb, src: acc, dst: drawable.texture)
-        } else if let blit = cb.makeBlitCommandEncoder() {
-            blit.copy(from: acc, to: drawable.texture)
-            blit.endEncoding()
+        guard finalizeScene(
+            source: acc,
+            destination: drawable.texture,
+            commandBuffer: cb,
+            device: device) else {
+            cb.commit()
+            return
         }
         cb.present(drawable)
         cb.commit()
@@ -1030,8 +1051,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             for t in times.sorted() {
                 guard let cb = queue.makeCommandBuffer() else { continue }
                 beginFramePool()
-                guard encode3D(into: target, cb: cb, device: device, time: t) else { continue }
-                cb.commit(); cb.waitUntilCompleted()
+                let source = sceneWantsLDRBloom
+                    ? (pooledOffscreen(width, height, device, bgra: true) ?? target)
+                    : target
+                guard encode3D(into: source, cb: cb, device: device, time: t) else { continue }
+                guard finalizeScene(
+                    source: source,
+                    destination: target,
+                    commandBuffer: cb,
+                    device: device) else {
+                    cb.commit()
+                    continue
+                }
+                cb.commit()
+                cb.waitUntilCompleted()
                 let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
                 if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
             }
@@ -1052,9 +1085,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             guard let cb = queue.makeCommandBuffer() else { continue }
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
             let displayTextures = buildDisplayTextures(device: device, time: t, cb: cb)  // beginFramePool 포함
-            // A2: HDR 씬은 float acc 에 합성 후 톤맵 → target(bgra8). 그 외는 종전대로 target 에 직접 합성.
-            // (풀 할당은 beginFramePool 이후여야 하므로 buildDisplayTextures 다음.)
-            let acc = hdrActive ? (pooledOffscreen(width, height, device, bgra: true) ?? target) : target
+            // HDR tone-map and LDR bloom both need an immutable scene source distinct from readback.
+            let needsSeparateFinalSource = hdrActive || sceneWantsLDRBloom
+            let acc = needsSeparateFinalSource
+                ? (pooledOffscreen(width, height, device, bgra: true) ?? target)
+                : target
             let rpd = MTLRenderPassDescriptor()
             rpd.colorAttachments[0].texture = acc
             rpd.colorAttachments[0].loadAction = .clear
@@ -1074,8 +1109,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 },
                                                 camOffset: &camOff, aspectScale: &asp) else { cb.commit(); continue }
             finalEnc.endEncoding()
-            if hdrActive, acc !== target, let hdrPost { hdrPost.encode(cb: cb, src: acc, dst: target) }
-            cb.commit(); cb.waitUntilCompleted()
+            guard finalizeScene(
+                source: acc,
+                destination: target,
+                commandBuffer: cb,
+                device: device) else {
+                cb.commit()
+                continue
+            }
+            cb.commit()
+            cb.waitUntilCompleted()
             let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
             if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
         }
@@ -1143,6 +1186,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         pointShadowDepthState = nil; pointShadowAtlas = nil; pointShadowAtlasSlices = 0
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
+        sceneWantsLDRBloom = false
+        ldrBloomParameters = .defaults
+        ldrBloomPass = nil
         pipeline = nil; layerAdditivePipeline = nil; queue = nil; device = nil
     }
 }
