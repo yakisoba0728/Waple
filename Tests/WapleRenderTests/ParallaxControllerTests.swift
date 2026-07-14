@@ -70,4 +70,20 @@ final class ParallaxControllerTests: XCTestCase {
         for _ in 0..<60  { b = ParallaxController.smoothed(current: b, target: tgt, dt: 1.0 / 60,  delay: 0.3) }  // 1s @60
         XCTAssertEqual(a.x, b.x, accuracy: 5e-3)
     }
+
+    // MARK: - SceneRenderer teardown→resume 계약 (parallax monitor 재기동 방지)
+
+    /// parallax 활성 씬을 teardown(scene→video 직접 remount 시 이전 렌더러 정리 경로)한 뒤
+    /// resume 이 호출돼도 stale parallaxEnabled 로 mouseMoved 모니터를 되살리면 안 된다.
+    /// resume(:1172) 게이트가 parallaxEnabled 를 보므로 teardown 이 이를 끄지 않으면 monitor 재기동.
+    /// start() 가 emit() 을 동기 호출하므로 onOffset 발화로 run-loop 없이 관측 가능.
+    func testTeardownClearsParallaxSoResumeDoesNotRearmMonitor() {
+        let r = SceneRenderer()
+        r.parallaxEnabled = true                  // parallax 활성 씬 mount 사후상태 모사
+        r.teardown()
+        var revived = false
+        r.parallax.onOffset = { _ in revived = true }
+        r.resume()
+        XCTAssertFalse(revived, "teardown 후 resume 이 parallax monitor 를 재기동하면 안 됨")
+    }
 }

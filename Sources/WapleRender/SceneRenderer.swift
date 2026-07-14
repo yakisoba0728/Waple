@@ -1177,6 +1177,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneAudio?.teardown(); sceneAudio = nil
         parallax.stop()
         cameraOffset = .zero; targetCameraOffset = .zero  // 마운트 재사용 대비 시차 리셋(mount :656 과 일관)
+        parallaxEnabled = false  // teardown 후 resume(:1172 게이트)이 stale parallaxEnabled 로 monitor 를 재기동하지 않도록. mount(:836)이 무조건 덮으므로 재사용 무회귀.
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         mediaPoller?.stop(); mediaPoller = nil
         eventEngines = []
