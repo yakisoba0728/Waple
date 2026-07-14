@@ -10,7 +10,7 @@ public enum TexDecoder {
 
     /// keepFullAtlas: 단일-이미지 다중프레임 스프라이트시트는 imgW/imgH(단일 프레임 크기) 크롭을 건너뛰고
     /// 디코드 아틀라스(decodeW×decodeH) 전체를 보존한다 — TEXS 프레임 좌표(예 frame1 x=1920)가 imgW 를
-    /// 넘어서므로 크롭하면 frame≥1 이 소실돼 spriteFrameTexture 가 1px 클램프 블릿(흑화)한다. 호출자
+    /// 넘어서므로 크롭하면 frame≥1 이 소실돼 spriteFrameTexture 가 경계 클램프 샘플(흑화)한다. 호출자
     /// (resolveTextureWithFrames)만 true — 일반/단일프레임 경로는 종전대로 크롭(무회귀).
     public static func rgba(from tex: TexImage, data: Data, keepFullAtlas: Bool = false) -> (pixels: Data, width: Int, height: Int)? {
         switch tex.payload {
@@ -76,13 +76,15 @@ public enum TexDecoder {
     }
 
     /// BC(DXT) 텍스처를 Metal 네이티브 BC 로 올릴 후보 추출(LZ4 만 해제, RGBA 전개 안 함). 불가면 nil →
-    /// 호출자는 기존 rgba() CPU 경로로 폴백. **호출 규약**: keepFullAtlas(스프라이트 아틀라스)는 호출자가
-    /// 부르지 말 것 — 그 텍스처는 spriteFrameTexture 가 blit.copy(BC→rgba8 무효)로 소비하므로 반드시 CPU.
-    /// 반환 dims 는 rgba()+cropped() 와 **정확히 일치**시켜 effW/UV/texRatio 무회귀. 크롭(imgW<decodeW)은
+    /// 호출자는 기존 rgba() CPU 경로로 폴백. keepFullAtlas(스프라이트 아틀라스)면 image dims 크롭 금지 →
+    /// full decode dims 상주(프레임 좌표가 decode dims 전체를 참조하므로 크롭 시 frame≥1 소실). 종전엔
+    /// blit.copy(BC→rgba8 무효)로 CPU 강제였으나 spriteFrameTexture 가 f_spriteframe 샘플로 전환돼 허용.
+    /// 반환 dims 는 rgba()+cropped()/keepFullAtlas 와 **정확히 일치**시켜 effW/UV/texRatio 무회귀. 크롭(imgW<decodeW)은
     /// image dims 텍스처 + decode-dims stride 로 Metal 이 패딩/부분 엣지 블록을 GPU 에서 처리(실측 검증).
     /// 멀티페이지 아틀라스는 CPU 세로 스택(stackedAtlas)이 필요해 대상 제외. 변형(properties)은 selectedMip.
     public static func nativeBC(from tex: TexImage, data: Data,
-                                properties: [String: PropertyValue] = [:]) -> NativeBCUpload? {
+                                properties: [String: PropertyValue] = [:],
+                                keepFullAtlas: Bool = false) -> NativeBCUpload? {
         let format: BCFormat
         switch tex.payload {
         case .bc1: format = .bc1
@@ -98,10 +100,11 @@ public enum TexDecoder {
         // 해제 블록이 decode dims 전체를 담는지 확인(잘린/손상 데이터 방어) — 부족하면 rgba() 폴백.
         guard blocks.count >= ((dw + 3) / 4) * ((dh + 3) / 4) * blockBytes else { return nil }
         let bytesPerRow = ((dw + 3) / 4) * blockBytes
-        // 타깃 dims = cropped() 와 동일 규칙(무회귀).
+        // 타깃 dims = cropped()/keepFullAtlas 와 동일 규칙(무회귀). keepFullAtlas 는 크롭 금지(full decode dims).
         let iw = mip.imageWidth, ih = mip.imageHeight
         let w: Int, h: Int
-        if iw == dw && ih == dh { (w, h) = (dw, dh) }
+        if keepFullAtlas { (w, h) = (dw, dh) }   // 스프라이트 아틀라스: 프레임 좌표가 decode dims 전체 참조 → 크롭 시 frame≥1 소실
+        else if iw == dw && ih == dh { (w, h) = (dw, dh) }
         else if iw > 0, ih > 0, iw <= dw, ih <= dh { (w, h) = (iw, ih) }
         else { (w, h) = (dw, dh) }
         return NativeBCUpload(blocks: blocks, format: format, width: w, height: h, bytesPerRow: bytesPerRow)

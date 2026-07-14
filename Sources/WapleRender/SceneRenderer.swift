@@ -469,6 +469,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var composePipeline: MTLRenderPipelineState?
     /// 2D 포워드 라이팅 파이프라인(f_lit) — 라이트 씬의 LIGHTING:1 레이어 전용. nil 이면 미사용.
     var litPipeline: MTLRenderPipelineState?
+    /// 스프라이트 프레임 추출 파이프라인(v_spriteframe/f_spriteframe) — 아틀라스 서브렉트를 프레임크기
+    /// dst 로 nearest 1:1 복사(종전 blit.copy 대체 → BC 아틀라스 네이티브 상주 가능). nil 이면
+    /// spriteFrameTexture 가 원본 아틀라스 그대로 폴백(무크래시).
+    var spriteFramePipeline: MTLRenderPipelineState?
     /// A2 HDR: 씬 general.hdr && 톤맵 파이프라인 빌드 성공 시에만 true(빌드 실패 시 종전 LDR 폴백).
     /// 참이면 acc/합성 스냅샷을 float(rgba16Float)로, acc→타깃 blit 을 톤맵 패스로 대체한다.
     var sceneIsHDR = false
@@ -780,6 +784,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         latt.sourceRGBBlendFactor = .one; latt.sourceAlphaBlendFactor = .one
         latt.destinationRGBBlendFactor = .oneMinusSourceAlpha; latt.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         self.litPipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: ldesc) }
+        // 스프라이트 프레임 추출(f_spriteframe): dst=makeOffscreen(rgba8Unorm), 블렌딩 없음(straight 덮어쓰기).
+        let sfdesc = MTLRenderPipelineDescriptor()
+        sfdesc.vertexFunction = library.makeFunction(name: "v_spriteframe")
+        sfdesc.fragmentFunction = library.makeFunction(name: "f_spriteframe")
+        sfdesc.colorAttachments[0]!.pixelFormat = .rgba8Unorm
+        self.spriteFramePipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: sfdesc) }
 
         clearColor = MTLClearColor(red: Double(doc.clearColor.x), green: Double(doc.clearColor.y),
                                    blue: Double(doc.clearColor.z), alpha: 1)
@@ -1224,7 +1234,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
         particle3DAdditive = nil; particle3DTranslucent = nil; particle3DClock = 0  // 3D 파티클 상태 리셋(마운트 재사용)
-        forwardLit = false; litPipeline = nil  // 라이트 상태 리셋(마운트 간 스테일 방지)
+        forwardLit = false; litPipeline = nil; spriteFramePipeline = nil  // 라이트/스프라이트 추출 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
         scriptVisible.removeAll()

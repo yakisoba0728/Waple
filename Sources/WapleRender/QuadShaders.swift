@@ -25,6 +25,22 @@ enum QuadShaders {
         float a = c.a * tint.a;
         return float4(c.rgb * tint.rgb * a, a);
     }
+    // 스프라이트 프레임 추출(spriteFrameTexture): 아틀라스 서브렉트를 프레임크기 dst 로 1:1 복사한다.
+    // 종전 blit.copy 대체 — blit 은 BC 아틀라스를 CPU rgba8 로 강제했으나(BC→rgba8 blit 무효), 샘플은
+    // BC 를 GPU 에서 디코드하므로 아틀라스가 네이티브 BC 로 상주할 수 있다(keepFullAtlas 네이티브 허용).
+    // fullscreen 쿼드(effectVertexBuffer) + rect=(u0,v0,du,dv) 정규화 서브렉트. dst 가 정확히 프레임
+    // 크기(fw×fh)라 **nearest** 샘플이 dst 픽셀중심 (i+0.5)/fw → 아틀라스 텍셀 sx+i 로 떨어져 blit 과
+    // **텍셀 동일**(비-BC bit-identical). tint/premultiply 없음 — straight-alpha 규약(§3, 합성서 1회 premult) 보존.
+    vertex VOut v_spriteframe(uint vid [[vertex_id]], const device float2* verts [[buffer(0)]]) {
+        float2 p = verts[vid];
+        VOut o; o.pos = float4(p, 0.0, 1.0); o.uv = float2((p.x + 1.0) * 0.5, 1.0 - (p.y + 1.0) * 0.5); return o;
+    }
+    fragment float4 f_spriteframe(VOut in [[stage_in]], texture2d<float> atlas [[texture(0)]],
+                                  constant float4 &rect [[buffer(0)]]) {
+        constexpr sampler s(filter::nearest, address::clamp_to_edge);
+        float2 uv = float2(rect.x + in.uv.x * rect.z, rect.y + in.uv.y * rect.w);
+        return atlas.sample(s, uv);
+    }
     // 컴포지션(_rt_FullFrameBuffer) 레이어 전용: 프레임버퍼 스냅샷(tex)을 **화면좌표**로 샘플한다
     // (f_blend 의 dst 샘플과 동일 규약 — in.pos = 렌더타깃 픽셀좌표, y-flip 없음이 정본:
     // BlendModeLayerTests 로 검증됨). f_main 처럼 로컬 UV(0-1) 로 샘플하면 전체 화면이 부분 쿼드에
