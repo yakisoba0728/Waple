@@ -447,7 +447,8 @@ extension SceneRenderer {
         }
         var passScripts: [(slot: Int, engine: TextScriptEngine)] = []
         for (slot, p) in t.materialParams.enumerated() {
-            if let src = scenePass.constantScripts[p.sceneKey], let engine = makeScriptEngine(src) {
+            if let src = scenePass.constantScripts[p.sceneKey],
+               let engine = makeScriptEngine(src, scriptPropsJSON: scenePass.constantScriptProps[p.sceneKey]) {
                 passScripts.append((slot, engine))
                 if engine.hasUpdate { hasAnimations = true }  // 스크립트 상수는 시간 함수 — 연속 렌더 필요
             }
@@ -835,7 +836,7 @@ extension SceneRenderer {
             if !isSystem && fontData == nil { NSLog("%@", "[Waple] text font missing (system fallback): \(t.font)") }
             // 씬 공유 컨텍스트 로드(top-level 사이드이펙트 실행). update 없는 스크립트는 텍스트 갱신에
             // 못 쓰므로 엔진 nil 취급(정적 텍스트 유지) — 로드 자체는 shared 통신을 위해 수행.
-            let loaded = t.script.flatMap { makeScriptEngine($0, layerName: t.name.isEmpty ? nil : t.name) }
+            let loaded = t.script.flatMap { makeScriptEngine($0, layerName: t.name.isEmpty ? nil : t.name, scriptPropsJSON: t.scriptProps) }
             if t.script != nil && loaded == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
             let engine = (loaded?.hasUpdate == true) ? loaded : nil
             let initial = engine != nil ? (engine!.evaluate(current: t.text) ?? "") : t.text
