@@ -62,12 +62,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if !hasAudio, Self.scriptWantsAudio(src) { hasAudio = true }
         let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName) }
             ?? TextScriptEngine(script: src)
-        if let e = engine, !e.hookNames.isEmpty {
-            eventEngines.append(e)
+        guard let engine else { return nil }
+
+        // Constructor evaluation is complete here. Every engine gets apply exactly once; only init-only
+        // engines initialize now. Update-bearing engines retain init(currentValue) in evaluate*.
+        engine.applyUserProperties(sceneUserPropertiesJSON)
+        if !engine.hasUpdate { engine.callInitIfNeeded() }
+
+        if !engine.hookNames.isEmpty {
+            eventEngines.append(engine)
             // cursorEnter/Leave 는 엔진이 바인드 레이어를 히트테스트(WE 규약 — 스크립트는 반응만).
             // 레이어명을 기억했다가 mount 말미에 AABB 로 해석(buildHoverTargets).
-            if let ln = layerName, !e.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
-                hoverEngineLayers.append((e, ln))
+            if let layerName,
+               !engine.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
+                hoverEngineLayers.append((engine, layerName))
             }
         }
         return engine
@@ -459,6 +467,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneIsHDR = false
     /// HDR 톤맵 포스트 패스(최종 합성 float 버퍼 → LDR 압축). sceneIsHDR 일 때만 존재.
     var hdrPost: HDRPostPass?
+    /// Authored gate, kept separate from pass availability so construction failure can raw-fallback.
+    var sceneWantsLDRBloom = false
+    var ldrBloomParameters = LDRBloomParameters.defaults
+    var ldrBloomPass: LDRBloomEncoding?
     /// HDR 경로 실효 게이트. 3D 씬은 별도 파이프라인(bgra8, 다른 lane)이라 제외 — 3D-HDR 은 종전 LDR 유지.
     var hdrActive: Bool { sceneIsHDR && !is3D }
     /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
@@ -539,9 +551,36 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var particleSystems: [GPUParticleSystem] = []
     var hasParticles = false
     var assetBaseDir: URL?  // WE 공유 에셋 폴백 디렉터리(설정), 패키지에 없는 .tex 용
+
+    public private(set) var hasMissingRequiredSharedAssets = false
+
+    func markMissingRequiredSharedAsset() {
+        hasMissingRequiredSharedAssets = true
+    }
+
+    static func sharedAssetProbe(_ name: String, root: URL?) -> SharedAssetProbeResult {
+        guard let path = WallpaperPathSecurity.normalizedRelativePath(name) else {
+            return .rejected
+        }
+        guard let root else { return .missing }
+        let rootURL = root.standardizedFileURL
+        let candidate = rootURL.appendingPathComponent(path).standardizedFileURL
+        guard WallpaperPathSecurity.contains(candidate, in: rootURL),
+              let contained = WallpaperPathSecurity.containedFileURL(path, root: root) else {
+            return .rejected
+        }
+        guard FileManager.default.fileExists(atPath: candidate.path),
+              let data = try? Data(contentsOf: contained) else {
+            return .missing
+        }
+        return .data(data)
+    }
+
     /// 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 값(기본값+유저/프리셋 오버라이드).
     /// mount 시 스냅샷 — 프로퍼티 변경은 reapply(=remount)로 반영(LibraryViewModel.setProperty→onApply).
     var variantProperties: [String: PropertyValue] = [:]
+    /// SceneScript applyUserProperties payload. Computed once per mount and reused by every engine.
+    var sceneUserPropertiesJSON = "{}"
     var additivePipeline: MTLRenderPipelineState?
     var translucentPipeline: MTLRenderPipelineState?
     var fullscreenQuad: [SIMD2<Float>] = [SIMD2(-1,-1), SIMD2(1,-1), SIMD2(-1,1), SIMD2(1,1)]
@@ -599,9 +638,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
+        teardown()
+        hasMissingRequiredSharedAssets = false
         scenePausedAt = nil
         shouldAnimate = false
         videoTextureMP4URL = nil   // 마운트 재사용: 이전 비디오-백드 상태가 비-비디오 씬 캡처로 새지 않게.
+        sceneWantsLDRBloom = false
+        ldrBloomParameters = .defaults
+        ldrBloomPass = nil
         guard let pkgURL = pkgURL(in: project.folderURL) else {
             NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
             throw RendererError.assetMissing
@@ -618,10 +662,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         do {
             package = try ScenePackage.parse(data)
             // 공유(base-assets) 리졸버: pkg 에 없는 util 모델/머티리얼 JSON(솔리드 레이어 등) 폴백.
-            doc = try SceneDocument.parse(package: package, assets: { name in
-                guard let base = BaseAssetsSettings.baseAssetsDirectory,
-                      let url = WallpaperPathSecurity.containedFileURL(name, root: base) else { return nil }
-                return try? Data(contentsOf: url)
+            doc = try SceneDocument.parse(package: package, sharedAssetProbe: { name in
+                Self.sharedAssetProbe(name, root: BaseAssetsSettings.baseAssetsDirectory)
+            }, onMissingRequiredAsset: { [weak self] in
+                self?.markMissingRequiredSharedAsset()
             }, userProps: UserPropertyStore.rawOverrides(
                 id: project.id,
                 presetOverrides: project.presetOverrides,
@@ -635,10 +679,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // project.json 기본값 + 유저/프리셋 오버라이드(LibraryViewModel 유효값 계산과 동형).
         // 값 부재/미매치는 기본 image 로 폴백 → 무회귀. 변경은 reapply(remount)로 새 스냅샷.
         let baseProps = (try? WallpaperProperties.parse(folderURL: project.folderURL)) ?? []
-        let overrides = UserPropertyStore.overrides(id: project.id, presetOverrides: project.presetOverrides,
-                                                    presetResourceRoot: project.presetFolderURL)
-        variantProperties = Dictionary(WallpaperProperties.applying(overrides: overrides, to: baseProps)
-            .map { ($0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
+        let overrides = UserPropertyStore.overrides(
+            id: project.id,
+            presetOverrides: project.presetOverrides,
+            presetResourceRoot: project.presetFolderURL
+        )
+        let effectiveProperties = WallpaperProperties.applying(overrides: overrides, to: baseProps)
+        variantProperties = Dictionary(
+            effectiveProperties.map { ($0.key, $0.value) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        sceneUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effectiveProperties)
         // 비디오-텍스처 씬 → 내장 MP4 추출 후 VideoRenderer 위임.
         if let videoName = VideoTextureExtractor.videoLayer(in: doc, package: package),
            let mp4URL = VideoTextureExtractor.extractMP4(textureEntryName: videoName, package: package,
@@ -664,6 +715,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if doc.hdr, let post = HDRPostPass(device: device, outputFormat: .bgra8Unorm) {
             self.sceneIsHDR = true
             self.hdrPost = post
+        }
+        // LDR bloom is authored-policy gated, not HDR-pipeline-availability gated.
+        sceneWantsLDRBloom = doc.bloom && !doc.hdr
+        ldrBloomParameters = LDRBloomParameters(
+            strength: doc.bloomStrength,
+            threshold: doc.bloomThreshold,
+            tint: SIMD3(doc.bloomTint.x, doc.bloomTint.y, doc.bloomTint.z))
+        if sceneWantsLDRBloom {
+            ldrBloomPass = LDRBloomPass(device: device)
         }
 
         let library = try device.makeLibrary(source: QuadShaders.source, options: nil)
@@ -911,14 +971,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
         }
 
-        // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → drawable blit.
+        // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → scene-global finalizer.
         if is3D {
             beginFramePool()
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
                   encode3D(into: acc, cb: cb, device: device, time: time) else { cb.commit(); return }
-            if let blit = cb.makeBlitCommandEncoder() {
-                blit.copy(from: acc, to: drawable.texture)
-                blit.endEncoding()
+            guard finalizeScene(
+                source: acc,
+                destination: drawable.texture,
+                commandBuffer: cb,
+                device: device) else {
+                cb.commit()
+                return
             }
             cb.present(drawable)
             cb.commit()
@@ -955,12 +1019,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                             },
                                             camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }
         finalEnc.endEncoding()
-        // A2: HDR 씬은 float acc 를 톤맵해 drawable(bgra8)로(>1 압축 = 백화 해소). 그 외는 종전 raw blit.
-        if hdrActive, let hdrPost {
-            hdrPost.encode(cb: cb, src: acc, dst: drawable.texture)
-        } else if let blit = cb.makeBlitCommandEncoder() {
-            blit.copy(from: acc, to: drawable.texture)
-            blit.endEncoding()
+        guard finalizeScene(
+            source: acc,
+            destination: drawable.texture,
+            commandBuffer: cb,
+            device: device) else {
+            cb.commit()
+            return
         }
         cb.present(drawable)
         cb.commit()
@@ -1002,8 +1067,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             for t in times.sorted() {
                 guard let cb = queue.makeCommandBuffer() else { continue }
                 beginFramePool()
-                guard encode3D(into: target, cb: cb, device: device, time: t) else { continue }
-                cb.commit(); cb.waitUntilCompleted()
+                let source = sceneWantsLDRBloom
+                    ? (pooledOffscreen(width, height, device, bgra: true) ?? target)
+                    : target
+                guard encode3D(into: source, cb: cb, device: device, time: t) else { continue }
+                guard finalizeScene(
+                    source: source,
+                    destination: target,
+                    commandBuffer: cb,
+                    device: device) else {
+                    cb.commit()
+                    continue
+                }
+                cb.commit()
+                cb.waitUntilCompleted()
                 let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
                 if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
             }
@@ -1024,9 +1101,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             guard let cb = queue.makeCommandBuffer() else { continue }
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
             let displayTextures = buildDisplayTextures(device: device, time: t, cb: cb)  // beginFramePool 포함
-            // A2: HDR 씬은 float acc 에 합성 후 톤맵 → target(bgra8). 그 외는 종전대로 target 에 직접 합성.
-            // (풀 할당은 beginFramePool 이후여야 하므로 buildDisplayTextures 다음.)
-            let acc = hdrActive ? (pooledOffscreen(width, height, device, bgra: true) ?? target) : target
+            // HDR tone-map and LDR bloom both need an immutable scene source distinct from readback.
+            let needsSeparateFinalSource = hdrActive || sceneWantsLDRBloom
+            let acc = needsSeparateFinalSource
+                ? (pooledOffscreen(width, height, device, bgra: true) ?? target)
+                : target
             let rpd = MTLRenderPassDescriptor()
             rpd.colorAttachments[0].texture = acc
             rpd.colorAttachments[0].loadAction = .clear
@@ -1046,8 +1125,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 },
                                                 camOffset: &camOff, aspectScale: &asp) else { cb.commit(); continue }
             finalEnc.endEncoding()
-            if hdrActive, acc !== target, let hdrPost { hdrPost.encode(cb: cb, src: acc, dst: target) }
-            cb.commit(); cb.waitUntilCompleted()
+            guard finalizeScene(
+                source: acc,
+                destination: target,
+                commandBuffer: cb,
+                device: device) else {
+                cb.commit()
+                continue
+            }
+            cb.commit()
+            cb.waitUntilCompleted()
             let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
             if writeFramePNG(target, width: width, height: height, to: url) { urls.append(url) }
         }
@@ -1101,7 +1188,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
         forwardLit = false; litPipeline = nil  // 라이트 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
-        sceneScript = nil; scriptVisible.removeAll()
+        sceneScript = nil; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
+        scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; _passthroughPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
@@ -1114,6 +1202,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         pointShadowDepthState = nil; pointShadowAtlas = nil; pointShadowAtlasSlices = 0
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
+        sceneIsHDR = false
+        hdrPost = nil
+        sceneWantsLDRBloom = false
+        ldrBloomParameters = .defaults
+        ldrBloomPass = nil
         pipeline = nil; layerAdditivePipeline = nil; queue = nil; device = nil
     }
 }

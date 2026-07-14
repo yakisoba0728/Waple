@@ -8,6 +8,12 @@ import WapleCore
 // 파티클/텍스트 빌드, 텍스처·파이프라인 팩토리. per-frame 인코딩은 SceneRendererFrameEncoder.swift,
 // 3D 서브시스템은 SceneRenderer3D.swift 참조.
 extension SceneRenderer {
+    private enum BaseAssetURLProbe {
+        case url(URL)
+        case missing
+        case rejected
+    }
+
     struct AudioParams { let mode: Int; let freqMin: Float; let freqMax: Float; let bounds: SIMD2<Float>; let power: Float; let multiply: Float }
     /// 효과 바인딩: 손-포팅(기존 규약: float* P buffer(0) + aux texture(1+) + audioResp buffer(1))
     /// 또는 GLSL→MSL 변환본(reflection 규약: float4* p buffer(0) + EngineU buffer(1) + slot 텍스처 + audioL/R buffer(2/3)).
@@ -49,19 +55,63 @@ extension SceneRenderer {
     /// 텍스처/에셋 바이트 로드: 패키지 우선, 없으면 공유 기본 에셋 디렉터리에서 폴백.
     /// 공유에서 찾거나 둘 다 없을 때만 로그(in-pkg 일반 경로는 조용히).
     func assetData(_ name: String, package: ScenePackage) -> Data? {
-        if let d = packageData(name, package: package) { return d }
+        guard case .data(let data) = probeAssetData(name, package: package) else {
+            return nil
+        }
+        return data
+    }
+
+    private func probeAssetData(_ name: String, package: ScenePackage) -> SharedAssetProbeResult {
+        if let d = packageData(name, package: package) { return .data(d) }
+        guard WallpaperPathSecurity.normalizedRelativePath(name) != nil else {
+            NSLog("%@", "[Waple] rejected shared asset path: \(name)")
+            return .rejected
+        }
         if let base = assetBaseDir {
-            guard WallpaperPathSecurity.normalizedRelativePath(name) != nil else {
+            switch baseAssetURLProbe(for: name, root: base) {
+            case .url(let url):
+                if let d = try? Data(contentsOf: url) {
+                    NSLog("%@", "[Waple] asset from shared base: \(name)")
+                    return .data(d)
+                }
+            case .rejected:
                 NSLog("%@", "[Waple] rejected shared asset path: \(name)")
-                return nil
-            }
-            if let u = baseAssetURL(for: name, root: base),
-               let d = try? Data(contentsOf: u) {
-                NSLog("%@", "[Waple] asset from shared base: \(name)")
-                return d
+                return .rejected
+            case .missing:
+                break
             }
         }
         NSLog("%@", "[Waple] asset missing (pkg+shared): \(name)")
+        return .missing
+    }
+
+    func resolveRequiredAsset<T>(
+        _ candidates: [String],
+        package: ScenePackage,
+        decode: (Data) -> T?,
+        alternate: () -> T? = { nil }
+    ) -> T? {
+        var foundBytes = false
+        var rejected = false
+        for candidate in candidates {
+            switch probeAssetData(candidate, package: package) {
+            case .data(let data):
+                foundBytes = true
+                if let value = decode(data) { return value }
+            case .missing:
+                break
+            case .rejected:
+                rejected = true
+            }
+        }
+        if let value = alternate() { return value }
+        guard !foundBytes,
+              !rejected,
+              !candidates.isEmpty,
+              candidates.allSatisfy({ WallpaperPathSecurity.normalizedRelativePath($0) != nil }) else {
+            return nil
+        }
+        markMissingRequiredSharedAsset()
         return nil
     }
 
@@ -95,15 +145,31 @@ extension SceneRenderer {
                 frames = sprite.frames
                 effW = max(1, Int(sprite.frames[0].atlasWidth.rounded()))
                 effH = max(1, Int(sprite.frames[0].atlasHeight.rounded()))
-            } else if let texData = assetData(layer.textureEntryName, package: package),
-                      let tex = TexImage.parse(texData),
-                      let d = TexDecoder.rgba(from: tex, data: texData, properties: variantProperties) {
-                guard let t = makeTexture(d.pixels, d.width, d.height, device) else { continue }
-                mtl = t; effW = d.width; effH = d.height
-            } else if let d = bitmapRGBAFile(layer.textureEntryName) {
-                guard let t = makeTexture(d.pixels, d.width, d.height, device) else { continue }
-                mtl = t; effW = d.width; effH = d.height
-            } else { continue }
+            } else if let loaded: (texture: MTLTexture, width: Int, height: Int) = resolveRequiredAsset(
+                [layer.textureEntryName],
+                package: package,
+                decode: { data in
+                    guard let tex = TexImage.parse(data),
+                          let decoded = TexDecoder.rgba(from: tex, data: data, properties: variantProperties),
+                          let texture = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
+                        return nil
+                    }
+                    return (texture, decoded.width, decoded.height)
+                },
+                alternate: {
+                    guard let decoded = bitmapRGBAFile(layer.textureEntryName),
+                          let texture = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
+                        return nil
+                    }
+                    return (texture, decoded.width, decoded.height)
+                }
+            ) {
+                mtl = loaded.texture
+                effW = loaded.width
+                effH = loaded.height
+            } else {
+                continue
+            }
             // 스프라이트 프레임 있으면 상시 리드로 필요(gif 재생) — needsDisplay 정책은 shouldAnimate 로.
             if !frames.isEmpty { hasAnimations = true }
             let verts = Self.quadVertices(layer: layer, projW: w, projH: h)
@@ -426,27 +492,36 @@ extension SceneRenderer {
     }
 
     private func baseAssetURL(for name: String, root: URL) -> URL? {
-        guard let path = WallpaperPathSecurity.normalizedRelativePath(name) else { return nil }
-        if let exact = WallpaperPathSecurity.containedFileURL(path, root: root),
-           FileManager.default.fileExists(atPath: exact.path) {
-            return exact
-        }
+        guard case .url(let url) = baseAssetURLProbe(for: name, root: root) else { return nil }
+        return url
+    }
+
+    private func baseAssetURLProbe(for name: String, root: URL) -> BaseAssetURLProbe {
+        guard let path = WallpaperPathSecurity.normalizedRelativePath(name) else { return .rejected }
         let rootURL = root.standardizedFileURL
+        let exactCandidate = rootURL.appendingPathComponent(path).standardizedFileURL
+        guard WallpaperPathSecurity.contains(exactCandidate, in: rootURL) else { return .rejected }
+        if FileManager.default.fileExists(atPath: exactCandidate.path) {
+            guard let exact = WallpaperPathSecurity.containedFileURL(path, root: root) else {
+                return .rejected
+            }
+            return .url(exact)
+        }
+        let realRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
         var current = rootURL
         for part in path.split(separator: "/").map(String.init) {
             guard let children = try? FileManager.default.contentsOfDirectory(at: current,
                                                                               includingPropertiesForKeys: nil),
                   let match = children.first(where: {
                       $0.lastPathComponent.caseInsensitiveCompare(part) == .orderedSame
-                  }) else { return nil }
+                  }) else { return .missing }
             current = match.standardizedFileURL
-            guard WallpaperPathSecurity.contains(current, in: rootURL) else { return nil }
+            guard WallpaperPathSecurity.contains(current, in: rootURL) else { return .rejected }
+            let realCurrent = current.resolvingSymlinksInPath().standardizedFileURL
+            guard WallpaperPathSecurity.contains(realCurrent, in: realRoot) else { return .rejected }
         }
-        guard FileManager.default.fileExists(atPath: current.path) else { return nil }
-        let realRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
-        let realCurrent = current.resolvingSymlinksInPath().standardizedFileURL
-        guard WallpaperPathSecurity.contains(realCurrent, in: realRoot) else { return nil }
-        return current
+        guard FileManager.default.fileExists(atPath: current.path) else { return .missing }
+        return .url(current)
     }
 
     /// 변환 효과 파이프라인. 정점 디스크립터: a_Position float3@0, a_TexCoord float2@12, stride 20,
@@ -507,24 +582,33 @@ extension SceneRenderer {
     func resolveTextureWithFrames(_ name: String?, package: ScenePackage, device: MTLDevice)
         -> (texture: MTLTexture, frames: [TexImage.TexFrame])? {
         if let name {
-            let cand = name.hasSuffix(".tex") ? name : "materials/\(name).tex"
-            if let d = assetData(cand, package: package) ?? assetData(name, package: package),
-               let tex = TexImage.parse(d) {
-                // 다중 image = 아틀라스 페이지: 세로로 이어붙인 단일 텍스처 + frame.y 페이지 오프셋(아래 헬퍼).
-                let multipage = tex.imageCount > 1
-                if multipage, !tex.frames.isEmpty,
-                   let stacked = stackedAtlas(tex: tex, data: d, device: device) { return stacked }
-                // 조건 변형(예 3D 모델 튜닉색): variantProperties 로 mip 선택. 비-변형은 기존 경로 그대로.
-                if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties),
-                   let m = makeTexture(dec.pixels, dec.width, dec.height, device) {
-                    // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
-                    // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백
-                    // (page 0 표시)해 "틀린 애니" 대신 "정지"로 명예로운 실패(advisor). 단일 image 는 frames
-                    // 정상(전부 id0, 오프셋 무관). 영향 실측 6씬(3379048027 7페이지/420프레임 sumH 52920,
-                    // 3363252053·3448877775 7페이지, 3577990983 5페이지, 3000562427 day/night 3페이지).
-                    // ponytail: 진짜 고침 = 페이지별 텍스처 또는 온디맨드 프레임 스트리밍(초대형 시트 ~1.7GB) — 재설계.
-                    return (m, multipage ? [] : tex.frames)
+            let candidates = name.hasSuffix(".tex")
+                ? [name]
+                : ["materials/\(name).tex", name]
+            if let resolved: (texture: MTLTexture, frames: [TexImage.TexFrame]) = resolveRequiredAsset(
+                candidates,
+                package: package,
+                decode: { d in
+                    guard let tex = TexImage.parse(d) else { return nil }
+                    let multipage = tex.imageCount > 1
+                    if multipage, !tex.frames.isEmpty,
+                       let stacked = stackedAtlas(tex: tex, data: d, device: device) {
+                        return stacked
+                    }
+                    if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties),
+                       let texture = makeTexture(dec.pixels, dec.width, dec.height, device) {
+                        // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
+                        // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백
+                        // (page 0 표시)해 "틀린 애니" 대신 "정지"로 명예로운 실패(advisor). 단일 image 는 frames
+                        // 정상(전부 id0, 오프셋 무관). 영향 실측 6씬(3379048027 7페이지/420프레임 sumH 52920,
+                        // 3363252053·3448877775 7페이지, 3577990983 5페이지, 3000562427 day/night 3페이지).
+                        // ponytail: 진짜 고침 = 페이지별 텍스처 또는 온디맨드 프레임 스트리밍(초대형 시트 ~1.7GB) — 재설계.
+                        return (texture, multipage ? [] : tex.frames)
+                    }
+                    return nil
                 }
+            ) {
+                return resolved
             }
         }
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }

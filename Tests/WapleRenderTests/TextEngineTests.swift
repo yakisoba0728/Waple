@@ -192,6 +192,33 @@ final class TextEngineTests: XCTestCase {
         XCTAssertEqual(d.evaluate(current: ""), "1920/1080")
     }
 
+    func testEngineBooleanCapabilitiesAreConcreteAndUnknownProxyRemainsTruthy() throws {
+        let script = """
+        export function update(value) {
+            return [
+                engine.isWallpaper(),
+                engine.isDesktopDevice(),
+                engine.isMobileDevice(),
+                engine.isScreensaver(),
+                engine.isRunningInEditor(),
+                engine.isPortrait(),
+                engine.isLandscape(),
+                engine.unknownCapability().stillChains
+            ].map(function(v) { return v ? '1' : '0'; }).join('');
+        }
+        """
+
+        func flags(width: Float, height: Float) throws -> String {
+            let scene = try XCTUnwrap(SceneScriptContext(width: width, height: height))
+            let engine = try XCTUnwrap(TextScriptEngine(script: script, scene: scene))
+            return try XCTUnwrap(engine.evaluate(current: ""))
+        }
+
+        XCTAssertEqual(try flags(width: 1920, height: 1080), "11000011")
+        XCTAssertEqual(try flags(width: 600, height: 800), "11000101")
+        XCTAssertEqual(try flags(width: 900, height: 900), "11000011")
+    }
+
     /// engine.setTimeout: runtime 0→2 전진 시 만기순(동일 만기는 등록순) 1회 발화, clearTimeout 은 취소.
     func testEngineSetTimeoutFiresOnRuntimeAdvance() throws {
         let scene = try XCTUnwrap(SceneScriptContext())

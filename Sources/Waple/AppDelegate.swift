@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return vm
     }()
     private let bannerModel = StatusBannerModel()
+    private var baseAssetsWarningGate = BaseAssetsWarningGate()
     private var libraryWindow: NSWindow?
 
     // 데스크탑 가림 자동 일시정지(옵션, UserDefaults 영속, 기본 꺼짐 — 기존 동작 보존).
@@ -296,6 +297,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if pausedByOcclusion || manualGlobalPause { renderers.forEach { $0.pause() } }  // 가림/수동 정지 중 교체된 렌더러도 정지 유지
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
             pushRecent(project?.id)     // 최근 배경 목록 갱신(nil = 무선택 → no-op)
+            baseAssetsWarningGate.presentIfNeeded(
+                after: result,
+                fingerprint: BaseAssetsSettings.fingerprint,
+                missingRequiredSharedAssets: { renderer in
+                    (renderer as? SceneRenderer)?.hasMissingRequiredSharedAssets
+                },
+                present: { [weak self] message in
+                    guard let self else { return false }
+                    return self.notify(message)
+                }
+            )
             return true
         case .failure(let error):
             notify("적용 실패: \(error)")
@@ -473,11 +485,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return output
     }
 
-    private func notify(_ message: String) {
+    @discardableResult
+    private func notify(_ message: String) -> Bool {
         NSLog("%@", "[Waple] \(message)")
-        if let w = libraryWindow, w.isVisible {
-            bannerModel.show(message)
+        guard let window = libraryWindow, window.isVisible else {
+            return false
         }
+        bannerModel.show(message)
+        return true
     }
 }
 
@@ -686,4 +701,3 @@ extension AppDelegate: NSMenuDelegate {
         _ = libraryVM.apply(entry)   // 기존 적용 경로 재사용(선택 영속·강조 포함)
     }
 }
-

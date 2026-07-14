@@ -10,6 +10,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var webView: WKWebView?
     /// 테스트 전용 접근자(JS 상태 검증).
     public var webViewForTesting: WKWebView? { webView }
+    var mediaPollingForTesting: Bool {
+        mediaPoller?.isRunningForTesting ?? false
+    }
     private var userPropertiesJSON: String?
     private var userPropertiesByKey: [String: WallpaperProperty] = [:]
     private var projectRootURL: URL?
@@ -23,6 +26,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var pausedManually = false
     /// 가림으로 자동 정지했는지 — visible 복귀 시 자동 재개 판단(수동 pause 와 구분, VideoRenderer 패턴).
     private(set) var pausedByOcclusion = false
+    private var effectivePauseApplied = false
+    private var isEffectivelyPaused: Bool { pausedManually || pausedByOcclusion }
     private var userSelectedResourceOverrides: [String: String] = [:]
 
     public init(mode: Mode) {
@@ -48,6 +53,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         config.setURLSchemeHandler(WallpaperSchemeHandler(rootURL: project.folderURL),
                                    forURLScheme: WallpaperSchemeHandler.scheme)
         let ucc = WKUserContentController()
+        ucc.addUserScript(WKUserScript(source: WebHardPauseJS.source,
+                                       injectionTime: .atDocumentStart,
+                                       forMainFrameOnly: false))
         ucc.addUserScript(WKUserScript(source: WallpaperBridgeJS.source,
                                        injectionTime: .atDocumentStart, forMainFrameOnly: false))
         ucc.add(self, name: "waple")
@@ -162,14 +170,45 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         webView?.evaluateJavaScript("""
             if (window.__wapleSetPaused) {
               window.__wapleSetPaused(\(paused));
-            } else if (window.wallpaperPropertyListener && window.wallpaperPropertyListener.setPaused) {
-              window.wallpaperPropertyListener.setPaused(\(paused));
+            } else {
+              if (window.__wapleHardPauseController) {
+                window.__wapleHardPauseController.setPaused(\(paused));
+              }
+              if (window.wallpaperPropertyListener &&
+                  window.wallpaperPropertyListener.setPaused) {
+                window.wallpaperPropertyListener.setPaused(\(paused));
+              }
             }
-            """)
+            """) { _, error in
+                if let error {
+                    NSLog("%@", "[Waple] pause injection failed: \(error)")
+                }
+            }
+    }
+
+    private func synchronizeEffectivePause(forceJavaScript: Bool = false) {
+        let effective = isEffectivelyPaused
+        let changed = effectivePauseApplied != effective
+        effectivePauseApplied = effective
+        if changed || forceJavaScript {
+            setPausedJS(effective)
+        }
+
+        if effective || !hasAudioListener {
+            audioProvider?.stop()
+        } else {
+            audioProvider?.start()
+        }
+        if effective {
+            mediaPoller?.stop()
+        } else {
+            mediaPoller?.start()
+        }
     }
 
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard Self.isAllowedTopFrameURL(webView.url) else { return }
+        synchronizeEffectivePause(forceJavaScript: isEffectivelyPaused)
         // didFinish 는 모든 허용 main-frame 내비게이션마다 발생한다. WE 는 문서가 다시 로드될 때도
         // 저장된 사용자 속성을 다시 전달하므로 JSON 을 소비하지 않는다.
         guard let json = userPropertiesJSON else { return }
@@ -179,8 +218,6 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             if let error { NSLog("%@", "[Waple] property injection failed: \(error)") }
         }
         deliverFetchAllDirectories()
-        // 가림 자동정지 중 페이지 자체 재로드 시에도 정지 상태를 재동기화.
-        if pausedManually || pausedByOcclusion { setPausedJS(true) }
     }
 
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -206,12 +243,13 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         guard let dict = message.body as? [String: Any], let type = dict["type"] as? String else { return }
         if type == "audioListen" {
             hasAudioListener = true
-            if !pausedManually { audioProvider?.start() }
+            synchronizeEffectivePause()
         } else if type == "audioUnlisten" {
             hasAudioListener = false
-            audioProvider?.stop()
+            synchronizeEffectivePause()
         } else if type == "mediaListen" {
             startMediaPolling()
+            synchronizeEffectivePause()
         } else if type == "randomFile",
                   let name = dict["name"] as? String,
                   let requestID = dict["requestId"] as? String {
@@ -413,25 +451,19 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                 textColor: \(q(hx(p.textColor))), highContrastColor: \(q(hx(p.highContrast))), hasThumbnail: true }
                 """)
         }
-        // 정지 중 등록되면 폴링은 재개 시점(resume/가림 해제)에 시작.
-        if !pausedManually, !pausedByOcclusion { poller.start() }
         mediaPoller = poller
     }
 
     public func pause() {
         guard !pausedManually else { return }
         pausedManually = true
-        setPausedJS(true)
-        audioProvider?.stop()
-        mediaPoller?.stop()
+        synchronizeEffectivePause()
     }
 
     public func resume() {
         guard pausedManually else { return }
         pausedManually = false
-        setPausedJS(false)
-        if hasAudioListener { audioProvider?.start() }
-        if !pausedByOcclusion { mediaPoller?.start() }
+        synchronizeEffectivePause()
     }
 
     /// 가림 상태 전이(옵저버 클로저에서 분리 — webView 창 없이도 테스트 가능). 가림 정지는 수동 pause 와
@@ -439,19 +471,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     /// 전제라 즉시 반환 → JS/오디오가 영구 정지되는 데드패스였다(감사 W-B1). 수동 pause 중이면 복귀해도
     /// 재개하지 않는다(수동 정지가 우선 — resume() 으로만 해제).
     func occlusionChanged(visible: Bool) {
-        if visible {
-            if pausedByOcclusion, !pausedManually {
-                setPausedJS(false)
-                if hasAudioListener { audioProvider?.start() }
-                mediaPoller?.start()
-            }
-            pausedByOcclusion = false
-        } else {
-            pausedByOcclusion = true
-            setPausedJS(true)
-            audioProvider?.stop()
-            mediaPoller?.stop()
-        }
+        let occluded = !visible
+        guard pausedByOcclusion != occluded else { return }
+        pausedByOcclusion = occluded
+        synchronizeEffectivePause()
     }
 
     public func teardown() {
@@ -466,6 +489,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         audioProvider = nil
         mediaPoller?.stop()
         mediaPoller = nil
+        effectivePauseApplied = false
+        pausedManually = false
+        pausedByOcclusion = false
         hasAudioListener = false
         userPropertiesJSON = nil
         userPropertiesByKey = [:]

@@ -383,12 +383,12 @@ public struct SceneDocument: Equatable {
     /// >1.0 합을 [0,1] 로 압축한다(종전 bgra8 하드클램프 = 밝은 영역 순백 "백화" 방지).
     /// WE combine_srgb/hdr_upsample 경로 대응(lane-04 §1.2). 부재 시 false = 종전 LDR 경로(무회귀).
     public var hdr: Bool = false
-    /// `general.bloom` — 블룸(밝은영역 광륜 확산) 플래그. **현재 파싱만** — 확산 패스는 후속(톤맵 우선).
+    /// `general.bloom` — fixed two-stage LDR bloom request. Renderer activation additionally requires `!general.hdr`.
     public var bloom: Bool = false
-    /// 블룸 파라미터(파싱만, 미소비). WE `bloomstrength`/`bloomthreshold` + hdr 변형(lane-04 §1.1).
-    /// 향후 블룸 패스가 threshold 로 밝은영역 추출, strength 로 가산 스케일에 사용.
-    public var bloomStrength: Float = 0
-    public var bloomThreshold: Float = 0
+    /// WE fixed two-stage LDR bloom parameters. Strength/threshold remain authored finite values without clamps.
+    public var bloomStrength: Float = 2
+    public var bloomThreshold: Float = 0.65
+    public var bloomTint: Vec3 = Vec3(x: 1, y: 1, z: 1)
     public var bloomHDRStrength: Float = 0
     public var bloomHDRThreshold: Float = 0
 
@@ -399,13 +399,24 @@ public struct SceneDocument: Equatable {
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
 
+public enum SharedAssetProbeResult {
+    case data(Data)
+    case missing
+    case rejected
+}
+
 extension SceneDocument {
     /// - assets: 공유(base-assets) 리졸버 — pkg 에 없는 모델/머티리얼 JSON(models/util/solidlayer.json 등)의
     ///   폴백. WapleCore 는 순수하므로 파일 IO 는 호출자가 클로저로 주입한다(렌더러: BaseAssetsSettings 디렉터리).
     /// - userProps: 유저 속성 오버라이드(키 → 값). scene.json 의 `{"user": "키", "value": 기본}` 바인딩을
     ///   파스 전에 트리 전체에서 일괄 해석한다(visible/alpha/color/effect 상수 등 모든 바인딩 지점 공통).
-    public static func parse(package: ScenePackage, assets: ((String) -> Data?)? = nil,
-                             userProps: [String: Any] = [:]) throws -> SceneDocument {
+    public static func parse(
+        package: ScenePackage,
+        assets: ((String) -> Data?)? = nil,
+        sharedAssetProbe: ((String) -> SharedAssetProbeResult)? = nil,
+        onMissingRequiredAsset: (() -> Void)? = nil,
+        userProps: [String: Any] = [:]
+    ) throws -> SceneDocument {
         guard let sceneData = package.data(for: "scene.json") ?? package.data(for: "gifscene.json"),
               var scene = (try? JSONSerialization.jsonObject(with: sceneData)) as? [String: Any] else {
             throw SceneDocumentError.noScene
@@ -440,6 +451,15 @@ extension SceneDocument {
         var lights3D: [SceneLight3D] = []
         var nodes3D: [SceneNode3D] = []
         var sounds: [SceneSound] = []
+        let resolvedAssets: ((String) -> Data?)?
+        if let sharedAssetProbe {
+            resolvedAssets = { name in
+                guard case .data(let data) = sharedAssetProbe(name) else { return nil }
+                return data
+            }
+        } else {
+            resolvedAssets = assets
+        }
         let imageLayerCompositeIDs = referencedImageLayerCompositeIDs(in: package)
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
@@ -484,7 +504,10 @@ extension SceneDocument {
             // 콘텐츠 키 접근은 contentValue 로 NSNull 정규화(존재 판정과 동일 규약).
             if let imagePath = contentValue(obj["image"]) as? String {
                 if let layer = parseLayer(obj, imagePath: imagePath, order: order, pw: pw, ph: ph,
-                                          package: package, assets: assets, userProps: userProps,
+                                          package: package, assets: resolvedAssets,
+                                          sharedAssetProbe: sharedAssetProbe,
+                                          missingRequiredAsset: onMissingRequiredAsset,
+                                          userProps: userProps,
                                           visibleScript: visibleScript, initialVisible: initialVisible) {
                     layers.append(layer)
                 }
@@ -502,7 +525,12 @@ extension SceneDocument {
             }
         }
         // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다).
-        composeParentTransforms(layers: &layers, nodes3D: nodes3D, camera3D: camera3D, package: package, assets: assets)
+        composeParentTransforms(
+            layers: &layers,
+            nodes3D: nodes3D,
+            camera3D: camera3D,
+            package: package,
+            assets: resolvedAssets)
         var out = SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                                 parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
                                 parallaxMouseInfluence: parallaxMouseInfluence, parallaxDelay: parallaxDelay,
@@ -515,9 +543,10 @@ extension SceneDocument {
         out.skylightColor = skylightColor
         out.hdr = hdr
         out.bloom = bloom
-        // bloom 파라미터는 파싱만(float 는 문자열/숫자/{value} 바인딩 관용) — 미부재 시 0.
-        out.bloomStrength = float(general["bloomstrength"]) ?? 0
-        out.bloomThreshold = float(general["bloomthreshold"]) ?? 0
+        // LDR uses the WE defaults; float/vec3 retain numeric-string and {value} unwrapping without clamps.
+        out.bloomStrength = float(general["bloomstrength"]) ?? 2
+        out.bloomThreshold = float(general["bloomthreshold"]) ?? 0.65
+        out.bloomTint = vec3(general["bloomtint"]) ?? Vec3(x: 1, y: 1, z: 1)
         out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 0
         out.bloomHDRThreshold = float(general["bloomhdrthreshold"]) ?? 0
         return out
@@ -547,9 +576,18 @@ extension SceneDocument {
     /// 애니(PropertyAnimation)·프로퍼티 스크립트·퍼펫·블렌드·부모/id/originZ 를 obj 에서 채운다.
     private static func parseLayer(_ obj: [String: Any], imagePath: String, order: Int, pw: Int, ph: Int,
                                    package: ScenePackage, assets: ((String) -> Data?)?,
+                                   sharedAssetProbe: ((String) -> SharedAssetProbeResult)?,
+                                   missingRequiredAsset: (() -> Void)?,
                                    userProps: [String: Any],
                                    visibleScript: String?, initialVisible: Bool) -> SceneLayer? {
-        guard let resolved = resolveLayerTexture(imagePath: imagePath, package: package, assets: assets, userProps: userProps) else {
+        guard let resolved = resolveLayerTexture(
+            imagePath: imagePath,
+            package: package,
+            assets: assets,
+            sharedAssetProbe: sharedAssetProbe,
+            missingRequiredAsset: missingRequiredAsset,
+            userProps: userProps
+        ) else {
             return nil  // 사유별 로그는 resolveLayerTexture 내부에서.
         }
         let angles = floats(obj["angles"])
@@ -873,14 +911,43 @@ extension SceneDocument {
     }
 
     /// image(model) → material → texture name → "materials/<name>.tex". nil = 해석 실패(드롭+로그).
-    private static func resolveLayerTexture(imagePath: String, package: ScenePackage,
-                                            assets: ((String) -> Data?)? = nil,
-                                            userProps: [String: Any] = [:]) -> LayerTexture? {
-        func data(_ name: String) -> Data? { package.data(for: name) ?? assets?(name) }
-        guard let modelData = data(imagePath),
+    private static func resolveLayerTexture(
+        imagePath: String,
+        package: ScenePackage,
+        assets: ((String) -> Data?)? = nil,
+        sharedAssetProbe: ((String) -> SharedAssetProbeResult)? = nil,
+        missingRequiredAsset: (() -> Void)? = nil,
+        userProps: [String: Any] = [:]
+    ) -> LayerTexture? {
+        func requiredData(_ name: String) -> Data? {
+            if let data = package.data(for: name) {
+                return data
+            }
+            guard WallpaperPathSecurity.normalizedRelativePath(name) != nil else {
+                return nil
+            }
+            if let sharedAssetProbe {
+                switch sharedAssetProbe(name) {
+                case .data(let data):
+                    return data
+                case .missing:
+                    missingRequiredAsset?()
+                case .rejected:
+                    break
+                }
+                return nil
+            }
+            if let data = assets?(name) {
+                return data
+            }
+            missingRequiredAsset?()
+            return nil
+        }
+
+        guard let modelData = requiredData(imagePath),
               let model = (try? JSONSerialization.jsonObject(with: modelData)) as? [String: Any],
               let materialPath = model["material"] as? String,
-              let materialData = data(materialPath),
+              let materialData = requiredData(materialPath),
               let material = (try? JSONSerialization.jsonObject(with: materialData)) as? [String: Any],
               let passes = material["passes"] as? [Any],
               let pass0 = passes.first as? [String: Any] else {
@@ -911,10 +978,12 @@ extension SceneDocument {
         if name.hasPrefix("/") {
             return .entry(name)
         }
-        // 머티리얼의 텍스처 이름은 materials/ 상대 + 무확장("util/white" → "materials/util/white.tex").
-        // pkg 에 실제로 있는 후보를 우선하고, 없으면 관례 경로를 반환(렌더러가 base-assets 폴백 시도).
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
-        for c in candidates where package.data(for: c) != nil { return .entry(c) }
+        for candidate in candidates {
+            if package.data(for: candidate) != nil || assets?(candidate) != nil {
+                return .entry(candidate)
+            }
+        }
         return .entry(candidates[0])
     }
 

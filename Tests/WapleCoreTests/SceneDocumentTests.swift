@@ -37,6 +37,7 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(doc.bloom)
         XCTAssertEqual(doc.bloomStrength, 3.37, accuracy: 1e-4)
         XCTAssertEqual(doc.bloomThreshold, 0.36, accuracy: 1e-4)
+        XCTAssertEqual(doc.bloomTint, Vec3(x: 1, y: 1, z: 1))
         XCTAssertEqual(doc.bloomHDRStrength, 1.4, accuracy: 1e-4)
         XCTAssertEqual(doc.bloomHDRThreshold, 0.70, accuracy: 1e-4)
     }
@@ -47,6 +48,40 @@ final class SceneDocumentTests: XCTestCase {
         let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
         XCTAssertFalse(doc.hdr)
         XCTAssertFalse(doc.bloom)
+        XCTAssertEqual(doc.bloomStrength, 2, accuracy: 1e-6)
+        XCTAssertEqual(doc.bloomThreshold, 0.65, accuracy: 1e-6)
+        XCTAssertEqual(doc.bloomTint, Vec3(x: 1, y: 1, z: 1))
+        XCTAssertEqual(doc.bloomHDRStrength, 0, accuracy: 1e-6)
+        XCTAssertEqual(doc.bloomHDRThreshold, 0, accuracy: 1e-6)
+    }
+
+    func testBloomParserAcceptsNumericStringAndValueFormsWithoutClamping() throws {
+        func parse(_ fields: String) throws -> SceneDocument {
+            let scene = """
+            {"general":{"orthogonalprojection":{"width":16,"height":16},\(fields)},"objects":[]}
+            """
+            return try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        }
+
+        let numeric = try parse(
+            #""bloom":true,"bloomstrength":20,"bloomthreshold":-0.5,"bloomtint":"0.2 0.4 0.8","bloomhdrstrength":1.4,"bloomhdrthreshold":0.7"#)
+        XCTAssertEqual(numeric.bloomStrength, 20, accuracy: 1e-6)
+        XCTAssertEqual(numeric.bloomThreshold, -0.5, accuracy: 1e-6)
+        XCTAssertEqual(numeric.bloomTint, Vec3(x: 0.2, y: 0.4, z: 0.8))
+        XCTAssertEqual(numeric.bloomHDRStrength, 1.4, accuracy: 1e-6)
+        XCTAssertEqual(numeric.bloomHDRThreshold, 0.7, accuracy: 1e-6)
+
+        let strings = try parse(
+            #""bloomstrength":"6.25","bloomthreshold":"1.25","bloomtint":"0.9 0.7 0.5""#)
+        XCTAssertEqual(strings.bloomStrength, 6.25, accuracy: 1e-6)
+        XCTAssertEqual(strings.bloomThreshold, 1.25, accuracy: 1e-6)
+        XCTAssertEqual(strings.bloomTint, Vec3(x: 0.9, y: 0.7, z: 0.5))
+
+        let values = try parse(
+            #""bloomstrength":{"value":"4.5"},"bloomthreshold":{"value":0.2},"bloomtint":{"value":"1 0.5 0.25"}"#)
+        XCTAssertEqual(values.bloomStrength, 4.5, accuracy: 1e-6)
+        XCTAssertEqual(values.bloomThreshold, 0.2, accuracy: 1e-6)
+        XCTAssertEqual(values.bloomTint, Vec3(x: 1, y: 0.5, z: 0.25))
     }
 
     func testSkipsSoundAndInvisibleObjects() throws {
@@ -654,5 +689,103 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers.count, 1, "2D 이미지 레이어 그대로 렌더(3D 승격 시 소실)")
         XCTAssertFalse(doc.lights3D.isEmpty, "라이트 파스")
         XCTAssertTrue(doc.forwardLit2D, "2D 포워드 라이팅 게이트(camera3D==nil) 유지 — 3D 승격 시 소실")
+    }
+
+    func testSelfContainedRequiredLayerDoesNotReportSharedMiss() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/x.json","visible":true}]}
+        """
+        let package = try pkg([
+            ("scene.json", scene),
+            ("models/x.json", model),
+            ("materials/m.json", material),
+        ])
+        var misses = 0
+
+        let document = try SceneDocument.parse(
+            package: package,
+            assets: { _ in nil },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+
+        XCTAssertEqual(document.layers.count, 1)
+        XCTAssertEqual(misses, 0)
+    }
+
+    func testRequiredLayerResolvedBySharedAssetsDoesNotReportMiss() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/util/solidlayer.json","visible":true}]}
+        """
+        let package = try pkg([("scene.json", scene)])
+        let shared: [String: String] = [
+            "models/util/solidlayer.json": #"{"material":"materials/util/solidlayer.json"}"#,
+            "materials/util/solidlayer.json": #"{"passes":[{"shader":"flat"}]}"#,
+        ]
+        var misses = 0
+
+        let document = try SceneDocument.parse(
+            package: package,
+            assets: { shared[$0].map { Data($0.utf8) } },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+
+        XCTAssertEqual(document.layers.count, 1)
+        XCTAssertEqual(misses, 0)
+    }
+
+    func testSharedRawTextureCandidateIsSelectedWithoutMissingDiagnostic() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/x.json","visible":true}]}
+        """
+        let package = try pkg([
+            ("scene.json", scene),
+            ("models/x.json", #"{"material":"materials/m.json"}"#),
+            ("materials/m.json", #"{"passes":[{"textures":["raw-name"]}]}"#),
+        ])
+        let shared = ["raw-name": Data("raw".utf8)]
+        var misses = 0
+
+        let document = try SceneDocument.parse(
+            package: package,
+            assets: { shared[$0] },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+
+        XCTAssertEqual(document.layers.map(\.textureEntryName), ["raw-name"])
+        XCTAssertEqual(misses, 0)
+    }
+
+    func testMissingRequiredLayerReportsButInvalidPathDoesNot() throws {
+        let missingScene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/missing.json","visible":true}]}
+        """
+        var misses = 0
+        let missingDocument = try SceneDocument.parse(
+            package: try pkg([("scene.json", missingScene)]),
+            assets: { _ in nil },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+        XCTAssertTrue(missingDocument.layers.isEmpty)
+        XCTAssertEqual(misses, 1)
+
+        let rejectedScene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"../outside.json","visible":true}]}
+        """
+        var rejectedMisses = 0
+        let rejectedDocument = try SceneDocument.parse(
+            package: try pkg([("scene.json", rejectedScene)]),
+            assets: { _ in
+                XCTFail("invalid relative paths must not reach the shared resolver")
+                return nil
+            },
+            onMissingRequiredAsset: { rejectedMisses += 1 }
+        )
+        XCTAssertTrue(rejectedDocument.layers.isEmpty)
+        XCTAssertEqual(rejectedMisses, 0)
     }
 }

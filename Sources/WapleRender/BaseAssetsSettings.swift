@@ -7,6 +7,13 @@ import Foundation
 public enum BaseAssetsSettings {
     private static let key = "waple.baseAssetsPath"
 
+    public static var fingerprint: String {
+        guard let path = UserDefaults.standard.string(forKey: key), !path.isEmpty else {
+            return "<automatic>"
+        }
+        return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+    }
+
     public static var baseAssetsDirectory: URL? {
         get {
             if let p = UserDefaults.standard.string(forKey: key), !p.isEmpty {
