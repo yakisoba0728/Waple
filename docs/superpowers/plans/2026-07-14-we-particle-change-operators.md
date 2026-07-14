@@ -29,10 +29,11 @@
 **Files:**
 - Modify: `Tests/WapleCoreTests/ParticleSystemTests.swift`
 - Modify: `Sources/WapleCore/ParticleSystem.swift:59-82,275-280,325-328`
+- Modify: `Sources/WapleCore/ParticleSimulator.swift:111-112` (enum arity compatibility only; Task 2 consumes `endTime`)
 
 **Interfaces:**
 - Consumes: `ParticleSystemDef.parse(_:material:)`, `ParticleOperator`, existing `pfloat(_:)` and `pvec3(_:)` finite-number parsing.
-- Produces: `.sizeChange(startTime:startValue:endValue:endTime:)`, `.colorChange(startTime:startValue:endValue:endTime:)`, and native defaults shared with `.alphaChange`.
+- Produces: `.sizeChange(startTime:startValue:endValue:endTime:)`, `.colorChange(startTime:startValue:endValue:endTime:)`, native defaults shared with `.alphaChange`, and compiling four-value simulator pattern matches that intentionally ignore `endTime` until Task 2.
 
 - [ ] **Step 1: Add explicit-interval and native-default parser tests**
 
@@ -148,6 +149,15 @@ Replace the alpha parser branch with:
 
 Do not add a new numeric parser: `pfloat` already rejects nonfinite values and preserves finite values outside `[0,1]`.
 
+Because the associated-value arity changes immediately, replace the two simulator switch patterns with compile-only compatibility matches:
+
+```swift
+            case let .sizeChange(st, sv, ev, _): if sc == nil { sc = (st, sv, ev) }
+            case let .colorChange(st, sv, ev, _): if cc == nil { cc = (st, s3(sv), s3(ev)) }
+```
+
+Task 2 replaces these temporary first-only matches with authored-order arrays and consumes the fourth value.
+
 - [ ] **Step 6: Turn the parser tests GREEN and run the affected parser class**
 
 Run:
@@ -162,12 +172,12 @@ Expected: 2 targeted tests pass; the full class executes 20 tests with 0 failure
 - [ ] **Step 7: Commit the model and parser implementation**
 
 ```bash
-git add Sources/WapleCore/ParticleSystem.swift
+git add Sources/WapleCore/ParticleSystem.swift Sources/WapleCore/ParticleSimulator.swift
 git diff --cached --check
 git commit -m "수정(particle): change operator 구간과 기본값 파싱"
 ```
 
-Expected: exactly one production file is committed.
+Expected: `ParticleSystem.swift` contains the model/parser behavior and `ParticleSimulator.swift` contains only the required arity-compatibility pattern update.
 
 ---
 
