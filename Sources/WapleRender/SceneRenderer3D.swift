@@ -14,15 +14,27 @@ extension SceneRenderer {
         let indexCount: Int
         let texture: MTLTexture
         let tint: SIMD4<Float>       // 머티리얼 Color × Alpha
+        let roughness: Float
+        let metallic: Float
+        let specularTint: SIMD3<Float>
         let alphaCutoff: Float       // alphatocoverage → 0.5 (컷아웃 discard 근사), 그 외 0
+        let shadowEligible: Bool     // opaque/alphatocoverage만 P4 caster 대상
         let cullBack: Bool           // cullmode "normal" → 백페이스 컬, "nocull" → 양면
         let additive: Bool
         let depthTest: Bool
         let depthWrite: Bool
         let skinned: Bool            // true → 16f 스트라이드 + mv_skin(본행렬 버퍼)
     }
-    /// MSL 쪽 MeshU 와 레이아웃 일치(float4x4 + float4 + float4 = 96B).
-    struct MeshUniform { var mvp: simd_float4x4; var tint: SIMD4<Float>; var misc: SIMD4<Float> }
+    /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 3×float4 = 240B).
+    struct MeshUniform {
+        var mvp: simd_float4x4
+        var model: simd_float4x4
+        var normalMatrix: simd_float4x4
+        var tint: SIMD4<Float>
+        /// x=roughness, y=metallic, z=alphaCutoff, w=0 unlit / 1 mesh hemisphere / 2 image flat.
+        var material: SIMD4<Float>
+        var specularTint: SIMD4<Float>
+    }
     struct Script3D { let key: String; let engine: TextScriptEngine }
 
     /// 3D 변환 계층의 한 노드(그룹 or 모델 오브젝트) — per-frame 스크립트 평가로 로컬 변환/가시성 갱신.
@@ -70,6 +82,7 @@ extension SceneRenderer {
         let animIndex: Int           // -1 = 정지(바인드 포즈)
         let animRate: Float
         let boneRing: DynamicVertexBuffer?   // 3슬롯 링: skin=world×bindWorld⁻¹, 프레임마다 다음 슬롯에 적재(경합 회피)
+        let castShadow: Bool
     }
 
     /// 3D 씬의 2D 이미지 레이어를 카메라-페이싱 쿼드로(빌보드). 로컬 변환 + 부모 계층 + per-frame 스크립트.
@@ -90,6 +103,10 @@ extension SceneRenderer {
         let baseAngleZ: Float
         let baseTint: SIMD4<Float>
         let baseVisible: Bool
+        let lighting: Bool
+        let roughness: Float
+        let metallic: Float
+        let specularTint: SIMD3<Float>
         var scripts: [Script3D] = []
         /// per-frame 정점 재사용(3슬롯 링 — 레이어/파티클/본과 동일 패턴, 매프레임 makeBuffer 방지).
         let scratchQuad = DynamicVertexBuffer()
@@ -102,12 +119,15 @@ extension SceneRenderer {
         init(texture: MTLTexture, size: SIMD2<Float>, parent: Int?, order: Int, additive: Bool,
              depthTest: Bool, depthWrite: Bool, effects: [EffectGPU], texWidth: Int, texHeight: Int,
              isFrameBuffer: Bool, origin: SIMD3<Float>, scale: SIMD2<Float>, angleZ: Float,
-             tint: SIMD4<Float>, visible: Bool) {
+             tint: SIMD4<Float>, visible: Bool, lighting: Bool,
+             roughness: Float, metallic: Float, specularTint: SIMD3<Float>) {
             self.texture = texture; self.size = size; self.parent = parent; self.order = order
             self.additive = additive
             self.depthTest = depthTest; self.depthWrite = depthWrite; self.effects = effects
             self.texWidth = texWidth; self.texHeight = texHeight; self.isFrameBuffer = isFrameBuffer
             baseOrigin = origin; baseScale = scale; baseAngleZ = angleZ; baseTint = tint; baseVisible = visible
+            self.lighting = lighting; self.roughness = roughness; self.metallic = metallic
+            self.specularTint = specularTint
             self.origin = origin; self.scale = scale; self.angleZ = angleZ; self.tint = tint; self.visible = visible
         }
         func evaluateScripts(time: Float) {
@@ -138,10 +158,21 @@ extension SceneRenderer {
             NSLog("%@", "[Waple] 3D: mesh shader compile failed")
             return
         }
+        scene3DLights = doc.lights3D
+        scene3DAmbient = SIMD3(doc.ambientColor.x, doc.ambientColor.y, doc.ambientColor.z)
+        scene3DSkylight = SIMD3(doc.skylightColor.x, doc.skylightColor.y, doc.skylightColor.z)
         meshPipelineOver = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
         meshPipelineAdditive = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         meshPipelineSkin = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: false, device: device)
         meshPipelineSkinAdditive = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: true, device: device)
+        shadowPipelineStaticOpaque = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: false, device: device)
+        shadowPipelineStaticCutout = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: true, device: device)
+        shadowPipelineSkinOpaque = shadow3DPipeline(lib: lib, vertex: "sv_skin", cutout: false, device: device)
+        shadowPipelineSkinCutout = shadow3DPipeline(lib: lib, vertex: "sv_skin", cutout: true, device: device)
+        let shadowDepth = MTLDepthStencilDescriptor()
+        shadowDepth.depthCompareFunction = .less
+        shadowDepth.isDepthWriteEnabled = true
+        pointShadowDepthState = device.makeDepthStencilState(descriptor: shadowDepth)
         guard meshPipelineOver != nil else { return }
 
         // 카메라 프로퍼티 스크립트(eye/center/up/fov) 로드 — per-frame 재평가로 카메라 애니(젤다 fov 등).
@@ -212,7 +243,10 @@ extension SceneRenderer {
                 else { continue }
                 if skinned { anySkinned = true }
                 meshes.append(GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
-                                        texture: mat.texture, tint: mat.tint, alphaCutoff: mat.alphaCutoff,
+                                        texture: mat.texture, tint: mat.tint,
+                                        roughness: mat.roughness, metallic: mat.metallic,
+                                        specularTint: mat.specularTint, alphaCutoff: mat.alphaCutoff,
+                                        shadowEligible: mat.shadowEligible,
                                         cullBack: mat.cullBack, additive: mat.additive,
                                         depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned))
             }
@@ -235,7 +269,8 @@ extension SceneRenderer {
             }
             meshRenderables.append(MeshRenderable(id: obj.id, meshes: meshes, order: obj.order, name: obj.name,
                                                   model: keepModel, animIndex: animIndex,
-                                                  animRate: obj.animation?.rate ?? 1, boneRing: boneRing))
+                                                  animRate: obj.animation?.rate ?? 1, boneRing: boneRing,
+                                                  castShadow: obj.castShadow))
             loaded += 1
         }
 
@@ -282,7 +317,11 @@ extension SceneRenderer {
                                  origin: SIMD3(layer.origin.x, layer.origin.y, layer.originZ),
                                  scale: SIMD2(layer.scale.x, layer.scale.y), angleZ: layer.angleZ,
                                  tint: tint,
-                                 visible: layer.initialVisible)
+                                 visible: layer.initialVisible,
+                                 lighting: layer.lighting,
+                                 roughness: layer.roughness,
+                                 metallic: layer.metallic,
+                                 specularTint: SIMD3(layer.specularTint.x, layer.specularTint.y, layer.specularTint.z))
             attachScripts(bb, sources: layer.propertyScripts)
             billboards.append(bb)
             billboardDefs.append(layer)   // 록스텝(이벤트 마커 결속 — buildAnimationEventTargets)
@@ -324,7 +363,11 @@ extension SceneRenderer {
     struct Mesh3DMaterialInfo {
         let texture: MTLTexture
         let tint: SIMD4<Float>
+        let roughness: Float
+        let metallic: Float
+        let specularTint: SIMD3<Float>
         let alphaCutoff: Float
+        let shadowEligible: Bool
         let cullBack: Bool
         let additive: Bool
         let depthTest: Bool
@@ -343,6 +386,8 @@ extension SceneRenderer {
         var additive = false
         var alphaCutoff: Float = 0
         var depthTest = true, depthWrite = true
+        var pbr = Scene3DMaterialValues()
+        var shadowEligible = true
         if let d = quietAssetData(path, package: package),
            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
@@ -351,9 +396,11 @@ extension SceneRenderer {
             let blend = (p0["blending"] as? String) ?? "normal"
             additive = blend == "additive"
             if blend == "alphatocoverage" { alphaCutoff = 0.5 }  // MSAA 없는 컷아웃 근사(discard)
+            shadowEligible = blend == "normal" || blend == "alphatocoverage"
             depthTest = (p0["depthtest"] as? String) != "disabled"
             depthWrite = (p0["depthwrite"] as? String) != "disabled"
             if let csv = p0["constantshadervalues"] as? [String: Any] {
+                pbr = Scene3DMaterialValues.parse(csv)
                 func fvec(_ any: Any?) -> [Float]? {
                     if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
                     if let n = any as? Double { return [Float(n)] }
@@ -372,14 +419,20 @@ extension SceneRenderer {
             if texName == nil {
                 return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map {
                     Mesh3DMaterialInfo(texture: $0, tint: SIMD4(color.x, color.y, color.z, alpha),
-                                       alphaCutoff: alphaCutoff, cullBack: cullBack, additive: additive,
+                                       roughness: pbr.roughness, metallic: pbr.metallic,
+                                       specularTint: pbr.specularTint,
+                                       alphaCutoff: alphaCutoff, shadowEligible: shadowEligible,
+                                       cullBack: cullBack, additive: additive,
                                        depthTest: depthTest, depthWrite: depthWrite)
                 }
             }
         }
         guard let tex = resolveTexture(texName, package: package, device: device) else { return nil }
         return Mesh3DMaterialInfo(texture: tex, tint: SIMD4(color.x, color.y, color.z, alpha),
-                                  alphaCutoff: alphaCutoff, cullBack: cullBack, additive: additive,
+                                  roughness: pbr.roughness, metallic: pbr.metallic,
+                                  specularTint: pbr.specularTint,
+                                  alphaCutoff: alphaCutoff, shadowEligible: shadowEligible,
+                                  cullBack: cullBack, additive: additive,
                                   depthTest: depthTest, depthWrite: depthWrite)
     }
 
@@ -407,6 +460,15 @@ extension SceneRenderer {
         return try? device.makeRenderPipelineState(descriptor: pd)
     }
 
+    func shadow3DPipeline(lib: MTLLibrary, vertex: String, cutout: Bool,
+                         device: MTLDevice) -> MTLRenderPipelineState? {
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = lib.makeFunction(name: vertex)
+        descriptor.fragmentFunction = cutout ? lib.makeFunction(name: "sf_cutout") : nil
+        descriptor.depthAttachmentPixelFormat = .depth32Float
+        return try? device.makeRenderPipelineState(descriptor: descriptor)
+    }
+
     func meshDepthState(test: Bool, write: Bool, device: MTLDevice) -> MTLDepthStencilState? {
         let key = "\(test)-\(write)"
         if let s = meshDepthStates[key] { return s }
@@ -432,6 +494,166 @@ extension SceneRenderer {
         guard let t = device.makeTexture(descriptor: d) else { return nil }
         depthTextures[key] = t
         return t
+    }
+
+    /// point 하나당 native 2×3 face atlas 한 slice. drawable 크기와 무관하게 씬 동안 유지한다.
+    func pointShadowTexture(sliceCount: Int, device: MTLDevice) -> MTLTexture? {
+        guard sliceCount > 0 else { return nil }
+        if pointShadowAtlasSlices == sliceCount, let pointShadowAtlas { return pointShadowAtlas }
+        let descriptor = MTLTextureDescriptor()
+        descriptor.textureType = .type2DArray
+        descriptor.pixelFormat = .depth32Float
+        descriptor.width = PointShadowMath.faceResolution * PointShadowMath.atlasColumns
+        descriptor.height = PointShadowMath.faceResolution * PointShadowMath.atlasRows
+        descriptor.arrayLength = sliceCount
+        descriptor.mipmapLevelCount = 1
+        descriptor.sampleCount = 1
+        descriptor.storageMode = .private
+        descriptor.usage = [.renderTarget, .shaderRead]
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            pointShadowAtlas = nil; pointShadowAtlasSlices = 0
+            return nil
+        }
+        pointShadowAtlas = texture
+        pointShadowAtlasSlices = sliceCount
+        return texture
+    }
+
+    /// 스키닝 본 버퍼를 그림자 6면/메인 패스가 공유하도록 프레임당 정확히 한 번 적재한다.
+    func prepare3DSkinBuffers(time: Float, device: MTLDevice) -> [Int: MTLBuffer] {
+        var result: [Int: MTLBuffer] = [:]
+        for (index, renderable) in meshRenderables.enumerated() {
+            guard let model = renderable.model, let ring = renderable.boneRing, !model.bones.isEmpty else { continue }
+            let matrices = Model3DPose.skinMatrices(
+                model: model, animation: renderable.animIndex, time: time, rate: renderable.animRate)
+            guard !matrices.isEmpty, let buffer = ring.load(matrices, device: device) else { continue }
+            result[index] = buffer
+        }
+        return result
+    }
+
+    /// `castShadow` point의 6면을 2×3 viewport에 렌더한다. 실패 시 해당 프레임 shadow metadata를 끈다.
+    func encodePointShadows(resolvedLights: [Scene3DResolvedLight],
+                            lights: inout [Scene3DLightUniform],
+                            nodes: [Int: Scene3DMath.Node],
+                            skinBuffers: [Int: MTLBuffer],
+                            commandBuffer: MTLCommandBuffer,
+                            device: MTLDevice) -> (texture: MTLTexture?, matrices: [simd_float4x4]) {
+        var matrices = [simd_float4x4](repeating: matrix_identity_float4x4, count: 24)
+        let sliceCount = Scene3DLighting.shadowSliceCount(lights)
+        guard sliceCount > 0 else { return (nil, matrices) }
+
+        func disableShadows() {
+            for index in lights.indices { lights[index].shadow = SIMD4(-1, -1, 0, 0) }
+        }
+        guard let atlas = pointShadowTexture(sliceCount: sliceCount, device: device),
+              let depthState = pointShadowDepthState,
+              shadowPipelineStaticOpaque != nil,
+              shadowPipelineStaticCutout != nil,
+              shadowPipelineSkinOpaque != nil,
+              shadowPipelineSkinCutout != nil else {
+            disableShadows()
+            return (nil, matrices)
+        }
+
+        for (lightIndex, light) in resolvedLights.enumerated() where lightIndex < lights.count {
+            let sliceValue = lights[lightIndex].shadow.x
+            guard sliceValue >= 0 else { continue }
+            let slice = Int(sliceValue)
+            let faceMatrices = PointShadowMath.faceViewProjections(
+                position: light.position, radius: light.colorRadius.w)
+            guard faceMatrices.count == 6 else {
+                Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
+                continue
+            }
+            for face in 0..<6 { matrices[slice * 6 + face] = faceMatrices[face] }
+
+            let pass = MTLRenderPassDescriptor()
+            pass.depthAttachment.texture = atlas
+            pass.depthAttachment.slice = slice
+            pass.depthAttachment.level = 0
+            pass.depthAttachment.loadAction = .clear
+            pass.depthAttachment.storeAction = .store
+            pass.depthAttachment.clearDepth = 1
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+                Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
+                continue
+            }
+            encoder.setFrontFacing(.counterClockwise)
+            encoder.setDepthStencilState(depthState)
+            // [Waple stability policy] native Metal raster bias 상수는 미확정. acne만 억제하는 최소 정책값.
+            encoder.setDepthBias(1, slopeScale: 1.5, clamp: 0)
+
+            for face in 0..<6 {
+                let cell = PointShadowMath.atlasCell(face)
+                let originX = cell.x * PointShadowMath.faceResolution
+                let originY = cell.y * PointShadowMath.faceResolution
+                encoder.setViewport(MTLViewport(
+                    originX: Double(originX), originY: Double(originY),
+                    width: Double(PointShadowMath.faceResolution),
+                    height: Double(PointShadowMath.faceResolution), znear: 0, zfar: 1))
+                encoder.setScissorRect(MTLScissorRect(
+                    x: originX, y: originY,
+                    width: PointShadowMath.faceResolution, height: PointShadowMath.faceResolution))
+
+                for (renderableIndex, renderable) in meshRenderables.enumerated() where renderable.castShadow {
+                    guard let world = Scene3DMath.worldMatrix(id: renderable.id, nodes: nodes), world.visible else { continue }
+                    var uniform = MeshUniform(
+                        mvp: faceMatrices[face] * world.matrix,
+                        model: world.matrix,
+                        normalMatrix: Scene3DMath.normalMatrix4x4(world.matrix),
+                        tint: SIMD4(1, 1, 1, 1),
+                        material: SIMD4(0.7, 0, 0, 1),
+                        specularTint: SIMD4(1, 1, 1, 0))
+                    for mesh in renderable.meshes where mesh.shadowEligible {
+                        let skinBuffer = skinBuffers[renderableIndex]
+                        if mesh.skinned && skinBuffer == nil { continue }
+                        let cutout = mesh.alphaCutoff > 0
+                        let pipeline: MTLRenderPipelineState?
+                        if mesh.skinned {
+                            pipeline = cutout ? shadowPipelineSkinCutout : shadowPipelineSkinOpaque
+                        } else {
+                            pipeline = cutout ? shadowPipelineStaticCutout : shadowPipelineStaticOpaque
+                        }
+                        guard let pipeline else { continue }
+                        uniform.tint = mesh.tint
+                        uniform.material.z = mesh.alphaCutoff
+                        encoder.setRenderPipelineState(pipeline)
+                        encoder.setCullMode(mesh.cullBack ? .back : .none)
+                        encoder.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                        encoder.setVertexBytes(&uniform, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                        if let skinBuffer { encoder.setVertexBuffer(skinBuffer, offset: 0, index: 2) }
+                        if cutout {
+                            encoder.setFragmentBytes(&uniform, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                            encoder.setFragmentTexture(mesh.texture, index: 0)
+                        }
+                        encoder.drawIndexedPrimitives(
+                            type: .triangle, indexCount: mesh.indexCount, indexType: .uint16,
+                            indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                    }
+                }
+            }
+            encoder.endEncoding()
+        }
+        return (atlas, matrices)
+    }
+
+    /// Metal encoder는 framebuffer billboard에서 재생성되므로 scene-wide PBR 상수를 한 곳에서 재바인드한다.
+    func bindScene3DLighting(frame: inout Scene3DFrameUniform,
+                            lights: [Scene3DLightUniform],
+                            shadowMatrices: [simd_float4x4],
+                            shadowTexture: MTLTexture?,
+                            into encoder: MTLRenderCommandEncoder) {
+        encoder.setFragmentBytes(&frame, length: MemoryLayout<Scene3DFrameUniform>.stride, index: 2)
+        lights.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            encoder.setFragmentBytes(base, length: bytes.count, index: 3)
+        }
+        shadowMatrices.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            encoder.setFragmentBytes(base, length: bytes.count, index: 4)
+        }
+        encoder.setFragmentTexture(shadowTexture, index: 1)
     }
 
     /// 3D 메시 패스: target 에 clearColor 로 클리어 + 뎁스(.less) 붙여 씬 순서대로 드로우.
@@ -467,16 +689,6 @@ extension SceneRenderer {
             }
             billboardTextures[i] = current
         }
-        let needsDepthStore = billboards.contains { $0.isFrameBuffer }
-        let rpd = MTLRenderPassDescriptor()
-        rpd.colorAttachments[0].texture = target
-        rpd.colorAttachments[0].loadAction = .clear
-        rpd.colorAttachments[0].clearColor = clearColor
-        rpd.depthAttachment.texture = depthTex
-        rpd.depthAttachment.loadAction = .clear
-        rpd.depthAttachment.clearDepth = 1.0
-        rpd.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
-        guard var enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
         let aspect = Float(target.width) / Float(max(1, target.height))
         // 카메라 프로퍼티 스크립트 per-frame 재평가(eye/center/up → Vec3, fov → 스칼라). 무스크립트면 base 고정.
         var eye = SIMD3(cam.eye.x, cam.eye.y, cam.eye.z)
@@ -509,9 +721,39 @@ extension SceneRenderer {
         let fwd = simd_normalize(ctr - eye)
         let right = simd_normalize(simd_cross(fwd, upv))
         let camUp = simd_cross(right, fwd)
+        let resolvedLights = Scene3DLighting.resolvePointLights(scene3DLights, nodes: nmap)
+        var frameUniform = Scene3DFrameUniform(
+            cameraEye: SIMD4(eye.x, eye.y, eye.z, 1),
+            ambient: SIMD4(scene3DAmbient.x, scene3DAmbient.y, scene3DAmbient.z, 0),
+            skylight: SIMD4(scene3DSkylight.x, scene3DSkylight.y, scene3DSkylight.z, 0),
+            meta: SIMD4(Float(resolvedLights.count), 0, 0, 0))
+        var lightUniforms = Scene3DLighting.packLights(resolvedLights)
+        let skinBuffers = prepare3DSkinBuffers(time: time, device: device)
+        let shadowResult = encodePointShadows(
+            resolvedLights: resolvedLights, lights: &lightUniforms, nodes: nmap,
+            skinBuffers: skinBuffers, commandBuffer: cb, device: device)
+        if let shadowTexture = shadowResult.texture {
+            frameUniform.meta.y = 1 / Float(shadowTexture.width)
+            frameUniform.meta.z = 1 / Float(shadowTexture.height)
+            // [Waple stability policy] receiver depth-space bias; native CPU/Metal 상수는 미확정.
+            frameUniform.meta.w = 0.001
+        }
+        let needsDepthStore = billboards.contains { $0.isFrameBuffer }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = target
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].clearColor = clearColor
+        rpd.depthAttachment.texture = depthTex
+        rpd.depthAttachment.loadAction = .clear
+        rpd.depthAttachment.clearDepth = 1.0
+        rpd.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
+        guard var enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
         // 와인딩: front = CCW(A/B 실측 — CW 는 젤다 회랑이 인사이드아웃: 근접 벽이 컬링되어
         // 뒤쪽 외벽이 보임). cullmode "normal" 메시가 CCW-front 백페이스 컬에서 preview 와 일치.
         enc.setFrontFacing(.counterClockwise)
+        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                            shadowMatrices: shadowResult.matrices, shadowTexture: shadowResult.texture,
+                            into: enc)
         let debug3D = Self.debugFlag("WAPLE_3D_DEBUG")
         for item in draw3DOrder {
             if item.bb {
@@ -540,12 +782,17 @@ extension SceneRenderer {
                     guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
                     enc = nextEnc
                     enc.setFrontFacing(.counterClockwise)
+                    bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                                        shadowMatrices: shadowResult.matrices,
+                                        shadowTexture: shadowResult.texture, into: enc)
                     if let srcTex {
-                        encodeBillboard(bb, overrideTexture: srcTex, viewProj: viewProj, right: right, up: camUp,
+                        encodeBillboard(bb, overrideTexture: srcTex, viewProj: viewProj, eye: eye,
+                                        right: right, up: camUp,
                                         nmap: nmap, into: enc, device: device, over: over)
                     }
                 } else {
-                    encodeBillboard(bb, overrideTexture: billboardTextures[item.idx], viewProj: viewProj, right: right, up: camUp,
+                    encodeBillboard(bb, overrideTexture: billboardTextures[item.idx], viewProj: viewProj, eye: eye,
+                                    right: right, up: camUp,
                                     nmap: nmap, into: enc, device: device, over: over)
                 }
             } else {
@@ -555,23 +802,21 @@ extension SceneRenderer {
                     let c = viewProj * w.matrix * SIMD4<Float>(0, 0, 0, 1)
                     NSLog("%@", "[Waple3D] draw '\(mr.name)' ndc=\(c.w != 0 ? SIMD3(c.x, c.y, c.z) / c.w : .zero) w=\(c.w)")
                 }
-                var u = MeshUniform(mvp: viewProj * w.matrix, tint: SIMD4(1, 1, 1, 1), misc: SIMD4(0, 0, 0, 0))
-                // 스키닝 모델: 프레임당 본행렬(skin=world(t)×bindWorld⁻¹) 계산 → boneBuffer memcpy(정적 애니는 항등).
-                var skinReady = false
-                var boneBuf: MTLBuffer? = nil
-                if let model = mr.model, let ring = mr.boneRing, !model.bones.isEmpty {
-                    let mats = Model3DPose.skinMatrices(model: model, animation: mr.animIndex, time: time, rate: mr.animRate)
-                    if !mats.isEmpty {
-                        boneBuf = ring.load(mats, device: device)   // 다음 슬롯에 적재(크기 부족 시에만 재할당)
-                        skinReady = boneBuf != nil
-                    }
-                }
+                var u = MeshUniform(
+                    mvp: viewProj * w.matrix,
+                    model: w.matrix,
+                    normalMatrix: Scene3DMath.normalMatrix4x4(w.matrix),
+                    tint: SIMD4(1, 1, 1, 1),
+                    material: SIMD4(0.7, 0, 0, 1),
+                    specularTint: SIMD4(1, 1, 1, 0))
+                let boneBuf = skinBuffers[item.idx]
                 for mesh in mr.meshes {
                     // 스키닝 메시(16f 패킹)는 반드시 스키닝 파이프라인 필요 — 본버퍼 미준비면 스킵(8f 셰이더로 오독 방지).
-                    if mesh.skinned && !skinReady { continue }
+                    if mesh.skinned && boneBuf == nil { continue }
                     u.tint = mesh.tint
-                    u.misc.x = mesh.alphaCutoff
-                    let useSkin = mesh.skinned && skinReady
+                    u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, 1)
+                    u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, 0)
+                    let useSkin = mesh.skinned && boneBuf != nil
                     let pipe: MTLRenderPipelineState
                     if useSkin { pipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin ?? over) : (meshPipelineSkin ?? over) }
                     else { pipe = mesh.additive ? (meshPipelineAdditive ?? over) : over }
@@ -582,7 +827,7 @@ extension SceneRenderer {
                     enc.setCullMode(mesh.cullBack ? .back : .none)
                     enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
                     enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                    if useSkin, let bb = boneBuf { enc.setVertexBuffer(bb, offset: 0, index: 2) }
+                    if useSkin, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
                     enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
                     enc.setFragmentTexture(mesh.texture, index: 0)
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
@@ -598,7 +843,8 @@ extension SceneRenderer {
     /// 쿼드 4코너를 카메라 right/up 축으로 전개(월드 좌표) → mvp=viewProj. 뎁스 테스트 유지·미기록(투명),
     /// 양면, over(premult) 블렌드. 부모 서브트리 비가시/자기 비가시면 스킵.
     func encodeBillboard(_ bb: Billboard3D, overrideTexture: MTLTexture? = nil, viewProj: simd_float4x4,
-                                 right: SIMD3<Float>, up: SIMD3<Float>, nmap: [Int: Scene3DMath.Node],
+                                 eye: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                                 nmap: [Int: Scene3DMath.Node],
                                  into enc: MTLRenderCommandEncoder, device: MTLDevice, over: MTLRenderPipelineState) {
         var pWorld = matrix_identity_float4x4
         if let pid = bb.parent {
@@ -621,15 +867,27 @@ extension SceneRenderer {
         let rollRight = right * ca + up * sa
         let rollUp = -right * sa + up * ca
         let r = rollRight * hw, u = rollUp * hh
+        let receiverNormal: SIMD3<Float>
+        let toEye = eye - center
+        if simd_length_squared(toEye) > 1e-12 { receiverNormal = simd_normalize(toEye) }
+        else { receiverNormal = -simd_normalize(simd_cross(rollRight, rollUp)) }
         // UV 상단 원점: 상단 = +up. TL(0,0) TR(1,0) BR(1,1) BL(0,1).
         let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
-        func vtx(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] { [p.x, p.y, p.z, 0, 0, 0, uu, vv] }
+        func vtx(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] {
+            [p.x, p.y, p.z, receiverNormal.x, receiverNormal.y, receiverNormal.z, uu, vv]
+        }
         var verts: [Float] = []
         verts.reserveCapacity(48)
         verts += vtx(tl, 0, 0); verts += vtx(tr, 1, 0); verts += vtx(br, 1, 1)
         verts += vtx(tl, 0, 0); verts += vtx(br, 1, 1); verts += vtx(bl, 0, 1)
         guard let vbuf = bb.scratchQuad.load(verts, device: device) else { return }
-        var u2 = MeshUniform(mvp: viewProj, tint: bb.tint, misc: SIMD4(0, 0, 0, 0))
+        var u2 = MeshUniform(
+            mvp: viewProj,
+            model: matrix_identity_float4x4,
+            normalMatrix: matrix_identity_float4x4,
+            tint: bb.tint,
+            material: SIMD4(bb.roughness, bb.metallic, 0, bb.lighting ? 2 : 0),
+            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z, 0))
         // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우 광량 복원). 그 외 premult-over.
         enc.setRenderPipelineState(bb.additive ? (meshPipelineAdditive ?? over) : over)
         if let ds = meshDepthState(test: bb.depthTest, write: bb.depthWrite, device: device) { enc.setDepthStencilState(ds) }

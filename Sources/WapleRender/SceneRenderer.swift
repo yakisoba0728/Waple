@@ -551,6 +551,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var camera3D: SceneCamera3D?
     var is3D = false
     var has3DScripts = false
+    var scene3DLights: [SceneLight3D] = []
+    var scene3DAmbient = SIMD3<Float>(repeating: 0)
+    var scene3DSkylight = SIMD3<Float>(repeating: 0)
     var nodes3D: [Node3D] = []                 // scene order(계층 합성 입력)
     var meshRenderables: [MeshRenderable] = []
     var billboards: [Billboard3D] = []
@@ -566,6 +569,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var meshPipelineAdditive: MTLRenderPipelineState?
     var meshPipelineSkin: MTLRenderPipelineState?      // GPU 스키닝(mv_skin) over
     var meshPipelineSkinAdditive: MTLRenderPipelineState?
+    var shadowPipelineStaticOpaque: MTLRenderPipelineState?
+    var shadowPipelineStaticCutout: MTLRenderPipelineState?
+    var shadowPipelineSkinOpaque: MTLRenderPipelineState?
+    var shadowPipelineSkinCutout: MTLRenderPipelineState?
+    var pointShadowDepthState: MTLDepthStencilState?
+    var pointShadowAtlas: MTLTexture?
+    var pointShadowAtlasSlices = 0
     /// 카메라 프로퍼티 스크립트(eye/center/up/fov). per-frame 재평가로 카메라 애니.
     var cameraScripts: [Script3D] = []
     var meshDepthStates: [String: MTLDepthStencilState] = [:]  // "test-write" 키
@@ -1094,10 +1104,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneScript = nil; scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; _passthroughPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
+        scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
         eval3DOrder = []; draw3DOrder = []
         meshPipelineOver = nil; meshPipelineAdditive = nil
         meshPipelineSkin = nil; meshPipelineSkinAdditive = nil
+        shadowPipelineStaticOpaque = nil; shadowPipelineStaticCutout = nil
+        shadowPipelineSkinOpaque = nil; shadowPipelineSkinCutout = nil
+        pointShadowDepthState = nil; pointShadowAtlas = nil; pointShadowAtlasSlices = 0
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
         pipeline = nil; layerAdditivePipeline = nil; queue = nil; device = nil
