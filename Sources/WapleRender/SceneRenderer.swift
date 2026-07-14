@@ -663,7 +663,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         let data: Data
         do {
-            data = try Data(contentsOf: pkgURL)
+            data = try WapleProfiler.time("pkgRead") { try Data(contentsOf: pkgURL) }
         } catch {
             NSLog("%@", "[Waple] scene mount: cannot read \(pkgURL.path): \(error)")
             throw RendererError.assetMissing
@@ -671,17 +671,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let package: ScenePackage
         let doc: SceneDocument
         do {
-            package = try ScenePackage.parse(data)
+            package = try WapleProfiler.time("pkgParse") { try ScenePackage.parse(data) }
             // 공유(base-assets) 리졸버: pkg 에 없는 util 모델/머티리얼 JSON(솔리드 레이어 등) 폴백.
-            doc = try SceneDocument.parse(package: package, sharedAssetProbe: { name in
-                Self.sharedAssetProbe(name, root: BaseAssetsSettings.baseAssetsDirectory)
-            }, onMissingRequiredAsset: { [weak self] in
-                self?.markMissingRequiredSharedAsset()
-            }, userProps: UserPropertyStore.rawOverrides(
-                id: project.id,
-                presetOverrides: project.presetOverrides,
-                presetResourceRoot: project.presetFolderURL
-            ))
+            doc = try WapleProfiler.time("docParse") {
+                try SceneDocument.parse(package: package, sharedAssetProbe: { name in
+                    Self.sharedAssetProbe(name, root: BaseAssetsSettings.baseAssetsDirectory)
+                }, onMissingRequiredAsset: { [weak self] in
+                    self?.markMissingRequiredSharedAsset()
+                }, userProps: UserPropertyStore.rawOverrides(
+                    id: project.id,
+                    presetOverrides: project.presetOverrides,
+                    presetResourceRoot: project.presetFolderURL
+                ))
+            }
         } catch {
             NSLog("%@", "[Waple] scene mount: failed to parse \(pkgURL.path): \(error)")
             throw error
@@ -715,8 +717,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             self.videoTextureMP4URL = mp4URL   // 헤드리스 captureFrames 가 이 mp4 에서 프레임을 뽑도록.
             return
         }
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let queue = device.makeCommandQueue() else { throw RendererError.unsupportedType }
+        let (deviceOpt, queueOpt): (MTLDevice?, MTLCommandQueue?) = WapleProfiler.time("deviceInit") {
+            let d = MTLCreateSystemDefaultDevice()
+            return (d, d?.makeCommandQueue())
+        }
+        guard let device = deviceOpt, let queue = queueOpt else { throw RendererError.unsupportedType }
         self.device = device
         self.queue = queue
         self.assetBaseDir = BaseAssetsSettings.baseAssetsDirectory
@@ -739,7 +744,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             ldrBloomPass = LDRBloomPass(device: device)
         }
 
-        let library = try device.makeLibrary(source: QuadShaders.source, options: nil)
+        let library = try WapleProfiler.compile(QuadShaders.source) { try device.makeLibrary(source: QuadShaders.source, options: nil) }
         let pdesc = MTLRenderPipelineDescriptor()
         pdesc.vertexFunction = library.makeFunction(name: "v_main")
         pdesc.fragmentFunction = library.makeFunction(name: "f_main")
@@ -749,17 +754,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         att.rgbBlendOperation = .add; att.alphaBlendOperation = .add
         att.sourceRGBBlendFactor = .one; att.sourceAlphaBlendFactor = .one
         att.destinationRGBBlendFactor = .oneMinusSourceAlpha; att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        self.pipeline = try device.makeRenderPipelineState(descriptor: pdesc)
+        self.pipeline = try WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pdesc) }
         // 같은 v_main/f_main + accPixelFormat. premultiplied source를 destination에 그대로 더한다.
         att.destinationRGBBlendFactor = .one
         att.destinationAlphaBlendFactor = .one
-        self.layerAdditivePipeline = try? device.makeRenderPipelineState(descriptor: pdesc)
+        self.layerAdditivePipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pdesc) }
         // colorBlendMode 레이어: dst 스냅샷 대비 블렌드를 셰이더에서 계산 → HW 블렌딩 OFF.
         let bdesc = MTLRenderPipelineDescriptor()
         bdesc.vertexFunction = library.makeFunction(name: "v_main")
         bdesc.fragmentFunction = library.makeFunction(name: "f_blend")
         bdesc.colorAttachments[0]!.pixelFormat = accPixelFormat
-        self.blendPipeline = try? device.makeRenderPipelineState(descriptor: bdesc)
+        self.blendPipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: bdesc) }
         // 컴포지션(f_compose): 프레임버퍼를 화면좌표로 샘플 — f_main 과 동일 프리멀티 오버 블렌드.
         let cdesc = MTLRenderPipelineDescriptor()
         cdesc.vertexFunction = library.makeFunction(name: "v_main")
@@ -770,7 +775,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         catt.rgbBlendOperation = .add; catt.alphaBlendOperation = .add
         catt.sourceRGBBlendFactor = .one; catt.sourceAlphaBlendFactor = .one
         catt.destinationRGBBlendFactor = .oneMinusSourceAlpha; catt.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        self.composePipeline = try? device.makeRenderPipelineState(descriptor: cdesc)
+        self.composePipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: cdesc) }
         // 포워드 라이팅(f_lit): f_main 과 동일 프리멀티 오버 블렌드 — 라이트 반응만 다르다.
         let ldesc = MTLRenderPipelineDescriptor()
         ldesc.vertexFunction = library.makeFunction(name: "v_main")
@@ -781,7 +786,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         latt.rgbBlendOperation = .add; latt.alphaBlendOperation = .add
         latt.sourceRGBBlendFactor = .one; latt.sourceAlphaBlendFactor = .one
         latt.destinationRGBBlendFactor = .oneMinusSourceAlpha; latt.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        self.litPipeline = try? device.makeRenderPipelineState(descriptor: ldesc)
+        self.litPipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: ldesc) }
 
         clearColor = MTLClearColor(red: Double(doc.clearColor.x), green: Double(doc.clearColor.y),
                                    blue: Double(doc.clearColor.z), alpha: 1)
@@ -933,6 +938,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // 헤드리스(오디오 미생성)에선 미연결 → 브리지가 안전 no-op(트리거는 무시, 캡처 결정성 유지).
             sceneScript?.soundTransport = audio
         }
+        // 마운트 상주 GPU 메모리(통합메모리이므로 phys_footprint 델타와 함께 리포트).
+        if WapleProfiler.enabled { WapleProfiler.deviceAllocatedBytes = device.currentAllocatedSize }
     }
 
 

@@ -181,6 +181,14 @@ public struct ParticleSimulator {
 
     /// dt 만큼 진행 후 살아있는 파티클의 표시 스냅샷을 반환.
     public mutating func step(_ dt: Float) -> [Particle] {
+        guard WapleProfiler.enabled else { return _step(dt) }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let out = _step(dt)
+        WapleProfiler.recordParticleStep(count: out.count, seconds: CFAbsoluteTimeGetCurrent() - t0)
+        return out
+    }
+
+    private mutating func _step(_ dt: Float) -> [Particle] {
         time += dt
         let countBeforeEmission = particles.count
         // 방출(starttime 이후, 자식 원샷/고아는 정지). burst(실물 instantaneous)는 rate 대신 일괄 스폰.

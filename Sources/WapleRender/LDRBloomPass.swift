@@ -1,5 +1,6 @@
 import Metal
 import simd
+import WapleCore
 
 struct LDRBloomParameters: Equatable {
     let strength: Float
@@ -37,7 +38,7 @@ final class LDRBloomPass: LDRBloomEncoding {
     private let compositePipeline: MTLRenderPipelineState
 
     init?(device: MTLDevice) {
-        guard let library = try? device.makeLibrary(source: Self.metalSource, options: nil),
+        guard let library = try? WapleProfiler.compile(Self.metalSource, { try device.makeLibrary(source: Self.metalSource, options: nil) }),
               let vertex = library.makeFunction(name: "ldrBloomVertex"),
               let extract = library.makeFunction(name: "ldrBloomExtract"),
               let blur = library.makeFunction(name: "ldrBloomBlur"),
@@ -50,7 +51,7 @@ final class LDRBloomPass: LDRBloomEncoding {
             descriptor.vertexFunction = vertex
             descriptor.fragmentFunction = fragment
             descriptor.colorAttachments[0]!.pixelFormat = .bgra8Unorm
-            return try? device.makeRenderPipelineState(descriptor: descriptor)
+            return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: descriptor) }
         }
 
         guard let extractPipeline = makePipeline(extract),
