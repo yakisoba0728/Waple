@@ -80,6 +80,20 @@ final class Scene3DParticleTests: XCTestCase {
         }
     }
 
+    /// I1/#2: 같은 렌더러로 captureFrames 를 두 번 호출해도(라이브 재사용) 각 호출이 프레시 sim+clock=0 에서
+    /// 리플레이하므로 동일 t 는 바이트 동일. 수정 전엔 1차 캡처가 clock 을 전진시켜 2차가 현재 프레임을 잡았다.
+    func testCaptureFramesReproducibleAcrossCalls() throws {
+        let renderer = try mount3DParticleScene()
+        let base = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_3dpart_repro_\(UUID().uuidString)", isDirectory: true)
+        let d1 = base.appendingPathComponent("a"), d2 = base.appendingPathComponent("b")
+        for d in [d1, d2] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        let u1 = try XCTUnwrap(renderer.captureFrames(width: 160, height: 100, times: [2.0], toDir: d1).first)
+        let u2 = try XCTUnwrap(renderer.captureFrames(width: 160, height: 100, times: [2.0], toDir: d2).first)
+        XCTAssertEqual(try Data(contentsOf: u1), try Data(contentsOf: u2),
+                       "captureFrames 재호출은 프레시 리플레이라 동일 t=2s 결과가 바이트 동일해야(I1: defer 복원/리셋)")
+    }
+
     // ── 빌보드 행렬 수학: 쿼드가 카메라 right/up 평면에 놓이고(카메라 향함) 월드 위치/크기가 정확해야. ──
 
     private func makeSystem(texRatio: Float) throws -> SceneRenderer.GPUParticleSystem {
@@ -137,5 +151,48 @@ final class Scene3DParticleTests: XCTestCase {
         let xs = (0..<6).map { vtx(verts, $0).x }, ys = (0..<6).map { vtx(verts, $0).y }
         XCTAssertEqual(xs.max()! - xs.min()!, 2, accuracy: 1e-6, "가로 폭 = size")
         XCTAssertEqual(ys.max()! - ys.min()!, 4, accuracy: 1e-6, "세로 폭 = size·ratio")
+    }
+
+    // ── 시뮬 시간 구동(감사 C1/I1): 라이브 = 클램프 dt 이어가기(유한 스텝), 캡처 = 프레시 결정적 리플레이. ──
+
+    /// 방출 파티클 시스템 하나를 renderer.particleSystems 에 직접 배치(Metal 텍스처만 필요, 마운트 불요).
+    private func makeEmittingRenderer() throws -> SceneRenderer {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        let tex = try XCTUnwrap(device.makeTexture(descriptor: td))
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0.5, y: 0.5, z: 0), rate: 50, burst: 0)],
+            initializers: [.lifetimeRandom(min: 3, max: 5), .sizeRandom(min: 20, max: 40)],
+            operators: [], renderer: .sprite, maxCount: 100, startTime: 0, material: nil)
+        let sys = SceneRenderer.GPUParticleSystem(
+            sim: ParticleSimulator(def: def, seed: 1), def: def, seed: 1, texture: tex,
+            blendAdditive: true, origin: .zero, scale: SIMD2(1, 1), texRatio: 1,
+            order: 0, isTrail: false, childOf: nil, frames: [], mapSeqMirror: false)
+        let renderer = SceneRenderer()
+        renderer.particleSystems = [sys]
+        return renderer
+    }
+
+    /// C1: 라이브 프레임은 클램프 dt 로 구동돼 큰 time(가림/절전 갭) 뒤에도 유한 스텝만 밟아야 한다.
+    /// 수정 전(stepParticleSnapshots 가 liveDelta 무시, time-clock 구동)엔 300s → 9000 스텝 = 메인스레드 행.
+    func testLiveFrameStepsBoundedAfterOcclusionGap() throws {
+        let r = try makeEmittingRenderer()
+        r.particle3DClock = 0
+        _ = r.stepParticleSnapshots(time: 300, liveDelta: 1.0 / 60.0)   // draw() 가 넘기는 클램프 dt
+        XCTAssertLessThanOrEqual(r.particle3DLastStepCount, 2,
+                                 "라이브는 프레임당 유한 스텝(클램프 dt)이어야 — time-clock 캐치업 루프 금지")
+        XCTAssertGreaterThanOrEqual(r.particle3DLastStepCount, 1, "dt>0 이면 최소 1스텝 진행")
+    }
+
+    /// I1/#2: 캡처(liveDelta=nil)는 프레시 sim + clock=0 에서 0→t 결정적 리플레이 — 같은 t 두 번 = 동일 스냅샷.
+    func testCaptureReplayDeterministic() throws {
+        let a = try makeEmittingRenderer(); a.particle3DClock = 0
+        let b = try makeEmittingRenderer(); b.particle3DClock = 0
+        let s1 = a.stepParticleSnapshots(time: 2.0, liveDelta: nil).flatMap { $0 }
+        let s2 = b.stepParticleSnapshots(time: 2.0, liveDelta: nil).flatMap { $0 }
+        XCTAssertFalse(s1.isEmpty, "방출 시스템이라 t=2s 에 파티클이 있어야(결정성 검증 유의미)")
+        XCTAssertEqual(s1.count, s2.count, "프레시 sim 은 결정적 — 파티클 수 동일")
+        XCTAssertEqual(s1.map { $0.pos.x }, s2.map { $0.pos.x }, "프레시 sim 은 결정적 — 위치 동일")
+        XCTAssertEqual(s1.map { $0.age }, s2.map { $0.age }, "프레시 sim 은 결정적 — age 동일")
     }
 }

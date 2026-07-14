@@ -617,8 +617,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     // 3D 파티클(원근 빌보드) — bgra8+depth32 타깃용(2D additivePipeline 은 acc 포맷이라 별도).
     var particle3DAdditive: MTLRenderPipelineState?
     var particle3DTranslucent: MTLRenderPipelineState?
-    /// 3D 파티클 시뮬의 마지막 진행 시각(라이브/캡처 공용, mount 에서 0). encode3D 가 매 프레임 time 까지 1/30 서브스텝.
+    /// 3D 파티클 시뮬의 마지막 진행 시각(캡처 전용 — 라이브는 클램프 dt 로 구동하며 clock 미사용). mount/캡처 시작에서 0.
     var particle3DClock: Float = 0
+    /// 직전 stepParticleSnapshots 가 밟은 서브스텝 수(테스트 관측 — 라이브 프레임당 유한 스텝 보장 검증, 감사 C1).
+    var particle3DLastStepCount = 0
     var shadowPipelineStaticOpaque: MTLRenderPipelineState?
     var shadowPipelineStaticCutout: MTLRenderPipelineState?
     var shadowPipelineSkinOpaque: MTLRenderPipelineState?
@@ -997,7 +999,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if is3D {
             beginFramePool()
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
-                  encode3D(into: acc, cb: cb, device: device, time: time) else { cb.commit(); return }
+                  encode3D(into: acc, cb: cb, device: device, time: time, particleDelta: dt) else { cb.commit(); return }
             guard finalizeScene(
                 source: acc,
                 destination: drawable.texture,
@@ -1066,7 +1068,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     /// 헤드리스 시각 검증: 레이어(베이스, 효과 제외) + 파티클을 오프스크린에 렌더해 각 time 의 PNG 를 저장.
-    /// 시뮬은 t=0 에서 새로 시작해 1/30 스텝으로 각 time 까지 진행(재현 가능). 데스크탑 가림과 무관.
+    /// 시뮬은 t=0 에서 새로 시작해 1/30 스텝으로 각 time 까지 진행(재현 가능) — 2D 는 프레시 로컬 sims,
+    /// 3D 는 라이브 sim 을 프레시로 리셋 후 복원(I1). 데스크탑 가림·라이브 재생 상태와 무관.
     @discardableResult
     public func captureFrames(width: Int, height: Int, times: [Float], toDir: URL) -> [URL] {
         // 비디오-백드 씬(mount 가 VideoRenderer 에 위임 → Metal device/queue/pipeline 미설정): 그대로 두면
@@ -1085,6 +1088,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
         // 3D 씬: 메시 + 빌보드 패스(뎁스). per-frame 스크립트 평가로 각 time 마다 갱신(궤도/인트로 애니).
         if is3D {
+            // 파티클 캡처는 라이브 sim 상태를 건드리지 않고 프레시(clock=0)에서 0→t 를 재현한다(감사 I1: 라이브
+            // 렌더러 재사용 시 stale clock=T 로 t 가 아닌 현재 프레임이 잡히던 결함). struct 값복사로 저장·복원.
+            let savedSims = particleSystems.map { $0.sim }
+            let savedClock = particle3DClock
+            for i in particleSystems.indices {
+                particleSystems[i].sim = ParticleSimulator(def: particleSystems[i].def, seed: particleSystems[i].seed)
+            }
+            particle3DClock = 0
+            defer {
+                for i in particleSystems.indices { particleSystems[i].sim = savedSims[i] }
+                particle3DClock = savedClock
+            }
             var urls: [URL] = []
             for t in times.sorted() {
                 guard let cb = queue.makeCommandBuffer() else { continue }
@@ -1092,7 +1107,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 let source = sceneWantsLDRBloom
                     ? (pooledOffscreen(width, height, device, bgra: true) ?? target)
                     : target
-                guard encode3D(into: source, cb: cb, device: device, time: t) else { continue }
+                guard encode3D(into: source, cb: cb, device: device, time: t, particleDelta: nil) else { continue }
                 guard finalizeScene(
                     source: source,
                     destination: target,
