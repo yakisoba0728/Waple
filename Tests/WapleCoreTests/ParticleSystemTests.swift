@@ -26,6 +26,26 @@ final class ParticleSystemTests: XCTestCase {
      "renderer":[{"name":"sprite"}],"maxcount":500,"starttime":3}
     """
 
+    func testRotationInitializersPreserveRadiansEndToEnd() throws {
+        let twoPi = Float.pi * 2
+        let pi = Float.pi
+        let source = """
+        {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+         "initializer":[
+           {"name":"lifetimerandom","min":10,"max":10},
+           {"name":"rotationrandom","min":"\(twoPi) 0 0","max":"\(twoPi) 0 0"},
+           {"name":"angularvelocityrandom","min":"\(pi) 0 0","max":"\(pi) 0 0"}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """
+        let def = ParticleSystemDef.parse(json(source), material: nil)
+        var simulator = ParticleSimulator(def: def, seed: 7)
+
+        let particle = try XCTUnwrap(simulator.step(0).first)
+
+        XCTAssertEqual(particle.rotation.x, twoPi, accuracy: 1e-6)
+        XCTAssertEqual(particle.angularVel.x, pi, accuracy: 1e-6)
+    }
+
     func testParseSnow() {
         let d = ParticleSystemDef.parse(json(snow), material: nil)
         XCTAssertEqual(d.maxCount, 360)

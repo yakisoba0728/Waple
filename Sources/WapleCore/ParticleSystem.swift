@@ -31,8 +31,8 @@ public enum Initializer: Equatable {
     case colorRandom(min: Vec3, max: Vec3)            // 0..255
     case alphaRandom(min: Float, max: Float, exponent: Float)
     case velocityRandom(min: Vec3, max: Vec3)
-    case rotationRandom(min: Vec3, max: Vec3)          // degrees
-    case angularVelocityRandom(min: Vec3, max: Vec3)   // degrees/s
+    case rotationRandom(min: Vec3, max: Vec3)          // radians
+    case angularVelocityRandom(min: Vec3, max: Vec3)   // radians/s
     case turbulentVelocityRandom(speedMin: Float, speedMax: Float, scale: Float, offset: Float)
     case colorList(colors: [Vec3])                     // 0..1 (실물 "r g b" 문자열 목록) — 균등 랜덤 선택
     /// 스프라이트시트 프레임 선택(스폰 시 확정). between=false: CP0 기준 각도 → 시퀀스,

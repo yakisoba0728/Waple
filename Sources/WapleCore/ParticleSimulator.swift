@@ -421,9 +421,9 @@ public struct ParticleSimulator {
         case let .velocityRandom(mn, mx):
             p.vel = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z))
         case let .rotationRandom(mn, mx):
-            p.rotation = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z)) * (.pi / 180)
+            p.rotation = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z))
         case let .angularVelocityRandom(mn, mx):
-            p.angularVel = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z)) * (.pi / 180)
+            p.angularVel = SIMD3(rng.range(mn.x, mx.x), rng.range(mn.y, mx.y), rng.range(mn.z, mx.z))
         case let .turbulentVelocityRandom(smin, smax, _, _):
             // ponytail: scale/offset 은 파스만(방향 균등 랜덤 근사, 미적용) — 실물 스키마 반례 확보 시 배선
             p.vel += randomUnitVector() * rng.range(smin, smax)
