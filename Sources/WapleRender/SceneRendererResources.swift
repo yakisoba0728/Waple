@@ -65,6 +65,29 @@ extension SceneRenderer {
         return nil
     }
 
+    func resolveRequiredAsset<T>(
+        _ candidates: [String],
+        package: ScenePackage,
+        decode: (Data) -> T?,
+        alternate: () -> T? = { nil }
+    ) -> T? {
+        var foundBytes = false
+        for candidate in candidates {
+            if let data = assetData(candidate, package: package) {
+                foundBytes = true
+                if let value = decode(data) { return value }
+            }
+        }
+        if let value = alternate() { return value }
+        guard !foundBytes,
+              !candidates.isEmpty,
+              candidates.allSatisfy({ WallpaperPathSecurity.normalizedRelativePath($0) != nil }) else {
+            return nil
+        }
+        markMissingRequiredSharedAsset()
+        return nil
+    }
+
     /// 레이어를 후→전 순서(JSON 순서)로 GPU 리소스화. 디코드 실패 레이어는 스킵.
     func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPULayer] {
         let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
@@ -95,15 +118,31 @@ extension SceneRenderer {
                 frames = sprite.frames
                 effW = max(1, Int(sprite.frames[0].atlasWidth.rounded()))
                 effH = max(1, Int(sprite.frames[0].atlasHeight.rounded()))
-            } else if let texData = assetData(layer.textureEntryName, package: package),
-                      let tex = TexImage.parse(texData),
-                      let d = TexDecoder.rgba(from: tex, data: texData, properties: variantProperties) {
-                guard let t = makeTexture(d.pixels, d.width, d.height, device) else { continue }
-                mtl = t; effW = d.width; effH = d.height
-            } else if let d = bitmapRGBAFile(layer.textureEntryName) {
-                guard let t = makeTexture(d.pixels, d.width, d.height, device) else { continue }
-                mtl = t; effW = d.width; effH = d.height
-            } else { continue }
+            } else if let loaded: (texture: MTLTexture, width: Int, height: Int) = resolveRequiredAsset(
+                [layer.textureEntryName],
+                package: package,
+                decode: { data in
+                    guard let tex = TexImage.parse(data),
+                          let decoded = TexDecoder.rgba(from: tex, data: data, properties: variantProperties),
+                          let texture = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
+                        return nil
+                    }
+                    return (texture, decoded.width, decoded.height)
+                },
+                alternate: {
+                    guard let decoded = bitmapRGBAFile(layer.textureEntryName),
+                          let texture = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
+                        return nil
+                    }
+                    return (texture, decoded.width, decoded.height)
+                }
+            ) {
+                mtl = loaded.texture
+                effW = loaded.width
+                effH = loaded.height
+            } else {
+                continue
+            }
             // 스프라이트 프레임 있으면 상시 리드로 필요(gif 재생) — needsDisplay 정책은 shouldAnimate 로.
             if !frames.isEmpty { hasAnimations = true }
             let verts = Self.quadVertices(layer: layer, projW: w, projH: h)
@@ -507,24 +546,33 @@ extension SceneRenderer {
     func resolveTextureWithFrames(_ name: String?, package: ScenePackage, device: MTLDevice)
         -> (texture: MTLTexture, frames: [TexImage.TexFrame])? {
         if let name {
-            let cand = name.hasSuffix(".tex") ? name : "materials/\(name).tex"
-            if let d = assetData(cand, package: package) ?? assetData(name, package: package),
-               let tex = TexImage.parse(d) {
-                // 다중 image = 아틀라스 페이지: 세로로 이어붙인 단일 텍스처 + frame.y 페이지 오프셋(아래 헬퍼).
-                let multipage = tex.imageCount > 1
-                if multipage, !tex.frames.isEmpty,
-                   let stacked = stackedAtlas(tex: tex, data: d, device: device) { return stacked }
-                // 조건 변형(예 3D 모델 튜닉색): variantProperties 로 mip 선택. 비-변형은 기존 경로 그대로.
-                if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties),
-                   let m = makeTexture(dec.pixels, dec.width, dec.height, device) {
-                    // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
-                    // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백
-                    // (page 0 표시)해 "틀린 애니" 대신 "정지"로 명예로운 실패(advisor). 단일 image 는 frames
-                    // 정상(전부 id0, 오프셋 무관). 영향 실측 6씬(3379048027 7페이지/420프레임 sumH 52920,
-                    // 3363252053·3448877775 7페이지, 3577990983 5페이지, 3000562427 day/night 3페이지).
-                    // ponytail: 진짜 고침 = 페이지별 텍스처 또는 온디맨드 프레임 스트리밍(초대형 시트 ~1.7GB) — 재설계.
-                    return (m, multipage ? [] : tex.frames)
+            let candidates = name.hasSuffix(".tex")
+                ? [name]
+                : ["materials/\(name).tex", name]
+            if let resolved: (texture: MTLTexture, frames: [TexImage.TexFrame]) = resolveRequiredAsset(
+                candidates,
+                package: package,
+                decode: { d in
+                    guard let tex = TexImage.parse(d) else { return nil }
+                    let multipage = tex.imageCount > 1
+                    if multipage, !tex.frames.isEmpty,
+                       let stacked = stackedAtlas(tex: tex, data: d, device: device) {
+                        return stacked
+                    }
+                    if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties),
+                       let texture = makeTexture(dec.pixels, dec.width, dec.height, device) {
+                        // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
+                        // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백
+                        // (page 0 표시)해 "틀린 애니" 대신 "정지"로 명예로운 실패(advisor). 단일 image 는 frames
+                        // 정상(전부 id0, 오프셋 무관). 영향 실측 6씬(3379048027 7페이지/420프레임 sumH 52920,
+                        // 3363252053·3448877775 7페이지, 3577990983 5페이지, 3000562427 day/night 3페이지).
+                        // ponytail: 진짜 고침 = 페이지별 텍스처 또는 온디맨드 프레임 스트리밍(초대형 시트 ~1.7GB) — 재설계.
+                        return (texture, multipage ? [] : tex.frames)
+                    }
+                    return nil
                 }
+            ) {
+                return resolved
             }
         }
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }

@@ -539,6 +539,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var particleSystems: [GPUParticleSystem] = []
     var hasParticles = false
     var assetBaseDir: URL?  // WE 공유 에셋 폴백 디렉터리(설정), 패키지에 없는 .tex 용
+
+    public private(set) var hasMissingRequiredSharedAssets = false
+
+    func markMissingRequiredSharedAsset() {
+        hasMissingRequiredSharedAssets = true
+    }
+
     /// 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 값(기본값+유저/프리셋 오버라이드).
     /// mount 시 스냅샷 — 프로퍼티 변경은 reapply(=remount)로 반영(LibraryViewModel.setProperty→onApply).
     var variantProperties: [String: PropertyValue] = [:]
@@ -599,6 +606,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
+        hasMissingRequiredSharedAssets = false
         scenePausedAt = nil
         shouldAnimate = false
         videoTextureMP4URL = nil   // 마운트 재사용: 이전 비디오-백드 상태가 비-비디오 씬 캡처로 새지 않게.
