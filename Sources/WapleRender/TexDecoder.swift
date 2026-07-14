@@ -62,6 +62,51 @@ public enum TexDecoder {
         return decodeMip(payload: tex.payload, mip: tex.mips[imageIndex], data: data)
     }
 
+    public enum BCFormat { case bc1, bc2, bc3 }
+
+    /// 네이티브 BC 업로드 후보. CPU 디코드 없이 LZ4 해제된 raw BC 블록을 `.bc1/2/3_rgba` 로 직접 올린다.
+    /// blocks 는 decode dims 레이아웃(ceil(decodeW/4) 블록/행), bytesPerRow 는 그 소스 stride —
+    /// 텍스처를 image dims 로 만들고 이 stride 를 주면 Metal 이 패딩 블록을 건너뛰어 크롭을 무비용 처리한다.
+    public struct NativeBCUpload {
+        public let blocks: Data
+        public let format: BCFormat
+        public let width: Int         // 타깃 텍스처 폭(= rgba()+cropped() 반환 폭, 파리티)
+        public let height: Int
+        public let bytesPerRow: Int   // 소스 블록 stride = ceil(decodeW/4)*blockBytes
+    }
+
+    /// BC(DXT) 텍스처를 Metal 네이티브 BC 로 올릴 후보 추출(LZ4 만 해제, RGBA 전개 안 함). 불가면 nil →
+    /// 호출자는 기존 rgba() CPU 경로로 폴백. **호출 규약**: keepFullAtlas(스프라이트 아틀라스)는 호출자가
+    /// 부르지 말 것 — 그 텍스처는 spriteFrameTexture 가 blit.copy(BC→rgba8 무효)로 소비하므로 반드시 CPU.
+    /// 반환 dims 는 rgba()+cropped() 와 **정확히 일치**시켜 effW/UV/texRatio 무회귀. 크롭(imgW<decodeW)은
+    /// image dims 텍스처 + decode-dims stride 로 Metal 이 패딩/부분 엣지 블록을 GPU 에서 처리(실측 검증).
+    /// 멀티페이지 아틀라스는 CPU 세로 스택(stackedAtlas)이 필요해 대상 제외. 변형(properties)은 selectedMip.
+    public static func nativeBC(from tex: TexImage, data: Data,
+                                properties: [String: PropertyValue] = [:]) -> NativeBCUpload? {
+        let format: BCFormat
+        switch tex.payload {
+        case .bc1: format = .bc1
+        case .bc2: format = .bc2
+        case .bc3: format = .bc3
+        default: return nil
+        }
+        guard tex.imageCount <= 1, let mip = tex.selectedMip(properties: properties),
+              let blocks = mipBytes(mip: mip, data: data) else { return nil }
+        let blockBytes = format == .bc1 ? 8 : 16
+        let dw = mip.decodeWidth, dh = mip.decodeHeight
+        guard dw > 0, dh > 0 else { return nil }
+        // 해제 블록이 decode dims 전체를 담는지 확인(잘린/손상 데이터 방어) — 부족하면 rgba() 폴백.
+        guard blocks.count >= ((dw + 3) / 4) * ((dh + 3) / 4) * blockBytes else { return nil }
+        let bytesPerRow = ((dw + 3) / 4) * blockBytes
+        // 타깃 dims = cropped() 와 동일 규칙(무회귀).
+        let iw = mip.imageWidth, ih = mip.imageHeight
+        let w: Int, h: Int
+        if iw == dw && ih == dh { (w, h) = (dw, dh) }
+        else if iw > 0, ih > 0, iw <= dw, ih <= dh { (w, h) = (iw, ih) }
+        else { (w, h) = (dw, dh) }
+        return NativeBCUpload(blocks: blocks, format: format, width: w, height: h, bytesPerRow: bytesPerRow)
+    }
+
     /// mip 기반(raw/DXT) 포맷 1장 디코드 + 패딩 크롭. 단일/다중 페이지 공용(mip 인자로 페이지 선택).
     private static func decodeMip(payload: TexImage.PayloadKind, mip: TexImage.CompressedMip, data: Data,
                                   keepFullAtlas: Bool = false)

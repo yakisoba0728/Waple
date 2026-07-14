@@ -279,29 +279,27 @@ extension SceneRenderer {
         // ── 빌보드(2D 이미지 레이어). 텍스처 로딩은 2D 경로와 동일(assetData→TexImage→TexDecoder). ──
         var bbLoaded = 0, bbSkipped = 0
         for layer in doc.layers {
-            let decoded: (pixels: Data, width: Int, height: Int)
+            // 빌보드 텍스처도 2D 와 동일 공유 경로(makeImageTexture): BC 는 네이티브 업로드, 그 외 CPU 폴백.
+            let mtl: MTLTexture, texW: Int, texH: Int
             if layer.textureEntryName.isEmpty {
-                decoded = (Data([255, 255, 255, 255]), 1, 1)
+                guard let t = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) else { bbSkipped += 1; continue }
+                mtl = t; texW = 1; texH = 1
             } else {
-                guard let resolved: (pixels: Data, width: Int, height: Int) = resolveRequiredAsset(
+                guard let up: (texture: MTLTexture, width: Int, height: Int) = resolveRequiredAsset(
                     [layer.textureEntryName],
                     package: package,
                     decode: { data in
                         guard let tex = TexImage.parse(data) else { return nil }
-                        return TexDecoder.rgba(from: tex, data: data, properties: variantProperties)
+                        return makeImageTexture(tex: tex, data: data, device: device)
                     }
                 ) else {
                     bbSkipped += 1
                     continue
                 }
-                decoded = resolved
+                mtl = up.texture; texW = up.width; texH = up.height
             }
-            guard let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
-                bbSkipped += 1
-                continue
-            }
-            let effW = layer.isFrameBuffer ? Int(max(1, projW)) : decoded.width
-            let effH = layer.isFrameBuffer ? Int(max(1, projH)) : decoded.height
+            let effW = layer.isFrameBuffer ? Int(max(1, projW)) : texW
+            let effH = layer.isFrameBuffer ? Int(max(1, projH)) : texH
             var effects: [EffectGPU] = []
             for eff in layer.effects {
                 if let translated = buildTranslatedEffect(eff, package: package, device: device,
