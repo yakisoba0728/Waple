@@ -655,4 +655,79 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertFalse(doc.lights3D.isEmpty, "라이트 파스")
         XCTAssertTrue(doc.forwardLit2D, "2D 포워드 라이팅 게이트(camera3D==nil) 유지 — 3D 승격 시 소실")
     }
+
+    func testSelfContainedRequiredLayerDoesNotReportSharedMiss() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/x.json","visible":true}]}
+        """
+        let package = try pkg([
+            ("scene.json", scene),
+            ("models/x.json", model),
+            ("materials/m.json", material),
+        ])
+        var misses = 0
+
+        let document = try SceneDocument.parse(
+            package: package,
+            assets: { _ in nil },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+
+        XCTAssertEqual(document.layers.count, 1)
+        XCTAssertEqual(misses, 0)
+    }
+
+    func testRequiredLayerResolvedBySharedAssetsDoesNotReportMiss() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/util/solidlayer.json","visible":true}]}
+        """
+        let package = try pkg([("scene.json", scene)])
+        let shared: [String: String] = [
+            "models/util/solidlayer.json": #"{"material":"materials/util/solidlayer.json"}"#,
+            "materials/util/solidlayer.json": #"{"passes":[{"shader":"flat"}]}"#,
+        ]
+        var misses = 0
+
+        let document = try SceneDocument.parse(
+            package: package,
+            assets: { shared[$0].map { Data($0.utf8) } },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+
+        XCTAssertEqual(document.layers.count, 1)
+        XCTAssertEqual(misses, 0)
+    }
+
+    func testMissingRequiredLayerReportsButInvalidPathDoesNot() throws {
+        let missingScene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/missing.json","visible":true}]}
+        """
+        var misses = 0
+        let missingDocument = try SceneDocument.parse(
+            package: try pkg([("scene.json", missingScene)]),
+            assets: { _ in nil },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+        XCTAssertTrue(missingDocument.layers.isEmpty)
+        XCTAssertEqual(misses, 1)
+
+        let rejectedScene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"../outside.json","visible":true}]}
+        """
+        var rejectedMisses = 0
+        let rejectedDocument = try SceneDocument.parse(
+            package: try pkg([("scene.json", rejectedScene)]),
+            assets: { _ in
+                XCTFail("invalid relative paths must not reach the shared resolver")
+                return nil
+            },
+            onMissingRequiredAsset: { rejectedMisses += 1 }
+        )
+        XCTAssertTrue(rejectedDocument.layers.isEmpty)
+        XCTAssertEqual(rejectedMisses, 0)
+    }
 }

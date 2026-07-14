@@ -209,8 +209,9 @@ extension SceneRenderer {
         }
         var loaded = 0, skipped = 0
         for obj in doc.objects3D {
-            guard let mdlData = assetData(obj.model, package: package),
-                  let model = Model3D.parse(mdlData) else {
+            guard let model: Model3D = resolveRequiredAsset(
+                [obj.model], package: package, decode: { Model3D.parse($0) }
+            ) else {
                 NSLog("%@", "[Waple] 3D: mdl load failed: \(obj.model)")
                 skipped += 1
                 continue
@@ -280,13 +281,19 @@ extension SceneRenderer {
             let decoded: (pixels: Data, width: Int, height: Int)
             if layer.textureEntryName.isEmpty {
                 decoded = (Data([255, 255, 255, 255]), 1, 1)
-            } else if let texData = assetData(layer.textureEntryName, package: package),
-                      let tex = TexImage.parse(texData),
-                      let dec = TexDecoder.rgba(from: tex, data: texData, properties: variantProperties) {
-                decoded = dec
             } else {
-                bbSkipped += 1
-                continue
+                guard let resolved: (pixels: Data, width: Int, height: Int) = resolveRequiredAsset(
+                    [layer.textureEntryName],
+                    package: package,
+                    decode: { data in
+                        guard let tex = TexImage.parse(data) else { return nil }
+                        return TexDecoder.rgba(from: tex, data: data, properties: variantProperties)
+                    }
+                ) else {
+                    bbSkipped += 1
+                    continue
+                }
+                decoded = resolved
             }
             guard let mtl = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
                 bbSkipped += 1

@@ -26,7 +26,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 
 | 항목 | 영향 | 메모 |
 | --- | --- | --- |
-| 3D 메시 라이팅 | 코퍼스 5씬 | 2D 포워드 라이팅(`f_lit`)은 완료. 3D 메시는 unlit(Mesh3DShaders). 실물 규약 유니폼 팩(SceneLight3D.packUniforms)은 이미 있음 |
+| ~~3D 메시 라이팅~~ | **완료(P3/P4)** | 3D 메시·`LIGHTING` 원근 빌보드 Cook–Torrance PBR, 최대 4 `lpoint`, 6면 point-shadow atlas + 9-tap PCF 완료([Scene3DLighting.swift](Sources/WapleRender/Scene3DLighting.swift), [SceneRenderer3D.swift](Sources/WapleRender/SceneRenderer3D.swift)); 비-LIGHTING 빌보드는 기존 unlit 유지 |
 | HDR/톤맵 | 대부분 해소 | **2D 씬 HDR ACES 톤맵 완료**(2026-07-13 Wave3, [HDRPostPass.swift](Sources/WapleRender/HDRPostPass.swift)) — 백화 해소(2802·2899 실측 정상). 잔여: ①이펙트-헤비 씬 빨강(2881, 아래) ②블룸 확산(파싱만) ③3D 씬 HDR ④라이트 intensity>1(실측 9.84) |
 | 원근 태양계 라이팅·노멀맵 1건·스팟 콘 | 각 1씬 내외 | 2D 라이팅 SP 잔여 목록 |
 | 파리티 상위 각개 진단 | 2902406982(0.37) 등 | 방법: rank.py 랭킹 → drawPlan prefix 이분 → SKIP 노브 |
@@ -52,7 +52,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 ## 제품화 — 트리거: 배포 결심
 
 1. ~~notify() NSLog-only~~ → **부분 해소(2026-07-12 SP1′)**: 메인창 열림 시 창 내 배너(StatusBanner)로 표시. 잔여: 창 닫힘 상태의 오류는 여전히 NSLog only → UNUserNotification 승격은 배포 결심 시
-2. 최초 실행 온보딩 + base-assets/ffmpeg 미설정 안내 (현재 조용한 저하)
+2. 최초 실행 온보딩 + base-assets/ffmpeg 미설정 안내 → **base-assets 조용한 저하 부분 해소**: 실제 필수 공유 에셋 miss 때 설정 경로를 StatusBanner로 앱 세션·설정 fingerprint당 1회 안내. 잔여: 최초 실행 onboarding, ffmpeg 미설정 안내, 메인창 닫힘 상태의 base-assets NSLog-only 안내
 3. CI 구축 — 현재 저장소에 CI 자체가 없음. `.saver`(WapleSaverView.m) clang 컴파일 스텝 포함(현재 `swift test` 커버리지 밖)
 4. LICENSE 결정 (README "미정")
 5. 코드사인/공증, GUI 스모크, 워크샵 E2E
