@@ -11,7 +11,11 @@ struct Scene3DMaterialValues: Equatable {
 
     static func parse(_ constants: [String: Any]?) -> Self {
         guard let constants else { return Self() }
-        let values = Dictionary(uniqueKeysWithValues: constants.map { ($0.key.lowercased(), $0.value) })
+        // case-only 중복 키(예: "Alpha"+"alpha")는 원본 키 정렬 후 첫 키를 채택해 결정적으로 병합한다.
+        // (uniquingKeysWith 클로저는 값만 받으므로 정렬 없이는 dict 순회 비결정성이 런마다 결과를 가른다.)
+        let values = Dictionary(
+            constants.sorted { $0.key < $1.key }.map { ($0.key.lowercased(), $0.value) },
+            uniquingKeysWith: { first, _ in first })
         var result = Self()
         if let roughness = numbers(values["roughness"])?.first { result.roughness = roughness }
         if let metallic = numbers(values["metallic"])?.first { result.metallic = metallic }

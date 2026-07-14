@@ -61,6 +61,26 @@ final class Scene3DLightingTests: XCTestCase {
         XCTAssertEqual(authored.specularTint, SIMD3(0.9, 0.8, 0.7))
     }
 
+    func testMaterialParserMergesCaseOnlyDuplicateKeysDeterministically() {
+        // 실코퍼스 3470948192 DefaultMaterial: "Alpha"+"alpha", "Color"+"color" 공존.
+        // 수정 전엔 lowercased 후 중복 키로 Dictionary(uniqueKeysWithValues:)가 SIGTRAP(exit 133).
+        let corpus = Scene3DMaterialValues.parse([
+            "Alpha": 1,
+            "Color": "1.00000 1.00000 1.00000",
+            "alpha": 1,
+            "color": "0.00000 0.00000 0.00000",
+            "metallic": 1,
+            "roughness": 0.6,
+        ])
+        XCTAssertEqual(corpus.roughness, 0.6, accuracy: 1e-6)
+        XCTAssertEqual(corpus.metallic, 1)
+        XCTAssertEqual(corpus.specularTint, SIMD3(1, 1, 1))
+
+        // 결정성 잠금: 읽는 키가 case-only 중복이고 값이 다르면 정렬상 첫 원본 키("Roughness")를 채택.
+        let tie = Scene3DMaterialValues.parse(["Roughness": 0.2, "roughness": 0.9])
+        XCTAssertEqual(tie.roughness, 0.2, accuracy: 1e-6)
+    }
+
     func testNormalMatrixHandlesNonUniformScaleAndSingularFallback() {
         let model = Scene3DMath.modelMatrix(
             origin: .zero,
