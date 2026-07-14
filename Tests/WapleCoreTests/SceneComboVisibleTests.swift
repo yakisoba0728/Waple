@@ -85,4 +85,55 @@ final class SceneComboVisibleTests: XCTestCase {
         XCTAssertEqual(obj["useFallbackColor"] as? Bool, false)
         XCTAssertEqual(obj["enabled"] as? Bool, true, "{user,value} 바인딩 → 정적 value 로 해석")
     }
+
+    /// 텍스트 스크립트의 저장 `scriptproperties`(사용자 오버라이드)를 parseText 가 보존하는지 —
+    /// 미보존 시 시계 스크립트가 소스 기본값(24h·초숨김)으로 폴백(코퍼스 117씬 패턴). 평문 텍스트는 nil(무회귀).
+    func testTextScriptPropertiesPreservedAtParse() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"Clock","font":"systemfont_arial","origin":"50 50 0","pointsize":16,
+            "text":{"script":"export function update(v){return v;}","value":"12:00",
+                    "scriptproperties":{"showSeconds":true,"delimiter":"-","use24hFormat":{"user":"h","value":false}}}},
+           {"id":2,"name":"Plain","font":"systemfont_arial","origin":"10 10 0","text":"static"}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let clock = try XCTUnwrap(doc.texts.first { $0.name == "Clock" })
+        let json = try XCTUnwrap(clock.scriptProps, "text scriptproperties 보존")
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(obj["showSeconds"] as? Bool, true)
+        XCTAssertEqual(obj["delimiter"] as? String, "-")
+        XCTAssertEqual(obj["use24hFormat"] as? Bool, false, "{user,value} 바인딩 → 정적 value 로 해석")
+        // 무회귀: 스크립트 없는 평문 텍스트는 오버라이드 없음(nil → 소스 무주입).
+        let plain = try XCTUnwrap(doc.texts.first { $0.name == "Plain" })
+        XCTAssertNil(plain.scriptProps, "평문 텍스트는 scriptProps nil")
+    }
+
+    /// 효과 상수 스크립트(constantshadervalues 바인딩)의 저장 `scriptproperties`를 parseEffects 가 보존하는지.
+    /// 벡터 value("r g b" 컬러 — float 단일파스 실패로 dict 브랜치 도달, 실물 3388330010 color 패턴)에서
+    /// 스크립트가 캡처되므로 그 자리에 scriptProps 보존. 스크립트 없는 정적 상수는 미포함(무회귀).
+    /// (주의: 스칼라 value 바인딩은 상류 float 언랩 short-circuit 으로 스크립트 자체가 미캡처 — 별도 기존 결함.)
+    func testEffectConstantScriptPropertiesPreservedAtParse() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"L","image":"models/x.json","origin":"50 50 0","size":"10 10",
+            "effects":[{"file":"effects/fx/effect.json","passes":[
+              {"constantshadervalues":{
+                 "g_Color":{"script":"export function update(v){return v;}","value":"1 1 1",
+                            "scriptproperties":{"timer":1,"gain":{"user":"g","value":0.9}}},
+                 "plain":0.25}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let layer = try XCTUnwrap(doc.layers.first { $0.name == "L" })
+        let pass = try XCTUnwrap(layer.effects.first?.passList.first)
+        let json = try XCTUnwrap(pass.constantScriptProps["g_Color"], "effect const scriptproperties 보존")
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual((obj["timer"] as? NSNumber)?.doubleValue, 1)
+        XCTAssertEqual((obj["gain"] as? NSNumber)?.doubleValue ?? 0, 0.9, accuracy: 1e-6, "{user,value} 바인딩 → 정적 value")
+        // 무회귀: 스크립트 없는 정적 상수는 constantScriptProps 에 미포함.
+        XCTAssertNil(pass.constantScriptProps["plain"], "정적 상수는 오버라이드 없음")
+    }
 }

@@ -5,6 +5,9 @@ public struct SceneEffectPass: Equatable {
     public var constants: [String: [Float]] = [:]
     /// 상수에 걸린 프로퍼티 스크립트(키 → JS 소스) — 렌더러가 per-frame 평가(컬러 사이클 등).
     public var constantScripts: [String: String] = [:]
+    /// 상수 스크립트의 저장 `scriptproperties`(사용자 오버라이드) — 키 → JSON 문자열. 레이어/텍스트
+    /// 스크립트와 동일 규약: 엔진 로드 시 주입해 소스 `createScriptProperties().addX({value})` 기본값 대체.
+    public var constantScriptProps: [String: String] = [:]
     public var textureNames: [String?] = []
     public var combos: [String: Int] = [:]
     public init() {}
@@ -120,6 +123,10 @@ public struct SceneTextLayer: Equatable {
     public var name: String = ""
     public let text: String              // 평문(스크립트면 "")
     public let script: String?           // {"script": ...} — update(value) 가 텍스트 반환
+    /// 텍스트 스크립트의 저장 `scriptproperties`(사용자 오버라이드) — JSON 문자열. 레이어 프로퍼티
+    /// 스크립트(propertyScriptProps)와 동일 규약: 미주입 시 소스 기본값 폴백(예 시계 24h/초 표시가
+    /// 저작자 저장값 대신 스크립트 기본으로 되돌아감). script 부재 시 nil(무회귀).
+    public var scriptProps: String? = nil
     public let font: String              // "systemfont_arial" | "fonts/....otf" (pkg/base-assets)
     public let pointSize: Float          // 씬 픽셀 단위 글자 크기
     public let color: Vec3
@@ -776,14 +783,17 @@ extension SceneDocument {
     private static func parseText(_ obj: [String: Any], order: Int) -> SceneTextLayer {
         var plain = ""
         var script: String? = nil
+        var scriptProps: String? = nil
         if let s = obj["text"] as? String { plain = s }
         else if let d = obj["text"] as? [String: Any] {
             script = d["script"] as? String
             plain = (d["value"] as? String) ?? ""
+            // 레이어 프로퍼티 스크립트(line 500)와 동일 게이트: 스크립트가 있을 때만 오버라이드 보존.
+            if script != nil { scriptProps = Self.scriptPropsJSON(d["scriptproperties"]) }
         }
         return SceneTextLayer(
             name: (obj["name"] as? String) ?? "",
-            text: plain, script: script,
+            text: plain, script: script, scriptProps: scriptProps,
             font: (obj["font"] as? String) ?? "systemfont_arial",
             pointSize: float(obj["pointsize"]) ?? 16,
             color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
@@ -1102,7 +1112,11 @@ extension SceneDocument {
                         }
                         else if let dict = v as? [String: Any] {
                             // 바인딩 객체 {script/user/value} — 정적 value 언랩 + 스크립트 캡처(per-frame 평가용).
-                            if let sc = dict["script"] as? String { p.constantScripts[k] = sc }
+                            if let sc = dict["script"] as? String {
+                                p.constantScripts[k] = sc
+                                // 스크립트가 있을 때만 저장 오버라이드 보존(레이어/텍스트 경로와 동일 규약).
+                                if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { p.constantScriptProps[k] = sp }
+                            }
                             if let f = float(dict["value"]) { p.constants[k] = [f] }
                             else if let sv = dict["value"] as? String {
                                 let f = floatList(sv)

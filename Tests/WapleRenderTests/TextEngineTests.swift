@@ -59,6 +59,54 @@ final class TextEngineTests: XCTestCase {
         XCTAssertEqual(fixed.evaluate(current: ""), "0.322 0.231 0.416 s=5 flag=true")
     }
 
+    /// end-to-end 재현체(코퍼스 3000562427 mainClock 등 117씬 패턴): 텍스트 레이어의 저장
+    /// `scriptproperties`(showSeconds=true override, 소스 기본 false)가 parseText→buildTexts→
+    /// makeScriptEngine 를 관통해 초기 렌더 텍스트에 반영되는지. 미배선 시 소스 기본값으로 폴백해
+    /// 초 없는 "HH:MM"(콜론 1)만 나온다. captureDateEpochMillis 로 시각 고정(초="00" 결정성).
+    func testTextScriptPropsWiredThroughBuildTexts() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        TextScriptEngine.captureDateEpochMillis = 1_704_110_400_000
+        defer { TextScriptEngine.captureDateEpochMillis = nil }
+        let clock = """
+        'use strict';
+        export var scriptProperties = createScriptProperties()
+            .addCheckbox({ name: 'showSeconds', value: false })
+            .addText({ name: 'delimiter', value: ':' })
+            .finish();
+        export function update(value) {
+            var t = new Date();
+            var hh = ("00" + t.getHours()).slice(-2);
+            var mm = ("00" + t.getMinutes()).slice(-2);
+            var out = hh + scriptProperties.delimiter + mm;
+            if (scriptProperties.showSeconds) { out += scriptProperties.delimiter + ("00" + t.getSeconds()).slice(-2); }
+            return out;
+        }
+        """
+        func firstRenderedText(withOverride: Bool) throws -> String {
+            var text: [String: Any] = ["script": clock, "value": ""]
+            if withOverride { text["scriptproperties"] = ["showSeconds": true] }
+            let scene: [String: Any] = [
+                "general": ["orthogonalprojection": ["width": 100, "height": 100], "clearcolor": "0 0 0"],
+                "objects": [["id": 1, "name": "Clock", "text": text, "font": "systemfont_arial",
+                             "origin": "50 50 0", "pointsize": 16]]
+            ]
+            let pkg = ScenePackage.assemble([(name: "scene.json", data: try JSONSerialization.data(withJSONObject: scene))])
+            let doc = try SceneDocument.parse(package: pkg, userProps: [:])
+            if withOverride {
+                let js = try XCTUnwrap(doc.texts.first?.scriptProps, "파스가 scriptProps 보존")
+                XCTAssertEqual((try JSONSerialization.jsonObject(with: Data(js.utf8)) as? [String: Any])?["showSeconds"] as? Bool, true)
+            } else {
+                XCTAssertNil(doc.texts.first?.scriptProps, "오버라이드 없으면 nil(무회귀)")
+            }
+            return try XCTUnwrap(SceneRenderer().buildTexts(doc: doc, package: pkg, device: device).first?.lastText)
+        }
+        let base = try firstRenderedText(withOverride: false)
+        let fixed = try firstRenderedText(withOverride: true)
+        XCTAssertEqual(base.filter { $0 == ":" }.count, 1, "override 미주입 = 초 없음(base): \(base)")
+        XCTAssertEqual(fixed.filter { $0 == ":" }.count, 2, "override 주입 = 초 표시(fix): \(fixed)")
+        XCTAssertNotEqual(base, fixed, "저장 오버라이드가 렌더 텍스트를 WE 방향(초 표시)으로 이동")
+    }
+
     /// captureDateEpochMillis 설정 시 시계 스크립트가 실 벽시계 대신 고정 epoch 를 렌더(캡처 결정성).
     /// getHours 는 로컬 TZ 라 기대값도 로컬 TZ 로 계산 — 머신/CI TZ 무관하게 일치. defer 로 프로세스 전역
     /// static 을 리셋(XCTest 단일 프로세스 — 미복원 시 testClockScriptReturnsCurrentTime(실시각 검증)에 누수).
