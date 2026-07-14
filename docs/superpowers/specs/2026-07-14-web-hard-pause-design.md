@@ -1,7 +1,7 @@
 # Web Hard Pause Design
 
 **Date:** 2026-07-14
-**Status:** Draft complete; written review pending
+**Status:** Approved
 
 ## Goal
 
