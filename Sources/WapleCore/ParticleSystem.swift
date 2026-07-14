@@ -26,13 +26,15 @@ public enum Emitter: Equatable {
 }
 
 public enum Initializer: Equatable {
-    case lifetimeRandom(min: Float, max: Float)
-    case sizeRandom(min: Float, max: Float)
-    case colorRandom(min: Vec3, max: Vec3)            // 0..255
+    case lifetimeRandom(min: Float, max: Float, exponent: Float = 1)
+    case sizeRandom(min: Float, max: Float, exponent: Float = 1)
+    /// 0..255. [보존/추측] 한 t 로 min↔max 색 라인을 보간; WE RGB 축별 draw 반증 시 color만 재검토.
+    case colorRandom(min: Vec3, max: Vec3, exponent: Float = 1)
     case alphaRandom(min: Float, max: Float, exponent: Float)
-    case velocityRandom(min: Vec3, max: Vec3)
-    case rotationRandom(min: Vec3, max: Vec3)          // radians
-    case angularVelocityRandom(min: Vec3, max: Vec3)   // radians/s
+    /// [보존/추측] 방향/회전 스프레드 보존을 위해 성분별 독립 t를 사용한다.
+    case velocityRandom(min: Vec3, max: Vec3, exponent: Float = 1)
+    case rotationRandom(min: Vec3, max: Vec3, exponent: Float = 1)          // radians
+    case angularVelocityRandom(min: Vec3, max: Vec3, exponent: Float = 1)   // radians/s
     case turbulentVelocityRandom(speedMin: Float, speedMax: Float, scale: Float, offset: Float)
     case colorList(colors: [Vec3])                     // 0..1 (실물 "r g b" 문자열 목록) — 균등 랜덤 선택
     /// 스프라이트시트 프레임 선택(스폰 시 확정). between=false: CP0 기준 각도 → 시퀀스,
@@ -217,22 +219,31 @@ public struct ParticleSystemDef: Equatable {
         var inits: [Initializer] = []
         for case let i as [String: Any] in (json["initializer"] as? [Any] ?? []) {
             switch i["name"] as? String {
-            case "lifetimerandom": inits.append(.lifetimeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1))
-            case "sizerandom": inits.append(.sizeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1))
+            case "lifetimerandom":
+                inits.append(.lifetimeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
+                                             exponent: pfloat(i["exponent"]) ?? 1))
+            case "sizerandom":
+                inits.append(.sizeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
+                                         exponent: pfloat(i["exponent"]) ?? 1))
             case "colorrandom":
                 inits.append(.colorRandom(min: pvec3(i["min"]) ?? Vec3(x: 255, y: 255, z: 255),
-                                          max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255)))
+                                          max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255),
+                                          exponent: pfloat(i["exponent"]) ?? 1))
             case "alpharandom":
-                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1, exponent: pfloat(i["exponent"]) ?? 1))
+                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
+                                          exponent: pfloat(i["exponent"]) ?? 1))
             case "velocityrandom":
                 inits.append(.velocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                                             max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                             exponent: pfloat(i["exponent"]) ?? 1))
             case "rotationrandom":
                 inits.append(.rotationRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                                             max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                             exponent: pfloat(i["exponent"]) ?? 1))
             case "angularvelocityrandom":
                 inits.append(.angularVelocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                                    max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                                                    max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                                    exponent: pfloat(i["exponent"]) ?? 1))
             case "turbulentvelocityrandom":
                 inits.append(.turbulentVelocityRandom(speedMin: pfloat(i["speedmin"]) ?? 0, speedMax: pfloat(i["speedmax"]) ?? 0,
                                                       scale: pfloat(i["scale"]) ?? 1, offset: pfloat(i["offset"]) ?? 0))
