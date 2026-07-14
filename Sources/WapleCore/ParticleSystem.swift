@@ -221,29 +221,29 @@ public struct ParticleSystemDef: Equatable {
             switch i["name"] as? String {
             case "lifetimerandom":
                 inits.append(.lifetimeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
-                                             exponent: pfloat(i["exponent"]) ?? 1))
+                                             exponent: pexponent(i["exponent"]) ?? 1))
             case "sizerandom":
                 inits.append(.sizeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
-                                         exponent: pfloat(i["exponent"]) ?? 1))
+                                         exponent: pexponent(i["exponent"]) ?? 1))
             case "colorrandom":
                 inits.append(.colorRandom(min: pvec3(i["min"]) ?? Vec3(x: 255, y: 255, z: 255),
                                           max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255),
-                                          exponent: pfloat(i["exponent"]) ?? 1))
+                                          exponent: pexponent(i["exponent"]) ?? 1))
             case "alpharandom":
                 inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
-                                          exponent: pfloat(i["exponent"]) ?? 1))
+                                          exponent: pexponent(i["exponent"]) ?? 1))
             case "velocityrandom":
                 inits.append(.velocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
                                              max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             exponent: pfloat(i["exponent"]) ?? 1))
+                                             exponent: pexponent(i["exponent"]) ?? 1))
             case "rotationrandom":
                 inits.append(.rotationRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
                                              max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             exponent: pfloat(i["exponent"]) ?? 1))
+                                             exponent: pexponent(i["exponent"]) ?? 1))
             case "angularvelocityrandom":
                 inits.append(.angularVelocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
                                                     max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                                    exponent: pfloat(i["exponent"]) ?? 1))
+                                                    exponent: pexponent(i["exponent"]) ?? 1))
             case "turbulentvelocityrandom":
                 inits.append(.turbulentVelocityRandom(speedMin: pfloat(i["speedmin"]) ?? 0, speedMax: pfloat(i["speedmax"]) ?? 0,
                                                       scale: pfloat(i["scale"]) ?? 1, offset: pfloat(i["offset"]) ?? 0))
@@ -415,6 +415,11 @@ public struct ParticleSystemDef: Equatable {
 // MARK: - 파싱 헬퍼 (공용 JSONNumerics 위임 — 파티클 규약: 문자열 스칼라 거부, 언랩 없음)
 
 private func pfloat(_ v: Any?) -> Float? { strictFloat(v) }
+/// JSON false/true는 NSNumber로도 브리지되므로 exponent 숫자 경로에서 명시적으로 배제한다.
+private func pexponent(_ v: Any?) -> Float? {
+    if let number = v as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
+    return pfloat(v)
+}
 private func pint(_ v: Any?) -> Int? { strictInt(v) }
 private func pvec3(_ v: Any?) -> Vec3? { stringVec3(v) }
 /// "x y z" 벡터 또는 단일 스칼라(브로드캐스트).

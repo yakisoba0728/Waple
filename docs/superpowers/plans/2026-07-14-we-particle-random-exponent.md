@@ -17,7 +17,7 @@
 - **[보존/추측]** `colorRandom` uses one shared factor; velocity/rotation/angular velocity use three independent component factors. Only later WE A/B evidence may revisit color.
 - Preserve RNG draw counts even when min equals max: lifetime/size/color/alpha consume one each; velocity/rotation/angular velocity consume three each.
 - Do not modify `SplitMix64`, renderers, operators, corpus baselines, or `.vscode/launch.json`.
-- Do not run the full Swift test suite or render corpus. Run only the two new tests plus `ParticleSystemTests` and `ParticleSimulatorTests`.
+- Do not run the full Swift test suite or render corpus. Run only the four exponent regression tests plus `ParticleSystemTests` and `ParticleSimulatorTests`.
 - Per user instruction, do not perform task-by-task code reviews; perform one whole-branch final review after all implementation and focused verification are complete.
 
 ---
@@ -152,36 +152,45 @@ public enum Initializer: Equatable {
 
 Leave `colorList` and `mapSequence` unchanged.
 
-- [ ] **Step 6: Parse exponent for all six cases without changing existing endpoint defaults**
+- [ ] **Step 6: Parse exponent for all seven cases without changing existing endpoint defaults**
 
 Replace the random initializer parser branches at `Sources/WapleCore/ParticleSystem.swift:220-235` with:
 
 ```swift
             case "lifetimerandom":
                 inits.append(.lifetimeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
-                                             exponent: pfloat(i["exponent"]) ?? 1))
+                                             exponent: pexponent(i["exponent"]) ?? 1))
             case "sizerandom":
                 inits.append(.sizeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
-                                         exponent: pfloat(i["exponent"]) ?? 1))
+                                         exponent: pexponent(i["exponent"]) ?? 1))
             case "colorrandom":
                 inits.append(.colorRandom(min: pvec3(i["min"]) ?? Vec3(x: 255, y: 255, z: 255),
                                           max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255),
-                                          exponent: pfloat(i["exponent"]) ?? 1))
+                                          exponent: pexponent(i["exponent"]) ?? 1))
             case "alpharandom":
                 inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
-                                          exponent: pfloat(i["exponent"]) ?? 1))
+                                          exponent: pexponent(i["exponent"]) ?? 1))
             case "velocityrandom":
                 inits.append(.velocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
                                              max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             exponent: pfloat(i["exponent"]) ?? 1))
+                                             exponent: pexponent(i["exponent"]) ?? 1))
             case "rotationrandom":
                 inits.append(.rotationRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
                                              max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             exponent: pfloat(i["exponent"]) ?? 1))
+                                             exponent: pexponent(i["exponent"]) ?? 1))
             case "angularvelocityrandom":
                 inits.append(.angularVelocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
                                                     max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                                    exponent: pfloat(i["exponent"]) ?? 1))
+                                                    exponent: pexponent(i["exponent"]) ?? 1))
+```
+
+Add an exponent-specific scalar helper next to `pfloat` so JSON booleans do not bridge to `0`/`1` as numbers:
+
+```swift
+private func pexponent(_ v: Any?) -> Float? {
+    if let number = v as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
+    return pfloat(v)
+}
 ```
 
 - [ ] **Step 7: Centralize biased factors and apply them without changing draw topology**
@@ -257,7 +266,7 @@ swift test --filter ParticleSystemTests
 swift test --filter ParticleSimulatorTests
 ```
 
-Expected: `ParticleSystemTests` executes 16 tests and `ParticleSimulatorTests` executes 23 tests; 39 total, 0 failures. Do not run any broader suite or corpus command.
+Expected after the final review fix wave: `ParticleSystemTests` executes 18 tests and `ParticleSimulatorTests` executes 23 tests; 41 total, 0 failures. Do not run any broader suite or corpus command.
 
 - [ ] **Step 10: Verify boundaries and commit production changes**
 
@@ -287,6 +296,8 @@ Expected: exactly the two production files are committed. The test and productio
 
 After Task 1 is fully implemented, perform exactly one whole-branch code review covering the design, tests, parser model, sampling helpers, RNG topology, comments, and compatibility constraints. Fix all Critical/Important findings in one fix wave, then rerun only the affected tests.
 
+The final review fix wave adds two compact `ParticleSystemTests`: one proves JSON boolean/string/nonfinite exponent values fall back to `1` for all seven families, and one proves a fixed-width initializer still consumes its draw before a seeded sentinel.
+
 Before merging, independently rerun:
 
 ```bash
@@ -294,4 +305,4 @@ swift test --filter ParticleSystemTests
 swift test --filter ParticleSimulatorTests
 ```
 
-Expected: 39 total tests, 0 failures. Do not run the full suite or corpus.
+Expected: 41 total tests, 0 failures. Do not run the full suite or corpus.

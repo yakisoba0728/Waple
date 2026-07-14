@@ -61,7 +61,7 @@ case rotationRandom(min: Vec3, max: Vec3, exponent: Float = 1)
 case angularVelocityRandom(min: Vec3, max: Vec3, exponent: Float = 1)
 ```
 
-각 JSON 파서 분기는 `pfloat(i["exponent"]) ?? 1`을 전달한다. 기존 `pfloat`의 유한 숫자 검사 규약을 그대로 사용하므로 필드 부재, 문자열, NaN/무한대 등은 `1`로 폴백한다. 기존 min/max 기본값과 회전 단위(라디안, 라디안/초)는 바꾸지 않는다.
+각 JSON 파서 분기는 `pexponent(i["exponent"]) ?? 1`을 전달한다. `pexponent`는 `JSONSerialization`의 boolean이 `NSNumber`/`Double`로 둔갑하는 브리지를 `CFBooleanGetTypeID`로 먼저 배제한 뒤 기존 `pfloat`의 유한 숫자 검사에 위임한다. 따라서 필드 부재, boolean, 문자열, NaN/무한대 등은 `1`로 폴백한다. 기존 min/max 기본값과 회전 단위(라디안, 라디안/초)는 바꾸지 않는다.
 
 ### 분포 성형
 
@@ -116,7 +116,7 @@ colorRandom만 A/B 관찰 대상으로 두며, WE 실화면에서 그라디언�
 
 ## 테스트 설계
 
-파서→시뮬레이터를 한 번에 통과하는 고정 시드 unit test 두 개를 `ParticleSystemTests`에 둔다. fixture는 zero-extent box emitter의 instantaneous 1개 스폰과 7종 initializer를 순서대로 포함한다.
+파서→시뮬레이터를 한 번에 통과하는 고정 시드 unit test 두 개와 파서/RNG 경계 테스트 두 개를 `ParticleSystemTests`에 둔다. 주 fixture는 zero-extent box emitter의 instantaneous 1개 스폰과 7종 initializer를 순서대로 포함한다.
 
 1. **기본 exponent 무회귀**
    - 모든 `exponent` 키를 생략한다.
@@ -128,6 +128,14 @@ colorRandom만 A/B 관찰 대상으로 두며, WE 실화면에서 그라디언�
    - seed `7`, `step(0)`의 각 scalar/vector 값이 동일 raw의 제곱 곡선과 맞는지 확인한다.
    - 수정 전에는 새 6종만 선형값으로 실패하고, 이미 지원되는 alpha assertion은 통과해야 한다.
    - color의 세 채널 동일값과 vector의 축별 서로 다른 값을 함께 고정한다.
+
+3. **비숫자·비유한 폴백**
+   - 실제 `JSONSerialization`을 통과한 boolean과 직접 파서 dictionary에 주입한 문자열, NaN, 무한대를 7종 모두에 넣는다.
+   - 모든 exponent가 `1`로 파싱되는지 확인한다.
+
+4. **고정 범위 RNG 소비**
+   - min=max인 initializer 뒤에 가변 sentinel initializer를 둔다.
+   - 고정 범위도 난수를 소비해 sentinel이 다음 draw를 사용하는지 seed `7`로 확인한다.
 
 GREEN 후에는 다음 두 클래스만 실행한다.
 

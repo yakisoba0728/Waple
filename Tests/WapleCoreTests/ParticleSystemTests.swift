@@ -105,6 +105,52 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(p.angularVel.z, 0.30061907, accuracy: 1e-6)
     }
 
+    func testRandomInitializerExponentRejectsNonnumericAndNonfiniteValues() {
+        // JSONSerialization의 false는 __NSCFBoolean이며 `as? Double`로도 0.0에 브리지된다.
+        let bridgedFalse = json(#"{"value":false}"#)["value"]!
+        let invalidExponents: [Any] = [bridgedFalse, "2", Double.nan, Double.infinity]
+        let expected: [Initializer] = [
+            .lifetimeRandom(min: 1, max: 2, exponent: 1),
+            .sizeRandom(min: 0, max: 1, exponent: 1),
+            .colorRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 255, y: 255, z: 255), exponent: 1),
+            .alphaRandom(min: 0, max: 1, exponent: 1),
+            .velocityRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 1, y: 1, z: 1), exponent: 1),
+            .rotationRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 1, y: 1, z: 1), exponent: 1),
+            .angularVelocityRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 1, y: 1, z: 1), exponent: 1),
+        ]
+
+        for invalid in invalidExponents {
+            let initializers: [[String: Any]] = [
+                ["name": "lifetimerandom", "min": 1, "max": 2, "exponent": invalid],
+                ["name": "sizerandom", "min": 0, "max": 1, "exponent": invalid],
+                ["name": "colorrandom", "min": "0 0 0", "max": "255 255 255", "exponent": invalid],
+                ["name": "alpharandom", "min": 0, "max": 1, "exponent": invalid],
+                ["name": "velocityrandom", "min": "0 0 0", "max": "1 1 1", "exponent": invalid],
+                ["name": "rotationrandom", "min": "0 0 0", "max": "1 1 1", "exponent": invalid],
+                ["name": "angularvelocityrandom", "min": "0 0 0", "max": "1 1 1", "exponent": invalid],
+            ]
+            let def = ParticleSystemDef.parse(["initializer": initializers], material: nil)
+
+            XCTAssertEqual(def.initializers, expected, "invalid exponent: \(invalid)")
+        }
+    }
+
+    func testFixedWidthRandomInitializerStillConsumesItsDraw() throws {
+        let source = """
+        {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+         "initializer":[
+           {"name":"lifetimerandom","min":5,"max":5,"exponent":2},
+           {"name":"sizerandom","min":0,"max":1,"exponent":2}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """
+        let def = ParticleSystemDef.parse(json(source), material: nil)
+        var simulator = ParticleSimulator(def: def, seed: 7)
+        let p = try XCTUnwrap(simulator.step(0).first)
+
+        XCTAssertEqual(p.lifetime, 5, accuracy: 1e-6)
+        XCTAssertEqual(p.size, 0.20470364, accuracy: 1e-6)
+    }
+
     func testParseSnow() {
         let d = ParticleSystemDef.parse(json(snow), material: nil)
         XCTAssertEqual(d.maxCount, 360)
