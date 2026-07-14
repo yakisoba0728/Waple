@@ -475,6 +475,24 @@ extension SceneRenderer {
         return try? device.makeRenderPipelineState(descriptor: pd)
     }
 
+    /// 3D 파티클 원근 빌보드 파이프라인. 메시 패스와 동일 타깃(bgra8+depth32). frag=pf_main(premult α),
+    /// 블렌드는 2D 파티클(particlePipeline)과 동치: additive dst=one / translucent dst=1-srcα.
+    func particle3DPipeline(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+        guard let lib = try? device.makeLibrary(source: ParticleShaders.source, options: nil) else { return nil }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "pv3d_main")
+        pd.fragmentFunction = lib.makeFunction(name: "pf_main")
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = .bgra8Unorm
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? device.makeRenderPipelineState(descriptor: pd)
+    }
+
     func shadow3DPipeline(lib: MTLLibrary, vertex: String, cutout: Bool,
                          device: MTLDevice) -> MTLRenderPipelineState? {
         let descriptor = MTLRenderPipelineDescriptor()
@@ -851,6 +869,9 @@ extension SceneRenderer {
                 }
             }
         }
+        // 파티클: 불투명 메시/빌보드 뒤에 원근 빌보드로(뎁스 read-only). enc 는 프레임버퍼 빌보드 경로에서
+        // 재할당됐을 수 있으므로 현재 enc 를 사용(같은 depthTex 바인딩 유지).
+        if hasParticles { encode3DParticles(time: time, viewProj: viewProj, right: right, up: camUp, nmap: nmap, into: enc, device: device) }
         enc.endEncoding()
         return true
     }
@@ -913,5 +934,117 @@ extension SceneRenderer {
         enc.setFragmentBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
         enc.setFragmentTexture(overrideTexture ?? bb.texture, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+
+    /// 3D 씬 파티클을 원근 카메라-페이싱 빌보드로 드로우한다(encode3D 의 메시/빌보드 패스 뒤, 같은 인코더).
+    /// - 시뮬: 기존 CPU `ParticleSimulator`(2D 와 공용). particle3DClock 을 `time` 까지 1/30 서브스텝
+    ///   (라이브 = 매 프레임 소량, 캡처 = 정렬 시각 간 델타). 루트만 스텝, 자식은 부모 childDisplay.
+    /// - 배치: 월드행렬 M = 부모월드(nmap, 서브트리 가시성 존중) · modelMatrix(origin3D,angles3D,scale3D).
+    ///   부모 서브트리 비가시 또는 정적 visible=false 면 시스템 전체 스킵(WE 가시성 시맨틱 — 예: 3737268876
+    ///   횃불은 부모 "Torches" 정적 비가시라 드롭이 정답).
+    /// - 렌더: 파티클 로컬 pos 를 M 으로 월드 변환 → 카메라 right/up 으로 쿼드 전개 → viewProj. 뎁스는
+    ///   read-only(메시에 가려짐, 미기록 — WE 투명 관례). 블렌드는 머티리얼(additive/translucent) 재사용.
+    func encode3DParticles(time: Float, viewProj: simd_float4x4,
+                           right: SIMD3<Float>, up: SIMD3<Float>,
+                           nmap: [Int: Scene3DMath.Node],
+                           into enc: MTLRenderCommandEncoder, device: MTLDevice) {
+        guard !particleSystems.isEmpty else { return }
+        // ── 시뮬 진행(절대시계 → time). 루트만 스텝, 자식은 부모 캐시. ──
+        let dtCap: Float = 1.0 / 30.0
+        var snaps = [[Particle]](repeating: [], count: particleSystems.count)
+        let rootIdxs = particleSystems.indices.filter { particleSystems[$0].childOf == nil }
+        // clock(=마지막 진행 시각, mount 0) → time 까지 1/30 서브스텝. 캡처는 단일 프레임 time=6s 라도
+        // 0→6s 전량 진행(2D 캡처 경로와 동일 입도)해야 방출/이동이 반영된다. acc≈0(정지/재드로)이면 step(0).
+        var acc = max(0, time - particle3DClock)            // time 은 라이브 단조·캡처 정렬 → 음수 없음.
+        if acc > 1e-5 {
+            while acc > 1e-5 { let s = min(dtCap, acc); for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(s) }; acc -= s }
+            particle3DClock = time
+        } else {
+            for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(0) }
+        }
+        for i in particleSystems.indices {
+            if let c = particleSystems[i].childOf { snaps[i] = particleSystems[c.parent].sim.childDisplay(c.link) }
+        }
+        // ── 드로우(씬 order 오름차순 — 뎁스가 메시 가림 처리, 파티클 간 정렬은 미적용: WE depth-sort 근거 없음). ──
+        guard let dstate = meshDepthState(test: true, write: false, device: device) else { return }
+        var vp = viewProj
+        let dbg = Self.debugFlag("WAPLE_PARTICLE3D_DEBUG")
+        var drawn = 0, skipInvis = 0, skipParent = 0, skipEmpty = 0
+        for idx in particleSystems.indices.sorted(by: { particleSystems[$0].order < particleSystems[$1].order }) {
+            let sys = particleSystems[idx]
+            guard sys.visible3D else { skipInvis += 1; continue }  // 정적 visible=false(스크립트 미평가 — ponytail).
+            var pWorld = matrix_identity_float4x4
+            if let pid = sys.parent3D {
+                guard let pw = Scene3DMath.worldMatrix(id: pid, nodes: nmap), pw.visible else { skipParent += 1; continue }
+                pWorld = pw.matrix
+            }
+            let m = pWorld * Scene3DMath.modelMatrix(origin: sys.origin3D, angles: sys.angles3D, scale: sys.scale3D)
+            let snapshot = snaps[idx]
+            guard !snapshot.isEmpty else { skipEmpty += 1; continue }
+            drawn += 1
+            let verts = particle3DVertices(snapshot, sys, m: m, right: right, up: up)
+            let vertexCount = verts.count / 9
+            guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { continue }
+            guard let pipe = sys.blendAdditive ? particle3DAdditive : particle3DTranslucent else { continue }
+            enc.setRenderPipelineState(pipe)
+            enc.setDepthStencilState(dstate)
+            enc.setCullMode(.none)
+            enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+            enc.setVertexBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 1)
+            enc.setFragmentTexture(sys.texture, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+        }
+        if dbg { NSLog("%@", "[Particle3D] t=\(time) drawn=\(drawn) skipInvis=\(skipInvis) skipParent=\(skipParent) skipEmpty=\(skipEmpty) of \(particleSystems.count)") }
+    }
+
+    /// 파티클 스냅샷 → 월드공간 카메라-페이싱 쿼드 정점(정점당 9 float: world.xyz, uv, rgba).
+    /// 월드 중심 = m · 파티클 로컬 pos. 반경 = 0.5·size·(m 열0 길이) — in-plane 스케일만 크기에 반영,
+    /// z 스케일(예: speedline 0.6)은 위치에 이미 m 으로 반영됨. 세로 = 반경·texRatio(WE ComputeParticlePosition).
+    /// ponytail: 트레일(spritetrail/rope)은 3D 리본 미구현 — 헤드 위치 쿼드로 폴백(파티클 등장은 보장,
+    /// 리본 연결 없음). 실물 필요 시 appendRibbon 을 월드공간으로 이식.
+    func particle3DVertices(_ snapshot: [Particle], _ sys: GPUParticleSystem,
+                            m: simd_float4x4, right: SIMD3<Float>, up: SIMD3<Float>) -> [Float] {
+        var verts: [Float] = []
+        verts.reserveCapacity(snapshot.count * 54)
+        let colScale = simd_length(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z))
+        for p in snapshot {
+            let wp = m * SIMD4<Float>(p.pos.x, p.pos.y, p.pos.z, 1)
+            let center = SIMD3(wp.x, wp.y, wp.z)
+            // UV + 종횡비: 스프라이트시트면 현재 프레임 서브렉트(2D appendQuad 미러), 아니면 전체 텍스처.
+            var uv: [(Float, Float)] = [(0, 0), (1, 0), (1, 1), (0, 1)]
+            var ratio = sys.texRatio
+            if !sys.frames.isEmpty {
+                let fc = sys.frames.count
+                let fi: Int
+                if p.frame >= 0 { fi = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror) }
+                else { fi = Int(p.age / max(0.016, sys.frames[0].time)) % fc }
+                let fr = sys.frames[max(0, min(fc - 1, fi))]
+                let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
+                let u0 = fr.atlasX / tw, v0 = fr.atlasY / th
+                let u1 = min(1, (fr.atlasX + fr.atlasWidth) / tw), v1 = min(1, (fr.atlasY + fr.atlasHeight) / th)
+                let corners = [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+                let q = fr.rotationQuarters
+                uv = (0..<4).map { corners[($0 + q) % 4] }
+                let upW = q % 2 == 0 ? fr.atlasWidth : fr.atlasHeight
+                let upH = q % 2 == 0 ? fr.atlasHeight : fr.atlasWidth
+                ratio = upH / max(1, upW)
+            }
+            let hw = p.size * colScale * 0.5
+            let hh = hw * ratio
+            guard hw > 0, hw.isFinite, hh.isFinite else { continue }
+            // 파티클 롤(rotation.z)을 뷰 축에 적용(encodeBillboard angleZ 규약). UV 상단원점: 상단=+up.
+            let ca = cos(p.rotation.z), sa = sin(p.rotation.z)
+            let rRight = right * ca + up * sa
+            let rUp = -right * sa + up * ca
+            let r = rRight * hw, u = rUp * hh
+            let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
+            let cr = p.color.x, cg = p.color.y, cb = p.color.z, al = p.alpha
+            func v(_ pt: SIMD3<Float>, _ uu: (Float, Float)) {
+                verts.append(contentsOf: [pt.x, pt.y, pt.z, uu.0, uu.1, cr, cg, cb, al])
+            }
+            v(tl, uv[0]); v(tr, uv[1]); v(br, uv[2])
+            v(tl, uv[0]); v(br, uv[2]); v(bl, uv[3])
+        }
+        return verts
     }
 }

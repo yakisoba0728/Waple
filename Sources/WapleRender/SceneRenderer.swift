@@ -30,6 +30,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var frames: [TexImage.TexFrame] = []
         /// mapsequence limitbehavior=mirror(시퀀스 → 시트 폴드 방식).
         var mapSeqMirror: Bool = false
+        /// 3D 마운트 배치(camera3D 씬 전용 — 2D 경로 미사용). 부모 노드 id·전-성분 트랜스폼·정적 가시성.
+        var parent3D: Int? = nil
+        var origin3D: SIMD3<Float> = .zero
+        var scale3D: SIMD3<Float> = SIMD3(1, 1, 1)
+        var angles3D: SIMD3<Float> = .zero
+        var visible3D: Bool = true
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 스크립트는 초당 재평가 → 변경 시 재래스터.
@@ -608,6 +614,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var meshPipelineAdditive: MTLRenderPipelineState?
     var meshPipelineSkin: MTLRenderPipelineState?      // GPU 스키닝(mv_skin) over
     var meshPipelineSkinAdditive: MTLRenderPipelineState?
+    // 3D 파티클(원근 빌보드) — bgra8+depth32 타깃용(2D additivePipeline 은 acc 포맷이라 별도).
+    var particle3DAdditive: MTLRenderPipelineState?
+    var particle3DTranslucent: MTLRenderPipelineState?
+    /// 3D 파티클 시뮬의 마지막 진행 시각(라이브/캡처 공용, mount 에서 0). encode3D 가 매 프레임 time 까지 1/30 서브스텝.
+    var particle3DClock: Float = 0
     var shadowPipelineStaticOpaque: MTLRenderPipelineState?
     var shadowPipelineStaticCutout: MTLRenderPipelineState?
     var shadowPipelineSkinOpaque: MTLRenderPipelineState?
@@ -787,6 +798,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             camera3D = cam
             build3D(doc: doc, package: package, device: device)
             is3D = !meshRenderables.isEmpty || !billboards.isEmpty
+            // 3D 씬 파티클: 기존 CPU 시뮬(buildParticles 공용) 로 구동, encode3D 가 원근 빌보드로 렌더.
+            // 종전엔 이 배선이 없어 3D 씬의 파티클 오브젝트가 전량 드롭됐다(B3 분석 §최중요 갭).
+            if is3D {
+                particleSystems = buildParticles(doc: doc, package: package, device: device)
+                if !particleSystems.isEmpty {
+                    hasParticles = true
+                    particle3DClock = 0   // 시뮬 t=0 기준. encode3D 가 매 프레임 time 까지 서브스텝(캡처 단일 프레임 포함).
+                    particle3DAdditive = particle3DPipeline(additive: true, device: device)
+                    particle3DTranslucent = particle3DPipeline(additive: false, device: device)
+                }
+            }
         }
         if !is3D {
             camera3D = nil
@@ -1187,6 +1209,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         audioProvider?.stop(); audioProvider = nil; hasAudio = false; hasEffects = false
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
+        particle3DAdditive = nil; particle3DTranslucent = nil; particle3DClock = 0  // 3D 파티클 상태 리셋(마운트 재사용)
         forwardLit = false; litPipeline = nil  // 라이트 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
