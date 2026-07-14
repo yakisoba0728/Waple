@@ -1,71 +1,179 @@
-/// 3D 메시(MDLV0023) 렌더 MSL — v1 unlit(텍스처 × 머티리얼 tint).
+/// 3D 메시(MDLV0023) + perspective billboard 렌더 MSL.
+/// `generic4`/`genericimage4`의 source-confirmed finite-point Cook–Torrance 코어를 공유한다.
 /// 정점은 [[stage_in]] 대신 buffer(0) 수동 페치:
-///   • 정적 메시: CPU 에서 pos3+normal3+uv2 = 8 float(32B)로 재패킹(mv_main).
-///   • 스키닝 메시(v3): pos3+normal3+uv2+boneIdx4+weight4 = 16 float(64B) 재패킹 + 본행렬 버퍼(buffer(2))로
-///     GPU 정점 스키닝(mv_skin). CPU 는 프레임당 본행렬(skin=world×bindWorld⁻¹)만 계산(Model3DPose).
-/// drawIndexedPrimitives 에서 vertex_id = 인덱스 버퍼 값.
+///   • 정적: pos3+normal3+uv2 = 8 float
+///   • 스키닝: pos3+normal3+uv2+boneIdx4+weight4 = 16 float
 enum Mesh3DShaders {
     static let source = """
     #include <metal_stdlib>
     using namespace metal;
 
-    // params: misc.x = 알파컷(>0 이면 a < misc.x 프래그먼트 discard — alphatocoverage/컷아웃 근사)
     struct MeshU {
         float4x4 mvp;
+        float4x4 model;
+        float4x4 normalMatrix;
         float4 tint;
-        float4 misc;
+        float4 material;      // roughness, metallic, alphaCutoff, 0=unlit/1=mesh hemi/2=image flat
+        float4 specularTint;
     };
-    struct VOut { float4 pos [[position]]; float2 uv; float3 normal; };
+    struct FrameU {
+        float4 cameraEye;
+        float4 ambient;
+        float4 skylight;
+        float4 meta;          // x=light count; shadow fields are introduced by P4
+    };
+    struct LightU {
+        float4 positionExponent;
+        float4 colorRadius;
+        float4 shadow;
+    };
+    struct VOut {
+        float4 pos [[position]];
+        float2 uv;
+        float3 worldPos;
+        float3 worldNormal;
+    };
+
+    inline float3 normalizedOr(float3 value, float3 fallback) {
+        float length2 = dot(value, value);
+        return length2 > 1e-12 ? value * rsqrt(length2) : fallback;
+    }
 
     vertex VOut mv_main(uint vid [[vertex_id]],
                         const device float* vtx [[buffer(0)]],
                         constant MeshU& u [[buffer(1)]]) {
         uint b = vid * 8;
+        float3 localPos = float3(vtx[b], vtx[b + 1], vtx[b + 2]);
+        float3 localNormal = float3(vtx[b + 3], vtx[b + 4], vtx[b + 5]);
+        float4 world = u.model * float4(localPos, 1.0);
         VOut o;
-        o.pos = u.mvp * float4(vtx[b], vtx[b + 1], vtx[b + 2], 1.0);
-        o.normal = float3(vtx[b + 3], vtx[b + 4], vtx[b + 5]);
-        // UV 원점 = 상단(V 플립 없음): A/B 실측 — 플립 시 젤다 담쟁이/이끼가 벽 상단에 붙음.
-        // .tex 디코더 행 순서(top-down, 2D GT 검증)와 모델 UV 가 같은 규약.
+        o.pos = u.mvp * float4(localPos, 1.0);
+        o.worldPos = world.xyz;
+        o.worldNormal = normalizedOr((u.normalMatrix * float4(localNormal, 0.0)).xyz,
+                                     normalizedOr(localNormal, float3(0.0, 0.0, 1.0)));
+        // UV 원점 = 상단(V flip 없음): 기존 3D A/B 실측 규약 보존.
         o.uv = float2(vtx[b + 6], vtx[b + 7]);
         return o;
     }
 
-    // 스키닝 정점 셰이더: 16 float 스트라이드(pos3,normal3,uv2,boneIdx4,weight4).
-    // p' = Σ (wᵏ/Σw) · bones[idxᵏ] · p. 가중치 합 0 → 원위치(정적). idx 는 CPU 에서 clamp 됨.
     vertex VOut mv_skin(uint vid [[vertex_id]],
                         const device float* vtx [[buffer(0)]],
                         constant MeshU& u [[buffer(1)]],
                         const device float4x4* bones [[buffer(2)]]) {
         uint b = vid * 16;
-        float3 pos = float3(vtx[b], vtx[b + 1], vtx[b + 2]);
-        float4 w = float4(vtx[b + 12], vtx[b + 13], vtx[b + 14], vtx[b + 15]);
+        float3 localPos = float3(vtx[b], vtx[b + 1], vtx[b + 2]);
+        float3 localNormal = float3(vtx[b + 3], vtx[b + 4], vtx[b + 5]);
         uint4 idx = uint4(uint(vtx[b + 8] + 0.5), uint(vtx[b + 9] + 0.5),
                           uint(vtx[b + 10] + 0.5), uint(vtx[b + 11] + 0.5));
-        float wsum = w.x + w.y + w.z + w.w;
-        float4 p4 = float4(pos, 1.0);
-        float3 sp;
-        if (wsum > 0.0) {
-            float4 acc = (w.x / wsum) * (bones[idx.x] * p4)
-                       + (w.y / wsum) * (bones[idx.y] * p4)
-                       + (w.z / wsum) * (bones[idx.z] * p4)
-                       + (w.w / wsum) * (bones[idx.w] * p4);
-            sp = acc.xyz;
-        } else { sp = pos; }
+        float4 weights = float4(vtx[b + 12], vtx[b + 13], vtx[b + 14], vtx[b + 15]);
+        float weightSum = weights.x + weights.y + weights.z + weights.w;
+        float3 skinnedPos = localPos;
+        float3 skinnedNormal = localNormal;
+        if (weightSum > 0.0) {
+            weights /= weightSum;
+            skinnedPos = (weights.x * (bones[idx.x] * float4(localPos, 1.0))
+                        + weights.y * (bones[idx.y] * float4(localPos, 1.0))
+                        + weights.z * (bones[idx.z] * float4(localPos, 1.0))
+                        + weights.w * (bones[idx.w] * float4(localPos, 1.0))).xyz;
+            skinnedNormal = (weights.x * (bones[idx.x] * float4(localNormal, 0.0))
+                           + weights.y * (bones[idx.y] * float4(localNormal, 0.0))
+                           + weights.z * (bones[idx.z] * float4(localNormal, 0.0))
+                           + weights.w * (bones[idx.w] * float4(localNormal, 0.0))).xyz;
+        }
+        float4 world = u.model * float4(skinnedPos, 1.0);
         VOut o;
-        o.pos = u.mvp * float4(sp, 1.0);
-        o.normal = float3(vtx[b + 3], vtx[b + 4], vtx[b + 5]);  // unlit — 미변환 무영향
+        o.pos = u.mvp * float4(skinnedPos, 1.0);
+        o.worldPos = world.xyz;
+        o.worldNormal = normalizedOr((u.normalMatrix * float4(skinnedNormal, 0.0)).xyz,
+                                     normalizedOr(skinnedNormal, float3(0.0, 0.0, 1.0)));
         o.uv = float2(vtx[b + 6], vtx[b + 7]);
         return o;
     }
 
+    inline float finiteLightFalloff(float distance, float radius, float exponent) {
+        if (radius <= 0.0) return 0.0;
+        float falloff = clamp(1.0 - distance / radius, 0.0, 1.0);
+        constexpr float epsilon = 6.103515625e-5;
+        // Native GLSL lane: radius 경계에서 exponent=0이어도 hard zero.
+        return falloff >= epsilon ? pow(falloff + epsilon, exponent) : 0.0;
+    }
+
+    inline float Distribution_GGX(float3 N, float3 H, float roughness) {
+        float r2 = roughness * roughness;
+        float r4 = r2 * r2;
+        float NH = max(dot(N, H), 0.0);
+        float rawDenominator = NH * NH * (r4 - 1.0) + 1.0;
+        // [safety deviation] Native의 roughness=0,NH=1 0/0만 방지. 상단은 무클램프.
+        float denominator = max(rawDenominator, 1e-4);
+        return r4 / (3.14159265359 * denominator * denominator);
+    }
+
+    inline float Schlick_GGX(float ND, float roughness) {
+        float base = roughness + 1.0;
+        float k = base * base / 8.0;
+        return ND / (ND * (1.0 - k) + k);
+    }
+
+    inline float GeometrySmith(float3 N, float3 V, float3 L, float roughness) {
+        return Schlick_GGX(max(dot(N, V), 0.001), roughness)
+             * Schlick_GGX(max(dot(N, L), 0.001), roughness);
+    }
+
+    inline float3 FresnelSchlick(float cosTheta, float3 F0) {
+        return F0 + (1.0 - F0) * pow(max(1.0 - cosTheta, 0.001), 5.0);
+    }
+
+    inline float3 pointPBR(float3 worldPos, float3 N, float3 V, float3 albedo,
+                           float roughness, float metallic, float3 specularTint,
+                           constant LightU& light) {
+        float3 delta = light.positionExponent.xyz - worldPos;
+        float distance = length(delta);
+        if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
+        float3 L = delta / distance;
+        float NL = max(dot(N, L), 0.0);
+        if (NL <= 0.0) return float3(0.0);
+        float3 H = normalizedOr(V + L, N);
+        float D = Distribution_GGX(N, H, roughness);
+        float G = GeometrySmith(N, V, L, roughness);
+        float3 F0 = mix(float3(0.04), albedo, metallic);
+        float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+        float3 diffuseWeight = (1.0 - metallic) * (1.0 - F);
+        float denominator = max(4.0 * max(dot(N, V), 0.0) * NL, 0.001);
+        float3 specular = D * G * F / denominator;
+        float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
+                                               light.positionExponent.w);
+        float3 radiance = light.colorRadius.xyz * attenuation;
+        return (diffuseWeight * albedo / 3.14159265359 + specular * specularTint)
+             * radiance * NL;
+    }
+
     fragment float4 mf_main(VOut in [[stage_in]],
                             texture2d<float> tex [[texture(0)]],
-                            constant MeshU& u [[buffer(1)]]) {
+                            constant MeshU& u [[buffer(1)]],
+                            constant FrameU& frame [[buffer(2)]],
+                            constant LightU* lights [[buffer(3)]]) {
         constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
-        float4 c = tex.sample(s, in.uv) * u.tint;
-        if (u.misc.x > 0.0 && c.a < u.misc.x) { discard_fragment(); }
-        // 합성 규약(설계 §3)과 동일하게 premultiplied 출력(파이프라인 블렌드 src=one).
-        return float4(c.rgb * c.a, c.a);
+        float4 sampled = tex.sample(s, in.uv) * u.tint;
+        if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
+        float mode = u.material.w;
+        if (mode < 0.5) return float4(sampled.rgb * sampled.a, sampled.a);
+
+        float3 albedo = sampled.rgb;
+        float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
+        float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
+        float3 direct = float3(0.0);
+        int count = clamp(int(frame.meta.x + 0.5), 0, 4);
+        for (int i = 0; i < count; ++i) {
+            direct += pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                              u.specularTint.xyz, lights[i]);
+        }
+        float3 ambientColor = frame.ambient.xyz;
+        if (mode < 1.5) {
+            float hemisphere = clamp(dot(N, float3(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);
+            ambientColor = mix(frame.skylight.xyz, frame.ambient.xyz, hemisphere);
+        }
+        float3 lit = ambientColor * albedo + direct;
+        return float4(lit * sampled.a, sampled.a);
     }
     """
 }

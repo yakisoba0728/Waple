@@ -50,6 +50,30 @@ enum Scene3DMath {
             SIMD4<Float>(origin.x, origin.y, origin.z, 1)))
     }
 
+    /// 비균등 스케일에서도 노멀을 올바르게 월드 공간으로 옮기는 inverse-transpose 행렬.
+    /// 0 스케일/비유한 입력은 역행렬이 NaN이 되므로 항등으로 폴백해 프레임 전체 오염을 막는다.
+    static func normalMatrix4x4(_ model: simd_float4x4) -> simd_float4x4 {
+        let upper = simd_float3x3(columns: (
+            SIMD3(model.columns.0.x, model.columns.0.y, model.columns.0.z),
+            SIMD3(model.columns.1.x, model.columns.1.y, model.columns.1.z),
+            SIMD3(model.columns.2.x, model.columns.2.y, model.columns.2.z)))
+        let determinant = simd_determinant(upper)
+        guard determinant.isFinite, abs(determinant) > 1e-8 else {
+            return matrix_identity_float4x4
+        }
+        let normal = simd_transpose(simd_inverse(upper))
+        guard (0..<3).allSatisfy({ column in
+            normal[column].x.isFinite && normal[column].y.isFinite && normal[column].z.isFinite
+        }) else {
+            return matrix_identity_float4x4
+        }
+        return simd_float4x4(columns: (
+            SIMD4(normal.columns.0.x, normal.columns.0.y, normal.columns.0.z, 0),
+            SIMD4(normal.columns.1.x, normal.columns.1.y, normal.columns.1.z, 0),
+            SIMD4(normal.columns.2.x, normal.columns.2.y, normal.columns.2.z, 0),
+            SIMD4(0, 0, 0, 1)))
+    }
+
     /// 계층 합성용 노드(트랜스폼 + 부모 + 정적 가시성).
     struct Node {
         let origin: SIMD3<Float>

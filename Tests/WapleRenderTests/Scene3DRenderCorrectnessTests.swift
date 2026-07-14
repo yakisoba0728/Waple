@@ -86,4 +86,51 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertEqual(material.texture.width, 8)
         XCTAssertEqual(material.texture.height, 2)
     }
+
+    func test3DMeshMaterialKeepsPBRConstantsWithoutUpperClamping() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let package = try pkg([
+            ("materials/mesh.json", #"{"passes":[{"textures":["white"],"constantshadervalues":{"roughness":5,"metallic":0.25,"speculartint":"0.2 0.4 0.6"}}]}"#.data(using: .utf8)!),
+            ("materials/white.tex", solidTex(255, 255, 255, w: 1, h: 1)),
+        ])
+        let renderer = SceneRenderer()
+
+        let material = try XCTUnwrap(renderer.loadMesh3DMaterial(
+            "materials/mesh.json", package: package, device: device))
+
+        XCTAssertEqual(material.roughness, 5)
+        XCTAssertEqual(material.metallic, 0.25)
+        XCTAssertEqual(material.specularTint, SIMD3(0.2, 0.4, 0.6))
+    }
+
+    func test3DBillboardKeepsLightingAndPBRMaterialState() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"model":"models/missing.mdl"},
+           {"id":2,"image":"models/lit.json","origin":"0 0 0","size":"2 2","color":"1 1 1","alpha":1}
+         ]}
+        """
+        let package = try pkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/lit.json", #"{"material":"materials/lit.json"}"#.data(using: .utf8)!),
+            ("materials/lit.json", #"{"passes":[{"textures":["white"],"combos":{"LIGHTING":1},"constantshadervalues":{"roughness":0.4,"metallic":0.6,"speculartint":"0.8 0.7 0.5"}}]}"#.data(using: .utf8)!),
+            ("materials/white.tex", solidTex(255, 255, 255, w: 1, h: 1)),
+        ])
+        let doc = try SceneDocument.parse(package: package)
+        let renderer = SceneRenderer()
+        renderer.sceneScript = SceneScriptContext()
+        renderer.projW = Float(doc.projectionWidth)
+        renderer.projH = Float(doc.projectionHeight)
+
+        renderer.build3D(doc: doc, package: package, device: device)
+
+        let billboard = try XCTUnwrap(renderer.billboards.first)
+        XCTAssertEqual(mirrorValue(billboard, "lighting", as: Bool.self), true)
+        XCTAssertEqual(mirrorValue(billboard, "roughness", as: Float.self), 0.4)
+        XCTAssertEqual(mirrorValue(billboard, "metallic", as: Float.self), 0.6)
+        XCTAssertEqual(mirrorValue(billboard, "specularTint", as: SIMD3<Float>.self), SIMD3(0.8, 0.7, 0.5))
+    }
 }

@@ -551,6 +551,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var camera3D: SceneCamera3D?
     var is3D = false
     var has3DScripts = false
+    var scene3DLights: [SceneLight3D] = []
+    var scene3DAmbient = SIMD3<Float>(repeating: 0)
+    var scene3DSkylight = SIMD3<Float>(repeating: 0)
     var nodes3D: [Node3D] = []                 // scene order(계층 합성 입력)
     var meshRenderables: [MeshRenderable] = []
     var billboards: [Billboard3D] = []
@@ -1094,6 +1097,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneScript = nil; scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; _passthroughPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
+        scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
         eval3DOrder = []; draw3DOrder = []
         meshPipelineOver = nil; meshPipelineAdditive = nil

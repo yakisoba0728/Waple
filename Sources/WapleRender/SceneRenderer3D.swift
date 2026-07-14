@@ -14,6 +14,9 @@ extension SceneRenderer {
         let indexCount: Int
         let texture: MTLTexture
         let tint: SIMD4<Float>       // 머티리얼 Color × Alpha
+        let roughness: Float
+        let metallic: Float
+        let specularTint: SIMD3<Float>
         let alphaCutoff: Float       // alphatocoverage → 0.5 (컷아웃 discard 근사), 그 외 0
         let cullBack: Bool           // cullmode "normal" → 백페이스 컬, "nocull" → 양면
         let additive: Bool
@@ -21,8 +24,16 @@ extension SceneRenderer {
         let depthWrite: Bool
         let skinned: Bool            // true → 16f 스트라이드 + mv_skin(본행렬 버퍼)
     }
-    /// MSL 쪽 MeshU 와 레이아웃 일치(float4x4 + float4 + float4 = 96B).
-    struct MeshUniform { var mvp: simd_float4x4; var tint: SIMD4<Float>; var misc: SIMD4<Float> }
+    /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 3×float4 = 240B).
+    struct MeshUniform {
+        var mvp: simd_float4x4
+        var model: simd_float4x4
+        var normalMatrix: simd_float4x4
+        var tint: SIMD4<Float>
+        /// x=roughness, y=metallic, z=alphaCutoff, w=0 unlit / 1 mesh hemisphere / 2 image flat.
+        var material: SIMD4<Float>
+        var specularTint: SIMD4<Float>
+    }
     struct Script3D { let key: String; let engine: TextScriptEngine }
 
     /// 3D 변환 계층의 한 노드(그룹 or 모델 오브젝트) — per-frame 스크립트 평가로 로컬 변환/가시성 갱신.
@@ -90,6 +101,10 @@ extension SceneRenderer {
         let baseAngleZ: Float
         let baseTint: SIMD4<Float>
         let baseVisible: Bool
+        let lighting: Bool
+        let roughness: Float
+        let metallic: Float
+        let specularTint: SIMD3<Float>
         var scripts: [Script3D] = []
         /// per-frame 정점 재사용(3슬롯 링 — 레이어/파티클/본과 동일 패턴, 매프레임 makeBuffer 방지).
         let scratchQuad = DynamicVertexBuffer()
@@ -102,12 +117,15 @@ extension SceneRenderer {
         init(texture: MTLTexture, size: SIMD2<Float>, parent: Int?, order: Int, additive: Bool,
              depthTest: Bool, depthWrite: Bool, effects: [EffectGPU], texWidth: Int, texHeight: Int,
              isFrameBuffer: Bool, origin: SIMD3<Float>, scale: SIMD2<Float>, angleZ: Float,
-             tint: SIMD4<Float>, visible: Bool) {
+             tint: SIMD4<Float>, visible: Bool, lighting: Bool,
+             roughness: Float, metallic: Float, specularTint: SIMD3<Float>) {
             self.texture = texture; self.size = size; self.parent = parent; self.order = order
             self.additive = additive
             self.depthTest = depthTest; self.depthWrite = depthWrite; self.effects = effects
             self.texWidth = texWidth; self.texHeight = texHeight; self.isFrameBuffer = isFrameBuffer
             baseOrigin = origin; baseScale = scale; baseAngleZ = angleZ; baseTint = tint; baseVisible = visible
+            self.lighting = lighting; self.roughness = roughness; self.metallic = metallic
+            self.specularTint = specularTint
             self.origin = origin; self.scale = scale; self.angleZ = angleZ; self.tint = tint; self.visible = visible
         }
         func evaluateScripts(time: Float) {
@@ -138,6 +156,9 @@ extension SceneRenderer {
             NSLog("%@", "[Waple] 3D: mesh shader compile failed")
             return
         }
+        scene3DLights = doc.lights3D
+        scene3DAmbient = SIMD3(doc.ambientColor.x, doc.ambientColor.y, doc.ambientColor.z)
+        scene3DSkylight = SIMD3(doc.skylightColor.x, doc.skylightColor.y, doc.skylightColor.z)
         meshPipelineOver = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
         meshPipelineAdditive = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         meshPipelineSkin = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: false, device: device)
@@ -212,7 +233,9 @@ extension SceneRenderer {
                 else { continue }
                 if skinned { anySkinned = true }
                 meshes.append(GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
-                                        texture: mat.texture, tint: mat.tint, alphaCutoff: mat.alphaCutoff,
+                                        texture: mat.texture, tint: mat.tint,
+                                        roughness: mat.roughness, metallic: mat.metallic,
+                                        specularTint: mat.specularTint, alphaCutoff: mat.alphaCutoff,
                                         cullBack: mat.cullBack, additive: mat.additive,
                                         depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned))
             }
@@ -282,7 +305,11 @@ extension SceneRenderer {
                                  origin: SIMD3(layer.origin.x, layer.origin.y, layer.originZ),
                                  scale: SIMD2(layer.scale.x, layer.scale.y), angleZ: layer.angleZ,
                                  tint: tint,
-                                 visible: layer.initialVisible)
+                                 visible: layer.initialVisible,
+                                 lighting: layer.lighting,
+                                 roughness: layer.roughness,
+                                 metallic: layer.metallic,
+                                 specularTint: SIMD3(layer.specularTint.x, layer.specularTint.y, layer.specularTint.z))
             attachScripts(bb, sources: layer.propertyScripts)
             billboards.append(bb)
             billboardDefs.append(layer)   // 록스텝(이벤트 마커 결속 — buildAnimationEventTargets)
@@ -324,6 +351,9 @@ extension SceneRenderer {
     struct Mesh3DMaterialInfo {
         let texture: MTLTexture
         let tint: SIMD4<Float>
+        let roughness: Float
+        let metallic: Float
+        let specularTint: SIMD3<Float>
         let alphaCutoff: Float
         let cullBack: Bool
         let additive: Bool
@@ -343,6 +373,7 @@ extension SceneRenderer {
         var additive = false
         var alphaCutoff: Float = 0
         var depthTest = true, depthWrite = true
+        var pbr = Scene3DMaterialValues()
         if let d = quietAssetData(path, package: package),
            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
@@ -354,6 +385,7 @@ extension SceneRenderer {
             depthTest = (p0["depthtest"] as? String) != "disabled"
             depthWrite = (p0["depthwrite"] as? String) != "disabled"
             if let csv = p0["constantshadervalues"] as? [String: Any] {
+                pbr = Scene3DMaterialValues.parse(csv)
                 func fvec(_ any: Any?) -> [Float]? {
                     if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
                     if let n = any as? Double { return [Float(n)] }
@@ -372,6 +404,8 @@ extension SceneRenderer {
             if texName == nil {
                 return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map {
                     Mesh3DMaterialInfo(texture: $0, tint: SIMD4(color.x, color.y, color.z, alpha),
+                                       roughness: pbr.roughness, metallic: pbr.metallic,
+                                       specularTint: pbr.specularTint,
                                        alphaCutoff: alphaCutoff, cullBack: cullBack, additive: additive,
                                        depthTest: depthTest, depthWrite: depthWrite)
                 }
@@ -379,6 +413,8 @@ extension SceneRenderer {
         }
         guard let tex = resolveTexture(texName, package: package, device: device) else { return nil }
         return Mesh3DMaterialInfo(texture: tex, tint: SIMD4(color.x, color.y, color.z, alpha),
+                                  roughness: pbr.roughness, metallic: pbr.metallic,
+                                  specularTint: pbr.specularTint,
                                   alphaCutoff: alphaCutoff, cullBack: cullBack, additive: additive,
                                   depthTest: depthTest, depthWrite: depthWrite)
     }
@@ -432,6 +468,17 @@ extension SceneRenderer {
         guard let t = device.makeTexture(descriptor: d) else { return nil }
         depthTextures[key] = t
         return t
+    }
+
+    /// Metal encoder는 framebuffer billboard에서 재생성되므로 scene-wide PBR 상수를 한 곳에서 재바인드한다.
+    func bindScene3DLighting(frame: inout Scene3DFrameUniform,
+                            lights: [Scene3DLightUniform],
+                            into encoder: MTLRenderCommandEncoder) {
+        encoder.setFragmentBytes(&frame, length: MemoryLayout<Scene3DFrameUniform>.stride, index: 2)
+        lights.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            encoder.setFragmentBytes(base, length: bytes.count, index: 3)
+        }
     }
 
     /// 3D 메시 패스: target 에 clearColor 로 클리어 + 뎁스(.less) 붙여 씬 순서대로 드로우.
@@ -509,9 +556,24 @@ extension SceneRenderer {
         let fwd = simd_normalize(ctr - eye)
         let right = simd_normalize(simd_cross(fwd, upv))
         let camUp = simd_cross(right, fwd)
+        let resolvedLights = Scene3DLighting.resolvePointLights(scene3DLights, nodes: nmap)
+        var frameUniform = Scene3DFrameUniform(
+            cameraEye: SIMD4(eye.x, eye.y, eye.z, 1),
+            ambient: SIMD4(scene3DAmbient.x, scene3DAmbient.y, scene3DAmbient.z, 0),
+            skylight: SIMD4(scene3DSkylight.x, scene3DSkylight.y, scene3DSkylight.z, 0),
+            meta: SIMD4(Float(resolvedLights.count), 0, 0, 0))
+        var lightUniforms = [Scene3DLightUniform](repeating: Scene3DLightUniform(
+            positionExponent: .zero, colorRadius: .zero, shadow: SIMD4(-1, -1, 0, 0)), count: 4)
+        for (index, light) in resolvedLights.enumerated() {
+            lightUniforms[index] = Scene3DLightUniform(
+                positionExponent: SIMD4(light.position.x, light.position.y, light.position.z, light.exponent),
+                colorRadius: light.colorRadius,
+                shadow: SIMD4(-1, -1, 0, 0))
+        }
         // 와인딩: front = CCW(A/B 실측 — CW 는 젤다 회랑이 인사이드아웃: 근접 벽이 컬링되어
         // 뒤쪽 외벽이 보임). cullmode "normal" 메시가 CCW-front 백페이스 컬에서 preview 와 일치.
         enc.setFrontFacing(.counterClockwise)
+        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms, into: enc)
         let debug3D = Self.debugFlag("WAPLE_3D_DEBUG")
         for item in draw3DOrder {
             if item.bb {
@@ -540,12 +602,15 @@ extension SceneRenderer {
                     guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
                     enc = nextEnc
                     enc.setFrontFacing(.counterClockwise)
+                    bindScene3DLighting(frame: &frameUniform, lights: lightUniforms, into: enc)
                     if let srcTex {
-                        encodeBillboard(bb, overrideTexture: srcTex, viewProj: viewProj, right: right, up: camUp,
+                        encodeBillboard(bb, overrideTexture: srcTex, viewProj: viewProj, eye: eye,
+                                        right: right, up: camUp,
                                         nmap: nmap, into: enc, device: device, over: over)
                     }
                 } else {
-                    encodeBillboard(bb, overrideTexture: billboardTextures[item.idx], viewProj: viewProj, right: right, up: camUp,
+                    encodeBillboard(bb, overrideTexture: billboardTextures[item.idx], viewProj: viewProj, eye: eye,
+                                    right: right, up: camUp,
                                     nmap: nmap, into: enc, device: device, over: over)
                 }
             } else {
@@ -555,7 +620,13 @@ extension SceneRenderer {
                     let c = viewProj * w.matrix * SIMD4<Float>(0, 0, 0, 1)
                     NSLog("%@", "[Waple3D] draw '\(mr.name)' ndc=\(c.w != 0 ? SIMD3(c.x, c.y, c.z) / c.w : .zero) w=\(c.w)")
                 }
-                var u = MeshUniform(mvp: viewProj * w.matrix, tint: SIMD4(1, 1, 1, 1), misc: SIMD4(0, 0, 0, 0))
+                var u = MeshUniform(
+                    mvp: viewProj * w.matrix,
+                    model: w.matrix,
+                    normalMatrix: Scene3DMath.normalMatrix4x4(w.matrix),
+                    tint: SIMD4(1, 1, 1, 1),
+                    material: SIMD4(0.7, 0, 0, 1),
+                    specularTint: SIMD4(1, 1, 1, 0))
                 // 스키닝 모델: 프레임당 본행렬(skin=world(t)×bindWorld⁻¹) 계산 → boneBuffer memcpy(정적 애니는 항등).
                 var skinReady = false
                 var boneBuf: MTLBuffer? = nil
@@ -570,7 +641,8 @@ extension SceneRenderer {
                     // 스키닝 메시(16f 패킹)는 반드시 스키닝 파이프라인 필요 — 본버퍼 미준비면 스킵(8f 셰이더로 오독 방지).
                     if mesh.skinned && !skinReady { continue }
                     u.tint = mesh.tint
-                    u.misc.x = mesh.alphaCutoff
+                    u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, 1)
+                    u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, 0)
                     let useSkin = mesh.skinned && skinReady
                     let pipe: MTLRenderPipelineState
                     if useSkin { pipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin ?? over) : (meshPipelineSkin ?? over) }
@@ -598,7 +670,8 @@ extension SceneRenderer {
     /// 쿼드 4코너를 카메라 right/up 축으로 전개(월드 좌표) → mvp=viewProj. 뎁스 테스트 유지·미기록(투명),
     /// 양면, over(premult) 블렌드. 부모 서브트리 비가시/자기 비가시면 스킵.
     func encodeBillboard(_ bb: Billboard3D, overrideTexture: MTLTexture? = nil, viewProj: simd_float4x4,
-                                 right: SIMD3<Float>, up: SIMD3<Float>, nmap: [Int: Scene3DMath.Node],
+                                 eye: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                                 nmap: [Int: Scene3DMath.Node],
                                  into enc: MTLRenderCommandEncoder, device: MTLDevice, over: MTLRenderPipelineState) {
         var pWorld = matrix_identity_float4x4
         if let pid = bb.parent {
@@ -621,15 +694,27 @@ extension SceneRenderer {
         let rollRight = right * ca + up * sa
         let rollUp = -right * sa + up * ca
         let r = rollRight * hw, u = rollUp * hh
+        let receiverNormal: SIMD3<Float>
+        let toEye = eye - center
+        if simd_length_squared(toEye) > 1e-12 { receiverNormal = simd_normalize(toEye) }
+        else { receiverNormal = -simd_normalize(simd_cross(rollRight, rollUp)) }
         // UV 상단 원점: 상단 = +up. TL(0,0) TR(1,0) BR(1,1) BL(0,1).
         let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
-        func vtx(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] { [p.x, p.y, p.z, 0, 0, 0, uu, vv] }
+        func vtx(_ p: SIMD3<Float>, _ uu: Float, _ vv: Float) -> [Float] {
+            [p.x, p.y, p.z, receiverNormal.x, receiverNormal.y, receiverNormal.z, uu, vv]
+        }
         var verts: [Float] = []
         verts.reserveCapacity(48)
         verts += vtx(tl, 0, 0); verts += vtx(tr, 1, 0); verts += vtx(br, 1, 1)
         verts += vtx(tl, 0, 0); verts += vtx(br, 1, 1); verts += vtx(bl, 0, 1)
         guard let vbuf = bb.scratchQuad.load(verts, device: device) else { return }
-        var u2 = MeshUniform(mvp: viewProj, tint: bb.tint, misc: SIMD4(0, 0, 0, 0))
+        var u2 = MeshUniform(
+            mvp: viewProj,
+            model: matrix_identity_float4x4,
+            normalMatrix: matrix_identity_float4x4,
+            tint: bb.tint,
+            material: SIMD4(bb.roughness, bb.metallic, 0, bb.lighting ? 2 : 0),
+            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z, 0))
         // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우 광량 복원). 그 외 premult-over.
         enc.setRenderPipelineState(bb.additive ? (meshPipelineAdditive ?? over) : over)
         if let ds = meshDepthState(test: bb.depthTest, write: bb.depthWrite, device: device) { enc.setDepthStencilState(ds) }
