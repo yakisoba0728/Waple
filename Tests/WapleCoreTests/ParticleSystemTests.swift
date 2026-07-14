@@ -46,6 +46,65 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(particle.angularVel.x, pi, accuracy: 1e-6)
     }
 
+    private func randomInitializerParticle(exponent: Float?) throws -> Particle {
+        let exp = exponent.map { ",\"exponent\":\($0)" } ?? ""
+        let source = """
+        {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+         "initializer":[
+           {"name":"lifetimerandom","min":1,"max":2\(exp)},
+           {"name":"sizerandom","min":0,"max":1\(exp)},
+           {"name":"colorrandom","min":"0 0 0","max":"255 255 255"\(exp)},
+           {"name":"alpharandom","min":0,"max":1\(exp)},
+           {"name":"velocityrandom","min":"0 0 0","max":"1 1 1"\(exp)},
+           {"name":"rotationrandom","min":"0 0 0","max":"1 1 1"\(exp)},
+           {"name":"angularvelocityrandom","min":"0 0 0","max":"1 1 1"\(exp)}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """
+        let def = ParticleSystemDef.parse(json(source), material: nil)
+        var simulator = ParticleSimulator(def: def, seed: 7)
+        return try XCTUnwrap(simulator.step(0).first)
+    }
+
+    func testRandomInitializerExponentDefaultsToLinearSampling() throws {
+        let p = try randomInitializerParticle(exponent: nil)
+
+        XCTAssertEqual(p.lifetime, 1.5829303, accuracy: 1e-6)
+        XCTAssertEqual(p.size, 0.45244187, accuracy: 1e-6)
+        XCTAssertEqual(p.color.x, 0.24943149, accuracy: 1e-6)
+        XCTAssertEqual(p.color.y, 0.24943149, accuracy: 1e-6)
+        XCTAssertEqual(p.color.z, 0.24943149, accuracy: 1e-6)
+        XCTAssertEqual(p.alpha, 0.46795297, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.x, 0.32807672, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.y, 0.13425827, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.z, 0.41314137, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.x, 0.10355991, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.y, 0.95987403, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.z, 0.91801953, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.x, 0.87133175, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.y, 0.86400765, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.z, 0.54828739, accuracy: 1e-6)
+    }
+
+    func testRandomInitializerExponentCurvesSeededSamplingAndPreservesAlpha() throws {
+        let p = try randomInitializerParticle(exponent: 2)
+
+        XCTAssertEqual(p.lifetime, 1.3398077, accuracy: 1e-6)
+        XCTAssertEqual(p.size, 0.20470364, accuracy: 1e-6)
+        XCTAssertEqual(p.color.x, 0.06221607, accuracy: 1e-6)
+        XCTAssertEqual(p.color.y, 0.06221607, accuracy: 1e-6)
+        XCTAssertEqual(p.color.z, 0.06221607, accuracy: 1e-6)
+        XCTAssertEqual(p.alpha, 0.21897998, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.x, 0.10763434, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.y, 0.01802528, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.z, 0.17068580, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.x, 0.01072466, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.y, 0.92135817, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.z, 0.84275985, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.x, 0.75921905, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.y, 0.74650919, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.z, 0.30061907, accuracy: 1e-6)
+    }
+
     func testParseSnow() {
         let d = ParticleSystemDef.parse(json(snow), material: nil)
         XCTAssertEqual(d.maxCount, 360)
