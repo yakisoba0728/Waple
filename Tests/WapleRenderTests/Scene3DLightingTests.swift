@@ -257,7 +257,9 @@ final class Scene3DLightingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(cos(10 * Float.pi / 180), cone.inner - 1e-6)
         // 축에서 20°(> half-outer 15°) 방향은 outer 콘 밖 → 무조명(코사인 < outer).
         XCTAssertLessThan(cos(20 * Float.pi / 180), cone.outer)
-        // 콘 데이터 없음(0) → 전방향 통과.
+        // 콘 데이터 없음(0) → (1,-1): 셰이더 (cosAngle+1)/2 반구 그라디언트 폴백 곡선을 이 유닛이 잠금.
+        // 콘 게이팅 없는 광역 조명(가장자리 도달)은 픽셀로도 회귀 가드 —
+        // Scene3DPBRShadowRenderTests.testSpotWithoutConeDataUsesHemisphereGradientFallback.
         let none = Scene3DLighting.spotConeCosines(inner: 0, outer: 0)
         XCTAssertEqual(none.inner, 1)
         XCTAssertEqual(none.outer, -1)
