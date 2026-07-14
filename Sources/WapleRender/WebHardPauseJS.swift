@@ -172,6 +172,245 @@ enum WebHardPauseJS {
         });
       }
 
+      var audioEntries = [];
+
+      function removeAudioEntry(entry) {
+        var index = audioEntries.indexOf(entry);
+        if (index >= 0) { audioEntries.splice(index, 1); }
+      }
+
+      function enqueueAudio(entry, desiredState, transition, onCurrentCompletion) {
+        entry.desiredState = desiredState;
+        var generation = ++entry.generation;
+        entry.chain = entry.chain.catch(function (error) {
+          report(error);
+        }).then(function () {
+          if (entry.context.state === 'closed') {
+            removeAudioEntry(entry);
+            return;
+          }
+          if (generation !== entry.generation) { return; }
+          return Promise.resolve().then(transition).then(function () {
+            if (entry.context.state === 'closed') {
+              removeAudioEntry(entry);
+              return;
+            }
+            if (generation === entry.generation && onCurrentCompletion) {
+              onCurrentCompletion();
+            }
+          });
+        }).catch(function (error) {
+          report(error);
+        });
+        return entry.chain;
+      }
+
+      function requestAudioState(entry, desiredState, ownedResume) {
+        return enqueueAudio(entry, desiredState, function () {
+          if (entry.context.state === desiredState) { return; }
+          return desiredState === 'running'
+            ? entry.nativeResume()
+            : entry.nativeSuspend();
+        }, function () {
+          if (ownedResume && !paused && entry.context.state === 'running') {
+            entry.resumeAfterPause = false;
+          }
+        });
+      }
+
+      function trackAudioContext(context) {
+        var entry = {
+          context: context,
+          nativeResume: context.resume.bind(context),
+          nativeSuspend: context.suspend.bind(context),
+          desiredState: context.state,
+          generation: 0,
+          chain: Promise.resolve(),
+          resumeAfterPause: false
+        };
+        audioEntries.push(entry);
+
+        try {
+          Object.defineProperty(context, 'resume', {
+            configurable: true,
+            value: function () {
+              return enqueueAudio(entry, paused ? 'suspended' : 'running', function () {
+                return Promise.resolve(entry.nativeResume()).then(function () {
+                  if (paused) { return entry.nativeSuspend(); }
+                });
+              });
+            }
+          });
+          Object.defineProperty(context, 'suspend', {
+            configurable: true,
+            value: function () {
+              entry.resumeAfterPause = false;
+              return enqueueAudio(entry, 'suspended', entry.nativeSuspend);
+            }
+          });
+        } catch (error) {
+          report(error);
+        }
+
+        if (paused) { requestAudioState(entry, 'suspended', false); }
+        return context;
+      }
+
+      var audioConstructorWrappers = [];
+
+      function wrapperForAudioConstructor(Original, name) {
+        for (var index = 0; index < audioConstructorWrappers.length; index += 1) {
+          if (audioConstructorWrappers[index].original === Original) {
+            return audioConstructorWrappers[index].wrapper;
+          }
+        }
+        function WrappedAudioContext() {
+          if (!new.target) { throw new TypeError(name + ' requires new'); }
+          var args = Array.prototype.slice.call(arguments);
+          var target = new.target === WrappedAudioContext ? Original : new.target;
+          return trackAudioContext(Reflect.construct(Original, args, target));
+        }
+        Object.setPrototypeOf(WrappedAudioContext, Original);
+        WrappedAudioContext.prototype = Original.prototype;
+        audioConstructorWrappers.push({ original: Original, wrapper: WrappedAudioContext });
+        return WrappedAudioContext;
+      }
+
+      function wrapAudioConstructor(name) {
+        var Original = window[name];
+        if (typeof Original !== 'function') { return; }
+        var WrappedAudioContext = wrapperForAudioConstructor(Original, name);
+        try {
+          Object.defineProperty(window, name, {
+            value: WrappedAudioContext, writable: true, configurable: true
+          });
+        } catch (error) {
+          window[name] = WrappedAudioContext;
+        }
+      }
+
+      function pauseAudioContexts() {
+        audioEntries.slice().forEach(function (entry) {
+          if (entry.context.state === 'closed') {
+            removeAudioEntry(entry);
+            return;
+          }
+          if (entry.context.state === 'running') {
+            entry.resumeAfterPause = true;
+            requestAudioState(entry, 'suspended', false);
+          } else if (entry.desiredState === 'running') {
+            requestAudioState(entry, 'suspended', false);
+          }
+        });
+      }
+
+      function resumeAudioContexts() {
+        audioEntries.slice().forEach(function (entry) {
+          if (entry.context.state === 'closed') {
+            removeAudioEntry(entry);
+          } else if (entry.resumeAfterPause) {
+            requestAudioState(entry, 'running', true);
+          }
+        });
+      }
+
+      safely(function () { wrapAudioConstructor('AudioContext'); });
+      safely(function () { wrapAudioConstructor('webkitAudioContext'); });
+
+      var pauseClass = '__waple-hard-paused';
+      var animationStyleID = '__waple-hard-pause-style';
+      var knownAnimations = [];
+      var animationsToResume = [];
+      var animationObserver = null;
+
+      function allAnimations() {
+        if (typeof document.getAnimations !== 'function') { return []; }
+        return document.getAnimations();
+      }
+
+      function rememberAnimation(animation) {
+        if (animationsToResume.indexOf(animation) < 0) {
+          animationsToResume.push(animation);
+        }
+        try { animation.pause(); } catch (error) { report(error); }
+      }
+
+      function ensureAnimationStyle() {
+        if (document.getElementById(animationStyleID)) { return; }
+        var parent = document.head || document.documentElement;
+        if (!parent) { return; }
+        var style = document.createElement('style');
+        style.id = animationStyleID;
+        style.textContent =
+          'html.' + pauseClass + ', html.' + pauseClass + ' *, ' +
+          'html.' + pauseClass + '::before, html.' + pauseClass + '::after, ' +
+          'html.' + pauseClass + ' *::before, html.' + pauseClass + ' *::after {' +
+          'animation-play-state: paused !important;}';
+        parent.appendChild(style);
+      }
+
+      function pauseAnimations() {
+        ensureAnimationStyle();
+        knownAnimations = allAnimations();
+        knownAnimations.forEach(function (animation) {
+          if (animation.playState === 'running' || animation.playState === 'pending') {
+            rememberAnimation(animation);
+          }
+        });
+        if (document.documentElement) {
+          document.documentElement.classList.add(pauseClass);
+        }
+      }
+
+      function captureAnimationsCreatedWhilePaused() {
+        if (!paused) { return; }
+        allAnimations().forEach(function (animation) {
+          if (knownAnimations.indexOf(animation) >= 0) { return; }
+          knownAnimations.push(animation);
+          if (animation.playState !== 'idle' && animation.playState !== 'finished') {
+            rememberAnimation(animation);
+          }
+        });
+      }
+
+      function queueAnimationCapture() {
+        Promise.resolve().then(captureAnimationsCreatedWhilePaused);
+      }
+
+      function installAnimationObservation() {
+        if (animationObserver || !document.documentElement || !window.MutationObserver) { return; }
+        animationObserver = new MutationObserver(queueAnimationCapture);
+        animationObserver.observe(document.documentElement, {
+          childList: true, subtree: true, attributes: true
+        });
+      }
+
+      function resumeAnimations() {
+        if (document.documentElement) {
+          document.documentElement.classList.remove(pauseClass);
+        }
+        var recorded = animationsToResume.slice();
+        animationsToResume = [];
+        knownAnimations = [];
+        recorded.forEach(function (animation) {
+          if (animation.playState !== 'idle' && animation.playState !== 'finished') {
+            try { animation.play(); } catch (error) { report(error); }
+          }
+        });
+      }
+
+      document.addEventListener('animationstart', queueAnimationCapture, true);
+      document.addEventListener('transitionrun', queueAnimationCapture, true);
+      document.addEventListener('transitionstart', queueAnimationCapture, true);
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () {
+          installAnimationObservation();
+          if (paused) { pauseAnimations(); }
+        });
+      } else {
+        installAnimationObservation();
+      }
+
       var controller = {
         version: 1,
         isPaused: function () { return paused; },
@@ -181,7 +420,11 @@ enum WebHardPauseJS {
           paused = next;
           if (paused) {
             safely(pauseSchedulers);
+            safely(pauseAudioContexts);
+            safely(pauseAnimations);
           } else {
+            safely(resumeAnimations);
+            safely(resumeAudioContexts);
             safely(resumeSchedulers);
           }
         }

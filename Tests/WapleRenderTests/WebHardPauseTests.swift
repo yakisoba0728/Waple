@@ -38,6 +38,67 @@ final class WebHardPauseTests: XCTestCase {
     })();
     """#
 
+    private let deterministicAnimationPrelude = #"""
+    (function () {
+      var nativeSetInterval = window.setInterval.bind(window);
+      nativeSetInterval(function () {
+        if (document.visibilityState !== 'hidden' ||
+            typeof document.getAnimations !== 'function') {
+          return;
+        }
+        document.getAnimations().forEach(function (animation) {
+          if (animation.playState !== 'running' && animation.playState !== 'pending') {
+            return;
+          }
+          animation.currentTime = Number(animation.currentTime || 0) + 16;
+        });
+      }, 16);
+    })();
+    """#
+
+    private let fakeAudioPrelude = #"""
+    (function () {
+      window.__audioContexts = [];
+      window.__audioPending = [];
+      window.__audioInitialState = 'running';
+
+      function transition(context, state, operation) {
+        return new Promise(function (resolve) {
+          window.__audioPending.push(function () {
+            context.state = state;
+            context.operations.push(operation);
+            resolve();
+          });
+        });
+      }
+
+      function FakeAudioContext() {
+        this.state = window.__audioInitialState;
+        this.operations = [];
+        window.__audioContexts.push(this);
+      }
+
+      FakeAudioContext.prototype.suspend = function () {
+        return transition(this, 'suspended', 'suspend');
+      };
+      FakeAudioContext.prototype.resume = function () {
+        return transition(this, 'running', 'resume');
+      };
+      FakeAudioContext.prototype.close = function () {
+        this.state = 'closed';
+        return Promise.resolve();
+      };
+
+      window.__resolveAudio = function () {
+        var resolver = window.__audioPending.shift();
+        if (resolver) { resolver(); }
+        return window.__audioPending.length;
+      };
+      window.AudioContext = FakeAudioContext;
+      window.webkitAudioContext = FakeAudioContext;
+    })();
+    """#
+
     override func tearDown() {
         for web in webViews {
             web.stopLoading()
@@ -242,5 +303,175 @@ final class WebHardPauseTests: XCTestCase {
         XCTAssertLessThan(times[0] - resumedAt, 230)
         XCTAssertGreaterThan(times[1] - times[0], 180)
         XCTAssertLessThan(times[1] - times[0], 330)
+    }
+
+    func testOnlyRunningAudioContextsResumeAndPausedCreationStaysSuspended() throws {
+        let web = makeControllerWebView(prelude: fakeAudioPrelude)
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.AudioContext === window.webkitAudioContext") as? Bool,
+            true,
+            "constructor aliases must preserve identity"
+        )
+        _ = pumpEvalJS(web, """
+        window.__audioInitialState = 'running';
+        window.__runningContext = new AudioContext();
+        window.__audioInitialState = 'suspended';
+        window.__pageSuspendedContext = new webkitAudioContext();
+        window.__wapleHardPauseController.setPaused(true);
+        """)
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__runningContext.state") as? String == "suspended"
+        })
+
+        _ = pumpEvalJS(web, """
+        window.__audioInitialState = 'running';
+        window.__createdWhilePaused = new AudioContext();
+        """)
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__createdWhilePaused.state") as? String == "suspended"
+        })
+
+        _ = pumpEvalJS(web, "window.__createdWhilePaused.resume();")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__createdWhilePaused.state") as? String == "suspended"
+        }, "resume() during hard pause must be followed immediately by suspend()")
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__runningContext.state") as? String == "running"
+        })
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__pageSuspendedContext.state") as? String,
+            "suspended"
+        )
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__createdWhilePaused.state") as? String,
+            "suspended"
+        )
+    }
+
+    func testLateAudioPromisesCannotReverseLatestPauseState() throws {
+        let web = makeControllerWebView(prelude: fakeAudioPrelude)
+        _ = pumpEvalJS(web, """
+        window.__context = new AudioContext();
+        window.__wapleHardPauseController.setPaused(true);
+        """)
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__context.state") as? String == "running"
+        }, "late suspend must be followed by the latest resume")
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(true);")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__context.state") as? String == "suspended"
+        })
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(true);")
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__context.state") as? String == "suspended"
+        }, "late resume must be followed by the latest suspend")
+    }
+
+    func testWAAPIAndCSSAnimationsFreezeIncludingAnimationsAddedWhilePaused() throws {
+        let web = makeControllerWebView(prelude: deterministicAnimationPrelude, html: """
+        <html><head><style>
+        @keyframes waplePulse { from { opacity: 0; } to { opacity: 1; } }
+        #cssBox { animation: waplePulse 1s linear infinite; }
+        </style></head><body><div id="box"></div><div id="cssBox"></div><script>
+        window.__animation = document.getElementById('box').animate(
+          [{ transform: 'translateX(0px)' }, { transform: 'translateX(100px)' }],
+          { duration: 1000, iterations: Infinity }
+        );
+        void document.body.offsetWidth;
+        window.__cssAnimation = document.getElementById('cssBox').getAnimations()[0];
+        </script></body></html>
+        """)
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__animation.currentTime") as? Double ?? 0) > 30 &&
+                (pumpEvalJS(web, "window.__cssAnimation.currentTime") as? Double ?? 0) > 30
+        })
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(true);")
+        let frozen = pumpEvalJS(web, "window.__animation.currentTime") as? Double ?? 0
+        let frozenCSS = pumpEvalJS(web, "window.__cssAnimation.currentTime") as? Double ?? 0
+        spin(0.20)
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__animation.currentTime") as? Double ?? -1,
+            frozen,
+            accuracy: 3
+        )
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__cssAnimation.currentTime") as? Double ?? -1,
+            frozenCSS,
+            accuracy: 3
+        )
+        _ = pumpEvalJS(web, """
+        var dynamic = document.createElement('div');
+        document.body.appendChild(dynamic);
+        window.__dynamicAnimation = dynamic.animate(
+          [{ opacity: 0 }, { opacity: 1 }],
+          { duration: 1000, iterations: Infinity }
+        );
+        """)
+        spin(0.20)
+        let dynamicFrozen = pumpEvalJS(web, "window.__dynamicAnimation.currentTime") as? Double ?? 0
+        spin(0.15)
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__dynamicAnimation.currentTime") as? Double ?? -1,
+            dynamicFrozen,
+            accuracy: 3
+        )
+        XCTAssertEqual(
+            pumpEvalJS(web, """
+            document.documentElement.classList.contains('__waple-hard-paused')
+            """) as? Bool,
+            true
+        )
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__animation.currentTime") as? Double ?? 0) > frozen + 20 &&
+                (pumpEvalJS(web, "window.__cssAnimation.currentTime") as? Double ?? 0) > frozenCSS + 20 &&
+                (pumpEvalJS(web, "window.__dynamicAnimation.currentTime") as? Double ?? 0) > dynamicFrozen + 20
+        })
     }
 }
