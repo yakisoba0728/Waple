@@ -59,8 +59,10 @@ public func sheetFrameIndex(sequence: Float, frameCount: Int, mirror: Bool) -> I
 public enum ParticleOperator: Equatable {
     case movement(gravity: Vec3, drag: Float)
     case alphaFade(fadeInTime: Float, fadeOutTime: Float)          // 수명 비율 0..1 (fadeOut 0=없음)
-    case sizeChange(startTime: Float, startValue: Float, endValue: Float)
-    case colorChange(startTime: Float, startValue: Vec3, endValue: Vec3)
+    /// 수명 비율 구간에서 factor를 보간해 현재 크기에 곱한다.
+    case sizeChange(startTime: Float, startValue: Float, endValue: Float, endTime: Float = 1)
+    /// 수명 비율 구간에서 RGB factor를 성분별 보간해 현재 색에 곱한다.
+    case colorChange(startTime: Float, startValue: Vec3, endValue: Vec3, endTime: Float = 1)
     case angularMovement(force: Vec3)
     case oscillateAlpha(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float)
     case oscillatePosition(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
@@ -78,7 +80,7 @@ public enum ParticleOperator: Equatable {
     /// 크기 진동: size ×= lerp(scaleMin, scaleMax, 0.5(1+sin(2πf·age+phase))). 파티클별 f/phase 스폰 샘플.
     case oscillateSize(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
                        phaseMin: Float, phaseMax: Float)
-    /// 알파 램프(초 단위 — 실물 长2.json lifetime3/endtime2 로 단위 확정): st..et 사이 sv→ev, 밖은 홀드.
+    /// 수명 비율 구간에서 alpha factor를 보간해 현재 알파에 곱한다.
     case alphaChange(startTime: Float, endTime: Float, startValue: Float, endValue: Float)
     /// 노이즈 리맵: velocity = 범위 보간(덮어쓰기, 매 스텝) / speed = 적분 속도 배수(비파괴 — 복리 방지).
     /// 노이즈 입력은 파티클별 위상 + age (근사 — WE 정의 미공개, 유계·탈동기·결정성 보장).
@@ -273,11 +275,15 @@ public struct ParticleSystemDef: Equatable {
             case "alphafade":
                 ops.append(.alphaFade(fadeInTime: pfloat(o["fadeintime"]) ?? 0, fadeOutTime: pfloat(o["fadeouttime"]) ?? 0))
             case "sizechange":
-                ops.append(.sizeChange(startTime: pfloat(o["starttime"]) ?? 0, startValue: pfloat(o["startvalue"]) ?? 1, endValue: pfloat(o["endvalue"]) ?? 1))
+                ops.append(.sizeChange(startTime: pfloat(o["starttime"]) ?? 0,
+                                       startValue: pfloat(o["startvalue"]) ?? 1,
+                                       endValue: pfloat(o["endvalue"]) ?? 0,
+                                       endTime: pfloat(o["endtime"]) ?? 1))
             case "colorchange":
                 ops.append(.colorChange(startTime: pfloat(o["starttime"]) ?? 0,
                                         startValue: pvec3(o["startvalue"]) ?? Vec3(x: 1, y: 1, z: 1),
-                                        endValue: pvec3(o["endvalue"]) ?? Vec3(x: 1, y: 1, z: 1)))
+                                        endValue: pvec3(o["endvalue"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                        endTime: pfloat(o["endtime"]) ?? 1))
             case "angularmovement":
                 ops.append(.angularMovement(force: pvec3(o["force"]) ?? Vec3(x: 0, y: 0, z: 0)))
             case "oscillatealpha":
@@ -323,9 +329,10 @@ public struct ParticleSystemDef: Equatable {
                                           scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin,
                                           phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "alphachange":
-                // ponytail: 기본 sv0→ev1/et1(WE 에디터 관례 추정) — 실물 preview 대비 어긋나면 여기 튜닝.
-                ops.append(.alphaChange(startTime: pfloat(o["starttime"]) ?? 0, endTime: pfloat(o["endtime"]) ?? 1,
-                                        startValue: pfloat(o["startvalue"]) ?? 0, endValue: pfloat(o["endvalue"]) ?? 1))
+                ops.append(.alphaChange(startTime: pfloat(o["starttime"]) ?? 0,
+                                        endTime: pfloat(o["endtime"]) ?? 1,
+                                        startValue: pfloat(o["startvalue"]) ?? 1,
+                                        endValue: pfloat(o["endvalue"]) ?? 0))
             case "remapvalue":
                 let fbm = (o["transformfunction"] as? String) == "fbmnoise"
                 let scale = pfloat(o["transforminputscale"]) ?? 1

@@ -108,8 +108,8 @@ public struct ParticleSimulator {
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
             case let .angularMovement(f): ang.append(s3(f))
-            case let .sizeChange(st, sv, ev): if sc == nil { sc = (st, sv, ev) }
-            case let .colorChange(st, sv, ev): if cc == nil { cc = (st, s3(sv), s3(ev)) }
+            case let .sizeChange(st, sv, ev, _): if sc == nil { sc = (st, sv, ev) }
+            case let .colorChange(st, sv, ev, _): if cc == nil { cc = (st, s3(sv), s3(ev)) }
             case let .alphaFade(fin, fout): if af == nil { af = (fin, fout) }
             case let .oscillatePosition(fmin, fmax, smin, smax, pmin, pmax, mask):
                 if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
