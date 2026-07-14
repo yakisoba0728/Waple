@@ -47,13 +47,13 @@ public struct ParticleSimulator {
     // 파생 오퍼레이터(스폰 시/표시 시 참조) 캐시.
     private let movements: [(gravity: SIMD3<Float>, drag: Float)]
     private let angulars: [SIMD3<Float>]
-    private let sizeChange: (st: Float, sv: Float, ev: Float)?
-    private let colorChange: (st: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)?
+    private let sizeChanges: [(st: Float, et: Float, sv: Float, ev: Float)]
+    private let colorChanges: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)]
     private let alphaFade: (fin: Float, fout: Float)?
     private let oscPosOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float, mask: SIMD3<Float>)?
     private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float)?
     private let oscSizeOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float)?
-    private let alphaChangeOp: (st: Float, et: Float, sv: Float, ev: Float)?
+    private let alphaChanges: [(st: Float, et: Float, sv: Float, ev: Float)]
     private enum CachedRemap {
         case velocity(min: SIMD3<Float>, max: SIMD3<Float>, fbm: Bool, scale: Float)
         case speed(min: Float, max: Float, fbm: Bool, scale: Float)
@@ -93,8 +93,8 @@ public struct ParticleSimulator {
 
         var mv: [(SIMD3<Float>, Float)] = []
         var ang: [SIMD3<Float>] = []
-        var sc: (Float, Float, Float)? = nil
-        var cc: (Float, SIMD3<Float>, SIMD3<Float>)? = nil
+        var sc: [(st: Float, et: Float, sv: Float, ev: Float)] = []
+        var cc: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)] = []
         var af: (Float, Float)? = nil
         var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
         var oa: (Float, Float, Float, Float)? = nil
@@ -102,14 +102,16 @@ public struct ParticleSimulator {
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>)] = []
         var turb: (Float, Float, Float, Float, SIMD3<Float>, Float, Float)? = nil
         var osz: (Float, Float, Float, Float, Float, Float)? = nil
-        var ac: (Float, Float, Float, Float)? = nil
+        var ac: [(st: Float, et: Float, sv: Float, ev: Float)] = []
         var rms: [CachedRemap] = []
         for op in def.operators {
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
             case let .angularMovement(f): ang.append(s3(f))
-            case let .sizeChange(st, sv, ev, _): if sc == nil { sc = (st, sv, ev) }
-            case let .colorChange(st, sv, ev, _): if cc == nil { cc = (st, s3(sv), s3(ev)) }
+            case let .sizeChange(st, sv, ev, et):
+                sc.append((st: st, et: et, sv: sv, ev: ev))
+            case let .colorChange(st, sv, ev, et):
+                cc.append((st: st, et: et, sv: s3(sv), ev: s3(ev)))
             case let .alphaFade(fin, fout): if af == nil { af = (fin, fout) }
             case let .oscillatePosition(fmin, fmax, smin, smax, pmin, pmax, mask):
                 if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
@@ -124,7 +126,7 @@ public struct ParticleSimulator {
             case let .oscillateSize(fmin, fmax, smin, smax, pmin, pmax):
                 if osz == nil { osz = (fmin, fmax, smin, smax, pmin, pmax) }
             case let .alphaChange(st, et, sv, ev):
-                if ac == nil { ac = (st, et, sv, ev) }
+                ac.append((st: st, et: et, sv: sv, ev: ev))
             case let .remapValue(output, fbm, scale):
                 switch output {
                 case let .velocity(mn, mx): rms.append(.velocity(min: s3(mn), max: s3(mx), fbm: fbm, scale: scale))
@@ -134,8 +136,8 @@ public struct ParticleSimulator {
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
         angulars = ang
-        sizeChange = sc.map { (st: $0.0, sv: $0.1, ev: $0.2) }
-        colorChange = cc.map { (st: $0.0, sv: $0.1, ev: $0.2) }
+        sizeChanges = sc
+        colorChanges = cc
         alphaFade = af.map { (fin: $0.0, fout: $0.1) }
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3) }
@@ -143,7 +145,7 @@ public struct ParticleSimulator {
         vortices = vort.map { (axis: $0.0, dIn: $0.1, dOut: $0.2, sIn: $0.3, sOut: $0.4, offset: $0.5) }
         turbulence = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
         oscSizeOp = osz.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
-        alphaChangeOp = ac.map { (st: $0.0, et: $0.1, sv: $0.2, ev: $0.3) }
+        alphaChanges = ac
         remaps = rms
         trailSamples = def.renderer.trailSampleCount
         speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
@@ -476,22 +478,25 @@ public struct ParticleSimulator {
         var d = p
         let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
         // size
-        if let sc = sizeChange { d.size = p.initialSize * lerp(sc.sv, sc.ev, progress(n, sc.st)) }
-        else { d.size = p.initialSize }
+        d.size = p.initialSize
+        for op in sizeChanges {
+            d.size *= lerp(op.sv, op.ev, changeProgress(n, op.st, op.et))
+        }
         if let os = oscSizeOp {
             let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscSizeFreq * p.age + p.oscSizePhase))
             d.size *= lerp(os.smin, os.smax, osc01)
         }
         // color
-        if let cc = colorChange { let t = progress(n, cc.st); d.color = p.initialColor * (cc.sv + (cc.ev - cc.sv) * t) }
-        else { d.color = p.initialColor }
+        d.color = p.initialColor
+        for op in colorChanges {
+            let t = changeProgress(n, op.st, op.et)
+            d.color *= op.sv + (op.ev - op.sv) * t
+        }
         // alpha
         var a = p.initialAlpha
         if let af = alphaFade { a *= fadeFactor(n, af.fin, af.fout) }
-        if let ac = alphaChangeOp {   // 초 단위 램프(st..et 사이 sv→ev, 밖은 홀드)
-            let t: Float = ac.et > ac.st ? max(0, min(1, (p.age - ac.st) / (ac.et - ac.st)))
-                                         : (p.age >= ac.st ? 1 : 0)
-            a *= lerp(ac.sv, ac.ev, t)
+        for op in alphaChanges {
+            a *= lerp(op.sv, op.ev, changeProgress(n, op.st, op.et))
         }
         if p.oscAlphaScale > 0 {
             let osc = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * p.age + p.oscAlphaPhase))
@@ -596,10 +601,11 @@ private func normalizeSafe(_ v: SIMD3<Float>) -> SIMD3<Float> {
     return len > 1e-6 ? v / len : SIMD3(0, 0, 0)
 }
 private func lerp(_ a: Float, _ b: Float, _ t: Float) -> Float { a + (b - a) * t }
-/// 진행도: starttime 이전 0, 이후 [0,1] 선형. st>=1 이면 n>=st 일 때만 1.
-private func progress(_ n: Float, _ st: Float) -> Float {
-    if st >= 1 { return n >= st ? 1 : 0 }
-    return max(0, min(1, (n - st) / max(0.0001, 1 - st)))
+/// 수명 비율 진행도. 시간값은 보존하고 계산 결과만 clamp한다(음수 span은 역보간).
+private func changeProgress(_ n: Float, _ st: Float, _ et: Float) -> Float {
+    let span = et - st
+    if span == 0 { return n >= st ? 1 : 0 }
+    return max(0, min(1, (n - st) / span))
 }
 /// alphaFade: fadeIn(수명 비율) 동안 0→1, fadeOut(말미 비율) 동안 1→0.
 private func fadeFactor(_ n: Float, _ fin: Float, _ fout: Float) -> Float {
