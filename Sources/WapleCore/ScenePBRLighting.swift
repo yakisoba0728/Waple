@@ -51,7 +51,7 @@ enum ScenePBRMath {
         guard radius > 0 else { return .zero }
         let delta = lightPosition - world
         let distance = simd_length(delta)
-        guard distance > 1e-5 else { return .zero }
+        guard distance >= 1e-5 else { return .zero }
 
         let light = delta / distance
         let nl = max(simd_dot(normal, light), 0)

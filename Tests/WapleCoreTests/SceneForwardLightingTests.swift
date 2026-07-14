@@ -117,13 +117,23 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(outside, 0, accuracy: 1e-6)
     }
 
-    func testZeroRadiusLightContributesNothing() {
+    func testRadiusAndDistanceGuardsMatchMetal() {
         // parseLight 는 radius 부재 시 0 → 0나눗셈 없이 기여 0.
         let u = SceneLight3D.forwardUniforms(
             [light(Vec3(x: 0, y: 0, z: 10), Vec3(x: 1, y: 1, z: 1), intensity: 5, radius: 0)],
             ambient: Vec3(x: 0.1, y: 0.1, z: 0.1), skylight: Vec3(x: 0.1, y: 0.1, z: 0.1))
         let c = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, 0), u)
         XCTAssertEqual(c, SIMD3(0.1, 0.1, 0.1))
+
+        // Metal은 dist < 1e-5만 제외하므로 정확히 경계인 점은 평가해야 한다.
+        let boundary: Float = 1e-5
+        let boundaryUniforms = SceneLight3D.forwardUniforms(
+            [light(Vec3(x: 0, y: 0, z: boundary), Vec3(x: 1, y: 1, z: 1),
+                   intensity: 1, radius: 1, exponent: 0)],
+            ambient: Vec3(x: 0, y: 0, z: 0), skylight: Vec3(x: 0, y: 0, z: 0))
+        let boundaryResult = SceneLight3D.evaluateLighting(
+            at: .zero, boundaryUniforms, roughness: 1, metallic: 0)
+        XCTAssertGreaterThan(boundaryResult.x, 0)
     }
 
     func testColorAndSummation() {

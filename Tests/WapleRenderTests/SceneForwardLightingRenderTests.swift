@@ -58,8 +58,12 @@ final class SceneForwardLightingRenderTests: XCTestCase {
     func testForwardLightShaderUsesCookTorranceAndPackedExponent() throws {
         let source = QuadShaders.source
         XCTAssertTrue(source.contains("distributionGGX"))
+        XCTAssertTrue(source.contains("geometrySmith"))
+        XCTAssertTrue(source.contains("fresnelSchlick"))
         XCTAssertTrue(source.contains("ggxDenominatorFloor = 1e-4"))
         XCTAssertTrue(source.contains("material.scalars.x"))
+        XCTAssertTrue(source.contains("material.specularTint.xyz"))
+        XCTAssertTrue(source.contains("constant PBRMaterialUniforms &material [[buffer(5)]]"))
         XCTAssertTrue(source.contains("finiteLightFalloff(dist, radius, lightPos[i].w)"))
         XCTAssertFalse(source.contains("light += lightCol[i].xyz * (ndl * attenuation)"))
 
