@@ -569,6 +569,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var meshPipelineAdditive: MTLRenderPipelineState?
     var meshPipelineSkin: MTLRenderPipelineState?      // GPU 스키닝(mv_skin) over
     var meshPipelineSkinAdditive: MTLRenderPipelineState?
+    var shadowPipelineStaticOpaque: MTLRenderPipelineState?
+    var shadowPipelineStaticCutout: MTLRenderPipelineState?
+    var shadowPipelineSkinOpaque: MTLRenderPipelineState?
+    var shadowPipelineSkinCutout: MTLRenderPipelineState?
+    var pointShadowDepthState: MTLDepthStencilState?
+    var pointShadowAtlas: MTLTexture?
+    var pointShadowAtlasSlices = 0
     /// 카메라 프로퍼티 스크립트(eye/center/up/fov). per-frame 재평가로 카메라 애니.
     var cameraScripts: [Script3D] = []
     var meshDepthStates: [String: MTLDepthStencilState] = [:]  // "test-write" 키
@@ -1102,6 +1109,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         eval3DOrder = []; draw3DOrder = []
         meshPipelineOver = nil; meshPipelineAdditive = nil
         meshPipelineSkin = nil; meshPipelineSkinAdditive = nil
+        shadowPipelineStaticOpaque = nil; shadowPipelineStaticCutout = nil
+        shadowPipelineSkinOpaque = nil; shadowPipelineSkinCutout = nil
+        pointShadowDepthState = nil; pointShadowAtlas = nil; pointShadowAtlasSlices = 0
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
         pipeline = nil; layerAdditivePipeline = nil; queue = nil; device = nil

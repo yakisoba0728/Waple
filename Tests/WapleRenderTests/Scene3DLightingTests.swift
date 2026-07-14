@@ -4,6 +4,15 @@ import simd
 @testable import WapleRender
 
 final class Scene3DLightingTests: XCTestCase {
+    private func resolved(castsShadow: Bool,
+                          position: SIMD3<Float> = .zero) -> Scene3DResolvedLight {
+        Scene3DResolvedLight(
+            position: position,
+            exponent: 2,
+            colorRadius: SIMD4(1, 0.5, 0.25, 10),
+            castsShadow: castsShadow)
+    }
+
     private func light(id: Int,
                        type: String,
                        origin: SIMD3<Float>,
@@ -116,5 +125,53 @@ final class Scene3DLightingTests: XCTestCase {
 
         XCTAssertEqual(resolved.count, 1)
         XCTAssertEqual(resolved[0].position, SIMD3(4, 5, 6))
+    }
+
+    func testPointShadowFaceAndAtlasCellsMatchNativeOrder() {
+        XCTAssertEqual(PointShadowMath.faceIndex(SIMD3(2, 1, 1)), 0)
+        XCTAssertEqual(PointShadowMath.faceIndex(SIMD3(-2, 1, 1)), 1)
+        XCTAssertEqual(PointShadowMath.faceIndex(SIMD3(1, 2, 1)), 2)
+        XCTAssertEqual(PointShadowMath.faceIndex(SIMD3(1, -2, 1)), 3)
+        XCTAssertEqual(PointShadowMath.faceIndex(SIMD3(1, 1, 2)), 4)
+        XCTAssertEqual(PointShadowMath.faceIndex(SIMD3(1, 1, -2)), 5)
+        XCTAssertEqual(
+            (0..<6).map(PointShadowMath.atlasCell),
+            [SIMD2(0, 0), SIMD2(1, 0), SIMD2(0, 1),
+             SIMD2(1, 1), SIMD2(0, 2), SIMD2(1, 2)])
+    }
+
+    func testPointShadowDominantAxisTiesMatchNativePriority() {
+        XCTAssertEqual(PointShadowMath.faceIndex(SIMD3(1, 1, 1)), 0, "X wins an XYZ tie")
+        XCTAssertEqual(PointShadowMath.faceIndex(SIMD3(0, 1, 1)), 2, "Y wins a YZ tie")
+    }
+
+    func testShadowSlicesAreDenseOnlyForCastingLights() {
+        let packed = Scene3DLighting.packLights([
+            resolved(castsShadow: true, position: SIMD3(1, 0, 0)),
+            resolved(castsShadow: false, position: SIMD3(2, 0, 0)),
+            resolved(castsShadow: true, position: SIMD3(3, 0, 0)),
+        ])
+
+        XCTAssertEqual(packed.map { $0.shadow.x }, [0, -1, 1, -1])
+        XCTAssertEqual(packed.map { $0.shadow.y }, [0, -1, 6, -1])
+        XCTAssertEqual(packed[0].positionExponent, SIMD4(1, 0, 0, 2))
+        XCTAssertEqual(packed[1].colorRadius, SIMD4(1, 0.5, 0.25, 10))
+        XCTAssertEqual(Scene3DLighting.shadowSliceCount(packed), 2)
+    }
+
+    func testPointShadowViewProjectionsAreFiniteAndMapFaceCenters() {
+        let position = SIMD3<Float>(3, 4, 5)
+        let matrices = PointShadowMath.faceViewProjections(position: position, radius: 20)
+        XCTAssertEqual(matrices.count, 6)
+        let directions: [SIMD3<Float>] = [
+            SIMD3(1, 0, 0), SIMD3(-1, 0, 0), SIMD3(0, 1, 0),
+            SIMD3(0, -1, 0), SIMD3(0, 0, 1), SIMD3(0, 0, -1),
+        ]
+        for (index, direction) in directions.enumerated() {
+            let clip = matrices[index] * SIMD4<Float>(position + direction, 1)
+            XCTAssertTrue(clip.x.isFinite && clip.y.isFinite && clip.z.isFinite && clip.w.isFinite)
+            XCTAssertEqual(clip.x / clip.w, 0, accuracy: 1e-5)
+            XCTAssertEqual(clip.y / clip.w, 0, accuracy: 1e-5)
+        }
     }
 }

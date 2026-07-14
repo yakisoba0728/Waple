@@ -109,4 +109,78 @@ enum Scene3DLighting {
         }
         return result
     }
+
+    /// 활성 라이트 순서를 유지하면서 shadow caster에만 조밀한 array slice를 부여한다.
+    static func packLights(_ lights: [Scene3DResolvedLight]) -> [Scene3DLightUniform] {
+        var packed = [Scene3DLightUniform](repeating: Scene3DLightUniform(
+            positionExponent: .zero,
+            colorRadius: .zero,
+            shadow: SIMD4(-1, -1, 0, 0)), count: maximumLights)
+        var nextShadowSlice: Float = 0
+        for (index, light) in lights.prefix(maximumLights).enumerated() {
+            let slice = light.castsShadow ? nextShadowSlice : -1
+            if light.castsShadow { nextShadowSlice += 1 }
+            packed[index] = Scene3DLightUniform(
+                positionExponent: SIMD4(light.position.x, light.position.y, light.position.z, light.exponent),
+                colorRadius: light.colorRadius,
+                shadow: SIMD4(slice, slice >= 0 ? slice * 6 : -1, 0, 0))
+        }
+        return packed
+    }
+
+    static func shadowSliceCount(_ packed: [Scene3DLightUniform]) -> Int {
+        packed.reduce(into: 0) { count, light in
+            if light.shadow.x >= 0 { count = max(count, Int(light.shadow.x) + 1) }
+        }
+    }
+}
+
+/// point shadow cube의 네이티브 dominant-axis face 순서와 2×3 셀 배치.
+enum PointShadowMath {
+    static let faceResolution = 512
+    static let atlasColumns = 2
+    static let atlasRows = 3
+    static let viewportCompensation: Float = 0.49
+
+    static func faceIndex(_ delta: SIMD3<Float>) -> Int {
+        let absolute = simd_abs(delta)
+        if absolute.x >= absolute.y && absolute.x >= absolute.z {
+            return delta.x >= 0 ? 0 : 1
+        }
+        if absolute.y >= absolute.x && absolute.y >= absolute.z {
+            return delta.y >= 0 ? 2 : 3
+        }
+        return delta.z >= 0 ? 4 : 5
+    }
+
+    static func atlasCell(_ face: Int) -> SIMD2<Int> {
+        switch face {
+        case 0: return SIMD2(0, 0)
+        case 1: return SIMD2(1, 0)
+        case 2: return SIMD2(0, 1)
+        case 3: return SIMD2(1, 1)
+        case 4: return SIMD2(0, 2)
+        default: return SIMD2(1, 2)
+        }
+    }
+
+    static func faceViewProjections(position: SIMD3<Float>, radius: Float) -> [simd_float4x4] {
+        guard radius.isFinite, radius > 0 else { return [] }
+        let directions: [SIMD3<Float>] = [
+            SIMD3(1, 0, 0), SIMD3(-1, 0, 0),
+            SIMD3(0, 1, 0), SIMD3(0, -1, 0),
+            SIMD3(0, 0, 1), SIMD3(0, 0, -1),
+        ]
+        let up: [SIMD3<Float>] = [
+            SIMD3(0, -1, 0), SIMD3(0, -1, 0),
+            SIMD3(0, 0, 1), SIMD3(0, 0, -1),
+            SIMD3(0, -1, 0), SIMD3(0, -1, 0),
+        ]
+        // [Waple stability policy] native CPU near 값은 미확정. 반경에 비례시키되 0/역전은 금지한다.
+        let near = max(1e-4, min(min(0.05, radius * 0.01), radius * 0.5))
+        let projection = Scene3DMath.perspective(fovYDegrees: 90, aspect: 1, nearZ: near, farZ: radius)
+        return zip(directions, up).map { direction, upVector in
+            projection * Scene3DMath.lookAt(eye: position, center: position + direction, up: upVector)
+        }
+    }
 }

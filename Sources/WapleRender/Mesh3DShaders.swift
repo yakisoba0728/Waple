@@ -33,6 +33,10 @@ enum Mesh3DShaders {
         float3 worldPos;
         float3 worldNormal;
     };
+    struct ShadowVOut {
+        float4 pos [[position]];
+        float2 uv;
+    };
 
     inline float3 normalizedOr(float3 value, float3 fallback) {
         float length2 = dot(value, value);
@@ -88,6 +92,48 @@ enum Mesh3DShaders {
                                      normalizedOr(skinnedNormal, float3(0.0, 0.0, 1.0)));
         o.uv = float2(vtx[b + 6], vtx[b + 7]);
         return o;
+    }
+
+    vertex ShadowVOut sv_main(uint vid [[vertex_id]],
+                              const device float* vtx [[buffer(0)]],
+                              constant MeshU& u [[buffer(1)]]) {
+        uint b = vid * 8;
+        ShadowVOut o;
+        o.pos = u.mvp * float4(vtx[b], vtx[b + 1], vtx[b + 2], 1.0);
+        o.uv = float2(vtx[b + 6], vtx[b + 7]);
+        return o;
+    }
+
+    vertex ShadowVOut sv_skin(uint vid [[vertex_id]],
+                              const device float* vtx [[buffer(0)]],
+                              constant MeshU& u [[buffer(1)]],
+                              const device float4x4* bones [[buffer(2)]]) {
+        uint b = vid * 16;
+        float3 localPos = float3(vtx[b], vtx[b + 1], vtx[b + 2]);
+        uint4 idx = uint4(uint(vtx[b + 8] + 0.5), uint(vtx[b + 9] + 0.5),
+                          uint(vtx[b + 10] + 0.5), uint(vtx[b + 11] + 0.5));
+        float4 weights = float4(vtx[b + 12], vtx[b + 13], vtx[b + 14], vtx[b + 15]);
+        float weightSum = weights.x + weights.y + weights.z + weights.w;
+        float3 skinnedPos = localPos;
+        if (weightSum > 0.0) {
+            weights /= weightSum;
+            skinnedPos = (weights.x * (bones[idx.x] * float4(localPos, 1.0))
+                        + weights.y * (bones[idx.y] * float4(localPos, 1.0))
+                        + weights.z * (bones[idx.z] * float4(localPos, 1.0))
+                        + weights.w * (bones[idx.w] * float4(localPos, 1.0))).xyz;
+        }
+        ShadowVOut o;
+        o.pos = u.mvp * float4(skinnedPos, 1.0);
+        o.uv = float2(vtx[b + 6], vtx[b + 7]);
+        return o;
+    }
+
+    fragment void sf_cutout(ShadowVOut in [[stage_in]],
+                            texture2d<float> tex [[texture(0)]],
+                            constant MeshU& u [[buffer(1)]]) {
+        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        float alpha = tex.sample(s, in.uv).a * u.tint.a;
+        if (alpha < u.material.z) discard_fragment();
     }
 
     inline float finiteLightFalloff(float distance, float radius, float exponent) {
@@ -147,11 +193,69 @@ enum Mesh3DShaders {
              * radiance * NL;
     }
 
+    inline int pointShadowFace(float3 delta) {
+        float3 absolute = abs(delta);
+        if (absolute.x >= absolute.y && absolute.x >= absolute.z) return delta.x >= 0.0 ? 0 : 1;
+        if (absolute.y >= absolute.x && absolute.y >= absolute.z) return delta.y >= 0.0 ? 2 : 3;
+        return delta.z >= 0.0 ? 4 : 5;
+    }
+
+    inline float2 pointShadowCell(int face) {
+        if (face == 0) return float2(0.0, 0.0);
+        if (face == 1) return float2(1.0, 0.0);
+        if (face == 2) return float2(0.0, 1.0);
+        if (face == 3) return float2(1.0, 1.0);
+        if (face == 4) return float2(0.0, 2.0);
+        return float2(1.0, 2.0);
+    }
+
+    inline float pointShadowVisibility(float3 worldPos,
+                                       constant LightU& light,
+                                       constant FrameU& frame,
+                                       constant float4x4* shadowVP,
+                                       depth2d_array<float> shadowAtlas) {
+        if (light.shadow.x < 0.0 || frame.meta.y <= 0.0 || frame.meta.z <= 0.0) return 1.0;
+        int face = pointShadowFace(worldPos - light.positionExponent.xyz);
+        int matrixIndex = int(light.shadow.y + 0.5) + face;
+        float4 projected = shadowVP[matrixIndex] * float4(worldPos, 1.0);
+        if (projected.w <= 0.0) return 1.0;
+        float3 ndc = projected.xyz / projected.w;
+        if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
+
+        // Native point cube: +X,-X,+Y,-Y,+Z,-Z in a 2×3 atlas.
+        float2 cell = pointShadowCell(face);
+        float2 localUV = ndc.xy * float2(0.49, -0.49) + 0.5;
+        float2 atlasScale = float2(0.5, 0.3333333333);
+        float2 uv = (cell + localUV) * atlasScale;
+        float2 texel = frame.meta.yz;
+        float2 cellMin = cell * atlasScale + texel * 0.5;
+        float2 cellMax = (cell + 1.0) * atlasScale - texel * 0.5;
+        float referenceDepth = ndc.z - frame.meta.w;
+        uint slice = uint(light.shadow.x + 0.5);
+        constexpr sampler compareSampler(coord::normalized, filter::nearest,
+                                         address::clamp_to_edge, compare_func::less_equal);
+        float2 roundOffset = texel * 0.81616;
+        float2 axialOffset = texel * 1.02323;
+        float visibility = 0.0;
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv - roundOffset, cellMin, cellMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(0.0, -axialOffset.y), cellMin, cellMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(roundOffset.x, -roundOffset.y), cellMin, cellMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(-axialOffset.x, 0.0), cellMin, cellMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv, cellMin, cellMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(axialOffset.x, 0.0), cellMin, cellMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(-roundOffset.x, roundOffset.y), cellMin, cellMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(0.0, axialOffset.y), cellMin, cellMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + roundOffset, cellMin, cellMax), slice, referenceDepth);
+        return visibility / 9.0;
+    }
+
     fragment float4 mf_main(VOut in [[stage_in]],
                             texture2d<float> tex [[texture(0)]],
+                            depth2d_array<float> shadowAtlas [[texture(1)]],
                             constant MeshU& u [[buffer(1)]],
                             constant FrameU& frame [[buffer(2)]],
-                            constant LightU* lights [[buffer(3)]]) {
+                            constant LightU* lights [[buffer(3)]],
+                            constant float4x4* shadowVP [[buffer(4)]]) {
         constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
         float4 sampled = tex.sample(s, in.uv) * u.tint;
         if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
@@ -164,8 +268,9 @@ enum Mesh3DShaders {
         float3 direct = float3(0.0);
         int count = clamp(int(frame.meta.x + 0.5), 0, 4);
         for (int i = 0; i < count; ++i) {
-            direct += pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
-                              u.specularTint.xyz, lights[i]);
+            float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+            direct += visibility * pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                           u.specularTint.xyz, lights[i]);
         }
         float3 ambientColor = frame.ambient.xyz;
         if (mode < 1.5) {
