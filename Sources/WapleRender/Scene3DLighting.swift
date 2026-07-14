@@ -49,11 +49,30 @@ struct Scene3DMaterialValues: Equatable {
     }
 }
 
+/// 3D 라이트 종류. rawValue 는 MSL `LightU.shadow.z` 타입 플래그와 동일 규약(0/1/2).
+enum Scene3DLightKind: Float, Equatable {
+    case point = 0, directional = 1, spot = 2
+    init?(type: String) {
+        switch type.lowercased() {
+        case "lpoint": self = .point
+        case "ldirectional": self = .directional
+        case "lspot": self = .spot
+        default: return nil
+        }
+    }
+}
+
 struct Scene3DResolvedLight: Equatable {
     var position: SIMD3<Float>
     var exponent: Float
     var colorRadius: SIMD4<Float>
     var castsShadow: Bool
+    var kind: Scene3DLightKind = .point
+    /// 월드 forward(+Z blue축 = 광자 진행 방향). directional/spot 만 유효. point 는 미사용.
+    var forward: SIMD3<Float> = SIMD3(0, 0, 1)
+    /// spot 콘 코사인(축 기준). point/directional 미사용(기본 0 → 셰이더가 kind 로 분기).
+    var coneInnerCos: Float = 0
+    var coneOuterCos: Float = 0
 }
 
 /// MSL `FrameU`와 필드/정렬이 같은 per-frame 3D 라이팅 상수(4×float4).
@@ -65,53 +84,104 @@ struct Scene3DFrameUniform {
     var meta: SIMD4<Float>
 }
 
-/// MSL `LightU`와 필드/정렬이 같은 라이트 1개 상수(3×float4).
+/// MSL `LightU`와 필드/정렬이 같은 라이트 1개 상수(4×float4).
 struct Scene3DLightUniform {
     var positionExponent: SIMD4<Float>
     var colorRadius: SIMD4<Float>
-    /// x=shadow array slice(-1이면 비활성), y=shadow VP 시작 인덱스.
+    /// x=shadow array slice(-1이면 비활성), y=shadow VP 시작 인덱스, z=kind(0/1/2), w=spot 콘 inner cos.
     var shadow: SIMD4<Float>
+    /// xyz=월드 forward(+Z blue축), w=spot 콘 outer cos. directional/spot 전용.
+    var axis: SIMD4<Float>
 }
 
 enum Scene3DLighting {
     static let maximumLights = 4
 
-    /// 현 시점에 CPU 규약이 확정된 point만 월드 공간으로 해석한다.
-    /// 입력 순서를 보존하고, 부모가 있으면 그 부모의 현재 월드행렬/가시성을 적용한다.
-    static func resolvePointLights(_ lights: [SceneLight3D],
-                                   nodes: [Int: Scene3DMath.Node]) -> [Scene3DResolvedLight] {
+    /// lpoint / ldirectional / lspot 을 월드 공간으로 해석한다. 입력 순서를 보존하고(첫 4개 정책),
+    /// 부모가 있으면 그 부모의 현재 월드행렬/가시성을 적용한다.
+    ///
+    /// 방향 규약(2026-07 확정): scene.json `angles`(라디안) → Scene3DMath 모델행렬(T·Rz·Ry·Rx·S,
+    /// 오브젝트와 동일 규약)의 **blue축(+Z, col2)** 이 라이트 forward. 근거: WE 스크립트 API
+    /// (`lib.sceneScript.d.ts`) `Mat4.forward() = Blue axis`, `right=Red(+X)`, `up=Green(+Y)`,
+    /// `compose = T*R*S`. directional 은 무감쇠(radiance=color×intensity), L=-forward.
+    /// directional/spot 섀도우는 스코프 밖 → castShadow 는 point 만 존중(무회귀).
+    static func resolveLights(_ lights: [SceneLight3D],
+                              nodes: [Int: Scene3DMath.Node]) -> [Scene3DResolvedLight] {
         var result: [Scene3DResolvedLight] = []
         result.reserveCapacity(maximumLights)
 
         for light in lights where result.count < maximumLights {
-            guard light.type.caseInsensitiveCompare("lpoint") == .orderedSame,
-                  light.radius.isFinite, light.radius > PointShadowMath.minimumRadius,
-                  light.exponent.isFinite, light.intensity.isFinite,
+            guard let kind = Scene3DLightKind(type: light.type),
+                  light.intensity.isFinite,
+                  light.exponent.isFinite,
                   light.origin.x.isFinite, light.origin.y.isFinite, light.origin.z.isFinite,
+                  light.angles.x.isFinite, light.angles.y.isFinite, light.angles.z.isFinite,
                   light.color.x.isFinite, light.color.y.isFinite, light.color.z.isFinite else { continue }
+            // point/spot 은 유한 감쇠 반경 필요. directional 은 무감쇠라 반경 무관.
+            if kind != .directional {
+                guard light.radius.isFinite, light.radius > PointShadowMath.minimumRadius else { continue }
+            }
 
-            let local = SIMD4<Float>(light.origin.x, light.origin.y, light.origin.z, 1)
-            let world: SIMD4<Float>
+            // 라이트 자체 회전 포함 로컬행렬(scale=1: 위치·방향에 스케일 오염 방지) → 부모 체인 합성.
+            // col3=위치, col2=forward. point 위치는 회전 무관(T·R·S 의 col3 = origin)이라 무회귀.
+            let localMatrix = Scene3DMath.modelMatrix(
+                origin: SIMD3(light.origin.x, light.origin.y, light.origin.z),
+                angles: SIMD3(light.angles.x, light.angles.y, light.angles.z),
+                scale: SIMD3(1, 1, 1))
+            let worldMatrix: simd_float4x4
             if let parent = light.parent {
                 guard let transform = Scene3DMath.worldMatrix(id: parent, nodes: nodes),
                       transform.visible else { continue }
-                world = transform.matrix * local
+                worldMatrix = transform.matrix * localMatrix
             } else {
-                world = local
+                worldMatrix = localMatrix
             }
-            guard world.x.isFinite, world.y.isFinite, world.z.isFinite else { continue }
+            let position = SIMD3(worldMatrix.columns.3.x, worldMatrix.columns.3.y, worldMatrix.columns.3.z)
+            let forward = normalizedOr(
+                SIMD3(worldMatrix.columns.2.x, worldMatrix.columns.2.y, worldMatrix.columns.2.z),
+                SIMD3(0, 0, 1))
+            guard position.x.isFinite, position.y.isFinite, position.z.isFinite,
+                  forward.x.isFinite, forward.y.isFinite, forward.z.isFinite else { continue }
 
-            result.append(Scene3DResolvedLight(
-                position: SIMD3(world.x, world.y, world.z),
+            var resolved = Scene3DResolvedLight(
+                position: position,
                 exponent: light.exponent,
                 colorRadius: SIMD4(
                     light.color.x * light.intensity,
                     light.color.y * light.intensity,
                     light.color.z * light.intensity,
                     light.radius),
-                castsShadow: light.castShadow))
+                // directional/spot 섀도우는 스코프 밖 → point 만 캐스트.
+                castsShadow: kind == .point && light.castShadow,
+                kind: kind,
+                forward: forward)
+            if kind == .spot {
+                let cone = spotConeCosines(inner: light.innerCone, outer: light.outerCone)
+                resolved.coneInnerCos = cone.inner
+                resolved.coneOuterCos = cone.outer
+            }
+            result.append(resolved)
         }
         return result
+    }
+
+    /// spot innercone/outercone(전각, 도) → 축 기준 half-angle 코사인.
+    /// half-angle 규약(cone/2) 채택: WE 에디터 라벨은 단위 미명시라 표준 전각 해석.
+    // ponytail: half vs full 미확정(코퍼스 spot 은 전부 지오메트리 범위 밖이라 육안 보정 불가).
+    //           full-angle 이면 `* 0.5` 를 제거. 지오메트리 도달 spot 실물 확보 시 3477054430 로 보정.
+    static func spotConeCosines(inner: Float, outer: Float) -> (inner: Float, outer: Float) {
+        guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 전방향 통과
+        let toHalfRadians = Float.pi / 180 * 0.5
+        let cosOuter = cos(max(0, outer) * toHalfRadians)
+        let cosInnerRaw = inner.isFinite && inner > 0 ? cos(inner * toHalfRadians) : 1
+        // inner 는 outer 보다 좁아야(코사인 큼) 스무드스텝이 0→1 로 증가.
+        return (max(cosInnerRaw, cosOuter + 1e-4), cosOuter)
+    }
+
+    /// 영벡터/비유한 방어 정규화(셰이더 normalizedOr 과 동일 시맨틱).
+    private static func normalizedOr(_ value: SIMD3<Float>, _ fallback: SIMD3<Float>) -> SIMD3<Float> {
+        let lengthSquared = simd_length_squared(value)
+        return lengthSquared > 1e-12 && lengthSquared.isFinite ? value / sqrt(lengthSquared) : fallback
     }
 
     /// 활성 라이트 순서를 유지하면서 shadow caster에만 조밀한 array slice를 부여한다.
@@ -119,7 +189,8 @@ enum Scene3DLighting {
         var packed = [Scene3DLightUniform](repeating: Scene3DLightUniform(
             positionExponent: .zero,
             colorRadius: .zero,
-            shadow: SIMD4(-1, -1, 0, 0)), count: maximumLights)
+            shadow: SIMD4(-1, -1, 0, 0),
+            axis: SIMD4(0, 0, 1, 0)), count: maximumLights)
         var nextShadowSlice: Float = 0
         for (index, light) in lights.prefix(maximumLights).enumerated() {
             let slice = light.castsShadow ? nextShadowSlice : -1
@@ -127,7 +198,8 @@ enum Scene3DLighting {
             packed[index] = Scene3DLightUniform(
                 positionExponent: SIMD4(light.position.x, light.position.y, light.position.z, light.exponent),
                 colorRadius: light.colorRadius,
-                shadow: SIMD4(slice, slice >= 0 ? slice * 6 : -1, 0, 0))
+                shadow: SIMD4(slice, slice >= 0 ? slice * 6 : -1, light.kind.rawValue, light.coneInnerCos),
+                axis: SIMD4(light.forward.x, light.forward.y, light.forward.z, light.coneOuterCos))
         }
         return packed
     }
@@ -138,9 +210,11 @@ enum Scene3DLighting {
         }
     }
 
+    /// shadow slice/VP 만 끈다(x/y). kind/cone(z/w)·axis 는 보존해야 directional/spot 셰이딩이 유지된다.
     static func disableShadow(at index: Int, in lights: inout [Scene3DLightUniform]) {
         guard lights.indices.contains(index) else { return }
-        lights[index].shadow = SIMD4(-1, -1, 0, 0)
+        lights[index].shadow.x = -1
+        lights[index].shadow.y = -1
     }
 }
 

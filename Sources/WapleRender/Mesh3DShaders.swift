@@ -25,7 +25,8 @@ enum Mesh3DShaders {
     struct LightU {
         float4 positionExponent;
         float4 colorRadius;
-        float4 shadow;
+        float4 shadow;        // x=slice, y=vp start, z=kind(0=point,1=directional,2=spot), w=spot inner cos
+        float4 axis;          // xyz=forward(+Z blue축, 광자 진행 방향), w=spot outer cos
     };
     struct VOut {
         float4 pos [[position]];
@@ -169,15 +170,11 @@ enum Mesh3DShaders {
         return F0 + (1.0 - F0) * pow(max(1.0 - cosTheta, 0.001), 5.0);
     }
 
-    inline float3 pointPBR(float3 worldPos, float3 N, float3 V, float3 albedo,
-                           float roughness, float metallic, float3 specularTint,
-                           constant LightU& light) {
-        float3 delta = light.positionExponent.xyz - worldPos;
-        float distance = length(delta);
-        if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
-        float3 L = delta / distance;
+    // Cook–Torrance BRDF × NL (source-confirmed generic4 코어). radiance 는 호출부가 곱한다.
+    // NL<=0 이면 최종 *NL 로 0(포인트 조기반환과 수치 동일). point/directional/spot 공유.
+    inline float3 pbrDirect(float3 N, float3 V, float3 L, float3 albedo,
+                            float roughness, float metallic, float3 specularTint) {
         float NL = max(dot(N, L), 0.0);
-        if (NL <= 0.0) return float3(0.0);
         float3 H = normalizedOr(V + L, N);
         float D = Distribution_GGX(N, H, roughness);
         float G = GeometrySmith(N, V, L, roughness);
@@ -186,11 +183,53 @@ enum Mesh3DShaders {
         float3 diffuseWeight = (1.0 - metallic) * (1.0 - F);
         float denominator = max(4.0 * max(dot(N, V), 0.0) * NL, 0.001);
         float3 specular = D * G * F / denominator;
+        return (diffuseWeight * albedo / 3.14159265359 + specular * specularTint) * NL;
+    }
+
+    inline float3 pointPBR(float3 worldPos, float3 N, float3 V, float3 albedo,
+                           float roughness, float metallic, float3 specularTint,
+                           constant LightU& light) {
+        float3 delta = light.positionExponent.xyz - worldPos;
+        float distance = length(delta);
+        if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
+        float3 L = delta / distance;
+        if (dot(N, L) <= 0.0) return float3(0.0);
         float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
                                                light.positionExponent.w);
         float3 radiance = light.colorRadius.xyz * attenuation;
-        return (diffuseWeight * albedo / 3.14159265359 + specular * specularTint)
-             * radiance * NL;
+        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint) * radiance;
+    }
+
+    // 무한거리(directional): 무감쇠 radiance = lightColor. L = -forward(surface→light).
+    // WE common_pbr_2.h::ComputePBRLightShadowInfinite (shadowFactor=1: directional 섀도우 스코프 밖).
+    inline float3 directionalPBR(float3 N, float3 V, float3 albedo,
+                                 float roughness, float metallic, float3 specularTint,
+                                 constant LightU& light) {
+        float3 L = normalizedOr(-light.axis.xyz, float3(0.0, 1.0, 0.0));
+        if (dot(N, L) <= 0.0) return float3(0.0);
+        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint) * light.colorRadius.xyz;
+    }
+
+    // spot: point 감쇠 × 콘 스무드스텝(축 forward 기준). 콘 밖은 0.
+    inline float3 spotPBR(float3 worldPos, float3 N, float3 V, float3 albedo,
+                          float roughness, float metallic, float3 specularTint,
+                          constant LightU& light) {
+        float3 delta = light.positionExponent.xyz - worldPos;
+        float distance = length(delta);
+        if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
+        float3 L = delta / distance;                 // surface→light
+        if (dot(N, L) <= 0.0) return float3(0.0);
+        // 광자 진행 방향 forward vs light→surface(-L) 의 코사인.
+        float cosAngle = dot(normalizedOr(light.axis.xyz, float3(0.0, 0.0, 1.0)), -L);
+        float cosInner = light.shadow.w;
+        float cosOuter = light.axis.w;
+        float cone = clamp((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4), 0.0, 1.0);
+        cone = cone * cone * (3.0 - 2.0 * cone);     // smoothstep
+        if (cone <= 0.0) return float3(0.0);
+        float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
+                                               light.positionExponent.w);
+        float3 radiance = light.colorRadius.xyz * attenuation * cone;
+        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint) * radiance;
     }
 
     inline int pointShadowFace(float3 delta) {
@@ -268,9 +307,18 @@ enum Mesh3DShaders {
         float3 direct = float3(0.0);
         int count = clamp(int(frame.meta.x + 0.5), 0, 4);
         for (int i = 0; i < count; ++i) {
-            float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
-            direct += visibility * pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
-                                           u.specularTint.xyz, lights[i]);
+            float kind = lights[i].shadow.z;
+            if (kind < 0.5) {          // point: 감쇠 + 6면 큐브 섀도우
+                float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+                direct += visibility * pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                                u.specularTint.xyz, lights[i]);
+            } else if (kind < 1.5) {   // directional: 무감쇠(섀도우 스코프 밖)
+                direct += directionalPBR(N, V, albedo, u.material.x, u.material.y,
+                                         u.specularTint.xyz, lights[i]);
+            } else {                   // spot: 감쇠 + 콘(섀도우 스코프 밖)
+                direct += spotPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                  u.specularTint.xyz, lights[i]);
+            }
         }
         float3 ambientColor = frame.ambient.xyz;
         if (mode < 1.5) {

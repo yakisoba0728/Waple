@@ -559,7 +559,8 @@ extension SceneRenderer {
         guard sliceCount > 0 else { return (nil, matrices) }
 
         func disableShadows() {
-            for index in lights.indices { lights[index].shadow = SIMD4(-1, -1, 0, 0) }
+            // slice/VP(x/y)만 끈다 — kind/cone(z/w)·axis 는 directional/spot 셰이딩에 필요.
+            for index in lights.indices { lights[index].shadow.x = -1; lights[index].shadow.y = -1 }
         }
         guard let atlas = pointShadowTexture(sliceCount: sliceCount, device: device),
               let depthState = pointShadowDepthState,
@@ -736,7 +737,7 @@ extension SceneRenderer {
         let fwd = simd_normalize(ctr - eye)
         let right = simd_normalize(simd_cross(fwd, upv))
         let camUp = simd_cross(right, fwd)
-        let resolvedLights = Scene3DLighting.resolvePointLights(scene3DLights, nodes: nmap)
+        let resolvedLights = Scene3DLighting.resolveLights(scene3DLights, nodes: nmap)
         var frameUniform = Scene3DFrameUniform(
             cameraEye: SIMD4(eye.x, eye.y, eye.z, 1),
             ambient: SIMD4(scene3DAmbient.x, scene3DAmbient.y, scene3DAmbient.z, 0),
