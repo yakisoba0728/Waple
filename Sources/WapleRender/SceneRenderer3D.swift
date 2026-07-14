@@ -155,7 +155,7 @@ extension SceneRenderer {
     /// 그룹/모델 → Node3D(변환 계층). 프로퍼티 스크립트 엔진은 **씬 order** 로 로드(컨트롤러 top-level
     /// 사이드이펙트가 이를 읽는 스크립트보다 먼저) 후 per-frame 평가. 실패 오브젝트는 스킵+로그.
     func build3D(doc: SceneDocument, package: ScenePackage, device: MTLDevice) {
-        guard let lib = try? device.makeLibrary(source: Mesh3DShaders.source, options: nil) else {
+        guard let lib = try? WapleProfiler.compile(Mesh3DShaders.source, { try device.makeLibrary(source: Mesh3DShaders.source, options: nil) }) else {
             NSLog("%@", "[Waple] 3D: mesh shader compile failed")
             return
         }
@@ -472,13 +472,13 @@ extension SceneRenderer {
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
         a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
         a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
-        return try? device.makeRenderPipelineState(descriptor: pd)
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
     /// 3D 파티클 원근 빌보드 파이프라인. 메시 패스와 동일 타깃(bgra8+depth32). frag=pf_main(premult α),
     /// 블렌드는 2D 파티클(particlePipeline)과 동치: additive dst=one / translucent dst=1-srcα.
     func particle3DPipeline(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
-        guard let lib = try? device.makeLibrary(source: ParticleShaders.source, options: nil) else { return nil }
+        guard let lib = try? WapleProfiler.compile(ParticleShaders.source, { try device.makeLibrary(source: ParticleShaders.source, options: nil) }) else { return nil }
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "pv3d_main")
         pd.fragmentFunction = lib.makeFunction(name: "pf_main")
@@ -490,7 +490,7 @@ extension SceneRenderer {
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
         a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
         a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
-        return try? device.makeRenderPipelineState(descriptor: pd)
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
     func shadow3DPipeline(lib: MTLLibrary, vertex: String, cutout: Bool,
@@ -499,7 +499,7 @@ extension SceneRenderer {
         descriptor.vertexFunction = lib.makeFunction(name: vertex)
         descriptor.fragmentFunction = cutout ? lib.makeFunction(name: "sf_cutout") : nil
         descriptor.depthAttachmentPixelFormat = .depth32Float
-        return try? device.makeRenderPipelineState(descriptor: descriptor)
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: descriptor) }
     }
 
     func meshDepthState(test: Bool, write: Bool, device: MTLDevice) -> MTLDepthStencilState? {

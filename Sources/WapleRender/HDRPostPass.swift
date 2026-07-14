@@ -1,4 +1,5 @@
 import Metal
+import WapleCore
 
 /// A2 HDR 톤맵 포스트 패스 — float(rgba16Float) 누적 버퍼의 >1.0 합을 [0,1] LDR 로 압축(백화 방지).
 ///
@@ -20,14 +21,14 @@ final class HDRPostPass {
 
     /// outputFormat 은 최종 LDR 타깃 포맷(drawable/캡처 = .bgra8Unorm). 파이프라인 생성 실패 시 nil.
     init?(device: MTLDevice, outputFormat: MTLPixelFormat) {
-        guard let lib = try? device.makeLibrary(source: HDRPostPass.source, options: nil),
+        guard let lib = try? WapleProfiler.compile(HDRPostPass.source, { try device.makeLibrary(source: HDRPostPass.source, options: nil) }),
               let vf = lib.makeFunction(name: "hdrpost_v"),
               let ff = lib.makeFunction(name: "hdrpost_f") else { return nil }
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = vf
         pd.fragmentFunction = ff
         pd.colorAttachments[0].pixelFormat = outputFormat
-        guard let ps = try? device.makeRenderPipelineState(descriptor: pd) else { return nil }
+        guard let ps = try? WapleProfiler.pipe({ try device.makeRenderPipelineState(descriptor: pd) }) else { return nil }
         self.pipeline = ps
     }
 

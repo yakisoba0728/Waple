@@ -43,6 +43,16 @@ public struct TranslatedShader: Equatable {
 public enum GLSLTranslator {
     public static func translate(vertex: String, fragment: String, combos: [String: Int],
                                  include: (String) -> String? = { _ in nil }) -> TranslatedShader? {
+        guard WapleProfiler.enabled else {
+            return _translate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+        }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        defer { WapleProfiler.recordTranslate(seconds: CFAbsoluteTimeGetCurrent() - t0) }
+        return _translate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+    }
+
+    private static func _translate(vertex: String, fragment: String, combos: [String: Int],
+                                   include: (String) -> String?) -> TranslatedShader? {
         // [COMBO] 기본값은 스테이지 합집합 — vert 에만 선언된 콤보(실물 auto_sway 의 AA_VERSION)를
         // frag 도 봐야 한다(WE 는 효과 단위로 콤보를 병합).
         var combos = combos

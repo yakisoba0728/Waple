@@ -552,7 +552,7 @@ extension SceneRenderer {
     func translatedPipeline(msl: String, device: MTLDevice) -> MTLRenderPipelineState? {
         let lib: MTLLibrary
         do {
-            lib = try device.makeLibrary(source: msl, options: nil)
+            lib = try WapleProfiler.compile(msl) { try device.makeLibrary(source: msl, options: nil) }
         } catch {
             // 실패 원인 진단용: 첫 에러 줄만(대개 undefined identifier = common.h 함수 부재).
             let first = "\(error)".split(separator: "\n").first(where: { $0.contains("error:") }) ?? ""
@@ -568,7 +568,7 @@ extension SceneRenderer {
         vd.layouts[4].stride = 20
         pd.vertexDescriptor = vd
         pd.colorAttachments[0].pixelFormat = .rgba8Unorm
-        return try? device.makeRenderPipelineState(descriptor: pd)
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
     /// 효과 보조 텍스처 슬롯 이름 → MTLTexture. 이름 nil/디코드 실패 → 흰색 1x1 폴백
@@ -727,7 +727,7 @@ extension SceneRenderer {
     /// 파티클 파이프라인. frag 가 premultiplied-alpha 출력 → src=one.
     /// additive: dst=one(가산), translucent: dst=oneMinusSrcAlpha(일반 over).
     func particlePipeline(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
-        guard let lib = try? device.makeLibrary(source: ParticleShaders.source, options: nil) else { return nil }
+        guard let lib = try? WapleProfiler.compile(ParticleShaders.source, { try device.makeLibrary(source: ParticleShaders.source, options: nil) }) else { return nil }
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "pv_main")
         pd.fragmentFunction = lib.makeFunction(name: "pf_main")
@@ -738,16 +738,16 @@ extension SceneRenderer {
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
         a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
         a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
-        return try? device.makeRenderPipelineState(descriptor: pd)
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
     func effectPipeline(source: String, device: MTLDevice) -> MTLRenderPipelineState? {
-        guard let lib = try? device.makeLibrary(source: source, options: nil) else { return nil }
+        guard let lib = try? WapleProfiler.compile(source, { try device.makeLibrary(source: source, options: nil) }) else { return nil }
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "ev_main")
         pd.fragmentFunction = lib.makeFunction(name: "ef_main")
         pd.colorAttachments[0].pixelFormat = .rgba8Unorm
-        return try? device.makeRenderPipelineState(descriptor: pd)
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
     func makeOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {

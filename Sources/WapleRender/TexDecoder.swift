@@ -15,19 +15,12 @@ public enum TexDecoder {
     public static func rgba(from tex: TexImage, data: Data, keepFullAtlas: Bool = false) -> (pixels: Data, width: Int, height: Int)? {
         switch tex.payload {
         case .png, .jpeg:
-            let sub = data.subdata(in: tex.payloadRange)
-            guard embeddedImagePropertiesAreWithinLimits(sub),
-                  let src = CGImageSourceCreateWithData(sub as CFData, nil),
-                  let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
-            return draw(img)
+            return decodeEncoded(data.subdata(in: tex.payloadRange), inBytes: tex.payloadRange.count, format: "png/jpeg")
         case .embeddedImage:
             // imageFormat 이 인코딩 이미지(PNG/JPEG/GIF)로 지정한 mip. LZ4 해제(mipBytes) 후 CGImageSource 디코드
             // — fast-path 512B 스캔이 놓치는 LZ4 압축 임베디드 이미지 경로. straight-alpha 규약은 draw 가 유지.
-            guard let mip = tex.mip, let dec = mipBytes(mip: mip, data: data),
-                  embeddedImagePropertiesAreWithinLimits(dec),
-                  let src = CGImageSourceCreateWithData(dec as CFData, nil),
-                  let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
-            return draw(img)
+            guard let mip = tex.mip, let dec = mipBytes(mip: mip, data: data) else { return nil }
+            return decodeEncoded(dec, inBytes: mip.payloadRange.count, format: "embedded")
         case .rawRGBA8888:
             let w = tex.width, h = tex.height
             guard w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
@@ -72,6 +65,17 @@ public enum TexDecoder {
     /// mip 기반(raw/DXT) 포맷 1장 디코드 + 패딩 크롭. 단일/다중 페이지 공용(mip 인자로 페이지 선택).
     private static func decodeMip(payload: TexImage.PayloadKind, mip: TexImage.CompressedMip, data: Data,
                                   keepFullAtlas: Bool = false)
+        -> (pixels: Data, width: Int, height: Int)? {
+        guard WapleProfiler.enabled else { return _decodeMip(payload: payload, mip: mip, data: data, keepFullAtlas: keepFullAtlas) }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let out = _decodeMip(payload: payload, mip: mip, data: data, keepFullAtlas: keepFullAtlas)
+        WapleProfiler.recordTex(format: "\(payload)", outBytes: out?.pixels.count ?? 0,
+                                inBytes: mip.payloadRange.count, seconds: CFAbsoluteTimeGetCurrent() - t0)
+        return out
+    }
+
+    private static func _decodeMip(payload: TexImage.PayloadKind, mip: TexImage.CompressedMip, data: Data,
+                                   keepFullAtlas: Bool)
         -> (pixels: Data, width: Int, height: Int)? {
         guard let dec = mipBytes(mip: mip, data: data) else { return nil }
         let w = mip.decodeWidth, h = mip.decodeHeight
@@ -164,6 +168,23 @@ public enum TexDecoder {
             }
         }
         return (out, iw, ih)
+    }
+
+    /// 인코딩 이미지(PNG/JPEG/GIF) 바이트 → straight-alpha RGBA. png/jpeg·embedded 케이스 공용.
+    /// 계측 시 texDecode 페이즈 누적(CGImageSource 디코드 + straight 역변환 포함).
+    private static func decodeEncoded(_ imageData: Data, inBytes: Int, format: String) -> (Data, Int, Int)? {
+        guard WapleProfiler.enabled else { return decodeEncodedImpl(imageData) }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let out = decodeEncodedImpl(imageData)
+        WapleProfiler.recordTex(format: format, outBytes: out?.0.count ?? 0, inBytes: inBytes, seconds: CFAbsoluteTimeGetCurrent() - t0)
+        return out
+    }
+
+    private static func decodeEncodedImpl(_ imageData: Data) -> (Data, Int, Int)? {
+        guard embeddedImagePropertiesAreWithinLimits(imageData),
+              let src = CGImageSourceCreateWithData(imageData as CFData, nil),
+              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+        return draw(img)
     }
 
     /// PNG/JPEG → straight-alpha RGBA. 디코더 출력 규약은 전 포맷 STRAIGHT 로 통일한다
