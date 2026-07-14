@@ -8,7 +8,11 @@ public enum TexDecoder {
     private static let maxEmbeddedImageDimension = 8192
     private static let maxEmbeddedImageBytes = 256 << 20
 
-    public static func rgba(from tex: TexImage, data: Data) -> (pixels: Data, width: Int, height: Int)? {
+    /// keepFullAtlas: 단일-이미지 다중프레임 스프라이트시트는 imgW/imgH(단일 프레임 크기) 크롭을 건너뛰고
+    /// 디코드 아틀라스(decodeW×decodeH) 전체를 보존한다 — TEXS 프레임 좌표(예 frame1 x=1920)가 imgW 를
+    /// 넘어서므로 크롭하면 frame≥1 이 소실돼 spriteFrameTexture 가 1px 클램프 블릿(흑화)한다. 호출자
+    /// (resolveTextureWithFrames)만 true — 일반/단일프레임 경로는 종전대로 크롭(무회귀).
+    public static func rgba(from tex: TexImage, data: Data, keepFullAtlas: Bool = false) -> (pixels: Data, width: Int, height: Int)? {
         switch tex.payload {
         case .png, .jpeg:
             let sub = data.subdata(in: tex.payloadRange)
@@ -33,7 +37,7 @@ public enum TexDecoder {
             return (sub.prefix(need), w, h)
         case .bc3, .bc2, .bc1, .r8, .rg88, .lz4RGBA:
             guard let mip = tex.mip else { return nil }
-            return decodeMip(payload: tex.payload, mip: mip, data: data)
+            return decodeMip(payload: tex.payload, mip: mip, data: data, keepFullAtlas: keepFullAtlas)
         case .video, .unknown:
             return nil
         }
@@ -42,17 +46,18 @@ public enum TexDecoder {
     /// 조건 변형(TEXB0004) 선택 디코드: tex.variants 가 있으면 프로퍼티 값으로 mip 선택 후 디코드,
     /// 없으면(또는 미매치=기본 mip 선택 시) 기존 rgba(from:data:). 변형 mip 은 기본과 동일 포맷(파일
     /// format 기반 DXT/raw)이라 decodeMip 재사용. 젤다 튜닉색(tuniccolor) 등 프로퍼티 연동 텍스처용.
-    public static func rgba(from tex: TexImage, data: Data, properties: [String: PropertyValue])
+    public static func rgba(from tex: TexImage, data: Data, properties: [String: PropertyValue],
+                            keepFullAtlas: Bool = false)
         -> (pixels: Data, width: Int, height: Int)? {
         guard !tex.variants.isEmpty,
               let mip = tex.selectedMip(properties: properties), mip != tex.mip else {
-            return rgba(from: tex, data: data)
+            return rgba(from: tex, data: data, keepFullAtlas: keepFullAtlas)
         }
         switch tex.payload {
         case .bc3, .bc2, .bc1, .r8, .rg88, .lz4RGBA:
-            return decodeMip(payload: tex.payload, mip: mip, data: data)
+            return decodeMip(payload: tex.payload, mip: mip, data: data, keepFullAtlas: keepFullAtlas)
         default:
-            return rgba(from: tex, data: data)   // 변형이나 mip 기반 아님(미관측) — 안전 폴백
+            return rgba(from: tex, data: data, keepFullAtlas: keepFullAtlas)   // 변형이나 mip 기반 아님(미관측) — 안전 폴백
         }
     }
 
@@ -65,20 +70,23 @@ public enum TexDecoder {
     }
 
     /// mip 기반(raw/DXT) 포맷 1장 디코드 + 패딩 크롭. 단일/다중 페이지 공용(mip 인자로 페이지 선택).
-    private static func decodeMip(payload: TexImage.PayloadKind, mip: TexImage.CompressedMip, data: Data)
+    private static func decodeMip(payload: TexImage.PayloadKind, mip: TexImage.CompressedMip, data: Data,
+                                  keepFullAtlas: Bool = false)
         -> (pixels: Data, width: Int, height: Int)? {
         guard let dec = mipBytes(mip: mip, data: data) else { return nil }
         let w = mip.decodeWidth, h = mip.decodeHeight
+        // 스프라이트시트 아틀라스는 전체 보존(프레임 좌표가 imgW/imgH 를 넘음), 그 외는 패딩 크롭.
+        func finish(_ rgba: Data) -> (Data, Int, Int) { keepFullAtlas ? (rgba, w, h) : cropped(rgba, mip) }
         switch payload {
         case .bc3:
             guard let rgba = DXT5Decoder.decode(dec, width: w, height: h) else { return nil }
-            return cropped(rgba, mip)
+            return finish(rgba)
         case .bc2:
             guard let rgba = DXT5Decoder.decodeBC2(dec, width: w, height: h) else { return nil }
-            return cropped(rgba, mip)
+            return finish(rgba)
         case .bc1:
             guard let rgba = DXT5Decoder.decodeBC1(dec, width: w, height: h) else { return nil }
-            return cropped(rgba, mip)
+            return finish(rgba)
         case .r8:
             // 단일 채널 8bit(WE fmt9). raw 바이트 = 픽셀당 값. 그레이스케일(v,v,v)+불투명(255)로 확장 —
             // 소비처(opacity 마스크 등)는 .r 을 읽으므로 r=v 로 정확하고, 직접 표시 시에도 회색으로 자연스럽다.
@@ -93,7 +101,7 @@ public enum TexDecoder {
                     }
                 }
             }
-            return cropped(rgba, mip)
+            return finish(rgba)
         case .rg88:
             // 2채널 8bit(WE fmt8): byte0→루마(r=g=b), byte1→알파. 판정(2026-07-09, RePKG 대조):
             // 실물 셰이더 common_fragment.h:98 ConvertTexture0Format(RG88)=`.rrrg` — GL_RG8 샘플은 .r=byte0/.g=byte1
@@ -112,10 +120,10 @@ public enum TexDecoder {
                     }
                 }
             }
-            return cropped(rgba, mip)
+            return finish(rgba)
         case .lz4RGBA:
             guard dec.count >= w * h * 4 else { return nil }
-            return cropped(dec, mip)
+            return finish(dec)
         default:
             return nil
         }

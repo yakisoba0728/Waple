@@ -172,6 +172,32 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertEqual([px[0], px[1], px[2], px[3]], [10, 20, 30, 40])  // 패딩 stride 에서 올바로 복사
     }
 
+    /// 스프라이트시트 아틀라스 크롭 회귀(1612750231 흑화 원인): decodeW(4) > imgW(2) 인 단일-이미지
+    /// 다중프레임 시트를 imgW/imgH 로 크롭하면 우측 프레임(x=2)이 소실 → spriteFrameTexture 가 1px 클램프
+    /// 블릿(전화면 흑화). keepFullAtlas 는 아틀라스 전체 폭을 보존해 우측 프레임을 살린다. 기본 경로는
+    /// 종전대로 크롭(무회귀 — 위 testDecodesLZ4RGBAWithCrop 과 병존).
+    func testSpritesheetAtlasKeepsFullWidthWhenRequested() throws {
+        let dw = 4, dh = 2, iw = 2, ih = 2
+        // 좌 2폭 = 프레임0(빨강), 우 2폭(x≥2) = 프레임1(초록). 크롭 시 x=2..4 소실 → 초록 접근 불가.
+        var raw = [UInt8](repeating: 0, count: dw * dh * 4)
+        for y in 0..<dh { for x in 0..<dw {
+            let i = (y * dw + x) * 4, green = x >= iw
+            raw[i] = green ? 0 : 255; raw[i + 1] = green ? 255 : 0; raw[i + 2] = 0; raw[i + 3] = 255
+        } }
+        let data = makeLZ4RGBATex(dw: dw, dh: dh, iw: iw, ih: ih, raw: raw)
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        // 기본(크롭): imgW 로 잘림 — 종전 흑화 경로.
+        let cropped = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data))
+        XCTAssertEqual(cropped.width, iw, "기본 경로는 종전대로 imgW 크롭(무회귀)")
+        // keepFullAtlas: 전체 폭 보존 → 우측 프레임(x=2) 픽셀이 초록으로 살아있음.
+        let full = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data, keepFullAtlas: true))
+        XCTAssertEqual(full.width, dw, "스프라이트 아틀라스는 전체 폭 보존")
+        XCTAssertEqual(full.height, dh)
+        let px = [UInt8](full.pixels)
+        let i = (0 * dw + iw) * 4   // frame1 좌상단(x=2, y=0)
+        XCTAssertEqual([px[i], px[i + 1], px[i + 2]], [0, 255, 0], "우측 프레임(x=2)=초록 접근 가능(크롭 시 소실)")
+    }
+
     /// 이슈4: 다중 image(아틀라스 페이지) → 페이지별 decode-by-index. 두 페이지가 서로 다른 픽셀로 디코드.
     func testDecodesMultiImagePagesByIndex() throws {
         let page0: [UInt8] = [10, 20, 30, 40]

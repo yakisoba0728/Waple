@@ -595,7 +595,9 @@ extension SceneRenderer {
                        let stacked = stackedAtlas(tex: tex, data: d, device: device) {
                         return stacked
                     }
-                    if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties),
+                    // 단일-이미지 다중프레임 시트는 아틀라스 전체 보존(imgW/imgH 크롭 시 frame≥1 소실 → 흑화).
+                    if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties,
+                                                 keepFullAtlas: !multipage && tex.frames.count > 1),
                        let texture = makeTexture(dec.pixels, dec.width, dec.height, device) {
                         // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
                         // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백

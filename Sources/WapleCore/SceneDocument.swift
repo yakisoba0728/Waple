@@ -1032,6 +1032,9 @@ extension SceneDocument {
         guard let arr = raw as? [Any] else { return [] }
         var out: [SceneEffect] = []
         for case let e as [String: Any] in arr {
+            // WE: visible=false 효과는 미적용(사용자 토글 OFF 포함 — {user,value} 는 resolveUserBindings 가
+            // 이미 정적 value 로 해석). 종전 무시 → 꺼진 post-process(예 3489263099 halftone)가 적용돼 전화면 흑화.
+            if let visible = unwrap(e["visible"]) as? Bool, !visible { continue }
             let file = (e["file"] as? String) ?? ""
             // "effects/<name>/effect.json" → name
             let parts = file.split(separator: "/")
