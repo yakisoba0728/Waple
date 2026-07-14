@@ -131,14 +131,14 @@ public final class TextScriptEngine {
     private let context: JSContext
     private let updateFn: JSValue?
     private let initFn: JSValue?
+    private let applyUserPropertiesFn: JSValue?
     private var didCallInit = false
-    /// export 된 이벤트 훅(name → 함수). update 외 실물 계약: cursorClick(3394601417 주야 토글),
-    /// media*Changed(뮤직 씬 — 2881558311 ColorTinter 등). cursorDown/Up/Move 는 보관만(배선은 추후).
+    private var didApplyUserProperties = false
+    /// Generic event hooks only. Lifecycle functions have dedicated storage and gates.
     private var hookFns: [String: JSValue] = [:]
 
-    /// 씬 스크립트가 export 할 수 있는 이벤트 훅 이름(실물 193패키지 역추출).
-    static let eventHookNames = ["init", "applyUserProperties",
-                                 "cursorClick", "cursorDown", "cursorUp", "cursorMove",
+    private static let lifecycleFunctionNames = ["init", "applyUserProperties"]
+    static let eventHookNames = ["cursorClick", "cursorDown", "cursorUp", "cursorMove",
                                  "cursorEnter", "cursorLeave", "animationEvent",
                                  "mediaPlaybackChanged", "mediaPropertiesChanged", "mediaThumbnailChanged",
                                  "mediaTimelineChanged", "mediaStatusChanged"]
@@ -161,6 +161,8 @@ public final class TextScriptEngine {
         updateFn = fn
         let i = ctx.objectForKeyedSubscript("init")
         initFn = (i?.isObject == true) ? i : nil
+        let apply = ctx.objectForKeyedSubscript("applyUserProperties")
+        applyUserPropertiesFn = (apply?.isObject == true) ? apply : nil
         for name in Self.eventHookNames {
             if let f = ctx.objectForKeyedSubscript(name), f.isObject { hookFns[name] = f }
         }
@@ -185,7 +187,7 @@ public final class TextScriptEngine {
             hadException = true
         }
         let cleaned = Self.stripModuleSyntax(script)
-        let exports = (["update"] + Self.eventHookNames)
+        let exports = (["update"] + Self.lifecycleFunctionNames + Self.eventHookNames)
             .map { "\($0): (typeof \($0) !== 'undefined') ? \($0) : null" }
             .joined(separator: ", ")
         let layerArg = currentLayerName.map(Self.javascriptStringLiteral) ?? "null"
@@ -205,12 +207,15 @@ public final class TextScriptEngine {
             updateFn = (u?.isObject == true) ? u : nil
             let i = out.objectForKeyedSubscript("init")
             initFn = (i?.isObject == true) ? i : nil
+            let apply = out.objectForKeyedSubscript("applyUserProperties")
+            applyUserPropertiesFn = (apply?.isObject == true) ? apply : nil
             for name in Self.eventHookNames {
                 if let f = out.objectForKeyedSubscript(name), f.isObject { hookFns[name] = f }
             }
         } else {
             updateFn = nil
             initFn = nil
+            applyUserPropertiesFn = nil
         }
     }
 
@@ -241,6 +246,28 @@ public final class TextScriptEngine {
         _ = withExceptionCapture("\(name) hook exception") { failed -> JSValue? in
             guard let ev = context.evaluateScript("(\(eventJS))"), !failed() else { return nil }
             return fn.call(withArguments: [ev])
+        }
+    }
+
+    /// Deliver the mount's effective WallpaperProperty JSON once. The gate is set before JSON evaluation/call,
+    /// so malformed JSON or a throwing script is logged and never retried automatically.
+    public func applyUserProperties(_ propertiesJSON: String) {
+        guard !didApplyUserProperties else { return }
+        didApplyUserProperties = true
+        guard let applyUserPropertiesFn else { return }
+        _ = withExceptionCapture("applyUserProperties hook exception") { failed -> JSValue? in
+            guard let properties = context.evaluateScript("(\(propertiesJSON))"), !failed() else { return nil }
+            let result = applyUserPropertiesFn.call(withArguments: [properties])
+            return failed() ? nil : result
+        }
+    }
+
+    /// Initialize an init-only SceneScript once with zero arguments.
+    public func callInitIfNeeded() {
+        guard let initFn = takeInitFunctionIfNeeded() else { return }
+        _ = withExceptionCapture("init hook exception") { failed -> JSValue? in
+            let result = initFn.call(withArguments: [])
+            return failed() ? nil : result
         }
     }
 
@@ -291,10 +318,14 @@ public final class TextScriptEngine {
         }
     }
 
-    private func callInitIfNeeded(argument: Any) {
-        guard !didCallInit else { return }
+    private func takeInitFunctionIfNeeded() -> JSValue? {
+        guard !didCallInit else { return nil }
         didCallInit = true
-        guard let initFn else { return }
+        return initFn
+    }
+
+    private func callInitIfNeeded(argument: Any) {
+        guard let initFn = takeInitFunctionIfNeeded() else { return }
         initFn.call(withArguments: [initArgument(from: argument)])
     }
 
