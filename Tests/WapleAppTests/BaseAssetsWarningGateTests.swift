@@ -73,6 +73,28 @@ final class BaseAssetsWarningGateTests: XCTestCase {
         XCTAssertEqual(presented, [BaseAssetsWarningGate.message, BaseAssetsWarningGate.message])
     }
 
+    func testReturningToWarnedFingerprintDoesNotRepresentButNewOneDoes() {
+        var gate = BaseAssetsWarningGate()
+        var presented: [String] = []
+        let miss: Result<[Bool], Error> = .success([true])
+        func warn(_ fingerprint: String) {
+            gate.presentIfNeeded(
+                after: miss,
+                fingerprint: fingerprint,
+                missingRequiredSharedAssets: { $0 },
+                present: { presented.append($0); return true }
+            )
+        }
+
+        warn("/assets/a")                       // ① A 최초 경고
+        warn("/assets/b")                        // ② B(신규)는 다른 fingerprint라 구 로직이 여기서 게이트를 리셋했음
+        warn("/assets/a")                        // ③ A 복귀 — 이미 경고했으므로 재경고 없어야 함
+        XCTAssertEqual(presented.count, 2, "returning to an already-warned fingerprint must not re-warn")
+
+        warn("/assets/c")                        // ④ C(신규)는 경고함
+        XCTAssertEqual(presented.count, 3)
+    }
+
     func testHiddenWindowDoesNotConsumePresentationAllowance() {
         var gate = BaseAssetsWarningGate()
         let miss: Result<[Bool], Error> = .success([true])
