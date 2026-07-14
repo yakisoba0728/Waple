@@ -175,11 +175,10 @@ extension SceneRenderer {
                 package: package,
                 decode: { data in
                     guard let tex = TexImage.parse(data),
-                          let decoded = TexDecoder.rgba(from: tex, data: data, properties: variantProperties),
-                          let texture = makeTexture(decoded.pixels, decoded.width, decoded.height, device) else {
+                          let up = makeImageTexture(tex: tex, data: data, device: device) else {
                         return nil
                     }
-                    return (texture, decoded.width, decoded.height)
+                    return (up.texture, up.width, up.height)
                 },
                 alternate: {
                     guard let decoded = bitmapRGBAFile(layer.textureEntryName),
@@ -621,9 +620,10 @@ extension SceneRenderer {
                         return stacked
                     }
                     // 단일-이미지 다중프레임 시트는 아틀라스 전체 보존(imgW/imgH 크롭 시 frame≥1 소실 → 흑화).
-                    if let dec = TexDecoder.rgba(from: tex, data: d, properties: variantProperties,
-                                                 keepFullAtlas: !multipage && tex.frames.count > 1),
-                       let texture = makeTexture(dec.pixels, dec.width, dec.height, device) {
+                    // keepFullAtlas 는 makeImageTexture 가 네이티브 BC 를 건너뛰고 CPU(스프라이트 blit 소비 대응).
+                    if let dec = makeImageTexture(tex: tex, data: d, device: device,
+                                                  keepFullAtlas: !multipage && tex.frames.count > 1) {
+                        let texture = dec.texture
                         // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
                         // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백
                         // (page 0 표시)해 "틀린 애니" 대신 "정지"로 명예로운 실패(advisor). 단일 image 는 frames
@@ -803,6 +803,45 @@ extension SceneRenderer {
             t.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0, withBytes: ptr.baseAddress!, bytesPerRow: w * 4)
         }
         return t
+    }
+
+    /// 네이티브 BC 업로드: LZ4 해제된 raw BC 블록을 `.bc1/2/3_rgba`(sRGB 아님 — rgba8Unorm 선형 파이프라인과
+    /// 동일 취급)로 직접 올린다. bytesPerRow=소스 decode-dims stride 라 Metal 이 패딩 블록을 스킵(크롭 무비용,
+    /// 부분 엣지 블록은 GPU 엣지 클램프 — 실측 검증). CPU DXT 디코드·RGBA 상주(≈12× 큼) 동시 회피.
+    func makeBCTexture(_ bc: TexDecoder.NativeBCUpload, _ device: MTLDevice) -> MTLTexture? {
+        let pf: MTLPixelFormat
+        switch bc.format {
+        case .bc1: pf = .bc1_rgba
+        case .bc2: pf = .bc2_rgba
+        case .bc3: pf = .bc3_rgba
+        }
+        guard bc.width > 0, bc.height > 0 else { return nil }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pf, width: bc.width, height: bc.height, mipmapped: false)
+        guard let t = device.makeTexture(descriptor: desc) else { return nil }
+        bc.blocks.withUnsafeBytes { ptr in
+            guard let base = ptr.baseAddress else { return }
+            t.replace(region: MTLRegionMake2D(0, 0, bc.width, bc.height), mipmapLevel: 0,
+                      withBytes: base, bytesPerRow: bc.bytesPerRow)
+        }
+        return t
+    }
+
+    /// 씬 이미지 텍스처 1장 → MTLTexture(+dims). BC(DXT)면 네이티브 BC 업로드 시도(supportsBC 게이트 +
+    /// WAPLE_BC_NATIVE!=0 킬스위치), 비-BC/멀티페이지/미지원이면 기존 CPU rgba()+makeTexture 폴백.
+    /// 반환 dims 는 두 경로 동일(파리티). buildLayers·resolveTextureWithFrames·3D 빌보드 공용.
+    /// keepFullAtlas(스프라이트 아틀라스)는 spriteFrameTexture 가 blit.copy 로 소비 → 네이티브 대상 아님(CPU만).
+    func makeImageTexture(tex: TexImage, data: Data, device: MTLDevice, keepFullAtlas: Bool = false)
+        -> (texture: MTLTexture, width: Int, height: Int)? {
+        if !keepFullAtlas,
+           ProcessInfo.processInfo.environment["WAPLE_BC_NATIVE"] != "0",
+           device.supportsBCTextureCompression,
+           let bc = TexDecoder.nativeBC(from: tex, data: data, properties: variantProperties),
+           let t = makeBCTexture(bc, device) {
+            return (t, bc.width, bc.height)
+        }
+        guard let dec = TexDecoder.rgba(from: tex, data: data, properties: variantProperties, keepFullAtlas: keepFullAtlas),
+              let t = makeTexture(dec.pixels, dec.width, dec.height, device) else { return nil }
+        return (t, dec.width, dec.height)
     }
 
     private func bitmapRGBAFile(_ path: String) -> (pixels: Data, width: Int, height: Int)? {
