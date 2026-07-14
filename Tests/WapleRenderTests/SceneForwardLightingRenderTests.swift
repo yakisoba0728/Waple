@@ -49,6 +49,16 @@ final class SceneForwardLightingRenderTests: XCTestCase {
         return (c.redComponent, c.greenComponent, c.blueComponent)
     }
 
+    func testForwardLightShaderUsesPackedExponent() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let source = QuadShaders.source
+        XCTAssertTrue(source.contains("finiteLightFalloff(dist, radius, lightPos[i].w)"))
+        XCTAssertFalse(source.contains("ndl * attn * attn"))
+
+        let library = try device.makeLibrary(source: source, options: nil)
+        XCTAssertNotNil(library.makeFunction(name: "f_lit"))
+    }
+
     func testSkylightDoesNotAffectFlat2DAmbient() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let projectID = "fl_flat_ambient"

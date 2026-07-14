@@ -508,7 +508,7 @@ extension SceneRenderer {
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         enc.setFragmentTexture(texture, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-        // f_lit 유니폼: rect(uv→월드) + 라이트 위치/색·반경 + 앰비언트(씬 상수). 라이트 레이어만.
+        // f_lit 유니폼: rect(uv→월드) + 라이트 위치·exponent/색·반경 + 앰비언트(씬 상수). 라이트 레이어만.
         if layer.isLit, litPipeline != nil {
             let rect = [litRect0, litRect1]
             rect.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }

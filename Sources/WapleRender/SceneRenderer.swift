@@ -461,7 +461,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var accPixelFormat: MTLPixelFormat { sceneIsHDR ? .rgba16Float : .bgra8Unorm }
     /// 씬당 라이트 유니폼(상수) — forwardLit=false(라이트 씬 아님)면 전 레이어 f_main(무회귀).
     var forwardLit = false
-    var lightPositions = [SIMD4<Float>](repeating: .zero, count: 4)    // [4] xyz=world, w=active
+    var lightPositions = [SIMD4<Float>](repeating: .zero, count: 4)    // [4] xyz=world, w=exponent
     var lightColorRadius = [SIMD4<Float>](repeating: .zero, count: 4)  // [4] rgb=color×intensity, w=radius
     var lightAmbient = SIMD4<Float>(0, 0, 0, 0)                        // xyz=flat ambient (genericimage4)
     var layers: [GPULayer] = []

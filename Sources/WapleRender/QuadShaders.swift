@@ -54,18 +54,22 @@ enum QuadShaders {
         float3 r = applyBlending(mode, d.rgb, c.rgb * tint.rgb, o);
         return float4(r, d.a);
     }
-    // 2D 포워드 라이팅(라이트 씬의 LIGHTING:1 레이어 전용). 수식 정본 =
-    // assets/shaders/common_fragment.h::ComputeLight(diffuse) + genericimage4 flat ambient.
+    // WE genericimage4 유한광 감쇠의 GLSL/Metal 포트. 반경 경계는 0^0 스파이크를 막도록 hard zero.
+    inline float finiteLightFalloff(float dist, float radius, float exponent) {
+        float falloff = clamp(1.0 - dist / radius, 0.0, 1.0);
+        constexpr float eps = 6.103515625e-5;
+        return falloff >= eps ? pow(falloff + eps, exponent) : 0.0;
+    }
+    // 2D 포워드 라이팅(라이트 씬의 LIGHTING:1 레이어 전용). P1 범위는 exponent 감쇠 + flat ambient.
     //   worldPos: uv → 레이어 월드 사각형 재구성(quadVertices 와 동일 규약). N=+Z(평면 레이어).
-    //   light = ambient + Σ color·saturate(dot(normalize(lightPos-world), N))·attn²,
-    //           attn = saturate((radius-dist)/radius). albedo *= tint(color×brightness) *= light.
+    //   light = ambient + Σ color·saturate(dot(normalize(lightPos-world), N))·pow(falloff+eps, exponent).
     //   미사용 슬롯/짧은반경 라이트는 radius≤0 로 스킵(count 유니폼 불필요).
     //   블로아웃: bgra8Unorm 이 [0,1] 클램프 = 고강도(HDR)는 white(HDR/톤맵 패스 전까지 — 보고).
     fragment float4 f_lit(VOut in [[stage_in]],
                           texture2d<float> tex [[texture(0)]],
                           constant float4 &tint [[buffer(0)]],
                           constant float4 *rect [[buffer(1)]],      // [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,_)
-                          constant float4 *lightPos [[buffer(2)]],  // [4] xyz=world
+                          constant float4 *lightPos [[buffer(2)]],  // [4] xyz=world, w=exponent
                           constant float4 *lightCol [[buffer(3)]],  // [4] rgb=color×intensity, w=radius
                           constant float4 &ambient [[buffer(4)]]) { // xyz=flat ambient (genericimage4)
         constexpr sampler s(filter::linear, address::clamp_to_edge);
@@ -83,9 +87,9 @@ enum QuadShaders {
             float3 delta = lightPos[i].xyz - world;
             float dist = length(delta);
             if (dist < 1e-5) continue;
-            float attn = clamp((radius - dist) / radius, 0.0, 1.0);
+            float attenuation = finiteLightFalloff(dist, radius, lightPos[i].w);
             float ndl = max(0.0, dot(delta / dist, N));
-            light += lightCol[i].xyz * (ndl * attn * attn);
+            light += lightCol[i].xyz * (ndl * attenuation);
         }
         // WE genericimage*/generic2: albedo *= g_TintColor(=color×brightness), albedo.rgb *= light.
         // f_main 규약대로 straight→premultiplied 를 마지막에 단 한 번(블렌드 src=one).
