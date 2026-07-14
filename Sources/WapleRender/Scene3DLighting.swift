@@ -170,7 +170,7 @@ enum Scene3DLighting {
     // ponytail: half vs full 미확정(코퍼스 spot 은 전부 지오메트리 범위 밖이라 육안 보정 불가).
     //           full-angle 이면 `* 0.5` 를 제거. 지오메트리 도달 spot 실물 확보 시 3477054430 로 보정.
     static func spotConeCosines(inner: Float, outer: Float) -> (inner: Float, outer: Float) {
-        guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 전방향 통과
+        guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 반구 그라디언트(셰이더 (cosAngle+1)/2 → 축상 1·수직 0.5·후방 0). 전방향 통과 아님.
         let toHalfRadians = Float.pi / 180 * 0.5
         let cosOuter = cos(max(0, outer) * toHalfRadians)
         let cosInnerRaw = inner.isFinite && inner > 0 ? cos(inner * toHalfRadians) : 1

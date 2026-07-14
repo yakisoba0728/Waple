@@ -698,7 +698,8 @@ extension SceneRenderer {
     ///   • fov: 세로축 — 젤다 회랑 상하 구도가 정합(가로 해석은 세로 화각 29° 로 좁아져 아치 잘림).
     ///     코퍼스 3씬 전부 fov 50 이라 축 구분 실물 반례는 없음(표준 규약 채택)
     ///   • 오일러: Rz·Ry·Rx (Scene3DMath.modelMatrix 주석 — 짐벌 동치 실측)
-    func encode3D(into target: MTLTexture, cb: MTLCommandBuffer, device: MTLDevice, time: Float) -> Bool {
+    func encode3D(into target: MTLTexture, cb: MTLCommandBuffer, device: MTLDevice, time: Float,
+                  particleDelta: Float?) -> Bool {
         guard let cam = camera3D, let over = meshPipelineOver,
               let depthTex = pooledDepth(target.width, target.height, device) else { return false }
         // per-frame 스크립트 평가(씬 order — 컨트롤러가 이를 읽는 스크립트보다 먼저) → 현재 로컬 변환/가시성.
@@ -871,7 +872,7 @@ extension SceneRenderer {
         }
         // 파티클: 불투명 메시/빌보드 뒤에 원근 빌보드로(뎁스 read-only). enc 는 프레임버퍼 빌보드 경로에서
         // 재할당됐을 수 있으므로 현재 enc 를 사용(같은 depthTex 바인딩 유지).
-        if hasParticles { encode3DParticles(time: time, viewProj: viewProj, right: right, up: camUp, nmap: nmap, into: enc, device: device) }
+        if hasParticles { encode3DParticles(time: time, liveDelta: particleDelta, viewProj: viewProj, right: right, up: camUp, nmap: nmap, into: enc, device: device) }
         enc.endEncoding()
         return true
     }
@@ -936,35 +937,45 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 
+    /// 3D 파티클 시뮬을 진행해 시스템별 스냅샷을 낸다(드로우/Metal 과 분리 — 유닛 테스트·캡처 재현 공용).
+    /// - liveDelta 지정(라이브): 클램프된 프레임 dt 로 **이어가기**. draw() 가 dt 를 ≤0.05 로 클램프하므로
+    ///   가림/절전 갭 후에도 프레임당 유한 스텝(서브스텝 상한 dtCap)만 밟는다 — time-clock 무제한 캐치업 금지(감사 C1).
+    /// - liveDelta=nil(캡처): particle3DClock(프레시 마운트/캡처 시작=0) → time 까지 전량 서브스텝 = 0→t 결정적
+    ///   리플레이(2D 캡처 입도와 동일 — 방출/이동 반영). captureFrames 가 라이브 sim 을 프레시로 리셋해 재현 보장(I1).
+    /// 루트만 스텝, 자식은 부모 sim.childDisplay. 밟은 서브스텝 수를 particle3DLastStepCount 에 기록(테스트 관측).
+    func stepParticleSnapshots(time: Float, liveDelta: Float?) -> [[Particle]] {
+        let dtCap: Float = 1.0 / 30.0
+        var snaps = [[Particle]](repeating: [], count: particleSystems.count)
+        let rootIdxs = particleSystems.indices.filter { particleSystems[$0].childOf == nil }
+        // 라이브(liveDelta 지정)=클램프 dt 이어가기(유한), 캡처(nil)=clock→time 리플레이. clock 은 캡처만 전진.
+        var acc = max(0, liveDelta ?? (time - particle3DClock))
+        var steps = 0
+        if acc > 1e-5 {
+            while acc > 1e-5 { let s = min(dtCap, acc); for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(s) }; acc -= s; steps += 1 }
+            if liveDelta == nil { particle3DClock = time }
+        } else {
+            for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(0) }   // 정지/재드로 — 현재 스냅샷 재방출.
+        }
+        for i in particleSystems.indices {
+            if let c = particleSystems[i].childOf { snaps[i] = particleSystems[c.parent].sim.childDisplay(c.link) }
+        }
+        particle3DLastStepCount = steps
+        return snaps
+    }
+
     /// 3D 씬 파티클을 원근 카메라-페이싱 빌보드로 드로우한다(encode3D 의 메시/빌보드 패스 뒤, 같은 인코더).
-    /// - 시뮬: 기존 CPU `ParticleSimulator`(2D 와 공용). particle3DClock 을 `time` 까지 1/30 서브스텝
-    ///   (라이브 = 매 프레임 소량, 캡처 = 정렬 시각 간 델타). 루트만 스텝, 자식은 부모 childDisplay.
+    /// - 시뮬: stepParticleSnapshots(time:liveDelta:) 로 진행(라이브 = 클램프 dt 이어가기, 캡처 = clock→time 리플레이).
     /// - 배치: 월드행렬 M = 부모월드(nmap, 서브트리 가시성 존중) · modelMatrix(origin3D,angles3D,scale3D).
     ///   부모 서브트리 비가시 또는 정적 visible=false 면 시스템 전체 스킵(WE 가시성 시맨틱 — 예: 3737268876
     ///   횃불은 부모 "Torches" 정적 비가시라 드롭이 정답).
     /// - 렌더: 파티클 로컬 pos 를 M 으로 월드 변환 → 카메라 right/up 으로 쿼드 전개 → viewProj. 뎁스는
     ///   read-only(메시에 가려짐, 미기록 — WE 투명 관례). 블렌드는 머티리얼(additive/translucent) 재사용.
-    func encode3DParticles(time: Float, viewProj: simd_float4x4,
+    func encode3DParticles(time: Float, liveDelta: Float?, viewProj: simd_float4x4,
                            right: SIMD3<Float>, up: SIMD3<Float>,
                            nmap: [Int: Scene3DMath.Node],
                            into enc: MTLRenderCommandEncoder, device: MTLDevice) {
         guard !particleSystems.isEmpty else { return }
-        // ── 시뮬 진행(절대시계 → time). 루트만 스텝, 자식은 부모 캐시. ──
-        let dtCap: Float = 1.0 / 30.0
-        var snaps = [[Particle]](repeating: [], count: particleSystems.count)
-        let rootIdxs = particleSystems.indices.filter { particleSystems[$0].childOf == nil }
-        // clock(=마지막 진행 시각, mount 0) → time 까지 1/30 서브스텝. 캡처는 단일 프레임 time=6s 라도
-        // 0→6s 전량 진행(2D 캡처 경로와 동일 입도)해야 방출/이동이 반영된다. acc≈0(정지/재드로)이면 step(0).
-        var acc = max(0, time - particle3DClock)            // time 은 라이브 단조·캡처 정렬 → 음수 없음.
-        if acc > 1e-5 {
-            while acc > 1e-5 { let s = min(dtCap, acc); for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(s) }; acc -= s }
-            particle3DClock = time
-        } else {
-            for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(0) }
-        }
-        for i in particleSystems.indices {
-            if let c = particleSystems[i].childOf { snaps[i] = particleSystems[c.parent].sim.childDisplay(c.link) }
-        }
+        let snaps = stepParticleSnapshots(time: time, liveDelta: liveDelta)
         // ── 드로우(씬 order 오름차순 — 뎁스가 메시 가림 처리, 파티클 간 정렬은 미적용: WE depth-sort 근거 없음). ──
         guard let dstate = meshDepthState(test: true, write: false, device: device) else { return }
         var vp = viewProj
