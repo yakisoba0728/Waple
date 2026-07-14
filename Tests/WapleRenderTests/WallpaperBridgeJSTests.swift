@@ -57,6 +57,42 @@ final class WallpaperBridgeJSTests: XCTestCase {
         XCTAssertTrue(s.contains("wallpaperWillGoBackground"))
         XCTAssertTrue(s.contains("wallpaperWillGoForeground"))
     }
+
+    func testBridgeCallsHardPauseBeforeCooperativeLifecycle() throws {
+        let source = WallpaperBridgeJS.source
+        let hard = try XCTUnwrap(
+            source.range(of: "window.__wapleHardPauseController.setPaused(paused)")
+        )
+        let listener = try XCTUnwrap(
+            source.range(of: "if (listener && listener.setPaused)")
+        )
+        let lifecycle = try XCTUnwrap(
+            source.range(of: "var lifecycle = paused ?")
+        )
+        XCTAssertLessThan(
+            source.distance(from: source.startIndex, to: hard.lowerBound),
+            source.distance(from: source.startIndex, to: listener.lowerBound)
+        )
+        XCTAssertLessThan(
+            source.distance(from: source.startIndex, to: listener.lowerBound),
+            source.distance(from: source.startIndex, to: lifecycle.lowerBound)
+        )
+    }
+
+    func testHardPauseSourceDeclaresStableControllerContract() {
+        let source = WebHardPauseJS.source
+        for token in [
+            "__wapleHardPauseController",
+            "version: 1",
+            "isPaused: function",
+            "setPaused: function",
+            "AudioContext",
+            "webkitAudioContext",
+            "document.getAnimations"
+        ] {
+            XCTAssertTrue(source.contains(token), "missing hard-pause contract: \(token)")
+        }
+    }
 }
 
 extension WallpaperBridgeJSTests {

@@ -474,4 +474,56 @@ final class WebHardPauseTests: XCTestCase {
                 (pumpEvalJS(web, "window.__dynamicAnimation.currentTime") as? Double ?? 0) > dynamicFrozen + 20
         })
     }
+
+    func testControllerFailureDoesNotBlockCooperativeLifecycle() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_hard_pause_error_\(UUID().uuidString)",
+                                  isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        <html><body><script>
+        window.__hardCalls = 0;
+        window.__background = 0;
+        window.__pausedLog = [];
+        window.wallpaperWillGoBackground = function () { window.__background += 1; };
+        window.wallpaperPropertyListener = {
+          setPaused: function (value) { window.__pausedLog.push(value); }
+        };
+        </script></body></html>
+        """.write(to: dir.appendingPathComponent("index.html"),
+                  atomically: true, encoding: .utf8)
+        try #"{"type":"web","file":"index.html","title":"controller-error"}"#
+            .write(to: dir.appendingPathComponent("project.json"),
+                   atomically: true, encoding: .utf8)
+
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(
+            in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+            project: ProjectJSONParser.parse(folderURL: dir)
+        )
+        defer { renderer.teardown() }
+        let web = try XCTUnwrap(renderer.webViewForTesting)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            pumpEvalJS(web, """
+            !!window.__wapleHardPauseController &&
+            Array.isArray(window.__pausedLog)
+            """) as? Bool == true
+        })
+        _ = pumpEvalJS(web, """
+        window.__wapleHardPauseController.setPaused = function () {
+          window.__hardCalls += 1;
+          throw new Error('expected controller failure');
+        };
+        """)
+        renderer.pause()
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, """
+            window.__hardCalls === 1 &&
+            window.__background === 1 &&
+            window.__pausedLog.length === 1 &&
+            window.__pausedLog[0] === true
+            """) as? Bool == true
+        })
+    }
 }

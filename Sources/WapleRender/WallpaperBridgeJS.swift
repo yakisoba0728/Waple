@@ -122,6 +122,16 @@ enum WallpaperBridgeJS {
           } catch (e) {}
         });
       }
+      function setHardPaused(paused) {
+        try {
+          if (window.__wapleHardPauseController &&
+              typeof window.__wapleHardPauseController.setPaused === 'function') {
+            window.__wapleHardPauseController.setPaused(paused);
+          }
+        } catch (error) {
+          try { window.console.error('[Waple hard pause bridge]', error); } catch (_) {}
+        }
+      }
       function propagateLastProps() {
         if (lastProps || lastGeneral) { propagateProps(lastProps, lastGeneral); }
       }
@@ -152,6 +162,7 @@ enum WallpaperBridgeJS {
         paused = !!paused;
         if (lastPaused === paused) { return; }
         lastPaused = paused;
+        setHardPaused(paused);
         if (listener && listener.setPaused) {
           try { listener.setPaused(paused); } catch (e) {}
         }
