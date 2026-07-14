@@ -49,6 +49,35 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(u.positions[1], .zero)
     }
 
+    func testParsesPBRMaterialConstantsAndDefaults() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"id":1,"name":"authored","image":"models/authored.json","origin":"25 50 0"},
+           {"id":2,"name":"defaulted","image":"models/defaulted.json","origin":"75 50 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/authored.json", d(#"{"material":"materials/authored.json"}"#)),
+            ("models/defaulted.json", d(#"{"material":"materials/defaulted.json"}"#)),
+            ("materials/authored.json", d(#"{"passes":[{"textures":["authored"],"constantshadervalues":{"roughness":5,"metallic":0.25,"speculartint":"0.2 0.4 0.6"}}]}"#)),
+            ("materials/defaulted.json", d(#"{"passes":[{"textures":["defaulted"]}]}"#)),
+            ("materials/authored.tex", d("not-a-real-tex")),
+            ("materials/defaulted.tex", d("not-a-real-tex")),
+        ])
+
+        let doc = try SceneDocument.parse(package: pkg)
+        let authored = try XCTUnwrap(doc.layers.first { $0.name == "authored" })
+        let defaulted = try XCTUnwrap(doc.layers.first { $0.name == "defaulted" })
+        XCTAssertEqual(authored.roughness, 5)
+        XCTAssertEqual(authored.metallic, 0.25)
+        XCTAssertEqual(authored.specularTint, Vec3(x: 0.2, y: 0.4, z: 0.6))
+        XCTAssertEqual(defaulted.roughness, 0.7)
+        XCTAssertEqual(defaulted.metallic, 0)
+        XCTAssertEqual(defaulted.specularTint, Vec3(x: 1, y: 1, z: 1))
+    }
+
     // MARK: 감쇠/합산 수식 (손계산 대조 — 실씬 3047405322 spot)
 
     func testAmbientFloorWhenLightOutOfRange() {

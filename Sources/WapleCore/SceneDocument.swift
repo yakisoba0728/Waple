@@ -88,6 +88,10 @@ public struct SceneLayer: Equatable {
     /// 머티리얼 패스에 LIGHTING 콤보(!=0)가 있으면 true → 이 레이어는 씬 라이트에 반응(포워드 라이팅).
     /// 2D 씬 + 라이트 존재 시에만 소비(SceneDocument.forwardLit2D). LIGHTING:0/부재는 기존 unlit 경로(무회귀).
     public var lighting: Bool = false
+    /// genericimage4 scalar PBR constants from passes[0].constantshadervalues.
+    public var roughness: Float = 0.7
+    public var metallic: Float = 0
+    public var specularTint: Vec3 = Vec3(x: 1, y: 1, z: 1)
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -607,6 +611,9 @@ extension SceneDocument {
         var depthWrite = true
         var spritesheetCombo = false
         var lightingCombo = false
+        var roughness: Float = 0.7
+        var metallic: Float = 0
+        var specularTint = Vec3(x: 1, y: 1, z: 1)
         if let md = package.data(for: imagePath) ?? assets?(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
@@ -622,6 +629,11 @@ extension SceneDocument {
                 if let combos = p0["combos"] as? [String: Any] {
                     spritesheetCombo = combos.contains { $0.key.lowercased() == "spritesheet" && (intVal($0.value) ?? 0) != 0 }
                     lightingCombo = combos.contains { $0.key.lowercased() == "lighting" && (intVal($0.value) ?? 0) != 0 }
+                }
+                if let constants = p0["constantshadervalues"] as? [String: Any] {
+                    roughness = float(constants["roughness"]) ?? roughness
+                    metallic = float(constants["metallic"]) ?? metallic
+                    specularTint = vec3(constants["speculartint"]) ?? specularTint
                 }
             }
         }
@@ -650,6 +662,9 @@ extension SceneDocument {
         layer.depthWrite = depthWrite
         layer.spritesheet = spritesheetCombo
         layer.lighting = lightingCombo
+        layer.roughness = roughness
+        layer.metallic = metallic
+        layer.specularTint = specularTint
         layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])
