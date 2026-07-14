@@ -630,6 +630,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 guard let base = BaseAssetsSettings.baseAssetsDirectory,
                       let url = WallpaperPathSecurity.containedFileURL(name, root: base) else { return nil }
                 return try? Data(contentsOf: url)
+            }, onMissingRequiredAsset: { [weak self] in
+                self?.markMissingRequiredSharedAsset()
             }, userProps: UserPropertyStore.rawOverrides(
                 id: project.id,
                 presetOverrides: project.presetOverrides,
