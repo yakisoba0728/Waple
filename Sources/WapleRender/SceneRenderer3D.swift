@@ -19,6 +19,7 @@ extension SceneRenderer {
         let specularTint: SIMD3<Float>
         let alphaCutoff: Float       // alphatocoverage → 0.5 (컷아웃 discard 근사), 그 외 0
         let shadowEligible: Bool     // opaque/alphatocoverage만 P4 caster 대상
+        let unlit: Bool              // combos.LIGHTING==0 → 풀브라이트 albedo(라이팅 스킵, mode.w=0)
         let cullBack: Bool           // cullmode "normal" → 백페이스 컬, "nocull" → 양면
         let additive: Bool
         let depthTest: Bool
@@ -247,7 +248,7 @@ extension SceneRenderer {
                                         texture: mat.texture, tint: mat.tint,
                                         roughness: mat.roughness, metallic: mat.metallic,
                                         specularTint: mat.specularTint, alphaCutoff: mat.alphaCutoff,
-                                        shadowEligible: mat.shadowEligible,
+                                        shadowEligible: mat.shadowEligible, unlit: mat.unlit,
                                         cullBack: mat.cullBack, additive: mat.additive,
                                         depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned))
             }
@@ -375,6 +376,7 @@ extension SceneRenderer {
         let specularTint: SIMD3<Float>
         let alphaCutoff: Float
         let shadowEligible: Bool
+        let unlit: Bool
         let cullBack: Bool
         let additive: Bool
         let depthTest: Bool
@@ -395,6 +397,7 @@ extension SceneRenderer {
         var depthTest = true, depthWrite = true
         var pbr = Scene3DMaterialValues()
         var shadowEligible = true
+        var unlit = false
         if let d = quietAssetData(path, package: package),
            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
@@ -406,6 +409,11 @@ extension SceneRenderer {
             shadowEligible = blend == "normal" || blend == "alphatocoverage"
             depthTest = (p0["depthtest"] as? String) != "disabled"
             depthWrite = (p0["depthwrite"] as? String) != "disabled"
+            // combos.LIGHTING==0 → unlit(풀브라이트 albedo, generic4.frag:124-125). WE 기본 LIGHTING=1(lit). 키 대소문자 무시(2D SceneDocument:646 규약).
+            if let combos = p0["combos"] as? [String: Any],
+               let v = combos.first(where: { $0.key.lowercased() == "lighting" })?.value {
+                unlit = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 1) == 0
+            }
             if let csv = p0["constantshadervalues"] as? [String: Any] {
                 pbr = Scene3DMaterialValues.parse(csv)
                 func fvec(_ any: Any?) -> [Float]? {
@@ -429,7 +437,7 @@ extension SceneRenderer {
                                        roughness: pbr.roughness, metallic: pbr.metallic,
                                        specularTint: pbr.specularTint,
                                        alphaCutoff: alphaCutoff, shadowEligible: shadowEligible,
-                                       cullBack: cullBack, additive: additive,
+                                       unlit: unlit, cullBack: cullBack, additive: additive,
                                        depthTest: depthTest, depthWrite: depthWrite)
                 }
             }
@@ -439,7 +447,7 @@ extension SceneRenderer {
                                   roughness: pbr.roughness, metallic: pbr.metallic,
                                   specularTint: pbr.specularTint,
                                   alphaCutoff: alphaCutoff, shadowEligible: shadowEligible,
-                                  cullBack: cullBack, additive: additive,
+                                  unlit: unlit, cullBack: cullBack, additive: additive,
                                   depthTest: depthTest, depthWrite: depthWrite)
     }
 
@@ -821,7 +829,7 @@ extension SceneRenderer {
                     // 스키닝 메시(16f 패킹)는 반드시 스키닝 파이프라인 필요 — 본버퍼 미준비면 스킵(8f 셰이더로 오독 방지).
                     if mesh.skinned && boneBuf == nil { continue }
                     u.tint = mesh.tint
-                    u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, 1)
+                    u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, mesh.unlit ? 0 : 1)
                     u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, 0)
                     let useSkin = mesh.skinned && boneBuf != nil
                     let pipe: MTLRenderPipelineState
