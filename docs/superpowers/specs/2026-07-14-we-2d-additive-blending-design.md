@@ -50,6 +50,8 @@ destination을 복사한 뒤 셰이더에서 더할 수도 있다. 그러나 고
 
 `GPULayer`에는 raw 문자열 대신 `Bool`을 저장한다. 렌더 핫 경로에서 문자열 비교를 피하고 이번 작업의 지원 범위를 명확히 제한하기 위해서다. 이름은 기존 `GPUParticleSystem.blendAdditive`와 맞춘다.
 
+`SceneLayer.blendMode`의 주석도 실제 소비 범위에 맞춰 갱신한다. 이는 동작 변경이 아니라 구현 후 "2D 경로는 무시"라고 남게 될 낡은 설명을 제거하는 작업이다.
+
 ### 파이프라인
 
 `layerAdditivePipeline`을 기본 2D `pipeline` 옆에서 생성한다.
@@ -111,6 +113,7 @@ destination을 복사한 뒤 셰이더에서 더할 수도 있다. 그러나 고
 
 예상 수정 파일은 다음으로 제한한다.
 
+- `Sources/WapleCore/SceneDocument.swift`의 `blendMode` 계약 주석
 - `Sources/WapleRender/SceneRenderer.swift`
 - `Sources/WapleRender/SceneRendererResources.swift`
 - `Sources/WapleRender/SceneRendererFrameEncoder.swift`
