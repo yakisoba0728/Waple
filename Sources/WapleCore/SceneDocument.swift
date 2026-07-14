@@ -249,11 +249,11 @@ public extension SceneLight3D {
     ///   ("Premultiplied" = color × intensity; 별도 intensity/radius 유니폼 없음.)
     /// - `ambient`: `general.ambientcolor`.
     ///
-    /// > ⚠️ **현재 런타임 소비처 없음.** Waple 의 2D 레이어는 QuadShaders(텍스처×tint), 3D 메시는 고정
-    /// > unlit `Mesh3DShaders` 로 그린다. 라이트를 참조하는 머티리얼 셰이더(generic*/genericimage2)는
-    /// > 로드·번역되지 않으며, 번역되는 이펙트 셰이더는 코퍼스 전체 0건이 이 유니폼을 참조한다. 따라서
-    /// > 이 팩을 읽는 셰이더가 없어 값을 공급해도 화면 변화가 없다. 이 함수는 향후 forward-lighting(PBR)
-    /// > 도입 시 소비될 **확정 규약**을 유닛으로 고정해 두는 것이 목적(SP 리포트 참조).
+    /// > ⚠️ **이 legacy `PackedUniforms`의 현재 런타임 소비처는 없음.** 2D 포워드 라이팅은 별도
+    /// > `ForwardUniforms`를 `QuadShaders.f_lit`에 공급한다. 라이트를 참조하는 원본 머티리얼 셰이더
+    /// > (generic*/genericimage2)는 로드·번역되지 않으며, 번역되는 이펙트 셰이더는 코퍼스 전체 0건이
+    /// > 이 legacy 팩을 참조한다. 이 함수는 향후 해당 규약 소비처 도입을 위해 **확정 규약**을 유닛으로
+    /// > 고정해 두는 것이 목적(SP 리포트 참조).
     struct PackedUniforms: Equatable {
         public var positions: [SIMD3<Float>]           // g_LightsPosition[4]
         public var colorsPremultiplied: [SIMD4<Float>] // g_LightsColorPremultiplied[3]

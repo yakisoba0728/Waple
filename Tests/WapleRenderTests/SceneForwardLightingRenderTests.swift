@@ -11,6 +11,7 @@ import Metal
 final class SceneForwardLightingRenderTests: XCTestCase {
     /// lightColor=nil → 라이트 오브젝트 없음. lighting → 머티리얼 LIGHTING 콤보.
     private func capture(lightColor: String?, lighting: Bool, tag: String,
+                         projectID: String? = nil,
                          ambient: String = "0.3 0.3 0.3",
                          skylight: String = "0.3 0.3 0.3") throws -> NSBitmapImageRep {
         var objs = #"{"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"}"#
@@ -32,7 +33,7 @@ final class SceneForwardLightingRenderTests: XCTestCase {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_fl_\(tag)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try encodePkg(files).write(to: dir.appendingPathComponent("scene.pkg"))
-        let project = WallpaperProject(id: "fl_\(tag)", type: .scene, fileName: "scene.pkg", previewName: nil,
+        let project = WallpaperProject(id: projectID ?? "fl_\(tag)", type: .scene, fileName: "scene.pkg", previewName: nil,
                                        title: "fl", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
@@ -50,10 +51,22 @@ final class SceneForwardLightingRenderTests: XCTestCase {
 
     func testSkylightDoesNotAffectFlat2DAmbient() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let projectID = "fl_flat_ambient"
         let darkSky = try capture(lightColor: "0 0 0", lighting: true, tag: "flat_ambient_dark_sky",
+                                  projectID: projectID,
                                   ambient: "0.2 0.3 0.4", skylight: "0 0 0")
         let brightSky = try capture(lightColor: "0 0 0", lighting: true, tag: "flat_ambient_bright_sky",
+                                    projectID: projectID,
                                     ambient: "0.2 0.3 0.4", skylight: "1 1 1")
+        let unlit = try capture(lightColor: "0 0 0", lighting: false, tag: "flat_ambient_unlit",
+                                projectID: projectID,
+                                ambient: "0.2 0.3 0.4", skylight: "0 0 0")
+        XCTAssertEqual(darkSky.pixelsWide, 64)
+        XCTAssertEqual(darkSky.pixelsHigh, 36)
+        XCTAssertEqual(brightSky.pixelsWide, 64)
+        XCTAssertEqual(brightSky.pixelsHigh, 36)
+        XCTAssertEqual(unlit.pixelsWide, 64)
+        XCTAssertEqual(unlit.pixelsHigh, 36)
         var maxDiff = 0.0
         for y in 0..<36 {
             for x in 0..<64 {
@@ -62,6 +75,11 @@ final class SceneForwardLightingRenderTests: XCTestCase {
             }
         }
         XCTAssertLessThan(maxDiff, 0.01, "2D genericimage4 ambient must ignore skylight")
+        let litCenter = rgb(darkSky, 32, 18), unlitCenter = rgb(unlit, 32, 18)
+        let activeDiff = max(abs(litCenter.r - unlitCenter.r),
+                             abs(litCenter.g - unlitCenter.g),
+                             abs(litCenter.b - unlitCenter.b))
+        XCTAssertGreaterThan(activeDiff, 0.5, "flat-ambient assertion requires the f_lit path to be active")
     }
 
     func testLightColorReactivity() throws {
