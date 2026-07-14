@@ -813,6 +813,13 @@ public final class TextScriptEngine {
     var __engineState = { runtime: 0.0, frametime: 0.016, frameTime: 0.016,
                           audio: __audioBuffer, audioBuffer: __audioBuffer,
                           canvasSize: __canvasSize,
+                          isWallpaper: function() { return true; },
+                          isDesktopDevice: function() { return true; },
+                          isMobileDevice: function() { return false; },
+                          isScreensaver: function() { return false; },
+                          isRunningInEditor: function() { return false; },
+                          isPortrait: function() { return __canvasSize.y > __canvasSize.x; },
+                          isLandscape: function() { return __canvasSize.x >= __canvasSize.y; },
                           setTimeout: function(cb, ms) {
                               if (typeof cb !== 'function') { return 0; }
                               var id = ++__timeoutSeq;
