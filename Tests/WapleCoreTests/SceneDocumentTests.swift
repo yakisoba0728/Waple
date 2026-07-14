@@ -37,6 +37,7 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(doc.bloom)
         XCTAssertEqual(doc.bloomStrength, 3.37, accuracy: 1e-4)
         XCTAssertEqual(doc.bloomThreshold, 0.36, accuracy: 1e-4)
+        XCTAssertEqual(doc.bloomTint, Vec3(x: 1, y: 1, z: 1))
         XCTAssertEqual(doc.bloomHDRStrength, 1.4, accuracy: 1e-4)
         XCTAssertEqual(doc.bloomHDRThreshold, 0.70, accuracy: 1e-4)
     }
@@ -47,6 +48,40 @@ final class SceneDocumentTests: XCTestCase {
         let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
         XCTAssertFalse(doc.hdr)
         XCTAssertFalse(doc.bloom)
+        XCTAssertEqual(doc.bloomStrength, 2, accuracy: 1e-6)
+        XCTAssertEqual(doc.bloomThreshold, 0.65, accuracy: 1e-6)
+        XCTAssertEqual(doc.bloomTint, Vec3(x: 1, y: 1, z: 1))
+        XCTAssertEqual(doc.bloomHDRStrength, 0, accuracy: 1e-6)
+        XCTAssertEqual(doc.bloomHDRThreshold, 0, accuracy: 1e-6)
+    }
+
+    func testBloomParserAcceptsNumericStringAndValueFormsWithoutClamping() throws {
+        func parse(_ fields: String) throws -> SceneDocument {
+            let scene = """
+            {"general":{"orthogonalprojection":{"width":16,"height":16},\(fields)},"objects":[]}
+            """
+            return try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        }
+
+        let numeric = try parse(
+            #""bloom":true,"bloomstrength":20,"bloomthreshold":-0.5,"bloomtint":"0.2 0.4 0.8","bloomhdrstrength":1.4,"bloomhdrthreshold":0.7"#)
+        XCTAssertEqual(numeric.bloomStrength, 20, accuracy: 1e-6)
+        XCTAssertEqual(numeric.bloomThreshold, -0.5, accuracy: 1e-6)
+        XCTAssertEqual(numeric.bloomTint, Vec3(x: 0.2, y: 0.4, z: 0.8))
+        XCTAssertEqual(numeric.bloomHDRStrength, 1.4, accuracy: 1e-6)
+        XCTAssertEqual(numeric.bloomHDRThreshold, 0.7, accuracy: 1e-6)
+
+        let strings = try parse(
+            #""bloomstrength":"6.25","bloomthreshold":"1.25","bloomtint":"0.9 0.7 0.5""#)
+        XCTAssertEqual(strings.bloomStrength, 6.25, accuracy: 1e-6)
+        XCTAssertEqual(strings.bloomThreshold, 1.25, accuracy: 1e-6)
+        XCTAssertEqual(strings.bloomTint, Vec3(x: 0.9, y: 0.7, z: 0.5))
+
+        let values = try parse(
+            #""bloomstrength":{"value":"4.5"},"bloomthreshold":{"value":0.2},"bloomtint":{"value":"1 0.5 0.25"}"#)
+        XCTAssertEqual(values.bloomStrength, 4.5, accuracy: 1e-6)
+        XCTAssertEqual(values.bloomThreshold, 0.2, accuracy: 1e-6)
+        XCTAssertEqual(values.bloomTint, Vec3(x: 1, y: 0.5, z: 0.25))
     }
 
     func testSkipsSoundAndInvisibleObjects() throws {

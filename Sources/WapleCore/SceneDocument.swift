@@ -383,12 +383,12 @@ public struct SceneDocument: Equatable {
     /// >1.0 합을 [0,1] 로 압축한다(종전 bgra8 하드클램프 = 밝은 영역 순백 "백화" 방지).
     /// WE combine_srgb/hdr_upsample 경로 대응(lane-04 §1.2). 부재 시 false = 종전 LDR 경로(무회귀).
     public var hdr: Bool = false
-    /// `general.bloom` — 블룸(밝은영역 광륜 확산) 플래그. **현재 파싱만** — 확산 패스는 후속(톤맵 우선).
+    /// `general.bloom` — fixed two-stage LDR bloom request. Renderer activation additionally requires `!general.hdr`.
     public var bloom: Bool = false
-    /// 블룸 파라미터(파싱만, 미소비). WE `bloomstrength`/`bloomthreshold` + hdr 변형(lane-04 §1.1).
-    /// 향후 블룸 패스가 threshold 로 밝은영역 추출, strength 로 가산 스케일에 사용.
-    public var bloomStrength: Float = 0
-    public var bloomThreshold: Float = 0
+    /// WE fixed two-stage LDR bloom parameters. Strength/threshold remain authored finite values without clamps.
+    public var bloomStrength: Float = 2
+    public var bloomThreshold: Float = 0.65
+    public var bloomTint: Vec3 = Vec3(x: 1, y: 1, z: 1)
     public var bloomHDRStrength: Float = 0
     public var bloomHDRThreshold: Float = 0
 
@@ -515,9 +515,10 @@ extension SceneDocument {
         out.skylightColor = skylightColor
         out.hdr = hdr
         out.bloom = bloom
-        // bloom 파라미터는 파싱만(float 는 문자열/숫자/{value} 바인딩 관용) — 미부재 시 0.
-        out.bloomStrength = float(general["bloomstrength"]) ?? 0
-        out.bloomThreshold = float(general["bloomthreshold"]) ?? 0
+        // LDR uses the WE defaults; float/vec3 retain numeric-string and {value} unwrapping without clamps.
+        out.bloomStrength = float(general["bloomstrength"]) ?? 2
+        out.bloomThreshold = float(general["bloomthreshold"]) ?? 0.65
+        out.bloomTint = vec3(general["bloomtint"]) ?? Vec3(x: 1, y: 1, z: 1)
         out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 0
         out.bloomHDRThreshold = float(general["bloomhdrthreshold"]) ?? 0
         return out
