@@ -52,4 +52,75 @@ final class WebRendererOcclusionTests: XCTestCase {
         renderer.resume()                           // 수동 해제로만 재개
         XCTAssertEqual(pausedLog(), [1, 0, 1, 0], "resume() 이 재개를 전달해야")
     }
+
+    func testManualResumeWaitsForOcclusionBeforeRestartingAllConsumers() throws {
+        final class FakeAudioProvider: AudioSpectrumProviding {
+            var onFrame: (([Float]) -> Void)?
+            private(set) var running = false
+            private(set) var startCount = 0
+            private(set) var stopCount = 0
+            func start() {
+                guard !running else { return }
+                running = true
+                startCount += 1
+            }
+            func stop() {
+                guard running else { return }
+                running = false
+                stopCount += 1
+            }
+        }
+
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_web_effective_pause_\(UUID().uuidString)",
+                                  isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        <html><body><script>
+        window.__pausedLog = [];
+        window.wallpaperPropertyListener = {
+          setPaused: function (value) { window.__pausedLog.push(value ? 1 : 0); }
+        };
+        wallpaperRegisterAudioListener(function () {});
+        wallpaperRegisterMediaStatusListener(function () {});
+        </script></body></html>
+        """.write(to: dir.appendingPathComponent("index.html"),
+                  atomically: true, encoding: .utf8)
+        try #"{"type":"web","file":"index.html","title":"effective"}"#
+            .write(to: dir.appendingPathComponent("project.json"),
+                   atomically: true, encoding: .utf8)
+
+        let provider = FakeAudioProvider()
+        let renderer = WebRenderer(mode: .web)
+        renderer.audioProviderFactory = { provider }
+        try renderer.mount(
+            in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+            project: ProjectJSONParser.parse(folderURL: dir)
+        )
+        defer { renderer.teardown() }
+        let web = try XCTUnwrap(renderer.webViewForTesting)
+        let readyDeadline = Date(timeIntervalSinceNow: 5)
+        while Date() < readyDeadline,
+              (!provider.running || !renderer.mediaPollingForTesting) {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+        XCTAssertTrue(provider.running)
+        XCTAssertTrue(renderer.mediaPollingForTesting)
+
+        renderer.pause()
+        renderer.occlusionChanged(visible: false)
+        renderer.resume()
+        _ = pumpEvalJS(web, "window.__pausedLog")
+        XCTAssertFalse(provider.running)
+        XCTAssertFalse(renderer.mediaPollingForTesting)
+        XCTAssertEqual(pumpEvalJS(web, "window.__pausedLog") as? [Int], [1])
+
+        renderer.occlusionChanged(visible: true)
+        XCTAssertTrue(provider.running)
+        XCTAssertTrue(renderer.mediaPollingForTesting)
+        XCTAssertEqual(pumpEvalJS(web, "window.__pausedLog") as? [Int], [1, 0])
+        XCTAssertEqual(provider.startCount, 2, "initial start plus one effective resume")
+        XCTAssertEqual(provider.stopCount, 1, "only the active-to-paused edge stops")
+    }
 }

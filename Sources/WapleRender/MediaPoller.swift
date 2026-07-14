@@ -13,6 +13,7 @@ public final class MediaPoller {
 
     private let provider: NowPlayingProvider
     private var timer: Timer?
+    var isRunningForTesting: Bool { timer != nil }
     private var last: NowPlayingInfo?
     private var lastTrackKey: String?
     private let pollLock = NSLock()
