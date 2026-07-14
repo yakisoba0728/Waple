@@ -29,6 +29,15 @@ public enum ShaderPreprocessor {
         return evaluateConditionals(spliceDefineContinuations(included), defines: defines)
     }
 
+    /// 번역 메모이즈 키 전용: `#include` 무조건 재귀 인라인 + CRLF 정규화만 수행(조건부 평가·매크로 확장 제외).
+    /// 근거: preprocess 는 조건부 평가 전에 include 를 무조건 인라인하므로(위 line 19) 이 결과가 실제
+    /// 해석과 정확히 일치 = 내용 기반 완전 키. 비용은 preprocess 의 1-2%(실측) — 조건부 평가/매크로 fixpoint
+    /// (66-87%)를 히트 시 건너뛰기 위한 저렴한 지문. base-assets 교체/패키지별 인클루드 상이 시 자동 분기.
+    static func inlinedSource(_ source: String, include: (String) -> String?) -> String {
+        let normalized = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        return inlineIncludes(normalized, include: include, depth: 0)
+    }
+
     /// C 줄연속(`\` + 개행) 스플라이스 — `#define` 지시문 한정. 일반 코드/주석 줄의 트레일링
     /// 백슬래시(Windows 경로 주석 등)가 다음 줄을 삼키지 않도록 지시문 밖은 건드리지 않는다.
     /// ponytail: 멀티라인 매크로 "호출"의 줄단위 미확장은 별도(실입력 미확인 — 필요 시 확장).

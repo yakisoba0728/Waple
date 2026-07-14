@@ -41,14 +41,60 @@ public struct TranslatedShader: Equatable {
 
 /// WE GLSL(방언) → MSL 소스-투-소스 변환기. 실패 시 nil(→ 손-포팅 폴백).
 public enum GLSLTranslator {
+    // MARK: - 번역 메모이즈 (프로세스 전역, 마운트 간·재마운트 공유)
+    // 번역은 (vertex, fragment, combos, include) 의 순수 함수(씬 상수 값은 번역기 밖 buildPassMaterial 에서
+    // 적용 → 출력에 안 굽힘 → 전역 공유 안전). 키 = raw 소스 + 인라인된 소스 + 정규화 combos:
+    //   · raw(vertex/fragment): 교차스테이지 콤보 union 은 _translate 가 raw 소스에서 parseComboDefaults 로
+    //     만든다(인라인 前) — 인클루드-내 [COMBO] 는 raw 엔 없어 union 에 안 들어간다. raw 를 키에 넣어야
+    //     union 을 정확히 고정(인라인만으론 인클루드 [COMBO] 를 과다 계상해 vertex 분기 aliasing).
+    //   · 인라인(inlinedSource): #include 는 조건부 평가 前 무조건 인라인되므로 include 내용을 정확히 포착
+    //     = base-assets 교체/패키지별 인클루드 상이 시 자동 분기(스테일 히트 없음). raw 만으론 include 내용 미포착.
+    //   · 히트 시 조건부 평가/매크로 fixpoint(preprocess 의 66-87% 실측) + 파싱/방출(core) 전량 스킵.
+    //     inlinedSource 비용은 preprocess 의 1-2% 뿐 → 키 생성 저렴(측정: `ppInline` 1-2% vs `ppCond` 66-87%).
+    // 완전성: 동일 키 ⟹ raw v/f·combos 동일 ⟹ union 등 include 외 전부 동일, include 는 인라인이 고정.
+    // 무효화 불필요(내용 기반), teardown 에서 비우지 않음(재마운트·크로스씬 수혜가 목적).
+    private struct MemoKey: Hashable {
+        let vRaw: String; let fRaw: String; let vInlined: String; let fInlined: String; let combos: String
+    }
+    private static var memoCache: [MemoKey: TranslatedShader?] = [:]
+    private static let memoLock = NSLock()   // DeepScan.concurrentPerform 가 translate 를 동시 호출 → 필수.
+    // 상한 불요: 유니크 키는 사용자 라이브러리의 유한 셰이더 수(수백~저수천)로 바운드,
+    // 엔트리당 인라인소스+MSL 수십 KB → 수십 MB 천장. 필요 시 count 상한+FIFO 로 승격.
+
+    /// 테스트 전용: 프로세스 전역 캐시라 테스트 간 격리·미스(실번역) 카운트 관측을 위해 제공(@testable).
+    public private(set) static var memoComputeCount = 0
+    static func _resetTranslationMemoForTesting() {
+        memoLock.lock(); defer { memoLock.unlock() }
+        memoCache.removeAll(); memoComputeCount = 0
+    }
+
     public static func translate(vertex: String, fragment: String, combos: [String: Int],
                                  include: (String) -> String? = { _ in nil }) -> TranslatedShader? {
         guard WapleProfiler.enabled else {
-            return _translate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+            return _memoizedTranslate(vertex: vertex, fragment: fragment, combos: combos, include: include)
         }
         let t0 = CFAbsoluteTimeGetCurrent()
         defer { WapleProfiler.recordTranslate(seconds: CFAbsoluteTimeGetCurrent() - t0) }
-        return _translate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+        return _memoizedTranslate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+    }
+
+    /// 메모이즈 진입: 키(인라인 소스+combos) 조회 → 히트 반환, 미스 시 실번역 후 저장. 실패(nil)도 캐시
+    /// (결정적 — 동일 입력 재실패 반복 회피). 실번역은 락 밖(동시 미스 = 동일 순수출력 재계산일 뿐 무해).
+    private static func _memoizedTranslate(vertex: String, fragment: String, combos: [String: Int],
+                                           include: (String) -> String?) -> TranslatedShader? {
+        let key = MemoKey(vRaw: vertex, fRaw: fragment,
+                          vInlined: ShaderPreprocessor.inlinedSource(vertex, include: include),
+                          fInlined: ShaderPreprocessor.inlinedSource(fragment, include: include),
+                          combos: combos.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ","))
+        memoLock.lock()
+        if let cached = memoCache[key] { memoLock.unlock(); return cached }
+        memoLock.unlock()
+        let result = _translate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+        memoLock.lock()
+        memoCache[key] = result
+        memoComputeCount += 1
+        memoLock.unlock()
+        return result
     }
 
     private static func _translate(vertex: String, fragment: String, combos: [String: Int],
