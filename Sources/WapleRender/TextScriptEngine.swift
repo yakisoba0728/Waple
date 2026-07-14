@@ -50,6 +50,7 @@ public final class SceneScriptContext {
             NSLog("%@", "[Waple] scene script context exception: \(ex?.toString() ?? "?")")
         }
         ctx.evaluateScript(TextScriptEngine.shims)
+        if let ms = TextScriptEngine.captureDateEpochMillis { ctx.evaluateScript(TextScriptEngine.dateOverrideJS(ms)) }
         ctx.evaluateScript("__setCanvasSize(\(TextScriptEngine.jsNumber(width)), \(TextScriptEngine.jsNumber(height)));")
         installSoundBridge(ctx)
         if !layers.isEmpty {
@@ -128,6 +129,30 @@ public final class SceneScriptContext {
 /// update 없는 사이드이펙트 전용 스크립트도 로드: 실물 컨트롤러는 top-level 에서 shared 를 초기화하고
 /// cursorClick 만 export 한다).
 public final class TextScriptEngine {
+    /// 캡처/스냅샷 결정성 훅: 설정 시 JSContext 의 `new Date()`(무인자)/`Date.now()` 가 이 고정 epoch(ms)를
+    /// 반환 — 벽시계 텍스트(시계/날짜 레이어)가 재캡처마다 동일 픽셀. nil(프로덕션 기본) = 실 벽시계 유지.
+    /// SnapshotPipeline.pinRenderSettings 가 캡처 동안만 핀(defer 복원). 인자 있는 `new Date(ms)` 등은 불변.
+    public static var captureDateEpochMillis: Double?
+
+    /// captureDateEpochMillis 주입용 JS: 전역 Date 를 감싸 무인자 생성/now 만 고정, 나머지는 실 Date 로 위임.
+    static func dateOverrideJS(_ epochMillis: Double) -> String {
+        let ms = epochMillis.isFinite ? epochMillis : 0
+        return """
+        (function(){
+            var g = Function('return this')();
+            var R = g.Date, FIXED = \(ms);
+            function D() {
+                if (arguments.length === 0) { return new R(FIXED); }
+                return new (R.bind.apply(R, [null].concat(Array.prototype.slice.call(arguments))))();
+            }
+            D.prototype = R.prototype;
+            D.now = function(){ return FIXED; };
+            D.parse = R.parse; D.UTC = R.UTC;
+            g.Date = D;
+        })();
+        """
+    }
+
     private let context: JSContext
     private let updateFn: JSValue?
     private let initFn: JSValue?
@@ -154,6 +179,7 @@ public final class TextScriptEngine {
             hadException = true
         }
         ctx.evaluateScript(Self.shims)
+        if let ms = Self.captureDateEpochMillis { ctx.evaluateScript(Self.dateOverrideJS(ms)) }
         let cleaned = Self.stripModuleSyntax(script)
         ctx.evaluateScript(cleaned)
         guard !hadException,

@@ -16,6 +16,9 @@ enum SnapshotPipeline {
     static let thumbH = 144
     static let captureT: Float = 6.0   // 인트로 페이드가 끝난 정상상태(GT 규약과 동일)
     static let fitMode: FitMode = .fill
+    /// 벽시계 텍스트(시계/날짜 레이어)가 재캡처마다 동일 픽셀이 되도록 JS Date 무인자/now 를 핀하는 고정
+    /// epoch(ms) — 임의 상수(2024-01-01 12:00:00 UTC). 변경 시 시계/날짜 씬 베이스라인 재생성 필요.
+    static let captureEpochMillis: Double = 1_704_110_400_000
 
     /// 폴링 없이 항상 "정지" — 미디어 씬이 osascript 를 스폰하지 않게(결정적·TCC 무).
     struct StoppedNowPlaying: NowPlayingProvider { func fetch() -> NowPlayingInfo? { nil } }
@@ -144,11 +147,14 @@ enum SnapshotPipeline {
         let oldFit = SceneRenderSettings.fitMode
         SceneRenderSettings.fitMode = fitMode
         let oldBase = BaseAssetsSettings.baseAssetsDirectory
+        let oldEpoch = TextScriptEngine.captureDateEpochMillis
+        TextScriptEngine.captureDateEpochMillis = captureEpochMillis
         let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"] ?? (root + "/assets")
         if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
             BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)
         }
-        return { SceneRenderSettings.fitMode = oldFit; BaseAssetsSettings.baseAssetsDirectory = oldBase }
+        return { SceneRenderSettings.fitMode = oldFit; BaseAssetsSettings.baseAssetsDirectory = oldBase
+                 TextScriptEngine.captureDateEpochMillis = oldEpoch }
     }
 
     /// cwd 의 git HEAD 단축 sha(레이블 기본값용 — 코드 리포 버전이 의도, 코퍼스 root 와 무관).
