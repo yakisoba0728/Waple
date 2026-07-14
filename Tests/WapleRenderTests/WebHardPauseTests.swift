@@ -526,4 +526,166 @@ final class WebHardPauseTests: XCTestCase {
             """) as? Bool == true
         })
     }
+
+    func testFramesCreatedWhilePausedInheritStateAndResumeOnce() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(
+                "waple_hard_pause_frames_\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let child = """
+        <html><body><script>
+        parent.postMessage({ wapleFrame: 'same', kind: 'ready' }, '*');
+        setInterval(function () {
+          parent.postMessage({ wapleFrame: 'same', kind: 'tick' }, '*');
+        }, 100);
+        </script></body></html>
+        """
+        let dataChild = """
+        <html><body><script>
+        parent.postMessage({ wapleFrame: 'data', kind: 'ready' }, '*');
+        setInterval(function () {
+          parent.postMessage({ wapleFrame: 'data', kind: 'tick' }, '*');
+        }, 100);
+        </script></body></html>
+        """
+        let dataURL = "data:text/html;charset=utf-8," +
+            (dataChild.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
+        let dataURLLiteral = try XCTUnwrap(
+            String(data: JSONEncoder().encode(dataURL), encoding: .utf8)
+        )
+        try child.write(
+            to: dir.appendingPathComponent("child.html"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try """
+        <html><body><script>
+        window.__frameEvents = {
+          same: { ready: 0, tick: 0 },
+          data: { ready: 0, tick: 0 }
+        };
+        window.addEventListener('message', function (event) {
+          var body = event.data || {};
+          if (!window.__frameEvents[body.wapleFrame]) { return; }
+          window.__frameEvents[body.wapleFrame][body.kind] += 1;
+        });
+        window.__spawnPausedFrames = function () {
+          var same = document.createElement('iframe');
+          same.src = 'child.html';
+          document.body.appendChild(same);
+          var data = document.createElement('iframe');
+          data.src = \(dataURLLiteral);
+          document.body.appendChild(data);
+        };
+        </script></body></html>
+        """.write(
+            to: dir.appendingPathComponent("index.html"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try #"{"type":"web","file":"index.html","title":"frames"}"#
+            .write(
+                to: dir.appendingPathComponent("project.json"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(
+            in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)),
+            project: ProjectJSONParser.parse(folderURL: dir)
+        )
+        defer { renderer.teardown() }
+        let web = try XCTUnwrap(renderer.webViewForTesting)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            pumpEvalJS(web, "typeof window.__spawnPausedFrames === 'function'") as? Bool == true
+        })
+
+        renderer.pause()
+        _ = pumpEvalJS(web, "window.__spawnPausedFrames();")
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            let events = try? self.object(web, "window.__frameEvents")
+            let same = events?["same"] as? [String: Any]
+            let data = events?["data"] as? [String: Any]
+            return same?["ready"] as? Int == 1 && data?["ready"] as? Int == 1
+        })
+        spin(0.30)
+        var events = try object(web, "window.__frameEvents")
+        XCTAssertEqual((events["same"] as? [String: Any])?["tick"] as? Int, 0)
+        XCTAssertEqual((events["data"] as? [String: Any])?["tick"] as? Int, 0)
+
+        renderer.resume()
+        XCTAssertTrue(waitUntil(timeout: 2) {
+            let current = try? self.object(web, "window.__frameEvents")
+            return ((current?["same"] as? [String: Any])?["tick"] as? Int ?? 0) >= 1 &&
+                ((current?["data"] as? [String: Any])?["tick"] as? Int ?? 0) >= 1
+        })
+        events = try object(web, "window.__frameEvents")
+        XCTAssertLessThanOrEqual((events["same"] as? [String: Any])?["tick"] as? Int ?? 99, 5)
+        XCTAssertLessThanOrEqual((events["data"] as? [String: Any])?["tick"] as? Int ?? 99, 5)
+    }
+
+    func testReloadReplaysEffectivePauseBeforePropertyDelivery() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(
+                "waple_hard_pause_reload_\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try """
+        <html><body><script>
+        sessionStorage.loads = String(Number(sessionStorage.loads || '0') + 1);
+        window.__ticks = 0;
+        window.__pauseEvents = [];
+        setInterval(function () { window.__ticks += 1; }, 50);
+        window.wallpaperPropertyListener = {
+          setPaused: function (value) { window.__pauseEvents.push(value); }
+        };
+        </script></body></html>
+        """.write(
+            to: dir.appendingPathComponent("index.html"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try #"{"type":"web","file":"index.html","title":"reload"}"#
+            .write(
+                to: dir.appendingPathComponent("project.json"),
+                atomically: true,
+                encoding: .utf8
+            )
+
+        let renderer = WebRenderer(mode: .web)
+        try renderer.mount(
+            in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)),
+            project: ProjectJSONParser.parse(folderURL: dir)
+        )
+        defer { renderer.teardown() }
+        let web = try XCTUnwrap(renderer.webViewForTesting)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            (pumpEvalJS(web, "window.__ticks") as? Int ?? 0) >= 1
+        })
+        renderer.pause()
+        _ = pumpEvalJS(web, "window.location.reload();")
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            pumpEvalJS(web, """
+            Number(sessionStorage.loads || '0') === 2 &&
+            Array.isArray(window.__pauseEvents) &&
+            window.__pauseEvents.length === 1 &&
+            window.__pauseEvents[0] === true
+            """) as? Bool == true
+        })
+        let frozen = pumpEvalJS(web, "window.__ticks") as? Int ?? -1
+        spin(0.25)
+        XCTAssertEqual(pumpEvalJS(web, "window.__ticks") as? Int, frozen)
+        renderer.resume()
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__ticks") as? Int ?? 0) > frozen
+        })
+        XCTAssertEqual(pumpEvalJS(web, "window.__pauseEvents") as? [Bool], [true, false])
+    }
 }

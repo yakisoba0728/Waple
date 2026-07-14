@@ -422,10 +422,12 @@ enum WebHardPauseJS {
             safely(pauseSchedulers);
             safely(pauseAudioContexts);
             safely(pauseAnimations);
+            safely(postStateToChildren);
           } else {
             safely(resumeAnimations);
             safely(resumeAudioContexts);
             safely(resumeSchedulers);
+            safely(postStateToChildren);
           }
         }
       };
@@ -437,6 +439,73 @@ enum WebHardPauseJS {
       } catch (error) {
         window.__wapleHardPauseController = controller;
       }
+
+      var frameChannel = 'waple-hard-pause';
+      var frameVersion = 1;
+
+      function frameMessage(type) {
+        return {
+          channel: frameChannel,
+          version: frameVersion,
+          type: type,
+          paused: paused
+        };
+      }
+
+      function isDirectChild(source) {
+        for (var index = 0; index < window.frames.length; index += 1) {
+          try {
+            if (window.frames[index] === source) { return true; }
+          } catch (_) {}
+        }
+        return false;
+      }
+
+      function postStateToChildren() {
+        for (var index = 0; index < window.frames.length; index += 1) {
+          try {
+            window.frames[index].postMessage(frameMessage('state'), '*');
+          } catch (error) {
+            report(error);
+          }
+        }
+      }
+
+      window.addEventListener('message', function (event) {
+        var message = event.data;
+        if (!message ||
+            message.channel !== frameChannel ||
+            message.version !== frameVersion) {
+          return;
+        }
+        if (message.type === 'requestState' && isDirectChild(event.source)) {
+          try {
+            event.source.postMessage(frameMessage('state'), '*');
+          } catch (error) {
+            report(error);
+          }
+          return;
+        }
+        if (message.type === 'state' &&
+            window.parent !== window &&
+            event.source === window.parent) {
+          controller.setPaused(!!message.paused);
+        }
+      }, false);
+
+      if (window.parent !== window) {
+        try {
+          window.parent.postMessage({
+            channel: frameChannel,
+            version: frameVersion,
+            type: 'requestState'
+          }, '*');
+        } catch (error) {
+          report(error);
+        }
+      }
+
+      window.addEventListener('load', postStateToChildren, true);
     })();
     """#
 }
