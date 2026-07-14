@@ -308,3 +308,195 @@ final class SceneVisibleScriptRenderTests: XCTestCase {
         XCTAssertLessThan(left.r, 0.2, "빨강 visible-false 레이어가 그려짐: \(left)")
     }
 }
+
+final class SceneScriptMountLifecycleTests: XCTestCase {
+    private var propertyStoreIDs: [String] = []
+
+    override func tearDown() {
+        for id in propertyStoreIDs { UserPropertyStore.reset(id: id) }
+        super.tearDown()
+    }
+
+    private func makeProject(
+        id: String,
+        marker: String,
+        properties: [String: Any],
+        presetOverrides: [String: PropertyValue] = [:]
+    ) throws -> WallpaperProject {
+        UserPropertyStore.reset(id: id)
+        propertyStoreIDs.append(id)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("waple-scene-lifecycle-\(id)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+
+        let script = """
+        function propertyValue(props, key) {
+            return Object.prototype.hasOwnProperty.call(props, key)
+                ? String(props[key].value) : 'missing';
+        }
+        shared.order = ['top:\(marker)'];
+        export function applyUserProperties(props) {
+            shared.payload = [
+                propertyValue(props, 'enabled'),
+                propertyValue(props, 'amount'),
+                propertyValue(props, 'label'),
+                propertyValue(props, 'mode'),
+                propertyValue(props, 'baseOnly')
+            ].join('|');
+            shared.order.push('apply:' + Object.keys(props).length);
+        }
+        export function init() {
+            shared.order.push('init:' + arguments.length + ':' + shared.payload);
+        }
+        export function cursorClick(event) {
+            shared.clicks = (shared.clicks || 0) + 1;
+        }
+        """
+        let sceneObject: [String: Any] = [
+            "general": [
+                "orthogonalprojection": ["width": 320, "height": 180],
+                "clearcolor": "0 0 0"
+            ],
+            "objects": [[
+                "name": "lifecycle-\(marker)",
+                "text": ["value": "", "script": script],
+                "font": "systemfont_arial",
+                "pointsize": 16,
+                "origin": "10 10 0",
+                "scale": "1 1",
+                "visible": ["value": true]
+            ]]
+        ]
+        let sceneData = try JSONSerialization.data(withJSONObject: sceneObject, options: [.sortedKeys])
+        try encodePkg([("scene.json", sceneData)]).write(to: dir.appendingPathComponent("scene.pkg"))
+
+        let projectObject: [String: Any] = [
+            "type": "scene",
+            "file": "scene.pkg",
+            "general": ["properties": properties]
+        ]
+        let projectData = try JSONSerialization.data(withJSONObject: projectObject, options: [.sortedKeys])
+        try projectData.write(to: dir.appendingPathComponent("project.json"))
+
+        return WallpaperProject(
+            id: id,
+            type: .scene,
+            fileName: "scene.pkg",
+            previewName: nil,
+            title: id,
+            tags: [],
+            contentRating: nil,
+            workshopId: nil,
+            dependency: nil,
+            folderURL: dir,
+            presetOverrides: presetOverrides
+        )
+    }
+
+    private func state(in scene: SceneScriptContext) throws -> String {
+        let probe = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(value) {
+            return shared.order.join(',') + '/' + String(shared.payload) + '/' + String(shared.clicks || 0);
+        }
+        """, scene: scene))
+        return try XCTUnwrap(probe.evaluate(current: ""))
+    }
+
+    func testMountDeliversOneEffectiveSnapshotToInitialAndLateEngines() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let id = "scene-lifecycle-effective-\(UUID().uuidString)"
+        let project = try makeProject(
+            id: id,
+            marker: "first",
+            properties: [
+                "enabled": ["type": "bool", "value": true],
+                "amount": ["type": "slider", "value": 9.0],
+                "label": ["type": "text", "value": "default"],
+                "mode": ["type": "text", "value": "default"],
+                "baseOnly": ["type": "text", "value": "base"]
+            ],
+            presetOverrides: [
+                "enabled": .bool(false),
+                "amount": .number(5),
+                "mode": .string("preset")
+            ]
+        )
+        UserPropertyStore.set(.number(0), key: "amount", id: id)
+        UserPropertyStore.set(.string(""), key: "label", id: id)
+        UserPropertyStore.set(.string("user"), key: "mode", id: id)
+
+        let renderer = SceneRenderer()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36))
+        try renderer.mount(in: container, project: project)
+        defer { renderer.teardown() }
+
+        let mountedScene = try XCTUnwrap(renderer.sceneScript)
+        XCTAssertEqual(
+            try state(in: mountedScene),
+            "top:first,apply:5,init:0:false|0||user|base/false|0||user|base/0"
+        )
+
+        // Mutating persistence after mount must not change the cached snapshot delivered to later engines.
+        UserPropertyStore.set(.bool(true), key: "enabled", id: id)
+        UserPropertyStore.set(.number(8), key: "amount", id: id)
+        UserPropertyStore.set(.string("changed"), key: "label", id: id)
+        UserPropertyStore.set(.string("changed"), key: "mode", id: id)
+
+        let late = try XCTUnwrap(renderer.makeScriptEngine("""
+        var trace = ['top'];
+        var delivered = '';
+        export function applyUserProperties(props) {
+            delivered = [props.enabled.value, props.amount.value, props.label.value,
+                         props.mode.value, props.baseOnly.value].join('|');
+            trace.push('apply');
+        }
+        export function init(value) { trace.push('init:' + value); }
+        export function update(value) {
+            trace.push('update:' + value);
+            return trace.join(',') + '/' + delivered;
+        }
+        """))
+        XCTAssertEqual(late.evaluate(current: "A"), "top,apply,init:A,update:A/false|0||user|base")
+        XCTAssertEqual(late.evaluate(current: "B"), "top,apply,init:A,update:A,update:B/false|0||user|base")
+    }
+
+    func testDirectRemountUsesEmptyObjectAndDoesNotDispatchToStaleEngine() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let oldProject = try makeProject(
+            id: "scene-lifecycle-old-\(UUID().uuidString)",
+            marker: "old",
+            properties: ["mode": ["type": "text", "value": "old"]]
+        )
+        let newProject = try makeProject(
+            id: "scene-lifecycle-new-\(UUID().uuidString)",
+            marker: "new",
+            properties: [:]
+        )
+        let renderer = SceneRenderer()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36))
+        try renderer.mount(in: container, project: oldProject)
+        defer { renderer.teardown() }
+
+        let oldScene = try XCTUnwrap(renderer.sceneScript)
+        let stale = try XCTUnwrap(renderer.eventEngines.first)
+        XCTAssertEqual(renderer.eventEngines.count, 1)
+
+        // No explicit teardown: mount itself owns remount cleanup.
+        try renderer.mount(in: container, project: newProject)
+        XCTAssertEqual(container.subviews.count, 1)
+        XCTAssertEqual(renderer.eventEngines.count, 1)
+        XCTAssertFalse(renderer.eventEngines.contains { $0 === stale })
+
+        renderer.simulateCursorClick(x: 1, y: 1)
+        let newScene = try XCTUnwrap(renderer.sceneScript)
+        XCTAssertEqual(
+            try state(in: newScene),
+            "top:new,apply:0,init:0:missing|missing|missing|missing|missing/missing|missing|missing|missing|missing/1"
+        )
+        XCTAssertEqual(
+            try state(in: oldScene),
+            "top:old,apply:1,init:0:missing|missing|missing|old|missing/missing|missing|missing|old|missing/0"
+        )
+    }
+}
