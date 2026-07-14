@@ -693,7 +693,7 @@ extension SceneRenderer {
             let mirror = def.initializers.contains {
                 if case .mapSequence(_, true, _) = $0 { return true }; return false
             }
-            return GPUParticleSystem(
+            var g = GPUParticleSystem(
                 sim: ParticleSimulator(def: def, seed: seed), def: def, seed: seed,
                 texture: tex, blendAdditive: def.material?.blend == .additive,
                 origin: SIMD2<Float>(sp.origin.x, sp.origin.y),
@@ -701,6 +701,13 @@ extension SceneRenderer {
                 texRatio: Float(tex.height) / Float(max(1, tex.width)), order: sp.order,
                 isTrail: def.renderer.isTrail, childOf: childOf,
                 frames: frames, mapSeqMirror: mirror)
+            // 3D 씬 배치(2D 는 위 origin/scale Vec2 만 사용 — 아래 필드 무시).
+            g.parent3D = sp.parent
+            g.origin3D = SIMD3<Float>(sp.origin3D.x, sp.origin3D.y, sp.origin3D.z)
+            g.scale3D = SIMD3<Float>(sp.scale3D.x, sp.scale3D.y, sp.scale3D.z)
+            g.angles3D = SIMD3<Float>(sp.angles3D.x, sp.angles3D.y, sp.angles3D.z)
+            g.visible3D = sp.visible
+            return g
         }
         for (i, sp) in doc.particles.enumerated() {
             let seed = UInt64(0x9E37_79B9_7F4A_7C15 &+ UInt64(i))

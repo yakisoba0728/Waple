@@ -101,6 +101,13 @@ public struct SceneParticle: Equatable {
     public let scale: Vec2
     /// scene.json objects[] 내 인덱스(레이어와 공유하는 z-순서).
     public var order: Int = 0
+    /// 3D 씬 배치(camera3D 마운트 경로 전용 — 2D 정사영 경로는 origin/scale Vec2 그대로 사용).
+    /// 파티클 오브젝트의 3D 트랜스폼(전 성분)·부모 노드 id·정적 가시성. 2D 씬에선 기본값(미사용).
+    public var origin3D: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    public var scale3D: Vec3 = Vec3(x: 1, y: 1, z: 1)
+    public var angles3D: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    public var parent: Int? = nil
+    public var visible: Bool = true
 }
 
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
@@ -518,7 +525,8 @@ extension SceneDocument {
                     layers.append(layer)
                 }
             } else if let particlePath = contentValue(obj["particle"]) as? String {
-                if var p = parseParticle(particlePath, obj: obj, package: package) {
+                if var p = parseParticle(particlePath, obj: obj, package: package,
+                                         initialVisible: initialVisible) {
                     p.order = order
                     particles.append(p)
                 }
@@ -998,14 +1006,22 @@ extension SceneDocument {
     /// scene object 의 `particle` 경로 → particles/X.json + material → SceneParticle.
     /// origin/scale 은 씬 픽셀 좌표(첫 2성분). 로드/파싱 실패 → nil + 로그.
     /// children[] 링크는 재귀 리졸브(순환/깊이 4 가드) — 자식도 자체 material 포함 완전한 def.
-    private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage) -> SceneParticle? {
+    private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage,
+                                      initialVisible: Bool) -> SceneParticle? {
         guard let def = parseParticleDef(path, package: package, visited: [path]) else {
             WapleLog.warn("[Waple] SP4 particle load failed: \(path)")
             return nil
         }
-        return SceneParticle(def: def,
-                             origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
-                             scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1))
+        var p = SceneParticle(def: def,
+                              origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
+                              scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1))
+        // 3D 마운트용 전-성분 트랜스폼/부모/가시성(2D 경로는 위 Vec2 만 사용 — 무영향).
+        p.origin3D = vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0)
+        p.scale3D = vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1)
+        p.angles3D = vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0)
+        p.parent = intVal(obj["parent"])
+        p.visible = initialVisible
+        return p
     }
 
     private static func parseParticleDef(_ path: String, package: ScenePackage,

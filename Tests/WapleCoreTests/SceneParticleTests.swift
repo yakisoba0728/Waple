@@ -54,4 +54,34 @@ final class SceneParticleTests: XCTestCase {
         let doc = try! SceneDocument.parse(package: pkg)
         XCTAssertEqual(doc.particles.count, 0)  // 로드 실패 → 드롭(무크래시)
     }
+
+    /// 3D 씬 파티클 오브젝트: 전-성분 origin/scale(z 포함)·parent·visible 을 SceneParticle 이 보존해야
+    /// 3D 마운트가 원근 배치를 할 수 있다(2D 는 origin/scale Vec2 만 사용 — 무영향). 실물 3706286085
+    /// SpeedLine(origin z=-58, 3D scale)·3737268876 torch(parent=1203) 구조를 축약.
+    func testParticle3DTransformFieldsPreserved() {
+        let scene = """
+        {"general":{"fov":50.0},"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "objects":[
+           {"id":1,"model":"models/x.mdl"},
+           {"id":50,"name":"root","origin":"0 1 0"},
+           {"id":2,"name":"speedline","particle":"particles/p.json","parent":50,
+            "origin":"0 0 -58","scale":"0.01 0.01 0.025","angles":"0 0 0","visible":true}
+         ]}
+        """
+        let particle = d(#"{"renderer":[{"name":"sprite"}],"maxcount":10,"material":"materials/p.json"}"#)
+        let material = d(#"{"passes":[{"shader":"genericparticle","blending":"additive","textures":["particle/dot"]}]}"#)
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)), ("particles/p.json", particle), ("materials/p.json", material),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.particles.count, 1)
+        let p = doc.particles[0]
+        XCTAssertEqual(p.origin3D, Vec3(x: 0, y: 0, z: -58), "3D origin z 보존 실패")
+        XCTAssertEqual(p.scale3D, Vec3(x: 0.01, y: 0.01, z: 0.025), "3D scale z 보존 실패")
+        XCTAssertEqual(p.parent, 50, "parent 노드 id 보존 실패")
+        XCTAssertTrue(p.visible)
+        // 2D 경로 필드는 종전대로 첫 2성분(무회귀).
+        XCTAssertEqual(p.origin, Vec2(x: 0, y: 0))
+        XCTAssertEqual(p.scale, Vec2(x: 0.01, y: 0.01))
+    }
 }
