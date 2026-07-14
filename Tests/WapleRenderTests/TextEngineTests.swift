@@ -33,6 +33,42 @@ final class TextEngineTests: XCTestCase {
         XCTAssertTrue(out == now || out == oneMinuteEarlier, "got \(out), expected \(now) or \(oneMinuteEarlier)")
     }
 
+    /// captureDateEpochMillis 설정 시 시계 스크립트가 실 벽시계 대신 고정 epoch 를 렌더(캡처 결정성).
+    /// getHours 는 로컬 TZ 라 기대값도 로컬 TZ 로 계산 — 머신/CI TZ 무관하게 일치. defer 로 프로세스 전역
+    /// static 을 리셋(XCTest 단일 프로세스 — 미복원 시 testClockScriptReturnsCurrentTime(실시각 검증)에 누수).
+    func testCaptureDateEpochPinsClockAndDateNow() throws {
+        let fixed: Double = 1_704_110_400_000   // 2024-01-01 12:00:00 UTC
+        TextScriptEngine.captureDateEpochMillis = fixed
+        defer { TextScriptEngine.captureDateEpochMillis = nil }
+        let script = """
+        'use strict';
+        export function update(value) {
+            let t = new Date();
+            var hh = ("00" + t.getHours()).slice(-2);
+            var mm = ("00" + t.getMinutes()).slice(-2);
+            var ss = ("00" + t.getSeconds()).slice(-2);
+            return hh + ":" + mm + ":" + ss + "|" + Date.now();
+        }
+        """
+        let engine = try XCTUnwrap(TextScriptEngine(script: script))
+        let out = try XCTUnwrap(engine.evaluate(current: ""))
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        let expected = f.string(from: Date(timeIntervalSince1970: fixed / 1000)) + "|\(Int(fixed))"
+        XCTAssertEqual(out, expected, "고정 epoch 주입 시 Date 무인자/now 가 벽시계 아닌 FIXED 를 반환해야")
+    }
+
+    /// 인자 있는 `new Date(ms)` 는 오버라이드 무관(무인자/now 만 핀) — 실 Date 계산 보존 확인.
+    func testCaptureDateEpochLeavesArgumentedDateIntact() throws {
+        TextScriptEngine.captureDateEpochMillis = 1_704_110_400_000
+        defer { TextScriptEngine.captureDateEpochMillis = nil }
+        let script = """
+        'use strict';
+        export function update(value) { return String(new Date(0).getTime()) + "," + String(new Date(1000).getTime()); }
+        """
+        let engine = try XCTUnwrap(TextScriptEngine(script: script))
+        XCTAssertEqual(try XCTUnwrap(engine.evaluate(current: "")), "0,1000")
+    }
+
     /// H4: engine.registerAudioBuffers(res) 는 AudioBuffers{left,right,average}(res 길이) 동기반환, engine.audio.average
     /// 도 접근 가능해야 한다. 종전엔 registerAudioBuffers 가 콜백-등록(undefined 반환)이고 average 키가 없어
     /// buffers.average / audio.average.[i] 접근이 TypeError → 오디오응답 스크립트가 런타임에 죽었다(capture.log 30회).
