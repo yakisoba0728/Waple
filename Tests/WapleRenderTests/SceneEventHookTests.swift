@@ -245,25 +245,40 @@ final class SceneEventHookTests: XCTestCase {
         XCTAssertEqual(e.evaluate(current: ""), "silent", "미연결 브리지는 isPlaying false, 크래시 없음")
     }
 
-    func testWallpaperEngineLifecycleAndAnimationHooksCaptured() throws {
+    func testLifecycleEntrypointsAreGatedAndExcludedFromGenericHooks() throws {
         let e = try XCTUnwrap(TextScriptEngine(script: """
-        var t = '';
-        export function init(value) {}
-        export function update(value) { return t; }
-        export function applyUserProperties(props) { t += props.mode.value; }
-        export function cursorEnter(event) { t += ':enter'; }
-        export function cursorLeave(event) { t += ':leave'; }
-        export function animationEvent(event) { t += ':' + event.name + ':' + event.frame; }
+        var trace = ['top'];
+        export function applyUserProperties(props) {
+            trace.push('apply:' + props.enabled.value + ':' + props.amount.value + ':' + props.label.value);
+        }
+        export function init(value) { trace.push('init:' + value); }
+        export function update(value) {
+            trace.push('update:' + value);
+            return trace.join('|');
+        }
+        export function cursorEnter(event) { trace.push('enter'); }
+        export function animationEvent(event) { trace.push('animation:' + event.name + ':' + event.frame); }
         """))
-        let expected: Set<String> = ["init", "applyUserProperties", "cursorEnter", "cursorLeave", "animationEvent"]
 
-        XCTAssertTrue(expected.isSubset(of: e.hookNames), "missing hooks: \(expected.subtracting(e.hookNames))")
+        XCTAssertEqual(e.hookNames, Set(["cursorEnter", "animationEvent"]))
+        XCTAssertFalse(e.hookNames.contains("init"))
+        XCTAssertFalse(e.hookNames.contains("applyUserProperties"))
 
-        e.callHook("applyUserProperties", eventJS: "({ mode: { value: 'dark' } })")
+        e.applyUserProperties(#"{"enabled":{"value":false},"amount":{"value":0},"label":{"value":""}}"#)
+        XCTAssertEqual(
+            e.evaluate(current: "first"),
+            "top|apply:false:0:|init:first|update:first"
+        )
+
+        e.applyUserProperties(#"{"enabled":{"value":true},"amount":{"value":99},"label":{"value":"again"}}"#)
+        e.callHook("applyUserProperties", eventJS: #"({"enabled":{"value":true}})"#)
+        e.callHook("init", eventJS: "'generic-bypass'")
         e.callHook("cursorEnter", eventJS: "({ worldPosition: new Vec3(1, 2, 0) })")
-        e.callHook("cursorLeave", eventJS: "({ worldPosition: new Vec3(3, 4, 0) })")
         e.callHook("animationEvent", eventJS: "new AnimationEvent({ name: 'intro', frame: 2 })")
 
-        XCTAssertEqual(e.evaluate(current: ""), "dark:enter:leave:intro:2")
+        XCTAssertEqual(
+            e.evaluate(current: "second"),
+            "top|apply:false:0:|init:first|update:first|enter|animation:intro:2|update:second"
+        )
     }
 }

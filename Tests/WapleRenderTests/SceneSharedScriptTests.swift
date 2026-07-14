@@ -97,6 +97,74 @@ final class SceneSharedScriptTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(e.evaluateVec(current: [4, 5, 6])), [6, 8, 10])
     }
 
+    func testInitOnlyEngineRunsOnceWithoutArgumentsAndPublishesSharedState() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let initOnly = try XCTUnwrap(TextScriptEngine(script: """
+        export function applyUserProperties(props) { shared.theme = props.theme.value; }
+        export function init() {
+            shared.initCount = (shared.initCount || 0) + 1;
+            shared.initArgumentCount = arguments.length;
+        }
+        """, scene: scene))
+
+        XCTAssertFalse(initOnly.hasUpdate)
+        initOnly.applyUserProperties(#"{"theme":{"type":"text","value":"dark"}}"#)
+        initOnly.callInitIfNeeded()
+        initOnly.callInitIfNeeded()
+        initOnly.callHook("init", eventJS: "'generic-bypass'")
+        initOnly.callHook("applyUserProperties", eventJS: #"({"theme":{"value":"light"}})"#)
+
+        let probe = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(value) {
+            return shared.theme + '/' + shared.initCount + '/' + shared.initArgumentCount;
+        }
+        """, scene: scene))
+        XCTAssertEqual(probe.evaluate(current: ""), "dark/1/0")
+    }
+
+    func testThrowingLifecycleFunctionsAreNotRetriedOrCrossContaminateSharedContext() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let throwing = try XCTUnwrap(TextScriptEngine(script: """
+        shared.applyAttempts = 0;
+        shared.initAttempts = 0;
+        export function applyUserProperties(props) {
+            shared.applyAttempts += 1;
+            throw new Error('apply boom');
+        }
+        export function init() {
+            shared.initAttempts += 1;
+            throw new Error('init boom');
+        }
+        """, scene: scene))
+
+        throwing.applyUserProperties(#"{"mode":{"value":"first"}}"#)
+        throwing.applyUserProperties(#"{"mode":{"value":"second"}}"#)
+        throwing.callInitIfNeeded()
+        throwing.callInitIfNeeded()
+        throwing.callHook("applyUserProperties", eventJS: #"({"mode":{"value":"generic"}})"#)
+        throwing.callHook("init", eventJS: "({})")
+
+        let lazy = try XCTUnwrap(TextScriptEngine(script: """
+        shared.lazyInitAttempts = 0;
+        export function init(value) {
+            shared.lazyInitAttempts += 1;
+            throw new Error('lazy init boom');
+        }
+        export function update(value) {
+            return shared.lazyInitAttempts + '/' + value;
+        }
+        """, scene: scene))
+        XCTAssertNil(lazy.evaluate(current: "first"))
+        XCTAssertEqual(lazy.evaluate(current: "second"), "1/second")
+
+        let healthy = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(value) {
+            return shared.applyAttempts + '/' + shared.initAttempts + '/healthy';
+        }
+        """, scene: scene))
+        XCTAssertEqual(healthy.evaluate(current: ""), "1/1/healthy")
+    }
+
     func testSceneLayerDescriptorsBackEnumerateLayersAndThisLayer() throws {
         let scene = try XCTUnwrap(SceneScriptContext(layers: [
             SceneScriptLayerDescriptor(name: "owner"),
