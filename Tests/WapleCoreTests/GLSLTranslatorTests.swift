@@ -963,4 +963,79 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertEqual(annColor.defaultValue, [1, 0, 0], "어노테이션 default 가 중립값에 우선해야 함")
         XCTAssertEqual(annColor.sceneKey, "color", "어노테이션 material 키 유지")
     }
+
+    // MARK: - 번역 메모이즈 (프로세스 전역 캐시; 마운트 41%·중복 최악 763회 실측 대응)
+
+    func testMemoizeSameInputsTranslateOnce() throws {
+        GLSLTranslator._resetTranslationMemoForTesting()
+        let c0 = GLSLTranslator.memoComputeCount
+        let t1 = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: ["MASK": 0]))
+        let t2 = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: ["MASK": 0]))
+        XCTAssertEqual(GLSLTranslator.memoComputeCount - c0, 1, "동일 (소스,combos) 2회 → 실번역 1회")
+        XCTAssertEqual(t1, t2, "캐시 히트 = 동일 출력(TranslatedShader Equatable)")
+        XCTAssertEqual(t1.msl, t2.msl)
+    }
+
+    func testMemoizeDifferentCombosTranslateSeparately() throws {
+        GLSLTranslator._resetTranslationMemoForTesting()
+        let c0 = GLSLTranslator.memoComputeCount
+        let on = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: ["MASK": 1]))
+        let off = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: ["MASK": 0]))
+        XCTAssertEqual(GLSLTranslator.memoComputeCount - c0, 2, "다른 combos → 별도 번역")
+        XCTAssertNotEqual(on.msl, off.msl, "MASK 분기가 다른 MSL 산출")
+        // 동일 재요청은 각각 히트(추가 번역 0).
+        _ = GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: ["MASK": 1])
+        _ = GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: ["MASK": 0])
+        XCTAssertEqual(GLSLTranslator.memoComputeCount - c0, 2, "동일 재요청은 캐시 히트")
+    }
+
+    func testMemoizeKeysOnResolvedIncludeContent() throws {
+        // 동일 (vertex, fragment, combos) 라도 #include 가 다른 내용으로 리졸브되면 별도 번역·다른 출력.
+        // → base-assets 교체/패키지별 인클루드 상이 시 스테일 히트 방지의 순수성 회귀 가드.
+        GLSLTranslator._resetTranslationMemoForTesting()
+        let vert = "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }"
+        let frag = "#include \"col.h\"\nvoid main() { gl_FragColor = COLOR; }"
+        let incRed: (String) -> String? = { _ in "#define COLOR vec4(1.0, 0.0, 0.0, 1.0)" }
+        let incGreen: (String) -> String? = { _ in "#define COLOR vec4(0.0, 1.0, 0.0, 1.0)" }
+        let c0 = GLSLTranslator.memoComputeCount
+        let tRed = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:], include: incRed))
+        let tGreen = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:], include: incGreen))
+        XCTAssertEqual(GLSLTranslator.memoComputeCount - c0, 2, "다른 인클루드 내용 → 별도 번역(내용 기반 키)")
+        XCTAssertNotEqual(tRed.msl, tGreen.msl, "다른 인클루드 → 다른 MSL(스테일 히트 없음)")
+        XCTAssertTrue(tRed.msl.contains("float4(1.0, 0.0, 0.0, 1.0)"))
+        XCTAssertTrue(tGreen.msl.contains("float4(0.0, 1.0, 0.0, 1.0)"))
+        // 동일 인클루드 재요청 → 히트(추가 번역 0).
+        _ = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:], include: incRed)
+        XCTAssertEqual(GLSLTranslator.memoComputeCount - c0, 2, "동일 인클루드 내용은 히트")
+    }
+
+    func testMemoizeCrossStageComboInIncludeNotAliased() throws {
+        // 완전성 회귀: 교차스테이지 콤보 union 은 raw 소스에서 parseComboDefaults 로 만들어진다(_translate).
+        // 프래그먼트가 #include 로 들여온 [COMBO] 는 raw 엔 없어(=#include 줄) union 에 안 들어가지만,
+        // 인라인 소스엔 있다 → 인라인만으로 키를 잡으면 (인라인 동일, raw 상이) 두 씬이 aliasing 되어
+        // vertex 의 #if 분기가 뒤바뀐다. raw 소스도 키에 포함해야 한다.
+        GLSLTranslator._resetTranslationMemoForTesting()
+        let vert = """
+        attribute vec3 a_Position;
+        void main() {
+        #if FOO
+            gl_Position = vec4(1.0, 0.0, 0.0, 1.0);
+        #else
+            gl_Position = vec4(0.0, 1.0, 0.0, 1.0);
+        #endif
+        }
+        """
+        let comboLine = "// [COMBO] {\"combo\":\"FOO\",\"default\":1}"
+        let fragViaInclude = "#include \"foo.h\"\nvoid main() { gl_FragColor = vec4(1.0); }"
+        let fragInline = comboLine + "\nvoid main() { gl_FragColor = vec4(1.0); }"
+        // X: 프래그먼트가 foo.h(=[COMBO] FOO) 를 include. Y: 동일 [COMBO] 를 인라인. 인라인 결과는 동일.
+        let tX = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: fragViaInclude, combos: [:],
+                                                        include: { $0 == "foo.h" ? comboLine : nil }))
+        let tY = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: fragInline, combos: [:]))
+        // 인클루드-내 [COMBO] 는 교차스테이지 union 에 안 들어가므로 X 는 #if FOO 거짓(green), Y 는 참(red).
+        XCTAssertTrue(tX.msl.contains("float4(0.0, 1.0, 0.0, 1.0)"), "X: 인클루드 [COMBO] 미전파 → #else")
+        XCTAssertTrue(tY.msl.contains("float4(1.0, 0.0, 0.0, 1.0)"), "Y: 인라인 [COMBO] 전파 → #if")
+        XCTAssertNotEqual(tX.msl, tY.msl, "raw 상이 → 별도 번역(aliasing 금지)")
+        XCTAssertEqual(GLSLTranslator.memoComputeCount, 2, "두 입력은 별도 실번역(스테일 히트 없음)")
+    }
 }
