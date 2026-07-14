@@ -285,7 +285,7 @@ public extension SceneLight3D {
     /// - `colorRadius[i]`: `rgb = color × intensity`, `w = radius`(선형 감쇠 반경).
     ///   ⚠️ **`color × intensity` 는 직전 라운드 추정 규약** — 셰이더 소스에 C++ 유니폼 피드가 없고
     ///   코퍼스 번역 이펙트 0건이 이 유니폼을 참조해 미확정. 블로아웃(고강도 씬)의 최대 레버(보고 참조).
-    /// - `ambientTerm`: 평면 레이어(N=+Z, up=(0,1,0)→dot 0) 반구 앰비언트 = `(skylight+ambient)/2`.
+    /// - `ambientTerm`: flat ambient (genericimage4).
     struct ForwardUniforms: Equatable {
         public var positions: [SIMD4<Float>]   // xyz=world, w=active
         public var colorRadius: [SIMD4<Float>] // rgb=color×intensity, w=radius
@@ -299,7 +299,7 @@ public extension SceneLight3D {
     }
 
     /// 라이트 배열 → 포워드 유니폼. 4개 초과 시 앞 4개(현행 근사 — WE 오브젝트별 relevance 선택은 미구현).
-    static func forwardUniforms(_ lights: [SceneLight3D], ambient: Vec3, skylight: Vec3) -> ForwardUniforms {
+    static func forwardUniforms(_ lights: [SceneLight3D], ambient: Vec3, skylight _: Vec3) -> ForwardUniforms {
         var pos = [SIMD4<Float>](repeating: .zero, count: 4)
         var cr = [SIMD4<Float>](repeating: .zero, count: 4)
         let used = lights.prefix(4)
@@ -307,7 +307,7 @@ public extension SceneLight3D {
             pos[i] = SIMD4(l.origin.x, l.origin.y, l.origin.z, 1)
             cr[i] = SIMD4(l.color.x * l.intensity, l.color.y * l.intensity, l.color.z * l.intensity, l.radius)
         }
-        let amb = (SIMD3(ambient.x, ambient.y, ambient.z) + SIMD3(skylight.x, skylight.y, skylight.z)) * 0.5
+        let amb = SIMD3(ambient.x, ambient.y, ambient.z)
         return ForwardUniforms(positions: pos, colorRadius: cr, ambientTerm: amb, count: used.count)
     }
 
@@ -392,8 +392,8 @@ public struct SceneDocument: Equatable {
     public var sounds: [SceneSound] = []
     /// `general.ambientcolor` — 포워드 라이팅의 앰비언트 바닥(라이트 미도달 영역이 전흑되지 않게).
     public var ambientColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
-    /// `general.skylightcolor` — 반구 앰비언트의 상단(부재 시 ambientcolor 로 폴백). 평면 레이어에선
-    /// dot(N=+Z, up=(0,1,0))=0 → mix(skylight, ambient, 0.5) = (skylight+ambient)/2 로 소비.
+    /// `general.skylightcolor` — 부재 시 ambientcolor 로 폴백. 2D genericimage4 포워드 경로는
+    /// flat ambient 만 소비하므로 이 값은 사용하지 않는다.
     public var skylightColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
 
     /// `general.hdr` — HDR 씬 플래그. true 면 렌더러가 float(rgba16Float) 누적 버퍼 + 톤맵 패스로

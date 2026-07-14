@@ -10,14 +10,16 @@ import Metal
 /// - 무회귀: 라이트 없으면 LIGHTING:1 이어도 f_main 과 픽셀 동일(게이트 = 라이트 존재).
 final class SceneForwardLightingRenderTests: XCTestCase {
     /// lightColor=nil → 라이트 오브젝트 없음. lighting → 머티리얼 LIGHTING 콤보.
-    private func capture(lightColor: String?, lighting: Bool, tag: String) throws -> NSBitmapImageRep {
+    private func capture(lightColor: String?, lighting: Bool, tag: String,
+                         ambient: String = "0.3 0.3 0.3",
+                         skylight: String = "0.3 0.3 0.3") throws -> NSBitmapImageRep {
         var objs = #"{"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"}"#
         if let lc = lightColor {
             objs += #",{"id":2,"light":"lpoint","origin":"960 540 100","color":"\#(lc)","intensity":3.0,"radius":2000.0}"#
         }
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0",
-          "ambientcolor":"0.3 0.3 0.3","skylightcolor":"0.3 0.3 0.3"},
+          "ambientcolor":"\(ambient)","skylightcolor":"\(skylight)"},
          "objects":[\(objs)]}
         """
         let combos = lighting ? #","combos":{"LIGHTING":1}"# : ""
@@ -44,6 +46,22 @@ final class SceneForwardLightingRenderTests: XCTestCase {
     private func rgb(_ rep: NSBitmapImageRep, _ x: Int, _ y: Int) -> (r: Double, g: Double, b: Double) {
         let c = rep.colorAt(x: x, y: y)!
         return (c.redComponent, c.greenComponent, c.blueComponent)
+    }
+
+    func testSkylightDoesNotAffectFlat2DAmbient() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let darkSky = try capture(lightColor: "0 0 0", lighting: true, tag: "flat_ambient_dark_sky",
+                                  ambient: "0.2 0.3 0.4", skylight: "0 0 0")
+        let brightSky = try capture(lightColor: "0 0 0", lighting: true, tag: "flat_ambient_bright_sky",
+                                    ambient: "0.2 0.3 0.4", skylight: "1 1 1")
+        var maxDiff = 0.0
+        for y in 0..<36 {
+            for x in 0..<64 {
+                let a = rgb(darkSky, x, y), b = rgb(brightSky, x, y)
+                maxDiff = max(maxDiff, abs(a.r - b.r), abs(a.g - b.g), abs(a.b - b.b))
+            }
+        }
+        XCTAssertLessThan(maxDiff, 0.01, "2D genericimage4 ambient must ignore skylight")
     }
 
     func testLightColorReactivity() throws {

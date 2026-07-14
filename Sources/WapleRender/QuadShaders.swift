@@ -55,7 +55,7 @@ enum QuadShaders {
         return float4(r, d.a);
     }
     // 2D 포워드 라이팅(라이트 씬의 LIGHTING:1 레이어 전용). 수식 정본 =
-    // assets/shaders/common_fragment.h::ComputeLight(diffuse) + generic.vert(반구 앰비언트).
+    // assets/shaders/common_fragment.h::ComputeLight(diffuse) + genericimage4 flat ambient.
     //   worldPos: uv → 레이어 월드 사각형 재구성(quadVertices 와 동일 규약). N=+Z(평면 레이어).
     //   light = ambient + Σ color·saturate(dot(normalize(lightPos-world), N))·attn²,
     //           attn = saturate((radius-dist)/radius). albedo *= tint(color×brightness) *= light.
@@ -67,7 +67,7 @@ enum QuadShaders {
                           constant float4 *rect [[buffer(1)]],      // [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,_)
                           constant float4 *lightPos [[buffer(2)]],  // [4] xyz=world
                           constant float4 *lightCol [[buffer(3)]],  // [4] rgb=color×intensity, w=radius
-                          constant float4 &ambient [[buffer(4)]]) { // xyz=(skylight+ambient)/2
+                          constant float4 &ambient [[buffer(4)]]) { // xyz=flat ambient (genericimage4)
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
         // uv(0..1) → 레이어 로컬(-hw..hw) → 회전 → 월드 픽셀(quadVertices 역산). z = 레이어 originZ.

@@ -21,7 +21,7 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(u.positions[1], .zero)                        // 미사용 .w=0
         XCTAssertEqual(u.colorRadius[0], SIMD4<Float>(4, 2, 1, 100)) // rgb=color×intensity, w=radius
         XCTAssertEqual(u.colorRadius[1], .zero)
-        XCTAssertEqual(u.ambientTerm, SIMD3<Float>(0.4, 0.3, 0.2))   // (skylight+ambient)/2
+        XCTAssertEqual(u.ambientTerm, SIMD3<Float>(0.3, 0.2, 0.1))   // genericimage4: flat ambient only
     }
 
     func testForwardUniformsTakesFirstFour() {

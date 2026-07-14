@@ -461,7 +461,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var forwardLit = false
     var lightPositions = [SIMD4<Float>](repeating: .zero, count: 4)    // [4] xyz=world, w=active
     var lightColorRadius = [SIMD4<Float>](repeating: .zero, count: 4)  // [4] rgb=color×intensity, w=radius
-    var lightAmbient = SIMD4<Float>(0, 0, 0, 0)                        // xyz=(skylight+ambient)/2
+    var lightAmbient = SIMD4<Float>(0, 0, 0, 0)                        // xyz=flat ambient (genericimage4)
     var layers: [GPULayer] = []
     var clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
     var cameraOffset = SIMD2<Float>(0, 0)
