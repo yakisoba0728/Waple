@@ -62,12 +62,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if !hasAudio, Self.scriptWantsAudio(src) { hasAudio = true }
         let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName) }
             ?? TextScriptEngine(script: src)
-        if let e = engine, !e.hookNames.isEmpty {
-            eventEngines.append(e)
+        guard let engine else { return nil }
+
+        // Constructor evaluation is complete here. Every engine gets apply exactly once; only init-only
+        // engines initialize now. Update-bearing engines retain init(currentValue) in evaluate*.
+        engine.applyUserProperties(sceneUserPropertiesJSON)
+        if !engine.hasUpdate { engine.callInitIfNeeded() }
+
+        if !engine.hookNames.isEmpty {
+            eventEngines.append(engine)
             // cursorEnter/Leave 는 엔진이 바인드 레이어를 히트테스트(WE 규약 — 스크립트는 반응만).
             // 레이어명을 기억했다가 mount 말미에 AABB 로 해석(buildHoverTargets).
-            if let ln = layerName, !e.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
-                hoverEngineLayers.append((e, ln))
+            if let layerName,
+               !engine.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
+                hoverEngineLayers.append((engine, layerName))
             }
         }
         return engine
@@ -542,6 +550,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 값(기본값+유저/프리셋 오버라이드).
     /// mount 시 스냅샷 — 프로퍼티 변경은 reapply(=remount)로 반영(LibraryViewModel.setProperty→onApply).
     var variantProperties: [String: PropertyValue] = [:]
+    /// SceneScript applyUserProperties payload. Computed once per mount and reused by every engine.
+    var sceneUserPropertiesJSON = "{}"
     var additivePipeline: MTLRenderPipelineState?
     var translucentPipeline: MTLRenderPipelineState?
     var fullscreenQuad: [SIMD2<Float>] = [SIMD2(-1,-1), SIMD2(1,-1), SIMD2(-1,1), SIMD2(1,1)]
@@ -599,9 +609,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
+        teardown()
         scenePausedAt = nil
         shouldAnimate = false
-        videoTextureMP4URL = nil   // 마운트 재사용: 이전 비디오-백드 상태가 비-비디오 씬 캡처로 새지 않게.
+        videoTextureMP4URL = nil
         guard let pkgURL = pkgURL(in: project.folderURL) else {
             NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
             throw RendererError.assetMissing
@@ -635,10 +646,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // project.json 기본값 + 유저/프리셋 오버라이드(LibraryViewModel 유효값 계산과 동형).
         // 값 부재/미매치는 기본 image 로 폴백 → 무회귀. 변경은 reapply(remount)로 새 스냅샷.
         let baseProps = (try? WallpaperProperties.parse(folderURL: project.folderURL)) ?? []
-        let overrides = UserPropertyStore.overrides(id: project.id, presetOverrides: project.presetOverrides,
-                                                    presetResourceRoot: project.presetFolderURL)
-        variantProperties = Dictionary(WallpaperProperties.applying(overrides: overrides, to: baseProps)
-            .map { ($0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
+        let overrides = UserPropertyStore.overrides(
+            id: project.id,
+            presetOverrides: project.presetOverrides,
+            presetResourceRoot: project.presetFolderURL
+        )
+        let effectiveProperties = WallpaperProperties.applying(overrides: overrides, to: baseProps)
+        variantProperties = Dictionary(
+            effectiveProperties.map { ($0.key, $0.value) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        sceneUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effectiveProperties)
         // 비디오-텍스처 씬 → 내장 MP4 추출 후 VideoRenderer 위임.
         if let videoName = VideoTextureExtractor.videoLayer(in: doc, package: package),
            let mp4URL = VideoTextureExtractor.extractMP4(textureEntryName: videoName, package: package,
@@ -1101,7 +1119,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
         forwardLit = false; litPipeline = nil  // 라이트 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
-        sceneScript = nil; scriptVisible.removeAll()
+        sceneScript = nil; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
+        scriptVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; _passthroughPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
