@@ -86,6 +86,19 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(c.z, c.x, accuracy: 1e-6)
     }
 
+    func testZeroExponentIsUnclampedInsideRadiusAndZeroOutside() {
+        let u = SceneLight3D.forwardUniforms(
+            [light(Vec3(x: 0, y: 0, z: 5), Vec3(x: 1, y: 1, z: 1),
+                   intensity: 1, radius: 10, exponent: 0)],
+            ambient: Vec3(x: 0, y: 0, z: 0),
+            skylight: Vec3(x: 0, y: 0, z: 0))
+
+        let inside = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, 0), u)
+        let outside = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, -10), u)
+        XCTAssertEqual(inside.x, 1, accuracy: 1e-6)
+        XCTAssertEqual(outside.x, 0, accuracy: 1e-6)
+    }
+
     func testZeroRadiusLightContributesNothing() {
         // parseLight 는 radius 부재 시 0 → 0나눗셈 없이 기여 0.
         let u = SceneLight3D.forwardUniforms(

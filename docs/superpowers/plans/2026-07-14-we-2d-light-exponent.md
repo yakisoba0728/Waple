@@ -99,6 +99,8 @@ swift test --filter SceneForwardLightingTests
 
 Expected: the two new tests fail for the intended reasons. The parsed value is `3` but packed `.w` is `1`; the CPU oracle returns the old fixed-square value near `0.25` instead of the exponent-3 value near `0.125`. Existing tests pass because their quadratic fixtures now explicitly use exponent `2`.
 
+Also add a regression for the corpus-observed `exponent=0` edge: attenuation must remain `1` inside the radius and hard-zero outside it. Mutation-check this test against the old fixed-square formula before restoring the exponent implementation.
+
 - [ ] **Step 5: Pack exponent into the existing position payload**
 
 Update `ForwardUniforms` documentation:
@@ -139,7 +141,7 @@ Run:
 swift test --filter SceneForwardLightingTests
 ```
 
-Expected: all 11 `SceneForwardLightingTests` pass with zero failures.
+Expected: all 12 `SceneForwardLightingTests` pass with zero failures.
 
 - [ ] **Step 8: Commit the core payload and oracle**
 
@@ -242,7 +244,7 @@ Run:
 swift test --filter SceneForwardLightingTests
 ```
 
-Expected: all 11 tests pass with zero failures.
+Expected: all 12 tests pass with zero failures.
 
 - [ ] **Step 7: Commit the Metal implementation**
 
@@ -293,7 +295,7 @@ git diff --check <merge-base>..HEAD
 git status --short
 ```
 
-Expected: 11 core tests, one shader-contract test, and one rendered smoke test pass with zero failures; diff check is clean; feature worktree status is empty.
+Expected: 12 core tests, one shader-contract test, and one rendered smoke test pass with zero failures; diff check is clean; feature worktree status is empty.
 
 - [ ] **Step 3: Fast-forward merge into local `main`**
 
@@ -315,7 +317,7 @@ swift test --filter 'SceneForwardLightingRenderTests/testForwardLightShaderUsesP
 swift test --filter 'SceneForwardLightingRenderTests/testSpatialPoolBrighterAtLight'
 ```
 
-Expected: the same 13 focused tests pass with zero failures. Do not run the full suite or render corpus.
+Expected: the same 14 focused tests pass with zero failures. Do not run the full suite or render corpus.
 
 - [ ] **Step 5: Clean up the owned feature worktree and branch**
 
