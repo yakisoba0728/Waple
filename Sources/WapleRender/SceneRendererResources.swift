@@ -8,6 +8,12 @@ import WapleCore
 // 파티클/텍스트 빌드, 텍스처·파이프라인 팩토리. per-frame 인코딩은 SceneRendererFrameEncoder.swift,
 // 3D 서브시스템은 SceneRenderer3D.swift 참조.
 extension SceneRenderer {
+    private enum BaseAssetURLProbe {
+        case url(URL)
+        case missing
+        case rejected
+    }
+
     struct AudioParams { let mode: Int; let freqMin: Float; let freqMax: Float; let bounds: SIMD2<Float>; let power: Float; let multiply: Float }
     /// 효과 바인딩: 손-포팅(기존 규약: float* P buffer(0) + aux texture(1+) + audioResp buffer(1))
     /// 또는 GLSL→MSL 변환본(reflection 규약: float4* p buffer(0) + EngineU buffer(1) + slot 텍스처 + audioL/R buffer(2/3)).
@@ -49,20 +55,34 @@ extension SceneRenderer {
     /// 텍스처/에셋 바이트 로드: 패키지 우선, 없으면 공유 기본 에셋 디렉터리에서 폴백.
     /// 공유에서 찾거나 둘 다 없을 때만 로그(in-pkg 일반 경로는 조용히).
     func assetData(_ name: String, package: ScenePackage) -> Data? {
-        if let d = packageData(name, package: package) { return d }
+        guard case .data(let data) = probeAssetData(name, package: package) else {
+            return nil
+        }
+        return data
+    }
+
+    private func probeAssetData(_ name: String, package: ScenePackage) -> SharedAssetProbeResult {
+        if let d = packageData(name, package: package) { return .data(d) }
+        guard WallpaperPathSecurity.normalizedRelativePath(name) != nil else {
+            NSLog("%@", "[Waple] rejected shared asset path: \(name)")
+            return .rejected
+        }
         if let base = assetBaseDir {
-            guard WallpaperPathSecurity.normalizedRelativePath(name) != nil else {
+            switch baseAssetURLProbe(for: name, root: base) {
+            case .url(let url):
+                if let d = try? Data(contentsOf: url) {
+                    NSLog("%@", "[Waple] asset from shared base: \(name)")
+                    return .data(d)
+                }
+            case .rejected:
                 NSLog("%@", "[Waple] rejected shared asset path: \(name)")
-                return nil
-            }
-            if let u = baseAssetURL(for: name, root: base),
-               let d = try? Data(contentsOf: u) {
-                NSLog("%@", "[Waple] asset from shared base: \(name)")
-                return d
+                return .rejected
+            case .missing:
+                break
             }
         }
         NSLog("%@", "[Waple] asset missing (pkg+shared): \(name)")
-        return nil
+        return .missing
     }
 
     func resolveRequiredAsset<T>(
@@ -72,14 +92,21 @@ extension SceneRenderer {
         alternate: () -> T? = { nil }
     ) -> T? {
         var foundBytes = false
+        var rejected = false
         for candidate in candidates {
-            if let data = assetData(candidate, package: package) {
+            switch probeAssetData(candidate, package: package) {
+            case .data(let data):
                 foundBytes = true
                 if let value = decode(data) { return value }
+            case .missing:
+                break
+            case .rejected:
+                rejected = true
             }
         }
         if let value = alternate() { return value }
         guard !foundBytes,
+              !rejected,
               !candidates.isEmpty,
               candidates.allSatisfy({ WallpaperPathSecurity.normalizedRelativePath($0) != nil }) else {
             return nil
@@ -465,27 +492,36 @@ extension SceneRenderer {
     }
 
     private func baseAssetURL(for name: String, root: URL) -> URL? {
-        guard let path = WallpaperPathSecurity.normalizedRelativePath(name) else { return nil }
-        if let exact = WallpaperPathSecurity.containedFileURL(path, root: root),
-           FileManager.default.fileExists(atPath: exact.path) {
-            return exact
-        }
+        guard case .url(let url) = baseAssetURLProbe(for: name, root: root) else { return nil }
+        return url
+    }
+
+    private func baseAssetURLProbe(for name: String, root: URL) -> BaseAssetURLProbe {
+        guard let path = WallpaperPathSecurity.normalizedRelativePath(name) else { return .rejected }
         let rootURL = root.standardizedFileURL
+        let exactCandidate = rootURL.appendingPathComponent(path).standardizedFileURL
+        guard WallpaperPathSecurity.contains(exactCandidate, in: rootURL) else { return .rejected }
+        if FileManager.default.fileExists(atPath: exactCandidate.path) {
+            guard let exact = WallpaperPathSecurity.containedFileURL(path, root: root) else {
+                return .rejected
+            }
+            return .url(exact)
+        }
+        let realRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
         var current = rootURL
         for part in path.split(separator: "/").map(String.init) {
             guard let children = try? FileManager.default.contentsOfDirectory(at: current,
                                                                               includingPropertiesForKeys: nil),
                   let match = children.first(where: {
                       $0.lastPathComponent.caseInsensitiveCompare(part) == .orderedSame
-                  }) else { return nil }
+                  }) else { return .missing }
             current = match.standardizedFileURL
-            guard WallpaperPathSecurity.contains(current, in: rootURL) else { return nil }
+            guard WallpaperPathSecurity.contains(current, in: rootURL) else { return .rejected }
+            let realCurrent = current.resolvingSymlinksInPath().standardizedFileURL
+            guard WallpaperPathSecurity.contains(realCurrent, in: realRoot) else { return .rejected }
         }
-        guard FileManager.default.fileExists(atPath: current.path) else { return nil }
-        let realRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
-        let realCurrent = current.resolvingSymlinksInPath().standardizedFileURL
-        guard WallpaperPathSecurity.contains(realCurrent, in: realRoot) else { return nil }
-        return current
+        guard FileManager.default.fileExists(atPath: current.path) else { return .missing }
+        return .url(current)
     }
 
     /// 변환 효과 파이프라인. 정점 디스크립터: a_Position float3@0, a_TexCoord float2@12, stride 20,

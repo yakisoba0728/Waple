@@ -735,6 +735,29 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(misses, 0)
     }
 
+    func testSharedRawTextureCandidateIsSelectedWithoutMissingDiagnostic() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/x.json","visible":true}]}
+        """
+        let package = try pkg([
+            ("scene.json", scene),
+            ("models/x.json", #"{"material":"materials/m.json"}"#),
+            ("materials/m.json", #"{"passes":[{"textures":["raw-name"]}]}"#),
+        ])
+        let shared = ["raw-name": Data("raw".utf8)]
+        var misses = 0
+
+        let document = try SceneDocument.parse(
+            package: package,
+            assets: { shared[$0] },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+
+        XCTAssertEqual(document.layers.map(\.textureEntryName), ["raw-name"])
+        XCTAssertEqual(misses, 0)
+    }
+
     func testMissingRequiredLayerReportsButInvalidPathDoesNot() throws {
         let missingScene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100}},

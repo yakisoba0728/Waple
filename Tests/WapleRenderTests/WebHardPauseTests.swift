@@ -413,6 +413,29 @@ final class WebHardPauseTests: XCTestCase {
         }, "late resume must be followed by the latest suspend")
     }
 
+    func testPendingPageSuspendSurvivesSameTurnHardPauseRoundTrip() throws {
+        let web = makeControllerWebView(prelude: fakeAudioPrelude)
+        _ = pumpEvalJS(web, """
+        window.__context = new AudioContext();
+        window.__pageSuspend = window.__context.suspend();
+        window.__wapleHardPauseController.setPaused(true);
+        window.__wapleHardPauseController.setPaused(false);
+        """)
+
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        }, "the page suspend must reach the native context")
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__context.state") as? String == "suspended" &&
+                (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? -1) == 0
+        })
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__context.operations") as? [String],
+            ["suspend"],
+            "Waple must neither supersede the page suspend nor claim a resume it did not own")
+    }
+
     func testWAAPIAndCSSAnimationsFreezeIncludingAnimationsAddedWhilePaused() throws {
         let web = makeControllerWebView(prelude: deterministicAnimationPrelude, html: """
         <html><head><style>
@@ -472,6 +495,67 @@ final class WebHardPauseTests: XCTestCase {
             (pumpEvalJS(web, "window.__animation.currentTime") as? Double ?? 0) > frozen + 20 &&
                 (pumpEvalJS(web, "window.__cssAnimation.currentTime") as? Double ?? 0) > frozenCSS + 20 &&
                 (pumpEvalJS(web, "window.__dynamicAnimation.currentTime") as? Double ?? 0) > dynamicFrozen + 20
+        })
+    }
+
+    func testExistingNodeAnimationStartedWhilePausedIsCapturedImmediately() throws {
+        let web = makeControllerWebView(
+            prelude: deterministicAnimationPrelude,
+            html: "<html><body><div id='box'></div></body></html>")
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(true);")
+
+        let playState = pumpEvalJS(web, """
+        window.__existingNodeAnimation = document.getElementById('box').animate(
+          [{ opacity: 0 }, { opacity: 1 }],
+          { duration: 1000, iterations: Infinity }
+        );
+        window.__existingNodeAnimation.playState;
+        """) as? String
+        XCTAssertEqual(playState, "paused")
+        let frozen = pumpEvalJS(web, "window.__existingNodeAnimation.currentTime") as? Double ?? 0
+        spin(0.15)
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__existingNodeAnimation.currentTime") as? Double ?? -1,
+            frozen,
+            accuracy: 3)
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__existingNodeAnimation.currentTime") as? Double ?? 0) > frozen + 20
+        })
+    }
+
+    func testKnownAnimationReplayedWhilePausedIsCapturedImmediately() throws {
+        let web = makeControllerWebView(prelude: deterministicAnimationPrelude, html: """
+        <html><body><div id="box"></div><script>
+        window.__knownAnimation = document.getElementById('box').animate(
+          [{ transform: 'translateX(0px)' }, { transform: 'translateX(100px)' }],
+          { duration: 1000, iterations: Infinity }
+        );
+        window.__knownAnimation.pause();
+        </script></body></html>
+        """)
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__knownAnimation.playState") as? String,
+            "paused")
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(true);")
+
+        XCTAssertEqual(
+            pumpEvalJS(web, """
+            window.__knownAnimation.play();
+            window.__knownAnimation.playState;
+            """) as? String,
+            "paused")
+        let frozen = pumpEvalJS(web, "window.__knownAnimation.currentTime") as? Double ?? 0
+        spin(0.15)
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__knownAnimation.currentTime") as? Double ?? -1,
+            frozen,
+            accuracy: 3)
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__knownAnimation.currentTime") as? Double ?? 0) > frozen + 20
         })
     }
 

@@ -123,4 +123,55 @@ final class LDRBloomRendererTests: XCTestCase {
             halo(enabled.image, exclusionRadius: 10),
             halo(disabled.image, exclusionRadius: 10) + 0.01)
     }
+
+    func testDirectRemountFromHDRToLDRBloomResetsHDRStateAndSelectsBGRA8Bloom() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("waple_ldr_bloom_remount_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        func project(scene: String, tag: String) throws -> WallpaperProject {
+            let folder = root.appendingPathComponent(tag, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let files: [(String, Data)] = [
+                ("scene.json", Data(scene.utf8)),
+                ("models/spot.json", Data(#"{"material":"materials/spot.json"}"#.utf8)),
+                ("materials/spot.json", Data(#"{"passes":[{"textures":["spot"]}]}"#.utf8)),
+                ("materials/spot.tex", solidTex(255, 255, 255, w: 2, h: 2))
+            ]
+            try encodePkg(files).write(to: folder.appendingPathComponent("scene.pkg"))
+            return WallpaperProject(
+                id: tag,
+                type: .scene,
+                fileName: "scene.pkg",
+                previewName: nil,
+                title: tag,
+                tags: [],
+                contentRating: nil,
+                workshopId: nil,
+                dependency: nil,
+                folderURL: folder)
+        }
+
+        let renderer = SceneRenderer()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))
+        try renderer.mount(
+            in: container,
+            project: project(scene: scene2D(bloom: true, hdr: true), tag: "hdr"))
+        XCTAssertTrue(renderer.hdrActive)
+        XCTAssertEqual(renderer.accPixelFormat, .rgba16Float)
+        XCTAssertFalse(renderer.sceneWantsLDRBloom)
+
+        try renderer.mount(
+            in: container,
+            project: project(scene: scene2D(bloom: true, hdr: false), tag: "ldr"))
+        defer { renderer.teardown() }
+
+        XCTAssertFalse(renderer.sceneIsHDR)
+        XCTAssertNil(renderer.hdrPost)
+        XCTAssertFalse(renderer.hdrActive)
+        XCTAssertEqual(renderer.accPixelFormat, .bgra8Unorm)
+        XCTAssertTrue(renderer.sceneWantsLDRBloom)
+    }
 }

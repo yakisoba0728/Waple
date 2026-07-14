@@ -399,6 +399,12 @@ public struct SceneDocument: Equatable {
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
 
+public enum SharedAssetProbeResult {
+    case data(Data)
+    case missing
+    case rejected
+}
+
 extension SceneDocument {
     /// - assets: 공유(base-assets) 리졸버 — pkg 에 없는 모델/머티리얼 JSON(models/util/solidlayer.json 등)의
     ///   폴백. WapleCore 는 순수하므로 파일 IO 는 호출자가 클로저로 주입한다(렌더러: BaseAssetsSettings 디렉터리).
@@ -407,6 +413,7 @@ extension SceneDocument {
     public static func parse(
         package: ScenePackage,
         assets: ((String) -> Data?)? = nil,
+        sharedAssetProbe: ((String) -> SharedAssetProbeResult)? = nil,
         onMissingRequiredAsset: (() -> Void)? = nil,
         userProps: [String: Any] = [:]
     ) throws -> SceneDocument {
@@ -444,6 +451,15 @@ extension SceneDocument {
         var lights3D: [SceneLight3D] = []
         var nodes3D: [SceneNode3D] = []
         var sounds: [SceneSound] = []
+        let resolvedAssets: ((String) -> Data?)?
+        if let sharedAssetProbe {
+            resolvedAssets = { name in
+                guard case .data(let data) = sharedAssetProbe(name) else { return nil }
+                return data
+            }
+        } else {
+            resolvedAssets = assets
+        }
         let imageLayerCompositeIDs = referencedImageLayerCompositeIDs(in: package)
         for (order, any) in (scene["objects"] as? [Any] ?? []).enumerated() {
             guard let obj = any as? [String: Any] else { continue }
@@ -488,7 +504,8 @@ extension SceneDocument {
             // 콘텐츠 키 접근은 contentValue 로 NSNull 정규화(존재 판정과 동일 규약).
             if let imagePath = contentValue(obj["image"]) as? String {
                 if let layer = parseLayer(obj, imagePath: imagePath, order: order, pw: pw, ph: ph,
-                                          package: package, assets: assets,
+                                          package: package, assets: resolvedAssets,
+                                          sharedAssetProbe: sharedAssetProbe,
                                           missingRequiredAsset: onMissingRequiredAsset,
                                           userProps: userProps,
                                           visibleScript: visibleScript, initialVisible: initialVisible) {
@@ -508,7 +525,12 @@ extension SceneDocument {
             }
         }
         // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다).
-        composeParentTransforms(layers: &layers, nodes3D: nodes3D, camera3D: camera3D, package: package, assets: assets)
+        composeParentTransforms(
+            layers: &layers,
+            nodes3D: nodes3D,
+            camera3D: camera3D,
+            package: package,
+            assets: resolvedAssets)
         var out = SceneDocument(projectionWidth: pw, projectionHeight: ph, clearColor: clear,
                                 parallaxEnabled: parallaxEnabled, parallaxAmount: parallaxAmount,
                                 parallaxMouseInfluence: parallaxMouseInfluence, parallaxDelay: parallaxDelay,
@@ -554,6 +576,7 @@ extension SceneDocument {
     /// 애니(PropertyAnimation)·프로퍼티 스크립트·퍼펫·블렌드·부모/id/originZ 를 obj 에서 채운다.
     private static func parseLayer(_ obj: [String: Any], imagePath: String, order: Int, pw: Int, ph: Int,
                                    package: ScenePackage, assets: ((String) -> Data?)?,
+                                   sharedAssetProbe: ((String) -> SharedAssetProbeResult)?,
                                    missingRequiredAsset: (() -> Void)?,
                                    userProps: [String: Any],
                                    visibleScript: String?, initialVisible: Bool) -> SceneLayer? {
@@ -561,6 +584,7 @@ extension SceneDocument {
             imagePath: imagePath,
             package: package,
             assets: assets,
+            sharedAssetProbe: sharedAssetProbe,
             missingRequiredAsset: missingRequiredAsset,
             userProps: userProps
         ) else {
@@ -891,6 +915,7 @@ extension SceneDocument {
         imagePath: String,
         package: ScenePackage,
         assets: ((String) -> Data?)? = nil,
+        sharedAssetProbe: ((String) -> SharedAssetProbeResult)? = nil,
         missingRequiredAsset: (() -> Void)? = nil,
         userProps: [String: Any] = [:]
     ) -> LayerTexture? {
@@ -899,6 +924,17 @@ extension SceneDocument {
                 return data
             }
             guard WallpaperPathSecurity.normalizedRelativePath(name) != nil else {
+                return nil
+            }
+            if let sharedAssetProbe {
+                switch sharedAssetProbe(name) {
+                case .data(let data):
+                    return data
+                case .missing:
+                    missingRequiredAsset?()
+                case .rejected:
+                    break
+                }
                 return nil
             }
             if let data = assets?(name) {
@@ -943,8 +979,10 @@ extension SceneDocument {
             return .entry(name)
         }
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
-        for candidate in candidates where package.data(for: candidate) != nil {
-            return .entry(candidate)
+        for candidate in candidates {
+            if package.data(for: candidate) != nil || assets?(candidate) != nil {
+                return .entry(candidate)
+            }
         }
         return .entry(candidates[0])
     }

@@ -558,6 +558,24 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         hasMissingRequiredSharedAssets = true
     }
 
+    static func sharedAssetProbe(_ name: String, root: URL?) -> SharedAssetProbeResult {
+        guard let path = WallpaperPathSecurity.normalizedRelativePath(name) else {
+            return .rejected
+        }
+        guard let root else { return .missing }
+        let rootURL = root.standardizedFileURL
+        let candidate = rootURL.appendingPathComponent(path).standardizedFileURL
+        guard WallpaperPathSecurity.contains(candidate, in: rootURL),
+              let contained = WallpaperPathSecurity.containedFileURL(path, root: root) else {
+            return .rejected
+        }
+        guard FileManager.default.fileExists(atPath: candidate.path),
+              let data = try? Data(contentsOf: contained) else {
+            return .missing
+        }
+        return .data(data)
+    }
+
     /// 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 값(기본값+유저/프리셋 오버라이드).
     /// mount 시 스냅샷 — 프로퍼티 변경은 reapply(=remount)로 반영(LibraryViewModel.setProperty→onApply).
     var variantProperties: [String: PropertyValue] = [:]
@@ -644,10 +662,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         do {
             package = try ScenePackage.parse(data)
             // 공유(base-assets) 리졸버: pkg 에 없는 util 모델/머티리얼 JSON(솔리드 레이어 등) 폴백.
-            doc = try SceneDocument.parse(package: package, assets: { name in
-                guard let base = BaseAssetsSettings.baseAssetsDirectory,
-                      let url = WallpaperPathSecurity.containedFileURL(name, root: base) else { return nil }
-                return try? Data(contentsOf: url)
+            doc = try SceneDocument.parse(package: package, sharedAssetProbe: { name in
+                Self.sharedAssetProbe(name, root: BaseAssetsSettings.baseAssetsDirectory)
             }, onMissingRequiredAsset: { [weak self] in
                 self?.markMissingRequiredSharedAsset()
             }, userProps: UserPropertyStore.rawOverrides(
@@ -1186,6 +1202,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         pointShadowDepthState = nil; pointShadowAtlas = nil; pointShadowAtlasSlices = 0
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
+        sceneIsHDR = false
+        hdrPost = nil
         sceneWantsLDRBloom = false
         ldrBloomParameters = .defaults
         ldrBloomPass = nil

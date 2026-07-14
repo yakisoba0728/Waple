@@ -179,9 +179,7 @@ enum WebHardPauseJS {
         if (index >= 0) { audioEntries.splice(index, 1); }
       }
 
-      function enqueueAudio(entry, desiredState, transition, onCurrentCompletion) {
-        entry.desiredState = desiredState;
-        var generation = ++entry.generation;
+      function enqueueAudio(entry, transition, onCompletion) {
         entry.chain = entry.chain.catch(function (error) {
           report(error);
         }).then(function () {
@@ -189,15 +187,12 @@ enum WebHardPauseJS {
             removeAudioEntry(entry);
             return;
           }
-          if (generation !== entry.generation) { return; }
           return Promise.resolve().then(transition).then(function () {
             if (entry.context.state === 'closed') {
               removeAudioEntry(entry);
               return;
             }
-            if (generation === entry.generation && onCurrentCompletion) {
-              onCurrentCompletion();
-            }
+            if (onCompletion) { onCompletion(); }
           });
         }).catch(function (error) {
           report(error);
@@ -206,13 +201,17 @@ enum WebHardPauseJS {
       }
 
       function requestAudioState(entry, desiredState, ownedResume) {
-        return enqueueAudio(entry, desiredState, function () {
+        entry.controllerDesiredState = desiredState;
+        var generation = ++entry.controllerGeneration;
+        return enqueueAudio(entry, function () {
+          if (generation !== entry.controllerGeneration) { return; }
           if (entry.context.state === desiredState) { return; }
           return desiredState === 'running'
             ? entry.nativeResume()
             : entry.nativeSuspend();
         }, function () {
-          if (ownedResume && !paused && entry.context.state === 'running') {
+          if (generation === entry.controllerGeneration &&
+              ownedResume && !paused && entry.context.state === 'running') {
             entry.resumeAfterPause = false;
           }
         });
@@ -223,8 +222,9 @@ enum WebHardPauseJS {
           context: context,
           nativeResume: context.resume.bind(context),
           nativeSuspend: context.suspend.bind(context),
-          desiredState: context.state,
-          generation: 0,
+          pageDesiredState: context.state,
+          controllerDesiredState: context.state,
+          controllerGeneration: 0,
           chain: Promise.resolve(),
           resumeAfterPause: false
         };
@@ -234,7 +234,8 @@ enum WebHardPauseJS {
           Object.defineProperty(context, 'resume', {
             configurable: true,
             value: function () {
-              return enqueueAudio(entry, paused ? 'suspended' : 'running', function () {
+              entry.pageDesiredState = 'running';
+              return enqueueAudio(entry, function () {
                 return Promise.resolve(entry.nativeResume()).then(function () {
                   if (paused) { return entry.nativeSuspend(); }
                 });
@@ -244,8 +245,9 @@ enum WebHardPauseJS {
           Object.defineProperty(context, 'suspend', {
             configurable: true,
             value: function () {
+              entry.pageDesiredState = 'suspended';
               entry.resumeAfterPause = false;
-              return enqueueAudio(entry, 'suspended', entry.nativeSuspend);
+              return enqueueAudio(entry, entry.nativeSuspend);
             }
           });
         } catch (error) {
@@ -296,9 +298,11 @@ enum WebHardPauseJS {
             return;
           }
           if (entry.context.state === 'running') {
-            entry.resumeAfterPause = true;
+            if (entry.pageDesiredState === 'running') {
+              entry.resumeAfterPause = true;
+            }
             requestAudioState(entry, 'suspended', false);
-          } else if (entry.desiredState === 'running') {
+          } else if (entry.controllerDesiredState === 'running') {
             requestAudioState(entry, 'suspended', false);
           }
         });
@@ -308,7 +312,7 @@ enum WebHardPauseJS {
         audioEntries.slice().forEach(function (entry) {
           if (entry.context.state === 'closed') {
             removeAudioEntry(entry);
-          } else if (entry.resumeAfterPause) {
+          } else if (entry.resumeAfterPause && entry.pageDesiredState === 'running') {
             requestAudioState(entry, 'running', true);
           }
         });
@@ -322,6 +326,9 @@ enum WebHardPauseJS {
       var knownAnimations = [];
       var animationsToResume = [];
       var animationObserver = null;
+      var nativeElementAnimate = null;
+      var nativeAnimationPlay = null;
+      var resumingOwnedAnimation = false;
 
       function allAnimations() {
         if (typeof document.getAnimations !== 'function') { return []; }
@@ -333,6 +340,45 @@ enum WebHardPauseJS {
           animationsToResume.push(animation);
         }
         try { animation.pause(); } catch (error) { report(error); }
+      }
+
+      function rememberAnimationStartedWhilePaused(animation) {
+        if (!paused || !animation) { return; }
+        if (knownAnimations.indexOf(animation) < 0) {
+          knownAnimations.push(animation);
+        }
+        rememberAnimation(animation);
+      }
+
+      function installAnimationAPIObservation() {
+        if (window.Element && window.Element.prototype) {
+          var animateDescriptor = Object.getOwnPropertyDescriptor(
+            window.Element.prototype, 'animate');
+          if (animateDescriptor && typeof animateDescriptor.value === 'function') {
+            nativeElementAnimate = animateDescriptor.value;
+            animateDescriptor.value = function () {
+              var animation = nativeElementAnimate.apply(this, arguments);
+              rememberAnimationStartedWhilePaused(animation);
+              return animation;
+            };
+            Object.defineProperty(window.Element.prototype, 'animate', animateDescriptor);
+          }
+        }
+        if (window.Animation && window.Animation.prototype) {
+          var playDescriptor = Object.getOwnPropertyDescriptor(
+            window.Animation.prototype, 'play');
+          if (playDescriptor && typeof playDescriptor.value === 'function') {
+            nativeAnimationPlay = playDescriptor.value;
+            playDescriptor.value = function () {
+              var result = nativeAnimationPlay.apply(this, arguments);
+              if (!resumingOwnedAnimation) {
+                rememberAnimationStartedWhilePaused(this);
+              }
+              return result;
+            };
+            Object.defineProperty(window.Animation.prototype, 'play', playDescriptor);
+          }
+        }
       }
 
       function ensureAnimationStyle() {
@@ -394,11 +440,19 @@ enum WebHardPauseJS {
         knownAnimations = [];
         recorded.forEach(function (animation) {
           if (animation.playState !== 'idle' && animation.playState !== 'finished') {
-            try { animation.play(); } catch (error) { report(error); }
+            try {
+              resumingOwnedAnimation = true;
+              animation.play();
+            } catch (error) {
+              report(error);
+            } finally {
+              resumingOwnedAnimation = false;
+            }
           }
         });
       }
 
+      safely(installAnimationAPIObservation);
       document.addEventListener('animationstart', queueAnimationCapture, true);
       document.addEventListener('transitionrun', queueAnimationCapture, true);
       document.addEventListener('transitionstart', queueAnimationCapture, true);

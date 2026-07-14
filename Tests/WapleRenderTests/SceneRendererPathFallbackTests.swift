@@ -144,4 +144,59 @@ final class SceneRendererPathFallbackTests: XCTestCase {
             ["../secret.bin"], package: package, decode: { $0 }))
         XCTAssertFalse(renderer.hasMissingRequiredSharedAssets)
     }
+
+    func testRequiredAssetSymlinkEscapeIsRejectedWithoutMissingDiagnostic() throws {
+        let fm = FileManager.default
+        let parent = fm.temporaryDirectory
+            .appendingPathComponent("waple-required-symlink-\(UUID().uuidString)", isDirectory: true)
+        let base = parent.appendingPathComponent("base", isDirectory: true)
+        let outside = parent.appendingPathComponent("outside", isDirectory: true)
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: parent) }
+        try Data("outside".utf8).write(to: outside.appendingPathComponent("secret.bin"))
+        try fm.createSymbolicLink(at: base.appendingPathComponent("link"), withDestinationURL: outside)
+
+        let renderer = SceneRenderer()
+        renderer.assetBaseDir = base
+
+        XCTAssertNil(renderer.resolveRequiredAsset(
+            ["link/secret.bin"],
+            package: ScenePackage.assemble([]),
+            decode: { $0 }))
+        XCTAssertFalse(
+            renderer.hasMissingRequiredSharedAssets,
+            "a canonical symlink escape is a security rejection, not a missing shared asset")
+    }
+
+    func testCoreRequiredSharedProbeSymlinkEscapeIsRejectedWithoutMissingCallback() throws {
+        let fm = FileManager.default
+        let parent = fm.temporaryDirectory
+            .appendingPathComponent("waple-core-symlink-\(UUID().uuidString)", isDirectory: true)
+        let base = parent.appendingPathComponent("base", isDirectory: true)
+        let outside = parent.appendingPathComponent("outside", isDirectory: true)
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: parent) }
+        try Data(#"{"material":"materials/outside.json"}"#.utf8)
+            .write(to: outside.appendingPathComponent("model.json"))
+        try fm.createSymbolicLink(at: base.appendingPathComponent("link"), withDestinationURL: outside)
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"link/model.json","visible":true}]}
+        """
+        let package = ScenePackage.assemble([
+            (name: "scene.json", data: Data(scene.utf8)),
+        ])
+        var misses = 0
+
+        let document = try SceneDocument.parse(
+            package: package,
+            sharedAssetProbe: { SceneRenderer.sharedAssetProbe($0, root: base) },
+            onMissingRequiredAsset: { misses += 1 }
+        )
+
+        XCTAssertTrue(document.layers.isEmpty)
+        XCTAssertEqual(misses, 0)
+    }
 }
