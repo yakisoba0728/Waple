@@ -33,6 +33,32 @@ final class TextEngineTests: XCTestCase {
         XCTAssertTrue(out == now || out == oneMinuteEarlier, "got \(out), expected \(now) or \(oneMinuteEarlier)")
     }
 
+    /// createScriptProperties 심이 저장된 scriptproperties(사용자 오버라이드)를 소스 기본값보다 우선하는지.
+    /// 미주입 시 Background color 스크립트가 소스 기본값 흰색(new Vec3(1,1,1))을 fallback 으로 반환 →
+    /// 텍스처 tint=(1,1,1) 로 전화면 백화(3300031038 luma 0.9999). addColor 오버라이드는 "r g b" 문자열이라
+    /// Vec3 로 변환해야 스크립트의 .x/.y/.z·.subtract 접근이 성립(문자열 주입 시 예외로 오히려 악화).
+    func testScriptPropertiesOverrideInjection() throws {
+        let script = """
+        export var scriptProperties = createScriptProperties()
+            .addColor({ name: 'c', value: new Vec3(1, 1, 1) })
+            .addSlider({ name: 's', value: 0 })
+            .addCheckbox({ name: 'flag', value: false })
+            .finish();
+        export function update(value) {
+            var c = scriptProperties.c;
+            return c.x.toFixed(3) + ' ' + c.y.toFixed(3) + ' ' + c.z.toFixed(3)
+                + ' s=' + scriptProperties.s + ' flag=' + scriptProperties.flag;
+        }
+        """
+        // 오버라이드 미주입 → 소스 기본값(흰색·0·false) 유지(무회귀 경로).
+        let base = try XCTUnwrap(TextScriptEngine(script: script))
+        XCTAssertEqual(base.evaluate(current: ""), "1.000 1.000 1.000 s=0 flag=false")
+        // 오버라이드 주입: addColor 는 "r g b" 문자열→Vec3, slider=숫자, checkbox=bool.
+        let ov = #"{"c":"0.322 0.231 0.416","s":5,"flag":true}"#
+        let fixed = try XCTUnwrap(TextScriptEngine(script: script, scriptPropsJSON: ov))
+        XCTAssertEqual(fixed.evaluate(current: ""), "0.322 0.231 0.416 s=5 flag=true")
+    }
+
     /// captureDateEpochMillis 설정 시 시계 스크립트가 실 벽시계 대신 고정 epoch 를 렌더(캡처 결정성).
     /// getHours 는 로컬 TZ 라 기대값도 로컬 TZ 로 계산 — 머신/CI TZ 무관하게 일치. defer 로 프로세스 전역
     /// static 을 리셋(XCTest 단일 프로세스 — 미복원 시 testClockScriptReturnsCurrentTime(실시각 검증)에 누수).

@@ -169,7 +169,19 @@ public final class TextScriptEngine {
                                  "mediaTimelineChanged", "mediaStatusChanged"]
     private static let maxScriptCharacters = 512_000
 
-    public init?(script: String) {
+    /// 프로퍼티 스크립트 사용자 오버라이드(JSON)를 컨텍스트 전역 `__scriptPropOverrides` 에 주입. 스크립트
+    /// 평가 직전 호출 — createScriptProperties 심이 이 값으로 소스 기본값을 대체한다. 공유 컨텍스트에선
+    /// 매 로드 직전 재설정(잔류 무해 — 다음 로드가 덮어씀). nil 이면 null(오버라이드 없음 = 무회귀).
+    static func injectScriptPropOverrides(_ ctx: JSContext, json: String?) {
+        if let json {
+            ctx.setObject(json, forKeyedSubscript: "__scriptPropOverridesJSON" as NSString)
+            ctx.evaluateScript("__scriptPropOverrides = (function(){try{return JSON.parse(__scriptPropOverridesJSON);}catch(e){return null;}})();")
+        } else {
+            ctx.evaluateScript("__scriptPropOverrides = null;")
+        }
+    }
+
+    public init?(script: String, scriptPropsJSON: String? = nil) {
         guard Self.passesPracticalSafetyChecks(script) else { return nil }
         guard let ctx = JSContext() else { return nil }
         context = ctx
@@ -180,6 +192,7 @@ public final class TextScriptEngine {
         }
         ctx.evaluateScript(Self.shims)
         if let ms = Self.captureDateEpochMillis { ctx.evaluateScript(Self.dateOverrideJS(ms)) }
+        Self.injectScriptPropOverrides(ctx, json: scriptPropsJSON)
         let cleaned = Self.stripModuleSyntax(script)
         ctx.evaluateScript(cleaned)
         guard !hadException,
@@ -198,7 +211,7 @@ public final class TextScriptEngine {
     /// {update, cursorClick, media*Changed...} 훅 딕셔너리를 반환받아 보관.
     /// update/훅 부재도 성공(top-level 사이드이펙트는 이미 실행됨).
     /// 로드 예외(문법 오류 등) → nil, 공유 컨텍스트는 오염되지 않는다(IIFE 미실행).
-    public init?(script: String, scene: SceneScriptContext, currentLayerName: String? = nil) {
+    public init?(script: String, scene: SceneScriptContext, currentLayerName: String? = nil, scriptPropsJSON: String? = nil) {
         guard Self.passesPracticalSafetyChecks(script) else { return nil }
         let ctx = scene.context
         context = ctx
@@ -226,6 +239,7 @@ public final class TextScriptEngine {
         ;return { \(exports) };
         })(__wapleLayerForScript(\(layerArg)))
         """
+        Self.injectScriptPropOverrides(context, json: scriptPropsJSON)
         let out = context.evaluateScript(wrapped)
         guard !hadException else { return nil }
         if let out, out.isObject {
@@ -736,21 +750,40 @@ public final class TextScriptEngine {
     /// createScriptProperties 빌더 + 엔진 API no-op Proxy 심(SceneScriptContext 와 공유).
     static let shims = """
     'use strict';
+    // 프로퍼티 스크립트 사용자 오버라이드(저장 scriptproperties). 엔진 로드 시 JSON 을 주입 → 소스
+    // `addColor({value:new Vec3(1,1,1)})` 등의 기본값을 대체. 미주입(null)이면 소스 기본값 유지(무회귀).
+    var __scriptPropOverrides = null;
     function createScriptProperties() {
         var props = {};
         var builder = {};
-        function add(d) { if (d && d.name !== undefined) { props[d.name] = d.value; } return builder; }
+        var __ov = __scriptPropOverrides || null;
+        // 오버라이드 우선(없으면 소스 기본값). addColor 오버라이드는 "r g b" 문자열이라 Vec3 로 변환해야
+        // 한다 — 스크립트가 .subtract/.multiply 등 Vec3 메서드를 호출하기 때문(문자열 주입 시 예외).
+        function __pick(d, asColor) {
+            var o = __ov ? __ov[d.name] : undefined;
+            if (o === undefined) { return d.value; }
+            if (asColor && typeof o === 'string') {
+                var p = o.trim().split(/\\s+/);
+                return new Vec3(__num(p[0], 0), __num(p[1], 0), __num(p[2], 0));
+            }
+            return o;
+        }
+        function add(d) { if (d && d.name !== undefined) { props[d.name] = __pick(d, false); } return builder; }
+        function addColor(d) { if (d && d.name !== undefined) { props[d.name] = __pick(d, true); } return builder; }
         function firstOptionValue(options) {
             if (!options || !options.length) { return undefined; }
             var first = options[0];
             return first && typeof first === 'object' && first.value !== undefined ? first.value : first;
         }
-        ['addCheckbox','addText','addSlider','addColor','addTextInput','addFile'].forEach(function(k){ builder[k] = add; });
+        ['addCheckbox','addText','addSlider','addTextInput','addFile'].forEach(function(k){ builder[k] = add; });
+        builder.addColor = addColor;
         builder.addCombo = function(d) {
             if (d && d.name !== undefined) {
-                props[d.name] = d.value !== undefined ? d.value
+                var o = __ov ? __ov[d.name] : undefined;
+                props[d.name] = o !== undefined ? o
+                    : (d.value !== undefined ? d.value
                     : (d.default !== undefined ? d.default
-                    : (d.defaultValue !== undefined ? d.defaultValue : firstOptionValue(d.options)));
+                    : (d.defaultValue !== undefined ? d.defaultValue : firstOptionValue(d.options))));
             }
             return builder;
         };

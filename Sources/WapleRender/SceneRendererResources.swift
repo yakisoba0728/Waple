@@ -221,7 +221,7 @@ extension SceneRenderer {
                     continue
                 }
                 let ownerName = layer.name.isEmpty ? nil : layer.name
-                if let e = makeScriptEngine(src, layerName: ownerName) {
+                if let e = makeScriptEngine(src, layerName: ownerName, scriptPropsJSON: layer.propertyScriptProps[key]) {
                     propScripts.append((key, e))
                     if e.hasUpdate { hasAnimations = true }
                 }
