@@ -35,7 +35,7 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         }
         defer { BaseAssetsSettings.baseAssetsDirectory = oldBase }
 
-        var mounted = 0, captured = 0, delegatedVideo = 0, failed: [String] = [], missingCapture: [String] = []
+        var mounted = 0, captured = 0, failed: [String] = [], missingCapture: [String] = []
         var lumas: [String: Float] = [:]
         let folders = (try FileManager.default.contentsOfDirectory(at: baseURL, includingPropertiesForKeys: nil))
             .filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("scene.pkg").path)
@@ -60,9 +60,6 @@ final class RealPackagesGroundTruthTests: XCTestCase {
                     try? FileManager.default.moveItem(at: u, to: dst)
                     captured += 1
                     if let l = Self.meanLuma(dst) { lumas[id] = l }
-                } else if r.videoRenderer != nil {
-                    delegatedVideo += 1
-                    NSLog("%@", "[WapleGT] scene \(id) delegated to VideoRenderer")
                 } else {
                     missingCapture.append(id)
                     NSLog("%@", "[WapleGT] capture MISSING \(id)")
@@ -73,7 +70,7 @@ final class RealPackagesGroundTruthTests: XCTestCase {
                 NSLog("%@", "[WapleGT] mount FAILED \(id): \(error)")
             }
         }
-        NSLog("%@", "[WapleGT] SUMMARY mounted=\(mounted)/\(folders.count) captured=\(captured) delegatedVideo=\(delegatedVideo) missingCapture=\(missingCapture) failed=\(failed)")
+        NSLog("%@", "[WapleGT] SUMMARY mounted=\(mounted)/\(folders.count) captured=\(captured) missingCapture=\(missingCapture) failed=\(failed)")
         // per-scene 평균 luma 기준선 비교(시각 회귀 조기 감지 — 2902406982 백화가 놓쳤던 클래스).
         // 기준선이 없으면 생성. 초과 편차는 경고 로그(씬은 시간 함수라 하드 fail 은 오탐 위험).
         let baseURL2 = outDir.appendingPathComponent("luma_baseline.json")
@@ -98,7 +95,7 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         }
         XCTAssertGreaterThan(mounted, 0, "실측 씬이 하나도 마운트되지 않음")
         XCTAssertEqual(failed.count, 0, "mount 실패: \(failed)")
-        XCTAssertEqual(captured + delegatedVideo, mounted, "캡처 누락: \(missingCapture)")
+        XCTAssertEqual(captured, mounted, "캡처 누락: \(missingCapture)")
     }
 
     /// PNG 평균 luma(0..1). 디코드 실패 → nil.

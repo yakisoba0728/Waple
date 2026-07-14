@@ -10,7 +10,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var scalars: SIMD4<Float>       // x=roughness, y=metallic
         var specularTint: SIMD4<Float>  // xyz=specular tint
     }
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
     var hasAnimations = false
     struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -450,10 +450,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     struct DrawItem { enum Kind { case layer, particle, text }; let kind: Kind; let idx: Int }
     var drawPlan: [DrawItem] = []
 
-    var videoRenderer: VideoRenderer?
-    /// 비디오-백드 씬(mount 가 VideoRenderer 에 위임)에서 추출한 mp4 캐시 URL. 설정 시 captureFrames 는
-    /// Metal 경로 대신 이 mp4 에서 프레임을 뽑는다(헤드리스 캡처가 빈 프레임이 되지 않게). 비-비디오 씬=nil.
-    var videoTextureMP4URL: URL?
+    /// 씬 내부 video-텍스처 레이어 존재 여부 — shouldAnimate 게이트(비디오는 연속 렌더 필요).
+    /// 실제 프레임 공급자는 각 GPULayer.video 에 있고, pause/resume/teardown 은 layers 를 순회한다.
+    var hasVideoLayer = false
+    /// 비디오 레이어 라이브 재생이 기동됐는지(첫 draw 에서 1회) — 매 프레임 순회 회피 플래그.
+    var videoLayersLive = false
     /// 씬 sound 레이어 재생기(라이브 mount 한정 — 헤드리스에선 미생성). pause/resume/teardown 에 연동.
     var sceneAudio: SceneAudioPlayer?
     var mtkView: MTKView?
@@ -653,7 +654,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         hasMissingRequiredSharedAssets = false
         scenePausedAt = nil
         shouldAnimate = false
-        videoTextureMP4URL = nil   // 마운트 재사용: 이전 비디오-백드 상태가 비-비디오 씬 캡처로 새지 않게.
+        hasVideoLayer = false   // 마운트 재사용: 이전 비디오 상태가 비-비디오 씬으로 새지 않게.
+        videoLayersLive = false
         sceneWantsLDRBloom = false
         ldrBloomParameters = .defaults
         ldrBloomPass = nil
@@ -701,20 +703,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             uniquingKeysWith: { first, _ in first }
         )
         sceneUserPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effectiveProperties)
-        // 비디오-텍스처 씬 → 내장 MP4 추출 후 VideoRenderer 위임.
-        if let videoName = VideoTextureExtractor.videoLayer(in: doc, package: package),
-           let mp4URL = VideoTextureExtractor.extractMP4(textureEntryName: videoName, package: package,
-                                                         sceneID: project.id, cacheDir: VideoTextureExtractor.defaultCacheDir()) {
-            let synthetic = WallpaperProject(
-                id: project.id, type: .video, fileName: mp4URL.lastPathComponent, previewName: nil,
-                title: project.title, tags: [], contentRating: nil, workshopId: nil, dependency: nil,
-                folderURL: mp4URL.deletingLastPathComponent())
-            let vr = VideoRenderer()
-            try vr.mount(in: container, project: synthetic)
-            self.videoRenderer = vr
-            self.videoTextureMP4URL = mp4URL   // 헤드리스 captureFrames 가 이 mp4 에서 프레임을 뽑도록.
-            return
-        }
+        // 비디오-텍스처 레이어는 씬을 통째로 VideoRenderer 로 스왑하지 않는다(형제 레이어 소실). buildLayers 가
+        // 각 video 레이어를 SceneVideoLayer 공급자를 붙인 일반 GPULayer 로 만들고, draw/captureFrames 가
+        // buildDisplayTextures 로 프레임을 합성한다(라이브 재생은 아래 container.window 게이트에서 기동).
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue() else { throw RendererError.unsupportedType }
         self.device = device
@@ -821,7 +812,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 lightColorRadius = u.colorRadius
                 lightAmbient = SIMD4(u.ambientTerm.x, u.ambientTerm.y, u.ambientTerm.z, 0)
             }
-            layers = buildLayers(doc: doc, package: package, device: device)
+            layers = buildLayers(doc: doc, package: package, device: device, sceneID: project.id)
             particleSystems = buildParticles(doc: doc, package: package, device: device)
             if !particleSystems.isEmpty {
                 hasParticles = true
@@ -875,7 +866,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
              1,  1, 0,  1, 0,
         ]
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
-        shouldAnimate = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts
+        shouldAnimate = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer
         if shouldAnimate {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
@@ -966,10 +957,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
-        if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts, view.window?.occlusionState.contains(.visible) == false { return }
+        if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer, view.window?.occlusionState.contains(.visible) == false { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
+        // 비디오 레이어 라이브 재생 지연 기동: 첫 draw 도달 = 라이브 컨텍스트 확정(captureFrames 는 draw 를
+        // 타지 않음 → 헤드리스 결정적 경로 유지). startLive 는 멱등이라 플래그로 매 프레임 순회만 회피.
+        if hasVideoLayer, !videoLayersLive {
+            for case let v? in layers.map(\.video) { v.startLive(device: device) }
+            videoLayersLive = true
+        }
         // 일시정지 중 재드로(호버/리사이즈/이벤트 needsDisplay)는 정지 시점 프레임을 재렌더(시간 동결 —
         // 미래 시간 렌더 후 resume 되감김 점프 방지). dt: 첫 재드로 = pausedAt−직전프레임 ≥ 0, 이후
         // lastFrameTime == pausedAt 이라 0 — 아래 max(0,·) 클램프로 충분, 추가 보정 불요.
@@ -1069,19 +1066,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 시뮬은 t=0 에서 새로 시작해 1/30 스텝으로 각 time 까지 진행(재현 가능). 데스크탑 가림과 무관.
     @discardableResult
     public func captureFrames(width: Int, height: Int, times: [Float], toDir: URL) -> [URL] {
-        // 비디오-백드 씬(mount 가 VideoRenderer 에 위임 → Metal device/queue/pipeline 미설정): 그대로 두면
-        // 아래 guard 에서 [] 를 반환해 빈 프레임이 된다(스냅샷 empties·still 배경 실패). 추출된 mp4 에서
-        // AVFoundation 으로 해당 시각 프레임을 뽑아 유효 프레임을 낸다.
-        if let mp4 = videoTextureMP4URL {
-            var urls: [URL] = []
-            for t in times.sorted() {
-                let url = toDir.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png")
-                if VideoTextureExtractor.captureFramePNG(mp4URL: mp4, at: Double(t), width: width, height: height, to: url) {
-                    urls.append(url)
-                }
-            }
-            return urls
-        }
+        // 비디오 레이어는 이제 일반 레이어로 합성된다(스왑 아님) — buildDisplayTextures 가 각 time 의
+        // 비디오 프레임(헤드리스=AVAssetImageGenerator@scene-time, 결정적)을 형제 레이어와 함께 렌더한다.
         guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
         // 3D 씬: 메시 + 빌보드 패스(뎁스). per-frame 스크립트 평가로 각 time 마다 갱신(궤도/인트로 애니).
         if is3D {
@@ -1165,7 +1151,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
 
     public func pause() {
-        videoRenderer?.pause()
+        for case let v? in layers.map(\.video) { v.pause() }
         sceneAudio?.pause()
         audioProvider?.stop()
         parallax.stop()
@@ -1181,9 +1167,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             lastFrameTime = now
             scenePausedAt = nil
         }
-        if let videoRenderer {
-            videoRenderer.resume()
-        } else if shouldAnimate {
+        for case let v? in layers.map(\.video) { v.resume() }
+        if shouldAnimate {
             mtkView?.isPaused = false
             mtkView?.enableSetNeedsDisplay = false
         } else {
@@ -1195,7 +1180,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneAudio?.resume()
     }
     public func teardown() {
-        videoRenderer?.teardown(); videoRenderer = nil
+        for case let v? in layers.map(\.video) { v.teardown() }   // layers = nil (하단) 전에 — 플레이어/텍스처캐시 정리
+        hasVideoLayer = false; videoLayersLive = false
         sceneAudio?.teardown(); sceneAudio = nil
         parallax.stop()
         cameraOffset = .zero; targetCameraOffset = .zero  // 마운트 재사용 대비 시차 리셋(mount :656 과 일관)

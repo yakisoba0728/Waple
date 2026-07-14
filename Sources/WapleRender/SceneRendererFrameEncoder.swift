@@ -606,9 +606,19 @@ extension SceneRenderer {
         beginFramePool()  // 프레임 시작: 모든 풀 텍스처를 재사용 가능 상태로 + 미사용 크기 evict
         var out: [MTLTexture] = []
         for layer in layers {
+            // 비디오 레이어: 프레임별 비디오 텍스처를 base 로(라이브=AVPlayerItemVideoOutput,
+            // 헤드리스=AVAssetImageGenerator@scene-time). 디코드 실패면 layer.texture(1×1 clear
+            // placeholder) → 비디오만 투명, 형제 레이어는 그대로 합성. 효과가 있으면 아래 체인이 이어 적용.
             // 스프라이트: 현재 프레임 추출(무프레임 레이어는 원본 그대로 — 무회귀).
-            let base = layer.frames.isEmpty ? layer.texture
-                                            : spriteFrameTexture(layer, time: time, device: device, cb: cb)
+            let base: MTLTexture
+            if let video = layer.video {
+                base = (video.isLive ? video.liveTexture(device: device)
+                                     : video.headlessTexture(at: time, device: device)) ?? layer.texture
+            } else if layer.frames.isEmpty {
+                base = layer.texture
+            } else {
+                base = spriteFrameTexture(layer, time: time, device: device, cb: cb)
+            }
             // 컴포지션 레이어의 효과는 사전 계산 불가(src = 그 시점 프레임버퍼 스냅샷) — draw 루프에서 처리.
             if layer.effects.isEmpty || layer.isFrameBuffer { out.append(base); continue }
             // 베이스 복사 불필요: base 를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).

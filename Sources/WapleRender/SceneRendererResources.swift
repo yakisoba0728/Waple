@@ -115,8 +115,21 @@ extension SceneRenderer {
         return nil
     }
 
+    /// 레이어의 텍스처가 video-.tex 면 내장 MP4 를 추출(레이어별 고유 캐시키 — 한 씬 다중 video 대비)해
+    /// SceneVideoLayer 공급자를 만든다. 비디오 아니거나 추출 실패(LZ4-mp4 등)면 nil → 호출부는 일반 이미지
+    /// 경로로 폴백(video 페이로드는 TexDecoder.rgba 가 nil → 레이어 스킵, 형제 보존).
+    func videoLayerProvider(_ layer: SceneLayer, package: ScenePackage, sceneID: String, index: Int) -> SceneVideoLayer? {
+        guard let data = package.data(for: layer.textureEntryName),
+              let tex = TexImage.parse(data), tex.payload == .video,
+              let mp4 = VideoTextureExtractor.extractMP4(
+                textureEntryName: layer.textureEntryName, package: package, sceneID: sceneID,
+                cacheKey: "\(sceneID)_\(index)", cacheDir: VideoTextureExtractor.defaultCacheDir())
+        else { return nil }
+        return SceneVideoLayer(mp4URL: mp4)
+    }
+
     /// 레이어를 후→전 순서(JSON 순서)로 GPU 리소스화. 디코드 실패 레이어는 스킵.
-    func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPULayer] {
+    func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice, sceneID: String) -> [GPULayer] {
         let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
         var out: [GPULayer] = []
         for (uid, layer) in doc.layers.enumerated() {
@@ -128,6 +141,7 @@ extension SceneRenderer {
             let mtl: MTLTexture
             let effW: Int, effH: Int
             var frames: [TexImage.TexFrame] = []
+            var videoLayer: SceneVideoLayer? = nil   // 비디오-텍스처 레이어면 프레임 공급자(그 외 nil)
             if layer.textureEntryName.isEmpty {  // 솔리드/컴포지션 placeholder
                 guard let t = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) else { continue }
                 mtl = t
@@ -135,6 +149,17 @@ extension SceneRenderer {
                 // (waterwaves/scroll 등) 체인 전체가 1픽셀 타깃으로 퇴화(단색화).
                 effW = layer.isFrameBuffer ? Int(max(1, projW)) : max(1, Int(layer.size.x.rounded()))
                 effH = layer.isFrameBuffer ? Int(max(1, projH)) : max(1, Int(layer.size.y.rounded()))
+            } else if let sv = videoLayerProvider(layer, package: package, sceneID: sceneID, index: uid),
+                      let ph = makeTexture(Data([0, 0, 0, 0]), 1, 1, device) {
+                // 비디오-텍스처 레이어: 씬을 통째로 VideoRenderer 로 스왑(형제 소실)하지 않고 일반 레이어로
+                // 합성한다. mtl 은 1×1 clear placeholder — 실제 프레임은 buildDisplayTextures 가 프레임별
+                // (라이브: AVPlayerItemVideoOutput / 헤드리스: AVAssetImageGenerator)로 공급. 디코드 실패 시
+                // placeholder(투명)라 형제 레이어는 그대로 보존. rect/blend/opacity 는 아래 일반 경로가 존중.
+                mtl = ph
+                effW = max(1, Int(layer.size.x.rounded()))
+                effH = max(1, Int(layer.size.y.rounded()))
+                videoLayer = sv
+                hasVideoLayer = true
             } else if layer.spritesheet,
                       let sprite = resolveTextureWithFrames(layer.textureEntryName, package: package, device: device),
                       sprite.frames.count > 1 {
@@ -250,7 +275,7 @@ extension SceneRenderer {
                                     scalars: SIMD4(layer.roughness, layer.metallic, 0, 0),
                                     specularTint: SIMD4(layer.specularTint.x, layer.specularTint.y,
                                                         layer.specularTint.z, 0)),
-                                litRect: lrect))
+                                litRect: lrect, video: videoLayer))
         }
         return out
     }

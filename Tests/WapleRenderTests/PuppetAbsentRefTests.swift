@@ -57,7 +57,7 @@ final class PuppetAbsentRefTests: XCTestCase {
         renderer.projH = Float(doc.projectionHeight)
 
         let (layers, log) = captureStderr {
-            renderer.buildLayers(doc: doc, package: package, device: device)
+            renderer.buildLayers(doc: doc, package: package, device: device, sceneID: "test")
         }
 
         // 퍼펫 유무와 무관하게 세 이미지 레이어 모두 쿼드로 남아야(부재는 스킵이 아니라 정적 쿼드)
