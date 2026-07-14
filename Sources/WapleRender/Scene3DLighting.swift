@@ -81,7 +81,7 @@ enum Scene3DLighting {
 
         for light in lights where result.count < maximumLights {
             guard light.type.caseInsensitiveCompare("lpoint") == .orderedSame,
-                  light.radius.isFinite, light.radius > 0,
+                  light.radius.isFinite, light.radius > PointShadowMath.minimumRadius,
                   light.exponent.isFinite, light.intensity.isFinite,
                   light.origin.x.isFinite, light.origin.y.isFinite, light.origin.z.isFinite,
                   light.color.x.isFinite, light.color.y.isFinite, light.color.z.isFinite else { continue }
@@ -133,10 +133,17 @@ enum Scene3DLighting {
             if light.shadow.x >= 0 { count = max(count, Int(light.shadow.x) + 1) }
         }
     }
+
+    static func disableShadow(at index: Int, in lights: inout [Scene3DLightUniform]) {
+        guard lights.indices.contains(index) else { return }
+        lights[index].shadow = SIMD4(-1, -1, 0, 0)
+    }
 }
 
 /// point shadow cube의 네이티브 dominant-axis face 순서와 2×3 셀 배치.
 enum PointShadowMath {
+    /// 이 이하 반경은 안정적인 depth 범위를 만들 수 없는 퇴화 광원으로 취급한다.
+    static let minimumRadius: Float = 1e-4
     static let faceResolution = 512
     static let atlasColumns = 2
     static let atlasRows = 3
@@ -165,7 +172,7 @@ enum PointShadowMath {
     }
 
     static func faceViewProjections(position: SIMD3<Float>, radius: Float) -> [simd_float4x4] {
-        guard radius.isFinite, radius > 0 else { return [] }
+        guard let near = nearPlane(radius: radius) else { return [] }
         let directions: [SIMD3<Float>] = [
             SIMD3(1, 0, 0), SIMD3(-1, 0, 0),
             SIMD3(0, 1, 0), SIMD3(0, -1, 0),
@@ -176,11 +183,16 @@ enum PointShadowMath {
             SIMD3(0, 0, 1), SIMD3(0, 0, -1),
             SIMD3(0, -1, 0), SIMD3(0, -1, 0),
         ]
-        // [Waple stability policy] native CPU near 값은 미확정. 반경에 비례시키되 0/역전은 금지한다.
-        let near = max(1e-4, min(min(0.05, radius * 0.01), radius * 0.5))
         let projection = Scene3DMath.perspective(fovYDegrees: 90, aspect: 1, nearZ: near, farZ: radius)
         return zip(directions, up).map { direction, upVector in
             projection * Scene3DMath.lookAt(eye: position, center: position + direction, up: upVector)
         }
+    }
+
+    static func nearPlane(radius: Float) -> Float? {
+        guard radius.isFinite, radius > minimumRadius else { return nil }
+        // [Waple stability policy] native CPU near 값은 미확정. 반경에 비례시키되 항상 far보다 작게 둔다.
+        let preferred = max(minimumRadius, min(0.05, radius * 0.01))
+        return min(preferred, radius * 0.5)
     }
 }

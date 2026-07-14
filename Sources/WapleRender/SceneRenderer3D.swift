@@ -562,7 +562,10 @@ extension SceneRenderer {
             let slice = Int(sliceValue)
             let faceMatrices = PointShadowMath.faceViewProjections(
                 position: light.position, radius: light.colorRadius.w)
-            guard faceMatrices.count == 6 else { continue }
+            guard faceMatrices.count == 6 else {
+                Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
+                continue
+            }
             for face in 0..<6 { matrices[slice * 6 + face] = faceMatrices[face] }
 
             let pass = MTLRenderPassDescriptor()
@@ -572,7 +575,10 @@ extension SceneRenderer {
             pass.depthAttachment.loadAction = .clear
             pass.depthAttachment.storeAction = .store
             pass.depthAttachment.clearDepth = 1
-            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { continue }
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+                Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
+                continue
+            }
             encoder.setFrontFacing(.counterClockwise)
             encoder.setDepthStencilState(depthState)
             // [Waple stability policy] native Metal raster bias 상수는 미확정. acne만 억제하는 최소 정책값.

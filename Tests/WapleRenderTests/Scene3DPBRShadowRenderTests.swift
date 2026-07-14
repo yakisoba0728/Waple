@@ -38,7 +38,8 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
         return data
     }
 
-    private func capture(lightCastsShadow: Bool, tag: String) throws -> NSBitmapImageRep {
+    private func capture(lightCastsShadow: Bool, tag: String,
+                         roughness: Float = 0.7, metallic: Float = 0) throws -> NSBitmapImageRep {
         let scene = """
         {"camera":{"eye":"3 0 5","center":"0 0 0","up":"0 1 0"},
          "general":{"orthogonalprojection":null,"fov":50.0,"nearz":0.05,"farz":50,
@@ -50,10 +51,14 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
             "radius":10,"exponent":2,"castshadow":\(lightCastsShadow ? "true" : "false")}
          ]}
         """
+        let material = """
+        {"passes":[{"textures":["white"],"constantshadervalues":{
+          "roughness":\(roughness),"metallic":\(metallic)}}]}
+        """
         let files: [(String, Data)] = [
             ("scene.json", Data(scene.utf8)),
             ("models/plane.mdl", planeModel()),
-            ("materials/plane.json", Data(#"{"passes":[{"textures":["white"],"constantshadervalues":{"roughness":0.7,"metallic":0}}]}"#.utf8)),
+            ("materials/plane.json", Data(material.utf8)),
             ("materials/white.tex", solidTex(255, 255, 255, w: 2, h: 2)),
         ]
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -93,5 +98,20 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
         XCTAssertGreaterThan(unshadowed, 0.02, "test scene must be visibly lit")
         XCTAssertLessThan(shadowed, unshadowed - 0.01,
                           "a casting point light must darken the receiver behind the occluder")
+    }
+
+    func testPBRMaterialChangesResponseAndKeepsOpaqueAlpha() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let dielectric = try capture(
+            lightCastsShadow: false, tag: "dielectric", roughness: 1, metallic: 0)
+        let metal = try capture(
+            lightCastsShadow: false, tag: "metal", roughness: 1, metallic: 1)
+
+        let responseDelta = abs(averageLuminance(dielectric) - averageLuminance(metal))
+        XCTAssertGreaterThan(responseDelta, 0.01,
+                             "authored metallic must change the Cook-Torrance material response")
+        let center = try XCTUnwrap(dielectric.colorAt(x: 32, y: 32))
+        XCTAssertEqual(center.alphaComponent, 1, accuracy: 0.01,
+                       "opaque mesh output must remain opaque")
     }
 }

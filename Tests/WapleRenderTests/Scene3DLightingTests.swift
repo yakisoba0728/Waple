@@ -159,6 +159,32 @@ final class Scene3DLightingTests: XCTestCase {
         XCTAssertEqual(Scene3DLighting.shadowSliceCount(packed), 2)
     }
 
+    func testFailedShadowLightCanBeDisabledWithoutAffectingOtherSlices() {
+        var packed = Scene3DLighting.packLights([
+            resolved(castsShadow: true, position: SIMD3(1, 0, 0)),
+            resolved(castsShadow: true, position: SIMD3(2, 0, 0)),
+        ])
+
+        Scene3DLighting.disableShadow(at: 0, in: &packed)
+
+        XCTAssertEqual(packed[0].shadow, SIMD4(-1, -1, 0, 0))
+        XCTAssertEqual(packed[1].shadow.x, 1)
+        XCTAssertEqual(packed[1].shadow.y, 6)
+    }
+
+    func testPointShadowNearPlaneAlwaysPrecedesAcceptedRadius() {
+        XCTAssertNil(PointShadowMath.nearPlane(radius: PointShadowMath.minimumRadius))
+        let radius = PointShadowMath.minimumRadius * 2
+        let near = try! XCTUnwrap(PointShadowMath.nearPlane(radius: radius))
+        XCTAssertGreaterThan(near, 0)
+        XCTAssertLessThan(near, radius)
+
+        let tiny = light(
+            id: 10, type: "lpoint", origin: .zero, parent: nil,
+            radius: PointShadowMath.minimumRadius)
+        XCTAssertTrue(Scene3DLighting.resolvePointLights([tiny], nodes: [:]).isEmpty)
+    }
+
     func testPointShadowViewProjectionsAreFiniteAndMapFaceCenters() {
         let position = SIMD3<Float>(3, 4, 5)
         let matrices = PointShadowMath.faceViewProjections(position: position, radius: 20)

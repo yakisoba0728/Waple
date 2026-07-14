@@ -1,7 +1,7 @@
 # WE 3D PBR + Point Shadow (P3/P4) Design
 
 **Date:** 2026-07-14  
-**Status:** Approved scope, implementation pending  
+**Status:** Implemented; focused verification and final review passed
 **Branch:** `codex/p3-p4-point-shadows`
 
 ## 1. Goal
@@ -149,8 +149,9 @@ synthetic rendering. They are not documented as WE-exact values.
 
 - A missing/invalid material texture retains the existing white fallback.
 - A singular/non-finite normal transform falls back to a safe normalized geometric normal path.
-- Lights with non-positive radius or invalid transforms are skipped.
-- A failed shadow allocation/pipeline disables shadows for the frame but retains PBR lighting.
+- Lights with radius at or below the `1e-4` stability floor, or invalid transforms, are skipped.
+- A failed shadow allocation/pipeline disables all shadows for the frame; a per-light setup/encoder
+  failure disables that light's metadata so a persistent stale slice cannot be sampled.
 - Existing unlit behavior remains for billboards without the lighting flag.
 - Existing blend, depth-test/write, cull, alpha-cutout, animation, and framebuffer-billboard behavior
   remains in force.

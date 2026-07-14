@@ -54,7 +54,7 @@
 - Produces: `Scene3DMaterialValues.parse(_:)`, `Scene3DLighting.resolvePointLights(_:nodes:)`, `Scene3DMath.normalMatrix4x4(_:)`, `Scene3DFrameUniform`, `Scene3DLightUniform`, expanded `SceneRenderer.MeshUniform`, and PBR-capable `mv_main`/`mv_skin`/`mf_main`.
 - Consumes: `SceneLight3D`, `Scene3DMath.Node`, P2a's native finite-light formula, current `SceneLayer` PBR fields, and existing node/skin/camera evaluation.
 
-- [ ] **Step 1: Add failing pure tests for materials, transforms, and point-light selection**
+- [x] **Step 1: Add failing pure tests for materials, transforms, and point-light selection**
 
 Create `Scene3DLightingTests.swift` with these concrete assertions:
 
@@ -100,7 +100,7 @@ func testPointLightsApplyParentTransformSkipUnknownAndLimitFour() {
 }
 ```
 
-- [ ] **Step 2: Run the pure tests and confirm RED**
+- [x] **Step 2: Run the pure tests and confirm RED**
 
 Run:
 
@@ -110,7 +110,7 @@ swift test --filter Scene3DLightingTests
 
 Expected: compilation fails because `Scene3DMaterialValues`, `Scene3DLighting`, and `normalMatrix4x4` do not exist.
 
-- [ ] **Step 3: Implement the pure P3 data/math boundary**
+- [x] **Step 3: Implement the pure P3 data/math boundary**
 
 Create these exact public-to-target interfaces in `Scene3DLighting.swift`:
 
@@ -156,13 +156,13 @@ origin with `w=1`, multiply color by intensity, preserve input order, and stop a
 Add `Scene3DMath.normalMatrix4x4(_:)`: extract the upper 3×3, return identity for non-finite or
 `abs(determinant) <= 1e-8`, otherwise embed `transpose(inverse(m3))` in a 4×4 with zero translation.
 
-- [ ] **Step 4: Run the pure tests and confirm GREEN**
+- [x] **Step 4: Run the pure tests and confirm GREEN**
 
 Run `swift test --filter Scene3DLightingTests`.
 
 Expected: all material, normal-matrix, parent transform, filtering, and four-light assertions pass.
 
-- [ ] **Step 5: Add failing PBR shader/parser integration tests**
+- [x] **Step 5: Add failing PBR shader/parser integration tests**
 
 Extend `Mesh3DShadersTests` to require `mv_main`, `mv_skin`, and `mf_main`, require both static and
 skinned PBR color/depth pipelines to compile, and assert the source exposes world-position,
@@ -178,7 +178,7 @@ world-normal, GGX, and perspective-view-vector transport. Extend
 Assert the resulting `Mesh3DMaterialInfo` keeps those exact values, and assert a `LIGHTING:1`
 billboard keeps `lighting=true` plus its layer material values.
 
-- [ ] **Step 6: Run shader/parser tests and confirm RED**
+- [x] **Step 6: Run shader/parser tests and confirm RED**
 
 Run:
 
@@ -188,7 +188,7 @@ swift test --filter 'Mesh3DShadersTests|Scene3DRenderCorrectnessTests'
 
 Expected: failures for missing PBR transport/material fields and missing billboard lighting state.
 
-- [ ] **Step 7: Implement P3 shader and renderer integration**
+- [x] **Step 7: Implement P3 shader and renderer integration**
 
 Expand `MeshUniform`/MSL `MeshU` in the same order:
 
@@ -218,7 +218,7 @@ light pack after per-frame node evaluation; bind frame/lights to every mesh/bill
 including an encoder recreated after a framebuffer billboard. Parse mesh PBR constants through
 `Scene3DMaterialValues.parse` and propagate them to `GPU3DMesh`.
 
-- [ ] **Step 8: Run P3 affected tests and commit**
+- [x] **Step 8: Run P3 affected tests and commit**
 
 Run:
 
@@ -250,7 +250,7 @@ git commit -m '기능(lighting): 3D PBR 경로 구현'
 - Consumes: Task 1's resolved-light order, frame/light uniforms, mesh material/caster state, world matrices, prepared bone buffers, and PBR direct-light loop.
 - Produces: `PointShadowMath`, `PointShadowPipelines`, persistent 2×3 depth-array resource, pre-camera shadow encoding, and per-light PCF visibility.
 
-- [ ] **Step 1: Add failing point-face/layout and shadow-selection tests**
+- [x] **Step 1: Add failing point-face/layout and shadow-selection tests**
 
 Add assertions:
 
@@ -275,13 +275,13 @@ func testShadowSlicesAreDenseOnlyForCastingLights() {
 }
 ```
 
-- [ ] **Step 2: Run point-shadow tests and confirm RED**
+- [x] **Step 2: Run point-shadow tests and confirm RED**
 
 Run `swift test --filter Scene3DLightingTests`.
 
 Expected: compilation fails because `PointShadowMath` and `packLights` do not exist.
 
-- [ ] **Step 3: Implement point-shadow math and packing**
+- [x] **Step 3: Implement point-shadow math and packing**
 
 Add:
 
@@ -305,11 +305,11 @@ Use face directions/up vectors `(+X,-Y)`, `(-X,-Y)`, `(+Y,+Z)`, `(-Y,-Z)`, `(+Z,
 `packLights` preserves the resolved order, fills four entries, gives dense shadow slices only to
 `castsShadow`, and sets matrix base to `slice*6`.
 
-- [ ] **Step 4: Run point-shadow math tests and confirm GREEN**
+- [x] **Step 4: Run point-shadow math tests and confirm GREEN**
 
 Run `swift test --filter Scene3DLightingTests` and expect all selected tests to pass.
 
-- [ ] **Step 5: Add failing shadow pipeline and deterministic render tests**
+- [x] **Step 5: Add failing shadow pipeline and deterministic render tests**
 
 Extend `Mesh3DShadersTests` to require `sv_main`, `sv_skin`, and `sf_cutout`, then require
 depth-only static/skinned pipelines and alpha-cutout static/skinned pipelines to compile
@@ -322,7 +322,7 @@ against a `.depth32Float` attachment with no color attachment. Add two 32×32 GP
 
 Both tests use only generated buffers/textures and one command buffer; no package/render corpus.
 
-- [ ] **Step 6: Run pipeline/render tests and confirm RED**
+- [x] **Step 6: Run pipeline/render tests and confirm RED**
 
 Run:
 
@@ -332,7 +332,7 @@ swift test --filter 'Mesh3DShadersTests|Scene3DPBRShadowRenderTests'
 
 Expected: missing shadow pipeline/resource functions or unshadowed output causes failure.
 
-- [ ] **Step 7: Implement the point shadow resource, caster pass, and 9-tap receiver sampling**
+- [x] **Step 7: Implement the point shadow resource, caster pass, and 9-tap receiver sampling**
 
 Add renderer state for opaque/cutout static/skinned shadow pipelines, the depth array texture,
 current slice count, and 24 VP matrices. Create `.type2DArray`, `.depth32Float`, private,
@@ -352,7 +352,7 @@ bias constants and label them Waple stability policy.
 If resource/pipeline creation fails, set all packed shadow slices to `-1` and continue the camera
 pass. Clear every new resource/state in `teardown()`.
 
-- [ ] **Step 8: Run P3/P4 affected tests and commit**
+- [x] **Step 8: Run P3/P4 affected tests and commit**
 
 Run:
 
@@ -379,14 +379,14 @@ git commit -m '기능(lighting): point shadow map 및 PCF 구현'
 - Consumes: complete Task 1+2 branch diff and focused test evidence.
 - Produces: one reviewed/verified branch merged locally into `main` without touching `.vscode/launch.json`.
 
-- [ ] **Step 1: Perform the single whole-branch review**
+- [x] **Step 1: Perform the single whole-branch review**
 
 Review `git diff $(git merge-base main HEAD)..HEAD` for spec coverage, CPU/MSL layout equality,
 static/skinned parity, encoder rebinds, shadow-slice/matrix indexing, face/view consistency,
 failure fallback, teardown, and scope exclusion. Fix every Critical/Important finding in one wave,
 then rerun only the covering focused tests.
 
-- [ ] **Step 2: Run final focused verification**
+- [x] **Step 2: Run final focused verification**
 
 Run exactly:
 
