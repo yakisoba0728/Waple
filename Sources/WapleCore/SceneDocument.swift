@@ -315,29 +315,6 @@ public extension SceneLight3D {
         return ForwardUniforms(positions: pos, colorRadius: cr, ambientTerm: amb, count: used.count)
     }
 
-    /// 테스트 오라클 — QuadShaders `f_lit` 프래그먼트와 **동일 수식**(exponent 감쇠·합산·앰비언트 바닥).
-    /// 런타임 미사용(셰이더가 정본). radius≤0 라이트는 기여 0(0나눗셈 회피).
-    /// ponytail: 셰이더 정본의 8줄 미러 — 감쇠/합산 유닛 검증 + 손계산 대조용.
-    static func evaluateLighting(at world: SIMD3<Float>, _ u: ForwardUniforms,
-                                 normal: SIMD3<Float> = SIMD3(0, 0, 1)) -> SIMD3<Float> {
-        var light = u.ambientTerm
-        for i in 0..<min(u.count, 4) {
-            let lp = u.positions[i]
-            let radius = u.colorRadius[i].w
-            guard radius > 0 else { continue }
-            let delta = SIMD3(lp.x, lp.y, lp.z) - world
-            let dist = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).squareRoot()
-            guard dist > 1e-5 else { continue }
-            let falloff = max(0, min(1, 1 - dist / radius))
-            let eps: Float = 6.103515625e-5
-            let attenuation = falloff >= eps ? powf(falloff + eps, lp.w) : 0
-            let nd = delta / dist
-            let d = max(0, nd.x * normal.x + nd.y * normal.y + nd.z * normal.z)
-            let c = SIMD3(u.colorRadius[i].x, u.colorRadius[i].y, u.colorRadius[i].z)
-            light += c * (d * attenuation)
-        }
-        return light
-    }
 }
 
 /// 씬 sound 오브젝트(scene.json objects[] 중 "sound" 키 보유). 실측(코퍼스 460종 / 382오브젝트, 2026-07-09):

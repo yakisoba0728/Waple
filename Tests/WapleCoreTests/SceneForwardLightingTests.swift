@@ -2,8 +2,7 @@ import Foundation
 import XCTest
 @testable import WapleCore
 
-/// 2D 포워드 라이팅: 유니폼 팩 + 감쇠/합산 수식(QuadShaders f_lit 미러 오라클) + 게이트 판정.
-/// 수식 정본 = assets/shaders/common_fragment.h::ComputeLight (실물). 손계산 대조값으로 고정.
+/// 2D 포워드 라이팅: 유니폼 팩 + genericimage4 PBR 수식(QuadShaders f_lit 미러 오라클) + 게이트 판정.
 final class SceneForwardLightingTests: XCTestCase {
     private func d(_ s: String) -> Data { s.data(using: .utf8)! }
     private func light(_ o: Vec3, _ c: Vec3, intensity: Float, radius: Float,
@@ -78,7 +77,7 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(defaulted.specularTint, Vec3(x: 1, y: 1, z: 1))
     }
 
-    // MARK: 감쇠/합산 수식 (손계산 대조 — 실씬 3047405322 spot)
+    // MARK: 감쇠/PBR 합산 수식
 
     func testAmbientFloorWhenLightOutOfRange() {
         // 라이트 반경 밖 → 기여 0 → 정확히 앰비언트(전흑 방지의 근거).
@@ -91,14 +90,9 @@ final class SceneForwardLightingTests: XCTestCase {
     }
 
     func testAttenuationMatchesHandComputation() {
-        // 3047405322 스팟이 (3500,2000,0)에 만드는 값: dist≈907.8, attn²≈0.310, dot≈0.6224
-        // → 4.87·0.6224·0.310 ≈ 0.9396, +ambient 0.3 = 1.2396 (손계산·python 대조).
-        let u = SceneLight3D.forwardUniforms(
-            [light(Vec3(x: 4134.5, y: 2319.7, z: 565), Vec3(x: 1, y: 1, z: 1),
-                   intensity: 4.87, radius: 2048, exponent: 2)],
-            ambient: Vec3(x: 0.3, y: 0.3, z: 0.3), skylight: Vec3(x: 0.3, y: 0.3, z: 0.3))
-        let c = SceneLight3D.evaluateLighting(at: SIMD3(3500, 2000, 0), u)
-        XCTAssertEqual(c.x, 1.2396, accuracy: 5e-3)
+        let eps: Float = 6.103515625e-5
+        let attenuation = SceneLight3D.finiteLightFalloff(distance: 5, radius: 10, exponent: 2)
+        XCTAssertEqual(attenuation, powf(0.5 + eps, 2), accuracy: 1e-6)
     }
 
     func testAttenuationUsesPackedLightExponent() {
@@ -108,24 +102,19 @@ final class SceneForwardLightingTests: XCTestCase {
             ambient: Vec3(x: 0, y: 0, z: 0),
             skylight: Vec3(x: 0, y: 0, z: 0))
 
-        let c = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, 0), u)
+        let attenuation = SceneLight3D.finiteLightFalloff(
+            distance: 5,
+            radius: u.colorRadius[0].w,
+            exponent: u.positions[0].w)
         let eps: Float = 6.103515625e-5
-        XCTAssertEqual(c.x, powf(0.5 + eps, 3), accuracy: 1e-5)
-        XCTAssertEqual(c.y, c.x, accuracy: 1e-6)
-        XCTAssertEqual(c.z, c.x, accuracy: 1e-6)
+        XCTAssertEqual(attenuation, powf(0.5 + eps, 3), accuracy: 1e-5)
     }
 
     func testZeroExponentIsUnclampedInsideRadiusAndZeroOutside() {
-        let u = SceneLight3D.forwardUniforms(
-            [light(Vec3(x: 0, y: 0, z: 5), Vec3(x: 1, y: 1, z: 1),
-                   intensity: 1, radius: 10, exponent: 0)],
-            ambient: Vec3(x: 0, y: 0, z: 0),
-            skylight: Vec3(x: 0, y: 0, z: 0))
-
-        let inside = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, 0), u)
-        let outside = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, -10), u)
-        XCTAssertEqual(inside.x, 1, accuracy: 1e-6)
-        XCTAssertEqual(outside.x, 0, accuracy: 1e-6)
+        let inside = SceneLight3D.finiteLightFalloff(distance: 5, radius: 10, exponent: 0)
+        let outside = SceneLight3D.finiteLightFalloff(distance: 15, radius: 10, exponent: 0)
+        XCTAssertEqual(inside, 1, accuracy: 1e-6)
+        XCTAssertEqual(outside, 0, accuracy: 1e-6)
     }
 
     func testZeroRadiusLightContributesNothing() {
@@ -138,16 +127,49 @@ final class SceneForwardLightingTests: XCTestCase {
     }
 
     func testColorAndSummation() {
-        // 2 라이트 색 합산: 각각 z-축상 근접(dot≈1, attn≈1)이면 근사 (color×intensity) 합.
-        // r=1000, dist=10 → attn=(990/1000)²=0.9801, dot=1 → 기여 = color×i×0.9801.
+        // roughness=1, dielectric, N=V=L=+Z: diffuse+specular = (0.96+0.01)/pi.
         let u = SceneLight3D.forwardUniforms([
-            light(Vec3(x: 0, y: 0, z: 10), Vec3(x: 1, y: 0, z: 0), intensity: 2, radius: 1000, exponent: 2),   // red×2
-            light(Vec3(x: 0, y: 0, z: 10), Vec3(x: 0, y: 0, z: 1), intensity: 3, radius: 1000, exponent: 2),   // blue×3
+            light(Vec3(x: 0, y: 0, z: 5), Vec3(x: 1, y: 0, z: 0), intensity: 2, radius: 10, exponent: 2),
+            light(Vec3(x: 0, y: 0, z: 5), Vec3(x: 0, y: 0, z: 1), intensity: 3, radius: 10, exponent: 2),
         ], ambient: Vec3(x: 0, y: 0, z: 0), skylight: Vec3(x: 0, y: 0, z: 0))
-        let c = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, 0), u)
-        XCTAssertEqual(c.x, 2 * 0.9801, accuracy: 1e-3)   // red
+        let c = SceneLight3D.evaluateLighting(
+            at: SIMD3(0, 0, 0), u,
+            roughness: 1, metallic: 0)
+        let eps: Float = 6.103515625e-5
+        let common = (0.97 / Float.pi) * powf(0.5 + eps, 2)
+        XCTAssertEqual(c.x, 2 * common, accuracy: 1e-5)
         XCTAssertEqual(c.y, 0, accuracy: 1e-6)
-        XCTAssertEqual(c.z, 3 * 0.9801, accuracy: 1e-3)   // blue
+        XCTAssertEqual(c.z, 3 * common, accuracy: 1e-5)
+    }
+
+    func testMetallicChangesF0AndContribution() {
+        let u = SceneLight3D.forwardUniforms(
+            [light(Vec3(x: 0, y: 0, z: 1), Vec3(x: 1, y: 1, z: 1),
+                   intensity: 1, radius: 2, exponent: 0)],
+            ambient: Vec3(x: 0, y: 0, z: 0),
+            skylight: Vec3(x: 0, y: 0, z: 0))
+        let albedo = SIMD3<Float>(1, 0.25, 0.1)
+        let dielectric = SceneLight3D.evaluateLighting(
+            at: .zero, u, albedo: albedo, roughness: 1, metallic: 0)
+        let metallic = SceneLight3D.evaluateLighting(
+            at: .zero, u, albedo: albedo, roughness: 1, metallic: 1)
+        let expectedDielectric = (0.96 * albedo + SIMD3<Float>(repeating: 0.01)) / Float.pi
+        let expectedMetallic = albedo / (4 * Float.pi)
+
+        for channel in 0..<3 {
+            XCTAssertEqual(dielectric[channel], expectedDielectric[channel], accuracy: 1e-5)
+            XCTAssertEqual(metallic[channel], expectedMetallic[channel], accuracy: 1e-5)
+        }
+        XCTAssertNotEqual(dielectric, metallic)
+    }
+
+    func testZeroRoughnessAlignedHalfVectorIsFinite() {
+        let d = ScenePBRMath.distributionGGX(
+            normal: SIMD3(0, 0, 1),
+            halfVector: SIMD3(0, 0, 1),
+            roughness: 0)
+        XCTAssertTrue(d.isFinite)
+        XCTAssertEqual(d, 0)
     }
 
     // MARK: 게이트 판정
