@@ -46,6 +46,47 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(particle.angularVel.x, pi, accuracy: 1e-6)
     }
 
+    func testChangeOperatorsParseExplicitIntervals() {
+        let def = ParticleSystemDef.parse([
+            "operator": [
+                ["name": "sizechange", "starttime": 0.2, "endtime": 0.6,
+                 "startvalue": 0.4, "endvalue": 0.8],
+                ["name": "colorchange", "starttime": 0.25, "endtime": 0.75,
+                 "startvalue": "1 0.5 0.25", "endvalue": "0.2 1 0.75"],
+                ["name": "alphachange", "starttime": 0.1, "endtime": 0.9,
+                 "startvalue": 0.8, "endvalue": 0.3],
+            ],
+        ], material: nil)
+
+        XCTAssertEqual(def.operators, [
+            .sizeChange(startTime: 0.2, startValue: 0.4, endValue: 0.8, endTime: 0.6),
+            .colorChange(startTime: 0.25,
+                         startValue: Vec3(x: 1, y: 0.5, z: 0.25),
+                         endValue: Vec3(x: 0.2, y: 1, z: 0.75),
+                         endTime: 0.75),
+            .alphaChange(startTime: 0.1, endTime: 0.9, startValue: 0.8, endValue: 0.3),
+        ])
+    }
+
+    func testChangeOperatorsUseNativeDefaults() {
+        let def = ParticleSystemDef.parse([
+            "operator": [
+                ["name": "sizechange"],
+                ["name": "colorchange"],
+                ["name": "alphachange"],
+            ],
+        ], material: nil)
+
+        XCTAssertEqual(def.operators, [
+            .sizeChange(startTime: 0, startValue: 1, endValue: 0, endTime: 1),
+            .colorChange(startTime: 0,
+                         startValue: Vec3(x: 1, y: 1, z: 1),
+                         endValue: Vec3(x: 0, y: 0, z: 0),
+                         endTime: 1),
+            .alphaChange(startTime: 0, endTime: 1, startValue: 1, endValue: 0),
+        ])
+    }
+
     private func randomInitializerParticle(exponent: Float?) throws -> Particle {
         let exp = exponent.map { ",\"exponent\":\($0)" } ?? ""
         let source = """
