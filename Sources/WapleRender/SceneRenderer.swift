@@ -459,6 +459,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneIsHDR = false
     /// HDR 톤맵 포스트 패스(최종 합성 float 버퍼 → LDR 압축). sceneIsHDR 일 때만 존재.
     var hdrPost: HDRPostPass?
+    /// Authored gate, kept separate from pass availability so construction failure can raw-fallback.
+    var sceneWantsLDRBloom = false
+    var ldrBloomParameters = LDRBloomParameters.defaults
+    var ldrBloomPass: LDRBloomEncoding?
     /// HDR 경로 실효 게이트. 3D 씬은 별도 파이프라인(bgra8, 다른 lane)이라 제외 — 3D-HDR 은 종전 LDR 유지.
     var hdrActive: Bool { sceneIsHDR && !is3D }
     /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
