@@ -66,7 +66,7 @@ public struct SceneLayer: Equatable {
     /// 전환, 주야 컨트롤러). visible 스크립트가 있는 레이어는 파스에서 드롭하지 않는다.
     public var propertyScripts: [String: String] = [:]
     /// 머티리얼 블렌드 모드("normal"|"additive"|"alphatocoverage"…). 3D 씬 빌보드가 파이프라인 선택에 사용
-    /// (플레어/글로우 = additive). 2D 경로는 무시(단일 premult-over).
+    /// (플레어/글로우 = additive). 2D는 additive만 전용 고정기능 파이프라인으로 소비하고 나머지는 premult-over 유지.
     public var blendMode: String = "normal"
     /// 3D 씬 빌보드용 머티리얼 depth 플래그. 2D 경로는 무시.
     public var depthTest: Bool = true

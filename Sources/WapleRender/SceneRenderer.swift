@@ -5,7 +5,7 @@ import WapleCore
 
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
     var hasAnimations = false
     struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -441,6 +441,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var device: MTLDevice?
     var queue: MTLCommandQueue?
     var pipeline: MTLRenderPipelineState?
+    /// 일반 2D material additive용 v_main/f_main 파이프라인. nil이면 기본 over로 폴백.
+    var layerAdditivePipeline: MTLRenderPipelineState?
     var blendPipeline: MTLRenderPipelineState?
     /// 컴포지션(_rt_FullFrameBuffer) 레이어 파이프라인(f_compose) — 프레임버퍼를 화면좌표로 샘플.
     /// nil(컴파일 실패)이면 encodeLayer 가 f_main 폴백(종전 stretch 동작 — 무크래시).
@@ -660,6 +662,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         att.sourceRGBBlendFactor = .one; att.sourceAlphaBlendFactor = .one
         att.destinationRGBBlendFactor = .oneMinusSourceAlpha; att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         self.pipeline = try device.makeRenderPipelineState(descriptor: pdesc)
+        // 같은 v_main/f_main + accPixelFormat. premultiplied source를 destination에 그대로 더한다.
+        att.destinationRGBBlendFactor = .one
+        att.destinationAlphaBlendFactor = .one
+        self.layerAdditivePipeline = try? device.makeRenderPipelineState(descriptor: pdesc)
         // colorBlendMode 레이어: dst 스냅샷 대비 블렌드를 셰이더에서 계산 → HW 블렌딩 OFF.
         let bdesc = MTLRenderPipelineDescriptor()
         bdesc.vertexFunction = library.makeFunction(name: "v_main")
@@ -1089,6 +1095,6 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         meshPipelineSkin = nil; meshPipelineSkinAdditive = nil
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
-        pipeline = nil; queue = nil; device = nil
+        pipeline = nil; layerAdditivePipeline = nil; queue = nil; device = nil
     }
 }

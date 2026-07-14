@@ -479,8 +479,8 @@ extension SceneRenderer {
             }
         }
         var depth = layer.parallaxDepth
-        // 파이프라인 선택: 라이트 레이어(f_lit) > colorBlendMode(f_blend) > 컴포지션(f_compose) > 일반(f_main).
-        // 라이트 레이어는 게이트상 colorBlendMode==0 이라 상호배타(무회귀 — 라이트 씬만 여기 진입).
+        // 파이프라인 선택: lit > colorBlendMode > framebuffer compose > material additive > 기본 over.
+        // additive는 특수 경로가 아닌 일반 f_main 레이어에만 적용한다.
         if layer.isLit, let litPipeline {
             enc.setRenderPipelineState(litPipeline)
         } else if let blendSnapshot, let blendPipeline, layer.colorBlendMode != 0 {
@@ -493,6 +493,12 @@ extension SceneRenderer {
             // 컴포지션(_rt_FullFrameBuffer): texture=프레임버퍼 스냅샷을 화면좌표로 샘플(f_compose).
             // 부분 쿼드도 뒤 화면을 1:1 통과 → stretch 회색 덩어리 제거(E1). 나머지 바인딩은 f_main 동일.
             enc.setRenderPipelineState(composePipeline)
+        } else if layer.blendAdditive,
+                  !layer.isLit,
+                  layer.colorBlendMode == 0,
+                  !layer.isFrameBuffer,
+                  let layerAdditivePipeline {
+            enc.setRenderPipelineState(layerAdditivePipeline)
         } else {
             enc.setRenderPipelineState(pipeline)
         }
