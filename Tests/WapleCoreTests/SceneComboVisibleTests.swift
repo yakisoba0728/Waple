@@ -40,4 +40,27 @@ final class SceneComboVisibleTests: XCTestCase {
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
         XCTAssertEqual(try SceneDocument.parse(package: p, userProps: ["toggle": false]).layers.count, 0)
     }
+
+    /// 효과 visible=false(정적 bool + 사용자 토글 OFF)는 미적용(WE 규약). 종전엔 무시 → 꺼진
+    /// post-process(3489263099 halftone=bwhalftone OFF)가 적용돼 전화면 흑화. {user,value} 는
+    /// resolveUserBindings 가 정적 value 로 해석하므로 파스 시점 필터가 정답.
+    func testDisabledEffectsAreDroppedAtParse() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"L","image":"models/x.json","origin":"50 50 0","size":"10 10",
+            "effects":[
+              {"file":"effects/on1/effect.json"},
+              {"file":"effects/off1/effect.json","visible":false},
+              {"file":"effects/on2/effect.json","visible":true},
+              {"file":"effects/off2/effect.json","visible":{"user":"bwhalftone","value":false}}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let layer = try XCTUnwrap(doc.layers.first { $0.name == "L" })
+        XCTAssertEqual(layer.effects.count, 2, "visible=false 효과 2개(off1 정적·off2 유저OFF) 제외")
+        XCTAssertTrue(layer.effects.contains { $0.file.contains("on1") }, "visible 부재=활성")
+        XCTAssertTrue(layer.effects.contains { $0.file.contains("on2") }, "visible=true 유지")
+        XCTAssertFalse(layer.effects.contains { $0.file.contains("off") }, "꺼진 효과는 미적용")
+    }
 }
