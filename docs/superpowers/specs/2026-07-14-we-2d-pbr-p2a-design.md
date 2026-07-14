@@ -110,6 +110,7 @@ F = F0 + (1 - F0) * pow(max(1 - dot(H, V), 0.001), 5)
 kD = (1 - metallic) * (1 - F)
 
 NL = max(dot(N, L), 0)
+if NL == 0: contribution = 0
 specular = (D * G * F) / max(4 * max(dot(N, V), 0) * NL, 0.001)
 radiance = lightColor * finiteLightFalloff(distance, radius, exponent)
 direct += (kD * albedo / pi + specular * specularTint) * radiance * NL
@@ -131,6 +132,8 @@ Direct PBR already contains albedo in its diffuse term. The old `albedo * accumu
 The native distribution has no denominator floor. At exactly `roughness = 0` and `NH = 1`, it evaluates `0 / 0`. P2a preserves the authored roughness value and floors only the intermediate GGX denominator to `1e-4` in both the Swift oracle and Metal helper. This makes the singular contribution zero while leaving values such as corpus-observed `roughness = 5` unclamped.
 
 The deviation is documented as `[safety deviation]`; it must not be described as bit-exact native behavior.
+
+The implementation also returns zero before constructing the half vector when `NL == 0`. In the selected non-gradient, single-sided path the final multiplier is already zero, so this preserves the defined result while preventing `normalize(V + L)` from producing NaN for an exactly back-facing light.
 
 ## Preserved P1 Behavior
 
