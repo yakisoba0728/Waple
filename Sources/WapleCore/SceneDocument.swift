@@ -65,6 +65,11 @@ public struct SceneLayer: Equatable {
     /// 프로퍼티 스크립트(color/alpha/visible — 키 → JS 소스). per-frame 평가(실물: 미디어 썸네일 컬러
     /// 전환, 주야 컨트롤러). visible 스크립트가 있는 레이어는 파스에서 드롭하지 않는다.
     public var propertyScripts: [String: String] = [:]
+    /// 프로퍼티 스크립트의 저장된 `scriptproperties`(사용자 오버라이드) — 키 → JSON 문자열. WE 는 이 값을
+    /// 스크립트의 scriptProperties 객체에 주입(소스 `addColor({value:new Vec3(1,1,1)})` 기본값 대체).
+    /// 미주입 시 Background color 스크립트가 흰색 fallback 을 반환해 전화면 백화(3300031038). {user,value}
+    /// 바인딩은 파스 시점에 정적 value 로 해석(resolveUserBindings 규약).
+    public var propertyScriptProps: [String: String] = [:]
     /// 머티리얼 블렌드 모드("normal"|"additive"|"alphatocoverage"…). 3D 씬 빌보드가 파이프라인 선택에 사용
     /// (플레어/글로우 = additive). 2D는 additive만 전용 고정기능 파이프라인으로 소비하고 나머지는 premult-over 유지.
     public var blendMode: String = "normal"
@@ -487,10 +492,12 @@ extension SceneDocument {
             // 실물 3394601417 'bt') — 그 외 오브젝트는 정적 false 시 기존대로 드롭.
             var initialVisible = true
             var visibleScript: String? = nil
+            var visibleScriptProps: String? = nil
             if let b = obj["visible"] as? Bool { initialVisible = b }
             else if let vis = obj["visible"] as? [String: Any] {
                 if let v = vis["value"] as? Bool { initialVisible = v }
                 visibleScript = vis["script"] as? String
+                if visibleScript != nil { visibleScriptProps = Self.scriptPropsJSON(vis["scriptproperties"]) }
             }
             // 트랜스폼-온리 그룹(콘텐츠 키 없음 + id 보유): 계층 노드로 기록(비가시도 포함 — 서브트리
             // 가시성 판정에 필요)하고 다음으로. 종전에는 조용히 버려져 parent 참조가 끊겼다.
@@ -521,7 +528,8 @@ extension SceneDocument {
                                           sharedAssetProbe: sharedAssetProbe,
                                           missingRequiredAsset: onMissingRequiredAsset,
                                           userProps: userProps,
-                                          visibleScript: visibleScript, initialVisible: initialVisible) {
+                                          visibleScript: visibleScript, visibleScriptProps: visibleScriptProps,
+                                          initialVisible: initialVisible) {
                     layers.append(layer)
                 }
             } else if let particlePath = contentValue(obj["particle"]) as? String {
@@ -593,7 +601,8 @@ extension SceneDocument {
                                    sharedAssetProbe: ((String) -> SharedAssetProbeResult)?,
                                    missingRequiredAsset: (() -> Void)?,
                                    userProps: [String: Any],
-                                   visibleScript: String?, initialVisible: Bool) -> SceneLayer? {
+                                   visibleScript: String?, visibleScriptProps: String? = nil,
+                                   initialVisible: Bool) -> SceneLayer? {
         guard let resolved = resolveLayerTexture(
             imagePath: imagePath,
             package: package,
@@ -623,15 +632,18 @@ extension SceneDocument {
         }
         var anims: [String: PropertyAnimation] = [:]
         var propScripts: [String: String] = [:]
+        var propScriptProps: [String: String] = [:]
         for key in ["origin", "scale", "alpha", "angles", "color"] {
             if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind) {
                 anims[key] = a
             }
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
                 propScripts[key] = sc  // 정적 value 는 기존 언랩이 처리 — 스크립트는 per-frame 재평가
+                if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { propScriptProps[key] = j }
             }
         }
         if let vs = visibleScript { propScripts["visible"] = vs }
+        if let j = visibleScriptProps { propScriptProps["visible"] = j }
         // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
         // 겸사겸사 머티리얼 blending 을 캡처(3D 빌보드 additive 파이프라인 선택 — 플레어/글로우).
         var puppetPath: String? = nil
@@ -685,6 +697,7 @@ extension SceneDocument {
         layer.puppet = puppetPath
         if puppetPath != nil { layer.animationLayers = parseAllAnimationLayers(obj["animationlayers"]) }
         layer.propertyScripts = propScripts
+        layer.propertyScriptProps = propScriptProps
         layer.initialVisible = initialVisible
         layer.blendMode = blendMode
         layer.depthTest = depthTest
@@ -1042,6 +1055,22 @@ extension SceneDocument {
             }
             return parseParticleDef(childPath, package: package, visited: visited.union([childPath]))
         }
+    }
+
+    /// 프로퍼티 스크립트의 저장 `scriptproperties`(사용자 오버라이드)를 JSON 문자열로 직렬화. {user,value}
+    /// 바인딩은 정적 value 로 해석(스크립트는 정적 값을 기대 — resolveUserBindings 규약). 빈 값/직렬화
+    /// 불가면 nil(= 소스 기본값 유지, 무회귀).
+    private static func scriptPropsJSON(_ raw: Any?) -> String? {
+        guard let dict = raw as? [String: Any], !dict.isEmpty else { return nil }
+        var resolved: [String: Any] = [:]
+        for (k, v) in dict {
+            if let bind = v as? [String: Any], let inner = bind["value"] { resolved[k] = inner }
+            else { resolved[k] = v }
+        }
+        guard JSONSerialization.isValidJSONObject(resolved),
+              let data = try? JSONSerialization.data(withJSONObject: resolved),
+              let s = String(data: data, encoding: .utf8) else { return nil }
+        return s
     }
 
     private static func parseEffects(_ raw: Any?) -> [SceneEffect] {

@@ -62,12 +62,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
-    func makeScriptEngine(_ src: String, layerName: String? = nil) -> TextScriptEngine? {
+    func makeScriptEngine(_ src: String, layerName: String? = nil, scriptPropsJSON: String? = nil) -> TextScriptEngine? {
         // 오디오 소비 스크립트 게이팅: 참조가 보이면 hasAudio 승격 → mount 말미의 provider 기동
         // (기존엔 셰이더 오디오 효과만 켰다). 모든 스크립트 로드는 mount 의 기동 검사보다 앞선다.
         if !hasAudio, Self.scriptWantsAudio(src) { hasAudio = true }
-        let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName) }
-            ?? TextScriptEngine(script: src)
+        let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName, scriptPropsJSON: scriptPropsJSON) }
+            ?? TextScriptEngine(script: src, scriptPropsJSON: scriptPropsJSON)
         guard let engine else { return nil }
 
         // Constructor evaluation is complete here. Every engine gets apply exactly once; only init-only
@@ -728,7 +728,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             self.hdrPost = post
         }
         // LDR bloom is authored-policy gated, not HDR-pipeline-availability gated.
+        // 디버그: WAPLE_NO_BLOOM=1 → bloom 강제 OFF(백화 파리티 이분용).
         sceneWantsLDRBloom = doc.bloom && !doc.hdr
+            && ProcessInfo.processInfo.environment["WAPLE_NO_BLOOM"] == nil
         ldrBloomParameters = LDRBloomParameters(
             strength: doc.bloomStrength,
             threshold: doc.bloomThreshold,
@@ -839,6 +841,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             .enumerated()
             .sorted { ($0.1.0, $0.0) < ($1.1.0, $1.0) }
             .map { $0.1.1 }
+        // 디버그: WAPLE_LAYER_TRUNC=n → z-정렬된 draw 앞 n개만(레이어 이분용, 백화 유발 레이어 특정).
+        if let t = ProcessInfo.processInfo.environment["WAPLE_LAYER_TRUNC"], let n = Int(t), n >= 0, n < drawPlan.count {
+            drawPlan = Array(drawPlan.prefix(n))
+        }
 
         let view = MTKView(frame: container.bounds, device: device)
         view.autoresizingMask = [.width, .height]

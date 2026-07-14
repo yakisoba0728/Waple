@@ -63,4 +63,26 @@ final class SceneComboVisibleTests: XCTestCase {
         XCTAssertTrue(layer.effects.contains { $0.file.contains("on2") }, "visible=true 유지")
         XCTAssertFalse(layer.effects.contains { $0.file.contains("off") }, "꺼진 효과는 미적용")
     }
+
+    /// color 프로퍼티 스크립트의 저장 `scriptproperties`(사용자 오버라이드)를 파스가 보존하는지 —
+    /// 미보존 시 스크립트가 소스 기본값(흰색 fallback)을 반환해 전화면 백화(3300031038). {user,value}
+    /// 바인딩은 정적 value 로 해석(스크립트는 정적 값을 기대 — resolveUserBindings 규약).
+    func testColorScriptPropertiesPreservedAtParse() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"L","image":"models/x.json","origin":"50 50 0","size":"10 10",
+            "color":{"script":"export function update(v){return v;}","value":"0.3 0.2 0.4",
+                     "scriptproperties":{"fallbackColor":"0.3 0.2 0.4","useFallbackColor":false,
+                                         "enabled":{"user":"musicplayer","value":true}}}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let layer = try XCTUnwrap(doc.layers.first { $0.name == "L" })
+        let json = try XCTUnwrap(layer.propertyScriptProps["color"], "color scriptproperties 보존")
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(obj["fallbackColor"] as? String, "0.3 0.2 0.4")
+        XCTAssertEqual(obj["useFallbackColor"] as? Bool, false)
+        XCTAssertEqual(obj["enabled"] as? Bool, true, "{user,value} 바인딩 → 정적 value 로 해석")
+    }
 }
