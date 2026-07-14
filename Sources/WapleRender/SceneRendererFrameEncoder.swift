@@ -508,7 +508,7 @@ extension SceneRenderer {
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         enc.setFragmentTexture(texture, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-        // f_lit 유니폼: rect(uv→월드) + 라이트 위치·exponent/색·반경 + 앰비언트(씬 상수). 라이트 레이어만.
+        // f_lit 유니폼: rect + 라이트 위치·exponent/색·반경 + 앰비언트 + 레이어 PBR 재질. 라이트 레이어만.
         if layer.isLit, litPipeline != nil {
             let rect = [litRect0, litRect1]
             rect.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
@@ -516,6 +516,8 @@ extension SceneRenderer {
             lightColorRadius.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 3) }
             var amb = lightAmbient
             enc.setFragmentBytes(&amb, length: MemoryLayout<SIMD4<Float>>.stride, index: 4)
+            var material = layer.pbrMaterial
+            enc.setFragmentBytes(&material, length: MemoryLayout<PBRMaterialUniforms>.stride, index: 5)
         }
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }

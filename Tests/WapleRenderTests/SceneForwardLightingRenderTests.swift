@@ -13,21 +13,27 @@ final class SceneForwardLightingRenderTests: XCTestCase {
     private func capture(lightColor: String?, lighting: Bool, tag: String,
                          projectID: String? = nil,
                          ambient: String = "0.3 0.3 0.3",
-                         skylight: String = "0.3 0.3 0.3") throws -> NSBitmapImageRep {
+                         skylight: String = "0.3 0.3 0.3",
+                         lightIntensity: Float = 3,
+                         roughness: Float = 0.7,
+                         metallic: Float = 0,
+                         specularTint: String = "1 1 1") throws -> NSBitmapImageRep {
         var objs = #"{"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"}"#
         if let lc = lightColor {
-            objs += #",{"id":2,"light":"lpoint","origin":"960 540 100","color":"\#(lc)","intensity":3.0,"radius":2000.0}"#
+            objs += #",{"id":2,"light":"lpoint","origin":"960 540 100","color":"\#(lc)","intensity":\#(lightIntensity),"radius":2000.0}"#
         }
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0",
           "ambientcolor":"\(ambient)","skylightcolor":"\(skylight)"},
          "objects":[\(objs)]}
         """
-        let combos = lighting ? #","combos":{"LIGHTING":1}"# : ""
+        let materialValues = lighting
+            ? #","combos":{"LIGHTING":1},"constantshadervalues":{"roughness":\#(roughness),"metallic":\#(metallic),"speculartint":"\#(specularTint)"}"#
+            : ""
         let files: [(String, Data)] = [
             ("scene.json", scene.data(using: .utf8)!),
             ("models/bg.json", #"{"material":"materials/bg.json"}"#.data(using: .utf8)!),
-            ("materials/bg.json", "{\"passes\":[{\"textures\":[\"bg\"]\(combos)}]}".data(using: .utf8)!),
+            ("materials/bg.json", "{\"passes\":[{\"textures\":[\"bg\"]\(materialValues)}]}".data(using: .utf8)!),
             ("materials/bg.tex", solidTex(255, 255, 255)),
         ]
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_fl_\(tag)", isDirectory: true)
@@ -49,14 +55,34 @@ final class SceneForwardLightingRenderTests: XCTestCase {
         return (c.redComponent, c.greenComponent, c.blueComponent)
     }
 
-    func testForwardLightShaderUsesPackedExponent() throws {
-        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+    func testForwardLightShaderUsesCookTorranceAndPackedExponent() throws {
         let source = QuadShaders.source
+        XCTAssertTrue(source.contains("distributionGGX"))
+        XCTAssertTrue(source.contains("ggxDenominatorFloor = 1e-4"))
+        XCTAssertTrue(source.contains("material.scalars.x"))
         XCTAssertTrue(source.contains("finiteLightFalloff(dist, radius, lightPos[i].w)"))
-        XCTAssertFalse(source.contains("ndl * attn * attn"))
+        XCTAssertFalse(source.contains("light += lightCol[i].xyz * (ndl * attenuation)"))
 
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let library = try device.makeLibrary(source: source, options: nil)
         XCTAssertNotNil(library.makeFunction(name: "f_lit"))
+    }
+
+    func testPBRMaterialMetallicChangesRenderedResponse() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let dielectric = try capture(
+            lightColor: "1 1 1", lighting: true, tag: "pbr_dielectric",
+            ambient: "0 0 0", skylight: "0 0 0",
+            lightIntensity: 0.5, roughness: 1, metallic: 0)
+        let metal = try capture(
+            lightColor: "1 1 1", lighting: true, tag: "pbr_metal",
+            ambient: "0 0 0", skylight: "0 0 0",
+            lightIntensity: 0.5, roughness: 1, metallic: 1)
+        let dielectricCenter = rgb(dielectric, 32, 18)
+        let metalCenter = rgb(metal, 32, 18)
+        XCTAssertGreaterThan(
+            dielectricCenter.r, metalCenter.r + 0.07,
+            "roughness=1 white dielectric should exceed the corresponding metallic response")
     }
 
     func testSkylightDoesNotAffectFlat2DAmbient() throws {

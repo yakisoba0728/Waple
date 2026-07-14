@@ -60,18 +60,44 @@ enum QuadShaders {
         constexpr float eps = 6.103515625e-5;
         return falloff >= eps ? pow(falloff + eps, exponent) : 0.0;
     }
-    // 2D 포워드 라이팅(라이트 씬의 LIGHTING:1 레이어 전용). P1 범위는 exponent 감쇠 + flat ambient.
-    //   worldPos: uv → 레이어 월드 사각형 재구성(quadVertices 와 동일 규약). N=+Z(평면 레이어).
-    //   light = ambient + Σ color·saturate(dot(normalize(lightPos-world), N))·pow(falloff+eps, exponent).
+    struct PBRMaterialUniforms {
+        float4 scalars;       // x=roughness, y=metallic
+        float4 specularTint;  // xyz=specular tint
+    };
+    inline float distributionGGX(float3 N, float3 H, float roughness) {
+        float r2 = roughness * roughness;
+        float r4 = r2 * r2;
+        float NH = max(dot(N, H), 0.0);
+        float rawDenominator = NH * NH * (r4 - 1.0) + 1.0;
+        // [safety deviation] Native has no floor and reaches 0/0 at roughness=0, N·H=1.
+        constexpr float ggxDenominatorFloor = 1e-4;
+        float denominator = max(rawDenominator, ggxDenominatorFloor);
+        return r4 / (3.14159265359 * denominator * denominator);
+    }
+    inline float schlickGGX(float ND, float roughness) {
+        float r = roughness + 1.0;
+        float k = r * r / 8.0;
+        return ND / (ND * (1.0 - k) + k);
+    }
+    inline float geometrySmith(float3 N, float3 V, float3 L, float roughness) {
+        return schlickGGX(max(dot(N, V), 0.001), roughness)
+             * schlickGGX(max(dot(N, L), 0.001), roughness);
+    }
+    inline float3 fresnelSchlick(float cosTheta, float3 F0) {
+        return F0 + (1.0 - F0) * pow(max(1.0 - cosTheta, 0.001), 5.0);
+    }
+    // 2D 포워드 라이팅(라이트 씬의 LIGHTING:1 레이어 전용). P2a = orthographic finite-point PBR.
+    //   worldPos: uv → 레이어 월드 사각형 재구성. N=V=+Z; light type specialization is P2b.
     //   미사용 슬롯/짧은반경 라이트는 radius≤0 로 스킵(count 유니폼 불필요).
-    //   블로아웃: bgra8Unorm 이 [0,1] 클램프 = 고강도(HDR)는 white(HDR/톤맵 패스 전까지 — 보고).
+    //   비-HDR bgra8Unorm 블로아웃 정책은 기존 경로를 보존한다.
     fragment float4 f_lit(VOut in [[stage_in]],
                           texture2d<float> tex [[texture(0)]],
                           constant float4 &tint [[buffer(0)]],
                           constant float4 *rect [[buffer(1)]],      // [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,_)
                           constant float4 *lightPos [[buffer(2)]],  // [4] xyz=world, w=exponent
                           constant float4 *lightCol [[buffer(3)]],  // [4] rgb=color×intensity, w=radius
-                          constant float4 &ambient [[buffer(4)]]) { // xyz=flat ambient (genericimage4)
+                          constant float4 &ambient [[buffer(4)]],   // xyz=flat ambient (genericimage4)
+                          constant PBRMaterialUniforms &material [[buffer(5)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
         // uv(0..1) → 레이어 로컬(-hw..hw) → 회전 → 월드 픽셀(quadVertices 역산). z = 레이어 originZ.
@@ -80,20 +106,37 @@ enum QuadShaders {
         float ca = rect[1].x, sa = rect[1].y;
         float3 world = float3(rect[0].x + lx * ca - ly * sa, rect[0].y + lx * sa + ly * ca, rect[1].z);
         float3 N = float3(0.0, 0.0, 1.0);
-        float3 light = ambient.xyz;
+        float3 V = float3(0.0, 0.0, 1.0);
+        float3 albedo = c.rgb * tint.rgb;
+        float roughness = material.scalars.x;
+        float metallic = material.scalars.y;
+        float3 F0 = mix(float3(0.04), albedo, metallic);
+        float3 direct = float3(0.0);
         for (int i = 0; i < 4; i++) {
             float radius = lightCol[i].w;
             if (radius <= 0.0) continue;
             float3 delta = lightPos[i].xyz - world;
             float dist = length(delta);
             if (dist < 1e-5) continue;
+            float3 L = delta / dist;
+            float NL = max(dot(N, L), 0.0);
+            // Back-facing output is already zero; return early to avoid normalize(V+L) NaN.
+            if (NL <= 0.0) continue;
+            float3 H = normalize(V + L);
+            float D = distributionGGX(N, H, roughness);
+            float G = geometrySmith(N, V, L, roughness);
+            float3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+            float3 kD = (1.0 - metallic) * (1.0 - F);
+            float denominator = max(4.0 * max(dot(N, V), 0.0) * NL, 0.001);
+            float3 specular = (D * G * F) / denominator;
             float attenuation = finiteLightFalloff(dist, radius, lightPos[i].w);
-            float ndl = max(0.0, dot(delta / dist, N));
-            light += lightCol[i].xyz * (ndl * attenuation);
+            float3 radiance = lightCol[i].xyz * attenuation;
+            direct += (kD * albedo / 3.14159265359 + specular * material.specularTint.xyz)
+                    * radiance * NL;
         }
-        // WE genericimage*/generic2: albedo *= g_TintColor(=color×brightness), albedo.rgb *= light.
+        // Direct PBR already contains diffuse albedo; ambient gets albedo exactly once.
         // f_main 규약대로 straight→premultiplied 를 마지막에 단 한 번(블렌드 src=one).
-        float3 lit = c.rgb * tint.rgb * light;
+        float3 lit = ambient.xyz * albedo + direct;
         float a = c.a * tint.a;
         return float4(lit * a, a);
     }

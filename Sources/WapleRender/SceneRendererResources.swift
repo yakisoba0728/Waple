@@ -179,7 +179,12 @@ extension SceneRenderer {
                                 puppet: puppetModel, propScripts: propScripts,
                                 initialVisible: layer.initialVisible,
                                 colorBlendMode: layer.colorBlendMode, frames: frames,
-                                isLit: layerLit, litRect: lrect))
+                                isLit: layerLit,
+                                pbrMaterial: PBRMaterialUniforms(
+                                    scalars: SIMD4(layer.roughness, layer.metallic, 0, 0),
+                                    specularTint: SIMD4(layer.specularTint.x, layer.specularTint.y,
+                                                        layer.specularTint.z, 0)),
+                                litRect: lrect))
         }
         return out
     }
