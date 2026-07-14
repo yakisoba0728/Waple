@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import WapleCore
 
@@ -5,9 +6,11 @@ import XCTest
 /// 수식 정본 = assets/shaders/common_fragment.h::ComputeLight (실물). 손계산 대조값으로 고정.
 final class SceneForwardLightingTests: XCTestCase {
     private func d(_ s: String) -> Data { s.data(using: .utf8)! }
-    private func light(_ o: Vec3, _ c: Vec3, intensity: Float, radius: Float) -> SceneLight3D {
+    private func light(_ o: Vec3, _ c: Vec3, intensity: Float, radius: Float,
+                       exponent: Float = 1) -> SceneLight3D {
         SceneLight3D(id: 0, name: "", type: "lpoint", origin: o, angles: Vec3(x: 0, y: 0, z: 0),
-                     color: c, radius: radius, intensity: intensity, exponent: 1, castShadow: false, parent: nil)
+                     color: c, radius: radius, intensity: intensity, exponent: exponent,
+                     castShadow: false, parent: nil)
     }
 
     // MARK: 유니폼 팩
@@ -31,6 +34,21 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(u.positions[3], SIMD4<Float>(3, 0, 0, 1))     // 4번째(idx3), 5번째 미포함
     }
 
+    func testParsedExponentReachesPackedForwardUniform() throws {
+        let scene = #"{"objects":[{"id":1,"light":"lpoint","origin":"0 0 5","color":"1 1 1","intensity":1,"radius":10,"exponent":3}]}"#
+        let pkg = ScenePackage.assemble([("scene.json", d(scene))])
+        let doc = try SceneDocument.parse(package: pkg)
+        let parsed = try XCTUnwrap(doc.lights3D.first)
+        XCTAssertEqual(parsed.exponent, 3)
+
+        let u = SceneLight3D.forwardUniforms(
+            doc.lights3D,
+            ambient: Vec3(x: 0, y: 0, z: 0),
+            skylight: Vec3(x: 0, y: 0, z: 0))
+        XCTAssertEqual(u.positions[0], SIMD4<Float>(0, 0, 5, 3))
+        XCTAssertEqual(u.positions[1], .zero)
+    }
+
     // MARK: 감쇠/합산 수식 (손계산 대조 — 실씬 3047405322 spot)
 
     func testAmbientFloorWhenLightOutOfRange() {
@@ -47,10 +65,25 @@ final class SceneForwardLightingTests: XCTestCase {
         // 3047405322 스팟이 (3500,2000,0)에 만드는 값: dist≈907.8, attn²≈0.310, dot≈0.6224
         // → 4.87·0.6224·0.310 ≈ 0.9396, +ambient 0.3 = 1.2396 (손계산·python 대조).
         let u = SceneLight3D.forwardUniforms(
-            [light(Vec3(x: 4134.5, y: 2319.7, z: 565), Vec3(x: 1, y: 1, z: 1), intensity: 4.87, radius: 2048)],
+            [light(Vec3(x: 4134.5, y: 2319.7, z: 565), Vec3(x: 1, y: 1, z: 1),
+                   intensity: 4.87, radius: 2048, exponent: 2)],
             ambient: Vec3(x: 0.3, y: 0.3, z: 0.3), skylight: Vec3(x: 0.3, y: 0.3, z: 0.3))
         let c = SceneLight3D.evaluateLighting(at: SIMD3(3500, 2000, 0), u)
         XCTAssertEqual(c.x, 1.2396, accuracy: 5e-3)
+    }
+
+    func testAttenuationUsesPackedLightExponent() {
+        let u = SceneLight3D.forwardUniforms(
+            [light(Vec3(x: 0, y: 0, z: 5), Vec3(x: 1, y: 1, z: 1),
+                   intensity: 1, radius: 10, exponent: 3)],
+            ambient: Vec3(x: 0, y: 0, z: 0),
+            skylight: Vec3(x: 0, y: 0, z: 0))
+
+        let c = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, 0), u)
+        let eps: Float = 6.103515625e-5
+        XCTAssertEqual(c.x, powf(0.5 + eps, 3), accuracy: 1e-5)
+        XCTAssertEqual(c.y, c.x, accuracy: 1e-6)
+        XCTAssertEqual(c.z, c.x, accuracy: 1e-6)
     }
 
     func testZeroRadiusLightContributesNothing() {
@@ -66,8 +99,8 @@ final class SceneForwardLightingTests: XCTestCase {
         // 2 라이트 색 합산: 각각 z-축상 근접(dot≈1, attn≈1)이면 근사 (color×intensity) 합.
         // r=1000, dist=10 → attn=(990/1000)²=0.9801, dot=1 → 기여 = color×i×0.9801.
         let u = SceneLight3D.forwardUniforms([
-            light(Vec3(x: 0, y: 0, z: 10), Vec3(x: 1, y: 0, z: 0), intensity: 2, radius: 1000),   // red×2
-            light(Vec3(x: 0, y: 0, z: 10), Vec3(x: 0, y: 0, z: 1), intensity: 3, radius: 1000),   // blue×3
+            light(Vec3(x: 0, y: 0, z: 10), Vec3(x: 1, y: 0, z: 0), intensity: 2, radius: 1000, exponent: 2),   // red×2
+            light(Vec3(x: 0, y: 0, z: 10), Vec3(x: 0, y: 0, z: 1), intensity: 3, radius: 1000, exponent: 2),   // blue×3
         ], ambient: Vec3(x: 0, y: 0, z: 0), skylight: Vec3(x: 0, y: 0, z: 0))
         let c = SceneLight3D.evaluateLighting(at: SIMD3(0, 0, 0), u)
         XCTAssertEqual(c.x, 2 * 0.9801, accuracy: 1e-3)   // red

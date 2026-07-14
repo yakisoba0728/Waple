@@ -281,13 +281,13 @@ public extension SceneLight3D {
     /// 포워드 라이팅(2D)용 유니폼 — **실물 셰이더 규약** `common_fragment.h::ComputeLight` /
     /// `generic.vert` 소비 형태에 맞춘 별도 팩. 위 `packUniforms` 는 radius 없는 규약 스냅샷(소비처
     /// 없음)이라 감쇠에 못 쓴다 — 이 팩이 실 소비처(QuadShaders f_lit).
-    /// - `positions[i]`: 라이트 월드 위치(프로젝션 픽셀), `.w`=활성(1)/미사용(0).
+    /// - `positions[i]`: 라이트 월드 위치(프로젝션 픽셀), `.w`=유한광 감쇠 exponent.
     /// - `colorRadius[i]`: `rgb = color × intensity`, `w = radius`(선형 감쇠 반경).
     ///   ⚠️ **`color × intensity` 는 직전 라운드 추정 규약** — 셰이더 소스에 C++ 유니폼 피드가 없고
     ///   코퍼스 번역 이펙트 0건이 이 유니폼을 참조해 미확정. 블로아웃(고강도 씬)의 최대 레버(보고 참조).
     /// - `ambientTerm`: flat ambient (genericimage4).
     struct ForwardUniforms: Equatable {
-        public var positions: [SIMD4<Float>]   // xyz=world, w=active
+        public var positions: [SIMD4<Float>]   // xyz=world, w=finite-light exponent
         public var colorRadius: [SIMD4<Float>] // rgb=color×intensity, w=radius
         public var ambientTerm: SIMD3<Float>
         public var count: Int
@@ -304,14 +304,14 @@ public extension SceneLight3D {
         var cr = [SIMD4<Float>](repeating: .zero, count: 4)
         let used = lights.prefix(4)
         for (i, l) in used.enumerated() {
-            pos[i] = SIMD4(l.origin.x, l.origin.y, l.origin.z, 1)
+            pos[i] = SIMD4(l.origin.x, l.origin.y, l.origin.z, l.exponent)
             cr[i] = SIMD4(l.color.x * l.intensity, l.color.y * l.intensity, l.color.z * l.intensity, l.radius)
         }
         let amb = SIMD3(ambient.x, ambient.y, ambient.z)
         return ForwardUniforms(positions: pos, colorRadius: cr, ambientTerm: amb, count: used.count)
     }
 
-    /// 테스트 오라클 — QuadShaders `f_lit` 프래그먼트와 **동일 수식**(감쇠·합산·앰비언트 바닥).
+    /// 테스트 오라클 — QuadShaders `f_lit` 프래그먼트와 **동일 수식**(exponent 감쇠·합산·앰비언트 바닥).
     /// 런타임 미사용(셰이더가 정본). radius≤0 라이트는 기여 0(0나눗셈 회피).
     /// ponytail: 셰이더 정본의 8줄 미러 — 감쇠/합산 유닛 검증 + 손계산 대조용.
     static func evaluateLighting(at world: SIMD3<Float>, _ u: ForwardUniforms,
@@ -324,11 +324,13 @@ public extension SceneLight3D {
             let delta = SIMD3(lp.x, lp.y, lp.z) - world
             let dist = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).squareRoot()
             guard dist > 1e-5 else { continue }
-            let attn = max(0, min(1, (radius - dist) / radius))
+            let falloff = max(0, min(1, 1 - dist / radius))
+            let eps: Float = 6.103515625e-5
+            let attenuation = falloff >= eps ? powf(falloff + eps, lp.w) : 0
             let nd = delta / dist
             let d = max(0, nd.x * normal.x + nd.y * normal.y + nd.z * normal.z)
             let c = SIMD3(u.colorRadius[i].x, u.colorRadius[i].y, u.colorRadius[i].z)
-            light += c * (d * attn * attn)
+            light += c * (d * attenuation)
         }
         return light
     }
