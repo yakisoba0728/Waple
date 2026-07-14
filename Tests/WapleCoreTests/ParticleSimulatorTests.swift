@@ -96,6 +96,110 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(s.size, 3.0, accuracy: 0.15)
     }
 
+    func testChangeIntervalsUseNormalizedLifetime() {
+        let operators: [ParticleOperator] = [
+            .sizeChange(startTime: 0.2, startValue: 0.2, endValue: 0.8, endTime: 0.6),
+            .colorChange(startTime: 0.2,
+                         startValue: Vec3(x: 1, y: 0.5, z: 0.25),
+                         endValue: Vec3(x: 0.2, y: 1, z: 0.75),
+                         endTime: 0.6),
+            .alphaChange(startTime: 0.2, endTime: 0.6, startValue: 1, endValue: 0),
+        ]
+        var short = ParticleSimulator(def: linearDef(velocity: Vec3(x: 0, y: 0, z: 0),
+                                                      lifetime: 10, operators: operators), seed: 7)
+        var long = ParticleSimulator(def: linearDef(velocity: Vec3(x: 0, y: 0, z: 0),
+                                                     lifetime: 20, operators: operators), seed: 7)
+
+        let a = short.step(4)[0]
+        let b = long.step(8)[0]
+        for p in [a, b] {
+            XCTAssertEqual(p.size, 2.5, accuracy: 1e-5)
+            XCTAssertEqual(p.color.x, 0.6, accuracy: 1e-5)
+            XCTAssertEqual(p.color.y, 0.75, accuracy: 1e-5)
+            XCTAssertEqual(p.color.z, 0.5, accuracy: 1e-5)
+            XCTAssertEqual(p.alpha, 0.5, accuracy: 1e-5)
+        }
+    }
+
+    func testChangeEndTimeBeyondLifetimeRemainsIncompleteAtDeath() {
+        let operators: [ParticleOperator] = [
+            .sizeChange(startTime: 0, startValue: 1, endValue: 0, endTime: 2),
+            .colorChange(startTime: 0,
+                         startValue: Vec3(x: 1, y: 1, z: 1),
+                         endValue: Vec3(x: 0, y: 0, z: 0),
+                         endTime: 2),
+            .alphaChange(startTime: 0, endTime: 2, startValue: 1, endValue: 0),
+        ]
+        var sim = ParticleSimulator(def: linearDef(velocity: Vec3(x: 0, y: 0, z: 0),
+                                                    lifetime: 10, operators: operators), seed: 8)
+
+        let p = sim.step(10)[0]
+        XCTAssertEqual(p.size, 2.5, accuracy: 1e-5)
+        XCTAssertEqual(p.color.x, 0.5, accuracy: 1e-5)
+        XCTAssertEqual(p.color.y, 0.5, accuracy: 1e-5)
+        XCTAssertEqual(p.color.z, 0.5, accuracy: 1e-5)
+        XCTAssertEqual(p.alpha, 0.5, accuracy: 1e-5)
+    }
+
+    func testChangeZeroLengthIntervalStepsAtStart() {
+        let operators: [ParticleOperator] = [
+            .sizeChange(startTime: 0.5, startValue: 1, endValue: 0.2, endTime: 0.5),
+            .colorChange(startTime: 0.5,
+                         startValue: Vec3(x: 1, y: 1, z: 1),
+                         endValue: Vec3(x: 0.2, y: 0.3, z: 0.4),
+                         endTime: 0.5),
+            .alphaChange(startTime: 0.5, endTime: 0.5, startValue: 1, endValue: 0.25),
+        ]
+        var sim = ParticleSimulator(def: linearDef(velocity: Vec3(x: 0, y: 0, z: 0),
+                                                    lifetime: 10, operators: operators), seed: 9)
+
+        let before = sim.step(4)[0]
+        XCTAssertEqual(before.size, 5, accuracy: 1e-5)
+        XCTAssertEqual(before.color.x, 1, accuracy: 1e-5)
+        XCTAssertEqual(before.alpha, 1, accuracy: 1e-5)
+
+        let at = sim.step(1)[0]
+        XCTAssertEqual(at.size, 1, accuracy: 1e-5)
+        XCTAssertEqual(at.color.x, 0.2, accuracy: 1e-5)
+        XCTAssertEqual(at.color.y, 0.3, accuracy: 1e-5)
+        XCTAssertEqual(at.color.z, 0.4, accuracy: 1e-5)
+        XCTAssertEqual(at.alpha, 0.25, accuracy: 1e-5)
+    }
+
+    func testChangeReverseIntervalUsesSignedSpan() {
+        let op = ParticleOperator.sizeChange(startTime: 0.8, startValue: 1, endValue: 0, endTime: 0.2)
+        var sim = ParticleSimulator(def: linearDef(velocity: Vec3(x: 0, y: 0, z: 0),
+                                                    lifetime: 10, operators: [op]), seed: 10)
+
+        XCTAssertEqual(sim.step(1)[0].size, 0, accuracy: 1e-5)
+        XCTAssertEqual(sim.step(4)[0].size, 2.5, accuracy: 1e-5)
+        XCTAssertEqual(sim.step(3)[0].size, 5, accuracy: 1e-5)
+    }
+
+    func testMultipleChangeOperatorsMultiplyAllFactors() {
+        let operators: [ParticleOperator] = [
+            .sizeChange(startTime: 0, startValue: 0.5, endValue: 0.5),
+            .sizeChange(startTime: 0, startValue: 0.4, endValue: 0.4),
+            .colorChange(startTime: 0,
+                         startValue: Vec3(x: 0.5, y: 0.8, z: 0.6),
+                         endValue: Vec3(x: 0.5, y: 0.8, z: 0.6)),
+            .colorChange(startTime: 0,
+                         startValue: Vec3(x: 0.4, y: 0.5, z: 0.25),
+                         endValue: Vec3(x: 0.4, y: 0.5, z: 0.25)),
+            .alphaChange(startTime: 0, endTime: 1, startValue: 0.5, endValue: 0.5),
+            .alphaChange(startTime: 0, endTime: 1, startValue: 0.4, endValue: 0.4),
+        ]
+        var sim = ParticleSimulator(def: linearDef(velocity: Vec3(x: 0, y: 0, z: 0),
+                                                    lifetime: 10, operators: operators), seed: 11)
+
+        let p = sim.step(0.01)[0]
+        XCTAssertEqual(p.size, 1, accuracy: 1e-5)
+        XCTAssertEqual(p.color.x, 0.2, accuracy: 1e-5)
+        XCTAssertEqual(p.color.y, 0.4, accuracy: 1e-5)
+        XCTAssertEqual(p.color.z, 0.15, accuracy: 1e-5)
+        XCTAssertEqual(p.alpha, 0.2, accuracy: 1e-5)
+    }
+
     func testDeterministic() {
         let def = linearDef(velocity: Vec3(x: 3, y: 7, z: 0), maxCount: 50)
         var a = ParticleSimulator(def: def, seed: 99)

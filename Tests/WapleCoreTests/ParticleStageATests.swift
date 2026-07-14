@@ -3,7 +3,7 @@ import simd
 @testable import WapleCore
 
 /// Stage A 파티클 연산자/이니셜라이저(실물 스키마 실측 기반):
-/// oscillatesize(크기 진동), alphachange(초 단위 알파 램프 — 长2.json lifetime3/endtime2 로 단위 확정),
+/// oscillatesize(크기 진동), alphachange(수명 비율 알파 램프),
 /// remapvalue(노이즈→velocity 덮어쓰기 / speed 비파괴 배수), colorlist(0..1 색 목록),
 /// instantaneous 버스트 이미터(rate 0 — 현재 0스폰이던 유성/스플래시 계열), sign 방향 클램프.
 final class ParticleStageATests: XCTestCase {
@@ -37,24 +37,24 @@ final class ParticleStageATests: XCTestCase {
         XCTAssertEqual(c[0].size, 2.5, accuracy: 0.01)
     }
 
-    // MARK: - alphachange (초 단위)
+    // MARK: - alphachange (수명 비율)
 
-    func testAlphaChange_rampInSeconds_holdsAfterEnd() {
-        // sv1→ev0, st0, et2(초). lifetime 10 — 정규화가 아니라 초 단위임을 고정.
-        let op = ParticleOperator.alphaChange(startTime: 0, endTime: 2, startValue: 1, endValue: 0)
+    func testAlphaChange_lifetimeRatio_holdsAfterEnd() {
+        // lifetime 10, et=0.2 → age2에서 완료. age1은 t=0.5.
+        let op = ParticleOperator.alphaChange(startTime: 0, endTime: 0.2, startValue: 1, endValue: 0)
         var sim = ParticleSimulator(def: makeDef(lifetime: 10, operators: [op]), seed: 12)
-        let a = sim.step(1.0)   // age1 → t=0.5 → alpha 0.5
+        let a = sim.step(1.0)
         XCTAssertEqual(a[0].alpha, 0.5, accuracy: 0.01)
-        let b = sim.step(1.0)   // age2 → t=1 → 0
+        let b = sim.step(1.0)
         XCTAssertEqual(b[0].alpha, 0, accuracy: 0.01)
-        let c = sim.step(1.0)   // age3 → 끝값 유지
+        let c = sim.step(1.0)
         XCTAssertEqual(c[0].alpha, 0, accuracy: 0.01)
     }
 
     func testAlphaChange_beforeStartHoldsStartValue() {
-        let op = ParticleOperator.alphaChange(startTime: 2, endTime: 4, startValue: 0.8, endValue: 0)
+        let op = ParticleOperator.alphaChange(startTime: 0.2, endTime: 0.4, startValue: 0.8, endValue: 0)
         var sim = ParticleSimulator(def: makeDef(lifetime: 10, operators: [op]), seed: 13)
-        let a = sim.step(1.0)   // age1 < st2 → sv 유지
+        let a = sim.step(1.0)
         XCTAssertEqual(a[0].alpha, 0.8, accuracy: 0.01)
     }
 
@@ -191,8 +191,8 @@ final class ParticleStageATests: XCTestCase {
             if case .oscillateSize(1, 2, 0.2, 0.8, 0, 2) = $0 { return true }; return false
         })
         XCTAssertTrue(def.operators.contains {
-            // 기본값: st0, sv0→ev1 (WE 에디터 관례 추정 — ponytail 천장)
-            if case .alphaChange(0, 2, 0, 1) = $0 { return true }; return false
+            // 비율 2를 원문 그대로 보존하고 누락 값은 네이티브 기본 fade-out 1→0.
+            if case .alphaChange(0, 2, 1, 0) = $0 { return true }; return false
         })
         XCTAssertTrue(def.operators.contains {
             if case let .remapValue(output, fbm, scale) = $0,
