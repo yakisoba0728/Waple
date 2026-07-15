@@ -1105,18 +1105,22 @@ extension SceneDocument {
                 }
                 if let cs = passDict["constantshadervalues"] as? [String: Any] {
                     for (k, v) in cs {
+                        // 스크립트 캡처는 value 언랩보다 먼저 — 스칼라 {value,script} 는 아래 float(v) 의
+                        // {value} 언랩이 dict 를 삼켜 스크립트가 통째로 유실되던 결함(실물 54씬:
+                        // alpha/multiply/audioamount 류. 벡터 "r g b" 만 dict 브랜치에 도달해 생존하던 비대칭).
+                        if let dict = v as? [String: Any], let sc = dict["script"] as? String {
+                            p.constantScripts[k] = sc
+                            // 스크립트가 있을 때만 저장 오버라이드 보존(레이어/텍스트 경로와 동일 규약).
+                            if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { p.constantScriptProps[k] = sp }
+                        }
                         if let f = float(v) { p.constants[k] = [f] }
                         else if let s = v as? String {
                             let f = floatList(s)
                             if !f.isEmpty { p.constants[k] = f }
                         }
                         else if let dict = v as? [String: Any] {
-                            // 바인딩 객체 {script/user/value} — 정적 value 언랩 + 스크립트 캡처(per-frame 평가용).
-                            if let sc = dict["script"] as? String {
-                                p.constantScripts[k] = sc
-                                // 스크립트가 있을 때만 저장 오버라이드 보존(레이어/텍스트 경로와 동일 규약).
-                                if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { p.constantScriptProps[k] = sp }
-                            }
+                            // 바인딩 객체 {script/user/value} 의 정적 value 언랩(스칼라 value 는 위 float(v)
+                            // 가 언랩 — 여기는 "r g b" 벡터 value 만 도달).
                             if let f = float(dict["value"]) { p.constants[k] = [f] }
                             else if let sv = dict["value"] as? String {
                                 let f = floatList(sv)
