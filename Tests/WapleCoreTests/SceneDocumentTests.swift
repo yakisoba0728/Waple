@@ -382,6 +382,54 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(e.passList.first?.constantScripts["color"]?.contains("update") == true, "스크립트 캡처")
     }
 
+    /// 스칼라 효과 상수 {value:<수>, script} — 상류 float 언랩 short-circuit 결함 수정: 스크립트가
+    /// 캡처되고 초기값(정적 value)이 정확해야(실물 audioamount/alpha/multiply 63씬 패턴).
+    func testScalarConstantScriptCaptured() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10",
+           "effects":[{"file":"effects/e.json","passes":[{"constantshadervalues":
+             {"alpha":{"script":"export function update(v){return v*0.5;}","value":0.8}}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let e = try XCTUnwrap(try SceneDocument.parse(package: p).layers.first?.effects.first)
+        XCTAssertEqual(e.constants["alpha"], [0.8], "스칼라 초기값 정확(언랩)")
+        XCTAssertTrue(e.passList.first?.constantScripts["alpha"]?.contains("update") == true,
+                      "스칼라 스크립트 캡처(종전 float 언랩에 삼켜지던 결함)")
+    }
+
+    /// 무회귀: 정적 스칼라 {value} 만(스크립트 없음) → 종전대로 언랩, 스크립트 미기록.
+    func testScalarStaticConstantNoScriptNoRegression() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10",
+           "effects":[{"file":"effects/e.json","passes":[{"constantshadervalues":
+             {"alpha":{"value":0.75},"plain":0.25}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let pass = try XCTUnwrap(try SceneDocument.parse(package: p).layers.first?.effects.first?.passList.first)
+        XCTAssertEqual(pass.constants["alpha"], [0.75], "정적 {value} 언랩")
+        XCTAssertEqual(pass.constants["plain"], [0.25], "평문 스칼라")
+        XCTAssertNil(pass.constantScripts["alpha"], "스크립트 없는 정적 상수는 미기록")
+        XCTAssertNil(pass.constantScripts["plain"], "평문 스칼라도 미기록")
+    }
+
+    /// scriptproperties 오버라이드가 스칼라 상수에도 주입돼야(종전 스칼라는 스크립트째 삼켜져 같이 죽었음).
+    func testScalarConstantScriptPropertiesInjected() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10",
+           "effects":[{"file":"effects/e.json","passes":[{"constantshadervalues":
+             {"multiply":{"script":"export function update(v){return v;}","value":1,
+                          "scriptproperties":{"gain":0.4}}}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let pass = try XCTUnwrap(try SceneDocument.parse(package: p).layers.first?.effects.first?.passList.first)
+        let json = try XCTUnwrap(pass.constantScriptProps["multiply"], "스칼라 scriptproperties 보존")
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual((obj["gain"] as? NSNumber)?.doubleValue ?? 0, 0.4, accuracy: 1e-6)
+    }
+
     /// 퍼펫 모델: model json 의 "puppet" 키가 SceneLayer.puppet 으로 전달돼야(SP6).
     func testPuppetPathParsed() throws {
         let puppetModel = #"{"autosize":true,"material":"materials/m.json","puppet":"models/x_puppet.mdl"}"#
