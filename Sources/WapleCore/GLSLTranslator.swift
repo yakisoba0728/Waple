@@ -1096,6 +1096,7 @@ public enum GLSLTranslator {
 
     static func isEngine(_ name: String) -> Bool {
         name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
+            || name == "g_TexelSize" || name == "g_TexelSizeHalf"
             || name.hasPrefix("g_AudioSpectrum")
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Resolution"))
             || (name.hasPrefix("g_") && name.contains("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder);
@@ -1108,6 +1109,12 @@ public enum GLSLTranslator {
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
         // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
         if name.hasPrefix("g_"), name.contains("Matrix") { return "float4x4(1.0)" }
+        // WE g_TexelSize = 렌더 타깃 1텍셀(UV). EngineU 에 타깃 dims 가 없어 tex0 해상도로 근사 —
+        // 효과 패스는 tex0(framebuffer)=타깃 크기가 통례라 대체로 정확(실물 bokeh 7패스 중 6 정확).
+        // 머티리얼로 오인되면 기본값 (0,0) → 0/0=NaN UV → 검정(3544152633 ×0.4 luma 손실 근원).
+        // ponytail: 스케일드 fbo 에서 타깃≠tex0 인 패스는 tex0 텍셀로 근사 — 타깃 dims 가 EngineU 에 실리면 교체.
+        if name == "g_TexelSize" { return "(1.0 / eng.texRes[0].xy)" }
+        if name == "g_TexelSizeHalf" { return "(0.5 / eng.texRes[0].xy)" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
         if name == "g_AudioSpectrum16Right" { return "audioR" }
         if name == "g_AudioSpectrum32Left" { return "audioL32" }
@@ -1378,7 +1385,8 @@ public enum GLSLTranslator {
         case .material(let i): return "\(materials[i].type.msl) \(materials[i].glslName)"
         case .engine(let n):
             let t = n.contains("Matrix") ? "float4x4"
-                : (n.hasSuffix("Resolution") ? "float4" : (n == "g_PointerPosition" ? "float2" : "float"))
+                : (n.hasSuffix("Resolution") ? "float4"
+                    : (n == "g_PointerPosition" || n == "g_TexelSize" || n == "g_TexelSizeHalf" ? "float2" : "float"))
             return "\(t) \(n)"
         case .varying(let n, let t): return "\(t.msl) \(n)"
         case .attribute(let n, let t): return "\(t.msl) \(n)"

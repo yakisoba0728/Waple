@@ -283,6 +283,44 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("mainImage(c);"), t.msl)
     }
 
+    func testTexelSizeIsEngineUniformNotMaterial() throws {
+        // 실물 bokeh.vert: `uniform vec2 g_TexelSize;` 선언 + `ratio = g_TexelSize * g_Texture0Resolution.xy`.
+        // 머티리얼 파라미터로 오인되면 기본값 (0,0) → ratio.y/ratio.x = 0/0 = NaN → NaN UV 샘플 → 검정
+        // (3544152633 bokeh 패스 ×0.4 luma 손실의 근원). 엔진 유니폼: 타깃 texel 크기 ≈ 1/tex0 해상도.
+        let vert = """
+        uniform vec2 g_TexelSize;
+        uniform vec4 g_Texture0Resolution;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        varying vec2 v_PixelSize;
+        void main() {
+            vec2 ratio = g_TexelSize * g_Texture0Resolution.xy;
+            v_PixelSize = (g_TexelSize + g_TexelSizeHalf) * ratio;
+            gl_Position = vec4(a_Position, 1.0);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        uniform sampler2D g_Texture0;
+        varying vec2 v_TexCoord;
+        varying vec2 v_PixelSize;
+        vec2 texel(int x, int y) {
+            return vec2(x, y) * vec2(1.0 / g_TexelSize.x, 1.0 / g_TexelSize.y);
+        }
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + v_PixelSize + texel(1, 1) * 0.0);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("(1.0 / eng.texRes[0].xy)"), "g_TexelSize → 1/tex0 해상도:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("(0.5 / eng.texRes[0].xy)"), "g_TexelSizeHalf → 0.5/tex0 해상도:\n\(t.msl)")
+        // 헬퍼 캡처 파라미터는 float2 로 선언돼야 한다(실물 contrast_based_sharpness 의
+        // `1./g_TexelSize.x` — float 폴백이면 .x 멤버 참조로 MSL 컴파일 실패).
+        XCTAssertTrue(t.msl.contains("float2 g_TexelSize"), "캡처 파라미터 타입 float2:\n\(t.msl)")
+        XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
+    }
+
     func testHelperCapturesEngineAndMaterial() throws {
         let frag = """
         varying vec2 v_TexCoord;
