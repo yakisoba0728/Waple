@@ -70,6 +70,41 @@ final class SpriteSheetLayerRenderTests: XCTestCase {
         return n > 0 ? (r / n, g / n) : (-1, -1)
     }
 
+    // MARK: 프레임 rect→UV 변환(유닛, Metal 불필요)
+
+    /// spriteFrameTexture 의 아틀라스 서브렉트 추출 규약: (1) 정수 서브렉트 클램프(경계 밖 TEXS 렉트 방어),
+    /// (2) 정규화 rect + v_spriteframe/f_spriteframe 의 텍셀중심 매핑이 dst 픽셀 i → 아틀라스 텍셀 sx+i 로
+    /// 정확히 낙하하는지. 이게 **nearest 추출 = 종전 blit 텍셀 동일(비-BC bit-identical)** 의 근거 —
+    /// half-texel inset 이 불필요한(그리고 있으면 bit-identity 를 깨는) 이유.
+    func testSpriteSubrectAndTexelCenterMapping() {
+        let aw = 3840, ah = 1080
+        // (1) 아틀라스 절대 좌표(frame1 = 우측 절반).
+        let f1 = TexImage.TexFrame(imageId: 0, time: 0.1, x: 1920, y: 0, width: 1920, height: 1080)
+        let r1 = SceneRenderer.spriteSubrect(atlasW: aw, atlasH: ah, frame: f1)
+        XCTAssertEqual([r1.x, r1.y, r1.w, r1.h], [1920, 0, 1920, 1080])
+        // 경계 밖 렉트(x=4000>aw, y 음수): sx/sy 클램프 + fw/fh 축소로 항상 아틀라스 내(추출 크래시 방지).
+        let f2 = TexImage.TexFrame(imageId: 0, time: 0.1, x: 4000, y: -50, width: 500, height: 500)
+        let r2 = SceneRenderer.spriteSubrect(atlasW: aw, atlasH: ah, frame: f2)
+        XCTAssertGreaterThanOrEqual(r2.x, 0); XCTAssertGreaterThanOrEqual(r2.y, 0)
+        XCTAssertLessThanOrEqual(r2.x + r2.w, aw); XCTAssertLessThanOrEqual(r2.y + r2.h, ah)
+
+        // (2) 텍셀중심 매핑: f_spriteframe 이 uv=rect.xy+in.uv*rect.zw(정규화), in.uv 는 v_spriteframe 의
+        //     dst 픽셀중심. nearest 샘플이 아틀라스 텍셀 sx+i 로 떨어지고 경계서 ±0.5 여유(견고성).
+        let (sx, sy, fw, fh) = r1
+        let u0 = Float(sx) / Float(aw), du = Float(fw) / Float(aw)
+        let v0 = Float(sy) / Float(ah), dv = Float(fh) / Float(ah)
+        for i in [0, 1, fw / 2, fw - 1] {
+            let atlasTexel = (u0 + ((Float(i) + 0.5) / Float(fw)) * du) * Float(aw)
+            XCTAssertEqual(Int(atlasTexel.rounded(.down)), sx + i, "dst x=\(i) → 아틀라스 텍셀 sx+i")
+            XCTAssertEqual(atlasTexel - Float(sx + i), 0.5, accuracy: 0.02, "텍셀중심(nearest 경계 여유)")
+        }
+        for j in [0, 1, fh / 2, fh - 1] {
+            let atlasTexel = (v0 + ((Float(j) + 0.5) / Float(fh)) * dv) * Float(ah)
+            XCTAssertEqual(Int(atlasTexel.rounded(.down)), sy + j, "dst y=\(j) → 아틀라스 텍셀 sy+j")
+            XCTAssertEqual(atlasTexel - Float(sy + j), 0.5, accuracy: 0.02)
+        }
+    }
+
     // MARK: 합성(항상 실행)
 
     /// 콤보 씬: t=0 은 프레임0(빨강), t=0.3(>frametime 0.2, total 0.4 내)은 프레임1(초록) → 다름.

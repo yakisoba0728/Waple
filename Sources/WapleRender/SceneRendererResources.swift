@@ -621,7 +621,8 @@ extension SceneRenderer {
                         return stacked
                     }
                     // 단일-이미지 다중프레임 시트는 아틀라스 전체 보존(imgW/imgH 크롭 시 frame≥1 소실 → 흑화).
-                    // keepFullAtlas 는 makeImageTexture 가 네이티브 BC 를 건너뛰고 CPU(스프라이트 blit 소비 대응).
+                    // keepFullAtlas 는 makeImageTexture 가 full decode dims 로 상주(BC 면 네이티브, 비-BC 면 CPU rgba8) —
+                    // spriteFrameTexture 가 f_spriteframe 샘플로 프레임을 뽑으므로 아틀라스가 BC 로 상주해도 무방.
                     if let dec = makeImageTexture(tex: tex, data: d, device: device,
                                                   keepFullAtlas: !multipage && tex.frames.count > 1) {
                         let texture = dec.texture
@@ -830,13 +831,13 @@ extension SceneRenderer {
     /// 씬 이미지 텍스처 1장 → MTLTexture(+dims). BC(DXT)면 네이티브 BC 업로드 시도(supportsBC 게이트 +
     /// WAPLE_BC_NATIVE!=0 킬스위치), 비-BC/멀티페이지/미지원이면 기존 CPU rgba()+makeTexture 폴백.
     /// 반환 dims 는 두 경로 동일(파리티). buildLayers·resolveTextureWithFrames·3D 빌보드 공용.
-    /// keepFullAtlas(스프라이트 아틀라스)는 spriteFrameTexture 가 blit.copy 로 소비 → 네이티브 대상 아님(CPU만).
+    /// keepFullAtlas(스프라이트 아틀라스)도 네이티브 BC 허용 — spriteFrameTexture 가 blit.copy 가 아닌
+    /// f_spriteframe 샘플로 프레임을 뽑으므로 아틀라스가 BC 로 상주해도 무방(전 크롭 금지 위해 nativeBC 에 full dims 요청).
     func makeImageTexture(tex: TexImage, data: Data, device: MTLDevice, keepFullAtlas: Bool = false)
         -> (texture: MTLTexture, width: Int, height: Int)? {
-        if !keepFullAtlas,
-           ProcessInfo.processInfo.environment["WAPLE_BC_NATIVE"] != "0",
+        if ProcessInfo.processInfo.environment["WAPLE_BC_NATIVE"] != "0",
            device.supportsBCTextureCompression,
-           let bc = TexDecoder.nativeBC(from: tex, data: data, properties: variantProperties),
+           let bc = TexDecoder.nativeBC(from: tex, data: data, properties: variantProperties, keepFullAtlas: keepFullAtlas),
            let t = makeBCTexture(bc, device) {
             return (t, bc.width, bc.height)
         }

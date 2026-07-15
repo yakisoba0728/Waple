@@ -572,30 +572,49 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
-    /// 스프라이트시트 레이어(SPRITESHEET 콤보 + TEXS 다중 프레임)의 **현재 프레임**을 프레임 크기
-    /// 텍스처로 추출한다(raw blit). 씬 시간 → 프레임 인덱스 → 아틀라스 서브렉트(멀티페이지는 frame.y 에
-    /// 페이지 오프셋 반영됨)를 새 텍스처로 복사. 이 텍스처가 하류(효과 체인 src, 또는 무효과 시
-    /// displayTexture)가 되어 효과·컴포지트 쿼드는 시트를 모른 채 프레임 1장만 다룬다 — 효과+스프라이트가
-    /// 자연히 맞물린다(그래서 UV-서브렉트-쿼드가 아니라 프레임 추출로 통일). **반드시 raw blit** — 셰이더
-    /// 드로우로 뽑으면 tint/premultiply 가 걸려 straight-alpha 규약(§3, 최종 합성서 1회 premult) 위반.
-    /// ponytail: blit 은 회전 미지원(코퍼스 회전 프레임 0건) + 프레임 dims 균일 가정(가변 시 효과 dst 스트레치,
-    /// 코퍼스 균일). 경계는 엄격 클램프 — 잘못된 TEXS 렉트라도 blit validation 크래시 없이 잘라낸다.
-    func spriteFrameTexture(_ layer: GPULayer, time: Float, device: MTLDevice, cb: MTLCommandBuffer) -> MTLTexture {
-        let atlas = layer.texture
-        let aw = atlas.width, ah = atlas.height
-        let fr = layer.frames[TexImage.spriteFrameIndex(frames: layer.frames, time: time)]
+    /// 스프라이트 프레임의 아틀라스 절대 서브렉트(정수 픽셀, 엄격 클램프). 잘못된 TEXS 렉트도 경계 내로
+    /// 자른다(추출 validation 크래시 방지). 종전 blit 과 동일 규약 — nearest 추출이 이 정수 렉트를
+    /// 텍셀 단위로 재현하도록 rounded→clamp 를 그대로 유지(비-BC bit-identical 근거).
+    static func spriteSubrect(atlasW aw: Int, atlasH ah: Int, frame fr: TexImage.TexFrame) -> (x: Int, y: Int, w: Int, h: Int) {
         let sx = max(0, min(aw - 1, Int(fr.atlasX.rounded())))
         let sy = max(0, min(ah - 1, Int(fr.atlasY.rounded())))
         let fw = max(1, min(aw - sx, Int(fr.atlasWidth.rounded())))
         let fh = max(1, min(ah - sy, Int(fr.atlasHeight.rounded())))
-        guard let dst = pooledOffscreen(fw, fh, device),
-              let blit = cb.makeBlitCommandEncoder() else { return atlas }
-        blit.copy(from: atlas, sourceSlice: 0, sourceLevel: 0,
-                  sourceOrigin: MTLOrigin(x: sx, y: sy, z: 0),
-                  sourceSize: MTLSize(width: fw, height: fh, depth: 1),
-                  to: dst, destinationSlice: 0, destinationLevel: 0,
-                  destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
-        blit.endEncoding()
+        return (sx, sy, fw, fh)
+    }
+
+    /// 스프라이트시트 레이어(SPRITESHEET 콤보 + TEXS 다중 프레임)의 **현재 프레임**을 프레임 크기
+    /// 텍스처로 추출한다(패스스루 샘플 드로우). 씬 시간 → 프레임 인덱스 → 아틀라스 서브렉트(멀티페이지는
+    /// frame.y 에 페이지 오프셋 반영됨)를 프레임크기 dst 로 1:1 복사. 이 텍스처가 하류(효과 체인 src, 또는
+    /// 무효과 시 displayTexture)가 되어 효과·컴포지트 쿼드는 시트를 모른 채 프레임 1장만 다룬다 —
+    /// 효과+스프라이트가 자연히 맞물린다(코퍼스 37씬 중 17씬이 효과+스프라이트라 이 프레임-추출 구조 유지 필수).
+    /// **종전 blit.copy 대체**: blit 은 BC 아틀라스를 CPU rgba8 로 강제했으나(BC→rgba8 blit 무효 → keepFullAtlas
+    /// 폴백), f_spriteframe 샘플은 BC 를 GPU 에서 디코드하므로 아틀라스가 네이티브 BC 로 상주할 수 있다(메모리 절감).
+    /// dst 가 정확히 프레임크기(fw×fh)라 **nearest** 샘플이 dst 픽셀중심 → 아틀라스 텍셀로 1:1 낙하 →
+    /// blit 과 텍셀 동일(비-BC bit-identical). f_spriteframe 은 tint/premultiply 없음 — straight-alpha 규약(§3) 보존.
+    /// ponytail: 회전 미지원(코퍼스 회전 프레임 0건) + 프레임 dims 균일 가정(코퍼스 균일).
+    func spriteFrameTexture(_ layer: GPULayer, time: Float, device: MTLDevice, cb: MTLCommandBuffer) -> MTLTexture {
+        let atlas = layer.texture
+        let aw = atlas.width, ah = atlas.height
+        let fr = layer.frames[TexImage.spriteFrameIndex(frames: layer.frames, time: time)]
+        let (sx, sy, fw, fh) = Self.spriteSubrect(atlasW: aw, atlasH: ah, frame: fr)
+        // 파이프라인/버퍼 부재(빌드 실패) 시 원본 아틀라스 폴백(무크래시 — advisor).
+        guard let pipe = spriteFramePipeline, let vbuf = effectVertexBuffer,
+              let dst = pooledOffscreen(fw, fh, device) else { return atlas }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = dst
+        rpd.colorAttachments[0].loadAction = .dontCare   // 전 픽셀 덮어씀(클리어 불필요)
+        rpd.colorAttachments[0].storeAction = .store
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return atlas }
+        enc.setRenderPipelineState(pipe)
+        enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+        enc.setFragmentTexture(atlas, index: 0)
+        // 정규화 서브렉트 (u0, v0, du, dv) — f_spriteframe 이 uv=rect.xy+in.uv*rect.zw 로 샘플.
+        var rect = SIMD4<Float>(Float(sx) / Float(aw), Float(sy) / Float(ah),
+                                Float(fw) / Float(aw), Float(fh) / Float(ah))
+        enc.setFragmentBytes(&rect, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+        enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        enc.endEncoding()
         return dst
     }
 
