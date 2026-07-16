@@ -63,10 +63,10 @@ final class SpikeOpacityTranslatedTests: XCTestCase {
         // material: p[0] = (alpha=0.5, 0,0,0)
         var p: [SIMD4<Float>] = [SIMD4(0.5, 0, 0, 0)]
         let pbuf = device.makeBuffer(bytes: &p, length: MemoryLayout<SIMD4<Float>>.stride)!
-        // engine: mvp identity(16) + timeAndPad(4) + texRes[8](32). texRes 는 1 로 채워 div0 회피.
-        var eng = [Float](repeating: 0, count: 16 + 4 + 32)
+        // engine: mvp identity(16) + timeAndPad(4) + pointerLastAndPad(4) + texRes[8](32). texRes 는 1 로 채워 div0 회피.
+        var eng = [Float](repeating: 0, count: 16 + 8 + 32)
         eng[0] = 1; eng[5] = 1; eng[10] = 1; eng[15] = 1       // identity
-        for i in 20..<52 { eng[i] = 1 }                         // texRes = 1
+        for i in 24..<56 { eng[i] = 1 }                         // texRes = 1
         let ebuf = device.makeBuffer(bytes: eng, length: MemoryLayout<Float>.stride * eng.count)!
 
         func whiteTex() -> MTLTexture {

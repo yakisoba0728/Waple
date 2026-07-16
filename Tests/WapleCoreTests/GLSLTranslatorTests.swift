@@ -337,6 +337,43 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
     }
 
+    func testFrametimeAndPointerLastAreEngineUniforms() throws {
+        // 실물 fluidsim/cursorripple: bare g_Frametime(dt 시간적분) + g_PointerPositionLast(이전 프레임 포인터).
+        // 머티리얼-0 고정이면 시간적분 동결/유령 링플. ★두 유니폼은 짝 — dt 없이 last 만 주면 발산.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform float g_Frametime;
+        uniform vec2 g_PointerPositionLast;
+        void main() {
+            vec2 d = (g_PointerPosition - g_PointerPositionLast) * g_Frametime;
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + d);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("eng.timeAndPad.w"), "g_Frametime → dt 슬롯:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("eng.pointerLastAndPad.xy"), "g_PointerPositionLast → 히스토리 슬롯:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float4 pointerLastAndPad;"), "EngineU 에 히스토리 필드:\n\(t.msl)")
+        XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
+    }
+
+    func testFrametimeHelperCaptureTypedFloat() throws {
+        // 헬퍼 캡처 파라미터 타입: g_Frametime=float, g_PointerPositionLast/g_ParallaxPosition=float2
+        // (float 폴백이면 .x 멤버 참조 컴파일 실패 — g_TexelSize 와 동일 클래스).
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        vec2 drift() { return g_PointerPositionLast * g_Frametime + g_ParallaxPosition.yx * 0.0; }
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + drift());
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float2 g_PointerPositionLast"), "캡처 파라미터 float2:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float2 g_ParallaxPosition"), "캡처 파라미터 float2:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float g_Frametime"), "캡처 파라미터 float:\n\(t.msl)")
+    }
+
     func testHelperCapturesEngineAndMaterial() throws {
         let frag = """
         varying vec2 v_TexCoord;

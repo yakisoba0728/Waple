@@ -505,6 +505,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     let parallax = ParallaxController()
     /// WE 포인터 UV(0..1, 상단 원점). 마우스 미구동/헤드리스 = 중앙(0.5,0.5).
     var pointerUV = SIMD2<Float>(0.5, 0.5)
+    /// 직전 draw 프레임의 포인터 UV(g_PointerPositionLast — cursorripple 이전 위치). draw 종료 시 이월.
+    var pointerUVLast = SIMD2<Float>(0.5, 0.5)
+    /// 현재 프레임 dt 초(g_Frametime — fluidsim 시간적분). draw 가 갱신, 캡처는 1/30 고정(결정적).
+    var frameDT: Float = 0
     /// cursorMove 훅 보유 씬만 이동 이벤트 배달(마운트 시 캐시 — 매 마우스무브 스캔 회피).
     var hasCursorMoveHook = false
     var lastCursorMoveAt: CFAbsoluteTime = 0
@@ -999,6 +1003,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let time = Float(nowT - startTime)
         var dt = Float(nowT - lastFrameTime); lastFrameTime = nowT
         dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
+        frameDT = dt  // g_Frametime(효과 유니폼) — 이번 프레임 전 패스 공용
+        // g_PointerPositionLast: 이번 프레임 인코딩이 쓴 포인터를 함수 종료 시 다음 프레임의 '직전'으로 이월
+        // (이후의 인코딩 실패 조기 return 포함. 이 지점 앞 가드 return(가림 등)은 프레임 자체가 없어 미이월 —
+        // 히스토리는 '마지막으로 그린 프레임'의 포인터를 유지).
+        defer { pointerUVLast = pointerUV }
 
         // 애니메이션 이벤트 마커(라이브 재생 전용): 일시정지 중엔 발화 금지 —
         // pause() 후에도 needsDisplay 재드로(호버/리사이즈)가 여길 지나므로 명시 가드.
@@ -1095,6 +1104,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 비디오 레이어는 이제 일반 레이어로 합성된다(스왑 아님) — buildDisplayTextures 가 각 time 의
         // 비디오 프레임(헤드리스=AVAssetImageGenerator@scene-time, 결정적)을 형제 레이어와 함께 렌더한다.
         guard let device, let queue, pipeline != nil, let target = makeOffscreenBGRA(width, height, device) else { return [] }
+        frameDT = 1.0 / 30.0  // g_Frametime: 캡처는 시뮬 스텝과 동일 고정 dt(결정적 — 라이브 dt 오염 차단)
         // 3D 씬: 메시 + 빌보드 패스(뎁스). per-frame 스크립트 평가로 각 time 마다 갱신(궤도/인트로 애니).
         if is3D {
             // 파티클 캡처는 라이브 sim 상태를 건드리지 않고 프레시(clock=0)에서 0→t 를 재현한다(감사 I1: 라이브
