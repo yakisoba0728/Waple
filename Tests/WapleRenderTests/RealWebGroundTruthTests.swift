@@ -160,12 +160,13 @@ final class RealWebGroundTruthTests: XCTestCase {
 
     /// 실물 웹 배경(2830814490, 엔트리에 <video muted autoplay loop src='./pv.webm'>)의 실제
     /// DOM <video> 에 프로덕션 경로(renderer.pause/resume → __wapleSetPaused → hard pause
-    /// controller)로 HTMLMediaElement 하드정지를 검증. 실측 제약: WKURLSchemeHandler 경유
-    /// 미디어는 소스 선택이 실패해(networkState=NO_SOURCE, webm MIME 미등록 + Range 미지원)
-    /// 재생 프레임/currentTime 전진은 이 환경에서 관측 불가 — HTMLMediaElement 의 paused
-    /// 속성은 소스와 무관하게 play()/pause() 로 동기 전이(스펙)하므로 실물 DOM 에 play() 를
-    /// 걸어 정지→유지→재개 의미론을 채점하고, currentTime 동결/전진 검증은
-    /// WebHardPauseTests(src 없는 미디어 유닛)와 동일 근거에 위임한다.
+    /// controller)로 HTMLMediaElement 하드정지를 검증. 실측 제약(2026-07-16 정정): 창에 안 붙은
+    /// 비가시 페이지는 WebKit 이 미디어 데이터 로딩 자체를 유예해(networkState=NO_SOURCE 대기,
+    /// fetch 미발행 — 스킴 응답의 MIME/Range 와 무관) 재생 프레임/currentTime 전진은 이 창 없는
+    /// 환경에서 관측 불가 — HTMLMediaElement 의 paused 속성은 소스와 무관하게 play()/pause() 로
+    /// 동기 전이(스펙)하므로 실물 DOM 에 play() 를 걸어 정지→유지→재개 의미론을 채점하고,
+    /// currentTime 동결/전진 검증은 WebHardPauseTests(src 없는 미디어 유닛)와 동일 근거에 위임한다.
+    /// 창 부착 시 실로드는 testRealWebVideoLoadsViaSchemeWhenWindowAttached 가 검증한다.
     func testRealWebHardPauseFreezesVideoElementWhenAvailable() throws {
         let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
             ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
@@ -216,9 +217,59 @@ final class RealWebGroundTruthTests: XCTestCase {
         }, "resume must replay the real-page <video> Waple paused")
     }
 
-    private func loadAndProbe(project: WallpaperProject) throws -> (ok: Bool, last: String, web: WKWebView, renderer: WebRenderer) {
+    /// 실물 <video>(pv.webm)가 waple-asset 스킴 경유로 소스 선택·디코드까지 성공하는지 실측.
+    /// 헤드리스 실측 정리(2026-07-16): WebKit 은 창에 안 붙은(비가시 페이지) WKWebView 의 미디어
+    /// 데이터 로딩을 유예한다 — fetch 미발행 + networkState=NO_SOURCE(3)/err=0 대기가 그 증상으로,
+    /// 스킴 응답 형태와 무관했다(A/B: octet-stream·Content-Length 없음·Range 무시도 창 부착 시
+    /// ready=4 재생 성공). 따라서 이 프로브는 실배포 조건처럼 창에 부착해 관측하고, 스킴 응답의
+    /// MIME/206 정확성 게이트는 WallpaperSchemeHandler 유닛·FakeSchemeTask 통합 테스트가 진다.
+    func testRealWebVideoLoadsViaSchemeWhenWindowAttached() throws {
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
+        let folder = URL(fileURLWithPath: base, isDirectory: true).appendingPathComponent("2830814490", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("project.json").path) else {
+            throw XCTSkip("no video-bearing real web wallpaper")
+        }
+        let project = try ProjectJSONParser.parse(folderURL: folder)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        let result = try loadAndProbe(project: project, container: window.contentView)
+        defer { result.renderer.teardown() }
+        XCTAssertTrue(result.ok, "\(project.id): mount probe=\(result.last)")
+        let web = result.web
+
+        let probe = """
+        (function () {
+          var v = document.querySelector('video');
+          if (!v) { return 'no-video'; }
+          return JSON.stringify({ network: v.networkState, ready: v.readyState,
+                                  err: v.error ? v.error.code : 0 });
+        })()
+        """
+        var last = "", network = -1, ready = -1, err = -1
+        let deadline = Date(timeIntervalSinceNow: 15)
+        while Date() < deadline {
+            last = pumpEvalJS(web, probe) as? String ?? "?"
+            if let data = last.data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                network = obj["network"] as? Int ?? -1
+                ready = obj["ready"] as? Int ?? -1
+                err = obj["err"] as? Int ?? -1
+            }
+            if ready >= 2 { break }  // HAVE_CURRENT_DATA: 소스 선택 + webm 디코드 프레임까지 확정
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        }
+        NSLog("%@", "[WapleWebVideoProbe] \(project.id): network=\(network) ready=\(ready) err=\(err) raw=\(last)")
+        XCTAssertNotEqual(network, 3, "<video> must escape NO_SOURCE via scheme serving; last=\(last)")
+        XCTAssertEqual(err, 0, "<video> must not carry a media error; last=\(last)")
+        XCTAssertGreaterThanOrEqual(ready, 2, "webm must reach HAVE_CURRENT_DATA (decoded frame); last=\(last)")
+    }
+
+    private func loadAndProbe(project: WallpaperProject, container: NSView? = nil) throws -> (ok: Bool, last: String, web: WKWebView, renderer: WebRenderer) {
         let r = WebRenderer(mode: .web)
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
+        let container = container ?? NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
         do { try r.mount(in: container, project: project) } catch { throw error }
         guard let web = container.subviews.compactMap({ $0 as? WKWebView }).first else {
             return (false, "missing-webview", WKWebView(), r)

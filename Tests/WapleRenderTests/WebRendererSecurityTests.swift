@@ -162,6 +162,86 @@ final class WebRendererSecurityTests: XCTestCase {
         XCTAssertGreaterThan(task.dataEventCount, 1)
     }
 
+    /// <video> 미디어 로더는 Range 요청을 보낸다 — 206 + Content-Range + 해당 바이트만 응답해야
+    /// 소스 선택이 성공한다(전체 200 만 주면 networkState=NO_SOURCE 로 로드 실패).
+    func testSchemeHandlerServesPartialContentForRangeRequest() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("waple-web-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let payload = Data((0..<100_000).map { UInt8($0 % 251) })  // 위치 판별 가능한 패턴
+        try payload.write(to: root.appendingPathComponent("pv.webm"))
+
+        let handler = WallpaperSchemeHandler(rootURL: root)
+        let task = FakeSchemeTask(url: URL(string: "waple-asset://wallpaper/pv.webm")!, range: "bytes=1000-1999")
+        handler.webView(WKWebView(), start: task)
+        waitForTask(task)
+
+        XCTAssertEqual(task.statusCode, 206)
+        XCTAssertEqual(task.receivedData, payload.subdata(in: 1000..<2000))
+        XCTAssertEqual(task.responseHeaders["Content-Type"], "video/webm")
+        XCTAssertEqual(task.responseHeaders["Content-Range"], "bytes 1000-1999/100000")
+        XCTAssertEqual(task.responseHeaders["Content-Length"], "1000")
+        XCTAssertEqual(task.responseHeaders["Accept-Ranges"], "bytes")
+    }
+
+    /// 첫 프로브가 흔히 보내는 open-ended Range(bytes=0-)도 206 전체로 서빙돼야 한다.
+    func testSchemeHandlerServesOpenEndedRange() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("waple-web-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let payload = Data(repeating: 0x42, count: 5_000)
+        try payload.write(to: root.appendingPathComponent("pv.webm"))
+
+        let handler = WallpaperSchemeHandler(rootURL: root)
+        let task = FakeSchemeTask(url: URL(string: "waple-asset://wallpaper/pv.webm")!, range: "bytes=0-")
+        handler.webView(WKWebView(), start: task)
+        waitForTask(task)
+
+        XCTAssertEqual(task.statusCode, 206)
+        XCTAssertEqual(task.receivedData, payload)
+        XCTAssertEqual(task.responseHeaders["Content-Range"], "bytes 0-4999/5000")
+    }
+
+    /// 무회귀: Range 없는 요청(정적 에셋 경로)은 종전대로 200 전체 — 이제 Content-Length 도 정확해야 한다.
+    func testSchemeHandlerFullResponseWithoutRangeUnchanged() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("waple-web-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let payload = Data(repeating: 0x41, count: 12_345)
+        try payload.write(to: root.appendingPathComponent("app.js"))
+
+        let handler = WallpaperSchemeHandler(rootURL: root)
+        let task = FakeSchemeTask(url: URL(string: "waple-asset://wallpaper/app.js")!)
+        handler.webView(WKWebView(), start: task)
+        waitForTask(task)
+
+        XCTAssertEqual(task.statusCode, 200)
+        XCTAssertEqual(task.receivedData, payload)
+        XCTAssertEqual(task.responseHeaders["Content-Length"], "12345")
+        XCTAssertEqual(task.responseHeaders["Accept-Ranges"], "bytes")
+    }
+
+    /// 파일 끝 이후에서 시작하는 Range 는 416 + 빈 바디.
+    func testSchemeHandlerRejectsUnsatisfiableRange() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("waple-web-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        try Data(repeating: 0x41, count: 100).write(to: root.appendingPathComponent("pv.webm"))
+
+        let handler = WallpaperSchemeHandler(rootURL: root)
+        let task = FakeSchemeTask(url: URL(string: "waple-asset://wallpaper/pv.webm")!, range: "bytes=100-")
+        handler.webView(WKWebView(), start: task)
+        waitForTask(task)
+
+        XCTAssertEqual(task.statusCode, 416)
+        XCTAssertEqual(task.receivedData, Data())
+        XCTAssertEqual(task.responseHeaders["Content-Range"], "bytes */100")
+    }
+
     private func makeWebProject(html: String, extraFiles: [String: String] = [:]) throws -> URL {
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("waple-web-\(UUID().uuidString)", isDirectory: true)
@@ -201,8 +281,10 @@ private final class FakeSchemeTask: NSObject, WKURLSchemeTask {
         } ?? [:]
     }
 
-    init(url: URL) {
-        self.request = URLRequest(url: url)
+    init(url: URL, range: String? = nil) {
+        var request = URLRequest(url: url)
+        if let range { request.setValue(range, forHTTPHeaderField: "Range") }
+        self.request = request
         super.init()
     }
 
