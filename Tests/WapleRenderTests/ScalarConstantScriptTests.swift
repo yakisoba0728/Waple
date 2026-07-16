@@ -112,11 +112,14 @@ final class ScalarConstantScriptTests: XCTestCase {
     /// 가드: 스칼라-스크립트 없는 효과 씬 3종(벡터-스크립트 3146703458 / 정적만 3299228616·3538758087,
     /// scene.json 정밀 스캔 기준) 의 파스 산출(constants·constantScripts·constantScriptProps) 이 수정 전후 불변.
     /// expected 는 base HEAD(74defee) 캡처 SHA-256 — fix 실행이 동일하면 무회귀 증명.
+    /// 2026-07-16 리베이스: P0 배치 9bad33d 중 0662e0b(parseNode shape:quad 이펙트 승격)가 두 씬의
+    /// shape:quad 오브젝트("Light shafts" 6개/1개)에 달린 lightshafts 효과를 신규 파스 — a4c678b↔9bad33d
+    /// 덤프 diff 로 순수 삽입(기존 라인 무변형·instanceoverride 무영향·이후 P1 무영향) 검증 후 갱신.
     func testEffectSceneParseUnchangedGuard() throws {
         let expected: [String: String] = [
             "3146703458": "e1ad41a0a7f45f1dc0271b62614e52764296481c11ccec9fe5a82d6fc23ab839",  // 벡터-스크립트 6패스
-            "3299228616": "c03791b63669966a1f56f57b91853e4d339d9b4b73253a2c485dc6e2ad19c4f3",  // 정적 97패스
-            "3538758087": "71299678df7c171d37d31d503aae1f6fb4a0a43bed29770d3297e135ccf0dc3c",  // 정적 101패스
+            "3299228616": "61e18d9f418d0b7763ad91ad315d5052c00d2b91baaa24f2009c5a3bd9359f30",  // 정적 97→103패스(0662e0b lightshafts ×6 승격)
+            "3538758087": "4eb46e7aee91dd98f35920ec7df5b983a432fde08a08887e1da4e554ab0d4adf",  // 정적 101→102패스(0662e0b lightshafts ×1 승격)
         ]
         for (sid, want) in expected.sorted(by: { $0.key < $1.key }) {
             let doc = try parseScene(sid)
