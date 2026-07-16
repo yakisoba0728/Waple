@@ -644,7 +644,8 @@ extension SceneDocument {
             assets: assets,
             sharedAssetProbe: sharedAssetProbe,
             missingRequiredAsset: missingRequiredAsset,
-            userProps: userProps
+            userProps: userProps,
+            instance: obj["instance"] as? [String: Any]
         ) else {
             return nil  // 사유별 로그는 resolveLayerTexture 내부에서.
         }
@@ -1039,7 +1040,8 @@ extension SceneDocument {
         assets: ((String) -> Data?)? = nil,
         sharedAssetProbe: ((String) -> SharedAssetProbeResult)? = nil,
         missingRequiredAsset: (() -> Void)? = nil,
-        userProps: [String: Any] = [:]
+        userProps: [String: Any] = [:],
+        instance: [String: Any]? = nil
     ) -> LayerTexture? {
         func requiredData(_ name: String) -> Data? {
             if let data = package.data(for: name) {
@@ -1082,6 +1084,25 @@ extension SceneDocument {
         if let userTextures = pass0["usertextures"] as? [Any] {
             for (slot, rawUserKey) in userTextures.enumerated() {
                 guard let userKey = rawUserKey as? String,
+                      let override = userProps[userKey] as? String,
+                      !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                while textures.count <= slot { textures.append(NSNull()) }
+                textures[slot] = override
+            }
+        }
+        // P1 solid_instance: 레이어 obj 의 instance{textures,usertextures} 가 base material 슬롯을
+        // 치환(실측 53씬/324오브젝트 — base 는 전건 util/white 라 미병합 시 실텍스처가 흰 솔리드로 소실).
+        // usertextures 항목은 평문 문자열 키 또는 {name,type} 딕셔너리(usershortcut/system) — name 이
+        // userProps 키. 설정된 유저 값이 instance.textures 보다 우선(위 material usertextures 와 동일 규약).
+        // instance.combos 는 실측 전건 {"version":2} 로 파스 계층 소비처 없음 — 스킵.
+        if let instance {
+            for (slot, raw) in ((instance["textures"] as? [Any]) ?? []).enumerated() {
+                guard let name = raw as? String, !name.isEmpty else { continue }
+                while textures.count <= slot { textures.append(NSNull()) }
+                textures[slot] = name
+            }
+            for (slot, raw) in ((instance["usertextures"] as? [Any]) ?? []).enumerated() {
+                guard let userKey = (raw as? String) ?? ((raw as? [String: Any])?["name"] as? String),
                       let override = userProps[userKey] as? String,
                       !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
                 while textures.count <= slot { textures.append(NSNull()) }

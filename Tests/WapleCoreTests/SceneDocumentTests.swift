@@ -324,6 +324,59 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.layers[0].textureEntryName, "materials/util/white.tex")
     }
 
+    /// P1 solid_instance: 레이어 obj 의 instance.textures 가 base material 슬롯(전건 util/white)을
+    /// 치환해야 한다(실측 53씬/324오브젝트 — 미병합 시 흰 솔리드/공백). instance 부재 시 base 유지는
+    /// 위 testInstanceMaterialFromAssetsResolvesTexture 가 커버(무회귀).
+    func testInstanceBlockTexturesReplaceBaseMaterialSlot() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/solid_instance_model_x.json","origin":"960 540 0","size":"256 256",
+                     "visible":{"value":true},
+                     "instance":{"combos":{"version":2},"id":7,"textures":["photo1"]}}]}
+        """
+        let p = try pkg([
+            ("scene.json", scene),
+            ("models/solid_instance_model_x.json", #"{"instanced":true,"material":"materials/util/solidlayer_instance.json","solidlayer":true}"#),
+            ("materials/photo1.tex", "tex"),
+        ])
+        let assets: [String: String] = [
+            "materials/util/solidlayer_instance.json": #"{"passes":[{"shader":"genericimage2","textures":["util/white"]}]}"#,
+        ]
+        let doc = try SceneDocument.parse(package: p, assets: { assets[$0].map { Data($0.utf8) } })
+        XCTAssertEqual(doc.layers.count, 1)
+        XCTAssertEqual(doc.layers[0].textureEntryName, "materials/photo1.tex")
+    }
+
+    /// instance.usertextures 는 {name,type} 딕셔너리(실측 usershortcut 164/system 22)와 평문 문자열
+    /// (실측 14) 두 형태 — name 이 userProps 키. 값 설정 시 instance.textures 보다 우선, 미설정 슬롯은
+    /// instance.textures 유지.
+    func testInstanceUserTexturesOverrideInstanceTextures() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"image":"models/solid_instance_model_x.json","origin":"1 1 0","size":"8 8","visible":{"value":true},
+            "instance":{"textures":["photo1"],"usertextures":[{"name":"launcher1","type":"usershortcut"}]}},
+           {"image":"models/solid_instance_model_x.json","origin":"2 2 0","size":"8 8","visible":{"value":true},
+            "instance":{"textures":["photo1"],"usertextures":["plainkey"]}},
+           {"image":"models/solid_instance_model_x.json","origin":"3 3 0","size":"8 8","visible":{"value":true},
+            "instance":{"textures":["photo1"],"usertextures":[{"name":"unsetkey","type":"usershortcut"}]}}]}
+        """
+        let p = try pkg([
+            ("scene.json", scene),
+            ("models/solid_instance_model_x.json", #"{"instanced":true,"material":"materials/util/solidlayer_instance.json","solidlayer":true}"#),
+            ("materials/photo1.tex", "tex"),
+        ])
+        let assets: [String: String] = [
+            "materials/util/solidlayer_instance.json": #"{"passes":[{"shader":"genericimage2","textures":["util/white"]}]}"#,
+        ]
+        let doc = try SceneDocument.parse(package: p, assets: { assets[$0].map { Data($0.utf8) } },
+                                          userProps: ["launcher1": "/tmp/icon1.png", "plainkey": "/tmp/icon2.png"])
+        XCTAssertEqual(doc.layers.count, 3)
+        XCTAssertEqual(doc.layers[0].textureEntryName, "/tmp/icon1.png", "딕셔너리형 usertexture 오버라이드")
+        XCTAssertEqual(doc.layers[1].textureEntryName, "/tmp/icon2.png", "문자열형 usertexture 오버라이드")
+        XCTAssertEqual(doc.layers[2].textureEntryName, "materials/photo1.tex", "미설정 키 → instance.textures 유지")
+    }
+
     /// _rt_ 텍스처(프레임버퍼 참조) → isFrameBuffer 레이어. fullscreen 모델은 size 지정과 무관하게
     /// 프로젝션 전체를 덮는다(origin 중앙).
     func testFrameBufferTextureLayerParsed() throws {
