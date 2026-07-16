@@ -101,8 +101,21 @@ public struct Model3D: Equatable {
         public var events: [AnimationMarker] = []
     }
 
+    /// 부착점(MDAT0001 섹션) — 씬 오브젝트의 `attachment` 키가 **이름으로** 참조하는 본-슬롯.
+    /// 실물 본 이름은 대개 빈 문자열이라 본은 **인덱스**로 바인딩된다(코퍼스 28씬/47 mdl 전수 실측).
+    public struct Attachment: Equatable {
+        public let name: String            // 씬 `attachment` 가 참조하는 이름("头"/"Attachment" 등)
+        public let bone: Int32             // MDLS 본 인덱스
+        public let local: simd_float4x4    // 본-로컬 부착 변환(모델공간 y-up, 실측: 평행이동 위주)
+        public init(name: String, bone: Int32, local: simd_float4x4) {
+            self.name = name; self.bone = bone; self.local = local
+        }
+    }
+
     public let meshes: [Mesh]
     public var bones: [Bone] = []
+    /// MDAT0001 부착점(스켈레톤 트레일러 뒤·MDLA 앞). 없으면 빈 배열(무부착).
+    public var attachments: [Attachment] = []
     /// MDLA0006 애니 섹션 존재 여부(매직 탐지 — animations 가 비어도 마커는 true).
     public var hasAnimation: Bool = false
     /// 파스된 애니메이션(순서 = 파일 순서). 렌더러가 animationlayers 로 활성 애니를 선택.
@@ -292,6 +305,12 @@ public struct Model3D: Equatable {
             }
         }
 
+        // 부착점 섹션(MDAT0001) — 스켈레톤 트레일러 뒤·MDLA 앞(실측: attachment 28씬 47 mdl 전수).
+        // 씬 오브젝트 `attachment`(이름 본-슬롯 부착)의 슬롯 정의. 실패/부재는 빈 배열(무부착 폴백).
+        if !model.bones.isEmpty, let mi = findMagic("MDAT0001", in: bytes, from: o) {
+            model.attachments = parseAttachments(bytes: bytes, at: mi, boneCount: model.bones.count)
+        }
+
         // 애니 섹션(MDLA000N) — 스켈레톤 유무와 무관하게 메시 끝 이후 탐색(스키닝 모델만 존재).
         // 버전별 매직: 0016→MDLA0003, 0017→0004, 0019→0005, 0023→0006(실측). 헤더·레코드 레이아웃은
         // 전 버전 동일(36B 키, 코퍼스 전수 트레이스 일치) — 숫자만 다르니 접두 스캔으로 통합.
@@ -302,6 +321,37 @@ public struct Model3D: Equatable {
         }
 
         return model
+    }
+
+    /// MDAT0001 부착점 파스. 레이아웃(실측 7씬 다중 엔트리 정렬 전수 일치):
+    /// "MDAT0001" | u8 0 | u32 nextOff | u16 count | count×(u16 본인덱스 | cstring 이름(UTF-8) | 64B float4x4 로컬).
+    /// 구조 불일치(본 인덱스 범위 밖 포함)는 빈 배열 — 추측 파스로 이상 부착을 만드느니 무부착이 낫다.
+    static func parseAttachments(bytes: [UInt8], at magicOff: Int, boneCount: Int) -> [Attachment] {
+        func u16(_ o: Int) -> Int? {
+            guard o >= 0, o + 2 <= bytes.count else { return nil }
+            return Int(bytes[o]) | (Int(bytes[o + 1]) << 8)
+        }
+        func f32(_ o: Int) -> Float? { readU32LE(bytes, at: o).map { Float(bitPattern: $0) } }
+        var p = magicOff + 8 + 1 + 4   // magic + u8(0) + u32 nextOff
+        guard let count = u16(p), count > 0, count < 1000 else { return [] }
+        p += 2
+        var out: [Attachment] = []
+        out.reserveCapacity(count)
+        for _ in 0..<count {
+            guard let bone = u16(p), bone < boneCount,
+                  let name = readCString(bytes, at: p + 2) else { return [] }
+            p = name.next
+            var cols: [SIMD4<Float>] = []
+            for c in 0..<4 {
+                guard let x = f32(p + c * 16), let y = f32(p + c * 16 + 4),
+                      let z = f32(p + c * 16 + 8), let w = f32(p + c * 16 + 12) else { return [] }
+                cols.append(SIMD4(x, y, z, w))
+            }
+            p += 64
+            out.append(Attachment(name: name.value, bone: Int32(bone),
+                                  local: simd_float4x4(cols[0], cols[1], cols[2], cols[3])))
+        }
+        return out
     }
 
     private static let animModes: Set<String> = ["loop", "single", "mirror", "clamp"]

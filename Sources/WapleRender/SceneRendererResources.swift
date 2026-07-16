@@ -132,6 +132,8 @@ extension SceneRenderer {
     func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice, sceneID: String) -> [GPULayer] {
         let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
         var out: [GPULayer] = []
+        // attachment 자식들이 공유하는 부모 퍼펫 캐시(경로→파스 결과, 실패도 캐시 — 재파스 방지).
+        var attachPuppets: [String: PuppetModel?] = [:]
         for (uid, layer) in doc.layers.enumerated() {
             // 솔리드 마커(""): 무텍스처 flat 머티리얼 → 흰색 1x1 — 기존 tint 경로(color×brightness, alpha)가 필을 만든다.
             // 컴포지션(_rt_) 레이어: 텍스처는 런타임 스냅샷 — 여기선 placeholder + 효과 dims 를 프로젝션으로 근사
@@ -250,6 +252,28 @@ extension SceneRenderer {
                     if e.hasUpdate { hasAnimations = true }
                 }
             }
+            // attachment(이름 본-슬롯 부착): 부모 레이어의 퍼펫 모델에서 부착점(MDAT)을 찾아 스펙 구성.
+            // 부모/퍼펫/부착점 어느 하나라도 부재 → nil = 무부착 폴백(기존 베이크 위치 그대로 — 무회귀·무크래시).
+            var attach: SceneRenderer.PuppetAttach? = nil
+            if let attName = layer.attachment, let pid = layer.parent,
+               let parentDef = doc.layers.first(where: { $0.id == pid }), let pp = parentDef.puppet {
+                let pm: PuppetModel?
+                if let cached = attachPuppets[pp] {
+                    pm = cached
+                } else {
+                    pm = quietAssetData(pp, package: package).flatMap { PuppetModel.parse($0) }
+                    attachPuppets[pp] = pm
+                }
+                if let pm, pm.attachments.contains(where: { $0.name == attName }) {
+                    attach = SceneRenderer.PuppetAttach(
+                        model: pm, name: attName,
+                        parentOrigin: SIMD2(parentDef.origin.x, parentDef.origin.y),
+                        parentScale: SIMD2(parentDef.scale.x, parentDef.scale.y),
+                        parentAngle: parentDef.angleZ,
+                        parentLayers: parentDef.animationLayers)
+                    if !pm.animations.isEmpty { hasAnimations = true }  // 본 애니 추종 = 연속 리드로
+                }
+            }
             // 포워드 라이팅 대상 게이트(좁게): 씬 라이트(forwardLit) + LIGHTING:1 콤보 + 일반 이미지
             // 레이어만(퍼펫/컴포지션/colorBlend 는 별도 특수 경로라 제외 → 무회귀). base litRect 산출,
             // 애니 레이어는 encodeLayer 가 per-frame 재계산.
@@ -265,7 +289,8 @@ extension SceneRenderer {
                                 order: layer.order, uid: uid,
                                 blendAdditive: layer.blendMode == "additive",
                                 isFrameBuffer: layer.isFrameBuffer,
-                                def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty) ? nil : layer,
+                                def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty
+                                      && attach == nil) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 initialVisible: layer.initialVisible,
                                 colorBlendMode: layer.colorBlendMode, frames: frames,
@@ -274,7 +299,7 @@ extension SceneRenderer {
                                     scalars: SIMD4(layer.roughness, layer.metallic, 0, 0),
                                     specularTint: SIMD4(layer.specularTint.x, layer.specularTint.y,
                                                         layer.specularTint.z, 0)),
-                                litRect: lrect, video: videoLayer))
+                                litRect: lrect, video: videoLayer, attach: attach))
         }
         return out
     }

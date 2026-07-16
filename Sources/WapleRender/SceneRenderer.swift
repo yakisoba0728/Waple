@@ -10,7 +10,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var scalars: SIMD4<Float>       // x=roughness, y=metallic
         var specularTint: SIMD4<Float>  // xyz=specular tint
     }
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
+    /// attachment(이름 본-슬롯 부착) 스펙: 부모 퍼펫 모델 + 부착점 이름 + 부모 월드 정적 변환(베이크값 —
+    /// 씬 델타 켤레 D = P∘(Y·A·Y)∘P⁻¹ 용) + 부모 animationlayers(부모 렌더와 포즈 클록 일치).
+    struct PuppetAttach {
+        let model: PuppetModel
+        let name: String
+        let parentOrigin: SIMD2<Float>
+        let parentScale: SIMD2<Float>
+        let parentAngle: Float
+        let parentLayers: [AnimationLayer]
+    }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
     var hasAnimations = false
     struct GPUParticleSystem {
         var sim: ParticleSimulator

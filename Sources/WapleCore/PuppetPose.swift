@@ -100,25 +100,25 @@ public enum PuppetPose {
         return min(max(fallback, 0), count - 1)
     }
 
-    /// 다층 animationlayers 캐스케이드 블렌드 스킨 행렬(순수). `layers` 순서 = 합성 순서.
-    /// 각 본 로컬은 bind 에서 시작해 레이어 순차 합성:
-    ///   - 절대(additive=false): `local = lerp(local, clip, weight)` — 캐스케이드(첫 절대·weight=1 = 그 클립).
-    ///   - 가산(additive=true):  `local = (clip × clipFrame0⁻¹) × local` — 델타 합성(기준=클립 프레임0).
-    /// 이후 부모체인 world → `skin = world × bindWorld⁻¹`(skinMatrices 와 동일).
-    /// 단일 절대 레이어 weight=1 → `skinMatrices(animation:)` 와 동일(= 단층 무회귀 보장).
-    /// ⚠️ 가산 델타 기준(클립 프레임0)·정규화·성분 lerp 는 WE C++ 내부 규약의 근사 — SP 리포트 참조.
-    public static func blendedSkinMatrices(model: PuppetModel,
-                                           layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
-                                           time: Float) -> [simd_float4x4] {
-        let n = model.bones.count
-        guard n > 0, !layers.isEmpty else {
-            return [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
-        }
-        var bindWorld = [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
+    /// 본별 바인드 월드(부모 체인 합성) — 스킨/부착점 공용.
+    static func bindWorlds(_ model: PuppetModel) -> [simd_float4x4] {
+        var bw = [simd_float4x4](repeating: matrix_identity_float4x4, count: model.bones.count)
         for (i, b) in model.bones.enumerated() {
             let p = Int(b.parent)
-            bindWorld[i] = (b.parent >= 0 && p < i) ? bindWorld[p] * b.bind : b.bind
+            bw[i] = (b.parent >= 0 && p < i) ? bw[p] * b.bind : b.bind
         }
+        return bw
+    }
+
+    /// 본 월드 행렬(모델공간 — 스킨의 bindWorld⁻¹ 곱 이전). layers 캐스케이드 규약은
+    /// blendedSkinMatrices 와 동일, 빈 layers = 바인드 포즈. 부착점(attachment) 프레임 산출용.
+    static func worldMatrices(model: PuppetModel,
+                              layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
+                              time: Float) -> [simd_float4x4] {
+        let n = model.bones.count
+        guard n > 0 else { return [] }
+        let bind = bindWorlds(model)
+        guard !layers.isEmpty else { return bind }
         // 레이어별 프레임(자기 클립의 fps/mode/length + rate 배속).
         let frames: [Float] = layers.map { L in
             guard L.anim >= 0, L.anim < model.animations.count else { return 0 }
@@ -144,7 +144,40 @@ public enum PuppetPose {
             let p = Int(b.parent)
             world[i] = (b.parent >= 0 && p < i) ? world[p] * local : local
         }
+        return world
+    }
+
+    /// 다층 animationlayers 캐스케이드 블렌드 스킨 행렬(순수). `layers` 순서 = 합성 순서.
+    /// 각 본 로컬은 bind 에서 시작해 레이어 순차 합성:
+    ///   - 절대(additive=false): `local = lerp(local, clip, weight)` — 캐스케이드(첫 절대·weight=1 = 그 클립).
+    ///   - 가산(additive=true):  `local = (clip × clipFrame0⁻¹) × local` — 델타 합성(기준=클립 프레임0).
+    /// 이후 부모체인 world → `skin = world × bindWorld⁻¹`(skinMatrices 와 동일).
+    /// 단일 절대 레이어 weight=1 → `skinMatrices(animation:)` 와 동일(= 단층 무회귀 보장).
+    /// ⚠️ 가산 델타 기준(클립 프레임0)·정규화·성분 lerp 는 WE C++ 내부 규약의 근사 — SP 리포트 참조.
+    public static func blendedSkinMatrices(model: PuppetModel,
+                                           layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
+                                           time: Float) -> [simd_float4x4] {
+        let n = model.bones.count
+        guard n > 0, !layers.isEmpty else {
+            return [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
+        }
+        let world = worldMatrices(model: model, layers: layers, time: time)
+        let bindWorld = bindWorlds(model)
         return (0..<n).map { world[$0] * bindWorld[$0].inverse }
+    }
+
+    /// 부착점 프레임(퍼펫 모델공간 y-up): `boneWorld(t) × attLocal` — 씬 오브젝트 `attachment`
+    /// (이름 본-슬롯 부착)의 시변 부모 프레임. 이름 미존재/본 인덱스 범위 밖 → nil(무부착 폴백).
+    /// 빈 layers 는 **첫 클립 재생**으로 폴백 — encodeLayer 부모 퍼펫의 단일 경로
+    /// `skinMatrices(animation: 0)` 과 포즈 클록을 일치시킨다(단일 절대 weight=1 캐스케이드 ≡ 클립 0).
+    public static func attachmentFrame(model: PuppetModel, name: String,
+                                       layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
+                                       time: Float) -> simd_float4x4? {
+        guard let att = model.attachments.first(where: { $0.name == name }),
+              att.bone >= 0, Int(att.bone) < model.bones.count else { return nil }
+        let L = (layers.isEmpty && !model.animations.isEmpty)
+            ? [(anim: 0, additive: false, weight: Float(1), rate: Float(1))] : layers
+        return worldMatrices(model: model, layers: L, time: time)[Int(att.bone)] * att.local
     }
 
     /// CPU 스키닝: p' = Σ wᵏ · skin[idxᵏ] · p. 가중치 합 0 → 원위치.
