@@ -1031,7 +1031,11 @@ extension SceneDocument {
     /// children[] 링크는 재귀 리졸브(순환/깊이 4 가드) — 자식도 자체 material 포함 완전한 def.
     private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage,
                                       initialVisible: Bool) -> SceneParticle? {
-        guard let def = parseParticleDef(path, package: package, visited: [path]) else {
+        // instanceoverride(인스턴스 모디파이어): 프리셋 def 에 배수/CP 대체를 적용해 인스턴스별 다양화
+        // (실측 127씬/866건). 종전 통째 드롭 — 재사용 프리셋 전 인스턴스가 동일 기본값으로 렌더됐다.
+        let override = particleInstanceOverride(obj["instanceoverride"])
+        guard let def = parseParticleDef(path, package: package, visited: [path],
+                                         instanceOverride: override) else {
             WapleLog.warn("[Waple] SP4 particle load failed: \(path)")
             return nil
         }
@@ -1047,8 +1051,10 @@ extension SceneDocument {
         return p
     }
 
+    /// instanceOverride 는 루트 def 에만 적용(자식 children 재귀에는 비전파 — 보수 규약).
     private static func parseParticleDef(_ path: String, package: ScenePackage,
-                                         visited: Set<String>) -> ParticleSystemDef? {
+                                         visited: Set<String>,
+                                         instanceOverride: ParticleInstanceOverride? = nil) -> ParticleSystemDef? {
         guard let pData = package.data(for: path),
               let pjson = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any] else {
             return nil
@@ -1058,13 +1064,43 @@ extension SceneDocument {
            let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any] {
             material = ParticleMaterial.parse(mjson)
         }
-        return ParticleSystemDef.parse(pjson, material: material) { childPath in
+        return ParticleSystemDef.parse(pjson, material: material, instanceOverride: instanceOverride) { childPath in
             guard !visited.contains(childPath), visited.count < 4 else {
                 WapleLog.warn("[Waple] particle child cycle/depth cap, dropped: \(childPath)")
                 return nil
             }
             return parseParticleDef(childPath, package: package, visited: visited.union([childPath]))
         }
+    }
+
+    /// scene object "instanceoverride" 블록 → 타입드 오버라이드. 실측 값 형태(코퍼스 127씬/866건):
+    /// 숫자 | {user,value}/{animation,value} 바인딩(float()/vec3() 언랩) | "r g b" 문자열(colorn/
+    /// controlpointN). 색 배수는 colorn(0..1) × brightness(스칼라) × color(0..255 → /255) 합성.
+    /// id 는 인스턴스 식별자(미적용), controlpointangleN 은 실코퍼스 전건 0 — 스킵. 유효 필드 없으면 nil.
+    private static func particleInstanceOverride(_ raw: Any?) -> ParticleInstanceOverride? {
+        guard let io = raw as? [String: Any], !io.isEmpty else { return nil }
+        var ov = ParticleInstanceOverride()
+        ov.count = float(io["count"])
+        ov.rate = float(io["rate"])
+        ov.size = float(io["size"])
+        ov.alpha = float(io["alpha"])
+        ov.speed = float(io["speed"])
+        ov.lifetime = float(io["lifetime"])
+        var colorMul: Vec3? = nil
+        if let c = vec3(io["colorn"]) { colorMul = c }
+        if let b = float(io["brightness"]) {
+            let m = colorMul ?? Vec3(x: 1, y: 1, z: 1)
+            colorMul = Vec3(x: m.x * b, y: m.y * b, z: m.z * b)
+        }
+        if let c = vec3(io["color"]) {  // 0..255 표기(실측 1건) — 정규화 후 합성
+            let m = colorMul ?? Vec3(x: 1, y: 1, z: 1)
+            colorMul = Vec3(x: m.x * c.x / 255, y: m.y * c.y / 255, z: m.z * c.z / 255)
+        }
+        ov.colorMultiplier = colorMul
+        for i in 0..<8 {
+            if let v = vec3(io["controlpoint\(i)"]) { ov.controlPoints[i] = v }
+        }
+        return ov.isEmpty ? nil : ov
     }
 
     /// 프로퍼티 스크립트의 저장 `scriptproperties`(사용자 오버라이드)를 JSON 문자열로 직렬화. {user,value}
