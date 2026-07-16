@@ -158,6 +158,64 @@ final class RealWebGroundTruthTests: XCTestCase {
                        "resume must remove the CSS freeze class")
     }
 
+    /// 실물 웹 배경(2830814490, 엔트리에 <video muted autoplay loop src='./pv.webm'>)의 실제
+    /// DOM <video> 에 프로덕션 경로(renderer.pause/resume → __wapleSetPaused → hard pause
+    /// controller)로 HTMLMediaElement 하드정지를 검증. 실측 제약: WKURLSchemeHandler 경유
+    /// 미디어는 소스 선택이 실패해(networkState=NO_SOURCE, webm MIME 미등록 + Range 미지원)
+    /// 재생 프레임/currentTime 전진은 이 환경에서 관측 불가 — HTMLMediaElement 의 paused
+    /// 속성은 소스와 무관하게 play()/pause() 로 동기 전이(스펙)하므로 실물 DOM 에 play() 를
+    /// 걸어 정지→유지→재개 의미론을 채점하고, currentTime 동결/전진 검증은
+    /// WebHardPauseTests(src 없는 미디어 유닛)와 동일 근거에 위임한다.
+    func testRealWebHardPauseFreezesVideoElementWhenAvailable() throws {
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
+        let folder = URL(fileURLWithPath: base, isDirectory: true).appendingPathComponent("2830814490", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: folder.appendingPathComponent("project.json").path) else {
+            throw XCTSkip("no video-bearing real web wallpaper")
+        }
+        let project = try ProjectJSONParser.parse(folderURL: folder)
+        let result = try loadAndProbe(project: project)
+        defer { result.renderer.teardown() }
+        XCTAssertTrue(result.ok, "\(project.id): mount probe=\(result.last)")
+        let web = result.web
+
+        func waitUntil(_ timeout: TimeInterval = 5, _ predicate: () -> Bool) -> Bool {
+            let deadline = Date(timeIntervalSinceNow: timeout)
+            while Date() < deadline {
+                if predicate() { return true }
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+            }
+            return predicate()
+        }
+
+        // 실물 DOM 의 <video> 를 재생 상태로 만든다(소스 로드 실패 환경에서도 paused 는 false 로 전이).
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, """
+            (function () {
+              var v = document.querySelector('video');
+              if (!v) { return false; }
+              if (v.paused) { v.play().catch(function () {}); }
+              return !v.paused;
+            })()
+            """) as? Bool == true
+        }, "real page <video> must report playing before the freeze test")
+
+        result.renderer.pause()
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "document.querySelector('video').paused") as? Bool == true
+        }, "production pause path must pause the playing real-page <video>")
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.30))
+        XCTAssertEqual(
+            pumpEvalJS(web, "document.querySelector('video').paused") as? Bool, true,
+            "real-page <video> must stay paused for the whole hard pause"
+        )
+
+        result.renderer.resume()
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "document.querySelector('video').paused") as? Bool == false
+        }, "resume must replay the real-page <video> Waple paused")
+    }
+
     private func loadAndProbe(project: WallpaperProject) throws -> (ok: Bool, last: String, web: WKWebView, renderer: WebRenderer) {
         let r = WebRenderer(mode: .web)
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
