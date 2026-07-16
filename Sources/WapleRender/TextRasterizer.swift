@@ -16,20 +16,81 @@ public enum TextRasterizer {
 
     /// - fontData: pkg/base-assets 의 .otf/.ttf 바이트(전역 등록 없이 디스크립터로 생성).
     /// - systemFontName: "systemfont_arial" 류의 이름 매핑(없거나 실패 시 시스템 폰트).
-    public static func render(text: String, fontData: Data?, systemFontName: String?, pointSize: Float) -> Raster? {
+    /// - maxWidth: "Limit width" 워드랩 폭(래스터 px = WE 로컬 px — 실물 maxwidth 스크립트가 화면폭을
+    ///   scale 로 나눠 전달). nil = 무제한(기존 경로 그대로 — 무회귀).
+    /// - maxRows: "Limit rows" 최대 행수(초과 행 잘림). nil = 무제한.
+    /// - ellipsis: "Overflow ellipsis" — 행 잘림 시 마지막 행에 U+2026(maxWidth 초과 시 끝을 잘라 삽입).
+    /// - justify: "Justify text"(blockalign) — 문단 중간 워드랩 줄을 maxWidth 로 양쪽 정렬.
+    /// - align: 블록 내 행 정렬(horizontalalign) — 멀티라인만 적용(단일 행은 종전 x=1 그대로).
+    public static func render(text: String, fontData: Data?, systemFontName: String?, pointSize: Float,
+                              maxWidth: Float? = nil, maxRows: Int? = nil,
+                              ellipsis: Bool = false, justify: Bool = false,
+                              align: String = "left") -> Raster? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, pointSize.isFinite, pointSize > 0, pointSize <= maxPointSize else { return nil }
         let font = makeFont(fontData: fontData, systemFontName: systemFontName,
                             pointSize: CGFloat(pointSize) * weRenderDPI / 72)
         let white = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
-        // `\n` 마다 줄 분리 → 줄별 CTLine. (단일 CTLine 은 `\n` 을 제로폭 글리프로 뭉개 한 줄로 붕괴시킨다.)
-        let lines = text.components(separatedBy: "\n").map { s in
-            CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: white]))
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: white]
+
+        // ── 행 구성: maxWidth(limitwidth) 시 CTTypesetter 워드랩(UAX#14: 공백 단어 경계·CJK 문자 경계,
+        //    폭 초과 단어는 내부 강제 분리, `\n` 은 강제 개행). 아니면 기존 `\n` 분리 그대로(무회귀).
+        //    (단일 CTLine 은 `\n` 을 제로폭 글리프로 뭉개 한 줄로 붕괴시킨다.)
+        var rows: [String]
+        var midParagraph: [Bool]   // justify 대상(문단 마지막·잘린 끝 행 제외)
+        if let mw = maxWidth, mw.isFinite, mw >= 1 {
+            let ns = text as NSString
+            let ts = CTTypesetterCreateWithAttributedString(NSAttributedString(string: text, attributes: attrs))
+            rows = []; midParagraph = []
+            var start = 0
+            while start < ns.length {
+                let count = CTTypesetterSuggestLineBreak(ts, start, Double(mw))
+                guard count > 0 else { break }   // 방어(규약상 ≥1 클러스터)
+                var piece = ns.substring(with: NSRange(location: start, length: count))
+                let hard = piece.hasSuffix("\n")
+                if hard { piece.removeLast() }
+                rows.append(piece)
+                start += count
+                midParagraph.append(!hard && start < ns.length)
+            }
+        } else {
+            rows = text.components(separatedBy: "\n")
+            midParagraph = Array(repeating: false, count: rows.count)
         }
+
+        // ── 행 제한(limitrows): 초과 행 잘림 + (ellipsis) 마지막 행에 U+2026.
+        var clipped = false
+        if let mr = maxRows, mr > 0, rows.count > mr {
+            rows.removeLast(rows.count - mr)
+            midParagraph.removeLast(midParagraph.count - mr)
+            midParagraph[midParagraph.count - 1] = false   // 잘린 끝 행은 justify 스트레치 제외
+            clipped = true
+        }
+
+        var lines = rows.map {
+            CTLineCreateWithAttributedString(NSAttributedString(string: $0, attributes: attrs))
+        }
+        if clipped, ellipsis, let lastRow = rows.last {
+            let cand = CTLineCreateWithAttributedString(
+                NSAttributedString(string: lastRow + "\u{2026}", attributes: attrs))
+            if let mw = maxWidth, CTLineGetTypographicBounds(cand, nil, nil, nil) > Double(mw) {
+                let token = CTLineCreateWithAttributedString(NSAttributedString(string: "\u{2026}", attributes: attrs))
+                lines[lines.count - 1] = CTLineCreateTruncatedLine(cand, Double(mw), .end, token) ?? cand
+            } else {
+                lines[lines.count - 1] = cand
+            }
+        }
+        if justify, let mw = maxWidth, mw >= 1 {
+            for i in lines.indices where midParagraph[i] {
+                lines[i] = CTLineCreateJustifiedLine(lines[i], 1.0, Double(mw)) ?? lines[i]
+            }
+        }
+
         // 줄 높이는 폰트 메트릭(빈 줄도 한 행 차지) — 폭은 줄별 실측 최대치.
         let ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font), leading = CTFontGetLeading(font)
         let lineH = ceil(ascent + descent + leading)
-        let maxW = lines.map { CTLineGetTypographicBounds($0, nil, nil, nil) }.max() ?? 0
+        let widths = lines.map { CTLineGetTypographicBounds($0, nil, nil, nil) }
+        let maxW = widths.max() ?? 0
         guard ascent.isFinite, descent.isFinite, lineH.isFinite, lineH > 0, maxW.isFinite else { return nil }
         let rawW = ceil(maxW)
         let rawH = lineH * CGFloat(lines.count)
@@ -44,7 +105,8 @@ public enum TextRasterizer {
             let scale = 8192.0 / Double(max(w, h))
             let reduced = pointSize * Float(min(0.95, scale))
             guard reduced > 0, reduced < pointSize else { return nil }
-            return render(text: text, fontData: fontData, systemFontName: systemFontName, pointSize: reduced)
+            return render(text: text, fontData: fontData, systemFontName: systemFontName, pointSize: reduced,
+                          maxWidth: maxWidth, maxRows: maxRows, ellipsis: ellipsis, justify: justify, align: align)
         }
         var pixels = Data(count: w * h * 4)
         let ok = pixels.withUnsafeMutableBytes { ptr -> Bool in
@@ -54,7 +116,17 @@ public enum TextRasterizer {
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
             // 하단원점 컨텍스트: 첫 줄을 위(높은 y)에 그린다 → 마지막 전체 상하반전으로 텍스처 규약(row0=top) 정합.
             for (i, line) in lines.enumerated() {
-                ctx.textPosition = CGPoint(x: 1, y: CGFloat(h) - 1 - ascent - CGFloat(i) * lineH)
+                // 멀티라인 블록 내 행 정렬(horizontalalign) — 단일 행은 종전 x=1 그대로(무회귀).
+                var x: CGFloat = 1
+                if lines.count > 1 {
+                    let lw = CGFloat(widths[i])
+                    switch align {
+                    case "center": x = (CGFloat(w) - lw) / 2
+                    case "right": x = CGFloat(w) - 1 - lw
+                    default: break
+                    }
+                }
+                ctx.textPosition = CGPoint(x: x, y: CGFloat(h) - 1 - ascent - CGFloat(i) * lineH)
                 CTLineDraw(line, ctx)
             }
             // premultiplied → straight (흰색 글리프라 rgb=alpha; 255 로 통일해 tint 가 온전히 색을 결정)

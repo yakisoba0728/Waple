@@ -728,6 +728,43 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.texts[1].script, "return v;")
     }
 
+    /// P2: 텍스트 limit 필드(WE 에디터 라벨 실측: Limit width/Max width/Limit rows/Max rows/
+    /// Overflow ellipsis/Justify text=blockalign) — 체크 시에만 유효값, 미체크/부재는 nil=무제한(무회귀).
+    func testParsesTextLimitFields() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"text":"L","limitwidth":true,"maxwidth":390.0,"limitrows":true,"maxrows":2,
+            "limituseellipsis":true,"blockalign":true,"origin":"0 0 0","visible":true},
+           {"text":"U","limitwidth":false,"maxwidth":500.0,"limitrows":false,"maxrows":1,
+            "limituseellipsis":false,"blockalign":false,"origin":"0 0 0","visible":true},
+           {"text":"D","origin":"0 0 0","visible":true},
+           {"text":"B","limitwidth":true,"maxwidth":{"user":"p","value":260.0},"limitrows":true,
+            "origin":"0 0 0","visible":true}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.texts.count, 4)
+        let l = doc.texts[0]
+        XCTAssertEqual(l.maxWidth, 390)
+        XCTAssertEqual(l.maxRows, 2)
+        XCTAssertTrue(l.overflowEllipsis)
+        XCTAssertTrue(l.justify)
+        let u = doc.texts[1]
+        XCTAssertNil(u.maxWidth, "limitwidth=false 면 maxwidth 무시")
+        XCTAssertNil(u.maxRows, "limitrows=false 면 maxrows 무시")
+        XCTAssertFalse(u.overflowEllipsis)
+        XCTAssertFalse(u.justify)
+        let d = doc.texts[2]
+        XCTAssertNil(d.maxWidth, "부재 시 무제한(무회귀)")
+        XCTAssertNil(d.maxRows)
+        XCTAssertFalse(d.overflowEllipsis)
+        XCTAssertFalse(d.justify)
+        let b = doc.texts[3]
+        XCTAssertEqual(b.maxWidth, 260, "바인딩 dict maxwidth 는 {value} 언랩(실물 32건)")
+        XCTAssertEqual(b.maxRows, 1, "maxrows 부재 시 실측 기본 1")
+    }
+
     /// 콘텐츠 키가 JSON null(NSNull) 인 오브젝트(실물 21오브젝트) — 트랜스폼-온리 노드로 계층 보존.
     func testNSNullContentKeyPreservesNode() throws {
         let scene = """
