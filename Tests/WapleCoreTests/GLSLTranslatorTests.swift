@@ -321,6 +321,76 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
     }
 
+    func testParallaxPositionIsEngineUniformNotMaterial() throws {
+        // 실물 depthparallax: bare `uniform vec2 g_ParallaxPosition;` — 머티리얼로 오인되면
+        // 기본값 (0,0) 영구고정 → 시차 왜곡/중앙정지 실패. 엔진 유니폼: 포인터 UV alias.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform vec2 g_ParallaxPosition;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + g_ParallaxPosition * 0.01);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("eng.timeAndPad.yz"), "g_ParallaxPosition → 포인터 슬롯 alias:\n\(t.msl)")
+        XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
+    }
+
+    func testFrametimeAndPointerLastAreEngineUniforms() throws {
+        // 실물 fluidsim/cursorripple: bare g_Frametime(dt 시간적분) + g_PointerPositionLast(이전 프레임 포인터).
+        // 머티리얼-0 고정이면 시간적분 동결/유령 링플. ★두 유니폼은 짝 — dt 없이 last 만 주면 발산.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform float g_Frametime;
+        uniform vec2 g_PointerPositionLast;
+        void main() {
+            vec2 d = (g_PointerPosition - g_PointerPositionLast) * g_Frametime;
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + d);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("eng.timeAndPad.w"), "g_Frametime → dt 슬롯:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("eng.pointerLastAndPad.xy"), "g_PointerPositionLast → 히스토리 슬롯:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float4 pointerLastAndPad;"), "EngineU 에 히스토리 필드:\n\(t.msl)")
+        XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
+    }
+
+    func testFrametimeHelperCaptureTypedFloat() throws {
+        // 헬퍼 캡처 파라미터 타입: g_Frametime=float, g_PointerPositionLast/g_ParallaxPosition=float2
+        // (float 폴백이면 .x 멤버 참조 컴파일 실패 — g_TexelSize 와 동일 클래스).
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        vec2 drift() { return g_PointerPositionLast * g_Frametime + g_ParallaxPosition.yx * 0.0; }
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + drift());
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float2 g_PointerPositionLast"), "캡처 파라미터 float2:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float2 g_ParallaxPosition"), "캡처 파라미터 float2:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float g_Frametime"), "캡처 파라미터 float:\n\(t.msl)")
+    }
+
+    func testTextureReductionScaleNeutralDefaultOne() throws {
+        // 실물 blend.vert:75 TRANSFORMUV: `... / g_TextureReductionScale` — bare 선언이 기본값 0 이면
+        // ÷0 NaN(+skew ×0 no-op). 엔진 주입값은 아니지만 중립값은 1.0(항등 배율).
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform vec2 g_TextureReductionScale;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord / g_TextureReductionScale);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        let p = try XCTUnwrap(t.materialParams.first(where: { $0.glslName == "g_TextureReductionScale" }),
+                              "머티리얼 파라미터 유지(엔진 승격 아님): \(t.materialParams.map(\.glslName))")
+        XCTAssertEqual(p.defaultValue, [1.0, 1.0], "중립값 1.0(0=÷0 NaN)")
+    }
+
     func testHelperCapturesEngineAndMaterial() throws {
         let frag = """
         varying vec2 v_TexCoord;

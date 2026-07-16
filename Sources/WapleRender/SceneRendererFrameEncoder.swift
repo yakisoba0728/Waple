@@ -30,14 +30,17 @@ final class DynamicVertexBuffer {
 }
 
 extension SceneRenderer {
-    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,0,0,0) + texRes[8](슬롯별 실제 dims).
+    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,pointer,dt) + pointerLastAndPad + texRes[8](슬롯별 실제 dims).
+    /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
     func engineUniform(time: Float, texRes: [SIMD4<Float>]) -> [Float] {
-        var e = [Float](repeating: 0, count: 16 + 4 + 32)
+        var e = [Float](repeating: 0, count: 16 + 8 + 32)
         e[0] = 1; e[5] = 1; e[10] = 1; e[15] = 1   // identity mvp
-        e[16] = time; e[17] = pointerUV.x; e[18] = pointerUV.y  // timeAndPad = (time, pointerX, pointerY, 0)
+        e[16] = time; e[17] = pointerUV.x; e[18] = pointerUV.y  // timeAndPad = (time, pointerX, pointerY, dt)
+        e[19] = frameDT                                          // g_Frametime
+        e[20] = pointerUVLast.x; e[21] = pointerUVLast.y         // g_PointerPositionLast
         for n in 0..<8 {
             let r = n < texRes.count ? texRes[n] : SIMD4<Float>(1, 1, 1, 1)
-            let o = 20 + n * 4
+            let o = 24 + n * 4
             e[o] = r.x; e[o + 1] = r.y; e[o + 2] = r.z; e[o + 3] = r.w
         }
         return e
