@@ -321,6 +321,53 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
     }
 
+    func testTextureNTexelIsEngineUniformNotMaterial() throws {
+        // g_TexelSize 동족(텍스처별 텍셀 크기, 실물 downsample_quarter.vert `a_TexCoord ± g_Texture0Texel.xy*2`).
+        // 머티리얼 오인 시 (0,0,0,0) → 커널 오프셋 0 = 블러/다운샘플 무력화. WE 규약 vec4 = (1/w, 1/h, w, h) —
+        // 모프 코드(model_vertex_v1.h `% morphTexel.z`)가 .zw(=dims)를 쓰므로 vec4 전체 치환이어야 한다.
+        // g_Texture4Texel 은 선언 없이 본문만(실물 fluidsimulation_combine — 선언이 공용 헤더인 패턴):
+        // bodyIds 인식 + 헬퍼 캡처 + 팬텀 텍스처 슬롯 가드를 함께 검증.
+        let vert = """
+        uniform vec4 g_Texture0Texel;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        varying vec2 v_Dims;
+        void main() {
+            gl_Position = vec4(a_Position, 1.0);
+            v_TexCoord = a_TexCoord + g_Texture0Texel.xy * 2.0;
+            v_Dims = g_Texture0Texel.zw;
+        }
+        """
+        let frag = """
+        uniform sampler2D g_Texture0;
+        uniform vec4 g_Texture1Texel;
+        varying vec2 v_TexCoord;
+        varying vec2 v_Dims;
+        vec2 shadowStep(float s) {
+            return g_Texture4Texel.xy * s;
+        }
+        void main() {
+            vec2 halfTexel = g_Texture1Texel * 0.5;
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord + halfTexel + shadowStep(2.0)) + vec4(v_Dims, 0.0, 0.0);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        // vec4 전체 치환: xy = 1/dims(텍셀), zw = dims.
+        XCTAssertTrue(t.msl.contains("float4(1.0 / eng.texRes[0].xy, eng.texRes[0].xy)"),
+                      "g_Texture0Texel → texRes[0] vec4 치환:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float4(1.0 / eng.texRes[4].xy, eng.texRes[4].xy)"),
+                      "g_Texture4Texel(본문만) → texRes[4] vec4 치환:\n\(t.msl)")
+        // 헬퍼 캡처 파라미터 float4(float 폴백이면 .xy 멤버 참조로 MSL 컴파일 실패).
+        XCTAssertTrue(t.msl.contains("float4 g_Texture4Texel"), "캡처 파라미터 타입 float4:\n\(t.msl)")
+        // sizeEnv 컴포넌트 4: vec2 = vec4*스칼라 혼합을 타입어댑터가 절단(.xy)해야 MSL 유효.
+        XCTAssertTrue(t.msl.contains("(float4(1.0 / eng.texRes[1].xy, eng.texRes[1].xy) * 0.5).xy"),
+                      "sizeEnv=4 → 절단 삽입:\n\(t.msl)")
+        XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
+        // 팬텀 텍스처 슬롯 금지: Texel 토큰이 textureIndex 본문 스캔에 잡히면 [0,1,4] 로 오염된다.
+        XCTAssertEqual(t.textureSlots, [0], "팬텀 슬롯 금지: \(t.textureSlots)")
+    }
+
     func testParallaxPositionIsEngineUniformNotMaterial() throws {
         // 실물 depthparallax: bare `uniform vec2 g_ParallaxPosition;` — 머티리얼로 오인되면
         // 기본값 (0,0) 영구고정 → 시차 왜곡/중앙정지 실패. 엔진 유니폼: 포인터 UV alias.

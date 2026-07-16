@@ -155,7 +155,8 @@ public enum GLSLTranslator {
         let bodyIds = identifiers(in: vClean).union(identifiers(in: fClean))
         for id in bodyIds {
             if id.contains("AudioSpectrum") { usesAudio = true }
-            if id.hasPrefix("g_Texture"), !id.hasSuffix("Resolution"), let n = textureIndex(id) { textures.append(n) }
+            // Texel 가드: textureIndex("g_Texture6Texel")=6 — 엔진 유니폼 토큰이 팬텀 텍스처 슬롯으로 등록되는 것 방지.
+            if id.hasPrefix("g_Texture"), !id.hasSuffix("Resolution"), !id.hasSuffix("Texel"), let n = textureIndex(id) { textures.append(n) }
         }
         textures = Array(Set(textures)).sorted()
 
@@ -198,7 +199,7 @@ public enum GLSLTranslator {
                                               "a_TexCoord": 2, "a_Position": 3]
         for vy in varyings { overloadSizeEnv[vy.name] = vy.type.components }
         for m in materials { overloadSizeEnv[m.glslName] = m.type.components }
-        for id in bodyIds where isEngine(id) && id.hasSuffix("Resolution") { overloadSizeEnv[id] = 4 }
+        for id in bodyIds where isEngine(id) && (id.hasSuffix("Resolution") || id.hasSuffix("Texel")) { overloadSizeEnv[id] = 4 }
         var vertexOverloadSizeEnv = overloadSizeEnv
         for (name, type) in vVaryingTypes where type.components > 0 { vertexOverloadSizeEnv[name] = type.components }
         vFns = rewriteSameStageOverloads(vFns, baseEnv: vertexOverloadSizeEnv)
@@ -283,7 +284,7 @@ public enum GLSLTranslator {
                                       "a_TexCoord": 2, "a_Position": 3]
         for vy in varyings { sizeEnv[vy.name] = vy.type.components }
         for m in materials { sizeEnv[m.glslName] = m.type.components }
-        for id in bodyIds where isEngine(id) && id.hasSuffix("Resolution") { sizeEnv[id] = 4 }
+        for id in bodyIds where isEngine(id) && (id.hasSuffix("Resolution") || id.hasSuffix("Texel")) { sizeEnv[id] = 4 }
         var fnSizes: [String: Int] = [:]
         var fnParamSizes: [String: [Int]] = [:]
         for h in helpers {
@@ -1104,6 +1105,7 @@ public enum GLSLTranslator {
             // g_Lights*/g_L{Point,Spot,...}_* 배열형은 parseUniforms [N] 스트립과 충돌. 표적 등재만.
             || name.hasPrefix("g_AudioSpectrum")
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Resolution"))
+            || (name.hasPrefix("g_Texture") && name.hasSuffix("Texel"))  // g_TextureNTexel — g_TexelSize 동족(텍스처별 텍셀)
             || (name.hasPrefix("g_") && name.contains("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder);
                                                                    // ...MatrixInverse/...MatrixInverseTranspose 변형 포함(실물 depthparallax)
     }
@@ -1137,6 +1139,14 @@ public enum GLSLTranslator {
            let n = Int(name.dropFirst("g_Texture".count).dropLast("Resolution".count)),
            (0..<8).contains(n) {   // EngineU.texRes 는 [8] 고정 — N≥8 은 미치환(컴파일 실패→폴백)
             return "eng.texRes[\(n)]"
+        }
+        // WE g_TextureNTexel = 슬롯 N 텍스처의 (1/w, 1/h, w, h) — g_TexelSize 동족(텍스처별 텍셀 크기).
+        // 머티리얼-0 고정이면 커널 오프셋 0 = 블러/다운샘플 무력화. 모프 코드(model_vertex_v1.h
+        // `% morphTexel.z`)가 .zw(=dims)를 쓰므로 .xy 만 주면 재파손 — vec4 전체 치환.
+        if name.hasPrefix("g_Texture"), name.hasSuffix("Texel"),
+           let n = Int(name.dropFirst("g_Texture".count).dropLast("Texel".count)),
+           (0..<8).contains(n) {   // Resolution 과 동일 상한 — N≥8 은 미치환(컴파일 실패→폴백)
+            return "float4(1.0 / eng.texRes[\(n)].xy, eng.texRes[\(n)].xy)"
         }
         return name
     }
@@ -1399,7 +1409,8 @@ public enum GLSLTranslator {
         case .material(let i): return "\(materials[i].type.msl) \(materials[i].glslName)"
         case .engine(let n):
             let t = n.contains("Matrix") ? "float4x4"
-                : (n.hasSuffix("Resolution") ? "float4"
+                // Texel 접미는 isEngine 통과분만 도달 = g_TextureNTexel 한정(g_TexelSize 는 "Size" 접미).
+                : (n.hasSuffix("Resolution") || n.hasSuffix("Texel") ? "float4"
                     : (n == "g_PointerPosition" || n == "g_ParallaxPosition" || n == "g_PointerPositionLast"
                         || n == "g_TexelSize" || n == "g_TexelSizeHalf" ? "float2" : "float"))
             return "\(t) \(n)"
