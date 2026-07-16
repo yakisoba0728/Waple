@@ -1152,7 +1152,9 @@ public enum GLSLTranslator {
     /// 렌더 파이프라인 밖이라 스코프 아웃(중립값이면 이중적용도 없음).
     private static func engineNeutralDefault(_ name: String, _ t: GLSLType) -> [Float] {
         switch name {
-        case "g_Alpha", "g_UserAlpha", "g_Brightness", "g_Color":
+        case "g_Alpha", "g_UserAlpha", "g_Brightness", "g_Color",
+             // 실물 blend.vert TRANSFORMUV 콤보: UV 를 이 값으로 나눔 — 0 이면 ÷0 NaN, 중립은 항등 배율 1.
+             "g_TextureReductionScale":
             return Array(repeating: 1, count: max(1, t.components))
         default: return padDefault(t)
         }

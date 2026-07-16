@@ -374,6 +374,23 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("float g_Frametime"), "캡처 파라미터 float:\n\(t.msl)")
     }
 
+    func testTextureReductionScaleNeutralDefaultOne() throws {
+        // 실물 blend.vert:75 TRANSFORMUV: `... / g_TextureReductionScale` — bare 선언이 기본값 0 이면
+        // ÷0 NaN(+skew ×0 no-op). 엔진 주입값은 아니지만 중립값은 1.0(항등 배율).
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform vec2 g_TextureReductionScale;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord / g_TextureReductionScale);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        let p = try XCTUnwrap(t.materialParams.first(where: { $0.glslName == "g_TextureReductionScale" }),
+                              "머티리얼 파라미터 유지(엔진 승격 아님): \(t.materialParams.map(\.glslName))")
+        XCTAssertEqual(p.defaultValue, [1.0, 1.0], "중립값 1.0(0=÷0 NaN)")
+    }
+
     func testHelperCapturesEngineAndMaterial() throws {
         let frag = """
         varying vec2 v_TexCoord;
