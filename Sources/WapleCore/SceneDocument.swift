@@ -153,6 +153,23 @@ public struct SceneCamera3D: Equatable {
     }
 }
 
+/// 씬 objects[] 의 camera 의사-오브젝트(에디터 카메라 프리셋: fov/zoom/origin/경로 — 실측 37씬/58
+/// 오브젝트, 실효 zoom 애니 9씬·비기본 fov 16). scene.camera(3D 룩앳, parseCamera)와 별개 채널.
+/// 종전 parseNode 가 콘텐츠 키 부재로 트랜스폼-노드로 흡수해 fov/zoom 을 통째 드롭했다.
+/// path(카메라 경로 json, 실효 1씬)는 미캡처 — 렌더러 소비 규약과 함께 도입.
+public struct SceneCameraObject: Equatable {
+    public var id: Int = 0
+    public var name: String = ""
+    public var fov: Float = 50          // 실측 기본 50.0
+    public var zoom: Float = 1          // 정적 값({user,value}/{animation,value} 는 value)
+    /// zoom 바인딩의 키프레임 타임라인({"animation":…} — 실측 9씬). 렌더러 per-frame 평가용 보존.
+    public var zoomAnimation: PropertyAnimation? = nil
+    /// origin/zoom 프로퍼티 스크립트(키 → JS 소스 — 실물: 슬라이더 연동 카메라 위치).
+    public var scripts: [String: String] = [:]
+    public var origin: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    public init() {}
+}
+
 /// 3D 모델의 활성 애니메이션 선택(animationlayers 의 숫자 blend≥0.5 & visible 인 베이스 레이어).
 /// name = 레이어 이름("Idle" 등, 렌더러가 모델 애니 이름에 서브스트링 매칭), rate = 재생 배속.
 public struct AnimationSelection: Equatable {
@@ -390,6 +407,8 @@ public struct SceneDocument: Equatable {
     /// 카메라 프로퍼티 스크립트(키: eye/center/up/fov → JS 소스). 렌더러가 per-frame 재평가(카메라 애니).
     /// 실물 젤다 fov 는 {"script":…,"value":50}; Sonic eye/center 는 정적 문자열(무스크립트). base 값은 camera3D.
     public var cameraScripts: [String: String] = [:]
+    /// objects[] 의 camera 의사-오브젝트(가시분만 — 정적 비가시는 비활성 카메라로 종전 노드 보존 경로).
+    public var cameraObjects: [SceneCameraObject] = []
     /// 3D 메시 오브젝트(`.mdl` 직접 참조). 2D 씬에서는 빈 배열.
     public var objects3D: [SceneObject3D] = []
     /// 3D 라이트 오브젝트.
@@ -476,6 +495,7 @@ extension SceneDocument {
         var lights3D: [SceneLight3D] = []
         var nodes3D: [SceneNode3D] = []
         var sounds: [SceneSound] = []
+        var cameraObjects: [SceneCameraObject] = []
         let resolvedAssets: ((String) -> Data?)?
         if let sharedAssetProbe {
             resolvedAssets = { name in
@@ -551,6 +571,13 @@ extension SceneDocument {
                 objects3D.append(parseModel(obj, modelPath: modelPath, order: order, visibleScript: visibleScript))
             } else if let lightType = contentValue(obj["light"]) as? String {
                 lights3D.append(parseLight(obj, lightType: lightType, order: order))
+            } else if contentValue(obj["camera"]) != nil {
+                cameraObjects.append(parseCameraObject(obj))
+            } else if isEffectQuad(obj) {
+                layers.append(effectQuadLayer(obj, order: order, pw: pw, ph: ph,
+                                              visibleScript: visibleScript,
+                                              visibleScriptProps: visibleScriptProps,
+                                              initialVisible: initialVisible))
             }
         }
         // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다).
@@ -567,6 +594,7 @@ extension SceneDocument {
                                 texts: texts, camera3D: camera3D, objects3D: objects3D, lights3D: lights3D,
                                 nodes3D: nodes3D)
         out.cameraScripts = cameraScripts
+        out.cameraObjects = cameraObjects
         out.sounds = sounds
         out.ambientColor = ambientColor
         out.skylightColor = skylightColor
@@ -762,8 +790,11 @@ extension SceneDocument {
 
     /// 트랜스폼-온리 그룹 노드: 콘텐츠 키 없음 + id 보유 시 SceneNode3D(비가시도 포함 — 서브트리 판정에 필요).
     /// 콘텐츠 키가 있거나 id 없으면 nil(호출부가 레이어/컨텐츠 분기로 진행).
+    /// camera 의사-오브젝트와 이펙트 캐리어 quad(shape+effects)도 콘텐츠로 취급 — 종전에는 여기서
+    /// 트랜스폼-노드로 흡수돼 갓레이 41오브젝트(23씬)·카메라 fov/zoom(37씬)이 통째 드롭됐다.
     private static func parseNode(_ obj: [String: Any], initialVisible: Bool, visibleScript: String?) -> SceneNode3D? {
-        guard !["image", "model", "particle", "text", "light"].contains(where: { contentValue(obj[$0]) != nil }),
+        guard !["image", "model", "particle", "text", "light", "camera"].contains(where: { contentValue(obj[$0]) != nil }),
+              !isEffectQuad(obj),
               let nodeID = intVal(obj["id"]) else { return nil }
         var node = SceneNode3D(
             id: nodeID,
@@ -776,6 +807,58 @@ extension SceneDocument {
         if let vs = visibleScript { ps["visible"] = vs }
         node.propertyScripts = ps
         return node
+    }
+
+    /// 이펙트 캐리어 quad: shape 보유 + effects 비어있지 않음(실측 41/41 이 effects 보유 — 전건
+    /// lightshafts). effects 없는 shape(코퍼스 0건)는 종전 트랜스폼-노드 경로 유지(무회귀).
+    private static func isEffectQuad(_ obj: [String: Any]) -> Bool {
+        contentValue(obj["shape"]) != nil && !((obj["effects"] as? [Any])?.isEmpty ?? true)
+    }
+
+    /// shape:"quad" 이펙트 캐리어 → 솔리드 풀스크린 이펙트 레이어 승격(갓레이/라이트샤프트 — 육안 차이
+    /// 최대급 갭). 렌더러의 기존 솔리드(무텍스처 흰 1×1 + tint)·효과 체인 경로를 그대로 재사용한다.
+    /// isFrameBuffer 로 만들면 렌더러가 효과 체인을 스킵(encodeDrawPlan 규약)하므로 반드시 솔리드.
+    /// 풀스크린 고정 승격이므로 저작 트랜스폼(origin/scale/angles)·parent 는 버린다 — parent 를 남기면
+    /// composeParentTransforms 가 풀스크린 지오메트리를 재배치한다(실측: 쿼드에 붙는 자식 0건, 전건 2D 씬).
+    private static func effectQuadLayer(_ obj: [String: Any], order: Int, pw: Int, ph: Int,
+                                        visibleScript: String?, visibleScriptProps: String?,
+                                        initialVisible: Bool) -> SceneLayer {
+        var layer = SceneLayer(
+            textureEntryName: "",
+            origin: Vec2(x: Float(pw) / 2, y: Float(ph) / 2),
+            size: Vec2(x: Float(pw), y: Float(ph)),
+            scale: Vec2(x: 1, y: 1),
+            angleZ: 0,
+            alpha: float(obj["alpha"]) ?? 1,
+            color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
+            brightness: float(obj["brightness"]) ?? 1,
+            parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
+            effects: parseEffects(obj["effects"]),
+            order: order)
+        layer.name = (obj["name"] as? String) ?? ""
+        layer.id = intVal(obj["id"]) ?? 0
+        layer.initialVisible = initialVisible
+        if let vs = visibleScript { layer.propertyScripts["visible"] = vs }
+        if let vp = visibleScriptProps { layer.propertyScriptProps["visible"] = vp }
+        return layer
+    }
+
+    /// camera 의사-오브젝트 → SceneCameraObject. fov/zoom 은 float() 언랩({user,value}/{animation,value}),
+    /// zoom 키프레임 애니와 origin/zoom 스크립트는 렌더러 소비용으로 별도 보존.
+    private static func parseCameraObject(_ obj: [String: Any]) -> SceneCameraObject {
+        var cam = SceneCameraObject()
+        cam.id = intVal(obj["id"]) ?? 0
+        cam.name = (obj["name"] as? String) ?? ""
+        cam.fov = float(obj["fov"]) ?? 50
+        cam.zoom = float(obj["zoom"]) ?? 1
+        cam.origin = vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0)
+        if let bind = obj["zoom"] as? [String: Any], let a = PropertyAnimation.parse(bind) {
+            cam.zoomAnimation = a
+        }
+        for key in ["origin", "zoom"] {
+            if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { cam.scripts[key] = sc }
+        }
+        return cam
     }
 
     /// 텍스트 레이어("text": 평문 문자열 | {"value": 초기값, "script": JS} 바인딩 — 둘 다 보유 가능).

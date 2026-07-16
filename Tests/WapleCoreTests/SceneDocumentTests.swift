@@ -836,4 +836,108 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(rejectedDocument.layers.isEmpty)
         XCTAssertEqual(rejectedMisses, 0)
     }
+
+    // MARK: parseNode 콘텐츠키 디스패치 누수 (shape:"quad" 이펙트 캐리어 · camera 의사-오브젝트)
+
+    /// shape:"quad" + effects 오브젝트(실측 23씬/41오브젝트 — 전건 lightshafts 갓레이)는 콘텐츠 키가
+    /// 없어 종전 parseNode 가 트랜스폼-노드로 흡수(통째 미표시). 솔리드 풀스크린 이펙트 레이어로 승격.
+    /// isFrameBuffer 면 렌더러가 효과 체인을 스킵하므로 솔리드 캔버스(FB 아님)여야 한다.
+    func testEffectQuadPromotedToFullscreenEffectLayer() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"image":"models/x.json","origin":"960 540 0"},
+           {"id":18661,"name":"dusk6","shape":"quad","origin":"266.3 -1671.7 0.0","parent":18660,
+            "scale":"2.96 2.0 1.0","angles":"0 0 -2.92","castshadow":false,
+            "effects":[{"file":"effects/lightshafts/effect.json","id":18662,"visible":true,
+                        "passes":[{"combos":{"DIRECTDRAW":1,"RAYMODE":1},
+                                   "constantshadervalues":{"rayspeed":0.31}}]}]}
+         ]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.layers.count, 2, "이미지 + 승격된 이펙트 쿼드")
+        let quad = doc.layers[1]
+        XCTAssertEqual(quad.textureEntryName, "", "솔리드 캔버스")
+        XCTAssertFalse(quad.isFrameBuffer)
+        XCTAssertEqual(quad.origin, Vec2(x: 960, y: 540))
+        XCTAssertEqual(quad.size, Vec2(x: 1920, y: 1080))
+        XCTAssertEqual(quad.scale, Vec2(x: 1, y: 1))
+        XCTAssertNil(quad.parent, "풀스크린 승격 고정 — 부모 체인 재배치 방지")
+        XCTAssertEqual(quad.id, 18661)
+        XCTAssertEqual(quad.name, "dusk6")
+        XCTAssertEqual(quad.order, 1, "z-순서(objects[] 인덱스) 보존")
+        XCTAssertEqual(quad.effects.count, 1)
+        XCTAssertEqual(quad.effects[0].name, "lightshafts")
+        XCTAssertEqual(quad.effects[0].combos["DIRECTDRAW"], 1)
+        XCTAssertEqual(quad.effects[0].constants["rayspeed"], [0.31])
+        XCTAssertFalse(doc.nodes3D.contains { $0.id == 18661 }, "트랜스폼-노드로 흡수되면 안 됨")
+    }
+
+    /// 정적 비가시 이펙트 쿼드는 종전 규약대로 렌더 대상에서 제외하되 비가시 노드로 계층만 보존(V06).
+    func testEffectQuadStaticInvisiblePreservedAsNode() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"id":7,"shape":"quad","visible":false,
+                     "effects":[{"file":"effects/lightshafts/effect.json","passes":[{}]}]}]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertTrue(doc.layers.isEmpty)
+        XCTAssertTrue(doc.nodes3D.contains { $0.id == 7 && !$0.visible })
+    }
+
+    /// effects 없는 shape 오브젝트(코퍼스 0건)는 승격하지 않는다 — 종전 트랜스폼-노드 유지(무회귀).
+    func testShapeWithoutEffectsRemainsTransformNode() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"id":9,"shape":"quad","origin":"1 2 3"}]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertTrue(doc.layers.isEmpty)
+        XCTAssertTrue(doc.nodes3D.contains { $0.id == 9 })
+    }
+
+    /// camera 의사-오브젝트(실측 37씬/58오브젝트: fov/zoom/origin/path) — parseCamera 는 scene.camera 만
+    /// 봐서 종전 parseNode 가 노드로 흡수. fov/zoom({user,value} 언랩)·origin(script+value)을 보존한다.
+    func testCameraObjectParsedWithFovZoom() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":1297271,"camera":"default","name":"","fov":62.5,
+            "zoom":{"user":"newproperty30","value":1.4},
+            "origin":{"script":"export function update(v){return v;}","value":"2434.4 725.3 500.0"},
+            "path":"scripts/camera_paths_1297271.json","queuemode":"random"}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.cameraObjects.count, 1)
+        let cam = doc.cameraObjects[0]
+        XCTAssertEqual(cam.id, 1297271)
+        XCTAssertEqual(cam.fov, 62.5)
+        XCTAssertEqual(cam.zoom, 1.4)
+        XCTAssertEqual(cam.origin, Vec3(x: 2434.4, y: 725.3, z: 500.0))
+        XCTAssertEqual(cam.scripts["origin"], "export function update(v){return v;}")
+        XCTAssertNil(cam.zoomAnimation)
+        XCTAssertTrue(doc.nodes3D.isEmpty, "카메라 의사-오브젝트가 트랜스폼-노드로 새면 안 됨")
+        XCTAssertTrue(doc.layers.isEmpty)
+    }
+
+    /// zoom 키프레임 애니({animation,value} — 실측 9씬)는 PropertyAnimation 으로 보존, 정적 zoom 은 value.
+    func testCameraObjectZoomAnimationCaptured() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":5,"camera":"default","fov":50.0,
+            "zoom":{"animation":{"c0":[{"frame":0,"value":3},{"frame":36,"value":1}],
+                                 "options":{"fps":12,"length":60,"mode":"single"}},
+                    "value":3.0}}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.cameraObjects.count, 1)
+        let cam = doc.cameraObjects[0]
+        XCTAssertEqual(cam.zoom, 3.0)
+        XCTAssertNotNil(cam.zoomAnimation)
+        XCTAssertEqual(cam.zoomAnimation?.fps, 12)
+    }
 }
