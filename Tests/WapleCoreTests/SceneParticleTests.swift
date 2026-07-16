@@ -55,6 +55,118 @@ final class SceneParticleTests: XCTestCase {
         XCTAssertEqual(doc.particles.count, 0)  // 로드 실패 → 드롭(무크래시)
     }
 
+    // MARK: instanceoverride (실측 127씬/866건 — 프리셋 인스턴스 모디파이어)
+
+    /// 스칼라 오버라이드는 프리셋 값의 **배수**(WE 에디터 인스턴스 슬라이더): maxcount·버스트 ← count,
+    /// 이미터 rate ← rate, 이니셜라이저 min/max ← size/alpha/lifetime/speed, colorn 은 색 배수.
+    /// {user,value} 바인딩(실물 shimmering_particles count)도 언랩. id 는 인스턴스 식별자 — 미적용.
+    func testInstanceOverrideScalesPresetDef() {
+        let scene = """
+        {"objects":[{"id":1,"particle":"particles/snow.json","origin":"0 0 0",
+          "instanceoverride":{"id":126,"count":2.0,"rate":0.5,"size":2.0,
+                              "alpha":{"user":"a","value":0.8},"speed":1.5,"lifetime":3.0,
+                              "colorn":"0.5 0.5 1"}}]}
+        """
+        let particle = """
+        {"emitter":[{"name":"sphererandom","rate":25,"instantaneous":4,"distancemax":100}],
+         "initializer":[{"name":"sizerandom","min":2,"max":30},
+                        {"name":"alpharandom","min":0.5,"max":1},
+                        {"name":"lifetimerandom","min":1,"max":3},
+                        {"name":"velocityrandom","min":"-10 -50 0","max":"10 -90 0"},
+                        {"name":"colorrandom","min":"100 100 100","max":"200 200 200"}],
+         "renderer":[{"name":"sprite"}],"maxcount":100}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)), ("particles/snow.json", d(particle)),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.particles.count, 1)
+        let def = doc.particles[0].def
+        XCTAssertEqual(def.maxCount, 200, "count 2.0 → maxcount 100×2")
+        guard case let .sphere(_, _, _, _, rate, burst, _) = def.emitters[0] else {
+            return XCTFail("sphere emitter expected")
+        }
+        XCTAssertEqual(rate, 12.5, "rate 0.5 → 25×0.5")
+        XCTAssertEqual(burst, 8, "count 2.0 → instantaneous 4×2")
+        XCTAssertTrue(def.initializers.contains(.sizeRandom(min: 4, max: 60, exponent: 1)))
+        XCTAssertTrue(def.initializers.contains(.alphaRandom(min: 0.4, max: 0.8, exponent: 1)),
+                      "{user,value} 바인딩 alpha 0.8(언랩)×[0.5,1]")
+        XCTAssertTrue(def.initializers.contains(.lifetimeRandom(min: 3, max: 9, exponent: 1)))
+        XCTAssertTrue(def.initializers.contains(
+            .velocityRandom(min: Vec3(x: -15, y: -75, z: 0), max: Vec3(x: 15, y: -135, z: 0), exponent: 1)))
+        XCTAssertTrue(def.initializers.contains(
+            .colorRandom(min: Vec3(x: 50, y: 50, z: 100), max: Vec3(x: 100, y: 100, z: 200), exponent: 1)))
+    }
+
+    /// controlpointN 오버라이드는 CP 오프셋 **절대 대체**이고, controlpointattract 의 target 은 def 파스
+    /// 시 CP 로 베이크되므로(ParticleSystem attract 재바인딩) 오버라이드가 베이크 **전에** 적용돼야 한다
+    /// — 실측: CP 오버라이드 51오브젝트 중 22가 attract 보유(사후 def 복제로는 미치지 못하는 지점).
+    func testInstanceOverrideControlPointRebakesAttractTarget() {
+        let scene = """
+        {"objects":[{"id":1,"particle":"particles/p.json",
+          "instanceoverride":{"controlpoint1":"100 200 0"}}]}
+        """
+        let particle = """
+        {"emitter":[{"name":"sphererandom","rate":1}],
+         "operator":[{"name":"controlpointattract","controlpoint":1,"scale":2,"threshold":10}],
+         "controlpoint":[{"id":1,"offset":"5 5 0"}],
+         "renderer":[{"name":"sprite"}],"maxcount":10}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)), ("particles/p.json", d(particle)),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.particles.count, 1)
+        let def = doc.particles[0].def
+        XCTAssertEqual(def.controlPoints[1], Vec3(x: 100, y: 200, z: 0))
+        XCTAssertTrue(def.operators.contains(
+            .controlPointAttract(scale: 2, threshold: 10, target: Vec3(x: 100, y: 200, z: 0))),
+            "attract target 이 오버라이드된 CP1 로 재베이크돼야 함 — got \(def.operators)")
+    }
+
+    /// 배수 대상 이니셜라이저가 프리셋에 없으면 주입(스폰 기본 1 × 배수 = 배수 자체).
+    /// speed 는 속도원(velocityrandom 등)이 없으면 0×배수=0 — 주입하지 않는다.
+    /// brightness 는 colorn 과 합성된 색 배수로 반영.
+    func testInstanceOverrideInjectsInitializersWhenAbsent() {
+        let scene = """
+        {"objects":[{"id":1,"particle":"particles/p.json",
+          "instanceoverride":{"size":2.0,"alpha":0.5,"lifetime":2.0,"speed":2.0,
+                              "colorn":"1 0 0","brightness":2.0}}]}
+        """
+        let particle = #"{"emitter":[{"name":"sphererandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":10}"#
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)), ("particles/p.json", d(particle)),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.particles.count, 1)
+        let def = doc.particles[0].def
+        XCTAssertTrue(def.initializers.contains(.sizeRandom(min: 2, max: 2, exponent: 1)))
+        XCTAssertTrue(def.initializers.contains(.alphaRandom(min: 0.5, max: 0.5, exponent: 1)))
+        XCTAssertTrue(def.initializers.contains(.lifetimeRandom(min: 2, max: 2, exponent: 1)))
+        XCTAssertTrue(def.initializers.contains(.colorList(colors: [Vec3(x: 2, y: 0, z: 0)])),
+                      "colorn(1,0,0)×brightness2 합성 색 배수 주입")
+        XCTAssertEqual(def.initializers.count, 4, "speed 는 속도원 부재 시 미주입")
+    }
+
+    /// id 만 있는 오버라이드(인스턴스 식별자)는 def 를 바꾸지 않는다 — 무오버라이드 파스와 동일.
+    func testInstanceOverrideIdOnlyIsNoop() {
+        let particle = """
+        {"emitter":[{"name":"sphererandom","rate":25,"distancemax":100}],
+         "initializer":[{"name":"sizerandom","min":2,"max":30}],
+         "renderer":[{"name":"sprite"}],"maxcount":100}
+        """
+        func parse(_ objectJSON: String) -> ParticleSystemDef {
+            let pkg = ScenePackage.assemble([
+                ("scene.json", d(#"{"objects":[\#(objectJSON)]}"#)),
+                ("particles/p.json", d(particle)),
+            ])
+            return try! SceneDocument.parse(package: pkg).particles[0].def
+        }
+        let plain = parse(#"{"id":1,"particle":"particles/p.json"}"#)
+        let idOnly = parse(#"{"id":1,"particle":"particles/p.json","instanceoverride":{"id":126}}"#)
+        XCTAssertEqual(plain, idOnly)
+    }
+
     /// 3D 씬 파티클 오브젝트: 전-성분 origin/scale(z 포함)·parent·visible 을 SceneParticle 이 보존해야
     /// 3D 마운트가 원근 배치를 할 수 있다(2D 는 origin/scale Vec2 만 사용 — 무영향). 실물 3706286085
     /// SpeedLine(origin z=-58, 3D scale)·3737268876 torch(parent=1203) 구조를 축약.

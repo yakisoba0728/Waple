@@ -170,6 +170,30 @@ public struct ChildLink: Equatable {
     }
 }
 
+// MARK: - 인스턴스 오버라이드 (scene object "instanceoverride")
+
+/// 씬 오브젝트의 파티클 인스턴스 모디파이어 — 동일 프리셋 def 를 인스턴스별로 다양화하는 장치
+/// (실측 127씬/866건: 눈·불티·버블 재사용). 스칼라는 프리셋 값에 곱하는 **배수**(WE 에디터
+/// Count/Rate/Size/… 인스턴스 슬라이더 — 실물 shimmering_particles alpha:10 등 >1 도 유효),
+/// controlPoints 는 CP 오프셋 **절대 대체**. 씬 규약 값 언랩({user,value}/문자열)은 SceneDocument 책임.
+public struct ParticleInstanceOverride: Equatable {
+    public var count: Float? = nil      // maxcount·버스트(instantaneous) 배수
+    public var rate: Float? = nil       // 이미터 rate 배수
+    public var size: Float? = nil
+    public var alpha: Float? = nil
+    public var speed: Float? = nil      // 초기 속도(velocityrandom/turbulent) 배수
+    public var lifetime: Float? = nil
+    /// colorn × brightness × color/255 합성 색 배수(0..1 스페이스, 성분별 곱).
+    public var colorMultiplier: Vec3? = nil
+    /// controlpointN "x y z" — CP 오프셋 절대 대체(id 0..7).
+    public var controlPoints: [Int: Vec3] = [:]
+    public init() {}
+    public var isEmpty: Bool {
+        count == nil && rate == nil && size == nil && alpha == nil && speed == nil
+            && lifetime == nil && colorMultiplier == nil && controlPoints.isEmpty
+    }
+}
+
 // MARK: - 시스템 정의
 
 public struct ParticleSystemDef: Equatable {
@@ -193,7 +217,11 @@ public struct ParticleSystemDef: Equatable {
     }
 
     /// resolveChild: 자식 json 경로 → def (호출측이 pkg/머티리얼/재귀 리졸브 담당). nil 리졸브 = 링크 드롭+로그.
+    /// instanceOverride: 씬 오브젝트 "instanceoverride"(루트 def 전용 — 자식 children 은 비전파 보수 규약).
+    /// 파스 **중** 적용해야 하는 이유: controlpointattract 의 target 이 CP 로 베이크되므로(아래 attractCPIds
+    /// 재바인딩) CP 오버라이드는 베이크 전에 반영돼야 한다 — 사후 def 복제는 이 지점에 못 미친다.
     public static func parse(_ json: [String: Any], material: ParticleMaterial?,
+                             instanceOverride: ParticleInstanceOverride? = nil,
                              resolveChild: ((String) -> ParticleSystemDef?)? = nil) -> ParticleSystemDef {
         var emitters: [Emitter] = []
         for case let e as [String: Any] in (json["emitter"] as? [Any] ?? []) {
@@ -261,6 +289,66 @@ public struct ParticleSystemDef: Equatable {
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: true))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported initializer dropped: \(other ?? "nil")")
+            }
+        }
+
+        // 인스턴스 오버라이드(배수) 적용 — 이미터 rate/버스트, 이니셜라이저 min/max.
+        // 배수 대상 이니셜라이저가 프리셋에 없으면 주입(스폰 기본 1 × 배수 = 배수 자체; m==1 은 무의미라
+        // 생략). speed 는 속도원 부재 시 0×배수=0 — 주입 없음. 색 배수는 colorrandom(0..255)·colorlist
+        // (0..1) 양쪽에 성분별 곱(선형 배수라 스페이스 무관), 색 이니셜라이저 부재 시 colorList([배수]) 주입
+        // (스폰 기본 백색 × 배수 = 배수 자체).
+        if let ov = instanceOverride, !ov.isEmpty {
+            func mul(_ v: Vec3, _ m: Vec3) -> Vec3 { Vec3(x: v.x * m.x, y: v.y * m.y, z: v.z * m.z) }
+            func scale(_ v: Vec3, _ m: Float) -> Vec3 { Vec3(x: v.x * m, y: v.y * m, z: v.z * m) }
+            func scaledBurst(_ b: Int, _ m: Float) -> Int { max(0, Int((Float(b) * m).rounded())) }
+            if ov.rate != nil || ov.count != nil {
+                let rm = ov.rate ?? 1, cm = ov.count ?? 1
+                emitters = emitters.map { e in
+                    switch e {
+                    case let .sphere(origin, directions, dMin, dMax, rate, burst, sign):
+                        return .sphere(origin: origin, directions: directions, distanceMin: dMin,
+                                       distanceMax: dMax, rate: rate * rm, burst: scaledBurst(burst, cm), sign: sign)
+                    case let .box(origin, distanceMax, rate, burst):
+                        return .box(origin: origin, distanceMax: distanceMax,
+                                    rate: rate * rm, burst: scaledBurst(burst, cm))
+                    }
+                }
+            }
+            inits = inits.map { i in
+                switch i {
+                case let .lifetimeRandom(mn, mx, e) where ov.lifetime != nil:
+                    return .lifetimeRandom(min: mn * ov.lifetime!, max: mx * ov.lifetime!, exponent: e)
+                case let .sizeRandom(mn, mx, e) where ov.size != nil:
+                    return .sizeRandom(min: mn * ov.size!, max: mx * ov.size!, exponent: e)
+                case let .alphaRandom(mn, mx, e) where ov.alpha != nil:
+                    return .alphaRandom(min: mn * ov.alpha!, max: mx * ov.alpha!, exponent: e)
+                case let .velocityRandom(mn, mx, e) where ov.speed != nil:
+                    return .velocityRandom(min: scale(mn, ov.speed!), max: scale(mx, ov.speed!), exponent: e)
+                case let .turbulentVelocityRandom(sMin, sMax, sc, off) where ov.speed != nil:
+                    return .turbulentVelocityRandom(speedMin: sMin * ov.speed!, speedMax: sMax * ov.speed!,
+                                                    scale: sc, offset: off)
+                case let .colorRandom(mn, mx, e) where ov.colorMultiplier != nil:
+                    return .colorRandom(min: mul(mn, ov.colorMultiplier!), max: mul(mx, ov.colorMultiplier!), exponent: e)
+                case let .colorList(colors) where ov.colorMultiplier != nil:
+                    return .colorList(colors: colors.map { mul($0, ov.colorMultiplier!) })
+                default:
+                    return i
+                }
+            }
+            func lacks(_ isKind: (Initializer) -> Bool) -> Bool { !inits.contains(where: isKind) }
+            if let m = ov.size, m != 1, lacks({ if case .sizeRandom = $0 { return true } else { return false } }) {
+                inits.append(.sizeRandom(min: m, max: m))
+            }
+            if let m = ov.alpha, m != 1, lacks({ if case .alphaRandom = $0 { return true } else { return false } }) {
+                inits.append(.alphaRandom(min: m, max: m, exponent: 1))
+            }
+            if let m = ov.lifetime, m != 1, lacks({ if case .lifetimeRandom = $0 { return true } else { return false } }) {
+                inits.append(.lifetimeRandom(min: m, max: m))
+            }
+            if let c = ov.colorMultiplier, c != Vec3(x: 1, y: 1, z: 1),
+               lacks({ if case .colorRandom = $0 { return true }
+                       if case .colorList = $0 { return true } else { return false } }) {
+                inits.append(.colorList(colors: [c]))
             }
         }
 
@@ -370,7 +458,10 @@ public struct ParticleSystemDef: Equatable {
         }
 
         // 음수 maxcount 가 시뮬 버스트 Range 상한으로 흘러 트랩 — 0 하한 클램프(감사 V02).
-        let maxCount = max(0, pint(json["maxcount"]) ?? 100)
+        var maxCount = max(0, pint(json["maxcount"]) ?? 100)
+        if let m = instanceOverride?.count {
+            maxCount = max(0, Int((Float(maxCount) * m).rounded()))
+        }
 
         var children: [ChildLink] = []
         if let resolve = resolveChild {
@@ -403,6 +494,11 @@ public struct ParticleSystemDef: Equatable {
             if let id = pint(cp["id"]), id >= 0, id < 8, let off = pvec3(cp["offset"]) {
                 controlPoints[id] = off
             }
+        }
+        // 인스턴스 CP 오버라이드(절대 대체)는 attract target 재베이크 **전에** — 재베이크 후면 attract 가
+        // 프리셋 CP 를 계속 본다(실측: CP 오버라이드 51오브젝트 중 22가 attract 보유).
+        if let ov = instanceOverride {
+            for (id, off) in ov.controlPoints where id >= 0 && id < 8 { controlPoints[id] = off }
         }
         for (i, cpid) in attractCPIds {
             if case let .controlPointAttract(scale, threshold, _) = ops[i] {
