@@ -46,11 +46,16 @@ public struct PuppetModel: Equatable {
         public var events: [AnimationMarker] = []
     }
 
+    /// 부착점(씬 `attachment` 이름 본-슬롯 부착) — Model3D.Attachment 와 동형(컨테이너 경로에서 이식).
+    /// 네이티브 MDLV0013 은 코퍼스 attachment 28씬 전수가 컨테이너형이라 MDAT 미탐(실측 0건).
+    public typealias Attachment = Model3D.Attachment
+
     public let material: String
     public let vertices: [Vertex]
     public let indices: [UInt16]
     public var bones: [Bone] = []
     public var animations: [Animation] = []
+    public var attachments: [Attachment] = []
 
     /// 매직으로 라우팅: MDLV0013 = 네이티브 2D 퍼펫; MDLV0016/0017/0019/0021/0023 = 3D 스키닝 모델
     /// 컨테이너로 저장된 2D 퍼펫(예: Hollow Knight 3598808038 knight, WLOP 3113287126 — 종전엔 매직
@@ -83,6 +88,7 @@ public struct PuppetModel: Equatable {
         var pm = PuppetModel(material: m.meshes.first?.material ?? "", vertices: verts, indices: indices)
         // 본 규약(name/parent/bind)은 2D 퍼펫과 동형 — 그대로 이식(정적 스킨은 애니 부재 시 항등이라 무해).
         pm.bones = m.bones.map { Bone(name: $0.name, parent: $0.parent, bind: $0.bind) }
+        pm.attachments = m.attachments
         pm.animations = m.animations.map { anim in
             var a = Animation(name: anim.name, mode: anim.mode, fps: anim.fps, lengthFrames: anim.lengthFrames,
                               tracks: anim.tracks.map { track in

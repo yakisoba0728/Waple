@@ -364,6 +364,24 @@ extension SceneRenderer {
         return out
     }
 
+    /// attachment 씬공간 델타 D = P∘(Y·A·Y)∘P⁻¹ — 베이크된 자식 월드에 곱하면
+    /// childWorld(t) = P∘A(t)∘childLocal (P=부모 월드 T(o)·R(a)·S(s), 씬 y-down; A=부착점 프레임 4x4,
+    /// 퍼펫 모델공간 y-up; Y=diag(1,−1) 축 켤레). 반환 (m,t): p′ = m·p + t. 부모 스케일 퇴화(≈0) → nil.
+    static func attachmentSceneDelta(frame A: simd_float4x4,
+                                     parentOrigin po: SIMD2<Float>, parentScale ps: SIMD2<Float>,
+                                     parentAngle pa: Float) -> (m: simd_float2x2, t: SIMD2<Float>)? {
+        guard abs(ps.x) > 1e-6, abs(ps.y) > 1e-6 else { return nil }
+        // Y 켤레: 모델 y-up 2D 블록 → 씬 y-down (비대각 성분 부호 반전, 평행이동 y 반전).
+        let FL = simd_float2x2(SIMD2(A.columns.0.x, -A.columns.0.y),
+                               SIMD2(-A.columns.1.x, A.columns.1.y))
+        let Ft = SIMD2(A.columns.3.x, -A.columns.3.y)
+        let ca = cos(pa), sa = sin(pa)
+        let PL = simd_float2x2(SIMD2(ca * ps.x, sa * ps.x), SIMD2(-sa * ps.y, ca * ps.y))
+        let m = PL * FL * PL.inverse
+        let t = PL * Ft + po - m * po
+        return (m, t)
+    }
+
     /// drawPlan 씬-순서 인터리브 인코딩(라이브 draw / 헤드리스 captureFrames 공용 단일 루프).
     /// 컴포지션(_rt_) 레이어는 인코더 교체(runFrameBufferLayer)가 일어나며, 재개 실패 시 nil 반환 —
     /// 이 시점엔 직전 인코더가 이미 endEncoding 된 상태이므로 호출자는 **추가 인코딩 없이**
@@ -425,14 +443,39 @@ extension SceneRenderer {
         var tint = layer.tint
         var vbuf = layer.vertexBuffer
         var litRect0 = layer.litRect.0, litRect1 = layer.litRect.1  // 애니 레이어는 아래서 재계산
+        // attachment 적용 후 유효 변환(퍼펫 자식이 스킨 정점 산출에도 사용) — nil 이면 def 정적값 그대로.
+        var attachedTransform: (origin: Vec2, scale: Vec2, angle: Float)? = nil
         if let def = layer.def, let device {
             func animValue(_ key: String, _ comp: Int, _ base: Float) -> Float {
                 def.animations[key]?.value(component: comp, atTime: time, base: base) ?? base
             }
-            let origin = Vec2(x: animValue("origin", 0, def.origin.x), y: animValue("origin", 1, def.origin.y))
-            let scale = Vec2(x: animValue("scale", 0, def.scale.x), y: animValue("scale", 1, def.scale.y))
-            let angle = animValue("angles", 2, def.angleZ)
-            if def.animations["origin"] != nil || def.animations["scale"] != nil || def.animations["angles"] != nil {
+            var origin = Vec2(x: animValue("origin", 0, def.origin.x), y: animValue("origin", 1, def.origin.y))
+            var scale = Vec2(x: animValue("scale", 0, def.scale.x), y: animValue("scale", 1, def.scale.y))
+            var angle = animValue("angles", 2, def.angleZ)
+            var quadDirty = def.animations["origin"] != nil || def.animations["scale"] != nil || def.animations["angles"] != nil
+            // attachment(이름 본-슬롯 부착): 부모 퍼펫 부착점 프레임 A(t) → 씬 델타 D = P∘(Y·A·Y)∘P⁻¹ 를
+            // 베이크된 월드 변환에 합성. childWorld(t) = P∘A(t)∘childLocal 이 되어 정적 배치(부착점 상대)와
+            // 본 애니 추종을 한 식으로 해소. 부착점 부재/퇴화 스케일 → 무부착(기존 위치 유지 — 무회귀).
+            if let att = layer.attach {
+                let eff = att.parentLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
+                // 부모 퍼펫 렌더와 동일 디스패치: 2+ 레이어 = 캐스케이드, 그 외 = 클립 0(attachmentFrame 폴백).
+                let resolved: [(anim: Int, additive: Bool, weight: Float, rate: Float)] = eff.count >= 2
+                    ? eff.map { (PuppetPose.clipIndex(model: att.model, name: $0.element.name, fallback: $0.offset),
+                                 $0.element.additive, $0.element.blend, $0.element.rate) }
+                    : []
+                if let A = PuppetPose.attachmentFrame(model: att.model, name: att.name, layers: resolved, time: time),
+                   let d = Self.attachmentSceneDelta(frame: A, parentOrigin: att.parentOrigin,
+                                                     parentScale: att.parentScale, parentAngle: att.parentAngle) {
+                    let o2 = d.m * SIMD2(origin.x, origin.y) + d.t
+                    origin = Vec2(x: o2.x, y: o2.y)
+                    angle += atan2(d.m.columns.0.y, d.m.columns.0.x)
+                    // ponytail: 델타 선형부는 각+축배율로 분해(전단 폐기) — 2D 퍼펫 본은 z회전·평행이동 위주.
+                    scale = Vec2(x: scale.x * simd_length(d.m.columns.0), y: scale.y * simd_length(d.m.columns.1))
+                    attachedTransform = (origin, scale, angle)
+                    quadDirty = true
+                }
+            }
+            if quadDirty {
                 let verts = Self.quadVertices(origin: origin, size: def.size, scale: scale, angleZ: angle,
                                          alignment: def.alignment, projW: projW, projH: projH)
                 if let b = layer.scratchQuad.load(verts, device: device) {
@@ -483,8 +526,10 @@ extension SceneRenderer {
                 mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
             }
             let pos = PuppetPose.skinnedPositions(model: pm, matrices: mats)
+            // attachment 자식 퍼펫(머리카락 등): 부착 델타가 합성된 변환으로 스킨 메시 배치.
+            let (po, ps, pa) = attachedTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
             let verts = SceneRenderer.puppetVertices(model: pm, positions: pos,
-                                                     origin: def.origin, scale: def.scale, angleZ: def.angleZ,
+                                                     origin: po, scale: ps, angleZ: pa,
                                                      projW: projW, projH: projH)
             if !verts.isEmpty, let b = layer.scratchSkin.load(verts, device: device) {
                 vbuf = b

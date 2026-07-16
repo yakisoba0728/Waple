@@ -46,6 +46,10 @@ public struct SceneLayer: Equatable {
     public var originZ: Float = 0
     /// 부모 오브젝트 id(3D 씬 빌보드의 트랜스폼 계층 — 태양계 이미지는 대부분 그룹 노드에 붙는다). nil=루트.
     public var parent: Int? = nil
+    /// 오브젝트 `attachment` — 부모 퍼펫 모델의 **이름 부착점**(.mdl MDAT 슬롯, 본 인덱스 바인딩)에 부착.
+    /// 자식의 origin/angles 는 부착점 프레임 상대(실측 3538758087 주발/눈: 부모중심 상대면 허리 위치 —
+    /// 부착점 상대만 머리에 정합). 렌더러가 per-frame `boneWorld(t)×attLocal` 씬 델타를 합성. nil=일반 계층.
+    public var attachment: String? = nil
     public let size: Vec2
     public var scale: Vec2
     public var angleZ: Float
@@ -747,6 +751,7 @@ extension SceneDocument {
         let originFull = floats(obj["origin"])
         layer.originZ = originFull.count >= 3 ? originFull[2] : 0
         layer.parent = intVal(obj["parent"])
+        layer.attachment = obj["attachment"] as? String   // 이름 본-슬롯 부착(28씬 실측: 평문 문자열)
         layer.id = intVal(obj["id"]) ?? 0
         layer.alignment = (obj["alignment"] as? String) ?? "center"
         return layer
