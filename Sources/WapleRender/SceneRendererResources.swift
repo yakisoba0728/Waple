@@ -966,7 +966,10 @@ extension SceneRenderer {
     /// 텍스트 재래스터: lastText → 텍스처 + 앵커 정렬 쿼드. 빈 텍스트 → 텍스처 nil(드로우 스킵).
     func rasterize(_ g: inout GPUText, device: MTLDevice) {
         guard let r = TextRasterizer.render(text: g.lastText, fontData: g.fontData,
-                                            systemFontName: g.systemFontName, pointSize: g.def.pointSize) else {
+                                            systemFontName: g.systemFontName, pointSize: g.def.pointSize,
+                                            maxWidth: g.def.maxWidth, maxRows: g.def.maxRows,
+                                            ellipsis: g.def.overflowEllipsis, justify: g.def.justify,
+                                            align: g.def.horizontalAlign) else {
             g.texture = nil; g.vertexBuffer = nil
             return
         }

@@ -139,6 +139,15 @@ public struct SceneTextLayer: Equatable {
     public let verticalAlign: String     // top|center|bottom
     public let origin: Vec2
     public let scale: Vec2               // 오브젝트 "size" 필드 = 배수(실측 "2 2")
+    /// "Limit width"(limitwidth) 체크 시 워드랩 폭 maxwidth(래스터 로컬 px — 실물 maxwidth 스크립트가
+    /// 화면폭을 scale.x 로 나눠 전달 = 스케일 전 단위, d.ts "Max width in pixels"). nil = 무제한(무회귀).
+    public var maxWidth: Float? = nil
+    /// "Limit rows"(limitrows) 체크 시 최대 행수 maxrows(실측 기본 1 — 1628/1640). nil = 무제한.
+    public var maxRows: Int? = nil
+    /// "Overflow ellipsis"(limituseellipsis) — 행 제한 잘림 시 마지막 행에 U+2026.
+    public var overflowEllipsis: Bool = false
+    /// "Justify text"(blockalign — 에디터 프로퍼티 테이블 실측 라벨) — 워드랩 줄 양쪽 정렬.
+    public var justify: Bool = false
     public var order: Int = 0
 }
 
@@ -880,7 +889,7 @@ extension SceneDocument {
             // 레이어 프로퍼티 스크립트(line 500)와 동일 게이트: 스크립트가 있을 때만 오버라이드 보존.
             if script != nil { scriptProps = Self.scriptPropsJSON(d["scriptproperties"]) }
         }
-        return SceneTextLayer(
+        var t = SceneTextLayer(
             name: (obj["name"] as? String) ?? "",
             text: plain, script: script, scriptProps: scriptProps,
             font: (obj["font"] as? String) ?? "systemfont_arial",
@@ -892,6 +901,14 @@ extension SceneDocument {
             origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
             scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),  // 배율은 scale 필드 — size 는 레이아웃 박스(오독 시 거대 글리프)
             order: order)
+        // "Limit width/rows" 체크(불리언 리터럴 — 코퍼스 1640건 전수)가 켜진 때만 유효값. maxwidth 는
+        // 바인딩 dict({user/script,value} — 실물 32건)가 있어 float() 의 {value} 언랩 경유, 폴백은
+        // 에디터 기본(maxwidth 500 — 1468건 / maxrows 1 — 1628건). 부재/미체크 nil = 무제한(무회귀).
+        if (obj["limitwidth"] as? Bool) == true, case let mw = float(obj["maxwidth"]) ?? 500, mw > 0 { t.maxWidth = mw }
+        if (obj["limitrows"] as? Bool) == true, case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
+        t.overflowEllipsis = (obj["limituseellipsis"] as? Bool) ?? false
+        t.justify = (obj["blockalign"] as? Bool) ?? false
+        return t
     }
 
     /// 3D 메시 오브젝트("model": `.mdl` 직접 참조 — 2D image→json→puppet 인다이렉션 우회). angles 는 라디안.

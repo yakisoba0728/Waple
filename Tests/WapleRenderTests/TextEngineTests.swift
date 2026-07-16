@@ -501,6 +501,108 @@ final class TextRasterizerTests: XCTestCase {
         XCTAssertLessThanOrEqual(r.height, 8192)
         XCTAssertGreaterThan(r.width, 1)
     }
+
+    // ── P2: 폭 기반 워드랩 + 행 제한 + 말줄임 (limitwidth/maxwidth·limitrows/maxrows·limituseellipsis,
+    //        WE 에디터 라벨 "Limit width/Max width/Limit rows/Max rows/Overflow ellipsis" 실측) ──
+
+    /// 공백 단어 경계 워드랩: maxWidth 를 넘는 텍스트는 세로로 접히고 래스터 폭은 maxWidth 이내.
+    func testWordWrapBreaksAtWordBoundary() throws {
+        let flat = try XCTUnwrap(TextRasterizer.render(text: "aaaa bbbb", fontData: nil, systemFontName: nil, pointSize: 24))
+        let mw = Float(flat.width) * 0.7
+        let wrapped = try XCTUnwrap(TextRasterizer.render(text: "aaaa bbbb", fontData: nil, systemFontName: nil,
+                                                          pointSize: 24, maxWidth: mw))
+        XCTAssertGreaterThan(wrapped.height, flat.height, "폭 제한 초과인데 줄바꿈 안 됨")
+        XCTAssertLessThanOrEqual(wrapped.width, Int(mw.rounded(.up)) + 2, "래스터 폭이 maxWidth 초과")
+    }
+
+    /// 여유 maxWidth(제한 비격발)면 무제한 경로와 동일 치수 — 워드랩 경로 자체의 무회귀.
+    func testGenerousMaxWidthKeepsSingleLine() throws {
+        let flat = try XCTUnwrap(TextRasterizer.render(text: "aaaa bbbb", fontData: nil, systemFontName: nil, pointSize: 24))
+        let wide = try XCTUnwrap(TextRasterizer.render(text: "aaaa bbbb", fontData: nil, systemFontName: nil,
+                                                       pointSize: 24, maxWidth: Float(flat.width) * 2))
+        XCTAssertEqual(wide.width, flat.width)
+        XCTAssertEqual(wide.height, flat.height)
+    }
+
+    /// 공백 없는 CJK(한글)도 문자 경계로 접힘(UAX#14 — CTTypesetter, 한글은 음절 단위 줄바꿈).
+    func testWordWrapCJKBreaksPerCharacter() throws {
+        let flat = try XCTUnwrap(TextRasterizer.render(text: "가나다라마바사", fontData: nil, systemFontName: nil, pointSize: 24))
+        let wrapped = try XCTUnwrap(TextRasterizer.render(text: "가나다라마바사", fontData: nil, systemFontName: nil,
+                                                          pointSize: 24, maxWidth: Float(flat.width) / 2))
+        XCTAssertGreaterThan(wrapped.height, flat.height, "CJK 문자 단위 줄바꿈 안 됨")
+    }
+
+    /// maxWidth 보다 긴 단일 단어는 단어 내부 강제 분리(소실/오버플로 금지).
+    func testWordWrapForcesBreakInsideOverlongWord() throws {
+        let flat = try XCTUnwrap(TextRasterizer.render(text: "aaaaaaaaaaaaaaaa", fontData: nil, systemFontName: nil, pointSize: 24))
+        let wrapped = try XCTUnwrap(TextRasterizer.render(text: "aaaaaaaaaaaaaaaa", fontData: nil, systemFontName: nil,
+                                                          pointSize: 24, maxWidth: Float(flat.width) / 2))
+        XCTAssertGreaterThan(wrapped.height, flat.height, "장단어 내부 분리 안 됨")
+    }
+
+    /// 행 제한: maxRows 초과 행은 잘림(높이 = maxRows 행 높이).
+    func testRowLimitDropsExcessRows() throws {
+        let two = try XCTUnwrap(TextRasterizer.render(text: "A\nB", fontData: nil, systemFontName: nil, pointSize: 24))
+        let limited = try XCTUnwrap(TextRasterizer.render(text: "A\nB\nC\nD", fontData: nil, systemFontName: nil,
+                                                          pointSize: 24, maxRows: 2))
+        XCTAssertEqual(limited.height, two.height, "maxRows=2 인데 2행 높이가 아님")
+    }
+
+    /// 말줄임: 행 잘림 발생 시 마지막 행에 U+2026 부착("A…" 래스터와 동일 폭).
+    func testEllipsisAppendedWhenRowsOverflow() throws {
+        let one = try XCTUnwrap(TextRasterizer.render(text: "A", fontData: nil, systemFontName: nil, pointSize: 24))
+        let ref = try XCTUnwrap(TextRasterizer.render(text: "A\u{2026}", fontData: nil, systemFontName: nil, pointSize: 24))
+        let ell = try XCTUnwrap(TextRasterizer.render(text: "A\nB", fontData: nil, systemFontName: nil,
+                                                      pointSize: 24, maxRows: 1, ellipsis: true))
+        XCTAssertEqual(ell.height, one.height, "1행이어야")
+        XCTAssertEqual(ell.width, ref.width, "마지막 행에 … 미부착")
+    }
+
+    /// 말줄임 + 폭 제한: U+2026 포함 마지막 행도 maxWidth 이내로 끝을 잘라 수렴.
+    func testEllipsisTruncatesWithinMaxWidth() throws {
+        let flat = try XCTUnwrap(TextRasterizer.render(text: "aaaa bbbb cccc", fontData: nil, systemFontName: nil, pointSize: 24))
+        let one = try XCTUnwrap(TextRasterizer.render(text: "A", fontData: nil, systemFontName: nil, pointSize: 24))
+        let mw = Float(flat.width) * 0.4
+        let r = try XCTUnwrap(TextRasterizer.render(text: "aaaa bbbb cccc", fontData: nil, systemFontName: nil,
+                                                    pointSize: 24, maxWidth: mw, maxRows: 1, ellipsis: true))
+        XCTAssertEqual(r.height, one.height, "maxRows=1 인데 1행이 아님")
+        XCTAssertLessThanOrEqual(r.width, Int(mw.rounded(.up)) + 2, "…행이 maxWidth 초과")
+    }
+
+    /// Justify(blockalign): 문단 중간 워드랩 줄은 maxWidth 로 스트레치(래스터 폭 ≈ maxWidth).
+    func testJustifyStretchesWrappedLines() throws {
+        let flat = try XCTUnwrap(TextRasterizer.render(text: "aa bb cc dd ee ff", fontData: nil, systemFontName: nil, pointSize: 24))
+        let mw = Float(flat.width) * 0.6
+        let j = try XCTUnwrap(TextRasterizer.render(text: "aa bb cc dd ee ff", fontData: nil, systemFontName: nil,
+                                                    pointSize: 24, maxWidth: mw, justify: true))
+        XCTAssertGreaterThan(j.height, flat.height, "워드랩이 선행돼야")
+        XCTAssertGreaterThanOrEqual(Float(j.width), mw * 0.98, "justify 줄이 maxWidth 로 안 늘어남")
+        XCTAssertLessThanOrEqual(j.width, Int(mw.rounded(.up)) + 2)
+    }
+
+    /// 멀티라인 center 정렬: 짧은 행의 잉크가 좌측 flush(종전) 대신 블록 중앙으로 온다.
+    /// 버퍼 행 순서 주의(실측): 래스터 플립 규약상 마지막 줄('A')이 버퍼 상단 절반에 온다
+    /// (다운스트림 쿼드/샘플링이 재반전해 화면은 정순 — x 정렬 검증엔 영향 없음).
+    func testMultilineCenterAlignsShortRow() throws {
+        func firstInkX(_ r: TextRasterizer.Raster, rows: Range<Int>) -> Int? {
+            var minX: Int? = nil
+            r.rgba.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
+                for y in rows {
+                    for x in 0..<r.width where p[(y * r.width + x) * 4 + 3] > 32 {
+                        minX = min(minX ?? x, x)
+                    }
+                }
+            }
+            return minX
+        }
+        let left = try XCTUnwrap(TextRasterizer.render(text: "WWWWWWWW\nA", fontData: nil, systemFontName: nil, pointSize: 24))
+        let centered = try XCTUnwrap(TextRasterizer.render(text: "WWWWWWWW\nA", fontData: nil, systemFontName: nil,
+                                                           pointSize: 24, align: "center"))
+        XCTAssertEqual(centered.width, left.width, "정렬은 래스터 치수를 바꾸지 않아야")
+        let l = try XCTUnwrap(firstInkX(left, rows: 0..<(left.height / 2)))
+        let c = try XCTUnwrap(firstInkX(centered, rows: 0..<(centered.height / 2)))
+        XCTAssertGreaterThan(c, l + 4, "짧은 행 'A' 가 중앙 정렬되지 않음")
+    }
 }
 
 /// 효과 상수 스크립트: WEColor 실심 + engine.runtime + evaluateVec (실물 컬러 사이클 패턴).
