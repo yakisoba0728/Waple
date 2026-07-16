@@ -643,6 +643,28 @@ extension SceneRenderer {
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }
     }
 
+    /// REFRACT 노멀맵 아틀라스 + RG88 여부. 프레임 UV 는 알베도와 공유(동일 그리드 가정) → 전체 아틀라스만 필요.
+    /// resolveTextureWithFrames 와 동일 디코드 경로(멀티페이지 스택/keepFullAtlas)로 알베도와 레이아웃 정합.
+    /// rg88 플래그는 pf_refract 의 노멀 언팩 분기용(WE DecompressNormalWithMask 의 FORMAT_RG88 vs DXT).
+    func resolveRefractNormal(_ name: String?, package: ScenePackage, device: MTLDevice)
+        -> (texture: MTLTexture, rg88: Bool)? {
+        guard let name else { return nil }
+        let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
+        return resolveRequiredAsset(candidates, package: package, decode: { d -> (texture: MTLTexture, rg88: Bool)? in
+            guard let tex = TexImage.parse(d) else { return nil }
+            let rg88 = tex.payload == .rg88
+            let multipage = tex.imageCount > 1
+            if multipage, !tex.frames.isEmpty, let stacked = stackedAtlas(tex: tex, data: d, device: device) {
+                return (stacked.texture, rg88)
+            }
+            if let dec = makeImageTexture(tex: tex, data: d, device: device,
+                                          keepFullAtlas: !multipage && tex.frames.count > 1) {
+                return (dec.texture, rg88)
+            }
+            return nil
+        })
+    }
+
     /// 다중 image 아틀라스 페이지를 **세로로 이어붙인 단일 텍스처**로 합치고 frame.y 에 페이지별 누적
     /// y-오프셋을 더한다(frame.imageId = 페이지). GPUParticleSystem/GPULayer.texture 단일 유지 → 프레임
     /// 인코더/blit 무변경. 실측(2026-07-10, 코퍼스 멀티페이지 7종): 페이지 dims 가 **불균일**하다(예
@@ -734,6 +756,14 @@ extension SceneRenderer {
             g.scale3D = SIMD3<Float>(sp.scale3D.x, sp.scale3D.y, sp.scale3D.z)
             g.angles3D = SIMD3<Float>(sp.angles3D.x, sp.angles3D.y, sp.angles3D.z)
             g.visible3D = sp.visible
+            // REFRACT: 노멀맵(textures[1]) 로드 + refractAmount. 실패 시 refract 미설정 → identity 폴백(무크래시).
+            if let mat = def.material, mat.refract, let normalName = mat.normalTextureName,
+               let n = resolveRefractNormal(normalName, package: package, device: device) {
+                g.refract = true
+                g.normalTexture = n.texture
+                g.normalRG88 = n.rg88
+                g.refractAmount = mat.refractAmount
+            }
             return g
         }
         for (i, sp) in doc.particles.enumerated() {
@@ -765,6 +795,23 @@ extension SceneRenderer {
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
         a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
         a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// REFRACT 스프라이트 파이프라인. vert=pv_main 공유, frag=pf_refract(노멀 오프셋 씬 재샘플·곱).
+    /// 블렌드는 translucent(over) — refract 코퍼스는 전부 translucent(additive-refract 미관측).
+    func refractParticlePipelineBuild(device: MTLDevice) -> MTLRenderPipelineState? {
+        guard let lib = try? WapleProfiler.compile(ParticleShaders.source, { try device.makeLibrary(source: ParticleShaders.source, options: nil) }) else { return nil }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "pv_main")
+        pd.fragmentFunction = lib.makeFunction(name: "pf_refract")
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 

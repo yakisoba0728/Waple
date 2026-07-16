@@ -136,18 +136,29 @@ public enum BlendKind: Equatable { case additive, translucent }
 public struct ParticleMaterial: Equatable {
     public let textureName: String?
     public let blend: BlendKind
-    public init(textureName: String?, blend: BlendKind) { self.textureName = textureName; self.blend = blend }
+    /// REFRACT 콤보(스크린 굴절): 노멀맵(normalTextureName=textures[1]) 의 xy 로 씬 컬러 타깃을 재샘플해 곱한다.
+    public let refract: Bool
+    public let normalTextureName: String?
+    public let refractAmount: Float   // g_RefractAmount (WE 기본 0.05)
+    public init(textureName: String?, blend: BlendKind,
+                refract: Bool = false, normalTextureName: String? = nil, refractAmount: Float = 0.05) {
+        self.textureName = textureName; self.blend = blend
+        self.refract = refract; self.normalTextureName = normalTextureName; self.refractAmount = refractAmount
+    }
 
     public static func parse(_ json: [String: Any]) -> ParticleMaterial {
         guard let passes = json["passes"] as? [Any], let p0 = passes.first as? [String: Any] else {
             return ParticleMaterial(textureName: nil, blend: .translucent)
         }
         let blend: BlendKind = (p0["blending"] as? String) == "additive" ? .additive : .translucent
-        var name: String? = nil
-        if let texs = p0["textures"] as? [Any] {
-            name = texs.compactMap { $0 as? String }.first(where: { !$0.isEmpty })
-        }
-        return ParticleMaterial(textureName: name, blend: blend)
+        let names = (p0["textures"] as? [Any])?.compactMap { $0 as? String } ?? []
+        let albedo = names.first(where: { !$0.isEmpty })
+        // combos.REFRACT==1 + textures[1] 노멀맵 + constantshadervalues.ui_editor_properties_refract_amount.
+        let refract = ((p0["combos"] as? [String: Any])?["REFRACT"] as? NSNumber)?.intValue == 1
+        let normalName = (names.count > 1 && !names[1].isEmpty) ? names[1] : nil
+        let refractAmount = pfloat((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
+        return ParticleMaterial(textureName: albedo, blend: blend,
+                                refract: refract && normalName != nil, normalTextureName: normalName, refractAmount: refractAmount)
     }
 }
 

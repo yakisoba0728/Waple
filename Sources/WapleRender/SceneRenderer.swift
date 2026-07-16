@@ -36,6 +36,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var scale3D: SIMD3<Float> = SIMD3(1, 1, 1)
         var angles3D: SIMD3<Float> = .zero
         var visible3D: Bool = true
+        /// REFRACT(스크린 굴절): 노멀맵 + refractAmount. refract && normalTexture != nil 일 때만 굴절 경로
+        /// (encodeDrawPlan 이 acc 스냅샷을 떠 pf_refract 로 드로우). 그 외/실패는 identity 파티클 폴백.
+        var refract: Bool = false
+        var normalTexture: MTLTexture? = nil
+        var refractAmount: Float = 0.05
+        var normalRG88: Bool = false   // 노멀 텍스처가 WE RG88(2채널) 포맷 → 셰이더 언팩 분기
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 스크립트는 초당 재평가 → 변경 시 재래스터.
@@ -594,6 +600,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneUserPropertiesJSON = "{}"
     var additivePipeline: MTLRenderPipelineState?
     var translucentPipeline: MTLRenderPipelineState?
+    var refractParticlePipeline: MTLRenderPipelineState?   // REFRACT 스프라이트(pf_refract, translucent)
     var fullscreenQuad: [SIMD2<Float>] = [SIMD2(-1,-1), SIMD2(1,-1), SIMD2(-1,1), SIMD2(1,1)]
 
     // ── 3D 씬(camera3D + .mdl 메시) 상태 ─────────────────────────────────────────
@@ -837,6 +844,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 hasParticles = true
                 additivePipeline = particlePipeline(additive: true, device: device)
                 translucentPipeline = particlePipeline(additive: false, device: device)
+                // REFRACT 시스템이 하나라도 있으면 굴절 파이프라인 빌드(스냅샷 재샘플). 없으면 미빌드.
+                if particleSystems.contains(where: { $0.refract && $0.normalTexture != nil }) {
+                    refractParticlePipeline = refractParticlePipelineBuild(device: device)
+                }
             }
             textLayers = buildTexts(doc: doc, package: package, device: device)
         }
@@ -1238,7 +1249,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
         scriptVisible.removeAll()
-        additivePipeline = nil; translucentPipeline = nil; _passthroughPipeline = nil
+        additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
