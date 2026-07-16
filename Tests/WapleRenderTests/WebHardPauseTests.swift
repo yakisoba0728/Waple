@@ -559,6 +559,95 @@ final class WebHardPauseTests: XCTestCase {
         })
     }
 
+    func testMediaElementsPauseAndOnlyPlayingOnesResume() throws {
+        // src 없는 <video>/<audio> 도 play() 가 paused 속성을 동기 false 로 전이시킨다(소스 선택 대기).
+        // 실미디어 디코딩 없이 HTMLMediaElement 정지/재개 의미론을 검증하는 최소 재료.
+        let web = makeControllerWebView(html: """
+        <html><body>
+        <video id="playing" muted></video>
+        <video id="idle" muted></video>
+        <audio id="playingAudio"></audio>
+        </body></html>
+        """)
+        _ = pumpEvalJS(web, """
+        window.__media = {
+          playing: document.getElementById('playing'),
+          idle: document.getElementById('idle'),
+          audio: document.getElementById('playingAudio')
+        };
+        window.__media.playing.play().catch(function () {});
+        window.__media.audio.play().catch(function () {});
+        """)
+        XCTAssertEqual(
+            pumpEvalJS(web, """
+            [window.__media.playing.paused, window.__media.idle.paused,
+             window.__media.audio.paused].join(',')
+            """) as? String,
+            "false,true,false",
+            "precondition: play() must transition paused synchronously even without a source"
+        )
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(true);")
+        XCTAssertEqual(
+            pumpEvalJS(web, """
+            [window.__media.playing.paused, window.__media.idle.paused,
+             window.__media.audio.paused].join(',')
+            """) as? String,
+            "true,true,true",
+            "hard pause must pause playing media elements"
+        )
+        spin(0.15)
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__media.playing.paused") as? Bool, true,
+            "media must stay paused for the whole hard pause"
+        )
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, """
+            !window.__media.playing.paused && !window.__media.audio.paused
+            """) as? Bool == true
+        }, "resume must replay exactly the media Waple paused")
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__media.idle.paused") as? Bool, true,
+            "media that was already paused by the page must stay paused after resume"
+        )
+    }
+
+    func testMediaStartedWhilePausedIsCapturedAndResumed() throws {
+        let web = makeControllerWebView(
+            html: "<html><body><video id='box' muted></video></body></html>")
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(true);")
+
+        _ = pumpEvalJS(web, """
+        window.__existing = document.getElementById('box');
+        window.__existing.play().catch(function () {});
+        window.__dynamic = document.createElement('video');
+        window.__dynamic.muted = true;
+        document.body.appendChild(window.__dynamic);
+        window.__dynamic.play().catch(function () {});
+        """)
+        // 'play' 이벤트는 태스크 큐로 비동기 발화 — 캡처 후 강제 정지까지 waitUntil.
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, """
+            window.__existing.paused && window.__dynamic.paused
+            """) as? Bool == true
+        }, "media started while hard-paused must be paused immediately")
+        spin(0.15)
+        XCTAssertEqual(
+            pumpEvalJS(web, "window.__existing.paused && window.__dynamic.paused") as? Bool,
+            true,
+            "captured media must stay paused"
+        )
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, """
+            !window.__existing.paused && !window.__dynamic.paused
+            """) as? Bool == true
+        }, "media captured while paused must resume playback on release")
+    }
+
     func testControllerFailureDoesNotBlockCooperativeLifecycle() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("waple_hard_pause_error_\(UUID().uuidString)",

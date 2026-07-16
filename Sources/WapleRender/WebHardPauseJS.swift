@@ -452,14 +452,69 @@ enum WebHardPauseJS {
         });
       }
 
+      // HTMLMediaElement(<video>/<audio>)는 rAF/타이머/WAAPI/AudioContext 와 별개의 자체
+      // 재생 루프 — pauseAnimations 와 같은 구조(정지 시 재생중이던 것만 기록 후 pause,
+      // 재개 시 그것만 play)로 정지한다.
+      var mediaToResume = [];
+
+      function rememberMediaElement(media) {
+        if (mediaToResume.indexOf(media) < 0) { mediaToResume.push(media); }
+        try { media.pause(); } catch (error) { report(error); }
+      }
+
+      function allMediaElements() {
+        if (!document.querySelectorAll) { return []; }
+        return Array.prototype.slice.call(document.querySelectorAll('video, audio'));
+      }
+
+      function pauseMediaElements() {
+        allMediaElements().forEach(function (media) {
+          // 자연 종료된 미디어는 paused=false 로 남을 수 있다 — 재개 시 처음부터
+          // 재재생하면 페이지 의도를 왜곡하므로 기록하지 않는다.
+          if (!media.paused && !media.ended) {
+            rememberMediaElement(media);
+          }
+        });
+      }
+
+      // pause 중 시작된 재생(동적 <video autoplay> 추가, 스크립트 play()) 캡처.
+      // 'play' 이벤트는 버블하지 않지만 capture 리스너로 문서 레벨에서 잡힌다
+      // (animationstart 캡처 리스너와 동일 구조). 재개 시 우리가 부르는 play() 도
+      // 이 리스너를 지나지만 그 시점엔 paused === false 라 no-op.
+      function captureMediaStartedWhilePaused(event) {
+        if (!paused) { return; }
+        var media = event.target;
+        if (media && typeof media.pause === 'function') {
+          rememberMediaElement(media);
+        }
+      }
+
+      function resumeMediaElements() {
+        var recorded = mediaToResume.slice();
+        mediaToResume = [];
+        recorded.forEach(function (media) {
+          if (media.ended) { return; }
+          try {
+            var result = media.play();
+            // play() 는 자동재생 정책 등으로 거부될 수 있는 Promise 반환 — 로깅만.
+            if (result && typeof result.catch === 'function') {
+              result.catch(report);
+            }
+          } catch (error) {
+            report(error);
+          }
+        });
+      }
+
       safely(installAnimationAPIObservation);
       document.addEventListener('animationstart', queueAnimationCapture, true);
       document.addEventListener('transitionrun', queueAnimationCapture, true);
       document.addEventListener('transitionstart', queueAnimationCapture, true);
+      document.addEventListener('play', captureMediaStartedWhilePaused, true);
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () {
           installAnimationObservation();
-          if (paused) { pauseAnimations(); }
+          if (paused) { pauseAnimations(); pauseMediaElements(); }
         });
       } else {
         installAnimationObservation();
@@ -476,8 +531,10 @@ enum WebHardPauseJS {
             safely(pauseSchedulers);
             safely(pauseAudioContexts);
             safely(pauseAnimations);
+            safely(pauseMediaElements);
             safely(postStateToChildren);
           } else {
+            safely(resumeMediaElements);
             safely(resumeAnimations);
             safely(resumeAudioContexts);
             safely(resumeSchedulers);
