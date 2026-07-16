@@ -291,12 +291,18 @@ public final class TextScriptEngine {
 
     /// Deliver the mount's effective WallpaperProperty JSON once. The gate is set before JSON evaluation/call,
     /// so malformed JSON or a throwing script is logged and never retried automatically.
+    /// engine.userProperties(코퍼스 17씬)는 훅 유무와 무관하게 항상 채운다 — noopProxy 폴백은 truthy 라
+    /// `if (engine.userProperties.x.value)` 부울 분기가 항상 참으로 새는 오분기 버그(0 수치보다 악질).
+    /// 수용된 순서 제약: 공유 컨텍스트 첫 스크립트의 톱레벨 코드는 이 주입 이전에 실행됨 — 실물
+    /// 스크립트는 update()/init() 안에서 읽는다(build3D 선행과 동일한 기존 제약, 재구조화 금지).
     public func applyUserProperties(_ propertiesJSON: String) {
         guard !didApplyUserProperties else { return }
         didApplyUserProperties = true
-        guard let applyUserPropertiesFn else { return }
         _ = withExceptionCapture("applyUserProperties hook exception") { failed -> JSValue? in
             guard let properties = context.evaluateScript("(\(propertiesJSON))"), !failed() else { return nil }
+            context.setObject(properties, forKeyedSubscript: "__wapleUserProperties" as NSString)
+            context.evaluateScript("engine.userProperties = __wapleUserProperties;")
+            guard let applyUserPropertiesFn, !failed() else { return nil }
             let result = applyUserPropertiesFn.call(withArguments: [properties])
             return failed() ? nil : result
         }

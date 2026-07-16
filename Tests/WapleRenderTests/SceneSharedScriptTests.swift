@@ -122,6 +122,21 @@ final class SceneSharedScriptTests: XCTestCase {
         XCTAssertEqual(probe.evaluate(current: ""), "dark/1/0")
     }
 
+    /// engine.userProperties(코퍼스 17씬): 스크립트 자체 applyUserProperties 훅이 없어도 마운트
+    /// 프로퍼티를 update() 안에서 읽을 수 있어야 한다. 부울 오분기 가드 — noopProxy 는 항상 truthy 라
+    /// false 값이 'on' 분기로 새는 것이 기존 버그(0 수치보다 악질).
+    func testEngineUserPropertiesReadableFromUpdateWithoutOwnHook() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(value) {
+            var p = engine.userProperties;
+            return (p.darkmode && p.darkmode.value) ? 'on' : 'off:' + p.speed.value;
+        }
+        """, scene: scene))
+        e.applyUserProperties(#"{"darkmode":{"value":false},"speed":{"value":42}}"#)
+        XCTAssertEqual(e.evaluate(current: ""), "off:42")
+    }
+
     func testThrowingLifecycleFunctionsAreNotRetriedOrCrossContaminateSharedContext() throws {
         let scene = try XCTUnwrap(SceneScriptContext())
         let throwing = try XCTUnwrap(TextScriptEngine(script: """
