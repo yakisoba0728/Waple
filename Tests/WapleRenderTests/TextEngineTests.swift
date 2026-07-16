@@ -768,4 +768,42 @@ final class ConstantScriptTests: XCTestCase {
 
         XCTAssertEqual(out[0], 4.75, accuracy: 1e-4)
     }
+
+    /// WEMath 실심(코퍼스 58씬): 공개 d.ts 표면 smoothStep/mix. noopProxy 폴백이면 전부 0/비수치로 붕괴.
+    /// smoothStep 0.15625 는 Hermite 가정 고정값(선형 클램프면 0.25) — 골든 A/B 가 반박하면 심과 함께 갱신.
+    func testWEMathSmoothStepAndMix() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        import * as WEMath from 'WEMath';
+        export function update(value) {
+            return new Vec2(WEMath.smoothStep(0, 1, 0.25), WEMath.mix(10, 20, 0.25));
+        }
+        """))
+        let out = try XCTUnwrap(e.evaluateVec(current: [0, 0]), "WEMath 심 부재(noopProxy 는 비수치)")
+        XCTAssertEqual(out[0], 0.15625, accuracy: 1e-6)
+        XCTAssertEqual(out[1], 12.5, accuracy: 1e-6)
+    }
+
+    /// smoothStep 구간 밖 클램프 + min==max 퇴화(step, NaN 누출 금지).
+    func testWEMathSmoothStepClampAndDegenerate() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        import * as WEMath from 'WEMath';
+        export function update(value) {
+            return new Vec3(WEMath.smoothStep(2, 6, 1),
+                            WEMath.smoothStep(2, 6, 9),
+                            WEMath.smoothStep(3, 3, 3));
+        }
+        """))
+        XCTAssertEqual(try XCTUnwrap(e.evaluateVec(current: [0, 0, 0])), [0, 1, 1])
+    }
+
+    /// WEMath 각도 상수(d.ts: deg2rad/rad2deg).
+    func testWEMathAngleConstants() throws {
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        import * as WEMath from 'WEMath';
+        export function update(value) { return new Vec2(WEMath.deg2rad * 90, WEMath.rad2deg); }
+        """))
+        let out = try XCTUnwrap(e.evaluateVec(current: [0, 0]))
+        XCTAssertEqual(out[0], .pi / 2, accuracy: 1e-5)
+        XCTAssertEqual(out[1], 180 / .pi, accuracy: 1e-3)
+    }
 }

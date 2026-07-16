@@ -706,12 +706,16 @@ public final class TextScriptEngine {
     }
 
     /// import clause → no-op 프록시 var 선언 코드. 빈 clause(side-effect) → "".
-    /// `* as X` / `{a, b as c}` / `default` / `default, {..}`(콤보) 지원. WEColor 는 실심 바인딩.
+    /// `* as X` / `{a, b as c}` / `default` / `default, {..}`(콤보) 지원. WEColor/WEMath 는 실심 바인딩.
     private static func importBindings(clause: String) -> String {
         let clause = clause.trimmingCharacters(in: .whitespaces)
         guard !clause.isEmpty else { return "" }
         func decl(_ name: String) -> String {
-            name == "WEColor" ? "var WEColor = __WEColor;" : "var \(name) = __noopProxy();"
+            switch name {
+            case "WEColor": return "var WEColor = __WEColor;"
+            case "WEMath": return "var WEMath = __WEMath;"
+            default: return "var \(name) = __noopProxy();"
+            }
         }
         if clause.hasPrefix("*") {
             // minified `import*as e from"m"` 대응(감사 W-B5): as 주변 공백을 강제하지 않는다.
@@ -964,6 +968,21 @@ public final class TextScriptEngine {
             }
             return new Vec3(h, mx === 0 ? 0 : d / mx, mx);
         }
+    };
+    // WEMath 실심(코퍼스 58씬) — 표면은 공개 lib.sceneScript.d.ts 그대로: smoothStep/mix/deg2rad/rad2deg 뿐.
+    var __WEMath = {
+        // ponytail: d.ts 문구는 "min..max → [0,1] 재매핑"뿐 — Hermite 인지 선형 클램프인지 미확정.
+        // GLSL/HLSL 동명 내장(셰이더 중심 엔진) 근거로 Hermite 채택; 골든 A/B 가 반박하면
+        // `t * t * (3 - 2 * t)` 를 `t`(선형 램프)로 교체 — 두 형태는 구간 밖 클램프는 동일.
+        smoothStep: function(min, max, value) {
+            min = Number(min); max = Number(max); value = Number(value);
+            if (min === max) { return value < min ? 0 : 1; }  // 퇴화(0폭 구간): step — 0나눗셈 NaN 누출 방지.
+            var t = Math.max(0, Math.min(1, (value - min) / (max - min)));
+            return t * t * (3 - 2 * t);
+        },
+        mix: function(a, b, value) { return Number(a) + (Number(b) - Number(a)) * Number(value); },
+        deg2rad: Math.PI / 180,
+        rad2deg: 180 / Math.PI
     };
     // 미디어 이벤트 클래스(실물 계약 — 필드는 193패키지 소비 역추출): 생성자는 기본값 채운 뒤
     // 주어진 필드를 전부 복사(실물 스크립트가 여러 이벤트를 한 객체에 합쳐 쓰는 union 소비 허용).
