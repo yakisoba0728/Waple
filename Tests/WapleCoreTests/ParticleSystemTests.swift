@@ -342,4 +342,44 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertTrue(d.operators.contains(
             .controlPointAttract(scale: -750, threshold: 64, target: Vec3(x: 100, y: 200, z: 0))))
     }
+
+    // REFRACT 스크린 굴절 머티리얼 파싱(실측 refractiverain.json 구조): combos.REFRACT + textures[1] 노멀 +
+    // constantshadervalues.ui_editor_properties_refract_amount. 노멀 유무가 굴절 경로 게이트.
+    func testRefractMaterialParse() {
+        let m = ParticleMaterial.parse(json("""
+        {"passes":[{"blending":"translucent","combos":{"REFRACT":1},
+          "constantshadervalues":{"ui_editor_properties_refract_amount":0.1},
+          "shader":"genericparticle","textures":["particle/drop","particle/drop_normal"]}]}
+        """))
+        XCTAssertTrue(m.refract)
+        XCTAssertEqual(m.textureName, "particle/drop")
+        XCTAssertEqual(m.normalTextureName, "particle/drop_normal")
+        XCTAssertEqual(m.refractAmount, 0.1, accuracy: 1e-6)
+        XCTAssertEqual(m.blend, .translucent)
+    }
+
+    // 음수 refract_amount(rain_screen.json = -0.1)도 그대로 보존(반전 굴절).
+    func testRefractNegativeAmount() {
+        let m = ParticleMaterial.parse(json("""
+        {"passes":[{"blending":"translucent","combos":{"CUTOUT":0,"REFRACT":1},
+          "constantshadervalues":{"ui_editor_properties_refract_amount":-0.1},
+          "textures":["a/sheet","a/sheet_normal"]}]}
+        """))
+        XCTAssertTrue(m.refract)
+        XCTAssertEqual(m.refractAmount, -0.1, accuracy: 1e-6)
+    }
+
+    // 비굴절 머티리얼: refract=false, 노멀 nil, refract_amount 기본 0.05. + REFRACT 콤보라도 노멀 없으면 게이트 off.
+    func testNonRefractAndRefractWithoutNormal() {
+        let plain = ParticleMaterial.parse(json(#"{"passes":[{"blending":"additive","textures":["particle/snow"]}]}"#))
+        XCTAssertFalse(plain.refract)
+        XCTAssertNil(plain.normalTextureName)
+        XCTAssertEqual(plain.refractAmount, 0.05, accuracy: 1e-6)
+        XCTAssertEqual(plain.blend, .additive)
+
+        // REFRACT=1 이지만 textures[1] 부재 → normalTextureName nil → refract 게이트 off(굴절 셰이더는 노멀 필수).
+        let noNormal = ParticleMaterial.parse(json(#"{"passes":[{"combos":{"REFRACT":1},"textures":["only/albedo"]}]}"#))
+        XCTAssertFalse(noNormal.refract)
+        XCTAssertNil(noNormal.normalTextureName)
+    }
 }

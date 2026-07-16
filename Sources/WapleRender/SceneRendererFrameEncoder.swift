@@ -380,6 +380,16 @@ extension SceneRenderer {
         var enc = enc
         for item in drawPlan {
             switch item.kind {
+            case .particle where particleSystems[item.idx].refract
+                              && !particleSystems[item.idx].isTrail
+                              && particleSystems[item.idx].normalTexture != nil
+                              && refractParticlePipeline != nil:
+                // REFRACT 스프라이트: 여기까지의 acc(씬 컬러)를 스냅샷 떠 노멀 오프셋 재샘플(인코더 분할).
+                // 리본/rope refract 는 스코프 밖 → 아래 일반 .particle 로 identity 렌더(ponytail).
+                guard let next = runRefractParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx),
+                                                    acc: acc, cb: cb, ending: enc, device: device,
+                                                    camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                enc = next
             case .particle:
                 encodeParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx), into: enc,
                                device: device, camOffset: &camOffset, aspectScale: &aspectScale)
@@ -572,6 +582,53 @@ extension SceneRenderer {
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setFragmentTexture(sys.texture, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
+    }
+
+    /// REFRACT 스프라이트 드로우(인코더 분할): 현재 enc 를 닫고 acc(씬 컬러)를 스냅샷(blit — 진행 중 타깃은
+    /// 샘플 불가, runFrameBufferLayer 와 동일 패턴)한 뒤, .load 로 재개한 인코더에 pf_refract 로 파티클을
+    /// 그린다(노멀 오프셋으로 스냅샷 재샘플·곱). 스냅샷/파이프라인 확보 실패 시 identity 파티클 폴백(무크래시).
+    /// 반환 인코더로 나머지 drawPlan 지속. 재개 실패만 nil(호출자는 추가 인코딩 없이 commit).
+    func runRefractParticle(_ sys: GPUParticleSystem, snapshot: [Particle], acc: MTLTexture, cb: MTLCommandBuffer,
+                            ending enc: MTLRenderCommandEncoder, device: MTLDevice,
+                            camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        enc.endEncoding()
+        var snap: MTLTexture? = nil
+        if let s = pooledOffscreen(acc.width, acc.height, device, bgra: true), let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(from: acc, to: s); blit.endEncoding(); snap = s
+        }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = acc
+        rpd.colorAttachments[0].loadAction = .load
+        guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        if let snap, let pipe = refractParticlePipeline {
+            encodeRefractParticle(sys, snapshot: snapshot, framebuffer: snap, pipe: pipe, into: next,
+                                  device: device, camOffset: &camOffset, aspectScale: &aspectScale)
+        } else {
+            encodeParticle(sys, snapshot: snapshot, into: next, device: device,
+                           camOffset: &camOffset, aspectScale: &aspectScale)  // identity 폴백
+        }
+        return next
+    }
+
+    /// REFRACT 파티클 1개 드로우. encodeParticle 과 동형이나 노멀맵(1)·씬 스냅샷(2)·refract 유니폼을 바인딩하고
+    /// pf_refract 파이프라인 사용. 정점(프레임 UV 포함)은 particleVertices 공유 — 노멀은 알베도와 같은 uv 로 샘플.
+    func encodeRefractParticle(_ sys: GPUParticleSystem, snapshot: [Particle], framebuffer: MTLTexture,
+                               pipe: MTLRenderPipelineState, into enc: MTLRenderCommandEncoder,
+                               device: MTLDevice, camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+        guard !snapshot.isEmpty, let normal = sys.normalTexture else { return }
+        let verts = particleVertices(snapshot, sys)
+        let vertexCount = verts.count / 8
+        guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { return }
+        enc.setRenderPipelineState(pipe)
+        enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        enc.setFragmentTexture(sys.texture, index: 0)     // 알베도(g_Texture0)
+        enc.setFragmentTexture(normal, index: 1)          // 노멀맵(g_Texture1)
+        enc.setFragmentTexture(framebuffer, index: 2)     // 씬 컬러 스냅샷(g_Texture3 = _rt_FullFrameBuffer)
+        var params = SIMD4<Float>(sys.refractAmount, sys.normalRG88 ? 1 : 0, 0, 0)
+        enc.setFragmentBytes(&params, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 

@@ -37,5 +37,35 @@ enum ParticleShaders {
         float A = t.a * in.color.a;
         return float4(t.rgb * in.color.rgb * A, A);
     }
+
+    // REFRACT(스크린 굴절 — WE genericparticle.frag:103-116). 파티클 컬러에 씬 컬러 타깃(fb=뒤 배경
+    // 누적 스냅샷)을 노멀맵 오프셋으로 재샘플해 **곱한다**(유리/물방울/열왜곡). vert 는 pv_main 공유
+    // (8-float 정점) — 화면 UV 는 in.pos(렌더타깃 픽셀)에서 얻어 f_compose 규약과 동일(y-flip 없음).
+    // refractParams = (g_RefractAmount, rg88Flag, 0, 0).
+    fragment float4 pf_refract(PVOut in [[stage_in]],
+                               texture2d<float> albedoTex [[texture(0)]],
+                               texture2d<float> normalTex [[texture(1)]],
+                               texture2d<float> fbTex [[texture(2)]],
+                               constant float4& refractParams [[buffer(0)]]) {
+        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        float4 t = albedoTex.sample(s, in.uv);
+        float4 nraw = normalTex.sample(s, in.uv);
+        bool rg88 = refractParams.y > 0.5;
+        // WE common_fragment.h DecompressNormalWithMask 포트. Waple RG88 디코드가 (b0,b0,b0,b1) 라
+        //   normal.x=.a (DXT5nm=alpha / RG88=byte1), normal.y=.g (DXT=green / RG88=byte0 복제) 로 양 포맷 공통.
+        //   차이만 분기: x-bias(DXT 0.965 / RG88 1.0), mask(DXT=red / RG88=없음→1.0).
+        float nx = nraw.a * 2.0 - (rg88 ? 1.0 : 0.965);
+        float ny = nraw.g * 2.0 - 1.0;
+        float mask = rg88 ? 1.0 : nraw.r;
+        // 스크린-정렬 2D 빌보드 → v_ScreenTangents = refractAmount·I (ViewRight/Up=축, 회전 생략:
+        // sprite refract 코퍼스에 회전 이니셜라이저 0건. ponytail: 회전 refract 발견 시 per-vertex 탄젠트).
+        // y 부호: WE GLSL 의 -offset.y 는 Metal y-down UV(in.pos) 규약과 상쇄 → 무플립(A/B 육안이 최종 게이트).
+        float2 off = refractParams.x * float2(nx, ny) * (mask * in.color.a);
+        float2 uv = in.pos.xy / float2(fbTex.get_width(), fbTex.get_height()) + off;
+        float3 bg = fbTex.sample(s, uv).rgb;
+        float3 rgb = t.rgb * in.color.rgb * bg;   // WE: color.rgb = v_Color*albedo; color.rgb *= framebuffer.rgb
+        float A = t.a * in.color.a;
+        return float4(rgb * A, A);                // premultiplied(블렌드 src=one)
+    }
     """
 }
