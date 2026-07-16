@@ -407,7 +407,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         guard view.bounds.contains(inView) else { return nil }
         return SceneRenderer.sceneCoords(viewPoint: inView, viewSize: view.bounds.size,
                                          projW: projW, projH: projH,
-                                         fitMode: SceneRenderSettings.fitMode)
+                                         fitMode: SceneRenderSettings.fitMode,
+                                         zoom: currentCameraZoom)
     }
 
     func deliverGlobalMouse(isDown: Bool) {
@@ -551,12 +552,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 뷰 좌표(AppKit 하단원점) → 씬 픽셀(WE 상단원점). aspectScale 역적용으로 fit 레터박스/
     /// fill 크롭 보정 — fit 레터박스 밖 클릭은 nil(대응하는 씬 좌표가 없음). (순수)
     static func sceneCoords(viewPoint: CGPoint, viewSize: CGSize, projW: Float, projH: Float,
-                            fitMode: FitMode) -> SIMD2<Float>? {
-        guard viewSize.width > 0, viewSize.height > 0, projW > 0, projH > 0 else { return nil }
+                            fitMode: FitMode, zoom: Float = 1) -> SIMD2<Float>? {
+        guard viewSize.width > 0, viewSize.height > 0, projW > 0, projH > 0, zoom > 0 else { return nil }
         let s = aspectScale(projAspect: projW / projH,
                             viewAspect: Float(viewSize.width / viewSize.height), fitMode: fitMode)
-        let nx = Float(viewPoint.x / viewSize.width * 2 - 1) / s.x
-        let ny = Float(viewPoint.y / viewSize.height * 2 - 1) / s.y
+        // zoom = camera 의사-오브젝트 뷰 스케일(draw 의 aspectScale×zoom 과 동일 공식 역적용).
+        let nx = Float(viewPoint.x / viewSize.width * 2 - 1) / (s.x * zoom)
+        let ny = Float(viewPoint.y / viewSize.height * 2 - 1) / (s.y * zoom)
         guard abs(nx) <= 1, abs(ny) <= 1 else { return nil }
         return SIMD2((nx + 1) / 2 * projW, (1 - (ny + 1) / 2) * projH)
     }
@@ -564,6 +566,31 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var projAspect: Float = 16.0 / 9.0
     var projW: Float = 1920
     var projH: Float = 1080
+
+    // ── camera 의사-오브젝트(P0-2 파스)의 2D 뷰 줌 ─────────────────────────────
+    // WE 시맨틱(클린룸 L19 봉인 + 코퍼스 37씬 실측): 2D 씬 투영은 orthogonalprojection dict 가
+    // 지배 — fov 는 160/168 씬에서 50 상수(투영 선택자 아님)라 무효, zoom 만 뷰 스케일로 실효
+    // (정적 0.75/2.87 + single 인트로 애니 9씬 — 전수 최종 키프레임 1.0 정착). origin 은 실효
+    // 카메라 전수가 중립(≈0)/스크립트 바인딩/미파스 인트로 애니 → 미배선(팬은 후속, BACKLOG).
+    // 3D 씬의 camera 오브젝트는 경로 웨이포인트(씬당 다수·큐 재생)라 미소비 — draw 3D 분기가
+    // 이 상태를 아예 안 읽는다. 정적 비가시 카메라는 파스가 이미 드롭 → first = 첫 가시 카메라.
+    var cameraZoomBase: Float = 1
+    var cameraZoomAnim: PropertyAnimation?
+    /// 마지막으로 그린 프레임의 zoom — 클릭/호버 역매핑(sceneCoords) 정합용.
+    var currentCameraZoom: Float = 1
+
+    /// mount: 씬 camera 의사-오브젝트 → 뷰 줌 상태. 카메라 없으면 중립 리셋(마운트 재사용 무회귀).
+    func applyCameraObjects(_ cams: [SceneCameraObject]) {
+        let cam = cams.first
+        cameraZoomBase = cam?.zoom ?? 1
+        cameraZoomAnim = cam?.zoomAnimation
+        currentCameraZoom = cameraZoomBase
+    }
+
+    /// time(초) 시점의 카메라 줌(정적 값 + 키프레임 평가 — single 은 끝 클램프). 카메라 부재 = 1.
+    func cameraZoom(at time: Float) -> Float {
+        cameraZoomAnim?.value(component: 0, atTime: time, base: cameraZoomBase) ?? cameraZoomBase
+    }
     var startTime = CFAbsoluteTimeGetCurrent()
     var lastFrameTime = CFAbsoluteTimeGetCurrent()
     var shouldAnimate = false
@@ -816,6 +843,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                    blue: Double(doc.clearColor.z), alpha: 1)
         projW = Float(max(1, doc.projectionWidth)); projH = Float(max(1, doc.projectionHeight))
         projAspect = projW / projH
+        // camera 의사-오브젝트 → 2D 뷰 줌(3D 는 미소비 — draw 3D 분기가 zoom 상태를 안 읽는다).
+        applyCameraObjects(doc.cameraObjects)
         // 씬 공유 JSContext — 3D 오브젝트/빌보드 스크립트와 2D buildLayers/buildTexts/효과 스크립트가 공유.
         // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
         // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
@@ -915,6 +944,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         ]
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
         shouldAnimate = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer
+            || cameraZoomAnim != nil  // 카메라 줌 인트로(single)도 연속 재생 필요
         if shouldAnimate {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
@@ -1007,7 +1037,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
-        if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer, view.window?.occlusionState.contains(.visible) == false { return }
+        if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer
+            || cameraZoomAnim != nil, view.window?.occlusionState.contains(.visible) == false { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
@@ -1073,6 +1104,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let viewAspect = Float(ds.width / max(1, ds.height))
         var aspectScale = SceneRenderer.aspectScale(projAspect: projAspect, viewAspect: viewAspect,
                                                     fitMode: SceneRenderSettings.fitMode)
+        // camera 의사-오브젝트 zoom: 뷰 스케일(NDC 중심 기준 — 실효 카메라 origin 전수 중립과 일치).
+        // 중립(1)/비정상(≤0)은 곱 자체를 스킵 → 카메라 없는 씬의 aspectScale 비트 불변(무회귀 가드).
+        let camZoomRaw = cameraZoom(at: time)
+        let camZoom = camZoomRaw > 0 ? camZoomRaw : 1
+        if camZoom != 1 { aspectScale *= camZoom }
+        currentCameraZoom = camZoom
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
         guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { cb.commit(); return }
@@ -1168,9 +1205,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let dt: Float = 1.0 / 30.0
         var urls: [URL] = []
         var camOff = SIMD2<Float>(0, 0)
-        var asp = SceneRenderer.aspectScale(projAspect: projAspect,
-                                            viewAspect: Float(width) / Float(max(1, height)),
-                                            fitMode: SceneRenderSettings.fitMode)
+        let aspBase = SceneRenderer.aspectScale(projAspect: projAspect,
+                                                viewAspect: Float(width) / Float(max(1, height)),
+                                                fitMode: SceneRenderSettings.fitMode)
         // 자식 GPU 시스템의 로컬 sim 은 더미 — 부모 sim 이 자식을 구동하므로 웜업/스텝에서 제외.
         let rootIdxs = sims.indices.filter { particleSystems[$0].childOf == nil }
         for t in times.sorted() {
@@ -1188,6 +1225,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             rpd.colorAttachments[0].loadAction = .clear
             rpd.colorAttachments[0].clearColor = clearColor
             guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
+            // camera zoom: 라이브 draw 와 동일하게 t 에 평가(A/B 캡처가 줌 씬을 판독해야 한다).
+            var asp = aspBase
+            let capZoomRaw = cameraZoom(at: t)
+            let capZoom = capZoomRaw > 0 ? capZoomRaw : 1
+            if capZoom != 1 { asp *= capZoom }
             // 라이브 draw 와 동일한 씬-순서 인터리브(encodeDrawPlan 공용 — 복제 루프 발산 방지).
             // 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
             // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)
