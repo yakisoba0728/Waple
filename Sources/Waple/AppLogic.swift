@@ -375,3 +375,9 @@ enum SettingsPresentation {
                   : "미설치 — mkv/webm 동영상 변환에 필요합니다 (brew install ffmpeg)"
     }
 }
+
+/// 최초 실행 온보딩 게이트(앱셸 스코프 B, 순수). 준비 항목 상태·시트 표시는 UI(부수효과)가 담당하고,
+/// 여기서는 "완료 플래그가 없으면 1회 표시" 결정만 한다(플래그 영속은 호출자 — UserDefaults).
+enum Onboarding {
+    static func shouldPresent(completed: Bool) -> Bool { !completed }
+}
