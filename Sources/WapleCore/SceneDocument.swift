@@ -580,13 +580,19 @@ extension SceneDocument {
                 // 가시 자식의 parent 체인 합성(2D composeParentTransforms localT·3D nodeMap)이 끊기지
                 // 않게 한다. 렌더 대상(layers/objects3D/…)에는 계속 미포함(무회귀).
                 if intVal(obj["id"]) != nil {
-                    nodes3D.append(SceneNode3D(
+                    var invNode = SceneNode3D(
                         id: objectID,
                         origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
                         angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
                         scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
                         parent: intVal(obj["parent"]),
-                        visible: false))
+                        visible: false)
+                    // 정적 비가시 콘텐츠 노드의 트랜스폼 스크립트(origin/angles/scale) 보존 — 이들이
+                    // shared 사이드이펙트로 다른 스크립트를 구동한다(실물 3470948192: 비가시 id=56 origin
+                    // 스크립트가 shared.xx 세팅 → text id=181 이 소비 → shared.vvv → Hollow Cylinder 스케일).
+                    // 종전엔 트랜스폼만 보존하고 스크립트를 버려 컨트롤러 체인이 끊겼다(소비 지오메트리 NaN).
+                    invNode.propertyScripts = transformScripts(obj)
+                    nodes3D.append(invNode)
                 }
                 continue
             }

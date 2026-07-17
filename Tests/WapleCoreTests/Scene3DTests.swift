@@ -176,6 +176,26 @@ final class Scene3DTests: XCTestCase {
         XCTAssertNotNil(model.propertyScripts["visible"])
     }
 
+    /// 정적 비가시 콘텐츠 오브젝트(visible:false, visible 스크립트 없음)의 트랜스폼 스크립트(origin 등)는
+    /// 비가시 노드에 보존된다 — shared 사이드이펙트로 다른 스크립트를 구동하므로(실물 3470948192 id=56 →
+    /// shared.xx → text → shared.vvv → Hollow Cylinder 스케일). 종전엔 트랜스폼만 보존, 스크립트 소실.
+    func testStaticHiddenControllerTransformScriptPreserved() throws {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":56,"name":"ctrl","image":"models/x.json","visible":false,
+            "origin":{"script":"export function update(v){ shared.xx = 3; return v; }","value":"0 0 0"}}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: pkg([("scene.json", scene)]))
+        // 렌더 대상엔 미포함(비가시), 계층 노드로만 보존.
+        XCTAssertTrue(doc.layers.isEmpty, "비가시 콘텐츠는 렌더 레이어 제외")
+        let node = try XCTUnwrap(doc.nodes3D.first { $0.id == 56 })
+        XCTAssertFalse(node.visible)
+        XCTAssertNotNil(node.propertyScripts["origin"], "비가시 컨트롤러의 origin 스크립트 보존")
+    }
+
     /// 3D 씬 이미지 레이어(빌보드): origin 의 z 성분과 parent 계층 보존.
     func test3DBillboardLayerPreservesOriginZAndParent() throws {
         let scene = """
