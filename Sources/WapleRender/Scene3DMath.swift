@@ -29,6 +29,17 @@ enum Scene3DMath {
             SIMD4<Float>(0, 0, nearZ * zz, 0)))
     }
 
+    /// clip-space 병진행렬. viewProj 에 좌승(clipTranslation(s)·viewProj)하면 (s·w) 가 clip.xy 에 더해져
+    /// 원근분할 후 전 정점이 depth 무관하게 ndc 만큼 병진한다 — camerashake 3D 전역 카메라 지터를
+    /// 셰이더 무수정으로 viewProj 한 곳에 적용(2D shakeOffset 의 3D 동형). s=.zero → 항등(무회귀 가드).
+    static func clipTranslation(_ ndc: SIMD2<Float>) -> simd_float4x4 {
+        simd_float4x4(columns: (
+            SIMD4<Float>(1, 0, 0, 0),
+            SIMD4<Float>(0, 1, 0, 0),
+            SIMD4<Float>(0, 0, 1, 0),
+            SIMD4<Float>(ndc.x, ndc.y, 0, 1)))
+    }
+
     /// 오브젝트 모델행렬 = T(origin) · Rz(z)·Ry(y)·Rx(x) · S(scale). angles 라디안.
     /// 오일러 순서 실측(2026-07-03): 실물 회전의 절대다수가 단축(yaw 전용)이라 순서 무관하게 동일 —
     /// 유일한 판정 지점인 짐벌 표현 (π, θ, -π)(젤다 Rupee Root/happy_mask_salesman)은 순수 yaw(π-θ)와

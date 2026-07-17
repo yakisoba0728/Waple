@@ -750,7 +750,11 @@ extension SceneRenderer {
         let view = Scene3DMath.lookAt(eye: eye, center: ctr, up: upv)
         let proj = Scene3DMath.perspective(fovYDegrees: fov, aspect: aspect,
                                            nearZ: cam.nearZ, farZ: cam.farZ)
-        let viewProj = proj * view
+        var viewProj = proj * view
+        // camerashake 3D: 전역 지터를 clip-space 병진으로 viewProj 에 좌승 → 메시/빌보드/파티클 전역 동병진
+        // (depth 무관). 미보유/비활성 씬은 frameShakeOffset=.zero → clipTranslation=항등 → 비트동일 가드.
+        // shadow VP(광원공간)는 viewProj 미참조 → 월드 지오메트리·섀도우 불변, 화면만 흔들림.
+        if frameShakeOffset != .zero { viewProj = Scene3DMath.clipTranslation(frameShakeOffset) * viewProj }
         // 빌보드 카메라-페이싱 축(월드): right/up(lookAt 과 동일 규약).
         let fwd = simd_normalize(ctr - eye)
         let right = simd_normalize(simd_cross(fwd, upv))

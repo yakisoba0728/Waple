@@ -1188,6 +1188,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 3D 씬: 메시 + 빌보드 패스(뎁스, per-frame 스크립트) → scene-global finalizer.
         if is3D {
             beginFramePool()
+            frameShakeOffset = shakeOffset(at: time)  // camerashake 3D 전역 지터(encode3D 가 viewProj 에 좌승). 비활성=.zero → 항등.
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
                   encode3D(into: acc, cb: cb, device: device, time: time, particleDelta: dt) else { cb.commit(); return }
             guard finalizeScene(
@@ -1295,6 +1296,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             for t in times.sorted() {
                 guard let cb = queue.makeCommandBuffer() else { continue }
                 beginFramePool()
+                frameShakeOffset = shakeOffset(at: t)  // 라이브 draw 동형: A/B 캡처가 3D 지터 오프셋을 판독(비활성=.zero)
                 // HDR bloom/LDR bloom 모두 readback(target)과 분리된 불변 소스 필요.
                 // HDR 은 pooledOffscreen(bgra:true) 이 hdrActive 로 float(rgba16Float) 승격 → >1 보존해 골든 대조.
                 let source = (hdrActive || sceneWantsLDRBloom)
