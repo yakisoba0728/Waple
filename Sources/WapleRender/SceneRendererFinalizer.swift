@@ -18,7 +18,8 @@ extension SceneRenderer {
             // 비-sRGB 타깃엔 이중감마가 된다 — 근거·실측은 HDRBloomPass 헤더/합성부 주석).
             // 이 분기(블룸)와 아래 hdrPost 폴백은 이제 동일 saturate 규약 — hdr&&!bloom 은
             // hdrPost(클램프)로 확정, 블룸 실패 폴백도 같은 클램프라 폴백 시각 점프 없음.
-            // hdr 이어도 3D 씬은 hdrActive 의 !is3D 로 여기 미도달(3D-HDR 블룸 = 별도 트랙).
+            // 3D HDR 씬도 이 경로 도달(hdrActive=sceneIsHDR): acc·메시·파티클 파이프라인이 accPixelFormat(float)
+            // 로 승격돼 소스가 float — 골든 3470948192(3D)의 bloom 지상검증이 여기서 성립.
             // 자원/인코드 실패는 hdrPost(saturate 클램프)로 폴백(무크래시·동일 규약). pooledOffscreen(bgra:true)는 hdrActive
             // 에서 float(rgba16Float)로 자동 승격된다(중간 버퍼가 소스와 동일 float 계약).
             // 비-HDR 씬은 hdrActive=false 로 이 블록 자체에 도달 불가(격리 — 148씬 무접촉).

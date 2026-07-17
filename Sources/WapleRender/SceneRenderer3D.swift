@@ -456,15 +456,16 @@ extension SceneRenderer {
         return digits.isEmpty ? nil : Int(digits)
     }
 
-    /// 메시 파이프라인(bgra8 + depth32Float). 프래그먼트가 premultiplied 출력 → src=one,
+    /// 메시 파이프라인(accPixelFormat + depth32Float). 프래그먼트가 premultiplied 출력 → src=one,
     /// over: dst=1-srcAlpha, additive: dst=one(가산). vertex = "mv_main"(정적) | "mv_skin"(GPU 스키닝).
+    /// HDR 씬은 acc 가 float(rgba16Float)라 컬러 어태치먼트도 float 로 일치시켜야 한다(불일치=Metal 미정의).
     func mesh3DPipeline(lib: MTLLibrary, vertex: String, additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: vertex)
         pd.fragmentFunction = lib.makeFunction(name: "mf_main")
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
-        a.pixelFormat = .bgra8Unorm
+        a.pixelFormat = accPixelFormat
         a.isBlendingEnabled = true
         a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
@@ -473,7 +474,7 @@ extension SceneRenderer {
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
-    /// 3D 파티클 원근 빌보드 파이프라인. 메시 패스와 동일 타깃(bgra8+depth32). frag=pf_main(premult α),
+    /// 3D 파티클 원근 빌보드 파이프라인. 메시 패스와 동일 타깃(accPixelFormat+depth32). frag=pf_main(premult α),
     /// 블렌드는 2D 파티클(particlePipeline)과 동치: additive dst=one / translucent dst=1-srcα.
     func particle3DPipeline(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
         guard let lib = try? WapleProfiler.compile(ParticleShaders.source, { try device.makeLibrary(source: ParticleShaders.source, options: nil) }) else { return nil }
@@ -482,7 +483,7 @@ extension SceneRenderer {
         pd.fragmentFunction = lib.makeFunction(name: "pf_main")
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
-        a.pixelFormat = .bgra8Unorm
+        a.pixelFormat = accPixelFormat
         a.isBlendingEnabled = true
         a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one

@@ -508,8 +508,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneWantsHDRBloom = false
     var hdrBloomParameters = HDRBloomParameters.defaults
     var hdrBloomPass: HDRBloomEncoding?
-    /// HDR 경로 실효 게이트. 3D 씬은 별도 파이프라인(bgra8, 다른 lane)이라 제외 — 3D-HDR 은 종전 LDR 유지.
-    var hdrActive: Bool { sceneIsHDR && !is3D }
+    /// HDR 경로 실효 게이트(2D·3D 공통). 3D 씬도 acc/메시/파티클 파이프라인이 accPixelFormat(float)로
+    /// 승격되므로(mesh3DPipeline/particle3DPipeline) HDRBloomPass 에 도달 — 유일 HDR 골든(3470948192=3D) 대조 가능.
+    var hdrActive: Bool { sceneIsHDR }
     /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
     /// HDR 이면 float(>1 보존) — mount 에서 sceneIsHDR 확정 후 파이프라인 생성에 사용.
     var accPixelFormat: MTLPixelFormat { sceneIsHDR ? .rgba16Float : .bgra8Unorm }
@@ -1294,7 +1295,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             for t in times.sorted() {
                 guard let cb = queue.makeCommandBuffer() else { continue }
                 beginFramePool()
-                let source = sceneWantsLDRBloom
+                // HDR bloom/LDR bloom 모두 readback(target)과 분리된 불변 소스 필요.
+                // HDR 은 pooledOffscreen(bgra:true) 이 hdrActive 로 float(rgba16Float) 승격 → >1 보존해 골든 대조.
+                let source = (hdrActive || sceneWantsLDRBloom)
                     ? (pooledOffscreen(width, height, device, bgra: true) ?? target)
                     : target
                 guard encode3D(into: source, cb: cb, device: device, time: t, particleDelta: nil) else { continue }
