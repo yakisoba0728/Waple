@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import Metal
 @testable import WapleCore
 @testable import WapleRender
@@ -73,6 +74,109 @@ final class PuppetAbsentRefTests: XCTestCase {
         // === 과침묵 방지: 존재하나 파싱 불가한 퍼펫은 여전히 결함으로 로그(실진단 보존) ===
         XCTAssertTrue(log.contains("puppet mdl load failed (static quad fallback): models/garbage_puppet.mdl"),
                       "존재+파싱실패 퍼펫은 여전히 로그로 남아야")
+    }
+
+    // MARK: animationlayers 스크립트 per-frame 재적용(캐스케이드 소비자 배선) — 픽셀 red→green
+
+    /// 스키닝 MDLV0013 합성: 1본(항등 바인드), 화면을 덮는 ±5000 쿼드(전정점 본0 가중 1),
+    /// 클립 2개 — "clipA" 키 (0,0,0)=항등 / "clipB" 키 (+100000,0,0)=화면 밖 평행이동. 각 1키(시불변 포즈).
+    private func twoClipPuppetMDL() -> Data {
+        var d = Data("MDLV0013".utf8)
+        d.append(Data([0x00, 0x09, 0x00, 0x80, 0x01, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]))
+        func u(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func f(_ v: Float) { u(v.bitPattern) }
+        d.append(Data("materials/m.json".utf8)); d.append(0)
+        u(0)                                    // 미상 u32(0)
+        let quad: [(Float, Float)] = [(-5000, -5000), (5000, -5000), (-5000, 5000), (5000, 5000)]
+        u(UInt32(quad.count * 52))
+        for (px, py) in quad {
+            f(px); f(py); f(0)                  // pos
+            u(0); u(0); u(0); u(0)              // boneIndices
+            f(1); f(0); f(0); f(0)              // weights → 본0 전량
+            f(0); f(0)                          // uv
+        }
+        u(6 * 2)
+        for i: UInt16 in [0, 1, 2, 2, 1, 3] { var x = i.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        d.append(Data("MDLS0001".utf8)); d.append(0)
+        u(0); u(1)                              // nextOff(파서 미검증), 본수
+        d.append(Data("root".utf8)); d.append(0)
+        u(1); u(UInt32(bitPattern: -1)); u(64)  // flags, parent=-1, 행렬크기
+        for v: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(v) }
+        d.append(0)                             // pad
+        d.append(Data("MDLA0001".utf8)); d.append(0)
+        u(0); u(2); u(0); u(0)                  // nextOff, 애니수, id, 0
+        for (name, dx) in [("clipA", Float(0)), ("clipB", Float(100_000))] {
+            d.append(Data(name.utf8)); d.append(0)
+            d.append(Data("loop".utf8)); d.append(0)
+            f(1); u(1); u(0); u(1); u(0)        // fps, length, 0, 트랙본수, 0
+            u(36)                               // 1키(36B)
+            f(dx); f(0); f(0); f(0); f(0); f(0); f(1); f(1); f(1)  // pos/angles/scale
+            u(0)                                // blob2
+        }
+        return d
+    }
+
+    private func mountAndCapture(_ pkg: Data, id: String, times: [Float]) throws -> (SceneRenderer, [URL]) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_alscript_\(id)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try pkg.write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: id, type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: id, tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        addTeardownBlock { r.teardown() }
+        let out = dir.appendingPathComponent("out", isDirectory: true)
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let urls = r.captureFrames(width: 64, height: 36, times: times, toDir: out)
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return (r, urls)
+    }
+
+    /// 화면 평균 밝기(0=흑, 1=백).
+    private func brightness(_ url: URL) throws -> Double {
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        var sum = 0.0, n = 0.0
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let c = rep.colorAt(x: x, y: y) else { continue }
+                sum += (c.redComponent + c.greenComponent + c.blueComponent) / 3; n += 1
+            }
+        }
+        return n > 0 ? sum / n : -1
+    }
+
+    /// animationlayers visible 스크립트의 per-frame 재적용 → 캐스케이드 블렌드 소비자까지 관통(픽셀 검증).
+    /// 정적 파스: L1 visible=false → 단일 클립 경로(clipA=항등) → 흰 퍼펫이 화면을 덮는다.
+    /// 스크립트는 매 프레임 true → 재적용되면 2층 캐스케이드(clipB 절대 w=1 오버라이드, +100000px
+    /// 평행이동) → 메시 화면 밖 → 흑화면. base 는 파스된 정적값만 소비해 흰 화면 유지(red).
+    func testAnimationLayerVisibleScriptDrivesCascadePerFrame() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":64,"height":36},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/p.json","origin":"32 18 0","size":"64 36","scale":"1 1 1",
+           "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true,
+           "animationlayers":[
+             {"name":"clipA","additive":false,"blend":1.0,"rate":1.0,"visible":true},
+             {"name":"clipB","additive":false,"blend":1.0,"rate":1.0,
+              "visible":{"value":false,"script":"export function update(v) { return true; }"}}
+           ]}]}
+        """
+        let pkgData = encodePkg([
+            ("scene.json", Data(scene.utf8)),
+            ("models/p.json", Data(#"{"material":"materials/m.json","puppet":"models/p.mdl"}"#.utf8)),
+            ("materials/m.json", Data(#"{"passes":[{}]}"#.utf8)),   // 무텍스처 → solid 퍼펫 메시
+            ("models/p.mdl", twoClipPuppetMDL()),
+        ])
+        let (r, urls) = try mountAndCapture(pkgData, id: "cascade", times: [0.25, 0.75])
+        // 픽스처 새너티: 퍼펫+2클립 로드(실패 시 정적 쿼드 폴백도 흰 화면이라 red 원인이 오염된다).
+        let pm = try XCTUnwrap(r.layers.first?.puppet, "합성 퍼펫이 로드돼야(픽스처 새너티)")
+        XCTAssertEqual(pm.animations.map(\.name), ["clipA", "clipB"], "클립 2개 파스(픽스처 새너티)")
+        XCTAssertEqual(urls.count, 2)
+        for u in urls {
+            let b = try brightness(u)
+            XCTAssertLessThan(b, 0.05, "visible 스크립트 재적용 → clipB 오버라이드로 메시 화면 밖(흑)이어야. "
+                + "base: 정적 visible=false 단일 clipA(흰 화면) 유지 — \(u.lastPathComponent) brightness=\(b)")
+        }
     }
 
     /// stderr 캡처(NSLog → stderr; GT 하네스도 동일 가정). XCTest 직렬 실행 전제, 출력 소량(무-deadlock).

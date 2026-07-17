@@ -152,6 +152,28 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(al[1].eventTimelines.isEmpty, "events 없는 바인딩 애니는 미보관")
     }
 
+    /// animationlayers rate 바인딩 스크립트 캡처(실물 2955378002/3448290956 오디오 배속 축소판).
+    /// base 결함: 파서 키 루프가 ["blend","visible"] 만 훑어 rate 스크립트를 조용히 폐기.
+    /// 정적 초기값({value} 언랩)은 종전대로 보존돼야 한다(무회귀).
+    func testCapturesAnimationLayerRateScript() throws {
+        let puppetModel = #"{"width":100,"height":100,"material":"materials/m.json","puppet":"models/p.mdl"}"#
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"image":"models/x.json","origin":"50 50 0","size":"10 10","scale":"1 1 1",
+           "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true,
+           "animationlayers":[
+             {"name":"Animation 2","additive":false,"blend":1.0,"visible":true,
+              "rate":{"value":1.1,"script":"export function update(v){return 0;}"}}
+           ]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", puppetModel), ("materials/m.json", material)])
+        let al = try SceneDocument.parse(package: p).layers[0].animationLayers
+        XCTAssertEqual(al.count, 1)
+        XCTAssertNotNil(al[0].scripts["rate"], "rate 바인딩 스크립트가 캡처돼야(base: 파스에서 폐기)")
+        XCTAssertEqual(al[0].rate, 1.1, accuracy: 1e-6, "정적 rate 초기값({value} 언랩) 무회귀")
+        XCTAssertTrue(al[0].eventTimelines.isEmpty, "events 없는 rate 바인딩은 타임라인 미보관")
+    }
+
     /// 비-퍼펫 이미지 레이어는 animationLayers 빈 배열(파스 오버헤드/오분류 없음).
     func testNonPuppetLayerHasNoAnimationLayers() throws {
         let scene = """

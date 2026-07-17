@@ -252,6 +252,17 @@ extension SceneRenderer {
                     if e.hasUpdate { hasAnimations = true }
                 }
             }
+            // animationlayers blend/visible/rate 바인딩 스크립트(실물 rate 오디오 배속 2955378002/3448290956,
+            // visible 토글 15씬): per-frame 재평가용 엔진. 정적 파스값은 초기값으로 유지(encodeLayer effLayers).
+            var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = []
+            for (idx, al) in layer.animationLayers.enumerated() {
+                for (key, src) in al.scripts {
+                    if let e = makeScriptEngine(src, layerName: layer.name.isEmpty ? nil : layer.name) {
+                        animLayerScripts.append((idx, key, e))
+                        if e.hasUpdate { hasAnimations = true }
+                    }
+                }
+            }
             // attachment(이름 본-슬롯 부착): 부모 레이어의 퍼펫 모델에서 부착점(MDAT)을 찾아 스펙 구성.
             // 부모/퍼펫/부착점 어느 하나라도 부재 → nil = 무부착 폴백(기존 베이크 위치 그대로 — 무회귀·무크래시).
             var attach: SceneRenderer.PuppetAttach? = nil
@@ -292,6 +303,7 @@ extension SceneRenderer {
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty
                                       && attach == nil) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
+                                animLayerScripts: animLayerScripts,
                                 initialVisible: layer.initialVisible,
                                 colorBlendMode: layer.colorBlendMode, frames: frames,
                                 isLit: layerLit,

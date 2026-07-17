@@ -508,13 +508,35 @@ extension SceneRenderer {
                 scriptVisible[layer.uid] = sc.engine.evaluateBool(current: cur) ?? cur
             }
         }
+        // animationlayers 스크립트: per-frame 재평가 → 유효 visible/rate/blend 를 로컬 사본에 반영
+        // (캐스케이드 블렌드 소비자 전용 — 정적 파스값 def.animationLayers 는 불변, current 인자로 재공급).
+        // propScripts 와 동일하게 draw 스킵보다 먼저 평가(shared 사이드이펙트 보존). 예외/무update → 정적값 유지.
+        var effLayers = layer.def?.animationLayers ?? []
+        for sc in layer.animLayerScripts where sc.layerIndex < effLayers.count {
+            sc.engine.setRuntime(Double(time))
+            switch sc.key {
+            case "visible":
+                let cur = effLayers[sc.layerIndex].visible
+                effLayers[sc.layerIndex].visible = sc.engine.evaluateBool(current: cur) ?? cur
+            case "rate":
+                if let r = sc.engine.evaluateVec(current: [effLayers[sc.layerIndex].rate])?.first {
+                    effLayers[sc.layerIndex].rate = r
+                }
+            case "blend":   // 이미지 레이어 코퍼스 실측 0건 — 동일 스위치라 무비용 커버(3D 쪽 실물만 존재)
+                if let b = sc.engine.evaluateVec(current: [effLayers[sc.layerIndex].blend])?.first {
+                    effLayers[sc.layerIndex].blend = b
+                }
+            default: break
+            }
+        }
         // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(레이어는 유지 — 런타임 토글 가능).
         if !(scriptVisible[layer.uid] ?? layer.initialVisible) { return }
         var vertexCount = 6
         // 퍼펫: per-frame CPU 스키닝 → 메시 삼각형 리스트로 쿼드 대체.
         if let pm = layer.puppet, let def = layer.def, let device {
             // 다층 animationlayers → 캐스케이드 블렌드(2+ 활성 레이어). 0/1 = 기존 단일 경로(무회귀).
-            let eff = def.animationLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
+            // effLayers = 정적 파스값 + per-frame 스크립트 평가값(위 animLayerScripts 루프).
+            let eff = effLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
             let mats: [simd_float4x4]
             if eff.count >= 2 {
                 let resolved = eff.map { (pos, L) in
