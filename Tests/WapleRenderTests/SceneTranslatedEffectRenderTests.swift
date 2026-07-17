@@ -314,6 +314,63 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertGreaterThan(luma, 0.9, "g_Texture0Resolution.x must be actual capture width 64, not projection width 1920")
     }
 
+    /// 갓레이 각도 회귀(#): vertex mul(vec, 비대칭행렬) 원근 전개. 종전 (b*a) 전치 오역은 fxCoord.y 를
+    /// 스크린 x 와 무관하게 만들어 가로띠로 렌더했다(lightshafts squareToQuad 실증). 순서보존(a*b) 이면
+    /// fxCoord.y = 0.8·u + w → 같은 행에서 좌<우(슬랜트). 셰이더 자족(인클루드 불요)이라 CI 이식.
+    func testVertexPerspectiveMulSlantsNotHorizontal() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        // GLSL column-major mat3: 열 c0=(1,0,0) c1=(0.8,1,0) c2=(0,0,1). 비대칭 → 전치 판별 가능.
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec3 v_Fx;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            mat3 xform = mat3(1.0, 0.0, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0, 1.0);
+            v_Fx = mul(vec3(a_TexCoord.xy, 1.0), xform);
+        }
+        """
+        let frag = """
+        varying vec3 v_Fx;
+        void main() {
+            float y = clamp(v_Fx.y / v_Fx.z, 0.0, 1.0);
+            gl_FragColor = vec4(y, y, y, 1.0);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/slanttest/effect.json","passes":[{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_slant", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("shaders/effects/slanttest.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/slanttest.frag", frag.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "slant", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "slant", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_slant")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        // 상단부 같은 행에서 좌/우 밝기(fxCoord.y = 0.8·u + w). 순서보존이면 우>좌, 전치면 동일(가로띠).
+        let yRow = rep.pixelsHigh / 8
+        let left = try XCTUnwrap(rep.colorAt(x: 3, y: yRow)).brightnessComponent
+        let right = try XCTUnwrap(rep.colorAt(x: rep.pixelsWide - 4, y: yRow)).brightnessComponent
+        NSLog("%@", "[Waple] perspective-mul slant left=\(left) right=\(right)")
+        XCTAssertGreaterThan(right - left, 0.3,
+                             "vertex mul(vec, 비대칭M) 슬랜트: 우(\(right)) - 좌(\(left)) > 0.3 — 전치 오역이면 ≈0(가로띠)")
+    }
+
     /// 실제 WE opacity GLSL 을 비-스톡 이름 "opacitytest" 로 변환·렌더 → 핸드포팅 오라클(alpha 0.4 → ~0.4)과 수치 일치.
     /// 비-스톡 이름이라 번역이 깨지면 폴백이 가리지 못하고 ~1.0 → 실패.
     func testTranslatedOpacityMatchesHandPort() throws {

@@ -1246,8 +1246,11 @@ public enum GLSLTranslator {
 
     static func translateBody(_ body: String, symbols: [String: String], isFragment: Bool) -> String? {
         var s = body
-        // 1) mul(a,b) → (b * a)
-        s = rewriteCall(s, "mul") { args in args.count == 2 ? "(\(args[1]) * \(args[0]))" : nil }
+        // 1) mul(a,b) → (a * b) — WE GLSL 방언의 mul 은 순서보존 곱(HLSL mul(v,M)=행벡터 v·M, GLSL
+        //    v*M=Mᵀ·v 로 동일 결과). 종전 (b*a) 는 전치 오역: 비대칭 행렬에서 결과가 뒤집힌다. MVP 는
+        //    이펙트 경로에서 항등(순서 무관)·2D 레이어는 하드코딩 v_main 이라 잠복해 있었고, 유일 발현이
+        //    lightshafts/cursorripple 의 squareToQuad 원근(vert): (b*a)→가로띠, (a*b)→저작 각도 광선.
+        s = rewriteCall(s, "mul") { args in args.count == 2 ? "(\(args[0]) * \(args[1]))" : nil }
         // 2) texSample2DLod(t, uv, l) → t.sample(smp, uv, level(l)) / texSample2D(t, uv) → t.sample(smp, uv).
         //    UV 는 we_uv() 로 절단 — WE GLSL(HLSL 방언)은 vec3/vec4 를 UV 로 암시적 절단해 넘기는 걸 허용한다.
         s = rewriteCall(s, "texSample2DLod") { args in args.count == 3 ? "\(args[0]).sample(smp, we_uv(\(args[1])), level(\(args[2])))" : nil }
