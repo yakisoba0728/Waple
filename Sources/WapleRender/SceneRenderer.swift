@@ -500,6 +500,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneWantsLDRBloom = false
     var ldrBloomParameters = LDRBloomParameters.defaults
     var ldrBloomPass: LDRBloomEncoding?
+    /// #22 HDR bloom authored 게이트(hdr && bloom — 코퍼스 8씬). 패스 생성 실패 시 종전 ACES 폴백.
+    var sceneWantsHDRBloom = false
+    var hdrBloomParameters = HDRBloomParameters.defaults
+    var hdrBloomPass: HDRBloomEncoding?
     /// HDR 경로 실효 게이트. 3D 씬은 별도 파이프라인(bgra8, 다른 lane)이라 제외 — 3D-HDR 은 종전 LDR 유지.
     var hdrActive: Bool { sceneIsHDR && !is3D }
     /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
@@ -714,6 +718,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneWantsLDRBloom = false
         ldrBloomParameters = .defaults
         ldrBloomPass = nil
+        sceneWantsHDRBloom = false
+        hdrBloomParameters = .defaults
+        hdrBloomPass = nil
         guard let pkgURL = pkgURL(in: project.folderURL) else {
             NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
             throw RendererError.assetMissing
@@ -788,6 +795,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             tint: SIMD3(doc.bloomTint.x, doc.bloomTint.y, doc.bloomTint.z))
         if sceneWantsLDRBloom {
             ldrBloomPass = LDRBloomPass(device: device)
+        }
+        // #22 HDR bloom: hdr&&bloom 씬 — LDR 과 병행하는 별개 레시피(둘은 상호배타 게이트).
+        // 실효 strength = 저작 × iterations × strengthScale(단일레벨의 피라미드 누적 보상 —
+        // 골든/preview 2점 캘리브, HDRBloomPass.strengthScale 주석 참조).
+        sceneWantsHDRBloom = doc.hdr && doc.bloom
+            && ProcessInfo.processInfo.environment["WAPLE_NO_BLOOM"] == nil
+        hdrBloomParameters = HDRBloomParameters(
+            strength: doc.bloomHDRStrength * Float(max(1, doc.bloomHDRIterations))
+                * HDRBloomPass.strengthScale,
+            threshold: doc.bloomHDRThreshold,
+            feather: doc.bloomHDRFeather,
+            tint: SIMD3(doc.bloomTint.x, doc.bloomTint.y, doc.bloomTint.z))
+        if sceneWantsHDRBloom {
+            hdrBloomPass = HDRBloomPass(device: device)
         }
 
         let library = try WapleProfiler.compile(QuadShaders.source) { try device.makeLibrary(source: QuadShaders.source, options: nil) }
@@ -1329,6 +1350,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneWantsLDRBloom = false
         ldrBloomParameters = .defaults
         ldrBloomPass = nil
+        sceneWantsHDRBloom = false
+        hdrBloomParameters = .defaults
+        hdrBloomPass = nil
         pipeline = nil; layerAdditivePipeline = nil; queue = nil; device = nil
     }
 }

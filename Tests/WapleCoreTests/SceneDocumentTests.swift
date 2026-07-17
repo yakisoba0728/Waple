@@ -30,7 +30,8 @@ final class SceneDocumentTests: XCTestCase {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},
           "hdr":true,"bloom":true,"bloomstrength":3.37,"bloomthreshold":0.36,
-          "bloomhdrstrength":1.4,"bloomhdrthreshold":0.70},"objects":[]}
+          "bloomhdrstrength":1.4,"bloomhdrthreshold":0.70,
+          "bloomhdrfeather":0.25,"bloomhdriterations":6,"bloomhdrscatter":2.0},"objects":[]}
         """
         let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
         XCTAssertTrue(doc.hdr)
@@ -40,6 +41,9 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.bloomTint, Vec3(x: 1, y: 1, z: 1))
         XCTAssertEqual(doc.bloomHDRStrength, 1.4, accuracy: 1e-4)
         XCTAssertEqual(doc.bloomHDRThreshold, 0.70, accuracy: 1e-4)
+        XCTAssertEqual(doc.bloomHDRFeather, 0.25, accuracy: 1e-4)
+        XCTAssertEqual(doc.bloomHDRIterations, 6)
+        XCTAssertEqual(doc.bloomHDRScatter, 2.0, accuracy: 1e-4)
     }
 
     /// hdr/bloom 부재 시 기본 false(종전 LDR 경로 유지 = 무회귀).
@@ -52,7 +56,11 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.bloomThreshold, 0.65, accuracy: 1e-6)
         XCTAssertEqual(doc.bloomTint, Vec3(x: 1, y: 1, z: 1))
         XCTAssertEqual(doc.bloomHDRStrength, 0, accuracy: 1e-6)
-        XCTAssertEqual(doc.bloomHDRThreshold, 0, accuracy: 1e-6)
+        // HDR 기본값 = WE 클린룸 확정치(A3 §0: threshold 1.0 · feather 0.1 · scatter 1.619 · iterations 8).
+        XCTAssertEqual(doc.bloomHDRThreshold, 1, accuracy: 1e-6)
+        XCTAssertEqual(doc.bloomHDRFeather, 0.1, accuracy: 1e-6)
+        XCTAssertEqual(doc.bloomHDRIterations, 8)
+        XCTAssertEqual(doc.bloomHDRScatter, 1.619, accuracy: 1e-6)
     }
 
     func testBloomParserAcceptsNumericStringAndValueFormsWithoutClamping() throws {
@@ -82,6 +90,14 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(values.bloomStrength, 4.5, accuracy: 1e-6)
         XCTAssertEqual(values.bloomThreshold, 0.2, accuracy: 1e-6)
         XCTAssertEqual(values.bloomTint, Vec3(x: 1, y: 0.5, z: 0.25))
+
+        // 실코퍼스 형태(3470948192/3589454154): bloomhdr* 가 {"user":...,"value":...} 바인딩으로 저작된다.
+        let userBound = try parse(
+            #""bloomhdrstrength":{"user":"hdr","value":0.30000001},"bloomhdriterations":{"user":"hdr2","value":6},"bloomhdrscatter":{"user":"hdr1","value":2.0},"bloomhdrfeather":"0.4""#)
+        XCTAssertEqual(userBound.bloomHDRStrength, 0.3, accuracy: 1e-4)
+        XCTAssertEqual(userBound.bloomHDRIterations, 6)
+        XCTAssertEqual(userBound.bloomHDRScatter, 2.0, accuracy: 1e-6)
+        XCTAssertEqual(userBound.bloomHDRFeather, 0.4, accuracy: 1e-6)
     }
 
     func testSkipsSoundAndInvisibleObjects() throws {
