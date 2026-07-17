@@ -49,8 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 데스크탑 가림 자동 일시정지(옵션, UserDefaults 영속, 기본 꺼짐 — 기존 동작 보존).
     private let visibilityMonitor = DesktopVisibilityMonitor()
     private var occlusionTimer: Timer?
-    private var pausedByOcclusion = false   // 이 모니터가 정지시켰는지(수동 정지와 사유 분리)
-    private var manualGlobalPause = false   // 하단 바 수동 일시정지(가림 정지와 독립)
+    // 렌더 정지 사유(가림·수동·슬립)를 한 곳에서 합성 — 서로 덮어쓰지 않게. 합성 로직은 PauseGate(순수).
+    private var pauseGate = PauseGate()
 
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
     private var stillSyncWork: DispatchWorkItem?
@@ -126,6 +126,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+
+        // 시스템/디스플레이 슬립 중 렌더 정지, 웨이크 시 재개(수동·가림 사유가 남아 있으면 유지).
+        // NSWorkspace 알림은 default 센터가 아니라 workspace 전용 센터로 온다.
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            workspaceCenter.addObserver(self, selector: #selector(sleepBegan), name: name, object: nil)
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            workspaceCenter.addObserver(self, selector: #selector(sleepEnded), name: name, object: nil)
+        }
 
         // 마지막 선택 배경 복원.
         restoreLastWallpaper()
@@ -294,7 +304,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let project {
                 ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
             }
-            if pausedByOcclusion || manualGlobalPause { renderers.forEach { $0.pause() } }  // 가림/수동 정지 중 교체된 렌더러도 정지 유지
+            if pauseGate.isPaused { renderers.forEach { $0.pause() } }  // 어떤 사유든 정지 중 교체된 렌더러도 정지 유지
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
             pushRecent(project?.id)     // 최근 배경 목록 갱신(nil = 무선택 → no-op)
             baseAssetsWarningGate.presentIfNeeded(
@@ -379,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         occlusionTimer?.invalidate()
         occlusionTimer = nil
         guard pauseWhenOccluded else {
-            if pausedByOcclusion { resumeFromOcclusion() }  // 끄면 정지 상태를 남기지 않는다
+            applyPause(pauseGate.set(.occlusion, active: false))  // 끄면 가림 사유 해제(다른 사유 없으면 재개)
             return
         }
         // .common 모드 — 메뉴 트래킹 중에도 폴링(scheduledTimer 는 .default 만 등록).
@@ -389,34 +399,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkOcclusion() {
-        let visible = visibilityMonitor.isDesktopVisible(threshold: occlusionCoverageThreshold)
-        if !visible, !pausedByOcclusion {
-            renderers.forEach { $0.pause() }
-            pausedByOcclusion = true
-        } else if visible, pausedByOcclusion {
-            resumeFromOcclusion()
-        }
-    }
-
-    private func resumeFromOcclusion() {
-        pausedByOcclusion = false
-        // 수동 정지(하단 바)가 남아 있으면 재개하지 않는다 — 둘 중 하나라도 있으면 정지 유지.
-        guard !manualGlobalPause else { return }
-        renderers.forEach { $0.resume() }
+        let occluded = !visibilityMonitor.isDesktopVisible(threshold: occlusionCoverageThreshold)
+        applyPause(pauseGate.set(.occlusion, active: occluded))
     }
 
     // MARK: - 전역 일시정지 (메인창 하단 바)
 
-    /// 하단 바 일시정지 토글 — 새 상태 반환. 가림 정지와 독립(둘 중 하나라도 있으면 정지 유지).
+    /// 하단 바 일시정지 토글 — 새 상태 반환. 가림·슬립 정지와 독립(하나라도 있으면 정지 유지).
     func toggleGlobalPause() -> Bool {
-        manualGlobalPause.toggle()
-        if manualGlobalPause {
-            renderers.forEach { $0.pause() }
-        } else if !pausedByOcclusion {
-            renderers.forEach { $0.resume() }
-        }
-        return manualGlobalPause
+        let (active, action) = pauseGate.toggle(.manual)
+        applyPause(action)
+        return active
     }
+
+    /// PauseGate 결정을 실제 렌더러에 적용(사유 합성은 gate 가, 실제 pause/resume I/O 는 여기서).
+    private func applyPause(_ action: PauseGate.Action) {
+        switch action {
+        case .pause:  renderers.forEach { $0.pause() }
+        case .resume: renderers.forEach { $0.resume() }
+        case .none:   break
+        }
+    }
+
+    // MARK: - 시스템/디스플레이 슬립 자동 정지 (앱셸 스코프 A)
+
+    /// 슬립 진입(willSleep/screensDidSleep) — 슬립 사유 켜고 필요 시 정지.
+    @objc private func sleepBegan() { applyPause(pauseGate.set(.sleep, active: true)) }
+
+    /// 웨이크(didWake/screensDidWake) — 슬립 사유 끄고, 수동·가림 사유가 없을 때만 재개.
+    @objc private func sleepEnded() { applyPause(pauseGate.set(.sleep, active: false)) }
 
     // MARK: - 정지 배경으로 설정 (작업 3)
 
@@ -676,7 +687,7 @@ extension AppDelegate: NSMenuDelegate {
     /// 서브메뉴를 열 때 최신 목록으로 다시 채운다(그 사이 삭제된 id 는 제외).
     public func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === statusMenu {
-            pauseMenuItem?.title = manualGlobalPause ? "재개" : "일시정지"
+            pauseMenuItem?.title = pauseGate.isActive(.manual) ? "재개" : "일시정지"
             return
         }
         guard menu === recentMenu else { return }
