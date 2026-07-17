@@ -10,12 +10,14 @@ enum ParticleShaders {
     vertex PVOut pv_main(uint vid [[vertex_id]],
                          const device float* v [[buffer(0)]],
                          constant float2& cameraOffset [[buffer(1)]],
-                         constant float2& aspectScale [[buffer(2)]]) {
+                         constant float2& aspectScale [[buffer(2)]],
+                         constant float2& shakeOffset [[buffer(3)]]) {
         uint b = vid * 8;
         float2 pos = float2(v[b + 0], v[b + 1]);
         float2 uv  = float2(v[b + 2], v[b + 3]);
         float4 col = float4(v[b + 4], v[b + 5], v[b + 6], v[b + 7]);
-        float2 p = (pos + cameraOffset) * aspectScale;
+        // shakeOffset = camerashake 전역 지터(파티클도 함께 흔들려야 전역 병진). 미보유 씬 = 0 → 비트동일.
+        float2 p = (pos + cameraOffset + shakeOffset) * aspectScale;
         PVOut o; o.pos = float4(p.x, p.y, 0.0, 1.0); o.uv = uv; o.color = col; return o;
     }
 
