@@ -35,6 +35,9 @@ enum Metrics {
     // 설정 창 (SP5′)
     static let settingsSize = NSSize(width: 560, height: 820)   // 5섹션+푸터가 스크롤 없이 한눈에
 
+    // 최초 실행 온보딩 시트 (앱셸 스코프 B)
+    static let onboardingSize = NSSize(width: 460, height: 430)
+
     // 공통 간격
     static let gap: CGFloat = 8
 }

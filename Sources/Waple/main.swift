@@ -4,8 +4,9 @@ let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
 let env = ProcessInfo.processInfo.environment
-// Dock 아이콘 없는 메뉴바(액세서리) 앱. 스모크 캡처(WAPLE_SMOKE / WAPLE_SMOKE_SETTINGS)만 regular.
-app.setActivationPolicy(env["WAPLE_SMOKE"] == nil && env["WAPLE_SMOKE_SETTINGS"] == nil ? .accessory : .regular)
+// Dock 아이콘 없는 메뉴바(액세서리) 앱. 스모크 캡처(WAPLE_SMOKE*)만 regular.
+let smokeCapture = env["WAPLE_SMOKE"] != nil || env["WAPLE_SMOKE_SETTINGS"] != nil || env["WAPLE_SMOKE_ONBOARDING"] != nil
+app.setActivationPolicy(smokeCapture ? .regular : .accessory)
 
 // 액세서리 앱은 메인 메뉴가 없어 ⌘C/⌘V 등 표준 편집 단축키가 모든 텍스트 필드에서 죽는다
 // (API 키 붙여넣기 불가 버그). 메뉴 바에 보이지는 않아도 키 이퀴밸런트 라우팅은 mainMenu 를

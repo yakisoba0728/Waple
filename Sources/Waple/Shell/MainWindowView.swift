@@ -18,6 +18,7 @@ enum MainTab: String, CaseIterable, Identifiable {
 struct MainWindowView: View {
     @ObservedObject var viewModel: LibraryViewModel
     @ObservedObject var banner: StatusBannerModel
+    @ObservedObject var onboarding: OnboardingModel
     var screenFrames: () -> [CGRect]
     // 워크샵/디스커버 VM 은 창이 소유 — 탭을 오가도 결과·다운로드 진행 상태가 유지된다.
     @StateObject private var workshopVM: WorkshopViewModel
@@ -29,9 +30,11 @@ struct MainWindowView: View {
     @State private var showFilters = ProcessInfo.processInfo.environment["WAPLE_SMOKE"] != nil  // 스모크 캡처용 기본 노출
     @State private var panelVisible = true
 
-    init(viewModel: LibraryViewModel, banner: StatusBannerModel, screenFrames: @escaping () -> [CGRect]) {
+    init(viewModel: LibraryViewModel, banner: StatusBannerModel, onboarding: OnboardingModel,
+         screenFrames: @escaping () -> [CGRect]) {
         self.viewModel = viewModel
         self.banner = banner
+        self.onboarding = onboarding
         self.screenFrames = screenFrames
         _workshopVM = StateObject(wrappedValue: WorkshopViewModel(library: viewModel))
     }
@@ -39,6 +42,8 @@ struct MainWindowView: View {
     var body: some View {
         VStack(spacing: 0) {
             content
+                // 최초 실행 온보딩(앱셸 스코프 B). 디스플레이 시트와 다른 뷰에 부착 — 동일 뷰 다중 .sheet 충돌 회피.
+                .sheet(isPresented: $onboarding.isPresented) { OnboardingView(model: onboarding) }
             NowPlayingBar(viewModel: viewModel)
         }
         .frame(minWidth: Metrics.windowMin.width, minHeight: Metrics.windowMin.height)

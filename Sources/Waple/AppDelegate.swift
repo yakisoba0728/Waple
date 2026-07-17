@@ -43,8 +43,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return vm
     }()
     private let bannerModel = StatusBannerModel()
+    private let onboardingModel = OnboardingModel()
     private var baseAssetsWarningGate = BaseAssetsWarningGate()
     private var libraryWindow: NSWindow?
+
+    // 최초 실행 온보딩(앱셸 스코프 B): 완료 플래그(UserDefaults 영속). 첫 실행에만 안내 시트 1회.
+    private static let onboardingCompletedKey = "waple.onboardingCompleted"
+    private var onboardingCompleted: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.onboardingCompletedKey) }
+    }
 
     // 데스크탑 가림 자동 일시정지(옵션, UserDefaults 영속, 기본 꺼짐 — 기존 동작 보존).
     private let visibilityMonitor = DesktopVisibilityMonitor()
@@ -162,6 +170,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["WAPLE_SMOKE_SETTINGS"] != nil {
             DispatchQueue.main.async { [weak self] in self?.openSettings() }
         }
+
+        // 최초 실행 온보딩(앱셸 스코프 B). 항목 상태는 기존 감지에서, "해결"은 기존 배관을 재사용.
+        onboardingModel.readiness = { [weak self] in
+            (content: !(self?.store.entries.isEmpty ?? true),
+             baseAssets: BaseAssetsSettings.baseAssetsDirectory != nil,
+             ffmpeg: FFmpegConverter.isAvailable)
+        }
+        onboardingModel.onChooseBaseAssets = { [weak self] in self?.chooseBaseAssets() }
+        onboardingModel.onOpenSettings = { [weak self] in self?.openSettings() }
+        maybePresentOnboarding()
+    }
+
+    /// 첫 실행이면 라이브러리 창 + 안내 시트를 1회 띄운다. 스모크 캡처와 분리:
+    /// WAPLE_SMOKE_ONBOARDING 은 (플래그 무관) 강제 표시, 그 외 WAPLE_SMOKE* 는 억제(기존 4종 무회귀).
+    private func maybePresentOnboarding() {
+        let env = ProcessInfo.processInfo.environment
+        if env["WAPLE_SMOKE_ONBOARDING"] != nil {
+            DispatchQueue.main.async { [weak self] in self?.openLibrary(); self?.onboardingModel.present() }
+            return
+        }
+        guard Onboarding.shouldPresent(completed: onboardingCompleted),
+              !env.keys.contains(where: { $0.hasPrefix("WAPLE_SMOKE") }) else { return }
+        onboardingCompleted = true   // 표시 시점에 확정 — 1회 보장(재표시 안 함)
+        DispatchQueue.main.async { [weak self] in self?.openLibrary(); self?.onboardingModel.present() }
     }
 
     /// WE 기본(공유) 에셋 팩 폴더 선택. 일부 씬은 패키지에 없는 공유 텍스처(particle/halo 등)를
@@ -192,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openLibrary() {
         if libraryWindow == nil {
             let root = MainWindowView(viewModel: libraryVM, banner: bannerModel,
+                                      onboarding: onboardingModel,
                                       screenFrames: { NSScreen.screens.map(\.frame) })
             let hosting = NSHostingController(rootView: root)
             // SwiftUI .toolbar → NSToolbar 브리징(macOS 14+ 전용 — 그래서 배포 타깃도 14).
