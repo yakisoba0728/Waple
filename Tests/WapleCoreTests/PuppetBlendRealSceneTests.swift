@@ -61,4 +61,39 @@ final class PuppetBlendRealSceneTests: XCTestCase {
         for (a, b) in zip(single, blend1) { maxV = max(maxV, abs(a - b).max()) }
         XCTAssertLessThan(maxV, 1e-3, "단일 절대 레이어 = 단일 클립 스키닝(무회귀)")
     }
+
+    /// 실코퍼스 animationlayers 스크립트 캡처 회귀(rate 3씬 ∪ visible 15씬 대표):
+    /// - 2955378002 obj 10311 / 3448290956 obj 179: rate 오디오 스크립트 — base 파서는 폐기(red).
+    /// - 3641860575 obj 219: visible 스크립트 — 종전 캡처 무회귀 앵커.
+    /// 캐스케이드 소비자(encodeLayer) 가 per-frame 로 읽는 값의 원천이 이 캡처다.
+    func testRealSceneAnimationLayerScriptCapture() throws {
+        func parse(_ sid: String) throws -> SceneDocument {
+            let pkgPath = corpusBase() + "/\(sid)/scene.pkg"
+            guard FileManager.default.fileExists(atPath: pkgPath) else { throw XCTSkip("corpus 없음 — skip(CI 안전)") }
+            return try SceneDocument.parse(
+                package: try ScenePackage.parse(try Data(contentsOf: URL(fileURLWithPath: pkgPath))))
+        }
+        func layer(_ doc: SceneDocument, _ id: Int) throws -> SceneLayer {
+            try XCTUnwrap(doc.layers.first { $0.id == id }, "layer \(id) 부재")
+        }
+
+        let rennee = try layer(try parse("2955378002"), 10311)   // 'circle 0-1 x1.1'
+        XCTAssertEqual(rennee.animationLayers.count, 2)
+        XCTAssertNotNil(rennee.animationLayers[1].scripts["rate"],
+                        "2955378002 rate 오디오 스크립트가 캡처돼야(base: 폐기)")
+        XCTAssertEqual(rennee.animationLayers[1].rate, 1.1, accuracy: 1e-4, "정적 rate 초기값 무회귀")
+
+        let eye = try layer(try parse("3448290956"), 179)        // '头位置'
+        XCTAssertEqual(eye.animationLayers.count, 2)
+        for i in [0, 1] {
+            XCTAssertNotNil(eye.animationLayers[i].scripts["rate"], "3448290956 [\(i)] rate 스크립트 캡처")
+            XCTAssertNil(eye.animationLayers[i].scripts["blend"],
+                         "blend 는 user 바인딩(스크립트 아님) — 오캡처 금지")
+            XCTAssertEqual(eye.animationLayers[i].blend, 0.3, accuracy: 1e-4, "blend {user,value} 정적 언랩 무회귀")
+        }
+
+        let bird = try layer(try parse("3641860575"), 219)       // 'b1'
+        XCTAssertNotNil(bird.animationLayers.first?.scripts["visible"],
+                        "3641860575 visible 스크립트 캡처(종전 동작 무회귀 앵커)")
+    }
 }

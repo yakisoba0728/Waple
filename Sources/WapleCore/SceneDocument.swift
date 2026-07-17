@@ -196,15 +196,18 @@ public struct AnimationSelection: Equatable {
 /// - additive: false = 절대 포즈(캐스케이드 lerp), true = 델타 가산(bind/이전 포즈 위에 클립 델타).
 /// - blend: 블렌드 가중치(대개 1.0, 분수/키프레임 존재 — 키프레임은 초기값). 0..1 클램프 안 함.
 /// - rate: 재생 배속(대개 1.0).
-/// - visible: 레이어 활성(키프레임 가능 — 정적 초기값만 반영).
+/// - visible: 레이어 활성(키프레임 가능 — 파스는 정적 초기값).
+/// blend/rate/visible 은 var — 렌더러가 per-frame 스크립트 평가값을 로컬 사본에 덮어쓴다
+/// (encodeLayer effLayers; 파스 산출 원본은 불변 유지).
 public struct AnimationLayer: Equatable {
     public let name: String
     public let additive: Bool
-    public let blend: Float
-    public let rate: Float
-    public let visible: Bool
-    /// blend/visible 바인딩의 프로퍼티 스크립트(키 → JS 소스) — 실물 animationEvent 훅의 주 서식지
-    /// (3737268876 젤다 blend 핸들러 19개, 3351179520/3396722575 visible 핸들러). 렌더러가 엔진 생성.
+    public var blend: Float
+    public var rate: Float
+    public var visible: Bool
+    /// blend/rate/visible 바인딩의 프로퍼티 스크립트(키 → JS 소스) — 실물 animationEvent 훅의 주 서식지
+    /// (3737268876 젤다 blend 핸들러 19개, 3351179520/3396722575 visible 핸들러, 2955378002/3448290956
+    /// rate 오디오 배속). 렌더러가 엔진 생성 + per-frame 재평가(2D 퍼펫 캐스케이드 소비자).
     public var scripts: [String: String] = [:]
     /// blend/visible 바인딩의 이벤트 마커 타임라인(options.events 보유분만 — 젤다 "surprise" 등).
     /// 값 구동(blend 키프레임 적용)은 미구현 — 마커 발화 클록으로만 사용(정적 blend 무회귀).
@@ -1024,8 +1027,9 @@ extension SceneDocument {
         return best.map { AnimationSelection(name: $0.name, rate: $0.rate) }
     }
 
-    /// animationlayers → 전 레이어(다층 블렌드용, 순서 보존). visible/blend 는 정적 초기값
-    /// (키프레임은 float()/value 언랩 후 초기값만 — 런타임 키프레임 토글은 미반영).
+    /// animationlayers → 전 레이어(다층 블렌드용, 순서 보존). visible/blend/rate 는 정적 초기값
+    /// (키프레임은 float()/value 언랩 후 초기값만 — 런타임 키프레임 토글은 미반영). 스크립트 바인딩은
+    /// scripts 로 캡처 → 렌더러가 per-frame 재평가(2D 퍼펫 캐스케이드 소비자).
     private static func parseAllAnimationLayers(_ raw: Any?) -> [AnimationLayer] {
         guard let layers = raw as? [Any] else { return [] }
         return layers.compactMap { any in
@@ -1037,9 +1041,9 @@ extension SceneDocument {
                                     blend: float(l["blend"]) ?? 1,
                                     rate: float(l["rate"]) ?? 1,
                                     visible: visible)
-            // blend/visible 바인딩의 스크립트·이벤트 타임라인(실물: 젤다 blend 의 animationEvent 훅 +
-            // options.events 마커, 3396722575 visible 의 훅). 값 구동은 종전대로 정적 초기값만.
-            for key in ["blend", "visible"] {
+            // blend/visible/rate 바인딩의 스크립트·이벤트 타임라인(실물: 젤다 blend 의 animationEvent 훅 +
+            // options.events 마커, 3396722575 visible 의 훅, 2955378002/3448290956 rate 오디오 배속).
+            for key in ["blend", "visible", "rate"] {
                 guard let bind = l[key] as? [String: Any] else { continue }
                 if let sc = bind["script"] as? String { al.scripts[key] = sc }
                 if let a = PropertyAnimation.parse(bind), !a.events.isEmpty { al.eventTimelines.append(a) }
