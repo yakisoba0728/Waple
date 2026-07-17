@@ -494,13 +494,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// A2 HDR: 씬 general.hdr && 톤맵 파이프라인 빌드 성공 시에만 true(빌드 실패 시 종전 LDR 폴백).
     /// 참이면 acc/합성 스냅샷을 float(rgba16Float)로, acc→타깃 blit 을 톤맵 패스로 대체한다.
     var sceneIsHDR = false
-    /// HDR 톤맵 포스트 패스(최종 합성 float 버퍼 → LDR 압축). sceneIsHDR 일 때만 존재.
+    /// HDR 최종 포스트 패스(float 합성 버퍼 → bgra8 saturate 클램프). sceneIsHDR 일 때만 존재.
     var hdrPost: HDRPostPass?
     /// Authored gate, kept separate from pass availability so construction failure can raw-fallback.
     var sceneWantsLDRBloom = false
     var ldrBloomParameters = LDRBloomParameters.defaults
     var ldrBloomPass: LDRBloomEncoding?
-    /// #22 HDR bloom authored 게이트(hdr && bloom — 코퍼스 8씬). 패스 생성 실패 시 종전 ACES 폴백.
+    /// #22 HDR bloom authored 게이트(hdr && bloom — 코퍼스 8씬). 패스 생성 실패 시 hdrPost(클램프) 폴백.
     var sceneWantsHDRBloom = false
     var hdrBloomParameters = HDRBloomParameters.defaults
     var hdrBloomPass: HDRBloomEncoding?
@@ -779,7 +779,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         self.queue = queue
         self.assetBaseDir = BaseAssetsSettings.baseAssetsDirectory
 
-        // A2 HDR: 톤맵 파이프라인이 빌드돼야 sceneIsHDR 활성(실패 시 종전 LDR 폴백 = 무회귀).
+        // A2 HDR: 최종 클램프 파이프라인이 빌드돼야 sceneIsHDR 활성(실패 시 종전 LDR 폴백 = 무회귀).
         // 아래 파이프라인 생성보다 먼저 확정해야 accPixelFormat 이 float 로 잡힌다.
         if doc.hdr, let post = HDRPostPass(device: device, outputFormat: .bgra8Unorm) {
             self.sceneIsHDR = true
