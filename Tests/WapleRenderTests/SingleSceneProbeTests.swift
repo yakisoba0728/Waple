@@ -23,7 +23,10 @@ final class SingleSceneProbeTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 360)), project: project)
         let time = Float(ProcessInfo.processInfo.environment["WAPLE_PROBE_TIME"] ?? "") ?? 6.0
-        let urls = r.captureFrames(width: 640, height: 360, times: [time], toDir: out)
+        // 골든 대조용 고해상 오버라이드(WAPLE_THUMB_W/H) — 미지정 시 640×360.
+        let capW = ProcessInfo.processInfo.environment["WAPLE_THUMB_W"].flatMap(Int.init) ?? 640
+        let capH = ProcessInfo.processInfo.environment["WAPLE_THUMB_H"].flatMap(Int.init) ?? 360
+        let urls = r.captureFrames(width: capW, height: capH, times: [time], toDir: out)
         for u in urls {
             let tag = ProcessInfo.processInfo.environment["WAPLE_PROBE_TAG"] ?? "probe"
             let dst = out.appendingPathComponent("\(id)_\(tag).png")

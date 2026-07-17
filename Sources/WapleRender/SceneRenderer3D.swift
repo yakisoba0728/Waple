@@ -824,9 +824,8 @@ extension SceneRenderer {
                                         shadowMatrices: shadowResult.matrices,
                                         shadowTexture: shadowResult.texture, into: enc)
                     if let srcTex {
-                        encodeBillboard(bb, overrideTexture: srcTex, viewProj: viewProj, eye: eye,
-                                        right: right, up: camUp,
-                                        nmap: nmap, into: enc, device: device, over: over)
+                        // 프레임버퍼 후처리(fullscreenlayer)는 스크린공간 풀스크린 합성 — 카메라 프로젝션 우회.
+                        encodeFullscreenComposite(bb, texture: srcTex, into: enc, device: device, over: over)
                     }
                 } else {
                     encodeBillboard(bb, overrideTexture: billboardTextures[item.idx], viewProj: viewProj, eye: eye,
@@ -937,6 +936,37 @@ extension SceneRenderer {
         enc.setVertexBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
         enc.setFragmentBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
         enc.setFragmentTexture(overrideTexture ?? bb.texture, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+
+    /// isFrameBuffer(fullscreenlayer/composelayer) 빌보드 합성: 후처리 결과(srcTex)를 **화면정렬 풀스크린
+    /// NDC 쿼드**로 그린다. 종전엔 encodeBillboard 가 프로젝션 픽셀 origin/size(예: 960,540 / 1920,1080)를
+    /// 월드 좌표로 배치해 오프스크린에 떨어졌다(godrays 워프필드 전량 소실). 프레임버퍼 후처리는 본디
+    /// 스크린공간이라 카메라 프로젝션을 우회한다. 블렌드/틴트/파이프라인은 encodeBillboard 와 동일(over/additive).
+    func encodeFullscreenComposite(_ bb: Billboard3D, texture: MTLTexture,
+                                   into enc: MTLRenderCommandEncoder, device: MTLDevice,
+                                   over: MTLRenderPipelineState) {
+        // NDC 풀스크린 쿼드. UV 상단 원점(v=0=상단) — encodeBillboard 규약과 동일(프레임버퍼 비플립).
+        func vtx(_ x: Float, _ y: Float, _ uu: Float, _ vv: Float) -> [Float] {
+            [x, y, 0, 0, 0, 1, uu, vv]
+        }
+        var verts: [Float] = []
+        verts += vtx(-1, 1, 0, 0); verts += vtx(1, 1, 1, 0); verts += vtx(1, -1, 1, 1)
+        verts += vtx(-1, 1, 0, 0); verts += vtx(1, -1, 1, 1); verts += vtx(-1, -1, 0, 1)
+        guard let vbuf = bb.scratchQuad.load(verts, device: device) else { return }
+        var u2 = MeshUniform(
+            mvp: matrix_identity_float4x4, model: matrix_identity_float4x4,
+            normalMatrix: matrix_identity_float4x4, tint: bb.tint,
+            material: SIMD4(bb.roughness, bb.metallic, 0, 0),   // w=0 = unlit(프레임버퍼는 라이팅 미대상)
+            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z, 0))
+        enc.setRenderPipelineState(bb.additive ? (meshPipelineAdditive ?? over) : over)
+        // 프레임버퍼 합성은 깊이 무관(스크린공간) — 항상 그리되 깊이 미기록.
+        if let ds = meshDepthState(test: false, write: false, device: device) { enc.setDepthStencilState(ds) }
+        enc.setCullMode(.none)
+        enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+        enc.setVertexBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
+        enc.setFragmentBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
+        enc.setFragmentTexture(texture, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 
