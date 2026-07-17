@@ -166,6 +166,22 @@ final class AudioCalibrationTests: XCTestCase {
         NSLog("%@", "[GUARD] (A) 현행 /max  loud=\(respA(loud))  quiet=\(respA(quiet))  (≈동일 = 버그)")
     }
 
+    // ── 프로덕션 경로 직접 검증(FIX 착지 후): 실제 AudioSpectrum.spectrum() 이 (C) 거동인지 ──
+    // 가드는 (C) 로컬 정의를 쓰지만 이건 프로덕션 spectrum() 을 직접 호출해 회귀를 잡는다.
+    func testProductionSpectrumLoudnessSensitive() {
+        let guardCfg = Cfg(bounds: [0.0, 1.0], power: 1.0, mul: 1.0, fmin: 0, fmax: 1, weight: 0)
+        func respProd(_ m: [Float]) -> Float {
+            let s = AudioSpectrum.spectrum(fromMagnitudes: m, binCount: 64)   // 프로덕션 경로
+            return respond(s, s, guardCfg)
+        }
+        let loud = respProd(mags(sine(1.0, 1000, fftSize)))        // 0 dBFS
+        let quiet = respProd(mags(sine(0.1259, 1000, fftSize)))    // −18 dB
+        NSLog("%@", "[PROD] AudioSpectrum.spectrum()  loud=\(loud)  quiet=\(quiet)")
+        XCTAssertGreaterThan(loud, quiet + 1e-3, "프로덕션 경로: loud 응답 > quiet (라우드니스 민감)")
+        XCTAssertTrue(loud > 0 && loud < 1, "loud 은 (0,1) 개구간")
+        XCTAssertTrue(quiet > 0 && quiet < 1, "quiet 은 (0,1) 개구간")
+    }
+
     // ── A3: 렌더 비회귀(GPU, 마지막) — (C) 스펙트럼 주입 시 진폭↑ → luma 단조 ──
     func testA3_candidateCRenderLumaMonotone() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
