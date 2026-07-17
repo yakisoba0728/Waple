@@ -69,6 +69,8 @@ public struct ParticleSimulator {
     private let trailSamples: Int
     // controlpointattract/vortex 가 있으면 속도 상한(폭주 방지, px/s).
     private let speedCap: Float?
+    // 이미터 오디오반응 보유 여부(무보유 시 rate 스케일 전면 우회 → 기존 방출 경로 비트동일).
+    private let hasEmitterAudio: Bool
 
     // MARK: 자식 시스템 상태 (부모 sim 이 링크별 자식 sim 인스턴스를 구동)
 
@@ -85,6 +87,8 @@ public struct ParticleSimulator {
     /// 자식 인스턴스 제어(부모 sim 이 설정): 스폰 위치 오프셋 / 방출 정지(고아·원샷).
     var emitOrigin = SIMD3<Float>(0, 0, 0)
     var emissionPaused = false
+    /// 라이브 오디오 스펙트럼(렌더러가 매 프레임 주입). nil/무신호(silent) = 오디오반응 스킵 → 기존 rate.
+    public var currentAudio: AudioSpectrum16?
 
     public init(def: ParticleSystemDef, seed: UInt64) {
         self.def = def
@@ -149,6 +153,7 @@ public struct ParticleSimulator {
         remaps = rms
         trailSamples = def.renderer.trailSampleCount
         speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
+        hasEmitterAudio = def.emitterAudio.contains { $0 != nil }
         parentSeed = seed
         childStates = def.children.map { _ in [] }
         childDisplaysCache = def.children.map { _ in [] }
@@ -205,7 +210,8 @@ public struct ParticleSimulator {
                         }
                     }
                 } else {
-                    acc[i] += e.rate * dt
+                    // 오디오반응: 무보유/무신호 시 스케일 1(× 1.0 은 IEEE 정확 → 기존 acc 누적 비트동일).
+                    acc[i] += e.rate * emitterRateScale(i) * dt
                     while acc[i] >= 1, particles.count < def.maxCount {
                         acc[i] -= 1
                         particles.append(spawn(e))
@@ -328,6 +334,7 @@ public struct ParticleSimulator {
                     if let pp = uidPos[insts[i].parentUID] { insts[i].sim.emitOrigin = pp + s3(link.origin) }
                     else { insts[i].sim.emissionPaused = true }   // 고아 — 드레인만
                 }
+                insts[i].sim.currentAudio = currentAudio   // 오디오 하향 전파(무신호면 무영향 → 무회귀)
                 displays.append(contentsOf: insts[i].sim.step(dt))
                 if insts[i].oneShot, !insts[i].fired { insts[i].fired = true; insts[i].sim.emissionPaused = true }
             }
@@ -335,6 +342,19 @@ public struct ParticleSimulator {
             childStates[li] = insts
             childDisplaysCache[li] = displays
         }
+    }
+
+    // MARK: - 오디오반응 rate 변조
+
+    /// 이미터 오디오반응 rate 배수. 무보유/무반응(params nil)/무신호(currentAudio nil·silent) = 1(기존 rate 유지).
+    /// 신호가 있을 때만 AudioResponse(구간평균→smoothstep(bounds)→pow→saturate, shake.vert 1:1)를 곱한다.
+    /// → 무음 A/B(공급자 부재 = currentAudio nil)는 기존 방출 경로와 비트동일. WE 충실도는 신호 존재 시 발현.
+    private func emitterRateScale(_ i: Int) -> Float {
+        guard hasEmitterAudio, i < def.emitterAudio.count, let ap = def.emitterAudio[i],
+              let audio = currentAudio, !audio.isSilent else { return 1 }
+        return AudioResponse.compute(left: audio.left, right: audio.right, mode: ap.mode,
+                                     freqMin: ap.freqStart, freqMax: ap.freqEnd,
+                                     bounds: ap.bounds, power: ap.exponent, multiply: 1)
     }
 
     // MARK: - 스폰
