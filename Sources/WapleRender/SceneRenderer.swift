@@ -745,6 +745,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// billboards[i] 의 원본 SceneLayer(록스텝 — build3D 가 같은 지점에서 append).
     /// 이벤트 마커 타임라인(def.animations 의 options.events — 젤다 눈꺼풀 blink 등) 결속용.
     var billboardDefs: [SceneLayer] = []
+    /// 3D 씬 text 오브젝트의 스크립트 컨트롤러(shared 사이드이펙트 전용 — 렌더 미배선).
+    /// 실물 3470948192: text id=181 이 shared.vvv 를 세팅하고 Hollow Cylinder 스케일 스크립트가 소비
+    /// (미실행 시 vvv 미정의 → 스케일 NaN → 워프 튜너 소실). 2D buildTexts 와 동일하게 엔진 로드(top-level
+    /// + shared 통신)하되, 3D 텍스트의 스크린 오버레이 위치/크기 규약이 미확정이라 픽셀 렌더는 미배선.
+    /// (last 는 evaluate(current:) 재평가 입력 — 시계 등 값 구동 스크립트의 이전 표시값).
+    var text3DControllers: [(engine: TextScriptEngine, last: String)] = []
     /// per-frame 스크립트 평가 순서(씬 order — 컨트롤러(Main)가 이를 읽는 스크립트보다 먼저 실행).
     /// (order, isBillboard, idx). 스크립트 없는 노드/빌보드는 제외.
     var eval3DOrder: [(order: Int, bb: Bool, idx: Int)] = []
@@ -1436,6 +1442,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         camera3D = nil; is3D = false; has3DScripts = false
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
+        text3DControllers = []
         eval3DOrder = []; draw3DOrder = []
         meshPipelineOver = nil; meshPipelineAdditive = nil
         meshPipelineSkin = nil; meshPipelineSkinAdditive = nil

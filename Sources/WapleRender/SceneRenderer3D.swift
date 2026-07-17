@@ -344,9 +344,18 @@ extension SceneRenderer {
         for (i, m) in meshRenderables.enumerated() { drawItems.append((m.order, false, i)) }
         for (i, b) in billboards.enumerated() { drawItems.append((b.order, true, i)) }
         draw3DOrder = drawItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
+        // 3D 씬 text 컨트롤러 로드: 2D buildTexts(shared 통신용 엔진 로드)의 3D 대응. text 스크립트의
+        // top-level + update 사이드이펙트(shared.vvv 등)가 3D 지오메트리 스크립트를 구동한다(미실행 시 NaN).
+        // 픽셀 렌더는 미배선(3D 텍스트 스크린 오버레이 위치/크기 규약 미확정) — 사이드이펙트만 실행.
+        for t in doc.texts {
+            guard let src = t.script, let e = makeScriptEngine(src, layerName: t.name.isEmpty ? nil : t.name,
+                                                               scriptPropsJSON: t.scriptProps) else { continue }
+            // makeScriptEngine 생성 시 top-level 실행(shared 초기화) — update 보유분만 per-frame 재평가 대상.
+            if e.hasUpdate { text3DControllers.append((engine: e, last: t.text)) }
+        }
         // 카메라 스크립트 또는 활성 애니(스키닝) 가 있으면 연속 렌더 필요.
         let hasSkinAnim = meshRenderables.contains { $0.animIndex >= 0 }
-        has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim
+        has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty
 
         NSLog("%@", "[Waple] 3D scene: \(loaded) meshes (\(skipped) skipped), \(bbLoaded) billboards (\(bbSkipped) skipped), " +
               "\(nodes3D.count) nodes, \(eval3DOrder.count) scripted, lights=\(doc.lights3D.count)")
@@ -701,6 +710,16 @@ extension SceneRenderer {
                   particleDelta: Float?) -> Bool {
         guard let cam = camera3D, let over = meshPipelineOver,
               let depthTex = pooledDepth(target.width, target.height, device) else { return false }
+        // text 컨트롤러 먼저 평가 — shared 사이드이펙트(shared.vvv 등)를 지오메트리 스크립트보다 앞서 세팅
+        // (단일 프레임 캡처에서도 소비자 스케일 스크립트가 프레시 값을 읽어 NaN 회피). 씬 order 로는 소비자
+        // (Hollow Cylinder order 5)가 생산자(text id=181 order 24)보다 앞서 라이브만 1프레임 지연 후 정착 —
+        // 컨트롤러 선행 평가로 캡처도 결정적. evaluate(current:) 는 update() 를 돌려 shared 갱신(반환 텍스트는 미사용).
+        for i in text3DControllers.indices {
+            text3DControllers[i].engine.setRuntime(Double(time))
+            if let s = text3DControllers[i].engine.evaluate(current: text3DControllers[i].last) {
+                text3DControllers[i].last = s
+            }
+        }
         // per-frame 스크립트 평가(씬 order — 컨트롤러가 이를 읽는 스크립트보다 먼저) → 현재 로컬 변환/가시성.
         for e in eval3DOrder {
             if e.bb { billboards[e.idx].evaluateScripts(time: time) }
