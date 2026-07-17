@@ -581,26 +581,57 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     // ── camera 의사-오브젝트(P0-2 파스)의 2D 뷰 줌 ─────────────────────────────
     // WE 시맨틱(클린룸 L19 봉인 + 코퍼스 37씬 실측): 2D 씬 투영은 orthogonalprojection dict 가
     // 지배 — fov 는 160/168 씬에서 50 상수(투영 선택자 아님)라 무효, zoom 만 뷰 스케일로 실효
-    // (정적 0.75/2.87 + single 인트로 애니 9씬 — 전수 최종 키프레임 1.0 정착). origin 은 실효
-    // 카메라 전수가 중립(≈0)/스크립트 바인딩/미파스 인트로 애니 → 미배선(팬은 후속, BACKLOG).
+    // (정적 0.75/2.87 + single 인트로 애니 9씬 — 전수 최종 키프레임 1.0 정착). origin.xy 팬은
+    // 애니(실측 5씬 — zoom single 인트로와 연동)만 실효 — 정적 base(전수 중립≈0)·스크립트 바인딩
+    // (19씬, 미평가 stale base)은 데드존/게이트로 중립 처리(A/B t=6 정착 중립 → 비트동일).
+    // path 는 스크립트 파일 참조("scripts/camera_paths_*.json")라 인라인 웨이포인트 부재 → 미소비(YAGNI).
     // 3D 씬의 camera 오브젝트는 경로 웨이포인트(씬당 다수·큐 재생)라 미소비 — draw 3D 분기가
     // 이 상태를 아예 안 읽는다. 정적 비가시 카메라는 파스가 이미 드롭 → first = 첫 가시 카메라.
     var cameraZoomBase: Float = 1
     var cameraZoomAnim: PropertyAnimation?
     /// 마지막으로 그린 프레임의 zoom — 클릭/호버 역매핑(sceneCoords) 정합용.
     var currentCameraZoom: Float = 1
+    /// camera origin.xy 팬(중심원점 씬픽셀, neutral=(0,0)). 정적 base 는 전수 중립/스크립트라 미소비 —
+    /// 애니(originAnim, 5씬 zoom 인트로 연동)만 실효. single 끝 클램프로 t=6 중립 정착 → A/B 비트동일.
+    var cameraOriginBase = SIMD2<Float>(0, 0)
+    var cameraOriginAnim: PropertyAnimation?
+    /// origin 이 스크립트 바인딩({"script":…} — 실측 19씬, value.x=slider×canvasSize=화면중심)이면 팬 미발화:
+    /// 렌더러는 카메라 origin 스크립트를 평가하지 않아 base(직렬화 stale)가 무의미 → 중립 처리(회귀 방지).
+    var cameraOriginIsScript = false
 
-    /// mount: 씬 camera 의사-오브젝트 → 뷰 줌 상태. 카메라 없으면 중립 리셋(마운트 재사용 무회귀).
+    /// mount: 씬 camera 의사-오브젝트 → 뷰 줌/origin 팬 상태. 카메라 없으면 중립 리셋(마운트 재사용 무회귀).
     func applyCameraObjects(_ cams: [SceneCameraObject]) {
         let cam = cams.first
         cameraZoomBase = cam?.zoom ?? 1
         cameraZoomAnim = cam?.zoomAnimation
         currentCameraZoom = cameraZoomBase
+        cameraOriginBase = SIMD2<Float>(cam?.origin.x ?? 0, cam?.origin.y ?? 0)
+        cameraOriginAnim = cam?.originAnimation
+        cameraOriginIsScript = cam?.scripts["origin"] != nil
     }
 
     /// time(초) 시점의 카메라 줌(정적 값 + 키프레임 평가 — single 은 끝 클램프). 카메라 부재 = 1.
     func cameraZoom(at time: Float) -> Float {
         cameraZoomAnim?.value(component: 0, atTime: time, base: cameraZoomBase) ?? cameraZoomBase
+    }
+
+    /// time(초) 시점의 카메라 origin.xy(중심원점 씬픽셀). 스크립트 바인딩은 중립(미평가 → stale base 무시).
+    /// 애니 없으면 정적 base(전수 중립 ≈0) — 팬 오프셋 단계의 데드존이 흡수. single 은 끝 클램프(t=6 정착).
+    func cameraOrigin(at time: Float) -> SIMD2<Float> {
+        guard !cameraOriginIsScript else { return .zero }
+        guard let a = cameraOriginAnim else { return cameraOriginBase }
+        return SIMD2<Float>(a.value(component: 0, atTime: time, base: cameraOriginBase.x),
+                            a.value(component: 1, atTime: time, base: cameraOriginBase.y))
+    }
+
+    /// origin.xy(중심원점 씬픽셀) → 전역 투영-NDC 병진(shakeOffset 과 동일 공간: 씬 = −1..1, aspectScale×zoom
+    /// 후단곱). 카메라 +x 이동 = 콘텐츠 −x. 2px 데드존(정착 잔차 3552064521≈(1,1)px·서브픽셀 저작오차 흡수
+    /// → A/B t=6·정적·스크립트·카메라부재 씬 전수 .zero = 비트동일 가드).
+    /// ponytail: y 부호는 캘리브 노브 — WE 팬 방향 실측 부재(클린룸; 게이트 t=6 중립이라 검증 불가). 인트로
+    ///   t<3 병진 방향만 좌우하고, .zero 우회 씬엔 무영향. 교체 조건: WE 팬 부호 실측 확정 시 이 함수만 수정.
+    static func cameraOriginPanOffset(originXY: SIMD2<Float>, projW: Float, projH: Float) -> SIMD2<Float> {
+        if abs(originXY.x) < 2 && abs(originXY.y) < 2 { return .zero }
+        return SIMD2<Float>(-2 * originXY.x / max(1, projW), 2 * originXY.y / max(1, projH))
     }
 
     // ── camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13씬 — 2D 11/3D 2) ────────────────────
@@ -1188,6 +1219,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if camZoom != 1 { aspectScale *= camZoom }
         currentCameraZoom = camZoom
         frameShakeOffset = shakeOffset(at: time)  // camerashake 전역 지터(비활성 = .zero → 셰이더 +0 = 비트동일)
+        frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: time), projW: projW, projH: projH)  // camera origin.xy 팬(중립/스크립트/정적 = .zero 데드존 → 비트동일)
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
         guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { cb.commit(); return }
@@ -1312,6 +1344,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let capZoom = capZoomRaw > 0 ? capZoomRaw : 1
             if capZoom != 1 { asp *= capZoom }
             frameShakeOffset = shakeOffset(at: t)  // 라이브 draw 와 동일: A/B 캡처가 t=6 지터 오프셋을 판독
+            frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: t), projW: projW, projH: projH)  // origin 팬(t=6 정착 중립·정적/스크립트 = .zero → A/B 비트동일)
             // 라이브 draw 와 동일한 씬-순서 인터리브(encodeDrawPlan 공용 — 복제 루프 발산 방지).
             // 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
             // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)

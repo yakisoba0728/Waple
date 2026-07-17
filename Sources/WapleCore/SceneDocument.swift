@@ -169,7 +169,9 @@ public struct SceneCamera3D: Equatable {
 /// 씬 objects[] 의 camera 의사-오브젝트(에디터 카메라 프리셋: fov/zoom/origin/경로 — 실측 37씬/58
 /// 오브젝트, 실효 zoom 애니 9씬·비기본 fov 16). scene.camera(3D 룩앳, parseCamera)와 별개 채널.
 /// 종전 parseNode 가 콘텐츠 키 부재로 트랜스폼-노드로 흡수해 fov/zoom 을 통째 드롭했다.
-/// path(카메라 경로 json, 실효 1씬)는 미캡처 — 렌더러 소비 규약과 함께 도입.
+/// path 필드는 스크립트 파일 참조(전 57오브젝트 "scripts/camera_paths_*.json" — 인라인 웨이포인트 부재)라
+/// 미소비(YAGNI). 팬은 origin.xy 애니(실측 5씬, zoom single 인트로와 연동)만 실효 — 정적/스크립트 base 는
+/// 전수 중립(화면중심)이라 렌더러 데드존/게이트로 흡수(P0-2 파스 → P1 zoom → 이번 origin 팬 잔여).
 public struct SceneCameraObject: Equatable {
     public var id: Int = 0
     public var name: String = ""
@@ -177,6 +179,9 @@ public struct SceneCameraObject: Equatable {
     public var zoom: Float = 1          // 정적 값({user,value}/{animation,value} 는 value)
     /// zoom 바인딩의 키프레임 타임라인({"animation":…} — 실측 9씬). 렌더러 per-frame 평가용 보존.
     public var zoomAnimation: PropertyAnimation? = nil
+    /// origin.xy 바인딩의 키프레임 타임라인({"animation":…} — 실측 5씬, zoom 인트로와 연동된 팬).
+    /// zoom 과 동형(PropertyAnimation.parse 재사용). single 끝 클램프로 A/B 캡처 t=6 은 중립 정착.
+    public var originAnimation: PropertyAnimation? = nil
     /// origin/zoom 프로퍼티 스크립트(키 → JS 소스 — 실물: 슬라이더 연동 카메라 위치).
     public var scripts: [String: String] = [:]
     public var origin: Vec3 = Vec3(x: 0, y: 0, z: 0)
@@ -904,6 +909,9 @@ extension SceneDocument {
         cam.origin = vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0)
         if let bind = obj["zoom"] as? [String: Any], let a = PropertyAnimation.parse(bind) {
             cam.zoomAnimation = a
+        }
+        if let bind = obj["origin"] as? [String: Any], let a = PropertyAnimation.parse(bind) {
+            cam.originAnimation = a
         }
         for key in ["origin", "zoom"] {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { cam.scripts[key] = sc }
