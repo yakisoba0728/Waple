@@ -458,6 +458,7 @@ final class AppLogicTests: XCTestCase {
     func testVideoImportIsVideoFile() {
         XCTAssertTrue(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.MP4")))
         XCTAssertTrue(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.mov")))
+        XCTAssertTrue(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.m4v")))  // 화면보호기(WapleSaverView)와 동일 컨테이너 집합
         XCTAssertFalse(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/a.webm")))
         XCTAssertFalse(VideoImport.isVideoFile(URL(fileURLWithPath: "/x/folder")))
     }

@@ -173,6 +173,21 @@ final class TextEngineTests: XCTestCase {
         XCTAssertEqual(engine.evaluate(current: ""), "okv")
     }
 
+    /// isScreensaver 실배선: 프로세스 옵션이 engine.isScreensaver() 로 관측된다.
+    /// 기본 false(하드코딩 제거 후에도 데스크탑 배경/캡처 경로 무변화 가드) + 옵션 true 반영.
+    func testIsScreensaverReflectsProcessOption() throws {
+        TextScriptEngine.isScreensaver = false
+        let off = try XCTUnwrap(SceneScriptContext())
+        XCTAssertEqual(off.context.evaluateScript("engine.isScreensaver()")?.toBool(), false,
+                       "기본 false → 관측 false(캡처/기존 앱 무변화 가드)")
+
+        TextScriptEngine.isScreensaver = true
+        defer { TextScriptEngine.isScreensaver = false }
+        let on = try XCTUnwrap(SceneScriptContext())
+        XCTAssertEqual(on.context.evaluateScript("engine.isScreensaver()")?.toBool(), true,
+                       "옵션 true → 관측 true")
+    }
+
     /// ES import 구문(실물 다수) → 바인딩을 no-op 프록시로 치환해 로드가 죽지 않아야 한다.
     func testImportStatementsNeutralized() throws {
         let script = """

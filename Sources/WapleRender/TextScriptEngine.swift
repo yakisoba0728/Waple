@@ -52,6 +52,7 @@ public final class SceneScriptContext {
         ctx.evaluateScript(TextScriptEngine.shims)
         if let ms = TextScriptEngine.captureDateEpochMillis { ctx.evaluateScript(TextScriptEngine.dateOverrideJS(ms)) }
         ctx.evaluateScript("__setCanvasSize(\(TextScriptEngine.jsNumber(width)), \(TextScriptEngine.jsNumber(height)));")
+        if TextScriptEngine.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
         installSoundBridge(ctx)
         if !layers.isEmpty {
             ctx.evaluateScript("__setSceneLayers(\(Self.layersJSONArray(layers)));")
@@ -134,6 +135,12 @@ public final class TextScriptEngine {
     /// SnapshotPipeline.pinRenderSettings 가 캡처 동안만 핀(defer 복원). 인자 있는 `new Date(ms)` 등은 불변.
     public static var captureDateEpochMillis: Double?
 
+    /// engine.isScreensaver() 반환값(WE: 화면보호기로 구동 중이면 true). 프로세스 전역 — 실행 문맥이
+    /// 컨텍스트 생성 전 1회 설정. 기본 false(데스크탑 배경 = 화면보호기 아님; 캡처·기존 앱 경로 무변화 가드).
+    /// 현 Waple 화면보호기(WapleSaverView)는 동영상 전용이라 씬 스크립트 경로가 없어 상시 false —
+    /// 씬 화면보호기 모드가 생기면 그 진입점이 true 설정(하드코딩 false 제거로 배관만 확보).
+    public static var isScreensaver = false
+
     /// captureDateEpochMillis 주입용 JS: 전역 Date 를 감싸 무인자 생성/now 만 고정, 나머지는 실 Date 로 위임.
     static func dateOverrideJS(_ epochMillis: Double) -> String {
         let ms = epochMillis.isFinite ? epochMillis : 0
@@ -192,6 +199,7 @@ public final class TextScriptEngine {
         }
         ctx.evaluateScript(Self.shims)
         if let ms = Self.captureDateEpochMillis { ctx.evaluateScript(Self.dateOverrideJS(ms)) }
+        if Self.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
         Self.injectScriptPropOverrides(ctx, json: scriptPropsJSON)
         let cleaned = Self.stripModuleSyntax(script)
         ctx.evaluateScript(cleaned)
@@ -843,6 +851,9 @@ public final class TextScriptEngine {
         __canvasSize.x = __num(w, 1920);
         __canvasSize.y = __num(h, 1080);
     }
+    // engine.isScreensaver(): 프로세스 전역 플래그(Swift TextScriptEngine.isScreensaver 가 __setScreensaver 로 주입).
+    var __isScreensaver = false;
+    function __setScreensaver(v) { __isScreensaver = !!v; }
     // engine.setTimeout: 벽시계가 아닌 runtime 클록 기반 만기 큐(결정적 — 캡처 t 주입 시 동일 발화).
     // 펌프는 setRuntime(= __engineState.runtime 갱신) 이 수행.
     var __timeoutQueue = [];   // {id, at(초), cb}
@@ -898,7 +909,7 @@ public final class TextScriptEngine {
                           isWallpaper: function() { return true; },
                           isDesktopDevice: function() { return true; },
                           isMobileDevice: function() { return false; },
-                          isScreensaver: function() { return false; },
+                          isScreensaver: function() { return __isScreensaver; },
                           isRunningInEditor: function() { return false; },
                           isPortrait: function() { return __canvasSize.y > __canvasSize.x; },
                           isLandscape: function() { return __canvasSize.x >= __canvasSize.y; },
