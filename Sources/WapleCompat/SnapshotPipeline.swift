@@ -12,8 +12,10 @@ import WapleSnapshot
 enum SnapshotPipeline {
 
     // 고정 캡처 조건(변경 시 베이스라인 재생성 필요).
-    static let thumbW = 256
-    static let thumbH = 144
+    // WAPLE_THUMB_W/H: 골든 대비 고해상 단건 캘리브 캡처용 오버라이드(예: HDR bloom #22 — 256×144 는
+    // 글로우 반경/강도 판독 불가). 스냅샷 비교는 크기 불일치를 즉시 명시 오류로 거른다(SnapshotCompare).
+    static let thumbW = ProcessInfo.processInfo.environment["WAPLE_THUMB_W"].flatMap(Int.init) ?? 256
+    static let thumbH = ProcessInfo.processInfo.environment["WAPLE_THUMB_H"].flatMap(Int.init) ?? 144
     static let captureT: Float = 6.0   // 인트로 페이드가 끝난 정상상태(GT 규약과 동일)
     static let fitMode: FitMode = .fill
     /// 벽시계 텍스트(시계/날짜 레이어)가 재캡처마다 동일 픽셀이 되도록 JS Date 무인자/now 를 핀하는 고정

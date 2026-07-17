@@ -446,8 +446,18 @@ public struct SceneDocument: Equatable {
     public var bloomStrength: Float = 2
     public var bloomThreshold: Float = 0.65
     public var bloomTint: Vec3 = Vec3(x: 1, y: 1, z: 1)
+    /// WE HDR bloom(soft-knee QuadraticThreshold) 파라미터 — `hdr && bloom` 씬 전용(#22, PS 29931 라이브 확증).
+    /// 기본값은 클린룸 확정치(threshold 1.0 · feather 0.1 · scatter 1.619 · iterations 8 — A3 §0).
+    /// strength 기본은 미복원(코퍼스 8씬 전건 저작) — 0 유지(무저작 = 무블룸).
     public var bloomHDRStrength: Float = 0
-    public var bloomHDRThreshold: Float = 0
+    public var bloomHDRThreshold: Float = 1
+    /// knee = threshold × feather (feather 단독 아님 — 윈도우 L1 라이브 cbuffer 확증).
+    public var bloomHDRFeather: Float = 0.1
+    /// 피라미드 단수(코퍼스 2~8). 단일 레벨 구현은 strength 보상 계수로 소비(실효 = strength ×
+    /// iterations — HDRBloomPass.strengthScale 캘리브 근거 참조); 피라미드 승격 시 단수 자체로 소비.
+    public var bloomHDRIterations: Int = 8
+    /// 업샘플 텐트 계수(레벨당 ×0.25×scatter, additive). 단일 레벨 구현은 미소비 — 피라미드 전용.
+    public var bloomHDRScatter: Float = 1.619
 
     /// 2D 포워드 라이팅 활성 조건: 2D 오르토 씬(camera3D==nil) + 라이트 존재. 3D(원근) 씬은 메시
     /// 라이팅 경로 담당(현행 미구현 — 보고). 개별 레이어는 `SceneLayer.lighting`(LIGHTING 콤보)로 추가 게이트.
@@ -617,8 +627,13 @@ extension SceneDocument {
         out.bloomStrength = float(general["bloomstrength"]) ?? 2
         out.bloomThreshold = float(general["bloomthreshold"]) ?? 0.65
         out.bloomTint = vec3(general["bloomtint"]) ?? Vec3(x: 1, y: 1, z: 1)
+        // HDR 판(#22): 기본값 = 클린룸 확정치(선언부 주석 참조). float/intVal 이 {"user":…,"value":…}
+        // 바인딩(실코퍼스 3470948192 등)과 문자열 숫자를 공통 언랩한다.
         out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 0
-        out.bloomHDRThreshold = float(general["bloomhdrthreshold"]) ?? 0
+        out.bloomHDRThreshold = float(general["bloomhdrthreshold"]) ?? 1
+        out.bloomHDRFeather = float(general["bloomhdrfeather"]) ?? 0.1
+        out.bloomHDRIterations = intVal(general["bloomhdriterations"]) ?? 8
+        out.bloomHDRScatter = float(general["bloomhdrscatter"]) ?? 1.619
         return out
     }
 
