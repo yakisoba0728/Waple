@@ -249,6 +249,34 @@ enum OcclusionMode {
     }
 }
 
+/// 렌더 일시정지 사유 합성(순수). 가림·수동·슬립은 독립으로 겹칠 수 있고, 렌더러는 사유가
+/// 하나도 없을 때만 재생한다. 사유 하나가 바뀔 때 실제 pause/resume 호출이 필요한지(엣지)를 이
+/// 한 곳에서만 판정 — AppDelegate 가 반환 액션대로 renderers 에 적용한다(병렬 사본 아님). 사유마다
+/// pause/resume 를 손으로 가드하지 않으므로 한 사유가 다른 사유를 덮어쓰는 실수가 원천 차단된다.
+struct PauseGate {
+    enum Reason { case occlusion, manual, sleep }
+    enum Action { case pause, resume, none }
+
+    private(set) var reasons: Set<Reason> = []
+
+    /// 사유 on/off 반영. none→some 첫 진입 = .pause, some→none 마지막 해제 = .resume, 그 외 = .none.
+    mutating func set(_ reason: Reason, active: Bool) -> Action {
+        let wasPaused = isPaused
+        if active { reasons.insert(reason) } else { reasons.remove(reason) }
+        if wasPaused == isPaused { return .none }   // 경계를 안 넘으면 렌더 무동작
+        return isPaused ? .pause : .resume
+    }
+
+    /// 사유 토글(수동 일시정지 메뉴/하단 바). 반환: 토글 후 활성 여부 + 렌더 액션.
+    mutating func toggle(_ reason: Reason) -> (active: Bool, action: Action) {
+        let next = !reasons.contains(reason)
+        return (next, set(reason, active: next))
+    }
+
+    var isPaused: Bool { !reasons.isEmpty }
+    func isActive(_ reason: Reason) -> Bool { reasons.contains(reason) }
+}
+
 /// 잠금화면 스틸(작업 2): `dscl . -read /Users/<user> GeneratedUID` 출력 파싱(순수).
 enum GeneratedUID {
     /// dscl 출력에서 UID 추출. 형식은 "GeneratedUID: <uuid>"(같은 줄) 또는 값이 다음 줄일 수 있어
