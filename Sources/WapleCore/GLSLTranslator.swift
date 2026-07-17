@@ -1101,6 +1101,7 @@ public enum GLSLTranslator {
             || name == "g_TexelSize" || name == "g_TexelSizeHalf"
             || name == "g_ParallaxPosition"
             || name == "g_Frametime" || name == "g_PointerPositionLast"  // ★짝 — last 단독 배선 시 유령 링플
+            || name == "g_PointerState"  // 클릭 상태(.z=버튼 힘) — cursorripple/fluidsim, 미클릭 0
             // 주의: bare g_* 전면 엔진 승격 금지 — g_RenderVar0..4 는 폴리모픽(파일마다 의미 상이),
             // g_Lights*/g_L{Point,Spot,...}_* 배열형은 parseUniforms [N] 스트립과 충돌. 표적 등재만.
             || name.hasPrefix("g_AudioSpectrum")
@@ -1119,6 +1120,8 @@ public enum GLSLTranslator {
         // 시간적분 동결/이전 포인터 부재. 짝 배선(위 isEngine 주석).
         if name == "g_Frametime" { return "eng.timeAndPad.w" }
         if name == "g_PointerPositionLast" { return "eng.pointerLastAndPad.xy" }
+        // 실물 cursorripple/fluidsim: g_PointerState.z = 클릭 버튼 힘(미클릭 0). .z 만 참조되므로 pad 슬롯 재사용.
+        if name == "g_PointerState" { return "float4(0.0, 0.0, eng.pointerLastAndPad.z, 0.0)" }
         if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
         // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
@@ -1410,7 +1413,7 @@ public enum GLSLTranslator {
         case .engine(let n):
             let t = n.contains("Matrix") ? "float4x4"
                 // Texel 접미는 isEngine 통과분만 도달 = g_TextureNTexel 한정(g_TexelSize 는 "Size" 접미).
-                : (n.hasSuffix("Resolution") || n.hasSuffix("Texel") ? "float4"
+                : (n.hasSuffix("Resolution") || n.hasSuffix("Texel") || n == "g_PointerState" ? "float4"
                     : (n == "g_PointerPosition" || n == "g_ParallaxPosition" || n == "g_PointerPositionLast"
                         || n == "g_TexelSize" || n == "g_TexelSizeHalf" ? "float2" : "float"))
             return "\(t) \(n)"
@@ -1462,7 +1465,7 @@ public enum GLSLTranslator {
         for v in varyings { vary += "  \(v.type.msl) \(v.name);\n" }
         vary += "};\n"
         let vin = "struct VIn { float3 a_Position [[attribute(0)]]; float2 a_TexCoord [[attribute(1)]]; };\n"
-        // timeAndPad = (time, pointerUV.x, pointerUV.y, frametime dt) / pointerLastAndPad = (직전 프레임 포인터 UV, 0, 0).
+        // timeAndPad = (time, pointerUV.x, pointerUV.y, frametime dt) / pointerLastAndPad = (직전 프레임 포인터 UV.xy, g_PointerState.z 클릭힘, 0).
         // Swift 측 단일 빌더 SceneRendererFrameEncoder.engineUniform 과 레이아웃 동기 필수.
         let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.

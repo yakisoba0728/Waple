@@ -169,6 +169,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         dispatchPointerEvent(hook: "cursorClick", x: x, y: y)
     }
 
+    /// 포인터 버튼 상태 주입점(g_PointerState.z 로 전달 — 시뮬/헤드리스 e2e 용, pointerUV 위치 주입과 대칭).
+    public func setPointerButtonDown(_ down: Bool) { pointerDown = down }
+
     // ── cursorEnter/cursorLeave (레이어 호버 — 코퍼스 47패키지) ────────────────────
     /// 레이어 스크린 AABB(씬 픽셀 y-down, pointerSceneCoords 와 동일 공간). origin=중심, 반너비=|size×scale|/2.
     /// 회전(angleZ)은 무시 — 축정렬 근사(호버 존은 대개 축정렬 UI). scale 은 mount 정적 스냅샷(퍼펫 합성 후 값).
@@ -413,6 +416,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     func deliverGlobalMouse(isDown: Bool) {
+        pointerDown = isDown  // g_PointerState.z 라이브 배관(위치 무관 물리 버튼 상태) — 헤드리스는 모니터 미설치라 미도달.
         guard let p = pointerSceneCoords() else { return }
         if isDown {
             dispatchPointerEvent(hook: "cursorDown", x: p.x, y: p.y)
@@ -529,6 +533,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var pointerUV = SIMD2<Float>(0.5, 0.5)
     /// 직전 draw 프레임의 포인터 UV(g_PointerPositionLast — cursorripple 이전 위치). draw 종료 시 이월.
     var pointerUVLast = SIMD2<Float>(0.5, 0.5)
+    /// 포인터 좌버튼 다운 상태(g_PointerState.z — cursorripple/fluidsim 클릭 힘). 미주입/헤드리스 = false(무클릭).
+    var pointerDown = false
     /// 현재 프레임 dt 초(g_Frametime — fluidsim 시간적분). draw 가 갱신, 캡처는 1/30 고정(결정적).
     var frameDT: Float = 0
     /// cursorMove 훅 보유 씬만 이동 이벤트 배달(마운트 시 캐시 — 매 마우스무브 스캔 회피).

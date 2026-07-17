@@ -38,6 +38,7 @@ extension SceneRenderer {
         e[16] = time; e[17] = pointerUV.x; e[18] = pointerUV.y  // timeAndPad = (time, pointerX, pointerY, dt)
         e[19] = frameDT                                          // g_Frametime
         e[20] = pointerUVLast.x; e[21] = pointerUVLast.y         // g_PointerPositionLast
+        e[22] = pointerDown ? 1 : 0                              // g_PointerState.z (클릭 힘) — pad 슬롯 재사용
         for n in 0..<8 {
             let r = n < texRes.count ? texRes[n] : SIMD4<Float>(1, 1, 1, 1)
             let o = 24 + n * 4

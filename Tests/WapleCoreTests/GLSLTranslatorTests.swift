@@ -384,6 +384,22 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
     }
 
+    func testPointerStateIsEngineUniformNotMaterial() throws {
+        // 실물 cursorripple/fluidsim: bare `uniform vec4 g_PointerState;` — .z = 클릭 버튼 힘.
+        // 머티리얼로 오인되면 클릭 배관이 끊겨 미클릭 0 영구고정. 엔진 유니폼: pointerLastAndPad.z alias.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform vec4 g_PointerState;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * g_PointerState.z;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("eng.pointerLastAndPad.z"), "g_PointerState.z → 클릭힘 슬롯:\n\(t.msl)")
+        XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
+    }
+
     func testFrametimeAndPointerLastAreEngineUniforms() throws {
         // 실물 fluidsim/cursorripple: bare g_Frametime(dt 시간적분) + g_PointerPositionLast(이전 프레임 포인터).
         // 머티리얼-0 고정이면 시간적분 동결/유령 링플. ★두 유니폼은 짝 — dt 없이 last 만 주면 발산.
