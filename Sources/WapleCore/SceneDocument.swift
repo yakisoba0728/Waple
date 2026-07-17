@@ -462,6 +462,17 @@ public struct SceneDocument: Equatable {
     /// 업샘플 텐트 계수(레벨당 ×0.25×scatter, additive). 단일 레벨 구현은 미소비 — 피라미드 전용.
     public var bloomHDRScatter: Float = 1.619
 
+    /// `general.camerashake` — 전역 카메라 지터 enable(bool). 코퍼스 활성 13/168씬(그 외는 편집기 기본값을
+    /// 동반하되 비활성). 클린룸 확정 수식 부재(문서 결론은 "전역 지터" §16만) → 렌더러가 코퍼스 값분포 기반
+    /// 결정적 근사로 적용(SceneRenderer.cameraShakeOffset). 비활성 씬은 렌더 경로가 비켜가 비트동일.
+    public var cameraShake: Bool = false
+    /// 지터 진폭(무차원 상대값 — 코퍼스 0.04..1.0, 기본 0.5). 렌더러가 NDC 스케일 상수로 환산.
+    public var cameraShakeAmplitude: Float = 0.5
+    /// 지터 거칠기(고주파 오버톤 혼합비 — 코퍼스 0.0..1.1, 기본 1.0).
+    public var cameraShakeRoughness: Float = 1
+    /// 지터 속도(시간 진행 스케일 — 코퍼스 0.5..7.0, 기본 3.0).
+    public var cameraShakeSpeed: Float = 3
+
     /// 2D 포워드 라이팅 활성 조건: 2D 오르토 씬(camera3D==nil) + 라이트 존재. 3D(원근) 씬은 메시
     /// 라이팅 경로 담당(현행 미구현 — 보고). 개별 레이어는 `SceneLayer.lighting`(LIGHTING 콤보)로 추가 게이트.
     public var forwardLit2D: Bool { camera3D == nil && !lights3D.isEmpty }
@@ -626,6 +637,12 @@ extension SceneDocument {
         out.skylightColor = skylightColor
         out.hdr = hdr
         out.bloom = bloom
+        // camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13/168씬). {"user"/"value"} 바인딩(클린룸 15씬)
+        // 대비 unwrap. 수식은 렌더러(코퍼스 값분포 근사) — 여기선 원시 파라미터만 보존.
+        out.cameraShake = (unwrap(general["camerashake"]) as? Bool) ?? false
+        out.cameraShakeAmplitude = float(general["camerashakeamplitude"]) ?? 0.5
+        out.cameraShakeRoughness = float(general["camerashakeroughness"]) ?? 1
+        out.cameraShakeSpeed = float(general["camerashakespeed"]) ?? 3
         // LDR uses the WE defaults; float/vec3 retain numeric-string and {value} unwrapping without clamps.
         out.bloomStrength = float(general["bloomstrength"]) ?? 2
         out.bloomThreshold = float(general["bloomthreshold"]) ?? 0.65

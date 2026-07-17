@@ -587,6 +587,8 @@ extension SceneRenderer {
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        var shake = frameShakeOffset  // camerashake 전역 지터(v_main buffer 4, 깊이 무관). 비활성=0 → +0 비트동일.
+        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
         enc.setFragmentTexture(texture, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         // f_lit 유니폼: rect + 라이트 위치·exponent/색·반경 + 앰비언트 + 레이어 PBR 재질. 라이트 레이어만.
@@ -631,6 +633,8 @@ extension SceneRenderer {
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        var shake = frameShakeOffset  // camerashake 전역 지터(v_main buffer 4). 텍스트도 전역 병진에 동참.
+        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
         enc.setFragmentTexture(tex, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
@@ -649,6 +653,8 @@ extension SceneRenderer {
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 3). 파티클도 함께 흔들림. 비활성=0.
+        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         enc.setFragmentTexture(sys.texture, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
@@ -692,6 +698,8 @@ extension SceneRenderer {
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
         enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 3). refract 파티클도 함께 흔들림.
+        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
         enc.setFragmentTexture(sys.texture, index: 0)     // 알베도(g_Texture0)
         enc.setFragmentTexture(normal, index: 1)          // 노멀맵(g_Texture1)
         enc.setFragmentTexture(framebuffer, index: 2)     // 씬 컬러 스냅샷(g_Texture3 = _rt_FullFrameBuffer)

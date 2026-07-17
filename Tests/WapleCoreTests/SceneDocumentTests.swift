@@ -63,6 +63,39 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.bloomHDRScatter, 1.619, accuracy: 1e-6)
     }
 
+    /// D 재감사 #16: general.camerashake 전역 지터 파스(bool enable + amplitude/roughness/speed 형제 키).
+    /// 실측 활성 13/168씬 — 실코퍼스 값(2800248288: amp 0.35 rough 0.0 speed 1.0)으로 파스 확증.
+    func testParsesCameraShakeFields() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},
+          "camerashake":true,"camerashakeamplitude":0.34999999,"camerashakeroughness":0.0,"camerashakespeed":1.0},"objects":[]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertTrue(doc.cameraShake)
+        XCTAssertEqual(doc.cameraShakeAmplitude, 0.35, accuracy: 1e-4)
+        XCTAssertEqual(doc.cameraShakeRoughness, 0.0, accuracy: 1e-4)
+        XCTAssertEqual(doc.cameraShakeSpeed, 1.0, accuracy: 1e-4)
+    }
+
+    /// camerashake 부재 → false + 코퍼스 편집기 기본값(0.5/1/3). 비활성 = 무영향(비트동일 가드 입력).
+    func testCameraShakeDefaultsWhenAbsent() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertFalse(doc.cameraShake)
+        XCTAssertEqual(doc.cameraShakeAmplitude, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(doc.cameraShakeRoughness, 1, accuracy: 1e-6)
+        XCTAssertEqual(doc.cameraShakeSpeed, 3, accuracy: 1e-6)
+    }
+
+    /// 실코퍼스 바인딩 형태: camerashake 는 {"user"/"value"} 로 저작될 수 있음(클린룸 15씬) — unwrap 공통.
+    func testCameraShakeAcceptsValueWrappedAndStringForms() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":16,"height":16},"camerashake":{"value":true},"camerashakeamplitude":"0.15000001","camerashakespeed":{"value":7.0}},"objects":[]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertTrue(doc.cameraShake)
+        XCTAssertEqual(doc.cameraShakeAmplitude, 0.15, accuracy: 1e-4)
+        XCTAssertEqual(doc.cameraShakeSpeed, 7.0, accuracy: 1e-4)
+    }
+
     func testBloomParserAcceptsNumericStringAndValueFormsWithoutClamping() throws {
         func parse(_ fields: String) throws -> SceneDocument {
             let scene = """

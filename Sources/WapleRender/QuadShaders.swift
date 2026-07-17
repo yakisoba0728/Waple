@@ -10,9 +10,11 @@ enum QuadShaders {
                        const device float4* verts [[buffer(0)]],
                        constant float2& cameraOffset [[buffer(1)]],
                        constant float2& parallaxDepth [[buffer(2)]],
-                       constant float2& aspectScale [[buffer(3)]]) {
+                       constant float2& aspectScale [[buffer(3)]],
+                       constant float2& shakeOffset [[buffer(4)]]) {
         float4 v = verts[vid];
-        float2 p = (v.xy + cameraOffset * parallaxDepth) * aspectScale;
+        // shakeOffset = camerashake 전역 지터 — parallaxDepth 무관(전역 카메라 병진). 미보유 씬 = 0 → 비트동일.
+        float2 p = (v.xy + cameraOffset * parallaxDepth + shakeOffset) * aspectScale;
         VOut o; o.pos = float4(p.x, p.y, 0.0, 1.0); o.uv = float2(v.z, v.w); return o;
     }
     fragment float4 f_main(VOut in [[stage_in]],

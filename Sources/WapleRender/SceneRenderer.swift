@@ -602,6 +602,50 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     func cameraZoom(at time: Float) -> Float {
         cameraZoomAnim?.value(component: 0, atTime: time, base: cameraZoomBase) ?? cameraZoomBase
     }
+
+    // ── camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13씬 — 2D 11/3D 2) ────────────────────
+    // 미보유 씬은 cameraShakeEnabled=false → frameShakeOffset 이 .zero 유지 → 셰이더 +0 = 비트동일(가드).
+    // parallax(camOffset×parallaxDepth) 채널은 depth=0 레이어(활성 씬 다수)에서 소실되므로 미사용 —
+    // 셰이더가 depth 무관 별도 항(shakeOffset)으로 전역 가산(v_main/pv_main 참조).
+    var cameraShakeEnabled = false
+    var cameraShakeAmplitude: Float = 0.5
+    var cameraShakeRoughness: Float = 1
+    var cameraShakeSpeed: Float = 3
+    /// 이번 프레임 지터 오프셋(v.xy 공간, 깊이 무관 전역). draw/captureFrames 가 t 로 평가해
+    /// encodeLayer/encodeText/encodeParticle 이 셰이더 버퍼로 바인드. 비활성 = .zero.
+    var frameShakeOffset = SIMD2<Float>(0, 0)
+
+    /// 진폭 1.0 → NDC(v.xy) 피크 ≈ shakeNDCScale. 코퍼스 진폭 0.04..1.0(기본 0.5)은 무차원 상대값
+    /// (픽셀 아님 — 0.04px 는 비가시, 0.5 기본은 정규화 노브 특성). 잔잔한 앰비언스라 작게.
+    /// ponytail: 캘리브 노브 — A/B 에서 과/소 흔들리면 여기만 조정(수식·바인딩 불변).
+    static let shakeNDCScale: Float = 0.03
+
+    /// camerashake 전역 지터 오프셋(v.xy 공간). t 결정적 — 같은 t → 같은 값(Date/random 미사용).
+    /// ponytail: WE 확정 수식 부재(클린룸 — 바이너리 미열람; 문서 결론은 "전역 지터"만 §16). 코퍼스 13씬
+    ///   값분포 기반 근사. 교체 조건: WE camerashake 수식이 실측 확정되면 이 함수만 축자 대체(호출부·바인딩
+    ///   불변). 천장: 2주파 사인 합(진짜 Perlin/value-noise 아님) — 미세 규칙주기 잔존을 허용.
+    static func cameraShakeOffset(time t: Float, amplitude: Float, roughness: Float, speed: Float) -> SIMD2<Float> {
+        let w = speed
+        // 저주파 기저 드리프트: x/y 비공약 주파수·위상으로 탈동기(뻔한 대각 왕복 회피).
+        let baseX = sin(t * w * 1.00)
+        let baseY = sin(t * w * 1.37 + 1.7)
+        // roughness = 고주파 오버톤 혼합비(거칠기). 0=매끈 드리프트, ~1=지글거림.
+        let rough = max(0, roughness)
+        let roughX = sin(t * w * 5.30 + 0.6)
+        let roughY = sin(t * w * 6.10 + 2.9)
+        let norm = 1 / (1 + rough)   // 오버톤 추가해도 피크 ≈ amplitude 유지(발산 억제)
+        let x = (baseX + rough * roughX) * norm
+        let y = (baseY + rough * roughY) * norm
+        return SIMD2<Float>(x, y) * (amplitude * SceneRenderer.shakeNDCScale)
+    }
+
+    /// 이번 프레임 지터 오프셋(비활성 = .zero → 비트동일 가드). cameraZoom(at:) 과 동형 디스패치.
+    func shakeOffset(at t: Float) -> SIMD2<Float> {
+        cameraShakeEnabled
+            ? SceneRenderer.cameraShakeOffset(time: t, amplitude: cameraShakeAmplitude,
+                                              roughness: cameraShakeRoughness, speed: cameraShakeSpeed)
+            : .zero
+    }
     var startTime = CFAbsoluteTimeGetCurrent()
     var lastFrameTime = CFAbsoluteTimeGetCurrent()
     var shouldAnimate = false
@@ -955,6 +999,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         parallaxAmount = doc.parallaxAmount
         parallaxMouseInfluence = doc.parallaxMouseInfluence
         parallaxDelay = doc.parallaxDelay
+        cameraShakeEnabled = doc.cameraShake
+        cameraShakeAmplitude = doc.cameraShakeAmplitude
+        cameraShakeRoughness = doc.cameraShakeRoughness
+        cameraShakeSpeed = doc.cameraShakeSpeed
         // 마우스 모니터는 시차 + 포인터 유니폼(g_PointerPosition — 커서 반응 효과) 공용.
         if parallaxEnabled || hasEffects {
             parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
@@ -973,6 +1021,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
         shouldAnimate = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer
             || cameraZoomAnim != nil  // 카메라 줌 인트로(single)도 연속 재생 필요
+            || cameraShakeEnabled     // camerashake 전역 지터는 t 의존 → 연속 재생 필요
         if shouldAnimate {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
@@ -1066,7 +1115,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
         if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer
-            || cameraZoomAnim != nil, view.window?.occlusionState.contains(.visible) == false { return }
+            || cameraZoomAnim != nil || cameraShakeEnabled, view.window?.occlusionState.contains(.visible) == false { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
@@ -1138,6 +1187,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let camZoom = camZoomRaw > 0 ? camZoomRaw : 1
         if camZoom != 1 { aspectScale *= camZoom }
         currentCameraZoom = camZoom
+        frameShakeOffset = shakeOffset(at: time)  // camerashake 전역 지터(비활성 = .zero → 셰이더 +0 = 비트동일)
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
         guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { cb.commit(); return }
@@ -1261,6 +1311,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let capZoomRaw = cameraZoom(at: t)
             let capZoom = capZoomRaw > 0 ? capZoomRaw : 1
             if capZoom != 1 { asp *= capZoom }
+            frameShakeOffset = shakeOffset(at: t)  // 라이브 draw 와 동일: A/B 캡처가 t=6 지터 오프셋을 판독
             // 라이브 draw 와 동일한 씬-순서 인터리브(encodeDrawPlan 공용 — 복제 루프 발산 방지).
             // 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
             // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)
@@ -1327,6 +1378,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneAudio?.teardown(); sceneAudio = nil
         parallax.stop()
         cameraOffset = .zero; targetCameraOffset = .zero  // 마운트 재사용 대비 시차 리셋(mount :656 과 일관)
+        frameShakeOffset = .zero; cameraShakeEnabled = false  // 지터 리셋(mount 가 무조건 덮음 — 재사용 무회귀·stale 애니게이트 방지)
         parallaxEnabled = false  // teardown 후 resume(:1172 게이트)이 stale parallaxEnabled 로 monitor 를 재기동하지 않도록. mount(:836)이 무조건 덮으므로 재사용 무회귀.
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         mediaPoller?.stop(); mediaPoller = nil
