@@ -1148,6 +1148,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 if let c = particleSystems[idx].childOf {
                                                     return particleSystems[c.parent].sim.childDisplay(c.link)
                                                 }
+                                                // 라이브 오디오반응: 신호 주입(무음이면 sim 이 스킵). 헤드리스 캡처는
+                                                // captureFrames 의 별도 로컬 sims 라 이 경로 밖 → 무음 A/B 비트동일 유지.
+                                                if hasAudio { particleSystems[idx].sim.currentAudio = currentSpectrum }
                                                 return particleSystems[idx].sim.step(dt)
                                             },
                                             camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }

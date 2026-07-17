@@ -8,6 +8,11 @@ public struct AudioSpectrum16: Equatable {
     public static let silent = AudioSpectrum16(left: [Float](repeating: 0, count: 16),
                                                right: [Float](repeating: 0, count: 16))
 
+    /// 전 빈이 0 = 무신호(캡처 무음/공급자 부재 폴백). 오디오반응 스킵 판정용 — 신호가 있을 때만 변조.
+    public var isSilent: Bool {
+        !left.contains(where: { $0 != 0 }) && !right.contains(where: { $0 != 0 })
+    }
+
     /// 임의 길이 스펙트럼 → 16빈(연속 그룹 평균). 라이브 모노 FFT(128빈) → 16빈 L=R 근사에 사용.
     /// 공용 비닝 프리미티브(AudioSpectrum.bin)로 위임 — 인덱스/평균 공식은 비트 동일.
     public static func downsample16(_ spectrum: [Float]) -> [Float] {

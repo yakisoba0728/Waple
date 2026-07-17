@@ -815,6 +815,8 @@ extension SceneRenderer {
                 }
             }
         }
+        // 이미터 오디오반응이 있으면 라이브 오디오 공급자 기동 대상(mount 의 hasAudio 게이트 → provider.start()).
+        if out.contains(where: { $0.def.emitterAudio.contains { $0 != nil } }) { hasAudio = true }
         return out
     }
 

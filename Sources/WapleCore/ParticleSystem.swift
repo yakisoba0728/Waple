@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 // MARK: - 요소 타입
 
@@ -205,6 +206,44 @@ public struct ParticleInstanceOverride: Equatable {
     }
 }
 
+// MARK: - 오디오반응 (실측 audioprocessing* — 이미터/이니셜라이저/오퍼레이터 부착, 본 구현은 이미터 rate 스코프)
+
+/// 이미터 오디오반응 파라미터(WE audioprocessing*). 소비는 `AudioResponse.compute`(shake/pulse.vert 1:1):
+/// 구간평균([freqStart,freqEnd]) → smoothstep(bounds) → pow(exponent) → saturate → ×1 = rate 배수(0..1).
+/// mode 1..3(L/R/Both평균)만 활성 — 0/부재는 nil(무반응, 기존 rate 유지 → 무음 폴백의 근거).
+public struct AudioProcessing: Equatable {
+    public let mode: Int
+    public let freqStart: Float
+    public let freqEnd: Float
+    public let bounds: SIMD2<Float>
+    public let exponent: Float
+    public init(mode: Int, freqStart: Float, freqEnd: Float, bounds: SIMD2<Float>, exponent: Float) {
+        self.mode = mode; self.freqStart = freqStart; self.freqEnd = freqEnd
+        self.bounds = bounds; self.exponent = exponent
+    }
+
+    /// 이미터/오퍼레이터 json 의 audioprocessing* 키 → AudioProcessing. mode 1..3 아니면 nil.
+    /// 기본값은 셰이더 오디오 경로(SceneRendererResources.audioParams)와 정합: freqStart 0·freqEnd 15·exponent 1.
+    /// bounds 부재 → [0,1](실측 modal "0 1"; A/B 무관 — 무음은 어떤 bounds 든 스킵).
+    static func parse(_ o: [String: Any]) -> AudioProcessing? {
+        guard let mode = strictInt(o["audioprocessingmode"]), mode >= 1, mode <= 3 else { return nil }
+        return AudioProcessing(
+            mode: mode,
+            freqStart: strictFloat(o["audioprocessingfrequencystart"]) ?? 0,
+            freqEnd: strictFloat(o["audioprocessingfrequencyend"]) ?? 15,
+            bounds: bounds2(o["audioprocessingbounds"]) ?? SIMD2(0, 1),  // ponytail: 부재 기본 [0,1]
+            exponent: strictFloat(o["audioprocessingexponent"]) ?? 1)
+    }
+}
+
+/// "min max" 문자열 → SIMD2(앞 두 성분). vec3 파서는 3성분 요구라 2성분 bounds 전용.
+private func bounds2(_ v: Any?) -> SIMD2<Float>? {
+    guard let s = v as? String else { return nil }
+    let parts = s.split(separator: " ").compactMap { Float($0) }
+    guard parts.count >= 2 else { return nil }
+    return SIMD2(parts[0], parts[1])
+}
+
 // MARK: - 시스템 정의
 
 public struct ParticleSystemDef: Equatable {
@@ -218,6 +257,8 @@ public struct ParticleSystemDef: Equatable {
     public let children: [ChildLink]
     /// 컨트롤포인트 오프셋(id 0..7, 시스템 로컬 좌표). mapsequence/트리거류가 참조.
     public var controlPoints: [Vec3] = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
+    /// 이미터별 오디오반응(emitters 와 병렬; nil=무반응). 비어 있으면 전 이미터 무반응(기존 def·테스트 호환).
+    public var emitterAudio: [AudioProcessing?] = []
 
     public init(emitters: [Emitter], initializers: [Initializer], operators: [ParticleOperator],
                 renderer: RendererKind, maxCount: Int, startTime: Float, material: ParticleMaterial?,
@@ -235,6 +276,8 @@ public struct ParticleSystemDef: Equatable {
                              instanceOverride: ParticleInstanceOverride? = nil,
                              resolveChild: ((String) -> ParticleSystemDef?)? = nil) -> ParticleSystemDef {
         var emitters: [Emitter] = []
+        // emitters 와 병렬(같은 case 에서 함께 append) — 오디오반응 rate 변조에 이미터별 파라미터 공급.
+        var emitterAudio: [AudioProcessing?] = []
         for case let e as [String: Any] in (json["emitter"] as? [Any] ?? []) {
             switch e["name"] as? String {
             case "sphererandom":
@@ -246,12 +289,14 @@ public struct ParticleSystemDef: Equatable {
                     rate: pfloat(e["rate"]) ?? 0,
                     burst: pint(e["instantaneous"]) ?? 0,
                     sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                emitterAudio.append(AudioProcessing.parse(e))
             case "boxrandom":
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
                     distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
                     rate: pfloat(e["rate"]) ?? 0,
                     burst: pint(e["instantaneous"]) ?? 0))
+                emitterAudio.append(AudioProcessing.parse(e))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
             }
@@ -522,6 +567,8 @@ public struct ParticleSystemDef: Equatable {
             maxCount: maxCount, startTime: pfloat(json["starttime"]) ?? 0, material: material,
             children: children)
         def.controlPoints = controlPoints
+        // 인스턴스 오버라이드는 emitters 를 .map(순서/개수 보존)만 하므로 emitterAudio 병렬성 유지.
+        def.emitterAudio = emitterAudio
         return def
     }
 }

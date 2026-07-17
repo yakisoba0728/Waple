@@ -947,6 +947,8 @@ extension SceneRenderer {
         let rootIdxs = particleSystems.indices.filter { particleSystems[$0].childOf == nil }
         // 라이브(liveDelta 지정)=클램프 dt 이어가기(유한), 캡처(nil)=clock→time 리플레이. clock 은 캡처만 전진.
         var acc = max(0, liveDelta ?? (time - particle3DClock))
+        // 라이브(liveDelta≠nil)만 오디오반응 주입 — 캡처(nil)는 프레시 sim 무음 재현 → A/B 비트동일.
+        if liveDelta != nil, hasAudio { for i in rootIdxs { particleSystems[i].sim.currentAudio = currentSpectrum } }
         var steps = 0
         if acc > 1e-5 {
             while acc > 1e-5 { let s = min(dtCap, acc); for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(s) }; acc -= s; steps += 1 }
