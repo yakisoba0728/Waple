@@ -78,7 +78,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "🖼"
+        // 상태바 아이콘 — 시스템 심볼 템플릿(라이트/다크 메뉴바 자동 적응). 심볼 부재 시 이모지 폴백.
+        if let symbol = NSImage(systemSymbolName: "water.waves", accessibilityDescription: "Waple") {
+            symbol.isTemplate = true
+            statusItem.button?.image = symbol
+        } else {
+            statusItem.button?.title = "🖼"
+        }
 
         // 트레이 축소(SP5′): 설정은 전부 설정 창으로 — 창 없이 필요한 동작만 남긴다.
         let menu = NSMenu()
