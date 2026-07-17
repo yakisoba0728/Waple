@@ -122,19 +122,49 @@ final class SceneSharedScriptTests: XCTestCase {
         XCTAssertEqual(probe.evaluate(current: ""), "dark/1/0")
     }
 
-    /// engine.userProperties(코퍼스 17씬): 스크립트 자체 applyUserProperties 훅이 없어도 마운트
-    /// 프로퍼티를 update() 안에서 읽을 수 있어야 한다. 부울 오분기 가드 — noopProxy 는 항상 truthy 라
-    /// false 값이 'on' 분기로 새는 것이 기존 버그(0 수치보다 악질).
-    func testEngineUserPropertiesReadableFromUpdateWithoutOwnHook() throws {
+    /// engine.userProperties 는 **원시값**이다 — {type,value} 래퍼가 아니다.
+    /// 코퍼스 진실(실측): `engine.userProperties.<KEY>` 65회 등장, `.value` 동반 **0회**. 스크립트는
+    /// 원시값을 느슨비교(`== 2`, `!= 0`)로 직접 읽는다. {type,value} 는 project.json `condition` DSL
+    /// ("advancesettings.value == true")과 web API(WallpaperBridgeJS)의 형태이지 스크립트 API 가 아니다.
+    ///
+    /// 스크립트 자체 applyUserProperties 훅이 없어도 update() 안에서 읽혀야 한다(훅 무관 상시 주입).
+    /// 아래 스크립트는 실코퍼스 2911866381 축자 인용:
+    ///   `if (engine.userProperties.timeofday != 0) { value = engine.userProperties.timeofday - 1; }`
+    /// 래퍼를 노출하면 `{obj} != 0` → true(오분기) → `{obj} - 1` → **NaN** → blendValue 오염 → 씬 암전.
+    /// noopProxy 폴백도 함께 배제한다(`'' - 0` → 0 ≠ 7).
+    func testEngineUserPropertiesExposeRawValuesNotTypeValueWrappers() throws {
         let scene = try XCTUnwrap(SceneScriptContext())
         let e = try XCTUnwrap(TextScriptEngine(script: """
         export function update(value) {
-            var p = engine.userProperties;
-            return (p.darkmode && p.darkmode.value) ? 'on' : 'off:' + p.speed.value;
+            var timeofday = (engine.userProperties.timeofday != 0)
+                ? engine.userProperties.timeofday - 1
+                : 'day';
+            return [timeofday,
+                    engine.userProperties.timeofday == 0,
+                    engine.userProperties.meteor == false,
+                    engine.userProperties.daytime - 0,
+                    engine.userProperties.timeofday.value === undefined].join('/');
         }
         """, scene: scene))
-        e.applyUserProperties(#"{"darkmode":{"value":false},"speed":{"value":42}}"#)
-        XCTAssertEqual(e.evaluate(current: ""), "off:42")
+        // 2911866381 실 project.json 형태: combo 는 문자열("0"), bool 은 진짜 bool, slider 는 수치.
+        e.applyUserProperties(#"{"timeofday":{"type":"combo","value":"0"},"meteor":{"type":"bool","value":false},"daytime":{"type":"slider","value":7}}"#)
+        // 래퍼 노출 시: "NaN/false/false/NaN/false" — 오분기 + NaN 전파.
+        XCTAssertEqual(e.evaluate(current: ""), "day/true/true/7/true")
+    }
+
+    /// 원시값이라도 combo 문자열('2')이 `== 2` 로 참이어야 한다(느슨비교 — 수치 강제변환 금지).
+    /// 실코퍼스 3151551777: `engine.userProperties.timeofday == 99`.
+    func testEngineUserPropertiesLooseEqualityMatchesComboStrings() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(value) {
+            return [engine.userProperties.timeofday == 99,
+                    engine.userProperties.timeofday == 1,
+                    engine.userProperties.label === 'Both'].join('/');
+        }
+        """, scene: scene))
+        e.applyUserProperties(#"{"timeofday":{"type":"combo","value":"99"},"label":{"type":"text","value":"Both"}}"#)
+        XCTAssertEqual(e.evaluate(current: ""), "true/false/true")
     }
 
     func testThrowingLifecycleFunctionsAreNotRetriedOrCrossContaminateSharedContext() throws {

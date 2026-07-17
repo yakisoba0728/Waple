@@ -292,7 +292,7 @@ public final class TextScriptEngine {
     /// Deliver the mount's effective WallpaperProperty JSON once. The gate is set before JSON evaluation/call,
     /// so malformed JSON or a throwing script is logged and never retried automatically.
     /// engine.userProperties(코퍼스 17씬)는 훅 유무와 무관하게 항상 채운다 — noopProxy 폴백은 truthy 라
-    /// `if (engine.userProperties.x.value)` 부울 분기가 항상 참으로 새는 오분기 버그(0 수치보다 악질).
+    /// 부울 분기가 항상 참으로 새는 오분기 버그(0 수치보다 악질).
     /// 수용된 순서 제약: 공유 컨텍스트 첫 스크립트의 톱레벨 코드는 이 주입 이전에 실행됨 — 실물
     /// 스크립트는 update()/init() 안에서 읽는다(build3D 선행과 동일한 기존 제약, 재구조화 금지).
     public func applyUserProperties(_ propertiesJSON: String) {
@@ -301,7 +301,20 @@ public final class TextScriptEngine {
         _ = withExceptionCapture("applyUserProperties hook exception") { failed -> JSValue? in
             guard let properties = context.evaluateScript("(\(propertiesJSON))"), !failed() else { return nil }
             context.setObject(properties, forKeyedSubscript: "__wapleUserProperties" as NSString)
-            context.evaluateScript("engine.userProperties = __wapleUserProperties;")
+            // engine.userProperties = **원시값** 맵({type,value} 래퍼 아님). 코퍼스 실측: `engine.userProperties.<KEY>`
+            // 65회 등장, `.value` 동반 0회 — 스크립트는 `engine.userProperties.timeofday == 2` 처럼 직접 비교한다.
+            // {type,value} 는 project.json `condition` DSL 과 web API 의 형태이지 스크립트 API 가 아니다.
+            // 래퍼를 노출하면 `{obj} != 0` → true(오분기) → `{obj} - 1` → NaN 전파 → 씬 암전(2911866381).
+            // 값은 combo 문자열('0'/'99') 그대로 — 코퍼스는 전부 느슨비교라 수치 강제변환은 불필요하고
+            // 문자열 프로퍼티(combo/text)를 깨뜨린다. 산출기 weUserPropertiesJSON 은 WebRenderer 와 공유 —
+            // 거기선 {type,value} 가 올바른 web 계약이므로 반드시 이 주입 지점에서만 벗긴다.
+            context.evaluateScript("""
+            engine.userProperties = (function (o) {
+                var r = {};
+                for (var k in o) { r[k] = o[k] ? o[k].value : o[k]; }
+                return r;
+            })(__wapleUserProperties);
+            """)
             guard let applyUserPropertiesFn, !failed() else { return nil }
             let result = applyUserPropertiesFn.call(withArguments: [properties])
             return failed() ? nil : result
