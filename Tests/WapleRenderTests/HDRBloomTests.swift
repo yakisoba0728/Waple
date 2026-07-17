@@ -3,7 +3,7 @@ import Metal
 @testable import WapleRender
 
 /// #22 HDR bloom(hdr && bloom) — 추출(PS 29931 soft-knee)→blur13→합성(saturate(base+bloom) =
-/// PS 29925 의 화면 순효과). 부정 컨트롤: 종전 동작(hdrPost ACES 조기 return)은 글로우가 0 —
+/// PS 29925 의 화면 순효과). 부정 컨트롤: hdrPost(클램프) 단독 조기 return 은 글로우가 0 —
 /// 라우팅 테스트가 그 결함을 red 로 재현.
 final class HDRBloomTests: XCTestCase {
     private final class FailingHDRBloomEncoder: HDRBloomEncoding {
@@ -160,7 +160,7 @@ final class HDRBloomTests: XCTestCase {
         XCTAssertGreaterThan(maxRGB(32, 4), 0)           // 세로 방향도 번짐(2-pass 분리형)
     }
 
-    /// 격리 가드: LDR(bgra8) 소스 유입은 인코드 전 거부 — 호출부 ACES 폴백 안전.
+    /// 격리 가드: LDR(bgra8) 소스 유입은 인코드 전 거부 — 호출부 hdrPost(클램프) 폴백 안전.
     func testRejectsNonFloatSource() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let pass = try XCTUnwrap(HDRBloomPass(device: device))
@@ -213,7 +213,7 @@ final class HDRBloomTests: XCTestCase {
     }
 
     /// ★부정 컨트롤(보고된 결함 재현): hdr&&bloom 씬이 hdrPost 조기 return 에 삼켜지면
-    /// 스팟 밖 전 픽셀이 0(ACES(0)=0) — HDR bloom 라우팅이 있어야 글로우 > 0.
+    /// 스팟 밖 전 픽셀이 0(saturate(0)=0) — HDR bloom 라우팅이 있어야 글로우 > 0.
     func testFinalizeRoutesHDRBloomAndSpreadsGlow() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let bytes = try finalize(device: device, configure: { renderer in
@@ -222,7 +222,7 @@ final class HDRBloomTests: XCTestCase {
             renderer.hdrBloomParameters = HDRBloomParameters(
                 strength: 1, threshold: 1, feather: 1, tint: SIMD3(1, 1, 1))
         })
-        // 스팟(28..36, 12..20) 밖 픽셀들의 RGB 합 — ACES 단독 경로면 정확히 0.
+        // 스팟(28..36, 12..20) 밖 픽셀들의 RGB 합 — hdrPost 단독(클램프) 경로면 정확히 0.
         var outsideSum = 0
         for y in 0..<32 {
             for x in 0..<64 where !(28..<36 ~= x && 12..<20 ~= y) {
@@ -233,18 +233,18 @@ final class HDRBloomTests: XCTestCase {
         XCTAssertGreaterThan(outsideSum, 0, "hdr&&bloom 씬에 글로우가 전혀 없음(=hdrPost 조기 return)")
     }
 
-    /// hdr && !bloom(~9씬) 무회귀: HDR bloom 미요청이면 종전 ACES 출력과 바이트 동일.
-    func testFinalizeWithoutBloomRequestKeepsACESByteIdentical() throws {
+    /// hdr && !bloom 무회귀: HDR bloom 미요청이면 hdrPost(클램프) 출력과 바이트 동일.
+    func testFinalizeWithoutBloomRequestKeepsHDRPostByteIdentical() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
-        let expected = try acesReference(device: device)
+        let expected = try hdrPostReference(device: device)
         let bytes = try finalize(device: device, configure: { _ in })
         XCTAssertEqual(bytes, expected)
     }
 
-    /// 패스 생성 실패/인코드 실패 시 종전 ACES 폴백(무크래시·바이트 동일).
-    func testFinalizeFallsBackToACESWhenBloomUnavailableOrFailing() throws {
+    /// 패스 생성 실패/인코드 실패 시 hdrPost(클램프) 폴백(무크래시·바이트 동일).
+    func testFinalizeFallsBackToHDRPostWhenBloomUnavailableOrFailing() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
-        let expected = try acesReference(device: device)
+        let expected = try hdrPostReference(device: device)
         let missing = try finalize(device: device, configure: { renderer in
             renderer.sceneWantsHDRBloom = true
             renderer.hdrBloomPass = nil
@@ -257,7 +257,7 @@ final class HDRBloomTests: XCTestCase {
         XCTAssertEqual(failing, expected)
     }
 
-    private func acesReference(device: MTLDevice) throws -> [UInt8] {
+    private func hdrPostReference(device: MTLDevice) throws -> [UInt8] {
         let width = 64, height = 32
         let source = try makeFloatTexture(
             device: device,

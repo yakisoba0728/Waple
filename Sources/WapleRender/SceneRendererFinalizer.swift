@@ -16,9 +16,10 @@ extension SceneRenderer {
             // #22 HDR bloom(hdr && bloom, 2D 7씬): soft-knee 추출→blur13→saturate(base+bloom) —
             // EOTF 디코드는 이식하지 않는다(WE sRGB-뷰 스왑체인의 하드웨어 인코드와 상쇄되는 쌍이라
             // 비-sRGB 타깃엔 이중감마가 된다 — 근거·실측은 HDRBloomPass 헤더/합성부 주석).
-            // 이 분기만 ACES(hdrPost) 대체. hdr&&!bloom(~9씬)은 아래 hdrPost 그대로(무회귀).
+            // 이 분기(블룸)와 아래 hdrPost 폴백은 이제 동일 saturate 규약 — hdr&&!bloom 은
+            // hdrPost(클램프)로 확정, 블룸 실패 폴백도 같은 클램프라 폴백 시각 점프 없음.
             // hdr 이어도 3D 씬은 hdrActive 의 !is3D 로 여기 미도달(3D-HDR 블룸 = 별도 트랙).
-            // 자원/인코드 실패는 종전 ACES 로 폴백(무크래시). pooledOffscreen(bgra:true)는 hdrActive
+            // 자원/인코드 실패는 hdrPost(saturate 클램프)로 폴백(무크래시·동일 규약). pooledOffscreen(bgra:true)는 hdrActive
             // 에서 float(rgba16Float)로 자동 승격된다(중간 버퍼가 소스와 동일 float 계약).
             // 비-HDR 씬은 hdrActive=false 로 이 블록 자체에 도달 불가(격리 — 148씬 무접촉).
             if sceneWantsHDRBloom, let hdrBloomPass,

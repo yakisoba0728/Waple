@@ -1,22 +1,17 @@
 import Metal
 import WapleCore
 
-/// A2 HDR 톤맵 포스트 패스 — float(rgba16Float) 누적 버퍼의 >1.0 합을 [0,1] LDR 로 압축(백화 방지).
+/// float(rgba16Float) HDR 누적 버퍼를 표시 포맷(bgra8)으로 확정하는 최종 포스트 패스. 최종 blit 대체.
 ///
-/// 배경(lane-04 §1): WE `hdr:true` 씬은 float HDR 버퍼에 합성 후 combine 단계에서 톤맵으로 >1 합을
-/// 압축한다. Waple 은 종전 bgra8 누적이라 >1 합이 [0,1] 하드클램프 = 밝은 영역 순백("백화").
-/// 이 패스가 그 압축(= "clamp the sum" → "tonemap the sum", lane-04 §3 D1)을 담당한다. 최종 blit 대체.
-///
-/// **톤맵 커브: ACES filmic (Narkowicz 2015 근사), per-channel + exposure.**
-/// ⚠️ WE 의 정확한 톤맵 커브는 참조본(exe/dll/scripts.js)에서 복원 불가 — tonemap/reinhard/aces/filmic
-/// 문자열 전무(lane-04 §1.3). ACES 는 게임 HDR 파이프라인의 사실상 표준 근사이며 0→0 을 유지하고
-/// >1 을 <1 로 매끄럽게 압축해 순백 plateau 를 제거한다. WE 실측 커브 확보 시 커브만 교체하면 된다.
-/// exposure 유니폼 = 튜닝 노브(ponytail: 미니멀 모델이 못 보는 물리 캘리브레이션 여지, 기본 1.0).
-///
-/// sRGB 인코드는 의도적으로 미포함 — 추가 시 전 미드톤이 이동해 기존 LDR 베이스라인과 불일치(별개 관심사).
+/// 압축 커브 = saturate 클램프. WE 2.8 의 최종 처리는 saturate 뿐(무-ACES 5중확증)이라
+/// HDRBloomPass 합성부(saturate(base+bloom))와 동일 규약 — >1 은 1.0 으로 클램프(밝은 영역 순백은
+/// WE-충실 결과이며 결함 아님), [0,1] 저역은 항등. 종전 ACES filmic 은 저역까지 곡선변형해 이탈했다(제거).
+/// EOTF(sRGB) 인코드는 미이식 — sRGB-뷰 스왑체인의 하드웨어 인코드와 상쇄되는 쌍이라 비-sRGB(bgra8)
+/// 타깃엔 이중감마가 된다(근거: SceneRendererFinalizer #22 · HDRBloomPass 합성 셰이더 주석).
+/// exposure 유니폼 = 밝기 튜닝 노브(ponytail: 미니멀 모델이 못 보는 캘리브레이션 여지, 기본 1.0 = 항등).
 final class HDRPostPass {
     private let pipeline: MTLRenderPipelineState
-    /// 노출 배율(씬 밝기 튜닝). 톤맵 입력에 곱한다.
+    /// 노출 배율(씬 밝기 튜닝). 클램프 입력에 곱한다(기본 1.0 = 항등).
     var exposure: Float = 1
 
     /// outputFormat 은 최종 LDR 타깃 포맷(drawable/캡처 = .bgra8Unorm). 파이프라인 생성 실패 시 nil.
@@ -32,7 +27,7 @@ final class HDRPostPass {
         self.pipeline = ps
     }
 
-    /// float `src`(HDR 누적) 를 톤맵해 LDR `dst` 로 그린다. 풀스크린 삼각형 — 최종 blit 대체.
+    /// float `src`(HDR 누적) 를 saturate 클램프해 LDR `dst` 로 그린다. 풀스크린 삼각형 — 최종 blit 대체.
     /// 현재 command buffer 에 자체 render encoder 를 open/close(호출부는 그 전에 씬 encoder 를 닫아야 한다).
     func encode(cb: MTLCommandBuffer, src: MTLTexture, dst: MTLTexture) {
         let rpd = MTLRenderPassDescriptor()
@@ -61,17 +56,14 @@ final class HDRPostPass {
         o.uv = float2((p.x + 1.0) * 0.5, (1.0 - p.y) * 0.5);
         return o;
     }
-    // ACES filmic (Narkowicz 2015) per-channel. 0→0, >1 을 <1 로 압축(순백 plateau 제거). 단조증가라 hue 순서 보존.
-    float3 acesFilmic(float3 x) {
-        const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-        return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-    }
     fragment float4 hdrpost_f(VOut in [[stage_in]],
                               texture2d<float> hdrTex [[texture(0)]],
                               constant float &exposure [[buffer(0)]]) {
         constexpr sampler s(filter::nearest, address::clamp_to_edge);   // acc 는 dst 와 1:1 해상 = 보간 불요
         float4 c = hdrTex.sample(s, in.uv);
-        return float4(acesFilmic(max(c.rgb, 0.0) * exposure), c.a);
+        // WE 최종 = saturate 클램프(무-ACES 5중확증, HDRBloomPass 합성부와 동일 규약).
+        // >1 → 1.0(순백), [0,1] 저역은 항등(ACES 는 저역도 곡선변형). exposure = 밝기 노브.
+        return float4(saturate(c.rgb * exposure), c.a);
     }
     """
 }

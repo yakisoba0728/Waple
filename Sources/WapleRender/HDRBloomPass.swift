@@ -38,7 +38,7 @@ protocol HDRBloomEncoding {
 ///   · `out=c·(strength·q/max(m,1e-5))·tint`, `P=(thr, thr−knee, 2·knee, 0.25/(knee+1e-5))`.
 /// - 합성 = PS 29925 의 화면 순효과 `saturate(base+bloom)` (EOTF 디코드는 WE sRGB-뷰 스왑체인
 ///   인코드와 상쇄 — 합성 셰이더 주석의 실측 근거 참조). **ACES/톤커브 없음**
-///   (Ultra float 경로 포함 5중 확증 — 이 경로에서 hdrPost(ACES)를 통째로 대체한다).
+///   (Ultra float 경로 포함 5중 확증 — 이 경로에서 hdrPost 를 통째로 대체한다; hdrPost 도 이제 동일 클램프).
 ///
 /// ponytail: 단일 레벨(1/4 추출→1/8 blur13 h/v→가산 합성 — LDR 선례와 동일 형상). WE 실물은
 /// 듀얼-필터 피라미드 `bloomhdriterations`단(실측 8단, 1800×1130→14×8) + 레벨당 ×0.25×scatter
@@ -117,7 +117,7 @@ final class HDRBloomPass: HDRBloomEncoding {
         destination: MTLTexture,
         parameters: HDRBloomParameters
     ) -> Bool {
-        // 격리 가드: 이 패스는 float 씬 소스 전용 — LDR(bgra8) 텍스처 유입은 인코드 전 거부(ACES 폴백).
+        // 격리 가드: 이 패스는 float 씬 소스 전용 — LDR(bgra8) 텍스처 유입은 인코드 전 거부(hdrPost 클램프 폴백).
         guard [source, quarter, eighth, bloom].allSatisfy({
                   $0.textureType == .type2D && $0.pixelFormat == .rgba16Float
               }),
@@ -191,7 +191,7 @@ final class HDRBloomPass: HDRBloomEncoding {
         verticalEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         verticalEncoder.endEncoding()
 
-        // Destination 은 이 마지막 인코더 전까지 무접촉 — false 반환 시 호출부의 ACES 폴백이 안전.
+        // Destination 은 이 마지막 인코더 전까지 무접촉 — false 반환 시 호출부의 hdrPost(클램프) 폴백이 안전.
         guard let combineEncoder = makeEncoder(
             commandBuffer: commandBuffer,
             target: destination,
@@ -284,7 +284,7 @@ final class HDRBloomPass: HDRBloomEncoding {
     // bgra8(디스플레이/PNG 가 값을 그대로 소비)이라 순효과만 이식한다 — 디코드만 옮기면 이중 감마
     // (실측 3299228616: EOTF 이식 p50 0.047 vs WE 골든 0.18, 클램프 p50 ≈0.19 — 골든 정합).
     // ★ACES/필믹 숄더·토우 등 톤커브 없음(5중 확증, "톤맵 곡선없음=saturate클램프") — 이 경로
-    // 한정으로 hdrPost(ACES) 대체.
+    // 한정으로 hdrPost 대체(hdrPost 도 이제 동일 saturate 클램프).
     fragment float4 hdrBloomCombine(
         BloomVertexOut in [[stage_in]],
         texture2d<float> source [[texture(0)]],
