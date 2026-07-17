@@ -1209,4 +1209,45 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertNotEqual(tX.msl, tY.msl, "raw 상이 → 별도 번역(aliasing 금지)")
         XCTAssertEqual(GLSLTranslator.memoComputeCount, 2, "두 입력은 별도 실번역(스테일 히트 없음)")
     }
+
+    /// mul(a,b) 순서보존(a*b) — WE GLSL 방언의 mul 은 순서보존 곱. 종전 (b*a) 전치 오역이
+    /// lightshafts/cursorripple 의 squareToQuad 원근을 뒤집어 갓레이가 가로띠로 렌더됐다.
+    /// 비대칭 행렬 mul(vec, M) 이 (vec * M) 로 방출돼야 fxCoord.y 가 스크린 x 에 의존(=슬랜트).
+    func testMulPreservesOrderForPerspective() throws {
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        uniform vec2 g_Point0; // {"material":"point0","default":"0 0"}
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec3 v_Fx;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            mat3 xform = mat3(1.0, 0.0, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0, 1.0);
+            v_Fx = mul(vec3(a_TexCoord.xy, 1.0), xform);
+        }
+        """
+        let frag = """
+        varying vec3 v_Fx;
+        void main() { gl_FragColor = vec4(v_Fx.xy / v_Fx.z, 0.0, 1.0); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        // 순서보존: a_TexCoord 표현이 xform 앞에 온다(= vec * M). 전치 오역이면 (xform * ...) 순.
+        guard let vr = t.msl.range(of: "vertex Vary ev_main"),
+              let stmt = t.msl.range(of: "= (", range: vr.upperBound..<t.msl.endIndex),
+              let mulLine = t.msl.range(of: "a_TexCoord", range: vr.upperBound..<t.msl.endIndex) else {
+            return XCTFail("ev_main / mul 문 미발견:\n\(t.msl)")
+        }
+        _ = stmt
+        // v_Fx 대입식에서 a_TexCoord 가 xform 보다 먼저 나오면 (a*b) 순서.
+        let vfx = try XCTUnwrap(t.msl.range(of: "out.v_Fx = ("))
+        let tail = String(t.msl[vfx.upperBound...]).prefix(120)
+        let aPos = tail.range(of: "a_TexCoord")
+        let mPos = tail.range(of: "xform")
+        _ = mulLine
+        XCTAssertNotNil(aPos); XCTAssertNotNil(mPos)
+        XCTAssertLessThan(aPos!.lowerBound, mPos!.lowerBound,
+                          "mul(vec, M) 은 (vec * M) 순서여야 — 전치 오역(M * vec)이면 갓레이 가로띠:\n\(tail)")
+        // MVP(항등) 경로는 순서와 무관하게 항상 정상(가드).
+        XCTAssertTrue(t.msl.contains("eng.mvp"))
+    }
 }
