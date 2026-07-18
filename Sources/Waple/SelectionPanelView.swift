@@ -14,13 +14,8 @@ struct SelectionPanelView: View {
             if let entry = viewModel.focusedEntry {
                 content(for: entry)
             } else {
-                VStack(spacing: 10) {
-                    Spacer()
-                    Image(systemName: "photo.on.rectangle.angled")
-                        .font(.system(size: 36)).foregroundStyle(.tertiary)
-                    Text("배경을 선택하세요").font(.callout).foregroundStyle(.secondary)
-                    Spacer()
-                }
+                // 네이티브 빈 상태(w5d-polish) — WorkshopTabView:33 과 동일한 ContentUnavailableView 문법.
+                ContentUnavailableView("배경을 선택하세요", systemImage: "photo.on.rectangle.angled")
             }
         }
         .frame(width: Metrics.panelWidth)

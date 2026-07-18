@@ -51,6 +51,9 @@ struct MainWindowView: View {
         .sheet(isPresented: $showDisplays) {
             DisplaysView(viewModel: viewModel, screenFrames: screenFrames)
         }
+        // 탭 전환은 이 뷰가 소유한 로컬 상태(tab)라 AppDelegate 가 아니라 여기서 배선한다
+        // (onOpenSettings/onAdvancePlaylist 등 다른 콜백과 달리 창 밖 side-effect가 아님).
+        .onAppear { viewModel.onOpenWorkshop = { tab = .workshop } }
     }
 
     @ToolbarContentBuilder

@@ -117,15 +117,18 @@ struct WallpaperGridView: View {
         .onTapGesture { viewModel.activeFolder = nil }
     }
 
+    // 네이티브 빈 상태(w5d-polish) — WorkshopTabView:33 이 이미 채택한 ContentUnavailableView 문법 준용.
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "photo.stack").font(.system(size: 44)).foregroundStyle(.tertiary)
-            Text("라이브러리가 비어 있습니다").font(.title3.weight(.semibold))
+        ContentUnavailableView {
+            Label("라이브러리가 비어 있습니다", systemImage: "photo.stack")
+        } description: {
             Text("Wallpaper Engine 폴더·zip·동영상을 드래그하거나 가져오세요")
-                .font(.callout).foregroundStyle(.secondary)
+        } actions: {
             Button("배경화면 가져오기…") { importFolder() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut("o")
+            // w5d-onboarding: 번들 샘플이 없는 첫 실행 사용자를 위한 대체 콘텐츠 경로 — 창작마당(다운로드)으로.
+            Button("창작마당 열기") { viewModel.onOpenWorkshop?() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

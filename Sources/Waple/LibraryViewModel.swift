@@ -62,6 +62,8 @@ final class LibraryViewModel: ObservableObject {
     var onOpenInteraction: (() -> Void)?
     /// 툴바 설정 버튼 → AppDelegate.openSettings (SP5′).
     var onOpenSettings: (() -> Void)?
+    /// 빈 라이브러리 상태의 "창작마당 열기" → MainWindowView 가 탭 전환(뷰 로컬 상태라 AppDelegate 아님).
+    var onOpenWorkshop: (() -> Void)?
     /// 하단 바: 재생목록 다음으로 — AppDelegate 주입.
     var onAdvancePlaylist: (() -> Void)?
     /// 하단 바: 전역 일시정지 토글(새 상태 반환) — AppDelegate 주입.
