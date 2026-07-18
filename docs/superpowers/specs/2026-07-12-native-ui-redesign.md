@@ -51,7 +51,7 @@
 | 항목 | 처분 |
 | --- | --- |
 | 셸 구조(탭/검색줄/하단/배너/시트)·ViewModel 배선·WAPLE_SMOKE·창 다크 강제 | **유지**(재스타일) |
-| `WETheme`(실측 hex 토큰)·`WEControls`(커스텀 스킨)·WEThemeTests | **삭제** → `DesignSystem/Layout.swift`(치수 상수만) |
+| `WETheme`(실측 hex 토큰)·`WEControls`(커스텀 스킨)·WEThemeTests | **삭제** → `DesignSystem/Metrics.swift`(치수 상수만, F410 정정: 실제 구현·SP2′~5′ 이후 전 플랜 문서는 `Metrics.swift`/`enum Metrics` 로 명명 — 이 문서와 SP1′ 플랜만 구 이름 `Layout.swift`/`enum Layout` 로 남아 있었음) |
 | `scripts/we-compare.sh`·`docs/reference/we/waple-sp1.png` | **삭제**(클론 검증 전용물, PNG는 사생활 우려도 해소) |
 | `docs/reference/we/` WE 스크린샷 | 두면 배치 참고용(선택) — 실측 게이트 아님 |
 
