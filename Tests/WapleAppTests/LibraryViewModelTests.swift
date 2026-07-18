@@ -190,6 +190,17 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertNil(vm.folderURL(for: entry(id: "ghost", title: "Ghost")), "빈 북마크는 해석 실패 → nil")
     }
 
+    // MARK: - 전역 선택 엔트리 (w5d-displays 미할당 모니터 미리보기 폴백)
+
+    func testGlobalEntryReflectsSelectedId() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset")])
+        let vm = makeVM(dir: dir)
+        XCTAssertNil(vm.globalEntry, "초기 selectedId 없음 → nil")
+        vm.selectedId = "wp1"
+        XCTAssertEqual(vm.globalEntry?.title, "Sunset")
+    }
+
     func testAssignedEntryLookup() throws {
         let dir = tempDir()
         let e = entry(id: "wp9", title: "Aurora")

@@ -37,8 +37,11 @@ final class LibraryViewModel: ObservableObject {
         Array(Set(entries.compactMap(\.contentRating))).sorted()
     }
     var focusedEntry: LibraryEntry? { entries.first { $0.id == focusedId } }
+    /// 전역 선택 엔트리(selectedId) — 하단 바 제목 표시, 디스플레이 시트 미할당 모니터 미리보기
+    /// 폴백(w5d-displays) 등이 공유. 없으면 nil.
+    var globalEntry: LibraryEntry? { entries.first { $0.id == selectedId } }
     /// 하단 바 "현재:" 표시용 — 적용된(selectedId) 배경 제목.
-    var appliedTitle: String? { entries.first { $0.id == selectedId }?.title }
+    var appliedTitle: String? { globalEntry?.title }
 
     /// 적용 요청을 AppDelegate 로 전달한다(폴더 URL). 마운트 성공 여부를 반환한다.
     var onApply: ((URL) -> Bool)?

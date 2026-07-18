@@ -63,7 +63,7 @@ struct DisplaysView: View {
         let selected = selectedScreenKey == screen.key
         let assigned = viewModel.assignedEntry(forScreen: screen.key)
         ZStack(alignment: .bottomLeading) {
-            thumbnail(for: assigned)
+            thumbnail(for: assigned, dimmed: assigned == nil)
                 .frame(width: rect.width, height: rect.height)
                 .clipped()
             LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .center, endPoint: .bottom)
@@ -84,17 +84,24 @@ struct DisplaysView: View {
         .offset(x: rect.minX, y: rect.minY)
     }
 
-    /// 할당 배경 썸네일(gif 는 정지 첫 프레임 — 다이어그램은 배치 확인 용도). 없으면 플레이스홀더.
+    /// 할당 배경 썸네일(gif 는 정지 첫 프레임 — 다이어그램은 배치 확인 용도). 미할당(entry==nil)이면
+    /// 실제 전역 배경(viewModel.globalEntry) 미리보기로 폴백해 살짝 디밍 렌더(w5d-displays) — 다이어그램이
+    /// "그 화면에 실제로 표시 중인" 배경을 보여주게 한다("전역 배경" 라벨은 기존 그대로 유지).
+    /// 전역도 없으면(둘 다 nil) 플레이스홀더.
     @ViewBuilder
-    private func thumbnail(for entry: LibraryEntry?) -> some View {
-        if let entry, let url = viewModel.previewURL(for: entry), let img = NSImage(contentsOf: url) {
-            Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
-        } else {
-            ZStack {
-                Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
-                Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary)
+    private func thumbnail(for entry: LibraryEntry?, dimmed: Bool = false) -> some View {
+        let resolved = entry ?? viewModel.globalEntry
+        Group {
+            if let resolved, let url = viewModel.previewURL(for: resolved), let img = NSImage(contentsOf: url) {
+                Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
+                    Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary)
+                }
             }
         }
+        .opacity(dimmed ? 0.55 : 1)
     }
 
     @ViewBuilder
