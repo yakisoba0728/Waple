@@ -339,15 +339,23 @@ extension SceneRenderer {
         // slot0 은 framebuffer → aux 는 slot1.. 디코드. 디코드 실패는 흰색 1x1 폴백.
         // 레거시 frag(mask=texture(1)) 와 waterripple(normal=1, mask=2) 모두 위해
         // 최소 2개 슬롯을 흰색으로 채워 미바인드 텍스처를 방지한다.
+        // F265 예외: shake 의 aux[0](slot1=flow map, WE 기본 util/noflow)은 흰색(=1.0)이면
+        // flowMask=(1-0.498)*2≈1 로 상시 대각 드리프트가 생겨 "기본 flow=noflow → flowMask≈0"(F265 evidence)
+        // 와 모순 — 명시 바인드가 없을 때만 중립 회색(byte 127≈0.498 → flowMask≈0)으로 대체.
         var aux: [MTLTexture] = []
         // slot0=framebuffer 라 aux 는 index i+1 로 바인드 — 126개 캡(Metal 텍스처 인자테이블 128 상한).
         let auxNames = eff.textureNames.count > 1 ? Array(eff.textureNames[1...].prefix(126)) : []
-        for name in auxNames {
+        for (i, name) in auxNames.enumerated() {
+            if eff.name == "shake", i == 0, name == nil, let neutral = makeTexture(Data([127, 127, 0, 255]), 1, 1, device) {
+                aux.append(neutral); continue
+            }
             guard let t = resolveTexture(name, package: package, device: device) else { continue }
             aux.append(t)
         }
-        while aux.count < 2, let white = makeTexture(Data([255, 255, 255, 255]), 1, 1, device) {
-            aux.append(white)
+        while aux.count < 2 {
+            let isShakeFlowPad = eff.name == "shake" && aux.isEmpty
+            guard let tex = makeTexture(isShakeFlowPad ? Data([127, 127, 0, 255]) : Data([255, 255, 255, 255]), 1, 1, device) else { break }
+            aux.append(tex)
         }
         return EffectGPU(pipeline: pipe, bind: .handPort(params: params, aux: aux, audio: audio))
     }

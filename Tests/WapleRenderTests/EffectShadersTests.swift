@@ -20,6 +20,14 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertEqual(EffectShaders.params(for: "shake", constants: ["amplitude": [0.02], "speed": [8]]), [0.02, 8])
         XCTAssertEqual(EffectShaders.params(for: "shake", constants: [:])?.count, 2)  // defaults
     }
+    /// F265: WE shake.frag:82 `texCoordOffset = offset*g_Amp*g_Amp*flowMask` 대조 — 진폭 제곱 +
+    /// flow map(texture1) 방향 구동. 구코드는 진폭 선형 + 합성 원형궤적(sin,cos*1.37)으로 flow 텍스처 미사용.
+    func testShakeUsesSquaredAmplitudeAndFlowMap() throws {
+        let src = try XCTUnwrap(EffectShaders.source(for: "shake"))
+        XCTAssertTrue(src.contains("P[1] * P[1]"), "진폭은 제곱(g_Amp*g_Amp)이어야 함: \(src)")
+        XCTAssertTrue(src.contains("flow.sample"), "flow map(texture1) 을 방향 구동에 실제로 샘플해야 함: \(src)")
+        XCTAssertFalse(src.contains("cos(t * 1.37)"), "합성 원형궤적(WE 미근거)이 제거되어야 함: \(src)")
+    }
     func testUnknownEffect() {
         XCTAssertNil(EffectShaders.source(for: "nope"))
         XCTAssertNil(EffectShaders.params(for: "nope", constants: [:]))

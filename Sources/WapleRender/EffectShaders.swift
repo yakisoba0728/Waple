@@ -158,10 +158,15 @@ enum EffectShaders {
                                 texture2d<float> flow [[texture(1)]], texture2d<float> mask [[texture(2)]],
                                 constant float* P [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
-            // P[0]=time, P[1]=amplitude, P[2]=speed. flow map 은 단순화로 미사용.
+            // P[0]=time, P[1]=amplitude, P[2]=speed. F265: WE shake.frag:82
+            // `texCoordOffset = offset*g_Amp*g_Amp*flowMask` 대조 — 진폭 제곱(선형이면 5~10배 과대) +
+            // flow map(g_Texture1, buildHandPortEffect 가 미바인드 시 중립(0.498,0.498)로 폴백 —
+            // WE 기본 util/noflow 와 정합해 flowMask≈0) 방향 구동. 시간 오실레이터(offset 스칼라)는
+            // WE 의 friction/bounds/DIRECTION 콤보 전체까진 미포팅 — sin(t) 로 단순화(정성적 근사).
             float m = mask.sample(s, in.uv).r;
             float t = P[0] * P[2];
-            float2 off = P[1] * float2(sin(t), cos(t * 1.37)) * m;
+            float2 flowMask = (flow.sample(s, in.uv).rg - float2(0.498, 0.498)) * 2.0;
+            float2 off = sin(t) * (P[1] * P[1]) * flowMask * m;
             return fb.sample(s, in.uv + off);
         }
         """,
