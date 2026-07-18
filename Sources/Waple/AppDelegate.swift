@@ -30,11 +30,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vm.onChooseBaseAssets = { [weak self] in self?.chooseBaseAssets() }
         vm.onSetStillWallpaper = { [weak self] in self?.setStillWallpaper() }
         vm.onToggleSaver = { [weak self] in self?.toggleScreenSaverCore() ?? false }
-        vm.videoTargetIds = { [weak self] in
-            guard let self else { return [] }
-            return VideoSettingsTarget.projectIds(currentProjectId: self.currentProjectId,
-                                                  activeVideoProjectIds: self.activeVideoProjectIds)
-        }
         vm.occlusionState = { [weak self] in
             guard let self else { return (false, 0) }
             return (self.pauseWhenOccluded, self.occlusionCoverageThreshold)
@@ -147,6 +142,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         libraryVM.onOpenSettings = { [weak self] in self?.openSettings() }
         libraryVM.onAdvancePlaylist = { [weak self] in self?.advancePlaylist() }
         libraryVM.onTogglePause = { [weak self] in self?.toggleGlobalPause() ?? false }
+        // w5d-settings-ia: 음량/배속 조절이 설정 창에서 하단 바로 이관 — SettingsViewModel 이 쓰던 것과
+        // 동일 소스(VideoSettingsTarget.projectIds)를 libraryVM 에도 주입.
+        libraryVM.videoTargetIds = { [weak self] in
+            guard let self else { return [] }
+            return VideoSettingsTarget.projectIds(currentProjectId: self.currentProjectId,
+                                                  activeVideoProjectIds: self.activeVideoProjectIds)
+        }
+        libraryVM.onVideoSettingsChanged = { [weak self] in _ = self?.applyCurrentSelection() }
         schedulePlaylistTimer()
 
         desktopController.rebuild()

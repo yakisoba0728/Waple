@@ -15,8 +15,6 @@ final class SettingsViewModel: ObservableObject {
     @Published var playlistEnabled = false
     @Published var playlistInterval = 15
     @Published var playlistShuffle = false
-    @Published var videoVolume: Float?     // nil = 적용 중인 동영상 없음(컨트롤 비활성)
-    @Published var videoRate: Float?
     @Published var loginEnabled = LoginItemController.isEnabled
     @Published var stillSync = false
     @Published var saverSelected = ScreenSaverController.isSelected
@@ -39,7 +37,6 @@ final class SettingsViewModel: ObservableObject {
     var onChooseBaseAssets: (() -> Void)?
     var onSetStillWallpaper: (() -> Void)?
     var onToggleSaver: (() -> Bool)?
-    var videoTargetIds: () -> [String] = { [] }
     var occlusionState: () -> (enabled: Bool, threshold: Double) = { (false, 0) }
     var stillSyncEnabled: () -> Bool = { false }
 
@@ -56,9 +53,6 @@ final class SettingsViewModel: ObservableObject {
         playlistEnabled = playlist.enabled
         playlistInterval = playlist.intervalMinutes
         playlistShuffle = playlist.shuffle
-        let ids = videoTargetIds()
-        videoVolume = ids.first.map { VideoSettings.volume(id: $0) }
-        videoRate = ids.first.map { VideoSettings.rate(id: $0) }
         loginEnabled = LoginItemController.isEnabled
         stillSync = stillSyncEnabled()
         saverSelected = ScreenSaverController.isSelected
@@ -102,22 +96,6 @@ final class SettingsViewModel: ObservableObject {
         playlist.shuffle = on
         playlistShuffle = on
         onPlaylistChanged?()
-    }
-
-    func setVolume(_ v: Float) {
-        let ids = videoTargetIds()
-        guard !ids.isEmpty else { return }
-        ids.forEach { VideoSettings.setVolume(v, id: $0) }
-        videoVolume = v
-        onApplySelection?()   // ponytail: 리마운트 반영(재생 리셋) — 라이브 반영은 BACKLOG(queue.volume) 항목
-    }
-
-    func setRate(_ r: Float) {
-        let ids = videoTargetIds()
-        guard !ids.isEmpty else { return }
-        ids.forEach { VideoSettings.setRate(r, id: $0) }
-        videoRate = r
-        onApplySelection?()
     }
 
     func setLogin(_ on: Bool) {

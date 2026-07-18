@@ -60,23 +60,15 @@ struct SettingsView: View {
         }
     }
 
+    /// w5d-settings-ia: 음량/배속 조절은 재생 컨텍스트를 이미 아는 하단 Now Playing 바(스피커
+    /// 아이콘)로 이관됐다 — 여기는 그 위치를 알려주는 안내로 축소(전역 설정 창에 묻혀 미디어
+    /// 플레이어 기대를 배신하던 문제 해소).
     private var videoSection: some View {
         Section {
-            Picker("음량", selection: Binding(get: { vm.videoVolume ?? 0 }, set: { vm.setVolume($0) })) {
-                ForEach(SettingsPresentation.volumeSteps, id: \.value) { Text($0.label).tag($0.value) }
-            }
-            .disabled(vm.videoVolume == nil)
-            Picker("배속", selection: Binding(get: { vm.videoRate ?? 1 }, set: { vm.setRate($0) })) {
-                ForEach(SettingsPresentation.rateSteps, id: \.value) { Text($0.label).tag($0.value) }
-            }
-            .disabled(vm.videoRate == nil)
+            Label("동영상이 적용 중일 때 메인 창 하단의 스피커 아이콘에서 조절합니다.", systemImage: "speaker.wave.2")
+                .font(.caption).foregroundStyle(.secondary)
         } header: {
             Text("동영상")
-        } footer: {
-            Text(vm.videoVolume == nil
-                 ? "동영상 배경이 적용 중일 때 조절할 수 있습니다."
-                 : "변경 시 재생이 처음부터 다시 시작됩니다.")
-                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

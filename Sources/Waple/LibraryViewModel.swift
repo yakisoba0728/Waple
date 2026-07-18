@@ -67,6 +67,11 @@ final class LibraryViewModel: ObservableObject {
     var onOpenSettings: (() -> Void)?
     /// 빈 라이브러리 상태의 "창작마당 열기" → MainWindowView 가 탭 전환(뷰 로컬 상태라 AppDelegate 아님).
     var onOpenWorkshop: (() -> Void)?
+    /// 현재 적용 중인 동영상 프로젝트 id들(w5d-settings-ia, 하단 바 음량/배속 대상) — AppDelegate 주입.
+    /// SettingsViewModel 이 쓰던 것과 동일 소스(VideoSettingsTarget.projectIds).
+    var videoTargetIds: () -> [String] = { [] }
+    /// 음량/배속 변경 반영(리마운트) — AppDelegate.applyCurrentSelection 주입.
+    var onVideoSettingsChanged: (() -> Void)?
     /// 하단 바: 재생목록 다음으로 — AppDelegate 주입.
     var onAdvancePlaylist: (() -> Void)?
     /// 하단 바: 전역 일시정지 토글(새 상태 반환) — AppDelegate 주입.
