@@ -296,6 +296,11 @@ public struct SceneLight3D: Equatable {
     public let castShadow: Bool
     public let parent: Int?
     public var order: Int = 0
+    /// 프로퍼티 스크립트(color/intensity/radius/origin/angles — 키 → JS 소스). SceneObject3D.propertyScripts/
+    /// SceneNode3D.propertyScripts 와 동일 규약(파스 캡처). 실측: intensity 8건(주야 조명 감쇠 컨트롤러),
+    /// color 1건(3737268876 젤다). TODO(소비 미배선): per-frame 재평가는 코퍼스 저빈도라 YAGNI 보류 —
+    /// 렌더러는 현재 정적 초기값(위 필드)만 소비한다.
+    public var propertyScripts: [String: String] = [:]
     public init(id: Int, name: String, type: String, origin: Vec3, angles: Vec3, color: Vec3,
                 radius: Float, intensity: Float, exponent: Float,
                 innerCone: Float = 0, outerCone: Float = 0,
@@ -990,7 +995,7 @@ extension SceneDocument {
 
     /// 3D 라이트 오브젝트("light": 타입 문자열 + 위치/색/반경/강도 등).
     private static func parseLight(_ obj: [String: Any], lightType: String, order: Int) -> SceneLight3D {
-        SceneLight3D(
+        var light = SceneLight3D(
             id: intVal(obj["id"]) ?? 0,
             name: (obj["name"] as? String) ?? "",
             type: lightType,
@@ -1005,6 +1010,11 @@ extension SceneDocument {
             castShadow: (obj["castshadow"] as? Bool) ?? false,
             parent: intVal(obj["parent"]),
             order: order)
+        // SceneObject3D/SceneNode3D 의 propertyScripts/transformScripts 와 동형 캡처(파스만 — TODO 위 참조).
+        for key in ["color", "intensity", "radius", "origin", "angles"] {
+            if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { light.propertyScripts[key] = sc }
+        }
+        return light
     }
 
     /// 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여
