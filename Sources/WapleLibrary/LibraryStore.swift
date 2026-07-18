@@ -69,8 +69,18 @@ public final class LibraryStore {
         let bookmark = try folderURL.bookmarkData(
             options: [], includingResourceValuesForKeys: nil, relativeTo: nil
         )
+        // F194: id 충돌 시, 기존 엔트리가 이 폴더와 다른 실경로(=서로 다른 배경이 우연히 같은 id로
+        // 귀결 — 예: workshopid 없는 두 배경이 같은 폴더명)를 가리키면 무통지 대체(엔트리 실종 +
+        // 북마크 앨리어싱) 대신 접미로 유일화해 둘 다 보존한다. 같은 실경로(재가져오기/갱신)면
+        // 종전대로 덮어쓴다(테스트: testReimportUpdatesEntryAndMovesToEnd).
+        var id = project.id
+        if let existing = entries.first(where: { $0.id == id }),
+           let existingURL = resolveFolderURL(for: existing),
+           existingURL.standardizedFileURL != folderURL.standardizedFileURL {
+            id = uniqueEntryId(basedOn: id)
+        }
         let entry = LibraryEntry(
-            id: project.id,
+            id: id,
             title: project.title,
             typeRaw: project.type.storageString,
             fileName: project.fileName,
@@ -83,6 +93,14 @@ public final class LibraryStore {
         entries.append(entry)
         save()
         return entry
+    }
+
+    /// 이미 쓰이는 id 와 충돌할 때 접미(-2, -3, …)로 유일화한다.
+    private func uniqueEntryId(basedOn base: String) -> String {
+        let existingIds = Set(entries.map(\.id))
+        var n = 2
+        while existingIds.contains("\(base)-\(n)") { n += 1 }
+        return "\(base)-\(n)"
     }
 
     @discardableResult

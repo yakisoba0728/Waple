@@ -84,6 +84,18 @@ final class ProjectJSONParserTests: XCTestCase {
         XCTAssertEqual(p.workshopId, "1108426854")
     }
 
+    // F194: 관리 위치 이동·zip 재래핑에도 안정적인 identity — workshopid 가 있으면 폴더 basename
+    // 대신 그것을 id 로 채택한다(basename 은 `Wallpaper/` 같은 WE export 관례로 비유일).
+    func testIdPrefersWorkshopIdOverFolderBasename() throws {
+        let p = try parse(#"{"type":"video","workshopid":"2913506072"}"#, folder: "/tmp/SomeWrapperName")
+        XCTAssertEqual(p.id, "2913506072", "폴더 basename 대신 workshopid 를 identity 로 채택해야 한다")
+    }
+
+    func testIdFallsBackToFolderBasenameWithoutWorkshopId() throws {
+        let p = try parse(#"{"type":"video"}"#, folder: "/tmp/SomeWrapperName")
+        XCTAssertEqual(p.id, "SomeWrapperName", "workshopid 없으면 종전대로 폴더명에 폴백")
+    }
+
     func testInvalidJSONThrows() {
         XCTAssertThrowsError(try parse("not json {")) { error in
             XCTAssertEqual(error as? ProjectParseError, .invalidJSON)

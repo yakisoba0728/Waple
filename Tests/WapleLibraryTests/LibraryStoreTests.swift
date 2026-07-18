@@ -127,6 +127,35 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(store.entries.last?.title, "A-new")
     }
 
+    /// F194: 서로 다른 실제 폴더 두 개가 (workshopid 가 없어) 같은 project id 로 귀결되는 경우,
+    /// 두 번째 가져오기가 첫 번째를 무통지로 대체(엔트리 실종 + 북마크 앨리어싱)하면 안 되고,
+    /// 접미로 유일화해 둘 다 라이브러리에 보존해야 한다.
+    func testImportFolderCollisionWithDifferentRealPathUniquifiesInsteadOfReplacing() throws {
+        let parentA = tmp.appendingPathComponent("A", isDirectory: true)
+        let parentB = tmp.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: parentA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: parentB, withIntermediateDirectories: true)
+        let folderA = parentA.appendingPathComponent("Wallpaper", isDirectory: true)
+        let folderB = parentB.appendingPathComponent("Wallpaper", isDirectory: true)
+        for (folder, tag) in [(folderA, "A"), (folderB, "B")] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let json = #"{"type":"video","file":"wallpaper.mp4","preview":"preview.jpg","title":"\#(tag)"}"#
+            try Data(json.utf8).write(to: folder.appendingPathComponent("project.json"))
+            try Data("dummy-\(tag)".utf8).write(to: folder.appendingPathComponent("wallpaper.mp4"))
+        }
+
+        let store = LibraryStore(baseDirectory: base())
+        let entryA = try store.importFolder(folderA)
+        let entryB = try store.importFolder(folderB)
+
+        XCTAssertEqual(entryA.id, "Wallpaper")
+        XCTAssertNotEqual(entryB.id, entryA.id, "다른 실경로면 무통지 대체 대신 유일화해야 한다")
+        XCTAssertEqual(Set(store.entries.map(\.id)), [entryA.id, entryB.id])
+        // 둘 다 각자의 원래 실경로를 정확히 가리켜야 한다(북마크 앨리어싱 없음).
+        XCTAssertEqual(store.resolveFolderURL(for: entryA)?.standardizedFileURL, folderA.standardizedFileURL)
+        XCTAssertEqual(store.resolveFolderURL(for: entryB)?.standardizedFileURL, folderB.standardizedFileURL)
+    }
+
     // MARK: - 작업 4: zip 가져오기
 
     func testFindProjectRootsRecursesAndStopsAtRoot() throws {

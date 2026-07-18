@@ -18,7 +18,11 @@ public enum ProjectJSONParser {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw ProjectParseError.invalidJSON
         }
-        let id = folderURL.lastPathComponent
+        // F194: 폴더 basename 은 관리 위치 이동·zip 재래핑(임포트 관례상 `Wallpaper/` 등 비유일 래퍼명)에
+        // 안정적이지 않다. project.json 이 워크샵 id 를 선언하면(전역 유일) identity 로 우선 채택하고,
+        // 없을 때만 종전대로 폴더명에 폴백한다 — steamcmd 코퍼스는 폴더명 자체가 워크샵 id 라 무변화.
+        let workshopId = parseStringOrNumber(obj["workshopid"])
+        let id = workshopId ?? folderURL.lastPathComponent
         let type = WallpaperType.from(obj["type"] as? String)
         let rawTitle = obj["title"] as? String
         let title = (rawTitle?.isEmpty == false) ? rawTitle! : id
@@ -32,7 +36,7 @@ public enum ProjectJSONParser {
             title: title,
             tags: tags,
             contentRating: obj["contentrating"] as? String,
-            workshopId: parseStringOrNumber(obj["workshopid"]),
+            workshopId: workshopId,
             dependency: WallpaperPathSecurity.normalizedPathComponent(obj["dependency"] as? String),
             folderURL: folderURL,
             presetOverrides: presetOverrides,
