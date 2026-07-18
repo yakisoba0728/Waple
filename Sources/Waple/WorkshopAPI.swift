@@ -153,15 +153,55 @@ enum SteamAPIKeyStore {
         return key
     }
 
+    /// save() 실패 원인 — UI 가 .message 를 그대로 사용자에게 보여줄 수 있다.
+    enum SaveFailure: Equatable {
+        /// delete 가 실패했는데 add 가 errSecDuplicateItem — 구항목이 그대로 남아 막혔을 가능성이
+        /// 높다(재서명/재빌드 후 레거시 파일 키체인 ACL 이 코드서명 cdhash 에 묶여 delete 를 거부하는
+        /// 함정 케이스가 대표적).
+        case aclDenied
+        case other(OSStatus)
+
+        var message: String {
+            switch self {
+            case .aclDenied:
+                return "API 키를 저장하지 못했습니다 — Keychain 이 기존 항목 삭제를 거부했습니다(권한/서명 변경 가능성). " +
+                       "macOS '키체인 접근' 앱에서 'kr.yaki.waple.steam-api-key' 항목을 지운 뒤 다시 시도하세요."
+            case .other(let status):
+                return "API 키를 저장하지 못했습니다(Keychain 오류 \(status))."
+            }
+        }
+    }
+
     /// 저장: 항상 삭제 후 추가. SecItemAdd 단독은 두 번째 저장에서 errSecDuplicateItem 으로 조용히 실패한다.
-    /// 빈 값이면 삭제만(클리어).
-    static func save(_ key: String) {
+    /// 빈 값이면 삭제만(클리어). 종전엔 SecItemDelete/SecItemAdd 의 OSStatus 를 전부 버려, 저장이 조용히
+    /// 실패해도 원인(잠금/ACL 거부/엔타이틀먼트 없음)을 로깅·구분·안내할 수 없었다 — 상태를 검사·로깅하고
+    /// 실패 원인을 반환한다. delete/add 는 테스트 주입(기본 SecItemDelete/SecItemAdd) — 실제 Keychain
+    /// 없이 ACL 거부 등 실패 경로를 결정적으로 검증할 수 있다.
+    @discardableResult
+    static func save(_ key: String,
+                     delete: (CFDictionary) -> OSStatus = SecItemDelete,
+                     add: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemAdd) -> SaveFailure? {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        SecItemDelete(baseQuery() as CFDictionary)
-        guard !trimmed.isEmpty else { return }
-        var add = baseQuery()
-        add[kSecValueData as String] = Data(trimmed.utf8)
-        SecItemAdd(add as CFDictionary, nil)
+        let deleteStatus = delete(baseQuery() as CFDictionary)
+        let deleteOK = deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound
+        if !deleteOK {
+            NSLog("%@", "[Waple] SteamAPIKeyStore: 기존 항목 삭제 실패 — OSStatus \(deleteStatus)")
+        }
+        guard !trimmed.isEmpty else {
+            if deleteOK { return nil }
+            let failure = SaveFailure.other(deleteStatus)
+            NSLog("%@", "[Waple] SteamAPIKeyStore: 키 삭제(클리어) 실패 — \(failure.message)")
+            return failure
+        }
+        var addQuery = baseQuery()
+        addQuery[kSecValueData as String] = Data(trimmed.utf8)
+        let addStatus = add(addQuery as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            let failure: SaveFailure = (addStatus == errSecDuplicateItem && !deleteOK) ? .aclDenied : .other(addStatus)
+            NSLog("%@", "[Waple] SteamAPIKeyStore: 키 저장 실패 — OSStatus \(addStatus)(선행 delete \(deleteStatus)) — \(failure.message)")
+            return failure
+        }
+        return nil
     }
 }
 

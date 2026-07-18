@@ -1,4 +1,5 @@
 import XCTest
+import Security
 @testable import Waple
 
 /// Steam Web API 클라이언트의 순수 로직(URL 조립 / query_type 결정 / 응답 파싱) 검증.
@@ -119,6 +120,65 @@ final class WorkshopAPITests: XCTestCase {
     func testSearchURLRequestsVoteData() {
         let url = WorkshopQuery.searchURL(apiKey: "K", page: 1, numPerPage: 10, searchText: "", sort: .trend)
         XCTAssertEqual(queryDict(url)["return_vote_data"], "true")
+    }
+
+    // MARK: - Keychain 저장 OSStatus 처리(F132) — delete/add 주입으로 실제 Keychain 없이 검증.
+
+    func testSaveSucceedsWhenDeleteAndAddSucceed() {
+        let failure = SteamAPIKeyStore.save(
+            "abc123",
+            delete: { _ in errSecSuccess },
+            add: { _, _ in errSecSuccess }
+        )
+        XCTAssertNil(failure)
+    }
+
+    func testSaveSucceedsWhenDeleteFindsNoExistingItem() {
+        // 최초 저장: 지울 기존 항목이 없음(errSecItemNotFound) — 정상 경로여야 한다.
+        let failure = SteamAPIKeyStore.save(
+            "abc123",
+            delete: { _ in errSecItemNotFound },
+            add: { _, _ in errSecSuccess }
+        )
+        XCTAssertNil(failure)
+    }
+
+    func testSaveReportsACLDeniedWhenDeleteFailsAndAddHitsDuplicate() {
+        // 재서명(재빌드) 함정 재현: delete 가 거부돼 실패 → 구항목이 그대로 남아 add 가 errSecDuplicateItem.
+        let failure = SteamAPIKeyStore.save(
+            "abc123",
+            delete: { _ in errSecAuthFailed },
+            add: { _, _ in errSecDuplicateItem }
+        )
+        XCTAssertEqual(failure, .aclDenied)
+        XCTAssertTrue(failure?.message.contains("키체인 접근") == true)
+    }
+
+    func testSaveReportsOtherFailureForUnrelatedAddError() {
+        let failure = SteamAPIKeyStore.save(
+            "abc123",
+            delete: { _ in errSecItemNotFound },
+            add: { _, _ in errSecParam }
+        )
+        XCTAssertEqual(failure, .other(errSecParam))
+    }
+
+    func testClearSucceedsEvenIfDeleteReportsItemNotFound() {
+        let failure = SteamAPIKeyStore.save(
+            "",
+            delete: { _ in errSecItemNotFound },
+            add: { _, _ in errSecSuccess }
+        )
+        XCTAssertNil(failure)
+    }
+
+    func testClearReportsFailureWhenDeleteFails() {
+        let failure = SteamAPIKeyStore.save(
+            "",
+            delete: { _ in errSecAuthFailed },
+            add: { _, _ in errSecSuccess }
+        )
+        XCTAssertEqual(failure, .other(errSecAuthFailed))
     }
 
     func testParseExtractsVoteScore() {
