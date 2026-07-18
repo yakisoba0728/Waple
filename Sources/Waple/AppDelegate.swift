@@ -375,10 +375,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func screensChanged() {
-        ScreenChangeLifecycle.detachRenderersBeforeRebuild(
-            existing: &renderers,
-            teardown: { $0.teardown() }
-        )
+        // F036/F035: renderers 를 여기서 선-소거하면 desktopController.rebuild() 직후 재적용이 실패했을 때
+        // RendererSwap.apply(existing:) 의 롤백 안전망("mount 실패 시 existing 은 건드리지 않는다")이 이미
+        // 빈 배열을 붙잡아 무력화된다. 살아있는 renderers 를 그대로 넘겨 applyResolved → RendererSwap 이
+        // 성공했을 때만 이전 렌더러를 정리하고, 실패하면 보존하게 한다(옛 창은 rebuild 로 사라지지만, 다음
+        // 재시도가 성공할 때까지 renderers 배열 자체는 유효한 객체를 유지 — 자원 정리를 성공 시점까지 지연).
         activeVideoProjectIds = []
         desktopController.rebuild()
         _ = applyCurrentSelection()

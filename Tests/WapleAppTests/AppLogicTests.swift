@@ -241,16 +241,39 @@ final class AppLogicTests: XCTestCase {
         XCTAssertNil(resolved)
     }
 
-    func testScreenChangeDetachesRenderersBeforeWindowRebuild() {
-        var existing = [Tok("old1"), Tok("old2")]
+    /// F036/F035 회귀 방지: screensChanged() 는 desktopController.rebuild() 뒤 곧바로
+    /// RendererSwap.apply(existing: renderers, ...) 로 재적용한다 — renderers 를 미리 비우지 않는다.
+    /// 종전에는 ScreenChangeLifecycle.detachRenderersBeforeRebuild 로 재적용 '전' renderers 를 []로
+    /// 선-소거해, RendererSwap 의 "mount 실패 시 existing 유지" 롤백 안전망이 이미 빈 배열을 붙잡아
+    /// 무력화됐다(재적용 실패 시 화면 전체가 배경 없이 남음). 아래는 실제 screensChanged 가 호출하는
+    /// 것과 동일한 RendererSwap.apply 를, 화면 하나의 마운트가 실패하는 상황으로 재현한다.
+    func testScreensChangedReapply_mountFailure_keepsExistingRenderersAlive() {
         var tornDown: [String] = []
+        let existing = [Tok("old1"), Tok("old2")]
 
-        ScreenChangeLifecycle.detachRenderersBeforeRebuild(
-            existing: &existing,
+        // 수정된 screensChanged 흐름: 선-소거 없이 곧바로 RendererSwap.apply(existing: renderers, ...).
+        let result = RendererSwap.apply(
+            screens: ["s1", "s2"],
+            existing: existing,
+            makeAndMount: { s -> Tok? in s == "s2" ? nil : Tok("new-\(s)") },  // 화면 s2 마운트 실패
             teardown: { tornDown.append($0.id) })
 
-        XCTAssertTrue(existing.isEmpty)
-        XCTAssertEqual(tornDown.sorted(), ["old1", "old2"])
+        guard case .failure = result else { return XCTFail("일부 화면 마운트 실패 시 .failure 여야 한다") }
+        XCTAssertFalse(tornDown.contains("old1"), "F036: 재적용 실패 시 기존 렌더러가 생존해야 한다")
+        XCTAssertFalse(tornDown.contains("old2"), "F036: 재적용 실패 시 기존 렌더러가 생존해야 한다")
+
+        // 대조군(종전 버그 재현): 재적용 '전' existing 을 선-소거하면, 위와 같은 실패에도 "생존"이
+        // 무의미해진다 — existing 이 이미 비어 있으므로 지킬 것 자체가 없다.
+        var preDetached = existing
+        preDetached.forEach { tornDown.append($0.id) }   // 옛 detachRenderersBeforeRebuild 와 동일한 즉시 teardown
+        preDetached.removeAll()
+        let regressed = RendererSwap.apply(
+            screens: ["s1", "s2"],
+            existing: preDetached,   // 이미 []
+            makeAndMount: { s -> Tok? in s == "s2" ? nil : Tok("new-\(s)") },
+            teardown: { _ in })
+        guard case .failure = regressed else { return XCTFail("대조군도 실패해야 의미가 있다") }
+        XCTAssertTrue(preDetached.isEmpty, "선-소거 경로는 롤백 안전망이 지킬 대상 자체를 미리 없애버린다(구버전 결함 재현)")
     }
 
     func testVideoSettingsTargetsActiveVideoRenderersBeforeCurrentProject() {

@@ -90,17 +90,6 @@ enum PresetResolver {
     }
 }
 
-enum ScreenChangeLifecycle {
-    static func detachRenderersBeforeRebuild<R>(
-        existing: inout [R],
-        teardown: (R) -> Void
-    ) {
-        let old = existing
-        existing.removeAll()
-        old.forEach(teardown)
-    }
-}
-
 enum VideoSettingsTarget {
     static func projectIds(currentProjectId: String?, activeVideoProjectIds: [String]) -> [String] {
         let active = unique(activeVideoProjectIds)
