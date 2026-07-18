@@ -66,19 +66,21 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
         XCTAssertTrue(report.containsIssue(.unsupportedApplicationType, projectID: "200"))
         XCTAssertFalse(report.containsIssue(.unsupportedPropertyType, projectID: "100", propertyKey: "pick"))
         XCTAssertFalse(report.containsIssue(.unsupportedPropertyType, projectID: "100", propertyKey: "gallery"))
-        XCTAssertFalse(report.containsIssue(.fractionalPropertyOrder, projectID: "100", propertyKey: "amount"))
         XCTAssertFalse(report.containsIssue(.propertyDisplayCondition, projectID: "100", propertyKey: "amount"))
-        XCTAssertFalse(report.containsIssue(.localizedProperties, projectID: "100"))
-        XCTAssertFalse(report.containsIssue(.directoryFetchAll, projectID: "100", propertyKey: "gallery"))
-        XCTAssertFalse(report.containsIssue(.webServiceWorker, projectID: "100"))
+        // F235: serviceWorker 는 이제 탐지 즉시 .warning 으로 승격된다(종전엔 features 에만 남고 issue
+        // 미생성 — 이 픽스처의 index.html 이 실제로 navigator.serviceWorker.register(...) 를 포함하는데도
+        // "보고 안 됨"을 단언하던 게 F393 이 지적한 회귀 감지력 0인 지점이었다).
+        XCTAssertTrue(report.containsIssue(.webServiceWorker, projectID: "100"))
         XCTAssertTrue(report.containsIssue(.webRandomFileBridge, projectID: "100"))
-        XCTAssertFalse(report.containsIssue(.presetOverridesNotApplied, projectID: "300"))
         XCTAssertTrue(report.containsIssue(.nonNativeVideoContainer, projectID: "400"))
+        // (F232/F235: fractionalPropertyOrder/localizedProperties/directoryFetchAll/presetOverridesNotApplied
+        // 는 재조사 결과 실재 갭이 아님이 확인돼 이슈코드 자체를 제거했다 — 이 픽스처가 그 트리거 조건을
+        // 그대로 갖고 있었는데도(order:0.5·localization 블록·gallery mode:fetchall·preset 오버라이드)
+        // 이슈가 안 나는 게 회귀가 아니라 설계였다는 근거가 바로 이 4개 필드다.)
 
         let markdown = report.markdown()
         XCTAssertTrue(markdown.contains("Wallpaper Compatibility Report"))
         XCTAssertTrue(markdown.contains("unsupportedApplicationType"))
-        XCTAssertFalse(markdown.contains("presetOverridesNotApplied"))
     }
 
     func testReportsMissingRequiredFilesAndDependencies() throws {
@@ -192,6 +194,13 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
         XCTAssertTrue(features.contains("fileURL"), features.description)
         XCTAssertTrue(features.contains("remoteNetwork"), features.description)
         XCTAssertTrue(report.containsIssue(.webRandomFileBridge, projectID: "linked-web"))
+        // F393: 대응하는 detectedFeatures 만 양성 테스트되고 issue 승격 여부는 무단정이던 비대칭을
+        // 메움(F235 가 이 4종을 detect 시 .warning 으로 배선) — features.contains 와 쌍을 이루는
+        // containsIssue 어서션.
+        XCTAssertTrue(report.containsIssue(.webServiceWorker, projectID: "linked-web"))
+        XCTAssertTrue(report.containsIssue(.webAudioListener, projectID: "linked-web"))
+        XCTAssertTrue(report.containsIssue(.webMediaIntegration, projectID: "linked-web"))
+        XCTAssertTrue(report.containsIssue(.remoteNetworkReference, projectID: "linked-web"))
     }
 
     func testWebFeatureScanFollowsStaticImportsAfterOversizedAssets() throws {
@@ -256,8 +265,13 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
     }
 
     func testRealWallpaperDevCorpusCanBeSummarizedWhenAvailable() throws {
-        let path = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS_ROOT"]
-            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev")
+        // F392: 이 스위트의 다른 ~25개 실코퍼스 게이트는 전부 WAPLE_REAL_PKGS(기본 .../backgrounds)를
+        // 읽는데 이 테스트만 별개 이름·별개 기본값(WAPLE_REAL_PKGS_ROOT, .../wallpaper_dev)을 썼다 —
+        // 표준 코퍼스 재지정으로는 이 테스트만 못 따라옴. WallpaperCompatibilityAnalyzer.scan(rootURL:)
+        // 은 backgrounds/ 상위·backgrounds/ 자체 둘 다 올바르게 처리하므로(projectContainerURL 자동판정)
+        // 표준 변수·표준 기본값으로 갈아타도 동작은 동일하다.
+        let path = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
         guard FileManager.default.fileExists(atPath: path) else {
             throw XCTSkip("no wallpaper_dev corpus at \(path)")
         }

@@ -1,11 +1,24 @@
 import Foundation
 
+// F232: `info` 케이스가 있었으나 analyzer 전체에서 이 값으로 이슈를 생성하는 곳이 한 군데도 없어(죽은
+// 코드) 제거 — 실제 사용은 .warning/.error 뿐. sortRank 확장도 함께 정리.
 public enum WallpaperCompatibilitySeverity: String, Codable, Equatable {
-    case info
     case warning
     case error
 }
 
+// F235: 22종 중 8종이 한 번도 생성되지 않는 죽은 코드였다. 재조사 결과:
+// - presetOverridesNotApplied/fractionalPropertyOrder/localizedProperties/directoryFetchAll 4종은
+//   애초에 "위험해 보이지만 실제로 지원됨"으로 판명난 시나리오의 예약 코드였다(테스트 픽스처가 정확히
+//   이 트리거 조건들 — 프리셋 오버라이드·소수 order·localization 블록·directory fetchall — 을 재현해
+//   "이슈 없음"을 단언하는 음성 회귀 가드로 이미 존재: WallpaperProperties.localizationTable 이 실제로
+//   지역화를 지원하고, WebRenderer:326 이 fetchall 모드를 실제로 처리하며, order 는 단순 Double 정렬키라
+//   소수여도 문제없다 — 리터럴로 확정된 갭이 아니므로 제거). 실제 재조사 근거 없이 남겨두면 향후 세션이
+//   "구현 예정 기능"으로 오인할 위험이 있어 퇴출한다.
+// - webServiceWorker/webAudioListener/webMediaIntegration/remoteNetworkReference 4종은 반대로 이미
+//   analyzeWebFeatures 가 실제로 탐지(features.insert)까지 하고서도 issue 로 승격하지 않던 것 — 아래
+//   analyzeWebFeatures 에서 .warning 으로 배선한다(호환 위험 신호는 있으나 렌더 실패로 확정되지는
+//   않으므로 .error 아닌 .warning).
 public enum WallpaperCompatibilityIssueCode: String, Codable, Equatable, CaseIterable {
     case invalidProjectJSON
     case unsupportedApplicationType
@@ -17,12 +30,8 @@ public enum WallpaperCompatibilityIssueCode: String, Codable, Equatable, CaseIte
     case missingPreviewFile
     case missingScenePackage
     case missingPresetDependency
-    case presetOverridesNotApplied
     case unsupportedPropertyType
-    case fractionalPropertyOrder
     case propertyDisplayCondition
-    case localizedProperties
-    case directoryFetchAll
     case nonNativeVideoContainer
     case webServiceWorker
     case webRandomFileBridge
@@ -468,17 +477,20 @@ public enum WallpaperCompatibilityAnalyzer {
             if text.contains("wallpaperWillGoBackground") || text.contains("wallpaperWillGoForeground") {
                 features.insert("webLifecycle")
             }
+            // F235: 아래 4건은 종전엔 features.insert 만 하고 issue 로 승격하지 않아 markdown/JSON 요약·
+            // --strict 게이트 어디에도 반영되지 않았다(detectedFeatures 에만 남아 사람이 안 읽는 한
+            // 소실). add(...) 로 최소 .warning 승격 — feature 키 자체는 하위호환을 위해 그대로 둔다.
             if text.range(of: "serviceWorker", options: .caseInsensitive) != nil {
-                features.insert("serviceWorker")
+                add("serviceWorker", .webServiceWorker, .warning, "Web wallpaper touches the serviceWorker API; Waple's offline WKWebView may not offer full parity for background sync/fetch interception.")
             }
             if text.contains("wallpaperRequestRandomFileForProperty") {
                 add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.")
             }
             if text.contains("wallpaperRegisterAudioListener") {
-                features.insert("audioListener")
+                add("audioListener", .webAudioListener, .warning, "Web wallpaper registers a Wallpaper Engine audio listener; verify Waple's audio bridge coverage for this project.")
             }
             if text.contains("wallpaperRegisterMedia") || text.contains("wallpaperMedia") {
-                features.insert("mediaIntegration")
+                add("mediaIntegration", .webMediaIntegration, .warning, "Web wallpaper uses Wallpaper Engine media integration bridges; coverage may be partial.")
             }
             if text.range(of: #"\bwebgl\b|OES_"#, options: [.regularExpression, .caseInsensitive]) != nil {
                 features.insert("webGL")
@@ -487,7 +499,7 @@ public enum WallpaperCompatibilityAnalyzer {
                 features.insert("fileURL")
             }
             if text.range(of: #"https?://"#, options: [.regularExpression, .caseInsensitive]) != nil {
-                features.insert("remoteNetwork")
+                add("remoteNetwork", .remoteNetworkReference, .warning, "Web wallpaper references a remote (non-local) URL; Waple's offline WKWebView may block or fail this request.")
             }
         }
         return Array(features)
@@ -723,7 +735,6 @@ private extension WallpaperCompatibilitySeverity {
         switch self {
         case .error: return 3
         case .warning: return 2
-        case .info: return 1
         }
     }
 }
