@@ -8,6 +8,11 @@ struct Scene3DMaterialValues: Equatable {
     var roughness: Float = 0.7
     var metallic: Float = 0
     var specularTint = SIMD3<Float>(1, 1, 1)
+    /// RIMLIGHTING 콤보 유니폼(g_RimAmount/g_RimExponent) — generic4.frag 기본값과 동일(F274).
+    /// 콤보 자체(rimLighting/shadingGradient on-off)는 combos 딕셔너리 소관이라 loadMesh3DMaterial 에서
+    /// 별도 파싱(unlit 과 동일 패턴) — 여기는 constantshadervalues 수치만 다룬다.
+    var rimAmount: Float = 2.0
+    var rimExponent: Float = 4.0
 
     static func parse(_ constants: [String: Any]?) -> Self {
         guard let constants else { return Self() }
@@ -22,6 +27,8 @@ struct Scene3DMaterialValues: Equatable {
         if let tint = numbers(values["speculartint"]), tint.count >= 3 {
             result.specularTint = SIMD3(tint[0], tint[1], tint[2])
         }
+        if let rimAmount = numbers(values["rimamount"])?.first { result.rimAmount = rimAmount }
+        if let rimExponent = numbers(values["rimexponent"])?.first { result.rimExponent = rimExponent }
         return result
     }
 

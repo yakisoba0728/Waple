@@ -91,13 +91,14 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
         return total / Double(image.pixelsWide * image.pixelsHigh)
     }
 
-    private func renderScene(_ scene: String, material: String, tag: String) throws -> NSBitmapImageRep {
+    private func renderScene(_ scene: String, material: String, tag: String,
+                             extraFiles: [(String, Data)] = []) throws -> NSBitmapImageRep {
         let files: [(String, Data)] = [
             ("scene.json", Data(scene.utf8)),
             ("models/plane.mdl", planeModel()),
             ("materials/plane.json", Data(material.utf8)),
             ("materials/white.tex", solidTex(255, 255, 255, w: 2, h: 2)),
-        ]
+        ] + extraFiles
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("waple_\(tag)_\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -239,5 +240,76 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
         let center = try XCTUnwrap(dielectric.colorAt(x: 32, y: 32))
         XCTAssertEqual(center.alphaComponent, 1, accuracy: 0.01,
                        "opaque mesh output must remain opaque")
+    }
+
+    // F274(폐기 취소 — 실코퍼스 3706286085 RioSonicLite/SonicBODY 실측 발화): RIMLIGHTING 콤보가 실제로
+    // GPU 파이프라인 끝까지 배선됐는지(콤보 파싱→유니폼→셰이더 샘플)를 픽셀로 증명. NL=max(NL,rimTerm)·
+    // metallic-=saturate(rimTerm) 는 절대 어둡게 만들 수 없다(common_pbr.h:62-67) — on 이 off 보다
+    // 반드시 밝거나 같아야 하고, amount>0·exponent 낮음(그레이징에서도 잘 감쇠 안 됨)이면 반드시 더 밝다.
+    private func rimLitScene() -> String {
+        """
+        {"camera":{"eye":"3 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"nearz":0.05,"farz":50,
+                    "clearcolor":"0 0 0","ambientcolor":"0.04 0.04 0.04","skylightcolor":"0.04 0.04 0.04"},
+         "objects":[
+           {"id":1,"name":"receiver","model":"models/plane.mdl","origin":"0 0 0","scale":"2.5 2.5 2.5","castshadow":false},
+           {"id":3,"name":"key","light":"lpoint","origin":"0 0 4","color":"1 1 1","intensity":2,
+            "radius":10,"exponent":2,"castshadow":false}
+         ]}
+        """
+    }
+
+    private func rimMaterial(rimOn: Bool) -> String {
+        #"""
+        {"passes":[{"textures":["white"],
+          "combos":{"LIGHTING":1,"RIMLIGHTING":\#(rimOn ? 1 : 0)},
+          "constantshadervalues":{"roughness":0.7,"metallic":0,"rimamount":4,"rimexponent":1.5}}]}
+        """#
+    }
+
+    func testRimLightingComboBrightensSurfaceEndToEnd() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let off = try renderScene(rimLitScene(), material: rimMaterial(rimOn: false), tag: "rimoff")
+        let on = try renderScene(rimLitScene(), material: rimMaterial(rimOn: true), tag: "rimon")
+        XCTAssertGreaterThan(averageLuminance(on), averageLuminance(off) + 0.01,
+            "F274: RIMLIGHTING=1(rimamount=4,rimexponent=1.5)은 NL 을 max(NL,rimTerm)으로 부스트하고 " +
+            "metallic 을 깎아 diffuse 를 밝혀야 함(common_pbr.h 이식) — off 대비 더 밝지 않으면 콤보가 " +
+            "파싱만 되고 셰이더까지 안 이어진 것")
+    }
+
+    func testRimLightingComboOffMatchesPreExistingMaterialResponse() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        // combos 자체가 없는(RIMLIGHTING 키 부재) 기존 자재와 RIMLIGHTING:0 명시가 같은 결과여야
+        // 회귀가 없다(F274 배선이 무콤보 메시의 기본 경로를 건드리지 않았는지 가드).
+        let noCombo = #"{"passes":[{"textures":["white"],"constantshadervalues":{"roughness":0.7,"metallic":0}}]}"#
+        let explicitOff = try renderScene(rimLitScene(), material: rimMaterial(rimOn: false), tag: "rimexplicitoff")
+        let implicitOff = try renderScene(rimLitScene(), material: noCombo, tag: "rimimplicitoff")
+        XCTAssertEqual(averageLuminance(explicitOff), averageLuminance(implicitOff), accuracy: 1e-4,
+            "RIMLIGHTING 콤보 부재(기존 자재)와 RIMLIGHTING:0 명시는 동일 렌더여야(무회귀)")
+    }
+
+    // F274: SHADINGGRADIENT 콤보가 g_Texture4(gradient/gradient_toon_smooth) 룩업까지 이어지는지 픽셀로
+    // 증명. 코퍼스는 이 텍스처를 재질에서 오버라이드하지 않으므로(항상 셰이더 기본 자산) 실제 자산 대신
+    // 결정적 테스트 전용 자산(단색 r=26/255≈0.10)을 패키지에 내장해 호스트 환경(WAPLE_BASE_ASSETS 유무)과
+    // 무관하게 만든다 — resolveTexture 는 패키지를 base-assets 보다 먼저 본다. 이 씬(광원이 리시버 거의
+    // 정면 위)의 자연 NL 은 중심 근방에서 ~1.0(밝음)이라, 강제로 낮은 값(~0.10)을 리맵하면 확연히
+    // 어두워져야 한다 — 텍스처가 실제로 샘플되지 않으면(배선 누락) 밝기 그대로일 것.
+    func testShadingGradientComboSamplesEmbeddedRampEndToEnd() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = rimLitScene()
+        let materialOff = #"{"passes":[{"textures":["white"],"combos":{"LIGHTING":1},"constantshadervalues":{"roughness":0.7,"metallic":0}}]}"#
+        let materialOn = #"{"passes":[{"textures":["white"],"combos":{"LIGHTING":1,"SHADINGGRADIENT":1},"constantshadervalues":{"roughness":0.7,"metallic":0}}]}"#
+        let gradientAsset = [("materials/gradient/gradient_toon_smooth.tex", solidTex(26, 26, 26, w: 4, h: 1))]
+        let off = try renderScene(scene, material: materialOff, tag: "gradientoff")
+        let on = try renderScene(scene, material: materialOn, tag: "gradienton", extraFiles: gradientAsset)
+        // 배경(검정, clearcolor)이 프레임 상당수를 차지해 whole-frame 평균은 희석된다 — 평면이 확실히
+        // 덮는 중심 3×3 블록으로 표본(기존 spot 테스트의 blockLuminance 관례와 동일).
+        let offCenter = blockLuminance(off, cx: 32, cy: 32)
+        let onCenter = blockLuminance(on, cx: 32, cy: 32)
+        XCTAssertGreaterThan(offCenter, 0.2,
+            "대조군(그래디언트 없음)은 광원이 거의 정면 위라 자연 NL 이 높아 밝아야 함")
+        XCTAssertLessThan(onCenter, offCenter - 0.1,
+            "F274: SHADINGGRADIENT=1 은 NL 을 저휘도(r≈0.10) 램프로 강제 치환해 확연히 어두워야 함 — " +
+            "그대로면 g_Texture4 룩업이 실제로 샘플되지 않은 것(콤보만 파싱되고 셰이더 미배선)")
     }
 }
