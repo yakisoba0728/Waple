@@ -348,9 +348,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activeVideoProjectIds = screenProjects
                 .filter { $0.project.type == .video }
                 .map { $0.project.id }
-            if let project {
-                ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
-            }
+            // F028: syncVideoPath 는 activeVideoProjectIds 와 같은 소스(모니터별 할당 반영된
+            // screenProjects)를 써야 한다 — 종전엔 여기서만 전역 project 파라미터에 게이팅돼, 전역
+            // 선택 없이(project==nil) 화면별 할당만으로 동영상을 표시 중이면 화면보호기 videoPath 가
+            // 절대 갱신되지 않았다. screenProjects 는 미할당 화면에 전역을 폴백하므로 전역이 동영상인
+            // 경우도 그대로 포함된다(무회귀) — 여러 화면이 서로 다른 동영상이면 첫 번째를 채택.
+            ScreenSaverController.syncVideoPath(for: screenProjects.first { $0.project.type == .video }?.project)
             if pauseGate.isPaused { renderers.forEach { $0.pause() } }  // 어떤 사유든 정지 중 교체된 렌더러도 정지 유지
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
             pushRecent(project?.id)     // 최근 배경 목록 갱신(nil = 무선택 → no-op)
@@ -668,8 +671,13 @@ extension AppDelegate {
             return false
         }
         do {
-            let project = currentFolderURL.flatMap { projectForMount(folderURL: $0) }
-            try ScreenSaverController.enable(currentProject: project)
+            let global = currentFolderURL.flatMap { projectForMount(folderURL: $0) }
+            // F028: 전역 선택 없이(화면별 할당만) 동영상을 표시 중이어도 화면보호기가 그 동영상을
+            // 찾을 수 있게 resolvedScreenProjectSlots(applyResolved 와 동일 소스)로 화면별 프로젝트를
+            // 함께 본다. 못 찾으면 종전처럼 전역으로 폴백(무회귀 — 전역이 비디오 아니면 syncVideoPath
+            // 내부에서 조용히 no-op).
+            let videoProject = resolvedScreenProjectSlots(global: global).first { $0.project?.type == .video }?.project
+            try ScreenSaverController.enable(currentProject: videoProject ?? global)
             ScreenSaverController.openSettings()  // 사용자가 바로 확인할 수 있게 잠금 화면 패널 열기
             return true
         } catch {
