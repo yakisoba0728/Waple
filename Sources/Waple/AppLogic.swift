@@ -221,6 +221,19 @@ enum StillDesktopSync {
     }
 }
 
+/// 수동 "정지 배경으로 설정" 통지 문구 결정(F044/F045, 순수). 종전엔 화면별 NSWorkspace 호출 성공
+/// 여부를 전혀 세지 않고(try? 로 폐기) 무조건 성공 알림을 띄웠다 — 일부·전체 실패해도 사용자는
+/// 거짓 성공을 통지받았다. 실제 성공 화면 수를 반영해 성공/부분성공/전체실패를 구분한다.
+enum StillWallpaperNotice {
+    static func message(successCount: Int, totalScreens: Int) -> String {
+        switch successCount {
+        case 0: return "정지 배경 설정에 실패했습니다"
+        case totalScreens: return "정지 배경으로 설정했습니다"
+        default: return "일부 화면만 정지 배경으로 설정했습니다(\(successCount)/\(totalScreens))"
+        }
+    }
+}
+
 /// 최근 배경 목록(작업 6): 적용 성공 id 를 선두 삽입·중복 제거·상한 유지(순수).
 enum RecentWallpapers {
     static func push(_ id: String, into list: [String], max: Int = 10) -> [String] {

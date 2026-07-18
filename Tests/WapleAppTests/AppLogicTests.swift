@@ -387,6 +387,22 @@ final class AppLogicTests: XCTestCase {
             "형제 프리픽스(stillage)는 내부 아님")
     }
 
+    // MARK: - StillWallpaperNotice (F044/F045: 성공 화면 수를 반영한 정확한 통지)
+
+    func testStillWallpaperNotice_allSucceed() {
+        XCTAssertEqual(StillWallpaperNotice.message(successCount: 2, totalScreens: 2), "정지 배경으로 설정했습니다")
+    }
+
+    func testStillWallpaperNotice_allFail() {
+        // 종전엔 try? 로 실패를 전부 삼키고 이 경우에도 성공 메시지를 띄웠다(F044/F045).
+        XCTAssertEqual(StillWallpaperNotice.message(successCount: 0, totalScreens: 2), "정지 배경 설정에 실패했습니다")
+    }
+
+    func testStillWallpaperNotice_partialSuccess() {
+        XCTAssertEqual(StillWallpaperNotice.message(successCount: 1, totalScreens: 2),
+                       "일부 화면만 정지 배경으로 설정했습니다(1/2)")
+    }
+
     // MARK: - StillDesktopSync.restorePass (P-D1: 분리 모니터 백업 보존)
 
     func testRestorePass_preservesDisconnectedKeys() {

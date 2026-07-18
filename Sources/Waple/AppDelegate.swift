@@ -488,18 +488,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 정지 배경으로 설정 (작업 3)
 
-    /// 현재 배경에서 정지 이미지를 만들어 전 스크린 데스크탑 배경으로 지정(수동 1회).
+    /// 현재 배경에서 화면별 정지 이미지를 만들어 데스크탑 배경으로 지정(수동 1회, F046: 모니터별 할당
+    /// 인지 — 화면마다 실제로 표시 중인 프로젝트에서 스틸을 뽑아 그 화면에만 적용한다).
     /// 배경 창은 아이콘 레벨 아래라, 라이브 창이 떠 있는 동안 정지 배경은 그 뒤의 폴백 레이어다.
     /// 원본 보존/복원은 자동 동기화(작업 1) 전용 — 수동 설정은 사용자의 명시적 1회 액션이라 백업 없음.
     @objc private func setStillWallpaper() {
-        guard currentFolderURL != nil else { notify("적용된 배경이 없습니다"); return }
-        guard let image = generateStillImage() else {
-            notify("정지 배경을 만들 수 없습니다"); return
+        // F043: currentFolderURL(전역 선택)만 보면 화면별 할당-전용 모드(전역 nil)에서 배경이 실제로
+        // 표시 중인데도 "없음" 오탐이 난다 — 실제 마운트된 렌더러 존재 여부로 판정.
+        guard !renderers.isEmpty else { notify("적용된 배경이 없습니다"); return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let images = self.generateStillImages()   // 블로킹(비디오 프레임 추출/씬 GPU 캡처) — 백그라운드(F047)
+            DispatchQueue.main.async { self.finishSetStillWallpaper(images: images) }
         }
-        for screen in NSScreen.screens {
-            try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
+    }
+
+    /// setStillWallpaper 의 메인 스레드 마무리 — 실제 OS 호출 결과에 따라 통지 문구를 정확히 고른다.
+    private func finishSetStillWallpaper(images: [String: URL]) {
+        guard !images.isEmpty else { notify("정지 배경을 만들 수 없습니다"); return }
+        backupOriginalsIfNeeded()   // F042: 덮어쓰기 전에 항상 먼저 백업(동기화 디바운스 경합과 무관)
+        var successCount = 0
+        let screens = NSScreen.screens
+        for screen in screens {
+            guard let image = images[DesktopWindow.screenKey(for: screen)] else { continue }
+            // F044/F045: try? 로 삼키지 않고 실제 성공 여부를 센다 — 무조건 성공 알림을 띄우던 결함.
+            if (try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])) != nil {
+                successCount += 1
+            }
         }
-        notify("정지 배경으로 설정했습니다")
+        notify(StillWallpaperNotice.message(successCount: successCount, totalScreens: screens.count))
     }
 
     /// still 산출 디렉터리(라이브러리 베이스/still).
@@ -507,22 +524,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LibraryStore.defaultBaseDirectory().appendingPathComponent("still", isDirectory: true)
     }
 
-    /// 현재 배경 → 정지 이미지 파일(공통). 소스 없음/추출 실패 → nil. (수동 설정·자동 동기화 공유)
-    private func generateStillImage() -> URL? {
-        guard let folder = currentFolderURL,
-              let project = projectForMount(folderURL: folder),
-              let source = StillWallpaper.source(for: project) else { return nil }
+    /// 화면키 → 그 화면에 실제로 표시 중인 프로젝트의 정지 이미지(F046). 모니터별 할당을 그대로
+    /// 반영하는 MonitorMapping.resolveProjectSlots(applyResolved 와 동일 소스)로 화면별 프로젝트를
+    /// 구한 뒤, 같은 프로젝트를 쓰는 화면은 한 번만 생성해 공유한다. 화면/전역 모두 무배경이면 빈 dict.
+    /// ⚠️ 블로킹(AVFoundation 디코드·씬 GPU 캡처) — 백그라운드 큐에서 호출(F047). NSScreen 열거만
+    /// 메인에서 미리 끝내 두고 넘어온 값을 쓴다(AppKit 뷰 API 는 메인 스레드 전용).
+    private func generateStillImages() -> [String: URL] {
+        let screenSizes = DispatchQueue.main.sync {
+            Dictionary(uniqueKeysWithValues: NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) })
+        }
+        let global = currentFolderURL.flatMap { projectForMount(folderURL: $0) }
+        let slots = DispatchQueue.main.sync { resolvedScreenProjectSlots(global: global) }
         let stillDir = stillDirectory()
         try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
+
+        var cache: [String: URL?] = [:]   // projectId → 생성 결과(실패도 캐시해 같은 화면 반복 재시도 방지)
+        var result: [String: URL] = [:]
+        for (key, project) in slots {
+            guard let project else { continue }
+            let url: URL?
+            if let cached = cache[project.id] {
+                url = cached
+            } else {
+                let size = screenSizes[key] ?? NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+                url = stillImage(for: project, size: size, stillDir: stillDir)
+                cache[project.id] = url
+            }
+            if let url { result[key] = url }
+        }
+        return result
+    }
+
+    /// 화면키 → 마운트된 프로젝트(F046 공용 — setStillWallpaper/syncDesktopStill/잠금화면 스틸이 공유).
+    /// applyResolved(304행대)와 동일한 MonitorMapping.resolveProjectSlots 호출 — 소스가 어긋나면
+    /// 실제 표시와 스틸이 따로 놀아 F046 이 재발한다.
+    private func resolvedScreenProjectSlots(global: WallpaperProject?) -> [(key: String, project: WallpaperProject?)] {
+        let screens = desktopController.screenViews
+        let slots = MonitorMapping.resolveProjectSlots(
+            screenKeys: screens.map { $0.screenKey },
+            global: global,
+            assignedFolder: { key in
+                MonitorMapping.assignedFolder(
+                    screenKey: key,
+                    assignment: { self.monitorStore.assignment(for: $0) },
+                    folderForEntry: { self.folderForEntry($0) })
+            },
+            parse: { self.projectForMount(folderURL: $0) }
+        )
+        return Array(zip(screens.map { $0.screenKey }, slots))
+    }
+
+    /// 프로젝트 하나의 정지 이미지(공통 스위치 — 동영상/씬/프리뷰). 소스 없음/추출 실패 → nil.
+    private func stillImage(for project: WallpaperProject, size: CGSize, stillDir: URL) -> URL? {
+        guard let source = StillWallpaper.source(for: project) else { return nil }
         let output = StillWallpaper.outputURL(projectId: project.id, stillDir: stillDir)
         switch source {
         case .videoFrame(let videoURL): return extractVideoFrame(from: videoURL, to: output)
-        case .sceneCapture:             return captureSceneStill(to: stillDir, output: output)
+        case .sceneCapture:             return captureSceneStill(project: project, size: size, to: stillDir, output: output)
         case .previewImage(let url):    return url   // preview 파일 그대로 사용
         }
     }
 
-    /// 동영상 t=1s 프레임 → PNG(실패 시 t=0 폴백). 실패 → nil.
+    /// 동영상 t=1s 프레임 → PNG(실패 시 t=0 폴백). 실패 → nil. AVFoundation 동기 디코드 — 백그라운드
+    /// 큐에서 호출(F047, generateStillImages 경유).
     private func extractVideoFrame(from videoURL: URL, to output: URL) -> URL? {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: videoURL))
         generator.appliesPreferredTrackTransform = true
@@ -538,15 +602,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return output
     }
 
-    /// 활성 씬 렌더러로 1프레임(t=1s) 캡처 → 프로젝트별 output 으로 복사. 씬 없음/실패 → nil.
-    /// captureFrames 는 고정 파일명(frame_t1.0.png)이라 그대로 반환하면 씬 전환 때마다 같은 URL 이
-    /// 재설정돼 macOS 배경 캐시가 갱신을 무시한다(P-B2) — 프로젝트별 경로로 복사해 URL 을 구분.
-    private func captureSceneStill(to dir: URL, output: URL) -> URL? {
-        guard let scene = renderers.compactMap({ $0 as? SceneRenderer }).first else { return nil }
-        let size = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+    /// 프로젝트 전용 임시 SceneRenderer 로 1프레임(t=1s) 캡처 → output 으로 복사(F046: 화면별로 실제
+    /// 마운트된 렌더러가 아니라 프로젝트 자체를 그 화면 크기로 새로 렌더 — 어느 렌더러가 어느 화면
+    /// 것인지 추적할 필요 없이 항상 정확한 프로젝트·크기로 캡처된다). 컨테이너는 어떤 창에도 속하지
+    /// 않는 오프스크린 NSView — SceneRenderer.mount 는 이미 이런 헤드리스 마운트를 캡처/테스트 용도로
+    /// 정식 지원한다("container.window == nil → 사운드 등 라이브 전용 사이드이펙트 스킵, 결정적").
+    /// NSView/MTKView 생성은 메인 스레드 전용이라, 백그라운드 큐에서 호출되면(F047) 메인으로 동기 홉.
+    private func captureSceneStill(project: WallpaperProject, size: CGSize, to dir: URL, output: URL) -> URL? {
+        if Thread.isMainThread {
+            return captureSceneStillOnMain(project: project, size: size, to: dir, output: output)
+        }
+        return DispatchQueue.main.sync {
+            captureSceneStillOnMain(project: project, size: size, to: dir, output: output)
+        }
+    }
+
+    private func captureSceneStillOnMain(project: WallpaperProject, size: CGSize, to dir: URL, output: URL) -> URL? {
+        guard size.width > 0, size.height > 0,
+              let renderer = RendererFactory.makeRenderer(for: project) as? SceneRenderer else { return nil }
+        let container = NSView(frame: CGRect(origin: .zero, size: size))
+        do {
+            try renderer.mount(in: container, project: project)
+        } catch {
+            return nil
+        }
+        defer { renderer.teardown() }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
-        guard let captured = scene.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
-                                                 times: [1.0], toDir: dir).first else { return nil }
+        guard let captured = renderer.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
+                                                    times: [1.0], toDir: dir).first else { return nil }
         let fm = FileManager.default
         try? fm.removeItem(at: output)   // safeName 은 영숫자만 남기므로 captured 와 충돌 불가
         guard (try? fm.copyItem(at: captured, to: output)) != nil else { return nil }
@@ -633,10 +716,39 @@ extension AppDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
-    /// 현재 배경 스틸을 전 스크린 바탕화면으로 설정. 최초 덮어쓰기 직전 원본을 화면별로 백업(가드).
-    /// 실패는 조용히 — 이 기능은 폴백일 뿐이다.
+    /// 현재 배경 스틸을 화면별로 실제 표시 중인 프로젝트에서 만들어 데스크탑에 설정(F046: 모니터별
+    /// 할당 인지). 실패는 조용히 — 이 기능은 폴백일 뿐이다.
     private func syncDesktopStill() {
-        guard desktopStillSync, let image = generateStillImage() else { return }
+        guard desktopStillSync else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let images = self.generateStillImages()   // 블로킹 — 백그라운드(F047)
+            DispatchQueue.main.async { self.finishSyncDesktopStill(images: images) }
+        }
+    }
+
+    /// syncDesktopStill 의 메인 스레드 마무리 — 백업·실 적용·잠금화면 갱신.
+    private func finishSyncDesktopStill(images: [String: URL]) {
+        guard desktopStillSync, !images.isEmpty else { return }
+        backupOriginalsIfNeeded()   // F042: 원본 백업 — 화면별 최초 덮어쓰기 직전 값만(자기오염 가드)
+        for screen in NSScreen.screens {
+            guard let image = images[DesktopWindow.screenKey(for: screen)] else { continue }
+            try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
+        }
+        // 잠금화면은 시스템 전역 1장뿐이라 화면별로 나눌 수 없다 — 주 화면(NSScreen.main) 이미지를
+        // 우선하고, 못 찾으면(드문 경우) 생성된 것 중 아무거나.
+        if let mainKey = NSScreen.main.map(DesktopWindow.screenKey(for:)), let mainImage = images[mainKey] {
+            writeLockscreenStill(mainImage)
+        } else if let anyImage = images.values.first {
+            writeLockscreenStill(anyImage)
+        }
+    }
+
+    /// 최초 덮어쓰기 직전 원본을 화면별로 백업(자기오염 가드) — 자동 동기화·수동 설정 공용(F042: 수동
+    /// "정지 배경으로 설정"이 동기화의 3초 디바운스 창 안에 먼저 실행되면, 이 백업이 자동 동기화
+    /// 전용으로만 존재하던 종전엔 원본이 한 번도 백업되지 못했다 — 두 경로가 여기를 함께 거치게 해
+    /// 순서와 무관하게 항상 백업이 보장되도록 했다).
+    private func backupOriginalsIfNeeded() {
         var originals = desktopOriginals
         let stillPath = stillDirectory().path
         for screen in NSScreen.screens {
@@ -646,10 +758,8 @@ extension AppDelegate {
                 currentPath: current, stillDirPath: stillPath, hasBackup: originals[key] != nil) {
                 originals[key] = current
             }
-            try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
         }
         desktopOriginals = originals
-        writeLockscreenStill(image)  // 작업 2: 잠금화면 스틸 갱신(graceful)
     }
 
     // MARK: - 잠금화면 스틸 (작업 2)
@@ -675,18 +785,22 @@ extension AppDelegate {
     /// 잠금화면 스틸을 /Library/Caches/Desktop Pictures/<UID>/lockscreen.png 에 PNG 로 기록.
     /// 디렉터리 부재(신규 macOS 등)/권한 실패는 조용히 스킵(graceful) — 폴백 기능일 뿐.
     /// ⚠️ macOS 26+ 는 비공개 WallpaperExtensionKit 확장으로 잠금화면을 관리 — 범위 외(별도 SP).
+    /// dscl 서브프로세스 대기가 블로킹이라(F047) 호출부(메인 스레드)를 막지 않도록 여기서 자체적으로
+    /// 백그라운드 큐로 넘어간다 — graceful 기능이라 호출부는 결과를 기다리지 않는다(fire-and-forget).
     private func writeLockscreenStill(_ image: URL) {
-        guard let uid = currentUserGeneratedUID() else { return }
-        let dir = URL(fileURLWithPath: "/Library/Caches/Desktop Pictures/\(uid)", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: dir.path) else { return }  // 디렉터리 부재 → 스킵
-        // 원본이 PNG 가 아닐 수 있어(preview.jpg 등) PNG 로 재인코딩.
-        guard let nsImage = NSImage(contentsOf: image),
-              let tiff = nsImage.tiffRepresentation,
-              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
-        do {
-            try png.write(to: dir.appendingPathComponent("lockscreen.png"), options: .atomic)
-        } catch {
-            notify("잠금화면 스틸 기록 실패(무시): \(error.localizedDescription)")
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self, let uid = self.currentUserGeneratedUID() else { return }
+            let dir = URL(fileURLWithPath: "/Library/Caches/Desktop Pictures/\(uid)", isDirectory: true)
+            guard FileManager.default.fileExists(atPath: dir.path) else { return }  // 디렉터리 부재 → 스킵
+            // 원본이 PNG 가 아닐 수 있어(preview.jpg 등) PNG 로 재인코딩.
+            guard let nsImage = NSImage(contentsOf: image),
+                  let tiff = nsImage.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+            do {
+                try png.write(to: dir.appendingPathComponent("lockscreen.png"), options: .atomic)
+            } catch {
+                DispatchQueue.main.async { self.notify("잠금화면 스틸 기록 실패(무시): \(error.localizedDescription)") }
+            }
         }
     }
 
