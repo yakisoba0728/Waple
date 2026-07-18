@@ -1237,18 +1237,16 @@ final class GLSLTranslatorTests: XCTestCase {
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
         // 순서보존: a_TexCoord 표현이 xform 앞에 온다(= vec * M). 전치 오역이면 (xform * ...) 순.
-        guard let vr = t.msl.range(of: "vertex Vary ev_main"),
-              let stmt = t.msl.range(of: "= (", range: vr.upperBound..<t.msl.endIndex),
-              let mulLine = t.msl.range(of: "a_TexCoord", range: vr.upperBound..<t.msl.endIndex) else {
-            return XCTFail("ev_main / mul 문 미발견:\n\(t.msl)")
+        // F388: vertex 스테이지 struct 존재만 전제조건으로 확인(과거엔 이 결과로 얻은 Range 를
+        // 실제로 쓰지 않고 즉시 버렸다 — 아래 실제 어서션은 t.msl 전체를 다시 검색해 독립 계산됨).
+        guard t.msl.contains("vertex Vary ev_main") else {
+            return XCTFail("ev_main 미발견:\n\(t.msl)")
         }
-        _ = stmt
         // v_Fx 대입식에서 a_TexCoord 가 xform 보다 먼저 나오면 (a*b) 순서.
         let vfx = try XCTUnwrap(t.msl.range(of: "out.v_Fx = ("))
         let tail = String(t.msl[vfx.upperBound...]).prefix(120)
         let aPos = tail.range(of: "a_TexCoord")
         let mPos = tail.range(of: "xform")
-        _ = mulLine
         XCTAssertNotNil(aPos); XCTAssertNotNil(mPos)
         XCTAssertLessThan(aPos!.lowerBound, mPos!.lowerBound,
                           "mul(vec, M) 은 (vec * M) 순서여야 — 전치 오역(M * vec)이면 갓레이 가로띠:\n\(tail)")
