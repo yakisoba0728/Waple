@@ -25,4 +25,13 @@ final class NowPlayingSubtitleTests: XCTestCase {
                                                intervalMinutes: 15, playlistEnabled: true),
                        "웹 · 재생목록 5개 · 15분마다 전환")
     }
+
+    // MARK: - 하단 바 음량/배속 컨트롤 노출 (w5d-settings-ia)
+
+    func testShowsVideoControlsOnlyForVideoType() {
+        XCTAssertTrue(NowPlayingSubtitle.showsVideoControls(typeRaw: "video"))
+        XCTAssertFalse(NowPlayingSubtitle.showsVideoControls(typeRaw: "scene"))
+        XCTAssertFalse(NowPlayingSubtitle.showsVideoControls(typeRaw: "web"))
+        XCTAssertFalse(NowPlayingSubtitle.showsVideoControls(typeRaw: nil), "적용된 배경이 없으면 노출 안 함")
+    }
 }

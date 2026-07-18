@@ -10,11 +10,11 @@ import WapleRender
 /// 오프메인 콜백이 있는 Workshop/Discover VM 과 달리 @MainActor 불필요.
 final class SettingsViewModel: ObservableObject {
     @Published var fitMode: FitMode = SceneRenderSettings.fitMode
+    @Published var maxFPS: SceneFPSCap = SceneRenderSettings.maxFPS
     @Published var occlusionRaw: Double = -1
     @Published var playlistEnabled = false
     @Published var playlistInterval = 15
-    @Published var videoVolume: Float?     // nil = 적용 중인 동영상 없음(컨트롤 비활성)
-    @Published var videoRate: Float?
+    @Published var playlistShuffle = false
     @Published var loginEnabled = LoginItemController.isEnabled
     @Published var stillSync = false
     @Published var saverSelected = ScreenSaverController.isSelected
@@ -37,7 +37,6 @@ final class SettingsViewModel: ObservableObject {
     var onChooseBaseAssets: (() -> Void)?
     var onSetStillWallpaper: (() -> Void)?
     var onToggleSaver: (() -> Bool)?
-    var videoTargetIds: () -> [String] = { [] }
     var occlusionState: () -> (enabled: Bool, threshold: Double) = { (false, 0) }
     var stillSyncEnabled: () -> Bool = { false }
 
@@ -48,13 +47,12 @@ final class SettingsViewModel: ObservableObject {
     /// 창을 열 때마다 실제 스토어에서 다시 읽는다(트레이/적용 경로가 그 사이 바꿨을 수 있음).
     func refresh() {
         fitMode = SceneRenderSettings.fitMode
+        maxFPS = SceneRenderSettings.maxFPS
         let occ = occlusionState()
         occlusionRaw = SettingsPresentation.currentOcclusionRaw(enabled: occ.enabled, threshold: occ.threshold)
         playlistEnabled = playlist.enabled
         playlistInterval = playlist.intervalMinutes
-        let ids = videoTargetIds()
-        videoVolume = ids.first.map { VideoSettings.volume(id: $0) }
-        videoRate = ids.first.map { VideoSettings.rate(id: $0) }
+        playlistShuffle = playlist.shuffle
         loginEnabled = LoginItemController.isEnabled
         stillSync = stillSyncEnabled()
         saverSelected = ScreenSaverController.isSelected
@@ -65,6 +63,14 @@ final class SettingsViewModel: ObservableObject {
     func setFit(_ mode: FitMode) {
         SceneRenderSettings.fitMode = mode
         fitMode = mode
+        onApplySelection?()
+    }
+
+    /// 전역 FPS 상한(w5d-feature-gaps) — preferredFramesPerSecond 는 mount 시점에만 읽으므로, 지금
+    /// 재생 중인 씬에도 즉시 반영되도록 fitMode 와 동일하게 재적용(리마운트)을 태운다.
+    func setMaxFPS(_ cap: SceneFPSCap) {
+        SceneRenderSettings.maxFPS = cap
+        maxFPS = cap
         onApplySelection?()
     }
 
@@ -85,20 +91,11 @@ final class SettingsViewModel: ObservableObject {
         onPlaylistChanged?()
     }
 
-    func setVolume(_ v: Float) {
-        let ids = videoTargetIds()
-        guard !ids.isEmpty else { return }
-        ids.forEach { VideoSettings.setVolume(v, id: $0) }
-        videoVolume = v
-        onApplySelection?()   // ponytail: 리마운트 반영(재생 리셋) — 라이브 반영은 BACKLOG(queue.volume) 항목
-    }
-
-    func setRate(_ r: Float) {
-        let ids = videoTargetIds()
-        guard !ids.isEmpty else { return }
-        ids.forEach { VideoSettings.setRate(r, id: $0) }
-        videoRate = r
-        onApplySelection?()
+    /// 셔플(무작위 순서, w5d-playback) — NowPlayingBar 팝오버와 동일 저장소를 공유.
+    func setPlaylistShuffle(_ on: Bool) {
+        playlist.shuffle = on
+        playlistShuffle = on
+        onPlaylistChanged?()
     }
 
     func setLogin(_ on: Bool) {

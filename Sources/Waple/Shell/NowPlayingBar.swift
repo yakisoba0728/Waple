@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import WapleCore
 import WapleLibrary
+import WapleRender
 
 /// Now Playing 부제(순수): 타입 라벨 + 재생목록 상태. 뷰와 분리해 단위 테스트.
 enum NowPlayingSubtitle {
@@ -11,6 +12,13 @@ enum NowPlayingSubtitle {
         if playlistCount > 0 { parts.append("재생목록 \(playlistCount)개") }
         if playlistEnabled, playlistCount > 0 { parts.append("\(intervalMinutes)분마다 전환") }
         return parts.joined(separator: " · ")
+    }
+
+    /// 하단 바 음량/배속 컨트롤(w5d-settings-ia) 노출 여부 — 적용된 배경이 동영상일 때만. 설정 창에
+    /// 묻혀 있던 컨트롤을 재생 컨텍스트(appliedEntry)를 이미 아는 하단 바로 옮기며, 씬/웹/무배경일
+    /// 때는 스피커 아이콘 자체를 숨겨 무의미한 컨트롤을 노출하지 않는다.
+    static func showsVideoControls(typeRaw: String?) -> Bool {
+        typeRaw.map { WallpaperType.from($0) == .video } ?? false
     }
 
     static func typeLabel(_ raw: String) -> String {
@@ -68,6 +76,12 @@ struct NowPlayingBar: View {
             .disabled(viewModel.playlist.ids.count < 2)
             .help("다음 배경")
 
+            // w5d-settings-ia: 동영상 음량/배속 — 재생 컨텍스트(appliedEntry)를 이미 아는 하단 바로
+            // 설정 창에서 이관. 적용된 배경이 동영상일 때만 노출(그 외엔 컨트롤할 대상이 없다).
+            if NowPlayingSubtitle.showsVideoControls(typeRaw: appliedEntry?.typeRaw) {
+                videoControlsMenu
+            }
+
             Divider().frame(height: 24)
 
             Button { showPlaylist.toggle() } label: {
@@ -102,6 +116,61 @@ struct NowPlayingBar: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
+    /// 음량/배속 메뉴(w5d-settings-ia). 리마운트를 유발하므로(재생 리셋) 연속 슬라이더 대신
+    /// SettingsPresentation 의 기존 이산 스텝을 재사용 — 설정 창이 쓰던 것과 동일한 값 집합이라
+    /// 저장값이 호환된다. 대상은 videoTargetIds()(모니터별 할당 포함, 설정 창과 동일 소스).
+    private var videoControlsMenu: some View {
+        Menu {
+            Section("음량") {
+                ForEach(SettingsPresentation.volumeSteps, id: \.value) { step in
+                    Button {
+                        applyToVideoTargets { VideoSettings.setVolume(step.value, id: $0) }
+                    } label: {
+                        if step.value == currentVideoVolume {
+                            Label(step.label, systemImage: "checkmark")
+                        } else {
+                            Text(step.label)
+                        }
+                    }
+                }
+            }
+            Section("배속") {
+                ForEach(SettingsPresentation.rateSteps, id: \.value) { step in
+                    Button {
+                        applyToVideoTargets { VideoSettings.setRate(step.value, id: $0) }
+                    } label: {
+                        if step.value == currentVideoRate {
+                            Label(step.label, systemImage: "checkmark")
+                        } else {
+                            Text(step.label)
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: currentVideoVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill").font(.title3)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("동영상 음량 · 배속")
+    }
+
+    private var currentVideoVolume: Float {
+        viewModel.videoTargetIds().first.map { VideoSettings.volume(id: $0) } ?? 0
+    }
+    private var currentVideoRate: Float {
+        viewModel.videoTargetIds().first.map { VideoSettings.rate(id: $0) } ?? 1
+    }
+
+    /// 현재 적용 중인 모든 동영상 대상(모니터별 할당 포함)에 변경을 반영하고 재적용을 태운다
+    /// (기존 설정 창 setVolume/setRate 와 동일 규약 — 리마운트로 재생이 처음부터 다시 시작된다).
+    private func applyToVideoTargets(_ mutate: (String) -> Void) {
+        let ids = viewModel.videoTargetIds()
+        guard !ids.isEmpty else { return }
+        ids.forEach(mutate)
+        viewModel.onVideoSettingsChanged?()
+    }
+
     /// 재생목록 관리: 자동 전환·간격 + 선택 항목 추가/제거 + 목록.
     private var playlistPopover: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -113,6 +182,10 @@ struct NowPlayingBar: View {
             Stepper("간격: \(viewModel.playlist.intervalMinutes)분", value: Binding(
                 get: { viewModel.playlist.intervalMinutes },
                 set: { viewModel.playlist.intervalMinutes = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }), in: 1...240)
+            // w5d-playback: 고정 순서만 순환하던 자동 전환에 무작위 순서 옵션 추가.
+            Toggle("셔플(무작위 순서)", isOn: Binding(
+                get: { viewModel.playlist.shuffle },
+                set: { viewModel.playlist.shuffle = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }))
             if let focused = viewModel.focusedEntry {
                 Button(viewModel.isInPlaylist(focused) ? "'\(focused.title)' 제거" : "'\(focused.title)' 추가") {
                     viewModel.togglePlaylist(focused)
@@ -133,16 +206,8 @@ struct NowPlayingBar: View {
         .frame(width: 280)
     }
 
-    /// '가져오기' = 디스크에서 임포트(기존 라우팅 재사용: 폴더/zip/동영상).
+    /// '가져오기' = 디스크에서 임포트(WallpaperGridView 와 공유하는 ImportPanel — 폴더/zip/동영상).
     private func openWallpaperPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        if url.pathExtension.lowercased() == "zip" { viewModel.importZip(url) }
-        else if VideoImport.isVideoFile(url) { viewModel.importVideoFile(url) }
-        else { viewModel.importParent(url) }
+        ImportPanel.run(into: viewModel)
     }
 }

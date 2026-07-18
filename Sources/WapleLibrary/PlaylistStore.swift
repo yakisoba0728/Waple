@@ -6,6 +6,8 @@ public final class PlaylistStore {
         var enabled = false
         var intervalMinutes = 30
         var ids: [String] = []
+        /// 무작위 순서(w5d-playback) — false(기본)는 기존 순차 순환과 동일(무회귀).
+        var shuffle = false
 
         init() {}
 
@@ -17,6 +19,7 @@ public final class PlaylistStore {
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
             intervalMinutes = try c.decodeIfPresent(Int.self, forKey: .intervalMinutes) ?? 30
             ids = try c.decodeIfPresent([String].self, forKey: .ids) ?? []
+            shuffle = try c.decodeIfPresent(Bool.self, forKey: .shuffle) ?? false
         }
     }
 
@@ -48,6 +51,12 @@ public final class PlaylistStore {
     public var ids: [String] {
         get { model.ids }
         set { model.ids = newValue }
+    }
+
+    /// 무작위 순서(w5d-playback) — true 면 PlaylistScheduling.shuffleNext 가 순환 대신 무작위 선곡.
+    public var shuffle: Bool {
+        get { model.shuffle }
+        set { model.shuffle = newValue }
     }
 
     /// 순환: current 다음 항목. current 가 목록에 없거나 nil → 첫 항목. 빈 목록 → nil.

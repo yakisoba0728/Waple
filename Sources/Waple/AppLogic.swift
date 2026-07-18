@@ -153,6 +153,22 @@ enum PlaylistScheduling {
         TimeInterval(max(1, minutes) * 60)
     }
 
+    /// 셔플(무작위 순서, w5d-playback) 다음 id. ids 가 2개 이상이면 직전(current)을 제외한 후보에서
+    /// 뽑아 연속 반복을 피한다(음악 셔플 관례 — SceneAudioPlayer.nextIndex(mode:"random") 과 달리
+    /// "직전 곡 회피"를 우선한다). 후보가 1개뿐이면 회피 불가능하므로 그대로 반환. 빈 목록 → nil.
+    /// random 은 주입(기본 Int.random) — 결정적 테스트 가능.
+    static func shuffleNext(current: String?, ids: [String],
+                            random: (Int) -> Int = { Int.random(in: 0..<$0) }) -> String? {
+        guard !ids.isEmpty else { return nil }
+        let candidates = ids.count > 1 ? ids.filter { $0 != current } : ids
+        guard !candidates.isEmpty else { return ids.first }   // 방어: current 가 목록과 불일치 등
+        return candidates[random(candidates.count)]
+    }
+
+    /// "다음 배경" 액션(트레이·하단 바 공용, w5d-tray)을 활성화할지 — 순환 가능한 후보가 2개 이상일
+    /// 때만. 하나뿐이면 순환해도 자기 자신으로 돌아와 무의미하다.
+    static func canAdvance(count: Int) -> Bool { count >= 2 }
+
     /// 타이머 콜백이 실제로 전진해야 하는가(F041) — 일시정지(가림·수동·슬립 사유 무관) 중엔 보류한다.
     /// "정지=화면 고정" 기대와 달리, 종전엔 재생목록 타이머만 PauseGate 밖에 있어 정지 중에도 배경이
     /// 계속 바뀌었다(새로 마운트된 렌더러 자체는 즉시 pause() 되어 결과 프레임은 정지 상태였지만,
@@ -382,6 +398,25 @@ enum SettingsPresentation {
     static func ffmpegStatus(available: Bool, path: String?) -> String {
         available ? "사용 가능 — \(path ?? "")"
                   : "미설치 — mkv/webm 동영상 변환에 필요합니다 (brew install ffmpeg)"
+    }
+}
+
+/// 상태바 아이콘 글리프·툴팁 결정(w5d-tray, 순수). 상주 앱은 메뉴바 아이콘으로 상태를 한눈에
+/// 알린다(미디어=재생/정지, VPN=연결) — Waple 은 종전엔 아이콘이 고정이라 정지·적용 실패가 메뉴를
+/// 열기 전엔 안 보였다.
+enum StatusIconState {
+    /// 우선순위: 오류 > 정지 > 정상(재생 중). 오류는 다음 적용 성공까지 지속 표시(호출부가 플래그를 든다).
+    static func symbolName(isPaused: Bool, hasError: Bool) -> String {
+        if hasError { return "exclamationmark.triangle.fill" }
+        return isPaused ? "pause.circle.fill" : "water.waves"
+    }
+
+    /// 툴팁: 적용된 배경 제목(없으면 앱 이름) + 상태 문구(정상 재생 중이면 덧붙이지 않음).
+    static func tooltip(appliedTitle: String?, isPaused: Bool, hasError: Bool) -> String {
+        var parts = [appliedTitle ?? "Waple"]
+        if hasError { parts.append("적용 실패") }
+        else if isPaused { parts.append("일시정지됨") }
+        return parts.joined(separator: " · ")
     }
 }
 

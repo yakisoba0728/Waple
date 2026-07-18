@@ -51,8 +51,10 @@ struct DiscoverView: View {
                 .padding(.horizontal, 20)
             case .loaded(let items):
                 if items.isEmpty {
-                    Text("항목이 없습니다").font(.caption).foregroundStyle(.secondary)
-                        .padding(.horizontal, 20)
+                    // 네이티브 빈 상태(w5d-polish) — WorkshopTabView:33 과 동일한 ContentUnavailableView 문법.
+                    ContentUnavailableView("항목이 없습니다", systemImage: "square.grid.2x2",
+                                           description: Text("나중에 다시 확인해보세요."))
+                        .frame(maxWidth: .infinity, minHeight: Metrics.tileThumbHeight)
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: Metrics.gridSpacing) {

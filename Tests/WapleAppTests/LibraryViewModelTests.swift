@@ -151,6 +151,79 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertEqual(byKey["enabled"]?.value, .bool(true))
     }
 
+    // MARK: - 속성 패널 자동 노출 (w5d-settings-ia)
+
+    func testSelectForPropertiesViewRevealsPanel() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset")])
+        let vm = makeVM(dir: dir)
+        vm.panelVisible = false   // 접힌 상태(사용자가 이전에 숨김)
+        vm.selectForPropertiesView(vm.entries[0])
+        XCTAssertEqual(vm.focusedId, "wp1", "포커스는 기존과 동일하게 설정")
+        XCTAssertTrue(vm.panelVisible, "접혀 있던 패널이 함께 열려야 라벨이 약속한 속성이 보인다")
+    }
+
+    func testPanelVisibleDefaultsToTrue() {
+        let vm = makeVM(dir: tempDir())
+        XCTAssertTrue(vm.panelVisible, "기존 동작(항상 노출) 무회귀 — 최초 상태는 보임")
+    }
+
+    // MARK: - Finder에서 보기 (w5d-library)
+
+    func testFolderURLResolvesRealImportedFolder() throws {
+        let dir = tempDir()
+        let store = LibraryStore(baseDirectory: dir)
+        let wallpaperFolder = tempDir()
+        let json: [String: Any] = ["type": "video", "file": "a.mp4", "title": "Real"]
+        try JSONSerialization.data(withJSONObject: json).write(to: wallpaperFolder.appendingPathComponent("project.json"))
+        let imported = try store.importFolder(wallpaperFolder)
+        let vm = LibraryViewModel(store: store, playlist: PlaylistStore(baseDirectory: dir),
+                                  monitors: MonitorAssignmentStore(baseDirectory: dir),
+                                  favorites: FavoritesStore(baseDirectory: dir),
+                                  folders: FolderStore(baseDirectory: dir))
+        let url = try XCTUnwrap(vm.folderURL(for: imported), "실제 임포트된 폴더는 해석돼야 한다")
+        XCTAssertEqual(url.standardizedFileURL.path, wallpaperFolder.standardizedFileURL.path)
+    }
+
+    func testFolderURLNilForUnresolvableBookmark() {
+        let vm = makeVM(dir: tempDir())
+        XCTAssertNil(vm.folderURL(for: entry(id: "ghost", title: "Ghost")), "빈 북마크는 해석 실패 → nil")
+    }
+
+    // MARK: - 드롭된 id → 지원 엔트리 해석 (w5d-displays 시트 내 드래그앤드롭)
+
+    func testSupportedEntryForId_resolvesSupportedEntry() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset")])   // typeRaw: "scene" — 지원됨
+        let vm = makeVM(dir: dir)
+        XCTAssertEqual(vm.supportedEntry(forId: "wp1")?.title, "Sunset")
+    }
+
+    func testSupportedEntryForId_nilForUnsupportedType() throws {
+        let dir = tempDir()
+        let unsupported = LibraryEntry(id: "app1", title: "App", typeRaw: "application",
+                                       fileName: nil, previewName: nil, bookmark: Data())
+        try seedLibrary(dir, entries: [unsupported])
+        let vm = makeVM(dir: dir)
+        XCTAssertNil(vm.supportedEntry(forId: "app1"), "지원 예정 타입은 드래그앤드롭 대상에서 제외")
+    }
+
+    func testSupportedEntryForId_nilForUnknownId() {
+        let vm = makeVM(dir: tempDir())
+        XCTAssertNil(vm.supportedEntry(forId: "ghost"))
+    }
+
+    // MARK: - 전역 선택 엔트리 (w5d-displays 미할당 모니터 미리보기 폴백)
+
+    func testGlobalEntryReflectsSelectedId() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset")])
+        let vm = makeVM(dir: dir)
+        XCTAssertNil(vm.globalEntry, "초기 selectedId 없음 → nil")
+        vm.selectedId = "wp1"
+        XCTAssertEqual(vm.globalEntry?.title, "Sunset")
+    }
+
     func testAssignedEntryLookup() throws {
         let dir = tempDir()
         let e = entry(id: "wp9", title: "Aurora")

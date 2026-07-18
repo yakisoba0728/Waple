@@ -330,6 +330,65 @@ final class AppLogicTests: XCTestCase {
             PlaylistScheduling.advance(from: nil, count: 0, next: { _ in "x" }, apply: { _ in true }))
     }
 
+    /// 트레이 "다음 배경"(w5d-tray) — 순환 가능한 후보가 2개 이상일 때만 활성화. 하단 바
+    /// NowPlayingBar 의 .disabled(ids.count < 2) 와 대칭이어야 두 진입점의 동작이 일치한다.
+    func testCanAdvance_requiresAtLeastTwoCandidates() {
+        XCTAssertFalse(PlaylistScheduling.canAdvance(count: 0))
+        XCTAssertFalse(PlaylistScheduling.canAdvance(count: 1), "혼자면 순환해도 자기 자신 — 무의미")
+        XCTAssertTrue(PlaylistScheduling.canAdvance(count: 2))
+        XCTAssertTrue(PlaylistScheduling.canAdvance(count: 5))
+    }
+
+    // MARK: - PlaylistScheduling.shuffleNext (w5d-playback)
+
+    func testShuffleNext_excludesCurrentWhenMultipleCandidates() {
+        // random 주입을 0 고정 — current("b") 제외 후보는 ["a","c"](원순서 보존), 인덱스 0 = "a".
+        XCTAssertEqual(
+            PlaylistScheduling.shuffleNext(current: "b", ids: ["a", "b", "c"], random: { _ in 0 }), "a")
+    }
+    func testShuffleNext_neverReturnsCurrentAcrossAllRandomDraws() {
+        // random 이 무엇을 뽑든(0/1) current="a" 는 후보에서 이미 제외돼 결과에 나올 수 없다.
+        for draw in 0..<2 {
+            let picked = PlaylistScheduling.shuffleNext(current: "a", ids: ["a", "b", "c"], random: { _ in draw })
+            XCTAssertNotEqual(picked, "a", "직전 곡 회피 — draw=\(draw)")
+        }
+    }
+    func testShuffleNext_singleCandidateReturnsItselfUnavoidably() {
+        // 후보가 1개뿐이면 회피 불가능 — 그대로 반환(무한루프 방지).
+        XCTAssertEqual(PlaylistScheduling.shuffleNext(current: "a", ids: ["a"], random: { _ in 0 }), "a")
+    }
+    func testShuffleNext_emptyListIsNil() {
+        XCTAssertNil(PlaylistScheduling.shuffleNext(current: nil, ids: [], random: { _ in 0 }))
+    }
+    func testShuffleNext_nilCurrentUsesFullList() {
+        // 첫 재생(current=nil) — 회피할 직전 곡이 없으니 전체 목록이 후보.
+        XCTAssertEqual(
+            PlaylistScheduling.shuffleNext(current: nil, ids: ["a", "b"], random: { _ in 1 }), "b")
+    }
+
+    // MARK: - StatusIconState (w5d-tray) — 상태바 아이콘 글리프·툴팁
+
+    func testSymbolNamePriorityErrorOverPause() {
+        XCTAssertEqual(StatusIconState.symbolName(isPaused: true, hasError: true), "exclamationmark.triangle.fill")
+        XCTAssertEqual(StatusIconState.symbolName(isPaused: false, hasError: true), "exclamationmark.triangle.fill",
+                       "오류는 정지 여부와 무관하게 최우선 표시")
+    }
+    func testSymbolNamePausedWithoutError() {
+        XCTAssertEqual(StatusIconState.symbolName(isPaused: true, hasError: false), "pause.circle.fill")
+    }
+    func testSymbolNameNormal() {
+        XCTAssertEqual(StatusIconState.symbolName(isPaused: false, hasError: false), "water.waves")
+    }
+    func testTooltipComposesAppliedTitleAndState() {
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: "Sunset", isPaused: false, hasError: false), "Sunset")
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: "Sunset", isPaused: true, hasError: false), "Sunset · 일시정지됨")
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: "Sunset", isPaused: false, hasError: true), "Sunset · 적용 실패")
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: nil, isPaused: false, hasError: false), "Waple",
+                       "적용된 배경이 없으면 앱 이름만")
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: "Sunset", isPaused: true, hasError: true), "Sunset · 적용 실패",
+                       "오류 문구가 정지 문구보다 우선(심볼과 동일 우선순위)")
+    }
+
     // MARK: - PropertyControl.sliderRange (뒤집힌/축퇴 경계에서도 ClosedRange 트랩 금지)
 
     func testSliderRange_invertedBounds_valid() {

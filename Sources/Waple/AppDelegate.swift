@@ -30,11 +30,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vm.onChooseBaseAssets = { [weak self] in self?.chooseBaseAssets() }
         vm.onSetStillWallpaper = { [weak self] in self?.setStillWallpaper() }
         vm.onToggleSaver = { [weak self] in self?.toggleScreenSaverCore() ?? false }
-        vm.videoTargetIds = { [weak self] in
-            guard let self else { return [] }
-            return VideoSettingsTarget.projectIds(currentProjectId: self.currentProjectId,
-                                                  activeVideoProjectIds: self.activeVideoProjectIds)
-        }
         vm.occlusionState = { [weak self] in
             guard let self else { return (false, 0) }
             return (self.pauseWhenOccluded, self.occlusionCoverageThreshold)
@@ -59,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var occlusionTimer: Timer?
     // 렌더 정지 사유(가림·수동·슬립)를 한 곳에서 합성 — 서로 덮어쓰지 않게. 합성 로직은 PauseGate(순수).
     private var pauseGate = PauseGate()
+    // 상태바 아이콘 글리프(w5d-tray): 최근 apply 성공/실패. 다음 적용 성공까지 지속(refreshStatusIcon 참조).
+    private var lastApplyFailed = false
 
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
     private var stillSyncWork: DispatchWorkItem?
@@ -76,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 설정 창 + 축소된 트레이(SP5′): 설정 창 강한 참조·일시정지 항목·상태바 메뉴 참조.
     private var settingsWindow: NSWindow?
     private weak var pauseMenuItem: NSMenuItem?
+    private weak var nextMenuItem: NSMenuItem?   // "다음 배경"(w5d-tray) — 후보 2개 미만이면 비활성
     private weak var statusMenu: NSMenu?
 
     private static let pauseWhenOccludedKey = "pauseWhenOccluded"
@@ -93,13 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // 상태바 아이콘 — 시스템 심볼 템플릿(라이트/다크 메뉴바 자동 적응). 심볼 부재 시 이모지 폴백.
-        if let symbol = NSImage(systemSymbolName: "water.waves", accessibilityDescription: "Waple") {
-            symbol.isTemplate = true
-            statusItem.button?.image = symbol
-        } else {
-            statusItem.button?.title = "🖼"
-        }
+        // 상태바 아이콘(w5d-tray) — 시스템 심볼 템플릿(라이트/다크 메뉴바 자동 적응) + 재생/정지/오류
+        // 글리프·툴팁. 초기값도 refreshStatusIcon() 을 거쳐 이후 갱신과 동일 경로를 탄다.
+        refreshStatusIcon()
 
         // 트레이 축소(SP5′): 설정은 전부 설정 창으로 — 창 없이 필요한 동작만 남긴다.
         let menu = NSMenu()
@@ -111,6 +105,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                action: #selector(togglePauseFromMenu), keyEquivalent: "p")
         menu.addItem(pause)
         pauseMenuItem = pause
+        // w5d-tray: 메뉴바 상주 앱의 핵심 가치(창을 열지 않고 즉시 조작) — 하단 바엔 이미 있던
+        // "다음 배경"을 트레이에도. WE 본가 트레이의 'Change wallpaper' 대응.
+        let next = NSMenuItem(title: "다음 배경",
+                              action: #selector(advanceFromMenu), keyEquivalent: "]")
+        menu.addItem(next)
+        nextMenuItem = next
         menu.addItem(NSMenuItem(title: "설정…",
                                 action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
@@ -142,6 +142,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         libraryVM.onOpenSettings = { [weak self] in self?.openSettings() }
         libraryVM.onAdvancePlaylist = { [weak self] in self?.advancePlaylist() }
         libraryVM.onTogglePause = { [weak self] in self?.toggleGlobalPause() ?? false }
+        // w5d-settings-ia: 음량/배속 조절이 설정 창에서 하단 바로 이관 — SettingsViewModel 이 쓰던 것과
+        // 동일 소스(VideoSettingsTarget.projectIds)를 libraryVM 에도 주입.
+        libraryVM.videoTargetIds = { [weak self] in
+            guard let self else { return [] }
+            return VideoSettingsTarget.projectIds(currentProjectId: self.currentProjectId,
+                                                  activeVideoProjectIds: self.activeVideoProjectIds)
+        }
+        libraryVM.onVideoSettingsChanged = { [weak self] in _ = self?.applyCurrentSelection() }
         schedulePlaylistTimer()
 
         desktopController.rebuild()
@@ -192,6 +200,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         onboardingModel.onChooseBaseAssets = { [weak self] in self?.chooseBaseAssets() }
         onboardingModel.onOpenSettings = { [weak self] in self?.openSettings() }
+        // w5d-onboarding: '배경 추가' 행 "가져오기…" — WallpaperGridView.importFolder 와 동일한
+        // NSOpenPanel+routeImport 배선(ImportPanel)을 재사용해 필수 단계를 시트에서 한 번에 끝낸다.
+        onboardingModel.onImport = { [weak self] in
+            guard let self else { return }
+            ImportPanel.run(into: self.libraryVM)
+        }
         maybePresentOnboarding()
     }
 
@@ -305,10 +319,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func apply(folderURL: URL) -> Bool {
         guard let project = projectForMount(folderURL: folderURL) else {
             notify("적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다")
+            markApplyResult(success: false)
             return false
         }
         guard RendererFactory.makeRenderer(for: project) != nil else {
             notify("지원하지 않는 타입입니다: \(project.type.storageString)")
+            markApplyResult(success: false)
             return false
         }
         return applyResolved(global: project, folderURL: folderURL)
@@ -389,9 +405,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return self.notify(message)
                 }
             )
+            markApplyResult(success: true)
             return true
         case .failure(let error):
             notify("적용 실패: \(error)")
+            markApplyResult(success: false)
             return false
         }
     }
@@ -461,10 +479,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func advancePlaylist() {
         // 후보를 순서대로 시도하고 실제 적용에 성공하는 첫 배경으로 전진(삭제/폴더 이동 등 실패 후보는 건너뜀).
+        // w5d-playback: shuffle 이 켜져 있으면 순차 순환 대신 직전 곡 회피 무작위 선곡으로 분기.
         _ = PlaylistScheduling.advance(
             from: store.selectedId,
             count: playlistStore.ids.count,
-            next: { self.playlistStore.next(after: $0) },
+            next: { current in
+                self.playlistStore.shuffle
+                    ? PlaylistScheduling.shuffleNext(current: current, ids: self.playlistStore.ids)
+                    : self.playlistStore.next(after: current)
+            },
             apply: { id in
                 guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
                 return self.libraryVM.apply(entry)
@@ -485,6 +508,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (안 하면 트레이로 토글한 상태가 하단 바 라벨/프리뷰 애니에 반영되지 않는다).
     @objc private func togglePauseFromMenu() {
         libraryVM.isPaused = toggleGlobalPause()
+    }
+
+    /// 트레이 "다음 배경"(w5d-tray) — 하단 바 forward 버튼과 동일하게 기존 advancePlaylist() 재사용.
+    @objc private func advanceFromMenu() {
+        advancePlaylist()
     }
 
     /// 폴링 타이머 재구성. 켜짐 → 1초 폴링(.common 모드). 꺼짐 → 정지하고, 가림 정지 중이었으면 해제.
@@ -528,6 +556,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .none:   return
         }
         libraryVM.isPaused = pauseGate.isPaused
+        refreshStatusIcon()
+    }
+
+    // MARK: - 상태바 아이콘 글리프·툴팁 (w5d-tray)
+
+    /// apply 성공/실패 초크포인트 — apply(folderURL:) 의 조기 실패 2곳과 applyResolved 의 성공/실패
+    /// 분기가 전부 여기를 거친다. 오류 플래그는 다음 적용 성공까지 지속(무음 실패를 능동적으로 드러냄).
+    private func markApplyResult(success: Bool) {
+        lastApplyFailed = !success
+        refreshStatusIcon()
+    }
+
+    /// 글리프(재생/정지/오류) + 툴팁(적용된 배경 제목 + 상태) 갱신 — 결정은 StatusIconState(순수).
+    private func refreshStatusIcon() {
+        let symbolName = StatusIconState.symbolName(isPaused: pauseGate.isPaused, hasError: lastApplyFailed)
+        if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Waple") {
+            symbol.isTemplate = true
+            statusItem.button?.image = symbol
+            statusItem.button?.title = ""
+        } else {
+            statusItem.button?.image = nil
+            statusItem.button?.title = "🖼"   // 심볼 부재 시 이모지 폴백(기존 동작 유지)
+        }
+        statusItem.button?.toolTip = StatusIconState.tooltip(
+            appliedTitle: libraryVM.appliedTitle, isPaused: pauseGate.isPaused, hasError: lastApplyFailed)
     }
 
     // MARK: - 시스템/디스플레이 슬립 자동 정지 (앱셸 스코프 A)
@@ -924,6 +977,8 @@ extension AppDelegate: NSMenuDelegate {
             // F040: 수동 사유만 보면 가림·슬립으로 실제 정지 중일 때도 "일시정지"로 오표시된다 —
             // 실제 렌더 상태(pauseGate.isPaused, 사유 무관)를 기준으로 라벨을 정한다.
             pauseMenuItem?.title = pauseGate.isPaused ? "재개" : "일시정지"
+            // w5d-tray: 하단 바 NowPlayingBar 의 .disabled(ids.count < 2) 와 대칭.
+            nextMenuItem?.isEnabled = PlaylistScheduling.canAdvance(count: playlistStore.ids.count)
             return
         }
         guard menu === recentMenu else { return }

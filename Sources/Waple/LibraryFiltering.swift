@@ -33,7 +33,14 @@ enum LibraryFiltering {
         var out = entries
         let q = search.trimmingCharacters(in: .whitespaces)
         if !q.isEmpty {
-            out = out.filter { $0.title.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+            // 제목뿐 아니라 태그·지역화 유형 라벨까지 매칭(합집합) — 사용자가 장르/테마 단어로 검색해도
+            // 그 메타데이터가 태그에만 있어 0건이 되던 문제(w5d-library). 제목 매칭 우선순위는 그대로
+            // 유지(먼저 검사) — 이후 sort 단계는 매칭 경로를 구분하지 않는다(기존과 동일 규약).
+            out = out.filter { entry in
+                matches(entry.title, q)
+                    || (entry.tags ?? []).contains { matches($0, q) }
+                    || matches(NowPlayingSubtitle.typeLabel(entry.typeRaw), q)
+            }
         }
         if !criteria.types.isEmpty {
             out = out.filter { criteria.types.contains(entryType($0)) }
@@ -55,6 +62,17 @@ enum LibraryFiltering {
             $0.title.compare($1.title, options: [.caseInsensitive, .numeric]) == .orderedAscending
         }
         }
+    }
+
+    /// 검색/필터가 활성인데 결과가 0건인가(그리드 dead-end 판정, w5d-library). 활성이 아니면(예: 빈
+    /// 폴더를 그냥 탐색 중) 대상이 아니다 — 그 경우는 원래 비어있을 수 있는 정상 상태다.
+    static func isSearchOrFilterDeadEnd(searchText: String, criteria: LibraryFilterCriteria, filteredCount: Int) -> Bool {
+        let active = !searchText.trimmingCharacters(in: .whitespaces).isEmpty || criteria.isActive
+        return active && filteredCount == 0
+    }
+
+    private static func matches(_ text: String, _ q: String) -> Bool {
+        text.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil
     }
 
     static func entryType(_ e: LibraryEntry) -> LibraryTypeFilter {

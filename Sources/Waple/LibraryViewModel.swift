@@ -9,6 +9,9 @@ final class LibraryViewModel: ObservableObject {
     @Published var selectedId: String?
     // MARK: - 브라우즈 상태(메인창 UI) — selectedId(=적용됨)와 구분되는 패널 포커스.
     @Published var focusedId: String?
+    /// 우측 정보 패널 노출 여부(툴바 토글이 소유하던 로컬 @State 를 승격 — selectForPropertiesView 가
+    /// focusedId 와 함께 갱신할 수 있어야 하기 때문. 기본 true(기존 동작 무회귀).
+    @Published var panelVisible = true
     @Published var searchText = ""
     @Published var criteria = LibraryFilterCriteria()
     @Published var activeFolder: String?
@@ -34,8 +37,11 @@ final class LibraryViewModel: ObservableObject {
         Array(Set(entries.compactMap(\.contentRating))).sorted()
     }
     var focusedEntry: LibraryEntry? { entries.first { $0.id == focusedId } }
+    /// 전역 선택 엔트리(selectedId) — 하단 바 제목 표시, 디스플레이 시트 미할당 모니터 미리보기
+    /// 폴백(w5d-displays) 등이 공유. 없으면 nil.
+    var globalEntry: LibraryEntry? { entries.first { $0.id == selectedId } }
     /// 하단 바 "현재:" 표시용 — 적용된(selectedId) 배경 제목.
-    var appliedTitle: String? { entries.first { $0.id == selectedId }?.title }
+    var appliedTitle: String? { globalEntry?.title }
 
     /// 적용 요청을 AppDelegate 로 전달한다(폴더 URL). 마운트 성공 여부를 반환한다.
     var onApply: ((URL) -> Bool)?
@@ -59,6 +65,13 @@ final class LibraryViewModel: ObservableObject {
     var onOpenInteraction: (() -> Void)?
     /// 툴바 설정 버튼 → AppDelegate.openSettings (SP5′).
     var onOpenSettings: (() -> Void)?
+    /// 빈 라이브러리 상태의 "창작마당 열기" → MainWindowView 가 탭 전환(뷰 로컬 상태라 AppDelegate 아님).
+    var onOpenWorkshop: (() -> Void)?
+    /// 현재 적용 중인 동영상 프로젝트 id들(w5d-settings-ia, 하단 바 음량/배속 대상) — AppDelegate 주입.
+    /// SettingsViewModel 이 쓰던 것과 동일 소스(VideoSettingsTarget.projectIds).
+    var videoTargetIds: () -> [String] = { [] }
+    /// 음량/배속 변경 반영(리마운트) — AppDelegate.applyCurrentSelection 주입.
+    var onVideoSettingsChanged: (() -> Void)?
     /// 하단 바: 재생목록 다음으로 — AppDelegate 주입.
     var onAdvancePlaylist: (() -> Void)?
     /// 하단 바: 전역 일시정지 토글(새 상태 반환) — AppDelegate 주입.
@@ -125,6 +138,14 @@ final class LibraryViewModel: ObservableObject {
         objectWillChange.send()
     }
 
+    /// 그리드 우클릭 "선택(속성 보기)" 진입점(w5d-settings-ia) — 포커스와 함께 정보 패널을 노출한다.
+    /// 패널이 접힌 상태에서 focusedId 만 바꾸면 라벨이 약속한 속성이 어디에도 나타나지 않는 데드엔드가
+    /// 된다 — 포커스 설정과 패널 노출을 하나로 묶어 항상 결과가 보이게 한다.
+    func selectForPropertiesView(_ entry: LibraryEntry) {
+        focusedId = entry.id
+        panelVisible = true
+    }
+
     /// 적용 중인(모니터 할당 없이 전역으로만 적용된) 배경이 라이브러리에서 제거되면, AppDelegate 의
     /// 전역 선택(currentFolderURL/currentProjectId) 도 함께 지우도록 알린다(F070) — 안 하면 스테일한
     /// currentFolderURL 이 남아, 이후 화면 변경·할당 변경 재적용(applyCurrentSelection)이 라이브러리
@@ -168,6 +189,15 @@ final class LibraryViewModel: ObservableObject {
         if imported.isEmpty {
             onError?("zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요.")
         }
+    }
+
+    /// 확장자 기반 임포트 라우팅(zip/동영상/폴더) — NSOpenPanel·드래그앤드롭 결과 URL 하나를 적절한
+    /// store 임포트로 보낸다. WallpaperGridView(툴바·드롭)·NowPlayingBar(하단 가져오기)·AppDelegate
+    /// (온보딩 "가져오기…", ImportPanel 경유)가 공유해 판정 로직이 여러 벌로 갈라지지 않게 한다.
+    func routeImport(_ url: URL) {
+        if url.pathExtension.lowercased() == "zip" { importZip(url) }
+        else if VideoImport.isVideoFile(url) { importVideoFile(url) }
+        else { importParent(url) }
     }
 
     /// 원시 mp4/mov 가져오기(작업 5) — 최소 project.json 배경으로 감싸 가져온다.
@@ -215,6 +245,11 @@ final class LibraryViewModel: ObservableObject {
         return true
     }
 
+    /// Finder에서 보기 등 파일시스템 접근용 폴더 URL(w5d-library). 해석 실패(북마크 stale·손상 등) → nil.
+    func folderURL(for entry: LibraryEntry) -> URL? {
+        store.resolveFolderURL(for: entry)
+    }
+
     func previewURL(for entry: LibraryEntry) -> URL? {
         guard let folder = store.resolveFolderURL(for: entry),
               let preview = WallpaperPathSecurity.containedFileURL(entry.previewName, root: folder) else { return nil }
@@ -223,6 +258,13 @@ final class LibraryViewModel: ObservableObject {
 
     func isSupported(_ entry: LibraryEntry) -> Bool {
         WallpaperType.from(entry.typeRaw).isSupportedInMVP
+    }
+
+    /// id(드래그앤드롭 등 문자열 페이로드로 전달된 경우) → 지원되는 실제 엔트리. 존재하지 않거나
+    /// 지원 예정 타입이면 nil(w5d-displays — 디스플레이 시트 레일 드래그 대상 검증에 사용).
+    func supportedEntry(forId id: String) -> LibraryEntry? {
+        guard let entry = entries.first(where: { $0.id == id }), isSupported(entry) else { return nil }
+        return entry
     }
 
     // MARK: - 유저 속성 편집
