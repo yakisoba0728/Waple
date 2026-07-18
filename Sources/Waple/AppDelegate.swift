@@ -59,6 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var occlusionTimer: Timer?
     // 렌더 정지 사유(가림·수동·슬립)를 한 곳에서 합성 — 서로 덮어쓰지 않게. 합성 로직은 PauseGate(순수).
     private var pauseGate = PauseGate()
+    // 상태바 아이콘 글리프(w5d-tray): 최근 apply 성공/실패. 다음 적용 성공까지 지속(refreshStatusIcon 참조).
+    private var lastApplyFailed = false
 
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
     private var stillSyncWork: DispatchWorkItem?
@@ -94,13 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // 상태바 아이콘 — 시스템 심볼 템플릿(라이트/다크 메뉴바 자동 적응). 심볼 부재 시 이모지 폴백.
-        if let symbol = NSImage(systemSymbolName: "water.waves", accessibilityDescription: "Waple") {
-            symbol.isTemplate = true
-            statusItem.button?.image = symbol
-        } else {
-            statusItem.button?.title = "🖼"
-        }
+        // 상태바 아이콘(w5d-tray) — 시스템 심볼 템플릿(라이트/다크 메뉴바 자동 적응) + 재생/정지/오류
+        // 글리프·툴팁. 초기값도 refreshStatusIcon() 을 거쳐 이후 갱신과 동일 경로를 탄다.
+        refreshStatusIcon()
 
         // 트레이 축소(SP5′): 설정은 전부 설정 창으로 — 창 없이 필요한 동작만 남긴다.
         let menu = NSMenu()
@@ -318,10 +316,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func apply(folderURL: URL) -> Bool {
         guard let project = projectForMount(folderURL: folderURL) else {
             notify("적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다")
+            markApplyResult(success: false)
             return false
         }
         guard RendererFactory.makeRenderer(for: project) != nil else {
             notify("지원하지 않는 타입입니다: \(project.type.storageString)")
+            markApplyResult(success: false)
             return false
         }
         return applyResolved(global: project, folderURL: folderURL)
@@ -402,9 +402,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return self.notify(message)
                 }
             )
+            markApplyResult(success: true)
             return true
         case .failure(let error):
             notify("적용 실패: \(error)")
+            markApplyResult(success: false)
             return false
         }
     }
@@ -546,6 +548,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .none:   return
         }
         libraryVM.isPaused = pauseGate.isPaused
+        refreshStatusIcon()
+    }
+
+    // MARK: - 상태바 아이콘 글리프·툴팁 (w5d-tray)
+
+    /// apply 성공/실패 초크포인트 — apply(folderURL:) 의 조기 실패 2곳과 applyResolved 의 성공/실패
+    /// 분기가 전부 여기를 거친다. 오류 플래그는 다음 적용 성공까지 지속(무음 실패를 능동적으로 드러냄).
+    private func markApplyResult(success: Bool) {
+        lastApplyFailed = !success
+        refreshStatusIcon()
+    }
+
+    /// 글리프(재생/정지/오류) + 툴팁(적용된 배경 제목 + 상태) 갱신 — 결정은 StatusIconState(순수).
+    private func refreshStatusIcon() {
+        let symbolName = StatusIconState.symbolName(isPaused: pauseGate.isPaused, hasError: lastApplyFailed)
+        if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Waple") {
+            symbol.isTemplate = true
+            statusItem.button?.image = symbol
+            statusItem.button?.title = ""
+        } else {
+            statusItem.button?.image = nil
+            statusItem.button?.title = "🖼"   // 심볼 부재 시 이모지 폴백(기존 동작 유지)
+        }
+        statusItem.button?.toolTip = StatusIconState.tooltip(
+            appliedTitle: libraryVM.appliedTitle, isPaused: pauseGate.isPaused, hasError: lastApplyFailed)
     }
 
     // MARK: - 시스템/디스플레이 슬립 자동 정지 (앱셸 스코프 A)

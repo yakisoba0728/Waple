@@ -389,6 +389,25 @@ enum SettingsPresentation {
     }
 }
 
+/// 상태바 아이콘 글리프·툴팁 결정(w5d-tray, 순수). 상주 앱은 메뉴바 아이콘으로 상태를 한눈에
+/// 알린다(미디어=재생/정지, VPN=연결) — Waple 은 종전엔 아이콘이 고정이라 정지·적용 실패가 메뉴를
+/// 열기 전엔 안 보였다.
+enum StatusIconState {
+    /// 우선순위: 오류 > 정지 > 정상(재생 중). 오류는 다음 적용 성공까지 지속 표시(호출부가 플래그를 든다).
+    static func symbolName(isPaused: Bool, hasError: Bool) -> String {
+        if hasError { return "exclamationmark.triangle.fill" }
+        return isPaused ? "pause.circle.fill" : "water.waves"
+    }
+
+    /// 툴팁: 적용된 배경 제목(없으면 앱 이름) + 상태 문구(정상 재생 중이면 덧붙이지 않음).
+    static func tooltip(appliedTitle: String?, isPaused: Bool, hasError: Bool) -> String {
+        var parts = [appliedTitle ?? "Waple"]
+        if hasError { parts.append("적용 실패") }
+        else if isPaused { parts.append("일시정지됨") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// 최초 실행 온보딩 게이트(앱셸 스코프 B, 순수). 준비 항목 상태·시트 표시는 UI(부수효과)가 담당하고,
 /// 여기서는 "완료 플래그가 없으면 1회 표시" 결정만 한다(플래그 영속은 호출자 — UserDefaults).
 enum Onboarding {

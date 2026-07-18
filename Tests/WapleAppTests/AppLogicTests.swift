@@ -339,6 +339,29 @@ final class AppLogicTests: XCTestCase {
         XCTAssertTrue(PlaylistScheduling.canAdvance(count: 5))
     }
 
+    // MARK: - StatusIconState (w5d-tray) — 상태바 아이콘 글리프·툴팁
+
+    func testSymbolNamePriorityErrorOverPause() {
+        XCTAssertEqual(StatusIconState.symbolName(isPaused: true, hasError: true), "exclamationmark.triangle.fill")
+        XCTAssertEqual(StatusIconState.symbolName(isPaused: false, hasError: true), "exclamationmark.triangle.fill",
+                       "오류는 정지 여부와 무관하게 최우선 표시")
+    }
+    func testSymbolNamePausedWithoutError() {
+        XCTAssertEqual(StatusIconState.symbolName(isPaused: true, hasError: false), "pause.circle.fill")
+    }
+    func testSymbolNameNormal() {
+        XCTAssertEqual(StatusIconState.symbolName(isPaused: false, hasError: false), "water.waves")
+    }
+    func testTooltipComposesAppliedTitleAndState() {
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: "Sunset", isPaused: false, hasError: false), "Sunset")
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: "Sunset", isPaused: true, hasError: false), "Sunset · 일시정지됨")
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: "Sunset", isPaused: false, hasError: true), "Sunset · 적용 실패")
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: nil, isPaused: false, hasError: false), "Waple",
+                       "적용된 배경이 없으면 앱 이름만")
+        XCTAssertEqual(StatusIconState.tooltip(appliedTitle: "Sunset", isPaused: true, hasError: true), "Sunset · 적용 실패",
+                       "오류 문구가 정지 문구보다 우선(심볼과 동일 우선순위)")
+    }
+
     // MARK: - PropertyControl.sliderRange (뒤집힌/축퇴 경계에서도 ClosedRange 트랩 금지)
 
     func testSliderRange_invertedBounds_valid() {
