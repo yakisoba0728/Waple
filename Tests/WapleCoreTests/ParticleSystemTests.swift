@@ -333,6 +333,18 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(pf0, 3.5); XCTAssertEqual(pf1, 3.5)
     }
 
+    // F189/F190: scalemax 기본이 scalemin 승계(구현)가 아니라 1(비퇴화)이어야 — scale 전체 생략(데모
+    // 시나리오)과 scalemin 단독 지정(코퍼스 다수: 0.2×9·0.3×4·0.1×4 등) 양쪽 모두 진폭이 죽지 않아야 한다.
+    func testOscillateAlphaScaleMaxDefaultsToOneNotScaleMin() {
+        let allOmitted = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","frequencymin":2}]}"#), material: nil)
+        guard case let .oscillateAlpha(_, _, smin0, smax0) = allOmitted.operators[0] else { return XCTFail("no oscillatealpha") }
+        XCTAssertEqual(smin0, 0); XCTAssertEqual(smax0, 1, "scale 생략 시 scalemax 는 scalemin(0) 이 아니라 1")
+
+        let scaleMinOnly = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","scalemin":0.2}]}"#), material: nil)
+        guard case let .oscillateAlpha(_, _, smin1, smax1) = scaleMinOnly.operators[0] else { return XCTFail("no oscillatealpha") }
+        XCTAssertEqual(smin1, 0.2); XCTAssertEqual(smax1, 1, "scalemin 단독 지정 시 scalemax 승계(상수화) 대신 1")
+    }
+
     func testControlPointAttractConsumesControlPointId() {
         // 감사 V04: controlpoint 키(CP id)가 controlpoint 배열의 offset 을 target 으로 소비.
         let d = ParticleSystemDef.parse(json("""

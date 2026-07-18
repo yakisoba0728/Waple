@@ -407,4 +407,42 @@ final class ParticleSimulatorTests: XCTestCase {
             XCTAssertEqual(p.color.z, 0.0, accuracy: 0.001)
         }
     }
+
+    // MARK: - oscillatealpha (F184/F189/F190)
+
+    /// 자매 oscillateSize 와 동형 직접보간 — peak=scaleMax, trough=scaleMin(구 감산식
+    /// "1-scale*osc" 대비: peak 는 항상 1 로 고정되고 trough 만 scale 로 눌리는 비대칭 수식이었다).
+    func testOscillateAlphaLerpsBetweenScaleMinAndMax() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 2, frequencyMax: 2, scaleMin: 0.2, scaleMax: 0.9)],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 3)
+        var minA: Float = 1, maxA: Float = 0
+        for _ in 0..<120 {   // 2Hz·1.2s ≥ 2 주기(랜덤 위상과 무관하게 극값을 커버)
+            let ps = sim.step(0.01)
+            if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
+        }
+        XCTAssertEqual(minA, 0.2, accuracy: 0.02, "trough 는 scaleMin")
+        XCTAssertEqual(maxA, 0.9, accuracy: 0.02, "peak 는 scaleMax")
+    }
+
+    /// F189 종단검증: 파서 기본값(scalemin 0, scalemax 1)이 시뮬까지 살아남아 0..1 전 구간을
+    /// 진동해야 한다(WE 데모: frequency 만 지정해도 가시 트윙클).
+    func testOscillateAlphaScaleOmittedDefaultsStillOscillate() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 2, frequencyMax: 2, scaleMin: 0, scaleMax: 1)],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 4)
+        var minA: Float = 1, maxA: Float = 0
+        for _ in 0..<120 {
+            let ps = sim.step(0.01)
+            if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
+        }
+        XCTAssertLessThan(minA, 0.05, "0 근접까지 어두워져야")
+        XCTAssertGreaterThan(maxA, 0.95, "1 근접까지 밝아져야")
+    }
 }

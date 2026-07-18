@@ -432,10 +432,15 @@ public struct ParticleSystemDef: Equatable {
                 ops.append(.angularMovement(force: pvec3(o["force"]) ?? Vec3(x: 0, y: 0, z: 0)))
             case "oscillatealpha":
                 // fmax 부재 시 fmin 승계(scaleMax 와 동일 패턴) — 역범위 rng.range(fmin, 0) 방지(감사 V03).
+                // scalemax 기본은 scalemin 승계가 아니라 1 고정(비퇴화, F189/F190) — 자매 oscillatesize 는
+                // scale 생략 시 상수(무진동)가 정답이지만, alpha 는 scale 생략 인스턴스(데모·
+                // magic_color_sparkle 등)도 트윙클을 내야 한다(실측: smax 가 smin 을 승계하면 scale
+                // 전체 생략은 진폭 0, scalemin 단독 지정은 진폭이 상수로 죽는다 — WE 데모는 frequency 만
+                // 지정하고도 가시 진동을 낸다).
                 let smin = pfloat(o["scalemin"]) ?? 0
                 let fmin = pfloat(o["frequencymin"]) ?? 0
                 ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? fmin,
-                                           scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin))
+                                           scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? 1))
             case "oscillateposition":
                 let smin = pfloat(o["scalemin"]) ?? 0
                 let fmin = pfloat(o["frequencymin"]) ?? 0

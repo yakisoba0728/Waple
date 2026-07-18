@@ -24,7 +24,7 @@ public struct Particle {
     // 스폰 시 결정되는 진동 파라미터(절대식 평가).
     var oscPosFreq: Float = 0, oscPosScale: Float = 0, oscPosPhase: Float = 0
     var oscPosMask = SIMD3<Float>(0, 0, 0)
-    var oscAlphaFreq: Float = 0, oscAlphaScale: Float = 0, oscAlphaPhase: Float = 0
+    var oscAlphaFreq: Float = 0, oscAlphaPhase: Float = 0
     var oscSizeFreq: Float = 0, oscSizePhase: Float = 0
     // 난류(turbulence): 스폰 시 결정되는 파티클별 속도/위상(노이즈 흐름장 이류에 사용).
     var turbSpeed: Float = 0, turbPhase: Float = 0
@@ -386,7 +386,6 @@ public struct ParticleSimulator {
         }
         if let o = oscAlphaOp {
             p.oscAlphaFreq = rng.range(o.fmin, o.fmax)
-            p.oscAlphaScale = rng.range(o.smin, o.smax)
             p.oscAlphaPhase = rng.nextFloat() * 2 * .pi
         }
         if let o = oscSizeOp {
@@ -526,9 +525,12 @@ public struct ParticleSimulator {
         for op in alphaChanges {
             a *= lerp(op.sv, op.ev, changeProgress(n, op.st, op.et))
         }
-        if p.oscAlphaScale > 0 {
-            let osc = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * p.age + p.oscAlphaPhase))
-            a *= max(0, 1 - p.oscAlphaScale * osc)
+        if let oa = oscAlphaOp {
+            // 자매 oscillateSize(위 sizeOp 분기)와 동형 직접보간 — scaleMin/Max 는 파티클별 랜덤화 없이
+            // def 고정값을 그대로 보간 양끝으로 쓴다(F184: 종전 "1 - scale*osc" 감산식은 peak 가 항상 1
+            // 로 고정되고 trough 만 scale 로 눌리는 별개 수식이었다).
+            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * p.age + p.oscAlphaPhase))
+            a *= lerp(oa.smin, oa.smax, osc01)
         }
         d.alpha = max(0, min(1, a))
         // pos 진동 오프셋(절대식, base 에 비누적).
