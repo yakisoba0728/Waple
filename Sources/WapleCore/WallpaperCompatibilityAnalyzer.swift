@@ -402,17 +402,31 @@ public enum WallpaperCompatibilityAnalyzer {
             ))
             return
         }
-        guard let previewURL = WallpaperPathSecurity.containedFileURL(preview, root: folderURL),
-              FileManager.default.fileExists(atPath: previewURL.path) else {
+        if let previewURL = WallpaperPathSecurity.containedFileURL(preview, root: folderURL),
+           FileManager.default.fileExists(atPath: previewURL.path) {
+            return
+        }
+        // F233/F234: existingMainFile 과 동일한 Unicode(NFC/NFD) 정규화 동치 폴백 — 바이트 단위로는
+        // 안 맞지만 실존하는 프리뷰 파일(Steam Workshop/한글 파일명 환경에서 흔함)을 거짓
+        // missingPreviewFile 로 잘못 잡지 않는다. main file 은 이미 이 폴백을 쓰는데 preview 만
+        // 엄격했던 비대칭을 해소.
+        if let equivalent = unicodeEquivalentURL(for: preview, root: folderURL) {
             issues.append(WallpaperCompatibilityIssue(
                 severity: .warning,
-                code: .missingPreviewFile,
-                message: "Preview file is missing from the project folder.",
+                code: .unicodeNormalizedFileMatch,
+                message: "Declared preview does not exist byte-for-byte, but a Unicode-normalized filename exists.",
                 projectID: project.id,
-                relativePath: preview
+                relativePath: relativePath(of: equivalent, root: folderURL)
             ))
             return
         }
+        issues.append(WallpaperCompatibilityIssue(
+            severity: .warning,
+            code: .missingPreviewFile,
+            message: "Preview file is missing from the project folder.",
+            projectID: project.id,
+            relativePath: preview
+        ))
     }
 
     private static func analyzeProperties(raw: [String: Any],
@@ -537,6 +551,17 @@ public enum WallpaperCompatibilityAnalyzer {
 
         guard let sceneData = package.data(for: "scene.json") ?? package.data(for: "gifscene.json"),
               let scene = try? JSONSerialization.jsonObject(with: sceneData) as? [String: Any] else {
+            // F236: 패키지 자체는 유효하게 파싱됐지만 scene.json/gifscene.json 이 없거나(또는 JSON으로
+            // 해석 불가) 실려 있지 않은 경우 — 위 catch(패키지 파싱 자체 실패)와 대칭으로 이슈를 남긴다.
+            // SceneDocument 를 구성할 방법이 없어 실제로는 렌더 불가할 개연성이 높은데, 종전엔 이슈
+            // 없이 조용히 통과해 "이슈 없음=렌더 가능" 이라는 이 스캐너의 보장이 이 경로에서만 깨졌다.
+            issues.append(WallpaperCompatibilityIssue(
+                severity: .error,
+                code: .missingScenePackage,
+                message: "Scene package parsed but contains no scene.json/gifscene.json (or it is not valid JSON) — Waple cannot build a SceneDocument from it.",
+                projectID: project.id,
+                relativePath: packageURL.lastPathComponent
+            ))
             return Array(features)
         }
         let sceneText = String(data: sceneData, encoding: .utf8) ?? ""
@@ -703,7 +728,8 @@ public enum WallpaperCompatibilityAnalyzer {
 
     private static func unicodeEquivalentURL(for relativePath: String, root: URL) -> URL? {
         guard let normalized = WallpaperPathSecurity.normalizedRelativePath(relativePath) else { return nil }
-        var current = root
+        let rootURL = root.standardizedFileURL
+        var current = rootURL
         for component in normalized.split(separator: "/").map(String.init) {
             guard let entries = try? FileManager.default.contentsOfDirectory(at: current, includingPropertiesForKeys: nil) else {
                 return nil
@@ -717,8 +743,16 @@ public enum WallpaperCompatibilityAnalyzer {
             }) else {
                 return nil
             }
-            current = match
+            current = match.standardizedFileURL
+            // F237: containedFileURL 과 동일한 논리 재검증 — 컴포넌트를 하나씩 실제 디렉터리 목록에서
+            // 골라 내려가므로 그 자체로는 탈출하지 않지만, 중간 디렉터리가 심볼릭 링크로 바뀌어 있으면
+            // 다음 nameOfContentsOfDirectory 가 루트 밖을 나열할 수 있다 — 매 스텝 즉시 방어.
+            guard WallpaperPathSecurity.contains(current, in: rootURL) else { return nil }
         }
+        // 최종 결과도 containedFileURL 과 동일하게 realpath 기준 재검증(심링크 경유 탈출 차단).
+        let realRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
+        let realCurrent = current.resolvingSymlinksInPath().standardizedFileURL
+        guard WallpaperPathSecurity.contains(realCurrent, in: realRoot) else { return nil }
         return current
     }
 
