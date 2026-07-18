@@ -24,7 +24,7 @@ public struct Particle {
     // 스폰 시 결정되는 진동 파라미터(절대식 평가).
     var oscPosFreq: Float = 0, oscPosScale: Float = 0, oscPosPhase: Float = 0
     var oscPosMask = SIMD3<Float>(0, 0, 0)
-    var oscAlphaFreq: Float = 0, oscAlphaScale: Float = 0, oscAlphaPhase: Float = 0
+    var oscAlphaFreq: Float = 0, oscAlphaPhase: Float = 0
     var oscSizeFreq: Float = 0, oscSizePhase: Float = 0
     // 난류(turbulence): 스폰 시 결정되는 파티클별 속도/위상(노이즈 흐름장 이류에 사용).
     var turbSpeed: Float = 0, turbPhase: Float = 0
@@ -46,12 +46,12 @@ public struct ParticleSimulator {
 
     // 파생 오퍼레이터(스폰 시/표시 시 참조) 캐시.
     private let movements: [(gravity: SIMD3<Float>, drag: Float)]
-    private let angulars: [SIMD3<Float>]
+    private let angulars: [(force: SIMD3<Float>, drag: Float)]
     private let sizeChanges: [(st: Float, et: Float, sv: Float, ev: Float)]
     private let colorChanges: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)]
     private let alphaFade: (fin: Float, fout: Float)?
     private let oscPosOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float, mask: SIMD3<Float>)?
-    private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float)?
+    private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float)?
     private let oscSizeOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float)?
     private let alphaChanges: [(st: Float, et: Float, sv: Float, ev: Float)]
     private enum CachedRemap {
@@ -96,12 +96,12 @@ public struct ParticleSimulator {
         self.acc = Array(repeating: 0, count: def.emitters.count)
 
         var mv: [(SIMD3<Float>, Float)] = []
-        var ang: [SIMD3<Float>] = []
+        var ang: [(SIMD3<Float>, Float)] = []
         var sc: [(st: Float, et: Float, sv: Float, ev: Float)] = []
         var cc: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)] = []
         var af: (Float, Float)? = nil
         var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
-        var oa: (Float, Float, Float, Float)? = nil
+        var oa: (Float, Float, Float, Float, Float, Float)? = nil
         var attr: [(Float, Float, SIMD3<Float>)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>)] = []
         var turb: (Float, Float, Float, Float, SIMD3<Float>, Float, Float)? = nil
@@ -111,7 +111,7 @@ public struct ParticleSimulator {
         for op in def.operators {
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
-            case let .angularMovement(f): ang.append(s3(f))
+            case let .angularMovement(f, drag): ang.append((s3(f), drag))
             case let .sizeChange(st, sv, ev, et):
                 sc.append((st: st, et: et, sv: sv, ev: ev))
             case let .colorChange(st, sv, ev, et):
@@ -119,8 +119,8 @@ public struct ParticleSimulator {
             case let .alphaFade(fin, fout): if af == nil { af = (fin, fout) }
             case let .oscillatePosition(fmin, fmax, smin, smax, pmin, pmax, mask):
                 if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
-            case let .oscillateAlpha(fmin, fmax, smin, smax):
-                if oa == nil { oa = (fmin, fmax, smin, smax) }
+            case let .oscillateAlpha(fmin, fmax, smin, smax, pmin, pmax):
+                if oa == nil { oa = (fmin, fmax, smin, smax, pmin, pmax) }
             case let .controlPointAttract(scale, threshold, target):
                 attr.append((scale, threshold, s3(target)))
             case let .vortex(axis, dIn, dOut, sIn, sOut, offset):
@@ -139,12 +139,12 @@ public struct ParticleSimulator {
             }
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
-        angulars = ang
+        angulars = ang.map { (force: $0.0, drag: $0.1) }
         sizeChanges = sc
         colorChanges = cc
         alphaFade = af.map { (fin: $0.0, fout: $0.1) }
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
-        oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3) }
+        oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2) }
         vortices = vort.map { (axis: $0.0, dIn: $0.1, dOut: $0.2, sIn: $0.3, sOut: $0.4, offset: $0.5) }
         turbulence = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
@@ -282,13 +282,18 @@ public struct ParticleSimulator {
                                            phase: particles[k].turbPhase, time: time)
                 particles[k].pos += v * dt
             }
-            for f in angulars {
-                particles[k].angularVel += f * dt
+            for a in angulars {
+                // 선형 movement(위 273-276행)와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
+                // 등가속 무감쇠 누적(무회귀).
+                particles[k].angularVel += a.force * dt
+                if a.drag > 0 { particles[k].angularVel *= max(0, 1 - a.drag * dt) }
                 particles[k].rotation += particles[k].angularVel * dt
             }
             // 트레일 위치 히스토리(dt>0 만 — step(0) 스냅샷 중복 방지). 링버퍼로 trailSamples 유지.
+            // display() 반환 스냅샷(d.pos)과 동형으로 oscillateposition 오프셋을 반영(F177) — base pos
+            // 만 기록하면 spriteTrail/rope 리본이 sprite 쿼드(d.pos 사용)와 달리 진동을 놓친다.
             if trailSamples > 0, dt > 0 {
-                particles[k].history.append(particles[k].pos)
+                particles[k].history.append(particles[k].pos + oscPositionOffset(particles[k]))
                 if particles[k].history.count > trailSamples {
                     particles[k].history.removeFirst(particles[k].history.count - trailSamples)
                 }
@@ -386,8 +391,9 @@ public struct ParticleSimulator {
         }
         if let o = oscAlphaOp {
             p.oscAlphaFreq = rng.range(o.fmin, o.fmax)
-            p.oscAlphaScale = rng.range(o.smin, o.smax)
-            p.oscAlphaPhase = rng.nextFloat() * 2 * .pi
+            // oscPos/oscSize 와 동형 range 샘플(F184) — phasemin/max 부재(기본 0) 시 전 파티클 동위상
+            // (fireworks 근동기 의도). 종전엔 항상 rng.nextFloat()*2π 완전 랜덤이라 desync 를 강제했다.
+            p.oscAlphaPhase = rng.range(o.pmin, o.pmax) * 2 * .pi
         }
         if let o = oscSizeOp {
             p.oscSizeFreq = rng.range(o.fmin, o.fmax)
@@ -398,7 +404,9 @@ public struct ParticleSimulator {
             p.turbPhase = rng.range(t.pmin, t.pmax)
         }
         if !remaps.isEmpty { p.remapPhase = rng.range(0, 100) }
-        if trailSamples > 0 { p.history = [p.pos] }  // 스폰 위치를 트레일 시작점으로.
+        // 스폰 위치(+ 위상 오프셋, F177)를 트레일 시작점으로 — oscPos 위상이 0 이 아니면 age=0 에서도
+        // 오프셋이 존재해(sin(phase)≠0) base pos 로 시드하면 트레일 시작점이 어긋난다.
+        if trailSamples > 0 { p.history = [p.pos + oscPositionOffset(p)] }
         return p
     }
 
@@ -526,19 +534,26 @@ public struct ParticleSimulator {
         for op in alphaChanges {
             a *= lerp(op.sv, op.ev, changeProgress(n, op.st, op.et))
         }
-        if p.oscAlphaScale > 0 {
-            let osc = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * p.age + p.oscAlphaPhase))
-            a *= max(0, 1 - p.oscAlphaScale * osc)
+        if let oa = oscAlphaOp {
+            // 자매 oscillateSize(위 sizeOp 분기)와 동형 직접보간 — scaleMin/Max 는 파티클별 랜덤화 없이
+            // def 고정값을 그대로 보간 양끝으로 쓴다(F184: 종전 "1 - scale*osc" 감산식은 peak 가 항상 1
+            // 로 고정되고 trough 만 scale 로 눌리는 별개 수식이었다).
+            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * p.age + p.oscAlphaPhase))
+            a *= lerp(oa.smin, oa.smax, osc01)
         }
         d.alpha = max(0, min(1, a))
-        // pos 진동 오프셋(절대식, base 에 비누적).
-        if p.oscPosScale > 0 {
-            let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * p.age + p.oscPosPhase)
-            d.pos = p.pos + p.oscPosMask * off
-        } else {
-            d.pos = p.pos
-        }
+        // pos 진동 오프셋(절대식, base 에 비누적) — 트레일 히스토리 기록(_step/spawn)과 동일 공식 공유.
+        d.pos = p.pos + oscPositionOffset(p)
         return d
+    }
+
+    /// 진동 위치 오프셋(절대식, base pos 불변) — display() 스냅샷과 트레일 히스토리 기록(_step 291행·
+    /// spawn 404행)이 동일 공식을 공유한다(F177: 히스토리가 base pos 만 기록하면 spriteTrail/rope
+    /// 리본이 oscillateposition 진동을 반영하지 못해 sprite 쿼드[d.pos 사용]와 비대칭이 생긴다).
+    private func oscPositionOffset(_ p: Particle) -> SIMD3<Float> {
+        guard p.oscPosScale > 0 else { return SIMD3(0, 0, 0) }
+        let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * p.age + p.oscPosPhase)
+        return p.oscPosMask * off
     }
 
     // MARK: - remapvalue 노이즈

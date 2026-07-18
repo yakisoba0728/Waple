@@ -252,6 +252,50 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(a, b)
     }
 
+    // F177: spriteTrail/rope/ropeTrail 리본이 oscillateposition 진동을 반영해야 — 종전엔 history 가
+    // 진동 전 base pos 만 기록해(display() 의 oscPos 오프셋은 반환 스냅샷 d.pos 에만 더해짐) 리본만
+    // 진동이 소실됐다(sprite 의 appendQuad 는 d.pos 를 써서 정상 반영, trail 의 appendRibbon 은 history
+    // 를 써서 비대칭이었다).
+
+    func testTrailHistoryReflectsOscillatePositionOffset() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100),
+                           .velocityRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 0, y: 0, z: 0))],
+            operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
+                        .oscillatePosition(frequencyMin: 1, frequencyMax: 1, scaleMin: 50, scaleMax: 50,
+                                           phaseMin: 0, phaseMax: 0, mask: Vec3(x: 0, y: 1, z: 0))],
+            renderer: .rope(subdivision: 0), maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<30 { last = sim.step(1.0 / 30.0) }
+        let p = last[0]
+        // 정지 파티클(속도 0)이라도 오실레이션이 y 를 흔들어야 — base pos 만 기록했다면 전 샘플 y=0.
+        let ys = p.history.map { $0.y }
+        XCTAssertGreaterThan(ys.max()! - ys.min()!, 10, "히스토리가 진동 y 오프셋을 반영해야(F177)")
+        // 마지막 히스토리 샘플은 같은 스텝의 반환 스냅샷 d.pos(진동 반영)와 일치해야.
+        XCTAssertEqual(p.history.last!.y, p.pos.y, accuracy: 1e-3)
+    }
+
+    func testTrailHistorySpawnSeedIncludesOscillatePositionPhaseOffset() {
+        // freq=0 → sin(phase) 만 남아 age 에 무관하게 상수 — 스폰 시드(age=0)와 스텝 기록 양쪽이
+        // 동일하게 위상 오프셋을 반영하는지 age 타이밍 없이 격리 검증.
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.oscillatePosition(frequencyMin: 0, frequencyMax: 0, scaleMin: 20, scaleMax: 20,
+                                           phaseMin: 0.25, phaseMax: 0.25, mask: Vec3(x: 0, y: 1, z: 0))],
+            renderer: .rope(subdivision: 0), maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        let ps = sim.step(1.0 / 30.0)
+        let p = ps[0]
+        XCTAssertEqual(p.history.count, 2, "스폰 시드 + 1스텝 기록")
+        for sample in p.history {
+            // scale 20 × sin(0.25·2π)=sin(π/2)=1 → offset 20.
+            XCTAssertEqual(sample.y, 20, accuracy: 0.5, "스폰 시드/스텝 기록 모두 위상 오프셋 반영(F177)")
+        }
+    }
+
     func testControlPointAttractPullsTowardTarget() {
         // 대상=원점, 파티클을 +x 로 스폰(velocityrandom 로 이동해 원점에서 멀어짐) 대신
         // 원점에서 velocity 0, scale>0 인력 → 원점에 붙어 있으면 힘 0. 오프셋 스폰이 필요하므로
@@ -297,6 +341,36 @@ final class ParticleSimulatorTests: XCTestCase {
         var sim = ParticleSimulator(def: def, seed: 1)
         let a = sim.step(0.05)
         XCTAssertGreaterThan(a[0].vel.y, 0)  // cross(z, +x) = +y → 접선 속도 +y
+    }
+
+    // MARK: - angularmovement drag (F188, movement 의 선형 drag 와 대칭)
+
+    func testAngularMovementNoDragAccumulatesUnbounded() {
+        // drag=0(기본) 은 종전 동작 그대로 등가속 누적(무회귀).
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.angularMovement(force: Vec3(x: 0, y: 0, z: 10))],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        let a = sim.step(1.0)[0]
+        let b = sim.step(1.0)[0]
+        XCTAssertEqual(a.angularVel.z, 10, accuracy: 1e-4)
+        XCTAssertEqual(b.angularVel.z, 20, accuracy: 1e-4, "무감쇠 등가속 누적(무회귀)")
+    }
+
+    func testAngularMovementDragDampensAngularVelocity() {
+        // 각속도가 drag 로 감쇠돼 force/drag 정상상태로 수렴해야(무감쇠 단조누적과 대비).
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.angularMovement(force: Vec3(x: 0, y: 0, z: 10), drag: 2)],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<200 { last = sim.step(0.05) }
+        XCTAssertLessThan(last[0].angularVel.z, 10, "감쇠로 유계(무감쇠라면 단조 누적해 200스텝 후 10 을 크게 상회)")
+        XCTAssertGreaterThan(last[0].angularVel.z, 0)
     }
 
     // MARK: - 난류(turbulence)
@@ -406,5 +480,74 @@ final class ParticleSimulatorTests: XCTestCase {
             XCTAssertEqual(p.color.x + p.color.y, 1.0, accuracy: 0.001)   // min→max 직선 위
             XCTAssertEqual(p.color.z, 0.0, accuracy: 0.001)
         }
+    }
+
+    // MARK: - oscillatealpha (F184/F189/F190)
+
+    /// 자매 oscillateSize 와 동형 직접보간 — peak=scaleMax, trough=scaleMin(구 감산식
+    /// "1-scale*osc" 대비: peak 는 항상 1 로 고정되고 trough 만 scale 로 눌리는 비대칭 수식이었다).
+    func testOscillateAlphaLerpsBetweenScaleMinAndMax() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 2, frequencyMax: 2, scaleMin: 0.2, scaleMax: 0.9)],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 3)
+        var minA: Float = 1, maxA: Float = 0
+        for _ in 0..<120 {   // 2Hz·1.2s ≥ 2 주기(랜덤 위상과 무관하게 극값을 커버)
+            let ps = sim.step(0.01)
+            if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
+        }
+        XCTAssertEqual(minA, 0.2, accuracy: 0.02, "trough 는 scaleMin")
+        XCTAssertEqual(maxA, 0.9, accuracy: 0.02, "peak 는 scaleMax")
+    }
+
+    /// F189 종단검증: 파서 기본값(scalemin 0, scalemax 1)이 시뮬까지 살아남아 0..1 전 구간을
+    /// 진동해야 한다(WE 데모: frequency 만 지정해도 가시 트윙클).
+    func testOscillateAlphaScaleOmittedDefaultsStillOscillate() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 2, frequencyMax: 2, scaleMin: 0, scaleMax: 1)],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 4)
+        var minA: Float = 1, maxA: Float = 0
+        for _ in 0..<120 {
+            let ps = sim.step(0.01)
+            if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
+        }
+        XCTAssertLessThan(minA, 0.05, "0 근접까지 어두워져야")
+        XCTAssertGreaterThan(maxA, 0.95, "1 근접까지 밝아져야")
+    }
+
+    /// phasemin=phasemax=0(기본, 미지정) → 전 파티클 동위상(fireworks 근동기 의도) — 종전엔 위상이
+    /// 항상 rng.nextFloat()*2π 완전 랜덤이라 phasemin/max 를 0으로 지정해도 개별 파티클이 어긋났다.
+    func testOscillateAlphaPhaseRangeZeroSyncsParticles() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 1, frequencyMax: 1, scaleMin: 0, scaleMax: 1,
+                                        phaseMin: 0, phaseMax: 0)],
+            renderer: .sprite, maxCount: 40, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 5)
+        let ps = sim.step(0.2)
+        XCTAssertGreaterThan(ps.count, 4, "테스트 유효성 전제(다수 스폰)")
+        let first = ps[0].alpha
+        for p in ps { XCTAssertEqual(p.alpha, first, accuracy: 1e-5, "동일 위상 range 면 전 파티클 alpha 동일") }
+    }
+
+    /// 명시적 phasemin/max 범위가 있으면 파티클별로 위상이 갈라져야(데스싱크).
+    func testOscillateAlphaPhaseRangeDesyncsParticles() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 1, frequencyMax: 1, scaleMin: 0, scaleMax: 1,
+                                        phaseMin: 0, phaseMax: 1)],
+            renderer: .sprite, maxCount: 40, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 5)
+        let ps = sim.step(0.2)
+        XCTAssertGreaterThan(ps.count, 4, "테스트 유효성 전제(다수 스폰)")
+        let distinctAlphas = Set(ps.map { ($0.alpha * 1000).rounded() })
+        XCTAssertGreaterThan(distinctAlphas.count, 1, "위상 range 가 있으면 파티클 간 alpha 가 갈라져야")
     }
 }

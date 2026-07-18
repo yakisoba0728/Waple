@@ -120,6 +120,15 @@ public struct SceneParticle: Equatable {
     public var angles3D: Vec3 = Vec3(x: 0, y: 0, z: 0)
     public var parent: Int? = nil
     public var visible: Bool = true
+    /// 마우스 시차(parallax) 가중치 — SceneLayer.parallaxDepth(59행)와 동형(F200). 기본 1(균일 시차,
+    /// 파서가 값을 못 읽어도 기존 동작과 동일 — 무회귀). 코퍼스 실측: particle 오브젝트 53개 중 42개(79%) 보유.
+    public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)
+    /// visible 프로퍼티 스크립트(JS 소스) — 레이어/노드(SceneLayer.propertyScripts["visible"],
+    /// SceneNode3D.propertyScripts["visible"])와 동형 규약(F199). per-frame 재평가로 visible 을
+    /// 갱신하는 소비는 렌더러 책임 — 여기선 파스 보존만. nil = 정적 visible(스크립트 없음, 무회귀).
+    public var visibleScript: String? = nil
+    /// visible 스크립트의 저장 scriptproperties(사용자 오버라이드) — JSON 문자열.
+    public var visibleScriptProps: String? = nil
 }
 
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
@@ -1224,6 +1233,16 @@ extension SceneDocument {
         p.angles3D = vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0)
         p.parent = intVal(obj["parent"])
         p.visible = initialVisible
+        // F200: 레이어(parseLayer 의 parallaxDepth 언랩)와 동형 — 미지정 시 1(균일, 무회귀).
+        p.parallaxDepth = vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1)
+        // F199: visible 스크립트 캡처(레이어 693-741행과 동일 언랩 규약). obj 는 이미 파라미터로
+        // 보유하므로 obj["visible"] 을 직접 재-도출한다 — 호출부(메인 파스 루프)는 이미 initialVisible/
+        // visibleScript 를 뽑아둔 상태지만 그 호출부는 배치 A 병행 구역이라 시그니처 변경으로 건드릴 수
+        // 없다(접촉 금지). obj 는 동일 원본이므로 재-도출해도 호출부의 578행 게이트 판정과 항상 일치한다.
+        if let vis = obj["visible"] as? [String: Any] {
+            p.visibleScript = vis["script"] as? String
+            if p.visibleScript != nil { p.visibleScriptProps = Self.scriptPropsJSON(vis["scriptproperties"]) }
+        }
         return p
     }
 
