@@ -235,12 +235,14 @@ extension SceneRenderer {
                     NSLog("%@", "[Waple] puppet mdl load failed (static quad fallback): \(pp)")
                 }
             }
-            // 레이어 프로퍼티 스크립트(visible/color/alpha): 씬 공유 컨텍스트에서 per-frame 평가.
-            // visible 을 먼저 로드 — 실물 컨트롤러(3394601417 'bt')의 top-level shared 초기화가
-            // 같은 오브젝트의 다른 스크립트보다 앞서도록. update 없는 스크립트(사이드이펙트 전용)도
-            // 로드는 하되 연속 렌더(hasAnimations)는 유발하지 않는다.
+            // 레이어 프로퍼티 스크립트(visible/color/alpha/origin/scale/angles): 씬 공유 컨텍스트에서
+            // per-frame 평가. visible 을 먼저 로드 — 실물 컨트롤러(3394601417 'bt')의 top-level shared
+            // 초기화가 같은 오브젝트의 다른 스크립트보다 앞서도록. update 없는 스크립트(사이드이펙트
+            // 전용)도 로드는 하되 연속 렌더(hasAnimations)는 유발하지 않는다.
+            // origin/scale/angles(F331): 3D 빌보드 경로(SceneRenderer3D.Billboard3D)는 이미 동일
+            // propertyScripts 를 소비 — 2D encodeLayer 도 동형으로 quadDirty→quadVertices 재계산.
             var propScripts: [(key: String, engine: TextScriptEngine)] = []
-            for key in ["visible", "color", "alpha"] {
+            for key in ["visible", "color", "alpha", "origin", "scale", "angles"] {
                 guard let src = layer.propertyScripts[key] else { continue }
                 if key == "visible", Self.isVectorValuedVisibleScript(src) {
                     NSLog("%@", "[Waple] skipped vector-valued visible script")

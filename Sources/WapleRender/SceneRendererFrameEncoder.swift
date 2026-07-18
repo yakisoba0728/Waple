@@ -434,8 +434,10 @@ extension SceneRenderer {
         return enc
     }
 
-    /// 이미지 레이어 1개 드로우(메인 컴포지트 파이프라인). time/device 는 프로퍼티 애니메이션 평가용
-    /// (def 있는 레이어만 per-frame 재계산 — origin/scale/angles → 쿼드, alpha/color → tint).
+    /// 이미지 레이어 1개 드로우(메인 컴포지트 파이프라인). time/device 는 프로퍼티 애니메이션·스크립트
+    /// 평가용(def 있는 레이어만 per-frame 재계산 — origin/scale/angles → 쿼드, alpha/color → tint;
+    /// 프로퍼티 스크립트(F331)도 동일 두 그룹으로 나뉘어 반영: origin/scale/angles 는 이 함수 앞부분
+    /// (애니와 합류해 quadDirty 단일 재계산), color/alpha/visible 은 아래 별도 루프).
     func encodeLayer(_ layer: GPULayer, texture: MTLTexture, into enc: MTLRenderCommandEncoder,
                              camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
                              time: Float = 0, device: MTLDevice? = nil,
@@ -474,6 +476,29 @@ extension SceneRenderer {
                     scale = Vec2(x: scale.x * simd_length(d.m.columns.0), y: scale.y * simd_length(d.m.columns.1))
                     attachedTransform = (origin, scale, angle)
                     quadDirty = true
+                }
+            }
+            // 프로퍼티 스크립트(origin/scale/angles, F331): update(현재값) → 쿼드 지오메트리 갱신(오디오반응
+            // 스케일·클릭 angles·호버 origin — 3D 빌보드 경로(SceneRenderer3D.Billboard3D.evaluateScripts)와
+            // 동일 marshalling 규약: origin/scale 은 Vec3(z 더미 성분 포함), angles 는 Vec3 의 z 성분만 사용.
+            // 애니메이션/attachment 가 이미 채운 origin/scale/angle 을 "현재값"으로 스크립트에 공급 —
+            // 한 레이어에서 서로 다른 키가 애니와 스크립트로 나뉘어도(예: scale 키프레임 + origin 스크립트)
+            // 둘 다 보존된다(스크립트 전용 바인딩은 PropertyAnimation.parse 가 nil 이라 키 단위로는 배타적).
+            for sc in layer.propScripts where sc.key == "origin" || sc.key == "scale" || sc.key == "angles" {
+                sc.engine.setRuntime(Double(time))
+                switch sc.key {
+                case "origin":
+                    if let v = sc.engine.evaluateVec(current: [origin.x, origin.y, def.originZ]), v.count >= 2 {
+                        origin = Vec2(x: v[0], y: v[1]); quadDirty = true
+                    }
+                case "scale":
+                    if let v = sc.engine.evaluateVec(current: [scale.x, scale.y, 1]), v.count >= 2 {
+                        scale = Vec2(x: v[0], y: v[1]); quadDirty = true
+                    }
+                default:  // "angles"
+                    if let v = sc.engine.evaluateVec(current: [0, 0, angle]), v.count >= 3 {
+                        angle = v[2]; quadDirty = true
+                    }
                 }
             }
             if quadDirty {
