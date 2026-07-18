@@ -208,10 +208,10 @@ final class Scene3DLightingTests: XCTestCase {
         XCTAssertEqual(packed[1].shadow.y, 6)
     }
 
-    func testPointShadowNearPlaneAlwaysPrecedesAcceptedRadius() {
+    func testPointShadowNearPlaneAlwaysPrecedesAcceptedRadius() throws {
         XCTAssertNil(PointShadowMath.nearPlane(radius: PointShadowMath.minimumRadius))
         let radius = PointShadowMath.minimumRadius * 2
-        let near = try! XCTUnwrap(PointShadowMath.nearPlane(radius: radius))
+        let near = try XCTUnwrap(PointShadowMath.nearPlane(radius: radius))
         XCTAssertGreaterThan(near, 0)
         XCTAssertLessThan(near, radius)
 

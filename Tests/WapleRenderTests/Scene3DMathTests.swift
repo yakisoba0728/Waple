@@ -93,24 +93,24 @@ final class Scene3DMathTests: XCTestCase {
 
     // MARK: hierarchy
 
-    func testWorldMatrixParentComposition() {
+    func testWorldMatrixParentComposition() throws {
         // parent: T(0,10,0) · 자기 R/S 없음, child: T(1,0,0) → 월드 (1,10,0) + 자식 로컬 점.
         let nodes: [Int: Scene3DMath.Node] = [
             1: .init(origin: SIMD3(0, 10, 0), angles: .zero, scale: SIMD3(1, 1, 1), parent: nil, visible: true),
             2: .init(origin: SIMD3(1, 0, 0), angles: .zero, scale: SIMD3(2, 2, 2), parent: 1, visible: true),
         ]
-        let w = try! XCTUnwrap(Scene3DMath.worldMatrix(id: 2, nodes: nodes))
+        let w = try XCTUnwrap(Scene3DMath.worldMatrix(id: 2, nodes: nodes))
         XCTAssertTrue(w.visible)
         assertVec(xform(w.matrix, SIMD3(1, 0, 0)), SIMD3(3, 10, 0))  // 1*2(스케일)+1(로컬T), 부모 +10y
     }
 
     /// 부모 회전이 자식 위치에 적용된다(피벗 공전 — 태양계 행성 배치의 핵심).
-    func testParentRotationOrbitsChild() {
+    func testParentRotationOrbitsChild() throws {
         let nodes: [Int: Scene3DMath.Node] = [
             1: .init(origin: .zero, angles: SIMD3(0, .pi / 2, 0), scale: SIMD3(1, 1, 1), parent: nil, visible: true),
             2: .init(origin: SIMD3(1, 0, 0), angles: .zero, scale: SIMD3(1, 1, 1), parent: 1, visible: true),
         ]
-        let w = try! XCTUnwrap(Scene3DMath.worldMatrix(id: 2, nodes: nodes))
+        let w = try XCTUnwrap(Scene3DMath.worldMatrix(id: 2, nodes: nodes))
         // Ry(90°): +X → -Z
         assertVec(xform(w.matrix, .zero), SIMD3(0, 0, -1))
     }
@@ -132,15 +132,15 @@ final class Scene3DMathTests: XCTestCase {
         XCTAssertNotNil(Scene3DMath.worldMatrix(id: 1, nodes: nodes))
     }
 
-    func testUnknownParentTreatedAsRoot() {
+    func testUnknownParentTreatedAsRoot() throws {
         let nodes: [Int: Scene3DMath.Node] = [
             5: .init(origin: SIMD3(1, 2, 3), angles: .zero, scale: SIMD3(1, 1, 1), parent: 999, visible: true),
         ]
-        let w = try! XCTUnwrap(Scene3DMath.worldMatrix(id: 5, nodes: nodes))
+        let w = try XCTUnwrap(Scene3DMath.worldMatrix(id: 5, nodes: nodes))
         assertVec(xform(w.matrix, .zero), SIMD3(1, 2, 3))
     }
 
-    func testNodeMapMergesObjectsAndGroups() {
+    func testNodeMapMergesObjectsAndGroups() throws {
         let objs = [SceneObject3D(id: 10, name: "m", model: "a.mdl", origin: Vec3(x: 1, y: 0, z: 0),
                                   angles: Vec3(x: 0, y: 0, z: 0), scale: Vec3(x: 1, y: 1, z: 1),
                                   castShadow: false, parent: 20, effects: [])]
@@ -148,7 +148,7 @@ final class Scene3DMathTests: XCTestCase {
                                   scale: Vec3(x: 1, y: 1, z: 1), parent: nil, visible: true)]
         let map = Scene3DMath.nodeMap(objects: objs, groups: groups)
         XCTAssertEqual(map.count, 2)
-        let w = try! XCTUnwrap(Scene3DMath.worldMatrix(id: 10, nodes: map))
+        let w = try XCTUnwrap(Scene3DMath.worldMatrix(id: 10, nodes: map))
         assertVec(xform(w.matrix, .zero), SIMD3(1, 5, 0))
     }
 }
