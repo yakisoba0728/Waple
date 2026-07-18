@@ -48,6 +48,11 @@ final class RealWebGroundTruthTests: XCTestCase {
         let outDir = URL(fileURLWithPath: "/tmp/waple_gt_web")
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
         var tested = 0, failed: [String] = []
+        // F404: 종전엔 스냅샷 실패(img nil/timeout)가 어떤 어서션에도 연결되지 않고 완전히 조용히
+        // 스킵됐다 — best-effort 판정 자체는 유지하되(스냅샷은 진단 산출물이지 이 테스트의 하드 오라클
+        // 이 아님, 헤드리스 WKWebView 타이밍 변동성이 있어 하드 fail 은 오탐 위험) 실패 건수를 최소
+        // NSLog 로 드러내 "브리지+body 만 확인, 스냅샷 실패는 무증상"이라는 약점을 눈에 띄게 한다.
+        var snapOK = 0, snapFailed: [String] = []
         for folder in folders.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard let project = try? ProjectJSONParser.parse(folderURL: folder), project.type == .web else { continue }
             let result: (ok: Bool, last: String, web: WKWebView, renderer: WebRenderer)
@@ -56,23 +61,30 @@ final class RealWebGroundTruthTests: XCTestCase {
                 tested += 1
                 NSLog("%@", "[WapleGT] web \(project.id): \(result.last)")
                 var snapDone = false  // 콜백은 메인 큐 — 세마포어 대기는 교착, RunLoop 스핀으로 대기.
+                var snapWrote = false
                 result.web.takeSnapshot(with: nil) { img, _ in
                     if let img, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
                        let png = rep.representation(using: .png, properties: [:]) {
                         try? png.write(to: outDir.appendingPathComponent("\(project.id).png"))
+                        snapWrote = true
                     }
                     snapDone = true
                 }
                 let snapDeadline = Date(timeIntervalSinceNow: 5)
                 while !snapDone, Date() < snapDeadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1)) }
+                if snapWrote { snapOK += 1 } else { snapFailed.append(project.id) }
             } else {
                 failed.append("\(project.id): probe=\(result.last)")
             }
             result.renderer.teardown()
         }
         NSLog("%@", "[WapleGT] web ok=\(tested) failed=\(failed)")
+        if !snapFailed.isEmpty {
+            NSLog("%@", "[WapleGT] ⚠️ 스냅샷 PNG 미기록(브리지/body 는 정상, 진단 산출물만 실패) \(snapFailed.count)/\(tested): \(snapFailed)")
+        }
         XCTAssertGreaterThan(tested, 0)
         XCTAssertEqual(failed.count, 0, "\(failed)")
+        _ = snapOK   // 하드 오라클 아님(주석 참조) — 진단 카운트만 보존.
     }
 
     /// 실물 웹 배경(matrix, setInterval 기반)에 프로덕션 pause 경로를 관통시켜 hard pause 실동작 검증.
