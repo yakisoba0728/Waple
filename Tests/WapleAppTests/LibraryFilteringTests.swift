@@ -37,6 +37,21 @@ final class LibraryFilteringTests: XCTestCase {
         var c = LibraryFilterCriteria(); c.tags = ["City"]
         XCTAssertEqual(apply("", c), ["4", "3"])
     }
+
+    // MARK: - 검색이 태그·유형 라벨까지 매칭 (w5d-library)
+
+    func testSearchMatchesTagCaseInsensitive() {
+        // "Nature" 태그를 가진 1·2 만 매칭 — 제목("바다"/"Alps")은 무관.
+        XCTAssertEqual(apply("nature"), ["2", "1"])
+    }
+    func testSearchMatchesLocalizedTypeLabel() {
+        // "동영상" = video 의 지역화 라벨 — 2·4 매칭(제목엔 없음).
+        XCTAssertEqual(apply("동영상"), ["4", "2"])
+    }
+    func testSearchTitleStillTakesPrecedenceComposition() {
+        // 태그 매칭 추가가 기존 제목 매칭 결과를 깨지 않는지(교집합 아님 — 합집합).
+        XCTAssertEqual(apply("바다"), ["4", "1"])
+    }
     func testRatingFilterTreatsNilAsNoMatch() {
         var c = LibraryFilterCriteria(); c.ratings = ["Everyone"]
         XCTAssertEqual(apply("", c), ["2", "1"])

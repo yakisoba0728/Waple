@@ -33,7 +33,14 @@ enum LibraryFiltering {
         var out = entries
         let q = search.trimmingCharacters(in: .whitespaces)
         if !q.isEmpty {
-            out = out.filter { $0.title.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+            // 제목뿐 아니라 태그·지역화 유형 라벨까지 매칭(합집합) — 사용자가 장르/테마 단어로 검색해도
+            // 그 메타데이터가 태그에만 있어 0건이 되던 문제(w5d-library). 제목 매칭 우선순위는 그대로
+            // 유지(먼저 검사) — 이후 sort 단계는 매칭 경로를 구분하지 않는다(기존과 동일 규약).
+            out = out.filter { entry in
+                matches(entry.title, q)
+                    || (entry.tags ?? []).contains { matches($0, q) }
+                    || matches(NowPlayingSubtitle.typeLabel(entry.typeRaw), q)
+            }
         }
         if !criteria.types.isEmpty {
             out = out.filter { criteria.types.contains(entryType($0)) }
@@ -55,6 +62,10 @@ enum LibraryFiltering {
             $0.title.compare($1.title, options: [.caseInsensitive, .numeric]) == .orderedAscending
         }
         }
+    }
+
+    private static func matches(_ text: String, _ q: String) -> Bool {
+        text.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil
     }
 
     static func entryType(_ e: LibraryEntry) -> LibraryTypeFilter {
