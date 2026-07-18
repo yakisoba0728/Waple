@@ -252,6 +252,50 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(a, b)
     }
 
+    // F177: spriteTrail/rope/ropeTrail 리본이 oscillateposition 진동을 반영해야 — 종전엔 history 가
+    // 진동 전 base pos 만 기록해(display() 의 oscPos 오프셋은 반환 스냅샷 d.pos 에만 더해짐) 리본만
+    // 진동이 소실됐다(sprite 의 appendQuad 는 d.pos 를 써서 정상 반영, trail 의 appendRibbon 은 history
+    // 를 써서 비대칭이었다).
+
+    func testTrailHistoryReflectsOscillatePositionOffset() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100),
+                           .velocityRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 0, y: 0, z: 0))],
+            operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
+                        .oscillatePosition(frequencyMin: 1, frequencyMax: 1, scaleMin: 50, scaleMax: 50,
+                                           phaseMin: 0, phaseMax: 0, mask: Vec3(x: 0, y: 1, z: 0))],
+            renderer: .rope(subdivision: 0), maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<30 { last = sim.step(1.0 / 30.0) }
+        let p = last[0]
+        // 정지 파티클(속도 0)이라도 오실레이션이 y 를 흔들어야 — base pos 만 기록했다면 전 샘플 y=0.
+        let ys = p.history.map { $0.y }
+        XCTAssertGreaterThan(ys.max()! - ys.min()!, 10, "히스토리가 진동 y 오프셋을 반영해야(F177)")
+        // 마지막 히스토리 샘플은 같은 스텝의 반환 스냅샷 d.pos(진동 반영)와 일치해야.
+        XCTAssertEqual(p.history.last!.y, p.pos.y, accuracy: 1e-3)
+    }
+
+    func testTrailHistorySpawnSeedIncludesOscillatePositionPhaseOffset() {
+        // freq=0 → sin(phase) 만 남아 age 에 무관하게 상수 — 스폰 시드(age=0)와 스텝 기록 양쪽이
+        // 동일하게 위상 오프셋을 반영하는지 age 타이밍 없이 격리 검증.
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.oscillatePosition(frequencyMin: 0, frequencyMax: 0, scaleMin: 20, scaleMax: 20,
+                                           phaseMin: 0.25, phaseMax: 0.25, mask: Vec3(x: 0, y: 1, z: 0))],
+            renderer: .rope(subdivision: 0), maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        let ps = sim.step(1.0 / 30.0)
+        let p = ps[0]
+        XCTAssertEqual(p.history.count, 2, "스폰 시드 + 1스텝 기록")
+        for sample in p.history {
+            // scale 20 × sin(0.25·2π)=sin(π/2)=1 → offset 20.
+            XCTAssertEqual(sample.y, 20, accuracy: 0.5, "스폰 시드/스텝 기록 모두 위상 오프셋 반영(F177)")
+        }
+    }
+
     func testControlPointAttractPullsTowardTarget() {
         // 대상=원점, 파티클을 +x 로 스폰(velocityrandom 로 이동해 원점에서 멀어짐) 대신
         // 원점에서 velocity 0, scale>0 인력 → 원점에 붙어 있으면 힘 0. 오프셋 스폰이 필요하므로

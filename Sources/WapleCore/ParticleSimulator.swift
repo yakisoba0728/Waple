@@ -287,8 +287,10 @@ public struct ParticleSimulator {
                 particles[k].rotation += particles[k].angularVel * dt
             }
             // 트레일 위치 히스토리(dt>0 만 — step(0) 스냅샷 중복 방지). 링버퍼로 trailSamples 유지.
+            // display() 반환 스냅샷(d.pos)과 동형으로 oscillateposition 오프셋을 반영(F177) — base pos
+            // 만 기록하면 spriteTrail/rope 리본이 sprite 쿼드(d.pos 사용)와 달리 진동을 놓친다.
             if trailSamples > 0, dt > 0 {
-                particles[k].history.append(particles[k].pos)
+                particles[k].history.append(particles[k].pos + oscPositionOffset(particles[k]))
                 if particles[k].history.count > trailSamples {
                     particles[k].history.removeFirst(particles[k].history.count - trailSamples)
                 }
@@ -399,7 +401,9 @@ public struct ParticleSimulator {
             p.turbPhase = rng.range(t.pmin, t.pmax)
         }
         if !remaps.isEmpty { p.remapPhase = rng.range(0, 100) }
-        if trailSamples > 0 { p.history = [p.pos] }  // 스폰 위치를 트레일 시작점으로.
+        // 스폰 위치(+ 위상 오프셋, F177)를 트레일 시작점으로 — oscPos 위상이 0 이 아니면 age=0 에서도
+        // 오프셋이 존재해(sin(phase)≠0) base pos 로 시드하면 트레일 시작점이 어긋난다.
+        if trailSamples > 0 { p.history = [p.pos + oscPositionOffset(p)] }
         return p
     }
 
@@ -535,14 +539,18 @@ public struct ParticleSimulator {
             a *= lerp(oa.smin, oa.smax, osc01)
         }
         d.alpha = max(0, min(1, a))
-        // pos 진동 오프셋(절대식, base 에 비누적).
-        if p.oscPosScale > 0 {
-            let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * p.age + p.oscPosPhase)
-            d.pos = p.pos + p.oscPosMask * off
-        } else {
-            d.pos = p.pos
-        }
+        // pos 진동 오프셋(절대식, base 에 비누적) — 트레일 히스토리 기록(_step/spawn)과 동일 공식 공유.
+        d.pos = p.pos + oscPositionOffset(p)
         return d
+    }
+
+    /// 진동 위치 오프셋(절대식, base pos 불변) — display() 스냅샷과 트레일 히스토리 기록(_step 291행·
+    /// spawn 404행)이 동일 공식을 공유한다(F177: 히스토리가 base pos 만 기록하면 spriteTrail/rope
+    /// 리본이 oscillateposition 진동을 반영하지 못해 sprite 쿼드[d.pos 사용]와 비대칭이 생긴다).
+    private func oscPositionOffset(_ p: Particle) -> SIMD3<Float> {
+        guard p.oscPosScale > 0 else { return SIMD3(0, 0, 0) }
+        let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * p.age + p.oscPosPhase)
+        return p.oscPosMask * off
     }
 
     // MARK: - remapvalue 노이즈
