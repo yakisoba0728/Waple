@@ -120,6 +120,9 @@ public struct SceneParticle: Equatable {
     public var angles3D: Vec3 = Vec3(x: 0, y: 0, z: 0)
     public var parent: Int? = nil
     public var visible: Bool = true
+    /// 마우스 시차(parallax) 가중치 — SceneLayer.parallaxDepth(59행)와 동형(F200). 기본 1(균일 시차,
+    /// 파서가 값을 못 읽어도 기존 동작과 동일 — 무회귀). 코퍼스 실측: particle 오브젝트 53개 중 42개(79%) 보유.
+    public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)
 }
 
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
@@ -1224,6 +1227,8 @@ extension SceneDocument {
         p.angles3D = vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0)
         p.parent = intVal(obj["parent"])
         p.visible = initialVisible
+        // F200: 레이어(parseLayer 의 parallaxDepth 언랩)와 동형 — 미지정 시 1(균일, 무회귀).
+        p.parallaxDepth = vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1)
         return p
     }
 

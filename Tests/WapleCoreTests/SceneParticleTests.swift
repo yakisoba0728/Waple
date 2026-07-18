@@ -196,4 +196,31 @@ final class SceneParticleTests: XCTestCase {
         XCTAssertEqual(p.origin, Vec2(x: 0, y: 0))
         XCTAssertEqual(p.scale, Vec2(x: 0.01, y: 0.01))
     }
+
+    // MARK: - parallaxDepth (F200)
+
+    /// 레이어(SceneLayer.parallaxDepth)와 동형 — 파티클 오브젝트도 parallaxDepth 를 보존해야
+    /// 마우스 시차에서 깊이 차별화가 가능하다(코퍼스 실측: particle 오브젝트 53개 중 42개(79%) 보유).
+    func testParticleParallaxDepthParsed() {
+        let scene = #"{"objects":[{"id":1,"particle":"particles/p.json","parallaxDepth":"0.3 0.3 0"}]}"#
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("particles/p.json", d(#"{"renderer":[{"name":"sprite"}],"maxcount":1}"#)),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.particles.count, 1)
+        XCTAssertEqual(doc.particles[0].parallaxDepth, Vec2(x: 0.3, y: 0.3))
+    }
+
+    /// 미지정 시 1(균일 시차, 무회귀 — 레이어 785행 기본값과 동형).
+    func testParticleParallaxDepthDefaultsToOne() {
+        let scene = #"{"objects":[{"id":1,"particle":"particles/p.json"}]}"#
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("particles/p.json", d(#"{"renderer":[{"name":"sprite"}],"maxcount":1}"#)),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.particles.count, 1)
+        XCTAssertEqual(doc.particles[0].parallaxDepth, Vec2(x: 1, y: 1))
+    }
 }
