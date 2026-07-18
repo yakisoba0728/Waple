@@ -84,10 +84,23 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertTrue(src!.contains("ef_main"))
     }
     func testScrollParams() {
-        // order: scaleX, scaleY, speedX, speedY
-        let p = EffectShaders.params(for: "scroll", constants: ["scale": [2, 3], "speed": [0.1, 0.2]])
-        XCTAssertEqual(p, [2, 3, 0.1, 0.2])
-        XCTAssertEqual(EffectShaders.params(for: "scroll", constants: [:])?.count, 4)
+        // order: scaleX, scaleY, speedX, speedY(부호보존 제곱, F267). 실키는 repeat(scale)·speedx/speedy —
+        // WE scroll.vert:19 sign(v)*v^2 커브를 상수 단계에 반영.
+        let p = EffectShaders.params(for: "scroll", constants: ["repeat": [2, 3], "speedx": [0.1], "speedy": [-0.2]])
+        XCTAssertEqual(p?.count, 4)
+        XCTAssertEqual(p?[0], 2); XCTAssertEqual(p?[1], 3)
+        XCTAssertEqual(p?[2] ?? -999, 0.01, accuracy: 1e-6)    // sign(0.1)*0.1^2
+        XCTAssertEqual(p?[3] ?? -999, -0.04, accuracy: 1e-6)   // sign(-0.2)*0.2^2(부호 보존)
+        // 폴백: 구 키(scale/speed 배열)도 여전히 인식(무회귀 — 실배포 케이싱 불확실 대비).
+        let legacy = EffectShaders.params(for: "scroll", constants: ["scale": [2, 3], "speed": [0.1, 0.2]])
+        XCTAssertEqual(legacy?[0], 2); XCTAssertEqual(legacy?[1], 3)
+        XCTAssertEqual(legacy?[2] ?? -999, 0.01, accuracy: 1e-6)
+        XCTAssertEqual(legacy?[3] ?? -999, 0.04, accuracy: 1e-6)
+        // 기본값: WE 실 기본 speedx/speedy=0.2(구코드는 [0.05,0] 오기본값).
+        let d = EffectShaders.params(for: "scroll", constants: [:])
+        XCTAssertEqual(d?.count, 4)
+        XCTAssertEqual(d?[2] ?? -999, 0.04, accuracy: 1e-6)    // sign(0.2)*0.2^2
+        XCTAssertEqual(d?[3] ?? -999, 0.04, accuracy: 1e-6)
     }
     func testWaterwavesParamsCount() {
         // order: dir.x, dir.y, speed, scale, strength, perspective

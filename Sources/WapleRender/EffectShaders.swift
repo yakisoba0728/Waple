@@ -38,11 +38,19 @@ enum EffectShaders {
             let scrollSpeed = c["scrollspeed"]?.first ?? c["speed"]?.first ?? 0.05
             return [strength, scale, scrollSpeed]
         case "scroll":
-            let sc = c["scale"] ?? [1, 1]
-            let sp = c["speed"] ?? c["scrollspeed"] ?? [0.05, 0]
+            // F267: WE scroll 머티리얼명은 repeat(g_Scale)·speedx/speedy(g_ScrollX/Y, 별도 스칼라 키, 기본
+            // 0.2/0.2) — 구코드는 scale/speed(배열) 로 오독해 실씬 커스터마이즈가 무시되고 손포팅 기본
+            // ([0.05,0],[1,1])으로 되돌아갔다(scroll.json 대조 확정). WE scroll.vert:19
+            // `scroll = sign(scroll) * pow(scroll, 2.0)`(부호보존 제곱, 시간 무관 상수라 여기서 1 회 적용)
+            // 도 미반영이었음. 실키 불확실(에디터 라벨 케이싱 잔여) 대비 구 키(scale/speed/scrollspeed)를
+            // 폴백으로 유지(무회귀).
+            let sc = c["repeat"] ?? c["scale"] ?? [1, 1]
+            let legacySpeed = c["speed"] ?? c["scrollspeed"]
+            let sxRaw = c["speedx"]?.first ?? legacySpeed?.first ?? 0.2
+            let syRaw = c["speedy"]?.first ?? ((legacySpeed?.count ?? 0) > 1 ? legacySpeed![1] : 0.2)
+            func signSq(_ v: Float) -> Float { (v < 0 ? -1 : 1) * v * v }
             let sx = sc.count > 0 ? sc[0] : 1, sy = sc.count > 1 ? sc[1] : sx
-            let vx = sp.count > 0 ? sp[0] : 0.05, vy = sp.count > 1 ? sp[1] : 0
-            return [sx, sy, vx, vy]
+            return [sx, sy, signSq(sxRaw), signSq(syRaw)]
         case "waterwaves":
             // F268/F269: WE waterwaves.vert:48 `v_Direction = rotateVec2(vec2(0,1), g_Direction)` — 기준벡터
             // (0,1)(세로) 회전. 구 코드는 기준벡터 (1,0)(가로) 이라 direction=0(기본)에서 dir 이 90° 어긋났다
