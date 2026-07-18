@@ -154,4 +154,44 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertEqual(mirrorValue(billboard, "metallic", as: Float.self), 0.6)
         XCTAssertEqual(mirrorValue(billboard, "specularTint", as: SIMD3<Float>.self), SIMD3(0.8, 0.7, 0.5))
     }
+
+    /// F309 최소 재현: 골든 3470948192 실물 체인(비가시 노드 id=56 origin 스크립트가 shared.xx 를 세팅 →
+    /// text id=181 이 shared.xx 를 읽어 shared.vvv 생산 → mesh id=115 scale 이 shared.vvv 소비)을 축약.
+    /// text3DControllers 는 항상 eval3DOrder 보다 먼저 평가되므로, build3D 가 마운트 직후 1회 프라이밍하지
+    /// 않으면 최초 real 호출(여기서는 build3D 직후의 단일 evaluate3DScripts 호출로 흉내)에서 id=181 이
+    /// 미정의 shared.xx 를 읽어 NaN 을 낳고 id=115 의 scale 이 그 NaN 을 물려받는다(단일 프레임 캡처·라이브
+    /// 첫 프레임 모두 영향).
+    func test3DTextControllerPrimingSettlesSharedChainBeforeFirstRealFrame() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":56,"origin":{"value":"0 0 0",
+             "script":"export function update(value) { value.x = value.x + 1; shared.xx = value.x; return value; }"}},
+           {"id":181,"text":{"value":"0",
+             "script":"export function update(value) { shared.vvv = (shared.xx - 0) / 5 + 0.6; return String(shared.vvv); }"}},
+           {"id":115,"model":"models/missing.mdl","scale":{"value":"1 1 1",
+             "script":"export function update(value) { let k = (shared.vvv - 0.73) / 0.73; value.x = 1 - 2 * k; return value; }"}}
+         ]}
+        """
+        let package = try pkg([("scene.json", scene.data(using: .utf8)!)])
+        let doc = try SceneDocument.parse(package: package)
+        let renderer = SceneRenderer()
+        renderer.sceneScript = SceneScriptContext()
+        renderer.projW = Float(doc.projectionWidth)
+        renderer.projH = Float(doc.projectionHeight)
+
+        // build3D 자체가 프라이밍(F309)을 내장 — 그 뒤 단 한 번의 evaluate3DScripts 호출이 encode3D 의
+        // 최초 real 프레임과 동형(순서·인자 동일). 프라이밍이 없으면 이 한 번의 호출만으로 NaN 이 나온다.
+        renderer.build3D(doc: doc, package: package, device: device)
+        renderer.evaluate3DScripts(time: 1.0 / 60)
+
+        let mesh = try XCTUnwrap(renderer.nodes3D.first { $0.id == 115 })
+        XCTAssertTrue(mesh.scale.x.isFinite,
+                      "프라이밍 없으면 text 가 첫 호출에서 undefined shared.xx 를 읽어 shared.vvv=NaN → scale.x=NaN")
+        // shared.xx=1(프라이밍의 eval3DOrder 스텝에서 세팅) → shared.vvv=(1-0)/5+0.6=0.8
+        // → k=(0.8-0.73)/0.73=7/73 → scale.x=1-14/73=59/73.
+        XCTAssertEqual(mesh.scale.x, Float(59.0 / 73.0), accuracy: 1e-4)
+    }
 }

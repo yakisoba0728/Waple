@@ -357,8 +357,34 @@ extension SceneRenderer {
         let hasSkinAnim = meshRenderables.contains { $0.animIndex >= 0 }
         has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty
 
+        // F309: mount 직후 1회 프라이밍 패스. encode3D 는 매 프레임 text3DControllers(:717-722 상당)를
+        // eval3DOrder 보다 항상 먼저 평가한다 — 순서를 뒤집으면(eval3DOrder→text) 이번엔 text(배열
+        // 후반)→mesh(배열 선두) 역전이 재도입돼(이 선행 평가 자체의 도입 사유) mesh 가 NaN을 물려받는다.
+        // 매 프레임 2패스도 기각(누적 스크립트 value.x+=... 가 프레임당 2회 적분되어 속도가 2배로 깨짐).
+        // 채택안(w3-architecture 판정): 현행 순서 그대로 build3D 직후 1회 예비 평가. 노드→text 의 유일한
+        // 역전이 이 1회로 흡수되어 shared(예: 3470948192 id=56→181→115 체인의 shared.xx/vvv)가 실호출
+        // 이전에 정착값을 갖는다 — 첫 캡처/라이브 프레임부터 유한값(라이브의 1프레임 지연은 정상 거동으로
+        // 보존, 캡처는 항상 프레시 마운트라 두 프로덕션 호출부 무수정으로 함께 해결).
+        evaluate3DScripts(time: 0)
+
         NSLog("%@", "[Waple] 3D scene: \(loaded) meshes (\(skipped) skipped), \(bbLoaded) billboards (\(bbSkipped) skipped), " +
               "\(nodes3D.count) nodes, \(eval3DOrder.count) scripted, lights=\(doc.lights3D.count)")
+    }
+
+    /// text 컨트롤러(shared 생산/소비) → eval3DOrder(노드/빌보드 트랜스폼) 순서로 1회 평가. build3D 말미의
+    /// 프라이밍 호출과 encode3D 의 매 프레임 호출이 이 구현을 공유한다(F309 — 두 호출부가 갈라지면 프라이밍이
+    /// 실호출과 다른 걸 평가해 무의미해진다).
+    func evaluate3DScripts(time: Float) {
+        for i in text3DControllers.indices {
+            text3DControllers[i].engine.setRuntime(Double(time))
+            if let s = text3DControllers[i].engine.evaluate(current: text3DControllers[i].last) {
+                text3DControllers[i].last = s
+            }
+        }
+        for e in eval3DOrder {
+            if e.bb { billboards[e.idx].evaluateScripts(time: time) }
+            else { nodes3D[e.idx].evaluateScripts(time: time) }
+        }
     }
 
     /// 노드/빌보드에 프로퍼티 스크립트 엔진 부착(씬 공유 컨텍스트 — top-level 사이드이펙트가 로드 시점에 실행).
@@ -710,21 +736,11 @@ extension SceneRenderer {
                   particleDelta: Float?) -> Bool {
         guard let cam = camera3D, let over = meshPipelineOver,
               let depthTex = pooledDepth(target.width, target.height, device) else { return false }
-        // text 컨트롤러 먼저 평가 — shared 사이드이펙트(shared.vvv 등)를 지오메트리 스크립트보다 앞서 세팅
-        // (단일 프레임 캡처에서도 소비자 스케일 스크립트가 프레시 값을 읽어 NaN 회피). 씬 order 로는 소비자
-        // (Hollow Cylinder order 5)가 생산자(text id=181 order 24)보다 앞서 라이브만 1프레임 지연 후 정착 —
-        // 컨트롤러 선행 평가로 캡처도 결정적. evaluate(current:) 는 update() 를 돌려 shared 갱신(반환 텍스트는 미사용).
-        for i in text3DControllers.indices {
-            text3DControllers[i].engine.setRuntime(Double(time))
-            if let s = text3DControllers[i].engine.evaluate(current: text3DControllers[i].last) {
-                text3DControllers[i].last = s
-            }
-        }
-        // per-frame 스크립트 평가(씬 order — 컨트롤러가 이를 읽는 스크립트보다 먼저) → 현재 로컬 변환/가시성.
-        for e in eval3DOrder {
-            if e.bb { billboards[e.idx].evaluateScripts(time: time) }
-            else { nodes3D[e.idx].evaluateScripts(time: time) }
-        }
+        // text 컨트롤러(shared 사이드이펙트) → eval3DOrder(노드/빌보드 트랜스폼) 순서로 평가. 씬 order 로는
+        // 소비자(예: Hollow Cylinder order 5)가 생산자(text id=181 order 24)보다 앞서 라이브만 1프레임
+        // 지연 후 정착하지만(정상 거동), build3D 말미의 1회 프라이밍(F309)이 이 첫 역전을 흡수해 두므로
+        // 이 첫 real 호출부터 이미 정착값이다 — 단일 프레임 캡처도 결정적. evaluate3DScripts 문서 참조.
+        evaluate3DScripts(time: time)
         // 현재 로컬 변환으로 계층 노드 맵 재구성(월드행렬 합성 입력).
         var nmap: [Int: Scene3DMath.Node] = [:]
         nmap.reserveCapacity(nodes3D.count)
