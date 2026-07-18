@@ -27,6 +27,10 @@ extension SceneRenderer {
         let target: Int?
         let usesAudio: Bool
         let texRes: [SIMD4<Float>]
+        /// 슬롯별(0..7, texRes 와 동일 상한) 샘플러 어드레싱(F162/F163): 1=clamp/0=repeat.
+        /// bind(fbo/previous, 자산 없음) 슬롯은 항상 clamp, aux(실 자산) 슬롯은 TexImage.clampUVs —
+        /// buildPassBindings 가 빌드 시 1 회 계산(런타임 재계산 불요 — 자산 정체성은 패스 고정).
+        let texWrap: [Float]
         /// 상수 프로퍼티 스크립트(슬롯 → 엔진) — per-frame 평가로 material 갱신(컬러 사이클 등).
         var scripts: [(slot: Int, engine: TextScriptEngine)] = []
     }
@@ -401,7 +405,7 @@ extension SceneRenderer {
             if t.usesAudio { anyAudio = true }
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
                                          binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
-                                         texRes: plan.texRes, scripts: passScripts))
+                                         texRes: plan.texRes, texWrap: plan.texWrap, scripts: passScripts))
         }
         // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         guard passes.contains(where: { $0.target == nil }) else { return nil }
@@ -431,9 +435,11 @@ extension SceneRenderer {
             NSLog("%@", "[Waple] unresolved copy pass in \(effName)"); return nil
         }
         let dims = SIMD4<Float>(lw, lh, lw, lh)
+        var wrap = [Float](repeating: 0, count: 8)
+        wrap[0] = 1  // slot0 = fbo bind(자산 없음) → 항상 clamp.
         return TranslatedPass(pipeline: pipe, material: [], aux: [],
                               binds: [(0, srcIdx)], target: tgtIdx, usesAudio: false,
-                              texRes: [SIMD4<Float>](repeating: dims, count: 8), scripts: [])
+                              texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap, scripts: [])
     }
 
     /// ③ 셰이더 이름 + 머티리얼 메타(combos/textures) 해석 — 패스에 shader 가 없으면 material JSON
@@ -501,7 +507,8 @@ extension SceneRenderer {
                                    scenePass: SceneEffectPass, matTextures: [String?],
                                    manifest: EffectManifest, fboIndex: [String: Int],
                                    lw: Float, lh: Float, package: ScenePackage, device: MTLDevice)
-        -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)], target: Int?)? {
+        -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)],
+            texWrap: [Float], target: Int?)? {
         var binds: [(slot: Int, source: Int)] = []
         for b in mp.binds {
             // 신뢰불가 effect.json index — Metal frag 텍스처 인자테이블 상한(macOS 128) 밖이면
@@ -516,10 +523,14 @@ extension SceneRenderer {
         if binds.isEmpty { binds = [(0, -1)] }
         let bindSlots = Set(binds.map { $0.slot })
         var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 8)
+        // F162/F163: bind(fbo/previous) 슬롯은 TexImage 가 없는 파이프라인-내부 렌더타깃 — 항상 clamp
+        // (콘텐츠 경계 밖 랩은 아티팩트, W4a 실측). aux(실 자산) 슬롯은 아래에서 TexImage.clampUVs 로 채운다.
+        var texWrap = [Float](repeating: 0, count: 8)
         for (slot, source) in binds where slot < 8 && source >= 0 {
             let s = Float(manifest.fbos[source].scale)
             texRes[slot] = SIMD4(lw / s, lh / s, lw / s, lh / s)
         }
+        for slot in bindSlots where slot < 8 { texWrap[slot] = 1 }
         var aux: [(slot: Int, tex: MTLTexture)] = []
         for slot in t.textureSlots where slot > 0 && slot < 128 && !bindSlots.contains(slot) {
             var name = slot < scenePass.textureNames.count ? scenePass.textureNames[slot] : nil
@@ -530,12 +541,24 @@ extension SceneRenderer {
                 if slot < 8 {
                     let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
                     texRes[slot] = SIMD4(w, h, w, h)
+                    texWrap[slot] = resolveTextureClampUVs(name, package: package) ? 1 : 0
                 }
             }
         }
         let target: Int? = mp.target.flatMap { fboIndex[$0] }
         if mp.target != nil && target == nil { NSLog("%@", "[Waple] unknown target in \(effName)"); return nil }
-        return (binds, texRes, aux, target)
+        return (binds, texRes, aux, texWrap, target)
+    }
+
+    /// F162/F163: 텍스처 자산의 ClampUVs 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x2)만 저비용
+    /// 조회 — 헤더만 재파스(디코드 없음, 씬 빌드 1 회성이라 무해). 실패/부재는 false(=repeat, WE 기본 어드레싱).
+    private func resolveTextureClampUVs(_ name: String?, package: ScenePackage) -> Bool {
+        guard let name else { return false }
+        let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
+        for c in candidates {
+            if let d = quietAssetData(c, package: package), let tex = TexImage.parse(d) { return tex.clampUVs }
+        }
+        return false
     }
 
     /// assetData 의 조용한 버전: pkg→베이스에셋 조회하되 미스에 로그 없음(소스 프로브는 미스가 정상).

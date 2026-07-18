@@ -52,7 +52,8 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("p[0].x"), "g_UserAlpha → p[0].x")
         XCTAssertTrue(t.msl.contains("float4 gl_FragColor = float4(0.0);"), "gl_FragColor 로컬 변수(straight, no premult)")
         XCTAssertTrue(t.msl.contains("return gl_FragColor;"), "말미 return")
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp"), "texSample2D → .sample")
+        // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat)으로 번역.
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat)"), "texSample2D → .sample")
         XCTAssertTrue(t.msl.contains("eng.mvp"), "MVP engine uniform")
         XCTAssertTrue(t.msl.contains("float mask = 1.0;"), "MASK=0 branch")
         XCTAssertFalse(t.msl.contains("texSample2D"))
@@ -62,7 +63,8 @@ final class GLSLTranslatorTests: XCTestCase {
 
     func testMaskComboOnSelectsBranch() throws {
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: ["MASK": 1]))
-        XCTAssertTrue(t.msl.contains("g_Texture1.sample(smp"), "MASK=1 uses g_Texture1")
+        // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat).
+        XCTAssertTrue(t.msl.contains("g_Texture1.sample((eng.texWrap[0][1] > 0.5 ? smp : smpRepeat)"), "MASK=1 uses g_Texture1: \(t.msl)")
         XCTAssertFalse(t.msl.contains("float mask = 1.0;"))
     }
 
@@ -589,7 +591,8 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("atan(1.0)"), "1-인자 atan 유지: \(t.msl)")
         XCTAssertTrue(t.msl.contains("dfdx(in.v_TexCoord.x)"), t.msl)
         XCTAssertTrue(t.msl.contains("dfdy(in.v_TexCoord.y)"), t.msl)
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord), level(0.0))"), t.msl)
+        // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat).
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat), we_uv(in.v_TexCoord), level(0.0))"), t.msl)
     }
 
     func testWhitespaceBeforeFunctionCallsRewritten() throws {
@@ -602,8 +605,9 @@ final class GLSLTranslatorTests: XCTestCase {
         }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord))"), t.msl)
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord), level(0.0))"), t.msl)
+        // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat).
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat), we_uv(in.v_TexCoord))"), t.msl)
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat), we_uv(in.v_TexCoord), level(0.0))"), t.msl)
         XCTAssertFalse(t.msl.contains("texSample2D"), t.msl)
     }
 
@@ -746,7 +750,8 @@ final class GLSLTranslatorTests: XCTestCase {
         }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample(smp, we_uv(in.v_TexCoord))"), t.msl)
+        // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat).
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat), we_uv(in.v_TexCoord))"), t.msl)
         XCTAssertTrue(t.msl.contains("inline float2 we_uv(float4 v) { return v.xy; }"), t.msl)
     }
 

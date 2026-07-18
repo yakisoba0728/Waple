@@ -319,7 +319,9 @@ public enum GLSLTranslator {
             if fragLocals.contains(m.glslName) { fragMap.removeValue(forKey: m.glslName) }
             if vertLocals.contains(m.glslName) { vertMap.removeValue(forKey: m.glslName) }
         }
-        guard let fragBodyT = translateBody(fragMainBody, symbols: fragMap, isFragment: true),
+        // perTextureSampler: true 는 최상위 frag 본문 한정(F162/F163) — vert/헬퍼/file-scope const 호출부는
+        // 모두 기본값(false)이라 무변경(vert 는 애초 smp 미선언 — 텍스처 샘플 시 기존과 동일하게 컴파일 실패).
+        guard let fragBodyT = translateBody(fragMainBody, symbols: fragMap, isFragment: true, perTextureSampler: true),
               let vertBodyT = translateBody(vertMainBody, symbols: vertMap, isFragment: false) else { return nil }
         var fragBody = fragVaryingPrelude + fragBodyT
         var vertBody = vertBodyT
@@ -1070,6 +1072,17 @@ public enum GLSLTranslator {
         let digits = rest.prefix { $0.isNumber }
         return Int(digits)
     }
+
+    /// F162/F163: texSample2D 텍스처 식(예: "g_Texture1")의 슬롯을 eng.texWrap 인덱스로 매핑해
+    /// smp(clamp)/smpRepeat 런타임 삼항 분기 식을 만든다. eng.texWrap[N] 은 buildPassBindings 가 빌드 시
+    /// 1 회 계산(bind 출처=clamp 고정, aux 출처=TexImage.clampUVs, WE 기본=repeat) — 번역 캐시는 GLSL
+    /// 소스 기반(프로세스 전역, 재마운트·크로스씬 공유)이라 실제 바인딩 자산을 텍스트에 구울 수 없어
+    /// 반드시 런타임 분기. 슬롯 미상(헬퍼 로컬 별칭 등 — capture 매커니즘은 원명 유지라 실전 거의 없음)이거나
+    /// texRes 와 동일한 8 슬롯 상한 밖이면 폴백 smp(기존 clamp 동작, 무회귀).
+    private static func perTextureSamplerExpr(_ texExpr: String) -> String {
+        guard let n = textureIndex(texExpr), (0..<8).contains(n) else { return "smp" }
+        return "(eng.texWrap[\(n / 4)][\(n % 4)] > 0.5 ? smp : smpRepeat)"
+    }
     /// 샘플러 주석의 콤보 어노테이션: `uniform sampler2D g_TextureN; // {..."combo":"NAME"...}` → [N: NAME].
     /// WE 규약: 해당 슬롯에 텍스처가 바인딩되면 콤보 자동 활성(페인트 마스크 등).
     public static func samplerCombos(_ src: String) -> [Int: String] {
@@ -1244,7 +1257,11 @@ public enum GLSLTranslator {
 
     // MARK: - 본문 변환
 
-    static func translateBody(_ body: String, symbols: [String: String], isFragment: Bool) -> String? {
+    /// perTextureSampler: 최상위(main) 본문 전용(호출부 한정, 헬퍼 본문은 항상 false — 캡처 매커니즘의
+    /// 단일 제네릭 `sampler smp` 파라미터 threading 은 절대 불변). true 면 texSample2D 의 텍스처별
+    /// eng.texWrap 런타임 분기(perTextureSamplerExpr)로 clamp/repeat 선택, false 면 기존 "smp"(clamp) 그대로.
+    static func translateBody(_ body: String, symbols: [String: String], isFragment: Bool,
+                              perTextureSampler: Bool = false) -> String? {
         var s = body
         // 1) mul(a,b) → (a * b) — WE GLSL 방언의 mul 은 순서보존 곱(HLSL mul(v,M)=행벡터 v·M, GLSL
         //    v*M=Mᵀ·v 로 동일 결과). 종전 (b*a) 는 전치 오역: 비대칭 행렬에서 결과가 뒤집힌다. MVP 는
@@ -1253,8 +1270,16 @@ public enum GLSLTranslator {
         s = rewriteCall(s, "mul") { args in args.count == 2 ? "(\(args[0]) * \(args[1]))" : nil }
         // 2) texSample2DLod(t, uv, l) → t.sample(smp, uv, level(l)) / texSample2D(t, uv) → t.sample(smp, uv).
         //    UV 는 we_uv() 로 절단 — WE GLSL(HLSL 방언)은 vec3/vec4 를 UV 로 암시적 절단해 넘기는 걸 허용한다.
-        s = rewriteCall(s, "texSample2DLod") { args in args.count == 3 ? "\(args[0]).sample(smp, we_uv(\(args[1])), level(\(args[2])))" : nil }
-        s = rewriteCall(s, "texSample2D") { args in args.count == 2 ? "\(args[0]).sample(smp, we_uv(\(args[1])))" : nil }
+        s = rewriteCall(s, "texSample2DLod") { args in
+            guard args.count == 3 else { return nil }
+            let smp = perTextureSampler ? perTextureSamplerExpr(args[0]) : "smp"
+            return "\(args[0]).sample(\(smp), we_uv(\(args[1])), level(\(args[2])))"
+        }
+        s = rewriteCall(s, "texSample2D") { args in
+            guard args.count == 2 else { return nil }
+            let smp = perTextureSampler ? perTextureSamplerExpr(args[0]) : "smp"
+            return "\(args[0]).sample(\(smp), we_uv(\(args[1])))"
+        }
         // 2b) GLSL 2-인자 atan(y,x) → MSL atan2 (1-인자는 유지)
         s = rewriteCall(s, "atan") { args in args.count == 2 ? "atan2(\(args[0]), \(args[1]))" : nil }
         // 2c) radians()/degrees() 는 MSL 미내장(실물 color_grading 의 radians(u_hueShift)) — 상수 곱으로 치환(π/180, 180/π).
@@ -1469,8 +1494,10 @@ public enum GLSLTranslator {
         vary += "};\n"
         let vin = "struct VIn { float3 a_Position [[attribute(0)]]; float2 a_TexCoord [[attribute(1)]]; };\n"
         // timeAndPad = (time, pointerUV.x, pointerUV.y, frametime dt) / pointerLastAndPad = (직전 프레임 포인터 UV.xy, g_PointerState.z 클릭힘, 0).
+        // texWrap[2](8 슬롯, texRes 와 동일 상한): 슬롯별 1=clamp/0=repeat(F162/F163) — buildPassBindings 가
+        // bind 출처(fbo/previous)=clamp, aux 출처=TexImage.clampUVs 로 빌드 시 1 회 계산(WE 기본=repeat).
         // Swift 측 단일 빌더 SceneRendererFrameEncoder.engineUniform 과 레이아웃 동기 필수.
-        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; };\n"
+        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
         let uvHelpers = """
         inline float2 we_uv(float2 v) { return v; }
@@ -1522,6 +1549,9 @@ public enum GLSLTranslator {
         let fragSig = """
         fragment float4 ef_main(Vary in [[stage_in]]\(pFrag), constant EngineU& eng [[buffer(1)]]\(fragTex)\(audioFrag)) {
             constexpr sampler smp(filter::linear, address::clamp_to_edge);
+            // F162/F163: 최상위 본문 텍스처 샘플 호출은 슬롯별 eng.texWrap 로 smp(clamp)/smpRepeat 런타임 분기
+            // (perTextureSamplerExpr) — 헬퍼 내부·전달용 smp 는 위 clamp 그대로(캡처 매커니즘 무변경).
+            constexpr sampler smpRepeat(filter::linear, address::repeat);
         \(indent(fragBody))
         }
         """
