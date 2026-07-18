@@ -64,6 +64,13 @@ enum LibraryFiltering {
         }
     }
 
+    /// 검색/필터가 활성인데 결과가 0건인가(그리드 dead-end 판정, w5d-library). 활성이 아니면(예: 빈
+    /// 폴더를 그냥 탐색 중) 대상이 아니다 — 그 경우는 원래 비어있을 수 있는 정상 상태다.
+    static func isSearchOrFilterDeadEnd(searchText: String, criteria: LibraryFilterCriteria, filteredCount: Int) -> Bool {
+        let active = !searchText.trimmingCharacters(in: .whitespaces).isEmpty || criteria.isActive
+        return active && filteredCount == 0
+    }
+
     private static func matches(_ text: String, _ q: String) -> Bool {
         text.range(of: q, options: [.caseInsensitive, .diacriticInsensitive]) != nil
     }

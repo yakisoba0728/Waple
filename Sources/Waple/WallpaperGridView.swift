@@ -26,10 +26,19 @@ struct WallpaperGridView: View {
 
     private let columns = [GridItem(.adaptive(minimum: Metrics.tileWidth), spacing: Metrics.gridSpacing)]
 
+    /// 검색/필터가 활성인데 그리드가 0건인가(w5d-library) — 판정은 LibraryFiltering(순수)에 위임.
+    private var isSearchOrFilterDeadEnd: Bool {
+        LibraryFiltering.isSearchOrFilterDeadEnd(searchText: viewModel.searchText,
+                                                  criteria: viewModel.criteria,
+                                                  filteredCount: viewModel.filteredEntries.count)
+    }
+
     var body: some View {
         Group {
             if viewModel.entries.isEmpty {
                 emptyState
+            } else if isSearchOrFilterDeadEnd {
+                noResultsState
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: Metrics.gridSpacing + 6) {
@@ -129,6 +138,22 @@ struct WallpaperGridView: View {
                 .keyboardShortcut("o")
             // w5d-onboarding: 번들 샘플이 없는 첫 실행 사용자를 위한 대체 콘텐츠 경로 — 창작마당(다운로드)으로.
             Button("창작마당 열기") { viewModel.onOpenWorkshop?() }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 검색/필터 무결과 dead-end(w5d-library) — 고장인지 결과가 없는 건지 구분하고, 되돌릴 원클릭
+    /// 수단을 준다(종전엔 아무 메시지도 없는 빈 스크롤 영역이라 툴바로 돌아가 일일이 해제해야 했다).
+    private var noResultsState: some View {
+        ContentUnavailableView {
+            Label("조건에 맞는 배경이 없습니다", systemImage: "line.3.horizontal.decrease.circle")
+        } description: {
+            Text("검색어나 필터를 조정해보세요")
+        } actions: {
+            Button("필터 초기화 / 검색 지우기") {
+                viewModel.searchText = ""
+                viewModel.criteria = LibraryFilterCriteria()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

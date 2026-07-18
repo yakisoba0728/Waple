@@ -60,6 +60,26 @@ final class LibraryFilteringTests: XCTestCase {
         var c = LibraryFilterCriteria(); c.favoritesOnly = true
         XCTAssertEqual(apply("", c, favorites: ["3"]), ["3"])
     }
+    // MARK: - 검색/필터 무결과 dead-end 판정 (w5d-library)
+
+    func testDeadEndWhenSearchActiveAndZeroResults() {
+        XCTAssertTrue(LibraryFiltering.isSearchOrFilterDeadEnd(
+            searchText: "존재하지않음", criteria: .init(), filteredCount: 0))
+    }
+    func testNotDeadEndWhenSearchActiveButHasResults() {
+        XCTAssertFalse(LibraryFiltering.isSearchOrFilterDeadEnd(
+            searchText: "바다", criteria: .init(), filteredCount: 1))
+    }
+    func testNotDeadEndWhenNoSearchOrFilterActive() {
+        // 빈 폴더 탐색 등 — 필터/검색이 애초에 꺼져 있으면 dead-end 판정 대상이 아니다.
+        XCTAssertFalse(LibraryFiltering.isSearchOrFilterDeadEnd(
+            searchText: "", criteria: .init(), filteredCount: 0))
+    }
+    func testDeadEndWhenOnlyCriteriaActiveAndZeroResults() {
+        var c = LibraryFilterCriteria(); c.favoritesOnly = true
+        XCTAssertTrue(LibraryFiltering.isSearchOrFilterDeadEnd(searchText: "", criteria: c, filteredCount: 0))
+    }
+
     func testFolderVisibilityRootHidesFolderedEntries() {
         let folders = [FolderStore.Folder(name: "메인", ids: ["1", "3"])]
         let root = LibraryFolders.visible(entries: sample, folders: folders, active: nil)
