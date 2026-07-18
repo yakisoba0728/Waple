@@ -27,8 +27,17 @@ extension SnapshotPipeline {
             fputs("[snap] 베이스라인 썸네일 크기 \(baseline.thumbWidth)x\(baseline.thumbHeight) ≠ 현재 \(thumbW)x\(thumbH) — --capture 로 베이스라인 재생성 필요\n", stderr)
             return 2
         }
+        // F145: 베이스라인 캡처 당시 활성이던 렌더-변형 게이트와 지금 활성인 게이트가 다르면 diff 가
+        // 게이트 차이 때문일 수 있음을 경고(하드 실패는 아님 — 게이트는 기본적으로 전부 꺼져 있어야
+        // 정상이므로 대부분의 실행에선 둘 다 빈 배열이라 무해).
+        let baselineGates = baseline.activeDebugGates ?? []
+        let currentGates = SnapshotPipeline.activeDebugGates()
+        if baselineGates != currentGates {
+            fputs("[snap] ⚠️ 렌더-변형 디버그 게이트 불일치 — 베이스라인 캡처 시=\(baselineGates.isEmpty ? "없음" : baselineGates.joined(separator: ",")), 지금=\(currentGates.isEmpty ? "없음" : currentGates.joined(separator: ",")) — 아래 diff 가 실제 회귀가 아니라 이 차이 때문일 수 있습니다.\n", stderr)
+        }
         let baseThumbs = baselineDir.appendingPathComponent("thumbs", isDirectory: true)
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_snap_cmp", isDirectory: true)
+        // F148: PID 로 스코프(SnapshotPipeline.runCapture 와 동일 이유 — 동시 실행 간 캡처파일 충돌 방지).
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_snap_cmp_\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
         let restore = pinRenderSettings(root: root)

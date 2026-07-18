@@ -5,7 +5,11 @@ import WapleCore
 /// 실물 검증(코퍼스 존재 시만): childlink_01.tex(젤다 아동 링크) 의 조건 변형이 tuniccolor 값에 따라
 /// 서로 다른 색을 디코드하는지 — 파스→선택→디코드 전 경로를 실제 TexDecoder 로 통과. 코퍼스 없으면 스킵.
 final class TexVariantDecodeCorpusTests: XCTestCase {
-    private static let pkgPath = "/Users/yakisoba/Downloads/wallpaper_dev/backgrounds/3737268876/scene.pkg"
+    // F408: 이 레인의 자매 코퍼스-게이트 테스트(RealPackagesGroundTruthTests 등 19개소)와 동일한
+    // WAPLE_REAL_PKGS 관례 — 종전엔 개발자 1인 계정 절대경로가 박혀 있어 다른 사용자/머신에선
+    // 코퍼스가 있어도 영구 XCTSkip 됐다.
+    private static let pkgPath = (ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+        ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")) + "/3737268876/scene.pkg"
 
     func testChildlinkTunicVariantsDecodeDistinctColors() throws {
         guard FileManager.default.fileExists(atPath: Self.pkgPath) else {

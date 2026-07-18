@@ -48,6 +48,8 @@ final class DeepAgg {
     // filled after compile pass:
     var compileAttempt = 0, compileOK = 0
     var compileFailClusters: [String: [String]] = [:]      // first error token -> sample provenances
+    // F140: GPU 디바이스가 없어 컴파일 패스 자체가 통째로 스킵됐는지(0/0="n/a" 를 "미실행"과 구분).
+    var metalDeviceUnavailable = false
 
     // scenes
     var sceneAttempt = 0, sceneParseOK = 0
@@ -145,13 +147,23 @@ struct PkgAssets {
 enum DeepScan {
     static let handPortNames: Set<String> = ["opacity", "tint", "pulse", "waterripple", "scroll", "waterwaves", "shake"]
 
-    static func run(rootPath: String, only: String?) -> String {
+    /// - Returns: (마크다운 리포트, 프로젝트-레벨 미지원 건수 — F151 `--deep --strict` 게이트용. "미지원" 은
+    ///   DeepReport 의 프로젝트-레벨 표(ALL 행)와 동일 기준: 핵심 에셋 파싱 실패, 위 리포트 각주 참고.)
+    static func run(rootPath: String, only: String?) -> (report: String, unsupported: Int) {
         let root = URL(fileURLWithPath: NSString(string: rootPath).expandingTildeInPath, isDirectory: true).standardizedFileURL
         let assetsDir = firstExisting([root.appendingPathComponent("assets"),
                                        root.deletingLastPathComponent().appendingPathComponent("assets")])
         let container = projectContainer(root)
         var folders = projectFolders(container)
-        let knownIDs = Set(folders.map { $0.lastPathComponent })
+        // F137: id 멤버십뿐 아니라 각 프로젝트의 실제 type 도 미리 색인 — preset 의존 검증이 "존재하는가"
+        // 뿐 아니라 "마운트 가능한 타입인가"(scene/video/web)까지 확인하게 한다(런타임 PresetResolver/
+        // RendererFactory 는 application/unknown/preset 의존을 지원 안 함).
+        var knownTypes: [String: WallpaperType] = [:]
+        for f in folders {
+            if let raw = rawJSON(f.appendingPathComponent("project.json")) {
+                knownTypes[f.lastPathComponent] = WallpaperType.from(raw["type"] as? String)
+            }
+        }
         if let only { folders = folders.filter { $0.lastPathComponent == only } }
 
         let agg = DeepAgg()
@@ -159,7 +171,7 @@ enum DeepScan {
 
         DispatchQueue.concurrentPerform(iterations: folders.count) { i in
             autoreleasepool {
-                scanProject(folders[i], assetsDir: assetsDir, knownIDs: knownIDs, agg: agg)
+                scanProject(folders[i], assetsDir: assetsDir, knownTypes: knownTypes, agg: agg)
             }
         }
 
@@ -174,13 +186,16 @@ enum DeepScan {
         compileShaders(agg: agg)
 
         let elapsed = Date().timeIntervalSince(started)
-        return Report.render(agg: agg, root: root, assetsDir: assetsDir,
-                             projectCount: folders.count, translateElapsed: translateElapsed, elapsed: elapsed)
+        let report = Report.render(agg: agg, root: root, assetsDir: assetsDir,
+                                   projectCount: folders.count, translateElapsed: translateElapsed, elapsed: elapsed)
+        let totalAll = agg.projTypeTotal.values.reduce(0, +)
+        let supAll = agg.projTypeSupported.values.reduce(0, +)
+        return (report, totalAll - supAll)
     }
 
     // MARK: project dispatch
 
-    static func scanProject(_ folder: URL, assetsDir: URL?, knownIDs: Set<String>, agg: DeepAgg) {
+    static func scanProject(_ folder: URL, assetsDir: URL?, knownTypes: [String: WallpaperType], agg: DeepAgg) {
         guard let raw = rawJSON(folder.appendingPathComponent("project.json")) else {
             agg.sync { agg.projectJSONTotal += 1; agg.projTypeTotal["invalid", default: 0] += 1 }
             return
@@ -205,7 +220,18 @@ enum DeepScan {
         case .web:
             supported = scanWeb(folder, project: project, agg: agg)
         case .preset:
-            let ok = (project.dependency.map { knownIDs.contains($0) } ?? false)
+            // F137: 의존 대상이 코퍼스에 존재할 뿐 아니라 실제로 마운트 가능한 타입(scene/video/web)일 때만
+            // "resolved" — application/unknown/또다른 preset 은 존재해도 런타임에서 "지원하지 않는 타입"으로
+            // 실패한다(AppLogic.PresetResolver target.type != .preset 요구 + RendererFactory default:nil).
+            let ok: Bool
+            if let dep = project.dependency, let depType = knownTypes[dep] {
+                switch depType {
+                case .scene, .video, .web: ok = true
+                default: ok = false
+                }
+            } else {
+                ok = false
+            }
             agg.sync { agg.presetTotal += 1; if ok { agg.presetResolved += 1 } }
             supported = ok
         case .application, .unknown:
@@ -460,7 +486,11 @@ enum DeepScan {
     // MARK: deferred Metal compile
 
     static func compileShaders(agg: DeepAgg) {
-        guard let device = MTLCreateSystemDefaultDevice() else { return }
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            // F140: 조용한 스킵 대신 명시 표식 — DeepReport 가 "n/a" 대신 이유를 밝힌다.
+            agg.sync { agg.metalDeviceUnavailable = true }
+            return
+        }
         let jobs = Array(agg.mslJobs)   // [(msl, provenance)]
         DispatchQueue.concurrentPerform(iterations: jobs.count) { i in
             autoreleasepool {
@@ -527,13 +557,26 @@ enum DeepScan {
             }
             // ParticleSystemDef.parse always returns a def; treat "has an emitter or initializer" as a real parse.
             let parseOK = !def.emitters.isEmpty || !def.initializers.isEmpty || !def.operators.isEmpty
-            let sim = ParticleSimulator(def: def, seed: 0x9E3779B97F4A7C15)
-            let simOK = sim.liveCount >= 0   // constructing the simulator did not trap
+            // F142: 예전엔 sim.liveCount>=0 (Array.count 라 항상 참인 죽은 검사)로 "빌드됨"을 셌다. 실제로
+            // 한 스텝 시뮬레이션해 방출된 파티클(있다면)의 상태가 전부 유한한지 확인 — 렌더러가 매 프레임
+            // 호출하는 것과 동일 경로(step)를 태워 트랩/NaN 을 잡는다. 방출 타이밍상 t=1/30 에 아직 미방출인
+            // 시스템(지연 스폰 등)은 vacuous true(정상 — 실패로 오분류하지 않음).
+            var sim = ParticleSimulator(def: def, seed: 0x9E3779B97F4A7C15)
+            let stepped = sim.step(1.0 / 30.0)
+            let simOK = stepped.allSatisfy { p in
+                p.pos.x.isFinite && p.pos.y.isFinite && p.pos.z.isFinite
+                    && p.size.isFinite && p.alpha.isFinite
+                    && p.color.x.isFinite && p.color.y.isFinite && p.color.z.isFinite
+            }
             agg.sync {
                 agg.particleFileAttempt += 1
                 if parseOK { agg.particleParseOK += 1 }
-                if simOK { agg.particleSimOK += 1 }
-                if !parseOK && agg.particleFailSamples.count < 8 { agg.particleFailSamples.append(provenance) }
+                if simOK { agg.particleSimOK += 1 } else if agg.particleFailSamples.count < 8 {
+                    agg.particleFailSamples.append("simNaN:\(provenance)")
+                }
+                // F141: emitters/initializers/operators 가 모두 비어 JSON 자체는 유효하나 "내용 없는" 정의는
+                // 별도 라벨(empty:)로 표시 — 실제 파싱 실패(위 guard, 라벨 없음)와 구분해 오분류를 막는다.
+                if !parseOK && agg.particleFailSamples.count < 8 { agg.particleFailSamples.append("empty:\(provenance)") }
             }
             return parseOK
         }

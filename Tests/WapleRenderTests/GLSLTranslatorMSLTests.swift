@@ -134,7 +134,12 @@ final class GLSLTranslatorMSLTests: XCTestCase {
 
     func testRealAudioResponsiveOscilloscopeCompiles() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
-        let url = URL(fileURLWithPath: "/Users/yakisoba/Downloads/wallpaper_dev/backgrounds/3629379075/scene.pkg")
+        // F397: 이 레인의 자매 코퍼스-게이트 테스트(RealPackagesGroundTruthTests 등 19개소)와 동일한
+        // WAPLE_REAL_PKGS 관례 — 종전엔 개발자 1인 계정 절대경로가 박혀 있어 다른 사용자/머신에선
+        // 코퍼스가 있어도 영구 XCTSkip 됐다.
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
+        let url = URL(fileURLWithPath: base).appendingPathComponent("3629379075/scene.pkg")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("real wallpaper package not installed")
         }

@@ -100,7 +100,8 @@ enum ProfilePipeline {
         }
         let restore = SnapshotPipeline.pinRenderSettings(root: root)
         defer { restore() }
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_profile", isDirectory: true)
+        // F148: PID 로 스코프(SnapshotPipeline.runCapture 와 동일 이유 — 동시 실행 간 캡처파일 충돌 방지).
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_profile_\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
         try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
 
         // 메타(파스만, 계측 밖) — 카운트/분류.

@@ -31,10 +31,16 @@ final class ForwardLightingGateProbeTests: XCTestCase {
             r.nowPlayingProvider = Stopped()
             try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
             let litCount = r.layers.filter { $0.isLit }.count
-            NSLog("%@", "[Waple] FL gate scene \(id): forwardLit=\(r.forwardLit) litLayers=\(litCount)/\(r.layers.count)")
+            let forwardLit = r.forwardLit   // teardown() 전에 캡처 — teardown 이 렌더러 상태를 리셋함
+            NSLog("%@", "[Waple] FL gate scene \(id): forwardLit=\(forwardLit) litLayers=\(litCount)/\(r.layers.count)")
             r.teardown()
-            // 세 타깃 모두 2D+라이트 → forwardLit + 최소 1개 lit 레이어(게이트 활성 증명).
-            // 3351179520 은 lit 레이어가 있으나 t=6.0 합성에서 전경 효과에 가려 픽셀 무변(스냅샷 무회귀).
+            // F395: 세 타깃 모두 2D+라이트 → forwardLit + 최소 1개 lit 레이어(게이트 활성 증명)라는
+            // 불변식이 주석으로만 있고 어서션이 없어(NSLog 뿐) 2D 포워드 라이팅 게이트 회귀가 조용히
+            // 통과할 수 있었다 — 문서화된 기대를 실제 XCTAssert 로 승격.
+            // 3351179520 은 lit 레이어가 있으나 t=6.0 합성에서 전경 효과에 가려 픽셀 무변(스냅샷
+            // 무회귀) — 게이트 활성(litCount>0) 자체는 그 씬도 성립해야 한다.
+            XCTAssertTrue(forwardLit, "\(id): forwardLit 게이트가 활성화돼야 함")
+            XCTAssertGreaterThan(litCount, 0, "\(id): lit 레이어가 최소 1개 있어야 함")
         }
     }
 }

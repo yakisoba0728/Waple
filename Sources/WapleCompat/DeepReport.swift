@@ -34,6 +34,17 @@ enum Report {
         }
         p("| **ALL** | **\(totalAll)** | **\(supAll)** | **\(pct(supAll, totalAll))** |")
         p("")
+        // F138/F139/F143: 헤드라인 "supported" 는 핵심 에셋(tex/model/particle) 파싱 + 컨테이너 프로브
+        // 기준이다 — 이펙트 셰이더 번역/컴파일과 사운드 디코드는 별도 절(아래)로만 보고되고 이 열에는
+        // 반영되지 않는다. 비-네이티브 비디오(webm/mkv 등)는 확장자만으로 "supported-in-principle" 처리되며
+        // 실제 ffmpeg 가용성/디코드 프로브는 하지 않는다 — "ffmpeg present" 값을 함께 봐야 한다.
+        p("> **참고(집계 기준)**: 이 표의 `supported` 는 프로젝트 타입별 *핵심 에셋 파싱 성공* 기준입니다 —")
+        p(">   scene = tex/model/particle 전부 파싱·디코드 성공(이펙트 셰이더 번역/컴파일·사운드 디코드는")
+        p(">   미포함, 아래 'Effect shaders'/'Scene audio' 절 참고); video = 네이티브 컨테이너는 AVFoundation")
+        p(">   프로브, 비-네이티브(webm/mkv 등)는 확장자만으로 in-principle 처리(디코드 프로브 없음, 아래")
+        p(">   'ffmpeg present' 값 참고); web = index 파일 존재 여부만. 즉 이 열은 '렌더 정확도'가 아니라")
+        p(">   '파싱 가능성'의 상한입니다.")
+        p("")
         p("project.json parsed: \(agg.projectJSONOK)/\(agg.projectJSONTotal) (\(pct(agg.projectJSONOK, agg.projectJSONTotal)))")
         p("properties parsed: \(agg.propsProjects); display conditions evaluable: \(agg.conditionsEvaluable)/\(agg.conditionsTotal) (\(pct(agg.conditionsEvaluable, agg.conditionsTotal)))")
         p("")
@@ -83,7 +94,19 @@ enum Report {
         p("- resolved via hand-port stock effect: \(agg.effectHandPort)")
         p("- shader files missing (skipped): \(agg.effectShaderMissing)")
         p("- **GLSL translate**: \(agg.translateOK)/\(agg.translateAttempt) (\(pct(agg.translateOK, agg.translateAttempt)))")
-        p("- **Metal compile** (unique MSL): \(agg.compileOK)/\(agg.compileAttempt) (\(pct(agg.compileOK, agg.compileAttempt)))")
+        if agg.metalDeviceUnavailable {
+            // F140: 조용한 0/0="n/a" 대신 이유를 명시 — 헤드리스/무-Metal 환경에서 컴파일 검증이
+            // 전혀 수행되지 않았음을 눈에 띄게 알린다(exit code 는 여전히 0 — 별도 셸 게이트 필요).
+            p("- **Metal compile**: SKIPPED — no Metal-capable GPU device on this host (compile verification NOT performed, not the same as 0%)")
+        } else {
+            p("- **Metal compile** (unique MSL): \(agg.compileOK)/\(agg.compileAttempt) (\(pct(agg.compileOK, agg.compileAttempt)))")
+        }
+        // F139: 위 두 수치는 패스 단위 집계다 — 실제 렌더러(SceneRendererResources.buildTranslatedEffect)는
+        // 화면-출력 패스가 0개이거나 bind/target 이름이 해석되지 않으면 *이펙트 전체*를 nil 로 폐기한다.
+        // 이 스캔은 그 이펙트-단위 게이트를 미러링하지 않으므로, 개별 패스가 전부 번역/컴파일에 성공해도
+        // 실제로는 화면에 그려지지 않을 이펙트가 위 비율에 포함될 수 있다.
+        p("> 참고: 위 비율은 *패스* 단위이며, 렌더러가 이펙트 전체를 폐기하는 조건(출력 패스 0개, bind/target")
+        p("> 이름 미해석)은 반영하지 않습니다 — 실제 화면 출력 성공률의 상한치로 읽으세요.")
         p("")
         if !agg.translateFailSamples.isEmpty {
             p("### translate failures (samples)")
@@ -128,8 +151,11 @@ enum Report {
         p("- native container + AVFoundation playable: \(agg.videoNativePlayable) (\(pct(agg.videoNativePlayable, agg.videoTotal)))")
         p("- native container but not playable: \(agg.videoNativeUnplayable)")
         p("- non-native (webm/... -> FFmpegConverter, supported-in-principle): \(agg.videoConvertible)")
+        // F143: 위 non-native 건수는 위 'ALL' 헤드라인 표에 supported 로 그대로 합산되지만, 확장자만
+        // 보고 판정하며 실제 디코드 프로브는 없다(ffmpeg 미가용/파일손상이어도 supported). 아래 값이
+        // false 면 이 non-native 건들은 이 머신에서 실제로는 재생 불가하다.
         p("- unknown container: \(agg.videoUnknownContainer)")
-        p("- ffmpeg present on this machine: \(FFmpegConverter.isAvailable)")
+        p("- ffmpeg present on this machine: \(FFmpegConverter.isAvailable)\(FFmpegConverter.isAvailable ? "" : "  ⚠️ non-native \(agg.videoConvertible)건은 이 머신에서 실제로는 재생 불가(위 헤드라인엔 supported 로 집계됨)")")
         if !agg.videoFailSamples.isEmpty { p("- fail/unknown samples: \(agg.videoFailSamples.joined(separator: " | "))") }
         p("")
 

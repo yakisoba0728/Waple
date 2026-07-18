@@ -1,11 +1,24 @@
 import Foundation
 
+// F232: `info` 케이스가 있었으나 analyzer 전체에서 이 값으로 이슈를 생성하는 곳이 한 군데도 없어(죽은
+// 코드) 제거 — 실제 사용은 .warning/.error 뿐. sortRank 확장도 함께 정리.
 public enum WallpaperCompatibilitySeverity: String, Codable, Equatable {
-    case info
     case warning
     case error
 }
 
+// F235: 22종 중 8종이 한 번도 생성되지 않는 죽은 코드였다. 재조사 결과:
+// - presetOverridesNotApplied/fractionalPropertyOrder/localizedProperties/directoryFetchAll 4종은
+//   애초에 "위험해 보이지만 실제로 지원됨"으로 판명난 시나리오의 예약 코드였다(테스트 픽스처가 정확히
+//   이 트리거 조건들 — 프리셋 오버라이드·소수 order·localization 블록·directory fetchall — 을 재현해
+//   "이슈 없음"을 단언하는 음성 회귀 가드로 이미 존재: WallpaperProperties.localizationTable 이 실제로
+//   지역화를 지원하고, WebRenderer:326 이 fetchall 모드를 실제로 처리하며, order 는 단순 Double 정렬키라
+//   소수여도 문제없다 — 리터럴로 확정된 갭이 아니므로 제거). 실제 재조사 근거 없이 남겨두면 향후 세션이
+//   "구현 예정 기능"으로 오인할 위험이 있어 퇴출한다.
+// - webServiceWorker/webAudioListener/webMediaIntegration/remoteNetworkReference 4종은 반대로 이미
+//   analyzeWebFeatures 가 실제로 탐지(features.insert)까지 하고서도 issue 로 승격하지 않던 것 — 아래
+//   analyzeWebFeatures 에서 .warning 으로 배선한다(호환 위험 신호는 있으나 렌더 실패로 확정되지는
+//   않으므로 .error 아닌 .warning).
 public enum WallpaperCompatibilityIssueCode: String, Codable, Equatable, CaseIterable {
     case invalidProjectJSON
     case unsupportedApplicationType
@@ -17,12 +30,8 @@ public enum WallpaperCompatibilityIssueCode: String, Codable, Equatable, CaseIte
     case missingPreviewFile
     case missingScenePackage
     case missingPresetDependency
-    case presetOverridesNotApplied
     case unsupportedPropertyType
-    case fractionalPropertyOrder
     case propertyDisplayCondition
-    case localizedProperties
-    case directoryFetchAll
     case nonNativeVideoContainer
     case webServiceWorker
     case webRandomFileBridge
@@ -130,15 +139,16 @@ public struct WallpaperCompatibilityReport: Codable, Equatable {
 
 public enum WallpaperCompatibilityAnalyzer {
     /// 지원 속성 타입 단일 소스 — DeepScan 의 known 목록도 이걸 참조(스캐너 간 불일치 방지).
+    /// F229: "boo4"/"uwu" 는 AppLogicTests 의 PropertyControl.kind(forType:) 미지 타입 폴백 검증용
+    /// 더미 문자열이었다(be10dad 에서 테스트와 동시에 잘못 유입) — 실제 WE 속성 타입이 아니므로 제거.
     public static let currentPropertyTypes: Set<String> = [
         "bool", "checkbox", "slider", "combo", "color", "textinput", "text",
         "file", "directory", "scenetexture", "texture", "usershortcut", "group", "label",
-        "boo4", "uwu"
     ]
 
-    private static let nativeVideoExtensions: Set<String> = [
-        "mp4", "m4v", "mov"
-    ]
+    /// F230: VideoRenderer.nativeVideoExtensions 와 값이 같아야 하는 사본을 따로 두지 않는다 —
+    /// WapleCore.VideoFormats 가 단일 소스(위 currentPropertyTypes 와 동일 원칙).
+    private static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
 
     public static func scan(rootURL: URL) throws -> WallpaperCompatibilityReport {
         let root = rootURL.standardizedFileURL
@@ -211,30 +221,11 @@ public enum WallpaperCompatibilityAnalyzer {
             )
         }
 
-        let project: WallpaperProject
-        do {
-            project = try ProjectJSONParser.parse(data: try Data(contentsOf: folderURL.appendingPathComponent("project.json")),
-                                                  folderURL: folderURL)
-        } catch {
-            let issue = WallpaperCompatibilityIssue(
-                severity: .error,
-                code: .invalidProjectJSON,
-                message: "project.json could not be parsed by Waple: \(error)",
-                projectID: id
-            )
-            return WallpaperCompatibilityProjectReport(
-                id: id,
-                title: id,
-                type: "invalid",
-                folderPath: folderURL.path,
-                fileName: nil,
-                previewName: nil,
-                dependency: nil,
-                propertyTypes: [:],
-                detectedFeatures: [],
-                issues: [issue]
-            )
-        }
+        // F231: `raw` 는 이미 이 폴더의 project.json 을 성공적으로 읽어 JSON 파싱한 결과다 — 같은 파일을
+        // 다시 Data(contentsOf:) 로 읽고 다시 JSONSerialization 하는 대신 그 결과를 그대로 넘긴다
+        // (ProjectJSONParser.parse(json:folderURL:) 는 non-throwing — 실패 가능성은 위 guard 가 이미
+        // 소진했다). 부수 이득: 두 번 읽던 사이의 TOCTOU 창(파일이 그 사이 바뀌는 경우)도 사라진다.
+        let project = ProjectJSONParser.parse(json: raw, folderURL: folderURL)
 
         analyzeTypeAndFiles(project, raw: raw, folderURL: folderURL, knownProjectIDs: knownProjectIDs, issues: &issues)
         let propertyTypes = analyzeProperties(raw: raw, projectID: project.id, issues: &issues)
@@ -411,17 +402,31 @@ public enum WallpaperCompatibilityAnalyzer {
             ))
             return
         }
-        guard let previewURL = WallpaperPathSecurity.containedFileURL(preview, root: folderURL),
-              FileManager.default.fileExists(atPath: previewURL.path) else {
+        if let previewURL = WallpaperPathSecurity.containedFileURL(preview, root: folderURL),
+           FileManager.default.fileExists(atPath: previewURL.path) {
+            return
+        }
+        // F233/F234: existingMainFile 과 동일한 Unicode(NFC/NFD) 정규화 동치 폴백 — 바이트 단위로는
+        // 안 맞지만 실존하는 프리뷰 파일(Steam Workshop/한글 파일명 환경에서 흔함)을 거짓
+        // missingPreviewFile 로 잘못 잡지 않는다. main file 은 이미 이 폴백을 쓰는데 preview 만
+        // 엄격했던 비대칭을 해소.
+        if let equivalent = unicodeEquivalentURL(for: preview, root: folderURL) {
             issues.append(WallpaperCompatibilityIssue(
                 severity: .warning,
-                code: .missingPreviewFile,
-                message: "Preview file is missing from the project folder.",
+                code: .unicodeNormalizedFileMatch,
+                message: "Declared preview does not exist byte-for-byte, but a Unicode-normalized filename exists.",
                 projectID: project.id,
-                relativePath: preview
+                relativePath: relativePath(of: equivalent, root: folderURL)
             ))
             return
         }
+        issues.append(WallpaperCompatibilityIssue(
+            severity: .warning,
+            code: .missingPreviewFile,
+            message: "Preview file is missing from the project folder.",
+            projectID: project.id,
+            relativePath: preview
+        ))
     }
 
     private static func analyzeProperties(raw: [String: Any],
@@ -486,17 +491,20 @@ public enum WallpaperCompatibilityAnalyzer {
             if text.contains("wallpaperWillGoBackground") || text.contains("wallpaperWillGoForeground") {
                 features.insert("webLifecycle")
             }
+            // F235: 아래 4건은 종전엔 features.insert 만 하고 issue 로 승격하지 않아 markdown/JSON 요약·
+            // --strict 게이트 어디에도 반영되지 않았다(detectedFeatures 에만 남아 사람이 안 읽는 한
+            // 소실). add(...) 로 최소 .warning 승격 — feature 키 자체는 하위호환을 위해 그대로 둔다.
             if text.range(of: "serviceWorker", options: .caseInsensitive) != nil {
-                features.insert("serviceWorker")
+                add("serviceWorker", .webServiceWorker, .warning, "Web wallpaper touches the serviceWorker API; Waple's offline WKWebView may not offer full parity for background sync/fetch interception.")
             }
             if text.contains("wallpaperRequestRandomFileForProperty") {
                 add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.")
             }
             if text.contains("wallpaperRegisterAudioListener") {
-                features.insert("audioListener")
+                add("audioListener", .webAudioListener, .warning, "Web wallpaper registers a Wallpaper Engine audio listener; verify Waple's audio bridge coverage for this project.")
             }
             if text.contains("wallpaperRegisterMedia") || text.contains("wallpaperMedia") {
-                features.insert("mediaIntegration")
+                add("mediaIntegration", .webMediaIntegration, .warning, "Web wallpaper uses Wallpaper Engine media integration bridges; coverage may be partial.")
             }
             if text.range(of: #"\bwebgl\b|OES_"#, options: [.regularExpression, .caseInsensitive]) != nil {
                 features.insert("webGL")
@@ -505,7 +513,7 @@ public enum WallpaperCompatibilityAnalyzer {
                 features.insert("fileURL")
             }
             if text.range(of: #"https?://"#, options: [.regularExpression, .caseInsensitive]) != nil {
-                features.insert("remoteNetwork")
+                add("remoteNetwork", .remoteNetworkReference, .warning, "Web wallpaper references a remote (non-local) URL; Waple's offline WKWebView may block or fail this request.")
             }
         }
         return Array(features)
@@ -543,6 +551,17 @@ public enum WallpaperCompatibilityAnalyzer {
 
         guard let sceneData = package.data(for: "scene.json") ?? package.data(for: "gifscene.json"),
               let scene = try? JSONSerialization.jsonObject(with: sceneData) as? [String: Any] else {
+            // F236: 패키지 자체는 유효하게 파싱됐지만 scene.json/gifscene.json 이 없거나(또는 JSON으로
+            // 해석 불가) 실려 있지 않은 경우 — 위 catch(패키지 파싱 자체 실패)와 대칭으로 이슈를 남긴다.
+            // SceneDocument 를 구성할 방법이 없어 실제로는 렌더 불가할 개연성이 높은데, 종전엔 이슈
+            // 없이 조용히 통과해 "이슈 없음=렌더 가능" 이라는 이 스캐너의 보장이 이 경로에서만 깨졌다.
+            issues.append(WallpaperCompatibilityIssue(
+                severity: .error,
+                code: .missingScenePackage,
+                message: "Scene package parsed but contains no scene.json/gifscene.json (or it is not valid JSON) — Waple cannot build a SceneDocument from it.",
+                projectID: project.id,
+                relativePath: packageURL.lastPathComponent
+            ))
             return Array(features)
         }
         let sceneText = String(data: sceneData, encoding: .utf8) ?? ""
@@ -709,7 +728,8 @@ public enum WallpaperCompatibilityAnalyzer {
 
     private static func unicodeEquivalentURL(for relativePath: String, root: URL) -> URL? {
         guard let normalized = WallpaperPathSecurity.normalizedRelativePath(relativePath) else { return nil }
-        var current = root
+        let rootURL = root.standardizedFileURL
+        var current = rootURL
         for component in normalized.split(separator: "/").map(String.init) {
             guard let entries = try? FileManager.default.contentsOfDirectory(at: current, includingPropertiesForKeys: nil) else {
                 return nil
@@ -723,8 +743,16 @@ public enum WallpaperCompatibilityAnalyzer {
             }) else {
                 return nil
             }
-            current = match
+            current = match.standardizedFileURL
+            // F237: containedFileURL 과 동일한 논리 재검증 — 컴포넌트를 하나씩 실제 디렉터리 목록에서
+            // 골라 내려가므로 그 자체로는 탈출하지 않지만, 중간 디렉터리가 심볼릭 링크로 바뀌어 있으면
+            // 다음 nameOfContentsOfDirectory 가 루트 밖을 나열할 수 있다 — 매 스텝 즉시 방어.
+            guard WallpaperPathSecurity.contains(current, in: rootURL) else { return nil }
         }
+        // 최종 결과도 containedFileURL 과 동일하게 realpath 기준 재검증(심링크 경유 탈출 차단).
+        let realRoot = rootURL.resolvingSymlinksInPath().standardizedFileURL
+        let realCurrent = current.resolvingSymlinksInPath().standardizedFileURL
+        guard WallpaperPathSecurity.contains(realCurrent, in: realRoot) else { return nil }
         return current
     }
 
@@ -741,7 +769,6 @@ private extension WallpaperCompatibilitySeverity {
         switch self {
         case .error: return 3
         case .warning: return 2
-        case .info: return 1
         }
     }
 }
