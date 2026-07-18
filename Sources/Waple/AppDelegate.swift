@@ -63,6 +63,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
     private var stillSyncWork: DispatchWorkItem?
 
+    // 화면 구성 변경(F034): didChangeScreenParametersNotification 은 한 물리 이벤트당 여러 번 연속
+    // 발화하는 게 macOS 표준 동작이라, 코얼레싱 없이 매번 반응하면 배경이 반복 리마운트된다.
+    private var screenChangeWork: DispatchWorkItem?
+    // F033: 새 모니터 연결 감지용 — screensChanged 가 실제로(디바운스 정착 후) 실행될 때만 갱신해
+    // 한 버스트 안의 중간값이 아니라 '정착 전 vs 정착 후'를 비교한다.
+    private lazy var lastSettledScreenCount = NSScreen.screens.count
+
     // 최근 배경 서브메뉴(작업 6): 열 때마다 최신 목록으로 다시 채운다(NSMenuDelegate).
     private weak var recentMenu: NSMenu?
 
@@ -403,7 +410,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// F034: didChangeScreenParametersNotification 은 단일 모니터 연결/해제·해상도 정착·Dock
+    /// 표시-숨김·디스플레이 슬립/웨이크에서 macOS 가 보통 2~4회 연속 발화한다 — 디바운스 없이 매번
+    /// 반응하면 배경이 반복 리마운트된다(동영상 t=0 재시작·웹 페이지 리로드·텍스처 재업로드).
+    /// scheduleDesktopStillSync 와 동일한 취소+재예약 패턴으로 흡수.
     @objc private func screensChanged() {
+        screenChangeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.performScreensChanged() }
+        screenChangeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func performScreensChanged() {
+        // F033: 새 디스플레이가 연결됐으면(정착 전 대비 화면 수 증가) 화면별 지정 기능을 안내 —
+        // 재구성/재적용 '전'에 스냅샷해야 rebuild 이후에도 비교가 유효하다.
+        let newScreenDetected = NSScreen.screens.count > lastSettledScreenCount
+        lastSettledScreenCount = NSScreen.screens.count
+
         // F036/F035: renderers 를 여기서 선-소거하면 desktopController.rebuild() 직후 재적용이 실패했을 때
         // RendererSwap.apply(existing:) 의 롤백 안전망("mount 실패 시 existing 은 건드리지 않는다")이 이미
         // 빈 배열을 붙잡아 무력화된다. 살아있는 renderers 를 그대로 넘겨 applyResolved → RendererSwap 이
@@ -412,6 +435,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeVideoProjectIds = []
         desktopController.rebuild()
         _ = applyCurrentSelection()
+
+        if newScreenDetected {
+            notify("새 디스플레이가 연결됐습니다 — 화면마다 다른 배경을 지정하려면 '디스플레이' 버튼을 확인하세요")
+        }
     }
 
     /// 재생목록 타이머 재구성. 비활성/빈 목록 → 정지(스케줄 조건은 추출 로직).
