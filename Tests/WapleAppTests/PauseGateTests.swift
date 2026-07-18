@@ -75,4 +75,20 @@ final class PauseGateTests: XCTestCase {
         XCTAssertFalse(r.active); XCTAssertEqual(r.action, .none, "가림이 남아 재개 안 함")
         XCTAssertTrue(g.isPaused)
     }
+
+    // MARK: - F040: UI 미러는 사유별 플래그가 아니라 isPaused(전체)를 봐야 한다
+
+    /// 트레이/하단 바가 종전처럼 `isActive(.manual)`(또는 toggle 의 `active`)만 보고 "정지 여부"를
+    /// 판단하면, 가림으로 실제 정지 중인데도 수동 사유가 꺼져 있다는 이유만으로 "재생 중"이라고
+    /// 오표시한다. AppDelegate.menuNeedsUpdate/toggleGlobalPause 는 이제 `isPaused`(사유 무관)를 쓴다 —
+    /// 이 테스트는 그 근거인 두 신호의 괴리를 명시적으로 고정한다.
+    func testIsPaused_diverges_fromManualOnlySignal_whileOccludedAndManualOff() {
+        var g = PauseGate()
+        _ = g.set(.occlusion, active: true)     // 가림으로 정지(사유: occlusion)
+        _ = g.toggle(.manual)                   // 수동 켬(렌더 무동작 — 이미 정지 중)
+        let r = g.toggle(.manual)               // 수동 다시 끔 → manual 사유는 이제 off
+        XCTAssertFalse(r.active, "manual 사유 자체는 꺼짐")
+        XCTAssertFalse(g.isActive(.manual), "isActive(.manual) 만 보면 '정지 아님'으로 오판(F040 구버전 버그)")
+        XCTAssertTrue(g.isPaused, "그러나 가림 사유가 남아 실제로는 계속 정지 — UI 미러는 이 값을 써야 한다")
+    }
 }

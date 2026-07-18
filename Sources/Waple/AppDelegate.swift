@@ -446,19 +446,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 전역 일시정지 (메인창 하단 바)
 
     /// 하단 바 일시정지 토글 — 새 상태 반환. 가림·슬립 정지와 독립(하나라도 있으면 정지 유지).
+    /// 반환값은 수동 사유 하나만이 아니라 실제 정지 여부(pauseGate.isPaused, F040) — 예: 가림으로
+    /// 이미 정지 중일 때 수동을 껐다 해도 여전히 정지 중이면 true 를 반환해야 UI 가 거짓 재생을 안 보인다.
     func toggleGlobalPause() -> Bool {
-        let (active, action) = pauseGate.toggle(.manual)
+        let (_, action) = pauseGate.toggle(.manual)
         applyPause(action)
-        return active
+        return pauseGate.isPaused
     }
 
     /// PauseGate 결정을 실제 렌더러에 적용(사유 합성은 gate 가, 실제 pause/resume I/O 는 여기서).
+    /// F040: 가림·슬립처럼 토글 메뉴를 거치지 않는 사유도 하단 바/트레이 미러(libraryVM.isPaused)를
+    /// 여기서 함께 갱신한다 — 경계를 안 넘는 .none 은 상태 변화가 없으므로 미러도 스킵(가림 폴링이
+    /// 매초 재호출해도 불필요한 SwiftUI 재발행을 만들지 않는다).
     private func applyPause(_ action: PauseGate.Action) {
         switch action {
         case .pause:  renderers.forEach { $0.pause() }
         case .resume: renderers.forEach { $0.resume() }
-        case .none:   break
+        case .none:   return
         }
+        libraryVM.isPaused = pauseGate.isPaused
     }
 
     // MARK: - 시스템/디스플레이 슬립 자동 정지 (앱셸 스코프 A)
@@ -727,7 +733,9 @@ extension AppDelegate: NSMenuDelegate {
     /// 서브메뉴를 열 때 최신 목록으로 다시 채운다(그 사이 삭제된 id 는 제외).
     public func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === statusMenu {
-            pauseMenuItem?.title = pauseGate.isActive(.manual) ? "재개" : "일시정지"
+            // F040: 수동 사유만 보면 가림·슬립으로 실제 정지 중일 때도 "일시정지"로 오표시된다 —
+            // 실제 렌더 상태(pauseGate.isPaused, 사유 무관)를 기준으로 라벨을 정한다.
+            pauseMenuItem?.title = pauseGate.isPaused ? "재개" : "일시정지"
             return
         }
         guard menu === recentMenu else { return }
