@@ -64,7 +64,8 @@ public enum ParticleOperator: Equatable {
     case sizeChange(startTime: Float, startValue: Float, endValue: Float, endTime: Float = 1)
     /// 수명 비율 구간에서 RGB factor를 성분별 보간해 현재 색에 곱한다.
     case colorChange(startTime: Float, startValue: Vec3, endValue: Vec3, endTime: Float = 1)
-    case angularMovement(force: Vec3)
+    /// 각가속 + 선형 movement(위 61행)와 대칭인 drag 감쇠(기본 0=무감쇠, 종전 동작 무회귀).
+    case angularMovement(force: Vec3, drag: Float = 0)
     /// 위상 진동: alpha ×= lerp(scaleMin, scaleMax, 0.5(1+sin(2πf·age+phase))). 파티클별 f/phase 는
     /// 스폰 시 range(min,max) 샘플(phasemin/max 부재 시 0 — 전 파티클 동위상, fireworks 근동기 의도).
     case oscillateAlpha(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
@@ -432,7 +433,9 @@ public struct ParticleSystemDef: Equatable {
                                         endValue: pvec3(o["endvalue"]) ?? Vec3(x: 0, y: 0, z: 0),
                                         endTime: pfloat(o["endtime"]) ?? 1))
             case "angularmovement":
-                ops.append(.angularMovement(force: pvec3(o["force"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                // F188: drag 파싱 — movement(위 421행)의 선형 drag 와 대칭(부재 시 0, 무회귀).
+                ops.append(.angularMovement(force: pvec3(o["force"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                            drag: pfloat(o["drag"]) ?? 0))
             case "oscillatealpha":
                 // fmax 부재 시 fmin 승계(scaleMax 와 동일 패턴) — 역범위 rng.range(fmin, 0) 방지(감사 V03).
                 // scalemax 기본은 scalemin 승계가 아니라 1 고정(비퇴화, F189/F190) — 자매 oscillatesize 는

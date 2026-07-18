@@ -343,6 +343,36 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertGreaterThan(a[0].vel.y, 0)  // cross(z, +x) = +y → 접선 속도 +y
     }
 
+    // MARK: - angularmovement drag (F188, movement 의 선형 drag 와 대칭)
+
+    func testAngularMovementNoDragAccumulatesUnbounded() {
+        // drag=0(기본) 은 종전 동작 그대로 등가속 누적(무회귀).
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.angularMovement(force: Vec3(x: 0, y: 0, z: 10))],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        let a = sim.step(1.0)[0]
+        let b = sim.step(1.0)[0]
+        XCTAssertEqual(a.angularVel.z, 10, accuracy: 1e-4)
+        XCTAssertEqual(b.angularVel.z, 20, accuracy: 1e-4, "무감쇠 등가속 누적(무회귀)")
+    }
+
+    func testAngularMovementDragDampensAngularVelocity() {
+        // 각속도가 drag 로 감쇠돼 force/drag 정상상태로 수렴해야(무감쇠 단조누적과 대비).
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.angularMovement(force: Vec3(x: 0, y: 0, z: 10), drag: 2)],
+            renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 1)
+        var last: [Particle] = []
+        for _ in 0..<200 { last = sim.step(0.05) }
+        XCTAssertLessThan(last[0].angularVel.z, 10, "감쇠로 유계(무감쇠라면 단조 누적해 200스텝 후 10 을 크게 상회)")
+        XCTAssertGreaterThan(last[0].angularVel.z, 0)
+    }
+
     // MARK: - 난류(turbulence)
 
     /// 정적 파티클(vel 0, gravity 0)에 turbulence 만 작용 — 이류 격리용. origin 은 격자 밖(0.25,0.25) 좌표.

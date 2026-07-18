@@ -46,7 +46,7 @@ public struct ParticleSimulator {
 
     // 파생 오퍼레이터(스폰 시/표시 시 참조) 캐시.
     private let movements: [(gravity: SIMD3<Float>, drag: Float)]
-    private let angulars: [SIMD3<Float>]
+    private let angulars: [(force: SIMD3<Float>, drag: Float)]
     private let sizeChanges: [(st: Float, et: Float, sv: Float, ev: Float)]
     private let colorChanges: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)]
     private let alphaFade: (fin: Float, fout: Float)?
@@ -96,7 +96,7 @@ public struct ParticleSimulator {
         self.acc = Array(repeating: 0, count: def.emitters.count)
 
         var mv: [(SIMD3<Float>, Float)] = []
-        var ang: [SIMD3<Float>] = []
+        var ang: [(SIMD3<Float>, Float)] = []
         var sc: [(st: Float, et: Float, sv: Float, ev: Float)] = []
         var cc: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)] = []
         var af: (Float, Float)? = nil
@@ -111,7 +111,7 @@ public struct ParticleSimulator {
         for op in def.operators {
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
-            case let .angularMovement(f): ang.append(s3(f))
+            case let .angularMovement(f, drag): ang.append((s3(f), drag))
             case let .sizeChange(st, sv, ev, et):
                 sc.append((st: st, et: et, sv: sv, ev: ev))
             case let .colorChange(st, sv, ev, et):
@@ -139,7 +139,7 @@ public struct ParticleSimulator {
             }
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
-        angulars = ang
+        angulars = ang.map { (force: $0.0, drag: $0.1) }
         sizeChanges = sc
         colorChanges = cc
         alphaFade = af.map { (fin: $0.0, fout: $0.1) }
@@ -282,8 +282,11 @@ public struct ParticleSimulator {
                                            phase: particles[k].turbPhase, time: time)
                 particles[k].pos += v * dt
             }
-            for f in angulars {
-                particles[k].angularVel += f * dt
+            for a in angulars {
+                // 선형 movement(위 273-276행)와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
+                // 등가속 무감쇠 누적(무회귀).
+                particles[k].angularVel += a.force * dt
+                if a.drag > 0 { particles[k].angularVel *= max(0, 1 - a.drag * dt) }
                 particles[k].rotation += particles[k].angularVel * dt
             }
             // 트레일 위치 히스토리(dt>0 만 — step(0) 스냅샷 중복 방지). 링버퍼로 trailSamples 유지.

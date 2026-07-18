@@ -246,6 +246,17 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(RendererKind.sprite.trailSampleCount, 0)
     }
 
+    // F188: drag 파싱 — movement 의 선형 drag(:418행)와 대칭. 실물 45/47 회귀·2/47 drag 실사용.
+    func testAngularMovementParsesDrag() {
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"angularmovement","force":"0 0 2","drag":0.5}]}"#), material: nil)
+        XCTAssertTrue(d.operators.contains(.angularMovement(force: Vec3(x: 0, y: 0, z: 2), drag: 0.5)))
+    }
+
+    func testAngularMovementDragDefaultsToZero() {
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"angularmovement","force":"1 0 0"}]}"#), material: nil)
+        XCTAssertTrue(d.operators.contains(.angularMovement(force: Vec3(x: 1, y: 0, z: 0), drag: 0)))
+    }
+
     func testParseVortex() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"vortex","axis":"0 0 1","distanceinner":0,"distanceouter":50,"speedinner":300,"speedouter":0,"offset":"0 0 0"}],"renderer":[{"name":"sprite"}],"maxcount":10}"#), material: nil)
         XCTAssertTrue(d.operators.contains(.vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 50,
