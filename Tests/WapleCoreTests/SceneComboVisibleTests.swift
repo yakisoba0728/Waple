@@ -113,7 +113,10 @@ final class SceneComboVisibleTests: XCTestCase {
     /// 효과 상수 스크립트(constantshadervalues 바인딩)의 저장 `scriptproperties`를 parseEffects 가 보존하는지.
     /// 벡터 value("r g b" 컬러 — float 단일파스 실패로 dict 브랜치 도달, 실물 3388330010 color 패턴)에서
     /// 스크립트가 캡처되므로 그 자리에 scriptProps 보존. 스크립트 없는 정적 상수는 미포함(무회귀).
-    /// (주의: 스칼라 value 바인딩은 상류 float 언랩 short-circuit 으로 스크립트 자체가 미캡처 — 별도 기존 결함.)
+    /// (F390 정정: 위 주의는 fcd85fc 도입 당시엔 사실이었으나 같은 날 6a5b75b(스칼라 효과 상수
+    /// {value,script} 스크립트 미캡처 수정 — parseEffects 의 float(v) 언랩 short-circuit 을 스크립트
+    /// 캡처보다 뒤로 호이스트)로 해소됨. 지금은 스칼라도 정상 캡처된다 — 반증은
+    /// SceneDocumentTests.testScalarConstantScriptCaptured/testScalarConstantScriptPropertiesInjected.)
     func testEffectConstantScriptPropertiesPreservedAtParse() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},

@@ -117,8 +117,11 @@ final class ParticleChildrenTests: XCTestCase {
                                                    lifetime: 10, maxCount: 4), seed: 36)
         for _ in 0..<20 { _ = sim.step(0.05) }
         // rate 20/s × 1s × 2인스턴스 ≈ 40 총이지만 수명 5s 라 전부 생존 → 인스턴스별 maxCount 8 캡 × 2 = 16 상한.
-        XCTAssertLessThanOrEqual(sim.childDisplay(0).count, 16)
-        XCTAssertFalse(sim.childDisplay(0).isEmpty)
+        // F389: 상한(<=16)과 비어있지 않음만으론 링크 캡이 2→1로 붕괴해도(각 인스턴스 8 캡 그대로 <=8<=16)
+        // green 을 유지한다 — 하한(>8)을 추가해 "2개 인스턴스가 실제로 기여했다"를 직접 단언.
+        let count = sim.childDisplay(0).count
+        XCTAssertLessThanOrEqual(count, 16)
+        XCTAssertGreaterThan(count, 8, "2개 인스턴스(각 캡 8)가 기여해야 함 — 8 이하면 링크 캡이 1로 붕괴")
     }
 
     func testParse_childLinksRealKeys() {
