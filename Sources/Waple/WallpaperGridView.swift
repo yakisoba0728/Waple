@@ -209,7 +209,11 @@ struct WallpaperGridView: View {
 
     @ViewBuilder
     private func contextMenu(for entry: LibraryEntry, supported: Bool) -> some View {
-        Button("선택(속성 보기)") { viewModel.focusedId = entry.id }
+        Button("선택(속성 보기)") {
+            // 패널이 접혀 있어도 즉시 보이도록(F103류 데드엔드 방지) — MainWindowView 의 기존 패널
+            // 토글과 동일한 스프링으로 트랜지션(:127 .move(edge: .trailing))을 재사용한다.
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { viewModel.selectForPropertiesView(entry) }
+        }
         if supported { Button("적용") { _ = viewModel.apply(entry) } }
         if WallpaperType.from(entry.typeRaw) == .web {
             Button("적용 + 조작 창 열기") { _ = viewModel.apply(entry); viewModel.onOpenInteraction?() }

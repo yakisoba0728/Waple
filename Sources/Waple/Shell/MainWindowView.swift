@@ -28,7 +28,6 @@ struct MainWindowView: View {
         ProcessInfo.processInfo.environment["WAPLE_SMOKE_TAB"].flatMap(MainTab.init(rawValue:)) ?? .installed
     @State private var showDisplays = ProcessInfo.processInfo.environment["WAPLE_SMOKE_DISPLAYS"] != nil
     @State private var showFilters = ProcessInfo.processInfo.environment["WAPLE_SMOKE"] != nil  // 스모크 캡처용 기본 노출
-    @State private var panelVisible = true
 
     init(viewModel: LibraryViewModel, banner: StatusBannerModel, onboarding: OnboardingModel,
          screenFrames: @escaping () -> [CGRect]) {
@@ -102,10 +101,10 @@ struct MainWindowView: View {
             Button { viewModel.onOpenSettings?() } label: { Label("설정", systemImage: "gearshape") }
                 .help("설정")
             if tab == .installed {
-                Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { panelVisible.toggle() } } label: {
+                Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { viewModel.panelVisible.toggle() } } label: {
                     Label("정보 패널", systemImage: "sidebar.trailing")
                 }
-                .help(panelVisible ? "정보 패널 숨기기" : "정보 패널 보기")
+                .help(viewModel.panelVisible ? "정보 패널 숨기기" : "정보 패널 보기")
             }
         }
     }
@@ -121,7 +120,7 @@ struct MainWindowView: View {
                     Divider()
                 }
                 WallpaperGridView(viewModel: viewModel)
-                if panelVisible {
+                if viewModel.panelVisible {
                     Divider()
                     SelectionPanelView(viewModel: viewModel)
                         .transition(.move(edge: .trailing))

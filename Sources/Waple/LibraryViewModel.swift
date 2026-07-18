@@ -9,6 +9,9 @@ final class LibraryViewModel: ObservableObject {
     @Published var selectedId: String?
     // MARK: - 브라우즈 상태(메인창 UI) — selectedId(=적용됨)와 구분되는 패널 포커스.
     @Published var focusedId: String?
+    /// 우측 정보 패널 노출 여부(툴바 토글이 소유하던 로컬 @State 를 승격 — selectForPropertiesView 가
+    /// focusedId 와 함께 갱신할 수 있어야 하기 때문. 기본 true(기존 동작 무회귀).
+    @Published var panelVisible = true
     @Published var searchText = ""
     @Published var criteria = LibraryFilterCriteria()
     @Published var activeFolder: String?
@@ -123,6 +126,14 @@ final class LibraryViewModel: ObservableObject {
     func moveToFolder(_ entry: LibraryEntry, folder: String?) {
         folders.move(entry.id, to: folder)
         objectWillChange.send()
+    }
+
+    /// 그리드 우클릭 "선택(속성 보기)" 진입점(w5d-settings-ia) — 포커스와 함께 정보 패널을 노출한다.
+    /// 패널이 접힌 상태에서 focusedId 만 바꾸면 라벨이 약속한 속성이 어디에도 나타나지 않는 데드엔드가
+    /// 된다 — 포커스 설정과 패널 노출을 하나로 묶어 항상 결과가 보이게 한다.
+    func selectForPropertiesView(_ entry: LibraryEntry) {
+        focusedId = entry.id
+        panelVisible = true
     }
 
     /// 적용 중인(모니터 할당 없이 전역으로만 적용된) 배경이 라이브러리에서 제거되면, AppDelegate 의

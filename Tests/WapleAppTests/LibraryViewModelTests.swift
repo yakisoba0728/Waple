@@ -151,6 +151,23 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertEqual(byKey["enabled"]?.value, .bool(true))
     }
 
+    // MARK: - 속성 패널 자동 노출 (w5d-settings-ia)
+
+    func testSelectForPropertiesViewRevealsPanel() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset")])
+        let vm = makeVM(dir: dir)
+        vm.panelVisible = false   // 접힌 상태(사용자가 이전에 숨김)
+        vm.selectForPropertiesView(vm.entries[0])
+        XCTAssertEqual(vm.focusedId, "wp1", "포커스는 기존과 동일하게 설정")
+        XCTAssertTrue(vm.panelVisible, "접혀 있던 패널이 함께 열려야 라벨이 약속한 속성이 보인다")
+    }
+
+    func testPanelVisibleDefaultsToTrue() {
+        let vm = makeVM(dir: tempDir())
+        XCTAssertTrue(vm.panelVisible, "기존 동작(항상 노출) 무회귀 — 최초 상태는 보임")
+    }
+
     func testAssignedEntryLookup() throws {
         let dir = tempDir()
         let e = entry(id: "wp9", title: "Aurora")
