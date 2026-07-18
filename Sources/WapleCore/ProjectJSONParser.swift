@@ -18,6 +18,14 @@ public enum ProjectJSONParser {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw ProjectParseError.invalidJSON
         }
+        return parse(json: obj, folderURL: folderURL)
+    }
+
+    /// F231: project.json 을 호출자가 이미 별도 목적(예: WallpaperCompatibilityAnalyzer 의 raw 필드
+    /// 검사)으로 파싱해 `[String: Any]` 를 들고 있을 때 파일을 다시 읽고 다시 JSON 파싱하지 않도록 하는
+    /// 진입점. `obj` 는 이미 유효한 JSON 오브젝트임이 보장되므로(호출자가 그 자체로 얻었음) throws 가
+    /// 필요 없다 — 파싱 실패 가능성은 위 `parse(data:folderURL:)` 의 guard 에서만 발생한다.
+    public static func parse(json obj: [String: Any], folderURL: URL) -> WallpaperProject {
         // F194: 폴더 basename 은 관리 위치 이동·zip 재래핑(임포트 관례상 `Wallpaper/` 등 비유일 래퍼명)에
         // 안정적이지 않다. project.json 이 워크샵 id 를 선언하면(전역 유일) identity 로 우선 채택하고,
         // 없을 때만 종전대로 폴더명에 폴백한다 — steamcmd 코퍼스는 폴더명 자체가 워크샵 id 라 무변화.

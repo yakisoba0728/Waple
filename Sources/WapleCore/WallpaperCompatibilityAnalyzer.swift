@@ -212,30 +212,11 @@ public enum WallpaperCompatibilityAnalyzer {
             )
         }
 
-        let project: WallpaperProject
-        do {
-            project = try ProjectJSONParser.parse(data: try Data(contentsOf: folderURL.appendingPathComponent("project.json")),
-                                                  folderURL: folderURL)
-        } catch {
-            let issue = WallpaperCompatibilityIssue(
-                severity: .error,
-                code: .invalidProjectJSON,
-                message: "project.json could not be parsed by Waple: \(error)",
-                projectID: id
-            )
-            return WallpaperCompatibilityProjectReport(
-                id: id,
-                title: id,
-                type: "invalid",
-                folderPath: folderURL.path,
-                fileName: nil,
-                previewName: nil,
-                dependency: nil,
-                propertyTypes: [:],
-                detectedFeatures: [],
-                issues: [issue]
-            )
-        }
+        // F231: `raw` 는 이미 이 폴더의 project.json 을 성공적으로 읽어 JSON 파싱한 결과다 — 같은 파일을
+        // 다시 Data(contentsOf:) 로 읽고 다시 JSONSerialization 하는 대신 그 결과를 그대로 넘긴다
+        // (ProjectJSONParser.parse(json:folderURL:) 는 non-throwing — 실패 가능성은 위 guard 가 이미
+        // 소진했다). 부수 이득: 두 번 읽던 사이의 TOCTOU 창(파일이 그 사이 바뀌는 경우)도 사라진다.
+        let project = ProjectJSONParser.parse(json: raw, folderURL: folderURL)
 
         analyzeTypeAndFiles(project, raw: raw, folderURL: folderURL, knownProjectIDs: knownProjectIDs, issues: &issues)
         let propertyTypes = analyzeProperties(raw: raw, projectID: project.id, issues: &issues)
