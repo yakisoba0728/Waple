@@ -743,9 +743,11 @@ extension SceneRenderer {
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-        var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 3). 파티클도 함께 흔들림. 비활성=0.
-        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        var depth = sys.parallaxDepth  // F200: 마우스 시차 가중치(pv_main buffer 2). 기본(1,1)/camOffset=0 은 비트동일.
+        enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 4). 파티클도 함께 흔들림. 비활성=0.
+        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
         enc.setFragmentTexture(sys.texture, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
@@ -788,9 +790,11 @@ extension SceneRenderer {
         enc.setRenderPipelineState(pipe)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
-        var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 3). refract 파티클도 함께 흔들림.
-        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        var depth = sys.parallaxDepth  // F200: 마우스 시차 가중치(pv_main buffer 2). 기본(1,1)/camOffset=0 은 비트동일.
+        enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 4). refract 파티클도 함께 흔들림.
+        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
         enc.setFragmentTexture(sys.texture, index: 0)     // 알베도(g_Texture0)
         enc.setFragmentTexture(normal, index: 1)          // 노멀맵(g_Texture1)
         enc.setFragmentTexture(framebuffer, index: 2)     // 씬 컬러 스냅샷(g_Texture3 = _rt_FullFrameBuffer)

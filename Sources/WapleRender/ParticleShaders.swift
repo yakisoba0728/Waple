@@ -10,14 +10,17 @@ enum ParticleShaders {
     vertex PVOut pv_main(uint vid [[vertex_id]],
                          const device float* v [[buffer(0)]],
                          constant float2& cameraOffset [[buffer(1)]],
-                         constant float2& aspectScale [[buffer(2)]],
-                         constant float2& shakeOffset [[buffer(3)]]) {
+                         constant float2& parallaxDepth [[buffer(2)]],
+                         constant float2& aspectScale [[buffer(3)]],
+                         constant float2& shakeOffset [[buffer(4)]]) {
         uint b = vid * 8;
         float2 pos = float2(v[b + 0], v[b + 1]);
         float2 uv  = float2(v[b + 2], v[b + 3]);
         float4 col = float4(v[b + 4], v[b + 5], v[b + 6], v[b + 7]);
-        // shakeOffset = camerashake 전역 지터(파티클도 함께 흔들려야 전역 병진). 미보유 씬 = 0 → 비트동일.
-        float2 p = (pos + cameraOffset + shakeOffset) * aspectScale;
+        // shakeOffset = camerashake 전역 지터 — parallaxDepth 무관(전역 카메라 병진). 미보유 씬 = 0 → 비트동일.
+        // parallaxDepth(F200) = 파티클 오브젝트 마우스 시차 가중치(QuadShaders.v_main 과 동형). 기본(1,1)
+        // 이거나 cameraOffset=0(헤드리스 captureFrames 항상 0 — draw() 참조)이면 곱해도 종전과 비트동일.
+        float2 p = (pos + cameraOffset * parallaxDepth + shakeOffset) * aspectScale;
         PVOut o; o.pos = float4(p.x, p.y, 0.0, 1.0); o.uv = uv; o.color = col; return o;
     }
 

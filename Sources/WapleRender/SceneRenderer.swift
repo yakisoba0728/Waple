@@ -30,6 +30,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let blendAdditive: Bool
         let origin: SIMD2<Float>
         let scale: SIMD2<Float>
+        /// 마우스 시차(parallax) 가중치(F200) — GPULayer.parallaxDepth/SceneParticle.parallaxDepth 와 동형,
+        /// 2D 경로 전용(3D 는 cameraOffset 채널이 없어 무영향). 기본 1(균일 시차, 무회귀). pv_main 이
+        /// cameraOffset×parallaxDepth 로 소비(encodeParticle/encodeRefractParticle 버퍼 2) — 헤드리스
+        /// captureFrames 는 cameraOffset 이 항상 .zero 라 값과 무관하게 무변화(라이브 마우스 이동 전용).
+        var parallaxDepth: SIMD2<Float> = SIMD2<Float>(1, 1)
         let texRatio: Float   // texH/texW (스프라이트 세로 비율)
         let order: Int        // scene objects[] 인덱스 — 레이어와 인터리브 z-순서
         let isTrail: Bool     // spritetrail/rope/ropetrail — 히스토리 리본으로 드로우

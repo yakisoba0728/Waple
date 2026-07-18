@@ -828,6 +828,8 @@ extension SceneRenderer {
                 texRatio: Float(tex.height) / Float(max(1, tex.width)), order: sp.order,
                 isTrail: def.renderer.isTrail, childOf: childOf,
                 frames: frames, mapSeqMirror: mirror)
+            // F200: 마우스 시차 가중치(레이어 buildLayers 의 GPULayer.parallaxDepth 배선과 동형) — 2D 전용.
+            g.parallaxDepth = SIMD2<Float>(sp.parallaxDepth.x, sp.parallaxDepth.y)
             // 3D 씬 배치(2D 는 위 origin/scale Vec2 만 사용 — 아래 필드 무시).
             g.parent3D = sp.parent
             g.origin3D = SIMD3<Float>(sp.origin3D.x, sp.origin3D.y, sp.origin3D.z)
