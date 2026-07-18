@@ -14,6 +14,12 @@ final class SingleSceneProbeTests: XCTestCase {
         let folder = URL(fileURLWithPath: base).appendingPathComponent(id)
         guard FileManager.default.fileExists(atPath: folder.path) else { throw XCTSkip("no scene \(id)") }
         let assetsPath = NSHomeDirectory() + "/Downloads/wallpaper_dev/assets"
+        // F409: BaseAssetsSettings.baseAssetsDirectory 는 UserDefaults.standard 에 영속되는 프로세스
+        // 전역 static — 복원 없이 바꾸면 개발자 실앱 설정에 영구 기록되고 동일 프로세스(swift test)의
+        // 후속 테스트로 누수된다. 형제 하네스(RealPackagesGroundTruthTests/ForwardLightingGateProbeTests)
+        // 는 이미 oldBase 저장+defer 복원을 쓴다 — 이 테스트만 비대칭이었다.
+        let oldBase = BaseAssetsSettings.baseAssetsDirectory
+        defer { BaseAssetsSettings.baseAssetsDirectory = oldBase }
         if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
             BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)
         }
