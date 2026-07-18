@@ -121,13 +121,32 @@ final class PlaylistStoreTests: XCTestCase {
         XCTAssertFalse(p.enabled)
         XCTAssertEqual(p.intervalMinutes, 30, "기본 30분")
         XCTAssertEqual(p.ids, [])
+        XCTAssertFalse(p.shuffle, "기본 순차(무회귀)")
         p.enabled = true
         p.intervalMinutes = 5
         p.ids = ["a", "b", "c"]
+        p.shuffle = true
         let p2 = PlaylistStore(baseDirectory: dir)
         XCTAssertTrue(p2.enabled)
         XCTAssertEqual(p2.intervalMinutes, 5)
         XCTAssertEqual(p2.ids, ["a", "b", "c"])
+        XCTAssertTrue(p2.shuffle, "셔플 설정도 영속")
+    }
+
+    /// w5d-playback: shuffle 필드가 없는 구버전 JSON(intervalMinutes 누락 케이스와 동일 하위호환
+    /// 패턴) → throw 없이 기본값(false) 폴백 디코드, corrupt 오판 없음.
+    func testOldShapeJSONMissingShuffleDecodesWithDefault() throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("playlist.json")
+        try Data(#"{"enabled":true,"intervalMinutes":15,"ids":["a","b"]}"#.utf8).write(to: url)
+
+        let p = PlaylistStore(baseDirectory: dir)
+        XCTAssertFalse(p.shuffle, "누락 필드는 기본값 폴백(throw 금지)")
+
+        p.ids = ["a", "b", "c"]  // 저장 트리거 — corrupt 오판이었다면 백업 파일이 생겼을 것
+        let backups = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("playlist.json.corrupt") }
+        XCTAssertTrue(backups.isEmpty, "누락 필드=corrupt 오판이면 안 됨")
     }
 
     func testNextRotatesAndWraps() {

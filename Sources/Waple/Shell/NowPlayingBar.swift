@@ -113,6 +113,10 @@ struct NowPlayingBar: View {
             Stepper("간격: \(viewModel.playlist.intervalMinutes)분", value: Binding(
                 get: { viewModel.playlist.intervalMinutes },
                 set: { viewModel.playlist.intervalMinutes = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }), in: 1...240)
+            // w5d-playback: 고정 순서만 순환하던 자동 전환에 무작위 순서 옵션 추가.
+            Toggle("셔플(무작위 순서)", isOn: Binding(
+                get: { viewModel.playlist.shuffle },
+                set: { viewModel.playlist.shuffle = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }))
             if let focused = viewModel.focusedEntry {
                 Button(viewModel.isInPlaylist(focused) ? "'\(focused.title)' 제거" : "'\(focused.title)' 추가") {
                     viewModel.togglePlaylist(focused)

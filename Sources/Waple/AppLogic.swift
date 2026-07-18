@@ -153,6 +153,18 @@ enum PlaylistScheduling {
         TimeInterval(max(1, minutes) * 60)
     }
 
+    /// 셔플(무작위 순서, w5d-playback) 다음 id. ids 가 2개 이상이면 직전(current)을 제외한 후보에서
+    /// 뽑아 연속 반복을 피한다(음악 셔플 관례 — SceneAudioPlayer.nextIndex(mode:"random") 과 달리
+    /// "직전 곡 회피"를 우선한다). 후보가 1개뿐이면 회피 불가능하므로 그대로 반환. 빈 목록 → nil.
+    /// random 은 주입(기본 Int.random) — 결정적 테스트 가능.
+    static func shuffleNext(current: String?, ids: [String],
+                            random: (Int) -> Int = { Int.random(in: 0..<$0) }) -> String? {
+        guard !ids.isEmpty else { return nil }
+        let candidates = ids.count > 1 ? ids.filter { $0 != current } : ids
+        guard !candidates.isEmpty else { return ids.first }   // 방어: current 가 목록과 불일치 등
+        return candidates[random(candidates.count)]
+    }
+
     /// "다음 배경" 액션(트레이·하단 바 공용, w5d-tray)을 활성화할지 — 순환 가능한 후보가 2개 이상일
     /// 때만. 하나뿐이면 순환해도 자기 자신으로 돌아와 무의미하다.
     static func canAdvance(count: Int) -> Bool { count >= 2 }

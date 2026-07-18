@@ -476,10 +476,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func advancePlaylist() {
         // 후보를 순서대로 시도하고 실제 적용에 성공하는 첫 배경으로 전진(삭제/폴더 이동 등 실패 후보는 건너뜀).
+        // w5d-playback: shuffle 이 켜져 있으면 순차 순환 대신 직전 곡 회피 무작위 선곡으로 분기.
         _ = PlaylistScheduling.advance(
             from: store.selectedId,
             count: playlistStore.ids.count,
-            next: { self.playlistStore.next(after: $0) },
+            next: { current in
+                self.playlistStore.shuffle
+                    ? PlaylistScheduling.shuffleNext(current: current, ids: self.playlistStore.ids)
+                    : self.playlistStore.next(after: current)
+            },
             apply: { id in
                 guard let entry = self.store.entries.first(where: { $0.id == id }) else { return false }
                 return self.libraryVM.apply(entry)

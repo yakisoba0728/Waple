@@ -14,6 +14,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var occlusionRaw: Double = -1
     @Published var playlistEnabled = false
     @Published var playlistInterval = 15
+    @Published var playlistShuffle = false
     @Published var videoVolume: Float?     // nil = 적용 중인 동영상 없음(컨트롤 비활성)
     @Published var videoRate: Float?
     @Published var loginEnabled = LoginItemController.isEnabled
@@ -54,6 +55,7 @@ final class SettingsViewModel: ObservableObject {
         occlusionRaw = SettingsPresentation.currentOcclusionRaw(enabled: occ.enabled, threshold: occ.threshold)
         playlistEnabled = playlist.enabled
         playlistInterval = playlist.intervalMinutes
+        playlistShuffle = playlist.shuffle
         let ids = videoTargetIds()
         videoVolume = ids.first.map { VideoSettings.volume(id: $0) }
         videoRate = ids.first.map { VideoSettings.rate(id: $0) }
@@ -92,6 +94,13 @@ final class SettingsViewModel: ObservableObject {
     func setPlaylistInterval(_ minutes: Int) {
         playlist.intervalMinutes = minutes
         playlistInterval = minutes
+        onPlaylistChanged?()
+    }
+
+    /// 셔플(무작위 순서, w5d-playback) — NowPlayingBar 팝오버와 동일 저장소를 공유.
+    func setPlaylistShuffle(_ on: Bool) {
+        playlist.shuffle = on
+        playlistShuffle = on
         onPlaylistChanged?()
     }
 

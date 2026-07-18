@@ -50,6 +50,8 @@ struct SettingsView: View {
                 ForEach(SettingsPresentation.playlistIntervalMinutes, id: \.self) { Text("\($0)분").tag($0) }
             }
             .disabled(!vm.playlistEnabled)
+            Toggle("셔플(무작위 순서)",
+                   isOn: Binding(get: { vm.playlistShuffle }, set: { vm.setPlaylistShuffle($0) }))
         } header: {
             Text("재생목록")
         } footer: {
