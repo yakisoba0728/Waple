@@ -207,6 +207,14 @@ extension SceneRenderer {
             let skipNames = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
                 .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
             for eff in layer.effects {
+                // F201 후속: parseEffects 는 visible={value:false,script} 이펙트도 SceneEffect[] 에
+                // 보존한다(데이터 무손실 — 향후 per-frame 런타임 토글 소비용). 그러나 그 소비(스크립트
+                // 재평가로 켜고 끄는 경로)가 아직 배선되지 않아, 여기서 그대로 태우면 "항상 미적용"이던
+                // 구 동작이 "항상 적용"으로 뒤집혀 실 코퍼스 17씬(예 2902406982·3113287126·3538758087)의
+                // 이벤트-훅 이펙트가 잘못 켜진다(구 드롭 동작이 우연히 WE 정적 상태 OFF와 일치했었다).
+                // 소비 배선 전까지는 initialVisible==false 인 이펙트를 여기서 게이트해 구 시각 거동을
+                // 복원 — 파스 구조체엔 그대로 남아 있으니 향후 이 한 줄만 지우면 소비가 열린다.
+                if !eff.initialVisible { continue }
                 if skipNames.contains(eff.name) { continue }
                 // 폴백 체인(Step 5, 2026-07-02 실물 검증 후 전환): **translated 우선** — pkg 동봉 GLSL 은
                 // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
