@@ -131,6 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             _ = self.applyCurrentSelection()  // 할당 변경 즉시 반영
         }
+        // F070: 할당 없이 전역으로만 적용 중이던 배경이 라이브러리에서 제거되면 currentFolderURL 도
+        // 함께 비운다 — 안 하면 스테일한 값이 이후 재적용에서 "제거된" 배경을 되살린다.
+        libraryVM.onGlobalSelectionRemoved = { [weak self] in
+            self?.currentFolderURL = nil
+            self?.currentProjectId = nil
+        }
         libraryVM.onPlaylistChanged = { [weak self] in self?.schedulePlaylistTimer() }
         libraryVM.onOpenInteraction = { [weak self] in self?.openWebInteraction() }
         libraryVM.onOpenSettings = { [weak self] in self?.openSettings() }

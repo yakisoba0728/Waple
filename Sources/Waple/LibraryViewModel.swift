@@ -125,10 +125,21 @@ final class LibraryViewModel: ObservableObject {
         objectWillChange.send()
     }
 
+    /// 적용 중인(모니터 할당 없이 전역으로만 적용된) 배경이 라이브러리에서 제거되면, AppDelegate 의
+    /// 전역 선택(currentFolderURL/currentProjectId) 도 함께 지우도록 알린다(F070) — 안 하면 스테일한
+    /// currentFolderURL 이 남아, 이후 화면 변경·할당 변경 재적용(applyCurrentSelection)이 라이브러리
+    /// 에서 이미 사라진 배경을 전역으로 되살린다(제거는 파일을 보존하므로 폴더 자체는 여전히 유효해
+    /// apply 가 조용히 성공해버린다).
+    var onGlobalSelectionRemoved: (() -> Void)?
+
     /// 라이브러리에서 제거(파일 보존) + 전 스토어 orphan 정리. 적용 중 배경은 계속 재생된다
     /// (렌더러는 폴더를 직접 들고 있음) — Now Playing 표시는 '적용된 배경 없음'으로 떨어진다.
     func remove(_ entry: LibraryEntry) {
         let hadAssignment = monitors.all.values.contains(entry.id)
+        let wasGlobalSelection = selectedId == entry.id && !hadAssignment   // F070
+        // F069: 재생목록에 없던 항목을 제거할 때도 무조건 onPlaylistChanged 를 호출하면 자동전환
+        // 카운트다운이 불필요하게 리셋된다 — 제거 전에 실제 포함 여부를 확인해 두었다가 가드한다.
+        let wasInPlaylist = playlist.ids.contains(entry.id)
         store.remove(id: entry.id)
         playlist.remove(entry.id)
         monitors.removeAssignments(entryId: entry.id)
@@ -137,8 +148,9 @@ final class LibraryViewModel: ObservableObject {
         entries = store.entries
         if selectedId == entry.id { selectedId = nil }
         if focusedId == entry.id { focusedId = nil }
-        onPlaylistChanged?()
+        if wasInPlaylist { onPlaylistChanged?() }
         if hadAssignment { onAssignmentsChanged?() }
+        if wasGlobalSelection { onGlobalSelectionRemoved?() }
     }
 
     func importParent(_ url: URL) {
