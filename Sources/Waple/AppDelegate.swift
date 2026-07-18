@@ -371,7 +371,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = applyCurrentSelection()
             return
         }
-        apply(folderURL: folder)
+        if !apply(folderURL: folder) {
+            // F031: 실패한 선택이 Now Playing/그리드에 계속 "적용됨"으로 오표시되지 않도록 UI 쪽 선택을
+            // 비운다(영속 store.selectedId 는 유지 — 다음 실행도 같은 배경을 먼저 시도하되, 원본이
+            // 다시 연결되면 자동 복구되고, 실패해도 아래와 동일하게 화면별 할당으로 폴백해 무해하다).
+            libraryVM.selectedId = nil
+            // F032: 전역 선택 마운트가 실패해도 화면별 할당(MonitorMapping) 배경은 정상일 수 있다 —
+            // apply(folderURL:) 의 실패를 그냥 버리면(종전) 정상적인 할당-전용 배경까지 통째로 누락된다.
+            // apply 실패는 applyResolved 이전(projectForMount/makeRenderer)에서 나므로 currentFolderURL 은
+            // 아직 미설정 — applyCurrentSelection() 이 전역 없이(global: nil) 화면별 할당만 재시도한다.
+            _ = applyCurrentSelection()
+        }
     }
 
     @objc private func screensChanged() {
