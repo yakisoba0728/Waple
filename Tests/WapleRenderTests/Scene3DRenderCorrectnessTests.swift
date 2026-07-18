@@ -194,4 +194,85 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         // → k=(0.8-0.73)/0.73=7/73 → scale.x=1-14/73=59/73.
         XCTAssertEqual(mesh.scale.x, Float(59.0 / 73.0), accuracy: 1e-4)
     }
+
+    /// F311 캡처 공통 헬퍼: 흰 배경 솔리드(id=1, 화면 전체 커버) 뒤에 초록 틴트 fullscreenlayer(id=2)를
+    /// 얹는다. over 블렌드+alpha=1 이므로 합성이 실제로 그려지면 중심 픽셀이 흰색→초록으로 완전 치환된다
+    /// (배경이 검정이면 tint 곱이 항상 검정이 되어 관측 불가하므로 흰 배경을 쓴다). objectExtra 로 두 번째
+    /// 오브젝트에 visible/parent 등을 주입해 가드 케이스를 구성한다.
+    /// id=0 은 로드 실패용 더미 model(models/missing.mdl) — mount() 의 3D 게이트(SceneRenderer.swift
+    /// "if let cam = doc.camera3D, !doc.objects3D.isEmpty")가 objects3D(= "model" 키 보유 오브젝트) 존재를
+    /// 요구해서, 빌보드만 있는 씬은 build3D 자체가 안 불리고 2D 폴백으로 새 버린다(is3D=false 로 직접 확인).
+    private func captureFullscreenCompositeCenterPixel(
+        secondObject: String, extraObjects: String = "", tag: String
+    ) throws -> NSColor {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":0,"model":"models/missing.mdl"},
+           {"id":1,"image":"models/solid.json","origin":"0 0 0","size":"20 20","color":"1 1 1","alpha":1}\(extraObjects),
+           \(secondObject)
+         ]}
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", Data(scene.utf8)),
+            ("models/solid.json", #"{"material":"materials/solid.json"}"#.data(using: .utf8)!),
+            ("materials/solid.json", #"{"passes":[{"shader":"flat","depthtest":"disabled","depthwrite":"disabled"}]}"#.data(using: .utf8)!),
+            ("models/fb.json", #"{"material":"materials/fb.json","fullscreen":true}"#.data(using: .utf8)!),
+            ("materials/fb.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+        ]
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_f311_\(tag)_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try encodePkg(files).write(to: root.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(
+            id: "f311_\(tag)", type: .scene, fileName: "scene.pkg", previewName: nil,
+            title: "f311", tags: [], contentRating: nil, workshopId: nil, dependency: nil,
+            folderURL: root)
+        let renderer = SceneRenderer()
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
+        defer { renderer.teardown(); try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("capture", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(renderer.captureFrames(width: 64, height: 64, times: [0], toDir: output).first)
+        let image = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        return try XCTUnwrap(image.colorAt(x: 32, y: 32))
+    }
+
+    func test3DFullscreenCompositeDrawsWhenVisible() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let color = try captureFullscreenCompositeCenterPixel(
+            secondObject: #"{"id":2,"image":"models/fb.json","origin":"0 0 -0.1","size":"2 2","color":"0 1 0","alpha":1}"#,
+            tag: "visible")
+        // 흰 배경 위에 초록 틴트가 over(alpha=1)로 완전 치환 — 빨강 채널이 꺼져야 한다(회귀 없음 대조군).
+        XCTAssertLessThan(color.redComponent, 0.3, "가시 fullscreenlayer 는 화면을 덮어써야 함")
+        XCTAssertGreaterThan(color.greenComponent, 0.7)
+    }
+
+    /// F311: bb.visible=false(스크립트로 유지 — 정적 false 는 파서가 invNode 로 드롭해 billboards 에 아예
+    /// 안 들어가므로 own-visible 가드를 재현하려면 스크립트가 필요)면 합성 전체(인코더 분할 포함)를 스킵해야
+    /// 배경이 그대로 남는다.
+    func test3DFullscreenCompositeSkipsWhenOwnVisibleFalse() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let secondObject = #"""
+        {"id":2,"image":"models/fb.json","origin":"0 0 -0.1","size":"2 2","color":"0 1 0","alpha":1,
+         "visible":{"value":false,"script":"export function update(value) { return false; }"}}
+        """#
+        let color = try captureFullscreenCompositeCenterPixel(secondObject: secondObject, tag: "ownfalse")
+        XCTAssertGreaterThan(color.redComponent, 0.7, "F311: 비가시 fullscreenlayer 가 여전히 화면을 덮어씀")
+        XCTAssertGreaterThan(color.greenComponent, 0.7)
+    }
+
+    /// F311: 부모 그룹(id=9)이 정적 비가시면 자식 fullscreenlayer 도 스킵해야 한다(encodeBillboard 의
+    /// 부모 가시성 가드와 대칭).
+    func test3DFullscreenCompositeSkipsWhenParentInvisible() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let secondObject = #"{"id":2,"image":"models/fb.json","parent":9,"origin":"0 0 -0.1","size":"2 2","color":"0 1 0","alpha":1}"#
+        let color = try captureFullscreenCompositeCenterPixel(
+            secondObject: secondObject,
+            extraObjects: #",{"id":9,"origin":"0 0 0","visible":false}"#,
+            tag: "parentfalse")
+        XCTAssertGreaterThan(color.redComponent, 0.7, "F311: 부모가 비가시인 fullscreenlayer 가 여전히 화면을 덮어씀")
+        XCTAssertGreaterThan(color.greenComponent, 0.7)
+    }
 }

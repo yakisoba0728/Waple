@@ -832,35 +832,41 @@ extension SceneRenderer {
             if item.bb {
                 let bb = billboards[item.idx]
                 if bb.isFrameBuffer {
-                    enc.endEncoding()
-                    var srcTex: MTLTexture? = nil
-                    if let snap = pooledOffscreen(target.width, target.height, device, bgra: true),
-                       let blit = cb.makeBlitCommandEncoder() {
-                        blit.copy(from: target, to: snap)
-                        blit.endEncoding()
-                        var current: MTLTexture = snap
-                        for eff in bb.effects {
-                            guard let next = pooledOffscreen(target.width, target.height, device) else { break }
-                            applyEffect(eff, src: current, dst: next, time: time, cb: cb)
-                            current = next
+                    // F311: encodeBillboard(:929 이하)와 대칭인 visible/부모 가시성 가드. 가드를 분기
+                    // 진입 전에 둬서 draw 뿐 아니라 endEncoding+풀타깃 blit+이펙트 체인 비용까지 함께
+                    // 회피한다(비가시 fullscreenlayer 는 씬 전체를 재합성할 이유가 없다).
+                    let parentVisible = bb.parent.map { Scene3DMath.worldMatrix(id: $0, nodes: nmap)?.visible ?? false } ?? true
+                    if bb.visible && parentVisible {
+                        enc.endEncoding()
+                        var srcTex: MTLTexture? = nil
+                        if let snap = pooledOffscreen(target.width, target.height, device, bgra: true),
+                           let blit = cb.makeBlitCommandEncoder() {
+                            blit.copy(from: target, to: snap)
+                            blit.endEncoding()
+                            var current: MTLTexture = snap
+                            for eff in bb.effects {
+                                guard let next = pooledOffscreen(target.width, target.height, device) else { break }
+                                applyEffect(eff, src: current, dst: next, time: time, cb: cb)
+                                current = next
+                            }
+                            srcTex = current
                         }
-                        srcTex = current
-                    }
-                    let nextRPD = MTLRenderPassDescriptor()
-                    nextRPD.colorAttachments[0].texture = target
-                    nextRPD.colorAttachments[0].loadAction = .load
-                    nextRPD.depthAttachment.texture = depthTex
-                    nextRPD.depthAttachment.loadAction = .load
-                    nextRPD.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
-                    guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
-                    enc = nextEnc
-                    enc.setFrontFacing(.counterClockwise)
-                    bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
-                                        shadowMatrices: shadowResult.matrices,
-                                        shadowTexture: shadowResult.texture, into: enc)
-                    if let srcTex {
-                        // 프레임버퍼 후처리(fullscreenlayer)는 스크린공간 풀스크린 합성 — 카메라 프로젝션 우회.
-                        encodeFullscreenComposite(bb, texture: srcTex, into: enc, device: device, over: over)
+                        let nextRPD = MTLRenderPassDescriptor()
+                        nextRPD.colorAttachments[0].texture = target
+                        nextRPD.colorAttachments[0].loadAction = .load
+                        nextRPD.depthAttachment.texture = depthTex
+                        nextRPD.depthAttachment.loadAction = .load
+                        nextRPD.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
+                        guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
+                        enc = nextEnc
+                        enc.setFrontFacing(.counterClockwise)
+                        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                                            shadowMatrices: shadowResult.matrices,
+                                            shadowTexture: shadowResult.texture, into: enc)
+                        if let srcTex {
+                            // 프레임버퍼 후처리(fullscreenlayer)는 스크린공간 풀스크린 합성 — 카메라 프로젝션 우회.
+                            encodeFullscreenComposite(bb, texture: srcTex, into: enc, device: device, over: over)
+                        }
                     }
                 } else {
                     encodeBillboard(bb, overrideTexture: billboardTextures[item.idx], viewProj: viewProj, eye: eye,
