@@ -244,9 +244,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 프로그램 생성 NSWindow 는 닫힐 때 기본적으로 release 되어, 강한 참조 프로퍼티가
             // 댕글링되고 재오픈 시 use-after-free 가 된다. 프로퍼티가 수명을 관리하도록 막는다.
             window.isReleasedWhenClosed = false
+            window.center()   // F024: 최초 생성 시에만 중앙 배치 — 재오픈마다 사용자가 옮긴 위치를 되돌리지 않는다.
             libraryWindow = window
         }
-        libraryWindow?.center()
+        // F023: orderFront 계열은 최소화된 창을 복원하지 않는다 — 액세서리 앱(Dock 아이콘 없음)이라
+        // 트레이가 유일한 재진입점인데 deminiaturize 가 없으면 최소화된 라이브러리 창이 영영 안 뜬다.
+        if libraryWindow?.isMiniaturized == true { libraryWindow?.deminiaturize(nil) }
         libraryWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -261,10 +264,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setContentSize(Metrics.settingsSize)
             window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
             window.isReleasedWhenClosed = false
+            window.center()   // F024: 최초 생성 시에만 — 재오픈마다 위치를 되돌리지 않는다.
             settingsWindow = window
         }
         settingsVM.refresh()
-        settingsWindow?.center()
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
