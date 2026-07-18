@@ -356,7 +356,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ScreenSaverController.syncVideoPath(for: screenProjects.first { $0.project.type == .video }?.project)
             if pauseGate.isPaused { renderers.forEach { $0.pause() } }  // 어떤 사유든 정지 중 교체된 렌더러도 정지 유지
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
-            pushRecent(project?.id)     // 최근 배경 목록 갱신(nil = 무선택 → no-op)
+            if let project {
+                pushRecent(project.id)  // 최근 배경 목록 갱신
+            } else {
+                // F029: 전역 선택 없이 화면별 할당만으로 적용하는(공식 지원되는) 모드에서는
+                // pushRecent(nil) 이 항상 no-op 이라 실제 적용된 배경이 '최근 배경' 메뉴에 전혀
+                // 쌓이지 않았다 — 화면별로 실제 마운트된 프로젝트 id 를 대신 반영한다(중복은
+                // pushRecent/RecentWallpapers.push 자체가 제거).
+                screenProjects.forEach { pushRecent($0.project.id) }
+            }
             baseAssetsWarningGate.presentIfNeeded(
                 after: result,
                 fingerprint: BaseAssetsSettings.fingerprint,
