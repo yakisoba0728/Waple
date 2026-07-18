@@ -214,11 +214,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 현재 적용된 웹 월페이퍼의 조작 창(실입력 프록시 + 라이브 미러)을 연다.
     @objc private func openWebInteraction() {
-        if let web = renderers.compactMap({ $0 as? WebRenderer }).first {
-            web.openInteractionPanel()
-        } else {
+        // F022: 화면마다 다른 웹 배경(모니터별 할당)이 동시에 적용될 수 있는데 종전엔 마운트 순서상
+        // '첫 번째' WebRenderer 만 대상으로 해 두 번째 이후 화면의 웹 배경은 조작 창(실입력 프록시)을
+        // 열 방법이 아예 없었다. renderers 는 화면키를 들고 있지 않아(F039 참조 — 별도 스코프) 특정
+        // 화면 하나만 골라 여는 UI는 이번 스코프 밖이지만, 전부 열면 최소한 도달 불가 상태는 없앤다.
+        let webRenderers = renderers.compactMap { $0 as? WebRenderer }
+        guard !webRenderers.isEmpty else {
             notify("웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요")
+            return
         }
+        webRenderers.forEach { $0.openInteractionPanel() }
     }
 
     @objc private func openLibrary() {
