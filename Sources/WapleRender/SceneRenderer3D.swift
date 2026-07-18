@@ -1032,6 +1032,21 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 
+    /// F315(자매 커밋 bloom·camerashake 는 각각 XCTAssert 기하 테스트를 남겼는데 fullscreenlayer 신설
+    /// 커밋(3b10c73)만 없었던 커버리지 격차 — encodeFullscreenComposite 에서 뽑아 전용 테스트가 직접
+    /// 호출/단언 가능하게 함, 인코딩 로직 자체는 무변경). GPU3DMesh 정점 레이아웃과 동일 8-float
+    /// 스트라이드(pos3+normal3+uv2) 6정점(삼각형 2개) — 화면정렬 -1..1 NDC 풀스크린 쿼드.
+    /// UV 상단 원점(v=0=상단) — encodeBillboard 규약과 동일(프레임버퍼 비플립).
+    static func fullscreenCompositeVertices() -> [Float] {
+        func vtx(_ x: Float, _ y: Float, _ uu: Float, _ vv: Float) -> [Float] {
+            [x, y, 0, 0, 0, 1, uu, vv]
+        }
+        var verts: [Float] = []
+        verts += vtx(-1, 1, 0, 0); verts += vtx(1, 1, 1, 0); verts += vtx(1, -1, 1, 1)
+        verts += vtx(-1, 1, 0, 0); verts += vtx(1, -1, 1, 1); verts += vtx(-1, -1, 0, 1)
+        return verts
+    }
+
     /// isFrameBuffer(fullscreenlayer/composelayer) 빌보드 합성: 후처리 결과(srcTex)를 **화면정렬 풀스크린
     /// NDC 쿼드**로 그린다. 종전엔 encodeBillboard 가 프로젝션 픽셀 origin/size(예: 960,540 / 1920,1080)를
     /// 월드 좌표로 배치해 오프스크린에 떨어졌다(godrays 워프필드 전량 소실). 프레임버퍼 후처리는 본디
@@ -1039,14 +1054,7 @@ extension SceneRenderer {
     func encodeFullscreenComposite(_ bb: Billboard3D, texture: MTLTexture,
                                    into enc: MTLRenderCommandEncoder, device: MTLDevice,
                                    over: MTLRenderPipelineState) {
-        // NDC 풀스크린 쿼드. UV 상단 원점(v=0=상단) — encodeBillboard 규약과 동일(프레임버퍼 비플립).
-        func vtx(_ x: Float, _ y: Float, _ uu: Float, _ vv: Float) -> [Float] {
-            [x, y, 0, 0, 0, 1, uu, vv]
-        }
-        var verts: [Float] = []
-        verts += vtx(-1, 1, 0, 0); verts += vtx(1, 1, 1, 0); verts += vtx(1, -1, 1, 1)
-        verts += vtx(-1, 1, 0, 0); verts += vtx(1, -1, 1, 1); verts += vtx(-1, -1, 0, 1)
-        guard let vbuf = bb.scratchQuad.load(verts, device: device) else { return }
+        guard let vbuf = bb.scratchQuad.load(Self.fullscreenCompositeVertices(), device: device) else { return }
         var u2 = MeshUniform(
             mvp: matrix_identity_float4x4, model: matrix_identity_float4x4,
             normalMatrix: matrix_identity_float4x4, tint: bb.tint,
