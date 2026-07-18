@@ -35,3 +35,11 @@ public enum WallpaperType: Equatable {
 
     public var isSupportedInMVP: Bool { self == .video || self == .web || self == .scene || self == .preset }
 }
+
+/// 비디오 컨테이너 확장자 분류 — 단일 소스(F230). VideoRenderer(재생 판단)와
+/// WallpaperCompatibilityAnalyzer/DeepScan(진단) 이 전부 이걸 참조해야 세 곳이 드리프트하지 않는다.
+/// (WapleCore 는 WapleRender 에 의존하지 않으므로 canonical 값은 여기 두고 VideoRenderer 가 이걸 가리킨다.)
+public enum VideoFormats {
+    /// AVFoundation 이 변환 없이 바로 재생하는 컨테이너.
+    public static let nativeExtensions: Set<String> = ["mp4", "m4v", "mov"]
+}

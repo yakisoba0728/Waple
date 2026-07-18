@@ -4,7 +4,8 @@ import WapleCore
 
 public final class VideoRenderer: WallpaperRenderer {
     /// Conservative AVFoundation-native containers used directly without conversion.
-    public static let nativeVideoExtensions: Set<String> = ["mp4", "m4v", "mov"]
+    /// F230: WapleCore.VideoFormats.nativeExtensions 가 단일 소스 — 여기서 다시 선언하지 않는다.
+    public static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
     /// Common non-native containers routed through ffmpeg conversion when available.
     public static let unsupportedExtensions: Set<String> = ["webm", "mkv", "avi", "wmv", "flv", "ogv", "mpg", "mpeg"]
 

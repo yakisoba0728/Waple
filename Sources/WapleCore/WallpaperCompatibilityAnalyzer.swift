@@ -130,15 +130,16 @@ public struct WallpaperCompatibilityReport: Codable, Equatable {
 
 public enum WallpaperCompatibilityAnalyzer {
     /// 지원 속성 타입 단일 소스 — DeepScan 의 known 목록도 이걸 참조(스캐너 간 불일치 방지).
+    /// F229: "boo4"/"uwu" 는 AppLogicTests 의 PropertyControl.kind(forType:) 미지 타입 폴백 검증용
+    /// 더미 문자열이었다(be10dad 에서 테스트와 동시에 잘못 유입) — 실제 WE 속성 타입이 아니므로 제거.
     public static let currentPropertyTypes: Set<String> = [
         "bool", "checkbox", "slider", "combo", "color", "textinput", "text",
         "file", "directory", "scenetexture", "texture", "usershortcut", "group", "label",
-        "boo4", "uwu"
     ]
 
-    private static let nativeVideoExtensions: Set<String> = [
-        "mp4", "m4v", "mov"
-    ]
+    /// F230: VideoRenderer.nativeVideoExtensions 와 값이 같아야 하는 사본을 따로 두지 않는다 —
+    /// WapleCore.VideoFormats 가 단일 소스(위 currentPropertyTypes 와 동일 원칙).
+    private static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
 
     public static func scan(rootURL: URL) throws -> WallpaperCompatibilityReport {
         let root = rootURL.standardizedFileURL
