@@ -548,9 +548,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // F043: currentFolderURL(전역 선택)만 보면 화면별 할당-전용 모드(전역 nil)에서 배경이 실제로
         // 표시 중인데도 "없음" 오탐이 난다 — 실제 마운트된 렌더러 존재 여부로 판정.
         guard !renderers.isEmpty else { notify("적용된 배경이 없습니다"); return }
+        // F047: currentFolderURL 은 메인 전용 프로퍼티라 백그라운드 클로저에서 직접 읽으면(다른 apply
+        // 가 마침 같은 순간 메인에서 값을 바꿀 수 있어) 동기화 없는 경합이 생긴다 — 큐 진입 '전'
+        // 메인에서 스냅샷해 넘긴다.
+        let globalFolderURL = currentFolderURL
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let images = self.generateStillImages()   // 블로킹(비디오 프레임 추출/씬 GPU 캡처) — 백그라운드(F047)
+            let images = self.generateStillImages(globalFolderURL: globalFolderURL)   // 블로킹 — 백그라운드(F047)
             DispatchQueue.main.async { self.finishSetStillWallpaper(images: images) }
         }
     }
@@ -579,13 +583,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 화면키 → 그 화면에 실제로 표시 중인 프로젝트의 정지 이미지(F046). 모니터별 할당을 그대로
     /// 반영하는 MonitorMapping.resolveProjectSlots(applyResolved 와 동일 소스)로 화면별 프로젝트를
     /// 구한 뒤, 같은 프로젝트를 쓰는 화면은 한 번만 생성해 공유한다. 화면/전역 모두 무배경이면 빈 dict.
-    /// ⚠️ 블로킹(AVFoundation 디코드·씬 GPU 캡처) — 백그라운드 큐에서 호출(F047). NSScreen 열거만
-    /// 메인에서 미리 끝내 두고 넘어온 값을 쓴다(AppKit 뷰 API 는 메인 스레드 전용).
-    private func generateStillImages() -> [String: URL] {
+    /// ⚠️ 블로킹(AVFoundation 디코드·씬 GPU 캡처) — 백그라운드 큐에서 호출(F047). NSScreen 열거는
+    /// 메인에서 미리 끝내 두고 넘어온 값을 쓴다(AppKit 뷰 API 는 메인 스레드 전용). globalFolderURL 도
+    /// 호출부가 메인에서 스냅샷해 넘긴다(currentFolderURL 을 백그라운드에서 직접 읽는 경합 방지).
+    private func generateStillImages(globalFolderURL: URL?) -> [String: URL] {
         let screenSizes = DispatchQueue.main.sync {
             Dictionary(uniqueKeysWithValues: NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) })
         }
-        let global = currentFolderURL.flatMap { projectForMount(folderURL: $0) }
+        let global = globalFolderURL.flatMap { projectForMount(folderURL: $0) }
         let slots = DispatchQueue.main.sync { resolvedScreenProjectSlots(global: global) }
         let stillDir = stillDirectory()
         try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
@@ -777,9 +782,10 @@ extension AppDelegate {
     /// 할당 인지). 실패는 조용히 — 이 기능은 폴백일 뿐이다.
     private func syncDesktopStill() {
         guard desktopStillSync else { return }
+        let globalFolderURL = currentFolderURL   // F047: 메인에서 스냅샷 — 백그라운드 직접 읽기 경합 방지
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let images = self.generateStillImages()   // 블로킹 — 백그라운드(F047)
+            let images = self.generateStillImages(globalFolderURL: globalFolderURL)   // 블로킹 — 백그라운드(F047)
             DispatchQueue.main.async { self.finishSyncDesktopStill(images: images) }
         }
     }
