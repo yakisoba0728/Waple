@@ -392,7 +392,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard PlaylistScheduling.shouldRun(enabled: playlistStore.enabled, ids: playlistStore.ids) else { return }
         let interval = PlaylistScheduling.intervalSeconds(minutes: playlistStore.intervalMinutes)
         playlistTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.advancePlaylist()
+            guard let self, PlaylistScheduling.shouldAdvanceNow(isPaused: self.pauseGate.isPaused) else { return }
+            self.advancePlaylist()
         }
     }
 

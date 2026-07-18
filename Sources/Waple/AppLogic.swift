@@ -153,6 +153,13 @@ enum PlaylistScheduling {
         TimeInterval(max(1, minutes) * 60)
     }
 
+    /// 타이머 콜백이 실제로 전진해야 하는가(F041) — 일시정지(가림·수동·슬립 사유 무관) 중엔 보류한다.
+    /// "정지=화면 고정" 기대와 달리, 종전엔 재생목록 타이머만 PauseGate 밖에 있어 정지 중에도 배경이
+    /// 계속 바뀌었다(새로 마운트된 렌더러 자체는 즉시 pause() 되어 결과 프레임은 정지 상태였지만,
+    /// 그 정지 프레임이 계속 바뀌는 것 자체가 문제). 수동 "다음으로" 버튼(advancePlaylist 직접 호출)은
+    /// 이 가드를 거치지 않아 정지 중에도 그대로 동작한다 — 사용자의 명시적 요청이라 의도적으로 예외.
+    static func shouldAdvanceNow(isPaused: Bool) -> Bool { !isPaused }
+
     /// 재생목록 전진: `selected` 다음 후보부터 순환하며 `apply` 가 성공하는 첫 id 를 적용하고 그 id 를 반환.
     /// `apply` 실패 후보(라이브러리에서 삭제됐거나 폴더 해석/마운트 실패)는 건너뛴다 — 한 바퀴(count) 한도.
     /// 종전 nextApplicableId 는 첫 후보 하나만 보고 실패 시 nil 을 반환해, 그 지점에서 재생목록이 영구

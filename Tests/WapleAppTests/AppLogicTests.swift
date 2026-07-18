@@ -303,6 +303,13 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(PlaylistScheduling.intervalSeconds(minutes: 0), 60, "최소 1분 하한")
     }
 
+    /// F041: 일시정지(가림·수동·슬립 사유 무관) 중엔 자동전환 타이머가 전진하면 안 된다 —
+    /// "정지=화면 고정" 기대와 달리 종전엔 이 가드가 아예 없어 정지 중에도 배경이 계속 바뀌었다.
+    func testShouldAdvanceNow_pausedSkipsAutoAdvance() {
+        XCTAssertFalse(PlaylistScheduling.shouldAdvanceNow(isPaused: true), "정지 중엔 자동전환 보류")
+        XCTAssertTrue(PlaylistScheduling.shouldAdvanceNow(isPaused: false))
+    }
+
     func testAdvance_skipsUnapplicableCandidates() {
         let ids = ["a", "b", "c"]
         func next(_ cur: String?) -> String? {  // a→b→c→a 순환
