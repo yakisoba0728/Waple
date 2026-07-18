@@ -38,14 +38,26 @@ enum EffectShaders {
             let scrollSpeed = c["scrollspeed"]?.first ?? c["speed"]?.first ?? 0.05
             return [strength, scale, scrollSpeed]
         case "scroll":
-            let sc = c["scale"] ?? [1, 1]
-            let sp = c["speed"] ?? c["scrollspeed"] ?? [0.05, 0]
+            // F267: WE scroll 머티리얼명은 repeat(g_Scale)·speedx/speedy(g_ScrollX/Y, 별도 스칼라 키, 기본
+            // 0.2/0.2) — 구코드는 scale/speed(배열) 로 오독해 실씬 커스터마이즈가 무시되고 손포팅 기본
+            // ([0.05,0],[1,1])으로 되돌아갔다(scroll.json 대조 확정). WE scroll.vert:19
+            // `scroll = sign(scroll) * pow(scroll, 2.0)`(부호보존 제곱, 시간 무관 상수라 여기서 1 회 적용)
+            // 도 미반영이었음. 실키 불확실(에디터 라벨 케이싱 잔여) 대비 구 키(scale/speed/scrollspeed)를
+            // 폴백으로 유지(무회귀).
+            let sc = c["repeat"] ?? c["scale"] ?? [1, 1]
+            let legacySpeed = c["speed"] ?? c["scrollspeed"]
+            let sxRaw = c["speedx"]?.first ?? legacySpeed?.first ?? 0.2
+            let syRaw = c["speedy"]?.first ?? ((legacySpeed?.count ?? 0) > 1 ? legacySpeed![1] : 0.2)
+            func signSq(_ v: Float) -> Float { (v < 0 ? -1 : 1) * v * v }
             let sx = sc.count > 0 ? sc[0] : 1, sy = sc.count > 1 ? sc[1] : sx
-            let vx = sp.count > 0 ? sp[0] : 0.05, vy = sp.count > 1 ? sp[1] : 0
-            return [sx, sy, vx, vy]
+            return [sx, sy, signSq(sxRaw), signSq(syRaw)]
         case "waterwaves":
+            // F268/F269: WE waterwaves.vert:48 `v_Direction = rotateVec2(vec2(0,1), g_Direction)` — 기준벡터
+            // (0,1)(세로) 회전. 구 코드는 기준벡터 (1,0)(가로) 이라 direction=0(기본)에서 dir 이 90° 어긋났다
+            // (rotateVec2 정의 common.h:28 대조: rotate((0,1),a)=(-sin a, cos a)). 단위(rad/deg) 는 미확정 —
+            // 이 수정은 축(기준벡터) 만 정정, 기존 *.pi/180 변환은 그대로 둔다.
             let a = f("direction", 0) * .pi / 180
-            return [cos(a), sin(a), f("speed", 5), f("scale", 200), f("strength", 0.1), f("perspective", 0)]
+            return [-sin(a), cos(a), f("speed", 5), f("scale", 200), f("strength", 0.1), f("perspective", 0)]
         case "shake":
             // 단순화: flow/noise combo 없이 시간 기반 흔들림. amp/speed 키는 게이트서 확인.
             let amp = c["amplitude"]?.first ?? c["amount"]?.first ?? c["strength"]?.first ?? 0.006
@@ -158,10 +170,15 @@ enum EffectShaders {
                                 texture2d<float> flow [[texture(1)]], texture2d<float> mask [[texture(2)]],
                                 constant float* P [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
-            // P[0]=time, P[1]=amplitude, P[2]=speed. flow map 은 단순화로 미사용.
+            // P[0]=time, P[1]=amplitude, P[2]=speed. F265: WE shake.frag:82
+            // `texCoordOffset = offset*g_Amp*g_Amp*flowMask` 대조 — 진폭 제곱(선형이면 5~10배 과대) +
+            // flow map(g_Texture1, buildHandPortEffect 가 미바인드 시 중립(0.498,0.498)로 폴백 —
+            // WE 기본 util/noflow 와 정합해 flowMask≈0) 방향 구동. 시간 오실레이터(offset 스칼라)는
+            // WE 의 friction/bounds/DIRECTION 콤보 전체까진 미포팅 — sin(t) 로 단순화(정성적 근사).
             float m = mask.sample(s, in.uv).r;
             float t = P[0] * P[2];
-            float2 off = P[1] * float2(sin(t), cos(t * 1.37)) * m;
+            float2 flowMask = (flow.sample(s, in.uv).rg - float2(0.498, 0.498)) * 2.0;
+            float2 off = sin(t) * (P[1] * P[1]) * flowMask * m;
             return fb.sample(s, in.uv + off);
         }
         """,

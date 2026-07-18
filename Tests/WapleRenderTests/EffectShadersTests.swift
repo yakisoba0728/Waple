@@ -20,6 +20,14 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertEqual(EffectShaders.params(for: "shake", constants: ["amplitude": [0.02], "speed": [8]]), [0.02, 8])
         XCTAssertEqual(EffectShaders.params(for: "shake", constants: [:])?.count, 2)  // defaults
     }
+    /// F265: WE shake.frag:82 `texCoordOffset = offset*g_Amp*g_Amp*flowMask` 대조 — 진폭 제곱 +
+    /// flow map(texture1) 방향 구동. 구코드는 진폭 선형 + 합성 원형궤적(sin,cos*1.37)으로 flow 텍스처 미사용.
+    func testShakeUsesSquaredAmplitudeAndFlowMap() throws {
+        let src = try XCTUnwrap(EffectShaders.source(for: "shake"))
+        XCTAssertTrue(src.contains("P[1] * P[1]"), "진폭은 제곱(g_Amp*g_Amp)이어야 함: \(src)")
+        XCTAssertTrue(src.contains("flow.sample"), "flow map(texture1) 을 방향 구동에 실제로 샘플해야 함: \(src)")
+        XCTAssertFalse(src.contains("cos(t * 1.37)"), "합성 원형궤적(WE 미근거)이 제거되어야 함: \(src)")
+    }
     func testUnknownEffect() {
         XCTAssertNil(EffectShaders.source(for: "nope"))
         XCTAssertNil(EffectShaders.params(for: "nope", constants: [:]))
@@ -76,16 +84,40 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertTrue(src!.contains("ef_main"))
     }
     func testScrollParams() {
-        // order: scaleX, scaleY, speedX, speedY
-        let p = EffectShaders.params(for: "scroll", constants: ["scale": [2, 3], "speed": [0.1, 0.2]])
-        XCTAssertEqual(p, [2, 3, 0.1, 0.2])
-        XCTAssertEqual(EffectShaders.params(for: "scroll", constants: [:])?.count, 4)
+        // order: scaleX, scaleY, speedX, speedY(부호보존 제곱, F267). 실키는 repeat(scale)·speedx/speedy —
+        // WE scroll.vert:19 sign(v)*v^2 커브를 상수 단계에 반영.
+        let p = EffectShaders.params(for: "scroll", constants: ["repeat": [2, 3], "speedx": [0.1], "speedy": [-0.2]])
+        XCTAssertEqual(p?.count, 4)
+        XCTAssertEqual(p?[0], 2); XCTAssertEqual(p?[1], 3)
+        XCTAssertEqual(p?[2] ?? -999, 0.01, accuracy: 1e-6)    // sign(0.1)*0.1^2
+        XCTAssertEqual(p?[3] ?? -999, -0.04, accuracy: 1e-6)   // sign(-0.2)*0.2^2(부호 보존)
+        // 폴백: 구 키(scale/speed 배열)도 여전히 인식(무회귀 — 실배포 케이싱 불확실 대비).
+        let legacy = EffectShaders.params(for: "scroll", constants: ["scale": [2, 3], "speed": [0.1, 0.2]])
+        XCTAssertEqual(legacy?[0], 2); XCTAssertEqual(legacy?[1], 3)
+        XCTAssertEqual(legacy?[2] ?? -999, 0.01, accuracy: 1e-6)
+        XCTAssertEqual(legacy?[3] ?? -999, 0.04, accuracy: 1e-6)
+        // 기본값: WE 실 기본 speedx/speedy=0.2(구코드는 [0.05,0] 오기본값).
+        let d = EffectShaders.params(for: "scroll", constants: [:])
+        XCTAssertEqual(d?.count, 4)
+        XCTAssertEqual(d?[2] ?? -999, 0.04, accuracy: 1e-6)    // sign(0.2)*0.2^2
+        XCTAssertEqual(d?[3] ?? -999, 0.04, accuracy: 1e-6)
     }
     func testWaterwavesParamsCount() {
-        // order: cos(dir), sin(dir), speed, scale, strength, perspective
+        // order: dir.x, dir.y, speed, scale, strength, perspective
         let p = EffectShaders.params(for: "waterwaves", constants: ["speed": [4], "scale": [34]])
         XCTAssertEqual(p?.count, 6)
         XCTAssertEqual(p?[2], 4); XCTAssertEqual(p?[3], 34)
+    }
+
+    /// F268/F269: WE waterwaves.vert:48 rotateVec2((0,1), direction) — 기준벡터 (0,1). direction=0(기본)
+    /// 이면 dir=(0,1)(세로), 90°면 dir=(1,0)(가로). 구 코드는 기준벡터 (1,0) 이라 상시 90° 어긋났었다.
+    func testWaterwavesDirectionVectorMatchesWERotateVec2Basis() {
+        let p0 = EffectShaders.params(for: "waterwaves", constants: [:])
+        XCTAssertEqual(p0?[0] ?? .nan, 0, accuracy: 1e-6, "dir.x = -sin(0)")
+        XCTAssertEqual(p0?[1] ?? .nan, 1, accuracy: 1e-6, "dir.y = cos(0)")
+        let p90 = EffectShaders.params(for: "waterwaves", constants: ["direction": [90]])
+        XCTAssertEqual(p90?[0] ?? .nan, -1, accuracy: 1e-4, "dir.x = -sin(90°)")
+        XCTAssertEqual(p90?[1] ?? .nan, 0, accuracy: 1e-4, "dir.y = cos(90°)")
     }
     func testSourcesExist() {
         for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake", "pulse"] {

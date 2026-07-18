@@ -30,10 +30,11 @@ final class DynamicVertexBuffer {
 }
 
 extension SceneRenderer {
-    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,pointer,dt) + pointerLastAndPad + texRes[8](슬롯별 실제 dims).
+    /// EngineU 버퍼: mvp(항등) + timeAndPad(time,pointer,dt) + pointerLastAndPad + texRes[8](슬롯별 실제 dims)
+    /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
-    func engineUniform(time: Float, texRes: [SIMD4<Float>]) -> [Float] {
-        var e = [Float](repeating: 0, count: 16 + 8 + 32)
+    func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = []) -> [Float] {
+        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8)
         e[0] = 1; e[5] = 1; e[10] = 1; e[15] = 1   // identity mvp
         e[16] = time; e[17] = pointerUV.x; e[18] = pointerUV.y  // timeAndPad = (time, pointerX, pointerY, dt)
         e[19] = frameDT                                          // g_Frametime
@@ -44,6 +45,7 @@ extension SceneRenderer {
             let o = 24 + n * 4
             e[o] = r.x; e[o + 1] = r.y; e[o + 2] = r.z; e[o + 3] = r.w
         }
+        for n in 0..<8 where n < texWrap.count { e[56 + n] = texWrap[n] }
         return e
     }
 
@@ -821,7 +823,7 @@ extension SceneRenderer {
                 let last = passes.removeLast()
                 passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
                                              binds: last.binds, target: nil, usesAudio: last.usesAudio,
-                                             texRes: last.texRes, scripts: last.scripts))
+                                             texRes: last.texRes, texWrap: last.texWrap, scripts: last.scripts))
             }
             // 멀티패스: 이름 있는 FBO(다운스케일)를 풀에서 할당하고, 각 패스를 target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
@@ -856,7 +858,8 @@ extension SceneRenderer {
                         enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                     }
                 }
-                let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: src, fboTex: fboTex))
+                let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: src, fboTex: fboTex),
+                                        texWrap: pass.texWrap)
                 eng.withUnsafeBytes {
                     enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
