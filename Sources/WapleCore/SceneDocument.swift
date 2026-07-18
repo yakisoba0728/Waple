@@ -919,7 +919,9 @@ extension SceneDocument {
         if let bind = obj["origin"] as? [String: Any], let a = PropertyAnimation.parse(bind) {
             cam.originAnimation = a
         }
-        for key in ["origin", "zoom"] {
+        // fov 는 바로 위에서 정적 파스(:913)만 하고 스크립트는 origin/zoom 과 달리 누락돼 있었다(실측
+        // 9씬 — 슬라이더 연동 줌 애니 정지). 세 키 동일 규약으로 통일.
+        for key in ["origin", "zoom", "fov"] {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { cam.scripts[key] = sc }
         }
         return cam
