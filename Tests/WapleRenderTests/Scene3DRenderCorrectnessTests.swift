@@ -335,4 +335,63 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertGreaterThan(color.redComponent, 0.7, "F311: 부모가 비가시인 fullscreenlayer 가 여전히 화면을 덮어씀")
         XCTAssertGreaterThan(color.greenComponent, 0.7)
     }
+
+    // MARK: F406 — colorBlendMode 픽셀 회귀 가드
+
+    /// F406: 이 파일의 다른 블렌드/라이팅 테스트(test3DBuildKeepsSolidAndFramebufferBillboardsWithState
+    /// 등)는 `layer.blendMode`/`additive` bool 같은 build-상태 보존만 검증하고 실제 GPU 블렌드 *출력*은
+    /// 아무도 캡처하지 않는다 — SceneRenderer3D.mesh3DPipeline 의 additive 파이프라인(destinationRGBBlend
+    /// Factor: .one, "가산") 선택 자체가 픽셀 단위로는 무검증이었다. 불투명 빨강 배경 위에 초록
+    /// billboard 를 얹어 blending 모드별 실제 합성 결과가 다른지 캡처로 직접 확인한다: additive 는
+    /// dst 를 유지한 채 src 를 더해 빨강+초록=노랑(양쪽 채널 다 높음), 일반(over, alpha=1)은 dst 를
+    /// 완전 치환해 순수 초록(빨강 채널 낮음) — 두 결과가 실제로 달라야 파이프라인 선택이 픽셀에
+    /// 반영된다는 증거다.
+    private func captureBlendModeCenterPixel(blending: String) throws -> NSColor {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":0,"model":"models/missing.mdl"},
+           {"id":1,"image":"models/bg.json","origin":"0 0 0","size":"20 20","color":"1 0 0","alpha":1},
+           {"id":2,"image":"models/fg.json","origin":"0 0 -0.1","size":"20 20","color":"0 1 0","alpha":1}
+         ]}
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", Data(scene.utf8)),
+            ("models/bg.json", #"{"material":"materials/bg.json"}"#.data(using: .utf8)!),
+            ("materials/bg.json", #"{"passes":[{"shader":"flat","depthtest":"disabled","depthwrite":"disabled"}]}"#.data(using: .utf8)!),
+            ("models/fg.json", #"{"material":"materials/fg.json"}"#.data(using: .utf8)!),
+            ("materials/fg.json", "{\"passes\":[{\"shader\":\"flat\",\"blending\":\"\(blending)\",\"depthtest\":\"disabled\",\"depthwrite\":\"disabled\"}]}".data(using: .utf8)!),
+        ]
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_blend3d_\(blending)_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try encodePkg(files).write(to: root.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(
+            id: "blend3d_\(blending)", type: .scene, fileName: "scene.pkg", previewName: nil,
+            title: "blend3d", tags: [], contentRating: nil, workshopId: nil, dependency: nil,
+            folderURL: root)
+        let renderer = SceneRenderer()
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
+        defer { renderer.teardown(); try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("capture", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(renderer.captureFrames(width: 64, height: 64, times: [0], toDir: output).first)
+        let image = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        return try XCTUnwrap(image.colorAt(x: 32, y: 32))
+    }
+
+    func test3DBillboardAdditiveBlendModeSumsPixelsOverBackground() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let additive = try captureBlendModeCenterPixel(blending: "additive")
+        XCTAssertGreaterThan(additive.redComponent, 0.6, "additive: 빨강 배경이 가산으로 남아있어야 함")
+        XCTAssertGreaterThan(additive.greenComponent, 0.6, "additive: 초록 전경도 가산으로 더해져야 함")
+    }
+
+    func test3DBillboardNormalBlendModeReplacesBackground() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let normal = try captureBlendModeCenterPixel(blending: "normal")
+        XCTAssertLessThan(normal.redComponent, 0.3, "normal(over) alpha=1: 배경을 완전 치환해야 함")
+        XCTAssertGreaterThan(normal.greenComponent, 0.7)
+    }
 }
