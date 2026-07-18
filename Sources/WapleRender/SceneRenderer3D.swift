@@ -25,8 +25,13 @@ extension SceneRenderer {
         let depthTest: Bool
         let depthWrite: Bool
         let skinned: Bool            // true → 16f 스트라이드 + mv_skin(본행렬 버퍼)
+        let rimLighting: Bool        // combos.RIMLIGHTING==1(F274) — g_RimAmount/g_RimExponent 림 부스트
+        let shadingGradient: Bool    // combos.SHADINGGRADIENT==1(F274) — g_Texture4 툰 그래디언트 룩업
+        let rimAmount: Float
+        let rimExponent: Float
+        let gradientTexture: MTLTexture?   // shadingGradient 일 때만 non-nil(항상 "gradient/gradient_toon_smooth")
     }
-    /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 3×float4 = 240B).
+    /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 4×float4 = 256B).
     struct MeshUniform {
         var mvp: simd_float4x4
         var model: simd_float4x4
@@ -35,6 +40,8 @@ extension SceneRenderer {
         /// x=roughness, y=metallic, z=alphaCutoff, w=0 unlit / 1 mesh hemisphere / 2 image flat.
         var material: SIMD4<Float>
         var specularTint: SIMD4<Float>
+        /// x=g_RimAmount, y=g_RimExponent, z=RIMLIGHTING on/off, w=SHADINGGRADIENT on/off(F274).
+        var rim: SIMD4<Float>
     }
     struct Script3D { let key: String; let engine: TextScriptEngine }
 
@@ -250,7 +257,10 @@ extension SceneRenderer {
                                         specularTint: mat.specularTint, alphaCutoff: mat.alphaCutoff,
                                         shadowEligible: mat.shadowEligible, unlit: mat.unlit,
                                         cullBack: mat.cullBack, additive: mat.additive,
-                                        depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned))
+                                        depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned,
+                                        rimLighting: mat.rimLighting, shadingGradient: mat.shadingGradient,
+                                        rimAmount: mat.rimAmount, rimExponent: mat.rimExponent,
+                                        gradientTexture: mat.gradientTexture))
             }
             guard !meshes.isEmpty else { skipped += 1; continue }
             // 활성 애니(animationlayers) → 인덱스. 스키닝 모델만 bone 버퍼/모델 참조 보유.
@@ -414,6 +424,11 @@ extension SceneRenderer {
         let additive: Bool
         let depthTest: Bool
         let depthWrite: Bool
+        let rimLighting: Bool
+        let shadingGradient: Bool
+        let rimAmount: Float
+        let rimExponent: Float
+        let gradientTexture: MTLTexture?
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
@@ -431,6 +446,8 @@ extension SceneRenderer {
         var pbr = Scene3DMaterialValues()
         var shadowEligible = true
         var unlit = false
+        var rimLighting = false
+        var shadingGradient = false
         if let d = quietAssetData(path, package: package),
            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
@@ -443,9 +460,20 @@ extension SceneRenderer {
             depthTest = (p0["depthtest"] as? String) != "disabled"
             depthWrite = (p0["depthwrite"] as? String) != "disabled"
             // combos.LIGHTING==0 → unlit(풀브라이트 albedo, generic4.frag:124-125). WE 기본 LIGHTING=1(lit). 키 대소문자 무시(2D SceneDocument:646 규약).
-            if let combos = p0["combos"] as? [String: Any],
-               let v = combos.first(where: { $0.key.lowercased() == "lighting" })?.value {
-                unlit = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 1) == 0
+            if let combos = p0["combos"] as? [String: Any] {
+                if let v = combos.first(where: { $0.key.lowercased() == "lighting" })?.value {
+                    unlit = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 1) == 0
+                }
+                // F274(폐기 취소 — 실코퍼스 3470948192/3706286085 발화 확정): RIMLIGHTING/SHADINGGRADIENT
+                // 콤보 게이트. 둘 다 기본 0(WE 콤보 선언 default:0), require LIGHTING:1 이나 그 요건은
+                // generic4.frag 콤보 자체가 강제하므로 여기선 단순 플래그만 뽑는다(unlit 이면 셰이더가
+                // 라이팅 루프 전체를 스킵해 자연히 무효과).
+                if let v = combos.first(where: { $0.key.lowercased() == "rimlighting" })?.value {
+                    rimLighting = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                }
+                if let v = combos.first(where: { $0.key.lowercased() == "shadinggradient" })?.value {
+                    shadingGradient = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                }
             }
             if let csv = p0["constantshadervalues"] as? [String: Any] {
                 pbr = Scene3DMaterialValues.parse(csv)
@@ -462,6 +490,11 @@ extension SceneRenderer {
         } else {
             NSLog("%@", "[Waple] 3D: material json missing: \(path)")
         }
+        // SHADINGGRADIENT 의 g_Texture4 는 코퍼스 전건이 재질 textures[] 로 오버라이드하지 않고 셰이더
+        // 유니폼 기본값("gradient/gradient_toon_smooth")에 상시 의존한다(F274 실측) — 그 고정 자산만 로드.
+        let gradientTexture = shadingGradient
+            ? resolveTexture("gradient/gradient_toon_smooth", package: package, device: device)
+            : nil
         if let name = texName, let id = imageLayerCompositeID(name) {
             texName = compositeImageTextures[id]
             if texName == nil {
@@ -471,7 +504,10 @@ extension SceneRenderer {
                                        specularTint: pbr.specularTint,
                                        alphaCutoff: alphaCutoff, shadowEligible: shadowEligible,
                                        unlit: unlit, cullBack: cullBack, additive: additive,
-                                       depthTest: depthTest, depthWrite: depthWrite)
+                                       depthTest: depthTest, depthWrite: depthWrite,
+                                       rimLighting: rimLighting, shadingGradient: shadingGradient,
+                                       rimAmount: pbr.rimAmount, rimExponent: pbr.rimExponent,
+                                       gradientTexture: gradientTexture)
                 }
             }
         }
@@ -481,7 +517,10 @@ extension SceneRenderer {
                                   specularTint: pbr.specularTint,
                                   alphaCutoff: alphaCutoff, shadowEligible: shadowEligible,
                                   unlit: unlit, cullBack: cullBack, additive: additive,
-                                  depthTest: depthTest, depthWrite: depthWrite)
+                                  depthTest: depthTest, depthWrite: depthWrite,
+                                  rimLighting: rimLighting, shadingGradient: shadingGradient,
+                                  rimAmount: pbr.rimAmount, rimExponent: pbr.rimExponent,
+                                  gradientTexture: gradientTexture)
     }
 
     private func imageLayerCompositeID(_ name: String) -> Int? {
@@ -672,7 +711,8 @@ extension SceneRenderer {
                         normalMatrix: Scene3DMath.normalMatrix4x4(world.matrix),
                         tint: SIMD4(1, 1, 1, 1),
                         material: SIMD4(0.7, 0, 0, 1),
-                        specularTint: SIMD4(1, 1, 1, 0))
+                        specularTint: SIMD4(1, 1, 1, 0),
+                        rim: .zero)  // 섀도우 패스(sf_cutout/sv_*)는 rim 유니폼 미소비 — 자리만 채움
                     for mesh in renderable.meshes where mesh.shadowEligible {
                         let skinBuffer = skinBuffers[renderableIndex]
                         if mesh.skinned && skinBuffer == nil { continue }
@@ -886,7 +926,8 @@ extension SceneRenderer {
                     normalMatrix: Scene3DMath.normalMatrix4x4(w.matrix),
                     tint: SIMD4(1, 1, 1, 1),
                     material: SIMD4(0.7, 0, 0, 1),
-                    specularTint: SIMD4(1, 1, 1, 0))
+                    specularTint: SIMD4(1, 1, 1, 0),
+                    rim: SIMD4(2, 4, 0, 0))
                 let boneBuf = skinBuffers[item.idx]
                 for mesh in mr.meshes {
                     // 스키닝 메시(16f 패킹)는 반드시 스키닝 파이프라인 필요 — 본버퍼 미준비면 스킵(8f 셰이더로 오독 방지).
@@ -894,6 +935,8 @@ extension SceneRenderer {
                     u.tint = mesh.tint
                     u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, mesh.unlit ? 0 : 1)
                     u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, 0)
+                    // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
+                    u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
                     let useSkin = mesh.skinned && boneBuf != nil
                     let pipe: MTLRenderPipelineState
                     if useSkin { pipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin ?? over) : (meshPipelineSkin ?? over) }
@@ -908,6 +951,9 @@ extension SceneRenderer {
                     if useSkin, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
                     enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
                     enc.setFragmentTexture(mesh.texture, index: 0)
+                    // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
+                    // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
+                    enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
                                               indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                 }
@@ -968,7 +1014,9 @@ extension SceneRenderer {
             normalMatrix: matrix_identity_float4x4,
             tint: bb.tint,
             material: SIMD4(bb.roughness, bb.metallic, 0, bb.lighting ? 2 : 0),
-            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z, 0))
+            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z, 0),
+            rim: .zero)  // 빌보드(2D 이미지 레이어)는 RIMLIGHTING/SHADINGGRADIENT 콤보 대상 아님(F274 — 콤보는
+                         // .mdl 메시 재질에만 실존, 코퍼스 460 전건 billboard 레이어에 0건)
         // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우 광량 복원). 그 외 premult-over.
         enc.setRenderPipelineState(bb.additive ? (meshPipelineAdditive ?? over) : over)
         if let ds = meshDepthState(test: bb.depthTest, write: bb.depthWrite, device: device) { enc.setDepthStencilState(ds) }
@@ -976,7 +1024,11 @@ extension SceneRenderer {
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
         enc.setFragmentBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
-        enc.setFragmentTexture(overrideTexture ?? bb.texture, index: 0)
+        let billboardTexture = overrideTexture ?? bb.texture
+        enc.setFragmentTexture(billboardTexture, index: 0)
+        // rim.w(shadingGradient)==0 이라 mf_main 이 gradientTex 를 절대 샘플하지 않는다 — 그래도 mf_main 이
+        // 선언하는 인자라 무언가는 바인딩해야 하므로 자기 텍스처를 채운다(F274, mesh draw 루프와 동일 관례).
+        enc.setFragmentTexture(billboardTexture, index: 2)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 
@@ -999,7 +1051,8 @@ extension SceneRenderer {
             mvp: matrix_identity_float4x4, model: matrix_identity_float4x4,
             normalMatrix: matrix_identity_float4x4, tint: bb.tint,
             material: SIMD4(bb.roughness, bb.metallic, 0, 0),   // w=0 = unlit(프레임버퍼는 라이팅 미대상)
-            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z, 0))
+            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z, 0),
+            rim: .zero)  // unlit 이라 mf_main 이 라이팅 루프 전체를 스킵 — rim/gradient 무관(F274)
         enc.setRenderPipelineState(bb.additive ? (meshPipelineAdditive ?? over) : over)
         // 프레임버퍼 합성은 깊이 무관(스크린공간) — 항상 그리되 깊이 미기록.
         if let ds = meshDepthState(test: false, write: false, device: device) { enc.setDepthStencilState(ds) }
@@ -1008,6 +1061,8 @@ extension SceneRenderer {
         enc.setVertexBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
         enc.setFragmentBytes(&u2, length: MemoryLayout<MeshUniform>.stride, index: 1)
         enc.setFragmentTexture(texture, index: 0)
+        // gradientTex 인자 자리만 채움(unlit 이라 mf_main 이 절대 샘플하지 않음) — mesh 루프와 동일 관례.
+        enc.setFragmentTexture(texture, index: 2)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 

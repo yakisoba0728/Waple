@@ -124,6 +124,66 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertFalse(try unlit(#"{"passes":[{"textures":["white"],"combos":{"LIGHTING":1}}]}"#))
     }
 
+    /// F274(폐기 취소 — 3706286085 RioSonicLite/SonicBODY 실측): RIMLIGHTING 콤보 게이트 + rimamount/
+    /// rimexponent 유니폼 파싱(unlit 과 동일 대소문자 무시 패턴).
+    func test3DMeshRimLightingComboParsesFlagAndUniforms() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let renderer = SceneRenderer()
+        func material(_ materialJSON: String) throws -> SceneRenderer.Mesh3DMaterialInfo {
+            let package = try pkg([
+                ("materials/mesh.json", Data(materialJSON.utf8)),
+                ("materials/white.tex", solidTex(255, 255, 255, w: 1, h: 1)),
+            ])
+            return try XCTUnwrap(renderer.loadMesh3DMaterial(
+                "materials/mesh.json", package: package, device: device))
+        }
+        // 실물 3706286085 chr_rio_body_dif.json 값 그대로(rimamount=5, rimexponent=2.98).
+        let rimOn = try material(#"{"passes":[{"textures":["white"],"combos":{"RIMLIGHTING":1},"constantshadervalues":{"rimamount":5,"rimexponent":2.98}}]}"#)
+        XCTAssertTrue(rimOn.rimLighting)
+        XCTAssertEqual(rimOn.rimAmount, 5)
+        XCTAssertEqual(rimOn.rimExponent, 2.98, accuracy: 1e-6)
+        // 키 대소문자 무시(unlit 과 동일 규약).
+        let rimOnLowercase = try material(#"{"passes":[{"textures":["white"],"combos":{"rimlighting":1}}]}"#)
+        XCTAssertTrue(rimOnLowercase.rimLighting)
+        // 미명시 → 꺼짐 + 셰이더 기본값(g_RimAmount=2.0/g_RimExponent=4.0, generic4.frag 유니폼 선언).
+        let noCombo = try material(#"{"passes":[{"textures":["white"]}]}"#)
+        XCTAssertFalse(noCombo.rimLighting)
+        XCTAssertEqual(noCombo.rimAmount, 2.0)
+        XCTAssertEqual(noCombo.rimExponent, 4.0)
+        // 명시 0 → 꺼짐.
+        let rimOff = try material(#"{"passes":[{"textures":["white"],"combos":{"RIMLIGHTING":0}}]}"#)
+        XCTAssertFalse(rimOff.rimLighting)
+    }
+
+    /// F274: SHADINGGRADIENT 콤보 게이트 + g_Texture4 고정 자산("gradient/gradient_toon_smooth") 로드 —
+    /// 코퍼스 전건이 재질 textures[] 로 오버라이드하지 않고 셰이더 유니폼 기본값에 상시 의존(실측).
+    func test3DMeshShadingGradientComboParsesFlagAndLoadsGradientTexture() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let renderer = SceneRenderer()
+        func material(_ materialJSON: String) throws -> SceneRenderer.Mesh3DMaterialInfo {
+            let package = try pkg([
+                ("materials/mesh.json", Data(materialJSON.utf8)),
+                ("materials/white.tex", solidTex(255, 255, 255, w: 1, h: 1)),
+            ])
+            return try XCTUnwrap(renderer.loadMesh3DMaterial(
+                "materials/mesh.json", package: package, device: device))
+        }
+        // 실물 3470948192 DefaultMaterial.json 값 그대로(SHADINGGRADIENT=1, RIMLIGHTING=1 도 동시 활성
+        // 가능 — 콤보는 독립 게이트, common_pbr.h 도 두 #if 를 중첩 없이 병렬 배치).
+        let gradientOn = try material(#"{"passes":[{"textures":["white"],"combos":{"SHADINGGRADIENT":1,"RIMLIGHTING":1}}]}"#)
+        XCTAssertTrue(gradientOn.shadingGradient)
+        XCTAssertTrue(gradientOn.rimLighting, "두 콤보는 독립 게이트 — 동시 활성 가능(3470948192 실물)")
+        XCTAssertNotNil(gradientOn.gradientTexture, "SHADINGGRADIENT=1 이면 고정 자산 텍스처가 로드돼야 함")
+        // 미명시 → 꺼짐 + 텍스처 미로드(불필요한 자산 IO 회피).
+        let noCombo = try material(#"{"passes":[{"textures":["white"]}]}"#)
+        XCTAssertFalse(noCombo.shadingGradient)
+        XCTAssertNil(noCombo.gradientTexture)
+        // 키 대소문자 무시.
+        let lowercase = try material(#"{"passes":[{"textures":["white"],"combos":{"shadinggradient":1}}]}"#)
+        XCTAssertTrue(lowercase.shadingGradient)
+        XCTAssertNotNil(lowercase.gradientTexture)
+    }
+
     func test3DBillboardKeepsLightingAndPBRMaterialState() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let scene = """

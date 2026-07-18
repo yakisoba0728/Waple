@@ -15,6 +15,7 @@ enum Mesh3DShaders {
         float4 tint;
         float4 material;      // roughness, metallic, alphaCutoff, 0=unlit/1=mesh hemi/2=image flat
         float4 specularTint;
+        float4 rim;            // x=g_RimAmount, y=g_RimExponent, z=RIMLIGHTING on/off, w=SHADINGGRADIENT on/off
     };
     struct FrameU {
         float4 cameraEye;
@@ -172,15 +173,43 @@ enum Mesh3DShaders {
 
     // Cook–Torrance BRDF × NL (source-confirmed generic4 코어). radiance 는 호출부가 곱한다.
     // NL<=0 이면 최종 *NL 로 0(포인트 조기반환과 수치 동일). point/directional/spot 공유.
+    // F274(RIMLIGHTING/SHADINGGRADIENT — common_pbr.h:53-75 1:1 이식): rim=(g_RimAmount,g_RimExponent,
+    // RIMLIGHTING on/off,SHADINGGRADIENT on/off). lightColorRaw 는 감쇠 적용 "전" 광원색(WE 의
+    // step(0.01, lightColor.x+y+z) 게이트와 동일 — 감쇠된 radiance 가 아니라 광원 자체의 세기를 본다).
     inline float3 pbrDirect(float3 N, float3 V, float3 L, float3 albedo,
-                            float roughness, float metallic, float3 specularTint) {
-        float NL = max(dot(N, L), 0.0);
+                            float roughness, float metallic, float3 specularTint,
+                            float3 lightColorRaw, float4 rim,
+                            texture2d<float> gradientTex, sampler gradientSampler) {
+        float dNL = dot(N, L);
         float3 H = normalizedOr(V + L, N);
         float D = Distribution_GGX(N, H, roughness);
         float G = GeometrySmith(N, V, L, roughness);
         float3 F0 = mix(float3(0.04), albedo, metallic);
         float3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
-        float3 diffuseWeight = (1.0 - metallic) * (1.0 - F);
+
+        // SHADINGGRADIENT: half-Lambert 리맵(dNL*0.5+0.5)을 g_Texture4 툰 램프에서 룩업. 고정 자산
+        // gradient_toon_smooth 는 항상 r8 포맷(F274 실측)이라 WE 의 TEX4FORMAT R8/RG88 분기(.rrr)와
+        // 동치인 .r 스칼라를 채택 — 우리 NL 은 애초에 스칼라 구조(WE 의 vec3 NL 분기는 미포팅).
+        float NL;
+        if (rim.w > 0.5) {
+            float halfLambert = max(dNL * 0.5 + 0.5, 0.0);
+            NL = gradientTex.sample(gradientSampler, float2(halfLambert, 0.0)).r;
+        } else {
+            NL = max(dNL, 0.0);
+        }
+        // RIMLIGHTING: 그레이징 뷰 앵글(1-NV)^exponent × amount × NL × (광원 비활성 게이트) 를 NL 에
+        // max 로 얹고, metallic 을 그만큼 깎아 림 부분을 diffuse 처럼 밝힌다(WE: metallic -= saturate(rimTerm),
+        // 상한 클램프 없음 — F0/Fresnel 은 원래 metallic 으로 이미 계산됐으므로 무관).
+        float adjustedMetallic = metallic;
+        if (rim.z > 0.5) {
+            float NV = max(dot(N, V), 0.0);
+            float rimTerm = pow(1.0 - NV, rim.y) * rim.x * NL
+                           * step(0.01, lightColorRaw.x + lightColorRaw.y + lightColorRaw.z);
+            NL = max(NL, rimTerm);
+            adjustedMetallic -= saturate(rimTerm);
+        }
+
+        float3 diffuseWeight = (1.0 - adjustedMetallic) * (1.0 - F);
         float denominator = max(4.0 * max(dot(N, V), 0.0) * NL, 0.001);
         float3 specular = D * G * F / denominator;
         return (diffuseWeight * albedo / 3.14159265359 + specular * specularTint) * NL;
@@ -188,7 +217,8 @@ enum Mesh3DShaders {
 
     inline float3 pointPBR(float3 worldPos, float3 N, float3 V, float3 albedo,
                            float roughness, float metallic, float3 specularTint,
-                           constant LightU& light) {
+                           constant LightU& light, float4 rim,
+                           texture2d<float> gradientTex, sampler gradientSampler) {
         float3 delta = light.positionExponent.xyz - worldPos;
         float distance = length(delta);
         if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
@@ -197,23 +227,27 @@ enum Mesh3DShaders {
         float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
                                                light.positionExponent.w);
         float3 radiance = light.colorRadius.xyz * attenuation;
-        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint) * radiance;
+        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint,
+                         light.colorRadius.xyz, rim, gradientTex, gradientSampler) * radiance;
     }
 
     // 무한거리(directional): 무감쇠 radiance = lightColor. L = -forward(surface→light).
     // WE common_pbr_2.h::ComputePBRLightShadowInfinite (shadowFactor=1: directional 섀도우 스코프 밖).
     inline float3 directionalPBR(float3 N, float3 V, float3 albedo,
                                  float roughness, float metallic, float3 specularTint,
-                                 constant LightU& light) {
+                                 constant LightU& light, float4 rim,
+                                 texture2d<float> gradientTex, sampler gradientSampler) {
         float3 L = normalizedOr(-light.axis.xyz, float3(0.0, 1.0, 0.0));
         if (dot(N, L) <= 0.0) return float3(0.0);
-        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint) * light.colorRadius.xyz;
+        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint,
+                         light.colorRadius.xyz, rim, gradientTex, gradientSampler) * light.colorRadius.xyz;
     }
 
     // spot: point 감쇠 × 콘 스무드스텝(축 forward 기준). 콘 밖은 0.
     inline float3 spotPBR(float3 worldPos, float3 N, float3 V, float3 albedo,
                           float roughness, float metallic, float3 specularTint,
-                          constant LightU& light) {
+                          constant LightU& light, float4 rim,
+                          texture2d<float> gradientTex, sampler gradientSampler) {
         float3 delta = light.positionExponent.xyz - worldPos;
         float distance = length(delta);
         if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
@@ -229,7 +263,8 @@ enum Mesh3DShaders {
         float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
                                                light.positionExponent.w);
         float3 radiance = light.colorRadius.xyz * attenuation * cone;
-        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint) * radiance;
+        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint,
+                         light.colorRadius.xyz, rim, gradientTex, gradientSampler) * radiance;
     }
 
     inline int pointShadowFace(float3 delta) {
@@ -291,11 +326,14 @@ enum Mesh3DShaders {
     fragment float4 mf_main(VOut in [[stage_in]],
                             texture2d<float> tex [[texture(0)]],
                             depth2d_array<float> shadowAtlas [[texture(1)]],
+                            texture2d<float> gradientTex [[texture(2)]],
                             constant MeshU& u [[buffer(1)]],
                             constant FrameU& frame [[buffer(2)]],
                             constant LightU* lights [[buffer(3)]],
                             constant float4x4* shadowVP [[buffer(4)]]) {
         constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        // gradient_toon_smooth 는 clampuvs 자산(F274 실측) — 램프 끝(NL≈0/1)에서 wrap 대신 edge 고정.
+        constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
         float4 sampled = tex.sample(s, in.uv) * u.tint;
         if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
         float mode = u.material.w;
@@ -311,13 +349,13 @@ enum Mesh3DShaders {
             if (kind < 0.5) {          // point: 감쇠 + 6면 큐브 섀도우
                 float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
                 direct += visibility * pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
-                                                u.specularTint.xyz, lights[i]);
+                                                u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
             } else if (kind < 1.5) {   // directional: 무감쇠(섀도우 스코프 밖)
                 direct += directionalPBR(N, V, albedo, u.material.x, u.material.y,
-                                         u.specularTint.xyz, lights[i]);
+                                         u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
             } else {                   // spot: 감쇠 + 콘(섀도우 스코프 밖)
                 direct += spotPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
-                                  u.specularTint.xyz, lights[i]);
+                                  u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
             }
         }
         float3 ambientColor = frame.ambient.xyz;
