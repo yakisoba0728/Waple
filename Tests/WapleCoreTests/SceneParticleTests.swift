@@ -223,4 +223,37 @@ final class SceneParticleTests: XCTestCase {
         XCTAssertEqual(doc.particles.count, 1)
         XCTAssertEqual(doc.particles[0].parallaxDepth, Vec2(x: 1, y: 1))
     }
+
+    // MARK: - visible 스크립트 (F199, SceneVisibleScriptTests 의 레이어 규약과 동형)
+
+    /// visible {"value":false,"script":...} → 578행 게이트를 스크립트 보유로 통과해 파스는 되지만
+    /// (testInvisibleParticleSkipped 와 대비: 스크립트 없는 정적 false 만 드롭), 종전엔 SceneParticle
+    /// 에 필드가 없어 스크립트가 유실되고 initialVisible=false 로 영구 고정됐다(런타임 토글 불능).
+    func testParticleVisibleScriptCaptured() {
+        let scene = """
+        {"objects":[{"id":1,"particle":"particles/p.json",
+          "visible":{"value":false,"script":"export function update(v){ return true; }"}}]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("particles/p.json", d(#"{"renderer":[{"name":"sprite"}],"maxcount":1}"#)),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.particles.count, 1, "스크립트 보유 시 정적 false 라도 드롭되지 않아야")
+        let p = doc.particles[0]
+        XCTAssertFalse(p.visible, "초기값은 정적 value(false) 그대로 유지")
+        XCTAssertEqual(p.visibleScript, "export function update(v){ return true; }")
+    }
+
+    /// 정적 visible(스크립트 없음)은 종전대로 visibleScript nil(무회귀).
+    func testParticleNoVisibleScriptStaysNil() {
+        let scene = #"{"objects":[{"id":1,"particle":"particles/p.json","visible":true}]}"#
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("particles/p.json", d(#"{"renderer":[{"name":"sprite"}],"maxcount":1}"#)),
+        ])
+        let doc = try! SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.particles.count, 1)
+        XCTAssertNil(doc.particles[0].visibleScript)
+    }
 }
