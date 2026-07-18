@@ -414,7 +414,7 @@ final class ScriptedTextRuntimeTests: XCTestCase {
                                                      tint: SIMD4<Float>(1, 1, 1, 1), order: 0,
                                                      engine: engine, lastText: "0",
                                                      fontData: nil, systemFontName: "systemfont_arial",
-                                                     def: def)]
+                                                     def: def, uid: 0)]
 
         renderer.refreshScriptedTexts(device: device, time: 3.2)
 

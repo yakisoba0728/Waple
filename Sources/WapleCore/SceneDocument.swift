@@ -155,6 +155,16 @@ public struct SceneTextLayer: Equatable {
     /// "Justify text"(blockalign — 에디터 프로퍼티 테이블 실측 라벨) — 워드랩 줄 양쪽 정렬.
     public var justify: Bool = false
     public var order: Int = 0
+    /// 초기 가시성(스크립트 있으면 정적 false 도 보존 — 레이어 initialVisible 과 동일 규약). 578행 게이트가
+    /// visibleScript!=nil 인 오브젝트를 통과시켜도 이 필드가 없으면 스크립트 평가와 무관하게 항상
+    /// 렌더링되던 결함(F219).
+    public var initialVisible: Bool = true
+    /// 프로퍼티 스크립트(origin/scale/alpha/color/angles/visible — 키 → JS 소스). SceneLayer.propertyScripts
+    /// 와 동일 규약(parseLayer:731-739 형): per-frame 재평가는 재래스터가 아니라 인코드 시점 트랜스폼/
+    /// 알파/가시성 적용(텍스트 '콘텐츠' 스크립트 위 script/scriptProps 와는 별개 채널).
+    public var propertyScripts: [String: String] = [:]
+    /// 프로퍼티 스크립트의 저장 scriptproperties(사용자 오버라이드) — 키 → JSON 문자열. 레이어와 동일 규약.
+    public var propertyScriptProps: [String: String] = [:]
 }
 
 /// 3D 씬 카메라(2D 의 orthogonalprojection 대체). look-at 파라미터 + 원근 fov.
@@ -630,7 +640,8 @@ extension SceneDocument {
                     particles.append(p)
                 }
             } else if contentValue(obj["text"]) != nil {
-                texts.append(parseText(obj, order: order))
+                texts.append(parseText(obj, order: order, visibleScript: visibleScript,
+                                       visibleScriptProps: visibleScriptProps, initialVisible: initialVisible))
             } else if let modelPath = contentValue(obj["model"]) as? String {
                 objects3D.append(parseModel(obj, modelPath: modelPath, order: order, visibleScript: visibleScript))
             } else if let lightType = contentValue(obj["light"]) as? String {
@@ -952,7 +963,11 @@ extension SceneDocument {
 
     /// 텍스트 레이어("text": 평문 문자열 | {"value": 초기값, "script": JS} 바인딩 — 둘 다 보유 가능).
     /// script 는 update(current) 로 갱신되므로 value 는 초기 표시값으로도 쓰인다(실물 29씬/136오브젝트).
-    private static func parseText(_ obj: [String: Any], order: Int) -> SceneTextLayer {
+    /// visibleScript/visibleScriptProps/initialVisible 은 호출부(578행 게이트)가 이미 계산한 값을
+    /// parseLayer/parseModel/effectQuadLayer 와 동형으로 전달(F219 — 종전엔 이 세 인자 자체가 없었다).
+    private static func parseText(_ obj: [String: Any], order: Int,
+                                  visibleScript: String?, visibleScriptProps: String? = nil,
+                                  initialVisible: Bool) -> SceneTextLayer {
         var plain = ""
         var script: String? = nil
         var scriptProps: String? = nil
@@ -982,6 +997,22 @@ extension SceneDocument {
         if (obj["limitrows"] as? Bool) == true, case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
         t.overflowEllipsis = (obj["limituseellipsis"] as? Bool) ?? false
         t.justify = (obj["blockalign"] as? Bool) ?? false
+        // 프로퍼티 스크립트(origin/scale/alpha/color/angles, F218): parseLayer(:731-739)와 동형 캡처 —
+        // 렌더러가 재래스터 없이 인코드 시점 트랜스폼/알파 적용(buildTexts/encodeText 참조). visible(F219)
+        // 은 위 578행 게이트에서 이미 판정된 값을 그대로 기록.
+        t.initialVisible = initialVisible
+        var propScripts: [String: String] = [:]
+        var propScriptProps: [String: String] = [:]
+        for key in ["origin", "scale", "alpha", "angles", "color"] {
+            if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
+                propScripts[key] = sc
+                if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { propScriptProps[key] = j }
+            }
+        }
+        if let vs = visibleScript { propScripts["visible"] = vs }
+        if let j = visibleScriptProps { propScriptProps["visible"] = j }
+        t.propertyScripts = propScripts
+        t.propertyScriptProps = propScriptProps
         return t
     }
 

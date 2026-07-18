@@ -958,7 +958,7 @@ extension SceneRenderer {
     /// 텍스트 오브젝트 준비: 폰트 바이트(pkg→base-assets) + 스크립트 엔진 + 초기 텍스트 래스터.
     func buildTexts(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPUText] {
         var out: [GPUText] = []
-        for t in doc.texts {
+        for (uid, t) in doc.texts.enumerated() {
             let isSystem = t.font.hasPrefix("systemfont_") || t.font.isEmpty
             let fontData = isSystem ? nil : quietAssetData(t.font, package: package)
             if !isSystem && fontData == nil { NSLog("%@", "[Waple] text font missing (system fallback): \(t.font)") }
@@ -968,10 +968,22 @@ extension SceneRenderer {
             if t.script != nil && loaded == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
             let engine = (loaded?.hasUpdate == true) ? loaded : nil
             let initial = engine != nil ? (engine!.evaluate(current: t.text) ?? "") : t.text
+            // 프로퍼티 스크립트(origin/scale/alpha/color/angles/visible, F218/F219): 레이어 propScripts
+            // 와 동일 규약(visible 먼저 로드 — top-level shared 사이드이펙트 순서).
+            var propScripts: [(key: String, engine: TextScriptEngine)] = []
+            for key in ["visible", "color", "alpha", "origin", "scale", "angles"] {
+                guard let src = t.propertyScripts[key] else { continue }
+                let ownerName = t.name.isEmpty ? nil : t.name
+                if let e = makeScriptEngine(src, layerName: ownerName, scriptPropsJSON: t.propertyScriptProps[key]) {
+                    propScripts.append((key, e))
+                    if e.hasUpdate { hasAnimations = true }
+                }
+            }
             var g = GPUText(texture: nil, vertexBuffer: nil,
                             tint: SIMD4(t.color.x, t.color.y, t.color.z, t.alpha),
                             order: t.order, engine: engine, lastText: initial,
-                            fontData: fontData, systemFontName: isSystem ? t.font : nil, def: t)
+                            fontData: fontData, systemFontName: isSystem ? t.font : nil, def: t,
+                            uid: uid, initialVisible: t.initialVisible, propScripts: propScripts)
             rasterize(&g, device: device)
             if engine != nil { hasScriptedText = true }
             out.append(g)
@@ -980,6 +992,8 @@ extension SceneRenderer {
     }
 
     /// 텍스트 재래스터: lastText → 텍스처 + 앵커 정렬 쿼드. 빈 텍스트 → 텍스처 nil(드로우 스킵).
+    /// rasterWidth/Height(비-스케일 글리프 픽셀 크기)를 저장 — encodeText 가 프로퍼티 스크립트로
+    /// per-frame 지오메트리를 재계산할 때 재래스터 없이 재사용한다.
     func rasterize(_ g: inout GPUText, device: MTLDevice) {
         guard let r = TextRasterizer.render(text: g.lastText, fontData: g.fontData,
                                             systemFontName: g.systemFontName, pointSize: g.def.pointSize,
@@ -990,6 +1004,7 @@ extension SceneRenderer {
             return
         }
         g.texture = makeTexture(r.rgba, r.width, r.height, device)
+        g.rasterWidth = Float(r.width); g.rasterHeight = Float(r.height)
         let w = Float(r.width) * g.def.scale.x, h = Float(r.height) * g.def.scale.y
         let x0: Float
         switch g.def.horizontalAlign {

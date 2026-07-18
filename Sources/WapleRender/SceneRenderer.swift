@@ -54,7 +54,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var normalRG88: Bool = false   // 노멀 텍스처가 WE RG88(2채널) 포맷 → 셰이더 언팩 분기
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
     }
-    /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 스크립트는 초당 재평가 → 변경 시 재래스터.
+    /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 콘텐츠 스크립트(engine)는 초당 재평가 →
+    /// 변경 시 재래스터. 프로퍼티 스크립트(propScripts, F218/F219)는 재래스터 없이 encodeText 가
+    /// per-frame 트랜스폼/알파/가시성만 갱신(GPULayer.propScripts 와 동형 — 별개 채널).
     struct GPUText {
         var texture: MTLTexture?
         var vertexBuffer: MTLBuffer?
@@ -65,6 +67,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let fontData: Data?
         let systemFontName: String?
         let def: SceneTextLayer
+        /// doc.texts 인덱스 기반 고유 키(scriptTextVisible 용 — order 는 중복 가능. GPULayer.uid 와 동일 규약).
+        let uid: Int
+        /// 초기 가시성(visible 스크립트 있으면 정적 false 도 보존).
+        var initialVisible: Bool = true
+        /// 프로퍼티 스크립트(origin/scale/alpha/color/angles/visible) — GPULayer.propScripts 와 동형.
+        var propScripts: [(key: String, engine: TextScriptEngine)] = []
+        /// rasterize() 가 채우는 원본(비-스케일) 글리프 픽셀 크기 — 스크립트 재래스터 없이 per-frame
+        /// 지오메트리 재계산(Self.quadVertices 재사용)에 쓰인다.
+        var rasterWidth: Float = 0
+        var rasterHeight: Float = 0
+        /// 애니 쿼드 per-frame 정점 재사용(GPULayer.scratchQuad 와 동일 패턴).
+        let scratchQuad = DynamicVertexBuffer()
     }
     var textLayers: [GPUText] = []
     var hasScriptedText = false
@@ -75,6 +89,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// visible 스크립트의 최근 평가값(레이어 고유 uid → 표시 여부). update(current) 에 이전 값을 전달.
     /// 키는 GPULayer.uid(doc.layers 인덱스) — order 는 씬에서 중복될 수 있어 키로 부적합(충돌).
     var scriptVisible: [Int: Bool] = [:]
+    /// 텍스트 visible 스크립트의 최근 평가값(GPUText.uid → 표시 여부, F219). scriptVisible 과 별개
+    /// 인덱스 공간(레이어/텍스트는 서로 다른 배열이라 uid 가 겹칠 수 있음).
+    var scriptTextVisible: [Int: Bool] = [:]
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
@@ -1446,6 +1463,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
         scriptVisible.removeAll()
+        scriptTextVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero

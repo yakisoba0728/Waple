@@ -331,6 +331,18 @@ extension SceneRenderer {
         ]
     }
 
+    /// 텍스트 horizontalAlign/verticalAlign(left|center|right / top|center|bottom) → SceneLayer.alignment
+    /// 9점 앵커 문자열(F218/F219). 두 규약은 의미가 동일함이 확인됨: rasterize() 의 x0/y0 앵커 계산
+    /// (left→origin=좌변, right→origin=좌변-w, top→origin=상변, bottom→origin=상변-h)이 quadVertices/
+    /// alignedCenter 의 "left"→ax=-hw(origin=좌변)/"right"→ax=+hw(origin=우변에서 2× 폭만큼 안쪽) 규약과
+    /// 정확히 일치 — 그래서 텍스트 지오메트리도 quadVertices 를 그대로 재사용할 수 있다(신규 회전 수식 불요).
+    static func textAlignmentString(h: String, v: String) -> String {
+        var s = ""
+        if v == "top" { s += "top" } else if v == "bottom" { s += "bottom" }
+        if h == "left" { s += "left" } else if h == "right" { s += "right" }
+        return s.isEmpty ? "center" : s
+    }
+
     /// 포워드 라이팅용 레이어 월드 사각형 — f_lit 이 uv→월드 재구성에 쓰는 (ox,oy,hw,hh)+(cosA,sinA,z,0).
     /// hw/hh/angle 규약은 quadVertices 와 동일(정합 필수). z = 레이어 originZ(2D 라이트 감쇠의 z 성분).
     static func litRect(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, alignment: String, originZ: Float) -> (SIMD4<Float>, SIMD4<Float>) {
@@ -413,7 +425,8 @@ extension SceneRenderer {
                 encodeParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx), into: enc,
                                device: device, camOffset: &camOffset, aspectScale: &aspectScale)
             case .text:
-                encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale)
+                encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale,
+                          time: time, device: device)
             case .layer where layers[item.idx].isFrameBuffer:
                 guard let next = runFrameBufferLayer(layers[item.idx], acc: acc, cb: cb, ending: enc,
                                                      device: device, time: time,
@@ -647,11 +660,62 @@ extension SceneRenderer {
         }
     }
 
-    /// 텍스트 1개 드로우(메인 컴포지트 파이프라인, parallaxDepth=1).
+    /// 텍스트 1개 드로우(메인 컴포지트 파이프라인, parallaxDepth=1). time/device 는 프로퍼티 스크립트
+    /// 평가용(F218/F219) — 콘텐츠 텍스트(engine/lastText, refreshScriptedTexts 가 초당 재래스터)와
+    /// 별개 채널: origin/scale/alpha/color/angles/visible 은 재래스터 없이 이 함수가 인코드 시점
+    /// 트랜스폼/알파/가시성만 갱신한다(3D 빌보드 Billboard3D.evaluateScripts 와 동형 단일 루프 —
+    /// 텍스트는 키프레임 애니메이션이 없어 GPULayer 처럼 애니 블록과 합류시킬 필요가 없다).
     func encodeText(_ t: GPUText, into enc: MTLRenderCommandEncoder,
-                            camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
-        guard let pipeline, let tex = t.texture, let vbuf = t.vertexBuffer else { return }
+                            camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
+                            time: Float = 0, device: MTLDevice? = nil) {
+        guard let pipeline, let tex = t.texture else { return }
         var tint = t.tint
+        var vbuf = t.vertexBuffer
+        var origin = t.def.origin, scale = t.def.scale
+        var angle: Float = 0
+        var quadDirty = false
+        // 모든 스크립트를 먼저 평가(shared 사이드이펙트 보존)한 뒤 visible 이 거짓이면 draw 스킵
+        // (GPULayer.propScripts 루프와 동일 순서 원칙).
+        for sc in t.propScripts {
+            sc.engine.setRuntime(Double(time))
+            switch sc.key {
+            case "origin":
+                if let v = sc.engine.evaluateVec(current: [origin.x, origin.y, 0]), v.count >= 2 {
+                    origin = Vec2(x: v[0], y: v[1]); quadDirty = true
+                }
+            case "scale":
+                if let v = sc.engine.evaluateVec(current: [scale.x, scale.y, 1]), v.count >= 2 {
+                    scale = Vec2(x: v[0], y: v[1]); quadDirty = true
+                }
+            case "angles":
+                if let v = sc.engine.evaluateVec(current: [0, 0, angle]), v.count >= 3 {
+                    angle = v[2]; quadDirty = true
+                }
+            case "color":
+                if let v = sc.engine.evaluateVec(current: [tint.x, tint.y, tint.z]), v.count >= 3 {
+                    tint = SIMD4(v[0], v[1], v[2], tint.w)
+                }
+            case "alpha":
+                if let v = sc.engine.evaluateVec(current: [tint.w]), let a = v.first {
+                    tint.w = a
+                }
+            case "visible":
+                let cur = scriptTextVisible[t.uid] ?? t.initialVisible
+                scriptTextVisible[t.uid] = sc.engine.evaluateBool(current: cur) ?? cur
+            default: break
+            }
+        }
+        // origin/scale/angles 스크립트가 있을 때만 재계산(정적 텍스트는 rasterize() 가 구운 vbuf 그대로
+        // — device 없는 호출자는 지오메트리 갱신을 건너뛰되 tint/visible 은 이미 반영된 채 그린다).
+        if quadDirty, let device {
+            let align = Self.textAlignmentString(h: t.def.horizontalAlign, v: t.def.verticalAlign)
+            let verts = Self.quadVertices(origin: origin, size: Vec2(x: t.rasterWidth, y: t.rasterHeight),
+                                          scale: scale, angleZ: angle, alignment: align, projW: projW, projH: projH)
+            if let b = t.scratchQuad.load(verts, device: device) { vbuf = b }
+        }
+        // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(GPULayer 와 동일 규약).
+        if !(scriptTextVisible[t.uid] ?? t.initialVisible) { return }
+        guard let vbuf else { return }
         var depth = SIMD2<Float>(1, 1)
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
