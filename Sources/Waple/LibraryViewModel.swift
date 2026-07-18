@@ -226,6 +226,11 @@ final class LibraryViewModel: ObservableObject {
         return true
     }
 
+    /// Finder에서 보기 등 파일시스템 접근용 폴더 URL(w5d-library). 해석 실패(북마크 stale·손상 등) → nil.
+    func folderURL(for entry: LibraryEntry) -> URL? {
+        store.resolveFolderURL(for: entry)
+    }
+
     func previewURL(for entry: LibraryEntry) -> URL? {
         guard let folder = store.resolveFolderURL(for: entry),
               let preview = WallpaperPathSecurity.containedFileURL(entry.previewName, root: folder) else { return nil }

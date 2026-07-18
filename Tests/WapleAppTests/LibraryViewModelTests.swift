@@ -168,6 +168,28 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertTrue(vm.panelVisible, "기존 동작(항상 노출) 무회귀 — 최초 상태는 보임")
     }
 
+    // MARK: - Finder에서 보기 (w5d-library)
+
+    func testFolderURLResolvesRealImportedFolder() throws {
+        let dir = tempDir()
+        let store = LibraryStore(baseDirectory: dir)
+        let wallpaperFolder = tempDir()
+        let json: [String: Any] = ["type": "video", "file": "a.mp4", "title": "Real"]
+        try JSONSerialization.data(withJSONObject: json).write(to: wallpaperFolder.appendingPathComponent("project.json"))
+        let imported = try store.importFolder(wallpaperFolder)
+        let vm = LibraryViewModel(store: store, playlist: PlaylistStore(baseDirectory: dir),
+                                  monitors: MonitorAssignmentStore(baseDirectory: dir),
+                                  favorites: FavoritesStore(baseDirectory: dir),
+                                  folders: FolderStore(baseDirectory: dir))
+        let url = try XCTUnwrap(vm.folderURL(for: imported), "실제 임포트된 폴더는 해석돼야 한다")
+        XCTAssertEqual(url.standardizedFileURL.path, wallpaperFolder.standardizedFileURL.path)
+    }
+
+    func testFolderURLNilForUnresolvableBookmark() {
+        let vm = makeVM(dir: tempDir())
+        XCTAssertNil(vm.folderURL(for: entry(id: "ghost", title: "Ghost")), "빈 북마크는 해석 실패 → nil")
+    }
+
     func testAssignedEntryLookup() throws {
         let dir = tempDir()
         let e = entry(id: "wp9", title: "Aurora")

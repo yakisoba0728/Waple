@@ -22,6 +22,7 @@ struct WallpaperGridView: View {
     @State private var hoveredId: String?
     @State private var newFolderName = ""
     @State private var folderPromptEntry: LibraryEntry?
+    @State private var removeConfirmEntry: LibraryEntry?
 
     private let columns = [GridItem(.adaptive(minimum: Metrics.tileWidth), spacing: Metrics.gridSpacing)]
 
@@ -59,6 +60,20 @@ struct WallpaperGridView: View {
                 newFolderName = ""; folderPromptEntry = nil
             }
             Button("취소", role: .cancel) { newFolderName = ""; folderPromptEntry = nil }
+        }
+        // 그리드 우클릭 "라이브러리에서 제거"(w5d-library) — SelectionPanelView 의 확인 대화상자와
+        // 동일한 문구/역할로 그리드에서도 완결(우측 패널로 다시 포커스할 필요 없음).
+        .confirmationDialog(
+            removeConfirmEntry.map { "'\($0.title)'을(를) 라이브러리에서 제거할까요?" } ?? "",
+            isPresented: Binding(get: { removeConfirmEntry != nil },
+                                 set: { if !$0 { removeConfirmEntry = nil } })
+        ) {
+            if let e = removeConfirmEntry {
+                Button("제거(파일은 유지)", role: .destructive) { viewModel.remove(e); removeConfirmEntry = nil }
+            }
+            Button("취소", role: .cancel) { removeConfirmEntry = nil }
+        } message: {
+            Text("디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더에서 함께 제거됩니다.")
         }
     }
 
@@ -245,6 +260,18 @@ struct WallpaperGridView: View {
                 }
             }
         }
+        // 정리 그룹(w5d-library) — 즐겨찾기·Finder·제거는 우측 패널로 다시 포커스하지 않아도
+        // 그리드에서 벗어나지 않고 완결된다.
+        Divider()
+        Button(viewModel.isFavorite(entry) ? "즐겨찾기 해제" : "즐겨찾기") { viewModel.toggleFavorite(entry) }
+        Button("Finder에서 보기") { revealInFinder(entry) }
+        Button("라이브러리에서 제거", role: .destructive) { removeConfirmEntry = entry }
+    }
+
+    /// 원본 폴더를 Finder 로 열어 선택 표시(macOS 보편 관례) — 해석 실패(북마크 stale 등) → 무동작.
+    private func revealInFinder(_ entry: LibraryEntry) {
+        guard let url = viewModel.folderURL(for: entry) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     // MARK: 임포트(로직 무변경)
