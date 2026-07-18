@@ -10,6 +10,7 @@ import WapleRender
 /// 오프메인 콜백이 있는 Workshop/Discover VM 과 달리 @MainActor 불필요.
 final class SettingsViewModel: ObservableObject {
     @Published var fitMode: FitMode = SceneRenderSettings.fitMode
+    @Published var maxFPS: SceneFPSCap = SceneRenderSettings.maxFPS
     @Published var occlusionRaw: Double = -1
     @Published var playlistEnabled = false
     @Published var playlistInterval = 15
@@ -48,6 +49,7 @@ final class SettingsViewModel: ObservableObject {
     /// 창을 열 때마다 실제 스토어에서 다시 읽는다(트레이/적용 경로가 그 사이 바꿨을 수 있음).
     func refresh() {
         fitMode = SceneRenderSettings.fitMode
+        maxFPS = SceneRenderSettings.maxFPS
         let occ = occlusionState()
         occlusionRaw = SettingsPresentation.currentOcclusionRaw(enabled: occ.enabled, threshold: occ.threshold)
         playlistEnabled = playlist.enabled
@@ -65,6 +67,14 @@ final class SettingsViewModel: ObservableObject {
     func setFit(_ mode: FitMode) {
         SceneRenderSettings.fitMode = mode
         fitMode = mode
+        onApplySelection?()
+    }
+
+    /// 전역 FPS 상한(w5d-feature-gaps) — preferredFramesPerSecond 는 mount 시점에만 읽으므로, 지금
+    /// 재생 중인 씬에도 즉시 반영되도록 fitMode 와 동일하게 재적용(리마운트)을 태운다.
+    func setMaxFPS(_ cap: SceneFPSCap) {
+        SceneRenderSettings.maxFPS = cap
+        maxFPS = cap
         onApplySelection?()
     }
 

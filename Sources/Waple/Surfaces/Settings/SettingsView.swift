@@ -22,7 +22,7 @@ struct SettingsView: View {
     }
 
     private var playbackSection: some View {
-        Section("배경 재생") {
+        Section {
             Picker("화면 맞춤", selection: Binding(get: { vm.fitMode }, set: { vm.setFit($0) })) {
                 ForEach(FitMode.allCases, id: \.self) { Text($0.label).tag($0) }
             }
@@ -30,6 +30,14 @@ struct SettingsView: View {
                    selection: Binding(get: { vm.occlusionRaw }, set: { vm.setOcclusion($0) })) {
                 ForEach(SettingsPresentation.occlusionOptions, id: \.raw) { Text($0.label).tag($0.raw) }
             }
+            Picker("프레임 상한", selection: Binding(get: { vm.maxFPS }, set: { vm.setMaxFPS($0) })) {
+                ForEach(SceneFPSCap.allCases, id: \.self) { Text($0.label).tag($0) }
+            }
+        } header: {
+            Text("배경 재생")
+        } footer: {
+            Text("프레임 상한은 장면(씬) 배경에만 적용됩니다 — 동영상·웹 배경은 자체 페이싱을 씁니다.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

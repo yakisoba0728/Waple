@@ -1099,7 +1099,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if shouldAnimate {
             view.isPaused = false
             view.enableSetNeedsDisplay = false
-            view.preferredFramesPerSecond = 30
+            // w5d-feature-gaps: 하드코딩 30 대신 사용자 설정(기본 30 — 무회귀). 비디오/웹은 자체
+            // 페이싱이라 미적용 — 씬 렌더만 이 상한을 탄다.
+            view.preferredFramesPerSecond = SceneRenderSettings.maxFPS.rawValue
             startTime = CFAbsoluteTimeGetCurrent()
             lastFrameTime = startTime
         }
