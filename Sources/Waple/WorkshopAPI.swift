@@ -209,10 +209,24 @@ enum WorkshopError: Error, LocalizedError {
     case badURL
     case http(Int)
 
+    /// 종전엔 모든 비-2xx 를 "API 키를 확인하세요"로 단일 처리해, 429(레이트리밋)·5xx(Steam 장애)도
+    /// 키 오류로 오진단했다 — 실제로는 멀쩡한 키를 사용자가 재발급(파괴적 "API 키 변경")하도록
+    /// 오도할 수 있다. 429/5xx는 재시도 안내로, 인증 실패(401/403)만 키 확인으로 분리한다.
     var errorDescription: String? {
         switch self {
-        case .badURL: return "검색 URL 을 만들 수 없습니다."
-        case .http(let code): return "Steam 응답 오류(HTTP \(code)). API 키를 확인하세요."
+        case .badURL:
+            return "검색 URL 을 만들 수 없습니다."
+        case .http(let code):
+            switch code {
+            case 429:
+                return "Steam 요청이 너무 잦습니다(HTTP 429). 잠시 후 다시 시도하세요."
+            case 500...599:
+                return "Steam 서버 응답 오류(HTTP \(code)). 잠시 후 다시 시도하세요."
+            case 401, 403:
+                return "Steam 응답 오류(HTTP \(code)). API 키를 확인하세요."
+            default:
+                return "Steam 응답 오류(HTTP \(code))."
+            }
         }
     }
 }

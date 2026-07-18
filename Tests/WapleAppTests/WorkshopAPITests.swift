@@ -181,6 +181,46 @@ final class WorkshopAPITests: XCTestCase {
         XCTAssertEqual(failure, .other(errSecAuthFailed))
     }
 
+    // MARK: - HTTP 오류 메시지 분리(F133) — 429/5xx는 재시도 안내, 인증 오류만 키 확인 안내.
+
+    func testHTTPErrorMessageForRateLimitSuggestsRetryNotKeyCheck() {
+        let msg = WorkshopError.http(429).errorDescription ?? ""
+        XCTAssertTrue(msg.contains("429"))
+        XCTAssertFalse(msg.contains("API 키"), "429(레이트리밋)는 키 오류가 아니므로 키 확인을 안내하면 안 된다")
+    }
+
+    func testHTTPErrorMessageForServerErrorSuggestsRetryNotKeyCheck() {
+        for code in [500, 502, 503] {
+            let msg = WorkshopError.http(code).errorDescription ?? ""
+            XCTAssertTrue(msg.contains("\(code)"))
+            XCTAssertFalse(msg.contains("API 키"), "5xx(Steam 장애)는 키 오류가 아니므로 키 확인을 안내하면 안 된다")
+        }
+    }
+
+    func testHTTPErrorMessageForAuthFailureSuggestsKeyCheck() {
+        for code in [401, 403] {
+            let msg = WorkshopError.http(code).errorDescription ?? ""
+            XCTAssertTrue(msg.contains("API 키"), "\(code)는 인증 실패이므로 키 확인 안내가 맞다")
+        }
+    }
+
+    func testHTTPErrorMessageForOtherCodesOmitsKeyGuidance() {
+        let msg = WorkshopError.http(418).errorDescription ?? ""
+        XCTAssertTrue(msg.contains("418"))
+        XCTAssertFalse(msg.contains("API 키"), "분류되지 않은 코드까지 키 오류로 오도하면 안 된다")
+    }
+
+    func testSearchThrowsHTTPErrorForNon2xxStatus() async throws {
+        // 종전엔 이 throw 경로(WorkshopClient.search 의 non-2xx → WorkshopError.http) 테스트가 전무했다.
+        let client = WorkshopClient { _ in (Data(), 429) }
+        do {
+            _ = try await client.search(apiKey: "K", searchText: "", sort: .subscriptions)
+            XCTFail("429 응답은 throw 해야 한다")
+        } catch WorkshopError.http(let code) {
+            XCTAssertEqual(code, 429)
+        }
+    }
+
     func testParseExtractsVoteScore() {
         let json = """
         {"response":{"publishedfiledetails":[
