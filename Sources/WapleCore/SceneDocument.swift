@@ -414,6 +414,11 @@ public struct SceneSound: Equatable {
     /// 비-loop 재트리거 간격(초) 추정 — 파스만, 스케줄링 미구현.
     public let minTime: Float
     public let maxTime: Float
+    /// volume 프로퍼티 스크립트(update(value) → 새 오서 볼륨). 실측: 12건(예 2911866381 오디오/페이드
+    /// 구동 볼륨). SceneAudioPlayer.tick(time:) 이 per-frame 재평가해 재생 중인 Playlist.authorVolume 을 갱신.
+    public var volumeScript: String? = nil
+    /// volume 스크립트의 저장 scriptproperties(사용자 오버라이드) — 레이어/텍스트와 동일 규약.
+    public var volumeScriptProps: String? = nil
     public init(id: Int, name: String = "", sounds: [String], volume: Float, playbackMode: String,
                 startSilent: Bool, minTime: Float, maxTime: Float) {
         self.id = id; self.name = name; self.sounds = sounds; self.volume = volume; self.playbackMode = playbackMode
@@ -849,7 +854,7 @@ extension SceneDocument {
         let paths = (obj["sound"] as? [Any])?.compactMap { $0 as? String } ?? []
         guard !paths.isEmpty else { return nil }
         // multi(플레이리스트)/startsilent(트리거 대기)는 의미 확정·재생기 반영(2026-07-09) — "unhandled" 로그 제거.
-        return SceneSound(
+        var snd = SceneSound(
             id: intVal(obj["id"]) ?? 0,
             name: (obj["name"] as? String) ?? "",
             sounds: paths,
@@ -858,6 +863,13 @@ extension SceneDocument {
             startSilent: (obj["startsilent"] as? Bool) ?? false,
             minTime: float(obj["mintime"]) ?? 0,
             maxTime: float(obj["maxtime"]) ?? 0)
+        // 이펙트 상수(:1323)·레이어(:731-739)와 동일 비대칭 수정: float() 의 {value} 언랩이 형제 script 를
+        // 삼키므로 스크립트는 별도로 먼저 캡처(정적 volume 은 위에서 이미 언랩됨).
+        if let bind = obj["volume"] as? [String: Any], let sc = bind["script"] as? String {
+            snd.volumeScript = sc
+            if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { snd.volumeScriptProps = j }
+        }
+        return snd
     }
 
     /// 트랜스폼-온리 그룹 노드: 콘텐츠 키 없음 + id 보유 시 SceneNode3D(비가시도 포함 — 서브트리 판정에 필요).

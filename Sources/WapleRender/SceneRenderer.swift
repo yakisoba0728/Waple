@@ -1104,8 +1104,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 음량은 VideoSettings(배경별) 재사용 → 동영상 설정 메뉴의 음소거/음량이 씬 오디오에도 적용.
         if container.window != nil, !doc.sounds.isEmpty {
             let audio = SceneAudioPlayer()
+            // F214: volume 프로퍼티 스크립트(오디오/페이드 구동, 실측 12건) — 엔진은 씬 공유 컨텍스트에서
+            // 생성(makeScriptEngine, top-level 사이드이펙트 즉시 실행). tick(time:) 이 draw 루프에서 재평가.
             audio.start(sounds: doc.sounds, package: package,
-                        settingVolume: VideoSettings.volume(id: project.id))
+                        settingVolume: VideoSettings.volume(id: project.id),
+                        volumeEngine: { [weak self] snd in
+                            guard let src = snd.volumeScript else { return nil }
+                            return self?.makeScriptEngine(src, layerName: snd.name.isEmpty ? nil : snd.name,
+                                                          scriptPropsJSON: snd.volumeScriptProps)
+                        })
             sceneAudio = audio
             // 씬 스크립트 사운드 트리거(getLayer(name).play()/isPlaying()/.volume)를 실제 트랜스포트에 배선.
             // 헤드리스(오디오 미생성)에선 미연결 → 브리지가 안전 no-op(트리거는 무시, 캡처 결정성 유지).
@@ -1211,6 +1218,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
 
         refreshScriptedTexts(device: device, time: time)  // 초당 1회 update() 재평가(시계 등)
+        sceneAudio?.tick(time: time)  // F214: volume 프로퍼티 스크립트 per-frame 재평가(헤드리스는 sceneAudio nil → no-op)
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
         let displayTextures = buildDisplayTextures(device: device, time: time, cb: cb)
 

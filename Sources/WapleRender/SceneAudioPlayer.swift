@@ -34,9 +34,13 @@ public final class SceneAudioPlayer {
 
     /// 재생 시작. 각 sound 오브젝트 → 플레이리스트 1개(한 번에 한 곡).
     /// - settingVolume: VideoSettings.volume(id:) (0…1). 오서 볼륨과 곱해 최종 음량.
+    /// - volumeEngine: sound.volumeScript 가 있는 오브젝트마다 호출되는 엔진 팩토리(씬 공유 JSContext
+    ///   생성은 SceneAudioPlayer 책임 밖 — 호출자(SceneRenderer.makeScriptEngine)가 주입). nil 반환 시
+    ///   해당 사운드는 정적 볼륨 유지(무회귀).
     /// 이름 있는 사운드는 startsilent 여도 트리거 레지스트리에 등록(재생은 play(name:) 트리거 대기).
     /// 자동재생은 비-startsilent 만(startsilent 은 기존 정책대로 시작 무음 — 클래스 주석 참조).
-    public func start(sounds: [SceneSound], package: ScenePackage, settingVolume: Float) {
+    public func start(sounds: [SceneSound], package: ScenePackage, settingVolume: Float,
+                      volumeEngine: (SceneSound) -> TextScriptEngine? = { _ in nil }) {
         for snd in sounds {
             let entries = Self.playableEntries(snd)
             guard !entries.isEmpty else {
@@ -46,9 +50,10 @@ public final class SceneAudioPlayer {
             let triggerable = !snd.name.isEmpty
             // startsilent 이고 이름도 없으면 재생 경로 전무(자동재생X·트리거X) → 스킵(기존 no-op 계약 유지).
             if snd.startSilent && !triggerable { continue }
+            let engine = snd.volumeScript != nil ? volumeEngine(snd) : nil
             let pl = Playlist(entries: entries, mode: snd.playbackMode, package: package,
                               authorVolume: snd.volume, settingVolume: settingVolume,
-                              minTime: snd.minTime, maxTime: snd.maxTime)
+                              minTime: snd.minTime, maxTime: snd.maxTime, volumeEngine: engine)
             // 자동재생 실패(전 후보 디코드 불가)면 미등록 — 단, 트리거 가능 사운드는 나중에 pkg 데이터가
             // 없을 리 없으니 그대로 등록(트리거 시 재시도). startsilent 은 애초에 자동재생 안 함.
             if !snd.startSilent {
@@ -58,6 +63,10 @@ public final class SceneAudioPlayer {
             if triggerable { named[snd.name] = pl }
         }
     }
+
+    /// volume 프로퍼티 스크립트 per-frame 재평가(F214) — 오디오/페이드 구동 볼륨(실측 12건, 예 2911866381).
+    /// 스크립트 없는 재생목록은 매칭되는 엔진이 없어 안전 no-op(정적 볼륨 유지).
+    public func tick(time: Float) { playlists.forEach { $0.tick(time: time) } }
 
     // ── 이름 주소 트랜스포트(씬 스크립트 브리지 __wapleSound 배후) ─────────────────
     /// 트리거 재생(재트리거 시 처음부터 재시작 — 클릭 SFX 규약). 미등록 이름은 안전 no-op.
@@ -138,16 +147,31 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
     private var paused = false
     /// 곡 간 대기(random gap) 중 일시정지되면 여기 다음 인덱스를 보관 → resume 이 재개(정지 중 재생 방지).
     private var pendingNext: Int?
+    /// F214: volume 프로퍼티 스크립트 엔진(sound.volumeScript 있을 때만 비-nil). tick(time:) 이 매 프레임
+    /// update(authorVolume) → 새 authorVolume 으로 재평가.
+    private let volumeEngine: TextScriptEngine?
 
     init(entries: [String], mode: String, package: ScenePackage,
-         authorVolume: Float, settingVolume: Float, minTime: Float, maxTime: Float) {
+         authorVolume: Float, settingVolume: Float, minTime: Float, maxTime: Float,
+         volumeEngine: TextScriptEngine? = nil) {
         self.entries = entries; self.mode = mode; self.package = package
         self.authorVolume = authorVolume; self.settingVolume = settingVolume
         self.minTime = minTime; self.maxTime = maxTime
+        self.volumeEngine = volumeEngine
     }
 
     /// 최종 출력 볼륨(오서 × 설정, 클램프). play(at:) 마다 적용 → 다음 곡에도 스크립트가 세팅한 볼륨이 지속.
     private var effectiveVolume: Float { SceneAudioPlayer.effectiveVolume(author: authorVolume, setting: settingVolume) }
+
+    /// volume 스크립트 재평가(오디오/페이드 구동 — 실측 12건). update() 가 스칼라를 반환하지 않거나
+    /// 예외면 authorVolume 유지(현상 유지 — 다른 프로퍼티 스크립트 소비처와 동일 규약).
+    func tick(time: Float) {
+        guard let volumeEngine else { return }
+        volumeEngine.setRuntime(Double(time))
+        if let v = volumeEngine.evaluateVec(current: [authorVolume])?.first {
+            setVolume(v)
+        }
+    }
     /// 스크립트가 읽어가는 볼륨(오서 관점). 세팅 배수는 감춘다(주크박스 페이드 로직이 세팅한 값을 그대로 회수).
     var scriptVolume: Float { authorVolume }
     func setVolume(_ v: Float) { authorVolume = v; player?.volume = effectiveVolume }
