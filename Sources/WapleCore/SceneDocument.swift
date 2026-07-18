@@ -138,7 +138,7 @@ public struct SceneTextLayer: Equatable {
     public let horizontalAlign: String   // left|center|right (origin 앵커 기준)
     public let verticalAlign: String     // top|center|bottom
     public let origin: Vec2
-    public let scale: Vec2               // 오브젝트 "size" 필드 = 배수(실측 "2 2")
+    public let scale: Vec2               // 배율은 "scale" 필드(실측 "2 2") — "size" 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)
     /// "Limit width"(limitwidth) 체크 시 워드랩 폭 maxwidth(래스터 로컬 px — 실물 maxwidth 스크립트가
     /// 화면폭을 scale.x 로 나눠 전달 = 스케일 전 단위, d.ts "Max width in pixels"). nil = 무제한(무회귀).
     public var maxWidth: Float? = nil
