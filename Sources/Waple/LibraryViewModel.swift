@@ -260,6 +260,13 @@ final class LibraryViewModel: ObservableObject {
         WallpaperType.from(entry.typeRaw).isSupportedInMVP
     }
 
+    /// id(드래그앤드롭 등 문자열 페이로드로 전달된 경우) → 지원되는 실제 엔트리. 존재하지 않거나
+    /// 지원 예정 타입이면 nil(w5d-displays — 디스플레이 시트 레일 드래그 대상 검증에 사용).
+    func supportedEntry(forId id: String) -> LibraryEntry? {
+        guard let entry = entries.first(where: { $0.id == id }), isSupported(entry) else { return nil }
+        return entry
+    }
+
     // MARK: - 유저 속성 편집
 
     /// 편집 가능한 속성 목록(기본값 + 저장된 오버라이드 병합).

@@ -190,6 +190,29 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertNil(vm.folderURL(for: entry(id: "ghost", title: "Ghost")), "빈 북마크는 해석 실패 → nil")
     }
 
+    // MARK: - 드롭된 id → 지원 엔트리 해석 (w5d-displays 시트 내 드래그앤드롭)
+
+    func testSupportedEntryForId_resolvesSupportedEntry() throws {
+        let dir = tempDir()
+        try seedLibrary(dir, entries: [entry(id: "wp1", title: "Sunset")])   // typeRaw: "scene" — 지원됨
+        let vm = makeVM(dir: dir)
+        XCTAssertEqual(vm.supportedEntry(forId: "wp1")?.title, "Sunset")
+    }
+
+    func testSupportedEntryForId_nilForUnsupportedType() throws {
+        let dir = tempDir()
+        let unsupported = LibraryEntry(id: "app1", title: "App", typeRaw: "application",
+                                       fileName: nil, previewName: nil, bookmark: Data())
+        try seedLibrary(dir, entries: [unsupported])
+        let vm = makeVM(dir: dir)
+        XCTAssertNil(vm.supportedEntry(forId: "app1"), "지원 예정 타입은 드래그앤드롭 대상에서 제외")
+    }
+
+    func testSupportedEntryForId_nilForUnknownId() {
+        let vm = makeVM(dir: tempDir())
+        XCTAssertNil(vm.supportedEntry(forId: "ghost"))
+    }
+
     // MARK: - 전역 선택 엔트리 (w5d-displays 미할당 모니터 미리보기 폴백)
 
     func testGlobalEntryReflectsSelectedId() throws {
