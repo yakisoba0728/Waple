@@ -192,6 +192,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         onboardingModel.onChooseBaseAssets = { [weak self] in self?.chooseBaseAssets() }
         onboardingModel.onOpenSettings = { [weak self] in self?.openSettings() }
+        // w5d-onboarding: '배경 추가' 행 "가져오기…" — WallpaperGridView.importFolder 와 동일한
+        // NSOpenPanel+routeImport 배선(ImportPanel)을 재사용해 필수 단계를 시트에서 한 번에 끝낸다.
+        onboardingModel.onImport = { [weak self] in
+            guard let self else { return }
+            ImportPanel.run(into: self.libraryVM)
+        }
         maybePresentOnboarding()
     }
 

@@ -14,6 +14,9 @@ final class OnboardingModel: ObservableObject {
     var readiness: () -> (content: Bool, baseAssets: Bool, ffmpeg: Bool) = { (false, false, false) }
     var onChooseBaseAssets: (() -> Void)?
     var onOpenSettings: (() -> Void)?
+    /// '배경 추가' 행 "가져오기…" 액션(w5d-onboarding) — AppDelegate 가 WallpaperGridView.importFolder 와
+    /// 동일한 NSOpenPanel+routeImport 배선(ImportPanel)을 주입한다.
+    var onImport: (() -> Void)?
 
     /// 최신 상태를 다시 읽어 반영(표시 직전·에셋 폴더 선택 후).
     func refresh() {
@@ -29,6 +32,14 @@ final class OnboardingModel: ObservableObject {
     /// 공유 에셋 폴더 선택(NSOpenPanel runModal — 반환 후 상태 재조회로 초록 갱신).
     func chooseBaseAssets() {
         onChooseBaseAssets?()
+        refresh()
+    }
+
+    /// 배경 가져오기(NSOpenPanel runModal — 반환 후 상태 재조회로 초록 갱신). 필수 단계(hasContent)를
+    /// 시트에서 한 번에 끝낼 수 있게 한다(어포던스 역전 정정 — 종전엔 선택 단계인 공유 에셋 폴더에만
+    /// 버튼이 있고 정작 필수인 배경 추가는 액션이 없어 시트를 닫고 다시 찾아야 했다).
+    func importContent() {
+        onImport?()
         refresh()
     }
 }
@@ -47,7 +58,10 @@ struct OnboardingView: View {
             }
 
             row(done: model.hasContent, title: "배경 추가",
-                detail: "배경 폴더나 zip 을 창에 끌어다 놓거나, 창작마당 탭에서 내려받으세요.") { EmptyView() }
+                detail: "배경 폴더나 zip 을 창에 끌어다 놓거나, 창작마당 탭에서 내려받으세요.") {
+                Button("가져오기…") { model.importContent() }
+                    .buttonStyle(.borderedProminent)
+            }
 
             row(done: model.baseAssetsSet, title: "공유 에셋 폴더 (선택)",
                 detail: "일부 씬은 Wallpaper Engine 공유 assets 폴더의 텍스처가 필요합니다.") {
@@ -62,7 +76,10 @@ struct OnboardingView: View {
             Spacer(minLength: 0)
 
             HStack {
+                // 첫 실행 가치가 낮은 이차 동작이라 위계를 낮춘다(link 스타일 — 필수 행의 새 프로미넌트
+                // "가져오기…" 버튼과 시각적으로 경쟁하지 않게).
                 Button("설정 열기") { model.onOpenSettings?() }
+                    .buttonStyle(.link)
                 Spacer()
                 Button("시작하기") { model.dismiss() }
                     .keyboardShortcut(.defaultAction)

@@ -133,16 +133,8 @@ struct NowPlayingBar: View {
         .frame(width: 280)
     }
 
-    /// '가져오기' = 디스크에서 임포트(기존 라우팅 재사용: 폴더/zip/동영상).
+    /// '가져오기' = 디스크에서 임포트(WallpaperGridView 와 공유하는 ImportPanel — 폴더/zip/동영상).
     private func openWallpaperPanel() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        if url.pathExtension.lowercased() == "zip" { viewModel.importZip(url) }
-        else if VideoImport.isVideoFile(url) { viewModel.importVideoFile(url) }
-        else { viewModel.importParent(url) }
+        ImportPanel.run(into: viewModel)
     }
 }

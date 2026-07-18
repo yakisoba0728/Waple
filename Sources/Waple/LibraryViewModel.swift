@@ -183,6 +183,15 @@ final class LibraryViewModel: ObservableObject {
         }
     }
 
+    /// 확장자 기반 임포트 라우팅(zip/동영상/폴더) — NSOpenPanel·드래그앤드롭 결과 URL 하나를 적절한
+    /// store 임포트로 보낸다. WallpaperGridView(툴바·드롭)·NowPlayingBar(하단 가져오기)·AppDelegate
+    /// (온보딩 "가져오기…", ImportPanel 경유)가 공유해 판정 로직이 여러 벌로 갈라지지 않게 한다.
+    func routeImport(_ url: URL) {
+        if url.pathExtension.lowercased() == "zip" { importZip(url) }
+        else if VideoImport.isVideoFile(url) { importVideoFile(url) }
+        else { importParent(url) }
+    }
+
     /// 원시 mp4/mov 가져오기(작업 5) — 최소 project.json 배경으로 감싸 가져온다.
     func importVideoFile(_ url: URL) {
         guard let folder = VideoImport.prepare(from: url),

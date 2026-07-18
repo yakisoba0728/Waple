@@ -302,22 +302,10 @@ struct WallpaperGridView: View {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    // MARK: 임포트(로직 무변경)
+    // MARK: 임포트
 
     func importFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowedContentTypes = [.folder, .zip, .movie]
-        panel.allowsMultipleSelection = false
-        panel.message = "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요."
-        if panel.runModal() == .OK, let url = panel.url { routeImport(url) }
-    }
-
-    private func routeImport(_ url: URL) {
-        if url.pathExtension.lowercased() == "zip" { viewModel.importZip(url) }
-        else if VideoImport.isVideoFile(url) { viewModel.importVideoFile(url) }
-        else { viewModel.importParent(url) }
+        ImportPanel.run(into: viewModel)
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -328,9 +316,27 @@ struct WallpaperGridView: View {
             provider.loadItem(forTypeIdentifier: fileURL, options: nil) { item, _ in
                 guard let data = item as? Data,
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                DispatchQueue.main.async { self.routeImport(url) }
+                DispatchQueue.main.async { self.viewModel.routeImport(url) }
             }
         }
         return handled
+    }
+}
+
+/// 배경 가져오기 패널(w5d-onboarding): NSOpenPanel(폴더·zip·동영상) → LibraryViewModel.routeImport 로
+/// 라우팅. WallpaperGridView(툴바)·NowPlayingBar(하단 가져오기)·AppDelegate(온보딩 "가져오기…")가
+/// 공유해 패널 설정이 세 벌로 갈라지지 않게 한다.
+enum ImportPanel {
+    @discardableResult
+    static func run(into viewModel: LibraryViewModel) -> Bool {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.folder, .zip, .movie]
+        panel.allowsMultipleSelection = false
+        panel.message = "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요."
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        viewModel.routeImport(url)
+        return true
     }
 }
