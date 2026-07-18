@@ -63,6 +63,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 정적 배경 동기화(작업 1): 적용 성공 후 스틸 생성/설정을 지연·디바운스하는 작업 핸들.
     private var stillSyncWork: DispatchWorkItem?
 
+    // 화면 구성 변경(F034): didChangeScreenParametersNotification 은 한 물리 이벤트당 여러 번 연속
+    // 발화하는 게 macOS 표준 동작이라, 코얼레싱 없이 매번 반응하면 배경이 반복 리마운트된다.
+    private var screenChangeWork: DispatchWorkItem?
+    // F033: 새 모니터 연결 감지용 — screensChanged 가 실제로(디바운스 정착 후) 실행될 때만 갱신해
+    // 한 버스트 안의 중간값이 아니라 '정착 전 vs 정착 후'를 비교한다.
+    private lazy var lastSettledScreenCount = NSScreen.screens.count
+
     // 최근 배경 서브메뉴(작업 6): 열 때마다 최신 목록으로 다시 채운다(NSMenuDelegate).
     private weak var recentMenu: NSMenu?
 
@@ -123,6 +130,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         libraryVM.onAssignmentsChanged = { [weak self] in
             guard let self else { return }
             _ = self.applyCurrentSelection()  // 할당 변경 즉시 반영
+        }
+        // F070: 할당 없이 전역으로만 적용 중이던 배경이 라이브러리에서 제거되면 currentFolderURL 도
+        // 함께 비운다 — 안 하면 스테일한 값이 이후 재적용에서 "제거된" 배경을 되살린다.
+        libraryVM.onGlobalSelectionRemoved = { [weak self] in
+            self?.currentFolderURL = nil
+            self?.currentProjectId = nil
         }
         libraryVM.onPlaylistChanged = { [weak self] in self?.schedulePlaylistTimer() }
         libraryVM.onOpenInteraction = { [weak self] in self?.openWebInteraction() }
@@ -214,11 +227,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 현재 적용된 웹 월페이퍼의 조작 창(실입력 프록시 + 라이브 미러)을 연다.
     @objc private func openWebInteraction() {
-        if let web = renderers.compactMap({ $0 as? WebRenderer }).first {
-            web.openInteractionPanel()
-        } else {
+        // F022: 화면마다 다른 웹 배경(모니터별 할당)이 동시에 적용될 수 있는데 종전엔 마운트 순서상
+        // '첫 번째' WebRenderer 만 대상으로 해 두 번째 이후 화면의 웹 배경은 조작 창(실입력 프록시)을
+        // 열 방법이 아예 없었다. renderers 는 화면키를 들고 있지 않아(F039 참조 — 별도 스코프) 특정
+        // 화면 하나만 골라 여는 UI는 이번 스코프 밖이지만, 전부 열면 최소한 도달 불가 상태는 없앤다.
+        let webRenderers = renderers.compactMap { $0 as? WebRenderer }
+        guard !webRenderers.isEmpty else {
             notify("웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요")
+            return
         }
+        webRenderers.forEach { $0.openInteractionPanel() }
     }
 
     @objc private func openLibrary() {
@@ -239,9 +257,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 프로그램 생성 NSWindow 는 닫힐 때 기본적으로 release 되어, 강한 참조 프로퍼티가
             // 댕글링되고 재오픈 시 use-after-free 가 된다. 프로퍼티가 수명을 관리하도록 막는다.
             window.isReleasedWhenClosed = false
+            window.center()   // F024: 최초 생성 시에만 중앙 배치 — 재오픈마다 사용자가 옮긴 위치를 되돌리지 않는다.
             libraryWindow = window
         }
-        libraryWindow?.center()
+        // F023: orderFront 계열은 최소화된 창을 복원하지 않는다 — 액세서리 앱(Dock 아이콘 없음)이라
+        // 트레이가 유일한 재진입점인데 deminiaturize 가 없으면 최소화된 라이브러리 창이 영영 안 뜬다.
+        if libraryWindow?.isMiniaturized == true { libraryWindow?.deminiaturize(nil) }
         libraryWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -256,10 +277,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setContentSize(Metrics.settingsSize)
             window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
             window.isReleasedWhenClosed = false
+            window.center()   // F024: 최초 생성 시에만 — 재오픈마다 위치를 되돌리지 않는다.
             settingsWindow = window
         }
         settingsVM.refresh()
-        settingsWindow?.center()
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -340,12 +361,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activeVideoProjectIds = screenProjects
                 .filter { $0.project.type == .video }
                 .map { $0.project.id }
-            if let project {
-                ScreenSaverController.syncVideoPath(for: project)  // 화면보호기 대상 동영상 갱신(feat/screensaver)
-            }
+            // F028: syncVideoPath 는 activeVideoProjectIds 와 같은 소스(모니터별 할당 반영된
+            // screenProjects)를 써야 한다 — 종전엔 여기서만 전역 project 파라미터에 게이팅돼, 전역
+            // 선택 없이(project==nil) 화면별 할당만으로 동영상을 표시 중이면 화면보호기 videoPath 가
+            // 절대 갱신되지 않았다. screenProjects 는 미할당 화면에 전역을 폴백하므로 전역이 동영상인
+            // 경우도 그대로 포함된다(무회귀) — 여러 화면이 서로 다른 동영상이면 첫 번째를 채택.
+            ScreenSaverController.syncVideoPath(for: screenProjects.first { $0.project.type == .video }?.project)
             if pauseGate.isPaused { renderers.forEach { $0.pause() } }  // 어떤 사유든 정지 중 교체된 렌더러도 정지 유지
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
-            pushRecent(project?.id)     // 최근 배경 목록 갱신(nil = 무선택 → no-op)
+            if let project {
+                pushRecent(project.id)  // 최근 배경 목록 갱신
+            } else {
+                // F029: 전역 선택 없이 화면별 할당만으로 적용하는(공식 지원되는) 모드에서는
+                // pushRecent(nil) 이 항상 no-op 이라 실제 적용된 배경이 '최근 배경' 메뉴에 전혀
+                // 쌓이지 않았다 — 화면별로 실제 마운트된 프로젝트 id 를 대신 반영한다(중복은
+                // pushRecent/RecentWallpapers.push 자체가 제거).
+                screenProjects.forEach { pushRecent($0.project.id) }
+            }
             baseAssetsWarningGate.presentIfNeeded(
                 after: result,
                 fingerprint: BaseAssetsSettings.fingerprint,
@@ -371,17 +403,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = applyCurrentSelection()
             return
         }
-        apply(folderURL: folder)
+        if !apply(folderURL: folder) {
+            // F031: 실패한 선택이 Now Playing/그리드에 계속 "적용됨"으로 오표시되지 않도록 UI 쪽 선택을
+            // 비운다(영속 store.selectedId 는 유지 — 다음 실행도 같은 배경을 먼저 시도하되, 원본이
+            // 다시 연결되면 자동 복구되고, 실패해도 아래와 동일하게 화면별 할당으로 폴백해 무해하다).
+            libraryVM.selectedId = nil
+            // F032: 전역 선택 마운트가 실패해도 화면별 할당(MonitorMapping) 배경은 정상일 수 있다 —
+            // apply(folderURL:) 의 실패를 그냥 버리면(종전) 정상적인 할당-전용 배경까지 통째로 누락된다.
+            // apply 실패는 applyResolved 이전(projectForMount/makeRenderer)에서 나므로 currentFolderURL 은
+            // 아직 미설정 — applyCurrentSelection() 이 전역 없이(global: nil) 화면별 할당만 재시도한다.
+            _ = applyCurrentSelection()
+        }
     }
 
+    /// F034: didChangeScreenParametersNotification 은 단일 모니터 연결/해제·해상도 정착·Dock
+    /// 표시-숨김·디스플레이 슬립/웨이크에서 macOS 가 보통 2~4회 연속 발화한다 — 디바운스 없이 매번
+    /// 반응하면 배경이 반복 리마운트된다(동영상 t=0 재시작·웹 페이지 리로드·텍스처 재업로드).
+    /// scheduleDesktopStillSync 와 동일한 취소+재예약 패턴으로 흡수.
     @objc private func screensChanged() {
-        ScreenChangeLifecycle.detachRenderersBeforeRebuild(
-            existing: &renderers,
-            teardown: { $0.teardown() }
-        )
+        screenChangeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.performScreensChanged() }
+        screenChangeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func performScreensChanged() {
+        // F033: 새 디스플레이가 연결됐으면(정착 전 대비 화면 수 증가) 화면별 지정 기능을 안내 —
+        // 재구성/재적용 '전'에 스냅샷해야 rebuild 이후에도 비교가 유효하다.
+        let newScreenDetected = NSScreen.screens.count > lastSettledScreenCount
+        lastSettledScreenCount = NSScreen.screens.count
+
+        // F036/F035: renderers 를 여기서 선-소거하면 desktopController.rebuild() 직후 재적용이 실패했을 때
+        // RendererSwap.apply(existing:) 의 롤백 안전망("mount 실패 시 existing 은 건드리지 않는다")이 이미
+        // 빈 배열을 붙잡아 무력화된다. 살아있는 renderers 를 그대로 넘겨 applyResolved → RendererSwap 이
+        // 성공했을 때만 이전 렌더러를 정리하고, 실패하면 보존하게 한다(옛 창은 rebuild 로 사라지지만, 다음
+        // 재시도가 성공할 때까지 renderers 배열 자체는 유효한 객체를 유지 — 자원 정리를 성공 시점까지 지연).
         activeVideoProjectIds = []
         desktopController.rebuild()
         _ = applyCurrentSelection()
+
+        if newScreenDetected {
+            notify("새 디스플레이가 연결됐습니다 — 화면마다 다른 배경을 지정하려면 '디스플레이' 버튼을 확인하세요")
+        }
     }
 
     /// 재생목록 타이머 재구성. 비활성/빈 목록 → 정지(스케줄 조건은 추출 로직).
@@ -391,7 +454,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard PlaylistScheduling.shouldRun(enabled: playlistStore.enabled, ids: playlistStore.ids) else { return }
         let interval = PlaylistScheduling.intervalSeconds(minutes: playlistStore.intervalMinutes)
         playlistTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.advancePlaylist()
+            guard let self, PlaylistScheduling.shouldAdvanceNow(isPaused: self.pauseGate.isPaused) else { return }
+            self.advancePlaylist()
         }
     }
 
@@ -445,19 +509,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 전역 일시정지 (메인창 하단 바)
 
     /// 하단 바 일시정지 토글 — 새 상태 반환. 가림·슬립 정지와 독립(하나라도 있으면 정지 유지).
+    /// 반환값은 수동 사유 하나만이 아니라 실제 정지 여부(pauseGate.isPaused, F040) — 예: 가림으로
+    /// 이미 정지 중일 때 수동을 껐다 해도 여전히 정지 중이면 true 를 반환해야 UI 가 거짓 재생을 안 보인다.
     func toggleGlobalPause() -> Bool {
-        let (active, action) = pauseGate.toggle(.manual)
+        let (_, action) = pauseGate.toggle(.manual)
         applyPause(action)
-        return active
+        return pauseGate.isPaused
     }
 
     /// PauseGate 결정을 실제 렌더러에 적용(사유 합성은 gate 가, 실제 pause/resume I/O 는 여기서).
+    /// F040: 가림·슬립처럼 토글 메뉴를 거치지 않는 사유도 하단 바/트레이 미러(libraryVM.isPaused)를
+    /// 여기서 함께 갱신한다 — 경계를 안 넘는 .none 은 상태 변화가 없으므로 미러도 스킵(가림 폴링이
+    /// 매초 재호출해도 불필요한 SwiftUI 재발행을 만들지 않는다).
     private func applyPause(_ action: PauseGate.Action) {
         switch action {
         case .pause:  renderers.forEach { $0.pause() }
         case .resume: renderers.forEach { $0.resume() }
-        case .none:   break
+        case .none:   return
         }
+        libraryVM.isPaused = pauseGate.isPaused
     }
 
     // MARK: - 시스템/디스플레이 슬립 자동 정지 (앱셸 스코프 A)
@@ -470,18 +540,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 정지 배경으로 설정 (작업 3)
 
-    /// 현재 배경에서 정지 이미지를 만들어 전 스크린 데스크탑 배경으로 지정(수동 1회).
+    /// 현재 배경에서 화면별 정지 이미지를 만들어 데스크탑 배경으로 지정(수동 1회, F046: 모니터별 할당
+    /// 인지 — 화면마다 실제로 표시 중인 프로젝트에서 스틸을 뽑아 그 화면에만 적용한다).
     /// 배경 창은 아이콘 레벨 아래라, 라이브 창이 떠 있는 동안 정지 배경은 그 뒤의 폴백 레이어다.
     /// 원본 보존/복원은 자동 동기화(작업 1) 전용 — 수동 설정은 사용자의 명시적 1회 액션이라 백업 없음.
     @objc private func setStillWallpaper() {
-        guard currentFolderURL != nil else { notify("적용된 배경이 없습니다"); return }
-        guard let image = generateStillImage() else {
-            notify("정지 배경을 만들 수 없습니다"); return
+        // F043: currentFolderURL(전역 선택)만 보면 화면별 할당-전용 모드(전역 nil)에서 배경이 실제로
+        // 표시 중인데도 "없음" 오탐이 난다 — 실제 마운트된 렌더러 존재 여부로 판정.
+        guard !renderers.isEmpty else { notify("적용된 배경이 없습니다"); return }
+        // F047: currentFolderURL 은 메인 전용 프로퍼티라 백그라운드 클로저에서 직접 읽으면(다른 apply
+        // 가 마침 같은 순간 메인에서 값을 바꿀 수 있어) 동기화 없는 경합이 생긴다 — 큐 진입 '전'
+        // 메인에서 스냅샷해 넘긴다.
+        let globalFolderURL = currentFolderURL
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let images = self.generateStillImages(globalFolderURL: globalFolderURL)   // 블로킹 — 백그라운드(F047)
+            DispatchQueue.main.async { self.finishSetStillWallpaper(images: images) }
         }
-        for screen in NSScreen.screens {
-            try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
+    }
+
+    /// setStillWallpaper 의 메인 스레드 마무리 — 실제 OS 호출 결과에 따라 통지 문구를 정확히 고른다.
+    private func finishSetStillWallpaper(images: [String: URL]) {
+        guard !images.isEmpty else { notify("정지 배경을 만들 수 없습니다"); return }
+        backupOriginalsIfNeeded()   // F042: 덮어쓰기 전에 항상 먼저 백업(동기화 디바운스 경합과 무관)
+        var successCount = 0
+        let screens = NSScreen.screens
+        for screen in screens {
+            guard let image = images[DesktopWindow.screenKey(for: screen)] else { continue }
+            // F044/F045: try? 로 삼키지 않고 실제 성공 여부를 센다 — 무조건 성공 알림을 띄우던 결함.
+            if (try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])) != nil {
+                successCount += 1
+            }
         }
-        notify("정지 배경으로 설정했습니다")
+        notify(StillWallpaperNotice.message(successCount: successCount, totalScreens: screens.count))
     }
 
     /// still 산출 디렉터리(라이브러리 베이스/still).
@@ -489,22 +580,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LibraryStore.defaultBaseDirectory().appendingPathComponent("still", isDirectory: true)
     }
 
-    /// 현재 배경 → 정지 이미지 파일(공통). 소스 없음/추출 실패 → nil. (수동 설정·자동 동기화 공유)
-    private func generateStillImage() -> URL? {
-        guard let folder = currentFolderURL,
-              let project = projectForMount(folderURL: folder),
-              let source = StillWallpaper.source(for: project) else { return nil }
+    /// 화면키 → 그 화면에 실제로 표시 중인 프로젝트의 정지 이미지(F046). 모니터별 할당을 그대로
+    /// 반영하는 MonitorMapping.resolveProjectSlots(applyResolved 와 동일 소스)로 화면별 프로젝트를
+    /// 구한 뒤, 같은 프로젝트를 쓰는 화면은 한 번만 생성해 공유한다. 화면/전역 모두 무배경이면 빈 dict.
+    /// ⚠️ 블로킹(AVFoundation 디코드·씬 GPU 캡처) — 백그라운드 큐에서 호출(F047). NSScreen 열거는
+    /// 메인에서 미리 끝내 두고 넘어온 값을 쓴다(AppKit 뷰 API 는 메인 스레드 전용). globalFolderURL 도
+    /// 호출부가 메인에서 스냅샷해 넘긴다(currentFolderURL 을 백그라운드에서 직접 읽는 경합 방지).
+    private func generateStillImages(globalFolderURL: URL?) -> [String: URL] {
+        let screenSizes = DispatchQueue.main.sync {
+            Dictionary(uniqueKeysWithValues: NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) })
+        }
+        let global = globalFolderURL.flatMap { projectForMount(folderURL: $0) }
+        let slots = DispatchQueue.main.sync { resolvedScreenProjectSlots(global: global) }
         let stillDir = stillDirectory()
         try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
+
+        var cache: [String: URL?] = [:]   // projectId → 생성 결과(실패도 캐시해 같은 화면 반복 재시도 방지)
+        var result: [String: URL] = [:]
+        for (key, project) in slots {
+            guard let project else { continue }
+            let url: URL?
+            if let cached = cache[project.id] {
+                url = cached
+            } else {
+                let size = screenSizes[key] ?? NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+                url = stillImage(for: project, size: size, stillDir: stillDir)
+                cache[project.id] = url
+            }
+            if let url { result[key] = url }
+        }
+        return result
+    }
+
+    /// 화면키 → 마운트된 프로젝트(F046 공용 — setStillWallpaper/syncDesktopStill/잠금화면 스틸이 공유).
+    /// applyResolved(304행대)와 동일한 MonitorMapping.resolveProjectSlots 호출 — 소스가 어긋나면
+    /// 실제 표시와 스틸이 따로 놀아 F046 이 재발한다.
+    private func resolvedScreenProjectSlots(global: WallpaperProject?) -> [(key: String, project: WallpaperProject?)] {
+        let screens = desktopController.screenViews
+        let slots = MonitorMapping.resolveProjectSlots(
+            screenKeys: screens.map { $0.screenKey },
+            global: global,
+            assignedFolder: { key in
+                MonitorMapping.assignedFolder(
+                    screenKey: key,
+                    assignment: { self.monitorStore.assignment(for: $0) },
+                    folderForEntry: { self.folderForEntry($0) })
+            },
+            parse: { self.projectForMount(folderURL: $0) }
+        )
+        return Array(zip(screens.map { $0.screenKey }, slots))
+    }
+
+    /// 프로젝트 하나의 정지 이미지(공통 스위치 — 동영상/씬/프리뷰). 소스 없음/추출 실패 → nil.
+    private func stillImage(for project: WallpaperProject, size: CGSize, stillDir: URL) -> URL? {
+        guard let source = StillWallpaper.source(for: project) else { return nil }
         let output = StillWallpaper.outputURL(projectId: project.id, stillDir: stillDir)
         switch source {
         case .videoFrame(let videoURL): return extractVideoFrame(from: videoURL, to: output)
-        case .sceneCapture:             return captureSceneStill(to: stillDir, output: output)
+        case .sceneCapture:             return captureSceneStill(project: project, size: size, to: stillDir, output: output)
         case .previewImage(let url):    return url   // preview 파일 그대로 사용
         }
     }
 
-    /// 동영상 t=1s 프레임 → PNG(실패 시 t=0 폴백). 실패 → nil.
+    /// 동영상 t=1s 프레임 → PNG(실패 시 t=0 폴백). 실패 → nil. AVFoundation 동기 디코드 — 백그라운드
+    /// 큐에서 호출(F047, generateStillImages 경유).
     private func extractVideoFrame(from videoURL: URL, to output: URL) -> URL? {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: videoURL))
         generator.appliesPreferredTrackTransform = true
@@ -520,15 +659,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return output
     }
 
-    /// 활성 씬 렌더러로 1프레임(t=1s) 캡처 → 프로젝트별 output 으로 복사. 씬 없음/실패 → nil.
-    /// captureFrames 는 고정 파일명(frame_t1.0.png)이라 그대로 반환하면 씬 전환 때마다 같은 URL 이
-    /// 재설정돼 macOS 배경 캐시가 갱신을 무시한다(P-B2) — 프로젝트별 경로로 복사해 URL 을 구분.
-    private func captureSceneStill(to dir: URL, output: URL) -> URL? {
-        guard let scene = renderers.compactMap({ $0 as? SceneRenderer }).first else { return nil }
-        let size = NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
+    /// 프로젝트 전용 임시 SceneRenderer 로 1프레임(t=1s) 캡처 → output 으로 복사(F046: 화면별로 실제
+    /// 마운트된 렌더러가 아니라 프로젝트 자체를 그 화면 크기로 새로 렌더 — 어느 렌더러가 어느 화면
+    /// 것인지 추적할 필요 없이 항상 정확한 프로젝트·크기로 캡처된다). 컨테이너는 어떤 창에도 속하지
+    /// 않는 오프스크린 NSView — SceneRenderer.mount 는 이미 이런 헤드리스 마운트를 캡처/테스트 용도로
+    /// 정식 지원한다("container.window == nil → 사운드 등 라이브 전용 사이드이펙트 스킵, 결정적").
+    /// NSView/MTKView 생성은 메인 스레드 전용이라, 백그라운드 큐에서 호출되면(F047) 메인으로 동기 홉.
+    private func captureSceneStill(project: WallpaperProject, size: CGSize, to dir: URL, output: URL) -> URL? {
+        if Thread.isMainThread {
+            return captureSceneStillOnMain(project: project, size: size, to: dir, output: output)
+        }
+        return DispatchQueue.main.sync {
+            captureSceneStillOnMain(project: project, size: size, to: dir, output: output)
+        }
+    }
+
+    private func captureSceneStillOnMain(project: WallpaperProject, size: CGSize, to dir: URL, output: URL) -> URL? {
+        guard size.width > 0, size.height > 0,
+              let renderer = RendererFactory.makeRenderer(for: project) as? SceneRenderer else { return nil }
+        let container = NSView(frame: CGRect(origin: .zero, size: size))
+        do {
+            try renderer.mount(in: container, project: project)
+        } catch {
+            return nil
+        }
+        defer { renderer.teardown() }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
-        guard let captured = scene.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
-                                                 times: [1.0], toDir: dir).first else { return nil }
+        guard let captured = renderer.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
+                                                    times: [1.0], toDir: dir).first else { return nil }
         let fm = FileManager.default
         try? fm.removeItem(at: output)   // safeName 은 영숫자만 남기므로 captured 와 충돌 불가
         guard (try? fm.copyItem(at: captured, to: output)) != nil else { return nil }
@@ -559,8 +717,13 @@ extension AppDelegate {
             return false
         }
         do {
-            let project = currentFolderURL.flatMap { projectForMount(folderURL: $0) }
-            try ScreenSaverController.enable(currentProject: project)
+            let global = currentFolderURL.flatMap { projectForMount(folderURL: $0) }
+            // F028: 전역 선택 없이(화면별 할당만) 동영상을 표시 중이어도 화면보호기가 그 동영상을
+            // 찾을 수 있게 resolvedScreenProjectSlots(applyResolved 와 동일 소스)로 화면별 프로젝트를
+            // 함께 본다. 못 찾으면 종전처럼 전역으로 폴백(무회귀 — 전역이 비디오 아니면 syncVideoPath
+            // 내부에서 조용히 no-op).
+            let videoProject = resolvedScreenProjectSlots(global: global).first { $0.project?.type == .video }?.project
+            try ScreenSaverController.enable(currentProject: videoProject ?? global)
             ScreenSaverController.openSettings()  // 사용자가 바로 확인할 수 있게 잠금 화면 패널 열기
             return true
         } catch {
@@ -615,10 +778,40 @@ extension AppDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
 
-    /// 현재 배경 스틸을 전 스크린 바탕화면으로 설정. 최초 덮어쓰기 직전 원본을 화면별로 백업(가드).
-    /// 실패는 조용히 — 이 기능은 폴백일 뿐이다.
+    /// 현재 배경 스틸을 화면별로 실제 표시 중인 프로젝트에서 만들어 데스크탑에 설정(F046: 모니터별
+    /// 할당 인지). 실패는 조용히 — 이 기능은 폴백일 뿐이다.
     private func syncDesktopStill() {
-        guard desktopStillSync, let image = generateStillImage() else { return }
+        guard desktopStillSync else { return }
+        let globalFolderURL = currentFolderURL   // F047: 메인에서 스냅샷 — 백그라운드 직접 읽기 경합 방지
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let images = self.generateStillImages(globalFolderURL: globalFolderURL)   // 블로킹 — 백그라운드(F047)
+            DispatchQueue.main.async { self.finishSyncDesktopStill(images: images) }
+        }
+    }
+
+    /// syncDesktopStill 의 메인 스레드 마무리 — 백업·실 적용·잠금화면 갱신.
+    private func finishSyncDesktopStill(images: [String: URL]) {
+        guard desktopStillSync, !images.isEmpty else { return }
+        backupOriginalsIfNeeded()   // F042: 원본 백업 — 화면별 최초 덮어쓰기 직전 값만(자기오염 가드)
+        for screen in NSScreen.screens {
+            guard let image = images[DesktopWindow.screenKey(for: screen)] else { continue }
+            try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
+        }
+        // 잠금화면은 시스템 전역 1장뿐이라 화면별로 나눌 수 없다 — 주 화면(NSScreen.main) 이미지를
+        // 우선하고, 못 찾으면(드문 경우) 생성된 것 중 아무거나.
+        if let mainKey = NSScreen.main.map(DesktopWindow.screenKey(for:)), let mainImage = images[mainKey] {
+            writeLockscreenStill(mainImage)
+        } else if let anyImage = images.values.first {
+            writeLockscreenStill(anyImage)
+        }
+    }
+
+    /// 최초 덮어쓰기 직전 원본을 화면별로 백업(자기오염 가드) — 자동 동기화·수동 설정 공용(F042: 수동
+    /// "정지 배경으로 설정"이 동기화의 3초 디바운스 창 안에 먼저 실행되면, 이 백업이 자동 동기화
+    /// 전용으로만 존재하던 종전엔 원본이 한 번도 백업되지 못했다 — 두 경로가 여기를 함께 거치게 해
+    /// 순서와 무관하게 항상 백업이 보장되도록 했다).
+    private func backupOriginalsIfNeeded() {
         var originals = desktopOriginals
         let stillPath = stillDirectory().path
         for screen in NSScreen.screens {
@@ -628,10 +821,8 @@ extension AppDelegate {
                 currentPath: current, stillDirPath: stillPath, hasBackup: originals[key] != nil) {
                 originals[key] = current
             }
-            try? NSWorkspace.shared.setDesktopImageURL(image, for: screen, options: [:])
         }
         desktopOriginals = originals
-        writeLockscreenStill(image)  // 작업 2: 잠금화면 스틸 갱신(graceful)
     }
 
     // MARK: - 잠금화면 스틸 (작업 2)
@@ -657,18 +848,22 @@ extension AppDelegate {
     /// 잠금화면 스틸을 /Library/Caches/Desktop Pictures/<UID>/lockscreen.png 에 PNG 로 기록.
     /// 디렉터리 부재(신규 macOS 등)/권한 실패는 조용히 스킵(graceful) — 폴백 기능일 뿐.
     /// ⚠️ macOS 26+ 는 비공개 WallpaperExtensionKit 확장으로 잠금화면을 관리 — 범위 외(별도 SP).
+    /// dscl 서브프로세스 대기가 블로킹이라(F047) 호출부(메인 스레드)를 막지 않도록 여기서 자체적으로
+    /// 백그라운드 큐로 넘어간다 — graceful 기능이라 호출부는 결과를 기다리지 않는다(fire-and-forget).
     private func writeLockscreenStill(_ image: URL) {
-        guard let uid = currentUserGeneratedUID() else { return }
-        let dir = URL(fileURLWithPath: "/Library/Caches/Desktop Pictures/\(uid)", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: dir.path) else { return }  // 디렉터리 부재 → 스킵
-        // 원본이 PNG 가 아닐 수 있어(preview.jpg 등) PNG 로 재인코딩.
-        guard let nsImage = NSImage(contentsOf: image),
-              let tiff = nsImage.tiffRepresentation,
-              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
-        do {
-            try png.write(to: dir.appendingPathComponent("lockscreen.png"), options: .atomic)
-        } catch {
-            notify("잠금화면 스틸 기록 실패(무시): \(error.localizedDescription)")
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self, let uid = self.currentUserGeneratedUID() else { return }
+            let dir = URL(fileURLWithPath: "/Library/Caches/Desktop Pictures/\(uid)", isDirectory: true)
+            guard FileManager.default.fileExists(atPath: dir.path) else { return }  // 디렉터리 부재 → 스킵
+            // 원본이 PNG 가 아닐 수 있어(preview.jpg 등) PNG 로 재인코딩.
+            guard let nsImage = NSImage(contentsOf: image),
+                  let tiff = nsImage.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+            do {
+                try png.write(to: dir.appendingPathComponent("lockscreen.png"), options: .atomic)
+            } catch {
+                DispatchQueue.main.async { self.notify("잠금화면 스틸 기록 실패(무시): \(error.localizedDescription)") }
+            }
         }
     }
 
@@ -726,7 +921,9 @@ extension AppDelegate: NSMenuDelegate {
     /// 서브메뉴를 열 때 최신 목록으로 다시 채운다(그 사이 삭제된 id 는 제외).
     public func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === statusMenu {
-            pauseMenuItem?.title = pauseGate.isActive(.manual) ? "재개" : "일시정지"
+            // F040: 수동 사유만 보면 가림·슬립으로 실제 정지 중일 때도 "일시정지"로 오표시된다 —
+            // 실제 렌더 상태(pauseGate.isPaused, 사유 무관)를 기준으로 라벨을 정한다.
+            pauseMenuItem?.title = pauseGate.isPaused ? "재개" : "일시정지"
             return
         }
         guard menu === recentMenu else { return }

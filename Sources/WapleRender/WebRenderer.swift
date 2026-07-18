@@ -2,6 +2,23 @@ import AppKit
 import WebKit
 import WapleCore
 
+/// WKUserContentController 는 등록된 메시지 핸들러를 강참조한다(Apple 문서 명시). WebRenderer 가
+/// 자신을 직접 등록하면 self→webView→configuration→userContentController→self 순환이 생겨, 이 순환이
+/// 유지되는 한 self 의 참조 카운트가 0 에 도달하지 못한다 — teardown() 을 명시적으로 부르지 않는
+/// 경로에서는 `deinit { teardown() }` 안전망 자체가 실행되지 않는다(F386). ucc 에는 self 대신 이
+/// 프록시를 등록해 실제 리스너를 약하게만 참조하게 하여 순환을 원천 차단한다(표준 WKWebView 패턴).
+private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var target: WKScriptMessageHandler?
+
+    init(target: WKScriptMessageHandler) {
+        self.target = target
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(controller, didReceive: message)
+    }
+}
+
 public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegate, WKScriptMessageHandler,
                                 NSWindowDelegate {
     public enum Mode { case web; case videoFallback }
@@ -58,7 +75,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
                                        forMainFrameOnly: false))
         ucc.addUserScript(WKUserScript(source: WallpaperBridgeJS.source,
                                        injectionTime: .atDocumentStart, forMainFrameOnly: false))
-        ucc.add(self, name: "waple")
+        ucc.add(WeakScriptMessageHandler(target: self), name: "waple")  // F386: self 강참조 순환 차단
         config.userContentController = ucc
 
         let web = WKWebView(frame: container.bounds, configuration: config)

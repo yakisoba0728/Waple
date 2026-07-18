@@ -241,16 +241,39 @@ final class AppLogicTests: XCTestCase {
         XCTAssertNil(resolved)
     }
 
-    func testScreenChangeDetachesRenderersBeforeWindowRebuild() {
-        var existing = [Tok("old1"), Tok("old2")]
+    /// F036/F035 회귀 방지: screensChanged() 는 desktopController.rebuild() 뒤 곧바로
+    /// RendererSwap.apply(existing: renderers, ...) 로 재적용한다 — renderers 를 미리 비우지 않는다.
+    /// 종전에는 ScreenChangeLifecycle.detachRenderersBeforeRebuild 로 재적용 '전' renderers 를 []로
+    /// 선-소거해, RendererSwap 의 "mount 실패 시 existing 유지" 롤백 안전망이 이미 빈 배열을 붙잡아
+    /// 무력화됐다(재적용 실패 시 화면 전체가 배경 없이 남음). 아래는 실제 screensChanged 가 호출하는
+    /// 것과 동일한 RendererSwap.apply 를, 화면 하나의 마운트가 실패하는 상황으로 재현한다.
+    func testScreensChangedReapply_mountFailure_keepsExistingRenderersAlive() {
         var tornDown: [String] = []
+        let existing = [Tok("old1"), Tok("old2")]
 
-        ScreenChangeLifecycle.detachRenderersBeforeRebuild(
-            existing: &existing,
+        // 수정된 screensChanged 흐름: 선-소거 없이 곧바로 RendererSwap.apply(existing: renderers, ...).
+        let result = RendererSwap.apply(
+            screens: ["s1", "s2"],
+            existing: existing,
+            makeAndMount: { s -> Tok? in s == "s2" ? nil : Tok("new-\(s)") },  // 화면 s2 마운트 실패
             teardown: { tornDown.append($0.id) })
 
-        XCTAssertTrue(existing.isEmpty)
-        XCTAssertEqual(tornDown.sorted(), ["old1", "old2"])
+        guard case .failure = result else { return XCTFail("일부 화면 마운트 실패 시 .failure 여야 한다") }
+        XCTAssertFalse(tornDown.contains("old1"), "F036: 재적용 실패 시 기존 렌더러가 생존해야 한다")
+        XCTAssertFalse(tornDown.contains("old2"), "F036: 재적용 실패 시 기존 렌더러가 생존해야 한다")
+
+        // 대조군(종전 버그 재현): 재적용 '전' existing 을 선-소거하면, 위와 같은 실패에도 "생존"이
+        // 무의미해진다 — existing 이 이미 비어 있으므로 지킬 것 자체가 없다.
+        var preDetached = existing
+        preDetached.forEach { tornDown.append($0.id) }   // 옛 detachRenderersBeforeRebuild 와 동일한 즉시 teardown
+        preDetached.removeAll()
+        let regressed = RendererSwap.apply(
+            screens: ["s1", "s2"],
+            existing: preDetached,   // 이미 []
+            makeAndMount: { s -> Tok? in s == "s2" ? nil : Tok("new-\(s)") },
+            teardown: { _ in })
+        guard case .failure = regressed else { return XCTFail("대조군도 실패해야 의미가 있다") }
+        XCTAssertTrue(preDetached.isEmpty, "선-소거 경로는 롤백 안전망이 지킬 대상 자체를 미리 없애버린다(구버전 결함 재현)")
     }
 
     func testVideoSettingsTargetsActiveVideoRenderersBeforeCurrentProject() {
@@ -278,6 +301,13 @@ final class AppLogicTests: XCTestCase {
         XCTAssertEqual(PlaylistScheduling.intervalSeconds(minutes: 5), 300)
         XCTAssertEqual(PlaylistScheduling.intervalSeconds(minutes: 30), 1800)
         XCTAssertEqual(PlaylistScheduling.intervalSeconds(minutes: 0), 60, "최소 1분 하한")
+    }
+
+    /// F041: 일시정지(가림·수동·슬립 사유 무관) 중엔 자동전환 타이머가 전진하면 안 된다 —
+    /// "정지=화면 고정" 기대와 달리 종전엔 이 가드가 아예 없어 정지 중에도 배경이 계속 바뀌었다.
+    func testShouldAdvanceNow_pausedSkipsAutoAdvance() {
+        XCTAssertFalse(PlaylistScheduling.shouldAdvanceNow(isPaused: true), "정지 중엔 자동전환 보류")
+        XCTAssertTrue(PlaylistScheduling.shouldAdvanceNow(isPaused: false))
     }
 
     func testAdvance_skipsUnapplicableCandidates() {
@@ -355,6 +385,22 @@ final class AppLogicTests: XCTestCase {
         XCTAssertTrue(StillDesktopSync.isUnder("/lib/still", dir: "/lib/still"), "동일 경로")
         XCTAssertFalse(StillDesktopSync.isUnder("/lib/stillage/a.png", dir: "/lib/still"),
             "형제 프리픽스(stillage)는 내부 아님")
+    }
+
+    // MARK: - StillWallpaperNotice (F044/F045: 성공 화면 수를 반영한 정확한 통지)
+
+    func testStillWallpaperNotice_allSucceed() {
+        XCTAssertEqual(StillWallpaperNotice.message(successCount: 2, totalScreens: 2), "정지 배경으로 설정했습니다")
+    }
+
+    func testStillWallpaperNotice_allFail() {
+        // 종전엔 try? 로 실패를 전부 삼키고 이 경우에도 성공 메시지를 띄웠다(F044/F045).
+        XCTAssertEqual(StillWallpaperNotice.message(successCount: 0, totalScreens: 2), "정지 배경 설정에 실패했습니다")
+    }
+
+    func testStillWallpaperNotice_partialSuccess() {
+        XCTAssertEqual(StillWallpaperNotice.message(successCount: 1, totalScreens: 2),
+                       "일부 화면만 정지 배경으로 설정했습니다(1/2)")
     }
 
     // MARK: - StillDesktopSync.restorePass (P-D1: 분리 모니터 백업 보존)

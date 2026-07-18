@@ -569,6 +569,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         SIMD2(Float(off.x + 1) / 2, 1 - Float(off.y + 1) / 2)
     }
 
+    /// 프레임 dt(초) 계산(순수, F291). 정지 중(isPaused) 재드로는 완전 동결(0) — 종전엔 직전 라이브
+    /// 프레임→pause 시점 간의 잔여 간격이 그대로 dt 가 돼, 정지 후 첫 재드로(호버/리사이즈)에서
+    /// dt 구동 시뮬(파티클 sim.step 등)이 최대 50ms 전진했다("시간 동결" 재렌더 의도 위반). 아니면
+    /// 직전 프레임과의 간격을 0…50ms 로 클램프(탭 전환 등 큰 델타 방지).
+    static func frameDelta(nowT: CFAbsoluteTime, lastFrameTime: CFAbsoluteTime, isPaused: Bool) -> Float {
+        guard !isPaused else { return 0 }
+        return max(0, min(Float(nowT - lastFrameTime), 0.05))
+    }
+
     /// FitMode 별 콘텐츠 NDC 배율(정점에 곱하는 값) — draw 와 클릭 역매핑의 단일 소스. (순수)
     static func aspectScale(projAspect: Float, viewAspect: Float, fitMode: FitMode) -> SIMD2<Float> {
         switch fitMode {
@@ -704,6 +713,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var lastFrameTime = CFAbsoluteTimeGetCurrent()
     var shouldAnimate = false
     var scenePausedAt: CFAbsoluteTime?
+    /// 가림 draw-게이트가 애니메이션을 스킵하기 시작한 시각(F289/F290) — scenePausedAt 과 별개 트랙:
+    /// 명시 pause()/resume() 없이도(기본 설정 경로) 창이 가려지는 것만으로 클록 동결·오디오 캡처
+    /// 중지가 필요해서다. pause() 가 이미 진행 중인 가림 구간을 이어받으면 nil 로 정리한다.
+    var drawGateOccludedSince: CFAbsoluteTime?
     var hasEffects = false
     var hasAudio = false
     var currentSpectrum = AudioSpectrum16.silent
@@ -822,6 +835,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         teardown()
         hasMissingRequiredSharedAssets = false
         scenePausedAt = nil
+        drawGateOccludedSince = nil   // 마운트 재사용 대비 가림 게이트 추적 리셋(stale 시각으로 오보정 방지)
         shouldAnimate = false
         hasVideoLayer = false   // 마운트 재사용: 이전 비디오 상태가 비-비디오 씬으로 새지 않게.
         videoLayersLive = false
@@ -1179,10 +1193,42 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) { view.needsDisplay = true }
 
+    /// 가림 draw-게이트 전이 처리(F289/F290) — draw() 가 매 프레임(가림 여부 재계산 후) 호출한다.
+    /// 가림에 '막 진입'한 프레임에만 시작 시각을 기록하고 오디오를 정지한다(매 프레임 반복 호출 방지).
+    /// 가림이 '막 해제'된 프레임엔 그 지속시간만큼 startTime 을 앞으로 보정해(resume() 의 pausedAt
+    /// 보정과 동형 공식) time(=nowT−startTime) 이 가림 구간을 건너뛰지 않게 하고, 오디오를 재기동한다.
+    /// stopAudio/startAudioIfNeeded 를 주입해 실제 SystemAudioSpectrumProvider(Metal/권한 필요) 없이도
+    /// 전이 로직만 단위 테스트할 수 있게 한다.
+    func handleOcclusionGate(
+        occluded: Bool,
+        now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent(),
+        stopAudio: () -> Void,
+        startAudioIfNeeded: () -> Void
+    ) {
+        if occluded {
+            guard drawGateOccludedSince == nil else { return }   // 이미 가림 추적 중 — 매 프레임 재발화 방지
+            drawGateOccludedSince = now
+            stopAudio()
+        } else if let since = drawGateOccludedSince {
+            startTime += max(0, now - since)
+            drawGateOccludedSince = nil
+            startAudioIfNeeded()
+        }
+    }
+
     public func draw(in view: MTKView) {
-        // 가림 시 애니메이션 정지(배터리). drawable 획득 전에 검사해 drawable 낭비/stall 방지.
-        if hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer
-            || cameraZoomAnim != nil || cameraShakeEnabled, view.window?.occlusionState.contains(.visible) == false { return }
+        // 가림 시 애니메이션 정지(배터리) + 오디오 캡처 중지(F289) + 클록 동결(F290).
+        // drawable 획득 전에 검사해 drawable 낭비/stall 방지.
+        let animGated = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts
+            || hasVideoLayer || cameraZoomAnim != nil || cameraShakeEnabled
+        let occluded = animGated && view.window?.occlusionState.contains(.visible) == false
+        handleOcclusionGate(occluded: occluded,
+                            stopAudio: { [weak self] in self?.audioProvider?.stop() },
+                            startAudioIfNeeded: { [weak self] in
+                                guard let self, self.hasAudio else { return }
+                                self.audioProvider?.start()
+                            })
+        if occluded { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
               let cb = queue.makeCommandBuffer() else { return }
@@ -1193,12 +1239,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             videoLayersLive = true
         }
         // 일시정지 중 재드로(호버/리사이즈/이벤트 needsDisplay)는 정지 시점 프레임을 재렌더(시간 동결 —
-        // 미래 시간 렌더 후 resume 되감김 점프 방지). dt: 첫 재드로 = pausedAt−직전프레임 ≥ 0, 이후
-        // lastFrameTime == pausedAt 이라 0 — 아래 max(0,·) 클램프로 충분, 추가 보정 불요.
+        // 미래 시간 렌더 후 resume 되감김 점프 방지).
         let nowT = scenePausedAt ?? CFAbsoluteTimeGetCurrent()
         let time = Float(nowT - startTime)
-        var dt = Float(nowT - lastFrameTime); lastFrameTime = nowT
-        dt = max(0, min(dt, 0.05))  // 큰 델타(탭 전환 등) 클램프
+        let dt = SceneRenderer.frameDelta(nowT: nowT, lastFrameTime: lastFrameTime, isPaused: scenePausedAt != nil)
+        lastFrameTime = nowT
         frameDT = dt  // g_Frametime(효과 유니폼) — 이번 프레임 전 패스 공용
         // g_PointerPositionLast: 이번 프레임 인코딩이 쓴 포인터를 함수 종료 시 다음 프레임의 '직전'으로 이월
         // (이후의 인코딩 실패 조기 return 포함. 이 지점 앞 가드 return(가림 등)은 프레임 자체가 없어 미이월 —
@@ -1422,7 +1467,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneAudio?.pause()
         audioProvider?.stop()
         parallax.stop()
-        if scenePausedAt == nil { scenePausedAt = CFAbsoluteTimeGetCurrent() }
+        // F289/F290: 가림 draw-게이트가 이미 이 순간을 추적 중이었다면(명시 정지 전부터 가려져 있던
+        // 경우) 그 시작 시각을 채택 — resume() 의 단일 보정이 가림+명시정지 전체 구간을 커버하게 해
+        // 이중 보정(가림 게이트 보정 + resume 보정이 같은 구간을 겹쳐 세는 것)을 막는다.
+        if scenePausedAt == nil { scenePausedAt = drawGateOccludedSince ?? CFAbsoluteTimeGetCurrent() }
+        drawGateOccludedSince = nil   // 가림 게이트 추적은 명시 정지가 이어받음
         mtkView?.isPaused = true
         mtkView?.enableSetNeedsDisplay = true
     }
@@ -1434,6 +1483,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             lastFrameTime = now
             scenePausedAt = nil
         }
+        drawGateOccludedSince = nil   // 명시 재개가 가림 게이트 추적을 이어받음(여전히 가려져 있으면 다음 draw() 가 새로 시작)
         for case let v? in layers.map(\.video) { v.resume() }
         if shouldAnimate {
             mtkView?.isPaused = false
