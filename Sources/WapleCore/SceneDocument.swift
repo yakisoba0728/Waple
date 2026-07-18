@@ -28,6 +28,12 @@ public struct SceneEffect: Equatable {
     public var audioMode: Int { combos["AUDIOPROCESSING"] ?? 0 }
     /// 전체 패스 사용자 데이터(멀티패스 효과용; [0]은 기존 constants/textureNames/combos 와 동일).
     public var passList: [SceneEffectPass] = []
+    /// 초기 가시성(스크립트 있으면 정적 false 도 보존 — 오브젝트 레벨 initialVisible 게이트와 동일 규약).
+    public var initialVisible: Bool = true
+    /// visible 프로퍼티 스크립트(단일 JS 소스, 상수처럼 키 맵이 아님). TODO(소비 미배선): per-frame
+    /// 재평가로 이펙트를 런타임에 토글하는 소비처는 아직 없음(코퍼스 저빈도로 YAGNI 보류) — 파스는
+    /// 이 필드가 있으면 initialVisible 이 false 라도 SceneEffect 를 드롭하지 않고 보존만 한다.
+    public var visibleScript: String? = nil
 
     public init(name: String, constants: [String: [Float]], textureNames: [String?], combos: [String: Int] = [:], file: String = "") {
         self.name = name; self.constants = constants; self.textureNames = textureNames; self.combos = combos; self.file = file
@@ -1313,7 +1319,16 @@ extension SceneDocument {
         for case let e as [String: Any] in arr {
             // WE: visible=false 효과는 미적용(사용자 토글 OFF 포함 — {user,value} 는 resolveUserBindings 가
             // 이미 정적 value 로 해석). 종전 무시 → 꺼진 post-process(예 3489263099 halftone)가 적용돼 전화면 흑화.
-            if let visible = unwrap(e["visible"]) as? Bool, !visible { continue }
+            // visibleScript!=nil 이면 오브젝트 레벨 게이트(:565-570/578)와 동일하게 정적 false 라도 드롭하지
+            // 않고 보존 — {script,value} 로 시작이 false 인 이펙트가 SceneEffect[] 에서 영구 제외되던 결함.
+            var effInitialVisible = true
+            var effVisibleScript: String? = nil
+            if let vb = e["visible"] as? Bool { effInitialVisible = vb }
+            else if let vis = e["visible"] as? [String: Any] {
+                if let v = vis["value"] as? Bool { effInitialVisible = v }
+                effVisibleScript = vis["script"] as? String
+            }
+            if !effInitialVisible && effVisibleScript == nil { continue }
             let file = (e["file"] as? String) ?? ""
             // "effects/<name>/effect.json" → name
             let parts = file.split(separator: "/")
@@ -1363,6 +1378,8 @@ extension SceneDocument {
             var eff = SceneEffect(name: name, constants: p0.constants, textureNames: p0.textureNames,
                                   combos: p0.combos, file: file)
             eff.passList = passList
+            eff.initialVisible = effInitialVisible
+            eff.visibleScript = effVisibleScript
             out.append(eff)
         }
         return out
