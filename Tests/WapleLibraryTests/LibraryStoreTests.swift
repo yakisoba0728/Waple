@@ -127,6 +127,35 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(store.entries.last?.title, "A-new")
     }
 
+    /// F194: 서로 다른 실제 폴더 두 개가 (workshopid 가 없어) 같은 project id 로 귀결되는 경우,
+    /// 두 번째 가져오기가 첫 번째를 무통지로 대체(엔트리 실종 + 북마크 앨리어싱)하면 안 되고,
+    /// 접미로 유일화해 둘 다 라이브러리에 보존해야 한다.
+    func testImportFolderCollisionWithDifferentRealPathUniquifiesInsteadOfReplacing() throws {
+        let parentA = tmp.appendingPathComponent("A", isDirectory: true)
+        let parentB = tmp.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: parentA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: parentB, withIntermediateDirectories: true)
+        let folderA = parentA.appendingPathComponent("Wallpaper", isDirectory: true)
+        let folderB = parentB.appendingPathComponent("Wallpaper", isDirectory: true)
+        for (folder, tag) in [(folderA, "A"), (folderB, "B")] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let json = #"{"type":"video","file":"wallpaper.mp4","preview":"preview.jpg","title":"\#(tag)"}"#
+            try Data(json.utf8).write(to: folder.appendingPathComponent("project.json"))
+            try Data("dummy-\(tag)".utf8).write(to: folder.appendingPathComponent("wallpaper.mp4"))
+        }
+
+        let store = LibraryStore(baseDirectory: base())
+        let entryA = try store.importFolder(folderA)
+        let entryB = try store.importFolder(folderB)
+
+        XCTAssertEqual(entryA.id, "Wallpaper")
+        XCTAssertNotEqual(entryB.id, entryA.id, "다른 실경로면 무통지 대체 대신 유일화해야 한다")
+        XCTAssertEqual(Set(store.entries.map(\.id)), [entryA.id, entryB.id])
+        // 둘 다 각자의 원래 실경로를 정확히 가리켜야 한다(북마크 앨리어싱 없음).
+        XCTAssertEqual(store.resolveFolderURL(for: entryA)?.standardizedFileURL, folderA.standardizedFileURL)
+        XCTAssertEqual(store.resolveFolderURL(for: entryB)?.standardizedFileURL, folderB.standardizedFileURL)
+    }
+
     // MARK: - 작업 4: zip 가져오기
 
     func testFindProjectRootsRecursesAndStopsAtRoot() throws {
@@ -177,6 +206,72 @@ final class LibraryStoreTests: XCTestCase {
                                        extract: { _, _ in false })
         XCTAssertTrue(imported.isEmpty)
         XCTAssertTrue(store.entries.isEmpty)
+    }
+
+    /// `--keepParent` zip 픽스처: wrapper/<wrapperName>/project.json + wallpaper.mp4(내용=tag 로 구분).
+    private func makeZipFixture(wrapperName: String, workshopId: String?, tag: String) throws -> URL {
+        let pkg = tmp.appendingPathComponent("pkg-\(UUID().uuidString)", isDirectory: true)
+        let inner = pkg.appendingPathComponent(wrapperName, isDirectory: true)
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let workshopField = workshopId.map { #","workshopid":"\#($0)""# } ?? ""
+        let json = #"{"type":"video","file":"wallpaper.mp4","preview":"preview.jpg","title":"\#(tag)"\#(workshopField)}"#
+        try Data(json.utf8).write(to: inner.appendingPathComponent("project.json"))
+        try Data("dummy-\(tag)".utf8).write(to: inner.appendingPathComponent("wallpaper.mp4"))
+
+        let zipURL = tmp.appendingPathComponent("wp-\(UUID().uuidString).zip")
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-c", "-k", "--keepParent", pkg.path, zipURL.path]
+        try ditto.run(); ditto.waitUntilExit()
+        XCTAssertEqual(ditto.terminationStatus, 0, "픽스처 zip 생성")
+        return zipURL
+    }
+
+    /// F247 필수 회귀: 래퍼 폴더명이 같아도(WE export 관례 `Wallpaper/`) workshopid 가 다르면
+    /// 별개 배경이다 — 두 번째 zip import 가 첫 배경의 관리 폴더를 지우고 그 위에 얹혀 첫 엔트리를
+    /// 무통지로 실종시키면 안 된다. 둘 다 라이브러리에 살아남고, 각자의 파일 내용도 뒤섞이면 안 된다.
+    func testImportZipSameWrapperNameDifferentWorkshopIdBothSurvive() throws {
+        let zipA = try makeZipFixture(wrapperName: "Wallpaper", workshopId: "AAA111", tag: "First")
+        let zipB = try makeZipFixture(wrapperName: "Wallpaper", workshopId: "BBB222", tag: "Second")
+
+        let store = LibraryStore(baseDirectory: base())
+        let importedA = store.importZip(zipA)
+        XCTAssertEqual(importedA.map(\.id), ["AAA111"])
+        let importedB = store.importZip(zipB)
+        XCTAssertEqual(importedB.map(\.id), ["BBB222"])
+
+        // 둘 다 라이브러리 인덱스에 살아남아야 한다(무통지 대체 금지).
+        XCTAssertEqual(Set(store.entries.map(\.id)), ["AAA111", "BBB222"])
+
+        // 각자의 관리 폴더가 실제로 디스크에 남아있고, 내용이 뒤섞이지 않아야 한다.
+        let resolvedA = try XCTUnwrap(store.resolveFolderURL(for: importedA[0]))
+        let resolvedB = try XCTUnwrap(store.resolveFolderURL(for: importedB[0]))
+        XCTAssertNotEqual(resolvedA, resolvedB)
+        let contentA = try Data(contentsOf: resolvedA.appendingPathComponent("wallpaper.mp4"))
+        let contentB = try Data(contentsOf: resolvedB.appendingPathComponent("wallpaper.mp4"))
+        XCTAssertEqual(String(data: contentA, encoding: .utf8), "dummy-First")
+        XCTAssertEqual(String(data: contentB, encoding: .utf8), "dummy-Second")
+    }
+
+    /// 잔여 케이스: 둘 다 workshopid 가 전혀 없으면 폴더명 폴백만으로는 정체성을 확정할 수 없다.
+    /// 이때 관리 폴더 충돌을 만나면 지우지 말고 유일화해야 한다(재가져오기인지 확정 불가 = 보수적으로 보존).
+    func testImportZipSameWrapperNameNoWorkshopIdUniquifiesInsteadOfDeleting() throws {
+        let zipA = try makeZipFixture(wrapperName: "Wallpaper", workshopId: nil, tag: "First")
+        let zipB = try makeZipFixture(wrapperName: "Wallpaper", workshopId: nil, tag: "Second")
+
+        let store = LibraryStore(baseDirectory: base())
+        let importedA = store.importZip(zipA)
+        let importedB = store.importZip(zipB)
+        XCTAssertEqual(importedA.map(\.id), ["Wallpaper"])
+        XCTAssertNotEqual(importedB.map(\.id), ["Wallpaper"], "정체성 불명 충돌은 유일화되어야 한다")
+
+        XCTAssertEqual(Set(store.entries.map(\.id)).count, 2, "둘 다 보존")
+        let resolvedA = try XCTUnwrap(store.resolveFolderURL(for: importedA[0]))
+        let resolvedB = try XCTUnwrap(store.resolveFolderURL(for: importedB[0]))
+        let contentA = try Data(contentsOf: resolvedA.appendingPathComponent("wallpaper.mp4"))
+        let contentB = try Data(contentsOf: resolvedB.appendingPathComponent("wallpaper.mp4"))
+        XCTAssertEqual(String(data: contentA, encoding: .utf8), "dummy-First", "첫 배경 파일이 지워지면 안 된다")
+        XCTAssertEqual(String(data: contentB, encoding: .utf8), "dummy-Second")
     }
 
     func testResolveFolderURLReturnsOriginalLocation() throws {

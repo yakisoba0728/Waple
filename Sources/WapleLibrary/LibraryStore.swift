@@ -69,8 +69,18 @@ public final class LibraryStore {
         let bookmark = try folderURL.bookmarkData(
             options: [], includingResourceValuesForKeys: nil, relativeTo: nil
         )
+        // F194: id 충돌 시, 기존 엔트리가 이 폴더와 다른 실경로(=서로 다른 배경이 우연히 같은 id로
+        // 귀결 — 예: workshopid 없는 두 배경이 같은 폴더명)를 가리키면 무통지 대체(엔트리 실종 +
+        // 북마크 앨리어싱) 대신 접미로 유일화해 둘 다 보존한다. 같은 실경로(재가져오기/갱신)면
+        // 종전대로 덮어쓴다(테스트: testReimportUpdatesEntryAndMovesToEnd).
+        var id = project.id
+        if let existing = entries.first(where: { $0.id == id }),
+           let existingURL = resolveFolderURL(for: existing),
+           existingURL.standardizedFileURL != folderURL.standardizedFileURL {
+            id = uniqueEntryId(basedOn: id)
+        }
         let entry = LibraryEntry(
-            id: project.id,
+            id: id,
             title: project.title,
             typeRaw: project.type.storageString,
             fileName: project.fileName,
@@ -83,6 +93,14 @@ public final class LibraryStore {
         entries.append(entry)
         save()
         return entry
+    }
+
+    /// 이미 쓰이는 id 와 충돌할 때 접미(-2, -3, …)로 유일화한다.
+    private func uniqueEntryId(basedOn base: String) -> String {
+        let existingIds = Set(entries.map(\.id))
+        var n = 2
+        while existingIds.contains("\(base)-\(n)") { n += 1 }
+        return "\(base)-\(n)"
     }
 
     @discardableResult
@@ -130,15 +148,23 @@ public final class LibraryStore {
         var imported: [LibraryEntry] = []
         var usedNames = Set<String>()   // 이번 zip 안의 동명 루트(WE export 관례 `Wallpaper/`) 상호 덮어쓰기 방지
         for root in ZipImporter.findProjectRoots(in: temp, fileManager: fm) {
-            // ponytail: 관리 폴더명=원본 폴더명(=WE 워크샵 id) 유지로 project id 안정.
-            // 콜 간 동명 충돌(재import)은 덮어씀 — WE id 는 유일하므로 실질 재import.
-            // 단 한 zip 에 동명 루트가 2개+면 서로 다른 배경 — 접미(-2,-3)로 유일화.
-            var name = root.lastPathComponent
+            // F247: 관리 폴더명은 원본 래퍼 폴더명이 아니라 **project.json 이 선언한 id**
+            // (workshopid 우선, 없으면 폴더명 폴백 — ProjectJSONParser.parse 와 동일 규칙)로 정한다.
+            // 래퍼명(WE export 관례 `Wallpaper/`)은 비유일이라 그대로 쓰면, 동명이나 서로 다른
+            // 배경의 두 번째 zip import 가 첫 배경의 관리 폴더를 조용히 지우고 그 위에 얹혀
+            // 첫 엔트리의 북마크가 두 번째 배경 콘텐츠로 앨리어싱된다(무경고 데이터 손실).
+            // move 전, 아직 임시 해제 위치에 있는 root 에서 미리 파싱한다.
+            let parsed = try? ProjectJSONParser.parse(folderURL: root)
+            let hasStableId = parsed?.workshopId != nil   // 전역 유일 식별자 — 있으면 재import 를 확정할 수 있다
+            var name = parsed?.id ?? root.lastPathComponent
             if usedNames.contains(name) {
-                var n = 2
-                while usedNames.contains("\(name)-\(n)")
-                        || fm.fileExists(atPath: importedDir.appendingPathComponent("\(name)-\(n)").path) { n += 1 }
-                name = "\(name)-\(n)"
+                name = uniqueManagedName(name, usedNames: usedNames, in: importedDir, fm: fm)
+            }
+            // 콜 간(이전 import) 충돌: workshopid 로 정체성이 확정된 경우만 "같은 배경 재가져오기"로
+            // 보고 덮어쓴다. 확정할 수 없는데(workshopid 없음) 관리 폴더가 이미 있으면 지우지 않고
+            // 유일화한다 — 폴더명 폴백만으로는 서로 다른 배경을 구분할 수 없기 때문(무통지 데이터 손실 방지).
+            if fm.fileExists(atPath: importedDir.appendingPathComponent(name).path), !hasStableId {
+                name = uniqueManagedName(name, usedNames: usedNames, in: importedDir, fm: fm)
             }
             usedNames.insert(name)
             let dest = importedDir.appendingPathComponent(name, isDirectory: true)
@@ -148,6 +174,13 @@ public final class LibraryStore {
             imported.append(entry)
         }
         return imported
+    }
+
+    private func uniqueManagedName(_ base: String, usedNames: Set<String>, in importedDir: URL, fm: FileManager) -> String {
+        var n = 2
+        while usedNames.contains("\(base)-\(n)")
+                || fm.fileExists(atPath: importedDir.appendingPathComponent("\(base)-\(n)").path) { n += 1 }
+        return "\(base)-\(n)"
     }
 
     public func select(_ id: String) {

@@ -69,6 +69,43 @@ final class MonitorAssignmentStoreTests: XCTestCase {
             .filter { $0.lastPathComponent.hasPrefix("monitors.json.corrupt") }
         XCTAssertTrue(backups.isEmpty, "일시적 읽기오류는 corrupt 오판이 아니므로 백업이 생기면 안 됨")
     }
+
+    /// F252: backupCorruptStoreFile 의 백업 move 가 실패하면 corrupt 플래그는 true 로 남아야 한다.
+    /// 종전엔 move 시도 전에 미리 플래그를 내려, move 가 실패해도(원본이 백업되지 않았는데도)
+    /// 호출부 save() 가 그대로 덮어쓰고 다음 save() 의 재시도 기회까지 막았다.
+    /// moveItem(rename) 실패를 결정적으로 재현하기 위해 디렉터리 쓰기 권한을 제거한다.
+    func testBackupFailureLeavesCorruptFlagSetForRetry() throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("monitors.json")
+        try Data("{ not json".utf8).write(to: url)
+
+        var corrupt = true
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+
+        backupCorruptStoreFile(url, &corrupt)
+
+        XCTAssertTrue(corrupt, "move 실패 시 플래그가 true 로 남아 다음 save() 가 재시도할 수 있어야 한다")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "실패한 백업 시도가 원본을 건드리면 안 된다")
+        let backups = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+            .filter { $0.lastPathComponent.hasPrefix("monitors.json.corrupt") } ?? []
+        XCTAssertTrue(backups.isEmpty, "move 가 실패했으므로 백업 파일이 생기면 안 된다")
+    }
+
+    /// F252: move 가 성공하면(정상 경로) 플래그는 그대로 false 로 내려가야 한다 — 회귀 방지용 대조.
+    func testBackupSuccessClearsCorruptFlag() throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("monitors.json")
+        try Data("{ not json".utf8).write(to: url)
+
+        var corrupt = true
+        backupCorruptStoreFile(url, &corrupt)
+
+        XCTAssertFalse(corrupt, "정상적으로 백업됐으면 플래그를 내려야 한다")
+        let backups = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("monitors.json.corrupt") }
+        XCTAssertEqual(backups.count, 1)
+    }
 }
 
 final class PlaylistStoreTests: XCTestCase {

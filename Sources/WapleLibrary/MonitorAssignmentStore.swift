@@ -4,11 +4,14 @@ import Foundation
 /// Library/Playlist/Monitor 스토어가 공유한다.
 func backupCorruptStoreFile(_ url: URL, _ corrupt: inout Bool) {
     guard corrupt else { return }
-    corrupt = false
     // ms 해상도: 같은 초 내 재손상 시 백업 파일명 충돌 → moveItem 실패 → 원본 유실 방지.
     let backup = url.appendingPathExtension("corrupt-\(Int(Date().timeIntervalSince1970 * 1000))")
     do {
         try FileManager.default.moveItem(at: url, to: backup)
+        // move 가 실제로 성공했을 때만 플래그를 내린다(F252) — 성공 전에 미리 꺼두면(종전 버그) move
+        // 가 실패했을 때 원본이 여전히 백업되지 않았는데도 호출부 save() 가 곧장 덮어써 복구 가능한
+        // 사용자 설정을 무음 파괴하고, 다음 save() 의 백업 재시도(새 ms 타임스탬프)까지 영구히 막았다.
+        corrupt = false
         NSLog("%@", "[Waple] backed up corrupt \(url.lastPathComponent) to \(backup.path)")
     } catch {
         NSLog("%@", "[Waple] failed to back up corrupt \(url.lastPathComponent): \(error)")

@@ -75,13 +75,25 @@ public enum UserPropertyStore {
         return raw
     }
 
+    /// preset(project.json "preset" 키) 오버라이드는 배경 작성자가 제어하는 신뢰 경계 밖 값이다.
+    /// 상대경로는 preset 루트 안에 봉쇄해 해석하지만, **절대경로 값은 root 유무와 무관하게 항상
+    /// 폐기한다** — WebRenderer 의 userSelectedResourceOverrides 허용목록은 이 함수의 반환값을
+    /// 그대로 스캔해 절대경로 문자열을 "사용자가 파일피커로 직접 선택"한 것으로 취급하므로, 여기서
+    /// 걸러내지 않으면 악성 web 배경이 project.json 에 `"preset":{"key":"/etc/passwd"}` 를 심어
+    /// randomFile/fetchall 브릿지로 임의 절대경로의 파일 존재 여부·디렉터리 목록을 프로빙할 수 있다
+    /// (F357). 진짜 사용자 선택은 이 함수를 거치지 않는 별도 경로(overrides(id:) → UserDefaults,
+    /// LibraryViewModel.setProperty)로만 들어오므로 영향받지 않는다.
     private static func resolvingPresetResources(_ overrides: [String: PropertyValue], root: URL?) -> [String: PropertyValue] {
-        guard let root else { return overrides }
         var out = overrides
         for (key, value) in overrides {
             guard case .string(let rawPath) = value else { continue }
             let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !path.isEmpty, !path.hasPrefix("/"),
+            guard !path.isEmpty else { continue }
+            if path.hasPrefix("/") {
+                out[key] = .none   // 신뢰 경계 밖 절대경로 — 허용목록에 편입되지 않도록 폐기
+                continue
+            }
+            guard let root,
                   let url = WallpaperPathSecurity.containedFileURL(path, root: root),
                   FileManager.default.fileExists(atPath: url.path) else { continue }
             out[key] = .string(url.path)
