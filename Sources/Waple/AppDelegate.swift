@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 설정 창 + 축소된 트레이(SP5′): 설정 창 강한 참조·일시정지 항목·상태바 메뉴 참조.
     private var settingsWindow: NSWindow?
     private weak var pauseMenuItem: NSMenuItem?
+    private weak var nextMenuItem: NSMenuItem?   // "다음 배경"(w5d-tray) — 후보 2개 미만이면 비활성
     private weak var statusMenu: NSMenu?
 
     private static let pauseWhenOccludedKey = "pauseWhenOccluded"
@@ -111,6 +112,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                action: #selector(togglePauseFromMenu), keyEquivalent: "p")
         menu.addItem(pause)
         pauseMenuItem = pause
+        // w5d-tray: 메뉴바 상주 앱의 핵심 가치(창을 열지 않고 즉시 조작) — 하단 바엔 이미 있던
+        // "다음 배경"을 트레이에도. WE 본가 트레이의 'Change wallpaper' 대응.
+        let next = NSMenuItem(title: "다음 배경",
+                              action: #selector(advanceFromMenu), keyEquivalent: "]")
+        menu.addItem(next)
+        nextMenuItem = next
         menu.addItem(NSMenuItem(title: "설정…",
                                 action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
@@ -491,6 +498,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (안 하면 트레이로 토글한 상태가 하단 바 라벨/프리뷰 애니에 반영되지 않는다).
     @objc private func togglePauseFromMenu() {
         libraryVM.isPaused = toggleGlobalPause()
+    }
+
+    /// 트레이 "다음 배경"(w5d-tray) — 하단 바 forward 버튼과 동일하게 기존 advancePlaylist() 재사용.
+    @objc private func advanceFromMenu() {
+        advancePlaylist()
     }
 
     /// 폴링 타이머 재구성. 켜짐 → 1초 폴링(.common 모드). 꺼짐 → 정지하고, 가림 정지 중이었으면 해제.
@@ -930,6 +942,8 @@ extension AppDelegate: NSMenuDelegate {
             // F040: 수동 사유만 보면 가림·슬립으로 실제 정지 중일 때도 "일시정지"로 오표시된다 —
             // 실제 렌더 상태(pauseGate.isPaused, 사유 무관)를 기준으로 라벨을 정한다.
             pauseMenuItem?.title = pauseGate.isPaused ? "재개" : "일시정지"
+            // w5d-tray: 하단 바 NowPlayingBar 의 .disabled(ids.count < 2) 와 대칭.
+            nextMenuItem?.isEnabled = PlaylistScheduling.canAdvance(count: playlistStore.ids.count)
             return
         }
         guard menu === recentMenu else { return }

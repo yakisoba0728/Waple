@@ -330,6 +330,15 @@ final class AppLogicTests: XCTestCase {
             PlaylistScheduling.advance(from: nil, count: 0, next: { _ in "x" }, apply: { _ in true }))
     }
 
+    /// 트레이 "다음 배경"(w5d-tray) — 순환 가능한 후보가 2개 이상일 때만 활성화. 하단 바
+    /// NowPlayingBar 의 .disabled(ids.count < 2) 와 대칭이어야 두 진입점의 동작이 일치한다.
+    func testCanAdvance_requiresAtLeastTwoCandidates() {
+        XCTAssertFalse(PlaylistScheduling.canAdvance(count: 0))
+        XCTAssertFalse(PlaylistScheduling.canAdvance(count: 1), "혼자면 순환해도 자기 자신 — 무의미")
+        XCTAssertTrue(PlaylistScheduling.canAdvance(count: 2))
+        XCTAssertTrue(PlaylistScheduling.canAdvance(count: 5))
+    }
+
     // MARK: - PropertyControl.sliderRange (뒤집힌/축퇴 경계에서도 ClosedRange 트랩 금지)
 
     func testSliderRange_invertedBounds_valid() {
