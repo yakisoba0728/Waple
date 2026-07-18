@@ -44,8 +44,12 @@ enum EffectShaders {
             let vx = sp.count > 0 ? sp[0] : 0.05, vy = sp.count > 1 ? sp[1] : 0
             return [sx, sy, vx, vy]
         case "waterwaves":
+            // F268/F269: WE waterwaves.vert:48 `v_Direction = rotateVec2(vec2(0,1), g_Direction)` — 기준벡터
+            // (0,1)(세로) 회전. 구 코드는 기준벡터 (1,0)(가로) 이라 direction=0(기본)에서 dir 이 90° 어긋났다
+            // (rotateVec2 정의 common.h:28 대조: rotate((0,1),a)=(-sin a, cos a)). 단위(rad/deg) 는 미확정 —
+            // 이 수정은 축(기준벡터) 만 정정, 기존 *.pi/180 변환은 그대로 둔다.
             let a = f("direction", 0) * .pi / 180
-            return [cos(a), sin(a), f("speed", 5), f("scale", 200), f("strength", 0.1), f("perspective", 0)]
+            return [-sin(a), cos(a), f("speed", 5), f("scale", 200), f("strength", 0.1), f("perspective", 0)]
         case "shake":
             // 단순화: flow/noise combo 없이 시간 기반 흔들림. amp/speed 키는 게이트서 확인.
             let amp = c["amplitude"]?.first ?? c["amount"]?.first ?? c["strength"]?.first ?? 0.006

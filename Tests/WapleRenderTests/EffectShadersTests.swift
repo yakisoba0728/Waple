@@ -90,10 +90,21 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertEqual(EffectShaders.params(for: "scroll", constants: [:])?.count, 4)
     }
     func testWaterwavesParamsCount() {
-        // order: cos(dir), sin(dir), speed, scale, strength, perspective
+        // order: dir.x, dir.y, speed, scale, strength, perspective
         let p = EffectShaders.params(for: "waterwaves", constants: ["speed": [4], "scale": [34]])
         XCTAssertEqual(p?.count, 6)
         XCTAssertEqual(p?[2], 4); XCTAssertEqual(p?[3], 34)
+    }
+
+    /// F268/F269: WE waterwaves.vert:48 rotateVec2((0,1), direction) — 기준벡터 (0,1). direction=0(기본)
+    /// 이면 dir=(0,1)(세로), 90°면 dir=(1,0)(가로). 구 코드는 기준벡터 (1,0) 이라 상시 90° 어긋났었다.
+    func testWaterwavesDirectionVectorMatchesWERotateVec2Basis() {
+        let p0 = EffectShaders.params(for: "waterwaves", constants: [:])
+        XCTAssertEqual(p0?[0] ?? .nan, 0, accuracy: 1e-6, "dir.x = -sin(0)")
+        XCTAssertEqual(p0?[1] ?? .nan, 1, accuracy: 1e-6, "dir.y = cos(0)")
+        let p90 = EffectShaders.params(for: "waterwaves", constants: ["direction": [90]])
+        XCTAssertEqual(p90?[0] ?? .nan, -1, accuracy: 1e-4, "dir.x = -sin(90°)")
+        XCTAssertEqual(p90?[1] ?? .nan, 0, accuracy: 1e-4, "dir.y = cos(90°)")
     }
     func testSourcesExist() {
         for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake", "pulse"] {
