@@ -56,9 +56,15 @@ enum SnapshotPipeline {
     }
 
     /// PNG → width×height RGBA8(premultipliedLast) 정규화 바이트. 캡처/비교가 동일 경로로 로드해야 diff 가 일관.
+    /// F147: 원본 PNG 픽셀 크기가 요청 크기와 다르면(캡처 경로 해상도 버그 등) 조용히 리스케일해 삼키지
+    /// 않고 stderr 경고 — diff 수학 자체는 항상 같은 길이 배열끼리 비교해야 하므로 리샘플은 유지하되
+    /// 불일치 사실만 드러낸다(호출자는 이미 매니페스트 크기로 요청해 정상 caso 는 항상 일치).
     static func pngToRGBA(_ url: URL, width: Int, height: Int) -> [UInt8]? {
         guard let img = NSImage(contentsOf: url),
               let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        if cg.width != width || cg.height != height {
+            fputs("[snap] ⚠️ PNG 실제 크기(\(cg.width)x\(cg.height)) ≠ 요청 크기(\(width)x\(height)) — \(url.lastPathComponent), 강제 리스케일해 비교합니다\n", stderr)
+        }
         var px = [UInt8](repeating: 0, count: width * height * 4)
         guard let ctx = CGContext(data: &px, width: width, height: height, bitsPerComponent: 8,
                                   bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
@@ -76,7 +82,9 @@ enum SnapshotPipeline {
         let lbl = label ?? sha
         let dst = outDir.appendingPathComponent(lbl, isDirectory: true)
         let thumbs = dst.appendingPathComponent("thumbs", isDirectory: true)
-        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_snap_cap", isDirectory: true)
+        // F148: PID 로 스코프 — 동시 두 프로세스가 같은 고정 경로에 쓰면 서로의 캡처를 덮어써 매니페스트
+        // 해시/썸네일 불일치나 쓰기 도중 읽기로 손상된 PNG "empty" 오분류가 날 수 있었다.
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_snap_cap_\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
         let fm = FileManager.default
         try? fm.createDirectory(at: thumbs, withIntermediateDirectories: true)
         try? fm.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -123,7 +131,8 @@ enum SnapshotPipeline {
         let manifest = SnapshotManifest(
             gitSHA: sha, label: lbl, thumbWidth: thumbW, thumbHeight: thumbH,
             captureTime: captureT, createdAt: ISO8601DateFormatter().string(from: Date()),
-            entries: entries.sorted { $0.id < $1.id }, empties: empties.sorted(), failures: failures.sorted())
+            entries: entries.sorted { $0.id < $1.id }, empties: empties.sorted(), failures: failures.sorted(),
+            activeDebugGates: activeDebugGates())
         do {
             try manifest.encoded().write(to: dst.appendingPathComponent("manifest.json"))
         } catch {
@@ -157,6 +166,22 @@ enum SnapshotPipeline {
         }
         return { SceneRenderSettings.fitMode = oldFit; BaseAssetsSettings.baseAssetsDirectory = oldBase
                  TextScriptEngine.captureDateEpochMillis = oldEpoch }
+    }
+
+    /// F145: 렌더 출력을 변형하는 WAPLE_* 디버그 게이트(mount/encode 시 ProcessInfo 에서 라이브로 읽힘 —
+    /// pinRenderSettings 가 핀하는 fitMode/base-assets/captureEpoch 와 달리 이들은 캡처 파이프라인이
+    /// 중화하지 않는다) 중 현재 활성인 것만 이름을 모아 매니페스트에 기록. 캡처 당시 상태를 남겨야
+    /// runCompare 가 베이스라인과의 게이트 불일치(=오염 가능성)를 사후에라도 경고할 수 있다.
+    static func activeDebugGates() -> [String] {
+        let env = ProcessInfo.processInfo.environment
+        var active: [String] = []
+        if env["WAPLE_NO_BLOOM"] != nil { active.append("WAPLE_NO_BLOOM") }
+        if let v = env["WAPLE_LAYER_TRUNC"], Int(v) != nil { active.append("WAPLE_LAYER_TRUNC=\(v)") }
+        if let v = env["WAPLE_MP_TRUNC"], Int(v) != nil { active.append("WAPLE_MP_TRUNC=\(v)") }
+        if let v = env["WAPLE_EFFECT_SKIP"], !v.isEmpty { active.append("WAPLE_EFFECT_SKIP=\(v)") }
+        if env["WAPLE_DISABLE_TRANSLATED"] == "1" { active.append("WAPLE_DISABLE_TRANSLATED=1") }
+        if env["WAPLE_BC_NATIVE"] == "0" { active.append("WAPLE_BC_NATIVE=0") }
+        return active.sorted()
     }
 
     /// cwd 의 git HEAD 단축 sha(레이블 기본값용 — 코드 리포 버전이 의도, 코퍼스 root 와 무관).

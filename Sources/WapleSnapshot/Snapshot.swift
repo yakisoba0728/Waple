@@ -37,14 +37,19 @@ public struct SnapshotManifest: Codable, Equatable {
     public var entries: [SnapshotEntry]
     public var empties: [String]
     public var failures: [String]
+    /// F145: 캡처 당시 라이브로 존중되던 렌더 출력 변형 WAPLE_* 디버그 게이트 이름 목록(정렬됨,
+    /// 없으면 빈 배열). 구 매니페스트(이 필드 도입 전)는 nil 로 디코드 — "기록 안 됨"과 "0개 활성"을
+    /// 구분한다. runCompare 가 현재 활성 게이트와 대조해 베이스라인 오염 가능성을 경고하는 데 쓴다.
+    public var activeDebugGates: [String]?
 
     public init(gitSHA: String, label: String, thumbWidth: Int, thumbHeight: Int,
                 captureTime: Float, createdAt: String, entries: [SnapshotEntry],
-                empties: [String], failures: [String]) {
+                empties: [String], failures: [String], activeDebugGates: [String]? = nil) {
         self.gitSHA = gitSHA; self.label = label
         self.thumbWidth = thumbWidth; self.thumbHeight = thumbHeight
         self.captureTime = captureTime; self.createdAt = createdAt
         self.entries = entries; self.empties = empties; self.failures = failures
+        self.activeDebugGates = activeDebugGates
     }
 
     public func encoded() throws -> Data {
