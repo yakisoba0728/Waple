@@ -50,30 +50,42 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.gap * 2) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Waple 시작하기").font(.title2).bold()
-                Text("아래를 확인하면 바로 배경을 즐길 수 있어요. 모두 나중에 설정에서 바꿀 수 있습니다.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            // F090: 시스템 큰 텍스트(접근성 Dynamic Type) 환경에서 3개 체크리스트 행 + 제목/부제가
+            // 고정 높이(Metrics.onboardingSize)를 넘어설 수 있다 — ScrollView 로 감싸 잘림 대신
+            // 스크롤되게 한다. 일반 크기(콘텐츠가 항상 여유 있게 들어맞는 경우)는 ScrollView 가 남는
+            // 세로 공간을 전부 흡수하고 콘텐츠는 상단 정렬되므로 기존 시각과 동일 — 아래 버튼 행만
+            // 프레임 최하단에 고정으로 남는다(종전 Spacer(minLength:0) 와 동일한 배치 효과).
+            ScrollView {
+                VStack(alignment: .leading, spacing: Metrics.gap * 2) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Waple 시작하기").font(.title2).bold()
+                        Text("아래를 확인하면 바로 배경을 즐길 수 있어요. 모두 나중에 설정에서 바꿀 수 있습니다.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    row(done: model.hasContent, title: "배경 추가",
+                        detail: "배경 폴더나 zip 을 창에 끌어다 놓거나, 창작마당 탭에서 내려받으세요.") {
+                        Button("가져오기…") { model.importContent() }
+                            .buttonStyle(.borderedProminent)
+                    }
+
+                    row(done: model.baseAssetsSet, title: "공유 에셋 폴더 (선택)",
+                        detail: "일부 씬은 Wallpaper Engine 공유 assets 폴더의 텍스처가 필요합니다.") {
+                        Button("폴더 선택…") { model.chooseBaseAssets() }
+                    }
+
+                    // F089: 원시 mkv/webm 파일 "가져오기" 경로는 ffmpeg 유무와 무관하게 존재하지 않는다
+                    // (VideoImport.isVideoFile 은 mp4/mov/m4v 만 인식) — ffmpeg 의 실제 역할은 폴더/zip 으로
+                    // 들여온 WE 배경 패키지 *안*의 비-네이티브 동영상 컨테이너를 재생 가능하게 변환하는 것
+                    // 뿐이다. 설정 창 문구(SettingsPresentation.ffmpegStatus)와 표현을 통일해 온보딩만 다른
+                    // 기대를 심지 않게 한다.
+                    row(done: model.ffmpegAvailable, title: "ffmpeg (선택)",
+                        detail: model.ffmpegAvailable
+                            ? "사용 가능 — 동영상 변환 준비됨."
+                            : "배경 패키지 안 mkv/webm 동영상 변환에 필요합니다 — brew install ffmpeg") { EmptyView() }
+                }
             }
-
-            row(done: model.hasContent, title: "배경 추가",
-                detail: "배경 폴더나 zip 을 창에 끌어다 놓거나, 창작마당 탭에서 내려받으세요.") {
-                Button("가져오기…") { model.importContent() }
-                    .buttonStyle(.borderedProminent)
-            }
-
-            row(done: model.baseAssetsSet, title: "공유 에셋 폴더 (선택)",
-                detail: "일부 씬은 Wallpaper Engine 공유 assets 폴더의 텍스처가 필요합니다.") {
-                Button("폴더 선택…") { model.chooseBaseAssets() }
-            }
-
-            row(done: model.ffmpegAvailable, title: "ffmpeg (선택)",
-                detail: model.ffmpegAvailable
-                    ? "사용 가능 — 동영상 변환 준비됨."
-                    : "mkv/webm 동영상 가져오기에 필요합니다 — brew install ffmpeg") { EmptyView() }
-
-            Spacer(minLength: 0)
 
             HStack {
                 // 첫 실행 가치가 낮은 이차 동작이라 위계를 낮춘다(link 스타일 — 필수 행의 새 프로미넌트
