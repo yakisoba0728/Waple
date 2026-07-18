@@ -28,6 +28,12 @@ public struct SceneEffect: Equatable {
     public var audioMode: Int { combos["AUDIOPROCESSING"] ?? 0 }
     /// 전체 패스 사용자 데이터(멀티패스 효과용; [0]은 기존 constants/textureNames/combos 와 동일).
     public var passList: [SceneEffectPass] = []
+    /// 초기 가시성(스크립트 있으면 정적 false 도 보존 — 오브젝트 레벨 initialVisible 게이트와 동일 규약).
+    public var initialVisible: Bool = true
+    /// visible 프로퍼티 스크립트(단일 JS 소스, 상수처럼 키 맵이 아님). TODO(소비 미배선): per-frame
+    /// 재평가로 이펙트를 런타임에 토글하는 소비처는 아직 없음(코퍼스 저빈도로 YAGNI 보류) — 파스는
+    /// 이 필드가 있으면 initialVisible 이 false 라도 SceneEffect 를 드롭하지 않고 보존만 한다.
+    public var visibleScript: String? = nil
 
     public init(name: String, constants: [String: [Float]], textureNames: [String?], combos: [String: Int] = [:], file: String = "") {
         self.name = name; self.constants = constants; self.textureNames = textureNames; self.combos = combos; self.file = file
@@ -147,7 +153,7 @@ public struct SceneTextLayer: Equatable {
     public let horizontalAlign: String   // left|center|right (origin 앵커 기준)
     public let verticalAlign: String     // top|center|bottom
     public let origin: Vec2
-    public let scale: Vec2               // 오브젝트 "size" 필드 = 배수(실측 "2 2")
+    public let scale: Vec2               // 배율은 "scale" 필드(실측 "2 2") — "size" 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)
     /// "Limit width"(limitwidth) 체크 시 워드랩 폭 maxwidth(래스터 로컬 px — 실물 maxwidth 스크립트가
     /// 화면폭을 scale.x 로 나눠 전달 = 스케일 전 단위, d.ts "Max width in pixels"). nil = 무제한(무회귀).
     public var maxWidth: Float? = nil
@@ -158,6 +164,16 @@ public struct SceneTextLayer: Equatable {
     /// "Justify text"(blockalign — 에디터 프로퍼티 테이블 실측 라벨) — 워드랩 줄 양쪽 정렬.
     public var justify: Bool = false
     public var order: Int = 0
+    /// 초기 가시성(스크립트 있으면 정적 false 도 보존 — 레이어 initialVisible 과 동일 규약). 578행 게이트가
+    /// visibleScript!=nil 인 오브젝트를 통과시켜도 이 필드가 없으면 스크립트 평가와 무관하게 항상
+    /// 렌더링되던 결함(F219).
+    public var initialVisible: Bool = true
+    /// 프로퍼티 스크립트(origin/scale/alpha/color/angles/visible — 키 → JS 소스). SceneLayer.propertyScripts
+    /// 와 동일 규약(parseLayer:731-739 형): per-frame 재평가는 재래스터가 아니라 인코드 시점 트랜스폼/
+    /// 알파/가시성 적용(텍스트 '콘텐츠' 스크립트 위 script/scriptProps 와는 별개 채널).
+    public var propertyScripts: [String: String] = [:]
+    /// 프로퍼티 스크립트의 저장 scriptproperties(사용자 오버라이드) — 키 → JSON 문자열. 레이어와 동일 규약.
+    public var propertyScriptProps: [String: String] = [:]
 }
 
 /// 3D 씬 카메라(2D 의 orthogonalprojection 대체). look-at 파라미터 + 원근 fov.
@@ -305,6 +321,11 @@ public struct SceneLight3D: Equatable {
     public let castShadow: Bool
     public let parent: Int?
     public var order: Int = 0
+    /// 프로퍼티 스크립트(color/intensity/radius/origin/angles — 키 → JS 소스). SceneObject3D.propertyScripts/
+    /// SceneNode3D.propertyScripts 와 동일 규약(파스 캡처). 실측: intensity 8건(주야 조명 감쇠 컨트롤러),
+    /// color 1건(3737268876 젤다). TODO(소비 미배선): per-frame 재평가는 코퍼스 저빈도라 YAGNI 보류 —
+    /// 렌더러는 현재 정적 초기값(위 필드)만 소비한다.
+    public var propertyScripts: [String: String] = [:]
     public init(id: Int, name: String, type: String, origin: Vec3, angles: Vec3, color: Vec3,
                 radius: Float, intensity: Float, exponent: Float,
                 innerCone: Float = 0, outerCone: Float = 0,
@@ -412,6 +433,11 @@ public struct SceneSound: Equatable {
     /// 비-loop 재트리거 간격(초) 추정 — 파스만, 스케줄링 미구현.
     public let minTime: Float
     public let maxTime: Float
+    /// volume 프로퍼티 스크립트(update(value) → 새 오서 볼륨). 실측: 12건(예 2911866381 오디오/페이드
+    /// 구동 볼륨). SceneAudioPlayer.tick(time:) 이 per-frame 재평가해 재생 중인 Playlist.authorVolume 을 갱신.
+    public var volumeScript: String? = nil
+    /// volume 스크립트의 저장 scriptproperties(사용자 오버라이드) — 레이어/텍스트와 동일 규약.
+    public var volumeScriptProps: String? = nil
     public init(id: Int, name: String = "", sounds: [String], volume: Float, playbackMode: String,
                 startSilent: Bool, minTime: Float, maxTime: Float) {
         self.id = id; self.name = name; self.sounds = sounds; self.volume = volume; self.playbackMode = playbackMode
@@ -623,7 +649,8 @@ extension SceneDocument {
                     particles.append(p)
                 }
             } else if contentValue(obj["text"]) != nil {
-                texts.append(parseText(obj, order: order))
+                texts.append(parseText(obj, order: order, visibleScript: visibleScript,
+                                       visibleScriptProps: visibleScriptProps, initialVisible: initialVisible))
             } else if let modelPath = contentValue(obj["model"]) as? String {
                 objects3D.append(parseModel(obj, modelPath: modelPath, order: order, visibleScript: visibleScript))
             } else if let lightType = contentValue(obj["light"]) as? String {
@@ -847,7 +874,7 @@ extension SceneDocument {
         let paths = (obj["sound"] as? [Any])?.compactMap { $0 as? String } ?? []
         guard !paths.isEmpty else { return nil }
         // multi(플레이리스트)/startsilent(트리거 대기)는 의미 확정·재생기 반영(2026-07-09) — "unhandled" 로그 제거.
-        return SceneSound(
+        var snd = SceneSound(
             id: intVal(obj["id"]) ?? 0,
             name: (obj["name"] as? String) ?? "",
             sounds: paths,
@@ -856,6 +883,13 @@ extension SceneDocument {
             startSilent: (obj["startsilent"] as? Bool) ?? false,
             minTime: float(obj["mintime"]) ?? 0,
             maxTime: float(obj["maxtime"]) ?? 0)
+        // 이펙트 상수(:1323)·레이어(:731-739)와 동일 비대칭 수정: float() 의 {value} 언랩이 형제 script 를
+        // 삼키므로 스크립트는 별도로 먼저 캡처(정적 volume 은 위에서 이미 언랩됨).
+        if let bind = obj["volume"] as? [String: Any], let sc = bind["script"] as? String {
+            snd.volumeScript = sc
+            if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { snd.volumeScriptProps = j }
+        }
+        return snd
     }
 
     /// 트랜스폼-온리 그룹 노드: 콘텐츠 키 없음 + id 보유 시 SceneNode3D(비가시도 포함 — 서브트리 판정에 필요).
@@ -928,7 +962,9 @@ extension SceneDocument {
         if let bind = obj["origin"] as? [String: Any], let a = PropertyAnimation.parse(bind) {
             cam.originAnimation = a
         }
-        for key in ["origin", "zoom"] {
+        // fov 는 바로 위에서 정적 파스(:913)만 하고 스크립트는 origin/zoom 과 달리 누락돼 있었다(실측
+        // 9씬 — 슬라이더 연동 줌 애니 정지). 세 키 동일 규약으로 통일.
+        for key in ["origin", "zoom", "fov"] {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { cam.scripts[key] = sc }
         }
         return cam
@@ -936,7 +972,11 @@ extension SceneDocument {
 
     /// 텍스트 레이어("text": 평문 문자열 | {"value": 초기값, "script": JS} 바인딩 — 둘 다 보유 가능).
     /// script 는 update(current) 로 갱신되므로 value 는 초기 표시값으로도 쓰인다(실물 29씬/136오브젝트).
-    private static func parseText(_ obj: [String: Any], order: Int) -> SceneTextLayer {
+    /// visibleScript/visibleScriptProps/initialVisible 은 호출부(578행 게이트)가 이미 계산한 값을
+    /// parseLayer/parseModel/effectQuadLayer 와 동형으로 전달(F219 — 종전엔 이 세 인자 자체가 없었다).
+    private static func parseText(_ obj: [String: Any], order: Int,
+                                  visibleScript: String?, visibleScriptProps: String? = nil,
+                                  initialVisible: Bool) -> SceneTextLayer {
         var plain = ""
         var script: String? = nil
         var scriptProps: String? = nil
@@ -966,6 +1006,22 @@ extension SceneDocument {
         if (obj["limitrows"] as? Bool) == true, case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
         t.overflowEllipsis = (obj["limituseellipsis"] as? Bool) ?? false
         t.justify = (obj["blockalign"] as? Bool) ?? false
+        // 프로퍼티 스크립트(origin/scale/alpha/color/angles, F218): parseLayer(:731-739)와 동형 캡처 —
+        // 렌더러가 재래스터 없이 인코드 시점 트랜스폼/알파 적용(buildTexts/encodeText 참조). visible(F219)
+        // 은 위 578행 게이트에서 이미 판정된 값을 그대로 기록.
+        t.initialVisible = initialVisible
+        var propScripts: [String: String] = [:]
+        var propScriptProps: [String: String] = [:]
+        for key in ["origin", "scale", "alpha", "angles", "color"] {
+            if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String {
+                propScripts[key] = sc
+                if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { propScriptProps[key] = j }
+            }
+        }
+        if let vs = visibleScript { propScripts["visible"] = vs }
+        if let j = visibleScriptProps { propScriptProps["visible"] = j }
+        t.propertyScripts = propScripts
+        t.propertyScriptProps = propScriptProps
         return t
     }
 
@@ -997,7 +1053,7 @@ extension SceneDocument {
 
     /// 3D 라이트 오브젝트("light": 타입 문자열 + 위치/색/반경/강도 등).
     private static func parseLight(_ obj: [String: Any], lightType: String, order: Int) -> SceneLight3D {
-        SceneLight3D(
+        var light = SceneLight3D(
             id: intVal(obj["id"]) ?? 0,
             name: (obj["name"] as? String) ?? "",
             type: lightType,
@@ -1012,6 +1068,11 @@ extension SceneDocument {
             castShadow: (obj["castshadow"] as? Bool) ?? false,
             parent: intVal(obj["parent"]),
             order: order)
+        // SceneObject3D/SceneNode3D 의 propertyScripts/transformScripts 와 동형 캡처(파스만 — TODO 위 참조).
+        for key in ["color", "intensity", "radius", "origin", "angles"] {
+            if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { light.propertyScripts[key] = sc }
+        }
+        return light
     }
 
     /// 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여
@@ -1320,7 +1381,16 @@ extension SceneDocument {
         for case let e as [String: Any] in arr {
             // WE: visible=false 효과는 미적용(사용자 토글 OFF 포함 — {user,value} 는 resolveUserBindings 가
             // 이미 정적 value 로 해석). 종전 무시 → 꺼진 post-process(예 3489263099 halftone)가 적용돼 전화면 흑화.
-            if let visible = unwrap(e["visible"]) as? Bool, !visible { continue }
+            // visibleScript!=nil 이면 오브젝트 레벨 게이트(:565-570/578)와 동일하게 정적 false 라도 드롭하지
+            // 않고 보존 — {script,value} 로 시작이 false 인 이펙트가 SceneEffect[] 에서 영구 제외되던 결함.
+            var effInitialVisible = true
+            var effVisibleScript: String? = nil
+            if let vb = e["visible"] as? Bool { effInitialVisible = vb }
+            else if let vis = e["visible"] as? [String: Any] {
+                if let v = vis["value"] as? Bool { effInitialVisible = v }
+                effVisibleScript = vis["script"] as? String
+            }
+            if !effInitialVisible && effVisibleScript == nil { continue }
             let file = (e["file"] as? String) ?? ""
             // "effects/<name>/effect.json" → name
             let parts = file.split(separator: "/")
@@ -1370,6 +1440,8 @@ extension SceneDocument {
             var eff = SceneEffect(name: name, constants: p0.constants, textureNames: p0.textureNames,
                                   combos: p0.combos, file: file)
             eff.passList = passList
+            eff.initialVisible = effInitialVisible
+            eff.visibleScript = effVisibleScript
             out.append(eff)
         }
         return out

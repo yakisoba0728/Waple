@@ -211,6 +211,14 @@ extension SceneRenderer {
             let skipNames = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
                 .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
             for eff in layer.effects {
+                // F201 후속: parseEffects 는 visible={value:false,script} 이펙트도 SceneEffect[] 에
+                // 보존한다(데이터 무손실 — 향후 per-frame 런타임 토글 소비용). 그러나 그 소비(스크립트
+                // 재평가로 켜고 끄는 경로)가 아직 배선되지 않아, 여기서 그대로 태우면 "항상 미적용"이던
+                // 구 동작이 "항상 적용"으로 뒤집혀 실 코퍼스 17씬(예 2902406982·3113287126·3538758087)의
+                // 이벤트-훅 이펙트가 잘못 켜진다(구 드롭 동작이 우연히 WE 정적 상태 OFF와 일치했었다).
+                // 소비 배선 전까지는 initialVisible==false 인 이펙트를 여기서 게이트해 구 시각 거동을
+                // 복원 — 파스 구조체엔 그대로 남아 있으니 향후 이 한 줄만 지우면 소비가 열린다.
+                if !eff.initialVisible { continue }
                 if skipNames.contains(eff.name) { continue }
                 // 폴백 체인(Step 5, 2026-07-02 실물 검증 후 전환): **translated 우선** — pkg 동봉 GLSL 은
                 // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
@@ -239,12 +247,14 @@ extension SceneRenderer {
                     NSLog("%@", "[Waple] puppet mdl load failed (static quad fallback): \(pp)")
                 }
             }
-            // 레이어 프로퍼티 스크립트(visible/color/alpha): 씬 공유 컨텍스트에서 per-frame 평가.
-            // visible 을 먼저 로드 — 실물 컨트롤러(3394601417 'bt')의 top-level shared 초기화가
-            // 같은 오브젝트의 다른 스크립트보다 앞서도록. update 없는 스크립트(사이드이펙트 전용)도
-            // 로드는 하되 연속 렌더(hasAnimations)는 유발하지 않는다.
+            // 레이어 프로퍼티 스크립트(visible/color/alpha/origin/scale/angles): 씬 공유 컨텍스트에서
+            // per-frame 평가. visible 을 먼저 로드 — 실물 컨트롤러(3394601417 'bt')의 top-level shared
+            // 초기화가 같은 오브젝트의 다른 스크립트보다 앞서도록. update 없는 스크립트(사이드이펙트
+            // 전용)도 로드는 하되 연속 렌더(hasAnimations)는 유발하지 않는다.
+            // origin/scale/angles(F331): 3D 빌보드 경로(SceneRenderer3D.Billboard3D)는 이미 동일
+            // propertyScripts 를 소비 — 2D encodeLayer 도 동형으로 quadDirty→quadVertices 재계산.
             var propScripts: [(key: String, engine: TextScriptEngine)] = []
-            for key in ["visible", "color", "alpha"] {
+            for key in ["visible", "color", "alpha", "origin", "scale", "angles"] {
                 guard let src = layer.propertyScripts[key] else { continue }
                 if key == "visible", Self.isVectorValuedVisibleScript(src) {
                     NSLog("%@", "[Waple] skipped vector-valued visible script")
@@ -987,7 +997,7 @@ extension SceneRenderer {
     /// 텍스트 오브젝트 준비: 폰트 바이트(pkg→base-assets) + 스크립트 엔진 + 초기 텍스트 래스터.
     func buildTexts(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPUText] {
         var out: [GPUText] = []
-        for t in doc.texts {
+        for (uid, t) in doc.texts.enumerated() {
             let isSystem = t.font.hasPrefix("systemfont_") || t.font.isEmpty
             let fontData = isSystem ? nil : quietAssetData(t.font, package: package)
             if !isSystem && fontData == nil { NSLog("%@", "[Waple] text font missing (system fallback): \(t.font)") }
@@ -997,10 +1007,22 @@ extension SceneRenderer {
             if t.script != nil && loaded == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
             let engine = (loaded?.hasUpdate == true) ? loaded : nil
             let initial = engine != nil ? (engine!.evaluate(current: t.text) ?? "") : t.text
+            // 프로퍼티 스크립트(origin/scale/alpha/color/angles/visible, F218/F219): 레이어 propScripts
+            // 와 동일 규약(visible 먼저 로드 — top-level shared 사이드이펙트 순서).
+            var propScripts: [(key: String, engine: TextScriptEngine)] = []
+            for key in ["visible", "color", "alpha", "origin", "scale", "angles"] {
+                guard let src = t.propertyScripts[key] else { continue }
+                let ownerName = t.name.isEmpty ? nil : t.name
+                if let e = makeScriptEngine(src, layerName: ownerName, scriptPropsJSON: t.propertyScriptProps[key]) {
+                    propScripts.append((key, e))
+                    if e.hasUpdate { hasAnimations = true }
+                }
+            }
             var g = GPUText(texture: nil, vertexBuffer: nil,
                             tint: SIMD4(t.color.x, t.color.y, t.color.z, t.alpha),
                             order: t.order, engine: engine, lastText: initial,
-                            fontData: fontData, systemFontName: isSystem ? t.font : nil, def: t)
+                            fontData: fontData, systemFontName: isSystem ? t.font : nil, def: t,
+                            uid: uid, initialVisible: t.initialVisible, propScripts: propScripts)
             rasterize(&g, device: device)
             if engine != nil { hasScriptedText = true }
             out.append(g)
@@ -1009,6 +1031,8 @@ extension SceneRenderer {
     }
 
     /// 텍스트 재래스터: lastText → 텍스처 + 앵커 정렬 쿼드. 빈 텍스트 → 텍스처 nil(드로우 스킵).
+    /// rasterWidth/Height(비-스케일 글리프 픽셀 크기)를 저장 — encodeText 가 프로퍼티 스크립트로
+    /// per-frame 지오메트리를 재계산할 때 재래스터 없이 재사용한다.
     func rasterize(_ g: inout GPUText, device: MTLDevice) {
         guard let r = TextRasterizer.render(text: g.lastText, fontData: g.fontData,
                                             systemFontName: g.systemFontName, pointSize: g.def.pointSize,
@@ -1019,6 +1043,7 @@ extension SceneRenderer {
             return
         }
         g.texture = makeTexture(r.rgba, r.width, r.height, device)
+        g.rasterWidth = Float(r.width); g.rasterHeight = Float(r.height)
         let w = Float(r.width) * g.def.scale.x, h = Float(r.height) * g.def.scale.y
         let x0: Float
         switch g.def.horizontalAlign {

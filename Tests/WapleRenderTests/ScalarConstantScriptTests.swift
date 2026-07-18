@@ -119,7 +119,7 @@ final class ScalarConstantScriptTests: XCTestCase {
         let expected: [String: String] = [
             "3146703458": "e1ad41a0a7f45f1dc0271b62614e52764296481c11ccec9fe5a82d6fc23ab839",  // 벡터-스크립트 6패스
             "3299228616": "61e18d9f418d0b7763ad91ad315d5052c00d2b91baaa24f2009c5a3bd9359f30",  // 정적 97→103패스(0662e0b lightshafts ×6 승격)
-            "3538758087": "4eb46e7aee91dd98f35920ec7df5b983a432fde08a08887e1da4e554ab0d4adf",  // 정적 101→102패스(0662e0b lightshafts ×1 승격)
+            "3538758087": "3ed3ab44d0713dd9a602067803581dda9873721b1dc18d31f63e75dfb77b8d0e",  // 정적 102→106패스(F201: effects[].visible={value:false,script} 4건(blend×2/blendgradient×2, 호버 토글) 보존 편입)
         ]
         for (sid, want) in expected.sorted(by: { $0.key < $1.key }) {
             let doc = try parseScene(sid)
