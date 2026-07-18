@@ -65,7 +65,10 @@ public enum ParticleOperator: Equatable {
     /// 수명 비율 구간에서 RGB factor를 성분별 보간해 현재 색에 곱한다.
     case colorChange(startTime: Float, startValue: Vec3, endValue: Vec3, endTime: Float = 1)
     case angularMovement(force: Vec3)
-    case oscillateAlpha(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float)
+    /// 위상 진동: alpha ×= lerp(scaleMin, scaleMax, 0.5(1+sin(2πf·age+phase))). 파티클별 f/phase 는
+    /// 스폰 시 range(min,max) 샘플(phasemin/max 부재 시 0 — 전 파티클 동위상, fireworks 근동기 의도).
+    case oscillateAlpha(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
+                        phaseMin: Float = 0, phaseMax: Float = 0)
     case oscillatePosition(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
                            phaseMin: Float, phaseMax: Float, mask: Vec3)
     /// 컨트롤포인트로의 인력/척력. 실물키: scale(가속, 음수=척력), threshold(근접 반경), origin(대상, 헤드리스=기본 0).
@@ -440,7 +443,8 @@ public struct ParticleSystemDef: Equatable {
                 let smin = pfloat(o["scalemin"]) ?? 0
                 let fmin = pfloat(o["frequencymin"]) ?? 0
                 ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? fmin,
-                                           scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? 1))
+                                           scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? 1,
+                                           phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "oscillateposition":
                 let smin = pfloat(o["scalemin"]) ?? 0
                 let fmin = pfloat(o["frequencymin"]) ?? 0

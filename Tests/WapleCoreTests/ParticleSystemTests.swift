@@ -327,7 +327,7 @@ final class ParticleSystemTests: XCTestCase {
         """), material: nil)
         guard case let .oscillateSize(sf0, sf1, _, _, _, _) = d.operators[0] else { return XCTFail("no oscillatesize") }
         XCTAssertEqual(sf0, 2.5); XCTAssertEqual(sf1, 2.5)
-        guard case let .oscillateAlpha(af0, af1, _, _) = d.operators[1] else { return XCTFail("no oscillatealpha") }
+        guard case let .oscillateAlpha(af0, af1, _, _, _, _) = d.operators[1] else { return XCTFail("no oscillatealpha") }
         XCTAssertEqual(af0, 1.5); XCTAssertEqual(af1, 1.5)
         guard case let .oscillatePosition(pf0, pf1, _, _, _, _, _) = d.operators[2] else { return XCTFail("no oscillateposition") }
         XCTAssertEqual(pf0, 3.5); XCTAssertEqual(pf1, 3.5)
@@ -337,12 +337,26 @@ final class ParticleSystemTests: XCTestCase {
     // 시나리오)과 scalemin 단독 지정(코퍼스 다수: 0.2×9·0.3×4·0.1×4 등) 양쪽 모두 진폭이 죽지 않아야 한다.
     func testOscillateAlphaScaleMaxDefaultsToOneNotScaleMin() {
         let allOmitted = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","frequencymin":2}]}"#), material: nil)
-        guard case let .oscillateAlpha(_, _, smin0, smax0) = allOmitted.operators[0] else { return XCTFail("no oscillatealpha") }
+        guard case let .oscillateAlpha(_, _, smin0, smax0, _, _) = allOmitted.operators[0] else { return XCTFail("no oscillatealpha") }
         XCTAssertEqual(smin0, 0); XCTAssertEqual(smax0, 1, "scale 생략 시 scalemax 는 scalemin(0) 이 아니라 1")
 
         let scaleMinOnly = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","scalemin":0.2}]}"#), material: nil)
-        guard case let .oscillateAlpha(_, _, smin1, smax1) = scaleMinOnly.operators[0] else { return XCTFail("no oscillatealpha") }
+        guard case let .oscillateAlpha(_, _, smin1, smax1, _, _) = scaleMinOnly.operators[0] else { return XCTFail("no oscillatealpha") }
         XCTAssertEqual(smin1, 0.2); XCTAssertEqual(smax1, 1, "scalemin 단독 지정 시 scalemax 승계(상수화) 대신 1")
+    }
+
+    // F184: phasemin/phasemax 가 파티클별 위상 range 로 파스돼야(fireworks 5씬 근동기 의도 복원 —
+    // 종전엔 이 키 자체를 읽지 않아 항상 완전 랜덤 위상이었다). 기본은 자매 오퍼레이터와 동형으로 0.
+    func testOscillateAlphaParsesPhaseRange() {
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","frequencymin":1.5,"phasemin":0,"phasemax":0.1}]}"#), material: nil)
+        guard case let .oscillateAlpha(_, _, _, _, pmin, pmax) = d.operators[0] else { return XCTFail("no oscillatealpha") }
+        XCTAssertEqual(pmin, 0); XCTAssertEqual(pmax, 0.1)
+    }
+
+    func testOscillateAlphaPhaseDefaultsToZero() {
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","frequencymin":1.5}]}"#), material: nil)
+        guard case let .oscillateAlpha(_, _, _, _, pmin, pmax) = d.operators[0] else { return XCTFail("no oscillatealpha") }
+        XCTAssertEqual(pmin, 0); XCTAssertEqual(pmax, 0)
     }
 
     func testControlPointAttractConsumesControlPointId() {

@@ -51,7 +51,7 @@ public struct ParticleSimulator {
     private let colorChanges: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)]
     private let alphaFade: (fin: Float, fout: Float)?
     private let oscPosOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float, mask: SIMD3<Float>)?
-    private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float)?
+    private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float)?
     private let oscSizeOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float)?
     private let alphaChanges: [(st: Float, et: Float, sv: Float, ev: Float)]
     private enum CachedRemap {
@@ -101,7 +101,7 @@ public struct ParticleSimulator {
         var cc: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)] = []
         var af: (Float, Float)? = nil
         var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
-        var oa: (Float, Float, Float, Float)? = nil
+        var oa: (Float, Float, Float, Float, Float, Float)? = nil
         var attr: [(Float, Float, SIMD3<Float>)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>)] = []
         var turb: (Float, Float, Float, Float, SIMD3<Float>, Float, Float)? = nil
@@ -119,8 +119,8 @@ public struct ParticleSimulator {
             case let .alphaFade(fin, fout): if af == nil { af = (fin, fout) }
             case let .oscillatePosition(fmin, fmax, smin, smax, pmin, pmax, mask):
                 if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
-            case let .oscillateAlpha(fmin, fmax, smin, smax):
-                if oa == nil { oa = (fmin, fmax, smin, smax) }
+            case let .oscillateAlpha(fmin, fmax, smin, smax, pmin, pmax):
+                if oa == nil { oa = (fmin, fmax, smin, smax, pmin, pmax) }
             case let .controlPointAttract(scale, threshold, target):
                 attr.append((scale, threshold, s3(target)))
             case let .vortex(axis, dIn, dOut, sIn, sOut, offset):
@@ -144,7 +144,7 @@ public struct ParticleSimulator {
         colorChanges = cc
         alphaFade = af.map { (fin: $0.0, fout: $0.1) }
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
-        oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3) }
+        oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2) }
         vortices = vort.map { (axis: $0.0, dIn: $0.1, dOut: $0.2, sIn: $0.3, sOut: $0.4, offset: $0.5) }
         turbulence = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
@@ -386,7 +386,9 @@ public struct ParticleSimulator {
         }
         if let o = oscAlphaOp {
             p.oscAlphaFreq = rng.range(o.fmin, o.fmax)
-            p.oscAlphaPhase = rng.nextFloat() * 2 * .pi
+            // oscPos/oscSize 와 동형 range 샘플(F184) — phasemin/max 부재(기본 0) 시 전 파티클 동위상
+            // (fireworks 근동기 의도). 종전엔 항상 rng.nextFloat()*2π 완전 랜덤이라 desync 를 강제했다.
+            p.oscAlphaPhase = rng.range(o.pmin, o.pmax) * 2 * .pi
         }
         if let o = oscSizeOp {
             p.oscSizeFreq = rng.range(o.fmin, o.fmax)

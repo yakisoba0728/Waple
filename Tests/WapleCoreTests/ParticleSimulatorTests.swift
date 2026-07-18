@@ -445,4 +445,35 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertLessThan(minA, 0.05, "0 근접까지 어두워져야")
         XCTAssertGreaterThan(maxA, 0.95, "1 근접까지 밝아져야")
     }
+
+    /// phasemin=phasemax=0(기본, 미지정) → 전 파티클 동위상(fireworks 근동기 의도) — 종전엔 위상이
+    /// 항상 rng.nextFloat()*2π 완전 랜덤이라 phasemin/max 를 0으로 지정해도 개별 파티클이 어긋났다.
+    func testOscillateAlphaPhaseRangeZeroSyncsParticles() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 1, frequencyMax: 1, scaleMin: 0, scaleMax: 1,
+                                        phaseMin: 0, phaseMax: 0)],
+            renderer: .sprite, maxCount: 40, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 5)
+        let ps = sim.step(0.2)
+        XCTAssertGreaterThan(ps.count, 4, "테스트 유효성 전제(다수 스폰)")
+        let first = ps[0].alpha
+        for p in ps { XCTAssertEqual(p.alpha, first, accuracy: 1e-5, "동일 위상 range 면 전 파티클 alpha 동일") }
+    }
+
+    /// 명시적 phasemin/max 범위가 있으면 파티클별로 위상이 갈라져야(데스싱크).
+    func testOscillateAlphaPhaseRangeDesyncsParticles() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 1, frequencyMax: 1, scaleMin: 0, scaleMax: 1,
+                                        phaseMin: 0, phaseMax: 1)],
+            renderer: .sprite, maxCount: 40, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 5)
+        let ps = sim.step(0.2)
+        XCTAssertGreaterThan(ps.count, 4, "테스트 유효성 전제(다수 스폰)")
+        let distinctAlphas = Set(ps.map { ($0.alpha * 1000).rounded() })
+        XCTAssertGreaterThan(distinctAlphas.count, 1, "위상 range 가 있으면 파티클 간 alpha 가 갈라져야")
+    }
 }
