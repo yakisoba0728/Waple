@@ -1061,6 +1061,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         view.isPaused = true
         view.enableSetNeedsDisplay = true
         view.delegate = self
+        // 라이브 데스크탑 프레젠트 상하 뒤집힘 보정(macOS 26+, 실기기 27 확인) — 캡처(readback)는
+        // drawable 을 안 타 무영향, 클릭 역매핑도 물리 좌표 기반이라 무영향(근거: SceneLivePresentationFix 상단 주석).
+        if SceneLivePresentationFix.needsDesktopFlipY {
+            view.layer?.isGeometryFlipped = true
+        }
         container.wantsLayer = true
         container.addSubview(view)
         self.mtkView = view
