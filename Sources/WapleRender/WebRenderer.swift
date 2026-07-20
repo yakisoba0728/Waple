@@ -123,7 +123,12 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             audioProvider = provider
         case .videoFallback:
             guard let baseURL = URL(string: base) else { throw RendererError.assetMissing }
-            web.loadHTMLString(VideoFallbackHTML.html(forVideoFile: fileName), baseURL: baseURL)
+            // F576: 정상 경로(VideoRenderer)와 같은 배경별 음량을 폴터 <video> 에도 적용.
+            web.loadHTMLString(
+                VideoFallbackHTML.html(forVideoFile: fileName,
+                                       volume: VideoSettings.volume(id: project.id)),
+                baseURL: baseURL
+            )
         }
 
         // 가림 시 정지(절전 — 씬/동영상과 동일). 창 없음(headless) → no-op.
@@ -237,6 +242,25 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         deliverFetchAllDirectories()
     }
 
+    /// F572: 문서가 실제로 교철되면(커밋) 이전 문서의 audioListen/mediaListen 등록은 JS 월드와
+    /// 함께 소멸한다 — 리셋하지 않으면 새 문서인데도 캡처+FFT+미디어 폴섹이 pause/teardown 까지
+    /// 계속 소모. didFinish 가 아니라 didCommit 에서 리셋하는 이유: (1) 초기 로드는 커밋 후에야
+    /// 스크립트가 실행돼 리스너 등록 메시지가 리셋 뒤에 도착하고(didFinish 리셋은 등록을 지움),
+    /// (2) 프래그먼트/pushState 같은 동일 문서 납비게이션은 JS 월드가 유지되며 didCommit 이
+    /// 발생하지 않는다(리셋하면 살아 있는 문서의 등록이 고립된다).
+    public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard Self.isAllowedTopFrameURL(webView.url) else { return }
+        // 소비자가 있을 때만 동기화 — 미등록 문서(초기 로드 등)에서의 무조건 동기화는
+        // 프로바이더에 불필요한 stop 을 추가할 뿐 아무 효과도 없다.
+        let hadConsumers = hasAudioListener || mediaPoller != nil
+        hasAudioListener = false
+        mediaPoller?.stop()
+        mediaPoller = nil
+        if hadConsumers {
+            synchronizeEffectivePause()
+        }
+    }
+
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.targetFrame?.isMainFrame != false {
@@ -247,6 +271,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         } else {
             // 서브프레임(iframe 등) — 메인프레임만 게이팅하면 <iframe src="https://…"> 로 원격 콘텐츠가
             // 무검증 로드된다(egress/IP 유출, 감사 S1). 로컬(에셋/about:blank/data:)만 허용.
+            // F571: 이 게이트는 납비게이션(메인+서브프레임)만 다룬다. <img>/<script>/fetch 등
+            // 서브리소스의 원격 로드는 WE 호환(WE 자체가 네트워크 허용)을 위해 열어 두는 의도된
+            // 범위 — 전면 차단은 원격 리소스를 쓰는 WE 웹 월페이퍼를 깨므로 수용 한계로 문서화.
             guard Self.isAllowedSubframeURL(navigationAction.request.url) else {
                 decisionHandler(.cancel)
                 return
@@ -270,8 +297,22 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         } else if type == "randomFile",
                   let name = dict["name"] as? String,
                   let requestID = dict["requestId"] as? String {
-            let path = randomFilePath(forProperty: name) ?? ""
-            deliverRandomFileResponse(requestID: requestID, propertyName: name, filePath: path)
+            switch randomFileTarget(forProperty: name) {
+            case .file(let path):
+                deliverRandomFileResponse(requestID: requestID, propertyName: name, filePath: path)
+            case .directory(let directoryURL):
+                // F573: 디렉터리 재귀 열거+stat 은 파일 수만큼 I/O — 메인 프리즈 방지를 위해
+                // 백그라운드에서 해석. 응답은 requestId 매칭이라 비동기 전달이 안전하다.
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let path = self?.randomFilePath(in: directoryURL) ?? ""
+                    DispatchQueue.main.async {
+                        self?.deliverRandomFileResponse(requestID: requestID, propertyName: name,
+                                                        filePath: path)
+                    }
+                }
+            case nil:
+                deliverRandomFileResponse(requestID: requestID, propertyName: name, filePath: "")
+            }
         }
     }
 
@@ -299,7 +340,13 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         return url.scheme == WallpaperSchemeHandler.scheme && url.host == WallpaperSchemeHandler.host
     }
 
-    private func randomFilePath(forProperty name: String) -> String? {
+    /// randomFile 대상 해석 결과. directory 는 재귀 열거가 필요해 호출부에서 백그라운드로 본낸다(F573).
+    private enum RandomFileTarget {
+        case file(String)       // 단일 파일 — 즉시 응답 가능
+        case directory(URL)     // 재귀 열거 필요
+    }
+
+    private func randomFileTarget(forProperty name: String) -> RandomFileTarget? {
         guard let root = projectRootURL,
               let property = userPropertiesByKey[name],
               case .string(let rawPath) = property.value else { return nil }
@@ -311,39 +358,58 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         if type == "file" {
             guard let fileURL = resourceURL(for: property, rawPath: path, projectRoot: root),
                   isRegularFile(fileURL, containedIn: path.hasPrefix("/") ? nil : root) else { return nil }
-            return fileURL.resolvingSymlinksInPath().path
+            return .file(fileURL.resolvingSymlinksInPath().path)
         }
 
         guard let directoryURL = resourceURL(for: property, rawPath: path, projectRoot: root),
               isDirectory(directoryURL, containedIn: path.hasPrefix("/") ? nil : root) else { return nil }
-        return randomFilePath(in: directoryURL)
+        return .directory(directoryURL)
     }
 
     private func deliverFetchAllDirectories() {
+        // 프로퍼티 필터+경로 검증(단일 stat)은 메인 상태(userPropertiesByKey/projectRootURL)를
+        // 읽으므로 여기서 스냅섯하고, 재귀 열거만 백그라운드로 본낸다.
+        var targets: [(key: String, directoryURL: URL)] = []
         for key in userPropertiesByKey.keys.sorted() {
             guard let property = userPropertiesByKey[key],
                   property.type.lowercased() == "directory",
                   property.mode?.lowercased() == "fetchall",
-                  let files = directoryFiles(for: property) else { continue }
-            deliverDirectoryFilesAddedOrChanged(propertyName: key, files: files)
+                  let directoryURL = fetchAllDirectoryURL(for: property) else { continue }
+            targets.append((key, directoryURL))
+        }
+        guard !targets.isEmpty else { return }
+        // F573: 재귀 열거+stat 은 파일 수만큼 I/O — 메인 프리즈 방지를 위해 백그라운드에서 해석 후
+        // 메인으로 복귀해 전달(teardown 후면 webView 가 nil 이라 evaluateJavaScript 가 no-op).
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let resolved: [(String, [String])] = targets.map { target in
+                let files = self?.regularFiles(in: target.directoryURL)
+                    .map { $0.resolvingSymlinksInPath().path } ?? []
+                return (target.key, files)
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                for (key, files) in resolved {
+                    self.deliverDirectoryFilesAddedOrChanged(propertyName: key, files: files)
+                }
+            }
         }
     }
 
-    private func directoryFiles(for property: WallpaperProperty) -> [String]? {
+    private func fetchAllDirectoryURL(for property: WallpaperProperty) -> URL? {
         guard let root = projectRootURL,
               case .string(let rawPath) = property.value else { return nil }
         let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty,
               let directoryURL = resourceURL(for: property, rawPath: path, projectRoot: root),
               isDirectory(directoryURL, containedIn: path.hasPrefix("/") ? nil : root) else { return nil }
-
-        return regularFiles(in: directoryURL).map { $0.resolvingSymlinksInPath().path }
+        return directoryURL
     }
 
     private func randomFilePath(in directoryURL: URL) -> String? {
         regularFiles(in: directoryURL).randomElement()?.resolvingSymlinksInPath().path
     }
 
+    /// F573: 재귀 열거+파일별 stat — 메인 스레드 동기 호출 금지(백그라운드 큐 전용).
     private func regularFiles(in directoryURL: URL) -> [URL] {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
         guard let enumerator = FileManager.default.enumerator(
