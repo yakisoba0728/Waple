@@ -72,8 +72,9 @@ echo "Built $APP"
 DMG="$PWD/Waple.dmg"
 rm -f "$DMG"
 STAGING="$(mktemp -d)"
+# hdiutil 실패 등 set -e 중간 종료 시에도 스테이징이 /tmp 에 남지 않도록 EXIT trap(make-icon.sh:9 와 동일 패턴).
+trap 'rm -rf "$STAGING"' EXIT
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Waple" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
-rm -rf "$STAGING"
 echo "Built $DMG"

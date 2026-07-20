@@ -65,7 +65,7 @@ defaults write kr.yaki.waple waple.baseAssetsPath /path/to/wallpaper_engine/asse
 
 ```bash
 swift run Waple            # 메뉴바 유틸리티로 실행
-swift test                 # 전체 테스트(800+개) + 실물 씬 그라운드-트루스
+swift test                 # 전체 테스트(1400+개) + 실물 씬 그라운드-트루스
 swift build -c release     # 릴리스 빌드
 bash scripts/package-app.sh  # Waple.app 번들 생성(화면보호기 .saver 포함)
 ```
@@ -89,7 +89,10 @@ Sources/
   WapleRender/   Metal 렌더러, 셰이더, 텍스처 디코드, 오디오/비디오/웹 렌더러
   WapleLibrary/  워크샵 폴더 스캔·가져오기·라이브러리/즐겨찾기/폴더/재생목록 저장
   Waple/         메뉴바 앱 + SwiftUI 네이티브 메인창(DesignSystem·Shell·Surfaces), 데스크톱 창, 화면보호기
-Tests/           5개 타깃 · 800+ 테스트(합성 단위 + 실물 코퍼스 그라운드-트루스)
+  WapleCompat/   호환성 스캔·스냅샷 캡처/비교·성능 프로파일 CLI 하니스(개발/검증용 실행파일)
+  WapleSaver/    화면보호기 .saver 번들 소스(Objective-C — package-app.sh 가 clang 으로 직접 컴파일)
+  WapleSnapshot/ 스냅샷 매니페스트 스키마·diff 메트릭(순수 Foundation, 유닛 검증용)
+Tests/           5개 타깃 · 1400+ 테스트(합성 단위 + 실물 코퍼스 그라운드-트루스)
 scripts/         package-app.sh(앱/화면보호기 번들), window-id.swift(창 캡처용 ID/영역 조회),
                  make-icon.sh/make-icon.swift(앱 아이콘 .icns 생성), Waple.icns(생성물)
 ```

@@ -6,7 +6,7 @@
 
 **Architecture:** Reuse `ForwardUniforms.positions[i].w`, which is currently an unused active marker, as the per-light exponent. Radius already gates inactive slots. Keep the renderer's existing fragment-buffer layout, and mirror the same hard-zero epsilon falloff in `SceneLight3D.evaluateLighting` and `QuadShaders.f_lit`.
 
-**Tech Stack:** Swift 6, XCTest, Metal Shading Language, Swift Package Manager.
+**Tech Stack:** Swift 5.9, XCTest, Metal Shading Language, Swift Package Manager.
 
 ## Global Constraints
 

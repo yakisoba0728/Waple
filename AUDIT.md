@@ -314,10 +314,10 @@ Waple 전 코드베이스(WapleCore · WapleRender · WapleLibrary · Waple 앱 
 - 무엇/왜: `symbolMap(materials:stage:)` 본문이 `materials`만 쓰고 `stage`는 미참조 → 호출부 두 곳(`.fragment` :103, `.vertex` :104)이 **동일 맵**을 받는다. `private enum Stage`(:640)는 이 파라미터 전용으로만 존재(다른 "Stage" 등장은 전부 주석의 파이프라인 단계 명칭).
 - 권장 조치: `stage` 파라미터 + `Stage` enum 삭제, 호출 2곳 통합.
 
-**obsolete: `WAPLE3D_*` 구 env 병행 인식**
-- 파일: SceneRenderer3D.swift:211,430 (정의 SceneRenderer.swift:267) · 심각도: low · 작업량: small
-- 무엇/왜: `debugFlag("WAPLE_3D_BINDPOSE", "WAPLE3D_BINDPOSE")`처럼 신규명+구명 동시 인식(주석이 "전환기 호환 — 추후 제거" 자인). 단 `WAPLE3D_BINDPOSE`가 `docs/superpowers/specs/2026-07-04-waple-3d-design.md:107`에 문서화돼 있어 즉시 제거 시 문서와 어긋난다. 디버그 전용이라 런타임 무영향.
-- 권장 조치: 문서 갱신과 함께 구명 인식만 제거, 또는 개발 편의로 현행 유지(저위험).
+**obsolete: `WAPLE3D_*` 구 env 병행 인식** — 해소됨(2026-07 재검증으로 항목 정정)
+- 파일: SceneRenderer3D.swift:277 (정의 SceneRenderer.swift:818) · 심각도: low · 작업량: —
+- 무엇/왜: 구명 병행 인식은 이미 제거됐다 — `debugFlag("WAPLE_3D_BINDPOSE")` 단일 인자 호출만 남아 있고 리포 전체 `WAPLE3D_` grep 0건(이 항목 자체 제외). spec(specs/2026-07-04-waple-3d-design.md:107)도 신규명 `WAPLE_3D_BINDPOSE` 를 문서화하므로 문서와의 충돌도 없다. (이전 서술은 구명 잔존 + spec 의 구명 문서화라는 이중 역스테일 전제였다.)
+- 권장 조치: 추가 조치 불필요.
 
 
 **`SystemAudioSpectrumProvider.floatSamples(from:)` — stereoSamples로 완전 대체됨**

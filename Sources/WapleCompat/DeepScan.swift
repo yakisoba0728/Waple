@@ -631,9 +631,21 @@ enum DeepScan {
         let ext = URL(fileURLWithPath: file).pathExtension.lowercased()
         let url = folder.appendingPathComponent(file)
         if VideoRenderer.nativeVideoExtensions.contains(ext) {
-            // header-only probe: AVURLAsset.isPlayable reads container headers, not the whole file.
+            // header-only probe: isPlayable/트랙 목록은 컨테이너 헤더만 읽는다(파일 전체 X).
+            // F525: deprecated 동기 API(isPlayable/tracks(withMediaType:)) → load(_:) 계열로 국소 교체
+            // (loadTracks(withMediaType:) 는 macOS 15+ 라 deployment target 14 에서 load(.tracks)+필터).
+            // scanVideo 는 concurrentPerform 워커의 동기 호출이므로 FFmpegConverter.isReusableConvertedOutput
+            // 과 같은 세마포어 브리지로 기다린다. 행위 보존: 로드 실패/예외는 unplayable 취급.
             let asset = AVURLAsset(url: url)
-            let playable = asset.isPlayable && !asset.tracks(withMediaType: .video).isEmpty
+            let sem = DispatchSemaphore(value: 0)
+            var playable = false
+            Task {
+                let ok = (try? await asset.load(.isPlayable)) ?? false
+                let hasVideo = ((try? await asset.load(.tracks)) ?? []).contains { $0.mediaType == .video }
+                playable = ok && hasVideo
+                sem.signal()
+            }
+            sem.wait()
             agg.sync {
                 agg.videoTotal += 1
                 if playable { agg.videoNativePlayable += 1 } else { agg.videoNativeUnplayable += 1; agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file)") }
