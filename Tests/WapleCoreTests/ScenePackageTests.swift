@@ -4,10 +4,6 @@ import XCTest
 final class ScenePackageTests: XCTestCase {
     /// 포맷대로 합성 .pkg 바이트 생성.
     static func makePkg(_ files: [(String, Data)], version: String = "PKGV0001") -> Data {
-        func i32(_ v: Int) -> [UInt8] {
-            let u = UInt32(truncatingIfNeeded: v)
-            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-        }
         let ver = Array(version.utf8)
         var out = i32(ver.count) + ver + i32(files.count)
         var offset = 0
@@ -49,10 +45,6 @@ final class ScenePackageTests: XCTestCase {
 
     /// 헤더는 정상 파싱되지만 엔트리 size 가 blob 끝을 넘어가면 거부돼야 한다(entry-bounds loop).
     func testRejectsEntryExtendingPastBlob() {
-        func i32(_ v: Int) -> [UInt8] {
-            let u = UInt32(truncatingIfNeeded: v)
-            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-        }
         let ver = Array("PKGV0001".utf8)
         let nm = Array("a.json".utf8)
         let body = Array("HI".utf8)  // 실제 2바이트

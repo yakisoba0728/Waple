@@ -254,7 +254,13 @@ enum WebHardPauseJS {
           report(error);
         }
 
-        if (paused) { requestAudioState(entry, 'suspended', false); }
+        if (paused) {
+          // pause 중 생성된 running 컨텍스트는 pauseAudioContexts 를 거치지 않으므로
+          // 여기서 재개 대상으로 표시하지 않으면 해제 후에도 영구 suspended 로 남는다.
+          // (pageDesiredState 는 위에서 context.state 로 초기화되어 같은 값)
+          if (context.state === 'running') { entry.resumeAfterPause = true; }
+          requestAudioState(entry, 'suspended', false);
+        }
         return context;
       }
 

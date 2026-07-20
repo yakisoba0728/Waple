@@ -66,7 +66,9 @@ public enum GLSLTypeAdapter {
         case .some(.vec4): return 4
         case .some(.mat2), .some(.mat3), .some(.mat4), .some(.sampler2D): return 0
         case .none:
-            return (name == "int" || name == "bool") ? 1 : nil
+            // uint 도 int 와 동일한 스칼라(1) — nil 이면 uint 선언이 statement(:173)에서 선언으로
+            // 인식되지 않아 intVars 등록(:195)·min/max 모호성 캐스트가 누락된다.
+            return (name == "int" || name == "uint" || name == "bool") ? 1 : nil
         }
     }
 

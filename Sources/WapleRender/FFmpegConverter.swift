@@ -121,7 +121,15 @@ public enum FFmpegConverter {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attrs[.size] as? NSNumber,
               size.int64Value > 0 else { return false }
-        return AVURLAsset(url: url).isPlayable
+        // load(.isPlayable) 비동기 — 호출부(convert/run)가 백그라운드 큐라 세마포어 동기 대기로 충분.
+        let sem = DispatchSemaphore(value: 0)
+        var playable = false
+        Task {
+            playable = (try? await AVURLAsset(url: url).load(.isPlayable)) ?? false
+            sem.signal()
+        }
+        sem.wait()
+        return playable
     }
 
     /// 실제 변환(백그라운드). videotoolbox 실패 시 libx264 재시도. 부분 파일이 캐시로 남지 않도록

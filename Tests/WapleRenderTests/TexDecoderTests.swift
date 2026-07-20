@@ -8,10 +8,6 @@ import WapleCore
 
 final class TexDecoderTests: XCTestCase {
     private func texHeader(format: Int, w: Int, h: Int) -> [UInt8] {
-        func i32(_ v: Int) -> [UInt8] {
-            let u = UInt32(truncatingIfNeeded: v)
-            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-        }
         return Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
             + i32(format) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)
             + Array("TEXB0001".utf8) + [0]
@@ -106,10 +102,6 @@ final class TexDecoderTests: XCTestCase {
     /// format=9 R8(단일채널) → 그레이스케일 RGBA(v,v,v,255). 실측: 3598808038 opacity 비네트 마스크.
     /// 종전(fmt9→BC3 오분류)엔 전백(全白)으로 디코드돼 마스크가 무효화→전화면 흑화면이었다.
     func testDecodesR8AsGrayscale() throws {
-        func i32(_ v: Int) -> [UInt8] {
-            let u = UInt32(truncatingIfNeeded: v)
-            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-        }
         let r8: [UInt8] = (0..<64).map { UInt8($0 * 4) }   // 8x8 램프(0,4,8,…,252)
         var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
         b += i32(9) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)
@@ -299,7 +291,6 @@ final class TexDecoderTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(n, 0)
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
         b += i32(4) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)   // format=4=DXT5
         b += Array("TEXB0003".utf8) + [0] + i32(1) + i32(-1) + i32(1) + i32(4) + i32(4) + i32(1) + i32(16) + i32(n)

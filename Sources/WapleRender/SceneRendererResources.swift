@@ -352,6 +352,8 @@ extension SceneRenderer {
         // F265 예외: shake 의 aux[0](slot1=flow map, WE 기본 util/noflow)은 흰색(=1.0)이면
         // flowMask=(1-0.498)*2≈1 로 상시 대각 드리프트가 생겨 "기본 flow=noflow → flowMask≈0"(F265 evidence)
         // 와 모순 — 명시 바인드가 없을 때만 중립 회색(byte 127≈0.498 → flowMask≈0)으로 대체.
+        // F412 예외: waterripple 의 aux[0](slot1=노멀맵)도 흰색이면 언팩(rgb*2-1) 후 n=(1,1,1) 이라
+        // 마스크 유효 영역 전체가 상시 대각 변위(정적 왜곡) — 중립 노멀 (128,128,255)(언팩 (0,0,1)=무왜곡)으로 대체.
         var aux: [MTLTexture] = []
         // slot0=framebuffer 라 aux 는 index i+1 로 바인드 — 126개 캡(Metal 텍스처 인자테이블 128 상한).
         let auxNames = eff.textureNames.count > 1 ? Array(eff.textureNames[1...].prefix(126)) : []
@@ -359,12 +361,18 @@ extension SceneRenderer {
             if eff.name == "shake", i == 0, name == nil, let neutral = makeTexture(Data([127, 127, 0, 255]), 1, 1, device) {
                 aux.append(neutral); continue
             }
+            if eff.name == "waterripple", i == 0, name == nil, let neutral = makeTexture(Data([128, 128, 255, 255]), 1, 1, device) {
+                aux.append(neutral); continue
+            }
             guard let t = resolveTexture(name, package: package, device: device) else { continue }
             aux.append(t)
         }
         while aux.count < 2 {
             let isShakeFlowPad = eff.name == "shake" && aux.isEmpty
-            guard let tex = makeTexture(isShakeFlowPad ? Data([127, 127, 0, 255]) : Data([255, 255, 255, 255]), 1, 1, device) else { break }
+            let isWaterrippleNormalPad = eff.name == "waterripple" && aux.isEmpty  // F412
+            guard let tex = makeTexture(
+                isShakeFlowPad ? Data([127, 127, 0, 255]) : isWaterrippleNormalPad ? Data([128, 128, 255, 255]) : Data([255, 255, 255, 255]),
+                1, 1, device) else { break }
             aux.append(tex)
         }
         return EffectGPU(pipeline: pipe, bind: .handPort(params: params, aux: aux, audio: audio))
@@ -675,7 +683,8 @@ extension SceneRenderer {
     }
 
     /// 효과 보조 텍스처 슬롯 이름 → MTLTexture. 이름 nil/디코드 실패 → 흰색 1x1 폴백
-    /// (마스크는 흰색=효과 전체 적용, 노멀맵은 흰색=무왜곡에 가까움).
+    /// (마스크는 흰색=효과 전체 적용으로 정상. 노멀맵은 흰색≠중립 — 언팩 시 (1,1,1)=상시 대각
+    /// 변위라 waterripple 은 buildHandPortEffect 에서 중립 (128,128,255)로 별도 처리, F412).
     /// "effects/X"/"masks/X" 같은 상대 이름은 "materials/<name>.tex" 로 해석, raw 이름도 시도.
     func resolveTexture(_ name: String?, package: ScenePackage, device: MTLDevice) -> MTLTexture? {
         resolveTextureWithFrames(name, package: package, device: device)?.texture

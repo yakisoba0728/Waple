@@ -4,10 +4,6 @@ import XCTest
 final class TexImageTests: XCTestCase {
     /// TEX 헤더 + 임의 페이로드로 합성 .tex 생성.
     static func makeTex(format: Int, w: Int, h: Int, payload: [UInt8]) -> Data {
-        func i32(_ v: Int) -> [UInt8] {
-            let u = UInt32(truncatingIfNeeded: v)
-            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-        }
         var b: [UInt8] = []
         b += Array("TEXV0005".utf8) + [0]
         b += Array("TEXI0001".utf8) + [0]
@@ -38,7 +34,6 @@ final class TexImageTests: XCTestCase {
     }
     /// format=9 는 R8(단일채널 8bit) — 실측 근거 3598808038 opacity 마스크. mip 있는 fmt9 는 .r8.
     func testParsesFormat9AsR8() {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
         let r8: [UInt8] = (0..<64).map { UInt8($0 * 4) }               // 8x8 그레이스케일 램프
         var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
         b += i32(9)+i32(0)+i32(8)+i32(8)+i32(8)+i32(8)                 // format=9
@@ -56,7 +51,6 @@ final class TexImageTests: XCTestCase {
     /// TEXB0004, imageFormat=-1, isLZ4=1, fmt0 — 압축 바이트가 512B 스캔 윈도우에서 JPEG 시그니처 흉내).
     /// 컨테이너 파스 성공 + imageFormat=-1 → format 기반(.lz4RGBA)이 정답.
     func testLZ4PayloadWithFakeJPEGSignatureIsNotEmbeddedJPEG() {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
         let lz4ish: [UInt8] = [0xFF, 0xD8, 0xFF, 0xE0] + Array(repeating: 0x11, count: 16)  // 압축 스트림 흉내
         var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
         b += i32(0)+i32(0)+i32(8)+i32(8)+i32(8)+i32(8)                    // format=0
@@ -74,7 +68,6 @@ final class TexImageTests: XCTestCase {
     /// flags bit5(IsVideoTexture) 세트 + payload 가 raw mp4(ftyp). format 기반 디코드(.lz4RGBA)로
     /// 떨어지면 크기 불일치로 실패한다 — 플래그 직독으로 .video 라우팅이 정답.
     func testVideoFlagWithRawContainerRoutesToVideo() {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
         let mp4ish: [UInt8] = [0,0,0,0x20] + Array("ftypisom".utf8) + Array(repeating: 0, count: 8)
         var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
         b += i32(0)+i32(0x22)+i32(8)+i32(8)+i32(8)+i32(8)                 // format=0, flags=ClampUV|IsVideoTexture
@@ -87,7 +80,6 @@ final class TexImageTests: XCTestCase {
 
     /// flags@22(RePKG TexFlags): bit0 NoInterp, bit1 ClampUV, bit2 IsGif, bit5 IsVideoTexture.
     func testParsesFlags() {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
         // flags = 0x25 = bit0(NoInterp) | bit2(Gif) | bit5(Video)
         var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
         b += i32(0) + i32(0x25) + i32(4) + i32(4) + i32(4) + i32(4)
@@ -103,7 +95,6 @@ final class TexImageTests: XCTestCase {
     /// 다중 mip(TEXB0004, 실측 DJK_1.tex mip 9개 클래스): mip0 payload 는 EOF 가 아니라
     /// compressedSize 만큼 — 종전 EOF-스캔 휴리스틱은 이 클래스에서 nil(흰색 폴백)이었다.
     func testParsesMultiMipTEXB0004() {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         let mip0: [UInt8] = Array(repeating: 7, count: 24)
         let mip1: [UInt8] = Array(repeating: 9, count: 12)
         var b: [UInt8] = []
@@ -124,7 +115,6 @@ final class TexImageTests: XCTestCase {
     /// 조건 변형 단일(실측 link_f01/p_tex01 클래스, 코퍼스 sweep 확정 레이아웃):
     /// [imageCount][fmt=-1][v4=변형수 1] | [1][idx=1][0][json NUL] | mipCount | mip.
     func testParsesTEXB0004WithConditionJSONBeforeMipTable() {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         let payload: [UInt8] = Array(repeating: 0x44, count: 20)
         let condition = #"{"condition":{"condition":"3","name":"tuniccolor"}}"#
         var b: [UInt8] = []
@@ -145,7 +135,6 @@ final class TexImageTests: XCTestCase {
     /// 조건 변형 다중(실측 childlink_01.tex: v4=3, tuniccolor 1/2/3): 변형 블록 3개 연속 후 mipCount.
     /// 종전 프레이밍(블록 선두 [1] 을 mipCount 로 오독)은 다변형에서 붕괴 → unknown-fmt4 0/8 의 마지막 1페이지.
     func testParsesTEXB0004MultiVariantConditionChain() {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         let payload: [UInt8] = Array(repeating: 0x24, count: 2048)     // 64×32 BC3 = 2048B
         func cond(_ v: Int) -> [UInt8] { Array(#"{"condition":{"condition":"\#(v)","name":"tuniccolor"}}"#.utf8) }
         var b: [UInt8] = []
@@ -170,7 +159,6 @@ final class TexImageTests: XCTestCase {
     /// 다중 image = 아틀라스 페이지(RePKG ConvertToGif): 각 image 의 mip0 을 순차 수집.
     /// imageCount=2, 각 1 mip → mips.count==2, 페이지별 payloadRange 가 서로 다름.
     func testParsesMultiImagePages() {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
         let page0: [UInt8] = [10, 20, 30, 40]
         let page1: [UInt8] = [200, 150, 100, 50]
         var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
@@ -189,7 +177,6 @@ final class TexImageTests: XCTestCase {
     /// format=7 은 DXT1(BC1, 4bpp) — 태양계 스카이박스/태양/8k_earth 실측.
     func testParsesFormat7AsBC1() {
         let bc1 = ((8 + 3) / 4) * ((8 + 3) / 4) * 8
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         var b: [UInt8] = []
         b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
         b += i32(7) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)
@@ -213,7 +200,6 @@ final class TexImageTests: XCTestCase {
     /// BC3 .tex 합성: TEX 헤더 + "TEXB0003" + mipCount + 7 ints(decompressedSize 포함) + payload.
     /// 기본 format=4(정본 DXT5) — fmt9 는 R8(단일채널)이라 별도 테스트.
     private func makeBC3Tex(w: Int, h: Int, payload: [UInt8], format: Int = 4) -> Data {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u & 0xff), UInt8((u>>8)&0xff), UInt8((u>>16)&0xff), UInt8((u>>24)&0xff)] }
         let dxt5 = ((w + 3) / 4) * ((h + 3) / 4) * 16
         var b: [UInt8] = []
         b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
@@ -238,7 +224,6 @@ final class TexImageTests: XCTestCase {
 
     /// format=0 LZ4 RGBA(패딩): tex≠img.
     private func makeLZ4RGBATex(texW: Int, texH: Int, imgW: Int, imgH: Int, payload: [UInt8]) -> Data {
-        func i32(_ v: Int) -> [UInt8] { let u = UInt32(truncatingIfNeeded: v); return [UInt8(u&0xff),UInt8((u>>8)&0xff),UInt8((u>>16)&0xff),UInt8((u>>24)&0xff)] }
         var b: [UInt8] = Array("TEXV0005".utf8)+[0]+Array("TEXI0001".utf8)+[0]
         b += i32(0)+i32(0)+i32(texW)+i32(texH)+i32(imgW)+i32(imgH)   // format=0
         b += Array("TEXB0003".utf8)+[0]+i32(1)+i32(-1)+i32(1)+i32(texW)+i32(texH)+i32(1)+i32(texW*texH*4)+i32(payload.count)
@@ -256,14 +241,6 @@ final class TexImageTests: XCTestCase {
     }
 
     func testRejectsNonPositiveTEXSFrameTime() {
-        func i32(_ v: Int) -> [UInt8] {
-            let u = UInt32(truncatingIfNeeded: v)
-            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-        }
-        func f32(_ v: Float) -> [UInt8] {
-            let u = v.bitPattern
-            return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-        }
         var texs: [UInt8] = Array("TEXS0003".utf8) + [0]
         texs += i32(1) + i32(4) + i32(4)
         texs += i32(0) + f32(0) + f32(0) + f32(0) + f32(4) + f32(0) + f32(0) + f32(4)

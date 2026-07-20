@@ -154,7 +154,7 @@ public enum WallpaperCompatibilityAnalyzer {
         let root = rootURL.standardizedFileURL
         let projectContainer = projectContainerURL(for: root)
         let folders = try projectFolders(in: projectContainer)
-        let knownProjectIDs = Set(folders.map(\.lastPathComponent))
+        let knownProjectIDs = knownProjectIDs(in: folders)
         let reports = folders.map { analyzeProject(folderURL: $0, knownProjectIDs: knownProjectIDs) }
             .sorted { $0.id < $1.id }
 
@@ -193,6 +193,22 @@ public enum WallpaperCompatibilityAnalyzer {
                 && FileManager.default.fileExists(atPath: url.appendingPathComponent("project.json").path)
         }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    /// F411: preset dependency 매칭 기준을 런타임 PresetResolver(엔트리 id 매칭 + 형제 폴터명 매칭)와
+    /// 동등 수준으로 — 종전엔 폴터명(lastPathComponent)만 모았는데, F194 이후 project id 는
+    /// `workshopid ?? 폴터명` 이라 폴터명 ≠ workshopid 인 대상을 가리키는 preset 은 런타임엔 해소되는데
+    /// analyzer 만 거짓 missingPresetDependency 를 냈다. id ∪ 폴터명 합집합으로 구성한다(id 규칙의
+    /// 단일 소스는 ProjectJSONParser — F230 원칙상 여기서 workshopid 추출을 복제하지 않는다).
+    private static func knownProjectIDs(in folders: [URL]) -> Set<String> {
+        var ids = Set<String>()
+        for folder in folders {
+            ids.insert(folder.lastPathComponent)
+            if let raw = rawProjectJSON(folderURL: folder) {
+                ids.insert(ProjectJSONParser.parse(json: raw, folderURL: folder).id)
+            }
+        }
+        return ids
     }
 
     private static func analyzeProject(folderURL: URL, knownProjectIDs: Set<String>) -> WallpaperCompatibilityProjectReport {

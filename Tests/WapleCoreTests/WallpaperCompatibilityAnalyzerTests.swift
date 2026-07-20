@@ -108,6 +108,38 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
         XCTAssertEqual(report.summary.blockedProjects, 2)
     }
 
+    /// F411: 대상 프로젝트의 폴터명 ≠ workshopid 일 때(F194: id = workshopid 우선) dependency 가
+    /// workshopid 를 가리키는 preset 은 런타임 PresetResolver 가 정상 해소하는데, 종전 analyzer 는
+    /// 폴터명 집합과만 비교해 거짓 missingPresetDependency 를 냈다. id ∪ 폴터명 합집합 매칭 회귀 가드.
+    func testPresetDependencyMatchesParsedIdWhenFolderNameDiffers() throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeProject(
+            id: "wrapper-folder",
+            in: root,
+            json: #"{"type":"web","file":"index.html","workshopid":12345}"#,
+            files: ["index.html": ""]
+        )
+        try writeProject(
+            id: "preset-by-workshopid",
+            in: root,
+            json: #"{"type":"preset","dependency":"12345"}"#,
+            files: [:]
+        )
+        try writeProject(
+            id: "preset-by-folder",
+            in: root,
+            json: #"{"type":"preset","dependency":"wrapper-folder"}"#,
+            files: [:]
+        )
+
+        let report = try WallpaperCompatibilityAnalyzer.scan(rootURL: root)
+
+        XCTAssertFalse(report.containsIssue(.missingPresetDependency, projectID: "preset-by-workshopid"))
+        XCTAssertFalse(report.containsIssue(.missingPresetDependency, projectID: "preset-by-folder"))
+    }
+
     func testReportsUnsafeMainFilePathSeparatelyFromMissingFile() throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

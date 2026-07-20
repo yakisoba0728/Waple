@@ -166,4 +166,11 @@ final class GLSLTypeAdapterTests: XCTestCase {
                                          env: env(["flag": 1, "big": 4, "small": 2]))
         XCTAssertEqual(out2, "vec2 r = flag ? (big).xy : small;")
     }
+
+    // uint 지역은 int 와 동일하게 스칼라(1) 선언으로 인식 + intVars 표시(:195)되어 min/max(int,float)
+    // 모호성 캐스트 대상이 된다. typeSize("uint") == nil 이면 선언 인식 자체가 안 돼 k 가 미등록.
+    func testUintDeclarationRegistersIntVar() {
+        let out = GLSLTypeAdapter.adapt(body: "uint k = uint(3); float r = max(k, 0.5);", env: env())
+        XCTAssertEqual(out, "uint k = uint(3); float r = max(float(k), 0.5);")
+    }
 }

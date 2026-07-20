@@ -126,6 +126,8 @@ enum EffectShaders {
             constexpr sampler s(filter::linear, address::repeat);
             constexpr sampler sc(filter::linear, address::clamp_to_edge);
             // P[0]=time, P[1]=strength, P[2]=scale, P[3]=scrollSpeed.
+            // F412: 노멀맵 미바인드 폴터는 중립 (128,128,255)(SceneRendererResources) — 흰색이면
+            // 언팩 후 n=(1,1,1) 이라 마스크 유효 영역이 상시 대각 변위.
             float2 nUV = in.uv * P[2] + float2(P[0] * P[3], P[0] * P[3] * 0.5);
             float3 n = normalMap.sample(s, nUV).rgb * 2.0 - 1.0;
             float maskV = mask.sample(sc, in.uv).r;

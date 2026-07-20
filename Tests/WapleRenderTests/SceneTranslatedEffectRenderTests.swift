@@ -9,20 +9,6 @@ import Metal
 /// 번역/컴파일/바인딩이 깨지면 → 핸드포팅 없음 → 스킵 → 레이어 풀밝기(luma≈1) → 실패.
 /// translated 경로가 실제로 실행돼야만 dim(luma≈0.4)이 나온다.
 final class SceneTranslatedEffectRenderTests: XCTestCase {
-    private func avgLuma(_ url: URL) -> Double {
-        guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)) else { return -1 }
-        var sum = 0.0; var n = 0
-        let stepX = max(1, rep.pixelsWide / 40), stepY = max(1, rep.pixelsHigh / 40)
-        for y in stride(from: 0, to: rep.pixelsHigh, by: stepY) {
-            for x in stride(from: 0, to: rep.pixelsWide, by: stepX) {
-                if let c = rep.colorAt(x: x, y: y) {
-                    sum += (c.redComponent + c.greenComponent + c.blueComponent) / 3.0; n += 1
-                }
-            }
-        }
-        return n > 0 ? sum / Double(n) : -1
-    }
-
     private func renderLuma(scene: String, extraFiles: [(String, Data)], tag: String) throws -> Double {
         var files: [(String, Data)] = [
             ("scene.json", scene.data(using: .utf8)!),

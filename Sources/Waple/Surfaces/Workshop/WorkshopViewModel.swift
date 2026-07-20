@@ -4,6 +4,8 @@ import WapleLibrary
 // Steam 워크샵 검색·페이징·다운로드 상태머신. 순수 로직(WorkshopAPI/SteamCmdDownloader)을 얇게 배선한다.
 // @MainActor — async 클라이언트/다운로더 콜백이 오프메인에서 재개되므로 @Published 변경을 전부 메인으로 모은다.
 // keyProvider — Keychain(SteamAPIKeyStore) 직독을 주입으로 바꿔 네트워크리스 테스트를 가능하게 한다.
+// downloader·steamcmdAvailable — SteamCmdDownloader 정적 호출/실행파일 탐지를 주입으로 바꿔
+// 다운로드 상태머신을 steamcmd 없이 테스트한다(기본값=현행 정적 호출).
 @MainActor
 final class WorkshopViewModel: ObservableObject {
     @Published var searchText = ""
@@ -18,12 +20,13 @@ final class WorkshopViewModel: ObservableObject {
     @Published var usernameInput: String
     @Published private(set) var downloads: [String: DownloadUIState] = [:]
 
-    let steamcmdAvailable = SteamCmdDownloader.isAvailable
+    let steamcmdAvailable: Bool
     let pageSize = 30
 
     private let client: WorkshopClient
     private let library: LibraryViewModel
     private let keyProvider: () -> String?
+    private let downloader: Downloader
     private var page = 1
     private var attemptedInitialLoad = false
     // 요청 세대. 정렬 급변경마다 새 search 가 뜨고 응답이 경합한다 — 시작 시 증가·캡처하고,
@@ -38,11 +41,23 @@ final class WorkshopViewModel: ObservableObject {
         var entryId: String?   // 임포트된 라이브러리 엔트리 id(적용용)
     }
 
+    /// 다운로드 실행 심 — 시그니처는 SteamCmdDownloader.download 와 같다(테스트에서 콜백 캡처용).
+    typealias Downloader = (_ itemId: String, _ username: String,
+                            _ progress: @escaping (SteamCmdDownloader.Progress) -> Void,
+                            _ completion: @escaping (URL?) -> Void) -> Void
+
     init(client: WorkshopClient = .live(), library: LibraryViewModel,
-         keyProvider: @escaping () -> String? = { SteamAPIKeyStore.load() }) {
+         keyProvider: @escaping () -> String? = { SteamAPIKeyStore.load() },
+         steamcmdAvailable: Bool = SteamCmdDownloader.isAvailable,
+         downloader: @escaping Downloader = { itemId, username, progress, completion in
+             SteamCmdDownloader.download(itemId: itemId, username: username,
+                                         progress: progress, completion: completion)
+         }) {
         self.client = client
         self.library = library
         self.keyProvider = keyProvider
+        self.steamcmdAvailable = steamcmdAvailable
+        self.downloader = downloader
         self.hasAPIKey = keyProvider() != nil
         self.usernameInput = SteamCmdDownloader.username
     }
@@ -80,7 +95,6 @@ final class WorkshopViewModel: ObservableObject {
         guard let key = keyProvider() else { hasAPIKey = false; return }
         searchEpoch &+= 1
         let epoch = searchEpoch
-        attemptedInitialLoad = true
         isSearching = true
         statusMessage = nil
         page = 1
@@ -94,7 +108,11 @@ final class WorkshopViewModel: ObservableObject {
             results = fetched
             canLoadMore = fetched.count == pageSize
             if fetched.isEmpty { statusMessage = "결과가 없습니다." }
+            // 성공 완료 시점에만 시도로 센다 — 실패/취소된 첫 로드는 탭 재진입 시 자동 재시도돼야 한다.
+            attemptedInitialLoad = true
         } catch {
+            // 탭 이탈 등으로 .task 가 취소된 경우 — 실패가 아니므로 결과/메시지를 건드리지 않는다.
+            if isCancellation(error) { return }
             guard epoch == searchEpoch else { return }
             results = []
             statusMessage = (error as? LocalizedError)?.errorDescription ?? "검색 실패: \(error.localizedDescription)"
@@ -119,6 +137,7 @@ final class WorkshopViewModel: ObservableObject {
             results.append(contentsOf: batch.filter { !known.contains($0.id) })
             canLoadMore = batch.count == pageSize
         } catch {
+            if isCancellation(error) { return }   // 취소는 실패가 아니다 — page/results/메시지 미변경
             guard epoch == searchEpoch else { return }
             statusMessage = (error as? LocalizedError)?.errorDescription ?? "더 불러오기 실패: \(error.localizedDescription)"
         }
@@ -136,11 +155,9 @@ final class WorkshopViewModel: ObservableObject {
         }
         SteamCmdDownloader.username = username
         downloads[item.id] = DownloadUIState(phase: .downloading(nil), entryId: nil)
-        SteamCmdDownloader.download(
-            itemId: item.id, username: username,
-            progress: { [weak self] p in Task { @MainActor in self?.applyProgress(item.id, p) } },
-            completion: { [weak self] url in Task { @MainActor in self?.finishDownload(item, url) } }
-        )
+        downloader(item.id, username,
+                   { [weak self] p in Task { @MainActor in self?.applyProgress(item.id, p) } },
+                   { [weak self] url in Task { @MainActor in self?.finishDownload(item, url) } })
     }
 
     private func applyProgress(_ id: String, _ p: SteamCmdDownloader.Progress) {
@@ -174,4 +191,10 @@ final class WorkshopViewModel: ObservableObject {
               let entry = library.entries.first(where: { $0.id == entryId }) else { return }
         _ = library.apply(entry)
     }
+}
+
+/// .task 취소(탭 이탈 등) 식별 — URLSession 은 경로/OS 에 따라 CancellationError 또는
+/// URLError.cancelled 로 throw 하므로 둘 다 취소로 본다.
+private func isCancellation(_ error: Error) -> Bool {
+    error is CancellationError || (error as? URLError)?.code == .cancelled
 }

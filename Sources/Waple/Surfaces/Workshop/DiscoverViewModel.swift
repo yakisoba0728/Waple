@@ -47,14 +47,16 @@ final class DiscoverViewModel: ObservableObject {
         let key = keyProvider()
         guard key != nil else { return }              // 키 없으면 로드 안 함(뷰가 이미 게이트)
         guard !attemptedLoad || key != loadedKey else { return }
-        attemptedLoad = true
-        loadedKey = key
         rows = Self.rowSorts.map { Row(sort: $0) }    // 재로드 시 이전 결과 비우고 .loading 으로
         await withTaskGroup(of: Void.self) { group in
             for index in rows.indices {
                 group.addTask { @MainActor in await self.loadRow(at: index) }
             }
         }
+        // 탭 이탈 취소로 그룹이 조기 종료됐으면 시도로 세지 않는다 — 재진입 시 다시 로드돼야 한다.
+        guard !Task.isCancelled else { return }
+        attemptedLoad = true
+        loadedKey = key
     }
 
     /// 실패 행 재시도.
@@ -74,8 +76,16 @@ final class DiscoverViewModel: ObservableObject {
                                                 searchText: "", sort: rows[index].sort)
             rows[index].state = .loaded(items)
         } catch {
+            // 탭 이탈 등으로 .task 가 취소된 경우 — 실패가 아니므로 행을 .failed 로 굳히지 않는다.
+            if isCancellation(error) { return }
             rows[index].state = .failed((error as? LocalizedError)?.errorDescription
                                         ?? error.localizedDescription)
         }
     }
+}
+
+/// .task 취소(탭 이탈 등) 식별 — URLSession 은 경로/OS 에 따라 CancellationError 또는
+/// URLError.cancelled 로 throw 하므로 둘 다 취소로 본다.
+private func isCancellation(_ error: Error) -> Bool {
+    error is CancellationError || (error as? URLError)?.code == .cancelled
 }

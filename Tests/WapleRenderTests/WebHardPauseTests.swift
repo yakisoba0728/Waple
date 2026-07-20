@@ -305,7 +305,7 @@ final class WebHardPauseTests: XCTestCase {
         XCTAssertLessThan(times[1] - times[0], 330)
     }
 
-    func testOnlyRunningAudioContextsResumeAndPausedCreationStaysSuspended() throws {
+    func testOnlyRunningAudioContextsResumeAndPausedCreationResumesOnRelease() throws {
         let web = makeControllerWebView(prelude: fakeAudioPrelude)
         XCTAssertEqual(
             pumpEvalJS(web, "window.AudioContext === window.webkitAudioContext") as? Bool,
@@ -353,21 +353,45 @@ final class WebHardPauseTests: XCTestCase {
         }, "resume() during hard pause must be followed immediately by suspend()")
 
         _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        // runningContext 와 (pause 중 생성·페이지가 resume 한) createdWhilePaused 둘 다 재개 대상.
         XCTAssertTrue(waitUntil {
-            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 2
         })
         _ = pumpEvalJS(web, "window.__resolveAudio();")
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
         XCTAssertTrue(waitUntil {
-            pumpEvalJS(web, "window.__runningContext.state") as? String == "running"
+            pumpEvalJS(web, "window.__runningContext.state") as? String == "running" &&
+                pumpEvalJS(web, "window.__createdWhilePaused.state") as? String == "running"
         })
         XCTAssertEqual(
             pumpEvalJS(web, "window.__pageSuspendedContext.state") as? String,
             "suspended"
         )
-        XCTAssertEqual(
-            pumpEvalJS(web, "window.__createdWhilePaused.state") as? String,
-            "suspended"
-        )
+    }
+
+    func testAudioContextCreatedWhilePausedResumesOnRelease() throws {
+        let web = makeControllerWebView(prelude: fakeAudioPrelude)
+        _ = pumpEvalJS(web, """
+        window.__audioInitialState = 'running';
+        window.__wapleHardPauseController.setPaused(true);
+        window.__createdWhilePaused = new AudioContext();
+        """)
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        })
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__createdWhilePaused.state") as? String == "suspended"
+        }, "precondition: creation while paused must be suspended immediately")
+
+        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
+        XCTAssertTrue(waitUntil {
+            (pumpEvalJS(web, "window.__audioPending.length") as? Int ?? 0) == 1
+        }, "release must enqueue a resume for the context created while paused")
+        _ = pumpEvalJS(web, "window.__resolveAudio();")
+        XCTAssertTrue(waitUntil {
+            pumpEvalJS(web, "window.__createdWhilePaused.state") as? String == "running"
+        }, "context created while paused must not stay suspended forever")
     }
 
     func testLateAudioPromisesCannotReverseLatestPauseState() throws {

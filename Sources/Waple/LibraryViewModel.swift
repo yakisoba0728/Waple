@@ -146,18 +146,23 @@ final class LibraryViewModel: ObservableObject {
         panelVisible = true
     }
 
-    /// 적용 중인(모니터 할당 없이 전역으로만 적용된) 배경이 라이브러리에서 제거되면, AppDelegate 의
+    /// 적용 중인(전역 선택된) 배경이 라이브러리에서 제거되면, AppDelegate 의
     /// 전역 선택(currentFolderURL/currentProjectId) 도 함께 지우도록 알린다(F070) — 안 하면 스테일한
     /// currentFolderURL 이 남아, 이후 화면 변경·할당 변경 재적용(applyCurrentSelection)이 라이브러리
     /// 에서 이미 사라진 배경을 전역으로 되살린다(제거는 파일을 보존하므로 폴더 자체는 여전히 유효해
     /// apply 가 조용히 성공해버린다).
+    /// 모니터 할당이 함께 있어도 발화한다 — 그 경우에도 재적용(onAssignmentsChanged) 전에
+    /// 전역 선택이 비워져야 부활을 막을 수 있다.
     var onGlobalSelectionRemoved: (() -> Void)?
 
     /// 라이브러리에서 제거(파일 보존) + 전 스토어 orphan 정리. 적용 중 배경은 계속 재생된다
     /// (렌더러는 폴더를 직접 들고 있음) — Now Playing 표시는 '적용된 배경 없음'으로 떨어진다.
     func remove(_ entry: LibraryEntry) {
         let hadAssignment = monitors.all.values.contains(entry.id)
-        let wasGlobalSelection = selectedId == entry.id && !hadAssignment   // F070
+        // F070: 전역 선택이었는지는 할당과 무관하게 판정한다 — 할당이 병존하면 onAssignmentsChanged
+        // 경유 applyCurrentSelection 이 스테일 currentFolderURL 을 재적용해 제거된 배경을 되살리므로,
+        // 그 전에 전역 선택을 비우는 통지(onGlobalSelectionRemoved)가 반드시 필요하다.
+        let wasGlobalSelection = selectedId == entry.id
         // F069: 재생목록에 없던 항목을 제거할 때도 무조건 onPlaylistChanged 를 호출하면 자동전환
         // 카운트다운이 불필요하게 리셋된다 — 제거 전에 실제 포함 여부를 확인해 두었다가 가드한다.
         let wasInPlaylist = playlist.ids.contains(entry.id)
@@ -170,9 +175,15 @@ final class LibraryViewModel: ObservableObject {
         if selectedId == entry.id { selectedId = nil }
         if focusedId == entry.id { focusedId = nil }
         if wasInPlaylist { onPlaylistChanged?() }
-        if hadAssignment { onAssignmentsChanged?() }
+        // F070: 전역 선택 정리 통지는 재적용 트리거(onAssignmentsChanged → applyCurrentSelection)보다
+        // 먼저 본다 — 순서가 뒤집히면 스테일 currentFolderURL 의 재적용이 먼저 일어나 부활한다.
         if wasGlobalSelection { onGlobalSelectionRemoved?() }
+        if hadAssignment { onAssignmentsChanged?() }
     }
+
+    /// 임포트 무거운 I/O(zip 해제·동영상 복사/프리뷰 디코드) 전용 직렬 큐(A2) — 메인 스레드 정지 방지.
+    /// 직렬로 두어 종전(메인 직렬)과 같은 순차 실행을 유지한다(동명 관리 디렉터리 유일화 판정 경합 방지).
+    private let importQueue = DispatchQueue(label: "waple.library.import", qos: .userInitiated)
 
     func importParent(_ url: URL) {
         let imported = store.importParent(url)
@@ -182,12 +193,21 @@ final class LibraryViewModel: ObservableObject {
         }
     }
 
-    /// zip 가져오기(작업 4) — 해제 후 담긴 배경들을 관리 위치로 옮겨 가져온다.
+    /// zip 가져오기(작업 4) — 해제(ditto, 무거움)는 백그라운드 큐에서, 스토어 등록
+    /// (importExtractedZip → entries 갱신)은 메인 홉에서 한다(스토어 변경 메인 한정 규약 유지).
     func importZip(_ url: URL) {
-        let imported = store.importZip(url)
-        entries = store.entries
-        if imported.isEmpty {
-            onError?("zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요.")
+        let store = self.store
+        importQueue.async { [weak self] in
+            guard let self else { return }
+            let temp = store.extractZipToTemp(url)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let imported = temp.map { store.importExtractedZip($0) } ?? []
+                self.entries = store.entries
+                if imported.isEmpty {
+                    self.onError?("zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요.")
+                }
+            }
         }
     }
 
@@ -200,14 +220,26 @@ final class LibraryViewModel: ObservableObject {
         else { importParent(url) }
     }
 
-    /// 원시 mp4/mov 가져오기(작업 5) — 최소 project.json 배경으로 감싸 가져온다.
+    /// 동영상 준비(복사+프리뷰 생성 — 무거운 I/O) 클로저. 백그라운드 큐에서 호출된다.
+    /// 테스트는 스텁을 주입해 실 복사/디코드·실 관리 디렉터리 쓰기를 생략한다.
+    var videoPrepare: (URL) -> URL? = { VideoImport.prepare(from: $0) }
+
+    /// 원시 mp4/mov 가져오기(작업 5) — prepare(복사+프리뷰 디코드, 무거움)는 백그라운드 큐에서,
+    /// 스토어 등록(importFolder → entries 갱신)은 메인 홉에서 한다(스토어 변경 메인 한정 규약 유지).
     func importVideoFile(_ url: URL) {
-        guard let folder = VideoImport.prepare(from: url),
-              (try? store.importFolder(folder)) != nil else {
-            onError?("동영상 가져오기에 실패했습니다: \(url.lastPathComponent)")
-            return
+        let store = self.store
+        importQueue.async { [weak self] in
+            guard let self else { return }
+            let folder = self.videoPrepare(url)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard let folder, (try? store.importFolder(folder)) != nil else {
+                    self.onError?("동영상 가져오기에 실패했습니다: \(url.lastPathComponent)")
+                    return
+                }
+                self.entries = store.entries
+            }
         }
-        entries = store.entries
     }
 
     /// 워크샵 다운로드 직후 평점 반영(0…1). 표시용 메타 — 실패 무해.

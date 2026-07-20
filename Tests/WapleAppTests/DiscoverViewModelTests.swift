@@ -120,4 +120,31 @@ final class DiscoverViewModelTests: XCTestCase {
         await vm.loadIfNeeded()
         XCTAssertEqual(recorder.urls.count, 4, "탭 재진입에 재요청하지 않는다")
     }
+
+    /// 탭 이탈로 .task 가 취소되면 행 로드가 CancellationError 로 끝난다 — 행을 .failed 로 굳히고
+    /// attemptedLoad 까지 세워 재진입 자동 재시도를 막던 회귀.
+    func testCancelledLoadLeavesRowsUnfailedAndRetriesOnReentry() async {
+        let blocking = FailSwitch()   // failing=true 동안 transport 를 붙잡아 둔다(취소 전까지 미완료)
+        let vm = DiscoverViewModel(client: WorkshopClient(transport: { _ in
+            if blocking.failing {
+                try await Task.sleep(nanoseconds: 10_000_000_000)   // 취소되면 즉시 CancellationError
+            }
+            return (self.itemsJSON(count: 1), 200)
+        }), keyProvider: { "KEY" })
+
+        let load = Task { await vm.loadIfNeeded() }
+        load.cancel()                            // 탭 이탈 — .task 취소와 동일
+        await load.value
+        for row in vm.rows {
+            guard case .loading = row.state else {
+                return XCTFail("취소된 행은 .failed 가 아니라 .loading 이어야 함: \(row.state)")
+            }
+        }
+
+        blocking.failing = false
+        await vm.loadIfNeeded()                  // 재진입 — 취소를 시도로 세지 않았으므로 다시 로드
+        for row in vm.rows {
+            guard case .loaded = row.state else { return XCTFail("재진입 후 로드돼야 함: \(row.state)") }
+        }
+    }
 }

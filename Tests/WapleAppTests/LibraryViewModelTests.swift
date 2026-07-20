@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import Waple
 import WapleCore
@@ -234,5 +235,72 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertNil(vm.assignedEntry(forScreen: "display-none"))
         vm.clearAssignment(forScreen: "display-7")
         XCTAssertNil(vm.assignedEntry(forScreen: "display-7"))
+    }
+
+    // MARK: - 비동기 임포트(A2)
+
+    /// A2: zip 임포트는 해제(ditto, 무거움)를 백그라운드 큐에서 돌리고, 완료 시 메인에서 entries 를
+    /// 갱신한다(종전엔 routeImport 호출 스레드=메인에서 ditto 가 끝날 때까지 UI 정지).
+    func testImportZipCompletesAsynchronouslyWithEntriesUpdated() throws {
+        let dir = tempDir()
+        let vm = makeVM(dir: dir)
+        // 픽스처: wrapper/111/project.json + 더미 mp4 를 담은 zip(ditto 생성 — LibraryStoreTests 관례).
+        let pkg = tempDir().appendingPathComponent("pkg", isDirectory: true)
+        let inner = pkg.appendingPathComponent("111", isDirectory: true)
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let json = #"{"type":"video","file":"wallpaper.mp4","preview":"preview.jpg","title":"zipwp"}"#
+        try Data(json.utf8).write(to: inner.appendingPathComponent("project.json"))
+        try Data("dummy".utf8).write(to: inner.appendingPathComponent("wallpaper.mp4"))
+        let zipURL = tempDir().appendingPathComponent("wp.zip")
+        let ditto = Process()
+        ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        ditto.arguments = ["-c", "-k", "--keepParent", pkg.path, zipURL.path]
+        try ditto.run(); ditto.waitUntilExit()
+        XCTAssertEqual(ditto.terminationStatus, 0, "픽스처 zip 생성")
+
+        let exp = expectation(description: "zip 임포트 완료(메인 홉)")
+        var cancellable: AnyCancellable?
+        cancellable = vm.$entries.dropFirst().sink { entries in
+            if !entries.isEmpty { exp.fulfill() }
+        }
+        vm.importZip(zipURL)
+        wait(for: [exp], timeout: 15)
+        withExtendedLifetime(cancellable) {}
+        XCTAssertEqual(vm.entries.map(\.id), ["111"])
+    }
+
+    /// A2: 동영상 임포트도 prepare(복사+프리뷰 디코드, 무거움)를 백그라운드 큐에서 돌리고, 완료 시
+    /// 메인에서 스토어 등록(importFolder) 후 entries 를 갱신한다. 준비 단계는 스텁 주입(실 디코드 생략).
+    func testImportVideoFileCompletesAsynchronouslyWithEntriesUpdated() throws {
+        let dir = tempDir()
+        let vm = makeVM(dir: dir)
+        let prepared = tempDir().appendingPathComponent("prepared", isDirectory: true)
+        try FileManager.default.createDirectory(at: prepared, withIntermediateDirectories: true)
+        let json: [String: Any] = ["type": "video", "file": "a.mp4", "title": "Stub"]
+        try JSONSerialization.data(withJSONObject: json).write(to: prepared.appendingPathComponent("project.json"))
+        vm.videoPrepare = { _ in prepared }
+
+        let exp = expectation(description: "동영상 임포트 완료(메인 홉)")
+        var cancellable: AnyCancellable?
+        cancellable = vm.$entries.dropFirst().sink { entries in
+            if !entries.isEmpty { exp.fulfill() }
+        }
+        vm.importVideoFile(URL(fileURLWithPath: "/tmp/source.mp4"))
+        wait(for: [exp], timeout: 10)
+        withExtendedLifetime(cancellable) {}
+        XCTAssertEqual(vm.entries.map(\.title), ["Stub"])
+    }
+
+    /// A2 실패 경로: 해제 불가 zip 도 메인 홉에서 onError 를 태운다(무응답 없이 오류 전달).
+    func testImportZipExtractionFailureReportsError() {
+        let dir = tempDir()
+        let vm = makeVM(dir: dir)
+        let exp = expectation(description: "오류 전달(메인 홉)")
+        var message: String?
+        vm.onError = { msg in message = msg; exp.fulfill() }
+        vm.importZip(URL(fileURLWithPath: "/tmp/waple-missing-\(UUID().uuidString).zip"))
+        wait(for: [exp], timeout: 10)
+        XCTAssertNotNil(message)
+        XCTAssertTrue(vm.entries.isEmpty)
     }
 }

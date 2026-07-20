@@ -133,13 +133,31 @@ public final class LibraryStore {
     @discardableResult
     public func importZip(_ zipURL: URL,
                           extract: (URL, URL) -> Bool = ZipImporter.dittoExtract) -> [LibraryEntry] {
+        guard let temp = extractZipToTemp(zipURL, extract: extract) else { return [] }
+        return importExtractedZip(temp)
+    }
+
+    /// zip 해제 단계(A2 — ditto waitUntilExit 블로킹 구간을 백그라운드 큐로 넘기기 위한 분리).
+    /// 스토어 상태(entries/index)를 전혀 건드리지 않으므로 백그라운드 호출이 안전하다.
+    /// 성공 시 해제된 임시 디렉터리(호출자가 importExtractedZip 에 넘겨 등록·정리), 실패 시 nil(정리됨).
+    public func extractZipToTemp(_ zipURL: URL,
+                                 extract: (URL, URL) -> Bool = ZipImporter.dittoExtract) -> URL? {
         let fm = FileManager.default
         let temp = fm.temporaryDirectory.appendingPathComponent("WapleZip-\(UUID().uuidString)", isDirectory: true)
         guard (try? fm.createDirectory(at: temp, withIntermediateDirectories: true)) != nil,
               extract(zipURL, temp) else {
             try? fm.removeItem(at: temp)
-            return []
+            return nil
         }
+        return temp
+    }
+
+    /// extractZipToTemp 가 해제해 둔 임시 디렉터리의 배경들을 관리 위치로 옮겨 가져온다.
+    /// 스토어 변경(importFolder → entries/save)을 포함하므로 스토어 규약대로 메인 스레드에서 호출.
+    /// temp 는 성공/실패 무관하게 항상 정리된다.
+    @discardableResult
+    public func importExtractedZip(_ temp: URL) -> [LibraryEntry] {
+        let fm = FileManager.default
         defer { try? fm.removeItem(at: temp) }   // 임시 해제 작업공간 정리
 
         let importedDir = baseDirectory.appendingPathComponent("imported", isDirectory: true)

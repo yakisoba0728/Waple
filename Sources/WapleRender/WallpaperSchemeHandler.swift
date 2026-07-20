@@ -32,7 +32,8 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         let requestURL = task.request.url
         let rangeHeader = task.request.value(forHTTPHeaderField: "Range")
         let root = self.root
-        // 파일 읽기는 메인 스레드를 막지 않도록 백그라운드에서(큰 비디오 등). 응답은 메인에서 stop 여부 확인 후.
+        // 파일 읽기는 메인 스레드를 막지 않도록 백그라운드에서(큰 비디오 등). 본문 응답도 이 큐에서
+        // stop 여부 확인 후 직접 전달(감사 H — didReceive 는 백그라운드 큐 호출 가능).
         ioQueue.async { [weak self] in
             guard let self else { return }
             if let url = requestURL,
@@ -122,13 +123,13 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         }
 
         let target = requestURL ?? URL(string: "waple-asset://wallpaper/")!
-        DispatchQueue.main.sync {
-            guard self.isTaskLive(id) else { return }
-            let response = HTTPURLResponse(
-                url: target, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers
-            )!
-            task.didReceive(response)
-        }
+        // 감사 H: main.sync 왕복이면 스트리밍 처리량이 메인 큐 응답성에 결합되므로 ioQueue 에서 직접
+        // 전달한다. isTaskLive 는 NSLock 보호이고, 이 함수는 태스크당 직렬로 진행돼 전달 순서는 유지된다.
+        guard isTaskLive(id) else { return }
+        let response = HTTPURLResponse(
+            url: target, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers
+        )!
+        task.didReceive(response)
         if body.lowerBound > 0 { try? handle.seek(toOffset: UInt64(body.lowerBound)) }
         var remaining = Int(body.upperBound - body.lowerBound)
         while remaining > 0, isTaskLive(id) {
@@ -137,10 +138,8 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
             }
             if data.isEmpty { break }
             remaining -= data.count
-            DispatchQueue.main.sync {
-                guard self.isTaskLive(id) else { return }
-                task.didReceive(data)
-            }
+            guard isTaskLive(id) else { break }
+            task.didReceive(data)
         }
         DispatchQueue.main.async {
             guard self.isTaskLive(id) else { return }

@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import AVFoundation
 import WebKit
 import WapleRender
 
@@ -48,4 +50,50 @@ func solidTex(_ r: UInt8, _ g: UInt8, _ b: UInt8, alpha: UInt8 = 255, w: Int = 8
     tex.append(Data(repeating: 0, count: 34))
     tex.append(png)
     return tex
+}
+
+/// 최소 유효 mp4 생성(AVAssetWriter, 4프레임 64×64 h264).
+func makeTinyMP4(at url: URL) throws {
+    try? FileManager.default.removeItem(at: url)
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+        AVVideoCodecKey: AVVideoCodecType.h264,
+        AVVideoWidthKey: 64,
+        AVVideoHeightKey: 64,
+    ])
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        kCVPixelBufferWidthKey as String: 64,
+        kCVPixelBufferHeightKey as String: 64,
+    ])
+    writer.add(input)
+    writer.startWriting()
+    writer.startSession(atSourceTime: .zero)
+    for i in 0..<4 {
+        while !input.isReadyForMoreMediaData {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        var buffer: CVPixelBuffer?
+        CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &buffer)
+        adaptor.append(buffer!, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: 10))
+    }
+    input.markAsFinished()
+    let sem = DispatchSemaphore(value: 0)
+    writer.finishWriting { sem.signal() }
+    sem.wait()
+}
+
+/// 캡처 PNG 의 평균 luma((r+g+b)/3 평균) — 최대 ~40×40 그리드 서브샘플. 실패 시 -1.
+func avgLuma(_ url: URL) -> Double {
+    guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)) else { return -1 }
+    var sum = 0.0; var n = 0
+    let stepX = max(1, rep.pixelsWide / 40), stepY = max(1, rep.pixelsHigh / 40)
+    for y in stride(from: 0, to: rep.pixelsHigh, by: stepY) {
+        for x in stride(from: 0, to: rep.pixelsWide, by: stepX) {
+            if let c = rep.colorAt(x: x, y: y) {
+                sum += (c.redComponent + c.greenComponent + c.blueComponent) / 3.0; n += 1
+            }
+        }
+    }
+    return n > 0 ? sum / Double(n) : -1
 }

@@ -147,6 +147,9 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
     private var paused = false
     /// 곡 간 대기(random gap) 중 일시정지되면 여기 다음 인덱스를 보관 → resume 이 재개(정지 중 재생 방지).
     private var pendingNext: Int?
+    /// F410: gap 콜백 stale 가드용 세대 — trigger/stop 마다 증가. 곡 종료로 예약된 asyncAfter 가 만기되기
+    /// 전 trigger/stop 으로 새 세대가 시작됐으면 캡처 세대와 불일치 → 폐기(트리거된 새 곡을 중간에 끊지 않음).
+    private var generation = 0
     /// F214: volume 프로퍼티 스크립트 엔진(sound.volumeScript 있을 때만 비-nil). tick(time:) 이 매 프레임
     /// update(authorVolume) → 새 authorVolume 으로 재평가.
     private let volumeEngine: TextScriptEngine?
@@ -178,6 +181,7 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
 
     /// 트리거 재생: 정지/일시정지 플래그 리셋 후 처음부터 재시작(재트리거 = 재시작).
     func trigger() {
+        generation += 1   // F410: 진행 중이던 gap 콜백 무효화(새 곡 절단 방지)
         stopped = false; paused = false; pendingNext = nil
         player?.stop()
         _ = startFirstPlayable()
@@ -236,8 +240,10 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
         // 다음 곡 실패 시 이 플레이리스트만 종료(코퍼스는 참조 파일 전부 존재 — 실사용에선 발생 안 함).
         let gap = SceneAudioPlayer.gapSeconds(mode: mode, minTime: minTime, maxTime: maxTime)
         guard gap > 0 else { _ = play(at: next); return }
+        let gen = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + gap) { [weak self] in
-            guard let self, !self.stopped else { return }
+            // F410: 만기 전 trigger/stop 으로 세대가 바뀌었으면 stale — 폐기(새 곡 절단 방지).
+            guard let self, !self.stopped, self.generation == gen else { return }
             if self.paused { self.pendingNext = next }   // 정지 중이면 보류 → resume 이 재개
             else { _ = self.play(at: next) }
         }
@@ -249,7 +255,7 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
         if let next = pendingNext { pendingNext = nil; _ = play(at: next); return }  // gap 중 정지됐던 다음 곡
         if let p = player, !p.isPlaying { p.play() }
     }
-    func stop() { stopped = true; pendingNext = nil; player?.stop(); player = nil }
+    func stop() { generation += 1; stopped = true; pendingNext = nil; player?.stop(); player = nil }
     var isPlaying: Bool { player?.isPlaying ?? false }
     var hasPlayer: Bool { player != nil }
 }

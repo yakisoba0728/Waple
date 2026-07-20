@@ -1,4 +1,5 @@
 import XCTest
+import WebKit
 @testable import WapleRender
 
 final class WallpaperSchemeHandlerTests: XCTestCase {
@@ -104,5 +105,68 @@ final class WallpaperSchemeHandlerTests: XCTestCase {
         let link = realRoot.appendingPathComponent("leak")
         try fm.createSymbolicLink(at: link, withDestinationURL: outside)
         XCTAssertNil(WallpaperSchemeHandler.fileURL(forRequestPath: "/leak", root: realRoot))
+    }
+
+    // MARK: - 감사 H 회귀 (didReceive 를 io 큐에서 직접 — main.sync 왕복 결합 해소)
+
+    /// 응답 헤더와 데이터 청크가 메인 스레드가 아닌 백그라운드 io 큐에서 전달돼야 한다.
+    /// main.sync 왕복이면 메인 큐가 바쁠 때 스트리밍 처리량이 같이 멈춘다.
+    func testSchemeHandlerDeliversResponseAndChunksOffMainThread() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("wp-io-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let payload = Data((0..<200_000).map { UInt8($0 % 251) })  // 64KB 청크 여러 개가 되는 크기
+        try payload.write(to: root.appendingPathComponent("pv.webm"))
+
+        let handler = WallpaperSchemeHandler(rootURL: root)
+        let task = ThreadRecordingSchemeTask(url: URL(string: "waple-asset://wallpaper/pv.webm")!)
+        handler.webView(WKWebView(), start: task)
+        let deadline = Date(timeIntervalSinceNow: 3)
+        while !task.finished, Date() < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+
+        XCTAssertTrue(task.finished)
+        XCTAssertEqual((task.response as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(task.receivedData, payload)
+        XCTAssertGreaterThan(task.dataEvents, 1)  // 청크 스트리밍 경로를 실제로 탔는지
+        XCTAssertEqual(task.responseOnMainThread, false)
+        XCTAssertFalse(task.anyDataOnMainThread)
+    }
+}
+
+/// didReceive 호출 스레드를 기록하는 WKURLSchemeTask 목 — 감사 H 회귀 테스트 전용.
+private final class ThreadRecordingSchemeTask: NSObject, WKURLSchemeTask {
+    let request: URLRequest
+    private(set) var response: URLResponse?
+    private(set) var receivedData = Data()
+    private(set) var dataEvents = 0
+    private(set) var finished = false
+    private(set) var responseOnMainThread: Bool?
+    private(set) var anyDataOnMainThread = false
+
+    init(url: URL) {
+        self.request = URLRequest(url: url)
+        super.init()
+    }
+
+    func didReceive(_ response: URLResponse) {
+        responseOnMainThread = Thread.isMainThread
+        self.response = response
+    }
+
+    func didReceive(_ data: Data) {
+        if Thread.isMainThread { anyDataOnMainThread = true }
+        dataEvents += 1
+        receivedData.append(data)
+    }
+
+    func didFinish() {
+        finished = true
+    }
+
+    func didFailWithError(_ error: Error) {
+        finished = true
     }
 }

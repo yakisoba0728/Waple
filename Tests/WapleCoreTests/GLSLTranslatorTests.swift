@@ -191,6 +191,30 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("return float2(v.x * c - v.y * s, v.x * s + v.y * c);"), t.msl)
     }
 
+    // uint 시그니처 헬퍼는 MSL 네이티브 uint 로 그대로 방출되어야 한다. uint 파라미터 헬퍼는
+    // helperSignature nil 로 스킵(:339 continue)되고, uint 반환 헬퍼는 parseFunctions 의 반환타입
+    // 인식(mslType) 자체가 실패해 누락된다 — 둘 다 호출부만 남아 MSL 컴파일 실패 → 효과 전체 폴터.
+    func testUintSignatureHelpersEmitted() throws {
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        float brighten(uint k) {
+            return float(k) / 255.0;
+        }
+        uint quantize(float v) {
+            return uint(v * 255.0);
+        }
+        void main() {
+            uint k = quantize(v_TexCoord.x);
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * brighten(k);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float brighten(uint k)"), t.msl)   // uint 파라미터 헬퍼 방출
+        XCTAssertTrue(t.msl.contains("uint quantize(float v)"), t.msl)   // uint 반환 헬퍼 방출
+        XCTAssertTrue(t.msl.contains("brighten(k)"), t.msl)              // 호출부와 정의 정합
+    }
+
     func testPiTwoMacroIsTwoPi() throws {
         // WE 관용: 실물 common.h 는 `#define M_PI_2 6.28318530718`(2π) — π/2 는 M_PI_HALF.
         let frag = """

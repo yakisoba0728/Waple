@@ -14,9 +14,9 @@ final class SceneAudioPlayerTests: XCTestCase {
     }
 
     private func sound(_ paths: [String], mode: String = "loop", startSilent: Bool = false,
-                       name: String = "") -> SceneSound {
+                       name: String = "", minTime: Float = 0, maxTime: Float = 0) -> SceneSound {
         SceneSound(id: 1, name: name, sounds: paths, volume: 0.5, playbackMode: mode,
-                   startSilent: startSilent, minTime: 0, maxTime: 0)
+                   startSilent: startSilent, minTime: minTime, maxTime: maxTime)
     }
 
     /// isPlaying(name:) 이 조건을 만족할 때까지 메인 런루프를 최대 deadline 초 스핀(자연종료 대기).
@@ -234,6 +234,34 @@ final class SceneAudioPlayerTests: XCTestCase {
         player.play(name: "click")   // 재트리거
         XCTAssertTrue(player.isPlaying(name: "click"), "재트리거 후에도 재생 중")
         XCTAssertEqual(player.playerCount, 1)
+        player.teardown()
+    }
+
+    /// F410 회귀: random 모드 곡 종료로 예약된 gap 콜백이 만기되기 전 play(name:) 재트리거로 새 곡이
+    /// 시작되면, stale 콜백이 stopped/paused=false 만 보고 play(at:) 로 플레이어를 교체해 새 곡을 중간에
+    /// 끊었다. 세대 불일치로 폐기돼야 한다(새 곡은 자연종료까지 생존).
+    func testStaleGapCallbackDoesNotCutRetriggeredTrack() {
+        // 단일 엔트리 random: 재선곡이 항상 같은 곡(결정성), gap 0.6초 고정(min==max).
+        let pkg = ScenePackage.assemble([(name: "sounds/a.wav", data: Self.silentWAV(seconds: 1.0))])
+        let player = SceneAudioPlayer()
+        player.start(sounds: [sound(["sounds/a.wav"], mode: "random", startSilent: true,
+                                    name: "bgm", minTime: 0.6, maxTime: 0.6)],
+                     package: pkg, settingVolume: 0)
+        player.play(name: "bgm")
+        XCTAssertTrue(player.isPlaying(name: "bgm"))
+        // 첫 곡 자연종료 대기 → gap(0.6초) 콜백 예약(구 세대 캡처)
+        spin(until: { !player.isPlaying(name: "bgm") })
+        XCTAssertFalse(player.isPlaying(name: "bgm"), "1.0초 곡 자연종료 후 gap 대기 중이어야")
+        // gap 대기 중 재트리거 → 새 세대에서 같은 곡 처음부터 재생(1.0초)
+        player.play(name: "bgm")
+        XCTAssertTrue(player.isPlaying(name: "bgm"))
+        // stale 콜백 만기(재트리거 후 ≈0.55초)와 재생 곡 자연종료(+1.0초)를 모두 지난 시점에 관측.
+        // 수정 전: stale 콜백이 ≈0.55초 시점에 플레이어를 교체(곡 절단 후 재시작) → 이 시점에도 재생 중.
+        // 수정 후: stale 콜백 폐기 → 재생 곡은 자연종료, 다음 gap 대기 중 → 미재생.
+        let sampleAt = Date().addingTimeInterval(1.25)
+        spin(until: { Date() >= sampleAt })
+        XCTAssertFalse(player.isPlaying(name: "bgm"),
+                       "F410: gap 중 재트리거된 새 곡이 stale 콜백에 교체·절단되지 않아야(자연종료 후 gap 대기 상태)")
         player.teardown()
     }
 

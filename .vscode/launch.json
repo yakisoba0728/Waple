@@ -19,6 +19,26 @@
       "target": "Waple",
       "configuration": "release",
       "preLaunchTask": "swift: Build Release Waple"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Waple}",
+      "name": "Debug WapleCompat",
+      "target": "WapleCompat",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug WapleCompat"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Waple}",
+      "name": "Release WapleCompat",
+      "target": "WapleCompat",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release WapleCompat"
     }
   ]
 }

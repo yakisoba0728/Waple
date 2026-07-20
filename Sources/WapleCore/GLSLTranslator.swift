@@ -418,9 +418,11 @@ public enum GLSLTranslator {
 
     /// GLSL 타입 → MSL 타입(시그니처용). 미지원 타입 nil → 해당 헬퍼 스킵(사용 시 컴파일 실패 → 폴백 안전망).
     /// `structs`: 소스 정의 struct 이름(그대로 MSL 타입). 실물 dot_matrix 의 `struct Grid`.
+    /// uint 는 MSL 네이티브 — 없으면 uint 반환 헬퍼는 parseFunctions 의 반환타입 인식(:543)이,
+    /// uint 파라미터 헬퍼는 helperSignature nil(→ :339 스킵)이 실패해 호출부만 남는다.
     static func mslType(_ glsl: String, structs: Set<String> = []) -> String? {
         switch glsl {
-        case "void", "float", "int", "bool": return glsl
+        case "void", "float", "int", "uint", "bool": return glsl
         case "vec2", "float2": return "float2"; case "vec3", "float3": return "float3"; case "vec4", "float4": return "float4"
         case "mat2", "float2x2": return "float2x2"; case "mat3", "float3x3": return "float3x3"; case "mat4", "float4x4": return "float4x4"
         case "sampler2D": return "texture2d<float>"

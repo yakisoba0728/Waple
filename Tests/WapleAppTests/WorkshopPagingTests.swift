@@ -178,4 +178,52 @@ final class WorkshopPagingTests: XCTestCase {
         await keyless.searchIfNeeded()
         XCTAssertTrue(keyless.results.isEmpty, "키 없으면 요청 자체를 내지 않는다")
     }
+
+    /// 탭 이탈로 .task 가 취소되면 URLSession 은 URLError.cancelled 를 던진다 — 이를 실패로 오판해
+    /// results 를 비우고 attemptedInitialLoad 까지 세워 재진입 자동 재시도를 막던 회귀.
+    func testCancelledSearchLeavesNoFailureStateAndRetriesOnReentry() async {
+        let recorder = URLRecorder()
+        let cancelled = FailSwitch(true)
+        let vm = makeVM { url in
+            recorder.record(url)
+            if cancelled.failing { throw URLError(.cancelled) }
+            return (self.itemsJSON(ids: 1...30), 200)
+        }
+        await vm.searchIfNeeded()                    // 취소된 첫 로드
+        XCTAssertNil(vm.statusMessage, "취소는 실패가 아니다 — 메시지를 남기지 않는다")
+        XCTAssertTrue(vm.results.isEmpty)
+        cancelled.failing = false
+        await vm.searchIfNeeded()                    // 재진입 — 취소를 시도로 세지 않았으므로 재요청
+        XCTAssertEqual(vm.results.count, 30)
+        XCTAssertEqual(recorder.urls.count, 2)
+    }
+
+    /// CancellationError 변형도 동일하게 다룬다 — 이미 로드된 결과를 취소된 재검색이 지우면 안 된다.
+    func testSearchCancellationErrorKeepsPreviousResults() async {
+        let cancelled = FailSwitch(false)
+        let vm = makeVM { _ in
+            if cancelled.failing { throw CancellationError() }
+            return (self.itemsJSON(ids: 1...30), 200)
+        }
+        await vm.search()
+        XCTAssertEqual(vm.results.count, 30)
+        cancelled.failing = true
+        await vm.search()
+        XCTAssertEqual(vm.results.count, 30, "취소된 재검색이 기존 결과를 지우면 안 된다")
+        XCTAssertNil(vm.statusMessage)
+    }
+
+    /// loadMore 도 같은 취소 오판을 가졌다 — 취소된 페이지 로드가 실패 메시지를 남기면 안 된다.
+    func testCancelledLoadMoreDoesNotSetFailureMessage() async {
+        let cancelled = FailSwitch(true)
+        let vm = makeVM { url in
+            if self.queryValue(url, "page") == "2" && cancelled.failing { throw URLError(.cancelled) }
+            return (self.itemsJSON(ids: 1...30), 200)
+        }
+        await vm.search()
+        await vm.loadMore()                          // 취소된 페이지 로드
+        XCTAssertNil(vm.statusMessage, "취소는 실패 메시지를 남기지 않는다")
+        XCTAssertEqual(vm.results.count, 30)
+        XCTAssertTrue(vm.canLoadMore, "재시도 가능 상태를 유지한다")
+    }
 }

@@ -6,11 +6,6 @@ import WapleCore
 /// 네이티브 BC(DXT) 업로드 경로 검증: TexDecoder.nativeBC 판정/dims/stride(유닛) + 합성 BC 블록의
 /// GPU 네이티브 디코드 vs CPU DXT5Decoder 파리티(보간 팔레트·BC1 punch-through 로 라운딩 차이 실측).
 final class NativeBCUploadTests: XCTestCase {
-    private func i32(_ v: Int) -> [UInt8] {
-        let u = UInt32(truncatingIfNeeded: v)
-        return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-    }
-
     /// 단일-image BC .tex 합성(format 4=BC3/6=BC2/7=BC1). decode dims dw×dh, image dims iw×ih.
     /// mip 은 비압축 저장(isLZ4=0) — LZ4_RAW 는 소형/비압축 블록에서 0 을 반환하므로 픽스처엔 부적합.
     private func makeBCTex(format: Int, dw: Int, dh: Int, iw: Int, ih: Int, blocks: [UInt8]) -> Data {

@@ -7,21 +7,20 @@ import XCTest
 final class RG88DecodeTests: XCTestCase {
     private func container(format: Int, w: Int, h: Int, payload: [UInt8]) -> Data {
         var b = [UInt8]()
-        func i32(_ v: Int32) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
         b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
         b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
-        i32(Int32(format))          // 18: format
-        i32(0)                      // 22
-        i32(Int32(w)); i32(Int32(h))   // 26/30: texW/H
-        i32(Int32(w)); i32(Int32(h))   // 34/38: imgW/H
+        b.append(contentsOf: i32(format))       // 18: format
+        b.append(contentsOf: i32(0))            // 22
+        b.append(contentsOf: i32(w)); b.append(contentsOf: i32(h))   // 26/30: texW/H
+        b.append(contentsOf: i32(w)); b.append(contentsOf: i32(h))   // 34/38: imgW/H
         b.append(contentsOf: Array("TEXB0003".utf8)); b.append(0)
-        i32(1)                      // imageCount
-        i32(-1)                     // imageFormat (v3)
-        i32(1)                      // mipCount
-        i32(Int32(w)); i32(Int32(h))
-        i32(0)                      // isLZ4
-        i32(Int32(payload.count))   // decompressedSize
-        i32(Int32(payload.count))   // compressed size
+        b.append(contentsOf: i32(1))            // imageCount
+        b.append(contentsOf: i32(-1))           // imageFormat (v3)
+        b.append(contentsOf: i32(1))            // mipCount
+        b.append(contentsOf: i32(w)); b.append(contentsOf: i32(h))
+        b.append(contentsOf: i32(0))            // isLZ4
+        b.append(contentsOf: i32(payload.count))    // decompressedSize
+        b.append(contentsOf: i32(payload.count))    // compressed size
         b.append(contentsOf: payload)
         return Data(b)
     }

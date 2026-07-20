@@ -208,6 +208,30 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertTrue(store.entries.isEmpty)
     }
 
+    /// A2 분할 검증: extractZipToTemp(백그라운드 단계)는 스토어를 건드리지 않고 해제만 하고,
+    /// importExtractedZip(메인 단계)이 등록 + 임시 정리를 완료한다 — 둘의 합성이 importZip 과 동치.
+    func testExtractZipToTempThenImportExtractedZipTwoPhase() throws {
+        let zipURL = try makeZipFixture(wrapperName: "Wallpaper", workshopId: "SPLIT1", tag: "Split")
+        let store = LibraryStore(baseDirectory: base())
+
+        let temp = try XCTUnwrap(store.extractZipToTemp(zipURL), "해제 단계 성공")
+        XCTAssertTrue(store.entries.isEmpty, "해제 단계는 스토어 미변경")
+        XCTAssertFalse(ZipImporter.findProjectRoots(in: temp).isEmpty, "해제물에 배경 루트 존재")
+
+        let imported = store.importExtractedZip(temp)
+        XCTAssertEqual(imported.map(\.id), ["SPLIT1"])
+        XCTAssertEqual(store.entries.map(\.id), ["SPLIT1"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temp.path), "임시 디렉터리는 등록 단계가 정리")
+    }
+
+    /// A2 분할 검증(실패 경로): 해제 실패 시 nil + 임시 정리 + 스토어 불변.
+    func testExtractZipToTempExtractionFailureReturnsNil() throws {
+        let store = LibraryStore(baseDirectory: base())
+        XCTAssertNil(store.extractZipToTemp(tmp.appendingPathComponent("nope.zip"),
+                                            extract: { _, _ in false }))
+        XCTAssertTrue(store.entries.isEmpty)
+    }
+
     /// `--keepParent` zip 픽스처: wrapper/<wrapperName>/project.json + wallpaper.mp4(내용=tag 로 구분).
     private func makeZipFixture(wrapperName: String, workshopId: String?, tag: String) throws -> URL {
         let pkg = tmp.appendingPathComponent("pkg-\(UUID().uuidString)", isDirectory: true)

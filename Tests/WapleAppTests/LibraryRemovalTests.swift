@@ -119,26 +119,59 @@ final class LibraryRemovalTests: XCTestCase {
         XCTAssertFalse(assignmentsChanged, "할당이 없었으므로 onAssignmentsChanged 는 무관")
     }
 
-    /// F070 대조: 할당이 있던 항목(전역 선택 여부 무관)은 onAssignmentsChanged 경로로 이미 재적용이
-    /// 트리거되므로 onGlobalSelectionRemoved 는 발화하면 안 된다(중복 정리 방지).
-    func testRemove_withAssignment_doesNotTriggerOnGlobalSelectionRemoved() throws {
+    /// F070 복합 케이스: 제거 대상이 전역 선택이면서 모니터 할당도 병존하면, 종전 가드
+    /// (`selectedId == entry.id && !hadAssignment`) 때문에 onGlobalSelectionRemoved 가 발화하지
+    /// 않았다 — 그러면 onAssignmentsChanged 경유 applyCurrentSelection 이 스테일 currentFolderURL
+    /// 을 재적용해 제거된 배경이 부활한다(파일 보존이라 apply 성공). 전역 선택이면 할당 병존 여부와
+    /// 무관하게 발화해야 하고, 재적용 트리거(onAssignmentsChanged)보다 **먼저** 발화해야 한다
+    /// (순서가 뒤집히면 스테일 재적용이 먼저 일어난다).
+    func testRemove_globalSelectionWithAssignment_triggersOnGlobalSelectionRemovedBeforeAssignmentsChanged() throws {
         let base = tempDir()
         let store = LibraryStore(baseDirectory: base)
         let playlist = PlaylistStore(baseDirectory: base)
         let monitors = MonitorAssignmentStore(baseDirectory: base)
         let favorites = FavoritesStore(baseDirectory: base)
         let folders = FolderStore(baseDirectory: base)
-        let entry = try store.importFolder(makeWallpaper(id: "assigned"))
-        store.select(entry.id)
+        let entry = try store.importFolder(makeWallpaper(id: "selected-and-assigned"))
+        store.select(entry.id)                              // 전역 선택
+        monitors.setAssignment(entry.id, for: "display-1")  // + 모니터 할당 병존(복합 케이스)
+
+        let vm = LibraryViewModel(store: store, playlist: playlist, monitors: monitors,
+                                  favorites: favorites, folders: folders)
+        var order: [String] = []
+        vm.onGlobalSelectionRemoved = { order.append("globalSelectionRemoved") }
+        vm.onAssignmentsChanged = { order.append("assignmentsChanged") }
+
+        vm.remove(entry)
+
+        XCTAssertEqual(order, ["globalSelectionRemoved", "assignmentsChanged"],
+                       "복합 케이스: 전역 선택 정리 통지가 재적용 트리거보다 먼저 발화해야 한다(F070)")
+    }
+
+    /// F070 대조: 할당만 있고 전역 선택은 '다른' 배경인 항목을 제거할 때 onGlobalSelectionRemoved 가
+    /// 발화하면 살아있는 전역 선택의 currentFolderURL 까지 잘못 비우게 된다 — 발화 금지.
+    func testRemove_assignedButNotGlobalSelection_doesNotTriggerOnGlobalSelectionRemoved() throws {
+        let base = tempDir()
+        let store = LibraryStore(baseDirectory: base)
+        let playlist = PlaylistStore(baseDirectory: base)
+        let monitors = MonitorAssignmentStore(baseDirectory: base)
+        let favorites = FavoritesStore(baseDirectory: base)
+        let folders = FolderStore(baseDirectory: base)
+        let entry = try store.importFolder(makeWallpaper(id: "assigned-only"))
+        let other = try store.importFolder(makeWallpaper(id: "still-selected"))
+        store.select(other.id)   // 전역 선택은 다른 배경
         monitors.setAssignment(entry.id, for: "display-1")
 
         let vm = LibraryViewModel(store: store, playlist: playlist, monitors: monitors,
                                   favorites: favorites, folders: folders)
         var globalSelectionRemoved = false
         vm.onGlobalSelectionRemoved = { globalSelectionRemoved = true }
+        var assignmentsChanged = false
+        vm.onAssignmentsChanged = { assignmentsChanged = true }
 
         vm.remove(entry)
 
-        XCTAssertFalse(globalSelectionRemoved, "할당이 있으면 onAssignmentsChanged 경로로 충분 — 중복 발화 금지")
+        XCTAssertFalse(globalSelectionRemoved, "전역 선택이 아닌 항목 제거로 전역 선택을 비우면 안 된다")
+        XCTAssertTrue(assignmentsChanged, "할당이 있던 항목 제거 → 재적용 트리거는 유지")
     }
 }

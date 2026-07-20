@@ -3,10 +3,6 @@ import XCTest
 
 /// TEXB0004 조건 변형(tuniccolor 류) 파스·선택 — 실측 레이아웃(2026-07-09 전 코퍼스 8종 확정) 합성 픽스처.
 final class TexImageVariantTests: XCTestCase {
-    private static func i32(_ v: Int) -> [UInt8] {
-        let u = UInt32(truncatingIfNeeded: v)
-        return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-    }
     private static func cond(_ value: String) -> [UInt8] {
         Array(#"{"condition":{"condition":"\#(value)","name":"tuniccolor"}}"#.utf8)
     }
@@ -99,7 +95,6 @@ final class TexImageVariantTests: XCTestCase {
 
     /// 비-조건 BC3 텍스처: variants 는 []이고 기본 mip 정상(무회귀 — selectedMip 는 항상 기본).
     func testNonConditionalHasNoVariants() {
-        func i32(_ v: Int) -> [UInt8] { Self.i32(v) }
         let payload = [UInt8](repeating: 7, count: 16)
         var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
         b += i32(4) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)
@@ -114,7 +109,6 @@ final class TexImageVariantTests: XCTestCase {
 
     /// 변형 섹션 헤더가 체인 수와 불일치하면 variants=[](기본 mip 무회귀 — 방어).
     func testMalformedVariantSectionFallsBackToDefault() {
-        func i32(_ v: Int) -> [UInt8] { Self.i32(v) }
         let payload = [UInt8](repeating: 0x44, count: 16)
         var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
         b += i32(4) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)

@@ -397,6 +397,29 @@ final class TextEngineTests: XCTestCase {
         let e = try XCTUnwrap(TextScriptEngine(script: script), "문자열 속 숫자를 루프 상한으로 오탐")
         XCTAssertEqual(e.evaluate(current: ""), "ab")
     }
+
+    /// 감사 W-B7 회귀: 정규식 리터럴(/while (true)/, /for (;;)/) 내부의 루프 패턴은 무한루프 오탐
+    /// 사유가 아니다 — 정상 스크립트가 로드·실행돼야 한다. 스킵 후의 실제 while (true) 는 여전히 거부.
+    func testRegexLiteralContainingLoopPatternNotRejected() throws {
+        // return 직후(키워드 경로)
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            return /while (true)/.source + '|' + v;
+        }
+        """), "return 직후 정규식 내부를 스캔해 오탐 거부")
+        // .source 비교 — 패턴 속 괄호는 정규식 그룹이라 test() 리터럴 매칭은 부적합.
+        XCTAssertEqual(e.evaluate(current: "ok"), "while (true)|ok")
+
+        // 대입 연산자 직후(연산자 경로) + 플래그
+        let e2 = try XCTUnwrap(TextScriptEngine(script: """
+        var re = /for (;;)/g;
+        export function update(v) { return re.source; }
+        """), "= 직후 정규식 내부를 스캔해 오탐 거부")
+        XCTAssertEqual(e2.evaluate(current: ""), "for (;;)")
+
+        // 정규식 스킵이 뒤 코드를 삼키지 않음 — 실제 while (true) 는 여전히 거부.
+        XCTAssertNil(TextScriptEngine(script: "var re = /x/; export function update(v) { while (true) {} return 'x'; }"))
+    }
 }
 
 final class ScriptedTextRuntimeTests: XCTestCase {

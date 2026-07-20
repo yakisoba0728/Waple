@@ -39,4 +39,24 @@ final class WebInputProxyViewTests: XCTestCase {
         XCTAssertEqual(p?.y, 300)
         withExtendedLifetime(web) {}
     }
+
+    /// 감사 항목 I: 매핑表에 없는 키(구형 확장키보드 Enter keyCode 52 등)는 chars 가 그대로 JS
+    /// 문자열 리터럴에 들어간다 — raw 라인터미네이터는 JS 구문 오류로 evaluateJavaScript 가
+    /// 무음 실패해 키가 유실되므로 반드시 이스케이프돼야 한다.
+    func testJSEscapeEscapesLineTerminators() {
+        let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let proxy = WebInputProxyView(target: web)
+
+        // 라인터미네이터(ECMA-262 LineTerminator)는 raw 면 문자열 리터럴 구문 오류.
+        XCTAssertEqual(proxy.jsEscape("\r"), "\\r")
+        XCTAssertEqual(proxy.jsEscape("\n"), "\\n")
+        XCTAssertEqual(proxy.jsEscape("\u{2028}"), "\\u2028")
+        XCTAssertEqual(proxy.jsEscape("\u{2029}"), "\\u2029")
+
+        // 기존 규약 회귀 없음: 백슬래시·작은따옴표, 일반 문자.
+        XCTAssertEqual(proxy.jsEscape("\\"), "\\\\")
+        XCTAssertEqual(proxy.jsEscape("'"), "\\'")
+        XCTAssertEqual(proxy.jsEscape("a"), "a")
+        withExtendedLifetime(web) {}
+    }
 }

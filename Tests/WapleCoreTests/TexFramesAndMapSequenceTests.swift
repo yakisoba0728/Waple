@@ -9,22 +9,20 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
     /// 실측 레이아웃 그대로 합성: TEXV0005 헤더(42B) + raw RGBA 페이로드 + TEXS0003 섹션.
     private func makeTexWithFrames() -> Data {
         var b = [UInt8]()
-        func i32(_ v: Int32) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
-        func f32(_ v: Float) { withUnsafeBytes(of: v.bitPattern.littleEndian) { b.append(contentsOf: $0) } }
         b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)          // 0..8
         b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)          // 9..17
-        i32(0)   // format 0 (raw RGBA)                                       18
-        i32(0)   //                                                          22
-        i32(2); i32(1)   // texW, texH                                       26, 30
-        i32(2); i32(1)   // imgW, imgH                                       34, 38
+        b += i32(0)      // format 0 (raw RGBA)                                18
+        b += i32(0)      //                                                    22
+        b += i32(2) + i32(1)   // texW, texH                                   26, 30
+        b += i32(2) + i32(1)   // imgW, imgH                                   34, 38
         b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])            // 2x1 RGBA
         b.append(contentsOf: Array("TEXS0003".utf8)); b.append(0)
-        i32(2)           // frameCount
-        i32(256); i32(256)   // gifW, gifH (v3)
+        b += i32(2)          // frameCount
+        b += i32(256) + i32(256)   // gifW, gifH (v3)
         // frame0: id0, t0.2, x0, y0, w256, unk, unk, h256
-        i32(0); f32(0.2); f32(0); f32(0); f32(256); f32(0); f32(0); f32(256)
+        b += i32(0) + f32(0.2) + f32(0) + f32(0) + f32(256) + f32(0) + f32(0) + f32(256)
         // frame1: x=256
-        i32(0); f32(0.2); f32(256); f32(0); f32(256); f32(0); f32(0); f32(256)
+        b += i32(0) + f32(0.2) + f32(256) + f32(0) + f32(256) + f32(0) + f32(0) + f32(256)
         return Data(b)
     }
 
@@ -40,17 +38,15 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
     /// 전체가 [] 로 버려졌다 — 이제 유효 크기 기준으로 살아남고 atlas*/rotationQuarters 가 도출된다.
     private func makeTexWithRotatedFrame() -> Data {
         var b = [UInt8]()
-        func i32(_ v: Int32) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
-        func f32(_ v: Float) { withUnsafeBytes(of: v.bitPattern.littleEndian) { b.append(contentsOf: $0) } }
         b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
         b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
-        i32(0); i32(0); i32(2); i32(1); i32(2); i32(1)
+        b += i32(0) + i32(0) + i32(2) + i32(1) + i32(2) + i32(1)
         b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])
         b.append(contentsOf: Array("TEXS0003".utf8)); b.append(0)
-        i32(1)              // frameCount
-        i32(256); i32(256)  // gifW, gifH
+        b += i32(1)                 // frameCount
+        b += i32(256) + i32(256)    // gifW, gifH
         // id0, t0.2, x256, y0, Width0, WidthY0, HeightX(-256), Height128 → 90/270° 회전
-        i32(0); f32(0.2); f32(256); f32(0); f32(0); f32(0); f32(-256); f32(128)
+        b += i32(0) + f32(0.2) + f32(256) + f32(0) + f32(0) + f32(0) + f32(-256) + f32(128)
         return Data(b)
     }
 
@@ -79,15 +75,13 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
     /// 양 축 모두 0(퇴화)이면 프레임 목록 전체 드롭(안전망 유지).
     func testDegenerateZeroFrameDropped() {
         var b = [UInt8]()
-        func i32(_ v: Int32) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
-        func f32(_ v: Float) { withUnsafeBytes(of: v.bitPattern.littleEndian) { b.append(contentsOf: $0) } }
         b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
         b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
-        i32(0); i32(0); i32(2); i32(1); i32(2); i32(1)
+        b += i32(0) + i32(0) + i32(2) + i32(1) + i32(2) + i32(1)
         b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])
         b.append(contentsOf: Array("TEXS0003".utf8)); b.append(0)
-        i32(1); i32(256); i32(256)
-        i32(0); f32(0.2); f32(0); f32(0); f32(0); f32(0); f32(0); f32(0)  // Width=Height=HeightX=WidthY=0
+        b += i32(1) + i32(256) + i32(256)
+        b += i32(0) + f32(0.2) + f32(0) + f32(0) + f32(0) + f32(0) + f32(0) + f32(0)  // Width=Height=HeightX=WidthY=0
         if let tex = TexImage.parse(Data(b)) { XCTAssertEqual(tex.frames, []) }
     }
 
@@ -101,19 +95,17 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
     /// v3 와 달리 x/y/w/h 를 정수 바이트로 넣는다.
     private func makeTexWithFramesV1() -> Data {
         var b = [UInt8]()
-        func i32(_ v: Int32) { withUnsafeBytes(of: v.littleEndian) { b.append(contentsOf: $0) } }
-        func f32(_ v: Float) { withUnsafeBytes(of: v.bitPattern.littleEndian) { b.append(contentsOf: $0) } }
         b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
         b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
-        i32(0); i32(0)          // format 0(raw RGBA), unk
-        i32(2); i32(1)          // texW, texH
-        i32(2); i32(1)          // imgW, imgH
+        b += i32(0) + i32(0)    // format 0(raw RGBA), unk
+        b += i32(2) + i32(1)    // texW, texH
+        b += i32(2) + i32(1)    // imgW, imgH
         b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])   // 2x1 RGBA
         b.append(contentsOf: Array("TEXS0001".utf8)); b.append(0)
-        i32(2)                  // frameCount (v1: gifW/H 없음)
+        b += i32(2)             // frameCount (v1: gifW/H 없음)
         // v1 프레임 32B: i32 id | f32 frametime | i32 x | i32 y | i32 w | i32 widthY | i32 heightX | i32 h
-        i32(0); f32(0.2); i32(0);   i32(0); i32(256); i32(0); i32(0); i32(256)
-        i32(0); f32(0.2); i32(256); i32(0); i32(256); i32(0); i32(0); i32(256)
+        b += i32(0) + f32(0.2) + i32(0)   + i32(0) + i32(256) + i32(0) + i32(0) + i32(256)
+        b += i32(0) + f32(0.2) + i32(256) + i32(0) + i32(256) + i32(0) + i32(0) + i32(256)
         return Data(b)
     }
 

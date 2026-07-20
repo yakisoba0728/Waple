@@ -226,17 +226,4 @@ final class AudioCalibrationTests: XCTestCase {
         NSLog("%@", "[A3] (C) 렌더 luma  A0.25=\(lo)  A1.0=\(hi)")
         XCTAssertGreaterThan(hi, lo + 0.02, "(C) 진폭 보존 → 큰 진폭이 더 밝아야(단조)")
     }
-
-    // avgLuma: SceneAudioRenderTests 의 프리미티브 재사용(같은 타깃 내 헬퍼).
-    private func avgLuma(_ url: URL) -> Double {
-        guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)) else { return -1 }
-        var sum = 0.0; var n = 0
-        let sx = max(1, rep.pixelsWide / 40), sy = max(1, rep.pixelsHigh / 40)
-        for y in stride(from: 0, to: rep.pixelsHigh, by: sy) {
-            for x in stride(from: 0, to: rep.pixelsWide, by: sx) {
-                if let c = rep.colorAt(x: x, y: y) { sum += (c.redComponent + c.greenComponent + c.blueComponent) / 3.0; n += 1 }
-            }
-        }
-        return n > 0 ? sum / Double(n) : -1
-    }
 }

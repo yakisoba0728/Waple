@@ -8,19 +8,6 @@ import Metal
 /// - 반투명 텍스처 레이어(무-이펙트)가 올바르게 합성되는지 (기존엔 straight 출력 + src=one 이라 과다 밝음)
 /// - 알파 감소 효과 체인이 이중 premult 없이 곱해지는지 (0.7×0.7 → 0.49; 기존 버그 0.343)
 final class SceneCompositeConventionTests: XCTestCase {
-    private func avgLuma(_ url: URL) -> Double {
-        guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)) else { return -1 }
-        var sum = 0.0; var n = 0
-        for y in stride(from: 0, to: rep.pixelsHigh, by: max(1, rep.pixelsHigh / 40)) {
-            for x in stride(from: 0, to: rep.pixelsWide, by: max(1, rep.pixelsWide / 40)) {
-                if let c = rep.colorAt(x: x, y: y) {
-                    sum += (c.redComponent + c.greenComponent + c.blueComponent) / 3.0; n += 1
-                }
-            }
-        }
-        return n > 0 ? sum / Double(n) : -1
-    }
-
     private func renderLuma(scene: String, texAlpha: UInt8 = 255, extraFiles: [(String, Data)] = [], tag: String) throws -> Double {
         var files: [(String, Data)] = [
             ("scene.json", scene.data(using: .utf8)!),

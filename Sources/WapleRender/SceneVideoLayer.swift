@@ -46,7 +46,19 @@ public final class SceneVideoLayer {
         g.maximumSize = CGSize(width: 1920, height: 1920)
         return g
     }()
-    private lazy var duration: Double = AVURLAsset(url: mp4URL).duration.seconds
+    // load(.duration) 은 비동기 — 호출부(wrappedTime/headlessTexture)가 동기이고 헤드리스 디코드가
+    // 어차피 블로킹이라, 구조 변경 대신 세마포어로 동기 대기한다. 로드 실패 시 0 — wrap 이 t 를 그대로 통과(기존과 동일).
+    private lazy var duration: Double = {
+        let asset = AVURLAsset(url: mp4URL)
+        let sem = DispatchSemaphore(value: 0)
+        var loaded: CMTime?
+        Task {
+            loaded = try? await asset.load(.duration)
+            sem.signal()
+        }
+        sem.wait()
+        return loaded?.seconds ?? 0
+    }()
 
     public init(mp4URL: URL) { self.mp4URL = mp4URL }
 

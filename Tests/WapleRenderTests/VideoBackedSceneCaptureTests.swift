@@ -8,27 +8,12 @@ import AppKit
 /// video-.tex 레이어에 SceneVideoLayer 공급자를 붙이고(스왑 아님), captureFrames/draw 가
 /// buildDisplayTextures 로 프레임을 형제 레이어와 함께 렌더한다.
 final class VideoBackedSceneCaptureTests: XCTestCase {
-    private func i32(_ v: Int) -> [UInt8] {
-        let u = UInt32(truncatingIfNeeded: v)
-        return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-    }
     private func makeTex(format: Int, w: Int, h: Int, payload: [UInt8]) -> Data {
         var b: [UInt8] = []
         b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
         b += i32(format) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)
         b += Array("TEXB0001".utf8) + [0] + payload
         return Data(b)
-    }
-    private func makePkg(_ files: [(String, Data)]) -> Data {
-        let ver = Array("PKGV0001".utf8)
-        var out = i32(ver.count) + ver + i32(files.count)
-        var off = 0
-        for (name, data) in files {
-            let nm = Array(name.utf8)
-            out += i32(nm.count) + nm + i32(off) + i32(data.count); off += data.count
-        }
-        for (_, data) in files { out += [UInt8](data) }
-        return Data(out)
     }
 
     // MARK: 시간 wrap (헤르메틱 — 코퍼스/디바이스 무관)
@@ -60,8 +45,8 @@ final class VideoBackedSceneCaptureTests: XCTestCase {
         let sibModel = Data(#"{"material":"materials/sibmat.json"}"#.utf8)
         let vidMat = Data(#"{"passes":[{"shader":"genericimage2","textures":["v"]}]}"#.utf8)
         let sibMat = Data(#"{"passes":[{"shader":"flat"}]}"#.utf8)   // 무텍스처 → 솔리드 형제(디코드 무관하게 상존)
-        let mp4: [UInt8] = i32(0x18) + Array("ftypisom".utf8) + [1, 2, 3]     // video 페이로드(비-디코드 — 경로만)
-        let pkg = makePkg([
+        let mp4: [UInt8] = [UInt8](i32(0x18)) + Array("ftypisom".utf8) + [1, 2, 3]     // video 페이로드(비-디코드 — 경로만)
+        let pkg = encodePkg([
             ("scene.json", scene),
             ("models/vid.json", vidModel), ("materials/vidmat.json", vidMat),
             ("materials/v.tex", makeTex(format: 0, w: 100, h: 100, payload: mp4)),

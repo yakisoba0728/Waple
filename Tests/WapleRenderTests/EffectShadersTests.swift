@@ -1,5 +1,6 @@
 import XCTest
 import Metal
+@testable import WapleCore
 @testable import WapleRender
 
 final class EffectShadersTests: XCTestCase {
@@ -82,6 +83,26 @@ final class EffectShadersTests: XCTestCase {
         let src = EffectShaders.source(for: "waterripple")
         XCTAssertNotNil(src)
         XCTAssertTrue(src!.contains("ef_main"))
+    }
+    /// F412: waterripple aux[0](slot1=노멀맵) 미바인드 폴터는 중립 노멀 (128,128,255) — 흰색이면
+    /// 셰이더 언팩(rgb*2-1) 후 n=(1,1,1) 이라 마스크 유효 영역 전체가 상시 대각 변위(정적 왜곡).
+    /// shake flow map 폴터의 F265 와 동형. 마스크(slot2) 폴터는 흰색(=효과 전체 적용) 유지가 정상.
+    func testWaterrippleNormalFallbackIsNeutral() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let r = SceneRenderer()
+        let pkg = ScenePackage.assemble([])
+        // (a) 명시 nil 슬롯 경로(textureNames 루프 인터셉트) + (b) 슬롯 아예 없음(패딩 경로).
+        for eff in [SceneEffect(name: "waterripple", constants: [:], textureNames: [nil, nil, nil]),
+                    SceneEffect(name: "waterripple", constants: [:], textureNames: [])] {
+            let gpu = try XCTUnwrap(r.buildHandPortEffect(eff, package: pkg, device: device))
+            guard case .handPort(_, let aux, _) = gpu.bind else { return XCTFail("handPort 바인드 expected") }
+            XCTAssertGreaterThanOrEqual(aux.count, 2)
+            var px = [UInt8](repeating: 0, count: 4)
+            aux[0].getBytes(&px, bytesPerRow: 4, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0)
+            XCTAssertEqual(px, [128, 128, 255, 255], "노멀맵 폴터는 중립 (128,128,255) — 언팩 시 (0,0,1)=무왜곡")
+            aux[1].getBytes(&px, bytesPerRow: 4, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0)
+            XCTAssertEqual(px, [255, 255, 255, 255], "마스크 폴터는 흰색(전체 적용) 유지")
+        }
     }
     func testScrollParams() {
         // order: scaleX, scaleY, speedX, speedY(부호보존 제곱, F267). 실키는 repeat(scale)·speedx/speedy —

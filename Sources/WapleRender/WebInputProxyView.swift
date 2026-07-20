@@ -132,8 +132,20 @@ final class WebInputProxyView: NSView {
     private func forwardKey(_ kind: String, _ event: NSEvent) {
         guard let chars = event.charactersIgnoringModifiers, !chars.isEmpty else { return }
         let key = jsKey(chars, keyCode: event.keyCode)
-        let escaped = key.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+        let escaped = jsEscape(key)
         target?.evaluateJavaScript("window.__wapleEvent('\(kind)', 0, 0, '\(escaped)', '\(escaped)');")
+    }
+
+    /// JS 문자열 리터럴 이스케이프 — 테스트 가능하게 분리(webPoint 와 동일 규약).
+    /// 백슬래시·작은따옴표 외에 라인터미네이터(\r/\n/U+2028/U+2029)도 이스케이프한다 — raw 로
+    /// 들어가면 JS 구문 오류로 evaluateJavaScript 가 무음 실패해 키가 유실된다(감사 항목 I).
+    func jsEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
     }
 
     private func jsKey(_ chars: String, keyCode: UInt16) -> String {

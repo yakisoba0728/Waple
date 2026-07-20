@@ -562,6 +562,8 @@ public final class TextScriptEngine {
         let chars = Array(src)
         let n = chars.count
         var i = 0
+        var prevSig: Character? = nil   // 마지막 비공백 코드 문자(정규식 시작 판별 — stripModuleSyntax 준용)
+        var lastKeywordAllowsRegex = false
         func isIdent(_ c: Character) -> Bool { c == "_" || c == "$" || c.isLetter || c.isNumber }
         func skipWS(_ p: inout Int) { while p < n && chars[p].isWhitespace { p += 1 } }
         func word(at p: Int, _ w: String) -> Bool {
@@ -582,6 +584,8 @@ public final class TextScriptEngine {
                     i += 1
                     if done { break }
                 }
+                prevSig = c   // 문자열 리터럴 = 피연산자 — 뒤따르는 / 는 나눗셈
+                lastKeywordAllowsRegex = false
                 continue
             }
             if c == "/", i + 1 < n, chars[i + 1] == "/" {
@@ -594,36 +598,79 @@ public final class TextScriptEngine {
                 i = min(i + 2, n)
                 continue
             }
-            if word(at: i, "while") {
-                var p = i + "while".count
-                skipWS(&p)
-                if p < n, chars[p] == "(" {
-                    p += 1
-                    skipWS(&p)
-                    if word(at: p, "true") {
-                        p += "true".count
-                        skipWS(&p)
-                        if p < n, chars[p] == ")" { return true }
-                    } else if let literal = numericLiteral(at: p), literal.isTruthy {
-                        p += literal.length
-                        skipWS(&p)
-                        if p < n, chars[p] == ")" { return true }
-                    }
+            // 정규식 리터럴 스킵(감사 W-B7): /while (true)/ 같은 패턴 내부를 스캔해 정상 스크립트를
+            // 오탐 거부하지 않도록. 시작 판정은 stripModuleSyntax(:485) 의 식-시작 휴리스틱 재사용 —
+            // 나눗셈/정규식 모호성도 같은 수준에서만 처리한다(`)` 뒤 정규식은 여전히 미스킵).
+            if c == "/", i + 1 < n,
+               lastKeywordAllowsRegex || prevSig == nil || "({[=,:;!?&|+-*%^~<>".contains(prevSig!) {
+                i += 1
+                var inClass = false
+                while i < n {
+                    let d = chars[i]
+                    if d == "\\", i + 1 < n { i += 2; continue }
+                    if d == "[" { inClass = true }
+                    if d == "]" { inClass = false }
+                    i += 1
+                    if d == "/" && !inClass { break }
                 }
-            } else if word(at: i, "for") {
-                var p = i + "for".count
-                skipWS(&p)
-                if p < n, chars[p] == "(" {
-                    p += 1
+                while i < n && isIdent(chars[i]) { i += 1 }   // 플래그
+                prevSig = "/"   // 리터럴 = 피연산자 — 뒤따르는 / 는 나눗셈
+                lastKeywordAllowsRegex = false
+                continue
+            }
+            // 식별자 시작(문자/_/$): word 단위 소비 — while/for 검사 + 정규식 허용 키워드 추적.
+            if c.isLetter || c == "_" || c == "$" {
+                var j = i
+                while j < n && isIdent(chars[j]) { j += 1 }
+                let wordString = String(chars[i..<j])
+                if wordString == "while" {
+                    var p = j
                     skipWS(&p)
-                    if p < n, chars[p] == ";" {
+                    if p < n, chars[p] == "(" {
                         p += 1
                         skipWS(&p)
-                        if p < n, chars[p] == ";" { return true }
-                    } else if forLoopHasHugeBound(start: p) {
-                        return true
+                        if word(at: p, "true") {
+                            p += "true".count
+                            skipWS(&p)
+                            if p < n, chars[p] == ")" { return true }
+                        } else if let literal = numericLiteral(at: p), literal.isTruthy {
+                            p += literal.length
+                            skipWS(&p)
+                            if p < n, chars[p] == ")" { return true }
+                        }
+                    }
+                } else if wordString == "for" {
+                    var p = j
+                    skipWS(&p)
+                    if p < n, chars[p] == "(" {
+                        p += 1
+                        skipWS(&p)
+                        if p < n, chars[p] == ";" {
+                            p += 1
+                            skipWS(&p)
+                            if p < n, chars[p] == ";" { return true }
+                        } else if forLoopHasHugeBound(start: p) {
+                            return true
+                        }
                     }
                 }
+                lastKeywordAllowsRegex = ["return", "throw", "case", "delete", "typeof", "void", "new", "yield"].contains(wordString)
+                prevSig = wordString.last
+                i = j
+                continue
+            }
+            // 숫자 리터럴 선두(16진수 0x.. 등): word 로 오인 안 되게 통째 소비(stripModuleSyntax 와 동일).
+            if c.isNumber {
+                var j = i
+                while j < n && isIdent(chars[j]) { j += 1 }
+                prevSig = chars[j - 1]
+                lastKeywordAllowsRegex = false
+                i = j
+                continue
+            }
+            if !c.isWhitespace {
+                prevSig = c
+                if !"({[=,:;!?&|+-*%^~<>".contains(c) { lastKeywordAllowsRegex = false }
             }
             i += 1
         }

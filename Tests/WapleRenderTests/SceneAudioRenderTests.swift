@@ -5,20 +5,6 @@ import Metal
 @testable import WapleRender
 
 final class SceneAudioRenderTests: XCTestCase {
-    private func avgLuma(_ url: URL) -> Double {
-        guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)) else { return -1 }
-        var sum = 0.0; var n = 0
-        let stepX = max(1, rep.pixelsWide / 40), stepY = max(1, rep.pixelsHigh / 40)
-        for y in stride(from: 0, to: rep.pixelsHigh, by: stepY) {
-            for x in stride(from: 0, to: rep.pixelsWide, by: stepX) {
-                if let c = rep.colorAt(x: x, y: y) {
-                    sum += (c.redComponent + c.greenComponent + c.blueComponent) / 3.0; n += 1
-                }
-            }
-        }
-        return n > 0 ? sum / Double(n) : -1
-    }
-
     /// opacity 효과(premultiplied 수정 검증): alpha 0.4 → 풀 대비 ~40% 밝기.
     func testOpacityFades() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
