@@ -38,11 +38,14 @@ public final class FolderStore {
         for i in folders.indices { folders[i].ids.removeAll { $0 == id } }
         if let raw = folderName {
             let name = normalizedFolderName(raw)
-            if !folders.contains(where: { $0.name == name }) {
-                folders.append(Folder(name: name, ids: []))
-            }
-            if let i = folders.firstIndex(where: { $0.name == name }) {
-                folders[i].ids.append(id)
+            // F585: createFolder 와 대칭 — 트림 후 빈 이름이면 폴더를 만들지 않는다(루트 이동과 동일 취급).
+            if !name.isEmpty {
+                if !folders.contains(where: { $0.name == name }) {
+                    folders.append(Folder(name: name, ids: []))
+                }
+                if let i = folders.firstIndex(where: { $0.name == name }) {
+                    folders[i].ids.append(id)
+                }
             }
         }
         save()
