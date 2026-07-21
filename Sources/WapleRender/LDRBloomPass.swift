@@ -127,7 +127,11 @@ final class LDRBloomPass: LDRBloomEncoding {
         extractEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         extractEncoder.endEncoding()
 
-        var horizontalStep = SIMD2<Float>(1 / Float(quarter.width), 0)
+        // F671: WE downsample_eighth_blur_v.vert/blur_h_bloom.vert `localTexel = g_TexelSize*8.0`
+        // (g_TexelSize = 풀해상도 텍셀, dig-effects-a §1.1 확정) = 2 quarter-texel 스트라이드.
+        // 구 스트라이드 1 은 합성 σ≈20px 로 WE ≈26px 대비 ~21% 좁은 글로우였다
+        // (둘째 블러 eighth 1텍셀 = 8 풀해상도 텍셀은 WE 와 원래 일치).
+        var horizontalStep = SIMD2<Float>(2 / Float(quarter.width), 0)
         guard let horizontalEncoder = makeEncoder(
             commandBuffer: commandBuffer,
             target: eighth,
@@ -204,11 +208,14 @@ final class LDRBloomPass: LDRBloomEncoding {
     ) {
         constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
         float2 t = u.sourceTexelSize;
+        // F670: WE downsample_quarter_bloom.vert `a_TexCoord ± g_TexelSize` — ±1텍셀 대각 4탭은
+        // bilinear 결합으로 풋프린트 4×4(16텍셀) 전량 평균. 구 ±1.5 는 코너 4텍셀 점샘플(4/16
+        // 서브샘플)이라 풋프린트 내측 2×2 고휘도 피처를 완전 누락(에일리어싱/쉬머).
         float3 rgb = (
-            source.sample(linearClamp, in.uv + t * float2(-1.5, -1.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2( 1.5, -1.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2(-1.5,  1.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2( 1.5,  1.5)).rgb
+            source.sample(linearClamp, in.uv + t * float2(-1.0, -1.0)).rgb +
+            source.sample(linearClamp, in.uv + t * float2( 1.0, -1.0)).rgb +
+            source.sample(linearClamp, in.uv + t * float2(-1.0,  1.0)).rgb +
+            source.sample(linearClamp, in.uv + t * float2( 1.0,  1.0)).rgb
         ) * 0.25;
         float scale = max(rgb.r, max(rgb.g, rgb.b));
         rgb *= saturate(scale - u.threshold);

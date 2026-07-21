@@ -17,6 +17,10 @@ enum BlendMSL {
 
     // RGB↔HSL (common_blending.h 1:1 — Hue/Saturation/Color/Luminosity 모드용)
     inline float3 we_rgb2hsl(float3 c) {
+        // F676: WE common_blending.h RGBToHSL 의 `#ifdef HDR color = saturate(color)` — Waple 은
+        // LDR/HDR 단일 소스라 무조건 적용(LDR UNORM ≤1 에선 항등이라 묵시 무차). HDR >1 입력의
+        // HSL 왜곡 봉인(colorBlendMode 26-29, 현 코퍼스 HDR 활성 0건 잠복).
+        c = saturate(c);
         float3 hsl;
         float fmin = min(min(c.r, c.g), c.b), fmax = max(max(c.r, c.g), c.b);
         float delta = fmax - fmin;

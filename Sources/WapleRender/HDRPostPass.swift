@@ -66,7 +66,8 @@ final class HDRPostPass {
         float4 c = hdrTex.sample(s, in.uv);
         // WE 최종 = saturate 클램프(무-ACES 5중확증, HDRBloomPass 합성부와 동일 규약).
         // >1 → 1.0(순백), [0,1] 저역은 항등(ACES 는 저역도 곡선변형). exposure = 밝기 노브.
-        return float4(saturate(c.rgb * exposure), c.a);
+        // F675: 최종 알파 1.0 강제 — c.a 통과는 캡처 PNG 투명 픽셀(디스플레이는 알파 무시라 묵시 무차).
+        return float4(saturate(c.rgb * exposure), 1.0);
     }
     """
 }
