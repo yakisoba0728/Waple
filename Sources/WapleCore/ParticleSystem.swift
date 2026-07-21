@@ -8,7 +8,9 @@ public enum Emitter: Equatable {
     /// burst = 실물 "instantaneous"(버스트 개수, 0=연속 rate 방출). sign = 축별 방향 강제(+1/-1, 0=무클램프).
     case sphere(origin: Vec3, directions: Vec3, distanceMin: Float, distanceMax: Float,
                 rate: Float, burst: Int, sign: Vec3)
-    /// 박스 분포. pos.axis = origin.axis + rand(-distanceMax.axis, +distanceMax.axis).
+    /// 박스 분포. 기본 pos.axis = origin.axis + rand(-distanceMax.axis, +distanceMax.axis).
+    /// F620: 실물 speedmin/speedmax(초기속도)와 F627 distancemin(코너 쌍)은 케이스 시그니처 무회귀를
+    /// 위해 def.emitterSpeed/def.boxDistanceMin 병렬 배열에 둔다(emitterAudio 와 동형).
     case box(origin: Vec3, distanceMax: Vec3, rate: Float, burst: Int)
 
     public var rate: Float {
@@ -97,6 +99,23 @@ public enum RemapOutput: Equatable {
     case speed(min: Float, max: Float)
 }
 
+/// F622: 실물 def 최상위 "animationmode"(스프라이트시트 재생 모드). 부재/미지 = frametime 기반
+/// 기본 재생(기존 폴터). sequence = 수명에 걸쳐 순차 재생(×sequencemultiplier — 프레임 수가
+/// 필요해 렌더 경로 소비, 본 갭에서는 파스·보존), randomframe = 스폰 시 랜덤 프레임 1개 고정
+/// (시뮬이 p.frame 을 스폰 확정 → 정지 파티클의 프레임 깜빡임 해소).
+public enum ParticleAnimationMode: String, Equatable {
+    case sequence
+    case randomframe
+}
+
+/// F626: 실물 렌더러 "orientation"(공식 문서: screen=기본 빌보드, upright=Y축 고정, fixed=축 고정).
+/// 파스·보존 전용 — 실제 쿼드 배향은 WapleRender 경로 소비(본 갭 스코프 밖).
+public enum ParticleOrientation: Equatable {
+    case screen
+    case upright
+    case fixed(axis: Vec3)
+}
+
 /// 파티클 렌더러. sprite = 빌보드 쿼드. trail 계열(spriteTrail/rope/ropeTrail)은
 /// 파티클별 위치 히스토리를 두께 있는 리본(삼각 스트립)으로 그린다.
 public enum RendererKind: Equatable {
@@ -115,21 +134,24 @@ public enum RendererKind: Equatable {
     }
 
     /// 리본에 보관할 위치 히스토리 샘플 수(step 당 1샘플, captureFrames=30fps 가정).
-    /// spriteTrail=maxlength(세그먼트 수 근사), ropeTrail=length(초)×30, rope=고정 16. 4..24 로 클램프.
+    /// spriteTrail=maxlength(세그먼트 수 근사), ropeTrail=length(초)×30, rope=subdivision(F629,
+    /// 부재/0 시 종전 고정 16). F625: 캡 24→240 — maxlength 100/ropetrail 수초 트레일이 24샘플
+    /// (30fps 0.8초)로 절단됐다. WE spritetrail 의 length 는 "speed×length 신장" 의미(공식 문서)라
+    /// 샘플 수에 쓰지 않는다(속도-신장 렌더는 WapleRender 경로 후속).
     public var trailSampleCount: Int {
-        func clamp(_ v: Int) -> Int { min(24, max(4, v)) }
+        func clamp(_ v: Int) -> Int { min(240, max(4, v)) }
         func clampedRounded(_ value: Float) -> Int? {
             guard value.isFinite, value > 0 else { return nil }
-            if value >= 24 { return 24 }
+            if value >= 240 { return 240 }
             return clamp(Int(value.rounded()))
         }
         switch self {
         case let .spriteTrail(maxLength, _):
             return clampedRounded(maxLength) ?? 8
-        case .rope:
-            return 16
-        case let .ropeTrail(length, _):
-            return clampedRounded(length * 30) ?? 12
+        case let .rope(subdivision):
+            return clampedRounded(Float(subdivision)) ?? 16
+        case let .ropeTrail(length, subdivision):
+            return clampedRounded(length * 30) ?? clampedRounded(Float(subdivision)) ?? 12
         default:
             return 0
         }
@@ -263,6 +285,25 @@ public struct ParticleSystemDef: Equatable {
     public var controlPoints: [Vec3] = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
     /// 이미터별 오디오반응(emitters 와 병렬; nil=무반응). 비어 있으면 전 이미터 무반응(기존 def·테스트 호환).
     public var emitterAudio: [AudioProcessing?] = []
+    /// F620: 이미터별 speedmin/speedmax(emitters 와 병렬) — 방출 방향을 따르는 초기속도
+    /// (WE 문서: "particle speed in conjunction with a movement Operator"). (0,0)=무속도(기존 동작).
+    public var emitterSpeed: [SIMD2<Float>] = []
+    /// F627: box 이미터별 distancemin(emitters 와 병렬; sphere 는 nil — 구 distancemin 은 케이스 필드).
+    /// nil = ±distanceMax 대칭 레거시. 실물은 distancemin/distancemax 코너 쌍(음수·혼합 부호 유효).
+    public var boxDistanceMin: [Vec3?] = []
+    /// F624: vortex 오퍼레이터별 오디오반응(def.operators 중 vortex 출현 순 병렬; nil=묵반응).
+    /// WE 문서: vortex 오디오반응은 "particle speed 를 오디오에 연결" → 속도 배수.
+    public var vortexAudio: [AudioProcessing?] = []
+    /// F623: 실물 def "flags" 비트(1=worldspace, 4=perspective z-원근 — snowperspective 프리셋 실측).
+    /// 파스·보존 전용(렌더 소비는 WapleRender 경로 후속).
+    public var flags: Int = 0
+    /// F622: 스프라이트시트 재생 모드/배속. animationMode nil = frametime 기반 기본 재생(기존 폴터).
+    public var animationMode: ParticleAnimationMode? = nil
+    public var sequenceMultiplier: Float = 1
+    /// F626: 렌더러 orientation(기본 screen — 기존 스크린 빌보드 폴터와 동일).
+    public var orientation: ParticleOrientation = .screen
+    /// F630: mapsequencearoundcontrolpoint "axis"(회전 평면 선택, 기본 z축=XY 평면 레거시).
+    public var mapSequenceAxis: Vec3? = nil
 
     public init(emitters: [Emitter], initializers: [Initializer], operators: [ParticleOperator],
                 renderer: RendererKind, maxCount: Int, startTime: Float, material: ParticleMaterial?,
@@ -282,7 +323,13 @@ public struct ParticleSystemDef: Equatable {
         var emitters: [Emitter] = []
         // emitters 와 병렬(같은 case 에서 함께 append) — 오디오반응 rate 변조에 이미터별 파라미터 공급.
         var emitterAudio: [AudioProcessing?] = []
+        // F620/F627: speedmin/speedmax·box distancemin 도 emitters 와 병렬로 함께 append.
+        var emitterSpeed: [SIMD2<Float>] = []
+        var boxDistanceMin: [Vec3?] = []
         for case let e as [String: Any] in (json["emitter"] as? [Any] ?? []) {
+            // F620: speedmin 부재 시 0, speedmax 부재 시 speedmin 승계(고정속도) — 부호 있는 초기속도.
+            let speedMin = pfloat(e["speedmin"]) ?? 0
+            let speedMax = pfloat(e["speedmax"]) ?? speedMin
             switch e["name"] as? String {
             case "sphererandom":
                 emitters.append(.sphere(
@@ -294,6 +341,8 @@ public struct ParticleSystemDef: Equatable {
                     burst: pint(e["instantaneous"]) ?? 0,
                     sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
                 emitterAudio.append(AudioProcessing.parse(e))
+                emitterSpeed.append(SIMD2(speedMin, speedMax))
+                boxDistanceMin.append(nil)
             case "boxrandom":
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -301,12 +350,15 @@ public struct ParticleSystemDef: Equatable {
                     rate: pfloat(e["rate"]) ?? 0,
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
+                emitterSpeed.append(SIMD2(speedMin, speedMax))
+                boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
             }
         }
 
         var inits: [Initializer] = []
+        var mapSeqAxis: Vec3? = nil   // F630: mapsequencearoundcontrolpoint "axis"
         for case let i as [String: Any] in (json["initializer"] as? [Any] ?? []) {
             switch i["name"] as? String {
             case "lifetimerandom":
@@ -344,6 +396,8 @@ public struct ParticleSystemDef: Equatable {
             case "mapsequencearoundcontrolpoint":
                 inits.append(.mapSequence(count: pfloat(i["count"]) ?? 0,
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: false))
+                // F630: "0 1 0" 같은 회전축 — 각도 평면 선택(기본 z축 레거시, 마지막 지정 승).
+                mapSeqAxis = pvec3(i["axis"]) ?? mapSeqAxis
             case "mapsequencebetweencontrolpoints":
                 inits.append(.mapSequence(count: pfloat(i["count"]) ?? 0,
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: true))
@@ -416,6 +470,8 @@ public struct ParticleSystemDef: Equatable {
         // controlpointattract 의 CP id — controlpoint 배열이 오퍼레이터보다 뒤에 파스되므로
         // (ops 인덱스, cpid)만 보관했다가 def 조립 직전에 target 재조립(감사 V04).
         var attractCPIds: [(op: Int, cp: Int)] = []
+        // F624: vortex 출현 순 병렬 오디오반응(WE: vortex 오디오반응 = particle speed 를 오디오에 연결).
+        var vortexAudio: [AudioProcessing?] = []
         for case let o as [String: Any] in (json["operator"] as? [Any] ?? []) {
             switch o["name"] as? String {
             case "movement":
@@ -470,6 +526,19 @@ public struct ParticleSystemDef: Equatable {
                                    speedInner: pfloat(o["speedinner"]) ?? 0,
                                    speedOuter: pfloat(o["speedouter"]) ?? 0,
                                    offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                vortexAudio.append(AudioProcessing.parse(o))
+            case "vortex_v2":
+                // F631: 실측 2인스턴스(3585875739)는 ring 키 없이 표준 vortex 파라미터(distanceinner/
+                // outer·speedinner)만 — 표준 vortex 로 근사 매핑(종전 default 드롭 → 소용돌이 복원).
+                // axis/offset 부재 = vortex 기본과 동일, speedouter 부재 = speedinner 승계.
+                let sIn = pfloat(o["speedinner"]) ?? 0
+                ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),
+                                   distanceInner: pfloat(o["distanceinner"]) ?? 0,
+                                   distanceOuter: pfloat(o["distanceouter"]) ?? 0,
+                                   speedInner: sIn,
+                                   speedOuter: pfloat(o["speedouter"]) ?? sIn,
+                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                vortexAudio.append(AudioProcessing.parse(o))
             case "turbulence":
                 // 실물 기본값: speed 부재 → 0(무동작), scale 부재 → 0.01(공간 변동 확보),
                 // timescale 부재 → 0(정적장, 파티클 이동만으로 흔들림), mask 부재 → (1,1,1).
@@ -510,6 +579,7 @@ public struct ParticleSystemDef: Equatable {
         }
 
         var renderer: RendererKind = .unsupported("none")
+        var orientation: ParticleOrientation = .screen
         if let r0 = (json["renderer"] as? [Any])?.first as? [String: Any] {
             let n = r0["name"] as? String ?? "none"
             switch n {
@@ -522,6 +592,12 @@ public struct ParticleSystemDef: Equatable {
                 renderer = .ropeTrail(length: pfloat(r0["length"]) ?? 0, subdivision: pint(r0["subdivision"]) ?? 0)
             default:
                 renderer = .unsupported(n); WapleLog.warn("[Waple] SP4 unsupported renderer (drawn as sprite): \(n)")
+            }
+            // F626: orientation("screen"/"upright"/"fixed") + axis — 파스·보존(렌더 소비는 후속).
+            switch r0["orientation"] as? String {
+            case "upright": orientation = .upright
+            case "fixed": orientation = .fixed(axis: pvec3(r0["axis"]) ?? Vec3(x: 0, y: 0, z: 1))
+            default: orientation = .screen
             }
         }
 
@@ -581,6 +657,15 @@ public struct ParticleSystemDef: Equatable {
         def.controlPoints = controlPoints
         // 인스턴스 오버라이드는 emitters 를 .map(순서/개수 보존)만 하므로 emitterAudio 병렬성 유지.
         def.emitterAudio = emitterAudio
+        def.emitterSpeed = emitterSpeed
+        def.boxDistanceMin = boxDistanceMin
+        def.vortexAudio = vortexAudio
+        def.flags = pint(json["flags"]) ?? 0                                        // F623
+        // F622: animationmode("sequence"/"randomframe")·sequencemultiplier(배속, 기본 1).
+        def.animationMode = (json["animationmode"] as? String).flatMap { ParticleAnimationMode(rawValue: $0) }
+        def.sequenceMultiplier = pfloat(json["sequencemultiplier"]) ?? 1
+        def.orientation = orientation
+        def.mapSequenceAxis = mapSeqAxis
         return def
     }
 }

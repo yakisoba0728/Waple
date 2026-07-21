@@ -28,6 +28,8 @@ public struct Particle {
     var oscSizeFreq: Float = 0, oscSizePhase: Float = 0
     // 난류(turbulence): 스폰 시 결정되는 파티클별 속도/위상(노이즈 흐름장 이류에 사용).
     var turbSpeed: Float = 0, turbPhase: Float = 0
+    /// F628: 2번째 이후 turbulence 오퍼레이터의 파티큘별 속도/위상(첫 번째는 위 스칼라 — 시드 비트동일).
+    var turbExtra: [(speed: Float, phase: Float)] = []
     // remapvalue 노이즈 입력의 파티클별 위상(탈동기 — 전 파티클 동일 곡선 방지).
     var remapPhase: Float = 0
     /// 트레일 렌더러용 최근 위치 히스토리(로컬 Y-up). oldest→newest, 마지막=현재 위치.
@@ -60,11 +62,12 @@ public struct ParticleSimulator {
     }
     private let remaps: [CachedRemap]
     private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>)]
-    private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float, offset: SIMD3<Float>)]
-    // 난류 흐름장(첫 turbulence 오퍼레이터만; oscPos 와 동일한 "first wins" 규약).
+    private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
+                            offset: SIMD3<Float>, audio: AudioProcessing?)]   // F624: 오디오반응 속도 배수
+    // F628: 난류 흐름장 배열(전 turbulence 오퍼레이터 누적 — 종전 "first wins"는 2번째를 드롭).
     // 파티클별 속도/위상 범위(smin/smax, pmin/pmax)는 스폰 시 뽑아 고정, 나머지는 장 파라미터.
-    private let turbulence: (smin: Float, smax: Float, scale: Float, timeScale: Float,
-                            mask: SIMD3<Float>, pmin: Float, pmax: Float)?
+    private let turbulences: [(smin: Float, smax: Float, scale: Float, timeScale: Float,
+                              mask: SIMD3<Float>, pmin: Float, pmax: Float)]
     // 트레일 히스토리 설정(스프라이트면 0 → 미기록).
     private let trailSamples: Int
     // controlpointattract/vortex 가 있으면 속도 상한(폭주 방지, px/s).
@@ -106,7 +109,8 @@ public struct ParticleSimulator {
         var oa: (Float, Float, Float, Float, Float, Float)? = nil
         var attr: [(Float, Float, SIMD3<Float>)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>)] = []
-        var turb: (Float, Float, Float, Float, SIMD3<Float>, Float, Float)? = nil
+        // F628: 전 turbulence 오퍼레이터 누적(종전 first-wins 드롭 — 3000562427 의 지배 성분 손실).
+        var turb: [(Float, Float, Float, Float, SIMD3<Float>, Float, Float)] = []
         var osz: (Float, Float, Float, Float, Float, Float)? = nil
         var ac: [(st: Float, et: Float, sv: Float, ev: Float)] = []
         var rms: [CachedRemap] = []
@@ -128,7 +132,7 @@ public struct ParticleSimulator {
             case let .vortex(axis, dIn, dOut, sIn, sOut, offset):
                 vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset)))
             case let .turbulence(smin, smax, scale, timeScale, mask, pmin, pmax):
-                if turb == nil { turb = (smin, smax, scale, timeScale, s3(mask), pmin, pmax) }
+                turb.append((smin, smax, scale, timeScale, s3(mask), pmin, pmax))
             case let .oscillateSize(fmin, fmax, smin, smax, pmin, pmax):
                 if osz == nil { osz = (fmin, fmax, smin, smax, pmin, pmax) }
             case let .alphaChange(st, et, sv, ev):
@@ -148,8 +152,10 @@ public struct ParticleSimulator {
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2) }
-        vortices = vort.map { (axis: $0.0, dIn: $0.1, dOut: $0.2, sIn: $0.3, sOut: $0.4, offset: $0.5) }
-        turbulence = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
+        vortices = vort.indices.map { (axis: vort[$0].0, dIn: vort[$0].1, dOut: vort[$0].2,
+                                        sIn: vort[$0].3, sOut: vort[$0].4, offset: vort[$0].5,
+                                        audio: $0 < def.vortexAudio.count ? def.vortexAudio[$0] : nil) }   // F624
+        turbulences = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
         oscSizeOp = osz.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         alphaChanges = ac
         remaps = rms
@@ -198,7 +204,8 @@ public struct ParticleSimulator {
     private mutating func _step(_ dt: Float) -> [Particle] {
         time += dt
         let countBeforeEmission = particles.count
-        // 방출(starttime 이후, 자식 원샷/고아는 정지). burst(실물 instantaneous)는 rate 대신 일괄 스폰.
+        // 방출(starttime 이후, 자식 원샷/고아는 정지). burst(실물 instantaneous)는 생성 1회 일괄 스폰,
+        // rate(연속)와 독립 병행(F621).
         // F438: dt==0(정지/재드로 스냅샷 재방출 — SceneRenderer3D:1096/SceneRenderer:1451)은 실행 이력
         // (time>0)이 있는 sim 에서만 방출 금지 — step(0) 이 acc/RNG/전멸 후 버스트 재발화 상태를 변이하지
         // 않게. 무이력(time==0) sim 의 초기 버스트는 종전대로 발화(기존 스위트·최초 드로 호환).
@@ -206,23 +213,23 @@ public struct ParticleSimulator {
             let wasEmpty = particles.isEmpty  // 버스트 재발화 판정은 스텝 진입 시점 기준(다중 이미터 동시 발화)
             for i in def.emitters.indices {
                 let e = def.emitters[i]
-                if e.burst > 0 {
+                if e.burst > 0, wasEmpty {
                     // ponytail: 전멸 시 재버스트 루프 — 실 WE 는 자식(eventfollow) 트리거가 주 용법,
                     // Stage B(children)에서 트리거 발화로 대체 예정.
-                    if wasEmpty {
-                        for _ in 0..<min(e.burst, def.maxCount - particles.count) {
-                            particles.append(spawn(e))
-                        }
+                    for _ in 0..<min(e.burst, def.maxCount - particles.count) {
+                        particles.append(spawn(e, index: i))
                     }
-                } else {
-                    // 오디오반응: 무보유/무신호 시 스케일 1(× 1.0 은 IEEE 정확 → 기존 acc 누적 비트동일).
-                    acc[i] += e.rate * emitterRateScale(i) * dt
-                    while acc[i] >= 1, particles.count < def.maxCount {
-                        acc[i] -= 1
-                        particles.append(spawn(e))
-                    }
-                    if particles.count >= def.maxCount { acc[i] = min(acc[i], 1) }  // 누적 폭주 방지
                 }
+                // F621: rate 분기는 burst 유무와 무관 — 실물 instantaneous(생성 1회)와 rate(연속)는
+                // 독립 필드로 병행(WE 문서 "Further particles will be spawned according to the
+                // configuration"). rate==0(burst-only)이면 acc 가 0 유지 → 기존 경로와 비트동일.
+                // 오디오반응: 무보유/무신호 시 스케일 1(× 1.0 은 IEEE 정확 → 기존 acc 누적 비트동일).
+                acc[i] += e.rate * emitterRateScale(i) * dt
+                while acc[i] >= 1, particles.count < def.maxCount {
+                    acc[i] -= 1
+                    particles.append(spawn(e, index: i))
+                }
+                if particles.count >= def.maxCount { acc[i] = min(acc[i], 1) }  // 누적 폭주 방지
             }
         }
         // 신규 스폰 → follow/spawnBurst 자식 인스턴스 생성(스폰 위치 기준, 링크 캡/확률).
@@ -270,7 +277,10 @@ public struct ParticleSimulator {
                 var vel = particles[k].vel
                 let pos = particles[k].pos
                 for a in attractors { applyAttract(a, to: &vel, pos: pos, dt: dt) }
-                for v in vortices { applyVortex(v, to: &vel, pos: pos, dt: dt) }
+                for v in vortices {
+                    // F624: vortex 오디오반응 = 접선 속도 × 응답 배수(무신호/묵보유 1 → 비트동일).
+                    applyVortex(v, to: &vel, pos: pos, dt: dt, audioScale: audioResponseScale(v.audio))
+                }
                 particles[k].vel = vel
             }
             if let cap = speedCap {
@@ -284,10 +294,20 @@ public struct ParticleSimulator {
             particles[k].pos += particles[k].vel * speedFactor * dt
             // 난류 이류(advection): 노이즈 흐름장 속도로 위치를 이동. vel 에 누적하지 않으므로
             // |변위| ≤ turbSpeed·dt 로 유계(속도 상한 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
-            if let t = turbulence, particles[k].turbSpeed > 0 {
-                let v = turbulenceVelocity(t, pos: particles[k].pos, speed: particles[k].turbSpeed,
-                                           phase: particles[k].turbPhase, time: time)
-                particles[k].pos += v * dt
+            // F628: 전 turbulence 오퍼레이터 누적 — 첫 번째는 turbSpeed/turbPhase(기존 비트동일),
+            // 2번째 이후는 turbExtra(다중 오퍼레이터 시스템만 신규 드로).
+            if !turbulences.isEmpty {
+                if particles[k].turbSpeed > 0 {
+                    let v = turbulenceVelocity(turbulences[0], pos: particles[k].pos, speed: particles[k].turbSpeed,
+                                               phase: particles[k].turbPhase, time: time)
+                    particles[k].pos += v * dt
+                }
+                for (ti, extra) in particles[k].turbExtra.enumerated() where extra.speed > 0 {
+                    guard ti + 1 < turbulences.count else { break }
+                    let v = turbulenceVelocity(turbulences[ti + 1], pos: particles[k].pos, speed: extra.speed,
+                                               phase: extra.phase, time: time)
+                    particles[k].pos += v * dt
+                }
             }
             // F431/F439: 선형 movement(위 280-283행)와 동형 — force/drag 는 전 오퍼레이터에 누적하고
             // rotation 적분은 스텝당 1회. 종전엔 루프 안에서 적분해 angularmovement N개면 N회 중복
@@ -370,8 +390,13 @@ public struct ParticleSimulator {
     /// 신호가 있을 때만 AudioResponse(구간평균→smoothstep(bounds)→pow→saturate, shake.vert 1:1)를 곱한다.
     /// → 무음 A/B(공급자 부재 = currentAudio nil)는 기존 방출 경로와 비트동일. WE 충실도는 신호 존재 시 발현.
     private func emitterRateScale(_ i: Int) -> Float {
-        guard hasEmitterAudio, i < def.emitterAudio.count, let ap = def.emitterAudio[i],
-              let audio = currentAudio, !audio.isSilent else { return 1 }
+        guard hasEmitterAudio, i < def.emitterAudio.count else { return 1 }
+        return audioResponseScale(def.emitterAudio[i])
+    }
+
+    /// F624: 오퍼레이터 부착 오디오반응 배수(vortex 속도). nil/무신호 = 1(× 1.0 은 IEEE 정확 → 비트동일).
+    private func audioResponseScale(_ ap: AudioProcessing?) -> Float {
+        guard let ap, let audio = currentAudio, !audio.isSilent else { return 1 }
         return AudioResponse.compute(left: audio.left, right: audio.right, mode: ap.mode,
                                      freqMin: ap.freqStart, freqMax: ap.freqEnd,
                                      bounds: ap.bounds, power: ap.exponent, multiply: 1)
@@ -379,7 +404,16 @@ public struct ParticleSimulator {
 
     // MARK: - 스폰
 
-    private mutating func spawn(_ emitter: Emitter) -> Particle {
+    /// F620: 이미터 초기속도 샘플. speedmax>speedmin 일 때만 RNG 드로(range 고정호출이라 무조건 소비) —
+    /// speed 키 부재(0,0)인 기존 시스템은 드로 0 → RNG 시퀀스·스폰 결과 비트동일.
+    private mutating func emitterSpeedSample(_ index: Int) -> Float {
+        guard index < def.emitterSpeed.count else { return 0 }
+        let sp = def.emitterSpeed[index]
+        if sp.y > sp.x { return rng.range(sp.x, sp.y) }
+        return sp.x
+    }
+
+    private mutating func spawn(_ emitter: Emitter, index: Int) -> Particle {
         var p = Particle()
         switch emitter {
         case let .sphere(origin, directions, dmin, dmax, _, _, sign):
@@ -391,12 +425,34 @@ public struct ParticleSimulator {
             if sg.y != 0 { dir.y = sg.y > 0 ? abs(dir.y) : -abs(dir.y) }
             if sg.z != 0 { dir.z = sg.z > 0 ? abs(dir.z) : -abs(dir.z) }
             p.pos = s3(origin) + dir * rng.range(dmin, dmax)
+            // F620: 이미터 speedmin/speedmax = 방출 방향(dir) 초기속도(WE 문서: movement 오퍼레이터와
+            // 결합하는 particle speed). velocityrandom 이니셜라이저가 있으면 뒤의 apply 가 덮어쓴다
+            // (기존 조합 순서 유지 — velocityrandom 有 시스템 무회귀).
+            let speed = emitterSpeedSample(index)
+            if speed != 0 { p.vel = dir * speed }
         case let .box(origin, dmax, _, _):
             let d = s3(dmax)
-            p.pos = s3(origin) + SIMD3(rng.range(-d.x, d.x), rng.range(-d.y, d.y), rng.range(-d.z, d.z))
+            // F627: distancemin 지정 시 두 코너의 성분별 AABB(음수/역순 축은 성분별 min/max 정규화 —
+            // 실물 "500 500 0"~"1000 256 0" 처럼 min>max 축 존재). 부재 시 ±distanceMax 대칭 레거시.
+            // 두 경로 모두 드로 3개라 RNG 시퀀스 길이는 동일.
+            if index < def.boxDistanceMin.count, let mn = def.boxDistanceMin[index] {
+                let lo = s3(mn)
+                p.pos = s3(origin) + SIMD3(rng.range(min(lo.x, d.x), max(lo.x, d.x)),
+                                           rng.range(min(lo.y, d.y), max(lo.y, d.y)),
+                                           rng.range(min(lo.z, d.z), max(lo.z, d.z)))
+            } else {
+                p.pos = s3(origin) + SIMD3(rng.range(-d.x, d.x), rng.range(-d.y, d.y), rng.range(-d.z, d.z))
+            }
+            // F620(box): 방향 정의가 없어 균등 랜덤 방향 근사 — 코퍼스 box speed 는 전부 0(묵발동).
+            let speed = emitterSpeedSample(index)
+            if speed != 0 { p.vel = randomUnitVector() * speed }
         }
         p.pos += emitOrigin   // 자식 인스턴스: 부모 위치(또는 링크 origin) 오프셋. 루트는 0.
         p.uid = nextUID; nextUID += 1
+        // F622: animationmode=randomframe — 스폰 시 시퀀스 인덱스 1개 확정(sheetFrameIndex 가
+        // 프레임 수로 접는다). mapsequence 이니셜라이저가 있으면 뒤의 apply 가 덮어써 그쪽이 승
+        // (cherry_blossoms 류 — 각도→프레임 명시 매핑이 더 구체적).
+        if def.animationMode == .randomframe { p.frame = rng.range(0, 4096) }
         for ini in def.initializers { apply(ini, to: &p) }
         if let o = oscPosOp {
             p.oscPosFreq = rng.range(o.fmin, o.fmax)
@@ -414,9 +470,14 @@ public struct ParticleSimulator {
             p.oscSizeFreq = rng.range(o.fmin, o.fmax)
             p.oscSizePhase = rng.range(o.pmin, o.pmax) * 2 * .pi
         }
-        if let t = turbulence {
+        if let t = turbulences.first {
             p.turbSpeed = rng.range(t.smin, t.smax)
             p.turbPhase = rng.range(t.pmin, t.pmax)
+            // F628: 2번째 이후 오퍼레이터도 스폰 샘플(단일 오퍼레이터 시스템은 드로 0 → 비트동일).
+            for extra in turbulences.dropFirst() {
+                p.turbExtra.append((speed: rng.range(extra.smin, extra.smax),
+                                    phase: rng.range(extra.pmin, extra.pmax)))
+            }
         }
         if !remaps.isEmpty { p.remapPhase = rng.range(0, 100) }
         // 스폰 위치(+ 위상 오프셋, F177)를 트레일 시작점으로 — oscPos 위상이 0 이 아니면 age=0 에서도
@@ -441,8 +502,10 @@ public struct ParticleSimulator {
 
     /// vortex: axis 를 회전축, offset 를 중심으로 하는 소용돌이. 회전면 반경 dist 에 따라
     /// speedInner(distanceInner)→speedOuter(distanceOuter) 보간한 접선 속도를 가속으로 부여.
-    private func applyVortex(_ v: (axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float, offset: SIMD3<Float>),
-                             to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) {
+    /// F624: audioScale = 오디오반응 배수(WE 문서: particle speed 를 오디오에 연결 — 1 이면 무영향).
+    private func applyVortex(_ v: (axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
+                                   offset: SIMD3<Float>, audio: AudioProcessing?),
+                             to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float, audioScale: Float) {
         let axisN = normalizeSafe(v.axis)
         guard simd_length(axisN) > 1e-6 else { return }
         let rel = pos - v.offset
@@ -452,7 +515,7 @@ public struct ParticleSimulator {
         let t: Float = v.dOut > v.dIn ? max(0, min(1, (dist - v.dIn) / (v.dOut - v.dIn))) : 0
         let speed = v.sIn + (v.sOut - v.sIn) * t
         let tangent = normalizeSafe(simd_cross(axisN, radial))
-        vel += tangent * speed * dt
+        vel += tangent * (speed * audioScale) * dt
     }
 
     /// Particle initializer 분포 성형. exponent==1은 종전 raw 산술과 RNG 시퀀스를 보존한다.
@@ -516,8 +579,17 @@ public struct ParticleSimulator {
                 t = len2 > 1e-8 ? max(0, min(1, simd_dot(p.pos - a, d) / len2)) : 0
             } else {
                 // CP0 기준 각도(0..2π → 0..1).
+                // F630: 실물 "axis"(회전축)로 각도 평면 선택 — 기본 z축=XY 평면(레거시 비트동일).
+                // [보존/추측] 회전 방향(atan2 인자 순서)은 WE 미확정 — 지배 성분 축만 평면을 바꾼다.
                 let rel = p.pos - s3(def.controlPoints[0])
-                t = (atan2(rel.y, rel.x) + .pi) / (2 * .pi)
+                let ax = def.mapSequenceAxis.map { s3($0) } ?? SIMD3<Float>(0, 0, 1)
+                let m = simd_abs(ax)
+                let angle: Float
+                if simd_length(ax) < 1e-6 { angle = atan2(rel.y, rel.x) }       // 퇴화 축 → 레거시
+                else if m.y >= m.x, m.y >= m.z { angle = atan2(rel.x, rel.z) }  // Y축 → XZ 평면
+                else if m.x >= m.z { angle = atan2(rel.y, rel.z) }              // X축 → YZ 평면
+                else { angle = atan2(rel.y, rel.x) }                            // Z축 → XY 평면(레거시)
+                t = (angle + .pi) / (2 * .pi)
             }
             p.frame = t * max(0, count)
         }
