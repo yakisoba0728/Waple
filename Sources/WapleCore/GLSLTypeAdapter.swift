@@ -284,11 +284,17 @@ public enum GLSLTypeAdapter {
         var mid = ""
         if p.peek() == ":" { mid = p.advance().full }
         var b = ternary(p)
-        // 분기 크기 불일치 → 큰 쪽 절단.
-        if a.size > 0, b.size > 0, a.size != b.size {
+        // F612: 분기 크기 불일치는 벡터:벡터(둘 다 >1)일 때만 큰 쪽 절단(HLSL 규칙). 스칼라:벡터는
+        // HLSL/MSL 모두 스칼라를 벡터로 스플랫하므로 무개입 — 종전 절단은 `flag ? 0.0 : (v3).x`
+        // (컴파일 성공·값 조용히 틀어짐)라 유일한 silent 오역 클래스였다.
+        if a.size > 1, b.size > 1, a.size != b.size {
             if a.size > b.size { a = coerce(a, to: b.size) } else { b = coerce(b, to: a.size) }
         }
-        return Node(text: cond.text + a.text + mid + b.text, size: max(a.size, b.size) == 0 ? 0 : min(a.size == 0 ? b.size : a.size, b.size == 0 ? a.size : b.size))
+        let size: Int
+        if a.size == 0 || b.size == 0 { size = max(a.size, b.size) }       // 한쪽 불투명 — 알려진 쪽(기존 규칙)
+        else if a.size == 1 || b.size == 1 { size = max(a.size, b.size) }  // 스칼라 스플랫 — 결과는 벡터 크기
+        else { size = min(a.size, b.size) }                                // 벡터:벡터 — 절단 후 크기
+        return Node(text: cond.text + a.text + mid + b.text, size: size)
     }
 
     private static func binary(_ p: P, ops: Set<String>, next: (P) -> Node, arithmetic: Bool, resultScalar: Bool = false) -> Node {
@@ -458,7 +464,10 @@ public enum GLSLTypeAdapter {
                 if ["min", "max", "clamp", "mix", "step", "pow", "mod"].contains(t), argTexts.count >= 2 {
                     func isIntLiteral(_ x: String) -> Bool {
                         let c = x.trimmingCharacters(in: .whitespaces)
-                        return !c.isEmpty && c.allSatisfy { $0.isNumber }
+                        // F615: 음수 정수 리터럴(`-1`)도 승격 대상 — `-` 미포함 오목으로 미승격 시
+                        // MSL (int,float) 혼합 오버로드 모호 LOUD 폴 fallback 클래스.
+                        let digits = c.hasPrefix("-") ? c.dropFirst() : c[...]
+                        return !digits.isEmpty && digits.allSatisfy { $0.isNumber }
                     }
                     let anyNonInt = argTexts.contains { !isIntLiteral($0) }
                     if anyNonInt {
