@@ -67,6 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 한 버스트 안의 중간값이 아니라 '정착 전 vs 정착 후'를 비교한다.
     private lazy var lastSettledScreenCount = NSScreen.screens.count
 
+    // F555: 비디오 비동기 실패 Notification 구독 핸들(블록 옵저버는 retain 필요).
+    private var videoFailureObserver: NSObjectProtocol?
+
     // 최근 배경 서브메뉴(작업 6): 열 때마다 최신 목록으로 다시 채운다(NSMenuDelegate).
     private weak var recentMenu: NSMenu?
 
@@ -162,6 +165,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSApplication.didChangeScreenParametersNotification,
             object: nil
         )
+
+        // F555: 비디오 배경의 비동기 실패(변환 실패·재생 중 실패 후 회복 불가)를 배너로 표면화.
+        // 발행 스레드가 백그라운드일 수 있어 메인으로 홉한다.
+        videoFailureObserver = NotificationCenter.default.addObserver(
+            forName: .wapleVideoPlaybackFailed, object: nil, queue: nil
+        ) { [weak self] note in
+            let name = (note.userInfo?["url"] as? URL)?.lastPathComponent ?? "비디오"
+            DispatchQueue.main.async {
+                _ = self?.notify("비디오를 재생할 수 없습니다: \(name)")
+            }
+        }
 
         // 시스템/디스플레이 슬립 중 렌더 정지, 웨이크 시 재개(수동·가림 사유가 남아 있으면 유지).
         // NSWorkspace 알림은 default 센터가 아니라 workspace 전용 센터로 온다.
