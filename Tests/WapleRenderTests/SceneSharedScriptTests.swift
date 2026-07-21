@@ -378,8 +378,9 @@ final class SceneScriptMountLifecycleTests: XCTestCase {
 
         let script = """
         function propertyValue(props, key) {
+            // F760: 훅 인자는 원시값 맵(F702 신 WE 계약) — `.value` 래퍼 접근은 구 계약이라 undefined 만 나온다.
             return Object.prototype.hasOwnProperty.call(props, key)
-                ? String(props[key].value) : 'missing';
+                ? String(props[key]) : 'missing';
         }
         shared.order = ['top:\(marker)'];
         export function applyUserProperties(props) {
@@ -493,8 +494,8 @@ final class SceneScriptMountLifecycleTests: XCTestCase {
         var trace = ['top'];
         var delivered = '';
         export function applyUserProperties(props) {
-            delivered = [props.enabled.value, props.amount.value, props.label.value,
-                         props.mode.value, props.baseOnly.value].join('|');
+            delivered = [props.enabled, props.amount, props.label,
+                         props.mode, props.baseOnly].join('|');
             trace.push('apply');
         }
         export function init(value) { trace.push('init:' + value); }
