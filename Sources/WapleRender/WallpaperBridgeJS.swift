@@ -55,6 +55,36 @@ enum WallpaperBridgeJS {
         }
       }
       installServiceWorkerShim();
+      // F682: WE 의미론의 Page Visibility 스푸핑. 데스크탑/헤드리스 WKWebView 의 네이티브
+      // document.hidden/visibilityState 는 월페이퍼 가시성과 무관하다(헤드리스 호스트는 항상 hidden —
+      // 가시성 게이트로 애니메이션을 미루는 페이지가 영구 정지한다). WE 는 월페이퍼가 가려질 때
+      // (=Waple pause) hidden=true + visibilitychange 를 발화하므로 pause 상태를 hidden 으로 매핑한다
+      // (__wapleSetPaused 가 갱신). atDocumentStart 주입이라 페이지 스크립트는 항상 스푸핑 값만 본다.
+      var spoofedHidden = false;
+      function spoofVisibilityGetter(name) {
+        return function () {
+          if (name === 'hidden' || name === 'webkitHidden') { return spoofedHidden; }
+          return spoofedHidden ? 'hidden' : 'visible';
+        };
+      }
+      ['hidden', 'webkitHidden', 'visibilityState', 'webkitVisibilityState'].forEach(function (name) {
+        var installed = false;
+        try {
+          Object.defineProperty(document, name, { get: spoofVisibilityGetter(name), configurable: true });
+          installed = true;
+        } catch (e) {}
+        if (!installed) {
+          try {
+            if (window.Document && window.Document.prototype) {
+              Object.defineProperty(window.Document.prototype, name,
+                { get: spoofVisibilityGetter(name), configurable: true });
+            }
+          } catch (e) {}
+        }
+      });
+      function fireVisibilityChange() {
+        try { document.dispatchEvent(new Event('visibilitychange')); } catch (e) {}
+      }
       function forEachChild(fn) {
         for (var i = 0; i < window.frames.length; i++) {
           try {
@@ -162,6 +192,8 @@ enum WallpaperBridgeJS {
         paused = !!paused;
         if (lastPaused === paused) { return; }
         lastPaused = paused;
+        // F682: WE 처럼 가시성 전이를 페이지에 알린다(가림/수동정지=hidden, 복귀=visible).
+        if (spoofedHidden !== paused) { spoofedHidden = paused; fireVisibilityChange(); }
         setHardPaused(paused);
         if (listener && listener.setPaused) {
           try { listener.setPaused(paused); } catch (e) {}

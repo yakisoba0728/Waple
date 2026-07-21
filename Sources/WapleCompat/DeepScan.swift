@@ -80,6 +80,10 @@ final class DeepAgg {
     var oggRefs = 0, oggDecodeOK = 0, oggDecodeFail = 0, oggSilent = 0, oggNaN = 0
     var oggChannels: [Int: Int] = [:], oggRates: [Int: Int] = [:]
     var oggFailSamples: [String] = []
+    // F681: ogg 전수 디코드가 스캔 벽시계를 지배(실측 wall 2522s 중 translate+decode 2519s) — 누적 디코드
+    // 시간이 예산(DeepScan.oggDecodeTimeBudget)을 넘으면 나머지는 디코드 없이 refs 만 센다(실패 아님).
+    var oggSkippedBudget = 0
+    var oggDecodeSeconds = 0.0
 
     // presets
     var presetTotal = 0, presetResolved = 0
@@ -146,6 +150,16 @@ struct PkgAssets {
 
 enum DeepScan {
     static let handPortNames: Set<String> = ["opacity", "tint", "pulse", "waterripple", "scroll", "waterwaves", "shake"]
+
+    /// F681: ogg 디코드 누적 시간 예산(초). 순수 Swift Vorbis 디코드는 Debug 빌드에서 0.9MB ≈ 21s 라
+    /// 음악 다수 씬에서 전수 디코드가 스캔 벽시계를 지배한다(실측 2522s 중 2519s). 예산 초과분은
+    /// 디코드 없이 참조 존재만 집계(oggSkippedBudget — 실패가 아니라 시간 상한에 의한 걸러넘김).
+    /// WAPLE_DEEP_OGG_BUDGET 환경변수로 오버라이드 가능(예산 경로 검증 등 디버그 게이트).
+    static let oggDecodeTimeBudget: TimeInterval = {
+        if let s = ProcessInfo.processInfo.environment["WAPLE_DEEP_OGG_BUDGET"],
+           let v = Double(s), v >= 0 { return v }
+        return 120
+    }()
 
     /// - Returns: (마크다운 리포트, 프로젝트-레벨 미지원 건수 — F151 `--deep --strict` 게이트용. "미지원" 은
     ///   DeepReport 의 프로젝트-레벨 표(ALL 행)와 동일 기준: 핵심 에셋 파싱 실패, 위 리포트 각주 참고.)
@@ -604,6 +618,16 @@ enum DeepScan {
 
     /// ogg 1개를 실제 디코드해 정합성 집계: 에러 0 / 채널·레이트 기록 / RMS 비무음 / NaN·Inf 없음.
     static func verifyOgg(_ data: Data, path: String, agg: DeepAgg) {
+        // F681: 누적 디코드 시간이 예산을 넘으면 이 파일은 디코드하지 않는다(스캔 시간 상한 — 실패 아님).
+        if agg.sync({ agg.oggDecodeSeconds >= oggDecodeTimeBudget }) {
+            agg.sync { agg.oggRefs += 1; agg.oggSkippedBudget += 1 }
+            return
+        }
+        let started = CFAbsoluteTimeGetCurrent()
+        defer {
+            let dt = CFAbsoluteTimeGetCurrent() - started
+            agg.sync { agg.oggDecodeSeconds += dt }
+        }
         guard let audio = try? OggVorbisDecoder.decode(data), audio.frameCount > 0 else {
             agg.sync { agg.oggRefs += 1; agg.oggDecodeFail += 1; agg.addSample2(&agg.oggFailSamples, "decode:\(path)") }
             return
