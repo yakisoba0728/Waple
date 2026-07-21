@@ -793,7 +793,8 @@ extension SceneRenderer {
             var current = bb.texture
             for eff in bb.effects {
                 guard let next = pooledOffscreen(bb.texWidth, bb.texHeight, device) else { break }
-                applyEffect(eff, src: current, dst: next, time: time, cb: cb)
+                // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
+                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
                 current = next
             }
             billboardTextures[i] = current
@@ -832,7 +833,9 @@ extension SceneRenderer {
         if frameShakeOffset != .zero { viewProj = Scene3DMath.clipTranslation(frameShakeOffset) * viewProj }
         // 빌보드 카메라-페이싱 축(월드): right/up(lookAt 과 동일 규약).
         let fwd = simd_normalize(ctr - eye)
-        let right = simd_normalize(simd_cross(fwd, upv))
+        // F533: 퇴화 up(영/평행)은 lookAt 과 같은 기준축 폴백 — 뷰행렬과 빌보드 축 정합 유지 + NaN 방어.
+        let bbUp = Scene3DMath.upReference(forward: fwd, up: upv)
+        let right = simd_normalize(simd_cross(fwd, bbUp))
         let camUp = simd_cross(right, fwd)
         let resolvedLights = Scene3DLighting.resolveLights(scene3DLights, nodes: nmap)
         var frameUniform = Scene3DFrameUniform(
@@ -886,7 +889,8 @@ extension SceneRenderer {
                             var current: MTLTexture = snap
                             for eff in bb.effects {
                                 guard let next = pooledOffscreen(target.width, target.height, device) else { break }
-                                applyEffect(eff, src: current, dst: next, time: time, cb: cb)
+                                // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
+                                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
                                 current = next
                             }
                             srcTex = current
@@ -939,7 +943,14 @@ extension SceneRenderer {
                     u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
                     let useSkin = mesh.skinned && boneBuf != nil
                     let pipe: MTLRenderPipelineState
-                    if useSkin { pipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin ?? over) : (meshPipelineSkin ?? over) }
+                    if useSkin {
+                        // F541(F-73): 스킨 파이프라인 nil 시 8f 셰이더(over/mv_main)로 16f 패킹 메시를
+                        // 오렌더해 지오메트리 붕괴 — :937 주석과 같은 스킵으로 통일(skinAdditive→skin 폴백은
+                        // 동일 16f 셰이더라 유지, over 폴백만 제거).
+                        let skinPipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin) : meshPipelineSkin
+                        guard let p = skinPipe else { continue }
+                        pipe = p
+                    }
                     else { pipe = mesh.additive ? (meshPipelineAdditive ?? over) : over }
                     enc.setRenderPipelineState(pipe)
                     if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {

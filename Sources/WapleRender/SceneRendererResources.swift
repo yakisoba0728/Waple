@@ -153,8 +153,9 @@ extension SceneRenderer {
                 mtl = t
                 // 컴포지션 효과 dims 는 화면 근사, 솔리드는 레이어 크기 — 1×1 이면 공간 가변 효과
                 // (waterwaves/scroll 등) 체인 전체가 1픽셀 타깃으로 퇴화(단색화).
-                effW = layer.isFrameBuffer ? Int(max(1, projW)) : max(1, Int(layer.size.x.rounded()))
-                effH = layer.isFrameBuffer ? Int(max(1, projH)) : max(1, Int(layer.size.y.rounded()))
+                // F530: 거대 size/projection 의 Int() 변환 트랩 방지 — safeFloatToInt(FrameEncoder) 경유.
+                effW = layer.isFrameBuffer ? Self.safeFloatToInt(projW, floor: 1) : Self.safeFloatToInt(layer.size.x, floor: 1)
+                effH = layer.isFrameBuffer ? Self.safeFloatToInt(projH, floor: 1) : Self.safeFloatToInt(layer.size.y, floor: 1)
             } else if let sv = videoLayerProvider(layer, package: package, sceneID: sceneID, index: uid),
                       let ph = makeTexture(Data([0, 0, 0, 0]), 1, 1, device) {
                 // 비디오-텍스처 레이어: 씬을 통째로 VideoRenderer 로 스왑(형제 소실)하지 않고 일반 레이어로
@@ -162,8 +163,8 @@ extension SceneRenderer {
                 // (라이브: AVPlayerItemVideoOutput / 헤드리스: AVAssetImageGenerator)로 공급. 디코드 실패 시
                 // placeholder(투명)라 형제 레이어는 그대로 보존. rect/blend/opacity 는 아래 일반 경로가 존중.
                 mtl = ph
-                effW = max(1, Int(layer.size.x.rounded()))
-                effH = max(1, Int(layer.size.y.rounded()))
+                effW = Self.safeFloatToInt(layer.size.x, floor: 1)  // F530: Int() 트랩 가드
+                effH = Self.safeFloatToInt(layer.size.y, floor: 1)
                 videoLayer = sv
                 hasVideoLayer = true
             } else if layer.spritesheet,
@@ -174,8 +175,8 @@ extension SceneRenderer {
                 // 정지 이미지와 동등 → 아래 일반 경로로(무-프레임, 상시 리드로 유발 안 함).
                 mtl = sprite.texture
                 frames = sprite.frames
-                effW = max(1, Int(sprite.frames[0].atlasWidth.rounded()))
-                effH = max(1, Int(sprite.frames[0].atlasHeight.rounded()))
+                effW = Self.safeFloatToInt(sprite.frames[0].atlasWidth, floor: 1)  // F530: Int() 트랩 가드
+                effH = Self.safeFloatToInt(sprite.frames[0].atlasHeight, floor: 1)
             } else if let loaded: (texture: MTLTexture, width: Int, height: Int) = resolveRequiredAsset(
                 [layer.textureEntryName],
                 package: package,

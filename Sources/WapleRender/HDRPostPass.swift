@@ -29,18 +29,21 @@ final class HDRPostPass {
 
     /// float `src`(HDR 누적) 를 saturate 클램프해 LDR `dst` 로 그린다. 풀스크린 삼각형 — 최종 blit 대체.
     /// 현재 command buffer 에 자체 render encoder 를 open/close(호출부는 그 전에 씬 encoder 를 닫아야 한다).
-    func encode(cb: MTLCommandBuffer, src: MTLTexture, dst: MTLTexture) {
+    /// F539(F-71): 인코더 생성 실패를 삼키지 않고 false 반환 — 미기록 dst present/캡처를 호출부가 스킵 가능.
+    @discardableResult
+    func encode(cb: MTLCommandBuffer, src: MTLTexture, dst: MTLTexture) -> Bool {
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = dst
         rpd.colorAttachments[0].loadAction = .dontCare   // 풀스크린 삼각형이 전 픽셀 덮음
         rpd.colorAttachments[0].storeAction = .store
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
         enc.setRenderPipelineState(pipeline)
         enc.setFragmentTexture(src, index: 0)
         var exp = exposure
         enc.setFragmentBytes(&exp, length: MemoryLayout<Float>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
+        return true
     }
 
     private static let source = """

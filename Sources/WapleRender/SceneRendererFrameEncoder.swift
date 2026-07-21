@@ -238,7 +238,8 @@ extension SceneRenderer {
             var current: MTLTexture = snap
             for eff in layer.effects {
                 guard let next = pooledOffscreen(acc.width, acc.height, device) else { break }
-                applyEffect(eff, src: current, dst: next, time: time, cb: cb)
+                // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
+                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
                 current = next
             }
             srcTex = current
@@ -803,14 +804,25 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
+    /// F530(F-2/F-70): 유한하지만 Int 범위를 넘는 float 의 Int() 변환은 클램프 전에 트랩 — 비신뢰
+    /// 패키지(거대 TEXS 프레임/scene.json size) 크래시 방지. ParticleSystem.sheetFrameIndex(:50) 의
+    /// Int.max 가드와 동형. 반환은 항상 ≥ floor(비유한/음수 → floor).
+    static func safeFloatToInt(_ v: Float, floor: Int) -> Int {
+        guard v.isFinite else { return floor }
+        let r = v.rounded()
+        if r <= 0 { return floor }
+        return r >= Float(Int.max) ? Int.max : max(floor, Int(r))
+    }
+
     /// 스프라이트 프레임의 아틀라스 절대 서브렉트(정수 픽셀, 엄격 클램프). 잘못된 TEXS 렉트도 경계 내로
     /// 자른다(추출 validation 크래시 방지). 종전 blit 과 동일 규약 — nearest 추출이 이 정수 렉트를
     /// 텍셀 단위로 재현하도록 rounded→clamp 를 그대로 유지(비-BC bit-identical 근거).
     static func spriteSubrect(atlasW aw: Int, atlasH ah: Int, frame fr: TexImage.TexFrame) -> (x: Int, y: Int, w: Int, h: Int) {
-        let sx = max(0, min(aw - 1, Int(fr.atlasX.rounded())))
-        let sy = max(0, min(ah - 1, Int(fr.atlasY.rounded())))
-        let fw = max(1, min(aw - sx, Int(fr.atlasWidth.rounded())))
-        let fh = max(1, min(ah - sy, Int(fr.atlasHeight.rounded())))
+        // F530: Int() 직접 변환 금지 — safeFloatToInt 경유(거대 좌표/크기는 Int.max 까지만 허용).
+        let sx = max(0, min(aw - 1, safeFloatToInt(fr.atlasX, floor: 0)))
+        let sy = max(0, min(ah - 1, safeFloatToInt(fr.atlasY, floor: 0)))
+        let fw = max(1, min(aw - sx, safeFloatToInt(fr.atlasWidth, floor: 1)))
+        let fh = max(1, min(ah - sy, safeFloatToInt(fr.atlasHeight, floor: 1)))
         return (sx, sy, fw, fh)
     }
 
@@ -875,7 +887,8 @@ extension SceneRenderer {
             var current = base
             for eff in layer.effects {
                 guard let next = pooledOffscreen(layer.texWidth, layer.texHeight, device) else { break }
-                applyEffect(eff, src: current, dst: next, time: time, cb: cb)
+                // F532: 인코드 실패 시 미기록 next 를 표시 결과로 채택하지 않음(:877 가드와 정합).
+                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
                 current = next
             }
             out.append(current)
@@ -883,14 +896,17 @@ extension SceneRenderer {
         return out
     }
 
-    func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, time: Float, cb: MTLCommandBuffer) {
+    /// 효과 1개를 src→dst 로 인코드. 반환값 = dst 기록 완료 여부(F532 — 조기 반환 시 dst 미기록을
+    /// 호출부가 알 수 있게; 실패 시 호출부는 마지막 유효 텍스처를 유지하도록 break).
+    @discardableResult
+    func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, time: Float, cb: MTLCommandBuffer) -> Bool {
         switch eff.bind {
         case .handPort(let params, let aux, let audio):
             let rpd = MTLRenderPassDescriptor()
             rpd.colorAttachments[0].texture = dst
             rpd.colorAttachments[0].loadAction = .clear
             rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-            guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+            guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
             enc.setRenderPipelineState(eff.pipeline)
             enc.setVertexBuffer(effectVertexBuffer, offset: 0, index: 0)
             enc.setFragmentTexture(src, index: 0)  // g_Texture0 = framebuffer
@@ -909,7 +925,7 @@ extension SceneRenderer {
             enc.endEncoding()
 
         case .translated(var passes, let fboScales):
-            guard let device else { return }  // mount 이후 항상 존재 — 강제 언랩 제거(teardown 경합 안전)
+            guard let device else { return false }  // mount 이후 항상 존재 — 강제 언랩 제거(teardown 경합 안전)
             // 디버그: WAPLE_MP_TRUNC=n → 앞 n개 패스만 실행(마지막은 dst 로 강제) — 패스별 이분용.
             if let t = ProcessInfo.processInfo.environment["WAPLE_MP_TRUNC"], let n = Int(t), n > 0, n < passes.count {
                 passes = Array(passes.prefix(n))
@@ -922,7 +938,7 @@ extension SceneRenderer {
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
             var fboTex: [MTLTexture] = []
             for s in fboScales {
-                guard let t = pooledOffscreen(max(1, baseW / s), max(1, baseH / s), device) else { return }
+                guard let t = pooledOffscreen(max(1, baseW / s), max(1, baseH / s), device) else { return false }
                 fboTex.append(t)
             }
             for pass in passes {
@@ -931,7 +947,7 @@ extension SceneRenderer {
                 rpd.colorAttachments[0].texture = target
                 rpd.colorAttachments[0].loadAction = .clear
                 rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-                guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+                guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
                 enc.setRenderPipelineState(pass.pipeline)
                 // 변환본 규약: 인터리브드 쿼드 buffer(4), p buffer(0)·EngineU buffer(1) 는 vert+frag 양쪽.
                 enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
@@ -976,6 +992,7 @@ extension SceneRenderer {
                 enc.endEncoding()
             }
         }
+        return true
     }
 
     /// bgra8 타겟 readback(BGRA→RGBA 스왑) → PNG 저장. 성공 여부 반환.

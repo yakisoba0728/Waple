@@ -41,8 +41,9 @@ extension SceneRenderer {
                 return true
             }
             if let hdrPost {
-                hdrPost.encode(cb: commandBuffer, src: source, dst: destination)
-                return true
+                // F539(F-71): hdrPost 자체의 인코더 실패도 호출부에 전파(미기록 dst present/캡처 방지) —
+                // "인코드 실패는 hdrPost 폴백(무크래시)" 보장은 hdrPost 생성 실패(위 guardlet)까지만 유효.
+                return hdrPost.encode(cb: commandBuffer, src: source, dst: destination)
             }
         }
 

@@ -74,6 +74,8 @@ enum QuadShaders {
     }
     // WE genericimage4 유한광 감쇠의 GLSL/Metal 포트. 반경 경계는 0^0 스파이크를 막도록 hard zero.
     inline float finiteLightFalloff(float dist, float radius, float exponent) {
+        // F543(F-75): radius<=0 가드(Mesh3DShaders:142 사본과 대칭) — 호출부(f_lit)가 선차단하지만 방어 일관성.
+        if (radius <= 0.0) return 0.0;
         float falloff = clamp(1.0 - dist / radius, 0.0, 1.0);
         constexpr float eps = 6.103515625e-5;
         return falloff >= eps ? pow(falloff + eps, exponent) : 0.0;

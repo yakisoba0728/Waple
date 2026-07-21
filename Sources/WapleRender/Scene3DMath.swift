@@ -7,14 +7,28 @@ import WapleCore
 enum Scene3DMath {
     /// gluLookAt 동형(우수 좌표, 카메라 전방 = 뷰 -Z). eye 는 원점으로, center 는 -Z 축 위로 사상.
     static func lookAt(eye: SIMD3<Float>, center: SIMD3<Float>, up: SIMD3<Float>) -> simd_float4x4 {
-        let f = simd_normalize(center - eye)             // 전방
-        let s = simd_normalize(simd_cross(f, up))        // 우측
-        let u = simd_cross(s, f)                         // 상방(직교화)
+        // F533(F-7): 전방 퇴화(eye==center/비유한)나 up 퇴화(영벡터·전방과 평행·비유한)면 정규화가
+        // NaN 을 viewProj 전체로 전파해 3D 프레임이 소실 — 안전 축으로 폴백해 total 함수로 유지한다
+        // (호출부의 eye==center 베이스 폴백은 별도 유지, 이 가드는 베이스 침러라 자체 퇴화까지 커버).
+        let fraw = center - eye
+        let f = (fraw.x.isFinite && fraw.y.isFinite && fraw.z.isFinite && simd_length_squared(fraw) > 1e-12)
+            ? simd_normalize(fraw) : SIMD3<Float>(0, 0, -1)     // 전방
+        let ref = upReference(forward: f, up: up)
+        let s = simd_normalize(simd_cross(f, ref))              // 우측
+        let u = simd_cross(s, f)                                // 상방(직교화)
         return simd_float4x4(columns: (
             SIMD4<Float>(s.x, u.x, -f.x, 0),
             SIMD4<Float>(s.y, u.y, -f.y, 0),
             SIMD4<Float>(s.z, u.z, -f.z, 0),
             SIMD4<Float>(-simd_dot(s, eye), -simd_dot(u, eye), simd_dot(f, eye), 1)))
+    }
+
+    /// F533(F-7): up 이 전방 f(정규화됨)에 대해 유효하면 그대로, 퇴화(영/평행/비유한)면 f 와 가장 덜
+    /// 정렬된 기준축을 반환. lookAt 과 빌보드 축 계산이 같은 up 규약을 쓰도록 공용으로 둔다.
+    static func upReference(forward f: SIMD3<Float>, up: SIMD3<Float>) -> SIMD3<Float> {
+        let c = simd_cross(f, up)
+        if c.x.isFinite && c.y.isFinite && c.z.isFinite && simd_length_squared(c) > 1e-12 { return up }
+        return abs(f.y) < 0.9 ? SIMD3<Float>(0, 1, 0) : SIMD3<Float>(1, 0, 0)
     }
 
     /// 원근 투영(세로 화각 도(度), Metal 뎁스 0..1). 뷰 z=-near → ndc z 0, z=-far → 1.
