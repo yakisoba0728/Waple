@@ -4,8 +4,10 @@
 enum BlendMSL {
     static let source = """
     inline float3 we_overlay(float3 b, float3 s) { return select(2.0*b*s, 1.0-2.0*(1.0-b)*(1.0-s), b >= 0.5); }
-    inline float3 we_colorburn(float3 b, float3 s) { return select(max(1.0-(1.0-b)/max(s,1e-5), 0.0), float3(0.0), s == 0.0); }
-    inline float3 we_colordodge(float3 b, float3 s) { return select(min(b/max(1.0-s,1e-5), 1.0), float3(1.0), s == 1.0); }
+    // F542(F-74): 경계 등호를 GLSL 내장본(BuiltinShaderIncludes.commonBlending step)과 일치 — colorburn 은
+    // s≤0(step(s,0)), colordodge 는 s≥1(step(1,s))에서 상수 선택(HDR 슈퍼브라이트/음수 틴트 발산 해소).
+    inline float3 we_colorburn(float3 b, float3 s) { return select(max(1.0-(1.0-b)/max(s,1e-5), 0.0), float3(0.0), s <= 0.0); }
+    inline float3 we_colordodge(float3 b, float3 s) { return select(min(b/max(1.0-s,1e-5), 1.0), float3(1.0), s >= 1.0); }
     inline float3 we_softlight(float3 b, float3 s) { return select(2.0*b*s + b*b*(1.0-2.0*s), sqrt(max(b,0.0))*(2.0*s-1.0)+2.0*b*(1.0-s), s >= 0.5); }
     inline float3 we_linearlight(float3 b, float3 s) { return select(max(b+2.0*s-1.0, 0.0), b+2.0*(s-0.5), s >= 0.5); }
     inline float3 we_vividlight(float3 b, float3 s) { return select(we_colorburn(b, 2.0*s), we_colordodge(b, 2.0*(s-0.5)), s >= 0.5); }

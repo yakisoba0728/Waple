@@ -123,6 +123,7 @@ final class HDRBloomPass: HDRBloomEncoding {
               }),
               destination.textureType == .type2D,
               destination.pixelFormat == .bgra8Unorm,
+              source !== destination,   // F540(F-72): 자기샘플 거부(LDRBloomPass:96 과 대칭 — 향후 dst float 화 대비)
               quarter !== eighth,
               quarter !== bloom,
               eighth !== bloom,

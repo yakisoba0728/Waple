@@ -147,7 +147,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let textLayers = doc.texts.map { text in
             SceneScriptLayerDescriptor(
                 name: text.name,
-                visible: true,
+                // F537(F-68): 이미지 레이어(:138)와 동일하게 초기 가시성 존중 — visible 스크립트 바인딩된
+                // 정적 비가시 텍스트의 최초 스크립트 판독(getLayer(name).visible)이 부정확하던 것을 수정.
+                visible: text.initialVisible,
                 alpha: text.alpha,
                 origin: SIMD3<Float>(text.origin.x, text.origin.y, 0),
                 scale: SIMD3<Float>(text.scale.x, text.scale.y, 1),
@@ -156,6 +158,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             )
         }
         return imageLayers + textLayers
+    }
+
+    /// F535(F-50): 이 창이 프라이머리(NSScreen.screens.first = 메뉴 바) 화면에 있는지. 헤드리스
+    /// (window == nil)는 false — 기존 캡처/테스트의 사운드 스킵(결정성) 계약과 동일. 멀티모니터 동일 씬
+    /// 사운드의 N중 재생(시차 에코)을 프라이머리 화면 1개로 디듑하는 데 쓴다.
+    static func isPrimaryScreenWindow(_ window: NSWindow?) -> Bool {
+        guard let screen = window?.screen, let primary = NSScreen.screens.first else { return false }
+        return screen == primary
     }
 
     // ── 씬 이벤트(클릭/미디어) ───────────────────────────────────────────────
@@ -1115,6 +1125,29 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // buildAnimationEventTargets 가 animationlayers 스크립트 엔진을 새로 등록(eventEngines/
         // hoverEngineLayers 경유)하므로 아래 배선 스캔들보다 먼저 호출(의존 리소스는 위에서 이미 완성).
         buildAnimationEventTargets(doc: doc)  // 타임라인/퍼펫 마커 → animationEvent 발화 타깃(오브젝트 스코프)
+        // 씬 sound 레이어 재생 — 라이브 한정. 헤드리스(캡처/테스트)는 container.window == nil → 스킵(결정성).
+        // 음량은 VideoSettings(배경별) 재사용 → 동영상 설정 메뉴의 음소거/음량이 씬 오디오에도 적용.
+        // F538(F-69): volume 프로퍼티 스크립트 엔진(makeScriptEngine)은 아래 이벤트 배선 스캔들과 오디오
+        // 프로바이더 기동 게이트(:1129)보다 먼저 생성되어야 훅 등록(eventEngines/hoverEngineLayers)과
+        // scriptWantsAudio 승격이 반영된다 — 종전에는 mount 말미 생성이라 훅 배달이 누락됐다.
+        // F535(F-50): 멀티모니터에서 동일 씬이 여러 화면에 마운트되면 화멻다 SceneAudioPlayer 가 생겨
+        // 같은 사운드가 마운트 시차만큼 어긋나 N중 재생(에코) — 프라이머리(메뉴 바) 화멻만 재생.
+        if Self.isPrimaryScreenWindow(container.window), !doc.sounds.isEmpty {
+            let audio = SceneAudioPlayer()
+            // F214: volume 프로퍼티 스크립트(오디오/페이드 구동, 실측 12건) — 엔진은 씬 공유 컨텍스트에서
+            // 생성(makeScriptEngine, top-level 사이드이펙트 즉시 실행). tick(time:) 이 draw 루프에서 재평가.
+            audio.start(sounds: doc.sounds, package: package,
+                        settingVolume: VideoSettings.volume(id: project.id),
+                        volumeEngine: { [weak self] snd in
+                            guard let src = snd.volumeScript else { return nil }
+                            return self?.makeScriptEngine(src, layerName: snd.name.isEmpty ? nil : snd.name,
+                                                          scriptPropsJSON: snd.volumeScriptProps)
+                        })
+            sceneAudio = audio
+            // 씬 스크립트 사운드 트리거(getLayer(name).play()/isPlaying()/.volume)를 실제 트랜스포트에 배선.
+            // 헤드리스(오디오 미생성)에선 미연결 → 브리지가 안전 no-op(트리거는 무시, 캡처 결정성 유지).
+            sceneScript?.soundTransport = audio
+        }
         startClickMonitorIfNeeded()
         hasCursorMoveHook = eventEngines.contains(where: { $0.hookNames.contains("cursorMove") })
         buildHoverTargets(doc: doc)   // cursorEnter/Leave 레이어 AABB 해석
@@ -1142,24 +1175,6 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             }
             provider.start()
             audioProvider = provider
-        }
-        // 씬 sound 레이어 재생 — 라이브 한정. 헤드리스(캡처/테스트)는 container.window == nil → 스킵(결정성).
-        // 음량은 VideoSettings(배경별) 재사용 → 동영상 설정 메뉴의 음소거/음량이 씬 오디오에도 적용.
-        if container.window != nil, !doc.sounds.isEmpty {
-            let audio = SceneAudioPlayer()
-            // F214: volume 프로퍼티 스크립트(오디오/페이드 구동, 실측 12건) — 엔진은 씬 공유 컨텍스트에서
-            // 생성(makeScriptEngine, top-level 사이드이펙트 즉시 실행). tick(time:) 이 draw 루프에서 재평가.
-            audio.start(sounds: doc.sounds, package: package,
-                        settingVolume: VideoSettings.volume(id: project.id),
-                        volumeEngine: { [weak self] snd in
-                            guard let src = snd.volumeScript else { return nil }
-                            return self?.makeScriptEngine(src, layerName: snd.name.isEmpty ? nil : snd.name,
-                                                          scriptPropsJSON: snd.volumeScriptProps)
-                        })
-            sceneAudio = audio
-            // 씬 스크립트 사운드 트리거(getLayer(name).play()/isPlaying()/.volume)를 실제 트랜스포트에 배선.
-            // 헤드리스(오디오 미생성)에선 미연결 → 브리지가 안전 no-op(트리거는 무시, 캡처 결정성 유지).
-            sceneScript?.soundTransport = audio
         }
         // 마운트 상주 GPU 메모리(통합메모리이므로 phys_footprint 델타와 함께 리포트).
         if WapleProfiler.enabled { WapleProfiler.deviceAllocatedBytes = device.currentAllocatedSize }
@@ -1212,6 +1227,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         stopAudio: () -> Void,
         startAudioIfNeeded: () -> Void
     ) {
+        // F534(F-8): 명시 정지(scenePausedAt) 중엔 가림 전이를 처리하지 않는다 — pause() 가 정지 시작
+        // 시각을 이미 소유(가림 추적도 이어받음)하고 resume() 이 전체 정지 구간을 단일 보정하므로, 여기서
+        // 보정하면 겹친 만큼 씬 시간이 역행하고 startAudioIfNeeded 가 정지 중 캡처를 재기동한다.
+        guard scenePausedAt == nil else { return }
         if occluded {
             guard drawGateOccludedSince == nil else { return }   // 이미 가림 추적 중 — 매 프레임 재발화 방지
             drawGateOccludedSince = now
@@ -1387,9 +1406,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 frameShakeOffset = shakeOffset(at: t)  // 라이브 draw 동형: A/B 캡처가 3D 지터 오프셋을 판독(비활성=.zero)
                 // HDR bloom/LDR bloom 모두 readback(target)과 분리된 불변 소스 필요.
                 // HDR 은 pooledOffscreen(bgra:true) 이 hdrActive 로 float(rgba16Float) 승격 → >1 보존해 골든 대조.
-                let source = (hdrActive || sceneWantsLDRBloom)
-                    ? (pooledOffscreen(width, height, device, bgra: true) ?? target)
-                    : target
+                // F531(F-5): HDR 씬에서 float 소스 할당 실패 시 target(bgra8) 폴백은 씬 파이프라인(accPixelFormat=
+                // float) 포맷 불일치 + finalizer 의 hdrPost 자기샘플(src===dst)이 성립 — 그 프레임은 스킵한다
+                // (라이브 draw :1279 와 동일 패턴). LDR bloom 은 target 폴백 안전(finalizer 의 src!==dst 가드).
+                let source: MTLTexture
+                if hdrActive {
+                    guard let s = pooledOffscreen(width, height, device, bgra: true) else { continue }
+                    source = s
+                } else {
+                    source = sceneWantsLDRBloom ? (pooledOffscreen(width, height, device, bgra: true) ?? target) : target
+                }
                 guard encode3D(into: source, cb: cb, device: device, time: t, particleDelta: nil) else { continue }
                 guard finalizeScene(
                     source: source,
@@ -1422,10 +1448,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
             let displayTextures = buildDisplayTextures(device: device, time: t, cb: cb)  // beginFramePool 포함
             // HDR tone-map and LDR bloom both need an immutable scene source distinct from readback.
-            let needsSeparateFinalSource = hdrActive || sceneWantsLDRBloom
-            let acc = needsSeparateFinalSource
-                ? (pooledOffscreen(width, height, device, bgra: true) ?? target)
-                : target
+            // F531(F-5): HDR 씬의 float acc 할당 실패 시 target(bgra8) 폴백은 포맷 불일치/자기샘플 — 프레임 스킵.
+            let acc: MTLTexture
+            if hdrActive {
+                guard let s = pooledOffscreen(width, height, device, bgra: true) else { continue }
+                acc = s
+            } else {
+                acc = sceneWantsLDRBloom ? (pooledOffscreen(width, height, device, bgra: true) ?? target) : target
+            }
             let rpd = MTLRenderPassDescriptor()
             rpd.colorAttachments[0].texture = acc
             rpd.colorAttachments[0].loadAction = .clear
