@@ -184,7 +184,7 @@ extension SceneRenderer {
         scene3DSkylight = SIMD3(doc.skylightColor.x, doc.skylightColor.y, doc.skylightColor.z)
         // F662(S-45): scene fog(general.fogdistance*/fogheight*) — SceneDocument 미파스 필드라
         // 패키지 scene.json 을 여기서 직독(Scene3DFog.parse). 읽기 실패/필드 부재 시 .disabled(fog 없음).
-        Scene3DFogStore.set(Self.parseScene3DFog(package: package), for: ObjectIdentifier(self))
+        scene3DFog = Self.parseScene3DFog(package: package)  // F745: 정식 저장 프로퍼티(F662 주석 참조)
         meshPipelineOver = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
         meshPipelineAdditive = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         meshPipelineSkin = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: false, device: device)
@@ -931,7 +931,7 @@ extension SceneRenderer {
             skylight: SIMD4(scene3DSkylight.x, scene3DSkylight.y, scene3DSkylight.z, 0),
             meta: SIMD4(Float(resolvedLights.count), 0, 0, 0))
         // F662: scene fog 유니폼 팩(build3D 에서 파스·저장). 비활성 씬은 w=0 이라 셰이더 무연산(무회귀).
-        let sceneFog = Scene3DFogStore.get(for: ObjectIdentifier(self))
+        let sceneFog = scene3DFog
         if sceneFog.distanceEnabled {
             frameUniform.fogDistanceColor = SIMD4(sceneFog.distanceColor.x, sceneFog.distanceColor.y,
                                                   sceneFog.distanceColor.z, 1)
@@ -1130,7 +1130,7 @@ extension SceneRenderer {
             // F662: 빌보드(genericimage4)도 scene fog 대상(WE FOG 콤보 기본 1 — 이미지 레이어의 FOG:0
             // 명시 오브아웃은 SceneLayer 미파스라 미지원, 코퍼스 해당 0건). w = fog 모드.
             specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z,
-                                Scene3DFogStore.get(for: ObjectIdentifier(self)).enabled
+                                scene3DFog.enabled
                                     ? (bb.additive ? 2 : 1) : 0),
             rim: .zero)  // 빌보드(2D 이미지 레이어)는 RIMLIGHTING/SHADINGGRADIENT 콤보 대상 아님(F274 — 콤보는
                          // .mdl 메시 재질에만 실존, 코퍼스 460 전건 billboard 레이어에 0건)

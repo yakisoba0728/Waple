@@ -85,8 +85,11 @@ extension SceneRenderer {
                 if p.frame >= 0 {
                     idx = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
                 } else {
-                    let ft = max(0.016, sys.frames[0].time)
-                    idx = Int(p.age / ft) % fc
+                    // F740(S-22): def.animationmode=sequence/sequencemultiplier 소비(그 외 frametime 폴터).
+                    idx = Self.particleSheetFrameIndex(age: p.age, lifetime: p.lifetime,
+                                                       frameTime: sys.frames[0].time, frameCount: fc,
+                                                       mode: sys.def.animationMode,
+                                                       seqMul: sys.def.sequenceMultiplier)
                 }
                 let fr = sys.frames[max(0, min(fc - 1, idx))]
                 let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
@@ -175,7 +178,10 @@ extension SceneRenderer {
             let fc = sys.frames.count
             let idx = p.frame >= 0
                 ? sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror)
-                : Int(p.age / max(0.016, sys.frames[0].time)) % fc
+                : Self.particleSheetFrameIndex(age: p.age, lifetime: p.lifetime,
+                                               frameTime: sys.frames[0].time, frameCount: fc,
+                                               mode: sys.def.animationMode,
+                                               seqMul: sys.def.sequenceMultiplier)  // F740(S-22): 쿼드 경로와 동일 폴터
             let fr = sys.frames[max(0, min(fc - 1, idx))]
             let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
             // 서브렉트는 atlas*(회전 프레임의 실제 extent). ponytail: 리본은 rotationQuarters 미반영 —
@@ -398,6 +404,32 @@ extension SceneRenderer {
         return (m, t)
     }
 
+    /// F742(S-19): SceneLayer.dependencies(F696) 명시 선행 의존 보정. 의존 타깃 레이어가 그리기 순서상
+    /// 의존자보다 뒤(depLater — 실물 3113287126 idx2→idx4, 3151551777 idx74→idx76)면 의존자 직전으로 이동한다.
+    /// _rt_imageLayerComposite 바인드(F720)가 "타깃이 그려진 뒤"의 프레임을 샘플하는 RTT/순서 계약을 보장.
+    /// 이미 선행인 엣지(코퍼스 39건 중 37)는 무건드림(무회귀). 타깃 해석은 image 레이어 id 한정 —
+    /// text 오브젝트는 id 미파스(F693 스코프)라 건드릴 수 없다(보고).
+    static func applyingDependencies(_ plan: [DrawItem], layers: [SceneLayer]) -> [DrawItem] {
+        var plan = plan
+        let idToIdx = Dictionary(layers.enumerated().compactMap {
+            $0.element.id != 0 ? ($0.element.id, $0.offset) : nil
+        }, uniquingKeysWith: { a, _ in a })
+        for (i, l) in layers.enumerated() where !l.dependencies.isEmpty {
+            for depId in l.dependencies {
+                guard let tIdx = idToIdx[depId],
+                      let depPos = plan.firstIndex(where: { $0.kind == .layer && $0.idx == i }),
+                      let tPos = plan.firstIndex(where: { $0.kind == .layer && $0.idx == tIdx }),
+                      tPos > depPos else { continue }
+                let item = plan.remove(at: tPos)
+                // 이동 후 의존자 위치를 다시 찾아 그 직전에 삽입(타깃 1개만 옮기는 최소 보정).
+                if let at = plan.firstIndex(where: { $0.kind == .layer && $0.idx == i }) {
+                    plan.insert(item, at: at)
+                }
+            }
+        }
+        return plan
+    }
+
     /// drawPlan 씬-순서 인터리브 인코딩(라이브 draw / 헤드리스 captureFrames 공용 단일 루프).
     /// 컴포지션(_rt_) 레이어는 인코더 교체(runFrameBufferLayer)가 일어나며, 재개 실패 시 nil 반환 —
     /// 이 시점엔 직전 인코더가 이미 endEncoding 된 상태이므로 호출자는 **추가 인코딩 없이**
@@ -409,6 +441,7 @@ extension SceneRenderer {
     func encodeDrawPlan(startingWith enc: MTLRenderCommandEncoder, acc: MTLTexture,
                                 cb: MTLCommandBuffer, device: MTLDevice, time: Float,
                                 displayTextures: [MTLTexture],
+                                textTextures: [MTLTexture?] = [],   // F741(S-13): 텍스트 이펙트 적용 표시 텍스처(옵션)
                                 particleSnapshot: (Int) -> [Particle],
                                 camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         var enc = enc
@@ -445,7 +478,8 @@ extension SceneRenderer {
                                device: device, camOffset: &camOffset, aspectScale: &aspectScale)
             case .text:
                 encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale,
-                          time: time, device: device)
+                          time: time, device: device,
+                          displayTexture: item.idx < textTextures.count ? textTextures[item.idx] : nil)
             case .layer where layers[item.idx].isFrameBuffer:
                 guard let next = runFrameBufferLayer(layers[item.idx], acc: acc, cb: cb, ending: enc,
                                                      device: device, time: time,
@@ -599,8 +633,8 @@ extension SceneRenderer {
     /// **thisScene.layers 인덱스**(sceneScriptLayers 와 동일 순서: 이미지 레이어 후 텍스트) —
     /// 이름 조회(getLayer)는 중복명 첫 매치/묘명 layers[0] 폴터(S-34 오바인딩)라, 그 경로로 읽으면
     /// 묘명 레이어가 전혀 다른 layers[0] 의 트랜스폼으로 오염된다(실측 3394601417 거대 텍스트 사고).
-    /// 엔진의 thisLayer 바인딩이 이름 기반인 한계(S-34, 엔진 측 소유)상 유일명 레이어에서만 대입과
-    /// read-back 이 같은 객체를 가리킨다 — 중복명/묘명 레이어의 대입은 엔진 수정 전까지 미반영(무회귀).
+    /// F743(S-34)로 엔진 thisLayer 는 디스크립터 인덱스 직결이라 대입과 read-back 이 항상 같은 객체를
+    /// 가리킨다(종전 이름 기반 한계 — 중복명/묘명 미반영 — 는 해소).
     func readBackScriptLayerState(index: Int) -> ScriptLayerReadBack? {
         guard let ctx = sceneScript?.context, index >= 0 else { return nil }
         // NaN/비수치 방어: num() 이 null 로 떨어뜨리면 아래 NSNumber 캐스트가 실패해 해당 키만 미적용.
@@ -627,6 +661,24 @@ extension SceneRenderer {
         }
         rb.origin = vec("origin"); rb.scale = vec("scale"); rb.angles = vec("angles")
         return rb
+    }
+
+    /// F743(S-35): 프레임 말 라이브 레이어 상태 → JS thisScene.layers 제자리 갱신(F710 경로).
+    /// encodeLayer/encodeText 가 기록한 값으로 기준 디스크립터를 덮어써 밀어 넣는다 — 다음 프레임의
+    /// getLayer()/thisLayer 독해가 스크립트/애니로 움직인 현재값을 본다(종전 t=0 정적 스냅샷 결함).
+    /// 기록 없음(정적 씬)/컨텍스트 없음이면 no-op(무회귀).
+    func pushLiveSceneLayers() {
+        guard let ctx = sceneScript, !sceneScriptBaseDescriptors.isEmpty, !liveLayerStates.isEmpty else { return }
+        var desc = sceneScriptBaseDescriptors
+        for (idx, rb) in liveLayerStates where idx >= 0 && idx < desc.count {
+            if let v = rb.visible { desc[idx].visible = v }
+            if let a = rb.alpha { desc[idx].alpha = a }
+            if let o = rb.origin { desc[idx].origin = o }
+            if let sc = rb.scale { desc[idx].scale = sc }
+            if let an = rb.angles { desc[idx].angles = an }
+        }
+        ctx.updateSceneLayers(desc)
+        liveLayerStates.removeAll(keepingCapacity: true)
     }
 
     /// 이미지 레이어 1개 드로우(메인 컴포지트 파이프라인). time/device 는 프로퍼티 애니메이션·스크립트
@@ -731,6 +783,12 @@ extension SceneRenderer {
                     litRect0 = r.0; litRect1 = r.1
                 }
             }
+            // F743(S-35): 라이브 디스크립터 채널 — 이번 프레임 최종 변환 기록(알파/가시성은 아래서 병기).
+            liveLayerStates[layer.uid] = ScriptLayerReadBack(
+                visible: nil, alpha: nil,
+                origin: SIMD3(origin.x, origin.y, def.originZ),
+                scale: SIMD3(scale.x, scale.y, 1),
+                angles: SIMD3(0, 0, angle))
             if def.animations["alpha"] != nil || def.animations["color"] != nil {
                 let a = animValue("alpha", 0, def.alpha)
                 let c = Vec3(x: animValue("color", 0, def.color.x), y: animValue("color", 1, def.color.y), z: animValue("color", 2, def.color.z))
@@ -762,6 +820,10 @@ extension SceneRenderer {
                 scriptVisible[layer.uid] = v
             }
         }
+        // F743(S-35): 알파/가시성 최종값 병기(변환은 위 애니 블록에서 기록 — def 없는 레이어는
+        // 스크립트/애니도 없어 기록 불요, 기준 디스크립터의 정적값이 곧 정답).
+        liveLayerStates[layer.uid]?.alpha = tint.w
+        liveLayerStates[layer.uid]?.visible = scriptVisible[layer.uid] ?? layer.initialVisible
         // animationlayers 스크립트: per-frame 재평가 → 유효 visible/rate/blend 를 로컬 사본에 반영
         // (캐스케이드 블렌드 소비자 전용 — 정적 파스값 def.animationLayers 는 불변, current 인자로 재공급).
         // propScripts 와 동일하게 draw 스킵보다 먼저 평가(shared 사이드이펙트 보존). 예외/무update → 정적값 유지.
@@ -881,8 +943,9 @@ extension SceneRenderer {
     /// 텍스트는 키프레임 애니메이션이 없어 GPULayer 처럼 애니 블록과 합류시킬 필요가 없다).
     func encodeText(_ t: GPUText, into enc: MTLRenderCommandEncoder,
                             camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
-                            time: Float = 0, device: MTLDevice? = nil) {
-        guard let pipeline, let tex = t.texture else { return }
+                            time: Float = 0, device: MTLDevice? = nil,
+                            displayTexture: MTLTexture? = nil) {   // F741(S-13): 이펙트 적용 텍스처(없으면 원본)
+        guard let pipeline, let tex = displayTexture ?? t.texture else { return }
         var tint = t.tint
         var vbuf = t.vertexBuffer
         var origin = t.def.origin, scale = t.def.scale
@@ -944,6 +1007,11 @@ extension SceneRenderer {
                                           scale: scale, angleZ: angle, alignment: align, projW: projW, projH: projH)
             if let b = t.scratchQuad.load(verts, device: device) { vbuf = b }
         }
+        // F743(S-35): 텍스트 라이브 디스크립터(GPULayer 와 동형 — JS 인덱스 = 이미지 레이어 수 + uid).
+        liveLayerStates[sceneScriptImageLayerCount + t.uid] = ScriptLayerReadBack(
+            visible: scriptTextVisible[t.uid] ?? t.initialVisible, alpha: tint.w,
+            origin: SIMD3(origin.x, origin.y, 0), scale: SIMD3(scale.x, scale.y, 1),
+            angles: SIMD3(0, 0, angle))
         // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(GPULayer 와 동일 규약).
         if !(scriptTextVisible[t.uid] ?? t.initialVisible) { return }
         guard let vbuf else { return }
@@ -1032,6 +1100,23 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
+    /// F740(S-22): 스프라이트 프레임 폴터(p.frame 미지정)의 def.animationmode 소비. sequence = 수명에
+    /// 걸쳐 시트를 순차 재생(×sequencemultiplier 회 반복 — rosepetals ×3/ash ×12 실물 배속이 종전엔
+    /// frametime 1배 고정이라 1/N 속도로 느려졌다). nil/randomframe 은 종전 frametime gif 폴터(무회귀)
+    /// — randomframe 은 시뮬이 스폰 시 p.frame 을 확정(F622)해 애초에 이 경로에 오지 않는다.
+    static func particleSheetFrameIndex(age: Float, lifetime: Float, frameTime ft: Float, frameCount fc: Int,
+                                        mode: ParticleAnimationMode?, seqMul: Float) -> Int {
+        guard fc > 1 else { return 0 }
+        if mode == .sequence, lifetime > 1e-4 {
+            let m = seqMul.isFinite ? max(0, seqMul) : 1
+            guard m > 0 else { return 0 }
+            let v = age / lifetime * Float(fc) * m
+            guard v.isFinite else { return 0 }
+            return Int(v) % fc
+        }
+        return Int(age / max(0.016, ft)) % fc
+    }
+
     /// F530(F-2/F-70): 유한하지만 Int 범위를 넘는 float 의 Int() 변환은 클램프 전에 트랩 — 비신뢰
     /// 패키지(거대 TEXS 프레임/scene.json size) 크래시 방지. ParticleSystem.sheetFrameIndex(:50) 의
     /// Int.max 가드와 동형. 반환은 항상 ≥ floor(비유한/음수 → floor).
@@ -1087,6 +1172,22 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
         return dst
+    }
+
+    /// F741(S-13): 텍스트 이펙트 체인 — 래스터 텍스처를 src 로 레이어와 동일한 applyEffect 체인을
+    /// 적용(buildDisplayTextures 와 같은 풀/F532 실패 규약). 이펙트 없는 텍스트는 nil → encodeText 가
+    /// 원본 래스터를 그대로 사용(무회귀). 인코더 생성 전(cb 에 패스 추가 가능한 시점)에 호출할 것.
+    func buildTextDisplayTextures(device: MTLDevice, time: Float, cb: MTLCommandBuffer) -> [MTLTexture?] {
+        textLayers.map { t in
+            guard let src = t.texture, !t.effects.isEmpty else { return nil }
+            var current: MTLTexture = src
+            for eff in t.effects {
+                guard let next = pooledOffscreen(src.width, src.height, device),
+                      applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
+                current = next
+            }
+            return current
+        }
     }
 
     /// 효과가 있는 레이어는 원본 텍스처를 첫 src 로 삼아 효과 패스 체인을 적용한 결과 텍스처를, 없으면 원본을 반환.

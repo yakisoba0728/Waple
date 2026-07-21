@@ -132,6 +132,39 @@ extension SceneRenderer {
         return SceneVideoLayer(mp4URL: mp4)
     }
 
+    /// 레이어/텍스트 공용 이펙트 체인 빌드(F741: buildLayers 루프에서 무수정 추출 — 정책 단일화).
+    /// 디버그: WAPLE_EFFECT_SKIP=이름,이름 → 해당 효과 제외(파리티 이분용, WAPLE_MP_TRUNC 와 세트).
+    func buildEffectChain(_ sceneEffects: [SceneEffect], package: ScenePackage, device: MTLDevice,
+                          texW: Int, texH: Int, compositeImageTextures: [Int: String] = [:]) -> [EffectGPU] {
+        var effects: [EffectGPU] = []
+        let skipNames = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        for eff in sceneEffects {
+            // F201 후속: parseEffects 는 visible={value:false,script} 이펙트도 SceneEffect[] 에
+            // 보존한다(데이터 무손실 — 향후 per-frame 런타임 토글 소비용). 그러나 그 소비(스크립트
+            // 재평가로 켜고 끄는 경로)가 아직 배선되지 않아, 여기서 그대로 태우면 "항상 미적용"이던
+            // 구 동작이 "항상 적용"으로 뒤집혀 실 코퍼스 17씬(예 2902406982·3113287126·3538758087)의
+            // 이벤트-훅 이펙트가 잘못 켜진다(구 드롭 동작이 우연히 WE 정적 상태 OFF와 일치했었다).
+            // 소비 배선 전까지는 initialVisible==false 인 이펙트를 여기서 게이트해 구 시각 거동을
+            // 복원 — 파스 구조체엔 그대로 남아 있으니 향후 이 한 줄만 지우면 소비가 열린다.
+            if !eff.initialVisible { continue }
+            if skipNames.contains(eff.name) { continue }
+            // 폴터 체인(Step 5, 2026-07-02 실물 검증 후 전환): **translated 우선** — pkg 동봉 GLSL 은
+            // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
+            // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴터 → 둘 다 실패 시 스킵+로그.
+            if let translated = buildTranslatedEffect(eff, package: package, device: device,
+                                                      texW: texW, texH: texH,
+                                                      compositeImageTextures: compositeImageTextures) {
+                effects.append(translated)
+            } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
+                effects.append(handPort)
+            } else {
+                NSLog("%@", "[Waple] effect skipped (no translatable GLSL, no hand-port): \(eff.name)")
+            }
+        }
+        return effects
+    }
+
     /// 레이어를 후→전 순서(JSON 순서)로 GPU 리소스화. 디코드 실패 레이어는 스킵.
     func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice, sceneID: String) -> [GPULayer] {
         let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
@@ -213,33 +246,10 @@ extension SceneRenderer {
             guard let vbuf = device.makeBuffer(bytes: verts, length: MemoryLayout<SIMD4<Float>>.stride * verts.count) else { continue }
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
-            var effects: [EffectGPU] = []
-            // 디버그: WAPLE_EFFECT_SKIP=이름,이름 → 해당 효과 제외(파리티 이분용, WAPLE_MP_TRUNC 와 세트).
-            let skipNames = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
-                .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
-            for eff in layer.effects {
-                // F201 후속: parseEffects 는 visible={value:false,script} 이펙트도 SceneEffect[] 에
-                // 보존한다(데이터 무손실 — 향후 per-frame 런타임 토글 소비용). 그러나 그 소비(스크립트
-                // 재평가로 켜고 끄는 경로)가 아직 배선되지 않아, 여기서 그대로 태우면 "항상 미적용"이던
-                // 구 동작이 "항상 적용"으로 뒤집혀 실 코퍼스 17씬(예 2902406982·3113287126·3538758087)의
-                // 이벤트-훅 이펙트가 잘못 켜진다(구 드롭 동작이 우연히 WE 정적 상태 OFF와 일치했었다).
-                // 소비 배선 전까지는 initialVisible==false 인 이펙트를 여기서 게이트해 구 시각 거동을
-                // 복원 — 파스 구조체엔 그대로 남아 있으니 향후 이 한 줄만 지우면 소비가 열린다.
-                if !eff.initialVisible { continue }
-                if skipNames.contains(eff.name) { continue }
-                // 폴백 체인(Step 5, 2026-07-02 실물 검증 후 전환): **translated 우선** — pkg 동봉 GLSL 은
-                // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
-                // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴백 → 둘 다 실패 시 스킵+로그.
-                if let translated = buildTranslatedEffect(eff, package: package, device: device,
-                                                          texW: effW, texH: effH,
-                                                          compositeImageTextures: compositeImageTextures) {
-                    effects.append(translated)
-                } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
-                    effects.append(handPort)
-                } else {
-                    NSLog("%@", "[Waple] effect skipped (no translatable GLSL, no hand-port): \(eff.name)")
-                }
-            }
+            // 이펙트 체인 빌드는 buildEffectChain 으로 추출(F741 — 텍스트 경로와 정책 공유, 동작 무수정).
+            let effects = buildEffectChain(layer.effects, package: package, device: device,
+                                           texW: effW, texH: effH,
+                                           compositeImageTextures: compositeImageTextures)
             if !effects.isEmpty { hasEffects = true }
             if !layer.animations.isEmpty { hasAnimations = true }
             // 퍼펫(.mdl): 스키닝 메시. WE 규약(changelog: "Only load puppet ref if file exists on
@@ -269,7 +279,10 @@ extension SceneRenderer {
                     continue
                 }
                 let ownerName = layer.name.isEmpty ? nil : layer.name
-                if let e = makeScriptEngine(src, layerName: ownerName, scriptPropsJSON: layer.propertyScriptProps[key]) {
+                // F743(S-34): currentLayerIndex = doc.layers 인덱스(디스크립터 순서 = doc.layers+doc.texts)
+                // — 중복명/묘명 레이어의 thisLayer 오바인딩 해소.
+                if let e = makeScriptEngine(src, layerName: ownerName, currentLayerIndex: uid,
+                                            scriptPropsJSON: layer.propertyScriptProps[key]) {
                     propScripts.append((key, e))
                     if e.hasUpdate { hasAnimations = true }
                 }
@@ -279,7 +292,8 @@ extension SceneRenderer {
             var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = []
             for (idx, al) in layer.animationLayers.enumerated() {
                 for (key, src) in al.scripts {
-                    if let e = makeScriptEngine(src, layerName: layer.name.isEmpty ? nil : layer.name) {
+                    if let e = makeScriptEngine(src, layerName: layer.name.isEmpty ? nil : layer.name,
+                                                currentLayerIndex: uid) {  // F743(S-34): 디스크립터 인덱스 직결
                         animLayerScripts.append((idx, key, e))
                         if e.hasUpdate { hasAnimations = true }
                     }
@@ -1074,13 +1088,22 @@ extension SceneRenderer {
     /// 텍스트 오브젝트 준비: 폰트 바이트(pkg→base-assets) + 스크립트 엔진 + 초기 텍스트 래스터.
     func buildTexts(doc: SceneDocument, package: ScenePackage, device: MTLDevice) -> [GPUText] {
         var out: [GPUText] = []
+        // F741(S-13): 텍스트 이펙트의 _rt_imageLayerComposite 바인드용 치환 맵(buildLayers 와 동일 규약).
+        let compositeImageTextures = doc.layers.reduce(into: [Int: String]()) { acc, layer in
+            guard layer.id != 0, !layer.textureEntryName.isEmpty else { return }
+            acc[layer.id] = layer.textureEntryName
+        }
         for (uid, t) in doc.texts.enumerated() {
             let isSystem = t.font.hasPrefix("systemfont_") || t.font.isEmpty
             let fontData = isSystem ? nil : quietAssetData(t.font, package: package)
             if !isSystem && fontData == nil { NSLog("%@", "[Waple] text font missing (system fallback): \(t.font)") }
+            // F743(S-34): JS 디스크립터 인덱스 = doc.layers.count + uid(sceneScriptLayers 의 이미지→텍스트 순서).
+            let descriptorIndex = doc.layers.count + uid
             // 씬 공유 컨텍스트 로드(top-level 사이드이펙트 실행). update 없는 스크립트는 텍스트 갱신에
             // 못 쓰므로 엔진 nil 취급(정적 텍스트 유지) — 로드 자체는 shared 통신을 위해 수행.
-            let loaded = t.script.flatMap { makeScriptEngine($0, layerName: t.name.isEmpty ? nil : t.name, scriptPropsJSON: t.scriptProps) }
+            let loaded = t.script.flatMap { makeScriptEngine($0, layerName: t.name.isEmpty ? nil : t.name,
+                                                             currentLayerIndex: descriptorIndex,
+                                                             scriptPropsJSON: t.scriptProps) }
             if t.script != nil && loaded == nil { NSLog("%@", "[Waple] text script failed to load (empty text): \(t.script!.prefix(60))") }
             let engine = (loaded?.hasUpdate == true) ? loaded : nil
             let initial = engine != nil ? (engine!.evaluate(current: t.text) ?? "") : t.text
@@ -1090,7 +1113,8 @@ extension SceneRenderer {
             for key in ["visible", "color", "alpha", "origin", "scale", "angles"] {
                 guard let src = t.propertyScripts[key] else { continue }
                 let ownerName = t.name.isEmpty ? nil : t.name
-                if let e = makeScriptEngine(src, layerName: ownerName, scriptPropsJSON: t.propertyScriptProps[key]) {
+                if let e = makeScriptEngine(src, layerName: ownerName, currentLayerIndex: descriptorIndex,
+                                            scriptPropsJSON: t.propertyScriptProps[key]) {
                     propScripts.append((key, e))
                     if e.hasUpdate { hasAnimations = true }
                 }
@@ -1101,6 +1125,15 @@ extension SceneRenderer {
                             fontData: fontData, systemFontName: isSystem ? t.font : nil, def: t,
                             uid: uid, initialVisible: t.initialVisible, propScripts: propScripts)
             rasterize(&g, device: device)
+            // F741(S-13): 텍스트 effects[](F693 파스·보존)를 래스터 텍스처에 적용할 GPU 체인 —
+            // 레이어와 동일 빌더(buildEffectChain). texRes 는 초기 래스터 dims 로 베이크(문자열이
+            // 바뀌어 재래스터돼도 효과 해상도는 초기값 유지 — ponytail: 갱신 시 재빌드는 후속 과제).
+            if !t.effects.isEmpty, g.texture != nil {
+                g.effects = buildEffectChain(t.effects, package: package, device: device,
+                                             texW: max(1, Int(g.rasterWidth)), texH: max(1, Int(g.rasterHeight)),
+                                             compositeImageTextures: compositeImageTextures)
+                if !g.effects.isEmpty { hasEffects = true }
+            }
             if engine != nil { hasScriptedText = true }
             out.append(g)
         }

@@ -193,15 +193,15 @@ final class Render3DSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(missing.distanceParams.w, 1)
     }
 
-    /// fog 저장소: 렌더러 키로 set/get, 미등록 키는 비활성 기본값.
-    func testF662FogStoreRoundTrip() {
-        final class Dummy {}
-        let a = Dummy(), b = Dummy()
+    /// F745: fog 는 렌더러 정식 저장 프로퍼티(구 ObjectIdentifier 우회 저장소 F662 대체) —
+    /// 인스턴스별 독립, 기본값은 비활성.
+    func testF745FogIsInstanceProperty() {
+        let a = SceneRenderer(), b = SceneRenderer()
         var fog = Scene3DFog()
         fog.distanceEnabled = true
-        Scene3DFogStore.set(fog, for: ObjectIdentifier(a))
-        XCTAssertTrue(Scene3DFogStore.get(for: ObjectIdentifier(a)).distanceEnabled)
-        XCTAssertFalse(Scene3DFogStore.get(for: ObjectIdentifier(b)).enabled)
+        a.scene3DFog = fog
+        XCTAssertTrue(a.scene3DFog.distanceEnabled)
+        XCTAssertFalse(b.scene3DFog.enabled)
     }
 
     /// 프레임 유니폼 레이아웃: fog 4×float4 확장 후에도 Swift/MSL 정렬 일치(128B).

@@ -85,6 +85,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         /// 지오메트리 재계산(Self.quadVertices 재사용)에 쓰인다.
         var rasterWidth: Float = 0
         var rasterHeight: Float = 0
+        /// F741(S-13): 텍스트 effects[](F693 파스)의 GPU 체인 — buildTextDisplayTextures 가 래스터
+        /// 텍스처에 applyEffect 체인을 적용(레이어 buildDisplayTextures 와 동일 경로). 비면 무회귀.
+        var effects: [EffectGPU] = []
         /// 애니 쿼드 per-frame 정점 재사용(GPULayer.scratchQuad 와 동일 패턴).
         let scratchQuad = DynamicVertexBuffer()
     }
@@ -96,6 +99,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// F723: JS thisScene.layers 의 이미지 레이어 수(=doc.layers.count) — 텍스트 read-back 인덱스 오프셋
     /// (sceneScriptLayers 가 이미지 레이어 먼저, 텍스트를 뒤에 붙이는 순서와 동일).
     var sceneScriptImageLayerCount = 0
+    /// F743(S-35): 마운트 시점 디스크립터 스냅샷(sceneScriptLayers) — 프레임 말 pushLiveSceneLayers 가
+    /// 라이브 상태를 덮어써 updateSceneLayers 로 JS thisScene.layers 를 제자리 갱신하는 기준 배열.
+    var sceneScriptBaseDescriptors: [SceneScriptLayerDescriptor] = []
+    /// F743(S-35): 이번 프레임 encodeLayer/encodeText 가 기록한 레이어별 라이브 상태(JS layers 인덱스 →
+    /// visible/alpha/origin/scale/angles). 프레임 말 pushLiveSceneLayers 가 소비하고 비운다.
+    var liveLayerStates: [Int: ScriptLayerReadBack] = [:]
     /// visible 스크립트의 최근 평가값(레이어 고유 uid → 표시 여부). update(current) 에 이전 값을 전달.
     /// 키는 GPULayer.uid(doc.layers 인덱스) — order 는 씬에서 중복될 수 있어 키로 부적합(충돌).
     var scriptVisible: [Int: Bool] = [:]
@@ -105,11 +114,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
-    func makeScriptEngine(_ src: String, layerName: String? = nil, scriptPropsJSON: String? = nil) -> TextScriptEngine? {
+    /// F743(S-34): currentLayerIndex = thisScene.layers 디스크립터 인덱스(doc.layers+doc.texts 순서) —
+    /// thisLayer 를 스크립트 소유 오브젝트 자체로 직결(중복명/묘명 오바인딩 해소). nil = 종전 이름 조회.
+    func makeScriptEngine(_ src: String, layerName: String? = nil, currentLayerIndex: Int? = nil,
+                          scriptPropsJSON: String? = nil) -> TextScriptEngine? {
         // 오디오 소비 스크립트 게이팅: 참조가 보이면 hasAudio 승격 → mount 말미의 provider 기동
         // (기존엔 셰이더 오디오 효과만 켰다). 모든 스크립트 로드는 mount 의 기동 검사보다 앞선다.
         if !hasAudio, Self.scriptWantsAudio(src) { hasAudio = true }
-        let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName, scriptPropsJSON: scriptPropsJSON) }
+        let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName,
+                                                        currentLayerIndex: currentLayerIndex,
+                                                        scriptPropsJSON: scriptPropsJSON) }
             ?? TextScriptEngine(script: src, scriptPropsJSON: scriptPropsJSON)
         guard let engine else { return nil }
 
@@ -146,7 +160,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 scale: SIMD3<Float>(layer.scale.x, layer.scale.y, 1),
                 angles: SIMD3<Float>(0, 0, layer.angleZ),
                 size: SIMD2<Float>(layer.size.x, layer.size.y),
-                solid: layer.textureEntryName.isEmpty
+                solid: layer.textureEntryName.isEmpty,
+                // F743(S-36/S-33): JS getParent()/getAnimationLayerCount() 실값 배선(파스 필드 소비).
+                id: layer.id, parentId: layer.parent,
+                animationLayerCount: layer.animationLayers.count
             )
         }
         let textLayers = doc.texts.map { text in
@@ -202,6 +219,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 포인터 이벤트 배달(씬 픽셀 좌표, 상단 원점 — WE worldPosition 규약).
     /// event 필드는 실물 역추출: worldPosition(Vec3 — .x/.subtract 체이닝), button(0=좌).
     func dispatchPointerEvent(hook: String, x: Float, y: Float) {
+        // F743(S-31): input.cursorWorldPosition/cursorScreenPosition/cursorLeftDown 폴ling 실데이터화
+        // (screen 좌표는 포인터 UV×프로젝션 픽셀 근사 — ponytail: WE screen 기준 실측 부재).
+        sceneScript?.setCursorState(worldX: x, worldY: y,
+                                    screenX: pointerUV.x * projW, screenY: pointerUV.y * projH,
+                                    leftDown: pointerDown)
         dispatchSceneEvent(hook, eventJS: "({ worldPosition: new Vec3(\(x), \(y), 0), button: 0 })")
     }
 
@@ -318,11 +340,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     /// def 의 animationlayers blend/visible 스크립트 → 엔진(여기서 생성 — Resources 는 layer 키만 취급).
-    private func animLayerEngines(_ def: SceneLayer) -> [TextScriptEngine] {
+    private func animLayerEngines(_ def: SceneLayer, currentLayerIndex: Int? = nil) -> [TextScriptEngine] {
         var engines: [TextScriptEngine] = []
         for al in def.animationLayers {
             for src in al.scripts.values {
-                if let e = makeScriptEngine(src, layerName: def.name.isEmpty ? nil : def.name) {
+                if let e = makeScriptEngine(src, layerName: def.name.isEmpty ? nil : def.name,
+                                            currentLayerIndex: currentLayerIndex) {  // F743(S-34)
                     engines.append(e)
                 }
             }
@@ -361,7 +384,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         for (i, bb) in billboards.enumerated() where i < billboardDefs.count {
             let def = billboardDefs[i]
             let timelines = defEventTimelines(def)
-            let engines = bb.scripts.map(\.engine) + animLayerEngines(def)
+            let engines = bb.scripts.map(\.engine)
+                + animLayerEngines(def, currentLayerIndex: doc.layers.firstIndex(of: def))  // F743(S-34)
             let hookEngines = engines.filter { $0.hookNames.contains("animationEvent") }
             guard !timelines.isEmpty, !hookEngines.isEmpty else { continue }
             animEventTargets.append(AnimEventTarget(timelines: timelines, engines: hookEngines))
@@ -653,6 +677,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     // 3D 씬의 camera 오브젝트는 경로 웨이포인트(씬당 다수·큐 재생)라 미소비 — draw 3D 분기가
     // 이 상태를 아예 안 읽는다. 정적 비가시 카메라는 파스가 이미 드롭 → first = 첫 가시 카메라.
     var cameraZoomBase: Float = 1
+    /// F744(S-18): general.zoom(F695 파스) — 씬 전역 줌 프레이밍. 1 = 무회귀(비기본 실측 7씬 1.006..1.08).
+    var sceneZoom: Float = 1
     var cameraZoomAnim: PropertyAnimation?
     /// 마지막으로 그린 프레임의 zoom — 클릭/호버 역매핑(sceneCoords) 정합용.
     var currentCameraZoom: Float = 1
@@ -802,6 +828,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     // ── 3D 씬(camera3D + .mdl 메시) 상태 ─────────────────────────────────────────
 
     var camera3D: SceneCamera3D?
+    /// F745: scene fog(F662) — fix-s7 은 extension 저장 프로퍼티 불가(SceneRenderer.swift 타 그룹 소유)라
+    /// ObjectIdentifier 키 정적 저장소(Scene3DFogStore)로 우회했었다. 통합으로 정식 프로퍼티에 복귀.
+    var scene3DFog = Scene3DFog()
     var is3D = false
     var has3DScripts = false
     var scene3DLights: [SceneLight3D] = []
@@ -1024,12 +1053,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         projAspect = projW / projH
         // camera 의사-오브젝트 → 2D 뷰 줌(3D 는 미소비 — draw 3D 분기가 zoom 상태를 안 읽는다).
         applyCameraObjects(doc.cameraObjects)
+        sceneZoom = doc.zoom   // F744(S-18): 씬 전역 줌(사용 지점에서 >0 새니타이즈)
         // 씬 공유 JSContext — 3D 오브젝트/빌보드 스크립트와 2D buildLayers/buildTexts/효과 스크립트가 공유.
         // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
         // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
-        sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc),
+        let scriptLayerDescriptors = Self.sceneScriptLayers(from: doc)
+        sceneScript = SceneScriptContext(layers: scriptLayerDescriptors,
                                          soundNames: doc.sounds.map { $0.name },
                                          width: projW, height: projH)
+        sceneScriptBaseDescriptors = scriptLayerDescriptors  // F743(S-35): 라이브 갱신 기준 배열
         sceneScriptImageLayerCount = doc.layers.count  // F723: 텍스트 read-back 인덱스 오프셋(이미지→텍스트 순)
         forwardLit = false  // 마운트 재사용 대비 기본값(2D 브랜치에서만 활성화)
         // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
@@ -1111,6 +1143,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             .enumerated()
             .sorted { ($0.1.0, $0.0) < ($1.1.0, $1.0) }
             .map { $0.1.1 }
+        // F742(S-19): dependencies(F696) depLater 보정 — 의존 타깃이 후순위면 의존자 직전으로 이동.
+        drawPlan = Self.applyingDependencies(drawPlan, layers: doc.layers)
         // 디버그: WAPLE_LAYER_TRUNC=n → z-정렬된 draw 앞 n개만(레이어 이분용, 백화 유발 레이어 특정).
         if let t = ProcessInfo.processInfo.environment["WAPLE_LAYER_TRUNC"], let n = Int(t), n >= 0, n < drawPlan.count {
             drawPlan = Array(drawPlan.prefix(n))
@@ -1367,6 +1401,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneAudio?.tick(time: time)  // F214: volume 프로퍼티 스크립트 per-frame 재평가(헤드리스는 sceneAudio nil → no-op)
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
         let displayTextures = buildDisplayTextures(device: device, time: time, cb: cb)
+        let textTextures = buildTextDisplayTextures(device: device, time: time, cb: cb)  // F741(S-13)
 
         var camOffset = cameraOffset
         // 종횡비 보정 — FitMode 설정에 따라(클릭 역매핑과 동일 공식 = sceneCoords 정합 보장).
@@ -1379,7 +1414,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let camZoomRaw = cameraZoom(at: time)
         let camZoom = camZoomRaw > 0 ? camZoomRaw : 1
         if camZoom != 1 { aspectScale *= camZoom }
-        currentCameraZoom = camZoom
+        // F744(S-18): general.zoom 씬 전역 프레이밍 — 침침 줌과 동일 채널(aspectScale 후단곱).
+        // 중립(1)/비정상(≤0)은 곱 스킵 → 침침 없는 씬 비트 불변(무회귀 가드는 침침 줌과 동형).
+        let sceneZoomEff = sceneZoom > 0 ? sceneZoom : 1
+        if sceneZoomEff != 1 { aspectScale *= sceneZoomEff }
+        currentCameraZoom = camZoom * sceneZoomEff   // 클릭 역매핑(sceneCoords) 정합 — 합산 줌
         frameShakeOffset = shakeOffset(at: time)  // camerashake 전역 지터(비활성 = .zero → 셰이더 +0 = 비트동일)
         frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: time), projW: projW, projH: projH)  // camera origin.xy 팬(중립/스크립트/정적 = .zero 데드존 → 비트동일)
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
@@ -1393,6 +1432,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 씬 오브젝트 순서대로 레이어·파티클·텍스트 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
         guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: time,
                                             displayTextures: displayTextures,
+                                            textTextures: textTextures,
                                             particleSnapshot: { [self] idx in
                                                 // 자식은 부모 sim 캐시를 그린다(drawPlan 이 부모를 먼저 스텝).
                                                 if let c = particleSystems[idx].childOf {
@@ -1405,6 +1445,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                             },
                                             camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }
         finalEnc.endEncoding()
+        pushLiveSceneLayers()  // F743(S-35): JS thisScene.layers 라이브 갱신(다음 프레임 스크립트 독해용)
         guard finalizeScene(
             source: acc,
             destination: drawable.texture,
@@ -1500,6 +1541,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             guard let cb = queue.makeCommandBuffer() else { continue }
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
             let displayTextures = buildDisplayTextures(device: device, time: t, cb: cb)  // beginFramePool 포함
+            let textTextures = buildTextDisplayTextures(device: device, time: t, cb: cb)  // F741(S-13)
             // HDR tone-map and LDR bloom both need an immutable scene source distinct from readback.
             // F531(F-5): HDR 씬의 float acc 할당 실패 시 target(bgra8) 폴백은 포맷 불일치/자기샘플 — 프레임 스킵.
             let acc: MTLTexture
@@ -1519,6 +1561,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             let capZoomRaw = cameraZoom(at: t)
             let capZoom = capZoomRaw > 0 ? capZoomRaw : 1
             if capZoom != 1 { asp *= capZoom }
+            let capSceneZoom = sceneZoom > 0 ? sceneZoom : 1  // F744(S-18): 라이브 draw 와 동일 채널
+            if capSceneZoom != 1 { asp *= capSceneZoom }
             frameShakeOffset = shakeOffset(at: t)  // 라이브 draw 와 동일: A/B 캡처가 t=6 지터 오프셋을 판독
             frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: t), projW: projW, projH: projH)  // origin 팬(t=6 정착 중립·정적/스크립트 = .zero → A/B 비트동일)
             if ortho3DHybrid { evaluate3DScripts(time: t) }  // F721: 라이브 draw 와 동일 — t 시점 노드 스크립트 평가
@@ -1528,6 +1572,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // target 이 곧 누적(acc) — 컴포지션 레이어는 스냅샷 경유(runFrameBufferLayer).
             guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: t,
                                                 displayTextures: displayTextures,
+                                                textTextures: textTextures,
                                                 particleSnapshot: { [self] idx in
                                                     if let c = particleSystems[idx].childOf {
                                                         return sims[c.parent].childDisplay(c.link)
@@ -1536,6 +1581,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 },
                                                 camOffset: &camOff, aspectScale: &asp) else { cb.commit(); continue }
             finalEnc.endEncoding()
+            pushLiveSceneLayers()  // F743(S-35): 라이브 draw 와 동일 — 캡처 프레임 간 스크립트 연속성
             guard finalizeScene(
                 source: acc,
                 destination: target,
@@ -1609,10 +1655,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         forwardLit = false; litPipeline = nil; spriteFramePipeline = nil  // 라이트/스프라이트 추출 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript = nil; sceneScriptImageLayerCount = 0; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
+        sceneScriptBaseDescriptors = []; liveLayerStates.removeAll()  // F743(S-35): 마운트 재사용 stale 방지
         scriptVisible.removeAll()
         scriptTextVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
-        camera3D = nil; is3D = false; has3DScripts = false
+        camera3D = nil; is3D = false; has3DScripts = false; scene3DFog = Scene3DFog()  // F745
         ortho3DHybrid = false  // F721: 하이브리드 상태 리셋(마운트 재사용)
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
