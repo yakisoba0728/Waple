@@ -488,14 +488,15 @@ public enum WallpaperCompatibilityAnalyzer {
         func add(_ feature: String,
                  _ code: WallpaperCompatibilityIssueCode,
                  _ severity: WallpaperCompatibilitySeverity,
-                 _ message: String) {
+                 _ message: String,
+                 path: String) {
             guard features.insert(feature).inserted else { return }
             issues.append(WallpaperCompatibilityIssue(
                 severity: severity,
                 code: code,
                 message: message,
                 projectID: project.id,
-                relativePath: fileName
+                relativePath: path
             ))
         }
 
@@ -510,17 +511,19 @@ public enum WallpaperCompatibilityAnalyzer {
             // F235: 아래 4건은 종전엔 features.insert 만 하고 issue 로 승격하지 않아 markdown/JSON 요약·
             // --strict 게이트 어디에도 반영되지 않았다(detectedFeatures 에만 남아 사람이 안 읽는 한
             // 소실). add(...) 로 최소 .warning 승격 — feature 키 자체는 하위호환을 위해 그대로 둔다.
+            // F424: relativePath 는 엔트리 fileName 이 아니라 실제 탐지 파일(source.path) — include 된
+            // JS 에서 serviceWorker 등을 탐지한 경우에도 종전엔 경고가 항상 index.html 을 가리켰다.
             if text.range(of: "serviceWorker", options: .caseInsensitive) != nil {
-                add("serviceWorker", .webServiceWorker, .warning, "Web wallpaper touches the serviceWorker API; Waple's offline WKWebView may not offer full parity for background sync/fetch interception.")
+                add("serviceWorker", .webServiceWorker, .warning, "Web wallpaper touches the serviceWorker API; Waple's offline WKWebView may not offer full parity for background sync/fetch interception.", path: source.path)
             }
             if text.contains("wallpaperRequestRandomFileForProperty") {
-                add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.")
+                add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.", path: source.path)
             }
             if text.contains("wallpaperRegisterAudioListener") {
-                add("audioListener", .webAudioListener, .warning, "Web wallpaper registers a Wallpaper Engine audio listener; verify Waple's audio bridge coverage for this project.")
+                add("audioListener", .webAudioListener, .warning, "Web wallpaper registers a Wallpaper Engine audio listener; verify Waple's audio bridge coverage for this project.", path: source.path)
             }
             if text.contains("wallpaperRegisterMedia") || text.contains("wallpaperMedia") {
-                add("mediaIntegration", .webMediaIntegration, .warning, "Web wallpaper uses Wallpaper Engine media integration bridges; coverage may be partial.")
+                add("mediaIntegration", .webMediaIntegration, .warning, "Web wallpaper uses Wallpaper Engine media integration bridges; coverage may be partial.", path: source.path)
             }
             if text.range(of: #"\bwebgl\b|OES_"#, options: [.regularExpression, .caseInsensitive]) != nil {
                 features.insert("webGL")
@@ -529,7 +532,7 @@ public enum WallpaperCompatibilityAnalyzer {
                 features.insert("fileURL")
             }
             if text.range(of: #"https?://"#, options: [.regularExpression, .caseInsensitive]) != nil {
-                add("remoteNetwork", .remoteNetworkReference, .warning, "Web wallpaper references a remote (non-local) URL; Waple's offline WKWebView may block or fail this request.")
+                add("remoteNetwork", .remoteNetworkReference, .warning, "Web wallpaper references a remote (non-local) URL; Waple's offline WKWebView may block or fail this request.", path: source.path)
             }
         }
         return Array(features)
@@ -606,6 +609,7 @@ public enum WallpaperCompatibilityAnalyzer {
 
     private struct WebFeatureSource {
         let text: String
+        let path: String   // 프로젝트 루트 기준 정규화 상대 경로 — F424: 경고의 relativePath 로 사용
     }
 
     private static func webFeatureSources(entryPath: String, folderURL: URL) -> [WebFeatureSource] {
@@ -630,7 +634,7 @@ public enum WallpaperCompatibilityAnalyzer {
                   totalBytes + data.count <= maxBytes,
                   let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { continue }
             totalBytes += data.count
-            sources.append(WebFeatureSource(text: text))
+            sources.append(WebFeatureSource(text: text, path: normalized))
 
             for reference in localWebReferences(in: text, basePath: normalized) {
                 guard !seen.contains(reference), queue.count + sources.count < maxFiles else { continue }

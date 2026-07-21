@@ -1,12 +1,21 @@
 import Foundation
 
 /// WE GLSL 전처리기: `[COMBO]` 기본값 + `#include` 인라인 + `#if/#ifdef/#else/#elif/#endif` 평가.
-/// 순수(테스트 가능). 미발견 인클루드/미지원은 안전 무시(빈 줄)하고 로그.
+/// 순수(테스트 가능). 미발견 인클루드/미지원 #include 는 안전 무시(빈 줄)하고 로그. 단, F421:
+/// 미지원 #if 식은 안전 무시가 아니라 전처리 "거부"(오분기 = 오역 — "오역보다 폴터" 위반) — preprocessStrict nil.
 public enum ShaderPreprocessor {
     /// - combos: scene.json 에서 온 명시적 콤보 값(소스의 [COMBO] 기본값보다 우선).
     /// - include: `#include "name"` → 헤더 소스(없으면 nil → 빈 인라인).
     public static func preprocess(_ source: String, combos: [String: Int],
                                   include: (String) -> String? = { _ in nil }) -> String {
+        // F421: 미지원 #if 식(모듈로·비트·삼항·시프트·16진 리터럴 등)은 어느 분기를 골라도 오역 —
+        // 조용한 오분기 대신 안전 거부(빈 결과 → 번역 실패 → 폴터로 폴백; "오역보다 폴터").
+        preprocessStrict(source, combos: combos, include: include) ?? ""
+    }
+
+    /// 전처리 엄격판: 미지원 #if 식 감지 시 nil(거부). 호출부는 nil 을 번역 실패로 승격해야 한다.
+    static func preprocessStrict(_ source: String, combos: [String: Int],
+                                 include: (String) -> String? = { _ in nil }) -> String? {
         // 실물 WE 셰이더는 CRLF — 정규화하지 않으면 `#endif\r` 미인식으로 조건부 스택이 안 닫혀
         // 첫 비활성 분기 이후 전체가 소실된다(실측 31씬 전 효과 폴백의 근본 원인).
         let source = source.replacingOccurrences(of: "\r\n", with: "\n")
@@ -96,11 +105,14 @@ public enum ShaderPreprocessor {
     /// (combos 포함 — WE 는 combos 를 #define 으로 주입하므로 본문 참조가 합법).
     /// 함수형 매크로(`#define F(x, y) body`)도 확장한다 — 실물 common_blending.h 의 Blend* 가 전부 이 형태.
     /// 매크로가 매크로를 부르는 체인/별칭은 fixpoint 루프로 수렴시킨다.
-    private static func evaluateConditionals(_ source: String, defines: [String: Int]) -> String {
+    private static func evaluateConditionals(_ source: String, defines: [String: Int]) -> String? {
         var d = defines
         var textDefines: [String: String] = [:]
         var funcMacros: [String: (params: [String], body: String)] = [:]
         var flagDefines = Set<String>()   // 값 없는 소스 #define — #ifdef 전용, 본문 "1" 치환 금지
+        // F421: 비-10진 수치 리터럴 값 define(`#define X 0x10` 류) — #if 식에서 참조되면
+        // 10진 파서로는 오평가이므로 그 #if 를 거부한다(본문 텍스트 치환은 기존대로 동작).
+        var suspectDefines = Set<String>()
         // C 규약(위치-인지): 정의는 이후 줄부터, 재정의 시 이전 정의는 그 줄까지(실물 frame_builder).
         struct MacroDef { let name: String; let value: String?; let fn: (params: [String], body: String)?
                           let fromLine: Int; var toLine: Int = Int.max }
@@ -138,12 +150,32 @@ public enum ShaderPreprocessor {
                 var cond = false
                 if t.hasPrefix("#ifdef ") { cond = isDefined(token(after: "#ifdef", t)) }
                 else if t.hasPrefix("#ifndef ") { cond = !isDefined(token(after: "#ifndef", t)) }
-                else { cond = ExprEval.eval(String(t.dropFirst(3)), defines: d, definedNames: definedNames()) != 0 }
+                else {
+                    let expr = String(t.dropFirst(3))
+                    if let v = ExprEval.evalChecked(expr, defines: d, definedNames: definedNames(), suspect: suspectDefines) {
+                        cond = v != 0
+                    } else if parentActive {
+                        // F421: 활성 분기의 #if 가 미지원 식 — 어느 분기든 오역이므로 전처리 거부.
+                        // (비활성 부모 안쪽은 출력에 무영향이라 관용 유지.)
+                        WapleLog.warn("[Waple] GLSL #if unsupported expression, refusing shader: \(expr)")
+                        return nil
+                    }
+                }
                 stack.append(Frame(active: parentActive && cond, taken: cond, parentActive: parentActive))
             } else if t.hasPrefix("#elif ") {
                 guard !stack.isEmpty else { continue }
                 var f = stack.removeLast()
-                let cond = !f.taken && ExprEval.eval(String(t.dropFirst(5)), defines: d, definedNames: definedNames()) != 0
+                var cond = false
+                if !f.taken {
+                    let expr = String(t.dropFirst(5))
+                    if let v = ExprEval.evalChecked(expr, defines: d, definedNames: definedNames(), suspect: suspectDefines) {
+                        cond = v != 0
+                    } else if f.parentActive {
+                        // F421: #elif 도 동일 — 활성 체인의 미지원 식은 거부.
+                        WapleLog.warn("[Waple] GLSL #elif unsupported expression, refusing shader: \(expr)")
+                        return nil
+                    }
+                }
                 f.active = f.parentActive && cond
                 f.taken = f.taken || cond
                 stack.append(f)
@@ -163,6 +195,7 @@ public enum ShaderPreprocessor {
                     textDefines.removeValue(forKey: name)
                     funcMacros.removeValue(forKey: name)
                     flagDefines.remove(name)
+                    suspectDefines.remove(name)
                     closePrev(name, at: out.count)
                 }
             } else if t.hasPrefix("#define "), emitting() {
@@ -199,7 +232,17 @@ public enum ShaderPreprocessor {
                         d[name] = 1  // 값 없는 #define NAME → #ifdef 용, 본문 치환은 안 함(빈 치환은 위험)
                         flagDefines.insert(name)
                     } else {
-                        if let v = Int(value) { d[name] = v }
+                        if let v = Int(value) {
+                            d[name] = v
+                        } else if let v = parenthesizedDecimalInt(value) {
+                            // F422: `#define MODE (2)` — 괄호 감싼 10진 정수도 #if 평가값으로 등록.
+                            // (종전 Int("(2)") == nil → d 미등재라 #if MODE 는 0 인데 본문 치환은 "(2)" 라 불일치.)
+                            d[name] = v
+                        } else if value.first?.isNumber == true {
+                            // F421: 숫자로 시작하지만 10진 정수가 아닌 값(0x10·1.5·2u 류) —
+                            // #if 에서 참조 시 오평가 방지를 위해 거부 대상으로 표시.
+                            suspectDefines.insert(name)
+                        }
                         textDefines[name] = value
                         closePrev(name, at: out.count)
                         macroDefs.append(MacroDef(name: name, value: value, fn: nil, fromLine: out.count))
@@ -289,6 +332,17 @@ public enum ShaderPreprocessor {
 
     // MARK: - 작은 헬퍼
 
+    /// F422: `#define MODE (2)` / `((3))` — 바깥 괄호로 감싼 10진 정수 리터럴을 벗겨 파스.
+    /// 괄호가 아니거나 안쪽이 정수가 아니면 nil(`(2)+(3)`, `(0x10)` 등).
+    private static func parenthesizedDecimalInt(_ value: String) -> Int? {
+        var v = value.trimmingCharacters(in: .whitespaces)
+        guard v.hasPrefix("(") else { return nil }
+        while v.hasPrefix("("), v.hasSuffix(")") {
+            v = v.dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
+        }
+        return Int(v)
+    }
+
     private static func token(after kw: String, _ line: String) -> String {
         line.dropFirst(kw.count).trimmingCharacters(in: .whitespaces)
             .split(separator: " ").first.map(String.init) ?? ""
@@ -323,10 +377,23 @@ public enum ShaderPreprocessor {
 /// 정수 리터럴 + 식별자(defines 룩업, 미정의=0) + `!  *  /  +  -  <  >  <=  >=  ==  !=  &&  ||` + 괄호만
 /// 다룬다. 함수 호출/문자열/부수효과 없음 → 셰이더 입력으로부터 코드 인젝션 불가.
 enum ExprEval {
+    /// 관용 래퍼(기존 호환): 거부 대상 식은 0. 파이프라인(#if/#elif)은 evalChecked 를 써야 한다.
     static func eval(_ expr: String, defines: [String: Int], definedNames: Set<String>? = nil) -> Int {
-        let toks = tokenize(expr)
+        evalChecked(expr, defines: defines, definedNames: definedNames) ?? 0
+    }
+
+    /// 엄격 평가 — 미지원 패턴이면 nil(분기 선택 거부). F421: 종전에는 미지 문자를 조용히 버리고
+    /// 잔여 토큰도 무시해 `#if A % 2`→A, `#if 0x10`→0 처럼 오분기가 "성공"으로 빠졌다.
+    /// 거부 조건: 미지 문자(`% & | ^ ~ ? :` 등)·시프트(`<<`/`>>`, 비교 이중 토큰으로 오평가됨)·
+    /// 숫자+문자 리터럴(`0x10`, `1u`, `1e5`)·비-10진 수치 define(suspect) 참조·잔여 토큰.
+    static func evalChecked(_ expr: String, defines: [String: Int], definedNames: Set<String>? = nil,
+                            suspect: Set<String> = []) -> Int? {
+        let lexed = tokenize(expr)
+        guard !lexed.unsupported else { return nil }
+        let toks = lexed.tokens
         let knownNames = definedNames ?? Set(defines.keys)
         var pos = 0
+        var failed = false   // suspect define 참조 — 값은 내지만 결과는 nil 로 거부
         // 중첩 깊이(괄호 `(`·단항 `!`/`-` 재귀 공용) — 악성 중첩 입력(`#if ((((…))))`)의 스택
         // 오버플로 방지. 256 은 SceneDocument.world() 의 32 캡을 본떴으되 넉넉히 잡음(실제 식은 10 미만 중첩).
         var depth = 0
@@ -353,6 +420,7 @@ enum ExprEval {
                 return knownNames.contains(next() ?? "") ? 1 : 0
             }
             if let n = Int(t) { return n }
+            if suspect.contains(t) { failed = true; return 0 }  // F421: `#define X 0x10` 류 — 10진 평가 불가
             return defines[t] ?? 0
         }
         // 산술은 랩핑(&*, &+, &-) + 나눗셈 트랩 가드 — #if 는 분기 결정만 하면 되므로 근사면 충분하고,
@@ -397,19 +465,27 @@ enum ExprEval {
             while peek() == "||" { pos += 1; let r = parseAnd(); v = (v != 0 || r != 0) ? 1 : 0 }
             return v
         }
-        return parseOr()
+        let value = parseOr()
+        // 잔여 토큰(`#if 1 0`·`A -> 2` 류)도 오평가 신호 — 전량 소비됐을 때만 유효 평가.
+        guard !failed, pos == toks.count else { return nil }
+        return value
     }
 
-    private static func tokenize(_ s: String) -> [String] {
+    private static func tokenize(_ s: String) -> (tokens: [String], unsupported: Bool) {
         var toks: [String] = []
         let chars = Array(s)
         var i = 0
+        var unsupported = false
         let two: Set<String> = ["==", "!=", "<=", ">=", "&&", "||"]
         while i < chars.count {
             let c = chars[i]
             if c.isWhitespace { i += 1; continue }
             if i + 1 < chars.count, two.contains(String([c, chars[i + 1]])) {
                 toks.append(String([c, chars[i + 1]])); i += 2; continue
+            }
+            // F421: 시프트 — `<`/`>` 이중 토큰으로 오평가(`A << 2` 가 `A < 0` 처럼)되므로 명시 거부.
+            if i + 1 < chars.count, (c == "<" && chars[i + 1] == "<") || (c == ">" && chars[i + 1] == ">") {
+                unsupported = true; i += 2; continue
             }
             if "()!*/+-<>".contains(c) { toks.append(String(c)); i += 1; continue }
             if c.isLetter || c == "_" {
@@ -418,10 +494,13 @@ enum ExprEval {
             }
             if c.isNumber {
                 var n = ""; while i < chars.count, chars[i].isNumber { n.append(chars[i]); i += 1 }
+                // F421: 숫자 런 뒤 문자 = 16진(`0x10`)·접미(`1u`/`2L`)·지수(`1e5`) 리터럴 — 10진 정수 파서로는 오평가.
+                if i < chars.count, chars[i].isLetter || chars[i] == "_" { unsupported = true }
                 toks.append(n); continue
             }
-            i += 1  // 알 수 없는 문자 무시
+            unsupported = true  // F421: 알 수 없는 문자(%, 비트 &, |, ^, ~, 삼항 ?, : 등) — 조용히 버리면 오분기
+            i += 1
         }
-        return toks
+        return (toks, unsupported)
     }
 }

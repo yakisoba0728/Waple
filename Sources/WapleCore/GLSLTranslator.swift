@@ -354,7 +354,7 @@ public enum GLSLTranslator {
         fragBody = appendCaptureArgs(fragBody, helpers: helpers, captureOf: captureOf) { cap in
             // 승격 varying 은 로컬 사본을 전달 — `in.<n>` 은 대입 전 보간값이라 헬퍼가 낡은 값을 읽는다.
             // (GLSL 에서 varying 은 전역: main 의 대입을 헬퍼가 봐야 한다.)
-            if case .varying(let n, _) = cap, promotedVaryings.contains(n) { return n }
+            if case .varying(let n, _, _) = cap, promotedVaryings.contains(n) { return n }
             return captureCallArg(cap, isFragment: true, materials: materials)
         }
         vertBody = appendCaptureArgs(vertBody, helpers: helpers, captureOf: captureOf) { cap in
@@ -1353,7 +1353,7 @@ public enum GLSLTranslator {
     enum Capture: Hashable {
         case material(Int)                    // materials[i] — 원 GLSL 이름의 값 파라미터
         case engine(String)                   // g_Time / g_ModelViewProjectionMatrix / g_TextureNResolution
-        case varying(String, GLSLType)
+        case varying(String, GLSLType, written: Bool)  // written: 헬퍼(전이 포함)가 대입하는가 → 참조 승격
         case attribute(String, GLSLType)      // a_Position / a_TexCoord
         case texture(Int)                     // g_TextureN
         case audio(String)                    // g_AudioSpectrum16Left/Right
@@ -1382,13 +1382,35 @@ public enum GLSLTranslator {
                 refsOf[h.name] = refs
             }
         }
+        // F420: varying "쓰기" 전이 폐쇄 — 헬퍼가 직접 대입하거나, 호출하는 헬퍼가 대입하는 varying.
+        // 이 경우 캡처를 값이 아닌 참조(thread&)로 받아야 호출자의 out.<n> 에 대입이 반영된다
+        // (by-value 면 지역 사본만 갱신돼 컴파일은 성공하지만 varying 이 미갱신으로 오렌더).
+        var writesOf: [String: Set<String>] = [:]
+        for h in helpers {
+            writesOf[h.name] = Set(varyings.map(\.name).filter { isAssigned($0, in: h.body) })
+        }
+        changed = true
+        while changed {
+            changed = false
+            for h in helpers {
+                var w = writesOf[h.name] ?? []
+                for g in helpers where g.name != h.name && (refsOf[h.name] ?? []).contains(g.name) {
+                    let before = w.count
+                    w.formUnion(writesOf[g.name] ?? [])
+                    if w.count != before { changed = true }
+                }
+                writesOf[h.name] = w
+            }
+        }
         var out: [String: [Capture]] = [:]
         for h in helpers {
             let refs = refsOf[h.name] ?? []
             var caps: [Capture] = []
             for (i, m) in materials.enumerated() where refs.contains(m.glslName) { caps.append(.material(i)) }
             for name in refs.filter({ isEngine($0) && !$0.contains("AudioSpectrum") }).sorted() { caps.append(.engine(name)) }
-            for v in varyings where refs.contains(v.name) { caps.append(.varying(v.name, v.type)) }
+            for v in varyings where refs.contains(v.name) {
+                caps.append(.varying(v.name, v.type, written: (writesOf[h.name] ?? []).contains(v.name)))
+            }
             for (n, t) in [("a_Position", GLSLType.vec3), ("a_TexCoord", GLSLType.vec2)] where refs.contains(n) {
                 caps.append(.attribute(n, t))
             }
@@ -1416,7 +1438,7 @@ public enum GLSLTranslator {
         switch cap {
         case .material(let i): return materials[i].glslName
         case .engine(let n): return n
-        case .varying(let n, _): return n
+        case .varying(let n, _, _): return n
         case .attribute(let n, _): return n
         case .texture(let n): return "g_Texture\(n)"
         case .audio(let n): return n
@@ -1429,7 +1451,7 @@ public enum GLSLTranslator {
         switch cap {
         case .material(let i): return "p[\(i)]\(materials[i].type.swizzle)"
         case .engine(let n): return engineReplacement(n)
-        case .varying(let n, _): return isFragment ? "in.\(n)" : "out.\(n)"
+        case .varying(let n, _, _): return isFragment ? "in.\(n)" : "out.\(n)"
         case .attribute(let n, _): return "vin.\(n)"  // fragment 에선 비합법 → 컴파일 실패 → 폴백(의도)
         case .texture(let n): return "g_Texture\(n)"
         case .audio(let n): return engineReplacement(n)  // audioL/audioR/audioL32/... 매핑 공유
@@ -1447,7 +1469,10 @@ public enum GLSLTranslator {
                     : (n == "g_PointerPosition" || n == "g_ParallaxPosition" || n == "g_PointerPositionLast"
                         || n == "g_TexelSize" || n == "g_TexelSizeHalf" ? "float2" : "float"))
             return "\(t) \(n)"
-        case .varying(let n, let t): return "\(t.msl) \(n)"
+        case .varying(let n, let t, let written):
+            // F420: 헬퍼가 쓰는 varying 은 참조로 — by-value 면 호출부(out.<n>)와 끊긴 지역 사본이라
+            // 헬퍼의 대입이 유실된다(컴파일 성공·오렌더). 읽기 전용은 기존 값 파라미터 유지.
+            return written ? "thread \(t.msl)& \(n)" : "\(t.msl) \(n)"
         case .attribute(let n, let t): return "\(t.msl) \(n)"
         case .texture(let n): return "texture2d<float> g_Texture\(n)"
         case .audio(let n): return "constant float* \(n)"
