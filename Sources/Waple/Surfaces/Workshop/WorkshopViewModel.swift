@@ -26,9 +26,14 @@ final class WorkshopViewModel: ObservableObject {
     private let client: WorkshopClient
     private let library: LibraryViewModel
     private let keyProvider: () -> String?
+    private let keySaver: (String) -> SteamAPIKeyStore.SaveFailure?
     private let downloader: Downloader
     private var page = 1
     private var attemptedInitialLoad = false
+    // F492: steamcmd 출력 신호(다운로드별) — 완료 콜백의 nil 하나로는 원인을 알 수 없어,
+    // ERROR!/성공 라인 관측 여부로 실패 유형(로그인 계열 vs 그 외)을 나누는 데 쓴다.
+    private var sawErrorSignal = Set<String>()
+    private var sawSuccessSignal = Set<String>()
     // 요청 세대. 정렬 급변경마다 새 search 가 뜨고 응답이 경합한다 — 시작 시 증가·캡처하고,
     // 응답 적용 직전에 최신 세대와 비교해 낡은 응답(다른 정렬/이전 검색)을 폐기한다.
     private var searchEpoch = 0
@@ -48,6 +53,7 @@ final class WorkshopViewModel: ObservableObject {
 
     init(client: WorkshopClient = .live(), library: LibraryViewModel,
          keyProvider: @escaping () -> String? = { SteamAPIKeyStore.load() },
+         keySaver: @escaping (String) -> SteamAPIKeyStore.SaveFailure? = { SteamAPIKeyStore.save($0) },
          steamcmdAvailable: Bool = SteamCmdDownloader.isAvailable,
          downloader: @escaping Downloader = { itemId, username, progress, completion in
              SteamCmdDownloader.download(itemId: itemId, username: username,
@@ -56,6 +62,7 @@ final class WorkshopViewModel: ObservableObject {
         self.client = client
         self.library = library
         self.keyProvider = keyProvider
+        self.keySaver = keySaver
         self.steamcmdAvailable = steamcmdAvailable
         self.downloader = downloader
         self.hasAPIKey = keyProvider() != nil
@@ -65,7 +72,14 @@ final class WorkshopViewModel: ObservableObject {
     // MARK: - API 키
 
     func saveAPIKey() {
-        SteamAPIKeyStore.save(apiKeyInput)
+        // F491: 저장 실패(SaveFailure)를 버리고 구키 존재(keyProvider)만으로 성공 판정하던 함정 —
+        // ACL 거부 시 구키를 계속 쓰는데 사용자는 새 키가 저장된 줄 알았다. 실패는 메시지로 표면화하고
+        // 입력을 유지해 재시도할 수 있게 한다.
+        if let failure = keySaver(apiKeyInput) {
+            hasAPIKey = keyProvider() != nil
+            statusMessage = failure.message
+            return
+        }
         hasAPIKey = keyProvider() != nil
         if hasAPIKey {
             apiKeyInput = ""
@@ -76,7 +90,12 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     func clearAPIKey() {
-        SteamAPIKeyStore.save("")
+        // F493: 삭제 실패를 무시하고 hasAPIKey = false 로 두면 stale 키가 Keychain 에 남아 다음 실행
+        // 때 부활한다 — 실패를 표면화하고 상태를 그대로 유지한다.
+        if let failure = keySaver("") {
+            statusMessage = failure.message
+            return
+        }
         hasAPIKey = false
         results = []
         canLoadMore = false
@@ -155,6 +174,8 @@ final class WorkshopViewModel: ObservableObject {
         }
         SteamCmdDownloader.username = username
         downloads[item.id] = DownloadUIState(phase: .downloading(nil), entryId: nil)
+        sawErrorSignal.remove(item.id)   // F492: 재시도 시 이전 실행의 신호가 섞이지 않게 초기화
+        sawSuccessSignal.remove(item.id)
         downloader(item.id, username,
                    { [weak self] p in Task { @MainActor in self?.applyProgress(item.id, p) } },
                    { [weak self] url in Task { @MainActor in self?.finishDownload(item, url) } })
@@ -166,8 +187,12 @@ final class WorkshopViewModel: ObservableObject {
         case .downloading(let v): state.phase = .downloading(v)
         case .verifying: state.phase = .verifying
         case .committing: state.phase = .committing
-        case .success: state.phase = .importing
-        case .failed: state.phase = .failed
+        case .success:
+            state.phase = .importing
+            sawSuccessSignal.insert(id)   // F492
+        case .failed:
+            state.phase = .failed
+            sawErrorSignal.insert(id)   // F492
         }
         downloads[id] = state
     }
@@ -175,9 +200,22 @@ final class WorkshopViewModel: ObservableObject {
     private func finishDownload(_ item: WorkshopItem, _ url: URL?) {
         guard let url else {
             downloads[item.id] = DownloadUIState(phase: .failed, entryId: nil)
-            statusMessage = "‘\(item.title)’ 다운로드 실패 — 터미널에서 `steamcmd +login \(usernameInput)` 로 1회 로그인해 세션을 캐시했는지 확인하세요."
+            // F492: 원인 불문 로그인 오진단 방지 — 관측된 steamcmd 신호로 실패 유형을 나눈다.
+            // ERROR! 라인은 로그인/세션 계열이 대표적이라 기존 안내를 유지하고, 성공 후 폴더 부재와
+            // 무신호(타임아웃·실행 실패·네트워크)는 로그인 무관 원인을 안내한다.
+            if sawSuccessSignal.contains(item.id) {
+                statusMessage = "‘\(item.title)’ 다운로드는 완료됐지만 결과 폴더를 찾지 못했습니다 — steamcmd 의 content 폴더 위치를 확인하세요."
+            } else if sawErrorSignal.contains(item.id) {
+                statusMessage = "‘\(item.title)’ 다운로드 실패 — 터미널에서 `steamcmd +login \(usernameInput)` 로 1회 로그인해 세션을 캐시했는지 확인하세요."
+            } else {
+                statusMessage = "‘\(item.title)’ 다운로드 실패 — steamcmd 가 완료 신호를 내지 않았습니다(시간 초과·네트워크·실행 오류 가능). 터미널에서 `steamcmd +login \(usernameInput)` 세션 캐시를 확인하고 직접 시도해 원인을 파악하세요."
+            }
+            sawErrorSignal.remove(item.id)
+            sawSuccessSignal.remove(item.id)
             return
         }
+        sawErrorSignal.remove(item.id)
+        sawSuccessSignal.remove(item.id)
         guard let entry = library.importDownloaded(url) else {
             downloads[item.id] = DownloadUIState(phase: .failed, entryId: nil)
             return

@@ -31,6 +31,21 @@ enum NowPlayingSubtitle {
         case .unknown(let s): return s
         }
     }
+
+    /// 하단 바 표시 엔트리(F495): 전역 선택 우선, 없으면 모니터 할당 중 하나 — 할당만으로 재생 중인
+    /// 세션(전역 적용 무)에서 "적용된 배경 없음"으로 표시되던 불일치 방지.
+    static func displayedEntry(global: LibraryEntry?, assignedIds: [String], entries: [LibraryEntry]) -> LibraryEntry? {
+        if let global { return global }
+        guard let id = assignedIds.first else { return nil }
+        return entries.first { $0.id == id }
+    }
+
+    /// 대상별 값이 모두 같으면 그 값, 아니면 nil(F496) — 멀티모니터에 서로 다른 값이 적용된 상태에서
+    /// 첫 대상 값만 보고 틀린 체크마크를 달지 않게 한다(nil = 체크 없음).
+    static func commonValue(_ values: [Float]) -> Float? {
+        guard let first = values.first, values.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
 }
 
 /// 시그니처: 하단 Now Playing 바 — 적용 중 배경의 애니 썸네일·제목 상시 + 재생 컨트롤 + 재생목록 + 가져오기.
@@ -39,7 +54,10 @@ struct NowPlayingBar: View {
     @State private var showPlaylist = false
 
     private var appliedEntry: LibraryEntry? {
-        viewModel.entries.first { $0.id == viewModel.selectedId }
+        // F495: 전역 선택만 볼 경우 할당-전용 세션에서 재생 중인데도 "적용된 배경 없음"으로 표시됨.
+        NowPlayingSubtitle.displayedEntry(global: viewModel.globalEntry,
+                                          assignedIds: Array(viewModel.monitors.all.values),
+                                          entries: viewModel.entries)
     }
 
     var body: some View {
@@ -155,11 +173,11 @@ struct NowPlayingBar: View {
         .help("동영상 음량 · 배속")
     }
 
-    private var currentVideoVolume: Float {
-        viewModel.videoTargetIds().first.map { VideoSettings.volume(id: $0) } ?? 0
+    private var currentVideoVolume: Float? {
+        NowPlayingSubtitle.commonValue(viewModel.videoTargetIds().map { VideoSettings.volume(id: $0) })
     }
-    private var currentVideoRate: Float {
-        viewModel.videoTargetIds().first.map { VideoSettings.rate(id: $0) } ?? 1
+    private var currentVideoRate: Float? {
+        NowPlayingSubtitle.commonValue(viewModel.videoTargetIds().map { VideoSettings.rate(id: $0) })
     }
 
     /// 현재 적용 중인 모든 동영상 대상(모니터별 할당 포함)에 변경을 반영하고 재적용을 태운다

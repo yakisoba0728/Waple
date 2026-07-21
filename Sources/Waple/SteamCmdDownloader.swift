@@ -80,6 +80,18 @@ enum SteamCmdDownloader {
         return Double(matched)
     }
 
+    /// 성공 라인의 목적지 경로 추출 — steamcmd 는 `Success. Downloaded item <id> to "<path>" :` 형태로
+    /// 실제로 쓴 위치를 출력한다(실측). F499: 후보 스캔이 Steam 홈을 항상 우선해 양쪽 공존 시 이번
+    /// 다운로드와 무관한 stale 콘텐츠를 임포트할 수 있어, 성공 라인이 알려준 경로를 우선한다.
+    static func successPath(_ line: String) -> String? {
+        guard line.contains("Success. Downloaded item"),
+              let open = line.firstIndex(of: "\"") else { return nil }
+        let rest = line[line.index(after: open)...]
+        guard let close = rest.firstIndex(of: "\"") else { return nil }
+        let path = String(rest[..<close])
+        return path.isEmpty ? nil : path
+    }
+
     /// 결과 폴더 후보(실존 확인은 호출부). steamcmd 홈이 실행파일 위치와 무관할 수 있어 두 후보를 순서대로 낸다:
     /// 1) macOS 기본 Steam 데이터 홈(~/Library/Application Support/Steam)
     /// 2) steamcmd 실행파일 디렉터리(자체 디렉터리에 저장하는 배포)
@@ -114,17 +126,26 @@ enum SteamCmdDownloader {
             return
         }
         DispatchQueue.global(qos: .utility).async {
-            let sawSuccess = run(exe: exe, args: arguments(username: username, itemId: itemId),
-                                 timeout: timeout, progress: progress)
-            guard sawSuccess else {
+            let result = run(exe: exe, args: arguments(username: username, itemId: itemId),
+                             timeout: timeout, progress: progress)
+            guard result.sawSuccess else {
                 WapleLog.warn("[Waple] steamcmd download did not report success for item \(itemId)")
                 completeOnMain(completion, nil)
                 return
             }
-            let found = resultPathCandidates(
-                itemId: itemId, executableURL: exe,
-                homeDirectory: FileManager.default.homeDirectoryForCurrentUser
-            ).first { isDirectory($0) }
+            // F499: 성공 라인이 경로를 알려주면 그 경로만 신뢰한다 — 다른 후보는 이번 실행이 쓴 곳이
+            // 아니므로(양쪽 공존 시 stale) 폴백 스캔으로 돌아가지 않는다. 경로 미출력(구형 포맷)일 때만
+            // 기존 후보 스캔을 쓴다.
+            let found: URL?
+            if let reported = result.path {
+                let url = URL(fileURLWithPath: reported)
+                found = isDirectory(url) ? url : nil
+            } else {
+                found = resultPathCandidates(
+                    itemId: itemId, executableURL: exe,
+                    homeDirectory: FileManager.default.homeDirectoryForCurrentUser
+                ).first { isDirectory($0) }
+            }
             if found == nil {
                 WapleLog.warn("[Waple] steamcmd reported success but no content folder found for item \(itemId)")
             }
@@ -142,9 +163,9 @@ enum SteamCmdDownloader {
     }
 
     /// Process 1회 실행. stdout 을 라인 단위로 파싱해 progress 를 메인 큐로 전달, 타임아웃 시 terminate.
-    /// 반환값 = "완료" 라인을 봤는가.
+    /// 반환값 = ("완료" 라인을 봤는가, 성공 라인이 알려준 목적지 경로 — F499. 경로 미출력 포맷이면 nil).
     private static func run(exe: URL, args: [String], timeout: TimeInterval,
-                            progress: @escaping (Progress) -> Void) -> Bool {
+                            progress: @escaping (Progress) -> Void) -> (sawSuccess: Bool, path: String?) {
         let proc = Process()
         proc.executableURL = exe
         proc.arguments = args
@@ -153,12 +174,13 @@ enum SteamCmdDownloader {
         proc.standardError = pipe
         do { try proc.run() } catch {
             WapleLog.warn("[Waple] steamcmd launch failed: \(error)")
-            return false
+            return (false, nil)
         }
         let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
 
         var sawSuccess = false
+        var reportedPath: String?
         var buffer = Data()
         let handle = pipe.fileHandleForReading
         while true {
@@ -170,17 +192,17 @@ enum SteamCmdDownloader {
                 let lineData = buffer[buffer.startIndex..<nl]
                 buffer.removeSubrange(buffer.startIndex...nl)
                 guard let line = String(data: lineData, encoding: .utf8), let p = parse(line: line) else { continue }
-                if p == .success { sawSuccess = true }
+                if p == .success { sawSuccess = true; reportedPath = successPath(line) ?? reportedPath }
                 DispatchQueue.main.async { progress(p) }
             }
         }
         // 마지막 줄이 개행 없이 EOF 로 끝날 수 있다 — 남은 버퍼도 파싱(성공 신호를 놓치지 않게).
         if let line = String(data: buffer, encoding: .utf8), let p = parse(line: line) {
-            if p == .success { sawSuccess = true }
+            if p == .success { sawSuccess = true; reportedPath = successPath(line) ?? reportedPath }
             DispatchQueue.main.async { progress(p) }
         }
         proc.waitUntilExit()
         killer.cancel()
-        return sawSuccess
+        return (sawSuccess, reportedPath)
     }
 }

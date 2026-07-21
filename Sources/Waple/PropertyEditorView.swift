@@ -3,7 +3,9 @@ import SwiftUI
 import WapleCore
 import WapleLibrary
 
-extension LibraryEntry: Identifiable {}
+// F502: 모듈 전역 retroactive conformance(extension LibraryEntry: Identifiable) 제거 — 사용처는
+// 전부 명시적 id: 파라미터라 이 conformance 에 의존하지 않음. 향후 WapleLibrary 가 직접 채택할 때
+// 중복 선언 빌드 오류를 만든다.
 
 /// 속성 라벨 표시(순수): HTML 태그 제거 + 미번역 로컬라이즈 키(ui_*/스네이크 케이스) 정돈.
 enum PropertyLabel {
@@ -33,6 +35,9 @@ struct PropertyEditorView: View {
     /// (키스트로크 커밋은 부적절: setProperty 가 현재 배경 리마운트를 유발.)
     @FocusState private var focusedText: Int?
     @State private var dirtyText = Set<Int>()
+    /// F494: 슬라이더 미커밋 편집 추적 — 드래그 틱마다 commit(setProperty → 전체 리마운트)하던 것을
+    /// textInput 과 같은 패턴(드래그 중엔 로컬 값만, 종료 시 1회 커밋)으로. 초당 수십 회 리마운트 방지.
+    @State private var dirtySliders = Set<Int>()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,15 +57,25 @@ struct PropertyEditorView: View {
             }
         }
         .onAppear { props = viewModel.editableProperties(for: entry) }
-        .onChange(of: focusedText) { newValue in
+        // F501: 1-파라미터 onChange(of:perform:) 는 macOS 14 에서 deprecated — 2-파라미터 신형으로.
+        .onChange(of: focusedText) { _, newValue in
             for i in dirtyText where i != newValue { commitDirtyText(i) }   // 포커스 이탈 커밋
         }
-        .onDisappear { for i in dirtyText { commitDirtyText(i) } }   // 시트 닫힘 시 잔여 커밋
+        .onDisappear {
+            for i in dirtyText { commitDirtyText(i) }   // 시트 닫힘 시 잔여 커밋
+            for i in dirtySliders { commitDirtySlider(i) }   // F494: 드래그 중 닫힘 대비
+        }
     }
 
     /// 편집된(dirty) textInput 만 영속화 — 무변경 커밋의 불필요한 리마운트 방지.
     private func commitDirtyText(_ i: Int) {
         guard dirtyText.remove(i) != nil, props.indices.contains(i) else { return }
+        viewModel.setProperty(key: props[i].key, value: props[i].value, for: entry)
+    }
+
+    /// F494: 편집된(dirty) 슬라이더만 영속화(드래그 종료 시 1회) — 무변경 커밋의 리마운트 방지.
+    private func commitDirtySlider(_ i: Int) {
+        guard dirtySliders.remove(i) != nil, props.indices.contains(i) else { return }
         viewModel.setProperty(key: props[i].key, value: props[i].value, for: entry)
     }
 
@@ -85,10 +100,13 @@ struct PropertyEditorView: View {
             VStack(alignment: .leading, spacing: 2) {
                 let v = { if case .number(let n) = props[i].value { return n }; return 0 }()
                 Text("\(label(p)): \(String(format: "%.2f", v))").font(.caption)
+                // F494: 드래그 틱마다 commit(setProperty → 전체 리마운트)하지 않고, 로컬 값만 갱신하다가
+                // 드래그 종료(onEditingChanged false) 시 1회 커밋 — 초당 수십 회 리마운트·깜빡임 방지.
                 Slider(value: Binding(
                     get: { if case .number(let n) = props[i].value { return n }; return 0 },
-                    set: { commit(i, .number($0)) }),
-                    in: PropertyControl.sliderRange(min: p.min, max: p.max))
+                    set: { props[i].value = .number($0); dirtySliders.insert(i) }),
+                    in: PropertyControl.sliderRange(min: p.min, max: p.max),
+                    onEditingChanged: { editing in if !editing { commitDirtySlider(i) } })
             }
         case .picker:
             Picker(label(p), selection: Binding(
