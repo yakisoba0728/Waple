@@ -82,7 +82,10 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         guard start < fileSize else { return .unsatisfiable }
         if endStr.isEmpty { return .partial(start..<fileSize) }  // bytes=N-
         guard let end = Int64(endStr), end >= start else { return .full }
-        return .partial(start..<min(end + 1, fileSize))
+        // F570: end=Int64.max(페이지 JS 가 Range 헤더로 주입 가능)면 end+1 이 산술 오버플로
+        // 트랩 — 클램프를 덧셈 없이 분기로 처리.
+        let upperBound = end >= fileSize ? fileSize : end + 1
+        return .partial(start..<upperBound)
     }
 
     private func respondFile(_ task: WKURLSchemeTask, id: ObjectIdentifier, requestURL: URL?, rangeHeader: String?, fileURL: URL) {
@@ -124,12 +127,13 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
 
         let target = requestURL ?? URL(string: "waple-asset://wallpaper/")!
         // 감사 H: main.sync 왕복이면 스트리밍 처리량이 메인 큐 응답성에 결합되므로 ioQueue 에서 직접
-        // 전달한다. isTaskLive 는 NSLock 보호이고, 이 함수는 태스크당 직렬로 진행돼 전달 순서는 유지된다.
-        guard isTaskLive(id) else { return }
+        // 전달한다. 이 함수는 태스크당 직렬로 진행돼 전달 순서는 유지된다.
+        // F575: live 확인과 didReceive 호출은 withLiveTask 로 원자화 — 확인과 호출 사이에
+        // webView(_:stop:) 이 id 를 제거하면 stop 된 태스크를 건드리는 계약 위반(예외)이 된다.
         let response = HTTPURLResponse(
             url: target, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers
         )!
-        task.didReceive(response)
+        guard withLiveTask(id, { task.didReceive(response) }) else { return }
         if body.lowerBound > 0 { try? handle.seek(toOffset: UInt64(body.lowerBound)) }
         var remaining = Int(body.upperBound - body.lowerBound)
         while remaining > 0, isTaskLive(id) {
@@ -138,8 +142,7 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
             }
             if data.isEmpty { break }
             remaining -= data.count
-            guard isTaskLive(id) else { break }
-            task.didReceive(data)
+            guard withLiveTask(id, { task.didReceive(data) }) else { break }
         }
         DispatchQueue.main.async {
             guard self.isTaskLive(id) else { return }
@@ -168,6 +171,16 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         let live = activeTasks.contains(id)
         lock.unlock()
         return live
+    }
+
+    /// F575: live 확인과 태스크 메서드 호출을 한 락 구간에서 원자화. webView(_:stop:) 도 같은 락으로
+    /// id 를 제거하므로, 락 획득 시 live 면 호출 완료까지 stop 의 제거는 대기한다(계약 위반 방지).
+    private func withLiveTask(_ id: ObjectIdentifier, _ body: () -> Void) -> Bool {
+        lock.lock()
+        guard activeTasks.contains(id) else { lock.unlock(); return false }
+        body()
+        lock.unlock()
+        return true
     }
 
     private func finishTask(_ id: ObjectIdentifier) {

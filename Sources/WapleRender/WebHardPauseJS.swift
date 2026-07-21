@@ -235,6 +235,10 @@ enum WebHardPauseJS {
             configurable: true,
             value: function () {
               entry.pageDesiredState = 'running';
+              // F574: pause 중 페이지가 직접 resume() 을 호출하면 running 의사가 명확하므로
+              // 해제 시 재개 대상으로 표시 — 표시하지 않으면(자동재생 정책 등으로 suspended
+              // 상태에서 pause 진입한 컨텍스트) 해제 후에도 영구 suspended 로 남는다.
+              if (paused) { entry.resumeAfterPause = true; }
               return enqueueAudio(entry, function () {
                 return Promise.resolve(entry.nativeResume()).then(function () {
                   if (paused) { return entry.nativeSuspend(); }
