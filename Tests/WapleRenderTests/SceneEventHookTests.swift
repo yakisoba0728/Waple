@@ -245,11 +245,12 @@ final class SceneEventHookTests: XCTestCase {
         XCTAssertEqual(e.evaluate(current: ""), "silent", "미연결 브리지는 isPlaying false, 크래시 없음")
     }
 
+    /// F702(S-8): 훅 인자 props 는 원시값 맵(WE 계약 — engine.userProperties 와 동일, 코퍼스 58씬 직접 비교).
     func testLifecycleEntrypointsAreGatedAndExcludedFromGenericHooks() throws {
         let e = try XCTUnwrap(TextScriptEngine(script: """
         var trace = ['top'];
         export function applyUserProperties(props) {
-            trace.push('apply:' + props.enabled.value + ':' + props.amount.value + ':' + props.label.value);
+            trace.push('apply:' + props.enabled + ':' + props.amount + ':' + props.label);
         }
         export function init(value) { trace.push('init:' + value); }
         export function update(value) {
