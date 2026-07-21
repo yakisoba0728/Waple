@@ -87,9 +87,19 @@ public enum TextRasterizer {
         }
 
         // 줄 높이는 폰트 메트릭(빈 줄도 한 행 차지) — 폭은 줄별 실측 최대치.
-        let ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font), leading = CTFontGetLeading(font)
+        // F476: 기본 폰트 메트릭만 쓰면 CoreText 캐스케이드로 그려지는 폴백 글리프(CJK·이모지 등
+        // 기본 폰트보다 ascent/descent 가 큰 폰트)가 캔버스 상하단에서 잘린다 — 줄별 실측(런의 실제
+        // 폰트 반영)과 기본 폰트 메트릭의 최대를 캔버스 높이/베이스라인에 사용한다.
+        var ascent = CTFontGetAscent(font), descent = CTFontGetDescent(font), leading = CTFontGetLeading(font)
+        let widths = lines.map { line -> Double in
+            var a: CGFloat = 0, d: CGFloat = 0, l: CGFloat = 0
+            let w = CTLineGetTypographicBounds(line, &a, &d, &l)
+            if a.isFinite { ascent = max(ascent, a) }
+            if d.isFinite { descent = max(descent, d) }
+            if l.isFinite { leading = max(leading, l) }
+            return w
+        }
         let lineH = ceil(ascent + descent + leading)
-        let widths = lines.map { CTLineGetTypographicBounds($0, nil, nil, nil) }
         let maxW = widths.max() ?? 0
         guard ascent.isFinite, descent.isFinite, lineH.isFinite, lineH > 0, maxW.isFinite else { return nil }
         let rawW = ceil(maxW)

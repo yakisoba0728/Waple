@@ -90,7 +90,7 @@ public enum UserPropertyStore {
             let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !path.isEmpty else { continue }
             if path.hasPrefix("/") {
-                out[key] = .none   // 신뢰 경계 밖 절대경로 — 허용목록에 편입되지 않도록 폐기
+                out[key] = PropertyValue.none   // 신뢰 경계 밖 절대경로 — 허용목록에 편입되지 않도록 폐기
                 continue
             }
             guard let root,

@@ -188,6 +188,24 @@ public final class TextScriptEngine {
         }
     }
 
+    /// F475: `__scriptPropOverrides` 는 **컨텍스트 전역** — 공유 컨텍스트에서 이후 로드되는 타 엔진이
+    /// 덮어쓴다. top-level 이 아니라 init/update 안에서 createScriptProperties() 를 지연 호출하는
+    /// 스크립트는 그 시점의 전역을 읽으므로, 이 엔진의 스크립트 코드가 실행되기 직전마다 로드 시점에
+    /// 찍어둔 자기 스냅샷으로 복원해야 한다(아래 두 헬퍼).
+    private var scriptPropOverridesSnapshot: JSValue?
+
+    /// 컨텍스트 전역 `__scriptPropOverrides` 현재 값의 스냅샷(null/undefined → nil).
+    private static func currentScriptPropOverrides(_ ctx: JSContext) -> JSValue? {
+        guard let v = ctx.objectForKeyedSubscript("__scriptPropOverrides"), !v.isNull, !v.isUndefined else { return nil }
+        return v
+    }
+
+    /// F475: 이 엔진의 오버라이드를 컨텍스트 전역에 복원(없으면 null — 타 엔진 값 잔류 차단).
+    private func restoreScriptPropOverrides() {
+        context.setObject(scriptPropOverridesSnapshot ?? NSNull(),
+                          forKeyedSubscript: "__scriptPropOverrides" as NSString)
+    }
+
     public init?(script: String, scriptPropsJSON: String? = nil) {
         guard Self.passesPracticalSafetyChecks(script) else { return nil }
         guard let ctx = JSContext() else { return nil }
@@ -201,6 +219,7 @@ public final class TextScriptEngine {
         if let ms = Self.captureDateEpochMillis { ctx.evaluateScript(Self.dateOverrideJS(ms)) }
         if Self.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
         Self.injectScriptPropOverrides(ctx, json: scriptPropsJSON)
+        scriptPropOverridesSnapshot = Self.currentScriptPropOverrides(ctx)   // F475
         let cleaned = Self.stripModuleSyntax(script)
         ctx.evaluateScript(cleaned)
         guard !hadException,
@@ -248,6 +267,7 @@ public final class TextScriptEngine {
         })(__wapleLayerForScript(\(layerArg)))
         """
         Self.injectScriptPropOverrides(context, json: scriptPropsJSON)
+        scriptPropOverridesSnapshot = Self.currentScriptPropOverrides(context)   // F475
         let out = context.evaluateScript(wrapped)
         guard !hadException else { return nil }
         if let out, out.isObject {
@@ -283,6 +303,7 @@ public final class TextScriptEngine {
             NSLog("%@", "[Waple] \(tag): \(ex?.toString() ?? "?")")
             failed = true
         }
+        restoreScriptPropOverrides()   // F475: 지연 createScriptProperties 호출은 자기 오버라이드를 봐야 함
         return body { failed }
     }
 
@@ -365,6 +386,7 @@ public final class TextScriptEngine {
     /// 효과 상수 스크립트용: engine.runtime 갱신(초) + engine.setTimeout 만기 큐 펌프.
     /// 공유 씬 컨텍스트에선 여러 엔진이 같은 t 로 재호출 — 펌프는 멱등(만기분은 1회만 발화).
     public func setRuntime(_ t: Double) {
+        restoreScriptPropOverrides()   // F475: __pumpTimeouts 만기 콜백도 이 엔진의 스크립트 코드
         context.evaluateScript("__engineState.runtime = \(t); __pumpTimeouts();")
     }
 
@@ -436,11 +458,19 @@ public final class TextScriptEngine {
         var i = 0
         var prevSig: Character? = nil   // 마지막 비공백 코드 문자(멤버 접근 `.export` 판별)
         var lastKeywordAllowsRegex = false
+        var sawLineBreak = false        // 마지막 코드 토큰 이후 개행 경과(ASI 판별 — F472)
         func isIdent(_ c: Character) -> Bool { c == "_" || c == "$" || c.isLetter || c.isNumber }
+        // 피연산자 종료 문자(식 연속 위치) — 이 직후 개행 없는 import/export 는 문 키워드가 될 수
+        // 없다(ASI 는 라인터미네이터 필요): 시작 판정을 놓친 정규식 내부의 키워드다(F472).
+        func isOperandEnding(_ c: Character) -> Bool {
+            c.isLetter || c.isNumber || c == "_" || c == "$" || c == ")" || c == "]"
+                || c == "\"" || c == "'" || c == "`"
+        }
         func emit(_ c: Character) {
             out.append(c)
             if !c.isWhitespace {
                 prevSig = c
+                sawLineBreak = false
                 if !"({[=,:;!?&|+-*%^~<>".contains(c) { lastKeywordAllowsRegex = false }
             }
         }
@@ -476,6 +506,9 @@ public final class TextScriptEngine {
                 out.append(c); out.append(chars[i + 1]); i += 2
                 while i < n {
                     if chars[i] == "*", i + 1 < n, chars[i + 1] == "/" { out.append("*"); out.append("/"); i += 2; break }
+                    // 블록 주석 내부의 개행도 ASI 라인터미네이터로 친다(F472) — 주석은 emit 을 거치지
+                    // 않으므로(prevSig 불변 규약) 여기서 별도 추적.
+                    if chars[i] == "\n" || chars[i] == "\r" { sawLineBreak = true }
                     out.append(chars[i]); i += 1
                 }
                 continue
@@ -507,8 +540,12 @@ public final class TextScriptEngine {
                 // 정규식 리터럴 내부뿐(나눗셈 우변의 예약어는 비합법) — `if (ok) /export /` 처럼 위의
                 // 정규식 시작 판정이 놓친 경우의 오폭 방지. `)`/`}` 를 정규식 시작 집합에 추가하는 방식은
                 // 나눗셈 `(a+b)/2` 를 정규식으로 오파괴하므로 불가.
+                // F472: 피연산자 종료(식별자/숫자/`)`/`]`/따옴표) 직후 **개행 없는** 키워드도 문 위치가
+                // 아니다 — `if (ok) /a import 'x'/.test(s)` 처럼 시작 판정을 놓친 정규식 중간의 키워드를
+                // 중화해 패턴을 파괴하는 경로 차단. ASI 가 성립하는 개행 경과 후나 `;`/`{`/`}` 뒤는 중화.
                 let isKeyword = (word == Array("export") || word == Array("import"))
                     && prevSig != "." && prevSig != "/"
+                    && (prevSig == nil || sawLineBreak || !isOperandEnding(prevSig!))
                 if isKeyword {
                     let after = nextNonWS(j)
                     let ac: Character? = after < n ? chars[after] : nil
@@ -519,10 +556,58 @@ public final class TextScriptEngine {
                     }
                     // export
                     if matchWord(after, Array("default")) {
-                        emitAll(Array("var __default =")); i = after + "default".count; continue
+                        // F474: `export default function update(...)` 를 `var __default = function update...`
+                        // 로 바꾸면 기명 함수식의 이름은 스코프에 바인딩되지 않아 update 훅 수집이 무음
+                        // 실패한다. 기명 function 선언은 `export default ` 만 삭제해 선언 바인딩을 보존
+                        // (익명/식 형태는 기존 __default 대입 유지).
+                        let d = after + "default".count
+                        let nd = nextNonWS(d)
+                        if matchWord(nd, Array("function")) {
+                            let nf = nextNonWS(nd + "function".count)
+                            if nf < n, isIdent(chars[nf]), !chars[nf].isNumber {
+                                i = d; continue
+                            }
+                        }
+                        emitAll(Array("var __default =")); i = d; continue
                     }
-                    if ac == "{" || ac == "*" {
-                        // export {..} / export * .. — 문 전체(다음 ';' 까지) 삭제.
+                    if ac == "{" {
+                        // F473: 멀티라인 `export { ... }` — 기존 스캔은 첫 \n 에서 멈춰 잔여 줄이
+                        // SyntaxError 로 로드를 깼다. 목록 구성 문자만 통과시키며 닫는 } 까지 삭제하고
+                        // 선택적 re-export 꼬리(`from 'm'`)·선택 `;` 까지 소비. 비정형(} 미발견/외부
+                        // 문자)이면 기존 동작(첫 ;/\n 까지 삭제)으로 후퇴.
+                        var m = after + 1
+                        var close: Int? = nil
+                        while m < n {
+                            let c = chars[m]
+                            if c == "}" { close = m; break }
+                            if c == ";" || !(c.isLetter || c.isNumber || c == "_" || c == "$"
+                                                || c == "," || c.isWhitespace) { break }
+                            m += 1
+                        }
+                        if let close {
+                            var e = close + 1
+                            var f = e
+                            while f < n && chars[f].isWhitespace { f += 1 }
+                            if matchWord(f, Array("from")) {
+                                var s = nextNonWS(f + "from".count)
+                                if s < n, chars[s] == "'" || chars[s] == "\"" {
+                                    let quote = chars[s]
+                                    s += 1
+                                    while s < n { if chars[s] == "\\", s + 1 < n { s += 2; continue }; let end = chars[s] == quote; s += 1; if end { break } }
+                                    e = s
+                                }
+                            }
+                            while e < n && chars[e].isWhitespace && chars[e] != "\n" { e += 1 }
+                            if e < n && chars[e] == ";" { e += 1 }
+                            i = e; continue
+                        }
+                        var m2 = after
+                        while m2 < n && chars[m2] != ";" && chars[m2] != "\n" { m2 += 1 }
+                        if m2 < n && chars[m2] == ";" { m2 += 1 }
+                        i = m2; continue
+                    }
+                    if ac == "*" {
+                        // export * .. — 문 전체(다음 ';' 까지) 삭제.
                         var m = after
                         while m < n && chars[m] != ";" && chars[m] != "\n" { m += 1 }
                         if m < n && chars[m] == ";" { m += 1 }
@@ -541,11 +626,21 @@ public final class TextScriptEngine {
                 while j < n && isIdent(chars[j]) { j += 1 }
                 emitAll(Array(chars[i..<j])); i = j; continue
             }
+            if c == "\n" || c == "\r" { sawLineBreak = true }   // ASI 라인터미네이터(F472)
             emit(c); i += 1
         }
         return String(out)
     }
 
+    /// 실용 안전 검사 — 자명한 무한 루프/초대형 소스를 로드 전에 거른다(거부 시 정적 텍스트 폴백).
+    ///
+    /// F470 잔여 리스크(문서화): JSC 평가는 호출 스레드(렌더/메인) **동기**이고, 공개 API 에는 평가
+    /// 인터럽트/타임아웃 수단이 없다(JSContextGroupSetExecutionTimeLimit 등은 private SPI라 미채택).
+    /// 백그라운드 스레드 격리는 프레임마다 동기 결과를 요구하는 호출 체인(AppDelegate → mount →
+    /// makeScriptEngine → evaluate*)의 전면 재구조라 침습적이라 보류했다. 따라서 이 가드는 자명한
+    /// 경우만 거르는 최선 노력이며 `while (f(x))` 류 계산 조건의 정교한 무한 루프는 여전히 통과한다 —
+    /// 제3자 스크립트의 악의적/버그성 행 유발은 수용 리스크로 남는다(정상 스크립트 오탐보다 행
+    /// 방지를 우선하는 기존 방향 유지).
     private static func passesPracticalSafetyChecks(_ script: String) -> Bool {
         guard script.count <= maxScriptCharacters else {
             NSLog("%@", "[Waple] text script rejected: source too large (\(script.count) chars)")
@@ -637,6 +732,16 @@ public final class TextScriptEngine {
                             p += literal.length
                             skipWS(&p)
                             if p < n, chars[p] == ")" { return true }
+                        } else {
+                            // F470: `while (x)` 베어 식별자 조건 — `var x=1; while(x){}` 류 리터럴 가드
+                            // 우회 차단(사실상 무한 루프 관용구). 비교식 `while (i<n)` 등은 허용 —
+                            // 오탐은 정적 텍스트 폴백, 행 방지를 우선.
+                            var q = p
+                            while q < n && isIdent(chars[q]) { q += 1 }
+                            if q > p {
+                                skipWS(&q)
+                                if q < n, chars[q] == ")" { return true }
+                            }
                         }
                     }
                 } else if wordString == "for" {
@@ -645,13 +750,7 @@ public final class TextScriptEngine {
                     if p < n, chars[p] == "(" {
                         p += 1
                         skipWS(&p)
-                        if p < n, chars[p] == ";" {
-                            p += 1
-                            skipWS(&p)
-                            if p < n, chars[p] == ";" { return true }
-                        } else if forLoopHasHugeBound(start: p) {
-                            return true
-                        }
+                        if forHeaderIsUnbounded(start: p) { return true }
                     }
                 }
                 lastKeywordAllowsRegex = ["return", "throw", "case", "delete", "typeof", "void", "new", "yield"].contains(wordString)
@@ -702,12 +801,18 @@ public final class TextScriptEngine {
             return (q - p, (Double(raw) ?? 0) != 0)
         }
 
-        func forLoopHasHugeBound(start: Int) -> Bool {
+        /// for 헤더 검사: 두 개의 ; 사이 조건식이 비어 있으면(공백뿐) 무한 루프 — F470: 기존은
+        /// `for(;;` 리터럴과 거대 상한만 검사해 `for (var i=0;;i++)` 류(init 있는 빈 조건)가 우회했다.
+        /// 문자열 스킵(감사 W-B6)·거대 상수 상한 휴리스틱은 기존 유지. 괄호 중첩(init 의 호출식)은
+        /// 깊이 추적으로 걸러낸다. 세미콜론 부재(for-of/in)는 미판정(기존 동작).
+        func forHeaderIsUnbounded(start: Int) -> Bool {
             var p = start
             var semicolons = 0
+            var depth = 0
             var condition: [Character] = []
-            while p < n, chars[p] != ")" {
+            while p < n {
                 let c = chars[p]
+                if c == ")", depth == 0 { break }
                 // 문자열 리터럴은 통째로 스킵(외곽 스캐너와 동일, 감사 W-B6) — 문자열 속 숫자
                 // (`table["16094592"]`)나 `;`/`)` 가 조건 수집을 오염해 정상 스크립트를 오탐했다.
                 if c == "\"" || c == "'" || c == "`" {
@@ -720,7 +825,8 @@ public final class TextScriptEngine {
                     }
                     continue
                 }
-                if c == ";" {
+                if c == "(" { depth += 1 } else if c == ")" { depth -= 1 }
+                if c == ";", depth == 0 {
                     semicolons += 1
                     p += 1
                     if semicolons == 2 { break }
@@ -731,6 +837,8 @@ public final class TextScriptEngine {
             }
             guard semicolons >= 2 else { return false }
             let text = String(condition)
+            // F470: 빈 조건(공백뿐) = 무한 루프 — init/update 절 유무와 무관하게 거부(`for(;;)` 와 동일 기준).
+            if text.trimmingCharacters(in: .whitespaces).isEmpty { return true }
             return text.range(of: #"(?:\d{8,}|1e\d{2,})"#, options: [.regularExpression, .caseInsensitive]) != nil
         }
     }
