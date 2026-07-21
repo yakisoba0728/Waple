@@ -172,8 +172,10 @@ final class SceneParticleModelFixRegressionTests: XCTestCase {
 
     func testF438_StepZeroDoesNotReEmitAfterRealSteps() {
         // 수명 0.15 버스트 — 발화(step 1)→전멸(step 2) 이력(time>0) 후 step(0) 은 재버스트하지 않는다.
+        // rate: 0 명시 — F621 부터 burst+rate 병행이라 def0 기본 rate(1000)가 남으면 연속 방출이
+        // maxCount 까지 채워져 버스트 의도 측정이 불가능해진다.
         var sim = ParticleSimulator(def: def0(initializers: [.lifetimeRandom(min: 0.15, max: 0.15)],
-                                              burst: 5), seed: 7)
+                                              rate: 0, burst: 5), seed: 7)
         _ = sim.step(0.1)                       // 버스트 발화(5, age 0.1 < 0.15)
         _ = sim.step(0.2)                       // 수명 초과 → 전멸
         XCTAssertEqual(sim.liveCount, 0)
