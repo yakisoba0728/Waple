@@ -123,6 +123,13 @@ public struct SceneLayer: Equatable {
     /// 오브젝트). 파스·보존 전용: depLater(타깃이 후순위 — 실물 3113287126 idx2→idx4 등)의
     /// 순서 보장은 렌더러 그리기 순서 책임(보고 경계).
     public var dependencies: [Int] = []
+    /// F751(S-20): 모델 json 루트 `cropoffset` — 에디터 크롭 베이크(베이크된 텍스처=크롭 영역,
+    /// autosize 동반) 시 **크롭 영역 중심 − 원본 이미지 중심**(px, 레이어 로컬). 실측 확정 근거:
+    /// 전수 1386 컴포넌트(693파일/49wp — 퍼펫 모델 49파일 포함)가 전부 0.5 배수(정수 픽셀 rect 의
+    /// 중심 차이만이 생성 가능한 정량화), "-0.00000"(중심 좌표계 산출의 −0.0) 출현, 임의 소수 0건.
+    /// nil = 크롭 아님. 파스·보존 전용 — 쿼드 중심을 origin+cropOffset 으로 옮기는 런타임 적용
+    /// 여부(부호 포함)는 실렌더 A/B 후속 과제(보고 경계).
+    public var cropOffset: Vec2? = nil
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -342,6 +349,17 @@ public struct SceneLight3D: Equatable {
     public let innerCone: Float
     public let outerCone: Float
     public let castShadow: Bool
+    /// F750(S-47): `cascadedistance0-2` — directional CSM 3-스플릿 far 경계 거리. 실측 11건
+    /// (코퍼스 스캔 2026-07: lpoint 7/lspot 1/ldirectional 3 — WE 에디터가 라이트 종 무관하게 기록).
+    /// 3키는 항상 동반(부분 저작 0건). nil = 미저작. 파스·보존 전용 — F661 단일 오소 근사가
+    /// 캐스케이드로 승격될 때 소비(렌더 미배선).
+    public let cascadeDistances: Vec3?
+    /// F750(S-47): `castvolumetrics` — 볼류메트릭 라이트 샤프트 캐스트 플래그(실측 2건, 전부 true).
+    public let castVolumetrics: Bool
+    /// F750(S-47): `volumetricsexponent` — 볼류메트릭 감쇠 지수. 실측 13건(기본 1.0, 비기본 1.7/2.82/3.04).
+    public let volumetricsExponent: Float
+    /// F750(S-47): `density` — 볼류메트릭 산란 밀도. 실측 13건(기본 2.0, 비기본 0.65..4.12).
+    public let density: Float
     public let parent: Int?
     public var order: Int = 0
     /// 프로퍼티 스크립트(color/intensity/radius/origin/angles — 키 → JS 소스). SceneObject3D.propertyScripts/
@@ -352,12 +370,16 @@ public struct SceneLight3D: Equatable {
     public init(id: Int, name: String, type: String, origin: Vec3, angles: Vec3, color: Vec3,
                 radius: Float, intensity: Float, exponent: Float,
                 innerCone: Float = 0, outerCone: Float = 0,
-                castShadow: Bool, parent: Int?, order: Int = 0) {
+                castShadow: Bool, parent: Int?, order: Int = 0,
+                cascadeDistances: Vec3? = nil, castVolumetrics: Bool = false,
+                volumetricsExponent: Float = 1, density: Float = 2) {
         self.id = id; self.name = name; self.type = type
         self.origin = origin; self.angles = angles; self.color = color
         self.radius = radius; self.intensity = intensity; self.exponent = exponent
         self.innerCone = innerCone; self.outerCone = outerCone
         self.castShadow = castShadow; self.parent = parent; self.order = order
+        self.cascadeDistances = cascadeDistances; self.castVolumetrics = castVolumetrics
+        self.volumetricsExponent = volumetricsExponent; self.density = density
     }
 }
 
@@ -816,6 +838,7 @@ extension SceneDocument {
         // 퍼펫 모델: model json 의 "puppet" 키(스키닝 메시 — 렌더러가 .mdl 로드).
         // 겸사겸사 머티리얼 blending 을 캡처(3D 빌보드 additive 파이프라인 선택 — 플레어/글로우).
         var puppetPath: String? = nil
+        var cropOffset: Vec2? = nil   // F751(S-20): 모델 json cropoffset — 필드 주석 참조
         var blendMode = "normal"
         var depthTest = true
         var depthWrite = true
@@ -827,6 +850,7 @@ extension SceneDocument {
         if let md = package.data(for: imagePath) ?? assets?(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
+            cropOffset = vec2(mj["cropoffset"])
             if let matPath = mj["material"] as? String,
                let matD = package.data(for: matPath) ?? assets?(matPath),
                let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
@@ -864,6 +888,7 @@ extension SceneDocument {
         )
         layer.name = (obj["name"] as? String) ?? ""
         layer.puppet = puppetPath
+        layer.cropOffset = cropOffset
         if puppetPath != nil { layer.animationLayers = parseAllAnimationLayers(obj["animationlayers"]) }
         layer.propertyScripts = propScripts
         layer.propertyScriptProps = propScriptProps
@@ -1100,6 +1125,10 @@ extension SceneDocument {
 
     /// 3D 라이트 오브젝트("light": 타입 문자열 + 위치/색/반경/강도 등).
     private static func parseLight(_ obj: [String: Any], lightType: String, order: Int) -> SceneLight3D {
+        // F750(S-47): CSM 캐스케이드 경계 + 볼류메트릭 샤프트 필드 파스·보존(렌더 소비는 후속 — 필드 주석 참조).
+        // 실물은 3키 동반만 존재(스캔 11건) — 방어적으로 부분 저작은 결측 컴포넌트 0 으로 채운다.
+        let cd0 = float(obj["cascadedistance0"]), cd1 = float(obj["cascadedistance1"]), cd2 = float(obj["cascadedistance2"])
+        let cascades: Vec3? = (cd0 != nil || cd1 != nil || cd2 != nil) ? Vec3(x: cd0 ?? 0, y: cd1 ?? 0, z: cd2 ?? 0) : nil
         var light = SceneLight3D(
             id: intVal(obj["id"]) ?? 0,
             name: (obj["name"] as? String) ?? "",
@@ -1114,7 +1143,11 @@ extension SceneDocument {
             outerCone: float(obj["outercone"]) ?? 0,
             castShadow: (obj["castshadow"] as? Bool) ?? false,
             parent: intVal(obj["parent"]),
-            order: order)
+            order: order,
+            cascadeDistances: cascades,
+            castVolumetrics: (obj["castvolumetrics"] as? Bool) ?? false,
+            volumetricsExponent: float(obj["volumetricsexponent"]) ?? 1,
+            density: float(obj["density"]) ?? 2)
         // SceneObject3D/SceneNode3D 의 propertyScripts/transformScripts 와 동형 캡처(파스만 — TODO 위 참조).
         for key in ["color", "intensity", "radius", "origin", "angles"] {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { light.propertyScripts[key] = sc }
