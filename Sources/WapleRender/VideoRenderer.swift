@@ -116,12 +116,17 @@ public final class VideoRenderer: WallpaperRenderer {
             }
         }
         // F565: loadValuesAsynchronously/statusOfValue/tracks 는 deprecated — load(_:) async 계열로 국소
-        // 교체(행위 동일: 로드 실패·트랙 없음을 recordPlayerItemFailure 로 표면화 — 거기서 메인으로 홉한다).
+        // 교체(로드 실패·재생 불가를 표면화 — 재생 불가 분기는 F600 참조).
         let asset = item.asset
         Task { [weak self] in
             do {
-                let (_, tracks, _) = try await asset.load(.isPlayable, .tracks, .duration)
-                if tracks.isEmpty { self?.recordPlayerItemFailure(nil, url: url, token: token) }
+                // F600: hev1(hvcC 없는 HEVC) mp4 는 status=.readyToPlay + 오디오 트랙 존재로 보고돼
+                // .failed 관찰·tracks.isEmpty 두 감지를 모두 우회한다(코퍼스 3448728208 실측:
+                // isPlayable=false, 트랙 2개, status=readyToPlay). 로드한 isPlayable 을 버리지 않고
+                // DeepScan.scanVideo 프로브(isPlayable && hasVideo)와 정합하게 검사해 F550 회복을 발동.
+                let (isPlayable, tracks, _) = try await asset.load(.isPlayable, .tracks, .duration)
+                let hasVideo = tracks.contains { $0.mediaType == .video }
+                if !isPlayable || !hasVideo { self?.recoverUnplayableLoadedAsset(url: url, token: token) }
             } catch {
                 self?.recordPlayerItemFailure(error, url: url, token: token)
             }
@@ -186,6 +191,19 @@ public final class VideoRenderer: WallpaperRenderer {
         }
     }
 
+    /// F600: 로드 헤더상 재생 불가(hev1 등 — status 는 readyToPlay 라 .failed 관찰이 오지 않는다)는
+    /// 실제 재생 실패가 아닌 판정이므로 lastError 를 세우기 전에 F550 회복부터 시도한다.
+    /// 회복 진행 중 lastError 를 세우면 소비자(RealVideosGroundTruthTests 등)가 최종 실패로 오인한다.
+    /// 회복 불가(변환기 부재·소진·변환 결과물)면 최종 실패로 기록(F555 표면화 포함).
+    private func recoverUnplayableLoadedAsset(url: URL, token: UInt64) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.mountToken == token else { return }
+            if !self.recoverPlaybackFailureIfPossible(url: url, token: token) {
+                self.recordPlayerItemFailure(nil, url: url, token: token)
+            }
+        }
+    }
+
     /// ffmpeg 회복(재변환)을 시작했으면 true. F550: 변환 결과물(캐시 mp4) 자체의 재생 실패를 다시
     /// ffmpeg 로 변환하면 같은 손상을 재인코딩하는 무의미 루프(수백MB CPU 낭비 + 동일 실패 예상) —
     /// 회복은 원본 소스에 대해 1회만 시도한다.
@@ -198,6 +216,8 @@ public final class VideoRenderer: WallpaperRenderer {
             DispatchQueue.main.async {
                 guard let self, self.mountToken == token, let container = self.container else { return }
                 guard let mp4 else {
+                    // F600: F600 경로(헤더 판정 → 회복 우선)는 여기까지 lastError 가 nil — 최종 실패를 기록.
+                    self.lastError = RendererError.unsupportedCodec
                     Self.postFailureNotification(RendererError.unsupportedCodec, url: url)   // F555: 회복 실패 = 최종 실패
                     return
                 }
