@@ -23,6 +23,8 @@ public final class VideoRenderer: WallpaperRenderer {
     private var pausedManually = false
     private var mountToken: UInt64 = 0
     private var attemptedPlaybackRecovery = false
+    /// F550: 현재 장착된 소스가 ffmpeg 변환 결과물인지 — 결과물 자체의 재생 실패는 재변환하지 않는다.
+    private var playingConvertedOutput = false
     private let converterAvailable: () -> Bool
     private let convert: (URL, @escaping (URL?) -> Void) -> Void
 
@@ -81,12 +83,14 @@ public final class VideoRenderer: WallpaperRenderer {
                 guard let self, self.mountToken == token, let container = self.container else { return }
                 guard let mp4 else {
                     self.lastError = RendererError.unsupportedCodec
+                    Self.postFailureNotification(RendererError.unsupportedCodec, url: url)   // F555: 변환 실패 표면화
                     NSLog("%@", "[Waple] video conversion failed, no playback: \(url.path)")
                     return
                 }
-                do { try self.attachPlayer(url: mp4, container: container, project: project) }
+                do { try self.attachPlayer(url: mp4, container: container, project: project, fromConversion: true) }
                 catch {
                     self.lastError = error
+                    Self.postFailureNotification(error, url: url)   // F555
                     NSLog("%@", "[Waple] converted video mount failed: \(error)")
                 }
             }
@@ -94,11 +98,15 @@ public final class VideoRenderer: WallpaperRenderer {
     }
 
     /// 재생 가능한 컨테이너(mp4 등)를 실제 장착·재생. mount 가 직접 또는 ffmpeg 변환 완료 후 호출.
-    private func attachPlayer(url: URL, container: NSView, project: WallpaperProject) throws {
+    /// fromConversion: ffmpeg 변환 결과물을 장착하는 경우 true — 그 결과물 자체의 재생 실패는
+    /// 재변환하지 않는다(F550, 무의미 루프 차단).
+    private func attachPlayer(url: URL, container: NSView, project: WallpaperProject,
+                              fromConversion: Bool = false) throws {
         stopPlayback()
         lastError = nil
         let token = mountToken
         projectId = project.id
+        playingConvertedOutput = fromConversion
         let item = AVPlayerItem(url: url)
         // 코덱/손상/DRM 실패는 AVFoundation 내부에서 비동기로 발생해 mount 성공 후 검은 화면이 된다.
         // status 를 관찰해 실패를 로깅함으로써 진단 가능하게 한다.
@@ -107,23 +115,15 @@ public final class VideoRenderer: WallpaperRenderer {
                 self?.recordPlayerItemFailure(item.error, url: url, token: token)
             }
         }
-        item.asset.loadValuesAsynchronously(forKeys: ["playable", "tracks", "duration"]) { [weak self] in
-            var error: NSError?
-            let status = item.asset.statusOfValue(forKey: "playable", error: &error)
-            if status == .failed {
-                self?.recordPlayerItemFailure(item.error ?? error, url: url, token: token)
-                return
-            }
-            var tracksError: NSError?
-            let tracksStatus = item.asset.statusOfValue(forKey: "tracks", error: &tracksError)
-            if tracksStatus == .failed || item.asset.tracks.isEmpty {
-                self?.recordPlayerItemFailure(item.error ?? tracksError, url: url, token: token)
-                return
-            }
-            var durationError: NSError?
-            let durationStatus = item.asset.statusOfValue(forKey: "duration", error: &durationError)
-            if durationStatus == .failed {
-                self?.recordPlayerItemFailure(item.error ?? durationError, url: url, token: token)
+        // F565: loadValuesAsynchronously/statusOfValue/tracks 는 deprecated — load(_:) async 계열로 국소
+        // 교체(행위 동일: 로드 실패·트랙 없음을 recordPlayerItemFailure 로 표면화 — 거기서 메인으로 홉한다).
+        let asset = item.asset
+        Task { [weak self] in
+            do {
+                let (_, tracks, _) = try await asset.load(.isPlayable, .tracks, .duration)
+                if tracks.isEmpty { self?.recordPlayerItemFailure(nil, url: url, token: token) }
+            } catch {
+                self?.recordPlayerItemFailure(error, url: url, token: token)
             }
         }
         // 배속 변경 시 음정 유지(WE 동작과 유사).
@@ -146,6 +146,9 @@ public final class VideoRenderer: WallpaperRenderer {
         layer.frame = container.bounds
         layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         container.layer?.addSublayer(layer)
+        // F551: mount 시점의 창 가림 상태 반영 — occluded 상태에서 mount 되면 첫 occlusion 알림 전까지
+        // 디코드·재생이 돌아갔다. 창이 없으면(headless 테스트) 기존 동작(재생) 유지.
+        if Self.isOccludedAtMount(container.window) { pausedByOcclusion = true }
         if !pausedManually && !pausedByOcclusion {
             queue.play()
         }
@@ -173,20 +176,31 @@ public final class VideoRenderer: WallpaperRenderer {
     private func recordPlayerItemFailure(_ error: Error?, url: URL, token: UInt64) {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.mountToken == token else { return }
-            self.lastError = error ?? RendererError.unsupportedCodec
+            let finalError = error ?? RendererError.unsupportedCodec
+            self.lastError = finalError
             NSLog("%@", "[Waple] video playback failed for \(url.path): \(String(describing: error))")
-            self.recoverPlaybackFailureIfPossible(url: url, token: token)
+            // F555: 회복이 시작되지 않으면(불가/소진/변환 결과물) 최종 실패 — 앱 계층 표면화 연결점.
+            if !self.recoverPlaybackFailureIfPossible(url: url, token: token) {
+                Self.postFailureNotification(finalError, url: url)
+            }
         }
     }
 
-    private func recoverPlaybackFailureIfPossible(url: URL, token: UInt64) {
-        guard !attemptedPlaybackRecovery, converterAvailable(), container != nil else { return }
+    /// ffmpeg 회복(재변환)을 시작했으면 true. F550: 변환 결과물(캐시 mp4) 자체의 재생 실패를 다시
+    /// ffmpeg 로 변환하면 같은 손상을 재인코딩하는 무의미 루프(수백MB CPU 낭비 + 동일 실패 예상) —
+    /// 회복은 원본 소스에 대해 1회만 시도한다.
+    @discardableResult
+    private func recoverPlaybackFailureIfPossible(url: URL, token: UInt64) -> Bool {
+        guard !attemptedPlaybackRecovery, !playingConvertedOutput, converterAvailable(), container != nil else { return false }
         attemptedPlaybackRecovery = true
         NSLog("%@", "[Waple] attempting ffmpeg recovery for native video: \(url.lastPathComponent)")
         convert(url) { [weak self] mp4 in
             DispatchQueue.main.async {
                 guard let self, self.mountToken == token, let container = self.container else { return }
-                guard let mp4 else { return }
+                guard let mp4 else {
+                    Self.postFailureNotification(RendererError.unsupportedCodec, url: url)   // F555: 회복 실패 = 최종 실패
+                    return
+                }
                 do {
                     let project = WallpaperProject(
                         id: self.projectId ?? url.deletingPathExtension().lastPathComponent,
@@ -200,13 +214,15 @@ public final class VideoRenderer: WallpaperRenderer {
                         dependency: nil,
                         folderURL: mp4.deletingLastPathComponent()
                     )
-                    try self.attachPlayer(url: mp4, container: container, project: project)
+                    try self.attachPlayer(url: mp4, container: container, project: project, fromConversion: true)
                 } catch {
                     self.lastError = error
+                    Self.postFailureNotification(error, url: url)   // F555
                     NSLog("%@", "[Waple] ffmpeg recovery mount failed: \(error)")
                 }
             }
         }
+        return true
     }
 
     public func pause() { pausedManually = true; player?.pause() }
@@ -230,4 +246,23 @@ public final class VideoRenderer: WallpaperRenderer {
         looper = nil
         playerLayer = nil
     }
+
+    /// F551: mount 시점 가림 판정 — 창이 있고 visible 아니면 true(재생 보류). headless(창 없음)는 false.
+    static func isOccludedAtMount(_ window: NSWindow?) -> Bool {
+        guard let window else { return false }
+        return !window.occlusionState.contains(.visible)
+    }
+
+    /// F555: 비동기 실패 표면화 최소 경로 — lastError 기록과 함께 Notification 발행(앱 계층 구독점).
+    static func postFailureNotification(_ error: Error, url: URL) {
+        NotificationCenter.default.post(name: .wapleVideoPlaybackFailed, object: nil,
+                                        userInfo: ["error": error, "url": url])
+    }
+}
+
+extension Notification.Name {
+    /// F555: 비디오 배경의 비동기 실패(ffmpeg 변환 실패·재생 중 실패 후 회복 불가/소진) 직후 post.
+    /// userInfo["error"]: Error, userInfo["url"]: 실패한 소스 URL. 앱 계층(배너/상태 표시)이 구독해
+    /// 사용자에게 표면화하는 연결점(종전엔 lastError 쓰기만 하고 소비자가 없어 검은 화면이 무표시였다).
+    public static let wapleVideoPlaybackFailed = Notification.Name("wapleVideoPlaybackFailed")
 }

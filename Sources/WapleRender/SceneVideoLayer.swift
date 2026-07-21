@@ -60,7 +60,10 @@ public final class SceneVideoLayer {
         return loaded?.seconds ?? 0
     }()
 
-    public init(mp4URL: URL) { self.mp4URL = mp4URL }
+    public init(mp4URL: URL) {
+        self.mp4URL = mp4URL
+        VideoTextureExtractor.markActive(mp4URL)   // F560: 사용 중 캐시 mp4 를 evict 에서 보호
+    }
 
     deinit { teardown() }   // teardown 미호출 백스톱 — endObserver(NotificationCenter 보유) 누수 방지
 
@@ -128,7 +131,12 @@ public final class SceneVideoLayer {
         frameHold.removeAll()
         lastLiveTexture = nil
         textureCache = nil
+        // F560: 활성 등록 해제(멱등 — teardown 은 명시 호출 + deinit 백스톱으로 2회 올 수 있다).
+        if holdsActiveMark { holdsActiveMark = false; VideoTextureExtractor.unmarkActive(mp4URL) }
     }
+
+    /// F560: teardown 2회 호출(명시 + deinit)에도 unmarkActive 가 1회만 나가도록.
+    private var holdsActiveMark = true
 
     // MARK: 헤드리스 (결정적)
 

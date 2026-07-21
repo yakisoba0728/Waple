@@ -54,8 +54,8 @@ public final class SceneAudioPlayer {
             let pl = Playlist(entries: entries, mode: snd.playbackMode, package: package,
                               authorVolume: snd.volume, settingVolume: settingVolume,
                               minTime: snd.minTime, maxTime: snd.maxTime, volumeEngine: engine)
-            // 자동재생 실패(전 후보 디코드 불가)면 미등록 — 단, 트리거 가능 사운드는 나중에 pkg 데이터가
-            // 없을 리 없으니 그대로 등록(트리거 시 재시도). startsilent 은 애초에 자동재생 안 함.
+            // F561(주석 정정): 자동재생 실패(전 후보 디코드 불가)면 named 여도 미등록 — pkg 데이터는 정적이라
+            // 트리거 시 재시도해도 같은 디코드 실패(결정적)라 등록이 무의미하다(실질 영향 없음). startsilent 은 애초에 자동재생 안 함.
             if !snd.startSilent {
                 guard pl.startFirstPlayable() else { continue }
             }
@@ -132,7 +132,8 @@ public final class SceneAudioPlayer {
 /// sound 오브젝트 1개 = 플레이리스트 1개. 곡 종료 delegate 로 다음 곡을 건다(트랙별 라이브 루프).
 /// AVAudioPlayer delegate 콜백 스레드는 문서상 미보장 — didFinishPlaying 은 메인으로 홉해
 /// 상태(player/index/paused)를 메인 전용으로 직렬화(mount/teardown 도 메인 — 락 불요).
-private final class Playlist: NSObject, AVAudioPlayerDelegate {
+/// internal 인 이유: F552 stale 콜백 회귀 테스트가 직접 구동한다.
+final class Playlist: NSObject, AVAudioPlayerDelegate {
     private let entries: [String]
     private let mode: String
     private let package: ScenePackage
@@ -234,7 +235,10 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
             DispatchQueue.main.async { [weak self] in self?.audioPlayerDidFinishPlaying(p, successfully: flag) }
             return
         }
-        guard !stopped,
+        // F552: stale 콜백 가드 — trigger/stop 으로 현재 플레이어가 교체/해제된 뒤 도착한 이전 곡의 종료
+        // 통지는 폐기한다. F410 세대 가드는 gap asyncAfter 경로만 보호하고 이 홉 경로(gap=0 즉시 play(at:))는
+        // 물방비였다 — 트리거 직전 자연종료 곡의 통지가 새 곡을 절단하는 것을 차단.
+        guard p === player, !stopped,
               let next = SceneAudioPlayer.nextIndex(mode: mode, current: index, count: entries.count) else { return }
         // random 모드는 곡 사이 [mintime,maxtime]초 대기 후 다음 곡(WE 셔플 간격). 그 외 gap=0(즉시).
         // 다음 곡 실패 시 이 플레이리스트만 종료(코퍼스는 참조 파일 전부 존재 — 실사용에선 발생 안 함).
@@ -258,4 +262,7 @@ private final class Playlist: NSObject, AVAudioPlayerDelegate {
     func stop() { generation += 1; stopped = true; pendingNext = nil; player?.stop(); player = nil }
     var isPlaying: Bool { player?.isPlaying ?? false }
     var hasPlayer: Bool { player != nil }
+    /// F552 회귀 테스트용 읽기 전용 접근자(stale 콜백이 현재 플레이어를 교체했는지 검증).
+    var playerForTesting: AVAudioPlayer? { player }
+    var indexForTesting: Int { index }
 }

@@ -336,7 +336,8 @@ private final class VorbisStream {
             let n2 = n / 2
             var prevFlag = true, nextFlag = true
             if blockflag { prevFlag = r.readBit() == 1; nextFlag = r.readBit() == 1 }
-            let (leftStart, leftEnd, rightStart, rightEnd) = windowBounds(n: n, blockflag: blockflag, prev: prevFlag, next: nextFlag)
+            // F566: leftEnd 미사용 경고 정리(윈도 경계 중 ls/rs/re 만 오버랩-덧셈에 사용).
+            let (leftStart, _, rightStart, rightEnd) = windowBounds(n: n, blockflag: blockflag, prev: prevFlag, next: nextFlag)
 
             let map = mappings[mode.mapping]
 
@@ -450,7 +451,10 @@ private final class VorbisStream {
     // MARK: floor1 디코드/합성
 
     private func decodeFloor1(_ f: Floor1Config, _ r: inout VorbisBitReader) -> (used: Bool, finalY: [Int], eop: Bool) {
-        guard r.readBit() == 1 else { return (false, [], false) }
+        // F562: nonzero 비트 판독 자체가 EOP(런트/빈 패킷)면 채널 미사용이 아니라 패킷 폐기로 보고한다 —
+        // 종전 (false,[],false) 반환은 그런 패킷을 '무음 프레임 1개 출력 + prevWindow 갱신'으로 처리해
+        // 이후 오디오가 right-left 샘플만큼 밀렸다(libvorbis/stb 는 런트 패킷 폐기로 타이밍 유지).
+        guard r.readBit() == 1 else { return (false, [], r.endOfPacket) }
         let rangeTable = [256, 128, 86, 64]
         let range = rangeTable[f.multiplier - 1]
         // 명세 §7.2.3: ilog(range-1) 비트. 2의 거듭제곱 range 는 ilog(range)-1 과 동치지만

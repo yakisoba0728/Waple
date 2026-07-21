@@ -141,11 +141,22 @@ extension AppleScriptNowPlayingProvider: ArtworkProviding {
     end tell
     """
 
+    /// F554: 아트워크 임시 경로(호출마다 고유) — 종전 PID 고정 경로는 멀티모니터 다중 폴섹이 같은 파일에
+    /// interleave write/read/defer 삭제로 절단/혼합 JPEG 를 만들었다. UUID 로 경합 제거.
+    static func artworkTempURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("waple_artwork_\(UUID().uuidString).dat")
+    }
+
+    /// F564: 아트워크 URL 검증 — https 만 허용(평문 http·file 등 차단).
+    static func isValidArtworkURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https"
+    }
+
     public func fetchArtwork() -> Data? {
         guard let app = Self.currentRunningPlayer() else { return nil }
         if app == "Music" {
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("waple_artwork_\(ProcessInfo.processInfo.processIdentifier).dat")
+            let tmp = Self.artworkTempURL()
             defer { try? FileManager.default.removeItem(at: tmp) }
             guard let out = Self.runOSAScript(Self.musicArtworkScript(destPath: tmp.path)),
                   out.trimmingCharacters(in: .whitespacesAndNewlines) == "ok",
@@ -153,9 +164,10 @@ extension AppleScriptNowPlayingProvider: ArtworkProviding {
             return data
         }
         // Spotify: artwork url → 동기 다운로드(유틸리티 큐에서 호출됨 — 10초 상한).
+        // F564: 평문 http 차단 — https 만 허용(종전 hasPrefix("http") 는 평문 http 통과).
         guard let out = Self.runOSAScript(Self.spotifyArtworkURLScript),
               let url = URL(string: out.trimmingCharacters(in: .whitespacesAndNewlines)),
-              url.scheme?.hasPrefix("http") == true else { return nil }
+              Self.isValidArtworkURL(url) else { return nil }
         var result: Data?
         let sem = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: url) { data, resp, _ in

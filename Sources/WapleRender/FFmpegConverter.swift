@@ -89,11 +89,16 @@ public enum FFmpegConverter {
          "-c:a", "aac", output.path]
     }
 
+    /// F557: 변환 작업 직렬 큐 — 동일 소스 동시 convert(복구 경로와 사용자 재마운트, 멀티모니터)가
+    /// 각자 ffmpeg 를 돌린 뒤 한쪽이 removeItem(output) 후 moveItem 실패하면 유효 출력이 삭제되고 nil
+    /// 반환되던 경주를 차단한다(캐시 remove+move 비원자 구간). 변환은 무거운 ffmpeg 실행이라 직렬화 비용 무해.
+    private static let workQueue = DispatchQueue(label: "waple.ffmpeg.convert", qos: .utility)
+
     /// 비동기 변환. 완료 콜백은 메인 큐에서 호출(성공=mp4 URL, 실패/부재/타임아웃=nil + 로그).
     /// 캐시 히트 검사(AVURLAsset.isPlayable 동기 로드)까지 백그라운드 — 메인스레드를 블록하지 않는다.
     public static func convert(_ source: URL, timeout: TimeInterval = 300,
                               completion: @escaping (URL?) -> Void) {
-        DispatchQueue.global(qos: .utility).async {
+        workQueue.async {
             let out = cachedURL(for: source)
             if FileManager.default.fileExists(atPath: out.path) {
                 if isReusableConvertedOutput(out) {
@@ -167,7 +172,15 @@ public enum FFmpegConverter {
         do { try proc.run() } catch {
             WapleLog.warn("[Waple] ffmpeg launch failed: \(error)"); return false
         }
-        let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+        let killer = DispatchWorkItem { [proc] in
+            guard proc.isRunning else { return }
+            proc.terminate()
+            // F558: SIGTERM 을 무시하는 ffmpeg 가 waitUntilExit 를 영구 블록(스레드 리크)하지 않도록
+            // 유예 후 SIGKILL 에스컬레이션.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [proc] in
+                if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+            }
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
         proc.waitUntilExit()
         killer.cancel()
