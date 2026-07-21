@@ -9,6 +9,10 @@ public struct SceneEffectPass: Equatable {
     /// 스크립트와 동일 규약: 엔진 로드 시 주입해 소스 `createScriptProperties().addX({value})` 기본값 대체.
     public var constantScriptProps: [String: String] = [:]
     public var textureNames: [String?] = []
+    /// F697: 패스 `usertextures` 슬롯 — 머티리얼 경로(material/instance)와 동일하게 name 만 정규화
+    /// (평문 문자열=유저 프로퍼티 키, {name,type}={"$mediaThumbnail","system"} 류 시스템 키 → name).
+    /// 렌더러가 이펙트 텍스처 슬롯 오버라이드/시스템 텍스처 바인드에 사용(소비는 렌더 그룹 경계).
+    public var userTextureNames: [String?] = []
     public var combos: [String: Int] = [:]
     public init() {}
 }
@@ -110,6 +114,15 @@ public struct SceneLayer: Equatable {
     public var roughness: Float = 0.7
     public var metallic: Float = 0
     public var specularTint: Vec3 = Vec3(x: 1, y: 1, z: 1)
+    /// F692: 오브젝트 `perspective:true` — WE 는 이 레이어를 general.perspectiveoverridefov 의
+    /// 원근 침침으로 그린다(정사영 평면화 대신). 파스·보존 전용: 원근 투영 소비는 렌더 경로 책임.
+    /// 실측(전수): perspective:true 19씬 전부 x/y angles 0(z-회전만)이라 원근/정사영 출력이
+    /// 코퍼스 내에서는 동일 — 렌더 갭 실피해 0 확인 후 파스 보존으로 결정.
+    public var perspective: Bool = false
+    /// F696: 오브젝트 `dependencies`(명시 렌더 순서/RTT 선행 의존 id 목록 — 타깃은 image/text
+    /// 오브젝트). 파스·보존 전용: depLater(타깃이 후순위 — 실물 3113287126 idx2→idx4 등)의
+    /// 순서 보장은 렌더러 그리기 순서 책임(보고 경계).
+    public var dependencies: [Int] = []
 }
 
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
@@ -174,6 +187,11 @@ public struct SceneTextLayer: Equatable {
     public var propertyScripts: [String: String] = [:]
     /// 프로퍼티 스크립트의 저장 scriptproperties(사용자 오버라이드) — 키 → JSON 문자열. 레이어와 동일 규약.
     public var propertyScriptProps: [String: String] = [:]
+    /// F693: 텍스트 오브젝트의 `effects[]`(tint/blurprecise/opacity/transform/shift_hue/skew 등 —
+    /// 실측 113건/16wp 이상). WE 는 텍스트를 텍스처로 래스터한 뒤 이펙트 체인을 적용한다.
+    /// 파스·보존 전용 — 텍스처화된 텍스트에 이펙트를 적용하는 렌더 소비(encodeText 경로)는
+    /// 별도 그룹 경계(미적용 시 이펙트가 조용히 소실되는 종전과 동일 동작, 값만 보존).
+    public var effects: [SceneEffect] = []
 }
 
 /// 3D 씬 카메라(2D 의 orthogonalprojection 대체). look-at 파라미터 + 원근 fov.
@@ -274,6 +292,9 @@ public struct SceneObject3D: Equatable {
     /// 프로퍼티 바인딩(origin/angles/scale/alpha/color)의 이벤트 마커 타임라인(options.events 보유분만).
     /// 값 구동은 미구현(3D 변환은 스크립트 경로) — 마커 발화 클록 전용(실물 젤다 walk_end/blink/change).
     public var eventTimelines: [PropertyAnimation] = []
+    /// F696: 오브젝트 `dependencies`(명시 렌더 선행 의존 id — 실측 model 오브젝트 23건). SceneLayer
+    /// 와 동일하게 파스·보존 전용(순서 보장 소비는 렌더러 책임).
+    public var dependencies: [Int] = []
     public init(id: Int, name: String, model: String, origin: Vec3, angles: Vec3, scale: Vec3,
                 castShadow: Bool, parent: Int?, effects: [SceneEffect], order: Int = 0) {
         self.id = id; self.name = name; self.model = model
@@ -309,7 +330,9 @@ public struct SceneLight3D: Equatable {
     public let id: Int
     public let name: String
     public let type: String
-    public let origin: Vec3
+    /// 로컬(부모 상대) 위치. 2D 씬은 파스 말미에 부모 체인을 합성한 월드 좌표로 덮어쓴다
+    /// (F691 — composeLightParentTransforms; 레이어 composeParentTransforms 와 동일 규약)라 var.
+    public var origin: Vec3
     public let angles: Vec3
     public let color: Vec3
     public let radius: Float
@@ -516,6 +539,13 @@ public struct SceneDocument: Equatable {
     /// 2D 포워드 라이팅 활성 조건: 2D 오르토 씬(camera3D==nil) + 라이트 존재. 3D(원근) 씬은 메시
     /// 라이팅 경로 담당(현행 미구현 — 보고). 개별 레이어는 `SceneLayer.lighting`(LIGHTING 콤보)로 추가 게이트.
     public var forwardLit2D: Bool { camera3D == nil && !lights3D.isEmpty }
+
+    /// F695: `general.zoom` — 씬 전역 줌(비기본 실측 7씬: 1.006..1.08, {user/script,value} 바인딩은
+    /// 정적 value 언랩). 부재 시 1(무회귀). 파스·보존 전용 — 프레이밍 적용 소비는 렌더러 책임.
+    public var zoom: Float = 1
+    /// F692: `general.perspectiveoverridefov` — perspective:true 레이어(SceneLayer.perspective)의
+    /// 원근 투영 FOV(도). 실측 전건 95.0(133씬 저작). nil = 미저작. 파스·보존 전용(렌더 소비 없음).
+    public var perspectiveOverrideFov: Float? = nil
 }
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
@@ -665,6 +695,10 @@ extension SceneDocument {
                                               initialVisible: initialVisible))
             }
         }
+        // F691: 2D 씬 라이트의 parent 체인 합성(로컬 origin → 월드 픽셀) — 레이어 합성 전에 실행
+        // (composeParentTransforms 가 layers 를 월드로 덮어쓰면 부모-레이어 로컬값이 유실된다).
+        // 3D 씬은 렌더러(Scene3DLighting.resolveLights)가 월드행렬을 합성하므로 제외(이중 적용 방지).
+        composeLightParentTransforms(lights: &lights3D, layers: layers, nodes3D: nodes3D, camera3D: camera3D)
         // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다).
         composeParentTransforms(
             layers: &layers,
@@ -702,6 +736,9 @@ extension SceneDocument {
         out.bloomHDRFeather = float(general["bloomhdrfeather"]) ?? 0.1
         out.bloomHDRIterations = intVal(general["bloomhdriterations"]) ?? 8
         out.bloomHDRScatter = float(general["bloomhdrscatter"]) ?? 1.619
+        // F695/F692: 씬 전역 줌 + perspective 레이어 원근 FOV(파스·보존 — 소비는 렌더러 책임).
+        out.zoom = float(general["zoom"]) ?? 1
+        out.perspectiveOverrideFov = float(general["perspectiveoverridefov"])
         return out
     }
 
@@ -847,6 +884,9 @@ extension SceneDocument {
         layer.attachment = obj["attachment"] as? String   // 이름 본-슬롯 부착(28씬 실측: 평문 문자열)
         layer.id = intVal(obj["id"]) ?? 0
         layer.alignment = (obj["alignment"] as? String) ?? "center"
+        // F692/F696: perspective 플래그·명시 렌더 의존 id 목록 파스 보존(소비는 렌더러 책임 — 필드 주석 참조).
+        layer.perspective = (unwrap(obj["perspective"]) as? Bool) ?? false
+        layer.dependencies = (obj["dependencies"] as? [Any])?.compactMap { intVal($0) } ?? []
         return layer
     }
 
@@ -1025,6 +1065,8 @@ extension SceneDocument {
         if let j = visibleScriptProps { propScriptProps["visible"] = j }
         t.propertyScripts = propScripts
         t.propertyScriptProps = propScriptProps
+        // F693: 텍스트 이펙트 체인 파스·보존(레이어/3D 와 동일 parseEffects 경로 — 렌더 적용은 별도 그룹).
+        t.effects = parseEffects(obj["effects"])
         return t
     }
 
@@ -1046,6 +1088,8 @@ extension SceneDocument {
         o.propertyScripts = ps
         o.animation = parseAnimationLayers(obj["animationlayers"])
         o.animationLayers = parseAllAnimationLayers(obj["animationlayers"])
+        // F696: 명시 렌더 의존 id 목록(레이어 경로와 동형 — 소비는 렌더러 책임).
+        o.dependencies = (obj["dependencies"] as? [Any])?.compactMap { intVal($0) } ?? []
         for key in ["origin", "angles", "scale", "alpha", "color"] {
             if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind), !a.events.isEmpty {
                 o.eventTimelines.append(a)
@@ -1142,6 +1186,47 @@ extension SceneDocument {
             layers[i].origin = wt.origin
             layers[i].scale = wt.scale
             layers[i].angleZ = wt.angle
+        }
+    }
+
+    /// F691: 2D 씬 라이트의 parent 체인 합성 — 2D 포워드 유니폼(forwardUniforms)은 l.origin 을 그대로
+    /// 팩하므로, 부모 붙은 라이트는 여기서 로컬→월드(프로젝션 픽셀)로 굽는다(실물 3351179520: lpoint
+    /// origin (-44,300,735) + 부모 노드 (2560,720) → 기대 (2515,1020,735), 종전 로우값 그대로 렌더).
+    /// 수식은 composeParentTransforms 의 2D 합성과 동일(origin/scale/angleZ) — x/y 만 회전·스케일 합성하고
+    /// z 는 조상 origin.z 누산만(2D 부모는 z 스케일 개념 없음). 3D 씬(camera3D!=nil)은 렌더러
+    /// resolveLights 가 월드행렬을 합성하므로 여기선 미적용(이중 합성 방지).
+    private static func composeLightParentTransforms(lights: inout [SceneLight3D], layers: [SceneLayer],
+                                                     nodes3D: [SceneNode3D], camera3D: SceneCamera3D?) {
+        guard camera3D == nil, lights.contains(where: { $0.parent != nil }) else { return }
+        var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float, z: Float)] = [:]
+        var parentOf: [Int: Int] = [:]
+        for l in layers where l.id != 0 {
+            localT[l.id] = (l.origin, l.scale, l.angleZ, l.originZ)
+            if let p = l.parent { parentOf[l.id] = p }
+        }
+        for n in nodes3D {
+            guard localT[n.id] == nil else { continue }  // 레이어 우선(composeParentTransforms F437 동일)
+            localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z, n.origin.z)
+            if let p = n.parent { parentOf[n.id] = p }
+        }
+        func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float, z: Float)? {
+            guard depth < 32, let t = localT[id] else { return nil }
+            guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
+            let r = pw.angle * .pi / 180
+            let ca = cosf(r), sa = sinf(r)
+            let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
+            return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
+                    scale: Vec2(x: pw.scale.x * t.scale.x, y: pw.scale.y * t.scale.y),
+                    angle: pw.angle + t.angle, z: pw.z + t.z)
+        }
+        for i in lights.indices {
+            guard let pid = lights[i].parent, let pw = world(pid, 0) else { continue }
+            let r = pw.angle * .pi / 180
+            let ca = cosf(r), sa = sinf(r)
+            let sx = pw.scale.x * lights[i].origin.x, sy = pw.scale.y * lights[i].origin.y
+            lights[i].origin = Vec3(x: pw.origin.x + sx * ca - sy * sa,
+                                    y: pw.origin.y + sx * sa + sy * ca,
+                                    z: pw.z + lights[i].origin.z)
         }
     }
 
@@ -1463,6 +1548,11 @@ extension SceneDocument {
                 // textures 배열 전체를 슬롯 순서로 캡처. JSON null → nil, 문자열 → 이름.
                 if let texs = passDict["textures"] as? [Any] {
                     p.textureNames = texs.map { $0 as? String }
+                }
+                // F697: usertextures 슬롯 캡처(문자열 키 | {name,type} 딕셔너리 → name) — 레이어
+                // 머티리얼 경로의 instance usertextures(:1270 인근)와 동일 정규화 규약.
+                if let uts = passDict["usertextures"] as? [Any] {
+                    p.userTextureNames = uts.map { ($0 as? String) ?? (($0 as? [String: Any])?["name"] as? String) }
                 }
                 passList.append(p)
             }

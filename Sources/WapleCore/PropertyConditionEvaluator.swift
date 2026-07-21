@@ -37,6 +37,15 @@ public enum PropertyConditionEvaluator {
             if g.exact, t.exact, e.exact, let gv = g.value, let tv = t.value, let ev = e.value {
                 return (gv ? tv : ev, true)
             }
+            // F694: 갈래가 대입식(`a ? x.text = '…' : x.text = '…'` — 실물 1081733658 의 18개 조건)이면
+            // WE 는 JS 로 평가해 대입 결과값(비어있지 않은 문자열)이 항상 truthy → 토글 항상 표시.
+            // 종전 guard-only 관용(g.value)은 기본값 false 인 토글을 영구 은닉시켰다. 대입 갈래는
+            // truthy 로 근사해 삼항을 완성하되 근사 사용 시 exact=false(canEvaluate 는 계속 false).
+            let tvApprox = t.value ?? (isAssignmentExpression(ternary.whenTrue) ? true : nil)
+            let evApprox = e.value ?? (isAssignmentExpression(ternary.whenFalse) ? true : nil)
+            if let gv = g.value, let tv = tvApprox, let ev = evApprox {
+                return (gv ? tv : ev, false)
+            }
             return (g.value, false)
         }
         let normalized = replaceIncludes(in: condition, values: values)
@@ -90,6 +99,30 @@ public enum PropertyConditionEvaluator {
             previous = char
         }
         return nil
+    }
+
+    /// F694: 식이 최상위 대입(`lhs = rhs`)을 포함하는가 — 따옴표 밖의 단독 `=` 탐지
+    /// (`==`/`===`/`!=`/`>=`/`<=` 등 비교 연산은 양옆 문자로 제외). JS 대입식의 값은 대입된 값이다.
+    private static func isAssignmentExpression(_ expr: Substring) -> Bool {
+        var quote: Character?
+        var previous: Character?
+        let chars = Array(expr)
+        for (i, char) in chars.enumerated() {
+            if let currentQuote = quote {
+                if char == currentQuote, previous != "\\" { quote = nil }
+                previous = char
+                continue
+            }
+            if char == "\"" || char == "'" {
+                quote = char
+            } else if char == "=" {
+                let prev = previous
+                let next = i + 1 < chars.count ? chars[i + 1] : nil
+                if prev != "=" && prev != "!" && prev != ">" && prev != "<" && next != "=" { return true }
+            }
+            previous = char
+        }
+        return false
     }
 
     private static func replaceIncludes(in condition: String, values: [String: PropertyValue]) -> String {
