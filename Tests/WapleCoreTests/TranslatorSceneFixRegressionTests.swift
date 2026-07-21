@@ -210,4 +210,59 @@ final class TranslatorSceneFixRegressionTests: XCTestCase {
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
         XCTAssertTrue(t.msl.contains("eng.pointerLastAndPad.z, 0.0)).xyz"), t.msl)
     }
+
+    // MARK: - F770: 스칼라 distance(float, float) → abs(x-y) 재작성
+
+    // 실물 텍스트 이펙트(2842323353·2885492021 의 workshop/2674029580): GLSL 은 genType 에 스칼라를
+    // 포함해 distance(0.0, l) 이 유효하지만 MSL metal::distance 는 벡터 전용이라 모호 오버로드 컴파일
+    // 오류 → 이펙트 폴터. 스칼라 distance 는 |x-y| 와 값이 같으므로 어댑터가 재작성한다.
+    func testF770ScalarDistanceRewrittenToAbs() {
+        XCTAssertEqual(GLSLTypeAdapter.adapt(body: "float p = distance(0.0, l);", env: env(["l": 1])),
+                       "float p = abs((0.0) - (l));")
+    }
+
+    // 벡터 distance 는 MSL 오버로드가 존재 — 무개입(무회귀).
+    func testF770VectorDistanceUntouched() {
+        XCTAssertEqual(GLSLTypeAdapter.adapt(body: "float p = distance(a, b);", env: env(["a": 3, "b": 3])),
+                       "float p = distance(a, b);")
+        XCTAssertEqual(GLSLTypeAdapter.adapt(body: "float p = distance(a.xy, b.xy);", env: env(["a": 3, "b": 4])),
+                       "float p = distance(a.xy, b.xy);")
+    }
+
+    // 한쪽 크기 미지(0)면 재작성 금지(무개입 = 기존 폴터 안전망, 어댑터 설계 원칙).
+    func testF770UnknownSizeDistanceUntouched() {
+        XCTAssertEqual(GLSLTypeAdapter.adapt(body: "float p = distance(0.0, q);", env: env([:])),
+                       "float p = distance(0.0, q);")
+    }
+
+    // MARK: - F771: 어댑터 크기 환경에 엔진 vec2/스칼라 심볼 등재(g_ParallaxPosition 등)
+
+    // 실물 shadow(3300031038·3396722575·3450697231·3479521040 의 workshop/3088030303) 버텍스:
+    // `float atFactor = (…abs(g_ParallaxPosition * u_ParallaxScale)…) * max(1, abs(u_ShadowScale));`
+    // — g_ParallaxPosition 이 크기 환경에 없어(overloadSizeEnv 에만 등재) 식 전체가 0(불투명)으로
+    // 전파돼 선언 절단이 빠지고, vec2 우변이 float 에 들어가 MSL 컴파일 오류로 폴터.
+    func testF771EngineVec2SizeKnownTruncatesFloatDecl() throws {
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        uniform vec2 g_ParallaxPosition;
+        uniform vec2 u_shadowOffset;
+        uniform vec2 u_ParallaxScale;
+        uniform vec2 u_ShadowScale;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() {
+            float atFactor = (1 + (abs(u_shadowOffset) + abs(g_ParallaxPosition * u_ParallaxScale)) * 2) * max(1, abs(u_ShadowScale));
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord * atFactor;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(v_TexCoord, 0.0, 1.0); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("atFactor = ("), t.msl)
+        XCTAssertTrue(t.msl.contains(")).x;"), t.msl)   // vec2 우변 → float 선언 절단 삽입
+    }
 }

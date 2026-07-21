@@ -157,15 +157,26 @@ final class VideoBackedSceneCaptureTests: XCTestCase {
         let W = 256, H = 144
         for s in sample {
             let project = try XCTUnwrap(try? ProjectJSONParser.parse(folderURL: s.folder))
-            let rgba1 = try captureRGBA(project: project, w: W, h: H, dir: tmp.appendingPathComponent("a-\(s.id)"))
+            // F772: 시계/날짜 텍스트 스크립트는 마운트 시점의 벽시계(new Date() 의 HH:MM)로 1회 래스터된다
+            // (refreshScriptedTexts 는 라이브 draw 전용 — 캡처 경로는 마운트 래스터를 쓴다). A/B 두 마운트가
+            // 분 경계를 건으면 같은 씬-시간 캡처도 글리프가 달라 (c) 결정성 어서션이 오탐한다(실측
+            // 3363473482: 01:15→01:16 건어넘 — 36864px 중 시계 마지막 자리 34px 만 불일치). WE 시계의
+            // 정상 동작이지 렌더러 비결정이 아니므로, 분이 바뀌었으면 같은 분 안에서 다시 찍는다.
+            var px1: [UInt8]?
+            var px2: [UInt8]?
+            for _ in 0..<3 {
+                let m0 = Calendar.current.component(.minute, from: Date())
+                px1 = try captureRGBA(project: project, w: W, h: H, dir: tmp.appendingPathComponent("a-\(s.id)"))
+                px2 = try captureRGBA(project: project, w: W, h: H, dir: tmp.appendingPathComponent("b-\(s.id)"))
+                if m0 == Calendar.current.component(.minute, from: Date()) { break }
+            }
             // (a)+(b): 유효 프레임 + 단색 아님(콘텐츠 존재).
-            XCTAssertNotNil(rgba1, "\(s.id): 비디오-백드 캡처가 빈 프레임(수정 실패)")
-            let px1 = try XCTUnwrap(rgba1)
-            XCTAssertTrue(isNonUniform(px1), "\(s.id): 단색 프레임 — 콘텐츠 없음")
+            XCTAssertNotNil(px1, "\(s.id): 비디오-백드 캡처가 빈 프레임(수정 실패)")
+            let px1u = try XCTUnwrap(px1)
+            XCTAssertTrue(isNonUniform(px1u), "\(s.id): 단색 프레임 — 콘텐츠 없음")
             // (c): 독립 재마운트 캡처가 결정적으로 일치(스냅샷 셀프체크 규약).
-            let rgba2 = try captureRGBA(project: project, w: W, h: H, dir: tmp.appendingPathComponent("b-\(s.id)"))
-            let px2 = try XCTUnwrap(rgba2, "\(s.id): 2차 캡처 empty")
-            XCTAssertEqual(px1, px2, "\(s.id): 비결정 캡처(같은 t 두 캡처가 불일치)")
+            let px2u = try XCTUnwrap(px2, "\(s.id): 2차 캡처 empty")
+            XCTAssertEqual(px1u, px2u, "\(s.id): 비결정 캡처(같은 t 두 캡처가 불일치)")
         }
     }
 

@@ -176,4 +176,81 @@ final class GLSLTranslatorMSLTests: XCTestCase {
             XCTFail("audio_responsive_oscilloscope pipeline failed: \(error)\n--- MSL ---\n\(t.msl)")
         }
     }
+
+    /// F770: 스칼라 distance(float, float) — MSL 은 벡터 전용 오버로드라 모호 → abs(x-y) 재작성으로 컴파일.
+    /// (hermetic 최소 축약 — 실물은 아래 testRealTextGradientScalarDistanceCompiles.)
+    func testF770ScalarDistanceCompiles() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform float g_Time;
+        void main() {
+            float l = v_TexCoord.x - 0.5;
+            float p = distance(0.0, l);
+            gl_FragColor = vec4(p + g_Time * 0.0);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: frag, combos: [:]))
+        XCTAssertFalse(t.msl.contains("distance(0.0"), t.msl)   // 스칼라 distance 잔존 금지
+        do { _ = try device.makeLibrary(source: t.msl, options: nil) }
+        catch { XCTFail("F770 scalar distance MSL failed: \(error)\n\(t.msl)") }
+    }
+
+    /// F770(실물 회귀): 2842323353·2885492021 의 텍스트 그라디언트 효과(workshop/2674029580) —
+    /// `float p = distance(0.0, l);` 가 그대로 MSL 로 나가 모호 오버로드로 이펙트 폴터했다.
+    func testRealTextGradientScalarDistanceCompiles() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
+        let url = URL(fileURLWithPath: base).appendingPathComponent("2842323353/scene.pkg")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("real wallpaper package not installed")
+        }
+        let package = try ScenePackage.parse(Data(contentsOf: url))
+        func string(_ path: String) throws -> String {
+            let data = try XCTUnwrap(package.data(for: path), "\(path) missing")
+            return try XCTUnwrap(String(data: data, encoding: .utf8), "\(path) is not UTF-8")
+        }
+        let base43 = "shaders/workshop/2674029580/effects/___________________________________________"
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: try string(base43 + ".vert"),
+                                                       fragment: try string(base43 + ".frag"),
+                                                       combos: [:]))
+        do { _ = try device.makeLibrary(source: t.msl, options: nil) }
+        catch { XCTFail("text gradient (scalar distance) MSL failed: \(error)\n--- MSL ---\n\(t.msl)") }
+    }
+
+    /// F771(실물 회귀): 3300031038·3396722575·3450697231·3479521040 의 shadow(workshop/3088030303) —
+    /// 버텍스 `float atFactor = (… g_ParallaxPosition …)` 의 vec2 우변이 float 에 들어가 폴터.
+    /// 크기 환경에 엔진 vec2 등재로 절단 삽입돼 컴파일돼야 한다.
+    func testRealShadowEngineVec2SizeCompiles() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
+        let url = URL(fileURLWithPath: base).appendingPathComponent("3300031038/scene.pkg")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("real wallpaper package not installed")
+        }
+        let package = try ScenePackage.parse(Data(contentsOf: url))
+        func string(_ path: String) throws -> String {
+            let data = try XCTUnwrap(package.data(for: path), "\(path) missing")
+            return try XCTUnwrap(String(data: data, encoding: .utf8), "\(path) is not UTF-8")
+        }
+        let t = try XCTUnwrap(GLSLTranslator.translate(
+            vertex: try string("shaders/workshop/3088030303/effects/shadow.vert"),
+            fragment: try string("shaders/workshop/3088030303/effects/shadow.frag"),
+            combos: [:],
+            include: { header in
+                // 렌더 경로(quietAssetData)와 동일 해석 순서: pkg → 베이스에셋 → 내장.
+                for cand in ["shaders/\(header)", header] {
+                    if let s = package.data(for: cand).flatMap({ String(data: $0, encoding: .utf8) }) { return s }
+                }
+                let assets = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
+                    ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/assets")
+                if let d = FileManager.default.contents(atPath: assets + "/shaders/" + header),
+                   let s = String(data: d, encoding: .utf8) { return s }
+                return BuiltinShaderIncludes.lookup(header)
+            }))
+        do { _ = try device.makeLibrary(source: t.msl, options: nil) }
+        catch { XCTFail("shadow (engine vec2 size) MSL failed: \(error)\n--- MSL ---\n\(t.msl)") }
+    }
 }

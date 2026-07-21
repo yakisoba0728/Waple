@@ -459,6 +459,15 @@ public enum GLSLTypeAdapter {
                     }
                 }
                 let close = p.peek() == ")" ? p.advance().full : ""
+                // F770: 스칼라 distance(float, float) — GLSL genType 은 스칼라를 포함해 유효하나 MSL
+                // metal::distance 는 벡터 전용이라 (float,float) 호출이 모호 오버로드(실물 텍스트
+                // 그라디언트 `distance(0.0, l)` — 이펙트 폴터). 스칼라 distance 는 |x-y| 와 동값이라
+                // 재작성. 크기 미지(0)·벡터 포함은 무개입(설계 원칙 — 확실한 크기에서만 개입).
+                if t == "distance", argTexts.count == 2, argSizes == [1, 1] {
+                    let a0 = argTexts[0].trimmingCharacters(in: .whitespaces)
+                    let a1 = argTexts[1].trimmingCharacters(in: .whitespaces)
+                    return Node(text: "\(tok.trivia)abs((\(a0)) - (\(a1)))", size: 1)
+                }
                 // MSL 은 min/max/clamp 의 정수·실수 혼합 오버로드가 모호(실물 rounded_mask `max(1, x/y)`).
                 // 다른 인자가 실수/벡터면 정수 리터럴 인자를 실수 리터럴로 승격.
                 if ["min", "max", "clamp", "mix", "step", "pow", "mod"].contains(t), argTexts.count >= 2 {

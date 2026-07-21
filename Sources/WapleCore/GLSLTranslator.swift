@@ -287,6 +287,10 @@ public enum GLSLTranslator {
         var sizeEnv: [String: Int] = ["gl_FragColor": 4, "gl_FragCoord": 4, "gl_Position": 4,
                                       "g_Time": 1, "g_PointerPosition": 2,
                                       "g_PointerState": 4,  // F618: float4 치환과 정합 — 절단 추론 활성
+                                      // F771: overloadSizeEnv 와 같은 정적 엔진 심볼 — 미등재 시 그 토큰이
+                                      // 0(불투명)으로 식 전체를 오염시켜 필요한 절단이 빠진다(실물 shadow 의
+                                      // `float atFactor = (…g_ParallaxPosition…)` — vec2 우변이 float 로).
+                                      "g_ParallaxPosition": 2, "g_Frametime": 1, "g_PointerPositionLast": 2,
                                       "a_TexCoord": 2, "a_Position": 3]
         for vy in varyings { sizeEnv[vy.name] = vy.type.components }
         for m in materials { sizeEnv[m.glslName] = m.type.components }
