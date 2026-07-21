@@ -644,6 +644,7 @@ extension SceneDocument {
                 }
             } else if let particlePath = contentValue(obj["particle"]) as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package,
+                                         assets: resolvedAssets,
                                          initialVisible: initialVisible) {
                     p.order = order
                     particles.append(p)
@@ -879,8 +880,10 @@ extension SceneDocument {
             name: (obj["name"] as? String) ?? "",
             sounds: paths,
             volume: float(obj["volume"]) ?? 1,   // float() 가 숫자/{value} 바인딩 공통 언랩
-            playbackMode: (obj["playbackmode"] as? String) ?? "single",
-            startSilent: (obj["startsilent"] as? Bool) ?? false,
+            // F434: volume 과 동일하게 {user,value} 바인딩 언랩 경유 — 평문 캐스트만이면 바인딩
+            // 형태가 기본값(single/false = 자동재생)으로 오판된다.
+            playbackMode: (unwrap(obj["playbackmode"]) as? String) ?? "single",
+            startSilent: (unwrap(obj["startsilent"]) as? Bool) ?? false,
             minTime: float(obj["mintime"]) ?? 0,
             maxTime: float(obj["maxtime"]) ?? 0)
         // 이펙트 상수(:1323)·레이어(:731-739)와 동일 비대칭 수정: float() 의 {value} 언랩이 형제 script 를
@@ -1101,14 +1104,17 @@ extension SceneDocument {
             if let p = l.parent { parentOf[l.id] = p }
         }
         for n in nodes3D {
+            // F437: 레이어/노드 id 중복 시 레이어 우선 — 종전엔 노드가 레이어의 localT 항목을 덮어써
+            // world(레이어id) 가 노드 트랜스폼을 반환했다(비정형 씬 한정).
+            guard localT[n.id] == nil else { continue }
             localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
             if let p = n.parent { parentOf[n.id] = p }
         }
         // angle 은 도(°) 단위(레이어 규약; puppetVertices 가 렌더 시 라디안 변환) — 부모 오프셋 회전은
         // 라디안으로 계산하되 합성 각은 도로 유지한다.
-        func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
-            guard depth < 32, let t = localT[id] else { return nil }
-            guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
+        func composed(_ pw: (origin: Vec2, scale: Vec2, angle: Float),
+                      _ t: (origin: Vec2, scale: Vec2, angle: Float))
+            -> (origin: Vec2, scale: Vec2, angle: Float) {
             let r = pw.angle * .pi / 180
             let ca = cosf(r), sa = sinf(r)
             let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
@@ -1116,7 +1122,22 @@ extension SceneDocument {
                     scale: Vec2(x: pw.scale.x * t.scale.x, y: pw.scale.y * t.scale.y),
                     angle: pw.angle + t.angle)
         }
+        func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
+            guard depth < 32, let t = localT[id] else { return nil }
+            guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
+            return composed(pw, t)
+        }
         for i in composeTargets {
+            // F436: id 없는(0) 레이어도 parent 가 있으면 합성 — world() 는 localT 에 id 항목이 있어야
+            // 해서 id==0 은 nil → 종전 미합성(로컬 좌표 그대로 렌더). 자신 로컬 × 부모 월드를 직접 합성.
+            if layers[i].id == 0 {
+                guard let pid = layers[i].parent, let pw = world(pid, 0) else { continue }
+                let wt = composed(pw, (layers[i].origin, layers[i].scale, layers[i].angleZ))
+                layers[i].origin = wt.origin
+                layers[i].scale = wt.scale
+                layers[i].angleZ = wt.angle
+                continue
+            }
             guard let wt = world(layers[i].id, 0) else { continue }
             layers[i].origin = wt.origin
             layers[i].scale = wt.scale
@@ -1154,7 +1175,10 @@ extension SceneDocument {
                 ?? ((l["visible"] as? [String: Any])?["value"] as? Bool) ?? true
             var al = AnimationLayer(name: (l["name"] as? String) ?? "",
                                     additive: (l["additive"] as? Bool) ?? false,
-                                    blend: float(l["blend"]) ?? 1,
+                                    // F435: 스크립트-only blend(바인딩 객체인데 정적 value 없음)의 기본은 0 — 형제
+                                    // 선택 경로 parseAnimationLayers 가 같은 입력을 "시작≈0"으로 간주하는 것과
+                                    // 대칭(엔진 생성 실패 시 풀블렌드 포즈 지속 방지). 키 부재는 종전대로 1.
+                                    blend: float(l["blend"]) ?? (l["blend"] is [String: Any] ? 0 : 1),
                                     rate: float(l["rate"]) ?? 1,
                                     visible: visible)
             // blend/visible/rate 바인딩의 스크립트·이벤트 타임라인(실물: 젤다 blend 의 animationEvent 훅 +
@@ -1276,12 +1300,13 @@ extension SceneDocument {
     /// origin/scale 은 씬 픽셀 좌표(첫 2성분). 로드/파싱 실패 → nil + 로그.
     /// children[] 링크는 재귀 리졸브(순환/깊이 4 가드) — 자식도 자체 material 포함 완전한 def.
     private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage,
+                                      assets: ((String) -> Data?)?,
                                       initialVisible: Bool) -> SceneParticle? {
         // instanceoverride(인스턴스 모디파이어): 프리셋 def 에 배수/CP 대체를 적용해 인스턴스별 다양화
         // (실측 127씬/866건). 종전 통째 드롭 — 재사용 프리셋 전 인스턴스가 동일 기본값으로 렌더됐다.
         let override = particleInstanceOverride(obj["instanceoverride"])
         guard let def = parseParticleDef(path, package: package, visited: [path],
-                                         instanceOverride: override) else {
+                                         instanceOverride: override, assets: assets) else {
             WapleLog.warn("[Waple] SP4 particle load failed: \(path)")
             return nil
         }
@@ -1310,13 +1335,17 @@ extension SceneDocument {
     /// instanceOverride 는 루트 def 에만 적용(자식 children 재귀에는 비전파 — 보수 규약).
     private static func parseParticleDef(_ path: String, package: ScenePackage,
                                          visited: Set<String>,
-                                         instanceOverride: ParticleInstanceOverride? = nil) -> ParticleSystemDef? {
-        guard let pData = package.data(for: path),
+                                         instanceOverride: ParticleInstanceOverride? = nil,
+                                         assets: ((String) -> Data?)? = nil) -> ParticleSystemDef? {
+        // F430: 이미지 레이어 requiredData 와 동일한 pkg→공유에셋 폴터 — 종전 pkg 한정이라
+        // base-assets 에만 있는 파티클 json/머티리얼은 씬에서 통째 드롭됐다.
+        func assetData(_ name: String) -> Data? { package.data(for: name) ?? assets?(name) }
+        guard let pData = assetData(path),
               let pjson = (try? JSONSerialization.jsonObject(with: pData)) as? [String: Any] else {
             return nil
         }
         var material: ParticleMaterial? = nil
-        if let matPath = pjson["material"] as? String, let mData = package.data(for: matPath),
+        if let matPath = pjson["material"] as? String, let mData = assetData(matPath),
            let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any] {
             material = ParticleMaterial.parse(mjson)
         }
@@ -1325,7 +1354,8 @@ extension SceneDocument {
                 WapleLog.warn("[Waple] particle child cycle/depth cap, dropped: \(childPath)")
                 return nil
             }
-            return parseParticleDef(childPath, package: package, visited: visited.union([childPath]))
+            return parseParticleDef(childPath, package: package, visited: visited.union([childPath]),
+                                    assets: assets)
         }
     }
 

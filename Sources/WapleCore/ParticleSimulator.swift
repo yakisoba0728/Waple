@@ -87,6 +87,8 @@ public struct ParticleSimulator {
     /// 자식 인스턴스 제어(부모 sim 이 설정): 스폰 위치 오프셋 / 방출 정지(고아·원샷).
     var emitOrigin = SIMD3<Float>(0, 0, 0)
     var emissionPaused = false
+    /// 누적 시간이 방출 게이트(def.startTime)를 통과했는가 — 원샷 자식의 fired 판정(F432).
+    var reachedStartTime: Bool { time >= def.startTime }
     /// 라이브 오디오 스펙트럼(렌더러가 매 프레임 주입). nil/무신호(silent) = 오디오반응 스킵 → 기존 rate.
     public var currentAudio: AudioSpectrum16?
 
@@ -197,7 +199,10 @@ public struct ParticleSimulator {
         time += dt
         let countBeforeEmission = particles.count
         // 방출(starttime 이후, 자식 원샷/고아는 정지). burst(실물 instantaneous)는 rate 대신 일괄 스폰.
-        if !emissionPaused, time >= def.startTime {
+        // F438: dt==0(정지/재드로 스냅샷 재방출 — SceneRenderer3D:1096/SceneRenderer:1451)은 실행 이력
+        // (time>0)이 있는 sim 에서만 방출 금지 — step(0) 이 acc/RNG/전멸 후 버스트 재발화 상태를 변이하지
+        // 않게. 무이력(time==0) sim 의 초기 버스트는 종전대로 발화(기존 스위트·최초 드로 호환).
+        if !emissionPaused, dt > 0 || time == 0, time >= def.startTime {
             let wasEmpty = particles.isEmpty  // 버스트 재발화 판정은 스텝 진입 시점 기준(다중 이미터 동시 발화)
             for i in def.emitters.indices {
                 let e = def.emitters[i]
@@ -238,22 +243,10 @@ public struct ParticleSimulator {
         // 적분(controlpointattract/vortex 힘 → movement/angularMovement) + 노화.
         for k in particles.indices {
             particles[k].age += dt
-            // 힘 오퍼레이터는 movement 적분 전에 속도를 갱신(같은 step 위치에 반영).
-            // vel/pos 로컬 호이스트: `&particles[k].vel` inout 과 같은 배열 읽기가 한 호출에 겹치면
-            // 호출마다 배열 전체가 COW 복사된다(attractor×particle×step — 무거운 씬 실측 병목).
-            if !attractors.isEmpty || !vortices.isEmpty {
-                var vel = particles[k].vel
-                let pos = particles[k].pos
-                for a in attractors { applyAttract(a, to: &vel, pos: pos, dt: dt) }
-                for v in vortices { applyVortex(v, to: &vel, pos: pos, dt: dt) }
-                particles[k].vel = vel
-            }
-            if let cap = speedCap {
-                let sp = simd_length(particles[k].vel)
-                if sp > cap { particles[k].vel *= cap / sp }
-            }
             // remapvalue: velocity 는 매 스텝 덮어쓰기(작가가 낙하속도를 노이즈로 직접 기술),
             // speed 는 이번 스텝 적분에만 곱하는 비파괴 배수(저장 vel 불변 → 복리 폭주 없음).
+            // F440: 덮어쓰기는 힘 오퍼레이터 **이전**에 — 종전엔 같은 스텝의 attract/vortex 가속을
+            // 전량 덮어써 힘 오퍼레이터가 묠력화됐다(speedCap 도 그 경로에서는 무의미).
             var speedFactor: Float = 1
             if !remaps.isEmpty {
                 let base = (particles[k].remapPhase + particles[k].age) * Self.remapInputK
@@ -270,6 +263,20 @@ public struct ParticleSimulator {
                     }
                 }
             }
+            // 힘 오퍼레이터는 movement 적분 전에 속도를 갱신(같은 step 위치에 반영).
+            // vel/pos 로컬 호이스트: `&particles[k].vel` inout 과 같은 배열 읽기가 한 호출에 겹치면
+            // 호출마다 배열 전체가 COW 복사된다(attractor×particle×step — 무거운 씬 실측 병목).
+            if !attractors.isEmpty || !vortices.isEmpty {
+                var vel = particles[k].vel
+                let pos = particles[k].pos
+                for a in attractors { applyAttract(a, to: &vel, pos: pos, dt: dt) }
+                for v in vortices { applyVortex(v, to: &vel, pos: pos, dt: dt) }
+                particles[k].vel = vel
+            }
+            if let cap = speedCap {
+                let sp = simd_length(particles[k].vel)
+                if sp > cap { particles[k].vel *= cap / sp }
+            }
             for m in movements {
                 particles[k].vel += m.gravity * dt
                 if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
@@ -282,13 +289,16 @@ public struct ParticleSimulator {
                                            phase: particles[k].turbPhase, time: time)
                 particles[k].pos += v * dt
             }
+            // F431/F439: 선형 movement(위 280-283행)와 동형 — force/drag 는 전 오퍼레이터에 누적하고
+            // rotation 적분은 스텝당 1회. 종전엔 루프 안에서 적분해 angularmovement N개면 N회 중복
+            // 적분(F439), 0개면 angularvelocityrandom 의 초기 각속도가 영구 사장(F431)됐다.
             for a in angulars {
-                // 선형 movement(위 273-276행)와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
+                // 선형 movement(위 280-283행)와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
                 // 등가속 무감쇠 누적(무회귀).
                 particles[k].angularVel += a.force * dt
                 if a.drag > 0 { particles[k].angularVel *= max(0, 1 - a.drag * dt) }
-                particles[k].rotation += particles[k].angularVel * dt
             }
+            particles[k].rotation += particles[k].angularVel * dt
             // 트레일 위치 히스토리(dt>0 만 — step(0) 스냅샷 중복 방지). 링버퍼로 trailSamples 유지.
             // display() 반환 스냅샷(d.pos)과 동형으로 oscillateposition 오프셋을 반영(F177) — base pos
             // 만 기록하면 spriteTrail/rope 리본이 sprite 쿼드(d.pos 사용)와 달리 진동을 놓친다.
@@ -320,7 +330,7 @@ public struct ParticleSimulator {
     }
 
     /// 자식 인스턴스 일괄 스텝: follow 는 부모 현재 위치로 방출 원점 갱신(부모 사망 → 방출 정지 후 드레인),
-    /// 원샷(spawn/death 버스트)은 첫 스텝 후 방출 정지. 드레인 완료 인스턴스는 제거.
+    /// 원샷(spawn/death 버스트)은 startTime 도달 첫 스텝 후 방출 정지(F432). 드레인 완료 인스턴스는 제거.
     private mutating func stepChildren(_ dt: Float) {
         guard !def.children.isEmpty else { return }
         var uidPos: [Int: SIMD3<Float>] = [:]
@@ -341,7 +351,12 @@ public struct ParticleSimulator {
                 }
                 insts[i].sim.currentAudio = currentAudio   // 오디오 하향 전파(무신호면 무영향 → 무회귀)
                 displays.append(contentsOf: insts[i].sim.step(dt))
-                if insts[i].oneShot, !insts[i].fired { insts[i].fired = true; insts[i].sim.emissionPaused = true }
+                // F432: startTime 게이트 도달 전에는 fired 마킹하지 않는다 — 종전엔 첫 스텝(누적
+                // time=첫 dt) 후 무조건 정지해 startTime > 첫 dt 인 원샷 자식(rain splash 류)이
+                // 한 개도 방출하지 못한 채 드레인 0 으로 제거됐다.
+                if insts[i].oneShot, !insts[i].fired, insts[i].sim.reachedStartTime {
+                    insts[i].fired = true; insts[i].sim.emissionPaused = true
+                }
             }
             insts.removeAll { $0.sim.emissionPaused && $0.sim.liveCount == 0 }
             childStates[li] = insts

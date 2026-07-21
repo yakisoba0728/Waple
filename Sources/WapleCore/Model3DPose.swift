@@ -43,7 +43,7 @@ public enum Model3DPose {
             let local = (i < anim.tracks.count ? sampledLocal(anim.tracks[i], frame: f) : nil) ?? b.bind
             world[i] = (b.parent >= 0 && p < i) ? world[p] * local : local
         }
-        return (0..<n).map { world[$0] * bindWorld[$0].inverse }
+        return (0..<n).map { world[$0] * PuppetPose.safeInverse(bindWorld[$0]) }
     }
 
     /// animationlayers 레이어 이름 → 파스된 애니 인덱스. 실측: 레이어 "Idle" → 애니 "..._arm|idle_bone".

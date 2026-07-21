@@ -147,6 +147,9 @@ public struct PuppetModel: Equatable {
             indices.append(UInt16(bytes[o + i]) | (UInt16(bytes[o + i + 1]) << 8))
         }
         o += iSize
+        // F441: Model3D.swift:255 와 동일한 인덱스 상한 검증 — 손상된 인덱스 블롭은 소비처가 범위 밖을
+        // 스킵해 플랫 삼각형 경계가 전부 어긋나므로(메시 붕괴), 파스 실패(→ 폴터 쿼드)가 낫다.
+        if let maxIndex = indices.max(), Int(maxIndex) >= vCount { return nil }
 
         var model = PuppetModel(material: mat, vertices: vertices, indices: indices)
         // 스켈레톤(있으면): "MDLS0001" 섹션. 실패는 본 없이 반환(정지 메시 렌더는 가능).
