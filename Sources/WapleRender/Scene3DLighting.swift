@@ -423,20 +423,3 @@ struct Scene3DFog: Equatable {
         }
     }
 }
-
-/// F662: 렌더러 인스턴스별 scene fog 저장소. SceneRenderer 의 저장 프로퍼티는 전부 SceneRenderer.swift
-/// (타 그룹 소유)에 선언되어 extension(SceneRenderer3D)에서 추가할 수 없어 ObjectIdentifier 키로 둔다.
-/// build3D 가 항상 encode3D 보다 먼저 호출되어(같은 렌더러) 값은 항상 신선 — 죽은 렌더러의 stale 엔트리는
-/// 읽히지 않고, 상한(64) 초과 시 전체 비움으로 성장을 제한한다(실사용 동시 활성 렌더러는 1~2개).
-enum Scene3DFogStore {
-    private static var values: [ObjectIdentifier: Scene3DFog] = [:]
-
-    static func set(_ fog: Scene3DFog, for id: ObjectIdentifier) {
-        if values.count > 64 { values.removeAll() }
-        values[id] = fog
-    }
-
-    static func get(for id: ObjectIdentifier) -> Scene3DFog {
-        values[id] ?? Scene3DFog()
-    }
-}
