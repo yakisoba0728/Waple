@@ -82,11 +82,16 @@ struct WapleCompatCLI {
         if active.count > 1 {
             fputs("WapleCompat: \u{26A0}\u{FE0F} 상호배타 모드 플래그 \(active.count)개 동시 지정(\(active.joined(separator: ", "))) — 우선순위상 '\(active[0])'만 실행되고 나머지는 무시됩니다.\n", stderr)
         }
-        if let o = only, !deep, profileOut == nil {
-            fputs("WapleCompat: \u{26A0}\u{FE0F} --only \(o) 는 --deep 또는 --profile 모드에서만 적용됩니다 — 현재 모드에서는 무시되고 전체 코퍼스를 스캔합니다.\n", stderr)
+        // F521: --only 소비 여부는 실제 실행 모드(active.first — 우선순위 최상위) 기준으로 판정.
+        // 종전 `!deep && profileOut == nil` 조건은 --deep+--capture+--only 처럼 deep 이 우선순위에서
+        // 밀린 조합을 건너뛰었다(capture 가 실행되고 --only 는 무시되는데 무경고).
+        let activeMode = active.first
+        if let o = only, activeMode != "--deep", activeMode != "--profile" {
+            fputs("WapleCompat: \u{26A0}\u{FE0F} --only \(o) 는 --deep 또는 --profile 모드에서만 적용됩니다 — 현재 모드(\(activeMode ?? "기본 스캔"))에서는 무시됩니다.\n", stderr)
         }
-        if (outputJSON || strict), (inventoryOut != nil || profileOut != nil || captureOut != nil || compareBaseline != nil) {
-            fputs("WapleCompat: \u{26A0}\u{FE0F} --json/--strict 는 capture/compare/profile/inventory 모드에 적용되지 않습니다(해당 모드는 자체 exit code 로만 결과를 알립니다).\n", stderr)
+        // F521: decode-ogg 도 --json/--strict 미적용 모드 — 종전 목록 누락으로 무경고였다.
+        if (outputJSON || strict), (inventoryOut != nil || profileOut != nil || captureOut != nil || compareBaseline != nil || decodeOggIn != nil) {
+            fputs("WapleCompat: \u{26A0}\u{FE0F} --json/--strict 는 capture/compare/profile/inventory/decode-ogg 모드에 적용되지 않습니다(해당 모드는 자체 exit code 로만 결과를 알립니다).\n", stderr)
         }
     }
 

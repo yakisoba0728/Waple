@@ -6,7 +6,7 @@
 
 **Architecture:** Extend the six `Initializer` payloads with a source-compatible default exponent, pass the parsed value through `ParticleSystemDef`, and centralize the existing alpha-style `pow(raw, exponent)` behavior in private `ParticleSimulator` helpers. Preserve one shared color factor, independent vector-component factors, endpoint order, and RNG draw counts.
 
-**Tech Stack:** Swift 6, SwiftPM, XCTest, WapleCore `ParticleSystemDef`/`ParticleSimulator`/`SplitMix64`.
+**Tech Stack:** Swift 5.9, SwiftPM, XCTest, WapleCore `ParticleSystemDef`/`ParticleSimulator`/`SplitMix64`.
 
 ## Global Constraints
 

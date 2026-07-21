@@ -32,8 +32,13 @@ enum ProfilePipeline {
     static func runInventory(root: String, outCSV: URL) -> Int32 {
         let restore = SnapshotPipeline.pinRenderSettings(root: root)
         defer { restore() }
+        // F520: 루트 오지정으로 씬 0개면 빈 CSV 를 쓰고 exit 0 → CI 오인 방지(capture/compare 와 동일 가드).
+        let folders = SnapshotPipeline.sceneFolders(root: root)
+        guard !folders.isEmpty else {
+            fputs("[profile] ⚠️ 씬 0개 — root 지정 확인: \(root)\n", stderr); return 2
+        }
         var rows: [InventoryRow] = []
-        for folder in SnapshotPipeline.sceneFolders(root: root) {
+        for folder in folders {
             let id = folder.lastPathComponent
             autoreleasepool {
                 let pkgName = FileManager.default.fileExists(atPath: folder.appendingPathComponent("scene.pkg").path)
@@ -94,9 +99,9 @@ enum ProfilePipeline {
     static func runProfile(root: String, outDir: URL, only: String, remount: Bool, frameW: Int, frameH: Int) -> Int32 {
         let fm = FileManager.default
         try? fm.createDirectory(at: outDir, withIntermediateDirectories: true)
-        let folder = URL(fileURLWithPath: root).appendingPathComponent("backgrounds").appendingPathComponent(only)
-        guard fm.fileExists(atPath: folder.path) else {
-            fputs("[profile] scene not found: \(folder.path)\n", stderr); return 2
+        // F520: 개발 루트/backgrounds/단일 씬 디렉터리 직접 지정 모두 수용(sceneFolders 와 동일 해석).
+        guard let folder = SnapshotPipeline.sceneFolders(root: root).first(where: { $0.lastPathComponent == only }) else {
+            fputs("[profile] scene not found: \(only) (root: \(root))\n", stderr); return 2
         }
         let restore = SnapshotPipeline.pinRenderSettings(root: root)
         defer { restore() }

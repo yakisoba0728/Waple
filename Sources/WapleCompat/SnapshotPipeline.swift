@@ -29,14 +29,29 @@ enum SnapshotPipeline {
 
     // MARK: 씬 열거
 
+    /// F520: DeepScan.projectContainer 와 동일 규칙 — root 가 개발 루트(하위에 backgrounds/ 디렉터리)면
+    /// 그 backgrounds 를, backgrounds 디렉터리 자체(또는 단일 씬 폴더)가 직접 지정되면 그대로 쓴다.
+    /// 종전엔 무조건 <root>/backgrounds 만 열어서 직접 지정 시 scenes=0 인데도 exit 0 이었다.
+    static func sceneContainer(root: String) -> URL {
+        let r = URL(fileURLWithPath: root)
+        let bg = r.appendingPathComponent("backgrounds", isDirectory: true)
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: bg.path, isDirectory: &isDir), isDir.boolValue {
+            return bg.standardizedFileURL
+        }
+        return r
+    }
+
     static func sceneFolders(root: String) -> [URL] {
-        let base = URL(fileURLWithPath: root).appendingPathComponent("backgrounds")
+        let base = sceneContainer(root: root)
         let fm = FileManager.default
+        func isScene(_ u: URL) -> Bool {
+            fm.fileExists(atPath: u.appendingPathComponent("scene.pkg").path)
+                || fm.fileExists(atPath: u.appendingPathComponent("gifscene.pkg").path)
+        }
+        if isScene(base) { return [base] }   // 단일 씬 폴더 직접 지정
         guard let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) else { return [] }
-        return items
-            .filter { fm.fileExists(atPath: $0.appendingPathComponent("scene.pkg").path)
-                   || fm.fileExists(atPath: $0.appendingPathComponent("gifscene.pkg").path) }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return items.filter(isScene).sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     // MARK: 단일 캡처(마운트 → 고정조건 렌더 → 256×144 PNG)
@@ -93,6 +108,12 @@ enum SnapshotPipeline {
         defer { restore() }
 
         let folders = sceneFolders(root: root)
+        // F520: 루트 오지정(backgrounds/단일 씬 폴더 미지정, 경로 오타 등)으로 씬 0개면 빈 매니페스트를
+        // 쓰고 exit 0 → CI 가 성공으로 오인(F150/F151 이 막은 바로 그 류). 경고 후 비정상 종료.
+        guard !folders.isEmpty else {
+            fputs("[snap] ⚠️ 씬 0개 — root 가 개발 루트/backgrounds/단일 씬 폴더 중 하나인지 확인: \(root)\n", stderr)
+            return 2
+        }
         var entries: [SnapshotEntry] = [], empties: [String] = [], failures: [String] = []
         var nonDet: [String] = []
 
@@ -107,9 +128,14 @@ enum SnapshotPipeline {
                     // 썸네일 복사는 2차 캡처 전에 — 캡처 파일명이 고정(frame_t6.0.png)이라 셀프체크가
                     // png1 을 덮어쓰면 썸네일(2차)과 manifest hash/meanLuma(1차 rgba1)가 영구 불일치.
                     try? fm.removeItem(at: thumbs.appendingPathComponent("\(id).png"))
-                    try? fm.copyItem(at: png1, to: thumbs.appendingPathComponent("\(id).png"))
+                    // F524: 복사 실패를 try? 로 삼키면 매니페스트 entry 만 남아 이후 compare 가 skippedMissing
+                    // 으로 회귀 커버리지를 조용히 잃는다 — 실패를 stderr 로 표면화(캡처 자체는 계속).
+                    do { try fm.copyItem(at: png1, to: thumbs.appendingPathComponent("\(id).png")) }
+                    catch { fputs("[snap] ⚠️ 썸네일 복사 실패 \(id): \(error) — 이후 compare 에서 이 씬은 skip 됩니다\n", stderr) }
                     // 셀프체크: 독립 재마운트로 두 번째 캡처 → 프레임 산출 씬만 2× (empty/fail 은 1×).
-                    var deterministic = true, selfMax = 0, note: String? = nil
+                    // F522: 스키마 규약(SnapshotEntry.selfMaxDiff "셀프체크 안 했으면 -1")에 맞춰 2차 캡처가
+                    // 픽셀을 내지 못하면 -1 유지 — 종전엔 0 이 기록돼 "실행했는데 최대차 0"과 구분 불가였다.
+                    var deterministic = true, selfMax = -1, note: String? = nil
                     if case let .pixels(rgba2, _) = (try? captureFrame(project: project, into: tmp)) ?? .empty {
                         let sd = diffRGBA(rgba1, rgba2)
                         selfMax = sd.maxAbsDiff

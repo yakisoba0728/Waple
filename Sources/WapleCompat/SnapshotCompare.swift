@@ -30,10 +30,16 @@ extension SnapshotPipeline {
         // F145: 베이스라인 캡처 당시 활성이던 렌더-변형 게이트와 지금 활성인 게이트가 다르면 diff 가
         // 게이트 차이 때문일 수 있음을 경고(하드 실패는 아님 — 게이트는 기본적으로 전부 꺼져 있어야
         // 정상이므로 대부분의 실행에선 둘 다 빈 배열이라 무해).
-        let baselineGates = baseline.activeDebugGates ?? []
-        let currentGates = SnapshotPipeline.activeDebugGates()
-        if baselineGates != currentGates {
-            fputs("[snap] ⚠️ 렌더-변형 디버그 게이트 불일치 — 베이스라인 캡처 시=\(baselineGates.isEmpty ? "없음" : baselineGates.joined(separator: ",")), 지금=\(currentGates.isEmpty ? "없음" : currentGates.joined(separator: ",")) — 아래 diff 가 실제 회귀가 아니라 이 차이 때문일 수 있습니다.\n", stderr)
+        // F523: nil(전-F145 베이스라인 = "기록 안 됨")과 빈 배열("0개 활성")은 다르다(Snapshot.swift
+        // 스키마 주석). ?? [] 로 붕괴시키면 구 베이스라인의 게이트 오염을 경고할 수 없으므로 nil 은
+        // 대조 불가로 명시하고 건너뛴다.
+        if let baselineGates = baseline.activeDebugGates {
+            let currentGates = SnapshotPipeline.activeDebugGates()
+            if baselineGates != currentGates {
+                fputs("[snap] ⚠️ 렌더-변형 디버그 게이트 불일치 — 베이스라인 캡처 시=\(baselineGates.isEmpty ? "없음" : baselineGates.joined(separator: ",")), 지금=\(currentGates.isEmpty ? "없음" : currentGates.joined(separator: ",")) — 아래 diff 가 실제 회귀가 아니라 이 차이 때문일 수 있습니다.\n", stderr)
+            }
+        } else {
+            fputs("[snap] ⚠️ 베이스라인에 activeDebugGates 기록 없음(전-F145 스키마) — 캡처 당시 게이트 상태를 알 수 없어 불일치 검사를 건너뜁니다.\n", stderr)
         }
         let baseThumbs = baselineDir.appendingPathComponent("thumbs", isDirectory: true)
         // F148: PID 로 스코프(SnapshotPipeline.runCapture 와 동일 이유 — 동시 실행 간 캡처파일 충돌 방지).
@@ -47,9 +53,11 @@ extension SnapshotPipeline {
         var regressedToEmpty: [String] = []   // 베이스라인엔 픽셀이 있었는데 지금 무픽셀/실패
         var skippedMissing: [String] = []      // 현재 코퍼스에 없거나 썸네일 없음
 
+        // F520: sceneFolders 와 동일 해석 — 개발 루트/backgrounds 직접 지정 모두 수용.
+        let container = sceneContainer(root: root)
         for entry in baseline.entries {
             autoreleasepool {
-                let folder = URL(fileURLWithPath: root).appendingPathComponent("backgrounds/\(entry.id)")
+                let folder = container.appendingPathComponent(entry.id)
                 guard FileManager.default.fileExists(atPath: folder.path),
                       let base = pngToRGBA(baseThumbs.appendingPathComponent("\(entry.id).png"),
                                            width: baseline.thumbWidth, height: baseline.thumbHeight) else {
@@ -98,6 +106,12 @@ extension SnapshotPipeline {
             fputs("[snap] ⚠️ 비결정 씬 \(ndFail.count)종이 관대 임계도 초과(참고): \(ndFail.map { $0.id }.prefix(12).joined(separator: ","))\n", stderr)
         }
 
+        // F520: 베이스라인 entry 전부 skip(코퍼스/썸네일 부재)이면 루트 오지정 또는 코퍼스 유실 —
+        // 회귀(1)가 아니라 환경 오류(2). compared=0 인데 exit 0 은 CI 가 성공으로 오인.
+        if !baseline.entries.isEmpty, skippedMissing.count == baseline.entries.count {
+            fputs("[snap] ⚠️ compared=0 — 베이스라인 \(baseline.entries.count)개 씬이 현재 코퍼스/썸네일에서 전부 누락. root 지정 확인: \(root)\n", stderr)
+            return 2
+        }
         let regressed = !detFail.isEmpty || !regressedToEmpty.isEmpty
         return regressed ? 1 : 0
     }

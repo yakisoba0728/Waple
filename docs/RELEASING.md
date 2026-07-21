@@ -36,7 +36,7 @@ xcrun stapler staple Waple.dmg
 ## 2. 릴리스 체크리스트
 
 1. `scripts/package-app.sh` 의 `Info.plist` 에서 `CFBundleShortVersionString`/`CFBundleVersion` 갱신.
-2. `swift test` 그린 확인(렌더 스위트 포함 전체는 시간이 오래 걸리니 CI 에서).
+2. `swift test` 그린 확인(렌더 스위트 포함 전체를 로컬에서 전수 실행 — 시간이 오래 걸리지만 현재 저장소에 CI 는 없다).
 3. `scripts/package-app.sh` 실행 → `Waple.dmg` 산출.
 4. GitHub 릴리스에 `Waple.dmg` 업로드, 태그(`v0.1.0` 등) 부여.
 5. Homebrew cask 사용 시 아래 템플릿의 `version`/`sha256`/`url` 갱신.
