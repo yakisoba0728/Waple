@@ -56,6 +56,14 @@ public enum PuppetPose {
         return localMatrix(k)
     }
 
+    /// F442: 퇴화(영스케일) 행렬의 .inverse 는 NaN/Inf 를 만들어 스킨 행렬 전체로 번진다(Metal 은 NaN
+    /// 정점을 크래시 없이 쓰레기 렌더로 처리). 행렬식이 0/비유한이면 항등으로 폴터(묵스킨에 준함).
+    static func safeInverse(_ m: simd_float4x4) -> simd_float4x4 {
+        let d = m.determinant
+        guard d.isFinite, abs(d) > 1e-12 else { return matrix_identity_float4x4 }
+        return m.inverse
+    }
+
     /// 본별 스킨 행렬. animation 인덱스가 범위 밖이면 항등(정지 포즈).
     public static func skinMatrices(model: PuppetModel, animation: Int, time: Float) -> [simd_float4x4] {
         let n = model.bones.count
@@ -77,7 +85,7 @@ public enum PuppetPose {
             let p = Int(b.parent)
             world[i] = (b.parent >= 0 && p < i) ? world[p] * local : local  // 부모가 자신 이후/범위 밖이면 루트
         }
-        return (0..<n).map { world[$0] * bindWorld[$0].inverse }
+        return (0..<n).map { world[$0] * safeInverse(bindWorld[$0]) }
     }
 
     /// 두 로컬 행렬 성분별 lerp(캐스케이드 절대 블렌드). t=0→a, t=1→b 정확, 중간=보간.
@@ -95,7 +103,9 @@ public enum PuppetPose {
         guard count > 0 else { return 0 }
         let ln = name.lowercased()
         if !ln.isEmpty, let i = model.animations.firstIndex(where: {
-            let cn = $0.name.lowercased(); return cn.contains(ln) || ln.contains(cn)
+            // F443: 빈 클립명(V0013 파스는 빈 애니 이름을 허용 — PuppetModel.parseV0013)은 contains("") 가
+            // 항상 참이라 아무 쿼리에나 선택된다 — 매칭 후보에서 제외.
+            let cn = $0.name.lowercased(); return !cn.isEmpty && (cn.contains(ln) || ln.contains(cn))
         }) { return i }
         return min(max(fallback, 0), count - 1)
     }
@@ -135,7 +145,7 @@ public enum PuppetPose {
                 if L.additive {
                     let ref = (i < tracks.count ? sampledLocal(tracks[i], frame: 0) : nil) ?? b.bind
                     // 가중 델타: weight 0 → 항등(무기여), 1 → 전체 델타.
-                    let wdelta = mixLocal(matrix_identity_float4x4, clip * ref.inverse, L.weight)
+                    let wdelta = mixLocal(matrix_identity_float4x4, clip * safeInverse(ref), L.weight)
                     local = wdelta * local
                 } else {
                     local = mixLocal(local, clip, L.weight)
@@ -163,7 +173,7 @@ public enum PuppetPose {
         }
         let world = worldMatrices(model: model, layers: layers, time: time)
         let bindWorld = bindWorlds(model)
-        return (0..<n).map { world[$0] * bindWorld[$0].inverse }
+        return (0..<n).map { world[$0] * safeInverse(bindWorld[$0]) }
     }
 
     /// 부착점 프레임(퍼펫 모델공간 y-up): `boneWorld(t) × attLocal` — 씬 오브젝트 `attachment`

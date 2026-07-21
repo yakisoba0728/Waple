@@ -232,7 +232,9 @@ public struct TexImage {
             return make(kind, mip.payloadRange, mip, mips: mips, variants: variants)
         }
         // 4) 비압축 raw RGBA(드묾).
-        if format == 0 { return make(.rawRGBA8888, 0..<b.count, nil) }
+        // F433: 픽셀은 42B TEXV 헤더(TEXV0005\0+TEXI0001\0+6×i32) 뒤에서 시작 — 종전 0..<b.count 는
+        // 헤더를 픽셀로 디코드해 42B(4의 배수 아님) 시프트로 채널 정렬이 깨졌다(TexDecoder.rawRGBA8888).
+        if format == 0 { return make(.rawRGBA8888, 42..<b.count, nil) }
         return make(.unknown, 0..<b.count, nil)
     }
 
