@@ -156,7 +156,10 @@ public enum GLSLTranslator {
         for id in bodyIds {
             if id.contains("AudioSpectrum") { usesAudio = true }
             // Texel 가드: textureIndex("g_Texture6Texel")=6 — 엔진 유니폼 토큰이 팬텀 텍스처 슬롯으로 등록되는 것 방지.
-            if id.hasPrefix("g_Texture"), !id.hasSuffix("Resolution"), !id.hasSuffix("Texel"), let n = textureIndex(id) { textures.append(n) }
+            // F617: 숫자부가 전부 숫자인 g_TextureN 만 인정 — g_Texture3MipMapInfo·g_Texture0Rotation 류는
+            // textureIndex 가 접두 숫자만 읽어 팬텀 슬롯(3/0)이 생겼다(본문 스캔 잔여 경로).
+            if id.hasPrefix("g_Texture"), !id.hasSuffix("Resolution"), !id.hasSuffix("Texel"),
+               id.dropFirst("g_Texture".count).allSatisfy({ $0.isNumber }), let n = textureIndex(id) { textures.append(n) }
         }
         textures = Array(Set(textures)).sorted()
 
@@ -196,6 +199,8 @@ public enum GLSLTranslator {
         var overloadSizeEnv: [String: Int] = ["gl_FragColor": 4, "gl_FragCoord": 4, "gl_Position": 4,
                                               "g_Time": 1, "g_PointerPosition": 2, "g_ParallaxPosition": 2,
                                               "g_Frametime": 1, "g_PointerPositionLast": 2,
+                                              // F618: g_PointerState = float4(치환/capture 정합) — 어댑터 크기 환경 등재.
+                                              "g_PointerState": 4,
                                               "a_TexCoord": 2, "a_Position": 3]
         for vy in varyings { overloadSizeEnv[vy.name] = vy.type.components }
         for m in materials { overloadSizeEnv[m.glslName] = m.type.components }
@@ -281,6 +286,7 @@ public enum GLSLTranslator {
         // 확실한 크기만 개입(미지 0 = 무개입). 스테이지별 env(frag 는 frag 선언 varying 타입 우선).
         var sizeEnv: [String: Int] = ["gl_FragColor": 4, "gl_FragCoord": 4, "gl_Position": 4,
                                       "g_Time": 1, "g_PointerPosition": 2,
+                                      "g_PointerState": 4,  // F618: float4 치환과 정합 — 절단 추론 활성
                                       "a_TexCoord": 2, "a_Position": 3]
         for vy in varyings { sizeEnv[vy.name] = vy.type.components }
         for m in materials { sizeEnv[m.glslName] = m.type.components }
@@ -1122,6 +1128,8 @@ public enum GLSLTranslator {
             || name.hasPrefix("g_AudioSpectrum")
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Resolution"))
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Texel"))  // g_TextureNTexel — g_TexelSize 동족(텍스처별 텍셀)
+            // F614: g_Screen = (렌더타깃 w, h, w/h) — 미분류 시 머티리얼 팬텀 슬롯(padDefault 0) 강등.
+            || name == "g_Screen"
             || (name.hasPrefix("g_") && name.contains("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder);
                                                                    // ...MatrixInverse/...MatrixInverseTranspose 변형 포함(실물 depthparallax)
     }
@@ -1137,6 +1145,9 @@ public enum GLSLTranslator {
         if name == "g_PointerPositionLast" { return "eng.pointerLastAndPad.xy" }
         // 실물 cursorripple/fluidsim: g_PointerState.z = 클릭 버튼 힘(미클릭 0). .z 만 참조되므로 pad 슬롯 재사용.
         if name == "g_PointerState" { return "float4(0.0, 0.0, eng.pointerLastAndPad.z, 0.0)" }
+        // F614: g_Screen = (width, height, width/height) — g_TexelSize 와 같은 texRes[0] 근사
+        // (이펙트 패스는 tex0=framebuffer=타깃 크기가 통례).
+        if name == "g_Screen" { return "float3(eng.texRes[0].xy, eng.texRes[0].x / eng.texRes[0].y)" }
         if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
         // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
@@ -1181,6 +1192,8 @@ public enum GLSLTranslator {
     private static func engineNeutralDefault(_ name: String, _ t: GLSLType) -> [Float] {
         switch name {
         case "g_Alpha", "g_UserAlpha", "g_Brightness", "g_Color",
+             // F613: g_Color 의 vec4 변형 — 미등재 시 padDefault (0,0,0,0) 으로 color*=0 즉시 검정.
+             "g_Color4",
              // 실물 blend.vert TRANSFORMUV 콤보: UV 를 이 값으로 나눔 — 0 이면 ÷0 NaN, 중립은 항등 배율 1.
              "g_TextureReductionScale":
             return Array(repeating: 1, count: max(1, t.components))
@@ -1289,6 +1302,10 @@ public enum GLSLTranslator {
         s = rewriteCall(s, "degrees") { args in args.count == 1 ? "((\(args[0])) * 57.29577951308232)" : nil }
         // 3) 식별자/타입 단일 패스 치환
         s = replaceIdentifiers(s, symbols)
+        // F616: 본문 내 배열 생성자 `TYPE[N](...)` 도 MSL brace-init 으로(종전엔 파일스코프 const 만
+        // 재작성 — 함수 본문 사용은 MSL 문법 오류 LOUD 폴 fallback). 배열 인덱싱(`a[i]`)은
+        // `]` 뒤 `(` 가 아니라 미검출이라 안전.
+        s = rewriteArrayConstructors(s)
         s = rewriteDiscardStatements(s)
         // 4) gl_Position / gl_FragColor
         if isFragment {
@@ -1466,8 +1483,10 @@ public enum GLSLTranslator {
             let t = n.contains("Matrix") ? "float4x4"
                 // Texel 접미는 isEngine 통과분만 도달 = g_TextureNTexel 한정(g_TexelSize 는 "Size" 접미).
                 : (n.hasSuffix("Resolution") || n.hasSuffix("Texel") || n == "g_PointerState" ? "float4"
-                    : (n == "g_PointerPosition" || n == "g_ParallaxPosition" || n == "g_PointerPositionLast"
-                        || n == "g_TexelSize" || n == "g_TexelSizeHalf" ? "float2" : "float"))
+                    // F614: g_Screen 은 vec3 — 헬퍼 캡처 승격 시 치환식(float3)과 타입 정합.
+                    : (n == "g_Screen" ? "float3"
+                        : (n == "g_PointerPosition" || n == "g_ParallaxPosition" || n == "g_PointerPositionLast"
+                            || n == "g_TexelSize" || n == "g_TexelSizeHalf" ? "float2" : "float")))
             return "\(t) \(n)"
         case .varying(let n, let t, let written):
             // F420: 헬퍼가 쓰는 varying 은 참조로 — by-value 면 호출부(out.<n>)와 끊긴 지역 사본이라

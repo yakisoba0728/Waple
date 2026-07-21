@@ -130,8 +130,11 @@ public enum ShaderPreprocessor {
         func definedNames() -> Set<String> { Set(d.keys).union(textDefines.keys).union(funcMacros.keys) }
         func isDefined(_ name: String) -> Bool { definedNames().contains(name) }
 
-        for raw in source.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(raw)
+        // F610: 인덱스 루프 — 미지원 #if 식의 동일-분기 관용 판정에 전방 탐색(srcLines)이 필요.
+        let srcLines = source.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var li = 0
+        while li < srcLines.count {
+            let line = srcLines[li]; li += 1
             var t = line.trimmingCharacters(in: .whitespaces)
             // 지시문 줄 트레일링 주석 제거 — `#if C_TYPE == 4 // 설명` 이 식 평가를 깨면
             // 관용 유지로 모든 분기가 방출된다(실물 frame_builder 의 offset 재정의 원인).
@@ -145,6 +148,12 @@ public enum ShaderPreprocessor {
             // 공백을 끼워 정규화(다운스트림 dropFirst 카운트 불변).
             if t.hasPrefix("#if(") { t = "#if " + t.dropFirst(3) }
             else if t.hasPrefix("#elif(") { t = "#elif " + t.dropFirst(5) }
+            // F611: 지시문 식의 후행 `;` 절단 — WE/C 전처리기는 관용(실물 simple_gradient_audio_bar 의
+            // `#elif AUDIOSAMPLES == 32;`). ExprEval 은 `;` 를 미지원 문자로 거부하므로 절단으로
+            // 달라지는 입력은 "종전 거부" 뿐이고 식의 값 자체는 불변.
+            if t.hasPrefix("#if ") || t.hasPrefix("#elif ") {
+                while t.hasSuffix(";") { t = String(t.dropLast()).trimmingCharacters(in: .whitespaces) }
+            }
             if t.hasPrefix("#if ") || t.hasPrefix("#ifdef ") || t.hasPrefix("#ifndef ") {
                 let parentActive = emitting()
                 var cond = false
@@ -155,10 +164,18 @@ public enum ShaderPreprocessor {
                     if let v = ExprEval.evalChecked(expr, defines: d, definedNames: definedNames(), suspect: suspectDefines) {
                         cond = v != 0
                     } else if parentActive {
-                        // F421: 활성 분기의 #if 가 미지원 식 — 어느 분기든 오역이므로 전처리 거부.
-                        // (비활성 부모 안쪽은 출력에 무영향이라 관용 유지.)
-                        WapleLog.warn("[Waple] GLSL #if unsupported expression, refusing shader: \(expr)")
-                        return nil
+                        // F610: 미지원 식이지만 단순 #if/#else/#endif 형태에서 양 분기 텍스트가 동일하면
+                        // 어느 분기를 택해든 출력이 같다 — 전량 폐기는 순손해(실물 lens_distorsion 의
+                        // `#if g_Texture0Resolution.x < g_Texture0Resolution.y` uniform 멤버 비교).
+                        // 분기가 다르거나 #elif/비정형 구조면 종전대로 거부("오역보다 폴터").
+                        if hasIdenticalBranches(srcLines, from: li) {
+                            cond = false
+                        } else {
+                            // F421: 활성 분기의 #if 가 미지원 식 — 어느 분기든 오역이므로 전처리 거부.
+                            // (비활성 부모 안쪽은 출력에 무영향이라 관용 유지.)
+                            WapleLog.warn("[Waple] GLSL #if unsupported expression, refusing shader: \(expr)")
+                            return nil
+                        }
                     }
                 }
                 stack.append(Frame(active: parentActive && cond, taken: cond, parentActive: parentActive))
@@ -285,6 +302,34 @@ public enum ShaderPreprocessor {
         }
         let body = lines.joined(separator: "\n")
         return body
+    }
+
+    /// F610: `lines[from…]` 에서 현재 #if 와 같은 깊이의 #else/#endif 를 찾아 양 분기 텍스트가
+    /// 동일한지 비교(동일하면 어느 분기든 출력이 같아 관용 가능). 안쪽 중첩은 깊이로 건어너뛰고,
+    /// 깊이-0 #elif(다분기)/짝 #endif 미발견 등 비정형은 false(보수적 — 거부로 회귀).
+    private static func hasIdenticalBranches(_ lines: [String], from start: Int) -> Bool {
+        var depth = 0
+        var elseIdx: Int? = nil
+        var i = start
+        while i < lines.count {
+            let lt = lines[i].trimmingCharacters(in: .whitespaces)
+            if lt.hasPrefix("#endif") {
+                if depth == 0 {
+                    let a = lines[start..<(elseIdx ?? i)]
+                    let b = elseIdx.map { lines[($0 + 1)..<i] } ?? []
+                    return a.elementsEqual(b)
+                }
+                depth -= 1
+            } else if lt.hasPrefix("#if") {          // #if/#ifdef/#ifndef/#if( 공통 오프너
+                depth += 1
+            } else if depth == 0, lt.hasPrefix("#elif") {
+                return false                          // 다분기 비교는 미지원(보수)
+            } else if depth == 0, lt.hasPrefix("#else"), elseIdx == nil {
+                elseIdx = i
+            }
+            i += 1
+        }
+        return false
     }
 
     /// whole-word 식별자 치환(단일 패스).
