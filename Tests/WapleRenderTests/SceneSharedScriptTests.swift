@@ -100,7 +100,8 @@ final class SceneSharedScriptTests: XCTestCase {
     func testInitOnlyEngineRunsOnceWithoutArgumentsAndPublishesSharedState() throws {
         let scene = try XCTUnwrap(SceneScriptContext())
         let initOnly = try XCTUnwrap(TextScriptEngine(script: """
-        export function applyUserProperties(props) { shared.theme = props.theme.value; }
+        // F702(S-8): 훅 인자는 원시값 맵(props.theme = "dark") — `.value` 래퍼 접근은 구 계약.
+        export function applyUserProperties(props) { shared.theme = props.theme; }
         export function init() {
             shared.initCount = (shared.initCount || 0) + 1;
             shared.initArgumentCount = arguments.length;

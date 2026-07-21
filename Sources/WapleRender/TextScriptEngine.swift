@@ -11,13 +11,20 @@ public struct SceneScriptLayerDescriptor {
     public var size: SIMD2<Float>
     public var solid: Bool
     public var text: String
+    /// scene.json objects[] 의 id — JS 측 parent 체인 배선(F711)에 사용. 0 = 미지정(배선 안 함, 무회귀).
+    public var id: Int
+    /// 부모 오브젝트 id(scene.json parent) — 실 부모 레이어 바인딩(F711). nil = 루트.
+    public var parentId: Int?
+    /// animationlayers 바인딩 수 — ILayer.getAnimationLayerCount() 실값(F708). 0 = 미지정.
+    public var animationLayerCount: Int
 
     public init(name: String, visible: Bool = true, alpha: Float = 1,
                 origin: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
                 scale: SIMD3<Float> = SIMD3<Float>(1, 1, 1),
                 angles: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
                 size: SIMD2<Float> = SIMD2<Float>(1, 1),
-                solid: Bool = false, text: String = "") {
+                solid: Bool = false, text: String = "",
+                id: Int = 0, parentId: Int? = nil, animationLayerCount: Int = 0) {
         self.name = name
         self.visible = visible
         self.alpha = alpha
@@ -27,6 +34,9 @@ public struct SceneScriptLayerDescriptor {
         self.size = size
         self.solid = solid
         self.text = text
+        self.id = id
+        self.parentId = parentId
+        self.animationLayerCount = animationLayerCount
     }
 }
 
@@ -87,6 +97,20 @@ public final class SceneScriptContext {
         context.evaluateScript("__setAudioData(\(Self.floatArrayLiteral(left64)), \(Self.floatArrayLiteral(right64)));")
     }
 
+    /// F713(S-31): input.cursorWorldPosition/cursorScreenPosition 폴터 주입 — 제자리 갱신이라 스크립트가
+    /// 보관한 참조도 따라온다. 렌더러의 포인터 이벤트 지점(SceneRenderer dispatchPointerEvent)이 프레임/
+    /// 이벤트마다 호출하는 연결점. world = 씬 픽셀(상단 원점), screen = 표현 좌표.
+    public func setCursorState(worldX: Float, worldY: Float, screenX: Float, screenY: Float, leftDown: Bool) {
+        context.evaluateScript("__setCursorState(\(TextScriptEngine.jsNumber(worldX)), \(TextScriptEngine.jsNumber(worldY)), \(TextScriptEngine.jsNumber(screenX)), \(TextScriptEngine.jsNumber(screenY)), \(leftDown));")
+    }
+
+    /// F710(S-35): JS thisScene 레이어를 최신 디스크립터로 **제자리** 갱신 — getLayer 가 반환한 JS 객체를
+    /// 스크립트가 쥐고 있어도 라이브 트랜스폼을 읽게 하는 연결점(렌더러가 프레임마다 호출).
+    /// 디스크립터 배열 순서는 mount 의 __setSceneLayers 와 동일해야 한다(인덱스 정합).
+    public func updateSceneLayers(_ layers: [SceneScriptLayerDescriptor]) {
+        context.evaluateScript("__updateSceneLayers(\(Self.layersJSONArray(layers)));")
+    }
+
     private static func floatArrayLiteral(_ values: [Float]) -> String {
         "[" + values.map(TextScriptEngine.jsNumber).joined(separator: ",") + "]"
     }
@@ -109,7 +133,10 @@ public final class SceneScriptContext {
                 "angles": [Double(l.angles.x), Double(l.angles.y), Double(l.angles.z)],
                 "size": [Double(l.size.x), Double(l.size.y)],
                 "solid": l.solid,
-                "text": l.text
+                "text": l.text,
+                "id": l.id,
+                "parentId": l.parentId ?? NSNull(),
+                "animationLayerCount": l.animationLayerCount
             ]
         }
         guard JSONSerialization.isValidJSONObject(objects),
@@ -238,7 +265,11 @@ public final class TextScriptEngine {
     /// {update, cursorClick, media*Changed...} 훅 딕셔너리를 반환받아 보관.
     /// update/훅 부재도 성공(top-level 사이드이펙트는 이미 실행됨).
     /// 로드 예외(문법 오류 등) → nil, 공유 컨텍스트는 오염되지 않는다(IIFE 미실행).
-    public init?(script: String, scene: SceneScriptContext, currentLayerName: String? = nil, scriptPropsJSON: String? = nil) {
+    /// currentLayerIndex(F709/S-34): thisLayer 를 스크립트가 붙은 오브젝트 자체로 직결하는 디스크립터
+    /// 인덱스 — 중복명/묪명 레이어에서 이름 조회는 첫 매치로 오바인딩된다(WE 계약은 객체 자체 바인딩).
+    /// nil 이면 종전 이름 조회 폴터(무회귀).
+    public init?(script: String, scene: SceneScriptContext, currentLayerName: String? = nil,
+                 currentLayerIndex: Int? = nil, scriptPropsJSON: String? = nil) {
         guard Self.passesPracticalSafetyChecks(script) else { return nil }
         let ctx = scene.context
         context = ctx
@@ -257,6 +288,7 @@ public final class TextScriptEngine {
             .map { "\($0): (typeof \($0) !== 'undefined') ? \($0) : null" }
             .joined(separator: ", ")
         let layerArg = currentLayerName.map(Self.javascriptStringLiteral) ?? "null"
+        let layerIndexArg = currentLayerIndex.map(String.init) ?? "null"
         let wrapped = """
         (function(__wapleThisLayer){
         var __wapleGlobal = Function('return this')();
@@ -264,7 +296,7 @@ public final class TextScriptEngine {
         var thisObject = thisLayer;
         \(cleaned)
         ;return { \(exports) };
-        })(__wapleLayerForScript(\(layerArg)))
+        })(__wapleLayerForScript(\(layerArg), \(layerIndexArg)))
         """
         Self.injectScriptPropOverrides(context, json: scriptPropsJSON)
         scriptPropOverridesSnapshot = Self.currentScriptPropOverrides(context)   // F475
@@ -338,45 +370,66 @@ public final class TextScriptEngine {
             // 문자열 프로퍼티(combo/text)를 깨뜨린다. 산출기 weUserPropertiesJSON 은 WebRenderer 와 공유 —
             // 거기선 {type,value} 가 올바른 web 계약이므로 반드시 이 주입 지점에서만 벗긴다.
             context.evaluateScript("""
-            engine.userProperties = (function (o) {
+            __wapleUserPropertiesRaw = (function (o) {
                 var r = {};
                 for (var k in o) { r[k] = o[k] ? o[k].value : o[k]; }
                 return r;
             })(__wapleUserProperties);
+            engine.userProperties = __wapleUserPropertiesRaw;
             """)
             guard let applyUserPropertiesFn, !failed() else { return nil }
-            let result = applyUserPropertiesFn.call(withArguments: [properties])
+            // F702(S-8): 훅 인자도 원시값 맵이어야 한다(WE 계약 — 실물 58씬 전부 `.value` 접근 없이
+            // `changedUserProperties.mode === 2` 처럼 직접 비교). 종전엔 {type,value} 래퍼를 그대로 넘겨
+            // hasOwnProperty 게이트 통과 후 기본값이 래퍼 객체로 덮어써져 수치 비교가 NaN→false 로 굳었다.
+            let hookArg = context.objectForKeyedSubscript("__wapleUserPropertiesRaw")
+            let result = applyUserPropertiesFn.call(withArguments: [hookArg ?? properties])
             return failed() ? nil : result
         }
     }
 
     /// Initialize an init-only SceneScript once with zero arguments.
+    /// F712(S-38): 반환값은 initReturnValue 에 캐시 — update 없는 프로퍼티 스크립트의 evaluate* 가
+    /// 이를 프로퍼티값으로 서빙한다(WE: init 반환 = 바운드 프로퍼티에 적용할 수정값, d.ts:52-55).
     public func callInitIfNeeded() {
         guard let initFn = takeInitFunctionIfNeeded() else { return }
         _ = withExceptionCapture("init hook exception") { failed -> JSValue? in
             let result = initFn.call(withArguments: [])
+            if let result, !result.isUndefined, !result.isNull { initReturnValue = result }
             return failed() ? nil : result
         }
     }
 
     /// update(current) 호출 → 새 텍스트. 예외/비문자열 → nil.
     public func evaluate(current: String) -> String? {
-        guard let updateFn else { return nil }
         return withExceptionCapture("text script update exception") { failed -> String? in
-            callInitIfNeeded(argument: current)
+            let initValue = callInitIfNeeded(argument: current)
             guard !failed() else { return nil }
-            guard let out = updateFn.call(withArguments: [current]), !failed(), out.isString else { return nil }
-            return out.toString()
+            if let updateFn {
+                // F712: init 반환(수정값)이 있으면 첫 update 의 current 로 공급(WE init→update 계약).
+                let arg: Any = initValue ?? current
+                guard let out = updateFn.call(withArguments: [arg]), !failed(), out.isString else { return nil }
+                return out.toString()
+            }
+            // F712: init-only 텍스트 스크립트 — init 반환 문자열을 프로퍼티값으로 적용, 없으면 nil(현상 유지).
+            guard let v = initValue ?? initReturnValue, v.isString else { return nil }
+            return v.toString()
         }
     }
 
     /// visible 스크립트용: update(current) → 부울(숫자는 0=false). 예외/부재/비해석 → nil(현상 유지).
     public func evaluateBool(current: Bool) -> Bool? {
-        guard let updateFn else { return nil }
         return withExceptionCapture("visible script exception") { failed -> Bool? in
-            callInitIfNeeded(argument: current)
+            let initValue = callInitIfNeeded(argument: current)
             guard !failed() else { return nil }
-            guard let out = updateFn.call(withArguments: [current]), !failed() else { return nil }
+            let out: JSValue?
+            if let updateFn {
+                let arg: Any = initValue ?? current
+                guard let o = updateFn.call(withArguments: [arg]), !failed() else { return nil }
+                out = o
+            } else {
+                out = initValue ?? initReturnValue   // F712: init-only — init 반환을 프로퍼티값으로
+            }
+            guard let out else { return nil }
             if out.isBoolean { return out.toBool() }
             if out.isNumber { return out.toDouble() != 0 }
             return nil
@@ -385,25 +438,27 @@ public final class TextScriptEngine {
 
     /// 효과 상수 스크립트용: engine.runtime 갱신(초) + engine.setTimeout 만기 큐 펌프.
     /// 공유 씬 컨텍스트에선 여러 엔진이 같은 t 로 재호출 — 펌프는 멱등(만기분은 1회만 발화).
+    /// F700(S-6): __setRuntime 이 frametime 을 실델타(t − 직전 t)로 갱신한다(같은 t 재호출은 물변화).
     public func setRuntime(_ t: Double) {
         restoreScriptPropOverrides()   // F475: __pumpTimeouts 만기 콜백도 이 엔진의 스크립트 코드
-        context.evaluateScript("__engineState.runtime = \(t); __pumpTimeouts();")
+        context.evaluateScript("__setRuntime(\(t.isFinite ? t : 0));")
     }
 
     /// update({x,y,z...}) 호출 → 수치 배열(스칼라는 1개). 예외/비수치 → nil.
     public func evaluateVec(current: [Float]) -> [Float]? {
-        guard let updateFn else { return nil }
         return withExceptionCapture("constant script exception") { failed -> [Float]? in
             guard let arg = vecArgument(current), !failed() else { return nil }
-            callInitIfNeeded(argument: arg)
+            let initValue = callInitIfNeeded(argument: arg)
             guard !failed() else { return nil }
-            guard let out = updateFn.call(withArguments: [arg]), !failed() else { return nil }
-            if out.isNumber { return [Float(out.toDouble())] }
-            guard out.isObject else { return nil }
-            let x = out.objectForKeyedSubscript("x"), y = out.objectForKeyedSubscript("y"), z = out.objectForKeyedSubscript("z")
-            guard let x, let y, x.isNumber, y.isNumber else { return nil }
-            if let z, z.isNumber { return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())] }
-            return [Float(x.toDouble()), Float(y.toDouble())]
+            if let updateFn {
+                let updateArg: Any = initValue ?? arg   // F712: init 수정값을 첫 update 의 current 로
+                guard let out = updateFn.call(withArguments: [updateArg]), !failed() else { return nil }
+                return Self.floatArray(from: out)
+            }
+            // F712(S-38): update 없는 init-only 프로퍼티 스크립트(실물 3367988661 드래그 패밀리의
+            // `return localStorage.get(storageName) || thisLayer.origin`) — WE 는 init 반환값을 바운드
+            // 프로퍼티에 적용하므로 per-frame 동일값으로 서빙(매 프레임 nil 이면 정적값에 묻힌다).
+            return Self.floatArray(from: initValue ?? initReturnValue)
         }
     }
 
@@ -413,9 +468,40 @@ public final class TextScriptEngine {
         return initFn
     }
 
-    private func callInitIfNeeded(argument: Any) {
-        guard let initFn = takeInitFunctionIfNeeded() else { return }
-        initFn.call(withArguments: [initArgument(from: argument)])
+    /// F712(S-38): init 의 반환값 캐시 — WE 계약은 "바운드 프로퍼티에 적용할 수정값"(d.ts:52-55).
+    /// update 보유 스크립트는 첫 update 의 current 로 공급되고, init-only 스크립트는 evaluate* 가 이 값을 서빙.
+    private var initReturnValue: JSValue?
+
+    /// init 을 1회 발화하고, 수정값 반환이 있으면 캐시 후 돌려준다(미발화/undefined/null → nil).
+    @discardableResult
+    private func callInitIfNeeded(argument: Any) -> JSValue? {
+        guard let initFn = takeInitFunctionIfNeeded() else { return nil }
+        guard let r = initFn.call(withArguments: [initArgument(from: argument)]),
+              !r.isUndefined, !r.isNull else { return nil }
+        initReturnValue = r
+        return r
+    }
+
+    /// 스크립트 반환값 → 수치 배열: 스칼라는 1개, Vec2/Vec3 형({x,y[,z]})은 성별 순, 배열 형은 앞에서부터.
+    static func floatArray(from value: JSValue?) -> [Float]? {
+        guard let value else { return nil }
+        if value.isNumber { return [Float(value.toDouble())] }
+        guard value.isObject else { return nil }
+        let x = value.objectForKeyedSubscript("x"), y = value.objectForKeyedSubscript("y"),
+            z = value.objectForKeyedSubscript("z")
+        if let x, let y, x.isNumber, y.isNumber {
+            if let z, z.isNumber { return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())] }
+            return [Float(x.toDouble()), Float(y.toDouble())]
+        }
+        if let len = value.objectForKeyedSubscript("length"), len.isNumber, len.toInt32() > 0 {
+            var out: [Float] = []
+            for i in 0..<len.toInt32() {
+                guard let e = value.objectAtIndexedSubscript(Int(i)), e.isNumber else { return nil }
+                out.append(Float(e.toDouble()))
+            }
+            return out
+        }
+        return nil
     }
 
     private func initArgument(from argument: Any) -> Any {
@@ -888,7 +974,7 @@ public final class TextScriptEngine {
     }
 
     /// import clause → no-op 프록시 var 선언 코드. 빈 clause(side-effect) → "".
-    /// `* as X` / `{a, b as c}` / `default` / `default, {..}`(콤보) 지원. WEColor/WEMath 는 실심 바인딩.
+    /// `* as X` / `{a, b as c}` / `default` / `default, {..}`(콤보) 지원. WEColor/WEMath/WEVector 는 실심 바인딩.
     private static func importBindings(clause: String) -> String {
         let clause = clause.trimmingCharacters(in: .whitespaces)
         guard !clause.isEmpty else { return "" }
@@ -896,6 +982,7 @@ public final class TextScriptEngine {
             switch name {
             case "WEColor": return "var WEColor = __WEColor;"
             case "WEMath": return "var WEMath = __WEMath;"
+            case "WEVector": return "var WEVector = __WEVector;"   // F706(S-42)
             default: return "var \(name) = __noopProxy();"
             }
         }
@@ -1009,23 +1096,47 @@ public final class TextScriptEngine {
     // engine.isScreensaver(): 프로세스 전역 플래그(Swift TextScriptEngine.isScreensaver 가 __setScreensaver 로 주입).
     var __isScreensaver = false;
     function __setScreensaver(v) { __isScreensaver = !!v; }
-    // engine.setTimeout: 벽시계가 아닌 runtime 클록 기반 만기 큐(결정적 — 캡처 t 주입 시 동일 발화).
+    // engine.setTimeout/setInterval: 벽시계가 아닌 runtime 클록 기반 만기 큐(결정적 — 캡처 t 주입 시 동일 발화).
     // 펌프는 setRuntime(= __engineState.runtime 갱신) 이 수행.
-    var __timeoutQueue = [];   // {id, at(초), cb}
+    var __timeoutQueue = [];   // {id, at(초), every(초, 0=1회), cb, cancelled}
     var __timeoutSeq = 0;
+    // F704(S-40): WE 계약은 setTimeout/setInterval 이 "취소용 콜백" 반환(d.ts:2451-2456 "Returns a new callback
+    // that can be used to stop") — 실물 관용구 `stopTimeout = engine.setTimeout(...); if (stopTimeout) stopTimeout();`
+    // (3367988661 MI 패밀리)이 숫자 id 반환에서는 함수 호출 TypeError 로 update 가 죽었다.
+    // clearTimeout 은 숫자 id(하위호환)와 취소함수(__wapleTimerId) 둘 다 수용(바이너리도 clearTimeout 수출).
+    function __scheduleTimer(cb, ms, repeat) {
+        if (typeof cb !== 'function') { return function() {}; }
+        var id = ++__timeoutSeq;
+        var entry = { id: id, at: __engineState.runtime + __num(ms, 0) / 1000,
+                      every: repeat ? Math.max(__num(ms, 0), 1) / 1000 : 0, cb: cb, cancelled: false };
+        __timeoutQueue.push(entry);
+        var cancel = function() { entry.cancelled = true; };
+        cancel.__wapleTimerId = id;
+        return cancel;
+    }
     function __pumpTimeouts() {
         var now = __engineState.runtime;
         var cutoff = __timeoutSeq;   // 콜백 내 재등록(0ms 체인)은 다음 틱으로 — 동일 틱 무한루프 방지
+        var i;
+        for (i = __timeoutQueue.length - 1; i >= 0; i -= 1) {   // 취소분 청소(큐 팽창 방지)
+            if (__timeoutQueue[i].cancelled) { __timeoutQueue.splice(i, 1); }
+        }
         for (;;) {
             var best = -1;
-            for (var i = 0; i < __timeoutQueue.length; i += 1) {   // ponytail: 선형 스캔 — 씬당 타이머는 한 자릿수
+            for (i = 0; i < __timeoutQueue.length; i += 1) {   // ponytail: 선형 스캔 — 씬당 타이머는 한 자릿수
                 var e = __timeoutQueue[i];
-                if (e.at > now || e.id > cutoff) { continue; }
+                if (e.at > now || e.id > cutoff || e.cancelled) { continue; }
                 if (best < 0 || e.at < __timeoutQueue[best].at
                     || (e.at === __timeoutQueue[best].at && e.id < __timeoutQueue[best].id)) { best = i; }
             }
             if (best < 0) { return; }
             var entry = __timeoutQueue.splice(best, 1)[0];
+            if (entry.every > 0 && !entry.cancelled) {   // setInterval: 다음 주기로 재등록
+                entry.at += entry.every;   // 추격형(누적 틱 보존 — JS setInterval 세맨틱스)
+                // 장시간 점프(슬립 복귀 등) 시 틱 폭주 방지: 64틱 이상 누적이면 fast-forward.
+                if (entry.at + entry.every * 64 < now) { entry.at = now + entry.every; }
+                __timeoutQueue.push(entry);
+            }
             entry.cb();   // 예외 → evaluateScript 예외(기존 exceptionHandler 로깅). 잔여 만기분은 다음 틱에.
         }
     }
@@ -1058,6 +1169,8 @@ public final class TextScriptEngine {
     }
     // engine: runtime 등 실수치 프로퍼티는 실제 타깃에 두고, 나머지는 no-op 흡수.
     // frametime(소문자)이 실물 표기(818회/193pkg — 2881558311 ColorTinter 전환 타이머 등); frameTime 은 호환 보존.
+    // F700(S-6): frametime 초기값 0.016 은 setRuntime 미호출 소비자(단독 평가)용 — 렌더 경로는 __setRuntime 이
+    // 프레임마다 실델타로 덮어쓴다(WE: "Last frametime in seconds", d.ts:2492).
     var __engineState = { runtime: 0.0, frametime: 0.016, frameTime: 0.016,
                           audio: __audioBuffer, audioBuffer: __audioBuffer,
                           canvasSize: __canvasSize,
@@ -1068,15 +1181,12 @@ public final class TextScriptEngine {
                           isRunningInEditor: function() { return false; },
                           isPortrait: function() { return __canvasSize.y > __canvasSize.x; },
                           isLandscape: function() { return __canvasSize.x >= __canvasSize.y; },
-                          setTimeout: function(cb, ms) {
-                              if (typeof cb !== 'function') { return 0; }
-                              var id = ++__timeoutSeq;
-                              __timeoutQueue.push({ id: id, at: __engineState.runtime + __num(ms, 0) / 1000, cb: cb });
-                              return id;
-                          },
+                          setTimeout: function(cb, ms) { return __scheduleTimer(cb, ms, false); },
+                          setInterval: function(cb, ms) { return __scheduleTimer(cb, ms, true); },
                           clearTimeout: function(id) {
+                              var tid = (typeof id === 'function') ? id.__wapleTimerId : id;
                               for (var i = 0; i < __timeoutQueue.length; i += 1) {
-                                  if (__timeoutQueue[i].id === id) { __timeoutQueue.splice(i, 1); return; }
+                                  if (__timeoutQueue[i].id === tid) { __timeoutQueue[i].cancelled = true; }
                               }
                           },
                           AUDIO_RESOLUTION_16: 16, AUDIO_RESOLUTION_32: 32, AUDIO_RESOLUTION_64: 64,
@@ -1089,6 +1199,25 @@ public final class TextScriptEngine {
                               if (n !== 16 && n !== 32 && n !== 64) { n = 64; }
                               return { left: __audioBuffer['left' + n], right: __audioBuffer['right' + n], average: __audioBuffer['average' + n] };
                           } };
+    // F703(S-39): engine.timeOfDay = [0,1] 하루 진행률(WE 네이티브 getter, dig-scenescript-v8 §4 — d.ts:2487).
+    // 부재 시 noopProxy 산술 0 으로 `engine.timeOfDay > sunRise/24` 가 영구 false(낮/밤 씬 영구 야간, 11씬).
+    // Date 기반 — captureDateEpochMillis 핀(무인자 Date 고정)을 그대로 따라가 캡처 결정성 유지.
+    Object.defineProperty(__engineState, 'timeOfDay', {
+        get: function() {
+            var d = new Date();
+            return (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000) / 86400;
+        },
+        set: function() {}   // 스크립트 대입은 무시(strict shims 라 setter 없으면 TypeError)
+    });
+    // F700(S-6): 프레임 절대시각 주입 — frametime 을 실델타(t − 직전 t)로 갱신한다. t > prev 일 때만 갱신:
+    // 공유 컨텍스트에서 같은 t 로 엔진마다 재호출돼도 두 번째부터는 물변화(0 리셋 방지). 시간 후퇴(루프/리셋)도 유지.
+    function __setRuntime(t) {
+        t = __num(t, 0);
+        var prev = __engineState.runtime;
+        if (t > prev) { __engineState.frametime = t - prev; __engineState.frameTime = t - prev; }
+        __engineState.runtime = t;
+        __pumpTimeouts();
+    }
     var engine = new Proxy(__engineState, {
         get: function(t, k) { if (k in t) { return t[k]; } return __noopProxy(); },
         set: function(t, k, v) { t[k] = v; return true; }
@@ -1110,6 +1239,17 @@ public final class TextScriptEngine {
     };
     Vec3.prototype.copy = function () { return new Vec3(this.x, this.y, this.z); };
     Vec3.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); };
+    // F705(S-41): d.ts Vec3 표면 보강 — 기존 add~length 뿐이라 reflect/normalize 호출이 TypeError 로 update 사망
+    // (실물 2955378002 바운스: reflect 82회/10씬, normalize 3씬). add 등과 동일하게 새 Vec3 반환(비파괴) 규약.
+    Vec3.prototype.normalize = function () {
+        var l = this.length();
+        return l > 0 ? new Vec3(this.x / l, this.y / l, this.z / l) : new Vec3(0, 0, 0);
+    };
+    Vec3.prototype.reflect = function (n) {   // 법선 n 에 대한 반사: v − 2·dot(v,n)·n (n 정규화 가정 — three.js 동일)
+        n = n || { x: 0, y: 0, z: 0 };
+        var d = 2 * (this.x * (n.x || 0) + this.y * (n.y || 0) + this.z * (n.z || 0));
+        return new Vec3(this.x - d * (n.x || 0), this.y - d * (n.y || 0), this.z - d * (n.z || 0));
+    };
     function Vec2(x, y) {
         if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; }
         else { this.x = x || 0; this.y = y || 0; }
@@ -1168,6 +1308,19 @@ public final class TextScriptEngine {
         mix: function(a, b, value) { return Number(a) + (Number(b) - Number(a)) * Number(value); },
         deg2rad: Math.PI / 180,
         rad2deg: 180 / Math.PI
+    };
+    // F706(S-42): WEVector 실심 — 공개 표면은 angleVector2/vectorAngle2 단 2개(d.ts:1200-1209).
+    // 종전 import 가 no-op Proxy(`var WEVector = __noopProxy();`)라 angleVector2 산술이 0 으로 붕괴(56회/10씬).
+    // 각도 단위는 도(degree): 유일한 실물 사용 3351163962 `45 + Math.floor(Math.random() * 4) * 90`
+    // (주석 "以90度为步长" = 90도 단위)이 도 단위를 증명 — WE 의 angles 관례(thisLayer.angles = 도)와도 일치.
+    var __WEVector = {
+        angleVector2: function(a) {
+            var r = (Number(a) || 0) * Math.PI / 180;
+            return new Vec2(Math.cos(r), Math.sin(r));
+        },
+        vectorAngle2: function(v) {
+            return Math.atan2(v ? (Number(v.y) || 0) : 0, v ? (Number(v.x) || 0) : 0) * 180 / Math.PI;
+        }
     };
     // 미디어 이벤트 클래스(실물 계약 — 필드는 193패키지 소비 역추출): 생성자는 기본값 채운 뒤
     // 주어진 필드를 전부 복사(실물 스크립트가 여러 이벤트를 한 객체에 합쳐 쓰는 union 소비 허용).
@@ -1262,6 +1415,50 @@ public final class TextScriptEngine {
         };
     }
     var __rootLayer = null;
+    // F707(S-32): Mat4 심 — 컬럼메이저 m[16](m[12]/m[13]/m[14] = 평행이동 x/y/z). 실물 판별식은
+    // `parent.getTransformMatrix().m[13] > engine.canvasSize.y/2`(MI/시계 패밀리, 12씬)처럼 평행이동 성분 소비.
+    // 로컬 TRS(angles = 도 단위, Rz·Ry·Rx 순 적용)를 부모 체인으로 합성해 월드행렬을 만든다.
+    function __mat4Identity() { return { m: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] }; }
+    function __mat4Multiply(a, b) {   // a·b (컬럼메이저)
+        var o = new Array(16);
+        for (var c = 0; c < 4; c += 1) {
+            for (var r = 0; r < 4; r += 1) {
+                o[c * 4 + r] = a.m[r] * b.m[c * 4] + a.m[4 + r] * b.m[c * 4 + 1]
+                             + a.m[8 + r] * b.m[c * 4 + 2] + a.m[12 + r] * b.m[c * 4 + 3];
+            }
+        }
+        return { m: o };
+    }
+    function __mat4FromTRS(origin, anglesDeg, scale) {
+        var d = Math.PI / 180;
+        var rx = (anglesDeg && anglesDeg.x || 0) * d, ry = (anglesDeg && anglesDeg.y || 0) * d,
+            rz = (anglesDeg && anglesDeg.z || 0) * d;
+        var cx = Math.cos(rx), sx = Math.sin(rx), cy = Math.cos(ry), sy = Math.sin(ry),
+            cz = Math.cos(rz), sz = Math.sin(rz);
+        var kx = scale && scale.x || 0, ky = scale && scale.y || 0, kz = scale && scale.z || 0;
+        var tx = origin && origin.x || 0, ty = origin && origin.y || 0, tz = origin && origin.z || 0;
+        // R = Rz·Ry·Rx 전개(컬럼 0..2 = 회전·스케일된 기저, m[12..14] = 평행이동):
+        //  [ cz·cy,  cz·sy·sx − sz·cx,  cz·sy·cx + sz·sx ]
+        //  [ sz·cy,  sz·sy·sx + cz·cx,  sz·sy·cx − cz·sx ]
+        //  [  −sy,         cy·sx,               cy·cx      ]
+        return { m: [
+            cz * cy * kx, sz * cy * kx, -sy * kx, 0,
+            (cz * sy * sx - sz * cx) * ky, (sz * sy * sx + cz * cx) * ky, cy * sx * ky, 0,
+            (cz * sy * cx + sz * sx) * kz, (sz * sy * cx - cz * sx) * kz, cy * cx * kz, 0,
+            tx, ty, tz, 1
+        ] };
+    }
+    function __layerWorldMatrix(layer) {
+        // 부모 체인 수집(루트 자기참조 순환은 제외) 후 바깥쪽부터 곱한다: world = L루트…L부모·L로컬.
+        var chain = [];
+        var p = layer.parent, depth = 0;
+        while (p && p !== p.parent && depth < 32) { chain.push(p); p = p.parent; depth += 1; }
+        var m = __mat4Identity();
+        for (var i = chain.length - 1; i >= 0; i -= 1) {
+            m = __mat4Multiply(m, __mat4FromTRS(chain[i].origin, chain[i].angles, chain[i].scale));
+        }
+        return __mat4Multiply(m, __mat4FromTRS(layer.origin, layer.angles, layer.scale));
+    }
     function __makeLayer() {
         var tex = __makeTexture();
         var animLayer = __makeAnimationLayer();
@@ -1297,6 +1494,11 @@ public final class TextScriptEngine {
             setAlpha: function(v) { this.alpha = Number(v) || 0; return this; },
             getText: function() { return this.text; },
             setText: function(v) { this.text = String(v || ''); return this; },
+            // F707(S-32)/F708(S-33): ILayer 변환행렬(부모 체인 합성 월드)과 애니메이션 레이어 수 —
+            // 미바인딩 시 `parent.getTransformMatrix().m[13]` 류가 TypeError 로 init/update 사망(12씬/7씬).
+            getTransformMatrix: function() { return __layerWorldMatrix(this); },
+            animationLayerCount: 0,   // __setSceneLayers 가 디스크립터 값으로 덮어씀(F708)
+            getAnimationLayerCount: function() { return this.animationLayerCount; },
             getEffect: function() { return __noopProxy(); }
         };
         return layer;
@@ -1322,6 +1524,8 @@ public final class TextScriptEngine {
             getAnimation: function() { return __makeTextureAnimation(); },
             getAnimationLayer: function() { return __makeAnimationLayer(); },
             createAnimationLayer: function() { return __makeAnimationLayer(); },
+            getTransformMatrix: function() { return __mat4Identity(); },   // F707: 루트는 항등
+            getAnimationLayerCount: function() { return 0; },              // F708
             getEffect: function() { return __noopProxy(); }
         };
         root.parent = root;
@@ -1429,7 +1633,22 @@ public final class TextScriptEngine {
         l.size = __vec2FromArray(d.size, [1, 1]);
         l.solid = !!d.solid;
         l.text = String(d.text || '');
+        l.__wapleId = (typeof d.id === 'number') ? d.id : 0;              // F711: parent 체인 배선용
+        l.__wapleParentId = (typeof d.parentId === 'number') ? d.parentId : null;
+        l.animationLayerCount = (typeof d.animationLayerCount === 'number') ? d.animationLayerCount : 0;   // F708
         return l;
+    }
+    // F711(S-36): getParent() 가 항상 root 였던 결함 — 디스크립터의 id/parentId(scene.json objects id 체계)로
+    // 실 부모를 배선한다. 부모 id 가 디스크립터 목록에 없으면(비가시 그룹 등) parent=null 유지 → root 폴터(무회귀).
+    function __wireLayerParents(layers) {
+        var byId = {};
+        for (var i = 0; i < layers.length; i += 1) {
+            if (layers[i].__wapleId) { byId[layers[i].__wapleId] = layers[i]; }
+        }
+        for (i = 0; i < layers.length; i += 1) {
+            var pid = layers[i].__wapleParentId;
+            if (pid !== null && byId[pid]) { layers[i].parent = byId[pid]; }
+        }
     }
     __rootLayer = __makeRootLayer();
     var thisLayer = __makeLayer();
@@ -1475,17 +1694,87 @@ public final class TextScriptEngine {
             layers.push(__layerFromDescriptor(descriptors[i]));
         }
         if (layers.length > 0) {
+            __wireLayerParents(layers);   // F711
             thisScene.layers = layers;
             thisLayer = layers[0];
             thisObject = thisLayer;
         }
     }
-    function __wapleLayerForScript(name) {
+    // F710(S-35): thisScene.getLayer 정적 스냅샷 결함 — 네이티브가 프레임마다 최신 디스크립터를 밀어 넣는다.
+    // 스크립트가 쥔 참조(getLayer 반환 객체)가 살아있도록 **필드 제자리 갱신**(origin/scale/angles/size 의
+    // Vec 객체 또한 성분 대입 — `var o = layer.origin` 보관 참조까지 라이브).
+    function __assignVec(v, a) {
+        if (!a) { return; }
+        v.x = __num(a[0], v.x);
+        v.y = __num(a[1], v.y);
+        if (a.length > 2) { v.z = __num(a[2], v.z); }
+    }
+    function __updateSceneLayers(descriptors) {
+        if (!descriptors || !descriptors.length) { return; }
+        var n = Math.min(descriptors.length, thisScene.layers.length);
+        for (var i = 0; i < n; i += 1) {
+            var d = descriptors[i], l = thisScene.layers[i];
+            if (!d || !l) { continue; }
+            l.visible = d.visible !== false;
+            l.alpha = __num(d.alpha, l.alpha);
+            __assignVec(l.origin, d.origin);
+            __assignVec(l.scale, d.scale);
+            __assignVec(l.angles, d.angles);
+            __assignVec(l.size, d.size);
+            l.text = String(d.text || '');
+            l.solid = !!d.solid;
+        }
+    }
+    // F709(S-34): thisLayer = 스크립트가 붙은 오브젝트 자체(WE 계약) — 디스크립터 인덱스가 오면 그 레이어로
+    // 직결한다. 종전 이름 첫 매치는 중복명(498레이어)/묪명(82레이어)에서 오바인딩(묪명은 layers[0] 으로).
+    function __wapleLayerForScript(name, index) {
+        if (typeof index === 'number' && index >= 0 && index < thisScene.layers.length) {
+            return thisScene.layers[index];
+        }
         if (typeof name !== 'string' || name.length === 0) { return thisLayer; }
         return thisScene.getLayer(name);
     }
     var shared = { camera: thisScene.getCameraTransforms(), miTextContainerScale: new Vec2(1, 1) };
-    var input = __noopProxy();
+    // F701(S-7): localStorage 전역 실심 — WE 계약 get/set/delete/clear + LOCATION_GLOBAL/SCREEN 상수
+    // (d.ts:2377, 바이너리 LocalStorageSet/Get/Delete/Clear·LSKV0001). 부재 시 init 첫행 `localStorage.get(...)`
+    // 이 ReferenceError 로 init 전체를 죽여 shared.* 초기화가 연쇄 사망했다(31씬, miDragable 드래그 패밀리).
+    // Waple 은 컨텍스트 수명의 인메모리 저장소(디스크 영속·subscribe 통지원 없음 — mount 주기 내 왕복만 보장).
+    var localStorage = (function() {
+        var store = {};
+        return {
+            LOCATION_GLOBAL: 'global',
+            LOCATION_SCREEN: 'screen',
+            get: function(key, location) {
+                var k = String(key);
+                return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : undefined;
+            },
+            set: function(key, value, location) { store[String(key)] = value; },
+            delete: function(key, location) { delete store[String(key)]; },
+            clear: function(location) { store = {}; },
+            subscribe: function(key, cb) { return function() {}; }   // 통지원 부재 — no-op 안전 폴터
+        };
+    })();
+    // F713(S-31): input 폴터 실심 — 종전 __noopProxy() 는 truthy 라 실물 가드(`if (input.cursorWorldPosition)`)
+    // 통과 후 산술이 0/NaN 으로 붕괴해 마우스 팔로우 레이어가 굳었다(29씬). 네이티브가 __setCursorState 로
+    // 제자리 갱신(참조 보존); 미주입(헤드리스/캡처)이면 0/거짓 유지. d.ts:2314-2329 — x/y 만 유효.
+    // 알려진 키(cursorWorldPosition/cursorScreenPosition/cursorLeftDown)는 실값, 그 외 멤버는 engine 과
+    // 동일하게 no-op Proxy 흡수(실심화로 미지 멤버 접근이 TypeError 가 되는 회귀 방지).
+    var __inputState = {
+        cursorWorldPosition: new Vec3(0, 0, 0),
+        cursorScreenPosition: new Vec3(0, 0, 0),
+        cursorLeftDown: false
+    };
+    var input = new Proxy(__inputState, {
+        get: function(t, k) { if (k in t) { return t[k]; } return __noopProxy(); },
+        set: function(t, k, v) { t[k] = v; return true; }
+    });
+    function __setCursorState(wx, wy, sx, sy, down) {
+        __inputState.cursorWorldPosition.x = __num(wx, 0);
+        __inputState.cursorWorldPosition.y = __num(wy, 0);
+        __inputState.cursorScreenPosition.x = __num(sx, 0);
+        __inputState.cursorScreenPosition.y = __num(sy, 0);
+        __inputState.cursorLeftDown = !!down;
+    }
     var audioBuffer = __audioBuffer;
     var g_AudioSpectrum16Left = __audioBuffer.left16;
     var g_AudioSpectrum16Right = __audioBuffer.right16;
