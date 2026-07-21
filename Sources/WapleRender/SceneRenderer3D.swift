@@ -337,8 +337,12 @@ extension SceneRenderer {
             let effH = layer.isFrameBuffer ? Int(max(1, projH)) : texH
             var effects: [EffectGPU] = []
             for eff in layer.effects {
+                // F733(S-5 잔여): compositeImageTextures 전달 — 2D 경로(F720, SceneRendererResources:235)와
+                // 동형. 생략 시 기본 인자 [:] 로 `_rt_imageLayerComposite_<id>` 슬롯이 베이스 텍스처 치환 없이
+                // 흰색 1×1 폴터로 바인드돼 blend/clipping_mask 계열 콘텐츠가 소실된다.
                 if let translated = buildTranslatedEffect(eff, package: package, device: device,
-                                                          texW: effW, texH: effH) {
+                                                          texW: effW, texH: effH,
+                                                          compositeImageTextures: compositeImageTextures) {
                     effects.append(translated)
                 } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
                     effects.append(handPort)
@@ -1261,18 +1265,44 @@ extension SceneRenderer {
     }
 
     /// 파티클 스냅샷 → 월드공간 카메라-페이싱 쿼드 정점(정점당 9 float: world.xyz, uv, rgba).
-    /// 월드 중심 = m · 파티클 로컬 pos. 반경 = 0.5·size·(m 열0 길이) — in-plane 스케일만 크기에 반영,
-    /// z 스케일(예: speedline 0.6)은 위치에 이미 m 으로 반영됨. 세로 = 반경·texRatio(WE ComputeParticlePosition).
+    /// 월드 중심 = m · 파티클 로컬 pos(F731: def.flags worldspace 시 m 우회 직결). 반경 = 0.5·size·(m 열0 길이)
+    /// — in-plane 스케일만 크기에 반영, z 스케일(예: speedline 0.6)은 위치에 이미 m 으로 반영됨.
+    /// 세로 = 반경·texRatio(WE ComputeParticlePosition). 쿼드 배향 = def.orientation(F732).
     /// ponytail: 트레일(spritetrail/rope)은 3D 리본 미구현 — 헤드 위치 쿼드로 폴백(파티클 등장은 보장,
     /// 리본 연결 없음). 실물 필요 시 appendRibbon 을 월드공간으로 이식.
     func particle3DVertices(_ snapshot: [Particle], _ sys: GPUParticleSystem,
                             m: simd_float4x4, right: SIMD3<Float>, up: SIMD3<Float>) -> [Float] {
         var verts: [Float] = []
         verts.reserveCapacity(snapshot.count * 54)
-        let colScale = simd_length(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z))
+        // F731(S-23): def.flags bit1(worldspace) — 파티클 pos 가 이미 월드 좌표라 오브젝트 변환 m 을
+        // 우회해 직결한다(크기도 월드 단위 → colScale=1). bit4(perspective)는 3D 경로가 viewProj 원근
+        // 투영을 내재해(멀수록 작아짐이 자동) 추가 z-스케일이면 이중 원근 — 여기선 의도적으로 미적용
+        // (실소비처는 직교 2D 경로, 오역보다 폴터).
+        let worldspace = (sys.def.flags & 1) != 0
+        let colScale = worldspace ? Float(1) : simd_length(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z))
+        // F732(S-26): def.orientation — screen(기본)은 전달된 right/up 그대로(기존 폴터 비트동일).
+        // upright/fixed(axis) 는 축 고정 빌보드: 쿼드 up 을 축에 고정하고 시선에 수직인 right 로 전개
+        // (upright = 축 (0,1,0) 특례). viewDir = cross(up, right) — right=cross(fwd,refUp)·up=cross(right,fwd)
+        // 의 삼중곱 정리로 fwd 복원. 시선∥축 퇴화 시 screen 폴터(NaN 방지 — 오역보다 폴터).
+        var axisRight = right, axisUp = up
+        let lockAxis: SIMD3<Float>?
+        switch sys.def.orientation {
+        case .screen: lockAxis = nil
+        case .upright: lockAxis = SIMD3(0, 1, 0)
+        case .fixed(let a): lockAxis = SIMD3(a.x, a.y, a.z)
+        }
+        if let ax = lockAxis, simd_length_squared(ax) > 1e-12 {
+            let an = simd_normalize(ax)
+            let r = simd_cross(simd_cross(up, right), an)
+            if simd_length_squared(r) > 1e-8 { axisRight = simd_normalize(r); axisUp = an }
+        }
         for p in snapshot {
-            let wp = m * SIMD4<Float>(p.pos.x, p.pos.y, p.pos.z, 1)
-            let center = SIMD3(wp.x, wp.y, wp.z)
+            let center: SIMD3<Float>
+            if worldspace { center = p.pos }
+            else {
+                let wp = m * SIMD4<Float>(p.pos.x, p.pos.y, p.pos.z, 1)
+                center = SIMD3(wp.x, wp.y, wp.z)
+            }
             // UV + 종횡비: 스프라이트시트면 현재 프레임 서브렉트(2D appendQuad 미러), 아니면 전체 텍스처.
             var uv: [(Float, Float)] = [(0, 0), (1, 0), (1, 1), (0, 1)]
             var ratio = sys.texRatio
@@ -1280,6 +1310,14 @@ extension SceneRenderer {
                 let fc = sys.frames.count
                 let fi: Int
                 if p.frame >= 0 { fi = sheetFrameIndex(sequence: p.frame, frameCount: fc, mirror: sys.mapSeqMirror) }
+                else if sys.def.animationMode == .sequence {
+                    // F730(S-22): animationmode=sequence — 수명에 걸쳐 시트 전체 순차 재생 ×sequencemultiplier
+                    // (3=수명 내 3회전, 0.5=절반까지). 수명 진행률 t×fc×rate 를 sheetFrameIndex 로 루프 폴드
+                    // (sequence 의 폴드는 순환 — mapsequence 전용 mirror 와 무관). 비유한 rate/수명은 0/ε 폴터.
+                    let t = p.age / max(1e-4, p.lifetime)
+                    let rate = sys.def.sequenceMultiplier.isFinite ? max(0, sys.def.sequenceMultiplier) : 0
+                    fi = sheetFrameIndex(sequence: t * Float(fc) * rate, frameCount: fc, mirror: false)
+                }
                 else { fi = Int(p.age / max(0.016, sys.frames[0].time)) % fc }
                 let fr = sys.frames[max(0, min(fc - 1, fi))]
                 let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
@@ -1295,10 +1333,11 @@ extension SceneRenderer {
             let hw = p.size * colScale * 0.5
             let hh = hw * ratio
             guard hw > 0, hw.isFinite, hh.isFinite else { continue }
-            // 파티클 롤(rotation.z)을 뷰 축에 적용(encodeBillboard angleZ 규약). UV 상단원점: 상단=+up.
+            // 파티클 롤(rotation.z)을 배향 축에 적용(encodeBillboard angleZ 규약). UV 상단원점: 상단=+up.
+            // F732: screen 은 전달 축(right/up)과 동치라 비트동일, upright/fixed 는 축 고정 평면에서 롤.
             let ca = cos(p.rotation.z), sa = sin(p.rotation.z)
-            let rRight = right * ca + up * sa
-            let rUp = -right * sa + up * ca
+            let rRight = axisRight * ca + axisUp * sa
+            let rUp = -axisRight * sa + axisUp * ca
             let r = rRight * hw, u = rUp * hh
             let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
             let cr = p.color.x, cg = p.color.y, cb = p.color.z, al = p.alpha
