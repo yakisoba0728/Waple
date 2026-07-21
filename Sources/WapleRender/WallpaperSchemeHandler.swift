@@ -128,8 +128,10 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         let target = requestURL ?? URL(string: "waple-asset://wallpaper/")!
         // 감사 H: main.sync 왕복이면 스트리밍 처리량이 메인 큐 응답성에 결합되므로 ioQueue 에서 직접
         // 전달한다. 이 함수는 태스크당 직렬로 진행돼 전달 순서는 유지된다.
-        // F575: live 확인과 didReceive 호출은 withLiveTask 로 원자화 — 확인과 호출 사이에
-        // webView(_:stop:) 이 id 를 제거하면 stop 된 태스크를 건드리는 계약 위반(예외)이 된다.
+        // F590: live 확인과 didReceive 호출을 한 락 구간에서 원자화한 F575 는 폐기 — WebKit 호출이
+        // 락 안에서 블록되는 동안 메인의 isTaskLive(didFinish 경로)가 같은 락을 기다리는 교착이
+        // 실재했다(RealWebGroundTruthTests 에서 샘플링으로 확인). stop 과 호출의 잔여 경합(F-28)은
+        // 청크 루프의 isTaskLive 재확인으로 창을 좁히는 선에서 수용한다.
         let response = HTTPURLResponse(
             url: target, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers
         )!
@@ -173,13 +175,15 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         return live
     }
 
-    /// F575: live 확인과 태스크 메서드 호출을 한 락 구간에서 원자화. webView(_:stop:) 도 같은 락으로
-    /// id 를 제거하므로, 락 획득 시 live 면 호출 완료까지 stop 의 제거는 대기한다(계약 위반 방지).
+    /// F590: live 확인과 태스크 메서드 호출은 락 밖에서 한다. 락을 쥔 채 WebKit 을 호출하면(F575)
+    /// WebKit 남부 블록 중 메인 스레드가 isTaskLive 에서 같은 락을 기다려 교착된다. 확인-호출 사이에
+    /// stop 이 끼는 창(F-28)은 마이크로초 단위라, 실재한 교착보다 이론적 경합을 택한다.
     private func withLiveTask(_ id: ObjectIdentifier, _ body: () -> Void) -> Bool {
         lock.lock()
-        guard activeTasks.contains(id) else { lock.unlock(); return false }
-        body()
+        let live = activeTasks.contains(id)
         lock.unlock()
+        guard live else { return false }
+        body()
         return true
     }
 
