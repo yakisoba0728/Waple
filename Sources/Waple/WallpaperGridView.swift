@@ -5,13 +5,22 @@ import WapleCore
 import WapleLibrary
 
 /// 미리보기 이미지 디코드 캐시(URL→NSImage). body 재평가마다의 반복 디스크 I/O 제거.
-private enum PreviewImageCache {
+/// F500: 최초 로드도 body 평가 중 메인 동기 읽기 대신 백그라운드 디코드로(느린 디스크에서의 스크롤
+/// 히치 방지) — cached() 는 조회만, load() 가 디코드+캐시를 담당한다. internal: 단위 테스트 대상.
+enum PreviewImageCache {
     private static let cache = NSCache<NSURL, NSImage>()
-    static func image(_ url: URL) -> NSImage? {
-        if let c = cache.object(forKey: url as NSURL) { return c }
-        guard let img = NSImage(contentsOf: url) else { return nil }
-        cache.setObject(img, forKey: url as NSURL)
-        return img
+
+    /// 캐시 히트만 동기 반환(디스크 읽기 없음 — body 평가 중 호출 안전).
+    static func cached(_ url: URL) -> NSImage? { cache.object(forKey: url as NSURL) }
+
+    /// 백그라운드 디코드 + 캐시. 히트면 즉시 반환, 실패(읽기 불가 등) → nil.
+    static func load(_ url: URL) async -> NSImage? {
+        if let hit = cached(url) { return hit }
+        return await Task.detached(priority: .userInitiated) {
+            guard let img = NSImage(contentsOf: url) else { return nil }
+            cache.setObject(img, forKey: url as NSURL)
+            return img
+        }.value
     }
 }
 
@@ -233,10 +242,9 @@ struct WallpaperGridView: View {
         if let url = viewModel.previewURL(for: entry) {
             if PreviewMedia.isAnimated(url) {
                 AnimatedPreviewView(url: url, animating: animating).scaledToFill()
-            } else if let image = PreviewImageCache.image(url) {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
-                placeholderThumb
+                // F500: 정지 프리뷰는 비동기 로드 뷰 — body 평가 중 메인 동기 디스크 읽기 제거.
+                StillPreviewView(url: url)
             }
         } else {
             placeholderThumb
@@ -338,5 +346,36 @@ enum ImportPanel {
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         viewModel.routeImport(url)
         return true
+    }
+}
+
+
+/// 정지 프리뷰 타일(F500) — 캐시 히트는 첫 평가에 즉시 표시(스크롤 깜빡임 방지), 미스는
+/// 백그라운드 디코드(load) 후 갱신. 종전엔 body 평가 중 메인 스레드에서 NSImage(contentsOf:) 로
+/// 동기 디스크 읽기를 해 새 타일마다 스크롤 히치가 날 수 있었다.
+private struct StillPreviewView: View {
+    let url: URL
+    @State private var image: NSImage?
+
+    init(url: URL) {
+        self.url = url
+        _image = State(initialValue: PreviewImageCache.cached(url))   // NSCache 조회만 — 디스크 읽기 없음
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.3))
+                    Image(systemName: "photo").foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .task(id: url) {
+            guard image == nil else { return }
+            image = await PreviewImageCache.load(url)
+        }
     }
 }

@@ -73,7 +73,10 @@ struct SelectionPanelView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .keyboardShortcut(.defaultAction)
+                    // F503: .keyboardShortcut(.defaultAction) 제거 — 창 전체에 걸리는 바로가기라
+                    // 패널 표시 중 검색 필드 등 무관한 포커스에서 Enter 를 쳐도 포커스된 엔트리가
+                    // 적용(전체 리마운트)되는 오발동 풋건이 있었다. 적용은 더블클릭·컨텍스트 메뉴·
+                    // 이 버튼 클릭으로 충분하다(비파괴적이라 low 판단이나 오발동 방지가 낫다고 판단).
                     .disabled(!supported)
 
                     HStack(spacing: 8) {

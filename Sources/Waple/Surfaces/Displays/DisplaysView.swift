@@ -3,6 +3,18 @@ import AppKit
 import UniformTypeIdentifiers
 import WapleLibrary
 
+/// F498: 썸네일 디코드 캐시 — body 재평가(드래그 호버의 dropTargetKey 변경 등)마다 디스크에서
+/// 재로드하지 않게 한다. WallpaperGridView.PreviewImageCache 는 file-private 라 별도 최소 캐시.
+private enum DisplaysImageCache {
+    private static let cache = NSCache<NSURL, NSImage>()
+    static func image(_ url: URL) -> NSImage? {
+        if let c = cache.object(forKey: url as NSURL) { return c }
+        guard let img = NSImage(contentsOf: url) else { return nil }
+        cache.setObject(img, forKey: url as NSURL)
+        return img
+    }
+}
+
 /// NSScreen.frames(하단 원점) → 컨테이너 좌표(상단 원점) 비례 배치. 순수 함수 — 유닛 테스트 대상.
 enum DisplayDiagramLayout {
     static func rects(screenFrames: [CGRect], container: CGSize, padding: CGFloat) -> [CGRect] {
@@ -33,6 +45,9 @@ struct DisplaysView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selectedScreenKey: String?
     @State private var dropTargetKey: String?
+    /// F497: 시트가 열린 동안의 모니터 구성 변경을 반영하기 위한 재평가 트리거 — screens /
+    /// screenFrames() 는 body 재평가 시에만 다시 읽힌다.
+    @State private var screensGeneration = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,6 +59,7 @@ struct DisplaysView: View {
             .padding(14)
             Divider()
             GeometryReader { geo in
+                let _ = screensGeneration   // F497: 변경 시 재평가되도록 body 가 의존
                 let screens = viewModel.screens
                 let rects = DisplayDiagramLayout.rects(screenFrames: screenFrames(),
                                                        container: geo.size, padding: 28)
@@ -61,6 +77,10 @@ struct DisplaysView: View {
         }
         .frame(minWidth: Metrics.displaysMin.width, minHeight: Metrics.displaysMin.height)
         .onAppear { if selectedScreenKey == nil { selectedScreenKey = viewModel.screens.first?.key } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            // F497: AppDelegate 의 rebuild 가 0.5초 디바운스로 뒤따르므로, 그 직후에 읽도록 살짝 늦게 갱신.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { screensGeneration += 1 }
+        }
     }
 
     @ViewBuilder
@@ -115,7 +135,7 @@ struct DisplaysView: View {
     private func thumbnail(for entry: LibraryEntry?, dimmed: Bool = false) -> some View {
         let resolved = entry ?? viewModel.globalEntry
         Group {
-            if let resolved, let url = viewModel.previewURL(for: resolved), let img = NSImage(contentsOf: url) {
+            if let resolved, let url = viewModel.previewURL(for: resolved), let img = DisplaysImageCache.image(url) {
                 Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
             } else {
                 ZStack {
@@ -187,7 +207,7 @@ struct DisplaysView: View {
 
     @ViewBuilder
     private func railThumbnail(_ entry: LibraryEntry) -> some View {
-        if let url = viewModel.previewURL(for: entry), let img = NSImage(contentsOf: url) {
+        if let url = viewModel.previewURL(for: entry), let img = DisplaysImageCache.image(url) {
             Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
         } else {
             ZStack {

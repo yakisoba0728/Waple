@@ -45,10 +45,11 @@ struct SettingsView: View {
         Section {
             Toggle("자동 전환",
                    isOn: Binding(get: { vm.playlistEnabled }, set: { vm.setPlaylistEnabled($0) }))
-            Picker("전환 간격",
-                   selection: Binding(get: { vm.playlistInterval }, set: { vm.setPlaylistInterval($0) })) {
-                ForEach(SettingsPresentation.playlistIntervalMinutes, id: \.self) { Text("\($0)분").tag($0) }
-            }
+            // F490: NowPlayingBar 팝오버(Stepper 1...240)와 같은 저장소를 쓰는데 Picker 가
+            // [5,15,30,60]만 제공해 그 외 값이면 선택 표시가 비어 보였다 — Stepper 로 정합.
+            Stepper("전환 간격: \(vm.playlistInterval)분",
+                    value: Binding(get: { vm.playlistInterval }, set: { vm.setPlaylistInterval($0) }),
+                    in: 1...240)
             .disabled(!vm.playlistEnabled)
             Toggle("셔플(무작위 순서)",
                    isOn: Binding(get: { vm.playlistShuffle }, set: { vm.setPlaylistShuffle($0) }))
