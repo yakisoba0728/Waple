@@ -334,7 +334,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func applyCurrentSelection() -> Bool {
         if let folder = currentFolderURL {
-            return apply(folderURL: folder)
+            if apply(folderURL: folder) { return true }
+            // F482: 전역 마운트 실패(스테일 currentFolderURL — 폴더 외부 삭제/이동) 시 화면별 할당
+            // 폴백. 종전엔 restoreLastWallpaper(F032)에만 있어 할당 변경·비디오 설정·베이스 에셋·
+            // 화면 변경 경로는 정상인 모니터별 할당까지 전부 마운트되지 않았다.
+            // 단, 마운트 가능한 할당이 하나도 없으면 폴백하지 않는다 — 빈 슬롯 성공이 살아있는
+            // 렌더러까지 teardown 하는 역효과를 막는다(F035/F036 롤백 보호 유지).
+            guard resolvedScreenProjectSlots(global: nil).contains(where: { $0.project != nil }) else { return false }
+            return applyResolved(global: nil, folderURL: nil)
         }
         return applyResolved(global: nil, folderURL: nil)
     }
@@ -386,14 +393,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ScreenSaverController.syncVideoPath(for: screenProjects.first { $0.project.type == .video }?.project)
             if pauseGate.isPaused { renderers.forEach { $0.pause() } }  // 어떤 사유든 정지 중 교체된 렌더러도 정지 유지
             scheduleDesktopStillSync()  // 정적 배경 동기화(옵션, 기본 꺼짐 — 내부에서 가드)
-            if let project {
-                pushRecent(project.id)  // 최근 배경 목록 갱신
+            if project != nil {
+                // F480: 최근 배경은 파서 id(project.id)가 아니라 라이브러리 엔트리 id 여야 한다 —
+                // F194 접미 유일화 엔트리(x-2)는 둘이 달라 menuNeedsUpdate 가 무접미 id 의 다른
+                // 엔트리를 집거나(원본 제거 시) 못 찾았다. 마운트 폴더로 엔트리 id 를 역탐색한다.
+                pushRecent(recentEntryId(mountedFolder: folderURL))
             } else {
                 // F029: 전역 선택 없이 화면별 할당만으로 적용하는(공식 지원되는) 모드에서는
                 // pushRecent(nil) 이 항상 no-op 이라 실제 적용된 배경이 '최근 배경' 메뉴에 전혀
                 // 쌓이지 않았다 — 화면별로 실제 마운트된 프로젝트 id 를 대신 반영한다(중복은
                 // pushRecent/RecentWallpapers.push 자체가 제거).
-                screenProjects.forEach { pushRecent($0.project.id) }
+                // F480: 이 분기는 global == nil 이라 마운트된 프로젝트는 전부 화면 할당에서 왔다 —
+                // 파서 id 대신 할당 스토어의 엔트리 id 를 그대로 push(접미 유일화 정합).
+                screenProjects.forEach { pushRecent(monitorStore.assignment(for: $0.screenKey)) }
             }
             baseAssetsWarningGate.presentIfNeeded(
                 after: result,
@@ -457,7 +469,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 빈 배열을 붙잡아 무력화된다. 살아있는 renderers 를 그대로 넘겨 applyResolved → RendererSwap 이
         // 성공했을 때만 이전 렌더러를 정리하고, 실패하면 보존하게 한다(옛 창은 rebuild 로 사라지지만, 다음
         // 재시도가 성공할 때까지 renderers 배열 자체는 유효한 객체를 유지 — 자원 정리를 성공 시점까지 지연).
-        activeVideoProjectIds = []
+        // F487: activeVideoProjectIds 도 여기서 선-소거하지 않는다 — 재적용 실패 시 롤백으로 살아있는
+        // 비디오 렌더러의 음량/배속 타깃(VideoSettingsTarget.projectIds)이 사라져 하단 바 조절이
+        // 묵묵히 무시되는 상태가 됐다. 성공 시 applyResolved 가 screenProjects 기준으로 항상 재계산하므로 불필요.
         desktopController.rebuild()
         _ = applyCurrentSelection()
 
@@ -470,7 +484,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func schedulePlaylistTimer() {
         playlistTimer?.invalidate()
         playlistTimer = nil
-        guard PlaylistScheduling.shouldRun(enabled: playlistStore.enabled, ids: playlistStore.ids) else { return }
+        // F483: 후보가 1개뿐이면 타이머를 걸지 않는다 — 매 간격 같은 배경 리마운트만 발생한다
+        // (수동 버튼/트레이의 canAdvance 가드와 대칭).
+        guard PlaylistScheduling.shouldScheduleTimer(enabled: playlistStore.enabled, ids: playlistStore.ids) else { return }
         let interval = PlaylistScheduling.intervalSeconds(minutes: playlistStore.intervalMinutes)
         playlistTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self, PlaylistScheduling.shouldAdvanceNow(isPaused: self.pauseGate.isPaused) else { return }
@@ -597,7 +613,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 현재 배경에서 화면별 정지 이미지를 만들어 데스크탑 배경으로 지정(수동 1회, F046: 모니터별 할당
     /// 인지 — 화면마다 실제로 표시 중인 프로젝트에서 스틸을 뽑아 그 화면에만 적용한다).
     /// 배경 창은 아이콘 레벨 아래라, 라이브 창이 떠 있는 동안 정지 배경은 그 뒤의 폴백 레이어다.
-    /// 원본 보존/복원은 자동 동기화(작업 1) 전용 — 수동 설정은 사용자의 명시적 1회 액션이라 백업 없음.
+    /// 원본 백업은 F042 부터 수동 경로도 남기지만(이후 동기화가 켜질 때의 자기오염 방지용), 동기화
+    /// OFF 상태에서는 종료 시 복원하지 않는다(F481) — 수동 설정은 사용자의 명시적 1회 액션이라 유지.
     @objc private func setStillWallpaper() {
         // F043: currentFolderURL(전역 선택)만 보면 화면별 할당-전용 모드(전역 nil)에서 배경이 실제로
         // 표시 중인데도 "없음" 오탐이 난다 — 실제 마운트된 렌더러 존재 여부로 판정.
@@ -641,25 +658,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 메인에서 미리 끝내 두고 넘어온 값을 쓴다(AppKit 뷰 API 는 메인 스레드 전용). globalFolderURL 도
     /// 호출부가 메인에서 스냅샷해 넘긴다(currentFolderURL 을 백그라운드에서 직접 읽는 경합 방지).
     private func generateStillImages(globalFolderURL: URL?) -> [String: URL] {
-        let screenSizes = DispatchQueue.main.sync {
-            Dictionary(uniqueKeysWithValues: NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) })
+        // NSScreen 열거·backingScaleFactor 조회는 AppKit 이라 메인에서 미리 캡처(F486: 씬 캡처가
+        // 백그라운드로 남려가면서 NSScreen 접근은 전부 이 시점으로 모았다).
+        let (screenSizes, mainScale) = DispatchQueue.main.sync {
+            (Dictionary(uniqueKeysWithValues: NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) }),
+             NSScreen.main?.backingScaleFactor ?? 2)
         }
-        let global = globalFolderURL.flatMap { projectForMount(folderURL: $0) }
-        let slots = DispatchQueue.main.sync { resolvedScreenProjectSlots(global: global) }
+        // F485: 전역 프리셋 해석(projectForMount → PresetResolver → folderForEntry → LibraryStore.entries
+        // 읽기 + stale 북마크 시 entries 갱신·save)을 백그라운드에서 직접 치면 락 없는 스토어 경합이다
+        // (F047 불완전 — 화면별 슬롯만 main.sync 였다). 슬롯 해석과 같은 main.sync 에서 함께 해석해
+        // 스토어 접근을 전부 메인에 모은다.
+        let (_, slots) = DispatchQueue.main.sync { () -> (WallpaperProject?, [(key: String, project: WallpaperProject?)]) in
+            let g = globalFolderURL.flatMap { self.projectForMount(folderURL: $0) }
+            return (g, self.resolvedScreenProjectSlots(global: g))
+        }
         let stillDir = stillDirectory()
         try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
 
-        var cache: [String: URL?] = [:]   // projectId → 생성 결과(실패도 캐시해 같은 화면 반복 재시도 방지)
+        var cache: [String: URL?] = [:]   // 스틸 캐시 키 → 생성 결과(실패도 캐시해 같은 화면 반복 재시도 방지)
         var result: [String: URL] = [:]
         for (key, project) in slots {
-            guard let project else { continue }
+            guard let project, let source = StillWallpaper.source(for: project) else { continue }
+            let size = screenSizes[key] ?? screenSizes.values.first ?? CGSize(width: 1920, height: 1080)
+            // F484: 씬 캡처는 요청 크기로 렌더되므로 캐시 키에 크기를 포함한다 — 종전 id 전용 키라
+            // 해상도/종횡비가 다른 두 모니터에 같은 씬이 할당되면 첫 화면 크기 스틸이 재사용됐다.
+            // (비디오 프레임·preview 는 크기 무관 — 기존 id 키 유지.)
+            let cacheKey = StillWallpaper.cacheKey(projectId: project.id, size: size,
+                                                   sizeDependent: StillWallpaper.isSizeDependent(source))
             let url: URL?
-            if let cached = cache[project.id] {
+            if let cached = cache[cacheKey] {
                 url = cached
             } else {
-                let size = screenSizes[key] ?? NSScreen.main?.frame.size ?? CGSize(width: 1920, height: 1080)
-                url = stillImage(for: project, size: size, stillDir: stillDir)
-                cache[project.id] = url
+                url = stillImage(for: project, source: source, size: size, scale: mainScale, stillDir: stillDir)
+                cache[cacheKey] = url
             }
             if let url { result[key] = url }
         }
@@ -685,13 +716,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return Array(zip(screens.map { $0.screenKey }, slots))
     }
 
-    /// 프로젝트 하나의 정지 이미지(공통 스위치 — 동영상/씬/프리뷰). 소스 없음/추출 실패 → nil.
-    private func stillImage(for project: WallpaperProject, size: CGSize, stillDir: URL) -> URL? {
-        guard let source = StillWallpaper.source(for: project) else { return nil }
-        let output = StillWallpaper.outputURL(projectId: project.id, stillDir: stillDir)
+    /// 프로젝트 하나의 정지 이미지(공통 스위치 — 동영상/씬/프리뷰). 소스 해석 실패/추출 실패 → nil.
+    private func stillImage(for project: WallpaperProject, source: StillWallpaper.Source,
+                            size: CGSize, scale: CGFloat, stillDir: URL) -> URL? {
+        // F484: 크기 의존 소스(씬 캡처)만 출력 파일명에 크기를 넣는다 — 같은 씬의 크기별 스틸이 공존.
+        let output = StillWallpaper.outputURL(projectId: project.id,
+                                              size: StillWallpaper.isSizeDependent(source) ? size : nil,
+                                              stillDir: stillDir)
         switch source {
         case .videoFrame(let videoURL): return extractVideoFrame(from: videoURL, to: output)
-        case .sceneCapture:             return captureSceneStill(project: project, size: size, to: stillDir, output: output)
+        case .sceneCapture:             return captureSceneStill(project: project, size: size, scale: scale, to: stillDir, output: output)
         case .previewImage(let url):    return url   // preview 파일 그대로 사용
         }
     }
@@ -718,17 +752,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 것인지 추적할 필요 없이 항상 정확한 프로젝트·크기로 캡처된다). 컨테이너는 어떤 창에도 속하지
     /// 않는 오프스크린 NSView — SceneRenderer.mount 는 이미 이런 헤드리스 마운트를 캡처/테스트 용도로
     /// 정식 지원한다("container.window == nil → 사운드 등 라이브 전용 사이드이펙트 스킵, 결정적").
-    /// NSView/MTKView 생성은 메인 스레드 전용이라, 백그라운드 큐에서 호출되면(F047) 메인으로 동기 홉.
-    private func captureSceneStill(project: WallpaperProject, size: CGSize, to dir: URL, output: URL) -> URL? {
-        if Thread.isMainThread {
-            return captureSceneStillOnMain(project: project, size: size, to: dir, output: output)
-        }
-        return DispatchQueue.main.sync {
-            captureSceneStillOnMain(project: project, size: size, to: dir, output: output)
-        }
-    }
-
-    private func captureSceneStillOnMain(project: WallpaperProject, size: CGSize, to dir: URL, output: URL) -> URL? {
+    /// F486: 종전엔 NSView/MTKView 생성이 메인 전용이라는 이유로 마운트(셰이더 컴파일)+GPU 대기
+    /// (waitUntilCompleted)까지 main.sync 에서 실행해 무거운 씬이면 수 초간 메뉴/라이브러리 창이
+    /// 정지했다(F049). 헤드리스 컨테이너는 창 계층에 들어가지 않고 draw/이벤트도 발생하지 않으며,
+    /// captureFrames 는 Metal 커맨드 인코딩+PNG 쓰기뿐이라 스레드 안전하다 — F047 블로킹 큐에서
+    /// 전 구간을 그대로 실행한다. NSScreen 이 필요한 scale 만 호출부가 메인에서 캡처해 넘기고,
+    /// 완료 후 메인 홉은 호출부(finishSetStillWallpaper/finishSyncDesktopStill)가 담당한다.
+    private func captureSceneStill(project: WallpaperProject, size: CGSize, scale: CGFloat, to dir: URL, output: URL) -> URL? {
         guard size.width > 0, size.height > 0,
               let renderer = RendererFactory.makeRenderer(for: project) as? SceneRenderer else { return nil }
         let container = NSView(frame: CGRect(origin: .zero, size: size))
@@ -738,7 +768,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
         defer { renderer.teardown() }
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
         guard let captured = renderer.captureFrames(width: Int(size.width * scale), height: Int(size.height * scale),
                                                     times: [1.0], toDir: dir).first else { return nil }
         let fm = FileManager.default
@@ -940,7 +969,11 @@ extension AppDelegate {
     }
 
     /// 종료 시 원본 복원(force-quit 엔 호출 안 됨 — 토글 오프도 복원 경로라 최선 노력으로 충분).
+    /// F481: 자동 동기화가 켜진 채 종료될 때만 복원한다 — 동기화 OFF 에서의 수동 "정지 배경으로 설정"
+    /// 은 사용자의 명시적 1회 액션이라(:616 독스트링) 종료와 함께 되돌리면 그 의도와 모순된다.
+    /// (백업 자체는 F042 오염 방지용으로 수동 경로도 남긴다 — 복원 여부만 여기서 가드.)
     public func applicationWillTerminate(_ notification: Notification) {
+        guard StillDesktopSync.shouldRestoreOnTerminate(syncEnabled: desktopStillSync) else { return }
         restoreDesktopOriginals()
     }
 }
@@ -961,6 +994,20 @@ extension AppDelegate: NSMenuDelegate {
     func pushRecent(_ id: String?) {
         guard let id else { return }
         recentWallpaperIds = RecentWallpapers.push(id, into: recentWallpaperIds)
+    }
+
+    /// F480: 마운트된 폴더에 대응하는 라이브러리 엔트리 id(최근 배경 push 용). 엔트리 id 가 아닌
+    /// 파서 id 를 push 하면 F194 접미 유일화 엔트리와 불일치해 메뉴 표시/적용이 엉뚱한 배경을
+    /// 가리켰다. 폴더 경로 일치로 역탐색(북마크 해석은 엔트리 수만큼 — 적용 성공 시 1회).
+    /// 대응 엔트리가 없으면(라이브러리 외 경로 등) nil — 파서 id 폴백을 섞지 않는다(같은 불일치 재발).
+    private func recentEntryId(mountedFolder: URL?) -> String? {
+        guard let mountedFolder else { return nil }
+        let target = mountedFolder.standardizedFileURL.path
+        let pairs: [(id: String, path: String)] = store.entries.compactMap { entry in
+            guard let url = store.resolveFolderURL(for: entry) else { return nil }
+            return (entry.id, url.standardizedFileURL.path)
+        }
+        return RecentWallpapers.entryId(matchingFolderPath: target, entries: pairs)
     }
 
     func recentMenuItem() -> NSMenuItem {
