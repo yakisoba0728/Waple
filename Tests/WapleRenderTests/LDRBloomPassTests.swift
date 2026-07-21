@@ -82,23 +82,35 @@ final class LDRBloomPassTests: XCTestCase {
         return read(destination)
     }
 
+    /// F670(±1텍셀 박스 추출) 이후 단일 텍셀 델타는 위상에 따라 추출량이 0~1/4 로 흔들리므로
+    /// (WE 도 동일 — 4×4 박스 평균) 위상 불변인 2×2 블록을 쓴다(추출 0.25 보장).
     private func isolatedWhitePixel(width: Int = 64, height: Int = 64) -> [UInt8] {
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         for index in stride(from: 3, to: pixels.count, by: 4) { pixels[index] = 255 }
-        let offset = (32 * width + 32) * 4
-        pixels[offset + 0] = 255
-        pixels[offset + 1] = 255
-        pixels[offset + 2] = 255
+        for dy in 0...1 {
+            for dx in 0...1 {
+                let offset = ((32 + dy) * width + (32 + dx)) * 4
+                pixels[offset + 0] = 255
+                pixels[offset + 1] = 255
+                pixels[offset + 2] = 255
+            }
+        }
         return pixels
+    }
+
+    /// isolatedWhitePixel 의 밝기 블록 바이트 오프셋 4개(합성 = scene+glow 라 스캔 제외용).
+    private func brightOffsets(width: Int = 64) -> Set<Int> {
+        Set((0...1).flatMap { dy in (0...1).map { dx in ((32 + dy) * width + (32 + dx)) * 4 } })
     }
 
     func testShaderContractPinsExactPassMathAndWeights() {
         let source = LDRBloomPass.metalSource
+        // F670: WE downsample_quarter_bloom.vert ±g_TexelSize(±1텍셀) 탭 — bilinear 4×4 박스.
         [
-            "float2(-1.5, -1.5)",
-            "float2( 1.5, -1.5)",
-            "float2(-1.5,  1.5)",
-            "float2( 1.5,  1.5)",
+            "float2(-1.0, -1.0)",
+            "float2( 1.0, -1.0)",
+            "float2(-1.0,  1.0)",
+            "float2( 1.0,  1.0)",
             "rgb *= saturate(scale - u.threshold)",
             "float gray = dot(float3(0.2989, 0.5870, 0.1140), rgb)",
             "rgb = 2.0 * rgb - gray",
@@ -168,10 +180,12 @@ final class LDRBloomPassTests: XCTestCase {
             width: 64,
             height: 64,
             pixels: pixels,
-            parameters: .init(strength: 8, threshold: 0, tint: SIMD3(1, 1, 1)))
-        let brightOffset = (32 * 64 + 32) * 4
+            // F670(±1텍셀 박스 추출, WE 정합)은 피처 에너지를 4×4 풋프린트로 분산해 구 ±1.5 점샘플
+            // 대비 추출 피크가 1/4 — 동일 글로우 측정을 위해 strength 보정(8→32).
+            parameters: .init(strength: 32, threshold: 0, tint: SIMD3(1, 1, 1)))
+        let bright = brightOffsets()
         var halo: UInt8 = 0
-        for offset in stride(from: 0, to: output.count, by: 4) where offset != brightOffset {
+        for offset in stride(from: 0, to: output.count, by: 4) where !bright.contains(offset) {
             halo = max(
                 halo,
                 max(output[offset + 0], max(output[offset + 1], output[offset + 2])))
@@ -187,10 +201,10 @@ final class LDRBloomPassTests: XCTestCase {
             width: 64,
             height: 64,
             pixels: isolatedWhitePixel(),
-            parameters: .init(strength: 8, threshold: 0, tint: SIMD3(1, 0, 0)))
-        let brightOffset = (32 * 64 + 32) * 4
+            parameters: .init(strength: 32, threshold: 0, tint: SIMD3(1, 0, 0)))  // F670 보정(상기 동일)
+        let bright = brightOffsets()
         var red: UInt8 = 0, green: UInt8 = 0, blue: UInt8 = 0
-        for offset in stride(from: 0, to: output.count, by: 4) where offset != brightOffset {
+        for offset in stride(from: 0, to: output.count, by: 4) where !bright.contains(offset) {
             blue = max(blue, output[offset + 0])
             green = max(green, output[offset + 1])
             red = max(red, output[offset + 2])

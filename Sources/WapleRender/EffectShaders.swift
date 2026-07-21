@@ -17,8 +17,10 @@ enum EffectShaders {
         case "tint":
             let col = c["color"] ?? [1, 0, 0]
             let r = col.count > 0 ? col[0] : 1, g = col.count > 1 ? col[1] : 0, b = col.count > 2 ? col[2] : 0
-            // BLENDMODE 은 콤보(0..32). 없으면 0=Normal. (구버전 constants["blendmode"] 도 폴백.)
-            let mode = Float(cb["BLENDMODE"] ?? Int(c["blendmode"]?.first ?? 0))
+            // BLENDMODE 은 콤보(0..32). (구버전 constants["blendmode"] 도 폴백.)
+            // F672: 기본 = WE tint.frag [COMBO] default:30(Tint, 휘도보존 컬러라이즈) — 구 0(Normal)은
+            // blendmode 키 부재 폴터에서 mix(A,B,o) 단색 워시였다.
+            let mode = Float(cb["BLENDMODE"] ?? Int(c["blendmode"]?.first ?? 30))
             return [r, g, b, f("alpha", 1), mode]
         case "pulse":
             // [speed,phase,amount,power,threshLo,threshHi, blendmode, pulseColor, pulseAlpha, audioMode, tintLo(3), tintHi(3)]
@@ -114,8 +116,11 @@ enum EffectShaders {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
             float4 c = fb.sample(s, in.uv);
             float m = mask.sample(s, in.uv).r;
+            int mode = int(P[5] + 0.5);
             // BLENDMODE(P[5]) 은 WE 전체 enum(0..32). applyBlending 이 opacity(P[4]*mask) 로 믹스.
-            c.rgb = applyBlending(int(P[5] + 0.5), c.rgb, float3(P[1], P[2], P[3]), P[4] * m);
+            c.rgb = applyBlending(mode, c.rgb, float3(P[1], P[2], P[3]), P[4] * m);
+            // F672: WE tint.frag `#if BLENDMODE == 0 → albedo.a = 1.0`(Normal 모드는 출력 불투명 강제).
+            if (mode == 0) { c.a = 1.0; }
             return c;
         }
         """,
@@ -154,7 +159,9 @@ enum EffectShaders {
             if (P[10] > 0.5) {
                 pulse = audio;  // audioResponse (CPU 계산, buffer1)
             } else {
-                pulse = smoothstep(P[5], P[6], sin(P[0] * P[1] + (P[2] - 0.25) * 6.28318530718) * 0.5 + 0.5) * P[3];
+                // F674: WE pulse.frag `sin(g_Time*g_PulseSpeed + (g_PulsePhase - 1.57079632679))` —
+                // phase 는 radian [0,6.282] 직접(구 (P[2]-0.25)×2π 는 phase=0 에서만 일치했다).
+                pulse = smoothstep(P[5], P[6], sin(P[0] * P[1] + (P[2] - 1.57079632679)) * 0.5 + 0.5) * P[3];
                 pulse = pow(max(pulse, 0.0), P[4]);
             }
             float3 albedo = c.rgb;

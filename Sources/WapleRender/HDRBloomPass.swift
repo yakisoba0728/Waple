@@ -238,11 +238,15 @@ final class HDRBloomPass: HDRBloomEncoding {
     ) {
         constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
         float2 t = u.sourceTexelSize;
+        // F673: ±1텍셀 대각 4탭 — bilinear 결합 시 4×4 풋프린트 전량 커버(LDR F670 과 동일 클래스).
+        // WE hdr_downsample 은 2× 단계 피라미드(±0.5텍셀 = 2×2 박스)라 quarter 단일 단계의 동치는
+        // ±1텍셀(WE 자체의 full→quarter 다운샘플 downsample_quarter_bloom 과 동일 탭). 구 ±1.5 는
+        // 코너 4/16 서브샘플(내측 2×2 누락).
         float3 c = max((
-            source.sample(linearClamp, in.uv + t * float2(-1.5, -1.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2( 1.5, -1.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2(-1.5,  1.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2( 1.5,  1.5)).rgb
+            source.sample(linearClamp, in.uv + t * float2(-1.0, -1.0)).rgb +
+            source.sample(linearClamp, in.uv + t * float2( 1.0, -1.0)).rgb +
+            source.sample(linearClamp, in.uv + t * float2(-1.0,  1.0)).rgb +
+            source.sample(linearClamp, in.uv + t * float2( 1.0,  1.0)).rgb
         ) * 0.25, 0.0);
         float4 P = u.blendParams;
         float m = max(c.r, max(c.g, c.b));
@@ -294,7 +298,9 @@ final class HDRBloomPass: HDRBloomEncoding {
         constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
         float4 base = source.sample(linearClamp, in.uv);
         float3 C = base.rgb + bloom.sample(linearClamp, in.uv).rgb;
-        return float4(saturate(C), base.a);
+        // F675: 최종 알파 1.0 강제(LDR composite 와 동일 규약) — base.a 통과는 캡처 PNG 투명 픽셀
+        // (디스플레이 drawable 은 알파 무시라 화면 무차, 위생).
+        return float4(saturate(C), 1.0);
     }
     """
 }

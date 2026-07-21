@@ -38,16 +38,16 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertEqual(EffectShaders.params(for: "opacity", constants: [:]), [1])  // default
     }
     func testTintParams() {
-        // order: r,g,b,blendAlpha,blendMode — blendMode default 0 (normal)
-        XCTAssertEqual(EffectShaders.params(for: "tint", constants: ["color": [1, 0, 0], "alpha": [0.5]]), [1, 0, 0, 0.5, 0])
-        XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:]), [1, 0, 0, 1, 0])  // default red, alpha 1, normal
+        // order: r,g,b,blendAlpha,blendMode — blendMode default 30(F672: WE tint.frag [COMBO] default)
+        XCTAssertEqual(EffectShaders.params(for: "tint", constants: ["color": [1, 0, 0], "alpha": [0.5]]), [1, 0, 0, 0.5, 30])
+        XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:]), [1, 0, 0, 1, 30])  // default red, alpha 1, tint
     }
     func testTintBlendModeMapping() {
         // BLENDMODE 은 콤보(WE 전체 enum). last 슬롯 = 모드.
         XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:], combos: ["BLENDMODE": 2])?.last, 2)   // multiply
         XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:], combos: ["BLENDMODE": 11])?.last, 11) // overlay (구버전엔 불가)
         XCTAssertEqual(EffectShaders.params(for: "tint", constants: ["blendmode": [7]])?.last, 7)  // 폴백: constants
-        XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:])?.last, 0)  // 미지정 → Normal
+        XCTAssertEqual(EffectShaders.params(for: "tint", constants: [:])?.last, 30)  // 미지정 → WE 기본 Tint(F672)
     }
 
     func testPulseParams() {
