@@ -22,6 +22,11 @@ enum Mesh3DShaders {
         float4 ambient;
         float4 skylight;
         float4 meta;          // x=light count; shadow fields are introduced by P4
+        // F662: scene fog(common_fog.h 대응) — color.w=활성 플래그, params=(start, end-start, startDensity, Δdensity).
+        float4 fogDistanceColor;
+        float4 fogDistanceParams;
+        float4 fogHeightColor;
+        float4 fogHeightParams;
     };
     struct LightU {
         float4 positionExponent;
@@ -283,6 +288,45 @@ enum Mesh3DShaders {
         return float2(1.0, 2.0);
     }
 
+    // F661(S-47): directional 섀도우 최소 근사 — 단일 오소 맵. 아틀라스 슬라이스 전체(2×3 셀 분할 없음)를
+    // 쓰고 VP 는 shadowVP[shadow.y] 하나. PCF 는 point 경로와 동일 9탭(네이티브 상수 유지), uv 는 풀슬라이스.
+    inline float directionalShadowVisibility(float3 worldPos,
+                                             constant LightU& light,
+                                             constant FrameU& frame,
+                                             constant float4x4* shadowVP,
+                                             depth2d_array<float> shadowAtlas) {
+        if (light.shadow.x < 0.0 || frame.meta.y <= 0.0 || frame.meta.z <= 0.0) return 1.0;
+        int matrixIndex = int(light.shadow.y + 0.5);
+        float4 projected = shadowVP[matrixIndex] * float4(worldPos, 1.0);
+        if (projected.w <= 0.0) return 1.0;
+        float3 ndc = projected.xyz / projected.w;
+        if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
+        // Metal NDC y-up → 텍스처 v-down 풀슬라이스 매핑(point 경로의 y 플립과 동일 규약).
+        float2 uv = ndc.xy * float2(0.5, -0.5) + 0.5;
+        // 오소 상자 밖은 깊이 정보 없음 — 그림자 판정 불가라 lit 폴터(clamp_to_edge 스미어 방지).
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+        float2 texel = frame.meta.yz;
+        float2 uvMin = texel * 0.5;
+        float2 uvMax = 1.0 - texel * 0.5;
+        float referenceDepth = ndc.z - frame.meta.w;
+        uint slice = uint(light.shadow.x + 0.5);
+        constexpr sampler compareSampler(coord::normalized, filter::nearest,
+                                         address::clamp_to_edge, compare_func::less_equal);
+        float2 roundOffset = texel * 0.81616;
+        float2 axialOffset = texel * 1.02323;
+        float visibility = 0.0;
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv - roundOffset, uvMin, uvMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(0.0, -axialOffset.y), uvMin, uvMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(roundOffset.x, -roundOffset.y), uvMin, uvMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(-axialOffset.x, 0.0), uvMin, uvMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv, uvMin, uvMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(axialOffset.x, 0.0), uvMin, uvMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(-roundOffset.x, roundOffset.y), uvMin, uvMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + float2(0.0, axialOffset.y), uvMin, uvMax), slice, referenceDepth);
+        visibility += shadowAtlas.sample_compare(compareSampler, clamp(uv + roundOffset, uvMin, uvMax), slice, referenceDepth);
+        return visibility / 9.0;
+    }
+
     inline float pointShadowVisibility(float3 worldPos,
                                        constant LightU& light,
                                        constant FrameU& frame,
@@ -323,6 +367,31 @@ enum Mesh3DShaders {
         return visibility / 9.0;
     }
 
+    // F662(S-45): common_fog.h ApplyFog 1:1 — HEIGHT 먼저, DIST 순. factor = z + w·saturate(t)²,
+    // mix 계수 미적용 클램프(WE 와 동일 — saturate 는 t 에만). fogMode: 0=비적용, 1=rgb 만, 2=rgb+alpha(ADDITIVE — ApplyFogAlpha).
+    inline void applySceneFog(thread float3& color, thread float& alpha, float fogMode,
+                              float3 worldPos, float3 eye, constant FrameU& frame) {
+        if (fogMode < 0.5) return;
+        float viewDist = distance(eye, worldPos);
+        float heightFactor = 0.0;
+        float distFactor = 0.0;
+        if (frame.fogHeightColor.w > 0.5) {
+            float t = saturate((worldPos.y - frame.fogHeightParams.x) / frame.fogHeightParams.y);
+            heightFactor = frame.fogHeightParams.z + frame.fogHeightParams.w * t * t;
+            color = mix(color, frame.fogHeightColor.xyz, heightFactor);
+        }
+        if (frame.fogDistanceColor.w > 0.5) {
+            float t = saturate((viewDist - frame.fogDistanceParams.x) / frame.fogDistanceParams.y);
+            distFactor = frame.fogDistanceParams.z + frame.fogDistanceParams.w * t * t;
+            color = mix(color, frame.fogDistanceColor.xyz, distFactor);
+        }
+        if (fogMode > 1.5) {
+            // ApplyFogAlpha: fogFactor = saturate(max(distFactor, heightFactor)); alpha *= 1 - factor².
+            float fogFactor = saturate(max(distFactor, heightFactor));
+            alpha *= 1.0 - fogFactor * fogFactor;
+        }
+    }
+
     fragment float4 mf_main(VOut in [[stage_in]],
                             texture2d<float> tex [[texture(0)]],
                             depth2d_array<float> shadowAtlas [[texture(1)]],
@@ -337,22 +406,31 @@ enum Mesh3DShaders {
         float4 sampled = tex.sample(s, in.uv) * u.tint;
         if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
         float mode = u.material.w;
-        if (mode < 0.5) return float4(sampled.rgb * sampled.a, sampled.a);
+        // F662: specularTint.w(미사용 채널 재활용) = fog 모드(0 비적용/1 rgb/2 rgb+alpha additive).
+        float fogMode = u.specularTint.w;
+        if (mode < 0.5) {
+            // unlit 도 WE(generic4 CombineLighting 이후 ApplyFog)와 같이 fog 대상.
+            float3 rgb = sampled.rgb;
+            float alpha = sampled.a;
+            applySceneFog(rgb, alpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
+            return float4(rgb * alpha, alpha);
+        }
 
         float3 albedo = sampled.rgb;
         float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
         float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
         float3 direct = float3(0.0);
-        int count = clamp(int(frame.meta.x + 0.5), 0, 4);
+        int count = clamp(int(frame.meta.x + 0.5), 0, 8);   // F660: 라이트 캡 4 → 8(젤다 6슬롯)
         for (int i = 0; i < count; ++i) {
             float kind = lights[i].shadow.z;
             if (kind < 0.5) {          // point: 감쇠 + 6면 큐브 섀도우
                 float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
                 direct += visibility * pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
                                                 u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
-            } else if (kind < 1.5) {   // directional: 무감쇠(섀도우 스코프 밖)
-                direct += directionalPBR(N, V, albedo, u.material.x, u.material.y,
-                                         u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            } else if (kind < 1.5) {   // directional: 무감쇠 + 단일 오소 섀도우(F661)
+                float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+                direct += visibility * directionalPBR(N, V, albedo, u.material.x, u.material.y,
+                                                      u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
             } else {                   // spot: 감쇠 + 콘(섀도우 스코프 밖)
                 direct += spotPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
                                   u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
@@ -364,7 +442,9 @@ enum Mesh3DShaders {
             ambientColor = mix(frame.skylight.xyz, frame.ambient.xyz, hemisphere);
         }
         float3 lit = ambientColor * albedo + direct;
-        return float4(lit * sampled.a, sampled.a);
+        float outAlpha = sampled.a;
+        applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
+        return float4(lit * outAlpha, outAlpha);
     }
     """
 }
