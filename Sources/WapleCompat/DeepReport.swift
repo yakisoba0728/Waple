@@ -170,7 +170,12 @@ enum Report {
         p("- referenced sound files present in pkg: \(agg.soundPresent)/\(agg.soundRefs) (\(pct(agg.soundPresent, agg.soundRefs)))")
         p("- by extension: " + agg.soundByExt.keys.sorted().map { "\($0)=\(agg.soundByExt[$0]!)" }.joined(separator: ", "))
         if agg.oggRefs > 0 {
-            p("- ogg(Vorbis) pure-Swift decode: \(agg.oggDecodeOK)/\(agg.oggRefs) OK (\(pct(agg.oggDecodeOK, agg.oggRefs))), fail=\(agg.oggDecodeFail), NaN/Inf=\(agg.oggNaN), silent=\(agg.oggSilent)")
+            // F681: 시간 예산으로 걸러넘긴 파일은 시도 분모에서 제외하고 별도 표기(실패로 오분류 금지).
+            let oggAttempted = agg.oggRefs - agg.oggSkippedBudget
+            let oggSkipNote = agg.oggSkippedBudget > 0
+                ? ", skipped(time-budget, 누적 \(Int(DeepScan.oggDecodeTimeBudget))s 상한)=\(agg.oggSkippedBudget)"
+                : ""
+            p("- ogg(Vorbis) pure-Swift decode: \(agg.oggDecodeOK)/\(oggAttempted) OK (\(pct(agg.oggDecodeOK, oggAttempted))), fail=\(agg.oggDecodeFail), NaN/Inf=\(agg.oggNaN), silent=\(agg.oggSilent)\(oggSkipNote)")
             p("  - channels: " + agg.oggChannels.keys.sorted().map { "\($0)ch=\(agg.oggChannels[$0]!)" }.joined(separator: ", ")
               + " | rates: " + agg.oggRates.keys.sorted().map { "\($0)=\(agg.oggRates[$0]!)" }.joined(separator: ", "))
             if !agg.oggFailSamples.isEmpty { p("  - flagged: " + agg.oggFailSamples.joined(separator: ", ")) }

@@ -37,6 +37,12 @@ enum ProfilePipeline {
         guard !folders.isEmpty else {
             fputs("[profile] ⚠️ 씬 0개 — root 지정 확인: \(root)\n", stderr); return 2
         }
+        // F680: 공유 에셋 리졸버 — assets: nil 이면 models/util/*.json 등 pkg 외 참조를 쓰는 레이어가
+        // 파스 단계에서 드롭되어 layers/effects 카운트가 실제보다 적게 찍혔다(3706286085: 실물 36오브젝트인데
+        // layers=0 실측). DeepScan 과 동일 해석(root/assets → 형제 assets 순으로 첫 존재).
+        let rootURL = URL(fileURLWithPath: NSString(string: root).expandingTildeInPath, isDirectory: true).standardizedFileURL
+        let assetsDir = DeepScan.firstExisting([rootURL.appendingPathComponent("assets"),
+                                                rootURL.deletingLastPathComponent().appendingPathComponent("assets")])
         var rows: [InventoryRow] = []
         for folder in folders {
             let id = folder.lastPathComponent
@@ -44,8 +50,12 @@ enum ProfilePipeline {
                 let pkgName = FileManager.default.fileExists(atPath: folder.appendingPathComponent("scene.pkg").path)
                     ? "scene.pkg" : "gifscene.pkg"
                 guard let data = try? Data(contentsOf: folder.appendingPathComponent(pkgName)),
-                      let pkg = try? ScenePackage.parse(data),
-                      let doc = try? SceneDocument.parse(package: pkg) else { return }
+                      let pkg = try? ScenePackage.parse(data) else { return }
+                let res = PkgAssets(package: pkg, assetsDir: assetsDir)
+                guard let doc = try? SceneDocument.parse(
+                    package: pkg,
+                    assets: { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }
+                ) else { return }
                 let is3D = doc.camera3D != nil && !doc.objects3D.isEmpty
                 let effects = doc.layers.reduce(0) { $0 + $1.effects.count }
                 let texBytes = pkg.entries.filter { $0.name.hasSuffix(".tex") }.reduce(0) { $0 + $1.size }
@@ -115,8 +125,19 @@ enum ProfilePipeline {
         }
         let pkgName = fm.fileExists(atPath: folder.appendingPathComponent("scene.pkg").path) ? "scene.pkg" : "gifscene.pkg"
         guard let mdata = try? Data(contentsOf: folder.appendingPathComponent(pkgName)),
-              let mpkg = try? ScenePackage.parse(mdata),
-              let mdoc = try? SceneDocument.parse(package: mpkg) else {
+              let mpkg = try? ScenePackage.parse(mdata) else {
+            fputs("[profile] meta parse failed: \(only)\n", stderr); return 2
+        }
+        // F680: 메타 파스도 inventory 와 같은 공유 에셋 리졸버를 쓴다 — 없으면 models/util/*.json 참조
+        // 레이어가 드롭되어 JSON 의 layers/effects 카운트가 실제보다 적게 나온다(동일 결함 클래스).
+        let rootURL = URL(fileURLWithPath: NSString(string: root).expandingTildeInPath, isDirectory: true).standardizedFileURL
+        let assetsDir = DeepScan.firstExisting([rootURL.appendingPathComponent("assets"),
+                                                rootURL.deletingLastPathComponent().appendingPathComponent("assets")])
+        let mres = PkgAssets(package: mpkg, assetsDir: assetsDir)
+        guard let mdoc = try? SceneDocument.parse(
+            package: mpkg,
+            assets: { mres.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }
+        ) else {
             fputs("[profile] meta parse failed: \(only)\n", stderr); return 2
         }
         let is3D = mdoc.camera3D != nil && !mdoc.objects3D.isEmpty
