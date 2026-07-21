@@ -38,6 +38,21 @@ enum ScreenSaverLogic {
         guard let current else { return false }
         return (current["moduleName"] as? String) != saverName
     }
+
+    /// F489: enable 시 옛 백업을 폐기해야 하는가 — 현재 선택이 '없음'(nil)일 때만.
+    /// Waple 활성 중 사용자가 시스템 설정에서 직접 선택을 해제한 뒤 재활성한 경우로, 최초 enable 때의
+    /// 옛 백업은 스테일이다(그대로 두면 disable 이 '없음'이 아니라 옛 saver 를 복원한다). Waple 자신이
+    /// 선택돼 있으면(재활성) 기존 백업 유지 → false, 다른 saver 면 shouldBackup 이 새로 덮어씀 → false.
+    static func shouldDiscardBackup(current: [String: Any]?) -> Bool {
+        current == nil
+    }
+
+    /// F489: disable 시 백업 원복 가능 여부 — 현재 시스템 선택이 Waple 일 때만 true. enable→disable
+    /// 사이 사용자가 시스템 설정에서 직접 다른 saver/'없음'으로 바꿨다면 그 최신 선택을 존중해
+    /// 옛 백업으로 덮어쓰지 않는다.
+    static func shouldRestoreBackup(current: [String: Any]?) -> Bool {
+        (current?["moduleName"] as? String) == saverName
+    }
 }
 
 /// 설치/선택/해제 부수효과. 메뉴 토글과 AppDelegate.apply 훅에서 호출한다.
@@ -84,6 +99,13 @@ enum ScreenSaverController {
             CFPreferencesSetValue(backupKey, current as CFDictionary?, saverDomain,
                                   kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
             CFPreferencesSynchronize(saverDomain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+        } else if ScreenSaverLogic.shouldDiscardBackup(current: current) {
+            // F489: 사용자가 Waple 활성 중 시스템 설정에서 직접 '없음'으로 해제한 뒤 재활성 —
+            // 최초 enable 때의 옛 백업은 스테일이므로 폐기한다(그대로 두면 disable 이 '없음'이
+            // 아니라 옛 saver 를 복원해 사용자의 최신 선택을 덮어썼다).
+            CFPreferencesSetValue(backupKey, nil, saverDomain,
+                                  kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
+            CFPreferencesSynchronize(saverDomain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
         }
 
         CFPreferencesSetValue(moduleDictKey,
@@ -95,13 +117,19 @@ enum ScreenSaverController {
 
     /// 끄기: 백업된 사용자 화면보호기가 있으면 원복(백업 소거), 없으면 선택 제거.
     /// 설치 파일은 남긴다(재활성 대비, 무해). enable 이 사용자 원본을 backupKey 에 보관해 둔다.
+    /// F489: enable→disable 사이 사용자가 시스템 설정에서 직접 다른 saver/'없음'으로 바꿨다면
+    /// 현재 선택이 Waple 이 아니므로 옛 백업으로 덮어쓰지 않고 그대로 존중한다(백업만 폐기).
     static func disable() {
         let backup = CFPreferencesCopyValue(backupKey, saverDomain,
                                             kCFPreferencesCurrentUser, kCFPreferencesAnyHost) as? [String: Any]
-        CFPreferencesSetValue(moduleDictKey, backup as CFDictionary?, systemDomain,
-                              kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
-        CFPreferencesSynchronize(systemDomain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
-        if backup != nil {  // 원복했으면 백업 소거(다음 enable/disable 사이클 오염 방지)
+        let current = CFPreferencesCopyValue(moduleDictKey, systemDomain,
+                                             kCFPreferencesCurrentUser, kCFPreferencesCurrentHost) as? [String: Any]
+        if ScreenSaverLogic.shouldRestoreBackup(current: current) {
+            CFPreferencesSetValue(moduleDictKey, backup as CFDictionary?, systemDomain,
+                                  kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
+            CFPreferencesSynchronize(systemDomain, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
+        }
+        if backup != nil {  // 원복했든 사용자 직접 변경으로 무효화됐든 백업 소거(다음 사이클 오염 방지)
             CFPreferencesSetValue(backupKey, nil, saverDomain,
                                   kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
             CFPreferencesSynchronize(saverDomain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)

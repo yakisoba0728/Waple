@@ -36,9 +36,25 @@ enum StillWallpaper {
         return .previewImage(url)
     }
 
-    /// 추출 결과 PNG 경로(배경 id 기준, 파일명 안전화).
-    static func outputURL(projectId: String, stillDir: URL) -> URL {
-        stillDir.appendingPathComponent("\(safeName(projectId)).png")
+    /// 추출 결과 PNG 경로(배경 id 기준, 파일명 안전화). F484: size 를 넘기면 크기도 파일명에 포함 —
+    /// 씬 캡처는 요청 크기로 렌더되므로, 해상도/종횡비가 다른 모니터끼리 같은 씬의 스틸을 공유하면
+    /// 잘못된 크기 이미지가 된다(크기 무관 소스 — 비디오 프레임/preview — 는 nil 로 기존 경로 유지).
+    static func outputURL(projectId: String, size: CGSize? = nil, stillDir: URL) -> URL {
+        let base = safeName(projectId)
+        guard let size else { return stillDir.appendingPathComponent("\(base).png") }
+        return stillDir.appendingPathComponent("\(base)-\(Int(size.width))x\(Int(size.height)).png")
+    }
+
+    /// F484: 이 소스의 스틸이 요청 크기에 의존하는가 — 씬 캡처만 true(비디오 프레임/preview 는 원본
+    /// 크기 고정이라 화면 크기와 무관). 캐시/출력 키에 크기를 포함할지의 기준.
+    static func isSizeDependent(_ source: Source) -> Bool {
+        if case .sceneCapture = source { return true }
+        return false
+    }
+
+    /// F484: 스틸 생성 캐시 키 — 크기 의존 소스는 "<id>#<w>x<h>"(모니터별 크기 구분), 아니면 id 그대로.
+    static func cacheKey(projectId: String, size: CGSize, sizeDependent: Bool) -> String {
+        sizeDependent ? "\(projectId)#\(Int(size.width))x\(Int(size.height))" : projectId
     }
 
     /// 영숫자만 남기고 나머지는 '-' 로. 전부 비면 "still".

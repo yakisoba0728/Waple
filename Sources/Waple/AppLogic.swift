@@ -148,9 +148,20 @@ enum PlaylistScheduling {
         enabled && !ids.isEmpty
     }
 
+    /// F483: 자동전환 타이머를 실제로 걸어야 하는가 — 켜짐 + 순환 가능한 후보 2개 이상.
+    /// 목록이 정확히 1개면 next(after:) 가 (i+1)%1 로 자기 자신만 반환해, 타이머가 매 간격 같은
+    /// 배경을 리마운트했다(동영상 t=0 재시작·웹 리로드·화면 깜빡임). 수동 "다음 배경" 버튼/트레이의
+    /// canAdvance(count>=2) 가드와 대칭을 맞춘다. shouldRun 은 기존 호출·테스트 호환을 위해 유지.
+    static func shouldScheduleTimer(enabled: Bool, ids: [String]) -> Bool {
+        shouldRun(enabled: enabled, ids: ids) && canAdvance(count: ids.count)
+    }
+
     /// 타이머 간격(초). 분 단위 → 초, 최소 1분 하한.
+    /// F488: 상한(1년)도 클램프 — playlist.json 수동 편집 등으로 거대한 분 값이 들어오면
+    /// `max(1, minutes) * 60` 의 Int 곱셈이 오버플로 트랩(크래시)을 일으켰다.
     static func intervalSeconds(minutes: Int) -> TimeInterval {
-        TimeInterval(max(1, minutes) * 60)
+        let clamped = min(max(1, minutes), 525_600)   // 1년 = 525_600분
+        return TimeInterval(clamped * 60)
     }
 
     /// 셔플(무작위 순서, w5d-playback) 다음 id. ids 가 2개 이상이면 직전(current)을 제외한 후보에서
@@ -235,6 +246,11 @@ enum StillDesktopSync {
         if p == d { return true }
         return p.hasPrefix(d.hasSuffix("/") ? d : d + "/")
     }
+
+    /// F481: 앱 종료 시 백업 원본을 복원해야 하는가 — 자동 동기화가 켜진 상태일 때만. 동기화 OFF 의
+    /// 수동 "정지 배경으로 설정"까지 종료와 함께 되돌리면(종전) 사용자의 명시적 1회 액션을 앱이
+    /// 묵시적으로 취소하는 모순이 된다(백업은 F042 오염 방지용으로 수동 경로도 남아 있다).
+    static func shouldRestoreOnTerminate(syncEnabled: Bool) -> Bool { syncEnabled }
 }
 
 /// 수동 "정지 배경으로 설정" 통지 문구 결정(F044/F045, 순수). 종전엔 화면별 NSWorkspace 호출 성공
@@ -257,6 +273,15 @@ enum RecentWallpapers {
         out.insert(id, at: 0)                // 선두 삽입(최신)
         if out.count > max { out.removeLast(out.count - max) }
         return out
+    }
+
+    /// F480: 마운트된 폴더 경로로 '최근 배경'에 넣을 라이브러리 엔트리 id 를 고른다(순수).
+    /// 파서 id(project.id)를 쓰면 F194 로 접미 유일화된 엔트리(x-2)와 불일치해 메뉴가 무접미 id 의
+    /// 다른 배경을 집거나(원본 제거 시) 아예 못 찾는다 — 반드시 엔트리 id 기준으로 정합.
+    /// entries 는 호출부가 (엔트리 id, 해석된 폴더 경로) 쌍으로 만든다. 못 찾으면 nil — 호출부는
+    /// push 를 생략한다(파서 id 폴백을 섞으면 같은 불일치가 재발한다).
+    static func entryId(matchingFolderPath path: String, entries: [(id: String, path: String)]) -> String? {
+        entries.first(where: { $0.path == path })?.id
     }
 }
 
