@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import WapleCore
 
@@ -22,15 +23,19 @@ public enum VideoTextureExtractor {
         let fm = FileManager.default
         let url = cacheDir.appendingPathComponent("\(cacheKey ?? sceneID).mp4")
         let expected = tex.payloadRange.count
-        // 캐시 적중: 단, 크기가 기대치와 일치할 때만 재사용한다. 같은 sceneID 로 콘텐츠가
-        // 바뀌었거나(앱이 도중에 죽어) 부분 기록된 파일이 남은 경우는 무효화하고 재추출한다.
+        // F559: 캐시 적중 검증 보강 — 크기 일치만으로는 동일 크기의 다른 콘텐츠가 stale 재사용됐다.
+        // 페이로드 지문(사이드카 .fp)까지 일치해야 재사용. 지문 없는 구 캐시는 1회 재추출 후 지문 생성.
+        let fp = fingerprint(range: tex.payloadRange, in: texData)
         if let attrs = try? fm.attributesOfItem(atPath: url.path),
-           let size = attrs[.size] as? Int {
-            if size == expected {
-                touch(url)   // 마지막 접근 갱신(LRU) — evict 순서에서 최근 사용을 보존
-                return url
-            }
-            NSLog("%@", "[Waple] stale/partial mp4 cache at \(url.path) (size \(size) != \(expected)) — re-extracting")
+           let size = attrs[.size] as? Int,
+           size == expected,
+           let stored = try? String(contentsOf: fingerprintURL(for: url), encoding: .utf8),
+           stored == fp {
+            touch(url)   // 마지막 접근 갱신(LRU) — evict 순서에서 최근 사용을 보존
+            return url
+        }
+        if fm.fileExists(atPath: url.path) {
+            NSLog("%@", "[Waple] stale/partial mp4 cache at \(url.path) — re-extracting")
             try? fm.removeItem(at: url)
         }
         do {
@@ -42,6 +47,7 @@ public enum VideoTextureExtractor {
         let mp4 = texData.subdata(in: tex.payloadRange)
         do {
             try mp4.write(to: url, options: [.atomic])
+            try? fp.write(to: fingerprintURL(for: url), atomically: true, encoding: .utf8)   // F559 지문 사이드카
         } catch {
             NSLog("%@", "[Waple] failed to write mp4 cache \(url.path): \(error)")
             return nil
@@ -59,19 +65,71 @@ public enum VideoTextureExtractor {
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
     }
 
+    /// F559: 캐시 지문 — 크기 + 선두/말미 64KB SHA256(전체 해시는 대형 페이로드에서 비용 — 표본 해시로 절충).
+    static func fingerprint(range: Range<Int>, in data: Data) -> String {
+        var h = SHA256()
+        var countLE = UInt64(range.count).littleEndian
+        withUnsafeBytes(of: &countLE) { h.update(bufferPointer: $0) }
+        let head = min(64 * 1024, range.count)
+        h.update(data: data[range.lowerBound..<(range.lowerBound + head)])
+        if range.count > head {
+            h.update(data: data[(range.upperBound - head)..<range.upperBound])
+        }
+        return h.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// F559: 지문 사이드카 경로(<name>.mp4.fp) — evictOldest 의 *.mp4 집계엔 걸리지 않는다.
+    static func fingerprintURL(for mp4URL: URL) -> URL {
+        mp4URL.appendingPathExtension("fp")
+    }
+
     /// cacheDir 의 *.mp4 개수가 keep 을 넘으면 mtime 오래된 것부터 (count-keep)개 제거.
     static func evictOldest(in dir: URL, keep: Int) {
         let fm = FileManager.default
         guard keep >= 0, let items = try? fm.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
         ) else { return }
-        let mp4s = items.filter { $0.pathExtension == "mp4" }
+        // F560: 활성(SceneVideoLayer 사용 중) mp4 는 evict 대상에서 제외 — 사용 중 파일을 지우면
+        // 라이브 AVPlayer 는 열린 fd 로 버티나, 지연 생성되는 헤드리스 AVAssetImageGenerator 는 첫 디코드 실패.
+        let mp4s = items.filter { $0.pathExtension == "mp4" && !isActive($0) }
         guard mp4s.count > keep else { return }
         func mtime(_ u: URL) -> Date {
             (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
         }
         let oldestFirst = mp4s.sorted { mtime($0) < mtime($1) }
-        for u in oldestFirst.prefix(mp4s.count - keep) { try? fm.removeItem(at: u) }
+        for u in oldestFirst.prefix(mp4s.count - keep) {
+            try? fm.removeItem(at: u)
+            try? fm.removeItem(at: fingerprintURL(for: u))   // F559 사이드카 동반 정리
+        }
+    }
+
+    // MARK: - F560 활성 mp4 레지스트리(evict 보호)
+
+    /// 활성 추적은 참조수로 — 동일 URL 이 복수 레이어(멀티모니터 동일 씬)에 쓰일 수 있다.
+    /// 키는 standardizedFileURL.path — contentsOfDirectory 가 /var → /private/var 심링크를 해소해
+    /// 돌려주므로 URL 직접 비교는 어긋난다(테스트로 확인).
+    private static let activeLock = NSLock()
+    private static var activeRefCounts: [String: Int] = [:]
+
+    /// SceneVideoLayer 가 mp4 를 잡는 동안 등록(teardown/deinit 시 unmarkActive).
+    static func markActive(_ url: URL) {
+        activeLock.lock()
+        activeRefCounts[url.standardizedFileURL.path, default: 0] += 1
+        activeLock.unlock()
+    }
+
+    static func unmarkActive(_ url: URL) {
+        activeLock.lock()
+        let key = url.standardizedFileURL.path
+        if let n = activeRefCounts[key] {
+            activeRefCounts[key] = n > 1 ? n - 1 : nil
+        }
+        activeLock.unlock()
+    }
+
+    static func isActive(_ url: URL) -> Bool {
+        activeLock.lock(); defer { activeLock.unlock() }
+        return activeRefCounts[url.standardizedFileURL.path] != nil
     }
 
     public static func defaultCacheDir() -> URL {

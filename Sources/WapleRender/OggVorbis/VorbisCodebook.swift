@@ -46,7 +46,10 @@ struct VorbisCodebook {
         let entries = Int(r.read(24))
         // 곱 상한: multiplicands/vqFlat 이 entries*dimensions 크기 — 미검증 시 거대 할당 폭발(A-B4).
         // 16bit×24bit 라 Int 곱 자체는 안전. 상한값은 기존 entries 상한(1<<24)과 일관.
-        guard dimensions > 0, entries > 0, entries <= 1 << 24, dimensions * entries <= 1 << 24 else {
+        // F553: ordered 코드북 DoS 가드 강화 — entries=2^24, 길이 32 짜리가 상한을 equality 로 통과해
+        // lengths(134MB)+트라이(수천만 노드, 수백MB) 할당/수억 회 삽입(메모리 압박·정체)을 유발했다.
+        // entries 실질 상한을 1<<20(실제 코드북 수천 엔트리의 수십 배 여유)으로 강화.
+        guard dimensions > 0, entries > 0, entries <= 1 << 20, dimensions * entries <= 1 << 24 else {
             throw VorbisError.corrupt("codebook dim/entries \(dimensions)/\(entries)")
         }
 
@@ -110,14 +113,18 @@ struct VorbisCodebook {
     static func buildTrie(lengths: [Int]) throws -> (child0: [Int32], child1: [Int32], leaf: [Int32]) {
         let n = lengths.count
         var child0: [Int32] = [-1]; var child1: [Int32] = [-1]; var leaf: [Int32] = [-1]  // root = 0
-        func newNode() -> Int32 { child0.append(-1); child1.append(-1); leaf.append(-1); return Int32(child0.count - 1) }
+        func newNode() throws -> Int32 {
+            // F553: 트라이 노드 실질 상한(1<<21 ≈ 2M 노드 ≈ 24MB) — 방대 코드북의 메모리/정체 DoS 차단.
+            guard child0.count < 1 << 21 else { throw VorbisError.corrupt("codebook trie too large") }
+            child0.append(-1); child1.append(-1); leaf.append(-1); return Int32(child0.count - 1)
+        }
         func insert(codeword: UInt32, len: Int, entry: Int) throws {
             var node: Int32 = 0
             for i in 0..<len {
                 let bit = (codeword >> UInt32(i)) & 1
                 var next = bit == 0 ? child0[Int(node)] : child1[Int(node)]
                 if leaf[Int(node)] >= 0 { throw VorbisError.corrupt("codebook not prefix-free") }
-                if next < 0 { next = newNode(); if bit == 0 { child0[Int(node)] = next } else { child1[Int(node)] = next } }
+                if next < 0 { next = try newNode(); if bit == 0 { child0[Int(node)] = next } else { child1[Int(node)] = next } }
                 node = next
             }
             leaf[Int(node)] = Int32(entry)
