@@ -25,12 +25,33 @@ public enum BaseAssetsSettings {
             let home = FileManager.default.homeDirectoryForCurrentUser
             for cand in [home.appendingPathComponent("Downloads/wallpaper_dev/assets"),
                          home.appendingPathComponent("Downloads/assets")] {
-                if FileManager.default.fileExists(atPath: cand.appendingPathComponent("shaders/common.h").path) {
+                if isValidBaseAssetsPack(cand) {
+                    logAutoDetectedOnce(cand)
                     return cand
                 }
             }
             return nil
         }
         set { UserDefaults.standard.set(newValue?.path, forKey: key) }
+    }
+
+    /// 자동 탐지 후보의 WE 기본 에셋 팩 정합성(F471) — shaders/common.h 와 materials/ 디렉터리 모두
+    /// 존재해야 한다. common.h 단독 검사는 우연히 같은 이름을 가진 무관 폴터(범용명 ~/Downloads/assets)를
+    /// 기본 에셋 팩으로 오채택할 수 있다.
+    static func isValidBaseAssetsPack(_ url: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.appendingPathComponent("shaders/common.h").path) else { return false }
+        var isDir: ObjCBool = false
+        return fm.fileExists(atPath: url.appendingPathComponent("materials").path, isDirectory: &isDir)
+            && isDir.boolValue
+    }
+
+    /// 자동 탐지 채택 1회 로그(F471) — 무관 폴터 채택 시 사용자가 원인을 추적할 수 있게.
+    private static var loggedAutoDetectedPaths: Set<String> = []
+    private static func logAutoDetectedOnce(_ url: URL) {
+        let path = url.path
+        guard !loggedAutoDetectedPaths.contains(path) else { return }
+        loggedAutoDetectedPaths.insert(path)
+        NSLog("%@", "[Waple] base assets auto-detected: \(path) (설정 메뉴 지정이 항상 우선)")
     }
 }
