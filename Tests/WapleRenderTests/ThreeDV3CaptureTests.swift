@@ -11,9 +11,12 @@ final class ThreeDV3CaptureTests: XCTestCase {
     func testCapture3DScenes() throws {
         guard ProcessInfo.processInfo.environment["WAPLE_3DV3"] == "1" else { throw XCTSkip("set WAPLE_3DV3=1") }
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
-        let base = NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds"
+        // 형제 하네스와 같은 WAPLE_REAL_PKGS/WAPLE_BASE_ASSETS 오버라이드 관례(F408 통일).
+        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")
         guard FileManager.default.fileExists(atPath: base) else { throw XCTSkip("no real pkgs") }
-        let assetsPath = NSHomeDirectory() + "/Downloads/wallpaper_dev/assets"
+        let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/assets")
         // F409: BaseAssetsSettings.baseAssetsDirectory 는 UserDefaults.standard 에 영속되는 프로세스
         // 전역 static — 복원 없이 바꾸면 개발자 실앱 설정에 영구 기록되고 동일 프로세스(swift test)의
         // 후속 테스트로 누수된다. 형제 하네스(RealPackagesGroundTruthTests/ForwardLightingGateProbeTests)

@@ -158,6 +158,8 @@ final class WebHardPauseTests: XCTestCase {
         )
         window.isReleasedWhenClosed = false
         window.contentView = web
+        // WebKit 유예 회피용 창 부착+가시 상태는 유지하되, 투명(alpha 0)으로 사용자 가시 출현은 제거.
+        window.alphaValue = 0
         window.orderFront(nil)
         let navigationWaiter = NavigationWaiter()
         web.navigationDelegate = navigationWaiter

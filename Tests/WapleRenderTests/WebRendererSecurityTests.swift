@@ -266,11 +266,19 @@ final class WebRendererSecurityTests: XCTestCase {
 
 private final class FakeSchemeTask: NSObject, WKURLSchemeTask {
     let request: URLRequest
-    private(set) var response: URLResponse?
-    private(set) var receivedData = Data()
-    private(set) var dataEventCount = 0
-    private(set) var finished = false
-    private(set) var failedError: Error?
+    // 핸들러의 io 큐(쓰기)와 테스트 스레드(읽기)가 교차하므로 모든 상태 접근을 lock 으로 동기화한다.
+    private let lock = NSLock()
+    private var _response: URLResponse?
+    private var _receivedData = Data()
+    private var _dataEventCount = 0
+    private var _finished = false
+    private var _failedError: Error?
+
+    var response: URLResponse? { lock.withLock { _response } }
+    var receivedData: Data { lock.withLock { _receivedData } }
+    var dataEventCount: Int { lock.withLock { _dataEventCount } }
+    var finished: Bool { lock.withLock { _finished } }
+    var failedError: Error? { lock.withLock { _failedError } }
 
     var statusCode: Int? { (response as? HTTPURLResponse)?.statusCode }
     var responseHeaders: [String: String] {
@@ -289,20 +297,24 @@ private final class FakeSchemeTask: NSObject, WKURLSchemeTask {
     }
 
     func didReceive(_ response: URLResponse) {
-        self.response = response
+        lock.withLock { _response = response }
     }
 
     func didReceive(_ data: Data) {
-        dataEventCount += 1
-        receivedData.append(data)
+        lock.withLock {
+            _dataEventCount += 1
+            _receivedData.append(data)
+        }
     }
 
     func didFinish() {
-        finished = true
+        lock.withLock { _finished = true }
     }
 
     func didFailWithError(_ error: Error) {
-        failedError = error
-        finished = true
+        lock.withLock {
+            _failedError = error
+            _finished = true
+        }
     }
 }

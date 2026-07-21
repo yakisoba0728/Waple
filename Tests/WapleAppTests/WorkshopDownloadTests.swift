@@ -23,18 +23,25 @@ final class WorkshopDownloadTests: XCTestCase {
     }
 
     private var savedUsername = ""
+    private var tempDirs: [URL] = []
 
+    // SteamCmdDownloader.username 은 UserDefaults.standard 전역 영속 — 스냅샷/복원으로 방어한다.
+    // 이 방어는 직렬 실행 전제다(테스트 병렬 실행 시 스냅샷/복원이 인터리브해 상호 오염 가능 — 기본
+    // 직렬 실행에서는 안전). 완전 격리는 프로덕션 측 UserDefaults 주입 설계 변경이 필요해 여기선 유지.
     override func setUp() async throws {
         savedUsername = SteamCmdDownloader.username   // download() 가 UserDefaults 를 덮어쓰므로 복원용
     }
 
     override func tearDown() async throws {
         SteamCmdDownloader.username = savedUsername
+        for d in tempDirs { try? FileManager.default.removeItem(at: d) }   // $TMPDIR 리터 방지
+        tempDirs = []
     }
 
     private func tempDir() -> URL {
         let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        tempDirs.append(d)
         return d
     }
 

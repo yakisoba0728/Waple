@@ -3,15 +3,25 @@ import WapleLibrary
 @testable import Waple
 
 final class LibraryRemovalTests: XCTestCase {
+    private var tempDirs: [URL] = []
+
+    override func tearDown() {
+        for d in tempDirs { try? FileManager.default.removeItem(at: d) }
+        tempDirs = []
+        super.tearDown()
+    }
+
     private func tempDir() -> URL {
         let d = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try! FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        tempDirs.append(d)   // tearDown 에서 정리($TMPDIR 리터 방지)
         return d
     }
     private func makeWallpaper(id: String) -> URL {
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + "-" + id, isDirectory: true)
         try! FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        tempDirs.append(folder)   // tearDown 에서 정리
         let json: [String: Any] = ["type": "video", "file": "a.mp4", "title": id]
         try! JSONSerialization.data(withJSONObject: json).write(to: folder.appendingPathComponent("project.json"))
         return folder

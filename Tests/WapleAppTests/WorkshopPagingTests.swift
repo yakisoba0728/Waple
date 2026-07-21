@@ -53,9 +53,18 @@ final class WorkshopPagingTests: XCTestCase {
             .queryItems?.first { $0.name == name }?.value
     }
 
+    private var tempDirs: [URL] = []
+
+    override func tearDown() {
+        for d in tempDirs { try? FileManager.default.removeItem(at: d) }
+        tempDirs = []
+        super.tearDown()
+    }
+
     private func tempDir() -> URL {
         let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        tempDirs.append(d)   // tearDown 에서 정리($TMPDIR 리터 방지)
         return d
     }
 

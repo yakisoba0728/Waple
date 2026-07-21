@@ -100,6 +100,10 @@ final class MediaPollerTests: XCTestCase {
         let provider = SlowProvider()
         let poller = MediaPoller(provider: provider)
 
+        // 5.4s 실시간 블로킹은 강제다: MediaPoller.start 의 폴 간격(5s)이 하드코딩이고 poll()/
+        // pollInFlight 가드가 private 이라, 두 번째 폴이 가드에 걸리는 순간은 5s 타이머 발화를
+        // 기다려야만 관측된다(Sources 변경 없이는 단축 불가 — 검토 결론). 0.4s 는 발화 직후 stop 을
+        // 보장하는 최소 슬랙.
         poller.start()
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 5.4))
         poller.stop()

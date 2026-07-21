@@ -241,12 +241,13 @@ final class AppLogicTests: XCTestCase {
         XCTAssertNil(resolved)
     }
 
-    /// F036/F035 회귀 방지: screensChanged() 는 desktopController.rebuild() 뒤 곧바로
-    /// RendererSwap.apply(existing: renderers, ...) 로 재적용한다 — renderers 를 미리 비우지 않는다.
-    /// 종전에는 ScreenChangeLifecycle.detachRenderersBeforeRebuild 로 재적용 '전' renderers 를 []로
-    /// 선-소거해, RendererSwap 의 "mount 실패 시 existing 유지" 롤백 안전망이 이미 빈 배열을 붙잡아
+    /// F036/F035 관련: 감시 대상 performScreensChanged()(private, AppDelegate.swift:449)는 테스트에서
+    /// 직접 호출할 수 없으므로, 이 테스트는 그 안전망이 의존하는 RendererSwap.apply 의 롤백 의미론만
+    /// 잠근다 — 살아있는 existing 을 그대로 넘겼을 때 mount 실패 시 기존 렌더러가 생존함. 호출부 배선
+    /// (선-소거 없이 renderers 를 그대로 넘기는지)은 미검증 — 종전 선-소거는 그 안전망이 빈 배열을 붙잡아
     /// 무력화됐다(재적용 실패 시 화면 전체가 배경 없이 남음). 아래는 실제 screensChanged 가 호출하는
-    /// 것과 동일한 RendererSwap.apply 를, 화면 하나의 마운트가 실패하는 상황으로 재현한다.
+    /// 것과 동일한 RendererSwap.apply 를, 화면 하나의 마운트가 실패하는 상황으로 재현한다(의미론 잠금 — 동일
+    /// 의미론은 위 :107-141 에서도 고정).
     func testScreensChangedReapply_mountFailure_keepsExistingRenderersAlive() {
         var tornDown: [String] = []
         let existing = [Tok("old1"), Tok("old2")]
@@ -262,8 +263,8 @@ final class AppLogicTests: XCTestCase {
         XCTAssertFalse(tornDown.contains("old1"), "F036: 재적용 실패 시 기존 렌더러가 생존해야 한다")
         XCTAssertFalse(tornDown.contains("old2"), "F036: 재적용 실패 시 기존 렌더러가 생존해야 한다")
 
-        // 대조군(종전 버그 재현): 재적용 '전' existing 을 선-소거하면, 위와 같은 실패에도 "생존"이
-        // 무의미해진다 — existing 이 이미 비어 있으므로 지킬 것 자체가 없다.
+        // 대조군(종전 버그 형태 재현): 재적용 '전' existing 을 선-소거하면, 위와 같은 실패에서도 기존
+        // 렌더러는 이미 teardown 돼 있다 — 롤백 안전망이 지킬 대상 자체가 사라진다.
         var preDetached = existing
         preDetached.forEach { tornDown.append($0.id) }   // 옛 detachRenderersBeforeRebuild 와 동일한 즉시 teardown
         preDetached.removeAll()
@@ -273,7 +274,8 @@ final class AppLogicTests: XCTestCase {
             makeAndMount: { s -> Tok? in s == "s2" ? nil : Tok("new-\(s)") },
             teardown: { _ in })
         guard case .failure = regressed else { return XCTFail("대조군도 실패해야 의미가 있다") }
-        XCTAssertTrue(preDetached.isEmpty, "선-소거 경로는 롤백 안전망이 지킬 대상 자체를 미리 없애버린다(구버전 결함 재현)")
+        XCTAssertTrue(tornDown.contains("old1") && tornDown.contains("old2"),
+                      "선-소거 패턴은 같은 실패에서 기존 렌더러를 이미 잃는다(구버전 결함 형태 대조)")
     }
 
     func testVideoSettingsTargetsActiveVideoRenderersBeforeCurrentProject() {

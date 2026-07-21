@@ -201,8 +201,9 @@ final class SceneCompositeConventionTests: XCTestCase {
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 1.0, 2.0], toDir: out)
         XCTAssertEqual(urls.count, 3)
-        let lumas = urls.sorted { $0.lastPathComponent < $1.lastPathComponent }.map { avgLuma($0) }
-        // 파일명 정렬: t0.0, t1.0, t2.0
+        // captureFrames 는 times 오름차순으로 반환(재정렬 불필요 — 파일명 사전순은 t≥10 에서 깨진다).
+        let lumas = urls.map { avgLuma($0) }
+        // 순서: t0.0, t1.0, t2.0
         XCTAssertEqual(lumas[0], 1.0, accuracy: 0.03, "t=0 → alpha 1")
         XCTAssertEqual(lumas[1], 0.5, accuracy: 0.1, "t=1 → 중점 ≈0.5")
         XCTAssertEqual(lumas[2], 0.0, accuracy: 0.03, "t=2 → alpha 0 (single 클램프)")
@@ -234,7 +235,8 @@ final class SceneCompositeConventionTests: XCTestCase {
         defer { r.teardown() }
         let out = URL(fileURLWithPath: "/tmp/waple_cc_animO")
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 2.0], toDir: out).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        // captureFrames 는 times 오름차순으로 반환(재정렬 불필요 — 파일명 사전순은 t≥10 에서 깨진다).
+        let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 2.0], toDir: out)
         func px(_ url: URL, _ x: Int) -> Double {
             guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)), let c = rep.colorAt(x: x, y: 18) else { return -1 }
             return c.redComponent

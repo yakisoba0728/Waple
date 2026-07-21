@@ -245,6 +245,8 @@ final class RealWebGroundTruthTests: XCTestCase {
         let project = try ProjectJSONParser.parse(folderURL: folder)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
                               styleMask: [.borderless], backing: .buffered, defer: false)
+        // WebKit 미디어 로딩 유예 회피용 가시 창은 유지하되, 투명(alpha 0)으로 사용자 가시 출현은 제거.
+        window.alphaValue = 0
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
         let result = try loadAndProbe(project: project, container: window.contentView)

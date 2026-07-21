@@ -36,8 +36,6 @@ final class PuppetModelTests: XCTestCase {
             body.append(0)
         }
         var nextOff = UInt32(d.count + 4 + 4 + body.count + 8)  // 대략적 MDLA 위치(파서는 count 기반이라 무관)
-        d.append(0)  // wait — 위에서 이미 magic 뒤 0 추가함
-        d.removeLast()
         withUnsafeBytes(of: &nextOff) { d.append(contentsOf: $0) }
         var bc = UInt32(boneRecords.count); withUnsafeBytes(of: &bc) { d.append(contentsOf: $0) }
         d.append(body)
