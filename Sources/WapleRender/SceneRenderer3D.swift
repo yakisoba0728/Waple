@@ -30,6 +30,10 @@ extension SceneRenderer {
         let rimAmount: Float
         let rimExponent: Float
         let gradientTexture: MTLTexture?   // shadingGradient 일 때만 non-nil(항상 "gradient/gradient_toon_smooth")
+        let foggy: Bool              // F662: combos.FOG!=0(기본 1) — scene fog 참여(FOG:0 명시 머티리얼만 제외)
+        /// F661: 로컬 AABB(정점 min/max, 바인드 포즈) — directional 오소 섀도우 피팅 입력.
+        let boundsMin: SIMD3<Float>
+        let boundsMax: SIMD3<Float>
     }
     /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 4×float4 = 256B).
     struct MeshUniform {
@@ -158,6 +162,15 @@ extension SceneRenderer {
 
     // ── 3D 씬(메시) 경로 ─────────────────────────────────────────────────────────
 
+    /// F662: 패키지 scene.json 의 general 딕셔너리에서 scene fog 를 읽는다(SceneDocument 미파스 필드).
+    /// scene.json 부재/파스 실패/general 부재 시 fog 비활성(기본값) — 어떤 입력에도 throw 없음.
+    static func parseScene3DFog(package: ScenePackage) -> Scene3DFog {
+        guard let data = package.data(for: "scene.json"),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let general = json["general"] as? [String: Any] else { return Scene3DFog() }
+        return Scene3DFog.parse(general: general)
+    }
+
     /// .mdl 로드 → 서브메시별 버퍼/텍스처 → MeshRenderable, 2D 이미지 레이어 → Billboard3D,
     /// 그룹/모델 → Node3D(변환 계층). 프로퍼티 스크립트 엔진은 **씬 order** 로 로드(컨트롤러 top-level
     /// 사이드이펙트가 이를 읽는 스크립트보다 먼저) 후 per-frame 평가. 실패 오브젝트는 스킵+로그.
@@ -169,6 +182,9 @@ extension SceneRenderer {
         scene3DLights = doc.lights3D
         scene3DAmbient = SIMD3(doc.ambientColor.x, doc.ambientColor.y, doc.ambientColor.z)
         scene3DSkylight = SIMD3(doc.skylightColor.x, doc.skylightColor.y, doc.skylightColor.z)
+        // F662(S-45): scene fog(general.fogdistance*/fogheight*) — SceneDocument 미파스 필드라
+        // 패키지 scene.json 을 여기서 직독(Scene3DFog.parse). 읽기 실패/필드 부재 시 .disabled(fog 없음).
+        Scene3DFogStore.set(Self.parseScene3DFog(package: package), for: ObjectIdentifier(self))
         meshPipelineOver = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
         meshPipelineAdditive = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         meshPipelineSkin = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: false, device: device)
@@ -251,6 +267,14 @@ extension SceneRenderer {
                                                    compositeImageTextures: compositeImageTextures)
                 else { continue }
                 if skinned { anySkinned = true }
+                // F661: 로컬 AABB(정점 min/max) — directional 오소 섀도우의 씬 바운드 피팅 입력.
+                // MDL 헤더 AABB(V0017+)와 동치이나 V0016 은 헤더에 없어 정점에서 일괄 산출한다.
+                var bMin = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+                var bMax = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+                for v in mesh.vertices {
+                    bMin = simd_min(bMin, v.position)
+                    bMax = simd_max(bMax, v.position)
+                }
                 meshes.append(GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
                                         texture: mat.texture, tint: mat.tint,
                                         roughness: mat.roughness, metallic: mat.metallic,
@@ -260,7 +284,8 @@ extension SceneRenderer {
                                         depthTest: mat.depthTest, depthWrite: mat.depthWrite, skinned: skinned,
                                         rimLighting: mat.rimLighting, shadingGradient: mat.shadingGradient,
                                         rimAmount: mat.rimAmount, rimExponent: mat.rimExponent,
-                                        gradientTexture: mat.gradientTexture))
+                                        gradientTexture: mat.gradientTexture, foggy: mat.foggy,
+                                        boundsMin: bMin, boundsMax: bMax))
             }
             guard !meshes.isEmpty else { skipped += 1; continue }
             // 활성 애니(animationlayers) → 인덱스. 스키닝 모델만 bone 버퍼/모델 참조 보유.
@@ -429,6 +454,7 @@ extension SceneRenderer {
         let rimAmount: Float
         let rimExponent: Float
         let gradientTexture: MTLTexture?
+        let foggy: Bool
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
@@ -448,6 +474,7 @@ extension SceneRenderer {
         var unlit = false
         var rimLighting = false
         var shadingGradient = false
+        var foggy = true   // F662: FOG 콤보 기본 1(WE 선언) — 명시 0 만 scene fog 제외(3706286085 sky/boost)
         if let d = quietAssetData(path, package: package),
            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
@@ -473,6 +500,9 @@ extension SceneRenderer {
                 }
                 if let v = combos.first(where: { $0.key.lowercased() == "shadinggradient" })?.value {
                     shadingGradient = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                }
+                if let v = combos.first(where: { $0.key.lowercased() == "fog" })?.value {
+                    foggy = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 1) != 0
                 }
             }
             if let csv = p0["constantshadervalues"] as? [String: Any] {
@@ -507,7 +537,7 @@ extension SceneRenderer {
                                        depthTest: depthTest, depthWrite: depthWrite,
                                        rimLighting: rimLighting, shadingGradient: shadingGradient,
                                        rimAmount: pbr.rimAmount, rimExponent: pbr.rimExponent,
-                                       gradientTexture: gradientTexture)
+                                       gradientTexture: gradientTexture, foggy: foggy)
                 }
             }
         }
@@ -520,7 +550,7 @@ extension SceneRenderer {
                                   depthTest: depthTest, depthWrite: depthWrite,
                                   rimLighting: rimLighting, shadingGradient: shadingGradient,
                                   rimAmount: pbr.rimAmount, rimExponent: pbr.rimExponent,
-                                  gradientTexture: gradientTexture)
+                                  gradientTexture: gradientTexture, foggy: foggy)
     }
 
     private func imageLayerCompositeID(_ name: String) -> Int? {
@@ -638,14 +668,16 @@ extension SceneRenderer {
         return result
     }
 
-    /// `castShadow` point의 6면을 2×3 viewport에 렌더한다. 실패 시 해당 프레임 shadow metadata를 끈다.
+    /// `castShadow` point 의 6면을 2×3 viewport에, directional(F661)은 단일 오소를 슬라이스 전체에 렌더한다.
+    /// 실패 시 해당 프레임 shadow metadata를 끈다.
     func encodePointShadows(resolvedLights: [Scene3DResolvedLight],
                             lights: inout [Scene3DLightUniform],
                             nodes: [Int: Scene3DMath.Node],
                             skinBuffers: [Int: MTLBuffer],
                             commandBuffer: MTLCommandBuffer,
                             device: MTLDevice) -> (texture: MTLTexture?, matrices: [simd_float4x4]) {
-        var matrices = [simd_float4x4](repeating: matrix_identity_float4x4, count: 24)
+        var matrices = [simd_float4x4](repeating: matrix_identity_float4x4,
+                                       count: Scene3DLighting.maximumLights * 6)
         let sliceCount = Scene3DLighting.shadowSliceCount(lights)
         guard sliceCount > 0 else { return (nil, matrices) }
 
@@ -663,17 +695,61 @@ extension SceneRenderer {
             return (nil, matrices)
         }
 
+        // F661: directional 오소 피팅용 씬 월드 AABB — 첫 directional 캐스터에서 1회 계산(lazy).
+        // 캐스터만 재면 리시버가 상자 밖으로 빠져 섀도우가 걸리지 않는다(광자는 캐스터를 먼저 때리고
+        // 리시버에 도달 — 상자는 수신 영역 전체를 덮어야 함). 모든 가시 메시(캐스터+리시버)를 포함.
+        var worldBoundsCache: (min: SIMD3<Float>, max: SIMD3<Float>)?? = nil
+        func sceneShadowWorldBounds() -> (min: SIMD3<Float>, max: SIMD3<Float>)? {
+            if let cached = worldBoundsCache { return cached }
+            var lo = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+            var hi = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+            var any = false
+            for renderable in meshRenderables {
+                guard let world = Scene3DMath.worldMatrix(id: renderable.id, nodes: nodes), world.visible else { continue }
+                for mesh in renderable.meshes {
+                    // 로컬 AABB 8코너 → 월드(정점 산출 AABB 라 유효성은 build3D 가 보장).
+                    for cx in [mesh.boundsMin.x, mesh.boundsMax.x] {
+                        for cy in [mesh.boundsMin.y, mesh.boundsMax.y] {
+                            for cz in [mesh.boundsMin.z, mesh.boundsMax.z] {
+                                let p = world.matrix * SIMD4<Float>(cx, cy, cz, 1)
+                                lo = simd_min(lo, SIMD3(p.x, p.y, p.z))
+                                hi = simd_max(hi, SIMD3(p.x, p.y, p.z))
+                            }
+                        }
+                    }
+                    any = true
+                }
+            }
+            let result = any ? (lo, hi) : nil
+            worldBoundsCache = .some(result)
+            return result
+        }
+
         for (lightIndex, light) in resolvedLights.enumerated() where lightIndex < lights.count {
             let sliceValue = lights[lightIndex].shadow.x
             guard sliceValue >= 0 else { continue }
             let slice = Int(sliceValue)
-            let faceMatrices = PointShadowMath.faceViewProjections(
-                position: light.position, radius: light.colorRadius.w)
-            guard faceMatrices.count == 6 else {
-                Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
-                continue
+            let isDirectional = light.kind == .directional
+            let faceMatrices: [simd_float4x4]
+            if isDirectional {
+                // F661: 단일 오소(슬라이스 전체). 캐스터 AABB 가 없으면 이 라이트 섀도우만 끈다.
+                guard let bounds = sceneShadowWorldBounds(),
+                      let vp = DirectionalShadowMath.viewProjection(
+                        forward: light.forward, minBound: bounds.min, maxBound: bounds.max) else {
+                    Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
+                    continue
+                }
+                faceMatrices = [vp]
+            } else {
+                let cube = PointShadowMath.faceViewProjections(
+                    position: light.position, radius: light.colorRadius.w)
+                guard cube.count == 6 else {
+                    Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
+                    continue
+                }
+                faceMatrices = cube
             }
-            for face in 0..<6 { matrices[slice * 6 + face] = faceMatrices[face] }
+            for (face, m) in faceMatrices.enumerated() { matrices[slice * 6 + face] = m }
 
             let pass = MTLRenderPassDescriptor()
             pass.depthAttachment.texture = atlas
@@ -691,17 +767,24 @@ extension SceneRenderer {
             // [Waple stability policy] native Metal raster bias 상수는 미확정. acne만 억제하는 최소 정책값.
             encoder.setDepthBias(1, slopeScale: 1.5, clamp: 0)
 
-            for face in 0..<6 {
-                let cell = PointShadowMath.atlasCell(face)
-                let originX = cell.x * PointShadowMath.faceResolution
-                let originY = cell.y * PointShadowMath.faceResolution
-                encoder.setViewport(MTLViewport(
-                    originX: Double(originX), originY: Double(originY),
-                    width: Double(PointShadowMath.faceResolution),
-                    height: Double(PointShadowMath.faceResolution), znear: 0, zfar: 1))
-                encoder.setScissorRect(MTLScissorRect(
-                    x: originX, y: originY,
-                    width: PointShadowMath.faceResolution, height: PointShadowMath.faceResolution))
+            for face in 0..<faceMatrices.count {
+                if isDirectional {
+                    // 슬라이스 전체(셀 분할 없음) — scissor 없이 풀 뷰포트.
+                    encoder.setViewport(MTLViewport(
+                        originX: 0, originY: 0,
+                        width: Double(atlas.width), height: Double(atlas.height), znear: 0, zfar: 1))
+                } else {
+                    let cell = PointShadowMath.atlasCell(face)
+                    let originX = cell.x * PointShadowMath.faceResolution
+                    let originY = cell.y * PointShadowMath.faceResolution
+                    encoder.setViewport(MTLViewport(
+                        originX: Double(originX), originY: Double(originY),
+                        width: Double(PointShadowMath.faceResolution),
+                        height: Double(PointShadowMath.faceResolution), znear: 0, zfar: 1))
+                    encoder.setScissorRect(MTLScissorRect(
+                        x: originX, y: originY,
+                        width: PointShadowMath.faceResolution, height: PointShadowMath.faceResolution))
+                }
 
                 for (renderableIndex, renderable) in meshRenderables.enumerated() where renderable.castShadow {
                     guard let world = Scene3DMath.worldMatrix(id: renderable.id, nodes: nodes), world.visible else { continue }
@@ -843,6 +926,18 @@ extension SceneRenderer {
             ambient: SIMD4(scene3DAmbient.x, scene3DAmbient.y, scene3DAmbient.z, 0),
             skylight: SIMD4(scene3DSkylight.x, scene3DSkylight.y, scene3DSkylight.z, 0),
             meta: SIMD4(Float(resolvedLights.count), 0, 0, 0))
+        // F662: scene fog 유니폼 팩(build3D 에서 파스·저장). 비활성 씬은 w=0 이라 셰이더 무연산(무회귀).
+        let sceneFog = Scene3DFogStore.get(for: ObjectIdentifier(self))
+        if sceneFog.distanceEnabled {
+            frameUniform.fogDistanceColor = SIMD4(sceneFog.distanceColor.x, sceneFog.distanceColor.y,
+                                                  sceneFog.distanceColor.z, 1)
+            frameUniform.fogDistanceParams = sceneFog.distanceParams
+        }
+        if sceneFog.heightEnabled {
+            frameUniform.fogHeightColor = SIMD4(sceneFog.heightColor.x, sceneFog.heightColor.y,
+                                                sceneFog.heightColor.z, 1)
+            frameUniform.fogHeightParams = sceneFog.heightParams
+        }
         var lightUniforms = Scene3DLighting.packLights(resolvedLights)
         let skinBuffers = prepare3DSkinBuffers(time: time, device: device)
         let shadowResult = encodePointShadows(
@@ -938,7 +1033,10 @@ extension SceneRenderer {
                     if mesh.skinned && boneBuf == nil { continue }
                     u.tint = mesh.tint
                     u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, mesh.unlit ? 0 : 1)
-                    u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, 0)
+                    // F662: specularTint.w = fog 모드(0 비적용/1 rgb/2 rgb+alpha additive). scene fog 활성 +
+                    // 머티리얼 FOG!=0 일 때만. fullscreen composite(unlit, 스크린공간)는 0 유지(별도 경로).
+                    let fogMode: Float = (sceneFog.enabled && mesh.foggy) ? (mesh.additive ? 2 : 1) : 0
+                    u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, fogMode)
                     // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
                     u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
                     let useSkin = mesh.skinned && boneBuf != nil
@@ -1025,7 +1123,11 @@ extension SceneRenderer {
             normalMatrix: matrix_identity_float4x4,
             tint: bb.tint,
             material: SIMD4(bb.roughness, bb.metallic, 0, bb.lighting ? 2 : 0),
-            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z, 0),
+            // F662: 빌보드(genericimage4)도 scene fog 대상(WE FOG 콤보 기본 1 — 이미지 레이어의 FOG:0
+            // 명시 오브아웃은 SceneLayer 미파스라 미지원, 코퍼스 해당 0건). w = fog 모드.
+            specularTint: SIMD4(bb.specularTint.x, bb.specularTint.y, bb.specularTint.z,
+                                Scene3DFogStore.get(for: ObjectIdentifier(self)).enabled
+                                    ? (bb.additive ? 2 : 1) : 0),
             rim: .zero)  // 빌보드(2D 이미지 레이어)는 RIMLIGHTING/SHADINGGRADIENT 콤보 대상 아님(F274 — 콤보는
                          // .mdl 메시 재질에만 실존, 코퍼스 460 전건 billboard 레이어에 0건)
         // 머티리얼 blending=additive → 가산 파이프라인(플레어/글로우 광량 복원). 그 외 premult-over.

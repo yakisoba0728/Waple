@@ -82,13 +82,19 @@ struct Scene3DResolvedLight: Equatable {
     var coneOuterCos: Float = 0
 }
 
-/// MSL `FrameU`와 필드/정렬이 같은 per-frame 3D 라이팅 상수(4×float4).
+/// MSL `FrameU`와 필드/정렬이 같은 per-frame 3D 라이팅 상수(8×float4).
 struct Scene3DFrameUniform {
     var cameraEye: SIMD4<Float>
     var ambient: SIMD4<Float>
     var skylight: SIMD4<Float>
     /// x=활성 라이트 수, y/z=shadow atlas texel 크기, w=receiver depth bias.
     var meta: SIMD4<Float>
+    /// F662: scene fog 유니폼(common_fog.h g_FogDistanceColor/g_FogDistanceParams 대응). w=활성 플래그.
+    var fogDistanceColor = SIMD4<Float>(0, 0, 0, 0)
+    /// x=start, y=end-start, z=startDensity, w=endDensity-startDensity.
+    var fogDistanceParams = SIMD4<Float>(0, 1, 0, 0)
+    var fogHeightColor = SIMD4<Float>(0, 0, 0, 0)
+    var fogHeightParams = SIMD4<Float>(0, 1, 0, 0)
 }
 
 /// MSL `LightU`와 필드/정렬이 같은 라이트 1개 상수(4×float4).
@@ -102,16 +108,19 @@ struct Scene3DLightUniform {
 }
 
 enum Scene3DLighting {
-    static let maximumLights = 4
+    // F660: 4 → 8 상향. WE 는 종류별 배열(lightconfig: 젤다 point:5+directional:1=6슬롯)로 전량 렌더하는데
+    // first-4 캡이 3737268876 의 5번째 lpoint(Navi Light)와 ldirectional(태양, castshadow:true)을 드롭했다.
+    // 코퍼스 최대 6(젤다) — 8 은 상한 여유 포함. 셰이더 루프 상한(Mesh3DShaders mf_main)도 동일하게 올린다.
+    static let maximumLights = 8
 
-    /// lpoint / ldirectional / lspot 을 월드 공간으로 해석한다. 입력 순서를 보존하고(첫 4개 정책),
+    /// lpoint / ldirectional / lspot 을 월드 공간으로 해석한다. 입력 순서를 보존하고(first-N 정책),
     /// 부모가 있으면 그 부모의 현재 월드행렬/가시성을 적용한다.
     ///
     /// 방향 규약(2026-07 확정): scene.json `angles`(라디안) → Scene3DMath 모델행렬(T·Rz·Ry·Rx·S,
     /// 오브젝트와 동일 규약)의 **blue축(+Z, col2)** 이 라이트 forward. 근거: WE 스크립트 API
     /// (`lib.sceneScript.d.ts`) `Mat4.forward() = Blue axis`, `right=Red(+X)`, `up=Green(+Y)`,
     /// `compose = T*R*S`. directional 은 무감쇠(radiance=color×intensity), L=-forward.
-    /// directional/spot 섀도우는 스코프 밖 → castShadow 는 point 만 존중(무회귀).
+    /// spot 섀도우는 스코프 밖(코퍼스 spot 전원 castshadow:false) → castShadow 는 point/directional 만 존중.
     static func resolveLights(_ lights: [SceneLight3D],
                               nodes: [Int: Scene3DMath.Node]) -> [Scene3DResolvedLight] {
         var result: [Scene3DResolvedLight] = []
@@ -158,8 +167,9 @@ enum Scene3DLighting {
                     light.color.y * light.intensity,
                     light.color.z * light.intensity,
                     light.radius),
-                // directional/spot 섀도우는 스코프 밖 → point 만 캐스트.
-                castsShadow: kind == .point && light.castShadow,
+                // F661: spot 섀도우만 스코프 밖(코퍼스 spot 전원 castshadow:false). directional 은
+                // 단일 오소 맵 최소 근사 지원(DirectionalShadowMath) — castshadow:true 3씬.
+                castsShadow: kind != .spot && light.castShadow,
                 kind: kind,
                 forward: forward)
             if kind == .spot {
@@ -279,5 +289,154 @@ enum PointShadowMath {
         // [Waple stability policy] native CPU near 값은 미확정. 반경에 비례시키되 항상 far보다 작게 둔다.
         let preferred = max(minimumRadius, min(0.05, radius * 0.01))
         return min(preferred, radius * 0.5)
+    }
+}
+
+/// F661(S-47): directional 섀도우 최소 근사 — 단일 오소 맵(캐스케이드 미구현, cascadedistance0-2 는
+/// SceneDocument 미파스라 미사용). WE 는 CSM(directionalshadow:1)이나 실구현은 대형이라 스코프 밖.
+/// 라이트 forward 축으로 씬 전체 메시 월드 AABB(캐스터+리시버)를 타이트 피팅한 ortho VP 1장을
+/// 아틀라스 한 슬라이스 전체에 기록.
+enum DirectionalShadowMath {
+    /// 월드 AABB(minB/maxB)를 라이트 뷰 공간으로 옮겨 타이트하게 덮는 ortho VP(Metal z 0..1) 반환.
+    /// 입력이 비유한/퇴화(min>max)면 nil — 호출부는 해당 라이트 섀도우를 끈다(기존 묻섀도우 폴터 유지).
+    static func viewProjection(forward: SIMD3<Float>,
+                               minBound: SIMD3<Float>, maxBound: SIMD3<Float>) -> simd_float4x4? {
+        guard forward.x.isFinite, forward.y.isFinite, forward.z.isFinite,
+              minBound.x.isFinite, minBound.y.isFinite, minBound.z.isFinite,
+              maxBound.x.isFinite, maxBound.y.isFinite, maxBound.z.isFinite,
+              minBound.x <= maxBound.x, minBound.y <= maxBound.y, minBound.z <= maxBound.z,
+              simd_length_squared(forward) > 1e-12 else { return nil }
+        let f = simd_normalize(forward)
+        // 라이트 뷰: eye=원점, center=forward(RH, 전방 -Z). up 은 침침과 동일 기준축 폴터(F533).
+        let view = Scene3DMath.lookAt(eye: .zero, center: f, up: SIMD3<Float>(0, 1, 0))
+        // 월드 AABB 8코너 → 라이트 뷰 공간 min/max.
+        var lo = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+        var hi = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+        for cx in [minBound.x, maxBound.x] {
+            for cy in [minBound.y, maxBound.y] {
+                for cz in [minBound.z, maxBound.z] {
+                    let p = view * SIMD4<Float>(cx, cy, cz, 1)
+                    lo = simd_min(lo, SIMD3(p.x, p.y, p.z))
+                    hi = simd_max(hi, SIMD3(p.x, p.y, p.z))
+                }
+            }
+        }
+        // 가장자리 여백 5%(스키닝 애니의 바인드포즈 AABB 이탈 흡수) + 최소 두께(퇴화 상자 방지).
+        let pad = simd_max((hi - lo) * 0.05, SIMD3<Float>(repeating: 1e-3))
+        lo -= pad
+        hi += pad
+        // RH 뷰: 가시 범위는 -Z. near = -hi.z(가장 가까움), far = -lo.z(가장 멂). pad 로 near<far 보장.
+        let l = lo.x, r = hi.x, b = lo.y, t = hi.y
+        let zn = -hi.z, zf = -lo.z
+        // Metal NDC(x/y -1..1, z 0..1) 직교 투영. z: view z=-zn → 0, z=-zf → 1.
+        let proj = simd_float4x4(columns: (
+            SIMD4<Float>(2 / (r - l), 0, 0, 0),
+            SIMD4<Float>(0, 2 / (t - b), 0, 0),
+            SIMD4<Float>(0, 0, 1 / (zn - zf), 0),
+            SIMD4<Float>((l + r) / (l - r), (b + t) / (b - t), zn / (zn - zf), 1)))
+        return proj * view
+    }
+}
+
+/// F662(S-45): scene-level fog(general.fogdistance*/fogheight*) + 머티리얼 FOG 콤보.
+/// WE generic4.frag 는 common_fog.h `#if FOG_HEIGHT || FOG_DIST` 로 ApplyFog — 씬에 fog 필드가 있으면
+/// FOG 콤보 기본값(1) 머티리얼 전부 참여. SceneDocument 가 general fog 를 미파스라(타 소유 파일)
+/// 렌더러가 패키지 scene.json 을 직접 읽어 이 구조로 파스한다(SceneRenderer3D.build3D).
+/// 파라미터 매핑(WE common_fog.h 정합): params=(start, end-start, startDensity, endDensity-startDensity)
+///  — factor = z + w·saturate((d - x)/y)² 로 ApplyFog 식과 동일.
+struct Scene3DFog: Equatable {
+    var distanceEnabled = false
+    var distanceColor = SIMD3<Float>(0, 0, 0)
+    var distanceParams = SIMD4<Float>(0, 1, 0, 0)
+    var heightEnabled = false
+    var heightColor = SIMD3<Float>(0, 0, 0)
+    var heightParams = SIMD4<Float>(0, 1, 0, 0)
+    var enabled: Bool { distanceEnabled || heightEnabled }
+
+    /// scene.json general 딕셔너리 → fog 설정. {user/script/animation, value} 바인딩은 초기값 언랩
+    /// (SceneDocument unwrap/float/vec3 와 동일 의미론 — 사용자 오버라이드 미반영은 기존 파스와 동일 한계).
+    static func parse(general: [String: Any]) -> Scene3DFog {
+        var fog = Scene3DFog()
+        if boolValue(general["fogdistance"]) {
+            fog.distanceEnabled = true
+            fog.distanceColor = vec3Value(general["fogdistancecolor"]) ?? SIMD3(0, 0, 0)
+            fog.distanceParams = params(start: floatValue(general["fogdistancestart"]),
+                                        end: floatValue(general["fogdistanceend"]),
+                                        startDensity: floatValue(general["fogdistancestartdensity"]),
+                                        endDensity: floatValue(general["fogdistanceenddensity"]))
+        }
+        if boolValue(general["fogheight"]) {
+            fog.heightEnabled = true
+            fog.heightColor = vec3Value(general["fogheightcolor"]) ?? SIMD3(0, 0, 0)
+            fog.heightParams = params(start: floatValue(general["fogheightstart"]),
+                                      end: floatValue(general["fogheightend"]),
+                                      startDensity: floatValue(general["fogheightstartdensity"]),
+                                      endDensity: floatValue(general["fogheightenddensity"]))
+        }
+        return fog
+    }
+
+    /// (start, end-start, startDensity, Δdensity). end==start 퇴화는 0 나눗셈 방지로 최소폭 보장.
+    private static func params(start: Float?, end: Float?, startDensity: Float?, endDensity: Float?) -> SIMD4<Float> {
+        let s = start ?? 0
+        let e = end ?? 1
+        let sd = startDensity ?? 0
+        let ed = endDensity ?? 1
+        var span = e - s
+        if span.magnitude < 1e-4 { span = span < 0 ? -1e-4 : 1e-4 }
+        return SIMD4(s, span, sd, ed - sd)
+    }
+
+    private static func unwrap(_ value: Any?) -> Any? {
+        if let dict = value as? [String: Any], dict["value"] != nil { return dict["value"] }
+        return value
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool {
+        switch unwrap(value) {
+        case let b as Bool: return b
+        case let n as NSNumber: return n.boolValue
+        default: return false
+        }
+    }
+
+    private static func floatValue(_ value: Any?) -> Float? {
+        switch unwrap(value) {
+        case let f as Float: return f.isFinite ? f : nil
+        case let d as Double: return d.isFinite ? Float(d) : nil
+        case let i as Int: return Float(i)
+        case let n as NSNumber: return n.floatValue
+        case let s as String: return Float(s.trimmingCharacters(in: .whitespaces))
+        default: return nil
+        }
+    }
+
+    private static func vec3Value(_ value: Any?) -> SIMD3<Float>? {
+        switch unwrap(value) {
+        case let s as String:
+            let parts = s.split(whereSeparator: { $0.isWhitespace }).compactMap { Float($0) }
+            return parts.count >= 3 ? SIMD3(parts[0], parts[1], parts[2]) : nil
+        case let a as [Any]:
+            let parts = a.compactMap { floatValue($0) }
+            return parts.count >= 3 ? SIMD3(parts[0], parts[1], parts[2]) : nil
+        default: return nil
+        }
+    }
+}
+
+/// F662: 렌더러 인스턴스별 scene fog 저장소. SceneRenderer 의 저장 프로퍼티는 전부 SceneRenderer.swift
+/// (타 그룹 소유)에 선언되어 extension(SceneRenderer3D)에서 추가할 수 없어 ObjectIdentifier 키로 둔다.
+/// build3D 가 항상 encode3D 보다 먼저 호출되어(같은 렌더러) 값은 항상 신선 — 죽은 렌더러의 stale 엔트리는
+/// 읽히지 않고, 상한(64) 초과 시 전체 비움으로 성장을 제한한다(실사용 동시 활성 렌더러는 1~2개).
+enum Scene3DFogStore {
+    private static var values: [ObjectIdentifier: Scene3DFog] = [:]
+
+    static func set(_ fog: Scene3DFog, for id: ObjectIdentifier) {
+        if values.count > 64 { values.removeAll() }
+        values[id] = fog
+    }
+
+    static func get(for id: ObjectIdentifier) -> Scene3DFog {
+        values[id] ?? Scene3DFog()
     }
 }

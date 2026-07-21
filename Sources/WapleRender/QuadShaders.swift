@@ -110,6 +110,11 @@ enum QuadShaders {
     //   worldPos: uv → 레이어 월드 사각형 재구성. N=V=+Z; light type specialization is P2b.
     //   미사용 슬롯/짧은반경 라이트는 radius≤0 로 스킵(count 유니폼 불필요).
     //   비-HDR bgra8Unorm 블로아웃 정책은 기존 경로를 보존한다.
+    //   TODO(S-9): spot/directional 분기는 kind/axis/cone 데이터가 유니폼에 없어 이 파일만으로는 불가
+    //   — forwardUniforms 팩(WapleCore SceneDocument.swift) + 렌더러 바인딩(SceneRenderer.swift /
+    //   SceneRendererFrameEncoder.swift) 확장이 선행돼야 한다. WE CPU 측 angles→2D 방향 규약도 미확정
+    //   (docs/superpowers/specs/2026-07-14-we-2d-pbr-p2a-design.md 의 의도적 보류). 3D 경로는 F274 계열
+    //   Mesh3DShaders 의 directional/spot 분기를 참조.
     fragment float4 f_lit(VOut in [[stage_in]],
                           texture2d<float> tex [[texture(0)]],
                           constant float4 &tint [[buffer(0)]],

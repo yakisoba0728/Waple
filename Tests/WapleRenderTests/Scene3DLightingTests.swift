@@ -112,7 +112,7 @@ final class Scene3DLightingTests: XCTestCase {
         XCTAssertEqual(fallback, matrix_identity_float4x4)
     }
 
-    func testLightsApplyParentTransformClassifyTypesAndLimitFour() {
+    func testLightsApplyParentTransformClassifyTypesAndLimitEight() {
         let nodes: [Int: Scene3DMath.Node] = [
             9: .init(
                 origin: SIMD3(10, 0, 0),
@@ -132,15 +132,15 @@ final class Scene3DLightingTests: XCTestCase {
 
         let resolved = Scene3DLighting.resolveLights(lights, nodes: nodes)
 
-        // 모든 타입이 씬 순서대로 분류되고 첫 4개만 통과.
-        XCTAssertEqual(resolved.count, 4)
-        XCTAssertEqual(resolved.map { $0.kind }, [.spot, .point, .directional, .point])
+        // F660: 캡 4 → 8 — 6개 전원이 씬 순서대로 분류·통과(구 first-4 는 5번째 이후를 드롭했다).
+        XCTAssertEqual(resolved.count, 6)
+        XCTAssertEqual(resolved.map { $0.kind }, [.spot, .point, .directional, .point, .point, .point])
         // 부모 회전(Ry90°)이 point 위치에 적용: (1,0,0) → (10,0,-1).
         XCTAssertEqual(resolved[1].position.x, 10, accuracy: 1e-5)
         XCTAssertEqual(resolved[1].position.y, 0, accuracy: 1e-5)
         XCTAssertEqual(resolved[1].position.z, -1, accuracy: 1e-5)
-        XCTAssertEqual(resolved.map { $0.position.x }, [0, 10, 2, 3])
-        // point 만 섀도우 캐스트(directional/spot 은 스코프 밖 → false).
+        XCTAssertEqual(resolved.map { $0.position.x }, [0, 10, 2, 3, 4, 5])
+        // point 만 섀도우 캐스트(directional/spot 은 스코프 밖 → false). 이 픽스처는 directional castshadow=false.
         XCTAssertTrue(resolved[1].castsShadow)
         XCTAssertFalse(resolved[0].castsShadow)
         XCTAssertEqual(resolved[0].colorRadius, SIMD4(0.5, 1, 1.5, 20))
@@ -188,8 +188,10 @@ final class Scene3DLightingTests: XCTestCase {
             resolved(castsShadow: true, position: SIMD3(3, 0, 0)),
         ])
 
-        XCTAssertEqual(packed.map { $0.shadow.x }, [0, -1, 1, -1])
-        XCTAssertEqual(packed.map { $0.shadow.y }, [0, -1, 6, -1])
+        // F660: 캡 8 — 3라이트 + 5개 비활성 슬롯.
+        XCTAssertEqual(packed.count, Scene3DLighting.maximumLights)
+        XCTAssertEqual(packed.map { $0.shadow.x }, [0, -1, 1, -1, -1, -1, -1, -1])
+        XCTAssertEqual(packed.map { $0.shadow.y }, [0, -1, 6, -1, -1, -1, -1, -1])
         XCTAssertEqual(packed[0].positionExponent, SIMD4(1, 0, 0, 2))
         XCTAssertEqual(packed[1].colorRadius, SIMD4(1, 0.5, 0.25, 10))
         XCTAssertEqual(Scene3DLighting.shadowSliceCount(packed), 2)
