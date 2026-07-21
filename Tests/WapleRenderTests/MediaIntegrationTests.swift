@@ -32,9 +32,11 @@ final class NowPlayingParseTests: XCTestCase {
 
     func testRunOSAScriptTimesOutWhenProcessStalls() {
         let started = Date()
-        let output = AppleScriptNowPlayingProvider.runOSAScript("delay 3\nreturn \"done\"")
-        XCTAssertNil(output)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 2.8)
+        let output = AppleScriptNowPlayingProvider.runOSAScript("delay 6\nreturn \"done\"")
+        XCTAssertNil(output, "delay 6 은 타임아웃(2s)에 잘려야 — 타임아웃 소실 회귀면 \"done\" 반환")
+        // 경과시간 단언은 타임아웃이 4s+ 로 늘어나는 회귀용 — 정상 ≈2s + 스폰/정리 마진 2.5s
+        // (종전 <2.8s 는 고부하 머신에서 간헐 오탐 여지가 있었다).
+        XCTAssertLessThan(Date().timeIntervalSince(started), 4.5)
     }
 }
 

@@ -79,7 +79,10 @@ final class VideoBackedSceneCaptureTests: XCTestCase {
     /// 프레임이 변화(정지 아님). 코퍼스 비디오로 실디코드 스모크(스냅샷 셀프체크가 못 잡는 경로).
     func testLiveVideoLayerProducesAdvancingFrames() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
-        let base = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+        // WAPLE_REAL_PKGS 는 아래 :126 과 같은 코퍼스 루트 관례(루트/<id>)가 기본 — 종전엔 씬 폴터
+        // 자체로만 해석해 관례대로 설정하면 영구 skip 이었다. 씬 폴터 직접 지정도 계속 수용한다.
+        let env = ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+        let base = env.map { FileManager.default.fileExists(atPath: $0 + "/scene.pkg") ? $0 : $0 + "/3665954520" }
             ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds/3665954520")
         guard FileManager.default.fileExists(atPath: base + "/scene.pkg") else { throw XCTSkip("no real video scene") }
         let pkg = try ScenePackage.parse(try Data(contentsOf: URL(fileURLWithPath: base + "/scene.pkg"), options: .mappedIfSafe))

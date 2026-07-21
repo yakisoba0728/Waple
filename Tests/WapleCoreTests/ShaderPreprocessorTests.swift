@@ -187,7 +187,11 @@ final class ShaderPreprocessorTests: XCTestCase {
         let r = ShaderPreprocessor.preprocess(src, combos: ["MASK": 0])
         XCTAssertTrue(r.contains("unmasked"), r)
         XCTAssertTrue(r.contains("after"), r)
-        XCTAssertFalse(r.contains("masked\r"), r)
+        // 종전 `!contains("masked\r")` 는 무효 단언이었다 — 아래 \r 검사가 참이면 자동 참이고, 정규화 회귀
+        // 시엔 "unmasked\r" 가 부분문자열로 걸려 오탐. 줄 단위 비교(:201 과 같은 이유)로 비활성 분기
+        // 누출을 직접 검증한다.
+        XCTAssertFalse(r.split(separator: "\n").map(String.init).contains("masked"),
+                       "비활성 분기 줄 누출 금지: \(r)")
         XCTAssertFalse(r.contains("\r"), "출력은 LF 정규화: \(r)")
     }
 

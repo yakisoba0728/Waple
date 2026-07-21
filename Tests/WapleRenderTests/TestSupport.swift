@@ -70,22 +70,44 @@ func makeTinyMP4(at url: URL) throws {
     writer.startWriting()
     writer.startSession(atSourceTime: .zero)
     for i in 0..<4 {
-        while !input.isReadyForMoreMediaData {
+        // writer 실패 시 input 은 영원히 ready 되지 않을 수 있다 — status 검사 + 타임아웃으로 행 방지.
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while !input.isReadyForMoreMediaData, writer.status == .writing, Date() < deadline {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
         }
+        guard writer.status == .writing else {
+            throw NSError(domain: "makeTinyMP4", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "AVAssetWriter 실패: \(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")"])
+        }
+        guard input.isReadyForMoreMediaData else {
+            throw NSError(domain: "makeTinyMP4", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "isReadyForMoreMediaData 대기 타임아웃(5s)"])
+        }
+        guard let pool = adaptor.pixelBufferPool else {
+            throw NSError(domain: "makeTinyMP4", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "pixelBufferPool 생성 실패"])
+        }
         var buffer: CVPixelBuffer?
-        CVPixelBufferPoolCreatePixelBuffer(nil, adaptor.pixelBufferPool!, &buffer)
-        adaptor.append(buffer!, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: 10))
+        CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+        guard let buffer else {
+            throw NSError(domain: "makeTinyMP4", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "CVPixelBuffer 생성 실패"])
+        }
+        adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: 10))
     }
     input.markAsFinished()
     let sem = DispatchSemaphore(value: 0)
     writer.finishWriting { sem.signal() }
     sem.wait()
+    guard writer.status == .completed else {
+        throw NSError(domain: "makeTinyMP4", code: 5, userInfo: [
+            NSLocalizedDescriptionKey: "finishWriting 실패: \(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")"])
+    }
 }
 
 /// 캡처 PNG 의 평균 luma((r+g+b)/3 평균) — 최대 ~40×40 그리드 서브샘플. 실패 시 -1.
 func avgLuma(_ url: URL) -> Double {
-    guard let rep = NSBitmapImageRep(data: try! Data(contentsOf: url)) else { return -1 }
+    guard let data = try? Data(contentsOf: url), let rep = NSBitmapImageRep(data: data) else { return -1 }
     var sum = 0.0; var n = 0
     let stepX = max(1, rep.pixelsWide / 40), stepY = max(1, rep.pixelsHigh / 40)
     for y in stride(from: 0, to: rep.pixelsHigh, by: stepY) {

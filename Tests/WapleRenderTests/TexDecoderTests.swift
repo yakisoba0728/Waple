@@ -71,7 +71,9 @@ final class TexDecoderTests: XCTestCase {
     /// 라우팅 .embeddedImage) 와 lut/*(mip 에 여분 int → parseMip 실패 → fast-path .png). 둘 다 정상 디코드
     /// 해야 무회귀(재정렬로 어느 것도 흰 폴백이 되지 않음). 코퍼스 부재 시 skip(Real* 하네스 규약).
     func testDecodesRealEmbeddedImages() throws {
-        let base = NSHomeDirectory() + "/Downloads/wallpaper_dev/assets/materials/"
+        // WAPLE_BASE_ASSETS 오버라이드(F408: Real* 하네스 관례와 통일 — 없으면 기본 경로).
+        let base = (ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/assets")) + "/materials/"
         let splash = base + "particle/water/splash_5.tex"
         guard FileManager.default.fileExists(atPath: splash) else { throw XCTSkip("no corpus: \(splash)") }
         // splash_5: imageFormat 라우팅 → .embeddedImage 로 실물 경로를 직접 검증.
@@ -255,7 +257,9 @@ final class TexDecoderTests: XCTestCase {
     /// 코퍼스 부재 시 skip(Real* 하네스와 동일 규약). 하드 어서션: fmt6→.bc2, 비-nil, 실 이미지 치수,
     /// 픽셀 변이(단색 폴백 아님). 알파 어서션은 실측값에 맞춰 확정(BC2 컬러맵은 대개 불투명).
     func testDecodesRealSunFmt6BC2() throws {
-        let pkgPath = NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds/3662790108/scene.pkg"
+        // WAPLE_REAL_PKGS 오버라이드(F408: Real* 하네스 관례와 통일 — 없으면 기본 경로).
+        let pkgPath = (ProcessInfo.processInfo.environment["WAPLE_REAL_PKGS"]
+            ?? (NSHomeDirectory() + "/Downloads/wallpaper_dev/backgrounds")) + "/3662790108/scene.pkg"
         guard FileManager.default.fileExists(atPath: pkgPath) else { throw XCTSkip("no corpus: \(pkgPath)") }
         let pkg = try ScenePackage.parse(Data(contentsOf: URL(fileURLWithPath: pkgPath)))
         let texData = try XCTUnwrap(pkg.data(for: "materials/sun-1.tex"), "sun-1.tex 부재")

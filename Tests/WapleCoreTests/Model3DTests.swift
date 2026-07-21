@@ -665,9 +665,12 @@ final class Model3DRealFileTests: XCTestCase {
     }
 
     func testParsesSonicAndSolarModels() throws {
+        var total = 0
         for id in ["3706286085", "3662790108"] {
             let pkg: ScenePackage
-            do { pkg = try loadPkg(id) } catch { continue }  // 없으면 스킵
+            // 파일 부재(XCTSkip)만 걸러낸다 — 손상 pkg 의 parse 실패까지 삼키면 조용히 green 이 된다.
+            do { pkg = try loadPkg(id) } catch is XCTSkip { continue }
+            total += 1
             let mdls = pkg.entries.filter { $0.name.hasSuffix(".mdl") }
             var ok = 0
             for e in mdls {
@@ -681,6 +684,8 @@ final class Model3DRealFileTests: XCTestCase {
             print("[Model3D] pkg \(id): \(ok)/\(mdls.count) OK")
             XCTAssertEqual(ok, mdls.count, "pkg \(id) 전수 파스")
         }
+        // 형제 실물 테스트(:710/:741)와 동일 패턴 — 전부 부재면 단언 0개 pass 가 아니라 skip.
+        if total == 0 { throw XCTSkip("코퍼스에 sonic/solar pkg 부재") }
     }
 
     /// 이슈7: MDLV0021(코퍼스 7개 pkg 에 17개 실존)이 0023 과 동일 레이아웃임을 실물 전수로 검증 —

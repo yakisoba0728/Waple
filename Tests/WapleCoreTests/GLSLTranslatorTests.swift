@@ -1269,10 +1269,9 @@ final class GLSLTranslatorTests: XCTestCase {
         // v_Fx 대입식에서 a_TexCoord 가 xform 보다 먼저 나오면 (a*b) 순서.
         let vfx = try XCTUnwrap(t.msl.range(of: "out.v_Fx = ("))
         let tail = String(t.msl[vfx.upperBound...]).prefix(120)
-        let aPos = tail.range(of: "a_TexCoord")
-        let mPos = tail.range(of: "xform")
-        XCTAssertNotNil(aPos); XCTAssertNotNil(mPos)
-        XCTAssertLessThan(aPos!.lowerBound, mPos!.lowerBound,
+        let aPos = try XCTUnwrap(tail.range(of: "a_TexCoord"), "v_Fx 대입식에 a_TexCoord 토큰 부재:\n\(tail)")
+        let mPos = try XCTUnwrap(tail.range(of: "xform"), "v_Fx 대입식에 xform 토큰 부재:\n\(tail)")
+        XCTAssertLessThan(aPos.lowerBound, mPos.lowerBound,
                           "mul(vec, M) 은 (vec * M) 순서여야 — 전치 오역(M * vec)이면 갓레이 가로띠:\n\(tail)")
         // MVP(항등) 경로는 순서와 무관하게 항상 정상(가드).
         XCTAssertTrue(t.msl.contains("eng.mvp"))

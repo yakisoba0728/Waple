@@ -139,12 +139,21 @@ final class WallpaperSchemeHandlerTests: XCTestCase {
 /// didReceive 호출 스레드를 기록하는 WKURLSchemeTask 목 — 감사 H 회귀 테스트 전용.
 private final class ThreadRecordingSchemeTask: NSObject, WKURLSchemeTask {
     let request: URLRequest
-    private(set) var response: URLResponse?
-    private(set) var receivedData = Data()
-    private(set) var dataEvents = 0
-    private(set) var finished = false
-    private(set) var responseOnMainThread: Bool?
-    private(set) var anyDataOnMainThread = false
+    // 핸들러의 io 큐(쓰기)와 테스트 스레드(읽기)가 교차하므로 모든 상태 접근을 lock 으로 동기화한다.
+    private let lock = NSLock()
+    private var _response: URLResponse?
+    private var _receivedData = Data()
+    private var _dataEvents = 0
+    private var _finished = false
+    private var _responseOnMainThread: Bool?
+    private var _anyDataOnMainThread = false
+
+    var response: URLResponse? { lock.withLock { _response } }
+    var receivedData: Data { lock.withLock { _receivedData } }
+    var dataEvents: Int { lock.withLock { _dataEvents } }
+    var finished: Bool { lock.withLock { _finished } }
+    var responseOnMainThread: Bool? { lock.withLock { _responseOnMainThread } }
+    var anyDataOnMainThread: Bool { lock.withLock { _anyDataOnMainThread } }
 
     init(url: URL) {
         self.request = URLRequest(url: url)
@@ -152,21 +161,25 @@ private final class ThreadRecordingSchemeTask: NSObject, WKURLSchemeTask {
     }
 
     func didReceive(_ response: URLResponse) {
-        responseOnMainThread = Thread.isMainThread
-        self.response = response
+        lock.withLock {
+            _responseOnMainThread = Thread.isMainThread
+            _response = response
+        }
     }
 
     func didReceive(_ data: Data) {
-        if Thread.isMainThread { anyDataOnMainThread = true }
-        dataEvents += 1
-        receivedData.append(data)
+        lock.withLock {
+            if Thread.isMainThread { _anyDataOnMainThread = true }
+            _dataEvents += 1
+            _receivedData.append(data)
+        }
     }
 
     func didFinish() {
-        finished = true
+        lock.withLock { _finished = true }
     }
 
     func didFailWithError(_ error: Error) {
-        finished = true
+        lock.withLock { _finished = true }
     }
 }

@@ -2,9 +2,18 @@ import XCTest
 @testable import WapleLibrary
 
 final class MonitorAssignmentStoreTests: XCTestCase {
+    private var tempDirs: [URL] = []
+
+    override func tearDown() {
+        for d in tempDirs { try? FileManager.default.removeItem(at: d) }
+        tempDirs = []
+        super.tearDown()
+    }
+
     private func tempDir() -> URL {
         let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        tempDirs.append(d)   // tearDown 에서 정리($TMPDIR 리터 방지)
         return d
     }
 
@@ -75,6 +84,8 @@ final class MonitorAssignmentStoreTests: XCTestCase {
     /// 호출부 save() 가 그대로 덮어쓰고 다음 save() 의 재시도 기회까지 막았다.
     /// moveItem(rename) 실패를 결정적으로 재현하기 위해 디렉터리 쓰기 권한을 제거한다.
     func testBackupFailureLeavesCorruptFlagSetForRetry() throws {
+        // root(UID 0)는 권한 비트 검사를 우회해 0o555 디렉터리에도 rename 이 성공한다 — 재현 불가라 skip.
+        try XCTSkipIf(getuid() == 0, "root 실행 시 권한 0o555 기반 move 실패 재현 불가")
         let dir = tempDir()
         let url = dir.appendingPathComponent("monitors.json")
         try Data("{ not json".utf8).write(to: url)
@@ -109,9 +120,18 @@ final class MonitorAssignmentStoreTests: XCTestCase {
 }
 
 final class PlaylistStoreTests: XCTestCase {
+    private var tempDirs: [URL] = []
+
+    override func tearDown() {
+        for d in tempDirs { try? FileManager.default.removeItem(at: d) }
+        tempDirs = []
+        super.tearDown()
+    }
+
     private func tempDir() -> URL {
         let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        tempDirs.append(d)   // tearDown 에서 정리($TMPDIR 리터 방지)
         return d
     }
 

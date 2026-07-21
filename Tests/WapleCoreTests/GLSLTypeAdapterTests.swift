@@ -112,17 +112,20 @@ final class GLSLTypeAdapterTests: XCTestCase {
     // 한다(캡 256, exprDepth 공유). 5000 은 캡을 한참 초과하므로 각 케이스 모두 크래시만 없으면 통과.
     func testDeepParenNestingDoesNotCrash() {
         let deep = String(repeating: "(", count: 5000) + "x" + String(repeating: ")", count: 5000) + ";"
-        _ = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1]))
+        let out = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1]))
+        XCTAssertFalse(out.isEmpty)   // 완주 검증(:141 과 같은 최소 오라클 — 값은 베스트에포트 패스스루)
     }
 
     func testDeepUnaryChainDoesNotCrash() {
         let deep = String(repeating: "!", count: 5000) + "x;"
-        _ = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1]))
+        let out = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1]))
+        XCTAssertFalse(out.isEmpty)   // 완주 검증
     }
 
     func testDeepTernaryChainDoesNotCrash() {
         let deep = String(repeating: "x?y:", count: 5000) + "z;"
-        _ = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1, "y": 1, "z": 1]))
+        let out = GLSLTypeAdapter.adapt(body: deep, env: env(["x": 1, "y": 1, "z": 1]))
+        XCTAssertFalse(out.isEmpty)   // 완주 검증
     }
 
     // S5(문장 레벨): statements ⇄ statement 상호재귀도 병리적 `{{{…}}}` 중첩에서 스택 오버플로 없이
@@ -130,7 +133,8 @@ final class GLSLTypeAdapterTests: XCTestCase {
     // — 이 테스트는 반환하기만 하면(행 없음) 통과.
     func testDeepBlockNestingDoesNotCrash() {
         let deep = String(repeating: "{", count: 5000) + String(repeating: "}", count: 5000)
-        _ = GLSLTypeAdapter.adapt(body: deep, env: env())
+        let out = GLSLTypeAdapter.adapt(body: deep, env: env())
+        XCTAssertFalse(out.isEmpty)   // 완주 검증(반환 = 행 없음 — 값은 베스트에포트 패스스루)
     }
 
     // S5(문장 무전진 폴백): 253~255개 `{` 뒤 비선언 식 토큰(` x`) — statement 자체 캡(depth≥257)은

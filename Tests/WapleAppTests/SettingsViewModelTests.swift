@@ -8,9 +8,18 @@ import WapleRender
 /// SceneRenderSettings(UserDefaults 전역) 를 건드는 테스트는 원값을 저장했다가 복원한다.
 final class SettingsViewModelTests: XCTestCase {
 
+    private var tempDirs: [URL] = []
+
+    override func tearDown() {
+        for d in tempDirs { try? FileManager.default.removeItem(at: d) }
+        tempDirs = []
+        super.tearDown()
+    }
+
     private func tempDir() -> URL {
         let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        tempDirs.append(d)   // tearDown 에서 정리($TMPDIR 리터 방지)
         return d
     }
 
@@ -19,6 +28,8 @@ final class SettingsViewModelTests: XCTestCase {
     }
 
     /// 전역 렌더 설정을 바꾸는 테스트용 스냅샷/복원(테스트 간 오염 방지).
+    /// SceneRenderSettings 는 UserDefaults.standard 전역 영속이라 이 방어는 직렬 실행 전제다(테스트
+    /// 병렬 실행 시 스냅샷/복원이 인터리브해 상호 오염 가능 — 기본 직렬 실행에서는 안전).
     private func snapshotRenderSettings() -> (FitMode, SceneFPSCap) {
         (SceneRenderSettings.fitMode, SceneRenderSettings.maxFPS)
     }

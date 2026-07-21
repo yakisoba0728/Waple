@@ -73,7 +73,7 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
     }
 
     /// 양 축 모두 0(퇴화)이면 프레임 목록 전체 드롭(안전망 유지).
-    func testDegenerateZeroFrameDropped() {
+    func testDegenerateZeroFrameDropped() throws {
         var b = [UInt8]()
         b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
         b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
@@ -82,13 +82,16 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         b.append(contentsOf: Array("TEXS0003".utf8)); b.append(0)
         b += i32(1) + i32(256) + i32(256)
         b += i32(0) + f32(0.2) + f32(0) + f32(0) + f32(0) + f32(0) + f32(0) + f32(0)  // Width=Height=HeightX=WidthY=0
-        if let tex = TexImage.parse(Data(b)) { XCTAssertEqual(tex.frames, []) }
+        // 퇴화 프레임은 드롭하되 parse 자체는 성공해야 한다 — if-let 형태는 nil 회귀를 조용히 통과시키므로 XCTUnwrap 으로 잠근다.
+        let tex = try XCTUnwrap(TexImage.parse(Data(b)), "퇴화 프레임 입력도 전체 거부가 아니라 파스 성공이어야")
+        XCTAssertEqual(tex.frames, [])
     }
 
-    func testTexWithoutFramesHasEmptyFrames() {
+    func testTexWithoutFramesHasEmptyFrames() throws {
         var d = makeTexWithFrames()
         d = d.prefix(50)   // TEXS 섹션 절단
-        if let tex = TexImage.parse(d) { XCTAssertTrue(tex.frames.isEmpty) }
+        let tex = try XCTUnwrap(TexImage.parse(d), "TEXS 절단 입력도 전체 거부가 아니라 파스 성공이어야")
+        XCTAssertTrue(tex.frames.isEmpty)
     }
 
     /// TEXS0001(v1): 지오메트리가 i32 정수형(RePKG 실측 — frametime 만 f32, gifW/H 없음).
