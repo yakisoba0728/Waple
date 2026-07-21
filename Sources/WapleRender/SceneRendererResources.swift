@@ -138,6 +138,12 @@ extension SceneRenderer {
         var out: [GPULayer] = []
         // attachment 자식들이 공유하는 부모 퍼펫 캐시(경로→파스 결과, 실패도 캐시 — 재파스 방지).
         var attachPuppets: [String: PuppetModel?] = [:]
+        // F720: `_rt_imageLayerComposite_<id>` 정적 치환 맵(레이어 id → 베이스 이미지 텍스처) —
+        // 3D 경로(SceneRenderer3D.build3D)와 동일 규약. 효과 슬롯 바인드(buildPassBindings)가 소비.
+        let compositeImageTextures = doc.layers.reduce(into: [Int: String]()) { acc, layer in
+            guard layer.id != 0, !layer.textureEntryName.isEmpty else { return }
+            acc[layer.id] = layer.textureEntryName
+        }
         for (uid, layer) in doc.layers.enumerated() {
             // 솔리드 마커(""): 무텍스처 flat 머티리얼 → 흰색 1x1 — 기존 tint 경로(color×brightness, alpha)가 필을 만든다.
             // 컴포지션(_rt_) 레이어: 텍스처는 런타임 스냅샷 — 여기선 placeholder + 효과 dims 를 프로젝션으로 근사
@@ -225,7 +231,8 @@ extension SceneRenderer {
                 // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
                 // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴백 → 둘 다 실패 시 스킵+로그.
                 if let translated = buildTranslatedEffect(eff, package: package, device: device,
-                                                          texW: effW, texH: effH) {
+                                                          texW: effW, texH: effH,
+                                                          compositeImageTextures: compositeImageTextures) {
                     effects.append(translated)
                 } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
                     effects.append(handPort)
@@ -326,7 +333,12 @@ extension SceneRenderer {
                                     scalars: SIMD4(layer.roughness, layer.metallic, 0, 0),
                                     specularTint: SIMD4(layer.specularTint.x, layer.specularTint.y,
                                                         layer.specularTint.z, 0)),
-                                litRect: lrect, video: videoLayer, attach: attach))
+                                litRect: lrect, video: videoLayer, attach: attach,
+                                // F722: 비디오/프레임버퍼가 아닌 정적 이미지 레이어만 미디어 아트워크 대상
+                                // (비디오는 프레임 공급자가 base 를 덮고, 컴포지션은 스냅샷 경로라 무의미).
+                                mediaArtwork: (videoLayer == nil && !layer.isFrameBuffer)
+                                    ? mediaArtworkKind(textureEntryName: layer.textureEntryName, package: package)
+                                    : .none))
         }
         return out
     }
@@ -386,7 +398,7 @@ extension SceneRenderer {
     /// (resolvePassCombos) ⑤ 머티리얼 상수/스크립트(buildPassMaterial) + 바인드·texRes·aux·target
     /// 플랜(buildPassBindings).
     func buildTranslatedEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice,
-                               texW: Int, texH: Int) -> EffectGPU? {
+                               texW: Int, texH: Int, compositeImageTextures: [Int: String] = [:]) -> EffectGPU? {
         // 디버그 바이섹션 스위치: 실물 씬에서 번역 효과만 끄고 A/B 비교(시각 아티팩트 책임 분리).
         if ProcessInfo.processInfo.environment["WAPLE_DISABLE_TRANSLATED"] == "1" { return nil }
         // #include 리졸버: pkg→베이스에셋→내장(확정-의미 서브셋, common_blending.h) 순.
@@ -428,7 +440,8 @@ extension SceneRenderer {
             guard let plan = buildPassBindings(mp, effName: eff.name, translation: t, scenePass: scenePass,
                                                matTextures: meta.matTextures, manifest: manifest,
                                                fboIndex: fboIndex, lw: lw, lh: lh,
-                                               package: package, device: device) else { return nil }
+                                               package: package, device: device,
+                                               compositeImageTextures: compositeImageTextures) else { return nil }
             if t.usesAudio { anyAudio = true }
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
                                          binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
@@ -533,7 +546,8 @@ extension SceneRenderer {
     private func buildPassBindings(_ mp: EffectManifest.Pass, effName: String, translation t: TranslatedShader,
                                    scenePass: SceneEffectPass, matTextures: [String?],
                                    manifest: EffectManifest, fboIndex: [String: Int],
-                                   lw: Float, lh: Float, package: ScenePackage, device: MTLDevice)
+                                   lw: Float, lh: Float, package: ScenePackage, device: MTLDevice,
+                                   compositeImageTextures: [Int: String] = [:])
         -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)],
             texWrap: [Float], target: Int?)? {
         var binds: [(slot: Int, source: Int)] = []
@@ -562,7 +576,18 @@ extension SceneRenderer {
         for slot in t.textureSlots where slot > 0 && slot < 128 && !bindSlots.contains(slot) {
             var name = slot < scenePass.textureNames.count ? scenePass.textureNames[slot] : nil
             if name == nil, slot < matTextures.count { name = matTextures[slot] }
-            if let n = name, n.hasPrefix("_rt_") { continue }
+            // F720: `_rt_imageLayerComposite_<id>` = 참조 레이어의 런타임 컴포지트 RTT. 종전엔 `_rt_` 접두어
+            // 슬롯을 continue 로 스킵해 해당 샘플러가 영구 미바인드(Metal 검증 실패/미정의 읽기 + blend/
+            // clipping_mask 콘텐츠 소실). 3D 경로(SceneRenderer3D.loadMesh3DMaterial)와 동일한 정적 치환:
+            // 참조 레이어의 베이스 이미지 텍스처로 대체하고, 해석 불가(id 미상/기타 _rt_)는 nil 로 둬
+            // resolveTexture 의 흰색 1×1 폴터가 바인드를 보장하게 한다(미바인드 방지가 우선 — 오역보다 폴터).
+            if let n = name, n.hasPrefix("_rt_") {
+                name = nil
+                if n.hasPrefix("_rt_imageLayerComposite_") {
+                    let digits = n.dropFirst("_rt_imageLayerComposite_".count).prefix { $0.isNumber }
+                    if let layerID = Int(digits) { name = compositeImageTextures[layerID] }
+                }
+            }
             if let tex = resolveTexture(name, package: package, device: device) {
                 aux.append((slot, tex))
                 if slot < 8 {
@@ -586,6 +611,46 @@ extension SceneRenderer {
             if let d = quietAssetData(c, package: package), let tex = TexImage.parse(d) { return tex.clampUVs }
         }
         return false
+    }
+
+    /// F722: 레이어의 머티리얼이 시스템 미디어 텍스처($mediaThumbnail/$mediaPreviousThumbnail)를 요청하는지
+    /// 감지. 파서가 해석한 textureEntryName("materials/X.tex")과 같은 basename 의 머티리얼 json("materials/X.json")을
+    /// 다시 읽어 passes[0].usertextures 의 시스템 키(문자열 또는 {name,type:"system"})를 찾는다 — 파스 계층이
+    /// 시스템 키를 userProps 에서 조회해 실패로 끝난 뒤라(실측 12wp 의 Album Cover 머티리얼) 렌더 측 재판독이 필요.
+    /// 감지 실패(무 json/무 usertextures)는 .none — 대부분의 레이어, 기존 정적 텍스처 그대로(무회귀).
+    func mediaArtworkKind(textureEntryName: String, package: ScenePackage) -> SceneRenderer.MediaArtworkKind {
+        guard textureEntryName.hasSuffix(".tex") else { return .none }
+        let jsonName = String(textureEntryName.dropLast(4)) + ".json"
+        guard let d = quietAssetData(jsonName, package: package),
+              let m = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let passes = m["passes"] as? [Any],
+              let p0 = passes.first as? [String: Any],
+              let userTextures = p0["usertextures"] as? [Any] else { return .none }
+        var found: SceneRenderer.MediaArtworkKind = .none
+        for raw in userTextures {
+            let key = (raw as? String) ?? ((raw as? [String: Any])?["name"] as? String)
+            if key == "$mediaThumbnail" { found = .current }
+            else if key == "$mediaPreviousThumbnail", found == .none { found = .previous }
+        }
+        return found
+    }
+
+    /// F722: 미디어 아트워크 원본 바이트(JPEG/PNG — MediaPoller 공급) → RGBA8 텍스처.
+    /// 디코드 실패 시 nil(호출부는 이전 텍스처/placeholder 유지). bitmapRGBAFile 과 동일 디코드 규약.
+    func decodeArtworkTexture(_ data: Data, device: MTLDevice) -> MTLTexture? {
+        guard let image = NSImage(data: data),
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              cg.width > 0, cg.height > 0 else { return nil }
+        let width = cg.width, height = cg.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let ctx = CGContext(
+            data: &pixels, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return makeTexture(Data(pixels), width, height, device)
     }
 
     /// assetData 의 조용한 버전: pkg→베이스에셋 조회하되 미스에 로그 없음(소스 프로브는 미스가 정상).

@@ -20,7 +20,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let parentAngle: Float
         let parentLayers: [AnimationLayer]
     }
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = [] /* animationlayers blend/visible/rate 바인딩 스크립트 — encodeLayer 가 per-frame 재평가해 캐스케이드에 반영. 훅 등록(buildAnimationEventTargets)도 이 인스턴스 재사용(중복 IIFE 방지) */; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
+    /// F722: 머티리얼 usertextures 의 시스템 미디어 키 요청 종류 — $mediaThumbnail(현재 트랙 아트워크) /
+    /// $mediaPreviousThumbnail(직전 트랙 아트워크). buildDisplayTextures 가 레이어 base 를 라이브 텍스처로 교체.
+    enum MediaArtworkKind { case none, current, previous }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = [] /* animationlayers blend/visible/rate 바인딩 스크립트 — encodeLayer 가 per-frame 재평가해 캐스케이드에 반영. 훅 등록(buildAnimationEventTargets)도 이 인스턴스 재사용(중복 IIFE 방지) */; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; var mediaArtwork: MediaArtworkKind = .none /* F722: 시스템 미디어 아트워크 요청 레이어 — buildDisplayTextures 가 base 교체(미수신 시 정적 placeholder 유지, 무회귀) */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
     var hasAnimations = false
     struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -59,8 +62,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var normalRG88: Bool = false   // 노멀 텍스처가 WE RG88(2채널) 포맷 → 셰이더 언팩 분기
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
     }
-    /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 콘텐츠 스크립트(engine)는 초당 재평가 →
-    /// 변경 시 재래스터. 프로퍼티 스크립트(propScripts, F218/F219)는 재래스터 없이 encodeText 가
+    /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 콘텐츠 스크립트(engine)는 매 프레임 재평가
+    /// (F724 — 변경 시에만 재래스터). 프로퍼티 스크립트(propScripts, F218/F219)는 재래스터 없이 encodeText 가
     /// per-frame 트랜스폼/알파/가시성만 갱신(GPULayer.propScripts 와 동형 — 별개 채널).
     struct GPUText {
         var texture: MTLTexture?
@@ -87,10 +90,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
     var textLayers: [GPUText] = []
     var hasScriptedText = false
-    var lastTextRefreshSecond = 0
 
     /// 씬 공유 JSContext(mount 당 1개) — 모든 프로퍼티 스크립트가 `shared` 로 통신(주야 컨트롤러 등).
     var sceneScript: SceneScriptContext?
+    /// F723: JS thisScene.layers 의 이미지 레이어 수(=doc.layers.count) — 텍스트 read-back 인덱스 오프셋
+    /// (sceneScriptLayers 가 이미지 레이어 먼저, 텍스트를 뒤에 붙이는 순서와 동일).
+    var sceneScriptImageLayerCount = 0
     /// visible 스크립트의 최근 평가값(레이어 고유 uid → 표시 여부). update(current) 에 이전 값을 전달.
     /// 키는 GPULayer.uid(doc.layers 인덱스) — order 는 씬에서 중복될 수 있어 키로 부적합(충돌).
     var scriptVisible: [Int: Bool] = [:]
@@ -179,6 +184,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var hoverTargets: [HoverTarget] = []
     var clickMonitor: Any?
     var mediaPoller: MediaPoller?
+    /// F722: 라이브 미디어 아트워크 텍스처(MediaPoller onThumbnail 이 트랙 변경 시 갱신). current=현재 트랙,
+    /// previous=직전 트랙(새 아트워크 도착 시 이월). nil=미수신 — 해당 레이어는 정적 placeholder 유지(무회귀).
+    var mediaArtworkTexture: MTLTexture? = nil
+    var mediaPreviousArtworkTexture: MTLTexture? = nil
     /// 테스트 주입용(mount 전에 설정). nil 이면 AppleScript(Music/Spotify) 프로바이더.
     public var nowPlayingProvider: NowPlayingProvider?
     /// 미디어 배달 횟수(테스트 동기화용).
@@ -459,11 +468,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     /// 미디어 소비 스크립트(media*Changed export)가 있을 때만 폴링 시작(웹과 같은 5초 규약).
+    /// F722: $mediaThumbnail/$mediaPreviousThumbnail 요청 레이어가 있어도 시작(아트워크 텍스처 공급 필요).
     func startMediaPollingIfNeeded() {
         let mediaHooks: Set<String> = ["mediaPlaybackChanged", "mediaPropertiesChanged",
                                        "mediaThumbnailChanged", "mediaTimelineChanged", "mediaStatusChanged"]
+        let wantsArtwork = layers.contains(where: { $0.mediaArtwork != .none })
         guard mediaPoller == nil,
-              eventEngines.contains(where: { !$0.hookNames.isDisjoint(with: mediaHooks) }) else { return }
+              wantsArtwork || eventEngines.contains(where: { !$0.hookNames.isDisjoint(with: mediaHooks) }) else { return }
         func q(_ s: String) -> String {
             (try? String(data: JSONEncoder().encode(s), encoding: .utf8) ?? "\"\"") ?? "\"\""
         }
@@ -487,6 +498,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                      eventJS: "new MediaTimelineEvent({ position: \(info.position), duration: \(info.duration) })")
         }
         poller.onThumbnail = { [weak self] _, artwork in
+            // F722: $mediaThumbnail/$mediaPreviousThumbnail 레이어용 라이브 아트워크 텍스처 갱신 —
+            // 직전 트랙은 previous 로 이월. 온디맨드(정지) 씬도 새 아트워크가 보이도록 재드로 요청.
+            if let self, wantsArtwork, let device = self.device,
+               let tex = self.decodeArtworkTexture(artwork, device: device) {
+                self.mediaPreviousArtworkTexture = self.mediaArtworkTexture
+                self.mediaArtworkTexture = tex
+                self.mtkView?.needsDisplay = true
+            }
             // 주색 추출 실패(디코드 불가)도 이벤트 생략 — 색 없는 썸네일 이벤트는 실물 소비자에 무의미.
             guard let p = ArtworkColors.palette(imageData: artwork) else { return }
             func v(_ c: SIMD3<Float>) -> String { "new Vec3(\(c.x), \(c.y), \(c.z))" }
@@ -501,8 +520,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     /// 씬 오브젝트 순서의 병합 드로우 플랜(레이어/파티클/텍스트 인터리브). mount 에서 1회 구성.
-    struct DrawItem { enum Kind { case layer, particle, text }; let kind: Kind; let idx: Int }
+    /// mesh3D: F721 ortho 하이브리드 — 2D(정사영) 씬의 .mdl 오브젝트를 씬 order 에 맞춰 인터리브 드로우.
+    struct DrawItem { enum Kind { case layer, particle, text, mesh3D }; let kind: Kind; let idx: Int }
     var drawPlan: [DrawItem] = []
+    /// F721(S-12): ortho(2D) 씬 + .mdl 오브젝트 하이브리드 모드 — build3D 로 메시/노드만 적재(빌보드는
+    /// 2D 레이어와 중복이라 폐기)하고 encodeDrawPlan 의 .mesh3D 아이템이 ortho 투영 메시 패스로 그린다.
+    var ortho3DHybrid = false
 
     /// 씬 내부 video-텍스처 레이어 존재 여부 — shouldAnimate 게이트(비디오는 연속 렌더 필요).
     /// 실제 프레임 공급자는 각 GPULayer.video 에 있고, pause/resume/teardown 은 layers 를 순회한다.
@@ -1007,6 +1030,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneScript = SceneScriptContext(layers: Self.sceneScriptLayers(from: doc),
                                          soundNames: doc.sounds.map { $0.name },
                                          width: projW, height: projH)
+        sceneScriptImageLayerCount = doc.layers.count  // F723: 텍스트 read-back 인덱스 오프셋(이미지→텍스트 순)
         forwardLit = false  // 마운트 재사용 대비 기본값(2D 브랜치에서만 활성화)
         // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
         // 메시/빌보드가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
@@ -1024,6 +1048,31 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     particle3DAdditive = particle3DPipeline(additive: true, device: device)
                     particle3DTranslucent = particle3DPipeline(additive: false, device: device)
                 }
+            }
+        }
+        // F721(S-12): ortho(2D) 씬의 3D 모델 오브젝트 하이브리드. ortho 씬은 parseCamera 가 camera3D=nil
+        // 을 반환해 종전엔 build3D 미진입 → .mdl 오브젝트가 조용히 드롭됐다(실물 3354366708 의 대형 링 3개).
+        // 2D 경로(buildLayers/파티클/텍스트)를 그대로 유지하면서 build3D 로 메시/노드만 적재하고,
+        // 2D 와 중복되는 부산물(빌보드=2D 레이어, 텍스트 컨트롤러=2D 텍스트)과 그 엔진의 훅 등록은 되돌린다
+        // (이중 로드·이중 훅 발화 방지). 노드(3D 오브젝트/그룹) 엔진은 2D 대응물이 없어 유지.
+        if doc.camera3D == nil, !doc.objects3D.isEmpty {
+            build3D(doc: doc, package: package, device: device)
+            if !meshRenderables.isEmpty {
+                let dupEngines = Set((billboards.flatMap { $0.scripts.map(\.engine) }
+                                      + text3DControllers.map(\.engine)).map { ObjectIdentifier($0) })
+                if !dupEngines.isEmpty {
+                    eventEngines.removeAll { dupEngines.contains(ObjectIdentifier($0)) }
+                    hoverEngineLayers.removeAll { dupEngines.contains(ObjectIdentifier($0.engine)) }
+                }
+                eval3DOrder = eval3DOrder.filter { !$0.bb }   // 빌보드 평가 항목 제거(아래서 billboards 를 비움)
+                draw3DOrder = []   // encode3D 는 하이브리드에서 미호출(ortho 메시 패스가 대신 그림)
+                billboards = []; billboardDefs = []; text3DControllers = []
+                ortho3DHybrid = true
+                NSLog("%@", "[Waple] ortho 3D hybrid: \(meshRenderables.count) mesh renderables (2D scene + .mdl objects)")
+            } else {
+                // 메시가 하나도 안 올라오면(로드 실패) 3D 부산물 전량 폐기 — 종전 2D 전용 경로와 동일(무회귀).
+                billboards = []; billboardDefs = []; text3DControllers = []
+                nodes3D = []; eval3DOrder = []; draw3DOrder = []; has3DScripts = false
             }
         }
         if !is3D {
@@ -1053,9 +1102,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 씬 오브젝트 순서(z-순서)대로 레이어·파티클·텍스트를 인터리브 드로우.
         // 안정 정렬(order 동률 시 삽입 순서 유지) — 파티클 자식이 부모 뒤에 오도록 보장
         // (자식 스냅샷은 같은 프레임에 부모가 먼저 스텝된 캐시를 읽는다).
+        // F721: ortho 하이브리드의 3D 메시도 같은 order 로 인터리브(.mesh3D — encodeDrawPlan 이
+        // 연속 런을 한 메시 패스로 묶어 뎁스 공유).
         drawPlan = (layers.enumerated().map { (i, l) in (l.order, DrawItem(kind: .layer, idx: i)) }
                     + particleSystems.enumerated().map { (i, p) in (p.order, DrawItem(kind: .particle, idx: i)) }
-                    + textLayers.enumerated().map { (i, t) in (t.order, DrawItem(kind: .text, idx: i)) })
+                    + textLayers.enumerated().map { (i, t) in (t.order, DrawItem(kind: .text, idx: i)) }
+                    + (ortho3DHybrid ? meshRenderables.enumerated().map { (i, m) in (m.order, DrawItem(kind: .mesh3D, idx: i)) } : []))
             .enumerated()
             .sorted { ($0.1.0, $0.0) < ($1.1.0, $1.0) }
             .map { $0.1.1 }
@@ -1310,7 +1362,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             return
         }
 
-        refreshScriptedTexts(device: device, time: time)  // 초당 1회 update() 재평가(시계 등)
+        refreshScriptedTexts(device: device, time: time)  // 매 프레임 update() 재평가(F724 — 변경 시에만 재래스터)
+        if ortho3DHybrid { evaluate3DScripts(time: time) }  // F721: ortho 3D 메시/노드 스크립트(encode3D 와 동일 1프레임 1회)
         sceneAudio?.tick(time: time)  // F214: volume 프로퍼티 스크립트 per-frame 재평가(헤드리스는 sceneAudio nil → no-op)
         // 효과 있는 레이어는 오프스크린 베이스→효과 패스 후 결과 텍스처로 교체.
         let displayTextures = buildDisplayTextures(device: device, time: time, cb: cb)
@@ -1468,6 +1521,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             if capZoom != 1 { asp *= capZoom }
             frameShakeOffset = shakeOffset(at: t)  // 라이브 draw 와 동일: A/B 캡처가 t=6 지터 오프셋을 판독
             frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: t), projW: projW, projH: projH)  // origin 팬(t=6 정착 중립·정적/스크립트 = .zero → A/B 비트동일)
+            if ortho3DHybrid { evaluate3DScripts(time: t) }  // F721: 라이브 draw 와 동일 — t 시점 노드 스크립트 평가
             // 라이브 draw 와 동일한 씬-순서 인터리브(encodeDrawPlan 공용 — 복제 루프 발산 방지).
             // 파티클은 로컬 sims 의 현재 스냅샷(step(0)) 사용.
             // (camOff=0 이라 parallaxDepth 는 무영향 — encodeLayer 공용 사용 가능.)
@@ -1543,6 +1597,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         parallaxEnabled = false  // teardown 후 resume(:1172 게이트)이 stale parallaxEnabled 로 monitor 를 재기동하지 않도록. mount(:836)이 무조건 덮으므로 재사용 무회귀.
         if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
         mediaPoller?.stop(); mediaPoller = nil
+        mediaArtworkTexture = nil; mediaPreviousArtworkTexture = nil  // F722: 마운트 재사용 시 이전 씬 아트워크 잔류 방지
         eventEngines = []
         hoverEngineLayers = []; hoverTargets = []
         animEventTargets = []
@@ -1553,11 +1608,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         particle3DAdditive = nil; particle3DTranslucent = nil; particle3DClock = 0  // 3D 파티클 상태 리셋(마운트 재사용)
         forwardLit = false; litPipeline = nil; spriteFramePipeline = nil  // 라이트/스프라이트 추출 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
-        sceneScript = nil; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
+        sceneScript = nil; sceneScriptImageLayerCount = 0; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
         scriptVisible.removeAll()
         scriptTextVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
         camera3D = nil; is3D = false; has3DScripts = false
+        ortho3DHybrid = false  // F721: 하이브리드 상태 리셋(마운트 재사용)
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
         text3DControllers = []

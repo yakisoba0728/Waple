@@ -412,8 +412,24 @@ extension SceneRenderer {
                                 particleSnapshot: (Int) -> [Particle],
                                 camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         var enc = enc
-        for item in drawPlan {
+        var i = 0
+        while i < drawPlan.count {
+            let item = drawPlan[i]
+            if item.kind == .mesh3D {
+                // F721: 연속 mesh3D 런을 한 메시 패스로 묶어 뎁스 공유(메시 상호 은폐 정합) —
+                // 오브젝트별 분할이면 런 사이에 뎁스가 클리어되어 겹친 메시가 잘못 합성된다.
+                var run = [item.idx]
+                var j = i + 1
+                while j < drawPlan.count, drawPlan[j].kind == .mesh3D { run.append(drawPlan[j].idx); j += 1 }
+                guard let next = runOrtho3DMeshes(run, acc: acc, cb: cb, ending: enc, device: device,
+                                                  time: time, aspectScale: &aspectScale) else { return nil }
+                enc = next
+                i = j
+                continue
+            }
             switch item.kind {
+            case .mesh3D:
+                break  // 위 런 수집에서 처리(도달 불가)
             case .particle where particleSystems[item.idx].refract
                               && !particleSystems[item.idx].isTrail
                               && particleSystems[item.idx].normalTexture != nil
@@ -446,8 +462,171 @@ extension SceneRenderer {
                 encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
                             camOffset: &camOffset, aspectScale: &aspectScale, time: time, device: device)
             }
+            i += 1
         }
         return enc
+    }
+
+    /// F721(S-12): ortho(2D) 씬에 인터리브된 3D 메시 런. acc 를 load 하는 별도 패스(뎁스 부착)로
+    /// 메시를 그린 뒤 2D 인코더를 재개한다(runFrameBufferLayer 와 같은 인코더 분할 패턴).
+    /// 투영: 2D v_main 과 같은 픽셀→NDC 직교 매핑(x_ndc=(2x/W−1)·aspectScale.x, y_ndc=(1−2y/H)·aspectScale.y)
+    /// + z 는 ±F 대칭 클립(z 클수록 앞 — 오브젝트 z 양수가 화면 앞). 씬 픽셀 좌표계를 2D 레이어와
+    /// 공유하므로 같은 화면 위치에 놓인다(실물 3354366708: 그룹 origin (1920,1080) = 화면 중앙).
+    /// 프런트 와인딩: 이 직교행렬의 det 부호는 perspective 경로와 반대(encode3D=CCW → 여기선 CW) —
+    /// 같은 메시 와인딩에서 동일 면이 컬링된다. 섀도우는 미지원(ortho 검증 부재, 스코프 밖) —
+    /// 라이트는 resolveLights/packLights 를 3D 경로와 동일하게 해석(ortho 씬 라이트는 같은 씬 픽셀 공간).
+    func runOrtho3DMeshes(_ meshIndices: [Int], acc: MTLTexture, cb: MTLCommandBuffer,
+                          ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
+                          aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        enc.endEncoding()
+        // 2D 인코더 재개 헬퍼(메시 스킵 폴터 — 색만 load, 뎁스 없음).
+        func resume2D() -> MTLRenderCommandEncoder? {
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = acc
+            rpd.colorAttachments[0].loadAction = .load
+            return cb.makeRenderCommandEncoder(descriptor: rpd)
+        }
+        guard let over = meshPipelineOver,
+              let depthTex = pooledDepth(acc.width, acc.height, device) else {
+            NSLog("%@", "[Waple] ortho 3D: mesh pipeline/depth unavailable — meshes skipped")
+            return resume2D()
+        }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = acc
+        rpd.colorAttachments[0].loadAction = .load
+        rpd.depthAttachment.texture = depthTex
+        rpd.depthAttachment.loadAction = .clear
+        rpd.depthAttachment.clearDepth = 1.0
+        rpd.depthAttachment.storeAction = .dontCare
+        guard let menc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        // 직교 투영: z_ndc = 0.5 − z/(2F). F 는 WE ortho 기본 farz 와 같은 대칭 클립(오브젝트 z ≈ ±수백).
+        let F: Float = 10000
+        let sx = 2 / max(1, projW) * aspectScale.x
+        let sy = -2 / max(1, projH) * aspectScale.y
+        var proj = simd_float4x4(columns: (
+            SIMD4<Float>(sx, 0, 0, 0),
+            SIMD4<Float>(0, sy, 0, 0),
+            SIMD4<Float>(0, 0, -1 / (2 * F), 0),
+            SIMD4<Float>(-1, 1, 0.5, 1)))
+        // camerashake/camera-origin 팬: 2D 레이어와 같은 화면 병진(clipTranslation — encode3D 와 동일 기법).
+        if frameShakeOffset != .zero { proj = Scene3DMath.clipTranslation(frameShakeOffset) * proj }
+        menc.setFrontFacing(.clockwise)
+        // 월드행렬 입력(노드 계층) + 라이팅 바인드(섀도우 없음 — identity 행렬/nil 텍스처).
+        var nmap: [Int: Scene3DMath.Node] = [:]
+        nmap.reserveCapacity(nodes3D.count)
+        for n in nodes3D {
+            nmap[n.id] = Scene3DMath.Node(origin: n.origin, angles: n.angles, scale: n.scale,
+                                          parent: n.parent, visible: n.visible)
+        }
+        let resolvedLights = Scene3DLighting.resolveLights(scene3DLights, nodes: nmap)
+        var frameUniform = Scene3DFrameUniform(
+            cameraEye: SIMD4(projW / 2, projH / 2, F, 1),   // ortho 관측자 근사(스페큘러 방향용)
+            ambient: SIMD4(scene3DAmbient.x, scene3DAmbient.y, scene3DAmbient.z, 0),
+            skylight: SIMD4(scene3DSkylight.x, scene3DSkylight.y, scene3DSkylight.z, 0),
+            meta: SIMD4(Float(resolvedLights.count), 0, 0, 0))
+        let lightUniforms = Scene3DLighting.packLights(resolvedLights)
+        let noShadow = [simd_float4x4](repeating: matrix_identity_float4x4, count: 24)
+        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                            shadowMatrices: noShadow, shadowTexture: nil, into: menc)
+        let skinBuffers = prepare3DSkinBuffers(time: time, device: device)
+        for idx in meshIndices {
+            let mr = meshRenderables[idx]
+            guard let w = Scene3DMath.worldMatrix(id: mr.id, nodes: nmap), w.visible else { continue }
+            var u = MeshUniform(
+                mvp: proj * w.matrix,
+                model: w.matrix,
+                normalMatrix: Scene3DMath.normalMatrix4x4(w.matrix),
+                tint: SIMD4(1, 1, 1, 1),
+                material: SIMD4(0.7, 0, 0, 1),
+                specularTint: SIMD4(1, 1, 1, 0),
+                rim: SIMD4(2, 4, 0, 0))
+            let boneBuf = skinBuffers[idx]
+            for mesh in mr.meshes {
+                // 스키닝 메시는 스킨 파이프라인+본 버퍼 필수(없으면 스킵 — encode3D 와 동일 규약).
+                if mesh.skinned && boneBuf == nil { continue }
+                u.tint = mesh.tint
+                u.material = SIMD4(mesh.roughness, mesh.metallic, mesh.alphaCutoff, mesh.unlit ? 0 : 1)
+                u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, 0)
+                // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
+                u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
+                let useSkin = mesh.skinned && boneBuf != nil
+                let pipe: MTLRenderPipelineState
+                if useSkin {
+                    let skinPipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin) : meshPipelineSkin
+                    guard let p = skinPipe else { continue }
+                    pipe = p
+                } else {
+                    pipe = mesh.additive ? (meshPipelineAdditive ?? over) : over
+                }
+                menc.setRenderPipelineState(pipe)
+                if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
+                    menc.setDepthStencilState(ds)
+                }
+                menc.setCullMode(mesh.cullBack ? .back : .none)
+                menc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                menc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                if useSkin, let boneBuf { menc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
+                menc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                menc.setFragmentTexture(mesh.texture, index: 0)
+                // gradientTex 는 mf_main 선언 인자 — 미사용(u.rim.w==0) 시에도 자기 텍스처로 채워 바인딩 부재 방지.
+                menc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                menc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+                                           indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+            }
+        }
+        menc.endEncoding()
+        return resume2D()
+    }
+
+    /// F723(S-30): 스크립트의 `thisLayer.*` 직접 대입을 렌더러로 되읽는 채널(read-back).
+    /// 종전엔 update() 반환값만 유효해서, 훅/사이드이펙트에서의 직접 대입(표준 WE 이디엄 — 커서/미디어 훅의
+    /// thisLayer.visible 토글, isDragging 드래그 컨트롤러의 origin 대입 등 280회/23씬)이 렌더에 미반영이었다.
+    /// 씬 공유 JSContext 의 thisScene.layers[] 오브젝트는 __wapleLayerForScript 가 thisLayer 로 바인드한
+    /// 그 라이브 오브젝트이므로, 여기서 읽으면 스크립트가 쓴 최신 값이 보인다.
+    /// 적용 우선순위(기존 채널 무회귀): update 보유 propScript 키·키프레임 애니 키·attachment/puppet 변환은
+    /// 기존 평가값을 유지하고, 그 외 키만 read-back 으로 덮는다(update 반환값이 같은 프로퍼티의 WE 최종
+    /// 쓰기 순서와 일치 — update 본문 대입 후 호스트가 반환값을 적용하므로 반환값이 이긴다).
+    struct ScriptLayerReadBack {
+        var visible: Bool? = nil
+        var alpha: Float? = nil
+        var origin: SIMD3<Float>? = nil
+        var scale: SIMD3<Float>? = nil
+        var angles: SIMD3<Float>? = nil
+    }
+
+    /// name 레이어의 JS 측 현재 상태를 읽어 온다(씬 공유 컨텍스트가 없으면 nil — 단독 컨텍스트 엔진의
+    /// thisLayer 는 씬 레지스트리에 없어 read-back 대상이 아니다). 레이어 식별은 이름이 아니라
+    /// **thisScene.layers 인덱스**(sceneScriptLayers 와 동일 순서: 이미지 레이어 후 텍스트) —
+    /// 이름 조회(getLayer)는 중복명 첫 매치/묘명 layers[0] 폴터(S-34 오바인딩)라, 그 경로로 읽으면
+    /// 묘명 레이어가 전혀 다른 layers[0] 의 트랜스폼으로 오염된다(실측 3394601417 거대 텍스트 사고).
+    /// 엔진의 thisLayer 바인딩이 이름 기반인 한계(S-34, 엔진 측 소유)상 유일명 레이어에서만 대입과
+    /// read-back 이 같은 객체를 가리킨다 — 중복명/묘명 레이어의 대입은 엔진 수정 전까지 미반영(무회귀).
+    func readBackScriptLayerState(index: Int) -> ScriptLayerReadBack? {
+        guard let ctx = sceneScript?.context, index >= 0 else { return nil }
+        // NaN/비수치 방어: num() 이 null 로 떨어뜨리면 아래 NSNumber 캐스트가 실패해 해당 키만 미적용.
+        guard let v = ctx.evaluateScript("""
+        (function(i){
+            var l = (thisScene.layers && i >= 0 && i < thisScene.layers.length) ? thisScene.layers[i] : null;
+            if (!l) { return null; }
+            function num(x){ return (typeof x === 'number' && isFinite(x)) ? x : null; }
+            function v3(v){ return v ? [num(v.x), num(v.y), num(v.z)] : null; }
+            return JSON.stringify({ visible: !!l.visible, alpha: num(l.alpha),
+                origin: v3(l.origin), scale: v3(l.scale), angles: v3(l.angles) });
+        })(\(index))
+        """), v.isString, let data = v.toString().data(using: .utf8),
+              let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        var rb = ScriptLayerReadBack()
+        rb.visible = dict["visible"] as? Bool
+        rb.alpha = (dict["alpha"] as? NSNumber)?.floatValue
+        func vec(_ key: String) -> SIMD3<Float>? {
+            guard let a = dict[key] as? [Any], a.count >= 3,
+                  let x = (a[0] as? NSNumber)?.floatValue,
+                  let y = (a[1] as? NSNumber)?.floatValue,
+                  let z = (a[2] as? NSNumber)?.floatValue else { return nil }
+            return SIMD3(x, y, z)
+        }
+        rb.origin = vec("origin"); rb.scale = vec("scale"); rb.angles = vec("angles")
+        return rb
     }
 
     /// 이미지 레이어 1개 드로우(메인 컴포지트 파이프라인). time/device 는 프로퍼티 애니메이션·스크립트
@@ -462,6 +641,13 @@ extension SceneRenderer {
         var tint = layer.tint
         var vbuf = layer.vertexBuffer
         var litRect0 = layer.litRect.0, litRect1 = layer.litRect.1  // 애니 레이어는 아래서 재계산
+        // F723: thisLayer 직접 대입 read-back(구조·우선순위는 함수 주석 참조). 스크립트 없는 레이어는
+        // JS 평가 비용 0(propScripts/animLayerScripts 가 비어 있으면 nil).
+        let scriptUpdateKeys = Set(layer.propScripts.filter { $0.engine.hasUpdate }.map { $0.key })
+        let scriptRB: ScriptLayerReadBack? = {
+            guard layer.def != nil, !layer.propScripts.isEmpty || !layer.animLayerScripts.isEmpty else { return nil }
+            return readBackScriptLayerState(index: layer.uid)   // uid = doc.layers 인덱스 = JS layers 인덱스
+        }()
         // attachment 적용 후 유효 변환(퍼펫 자식이 스킨 정점 산출에도 사용) — nil 이면 def 정적값 그대로.
         var attachedTransform: (origin: Vec2, scale: Vec2, angle: Float)? = nil
         if let def = layer.def, let device {
@@ -517,6 +703,22 @@ extension SceneRenderer {
                     }
                 }
             }
+            // F723: thisLayer 직접 대입 read-back(변환). update 보유 키·키프레임 애니 키는 기존 평가값 우선,
+            // attachment/puppet 은 별도 변환 채널(본 델타/스킨)이라 건드리지 않는다(무회귀).
+            if let rb = scriptRB, layer.attach == nil, layer.puppet == nil {
+                if let o = rb.origin, !scriptUpdateKeys.contains("origin"), def.animations["origin"] == nil,
+                   (o.x != origin.x || o.y != origin.y) {
+                    origin = Vec2(x: o.x, y: o.y); quadDirty = true
+                }
+                if let s = rb.scale, !scriptUpdateKeys.contains("scale"), def.animations["scale"] == nil,
+                   (s.x != scale.x || s.y != scale.y) {
+                    scale = Vec2(x: s.x, y: s.y); quadDirty = true
+                }
+                if let a = rb.angles, !scriptUpdateKeys.contains("angles"), def.animations["angles"] == nil,
+                   a.z != angle {
+                    angle = a.z; quadDirty = true
+                }
+            }
             if quadDirty {
                 let verts = Self.quadVertices(origin: origin, size: def.size, scale: scale, angleZ: angle,
                                          alignment: def.alignment, projW: projW, projH: projH)
@@ -548,6 +750,16 @@ extension SceneRenderer {
             } else if sc.key == "visible" {
                 let cur = scriptVisible[layer.uid] ?? layer.initialVisible
                 scriptVisible[layer.uid] = sc.engine.evaluateBool(current: cur) ?? cur
+            }
+        }
+        // F723: thisLayer 직접 대입 read-back(alpha/visible). update 보유 키는 위 루프의 반환값이 우선.
+        // 훅/사이드이펙트 대입(커서·미디어 훅의 thisLayer.visible/alpha)이 여기서 렌더에 반영된다.
+        if let rb = scriptRB {
+            if let a = rb.alpha, !scriptUpdateKeys.contains("alpha"), layer.def?.animations["alpha"] == nil {
+                tint.w = a
+            }
+            if let v = rb.visible, !scriptUpdateKeys.contains("visible") {
+                scriptVisible[layer.uid] = v
             }
         }
         // animationlayers 스크립트: per-frame 재평가 → 유효 visible/rate/blend 를 로컬 사본에 반영
@@ -646,12 +858,11 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
-    /// 스크립트 텍스트 초당 재평가(시계 등). 변경 시에만 재래스터.
+    /// 스크립트 텍스트 매 프레임 재평가. 변경 시에만 재래스터(시계류는 초 1회만 바뀌어 비용 동일).
+    /// F724: 종전 초당 1회 게이트(sec != lastTextRefreshSecond)는 스크롤/마키·서브초 애니 스크립트를
+    /// 1Hz 로 끊었다 — WE 의 update 는 매 프레임 발화(d.ts:58). 게이트 제거, 재래스터는 문자열 비교로 억제.
     func refreshScriptedTexts(device: MTLDevice, time: Float) {
         guard hasScriptedText else { return }
-        let sec = Int(CFAbsoluteTimeGetCurrent())
-        guard sec != lastTextRefreshSecond else { return }
-        lastTextRefreshSecond = sec
         for i in textLayers.indices {
             guard let e = textLayers[i].engine else { continue }
             e.setRuntime(Double(time))
@@ -664,7 +875,7 @@ extension SceneRenderer {
     }
 
     /// 텍스트 1개 드로우(메인 컴포지트 파이프라인, parallaxDepth=1). time/device 는 프로퍼티 스크립트
-    /// 평가용(F218/F219) — 콘텐츠 텍스트(engine/lastText, refreshScriptedTexts 가 초당 재래스터)와
+    /// 평가용(F218/F219) — 콘텐츠 텍스트(engine/lastText, refreshScriptedTexts 가 매 프레임 재평가·변경 시 재래스터)와
     /// 별개 채널: origin/scale/alpha/color/angles/visible 은 재래스터 없이 이 함수가 인코드 시점
     /// 트랜스폼/알파/가시성만 갱신한다(3D 빌보드 Billboard3D.evaluateScripts 와 동형 단일 루프 —
     /// 텍스트는 키프레임 애니메이션이 없어 GPULayer 처럼 애니 블록과 합류시킬 필요가 없다).
@@ -707,6 +918,23 @@ extension SceneRenderer {
                 scriptTextVisible[t.uid] = sc.engine.evaluateBool(current: cur) ?? cur
             default: break
             }
+        }
+        // F723: thisLayer 직접 대입 read-back(텍스트 — GPULayer 와 동형). update 보유 키는 위 루프의
+        // 반환값이 우선(무회귀). 텍스트는 키프레임 애니가 없어 변환 read-back 도 그대로 적용.
+        // JS layers 인덱스 = 이미지 레이어 수 + 텍스트 uid(sceneScriptLayers 의 이미지→텍스트 순서).
+        if !t.propScripts.isEmpty, let rb = readBackScriptLayerState(index: sceneScriptImageLayerCount + t.uid) {
+            let updateKeys = Set(t.propScripts.filter { $0.engine.hasUpdate }.map { $0.key })
+            if let o = rb.origin, !updateKeys.contains("origin"), (o.x != origin.x || o.y != origin.y) {
+                origin = Vec2(x: o.x, y: o.y); quadDirty = true
+            }
+            if let s = rb.scale, !updateKeys.contains("scale"), (s.x != scale.x || s.y != scale.y) {
+                scale = Vec2(x: s.x, y: s.y); quadDirty = true
+            }
+            if let a = rb.angles, !updateKeys.contains("angles"), a.z != angle {
+                angle = a.z; quadDirty = true
+            }
+            if let al = rb.alpha, !updateKeys.contains("alpha") { tint.w = al }
+            if let v = rb.visible, !updateKeys.contains("visible") { scriptTextVisible[t.uid] = v }
         }
         // origin/scale/angles 스크립트가 있을 때만 재계산(정적 텍스트는 rasterize() 가 구운 vbuf 그대로
         // — device 없는 호출자는 지오메트리 갱신을 건너뛰되 tint/visible 은 이미 반영된 채 그린다).
@@ -876,6 +1104,11 @@ extension SceneRenderer {
             if let video = layer.video {
                 base = (video.isLive ? video.liveTexture(device: device)
                                      : video.headlessTexture(at: time, device: device)) ?? layer.texture
+            } else if layer.mediaArtwork != .none {
+                // F722: $mediaThumbnail/$mediaPreviousThumbnail — 라이브 아트워크가 base(효과 체인 입력 동일).
+                // 미수신(nil) 시 정적 placeholder 폴터(WE 의 썸네일-없음 상태와 동형 — 깜빡임 없음).
+                base = (layer.mediaArtwork == .previous ? mediaPreviousArtworkTexture : mediaArtworkTexture)
+                    ?? layer.texture
             } else if layer.frames.isEmpty {
                 base = layer.texture
             } else {

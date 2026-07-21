@@ -432,7 +432,7 @@ final class ScriptedTextRuntimeTests: XCTestCase {
                                  origin: Vec2(x: 0, y: 0), scale: Vec2(x: 1, y: 1))
         let renderer = SceneRenderer()
         renderer.hasScriptedText = true
-        renderer.lastTextRefreshSecond = -1
+        // F724: 1Hz 게이트(lastTextRefreshSecond) 폐기 — refresh 는 호출 즉시 재평가한다.
         renderer.textLayers = [SceneRenderer.GPUText(texture: nil, vertexBuffer: nil,
                                                      tint: SIMD4<Float>(1, 1, 1, 1), order: 0,
                                                      engine: engine, lastText: "0",
