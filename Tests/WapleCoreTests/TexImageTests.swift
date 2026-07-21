@@ -240,10 +240,11 @@ final class TexImageTests: XCTestCase {
         XCTAssertEqual(t?.mip?.payloadRange.count, payload.count)
     }
 
-    func testRejectsNonPositiveTEXSFrameTime() {
+    func testRejectsNegativeTEXSFrameTime() {
+        // F690: frametime==0 은 유효(RePKG 관용 — 별도 회귀 테스트)로 바뀌었고, 음수만 폐기 대상으로 남는다.
         var texs: [UInt8] = Array("TEXS0003".utf8) + [0]
         texs += i32(1) + i32(4) + i32(4)
-        texs += i32(0) + f32(0) + f32(0) + f32(0) + f32(4) + f32(0) + f32(0) + f32(4)
+        texs += i32(0) + f32(-1) + f32(0) + f32(0) + f32(4) + f32(0) + f32(0) + f32(4)
         let t = TexImage.parse(Self.makeTex(format: 0, w: 4, h: 4, payload: [0, 0, 0, 0] + texs))
         XCTAssertEqual(t?.frames, [])
     }

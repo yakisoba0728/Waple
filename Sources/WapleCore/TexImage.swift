@@ -418,7 +418,11 @@ public struct TexImage {
             guard let id = i32(p), let t = f32(p + 4),
                   let x = geom(p + 8), let y = geom(p + 12),
                   let w = geom(p + 16), let wy = geom(p + 20), let hx = geom(p + 24), let h = geom(p + 28),
-                  t.isFinite, t > 0,
+                  // F690: frametime==0 프레임도 유효(RePKG TexToImageConverter 는 딜레이 0 클램프로 유지 —
+                  // 실물 3554161528 13프레임 스트립·3596044309 3개 시트 전 프레임 0). 종전 t>0 가드는
+                  // 시트 전체를 `return []` 로 폐기해 파티클이 풀 아틀라스 UV 로 찌그러졌다. 소비처
+                  // spriteFrameIndex 는 프레임당 max(1e-4,…) 클램프라 0 도 안전.
+                  t.isFinite, t >= 0,
                   x >= 0, y >= 0, x.isFinite, y.isFinite,
                   w.isFinite, h.isFinite, wy.isFinite, hx.isFinite else { return [] }
             // 회전 프레임(RePKG): Width|Height 가 0 → 유효 크기는 HeightX/WidthY 에서. 양 축 모두 0(퇴화)이면
