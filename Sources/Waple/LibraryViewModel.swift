@@ -185,11 +185,22 @@ final class LibraryViewModel: ObservableObject {
     /// 직렬로 두어 종전(메인 직렬)과 같은 순차 실행을 유지한다(동명 관리 디렉터리 유일화 판정 경합 방지).
     private let importQueue = DispatchQueue(label: "waple.library.import", qos: .userInitiated)
 
+    /// F582: 상위 폴더 가져오기도 zip/동영상과 같이 importQueue 를 거친다 — 후보 나열(디렉터리
+    /// 순회 I/O)은 백그라운드, 스토어 등록(importFolders, 저장 일괄화)은 메인 홉(스토어 변경
+    /// 메인 한정 규약 유지). 종전엔 호출 스레드=메인에서 전체 순회·파싱을 동기 실행해 UI 가 정지했다.
     func importParent(_ url: URL) {
-        let imported = store.importParent(url)
-        entries = store.entries
-        if imported.isEmpty {
-            onError?("가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요.")
+        let store = self.store
+        importQueue.async { [weak self] in
+            guard let self else { return }
+            let folders = store.scanImportableFolders(in: url)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let imported = store.importFolders(folders)
+                self.entries = store.entries
+                if imported.isEmpty {
+                    onError?("가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요.")
+                }
+            }
         }
     }
 
@@ -222,6 +233,7 @@ final class LibraryViewModel: ObservableObject {
 
     /// 동영상 준비(복사+프리뷰 생성 — 무거운 I/O) 클로저. 백그라운드 큐에서 호출된다.
     /// 테스트는 스텁을 주입해 실 복사/디코드·실 관리 디렉터리 쓰기를 생략한다.
+    /// 반환된 폴더는 이 임포트 전용으로 새로 만든 것이어야 한다 — 등록 실패 시 제거된다(F583).
     var videoPrepare: (URL) -> URL? = { VideoImport.prepare(from: $0) }
 
     /// 원시 mp4/mov 가져오기(작업 5) — prepare(복사+프리뷰 디코드, 무거움)는 백그라운드 큐에서,
@@ -234,6 +246,9 @@ final class LibraryViewModel: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 guard let folder, (try? store.importFolder(folder)) != nil else {
+                    // F583: 준비(관리 폴더에 복사 완료) 후 등록이 실패하면 부분 산출물이 고아로 남는다 —
+                    // 이 임포트를 위해 만든 폴더이므로 정리한다(videoPrepare 계약 주석 참조).
+                    if let folder { try? FileManager.default.removeItem(at: folder) }
                     self.onError?("동영상 가져오기에 실패했습니다: \(url.lastPathComponent)")
                     return
                 }

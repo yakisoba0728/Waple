@@ -26,16 +26,24 @@ enum VideoImport {
         let folder = importsDir.appendingPathComponent(unique, isDirectory: true)
         guard (try? fm.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
 
+        // F583: 이후 단계(복사·project.json 기록) 실패 시 만든 폴더를 정리한다 — 안 하면 빈/부분
+        // 폴더가 고아로 남아 다음 임포트의 uniqueFolderName 이 불필요한 -2 접미를 붙인다.
         let fileName = videoURL.lastPathComponent
         let dest = folder.appendingPathComponent(fileName)
         try? fm.removeItem(at: dest)
-        guard (try? fm.copyItem(at: videoURL, to: dest)) != nil else { return nil }
+        guard (try? fm.copyItem(at: videoURL, to: dest)) != nil else {
+            try? fm.removeItem(at: folder)
+            return nil
+        }
 
         writePreview(from: dest, to: folder.appendingPathComponent("preview.jpg"))
 
         let json = ProjectJSONBuilder.videoProject(file: fileName, preview: "preview.jpg", title: name)
         guard (try? Data(json.utf8).write(to: folder.appendingPathComponent("project.json"), options: .atomic)) != nil
-        else { return nil }
+        else {
+            try? fm.removeItem(at: folder)
+            return nil
+        }
         return folder
     }
 

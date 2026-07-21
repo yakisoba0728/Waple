@@ -65,6 +65,12 @@ public final class LibraryStore {
 
     @discardableResult
     public func importFolder(_ folderURL: URL) throws -> LibraryEntry {
+        try importFolder(folderURL, saving: true)
+    }
+
+    /// F582: 일괄 임포트(importFolders)는 폴더마다 save() 하지 않고 마지막에 한 번만 저장한다
+    /// (호출마다 전체 인덱스 재작성 O(n²) 방지). 단건 임포트는 종전대로 즉시 저장.
+    private func importFolder(_ folderURL: URL, saving: Bool) throws -> LibraryEntry {
         let project = try ProjectJSONParser.parse(folderURL: folderURL)
         let bookmark = try folderURL.bookmarkData(
             options: [], includingResourceValuesForKeys: nil, relativeTo: nil
@@ -74,10 +80,25 @@ public final class LibraryStore {
         // 북마크 앨리어싱) 대신 접미로 유일화해 둘 다 보존한다. 같은 실경로(재가져오기/갱신)면
         // 종전대로 덮어쓴다(테스트: testReimportUpdatesEntryAndMovesToEnd).
         var id = project.id
-        if let existing = entries.first(where: { $0.id == id }),
-           let existingURL = resolveFolderURL(for: existing),
-           existingURL.standardizedFileURL != folderURL.standardizedFileURL {
-            id = uniqueEntryId(basedOn: id)
+        if let existing = entries.first(where: { $0.id == id }) {
+            // F586: 기존 엔트리의 북마크 해석이 실패(nil)하면 같은 소스인지 확인할 수 없다 —
+            // 충돌 검사를 건너뛰고 무통지 대체하지 말고 유일화한다(보존 우선; 깨진 엔트리는
+            // 어차피 해석 불가라 유실은 제한적).
+            let sameFolder = resolveFolderURL(for: existing)?.standardizedFileURL
+                == folderURL.standardizedFileURL
+            if !sameFolder {
+                // F581: 유일화 엔트리(id-2, id-3 …)가 이미 이 폴더를 가리키면 같은 소스의
+                // 재임포트다 — 새 접미를 붙이지 말고 그 엔트리를 갱신한다(재임포트마다
+                // X-3, X-4 … 중복 누적 방지).
+                if let sameSource = entries.first(where: {
+                    isUniquifiedVariant($0.id, base: id)
+                        && resolveFolderURL(for: $0)?.standardizedFileURL == folderURL.standardizedFileURL
+                }) {
+                    id = sameSource.id
+                } else {
+                    id = uniqueEntryId(basedOn: id)
+                }
+            }
         }
         let entry = LibraryEntry(
             id: id,
@@ -91,8 +112,14 @@ public final class LibraryStore {
         )
         entries.removeAll { $0.id == entry.id }
         entries.append(entry)
-        save()
+        if saving { save() }
         return entry
+    }
+
+    /// id 가 base 의 유일화 변형("base-2", "base-3" …)인지(F581 — 재임포트 동일 소스 탐색).
+    private func isUniquifiedVariant(_ id: String, base: String) -> Bool {
+        guard id.hasPrefix("\(base)-") else { return false }
+        return Int(id.dropFirst(base.count + 1)) != nil
     }
 
     /// 이미 쓰이는 id 와 충돌할 때 접미(-2, -3, …)로 유일화한다.
@@ -105,24 +132,40 @@ public final class LibraryStore {
 
     @discardableResult
     public func importParent(_ parentURL: URL) -> [LibraryEntry] {
+        importFolders(scanImportableFolders(in: parentURL))
+    }
+
+    /// importParent 의 1단계 — 가져올 배경 폴더 후보 나열(순수 I/O, entries/index 무접촉).
+    /// F582: 백그라운드 큐에서 호출 가능(메인 스레드 동기 I/O 방지 — LibraryViewModel.importParent 가
+    /// importQueue 경유로 이 단계를 백그라운드에서 돌린다).
+    public func scanImportableFolders(in parentURL: URL) -> [URL] {
         let fm = FileManager.default
         // 사용자가 상위 폴더가 아니라 개별 배경 폴더(project.json 포함)를 직접 고른 경우,
         // 하위 폴더만 순회하면 아무것도 가져오지 못한다. 자신이 배경 폴더면 직접 가져온다.
         if fm.fileExists(atPath: parentURL.appendingPathComponent("project.json").path) {
-            if let entry = try? importFolder(parentURL) { return [entry] }
-            return []
+            return [parentURL]
         }
         let subs = (try? fm.contentsOfDirectory(
             at: parentURL,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )) ?? []
-        var imported: [LibraryEntry] = []
-        for sub in subs {
+        return subs.filter { sub in
             var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: sub.path, isDirectory: &isDir), isDir.boolValue else { continue }
-            if let entry = try? importFolder(sub) { imported.append(entry) }
+            return fm.fileExists(atPath: sub.path, isDirectory: &isDir) && isDir.boolValue
         }
+    }
+
+    /// scanImportableFolders 결과를 순서대로 가져온다(스토어 변경 — 메인 스레드 규약).
+    /// F582: 일괄 임포트는 폴더마다 저장하지 않고 마지막에 한 번만 save() 한다(호출마다 전체
+    /// 인덱스 재작성이 누적되는 O(n²) 방지).
+    @discardableResult
+    public func importFolders(_ folderURLs: [URL]) -> [LibraryEntry] {
+        var imported: [LibraryEntry] = []
+        for url in folderURLs {
+            if let entry = try? importFolder(url, saving: false) { imported.append(entry) }
+        }
+        if !imported.isEmpty { save() }
         return imported
     }
 
@@ -174,7 +217,11 @@ public final class LibraryStore {
             // move 전, 아직 임시 해제 위치에 있는 root 에서 미리 파싱한다.
             let parsed = try? ProjectJSONParser.parse(folderURL: root)
             let hasStableId = parsed?.workshopId != nil   // 전역 유일 식별자 — 있으면 재import 를 확정할 수 있다
-            var name = parsed?.id ?? root.lastPathComponent
+            var name = WallpaperPathSecurity.normalizedPathComponent(parsed?.id) ?? root.lastPathComponent
+            // F580: project.json 선언 id(workshopid 우선)는 살균되지 않은 원문이라 "../../" 같은
+            // 경로 탈출 벡터다 — 그대로 관리 폴더명에 쓰면 dest 가 imported/ 밖을 가리켜
+            // removeItem/moveItem 이 임의 디렉터리를 파괴·교체한다. 단일 컴포넌트로 살균하고,
+            // 불가하면 원본 루트 폴더명으로 폴백한다.
             if usedNames.contains(name) {
                 name = uniqueManagedName(name, usedNames: usedNames, in: importedDir, fm: fm)
             }
@@ -186,10 +233,29 @@ public final class LibraryStore {
             }
             usedNames.insert(name)
             let dest = importedDir.appendingPathComponent(name, isDirectory: true)
-            try? fm.removeItem(at: dest)
-            guard (try? fm.moveItem(at: root, to: dest)) != nil,
-                  let entry = try? importFolder(dest) else { continue }
-            imported.append(entry)
+            // F584: 실패 경로를 try? 로 삼키면 어느 배경이 왜 빠졌는지 무통지다 — 각 단계 실패를
+            // 로그로 남기고, 이동 후 등록 실패 시 엔트리 없는 고아 관리 폴더를 정리한다.
+            if fm.fileExists(atPath: dest.path) {
+                do {
+                    try fm.removeItem(at: dest)
+                } catch {
+                    NSLog("%@", "[Waple] failed to replace managed folder \(dest.path): \(error) — skipping")
+                    continue
+                }
+            }
+            do {
+                try fm.moveItem(at: root, to: dest)
+            } catch {
+                NSLog("%@", "[Waple] failed to move \(root.path) into library: \(error) — skipping")
+                continue
+            }
+            do {
+                let entry = try importFolder(dest)
+                imported.append(entry)
+            } catch {
+                NSLog("%@", "[Waple] failed to register imported folder \(dest.path): \(error) — removing")
+                try? fm.removeItem(at: dest)
+            }
         }
         return imported
     }
