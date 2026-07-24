@@ -672,14 +672,16 @@ extension SceneRenderer {
         return result
     }
 
-    /// `castShadow` point 의 6면을 2×3 viewport에, directional(F661)은 단일 오소를 슬라이스 전체에 렌더한다.
+    /// `castShadow` point 의 6면을 2×3 viewport에, directional(F661)은 단일 오소를 슬라이스 전체에,
+    /// F780 CSM directional 은 캐스케이드 3장을 셀 0..2 에 렌더한다.
     /// 실패 시 해당 프레임 shadow metadata를 끈다.
     func encodePointShadows(resolvedLights: [Scene3DResolvedLight],
                             lights: inout [Scene3DLightUniform],
                             nodes: [Int: Scene3DMath.Node],
                             skinBuffers: [Int: MTLBuffer],
                             commandBuffer: MTLCommandBuffer,
-                            device: MTLDevice) -> (texture: MTLTexture?, matrices: [simd_float4x4]) {
+                            device: MTLDevice,
+                            camera: DirectionalShadowMath.ShadowCamera) -> (texture: MTLTexture?, matrices: [simd_float4x4]) {
         var matrices = [simd_float4x4](repeating: matrix_identity_float4x4,
                                        count: Scene3DLighting.maximumLights * 6)
         let sliceCount = Scene3DLighting.shadowSliceCount(lights)
@@ -736,14 +738,27 @@ extension SceneRenderer {
             let isDirectional = light.kind == .directional
             let faceMatrices: [simd_float4x4]
             if isDirectional {
-                // F661: 단일 오소(슬라이스 전체). 캐스터 AABB 가 없으면 이 라이트 섀도우만 끈다.
-                guard let bounds = sceneShadowWorldBounds(),
-                      let vp = DirectionalShadowMath.viewProjection(
-                        forward: light.forward, minBound: bounds.min, maxBound: bounds.max) else {
+                // F780: 유효 cascadeDistances 면 CSM 3-스플릿(셀 0..2), 아니면 F661 단일 오소 폴터.
+                // CSM 산출 실패(퇴화 카메라/바운드)로 단일 오소에 낮출 땐 유니폼의 cascades 도 지워
+                // 셰이더 경로(w>2.5=CSM)와 뎁스 맵 레이아웃이 어긋나지 않게 한다.
+                guard let bounds = sceneShadowWorldBounds() else {
                     Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
                     continue
                 }
-                faceMatrices = [vp]
+                if let distances = light.cascadeDistances,
+                   let cascades = DirectionalShadowMath.cascadeViewProjections(
+                        forward: light.forward, camera: camera, distances: distances,
+                        minBound: bounds.min, maxBound: bounds.max) {
+                    faceMatrices = cascades
+                } else if let vp = DirectionalShadowMath.viewProjection(
+                        forward: light.forward, minBound: bounds.min, maxBound: bounds.max) {
+                    lights[lightIndex].cascades = .zero
+                    faceMatrices = [vp]
+                } else {
+                    // 캐스터 AABB/VP 퇴화 — 이 라이트 섀도우만 끈다.
+                    Scene3DLighting.disableShadow(at: lightIndex, in: &lights)
+                    continue
+                }
             } else {
                 let cube = PointShadowMath.faceViewProjections(
                     position: light.position, radius: light.colorRadius.w)
@@ -772,12 +787,13 @@ extension SceneRenderer {
             encoder.setDepthBias(1, slopeScale: 1.5, clamp: 0)
 
             for face in 0..<faceMatrices.count {
-                if isDirectional {
-                    // 슬라이스 전체(셀 분할 없음) — scissor 없이 풀 뷰포트.
+                if isDirectional && faceMatrices.count == 1 {
+                    // F661 단일 오소: 슬라이스 전체(셀 분할 없음) — scissor 없이 풀 뷰포트.
                     encoder.setViewport(MTLViewport(
                         originX: 0, originY: 0,
                         width: Double(atlas.width), height: Double(atlas.height), znear: 0, zfar: 1))
                 } else {
+                    // point 6면 / F780 CSM 3캐스케이드: 2×3 셀 배치의 셀 face 에 기록.
                     let cell = PointShadowMath.atlasCell(face)
                     let originX = cell.x * PointShadowMath.faceResolution
                     let originY = cell.y * PointShadowMath.faceResolution
@@ -944,9 +960,13 @@ extension SceneRenderer {
         }
         var lightUniforms = Scene3DLighting.packLights(resolvedLights)
         let skinBuffers = prepare3DSkinBuffers(time: time, device: device)
+        // F780: CSM 프러스텀 슬라이스 입력 — 위에서 per-frame 스크립트까지 해석된 카메라 값과 동일 출처.
+        let shadowCamera = DirectionalShadowMath.ShadowCamera(
+            eye: eye, forward: fwd, right: right, up: camUp,
+            tanHalfFovY: tan(fov * .pi / 360), aspect: aspect, nearZ: cam.nearZ)
         let shadowResult = encodePointShadows(
             resolvedLights: resolvedLights, lights: &lightUniforms, nodes: nmap,
-            skinBuffers: skinBuffers, commandBuffer: cb, device: device)
+            skinBuffers: skinBuffers, commandBuffer: cb, device: device, camera: shadowCamera)
         if let shadowTexture = shadowResult.texture {
             frameUniform.meta.y = 1 / Float(shadowTexture.width)
             frameUniform.meta.z = 1 / Float(shadowTexture.height)

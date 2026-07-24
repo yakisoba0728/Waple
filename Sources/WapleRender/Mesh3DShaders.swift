@@ -33,6 +33,7 @@ enum Mesh3DShaders {
         float4 colorRadius;
         float4 shadow;        // x=slice, y=vp start, z=kind(0=point,1=directional,2=spot), w=spot inner cos
         float4 axis;          // xyz=forward(+Z blue축, 광자 진행 방향), w=spot outer cos
+        float4 cascades;      // F780: directional CSM far 경계 xyz, w=캐스케이드 수(3=CSM, 0=단일 오소)
     };
     struct VOut {
         float4 pos [[position]];
@@ -288,27 +289,49 @@ enum Mesh3DShaders {
         return float2(1.0, 2.0);
     }
 
-    // F661(S-47): directional 섀도우 최소 근사 — 단일 오소 맵. 아틀라스 슬라이스 전체(2×3 셀 분할 없음)를
-    // 쓰고 VP 는 shadowVP[shadow.y] 하나. PCF 는 point 경로와 동일 9탭(네이티브 상수 유지), uv 는 풀슬라이스.
+    // F661(S-47): directional 섀도우 — F780 이후 2단계. cascades.w==3 이면 CSM 3-스플릿: 카메라 거리로
+    // 캐스케이드를 골라 point 와 같은 2×3 셀 배치의 셀(0..2)을 샘플(VP 슬롯 shadow.y+cascade). 아니면
+    // 종전 단일 오소(아틀라스 슬라이스 전체, VP shadow.y 하나). PCF 는 point 경로와 동일 9탭 공유.
     inline float directionalShadowVisibility(float3 worldPos,
                                              constant LightU& light,
                                              constant FrameU& frame,
                                              constant float4x4* shadowVP,
                                              depth2d_array<float> shadowAtlas) {
         if (light.shadow.x < 0.0 || frame.meta.y <= 0.0 || frame.meta.z <= 0.0) return 1.0;
-        int matrixIndex = int(light.shadow.y + 0.5);
-        float4 projected = shadowVP[matrixIndex] * float4(worldPos, 1.0);
-        if (projected.w <= 0.0) return 1.0;
-        float3 ndc = projected.xyz / projected.w;
-        if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
-        // Metal NDC y-up → 텍스처 v-down 풀슬라이스 매핑(point 경로의 y 플립과 동일 규약).
-        float2 uv = ndc.xy * float2(0.5, -0.5) + 0.5;
-        // 오소 상자 밖은 깊이 정보 없음 — 그림자 판정 불가라 lit 폴터(clamp_to_edge 스미어 방지).
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
         float2 texel = frame.meta.yz;
-        float2 uvMin = texel * 0.5;
-        float2 uvMax = 1.0 - texel * 0.5;
-        float referenceDepth = ndc.z - frame.meta.w;
+        float2 uv, uvMin, uvMax;
+        float referenceDepth;
+        if (light.cascades.w > 2.5) {
+            // F780: CSM — 카메라-표면 거리로 슬라이스 선택. 마지막 경계 밖은 맵 없음(lit 폴터).
+            float viewDist = distance(frame.cameraEye.xyz, worldPos);
+            if (viewDist >= light.cascades.z) return 1.0;
+            int cascade = viewDist < light.cascades.x ? 0 : (viewDist < light.cascades.y ? 1 : 2);
+            float4 projected = shadowVP[int(light.shadow.y + 0.5) + cascade] * float4(worldPos, 1.0);
+            if (projected.w <= 0.0) return 1.0;
+            float3 ndc = projected.xyz / projected.w;
+            if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
+            // 셀 낭비 없이 point 경로와 동일 규약(0.49 보정, y 플립, 2×3 배치)으로 셀 i 에 매핑.
+            float2 cell = pointShadowCell(cascade);
+            float2 localUV = ndc.xy * float2(0.49, -0.49) + 0.5;
+            float2 atlasScale = float2(0.5, 0.3333333333);
+            uv = (cell + localUV) * atlasScale;
+            uvMin = cell * atlasScale + texel * 0.5;
+            uvMax = (cell + 1.0) * atlasScale - texel * 0.5;
+            referenceDepth = ndc.z - frame.meta.w;
+        } else {
+            int matrixIndex = int(light.shadow.y + 0.5);
+            float4 projected = shadowVP[matrixIndex] * float4(worldPos, 1.0);
+            if (projected.w <= 0.0) return 1.0;
+            float3 ndc = projected.xyz / projected.w;
+            if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
+            // Metal NDC y-up → 텍스처 v-down 풀슬라이스 매핑(point 경로의 y 플립과 동일 규약).
+            uv = ndc.xy * float2(0.5, -0.5) + 0.5;
+            // 오소 상자 밖은 깊이 정보 없음 — 그림자 판정 불가라 lit 폴터(clamp_to_edge 스미어 방지).
+            if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+            uvMin = texel * 0.5;
+            uvMax = 1.0 - texel * 0.5;
+            referenceDepth = ndc.z - frame.meta.w;
+        }
         uint slice = uint(light.shadow.x + 0.5);
         constexpr sampler compareSampler(coord::normalized, filter::nearest,
                                          address::clamp_to_edge, compare_func::less_equal);
@@ -427,7 +450,7 @@ enum Mesh3DShaders {
                 float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
                 direct += visibility * pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
                                                 u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
-            } else if (kind < 1.5) {   // directional: 무감쇠 + 단일 오소 섀도우(F661)
+            } else if (kind < 1.5) {   // directional: 무감쇠 + CSM/단일 오소 섀도우(F661/F780)
                 float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
                 direct += visibility * directionalPBR(N, V, albedo, u.material.x, u.material.y,
                                                       u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);

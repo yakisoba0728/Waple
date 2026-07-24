@@ -80,6 +80,9 @@ struct Scene3DResolvedLight: Equatable {
     /// spot 콘 코사인(축 기준). point/directional 미사용(기본 0 → 셰이더가 kind 로 분기).
     var coneInnerCos: Float = 0
     var coneOuterCos: Float = 0
+    /// F780(S-47): `cascadedistance0-2`(친 치수 상승 far 경계). 소비는 directional + castShadow 한정
+    /// (DirectionalShadowMath.validCascades) — WE 에디터는 라이트 종 무관 기록이라 point/spot 도 파스는 보존.
+    var cascadeDistances: SIMD3<Float>? = nil
 }
 
 /// MSL `FrameU`와 필드/정렬이 같은 per-frame 3D 라이팅 상수(8×float4).
@@ -97,7 +100,7 @@ struct Scene3DFrameUniform {
     var fogHeightParams = SIMD4<Float>(0, 1, 0, 0)
 }
 
-/// MSL `LightU`와 필드/정렬이 같은 라이트 1개 상수(4×float4).
+/// MSL `LightU`와 필드/정렬이 같은 라이트 1개 상수(5×float4).
 struct Scene3DLightUniform {
     var positionExponent: SIMD4<Float>
     var colorRadius: SIMD4<Float>
@@ -105,6 +108,9 @@ struct Scene3DLightUniform {
     var shadow: SIMD4<Float>
     /// xyz=월드 forward(+Z blue축), w=spot 콘 outer cos. directional/spot 전용.
     var axis: SIMD4<Float>
+    /// F780: directional CSM far 경계 xyz + w=캐스케이드 수(3=CSM, 0=단일 오소/기타).
+    /// spot cone 필드와 달리 directional 이 아니면 항상 .zero.
+    var cascades: SIMD4<Float> = .zero
 }
 
 enum Scene3DLighting {
@@ -177,6 +183,10 @@ enum Scene3DLighting {
                 resolved.coneInnerCos = cone.inner
                 resolved.coneOuterCos = cone.outer
             }
+            // F780: cascadeDistances 는 종 무관 보존(유효성·소비 게이트는 packLights/뎁스 패스).
+            if let cd = light.cascadeDistances {
+                resolved.cascadeDistances = SIMD3(cd.x, cd.y, cd.z)
+            }
             result.append(resolved)
         }
         return result
@@ -212,11 +222,18 @@ enum Scene3DLighting {
         for (index, light) in lights.prefix(maximumLights).enumerated() {
             let slice = light.castsShadow ? nextShadowSlice : -1
             if light.castsShadow { nextShadowSlice += 1 }
+            // F780: directional + 캐스터 + 유효 상승 3경계만 CSM 소비. 무효/부재면 w=0(단일 오소 폴터).
+            var csm = SIMD4<Float>.zero
+            if light.kind == .directional && light.castsShadow,
+               let d = DirectionalShadowMath.validCascades(light.cascadeDistances) {
+                csm = SIMD4(d.x, d.y, d.z, 3)
+            }
             packed[index] = Scene3DLightUniform(
                 positionExponent: SIMD4(light.position.x, light.position.y, light.position.z, light.exponent),
                 colorRadius: light.colorRadius,
                 shadow: SIMD4(slice, slice >= 0 ? slice * 6 : -1, light.kind.rawValue, light.coneInnerCos),
-                axis: SIMD4(light.forward.x, light.forward.y, light.forward.z, light.coneOuterCos))
+                axis: SIMD4(light.forward.x, light.forward.y, light.forward.z, light.coneOuterCos),
+                cascades: csm)
         }
         return packed
     }
@@ -292,11 +309,35 @@ enum PointShadowMath {
     }
 }
 
-/// F661(S-47): directional 섀도우 최소 근사 — 단일 오소 맵(캐스케이드 미구현, cascadedistance0-2 는
-/// SceneDocument 미파스라 미사용). WE 는 CSM(directionalshadow:1)이나 실구현은 대형이라 스코프 밖.
-/// 라이트 forward 축으로 씬 전체 메시 월드 AABB(캐스터+리시버)를 타이트 피팅한 ortho VP 1장을
-/// 아틀라스 한 슬라이스 전체에 기록.
+/// F661(S-47): directional 섀도우 — F780 이후 2단계: 라이트에 유효한 `cascadedistance0-2`(F750 파스)가
+/// 있으면 CSM 3-스플릿(엄격 상승 far 경계, 실측 ldirectional 3씬), 없으면 종전 단일 오소 근사 폴터.
+/// 단일 오소: 라이트 forward 축으로 씬 전체 메시 월드 AABB(캐스터+리시버)를 타이트 피팅한 ortho VP 1장을
+/// 아틀라스 한 슬라이스 전체에 기록. CSM: 깊이(라이트뷰 z)는 씬 AABB 전체를 유지하되 xy 범위는
+/// 카메라 프러스텀 슬라이스([near, d0], [d0, d1], [d1, d2])에 타이트 피팅 — 캐스케이드 i 는 point 와 같은
+/// 2×3 셀 배치의 셀 i 에 기록(VP 슬롯 slice*6+i, maximumLights*6 패턴 유지).
+/// WE 의 캐스케이드 피팅 정밀 수학은 미확정 — 여기서는 "cascadedistance = 카메라 기준 far 경계"(C-shaders
+/// 문서 확정 의미)만 소비하는 표준 CSM 으로 근사하고, 경계가 유효하지 않으면 추측 대신 단일 오소로 폴터.
 enum DirectionalShadowMath {
+    /// CSM 소비 가능한 경계인가: 전 성분 유한·양·친 치수 상승. 부분 저작/역전/0 은 WE 의미 미확정이라 부적격.
+    static func validCascades(_ distances: SIMD3<Float>?) -> SIMD3<Float>? {
+        guard let d = distances,
+              d.x.isFinite, d.y.isFinite, d.z.isFinite,
+              d.x > 0, d.y > d.x, d.z > d.y else { return nil }
+        return d
+    }
+
+    /// 캐스케이드 프러스텀 슬라이스 산출 입력(encode3D 의 per-frame 카메라 해석값과 동일 출처).
+    struct ShadowCamera {
+        var eye: SIMD3<Float>
+        /// 정규화된 시선 forward(center-eye). right/up 은 lookAt 과 동일 규약의 직교축.
+        var forward: SIMD3<Float>
+        var right: SIMD3<Float>
+        var up: SIMD3<Float>
+        var tanHalfFovY: Float
+        var aspect: Float
+        var nearZ: Float
+    }
+
     /// 월드 AABB(minB/maxB)를 라이트 뷰 공간으로 옮겨 타이트하게 덮는 ortho VP(Metal z 0..1) 반환.
     /// 입력이 비유한/퇴화(min>max)면 nil — 호출부는 해당 라이트 섀도우를 끈다(기존 묻섀도우 폴터 유지).
     static func viewProjection(forward: SIMD3<Float>,
@@ -321,10 +362,83 @@ enum DirectionalShadowMath {
                 }
             }
         }
+        return ortho(view: view, lo: lo, hi: hi)
+    }
+
+    /// F780: CSM 3-스플릿 VP(캐스케이드 0..2 순). 슬라이스 i 의 xy 는 카메라 프러스텀 구간
+    /// [near, d0]/[d0, d1]/[d1, d2] 8코너에, 깊이(z)는 씬 AABB 전체와의 합집합(프러스텀 밖 캐스터 포함)에
+    /// 피팅한다. 경계 무효(validCascades 부적격)·비유한 입력·퇴화 카메라면 nil → 호출부는 단일 오소 폴터.
+    static func cascadeViewProjections(forward: SIMD3<Float>,
+                                       camera: ShadowCamera,
+                                       distances: SIMD3<Float>,
+                                       minBound: SIMD3<Float>, maxBound: SIMD3<Float>) -> [simd_float4x4]? {
+        guard let d = validCascades(distances),
+              forward.x.isFinite, forward.y.isFinite, forward.z.isFinite,
+              simd_length_squared(forward) > 1e-12,
+              camera.eye.x.isFinite, camera.eye.y.isFinite, camera.eye.z.isFinite,
+              camera.forward.x.isFinite, camera.forward.y.isFinite, camera.forward.z.isFinite,
+              simd_length_squared(camera.forward) > 1e-12,
+              camera.right.x.isFinite, camera.right.y.isFinite, camera.right.z.isFinite,
+              camera.up.x.isFinite, camera.up.y.isFinite, camera.up.z.isFinite,
+              camera.tanHalfFovY.isFinite, camera.tanHalfFovY > 0,
+              camera.aspect.isFinite, camera.aspect > 0,
+              camera.nearZ.isFinite, camera.nearZ >= 0,
+              minBound.x.isFinite, minBound.y.isFinite, minBound.z.isFinite,
+              maxBound.x.isFinite, maxBound.y.isFinite, maxBound.z.isFinite,
+              minBound.x <= maxBound.x, minBound.y <= maxBound.y, minBound.z <= maxBound.z else { return nil }
+        let f = simd_normalize(forward)
+        let view = Scene3DMath.lookAt(eye: .zero, center: f, up: SIMD3<Float>(0, 1, 0))
+        // 깊이(z) 범위는 씬 AABB(캐스터+리시버) 기준 — 프러스텀 밖 캐스터의 그림자도 맵에 들어와야 한다.
+        var sceneLo = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+        var sceneHi = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+        for cx in [minBound.x, maxBound.x] {
+            for cy in [minBound.y, maxBound.y] {
+                for cz in [minBound.z, maxBound.z] {
+                    let p = view * SIMD4<Float>(cx, cy, cz, 1)
+                    sceneLo = simd_min(sceneLo, SIMD3(p.x, p.y, p.z))
+                    sceneHi = simd_max(sceneHi, SIMD3(p.x, p.y, p.z))
+                }
+            }
+        }
+        // 프러스텀 슬라이스 양단 4코너씩 → 라이트 뷰.
+        func sliceCorners(_ dist: Float) -> [SIMD3<Float>] {
+            let hh = camera.tanHalfFovY * dist
+            let hw = hh * camera.aspect
+            let c = camera.eye + camera.forward * dist
+            return [c + camera.right * hw + camera.up * hh,
+                    c - camera.right * hw + camera.up * hh,
+                    c + camera.right * hw - camera.up * hh,
+                    c - camera.right * hw - camera.up * hh]
+        }
+        var result: [simd_float4x4] = []
+        result.reserveCapacity(3)
+        var dNear = max(camera.nearZ, Float(1e-3))
+        for boundary in [d.x, d.y, d.z] {
+            // 카메라 near 가 첫 경계를 넘는 퇴화(빈 슬라이스)만 방어 — 정상 시나리오에선 dNear 가 작다.
+            let dn = min(dNear, boundary * 0.5)
+            var lo = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+            var hi = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+            for corner in sliceCorners(dn) + sliceCorners(boundary) {
+                let p = view * SIMD4<Float>(corner.x, corner.y, corner.z, 1)
+                lo = simd_min(lo, SIMD3(p.x, p.y, p.z))
+                hi = simd_max(hi, SIMD3(p.x, p.y, p.z))
+            }
+            // 깊이만 씬 전체로 확장(xy 는 슬라이스 타이트핏 유지 — 캐스케이드 해상도 이득의 핵심).
+            lo.z = sceneLo.z
+            hi.z = sceneHi.z
+            result.append(ortho(view: view, lo: lo, hi: hi))
+            dNear = boundary
+        }
+        return result
+    }
+
+    /// 라이트 뷰 공간 min/max → Metal NDC(x/y -1..1, z 0..1) 직교 VP. 가장자리 5% 여백 + 최소 두께.
+    private static func ortho(view: simd_float4x4, lo rawLo: SIMD3<Float>,
+                              hi rawHi: SIMD3<Float>) -> simd_float4x4 {
         // 가장자리 여백 5%(스키닝 애니의 바인드포즈 AABB 이탈 흡수) + 최소 두께(퇴화 상자 방지).
-        let pad = simd_max((hi - lo) * 0.05, SIMD3<Float>(repeating: 1e-3))
-        lo -= pad
-        hi += pad
+        let pad = simd_max((rawHi - rawLo) * 0.05, SIMD3<Float>(repeating: 1e-3))
+        let lo = rawLo - pad
+        let hi = rawHi + pad
         // RH 뷰: 가시 범위는 -Z. near = -hi.z(가장 가까움), far = -lo.z(가장 멂). pad 로 near<far 보장.
         let l = lo.x, r = hi.x, b = lo.y, t = hi.y
         let zn = -hi.z, zf = -lo.z
