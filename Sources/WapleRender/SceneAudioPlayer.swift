@@ -88,6 +88,8 @@ public final class SceneAudioPlayer {
     public var isPlaying: Bool { playlists.contains { $0.isPlaying } }
     /// 활성 플레이어 수(테스트용). 다중 엔트리도 오브젝트당 1(동시 재생 아님).
     var playerCount: Int { playlists.filter { $0.hasPlayer }.count }
+    /// F812 테스트용: 정지(paused) 상태 플레이리스트 수 — 가림 게이트의 sceneAudio pause/resume 대칭 검증.
+    var pausedPlaylistCountForTesting: Int { playlists.filter { $0.pausedForTesting }.count }
 
     // ── 순수 로직(테스트 대상) ─────────────────────────────────────────────
 
@@ -265,4 +267,6 @@ final class Playlist: NSObject, AVAudioPlayerDelegate {
     /// F552 회귀 테스트용 읽기 전용 접근자(stale 콜백이 현재 플레이어를 교체했는지 검증).
     var playerForTesting: AVAudioPlayer? { player }
     var indexForTesting: Int { index }
+    /// F812 테스트용: 정지(paused) 플래그 — 가림 게이트의 sceneAudio pause/resume 대칭 검증.
+    var pausedForTesting: Bool { paused }
 }
