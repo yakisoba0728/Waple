@@ -2,9 +2,19 @@ import XCTest
 @testable import WapleLibrary
 
 final class FavoritesFolderStoreTests: XCTestCase {
+    private var tempDirs: [URL] = []
+
+    // F821: 임시 디렉터리 정리 — 동료 테스트(MonitorAndPlaylistTests 등)와 같은 추적 패턴.
+    override func tearDown() {
+        for d in tempDirs { try? FileManager.default.removeItem(at: d) }
+        tempDirs = []
+        super.tearDown()
+    }
+
     private func tempDir() -> URL {
         let d = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try! FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        tempDirs.append(d)   // tearDown 에서 정리($TMPDIR 리터 방지)
         return d
     }
 

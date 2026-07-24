@@ -248,6 +248,21 @@ public final class VideoRenderer: WallpaperRenderer {
     public func pause() { pausedManually = true; player?.pause() }
     public func resume() { pausedManually = false; player?.play() }
 
+    /// F820: 음량/배속 라이브 반영 — UserDefaults 에 이미 저장된 새 값을 실행 중인 플레이어에
+    /// 직접 적용해, apply() 전체 리마운트(mkv/webm 은 ffmpeg 재변환 대기+재생 리셋) 없이 즉시 반영.
+    /// 플레이어가 아직 없으면(ffmpeg 변환 대기 중) no-op — attachPlayer 가 장착 시 새 값을 읽는다.
+    public func applyLiveVideoSettings() {
+        guard let player, let id = projectId else { return }
+        let volume = VideoSettings.volume(id: id)
+        player.volume = volume
+        player.isMuted = volume <= 0
+        let rate = VideoSettings.rate(id: id)
+        player.defaultRate = rate
+        // defaultRate 는 다음 play() 부터 적용 — 재생 중이면 현재 rate 도 즉시 맞춘다.
+        // 정지(수동/가림, rate==0) 중 대입은 재생 재개를 뜻하므로 건드리지 않는다.
+        if player.rate != 0 { player.rate = rate }
+    }
+
     public func teardown() {
         mountToken &+= 1
         stopPlayback()

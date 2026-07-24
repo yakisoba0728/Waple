@@ -134,9 +134,10 @@ struct NowPlayingBar: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
-    /// 음량/배속 메뉴(w5d-settings-ia). 리마운트를 유발하므로(재생 리셋) 연속 슬라이더 대신
-    /// SettingsPresentation 의 기존 이산 스텝을 재사용 — 설정 창이 쓰던 것과 동일한 값 집합이라
-    /// 저장값이 호환된다. 대상은 videoTargetIds()(모니터별 할당 포함, 설정 창과 동일 소스).
+    /// 음량/배속 메뉴(w5d-settings-ia). F820 으로 리마운트 없는 라이브 반영이 됐지만, 연속
+    /// 슬라이더는 드래그 틱마다 UserDefaults 쓰기+플레이어 조정을 유발하므로 이산 스텝 유지 —
+    /// SettingsPresentation 의 기존 스텝을 재사용해 설정 창과 동일한 값 집합(저장값 호환).
+    /// 대상은 videoTargetIds()(모니터별 할당 포함, 설정 창과 동일 소스).
     private var videoControlsMenu: some View {
         Menu {
             Section("음량") {
@@ -180,8 +181,8 @@ struct NowPlayingBar: View {
         NowPlayingSubtitle.commonValue(viewModel.videoTargetIds().map { VideoSettings.rate(id: $0) })
     }
 
-    /// 현재 적용 중인 모든 동영상 대상(모니터별 할당 포함)에 변경을 반영하고 재적용을 태운다
-    /// (기존 설정 창 setVolume/setRate 와 동일 규약 — 리마운트로 재생이 처음부터 다시 시작된다).
+    /// 현재 적용 중인 모든 동영상 대상(모니터별 할당 포함)에 변경을 저장하고 라이브 반영을 태운다
+    /// (F820 — 리마운트 없이 AVPlayer.volume/defaultRate 직접 조정, 재생 리셋 없음).
     private func applyToVideoTargets(_ mutate: (String) -> Void) {
         let ids = viewModel.videoTargetIds()
         guard !ids.isEmpty else { return }

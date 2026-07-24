@@ -153,7 +153,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return VideoSettingsTarget.projectIds(currentProjectId: self.currentProjectId,
                                                   activeVideoProjectIds: self.activeVideoProjectIds)
         }
-        libraryVM.onVideoSettingsChanged = { [weak self] in _ = self?.applyCurrentSelection() }
+        // F820: 음량/배속 변경은 살아있는 플레이어에 라이브 반영 — 종전 applyCurrentSelection()
+        // 전체 리마운트는 mkv/webm 에서 ffmpeg 재변환 대기+재생 리셋(t=0)을 유발했다.
+        libraryVM.onVideoSettingsChanged = { [weak self] in self?.applyLiveVideoSettings() }
         schedulePlaylistTimer()
 
         desktopController.rebuild()
@@ -352,12 +354,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // F482: 전역 마운트 실패(스테일 currentFolderURL — 폴더 외부 삭제/이동) 시 화면별 할당
             // 폴백. 종전엔 restoreLastWallpaper(F032)에만 있어 할당 변경·비디오 설정·베이스 에셋·
             // 화면 변경 경로는 정상인 모니터별 할당까지 전부 마운트되지 않았다.
+            // (비디오 설정 경로는 F820 에서 라이브 반영으로 바뀌어 더는 재적용을 타지 않는다.)
             // 단, 마운트 가능한 할당이 하나도 없으면 폴백하지 않는다 — 빈 슬롯 성공이 살아있는
             // 렌더러까지 teardown 하는 역효과를 막는다(F035/F036 롤백 보호 유지).
             guard resolvedScreenProjectSlots(global: nil).contains(where: { $0.project != nil }) else { return false }
             return applyResolved(global: nil, folderURL: nil)
         }
         return applyResolved(global: nil, folderURL: nil)
+    }
+
+    /// F820: 음량/배속 변경 라이브 반영 — 살아있는 VideoRenderer 의 AVPlayer.volume/defaultRate 를
+    /// 직접 조정해 전체 리마운트(mkv/webm 은 ffmpeg 재변환 대기+재생 리셋)를 피한다.
+    /// 값 저장은 호출자(NowPlayingBar)가 이미 마쳤고, 마운트 중(변환 대기)인 렌더러는
+    /// attachPlayer 시 새 값을 읽으므로 별도의 재적용은 필요 없다.
+    private func applyLiveVideoSettings() {
+        renderers.compactMap { $0 as? VideoRenderer }.forEach { $0.applyLiveVideoSettings() }
     }
 
     @discardableResult
