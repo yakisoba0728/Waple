@@ -80,6 +80,11 @@ enum QuadShaders {
         constexpr float eps = 6.103515625e-5;
         return falloff >= eps ? pow(falloff + eps, exponent) : 0.0;
     }
+    // 영벡터 방어 정규화(Mesh3DShaders:48 사본과 대칭) — 라이트 축/L 정규화 전용.
+    inline float3 normalizedOr(float3 value, float3 fallback) {
+        float length2 = dot(value, value);
+        return length2 > 1e-12 ? value * rsqrt(length2) : fallback;
+    }
     struct PBRMaterialUniforms {
         float4 scalars;       // x=roughness, y=metallic
         float4 specularTint;  // xyz=specular tint
@@ -107,14 +112,13 @@ enum QuadShaders {
         return F0 + (1.0 - F0) * pow(max(1.0 - cosTheta, 0.001), 5.0);
     }
     // 2D 포워드 라이팅(라이트 씬의 LIGHTING:1 레이어 전용). P2a = orthographic finite-point PBR.
-    //   worldPos: uv → 레이어 월드 사각형 재구성. N=V=+Z; light type specialization is P2b.
-    //   미사용 슬롯/짧은반경 라이트는 radius≤0 로 스킵(count 유니폼 불필요).
+    //   worldPos: uv → 레이어 월드 사각형 재구성. N=V=+Z.
+    //   미사용 슬롯/짧은반경 라이트는 radius≤0 로 스킵(count 유니폼 불필요 — directional 은 무감쇠라 제외).
     //   비-HDR bgra8Unorm 블로아웃 정책은 기존 경로를 보존한다.
-    //   TODO(S-9): spot/directional 분기는 kind/axis/cone 데이터가 유니폼에 없어 이 파일만으로는 불가
-    //   — forwardUniforms 팩(WapleCore SceneDocument.swift) + 렌더러 바인딩(SceneRenderer.swift /
-    //   SceneRendererFrameEncoder.swift) 확장이 선행돼야 한다. WE CPU 측 angles→2D 방향 규약도 미확정
-    //   (docs/superpowers/specs/2026-07-14-we-2d-pbr-p2a-design.md 의 의도적 보류). 3D 경로는 F274 계열
-    //   Mesh3DShaders 의 directional/spot 분기를 참조.
+    //   F800(S-9): kind 분기(point/spot cone/directional) — 3D 경로(Mesh3DShaders 의
+    //   directionalPBR/spotPBR) 확정 수식의 2D 포트. kind/axis/cone 데이터는 ForwardUniforms
+    //   (WapleCore SceneDocument.swift)가 blue축(Rz·Ry·Rx col2 = WE Mat4.forward 규약)·half-angle
+    //   코사인으로 팩한다. buffer 6/7 은 상위 5개 슬롯 규약을 건드리지 않는 후방 확장.
     fragment float4 f_lit(VOut in [[stage_in]],
                           texture2d<float> tex [[texture(0)]],
                           constant float4 &tint [[buffer(0)]],
@@ -122,7 +126,9 @@ enum QuadShaders {
                           constant float4 *lightPos [[buffer(2)]],  // [4] xyz=world, w=exponent
                           constant float4 *lightCol [[buffer(3)]],  // [4] rgb=color×intensity, w=radius
                           constant float4 &ambient [[buffer(4)]],   // xyz=flat ambient (genericimage4)
-                          constant PBRMaterialUniforms &material [[buffer(5)]]) {
+                          constant PBRMaterialUniforms &material [[buffer(5)]],
+                          constant float4 *lightAxisCone [[buffer(6)]],  // [4] xyz=forward, w=cone outer cos
+                          constant float4 *lightKindCone [[buffer(7)]]) { // [4] x=kind(0/1/2), y=cone inner cos
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
         // uv(0..1) → 레이어 로컬(-hw..hw) → 회전 → 월드 픽셀(quadVertices 역산). z = 레이어 originZ.
@@ -138,12 +144,35 @@ enum QuadShaders {
         float3 F0 = mix(float3(0.04), albedo, metallic);
         float3 direct = float3(0.0);
         for (int i = 0; i < 4; i++) {
-            float radius = lightCol[i].w;
-            if (radius <= 0.0) continue;
-            float3 delta = lightPos[i].xyz - world;
-            float dist = length(delta);
-            if (dist < 1e-5) continue;
-            float3 L = delta / dist;
+            int kind = int(lightKindCone[i].x + 0.5);
+            float3 L;
+            float3 radiance;
+            if (kind == 1) {
+                // directional(F800): 무한거리 무감쇠 radiance = color×intensity, L = -forward
+                // (Mesh3DShaders directionalPBR 포트). radius=0(미저작)이 정상이라 반경 가드 전에 분기.
+                L = normalizedOr(-lightAxisCone[i].xyz, float3(0.0, 1.0, 0.0));
+                radiance = lightCol[i].xyz;
+            } else {
+                float radius = lightCol[i].w;
+                if (radius <= 0.0) continue;
+                float3 delta = lightPos[i].xyz - world;
+                float dist = length(delta);
+                if (dist < 1e-5) continue;
+                L = delta / dist;
+                float attenuation = finiteLightFalloff(dist, radius, lightPos[i].w);
+                radiance = lightCol[i].xyz * attenuation;
+                if (kind == 2) {
+                    // spot(F800): point 감쇠 × 콘 스무드스텝(축 forward 기준, 콘 밖 0)
+                    // — Mesh3DShaders spotPBR 포트. 광자 진행 방향 forward vs light→surface(-L) 코사인.
+                    float cosAngle = dot(normalizedOr(lightAxisCone[i].xyz, float3(0.0, 0.0, 1.0)), -L);
+                    float cosInner = lightKindCone[i].y;
+                    float cosOuter = lightAxisCone[i].w;
+                    float cone = clamp((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4), 0.0, 1.0);
+                    cone = cone * cone * (3.0 - 2.0 * cone);     // smoothstep
+                    if (cone <= 0.0) continue;
+                    radiance *= cone;
+                }
+            }
             float NL = max(dot(N, L), 0.0);
             // Back-facing output is already zero; return early to avoid normalize(V+L) NaN.
             if (NL <= 0.0) continue;
@@ -154,8 +183,6 @@ enum QuadShaders {
             float3 kD = (1.0 - metallic) * (1.0 - F);
             float denominator = max(4.0 * max(dot(N, V), 0.0) * NL, 0.001);
             float3 specular = (D * G * F) / denominator;
-            float attenuation = finiteLightFalloff(dist, radius, lightPos[i].w);
-            float3 radiance = lightCol[i].xyz * attenuation;
             direct += (kD * albedo / 3.14159265359 + specular * material.specularTint.xyz)
                     * radiance * NL;
         }

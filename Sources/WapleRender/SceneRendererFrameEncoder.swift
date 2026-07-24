@@ -930,6 +930,9 @@ extension SceneRenderer {
             enc.setFragmentBytes(&amb, length: MemoryLayout<SIMD4<Float>>.stride, index: 4)
             var material = layer.pbrMaterial
             enc.setFragmentBytes(&material, length: MemoryLayout<PBRMaterialUniforms>.stride, index: 5)
+            // F800(S-9): kind/axis/cone — 후방 확장(기존 0-5 슬롯 규약 불변).
+            lightAxisCone.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 6) }
+            lightKindCone.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 7) }
         }
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
