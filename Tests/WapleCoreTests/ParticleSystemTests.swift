@@ -232,7 +232,7 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(rope.renderer.trailSampleCount, 16)
 
         let spriteTrail = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"spritetrail","maxlength":20}],"maxcount":24}"#), material: nil)
-        XCTAssertEqual(spriteTrail.renderer, .spriteTrail(maxLength: 20, length: 0))
+        XCTAssertEqual(spriteTrail.renderer, .spriteTrail(maxLength: 20, length: 0, minLength: 0))
         XCTAssertEqual(spriteTrail.renderer.trailSampleCount, 20)
 
         let ropeTrail = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"ropetrail","length":0.4,"subdivision":2}],"maxcount":10}"#), material: nil)

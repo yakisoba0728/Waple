@@ -65,12 +65,13 @@ extension SceneRenderer {
     }
 
     /// 파티클 스냅샷 → 인터리브드 버텍스(정점당 8 float: ndc.xy, uv, rgba).
-    /// sprite = 빌보드 쿼드. trail = 위치 히스토리 폴리라인을 두께 있는 리본(삼각 스트립)으로.
+    /// sprite = 빌보드 쿼드. rope/ropeTrail = 위치 히스토리 폴리라인을 두께 있는 리본(삼각 스트립).
+    /// spriteTrail = F790: 속도 방향 신장 쿼드(히스토리 리본 아님 — WE 공식 문서).
     func particleVertices(_ snapshot: [Particle], _ sys: GPUParticleSystem) -> [Float] {
         var verts: [Float] = []
         verts.reserveCapacity(snapshot.count * (sys.isTrail ? 200 : 48))
         func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { let p = sceneToNDC(x, y); return (p.x, p.y) }
-        func appendQuad(_ p: Particle) {
+        func appendQuad(_ p: Particle, stretch: Float = 1, angleOverride: Float? = nil) {
             let wx = sys.origin.x + sys.scale.x * p.pos.x
             let wy = sys.origin.y - sys.scale.y * p.pos.y
             let sizePx = p.size * sys.scale.x
@@ -103,8 +104,9 @@ extension SceneRenderer {
                 let upH = q % 2 == 0 ? fr.atlasHeight : fr.atlasWidth
                 ratio = upH / max(1, upW)
             }
-            let hw = sizePx * 0.5, hh = sizePx * ratio * 0.5
-            let ca = cos(p.rotation.z), sa = sin(p.rotation.z)
+            let hw = sizePx * 0.5 * stretch, hh = sizePx * ratio * 0.5  // F790: stretch = local X 신장
+            let ang = angleOverride ?? p.rotation.z
+            let ca = cos(ang), sa = sin(ang)
             func ndc(_ lx: Float, _ ly: Float) -> (Float, Float) {
                 return toNDC(wx + lx * ca - ly * sa, wy + lx * sa + ly * ca)
             }
@@ -116,8 +118,20 @@ extension SceneRenderer {
             v(tl, uv[0]); v(tr, uv[1]); v(br, uv[2])
             v(tl, uv[0]); v(br, uv[2]); v(bl, uv[3])
         }
+        // F790: WE spritetrail — 쿼드 장축(local X = u 축)을 속도 방향에 두고 size×신장 배로
+        // 그린다(히스토리 리본 아님). 신장 = speed×length 를 [minlength, maxlength] 클램프(공식
+        // 문서 — RendererKind.spriteTrailStretch). 정지/미세 속도는 방향 부정 → 무신장 폴터.
+        func appendSpriteTrailQuad(_ p: Particle) {
+            let speed = sqrtf(p.vel.x * p.vel.x + p.vel.y * p.vel.y)  // 씬 로컬(Y-up) — 신장 산정
+            guard speed > 0.5 else { appendQuad(p); return }  // ponytail: 방향 부정 임계 0.5px/s
+            let wvx = sys.scale.x * p.vel.x, wvy = -sys.scale.y * p.vel.y  // 월드 y-down — 각도
+            appendQuad(p, stretch: sys.def.renderer.spriteTrailStretch(speed: speed),
+                       angleOverride: atan2(wvy, wvx))
+        }
         for p in snapshot {
-            if sys.isTrail {
+            if case .spriteTrail = sys.def.renderer {
+                appendSpriteTrailQuad(p)
+            } else if sys.isTrail {
                 // 리본이 붕괴(정지 rope 등)면 false → 쿼드 폴백. inout verts 를 클로저와 동시
                 // 접근하지 않도록 순차 호출(Swift 배타적 접근 위반 방지).
                 if !appendRibbon(p, sys, into: &verts) { appendQuad(p) }

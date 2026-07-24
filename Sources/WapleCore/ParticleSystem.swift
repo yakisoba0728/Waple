@@ -116,16 +116,18 @@ public enum ParticleOrientation: Equatable {
     case fixed(axis: Vec3)
 }
 
-/// 파티클 렌더러. sprite = 빌보드 쿼드. trail 계열(spriteTrail/rope/ropeTrail)은
-/// 파티클별 위치 히스토리를 두께 있는 리본(삼각 스트립)으로 그린다.
+/// 파티클 렌더러. sprite = 빌보드 쿼드. F790 부터 분화 — rope/ropeTrail 만 위치 히스토리 리본,
+/// spriteTrail 은 WE 공식 의미(속도 방향 신장 쿼드 — spriteTrailStretch 참고)로 정정.
+/// isTrail 은 3D 경로 호환을 위해 spriteTrail 을 여전히 포함(2D 경로만 신장 쿼드로 분기).
 public enum RendererKind: Equatable {
     case sprite
-    case spriteTrail(maxLength: Float, length: Float)
+    case spriteTrail(maxLength: Float, length: Float, minLength: Float)
     case rope(subdivision: Int)
     case ropeTrail(length: Float, subdivision: Int)
     case unsupported(String)
 
-    /// 히스토리 리본으로 그리는 트레일 계열인가.
+    /// 히스토리 리본 계열인가. spriteTrail 은 2D 경로에선 F790 신장 쿼드로 분기하고
+    /// 리본을 그리지 않는다 — 이 플래그는 3D 경로 소비·refract 제외 판정 호환으로 유지.
     public var isTrail: Bool {
         switch self {
         case .spriteTrail, .rope, .ropeTrail: return true
@@ -137,7 +139,7 @@ public enum RendererKind: Equatable {
     /// spriteTrail=maxlength(세그먼트 수 근사), ropeTrail=length(초)×30, rope=subdivision(F629,
     /// 부재/0 시 종전 고정 16). F625: 캡 24→240 — maxlength 100/ropetrail 수초 트레일이 24샘플
     /// (30fps 0.8초)로 절단됐다. WE spritetrail 의 length 는 "speed×length 신장" 의미(공식 문서)라
-    /// 샘플 수에 쓰지 않는다(속도-신장 렌더는 WapleRender 경로 후속).
+    /// 샘플 수에 쓰지 않는다(속도-신장 렌더 = F790 에서 2D 경로 소비. 히스토리는 3D 경로 호환으로 유지).
     public var trailSampleCount: Int {
         func clamp(_ v: Int) -> Int { min(240, max(4, v)) }
         func clampedRounded(_ value: Float) -> Int? {
@@ -146,7 +148,7 @@ public enum RendererKind: Equatable {
             return clamp(Int(value.rounded()))
         }
         switch self {
-        case let .spriteTrail(maxLength, _):
+        case let .spriteTrail(maxLength, _, _):
             return clampedRounded(maxLength) ?? 8
         case let .rope(subdivision):
             return clampedRounded(Float(subdivision)) ?? 16
@@ -155,6 +157,23 @@ public enum RendererKind: Equatable {
         default:
             return 0
         }
+    }
+
+    /// F790: WE 공식 문서 확정 — spritetrail 은 히스토리 리본이 아니라 "속도 방향으로 신장된 쿼드":
+    /// 이상 신장 = speed×length, [minlength, maxlength] 클램프, 쿼드 장축 = size×신장(단축 = size
+    /// 무신장). 1/1/1 이면 무신장 회전만(공식 문서의 우주선 예시). 실물 코퍼스 123건 키 조합 실측
+    /// (length 만 30건 / maxlength 만 26건 / minlength 포함 24건 — 부재·null 혼재) 기반 부재값 규칙:
+    /// length 부재/0/null → 1(곱 항등 — 아니면 maxlength 만 쓴 26건이 전부 소멸), minlength 부재 →
+    /// 0(하한 없음), maxlength 부재 → 1(공식 문서의 무신장 중립값). ponytail: 부재 기본 1 은 추론 —
+    /// 상한 개방이면 전부재 spritetrail 6씬(신장=속도 그대로, 수백 배)이 붕괴하고, 1 은 코퍼스 123건
+    /// 전 조합에서 모순 없음(ember 0.7–1.0 / 벚꽃 회전만 / wind-blur 20배 클램프 유지).
+    public func spriteTrailStretch(speed: Float) -> Float {
+        guard case let .spriteTrail(maxLength, length, minLength) = self else { return 1 }
+        let mul = length > 0 ? length : 1
+        var s = speed * mul
+        if minLength > 0 { s = max(s, minLength) }
+        s = min(s, maxLength > 0 ? maxLength : 1)
+        return s
     }
 }
 
@@ -585,7 +604,10 @@ public struct ParticleSystemDef: Equatable {
             switch n {
             case "sprite": renderer = .sprite
             case "spritetrail":
-                renderer = .spriteTrail(maxLength: pfloat(r0["maxlength"]) ?? 0, length: pfloat(r0["length"]) ?? 0)
+                // F790: minlength 추가 파스(JSON null → pfloat nil → 0 = 클램프 부재).
+                renderer = .spriteTrail(maxLength: pfloat(r0["maxlength"]) ?? 0,
+                                        length: pfloat(r0["length"]) ?? 0,
+                                        minLength: pfloat(r0["minlength"]) ?? 0)
             case "rope":
                 renderer = .rope(subdivision: pint(r0["subdivision"]) ?? 0)
             case "ropetrail":

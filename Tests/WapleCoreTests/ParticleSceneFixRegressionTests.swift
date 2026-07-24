@@ -210,9 +210,9 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
 
     func testF625_TrailSampleCounts() {
         // 종전 4..24 클램프 — maxlength 100/ropetrail 수초가 24샘플(0.8초)로 절단됐다. 캡 240.
-        XCTAssertEqual(RendererKind.spriteTrail(maxLength: 100, length: 0.005).trailSampleCount, 100)
-        XCTAssertEqual(RendererKind.spriteTrail(maxLength: 1000, length: 0).trailSampleCount, 240)
-        XCTAssertEqual(RendererKind.spriteTrail(maxLength: 0, length: 0.007).trailSampleCount, 8)  // 기본
+        XCTAssertEqual(RendererKind.spriteTrail(maxLength: 100, length: 0.005, minLength: 0).trailSampleCount, 100)
+        XCTAssertEqual(RendererKind.spriteTrail(maxLength: 1000, length: 0, minLength: 0).trailSampleCount, 240)
+        XCTAssertEqual(RendererKind.spriteTrail(maxLength: 0, length: 0.007, minLength: 0).trailSampleCount, 8)  // 기본
         XCTAssertEqual(RendererKind.ropeTrail(length: 4, subdivision: 2).trailSampleCount, 120)     // 4초×30
         XCTAssertEqual(RendererKind.ropeTrail(length: 30, subdivision: 0).trailSampleCount, 240)    // 캡
         XCTAssertEqual(RendererKind.ropeTrail(length: 0, subdivision: 5).trailSampleCount, 5)       // subdivision 폴터
