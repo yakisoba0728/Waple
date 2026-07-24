@@ -70,7 +70,7 @@ final class LibraryViewModel: ObservableObject {
     /// 현재 적용 중인 동영상 프로젝트 id들(w5d-settings-ia, 하단 바 음량/배속 대상) — AppDelegate 주입.
     /// SettingsViewModel 이 쓰던 것과 동일 소스(VideoSettingsTarget.projectIds).
     var videoTargetIds: () -> [String] = { [] }
-    /// 음량/배속 변경 반영(리마운트) — AppDelegate.applyCurrentSelection 주입.
+    /// 음량/배속 변경 반영(F820: 라이브 반영 — AppDelegate.applyLiveVideoSettings 주입, 리마운트 없음).
     var onVideoSettingsChanged: (() -> Void)?
     /// 하단 바: 재생목록 다음으로 — AppDelegate 주입.
     var onAdvancePlaylist: (() -> Void)?
