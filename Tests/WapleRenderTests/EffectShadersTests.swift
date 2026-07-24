@@ -54,7 +54,7 @@ final class EffectShadersTests: XCTestCase {
         // audio mode + PULSEALPHA + bounds.
         let p = EffectShaders.params(for: "pulse", constants: ["amount": [1.5], "bounds": [0, 1]],
                                      combos: ["AUDIOPROCESSING": 3, "PULSEALPHA": 1, "BLENDMODE": 9])
-        XCTAssertEqual(p?.count, 16)
+        XCTAssertEqual(p?.count, 19)  // F830/F831: +noiseSpeed, noiseAmount, MASK콤보
         XCTAssertEqual(p?[2], 1.5)   // amount
         XCTAssertEqual(p?[6], 9)     // blendmode
         XCTAssertEqual(p?[8], 1)     // pulseAlpha

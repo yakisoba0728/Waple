@@ -51,20 +51,21 @@
 - S-44 REFLECTION SSR: mipmapped 프레임버퍼 필요+3씬은 2D 경로 소유권 블록 — 충실도 낮은 근사 거부
 - S-20 cropoffset: F751로 **의미 확정 후 파스**(크롭 중심 오프셋, 0.5 배수 정량화) — 런타임 적용은 실렌더 A/B 후속
 - S-27 tvr 기본 speed: 코퍼스 전건 turbulence 병존 실측 반증
-- S-25 spritetrail 정식 의미(속도-신장 렌더): 별도 렌더 경로 필요로 후속
-- S-72 oscillateposition 단위: F184 확정 경로와 상충, 재측정 필요
+- S-25 spritetrail 정식 의미(속도-신장 렌더): ~~후속~~ → **F790(2026-07-23) 해결** — WE 공식 문서 확정(속도 방향 신장 쿼드, length=신장 배수, min/maxlength 클램프), 2D 경로 구현
+- S-72 oscillateposition 단위: **F832로 해결** — WE 공식 디자이너 문서(operator.html) "oscillations per particle lifetime"(3종 공통) 확정, age·Hz → age/lifetime 전환
 - localStorage 디스크 영속: ~~현재 인메모리~~ → **F810(2026-07-23) 해결** — 라이브 마운트 한정 Application Support/Waple/script-storage/<씬 id>.json 영속(디바운스+teardown flush)
 - S-11 원근 렌더 적용: 현 코퍼스 x/y angles 전부 0이라 실피해 0 — 파스만
 
 ## 4. 잔여 후속 과제 (트리거 시)
 
-- F750 소비: 단일 오소 → cascadeDistances 기반 3-스플릿 CSM, 볼류메트릭 라이트샤프트
+- ~~F750 소비: 단일 오소 → 3-스플릿 CSM~~ → **F780(2026-07-23) 해결**(cascadeDistances 기반 3-스플릿, 무효 경계는 단일 오소 폴터). 볼류메트릭 라이트샤프트는 미구현(대형, 유보)
 - 텍스트 이펙트 texRes 초기 래스터 dims 베이크(동적 길이 텍스트)
 - updateSceneLayers 1프레임 지연(같은 프레임 내 교차 읽기 극단)
-- 3D 빌보드 변환의 라이브 채널 미기록(2D만): **F811(2026-07-23) 해결** — evaluate3DScripts 가 빌보드 상태를 liveLayerStates 에 기록, is3D 라이브/캡처 경로 모두 pushLiveSceneLayers 소비
-- pulse noise/MASK 셰이더 계약 확정 후 Resources 바인딩
-- F751 cropoffset 런타임 적용 여부 실렌더 A/B
-- 3706286085(소닉) 균일-16 평탄 렌더 — 별도 조사(침침/지오메트리 계열 기존 이슈)
+- 3D 빌보드 변환의 라이브 채널 미기록(2D만): **F811(2026-07-23) 해결** — evaluate3DScripts가 빌보드 상태를 liveLayerStates에 기록, is3D 라이브/캡처 경로 모두 pushLiveSceneLayers 소비
+- ~~pulse noise/MASK 셰이더 계약 확정 후 Resources 바인딩~~ → **F830/F831로 완료**(noise 항+util/noise 기본 바인딩, MASK mix+paintdefault 블랙)
+- ~~S-9 2D f_lit kind 분기~~ → **F800(2026-07-23) 해결**(point/spot cone/directional 분기, 3D 규약 포트)
+- ~~F751 cropoffset 런타임 적용 여부~~ → **F801로 기각 확정**: 실물 6조각 재조립 분석으로 WE 에디터가 베이크 시 origin에 이미 합성한 것 확인 — 런타임 적용은 이중 이동(오역)
+- 3706286085(소닉) 균일-16 평탄 렌더 — fix-w1이 조사(2026-07-23): 7/11~7/16 사이 변화 또는 하니스 조건 차이로 좁힘(camerashake 3D가 제1 용의자), 원인 특정엔 캡처 A/B 이분 탐색 필요로 유보
 
 ## 5. 검증
 
