@@ -597,6 +597,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var forwardLit = false
     var lightPositions = [SIMD4<Float>](repeating: .zero, count: 4)    // [4] xyz=world, w=exponent
     var lightColorRadius = [SIMD4<Float>](repeating: .zero, count: 4)  // [4] rgb=color×intensity, w=radius
+    // F800(S-9): kind/axis/cone — f_lit 버퍼 6/7. ForwardUniforms(WapleCore) 팩 그대로.
+    var lightAxisCone = [SIMD4<Float>](repeating: .zero, count: 4)     // [4] xyz=forward(blue축), w=cone outer cos
+    var lightKindCone = [SIMD4<Float>](repeating: .zero, count: 4)     // [4] x=kind(0/1/2), y=cone inner cos
     var lightAmbient = SIMD4<Float>(0, 0, 0, 0)                        // xyz=flat ambient (genericimage4)
     var layers: [GPULayer] = []
     var clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
@@ -1116,6 +1119,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 let u = SceneLight3D.forwardUniforms(doc.lights3D, ambient: doc.ambientColor, skylight: doc.skylightColor)
                 lightPositions = u.positions
                 lightColorRadius = u.colorRadius
+                lightAxisCone = u.axisCone      // F800(S-9)
+                lightKindCone = u.kindCone      // F800(S-9)
                 lightAmbient = SIMD4(u.ambientTerm.x, u.ambientTerm.y, u.ambientTerm.z, 0)
             }
             layers = buildLayers(doc: doc, package: package, device: device, sceneID: project.id)

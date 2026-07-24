@@ -127,8 +127,13 @@ public struct SceneLayer: Equatable {
     /// autosize 동반) 시 **크롭 영역 중심 − 원본 이미지 중심**(px, 레이어 로컬). 실측 확정 근거:
     /// 전수 1386 컴포넌트(693파일/49wp — 퍼펫 모델 49파일 포함)가 전부 0.5 배수(정수 픽셀 rect 의
     /// 중심 차이만이 생성 가능한 정량화), "-0.00000"(중심 좌표계 산출의 −0.0) 출현, 임의 소수 0건.
-    /// nil = 크롭 아님. 파스·보존 전용 — 쿼드 중심을 origin+cropOffset 으로 옮기는 런타임 적용
-    /// 여부(부호 포함)는 실렌더 A/B 후속 과제(보고 경계).
+    /// nil = 크롭 아님. 파스·보존 전용.
+    /// F801(S-20 후속): 런타임 적용 **기각 확정** — 실물 2827816001 의 크롭 6조각 재조립 분석:
+    /// origin == 원본배치중심(1920,1080)+cropoffset 이 4/6 비트정합, 2/6(id 39/35, 비정수 origin)은
+    /// ±0.1~1.4px 델타 = 크롭 후 사용자 미세이동. 무적용 시 조각 사각형이 원본 크롭 영역에 정확히
+    /// 붙고(id18: [547,2616]), ±어느 부호로든 origin+cropOffset 을 추가 적용하면 |cropOffset| 만큼
+    /// 이중 이동해 재조립이 파열(id18: [208.5,2277.5] 또는 [885.5,2954.5]). 즉 WE 에디터가 크롭
+    /// 베이크 시 origin 에 이미 합성해 기록 — 쿼드 배치는 cropOffset 을 소비하지 않는다(무회귀).
     public var cropOffset: Vec2? = nil
 }
 
@@ -428,29 +433,87 @@ public extension SceneLight3D {
     ///   ⚠️ **`color × intensity` 는 직전 라운드 추정 규약** — 셰이더 소스에 C++ 유니폼 피드가 없고
     ///   코퍼스 번역 이펙트 0건이 이 유니폼을 참조해 미확정. 블로아웃(고강도 씬)의 최대 레버(보고 참조).
     /// - `ambientTerm`: flat ambient (genericimage4).
+    /// - F800(S-9): `axisCone`/`kindCone` — 라이트 kind/axis/cone. 3D 경로(Scene3DLighting.swift)의
+    ///   확정 규약을 2D 로 가져온 포트: kind 는 Scene3DLightKind rawValue 와 동일(0=point/1=directional/2=spot,
+    ///   미지 type 은 point 폴터 — 종전 전원 point 처리와 동일이라 무회귀), axis 는 모델회전(Rz·Ry·Rx)의
+    ///   blue축(+Z, col2) = WE 스크립트 API `Mat4.forward()` 규약, cone 은 spot 전각(도)→half-angle
+    ///   코사인(Scene3DLighting.spotConeCosines 와 동일 변환). point 는 axis/cone 미사용(셰이더가 kind 로 분기).
     struct ForwardUniforms: Equatable {
         public var positions: [SIMD4<Float>]   // xyz=world, w=finite-light exponent
         public var colorRadius: [SIMD4<Float>] // rgb=color×intensity, w=radius
         public var ambientTerm: SIMD3<Float>
         public var count: Int
+        public var axisCone: [SIMD4<Float>]    // xyz=월드 forward(blue축), w=spot cone outer cos
+        public var kindCone: [SIMD4<Float>]    // x=kind(0/1/2), y=spot cone inner cos
         public init(positions: [SIMD4<Float>], colorRadius: [SIMD4<Float>],
-                    ambientTerm: SIMD3<Float>, count: Int) {
+                    ambientTerm: SIMD3<Float>, count: Int,
+                    axisCone: [SIMD4<Float>] = [SIMD4<Float>](repeating: .zero, count: 4),
+                    kindCone: [SIMD4<Float>] = [SIMD4<Float>](repeating: .zero, count: 4)) {
             self.positions = positions; self.colorRadius = colorRadius
             self.ambientTerm = ambientTerm; self.count = count
+            self.axisCone = axisCone; self.kindCone = kindCone
         }
+    }
+
+    /// F800(S-9): 2D 포워드 라이트 kind — Scene3DLightKind(type:) 와 동일 매핑(WapleRender 소속이라
+    /// 직접 참조 불가, rawValue 규약 0/1/2 동기 유지). 미지 type 은 point 폴터(무회귀).
+    static func forwardLightKind(_ type: String) -> Int {
+        switch type.lowercased() {
+        case "ldirectional": return 1
+        case "lspot": return 2
+        default: return 0   // lpoint + 미지
+        }
+    }
+
+    /// F800(S-9): 라이트 월드 forward — Scene3DMath.modelMatrix(WapleRender)의 회전부(Rz·Ry·Rx)와
+    /// 동일 수식의 blue축(col2) 포트(WapleCore 라 직접 참조 불가). 회전 열이라 단위 — 비유한 입력만
+    /// (0,0,1) 폴터(3D normalizedOr 와 동일 시맨틱). 스케일 미포함(방향 전용).
+    static func forwardLightAxis(angles: Vec3) -> SIMD3<Float> {
+        let (sx, cx) = (sin(angles.x), cos(angles.x))
+        let (sy, cy) = (sin(angles.y), cos(angles.y))
+        let (sz, cz) = (sin(angles.z), cos(angles.z))
+        let f = SIMD3<Float>(cz * sy * cx + sz * sx, sz * sy * cx - cz * sx, cy * cx)
+        guard f.x.isFinite, f.y.isFinite, f.z.isFinite else { return SIMD3(0, 0, 1) }
+        return f
+    }
+
+    /// F800(S-9): spot innercone/outercone(전각, 도) → half-angle 코사인 — Scene3DLighting
+    /// .spotConeCosines(WapleRender)와 동일 변환의 2D 포트(동기 유지 책임).
+    // ponytail: half vs full 미확정(3D 경로 주석과 동일) — full-angle 이면 `* 0.5` 제거.
+    static func forwardSpotConeCosines(inner: Float, outer: Float) -> (inner: Float, outer: Float) {
+        guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 반구 그라디언트(3D 동일)
+        let toHalfRadians = Float.pi / 180 * 0.5
+        let cosOuter = cos(max(0, outer) * toHalfRadians)
+        let cosInnerRaw = inner.isFinite && inner > 0 ? cos(inner * toHalfRadians) : 1
+        // inner 는 outer 보다 좁아야(코사인 큼) 스무드스텝이 0→1 로 증가.
+        return (max(cosInnerRaw, cosOuter + 1e-4), cosOuter)
     }
 
     /// 라이트 배열 → 포워드 유니폼. 4개 초과 시 앞 4개(현행 근사 — WE 오브젝트별 relevance 선택은 미구현).
     static func forwardUniforms(_ lights: [SceneLight3D], ambient: Vec3, skylight _: Vec3) -> ForwardUniforms {
         var pos = [SIMD4<Float>](repeating: .zero, count: 4)
         var cr = [SIMD4<Float>](repeating: .zero, count: 4)
+        var ac = [SIMD4<Float>](repeating: .zero, count: 4)
+        var kc = [SIMD4<Float>](repeating: .zero, count: 4)
         let used = lights.prefix(4)
         for (i, l) in used.enumerated() {
             pos[i] = SIMD4(l.origin.x, l.origin.y, l.origin.z, l.exponent)
             cr[i] = SIMD4(l.color.x * l.intensity, l.color.y * l.intensity, l.color.z * l.intensity, l.radius)
+            // F800(S-9): kind/axis/cone — 3D 확정 규약의 2D 포트(구조체 주석 참조).
+            let kind = forwardLightKind(l.type)
+            let axis = forwardLightAxis(angles: l.angles)
+            var innerCos: Float = 0
+            var outerCos: Float = 0
+            if kind == 2 {
+                let cone = forwardSpotConeCosines(inner: l.innerCone, outer: l.outerCone)
+                innerCos = cone.inner; outerCos = cone.outer
+            }
+            ac[i] = SIMD4(axis.x, axis.y, axis.z, outerCos)
+            kc[i] = SIMD4(Float(kind), innerCos, 0, 0)
         }
         let amb = SIMD3(ambient.x, ambient.y, ambient.z)
-        return ForwardUniforms(positions: pos, colorRadius: cr, ambientTerm: amb, count: used.count)
+        return ForwardUniforms(positions: pos, colorRadius: cr, ambientTerm: amb, count: used.count,
+                               axisCone: ac, kindCone: kc)
     }
 
 }
