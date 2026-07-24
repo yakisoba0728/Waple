@@ -74,3 +74,16 @@
 - **번역 거부 오발 0**: "translated MSL compile error" 0건(라운드 도중 신규 7건이 노출된 잠재 결함 2개를 F770/F771로 수습)
 - **회귀 수습 3건**: F760(스크립트 픽스처 구 계약 고착 — 프로덕션 물결함), F770/F771(F741이 노출한 잠재 번역 결함: 스칼라 distance MSL 모호, 어댑터 엔진 크기 환경 누락), F772(VideoBackedSceneCaptureTests 벽시계 분 경계 오탐)
 - 머지 히스토리: fix/s1~s9 → fix/i1~i3 → fix/script-regress → fix/render-regress (전부 main 병합 후 브랜치·워크트리 정리)
+
+## 6. 후속 웨이브 (2026-07-23, fix/w1~w6)
+
+§4의 잔여 과제 중 구현 가능한 것을 6그룹 워크트리 스웜으로 처리:
+
+- **F780** CSM 3-스플릿(cascadeDistances 소비, 침침 프러스텀 타이트핏 xy + 씬 AABB 깊이, 무효 경계는 단일 오소 폴터)
+- **F790** spritetrail 정식 렌더(속도 방향 신장 쿼드, min/maxlength 클램프 — 123건/69씬)
+- **F800** 2D f_lit kind 분기(point/spot cone/directional — 3D 규약 포트) · **F801** cropoffset 런타임 적용 **기각 확정**(에디터 베이크 합성 — 실물 6조각 재조립 분석)
+- **F810** localStorage 디스크 영속(라이브 마운트 한정 — 헤드리스 캡처 결정성 보호) · **F811** 3D 빌보드 라이브 채널 · **F812** 가림 시 씬 사운드 정지/재개 대칭화
+- **F820** 동영상 볼륨/배속 라이브 반영(BACKLOG F005 해소 — 전체 리마운트 제거) · F821 테스트 위생
+- **F830/F831** pulse noise 항+MASK 분기(WE pulse.frag 계약 확정) · **F832** oscillate frequency 수명당 횟수 전환(WE 공식 문서 확정, 3종 — GT luma 최대 |Δ| 0.1297은 F831 귀속, 임계 내)
+
+**최종 검증**: 전체 스위트 **1,719개 실행, 0 실패**(WapleRenderTests 773 · WapleCoreTests 613 · WapleAppTests 271 · WapleLibraryTests 45 · WapleSnapshotTests 17) · 실물 코퍼스 GT mounted=**170/170**, captured=170, failed=[] · MSL 번역 오류 0건. 머지: fix/w1~w6 전부 병합 후 정리.
