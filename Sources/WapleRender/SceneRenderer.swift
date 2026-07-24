@@ -1061,9 +1061,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // **build3D 보다 먼저** 생성해야 3D 스크립트가 shared 통신 컨텍스트에 로드된다(태양계 Main 컨트롤러가
         // shared 궤도 파라미터를 세팅, 행성 origin 스크립트가 이를 읽음 — 공유 컨텍스트 없으면 shared 소실).
         let scriptLayerDescriptors = Self.sceneScriptLayers(from: doc)
+        // F810(S-7 잔여): localStorage 디스크 영속은 라이브 마운트 한정(container.window != nil —
+        // sceneAudio :1221 과 동일 판정). 헤드리스 캡처(스냅샷)는 환경 잔존 상태가 렌더를 오염시키지
+        // 않게 인메모리 유지(결정성 계약). 멀티모니터는 같은 씬 id 파일을 공유(원자 쓰기, 최종자 승).
         sceneScript = SceneScriptContext(layers: scriptLayerDescriptors,
                                          soundNames: doc.sounds.map { $0.name },
-                                         width: projW, height: projH)
+                                         width: projW, height: projH,
+                                         localStorageStore: container.window != nil
+                                             ? ScriptLocalStorage(sceneId: project.id) : nil)
         sceneScriptBaseDescriptors = scriptLayerDescriptors  // F743(S-35): 라이브 갱신 기준 배열
         sceneScriptImageLayerCount = doc.layers.count  // F723: 텍스트 read-back 인덱스 오프셋(이미지→텍스트 순)
         forwardLit = false  // 마운트 재사용 대비 기본값(2D 브랜치에서만 활성화)
@@ -1333,6 +1338,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
     }
 
+    /// F812: 가림 게이트의 오디오 정지/재기동을 씬 사운드(sceneAudio)까지 대칭화 — 종전엔 스펙트럼
+    /// 캡처(audioProvider)만 정지해 가려진 동안 씬 사운드가 계속 재생되는 비대칭이었다. pause()/resume()
+    /// 명시 경로(:1604/:1634)와 정합(SceneAudioPlayer.pause/resume 은 멱등 — 명시 정지와 겹쳐도 안전).
+    /// draw() 의 게이트 클로저가 위임하는 실제 배선(단위 테스트 대상).
+    func occlusionStopAudio() {
+        audioProvider?.stop()
+        sceneAudio?.pause()
+    }
+    func occlusionStartAudioIfNeeded() {
+        if hasAudio { audioProvider?.start() }
+        sceneAudio?.resume()
+    }
+
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리) + 오디오 캡처 중지(F289) + 클록 동결(F290).
         // drawable 획득 전에 검사해 drawable 낭비/stall 방지.
@@ -1340,11 +1358,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             || hasVideoLayer || cameraZoomAnim != nil || cameraShakeEnabled
         let occluded = animGated && view.window?.occlusionState.contains(.visible) == false
         handleOcclusionGate(occluded: occluded,
-                            stopAudio: { [weak self] in self?.audioProvider?.stop() },
-                            startAudioIfNeeded: { [weak self] in
-                                guard let self, self.hasAudio else { return }
-                                self.audioProvider?.start()
-                            })
+                            stopAudio: { [weak self] in self?.occlusionStopAudio() },
+                            startAudioIfNeeded: { [weak self] in self?.occlusionStartAudioIfNeeded() })
         if occluded { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
@@ -1388,6 +1403,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             frameShakeOffset = shakeOffset(at: time)  // camerashake 3D 전역 지터(encode3D 가 viewProj 에 좌승). 비활성=.zero → 항등.
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
                   encode3D(into: acc, cb: cb, device: device, time: time, particleDelta: dt) else { cb.commit(); return }
+            pushLiveSceneLayers()  // F811(S-35): 3D 빌보드 라이브 채널 소비(2D :1448 과 동일 — JS thisScene.layers 갱신)
             guard finalizeScene(
                 source: acc,
                 destination: drawable.texture,
@@ -1516,6 +1532,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     source = sceneWantsLDRBloom ? (pooledOffscreen(width, height, device, bgra: true) ?? target) : target
                 }
                 guard encode3D(into: source, cb: cb, device: device, time: t, particleDelta: nil) else { continue }
+                pushLiveSceneLayers()  // F811(S-35): 라이브 draw 와 동일 — 캡처 프레임 간 스크립트 연속성(2D F743 과 동형)
                 guard finalizeScene(
                     source: source,
                     destination: target,
@@ -1659,6 +1676,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         particle3DAdditive = nil; particle3DTranslucent = nil; particle3DClock = 0  // 3D 파티클 상태 리셋(마운트 재사용)
         forwardLit = false; litPipeline = nil; spriteFramePipeline = nil  // 라이트/스프라이트 추출 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
+        sceneScript?.localStorageStore?.flush()  // F810: 마운트 해제 시 디바운스 대기분 즉시 기록(드래그 위치 유실 방지)
         sceneScript = nil; sceneScriptImageLayerCount = 0; sceneUserPropertiesJSON = "{}"; variantProperties = [:]
         sceneScriptBaseDescriptors = []; liveLayerStates.removeAll()  // F743(S-35): 마운트 재사용 stale 방지
         scriptVisible.removeAll()

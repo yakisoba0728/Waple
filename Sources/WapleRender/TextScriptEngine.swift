@@ -49,16 +49,22 @@ public final class SceneScriptContext {
     /// 사운드 트리거 트랜스포트(라이브 mount 시 SceneRenderer 가 연결). nil 이면 __wapleSound 브리지는 no-op —
     /// 헤드리스/캡처(오디오 미생성)에서 getLayer(사운드).play() 는 안전 무시된다.
     public weak var soundTransport: SceneAudioPlayer?
+    /// F810: 씬 스크립트 localStorage 디스크 저장소. nil(기본) = 종전 인메모리 전용(헤드리스/테스트 무회귀).
+    public let localStorageStore: ScriptLocalStorage?
 
     /// width/height = 프로젝션(캔버스) 크기 — thisScene.size/screenSize/resolution·engine.canvasSize 의
     /// 실값(기본 1920×1080: 기존 호출부 무회귀). SceneRenderer mount 가 doc.projectionWidth/Height 전달.
     public init?(layers: [SceneScriptLayerDescriptor] = [], soundNames: [String] = [],
-                 width: Float = 1920, height: Float = 1080) {
+                 width: Float = 1920, height: Float = 1080,
+                 localStorageStore: ScriptLocalStorage? = nil) {
         guard let ctx = JSContext() else { return nil }
         context = ctx
+        self.localStorageStore = localStorageStore
         ctx.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] scene script context exception: \(ex?.toString() ?? "?")")
         }
+        // F810: 스토리지 브리지는 shims 평가보다 먼저 — localStorage IIFE 가 평가 시점에 스냅샷으로 시드한다.
+        if let store = localStorageStore { installStorageBridge(ctx, store: store) }
         ctx.evaluateScript(TextScriptEngine.shims)
         if let ms = TextScriptEngine.captureDateEpochMillis { ctx.evaluateScript(TextScriptEngine.dateOverrideJS(ms)) }
         ctx.evaluateScript("__setCanvasSize(\(TextScriptEngine.jsNumber(width)), \(TextScriptEngine.jsNumber(height)));")
@@ -71,6 +77,20 @@ public final class SceneScriptContext {
         if !named.isEmpty {
             ctx.evaluateScript("__setSoundLayers(\(Self.stringJSONArray(named)));")
         }
+    }
+
+    /// F810(S-7 잔여): localStorage 네이티브 브리지 — shims 의 localStorage IIFE 가 평가 시점에
+    /// __wapleStorageSnapshot 으로 시드하고, set/delete/clear 마다 디스크 스토어와 동기화한다.
+    /// 블록이 store 를 강참조하지만 store 는 컨텍스트를 참조하지 않아 순환 없음.
+    private func installStorageBridge(_ ctx: JSContext, store: ScriptLocalStorage) {
+        let snapshot: @convention(block) () -> String = { store.snapshotJSON() }
+        let set: @convention(block) (String, String) -> Void = { k, v in store.set(key: k, json: v) }
+        let del: @convention(block) (String) -> Void = { k in store.delete(key: k) }
+        let clear: @convention(block) () -> Void = { store.clear() }
+        ctx.setObject(snapshot, forKeyedSubscript: "__wapleStorageSnapshot" as NSString)
+        ctx.setObject(set, forKeyedSubscript: "__wapleStorageSet" as NSString)
+        ctx.setObject(del, forKeyedSubscript: "__wapleStorageDelete" as NSString)
+        ctx.setObject(clear, forKeyedSubscript: "__wapleStorageClear" as NSString)
     }
 
     /// JS __wapleSound 가 호출하는 네이티브 전역을 트랜스포트에 연결. [weak self] 로 캡처(JSContext 가
@@ -145,6 +165,90 @@ public final class SceneScriptContext {
             return "[]"
         }
         return json
+    }
+}
+
+/// F810(S-7 잔여): 씬 스크립트 localStorage 디스크 영속 — F701 의 인메모리 저장소를 앱 재시작·리마운트
+/// 간에도 복원(miDragable 계열 드래그 위치 등). 저장 위치는 기존 스토어 관례(LibraryStore·변환 캐시와
+/// 같은 ~/Library/Application Support/Waple 하위)의 script-storage/<씬 id>.json — 본문은
+/// {키: JSON 인코딩 값 문자열} 딕셔너리(값은 JS 측이 JSON.stringify 한 문자열로 왕복, 복원 시 parse).
+/// 저장 시점: 값 변경 디바운스(기본 0.75s) + flush()(마운트 해제 경로)의 최소 설계. 쓰기 실패는 로그만
+/// (저장 불가가 렌더를 죽이지 않음). WE 의 location 네임스페이스 분리(global/screen)는 의미 미확정 —
+/// F701 과 동일하게 단일 네임스페이스로 무시(추측 구현 안 함).
+public final class ScriptLocalStorage {
+    /// 기본 저장 루트(~/Library/Application Support/Waple/script-storage).
+    public static func defaultBaseDirectory() -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return appSupport.appendingPathComponent("Waple/script-storage", isDirectory: true)
+    }
+
+    private let fileURL: URL
+    private var values: [String: String] = [:]
+    private let lock = NSLock()
+    private let saveQueue = DispatchQueue(label: "waple.script-localstorage", qos: .utility)
+    private var pendingSave: DispatchWorkItem?
+    private let debounce: TimeInterval
+
+    /// sceneId = 배경 프로젝트 id(워크숍 id 등). 파일명 안전 문자(영숫자 . - _) 외는 '_' 치환.
+    /// baseDirectory/debounce 는 테스트 주입용(nil/기본 = Application Support 경로·0.75s).
+    public init(sceneId: String, baseDirectory: URL? = nil, debounce: TimeInterval = 0.75) {
+        let safe = String(sceneId.map { ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_") ? $0 : "_" })
+        self.fileURL = (baseDirectory ?? Self.defaultBaseDirectory())
+            .appendingPathComponent((safe.isEmpty ? "scene" : safe) + ".json")
+        self.debounce = debounce
+        if let data = try? Data(contentsOf: fileURL),
+           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] {
+            values = dict
+        }
+    }
+
+    deinit { flush() }
+
+    /// JS 시드용 스냅샷(전체 딕셔너리 JSON 문자열). 직렬화 불가 시 "{}".
+    public func snapshotJSON() -> String {
+        lock.lock(); let dict = values; lock.unlock()
+        guard JSONSerialization.isValidJSONObject(dict),
+              let data = try? JSONSerialization.data(withJSONObject: dict),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
+    }
+
+    public func set(key: String, json: String) {
+        lock.lock(); values[key] = json; lock.unlock()
+        scheduleSave()
+    }
+
+    public func delete(key: String) {
+        lock.lock(); values.removeValue(forKey: key); lock.unlock()
+        scheduleSave()
+    }
+
+    public func clear() {
+        lock.lock(); values.removeAll(); lock.unlock()
+        scheduleSave()
+    }
+
+    private func scheduleSave() {
+        saveQueue.async { [weak self] in
+            guard let self else { return }
+            self.pendingSave?.cancel()
+            let item = DispatchWorkItem { [weak self] in self?.flush() }
+            self.pendingSave = item
+            self.saveQueue.asyncAfter(deadline: .now() + self.debounce, execute: item)
+        }
+    }
+
+    /// 즉시 동기 저장(마운트 해제/teardown·deinit·테스트). 디바운스 대기분을 흡수하는 최종 기록.
+    public func flush() {
+        lock.lock(); let dict = values; lock.unlock()
+        do {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
+            try data.write(to: fileURL, options: [.atomic])
+        } catch {
+            NSLog("%@", "[Waple] script localStorage save failed at \(fileURL.path): \(error)")
+        }
     }
 }
 
@@ -1738,9 +1842,27 @@ public final class TextScriptEngine {
     // F701(S-7): localStorage 전역 실심 — WE 계약 get/set/delete/clear + LOCATION_GLOBAL/SCREEN 상수
     // (d.ts:2377, 바이너리 LocalStorageSet/Get/Delete/Clear·LSKV0001). 부재 시 init 첫행 `localStorage.get(...)`
     // 이 ReferenceError 로 init 전체를 죽여 shared.* 초기화가 연쇄 사망했다(31씬, miDragable 드래그 패밀리).
-    // Waple 은 컨텍스트 수명의 인메모리 저장소(디스크 영속·subscribe 통지원 없음 — mount 주기 내 왕복만 보장).
+    // F810: 디스크 영속 — 씬 컨텍스트에 __wapleStorage* 네이티브 브리지(SceneScriptContext, 라이브 mount 한정)가
+    // 있으면 스냅샷으로 시드하고 set/delete/clear 마다 동기화(디바운스 기록은 네이티브 ScriptLocalStorage).
+    // 브리지 부재(단독 컨텍스트/헤드리스)는 종전 인메모리 폴터(무회귀). subscribe 통지원은 여전히 부재(no-op).
     var localStorage = (function() {
         var store = {};
+        if (typeof __wapleStorageSnapshot === 'function') {
+            try {
+                var snap = JSON.parse(__wapleStorageSnapshot() || '{}');
+                for (var sk in snap) {
+                    if (Object.prototype.hasOwnProperty.call(snap, sk)) {
+                        try { store[sk] = JSON.parse(snap[sk]); } catch (ignore) {}
+                    }
+                }
+            } catch (ignore) {}
+        }
+        function __persist(k) {
+            if (typeof __wapleStorageSet !== 'function') { return; }
+            var j;
+            try { j = JSON.stringify(store[k]); } catch (e) { return; }   // 순환참조 등 직렬화 불가는 영속 스킵
+            if (typeof j === 'string') { __wapleStorageSet(k, j); }        // undefined/함수는 미영속(get 계약 불변)
+        }
         return {
             LOCATION_GLOBAL: 'global',
             LOCATION_SCREEN: 'screen',
@@ -1748,9 +1870,16 @@ public final class TextScriptEngine {
                 var k = String(key);
                 return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : undefined;
             },
-            set: function(key, value, location) { store[String(key)] = value; },
-            delete: function(key, location) { delete store[String(key)]; },
-            clear: function(location) { store = {}; },
+            set: function(key, value, location) { var k = String(key); store[k] = value; __persist(k); },
+            delete: function(key, location) {
+                var k = String(key);
+                delete store[k];
+                if (typeof __wapleStorageDelete === 'function') { __wapleStorageDelete(k); }
+            },
+            clear: function(location) {
+                store = {};
+                if (typeof __wapleStorageClear === 'function') { __wapleStorageClear(); }
+            },
             subscribe: function(key, cb) { return function() {}; }   // 통지원 부재 — no-op 안전 폴터
         };
     })();

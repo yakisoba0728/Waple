@@ -99,6 +99,9 @@ extension SceneRenderer {
 
     /// 3D 씬의 2D 이미지 레이어를 카메라-페이싱 쿼드로(빌보드). 로컬 변환 + 부모 계층 + per-frame 스크립트.
     final class Billboard3D {
+        /// F811: doc.layers 인덱스(= JS thisScene.layers 인덱스 — sceneScriptLayers 의 이미지 선행 순서).
+        /// 빌보드 배열은 로드 실패 레이어를 걸러 인덱스가 어긋나므로 디스크립터 정합 키를 별도 보관한다.
+        let layerIndex: Int
         let texture: MTLTexture
         let size: SIMD2<Float>           // 씬 픽셀 크기(월드 반경 = size×scale×부모스케일)
         let parent: Int?
@@ -132,7 +135,7 @@ extension SceneRenderer {
              depthTest: Bool, depthWrite: Bool, effects: [EffectGPU], texWidth: Int, texHeight: Int,
              isFrameBuffer: Bool, origin: SIMD3<Float>, scale: SIMD2<Float>, angleZ: Float,
              tint: SIMD4<Float>, visible: Bool, lighting: Bool,
-             roughness: Float, metallic: Float, specularTint: SIMD3<Float>) {
+             roughness: Float, metallic: Float, specularTint: SIMD3<Float>, layerIndex: Int = 0) {
             self.texture = texture; self.size = size; self.parent = parent; self.order = order
             self.additive = additive
             self.depthTest = depthTest; self.depthWrite = depthWrite; self.effects = effects
@@ -141,6 +144,7 @@ extension SceneRenderer {
             self.lighting = lighting; self.roughness = roughness; self.metallic = metallic
             self.specularTint = specularTint
             self.origin = origin; self.scale = scale; self.angleZ = angleZ; self.tint = tint; self.visible = visible
+            self.layerIndex = layerIndex
         }
         func evaluateScripts(time: Float) {
             var o = baseOrigin, s = baseScale, a = baseAngleZ, t = baseTint
@@ -313,7 +317,7 @@ extension SceneRenderer {
 
         // ── 빌보드(2D 이미지 레이어). 텍스처 로딩은 2D 경로와 동일(assetData→TexImage→TexDecoder). ──
         var bbLoaded = 0, bbSkipped = 0
-        for layer in doc.layers {
+        for (bbLayerIndex, layer) in doc.layers.enumerated() {   // bbLayerIndex = JS layers 인덱스(F811)
             // 빌보드 텍스처도 2D 와 동일 공유 경로(makeImageTexture): BC 는 네이티브 업로드, 그 외 CPU 폴백.
             let mtl: MTLTexture, texW: Int, texH: Int
             if layer.textureEntryName.isEmpty {
@@ -366,7 +370,8 @@ extension SceneRenderer {
                                  lighting: layer.lighting,
                                  roughness: layer.roughness,
                                  metallic: layer.metallic,
-                                 specularTint: SIMD3(layer.specularTint.x, layer.specularTint.y, layer.specularTint.z))
+                                 specularTint: SIMD3(layer.specularTint.x, layer.specularTint.y, layer.specularTint.z),
+                                 layerIndex: bbLayerIndex)
             attachScripts(bb, sources: layer.propertyScripts)
             billboards.append(bb)
             billboardDefs.append(layer)   // 록스텝(이벤트 마커 결속 — buildAnimationEventTargets)
@@ -421,7 +426,19 @@ extension SceneRenderer {
             }
         }
         for e in eval3DOrder {
-            if e.bb { billboards[e.idx].evaluateScripts(time: time) }
+            if e.bb {
+                let bb = billboards[e.idx]
+                bb.evaluateScripts(time: time)
+                // F811(S-35 잔여): 3D 빌보드도 라이브 채널에 기록 — 2D encodeLayer/encodeText(F743)와
+                // 동일하게 프레임 말 pushLiveSceneLayers 가 JS thisScene.layers 를 제자리 갱신해, 다음
+                // 프레임 getLayer()/thisLayer 독해가 스크립트로 움직인 현재값을 본다(궤도 미러 등).
+                // 스크립트 보유 빌보드만(eval3DOrder) — 정적 빌보드는 base 디스크립터와 항상 동일.
+                liveLayerStates[bb.layerIndex] = ScriptLayerReadBack(
+                    visible: bb.visible, alpha: bb.tint.w,
+                    origin: bb.origin,
+                    scale: SIMD3(bb.scale.x, bb.scale.y, 1),
+                    angles: SIMD3(0, 0, bb.angleZ))
+            }
             else { nodes3D[e.idx].evaluateScripts(time: time) }
         }
     }

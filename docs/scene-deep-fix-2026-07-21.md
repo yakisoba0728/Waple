@@ -53,7 +53,7 @@
 - S-27 tvr 기본 speed: 코퍼스 전건 turbulence 병존 실측 반증
 - S-25 spritetrail 정식 의미(속도-신장 렌더): 별도 렌더 경로 필요로 후속
 - S-72 oscillateposition 단위: F184 확정 경로와 상충, 재측정 필요
-- localStorage 디스크 영속: 현재 인메모리(마운트 주기·재시작 간 복원 미해결)
+- localStorage 디스크 영속: ~~현재 인메모리~~ → **F810(2026-07-23) 해결** — 라이브 마운트 한정 Application Support/Waple/script-storage/<씬 id>.json 영속(디바운스+teardown flush)
 - S-11 원근 렌더 적용: 현 코퍼스 x/y angles 전부 0이라 실피해 0 — 파스만
 
 ## 4. 잔여 후속 과제 (트리거 시)
@@ -61,7 +61,7 @@
 - F750 소비: 단일 오소 → cascadeDistances 기반 3-스플릿 CSM, 볼류메트릭 라이트샤프트
 - 텍스트 이펙트 texRes 초기 래스터 dims 베이크(동적 길이 텍스트)
 - updateSceneLayers 1프레임 지연(같은 프레임 내 교차 읽기 극단)
-- 3D 빌보드 변환의 라이브 채널 미기록(2D만)
+- 3D 빌보드 변환의 라이브 채널 미기록(2D만): **F811(2026-07-23) 해결** — evaluate3DScripts 가 빌보드 상태를 liveLayerStates 에 기록, is3D 라이브/캡처 경로 모두 pushLiveSceneLayers 소비
 - pulse noise/MASK 셰이더 계약 확정 후 Resources 바인딩
 - F751 cropoffset 런타임 적용 여부 실렌더 A/B
 - 3706286085(소닉) 균일-16 평탄 렌더 — 별도 조사(침침/지오메트리 계열 기존 이슈)
