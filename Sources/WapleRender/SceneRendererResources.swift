@@ -391,14 +391,35 @@ extension SceneRenderer {
             if eff.name == "waterripple", i == 0, name == nil, let neutral = makeTexture(Data([128, 128, 255, 255]), 1, 1, device) {
                 aux.append(neutral); continue
             }
+            // F830: pulse 의 aux[0](slot1=noise)은 WE 기본 "util/noise"(pulse.frag g_Texture1 default) —
+            // 흰색 1x1 폴터면 noise=1×noiseAmount 상수 오프셋이 돼 시간 스크롤 노이즈가 사라진다.
+            // noiseAmount=0(기본) 이면 결과 무관하나 noise>0 실씬에서 유효.
+            if eff.name == "pulse", i == 0, name == nil,
+               let t = resolveTexture("util/noise", package: package, device: device) {
+                aux.append(t); continue
+            }
+            // F831: pulse 의 aux[1](slot2=opacity mask)은 MASK 콤보 ON 인데 미바인드면 WE
+            // paintdefaultcolor "0 0 0 1"(블랙) = 전면 마스크아웃(효과 미적용). 흰색이면 반대로 전면 적용.
+            if eff.name == "pulse", i == 1, name == nil, (eff.combos["MASK"] ?? 0) != 0,
+               let black = makeTexture(Data([0, 0, 0, 255]), 1, 1, device) {
+                aux.append(black); continue
+            }
             guard let t = resolveTexture(name, package: package, device: device) else { continue }
             aux.append(t)
         }
         while aux.count < 2 {
             let isShakeFlowPad = eff.name == "shake" && aux.isEmpty
             let isWaterrippleNormalPad = eff.name == "waterripple" && aux.isEmpty  // F412
+            // F830: textures 배열 자체가 짧은 pulse 도 slot1 기본은 util/noise(위 루프와 동일 계약).
+            if eff.name == "pulse", aux.isEmpty,
+               let t = resolveTexture("util/noise", package: package, device: device) {
+                aux.append(t); continue
+            }
+            // F831: MASK 콤보 ON pulse 의 slot2 패드는 paintdefault 블랙(위 루프와 동일 계약).
+            let isPulseMaskPad = eff.name == "pulse" && aux.count == 1 && (eff.combos["MASK"] ?? 0) != 0
             guard let tex = makeTexture(
-                isShakeFlowPad ? Data([127, 127, 0, 255]) : isWaterrippleNormalPad ? Data([128, 128, 255, 255]) : Data([255, 255, 255, 255]),
+                isShakeFlowPad ? Data([127, 127, 0, 255]) : isWaterrippleNormalPad ? Data([128, 128, 255, 255]) :
+                isPulseMaskPad ? Data([0, 0, 0, 255]) : Data([255, 255, 255, 255]),
                 1, 1, device) else { break }
             aux.append(tex)
         }

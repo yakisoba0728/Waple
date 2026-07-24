@@ -52,7 +52,7 @@
 - S-20 cropoffset: F751로 **의미 확정 후 파스**(크롭 중심 오프셋, 0.5 배수 정량화) — 런타임 적용은 실렌더 A/B 후속
 - S-27 tvr 기본 speed: 코퍼스 전건 turbulence 병존 실측 반증
 - S-25 spritetrail 정식 의미(속도-신장 렌더): 별도 렌더 경로 필요로 후속
-- S-72 oscillateposition 단위: F184 확정 경로와 상충, 재측정 필요
+- S-72 oscillateposition 단위: **F832 로 해결** — WE 공식 디자이너 문서(operator.html) "oscillations per particle lifetime"(3종 공통) 확정, age·Hz → age/lifetime 전환
 - localStorage 디스크 영속: 현재 인메모리(마운트 주기·재시작 간 복원 미해결)
 - S-11 원근 렌더 적용: 현 코퍼스 x/y angles 전부 0이라 실피해 0 — 파스만
 
@@ -62,7 +62,7 @@
 - 텍스트 이펙트 texRes 초기 래스터 dims 베이크(동적 길이 텍스트)
 - updateSceneLayers 1프레임 지연(같은 프레임 내 교차 읽기 극단)
 - 3D 빌보드 변환의 라이브 채널 미기록(2D만)
-- pulse noise/MASK 셰이더 계약 확정 후 Resources 바인딩
+- ~~pulse noise/MASK 셰이더 계약 확정 후 Resources 바인딩~~ → **F830/F831 로 완료**(noise 항+util/noise 기본 바인딩, MASK mix+paintdefault 블랙)
 - F751 cropoffset 런타임 적용 여부 실렌더 A/B
 - 3706286085(소닉) 균일-16 평탄 렌더 — 별도 조사(침침/지오메트리 계열 기존 이슈)
 

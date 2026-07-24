@@ -23,7 +23,10 @@ enum EffectShaders {
             let mode = Float(cb["BLENDMODE"] ?? Int(c["blendmode"]?.first ?? 30))
             return [r, g, b, f("alpha", 1), mode]
         case "pulse":
-            // [speed,phase,amount,power,threshLo,threshHi, blendmode, pulseColor, pulseAlpha, audioMode, tintLo(3), tintHi(3)]
+            // [speed,phase,amount,power,threshLo,threshHi, blendmode, pulseColor, pulseAlpha, audioMode, tintLo(3), tintHi(3),
+            //  noiseSpeed, noiseAmount, maskCombo]
+            // F830: noise 계열 키는 WE pulse.frag 주석 확정(noisespeed 기본 0.5 / noiseamount 기본 0).
+            // F831: MASK 콤보(g_Texture2 의 combo:"MASK") — 씬 JSON combos["MASK"]!=0 이면 마스크 분기.
             let bounds = c["bounds"] ?? [0, 1]
             let tLo = c["tintlow"] ?? [1, 1, 1], tHi = c["tinthigh"] ?? [1, 1, 1]
             func v3(_ a: [Float], _ i: Int) -> Float { i < a.count ? a[i] : 1 }
@@ -31,7 +34,8 @@ enum EffectShaders {
                     bounds.count > 0 ? bounds[0] : 0, bounds.count > 1 ? bounds[1] : 1,
                     Float(cb["BLENDMODE"] ?? 9), Float(cb["PULSECOLOR"] ?? 1), Float(cb["PULSEALPHA"] ?? 0),
                     Float(cb["AUDIOPROCESSING"] ?? 0),
-                    v3(tLo, 0), v3(tLo, 1), v3(tLo, 2), v3(tHi, 0), v3(tHi, 1), v3(tHi, 2)]
+                    v3(tLo, 0), v3(tLo, 1), v3(tLo, 2), v3(tHi, 0), v3(tHi, 1), v3(tHi, 2),
+                    f("noisespeed", 0.5), f("noiseamount", 0), Float(cb["MASK"] ?? 0)]
         case "waterripple":
             // strength/scale 키: ui_editor_properties_* → 실제 씬 키(ripple_*) → 단축 키 → 기본값.
             // 설계 문서 §2 정찰: 실제 오브젝트 constants 는 ratio, ripple_scale, ripple_strength.
@@ -150,10 +154,13 @@ enum EffectShaders {
         """,
         "pulse": """
         fragment float4 ef_main(EOut in [[stage_in]], texture2d<float> fb [[texture(0)]],
+                                texture2d<float> noiseTex [[texture(1)]], texture2d<float> maskTex [[texture(2)]],
                                 constant float* P [[buffer(0)]], constant float& audio [[buffer(1)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
+            constexpr sampler sr(filter::linear, address::repeat);
             // P[0]=time, P[1]=speed,P[2]=phase,P[3]=amount,P[4]=power,P[5]=threshLo,P[6]=threshHi,
-            //   P[7]=blendmode,P[8]=pulseColor,P[9]=pulseAlpha,P[10]=audioMode,P[11..13]=tintLo,P[14..16]=tintHi.
+            //   P[7]=blendmode,P[8]=pulseColor,P[9]=pulseAlpha,P[10]=audioMode,P[11..13]=tintLo,P[14..16]=tintHi,
+            //   P[17]=noiseSpeed,P[18]=noiseAmount,P[19]=MASK콤보.
             float4 c = fb.sample(s, in.uv);
             float pulse;
             if (P[10] > 0.5) {
@@ -162,6 +169,10 @@ enum EffectShaders {
                 // F674: WE pulse.frag `sin(g_Time*g_PulseSpeed + (g_PulsePhase - 1.57079632679))` —
                 // phase 는 radian [0,6.282] 직접(구 (P[2]-0.25)×2π 는 phase=0 에서만 일치했다).
                 pulse = smoothstep(P[5], P[6], sin(P[0] * P[1] + (P[2] - 1.57079632679)) * 0.5 + 0.5) * P[3];
+                // F830: WE pulse.frag:39-41 — noise = tex(g_Texture1, (t/12, t/36)*noiseSpeed).r * noiseAmount,
+                // pulse 에 합산 후 power(WE 순서: 합산→pow). 시간 스크롤 UV 라 repeat 랩(util/noise.tex-json
+                // clampuvs:false). AUDIOPROCESSING==0 분기 안(WE 와 동일 — 오디오 모드는 noise/power 미적용).
+                pulse += noiseTex.sample(sr, float2(P[0] * 0.08333333, P[0] * 0.02777777) * P[17]).r * P[18];
                 pulse = pow(max(pulse, 0.0), P[4]);
             }
             float3 albedo = c.rgb;
@@ -170,8 +181,17 @@ enum EffectShaders {
             }
             float a = c.a;
             if (P[9] > 0.5) { a *= pulse; }
+            float4 outC = float4(albedo, a);
+            // F831: WE pulse.frag:53-56 MASK 콤보 — albedo = mix(sample, albedo, mask.r)(알파 포함 믹스).
+            // mask UV 는 vert 의 a_TexCoord*(res.z/res.x, res.w/res.y) 인데 Waple 엔진 texRes 규약이
+            // SIMD4(w,h,w,h)(Resources texRes)라 비율=1 → in.uv 와 동일(tint/opacity 손포팅과 같은 근거).
+            if (P[19] > 0.5) {
+                float m = maskTex.sample(s, in.uv).r;
+                outC = mix(c, outC, m);
+            }
             // straight 출력(설계 §3): premultiply 는 최종 컴포지트(f_main)에서 1회.
-            return float4(max(float3(0.0), albedo), a);
+            // WE pulse.frag:58 — rgb max(0) 클램프는 mask 믹스 후(WE 순서 그대로).
+            return float4(max(float3(0.0), outC.rgb), outC.a);
         }
         """,
         "shake": """

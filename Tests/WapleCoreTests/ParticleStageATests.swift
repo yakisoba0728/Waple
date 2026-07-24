@@ -26,14 +26,14 @@ final class ParticleStageATests: XCTestCase {
     // MARK: - oscillatesize
 
     func testOscillateSize_peaksAndTroughs() {
-        // freq 0.25Hz(주기 4s), phase 0, 배율 0.5..1.5, initialSize 5.
-        let op = ParticleOperator.oscillateSize(frequencyMin: 0.25, frequencyMax: 0.25,
+        // F832: freq 단위 = 수명당 진동 횟수 — freq 1, lifetime 4 → age1(n=0.25) peak, age3(n=0.75) trough.
+        let op = ParticleOperator.oscillateSize(frequencyMin: 1, frequencyMax: 1,
                                                 scaleMin: 0.5, scaleMax: 1.5, phaseMin: 0, phaseMax: 0)
-        var sim = ParticleSimulator(def: makeDef(lifetime: 100, operators: [op]), seed: 11)
-        let a = sim.step(1.0)   // age1: sin(π/2)=1 → factor=1.5
+        var sim = ParticleSimulator(def: makeDef(lifetime: 4, operators: [op]), seed: 11)
+        let a = sim.step(1.0)   // n=0.25: sin(π/2)=1 → factor=1.5
         XCTAssertEqual(a[0].size, 7.5, accuracy: 0.01)
         _ = sim.step(1.0)
-        let c = sim.step(1.0)   // age3: sin(3π/2)=-1 → factor=0.5
+        let c = sim.step(1.0)   // n=0.75: sin(3π/2)=-1 → factor=0.5
         XCTAssertEqual(c[0].size, 2.5, accuracy: 0.01)
     }
 

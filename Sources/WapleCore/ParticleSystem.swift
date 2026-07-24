@@ -68,8 +68,9 @@ public enum ParticleOperator: Equatable {
     case colorChange(startTime: Float, startValue: Vec3, endValue: Vec3, endTime: Float = 1)
     /// 각가속 + 선형 movement(위 61행)와 대칭인 drag 감쇠(기본 0=무감쇠, 종전 동작 무회귀).
     case angularMovement(force: Vec3, drag: Float = 0)
-    /// 위상 진동: alpha ×= lerp(scaleMin, scaleMax, 0.5(1+sin(2πf·age+phase))). 파티클별 f/phase 는
+    /// 위상 진동: alpha ×= lerp(scaleMin, scaleMax, 0.5(1+sin(2πf·(age/lifetime)+phase))). 파티클별 f/phase 는
     /// 스폰 시 range(min,max) 샘플(phasemin/max 부재 시 0 — 전 파티클 동위상, fireworks 근동기 의도).
+    /// f 단위 = 수명당 진동 횟수(F832, WE 공식 디자이너 문서 operator.html — oscillate 3종 공통).
     case oscillateAlpha(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
                         phaseMin: Float = 0, phaseMax: Float = 0)
     case oscillatePosition(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
@@ -84,7 +85,7 @@ public enum ParticleOperator: Equatable {
     /// phasemin/phasemax(파티클별 위상 오프셋). 노이즈장 속도로 위치를 이류(advection)한다(vel 미누적 → 유계).
     case turbulence(speedMin: Float, speedMax: Float, scale: Float, timeScale: Float,
                     mask: Vec3, phaseMin: Float, phaseMax: Float)
-    /// 크기 진동: size ×= lerp(scaleMin, scaleMax, 0.5(1+sin(2πf·age+phase))). 파티클별 f/phase 스폰 샘플.
+    /// 크기 진동: size ×= lerp(scaleMin, scaleMax, 0.5(1+sin(2πf·(age/lifetime)+phase))). 파티클별 f/phase 스폰 샘플.
     case oscillateSize(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
                        phaseMin: Float, phaseMax: Float)
     /// 수명 비율 구간에서 alpha factor를 보간해 현재 알파에 곱한다.

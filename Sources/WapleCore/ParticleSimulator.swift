@@ -606,7 +606,11 @@ public struct ParticleSimulator {
             d.size *= lerp(op.sv, op.ev, changeProgress(n, op.st, op.et))
         }
         if let os = oscSizeOp {
-            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscSizeFreq * p.age + p.oscSizePhase))
+            // F832: frequency 단위 = "수명당 진동 횟수"(WE 공식 디자이너 문서 operator.html:
+            // "The minimum/maximum number of oscillations per particle lifetime" — oscillate
+            // position/alpha/size 3종 동일 문구) — 종전 age 곱(Hz 해석)은 수명이 긴 파티클에서
+            // 실제보다 빠르게 진동했다. n = age/lifetime(위 :602, clamped).
+            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscSizeFreq * n + p.oscSizePhase))
             d.size *= lerp(os.smin, os.smax, osc01)
         }
         // color
@@ -625,7 +629,8 @@ public struct ParticleSimulator {
             // 자매 oscillateSize(위 sizeOp 분기)와 동형 직접보간 — scaleMin/Max 는 파티클별 랜덤화 없이
             // def 고정값을 그대로 보간 양끝으로 쓴다(F184: 종전 "1 - scale*osc" 감산식은 peak 가 항상 1
             // 로 고정되고 trough 만 scale 로 눌리는 별개 수식이었다).
-            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * p.age + p.oscAlphaPhase))
+            // F832: frequency 단위 = 수명당 진동 횟수(age 가 아니라 n = age/lifetime 곱) — 위 sizeOp 분기 주석 참조.
+            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * n + p.oscAlphaPhase))
             a *= lerp(oa.smin, oa.smax, osc01)
         }
         d.alpha = max(0, min(1, a))
@@ -639,7 +644,11 @@ public struct ParticleSimulator {
     /// 리본이 oscillateposition 진동을 반영하지 못해 sprite 쿼드[d.pos 사용]와 비대칭이 생긴다).
     private func oscPositionOffset(_ p: Particle) -> SIMD3<Float> {
         guard p.oscPosScale > 0 else { return SIMD3(0, 0, 0) }
-        let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * p.age + p.oscPosPhase)
+        // F832: frequency 단위 = "수명당 진동 횟수"(WE 공식 디자이너 문서 operator.html — oscillate
+        // position/alpha/size 공통) — 종전 age 곱(Hz 해석)은 수명>1s 파티클에서 과속 진동.
+        // lifetime<=0 방어: n=1(display() :602 의 clamp 와 동일 규약).
+        let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
+        let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * n + p.oscPosPhase)
         return p.oscPosMask * off
     }
 

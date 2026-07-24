@@ -260,7 +260,8 @@ final class ParticleSimulatorTests: XCTestCase {
     func testTrailHistoryReflectsOscillatePositionOffset() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
-            initializers: [.lifetimeRandom(min: 100, max: 100),
+            // F832: freq 단위 = 수명당 진동 횟수 — lifetime 2, 30스텝(age1)이면 n 0..0.5 로 반주기 커버.
+            initializers: [.lifetimeRandom(min: 2, max: 2),
                            .velocityRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 0, y: 0, z: 0))],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
                         .oscillatePosition(frequencyMin: 1, frequencyMax: 1, scaleMin: 50, scaleMax: 50,
@@ -489,12 +490,13 @@ final class ParticleSimulatorTests: XCTestCase {
     func testOscillateAlphaLerpsBetweenScaleMinAndMax() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
-            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
-            operators: [.oscillateAlpha(frequencyMin: 2, frequencyMax: 2, scaleMin: 0.2, scaleMax: 0.9)],
+            initializers: [.lifetimeRandom(min: 2, max: 2), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 1, frequencyMax: 1, scaleMin: 0.2, scaleMax: 0.9)],
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 3)
         var minA: Float = 1, maxA: Float = 0
-        for _ in 0..<120 {   // 2Hz·1.2s ≥ 2 주기(랜덤 위상과 무관하게 극값을 커버)
+        // F832: freq 1 = 수명당 1주기 — lifetime 2, 1.5s(n 0..0.75, phase 0)면 peak(n=0.25)/trough(n=0.75) 커버.
+        for _ in 0..<150 {
             let ps = sim.step(0.01)
             if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
         }
@@ -507,12 +509,12 @@ final class ParticleSimulatorTests: XCTestCase {
     func testOscillateAlphaScaleOmittedDefaultsStillOscillate() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
-            initializers: [.lifetimeRandom(min: 100, max: 100), .alphaRandom(min: 1, max: 1, exponent: 1)],
-            operators: [.oscillateAlpha(frequencyMin: 2, frequencyMax: 2, scaleMin: 0, scaleMax: 1)],
+            initializers: [.lifetimeRandom(min: 2, max: 2), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            operators: [.oscillateAlpha(frequencyMin: 1, frequencyMax: 1, scaleMin: 0, scaleMax: 1)],
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 4)
         var minA: Float = 1, maxA: Float = 0
-        for _ in 0..<120 {
+        for _ in 0..<150 {   // F832: lifetime 2·freq 1 — n 0..0.75 스윕으로 극값 커버(상기 동일)
             let ps = sim.step(0.01)
             if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
         }
