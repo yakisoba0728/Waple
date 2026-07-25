@@ -23,6 +23,33 @@ extension SceneRenderer {
             // 자원/인코드 실패는 hdrPost(saturate 클램프)로 폴백(무크래시·동일 규약). pooledOffscreen(bgra:true)는 hdrActive
             // 에서 float(rgba16Float)로 자동 승격된다(중간 버퍼가 소스와 동일 float 계약).
             // 비-HDR 씬은 hdrActive=false 로 이 블록 자체에 도달 불가(격리 — 148씬 무접촉).
+            // H6: 3-레벨 피라미드 우선 — quarter 추출→eighth blur→sixteenth blur→additive 업샘플.
+            // 실패 시 기존 단일 레벨 HDRBloomPass 폴터(무회귀).
+            if sceneWantsHDRBloom, let hdrBloomPyramidPass,
+               let quarter = pooledOffscreen(
+                   max(1, source.width / 4), max(1, source.height / 4), device, bgra: true),
+               let eighth = pooledOffscreen(
+                   max(1, source.width / 8), max(1, source.height / 8), device, bgra: true),
+               let sixteenth = pooledOffscreen(
+                   max(1, source.width / 16), max(1, source.height / 16), device, bgra: true),
+               let bloom = pooledOffscreen(
+                   max(1, source.width / 8), max(1, source.height / 8), device, bgra: true),
+               hdrBloomPyramidPass.encode(
+                   commandBuffer: commandBuffer,
+                   source: source,
+                   quarter: quarter,
+                   eighth: eighth,
+                   sixteenth: sixteenth,
+                   bloom: bloom,
+                   destination: destination,
+                   parameters: HDRBloomPyramidParameters(
+                       strength: hdrBloomParameters.strength,
+                       threshold: hdrBloomParameters.threshold,
+                       feather: hdrBloomParameters.feather,
+                       tint: hdrBloomParameters.tint,
+                       scatter: 1.619)) {
+                return true
+            }
             if sceneWantsHDRBloom, let hdrBloomPass,
                let quarter = pooledOffscreen(
                    max(1, source.width / 4), max(1, source.height / 4), device, bgra: true),

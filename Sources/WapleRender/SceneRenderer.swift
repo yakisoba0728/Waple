@@ -615,6 +615,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneWantsHDRBloom = false
     var hdrBloomParameters = HDRBloomParameters.defaults
     var hdrBloomPass: HDRBloomEncoding?
+    /// H6: HDR bloom 3-레벨 피라미드(기존 단일 레벨 대비 글로우 반경 확장).
+    var hdrBloomPyramidPass: HDRBloomPyramidEncoding?
     /// HDR 경로 실효 게이트(2D·3D 공통). 3D 씬도 acc/메시/파티클 파이프라인이 accPixelFormat(float)로
     /// 승격되므로(mesh3DPipeline/particle3DPipeline) HDRBloomPass 에 도달 — 유일 HDR 골든(3470948192=3D) 대조 가능.
     var hdrActive: Bool { sceneIsHDR }
@@ -1037,6 +1039,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             tint: SIMD3(doc.bloomTint.x, doc.bloomTint.y, doc.bloomTint.z))
         if sceneWantsHDRBloom {
             hdrBloomPass = HDRBloomPass(device: device)
+            hdrBloomPyramidPass = HDRBloomPyramidPass(device: device)
         }
 
         let library = try WapleProfiler.compile(QuadShaders.source) { try device.makeLibrary(source: QuadShaders.source, options: nil) }

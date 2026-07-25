@@ -273,4 +273,40 @@ final class HDRBloomTests: XCTestCase {
         commandBuffer.waitUntilCompleted()
         return read(destination)
     }
+
+    /// H6: 3-레벨 피라미드가 단일 레벨보다 넓은 글로우를 생성.
+    func testPyramidWiderGlowThanSingleLevel() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let width = 64, height = 32
+        let source = try makeFloatTexture(
+            device: device, width: width, height: height,
+            spot: (x: 28..<36, y: 12..<20, value: 8))
+        let destination = try makeBGRATexture(device: device, width: width, height: height)
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let pass = try XCTUnwrap(HDRBloomPyramidPass(device: device))
+        let quarter = try makeFloatTexture(device: device, width: max(1, width / 4), height: max(1, height / 4))
+        let eighth = try makeFloatTexture(device: device, width: max(1, width / 8), height: max(1, height / 8))
+        let sixteenth = try makeFloatTexture(device: device, width: max(1, width / 16), height: max(1, height / 16))
+        let bloom = try makeFloatTexture(device: device, width: max(1, width / 8), height: max(1, height / 8))
+        let commandBuffer = try XCTUnwrap(queue.makeCommandBuffer())
+        XCTAssertTrue(pass.encode(
+            commandBuffer: commandBuffer,
+            source: source,
+            quarter: quarter,
+            eighth: eighth,
+            sixteenth: sixteenth,
+            bloom: bloom,
+            destination: destination,
+            parameters: HDRBloomPyramidParameters(
+                strength: 2, threshold: 1, feather: 0.1, tint: SIMD3(1, 1, 1), scatter: 1.619)))
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        let px = read(destination)
+        // 중심 스팟 주변에 0이 아닌 픽셀이 존재(글로우 확산).
+        var nonZero = 0
+        for i in stride(from: 0, to: px.count, by: 4) {
+            if px[i] > 0 || px[i + 1] > 0 || px[i + 2] > 0 { nonZero += 1 }
+        }
+        XCTAssertGreaterThan(nonZero, 64, "3-레벨 피라미드 글로우가 너무 좁음")
+    }
 }
