@@ -23,7 +23,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// F722: 머티리얼 usertextures 의 시스템 미디어 키 요청 종류 — $mediaThumbnail(현재 트랙 아트워크) /
     /// $mediaPreviousThumbnail(직전 트랙 아트워크). buildDisplayTextures 가 레이어 base 를 라이브 텍스처로 교체.
     enum MediaArtworkKind { case none, current, previous }
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = [] /* animationlayers blend/visible/rate 바인딩 스크립트 — encodeLayer 가 per-frame 재평가해 캐스케이드에 반영. 훅 등록(buildAnimationEventTargets)도 이 인스턴스 재사용(중복 IIFE 방지) */; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; var mediaArtwork: MediaArtworkKind = .none /* F722: 시스템 미디어 아트워크 요청 레이어 — buildDisplayTextures 가 base 교체(미수신 시 정적 placeholder 유지, 무회귀) */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */ }
+    /// H1: 2D 레이어 커스텀 머티리얼 셰이더 파이프라인 + 바인드 플랜.
+    struct CustomLayerShader {
+        let pipeline: MTLRenderPipelineState
+        let material: [SIMD4<Float>]                 // materialParams slot values
+        let aux: [(slot: Int, tex: MTLTexture)]     // material texture slots > 0
+        let texRes: [SIMD4<Float>]                   // 8 slots; slot 0 = layer texture
+        let texWrap: [Float]                         // 8 × 1=clamp / 0=repeat
+        let texFilter: [Float]                       // 8 × 1=nearest / 0=linear
+        var scripts: [(slot: Int, engine: TextScriptEngine)]  // constant scripts
+    }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = [] /* animationlayers blend/visible/rate 바인딩 스크립트 — encodeLayer 가 per-frame 재평가해 캐스케이드에 반영. 훅 등록(buildAnimationEventTargets)도 이 인스턴스 재사용(중복 IIFE 방지) */; var materialScripts: [(key: String, engine: TextScriptEngine)] = [] /* material.constantshadervalue.scripted (roughness/metallic/speculartint) per-frame evaluation */; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; var mediaArtwork: MediaArtworkKind = .none /* F722: 시스템 미디어 아트워크 요청 레이어 — buildDisplayTextures 가 base 교체(미수신 시 정적 placeholder 유지, 무회귀) */; var noInterp: Bool = false /* 감사 V07: 베이스 텍스처 NoInterpolation(TexImage flags bit0) — 무효과 레이어는 encodeLayer 가 nearest 변형 파이프라인으로 드로우 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */; var customShader: CustomLayerShader? = nil /* H1: 커스텀 머티리얼 셰이더 — nil = QuadShaders 경로 */ }
     var hasAnimations = false
     struct GPUParticleSystem {
         var sim: ParticleSimulator
@@ -60,6 +70,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var normalTexture: MTLTexture? = nil
         var refractAmount: Float = 0.05
         var normalRG88: Bool = false   // 노멀 텍스처가 WE RG88(2채널) 포맷 → 셰이더 언팩 분기
+        /// 감사 V07: 알베도 NoInterpolation(TexImage flags bit0) — encodeParticle 이 nearest 변형 선택.
+        var noInterp: Bool = false
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 콘텐츠 스크립트(engine)는 매 프레임 재평가
@@ -459,9 +471,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 전역 모니터가 관찰한다, ParallaxController 의 mouseMoved 와 동일 규약. 권한 불요).
     /// WE 규약: down 시 cursorDown+cursorClick(기존 e2e 검증 타이밍 유지), up 시 cursorUp.
     func startClickMonitorIfNeeded() {
-        let hooks: Set<String> = ["cursorClick", "cursorDown", "cursorUp"]
-        guard clickMonitor == nil,
-              eventEngines.contains(where: { !$0.hookNames.isDisjoint(with: hooks) }) else { return }
+        guard clickMonitor == nil else { return }
+        // F725: g_PointerState(cursorripple/fluidsim) 를 쓰는 셰이더가 있는 씬도 JS 훅 없이 클릭 상태를
+        // 받아야 한다. 이벤트 배달 자체는 dispatchPointerEvent 가 hook 보유 엔진으로만 하므로, 전역
+        // 모니터를 항상 설치핻도 무해하고 비용이 낮다(ParallaxController 의 mouseMoved 와 동일 규약).
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] ev in
             self?.deliverGlobalMouse(isDown: ev.type == .leftMouseDown)
         }
@@ -570,6 +583,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var composePipeline: MTLRenderPipelineState?
     /// 2D 포워드 라이팅 파이프라인(f_lit) — 라이트 씬의 LIGHTING:1 레이어 전용. nil 이면 미사용.
     var litPipeline: MTLRenderPipelineState?
+    /// 감사 V07: NoInterpolation(GPULayer.noInterp) 무효과 레이어 전용 nearest 변형(f_main over/additive,
+    /// f_blend, f_compose, f_lit — QuadShaders.nearestSource 동명 함수). noInterp 레이어가 있을 때만 빌드,
+    /// nil(미빌드/컴파일 실패)이면 encodeLayer 가 대응 선형 파이프라인으로 폴터(무회귀·무크래시).
+    var pipelineNearest: MTLRenderPipelineState?
+    var layerAdditiveNearestPipeline: MTLRenderPipelineState?
+    var blendNearestPipeline: MTLRenderPipelineState?
+    var composeNearestPipeline: MTLRenderPipelineState?
+    var litNearestPipeline: MTLRenderPipelineState?
     /// 스프라이트 프레임 추출 파이프라인(v_spriteframe/f_spriteframe) — 아틀라스 서브렉트를 프레임크기
     /// dst 로 nearest 1:1 복사(종전 blit.copy 대체 → BC 아틀라스 네이티브 상주 가능). nil 이면
     /// spriteFrameTexture 가 원본 아틀라스 그대로 폴백(무크래시).
@@ -826,6 +847,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var additivePipeline: MTLRenderPipelineState?
     var translucentPipeline: MTLRenderPipelineState?
     var refractParticlePipeline: MTLRenderPipelineState?   // REFRACT 스프라이트(pf_refract, translucent)
+    /// 감사 V07: 알베도 NoInterpolation(GPUParticleSystem.noInterp) 전용 nearest 변형 — noInterp 시스템이
+    /// 있을 때만 빌드, nil(미빌드/컴파일 실패)이면 encodeParticle 이 선형 폴터(무회귀·무크래시).
+    var additiveNearestPipeline: MTLRenderPipelineState?
+    var translucentNearestPipeline: MTLRenderPipelineState?
     var fullscreenQuad: [SIMD2<Float>] = [SIMD2(-1,-1), SIMD2(1,-1), SIMD2(-1,1), SIMD2(1,1)]
 
     // ── 3D 씬(camera3D + .mdl 메시) 상태 ─────────────────────────────────────────
@@ -856,6 +881,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var eval3DOrder: [(order: Int, bb: Bool, idx: Int)] = []
     /// 그리기 순서(메시+빌보드 인터리브, order 오름차순). (order, isBillboard, idx).
     var draw3DOrder: [(order: Int, bb: Bool, idx: Int)] = []
+    /// 감사 V06: 스킨 버퍼 프레임 메모 — prepare3DSkinBuffers 주석상 '프레임당 정확히 한 번' 적재가 전제인데,
+    /// ortho 하이브리드는 drawPlan 의 mesh3D 런이 2D 레이어와 인터리브되어 runOrtho3DMeshes 가 프레임당 2+회
+    /// 호출(호출마다 boneRing 3슬롯 전진)된다. 링이 프레임 내에서 감기면 GPU in-flight 슬롯을 CPU 가 덮어쓴다.
+    /// skin 행렬은 (model, anim, time, rate) 의 순수 함수라 같은 time 의 재호출은 직전 결과를 그대로 쓴다
+    /// (정지 재드로의 동일 time 도 동일 행렬 — 무회귀). teardown 이 해제.
+    var skinBuffersFrameMemo: (time: Float, buffers: [Int: MTLBuffer])? = nil
     var meshPipelineOver: MTLRenderPipelineState?      // premultiplied over(normal/translucent)
     var meshPipelineAdditive: MTLRenderPipelineState?
     var meshPipelineSkin: MTLRenderPipelineState?      // GPU 스키닝(mv_skin) over
@@ -1001,6 +1032,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
 
         let library = try WapleProfiler.compile(QuadShaders.source) { try device.makeLibrary(source: QuadShaders.source, options: nil) }
+        // 감사 V07: nearest 변형 라이브러리(베이스 레이어 NoInterpolation). 실패는 마운트 중단 사유가 아님
+        // (try?) — nearest 파이프라인 전부 nil 로 두고 encodeLayer 가 선형 폴터(무회귀·무크래시).
+        let libraryNearest = try? WapleProfiler.compile(QuadShaders.nearestSource) { try device.makeLibrary(source: QuadShaders.nearestSource, options: nil) }
         let pdesc = MTLRenderPipelineDescriptor()
         pdesc.vertexFunction = library.makeFunction(name: "v_main")
         pdesc.fragmentFunction = library.makeFunction(name: "f_main")
@@ -1129,11 +1163,33 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 lightAmbient = SIMD4(u.ambientTerm.x, u.ambientTerm.y, u.ambientTerm.z, 0)
             }
             layers = buildLayers(doc: doc, package: package, device: device, sceneID: project.id)
+            // 감사 V07: NoInterpolation 무효과 레이어가 있을 때만 nearest 변형 5종 빌드(동일 디스크립터,
+            // frag 만 nearestSource 동명 함수로 교체 — 선형 본체와 1:1 대응). 미빌드/nil 이면 encodeLayer 선형 폴터.
+            if let libN = libraryNearest, layers.contains(where: { $0.noInterp && $0.effects.isEmpty }) {
+                pdesc.fragmentFunction = libN.makeFunction(name: "f_main")
+                att.destinationRGBBlendFactor = .oneMinusSourceAlpha
+                att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+                pipelineNearest = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pdesc) }
+                att.destinationRGBBlendFactor = .one
+                att.destinationAlphaBlendFactor = .one
+                layerAdditiveNearestPipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pdesc) }
+                bdesc.fragmentFunction = libN.makeFunction(name: "f_blend")
+                blendNearestPipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: bdesc) }
+                cdesc.fragmentFunction = libN.makeFunction(name: "f_compose")
+                composeNearestPipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: cdesc) }
+                ldesc.fragmentFunction = libN.makeFunction(name: "f_lit")
+                litNearestPipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: ldesc) }
+            }
             particleSystems = buildParticles(doc: doc, package: package, device: device)
             if !particleSystems.isEmpty {
                 hasParticles = true
                 additivePipeline = particlePipeline(additive: true, device: device)
                 translucentPipeline = particlePipeline(additive: false, device: device)
+                // 감사 V07: noInterp 시스템이 있을 때만 nearest 변형 빌드(미빌드 시 encodeParticle 선형 폴터).
+                if particleSystems.contains(where: { $0.noInterp }) {
+                    additiveNearestPipeline = particlePipeline(additive: true, nearest: true, device: device)
+                    translucentNearestPipeline = particlePipeline(additive: false, nearest: true, device: device)
+                }
                 // REFRACT 시스템이 하나라도 있으면 굴절 파이프라인 빌드(스냅샷 재샘플). 없으면 미빌드.
                 if particleSystems.contains(where: { $0.refract && $0.normalTexture != nil }) {
                     refractParticlePipeline = refractParticlePipelineBuild(device: device)
@@ -1341,14 +1397,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// F812: 가림 게이트의 오디오 정지/재기동을 씬 사운드(sceneAudio)까지 대칭화 — 종전엔 스펙트럼
     /// 캡처(audioProvider)만 정지해 가려진 동안 씬 사운드가 계속 재생되는 비대칭이었다. pause()/resume()
     /// 명시 경로(:1604/:1634)와 정합(SceneAudioPlayer.pause/resume 은 멱등 — 명시 정지와 겹쳐도 안전).
-    /// draw() 의 게이트 클로저가 위임하는 실제 배선(단위 테스트 대상).
+    /// 감사 V06: 비디오 레이어도 대칭 정지/재개 — 씬 클록은 가림 구간만큼 동결(F290)하는데 AVPlayer 만
+    /// 실시간 진행하면 해제 시 씬 시간과 desync 된다. 헤드리스는 player=nil 이라 pause/resume 무영향
+    /// (captureFrames 경로 불변). draw() 의 게이트 클로저가 위임하는 실제 배선(단위 테스트 대상).
     func occlusionStopAudio() {
         audioProvider?.stop()
         sceneAudio?.pause()
+        for case let v? in layers.map(\.video) { v.pause() }
     }
     func occlusionStartAudioIfNeeded() {
         if hasAudio { audioProvider?.start() }
         sceneAudio?.resume()
+        for case let v? in layers.map(\.video) { v.resume() }
     }
 
     public func draw(in view: MTKView) {
@@ -1682,12 +1742,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         scriptVisible.removeAll()
         scriptTextVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
+        additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
+        blendPipeline = nil; composePipeline = nil          // 감사 V06: 해제 누락분(마운트 반복 시 GPU 리소스 누적 방지)
+        pipelineNearest = nil; layerAdditiveNearestPipeline = nil  // 감사 V07: nearest 변형 해제(동일 근거)
+        blendNearestPipeline = nil; composeNearestPipeline = nil; litNearestPipeline = nil
+        effectVertexBuffer = nil; effectQuadInterleaved = nil  // 감사 V06: 해제 누락분(효과 풀스크린 쿼드 버퍼)
         camera3D = nil; is3D = false; has3DScripts = false; scene3DFog = Scene3DFog()  // F745
         ortho3DHybrid = false  // F721: 하이브리드 상태 리셋(마운트 재사용)
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero
         nodes3D = []; meshRenderables = []; billboards = []; billboardDefs = []; cameraScripts = []
         text3DControllers = []
         eval3DOrder = []; draw3DOrder = []
+        skinBuffersFrameMemo = nil   // 감사 V06: 스킨 버퍼 프레임 메모 해제(마운트 재사용 시 stale 본 버퍼 참조 방지)
         meshPipelineOver = nil; meshPipelineAdditive = nil
         meshPipelineSkin = nil; meshPipelineSkinAdditive = nil
         shadowPipelineStaticOpaque = nil; shadowPipelineStaticCutout = nil

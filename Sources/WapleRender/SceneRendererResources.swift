@@ -31,6 +31,10 @@ extension SceneRenderer {
         /// bind(fbo/previous, 자산 없음) 슬롯은 항상 clamp, aux(실 자산) 슬롯은 TexImage.clampUVs —
         /// buildPassBindings 가 빌드 시 1 회 계산(런타임 재계산 불요 — 자산 정체성은 패스 고정).
         let texWrap: [Float]
+        /// 감사 V07: 슬롯별 샘플 필터(1=nearest/0=linear — TexImage.noInterpolation, WE tex Flags bit0).
+        /// bind 슬롯은 선형(단, 체인 첫 이펙트의 previous=베이스 직결은 baseNoInterp — 손-포팅 fbNearest
+        /// 의 V06 정합과 동일), aux 슬롯은 자산 플래그. texWrap 과 동일하게 빌드 시 1 회 계산.
+        let texFilter: [Float]
         /// 상수 프로퍼티 스크립트(슬롯 → 엔진) — per-frame 평가로 material 갱신(컬러 사이클 등).
         var scripts: [(slot: Int, engine: TextScriptEngine)] = []
     }
@@ -134,8 +138,11 @@ extension SceneRenderer {
 
     /// 레이어/텍스트 공용 이펙트 체인 빌드(F741: buildLayers 루프에서 무수정 추출 — 정책 단일화).
     /// 디버그: WAPLE_EFFECT_SKIP=이름,이름 → 해당 효과 제외(파리티 이분용, WAPLE_MP_TRUNC 와 세트).
+    /// baseNoInterp(감사 V06): 베이스 텍스처의 NoInterpolation — **체인 첫** 손-포팅 이펙트의 fb 만
+    /// nearest(fb=베이스 직결은 첫 이펙트뿐, 2번째+ 는 FBO 출력이라 선형 유지가 WE 정합).
     func buildEffectChain(_ sceneEffects: [SceneEffect], package: ScenePackage, device: MTLDevice,
-                          texW: Int, texH: Int, compositeImageTextures: [Int: String] = [:]) -> [EffectGPU] {
+                          texW: Int, texH: Int, compositeImageTextures: [Int: String] = [:],
+                          baseNoInterp: Bool = false) -> [EffectGPU] {
         var effects: [EffectGPU] = []
         let skipNames = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
@@ -154,9 +161,13 @@ extension SceneRenderer {
             // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴터 → 둘 다 실패 시 스킵+로그.
             if let translated = buildTranslatedEffect(eff, package: package, device: device,
                                                       texW: texW, texH: texH,
-                                                      compositeImageTextures: compositeImageTextures) {
+                                                      compositeImageTextures: compositeImageTextures,
+                                                      // 감사 V07: 베이스 NoInterpolation 은 체인 첫 이펙트의
+                                                      // previous(=베이스 직결)만 nearest(아래 fbNearest 와 동일 게이트).
+                                                      baseNoInterp: baseNoInterp && effects.isEmpty) {
                 effects.append(translated)
-            } else if let handPort = buildHandPortEffect(eff, package: package, device: device) {
+            } else if let handPort = buildHandPortEffect(eff, package: package, device: device,
+                                                         fbNearest: baseNoInterp && effects.isEmpty) {
                 effects.append(handPort)
             } else {
                 NSLog("%@", "[Waple] effect skipped (no translatable GLSL, no hand-port): \(eff.name)")
@@ -247,9 +258,14 @@ extension SceneRenderer {
             let tint = SIMD4<Float>(layer.color.x * layer.brightness, layer.color.y * layer.brightness,
                                     layer.color.z * layer.brightness, layer.alpha)
             // 이펙트 체인 빌드는 buildEffectChain 으로 추출(F741 — 텍스트 경로와 정책 공유, 동작 무수정).
+            // 감사 V06+V07: 베이스 텍스처의 NoInterpolation — 손-포팅 체인 첫 이펙트 fb(V06)와 무효과
+            // 베이스의 f_main nearest 변형(V07, GPULayer.noInterp) 양쪽이 소비하므로 상시 조회로 변경
+            // (V06 는 이펙트 보유 시에만 조회했다).
+            let noInterp = resolveTextureNoInterpolation(layer.textureEntryName, package: package)
             let effects = buildEffectChain(layer.effects, package: package, device: device,
                                            texW: effW, texH: effH,
-                                           compositeImageTextures: compositeImageTextures)
+                                           compositeImageTextures: compositeImageTextures,
+                                           baseNoInterp: noInterp)
             if !effects.isEmpty { hasEffects = true }
             if !layer.animations.isEmpty { hasAnimations = true }
             // 퍼펫(.mdl): 스키닝 메시. WE 규약(changelog: "Only load puppet ref if file exists on
@@ -299,6 +315,17 @@ extension SceneRenderer {
                     }
                 }
             }
+            // material.constantshadervalue.scripted — PBR scalar per-frame evaluation (roughness/metallic/speculartint).
+            var materialScripts: [(key: String, engine: TextScriptEngine)] = []
+            for key in ["roughness", "metallic", "speculartint"] {
+                guard let src = layer.materialScripts[key] else { continue }
+                if let e = makeScriptEngine(src, layerName: layer.name.isEmpty ? nil : layer.name,
+                                            currentLayerIndex: uid,
+                                            scriptPropsJSON: layer.materialScriptProps[key]) {
+                    materialScripts.append((key, e))
+                    if e.hasUpdate { hasAnimations = true }
+                }
+            }
             // attachment(이름 본-슬롯 부착): 부모 레이어의 퍼펫 모델에서 부착점(MDAT)을 찾아 스펙 구성.
             // 부모/퍼펫/부착점 어느 하나라도 부재 → nil = 무부착 폴백(기존 베이크 위치 그대로 — 무회귀·무크래시).
             var attach: SceneRenderer.PuppetAttach? = nil
@@ -330,7 +357,7 @@ extension SceneRenderer {
                 ? Self.litRect(origin: layer.origin, size: layer.size, scale: layer.scale,
                           angleZ: layer.angleZ, alignment: layer.alignment, originZ: layer.originZ)
                 : (SIMD4<Float>.zero, SIMD4<Float>.zero)
-            out.append(GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
+            var gpuLayer = GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
                                 effects: effects, texWidth: effW, texHeight: effH,
                                 order: layer.order, uid: uid,
@@ -340,6 +367,7 @@ extension SceneRenderer {
                                       && attach == nil) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 animLayerScripts: animLayerScripts,
+                                materialScripts: materialScripts,
                                 initialVisible: layer.initialVisible,
                                 colorBlendMode: layer.colorBlendMode, frames: frames,
                                 isLit: layerLit,
@@ -352,7 +380,14 @@ extension SceneRenderer {
                                 // (비디오는 프레임 공급자가 base 를 덮고, 컴포지션은 스냅샷 경로라 무의미).
                                 mediaArtwork: (videoLayer == nil && !layer.isFrameBuffer)
                                     ? mediaArtworkKind(textureEntryName: layer.textureEntryName, package: package)
-                                    : .none))
+                                    : .none,
+                                noInterp: noInterp)
+            // H1: 커스텀 머티리얼 셰이더 파이프라인 빌드(실패 시 nil → QuadShaders 폴터).
+            if layer.materialShader != nil {
+                gpuLayer.customShader = buildCustomLayerShader(layer, texture: mtl, package: package,
+                                                               device: device, pixelFormat: accPixelFormat)
+            }
+            out.append(gpuLayer)
         }
         return out
     }
@@ -367,8 +402,10 @@ extension SceneRenderer {
     }
 
     /// 손-포팅 효과(검증된 스톡 7종) 빌드. 미지원 이름이면 nil(→ 변환 경로 시도).
-    func buildHandPortEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice) -> EffectGPU? {
-        guard let src = EffectShaders.source(for: eff.name),
+    /// fbNearest(감사 V06): 레이어 베이스 텍스처의 NoInterpolation — fb(texture(0)) 샘플만 nearest.
+    func buildHandPortEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice,
+                             fbNearest: Bool = false) -> EffectGPU? {
+        guard let src = EffectShaders.source(for: eff.name, fbNearest: fbNearest),
               let params = EffectShaders.params(for: eff.name, constants: eff.constants, combos: eff.combos),
               let pipe = effectPipeline(source: src, device: device) else { return nil }
         let audio = audioParams(for: eff)
@@ -433,7 +470,10 @@ extension SceneRenderer {
     /// (resolvePassCombos) ⑤ 머티리얼 상수/스크립트(buildPassMaterial) + 바인드·texRes·aux·target
     /// 플랜(buildPassBindings).
     func buildTranslatedEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice,
-                               texW: Int, texH: Int, compositeImageTextures: [Int: String] = [:]) -> EffectGPU? {
+                               texW: Int, texH: Int, compositeImageTextures: [Int: String] = [:],
+                               // 감사 V07: 베이스 텍스처 NoInterpolation — previous bind(=효과 입력 src,
+                               // 체인 첫 이펙트는 베이스 직결) 슬롯의 texFilter 를 nearest 로.
+                               baseNoInterp: Bool = false) -> EffectGPU? {
         // 디버그 바이섹션 스위치: 실물 씬에서 번역 효과만 끄고 A/B 비교(시각 아티팩트 책임 분리).
         if ProcessInfo.processInfo.environment["WAPLE_DISABLE_TRANSLATED"] == "1" { return nil }
         // #include 리졸버: pkg→베이스에셋→내장(확정-의미 서브셋, common_blending.h) 순.
@@ -476,11 +516,13 @@ extension SceneRenderer {
                                                matTextures: meta.matTextures, manifest: manifest,
                                                fboIndex: fboIndex, lw: lw, lh: lh,
                                                package: package, device: device,
-                                               compositeImageTextures: compositeImageTextures) else { return nil }
+                                               compositeImageTextures: compositeImageTextures,
+                                               baseNoInterp: baseNoInterp) else { return nil }
             if t.usesAudio { anyAudio = true }
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
                                          binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
-                                         texRes: plan.texRes, texWrap: plan.texWrap, scripts: passScripts))
+                                         texRes: plan.texRes, texWrap: plan.texWrap, texFilter: plan.texFilter,
+                                         scripts: passScripts))
         }
         // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         guard passes.contains(where: { $0.target == nil }) else { return nil }
@@ -514,7 +556,9 @@ extension SceneRenderer {
         wrap[0] = 1  // slot0 = fbo bind(자산 없음) → 항상 clamp.
         return TranslatedPass(pipeline: pipe, material: [], aux: [],
                               binds: [(0, srcIdx)], target: tgtIdx, usesAudio: false,
-                              texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap, scripts: [])
+                              texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap,
+                              texFilter: [Float](repeating: 0, count: 8),  // fbo→fbo 복사 — 자산 없음, 선형 고정
+                              scripts: [])
     }
 
     /// ③ 셰이더 이름 + 머티리얼 메타(combos/textures) 해석 — 패스에 shader 가 없으면 material JSON
@@ -582,9 +626,10 @@ extension SceneRenderer {
                                    scenePass: SceneEffectPass, matTextures: [String?],
                                    manifest: EffectManifest, fboIndex: [String: Int],
                                    lw: Float, lh: Float, package: ScenePackage, device: MTLDevice,
-                                   compositeImageTextures: [Int: String] = [:])
+                                   compositeImageTextures: [Int: String] = [:],
+                                   baseNoInterp: Bool = false)
         -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)],
-            texWrap: [Float], target: Int?)? {
+            texWrap: [Float], texFilter: [Float], target: Int?)? {
         var binds: [(slot: Int, source: Int)] = []
         for b in mp.binds {
             // 신뢰불가 effect.json index — Metal frag 텍스처 인자테이블 상한(macOS 128) 밖이면
@@ -607,6 +652,14 @@ extension SceneRenderer {
             texRes[slot] = SIMD4(lw / s, lh / s, lw / s, lh / s)
         }
         for slot in bindSlots where slot < 8 { texWrap[slot] = 1 }
+        // 감사 V07: 슬롯별 샘플 필터(1=nearest/0=linear — TexImage.noInterpolation, WE tex Flags bit0).
+        // previous(bind -1) 슬롯은 baseNoInterp(체인 첫 이펙트의 베이스 직결 — applyEffect 가 previous 를
+        // 항상 효과 입력 src 로 바인드)일 때만 nearest, fbo bind 슬롯은 선형(FBO 출력 — 손-포팅 fbNearest
+        // 의 V06 정합과 동일). aux 슬롯은 아래에서 자산 플래그로 채운다.
+        var texFilter = [Float](repeating: 0, count: 8)
+        if baseNoInterp {
+            for (slot, source) in binds where slot < 8 && source == -1 { texFilter[slot] = 1 }
+        }
         var aux: [(slot: Int, tex: MTLTexture)] = []
         for slot in t.textureSlots where slot > 0 && slot < 128 && !bindSlots.contains(slot) {
             var name = slot < scenePass.textureNames.count ? scenePass.textureNames[slot] : nil
@@ -629,12 +682,13 @@ extension SceneRenderer {
                     let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
                     texRes[slot] = SIMD4(w, h, w, h)
                     texWrap[slot] = resolveTextureClampUVs(name, package: package) ? 1 : 0
+                    texFilter[slot] = resolveTextureNoInterpolation(name, package: package) ? 1 : 0  // 감사 V07
                 }
             }
         }
         let target: Int? = mp.target.flatMap { fboIndex[$0] }
         if mp.target != nil && target == nil { NSLog("%@", "[Waple] unknown target in \(effName)"); return nil }
-        return (binds, texRes, aux, texWrap, target)
+        return (binds, texRes, aux, texWrap, texFilter, target)
     }
 
     /// F162/F163: 텍스처 자산의 ClampUVs 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x2)만 저비용
@@ -644,6 +698,17 @@ extension SceneRenderer {
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
         for c in candidates {
             if let d = quietAssetData(c, package: package), let tex = TexImage.parse(d) { return tex.clampUVs }
+        }
+        return false
+    }
+
+    /// 감사 V06: 텍스처 자산의 NoInterpolation 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x1)만 저비용
+    /// 조회 — 헤더만 재파스(resolveTextureClampUVs 와 동일 패턴). 실패/부재는 false(=linear, WE 기본 필터).
+    private func resolveTextureNoInterpolation(_ name: String?, package: ScenePackage) -> Bool {
+        guard let name else { return false }
+        let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
+        for c in candidates {
+            if let d = quietAssetData(c, package: package), let tex = TexImage.parse(d) { return tex.noInterpolation }
         }
         return false
     }
@@ -781,6 +846,112 @@ extension SceneRenderer {
         pd.vertexDescriptor = vd
         pd.colorAttachments[0].pixelFormat = .rgba8Unorm
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// H1: 레이어 커스텀 셰이더 파이프라인. 정점 디스크립터는 translatedPipeline 과 동일(a_Position float3@0,
+    /// a_TexCoord float2@12, stride 20, buffer 4). 색상 어태치먼트는 레이어 블렌드 모드에 맞춘다.
+    func translatedLayerPipeline(msl: String, device: MTLDevice, pixelFormat: MTLPixelFormat, additive: Bool) -> MTLRenderPipelineState? {
+        let lib: MTLLibrary
+        do {
+            lib = try WapleProfiler.compile(msl) { try device.makeLibrary(source: msl, options: nil) }
+        } catch {
+            let first = "\(error)".split(separator: "\n").first(where: { $0.contains("error:") }) ?? ""
+            NSLog("%@", "[Waple] custom layer MSL compile error: \(first)")
+            return nil
+        }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "ev_main")
+        pd.fragmentFunction = lib.makeFunction(name: "ef_main")
+        let vd = MTLVertexDescriptor()
+        vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 4
+        vd.attributes[1].format = .float2; vd.attributes[1].offset = 12; vd.attributes[1].bufferIndex = 4
+        vd.layouts[4].stride = 20
+        pd.vertexDescriptor = vd
+        let att = pd.colorAttachments[0]!
+        att.pixelFormat = pixelFormat
+        att.isBlendingEnabled = true
+        att.rgbBlendOperation = .add; att.alphaBlendOperation = .add
+        att.sourceRGBBlendFactor = .one; att.sourceAlphaBlendFactor = .one
+        if additive {
+            att.destinationRGBBlendFactor = .one
+            att.destinationAlphaBlendFactor = .one
+        } else {
+            att.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        }
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// H1: 레이어 머티리얼 커스텀 셰이더 빌드. 성공 시 CustomLayerShader, 실패 시 nil(→ QuadShaders 폴터).
+    /// buildTranslatedEffect 의 5책임 분해를 2D 레이어에 맞춰 단순화한 버전.
+    func buildCustomLayerShader(_ layer: SceneLayer, texture: MTLTexture, package: ScenePackage, device: MTLDevice,
+                                pixelFormat: MTLPixelFormat) -> CustomLayerShader? {
+        guard let shaderName = layer.materialShader else { return nil }
+        let include: (String) -> String? = { header in
+            for cand in ["shaders/\(header)", header] {
+                if let d = self.quietAssetData(cand, package: package), let s = String(data: d, encoding: .utf8) { return s }
+            }
+            return BuiltinShaderIncludes.lookup(header)
+        }
+        guard let vData = quietAssetData("shaders/\(shaderName).vert", package: package),
+              let fData = quietAssetData("shaders/\(shaderName).frag", package: package),
+              let vert = String(data: vData, encoding: .utf8),
+              let frag = String(data: fData, encoding: .utf8) else {
+            NSLog("%@", "[Waple] custom layer shader source missing: \(shaderName)")
+            return nil
+        }
+        var combos = layer.materialCombos
+        for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
+            let bound = slot < layer.materialTextureNames.count && layer.materialTextureNames[slot] != nil
+            if bound { combos[comboName] = 1 }
+        }
+        guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos,
+                                               include: include, premultiplyOutput: true) else {
+            NSLog("%@", "[Waple] custom layer GLSL translate failed: \(shaderName)")
+            return nil
+        }
+        let additive = layer.blendMode == "additive"
+        guard let pipe = translatedLayerPipeline(msl: t.msl, device: device,
+                                                 pixelFormat: pixelFormat, additive: additive) else {
+            NSLog("%@", "[Waple] custom layer pipeline compile failed: \(shaderName)")
+            return nil
+        }
+        let material: [SIMD4<Float>] = t.materialParams.map { p in
+            let v = layer.materialConstants[p.sceneKey] ?? p.defaultValue
+            return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
+                                v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
+        }
+        var scripts: [(slot: Int, engine: TextScriptEngine)] = []
+        for (slot, p) in t.materialParams.enumerated() {
+            if let src = layer.materialConstantScripts[p.sceneKey],
+               let engine = makeScriptEngine(src, scriptPropsJSON: layer.materialConstantScriptProps[p.sceneKey]) {
+                scripts.append((slot, engine))
+                if engine.hasUpdate { hasAnimations = true }
+            }
+        }
+        let lw = Float(max(1, texture.width)), lh = Float(max(1, texture.height))
+        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 8)
+        var texWrap = [Float](repeating: 0, count: 8)
+        var texFilter = [Float](repeating: 0, count: 8)
+        texRes[0] = SIMD4(lw, lh, lw, lh)
+        texWrap[0] = resolveTextureClampUVs(layer.textureEntryName, package: package) ? 1 : 0
+        texFilter[0] = resolveTextureNoInterpolation(layer.textureEntryName, package: package) ? 1 : 0
+        var aux: [(slot: Int, tex: MTLTexture)] = []
+        for slot in t.textureSlots where slot > 0 && slot < 128 {
+            let name = slot < layer.materialTextureNames.count ? layer.materialTextureNames[slot] : nil
+            if let tex = resolveTexture(name, package: package, device: device) {
+                aux.append((slot, tex))
+                if slot < 8 {
+                    let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
+                    texRes[slot] = SIMD4(w, h, w, h)
+                    texWrap[slot] = resolveTextureClampUVs(name, package: package) ? 1 : 0
+                    texFilter[slot] = resolveTextureNoInterpolation(name, package: package) ? 1 : 0
+                }
+            }
+        }
+        return CustomLayerShader(pipeline: pipe, material: material, aux: aux,
+                                 texRes: texRes, texWrap: texWrap, texFilter: texFilter,
+                                 scripts: scripts)
     }
 
     /// 효과 보조 텍스처 슬롯 이름 → MTLTexture. 이름 nil/디코드 실패 → 흰색 1x1 폴백
@@ -954,6 +1125,9 @@ extension SceneRenderer {
                 g.normalRG88 = n.rg88
                 g.refractAmount = mat.refractAmount
             }
+            // 감사 V07: 알베도 NoInterpolation(TexImage flags bit0) — encodeParticle 이 nearest 변형
+            // 파이프라인을 선택(레이어 buildLayers 의 GPULayer.noInterp 배선과 동형).
+            g.noInterp = resolveTextureNoInterpolation(def.material?.textureName, package: package)
             return g
         }
         for (i, sp) in doc.particles.enumerated() {
@@ -975,8 +1149,11 @@ extension SceneRenderer {
 
     /// 파티클 파이프라인. frag 가 premultiplied-alpha 출력 → src=one.
     /// additive: dst=one(가산), translucent: dst=oneMinusSrcAlpha(일반 over).
-    func particlePipeline(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
-        guard let lib = try? WapleProfiler.compile(ParticleShaders.source, { try device.makeLibrary(source: ParticleShaders.source, options: nil) }) else { return nil }
+    /// nearest(감사 V07): 알베도 NoInterpolation 시스템 전용 — ParticleShaders.nearestSource(pf_main 샘플러만
+    /// filter::nearest, 어드레스 모드 보존). false 면 기존 소스와 비트동일(무회귀).
+    func particlePipeline(additive: Bool, nearest: Bool = false, device: MTLDevice) -> MTLRenderPipelineState? {
+        let src = nearest ? ParticleShaders.nearestSource : ParticleShaders.source
+        guard let lib = try? WapleProfiler.compile(src, { try device.makeLibrary(source: src, options: nil) }) else { return nil }
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "pv_main")
         pd.fragmentFunction = lib.makeFunction(name: "pf_main")
