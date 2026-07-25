@@ -31,10 +31,13 @@ final class DynamicVertexBuffer {
 
 extension SceneRenderer {
     /// EngineU 버퍼: mvp(항등) + timeAndPad(time,pointer,dt) + pointerLastAndPad + texRes[8](슬롯별 실제 dims)
-    /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요).
+    /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요)
+    /// + texFilter[8](감사 V07: 슬롯별 1=nearest/0=linear, pass.texFilter 그대로 — TexImage.noInterpolation)
+    /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
-    func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = []) -> [Float] {
-        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8)
+    func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = [], texFilter: [Float] = [],
+                       layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1)) -> [Float] {
+        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4)
         e[0] = 1; e[5] = 1; e[10] = 1; e[15] = 1   // identity mvp
         e[16] = time; e[17] = pointerUV.x; e[18] = pointerUV.y  // timeAndPad = (time, pointerX, pointerY, dt)
         e[19] = frameDT                                          // g_Frametime
@@ -46,6 +49,8 @@ extension SceneRenderer {
             e[o] = r.x; e[o + 1] = r.y; e[o + 2] = r.z; e[o + 3] = r.w
         }
         for n in 0..<8 where n < texWrap.count { e[56 + n] = texWrap[n] }
+        for n in 0..<8 where n < texFilter.count { e[64 + n] = texFilter[n] }  // 감사 V07: texWrap 직후
+        e[72] = layerTint.x; e[73] = layerTint.y; e[74] = layerTint.z; e[75] = layerTint.w
         return e
     }
 
@@ -891,26 +896,30 @@ extension SceneRenderer {
         var depth = layer.parallaxDepth
         // 파이프라인 선택: lit > colorBlendMode > framebuffer compose > material additive > 기본 over.
         // additive는 특수 경로가 아닌 일반 f_main 레이어에만 적용한다.
+        // 감사 V07: 무효과 NoInterpolation 레이어는 nearest 변형 우선(미빌드 시 대응 선형 폴터 — 무회귀).
+        // 효과 보유 레이어의 표시 텍스처는 체인 출력(FBO)이라 선형 유지가 WE 정합(손-포팅 fbNearest 의
+        // V06 근거와 동일 — nearest 는 베이스 텍스처 직결 샘플에만).
+        let near = layer.noInterp && layer.effects.isEmpty
         if layer.isLit, let litPipeline {
-            enc.setRenderPipelineState(litPipeline)
+            enc.setRenderPipelineState(near ? litNearestPipeline ?? litPipeline : litPipeline)
         } else if let blendSnapshot, let blendPipeline, layer.colorBlendMode != 0 {
             // colorBlendMode: 스냅샷 dst 대비 셰이더 블렌드(f_blend). 스냅샷 없으면 일반 합성 폴백.
-            enc.setRenderPipelineState(blendPipeline)
+            enc.setRenderPipelineState(near ? blendNearestPipeline ?? blendPipeline : blendPipeline)
             enc.setFragmentTexture(blendSnapshot, index: 1)
             var mode = Int32(layer.colorBlendMode)
             enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
         } else if layer.isFrameBuffer, let composePipeline {
             // 컴포지션(_rt_FullFrameBuffer): texture=프레임버퍼 스냅샷을 화면좌표로 샘플(f_compose).
             // 부분 쿼드도 뒤 화면을 1:1 통과 → stretch 회색 덩어리 제거(E1). 나머지 바인딩은 f_main 동일.
-            enc.setRenderPipelineState(composePipeline)
+            enc.setRenderPipelineState(near ? composeNearestPipeline ?? composePipeline : composePipeline)
         } else if layer.blendAdditive,
                   !layer.isLit,
                   layer.colorBlendMode == 0,
                   !layer.isFrameBuffer,
                   let layerAdditivePipeline {
-            enc.setRenderPipelineState(layerAdditivePipeline)
+            enc.setRenderPipelineState(near ? layerAdditiveNearestPipeline ?? layerAdditivePipeline : layerAdditivePipeline)
         } else {
-            enc.setRenderPipelineState(pipeline)
+            enc.setRenderPipelineState(near ? pipelineNearest ?? pipeline : pipeline)
         }
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
@@ -929,6 +938,27 @@ extension SceneRenderer {
             var amb = lightAmbient
             enc.setFragmentBytes(&amb, length: MemoryLayout<SIMD4<Float>>.stride, index: 4)
             var material = layer.pbrMaterial
+            // material.constantshadervalue.scripted — PBR scalar per-frame evaluation.
+            for (key, engine) in layer.materialScripts {
+                engine.setRuntime(Double(time))
+                switch key {
+                case "roughness":
+                    if let v = engine.evaluateVec(current: [material.scalars.x])?.first {
+                        material.scalars.x = v
+                    }
+                case "metallic":
+                    if let v = engine.evaluateVec(current: [material.scalars.y])?.first {
+                        material.scalars.y = v
+                    }
+                case "speculartint":
+                    if let v = engine.evaluateVec(current: [material.specularTint.x,
+                                                             material.specularTint.y,
+                                                             material.specularTint.z]), v.count >= 3 {
+                        material.specularTint = SIMD4(v[0], v[1], v[2], 0)
+                    }
+                default: break
+                }
+            }
             enc.setFragmentBytes(&material, length: MemoryLayout<PBRMaterialUniforms>.stride, index: 5)
             // F800(S-9): kind/axis/cone — 후방 확장(기존 0-5 슬롯 규약 불변).
             lightAxisCone.withUnsafeBytes { enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 6) }
@@ -1048,8 +1078,11 @@ extension SceneRenderer {
     /// 파티클 시스템 1개의 스냅샷을 빌보드 쿼드로 드로우(additive/translucent).
     func encodeParticle(_ sys: GPUParticleSystem, snapshot: [Particle], into enc: MTLRenderCommandEncoder,
                                 device: MTLDevice, camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+        // 감사 V07: 알베도 NoInterpolation 은 nearest 변형 우선(미빌드 시 대응 선형 폴터 — 무회귀).
+        let linearPipe = sys.blendAdditive ? additivePipeline : translucentPipeline
+        let nearPipe = sys.noInterp ? (sys.blendAdditive ? additiveNearestPipeline : translucentNearestPipeline) : nil
         guard !snapshot.isEmpty,
-              let pipe = sys.blendAdditive ? additivePipeline : translucentPipeline else { return }
+              let pipe = nearPipe ?? linearPipe else { return }
         let verts = particleVertices(snapshot, sys)
         // 트레일은 파티클당 정점 수가 가변(붕괴 시 0) — 빈 버텍스면 드로우 스킵.
         let vertexCount = verts.count / 8
@@ -1220,8 +1253,16 @@ extension SceneRenderer {
             // 스프라이트: 현재 프레임 추출(무프레임 레이어는 원본 그대로 — 무회귀).
             let base: MTLTexture
             if let video = layer.video {
-                base = (video.isLive ? video.liveTexture(device: device)
-                                     : video.headlessTexture(at: time, device: device)) ?? layer.texture
+                if video.isLive {
+                    base = video.liveTexture(device: device) ?? layer.texture
+                } else if video.liveStartFailed {
+                    // 감사 V06: startLive 실패 레이어 — 정적 폴 백(t=0, 1회 디코드 고정). 종전엔 isLive=false
+                    // 만으로 아래 헤드리스 경로를 타 라이브 draw(메인 스레드)가 매 프레임 copyCGImage 동기
+                    // 디코드(+ 최초 duration 세마포어 블로킹)를 했다.
+                    base = video.staticFallbackTexture(device: device) ?? layer.texture
+                } else {
+                    base = video.headlessTexture(at: time, device: device) ?? layer.texture
+                }
             } else if layer.mediaArtwork != .none {
                 // F722: $mediaThumbnail/$mediaPreviousThumbnail — 라이브 아트워크가 base(효과 체인 입력 동일).
                 // 미수신(nil) 시 정적 placeholder 폴터(WE 의 썸네일-없음 상태와 동형 — 깜빡임 없음).
@@ -1283,7 +1324,8 @@ extension SceneRenderer {
                 let last = passes.removeLast()
                 passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
                                              binds: last.binds, target: nil, usesAudio: last.usesAudio,
-                                             texRes: last.texRes, texWrap: last.texWrap, scripts: last.scripts))
+                                             texRes: last.texRes, texWrap: last.texWrap, texFilter: last.texFilter,
+                                             scripts: last.scripts))
             }
             // 멀티패스: 이름 있는 FBO(다운스케일)를 풀에서 할당하고, 각 패스를 target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
@@ -1319,7 +1361,7 @@ extension SceneRenderer {
                     }
                 }
                 let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: src, fboTex: fboTex),
-                                        texWrap: pass.texWrap)
+                                        texWrap: pass.texWrap, texFilter: pass.texFilter)
                 eng.withUnsafeBytes {
                     enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
