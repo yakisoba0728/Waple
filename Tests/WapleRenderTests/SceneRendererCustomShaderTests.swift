@@ -65,4 +65,42 @@ final class SceneRendererCustomShaderTests: XCTestCase {
         XCTAssertEqual(r.layers.count, 1)
         XCTAssertNil(r.layers[0].customShader, "missing shader must fall back to QuadShaders")
     }
+
+    /// H4: REFRACT 레이어 — 노멀맵 로드 + refract 파이프라인 빌드 + 스냅샷 렌더.
+    func testRefractLayerBuildsPipeline() throws {
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["albedo","normal"],"combos":{"REFRACT":1},"constantshadervalues":{"ui_editor_properties_refract_amount":0.1}}]}"#
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/x.json", model.data(using: .utf8)!),
+            ("materials/m.json", material.data(using: .utf8)!),
+            ("materials/albedo.tex", solidTex(255, 0, 0)),
+            ("materials/normal.tex", solidTex(128, 128, 255)),
+        ]
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                    project: try project(files: files, id: "refract"))
+        defer { r.teardown() }
+        XCTAssertEqual(r.layers.count, 1)
+        XCTAssertTrue(r.layers[0].refract.enabled)
+        XCTAssertNotNil(r.layers[0].refract.normalTexture)
+        XCTAssertNotNil(r.refractLayerPipeline)
+    }
+
+    /// H4: REFRACT 콤보 없으면 파이프라인 미빌드.
+    func testNoRefractLayerNoPipeline() throws {
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["albedo"]}]}"#
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/x.json", model.data(using: .utf8)!),
+            ("materials/m.json", material.data(using: .utf8)!),
+            ("materials/albedo.tex", solidTex(255, 0, 0)),
+        ]
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                    project: try project(files: files, id: "norefract"))
+        defer { r.teardown() }
+        XCTAssertEqual(r.layers.count, 1)
+        XCTAssertFalse(r.layers[0].refract.enabled)
+        XCTAssertNil(r.refractLayerPipeline)
+    }
 }

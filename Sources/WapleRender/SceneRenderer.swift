@@ -33,8 +33,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let texFilter: [Float]                       // 8 × 1=nearest / 0=linear
         var scripts: [(slot: Int, engine: TextScriptEngine)]  // constant scripts
     }
-    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = [] /* animationlayers blend/visible/rate 바인딩 스크립트 — encodeLayer 가 per-frame 재평가해 캐스케이드에 반영. 훅 등록(buildAnimationEventTargets)도 이 인스턴스 재사용(중복 IIFE 방지) */; var materialScripts: [(key: String, engine: TextScriptEngine)] = [] /* material.constantshadervalue.scripted (roughness/metallic/speculartint) per-frame evaluation */; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; var mediaArtwork: MediaArtworkKind = .none /* F722: 시스템 미디어 아트워크 요청 레이어 — buildDisplayTextures 가 base 교체(미수신 시 정적 placeholder 유지, 무회귀) */; var noInterp: Bool = false /* 감사 V07: 베이스 텍스처 NoInterpolation(TexImage flags bit0) — 무효과 레이어는 encodeLayer 가 nearest 변형 파이프라인으로 드로우 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */; var customShader: CustomLayerShader? = nil /* H1: 커스텀 머티리얼 셰이더 — nil = QuadShaders 경로 */ }
+    struct GPULayer { let texture: MTLTexture; let vertexBuffer: MTLBuffer; let tint: SIMD4<Float>; let parallaxDepth: SIMD2<Float>; let effects: [EffectGPU]; let texWidth: Int; let texHeight: Int; let order: Int; let uid: Int /* doc.layers 인덱스 기반 고유 키(scriptVisible 용 — order 는 중복 가능) */; let blendAdditive: Bool /* material passes[0].blending == "additive" */; var isFrameBuffer: Bool = false; var def: SceneLayer? = nil /* 프로퍼티 애니메이션 있는 레이어만(per-frame 재평가용) */; var puppet: PuppetModel? = nil; var propScripts: [(key: String, engine: TextScriptEngine)] = []; var animLayerScripts: [(layerIndex: Int, key: String, engine: TextScriptEngine)] = [] /* animationlayers blend/visible/rate 바인딩 스크립트 — encodeLayer 가 per-frame 재평가해 캐스케이드에 반영. 훅 등록(buildAnimationEventTargets)도 이 인스턴스 재사용(중복 IIFE 방지) */; var materialScripts: [(key: String, engine: TextScriptEngine)] = [] /* material.constantshadervalue.scripted (roughness/metallic/speculartint) per-frame evaluation */; var initialVisible: Bool = true; var colorBlendMode: Int = 0 /* common_blending enum(0=normal) — !=0 이면 acc 스냅샷 블렌드 합성 */; var frames: [TexImage.TexFrame] = [] /* SPRITESHEET 콤보 레이어의 TEXS 프레임 — 비면 정지(무회귀). encodeLayer 가 씬 시간으로 프레임 UV 서브렉트 전진 */; var isLit: Bool = false /* 포워드 라이팅 대상(LIGHTING:1 + 씬 라이트). true 면 encodeLayer 가 litPipeline 사용 */; let pbrMaterial: PBRMaterialUniforms; var litRect: (SIMD4<Float>, SIMD4<Float>) = (.zero, .zero) /* [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,0) — uv→월드 재구성용. 애니 레이어는 encodeLayer 가 per-frame 재계산 */; var video: SceneVideoLayer? = nil /* 비디오-텍스처 레이어면 프레임 공급자(그 외 nil) — buildDisplayTextures 가 프레임별 비디오 텍스처를 이 레이어에 공급 */; var attach: PuppetAttach? = nil /* attachment(이름 본-슬롯 부착) — 부모 퍼펫 부착점 프레임을 per-frame 씬 델타로 합성 */; var mediaArtwork: MediaArtworkKind = .none /* F722: 시스템 미디어 아트워크 요청 레이어 — buildDisplayTextures 가 base 교체(미수신 시 정적 placeholder 유지, 무회귀) */; var noInterp: Bool = false /* 감사 V07: 베이스 텍스처 NoInterpolation(TexImage flags bit0) — 무효과 레이어는 encodeLayer 가 nearest 변형 파이프라인으로 드로우 */; let scratchQuad = DynamicVertexBuffer() /* 애니 쿼드 per-frame 정점 재사용(스프라이트 UV 도 공용) */; let scratchSkin = DynamicVertexBuffer() /* 퍼펫 스킨 per-frame 정점 재사용 */; var customShader: CustomLayerShader? = nil /* H1: 커스텀 머티리얼 셰이더 — nil = QuadShaders 경로 */; var refract: LayerRefract = LayerRefract() /* H4: REFRACT 굴절 */ }
     var hasAnimations = false
+    /// H4: REFRACT(스크린 굴절) 레이어 데이터 — 파티클 GPUParticleSystem.refract 와 동형.
+    struct LayerRefract {
+        var enabled: Bool = false
+        var normalTexture: MTLTexture? = nil
+        var amount: Float = 0.05
+        var normalRG88: Bool = false
+    }
     struct GPUParticleSystem {
         var sim: ParticleSimulator
         let def: ParticleSystemDef
@@ -847,6 +854,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var additivePipeline: MTLRenderPipelineState?
     var translucentPipeline: MTLRenderPipelineState?
     var refractParticlePipeline: MTLRenderPipelineState?   // REFRACT 스프라이트(pf_refract, translucent)
+    var refractLayerPipeline: MTLRenderPipelineState?     // H4: REFRACT 이미지 레이어(f_refract)
     /// 감사 V07: 알베도 NoInterpolation(GPUParticleSystem.noInterp) 전용 nearest 변형 — noInterp 시스템이
     /// 있을 때만 빌드, nil(미빌드/컴파일 실패)이면 encodeParticle 이 선형 폴터(무회귀·무크래시).
     var additiveNearestPipeline: MTLRenderPipelineState?
@@ -1196,6 +1204,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 }
             }
             textLayers = buildTexts(doc: doc, package: package, device: device)
+            // H4: REFRACT 이미지 레이어 파이프라인 빌드(레이어 중 하나라도 refract 활성 시).
+            if layers.contains(where: { $0.refract.enabled && $0.refract.normalTexture != nil }) {
+                refractLayerPipeline = refractLayerPipelineBuild(device: device)
+            }
         }
         // 씬 오브젝트 순서(z-순서)대로 레이어·파티클·텍스트를 인터리브 드로우.
         // 안정 정렬(order 동률 시 삽입 순서 유지) — 파티클 자식이 부모 뒤에 오도록 보장

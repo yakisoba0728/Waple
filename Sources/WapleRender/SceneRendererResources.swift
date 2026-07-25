@@ -387,6 +387,14 @@ extension SceneRenderer {
                 gpuLayer.customShader = buildCustomLayerShader(layer, texture: mtl, package: package,
                                                                device: device, pixelFormat: accPixelFormat)
             }
+            // H4: REFRACT — 노멀맵 로드 + refractAmount. 실패 시 refract 미설정 → identity 폴터(무크래시).
+            if layer.refract, let normalName = layer.normalTextureName,
+               let n = resolveRefractNormal(normalName, package: package, device: device) {
+                gpuLayer.refract.enabled = true
+                gpuLayer.refract.normalTexture = n.texture
+                gpuLayer.refract.normalRG88 = n.rg88
+                gpuLayer.refract.amount = layer.refractAmount
+            }
             out.append(gpuLayer)
         }
         return out
@@ -1174,6 +1182,23 @@ extension SceneRenderer {
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "pv_main")
         pd.fragmentFunction = lib.makeFunction(name: "pf_refract")
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// H4: REFRACT 이미지 레이어 파이프라인. vert=v_main 공유, frag=f_refract(노멀 오프셋 씬 재샘플·곱).
+    /// 블렌드는 premultiplied-over(레이어 기본) — refract 코퍼스는 전부 translucent/additive 아님.
+    func refractLayerPipelineBuild(device: MTLDevice) -> MTLRenderPipelineState? {
+        guard let lib = try? WapleProfiler.compile(QuadShaders.source, { try device.makeLibrary(source: QuadShaders.source, options: nil) }) else { return nil }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "v_main")
+        pd.fragmentFunction = lib.makeFunction(name: "f_refract")
         let a = pd.colorAttachments[0]!
         a.pixelFormat = accPixelFormat
         a.isBlendingEnabled = true

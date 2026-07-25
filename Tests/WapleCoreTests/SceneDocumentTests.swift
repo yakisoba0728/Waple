@@ -1241,4 +1241,36 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(layer.roughness, 0.5)
         XCTAssertEqual(layer.metallic, 0.2)
     }
+
+    /// H4: REFRACT 콤보 + 노멀맵 + refractAmount 파싱.
+    func testParsesMaterialRefractFields() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"image":"models/x.json","origin":"960 540","size":"1920 1080","scale":"1 1",
+                     "angles":"0 0 0","alpha":1.0,"color":"1 1 1","brightness":1.0,"visible":true}]}
+        """
+        let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["albedo","normal"],"combos":{"REFRACT":1},"constantshadervalues":{"ui_editor_properties_refract_amount":0.15}}]}"#
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        let layer = doc.layers[0]
+        XCTAssertTrue(layer.refract)
+        XCTAssertEqual(layer.normalTextureName, "normal")
+        XCTAssertEqual(layer.refractAmount, 0.15, accuracy: 1e-4)
+    }
+
+    /// H4: REFRACT=1 이지만 노멀맵(textures[1]) 없으면 refract=false.
+    func testMaterialRefractRequiresNormalMap() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"image":"models/x.json","origin":"960 540","size":"1920 1080","scale":"1 1",
+                     "angles":"0 0 0","alpha":1.0,"color":"1 1 1","brightness":1.0,"visible":true}]}
+        """
+        let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["albedo"],"combos":{"REFRACT":1}}]}"#
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertFalse(doc.layers[0].refract)
+        XCTAssertNil(doc.layers[0].normalTextureName)
+    }
 }

@@ -72,6 +72,32 @@ enum QuadShaders {
         float3 r = applyBlending(mode, d.rgb, c.rgb * tint.rgb, o);
         return float4(r, d.a);
     }
+    // H4: REFRACT(스크린 굴절 — WE genericimage2/4 의 refract 분기). 레이어 컬러에 씬 컬러 타깃(fb=뒤 배경
+    // 누적 스냅샷)을 노멀맵 오프셋으로 재샘플해 **곱한다**(유리/물방울/열왜곡). vert 는 v_main 공유
+    // (4-float 정점) — 화면 UV 는 in.pos(렌더타깃 픽셀)에서 얻어 f_compose 규약과 동일(y-flip 없음).
+    // refractParams = (g_RefractAmount, rg88Flag, 0, 0).
+    fragment float4 f_refract(VOut in [[stage_in]],
+                              texture2d<float> albedoTex [[texture(0)]],
+                              texture2d<float> normalTex [[texture(1)]],
+                              texture2d<float> fbTex [[texture(2)]],
+                              constant float4& tint [[buffer(0)]],
+                              constant float4& refractParams [[buffer(1)]]) {
+        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        float4 t = albedoTex.sample(s, in.uv);
+        float4 nraw = normalTex.sample(s, in.uv);
+        bool rg88 = refractParams.y > 0.5;
+        // WE common_fragment.h DecompressNormalWithMask 포트(ParticleShaders.pf_refract 와 동일 규약).
+        float nx = nraw.a * 2.0 - (rg88 ? 1.0 : 0.965);
+        float ny = nraw.g * 2.0 - 1.0;
+        float mask = rg88 ? 1.0 : nraw.r;
+        // y 부호: WE GLSL 의 -offset.y 는 Metal y-down UV(in.pos) 규약과 상쇄 → 무플립(A/B 육안이 최종 게이트).
+        float2 off = refractParams.x * float2(nx, ny) * (mask * tint.a);
+        float2 uv = in.pos.xy / float2(fbTex.get_width(), fbTex.get_height()) + off;
+        float3 bg = fbTex.sample(s, uv).rgb;
+        float3 rgb = t.rgb * tint.rgb * bg;   // WE: color.rgb = v_Color*albedo; color.rgb *= framebuffer.rgb
+        float A = t.a * tint.a;
+        return float4(rgb * A, A);            // premultiplied(블렌드 src=one)
+    }
     // WE genericimage4 유한광 감쇠의 GLSL/Metal 포트. 반경 경계는 0^0 스파이크를 막도록 hard zero.
     inline float finiteLightFalloff(float dist, float radius, float exponent) {
         // F543(F-75): radius<=0 가드(Mesh3DShaders:142 사본과 대칭) — 호출부(f_lit)가 선차단하지만 방어 일관성.
@@ -193,4 +219,11 @@ enum QuadShaders {
         return float4(lit * a, a);
     }
     """
+    /// 감사 V07: 베이스 레이어 NoInterpolation(TexImage flags bit0) 전용 nearest 변형 — 4개 frag
+    /// (f_main/f_blend/f_compose/f_lit)의 유일한 선형 샘플러 선언만 filter::nearest 로 치환.
+    /// 어드레스 모드(clamp_to_edge)는 보존(WE NoInterpolation 은 필터만 point). v_main/f_spriteframe 은
+    /// 샘플러가 없거나 이미 nearest 라 무영향. 원본 source 는 불변 — 기존 선형 파이프라인 비트동일(무회귀).
+    static let nearestSource = source.replacingOccurrences(
+        of: "constexpr sampler s(filter::linear, address::clamp_to_edge);",
+        with: "constexpr sampler s(filter::nearest, address::clamp_to_edge);")
 }

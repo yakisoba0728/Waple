@@ -130,6 +130,10 @@ public struct SceneLayer: Equatable {
     public var materialTextureNames: [String?] = []
     /// H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑.
     public var materialUserShaderValues: [String: String] = [:]
+    /// H4: REFRACT 콤보 + 노멀맵 + refractAmount. 노멀맵 없으면 refract=false.
+    public var refract: Bool = false
+    public var normalTextureName: String? = nil
+    public var refractAmount: Float = 0.05
     /// F692: 오브젝트 `perspective:true` — WE 는 이 레이어를 general.perspectiveoverridefov 의
     /// 원근 침침으로 그린다(정사영 평면화 대신). 파스·보존 전용: 원근 투영 소비는 렌더 경로 책임.
     /// 실측(전수): perspective:true 19씬 전부 x/y angles 0(z-회전만)이라 원근/정사영 출력이
@@ -978,6 +982,10 @@ extension SceneDocument {
         var materialTextureNames: [String?] = []
         // H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑.
         var materialUserShaderValues: [String: String] = [:]
+        // H4: REFRACT 콤보 + 노멀맵 + refractAmount.
+        var refract = false
+        var normalTextureName: String? = nil
+        var refractAmount: Float = 0.05
         if let md = package.data(for: imagePath) ?? assets?(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
@@ -1060,6 +1068,18 @@ extension SceneDocument {
                 if let texs = p0["textures"] as? [Any] {
                     materialTextureNames = texs.map { $0 as? String }
                 }
+                // H4: REFRACT 콤보 + 노멀맵(textures[1]) + refractAmount 파싱. 노멀맵 없으면 refract=false.
+                let refractCombo = ((p0["combos"] as? [String: Any])?["REFRACT"] as? NSNumber)?.intValue == 1
+                let normalName = materialTextureNames.count > 1 ? materialTextureNames[1] : nil
+                var refractAmt = float((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
+                // usershadervalues 오버라이드(H2 와 동일 규약).
+                if let key = materialUserShaderValues["ui_editor_properties_refract_amount"],
+                   let raw = userProps[key], let f = float(raw) {
+                    refractAmt = f
+                }
+                refract = refractCombo && normalName != nil
+                normalTextureName = normalName
+                refractAmount = refractAmt
             }
         }
         var layer = SceneLayer(
@@ -1103,6 +1123,10 @@ extension SceneDocument {
         layer.materialTextureNames = materialTextureNames
         // H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑.
         layer.materialUserShaderValues = materialUserShaderValues
+        // H4: REFRACT 콤보 + 노멀맵 + refractAmount.
+        layer.refract = refract
+        layer.normalTextureName = normalTextureName
+        layer.refractAmount = refractAmount
         layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])

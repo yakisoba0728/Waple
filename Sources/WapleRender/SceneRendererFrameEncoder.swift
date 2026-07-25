@@ -310,6 +310,59 @@ extension SceneRenderer {
         return next
     }
 
+    /// H4: REFRACT 이미지 레이어 드로우(인코더 분할): 현재 enc 를 닫고 acc(씬 컬러)를 스냅샷(blit — 진행 중
+    /// 타깃은 샘플 불가, runFrameBufferLayer/runBlendModeLayer 와 동일 패턴)한 뒤, .load 로 재개한 인코더에
+    /// f_refract 로 레이어를 그린다(노멀 오프셋으로 스냅샷 재샘플·곱). 스냅샷/파이프라인 확보 실패 시
+    /// identity 레이어 폴터(무크래시). 재개 실패만 nil(호출자는 추가 인코딩 없이 commit).
+    func runRefractLayer(_ layer: GPULayer, texture: MTLTexture, acc: MTLTexture, cb: MTLCommandBuffer,
+                         ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
+                         camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        enc.endEncoding()
+        var snapshot: MTLTexture? = nil
+        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+           let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(from: acc, to: snap)
+            blit.endEncoding()
+            snapshot = snap
+        }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = acc
+        rpd.colorAttachments[0].loadAction = .load
+        guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        if let snap = snapshot, let pipe = refractLayerPipeline {
+            encodeRefractLayer(layer, texture: texture, framebuffer: snap, pipe: pipe, into: next,
+                               device: device, camOffset: &camOffset, aspectScale: &aspectScale)
+        } else {
+            encodeLayer(layer, texture: texture, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
+                        time: time, device: device)  // identity 폴터
+        }
+        return next
+    }
+
+    /// REFRACT 레이어 1개 드로우. encodeLayer 와 동형이나 노멀맵(1)·씬 스냅샷(2)·refract 유니폼을 바인딩하고
+    /// f_refract 파이프라인 사용. 정점은 layer.vertexBuffer(quadVertices 4-float) — 노멀은 알베도와 같은 uv 로 샘플.
+    func encodeRefractLayer(_ layer: GPULayer, texture: MTLTexture, framebuffer: MTLTexture,
+                            pipe: MTLRenderPipelineState, into enc: MTLRenderCommandEncoder,
+                            device: MTLDevice, camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) {
+        guard let normal = layer.refract.normalTexture else { return }
+        enc.setRenderPipelineState(pipe)
+        enc.setVertexBuffer(layer.vertexBuffer, offset: 0, index: 0)
+        enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        var depth = layer.parallaxDepth
+        enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+        var shake = frameShakeOffset
+        enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
+        enc.setFragmentTexture(texture, index: 0)         // 알베도(g_Texture0)
+        enc.setFragmentTexture(normal, index: 1)          // 노멀맵(g_Texture1)
+        enc.setFragmentTexture(framebuffer, index: 2)     // 씬 컬러 스냅샷
+        var tint = layer.tint
+        var params = SIMD4<Float>(layer.refract.amount, layer.refract.normalRG88 ? 1 : 0, 0, 0)
+        enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+        enc.setFragmentBytes(&params, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+
     /// 씬 픽셀 좌표(좌상단 원점, y-down) → NDC(-1..1, y-up). px→NDC 변환의 단일 정의 —
     /// 파티클/리본/쿼드/퍼펫/텍스트 경로가 공유(동일식 5중 중복 제거, 2026-07-04).
     @inline(__always)
@@ -548,6 +601,14 @@ extension SceneRenderer {
                 guard let next = runBlendModeLayer(layers[item.idx], texture: displayTextures[item.idx],
                                                    acc: acc, cb: cb, ending: enc, device: device, time: time,
                                                    camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                enc = next
+            case .layer where layers[item.idx].refract.enabled
+                              && layers[item.idx].refract.normalTexture != nil
+                              && refractLayerPipeline != nil:
+                // H4: REFRACT 이미지 레이어: 여기까지의 acc(씬 컬러)를 스냅샷 떠 노멀 오프셋 재샘플(인코더 분할).
+                guard let next = runRefractLayer(layers[item.idx], texture: displayTextures[item.idx],
+                                                 acc: acc, cb: cb, ending: enc, device: device, time: time,
+                                                 camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
                 enc = next
             case .layer:
                 encodeLayer(layers[item.idx], texture: displayTextures[item.idx], into: enc,
