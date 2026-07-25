@@ -55,6 +55,7 @@ public enum GLSLTranslator {
     // 무효화 불필요(내용 기반), teardown 에서 비우지 않음(재마운트·크로스씬 수혜가 목적).
     private struct MemoKey: Hashable {
         let vRaw: String; let fRaw: String; let vInlined: String; let fInlined: String; let combos: String
+        let premultiply: Bool
     }
     private static var memoCache: [MemoKey: TranslatedShader?] = [:]
     private static let memoLock = NSLock()   // DeepScan.concurrentPerform 가 translate 를 동시 호출 → 필수.
@@ -69,27 +70,32 @@ public enum GLSLTranslator {
     }
 
     public static func translate(vertex: String, fragment: String, combos: [String: Int],
-                                 include: (String) -> String? = { _ in nil }) -> TranslatedShader? {
+                                 include: (String) -> String? = { _ in nil },
+                                 premultiplyOutput: Bool = false) -> TranslatedShader? {
         guard WapleProfiler.enabled else {
-            return _memoizedTranslate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+            return _memoizedTranslate(vertex: vertex, fragment: fragment, combos: combos, include: include,
+                                      premultiplyOutput: premultiplyOutput)
         }
         let t0 = CFAbsoluteTimeGetCurrent()
         defer { WapleProfiler.recordTranslate(seconds: CFAbsoluteTimeGetCurrent() - t0) }
-        return _memoizedTranslate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+        return _memoizedTranslate(vertex: vertex, fragment: fragment, combos: combos, include: include,
+                                  premultiplyOutput: premultiplyOutput)
     }
 
     /// 메모이즈 진입: 키(인라인 소스+combos) 조회 → 히트 반환, 미스 시 실번역 후 저장. 실패(nil)도 캐시
     /// (결정적 — 동일 입력 재실패 반복 회피). 실번역은 락 밖(동시 미스 = 동일 순수출력 재계산일 뿐 무해).
     private static func _memoizedTranslate(vertex: String, fragment: String, combos: [String: Int],
-                                           include: (String) -> String?) -> TranslatedShader? {
+                                           include: (String) -> String?, premultiplyOutput: Bool) -> TranslatedShader? {
         let key = MemoKey(vRaw: vertex, fRaw: fragment,
                           vInlined: ShaderPreprocessor.inlinedSource(vertex, include: include),
                           fInlined: ShaderPreprocessor.inlinedSource(fragment, include: include),
-                          combos: combos.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ","))
+                          combos: combos.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ","),
+                          premultiply: premultiplyOutput)
         memoLock.lock()
         if let cached = memoCache[key] { memoLock.unlock(); return cached }
         memoLock.unlock()
-        let result = _translate(vertex: vertex, fragment: fragment, combos: combos, include: include)
+        let result = _translate(vertex: vertex, fragment: fragment, combos: combos, include: include,
+                                premultiplyOutput: premultiplyOutput)
         memoLock.lock()
         memoCache[key] = result
         memoComputeCount += 1
@@ -98,7 +104,7 @@ public enum GLSLTranslator {
     }
 
     private static func _translate(vertex: String, fragment: String, combos: [String: Int],
-                                   include: (String) -> String?) -> TranslatedShader? {
+                                   include: (String) -> String?, premultiplyOutput: Bool) -> TranslatedShader? {
         // [COMBO] 기본값은 스테이지 합집합 — vert 에만 선언된 콤보(실물 auto_sway 의 AA_VERSION)를
         // frag 도 봐야 한다(WE 는 효과 단위로 콤보를 병합).
         var combos = combos
@@ -412,7 +418,8 @@ public enum GLSLTranslator {
                            vertAudioNames: audioBufferNames.filter { vertIds.contains($0.name) },
                            fragAudioNames: audioBufferNames.filter { fragIds.contains($0.name) },
                            consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
-                           vertBody: vertBody, fragBody: fragBody, structs: structBlock)
+                           vertBody: vertBody, fragBody: fragBody, structs: structBlock,
+                           premultiplyOutput: premultiplyOutput)
         return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio)
     }
 
@@ -428,8 +435,8 @@ public enum GLSLTranslator {
 
     /// GLSL 타입 → MSL 타입(시그니처용). 미지원 타입 nil → 해당 헬퍼 스킵(사용 시 컴파일 실패 → 폴백 안전망).
     /// `structs`: 소스 정의 struct 이름(그대로 MSL 타입). 실물 dot_matrix 의 `struct Grid`.
-    /// uint 는 MSL 네이티브 — 없으면 uint 반환 헬퍼는 parseFunctions 의 반환타입 인식(:543)이,
-    /// uint 파라미터 헬퍼는 helperSignature nil(→ :339 스킵)이 실패해 호출부만 남는다.
+    /// uint 는 MSL 네이티브 — 없으면 uint 반환 헬퍼는 parseFunctions 의 반환타입 인식(:555)이,
+    /// uint 파라미터 헬퍼는 helperSignature nil(→ :349 스킵)이 실패해 호출부만 남는다.
     static func mslType(_ glsl: String, structs: Set<String> = []) -> String? {
         switch glsl {
         case "void", "float", "int", "uint", "bool": return glsl
@@ -1086,14 +1093,19 @@ public enum GLSLTranslator {
     }
 
     /// F162/F163: texSample2D 텍스처 식(예: "g_Texture1")의 슬롯을 eng.texWrap 인덱스로 매핑해
-    /// smp(clamp)/smpRepeat 런타임 삼항 분기 식을 만든다. eng.texWrap[N] 은 buildPassBindings 가 빌드 시
+    /// smp(clamp)/smpRepeat 런타임 삼항 분기 식을 만든다(감사 V07: 바깥에 eng.texFilter 삼항을 한 겹 더 씌운 2×2).
+    /// eng.texWrap[N]·texFilter[N] 는 buildPassBindings 가 빌드 시
     /// 1 회 계산(bind 출처=clamp 고정, aux 출처=TexImage.clampUVs, WE 기본=repeat) — 번역 캐시는 GLSL
     /// 소스 기반(프로세스 전역, 재마운트·크로스씬 공유)이라 실제 바인딩 자산을 텍스트에 구울 수 없어
     /// 반드시 런타임 분기. 슬롯 미상(헬퍼 로컬 별칭 등 — capture 매커니즘은 원명 유지라 실전 거의 없음)이거나
     /// texRes 와 동일한 8 슬롯 상한 밖이면 폴백 smp(기존 clamp 동작, 무회귀).
     private static func perTextureSamplerExpr(_ texExpr: String) -> String {
         guard let n = textureIndex(texExpr), (0..<8).contains(n) else { return "smp" }
-        return "(eng.texWrap[\(n / 4)][\(n % 4)] > 0.5 ? smp : smpRepeat)"
+        // 감사 V07: 바깥=eng.texFilter(1=nearest/0=linear — TexImage.noInterpolation, WE tex Flags bit0),
+        // 안쪽=eng.texWrap — 2×2 런타임 분기(필터만 point, 어드레스 모드는 wrap 차원이 그대로 결정 — WE 의미론).
+        let wrap = "eng.texWrap[\(n / 4)][\(n % 4)] > 0.5"
+        let filter = "eng.texFilter[\(n / 4)][\(n % 4)] > 0.5"
+        return "(\(filter) ? (\(wrap) ? smpNearest : smpRepeatNearest) : (\(wrap) ? smp : smpRepeat))"
     }
     /// 샘플러 주석의 콤보 어노테이션: `uniform sampler2D g_TextureN; // {..."combo":"NAME"...}` → [N: NAME].
     /// WE 규약: 해당 슬롯에 텍스처가 바인딩되면 콤보 자동 활성(페인트 마스크 등).
@@ -1134,6 +1146,9 @@ public enum GLSLTranslator {
             || (name.hasPrefix("g_Texture") && name.hasSuffix("Texel"))  // g_TextureNTexel — g_TexelSize 동족(텍스처별 텍셀)
             // F614: g_Screen = (렌더타깃 w, h, w/h) — 미분류 시 머티리얼 팬텀 슬롯(padDefault 0) 강등.
             || name == "g_Screen"
+            // F744: 2D genericimage4/fluidsim 이 bare g_LightAmbientColor 선언 시 padDefault=0 폭백.
+            // 엔진 상수로 승격해 흰색(1,1,1,1)을 주입; 실제 scene ambientColor 연동은 후속 범위.
+            || name == "g_LightAmbientColor"
             || (name.hasPrefix("g_") && name.contains("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder);
                                                                    // ...MatrixInverse/...MatrixInverseTranspose 변형 포함(실물 depthparallax)
     }
@@ -1162,6 +1177,8 @@ public enum GLSLTranslator {
         // ponytail: 스케일드 fbo 에서 타깃≠tex0 인 패스는 tex0 텍셀로 근사 — 타깃 dims 가 EngineU 에 실리면 교체.
         if name == "g_TexelSize" { return "(1.0 / eng.texRes[0].xy)" }
         if name == "g_TexelSizeHalf" { return "(0.5 / eng.texRes[0].xy)" }
+        // F744: g_LightAmbientColor 는 엔진 상수로 승격. 실제 scene ambientColor 연동 전 흰색 중립값.
+        if name == "g_LightAmbientColor" { return "float4(1.0, 1.0, 1.0, 1.0)" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
         if name == "g_AudioSpectrum16Right" { return "audioR" }
         if name == "g_AudioSpectrum32Left" { return "audioL32" }
@@ -1199,7 +1216,10 @@ public enum GLSLTranslator {
              // F613: g_Color 의 vec4 변형 — 미등재 시 padDefault (0,0,0,0) 으로 color*=0 즉시 검정.
              "g_Color4",
              // 실물 blend.vert TRANSFORMUV 콤보: UV 를 이 값으로 나눔 — 0 이면 ÷0 NaN, 중립은 항등 배율 1.
-             "g_TextureReductionScale":
+             "g_TextureReductionScale",
+             // F744: 2D genericimage4/fluidsim 이 bare g_LightAmbientColor 을 선언하면 padDefault=0 으로
+             // 레이어가 검게 나옴. WE 는 ambient 를 흰색(1,1,1)으로 폭백하는 케이스가 많다.
+             "g_LightAmbientColor":
             return Array(repeating: 1, count: max(1, t.components))
         default: return padDefault(t)
         }
@@ -1278,7 +1298,7 @@ public enum GLSLTranslator {
 
     /// perTextureSampler: 최상위(main) 본문 전용(호출부 한정, 헬퍼 본문은 항상 false — 캡처 매커니즘의
     /// 단일 제네릭 `sampler smp` 파라미터 threading 은 절대 불변). true 면 texSample2D 의 텍스처별
-    /// eng.texWrap 런타임 분기(perTextureSamplerExpr)로 clamp/repeat 선택, false 면 기존 "smp"(clamp) 그대로.
+    /// eng.texWrap/texFilter 런타임 분기(perTextureSamplerExpr)로 clamp/repeat·linear/nearest 선택, false 면 기존 "smp"(clamp) 그대로.
     static func translateBody(_ body: String, symbols: [String: String], isFragment: Bool,
                               perTextureSampler: Bool = false) -> String? {
         var s = body
@@ -1538,7 +1558,8 @@ public enum GLSLTranslator {
                                  fragAudioNames: [(name: String, buffer: Int)] = [],
                                  consts: [String] = [],
                                  helperProtos: [String] = [], helperDefs: [String] = [],
-                                 vertBody: String, fragBody: String, structs: String = "") -> String {
+                                 vertBody: String, fragBody: String, structs: String = "",
+                                 premultiplyOutput: Bool = false) -> String {
         var vary = "struct Vary {\n  float4 gl_Position [[position]];\n"
         for v in varyings { vary += "  \(v.type.msl) \(v.name);\n" }
         vary += "};\n"
@@ -1546,8 +1567,11 @@ public enum GLSLTranslator {
         // timeAndPad = (time, pointerUV.x, pointerUV.y, frametime dt) / pointerLastAndPad = (직전 프레임 포인터 UV.xy, g_PointerState.z 클릭힘, 0).
         // texWrap[2](8 슬롯, texRes 와 동일 상한): 슬롯별 1=clamp/0=repeat(F162/F163) — buildPassBindings 가
         // bind 출처(fbo/previous)=clamp, aux 출처=TexImage.clampUVs 로 빌드 시 1 회 계산(WE 기본=repeat).
+        // texFilter[2](감사 V07, 동일 상한): 슬롯별 1=nearest/0=linear — TexImage.noInterpolation(WE tex Flags
+        // bit0). bind 출처=선형(단, 체인 첫 이펙트의 previous=베이스 직결은 baseNoInterp), aux 출처=자산 플래그.
         // Swift 측 단일 빌더 SceneRendererFrameEncoder.engineUniform 과 레이아웃 동기 필수.
-        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; };\n"
+        // H1: layerTint = 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값으로 물변경.
+        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
         let uvHelpers = """
         inline float2 we_uv(float2 v) { return v; }
@@ -1589,6 +1613,17 @@ public enum GLSLTranslator {
         let audioFrag = audioDecl(fragAudioNames, sep: ",\n                        ")
         let pFrag = materialCount > 0 ? ",\n                        constant float4* p [[buffer(0)]]" : ""
 
+        var fragBody = fragBody
+        if premultiplyOutput {
+            fragBody = fragBody.replacingOccurrences(
+                of: "return gl_FragColor;",
+                with: """
+                gl_FragColor.rgb *= eng.layerTint.rgb;
+                gl_FragColor.a *= eng.layerTint.a;
+                return float4(gl_FragColor.rgb * gl_FragColor.a, gl_FragColor.a);
+                """)
+        }
+
         let vertSig = """
         vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(audioParams)) {
             Vary out = {};
@@ -1602,6 +1637,9 @@ public enum GLSLTranslator {
             // F162/F163: 최상위 본문 텍스처 샘플 호출은 슬롯별 eng.texWrap 로 smp(clamp)/smpRepeat 런타임 분기
             // (perTextureSamplerExpr) — 헬퍼 내부·전달용 smp 는 위 clamp 그대로(캡처 매커니즘 무변경).
             constexpr sampler smpRepeat(filter::linear, address::repeat);
+            // 감사 V07: NoInterpolation(eng.texFilter) 용 nearest 쌍 — 필터만 point, 어드레스 모드 보존.
+            constexpr sampler smpNearest(filter::nearest, address::clamp_to_edge);
+            constexpr sampler smpRepeatNearest(filter::nearest, address::repeat);
         \(indent(fragBody))
         }
         """

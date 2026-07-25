@@ -53,7 +53,7 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("float4 gl_FragColor = float4(0.0);"), "gl_FragColor 로컬 변수(straight, no premult)")
         XCTAssertTrue(t.msl.contains("return gl_FragColor;"), "말미 return")
         // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat)으로 번역.
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat)"), "texSample2D → .sample")
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texFilter[0][0] > 0.5 ? (eng.texWrap[0][0] > 0.5 ? smpNearest : smpRepeatNearest) : (eng.texWrap[0][0] > 0.5 ? smp : smpRepeat))"), "texSample2D → .sample")
         XCTAssertTrue(t.msl.contains("eng.mvp"), "MVP engine uniform")
         XCTAssertTrue(t.msl.contains("float mask = 1.0;"), "MASK=0 branch")
         XCTAssertFalse(t.msl.contains("texSample2D"))
@@ -64,7 +64,7 @@ final class GLSLTranslatorTests: XCTestCase {
     func testMaskComboOnSelectsBranch() throws {
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: ["MASK": 1]))
         // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat).
-        XCTAssertTrue(t.msl.contains("g_Texture1.sample((eng.texWrap[0][1] > 0.5 ? smp : smpRepeat)"), "MASK=1 uses g_Texture1: \(t.msl)")
+        XCTAssertTrue(t.msl.contains("g_Texture1.sample((eng.texFilter[0][1] > 0.5 ? (eng.texWrap[0][1] > 0.5 ? smpNearest : smpRepeatNearest) : (eng.texWrap[0][1] > 0.5 ? smp : smpRepeat))"), "MASK=1 uses g_Texture1: \(t.msl)")
         XCTAssertFalse(t.msl.contains("float mask = 1.0;"))
     }
 
@@ -192,7 +192,7 @@ final class GLSLTranslatorTests: XCTestCase {
     }
 
     // uint 시그니처 헬퍼는 MSL 네이티브 uint 로 그대로 방출되어야 한다. uint 파라미터 헬퍼는
-    // helperSignature nil 로 스킵(:339 continue)되고, uint 반환 헬퍼는 parseFunctions 의 반환타입
+    // helperSignature nil 로 스킵(:349 continue)되고, uint 반환 헬퍼는 parseFunctions 의 반환타입
     // 인식(mslType) 자체가 실패해 누락된다 — 둘 다 호출부만 남아 MSL 컴파일 실패 → 효과 전체 폴터.
     func testUintSignatureHelpersEmitted() throws {
         let frag = """
@@ -426,6 +426,22 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
     }
 
+    func testLightAmbientColorIsEngineUniformWithWhiteDefault() throws {
+        // F744: bare `uniform vec4 g_LightAmbientColor;` — 머티리얼로 오인되면 기본값 (0,0,0,0)으로
+        // 레이어가 검게 나옴. 엔진 유니폼: 흰색(1,1,1,1) 중립값.
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform vec4 g_LightAmbientColor;
+        void main() {
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * g_LightAmbientColor;
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("float4(1.0, 1.0, 1.0, 1.0)"), "g_LightAmbientColor → 흰색 중립값:\n\(t.msl)")
+        XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
+    }
+
     func testFrametimeAndPointerLastAreEngineUniforms() throws {
         // 실물 fluidsim/cursorripple: bare g_Frametime(dt 시간적분) + g_PointerPositionLast(이전 프레임 포인터).
         // 머티리얼-0 고정이면 시간적분 동결/유령 링플. ★두 유니폼은 짝 — dt 없이 last 만 주면 발산.
@@ -616,7 +632,7 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("dfdx(in.v_TexCoord.x)"), t.msl)
         XCTAssertTrue(t.msl.contains("dfdy(in.v_TexCoord.y)"), t.msl)
         // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat).
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat), we_uv(in.v_TexCoord), level(0.0))"), t.msl)
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texFilter[0][0] > 0.5 ? (eng.texWrap[0][0] > 0.5 ? smpNearest : smpRepeatNearest) : (eng.texWrap[0][0] > 0.5 ? smp : smpRepeat)), we_uv(in.v_TexCoord), level(0.0))"), t.msl)
     }
 
     func testWhitespaceBeforeFunctionCallsRewritten() throws {
@@ -630,8 +646,8 @@ final class GLSLTranslatorTests: XCTestCase {
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
         // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat).
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat), we_uv(in.v_TexCoord))"), t.msl)
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat), we_uv(in.v_TexCoord), level(0.0))"), t.msl)
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texFilter[0][0] > 0.5 ? (eng.texWrap[0][0] > 0.5 ? smpNearest : smpRepeatNearest) : (eng.texWrap[0][0] > 0.5 ? smp : smpRepeat)), we_uv(in.v_TexCoord))"), t.msl)
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texFilter[0][0] > 0.5 ? (eng.texWrap[0][0] > 0.5 ? smpNearest : smpRepeatNearest) : (eng.texWrap[0][0] > 0.5 ? smp : smpRepeat)), we_uv(in.v_TexCoord), level(0.0))"), t.msl)
         XCTAssertFalse(t.msl.contains("texSample2D"), t.msl)
     }
 
@@ -775,7 +791,7 @@ final class GLSLTranslatorTests: XCTestCase {
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
         // F162/F163: 최상위 본문 texSample2D 는 슬롯별 eng.texWrap 런타임 삼항(clamp smp/repeat smpRepeat).
-        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texWrap[0][0] > 0.5 ? smp : smpRepeat), we_uv(in.v_TexCoord))"), t.msl)
+        XCTAssertTrue(t.msl.contains("g_Texture0.sample((eng.texFilter[0][0] > 0.5 ? (eng.texWrap[0][0] > 0.5 ? smpNearest : smpRepeatNearest) : (eng.texWrap[0][0] > 0.5 ? smp : smpRepeat)), we_uv(in.v_TexCoord))"), t.msl)
         XCTAssertTrue(t.msl.contains("inline float2 we_uv(float4 v) { return v.xy; }"), t.msl)
     }
 
@@ -1275,5 +1291,21 @@ final class GLSLTranslatorTests: XCTestCase {
                           "mul(vec, M) 은 (vec * M) 순서여야 — 전치 오역(M * vec)이면 갓레이 가로띠:\n\(tail)")
         // MVP(항등) 경로는 순서와 무관하게 항상 정상(가드).
         XCTAssertTrue(t.msl.contains("eng.mvp"))
+    }
+
+    func testPremultiplyOutputWrapsFragment() throws {
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: [:], premultiplyOutput: true))
+        XCTAssertTrue(t.msl.contains("float4 layerTint;"), "EngineU must include layerTint")
+        XCTAssertTrue(t.msl.contains("gl_FragColor.rgb *= eng.layerTint.rgb;"))
+        XCTAssertTrue(t.msl.contains("gl_FragColor.a *= eng.layerTint.a;"))
+        XCTAssertTrue(t.msl.contains("return float4(gl_FragColor.rgb * gl_FragColor.a, gl_FragColor.a);"))
+        XCTAssertFalse(t.msl.contains("return gl_FragColor;"))
+    }
+
+    func testDefaultNoPremultiplyKeepsStraightAlpha() throws {
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: opacityVert, fragment: opacityFrag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("return gl_FragColor;"))
+        XCTAssertFalse(t.msl.contains("gl_FragColor.rgb *= eng.layerTint.rgb;"))
+        XCTAssertTrue(t.msl.contains("float4 layerTint;"), "EngineU always includes layerTint")
     }
 }
