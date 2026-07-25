@@ -114,6 +114,20 @@ public struct SceneLayer: Equatable {
     public var roughness: Float = 0.7
     public var metallic: Float = 0
     public var specularTint: Vec3 = Vec3(x: 1, y: 1, z: 1)
+    /// material.constantshadervalue.scripted — PBR scalar per-frame evaluation (roughness/metallic/speculartint).
+    public var materialScripts: [String: String] = [:]
+    public var materialScriptProps: [String: String] = [:]
+    /// H1: 커스텀 머티리얼 셰이더(material passes[0].shader). nil = 고정 QuadShaders 경로.
+    public var materialShader: String? = nil
+    /// H1: 커스텀 머티리얼 콤보(material passes[0].combos).
+    public var materialCombos: [String: Int] = [:]
+    /// H1: 커스텀 머티리얼 상수(material passes[0].constantshadervalues).
+    public var materialConstants: [String: [Float]] = [:]
+    /// H1: 커스텀 머티리얼 상수 스크립트.
+    public var materialConstantScripts: [String: String] = [:]
+    public var materialConstantScriptProps: [String: String] = [:]
+    /// H1: 커스텀 머티리얼 텍스처 슬롯(material passes[0].textures).
+    public var materialTextureNames: [String?] = []
     /// F692: 오브젝트 `perspective:true` — WE 는 이 레이어를 general.perspectiveoverridefov 의
     /// 원근 침침으로 그린다(정사영 평면화 대신). 파스·보존 전용: 원근 투영 소비는 렌더 경로 책임.
     /// 실측(전수): perspective:true 19씬 전부 x/y angles 0(z-회전만)이라 원근/정사영 출력이
@@ -123,6 +137,21 @@ public struct SceneLayer: Equatable {
     /// 오브젝트). 파스·보존 전용: depLater(타깃이 후순위 — 실물 3113287126 idx2→idx4 등)의
     /// 순서 보장은 렌더러 그리기 순서 책임(보고 경계).
     public var dependencies: [Int] = []
+    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존(소비는 렌더러 책임).
+    public var disablePropagation: Bool = false
+    public var copyBackground: Bool = false
+    public var clampUVs: Bool = false
+    public var noInterpolation: Bool = false
+    public var spacing: Float? = nil
+    public var lockTransforms: Bool = false
+    public var isSolid: Bool = false
+    public var ledSource: Bool = false
+    /// `config:{passthrough:true}` 등 compose 레이어 설정(이미지 오브젝트용).
+    public var configPassthrough: Bool = false
+    public var configAutosize: Bool = false
+    public var configIsSolidLayer: Bool = false
+    public var configIsProjectLayer: Bool = false
+    public var configIsInstanced: Bool = false
     /// F751(S-20): 모델 json 루트 `cropoffset` — 에디터 크롭 베이크(베이크된 텍스처=크롭 영역,
     /// autosize 동반) 시 **크롭 영역 중심 − 원본 이미지 중심**(px, 레이어 로컬). 실측 확정 근거:
     /// 전수 1386 컴포넌트(693파일/49wp — 퍼펫 모델 49파일 포함)가 전부 0.5 배수(정수 픽셀 rect 의
@@ -151,7 +180,7 @@ public struct SceneParticle: Equatable {
     public var angles3D: Vec3 = Vec3(x: 0, y: 0, z: 0)
     public var parent: Int? = nil
     public var visible: Bool = true
-    /// 마우스 시차(parallax) 가중치 — SceneLayer.parallaxDepth(59행)와 동형(F200). 기본 1(균일 시차,
+    /// 마우스 시차(parallax) 가중치 — SceneLayer.parallaxDepth(69행)와 동형(F200). 기본 1(균일 시차,
     /// 파서가 값을 못 읽어도 기존 동작과 동일 — 무회귀). 코퍼스 실측: particle 오브젝트 53개 중 42개(79%) 보유.
     public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)
     /// visible 프로퍼티 스크립트(JS 소스) — 레이어/노드(SceneLayer.propertyScripts["visible"],
@@ -160,6 +189,13 @@ public struct SceneParticle: Equatable {
     public var visibleScript: String? = nil
     /// visible 스크립트의 저장 scriptproperties(사용자 오버라이드) — JSON 문자열.
     public var visibleScriptProps: String? = nil
+    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존.
+    public var disablePropagation: Bool = false
+    public var copyBackground: Bool = false
+    public var clampUVs: Bool = false
+    public var noInterpolation: Bool = false
+    public var lockTransforms: Bool = false
+    public var isSolid: Bool = false
 }
 
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
@@ -204,6 +240,14 @@ public struct SceneTextLayer: Equatable {
     /// 파스·보존 전용 — 텍스처화된 텍스트에 이펙트를 적용하는 렌더 소비(encodeText 경로)는
     /// 별도 그룹 경계(미적용 시 이펙트가 조용히 소실되는 종전과 동일 동작, 값만 보존).
     public var effects: [SceneEffect] = []
+    /// 오브젝트-레벨 전파/렌더 플래그 파스·보존.
+    public var disablePropagation: Bool = false
+    public var copyBackground: Bool = false
+    public var clampUVs: Bool = false
+    public var noInterpolation: Bool = false
+    public var spacing: Float? = nil
+    public var lockTransforms: Bool = false
+    public var isSolid: Bool = false
 }
 
 /// 3D 씬 카메라(2D 의 orthogonalprojection 대체). look-at 파라미터 + 원근 fov.
@@ -240,6 +284,13 @@ public struct SceneCameraObject: Equatable {
     /// origin/zoom 프로퍼티 스크립트(키 → JS 소스 — 실물: 슬라이더 연동 카메라 위치).
     public var scripts: [String: String] = [:]
     public var origin: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    /// 칩 경로 스크립트 파일 참조 + 큐 모드(기본 random, sequential 1건).
+    public var path: String? = nil
+    public var queueMode: String = "random"
+    /// 오브젝트-레벨 플래그 파스·보존.
+    public var disablePropagation: Bool = false
+    public var lockTransforms: Bool = false
+    public var isSolid: Bool = false
     public init() {}
 }
 
@@ -760,15 +811,18 @@ extension SceneDocument {
             } else if let particlePath = contentValue(obj["particle"]) as? String {
                 if var p = parseParticle(particlePath, obj: obj, package: package,
                                          assets: resolvedAssets,
-                                         initialVisible: initialVisible) {
+                                         initialVisible: initialVisible,
+                                         userProps: userProps) {
                     p.order = order
                     particles.append(p)
                 }
             } else if contentValue(obj["text"]) != nil {
                 texts.append(parseText(obj, order: order, visibleScript: visibleScript,
-                                       visibleScriptProps: visibleScriptProps, initialVisible: initialVisible))
+                                       visibleScriptProps: visibleScriptProps, initialVisible: initialVisible,
+                                       userProps: userProps))
             } else if let modelPath = contentValue(obj["model"]) as? String {
-                objects3D.append(parseModel(obj, modelPath: modelPath, order: order, visibleScript: visibleScript))
+                objects3D.append(parseModel(obj, modelPath: modelPath, order: order,
+                                            visibleScript: visibleScript, userProps: userProps))
             } else if let lightType = contentValue(obj["light"]) as? String {
                 lights3D.append(parseLight(obj, lightType: lightType, order: order))
             } else if contentValue(obj["camera"]) != nil {
@@ -777,7 +831,8 @@ extension SceneDocument {
                 layers.append(effectQuadLayer(obj, order: order, pw: pw, ph: ph,
                                               visibleScript: visibleScript,
                                               visibleScriptProps: visibleScriptProps,
-                                              initialVisible: initialVisible))
+                                              initialVisible: initialVisible,
+                                              userProps: userProps))
             }
         }
         // F691: 2D 씬 라이트의 parent 체인 합성(로컬 origin → 월드 픽셀) — 레이어 합성 전에 실행
@@ -910,6 +965,15 @@ extension SceneDocument {
         var roughness: Float = 0.7
         var metallic: Float = 0
         var specularTint = Vec3(x: 1, y: 1, z: 1)
+        var materialScripts: [String: String] = [:]
+        var materialScriptProps: [String: String] = [:]
+        // H1: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
+        var materialShader: String? = nil
+        var materialCombos: [String: Int] = [:]
+        var materialConstants: [String: [Float]] = [:]
+        var materialConstantScripts: [String: String] = [:]
+        var materialConstantScriptProps: [String: String] = [:]
+        var materialTextureNames: [String?] = []
         if let md = package.data(for: imagePath) ?? assets?(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
@@ -928,9 +992,58 @@ extension SceneDocument {
                     lightingCombo = combos.contains { $0.key.lowercased() == "lighting" && (intVal($0.value) ?? 0) != 0 }
                 }
                 if let constants = p0["constantshadervalues"] as? [String: Any] {
-                    roughness = float(constants["roughness"]) ?? roughness
-                    metallic = float(constants["metallic"]) ?? metallic
-                    specularTint = vec3(constants["speculartint"]) ?? specularTint
+                    let r = scriptedConstant(constants["roughness"])
+                    if let f = lenientFloat(r.value) { roughness = f }
+                    if let script = r.script { materialScripts["roughness"] = script }
+                    if let props = r.scriptProps { materialScriptProps["roughness"] = props }
+                    let m = scriptedConstant(constants["metallic"])
+                    if let f = lenientFloat(m.value) { metallic = f }
+                    if let script = m.script { materialScripts["metallic"] = script }
+                    if let props = m.scriptProps { materialScriptProps["metallic"] = props }
+                    let s = scriptedConstant(constants["speculartint"])
+                    if let v = vec3(s.value) { specularTint = v }
+                    if let script = s.script { materialScripts["speculartint"] = script }
+                    if let props = s.scriptProps { materialScriptProps["speculartint"] = props }
+                }
+                // usershadervalues: PBR scalar 상수를 user property 값으로 오버라이드(커스텀 셰이더 경로
+                // 부재 시에도 genericimage4 PBR 상수는 여기서 소비).
+                if let usv = p0["usershadervalues"] as? [String: Any] {
+                    if let key = usv["roughness"] as? String, let raw = userProps[key],
+                       let f = float(raw) { roughness = f }
+                    if let key = usv["metallic"] as? String, let raw = userProps[key],
+                       let f = float(raw) { metallic = f }
+                    if let key = usv["speculartint"] as? String, let raw = userProps[key],
+                       let v = vec3(raw) { specularTint = v }
+                }
+                // H1: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
+                if let shader = p0["shader"] as? String { materialShader = shader }
+                if let combos = p0["combos"] as? [String: Any] {
+                    for (k, v) in combos {
+                        if let i = intVal(v) { materialCombos[k] = i }
+                    }
+                }
+                if let csv = p0["constantshadervalues"] as? [String: Any] {
+                    for (k, v) in csv {
+                        if let dict = v as? [String: Any], let sc = dict["script"] as? String {
+                            materialConstantScripts[k] = sc
+                            if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { materialConstantScriptProps[k] = sp }
+                        }
+                        if let f = float(v) { materialConstants[k] = [f] }
+                        else if let s = v as? String {
+                            let f = floatList(s)
+                            if !f.isEmpty { materialConstants[k] = f }
+                        }
+                        else if let dict = v as? [String: Any] {
+                            if let f = float(dict["value"]) { materialConstants[k] = [f] }
+                            else if let sv = dict["value"] as? String {
+                                let f = floatList(sv)
+                                if !f.isEmpty { materialConstants[k] = f }
+                            }
+                        }
+                    }
+                }
+                if let texs = p0["textures"] as? [Any] {
+                    materialTextureNames = texs.map { $0 as? String }
                 }
             }
         }
@@ -944,7 +1057,7 @@ extension SceneDocument {
             color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
             brightness: float(obj["brightness"]) ?? 1,
             parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
-            effects: parseEffects(obj["effects"]),
+            effects: parseEffects(obj["effects"], userProps: userProps),
             order: order,
             isFrameBuffer: isFB,
             animations: anims
@@ -964,6 +1077,15 @@ extension SceneDocument {
         layer.roughness = roughness
         layer.metallic = metallic
         layer.specularTint = specularTint
+        layer.materialScripts = materialScripts
+        layer.materialScriptProps = materialScriptProps
+        // H1: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
+        layer.materialShader = materialShader
+        layer.materialCombos = materialCombos
+        layer.materialConstants = materialConstants
+        layer.materialConstantScripts = materialConstantScripts
+        layer.materialConstantScriptProps = materialConstantScriptProps
+        layer.materialTextureNames = materialTextureNames
         layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])
@@ -975,6 +1097,22 @@ extension SceneDocument {
         // F692/F696: perspective 플래그·명시 렌더 의존 id 목록 파스 보존(소비는 렌더러 책임 — 필드 주석 참조).
         layer.perspective = (unwrap(obj["perspective"]) as? Bool) ?? false
         layer.dependencies = (obj["dependencies"] as? [Any])?.compactMap { intVal($0) } ?? []
+        // M7/M5: object-level render flags + config passthrough.
+        layer.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
+        layer.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? false
+        layer.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
+        layer.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
+        layer.spacing = float(obj["spacing"])
+        layer.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
+        layer.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
+        layer.ledSource = (unwrap(obj["ledsource"]) as? Bool) ?? false
+        if let config = obj["config"] as? [String: Any] {
+            layer.configPassthrough = (unwrap(config["passthrough"]) as? Bool) ?? false
+            layer.configAutosize = (unwrap(config["autosize"]) as? Bool) ?? false
+            layer.configIsSolidLayer = (unwrap(config["solidlayer"]) as? Bool) ?? false
+            layer.configIsProjectLayer = (unwrap(config["projectlayer"]) as? Bool) ?? false
+            layer.configIsInstanced = (unwrap(config["instanced"]) as? Bool) ?? false
+        }
         return layer
     }
 
@@ -1057,7 +1195,8 @@ extension SceneDocument {
     /// composeParentTransforms 가 풀스크린 지오메트리를 재배치한다(실측: 쿼드에 붙는 자식 0건, 전건 2D 씬).
     private static func effectQuadLayer(_ obj: [String: Any], order: Int, pw: Int, ph: Int,
                                         visibleScript: String?, visibleScriptProps: String?,
-                                        initialVisible: Bool) -> SceneLayer {
+                                        initialVisible: Bool,
+                                        userProps: [String: Any] = [:]) -> SceneLayer {
         var layer = SceneLayer(
             textureEntryName: "",
             origin: Vec2(x: Float(pw) / 2, y: Float(ph) / 2),
@@ -1068,7 +1207,7 @@ extension SceneDocument {
             color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
             brightness: float(obj["brightness"]) ?? 1,
             parallaxDepth: vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1),
-            effects: parseEffects(obj["effects"]),
+            effects: parseEffects(obj["effects"], userProps: userProps),
             order: order)
         layer.name = (obj["name"] as? String) ?? ""
         layer.id = intVal(obj["id"]) ?? 0
@@ -1098,6 +1237,11 @@ extension SceneDocument {
         for key in ["origin", "zoom", "fov"] {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { cam.scripts[key] = sc }
         }
+        cam.path = obj["path"] as? String
+        cam.queueMode = (obj["queuemode"] as? String) ?? "random"
+        cam.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
+        cam.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
+        cam.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
         return cam
     }
 
@@ -1107,7 +1251,8 @@ extension SceneDocument {
     /// parseLayer/parseModel/effectQuadLayer 와 동형으로 전달(F219 — 종전엔 이 세 인자 자체가 없었다).
     private static func parseText(_ obj: [String: Any], order: Int,
                                   visibleScript: String?, visibleScriptProps: String? = nil,
-                                  initialVisible: Bool) -> SceneTextLayer {
+                                  initialVisible: Bool,
+                                  userProps: [String: Any] = [:]) -> SceneTextLayer {
         var plain = ""
         var script: String? = nil
         var scriptProps: String? = nil
@@ -1154,12 +1299,21 @@ extension SceneDocument {
         t.propertyScripts = propScripts
         t.propertyScriptProps = propScriptProps
         // F693: 텍스트 이펙트 체인 파스·보존(레이어/3D 와 동일 parseEffects 경로 — 렌더 적용은 별도 그룹).
-        t.effects = parseEffects(obj["effects"])
+        t.effects = parseEffects(obj["effects"], userProps: userProps)
+        // M7: object-level render flags.
+        t.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
+        t.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? false
+        t.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
+        t.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
+        t.spacing = float(obj["spacing"])
+        t.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
+        t.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
         return t
     }
 
     /// 3D 메시 오브젝트("model": `.mdl` 직접 참조 — 2D image→json→puppet 인다이렉션 우회). angles 는 라디안.
-    private static func parseModel(_ obj: [String: Any], modelPath: String, order: Int, visibleScript: String?) -> SceneObject3D {
+    private static func parseModel(_ obj: [String: Any], modelPath: String, order: Int,
+                                   visibleScript: String?, userProps: [String: Any] = [:]) -> SceneObject3D {
         var o = SceneObject3D(
             id: intVal(obj["id"]) ?? 0,
             name: (obj["name"] as? String) ?? "",
@@ -1169,7 +1323,7 @@ extension SceneDocument {
             scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
             castShadow: (obj["castshadow"] as? Bool) ?? false,
             parent: intVal(obj["parent"]),
-            effects: parseEffects(obj["effects"]),
+            effects: parseEffects(obj["effects"], userProps: userProps),
             order: order)
         var ps = transformScripts(obj)
         if let vs = visibleScript { ps["visible"] = vs }
@@ -1482,12 +1636,14 @@ extension SceneDocument {
     /// children[] 링크는 재귀 리졸브(순환/깊이 4 가드) — 자식도 자체 material 포함 완전한 def.
     private static func parseParticle(_ path: String, obj: [String: Any], package: ScenePackage,
                                       assets: ((String) -> Data?)?,
-                                      initialVisible: Bool) -> SceneParticle? {
+                                      initialVisible: Bool,
+                                      userProps: [String: Any] = [:]) -> SceneParticle? {
         // instanceoverride(인스턴스 모디파이어): 프리셋 def 에 배수/CP 대체를 적용해 인스턴스별 다양화
         // (실측 127씬/866건). 종전 통째 드롭 — 재사용 프리셋 전 인스턴스가 동일 기본값으로 렌더됐다.
         let override = particleInstanceOverride(obj["instanceoverride"])
         guard let def = parseParticleDef(path, package: package, visited: [path],
-                                         instanceOverride: override, assets: assets) else {
+                                         instanceOverride: override, assets: assets,
+                                         userProps: userProps) else {
             WapleLog.warn("[Waple] SP4 particle load failed: \(path)")
             return nil
         }
@@ -1510,6 +1666,13 @@ extension SceneDocument {
             p.visibleScript = vis["script"] as? String
             if p.visibleScript != nil { p.visibleScriptProps = Self.scriptPropsJSON(vis["scriptproperties"]) }
         }
+        // M7: object-level render flags.
+        p.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
+        p.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? false
+        p.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
+        p.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
+        p.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
+        p.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
         return p
     }
 
@@ -1517,7 +1680,8 @@ extension SceneDocument {
     private static func parseParticleDef(_ path: String, package: ScenePackage,
                                          visited: Set<String>,
                                          instanceOverride: ParticleInstanceOverride? = nil,
-                                         assets: ((String) -> Data?)? = nil) -> ParticleSystemDef? {
+                                         assets: ((String) -> Data?)? = nil,
+                                         userProps: [String: Any] = [:]) -> ParticleSystemDef? {
         // F430: 이미지 레이어 requiredData 와 동일한 pkg→공유에셋 폴터 — 종전 pkg 한정이라
         // base-assets 에만 있는 파티클 json/머티리얼은 씬에서 통째 드롭됐다.
         func assetData(_ name: String) -> Data? { package.data(for: name) ?? assets?(name) }
@@ -1528,7 +1692,7 @@ extension SceneDocument {
         var material: ParticleMaterial? = nil
         if let matPath = pjson["material"] as? String, let mData = assetData(matPath),
            let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any] {
-            material = ParticleMaterial.parse(mjson)
+            material = ParticleMaterial.parse(mjson, userProps: userProps)
         }
         return ParticleSystemDef.parse(pjson, material: material, instanceOverride: instanceOverride) { childPath in
             guard !visited.contains(childPath), visited.count < 4 else {
@@ -1536,7 +1700,7 @@ extension SceneDocument {
                 return nil
             }
             return parseParticleDef(childPath, package: package, visited: visited.union([childPath]),
-                                    assets: assets)
+                                    assets: assets, userProps: userProps)
         }
     }
 
@@ -1586,7 +1750,7 @@ extension SceneDocument {
         return s
     }
 
-    private static func parseEffects(_ raw: Any?) -> [SceneEffect] {
+    private static func parseEffects(_ raw: Any?, userProps: [String: Any] = [:]) -> [SceneEffect] {
         guard let arr = raw as? [Any] else { return [] }
         var out: [SceneEffect] = []
         for case let e as [String: Any] in arr {
@@ -1636,6 +1800,20 @@ extension SceneDocument {
                             if let f = float(dict["value"]) { p.constants[k] = [f] }
                             else if let sv = dict["value"] as? String {
                                 let f = floatList(sv)
+                                if !f.isEmpty { p.constants[k] = f }
+                            }
+                        }
+                    }
+                }
+                // usershadervalues: 셰이더 상수 이름 → user property 키. 파스 시점에 userProps 룩업해
+                // constantshadervalues 와 동일 슬롯에 병합(런타임 변경은 현재 아키텍처에서 정적 해석).
+                if let usv = passDict["usershadervalues"] as? [String: Any] {
+                    for (k, v) in usv {
+                        guard let userKey = v as? String else { continue }
+                        if let raw = userProps[userKey] {
+                            if let f = float(raw) { p.constants[k] = [f] }
+                            else if let s = raw as? String {
+                                let f = floatList(s)
                                 if !f.isEmpty { p.constants[k] = f }
                             }
                         }
@@ -1729,5 +1907,16 @@ extension SceneDocument {
     }
     private static func vec3(_ v: Any?) -> Vec3? {
         let f = floats(v); return f.count >= 3 ? Vec3(x: f[0], y: f[1], z: f[2]) : nil
+    }
+
+    /// material.constantshadervalue 엔트리를 파싱: plain 값이면 (value, nil), {script,value} 이면 둘 다 반환.
+    /// 스크립트가 있는 경우 scriptproperties 도 보존해 사용자 오버라이드를 주입할 수 있게 한다.
+    private static func scriptedConstant(_ v: Any?) -> (value: Any?, script: String?, scriptProps: String?) {
+        guard let dict = v as? [String: Any] else { return (unwrap(v), nil, nil) }
+        if let script = dict["script"] as? String {
+            let props = scriptPropsJSON(dict["scriptproperties"])
+            return (unwrap(dict["value"]), script, props)
+        }
+        return (unwrap(dict["value"]), nil, nil)
     }
 }

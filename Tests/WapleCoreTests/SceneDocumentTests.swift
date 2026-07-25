@@ -1101,4 +1101,101 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertNotNil(cam.zoomAnimation)
         XCTAssertEqual(cam.zoomAnimation?.fps, 12)
     }
+
+    /// M7: 이미지/텍스트/파티클 오브젝트-레벨 렌더 플래그 파싱.
+    func testParsesObjectLevelRenderFlags() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":1,"image":"models/x.json","origin":"0 0 0","disablepropagation":true,"copybackground":true,"clampuvs":true,"nointerpolation":true,"spacing":2.5,"locktransforms":true,"solid":true,"ledsource":true}]}"#
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        let layer = try XCTUnwrap(doc.layers.first)
+        XCTAssertTrue(layer.disablePropagation)
+        XCTAssertTrue(layer.copyBackground)
+        XCTAssertTrue(layer.clampUVs)
+        XCTAssertTrue(layer.noInterpolation)
+        XCTAssertEqual(try XCTUnwrap(layer.spacing), Float(2.5), accuracy: Float(1e-4))
+        XCTAssertTrue(layer.lockTransforms)
+        XCTAssertTrue(layer.isSolid)
+        XCTAssertTrue(layer.ledSource)
+    }
+
+    /// M5: composelayer config.passthrough 및 config 하위 플래그 파싱.
+    func testParsesImageConfigFlags() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":1,"image":"models/x.json","origin":"0 0 0","config":{"passthrough":true,"autosize":true,"solidlayer":true,"projectlayer":true,"instanced":true}}]}"#
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        let layer = try XCTUnwrap(doc.layers.first)
+        XCTAssertTrue(layer.configPassthrough)
+        XCTAssertTrue(layer.configAutosize)
+        XCTAssertTrue(layer.configIsSolidLayer)
+        XCTAssertTrue(layer.configIsProjectLayer)
+        XCTAssertTrue(layer.configIsInstanced)
+    }
+
+    /// M9: camera 의사-오브젝트 path/queuemode 파싱.
+    func testParsesCameraObjectPathAndQueueMode() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":7,"camera":"default","fov":60,"path":"scripts/cam.json","queuemode":"sequential","disablepropagation":true,"locktransforms":true,"solid":true}]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let cam = try XCTUnwrap(doc.cameraObjects.first)
+        XCTAssertEqual(cam.path, "scripts/cam.json")
+        XCTAssertEqual(cam.queueMode, "sequential")
+        XCTAssertTrue(cam.disablePropagation)
+        XCTAssertTrue(cam.lockTransforms)
+        XCTAssertTrue(cam.isSolid)
+    }
+
+    /// M7: 텍스트 오브젝트 플래그 파싱.
+    func testParsesTextObjectFlags() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":1,"text":"hello","font":"systemfont_arial","pointsize":16,"origin":"0 0 0","disablepropagation":true,"copybackground":true,"clampuvs":true,"nointerpolation":true,"spacing":1.5,"locktransforms":true,"solid":true}]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let t = try XCTUnwrap(doc.texts.first)
+        XCTAssertTrue(t.disablePropagation)
+        XCTAssertTrue(t.copyBackground)
+        XCTAssertTrue(t.clampUVs)
+        XCTAssertTrue(t.noInterpolation)
+        XCTAssertEqual(try XCTUnwrap(t.spacing), Float(1.5), accuracy: Float(1e-4))
+        XCTAssertTrue(t.lockTransforms)
+        XCTAssertTrue(t.isSolid)
+    }
+
+    /// H1: 머티리얼 passes[0] 의 shader/combos/constantshadervalues/textures 파스 보존.
+    func testParsesMaterialCustomShaderFields() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"image":"models/x.json","origin":"960 540","size":"1920 1080","scale":"1 1",
+                     "angles":"0 0 0","alpha":0.8,"color":"1 0.5 0.5","brightness":0.9,"visible":true}]}
+        """
+        let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["pic",null,"mask"],"combos":{"LIGHTING":1,"SPRITESHEET":0},"constantshadervalues":{"roughness":0.5,"metallic":{"value":0.2},"color":{"script":"return [1,0,0];","value":"1 1 1","scriptproperties":{"foo":1}}}}]}"#
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        let layer = doc.layers[0]
+        XCTAssertEqual(layer.materialShader, "genericimage2")
+        XCTAssertEqual(layer.materialCombos["LIGHTING"], 1)
+        XCTAssertEqual(layer.materialCombos["SPRITESHEET"], 0)
+        XCTAssertEqual(layer.materialConstants["roughness"], [0.5])
+        XCTAssertEqual(layer.materialConstants["metallic"], [0.2])
+        XCTAssertEqual(layer.materialConstants["color"], [1, 1, 1])
+        XCTAssertEqual(layer.materialConstantScripts["color"], "return [1,0,0];")
+        XCTAssertNotNil(layer.materialConstantScriptProps["color"])
+        XCTAssertEqual(layer.materialTextureNames, ["pic", nil, "mask"])
+        // 기존 PBR 필드도 유지(폴터 경로).
+        XCTAssertEqual(layer.roughness, 0.5)
+        XCTAssertEqual(layer.metallic, 0.2)
+    }
+
+    /// H1: shader 필드 부재 시 nil — 기존 고정 경로(무회귀).
+    func testMaterialShaderAbsentLeavesNil() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"image":"models/x.json","origin":"960 540","size":"1920 1080","scale":"1 1",
+                     "angles":"0 0 0","alpha":1.0,"color":"1 1 1","brightness":1.0,"visible":true}]}
+        """
+        let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
+        let material = #"{"passes":[{"textures":["pic"]}]}"#
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertNil(doc.layers[0].materialShader)
+        XCTAssertTrue(doc.layers[0].materialCombos.isEmpty)
+        XCTAssertTrue(doc.layers[0].materialConstants.isEmpty)
+    }
 }
