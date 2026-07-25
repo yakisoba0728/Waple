@@ -36,9 +36,14 @@ extension SceneRenderer {
     /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
     func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = [], texFilter: [Float] = [],
-                       layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1)) -> [Float] {
+                       layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1),
+                       mvp: simd_float4x4? = nil) -> [Float] {
         var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4)
-        e[0] = 1; e[5] = 1; e[10] = 1; e[15] = 1   // identity mvp
+        let m = mvp ?? simd_float4x4(1)
+        e[0] = m.columns.0.x; e[1] = m.columns.0.y; e[2] = m.columns.0.z; e[3] = m.columns.0.w
+        e[4] = m.columns.1.x; e[5] = m.columns.1.y; e[6] = m.columns.1.z; e[7] = m.columns.1.w
+        e[8] = m.columns.2.x; e[9] = m.columns.2.y; e[10] = m.columns.2.z; e[11] = m.columns.2.w
+        e[12] = m.columns.3.x; e[13] = m.columns.3.y; e[14] = m.columns.3.z; e[15] = m.columns.3.w
         e[16] = time; e[17] = pointerUV.x; e[18] = pointerUV.y  // timeAndPad = (time, pointerX, pointerY, dt)
         e[19] = frameDT                                          // g_Frametime
         e[20] = pointerUVLast.x; e[21] = pointerUVLast.y         // g_PointerPositionLast
@@ -357,6 +362,39 @@ extension SceneRenderer {
             SIMD4<Float>(tl.x, tl.y, 0, 0), SIMD4<Float>(tr.x, tr.y, 1, 0), SIMD4<Float>(br.x, br.y, 1, 1),
             SIMD4<Float>(tl.x, tl.y, 0, 0), SIMD4<Float>(br.x, br.y, 1, 1), SIMD4<Float>(bl.x, bl.y, 0, 1),
         ]
+    }
+
+    /// H1: 커스텀 셰이더 레이어의 로컬 쿼드(-1…1) → NDC 변환 행렬.
+    /// quadVertices + v_main 의 기존 동작을 행렬로 재현.
+    func layerTransformMatrix(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, alignment: String,
+                              parallaxDepth: Vec2, camOffset: SIMD2<Float>, shakeOffset: SIMD2<Float>,
+                              aspectScale: SIMD2<Float>) -> simd_float4x4 {
+        let hw = size.x * scale.x * 0.5
+        let hh = size.y * scale.y * 0.5
+        let ca = cos(angleZ), sa = sin(angleZ)
+        let aligned = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
+        // model: translate(aligned) * rotateZ(angleZ) * scale(hw, hh)
+        var model = simd_float4x4(1)
+        model.columns.0 = SIMD4(ca * hw, sa * hw, 0, 0)
+        model.columns.1 = SIMD4(-sa * hh, ca * hh, 0, 0)
+        model.columns.2 = SIMD4(0, 0, 1, 0)
+        model.columns.3 = SIMD4(aligned.x, aligned.y, 0, 1)
+        // ortho: pixel → NDC (Y-flip, same as sceneToNDC)
+        var ortho = simd_float4x4(1)
+        ortho.columns.0 = SIMD4(2 / projW, 0, 0, 0)
+        ortho.columns.1 = SIMD4(0, -2 / projH, 0, 0)
+        ortho.columns.2 = SIMD4(0, 0, 1, 0)
+        ortho.columns.3 = SIMD4(-1, 1, 0, 1)
+        // camera/shake translation
+        let camX = camOffset.x * parallaxDepth.x + shakeOffset.x
+        let camY = camOffset.y * parallaxDepth.y + shakeOffset.y
+        var cam = simd_float4x4(1)
+        cam.columns.3 = SIMD4(camX, camY, 0, 1)
+        // aspect scale
+        var aspect = simd_float4x4(1)
+        aspect.columns.0 = SIMD4(aspectScale.x, 0, 0, 0)
+        aspect.columns.1 = SIMD4(0, aspectScale.y, 0, 0)
+        return aspect * cam * ortho * model
     }
 
     /// 텍스트 horizontalAlign/verticalAlign(left|center|right / top|center|bottom) → SceneLayer.alignment
@@ -712,6 +750,8 @@ extension SceneRenderer {
         var tint = layer.tint
         var vbuf = layer.vertexBuffer
         var litRect0 = layer.litRect.0, litRect1 = layer.litRect.1  // 애니 레이어는 아래서 재계산
+        // H1: 커스텀 셰이더용 유효 변환(애니/스크립트/attachment 반영 후).
+        var effectiveTransform: (origin: Vec2, scale: Vec2, angle: Float)? = nil
         // F723: thisLayer 직접 대입 read-back(구조·우선순위는 함수 주석 참조). 스크립트 없는 레이어는
         // JS 평가 비용 0(propScripts/animLayerScripts 가 비어 있으면 nil).
         let scriptUpdateKeys = Set(layer.propScripts.filter { $0.engine.hasUpdate }.map { $0.key })
@@ -801,6 +841,10 @@ extension SceneRenderer {
                     let r = Self.litRect(origin: origin, size: def.size, scale: scale, angleZ: angle, alignment: def.alignment, originZ: def.originZ)
                     litRect0 = r.0; litRect1 = r.1
                 }
+            }
+            // H1: 커스텀 셰이더 레이어는 유효 변환을 보존(파이프라인 선택에서 행렬 산출).
+            if layer.customShader != nil {
+                effectiveTransform = (origin, scale, angle)
             }
             // F743(S-35): 라이브 디스크립터 채널 — 이번 프레임 최종 변환 기록(알파/가시성은 아래서 병기).
             liveLayerStates[layer.uid] = ScriptLayerReadBack(
@@ -894,6 +938,42 @@ extension SceneRenderer {
             }
         }
         var depth = layer.parallaxDepth
+        // H1: 커스텀 머티리얼 셰이더 경로 — QuadShaders 대체.
+        if let custom = layer.customShader, let def = layer.def {
+            let t = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
+            let m = layerTransformMatrix(origin: t.origin, size: def.size, scale: t.scale,
+                                         angleZ: t.angle, alignment: def.alignment,
+                                         parallaxDepth: Vec2(x: layer.parallaxDepth.x, y: layer.parallaxDepth.y),
+                                         camOffset: camOffset, shakeOffset: frameShakeOffset,
+                                         aspectScale: aspectScale)
+            enc.setRenderPipelineState(custom.pipeline)
+            enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
+            var mat = custom.material
+            for sc in custom.scripts {
+                sc.engine.setRuntime(Double(time))
+                let cur = mat[sc.slot]
+                if let v = sc.engine.evaluateVec(current: [cur.x, cur.y, cur.z]) {
+                    if v.count >= 3 { mat[sc.slot] = SIMD4(v[0], v[1], v[2], cur.w) }
+                    else if v.count == 1 { mat[sc.slot] = SIMD4(v[0], cur.y, cur.z, cur.w) }
+                }
+            }
+            if !mat.isEmpty {
+                mat.withUnsafeBytes {
+                    enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
+                    enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
+                }
+            }
+            let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
+                                    texFilter: custom.texFilter, layerTint: tint, mvp: m)
+            eng.withUnsafeBytes {
+                enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
+                enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
+            }
+            enc.setFragmentTexture(texture, index: 0)
+            for (slot, tex) in custom.aux { enc.setFragmentTexture(tex, index: slot) }
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            return
+        }
         // 파이프라인 선택: lit > colorBlendMode > framebuffer compose > material additive > 기본 over.
         // additive는 특수 경로가 아닌 일반 f_main 레이어에만 적용한다.
         // 감사 V07: 무효과 NoInterpolation 레이어는 nearest 변형 우선(미빌드 시 대응 선형 폴터 — 무회귀).
