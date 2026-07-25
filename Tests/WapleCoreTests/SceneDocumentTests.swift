@@ -1198,4 +1198,47 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(doc.layers[0].materialCombos.isEmpty)
         XCTAssertTrue(doc.layers[0].materialConstants.isEmpty)
     }
+
+    /// H2: usershadervalues 가 머티리얼 상수를 user property 로 오버라이드.
+    func testParsesMaterialUserShaderValues() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"image":"models/x.json","origin":"960 540","size":"1920 1080","scale":"1 1",
+                     "angles":"0 0 0","alpha":1.0,"color":"1 1 1","brightness":1.0,"visible":true}]}
+        """
+        let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"],"constantshadervalues":{"roughness":0.5,"metallic":0.2,"color":"1 1 1"},"usershadervalues":{"roughness":"roughness","metallic":"metallic","color":"tintcolor"}}]}"#
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let userProps: [String: Any] = ["roughness": 0.9, "metallic": 0.7, "tintcolor": "0.1 0.2 0.3"]
+        let doc = try SceneDocument.parse(package: p, userProps: userProps)
+        let layer = doc.layers[0]
+        XCTAssertEqual(layer.materialUserShaderValues["roughness"], "roughness")
+        XCTAssertEqual(layer.materialUserShaderValues["metallic"], "metallic")
+        XCTAssertEqual(layer.materialUserShaderValues["color"], "tintcolor")
+        // usershadervalues 오버라이드 반영.
+        XCTAssertEqual(layer.materialConstants["roughness"], [0.9])
+        XCTAssertEqual(layer.materialConstants["metallic"], [0.7])
+        XCTAssertEqual(layer.materialConstants["color"], [0.1, 0.2, 0.3])
+        // 기존 PBR 필드도 usershadervalues 반영.
+        XCTAssertEqual(layer.roughness, 0.9)
+        XCTAssertEqual(layer.metallic, 0.7)
+    }
+
+    /// H2: user property 부재 시 constantshadervalues 폴터(무회귀).
+    func testMaterialUserShaderValuesFallbackToConstants() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"image":"models/x.json","origin":"960 540","size":"1920 1080","scale":"1 1",
+                     "angles":"0 0 0","alpha":1.0,"color":"1 1 1","brightness":1.0,"visible":true}]}
+        """
+        let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"],"constantshadervalues":{"roughness":0.5,"metallic":0.2},"usershadervalues":{"roughness":"roughness","metallic":"metallic"}}]}"#
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p)
+        let layer = doc.layers[0]
+        XCTAssertEqual(layer.materialConstants["roughness"], [0.5])
+        XCTAssertEqual(layer.materialConstants["metallic"], [0.2])
+        XCTAssertEqual(layer.roughness, 0.5)
+        XCTAssertEqual(layer.metallic, 0.2)
+    }
 }

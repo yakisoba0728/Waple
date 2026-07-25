@@ -128,6 +128,8 @@ public struct SceneLayer: Equatable {
     public var materialConstantScriptProps: [String: String] = [:]
     /// H1: 커스텀 머티리얼 텍스처 슬롯(material passes[0].textures).
     public var materialTextureNames: [String?] = []
+    /// H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑.
+    public var materialUserShaderValues: [String: String] = [:]
     /// F692: 오브젝트 `perspective:true` — WE 는 이 레이어를 general.perspectiveoverridefov 의
     /// 원근 침침으로 그린다(정사영 평면화 대신). 파스·보존 전용: 원근 투영 소비는 렌더 경로 책임.
     /// 실측(전수): perspective:true 19씬 전부 x/y angles 0(z-회전만)이라 원근/정사영 출력이
@@ -974,6 +976,8 @@ extension SceneDocument {
         var materialConstantScripts: [String: String] = [:]
         var materialConstantScriptProps: [String: String] = [:]
         var materialTextureNames: [String?] = []
+        // H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑.
+        var materialUserShaderValues: [String: String] = [:]
         if let md = package.data(for: imagePath) ?? assets?(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
@@ -1005,16 +1009,6 @@ extension SceneDocument {
                     if let script = s.script { materialScripts["speculartint"] = script }
                     if let props = s.scriptProps { materialScriptProps["speculartint"] = props }
                 }
-                // usershadervalues: PBR scalar 상수를 user property 값으로 오버라이드(커스텀 셰이더 경로
-                // 부재 시에도 genericimage4 PBR 상수는 여기서 소비).
-                if let usv = p0["usershadervalues"] as? [String: Any] {
-                    if let key = usv["roughness"] as? String, let raw = userProps[key],
-                       let f = float(raw) { roughness = f }
-                    if let key = usv["metallic"] as? String, let raw = userProps[key],
-                       let f = float(raw) { metallic = f }
-                    if let key = usv["speculartint"] as? String, let raw = userProps[key],
-                       let v = vec3(raw) { specularTint = v }
-                }
                 // H1: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
                 if let shader = p0["shader"] as? String { materialShader = shader }
                 if let combos = p0["combos"] as? [String: Any] {
@@ -1041,6 +1035,27 @@ extension SceneDocument {
                             }
                         }
                     }
+                }
+                // H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑 파스·보존.
+                // constantshadervalues 파스 후 적용해야 userProps 오버라이드가 기본값을 덮는다.
+                if let usv = p0["usershadervalues"] as? [String: Any] {
+                    for (k, v) in usv {
+                        guard let userKey = v as? String else { continue }
+                        materialUserShaderValues[k] = userKey
+                        guard let raw = userProps[userKey] else { continue }
+                        if let f = float(raw) { materialConstants[k] = [f] }
+                        else if let s = raw as? String {
+                            let f = floatList(s)
+                            if !f.isEmpty { materialConstants[k] = f }
+                        }
+                    }
+                    // 기존 PBR 필드도 usershadervalues 반영(roughness/metallic/speculartint).
+                    if let key = materialUserShaderValues["roughness"], let raw = userProps[key],
+                       let f = float(raw) { roughness = f }
+                    if let key = materialUserShaderValues["metallic"], let raw = userProps[key],
+                       let f = float(raw) { metallic = f }
+                    if let key = materialUserShaderValues["speculartint"], let raw = userProps[key],
+                       let v = vec3(raw) { specularTint = v }
                 }
                 if let texs = p0["textures"] as? [Any] {
                     materialTextureNames = texs.map { $0 as? String }
@@ -1086,6 +1101,8 @@ extension SceneDocument {
         layer.materialConstantScripts = materialConstantScripts
         layer.materialConstantScriptProps = materialConstantScriptProps
         layer.materialTextureNames = materialTextureNames
+        // H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑.
+        layer.materialUserShaderValues = materialUserShaderValues
         layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])
