@@ -175,8 +175,10 @@ public struct SceneLayer: Equatable {
 /// 씬 내 파티클 시스템 인스턴스. def(파티클 정의) + 씬 배치(origin/scale, 씬 픽셀 좌표).
 public struct SceneParticle: Equatable {
     public let def: ParticleSystemDef
-    public let origin: Vec2
-    public let scale: Vec2
+    /// 2D 정사영 경로의 로컬(부모 상대) → 월드(프로젝션 픽셀) 좌표. E1: parent 체인 합성이 파스 말미에
+    /// 이 값을 덮어쓴다(레이어와 동일 규약) — 그래서 var.
+    public var origin: Vec2
+    public var scale: Vec2
     /// scene.json objects[] 내 인덱스(레이어와 공유하는 z-순서).
     public var order: Int = 0
     /// 3D 씬 배치(camera3D 마운트 경로 전용 — 2D 정사영 경로는 origin/scale Vec2 그대로 사용).
@@ -207,6 +209,9 @@ public struct SceneParticle: Equatable {
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
 public struct SceneTextLayer: Equatable {
     public var name: String = ""
+    /// E1: 부모 오브젝트 id(2D parent 체인 합성 룩업용 — 레이어와 동일 규약). nil=루트.
+    /// origin/scale 은 파스 말미에 부모 체인이 합성된 월드(프로젝션 픽셀) 값으로 덮어쓴다(정적 부모 한정).
+    public var parent: Int? = nil
     public let text: String              // 평문(스크립트면 "")
     public let script: String?           // {"script": ...} — update(value) 가 텍스트 반환
     /// 텍스트 스크립트의 저장 `scriptproperties`(사용자 오버라이드) — JSON 문자열. 레이어 프로퍼티
@@ -219,8 +224,9 @@ public struct SceneTextLayer: Equatable {
     public let alpha: Float
     public let horizontalAlign: String   // left|center|right (origin 앵커 기준)
     public let verticalAlign: String     // top|center|bottom
-    public let origin: Vec2
-    public let scale: Vec2               // 배율은 "scale" 필드(실측 "2 2") — "size" 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)
+    /// E1: parent 체인 합성이 파스 말미에 월드(프로젝션 픽셀) 값으로 덮어쓴다(레이어와 동일 규약) — 그래서 var.
+    public var origin: Vec2
+    public var scale: Vec2               // 배율은 "scale" 필드(실측 "2 2") — "size" 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)
     /// "Limit width"(limitwidth) 체크 시 워드랩 폭 maxwidth(래스터 로컬 px — 실물 maxwidth 스크립트가
     /// 화면폭을 scale.x 로 나눠 전달 = 스케일 전 단위, d.ts "Max width in pixels"). nil = 무제한(무회귀).
     public var maxWidth: Float? = nil
@@ -854,6 +860,12 @@ extension SceneDocument {
         // (composeParentTransforms 가 layers 를 월드로 덮어쓰면 부모-레이어 로컬값이 유실된다).
         // 3D 씬은 렌더러(Scene3DLighting.resolveLights)가 월드행렬을 합성하므로 제외(이중 적용 방지).
         composeLightParentTransforms(lights: &lights3D, layers: layers, nodes3D: nodes3D, camera3D: camera3D)
+        // E1: 2D 텍스트/파티클 오브젝트의 parent 체인 합성 — 라이트와 동일 이유로 레이어 합성 전에 실행
+        // (레이어가 월드로 덮어써지면 부모-레이어 로컬값이 유실된다). 종전에는 SceneTextLayer 에 parent
+        // 필드 자체가 없고 SceneParticle.parent 는 3D 마운트 경로 전용이라, 부모 붙은 텍스트/파티클이
+        // 저작 로컬 좌표(대개 화면 밖/좌상단) 그대로 렌더됐다(가시 텍스트 177개/62씬).
+        composeTextParentTransforms(texts: &texts, layers: layers, nodes3D: nodes3D, camera3D: camera3D)
+        composeParticleParentTransforms(particles: &particles, layers: layers, nodes3D: nodes3D, camera3D: camera3D)
         // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다).
         composeParentTransforms(
             layers: &layers,
@@ -1317,6 +1329,7 @@ extension SceneDocument {
         }
         var t = SceneTextLayer(
             name: (obj["name"] as? String) ?? "",
+            parent: intVal(obj["parent"]),
             text: plain, script: script, scriptProps: scriptProps,
             font: (obj["font"] as? String) ?? "systemfont_arial",
             pointSize: float(obj["pointsize"]) ?? 16,
@@ -1437,17 +1450,23 @@ extension SceneDocument {
             guard let d = package.data(for: path) ?? assets?(path) else { return false }
             return PuppetModel.parse(d) != nil || Model3D.parse(d) != nil
         }
+        // E1: disablePropagation=true 인 레이어는 부모 트랜스폼 상속을 차단 — composeTargets 에서
+        // 제외해 저작 로컬 좌표를 그대로 유지한다(코퍼스 실측 34건, 전부 parent 보유라 종전엔
+        // 무조건 합성 대상이었다). 이 레이어가 다른 자식의 부모로 쓰일 때는 그 자식이 이 레이어의
+        // "저작 로컬 값 = 유효 위치"를 상속받는다(noPropagate 가드 — world() 참조).
         let composeTargets = camera3D != nil ? [] : layers.indices.filter {
-            guard layers[$0].parent != nil else { return false }
+            guard layers[$0].parent != nil, !layers[$0].disablePropagation else { return false }
             if let pp = layers[$0].puppet { return puppetLoads(pp) }
             return true
         }
         guard !composeTargets.isEmpty else { return }
         var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
         var parentOf: [Int: Int] = [:]
+        var noPropagate: Set<Int> = []
         for l in layers where l.id != 0 {
             localT[l.id] = (l.origin, l.scale, l.angleZ)
             if let p = l.parent { parentOf[l.id] = p }
+            if l.disablePropagation { noPropagate.insert(l.id) }
         }
         for n in nodes3D {
             // F437: 레이어/노드 id 중복 시 레이어 우선 — 종전엔 노드가 레이어의 localT 항목을 덮어써
@@ -1456,12 +1475,13 @@ extension SceneDocument {
             localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
             if let p = n.parent { parentOf[n.id] = p }
         }
-        // angle 은 도(°) 단위(레이어 규약; puppetVertices 가 렌더 시 라디안 변환) — 부모 오프셋 회전은
-        // 라디안으로 계산하되 합성 각은 도로 유지한다.
+        // A1/E1: angle 은 scene.json angles 그대로(이미 라디안 — 코퍼스 전부 ≤π 확정, 인코더 규약과 동일).
+        // 종전 `* .pi/180` 은 이미 라디안인 값을 도(°)로 오인해 부모 오프셋 회전을 57× 축소했다
+        // (852473d 가 렌더 인코더 3곳만 고쳤고 이 합성부는 미동기 — SceneRendererFrameEncoder.swift:405 참조).
         func composed(_ pw: (origin: Vec2, scale: Vec2, angle: Float),
                       _ t: (origin: Vec2, scale: Vec2, angle: Float))
             -> (origin: Vec2, scale: Vec2, angle: Float) {
-            let r = pw.angle * .pi / 180
+            let r = pw.angle
             let ca = cosf(r), sa = sinf(r)
             let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
             return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
@@ -1470,6 +1490,7 @@ extension SceneDocument {
         }
         func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float)? {
             guard depth < 32, let t = localT[id] else { return nil }
+            guard !noPropagate.contains(id) else { return t }  // E1: 전파 차단 — 조상 재귀 없이 로컬 그대로
             guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
             return composed(pw, t)
         }
@@ -1511,10 +1532,11 @@ extension SceneDocument {
             localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z, n.origin.z)
             if let p = n.parent { parentOf[n.id] = p }
         }
+        // A1/E1: angle 은 scene.json angles 그대로(이미 라디안) — composeParentTransforms 와 동기.
         func world(_ id: Int, _ depth: Int) -> (origin: Vec2, scale: Vec2, angle: Float, z: Float)? {
             guard depth < 32, let t = localT[id] else { return nil }
             guard let pid = parentOf[id], let pw = world(pid, depth + 1) else { return t }
-            let r = pw.angle * .pi / 180
+            let r = pw.angle
             let ca = cosf(r), sa = sinf(r)
             let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
             return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
@@ -1523,12 +1545,90 @@ extension SceneDocument {
         }
         for i in lights.indices {
             guard let pid = lights[i].parent, let pw = world(pid, 0) else { continue }
-            let r = pw.angle * .pi / 180
+            let r = pw.angle
             let ca = cosf(r), sa = sinf(r)
             let sx = pw.scale.x * lights[i].origin.x, sy = pw.scale.y * lights[i].origin.y
             lights[i].origin = Vec3(x: pw.origin.x + sx * ca - sy * sa,
                                     y: pw.origin.y + sx * sa + sy * ca,
                                     z: pw.z + lights[i].origin.z)
+        }
+    }
+
+    /// E1 공용: 레이어+노드에서 부모 체인 로컬 트랜스폼 맵을 구성(레이어 우선, F437 규약 동일).
+    /// composeParentTransforms/composeLightParentTransforms 는 검증된 원본 그대로 두고, 신규 소비처
+    /// (텍스트/파티클)만 이 헬퍼를 공유한다.
+    private static func buildParentTransformMap(layers: [SceneLayer], nodes3D: [SceneNode3D])
+        -> (localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)], parentOf: [Int: Int], noPropagate: Set<Int>) {
+        var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
+        var parentOf: [Int: Int] = [:]
+        var noPropagate: Set<Int> = []
+        for l in layers where l.id != 0 {
+            localT[l.id] = (l.origin, l.scale, l.angleZ)
+            if let p = l.parent { parentOf[l.id] = p }
+            if l.disablePropagation { noPropagate.insert(l.id) }
+        }
+        for n in nodes3D {
+            guard localT[n.id] == nil else { continue }
+            localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
+            if let p = n.parent { parentOf[n.id] = p }
+        }
+        return (localT, parentOf, noPropagate)
+    }
+
+    /// E1 공용: id 의 월드(부모 체인 합성) 트랜스폼. angle 은 scene.json angles 그대로(라디안).
+    private static func worldParentTransform(_ id: Int, _ depth: Int,
+                                             localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)],
+                                             parentOf: [Int: Int], noPropagate: Set<Int>)
+        -> (origin: Vec2, scale: Vec2, angle: Float)? {
+        guard depth < 32, let t = localT[id] else { return nil }
+        guard !noPropagate.contains(id) else { return t }
+        guard let pid = parentOf[id],
+              let pw = worldParentTransform(pid, depth + 1, localT: localT, parentOf: parentOf, noPropagate: noPropagate)
+        else { return t }
+        let r = pw.angle
+        let ca = cosf(r), sa = sinf(r)
+        let sx = pw.scale.x * t.origin.x, sy = pw.scale.y * t.origin.y
+        return (origin: Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca),
+                scale: Vec2(x: pw.scale.x * t.scale.x, y: pw.scale.y * t.scale.y),
+                angle: pw.angle + t.angle)
+    }
+
+    /// E1: 2D 텍스트 오브젝트의 parent 체인 합성 — 레이어/라이트와 동일 규약(로컬→월드 픽셀). 텍스트는
+    /// 렌더 회전 필드가 없어 origin/scale 만 굽는다(회전 미지원은 별도 갭, F057 — 무관 변경). 레이어 합성
+    /// 전에 실행해야 한다(레이어가 월드로 덮어써지면 부모-레이어 로컬값이 유실 — F691 라이트와 동일 이유).
+    private static func composeTextParentTransforms(texts: inout [SceneTextLayer], layers: [SceneLayer],
+                                                     nodes3D: [SceneNode3D], camera3D: SceneCamera3D?) {
+        guard camera3D == nil,
+              texts.contains(where: { $0.parent != nil && !$0.disablePropagation }) else { return }
+        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D)
+        for i in texts.indices {
+            guard !texts[i].disablePropagation, let pid = texts[i].parent,
+                  let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf, noPropagate: noPropagate)
+            else { continue }
+            let r = pw.angle
+            let ca = cosf(r), sa = sinf(r)
+            let sx = pw.scale.x * texts[i].origin.x, sy = pw.scale.y * texts[i].origin.y
+            texts[i].origin = Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca)
+            texts[i].scale = Vec2(x: pw.scale.x * texts[i].scale.x, y: pw.scale.y * texts[i].scale.y)
+        }
+    }
+
+    /// E1: 2D 파티클 오브젝트의 parent 체인 합성 — origin/scale(Vec2, 2D 정사영 경로 전용) 만 굽는다.
+    /// origin3D/scale3D/angles3D(3D 마운트 경로)는 SceneRenderer3D 가 별도로 parent3D 를 합성하므로 무관.
+    private static func composeParticleParentTransforms(particles: inout [SceneParticle], layers: [SceneLayer],
+                                                         nodes3D: [SceneNode3D], camera3D: SceneCamera3D?) {
+        guard camera3D == nil,
+              particles.contains(where: { $0.parent != nil && !$0.disablePropagation }) else { return }
+        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D)
+        for i in particles.indices {
+            guard !particles[i].disablePropagation, let pid = particles[i].parent,
+                  let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf, noPropagate: noPropagate)
+            else { continue }
+            let r = pw.angle
+            let ca = cosf(r), sa = sinf(r)
+            let sx = pw.scale.x * particles[i].origin.x, sy = pw.scale.y * particles[i].origin.y
+            particles[i].origin = Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca)
+            particles[i].scale = Vec2(x: pw.scale.x * particles[i].scale.x, y: pw.scale.y * particles[i].scale.y)
         }
     }
 
