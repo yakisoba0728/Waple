@@ -178,7 +178,11 @@ extension SceneRenderer {
 
     /// 레이어를 후→전 순서(JSON 순서)로 GPU 리소스화. 디코드 실패 레이어는 스킵.
     func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice, sceneID: String) -> [GPULayer] {
-        let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
+        // E1(⑥): SceneRenderer.swift:1122(projW/projH 인스턴스 프로퍼티)와 동일하게 클램프 — 종전엔 이
+        // 쿼드 정점 계산만 무클램프 doc.projectionWidth/Height 를 써서, projection 이 0인 씬(파서는
+        // 명시적 0을 그대로 통과시킨다, SceneDocument.swift:729-730)에서 pxToNDC 0-나눗셈으로 정적
+        // 레이어만 NaN 소실되는 비대칭이 있었다(애니/스크립트 경로는 이미 클램프된 projW/projH 사용).
+        let w = Float(max(1, doc.projectionWidth)), h = Float(max(1, doc.projectionHeight))
         var out: [GPULayer] = []
         // attachment 자식들이 공유하는 부모 퍼펫 캐시(경로→파스 결과, 실패도 캐시 — 재파스 방지).
         var attachPuppets: [String: PuppetModel?] = [:]
@@ -249,6 +253,9 @@ extension SceneRenderer {
                 effW = loaded.width
                 effH = loaded.height
             } else {
+                // E1(⑥): 진단성 — 종전엔 텍스처 바이트를 찾았어도 디코드(TexImage.parse/makeImageTexture)에
+                // 실패하면 레이어가 아무 로그 없이 통째로 드롭됐다(buildLayers 는 마운트당 1회라 스팸 무관).
+                WapleLog.warn("[Waple] layer texture decode failed, layer dropped: \(layer.textureEntryName)")
                 continue
             }
             // 스프라이트 프레임 있으면 상시 리드로 필요(gif 재생) — needsDisplay 정책은 shouldAnimate 로.
@@ -1134,6 +1141,12 @@ extension SceneRenderer {
             g.scale3D = SIMD3<Float>(sp.scale3D.x, sp.scale3D.y, sp.scale3D.z)
             g.angles3D = SIMD3<Float>(sp.angles3D.x, sp.angles3D.y, sp.angles3D.z)
             g.visible3D = sp.visible
+            // E1(④): 2D 정사영 경로 visible — 정적 초기값 + per-frame 재평가용 스크립트 엔진(F199 캡처
+            // 소비). 종전엔 어디서도 읽지 않아 저작자가 숨긴 파티클 시스템이 항상 렌더됐다.
+            g.initialVisible = sp.visible
+            if let src = sp.visibleScript {
+                g.visibleEngine = makeScriptEngine(src, scriptPropsJSON: sp.visibleScriptProps)
+            }
             // REFRACT: 노멀맵(textures[1]) 로드 + refractAmount. 실패 시 refract 미설정 → identity 폴백(무크래시).
             if let mat = def.material, mat.refract, let normalName = mat.normalTextureName,
                let n = resolveRefractNormal(normalName, package: package, device: device) {
@@ -1147,17 +1160,30 @@ extension SceneRenderer {
             g.noInterp = resolveTextureNoInterpolation(def.material?.textureName, package: package)
             return g
         }
+        // E1(③): F178 — children[]는 파스/시뮬 모두 깊이4 재귀를 지원하나(SceneDocument.parseParticleDef
+        // 의 visited.count<4 사이클/깊이 캡이 상한), 종전엔 이 GPU화 루프가 직계 자식(1단)만 순회해
+        // 손자 이상은 CPU/RNG 시뮬 비용만 내고 화면에 그려지지 않았다. def.children 를 재귀 순회해
+        // 모든 깊이의 자손에 GPUParticleSystem 을 만든다 — childOf.parent 는 항상 "직계" 부모의 GPU
+        // 배열 인덱스(트리 구조 그대로)이고, draw/step 소비처는 이 체인을 루트까지 거슬러 올라가 실제
+        // (스텝되는) 루트 sim 에서 경로 기반으로 표시 스냅샷을 얻는다(중간 자식의 sim 은 더미 — 미스텝).
+        func appendChildren(of def: ParticleSystemDef, parentIdx: Int, seed: UInt64, sp: SceneParticle, depth: Int) {
+            guard depth < 8 else { return }  // 방어적 상한(파스 단계 캡이 실질 상한 — 여긴 안전망)
+            for (li, link) in def.children.enumerated() {
+                let childSeed = seed &+ UInt64(li) &+ 1
+                if let child = makeSystem(def: link.def, seed: childSeed, sp: sp,
+                                          childOf: (parent: parentIdx, link: li)) {
+                    let childIdx = out.count
+                    out.append(child)
+                    appendChildren(of: link.def, parentIdx: childIdx, seed: childSeed, sp: sp, depth: depth + 1)
+                }
+            }
+        }
         for (i, sp) in doc.particles.enumerated() {
             let seed = UInt64(0x9E37_79B9_7F4A_7C15 &+ UInt64(i))
             guard let parent = makeSystem(def: sp.def, seed: seed, sp: sp) else { continue }
             let parentIdx = out.count
             out.append(parent)
-            for (li, link) in sp.def.children.enumerated() {
-                if let child = makeSystem(def: link.def, seed: seed &+ UInt64(li) &+ 1, sp: sp,
-                                          childOf: (parent: parentIdx, link: li)) {
-                    out.append(child)
-                }
-            }
+            appendChildren(of: sp.def, parentIdx: parentIdx, seed: seed, sp: sp, depth: 0)
         }
         // 이미터 오디오반응이 있으면 라이브 오디오 공급자 기동 대상(mount 의 hasAudio 게이트 → provider.start()).
         if out.contains(where: { $0.def.emitterAudio.contains { $0 != nil } }) { hasAudio = true }

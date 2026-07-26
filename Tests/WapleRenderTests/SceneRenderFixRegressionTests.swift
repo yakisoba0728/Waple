@@ -216,4 +216,103 @@ final class SceneRenderFixRegressionTests: XCTestCase {
         XCTAssertTrue(post.encode(cb: cb, src: src, dst: dst), "F539: 정상 인코드는 true 반환")
         cb.commit(); cb.waitUntilCompleted()
     }
+
+    // MARK: - E1(⑦): mount() 오디오 스펙트럼 캡처 헤드리스 결정성 가드 (F286)
+
+    /// mount()의 SCStream 오디오 스펙트럼 캡처가 형제 sceneAudio 블록(:1333, isPrimaryScreenWindow 가드)과
+    /// 동일하게 container.window==nil(헤드리스)에서는 기동을 건너뛰어야 한다 — 종전엔 이 블록만 가드가
+    /// 없어 테스트/캡처 경로에서도 화면 기록 권한을 요구하는 실 SCStream 캡처가 무조건 떴다.
+    func testMountHeadlessSkipsAudioSpectrumCapture() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal device") }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_e1_audio_headless", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"particle":"particles/x.json","origin":"10 10 0"}]}
+        """
+        // audioprocessingmode!=0 이미터 — buildParticles 가 hasAudio=true 로 승격(SceneRendererResources.swift:1169).
+        let particle = """
+        {"emitter":[{"name":"sphererandom","rate":1,"audioprocessingmode":3}],
+         "renderer":[{"name":"sprite"}],"maxcount":10,"material":"materials/x.json"}
+        """
+        let material = #"{"passes":[{"textures":["x"]}]}"#
+        let pkgData = encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("particles/x.json", particle.data(using: .utf8)!),
+            ("materials/x.json", material.data(using: .utf8)!),
+            ("materials/x.tex", solidTex(255, 255, 255)),
+        ])
+        try pkgData.write(to: dir.appendingPathComponent("scene.pkg"))
+
+        let project = WallpaperProject(
+            id: "e1audio", type: .scene, fileName: "scene.pkg", previewName: nil, title: "e1audio",
+            tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))  // 창에 미부착 — window == nil
+        XCTAssertNil(container.window)
+        let renderer = SceneRenderer()
+        try renderer.mount(in: container, project: project)
+        defer { renderer.teardown() }
+
+        XCTAssertTrue(renderer.hasAudio, "오디오반응 이미터가 있으면 hasAudio 는 계속 true 여야(무회귀)")
+        XCTAssertNil(renderer.audioProvider, "헤드리스(window==nil)에서는 SCStream 캡처 프로바이더가 기동되면 안 됨")
+    }
+
+    // MARK: - E1(⑥): buildLayers projW/projH 클램프 통일(projection 0 씬 NaN 방지)
+
+    /// scene.json 이 orthogonalprojection width/height 를 명시적 0 으로 주면 파서가 그대로 통과시킨다
+    /// (SceneDocument.swift:735 `intVal(proj["width"]) ?? 1920`) — 종전 buildLayers 는 이 값을
+    /// 무클램프로 quadVertices 에 넘겨 pxToNDC 의 `x / projW` 가 0-나눗셈으로 NaN/Inf 정점을 냈다
+    /// (encodeLayer 의 per-frame 재계산 경로는 이미 max(1,…) 클램프된 projW/projH 를 써서 비대칭이었다).
+    func testBuildLayersClampsZeroProjectionDimensionsAvoidingNaNVertices() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":0,"height":0}},
+         "objects":[{"id":1,"image":"models/x.json","origin":"0 0 0","size":"10 10"}]}
+        """
+        let p = ScenePackage.assemble([
+            ("scene.json", Data(scene.utf8)),
+            ("models/x.json", Data(#"{"material":"materials/x.json"}"#.utf8)),
+            ("materials/x.json", Data(#"{"passes":[{"textures":["x"]}]}"#.utf8)),
+            ("materials/x.tex", solidTex(255, 255, 255)),
+        ])
+        let doc = try SceneDocument.parse(package: p)
+        XCTAssertEqual(doc.projectionWidth, 0, "파서는 명시적 0 을 그대로 통과(무회귀 확인 — 클램프는 렌더러 책임)")
+        XCTAssertEqual(doc.projectionHeight, 0)
+
+        let renderer = SceneRenderer()
+        let built = renderer.buildLayers(doc: doc, package: p, device: device, sceneID: "e1-projzero")
+        XCTAssertEqual(built.count, 1)
+        let verts = built[0].vertexBuffer.contents().bindMemory(to: SIMD4<Float>.self, capacity: 4)
+        for i in 0..<4 {
+            XCTAssertTrue(verts[i].x.isFinite, "projection 0 이어도 정점 x 는 유한해야(0-나눗셈 NaN 방지)")
+            XCTAssertTrue(verts[i].y.isFinite, "projection 0 이어도 정점 y 는 유한해야(0-나눗셈 NaN 방지)")
+        }
+    }
+
+    /// E1(⑥): 텍스처 바이트는 찾았지만 디코드(TexImage.parse/makeImageTexture, 대체 bitmapRGBAFile 모두)에
+    /// 실패하면 종전엔 레이어가 아무 로그 없이 통째로 드롭됐다(buildLayers:255 `else { continue }`).
+    func testBuildLayersWarnsOnTextureDecodeFailure() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        var captured: [String] = []
+        let saved = WapleLog.warnHandler
+        defer { WapleLog.warnHandler = saved }
+        WapleLog.warnHandler = { captured.append($0) }
+
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"image":"models/x.json","origin":"0 0 0","size":"10 10"}]}
+        """
+        let p = ScenePackage.assemble([
+            ("scene.json", Data(scene.utf8)),
+            ("models/x.json", Data(#"{"material":"materials/x.json"}"#.utf8)),
+            ("materials/x.json", Data(#"{"passes":[{"textures":["x"]}]}"#.utf8)),
+            ("materials/x.tex", Data("not-a-real-tex".utf8)),  // 바이트는 존재하지만 디코드 실패
+        ])
+        let doc = try SceneDocument.parse(package: p)
+        let renderer = SceneRenderer()
+        let built = renderer.buildLayers(doc: doc, package: p, device: device, sceneID: "e1-decodefail")
+        XCTAssertEqual(built.count, 0, "디코드 실패 레이어는 계속 드롭돼야(무회귀)")
+        XCTAssertTrue(captured.contains { $0.contains("texture decode failed") },
+                      "디코드 실패가 경고 로그로 남아야 함(종전엔 무로그)")
+    }
 }

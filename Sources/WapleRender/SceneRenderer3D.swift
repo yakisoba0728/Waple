@@ -117,6 +117,9 @@ extension SceneRenderer {
         /// F811: doc.layers 인덱스(= JS thisScene.layers 인덱스 — sceneScriptLayers 의 이미지 선행 순서).
         /// 빌보드 배열은 로드 실패 레이어를 걸러 인덱스가 어긋나므로 디스크립터 정합 키를 별도 보관한다.
         let layerIndex: Int
+        /// E1(⑦): scene.json objects[] id(SceneLayer.id) — encode3D 의 nmap 룩업 키. 0 = 미지정(다른
+        /// 오브젝트가 이 빌보드를 parent 로 참조할 수 없음, 무회귀).
+        let id: Int
         let texture: MTLTexture
         let size: SIMD2<Float>           // 씬 픽셀 크기(월드 반경 = size×scale×부모스케일)
         let parent: Int?
@@ -150,7 +153,8 @@ extension SceneRenderer {
              depthTest: Bool, depthWrite: Bool, effects: [EffectGPU], texWidth: Int, texHeight: Int,
              isFrameBuffer: Bool, origin: SIMD3<Float>, scale: SIMD2<Float>, angleZ: Float,
              tint: SIMD4<Float>, visible: Bool, lighting: Bool,
-             roughness: Float, metallic: Float, specularTint: SIMD3<Float>, layerIndex: Int = 0) {
+             roughness: Float, metallic: Float, specularTint: SIMD3<Float>, layerIndex: Int = 0, id: Int = 0) {
+            self.id = id
             self.texture = texture; self.size = size; self.parent = parent; self.order = order
             self.additive = additive
             self.depthTest = depthTest; self.depthWrite = depthWrite; self.effects = effects
@@ -424,7 +428,7 @@ extension SceneRenderer {
                                  roughness: layer.roughness,
                                  metallic: layer.metallic,
                                  specularTint: SIMD3(layer.specularTint.x, layer.specularTint.y, layer.specularTint.z),
-                                 layerIndex: bbLayerIndex)
+                                 layerIndex: bbLayerIndex, id: layer.id)
             attachScripts(bb, sources: layer.propertyScripts)
             billboards.append(bb)
             billboardDefs.append(layer)   // 록스텝(이벤트 마커 결속 — buildAnimationEventTargets)
@@ -1140,10 +1144,20 @@ extension SceneRenderer {
         evaluate3DScripts(time: time)
         // 현재 로컬 변환으로 계층 노드 맵 재구성(월드행렬 합성 입력).
         var nmap: [Int: Scene3DMath.Node] = [:]
-        nmap.reserveCapacity(nodes3D.count)
+        nmap.reserveCapacity(nodes3D.count + billboards.count)
         for n in nodes3D {
             nmap[n.id] = Scene3DMath.Node(origin: n.origin, angles: n.angles, scale: n.scale,
                                           parent: n.parent, visible: n.visible)
+        }
+        // E1(⑦): 빌보드도 다른 오브젝트의 parent 가 될 수 있다 — 종전엔 nmap 에 nodes3D 만 있어
+        // billboard 를 parent 참조하는 요소가 Scene3DMath.worldMatrix(nil 반환)에 매프레임 조용히
+        // 드롭됐다. encodeBillboard 자신의 로컬 변환(:1470, angles 는 카메라-페이싱이라 항등 — 실제
+        // 회전은 roll 로 별도 적용)과 동일 규약으로 등록해 자신이 렌더되는 위치와 일치시킨다.
+        // 레이어(빌보드) id 가 nodes3D id 와 충돌하면 F437 규약과 동형으로 빌보드(이미지 콘텐츠) 우선.
+        for bb in billboards where bb.id != 0 {
+            nmap[bb.id] = Scene3DMath.Node(origin: bb.origin, angles: SIMD3<Float>(0, 0, 0),
+                                           scale: SIMD3(bb.scale.x, bb.scale.y, 1),
+                                           parent: bb.parent, visible: bb.visible)
         }
         var billboardTextures: [Int: MTLTexture] = [:]
         for (i, bb) in billboards.enumerated() where !bb.effects.isEmpty && !bb.isFrameBuffer {
@@ -1578,7 +1592,8 @@ extension SceneRenderer {
     ///   가림/절전 갭 후에도 프레임당 유한 스텝(서브스텝 상한 dtCap)만 밟는다 — time-clock 무제한 캐치업 금지(감사 C1).
     /// - liveDelta=nil(캡처): particle3DClock(프레시 마운트/캡처 시작=0) → time 까지 전량 서브스텝 = 0→t 결정적
     ///   리플레이(2D 캡처 입도와 동일 — 방출/이동 반영). captureFrames 가 라이브 sim 을 프레시로 리셋해 재현 보장(I1).
-    /// 루트만 스텝, 자식은 부모 sim.childDisplay. 밟은 서브스텝 수를 particle3DLastStepCount 에 기록(테스트 관측).
+    /// 루트만 스텝, 자식/손자(F178: 임의 깊이)는 루트 sim.descendantDisplay(경로 기반). 밟은 서브스텝
+    /// 수를 particle3DLastStepCount 에 기록(테스트 관측).
     func stepParticleSnapshots(time: Float, liveDelta: Float?) -> [[Particle]] {
         let dtCap: Float = 1.0 / 30.0
         var snaps = [[Particle]](repeating: [], count: particleSystems.count)
@@ -1594,8 +1609,12 @@ extension SceneRenderer {
         } else {
             for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(0) }   // 정지/재드로 — 현재 스냅샷 재방출.
         }
+        // F178(E1-③): 임의 깊이 — 루트까지 경로를 모아 descendantDisplay 로 조회(순서 무관, 루트
+        // childStates 를 직접 재귀 탐색하므로 이 루프의 i 순서가 부모/자식 순일 필요가 없다).
         for i in particleSystems.indices {
-            if let c = particleSystems[i].childOf { snaps[i] = particleSystems[c.parent].sim.childDisplay(c.link) }
+            if let (root, path) = particleDescendantPath(from: i) {
+                snaps[i] = particleSystems[root].sim.descendantDisplay(path: path)
+            }
         }
         particle3DLastStepCount = steps
         return snaps

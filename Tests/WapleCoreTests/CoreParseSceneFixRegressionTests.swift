@@ -238,4 +238,92 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(pass.userTextureNames[1], "usertexture1")
         XCTAssertEqual(pass.userTextureNames[2], "$mediaThumbnail")  // {name,type} 는 name 정규화
     }
+
+    // MARK: E1 — 2D text·particle parent 체인 합성 + 각도 라디안 정정 + disablepropagation 스킵
+
+    /// 텍스트 오브젝트는 종전 SceneTextLayer 에 parent 필드 자체가 없어 부모 붙은 텍스트가 저작
+    /// 로컬 좌표(대개 화면 밖) 그대로 렌더됐다. 레이어/라이트와 동일 규약으로 합성돼야 한다.
+    func testTextParentTransformComposed2D() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":1,"name":"g","origin":"500 300 0","scale":"2 2 1"},
+           {"id":2,"name":"clock","text":"00:00","parent":1,"origin":"10 10 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([("scene.json", d(scene))])
+        let doc = try SceneDocument.parse(package: pkg)
+        let text = try XCTUnwrap(doc.texts.first)
+        XCTAssertEqual(text.origin.x, 520, accuracy: 0.001)  // 500 + 2*10
+        XCTAssertEqual(text.origin.y, 320, accuracy: 0.001)  // 300 + 2*10
+        XCTAssertEqual(text.scale.x, 2, accuracy: 0.001)     // 부모 scale(2) × 자신 scale(기본 1)
+    }
+
+    /// 파티클 오브젝트도 2D 정사영 경로(origin/scale Vec2)에서 부모 체인이 전혀 합성되지 않아
+    /// 부모에 붙은 파티클 시스템이 로컬 좌표(대개 화면 좌상단 근처)에 그려졌다.
+    func testParticleParentTransformComposed2D() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":1,"name":"g","origin":"400 200 0"},
+           {"id":2,"name":"snow","particle":"particles/snow.json","parent":1,"origin":"5 5 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("particles/snow.json", d(#"{"renderer":[{"name":"sprite"}],"maxcount":1}"#)),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let p = try XCTUnwrap(doc.particles.first)
+        XCTAssertEqual(p.origin.x, 405, accuracy: 0.001)  // 400 + 5
+        XCTAssertEqual(p.origin.y, 205, accuracy: 0.001)  // 200 + 5
+    }
+
+    /// A1(852473d) 라디안 정정은 렌더 인코더(SceneRendererFrameEncoder.swift:405)만 고쳤고 이 파스-시
+    /// 합성부(composeParentTransforms)는 미동기라 부모 회전이 `*.pi/180` 으로 재차 축소됐다. scene.json
+    /// angles 는 이미 라디안이므로, 부모 angleZ=π/2(90°)면 자식 오프셋이 정확히 90° 회전해야 한다
+    /// (종전 버그는 π/2 를 "도(°)"로 오인해 사실상 무회전에 가깝게 축소했다).
+    func testLayerParentRotationUsesRadiansNotDegrees() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1000,"height":1000}},
+         "objects":[
+           {"id":1,"name":"g","origin":"500 500 0","angles":"0 0 1.5707963"},
+           {"id":2,"name":"child","image":"models/x.json","parent":1,"origin":"10 0 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let layer = try XCTUnwrap(doc.layers.first { $0.name == "child" })
+        // 로컬 (10,0) 을 부모 각 π/2 로 회전 → (0,10) 만큼의 오프셋(부모 원점 500,500 기준).
+        XCTAssertEqual(layer.origin.x, 500, accuracy: 0.01)
+        XCTAssertEqual(layer.origin.y, 510, accuracy: 0.01)
+    }
+
+    /// disablepropagation:true 인 레이어는 부모 트랜스폼 상속을 차단 — 저작 로컬 좌표를 그대로 유지해야
+    /// 한다(코퍼스 실측 34건, 전부 parent 보유). 종전엔 플래그를 검사하지 않고 무조건 합성했다.
+    func testDisablePropagationSkipsParentTransformComposition() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1000,"height":1000}},
+         "objects":[
+           {"id":1,"name":"g","origin":"500 500 0","scale":"2 2 1"},
+           {"id":2,"name":"child","image":"models/x.json","parent":1,"origin":"10 10 0",
+            "disablepropagation":true}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let layer = try XCTUnwrap(doc.layers.first { $0.name == "child" })
+        XCTAssertEqual(layer.origin, Vec2(x: 10, y: 10))  // 부모 미합성 — 저작 로컬 그대로
+        XCTAssertEqual(layer.scale, Vec2(x: 1, y: 1))
+    }
 }

@@ -376,4 +376,73 @@ final class TextScriptEngineSceneFixRegressionTests: XCTestCase {
         scene.setCursorState(worldX: 640, worldY: 360, screenX: 1280, screenY: 720, leftDown: true)
         XCTAssertEqual(e.evaluate(current: ""), "640,360/true")
     }
+
+    // MARK: E1(⑤) — ILayer.getVideoTexture/getParticleSystem/emitParticles·IScene.destroyLayer 안전 심
+
+    /// 종전 이 3개 메서드가 평객체에 부재라 첫 호출에서 TypeError 로 update() 전체가 죽어, 이 반환문에
+    /// 도달하지 못했다(정적 visible=false 레이어가 영구 미표시로 굳는 등 후속 스크립트 로직 무력화).
+    func testGetVideoTextureAndParticleSystemDoNotThrow() throws {
+        let layer = SceneScriptLayerDescriptor(name: "c")
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [layer]))
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            var t = thisLayer.getVideoTexture();
+            var p = thisLayer.getParticleSystem();
+            thisLayer.emitParticles(5);
+            return (t ? 'tex' : 'no') + ',' + (p ? 'ps' : 'no') + ',reached';
+        }
+        """, scene: scene, currentLayerIndex: 0))
+        XCTAssertEqual(e.evaluate(current: ""), "tex,ps,reached")
+    }
+
+    /// thisScene.destroyLayer 부재는 TypeError(392) — 이제 안전 제거 + getLayerCount/getLayerByID 동반.
+    func testSceneDestroyLayerAndLayerCount() throws {
+        let a = SceneScriptLayerDescriptor(name: "a", id: 1)
+        let b = SceneScriptLayerDescriptor(name: "b", id: 2)
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [a, b]))
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            var before = thisScene.getLayerCount();
+            var byId = thisScene.getLayerByID(2);
+            thisScene.destroyLayer('b');
+            var after = thisScene.getLayerCount();
+            return before + ',' + after + ',' + (byId ? byId.getName() : 'null');
+        }
+        """, scene: scene, currentLayerIndex: 0))
+        XCTAssertEqual(e.evaluate(current: ""), "2,1,b")
+    }
+
+    /// destroyLayer 가 splice 로 배열을 줄이면 그 뒤 레이어들의 위치 인덱스가 한 칸씩 밀린다 —
+    /// 렌더러 read-back(readBackScriptLayerState)은 이름이 아니라 **위치 인덱스**(=doc.layers 인덱스)로
+    /// thisScene.layers[i] 를 직접 읽으므로, 시프트가 나면 인덱스 1 이후 모든 레이어가 다른 레이어의
+    /// origin/scale/angles/visible 을 뒤집어쓴다(툼스톤 대신 splice 를 쓰면 이 테스트가 실패해야 한다).
+    func testSceneDestroyLayerPreservesSubsequentLayerIndices() throws {
+        let a = SceneScriptLayerDescriptor(name: "a", id: 1)
+        let b = SceneScriptLayerDescriptor(name: "b", id: 2)
+        let c = SceneScriptLayerDescriptor(name: "c", origin: SIMD3<Float>(7, 8, 9), id: 3)
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [a, b, c]))
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            thisScene.destroyLayer('b');
+            var atIndex2 = thisScene.layers[2];
+            return atIndex2.name + ',' + atIndex2.origin.x + ',' + thisScene.layers.length;
+        }
+        """, scene: scene, currentLayerIndex: 0))
+        XCTAssertEqual(e.evaluate(current: ""), "c,7,3",
+                        "destroyLayer 이후에도 'c' 는 그대로 인덱스 2 를 유지해야(splice 시프트 금지)")
+    }
+
+    /// thisScene.createLayer 는 종전과 동일하게 무해 스텁(JS 배열에만 추가, GPU 렌더 미연결)이지만
+    /// 이제 크래시 없이 반환값을 계속 조작할 수 있어야 한다(경고 로그는 별도 채널 — 반환 동작만 단언).
+    func testCreateLayerStubRemainsHarmlessAndUsable() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            var l = thisScene.createLayer('spawned');
+            l.setOrigin(new Vec3(1, 2, 0));
+            return thisScene.getLayerCount() + ',' + l.getOrigin().x;
+        }
+        """, scene: scene))
+        XCTAssertEqual(e.evaluate(current: ""), "2,1", "루트+신규 레이어 = 2, 신규 레이어 origin 조작 반영")
+    }
 }

@@ -586,6 +586,13 @@ extension SceneRenderer {
                 i = j
                 continue
             }
+            // E1(④): 2D 파티클 visible(정적+스크립트) 게이트 — 레이어/텍스트와 동일 규약으로 스크립트를
+            // 먼저 평가(shared 사이드이펙트 보존)한 뒤 거짓이면 draw 스킵. 종전엔 이 검사가 전무해
+            // 저작자가 숨긴 파티클 시스템이 항상 렌더됐다.
+            if item.kind == .particle, !particleScriptVisible(item.idx, time: time) {
+                i += 1
+                continue
+            }
             switch item.kind {
             case .mesh3D:
                 break  // 위 런 수집에서 처리(도달 불가)
@@ -1284,6 +1291,19 @@ extension SceneRenderer {
         enc.setFragmentTexture(tex, index: 0)
         enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+    }
+
+    /// E1(④): 2D 파티클 visible 프로퍼티 스크립트 재평가(레이어 encodeLayer/텍스트 encodeText 의 "visible"
+    /// 케이스와 동일 규약 — 이전 평가값을 current 로 전달, 스크립트 없으면 정적 초기값). 반환값이 draw 게이트.
+    func particleScriptVisible(_ idx: Int, time: Float) -> Bool {
+        guard idx < particleSystems.count, let engine = particleSystems[idx].visibleEngine else {
+            return idx < particleSystems.count ? particleSystems[idx].initialVisible : true
+        }
+        engine.setRuntime(Double(time))
+        let cur = scriptParticleVisible[idx] ?? particleSystems[idx].initialVisible
+        let v = engine.evaluateBool(current: cur) ?? cur
+        scriptParticleVisible[idx] = v
+        return v
     }
 
     /// 파티클 시스템 1개의 스냅샷을 빌보드 쿼드로 드로우(additive/translucent).

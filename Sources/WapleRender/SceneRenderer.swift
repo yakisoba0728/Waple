@@ -92,6 +92,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         /// 감사 V07: 알베도 NoInterpolation(TexImage flags bit0) — encodeParticle 이 nearest 변형 선택.
         var noInterp: Bool = false
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
+        /// E1(④): 2D 정사영 경로의 초기 가시성(SceneParticle.visible — 정적 스크립트 없음이면 이 값이
+        /// 종신, 무회귀). 3D 는 visible3D(별개 채널)를 계속 쓴다.
+        var initialVisible: Bool = true
+        /// E1(④): visible 프로퍼티 스크립트 엔진(SceneParticle.visibleScript, F199) — encodeParticle 호출
+        /// 전 per-frame 재평가로 draw 게이트. nil = 정적 visible(스크립트 없음, 무회귀).
+        var visibleEngine: TextScriptEngine? = nil
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 콘텐츠 스크립트(engine)는 매 프레임 재평가
     /// (F724 — 변경 시에만 재래스터). 프로퍼티 스크립트(propScripts, F218/F219)는 재래스터 없이 encodeText 가
@@ -142,6 +148,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 텍스트 visible 스크립트의 최근 평가값(GPUText.uid → 표시 여부, F219). scriptVisible 과 별개
     /// 인덱스 공간(레이어/텍스트는 서로 다른 배열이라 uid 가 겹칠 수 있음).
     var scriptTextVisible: [Int: Bool] = [:]
+    /// E1(④): 2D 파티클 visible 스크립트의 최근 평가값(particleSystems 인덱스 → 표시 여부).
+    /// scriptVisible/scriptTextVisible 과 별개 인덱스 공간(파티클은 별도 배열).
+    var scriptParticleVisible: [Int: Bool] = [:]
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
@@ -1371,7 +1380,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         startMediaPollingIfNeeded()
         // 오디오-반응 효과가 있으면 시스템 오디오 스펙트럼 캡처 시작(Screen Recording 권한 필요).
-        if hasAudio {
+        // E1(⑦): 형제 sceneAudio 블록(:1333)과 동일한 헤드리스 결정성 가드 — 종전엔 이 블록만 누락돼
+        // 헤드리스(캡처/테스트) 경로에서도 SCStream 오디오 캡처가 무조건 기동됐다.
+        if hasAudio, Self.isPrimaryScreenWindow(container.window) {
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] spec in
                 // spec = 128(64L+64R, 채널별 FFT) — 16빈도 채널 분리 다운샘플.
@@ -1473,6 +1484,32 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         for case let v? in layers.map(\.video) { v.resume() }
     }
 
+    /// F178(E1-③): idx 가 자식/손자(비루트, particleSystems[idx].childOf != nil)면 childOf 체인을
+    /// 루트까지 거슬러 올라가 링크 경로(root→leaf 순)를 모은다. childOf 는 항상 "직계" 부모의 GPU
+    /// 배열 인덱스만 담으므로(트리 구조 그대로 buildParticles 가 배선), 중간 자식의 sim 은 더미(step
+    /// 미호출)라 경로 전체를 루트의 실제 스텝된 sim 에 물어야 한다(ParticleSimulator.descendantDisplay).
+    /// 루트면 nil(호출자는 자기 sim.step 을 직접 쓴다 — 상태 변이는 루트 전용).
+    func particleDescendantPath(from idx: Int) -> (root: Int, path: [Int])? {
+        guard let firstC = particleSystems[idx].childOf else { return nil }
+        var path = [firstC.link]
+        var cur = firstC.parent
+        while let cc = particleSystems[cur].childOf {
+            path.insert(cc.link, at: 0)
+            cur = cc.parent
+        }
+        return (root: cur, path: path)
+    }
+
+    /// E1(⑥): draw() 자원 실패 조기 return 경로의 진단 로그 — 원인별 1회만(60fps 루프에서 매프레임
+    /// 재실패해도 로그 폭주 방지). 종전엔 이 경로들이 전부 조용히 프레임을 스킵해 "화면이 멈췄다/비었다"
+    /// 증상의 원인 특정이 불가능했다.
+    var loggedDrawFailureKeys: Set<String> = []
+    func logDrawFailureOnce(_ key: String, _ message: String) {
+        guard !loggedDrawFailureKeys.contains(key) else { return }
+        loggedDrawFailureKeys.insert(key)
+        WapleLog.warn("[Waple] draw() \(message)")
+    }
+
     public func draw(in view: MTKView) {
         // F4: isGeometryFlipped 멱등 재확인 — WapleMTKView.viewDidMoveToWindow 가 놓칠 수 있는 경로
         // (예: 창 자체는 그대로인데 AppKit 이 백킹 프로퍼티만 재동기화하는 경우) 대비 매 프레임 방어.
@@ -1492,7 +1529,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if occluded { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
-              let cb = queue.makeCommandBuffer() else { return }
+              let cb = queue.makeCommandBuffer() else {
+            logDrawFailureOnce("resources", "자원 확보 실패(device/queue/pipeline/drawable/commandBuffer 중 하나) — 프레임 스킵")
+            return
+        }
         // 비디오 레이어 라이브 재생 지연 기동: 첫 draw 도달 = 라이브 컨텍스트 확정(captureFrames 는 draw 를
         // 타지 않음 → 헤드리스 결정적 경로 유지). startLive 는 멱등이라 플래그로 매 프레임 순회만 회피.
         if hasVideoLayer, !videoLayersLive {
@@ -1531,13 +1571,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             beginFramePool()
             frameShakeOffset = shakeOffset(at: time)  // camerashake 3D 전역 지터(encode3D 가 viewProj 에 좌승). 비활성=.zero → 항등.
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
-                  encode3D(into: acc, cb: cb, device: device, time: time, particleDelta: dt) else { cb.commit(); return }
+                  encode3D(into: acc, cb: cb, device: device, time: time, particleDelta: dt) else {
+                logDrawFailureOnce("3d-encode", "3D 오프스크린 확보 또는 encode3D 실패 — 프레임 스킵")
+                cb.commit(); return
+            }
             pushLiveSceneLayers()  // F811(S-35): 3D 빌보드 라이브 채널 소비(2D :1448 과 동일 — JS thisScene.layers 갱신)
             guard finalizeScene(
                 source: acc,
                 destination: drawable.texture,
                 commandBuffer: cb,
                 device: device) else {
+                logDrawFailureOnce("3d-finalize", "3D finalizeScene 실패 — 프레임 스킵")
                 cb.commit()
                 return
             }
@@ -1573,27 +1617,37 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: time), projW: projW, projH: projH)  // camera origin.xy 팬(중립/스크립트/정적 = .zero 데드존 → 비트동일)
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
-        guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { cb.commit(); return }
+        guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else {
+            logDrawFailureOnce("2d-acc", "2D 오프스크린(acc) 확보 실패 — 프레임 스킵")
+            cb.commit(); return
+        }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { cb.commit(); return }
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else {
+            logDrawFailureOnce("2d-encoder", "렌더 커맨드 인코더 생성 실패 — 프레임 스킵")
+            cb.commit(); return
+        }
         // 씬 오브젝트 순서대로 레이어·파티클·텍스트 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
         guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: time,
                                             displayTextures: displayTextures,
                                             textTextures: textTextures,
                                             particleSnapshot: { [self] idx in
-                                                // 자식은 부모 sim 캐시를 그린다(drawPlan 이 부모를 먼저 스텝).
-                                                if let c = particleSystems[idx].childOf {
-                                                    return particleSystems[c.parent].sim.childDisplay(c.link)
+                                                // 자식/손자는 루트 sim 캐시를 경로 기반으로 그린다(drawPlan 이
+                                                // 루트를 먼저 스텝 — F178: 임의 깊이).
+                                                if let (root, path) = particleDescendantPath(from: idx) {
+                                                    return particleSystems[root].sim.descendantDisplay(path: path)
                                                 }
                                                 // 라이브 오디오반응: 신호 주입(무음이면 sim 이 스킵). 헤드리스 캡처는
                                                 // captureFrames 의 별도 로컬 sims 라 이 경로 밖 → 무음 A/B 비트동일 유지.
                                                 if hasAudio { particleSystems[idx].sim.currentAudio = currentSpectrum }
                                                 return particleSystems[idx].sim.step(dt)
                                             },
-                                            camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }
+                                            camOffset: &camOffset, aspectScale: &aspectScale) else {
+            logDrawFailureOnce("2d-drawplan", "encodeDrawPlan 실패 — 프레임 스킵")
+            cb.commit(); return
+        }
         finalEnc.endEncoding()
         pushLiveSceneLayers()  // F743(S-35): JS thisScene.layers 라이브 갱신(다음 프레임 스크립트 독해용)
         guard finalizeScene(
@@ -1601,6 +1655,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             destination: drawable.texture,
             commandBuffer: cb,
             device: device) else {
+            logDrawFailureOnce("2d-finalize", "2D finalizeScene 실패 — 프레임 스킵")
             cb.commit()
             return
         }
@@ -1725,8 +1780,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 displayTextures: displayTextures,
                                                 textTextures: textTextures,
                                                 particleSnapshot: { [self] idx in
-                                                    if let c = particleSystems[idx].childOf {
-                                                        return sims[c.parent].childDisplay(c.link)
+                                                    // F178(E1-③): 임의 깊이 — 루트까지 경로를 모아 로컬 sims 배열에서 조회.
+                                                    if let (root, path) = particleDescendantPath(from: idx) {
+                                                        return sims[root].descendantDisplay(path: path)
                                                     }
                                                     return sims[idx].step(0)
                                                 },
@@ -1810,6 +1866,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneScriptBaseDescriptors = []; liveLayerStates.removeAll()  // F743(S-35): 마운트 재사용 stale 방지
         scriptVisible.removeAll()
         scriptTextVisible.removeAll()
+        scriptParticleVisible.removeAll()
+        loggedDrawFailureKeys.removeAll()
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
         additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
         blendPipeline = nil; composePipeline = nil          // 감사 V06: 해제 누락분(마운트 반복 시 GPU 리소스 누적 방지)

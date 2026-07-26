@@ -446,4 +446,50 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertLessThan(normal.redComponent, 0.3, "normal(over) alpha=1: 배경을 완전 치환해야 함")
         XCTAssertGreaterThan(normal.greenComponent, 0.7)
     }
+
+    // MARK: E1(⑦) — encode3D nmap 이 billboards 를 포함해야(다른 오브젝트가 빌보드를 parent 로 참조 가능)
+
+    /// 빨강 빌보드 A(world x=-1)에 초록 빌보드 B(local x=+1, parent=A)를 붙인다. 부모가 제대로 합성되면
+    /// B 의 월드 위치는 A(-1,0,0)+로컬(1,0,0)=(0,0,0)=화면 중앙. 종전엔 encode3D 의 nmap 에 nodes3D 만
+    /// 있어 Scene3DMath.worldMatrix(id: A.id, nodes: nmap) 가 nil 을 반환 → encodeBillboard 의
+    /// `guard let pw = ... else { return }` 로 B 가 매프레임 조용히 드롭됐다(화면 중앙엔 배경만 남음).
+    /// A/B 는 겹치지 않는 작은 크기로 둬 중앙 픽셀이 B 단독 기여만 반영하게 한다.
+    func test3DBillboardCanBeParentOfAnotherBillboard() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":0,"model":"models/missing.mdl"},
+           {"id":1,"image":"models/a.json","origin":"-1.5 0 0","size":"1 1","color":"1 0 0","alpha":1},
+           {"id":2,"image":"models/b.json","parent":1,"origin":"1.5 0 0","size":"1 1","color":"0 1 0","alpha":1}
+         ]}
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", Data(scene.utf8)),
+            ("models/a.json", #"{"material":"materials/a.json"}"#.data(using: .utf8)!),
+            ("materials/a.json", #"{"passes":[{"shader":"flat","depthtest":"disabled","depthwrite":"disabled"}]}"#.data(using: .utf8)!),
+            ("models/b.json", #"{"material":"materials/b.json"}"#.data(using: .utf8)!),
+            ("materials/b.json", #"{"passes":[{"shader":"flat","depthtest":"disabled","depthwrite":"disabled"}]}"#.data(using: .utf8)!),
+        ]
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_e1_bbparent_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try encodePkg(files).write(to: root.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(
+            id: "e1_bbparent", type: .scene, fileName: "scene.pkg", previewName: nil,
+            title: "e1_bbparent", tags: [], contentRating: nil, workshopId: nil, dependency: nil,
+            folderURL: root)
+        let renderer = SceneRenderer()
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
+        defer { renderer.teardown(); try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("capture", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(renderer.captureFrames(width: 64, height: 64, times: [0], toDir: output).first)
+        let image = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let center = try XCTUnwrap(image.colorAt(x: 32, y: 32))
+        XCTAssertGreaterThan(center.greenComponent, 0.7,
+                             "B(초록)가 A 를 부모로 합성돼 화면 중앙(0,0,0)에 그려져야 함")
+        XCTAssertLessThan(center.redComponent, 0.3, "중앙엔 A(빨강)가 닿지 않아야 함(겹침 없는 배치)")
+    }
 }
