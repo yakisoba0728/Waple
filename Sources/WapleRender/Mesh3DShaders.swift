@@ -472,7 +472,7 @@ enum Mesh3DShaders {
 
     // M3: PBR 노멀맵/마스크 지원 — 스크린공간 미분으로 TBN 근사, 노멀맵 샘플로 법선 보정,
     // 마스크 텍스처로 per-pixel roughness/metallic 오버라이드.
-    // 노멀맵: texture(3), 마스크: texture(4).
+    // 노멀맵: texture(3), 마스크: texture(4), normalParams(포맷/보유 플래그): buffer(5).
     fragment float4 mf_normal(VOut in [[stage_in]],
                               texture2d<float> tex [[texture(0)]],
                               depth2d_array<float> shadowAtlas [[texture(1)]],
@@ -482,7 +482,10 @@ enum Mesh3DShaders {
                               constant MeshU& u [[buffer(1)]],
                               constant FrameU& frame [[buffer(2)]],
                               constant LightU* lights [[buffer(3)]],
-                              constant float4x4* shadowVP [[buffer(4)]]) {
+                              constant float4x4* shadowVP [[buffer(4)]],
+                              // x=DecompressNormal 포맷(0=블록압축/1=RG88/2=그 외), y=마스크 보유,
+                              // z=노멀맵 보유, w=미사용.
+                              constant float4& normalParams [[buffer(5)]]) {
         constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
         constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
         float4 sampled = tex.sample(s, in.uv) * u.tint;
@@ -497,22 +500,47 @@ enum Mesh3DShaders {
         }
 
         float3 albedo = sampled.rgb;
-        // M3: TBN 근사(스크린공간 미분). 정점 탄젠트 부재 시 ddx/ddy 로부터 탄젠트/비탄젠트 계산.
-        float3 dpx = dfdx(in.worldPos);
-        float3 dpy = dfdy(in.worldPos);
-        float2 duvx = dfdx(in.uv);
-        float2 duvy = dfdy(in.uv);
-        float3 T = normalizedOr(dpx * duvy.y - dpy * duvx.y, float3(1.0, 0.0, 0.0));
-        float3 B = normalizedOr(dpy * duvx.x - dpx * duvy.x, float3(0.0, 1.0, 0.0));
         float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
-        float3x3 TBN = float3x3(T, B, N);
-        float3 normalMap = normalTex.sample(s, in.uv).xyz * 2.0 - 1.0;
-        N = normalizedOr(TBN * normalMap, N);
+        // M3: 노멀맵 보유 시에만 TBN 근사(스크린공간 미분) + 언팩. WE common_fragment.h:18-30 DecompressNormal
+        // 포트(2채널 저장 + Z 재구성) — mf_refract(:571-576)의 DecompressNormalWithMask 와는 별개 함수라
+        // 바이어스가 다른 축에 실린다(DecompressNormal: 블록압축 x=alpha*2-1/y=green*2-0.965, WithMask 는
+        // x=alpha*2-0.965/y=green*2-1 — 통일하면 둘 중 하나가 깨지므로 의도된 차이, 임의 정리 금지).
+        // RG88 은 Waple 디코드가 byte0→(r,g,b) 복제·byte1→a(TexDecoder.swift rg88)라 x=.r/y=.a 로 대응.
+        if (normalParams.z > 0.5) {
+            float3 dpx = dfdx(in.worldPos);
+            float3 dpy = dfdy(in.worldPos);
+            float2 duvx = dfdx(in.uv);
+            float2 duvy = dfdy(in.uv);
+            float3 T = normalizedOr(dpx * duvy.y - dpy * duvx.y, float3(1.0, 0.0, 0.0));
+            float3 B = normalizedOr(dpy * duvx.x - dpx * duvy.x, float3(0.0, 1.0, 0.0));
+            float3x3 TBN = float3x3(T, B, N);
+            float4 nraw = normalTex.sample(s, in.uv);
+            float nx, ny;
+            if (normalParams.x < 0.5) {          // 블록압축(DXT5nm 등 BC1-3)
+                nx = nraw.a * 2.0 - 1.0;
+                ny = nraw.g * 2.0 - 0.965;
+            } else if (normalParams.x < 1.5) {   // RG88
+                nx = nraw.r * 2.0 - 1.0;
+                ny = nraw.a * 2.0 - 1.0;
+            } else {                              // 그 외(비압축) — 바이어스 없음
+                nx = nraw.a * 2.0 - 1.0;
+                ny = nraw.g * 2.0 - 1.0;
+            }
+            float nz = sqrt(saturate(1.0 - nx * nx - ny * ny));
+            N = normalizedOr(TBN * float3(nx, ny, nz), N);
+        }
 
-        // M3: 마스크 텍스처로 per-pixel roughness/metallic 오버라이드(없으면 머티리얼 상수).
-        float4 mask = maskTex.sample(s, in.uv);
-        float roughness = mask.r > 0.0 ? mask.r : u.material.x;
-        float metallic = mask.g > 0.0 ? mask.g : u.material.y;
+        // M3: 마스크 텍스처(PBRMASKS)로 per-pixel roughness/metallic 오버라이드(없으면 머티리얼 상수).
+        // generic4.frag:96/100 규약 — componentMaps.x(R)=metallic, .y(G)=roughness(① 종전 반전 수정).
+        // 게이트는 normalParams.y(hasMask) 플래그로만 판정 — 정당한 마스크 값 0(완전 무광/비금속)이
+        // "마스크 없음"으로 오폴백되던 종전 버그(mask.r>0.0 류 값 기반 게이트) 제거.
+        float roughness = u.material.x;
+        float metallic = u.material.y;
+        if (normalParams.y > 0.5) {
+            float4 mask = maskTex.sample(s, in.uv);
+            metallic = mask.r;
+            roughness = mask.g;
+        }
 
         float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
         float3 direct = float3(0.0);
@@ -613,6 +641,93 @@ enum Mesh3DShaders {
         }
         float3 lit = ambientColor * albedo + direct;
         float outAlpha = sampled.a;
+        applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
+        return float4(lit * outAlpha, outAlpha);
+    }
+
+    // M6(⑥): REFLECTION(스크린공간 반사) 메시 — generic4.frag:134-165 1:1(g_Texture3=_rt_MipMappedFrameBuffer
+    // 를 acc 스냅샷으로 근사, model_fragment_v1.h ApplyReflection 과 동일 수식). WE 는 이 블록이
+    // `#if LIGHTING || REFLECTION`(normal 계산)과 별개로 unlit 에서도 발화하므로(CombineLighting 이후 가산),
+    // mf_main 의 조기 unlit return 을 쓰지 않고 lit 베이스(unlit=albedo 그대로 / lit=ambient*albedo+direct)를
+    // 계산한 뒤 반사를 공통으로 더한다. 노멀맵과 미결합(기하 노멀만 — WE 의 `#else normalize(v_WorldNormal)`
+    // 분기와 동치, NORMALMAP 결합 마스크/탄젠트공간 변환은 과대 스코프라 미포함 — ⑥ caveat).
+    // mip 기반 roughness 블러(g_Texture3MipMapInfo)는 스냅샷이 밉체인을 갖지 않아(REFRACT 와 동일 최소
+    // 인프라) 레벨 0 고정 — REFLECTION_MAP(마스크 B채널) 도 미결합, g_Reflectivity 상수만 적용.
+    // 씬 스냅샷 texture(4), reflectParams=(g_Reflectivity, aspect=width/height, 0, 0) buffer(5),
+    // viewProj(카메라 전용, 모델 미포함) buffer(6).
+    fragment float4 mf_reflect(VOut in [[stage_in]],
+                               texture2d<float> tex [[texture(0)]],
+                               depth2d_array<float> shadowAtlas [[texture(1)]],
+                               texture2d<float> gradientTex [[texture(2)]],
+                               texture2d<float> fbTex [[texture(4)]],
+                               constant MeshU& u [[buffer(1)]],
+                               constant FrameU& frame [[buffer(2)]],
+                               constant LightU* lights [[buffer(3)]],
+                               constant float4x4* shadowVP [[buffer(4)]],
+                               constant float4& reflectParams [[buffer(5)]],
+                               constant float4x4& viewProj [[buffer(6)]]) {
+        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
+        // 씬 스냅샷은 화면 경계 클램프(REFRACT 의 fbSampler 와 동일 규약).
+        constexpr sampler fbSampler(filter::linear, address::clamp_to_edge);
+        float4 sampled = tex.sample(s, in.uv) * u.tint;
+        if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
+
+        float3 albedo = sampled.rgb;
+        // REFLECTION 은 LIGHTING 여부와 무관하게 geometric normal 이 필요(generic4.frag
+        // `#if LIGHTING || REFLECTION`) — mode<0.5(unlit) 에서도 계산.
+        float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
+        float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
+        float mode = u.material.w;
+        float3 lit;
+        if (mode < 0.5) {
+            // unlit: WE CombineLighting(light=0, ambient=albedo) = albedo 그대로(mf_main 무라이팅 경로와 동치).
+            lit = albedo;
+        } else {
+            float3 direct = float3(0.0);
+            int count = clamp(int(frame.meta.x + 0.5), 0, 8);
+            for (int i = 0; i < count; ++i) {
+                float kind = lights[i].shadow.z;
+                if (kind < 0.5) {
+                    float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+                    direct += visibility * pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                                    u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+                } else if (kind < 1.5) {
+                    float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+                    direct += visibility * directionalPBR(N, V, albedo, u.material.x, u.material.y,
+                                                          u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+                } else {
+                    direct += spotPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                      u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+                }
+            }
+            float3 ambientColor = frame.ambient.xyz;
+            if (mode < 1.5) {
+                float hemisphere = clamp(dot(N, float3(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);
+                ambientColor = mix(frame.skylight.xyz, frame.ambient.xyz, hemisphere);
+            }
+            lit = ambientColor * albedo + direct;
+        }
+
+        // REFLECTION: mul(v,M)=M*v(GLSL 네이티브 규약, 전치 불요 — H1 커스텀 셰이더의 mvp 전치는 GLSLTranslator
+        // 산출물 전용이라 여기 무관) 로 world normal 을 카메라 클립공간에 재투영해 화면 오프셋을 만든다.
+        // in.pos(윈도우 픽셀, y-down)는 이미 뷰포트변환을 거쳤지만 viewProj*N 결과는 클립공간(y-up)이라
+        // y 성분만 부호 반전해야 두 공간이 정합한다.
+        float reflectivity = reflectParams.x;
+        float fresnelTerm = abs(dot(N, V));
+        float3 reflectN = normalize((viewProj * float4(N, 0.0)).xyz);
+        float2 aspectScale = float2(0.15, 0.15 * reflectParams.y);
+        float2 screenUV = in.pos.xy / float2(fbTex.get_width(), fbTex.get_height());
+        screenUV += float2(reflectN.x, -reflectN.y) * pow(fresnelTerm, 4.0) * 10.0 * aspectScale;
+        float clipReflection = smoothstep(1.3, 1.0, screenUV.x) * smoothstep(-0.3, 0.0, screenUV.x)
+                              * smoothstep(1.3, 1.0, screenUV.y) * smoothstep(-0.3, 0.0, screenUV.y);
+        float3 reflectionColor = fbTex.sample(fbSampler, screenUV).rgb * clipReflection;
+        reflectionColor = reflectionColor * (1.0 - fresnelTerm) * reflectivity;
+        reflectionColor = pow(max(float3(0.001), reflectionColor), float3(2.0 - u.material.y));
+        lit += saturate(reflectionColor);
+
+        float outAlpha = sampled.a;
+        float fogMode = u.specularTint.w;
         applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
         return float4(lit * outAlpha, outAlpha);
     }

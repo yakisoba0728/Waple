@@ -13,6 +13,8 @@ struct Scene3DMaterialValues: Equatable {
     /// 별도 파싱(unlit 과 동일 패턴) — 여기는 constantshadervalues 수치만 다룬다.
     var rimAmount: Float = 2.0
     var rimExponent: Float = 4.0
+    /// M6(⑥): REFLECTION 콤보 g_Reflectivity(generic4.frag:66 — material key "reflectivity", 기본 1).
+    var reflectivity: Float = 1.0
 
     static func parse(_ constants: [String: Any]?) -> Self {
         guard let constants else { return Self() }
@@ -29,6 +31,7 @@ struct Scene3DMaterialValues: Equatable {
         }
         if let rimAmount = numbers(values["rimamount"])?.first { result.rimAmount = rimAmount }
         if let rimExponent = numbers(values["rimexponent"])?.first { result.rimExponent = rimExponent }
+        if let reflectivity = numbers(values["reflectivity"])?.first { result.reflectivity = reflectivity }
         return result
     }
 

@@ -43,6 +43,50 @@ enum ParticleShaders {
         return float4(t.rgb * in.color.rgb * A, A);
     }
 
+    // M(④): 3D 파티클 씬 포그(genericparticle.frag FOG 콤보 기본 1 — 3706286085 실증). 별도 MSL
+    // 컴파일 단위(파일)라 Mesh3DShaders.applySceneFog 를 직접 호출할 수 없어 동일 수식을 포트한다.
+    // WE genericparticle.frag 는 ApplyFog(rgb)+ApplyFogAlpha(alpha) 를 ADDITIVE 게이트 없이 무조건
+    // 적용(mesh generic4.frag 는 ApplyFogAlpha 가 #if ADDITIVE 안에만 있어 다름 — common_fog.h 참조).
+    struct PVOut3DFog { float4 pos [[position]]; float2 uv; float4 color; float3 worldPos; };
+    // FrameU(Mesh3DShaders) 의 마지막 5개 필드와 동일 레이아웃(eye+포그 4종) — Scene3DFrameUniform 에서
+    // 발췌한 Particle3DFogUniform 을 그대로 바인딩.
+    struct FogU3D { float4 eye; float4 fogDistanceColor; float4 fogDistanceParams; float4 fogHeightColor; float4 fogHeightParams; };
+
+    vertex PVOut3DFog pv3d_fog_main(uint vid [[vertex_id]],
+                                    const device float* v [[buffer(0)]],
+                                    constant float4x4& viewProj [[buffer(1)]]) {
+        uint b = vid * 9;
+        float3 wp  = float3(v[b + 0], v[b + 1], v[b + 2]);
+        float2 uv  = float2(v[b + 3], v[b + 4]);
+        float4 col = float4(v[b + 5], v[b + 6], v[b + 7], v[b + 8]);
+        PVOut3DFog o; o.pos = viewProj * float4(wp, 1.0); o.uv = uv; o.color = col; o.worldPos = wp; return o;
+    }
+
+    fragment float4 pf3d_fog(PVOut3DFog in [[stage_in]], texture2d<float> tex [[texture(0)]],
+                             constant FogU3D& fog [[buffer(0)]]) {
+        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        float4 t = tex.sample(s, in.uv);
+        float3 rgb = t.rgb * in.color.rgb;
+        float alpha = t.a * in.color.a;
+        float viewDist = distance(fog.eye.xyz, in.worldPos);
+        float heightFactor = 0.0;
+        float distFactor = 0.0;
+        if (fog.fogHeightColor.w > 0.5) {
+            float ht = saturate((in.worldPos.y - fog.fogHeightParams.x) / fog.fogHeightParams.y);
+            heightFactor = fog.fogHeightParams.z + fog.fogHeightParams.w * ht * ht;
+            rgb = mix(rgb, fog.fogHeightColor.xyz, heightFactor);
+        }
+        if (fog.fogDistanceColor.w > 0.5) {
+            float dt = saturate((viewDist - fog.fogDistanceParams.x) / fog.fogDistanceParams.y);
+            distFactor = fog.fogDistanceParams.z + fog.fogDistanceParams.w * dt * dt;
+            rgb = mix(rgb, fog.fogDistanceColor.xyz, distFactor);
+        }
+        // ApplyFogAlpha: WE 는 REFRACT/LIGHTING 무관 무조건 적용(ADDITIVE 게이트 없음, mesh 와 차이).
+        float fogFactor = saturate(max(distFactor, heightFactor));
+        alpha *= 1.0 - fogFactor * fogFactor;
+        return float4(rgb * alpha, alpha);
+    }
+
     // REFRACT(스크린 굴절 — WE genericparticle.frag:103-116). 파티클 컬러에 씬 컬러 타깃(fb=뒤 배경
     // 누적 스냅샷)을 노멀맵 오프셋으로 재샘플해 **곱한다**(유리/물방울/열왜곡). vert 는 pv_main 공유
     // (8-float 정점) — 화면 UV 는 in.pos(렌더타깃 픽셀)에서 얻어 f_compose 규약과 동일(y-flip 없음).

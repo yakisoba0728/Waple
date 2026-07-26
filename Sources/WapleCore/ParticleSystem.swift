@@ -187,10 +187,15 @@ public struct ParticleMaterial: Equatable {
     public let refract: Bool
     public let normalTextureName: String?
     public let refractAmount: Float   // g_RefractAmount (WE 기본 0.05)
+    /// M(④): combos.FOG(genericparticle.frag/genericropeparticle.frag 기본 1 — 명시 0 만 씬 포그 제외).
+    /// 메시 경로(SceneRenderer3D.loadMesh3DMaterial `foggy`)와 동일 기본값·게이트 규약.
+    public let foggy: Bool
     public init(textureName: String?, blend: BlendKind,
-                refract: Bool = false, normalTextureName: String? = nil, refractAmount: Float = 0.05) {
+                refract: Bool = false, normalTextureName: String? = nil, refractAmount: Float = 0.05,
+                foggy: Bool = true) {
         self.textureName = textureName; self.blend = blend
         self.refract = refract; self.normalTextureName = normalTextureName; self.refractAmount = refractAmount
+        self.foggy = foggy
     }
 
     public static func parse(_ json: [String: Any], userProps: [String: Any] = [:]) -> ParticleMaterial {
@@ -211,8 +216,16 @@ public struct ParticleMaterial: Equatable {
            let f = pfloat(raw) {
             refractAmount = f
         }
+        // M(④): FOG 콤보 기본 1(WE 선언) — 명시 0 만 제외. 메시 경로(SceneRenderer3D:608)와 동일하게
+        // 키 대소문자 무시(REFRACT 는 기존 정확일치 관례 보존 — 섞지 않음).
+        var foggy = true
+        if let combos = p0["combos"] as? [String: Any],
+           let v = combos.first(where: { $0.key.lowercased() == "fog" })?.value {
+            foggy = ((v as? NSNumber)?.intValue ?? 1) != 0
+        }
         return ParticleMaterial(textureName: albedo, blend: blend,
-                                refract: refract && normalName != nil, normalTextureName: normalName, refractAmount: refractAmount)
+                                refract: refract && normalName != nil, normalTextureName: normalName,
+                                refractAmount: refractAmount, foggy: foggy)
     }
 }
 

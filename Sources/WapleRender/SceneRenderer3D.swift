@@ -43,12 +43,18 @@ extension SceneRenderer {
         /// M3: PBR 노멀맵/마스크 텍스처 — nil = 미사용.
         var normalTexture: MTLTexture? = nil
         var maskTexture: MTLTexture? = nil
+        /// M3: mf_normal DecompressNormal 포맷 코드(0=블록압축/1=RG88/2=그 외) — resolveNormalMapFormat.
+        var normalTextureFormat: Float = 0
         /// H4: REFRACT 콤보(스크린 굴절) — true 면 acc 스냅샷을 노멀 오프셋 재샘플·곱(mf_refract).
         /// 노멀맵 로드 실패/스키닝/커스텀 셰이더 시 미적용(기존 파이프라인 폴터, 무크래시).
         var refract: Bool = false
         var refractAmount: Float = 0.05
         var refractNormal: MTLTexture? = nil   // textures[1] 노멀맵(resolveRefractNormal — rg88 플래그 동반)
         var refractRG88: Bool = false
+        /// M6(⑥): REFLECTION 콤보(스크린공간 반사) — true 면 acc 스냅샷을 프레넬 가중으로 가산(mf_reflect).
+        /// 노멀맵과 미결합(기하 노멀만 — generic4.frag `#else normalize(v_WorldNormal)` 분기와 동치).
+        var reflection: Bool = false
+        var reflectivity: Float = 1.0
     }
     /// P⑥: 3D 커스텀 메시 셰이더 파이프라인 + 바인드 플랜(2D CustomLayerShader 와 동형 — 번역 셰이더는
     /// buffer(1)에 EngineU(320B, engineUniform() 이 단일 정본)를 기대하지, MeshUniform(256B)이 아니다).
@@ -71,6 +77,15 @@ extension SceneRenderer {
         var specularTint: SIMD4<Float>
         /// x=g_RimAmount, y=g_RimExponent, z=RIMLIGHTING on/off, w=SHADINGGRADIENT on/off(F274).
         var rim: SIMD4<Float>
+    }
+    /// M(④): MSL `FogU3D`(ParticleShaders.pf3d_fog)와 레이아웃 일치 — Scene3DFrameUniform 의 eye+포그
+    /// 4필드를 발췌(파티클은 라이팅/섀도우 유니폼이 불필요해 FrameU 전체 대신 축소 구조체를 쓴다).
+    struct Particle3DFogUniform {
+        var eye: SIMD4<Float>
+        var fogDistanceColor: SIMD4<Float>
+        var fogDistanceParams: SIMD4<Float>
+        var fogHeightColor: SIMD4<Float>
+        var fogHeightParams: SIMD4<Float>
     }
     struct Script3D { let key: String; let engine: TextScriptEngine }
 
@@ -228,6 +243,9 @@ extension SceneRenderer {
         // H4: REFRACT 메시 파이프라인(정적 메시 한정 — M3 와 동일 제약).
         meshPipelineRefract = mesh3DRefractPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
         meshPipelineRefractAdditive = mesh3DRefractPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
+        // M6(⑥): REFLECTION 메시 파이프라인(정적 메시 한정 — M3/H4 와 동일 제약).
+        meshPipelineReflect = mesh3DReflectPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
+        meshPipelineReflectAdditive = mesh3DReflectPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         shadowPipelineStaticOpaque = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: false, device: device)
         shadowPipelineStaticCutout = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: true, device: device)
         shadowPipelineSkinOpaque = shadow3DPipeline(lib: lib, vertex: "sv_skin", cutout: false, device: device)
@@ -334,9 +352,16 @@ extension SceneRenderer {
                         gpuMesh.modelMeshIndex = modelMeshIdx
                     }
                 }
-                // M3: PBR 노멀맵/마스크 텍스처 로드.
+                // M3: PBR 노멀맵/마스크 텍스처 로드. normalTextureFormat 은 mf_normal 의 DecompressNormal
+                // 포맷 분기(resolveNormalMapFormat). 디코드 실패 시 종전과 동일하게 resolveTexture 의 흰
+                // 1×1 폴백으로 되돌아가(파이프라인 선택 :1383 무회귀), 그 경우 포맷 코드는 무의미(기본 0).
                 if let normalName = mat.normalTextureName {
-                    gpuMesh.normalTexture = resolveTexture(normalName, package: package, device: device)
+                    if let n = resolveNormalMapFormat(normalName, package: package, device: device) {
+                        gpuMesh.normalTexture = n.texture
+                        gpuMesh.normalTextureFormat = n.formatCode
+                    } else {
+                        gpuMesh.normalTexture = resolveTexture(normalName, package: package, device: device)
+                    }
                 }
                 if let maskName = mat.maskTextureName {
                     gpuMesh.maskTexture = resolveTexture(maskName, package: package, device: device)
@@ -349,6 +374,11 @@ extension SceneRenderer {
                     gpuMesh.refractAmount = mat.refractAmount
                     gpuMesh.refractNormal = n.texture
                     gpuMesh.refractRG88 = n.rg88
+                }
+                // M6(⑥): REFLECTION — 노멀맵/텍스처 로드 불요(기하 노멀만 사용), 콤보 플래그만으로 게이트.
+                if mat.reflection {
+                    gpuMesh.reflection = true
+                    gpuMesh.reflectivity = mat.reflectivity
                 }
                 meshes.append(gpuMesh)
             }
@@ -555,10 +585,16 @@ extension SceneRenderer {
         /// 노멀맵(textures[1])은 normalTextureName 재사용; refract && 노멀맵 로드 성공 시에만 굴절 적용.
         let refract: Bool
         let refractAmount: Float
+        /// M6(⑥): REFLECTION 콤보 + g_Reflectivity(기본 1 — generic4.frag:66).
+        let reflection: Bool
+        let reflectivity: Float
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
-    /// 규약: textures[] 첫 non-null 이름 → "materials/<이름>.tex"(resolveTexture 폴백 포함).
+    /// 규약: textures[0] = albedo 슬롯(WE generic4.frag g_Texture0) → "materials/<이름>.tex"
+    /// (resolveTexture 폴백 포함). null/공백/부재는 흰 1×1 폴백(resolveTexture 내장) — textures[1]
+    /// (노멀맵)로 흘러들어가지 않는다(③: 종전 "첫 non-null 문자열" 규약은 슬롯을 무시해 textures[0]=null
+    /// 인 재질에서 노멀맵이 알베도로 승격되는 결함이 있었다).
     /// nil = 디바이스 텍스처 생성 실패(흰색 1x1 폴백조차 불가)뿐 — 호출자는 서브메시 스킵.
     func loadMesh3DMaterial(_ path: String, package: ScenePackage, device: MTLDevice,
                             compositeImageTextures: [Int: String] = [:]) -> Mesh3DMaterialInfo? {
@@ -586,6 +622,8 @@ extension SceneRenderer {
         // H4: REFRACT 콤보 + refractAmount(노멀맵 없으면 미적용 — build3D 게이트).
         var refract = false
         var refractAmount: Float = 0.05
+        // M6(⑥): REFLECTION 콤보(스크린공간 반사) — reflectivity 상수는 pbr(Scene3DMaterialValues) 소관.
+        var reflection = false
         func fvec(_ any: Any?) -> [Float]? {
             if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
             if let n = any as? Double { return [Float(n)] }
@@ -596,7 +634,11 @@ extension SceneRenderer {
         if let d = quietAssetData(path, package: package),
            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
-            texName = (p0["textures"] as? [Any])?.compactMap { $0 as? String }.first { !$0.isEmpty }
+            // ③: textures[0] 슬롯만 albedo 후보 — "첫 non-null 문자열"(구규약)이면 textures[0]=null 인
+            // 재질(예: {"textures":[null,"foil_silver_normal"]})에서 slot1 노멀맵이 알베도로 승격된다.
+            if let firstSlot = (p0["textures"] as? [Any])?.first as? String, !firstSlot.isEmpty {
+                texName = firstSlot
+            }
             cullBack = (p0["cullmode"] as? String) != "nocull"
             let blend = (p0["blending"] as? String) ?? "normal"
             additive = blend == "additive"
@@ -625,6 +667,10 @@ extension SceneRenderer {
                 // H4: REFRACT 콤보(2D SceneDocument:1083 과 동일 게이트 — 콤보 1 + textures[1] 노멀맵).
                 if let v = combos.first(where: { $0.key.lowercased() == "refract" })?.value {
                     refract = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                }
+                // M6(⑥): REFLECTION 콤보(WE 기본 0 — generic4.frag:3 [COMBO] default:0).
+                if let v = combos.first(where: { $0.key.lowercased() == "reflection" })?.value {
+                    reflection = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
                 }
             }
             if let csv = p0["constantshadervalues"] as? [String: Any] {
@@ -677,7 +723,8 @@ extension SceneRenderer {
                                        customShader: customShader, customCombos: customCombos,
                                        customConstants: customConstants, customTextures: customTextures,
                                        normalTextureName: normalTextureName, maskTextureName: maskTextureName,
-                                       refract: refract, refractAmount: refractAmount)
+                                       refract: refract, refractAmount: refractAmount,
+                                       reflection: reflection, reflectivity: pbr.reflectivity)
                 }
             }
         }
@@ -694,7 +741,8 @@ extension SceneRenderer {
                                   customShader: customShader, customCombos: customCombos,
                                   customConstants: customConstants, customTextures: customTextures,
                                   normalTextureName: normalTextureName, maskTextureName: maskTextureName,
-                                  refract: refract, refractAmount: refractAmount)
+                                  refract: refract, refractAmount: refractAmount,
+                                  reflection: reflection, reflectivity: pbr.reflectivity)
     }
 
     private func imageLayerCompositeID(_ name: String) -> Int? {
@@ -756,6 +804,23 @@ extension SceneRenderer {
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
+    /// M6(⑥): REFLECTION 메시 파이프라인. frag=mf_reflect(acc 스냅샷 프레넬 가산) — 정적 메시 한정(M3/H4 와 동일).
+    /// 씬 스냅샷 texture(4), reflectParams buffer(5), viewProj buffer(6). 블렌드는 mesh3DPipeline 과 동치.
+    func mesh3DReflectPipeline(lib: MTLLibrary, vertex: String, additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: vertex)
+        pd.fragmentFunction = lib.makeFunction(name: "mf_reflect")
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
     /// 3D 파티클 원근 빌보드 파이프라인. 메시 패스와 동일 타깃(accPixelFormat+depth32). frag=pf_main(premult α),
     /// 블렌드는 2D 파티클(particlePipeline)과 동치: additive dst=one / translucent dst=1-srcα.
     func particle3DPipeline(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
@@ -763,6 +828,25 @@ extension SceneRenderer {
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "pv3d_main")
         pd.fragmentFunction = lib.makeFunction(name: "pf_main")
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// M(④): 3D 파티클 씬 포그 변형 — particle3DPipeline 과 동형(블렌드/타깃 동일)이나 vert/frag 가
+    /// pv3d_fog_main/pf3d_fog(worldPos 전달 + FogU3D 소비). foggy 플래그(GPUParticleSystem.foggy)
+    /// 시스템만 이 파이프라인을 타고, 그 외엔 종전 particle3DPipeline 로 폴터(무회귀).
+    func particle3DFogPipeline(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+        guard let lib = try? WapleProfiler.compile(ParticleShaders.source, { try device.makeLibrary(source: ParticleShaders.source, options: nil) }) else { return nil }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "pv3d_fog_main")
+        pd.fragmentFunction = lib.makeFunction(name: "pf3d_fog")
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
         a.pixelFormat = accPixelFormat
@@ -1292,8 +1376,10 @@ extension SceneRenderer {
         }
         // H4: refract 메시도 인코더 분할(아래 드로 루프의 H4 분기)이 생기므로 프레임버퍼 빌보드와 같은 이유로
         // 뎁스 .store 게이트에 포함(분할 전 패스가 dontCare 면 재개 패스의 뎁스가 미정의 — F311 주석 참조).
+        // M6(⑥): reflect 메시도 동일 이유로 인코더 분할 — 게이트에 포함.
         let needsDepthStore = billboards.contains { $0.isFrameBuffer }
             || meshRenderables.contains { $0.meshes.contains { $0.refract && $0.refractNormal != nil } }
+            || meshRenderables.contains { $0.meshes.contains { $0.reflection } }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = target
         rpd.colorAttachments[0].loadAction = .clear
@@ -1434,6 +1520,51 @@ extension SceneRenderer {
                             continue
                         }
                         // 스냅샷 확보 실패 — 재개한 enc 에서 일반 파이프라인으로 identity 폴터.
+                    } else if mesh.reflection, !useSkin, mesh.customShader == nil,
+                              let reflectPipe = mesh.additive ? (meshPipelineReflectAdditive ?? meshPipelineReflect)
+                                                              : meshPipelineReflect {
+                        // M6(⑥): REFLECTION 메시 — REFRACT 와 동일 인코더 분할 패턴(refract 와 동시 보유 시
+                        // 위 refract 분기가 우선 — 무회귀 선택, 코퍼스 실측상 상호배타적).
+                        enc.endEncoding()
+                        var snap: MTLTexture? = nil
+                        if let s = pooledOffscreen(target.width, target.height, device, bgra: true),
+                           let blit = cb.makeBlitCommandEncoder() {
+                            blit.copy(from: target, to: s); blit.endEncoding(); snap = s
+                        }
+                        let nextRPD = MTLRenderPassDescriptor()
+                        nextRPD.colorAttachments[0].texture = target
+                        nextRPD.colorAttachments[0].loadAction = .load
+                        nextRPD.depthAttachment.texture = depthTex
+                        nextRPD.depthAttachment.loadAction = .load
+                        nextRPD.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
+                        guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
+                        enc = nextEnc
+                        enc.setFrontFacing(.counterClockwise)
+                        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                                            shadowMatrices: shadowResult.matrices,
+                                            shadowTexture: shadowResult.texture, into: enc)
+                        if let snap {
+                            enc.setRenderPipelineState(reflectPipe)
+                            if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
+                                enc.setDepthStencilState(ds)
+                            }
+                            enc.setCullMode(mesh.cullBack ? .back : .none)
+                            enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                            enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                            enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                            enc.setFragmentTexture(mesh.texture, index: 0)
+                            enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                            enc.setFragmentTexture(snap, index: 4)   // 씬 컬러 스냅샷(_rt_MipMappedFrameBuffer 근사)
+                            // x=reflectivity, y=aspect(width/height, g_Screen.z 규약 — E1/WE-2.8-deep-KR 확인).
+                            var rp = SIMD4<Float>(mesh.reflectivity, aspect, 0, 0)
+                            enc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
+                            var vp = viewProj
+                            enc.setFragmentBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 6)
+                            enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+                                                      indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                            continue
+                        }
+                        // 스냅샷 확보 실패 — 재개한 enc 에서 일반 파이프라인으로 identity 폴터.
                     }
                     let pipe: MTLRenderPipelineState
                     var meshVBuf = mesh.vbuf
@@ -1506,10 +1637,16 @@ extension SceneRenderer {
                         // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
                         // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
                         enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
-                        // M3: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯).
+                        // M3/M①: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯). 미보유 시 자기
+                        // 알베도로 슬롯을 채우고(미바인딩 회피, gradientTex 선례와 동일), 소비 여부는 셰이더가
+                        // normalParams.z(hasNormal)/y(hasMask) 플래그로만 게이트 — mask.r>0 값 기반 오폴백 제거.
                         if pipe === meshPipelineNormal || pipe === meshPipelineNormalAdditive {
-                            if let normal = mesh.normalTexture { enc.setFragmentTexture(normal, index: 3) }
-                            if let mask = mesh.maskTexture { enc.setFragmentTexture(mask, index: 4) }
+                            enc.setFragmentTexture(mesh.normalTexture ?? mesh.texture, index: 3)
+                            enc.setFragmentTexture(mesh.maskTexture ?? mesh.texture, index: 4)
+                            var normalParams = SIMD4<Float>(mesh.normalTextureFormat,
+                                                            mesh.maskTexture != nil ? 1 : 0,
+                                                            mesh.normalTexture != nil ? 1 : 0, 0)
+                            enc.setFragmentBytes(&normalParams, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
                         }
                     }
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
@@ -1526,7 +1663,16 @@ extension SceneRenderer {
         }
         // 파티클: 불투명 메시/빌보드 뒤에 원근 빌보드로(뎁스 read-only). enc 는 프레임버퍼 빌보드 경로에서
         // 재할당됐을 수 있으므로 현재 enc 를 사용(같은 depthTex 바인딩 유지).
-        if hasParticles { encode3DParticles(time: time, liveDelta: particleDelta, viewProj: viewProj, right: right, up: camUp, nmap: nmap, into: enc, device: device) }
+        if hasParticles {
+            // M(④): frameUniform 의 포그 유니폼을 그대로 발췌 — 메시(mf_main 등)와 동일 소스(scene3DFog).
+            let particleFog = Particle3DFogUniform(
+                eye: frameUniform.cameraEye, fogDistanceColor: frameUniform.fogDistanceColor,
+                fogDistanceParams: frameUniform.fogDistanceParams, fogHeightColor: frameUniform.fogHeightColor,
+                fogHeightParams: frameUniform.fogHeightParams)
+            let fogActive = frameUniform.fogDistanceColor.w > 0.5 || frameUniform.fogHeightColor.w > 0.5
+            encode3DParticles(time: time, liveDelta: particleDelta, viewProj: viewProj, right: right, up: camUp,
+                              nmap: nmap, fog: particleFog, fogActive: fogActive, into: enc, device: device)
+        }
         enc.endEncoding()
         // H5: 볼륨 라이트 샤프트 — castVolumetrics 라이트를 additive로 합성(3D 씬 렌더 후).
         // P④: 방향은 SceneLight3D.forwardLightAxis(오일러→월드 forward, 2D 포워드 라이팅과 동일 변환기),
@@ -1724,15 +1870,19 @@ extension SceneRenderer {
     ///   횃불은 부모 "Torches" 정적 비가시라 드롭이 정답).
     /// - 렌더: 파티클 로컬 pos 를 M 으로 월드 변환 → 카메라 right/up 으로 쿼드 전개 → viewProj. 뎁스는
     ///   read-only(메시에 가려짐, 미기록 — WE 투명 관례). 블렌드는 머티리얼(additive/translucent) 재사용.
+    /// M(④): fog — 씬 포그가 실제로 활성(frame 레벨)일 때만 fog 파이프라인을 태운다. 비활성 씬은 종전
+    /// particle3DAdditive/Translucent(pf_main) 그대로라 완전 무회귀(코드 경로 자체가 안 바뀜).
     func encode3DParticles(time: Float, liveDelta: Float?, viewProj: simd_float4x4,
                            right: SIMD3<Float>, up: SIMD3<Float>,
                            nmap: [Int: Scene3DMath.Node],
+                           fog: Particle3DFogUniform, fogActive: Bool,
                            into enc: MTLRenderCommandEncoder, device: MTLDevice) {
         guard !particleSystems.isEmpty else { return }
         let snaps = stepParticleSnapshots(time: time, liveDelta: liveDelta)
         // ── 드로우(씬 order 오름차순 — 뎁스가 메시 가림 처리, 파티클 간 정렬은 미적용: WE depth-sort 근거 없음). ──
         guard let dstate = meshDepthState(test: true, write: false, device: device) else { return }
         var vp = viewProj
+        var fogUniform = fog
         let dbg = Self.debugFlag("WAPLE_PARTICLE3D_DEBUG")
         var drawn = 0, skipInvis = 0, skipParent = 0, skipEmpty = 0
         for idx in particleSystems.indices.sorted(by: { particleSystems[$0].order < particleSystems[$1].order }) {
@@ -1750,13 +1900,23 @@ extension SceneRenderer {
             let verts = particle3DVertices(snapshot, sys, m: m, right: right, up: up)
             let vertexCount = verts.count / 9
             guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { continue }
-            guard let pipe = sys.blendAdditive ? particle3DAdditive : particle3DTranslucent else { continue }
+            let useFog = fogActive && sys.foggy
+            let pipe: MTLRenderPipelineState?
+            if useFog {
+                pipe = sys.blendAdditive ? particle3DFogAdditive : particle3DFogTranslucent
+            } else {
+                pipe = sys.blendAdditive ? particle3DAdditive : particle3DTranslucent
+            }
+            guard let pipe else { continue }
             enc.setRenderPipelineState(pipe)
             enc.setDepthStencilState(dstate)
             enc.setCullMode(.none)
             enc.setVertexBuffer(vbuf, offset: 0, index: 0)
             enc.setVertexBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 1)
             enc.setFragmentTexture(sys.texture, index: 0)
+            if useFog {
+                enc.setFragmentBytes(&fogUniform, length: MemoryLayout<Particle3DFogUniform>.stride, index: 0)
+            }
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
         }
         if dbg { NSLog("%@", "[Particle3D] t=\(time) drawn=\(drawn) skipInvis=\(skipInvis) skipParent=\(skipParent) skipEmpty=\(skipEmpty) of \(particleSystems.count)") }
