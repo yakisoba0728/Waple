@@ -82,7 +82,7 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         return d
     }
 
-    /// P⑥: 커스텀 3D 메시 셰이더가 (a) buffer(1)=EngineU(304B) 정본을 바인딩하는지(g_Texture1Resolution
+    /// P⑥: 커스텀 3D 메시 셰이더가 (a) buffer(1)=EngineU(320B) 정본을 바인딩하는지(g_Texture1Resolution
     /// 이 아닌 값을 읽으면 MeshUniform 오독 — normalMatrix/tint 바이트가 텍셀 크기로 잡힘), (b) 정점
     /// bufferIndex 0↔4 충돌을 회피해 머티리얼 상수(buffer(0))가 있어도 파이프라인이 실제로 빌드·드로우
     /// 되는지(충돌 시 try? 가 조용히 nil→스톡 폴백, 커스텀 셰이더가 전혀 반영되지 않음), (c) 보조 텍스처
@@ -228,6 +228,54 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         // (둘 다 같은 색 텍스처를 "그림자"로 오독하거나 타입 불일치로 동일하게 깨짐).
         XCTAssertLessThan(averageLuminance(withShadow), averageLuminance(withoutShadow) - 0.01,
                           "커스텀 메시의 aux 텍스처가 texture(1)을 오염시켜 뒤이은 스톡 메시의 섀도우 항이 무너진 것으로 보임")
+    }
+
+    /// P⑥×X-⑤ 교차배치(검증 must_fix): X-⑤ 가 EngineU 에 targetRes(float4) 를 추가하며 engineUniform 의
+    /// 해당 인자를 필수화했다 — 3D 커스텀 메시 경로가 이를 누락하면 컴파일은 통과한 채 g_TexelSize 가
+    /// 기본값 유래 1.0(UV 전체 1텍셀)으로 조용히 깨진다. 이 경로는 다운스케일 멀티패스 체인이 없어(2D
+    /// 커스텀 레이어와 동형, X-⑤ 스코프 밖) dst 기준 새 값이 아니라 종전 tex0 근사(1/texRes[0])를 그대로
+    /// 유지해야 한다 — 앨비도 텍스처 8×8(solidTex 기본) 이면 g_TexelSize.x = 1/8 = 0.125 가 정답이고,
+    /// targetRes 누락(기본값 1,1,1,1) 회귀 시 1.0 이 나와 이 어서션이 실패한다.
+    func testCustomMeshShaderGTexelSizeMatchesAlbedoTex0Approximation() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"fov":50,"clearcolor":"0 0 0","ambientcolor":"1 1 1","skylightcolor":"1 1 1"},
+         "camera":{"eye":"0 0 3","center":"0 0 0","up":"0 1 0"},
+         "objects":[{"model":"models/quad.mdl","origin":"0 0 0"}]}
+        """
+        let material = #"{"passes":[{"shader":"texelsizetest","textures":["albedo"]}]}"#
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(g_TexelSize.x, 0.0, 0.0, 1.0); }
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/quad.mdl", staticQuadMDL()),
+            ("materials/quad.json", material.data(using: .utf8)!),
+            ("materials/albedo.tex", solidTex(255, 255, 255)),  // 기본 8×8 → tex0 근사 1/8=0.125
+            ("shaders/texelsizetest.vert", vert.data(using: .utf8)!),
+            ("shaders/texelsizetest.frag", frag.data(using: .utf8)!),
+        ]
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)),
+                    project: try project(files: files, id: "texelsize"))
+        defer { r.teardown() }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_h1tx_out", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: dir).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 32))
+        XCTAssertEqual(Double(c.redComponent), 0.125, accuracy: 0.05,
+                       "targetRes 미전달 회귀 시 기본값(1,1,1,1)으로 g_TexelSize=1.0 — tex0 근사(1/8) 파리티 고정")
     }
 
     // MARK: - H1 스키닝: 스키닝 메시 + 커스텀 셰이더

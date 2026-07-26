@@ -51,7 +51,7 @@ extension SceneRenderer {
         var refractRG88: Bool = false
     }
     /// P⑥: 3D 커스텀 메시 셰이더 파이프라인 + 바인드 플랜(2D CustomLayerShader 와 동형 — 번역 셰이더는
-    /// buffer(1)에 EngineU(304B, engineUniform() 이 단일 정본)를 기대하지, MeshUniform(256B)이 아니다).
+    /// buffer(1)에 EngineU(320B, engineUniform() 이 단일 정본)를 기대하지, MeshUniform(256B)이 아니다).
     struct CustomMeshShader {
         let pipeline: MTLRenderPipelineState
         let material: [SIMD4<Float>]                 // materialParams slot values(constantshadervalues)
@@ -1446,7 +1446,7 @@ extension SceneRenderer {
                     }
                     enc.setCullMode(mesh.cullBack ? .back : .none)
                     // P⑥: 커스텀 파이프라인(번역 셰이더)은 buffer 계약이 스톡 mf_main/mv_main 과 다르다
-                    // (buffer(1)=EngineU 304B — engineUniform() 이 단일 정본, MeshUniform 256B 오독 해소.
+                    // (buffer(1)=EngineU 320B — engineUniform() 이 단일 정본, MeshUniform 256B 오독 해소.
                     // 정점은 머티리얼 상수 p[[buffer(0)]] 와 충돌 회피 위해 buffer(4), 2D 커스텀 레이어
                     // 경로(SceneRendererFrameEncoder.swift:1094-1099)와 동일 계약).
                     if usedCustom, let custom = mesh.customShader {
@@ -1460,8 +1460,14 @@ extension SceneRenderer {
                                 enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                             }
                         }
+                        // X-⑤ 교차배치(검증 must_fix): g_TexelSize 는 이제 targetRes(dst) 기준 — 3D 커스텀
+                        // 메시 경로는 2D 커스텀 레이어(SceneRendererFrameEncoder.swift:1130)와 마찬가지로
+                        // 다운스케일 멀티패스 체인이 없어 스코프 밖(X-⑤ 커밋 노트) — 종전 tex0 근사(texRes[0])
+                        // 를 그대로 targetRes 에 실어 무회귀 유지. 누락 시 기본값(1,1,1,1)으로 g_TexelSize=1.0
+                        // (UV 전체 1텍셀)이 돼 조용히 깨진다 — engineUniform 필수 인자화로 재발 방지.
                         let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
-                                                texFilter: custom.texFilter, layerTint: u.tint, mvp: u.mvp.transpose)
+                                                texFilter: custom.texFilter, layerTint: u.tint,
+                                                targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: u.mvp.transpose)
                         eng.withUnsafeBytes {
                             enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                             enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)

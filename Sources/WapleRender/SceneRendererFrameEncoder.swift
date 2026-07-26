@@ -36,9 +36,12 @@ extension SceneRenderer {
     /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값) + X-⑤ targetRes[4]
     /// (이펙트 출력(dst) 해상도, 전 패스 불변 — g_TexelSize/g_TexelSizeHalf 전용, 소스 텍스처 아님).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
+    // P⑥×X-⑤ 교차배치(검증 must_fix): targetRes 는 기본값을 두지 않는다 — 기본값이 있으면 새 호출부가
+    // 인자를 빠뜨려도 컴파일이 통과해 g_TexelSize=1.0(UV 전체 1텍셀)으로 조용히 깨진다(3D 커스텀 메시
+    // 경로에서 실제로 발생). 필수 인자화해 신규 호출부를 컴파일 타임에 강제 검출한다.
     func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = [], texFilter: [Float] = [],
                        layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1),
-                       targetRes: SIMD4<Float> = SIMD4(1, 1, 1, 1),
+                       targetRes: SIMD4<Float>,
                        mvp: simd_float4x4? = nil) -> [Float] {
         var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4 + 4)
         let m = mvp ?? simd_float4x4(1)
