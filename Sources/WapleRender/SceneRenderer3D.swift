@@ -34,6 +34,8 @@ extension SceneRenderer {
         /// F661: 로컬 AABB(정점 min/max, 바인드 포즈) — directional 오소 섀도우 피팅 입력.
         let boundsMin: SIMD3<Float>
         let boundsMax: SIMD3<Float>
+        /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 — nil = Mesh3DShaders 고정 경로.
+        var customPipeline: MTLRenderPipelineState? = nil
     }
     /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 4×float4 = 256B).
     struct MeshUniform {
@@ -279,7 +281,7 @@ extension SceneRenderer {
                     bMin = simd_min(bMin, v.position)
                     bMax = simd_max(bMax, v.position)
                 }
-                meshes.append(GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
+                var gpuMesh = GPU3DMesh(vbuf: vbuf, ibuf: ibuf, indexCount: mesh.indices.count,
                                         texture: mat.texture, tint: mat.tint,
                                         roughness: mat.roughness, metallic: mat.metallic,
                                         specularTint: mat.specularTint, alphaCutoff: mat.alphaCutoff,
@@ -289,7 +291,13 @@ extension SceneRenderer {
                                         rimLighting: mat.rimLighting, shadingGradient: mat.shadingGradient,
                                         rimAmount: mat.rimAmount, rimExponent: mat.rimExponent,
                                         gradientTexture: mat.gradientTexture, foggy: mat.foggy,
-                                        boundsMin: bMin, boundsMax: bMax))
+                                        boundsMin: bMin, boundsMax: bMax)
+                // H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드(실패 시 nil → Mesh3DShaders 폴터).
+                if mat.customShader != nil {
+                    gpuMesh.customPipeline = buildCustomMeshShader(mat, package: package, device: device,
+                                                                   skinned: skinned)
+                }
+                meshes.append(gpuMesh)
             }
             guard !meshes.isEmpty else { skipped += 1; continue }
             // 활성 애니(animationlayers) → 인덱스. 스키닝 모델만 bone 버퍼/모델 참조 보유.
@@ -482,6 +490,11 @@ extension SceneRenderer {
         let rimExponent: Float
         let gradientTexture: MTLTexture?
         let foggy: Bool
+        /// H1 Phase 2: 커스텀 머티리얼 셰이더(material passes[0].shader). nil = Mesh3DShaders 고정 경로.
+        let customShader: String?
+        let customCombos: [String: Int]
+        let customConstants: [String: [Float]]
+        let customTextures: [String?]
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
@@ -502,6 +515,18 @@ extension SceneRenderer {
         var rimLighting = false
         var shadingGradient = false
         var foggy = true   // F662: FOG 콤보 기본 1(WE 선언) — 명시 0 만 scene fog 제외(3706286085 sky/boost)
+        // H1 Phase 2: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
+        var customShader: String? = nil
+        var customCombos: [String: Int] = [:]
+        var customConstants: [String: [Float]] = [:]
+        var customTextures: [String?] = []
+        func fvec(_ any: Any?) -> [Float]? {
+            if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
+            if let n = any as? Double { return [Float(n)] }
+            if let i = any as? Int { return [Float(i)] }
+            if let d = any as? [String: Any] { return fvec(d["value"]) }
+            return nil
+        }
         if let d = quietAssetData(path, package: package),
            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
@@ -534,15 +559,24 @@ extension SceneRenderer {
             }
             if let csv = p0["constantshadervalues"] as? [String: Any] {
                 pbr = Scene3DMaterialValues.parse(csv)
-                func fvec(_ any: Any?) -> [Float]? {
-                    if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
-                    if let n = any as? Double { return [Float(n)] }
-                    if let i = any as? Int { return [Float(i)] }
-                    if let d = any as? [String: Any] { return fvec(d["value"]) }  // 스크립트 바인딩 → 초기값
-                    return nil
-                }
                 if let c = fvec(csv["Color"] ?? csv["color"]), c.count >= 3 { color = SIMD3(c[0], c[1], c[2]) }
                 if let a = fvec(csv["Alpha"] ?? csv["alpha"])?.first { alpha = a }
+            }
+            // H1 Phase 2: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
+            if let shader = p0["shader"] as? String { customShader = shader }
+            if let combos = p0["combos"] as? [String: Any] {
+                for (k, v) in combos {
+                    if let i = v as? Int { customCombos[k] = i }
+                    else if let d = v as? Double { customCombos[k] = Int(d) }
+                }
+            }
+            if let csv = p0["constantshadervalues"] as? [String: Any] {
+                for (k, v) in csv {
+                    if let f = fvec(v) { customConstants[k] = f }
+                }
+            }
+            if let texs = p0["textures"] as? [Any] {
+                customTextures = texs.map { $0 as? String }
             }
         } else {
             NSLog("%@", "[Waple] 3D: material json missing: \(path)")
@@ -564,7 +598,9 @@ extension SceneRenderer {
                                        depthTest: depthTest, depthWrite: depthWrite,
                                        rimLighting: rimLighting, shadingGradient: shadingGradient,
                                        rimAmount: pbr.rimAmount, rimExponent: pbr.rimExponent,
-                                       gradientTexture: gradientTexture, foggy: foggy)
+                                       gradientTexture: gradientTexture, foggy: foggy,
+                                       customShader: customShader, customCombos: customCombos,
+                                       customConstants: customConstants, customTextures: customTextures)
                 }
             }
         }
@@ -577,7 +613,9 @@ extension SceneRenderer {
                                   depthTest: depthTest, depthWrite: depthWrite,
                                   rimLighting: rimLighting, shadingGradient: shadingGradient,
                                   rimAmount: pbr.rimAmount, rimExponent: pbr.rimExponent,
-                                  gradientTexture: gradientTexture, foggy: foggy)
+                                  gradientTexture: gradientTexture, foggy: foggy,
+                                  customShader: customShader, customCombos: customCombos,
+                                  customConstants: customConstants, customTextures: customTextures)
     }
 
     private func imageLayerCompositeID(_ name: String) -> Int? {
@@ -620,6 +658,68 @@ extension SceneRenderer {
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
         a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
         a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드. 성공 시 파이프라인, 실패 시 nil(→ Mesh3DShaders 폴터).
+    /// 메시 정점(pos3+normal3+uv2)을 GLSLTranslator VIn(a_Position/a_TexCoord)에 어댑트하는 커스텀 버텍스 사용.
+    func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice,
+                               skinned: Bool) -> MTLRenderPipelineState? {
+        guard let shaderName = mat.customShader else { return nil }
+        let include: (String) -> String? = { header in
+            for cand in ["shaders/\(header)", header] {
+                if let d = self.quietAssetData(cand, package: package), let s = String(data: d, encoding: .utf8) { return s }
+            }
+            return BuiltinShaderIncludes.lookup(header)
+        }
+        guard let vData = quietAssetData("shaders/\(shaderName).vert", package: package),
+              let fData = quietAssetData("shaders/\(shaderName).frag", package: package),
+              let vert = String(data: vData, encoding: .utf8),
+              let frag = String(data: fData, encoding: .utf8) else {
+            NSLog("%@", "[Waple] custom mesh shader source missing: \(shaderName)")
+            return nil
+        }
+        var combos = mat.customCombos
+        for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
+            let bound = slot < mat.customTextures.count && mat.customTextures[slot] != nil
+            if bound { combos[comboName] = 1 }
+        }
+        guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos,
+                                               include: include, premultiplyOutput: false) else {
+            NSLog("%@", "[Waple] custom mesh GLSL translate failed: \(shaderName)")
+            return nil
+        }
+        // 메시 정점 → VIn 어댑터: pos3+normal3+uv2(8 float) → a_Position(float3)+a_TexCoord(float2).
+        // 스키닝(16 float)은 미지원(본 유니폼 부재) — 정적 메시 한정.
+        guard !skinned else {
+            NSLog("%@", "[Waple] custom mesh shader: skinned mesh not supported: \(shaderName)")
+            return nil
+        }
+        let lib: MTLLibrary
+        do {
+            lib = try WapleProfiler.compile(t.msl, { try device.makeLibrary(source: t.msl, options: nil) })
+        } catch {
+            let first = "\(error)".split(separator: "\n").first(where: { $0.contains("error:") }) ?? ""
+            NSLog("%@", "[Waple] custom mesh MSL compile error: \(first)")
+            return nil
+        }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "ev_main")
+        pd.fragmentFunction = lib.makeFunction(name: "ef_main")
+        let vd = MTLVertexDescriptor()
+        // a_Position float3@0, a_TexCoord float2@12, stride 20 — 메시 정점 레이아웃과 동일.
+        vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 0
+        vd.attributes[1].format = .float2; vd.attributes[1].offset = 12; vd.attributes[1].bufferIndex = 0
+        vd.layouts[0].stride = 20
+        pd.vertexDescriptor = vd
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = mat.additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = mat.additive ? .one : .oneMinusSourceAlpha
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
@@ -1092,7 +1192,10 @@ extension SceneRenderer {
                     u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
                     let useSkin = mesh.skinned && boneBuf != nil
                     let pipe: MTLRenderPipelineState
-                    if useSkin {
+                    // H1 Phase 2: 커스텀 셰이더 파이프라인 우선(스키닝 미지원 → 정적 메시 한정).
+                    if let custom = mesh.customPipeline, !useSkin {
+                        pipe = custom
+                    } else if useSkin {
                         // F541(F-73): 스킨 파이프라인 nil 시 8f 셰이더(over/mv_main)로 16f 패킹 메시를
                         // 오렌더해 지오메트리 붕괴 — :937 주석과 같은 스킵으로 통일(skinAdditive→skin 폴백은
                         // 동일 16f 셰이더라 유지, over 폴백만 제거).
