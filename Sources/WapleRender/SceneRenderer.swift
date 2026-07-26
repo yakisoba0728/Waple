@@ -1355,7 +1355,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         startMediaPollingIfNeeded()
         // 오디오-반응 효과가 있으면 시스템 오디오 스펙트럼 캡처 시작(Screen Recording 권한 필요).
-        if hasAudio {
+        // E1(⑦): 형제 sceneAudio 블록(:1333)과 동일한 헤드리스 결정성 가드 — 종전엔 이 블록만 누락돼
+        // 헤드리스(캡처/테스트) 경로에서도 SCStream 오디오 캡처가 무조건 기동됐다.
+        if hasAudio, Self.isPrimaryScreenWindow(container.window) {
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] spec in
                 // spec = 128(64L+64R, 채널별 FFT) — 16빈도 채널 분리 다운샘플.

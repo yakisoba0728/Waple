@@ -216,4 +216,44 @@ final class SceneRenderFixRegressionTests: XCTestCase {
         XCTAssertTrue(post.encode(cb: cb, src: src, dst: dst), "F539: 정상 인코드는 true 반환")
         cb.commit(); cb.waitUntilCompleted()
     }
+
+    // MARK: - E1(⑦): mount() 오디오 스펙트럼 캡처 헤드리스 결정성 가드 (F286)
+
+    /// mount()의 SCStream 오디오 스펙트럼 캡처가 형제 sceneAudio 블록(:1333, isPrimaryScreenWindow 가드)과
+    /// 동일하게 container.window==nil(헤드리스)에서는 기동을 건너뛰어야 한다 — 종전엔 이 블록만 가드가
+    /// 없어 테스트/캡처 경로에서도 화면 기록 권한을 요구하는 실 SCStream 캡처가 무조건 떴다.
+    func testMountHeadlessSkipsAudioSpectrumCapture() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal device") }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_e1_audio_headless", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"particle":"particles/x.json","origin":"10 10 0"}]}
+        """
+        // audioprocessingmode!=0 이미터 — buildParticles 가 hasAudio=true 로 승격(SceneRendererResources.swift:1169).
+        let particle = """
+        {"emitter":[{"name":"sphererandom","rate":1,"audioprocessingmode":3}],
+         "renderer":[{"name":"sprite"}],"maxcount":10,"material":"materials/x.json"}
+        """
+        let material = #"{"passes":[{"textures":["x"]}]}"#
+        let pkgData = encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("particles/x.json", particle.data(using: .utf8)!),
+            ("materials/x.json", material.data(using: .utf8)!),
+            ("materials/x.tex", solidTex(255, 255, 255)),
+        ])
+        try pkgData.write(to: dir.appendingPathComponent("scene.pkg"))
+
+        let project = WallpaperProject(
+            id: "e1audio", type: .scene, fileName: "scene.pkg", previewName: nil, title: "e1audio",
+            tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))  // 창에 미부착 — window == nil
+        XCTAssertNil(container.window)
+        let renderer = SceneRenderer()
+        try renderer.mount(in: container, project: project)
+        defer { renderer.teardown() }
+
+        XCTAssertTrue(renderer.hasAudio, "오디오반응 이미터가 있으면 hasAudio 는 계속 true 여야(무회귀)")
+        XCTAssertNil(renderer.audioProvider, "헤드리스(window==nil)에서는 SCStream 캡처 프로바이더가 기동되면 안 됨")
+    }
 }
