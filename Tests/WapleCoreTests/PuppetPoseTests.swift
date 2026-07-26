@@ -194,4 +194,21 @@ final class PuppetPoseTests: XCTestCase {
         XCTAssertEqual(PuppetPose.clipIndex(model: m, name: "idle", fallback: 1), 0)
         XCTAssertEqual(PuppetPose.clipIndex(model: m, name: "nomatch", fallback: 1), 1)  // fallback 위치
     }
+
+    /// C③: clipId 가 있고 매칭되면 이름 휴리스틱보다 우선한다 — 저작 도구가 클립을 제네릭 이름("动画 1/2")
+    /// 으로 남기고 레이어 이름("wave" 등)에만 의미를 부여하는 실물 사례(3384019940/3517818807/3486806915
+    /// 코퍼스 교차검증) 재현: 이름으로는 "wave"가 clip1("动画 2")에 매칭될 것 같지만, 실제로는 id가
+    /// clip0("动画 1")을 가리키면 id가 이긴다.
+    func testClipIndexPrefersClipIdOverNameHeuristic() {
+        var m = multiModel([("动画 1", []), ("动画 2", [])])
+        m.animations[0].id = 100
+        m.animations[1].id = 200
+        // 이름 매칭만이면 "wave"는 두 제네릭 이름 어디에도 안 붙어 fallback(1) 로 떨어진다.
+        XCTAssertEqual(PuppetPose.clipIndex(model: m, name: "wave", fallback: 1), 1)
+        // clipId=100 을 주면 이름/제네릭과 무관하게 clip0 을 정확히 골라야(fallback 은 무시됨).
+        XCTAssertEqual(PuppetPose.clipIndex(model: m, name: "wave", fallback: 1, clipId: 100), 0)
+        XCTAssertEqual(PuppetPose.clipIndex(model: m, name: "wave", fallback: 0, clipId: 200), 1)
+        // 매칭 안 되는 clipId → 이름 휴리스틱/fallback 으로 정상 폴백(무회귀).
+        XCTAssertEqual(PuppetPose.clipIndex(model: m, name: "nomatch", fallback: 1, clipId: 999), 1)
+    }
 }

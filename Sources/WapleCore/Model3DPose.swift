@@ -79,10 +79,16 @@ public enum Model3DPose {
         return out
     }
 
-    /// animationlayers 레이어 이름 → 파스된 애니 인덱스. 실측: 레이어 "Idle" → 애니 "..._arm|idle_bone".
-    /// 서브스트링 매칭(소문자) → 폴백 "idle" → 폴백 인덱스 0. 애니 없음 → -1.
-    public static func resolveAnimation(model: Model3D, layerName: String?) -> Int {
+    /// animationlayers 레이어 → 파스된 애니 인덱스. C③: clipId(scene.json animationlayers[].animation,
+    /// 모델 클립의 실제 id — Model3D.Animation.id, MDLA0006 트레일러/baseId 경유)가 있고 매칭되는 클립이
+    /// 있으면 최우선(저작 도구가 클립명을 "动画 1/2/3" 같은 제네�릭으로 남기고 레이어 이름만 의미
+    /// 부여하는 실물 사례 — 이름 휴리스틱은 오선택). 없거나 미매칭이면 종전 이름 서브스트링 매칭 →
+    /// "idle" 폴백 → 인덱스 0 폴백(무회귀: clipId nil 인 씬은 100% 종전 경로).
+    public static func resolveAnimation(model: Model3D, layerName: String?, clipId: Int? = nil) -> Int {
         guard !model.animations.isEmpty else { return -1 }
+        if let cid = clipId, let i = model.animations.firstIndex(where: { $0.id == cid }) {
+            return i
+        }
         if let ln = layerName?.lowercased(), !ln.isEmpty,
            let i = model.animations.firstIndex(where: { $0.name.lowercased().contains(ln) }) {
             return i

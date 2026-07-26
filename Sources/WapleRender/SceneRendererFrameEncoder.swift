@@ -898,7 +898,8 @@ extension SceneRenderer {
                 let eff = att.parentLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
                 // 부모 퍼펫 렌더와 동일 디스패치: 2+ 레이어 = 캐스케이드, 그 외 = 클립 0(attachmentFrame 폴백).
                 let resolved: [(anim: Int, additive: Bool, weight: Float, rate: Float)] = eff.count >= 2
-                    ? eff.map { (PuppetPose.clipIndex(model: att.model, name: $0.element.name, fallback: $0.offset),
+                    ? eff.map { (PuppetPose.clipIndex(model: att.model, name: $0.element.name, fallback: $0.offset,
+                                                      clipId: $0.element.clipId),
                                  $0.element.additive, $0.element.blend, $0.element.rate) }
                     : []
                 if let A = PuppetPose.attachmentFrame(model: att.model, name: att.name, layers: resolved, time: time),
@@ -1041,7 +1042,7 @@ extension SceneRenderer {
             let mats: [simd_float4x4]
             if eff.count >= 2 {
                 let resolved = eff.map { (pos, L) in
-                    (anim: PuppetPose.clipIndex(model: pm, name: L.name, fallback: pos),
+                    (anim: PuppetPose.clipIndex(model: pm, name: L.name, fallback: pos, clipId: L.clipId),
                      additive: L.additive, weight: L.blend, rate: L.rate)
                 }
                 // C④: rate 가 스크립트로 매프레임 재평가되는 레이어(오디오 반응 등)만 dt 위상적분 —
@@ -1069,6 +1070,12 @@ extension SceneRenderer {
                 }
                 mats = PuppetPose.blendedSkinMatrices(model: pm, layers: resolved, time: time,
                                                       overrideFrames: overrideFrames)
+            } else if let (_, L) = eff.first {
+                // C③: 활성 레이어가 1개면 종전엔 무조건 클립 0(하드코딩)이었다 — id/이름 매칭 없이.
+                // clipIndex 와 동일 규약(id 최우선 → 이름 서브스트링 → fallback)으로 통일하되, fallback
+                // 을 0 으로 둬 id/이름 모두 미매칭이면 종전과 100% 동일한 클립 0 을 유지(무회귀).
+                let ci = PuppetPose.clipIndex(model: pm, name: L.name, fallback: 0, clipId: L.clipId)
+                mats = PuppetPose.skinMatrices(model: pm, animation: ci, time: time)
             } else {
                 mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
             }

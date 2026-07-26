@@ -388,7 +388,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             if let pm = gl.puppet, !pm.animations.isEmpty {
                 let eff = def.animationLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
                 let playing: [(clip: Int, rate: Float)] = eff.count >= 2
-                    ? eff.map { (PuppetPose.clipIndex(model: pm, name: $0.element.name, fallback: $0.offset), $0.element.rate) }
+                    ? eff.map { (PuppetPose.clipIndex(model: pm, name: $0.element.name, fallback: $0.offset,
+                                                      clipId: $0.element.clipId), $0.element.rate) }
                     : [(0, 1)]
                 for (ci, rate) in playing {
                     guard ci >= 0, ci < pm.animations.count else { continue }

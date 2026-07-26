@@ -97,10 +97,15 @@ public enum PuppetPose {
                       a.columns.3 + (b.columns.3 - a.columns.3) * t)
     }
 
-    /// 레이어 이름 → 애니 클립 인덱스(서브스트링 매칭, 실패 시 fallback 위치 클램프). 애니 없음 → 0.
-    public static func clipIndex(model: PuppetModel, name: String, fallback: Int) -> Int {
+    /// 레이어 → 애니 클립 인덱스. C③: clipId(scene.json animationlayers[].animation, 모델 클립의 실제
+    /// id — PuppetModel.Animation.id, 컨테이너형(MDLV0016+) 퍼펫만 보유·네이티브 MDLV0013 은 항상 nil)
+    /// 가 있고 매칭되면 최우선(저작 도구가 클립명을 제네릭 "动画 1/2/3" 으로 남기고 레이어 이름에만
+    /// 의미부여하는 실물 사례 — 이름 휴리스틱 오선택 회피). 없거나 미매칭이면 종전 이름 서브스트링
+    /// 매칭 → fallback 위치 클램프(무회귀: clipId nil 인 씬은 100% 종전 경로). 애니 없음 → 0.
+    public static func clipIndex(model: PuppetModel, name: String, fallback: Int, clipId: Int? = nil) -> Int {
         let count = model.animations.count
         guard count > 0 else { return 0 }
+        if let cid = clipId, let i = model.animations.firstIndex(where: { $0.id == cid }) { return i }
         let ln = name.lowercased()
         if !ln.isEmpty, let i = model.animations.firstIndex(where: {
             // F443: 빈 클립명(V0013 파스는 빈 애니 이름을 허용 — PuppetModel.parseV0013)은 contains("") 가

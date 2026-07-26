@@ -305,7 +305,12 @@ public struct SceneCameraObject: Equatable {
 public struct AnimationSelection: Equatable {
     public let name: String
     public let rate: Float
-    public init(name: String, rate: Float) { self.name = name; self.rate = rate }
+    /// C③: 선택된 레이어의 정수 클립 id(scene.json animationlayers[].animation) — 있으면 이름 휴리스틱
+    /// 대신 모델 클립 id 대조로 정확한 클립을 고른다(Model3DPose.resolveAnimation 참조).
+    public let clipId: Int?
+    public init(name: String, rate: Float, clipId: Int? = nil) {
+        self.name = name; self.rate = rate; self.clipId = clipId
+    }
 }
 
 /// animationlayers 의 개별 레이어(다층 캐스케이드 블렌드용 — 실측 확정 2026-07):
@@ -322,6 +327,12 @@ public struct AnimationLayer: Equatable {
     public var blend: Float
     public var rate: Float
     public var visible: Bool
+    /// C③: 재생 클립의 정수 id(scene.json animationlayers[].animation) — 모델 파일(MDLA0006 트레일러/
+    /// baseId, Model3D.Animation.id 경유)의 클립 id와 대조해 정확한 클립을 고른다. 저작 도구가 생성한
+    /// 이 레이어의 "표시 이름"(name)은 실제 클립 이름과 무관할 수 있어(실측: 클립명 "动画 1/2/3" 제네릭,
+    /// 레이어명 "呼吸/眨眼/转头" 의미부여) 이름 부분일치 휴리스틱이 오선택하는 경우의 정본. nil = 미저작
+    /// (이름 휴리스틱 폴백).
+    public let clipId: Int?
     /// blend/rate/visible 바인딩의 프로퍼티 스크립트(키 → JS 소스) — 실물 animationEvent 훅의 주 서식지
     /// (3737268876 젤다 blend 핸들러 19개, 3351179520/3396722575 visible 핸들러, 2955378002/3448290956
     /// rate 오디오 배속). 렌더러가 엔진 생성 + per-frame 재평가(2D 퍼펫 캐스케이드 소비자).
@@ -329,9 +340,9 @@ public struct AnimationLayer: Equatable {
     /// blend/visible 바인딩의 이벤트 마커 타임라인(options.events 보유분만 — 젤다 "surprise" 등).
     /// 값 구동(blend 키프레임 적용)은 미구현 — 마커 발화 클록으로만 사용(정적 blend 무회귀).
     public var eventTimelines: [PropertyAnimation] = []
-    public init(name: String, additive: Bool, blend: Float, rate: Float, visible: Bool) {
+    public init(name: String, additive: Bool, blend: Float, rate: Float, visible: Bool, clipId: Int? = nil) {
         self.name = name; self.additive = additive; self.blend = blend
-        self.rate = rate; self.visible = visible
+        self.rate = rate; self.visible = visible; self.clipId = clipId
     }
 }
 
@@ -1541,7 +1552,7 @@ extension SceneDocument {
     /// 스크립트/이벤트 제어, 시작≈0)는 무시 → 트리거 전 정지. 실물 젤다: "Idle"(blend 1.0)만 상시 재생.
     private static func parseAnimationLayers(_ raw: Any?) -> AnimationSelection? {
         guard let layers = raw as? [Any] else { return nil }
-        var best: (name: String, rate: Float, blend: Float)? = nil
+        var best: (name: String, rate: Float, blend: Float, clipId: Int?)? = nil
         for case let layer as [String: Any] in layers {
             // 바인딩 객체 {"value":false,...} 언랩 — parseAllAnimationLayers 와 동일 해석(숨긴 클립 오선택 방지)
             let visible = (layer["visible"] as? Bool)
@@ -1550,10 +1561,10 @@ extension SceneDocument {
             let blend = float(layer["blend"])  // 딕셔너리 blend(스크립트/애니 커브) = 이벤트 트리거 → 제외
             guard let bl = blend, bl >= 0.5 else { continue }
             if best == nil || bl > best!.blend {
-                best = ((layer["name"] as? String) ?? "", float(layer["rate"]) ?? 1, bl)
+                best = ((layer["name"] as? String) ?? "", float(layer["rate"]) ?? 1, bl, intVal(layer["animation"]))
             }
         }
-        return best.map { AnimationSelection(name: $0.name, rate: $0.rate) }
+        return best.map { AnimationSelection(name: $0.name, rate: $0.rate, clipId: $0.clipId) }
     }
 
     /// animationlayers → 전 레이어(다층 블렌드용, 순서 보존). visible/blend/rate 는 정적 초기값
@@ -1572,7 +1583,10 @@ extension SceneDocument {
                                     // 대칭(엔진 생성 실패 시 풀블렌드 포즈 지속 방지). 키 부재는 종전대로 1.
                                     blend: float(l["blend"]) ?? (l["blend"] is [String: Any] ? 0 : 1),
                                     rate: float(l["rate"]) ?? 1,
-                                    visible: visible)
+                                    visible: visible,
+                                    // C③: animationlayers[].animation(정수 클립 id) — 모델 파일 클립 id 와
+                                    // 대조해 정확한 클립을 고른다(이름 휴리스틱 오선택 회피).
+                                    clipId: intVal(l["animation"]))
             // blend/visible/rate 바인딩의 스크립트·이벤트 타임라인(실물: 젤다 blend 의 animationEvent 훅 +
             // options.events 마커, 3396722575 visible 의 훅, 2955378002/3448290956 rate 오디오 배속).
             for key in ["blend", "visible", "rate"] {

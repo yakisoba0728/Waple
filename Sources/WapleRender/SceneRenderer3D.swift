@@ -352,7 +352,8 @@ extension SceneRenderer {
                 // — 스키닝 배선 정합 게이트(v2 정적과 비교).
                 let bindPoseOnly = Self.debugFlag("WAPLE_3D_BINDPOSE")
                 animIndex = (!bindPoseOnly && obj.animation != nil)
-                    ? Model3DPose.resolveAnimation(model: model, layerName: obj.animation?.name)
+                    ? Model3DPose.resolveAnimation(model: model, layerName: obj.animation?.name,
+                                                   clipId: obj.animation?.clipId)
                     : -1
             }
             meshRenderables.append(MeshRenderable(id: obj.id, meshes: meshes, order: obj.order, name: obj.name,
