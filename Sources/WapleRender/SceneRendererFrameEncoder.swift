@@ -310,6 +310,28 @@ extension SceneRenderer {
         return next
     }
 
+    /// C⑥: colorBlendMode 텍스트 — runBlendModeLayer 와 동일 인코더 분할 패턴(이미지 레이어 경로 재사용).
+    /// acc 스냅샷(dst) 확보 → f_blend 로 텍스트 쿼드 드로우 → 새 인코더 반환.
+    func runBlendModeText(_ t: GPUText, texture: MTLTexture?, acc: MTLTexture, cb: MTLCommandBuffer,
+                          ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
+                          camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        enc.endEncoding()
+        var snapshot: MTLTexture? = nil
+        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+           let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(from: acc, to: snap)
+            blit.endEncoding()
+            snapshot = snap
+        }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = acc
+        rpd.colorAttachments[0].loadAction = .load
+        guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        encodeText(t, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
+                  time: time, device: device, displayTexture: texture, blendSnapshot: snapshot)
+        return next
+    }
+
     /// H4: REFRACT 이미지 레이어 드로우(인코더 분할): 현재 enc 를 닫고 acc(씬 컬러)를 스냅샷(blit — 진행 중
     /// 타깃은 샘플 불가, runFrameBufferLayer/runBlendModeLayer 와 동일 패턴)한 뒤, .load 로 재개한 인코더에
     /// f_refract 로 레이어를 그린다(노멀 오프셋으로 스냅샷 재샘플·곱). 스냅샷/파이프라인 확보 실패 시
@@ -602,6 +624,13 @@ extension SceneRenderer {
             case .particle:
                 encodeParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx), into: enc,
                                device: device, camOffset: &camOffset, aspectScale: &aspectScale)
+            case .text where textLayers[item.idx].def.colorBlendMode != 0:
+                // C⑥: colorBlendMode 텍스트 — 이미지 레이어와 동일 인코더 분할(acc 스냅샷 dst 블렌드).
+                guard let next = runBlendModeText(
+                    textLayers[item.idx], texture: item.idx < textTextures.count ? textTextures[item.idx] : nil,
+                    acc: acc, cb: cb, ending: enc, device: device, time: time,
+                    camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                enc = next
             case .text:
                 encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale,
                           time: time, device: device,
@@ -1232,7 +1261,8 @@ extension SceneRenderer {
     func encodeText(_ t: GPUText, into enc: MTLRenderCommandEncoder,
                             camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
                             time: Float = 0, device: MTLDevice? = nil,
-                            displayTexture: MTLTexture? = nil) {   // F741(S-13): 이펙트 적용 텍스처(없으면 원본)
+                            displayTexture: MTLTexture? = nil,   // F741(S-13): 이펙트 적용 텍스처(없으면 원본)
+                            blendSnapshot: MTLTexture? = nil) {  // C⑥: colorBlendMode dst 스냅샷(이미지 레이어와 동형)
         guard let pipeline, let tex = displayTexture ?? t.texture else { return }
         var tint = t.tint
         var vbuf = t.vertexBuffer
@@ -1304,6 +1334,24 @@ extension SceneRenderer {
         if !(scriptTextVisible[t.uid] ?? t.initialVisible) { return }
         guard let vbuf else { return }
         var depth = SIMD2<Float>(1, 1)
+        // C⑥: colorBlendMode — 이미지 레이어(encodeLayer)와 동일 f_blend 경로 재사용. 스냅샷 없으면
+        // (인코더 미분할 호출자 등) 일반 premult-over 폴백(무회귀).
+        if let blendSnapshot, let blendPipeline, t.def.colorBlendMode != 0 {
+            enc.setRenderPipelineState(blendPipeline)
+            enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+            enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+            enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+            var shake = frameShakeOffset
+            enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
+            enc.setFragmentTexture(tex, index: 0)
+            enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            enc.setFragmentTexture(blendSnapshot, index: 1)
+            var mode = Int32(t.def.colorBlendMode)
+            enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            return
+        }
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)

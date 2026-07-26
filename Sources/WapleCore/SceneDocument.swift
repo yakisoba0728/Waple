@@ -254,6 +254,10 @@ public struct SceneTextLayer: Equatable {
     public var spacing: Float? = nil
     public var lockTransforms: Bool = false
     public var isSolid: Bool = false
+    /// C⑥: 오브젝트 colorBlendMode(common_blending.h ApplyBlending enum 0-32; 0=normal) — 이미지
+    /// 레이어(SceneLayer.colorBlendMode)와 동일 필드이나 종전 텍스트 경로엔 아예 없었다. 텍스트도
+    /// 동일 enum 을 저작하며(실측 코퍼스 9씬/24오브젝트, mode 31 최빈 — 시계/곡명 텍스트 가산 합성).
+    public var colorBlendMode: Int = 0
 }
 
 /// 3D 씬 카메라(2D 의 orthogonalprojection 대체). look-at 파라미터 + 원근 fov.
@@ -1376,6 +1380,8 @@ extension SceneDocument {
         t.spacing = float(obj["spacing"])
         t.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
         t.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
+        // C⑥: colorBlendMode — 이미지 레이어(:1157 인근)와 동일 파스 규약.
+        t.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         return t
     }
 
