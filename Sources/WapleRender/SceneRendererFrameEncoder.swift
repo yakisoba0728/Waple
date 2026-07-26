@@ -874,7 +874,7 @@ extension SceneRenderer {
         var tint = layer.tint
         var vbuf = layer.vertexBuffer
         var litRect0 = layer.litRect.0, litRect1 = layer.litRect.1  // 애니 레이어는 아래서 재계산
-        // H1: 커스텀 셰이더용 유효 변환(애니/스크립트/attachment 반영 후).
+        // H1/C②: 커스텀 셰이더·퍼펫 스킨 메시 배치 공용 유효 변환(애니/스크립트/attachment 반영 후).
         var effectiveTransform: (origin: Vec2, scale: Vec2, angle: Float)? = nil
         // F723: thisLayer 직접 대입 read-back(구조·우선순위는 함수 주석 참조). 스크립트 없는 레이어는
         // JS 평가 비용 0(propScripts/animLayerScripts 가 비어 있으면 nil).
@@ -883,8 +883,6 @@ extension SceneRenderer {
             guard layer.def != nil, !layer.propScripts.isEmpty || !layer.animLayerScripts.isEmpty else { return nil }
             return readBackScriptLayerState(index: layer.uid)   // uid = doc.layers 인덱스 = JS layers 인덱스
         }()
-        // attachment 적용 후 유효 변환(퍼펫 자식이 스킨 정점 산출에도 사용) — nil 이면 def 정적값 그대로.
-        var attachedTransform: (origin: Vec2, scale: Vec2, angle: Float)? = nil
         if let def = layer.def, let device {
             func animValue(_ key: String, _ comp: Int, _ base: Float) -> Float {
                 def.animations[key]?.value(component: comp, atTime: time, base: base) ?? base
@@ -911,7 +909,6 @@ extension SceneRenderer {
                     angle += atan2(d.m.columns.0.y, d.m.columns.0.x)
                     // ponytail: 델타 선형부는 각+축배율로 분해(전단 폐기) — 2D 퍼펫 본은 z회전·평행이동 위주.
                     scale = Vec2(x: scale.x * simd_length(d.m.columns.0), y: scale.y * simd_length(d.m.columns.1))
-                    attachedTransform = (origin, scale, angle)
                     quadDirty = true
                 }
             }
@@ -967,10 +964,10 @@ extension SceneRenderer {
                     litRect0 = r.0; litRect1 = r.1
                 }
             }
-            // H1: 커스텀 셰이더 레이어는 유효 변환을 보존(파이프라인 선택에서 행렬 산출).
-            if layer.customShader != nil {
-                effectiveTransform = (origin, scale, angle)
-            }
+            // H1/C②: 유효 변환(애니/스크립트/attachment 반영 후)을 항상 보존 — 커스텀 셰이더 파이프라인
+            // 행렬 산출뿐 아니라 퍼펫 스킨 메시 배치(:1056)도 이 값을 쓴다. 애니/스크립트/attachment가
+            // 전무하면 origin/scale/angle == def 정적값이라 비트동일(무회귀).
+            effectiveTransform = (origin, scale, angle)
             // F743(S-35): 라이브 디스크립터 채널 — 이번 프레임 최종 변환 기록(알파/가시성은 아래서 병기).
             liveLayerStates[layer.uid] = ScriptLayerReadBack(
                 visible: nil, alpha: nil,
@@ -1052,8 +1049,13 @@ extension SceneRenderer {
                 mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
             }
             let pos = PuppetPose.skinnedPositions(model: pm, matrices: mats)
-            // attachment 자식 퍼펫(머리카락 등): 부착 델타가 합성된 변환으로 스킨 메시 배치.
-            let (po, ps, pa) = attachedTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
+            // C②: 스킨 메시 배치는 이 함수가 앞서 계산한 유효 변환(애니/스크립트/attachment 반영,
+            // effectiveTransform)을 써야 한다 — attachment 자식 퍼펫(머리카락 등)의 부착 델타뿐 아니라
+            // 부모 퍼펫 자신의 origin/scale/angles 키프레임·프로퍼티 스크립트도 여기 포함된다. 이전에는
+            // attachedTransform(attachment 전용) ?? def 정적값으로 떨어져, attachment 없는 퍼펫의 애니/
+            // 스크립트 변환이 계산만 되고 버려졌다(6씬 398오브젝트 실측 — 감사 C② wf3#20). 애니/스크립트/
+            // attachment가 전무하면 effectiveTransform == def 정적값이라 비트동일(무회귀).
+            let (po, ps, pa) = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
             let verts = SceneRenderer.puppetVertices(model: pm, positions: pos,
                                                      origin: po, scale: ps, angleZ: pa,
                                                      projW: projW, projH: projH)
