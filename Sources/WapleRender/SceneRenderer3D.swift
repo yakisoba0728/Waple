@@ -704,6 +704,8 @@ extension SceneRenderer {
 
     /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드. 성공 시 파이프라인, 실패 시 nil(→ Mesh3DShaders 폴터).
     /// 메시 정점(pos3+normal3+uv2)을 GLSLTranslator VIn(a_Position/a_TexCoord)에 어댑트하는 커스텀 버텍스 사용.
+    /// 셰이더 소스(.vert/.frag)는 씬 패키지 안 것만 인정(2D 경로와 동일 규칙 — 베이스 팩의 WE 빌트인
+    /// 셰이더까지 이 경로로 빨려 들어오는 것을 차단). include(common.h 등)만 베이스 팩 폴터 허용.
     func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice,
                                skinned: Bool) -> MTLRenderPipelineState? {
         guard let shaderName = mat.customShader else { return nil }
@@ -713,8 +715,8 @@ extension SceneRenderer {
             }
             return BuiltinShaderIncludes.lookup(header)
         }
-        guard let vData = quietAssetData("shaders/\(shaderName).vert", package: package),
-              let fData = quietAssetData("shaders/\(shaderName).frag", package: package),
+        guard let vData = packageData("shaders/\(shaderName).vert", package: package),
+              let fData = packageData("shaders/\(shaderName).frag", package: package),
               let vert = String(data: vData, encoding: .utf8),
               let frag = String(data: fData, encoding: .utf8) else {
             NSLog("%@", "[Waple] custom mesh shader source missing: \(shaderName)")

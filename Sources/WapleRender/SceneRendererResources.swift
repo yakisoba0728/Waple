@@ -773,7 +773,8 @@ extension SceneRenderer {
         return nil
     }
 
-    private func packageData(_ name: String, package: ScenePackage) -> Data? {
+    /// pkg 전용 에셋 조회(베이스 팩 폴터 없음) — 커스텀 셰이더 소스처럼 씬 번들만 인정해야 하는 프로브용.
+    func packageData(_ name: String, package: ScenePackage) -> Data? {
         if let d = package.data(for: name) { return d }
         guard let e = package.entries.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
             return nil
