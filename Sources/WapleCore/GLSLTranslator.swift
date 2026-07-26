@@ -1186,7 +1186,6 @@ public enum GLSLTranslator {
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
         // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
         if name.hasPrefix("g_"), name.contains("Matrix") { return "float4x4(1.0)" }
-<<<<<<< HEAD
         // X-⑤: 이펙트 체인 경로는 g_TexelSize = 이펙트 **출력(dst)** 1텍셀(UV), 체인 전 패스에 걸쳐
         // 고정값(패스별 타깃도 tex0 도 아님) 규약으로 채택했다. 근거는 WE gaussian.vert
         // `ratio = g_TexelSize * g_Texture0Resolution` — 단, 이 근거는 **판별력이 없다**: ratio 는
@@ -1201,12 +1200,6 @@ public enum GLSLTranslator {
         // 이 정본을 쓴다. 레이어 커스텀 셰이더 경로는 여전히 tex0 근사(다른 정본) — 아래 X-⑤ 스코프
         // 밖 주석 참조. 같은 심볼이 경로별로 다른 값을 낸다는 뜻이며, 어느 쪽도 실측으로 확정되지
         // 않았으니 둘 다 향후 라이브 A/B 로 재검증 대상이다.
-=======
-        // X-⑤: WE g_TexelSize = 이펙트 **출력(dst)** 1텍셀(UV), 체인 전 패스에 걸쳐 고정값(패스별 타깃도
-        // tex0 도 아님 — WE gaussian.vert 실측으로 확정, EngineU 선언 주석 참조). SceneRendererFrameEncoder
-        // 가 applyEffect 진입 시 dst 1 회로 eng.targetRes 를 채운다. 스케일드 fbo 를 패스 타깃/소스로 쓰는
-        // 체인(bokeh 등)에서 종전 tex0 근사(4× 과대 블러) 해소.
->>>>>>> worktree-wf_88f7dabe-f8a-3
         // 머티리얼로 오인되면 기본값 (0,0) → 0/0=NaN UV → 검정(3544152633 ×0.4 luma 손실 근원) — isEngine 등재 유지.
         if name == "g_TexelSize" { return "(1.0 / eng.targetRes.xy)" }
         if name == "g_TexelSizeHalf" { return "(0.5 / eng.targetRes.xy)" }
@@ -1605,13 +1598,8 @@ public enum GLSLTranslator {
         // Swift 측 단일 빌더 SceneRendererFrameEncoder.engineUniform 과 레이아웃 동기 필수.
         // H1: layerTint = 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값으로 물변경.
         // X-⑤: targetRes(layerTint 뒤 추가 — 앞 오프셋 불변) = 이펙트 **출력(dst)** 해상도, 전 패스 불변.
-<<<<<<< HEAD
         // 채택 근거·이 근거의 판별력 한계·레이어 커스텀 경로와의 규약 이원화·라이브 A/B 대기 상태는
         // 위 g_TexelSize 치환부(computeUV 근처) 주석 참조 — "실측으로 확정" 아님.
-=======
-        // WE 실물 gaussian.vert `ratio = g_TexelSize * g_Texture0Resolution`(bokeh_blur 최종 패스: tex0=
-        // _downscaled1(scale4), 그 결과가 소스/타깃 스케일비 1/4 이 되려면 g_TexelSize=1/dst 여야 성립) 로 확정.
->>>>>>> worktree-wf_88f7dabe-f8a-3
         let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; float4 targetRes; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
         let uvHelpers = """
