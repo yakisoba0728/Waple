@@ -145,6 +145,48 @@ final class PuppetPoseTests: XCTestCase {
         XCTAssertEqual(skinnedX(m, base + [(1, true, 1, 1)], 1.0).x, 100, accuracy: 1e-4)
     }
 
+    // MARK: - C④ 캐스케이드 위상 dt 적분(스크립트 구동 rate)
+
+    /// integratedCascadeFrame: 첫 호출(previousPhase nil)은 기존 time×rate 순간위상과 동일하게 시딩되고,
+    /// 이후 호출은 rate 가 프레임마다 급변해도 phase 가 dt×rate×fps 만큼만 연속 전진한다(불연속 점프 없음).
+    /// 감사 C④ 재현: rate 가 1 → 1000 으로 급변해도(오디오 반응 스크립트의 전형적 패턴) 위상은
+    /// time×rate 재계산(순간 수만 프레임 점프)이 아니라 dt 폭만큼만 이동해야 한다.
+    func testIntegratedCascadePhaseIsContinuousUnderVaryingRate() {
+        let m = model(tracks: [[key(0, 0), key(0, 0)], []], fps: 10, length: 1000, mode: "loop")
+        // 첫 프레임: previousPhase nil → time×rate×fps 로 시딩(정적 rate 경로와 동일 시작점).
+        let r0 = PuppetPose.integratedCascadeFrame(model: m, anim: 0, rate: 1, time: 1.0, dt: 0,
+                                                    previousPhase: nil)
+        XCTAssertEqual(r0.phase, 10, accuracy: 1e-4, "시딩 위상 = time×rate×fps = 1.0×1×10")
+
+        // rate 가 다음 프레임에 1000 으로 급변(오디오 반응 시나리오) — dt=0.1s 만 지남.
+        let r1 = PuppetPose.integratedCascadeFrame(model: m, anim: 0, rate: 1000, time: 1.1, dt: 0.1,
+                                                    previousPhase: r0.phase)
+        let expectedDelta: Float = 0.1 * 1000 * 10   // dt × rate × fps
+        XCTAssertEqual(r1.phase - r0.phase, expectedDelta, accuracy: 1e-2,
+                       "위상은 dt×rate×fps 만큼만 연속 전진 — time×rate 재계산이면 1.1×1000×10=11000 이 나와야 하는데 그게 아님을 확인")
+        // 구버전(time×rate 순간위상) 값과 뚜렷이 달라야 함 — 결함 재현 가드.
+        let naiveJump = Float(1.1) * 1000 * 10
+        XCTAssertNotEqual(r1.phase, naiveJump, "적분 위상이 순간위상 재계산과 같으면 안 됨(회귀)")
+        XCTAssertLessThan(abs(r1.phase - r0.phase), abs(naiveJump - r0.phase),
+                          "적분 위상 변화폭이 순간위상 재계산의 점프보다 훨씬 작아야(연속성)")
+    }
+
+    /// worldMatrices/blendedSkinMatrices 의 overrideFrames 배선: override 를 주면 그 레이어는 override
+    /// 프레임을, nil 이면 기존 time×rate 계산을 쓴다(선택적 오버라이드 — 무회귀 가드).
+    func testOverrideFramesSelectivelyReplacesPerLayerFrame() {
+        // 클립 a: 프레임 0→x=0, 프레임 1→x=100(단일 트랙). fps=1, length=1, single.
+        let m = multiModel([("a", [key(0, 0), key(100, 0)])], fps: 1, length: 1, mode: "single")
+        // override 없음(nil) → time=0 이므로 frame=0 → x=0.
+        let noOverride = skinnedX(m, [(anim: 0, additive: false, weight: 1, rate: 1)], 0)
+        XCTAssertEqual(noOverride.x, 0, accuracy: 1e-4)
+        // override 로 프레임 1 강제 지정 → time=0 이어도 x=100(오버라이드가 우선).
+        let withOverride = PuppetPose.skinnedPositions(
+            model: m,
+            matrices: PuppetPose.blendedSkinMatrices(model: m, layers: [(anim: 0, additive: false, weight: 1, rate: 1)],
+                                                      time: 0, overrideFrames: [1.0])).first!
+        XCTAssertEqual(withOverride.x, 100, accuracy: 1e-4, "override 프레임이 time×rate 계산을 대체해야")
+    }
+
     /// clipIndex: 이름 서브스트링 매칭, 실패 시 fallback 위치.
     func testClipIndexResolution() {
         let m = multiModel([("idle_bone", []), ("wave_bone", [])])

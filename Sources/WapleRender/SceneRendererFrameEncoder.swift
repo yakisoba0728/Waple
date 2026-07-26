@@ -1044,7 +1044,31 @@ extension SceneRenderer {
                     (anim: PuppetPose.clipIndex(model: pm, name: L.name, fallback: pos),
                      additive: L.additive, weight: L.blend, rate: L.rate)
                 }
-                mats = PuppetPose.blendedSkinMatrices(model: pm, layers: resolved, time: time)
+                // C④: rate 가 스크립트로 매프레임 재평가되는 레이어(오디오 반응 등)만 dt 위상적분 —
+                // 정적 rate 레이어는 기존 time×rate 순간위상 그대로(비트동일). rate 스크립트 부재 씬은
+                // overrideFrames 전원 nil → PuppetPose 내부 기존 계산과 100% 동일.
+                var overrideFrames: [Float?] = [Float?](repeating: nil, count: resolved.count)
+                var phase = puppetCascadePhase[layer.uid] ?? []
+                if phase.count != resolved.count { phase = [Float](repeating: .nan, count: resolved.count) }
+                let dt = puppetCascadeLastTime[layer.uid].map { max(0, time - $0) } ?? 0
+                var phaseTouched = false
+                for (i, e) in eff.enumerated() {
+                    guard layer.animLayerScripts.contains(where: { $0.key == "rate" && $0.layerIndex == e.offset })
+                    else { continue }
+                    let prev: Float? = phase[i].isNaN ? nil : phase[i]
+                    let r = PuppetPose.integratedCascadeFrame(model: pm, anim: resolved[i].anim,
+                                                              rate: resolved[i].rate, time: time, dt: dt,
+                                                              previousPhase: prev)
+                    phase[i] = r.phase
+                    overrideFrames[i] = r.frame
+                    phaseTouched = true
+                }
+                if phaseTouched {
+                    puppetCascadePhase[layer.uid] = phase
+                    puppetCascadeLastTime[layer.uid] = time
+                }
+                mats = PuppetPose.blendedSkinMatrices(model: pm, layers: resolved, time: time,
+                                                      overrideFrames: overrideFrames)
             } else {
                 mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
             }

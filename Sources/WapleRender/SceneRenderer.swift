@@ -130,6 +130,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 텍스트 visible 스크립트의 최근 평가값(GPUText.uid → 표시 여부, F219). scriptVisible 과 별개
     /// 인덱스 공간(레이어/텍스트는 서로 다른 배열이라 uid 가 겹칠 수 있음).
     var scriptTextVisible: [Int: Bool] = [:]
+    /// C④: 퍼펫 animationlayers 캐스케이드 중 rate 가 스크립트로 매프레임 재평가되는 레이어의 dt 적분
+    /// 누적 위상(GPULayer.uid → 캐스케이드 순서 배열, 인덱스는 eff/resolved 와 동일). 레이어 수 변경
+    /// (visible 토글로 캐스케이드 구성이 바뀜) 시 길이 불일치로 자동 무효화(재시딩).
+    var puppetCascadePhase: [Int: [Float]] = [:]
+    /// C④: 위 위상 적분의 dt 계산용 — 레이어가 마지막으로 encodeLayer 를 통과한 씬 시각.
+    var puppetCascadeLastTime: [Int: Float] = [:]
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
@@ -1778,6 +1784,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneScriptBaseDescriptors = []; liveLayerStates.removeAll()  // F743(S-35): 마운트 재사용 stale 방지
         scriptVisible.removeAll()
         scriptTextVisible.removeAll()
+        puppetCascadePhase.removeAll(); puppetCascadeLastTime.removeAll()  // C④: 마운트 재사용 stale 위상 방지
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
         additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
         blendPipeline = nil; composePipeline = nil          // 감사 V06: 해제 누락분(마운트 반복 시 GPU 리소스 누적 방지)
