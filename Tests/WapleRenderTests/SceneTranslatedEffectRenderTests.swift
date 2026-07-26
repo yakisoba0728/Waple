@@ -295,6 +295,64 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertGreaterThan(luma, 0.9, "fit:32 는 dst(64x36)와 무관하게 절대 32x32 여야 함(스케일 폴백이면 g_Texture0Resolution 불일치 → 검정)")
     }
 
+    /// X-⑦: constantshadervalues 의 {animation:{...}} 키프레임(55씬/287건) — 종전엔 파스 자체가
+    /// 없어 정적 초기값(여기선 value:1.0)에 영구 고정됐다. c0 트랙이 frame0=0.1→frame30=1.0(fps30,
+    /// single) 이므로 t=0 은 alpha≈0.1(어둡게), t=1.0초(=30프레임)는 alpha≈1.0(밝게) — 정적이면 두
+    /// 시점 모두 luma≈1.0(value 그대로)이라 단일 프레임으로는 "애니 vs 정적"을 구분 못 함(advisor 지적) —
+    /// 두 시점을 모두 캡처해 서로 달라야 함을 단언.
+    func testConstantShaderValueAnimationKeyframesEvaluatePerFrame() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform float g_UserAlpha; // {"material":"alpha","default":1.0}
+        void main() {
+            vec4 albedo = texSample2D(g_Texture0, v_TexCoord);
+            albedo.a *= g_UserAlpha;
+            gl_FragColor = albedo;
+        }
+        """
+        let scene = """
+        {"general": {"orthogonalprojection": {"width": 1920, "height": 1080}, "clearcolor": "0 0 0"}, "objects": [{"id": 1, "image": "models/w.json", "origin": "960 540 0", "size": "1920 1080", "effects": [{"file": "effects/animtest/effect.json", "passes": [{"constantshadervalues": {"alpha": {"value": 1.0, "animation": {"c0": [{"frame": 0, "value": 0.1, "front": {"enabled": false, "x": 0, "y": 0}, "back": {"enabled": false, "x": 0, "y": 0}}, {"frame": 30, "value": 1.0, "front": {"enabled": false, "x": 0, "y": 0}, "back": {"enabled": false, "x": 0, "y": 0}}], "options": {"fps": 30, "mode": "single"}}}}}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_anim", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("shaders/effects/animtest.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/animtest.frag", frag.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "anim", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "anim", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_anim")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 1.0], toDir: out)
+        XCTAssertEqual(urls.count, 2)
+        let lumaAtT0 = avgLuma(urls[0])
+        let lumaAtT1 = avgLuma(urls[1])
+        NSLog("%@", "[Waple] constantshadervalue animation lumaAtT0=\(lumaAtT0) lumaAtT1=\(lumaAtT1)")
+        XCTAssertEqual(lumaAtT0, 0.1, accuracy: 0.1, "t=0(frame0) → alpha≈0.1(어두움)")
+        XCTAssertEqual(lumaAtT1, 1.0, accuracy: 0.1, "t=1.0초(frame30) → alpha≈1.0(밝음)")
+        XCTAssertGreaterThan(lumaAtT1 - lumaAtT0, 0.5,
+                             "정적 고정(value:1.0)이면 두 시점 모두 luma≈1.0 이라 차이가 거의 0 — 애니가 실제로 평가돼야 함")
+    }
+
     /// X-②: effect.json `command:"swap"`(실물 fluidsimulation velocity/dye 더블버퍼) — 종전엔 셰이더
     /// 패스로 오해석돼(material/shader 부재 → "effects/<name>" 관례 조회 실패) 효과 전체가 드롭됐다.
     /// pass0 이 _rt_A 에 빨강을 채우고, swap(A,B) 로 포인터를 교환한 뒤, pass2 가 _rt_B 를 읽어 그대로

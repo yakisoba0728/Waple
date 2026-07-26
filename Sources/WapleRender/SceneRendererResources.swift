@@ -48,6 +48,9 @@ extension SceneRenderer {
         /// 와 동일 패턴(빌드 시점 흰색 1×1 폴백, draw 시점에 SceneRenderer.mediaArtworkTexture/
         /// mediaPreviousArtworkTexture 로 덮어씀). previous=true 면 이전 프레임 아트워크.
         let mediaArtworkSlots: [(slot: Int, previous: Bool)]
+        /// X-⑦: 상수 키프레임 애니메이션(슬롯 → PropertyAnimation) — per-frame value(atTime:) 로 material
+        /// 갱신(스크립트와 동일 위치, 레이어 origin/scale/alpha 애니와 동일 평가기).
+        var animations: [(slot: Int, anim: PropertyAnimation)] = []
     }
     /// X-①: 이름 있는 FBO 1개의 할당 스펙 — scale(dst 비례) 또는 fixedWidth/fixedHeight(절대 픽셀,
     /// 실물 cursorripple fit:512·glitter width/height:256) 중 후자가 있으면 우선.
@@ -545,7 +548,7 @@ extension SceneRenderer {
                 NSLog("%@", "[Waple] translated MSL compile failed: \(eff.name) pass \(i)")
                 return nil
             }
-            let (material, passScripts) = buildPassMaterial(t, scenePass: scenePass)
+            let (material, passScripts, passAnimations) = buildPassMaterial(t, scenePass: scenePass)
             guard let plan = buildPassBindings(mp, effName: eff.name, translation: t, scenePass: scenePass,
                                                matTextures: meta.matTextures, manifest: manifest,
                                                fboIndex: fboIndex, lw: lw, lh: lh,
@@ -557,7 +560,7 @@ extension SceneRenderer {
                                          binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
                                          texRes: plan.texRes, texWrap: plan.texWrap, texFilter: plan.texFilter,
                                          scripts: passScripts, fullFrameSlots: plan.fullFrameSlots, swapPair: nil,
-                                         mediaArtworkSlots: plan.mediaArtworkSlots))
+                                         mediaArtworkSlots: plan.mediaArtworkSlots, animations: passAnimations))
         }
         // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         guard passes.contains(where: { $0.target == nil }) else { return nil }
@@ -595,7 +598,7 @@ extension SceneRenderer {
                               binds: [(0, srcIdx)], target: tgtIdx, usesAudio: false,
                               texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap,
                               texFilter: [Float](repeating: 0, count: 8),  // fbo→fbo 복사 — 자산 없음, 선형 고정
-                              scripts: [], fullFrameSlots: [], swapPair: nil, mediaArtworkSlots: [])
+                              scripts: [], fullFrameSlots: [], swapPair: nil, mediaArtworkSlots: [], animations: [])
     }
 
     /// X-②: command:"swap"(셰이더 없음) — source/target fbo 이름을 인덱스로 해석해 포인터 교환만
@@ -612,7 +615,7 @@ extension SceneRenderer {
                               binds: [], target: nil, usesAudio: false,
                               texRes: [SIMD4<Float>](repeating: .zero, count: 8),
                               texWrap: [Float](repeating: 0, count: 8), texFilter: [Float](repeating: 0, count: 8),
-                              scripts: [], fullFrameSlots: [], swapPair: (srcIdx, tgtIdx), mediaArtworkSlots: [])
+                              scripts: [], fullFrameSlots: [], swapPair: (srcIdx, tgtIdx), mediaArtworkSlots: [], animations: [])
     }
 
     /// ③ 셰이더 이름 + 머티리얼 메타(combos/textures) 해석 — 패스에 shader 가 없으면 material JSON
@@ -651,9 +654,11 @@ extension SceneRenderer {
         return combos
     }
 
-    /// ⑤a 머티리얼 상수 벡터 + 상수 프로퍼티 스크립트 엔진(시간 함수 → 연속 렌더 필요 마킹).
+    /// ⑤a 머티리얼 상수 벡터 + 상수 프로퍼티 스크립트 엔진(시간 함수 → 연속 렌더 필요 마킹) + X-⑦
+    /// 상수 키프레임 애니메이션(동일 이유로 연속 렌더 필요).
     private func buildPassMaterial(_ t: TranslatedShader, scenePass: SceneEffectPass)
-        -> (material: [SIMD4<Float>], scripts: [(slot: Int, engine: TextScriptEngine)]) {
+        -> (material: [SIMD4<Float>], scripts: [(slot: Int, engine: TextScriptEngine)],
+            animations: [(slot: Int, anim: PropertyAnimation)]) {
         let constants = scenePass.constants
         let material: [SIMD4<Float>] = t.materialParams.map { p in
             let v = constants[p.sceneKey] ?? p.defaultValue
@@ -661,14 +666,19 @@ extension SceneRenderer {
                                 v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
         }
         var passScripts: [(slot: Int, engine: TextScriptEngine)] = []
+        var passAnimations: [(slot: Int, anim: PropertyAnimation)] = []
         for (slot, p) in t.materialParams.enumerated() {
             if let src = scenePass.constantScripts[p.sceneKey],
                let engine = makeScriptEngine(src, scriptPropsJSON: scenePass.constantScriptProps[p.sceneKey]) {
                 passScripts.append((slot, engine))
                 if engine.hasUpdate { hasAnimations = true }  // 스크립트 상수는 시간 함수 — 연속 렌더 필요
             }
+            if let anim = scenePass.constantAnimations[p.sceneKey] {
+                passAnimations.append((slot, anim))
+                hasAnimations = true  // X-⑦: 키프레임 상수도 시간 함수 — 연속 렌더 필요
+            }
         }
-        return (material, passScripts)
+        return (material, passScripts, passAnimations)
     }
 
     /// ⑤b 바인드/texRes/aux/target 플랜. 미지 바인드·타깃 이름 → nil(효과 전체 폴백).

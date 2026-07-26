@@ -1540,7 +1540,8 @@ extension SceneRenderer {
                                              binds: last.binds, target: nil, usesAudio: last.usesAudio,
                                              texRes: last.texRes, texWrap: last.texWrap, texFilter: last.texFilter,
                                              scripts: last.scripts, fullFrameSlots: last.fullFrameSlots,
-                                             swapPair: last.swapPair, mediaArtworkSlots: last.mediaArtworkSlots))
+                                             swapPair: last.swapPair, mediaArtworkSlots: last.mediaArtworkSlots,
+                                             animations: last.animations))
             }
             // 멀티패스: 이름 있는 FBO(다운스케일 또는 X-① 절대 크기)를 풀에서 할당하고, 각 패스를
             // target(fbo|dst)에 순차 실행.
@@ -1578,6 +1579,18 @@ extension SceneRenderer {
                             if v.count >= 3 { mat[sc.slot] = SIMD4(v[0], v[1], v[2], cur.w) }
                             else if v.count == 1 { mat[sc.slot] = SIMD4(v[0], cur.y, cur.z, cur.w) }
                         }
+                    }
+                    // X-⑦: constantshadervalues 의 {animation:{...}} 키프레임 — 레이어 origin/scale/alpha
+                    // 애니와 동일 평가기(PropertyAnimation.value)로 슬롯별 성분을 갱신. base = 현재(정적)값,
+                    // relative 애니는 그 base 에 가산. 컴포넌트 수는 tracks.count(선언된 c0..c2 만).
+                    for a in pass.animations {
+                        let cur = mat[a.slot]
+                        let base: [Float] = [cur.x, cur.y, cur.z, cur.w]
+                        var v = cur
+                        for comp in 0..<min(a.anim.tracks.count, 4) {
+                            v[comp] = a.anim.value(component: comp, atTime: time, base: base[comp])
+                        }
+                        mat[a.slot] = v
                     }
                     mat.withUnsafeBytes {
                         enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)

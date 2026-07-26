@@ -8,6 +8,10 @@ public struct SceneEffectPass: Equatable {
     /// 상수 스크립트의 저장 `scriptproperties`(사용자 오버라이드) — 키 → JSON 문자열. 레이어/텍스트
     /// 스크립트와 동일 규약: 엔진 로드 시 주입해 소스 `createScriptProperties().addX({value})` 기본값 대체.
     public var constantScriptProps: [String: String] = [:]
+    /// X-⑦: 상수에 걸린 키프레임 애니메이션({animation:{...}} 바인딩, 55씬/287건) — 렌더러가
+    /// per-frame PropertyAnimation.value(component:atTime:base:) 로 평가(레이어 origin/scale/alpha
+    /// 애니와 동일 평가기 재사용). 정적 constants[key] 는 애니 없을 때의 기본값 겸 relative 애니의 base.
+    public var constantAnimations: [String: PropertyAnimation] = [:]
     public var textureNames: [String?] = []
     /// F697: 패스 `usertextures` 슬롯 — 머티리얼 경로(material/instance)와 동일하게 name 만 정규화
     /// (평문 문자열=유저 프로퍼티 키, {name,type}={"$mediaThumbnail","system"} 류 시스템 키 → name).
@@ -1840,6 +1844,12 @@ extension SceneDocument {
                             p.constantScripts[k] = sc
                             // 스크립트가 있을 때만 저장 오버라이드 보존(레이어/텍스트 경로와 동일 규약).
                             if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { p.constantScriptProps[k] = sp }
+                        }
+                        // X-⑦: {animation:{...}} 키프레임 바인딩(55씬/287건) — 스크립트와 동일하게 value
+                        // 언랩보다 먼저 캡처(동일 이유: 아래 float(v)/{value} 언랩이 dict 를 소비해도 무관하게
+                        // 독립 필드에 보존). PropertyAnimation.parse 는 "animation" 키 부재 시 nil.
+                        if let dict = v as? [String: Any], let anim = PropertyAnimation.parse(dict) {
+                            p.constantAnimations[k] = anim
                         }
                         if let f = float(v) { p.constants[k] = [f] }
                         else if let s = v as? String {
