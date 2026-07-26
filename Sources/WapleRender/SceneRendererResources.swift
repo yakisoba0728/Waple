@@ -1134,6 +1134,12 @@ extension SceneRenderer {
             g.scale3D = SIMD3<Float>(sp.scale3D.x, sp.scale3D.y, sp.scale3D.z)
             g.angles3D = SIMD3<Float>(sp.angles3D.x, sp.angles3D.y, sp.angles3D.z)
             g.visible3D = sp.visible
+            // E1(④): 2D 정사영 경로 visible — 정적 초기값 + per-frame 재평가용 스크립트 엔진(F199 캡처
+            // 소비). 종전엔 어디서도 읽지 않아 저작자가 숨긴 파티클 시스템이 항상 렌더됐다.
+            g.initialVisible = sp.visible
+            if let src = sp.visibleScript {
+                g.visibleEngine = makeScriptEngine(src, scriptPropsJSON: sp.visibleScriptProps)
+            }
             // REFRACT: 노멀맵(textures[1]) 로드 + refractAmount. 실패 시 refract 미설정 → identity 폴백(무크래시).
             if let mat = def.material, mat.refract, let normalName = mat.normalTextureName,
                let n = resolveRefractNormal(normalName, package: package, device: device) {

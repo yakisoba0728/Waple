@@ -80,6 +80,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         /// 감사 V07: 알베도 NoInterpolation(TexImage flags bit0) — encodeParticle 이 nearest 변형 선택.
         var noInterp: Bool = false
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
+        /// E1(④): 2D 정사영 경로의 초기 가시성(SceneParticle.visible — 정적 스크립트 없음이면 이 값이
+        /// 종신, 무회귀). 3D 는 visible3D(별개 채널)를 계속 쓴다.
+        var initialVisible: Bool = true
+        /// E1(④): visible 프로퍼티 스크립트 엔진(SceneParticle.visibleScript, F199) — encodeParticle 호출
+        /// 전 per-frame 재평가로 draw 게이트. nil = 정적 visible(스크립트 없음, 무회귀).
+        var visibleEngine: TextScriptEngine? = nil
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 콘텐츠 스크립트(engine)는 매 프레임 재평가
     /// (F724 — 변경 시에만 재래스터). 프로퍼티 스크립트(propScripts, F218/F219)는 재래스터 없이 encodeText 가
@@ -130,6 +136,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 텍스트 visible 스크립트의 최근 평가값(GPUText.uid → 표시 여부, F219). scriptVisible 과 별개
     /// 인덱스 공간(레이어/텍스트는 서로 다른 배열이라 uid 가 겹칠 수 있음).
     var scriptTextVisible: [Int: Bool] = [:]
+    /// E1(④): 2D 파티클 visible 스크립트의 최근 평가값(particleSystems 인덱스 → 표시 여부).
+    /// scriptVisible/scriptTextVisible 과 별개 인덱스 공간(파티클은 별도 배열).
+    var scriptParticleVisible: [Int: Bool] = [:]
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
@@ -1778,6 +1787,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneScriptBaseDescriptors = []; liveLayerStates.removeAll()  // F743(S-35): 마운트 재사용 stale 방지
         scriptVisible.removeAll()
         scriptTextVisible.removeAll()
+        scriptParticleVisible.removeAll()
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
         additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
         blendPipeline = nil; composePipeline = nil          // 감사 V06: 해제 누락분(마운트 반복 시 GPU 리소스 누적 방지)
