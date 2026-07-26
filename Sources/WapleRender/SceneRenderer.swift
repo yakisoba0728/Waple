@@ -830,6 +830,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var audioProvider: SystemAudioSpectrumProvider?
     var effectVertexBuffer: MTLBuffer?
     var effectQuadInterleaved: MTLBuffer?   // 변환 효과용 인터리브드 풀스크린 쿼드(pos.xyz + uv.xy)
+    // F1(flip①): 커스텀 2D 레이어 전용 인터리브드 쿼드 — effectQuadInterleaved 와 포지션은 동일하지만
+    // uv 규약이 반대(local(-1,-1)→uv(0,0)=TL)다. 커스텀 레이어는 layerTransformMatrix(y-flip ortho)를
+    // 타므로 ev_main 용 effectQuadInterleaved(local(-1,-1)→uv(0,1))를 재사용하면 상하 반전된다 — 절대
+    // effectQuadInterleaved/이펙트 경로는 건드리지 않고 이 전용 버퍼만 커스텀 레이어 드로에 바인딩한다.
+    var customLayerQuadInterleaved: MTLBuffer?
     var particleSystems: [GPUParticleSystem] = []
     var hasParticles = false
     var assetBaseDir: URL?  // WE 공유 에셋 폴백 디렉터리(설정), 패키지에 없는 .tex 용
@@ -1297,6 +1302,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
              1,  1, 0,  1, 0,
         ]
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
+        // F1(flip①): 같은 포지션, uv 는 표준 quadVertices 규약(TL=uv(0,0))으로 반전 — 커스텀 2D 레이어 전용.
+        let interleavedLayer: [Float] = [
+            -1, -1, 0,  0, 0,
+             1, -1, 0,  1, 0,
+            -1,  1, 0,  0, 1,
+             1,  1, 0,  1, 1,
+        ]
+        customLayerQuadInterleaved = device.makeBuffer(bytes: interleavedLayer, length: MemoryLayout<Float>.stride * interleavedLayer.count)
         shouldAnimate = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer
             || cameraZoomAnim != nil  // 카메라 줌 인트로(single)도 연속 재생 필요
             || cameraShakeEnabled     // camerashake 전역 지터는 t 의존 → 연속 재생 필요
@@ -1784,6 +1797,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         pipelineNearest = nil; layerAdditiveNearestPipeline = nil  // 감사 V07: nearest 변형 해제(동일 근거)
         blendNearestPipeline = nil; composeNearestPipeline = nil; litNearestPipeline = nil
         effectVertexBuffer = nil; effectQuadInterleaved = nil  // 감사 V06: 해제 누락분(효과 풀스크린 쿼드 버퍼)
+        customLayerQuadInterleaved = nil  // F1(flip①): 커스텀 2D 레이어 전용 쿼드 버퍼
         camera3D = nil; is3D = false; has3DScripts = false; scene3DFog = Scene3DFog()  // F745
         ortho3DHybrid = false  // F721: 하이브리드 상태 리셋(마운트 재사용)
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero

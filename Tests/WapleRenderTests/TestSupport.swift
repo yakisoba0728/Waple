@@ -52,6 +52,24 @@ func solidTex(_ r: UInt8, _ g: UInt8, _ b: UInt8, alpha: UInt8 = 255, w: Int = 8
     return tex
 }
 
+/// 세로 그라디언트 .tex(디코드 가능) — row 0(이미지 상단)=top 색, 마지막 row(하단)=bottom 색 선형보간.
+/// 뒤집힘 방향(top/bottom) 단언 회귀 테스트 전용(F1: 커스텀 2D 레이어 shader UV 규약).
+func verticalGradientTex(top: (UInt8, UInt8, UInt8), bottom: (UInt8, UInt8, UInt8), w: Int = 8, h: Int = 8) -> Data {
+    var px = [UInt8](); px.reserveCapacity(w * h * 4)
+    for y in 0..<h {
+        let t: Float = h > 1 ? Float(y) / Float(h - 1) : 0
+        let r = UInt8(Float(top.0) + (Float(bottom.0) - Float(top.0)) * t)
+        let g = UInt8(Float(top.1) + (Float(bottom.1) - Float(top.1)) * t)
+        let b = UInt8(Float(top.2) + (Float(bottom.2) - Float(top.2)) * t)
+        for _ in 0..<w { px.append(contentsOf: [r, g, b, 255]) }
+    }
+    let png = OffscreenCapture.png(rgba: px, width: w, height: h)!
+    var tex = Data("TEXV0005".utf8)
+    tex.append(Data(repeating: 0, count: 34))
+    tex.append(png)
+    return tex
+}
+
 /// 최소 유효 mp4 생성(AVAssetWriter, 4프레임 64×64 h264).
 func makeTinyMP4(at url: URL) throws {
     try? FileManager.default.removeItem(at: url)

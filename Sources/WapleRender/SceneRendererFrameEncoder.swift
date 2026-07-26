@@ -1075,7 +1075,10 @@ extension SceneRenderer {
                                          camOffset: camOffset, shakeOffset: frameShakeOffset,
                                          aspectScale: aspectScale).transpose
             enc.setRenderPipelineState(custom.pipeline)
-            enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
+            // F1(flip①): effectQuadInterleaved(ev_main 전용, local(-1,-1)→uv(0,1))는 여기서 재사용하면
+            // layerTransformMatrix 의 y-flip ortho 와 겹쳐 텍스처가 상하 반전된다 — 전용 버퍼로 분리
+            // (customLayerQuadInterleaved: local(-1,-1)→uv(0,0), 표준 quadVertices 규약과 동일).
+            enc.setVertexBuffer(customLayerQuadInterleaved, offset: 0, index: 4)
             var mat = custom.material
             for sc in custom.scripts {
                 sc.engine.setRuntime(Double(time))
