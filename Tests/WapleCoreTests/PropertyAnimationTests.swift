@@ -94,6 +94,40 @@ final class PropertyAnimationTests: XCTestCase {
                                      AnimationMarker(name: "regular", frame: 21),
                                      AnimationMarker(name: "surprise_end", frame: 30)],
                        "frame 누락 항목은 드롭, 나머지는 순서 보존")
+        XCTAssertTrue(anim.startPaused, "C⑤: options.startpaused=true 가 파싱돼야")
+    }
+
+    // MARK: - C⑤ startpaused(정지 상태로 저작된 애니가 마운트 즉시 재생되는 결함)
+
+    /// startpaused=false(기본) → 종전대로 t 그대로 평가(무회귀).
+    func testStartPausedDefaultsFalseAndPlaysNormally() throws {
+        let dict: [String: Any] = [
+            "animation": [
+                "c0": [["frame": 0, "value": 0.0], ["frame": 30, "value": 1.0]] as [[String: Any]],
+                "options": ["fps": 30, "length": 30, "mode": "single"] as [String: Any],
+            ] as [String: Any],
+        ]
+        let anim = try XCTUnwrap(PropertyAnimation.parse(dict))
+        XCTAssertFalse(anim.startPaused)
+        XCTAssertEqual(anim.value(component: 0, atTime: 1.0, base: 0), 1.0, accuracy: 0.01,
+                       "startpaused 미저작 → t=1.0(끝 프레임 이후) 정상 재생 후 클램프")
+    }
+
+    /// startpaused=true → 마운트 즉시(t 무관) frame 0 값에 고정 — 스크립트 play() 전까지 정지.
+    /// 수정 전에는 t 를 그대로 써 마운트 순간 애니가 재생되고 single 모드 클램프로 끝값에 고착됐다.
+    func testStartPausedFreezesAtFrameZeroRegardlessOfTime() throws {
+        let dict: [String: Any] = [
+            "animation": [
+                "c0": [["frame": 0, "value": 0.0], ["frame": 30, "value": 1.0]] as [[String: Any]],
+                "options": ["fps": 30, "length": 30, "mode": "single", "startpaused": true] as [String: Any],
+            ] as [String: Any],
+        ]
+        let anim = try XCTUnwrap(PropertyAnimation.parse(dict))
+        XCTAssertTrue(anim.startPaused)
+        for t: Float in [0, 0.5, 1.0, 5.0, 999.0] {
+            XCTAssertEqual(anim.value(component: 0, atTime: t, base: 0), 0.0, accuracy: 1e-6,
+                           "startpaused → t=\(t) 이어도 frame 0 값(0.0)에 고정돼야(끝값 1.0 으로 고착되면 안 됨)")
+        }
     }
 
     private let zeldaSurprise = [AnimationMarker(name: "surprise", frame: 0),
