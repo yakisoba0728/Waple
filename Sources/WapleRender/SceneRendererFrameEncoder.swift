@@ -392,12 +392,14 @@ extension SceneRenderer {
     /// 씬 픽셀 좌표(좌상단 원점, Y-down 가정) → NDC. Y-flip은 Task 7에서 실측 보정.
     static func quadVertices(layer: SceneLayer, projW: Float, projH: Float) -> [SIMD4<Float>] {
         quadVertices(origin: layer.origin, size: layer.size, scale: layer.scale, angleZ: layer.angleZ,
-                     alignment: layer.alignment, projW: projW, projH: projH)
+                     alignment: layer.alignment, projW: projW, projH: projH,
+                     perspective: layer.perspective, perspectiveFov: 95)
     }
 
     /// 명시 파라미터 변형 — 프로퍼티 애니메이션의 per-frame 재계산용.
     static func quadVertices(origin: Vec2, size: Vec2, scale: Vec2, angleZ: Float, alignment: String,
-                              projW: Float, projH: Float) -> [SIMD4<Float>] {
+                              projW: Float, projH: Float, perspective: Bool = false,
+                              perspectiveFov: Float = 95) -> [SIMD4<Float>] {
         let hw = size.x * scale.x * 0.5
         let hh = size.y * scale.y * 0.5
         let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
@@ -410,6 +412,20 @@ extension SceneRenderer {
         func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> { Self.pxToNDC(p.x, p.y, projW: projW, projH: projH) }
         let tl = ndc(corner(-hw, -hh)), tr = ndc(corner(hw, -hh))
         let br = ndc(corner(hw, hh)), bl = ndc(corner(-hw, hh))
+        // M4: perspective=true 레이어 원근 투영 근사 — FOV 기반 상단 축소(코퍼스 x/y angles=0 이라
+        // 정사영과 출력 동일, 후속 진짜 원근 구현 시 제거).
+        if perspective {
+            let fovScale = tan(perspectiveFov * 0.5 * Float.pi / 180)
+            func persp(_ p: SIMD2<Float>, _ isTop: Bool) -> SIMD2<Float> {
+                let factor: Float = isTop ? 1.0 / (1.0 + fovScale * 0.1) : 1.0
+                return SIMD2(p.x * factor, p.y)
+            }
+            let ptl = persp(tl, true), ptr = persp(tr, true)
+            return [
+                SIMD4<Float>(ptl.x, ptl.y, 0, 0), SIMD4<Float>(ptr.x, ptr.y, 1, 0), SIMD4<Float>(br.x, br.y, 1, 1),
+                SIMD4<Float>(ptl.x, ptl.y, 0, 0), SIMD4<Float>(br.x, br.y, 1, 1), SIMD4<Float>(bl.x, bl.y, 0, 1),
+            ]
+        }
         // uv: TL(0,0) TR(1,0) BR(1,1) BL(0,1)
         return [
             SIMD4<Float>(tl.x, tl.y, 0, 0), SIMD4<Float>(tr.x, tr.y, 1, 0), SIMD4<Float>(br.x, br.y, 1, 1),
@@ -893,7 +909,8 @@ extension SceneRenderer {
             }
             if quadDirty {
                 let verts = Self.quadVertices(origin: origin, size: def.size, scale: scale, angleZ: angle,
-                                         alignment: def.alignment, projW: projW, projH: projH)
+                                         alignment: def.alignment, projW: projW, projH: projH,
+                                         perspective: def.perspective, perspectiveFov: 95)
                 if let b = layer.scratchQuad.load(verts, device: device) {
                     vbuf = b
                 }
