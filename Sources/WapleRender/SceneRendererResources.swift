@@ -261,7 +261,11 @@ extension SceneRenderer {
             // 감사 V06+V07: 베이스 텍스처의 NoInterpolation — 손-포팅 체인 첫 이펙트 fb(V06)와 무효과
             // 베이스의 f_main nearest 변형(V07, GPULayer.noInterp) 양쪽이 소비하므로 상시 조회로 변경
             // (V06 는 이펙트 보유 시에만 조회했다).
-            let noInterp = resolveTextureNoInterpolation(layer.textureEntryName, package: package)
+            // C⑧a: 오브젝트 레벨 nointerpolation 오버라이드(SceneDocument.swift 파싱, 종전 렌더 미소비)를
+            // 헤더 값과 OR — 오브젝트가 명시 요청하면 헤더가 linear 여도 nearest 를 강제한다(감사 C⑧a
+            // 발산 실측: 오브젝트=true·헤더=false 47쌍). 헤더가 true 인데 오브젝트 키가 JSON 부재(파스는
+            // 둘 다 false 로 접힘 — tri-state 미보존)라도 OR 라 기존 헤더발 nearest 는 그대로 보존(무회귀).
+            let noInterp = layer.noInterpolation || resolveTextureNoInterpolation(layer.textureEntryName, package: package)
             let effects = buildEffectChain(layer.effects, package: package, device: device,
                                            texW: effW, texH: effH,
                                            compositeImageTextures: compositeImageTextures,
@@ -1144,7 +1148,8 @@ extension SceneRenderer {
             }
             // 감사 V07: 알베도 NoInterpolation(TexImage flags bit0) — encodeParticle 이 nearest 변형
             // 파이프라인을 선택(레이어 buildLayers 의 GPULayer.noInterp 배선과 동형).
-            g.noInterp = resolveTextureNoInterpolation(def.material?.textureName, package: package)
+            // C⑧a: 오브젝트 레벨 nointerpolation 오버라이드도 OR(레이어 경로와 동일 규약·근거).
+            g.noInterp = sp.noInterpolation || resolveTextureNoInterpolation(def.material?.textureName, package: package)
             return g
         }
         for (i, sp) in doc.particles.enumerated() {
