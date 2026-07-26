@@ -364,7 +364,7 @@ extension SceneRenderer {
                                 blendAdditive: layer.blendMode == "additive",
                                 isFrameBuffer: layer.isFrameBuffer,
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty
-                                      && attach == nil) ? nil : layer,
+                                      && attach == nil && layer.materialShader == nil) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 animLayerScripts: animLayerScripts,
                                 materialScripts: materialScripts,
