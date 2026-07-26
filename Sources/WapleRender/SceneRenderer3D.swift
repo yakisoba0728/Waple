@@ -1267,7 +1267,8 @@ extension SceneRenderer {
                             for eff in bb.effects {
                                 guard let next = pooledOffscreen(target.width, target.height, device) else { break }
                                 // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
-                                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
+                                // F-X4: 2D runFrameBufferLayer 와 동형 — snap 을 COPYBG aux 슬롯에도 재사용.
+                                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb, fullFrameSnapshot: snap) else { break }
                                 current = next
                             }
                             srcTex = current

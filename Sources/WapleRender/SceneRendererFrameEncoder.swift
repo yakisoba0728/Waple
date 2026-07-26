@@ -269,7 +269,9 @@ extension SceneRenderer {
             for eff in layer.effects {
                 guard let next = pooledOffscreen(acc.width, acc.height, device) else { break }
                 // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
-                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
+                // F-X4: snap 은 이미 이 컴포지션 레이어가 그려지기 전 씬 컬러(_rt_FullFrameBuffer 의미)라
+                // godrays/shine 의 COPYBG aux 슬롯에도 동일 텍스처를 재사용(추가 블릿 불요).
+                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb, fullFrameSnapshot: snap) else { break }
                 current = next
             }
             srcTex = current
@@ -1498,8 +1500,12 @@ extension SceneRenderer {
 
     /// 효과 1개를 src→dst 로 인코드. 반환값 = dst 기록 완료 여부(F532 — 조기 반환 시 dst 미기록을
     /// 호출부가 알 수 있게; 실패 시 호출부는 마지막 유효 텍스처를 유지하도록 break).
+    /// fullFrameSnapshot(F-X4): `_rt_FullFrameBuffer` aux 슬롯(godrays/shine COPYBG)에 바인딩할 씬 컬러
+    /// 스냅샷 — 이미 acc 스냅샷을 확보한 호출부(runFrameBufferLayer 등)만 넘긴다. nil(기본값)이면 빌드
+    /// 시점 흰색 1×1 폴백 그대로(무회귀 — 기존 호출부는 수정 불필요).
     @discardableResult
-    func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, time: Float, cb: MTLCommandBuffer) -> Bool {
+    func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, time: Float, cb: MTLCommandBuffer,
+                     fullFrameSnapshot: MTLTexture? = nil) -> Bool {
         switch eff.bind {
         case .handPort(let params, let aux, let audio):
             let rpd = MTLRenderPassDescriptor()
@@ -1533,7 +1539,7 @@ extension SceneRenderer {
                 passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
                                              binds: last.binds, target: nil, usesAudio: last.usesAudio,
                                              texRes: last.texRes, texWrap: last.texWrap, texFilter: last.texFilter,
-                                             scripts: last.scripts))
+                                             scripts: last.scripts, fullFrameSlots: last.fullFrameSlots))
             }
             // 멀티패스: 이름 있는 FBO(다운스케일)를 풀에서 할당하고, 각 패스를 target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
@@ -1578,6 +1584,11 @@ extension SceneRenderer {
                     enc.setFragmentTexture(source == -1 ? src : fboTex[source], index: slot)
                 }
                 for (slot, tex) in pass.aux { enc.setFragmentTexture(tex, index: slot) }
+                // F-X4: `_rt_FullFrameBuffer` 슬롯 — 위 aux 루프가 이미 흰색 1×1 로 채웠으므로, 실제
+                // 씬 스냅샷이 있으면 여기서 덮어써 배경을 바인드(godrays/shine COPYBG). 없으면 무회귀.
+                if let snap = fullFrameSnapshot {
+                    for slot in pass.fullFrameSlots where slot < 128 { enc.setFragmentTexture(snap, index: slot) }
+                }
                 if pass.usesAudio {  // 스펙트럼 버퍼(16:2/3, 32:5/6, 64:7/8).
                     func bind(_ arr: [Float], _ idx: Int) {
                         arr.withUnsafeBytes {

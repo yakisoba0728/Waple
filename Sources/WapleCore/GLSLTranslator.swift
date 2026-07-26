@@ -37,6 +37,9 @@ public struct TranslatedShader: Equatable {
     public let materialParams: [MaterialParam]
     public let textureSlots: [Int]         // 선언된 g_TextureN 의 N 들(오름차순)
     public let usesAudio: Bool
+    /// F-X4: 샘플러 주석의 `"default":"경로"`(문자열) — 씬/머티리얼이 슬롯을 지정하지 않을 때의 텍스처
+    /// 폴백(WE 관례: util/noise, _rt_FullFrameBuffer 등). 슬롯 → 경로 문자열.
+    public let textureDefaults: [Int: String]
 }
 
 /// WE GLSL(방언) → MSL 소스-투-소스 변환기. 실패 시 nil(→ 손-포팅 폴백).
@@ -124,10 +127,14 @@ public enum GLSLTranslator {
         let allUniforms = mergeUniforms(vUniforms + fUniforms)
 
         var textures: [Int] = []
+        var textureDefaults: [Int: String] = [:]
         var materials: [MaterialParam] = []
         var usesAudio = false
         for u in allUniforms {
-            if u.type == .sampler2D, let n = textureIndex(u.name) { textures.append(n) }
+            if u.type == .sampler2D, let n = textureIndex(u.name) {
+                textures.append(n)
+                if let def = u.annotationDefaultTexture, !def.isEmpty { textureDefaults[n] = def }
+            }
             else if isEngine(u.name) { if u.name.contains("AudioSpectrum") { usesAudio = true } }
             else if u.type != .sampler2D {
                 let key = u.annotationMaterial ?? defaultKey(u.name)
@@ -420,7 +427,8 @@ public enum GLSLTranslator {
                            consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
                            vertBody: vertBody, fragBody: fragBody, structs: structBlock,
                            premultiplyOutput: premultiplyOutput)
-        return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio)
+        return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio,
+                                textureDefaults: textureDefaults)
     }
 
     // MARK: - 함수 파싱 (Stage 2)
@@ -1017,7 +1025,8 @@ public enum GLSLTranslator {
         return nil
     }
 
-    struct Uniform { let type: GLSLType; let name: String; let annotationMaterial: String?; let annotationDefault: [Float]? }
+    struct Uniform { let type: GLSLType; let name: String; let annotationMaterial: String?; let annotationDefault: [Float]?
+                     let annotationDefaultTexture: String? }
 
     static func parseUniforms(_ src: String) -> [Uniform] {
         var out: [Uniform] = []
@@ -1036,9 +1045,12 @@ public enum GLSLTranslator {
                 var name = rawName
                 if let br = name.firstIndex(of: "[") { name = String(name[..<br]) }  // 배열 유니폼(g_AudioSpectrum16Left[16])
                 guard !name.isEmpty else { continue }
+                // F-X4: sampler2D 의 "default" 는 텍스처 경로 문자열(예: "util/noise", "_rt_FullFrameBuffer")
+                // — jsonFloats 는 이를 숫자 파싱 실패로 빈 배열을 내므로 별도 jsonStr 로 포착.
                 out.append(Uniform(type: type, name: name,
                                    annotationMaterial: idx == 0 ? jsonStr(ann, "material") : nil,
-                                   annotationDefault: idx == 0 ? jsonFloats(ann, "default") : nil))
+                                   annotationDefault: idx == 0 ? jsonFloats(ann, "default") : nil,
+                                   annotationDefaultTexture: idx == 0 && type == .sampler2D ? jsonStr(ann, "default") : nil))
             }
         }
         return out

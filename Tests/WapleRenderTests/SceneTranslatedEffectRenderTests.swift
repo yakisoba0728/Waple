@@ -403,4 +403,90 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertLessThan(luma, 0.7, "translated path must run (skip → ~1.0)")
         XCTAssertEqual(luma, 0.4, accuracy: 0.1, "translated opacity matches hand-port oracle (alpha 0.4)")
     }
+
+    /// X-④a: 셰이더 샘플러 주석의 `"default":"경로"`(예: util/greenmark) 가 씬/머티리얼 어느 쪽도 슬롯을
+    /// 지정하지 않을 때 실제 자산으로 해석돼야 한다. 종전엔 어노테이션이 통째로 버려져 흰색 1×1(luma 1.0)
+    /// 이었다 — 초록 자산이 실제로 바인드되면 luma 는 초록의 (0+1+0)/3≈0.33.
+    func testSamplerDefaultAnnotationResolvesRealAsset() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        uniform sampler2D g_Texture1; // {"hidden":true,"default":"util/greenmark"}
+        void main() {
+            gl_FragColor = texSample2D(g_Texture1, v_TexCoord);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/defaulttex/effect.json","passes":[{}]}]}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("shaders/effects/defaulttex.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/defaulttex.frag", frag.data(using: .utf8)!),
+            ("materials/util/greenmark.tex", solidTex(0, 255, 0)),
+        ], tag: "defaulttex")
+        NSLog("%@", "[Waple] sampler default-annotation luma=\(luma)")
+        XCTAssertLessThan(luma, 0.6, "default 어노테이션이 해석되면 초록(luma≈0.33) — 미해석이면 흰색 폴백(luma≈1.0)")
+    }
+
+    /// X-④b: godrays/shine 의 COPYBG 콤보(`_rt_FullFrameBuffer` aux 슬롯)가 씬 컬러 스냅샷으로 실제
+    /// 바인드돼야 한다 — 컴포지션(fullscreenlayer) 레이어의 효과 체인에서 배경 레이어의 색이 그대로
+    /// 나와야 하고(luma≈0.33, 빨강), 미바인드면 흰색 1×1 폴백(luma≈1.0).
+    func testFullFrameBufferAuxSlotBindsSceneSnapshot() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        uniform sampler2D g_Texture1; // {"hidden":true,"default":"_rt_FullFrameBuffer"}
+        void main() {
+            gl_FragColor = texSample2D(g_Texture1, v_TexCoord);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "effects":[{"file":"effects/copybg/effect.json","passes":[{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_copybg", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/bg.json", #"{"material":"materials/bg.json"}"#.data(using: .utf8)!),
+            ("materials/bg.json", #"{"passes":[{"textures":["bg"]}]}"#.data(using: .utf8)!),
+            ("materials/bg.tex", solidTex(255, 0, 0)),
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+            ("shaders/effects/copybg.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/copybg.frag", frag.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "copybg", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "copybg", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_copybg")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let luma = avgLuma(url)
+        NSLog("%@", "[Waple] COPYBG fullframe-snapshot luma=\(luma)")
+        XCTAssertLessThan(luma, 0.6, "_rt_FullFrameBuffer 가 씬 스냅샷에 바인드되면 배경(빨강, luma≈0.33) — 미바인드면 흰색 폴백(luma≈1.0)")
+    }
 }

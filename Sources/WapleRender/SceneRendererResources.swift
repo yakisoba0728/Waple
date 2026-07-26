@@ -37,6 +37,10 @@ extension SceneRenderer {
         let texFilter: [Float]
         /// 상수 프로퍼티 스크립트(슬롯 → 엔진) — per-frame 평가로 material 갱신(컬러 사이클 등).
         var scripts: [(slot: Int, engine: TextScriptEngine)] = []
+        /// F-X4: `_rt_FullFrameBuffer` 어노테이션/텍스처명을 가진 aux 슬롯 — 빌드 시점엔 흰색 1×1 로
+        /// 채워두고(무회귀 폴백), 씬 컬러 스냅샷을 확보한 호출부(runFrameBufferLayer 등)만 draw 시점에
+        /// applyEffect(fullFrameSnapshot:) 로 실제 배경을 덮어 바인드한다(godrays/shine COPYBG).
+        let fullFrameSlots: [Int]
     }
     enum EffectBind {
         case handPort(params: [Float], aux: [MTLTexture], audio: AudioParams?)
@@ -535,7 +539,7 @@ extension SceneRenderer {
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
                                          binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
                                          texRes: plan.texRes, texWrap: plan.texWrap, texFilter: plan.texFilter,
-                                         scripts: passScripts))
+                                         scripts: passScripts, fullFrameSlots: plan.fullFrameSlots))
         }
         // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         guard passes.contains(where: { $0.target == nil }) else { return nil }
@@ -571,7 +575,7 @@ extension SceneRenderer {
                               binds: [(0, srcIdx)], target: tgtIdx, usesAudio: false,
                               texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap,
                               texFilter: [Float](repeating: 0, count: 8),  // fbo→fbo 복사 — 자산 없음, 선형 고정
-                              scripts: [])
+                              scripts: [], fullFrameSlots: [])
     }
 
     /// ③ 셰이더 이름 + 머티리얼 메타(combos/textures) 해석 — 패스에 shader 가 없으면 material JSON
@@ -642,7 +646,7 @@ extension SceneRenderer {
                                    compositeImageTextures: [Int: String] = [:],
                                    baseNoInterp: Bool = false)
         -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)],
-            texWrap: [Float], texFilter: [Float], target: Int?)? {
+            texWrap: [Float], texFilter: [Float], target: Int?, fullFrameSlots: [Int])? {
         var binds: [(slot: Int, source: Int)] = []
         for b in mp.binds {
             // 신뢰불가 effect.json index — Metal frag 텍스처 인자테이블 상한(macOS 128) 밖이면
@@ -674,19 +678,29 @@ extension SceneRenderer {
             for (slot, source) in binds where slot < 8 && source == -1 { texFilter[slot] = 1 }
         }
         var aux: [(slot: Int, tex: MTLTexture)] = []
+        var fullFrameSlots: [Int] = []
         for slot in t.textureSlots where slot > 0 && slot < 128 && !bindSlots.contains(slot) {
             var name = slot < scenePass.textureNames.count ? scenePass.textureNames[slot] : nil
             if name == nil, slot < matTextures.count { name = matTextures[slot] }
+            // F-X4: 씬/머티리얼 어느 쪽도 슬롯을 지정하지 않으면 셰이더 샘플러 주석의
+            // `"default":"경로"`(WE 관례: util/noise, pattern/voronoi_local, _rt_FullFrameBuffer 등)로
+            // 폴백 — 종전엔 이 어노테이션이 통째로 버려져 흰색 1×1 이 됐다(패턴/노이즈 기반 이펙트 왜곡).
+            if name == nil { name = t.textureDefaults[slot] }
             // F720: `_rt_imageLayerComposite_<id>` = 참조 레이어의 런타임 컴포지트 RTT. 종전엔 `_rt_` 접두어
             // 슬롯을 continue 로 스킵해 해당 샘플러가 영구 미바인드(Metal 검증 실패/미정의 읽기 + blend/
             // clipping_mask 콘텐츠 소실). 3D 경로(SceneRenderer3D.loadMesh3DMaterial)와 동일한 정적 치환:
             // 참조 레이어의 베이스 이미지 텍스처로 대체하고, 해석 불가(id 미상/기타 _rt_)는 nil 로 둬
             // resolveTexture 의 흰색 1×1 폴터가 바인드를 보장하게 한다(미바인드 방지가 우선 — 오역보다 폴터).
+            // F-X4: `_rt_FullFrameBuffer`(godrays/shine 의 COPYBG 콤보 등) 는 씬 컬러 스냅샷이 필요한
+            // **동적** 슬롯이라 정적 치환 불가 — 슬롯 번호만 기록해 draw 시점(applyEffect) 에 실제 스냅샷을
+            // 가진 호출부가 있으면 덮어쓴다. 빌드 시점엔 흰색 1×1 로 채워 무회귀 유지(폴백 없으면 백색 합성).
             if let n = name, n.hasPrefix("_rt_") {
                 name = nil
                 if n.hasPrefix("_rt_imageLayerComposite_") {
                     let digits = n.dropFirst("_rt_imageLayerComposite_".count).prefix { $0.isNumber }
                     if let layerID = Int(digits) { name = compositeImageTextures[layerID] }
+                } else if n == "_rt_FullFrameBuffer" {
+                    fullFrameSlots.append(slot)
                 }
             }
             if let tex = resolveTexture(name, package: package, device: device) {
@@ -701,7 +715,7 @@ extension SceneRenderer {
         }
         let target: Int? = mp.target.flatMap { fboIndex[$0] }
         if mp.target != nil && target == nil { NSLog("%@", "[Waple] unknown target in \(effName)"); return nil }
-        return (binds, texRes, aux, texWrap, texFilter, target)
+        return (binds, texRes, aux, texWrap, texFilter, target, fullFrameSlots)
     }
 
     /// F162/F163: 텍스처 자산의 ClampUVs 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x2)만 저비용
