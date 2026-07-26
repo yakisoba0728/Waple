@@ -3,6 +3,18 @@ import MetalKit
 import simd
 import WapleCore
 
+/// F4: isGeometryFlipped 재적용 훅 — AppKit 이 백킹 레이어 지오메트리를 재동기화하는 시점(창 재부모화·
+/// 스페이스 전이 등)에 mount 1회 대입이 유실될 수 있어, 이 뷰가 창에 (재)부착될 때마다 멱등 재확인한다
+/// (draw(in:) 진입부의 매 프레임 재확인과 이중 방어 — 여기는 정지(paused) 상태에서도 즉시 반응).
+final class WapleMTKView: MTKView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        let want = SceneLivePresentationFix.needsDesktopFlipY
+        if layer?.isGeometryFlipped != want {
+            layer?.isGeometryFlipped = want
+        }
+    }
+}
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// Metal `PBRMaterialUniforms`: exactly two float4 values (32 bytes).
@@ -1258,7 +1270,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             drawPlan = Array(drawPlan.prefix(n))
         }
 
-        let view = MTKView(frame: container.bounds, device: device)
+        let view = WapleMTKView(frame: container.bounds, device: device)
         view.autoresizingMask = [.width, .height]
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = false  // 누적(acc) → drawable blit 대상이 되려면 필요(컴포지션 합성)
@@ -1267,9 +1279,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         view.delegate = self
         // 라이브 데스크탑 프레젠트 상하 뒤집힘 보정(macOS 26+, 실기기 27 확인) — 캡처(readback)는
         // drawable 을 안 타 무영향, 클릭 역매핑도 물리 좌표 기반이라 무영향(근거: SceneLivePresentationFix 상단 주석).
-        if SceneLivePresentationFix.needsDesktopFlipY {
-            view.layer?.isGeometryFlipped = true
-        }
+        // F4: 조건부(true 일 때만) 대입 대신 항상 명시 대입 — 이후 재부모화/재동기화로 값이 되돌아가도
+        // WapleMTKView.viewDidMoveToWindow + draw(in:) 진입부가 이 기대값을 멱등 재확인한다.
+        view.layer?.isGeometryFlipped = SceneLivePresentationFix.needsDesktopFlipY
         container.wantsLayer = true
         container.addSubview(view)
         self.mtkView = view
@@ -1462,6 +1474,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     public func draw(in view: MTKView) {
+        // F4: isGeometryFlipped 멱등 재확인 — WapleMTKView.viewDidMoveToWindow 가 놓칠 수 있는 경로
+        // (예: 창 자체는 그대로인데 AppKit 이 백킹 프로퍼티만 재동기화하는 경우) 대비 매 프레임 방어.
+        // 값이 이미 일치하면 대입을 건너뛰어(불일치 시에만 재대입) 매 프레임 비용을 최소화한다.
+        let wantFlip = SceneLivePresentationFix.needsDesktopFlipY
+        if view.layer?.isGeometryFlipped != wantFlip {
+            view.layer?.isGeometryFlipped = wantFlip
+        }
         // 가림 시 애니메이션 정지(배터리) + 오디오 캡처 중지(F289) + 클록 동결(F290).
         // drawable 획득 전에 검사해 drawable 낭비/stall 방지.
         let animGated = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts

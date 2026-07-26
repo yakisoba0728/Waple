@@ -29,8 +29,20 @@ public enum SceneLivePresentationFix {
         majorVersion >= 26
     }
 
-    /// 실사용 게이트 — 현재 런타임 OS 메이저 버전으로 판정.
+    /// F4: WAPLE_LIVE_FLIP_FIX 환경변수 킬스위치/강제 오버라이드 — "0"(항상 미보정)/"1"(항상 보정)만
+    /// 유효, 그 외(미설정 포함)는 버전 판정으로 폴백. Apple 이 컴포지팅 회귀를 고치거나 경계가 달라진
+    /// 케이스가 필드에서 나와도 재빌드 없이 즉시 회피할 수 있게 하기 위함.
+    static func needsDesktopFlipY(majorVersion: Int, envOverride: String?) -> Bool {
+        switch envOverride {
+        case "0": return false
+        case "1": return true
+        default: return needsDesktopFlipY(majorVersion: majorVersion)
+        }
+    }
+
+    /// 실사용 게이트 — 현재 런타임 OS 메이저 버전 + WAPLE_LIVE_FLIP_FIX 환경변수로 판정.
     public static var needsDesktopFlipY: Bool {
-        needsDesktopFlipY(majorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+        needsDesktopFlipY(majorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
+                          envOverride: ProcessInfo.processInfo.environment["WAPLE_LIVE_FLIP_FIX"])
     }
 }
