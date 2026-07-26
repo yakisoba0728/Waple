@@ -730,4 +730,44 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertEqual(Double(c.redComponent), 0.125, accuracy: 0.05,
                       "g_TexelSize 는 다운스케일 소스(1/2)가 아니라 이펙트 dst(1/8) 기준이어야 함 — 4× 과대면 결함 재현")
     }
+
+    /// X-⑥: 이펙트 `visible` 스크립트가 per-frame 재평가돼야 한다. value:false 로 시작해도 script 가
+    /// true 를 반환하면 켜지고(구: 파스 단계 initialVisible==false 로 SceneEffect 자체는 보존되지만
+    /// buildEffectChain 이 무조건 드롭 — 영구 미적용), value:false+script:false 는 계속 꺼진 채(감사가
+    /// 지목한 실 코퍼스 17씬 이벤트-훅 회귀 방지 — 스크립트가 실제로 true 를 반환할 때만 켜져야 한다).
+    func testEffectVisibleScriptTogglesPerFrame() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 albedo = texSample2D(g_Texture0, v_TexCoord);
+            albedo.rgb *= 0.4;
+            gl_FragColor = albedo;
+        }
+        """
+        func luma(visible: String, tag: String) throws -> Double {
+            let scene = """
+            {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+             "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+               "effects":[{"file":"effects/vistoggle/effect.json","visible":\(visible),"passes":[{}]}]}]}
+            """
+            return try renderLuma(scene: scene, extraFiles: [
+                ("shaders/effects/vistoggle.vert", vert.data(using: .utf8)!),
+                ("shaders/effects/vistoggle.frag", frag.data(using: .utf8)!),
+            ], tag: "vis_\(tag)")
+        }
+        let onLuma = try luma(visible: #"{"value":false,"script":"function init(){ return true; }"}"#, tag: "on")
+        let offLuma = try luma(visible: #"{"value":false,"script":"function init(){ return false; }"}"#, tag: "off")
+        NSLog("%@", "[Waple] visible-script on=\(onLuma) off=\(offLuma)")
+        XCTAssertEqual(onLuma, 0.4, accuracy: 0.1, "script 가 true 를 반환하면 이펙트가 켜져야(dim 40%)")
+        XCTAssertGreaterThan(offLuma, 0.7, "script 가 false 를 반환하면 계속 꺼진 채(17씬 이벤트훅 회귀 방지)")
+    }
 }

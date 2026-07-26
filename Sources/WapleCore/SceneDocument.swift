@@ -38,10 +38,13 @@ public struct SceneEffect: Equatable {
     public var passList: [SceneEffectPass] = []
     /// 초기 가시성(스크립트 있으면 정적 false 도 보존 — 오브젝트 레벨 initialVisible 게이트와 동일 규약).
     public var initialVisible: Bool = true
-    /// visible 프로퍼티 스크립트(단일 JS 소스, 상수처럼 키 맵이 아님). TODO(소비 미배선): per-frame
-    /// 재평가로 이펙트를 런타임에 토글하는 소비처는 아직 없음(코퍼스 저빈도로 YAGNI 보류) — 파스는
-    /// 이 필드가 있으면 initialVisible 이 false 라도 SceneEffect 를 드롭하지 않고 보존만 한다.
+    /// visible 프로퍼티 스크립트(단일 JS 소스, 상수처럼 키 맵이 아님). X-⑥: SceneRendererResources.
+    /// buildEffectChain 이 per-frame 재평가로 소비(레이어/텍스트 propertyScripts["visible"] 과 동형 규약)
+    /// — 이 필드가 있으면 initialVisible 이 false 라도 SceneEffect 를 드롭하지 않고 보존만 한다.
     public var visibleScript: String? = nil
+    /// X-⑥: visibleScript 의 scriptproperties(레이어/텍스트 visibleScriptProps 와 동일 규약) — 스크립트가
+    /// scriptProperties.<name> 참조 시 필요. 미보유 스크립트는 nil 이어도 무해(기본값 폴백).
+    public var visibleScriptProps: String? = nil
 
     public init(name: String, constants: [String: [Float]], textureNames: [String?], combos: [String: Int] = [:], file: String = "") {
         self.name = name; self.constants = constants; self.textureNames = textureNames; self.combos = combos; self.file = file
@@ -1816,10 +1819,14 @@ extension SceneDocument {
             // 않고 보존 — {script,value} 로 시작이 false 인 이펙트가 SceneEffect[] 에서 영구 제외되던 결함.
             var effInitialVisible = true
             var effVisibleScript: String? = nil
+            var effVisibleScriptProps: String? = nil
             if let vb = e["visible"] as? Bool { effInitialVisible = vb }
             else if let vis = e["visible"] as? [String: Any] {
                 if let v = vis["value"] as? Bool { effInitialVisible = v }
                 effVisibleScript = vis["script"] as? String
+                // X-⑥: 레이어/텍스트 visible 파스(:788-789)와 동형 — scriptproperties 미포집이면 스크립트가
+                // scriptProperties.<name> 참조 시 항상 기본값으로 폴백(무동작 수정 방지).
+                if effVisibleScript != nil { effVisibleScriptProps = Self.scriptPropsJSON(vis["scriptproperties"]) }
             }
             if !effInitialVisible && effVisibleScript == nil { continue }
             let file = (e["file"] as? String) ?? ""
@@ -1910,6 +1917,7 @@ extension SceneDocument {
             eff.passList = passList
             eff.initialVisible = effInitialVisible
             eff.visibleScript = effVisibleScript
+            eff.visibleScriptProps = effVisibleScriptProps
             out.append(eff)
         }
         return out

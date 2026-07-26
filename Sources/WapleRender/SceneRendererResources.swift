@@ -59,7 +59,20 @@ extension SceneRenderer {
         case handPort(params: [Float], aux: [MTLTexture], audio: AudioParams?)
         case translated(passes: [TranslatedPass], fboSpecs: [FBOSpec])
     }
-    struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
+    /// X-⑥: 이펙트 visible 스크립트 per-frame 게이트 — 참조형이라 EffectGPU 가 배열 안에서 값복사돼도
+    /// (레이어/텍스트 propScripts 와 달리 build-once 캐시라 uid 키 dict 대신 인스턴스 자체가 상태를 든다)
+    /// current 는 동일 인스턴스에 누적(스크립트의 상대 토글 — 예: `return !current` — 용).
+    final class EffectVisibleGate {
+        let engine: TextScriptEngine
+        var current: Bool
+        init(engine: TextScriptEngine, initial: Bool) { self.engine = engine; self.current = initial }
+    }
+    struct EffectGPU {
+        let pipeline: MTLRenderPipelineState
+        let bind: EffectBind
+        /// X-⑥: visibleScript 보유 이펙트만 non-nil(스크립트 없는 절대다수는 무비용 nil — 매 프레임 항상 적용).
+        var visibleGate: EffectVisibleGate? = nil
+    }
 
     func pkgURL(in folder: URL) -> URL? {
         for name in ["scene.pkg", "gifscene.pkg"] {
@@ -163,27 +176,36 @@ extension SceneRenderer {
         let skipNames = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
         for eff in sceneEffects {
-            // F201 후속: parseEffects 는 visible={value:false,script} 이펙트도 SceneEffect[] 에
-            // 보존한다(데이터 무손실 — 향후 per-frame 런타임 토글 소비용). 그러나 그 소비(스크립트
-            // 재평가로 켜고 끄는 경로)가 아직 배선되지 않아, 여기서 그대로 태우면 "항상 미적용"이던
-            // 구 동작이 "항상 적용"으로 뒤집혀 실 코퍼스 17씬(예 2902406982·3113287126·3538758087)의
-            // 이벤트-훅 이펙트가 잘못 켜진다(구 드롭 동작이 우연히 WE 정적 상태 OFF와 일치했었다).
-            // 소비 배선 전까지는 initialVisible==false 인 이펙트를 여기서 게이트해 구 시각 거동을
-            // 복원 — 파스 구조체엔 그대로 남아 있으니 향후 이 한 줄만 지우면 소비가 열린다.
-            if !eff.initialVisible { continue }
+            // F201 후속 + X-⑥: parseEffects 는 visible={value:false,script} 이펙트도 SceneEffect[] 에
+            // 보존한다(데이터 무손실). 스크립트가 없는 순수 정적 initialVisible==false 만 여기서 드롭 —
+            // 스크립트 보유 이펙트는 항상 빌드해 아래 게이트로 per-frame 재평가(레이어/텍스트
+            // propertyScripts["visible"] 과 동형). 실 코퍼스 17씬(예 2902406982·3113287126·3538758087)의
+            // 이벤트-훅 이펙트는 initial=false 로 시작해(게이트 초기값) 스크립트가 실제로 true 를
+            // 반환할 때만 켜진다 — 구 "항상 드롭"의 근사가 아니라 WE 정합.
+            if !eff.initialVisible && eff.visibleScript == nil { continue }
             if skipNames.contains(eff.name) { continue }
+            // X-⑥: visible 스크립트 게이트 준비(레이어 propScripts 와 동일 엔진/평가기). hasUpdate
+            // 스크립트(시간/오디오 등 정적 재평가 불가한 함수 참조)는 연속 렌더 필요 — buildPassMaterial
+            // 의 constantshadervalues 애니 마킹과 동일 규율.
+            var visibleGate: EffectVisibleGate? = nil
+            if let vs = eff.visibleScript, let engine = makeScriptEngine(vs, scriptPropsJSON: eff.visibleScriptProps) {
+                visibleGate = EffectVisibleGate(engine: engine, initial: eff.initialVisible)
+                if engine.hasUpdate { hasAnimations = true }
+            }
             // 폴터 체인(Step 5, 2026-07-02 실물 검증 후 전환): **translated 우선** — pkg 동봉 GLSL 은
             // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
             // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴터 → 둘 다 실패 시 스킵+로그.
-            if let translated = buildTranslatedEffect(eff, package: package, device: device,
+            if var translated = buildTranslatedEffect(eff, package: package, device: device,
                                                       texW: texW, texH: texH,
                                                       compositeImageTextures: compositeImageTextures,
                                                       // 감사 V07: 베이스 NoInterpolation 은 체인 첫 이펙트의
                                                       // previous(=베이스 직결)만 nearest(아래 fbNearest 와 동일 게이트).
                                                       baseNoInterp: baseNoInterp && effects.isEmpty) {
+                translated.visibleGate = visibleGate
                 effects.append(translated)
-            } else if let handPort = buildHandPortEffect(eff, package: package, device: device,
+            } else if var handPort = buildHandPortEffect(eff, package: package, device: device,
                                                          fbNearest: baseNoInterp && effects.isEmpty) {
+                handPort.visibleGate = visibleGate
                 effects.append(handPort)
             } else {
                 NSLog("%@", "[Waple] effect skipped (no translatable GLSL, no hand-port): \(eff.name)")

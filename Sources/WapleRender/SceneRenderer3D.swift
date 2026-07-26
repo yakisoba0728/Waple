@@ -1149,6 +1149,7 @@ extension SceneRenderer {
         for (i, bb) in billboards.enumerated() where !bb.effects.isEmpty && !bb.isFrameBuffer {
             var current = bb.texture
             for eff in bb.effects {
+                guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(bb.texWidth, bb.texHeight, device) else { break }
                 // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
                 guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
@@ -1265,6 +1266,7 @@ extension SceneRenderer {
                             blit.endEncoding()
                             var current: MTLTexture = snap
                             for eff in bb.effects {
+                                guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                                 guard let next = pooledOffscreen(target.width, target.height, device) else { break }
                                 // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
                                 // F-X4: 2D runFrameBufferLayer 와 동형 — snap 을 COPYBG aux 슬롯에도 재사용.

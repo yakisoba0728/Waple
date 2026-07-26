@@ -270,6 +270,7 @@ extension SceneRenderer {
             blit.endEncoding()
             var current: MTLTexture = snap
             for eff in layer.effects {
+                guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(acc.width, acc.height, device) else { break }
                 // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
                 // F-X4: snap 은 이미 이 컴포지션 레이어가 그려지기 전 씬 컬러(_rt_FullFrameBuffer 의미)라
@@ -1448,6 +1449,7 @@ extension SceneRenderer {
             guard let src = t.texture, !t.effects.isEmpty else { return nil }
             var current: MTLTexture = src
             for eff in t.effects {
+                guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(src.width, src.height, device),
                       applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
                 current = next
@@ -1494,6 +1496,7 @@ extension SceneRenderer {
             // 베이스 복사 불필요: base 를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
             var current = base
             for eff in layer.effects {
+                guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(layer.texWidth, layer.texHeight, device) else { break }
                 // F532: 인코드 실패 시 미기록 next 를 표시 결과로 채택하지 않음(:877 가드와 정합).
                 guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
@@ -1502,6 +1505,16 @@ extension SceneRenderer {
             out.append(current)
         }
         return out
+    }
+
+    /// X-⑥: 이펙트 visible 스크립트 per-frame 재평가 — visibleGate 없으면(대다수) 무비용 true.
+    /// 호출부는 false 시 이 이펙트만 건너뛰고(continue, break 아님) 체인의 나머지·현재 텍스처를 보존한다
+    /// (레이어/텍스트 propertyScripts["visible"] 과 달리 이펙트 하나가 꺼진다고 레이어 전체가 안 꺼짐).
+    func effectVisible(_ eff: EffectGPU, time: Float) -> Bool {
+        guard let gate = eff.visibleGate else { return true }
+        gate.engine.setRuntime(Double(time))
+        gate.current = gate.engine.evaluateBool(current: gate.current) ?? gate.current
+        return gate.current
     }
 
     /// 효과 1개를 src→dst 로 인코드. 반환값 = dst 기록 완료 여부(F532 — 조기 반환 시 dst 미기록을
