@@ -215,6 +215,58 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertEqual(mirrorValue(billboard, "specularTint", as: SIMD3<Float>.self), SIMD3(0.8, 0.7, 0.5))
     }
 
+    /// F5: 3D 빌보드(encodeBillboard)가 합성 스케일을 열벡터 길이로 뽑아 음수 scale.x(좌우 미러링)의
+    /// 부호가 소실되는 결함 회귀 — 가로 그라디언트(좌=빨강/우=파랑) 텍스처로 방향을 직접 단언한다.
+    private func captureBillboardHorizontalPixels(scale: String, tag: String) throws -> (left: NSColor, right: NSColor) {
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":0,"model":"models/missing.mdl"},
+           {"id":1,"image":"models/grad.json","origin":"0 0 0","size":"8 8","scale":"\(scale)",
+            "angles":"0 0 0","color":"1 1 1","alpha":1}
+         ]}
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", Data(scene.utf8)),
+            ("models/grad.json", #"{"material":"materials/grad.json"}"#.data(using: .utf8)!),
+            ("materials/grad.json", #"{"passes":[{"textures":["pic"],"depthtest":"disabled","depthwrite":"disabled"}]}"#.data(using: .utf8)!),
+            ("materials/pic.tex", horizontalGradientTex(left: (255, 0, 0), right: (0, 0, 255))),
+        ]
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_f5_\(tag)_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try encodePkg(files).write(to: root.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(
+            id: "f5_\(tag)", type: .scene, fileName: "scene.pkg", previewName: nil,
+            title: "f5", tags: [], contentRating: nil, workshopId: nil, dependency: nil,
+            folderURL: root)
+        let renderer = SceneRenderer()
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
+        defer { renderer.teardown(); try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("capture", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(renderer.captureFrames(width: 64, height: 64, times: [0], toDir: output).first)
+        let image = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let left = try XCTUnwrap(image.colorAt(x: 16, y: 32))
+        let right = try XCTUnwrap(image.colorAt(x: 48, y: 32))
+        return (left, right)
+    }
+
+    func test3DBillboardNegativeScaleMirrorsHorizontally() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let normal = try captureBillboardHorizontalPixels(scale: "1 1", tag: "normal")
+        XCTAssertGreaterThan(normal.left.redComponent, normal.left.blueComponent,
+                             "정상 스케일: 화면 좌측은 텍스처 좌측(빨강)이어야 함")
+        XCTAssertGreaterThan(normal.right.blueComponent, normal.right.redComponent,
+                             "정상 스케일: 화면 우측은 텍스처 우측(파랑)이어야 함")
+        let mirrored = try captureBillboardHorizontalPixels(scale: "-1 1", tag: "mirrored")
+        XCTAssertGreaterThan(mirrored.left.blueComponent, mirrored.left.redComponent,
+                             "scale.x<0: 화면 좌측이 파랑으로 미러링돼야 함(부호 소실되면 정상과 동일하게 빨강)")
+        XCTAssertGreaterThan(mirrored.right.redComponent, mirrored.right.blueComponent,
+                             "scale.x<0: 화면 우측이 빨강으로 미러링돼야 함(부호 소실되면 정상과 동일하게 파랑)")
+    }
+
     /// F309 최소 재현: 골든 3470948192 실물 체인(비가시 노드 id=56 origin 스크립트가 shared.xx 를 세팅 →
     /// text id=181 이 shared.xx 를 읽어 shared.vvv 생산 → mesh id=115 scale 이 shared.vvv 소비)을 축약.
     /// text3DControllers 는 항상 eval3DOrder 보다 먼저 평가되므로, build3D 가 마운트 직후 1회 프라이밍하지
