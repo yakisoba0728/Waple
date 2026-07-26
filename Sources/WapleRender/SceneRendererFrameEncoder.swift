@@ -301,6 +301,22 @@ extension SceneRenderer {
         return next
     }
 
+    /// P⑦: colorBlendMode 레이어 전용 acc 스냅샷 — pooledOffscreen(프레임 내 단조 체크아웃, :239-253)을
+    /// 쓰면 블렌드 레이어 수(N)만큼 드로어블 크기 텍스처가 동시 상주한다(코퍼스 2955378002 실측 366개,
+    /// 4K 기준 ≈12GB). 커맨드 버퍼 내 인코더는 제출 순서대로 실행되므로, 레이어 직전에 acc 를 다시
+    /// blit 하는 이 패턴에서는 스냅샷 1장을 순차 재사용해도 매 레이어가 항상 "그 시점까지의" acc 를
+    /// 그대로 샘플한다(내용은 종전과 비트동일 — 텍스처 아이덴티티만 바뀜). 크기/포맷(acc 와 동형,
+    /// P① hdrActive 에 따라 동적)이 바뀌면만 재할당.
+    func blendModeSnapshotSlot(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
+        let fmt: MTLPixelFormat = hdrActive ? .rgba16Float : .bgra8Unorm
+        if let t = blendModeSnapshotTexture, t.width == w, t.height == h, t.pixelFormat == fmt {
+            return t
+        }
+        let t = hdrActive ? makeOffscreenHDR(w, h, device) : makeOffscreenBGRA(w, h, device)
+        blendModeSnapshotTexture = t
+        return t
+    }
+
     /// colorBlendMode 레이어: acc 스냅샷(dst) 확보 → f_blend 로 레이어 쿼드 드로우 → 새 인코더 반환.
     /// runFrameBufferLayer 와 같은 인코더 분할 패턴(효과 체인은 displayTextures 에서 이미 처리 — 미실행).
     func runBlendModeLayer(_ layer: GPULayer, texture: MTLTexture, acc: MTLTexture, cb: MTLCommandBuffer,
@@ -308,7 +324,7 @@ extension SceneRenderer {
                            camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var snapshot: MTLTexture? = nil
-        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+        if let snap = blendModeSnapshotSlot(acc.width, acc.height, device),
            let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: acc, to: snap)
             blit.endEncoding()

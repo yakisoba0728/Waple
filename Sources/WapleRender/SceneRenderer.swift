@@ -1399,6 +1399,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var texturePool: [String: [MTLTexture]] = [:]
     var poolCheckout: [String: Int] = [:]
 
+    // P⑦: colorBlendMode 레이어 전용 acc 스냅샷 캐시 — 풀에서 레이어마다 새 텍스처를 체크아웃하지 않고
+    // 1장을 재사용한다(runBlendModeLayer 참조). 크기/포맷(acc 와 동형) 불일치 시에만 재할당.
+    var blendModeSnapshotTexture: MTLTexture?
+
 
     func updateParallax(_ off: CGPoint) {
         pointerUV = SceneRenderer.pointerUV(fromNormalized: off)
@@ -1818,6 +1822,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         pointShadowDepthState = nil; pointShadowAtlas = nil; pointShadowAtlasSlices = 0
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
+        blendModeSnapshotTexture = nil
         sceneIsHDR = false
         hdrPost = nil
         sceneWantsLDRBloom = false
