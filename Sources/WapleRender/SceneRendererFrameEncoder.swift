@@ -1539,7 +1539,8 @@ extension SceneRenderer {
                 passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
                                              binds: last.binds, target: nil, usesAudio: last.usesAudio,
                                              texRes: last.texRes, texWrap: last.texWrap, texFilter: last.texFilter,
-                                             scripts: last.scripts, fullFrameSlots: last.fullFrameSlots))
+                                             scripts: last.scripts, fullFrameSlots: last.fullFrameSlots,
+                                             swapPair: last.swapPair))
             }
             // 멀티패스: 이름 있는 FBO(다운스케일 또는 X-① 절대 크기)를 풀에서 할당하고, 각 패스를
             // target(fbo|dst)에 순차 실행.
@@ -1552,6 +1553,12 @@ extension SceneRenderer {
                 fboTex.append(t)
             }
             for pass in passes {
+                // X-②: command:"swap" — 무비용 포인터 교환(draw 없음). 인덱스 유효성만 재확인(빌드 시
+                // fboIndex 로 이미 확정됐지만 fboTex.count 는 fboSpecs.count 와 항상 같아 안전).
+                if let sp = pass.swapPair, sp.source < fboTex.count, sp.target < fboTex.count {
+                    fboTex.swapAt(sp.source, sp.target)
+                    continue
+                }
                 let target = pass.target.map { fboTex[$0] } ?? dst
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target

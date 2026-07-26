@@ -41,6 +41,9 @@ extension SceneRenderer {
         /// 채워두고(무회귀 폴백), 씬 컬러 스냅샷을 확보한 호출부(runFrameBufferLayer 등)만 draw 시점에
         /// applyEffect(fullFrameSnapshot:) 로 실제 배경을 덮어 바인드한다(godrays/shine COPYBG).
         let fullFrameSlots: [Int]
+        /// X-②: command:"swap"(셰이더 없음, 실물 fluidsimulation velocity/dye 더블버퍼) — non-nil 이면
+        /// draw 를 건너뛰고 fboTex.swapAt(source,target) 만 수행(무비용 핑퐁). pipeline 은 미사용 placeholder.
+        let swapPair: (source: Int, target: Int)?
     }
     /// X-①: 이름 있는 FBO 1개의 할당 스펙 — scale(dst 비례) 또는 fixedWidth/fixedHeight(절대 픽셀,
     /// 실물 cursorripple fit:512·glitter width/height:256) 중 후자가 있으면 우선.
@@ -514,6 +517,14 @@ extension SceneRenderer {
                 passes.append(copy)
                 continue
             }
+            // X-②: command:"swap"(셰이더 없음, 실물 fluidsimulation velocity/dye 더블버퍼) — 무비용
+            // 포인터 교환. 종전엔 이 분기가 없어 셰이더 패스로 오해석돼(material/shader 부재 →
+            // "effects/<name>" 관례 조회 실패) 이펙트 전체가 드롭됐다.
+            if mp.command == "swap" {
+                guard let swap = makeSwapPass(mp, effName: eff.name, fboIndex: fboIndex, device: device) else { return nil }
+                passes.append(swap)
+                continue
+            }
             let meta = resolvePassShaderMeta(mp, eff: eff, package: package)
             guard let vData = quietAssetData("shaders/\(meta.base).vert", package: package),
                   let fData = quietAssetData("shaders/\(meta.base).frag", package: package),
@@ -541,7 +552,7 @@ extension SceneRenderer {
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
                                          binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
                                          texRes: plan.texRes, texWrap: plan.texWrap, texFilter: plan.texFilter,
-                                         scripts: passScripts, fullFrameSlots: plan.fullFrameSlots))
+                                         scripts: passScripts, fullFrameSlots: plan.fullFrameSlots, swapPair: nil))
         }
         // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         guard passes.contains(where: { $0.target == nil }) else { return nil }
@@ -579,7 +590,24 @@ extension SceneRenderer {
                               binds: [(0, srcIdx)], target: tgtIdx, usesAudio: false,
                               texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap,
                               texFilter: [Float](repeating: 0, count: 8),  // fbo→fbo 복사 — 자산 없음, 선형 고정
-                              scripts: [], fullFrameSlots: [])
+                              scripts: [], fullFrameSlots: [], swapPair: nil)
+    }
+
+    /// X-②: command:"swap"(셰이더 없음) — source/target fbo 이름을 인덱스로 해석해 포인터 교환만
+    /// 예약(draw 없음, makeCopyPass 와 동일 미해석 정책 — 실패 시 효과 전체 폴백). pipeline 은
+    /// applyEffect 가 swapPair 를 보고 즉시 continue 하므로 실제로 바인드·드로우되지 않는 placeholder.
+    private func makeSwapPass(_ mp: EffectManifest.Pass, effName: String, fboIndex: [String: Int],
+                              device: MTLDevice) -> TranslatedPass? {
+        guard let srcName = mp.source, let srcIdx = fboIndex[srcName],
+              let tgtName = mp.target, let tgtIdx = fboIndex[tgtName],
+              let pipe = passthroughEffectPipeline(device: device) else {
+            NSLog("%@", "[Waple] unresolved swap pass in \(effName)"); return nil
+        }
+        return TranslatedPass(pipeline: pipe, material: [], aux: [],
+                              binds: [], target: nil, usesAudio: false,
+                              texRes: [SIMD4<Float>](repeating: .zero, count: 8),
+                              texWrap: [Float](repeating: 0, count: 8), texFilter: [Float](repeating: 0, count: 8),
+                              scripts: [], fullFrameSlots: [], swapPair: (srcIdx, tgtIdx))
     }
 
     /// ③ 셰이더 이름 + 머티리얼 메타(combos/textures) 해석 — 패스에 shader 가 없으면 material JSON

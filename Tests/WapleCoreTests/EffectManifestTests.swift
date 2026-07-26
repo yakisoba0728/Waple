@@ -54,6 +54,16 @@ final class EffectManifestTests: XCTestCase {
         XCTAssertNil(m.passes[0].command)
     }
 
+    /// X-②: 실물 fluidsimulation `{"command":"swap","source":"_rt_SmokeVelocity1","target":"_rt_SmokeVelocity2"}`.
+    func testSwapCommandPass() throws {
+        let json = #"{"passes":[{"command":"swap","source":"_rt_V1","target":"_rt_V2"}],"fbos":[{"name":"_rt_V1","scale":1},{"name":"_rt_V2","scale":1}]}"#
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.passes[0].command, "swap")
+        XCTAssertEqual(m.passes[0].source, "_rt_V1")
+        XCTAssertEqual(m.passes[0].target, "_rt_V2")
+        XCTAssertNil(m.passes[0].material)
+    }
+
     func testRejectsNegativeBindSlots() throws {
         let json = #"{"passes":[{"shader":"effects/foo","bind":[{"name":"previous","index":-1},{"name":"mask","index":0}]}]}"#
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))

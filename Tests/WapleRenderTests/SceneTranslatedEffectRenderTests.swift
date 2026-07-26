@@ -295,6 +295,55 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertGreaterThan(luma, 0.9, "fit:32 는 dst(64x36)와 무관하게 절대 32x32 여야 함(스케일 폴백이면 g_Texture0Resolution 불일치 → 검정)")
     }
 
+    /// X-②: effect.json `command:"swap"`(실물 fluidsimulation velocity/dye 더블버퍼) — 종전엔 셰이더
+    /// 패스로 오해석돼(material/shader 부재 → "effects/<name>" 관례 조회 실패) 효과 전체가 드롭됐다.
+    /// pass0 이 _rt_A 에 빨강을 채우고, swap(A,B) 로 포인터를 교환한 뒤, pass2 가 _rt_B 를 읽어 그대로
+    /// 출력 — swap 이 실제 포인터 교환이면 빨강(luma≈0.33), 효과가 드롭되면 베이스(흰색, luma≈1.0).
+    func testSwapCommandPassSwapsBufferIdentity() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let fragRed = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
+        """
+        let fragPassthrough = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }
+        """
+        let effectJSON = """
+        {"passes":[
+           {"material":"materials/effects/swap_red.json","target":"_rt_A",
+            "bind":[{"name":"previous","index":0}]},
+           {"command":"swap","source":"_rt_A","target":"_rt_B"},
+           {"material":"materials/effects/swap_read.json",
+            "bind":[{"name":"_rt_B","index":0}]}],
+         "fbos":[{"name":"_rt_A","scale":1},{"name":"_rt_B","scale":1}]}
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/swaptest/effect.json","passes":[{},{},{}]}]}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("effects/swaptest/effect.json", effectJSON.data(using: .utf8)!),
+            ("materials/effects/swap_red.json", #"{"passes":[{"shader":"effects/swap_red"}]}"#.data(using: .utf8)!),
+            ("materials/effects/swap_read.json", #"{"passes":[{"shader":"effects/swap_read"}]}"#.data(using: .utf8)!),
+            ("shaders/effects/swap_red.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/swap_red.frag", fragRed.data(using: .utf8)!),
+            ("shaders/effects/swap_read.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/swap_read.frag", fragPassthrough.data(using: .utf8)!),
+        ], tag: "swaptest")
+        NSLog("%@", "[Waple] swap command luma=\(luma)")
+        XCTAssertLessThan(luma, 0.6, "swap 이 실제 포인터 교환이면 _rt_A 의 빨강이 _rt_B 를 통해 나와야 함(드롭되면 흰 베이스)")
+    }
+
     /// texRes per-slot(설계 §4): g_Texture1Resolution 은 aux 슬롯 1 텍스처의 실제 dims 여야 한다
     /// (레이어 dims 8x8 근사가 아니라). frag 가 x==4 를 검사해 백/흑으로 표출 — 4x2 aux 면 luma 1.
     func testAuxTextureResolutionPerSlot() throws {
