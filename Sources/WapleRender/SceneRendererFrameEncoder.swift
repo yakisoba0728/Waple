@@ -660,15 +660,18 @@ extension SceneRenderer {
             return resume2D()
         }
         // H4: refract 메시가 런에 있으면 인코더 분할 전 패스의 뎁스를 .store(분할 재개 시 .load 정합 —
-        // encode3D 의 needsDepthStore 게이트와 동일 이유).
+        // encode3D 의 needsDepthStore 게이트와 동일 이유). M6(⑥): reflect 메시도 동일 이유로 포함
+        // (코퍼스 실측: REFLECTION 콤보 7씬 중 3씬이 orthogonalprojection 실값 보유 — ortho 경로 필수).
         let anyRefract = meshIndices.contains { meshRenderables[$0].meshes.contains { $0.refract && $0.refractNormal != nil } }
+        let anyReflect = meshIndices.contains { meshRenderables[$0].meshes.contains { $0.reflection } }
+        let needsStore = anyRefract || anyReflect
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].loadAction = .load
         rpd.depthAttachment.texture = depthTex
         rpd.depthAttachment.loadAction = .clear
         rpd.depthAttachment.clearDepth = 1.0
-        rpd.depthAttachment.storeAction = anyRefract ? .store : .dontCare
+        rpd.depthAttachment.storeAction = needsStore ? .store : .dontCare
         guard var menc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
         // 직교 투영: z_ndc = 0.5 − z/(2F). F 는 WE ortho 기본 farz 와 같은 대칭 클립(오브젝트 z ≈ ±수백).
         let F: Float = 10000
@@ -738,7 +741,7 @@ extension SceneRenderer {
                     nextRPD.colorAttachments[0].loadAction = .load
                     nextRPD.depthAttachment.texture = depthTex
                     nextRPD.depthAttachment.loadAction = .load
-                    nextRPD.depthAttachment.storeAction = anyRefract ? .store : .dontCare
+                    nextRPD.depthAttachment.storeAction = needsStore ? .store : .dontCare
                     guard let nextMenc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return nil }
                     menc = nextMenc
                     menc.setFrontFacing(.clockwise)
@@ -759,6 +762,50 @@ extension SceneRenderer {
                         menc.setFragmentTexture(snap, index: 4)            // 씬 컬러 스냅샷(_rt_FullFrameBuffer)
                         var rp = SIMD4<Float>(mesh.refractAmount, mesh.refractRG88 ? 1 : 0, 0, 0)
                         menc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
+                        menc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+                                                   indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                        continue
+                    }
+                    // 스냅샷 확보 실패 — 재개한 menc 에서 일반 파이프라인으로 identity 폴터.
+                } else if mesh.reflection, !useSkin, mesh.customPipeline == nil,
+                          let reflectPipe = mesh.additive ? (meshPipelineReflectAdditive ?? meshPipelineReflect)
+                                                          : meshPipelineReflect {
+                    // M6(⑥): REFLECTION 메시(ortho 하이브리드) — encode3D 의 REFLECTION 분기와 동형.
+                    // 카메라 뷰가 없는 ortho 경로는 이 함수의 `proj`(직교 투영) 를 encode3D 의 viewProj
+                    // 자리에 그대로 대입(둘 다 "world→clip, 모델 미포함" 인 동일 역할).
+                    menc.endEncoding()
+                    var snap: MTLTexture? = nil
+                    if let s = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+                       let blit = cb.makeBlitCommandEncoder() {
+                        blit.copy(from: acc, to: s); blit.endEncoding(); snap = s
+                    }
+                    let nextRPD = MTLRenderPassDescriptor()
+                    nextRPD.colorAttachments[0].texture = acc
+                    nextRPD.colorAttachments[0].loadAction = .load
+                    nextRPD.depthAttachment.texture = depthTex
+                    nextRPD.depthAttachment.loadAction = .load
+                    nextRPD.depthAttachment.storeAction = needsStore ? .store : .dontCare
+                    guard let nextMenc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return nil }
+                    menc = nextMenc
+                    menc.setFrontFacing(.clockwise)
+                    bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                                        shadowMatrices: noShadow, shadowTexture: nil, into: menc)
+                    if let snap {
+                        menc.setRenderPipelineState(reflectPipe)
+                        if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
+                            menc.setDepthStencilState(ds)
+                        }
+                        menc.setCullMode(mesh.cullBack ? .back : .none)
+                        menc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                        menc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                        menc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                        menc.setFragmentTexture(mesh.texture, index: 0)
+                        menc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                        menc.setFragmentTexture(snap, index: 4)
+                        var rp = SIMD4<Float>(mesh.reflectivity, Float(acc.width) / Float(max(1, acc.height)), 0, 0)
+                        menc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
+                        var vp = proj
+                        menc.setFragmentBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 6)
                         menc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
                                                    indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                         continue

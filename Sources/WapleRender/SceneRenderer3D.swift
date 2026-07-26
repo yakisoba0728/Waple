@@ -51,6 +51,10 @@ extension SceneRenderer {
         var refractAmount: Float = 0.05
         var refractNormal: MTLTexture? = nil   // textures[1] 노멀맵(resolveRefractNormal — rg88 플래그 동반)
         var refractRG88: Bool = false
+        /// M6(⑥): REFLECTION 콤보(스크린공간 반사) — true 면 acc 스냅샷을 프레넬 가중으로 가산(mf_reflect).
+        /// 노멀맵과 미결합(기하 노멀만 — generic4.frag `#else normalize(v_WorldNormal)` 분기와 동치).
+        var reflection: Bool = false
+        var reflectivity: Float = 1.0
     }
     /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 4×float4 = 256B).
     struct MeshUniform {
@@ -225,6 +229,9 @@ extension SceneRenderer {
         // H4: REFRACT 메시 파이프라인(정적 메시 한정 — M3 와 동일 제약).
         meshPipelineRefract = mesh3DRefractPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
         meshPipelineRefractAdditive = mesh3DRefractPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
+        // M6(⑥): REFLECTION 메시 파이프라인(정적 메시 한정 — M3/H4 와 동일 제약).
+        meshPipelineReflect = mesh3DReflectPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
+        meshPipelineReflectAdditive = mesh3DReflectPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         shadowPipelineStaticOpaque = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: false, device: device)
         shadowPipelineStaticCutout = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: true, device: device)
         shadowPipelineSkinOpaque = shadow3DPipeline(lib: lib, vertex: "sv_skin", cutout: false, device: device)
@@ -353,6 +360,11 @@ extension SceneRenderer {
                     gpuMesh.refractAmount = mat.refractAmount
                     gpuMesh.refractNormal = n.texture
                     gpuMesh.refractRG88 = n.rg88
+                }
+                // M6(⑥): REFLECTION — 노멀맵/텍스처 로드 불요(기하 노멀만 사용), 콤보 플래그만으로 게이트.
+                if mat.reflection {
+                    gpuMesh.reflection = true
+                    gpuMesh.reflectivity = mat.reflectivity
                 }
                 meshes.append(gpuMesh)
             }
@@ -559,6 +571,9 @@ extension SceneRenderer {
         /// 노멀맵(textures[1])은 normalTextureName 재사용; refract && 노멀맵 로드 성공 시에만 굴절 적용.
         let refract: Bool
         let refractAmount: Float
+        /// M6(⑥): REFLECTION 콤보 + g_Reflectivity(기본 1 — generic4.frag:66).
+        let reflection: Bool
+        let reflectivity: Float
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
@@ -593,6 +608,8 @@ extension SceneRenderer {
         // H4: REFRACT 콤보 + refractAmount(노멀맵 없으면 미적용 — build3D 게이트).
         var refract = false
         var refractAmount: Float = 0.05
+        // M6(⑥): REFLECTION 콤보(스크린공간 반사) — reflectivity 상수는 pbr(Scene3DMaterialValues) 소관.
+        var reflection = false
         func fvec(_ any: Any?) -> [Float]? {
             if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
             if let n = any as? Double { return [Float(n)] }
@@ -636,6 +653,10 @@ extension SceneRenderer {
                 // H4: REFRACT 콤보(2D SceneDocument:1083 과 동일 게이트 — 콤보 1 + textures[1] 노멀맵).
                 if let v = combos.first(where: { $0.key.lowercased() == "refract" })?.value {
                     refract = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                }
+                // M6(⑥): REFLECTION 콤보(WE 기본 0 — generic4.frag:3 [COMBO] default:0).
+                if let v = combos.first(where: { $0.key.lowercased() == "reflection" })?.value {
+                    reflection = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
                 }
             }
             if let csv = p0["constantshadervalues"] as? [String: Any] {
@@ -688,7 +709,8 @@ extension SceneRenderer {
                                        customShader: customShader, customCombos: customCombos,
                                        customConstants: customConstants, customTextures: customTextures,
                                        normalTextureName: normalTextureName, maskTextureName: maskTextureName,
-                                       refract: refract, refractAmount: refractAmount)
+                                       refract: refract, refractAmount: refractAmount,
+                                       reflection: reflection, reflectivity: pbr.reflectivity)
                 }
             }
         }
@@ -705,7 +727,8 @@ extension SceneRenderer {
                                   customShader: customShader, customCombos: customCombos,
                                   customConstants: customConstants, customTextures: customTextures,
                                   normalTextureName: normalTextureName, maskTextureName: maskTextureName,
-                                  refract: refract, refractAmount: refractAmount)
+                                  refract: refract, refractAmount: refractAmount,
+                                  reflection: reflection, reflectivity: pbr.reflectivity)
     }
 
     private func imageLayerCompositeID(_ name: String) -> Int? {
@@ -756,6 +779,23 @@ extension SceneRenderer {
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: vertex)
         pd.fragmentFunction = lib.makeFunction(name: "mf_refract")
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// M6(⑥): REFLECTION 메시 파이프라인. frag=mf_reflect(acc 스냅샷 프레넬 가산) — 정적 메시 한정(M3/H4 와 동일).
+    /// 씬 스냅샷 texture(4), reflectParams buffer(5), viewProj buffer(6). 블렌드는 mesh3DPipeline 과 동치.
+    func mesh3DReflectPipeline(lib: MTLLibrary, vertex: String, additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: vertex)
+        pd.fragmentFunction = lib.makeFunction(name: "mf_reflect")
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
         a.pixelFormat = accPixelFormat
@@ -1274,8 +1314,10 @@ extension SceneRenderer {
         }
         // H4: refract 메시도 인코더 분할(아래 드로 루프의 H4 분기)이 생기므로 프레임버퍼 빌보드와 같은 이유로
         // 뎁스 .store 게이트에 포함(분할 전 패스가 dontCare 면 재개 패스의 뎁스가 미정의 — F311 주석 참조).
+        // M6(⑥): reflect 메시도 동일 이유로 인코더 분할 — 게이트에 포함.
         let needsDepthStore = billboards.contains { $0.isFrameBuffer }
             || meshRenderables.contains { $0.meshes.contains { $0.refract && $0.refractNormal != nil } }
+            || meshRenderables.contains { $0.meshes.contains { $0.reflection } }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = target
         rpd.colorAttachments[0].loadAction = .clear
@@ -1409,6 +1451,51 @@ extension SceneRenderer {
                             enc.setFragmentTexture(snap, index: 4)            // 씬 컬러 스냅샷(_rt_FullFrameBuffer)
                             var rp = SIMD4<Float>(mesh.refractAmount, mesh.refractRG88 ? 1 : 0, 0, 0)
                             enc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
+                            enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+                                                      indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                            continue
+                        }
+                        // 스냅샷 확보 실패 — 재개한 enc 에서 일반 파이프라인으로 identity 폴터.
+                    } else if mesh.reflection, !useSkin, mesh.customPipeline == nil,
+                              let reflectPipe = mesh.additive ? (meshPipelineReflectAdditive ?? meshPipelineReflect)
+                                                              : meshPipelineReflect {
+                        // M6(⑥): REFLECTION 메시 — REFRACT 와 동일 인코더 분할 패턴(refract 와 동시 보유 시
+                        // 위 refract 분기가 우선 — 무회귀 선택, 코퍼스 실측상 상호배타적).
+                        enc.endEncoding()
+                        var snap: MTLTexture? = nil
+                        if let s = pooledOffscreen(target.width, target.height, device, bgra: true),
+                           let blit = cb.makeBlitCommandEncoder() {
+                            blit.copy(from: target, to: s); blit.endEncoding(); snap = s
+                        }
+                        let nextRPD = MTLRenderPassDescriptor()
+                        nextRPD.colorAttachments[0].texture = target
+                        nextRPD.colorAttachments[0].loadAction = .load
+                        nextRPD.depthAttachment.texture = depthTex
+                        nextRPD.depthAttachment.loadAction = .load
+                        nextRPD.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
+                        guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
+                        enc = nextEnc
+                        enc.setFrontFacing(.counterClockwise)
+                        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                                            shadowMatrices: shadowResult.matrices,
+                                            shadowTexture: shadowResult.texture, into: enc)
+                        if let snap {
+                            enc.setRenderPipelineState(reflectPipe)
+                            if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
+                                enc.setDepthStencilState(ds)
+                            }
+                            enc.setCullMode(mesh.cullBack ? .back : .none)
+                            enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                            enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                            enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                            enc.setFragmentTexture(mesh.texture, index: 0)
+                            enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                            enc.setFragmentTexture(snap, index: 4)   // 씬 컬러 스냅샷(_rt_MipMappedFrameBuffer 근사)
+                            // x=reflectivity, y=aspect(width/height, g_Screen.z 규약 — E1/WE-2.8-deep-KR 확인).
+                            var rp = SIMD4<Float>(mesh.reflectivity, aspect, 0, 0)
+                            enc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
+                            var vp = viewProj
+                            enc.setFragmentBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 6)
                             enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
                                                       indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                             continue
