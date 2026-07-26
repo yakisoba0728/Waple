@@ -617,6 +617,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var hdrBloomPass: HDRBloomEncoding?
     /// H6: HDR bloom 8-레벨 피라미드(기존 단일 레벨 대비 글로우 반경 확장 — WE 실측 8단).
     var hdrBloomPyramidPass: HDRBloomPyramidEncoding?
+    /// P③: 피라미드 전용 원본 저작값 — hdrBloomParameters.strength 는 단일레벨 HDRBloomPass 폴백을
+    /// 위해 ×max(1,iterations) 로 보정돼 있어(HDRBloomPass.strengthScale 주석) 피라미드에 그대로
+    /// 쓰면 N레벨 가산 누적과 겹쳐 이중 보정된다. 피라미드는 raw strength 와 저작
+    /// bloomhdrscatter/bloomhdriterations 를 그대로 받는다(SceneRendererFinalizer 가 소비).
+    var hdrBloomPyramidStrength: Float = 0
+    var hdrBloomPyramidScatter: Float = HDRBloomPyramidParameters.defaults.scatter
+    var hdrBloomPyramidLevels: Int = 8
     /// H5: 볼륨 라이트 샤프트 패스(castVolumetrics 라이트).
     var volumetricLightPass: VolumetricLightPass?
     /// HDR 경로 실효 게이트(2D·3D 공통). 3D 씬도 acc/메시/파티클 파이프라인이 accPixelFormat(float)로
@@ -1062,6 +1069,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             threshold: doc.bloomHDRThreshold,
             feather: doc.bloomHDRFeather,
             tint: SIMD3(doc.bloomTint.x, doc.bloomTint.y, doc.bloomTint.z))
+        // P③: 피라미드는 raw strength(×iterations 보정 없음 — 피라미드 자체가 N레벨을 가산 누적)와
+        // 저작 scatter/iterations 를 그대로 받는다(단일레벨 hdrBloomParameters 와 별개 소스).
+        hdrBloomPyramidStrength = doc.bloomHDRStrength
+        hdrBloomPyramidScatter = doc.bloomHDRScatter
+        hdrBloomPyramidLevels = max(1, doc.bloomHDRIterations)
         if sceneWantsHDRBloom {
             hdrBloomPass = HDRBloomPass(device: device)
             hdrBloomPyramidPass = HDRBloomPyramidPass(device: device)

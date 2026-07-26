@@ -28,12 +28,16 @@ extension SceneRenderer {
             // H6: 8-레벨 피라미드 우선 — quarter 추출→레벨별 blur→additive 업샘플(소스가 작으면
             // 허용 mip 수로 클램프). 자원/인코드 실패 시 기존 단일 레벨 HDRBloomPass 폴터(무회귀).
             if sceneWantsHDRBloom, let hdrBloomPyramidPass {
+                // P③: strength 는 raw(hdrBloomParameters.strength 의 ×iterations 보정은 단일레벨
+                // 폴백 전용 — 피라미드는 N레벨 가산 누적 자체가 그 보상이라 재적용하면 이중 보정된다),
+                // scatter/levels 는 저작 bloomhdrscatter/bloomhdriterations 그대로.
                 let pyramidParameters = HDRBloomPyramidParameters(
-                    strength: hdrBloomParameters.strength,
+                    strength: hdrBloomPyramidStrength,
                     threshold: hdrBloomParameters.threshold,
                     feather: hdrBloomParameters.feather,
                     tint: hdrBloomParameters.tint,
-                    scatter: 1.619)
+                    scatter: hdrBloomPyramidScatter,
+                    levels: hdrBloomPyramidLevels)
                 let levelCount = HDRBloomPyramidPass.levelCount(
                     requested: pyramidParameters.levels,
                     sourceWidth: source.width,

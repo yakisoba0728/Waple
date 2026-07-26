@@ -16,7 +16,19 @@ struct HDRBloomPyramidParameters: Equatable {
     let tint: SIMD3<Float>
     let scatter: Float
     /// 요청 피라미드 레벨 수(WE 실측 8 이 기본) — 소스 크기/작업 버퍼 수가 못 받치면 클램프.
-    let levels: Int = 8
+    /// P③: 프로퍼티 기본값(`= 8`)만으로는 합성 멤버와이즈 이니셜라이저가 `levels` 를 파라미터 목록에서
+    /// 아예 제외한다(Swift: 기본값을 가진 `let` 저장 프로퍼티는 외부 주입 불가) — 저작
+    /// general.bloomhdriterations 를 전달하려면 명시 이니셜라이저가 필요하다.
+    let levels: Int
+
+    init(strength: Float, threshold: Float, feather: Float, tint: SIMD3<Float>, scatter: Float, levels: Int = 8) {
+        self.strength = strength
+        self.threshold = threshold
+        self.feather = feather
+        self.tint = tint
+        self.scatter = scatter
+        self.levels = levels
+    }
 
     static let defaults = HDRBloomPyramidParameters(
         strength: 0, threshold: 1, feather: 0.1, tint: SIMD3(1, 1, 1), scatter: 1.619)
