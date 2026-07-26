@@ -26,6 +26,35 @@ enum PropertyLabel {
     }
 }
 
+/// 감사 V06: ColorPicker 는 Slider 와 달리 editingChanged 콜백이 없어 컬러 패널 드래그 중 set 이
+/// 연속 발화한다 — 매번 commit(setProperty → reapplyIfCurrent 전체 리마운트)하면 리마운트 스톰이
+/// 되므로, 마지막 변경 뒤 1회만 실행되도록 취소·재예약하는 최소 디바운서(AppDelegate 화면 구성 변경
+/// 디바운스와 동일 패턴). F494 슬라이더의 "드래그 중 로컬 값만, 종료 시 1회 커밋"과 동등한 효과.
+final class CommitDebouncer {
+    private let delay: TimeInterval
+    private let queue: DispatchQueue
+    private var work: DispatchWorkItem?
+
+    init(delay: TimeInterval, queue: DispatchQueue = .main) {
+        self.delay = delay
+        self.queue = queue
+    }
+
+    /// 대기 중인 실행을 취소하고 delay 후 1회 실행을 재예약 — 연속 호출은 마지막 것만 실행된다.
+    func schedule(_ action: @escaping () -> Void) {
+        work?.cancel()
+        let w = DispatchWorkItem(block: action)
+        work = w
+        queue.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
+    /// 대기 중인 실행 취소(즉시 커밋 경로와의 중복 발화 방지).
+    func cancel() {
+        work?.cancel()
+        work = nil
+    }
+}
+
 /// 배경별 유저 속성 편집 시트(WE 속성 패널 대응). 변경 즉시 저장 + 현재 배경이면 재적용.
 struct PropertyEditorView: View {
     let entry: LibraryEntry
@@ -38,6 +67,10 @@ struct PropertyEditorView: View {
     /// F494: 슬라이더 미커밋 편집 추적 — 드래그 틱마다 commit(setProperty → 전체 리마운트)하던 것을
     /// textInput 과 같은 패턴(드래그 중엔 로컬 값만, 종료 시 1회 커밋)으로. 초당 수십 회 리마운트 방지.
     @State private var dirtySliders = Set<Int>()
+    /// 감사 V06: 컬러 미커밋 편집 추적 + 디바운스 — 컬러 패널 드래그 중엔 로컬 값만 갱신하고
+    /// 커밋(setProperty → 전체 리마운트)은 입력이 멈춘 뒤(또는 시트 닫힘 시) 1회.
+    @State private var dirtyColors = Set<Int>()
+    @State private var colorDebouncer = CommitDebouncer(delay: 0.5)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,6 +97,7 @@ struct PropertyEditorView: View {
         .onDisappear {
             for i in dirtyText { commitDirtyText(i) }   // 시트 닫힘 시 잔여 커밋
             for i in dirtySliders { commitDirtySlider(i) }   // F494: 드래그 중 닫힘 대비
+            commitDirtyColors()   // 감사 V06: 디바운스 대기 중 닫힘 대비
         }
     }
 
@@ -77,6 +111,17 @@ struct PropertyEditorView: View {
     private func commitDirtySlider(_ i: Int) {
         guard dirtySliders.remove(i) != nil, props.indices.contains(i) else { return }
         viewModel.setProperty(key: props[i].key, value: props[i].value, for: entry)
+    }
+
+    /// 감사 V06: dirty 컬러 전부 영속화(디바운스 1회 발화/시트 닫힘 시) — 대기 중 디바운스는 취소해
+    /// 중복 커밋하지 않는다.
+    private func commitDirtyColors() {
+        colorDebouncer.cancel()
+        let indices = dirtyColors
+        dirtyColors.removeAll()
+        for i in indices where props.indices.contains(i) {
+            viewModel.setProperty(key: props[i].key, value: props[i].value, for: entry)
+        }
     }
 
     private func label(_ p: WallpaperProperty) -> String {
@@ -117,6 +162,9 @@ struct PropertyEditorView: View {
                 }
             }
         case .color:
+            // 감사 V06: ColorPicker 는 editingChanged 가 없어 드래그 종료를 알 수 없다 — set 마다
+            // 즉시 commit 하던 것(컬러 패널 드래그 중 연속 리마운트 스톰)을 F494 슬라이더와 동등하게
+            // 로컬 값만 갱신 + dirty 추적 후 디바운스 1회 커밋으로.
             ColorPicker(label(p), selection: Binding(
                 get: {
                     if case .string(let s) = props[i].value {
@@ -127,7 +175,9 @@ struct PropertyEditorView: View {
                 },
                 set: { c in
                     let ns = NSColor(c).usingColorSpace(.sRGB) ?? .white
-                    commit(i, .string(String(format: "%.5f %.5f %.5f", ns.redComponent, ns.greenComponent, ns.blueComponent)))
+                    props[i].value = .string(String(format: "%.5f %.5f %.5f", ns.redComponent, ns.greenComponent, ns.blueComponent))
+                    dirtyColors.insert(i)
+                    colorDebouncer.schedule { commitDirtyColors() }
                 }), supportsOpacity: false)
         case .textInput:
             HStack {

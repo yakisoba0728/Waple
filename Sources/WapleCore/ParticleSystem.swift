@@ -193,7 +193,7 @@ public struct ParticleMaterial: Equatable {
         self.refract = refract; self.normalTextureName = normalTextureName; self.refractAmount = refractAmount
     }
 
-    public static func parse(_ json: [String: Any]) -> ParticleMaterial {
+    public static func parse(_ json: [String: Any], userProps: [String: Any] = [:]) -> ParticleMaterial {
         guard let passes = json["passes"] as? [Any], let p0 = passes.first as? [String: Any] else {
             return ParticleMaterial(textureName: nil, blend: .translucent)
         }
@@ -203,7 +203,14 @@ public struct ParticleMaterial: Equatable {
         // combos.REFRACT==1 + textures[1] 노멀맵 + constantshadervalues.ui_editor_properties_refract_amount.
         let refract = ((p0["combos"] as? [String: Any])?["REFRACT"] as? NSNumber)?.intValue == 1
         let normalName = (names.count > 1 && !names[1].isEmpty) ? names[1] : nil
-        let refractAmount = pfloat((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
+        var refractAmount = pfloat((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
+        // usershadervalues: 상수 → user property 키. 파스 시점에 userProps 룩업(런타임 변경은 정적 해석).
+        if let usv = p0["usershadervalues"] as? [String: Any],
+           let key = usv["ui_editor_properties_refract_amount"] as? String,
+           let raw = userProps[key],
+           let f = pfloat(raw) {
+            refractAmount = f
+        }
         return ParticleMaterial(textureName: albedo, blend: blend,
                                 refract: refract && normalName != nil, normalTextureName: normalName, refractAmount: refractAmount)
     }
@@ -434,7 +441,7 @@ public struct ParticleSystemDef: Equatable {
         if let ov = instanceOverride, !ov.isEmpty {
             func mul(_ v: Vec3, _ m: Vec3) -> Vec3 { Vec3(x: v.x * m.x, y: v.y * m.y, z: v.z * m.z) }
             func scale(_ v: Vec3, _ m: Float) -> Vec3 { Vec3(x: v.x * m, y: v.y * m, z: v.z * m) }
-            func scaledBurst(_ b: Int, _ m: Float) -> Int { max(0, Int((Float(b) * m).rounded())) }
+            func scaledBurst(_ b: Int, _ m: Float) -> Int { saturatedCount(Float(b) * m) }  // 감사 V06: 포화 클램프
             if ov.rate != nil || ov.count != nil {
                 let rm = ov.rate ?? 1, cm = ov.count ?? 1
                 emitters = emitters.map { e in
@@ -509,7 +516,7 @@ public struct ParticleSystemDef: Equatable {
                                         endValue: pvec3(o["endvalue"]) ?? Vec3(x: 0, y: 0, z: 0),
                                         endTime: pfloat(o["endtime"]) ?? 1))
             case "angularmovement":
-                // F188: drag 파싱 — movement(위 421행)의 선형 drag 와 대칭(부재 시 0, 무회귀).
+                // F188: drag 파싱 — movement(위 497-498행)의 선형 drag 와 대칭(부재 시 0, 무회귀).
                 ops.append(.angularMovement(force: pvec3(o["force"]) ?? Vec3(x: 0, y: 0, z: 0),
                                             drag: pfloat(o["drag"]) ?? 0))
             case "oscillatealpha":
@@ -627,8 +634,10 @@ public struct ParticleSystemDef: Equatable {
         // 음수 maxcount 가 시뮬 버스트 Range 상한으로 흘러 트랩 — 0 하한 클램프(감사 V02).
         var maxCount = max(0, pint(json["maxcount"]) ?? 100)
         if let m = instanceOverride?.count {
-            maxCount = max(0, Int((Float(maxCount) * m).rounded()))
+            maxCount = saturatedCount(Float(maxCount) * m)  // 감사 V06: Int 범위 밖 곱 트랩 — 포화 클램프
         }
+        // 상한 65536: 코퍼스 100000 설정 씨 CPU 시뮬 과부하 방지(감사 D-corpus G7).
+        maxCount = min(65536, maxCount)
 
         var children: [ChildLink] = []
         if let resolve = resolveChild {
@@ -702,6 +711,14 @@ private func pexponent(_ v: Any?) -> Float? {
     return pfloat(v)
 }
 private func pint(_ v: Any?) -> Int? { strictInt(v) }
+/// 감사 V06: Float→Int 스케일 변환 포화 클램프 — 곱이 Int 범위를 넘는(또는 NaN) 워크샵 입력의
+/// Int() 변환 트랩(SIGTRAP, maxcount 1e9 × override count 1e12 실재현) 방지.
+/// 0 하한은 V02 음수 클램프와 동일 정책, 상한 포화는 sheetFrameIndex(:52)와 동형.
+private func saturatedCount(_ v: Float) -> Int {
+    let p = v.rounded()
+    guard p.isFinite else { return 0 }
+    return p <= 0 ? 0 : (p >= Float(Int.max) ? Int.max : Int(p))
+}
 private func pvec3(_ v: Any?) -> Vec3? { stringVec3(v) }
 /// "x y z" 벡터 또는 단일 스칼라(브로드캐스트).
 private func pvec3OrScalar(_ v: Any?) -> Vec3? {

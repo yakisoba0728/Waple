@@ -212,7 +212,7 @@ final class SceneParticleTests: XCTestCase {
         XCTAssertEqual(doc.particles[0].parallaxDepth, Vec2(x: 0.3, y: 0.3))
     }
 
-    /// 미지정 시 1(균일 시차, 무회귀 — 레이어 785행 기본값과 동형).
+    /// 미지정 시 1(균일 시차, 무회귀 — 레이어 :946/:1070 기본값과 동형).
     func testParticleParallaxDepthDefaultsToOne() {
         let scene = #"{"objects":[{"id":1,"particle":"particles/p.json"}]}"#
         let pkg = ScenePackage.assemble([

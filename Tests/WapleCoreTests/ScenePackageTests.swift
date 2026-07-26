@@ -63,4 +63,31 @@ final class ScenePackageTests: XCTestCase {
             XCTAssertEqual(e as? ScenePackageError, .malformed)
         }
     }
+
+    func testRejectsInvalidMagic() {
+        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "PKGX0001"))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "PKGVXYZ1"))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "pkgv0001"))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+    }
+
+    func testAcceptsKnownVersions() {
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0001")))
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0002")))
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0024")))
+    }
+
+    func testRejectsOutOfRangeVersion() {
+        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "PKGV0000"))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "PKGV0100"))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+    }
 }

@@ -31,6 +31,15 @@ enum LibraryFiltering {
                       criteria: LibraryFilterCriteria, sort: LibrarySortOrder,
                       isFavorite: (String) -> Bool) -> [LibraryEntry] {
         var out = entries
+        // 감사 V06: 선택 집합이 그 축의 available 전체를 덮으면(사이드바 '전체' 버튼 또는 개별 토글
+        // 전부 체크) 그 축은 무필터로 간주 — 종전엔 이 상태도 필터 활성이라 태그/등급 없는 배경이 전부
+        // 숨겨졌다. available 목록은 입력 엔트리에서 유도(LibraryViewModel.availableTags/Ratings 와 동일
+        // 산식 — 필터가 켜진 상태에선 입력이 전체 엔트리라 같은 집합이 된다).
+        let allTags = Set(entries.flatMap { $0.tags ?? [] })
+        let allRatings = Set(entries.compactMap(\.contentRating))
+        // 감사 V07: 유형 축도 동일 규약 — available 은 사이드바가 나열하는 고정 3종(동적 유도 불필요).
+        // 3종 전부 체크 = 무필터 — entryType 이 .all 로 매핑되는 배경(preset 등)도 그대로 보인다.
+        let allTypes: Set<LibraryTypeFilter> = [.scene, .video, .web]
         let q = search.trimmingCharacters(in: .whitespaces)
         if !q.isEmpty {
             // 제목뿐 아니라 태그·지역화 유형 라벨까지 매칭(합집합) — 사용자가 장르/테마 단어로 검색해도
@@ -42,13 +51,13 @@ enum LibraryFiltering {
                     || matches(NowPlayingSubtitle.typeLabel(entry.typeRaw), q)
             }
         }
-        if !criteria.types.isEmpty {
+        if !criteria.types.isEmpty, !criteria.types.isSuperset(of: allTypes) {   // 감사 V07: 전체 선택 = 무필터
             out = out.filter { criteria.types.contains(entryType($0)) }
         }
-        if !criteria.tags.isEmpty {
+        if !criteria.tags.isEmpty, !criteria.tags.isSuperset(of: allTags) {   // 감사 V06: 전체 선택 = 무필터
             out = out.filter { !(criteria.tags.isDisjoint(with: $0.tags ?? [])) }
         }
-        if !criteria.ratings.isEmpty {
+        if !criteria.ratings.isEmpty, !criteria.ratings.isSuperset(of: allRatings) {   // 감사 V06: 동일
             out = out.filter { $0.contentRating.map { criteria.ratings.contains($0) } ?? false }
         }
         if criteria.favoritesOnly {

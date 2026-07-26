@@ -59,6 +59,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     public func mount(in container: NSView, project: WallpaperProject) throws {
+        // 감사 V06: 재마운트 시 선행 정리 — 방치하면 이전 WKWebView 가 container 에 잔존하고
+        // occlusionObserver/mouseMonitor 핸들이 덮여 teardown 로도 해제 불가능하게 누수된다
+        // (SceneRenderer.mount/VideoRenderer.mount 와 대칭). teardown 은 멱등이라 첫 마운트도 안전.
+        teardown()
         guard let fileName = WallpaperPathSecurity.normalizedRelativePath(project.fileName),
               let fileURL = WallpaperPathSecurity.containedFileURL(fileName, root: project.folderURL) else {
             throw RendererError.assetMissing
@@ -124,9 +128,11 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         case .videoFallback:
             guard let baseURL = URL(string: base) else { throw RendererError.assetMissing }
             // F576: 정상 경로(VideoRenderer)와 같은 배경별 음량을 폴터 <video> 에도 적용.
+            // 감사 V06: 화면 맞춤(fitMode)도 정상 경로와 같은 설정을 object-fit 으로 전달.
             web.loadHTMLString(
                 VideoFallbackHTML.html(forVideoFile: fileName,
-                                       volume: VideoSettings.volume(id: project.id)),
+                                       volume: VideoSettings.volume(id: project.id),
+                                       fitMode: SceneRenderSettings.fitMode),
                 baseURL: baseURL
             )
         }

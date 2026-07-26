@@ -30,16 +30,46 @@ public enum ZipImporter {
         return roots
     }
 
+    /// ditto 해제 실패 원인(감사 V06 — 해제 프로세스 타임아웃).
+    public enum ZipImportError: Error, Equatable {
+        /// 해제가 상한(extractionTimeout)을 넘겨 강제 종료(SIGTERM→SIGKILL)됨.
+        case extractionTimedOut
+    }
+
+    /// ditto 해제 시간 상한(감사 V06). 거대 zip 도 수 분이면 충분하고, 행 걸린 프로세스가
+    /// 직렬 importQueue 를 이 시간 이상 점유하지 못하게 하는 안전장치다.
+    static let extractionTimeout: TimeInterval = 300
+
     /// `/usr/bin/ditto -x -k <zip> <dest>`. 종료코드 0 = 성공.
-    /// 기본 구현 — 테스트는 대체 클로저를 주입한다.
-    public static func dittoExtract(_ zipURL: URL, _ dest: URL) -> Bool {
+    /// 감사 V06: waitUntilExit 무한 대기 금지 — extractionTimeout 초과 시 SIGTERM → 미종료 시
+    /// SIGKILL 로 회수하고 ZipImportError.extractionTimedOut 을 던진다(행 걸린 ditto 가
+    /// 직렬 importQueue 를 영구 정지시키는 회귀 방지). 기본 구현 — 테스트는 대체 클로저를 주입한다.
+    public static func dittoExtract(_ zipURL: URL, _ dest: URL) throws -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         p.arguments = ["-x", "-k", zipURL.path, dest.path]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return false }
-        p.waitUntilExit()
+        try waitForExitOrKill(p, timeout: extractionTimeout)
         return p.terminationStatus == 0
+    }
+
+    /// 프로세스 종료를 timeout 까지만 기다린다. 초과 시 SIGTERM, terminateGrace 내 미종료 시
+    /// SIGKILL 로 회수하고 extractionTimedOut 을 던진다(테스트는 단축 상한을 주입).
+    static func waitForExitOrKill(_ p: Process, timeout: TimeInterval, terminateGrace: TimeInterval = 5) throws {
+        let exited = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in exited.signal() }
+        guard exited.wait(timeout: .now() + timeout) == .timedOut else {
+            p.terminationHandler = nil
+            return
+        }
+        p.terminate()   // SIGTERM
+        if exited.wait(timeout: .now() + terminateGrace) == .timedOut {
+            kill(p.processIdentifier, SIGKILL)
+            p.waitUntilExit()   // SIGKILL 수거 확정
+        }
+        NSLog("%@", "[Waple] zip extraction timed out after \(Int(timeout))s — killed hung process")
+        throw ZipImportError.extractionTimedOut
     }
 }

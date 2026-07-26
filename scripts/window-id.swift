@@ -4,9 +4,11 @@
 import CoreGraphics
 import Foundation
 
-let args = CommandLine.arguments
-let name = args.count > 1 ? args[1] : "Waple"
+// 감사 V06: 플래그 단독 호출(`--bounds` 만) 시 args[1] 이 플래그를 앱 이름으로 잡아 항상 실패했다 —
+// `--` 접두 인자는 플래그로 구분하고, 첫 비플래그 인자를 앱 이름으로 쓴다(생략 시 기본 Waple).
+let args = CommandLine.arguments.dropFirst()
 let wantBounds = args.contains("--bounds")
+let name = args.first(where: { !$0.hasPrefix("--") }) ?? "Waple"
 let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
 for w in list where (w[kCGWindowOwnerName as String] as? String) == name
     && (w[kCGWindowLayer as String] as? Int) == 0 {

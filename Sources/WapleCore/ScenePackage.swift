@@ -46,6 +46,15 @@ public struct ScenePackage {
         var p = 0
         let vlen = try i32(p); p += 4
         guard vlen >= 0, p + vlen <= total else { throw ScenePackageError.malformed }
+        let magic = String(decoding: data[(base + p)..<(base + p + vlen)], as: UTF8.self)
+        // PKGV0001 ~ PKGV0024 (및 gifscene PKGV0002) 실측 범위; 미래 버전은 99 까지 허용.
+        guard magic.range(of: "^PKGV[0-9]{4}$", options: .regularExpression) != nil else {
+            throw ScenePackageError.malformed
+        }
+        guard let version = Int(magic.dropFirst("PKGV".count)), version >= 1, version <= 99 else {
+            throw ScenePackageError.malformed
+        }
+        _ = version
         p += vlen
         let count = try i32(p); p += 4
         guard count >= 0, count <= maxEntries else { throw ScenePackageError.malformed }

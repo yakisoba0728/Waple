@@ -40,6 +40,12 @@ enum NowPlayingSubtitle {
         return entries.first { $0.id == id }
     }
 
+    /// 모니터 할당 id 목록(감사 V06): Dictionary 순회 순서는 실행/상태마다 달라 멀티모니터에서
+    /// 표시되는 배경이 들쭉날쭉했다 — 화면 키 정렬 순으로 고정해 결정적으로 한다.
+    static func sortedAssignedIds(_ all: [String: String]) -> [String] {
+        all.sorted { $0.key < $1.key }.map(\.value)
+    }
+
     /// 대상별 값이 모두 같으면 그 값, 아니면 nil(F496) — 멀티모니터에 서로 다른 값이 적용된 상태에서
     /// 첫 대상 값만 보고 틀린 체크마크를 달지 않게 한다(nil = 체크 없음).
     static func commonValue(_ values: [Float]) -> Float? {
@@ -55,8 +61,9 @@ struct NowPlayingBar: View {
 
     private var appliedEntry: LibraryEntry? {
         // F495: 전역 선택만 볼 경우 할당-전용 세션에서 재생 중인데도 "적용된 배경 없음"으로 표시됨.
+        // 감사 V06: 대상 id 는 키 정렬 순(결정적) — Dictionary values 순회는 실행마다 달랐다.
         NowPlayingSubtitle.displayedEntry(global: viewModel.globalEntry,
-                                          assignedIds: Array(viewModel.monitors.all.values),
+                                          assignedIds: NowPlayingSubtitle.sortedAssignedIds(viewModel.monitors.all),
                                           entries: viewModel.entries)
     }
 

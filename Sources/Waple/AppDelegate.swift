@@ -5,6 +5,19 @@ import WapleCore
 import WapleLibrary
 import WapleRender
 
+/// 화면 수 기준선(순수, 감사 V06) — '새 디스플레이 감지' 판정용. 기준선은 생성 시점에 캡처하고
+/// 정착 후 값과 비교한다. (종전 lazy 프로퍼티는 첫 접근 — 디바운스 정착 후 — 에 기준선을 잡아
+/// 첫 감지를 항상 삼켰다.)
+struct ScreenCountBaseline {
+    private(set) var settledCount: Int
+    init(_ settledCount: Int) { self.settledCount = settledCount }
+    /// 정착 후 화면 수를 기준선에 반영하고, 기준선 대비 증가(새 디스플레이) 여부를 반환한다.
+    mutating func update(settled: Int) -> Bool {
+        defer { settledCount = settled }
+        return settled > settledCount
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let desktopController = DesktopWindowController()
@@ -65,7 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenChangeWork: DispatchWorkItem?
     // F033: 새 모니터 연결 감지용 — screensChanged 가 실제로(디바운스 정착 후) 실행될 때만 갱신해
     // 한 버스트 안의 중간값이 아니라 '정착 전 vs 정착 후'를 비교한다.
-    private lazy var lastSettledScreenCount = NSScreen.screens.count
+    // 감사 V06: lazy 는 첫 접근(performScreensChanged 의 정착 후)에 기준선을 잡아 첫 '새 디스플레이
+    // 감지' 배너가 항상 삼켜졌다 — 기준선은 옵저버 등록 직전(didFinishLaunching)에 캡처한다.
+    private var screenBaseline = ScreenCountBaseline(0)
 
     // F555: 비디오 비동기 실패 Notification 구독 핸들(블록 옵저버는 retain 필요).
     private var videoFailureObserver: NSObjectProtocol?
@@ -161,6 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         desktopController.rebuild()
 
         // 화면 구성 변경(모니터 연결/해제/해상도) 시 창 재구성 후 재적용.
+        // 감사 V06: '새 디스플레이 감지' 기준선은 여기서(실행 시 구성) 캡처 — 첫 변경부터 비교가 유효하다.
+        screenBaseline = ScreenCountBaseline(NSScreen.screens.count)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screensChanged),
@@ -486,8 +503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func performScreensChanged() {
         // F033: 새 디스플레이가 연결됐으면(정착 전 대비 화면 수 증가) 화면별 지정 기능을 안내 —
         // 재구성/재적용 '전'에 스냅샷해야 rebuild 이후에도 비교가 유효하다.
-        let newScreenDetected = NSScreen.screens.count > lastSettledScreenCount
-        lastSettledScreenCount = NSScreen.screens.count
+        let newScreenDetected = screenBaseline.update(settled: NSScreen.screens.count)
 
         // F036/F035: renderers 를 여기서 선-소거하면 desktopController.rebuild() 직후 재적용이 실패했을 때
         // RendererSwap.apply(existing:) 의 롤백 안전망("mount 실패 시 existing 은 건드리지 않는다")이 이미

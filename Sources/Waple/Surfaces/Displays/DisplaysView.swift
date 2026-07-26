@@ -3,15 +3,36 @@ import AppKit
 import UniformTypeIdentifiers
 import WapleLibrary
 
-/// F498: 썸네일 디코드 캐시 — body 재평가(드래그 호버의 dropTargetKey 변경 등)마다 디스크에서
-/// 재로드하지 않게 한다. WallpaperGridView.PreviewImageCache 는 file-private 라 별도 최소 캐시.
-private enum DisplaysImageCache {
-    private static let cache = NSCache<NSURL, NSImage>()
-    static func image(_ url: URL) -> NSImage? {
-        if let c = cache.object(forKey: url as NSURL) { return c }
-        guard let img = NSImage(contentsOf: url) else { return nil }
-        cache.setObject(img, forKey: url as NSURL)
-        return img
+/// 다이어그램/레일 썸네일(감사 V06) — WallpaperGridView.PreviewImageCache 의 F500 패턴 재사용:
+/// 조회는 cached()(동기, body 평가 중 디스크 읽기 없음), 최초 디코드는 .task 의 load()(백그라운드).
+/// 종전 전용 DisplaysImageCache(F498)는 body 평가 중 메인 스레드 동기 NSImage(contentsOf:) 디코드였다
+/// (당시 주석의 "PreviewImageCache 는 file-private" 주장은 스테일 — 실제로는 internal 단위 테스트 대상).
+private struct DisplaysThumbView: View {
+    let url: URL
+    var placeholderFont: Font = .title2
+    @State private var image: NSImage?
+
+    init(url: URL, placeholderFont: Font = .title2) {
+        self.url = url
+        self.placeholderFont = placeholderFont
+        _image = State(initialValue: PreviewImageCache.cached(url))   // NSCache 조회만 — 디스크 읽기 없음
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
+                    Image(systemName: "photo").font(placeholderFont).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .task(id: url) {
+            guard image == nil else { return }
+            image = await PreviewImageCache.load(url)
+        }
     }
 }
 
@@ -135,8 +156,8 @@ struct DisplaysView: View {
     private func thumbnail(for entry: LibraryEntry?, dimmed: Bool = false) -> some View {
         let resolved = entry ?? viewModel.globalEntry
         Group {
-            if let resolved, let url = viewModel.previewURL(for: resolved), let img = DisplaysImageCache.image(url) {
-                Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+            if let resolved, let url = viewModel.previewURL(for: resolved) {
+                DisplaysThumbView(url: url)
             } else {
                 ZStack {
                     Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
@@ -207,8 +228,8 @@ struct DisplaysView: View {
 
     @ViewBuilder
     private func railThumbnail(_ entry: LibraryEntry) -> some View {
-        if let url = viewModel.previewURL(for: entry), let img = DisplaysImageCache.image(url) {
-            Image(nsImage: img).resizable().aspectRatio(contentMode: .fill)
+        if let url = viewModel.previewURL(for: entry) {
+            DisplaysThumbView(url: url, placeholderFont: .caption)
         } else {
             ZStack {
                 Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))

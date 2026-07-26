@@ -246,7 +246,7 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(RendererKind.sprite.trailSampleCount, 0)
     }
 
-    // F188: drag 파싱 — movement 의 선형 drag(:418행)와 대칭. 실물 45/47 회귀·2/47 drag 실사용.
+    // F188: drag 파싱 — movement 의 선형 drag(:497-498행)와 대칭. 실물 45/47 회귀·2/47 drag 실사용.
     func testAngularMovementParsesDrag() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"angularmovement","force":"0 0 2","drag":0.5}]}"#), material: nil)
         XCTAssertTrue(d.operators.contains(.angularMovement(force: Vec3(x: 0, y: 0, z: 2), drag: 0.5)))
@@ -327,6 +327,32 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(d.maxCount, 0)
         var sim = ParticleSimulator(def: d, seed: 7)
         XCTAssertTrue(sim.step(0.1).isEmpty)  // 완주 자체가 무트랩 증명
+    }
+
+    func testHugeCountOverrideSaturatesInsteadOfTrapping() {
+        // 감사 V06: maxcount/instantaneous 1e9 × override count 1e12 = 1e21 > Int.max — Int() 변환
+        // SIGTRAP 회귀(실재현). 포화 클램프로 Int.max 에 포화돼야 한다.
+        // 감사 M8: maxcount 는 최종 65536 상한으로 CPU 시뮬 과부하 방지.
+        var ov = ParticleInstanceOverride()
+        ov.count = 1e12
+        let d = ParticleSystemDef.parse(json(
+            #"{"emitter":[{"name":"sphererandom","instantaneous":1000000000,"rate":1}],"renderer":[{"name":"sprite"}],"maxcount":1000000000}"#),
+            material: nil, instanceOverride: ov)
+        XCTAssertEqual(d.maxCount, 65536)
+        guard case let .sphere(_, _, _, _, _, burst, _) = d.emitters.first else { return XCTFail("no sphere") }
+        XCTAssertEqual(burst, Int.max)
+    }
+
+    func testNaNCountOverrideDefaultsToZeroInsteadOfTrapping() {
+        // 감사 V06: NaN 배수도 Int() 변환 트랩 — 안전 기본값 0(음수 클램프와 동일 정책).
+        var ov = ParticleInstanceOverride()
+        ov.count = .nan
+        let d = ParticleSystemDef.parse(json(
+            #"{"emitter":[{"name":"sphererandom","instantaneous":10,"rate":1}],"renderer":[{"name":"sprite"}],"maxcount":10}"#),
+            material: nil, instanceOverride: ov)
+        XCTAssertEqual(d.maxCount, 0)
+        guard case let .sphere(_, _, _, _, _, burst, _) = d.emitters.first else { return XCTFail("no sphere") }
+        XCTAssertEqual(burst, 0)
     }
 
     func testOscillateFrequencyMaxDefaultsToFrequencyMin() {

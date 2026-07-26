@@ -52,6 +52,9 @@ public enum BuiltinShaderIncludes {
         return mix(min(b * b / max(1.0 - s, vec3(0.00001)), vec3(1.0)), vec3(1.0), step(vec3(1.0), s));
     }
     vec3 rgb2hsl(vec3 c) {
+        // F676 정합(BlendMSL we_rgb2hsl 과 식 단위 일치): WE 원본의 `#ifdef HDR color = saturate(color)`
+        // — 단일 소스라 무조건 적용(LDR ≤1 에선 항등). HDR >1 입력의 모드 26-29 경로별 색 차이 봉인(감사 V06).
+        c = saturate(c);
         vec3 hsl;
         float fmin = min(min(c.r, c.g), c.b);
         float fmax = max(max(c.r, c.g), c.b);

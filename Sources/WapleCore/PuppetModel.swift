@@ -178,7 +178,9 @@ public struct PuppetModel: Equatable {
             model.bones = bones
         }
 
-        // 애니메이션(있으면): "MDLA0001". 실패는 애니 없이 반환(정지 포즈 렌더 가능).
+        // 애니메이션(있으면): "MDLA0001". 섹션 헤더 실패는 애니 없이 반환(정지 포즈 렌더 가능).
+        // 개별 애니 파스 실패는 그 애니만 버리고(break) 누적 완료분은 유지 — Model3D.swift:407,435 의
+        // 부분 실패 정책과 정합(감사 V06: 종전 return model 은 파스 완료분까지 전량 폐기했다).
         if o + 8 <= bytes.count, String(bytes: bytes[o..<o+8], encoding: .utf8) == "MDLA0001" {
             o += 8 + 1  // magic + u8(0)
             guard let _ = u32(o), let animCount = u32(o + 4) else { return model }
@@ -191,29 +193,32 @@ public struct PuppetModel: Equatable {
                     return c.value
                 }
                 guard let name = cstr(), let mode = cstr(),
-                      let fps = f32(o), let length = u32(o + 4), let boneCount = u32(o + 12) else { return model }
+                      let fps = f32(o), let length = u32(o + 4), let boneCount = u32(o + 12) else { break }
                 o += 20  // fps, length, 0, boneCount, 0
                 var tracks: [[Key]] = []
+                var ok = true
                 for _ in 0..<boneCount {
-                    guard let tSizeRaw = u32(o) else { return model }
+                    guard let tSizeRaw = u32(o) else { ok = false; break }
                     o += 4
                     let tSize = Int(tSizeRaw)
-                    guard tSize % 36 == 0, o + tSize <= bytes.count else { return model }
+                    guard tSize % 36 == 0, o + tSize <= bytes.count else { ok = false; break }
                     var keys: [Key] = []
                     keys.reserveCapacity(tSize / 36)
                     for k in stride(from: 0, to: tSize, by: 36) {
                         guard let px = f32(o + k), let py = f32(o + k + 4), let pz = f32(o + k + 8),
                               let ax = f32(o + k + 12), let ay = f32(o + k + 16), let az = f32(o + k + 20),
                               let sx = f32(o + k + 24), let sy = f32(o + k + 28), let sz = f32(o + k + 32)
-                        else { return model }
+                        else { ok = false; break }
                         keys.append(Key(position: SIMD3(px, py, pz), angles: SIMD3(ax, ay, az),
                                         scale: SIMD3(sx, sy, sz)))
                     }
+                    if !ok { break }
                     o += tSize
-                    guard let blob2Raw = u32(o) else { return model }
+                    guard let blob2Raw = u32(o) else { ok = false; break }
                     o += 4 + Int(blob2Raw)
                     tracks.append(keys)
                 }
+                guard ok, tracks.count == Int(boneCount) else { break }  // 부분 애니는 드롭, 누적분 유지
                 anims.append(Animation(name: name, mode: mode, fps: fps,
                                        lengthFrames: Int(length), tracks: tracks))
             }

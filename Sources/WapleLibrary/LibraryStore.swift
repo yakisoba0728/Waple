@@ -7,6 +7,9 @@ public final class LibraryStore {
     public private(set) var entries: [LibraryEntry] = []
     public private(set) var selectedId: String?
 
+    /// 감사 V06 회귀 테스트 계측: save() 호출 횟수(일괄 임포트의 인덱스 재작성 횟수 검증용).
+    private(set) var saveCount = 0
+
     public init(baseDirectory: URL) {
         self.baseDirectory = baseDirectory
         self.indexURL = baseDirectory.appendingPathComponent("library.json")
@@ -49,6 +52,7 @@ public final class LibraryStore {
     }
 
     private func save() {
+        saveCount += 1
         guard !indexLoadFailed else {
             NSLog("%@", "[Waple] library index save skipped at \(indexURL.path) — earlier read failed transiently, avoiding clobber")
             return
@@ -175,7 +179,7 @@ public final class LibraryStore {
     /// `extract` 주입으로 테스트 가능(기본 ditto). 가져온 엔트리 반환.
     @discardableResult
     public func importZip(_ zipURL: URL,
-                          extract: (URL, URL) -> Bool = ZipImporter.dittoExtract) -> [LibraryEntry] {
+                          extract: (URL, URL) throws -> Bool = ZipImporter.dittoExtract) -> [LibraryEntry] {
         guard let temp = extractZipToTemp(zipURL, extract: extract) else { return [] }
         return importExtractedZip(temp)
     }
@@ -184,11 +188,11 @@ public final class LibraryStore {
     /// 스토어 상태(entries/index)를 전혀 건드리지 않으므로 백그라운드 호출이 안전하다.
     /// 성공 시 해제된 임시 디렉터리(호출자가 importExtractedZip 에 넘겨 등록·정리), 실패 시 nil(정리됨).
     public func extractZipToTemp(_ zipURL: URL,
-                                 extract: (URL, URL) -> Bool = ZipImporter.dittoExtract) -> URL? {
+                                 extract: (URL, URL) throws -> Bool = ZipImporter.dittoExtract) -> URL? {
         let fm = FileManager.default
         let temp = fm.temporaryDirectory.appendingPathComponent("WapleZip-\(UUID().uuidString)", isDirectory: true)
         guard (try? fm.createDirectory(at: temp, withIntermediateDirectories: true)) != nil,
-              extract(zipURL, temp) else {
+              (try? extract(zipURL, temp)) == true else {
             try? fm.removeItem(at: temp)
             return nil
         }
@@ -250,13 +254,16 @@ public final class LibraryStore {
                 continue
             }
             do {
-                let entry = try importFolder(dest)
+                // 감사 V06: 루트마다 저장(saving: true)하면 인덱스를 N번 재작성하는 O(n²) —
+                // F582(importFolders)와 같이 루프 동안은 저장을 미루고 마지막에 1회만 저장한다.
+                let entry = try importFolder(dest, saving: false)
                 imported.append(entry)
             } catch {
                 NSLog("%@", "[Waple] failed to register imported folder \(dest.path): \(error) — removing")
                 try? fm.removeItem(at: dest)
             }
         }
+        if !imported.isEmpty { save() }   // 감사 V06: 일괄 임포트 저장 일괄화(F582 패턴)
         return imported
     }
 

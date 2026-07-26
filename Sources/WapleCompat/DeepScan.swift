@@ -162,8 +162,9 @@ enum DeepScan {
     }()
 
     /// - Returns: (마크다운 리포트, 프로젝트-레벨 미지원 건수 — F151 `--deep --strict` 게이트용. "미지원" 은
-    ///   DeepReport 의 프로젝트-레벨 표(ALL 행)와 동일 기준: 핵심 에셋 파싱 실패, 위 리포트 각주 참고.)
-    static func run(rootPath: String, only: String?) -> (report: String, unsupported: Int) {
+    ///   DeepReport 의 프로젝트-레벨 표(ALL 행)와 동일 기준: 핵심 에셋 파싱 실패, 위 리포트 각주 참고,
+    ///   프로젝트 발견 여부 — false 면 루트/--only 오지정으로 스캔이 무의미, 호출측은 비정상 종료할 것.)
+    static func run(rootPath: String, only: String?) -> (report: String, unsupported: Int, projectsFound: Bool) {
         let root = URL(fileURLWithPath: NSString(string: rootPath).expandingTildeInPath, isDirectory: true).standardizedFileURL
         let assetsDir = firstExisting([root.appendingPathComponent("assets"),
                                        root.deletingLastPathComponent().appendingPathComponent("assets")])
@@ -179,6 +180,13 @@ enum DeepScan {
             }
         }
         if let only { folders = folders.filter { $0.lastPathComponent == only } }
+
+        // 감사 V06: 프로젝트 0개(루트 오타·--only id 오지정)면 "0건 리포트 + exit 0" 으로 CI 가 성공 오인
+        // — 형제 모드 F520 가드(SnapshotPipeline/ProfilePipeline/SnapshotCompare)와 동일하게 경고 후 비정상 종료 신호.
+        guard !folders.isEmpty else {
+            fputs("[deep] ⚠️ 프로젝트 0개 — root(개발 루트/backgrounds/단일 씬 폴더)와 --only id 확인: \(rootPath)\n", stderr)
+            return ("", 0, false)
+        }
 
         let agg = DeepAgg()
         let started = Date()
@@ -204,7 +212,7 @@ enum DeepScan {
                                    projectCount: folders.count, translateElapsed: translateElapsed, elapsed: elapsed)
         let totalAll = agg.projTypeTotal.values.reduce(0, +)
         let supAll = agg.projTypeSupported.values.reduce(0, +)
-        return (report, totalAll - supAll)
+        return (report, totalAll - supAll, true)
     }
 
     // MARK: project dispatch

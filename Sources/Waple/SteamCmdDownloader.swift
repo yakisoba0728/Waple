@@ -162,10 +162,14 @@ enum SteamCmdDownloader {
         DispatchQueue.main.async { completion(result) }
     }
 
-    /// Process 1회 실행. stdout 을 라인 단위로 파싱해 progress 를 메인 큐로 전달, 타임아웃 시 terminate.
+    /// Process 1회 실행. stdout 을 라인 단위로 파싱해 progress 를 메인 큐로 전달.
+    /// 타임아웃 시 SIGTERM(terminate) → 유예(terminateGrace) 내 미종료 시 SIGKILL 로 에스컬레이션한다
+    /// (감사 V06: steamcmd 가 SIGTERM 을 무시하면 availableData/waitUntilExit 가 영구 블록돼
+    /// 다운로드 스레드 정지 + WorkshopViewModel .downloading 고착 — 어떤 경로든 반환을 보장).
     /// 반환값 = ("완료" 라인을 봤는가, 성공 라인이 알려준 목적지 경로 — F499. 경로 미출력 포맷이면 nil).
-    private static func run(exe: URL, args: [String], timeout: TimeInterval,
-                            progress: @escaping (Progress) -> Void) -> (sawSuccess: Bool, path: String?) {
+    static func run(exe: URL, args: [String], timeout: TimeInterval,
+                    terminateGrace: TimeInterval = 5,
+                    progress: @escaping (Progress) -> Void) -> (sawSuccess: Bool, path: String?) {
         let proc = Process()
         proc.executableURL = exe
         proc.arguments = args
@@ -176,7 +180,17 @@ enum SteamCmdDownloader {
             WapleLog.warn("[Waple] steamcmd launch failed: \(error)")
             return (false, nil)
         }
-        let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+        // 감사 V06: SIGTERM 을 무시하는 프로세스 대비 — 유예 후 SIGKILL 에스컬레이션.
+        // 프로세스 사망 시 파이프가 닫혀 위 읽기 루프(availableData)와 waitUntilExit 가 풀린다.
+        let escalator = DispatchWorkItem {
+            if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+        }
+        let killer = DispatchWorkItem {
+            if proc.isRunning {
+                proc.terminate()
+                DispatchQueue.global().asyncAfter(deadline: .now() + terminateGrace, execute: escalator)
+            }
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
 
         var sawSuccess = false
@@ -203,6 +217,7 @@ enum SteamCmdDownloader {
         }
         proc.waitUntilExit()
         killer.cancel()
+        escalator.cancel()
         return (sawSuccess, reportedPath)
     }
 }

@@ -24,7 +24,7 @@ public final class SceneVideoLayer {
     public let mp4URL: URL
 
     // MARK: 라이브
-    private var player: AVPlayer?
+    var player: AVPlayer?   // internal — 테스트가 pause/resume 상태(rate)를 관측(감사 V06 가림 대칭 검증)
     private var output: AVPlayerItemVideoOutput?
     private var textureCache: CVMetalTextureCache?
     private var endObserver: NSObjectProtocol?
@@ -70,14 +70,25 @@ public final class SceneVideoLayer {
     /// startLive 가 성공했으면 true — 호출부가 라이브/헤드리스 프레임 경로를 선택한다.
     public var isLive: Bool { player != nil }
 
+    /// 감사 V06: startLive 실패 기록. true 면 호출부가 라이브/헤드리스 대신 정적 폴 백(staticFallbackTexture)
+    /// 경로를 선택한다 — isLive=false 유지 상태로 라이브 draw 가 매 프레임 헤드리스 동기 디코드(copyCGImage
+    /// + 최초 duration 세마포어 블로킹)를 도는 것을 막기 위함. internal(set): 테스트가 실패 상태를 재현
+    /// (CVMetalTextureCacheCreate 실패는 환경 의존이라 직접 유발 불가).
+    public internal(set) var liveStartFailed = false
+
     // MARK: 라이브
 
     /// 라이브 재생 시작(온스크린 마운트에서만 호출). 실패해도 헤드리스 폴백엔 영향 없음(isLive=false 유지).
+    /// 실패 시 liveStartFailed 를 기록해 호출부가 정적 폴 백으로 전환하게 한다(재시도 없음 — 호출부의
+    /// videoLayersLive 플래그가 startLive 재호출을 이미 막는다).
     public func startLive(device: MTLDevice) {
         guard player == nil else { return }
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &cache) == kCVReturnSuccess,
-              let cache else { return }
+              let cache else {
+            liveStartFailed = true   // 감사 V06: 실패 기록 — 라이브 draw 의 매 프레임 동기 디코드 방지
+            return
+        }
         textureCache = cache
         let item = AVPlayerItem(url: mp4URL)
         let out = AVPlayerItemVideoOutput(pixelBufferAttributes: [
@@ -122,6 +133,21 @@ public final class SceneVideoLayer {
     public func pause() { player?.pause() }
     public func resume() { player?.play() }
 
+    // MARK: 라이브 실패 정적 폴 백 (감사 V06)
+
+    /// startLive 실패(liveStartFailed) 레이어의 정적 프레임 — t=0 을 **1회만** 디코드해 고정(재시도 없음).
+    /// 실패 레이어를 라이브 draw 가 매 프레임 headlessTexture 로 동기 디코드(copyCGImage + 최초 duration
+    /// 세마포어)하는 것을 막는다. 디코드 실패 시 nil 고정 → 호출부 placeholder 폴터(headlessTexture 와 동일 규약).
+    public func staticFallbackTexture(device: MTLDevice) -> MTLTexture? {
+        if !didDecodeStaticFallback {
+            didDecodeStaticFallback = true
+            cachedStaticFallback = headlessTexture(at: 0, device: device)
+        }
+        return cachedStaticFallback
+    }
+    private var didDecodeStaticFallback = false
+    private var cachedStaticFallback: MTLTexture?
+
     public func teardown() {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
@@ -131,6 +157,7 @@ public final class SceneVideoLayer {
         frameHold.removeAll()
         lastLiveTexture = nil
         textureCache = nil
+        cachedStaticFallback = nil   // 감사 V06: 정적 폴 백 텍스처 해제
         // F560: 활성 등록 해제(멱등 — teardown 은 명시 호출 + deinit 백스톱으로 2회 올 수 있다).
         if holdsActiveMark { holdsActiveMark = false; VideoTextureExtractor.unmarkActive(mp4URL) }
     }

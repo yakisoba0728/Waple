@@ -335,9 +335,15 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
         var sim = ParticleSimulator(def: def, seed: 29)
         let parts = sim.step(0.1)
         XCTAssertFalse(parts.isEmpty)
-        // turbExtra 는 비어 있어야 한다(첫 오퍼레이터만 스칼라 경로)
+        // turbExtra 는 비어 있어야 한다(첫 오퍼레이터만 스칼라 경로) — 스칼라 경로의 스폰 샘플이
+        // 실제 일어났는지(turbSpeed > 0)도 함께 확인해 단언이 공허해지지 않게 한다.
+        XCTAssertTrue(parts.allSatisfy { $0.turbSpeed > 0 }, "첫 turbulence 는 스칼라 경로로 스폰 샘플")
+        XCTAssertTrue(parts.allSatisfy { $0.turbExtra.isEmpty }, "단일 오퍼레이터는 turbExtra 신규 드로 0")
+        // 동일 시드 재실행은 비트동일(스폰 드로 수 불변 → RNG 스트림 재현).
         var sim2 = ParticleSimulator(def: def, seed: 29)
-        _ = sim2.step(0.1)
+        let parts2 = sim2.step(0.1)
+        XCTAssertEqual(parts2.count, parts.count)
+        XCTAssertEqual(parts2.map { $0.pos }, parts.map { $0.pos }, "동일 시드 재실행 비트동일")
     }
 
     // MARK: - F630 (S-67): mapsequencearoundcontrolpoint axis 회전 평면

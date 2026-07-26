@@ -160,7 +160,8 @@ public enum TexDecoder {
             // 이므로 (byte0,byte0,byte0,byte1). HLSL_SM30 경로 `.rrra`(A8L8 에뮬)도 동일 결론 → 아래 코드가 정본.
             // ⚠️ RePKG RG88.cs:40 은 정반대(`Rgba32(G,G,G,R)` = byte1→루마, byte0→알파)지만, 실제 렌더 규약은
             // 셰이더이므로 Waple 이 옳다(RePKG 를 보고 뒤집지 말 것). rain_drops_sheet 등 파티클 시트가 이 포맷.
-            // 마스크 소비(.r)도 r 그대로라 양쪽 정확. (REFRACT 의 스크린 굴절 곱은 항등 근사 — 별도 미구현.)
+            // 마스크 소비(.r)도 r 그대로라 양쪽 정확. (REFRACT 파티클은 ParticleShaders.pf_refract 로 구현;
+            // 이미지/3D 레이어 REFRACT 는 별도 미구현.)
             guard w > 0, h > 0, dec.count >= w * h * 2 else { return nil }
             var rgba = Data(count: w * h * 4)
             dec.withUnsafeBytes { (src: UnsafeRawBufferPointer) in

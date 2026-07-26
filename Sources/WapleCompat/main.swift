@@ -127,7 +127,10 @@ struct WapleCompatCLI {
             return
         }
         if deep {
-            let (report, unsupported) = DeepScan.run(rootPath: rootPath, only: only)
+            let (report, unsupported, projectsFound) = DeepScan.run(rootPath: rootPath, only: only)
+            // 감사 V06: 프로젝트 0개(루트/--only 오지정)면 형제 모드 F520 가드와 동일하게 exit 2
+            // — "0건 리포트 + exit 0" 의 CI false-green 차단.
+            guard projectsFound else { Foundation.exit(2) }
             print(report)
             // F151: --deep 은 예전엔 항상 return→exit 0 이라 --strict 와 병행해도 실패를 절대 못 잡았다.
             // 기본(비-deep) 스캔의 --strict 게이트(아래, blockedProjects>0 → exit 1)와 동일 취지로,

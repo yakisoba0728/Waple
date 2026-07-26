@@ -34,7 +34,7 @@ import simd
 ///   [메시 사이 구분자 6×u8 0]
 /// (스키닝 모델) "MDLS0004" | u8 0 | u32 nextOff | u32 본수 |
 ///   본별: cstring 이름 | u32 flags | i32 부모 | u32 64 | float4x4 바인드 | cstring props
-/// (스키닝 모델) "MDAT0001" ... "MDLA0006" ... (미해독, hasAnimation 로만 표기)
+/// (스키닝 모델) "MDAT0001" 이름-본 부착점 섹션 — parseAttachments()로 파싱, "MDLA0006" 애니메이션 섹션.
 ///
 /// 정점 포맷(formatFlag 하위 바이트 0x0f = pos+normal+tangent+uv; 비트 0x01800000 = 스키닝):
 ///   정적(stride 48): pos 3f | normal 3f | tangent 4f | uv 2f
@@ -324,7 +324,8 @@ public struct Model3D: Equatable {
     }
 
     /// MDAT0001 부착점 파스. 레이아웃(실측 7씬 다중 엔트리 정렬 전수 일치):
-    /// "MDAT0001" | u8 0 | u32 nextOff | u16 count | count×(u16 본인덱스 | cstring 이름(UTF-8) | 64B float4x4 로컬).
+    /// "MDAT0001" | u8 0 | u32 nextOff | u8 count | u8 padding |
+    /// count×(u16 본인덱스 | cstring 이름(UTF-8) | 64B float4x4 로컬).
     /// 구조 불일치(본 인덱스 범위 밖 포함)는 빈 배열 — 추측 파스로 이상 부착을 만드느니 무부착이 낫다.
     static func parseAttachments(bytes: [UInt8], at magicOff: Int, boneCount: Int) -> [Attachment] {
         func u16(_ o: Int) -> Int? {
@@ -333,8 +334,10 @@ public struct Model3D: Equatable {
         }
         func f32(_ o: Int) -> Float? { readU32LE(bytes, at: o).map { Float(bitPattern: $0) } }
         var p = magicOff + 8 + 1 + 4   // magic + u8(0) + u32 nextOff
-        guard let count = u16(p), count > 0, count < 1000 else { return [] }
-        p += 2
+        guard p + 2 <= bytes.count else { return [] }
+        let count = Int(bytes[p])
+        guard count > 0, count < 256 else { return [] }
+        p += 2  // u8 count + 1 byte padding
         var out: [Attachment] = []
         out.reserveCapacity(count)
         for _ in 0..<count {

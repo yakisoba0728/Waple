@@ -75,7 +75,7 @@ final class Model3DTests: XCTestCase {
         XCTAssertTrue(m.bones.isEmpty)
     }
 
-    /// T3: line 242 의 `maxIndex >= vCount` 가드가 정확히 경계에서 작동함을 증명 — 동일 정점수·구조에서
+    /// T3: line 255 의 `maxIndex >= vCount` 가드가 정확히 경계에서 작동함을 증명 — 동일 정점수·구조에서
     /// 인덱스 값만 1 차이나는 두 블롭을 대비해, nil 이 가드에서 오는 것이지 무관한 구조 결함이 아님을 확인.
     func testVertexIndexGuardRejectsExactlyAtBoundary() {
         func mesh(indices: [UInt16]) -> SynthMesh {
@@ -88,7 +88,7 @@ final class Model3DTests: XCTestCase {
         }
         // 경계 안(maxIndex == vCount-1 == 1): 파스 성공.
         XCTAssertNotNil(Model3D.parse(makeModelU16([mesh(indices: [0, 1, 0])])))
-        // 경계 밖(maxIndex == vCount == 2): 인덱스만 1 초과 → nil(242 가드).
+        // 경계 밖(maxIndex == vCount == 2): 인덱스만 1 초과 → nil(255 가드).
         XCTAssertNil(Model3D.parse(makeModelU16([mesh(indices: [0, 1, 2])])))
     }
 
@@ -696,7 +696,8 @@ final class Model3DRealFileTests: XCTestCase {
         var total = 0
         for id in ids {
             let pkg: ScenePackage
-            do { pkg = try loadPkg(id) } catch { continue }   // 없으면 스킵
+            // 파일 부재(XCTSkip)만 걸러낸다 — 손상 pkg 의 parse 실패까지 삼키면 조용히 green 이 된다.
+            do { pkg = try loadPkg(id) } catch is XCTSkip { continue }
             for e in pkg.entries where e.name.hasSuffix(".mdl") {
                 guard let raw = pkg.data(for: e.name),
                       String(bytes: raw.prefix(8), encoding: .utf8) == "MDLV0021" else { continue }
@@ -722,7 +723,8 @@ final class Model3DRealFileTests: XCTestCase {
         var total = 0
         for (id, wantMagic) in expected {
             let pkg: ScenePackage
-            do { pkg = try loadPkg(id) } catch { continue }   // 없으면 스킵
+            // 파일 부재(XCTSkip)만 걸러낸다 — 손상 pkg 의 parse 실패까지 삼키면 조용히 green 이 된다.
+            do { pkg = try loadPkg(id) } catch is XCTSkip { continue }
             for e in pkg.entries where e.name.hasSuffix(".mdl") {
                 guard let raw = pkg.data(for: e.name),
                       String(bytes: raw.prefix(8), encoding: .utf8) == wantMagic else { continue }

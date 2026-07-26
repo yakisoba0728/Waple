@@ -62,7 +62,7 @@ final class HDRPostPass {
     fragment float4 hdrpost_f(VOut in [[stage_in]],
                               texture2d<float> hdrTex [[texture(0)]],
                               constant float &exposure [[buffer(0)]]) {
-        constexpr sampler s(filter::nearest, address::clamp_to_edge);   // acc 는 dst 와 1:1 해상 = 보간 불요
+        constexpr sampler s(filter::linear, address::clamp_to_edge);    // WE combine.frag 는 linear 샘플러 가정
         float4 c = hdrTex.sample(s, in.uv);
         // WE 최종 = saturate 클램프(무-ACES 5중확증, HDRBloomPass 합성부와 동일 규약).
         // >1 → 1.0(순백), [0,1] 저역은 항등(ACES 는 저역도 곡선변형). exposure = 밝기 노브.

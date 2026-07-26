@@ -73,4 +73,10 @@ enum ParticleShaders {
         return float4(rgb * A, A);                // premultiplied(블렌드 src=one)
     }
     """
+    /// 감사 V07: 파티클 알베도 NoInterpolation(TexImage flags bit0) 전용 nearest 변형 — pf_main/pf_refract
+    /// 의 유일한 선형 샘플러 선언만 filter::nearest 로 치환. 어드레스 모드(clamp_to_edge)는 보존(WE
+    /// NoInterpolation 은 필터만 point). 원본 source 는 불변 — 기존 선형 파이프라인 비트동일(무회귀).
+    static let nearestSource = source.replacingOccurrences(
+        of: "constexpr sampler s(filter::linear, address::clamp_to_edge);",
+        with: "constexpr sampler s(filter::nearest, address::clamp_to_edge);")
 }

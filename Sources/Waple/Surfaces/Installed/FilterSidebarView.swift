@@ -30,6 +30,8 @@ struct FilterSidebarView: View {
             if !viewModel.availableTags.isEmpty {
                 Section {
                     HStack {
+                        // 감사 V06: '전체'는 available 전체 선택 — LibraryFiltering 은 이 상태를
+                        // 무필터로 간주하므로 태그 없는 배경도 그대로 보인다.
                         Button("전체") { viewModel.criteria.tags = Set(viewModel.availableTags) }
                         Button("없음") { viewModel.criteria.tags = [] }
                     }

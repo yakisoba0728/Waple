@@ -3,9 +3,43 @@ import Foundation
 enum EffectShaders {
     /// 효과 이름 → MSL(공유 vert ev_main + 효과 frag ef_main).
     /// frag uniform: constant float* P (P[0]=time, P[1..]=params, 효과별 순서).
-    static func source(for name: String) -> String? {
+    /// fbNearest(감사 V06): texture(0)(fb=체인 첫 src, 레이어 베이스 텍스처) 샘플만 nearest — TexImage
+    /// .noInterpolation(flags bit0, WE NoInterpolation) 소비. false 면 기존 소스와 비트동일(무회귀).
+    static func source(for name: String, fbNearest: Bool = false) -> String? {
         guard let frag = frags[name] else { return nil }
-        return header + vert + frag
+        return header + vert + (fbNearest ? nearestFB(frag) : frag)
+    }
+
+    /// fb.sample(<sampler>, …) 사이트의 샘플러만 nearest 쌍생(어드레스 모드 보존 — NoInterpolation 은
+    /// 필터만 point, 랩은 WE 그대로)으로 치환한다. aux 등 다른 텍스처의 동일 샘플러 사용은 불변.
+    /// 선언/사이트를 찾지 못하면 원문 그대로(폴터=기존 선형 — 무회귀·무크래시 우선).
+    private static func nearestFB(_ frag: String) -> String {
+        guard let siteRe = try? NSRegularExpression(pattern: #"fb\.sample\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,"#) else { return frag }
+        let ns = frag as NSString
+        var samplers: [String] = []   // 첫 등장 순서 수집(치환은 식별자별 독립 — 결정성 유지용)
+        for m in siteRe.matches(in: frag, range: NSRange(location: 0, length: ns.length)) {
+            let s = ns.substring(with: m.range(at: 1))
+            if !samplers.contains(s) { samplers.append(s) }
+        }
+        var out = frag
+        for s in samplers {
+            // 선언문 `constexpr sampler <s>(filter::linear, …);` 을 찾아 nearest 쌍생을 직후에 삽입.
+            let anchor = "constexpr sampler \(s)(filter::linear,"
+            guard let aStart = out.range(of: anchor),
+                  let semi = out[aStart.lowerBound...].firstIndex(of: ";") else { continue }
+            let decl = String(out[aStart.lowerBound...semi])
+            let twin = decl
+                .replacingOccurrences(of: "sampler \(s)(", with: "sampler \(s)NearestFB(")
+                .replacingOccurrences(of: "filter::linear", with: "filter::nearest")
+            out.insert(contentsOf: "\n    " + twin, at: out.index(after: semi))
+            // fb 샘플 사이트만 쌍생으로(다른 텍스처의 <s> 사용은 그대로).
+            guard let sRe = try? NSRegularExpression(
+                pattern: #"fb\.sample\(\s*"# + NSRegularExpression.escapedPattern(for: s) + #"\s*,"#) else { continue }
+            out = sRe.stringByReplacingMatches(
+                in: out, range: NSRange(location: 0, length: (out as NSString).length),
+                withTemplate: "fb.sample(\(s)NearestFB,")
+        }
+        return out
     }
 
     /// constantshadervalues(+combos) → 효과별 파라미터 슬롯(기본값 포함). 미지원 nil.

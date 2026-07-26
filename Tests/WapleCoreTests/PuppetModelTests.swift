@@ -126,6 +126,35 @@ final class PuppetModelTests: XCTestCase {
         XCTAssertNil(PuppetModel.parse(Data("MDLV0013".utf8)))  // 트렁케이트
     }
 
+    /// 감사 V06: MDLA0001 애니 루프 중간 실패(트렁케이트) 시 완료된 애니는 유지 — 종전 `return model` 은
+    /// 파스 완료분까지 전량 폐기했다(Model3D.swift:407,435 의 break 정책과 정합화).
+    func testAnimParseFailureKeepsCompletedAnimations() throws {
+        var d = makeMDL(material: "materials/b.json",
+                        verts: [(SIMD3(0, 0, 0), SIMD4(0, 0, 0, 0), SIMD4(1, 0, 0, 0), SIMD2(0, 0))],
+                        indices: [0, 0, 0],
+                        bones: [("", -1, [0, 0])])   // anim: nil → "MDLA0001" 매직만 붙은 상태
+        func u(_ v: UInt32) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func f(_ v: Float) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        d.append(0)                    // lead u8
+        u(0); u(2); u(1); u(0)         // nextOff, animCount=2, id, 0
+        // 첫 애니: 정상(본 1, 키 1).
+        d.append(Data("ok".utf8)); d.append(0)
+        d.append(Data("loop".utf8)); d.append(0)
+        f(20); u(1); u(0); u(1); u(0)  // fps, length, 0, boneCount, 0
+        u(36)                          // 트랙크기 = 키 1개
+        for v: Float in [1, 2, 3, 0, 0, 0, 1, 1, 1] { f(v) }
+        u(0)                           // blob2
+        // 둘째 애니: 트랙크기 360 선언 후 데이터 트렁케이트 → 이 애니만 파스 실패.
+        d.append(Data("broken".utf8)); d.append(0)
+        d.append(Data("loop".utf8)); d.append(0)
+        f(20); u(1); u(0); u(1); u(0)
+        u(360)                         // 실제 잔여 바이트 부족 → 범위 가드 실패
+        let m = try XCTUnwrap(PuppetModel.parse(d))
+        XCTAssertEqual(m.animations.count, 1, "실패 애니는 버리되 파스 완료된 첫 애니는 유지")
+        XCTAssertEqual(m.animations.first?.name, "ok")
+        XCTAssertEqual(m.animations.first?.tracks.count, 1)
+    }
+
     /// 실물 머티리얼/본 경로는 UTF-8 CJK("materials/太空球/…")를 포함 — 종전 바이트누적
     /// Latin-1 디코드는 mojibake 를 만들어 pkg 조회가 실패했다(감사 §1 medium). UTF-8 라운드트립 검증.
     func testDecodesCJKStringsAsUTF8() throws {

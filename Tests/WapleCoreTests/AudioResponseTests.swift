@@ -67,4 +67,24 @@ final class AudioResponseTests: XCTestCase {
                                        bounds: SIMD2(0, 1), power: 1, multiply: 1)
         XCTAssertEqual(r2, 0, accuracy: 1e-5)
     }
+
+    func testNaNFreqRangeNoTrap() {
+        // 감사 V06: NaN 은 Swift min/max 를 통과해 bin() 의 Int() 변환 트랩 — 0번 빈 기본값.
+        let bothNaN = AudioResponse.compute(left: ones, right: ones, mode: 3, freqMin: .nan, freqMax: .nan,
+                                            bounds: SIMD2(0, 1), power: 1, multiply: 1)
+        XCTAssertTrue(bothNaN.isFinite)
+        XCTAssertEqual(bothNaN, 1, accuracy: 1e-5, "NaN/NaN → 0번 빈(값 1) 평균 = 1")
+        let minNaN = AudioResponse.compute(left: ones, right: ones, mode: 3, freqMin: .nan, freqMax: 15,
+                                           bounds: SIMD2(0, 1), power: 1, multiply: 1)
+        XCTAssertEqual(minNaN, 1, accuracy: 1e-5, "NaN 하한은 0번 빈으로 — 전 구간 평균 = 1")
+    }
+
+    func testAsymmetricStereoDenominatorUsesSummedBins() {
+        // 감사 V06: mode 3 비대칭(right < left) — denom 은 실제 합산 빈 수(16+8=24)여야 한다.
+        // 종전 (hi-lo+1)×2 = 32 로 나눠 평균이 0.75 로 희석됐다(주석 :16 설계 목표와 불일치).
+        let right8 = [Float](repeating: 1, count: 8)
+        let r = AudioResponse.compute(left: ones, right: right8, mode: 3, freqMin: 0, freqMax: 15,
+                                      bounds: SIMD2(0, 1), power: 1, multiply: 1)
+        XCTAssertEqual(r, 1, accuracy: 1e-5, "합산 빈 전부 1 이면 평균 1 — 비대칭 희석 없음")
+    }
 }

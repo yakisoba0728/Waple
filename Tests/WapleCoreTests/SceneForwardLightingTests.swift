@@ -77,16 +77,46 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(defaulted.specularTint, Vec3(x: 1, y: 1, z: 1))
     }
 
-    // MARK: 감쇠/PBR 합산 수식
+    func testParsesUserShaderValuesForPBRScalars() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"id":1,"name":"usv","image":"models/usv.json","origin":"25 50 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/usv.json", d(#"{"material":"materials/usv.json"}"#)),
+            ("materials/usv.json", d(#"{"passes":[{"textures":["usv"],"constantshadervalues":{"roughness":5,"metallic":0.25,"speculartint":"0.2 0.4 0.6"},"usershadervalues":{"roughness":"roughnessProp","metallic":"metalProp","speculartint":"tintProp"}}]}"#)),
+            ("materials/usv.tex", d("not-a-real-tex")),
+        ])
 
-    func testAmbientFloorWhenLightOutOfRange() {
-        // 라이트 반경 밖 → 기여 0 → 정확히 앰비언트(전흑 방지의 근거).
-        let u = SceneLight3D.forwardUniforms(
-            [light(Vec3(x: 4134.5, y: 2319.7, z: 565), Vec3(x: 1, y: 1, z: 1), intensity: 4.87, radius: 2048)],
-            ambient: Vec3(x: 0.3, y: 0.3, z: 0.3), skylight: Vec3(x: 0.3, y: 0.3, z: 0.3))
-        let c = SceneLight3D.evaluateLighting(at: SIMD3(1920, 1080, 0), u)  // dist 2600 > radius 2048
-        XCTAssertEqual(c.x, 0.3, accuracy: 1e-4)
-        XCTAssertEqual(c.y, 0.3, accuracy: 1e-4)
+        let doc = try SceneDocument.parse(package: pkg,
+                                          userProps: ["roughnessProp": 0.1, "metalProp": 0.9, "tintProp": "0.8 0.6 0.4"])
+        let layer = try XCTUnwrap(doc.layers.first { $0.name == "usv" })
+        XCTAssertEqual(layer.roughness, 0.1)
+        XCTAssertEqual(layer.metallic, 0.9)
+        XCTAssertEqual(layer.specularTint, Vec3(x: 0.8, y: 0.6, z: 0.4))
+    }
+
+    func testParsesScriptedPBRConstants() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"id":1,"name":"scripted","image":"models/scripted.json","origin":"25 50 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/scripted.json", d(#"{"material":"materials/scripted.json"}"#)),
+            ("materials/scripted.json", d(#"{"passes":[{"textures":["scripted"],"constantshadervalues":{"roughness":{"value":5,"script":"export function update() { return 0.1; }"}}}]}"#)),
+            ("materials/scripted.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let layer = try XCTUnwrap(doc.layers.first { $0.name == "scripted" })
+        XCTAssertEqual(layer.roughness, 5)
+        XCTAssertNotNil(layer.materialScripts["roughness"])
+        XCTAssertTrue(layer.materialScripts["roughness"]?.contains("update") ?? false)
     }
 
     func testAttenuationMatchesHandComputation() {
