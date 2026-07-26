@@ -116,6 +116,73 @@ final class PuppetAbsentRefTests: XCTestCase {
         return d
     }
 
+    /// 스키닝 MDLV0013 합성(단일 클립): 1본(항등 바인드), ±5000 쿼드, 클립 "clipA" 1개(항등 포즈,
+    /// 시불변) — attachment·animationlayers 캐스케이드 모두 미사용, C② 테스트 전용(단층 skinMatrices
+    /// 경로가 항등 클립을 반환하므로 메시 화면상 위치는 오직 layer origin 애니에 의해서만 움직여야 한다).
+    private func singleClipPuppetMDL() -> Data {
+        var d = Data("MDLV0013".utf8)
+        d.append(Data([0x00, 0x09, 0x00, 0x80, 0x01, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]))
+        func u(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func f(_ v: Float) { u(v.bitPattern) }
+        d.append(Data("materials/m.json".utf8)); d.append(0)
+        u(0)                                    // 미상 u32(0)
+        let quad: [(Float, Float)] = [(-5000, -5000), (5000, -5000), (-5000, 5000), (5000, 5000)]
+        u(UInt32(quad.count * 52))
+        for (px, py) in quad {
+            f(px); f(py); f(0)                  // pos
+            u(0); u(0); u(0); u(0)              // boneIndices
+            f(1); f(0); f(0); f(0)              // weights → 본0 전량
+            f(0); f(0)                          // uv
+        }
+        u(6 * 2)
+        for i: UInt16 in [0, 1, 2, 2, 1, 3] { var x = i.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        d.append(Data("MDLS0001".utf8)); d.append(0)
+        u(0); u(1)                              // nextOff(파서 미검증), 본수
+        d.append(Data("root".utf8)); d.append(0)
+        u(1); u(UInt32(bitPattern: -1)); u(64)  // flags, parent=-1, 행렬크기
+        for v: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(v) }
+        d.append(0)                             // pad
+        d.append(Data("MDLA0001".utf8)); d.append(0)
+        u(0); u(1); u(0); u(0)                  // nextOff, 애니수=1, id, 0
+        d.append(Data("clipA".utf8)); d.append(0)
+        d.append(Data("loop".utf8)); d.append(0)
+        f(1); u(1); u(0); u(1); u(0)            // fps, length, 0, 트랙본수, 0
+        u(36)                                   // 1키(36B)
+        f(0); f(0); f(0); f(0); f(0); f(0); f(1); f(1); f(1)  // pos/angles/scale(항등)
+        u(0)                                    // blob2
+        return d
+    }
+
+    /// C②: attachment 없는 퍼펫 레이어가 origin 프로퍼티 키프레임 애니를 스킨 메시 배치에 반영해야 한다.
+    /// 항등 클립(단층, animationlayers 미사용) 고정 — 유일한 변수는 layer origin 애니. 수정 전에는
+    /// def 정적 origin(="32 18 0", 화면 중앙)만 써서 t=1.0(단일모드 클램프, origin.x=100032=화면 밖)
+    /// 에도 메시가 여전히 화면을 덮어 밝다(red). 수정 후에는 애니가 반영돼 화면 밖 → 어둡다(green).
+    func testPuppetOriginAnimationMovesSkinMesh() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":64,"height":36},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/p.json","size":"64 36","scale":"1 1 1",
+           "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true,
+           "origin":{"animation":{"c0":[{"frame":0,"value":32},{"frame":30,"value":100032}],
+                                   "options":{"fps":30,"length":30,"mode":"single"}},
+                     "value":"32 18 0"}}]}
+        """
+        let pkgData = encodePkg([
+            ("scene.json", Data(scene.utf8)),
+            ("models/p.json", Data(#"{"material":"materials/m.json","puppet":"models/p.mdl"}"#.utf8)),
+            ("materials/m.json", Data(#"{"passes":[{}]}"#.utf8)),   // 무텍스처 → solid 흰 퍼펫 메시
+            ("models/p.mdl", singleClipPuppetMDL()),
+        ])
+        let (r, urls) = try mountAndCapture(pkgData, id: "originanim", times: [0.0, 1.0])
+        let pm = try XCTUnwrap(r.layers.first?.puppet, "합성 퍼펫이 로드돼야(픽스처 새너티)")
+        XCTAssertEqual(pm.animations.map(\.name), ["clipA"], "단일 클립 파스(픽스처 새너티)")
+        XCTAssertEqual(urls.count, 2)
+        let b0 = try brightness(urls[0]), b1 = try brightness(urls[1])
+        XCTAssertGreaterThan(b0, 0.9, "t=0: origin=(32,18) 화면 중앙 → 메시가 화면을 덮어 밝아야")
+        XCTAssertLessThan(b1, 0.05, "t=1.0(단일모드 클램프, origin.x=100032) → 메시가 화면 밖으로 이동해 어두워야 "
+            + "(수정 전에는 def 정적 origin 을 써서 계속 밝음)")
+    }
+
     private func mountAndCapture(_ pkg: Data, id: String, times: [Float]) throws -> (SceneRenderer, [URL]) {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_alscript_\(id)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

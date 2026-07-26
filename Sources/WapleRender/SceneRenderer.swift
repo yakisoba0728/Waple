@@ -154,6 +154,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// E1(④): 2D 파티클 visible 스크립트의 최근 평가값(particleSystems 인덱스 → 표시 여부).
     /// scriptVisible/scriptTextVisible 과 별개 인덱스 공간(파티클은 별도 배열).
     var scriptParticleVisible: [Int: Bool] = [:]
+    /// C④: 퍼펫 animationlayers 캐스케이드 중 rate 가 스크립트로 매프레임 재평가되는 레이어의 dt 적분
+    /// 누적 위상(GPULayer.uid → 캐스케이드 순서 배열, 인덱스는 eff/resolved 와 동일). 레이어 수 변경
+    /// (visible 토글로 캐스케이드 구성이 바뀜) 시 길이 불일치로 자동 무효화(재시딩).
+    var puppetCascadePhase: [Int: [Float]] = [:]
+    /// C④: 위 위상 적분의 dt 계산용 — 레이어가 마지막으로 encodeLayer 를 통과한 씬 시각.
+    var puppetCascadeLastTime: [Int: Float] = [:]
 
     /// 프로퍼티 스크립트 엔진 생성: 씬 공유 컨텍스트 우선(IIFE 격리), 컨텍스트 부재 시 단독 폴백.
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
@@ -406,7 +412,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             if let pm = gl.puppet, !pm.animations.isEmpty {
                 let eff = def.animationLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
                 let playing: [(clip: Int, rate: Float)] = eff.count >= 2
-                    ? eff.map { (PuppetPose.clipIndex(model: pm, name: $0.element.name, fallback: $0.offset), $0.element.rate) }
+                    ? eff.map { (PuppetPose.clipIndex(model: pm, name: $0.element.name, fallback: $0.offset,
+                                                      clipId: $0.element.clipId), $0.element.rate) }
                     : [(0, 1)]
                 for (ci, rate) in playing {
                     guard ci >= 0, ci < pm.animations.count else { continue }
@@ -1036,6 +1043,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             NSLog("%@", "[Waple] scene mount: cannot read \(pkgURL.path): \(error)")
             throw RendererError.assetMissing
         }
+        // C①: project.json 기본값을 doc 파스보다 먼저 확보 — {user,value} 바인딩 해석(resolveUserBindings)
+        // 이 project.json 기본값도 유효값으로 보게 하려면 파스 시점 userProps 에 이미 실려 있어야 한다
+        // (종전엔 유저가 변경한 키만 실려, 미변경 키는 저작 스냅샷 baked value 로 남아 아래
+        // effectiveProperties/variantProperties 채널과 유효값 정의가 어긋났다).
+        let baseProps = (try? WallpaperProperties.parse(folderURL: project.folderURL)) ?? []
         let package: ScenePackage
         let doc: SceneDocument
         do {
@@ -1048,6 +1060,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     self?.markMissingRequiredSharedAsset()
                 }, userProps: UserPropertyStore.rawOverrides(
                     id: project.id,
+                    projectDefaults: baseProps,
                     presetOverrides: project.presetOverrides,
                     presetResourceRoot: project.presetFolderURL
                 ))
@@ -1059,7 +1072,6 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 스냅샷:
         // project.json 기본값 + 유저/프리셋 오버라이드(LibraryViewModel 유효값 계산과 동형).
         // 값 부재/미매치는 기본 image 로 폴백 → 무회귀. 변경은 reapply(remount)로 새 스냅샷.
-        let baseProps = (try? WallpaperProperties.parse(folderURL: project.folderURL)) ?? []
         let overrides = UserPropertyStore.overrides(
             id: project.id,
             presetOverrides: project.presetOverrides,
@@ -1912,6 +1924,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         scriptTextVisible.removeAll()
         scriptParticleVisible.removeAll()
         loggedDrawFailureKeys.removeAll()
+        puppetCascadePhase.removeAll(); puppetCascadeLastTime.removeAll()  // C④: 마운트 재사용 stale 위상 방지
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
         additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
         blendPipeline = nil; composePipeline = nil          // 감사 V06: 해제 누락분(마운트 반복 시 GPU 리소스 누적 방지)

@@ -799,6 +799,57 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(doc.texts[1].script, "return v;")
     }
 
+    // MARK: - C①: {user,value} 바인딩이 project.json 기본값(미변경 키)으로 해석돼야 하는지 종단 검증
+    // (UserPropertyStoreTests 는 raw 딕셔너리 계층만 확인 — 여기는 그 결과가 실제로 SceneDocument.parse
+    // 를 거쳐 파싱값에 반영되는지, 타입별(색상 문자열/불리언) 형태 불일치 없이 흐르는지를 확인한다.)
+
+    /// 색상 바인딩: baked "1 1 1"(흰색) 이지만 project.json 기본값(userProps 로 공급)이 다른 색이면
+    /// 그 값이 반영돼야 한다 — 발산 최다빈도 필드(color 76건/코퍼스, id=11 finding).
+    func testUserBindingResolvesToProjectDefaultColor() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"text":"hi","color":{"user":"tintcolor","value":"1 1 1"},
+           "origin":"0 0 0","visible":true}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        // userProps 는 UserPropertyStore.rawOverrides 가 project.json 기본값을 시딩한 형태를 모사
+        // (project.json "color" 타입은 WallpaperProperties.parseValue 에서 .string 그대로 보존 — 그
+        // rawDictionary 변환도 String 을 그대로 옮긴다).
+        let doc = try SceneDocument.parse(package: p, userProps: ["tintcolor": "0.8 0.4 0.05"])
+        XCTAssertEqual(doc.texts.count, 1)
+        XCTAssertEqual(doc.texts[0].color.x, 0.8, accuracy: 1e-6, "baked 흰색이 아니라 project 기본값을 반영해야")
+        XCTAssertEqual(doc.texts[0].color.y, 0.4, accuracy: 1e-6)
+        XCTAssertEqual(doc.texts[0].color.z, 0.05, accuracy: 1e-6)
+    }
+
+    /// 불리언 바인딩(visible): baked true 지만 project.json 기본값이 false 면 오브젝트가 드롭돼야
+    /// (truthiness 반전 6건 실측 — id=11 finding). WallpaperProperties.parseValue 의 bool 타입은
+    /// 네이티브 Swift Bool 을 만들어 rawDictionary 를 거쳐도 Bool 그대로 남는다(NSNumber 둔갑 없음).
+    func testUserBindingResolvesToProjectDefaultVisibility() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"text":"hidden by default","visible":{"user":"showtext","value":true},
+           "origin":"0 0 0"}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let doc = try SceneDocument.parse(package: p, userProps: ["showtext": false])
+        XCTAssertTrue(doc.texts.isEmpty, "baked true 가 아니라 project 기본값 false 를 반영해 드롭돼야")
+    }
+
+    /// 무회귀: userProps 에 해당 키가 전혀 없으면(프로젝트에 그 프로퍼티 자체가 없는 씬) 종전대로
+    /// baked value 를 유지한다 — resolveUserBindings 의 "미스=미해석" 폴백은 이 항목이 건드리지 않았다.
+    func testUserBindingKeepsBakedValueWhenKeyAbsentFromUserProps() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"text":"hi","color":{"user":"tintcolor","value":"1 1 1"},
+           "origin":"0 0 0","visible":true}]}
+        """
+        let p = try pkg([("scene.json", scene)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        XCTAssertEqual(doc.texts.count, 1)
+        XCTAssertEqual(doc.texts[0].color, Vec3(x: 1, y: 1, z: 1), "userProps 미공급 시 baked 값 유지(무회귀)")
+    }
+
     /// P2: 텍스트 limit 필드(WE 에디터 라벨 실측: Limit width/Max width/Limit rows/Max rows/
     /// Overflow ellipsis/Justify text=blockalign) — 체크 시에만 유효값, 미체크/부재는 nil=무제한(무회귀).
     func testParsesTextLimitFields() throws {
@@ -1157,6 +1208,35 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(t.isSolid)
     }
 
+    /// C⑨: 텍스트 outline/outlinecolor/outlinethickness/opaquebackground/backgroundcolor 파싱(실물
+    /// 스키마 3737268876 "VHS Time and Date"/3047405322 "README" 그대로).
+    func testParsesTextOutlineAndBackgroundFields() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"text":"hello","font":"systemfont_arial","pointsize":16,"origin":"0 0 0",
+           "outline":true,"outlinecolor":"0.15294 0.15294 0.15294","outlinethickness":9.72,
+           "opaquebackground":true,"backgroundcolor":"0 0 0"}]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let t = try XCTUnwrap(doc.texts.first)
+        XCTAssertTrue(t.outline)
+        XCTAssertEqual(t.outlineColor.x, 0.15294, accuracy: 1e-4)
+        XCTAssertEqual(t.outlineColor.y, 0.15294, accuracy: 1e-4)
+        XCTAssertEqual(t.outlineColor.z, 0.15294, accuracy: 1e-4)
+        XCTAssertEqual(t.outlineThickness, 9.72, accuracy: 1e-4)
+        XCTAssertTrue(t.opaqueBackground)
+        XCTAssertEqual(t.backgroundColor, Vec3(x: 0, y: 0, z: 0))
+    }
+
+    /// C⑨ 무회귀: 미저작 시 기본값(전부 off/검정) — 종전 동작과 동일.
+    func testTextOutlineAndBackgroundFieldsDefaultOff() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":1,"text":"hello","font":"systemfont_arial","pointsize":16,"origin":"0 0 0"}]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let t = try XCTUnwrap(doc.texts.first)
+        XCTAssertFalse(t.outline)
+        XCTAssertFalse(t.opaqueBackground)
+    }
+
     /// H1: 머티리얼 passes[0] 의 shader/combos/constantshadervalues/textures 파스 보존.
     func testParsesMaterialCustomShaderFields() throws {
         let scene = """
@@ -1199,7 +1279,10 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(doc.layers[0].materialConstants.isEmpty)
     }
 
-    /// H2: usershadervalues 가 머티리얼 상수를 user property 로 오버라이드.
+    /// H2/C⑦a: usershadervalues 가 머티리얼 상수를 user property 로 오버라이드.
+    /// 실물 규약(fantasticcar body.json)은 {JSON 키=user property 키, JSON 값=셰이더 상수 토큰} —
+    /// "tintcolor"(유저프로퍼티) → "color"(셰이더 상수 토큰) 처럼 서로 다른 이름일 때만 방향 결함이
+    /// 드러난다(같은 이름 roughness/metallic 은 방향이 반대여도 우연히 일치해 무증상이었다).
     func testParsesMaterialUserShaderValues() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
@@ -1207,7 +1290,7 @@ final class SceneDocumentTests: XCTestCase {
                      "angles":"0 0 0","alpha":1.0,"color":"1 1 1","brightness":1.0,"visible":true}]}
         """
         let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
-        let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"],"constantshadervalues":{"roughness":0.5,"metallic":0.2,"color":"1 1 1"},"usershadervalues":{"roughness":"roughness","metallic":"metallic","color":"tintcolor"}}]}"#
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"],"constantshadervalues":{"roughness":0.5,"metallic":0.2,"color":"1 1 1"},"usershadervalues":{"roughness":"roughness","metallic":"metallic","tintcolor":"color"}}]}"#
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
         let userProps: [String: Any] = ["roughness": 0.9, "metallic": 0.7, "tintcolor": "0.1 0.2 0.3"]
         let doc = try SceneDocument.parse(package: p, userProps: userProps)

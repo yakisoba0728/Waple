@@ -209,12 +209,13 @@ public struct ParticleMaterial: Equatable {
         let refract = ((p0["combos"] as? [String: Any])?["REFRACT"] as? NSNumber)?.intValue == 1
         let normalName = (names.count > 1 && !names[1].isEmpty) ? names[1] : nil
         var refractAmount = pfloat((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
-        // usershadervalues: 상수 → user property 키. 파스 시점에 userProps 룩업(런타임 변경은 정적 해석).
-        if let usv = p0["usershadervalues"] as? [String: Any],
-           let key = usv["ui_editor_properties_refract_amount"] as? String,
-           let raw = userProps[key],
-           let f = pfloat(raw) {
-            refractAmount = f
+        // C⑦a: usershadervalues — {JSON 키=user property 키, JSON 값=셰이더 상수 토큰}(SceneDocument
+        // 이미지 레이어 경로와 동일 방향 정정). 파스 시점에 userProps 룩업(런타임 변경은 정적 해석).
+        if let usv = p0["usershadervalues"] as? [String: Any] {
+            for (userKey, v) in usv {
+                guard let token = v as? String, token == "ui_editor_properties_refract_amount" else { continue }
+                if let raw = userProps[userKey], let f = pfloat(raw) { refractAmount = f }
+            }
         }
         // M(④): FOG 콤보 기본 1(WE 선언) — 명시 0 만 제외. 메시 경로(SceneRenderer3D:608)와 동일하게
         // 키 대소문자 무시(REFRACT 는 기존 정확일치 관례 보존 — 섞지 않음).

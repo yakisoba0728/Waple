@@ -349,6 +349,28 @@ extension SceneRenderer {
         return next
     }
 
+    /// C⑥: colorBlendMode 텍스트 — runBlendModeLayer 와 동일 인코더 분할 패턴(이미지 레이어 경로 재사용).
+    /// acc 스냅샷(dst) 확보 → f_blend 로 텍스트 쿼드 드로우 → 새 인코더 반환.
+    func runBlendModeText(_ t: GPUText, texture: MTLTexture?, acc: MTLTexture, cb: MTLCommandBuffer,
+                          ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
+                          camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
+        enc.endEncoding()
+        var snapshot: MTLTexture? = nil
+        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+           let blit = cb.makeBlitCommandEncoder() {
+            blit.copy(from: acc, to: snap)
+            blit.endEncoding()
+            snapshot = snap
+        }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = acc
+        rpd.colorAttachments[0].loadAction = .load
+        guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        encodeText(t, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
+                  time: time, device: device, displayTexture: texture, blendSnapshot: snapshot)
+        return next
+    }
+
     /// H4: REFRACT 이미지 레이어 드로우(인코더 분할): 현재 enc 를 닫고 acc(씬 컬러)를 스냅샷(blit — 진행 중
     /// 타깃은 샘플 불가, runFrameBufferLayer/runBlendModeLayer 와 동일 패턴)한 뒤, .load 로 재개한 인코더에
     /// f_refract 로 레이어를 그린다(노멀 오프셋으로 스냅샷 재샘플·곱). 스냅샷/파이프라인 확보 실패 시
@@ -648,6 +670,13 @@ extension SceneRenderer {
             case .particle:
                 encodeParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx), into: enc,
                                device: device, camOffset: &camOffset, aspectScale: &aspectScale)
+            case .text where textLayers[item.idx].def.colorBlendMode != 0:
+                // C⑥: colorBlendMode 텍스트 — 이미지 레이어와 동일 인코더 분할(acc 스냅샷 dst 블렌드).
+                guard let next = runBlendModeText(
+                    textLayers[item.idx], texture: item.idx < textTextures.count ? textTextures[item.idx] : nil,
+                    acc: acc, cb: cb, ending: enc, device: device, time: time,
+                    camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
+                enc = next
             case .text:
                 encodeText(textLayers[item.idx], into: enc, camOffset: &camOffset, aspectScale: &aspectScale,
                           time: time, device: device,
@@ -967,7 +996,7 @@ extension SceneRenderer {
         var tint = layer.tint
         var vbuf = layer.vertexBuffer
         var litRect0 = layer.litRect.0, litRect1 = layer.litRect.1  // 애니 레이어는 아래서 재계산
-        // H1: 커스텀 셰이더용 유효 변환(애니/스크립트/attachment 반영 후).
+        // H1/C②: 커스텀 셰이더·퍼펫 스킨 메시 배치 공용 유효 변환(애니/스크립트/attachment 반영 후).
         var effectiveTransform: (origin: Vec2, scale: Vec2, angle: Float)? = nil
         // F723: thisLayer 직접 대입 read-back(구조·우선순위는 함수 주석 참조). 스크립트 없는 레이어는
         // JS 평가 비용 0(propScripts/animLayerScripts 가 비어 있으면 nil).
@@ -976,8 +1005,6 @@ extension SceneRenderer {
             guard layer.def != nil, !layer.propScripts.isEmpty || !layer.animLayerScripts.isEmpty else { return nil }
             return readBackScriptLayerState(index: layer.uid)   // uid = doc.layers 인덱스 = JS layers 인덱스
         }()
-        // attachment 적용 후 유효 변환(퍼펫 자식이 스킨 정점 산출에도 사용) — nil 이면 def 정적값 그대로.
-        var attachedTransform: (origin: Vec2, scale: Vec2, angle: Float)? = nil
         if let def = layer.def, let device {
             func animValue(_ key: String, _ comp: Int, _ base: Float) -> Float {
                 def.animations[key]?.value(component: comp, atTime: time, base: base) ?? base
@@ -993,7 +1020,8 @@ extension SceneRenderer {
                 let eff = att.parentLayers.enumerated().filter { $0.element.visible && $0.element.blend > 0 }
                 // 부모 퍼펫 렌더와 동일 디스패치: 2+ 레이어 = 캐스케이드, 그 외 = 클립 0(attachmentFrame 폴백).
                 let resolved: [(anim: Int, additive: Bool, weight: Float, rate: Float)] = eff.count >= 2
-                    ? eff.map { (PuppetPose.clipIndex(model: att.model, name: $0.element.name, fallback: $0.offset),
+                    ? eff.map { (PuppetPose.clipIndex(model: att.model, name: $0.element.name, fallback: $0.offset,
+                                                      clipId: $0.element.clipId),
                                  $0.element.additive, $0.element.blend, $0.element.rate) }
                     : []
                 if let A = PuppetPose.attachmentFrame(model: att.model, name: att.name, layers: resolved, time: time),
@@ -1004,7 +1032,6 @@ extension SceneRenderer {
                     angle += atan2(d.m.columns.0.y, d.m.columns.0.x)
                     // ponytail: 델타 선형부는 각+축배율로 분해(전단 폐기) — 2D 퍼펫 본은 z회전·평행이동 위주.
                     scale = Vec2(x: scale.x * simd_length(d.m.columns.0), y: scale.y * simd_length(d.m.columns.1))
-                    attachedTransform = (origin, scale, angle)
                     quadDirty = true
                 }
             }
@@ -1060,10 +1087,10 @@ extension SceneRenderer {
                     litRect0 = r.0; litRect1 = r.1
                 }
             }
-            // H1: 커스텀 셰이더 레이어는 유효 변환을 보존(파이프라인 선택에서 행렬 산출).
-            if layer.customShader != nil {
-                effectiveTransform = (origin, scale, angle)
-            }
+            // H1/C②: 유효 변환(애니/스크립트/attachment 반영 후)을 항상 보존 — 커스텀 셰이더 파이프라인
+            // 행렬 산출뿐 아니라 퍼펫 스킨 메시 배치(:1056)도 이 값을 쓴다. 애니/스크립트/attachment가
+            // 전무하면 origin/scale/angle == def 정적값이라 비트동일(무회귀).
+            effectiveTransform = (origin, scale, angle)
             // F743(S-35): 라이브 디스크립터 채널 — 이번 프레임 최종 변환 기록(알파/가시성은 아래서 병기).
             liveLayerStates[layer.uid] = ScriptLayerReadBack(
                 visible: nil, alpha: nil,
@@ -1137,16 +1164,51 @@ extension SceneRenderer {
             let mats: [simd_float4x4]
             if eff.count >= 2 {
                 let resolved = eff.map { (pos, L) in
-                    (anim: PuppetPose.clipIndex(model: pm, name: L.name, fallback: pos),
+                    (anim: PuppetPose.clipIndex(model: pm, name: L.name, fallback: pos, clipId: L.clipId),
                      additive: L.additive, weight: L.blend, rate: L.rate)
                 }
-                mats = PuppetPose.blendedSkinMatrices(model: pm, layers: resolved, time: time)
+                // C④: rate 가 스크립트로 매프레임 재평가되는 레이어(오디오 반응 등)만 dt 위상적분 —
+                // 정적 rate 레이어는 기존 time×rate 순간위상 그대로(비트동일). rate 스크립트 부재 씬은
+                // overrideFrames 전원 nil → PuppetPose 내부 기존 계산과 100% 동일.
+                var overrideFrames: [Float?] = [Float?](repeating: nil, count: resolved.count)
+                var phase = puppetCascadePhase[layer.uid] ?? []
+                if phase.count != resolved.count { phase = [Float](repeating: .nan, count: resolved.count) }
+                let dt = puppetCascadeLastTime[layer.uid].map { max(0, time - $0) } ?? 0
+                var phaseTouched = false
+                for (i, e) in eff.enumerated() {
+                    guard layer.animLayerScripts.contains(where: { $0.key == "rate" && $0.layerIndex == e.offset })
+                    else { continue }
+                    let prev: Float? = phase[i].isNaN ? nil : phase[i]
+                    let r = PuppetPose.integratedCascadeFrame(model: pm, anim: resolved[i].anim,
+                                                              rate: resolved[i].rate, time: time, dt: dt,
+                                                              previousPhase: prev)
+                    phase[i] = r.phase
+                    overrideFrames[i] = r.frame
+                    phaseTouched = true
+                }
+                if phaseTouched {
+                    puppetCascadePhase[layer.uid] = phase
+                    puppetCascadeLastTime[layer.uid] = time
+                }
+                mats = PuppetPose.blendedSkinMatrices(model: pm, layers: resolved, time: time,
+                                                      overrideFrames: overrideFrames)
+            } else if let (_, L) = eff.first {
+                // C③: 활성 레이어가 1개면 종전엔 무조건 클립 0(하드코딩)이었다 — id/이름 매칭 없이.
+                // clipIndex 와 동일 규약(id 최우선 → 이름 서브스트링 → fallback)으로 통일하되, fallback
+                // 을 0 으로 둬 id/이름 모두 미매칭이면 종전과 100% 동일한 클립 0 을 유지(무회귀).
+                let ci = PuppetPose.clipIndex(model: pm, name: L.name, fallback: 0, clipId: L.clipId)
+                mats = PuppetPose.skinMatrices(model: pm, animation: ci, time: time)
             } else {
                 mats = PuppetPose.skinMatrices(model: pm, animation: 0, time: time)
             }
             let pos = PuppetPose.skinnedPositions(model: pm, matrices: mats)
-            // attachment 자식 퍼펫(머리카락 등): 부착 델타가 합성된 변환으로 스킨 메시 배치.
-            let (po, ps, pa) = attachedTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
+            // C②: 스킨 메시 배치는 이 함수가 앞서 계산한 유효 변환(애니/스크립트/attachment 반영,
+            // effectiveTransform)을 써야 한다 — attachment 자식 퍼펫(머리카락 등)의 부착 델타뿐 아니라
+            // 부모 퍼펫 자신의 origin/scale/angles 키프레임·프로퍼티 스크립트도 여기 포함된다. 이전에는
+            // attachedTransform(attachment 전용) ?? def 정적값으로 떨어져, attachment 없는 퍼펫의 애니/
+            // 스크립트 변환이 계산만 되고 버려졌다(6씬 398오브젝트 실측 — 감사 C② wf3#20). 애니/스크립트/
+            // attachment가 전무하면 effectiveTransform == def 정적값이라 비트동일(무회귀).
+            let (po, ps, pa) = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
             let verts = SceneRenderer.puppetVertices(model: pm, positions: pos,
                                                      origin: po, scale: ps, angleZ: pa,
                                                      projW: projW, projH: projH)
@@ -1302,7 +1364,8 @@ extension SceneRenderer {
     func encodeText(_ t: GPUText, into enc: MTLRenderCommandEncoder,
                             camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>,
                             time: Float = 0, device: MTLDevice? = nil,
-                            displayTexture: MTLTexture? = nil) {   // F741(S-13): 이펙트 적용 텍스처(없으면 원본)
+                            displayTexture: MTLTexture? = nil,   // F741(S-13): 이펙트 적용 텍스처(없으면 원본)
+                            blendSnapshot: MTLTexture? = nil) {  // C⑥: colorBlendMode dst 스냅샷(이미지 레이어와 동형)
         guard let pipeline, let tex = displayTexture ?? t.texture else { return }
         var tint = t.tint
         var vbuf = t.vertexBuffer
@@ -1374,6 +1437,24 @@ extension SceneRenderer {
         if !(scriptTextVisible[t.uid] ?? t.initialVisible) { return }
         guard let vbuf else { return }
         var depth = SIMD2<Float>(1, 1)
+        // C⑥: colorBlendMode — 이미지 레이어(encodeLayer)와 동일 f_blend 경로 재사용. 스냅샷 없으면
+        // (인코더 미분할 호출자 등) 일반 premult-over 폴백(무회귀).
+        if let blendSnapshot, let blendPipeline, t.def.colorBlendMode != 0 {
+            enc.setRenderPipelineState(blendPipeline)
+            enc.setVertexBuffer(vbuf, offset: 0, index: 0)
+            enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            enc.setVertexBytes(&depth, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+            enc.setVertexBytes(&aspectScale, length: MemoryLayout<SIMD2<Float>>.stride, index: 3)
+            var shake = frameShakeOffset
+            enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
+            enc.setFragmentTexture(tex, index: 0)
+            enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            enc.setFragmentTexture(blendSnapshot, index: 1)
+            var mode = Int32(t.def.colorBlendMode)
+            enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            return
+        }
         enc.setRenderPipelineState(pipeline)
         enc.setVertexBuffer(vbuf, offset: 0, index: 0)
         enc.setVertexBytes(&camOffset, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)

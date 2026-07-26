@@ -99,6 +99,11 @@ public struct Model3D: Equatable {
         /// JSON cstring {"frame":N,"name":"…"})`. 재생이 frame 을 지나면 animationEvent 발화
         /// (3351179520/3396722575 错帧 동기, 젤다 talon snore·link Look Left/Right).
         public var events: [AnimationMarker] = []
+        /// C③: 클립 고유 id(scene.json animationlayers[].animation 이 참조하는 정수) — 트레일러 u16
+        /// 필드(트레일러 시작 +31, 없으면 nil)에서 추출, 마지막 클립은 트레일러에 id가 없어 헤더의
+        /// baseId 를 대신 쓴다(실측 3파일·17클립 전수 교차검증: 3384019940 头/3517818807 rwm/3486806915 头).
+        /// nil = 추출 실패(트레일러 부족 등) — 이름 휴리스틱 폴백 유지.
+        public var id: Int? = nil
     }
 
     /// 부착점(MDAT0001 섹션) — 씬 오브젝트의 `attachment` 키가 **이름으로** 참조하는 본-슬롯.
@@ -380,6 +385,7 @@ public struct Model3D: Equatable {
         // 헤더: magic(8)|u8 0|u32 nextOff|u32 animCount|u32 baseId|u32 0
         var o = magicOff + 9
         guard u32(o) != nil else { return [] }
+        let baseId = u32(o + 8)   // C③: 마지막 클립의 id(트레일러에 미기재) — 실측 3파일 전수 일치.
         o += 16
         var anims: [Model3D.Animation] = []
         while let h = tryHeader(o) {
@@ -433,6 +439,15 @@ public struct Model3D: Equatable {
             } else {
                 var anim = Animation(name: h.name, mode: h.mode, fps: h.fps, lengthFrames: h.length, tracks: tracks)
                 anim.events = events
+                // C③: 클립 id — next(다음 헤더) 가 있으면 이 클립 트레일러의 고정오프셋(트레일러 시작+31)
+                // u16 필드(실측 3파일·17클립 전수 일치), 트레일러가 짧아 못 읽으면 nil(이름 휴리스틱
+                // 폴백). next 가 없으면(섹션의 마지막 실클립) 트레일러에 id가 없어 헤더 baseId 를 대신
+                // 쓴다(실측 3파일 전수 일치 — 3384019940 头 clip3/3517818807 rwm clip12/3486806915 头 clip2).
+                if let n = next {
+                    if let u = readU16LE(bytes, at: o + 31), o + 33 <= n { anim.id = Int(u) }
+                } else if let base = baseId {
+                    anim.id = Int(base)
+                }
                 anims.append(anim)
             }
             guard let n = next else { break }

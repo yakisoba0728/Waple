@@ -38,18 +38,24 @@ public struct PropertyAnimation: Equatable {
     public let mode: String      // "single"(끝 클램프) | "loop"(랩) | "mirror"(왕복 — 젤다 sky change)
     public let relative: Bool    // true 면 base + v
     public let events: [AnimationMarker]   // options.events 마커(없으면 빈 배열)
+    /// C⑤: options.startpaused — 스크립트가 play() 하기 전까지 정지(frame 0) 상태로 저작됐다는 계약
+    /// (lib.sceneScript.d.ts IAnimation.play "Start playing the animation if it's paused or stopped").
+    /// play()/pause() 런타임 제어(스크립트 트리거 연결)는 미구현이라 이 값이 true 인 애니는 항상 frame 0
+    /// 값으로 고정 평가된다 — WE 는 트리거 전까지 이 상태이므로 "영구 미발화"보다 "즉시 재생+고착"보다
+    /// 정합적(마운트 직후 다수 상태와 일치). 트리거 이후 값은 여전히 미반영(별건 — caveats 참조).
+    public let startPaused: Bool
 
     public init(tracks: [[PropertyKeyframe]], fps: Float, length: Float, mode: String, relative: Bool,
-                events: [AnimationMarker] = []) {
+                events: [AnimationMarker] = [], startPaused: Bool = false) {
         self.tracks = tracks; self.fps = fps; self.length = length; self.mode = mode; self.relative = relative
-        self.events = events
+        self.events = events; self.startPaused = startPaused
     }
 
-    /// t(초) 시점의 성분 값. 트랙 없음 → base 유지.
+    /// t(초) 시점의 성분 값. 트랙 없음 → base 유지. startPaused → 항상 frame 0(C⑤).
     public func value(component: Int, atTime t: Float, base: Float) -> Float {
         guard component < tracks.count, !tracks[component].isEmpty else { return base }
         let track = tracks[component]
-        var frame = t * fps
+        var frame = (startPaused ? 0 : t) * fps
         if mode == "loop", length > 0 {
             frame = frame.truncatingRemainder(dividingBy: length)
             if frame < 0 { frame += length }
@@ -183,6 +189,8 @@ public struct PropertyAnimation: Equatable {
             length: f(opts["length"]) ?? (tracks.compactMap { $0.last?.frame }.max() ?? 0),
             mode: (opts["mode"] as? String) ?? "single",
             relative: (a["relative"] as? Bool) ?? false,
-            events: events)
+            events: events,
+            // C⑤: startpaused(=스크립트 play() 전까지 정지) — 부재/false 는 종전대로 무조건 재생(무회귀).
+            startPaused: (opts["startpaused"] as? Bool) ?? false)
     }
 }

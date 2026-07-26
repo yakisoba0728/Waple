@@ -97,10 +97,15 @@ public enum PuppetPose {
                       a.columns.3 + (b.columns.3 - a.columns.3) * t)
     }
 
-    /// 레이어 이름 → 애니 클립 인덱스(서브스트링 매칭, 실패 시 fallback 위치 클램프). 애니 없음 → 0.
-    public static func clipIndex(model: PuppetModel, name: String, fallback: Int) -> Int {
+    /// 레이어 → 애니 클립 인덱스. C③: clipId(scene.json animationlayers[].animation, 모델 클립의 실제
+    /// id — PuppetModel.Animation.id, 컨테이너형(MDLV0016+) 퍼펫만 보유·네이티브 MDLV0013 은 항상 nil)
+    /// 가 있고 매칭되면 최우선(저작 도구가 클립명을 제네릭 "动画 1/2/3" 으로 남기고 레이어 이름에만
+    /// 의미부여하는 실물 사례 — 이름 휴리스틱 오선택 회피). 없거나 미매칭이면 종전 이름 서브스트링
+    /// 매칭 → fallback 위치 클램프(무회귀: clipId nil 인 씬은 100% 종전 경로). 애니 없음 → 0.
+    public static func clipIndex(model: PuppetModel, name: String, fallback: Int, clipId: Int? = nil) -> Int {
         let count = model.animations.count
         guard count > 0 else { return 0 }
+        if let cid = clipId, let i = model.animations.firstIndex(where: { $0.id == cid }) { return i }
         let ln = name.lowercased()
         if !ln.isEmpty, let i = model.animations.firstIndex(where: {
             // F443: 빈 클립명(V0013 파스는 빈 애니 이름을 허용 — PuppetModel.parseV0013)은 contains("") 가
@@ -122,15 +127,18 @@ public enum PuppetPose {
 
     /// 본 월드 행렬(모델공간 — 스킨의 bindWorld⁻¹ 곱 이전). layers 캐스케이드 규약은
     /// blendedSkinMatrices 와 동일, 빈 layers = 바인드 포즈. 부착점(attachment) 프레임 산출용.
+    /// C④: overrideFrames[i] 가 non-nil 이면 그 레이어의 프레임을 time×rate 순간위상 대신 그대로 쓴다
+    /// (호출측이 dt 적분한 값 — 스크립트 구동 rate 전용). nil 인 인덱스는 기존 계산 그대로(비트동일).
     static func worldMatrices(model: PuppetModel,
                               layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
-                              time: Float) -> [simd_float4x4] {
+                              time: Float, overrideFrames: [Float?]? = nil) -> [simd_float4x4] {
         let n = model.bones.count
         guard n > 0 else { return [] }
         let bind = bindWorlds(model)
         guard !layers.isEmpty else { return bind }
-        // 레이어별 프레임(자기 클립의 fps/mode/length + rate 배속).
-        let frames: [Float] = layers.map { L in
+        // 레이어별 프레임(자기 클립의 fps/mode/length + rate 배속) — override 우선.
+        let frames: [Float] = layers.enumerated().map { (li, L) in
+            if let of = overrideFrames, li < of.count, let f = of[li] { return f }
             guard L.anim >= 0, L.anim < model.animations.count else { return 0 }
             let a = model.animations[L.anim]
             return frame(time: time * L.rate, fps: a.fps, length: a.lengthFrames, mode: a.mode)
@@ -164,16 +172,33 @@ public enum PuppetPose {
     /// 이후 부모체인 world → `skin = world × bindWorld⁻¹`(skinMatrices 와 동일).
     /// 단일 절대 레이어 weight=1 → `skinMatrices(animation:)` 와 동일(= 단층 무회귀 보장).
     /// ⚠️ 가산 델타 기준(클립 프레임0)·정규화·성분 lerp 는 WE C++ 내부 규약의 근사 — SP 리포트 참조.
+    /// C④: overrideFrames 는 worldMatrices 로 그대로 전달(스크립트 구동 rate dt 적분 — 상세는 그쪽 주석).
     public static func blendedSkinMatrices(model: PuppetModel,
                                            layers: [(anim: Int, additive: Bool, weight: Float, rate: Float)],
-                                           time: Float) -> [simd_float4x4] {
+                                           time: Float, overrideFrames: [Float?]? = nil) -> [simd_float4x4] {
         let n = model.bones.count
         guard n > 0, !layers.isEmpty else {
             return [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
         }
-        let world = worldMatrices(model: model, layers: layers, time: time)
+        let world = worldMatrices(model: model, layers: layers, time: time, overrideFrames: overrideFrames)
         let bindWorld = bindWorlds(model)
         return (0..<n).map { world[$0] * safeInverse(bindWorld[$0]) }
+    }
+
+    /// C④: 스크립트 구동 rate(매프레임 재평가)의 캐스케이드 위상 dt 적분. rate 가 프레임마다 바뀌면
+    /// time×rate 순간위상은 위상이 t×Δrate 만큼 순간 이동해 포즈가 매 프레임 무작위로 점프한다(감사
+    /// C④ — 오디오 반응 rate 씬 실측). 이전 누적위상에 dt×rate×fps 를 더해 위상을 연속시킨다.
+    /// previousPhase가 nil(첫 프레임/캐스케이드 레이어 구성 변경으로 무효화)이면 그 프레임만
+    /// time×rate 순간위상으로 시딩(다음 프레임부터 연속 적분 — 정적 rate 경로와 값이 일치하는 시작점).
+    /// 반환 phase 는 래핑 전 원시 누적값(다음 호출에 그대로 넘겨야 연속성 유지), frame 은 표시용(래핑됨).
+    public static func integratedCascadeFrame(model: PuppetModel, anim: Int, rate: Float,
+                                               time: Float, dt: Float,
+                                               previousPhase: Float?) -> (phase: Float, frame: Float) {
+        guard anim >= 0, anim < model.animations.count else { return (0, 0) }
+        let a = model.animations[anim]
+        let base = previousPhase.map { $0 + dt * rate * a.fps } ?? (time * rate * a.fps)
+        let f = frame(time: base / max(a.fps, 1e-6), fps: a.fps, length: a.lengthFrames, mode: a.mode)
+        return (base, f)
     }
 
     /// 부착점 프레임(퍼펫 모델공간 y-up): `boneWorld(t) × attLocal` — 씬 오브젝트 `attachment`

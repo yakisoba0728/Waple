@@ -20,6 +20,21 @@ public enum UserPropertyStore {
         return raw
     }
 
+    /// C①: {user,value} 바인딩 해석용 유효값 raw 딕셔너리 — project.json 기본값(가장 낮은 우선순위)
+    /// 위에 preset·유저 오버라이드를 순서대로 얹는다(defaults < preset < user, effectiveProperties 와
+    /// 동일 계층). 사용자가 한 번도 건드리지 않은 키도 project.json 기본값으로 해석되게 하는 게 목적 —
+    /// 종전 rawOverrides(id:presetOverrides:presetResourceRoot:)는 defaults 를 아예 안 실어 SceneDocument.
+    /// resolveUserBindings 가 미변경 키를 저작 시점 baked value 그대로 남겼다(effectiveProperties/
+    /// variantProperties·engine.userProperties 채널과 유효값 정의가 어긋나는 결함의 근본원인).
+    public static func rawOverrides(id: String, projectDefaults: [WallpaperProperty],
+                                    presetOverrides: [String: PropertyValue], presetResourceRoot: URL?) -> [String: Any] {
+        var raw = rawDictionary(from: Dictionary(
+            projectDefaults.map { ($0.key, $0.value) }, uniquingKeysWith: { first, _ in first }))
+        raw.merge(rawDictionary(from: resolvingPresetResources(presetOverrides, root: presetResourceRoot))) { _, v in v }
+        raw.merge(rawOverrides(id: id)) { _, user in user }
+        return raw
+    }
+
     public static func overrides(id: String) -> [String: PropertyValue] {
         var out: [String: PropertyValue] = [:]
         for (k, v) in rawOverrides(id: id) {

@@ -77,6 +77,7 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(defaulted.specularTint, Vec3(x: 1, y: 1, z: 1))
     }
 
+    /// C⑦a: usershadervalues 실물 규약은 {JSON 키=user property 키, JSON 값=셰이더 상수 토큰}.
     func testParsesUserShaderValuesForPBRScalars() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100}},
@@ -87,7 +88,7 @@ final class SceneForwardLightingTests: XCTestCase {
         let pkg = ScenePackage.assemble([
             ("scene.json", d(scene)),
             ("models/usv.json", d(#"{"material":"materials/usv.json"}"#)),
-            ("materials/usv.json", d(#"{"passes":[{"textures":["usv"],"constantshadervalues":{"roughness":5,"metallic":0.25,"speculartint":"0.2 0.4 0.6"},"usershadervalues":{"roughness":"roughnessProp","metallic":"metalProp","speculartint":"tintProp"}}]}"#)),
+            ("materials/usv.json", d(#"{"passes":[{"textures":["usv"],"constantshadervalues":{"roughness":5,"metallic":0.25,"speculartint":"0.2 0.4 0.6"},"usershadervalues":{"roughnessProp":"roughness","metalProp":"metallic","tintProp":"speculartint"}}]}"#)),
             ("materials/usv.tex", d("not-a-real-tex")),
         ])
 

@@ -44,6 +44,9 @@ public struct PuppetModel: Equatable {
         /// 이벤트 마커(MDLV0023 컨테이너 퍼펫의 MDLA0006 트레일러 — Model3D.Animation.events 이식).
         /// 네이티브 MDLV0013(MDLA0001)은 코퍼스 이벤트 실측 0 — 항상 빈 배열.
         public var events: [AnimationMarker] = []
+        /// C③: 클립 고유 id — MDLV0023 등 컨테이너 퍼펫은 Model3D.Animation.id 이식(있으면), 네이티브
+        /// MDLV0013(MDLA0001)은 클립별 id 필드가 없어 항상 nil(이름 휴리스틱 폴백 유지).
+        public var id: Int? = nil
     }
 
     /// 부착점(씬 `attachment` 이름 본-슬롯 부착) — Model3D.Attachment 와 동형(컨테이너 경로에서 이식).
@@ -95,6 +98,7 @@ public struct PuppetModel: Equatable {
                                   track.map { Key(position: $0.position, angles: $0.angles, scale: $0.scale) }
                               })
             a.events = anim.events
+            a.id = anim.id   // C③: Model3D 클립 id 이식(있으면) — id 기반 클립 선택의 근거.
             return a
         }
         return pm

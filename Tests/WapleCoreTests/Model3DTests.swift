@@ -355,6 +355,106 @@ final class Model3DTests: XCTestCase {
         XCTAssertEqual(mats.count, 2)
     }
 
+    /// C③: MDLA0006 클립 id 추출 — 실측 3파일·17클립 전수 교차검증(3384019940 头/3517818807 rwm/
+    /// 3486806915 头): 트레일러가 있는(next 존재) 클립은 트레일러 시작+31 오프셋 u16 이 그 클립의 id,
+    /// 섹션의 마지막 실클립(next 없음)은 트레일러에 id가 없어 헤더 baseId 를 대신 쓴다.
+    func testParsesAnimationClipIdFromTrailerAndBaseIdFallback() throws {
+        let vSkin = SynthVert(pos: SIMD3(1, 1, 1), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
+                              bones: SIMD4(1, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
+        let m0 = SynthMesh(material: "materials/a.json", min: SIMD3(0, 0, 0), max: SIMD3(1, 1, 1),
+                           skinned: true, verts: [vSkin, vSkin, vSkin], indices: [0, 1, 2])
+        var d = makeModelU16([m0])
+        d.append(Data("MDLS0004".utf8)); d.append(0)
+        u(0, into: &d); u(1, into: &d)
+        d.append(Data("RootNode".utf8)); d.append(0)
+        u(1, into: &d)
+        var pr: Int32 = -1; withUnsafeBytes(of: &pr) { d.append(contentsOf: $0) }
+        u(64, into: &d)
+        for x: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(x, into: &d) }
+        d.append(0)
+        // 헤더: nextOff(미검증)|animCount(불신)|baseId=555|0
+        d.append(Data("MDLA0006".utf8)); d.append(0)
+        u(0, into: &d); u(99, into: &d); u(555, into: &d); u(0, into: &d)
+        func appendKey(_ p: SIMD3<Float>, _ a: SIMD3<Float>, _ s: SIMD3<Float>) {
+            f(p.x, into: &d); f(p.y, into: &d); f(p.z, into: &d)
+            f(a.x, into: &d); f(a.y, into: &d); f(a.z, into: &d)
+            f(s.x, into: &d); f(s.y, into: &d); f(s.z, into: &d)
+        }
+        func appendAnim(_ name: String, _ mode: String, _ fps: Float, _ length: Int) {
+            d.append(Data(name.utf8)); d.append(0)
+            d.append(Data(mode.utf8)); d.append(0)
+            f(fps, into: &d); u(UInt32(length), into: &d); u(0, into: &d); u(1, into: &d); u(0, into: &d)
+            u(36, into: &d); appendKey(SIMD3(0, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1))
+            u(0, into: &d)  // blob2
+        }
+        // anim0: 39B 트레일러, id=777 을 트레일러 시작+31 오프셋(u16 LE)에 배치(실측 오프셋).
+        appendAnim("clipA", "loop", 30, 1)
+        var trailer0 = [UInt8](repeating: 0, count: 39)
+        trailer0[31] = 0x09; trailer0[32] = 0x03   // 0x0309 = 777 LE
+        d.append(contentsOf: trailer0)
+        // anim1(마지막 실클립): 트레일러 없음(섹션 종료) — id는 baseId(555)로 폴백돼야.
+        appendAnim("clipB", "single", 24, 0)
+
+        let m = try XCTUnwrap(Model3D.parse(d))
+        XCTAssertEqual(m.animations.count, 2)
+        XCTAssertEqual(m.animations[0].name, "clipA")
+        XCTAssertEqual(m.animations[0].id, 777, "트레일러 오프셋+31 u16 이 클립 id 로 추출돼야")
+        XCTAssertEqual(m.animations[1].name, "clipB")
+        XCTAssertEqual(m.animations[1].id, 555, "마지막 실클립은 트레일러에 id가 없어 헤더 baseId 로 폴백돼야")
+    }
+
+    /// C③: 트레일러가 너무 짧아(실측 마지막 클립 32B 관측) id 필드를 못 읽으면 nil(이름 휴리스틱 폴백
+    /// 유지) — 잘못된 오프셋을 억지로 읽어 그릇된 id 를 만들지 않는다.
+    func testAnimationClipIdNilWhenTrailerTooShortWithNextHeader() throws {
+        let vSkin = SynthVert(pos: SIMD3(1, 1, 1), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
+                              bones: SIMD4(1, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
+        let m0 = SynthMesh(material: "materials/a.json", min: SIMD3(0, 0, 0), max: SIMD3(1, 1, 1),
+                           skinned: true, verts: [vSkin, vSkin, vSkin], indices: [0, 1, 2])
+        var d = makeModelU16([m0])
+        d.append(Data("MDLS0004".utf8)); d.append(0)
+        u(0, into: &d); u(1, into: &d)
+        d.append(Data("RootNode".utf8)); d.append(0)
+        u(1, into: &d)
+        var pr: Int32 = -1; withUnsafeBytes(of: &pr) { d.append(contentsOf: $0) }
+        u(64, into: &d)
+        for x: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(x, into: &d) }
+        d.append(0)
+        d.append(Data("MDLA0006".utf8)); d.append(0)
+        u(0, into: &d); u(99, into: &d); u(555, into: &d); u(0, into: &d)
+        func appendKey() {
+            for _ in 0..<9 { f(0, into: &d) }
+        }
+        func appendAnim(_ name: String, _ mode: String) {
+            d.append(Data(name.utf8)); d.append(0)
+            d.append(Data(mode.utf8)); d.append(0)
+            f(30, into: &d); u(1, into: &d); u(0, into: &d); u(1, into: &d); u(0, into: &d)
+            u(36, into: &d); appendKey()
+            u(0, into: &d)
+        }
+        appendAnim("clipA", "loop")
+        d.append(contentsOf: [UInt8](repeating: 0, count: 32))  // 32B — offset 31 읽기엔 부족(33B 필요)
+        appendAnim("clipB", "single")
+
+        let m = try XCTUnwrap(Model3D.parse(d))
+        XCTAssertEqual(m.animations.count, 2)
+        XCTAssertNil(m.animations[0].id, "트레일러가 짧아 id 를 못 읽으면 nil 이어야(그릇된 값 대신 폴백)")
+    }
+
+    /// C③: Model3DPose.resolveAnimation 도 clipId 가 있으면 이름 휴리스틱보다 우선한다(2D PuppetPose.
+    /// clipIndex 와 동일 규약 — 3D scene object 경로용).
+    func testResolveAnimationPrefersClipIdOverNameHeuristic() {
+        let animA = Model3D.Animation(name: "动画 1", mode: "loop", fps: 30, lengthFrames: 1, tracks: [], id: 100)
+        let animB = Model3D.Animation(name: "动画 2", mode: "loop", fps: 30, lengthFrames: 1, tracks: [], id: 200)
+        let m = Model3D(meshes: [], animations: [animA, animB])
+        // 이름 매칭만이면 "wave" 는 제네릭 이름 어디에도 안 붙어 폴백 인덱스 0.
+        XCTAssertEqual(Model3DPose.resolveAnimation(model: m, layerName: "wave"), 0)
+        XCTAssertEqual(Model3DPose.resolveAnimation(model: m, layerName: "wave", clipId: 200), 1,
+                       "clipId 가 이름 휴리스틱보다 우선해야")
+        XCTAssertEqual(Model3DPose.resolveAnimation(model: m, layerName: "wave", clipId: 100), 0)
+        XCTAssertEqual(Model3DPose.resolveAnimation(model: m, layerName: "wave", clipId: 999), 0,
+                       "미매칭 clipId 는 이름 휴리스틱/폴백으로 정상 폴백해야(무회귀)")
+    }
+
     /// Kirby_puppet.mdl(3441873795) 클래스: 스킨드 멀티메시 + 메시 간 26B 트레일러(u8 0|u8 1|u32 16|
     /// 16B|u32 0) + mesh1 헤더에 여분 u32 1개 + channelmap 정점 stride 44(pos|미상 24B|uv, 본/웨이트 없음).
     /// 종전 고정 '+6 스킵'은 mesh1 cstring 중간에 착지해 전체 파스 실패(377/378 의 마지막 1).

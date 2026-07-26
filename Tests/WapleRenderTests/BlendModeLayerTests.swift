@@ -123,4 +123,88 @@ final class BlendModeLayerTests: XCTestCase {
         let expected = pow(128.0 / 255.0, Double(layerCount))
         XCTAssertEqual(Double(c.redComponent), expected, accuracy: 0.02)
     }
+
+    // MARK: - C⑥ 텍스트 colorBlendMode(파스도 소비도 없어 항상 Normal 합성되던 결함)
+
+    /// 흰 배경 위 빨강 불투명 텍스트 × difference(18) → 글리프 안쪽은 |흰-빨강|=시안(0,1,1).
+    /// 미구현(항상 Normal 합성)이면 불투명 빨강 텍스트가 그대로(1,0,0) 그려져 시안이 전혀 안 나온다 —
+    /// multiply 처럼 배경이 흰색이라 결과가 우연히 같아지는 모드는 오라클로 못 써서 difference 사용.
+    func testTextColorBlendMode_differenceOnWhiteBackgroundYieldsCyanGlyph() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
+           {"text":"HELLO","font":"systemfont_arial","pointsize":300.0,"color":"1 0 0","alpha":1,
+            "horizontalalign":"center","verticalalign":"center","origin":"960 540 0","size":"1 1",
+            "colorBlendMode":18,"visible":{"value":true}}]}
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+        ]
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_bm_text_diff", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg(files).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "textdiff", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "textdiff", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_bm_text_diff")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 128, height: 72, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        // 중앙 행에서 가장 짙은(빨강 최소) 픽셀 = 글리프 내부(안티에일리어싱 경계 배제).
+        var minRed: CGFloat = 1
+        var atMinRed: NSColor? = nil
+        for x in stride(from: 0, to: 128, by: 1) {
+            guard let c = rep.colorAt(x: x, y: 36) else { continue }
+            if c.redComponent < minRed { minRed = c.redComponent; atMinRed = c }
+        }
+        let c = try XCTUnwrap(atMinRed)
+        NSLog("%@", "[Waple] text diff-blend darkest-red px = r=\(c.redComponent) g=\(c.greenComponent) b=\(c.blueComponent)")
+        XCTAssertLessThan(c.redComponent, 0.3, "difference(흰-빨강) → 글리프 내부는 red 성분이 낮아야(시안)")
+        XCTAssertGreaterThan(c.greenComponent, 0.7, "difference(흰-빨강) → green 성분은 높아야(시안)")
+        XCTAssertGreaterThan(c.blueComponent, 0.7, "difference(흰-빨강) → blue 성분은 높아야(시안)")
+    }
+
+    /// colorBlendMode 미지정(기본 0/normal)은 종전과 동일 — 텍스트가 정상 불투명으로 그려져야(무회귀).
+    func testTextColorBlendMode_defaultZeroRendersNormalOpaque() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
+           {"text":"HELLO","font":"systemfont_arial","pointsize":300.0,"color":"1 0 0","alpha":1,
+            "horizontalalign":"center","verticalalign":"center","origin":"960 540 0","size":"1 1",
+            "visible":{"value":true}}]}
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+        ]
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_bm_text_normal", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg(files).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "textnormal", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "textnormal", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_bm_text_normal")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 128, height: 72, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        var maxRed: CGFloat = 0
+        for x in stride(from: 0, to: 128, by: 1) {
+            guard let c = rep.colorAt(x: x, y: 36) else { continue }
+            if c.redComponent > maxRed { maxRed = c.redComponent }
+        }
+        XCTAssertGreaterThan(maxRed, 0.7, "colorBlendMode 미지정 → 정상 불투명 빨강 텍스트(무회귀)")
+    }
 }
