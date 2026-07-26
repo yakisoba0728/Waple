@@ -1171,12 +1171,13 @@ public enum GLSLTranslator {
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
         // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
         if name.hasPrefix("g_"), name.contains("Matrix") { return "float4x4(1.0)" }
-        // WE g_TexelSize = 렌더 타깃 1텍셀(UV). EngineU 에 타깃 dims 가 없어 tex0 해상도로 근사 —
-        // 효과 패스는 tex0(framebuffer)=타깃 크기가 통례라 대체로 정확(실물 bokeh 7패스 중 6 정확).
-        // 머티리얼로 오인되면 기본값 (0,0) → 0/0=NaN UV → 검정(3544152633 ×0.4 luma 손실 근원).
-        // ponytail: 스케일드 fbo 에서 타깃≠tex0 인 패스는 tex0 텍셀로 근사 — 타깃 dims 가 EngineU 에 실리면 교체.
-        if name == "g_TexelSize" { return "(1.0 / eng.texRes[0].xy)" }
-        if name == "g_TexelSizeHalf" { return "(0.5 / eng.texRes[0].xy)" }
+        // X-⑤: WE g_TexelSize = 이펙트 **출력(dst)** 1텍셀(UV), 체인 전 패스에 걸쳐 고정값(패스별 타깃도
+        // tex0 도 아님 — WE gaussian.vert 실측으로 확정, EngineU 선언 주석 참조). SceneRendererFrameEncoder
+        // 가 applyEffect 진입 시 dst 1 회로 eng.targetRes 를 채운다. 스케일드 fbo 를 패스 타깃/소스로 쓰는
+        // 체인(bokeh 등)에서 종전 tex0 근사(4× 과대 블러) 해소.
+        // 머티리얼로 오인되면 기본값 (0,0) → 0/0=NaN UV → 검정(3544152633 ×0.4 luma 손실 근원) — isEngine 등재 유지.
+        if name == "g_TexelSize" { return "(1.0 / eng.targetRes.xy)" }
+        if name == "g_TexelSizeHalf" { return "(0.5 / eng.targetRes.xy)" }
         // F744: g_LightAmbientColor 는 엔진 상수로 승격. 실제 scene ambientColor 연동 전 흰색 중립값.
         if name == "g_LightAmbientColor" { return "float4(1.0, 1.0, 1.0, 1.0)" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
@@ -1571,7 +1572,10 @@ public enum GLSLTranslator {
         // bit0). bind 출처=선형(단, 체인 첫 이펙트의 previous=베이스 직결은 baseNoInterp), aux 출처=자산 플래그.
         // Swift 측 단일 빌더 SceneRendererFrameEncoder.engineUniform 과 레이아웃 동기 필수.
         // H1: layerTint = 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값으로 물변경.
-        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; };\n"
+        // X-⑤: targetRes(layerTint 뒤 추가 — 앞 오프셋 불변) = 이펙트 **출력(dst)** 해상도, 전 패스 불변.
+        // WE 실물 gaussian.vert `ratio = g_TexelSize * g_Texture0Resolution`(bokeh_blur 최종 패스: tex0=
+        // _downscaled1(scale4), 그 결과가 소스/타깃 스케일비 1/4 이 되려면 g_TexelSize=1/dst 여야 성립) 로 확정.
+        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; float4 targetRes; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
         let uvHelpers = """
         inline float2 we_uv(float2 v) { return v; }
