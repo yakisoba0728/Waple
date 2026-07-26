@@ -77,4 +77,69 @@ final class SceneCustomShaderRenderTests: XCTestCase {
         XCTAssertTrue(rVal < 100 && gVal > 150 && bVal > 150,
                       "custom invert shader not applied (r=\(rVal), g=\(gVal), b=\(bVal))")
     }
+
+    /// 회전 레이어의 커스텀 셰이더 변환: 번역 셰이더는 mul(v, eng.mvp)=v·M 계약이라 M·v 규약의
+    /// layerTransformMatrix 를 전치해 바인딩해야 한다(무전치면 Dᵀ 회전 — 90° 회전 64×16 쿼드가
+    /// 세로 스트립 대신 가로 스트립으로 그려진다). 무회전 레이어는 D=Dᵀ 이라 기존 테스트에서 잠복.
+    func testCustomShaderRotatedLayerTransform() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":64,"height":64},"clearcolor":"0 0 0"},
+         "objects":[{"image":"models/x.json","origin":"32 32","size":"64 16","scale":"1 1",
+                     "angles":"0 0 1.5707963","alpha":1.0,"color":"1 1 1","brightness":1.0,"visible":true}]}
+        """
+        let model = #"{"width":64,"height":16,"material":"materials/m.json"}"#
+        let material = #"{"passes":[{"shader":"invert","textures":["pic"]}]}"#
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 c = texSample2D(g_Texture0, v_TexCoord);
+            gl_FragColor = vec4(1.0 - c.r, 1.0 - c.g, 1.0 - c.b, c.a);
+        }
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/x.json", model.data(using: .utf8)!),
+            ("materials/m.json", material.data(using: .utf8)!),
+            ("materials/pic.tex", solidTex(255, 0, 0)),
+            ("shaders/invert.vert", vert.data(using: .utf8)!),
+            ("shaders/invert.frag", frag.data(using: .utf8)!),
+        ]
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)),
+                    project: try project(files: files, id: "invert_rot"))
+        defer { r.teardown() }
+        try XCTUnwrap(r.layers.first?.customShader)
+        let outDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_h1v_out_rot", isDirectory: true)
+        try? FileManager.default.removeItem(at: outDir)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let urls = r.captureFrames(width: 64, height: 64, times: [0.1], toDir: outDir)
+        guard let url = urls.first,
+              let img = NSImage(contentsOf: url),
+              let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            XCTFail("capture failed"); return
+        }
+        var px = [UInt8](repeating: 0, count: 64 * 64 * 4)
+        guard let ctx = CGContext(data: &px, width: 64, height: 64, bitsPerComponent: 8,
+                                  bytesPerRow: 64 * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            XCTFail("context failed"); return
+        }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 64, height: 64))
+        // 64×16 쿼드 90° 회전 → 중심 (32,32) 의 세로 스트립(x∈[24,40], y∈[0,64]) 덮개.
+        func isCyan(_ x: Int, _ y: Int) -> Bool {
+            let o = (y * 64 + x) * 4
+            return px[o] < 100 && px[o + 1] > 150 && px[o + 2] > 150
+        }
+        XCTAssertTrue(isCyan(32, 4), "세로 스트립 날린 위치(32,4)가 커버돼야 함(무전치면 가로 스트립이라 미커버)")
+        XCTAssertFalse(isCyan(4, 32), "스트립 밖(4,32)은 배경(검정)이어야 함(무전치면 가로 스트립이라 칠해짐)")
+    }
 }

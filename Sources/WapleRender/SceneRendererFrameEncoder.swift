@@ -1066,11 +1066,14 @@ extension SceneRenderer {
         // H1: 커스텀 머티리얼 셰이더 경로 — QuadShaders 대체.
         if let custom = layer.customShader, let def = layer.def {
             let t = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
+            // 번역 셰이더 계약은 mul(v, eng.mvp)=v·M(HLSL 행벡터)라 M·v 규약의 layerTransformMatrix 는
+            // 전치해 바인딩(3D 커스텀 경로 47bd076 과 동일 수정). 무회전·축정렬 스케일만 있는 레이어는
+            // D=Dᵀ 이라 전치 여부가 무관해 기존 테스트에서 잠복해 있었다 — 회전 레이어에서 발현.
             let m = layerTransformMatrix(origin: t.origin, size: def.size, scale: t.scale,
                                          angleZ: t.angle, alignment: def.alignment,
                                          parallaxDepth: Vec2(x: layer.parallaxDepth.x, y: layer.parallaxDepth.y),
                                          camOffset: camOffset, shakeOffset: frameShakeOffset,
-                                         aspectScale: aspectScale)
+                                         aspectScale: aspectScale).transpose
             enc.setRenderPipelineState(custom.pipeline)
             enc.setVertexBuffer(effectQuadInterleaved, offset: 0, index: 4)
             var mat = custom.material
