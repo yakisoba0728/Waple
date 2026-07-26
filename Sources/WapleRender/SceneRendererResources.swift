@@ -178,7 +178,11 @@ extension SceneRenderer {
 
     /// 레이어를 후→전 순서(JSON 순서)로 GPU 리소스화. 디코드 실패 레이어는 스킵.
     func buildLayers(doc: SceneDocument, package: ScenePackage, device: MTLDevice, sceneID: String) -> [GPULayer] {
-        let w = Float(doc.projectionWidth), h = Float(doc.projectionHeight)
+        // E1(⑥): SceneRenderer.swift:1122(projW/projH 인스턴스 프로퍼티)와 동일하게 클램프 — 종전엔 이
+        // 쿼드 정점 계산만 무클램프 doc.projectionWidth/Height 를 써서, projection 이 0인 씬(파서는
+        // 명시적 0을 그대로 통과시킨다, SceneDocument.swift:729-730)에서 pxToNDC 0-나눗셈으로 정적
+        // 레이어만 NaN 소실되는 비대칭이 있었다(애니/스크립트 경로는 이미 클램프된 projW/projH 사용).
+        let w = Float(max(1, doc.projectionWidth)), h = Float(max(1, doc.projectionHeight))
         var out: [GPULayer] = []
         // attachment 자식들이 공유하는 부모 퍼펫 캐시(경로→파스 결과, 실패도 캐시 — 재파스 방지).
         var attachPuppets: [String: PuppetModel?] = [:]
@@ -249,6 +253,9 @@ extension SceneRenderer {
                 effW = loaded.width
                 effH = loaded.height
             } else {
+                // E1(⑥): 진단성 — 종전엔 텍스처 바이트를 찾았어도 디코드(TexImage.parse/makeImageTexture)에
+                // 실패하면 레이어가 아무 로그 없이 통째로 드롭됐다(buildLayers 는 마운트당 1회라 스팸 무관).
+                WapleLog.warn("[Waple] layer texture decode failed, layer dropped: \(layer.textureEntryName)")
                 continue
             }
             // 스프라이트 프레임 있으면 상시 리드로 필요(gif 재생) — needsDisplay 정책은 shouldAnimate 로.

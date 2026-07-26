@@ -1459,6 +1459,16 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         for case let v? in layers.map(\.video) { v.resume() }
     }
 
+    /// E1(⑥): draw() 자원 실패 조기 return 경로의 진단 로그 — 원인별 1회만(60fps 루프에서 매프레임
+    /// 재실패해도 로그 폭주 방지). 종전엔 이 경로들이 전부 조용히 프레임을 스킵해 "화면이 멈췄다/비었다"
+    /// 증상의 원인 특정이 불가능했다.
+    var loggedDrawFailureKeys: Set<String> = []
+    func logDrawFailureOnce(_ key: String, _ message: String) {
+        guard !loggedDrawFailureKeys.contains(key) else { return }
+        loggedDrawFailureKeys.insert(key)
+        WapleLog.warn("[Waple] draw() \(message)")
+    }
+
     public func draw(in view: MTKView) {
         // 가림 시 애니메이션 정지(배터리) + 오디오 캡처 중지(F289) + 클록 동결(F290).
         // drawable 획득 전에 검사해 drawable 낭비/stall 방지.
@@ -1471,7 +1481,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if occluded { return }
         guard let device, let queue, pipeline != nil,
               let drawable = view.currentDrawable,
-              let cb = queue.makeCommandBuffer() else { return }
+              let cb = queue.makeCommandBuffer() else {
+            logDrawFailureOnce("resources", "자원 확보 실패(device/queue/pipeline/drawable/commandBuffer 중 하나) — 프레임 스킵")
+            return
+        }
         // 비디오 레이어 라이브 재생 지연 기동: 첫 draw 도달 = 라이브 컨텍스트 확정(captureFrames 는 draw 를
         // 타지 않음 → 헤드리스 결정적 경로 유지). startLive 는 멱등이라 플래그로 매 프레임 순회만 회피.
         if hasVideoLayer, !videoLayersLive {
@@ -1510,13 +1523,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             beginFramePool()
             frameShakeOffset = shakeOffset(at: time)  // camerashake 3D 전역 지터(encode3D 가 viewProj 에 좌승). 비활성=.zero → 항등.
             guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true),
-                  encode3D(into: acc, cb: cb, device: device, time: time, particleDelta: dt) else { cb.commit(); return }
+                  encode3D(into: acc, cb: cb, device: device, time: time, particleDelta: dt) else {
+                logDrawFailureOnce("3d-encode", "3D 오프스크린 확보 또는 encode3D 실패 — 프레임 스킵")
+                cb.commit(); return
+            }
             pushLiveSceneLayers()  // F811(S-35): 3D 빌보드 라이브 채널 소비(2D :1448 과 동일 — JS thisScene.layers 갱신)
             guard finalizeScene(
                 source: acc,
                 destination: drawable.texture,
                 commandBuffer: cb,
                 device: device) else {
+                logDrawFailureOnce("3d-finalize", "3D finalizeScene 실패 — 프레임 스킵")
                 cb.commit()
                 return
             }
@@ -1552,12 +1569,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: time), projW: projW, projH: projH)  // camera origin.xy 팬(중립/스크립트/정적 = .zero 데드존 → 비트동일)
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
-        guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else { cb.commit(); return }
+        guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else {
+            logDrawFailureOnce("2d-acc", "2D 오프스크린(acc) 확보 실패 — 프레임 스킵")
+            cb.commit(); return
+        }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].clearColor = clearColor
         rpd.colorAttachments[0].loadAction = .clear
-        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { cb.commit(); return }
+        guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else {
+            logDrawFailureOnce("2d-encoder", "렌더 커맨드 인코더 생성 실패 — 프레임 스킵")
+            cb.commit(); return
+        }
         // 씬 오브젝트 순서대로 레이어·파티클·텍스트 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
         guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: time,
                                             displayTextures: displayTextures,
@@ -1572,7 +1595,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 if hasAudio { particleSystems[idx].sim.currentAudio = currentSpectrum }
                                                 return particleSystems[idx].sim.step(dt)
                                             },
-                                            camOffset: &camOffset, aspectScale: &aspectScale) else { cb.commit(); return }
+                                            camOffset: &camOffset, aspectScale: &aspectScale) else {
+            logDrawFailureOnce("2d-drawplan", "encodeDrawPlan 실패 — 프레임 스킵")
+            cb.commit(); return
+        }
         finalEnc.endEncoding()
         pushLiveSceneLayers()  // F743(S-35): JS thisScene.layers 라이브 갱신(다음 프레임 스크립트 독해용)
         guard finalizeScene(
@@ -1580,6 +1606,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             destination: drawable.texture,
             commandBuffer: cb,
             device: device) else {
+            logDrawFailureOnce("2d-finalize", "2D finalizeScene 실패 — 프레임 스킵")
             cb.commit()
             return
         }
@@ -1790,6 +1817,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         scriptVisible.removeAll()
         scriptTextVisible.removeAll()
         scriptParticleVisible.removeAll()
+        loggedDrawFailureKeys.removeAll()
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
         additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
         blendPipeline = nil; composePipeline = nil          // 감사 V06: 해제 누락분(마운트 반복 시 GPU 리소스 누적 방지)
