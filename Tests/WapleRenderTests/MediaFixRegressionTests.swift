@@ -472,3 +472,106 @@ extension MediaFixRegressionTests {
         XCTAssertFalse(AppleScriptNowPlayingProvider.isValidArtworkURL(URL(fileURLWithPath: "/tmp/x")))
     }
 }
+
+// MARK: - F5-2 라이브 비디오 트랙 preferredTransform 반영
+
+extension MediaFixRegressionTests {
+    /// VideoTrackOrientation.classify 순수 판정 — 디헤드럴군 8원소(무회전/90/180/270 × 무미러/미러) 인식 +
+    /// 임의 변환(스큐 등)은 nil(안전 무시 대상)로 거부.
+    func testVideoTrackOrientationClassifiesDihedralTransforms() {
+        XCTAssertEqual(VideoTrackOrientation.classify(.identity), .identity)
+        XCTAssertEqual(VideoTrackOrientation.classify(CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 64, ty: 0)),
+                       VideoTrackOrientation(quarterTurns: 1, mirroredX: false))
+        XCTAssertEqual(VideoTrackOrientation.classify(CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: 64, ty: 64)),
+                       VideoTrackOrientation(quarterTurns: 2, mirroredX: false))
+        XCTAssertEqual(VideoTrackOrientation.classify(CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: 64)),
+                       VideoTrackOrientation(quarterTurns: 3, mirroredX: false))
+        XCTAssertEqual(VideoTrackOrientation.classify(CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 64, ty: 0)),
+                       VideoTrackOrientation(quarterTurns: 0, mirroredX: true))
+        // 스큐(비-디헤드럴) — 안전 거부(nil), 오분기 대신 폴백.
+        XCTAssertNil(VideoTrackOrientation.classify(CGAffineTransform(a: 1, b: 0.3, c: 0, d: 1, tx: 0, ty: 0)))
+        // 임의 각도 회전(30°) — 8원소 어디에도 안 맞아야 함.
+        XCTAssertNil(VideoTrackOrientation.classify(CGAffineTransform(rotationAngle: .pi / 6)))
+    }
+
+
+    /// 텍스처의 (x,y) 픽셀을 논리 RGB(채널 순서 무관)로 읽는다 — 헤드리스는 rgba8Unorm, 라이브(보정 경로)는
+    /// bgra8Unorm 이라 픽셀 포맷별 순서를 맞춘다.
+    private func rgbPixel(_ tex: MTLTexture, _ x: Int, _ y: Int) -> (Int, Int, Int) {
+        var px = [UInt8](repeating: 0, count: 4)
+        tex.getBytes(&px, bytesPerRow: 4, from: MTLRegionMake2D(x, y, 1, 1), mipmapLevel: 0)
+        if tex.pixelFormat == .bgra8Unorm { return (Int(px[2]), Int(px[1]), Int(px[0])) }
+        return (Int(px[0]), Int(px[1]), Int(px[2]))
+    }
+
+    /// F5-2: 라이브 경로(AVPlayerItemVideoOutput.copyPixelBuffer)가 트랙 preferredTransform(90°배수+미러)을
+    /// 반영하는지 — 이미 정합인 헤드리스(AVAssetImageGenerator.appliesPreferredTrackTransform=true)와 4사분면
+    /// 지문을 대조한다. 정사각형 mp4 라 회전해도 치수가 불변이라 좌표계 혼란 없이 직접 비교 가능.
+    /// 수정 전: 라이브는 트랙 변환을 전혀 반영하지 않아 저장 그대로(TL=빨강/TR=초록/BL=파랑/BR=노랑)가 나와
+    /// 90°회전된 헤드리스 배치와 어긋난다.
+    func testLiveVideoAppliesTrackRotationLikeHeadless() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_f5_2_rot_\(UUID().uuidString).mp4")
+        // 표준 90°시계방향 표시변환(iOS UIImage.Orientation.right 와 동일 관용값).
+        try makeOrientedMP4(at: url, transform: CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 64, ty: 0))
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let sv = SceneVideoLayer(mp4URL: url)
+        defer { sv.teardown() }
+        guard let headless = sv.headlessTexture(at: 0, device: device) else {
+            throw XCTSkip("헤드리스 디코드 실패(환경 코덱 제약)")
+        }
+
+        sv.startLive(device: device)
+        var live: MTLTexture?
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, live == nil {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            live = sv.liveTexture(device: device)
+        }
+        guard let live else { throw XCTSkip("라이브 첫 프레임 미생성(환경 제약)") }
+
+        // 4사분면 중심(경계 아티팩트 회피) 대조.
+        for (x, y) in [(16, 16), (48, 16), (16, 48), (48, 48)] {
+            let h = rgbPixel(headless, x, y)
+            let l = rgbPixel(live, x, y)
+            let diff = abs(h.0 - l.0) + abs(h.1 - l.1) + abs(h.2 - l.2)
+            XCTAssertLessThan(diff, 150,
+                              "(\(x),\(y)) 헤드리스 rgb=\(h) vs 라이브 rgb=\(l) — 라이브가 트랙 회전을 반영하지 않음")
+        }
+    }
+
+    /// F5-2: 미러(좌우 반전) 전용 트랙 변환도 라이브 경로에 반영돼야 한다(회전과 별개 vImage 경로).
+    func testLiveVideoAppliesTrackMirrorLikeHeadless() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_f5_2_mirror_\(UUID().uuidString).mp4")
+        // 순수 수평 미러(회전 없음).
+        try makeOrientedMP4(at: url, transform: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 64, ty: 0))
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let sv = SceneVideoLayer(mp4URL: url)
+        defer { sv.teardown() }
+        guard let headless = sv.headlessTexture(at: 0, device: device) else {
+            throw XCTSkip("헤드리스 디코드 실패(환경 코덱 제약)")
+        }
+
+        sv.startLive(device: device)
+        var live: MTLTexture?
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline, live == nil {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            live = sv.liveTexture(device: device)
+        }
+        guard let live else { throw XCTSkip("라이브 첫 프레임 미생성(환경 제약)") }
+
+        for (x, y) in [(16, 16), (48, 16), (16, 48), (48, 48)] {
+            let h = rgbPixel(headless, x, y)
+            let l = rgbPixel(live, x, y)
+            let diff = abs(h.0 - l.0) + abs(h.1 - l.1) + abs(h.2 - l.2)
+            XCTAssertLessThan(diff, 150,
+                              "(\(x),\(y)) 헤드리스 rgb=\(h) vs 라이브 rgb=\(l) — 라이브가 트랙 미러를 반영하지 않음")
+        }
+    }
+}

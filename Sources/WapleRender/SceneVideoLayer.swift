@@ -4,6 +4,41 @@ import CoreVideo
 import CoreGraphics
 import Metal
 import QuartzCore
+import Accelerate
+import WapleCore
+
+/// F5-2: 라이브 임베디드 mp4 트랙 방향 메타데이터(preferredTransform) 분류 — 90° 배수 회전 + 좌우 미러
+/// 조합(디헤드럴군 8원소)만 지원한다. 헤드리스 경로(AVAssetImageGenerator.appliesPreferredTrackTransform=true,
+/// SceneVideoLayer.swift 아래 generator 정의)는 이미 정합이나, 라이브 경로(AVPlayerItemVideoOutput.
+/// copyPixelBuffer)는 트랙 표시 변환을 전혀 적용하지 않아 회전/미러 메타데이터를 가진 mp4 가 라이브·헤드리스
+/// 간 다른 방향으로 렌더된다. 임의 회전/스큐 등 그 외 변환은 안전 무시(1회 로그) — "오역보다 폴백".
+struct VideoTrackOrientation: Equatable {
+    /// 시계방향 90° 단위 회전 횟수(0..3) — 미러 적용 "후" 기준.
+    let quarterTurns: Int
+    /// 회전 전 좌우(수평) 미러 여부.
+    let mirroredX: Bool
+
+    static let identity = VideoTrackOrientation(quarterTurns: 0, mirroredX: false)
+
+    /// AVAssetTrack.preferredTransform → 분류. 표준 8개 디헤드럴 변환(identity/90/180/270 × 무미러/미러)
+    /// 중 하나와 일치하면 그 값을, 그 외(임의 회전·스큐·비균등 스케일 등)는 nil.
+    static func classify(_ t: CGAffineTransform) -> VideoTrackOrientation? {
+        let eps: CGFloat = 0.01
+        func near(_ x: CGFloat, _ y: CGFloat) -> Bool { abs(x - y) < eps }
+        // (quarterTurns, mirroredX, a, b, c, d) — tx/ty(평행이동)는 재래스터라이즈라 무관.
+        let candidates: [(Int, Bool, CGFloat, CGFloat, CGFloat, CGFloat)] = [
+            (0, false,  1,  0,  0,  1), (1, false,  0,  1, -1,  0),
+            (2, false, -1,  0,  0, -1), (3, false,  0, -1,  1,  0),
+            (0, true,  -1,  0,  0,  1), (1, true,   0,  1,  1,  0),
+            (2, true,   1,  0,  0, -1), (3, true,   0, -1, -1,  0),
+        ]
+        for (q, m, a, b, c, d) in candidates
+        where near(t.a, a) && near(t.b, b) && near(t.c, c) && near(t.d, d) {
+            return VideoTrackOrientation(quarterTurns: q, mirroredX: m)
+        }
+        return nil
+    }
+}
 
 /// 씬 내부 video-텍스처 레이어의 프레임 공급자.
 ///
@@ -34,6 +69,8 @@ public final class SceneVideoLayer {
     /// ponytail: 고정 3-deep 링. 티어링이 스모크에서 보이면 semaphore 완료핸들러 해제로 승급.
     private var frameHold: [(CVPixelBuffer, CVMetalTexture)] = []
     private var lastLiveTexture: MTLTexture?
+    /// F5-2: startLive 가 채운다 — identity(기본값)면 기존 CVMetalTextureCache 제로카피 경로 그대로.
+    private var trackOrientation: VideoTrackOrientation = .identity
 
     // MARK: 헤드리스
     private lazy var generator: AVAssetImageGenerator = {
@@ -97,6 +134,7 @@ public final class SceneVideoLayer {
         ])
         item.add(out)
         output = out
+        resolveTrackOrientation(asset: item.asset)   // F5-2: liveTexture 가 참조할 방향 보정값 확정
         let p = AVPlayer(playerItem: item)
         p.isMuted = true                 // 스코프 밖: 비디오 오디오 트랙.
         p.actionAtItemEnd = .none
@@ -117,6 +155,15 @@ public final class SceneVideoLayer {
               let pb = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: nil) else {
             return lastLiveTexture
         }
+        // F5-2: 트랙 표시 변환(90°배수+미러)이 있으면 CPU 측(vImage) 보정 후 새 텍스처로 낸다 —
+        // 아래 CVMetalTextureCache 제로카피 경로는 트랙 변환을 반영하지 않는다.
+        if trackOrientation != .identity {
+            if let tex = Self.orientedTexture(pixelBuffer: pb, orientation: trackOrientation, device: device) {
+                lastLiveTexture = tex
+                return tex
+            }
+            return lastLiveTexture
+        }
         let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
         var cvTex: CVMetalTexture?
         let st = CVMetalTextureCacheCreateTextureFromImage(
@@ -127,6 +174,89 @@ public final class SceneVideoLayer {
         frameHold.append((pb, cvTex))                       // 최근 프레임 refs 보유(GPU 인-플라이트 보호)
         if frameHold.count > 3 { frameHold.removeFirst() }
         lastLiveTexture = tex
+        return tex
+    }
+
+    /// F5-2: item.asset(비동기 트랙 로드) → preferredTransform 분류. 헤드리스 duration lazy var 와 동일하게
+    /// 세마포어로 동기 대기(mount 1회 startLive 비용 — 매 프레임 호출 아님).
+    private func resolveTrackOrientation(asset: AVAsset) {
+        let sem = DispatchSemaphore(value: 0)
+        var transform = CGAffineTransform.identity
+        Task {
+            if let track = try? await asset.loadTracks(withMediaType: .video).first,
+               let t = try? await track.load(.preferredTransform) {
+                transform = t
+            }
+            sem.signal()
+        }
+        sem.wait()
+        guard !transform.isIdentity else { trackOrientation = .identity; return }
+        if let o = VideoTrackOrientation.classify(transform) {
+            trackOrientation = o
+        } else {
+            trackOrientation = .identity
+            WapleLog.warn("[Waple] video live track transform unsupported (not 90°-multiple/mirror) — " +
+                          "orientation correction skipped: \(transform)")
+        }
+    }
+
+    /// F5-2: BGRA CVPixelBuffer 에 90°배수 회전+미러(vImage, 실시간 가능 성능)를 적용해 새 텍스처로 낸다.
+    /// 회전 시(90°/270°) 폭/높이가 스왑된다. 실패 시 nil(호출부는 직전 프레임 유지로 폴백).
+    private static func orientedTexture(pixelBuffer pb: CVPixelBuffer, orientation: VideoTrackOrientation,
+                                        device: MTLDevice) -> MTLTexture? {
+        guard orientation != .identity else { return nil }
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { return nil }
+        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
+        let srcRowBytes = CVPixelBufferGetBytesPerRow(pb)
+        guard w > 0, h > 0, srcRowBytes >= w * 4 else { return nil }
+        var srcBuf = vImage_Buffer(data: base, height: vImagePixelCount(h),
+                                   width: vImagePixelCount(w), rowBytes: srcRowBytes)
+
+        // 미러(회전 "전" 적용) — 필요 시 원본 크기 중간 스크래치.
+        let mirrorScratch = orientation.mirroredX
+            ? UnsafeMutableRawPointer.allocate(byteCount: h * srcRowBytes, alignment: 16) : nil
+        defer { mirrorScratch?.deallocate() }
+        var stageBuf = srcBuf
+        if let scratch = mirrorScratch {
+            var dst = vImage_Buffer(data: scratch, height: vImagePixelCount(h),
+                                    width: vImagePixelCount(w), rowBytes: srcRowBytes)
+            guard vImageHorizontalReflect_ARGB8888(&srcBuf, &dst, vImage_Flags(kvImageNoFlags)) == kvImageNoError
+            else { return nil }
+            stageBuf = dst
+        }
+
+        let rotated = orientation.quarterTurns % 2 != 0
+        let dstW = rotated ? h : w
+        let dstH = rotated ? w : h
+        let dstRowBytes = dstW * 4
+        var outData = [UInt8](repeating: 0, count: dstH * dstRowBytes)
+        let rotConst: UInt8
+        switch orientation.quarterTurns {
+        case 1: rotConst = UInt8(kRotate90DegreesClockwise)
+        case 2: rotConst = UInt8(kRotate180DegreesClockwise)
+        case 3: rotConst = UInt8(kRotate270DegreesClockwise)
+        default: rotConst = UInt8(kRotate0DegreesClockwise)   // 미러만(회전 0) — 유효 상수, 단순 복사로 동작
+        }
+        let ok: Bool = outData.withUnsafeMutableBytes { ptr in
+            guard let dstBase = ptr.baseAddress else { return false }
+            var dstBuf = vImage_Buffer(data: dstBase, height: vImagePixelCount(dstH),
+                                       width: vImagePixelCount(dstW), rowBytes: dstRowBytes)
+            var backColor: Pixel_8888 = (0, 0, 0, 0)
+            return vImageRotate90_ARGB8888(&stageBuf, &dstBuf, rotConst, &backColor,
+                                           vImage_Flags(kvImageNoFlags)) == kvImageNoError
+        }
+        guard ok else { return nil }
+
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: dstW, height: dstH,
+                                                             mipmapped: false)
+        desc.usage = [.shaderRead]
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
+        outData.withUnsafeBytes {
+            tex.replace(region: MTLRegionMake2D(0, 0, dstW, dstH), mipmapLevel: 0,
+                       withBytes: $0.baseAddress!, bytesPerRow: dstRowBytes)
+        }
         return tex
     }
 

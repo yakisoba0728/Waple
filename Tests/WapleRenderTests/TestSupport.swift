@@ -143,6 +143,78 @@ func makeTinyMP4(at url: URL) throws {
     }
 }
 
+/// F5-2 테스트 전용 — 4사분면 색(저장 그대로: TL=빨강/TR=초록/BL=파랑/BR=노랑) + 지정 preferredTransform
+/// 태그를 가진 정사각형 mp4(2프레임). 정사각형이라 회전해도 치수가 불변이라 헤드리스/라이브 대조가 단순해진다.
+func makeOrientedMP4(at url: URL, transform: CGAffineTransform, size: Int = 64) throws {
+    try? FileManager.default.removeItem(at: url)
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+        AVVideoCodecKey: AVVideoCodecType.h264,
+        AVVideoWidthKey: size,
+        AVVideoHeightKey: size,
+    ])
+    input.transform = transform
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        kCVPixelBufferWidthKey as String: size,
+        kCVPixelBufferHeightKey as String: size,
+    ])
+    writer.add(input)
+    writer.startWriting()
+    writer.startSession(atSourceTime: .zero)
+    let half = size / 2
+    for i in 0..<2 {
+        let deadline = Date(timeIntervalSinceNow: 5)
+        while !input.isReadyForMoreMediaData, writer.status == .writing, Date() < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        guard writer.status == .writing else {
+            throw NSError(domain: "makeOrientedMP4", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "AVAssetWriter 실패: \(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")"])
+        }
+        guard input.isReadyForMoreMediaData else {
+            throw NSError(domain: "makeOrientedMP4", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "isReadyForMoreMediaData 대기 타임아웃(5s)"])
+        }
+        guard let pool = adaptor.pixelBufferPool else {
+            throw NSError(domain: "makeOrientedMP4", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "pixelBufferPool 생성 실패"])
+        }
+        var buffer: CVPixelBuffer?
+        CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+        guard let buffer else {
+            throw NSError(domain: "makeOrientedMP4", code: 4, userInfo: [
+                NSLocalizedDescriptionKey: "CVPixelBuffer 생성 실패"])
+        }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        if let base = CVPixelBufferGetBaseAddress(buffer) {
+            let bpr = CVPixelBufferGetBytesPerRow(buffer)
+            let px = base.assumingMemoryBound(to: UInt8.self)
+            for y in 0..<size {
+                for x in 0..<size {
+                    let o = y * bpr + x * 4
+                    let bgr: (UInt8, UInt8, UInt8)
+                    if x < half && y < half { bgr = (0, 0, 255) }        // TL 빨강
+                    else if x >= half && y < half { bgr = (0, 255, 0) }  // TR 초록
+                    else if x < half && y >= half { bgr = (255, 0, 0) }  // BL 파랑
+                    else { bgr = (0, 255, 255) }                        // BR 노랑
+                    px[o] = bgr.0; px[o + 1] = bgr.1; px[o + 2] = bgr.2; px[o + 3] = 255
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+        adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: 10))
+    }
+    input.markAsFinished()
+    let sem = DispatchSemaphore(value: 0)
+    writer.finishWriting { sem.signal() }
+    sem.wait()
+    guard writer.status == .completed else {
+        throw NSError(domain: "makeOrientedMP4", code: 5, userInfo: [
+            NSLocalizedDescriptionKey: "finishWriting 실패: \(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")"])
+    }
+}
+
 /// 캡처 PNG 의 평균 luma((r+g+b)/3 평균) — 최대 ~40×40 그리드 서브샘플. 실패 시 -1.
 func avgLuma(_ url: URL) -> Double {
     guard let data = try? Data(contentsOf: url), let rep = NSBitmapImageRep(data: data) else { return -1 }
