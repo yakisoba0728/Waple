@@ -379,6 +379,22 @@ public struct ParticleSystemDef: Equatable {
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
+            case "layerimage":
+                // E1(②): layerimage(레이어 이미지 픽셀에서 방출) — 케이스 자체가 없어 무조건 드롭돼
+                // 이 이미터만 가진 시스템은 emitters=[] 로 파티클을 0개도 생성하지 못했다. 픽셀 불투명
+                // 분포 샘플링은 디코드 텍스처(WapleRender 전용) 접근이 필요해 파스 단계(WapleCore)에서는
+                // 불가 — sphererandom/boxrandom과 동일한 공용 필드(origin/distancemax/distancemin/rate/
+                // instantaneous)만 읽어 균등 박스 방출로 폴백한다. 캐비엇: 이미지 알파 마스크는 반영하지
+                // 않음(균등분포) — 코퍼스 실측 n=1(rate 외 필드 미관측)이라 이 필드들은 부재 시 boxrandom과
+                // 동일한 원점 스폰(distanceMax=0)으로 퇴화한다(무크래시, "0개"보다는 개선).
+                emitters.append(.box(
+                    origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    rate: pfloat(e["rate"]) ?? 0,
+                    burst: pint(e["instantaneous"]) ?? 0))
+                emitterAudio.append(AudioProcessing.parse(e))
+                emitterSpeed.append(SIMD2(speedMin, speedMax))
+                boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
             }

@@ -288,6 +288,37 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(rate, 1)
     }
 
+    /// E1(②): layerimage(레이어 이미지 픽셀 방출) — 케이스 부재로 무조건 드롭돼 이 이미터만 가진
+    /// 시스템은 emitters=[] 로 파티클을 0개도 생성하지 못했다(cluster 64/251/321). 픽셀 분포 샘플링은
+    /// WapleRender 전용 디코드 텍스처가 필요해 파스 단계에서 불가 — boxrandom 과 동일한 공용 필드로
+    /// 균등 박스 방출 폴백(캐비엇: 알파 마스크 미반영).
+    func testLayerImageEmitterFallsBackToBoxDistribution() {
+        let d = ParticleSystemDef.parse(json("""
+        {"emitter":[{"id":5,"name":"layerimage","rate":5000}],
+         "renderer":[{"name":"sprite"}],"maxcount":10000}
+        """), material: nil)
+        XCTAssertEqual(d.emitters.count, 1, "종전엔 드롭돼 emitters=[] — 유일 이미터가 소실되면 파티클 0개")
+        guard case let .box(origin, dmax, rate, burst) = d.emitters.first else { return XCTFail("box 아님") }
+        XCTAssertEqual(origin, Vec3(x: 0, y: 0, z: 0), "실물 프리뷰(n=1)는 origin 미관측 — 원점 폴백")
+        XCTAssertEqual(dmax, Vec3(x: 0, y: 0, z: 0), "distancemax 미관측 — 원점 스폰(무크래시, 0개보다 개선)")
+        XCTAssertEqual(rate, 5000)
+        XCTAssertEqual(burst, 0)
+    }
+
+    /// layerimage 도 sphererandom/boxrandom과 동일한 공용 필드(origin/distancemax/instantaneous)를
+    /// 제공하면 그대로 반영해야 한다(향후 실물 코퍼스가 더 풍부한 필드를 쓰는 경우 대비).
+    func testLayerImageEmitterHonorsProvidedFieldsLikeBoxrandom() {
+        let d = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"layerimage","origin":"10 20 0","distancemax":"5 5 0","rate":100,"instantaneous":3}],
+         "renderer":[{"name":"sprite"}],"maxcount":10}
+        """), material: nil)
+        guard case let .box(origin, dmax, rate, burst) = d.emitters.first else { return XCTFail("box 아님") }
+        XCTAssertEqual(origin, Vec3(x: 10, y: 20, z: 0))
+        XCTAssertEqual(dmax, Vec3(x: 5, y: 5, z: 0))
+        XCTAssertEqual(rate, 100)
+        XCTAssertEqual(burst, 3)
+    }
+
     func testMaterialBlend() {
         let add = ParticleMaterial.parse(json(#"{"passes":[{"blending":"additive","textures":["particle/snow"]}]}"#))
         XCTAssertEqual(add.blend, .additive); XCTAssertEqual(add.textureName, "particle/snow")
