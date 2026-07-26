@@ -40,9 +40,14 @@ public enum SceneLivePresentationFix {
         }
     }
 
-    /// 실사용 게이트 — 현재 런타임 OS 메이저 버전 + WAPLE_LIVE_FLIP_FIX 환경변수로 판정.
-    public static var needsDesktopFlipY: Bool {
+    /// F4 후속: OS 메이저 버전·WAPLE_LIVE_FLIP_FIX 환경변수는 프로세스 수명 중 불변이라 최초 접근 시
+    /// 1회만 계산(캐시) — draw(in:) 이 매 프레임(60fps) 이 게이트를 재확인하므로 ProcessInfo.environment
+    /// 사전 재구성 비용을 반복하지 않기 위함.
+    private static let cachedNeedsDesktopFlipY: Bool = {
         needsDesktopFlipY(majorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
                           envOverride: ProcessInfo.processInfo.environment["WAPLE_LIVE_FLIP_FIX"])
-    }
+    }()
+
+    /// 실사용 게이트 — 현재 런타임 OS 메이저 버전 + WAPLE_LIVE_FLIP_FIX 환경변수로 판정(프로세스당 1회 계산).
+    public static var needsDesktopFlipY: Bool { cachedNeedsDesktopFlipY }
 }
