@@ -2,8 +2,9 @@
 
 > 작성일: 2026-07-25  
 > 대상: `/Users/yakisoba/Documents/GitHub/Waple` (main 브랜치, dirty 48 files, HEAD `40643f6`)  
-> 외부 자료: `/Users/yakisoba/Downloads/wallpaper_dev/re-audit-2026-07/`, `/Users/yakisoba/Downloads/WallpaperEngine-macOS-analysis-reference-2.8.0.42/analysis/`, `/Users/yakisoba/Downloads/WallpaperEngine_RenderDoc_capture/`, `/Users/yakisoba/Downloads/wallpaper_engine_analysis_bundle/`, `/Users/yakisoba/Downloads/waple-baseline-a4c678b/`  
-> 분석 방식: 90개 explore 서브에이전트 병렬 정적 대조(read-only), 총 출력 816,707자
+> 외부 자료: `/Users/yakisoba/Downloads/wallpaper_dev/re-audit-2026-07/`, `/Users/yakisoba/Downloads/wallpaper_dev/references/WallpaperEngine-macOS-analysis-reference-2.8.0.42/analysis/`, `/Users/yakisoba/Downloads/wallpaper_dev/references/WallpaperEngine_RenderDoc_capture/`, `/Users/yakisoba/Downloads/wallpaper_dev/references/wallpaper_engine_analysis_bundle/`, `/Users/yakisoba/Downloads/wallpaper_dev/waple-baselines/main-a4c678b/` (2026-07-26 Downloads 정리로 이동된 경로 반영)  
+> 분석 방식: 90개 explore 서브에이전트 병렬 정적 대조(read-only), 총 출력 816,707자  
+> **후속 상태(2026-07-26): §3 로드맵 H1–H6·H8·M1–M5·M7–M10 구현 완료 — [roadmap-h1-h8-closeout-2026-07-26.md](roadmap-h1-h8-closeout-2026-07-26.md) 참조. 잔여: H7·M6.**
 
 ---
 
