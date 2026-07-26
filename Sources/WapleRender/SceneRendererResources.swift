@@ -364,7 +364,7 @@ extension SceneRenderer {
                                 blendAdditive: layer.blendMode == "additive",
                                 isFrameBuffer: layer.isFrameBuffer,
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty
-                                      && attach == nil && layer.materialShader == nil) ? nil : layer,
+                                      && attach == nil) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
                                 animLayerScripts: animLayerScripts,
                                 materialScripts: materialScripts,
@@ -386,6 +386,11 @@ extension SceneRenderer {
             if layer.materialShader != nil {
                 gpuLayer.customShader = buildCustomLayerShader(layer, texture: mtl, package: package,
                                                                device: device, pixelFormat: accPixelFormat)
+                // 커스텀 셰이더 경로는 변환 행렬 산출에 def 가 필요 — 빌드 성공 시에만 유지.
+                // materialShader 문자엧만으로는 판별 불가(genericimage4 같은 빌트인 이름도 잡히므로).
+                if gpuLayer.customShader != nil, gpuLayer.def == nil {
+                    gpuLayer.def = layer
+                }
             }
             // H4: REFRACT — 노멀맵 로드 + refractAmount. 실패 시 refract 미설정 → identity 폴터(무크래시).
             if layer.refract, let normalName = layer.normalTextureName,
@@ -892,6 +897,9 @@ extension SceneRenderer {
 
     /// H1: 레이어 머티리얼 커스텀 셰이더 빌드. 성공 시 CustomLayerShader, 실패 시 nil(→ QuadShaders 폴터).
     /// buildTranslatedEffect 의 5책임 분해를 2D 레이어에 맞춰 단순화한 버전.
+    /// 셰이더 소스(.vert/.frag)는 씬 패키지 안 것만 인정 — 베이스 에셋 팩의 WE 빌트인 셰이더
+    /// (genericimage4 등)까지 이 경로로 빨려 들어오면 검증된 QuadShaders 경로를 불필요하게 우회한다
+    /// (3394601417 주야 토글 회귀 실증). include(common.h 등)만 베이스 팩 폴터 허용.
     func buildCustomLayerShader(_ layer: SceneLayer, texture: MTLTexture, package: ScenePackage, device: MTLDevice,
                                 pixelFormat: MTLPixelFormat) -> CustomLayerShader? {
         guard let shaderName = layer.materialShader else { return nil }
@@ -901,8 +909,8 @@ extension SceneRenderer {
             }
             return BuiltinShaderIncludes.lookup(header)
         }
-        guard let vData = quietAssetData("shaders/\(shaderName).vert", package: package),
-              let fData = quietAssetData("shaders/\(shaderName).frag", package: package),
+        guard let vData = packageData("shaders/\(shaderName).vert", package: package),
+              let fData = packageData("shaders/\(shaderName).frag", package: package),
               let vert = String(data: vData, encoding: .utf8),
               let frag = String(data: fData, encoding: .utf8) else {
             NSLog("%@", "[Waple] custom layer shader source missing: \(shaderName)")
