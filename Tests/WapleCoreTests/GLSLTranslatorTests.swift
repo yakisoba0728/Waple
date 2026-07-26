@@ -339,8 +339,9 @@ final class GLSLTranslatorTests: XCTestCase {
         }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("(1.0 / eng.texRes[0].xy)"), "g_TexelSize → 1/tex0 해상도:\n\(t.msl)")
-        XCTAssertTrue(t.msl.contains("(0.5 / eng.texRes[0].xy)"), "g_TexelSizeHalf → 0.5/tex0 해상도:\n\(t.msl)")
+        // X-⑤: g_TexelSize 정본은 이펙트 출력(dst) 해상도 기준(eng.targetRes) — 종전 tex0 근사(texRes[0])에서 변경.
+        XCTAssertTrue(t.msl.contains("(1.0 / eng.targetRes.xy)"), "g_TexelSize → 1/dst 해상도:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("(0.5 / eng.targetRes.xy)"), "g_TexelSizeHalf → 0.5/dst 해상도:\n\(t.msl)")
         // 헬퍼 캡처 파라미터는 float2 로 선언돼야 한다(실물 contrast_based_sharpness 의
         // `1./g_TexelSize.x` — float 폴백이면 .x 멤버 참조로 MSL 컴파일 실패).
         XCTAssertTrue(t.msl.contains("float2 g_TexelSize"), "캡처 파라미터 타입 float2:\n\(t.msl)")
