@@ -71,11 +71,15 @@ enum EffectShaders {
                     v3(tLo, 0), v3(tLo, 1), v3(tLo, 2), v3(tHi, 0), v3(tHi, 1), v3(tHi, 2),
                     f("noisespeed", 0.5), f("noiseamount", 0), Float(cb["MASK"] ?? 0)]
         case "waterripple":
-            // strength/scale 키: ui_editor_properties_* → 실제 씬 키(ripple_*) → 단축 키 → 기본값.
-            // 설계 문서 §2 정찰: 실제 오브젝트 constants 는 ratio, ripple_scale, ripple_strength.
-            let strength = c["ui_editor_properties_ripple_strength"]?.first ?? c["ripple_strength"]?.first ?? c["strength"]?.first ?? 0.1
-            let scale = c["ui_editor_properties_ripple_scale"]?.first ?? c["ripple_scale"]?.first ?? c["scale"]?.first ?? 1
-            let scrollSpeed = c["scrollspeed"]?.first ?? c["speed"]?.first ?? 0.05
+            // F-X8: 실코퍼스 material 키(스톡 waterripple.frag/.vert 주석 확정) = ripplestrength/scale/
+            // animationspeed(구동원, 기본 0.15) — 구코드는 ripple_strength/ripple_scale/scrollspeed 를
+            // 조회해 전건 미스했다(실키와 구분자·이름 모두 불일치). scrollspeed(기본 0)는 별도 실키지만
+            // 이 손포팅의 단일탭 모델에서는 애니메이션 구동원 슬롯(P[3])을 animationspeed 가 맡는다(WE
+            // vert: v_TexCoordRipple = coords + g_Time*g_AnimationSpeed² + scroll — scroll 은 scrollspeed
+            // 이지만 통상 0이라 animationspeed 가 주 구동). 구 키는 폴백으로 유지(무회귀).
+            let strength = c["ripplestrength"]?.first ?? c["ripple_strength"]?.first ?? c["strength"]?.first ?? 0.1
+            let scale = c["scale"]?.first ?? c["ripple_scale"]?.first ?? 1
+            let scrollSpeed = c["animationspeed"]?.first ?? c["scrollspeed"]?.first ?? c["speed"]?.first ?? 0.15
             return [strength, scale, scrollSpeed]
         case "scroll":
             // F267: WE scroll 머티리얼명은 repeat(g_Scale)·speedx/speedy(g_ScrollX/Y, 별도 스칼라 키, 기본
@@ -100,9 +104,15 @@ enum EffectShaders {
             return [-sin(a), cos(a), f("speed", 5), f("scale", 200), f("strength", 0.1), f("perspective", 0)]
         case "shake":
             // 단순화: flow/noise combo 없이 시간 기반 흔들림. amp/speed 키는 게이트서 확인.
+            // F-X8: WE shake.frag g_Speed 실 기본값은 1(구코드 폴백 5 는 실물과 5배 어긋남 — 코퍼스
+            // 실측: speed 미지정 씬이 상례). bounds(g_Bounds, 기본 "0 1")는 문턱 리매핑
+            // (offset = saturate((offset-bounds.x)/(bounds.y-bounds.x)))용 슬롯 추가 — P[2]/P[3].
             let amp = c["amplitude"]?.first ?? c["amount"]?.first ?? c["strength"]?.first ?? 0.006
-            let spd = c["speed"]?.first ?? c["roughness"]?.first ?? 5
-            return [amp, spd]
+            let spd = c["speed"]?.first ?? c["roughness"]?.first ?? 1
+            let bounds = c["bounds"] ?? [0, 1]
+            let boundsLo = bounds.count > 0 ? bounds[0] : 0
+            let boundsHi = bounds.count > 1 ? bounds[1] : 1
+            return [amp, spd, boundsLo, boundsHi]
         default:
             return nil
         }
@@ -168,13 +178,15 @@ enum EffectShaders {
                                 constant float* P [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::repeat);
             constexpr sampler sc(filter::linear, address::clamp_to_edge);
-            // P[0]=time, P[1]=strength, P[2]=scale, P[3]=scrollSpeed.
+            // P[0]=time, P[1]=strength, P[2]=scale, P[3]=scrollSpeed(≈animationspeed).
             // F412: 노멀맵 미바인드 폴터는 중립 (128,128,255)(SceneRendererResources) — 흰색이면
             // 언팩 후 n=(1,1,1) 이라 마스크 유효 영역이 상시 대각 변위.
+            // F-X8: WE waterripple.frag `texCoord += normal.xy * g_Strength * g_Strength * mask` — 강도
+            // 제곱(선형이면 기본값에서 10배 과대 변위, 자매 waterwaves 는 이미 제곱 적용 — 파일내 정합).
             float2 nUV = in.uv * P[2] + float2(P[0] * P[3], P[0] * P[3] * 0.5);
             float3 n = normalMap.sample(s, nUV).rgb * 2.0 - 1.0;
             float maskV = mask.sample(sc, in.uv).r;
-            float2 distort = n.xy * P[1] * maskV;
+            float2 distort = n.xy * (P[1] * P[1]) * maskV;
             return fb.sample(sc, in.uv + distort);
         }
         """,
@@ -233,15 +245,22 @@ enum EffectShaders {
                                 texture2d<float> flow [[texture(1)]], texture2d<float> mask [[texture(2)]],
                                 constant float* P [[buffer(0)]]) {
             constexpr sampler s(filter::linear, address::clamp_to_edge);
-            // P[0]=time, P[1]=amplitude, P[2]=speed. F265: WE shake.frag:82
+            // P[0]=time, P[1]=amplitude, P[2]=speed, P[3]=bounds.x, P[4]=bounds.y. F265: WE shake.frag:82
             // `texCoordOffset = offset*g_Amp*g_Amp*flowMask` 대조 — 진폭 제곱(선형이면 5~10배 과대) +
             // flow map(g_Texture1, buildHandPortEffect 가 미바인드 시 중립(0.498,0.498)로 폴백 —
             // WE 기본 util/noflow 와 정합해 flowMask≈0) 방향 구동. 시간 오실레이터(offset 스칼라)는
-            // WE 의 friction/bounds/DIRECTION 콤보 전체까진 미포팅 — sin(t) 로 단순화(정성적 근사).
+            // WE 의 friction/DIRECTION 콤보 전체까진 미포팅 — sin(t) 로 단순화(정성적 근사).
+            // F-X8: WE shake.frag:56 `offset = saturate((offset - v_Bounds.x) * v_Bounds.y)`(v_Bounds.y =
+            // 1/(bounds.y-bounds.x)) 문턱 리매핑 — [0,1] 오실레이터 값을 bounds 구간으로 재배치한 뒤
+            // DIRECTION==0 관례대로 *2-1 로 부호 복원. bounds=[0,1](기본)이면 항등(sin(t) 그대로, 무회귀).
             float m = mask.sample(s, in.uv).r;
             float t = P[0] * P[2];
             float2 flowMask = (flow.sample(s, in.uv).rg - float2(0.498, 0.498)) * 2.0;
-            float2 off = sin(t) * (P[1] * P[1]) * flowMask * m;
+            float raw = sin(t) * 0.5 + 0.5;
+            float span = P[4] - P[3];
+            float inv = span == 0.0 ? 0.0 : 1.0 / span;
+            float remapped = saturate((raw - P[3]) * inv) * 2.0 - 1.0;
+            float2 off = remapped * (P[1] * P[1]) * flowMask * m;
             return fb.sample(s, in.uv + off);
         }
         """,
