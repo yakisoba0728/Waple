@@ -907,6 +907,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// skin 행렬은 (model, anim, time, rate) 의 순수 함수라 같은 time 의 재호출은 직전 결과를 그대로 쓴다
     /// (정지 재드로의 동일 time 도 동일 행렬 — 무회귀). teardown 이 해제.
     var skinBuffersFrameMemo: (time: Float, buffers: [Int: MTLBuffer])? = nil
+    /// H1 스키닝: 커스텀 셰이더 CPU 프리스킨 버퍼 프레임 메모(prepare3DCustomSkinBuffers — V06 과 동일 근거).
+    var customSkinFrameMemo: (time: Float, buffers: [Int: [Int: MTLBuffer]])? = nil
     var meshPipelineOver: MTLRenderPipelineState?      // premultiplied over(normal/translucent)
     var meshPipelineAdditive: MTLRenderPipelineState?
     var meshPipelineSkin: MTLRenderPipelineState?      // GPU 스키닝(mv_skin) over
@@ -1789,6 +1791,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         text3DControllers = []
         eval3DOrder = []; draw3DOrder = []
         skinBuffersFrameMemo = nil   // 감사 V06: 스킨 버퍼 프레임 메모 해제(마운트 재사용 시 stale 본 버퍼 참조 방지)
+        customSkinFrameMemo = nil    // H1: 커스텀 셰이더 CPU 프리스킨 메모도 같은 근거로 해제
         meshPipelineOver = nil; meshPipelineAdditive = nil
         meshPipelineSkin = nil; meshPipelineSkinAdditive = nil
         shadowPipelineStaticOpaque = nil; shadowPipelineStaticCutout = nil

@@ -46,6 +46,39 @@ public enum Model3DPose {
         return (0..<n).map { world[$0] * PuppetPose.safeInverse(bindWorld[$0]) }
     }
 
+    /// 커스텀 셰이더 경로용 CPU 정점 스키닝 — Mesh3DShaders mv_skin(MSL)과 같은 수학을 CPU 에서 수행해
+    /// rigid 8f 패킹(pos3+normal3+uv2)으로 반환한다. matrices = skinMatrices 결과.
+    /// 본 인덱스는 GPU 패킹과 같이 matrices.count-1 로 clamp, 가중치 합 0 이면 바인드 포즈 통과도 mv_skin 과 동치.
+    public static func cpuSkinnedPacked(mesh: Model3D.Mesh, matrices: [simd_float4x4]) -> [Float] {
+        guard !matrices.isEmpty else { return [] }
+        let mx = UInt32(matrices.count - 1)
+        var out: [Float] = []
+        out.reserveCapacity(mesh.vertices.count * 8)
+        for v in mesh.vertices {
+            var p = v.position
+            var n = v.normal
+            let wsum = v.weights.x + v.weights.y + v.weights.z + v.weights.w
+            if wsum > 0 {
+                let w = v.weights / wsum
+                let idx = SIMD4<UInt32>(min(v.boneIndices.x, mx), min(v.boneIndices.y, mx),
+                                        min(v.boneIndices.z, mx), min(v.boneIndices.w, mx))
+                let p4 = SIMD4<Float>(v.position, 1)
+                let n4 = SIMD4<Float>(v.normal, 0)
+                var sp = SIMD3<Float>(0, 0, 0)
+                var sn = SIMD3<Float>(0, 0, 0)
+                for k in 0..<4 {
+                    let tp = matrices[Int(idx[k])] * p4
+                    let tn = matrices[Int(idx[k])] * n4
+                    sp += w[k] * SIMD3<Float>(tp.x, tp.y, tp.z)
+                    sn += w[k] * SIMD3<Float>(tn.x, tn.y, tn.z)
+                }
+                p = sp; n = sn
+            }
+            out.append(contentsOf: [p.x, p.y, p.z, n.x, n.y, n.z, v.uv.x, v.uv.y])
+        }
+        return out
+    }
+
     /// animationlayers 레이어 이름 → 파스된 애니 인덱스. 실측: 레이어 "Idle" → 애니 "..._arm|idle_bone".
     /// 서브스트링 매칭(소문자) → 폴백 "idle" → 폴백 인덱스 0. 애니 없음 → -1.
     public static func resolveAnimation(model: Model3D, layerName: String?) -> Int {

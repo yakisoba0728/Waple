@@ -36,6 +36,10 @@ extension SceneRenderer {
         let boundsMax: SIMD3<Float>
         /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 — nil = Mesh3DShaders 고정 경로.
         var customPipeline: MTLRenderPipelineState? = nil
+        /// H1 스키닝: 커스텀 셰이더 메시용 CPU 프리스킨 8f 정점 링(스톡 GPU 본 스키닝 대신 rigid 계약).
+        var customSkinRing: DynamicVertexBuffer? = nil
+        /// CPU 프리스킨 입력 소스 — Model3D.meshes 인덱스(커스텀+스키닝 메시만 ≥0).
+        var modelMeshIndex: Int = -1
         /// M3: PBR 노멀맵/마스크 텍스처 — nil = 미사용.
         var normalTexture: MTLTexture? = nil
         var maskTexture: MTLTexture? = nil
@@ -264,7 +268,7 @@ extension SceneRenderer {
             let boneCount = model.bones.count
             var meshes: [GPU3DMesh] = []
             var anySkinned = false
-            for mesh in model.meshes {
+            for (modelMeshIdx, mesh) in model.meshes.enumerated() {
                 guard !mesh.vertices.isEmpty, !mesh.indices.isEmpty else { continue }
                 // 스키닝 메시(v3): pos3+normal3+uv2+boneIdx4+weight4(16f) — GPU 정점 스키닝(mv_skin).
                 // 정적 메시: pos3+normal3+uv2(8f). 본 인덱스는 boneCount-1 로 clamp(셰이더 OOB 방지).
@@ -308,9 +312,13 @@ extension SceneRenderer {
                                         gradientTexture: mat.gradientTexture, foggy: mat.foggy,
                                         boundsMin: bMin, boundsMax: bMax)
                 // H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드(실패 시 nil → Mesh3DShaders 폴터).
+                // 스키닝 메시는 CPU 프리스킨(8f, prepare3DCustomSkinBuffers)으로 rigid 입력 계약을 맞춘다.
                 if mat.customShader != nil {
-                    gpuMesh.customPipeline = buildCustomMeshShader(mat, package: package, device: device,
-                                                                   skinned: skinned)
+                    gpuMesh.customPipeline = buildCustomMeshShader(mat, package: package, device: device)
+                    if skinned && gpuMesh.customPipeline != nil {
+                        gpuMesh.customSkinRing = DynamicVertexBuffer()
+                        gpuMesh.modelMeshIndex = modelMeshIdx
+                    }
                 }
                 // M3: PBR 노멀맵/마스크 텍스처 로드.
                 if let normalName = mat.normalTextureName {
@@ -753,11 +761,13 @@ extension SceneRenderer {
     }
 
     /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드. 성공 시 파이프라인, 실패 시 nil(→ Mesh3DShaders 폴터).
-    /// 메시 정점(pos3+normal3+uv2)을 GLSLTranslator VIn(a_Position/a_TexCoord)에 어댑트하는 커스텀 버텍스 사용.
+    /// 메시 정점(pos3+normal3+uv2, 8f)을 GLSLTranslator VIn(a_Position/a_TexCoord)에 어댑트하는 버텍스 디스크립터.
+    /// 스키닝 메시는 CPU 프리스킨(prepare3DCustomSkinBuffers)으로 같은 8f 레이아웃을 맞춘 뒤 이 파이프라인을 탄다
+    /// (GLSLTranslator VIn 에 본 attribute/본 유니폼 배열을 꿰는 대수술 대신 최소 충실안 — 셰이더가 스스로
+    ///  a_BlendIndices 같은 미지원 attribute 를 선언하면 MSL 컴파일 실패 → 스톡 mv_skin 폴터).
     /// 셰이더 소스(.vert/.frag)는 씬 패키지 안 것만 인정(2D 경로와 동일 규칙 — 베이스 팩의 WE 빌트인
     /// 셰이더까지 이 경로로 빨려 들어오는 것을 차단). include(common.h 등)만 베이스 팩 폴터 허용.
-    func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice,
-                               skinned: Bool) -> MTLRenderPipelineState? {
+    func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice) -> MTLRenderPipelineState? {
         guard let shaderName = mat.customShader else { return nil }
         let include: (String) -> String? = { header in
             for cand in ["shaders/\(header)", header] {
@@ -782,12 +792,6 @@ extension SceneRenderer {
             NSLog("%@", "[Waple] custom mesh GLSL translate failed: \(shaderName)")
             return nil
         }
-        // 메시 정점 → VIn 어댑터: pos3+normal3+uv2(8 float) → a_Position(float3)+a_TexCoord(float2).
-        // 스키닝(16 float)은 미지원(본 유니폼 부재) — 정적 메시 한정.
-        guard !skinned else {
-            NSLog("%@", "[Waple] custom mesh shader: skinned mesh not supported: \(shaderName)")
-            return nil
-        }
         let lib: MTLLibrary
         do {
             lib = try WapleProfiler.compile(t.msl, { try device.makeLibrary(source: t.msl, options: nil) })
@@ -800,10 +804,12 @@ extension SceneRenderer {
         pd.vertexFunction = lib.makeFunction(name: "ev_main")
         pd.fragmentFunction = lib.makeFunction(name: "ef_main")
         let vd = MTLVertexDescriptor()
-        // a_Position float3@0, a_TexCoord float2@12, stride 20 — 메시 정점 레이아웃과 동일.
+        // 메시 정점 레이아웃 pos3+normal3+uv2(8f = 32B): a_Position=float3@0, a_TexCoord=float2@24.
+        // (H1 Phase 2 초기의 stride 20/uv@12 는 2D 쿼드 레이아웃 잘못 옮긴 값 — 8f 메시와 불일치하는
+        //  잠재 결함. 스키닝 메시도 CPU 프리스킨 후 동일 8f 라 같은 디스크립터를 쓴다.)
         vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 0
-        vd.attributes[1].format = .float2; vd.attributes[1].offset = 12; vd.attributes[1].bufferIndex = 0
-        vd.layouts[0].stride = 20
+        vd.attributes[1].format = .float2; vd.attributes[1].offset = 24; vd.attributes[1].bufferIndex = 0
+        vd.layouts[0].stride = 32
         pd.vertexDescriptor = vd
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
@@ -889,6 +895,34 @@ extension SceneRenderer {
             result[index] = buffer
         }
         skinBuffersFrameMemo = (time, result)
+        return result
+    }
+
+    /// 커스텀 셰이더 스키닝 메시용 CPU 프리스킨 8f 정점 버퍼 — prepare3DSkinBuffers 와 같은 프레임 메모 규약
+    /// (skin 행렬은 (model, anim, time, rate) 순수 함수라 같은 time 재호출은 재사용; ortho 하이브리드 다중 호출 대비).
+    /// 반환: meshRenderables 인덱스 → meshes 인덱스 → 프리스킨 정점 버퍼. 실패 메시는 누락 → 스톡 GPU 스키닝 폴터.
+    func prepare3DCustomSkinBuffers(time: Float, device: MTLDevice) -> [Int: [Int: MTLBuffer]] {
+        if let memo = customSkinFrameMemo, memo.time == time { return memo.buffers }
+        var result: [Int: [Int: MTLBuffer]] = [:]
+        for (index, renderable) in meshRenderables.enumerated() {
+            guard let model = renderable.model else { continue }
+            var matrices: [simd_float4x4]? = nil
+            for (mi, mesh) in renderable.meshes.enumerated() {
+                guard let ring = mesh.customSkinRing,
+                      mesh.modelMeshIndex >= 0, mesh.modelMeshIndex < model.meshes.count else { continue }
+                if matrices == nil {
+                    let m = Model3DPose.skinMatrices(
+                        model: model, animation: renderable.animIndex, time: time, rate: renderable.animRate)
+                    guard !m.isEmpty else { break }
+                    matrices = m
+                }
+                guard let m = matrices else { break }
+                let packed = Model3DPose.cpuSkinnedPacked(mesh: model.meshes[mesh.modelMeshIndex], matrices: m)
+                guard let buffer = ring.load(packed, device: device) else { continue }
+                result[index, default: [:]][mi] = buffer
+            }
+        }
+        customSkinFrameMemo = (time, result)
         return result
     }
 
@@ -1180,6 +1214,7 @@ extension SceneRenderer {
         }
         var lightUniforms = Scene3DLighting.packLights(resolvedLights)
         let skinBuffers = prepare3DSkinBuffers(time: time, device: device)
+        let customSkinBuffers = prepare3DCustomSkinBuffers(time: time, device: device)
         // F780: CSM 프러스텀 슬라이스 입력 — 위에서 per-frame 스크립트까지 해석된 카메라 값과 동일 출처.
         let shadowCamera = DirectionalShadowMath.ShadowCamera(
             eye: eye, forward: fwd, right: right, up: camUp,
@@ -1275,7 +1310,8 @@ extension SceneRenderer {
                     specularTint: SIMD4(1, 1, 1, 0),
                     rim: SIMD4(2, 4, 0, 0))
                 let boneBuf = skinBuffers[item.idx]
-                for mesh in mr.meshes {
+                let customSkins = customSkinBuffers[item.idx]
+                for (meshIdx, mesh) in mr.meshes.enumerated() {
                     // 스키닝 메시(16f 패킹)는 반드시 스키닝 파이프라인 필요 — 본버퍼 미준비면 스킵(8f 셰이더로 오독 방지).
                     if mesh.skinned && boneBuf == nil { continue }
                     u.tint = mesh.tint
@@ -1287,6 +1323,7 @@ extension SceneRenderer {
                     // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
                     u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
                     let useSkin = mesh.skinned && boneBuf != nil
+                    let customSkinBuf = customSkins?[meshIdx]
                     // H4: REFRACT 메시(정적·비커스텀 한정 — 커스텀 셰이더/스키닝은 기존 경로 폴터): 여기까지의
                     // target(acc)을 스냅샷(blit — 진행 중 타깃은 샘플 불가) 떠 노멀 오프셋 재샘플·곱. 인코더
                     // 분할은 runRefractLayer(2D)/F311 프레임버퍼 빌보드와 동일 패턴 — 분할 전 뎁스 .store 는
@@ -1335,9 +1372,12 @@ extension SceneRenderer {
                         // 스냅샷 확보 실패 — 재개한 enc 에서 일반 파이프라인으로 identity 폴터.
                     }
                     let pipe: MTLRenderPipelineState
-                    // H1 Phase 2: 커스텀 셰이더 파이프라인 우선(스키닝 미지원 → 정적 메시 한정).
-                    if let custom = mesh.customPipeline, !useSkin {
+                    var meshVBuf = mesh.vbuf
+                    // H1 Phase 2: 커스텀 셰이더 파이프라인 우선. 스키닝 메시는 CPU 프리스킨(8f) 버퍼로
+                    // rigid 입력 계약을 맞춘다(프리스킨 실패 시 스톡 GPU 스키닝 mv_skin 폴터).
+                    if let custom = mesh.customPipeline, !mesh.skinned || customSkinBuf != nil {
                         pipe = custom
+                        if let customSkinBuf { meshVBuf = customSkinBuf }
                     } else if (mesh.normalTexture != nil || mesh.maskTexture != nil), !useSkin,
                               let normalPipe = mesh.additive ? meshPipelineNormalAdditive : meshPipelineNormal {
                         // M3: PBR 노멀맵/마스크 파이프라인(정적 메시 한정).
@@ -1356,9 +1396,10 @@ extension SceneRenderer {
                         enc.setDepthStencilState(ds)
                     }
                     enc.setCullMode(mesh.cullBack ? .back : .none)
-                    enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                    enc.setVertexBuffer(meshVBuf, offset: 0, index: 0)
                     enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                    if useSkin, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
+                    // 커스텀 파이프라인(CPU 프리스킨)은 본 버퍼 불요 — 스톡 GPU 스키닝 경로만 buffer(2) 바인딩.
+                    if useSkin, pipe !== mesh.customPipeline, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
                     enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
                     enc.setFragmentTexture(mesh.texture, index: 0)
                     // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
