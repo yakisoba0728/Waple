@@ -1,5 +1,7 @@
 import XCTest
+import AppKit
 import Metal
+@testable import WapleCore
 @testable import WapleRender
 
 /// #22 HDR bloom(hdr && bloom) — 추출(PS 29931 soft-knee)→blur13→합성(saturate(base+bloom) =
@@ -17,6 +19,23 @@ final class HDRBloomTests: XCTestCase {
             parameters: HDRBloomParameters
         ) -> Bool {
             false
+        }
+    }
+
+    /// P③: 피라미드에 실제로 전달되는 파라미터를 가로채는 스파이 — 값 자체(더블카운팅 유무)를
+    /// 픽셀 관측이 아니라 경계에서 직접 단언하기 위함(골든 없이도 결정적).
+    private final class RecordingHDRBloomPyramidEncoder: HDRBloomPyramidEncoding {
+        var received: HDRBloomPyramidParameters?
+        func encode(
+            commandBuffer: MTLCommandBuffer,
+            source: MTLTexture,
+            levels: [MTLTexture],
+            scratches: [MTLTexture],
+            destination: MTLTexture,
+            parameters: HDRBloomPyramidParameters
+        ) -> Bool {
+            received = parameters
+            return true
         }
     }
 
@@ -268,6 +287,60 @@ final class HDRBloomTests: XCTestCase {
             renderer.hdrBloomPass = FailingHDRBloomEncoder()
         })
         XCTAssertEqual(failing, expected)
+    }
+
+    /// P③: 피라미드가 받는 strength 는 raw 저작값(단일레벨 hdrBloomParameters.strength 의
+    /// ×max(1,iterations) 보정과 무관)이어야 하고, scatter/levels 는 하드코딩 1.619/8 이 아니라
+    /// 저작 bloomhdrscatter/bloomhdriterations 그대로여야 한다 — 픽셀이 아니라 경계값 직접 단언
+    /// (골든 없이 결정적, 이중보정 회귀를 확실히 잡음).
+    func testFinalizeFeedsPyramidRawStrengthAndAuthoredScatterLevelsNotInflatedSingleLevelValue() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let spy = RecordingHDRBloomPyramidEncoder()
+        _ = try finalize(device: device, configure: { renderer in
+            renderer.sceneWantsHDRBloom = true
+            renderer.hdrBloomPyramidPass = spy
+            // 단일레벨 hdrBloomParameters.strength 는 저작값(2) × iterations(8) × strengthScale(1) = 16 처럼
+            // 의도적으로 이미 부풀려진 값을 넣어둔다 — 피라미드가 이 값을 재사용하면(이중보정) 테스트가 잡는다.
+            renderer.hdrBloomParameters = HDRBloomParameters(strength: 16, threshold: 0.5, feather: 0.2, tint: SIMD3(1, 1, 1))
+            renderer.hdrBloomPyramidStrength = 2       // raw 저작 bloomhdrstrength
+            renderer.hdrBloomPyramidScatter = 2.5       // raw 저작 bloomhdrscatter(≠ 하드코딩 1.619)
+            renderer.hdrBloomPyramidLevels = 4          // raw 저작 bloomhdriterations(≠ 하드코딩 8)
+        })
+        let received = try XCTUnwrap(spy.received, "피라미드 인코더가 호출되지 않음")
+        XCTAssertEqual(received.strength, 2, "피라미드 strength 는 raw 저작값이어야(단일레벨용 ×iterations 보정 재사용 금지)")
+        XCTAssertEqual(received.scatter, 2.5, "피라미드 scatter 는 저작 bloomhdrscatter 여야(하드코딩 1.619 금지)")
+        XCTAssertEqual(received.levels, 4, "피라미드 levels 는 저작 bloomhdriterations 여야(하드코딩 8 금지)")
+        // threshold/feather/tint 는 여전히 단일레벨 hdrBloomParameters 공유(스코프 밖 — 무변경 확인).
+        XCTAssertEqual(received.threshold, 0.5)
+        XCTAssertEqual(received.feather, 0.2)
+    }
+
+    /// P③ 배선 확인: mount() 가 doc.bloomHDRStrength/Scatter/Iterations 를 피라미드용 raw 필드에
+    /// 그대로 옮기고, 단일레벨 hdrBloomParameters.strength 는 종전대로 ×max(1,iterations) 보정을
+    /// 유지해야 한다(피라미드 실패 폴백 경로 무회귀).
+    func testMountWiresAuthoredBloomHDRFieldsToPyramidRawStorage() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":64,"height":64},"clearcolor":"0 0 0",
+          "hdr":true,"bloom":true,"bloomhdrstrength":1.4,"bloomhdrthreshold":0.7,
+          "bloomhdrfeather":0.25,"bloomhdriterations":6,"bloomhdrscatter":2.0},"objects":[]}
+        """
+        let files: [(String, Data)] = [("scene.json", Data(scene.utf8))]
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_p3_wire_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg(files).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(
+            id: "p3wire", type: .scene, fileName: "scene.pkg", previewName: nil,
+            title: "p3wire", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let renderer = SceneRenderer()
+        try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
+        defer { renderer.teardown() }
+        XCTAssertEqual(renderer.hdrBloomPyramidStrength, 1.4, accuracy: 1e-4, "피라미드 raw strength = 저작 bloomhdrstrength(×iterations 미적용)")
+        XCTAssertEqual(renderer.hdrBloomPyramidScatter, 2.0, accuracy: 1e-4, "피라미드 scatter = 저작 bloomhdrscatter")
+        XCTAssertEqual(renderer.hdrBloomPyramidLevels, 6, "피라미드 levels = 저작 bloomhdriterations")
+        // 단일레벨 폴백용 hdrBloomParameters.strength 는 종전 규약(×max(1,iterations)×strengthScale) 유지 — 무회귀.
+        XCTAssertEqual(renderer.hdrBloomParameters.strength, 1.4 * 6 * HDRBloomPass.strengthScale, accuracy: 1e-4)
     }
 
     private func hdrPostReference(device: MTLDevice) throws -> [UInt8] {

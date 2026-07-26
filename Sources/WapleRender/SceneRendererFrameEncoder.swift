@@ -34,12 +34,20 @@ extension SceneRenderer {
     /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요)
     /// + texFilter[8](감사 V07: 슬롯별 1=nearest/0=linear, pass.texFilter 그대로 — TexImage.noInterpolation)
     /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값) + X-⑤ targetRes[4]
+<<<<<<< HEAD
     /// (g_TexelSize/g_TexelSizeHalf 전용 — 이펙트 체인 경로는 출력(dst) 해상도 고정값, 전 패스 불변).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
     /// targetRes 는 의도적으로 기본값 없음(교차배치 리뷰 must_fix) — 신규 호출부는 자기 렌더 타깃
     /// 해상도를 명시 전달할 것(예: 3D 커스텀 메시 경로라면 소스 texRes.first 근사). 기본값 (1,1,1,1)
     /// 을 되살리면 그 호출부만 g_TexelSize=1.0 으로 조용히 깨진다 — 컴파일 에러가 나면 값을 채울 것,
     /// 파라미터를 다시 옵셔널로 되돌리지 말 것.
+=======
+    /// (이펙트 출력(dst) 해상도, 전 패스 불변 — g_TexelSize/g_TexelSizeHalf 전용, 소스 텍스처 아님).
+    /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
+    // P⑥×X-⑤ 교차배치(검증 must_fix): targetRes 는 기본값을 두지 않는다 — 기본값이 있으면 새 호출부가
+    // 인자를 빠뜨려도 컴파일이 통과해 g_TexelSize=1.0(UV 전체 1텍셀)으로 조용히 깨진다(3D 커스텀 메시
+    // 경로에서 실제로 발생). 필수 인자화해 신규 호출부를 컴파일 타임에 강제 검출한다.
+>>>>>>> worktree-wf_88f7dabe-f8a-3
     func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = [], texFilter: [Float] = [],
                        layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1),
                        targetRes: SIMD4<Float>,
@@ -263,15 +271,25 @@ extension SceneRenderer {
     /// 컴포지션(_rt_) 레이어 실행: 현재 encoder 를 닫고, acc 스냅샷(blit — 진행 중 타깃은 샘플 불가)에
     /// 레이어의 효과 체인을 적용한 뒤, 새 encoder(.load)로 레이어 지오메트리에 결과를 그린다.
     /// 반환된 encoder 로 나머지 drawPlan 을 계속한다. 실패 시 기존 흐름 유지 위해 새 encoder 만 연다.
+    /// P⑤: colorBlendMode 도 함께 저작된 레이어(코퍼스 13씬: _rt_ + colorBlendMode 동시 보유)는 종전
+    /// encodeDrawPlan 매치 순서(isFrameBuffer 가 colorBlendMode 보다 먼저 매치)때문에 f_compose 로만
+    /// 그려져 저작 블렌드 모드가 통째로 무시됐다(주석 명시 우선순위 lit>colorBlendMode>framebuffer 위반).
+    /// 매치 순서 자체를 바꾸면 colorBlendMode 경로(runBlendModeLayer)가 buildDisplayTextures 의 원본
+    /// 텍스처(효과 체인 스킵 — isFrameBuffer 는 사전계산 불가, :1485)를 쓰게 돼 이펙트 체인 결과를
+    /// 통째로 잃는다. 대신 이 함수 안에서 colorBlendMode 를 함께 반영: 효과 체인 실행 전 acc 스냅샷을
+    /// blendSnapshot 으로 보존해 encodeLayer 에 넘기면(:1113 의 f_blend 분기가 :1119 compose 분기보다
+    /// 우선) 이펙트 체인 결과(srcTex)는 그대로 유지한 채 저작 블렌드 모드가 적용된다.
     func runFrameBufferLayer(_ layer: GPULayer, acc: MTLTexture, cb: MTLCommandBuffer,
                                      ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
                                      camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var srcTex: MTLTexture? = nil
+        var backdrop: MTLTexture? = nil
         if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
            let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: acc, to: snap)
             blit.endEncoding()
+            backdrop = snap
             var current: MTLTexture = snap
             for eff in layer.effects {
                 guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
@@ -292,10 +310,29 @@ extension SceneRenderer {
             // NOTE: acc 는 premultiplied 누적이라 스냅샷도 premult — straight 규약과의 미세 오차는
             // 불투명 배경(일반 씬)에선 없음(설계 §4). fit/fill 시 aspectScale 이중 적용 에지도 §3 참고.
             // time/device 전달 — 누락 시 기본값(0/nil)으로 _rt_ 레이어의 애니·프로퍼티 스크립트 동결.
+            // P⑤: 효과 체인이 0패스(srcTex===backdrop)면 블렌드 소스=타깃 자기샘플이 되므로 blendSnapshot
+            // 생략(무회귀 f_compose 폴백) — 효과 체인이 실제로 다른 텍스처를 만들었을 때만 블렌드 적용.
+            let blendSnapshot: MTLTexture? = (layer.colorBlendMode != 0 && srcTex !== backdrop) ? backdrop : nil
             encodeLayer(layer, texture: srcTex, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
-                        time: time, device: device)
+                        time: time, device: device, blendSnapshot: blendSnapshot)
         }
         return next
+    }
+
+    /// P⑦: colorBlendMode 레이어 전용 acc 스냅샷 — pooledOffscreen(프레임 내 단조 체크아웃, :239-253)을
+    /// 쓰면 블렌드 레이어 수(N)만큼 드로어블 크기 텍스처가 동시 상주한다(코퍼스 2955378002 실측 366개,
+    /// 4K 기준 ≈12GB). 커맨드 버퍼 내 인코더는 제출 순서대로 실행되므로, 레이어 직전에 acc 를 다시
+    /// blit 하는 이 패턴에서는 스냅샷 1장을 순차 재사용해도 매 레이어가 항상 "그 시점까지의" acc 를
+    /// 그대로 샘플한다(내용은 종전과 비트동일 — 텍스처 아이덴티티만 바뀜). 크기/포맷(acc 와 동형,
+    /// P① hdrActive 에 따라 동적)이 바뀌면만 재할당.
+    func blendModeSnapshotSlot(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
+        let fmt: MTLPixelFormat = hdrActive ? .rgba16Float : .bgra8Unorm
+        if let t = blendModeSnapshotTexture, t.width == w, t.height == h, t.pixelFormat == fmt {
+            return t
+        }
+        let t = hdrActive ? makeOffscreenHDR(w, h, device) : makeOffscreenBGRA(w, h, device)
+        blendModeSnapshotTexture = t
+        return t
     }
 
     /// colorBlendMode 레이어: acc 스냅샷(dst) 확보 → f_blend 로 레이어 쿼드 드로우 → 새 인코더 반환.
@@ -305,7 +342,7 @@ extension SceneRenderer {
                            camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var snapshot: MTLTexture? = nil
-        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+        if let snap = blendModeSnapshotSlot(acc.width, acc.height, device),
            let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: acc, to: snap)
             blit.endEncoding()
@@ -741,7 +778,7 @@ extension SceneRenderer {
                 // H4: REFRACT 메시(정적·비커스텀 한정): 여기까지의 acc(하위 order 2D 레이어+선행 메시 누적)를
                 // 스냅샷 떠 노멀 오프셋 재샘플·곱(인코더 분할 — encode3D 의 H4 분기와 동형). 스냅샷 실패 시
                 // 아래 일반 경로 폴터(무크래시).
-                if mesh.refract, let refractNormal = mesh.refractNormal, !useSkin, mesh.customPipeline == nil,
+                if mesh.refract, let refractNormal = mesh.refractNormal, !useSkin, mesh.customShader == nil,
                    let refractPipe = mesh.additive ? (meshPipelineRefractAdditive ?? meshPipelineRefract)
                                                  : meshPipelineRefract {
                     menc.endEncoding()
@@ -1111,12 +1148,17 @@ extension SceneRenderer {
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                 }
             }
+<<<<<<< HEAD
             // X-⑤ 스코프 밖: 이 경로는 tex0(custom.texRes.first, 레이어 자산 텍스처 해상도)를 그대로
             // targetRes 에 실어 무회귀만 유지한다. 이펙트 체인 경로(위 g_TexelSize 정본)와 규약이
             // 이원화된 상태이며, tex0=타깃이라는 근거는 확인되지 않았다(레이어 자산 해상도와 합성
             // RT 해상도가 실제로 다른 경우가 흔함) — 알려진 미검증 괴리로 남겨둔 것이지 옳다고
             // 확인된 근사가 아니다. 값을 바꾸는 것은 이번 배치 스코프 밖(무회귀 우선), 필요 시 라이브
             // A/B 로 별도 재검증.
+=======
+            // X-⑤ 스코프 밖(레이어 커스텀 셰이더는 다운스케일 멀티패스 체인이 없어 tex0=타깃이 통례) —
+            // 종전 tex0 근사를 그대로 targetRes 에 실어 무회귀 유지.
+>>>>>>> worktree-wf_88f7dabe-f8a-3
             let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
                                     texFilter: custom.texFilter, layerTint: tint,
                                     targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: m)
@@ -1596,11 +1638,17 @@ extension SceneRenderer {
             // 멀티패스: 이름 있는 FBO(다운스케일 또는 X-① 절대 크기)를 풀에서 할당하고, 각 패스를
             // target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
+<<<<<<< HEAD
             // X-⑤: g_TexelSize/g_TexelSizeHalf = 이펙트 출력(dst) 1텍셀, 체인 전 패스 불변 — 채택된
             // 정본이며 "실측으로 확정"은 아니다(근거 판별력 한계는 GLSLTranslator.assemble 의
             // EngineU/g_TexelSize 주석 참조). 다운스케일 fbo 를 타깃/소스로 쓰는 패스에서도 종전 tex0
             // 근사(4× 과대 오프셋)가 아니라 이 값을 쓴다 — bokeh_blur 12씬 블러 폭은 라이브 A/B
             // 판독 대기(BACKLOG.md 시각 충실도 표).
+=======
+            // X-⑤: g_TexelSize/g_TexelSizeHalf = 이펙트 출력(dst) 1텍셀, 체인 전 패스 불변(WE gaussian.vert
+            // 실측 근거는 GLSLTranslator.assemble 의 EngineU 선언 주석) — 다운스케일 fbo 를 타깃/소스로 쓰는
+            // 패스에서도 종전 tex0 근사(4× 과대 오프셋, bokeh 12씬)가 아니라 이 값을 쓴다.
+>>>>>>> worktree-wf_88f7dabe-f8a-3
             let targetRes = SIMD4<Float>(Float(baseW), Float(baseH), Float(baseW), Float(baseH))
             var fboTex: [MTLTexture] = []
             for spec in fboSpecs {

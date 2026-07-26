@@ -18,20 +18,26 @@ extension SceneRenderer {
             // 비-sRGB 타깃엔 이중감마가 된다 — 근거·실측은 HDRBloomPass 헤더/합성부 주석).
             // 이 분기(블룸)와 아래 hdrPost 폴백은 이제 동일 saturate 규약 — hdr&&!bloom 은
             // hdrPost(클램프)로 확정, 블룸 실패 폴백도 같은 클램프라 폴백 시각 점프 없음.
-            // 3D HDR 씬도 이 경로 도달(hdrActive=sceneIsHDR): acc·메시·파티클 파이프라인이 accPixelFormat(float)
+            // 3D HDR 씬도 이 경로 도달(hdrActive 는 이제 sceneIsHDR && accPixelFormat==.rgba16Float, P① —
+            // quality 가 float 를 실제로 내주는 경우만): acc·메시·파티클 파이프라인이 accPixelFormat(float)
             // 로 승격돼 소스가 float — 골든 3470948192(3D)의 bloom 지상검증이 여기서 성립.
             // 자원/인코드 실패는 hdrPost(saturate 클램프)로 폴백(무크래시·동일 규약). pooledOffscreen(bgra:true)는 hdrActive
-            // 에서 float(rgba16Float)로 자동 승격된다(중간 버퍼가 소스와 동일 float 계약).
-            // 비-HDR 씬은 hdrActive=false 로 이 블록 자체에 도달 불가(격리 — 148씬 무접촉).
+            // 에서 float(rgba16Float)로 자동 승격된다(중간 버퍼가 소스와 동일 float 계약) — accPixelFormat 과 단일소스.
+            // 비-HDR 씬(또는 hdr 여도 quality low/medium)은 hdrActive=false 로 이 블록 자체에 도달 불가
+            // (격리 — 후자는 rawCopy/LDR 경로로 안전 폴백, P① 참조).
             // H6: 8-레벨 피라미드 우선 — quarter 추출→레벨별 blur→additive 업샘플(소스가 작으면
             // 허용 mip 수로 클램프). 자원/인코드 실패 시 기존 단일 레벨 HDRBloomPass 폴터(무회귀).
             if sceneWantsHDRBloom, let hdrBloomPyramidPass {
+                // P③: strength 는 raw(hdrBloomParameters.strength 의 ×iterations 보정은 단일레벨
+                // 폴백 전용 — 피라미드는 N레벨 가산 누적 자체가 그 보상이라 재적용하면 이중 보정된다),
+                // scatter/levels 는 저작 bloomhdrscatter/bloomhdriterations 그대로.
                 let pyramidParameters = HDRBloomPyramidParameters(
-                    strength: hdrBloomParameters.strength,
+                    strength: hdrBloomPyramidStrength,
                     threshold: hdrBloomParameters.threshold,
                     feather: hdrBloomParameters.feather,
                     tint: hdrBloomParameters.tint,
-                    scatter: 1.619)
+                    scatter: hdrBloomPyramidScatter,
+                    levels: hdrBloomPyramidLevels)
                 let levelCount = HDRBloomPyramidPass.levelCount(
                     requested: pyramidParameters.levels,
                     sourceWidth: source.width,

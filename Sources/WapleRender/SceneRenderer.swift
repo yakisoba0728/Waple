@@ -648,14 +648,28 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var hdrBloomPass: HDRBloomEncoding?
     /// H6: HDR bloom 8-레벨 피라미드(기존 단일 레벨 대비 글로우 반경 확장 — WE 실측 8단).
     var hdrBloomPyramidPass: HDRBloomPyramidEncoding?
+    /// P③: 피라미드 전용 원본 저작값 — hdrBloomParameters.strength 는 단일레벨 HDRBloomPass 폴백을
+    /// 위해 ×max(1,iterations) 로 보정돼 있어(HDRBloomPass.strengthScale 주석) 피라미드에 그대로
+    /// 쓰면 N레벨 가산 누적과 겹쳐 이중 보정된다. 피라미드는 raw strength 와 저작
+    /// bloomhdrscatter/bloomhdriterations 를 그대로 받는다(SceneRendererFinalizer 가 소비).
+    var hdrBloomPyramidStrength: Float = 0
+    var hdrBloomPyramidScatter: Float = HDRBloomPyramidParameters.defaults.scatter
+    var hdrBloomPyramidLevels: Int = 8
     /// H5: 볼륨 라이트 샤프트 패스(castVolumetrics 라이트).
     var volumetricLightPass: VolumetricLightPass?
     /// HDR 경로 실효 게이트(2D·3D 공통). 3D 씬도 acc/메시/파티클 파이프라인이 accPixelFormat(float)로
     /// 승격되므로(mesh3DPipeline/particle3DPipeline) HDRBloomPass 에 도달 — 유일 HDR 골든(3470948192=3D) 대조 가능.
-    var hdrActive: Bool { sceneIsHDR }
+    /// P①: accPixelFormat(레이어/메시/파티클 파이프라인 어태치먼트 포맷)과 동일 조건으로 좁힘 —
+    /// 종전엔 sceneIsHDR 단독이라 quality low/medium + hdr 씬에서 accPixelFormat 은 bgra8Unorm 인데
+    /// pooledOffscreen(bgra:true)(:242)의 float 승격은 hdrActive 만 보고 rgba16Float 를 만들어
+    /// 렌더 타깃-파이프라인 포맷이 불일치했다(감사 P① id 3/5/17/36/45, quality 키 보유 씬 0/460 —
+    /// 잠복이었으나 구성 가능한 입력). 이제 hdrActive 는 accPixelFormat 이 실제로 float 일 때만 true —
+    /// pooledOffscreen/finalizeScene(HDR 블룸·hdrPost 분기)이 전부 이 값 하나로 정합.
+    var hdrActive: Bool { sceneIsHDR && accPixelFormat == .rgba16Float }
     /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
     /// HDR 이면 float(>1 보존) — mount 에서 sceneIsHDR 확정 후 파이프라인 생성에 사용.
     /// H7: 품질 설정 반영 — low/medium 은 hdr 여도 bgra8Unorm(성능 우선), high/ultra 는 hdr 시 rgba16Float.
+    /// P①: 단일 소스 — hdrActive/pooledOffscreen 의 float 승격 판정이 이 계산을 그대로 미러링한다(위 참조).
     var accPixelFormat: MTLPixelFormat {
         switch sceneQuality {
         case .low, .medium: return .bgra8Unorm
@@ -1091,6 +1105,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             threshold: doc.bloomHDRThreshold,
             feather: doc.bloomHDRFeather,
             tint: SIMD3(doc.bloomTint.x, doc.bloomTint.y, doc.bloomTint.z))
+        // P③: 피라미드는 raw strength(×iterations 보정 없음 — 피라미드 자체가 N레벨을 가산 누적)와
+        // 저작 scatter/iterations 를 그대로 받는다(단일레벨 hdrBloomParameters 와 별개 소스).
+        hdrBloomPyramidStrength = doc.bloomHDRStrength
+        hdrBloomPyramidScatter = doc.bloomHDRScatter
+        hdrBloomPyramidLevels = max(1, doc.bloomHDRIterations)
         if sceneWantsHDRBloom {
             hdrBloomPass = HDRBloomPass(device: device)
             hdrBloomPyramidPass = HDRBloomPyramidPass(device: device)
@@ -1425,6 +1444,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     // 프레임 간 재사용은 비-heap tracked 텍스처라 Metal 자동 hazard tracking 이 동기화를 보장(무손상).
     var texturePool: [String: [MTLTexture]] = [:]
     var poolCheckout: [String: Int] = [:]
+
+    // P⑦: colorBlendMode 레이어 전용 acc 스냅샷 캐시 — 풀에서 레이어마다 새 텍스처를 체크아웃하지 않고
+    // 1장을 재사용한다(runBlendModeLayer 참조). 크기/포맷(acc 와 동형) 불일치 시에만 재할당.
+    var blendModeSnapshotTexture: MTLTexture?
 
 
     func updateParallax(_ off: CGPoint) {
@@ -1900,6 +1923,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         pointShadowDepthState = nil; pointShadowAtlas = nil; pointShadowAtlasSlices = 0
         meshDepthStates.removeAll(); depthTextures.removeAll()
         texturePool.removeAll(); poolCheckout.removeAll()
+        blendModeSnapshotTexture = nil
         sceneIsHDR = false
         hdrPost = nil
         sceneWantsLDRBloom = false

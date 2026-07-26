@@ -54,6 +54,230 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         XCTAssertTrue(true, "mount completed without crash")
     }
 
+    /// 정적(비스키닝) 쿼드 MDLV0023 — pos3+normal3+tangent4+uv2(stride 48), formatFlag 0x0f(normal+tangent, no skin).
+    /// materialPath 는 MDL 내부에 박히는 머티리얼 참조 문자열(파일명 규약과 무관 — loadMesh3DMaterial 이
+    /// mesh.material 값 그대로 자산을 찾는다) — 한 테스트에서 서로 다른 머티리얼의 모델 여러 개를 쓸 때는
+    /// 반드시 실제 파일 배치와 맞춰 명시해야 한다(디폴트 재사용 시 전부 같은 머티리얼을 참조하게 됨).
+    private func staticQuadMDL(materialPath: String = "materials/quad.json") -> Data {
+        var d = Data("MDLV0023".utf8)
+        d.append(0)
+        func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func f32(_ v: Float) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        u32(0x0000000f); u32(1); u32(1)
+        d.append(Data(materialPath.utf8)); d.append(0)
+        u32(0)
+        for v: Float in [-1, -1, 0, 1, 1, 0] { f32(v) }   // AABB
+        u32(0x0000000f)                                    // formatFlag: normal(0x2)+tangent(0x4), no skin
+        let verts: [(Float, Float, Float, Float)] = [       // 화면 가득 채우는 정면 쿼드
+            (-1, -1, 0, 1), (1, -1, 1, 1), (1, 1, 1, 0), (-1, 1, 0, 0),
+        ]
+        u32(UInt32(verts.count * 48))                       // 정적 스트라이드 48
+        for (x, y, u, v) in verts {
+            [x, y, 0, 0, 0, 1, 1, 0, 0, -1].forEach(f32)    // pos3, normal3(+Z), tangent4
+            f32(u); f32(v)
+        }
+        let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+        u32(UInt32(indices.count * 2))
+        for i in indices { var x = i.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        return d
+    }
+
+    /// P⑥: 커스텀 3D 메시 셰이더가 (a) buffer(1)=EngineU(320B) 정본을 바인딩하는지(g_Texture1Resolution
+    /// 이 아닌 값을 읽으면 MeshUniform 오독 — normalMatrix/tint 바이트가 텍셀 크기로 잡힘), (b) 정점
+    /// bufferIndex 0↔4 충돌을 회피해 머티리얼 상수(buffer(0))가 있어도 파이프라인이 실제로 빌드·드로우
+    /// 되는지(충돌 시 try? 가 조용히 nil→스톡 폴백, 커스텀 셰이더가 전혀 반영되지 않음), (c) 보조 텍스처
+    /// (materials textures[1])가 실제로 g_Texture1 슬롯에 바인딩되는지를 한 픽셀로 동시에 검증한다.
+    /// 기대 픽셀: R=머티리얼 상수(0.6, buffer(0) 정합) / G=aux 텍스처 blue 채널(0.8, 보조 텍스처 바인딩)
+    /// / B=g_Texture1Resolution.x/10(0.8, aux 는 8px 폭 — EngineU.texRes 정합). 세 값 모두 0/1 이 아닌
+    /// 임의값이라, 스톡 폴백(파이프라인 빌드 실패)이나 필드 오독이면 이 조합이 우연히 나오지 않는다.
+    func testCustomMeshShaderBindsEngineUniformMaterialAndAuxTexture() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"fov":50,"clearcolor":"0 0 0","ambientcolor":"1 1 1","skylightcolor":"1 1 1"},
+         "camera":{"eye":"0 0 3","center":"0 0 0","up":"0 1 0"},
+         "objects":[{"model":"models/quad.mdl","origin":"0 0 0"}]}
+        """
+        let material = """
+        {"passes":[{"shader":"tinttest","textures":["albedo","auxblue"],
+                     "constantshadervalues":{"tint":0.6}}]}
+        """
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+        """
+        let frag = """
+        uniform vec4 g_Texture1Resolution;
+        uniform float u_tint; // {"material":"tint","default":0.0}
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture1;
+        void main() {
+            vec4 aux = texSample2D(g_Texture1, v_TexCoord);
+            gl_FragColor = vec4(u_tint, aux.b, g_Texture1Resolution.x / 10.0, 1.0);
+        }
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/quad.mdl", staticQuadMDL()),
+            ("materials/quad.json", material.data(using: .utf8)!),
+            ("materials/albedo.tex", solidTex(255, 255, 255)),
+            ("materials/auxblue.tex", solidTex(0, 0, 204, w: 8, h: 8)),  // 204/255≈0.8, width=8
+            ("shaders/tinttest.vert", vert.data(using: .utf8)!),
+            ("shaders/tinttest.frag", frag.data(using: .utf8)!),
+        ]
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)),
+                    project: try project(files: files, id: "engineuniform"))
+        defer { r.teardown() }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_h1eu_out", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: dir).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 32))
+        XCTAssertEqual(Double(c.redComponent), 0.6, accuracy: 0.05,
+                       "머티리얼 상수(buffer(0)) 미반영 — bufferIndex 0/4 충돌 또는 파이프라인 폴백 의심")
+        XCTAssertEqual(Double(c.greenComponent), 0.8, accuracy: 0.05,
+                       "보조 텍스처(g_Texture1) 미바인딩 의심")
+        XCTAssertEqual(Double(c.blueComponent), 0.8, accuracy: 0.05,
+                       "g_Texture1Resolution(EngineU.texRes) 오독 의심 — MeshUniform 바인딩 잔존 가능성")
+    }
+
+    /// P⑥ 회귀: bindScene3DLighting 은 섀도우 아틀라스(depth2d_array)를 fragment texture(1)에 드로 루프
+    /// 진입 "전" 1회만 바인딩한다. 커스텀 메시가 보조 텍스처(materials textures[1], 가장 흔한 aux slot)를
+    /// texture(1)에 얹으면 그 바인딩이 같은 encoder 로 뒤이어 그려지는 스톡 섀도우-리시버 메시까지
+    /// 지속돼(Metal encoder 상태는 draw 간 유지) 아틀라스 대신 그 색상 텍스처를 타입 불일치로 샘플하게
+    /// 된다 — 원복 누락 시 리시버의 섀도우 항이 무너져 castshadow on/off 대비 밝기 차가 사라진다.
+    /// 화면 밖(scale 극소, 원점에서 멀리)에 커스텀 aux 메시를 리시버보다 먼저(order) 그리게 하고,
+    /// Scene3DPBRShadowRenderTests 와 동일한 오클루더/리시버 구성으로 그림자 대비가 여전히 나타나는지
+    /// (평균 휘도 하락)로 간접 검증한다.
+    func testCustomMeshAuxTextureAtSlot1DoesNotClobberShadowAtlasForLaterMeshes() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+
+        func capture(lightCastsShadow: Bool, tag: String) throws -> NSBitmapImageRep {
+            let scene = """
+            {"camera":{"eye":"3 0 5","center":"0 0 0","up":"0 1 0"},
+             "general":{"orthogonalprojection":null,"fov":50.0,"nearz":0.05,"farz":50,
+                        "clearcolor":"0 0 0","ambientcolor":"0.04 0.04 0.04","skylightcolor":"0.04 0.04 0.04"},
+             "objects":[
+               {"id":0,"name":"customaux","model":"models/aux.mdl","origin":"500 500 500","scale":"0.001 0.001 0.001"},
+               {"id":1,"name":"receiver","model":"models/plane.mdl","origin":"0 0 0","scale":"2.5 2.5 2.5","castshadow":false},
+               {"id":2,"name":"occluder","model":"models/plane.mdl","origin":"0 0 2","scale":"0.55 0.55 0.55","castshadow":true},
+               {"id":3,"name":"key","light":"lpoint","origin":"0 0 4","color":"1 1 1","intensity":2,
+                "radius":10,"exponent":2,"castshadow":\(lightCastsShadow ? "true" : "false")}
+             ]}
+            """
+            let planeMaterial = #"{"passes":[{"textures":["white"],"constantshadervalues":{"roughness":0.7,"metallic":0}}]}"#
+            let auxMaterial = #"{"passes":[{"shader":"auxslot1","textures":["_unused","auxcolor"]}]}"#
+            let vert = """
+            uniform mat4 g_ModelViewProjectionMatrix;
+            attribute vec3 a_Position;
+            attribute vec2 a_TexCoord;
+            varying vec2 v_TexCoord;
+            void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+            """
+            let frag = """
+            varying vec2 v_TexCoord;
+            uniform sampler2D g_Texture1;
+            void main() { gl_FragColor = texSample2D(g_Texture1, v_TexCoord); }
+            """
+            let files: [(String, Data)] = [
+                ("scene.json", Data(scene.utf8)),
+                ("models/plane.mdl", staticQuadMDL(materialPath: "materials/plane.json")),
+                ("materials/plane.json", Data(planeMaterial.utf8)),
+                ("materials/white.tex", solidTex(255, 255, 255, w: 2, h: 2)),
+                ("models/aux.mdl", staticQuadMDL(materialPath: "materials/aux.json")),
+                ("materials/aux.json", Data(auxMaterial.utf8)),
+                ("materials/_unused.tex", solidTex(255, 255, 255)),
+                ("materials/auxcolor.tex", solidTex(255, 0, 255)),
+                ("shaders/auxslot1.vert", Data(vert.utf8)),
+                ("shaders/auxslot1.frag", Data(frag.utf8)),
+            ]
+            let root = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("waple_p6aux_\(tag)_\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try encodePkg(files).write(to: root.appendingPathComponent("scene.pkg"))
+            let project = WallpaperProject(id: "p6aux_\(tag)", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                           title: "p6aux", tags: [], contentRating: nil, workshopId: nil,
+                                           dependency: nil, folderURL: root)
+            let renderer = SceneRenderer()
+            try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
+            defer { renderer.teardown(); try? FileManager.default.removeItem(at: root) }
+            let output = root.appendingPathComponent("capture", isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let url = try XCTUnwrap(renderer.captureFrames(width: 64, height: 64, times: [0], toDir: output).first)
+            return try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        }
+        func averageLuminance(_ image: NSBitmapImageRep) -> Double {
+            var total = 0.0, count = 0.0
+            for y in 0..<image.pixelsHigh {
+                for x in 0..<image.pixelsWide {
+                    guard let c = image.colorAt(x: x, y: y) else { continue }
+                    total += c.redComponent * 0.2126 + c.greenComponent * 0.7152 + c.blueComponent * 0.0722
+                    count += 1
+                }
+            }
+            return count > 0 ? total / count : 0
+        }
+        let withShadow = try capture(lightCastsShadow: true, tag: "on")
+        let withoutShadow = try capture(lightCastsShadow: false, tag: "off")
+        // 아틀라스가 aux 텍스처로 오염됐다면 castshadow on/off 가 리시버 셰이딩에 차이를 못 만든다
+        // (둘 다 같은 색 텍스처를 "그림자"로 오독하거나 타입 불일치로 동일하게 깨짐).
+        XCTAssertLessThan(averageLuminance(withShadow), averageLuminance(withoutShadow) - 0.01,
+                          "커스텀 메시의 aux 텍스처가 texture(1)을 오염시켜 뒤이은 스톡 메시의 섀도우 항이 무너진 것으로 보임")
+    }
+
+    /// P⑥×X-⑤ 교차배치(검증 must_fix): X-⑤ 가 EngineU 에 targetRes(float4) 를 추가하며 engineUniform 의
+    /// 해당 인자를 필수화했다 — 3D 커스텀 메시 경로가 이를 누락하면 컴파일은 통과한 채 g_TexelSize 가
+    /// 기본값 유래 1.0(UV 전체 1텍셀)으로 조용히 깨진다. 이 경로는 다운스케일 멀티패스 체인이 없어(2D
+    /// 커스텀 레이어와 동형, X-⑤ 스코프 밖) dst 기준 새 값이 아니라 종전 tex0 근사(1/texRes[0])를 그대로
+    /// 유지해야 한다 — 앨비도 텍스처 8×8(solidTex 기본) 이면 g_TexelSize.x = 1/8 = 0.125 가 정답이고,
+    /// targetRes 누락(기본값 1,1,1,1) 회귀 시 1.0 이 나와 이 어서션이 실패한다.
+    func testCustomMeshShaderGTexelSizeMatchesAlbedoTex0Approximation() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"fov":50,"clearcolor":"0 0 0","ambientcolor":"1 1 1","skylightcolor":"1 1 1"},
+         "camera":{"eye":"0 0 3","center":"0 0 0","up":"0 1 0"},
+         "objects":[{"model":"models/quad.mdl","origin":"0 0 0"}]}
+        """
+        let material = #"{"passes":[{"shader":"texelsizetest","textures":["albedo"]}]}"#
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(g_TexelSize.x, 0.0, 0.0, 1.0); }
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/quad.mdl", staticQuadMDL()),
+            ("materials/quad.json", material.data(using: .utf8)!),
+            ("materials/albedo.tex", solidTex(255, 255, 255)),  // 기본 8×8 → tex0 근사 1/8=0.125
+            ("shaders/texelsizetest.vert", vert.data(using: .utf8)!),
+            ("shaders/texelsizetest.frag", frag.data(using: .utf8)!),
+        ]
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)),
+                    project: try project(files: files, id: "texelsize"))
+        defer { r.teardown() }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_h1tx_out", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: dir).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 32))
+        XCTAssertEqual(Double(c.redComponent), 0.125, accuracy: 0.05,
+                       "targetRes 미전달 회귀 시 기본값(1,1,1,1)으로 g_TexelSize=1.0 — tex0 근사(1/8) 파리티 고정")
+    }
+
     // MARK: - H1 스키닝: 스키닝 메시 + 커스텀 셰이더
 
     /// 스키닝 쿼드 MDLV0023 + MDLS0004(2본) + MDLA0006(single, 본1 을 y+2 로 이동).

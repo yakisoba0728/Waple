@@ -31,6 +31,10 @@ final class VolumetricLightPass {
     }
 
     private let pipeline: MTLRenderPipelineState
+    /// P④: HDR 3D 씬(acc=rgba16Float — accPixelFormat 단일소스, SceneRenderer.swift accPixelFormat 참조)의
+    /// float 타깃용 별도 파이프라인. 생성 실패(희귀)는 nil 유지 — HDR 씬에서만 encode 가 false 로 폴백,
+    /// bgra8 타깃(LDR/저품질) 경로는 무영향.
+    private let pipelineHDR: MTLRenderPipelineState?
 
     init?(device: MTLDevice) {
         guard let library = try? WapleProfiler.compile(Self.metalSource, { try device.makeLibrary(source: Self.metalSource, options: nil) }),
@@ -38,25 +42,29 @@ final class VolumetricLightPass {
               let fragment = library.makeFunction(name: "volumetricFragment") else {
             return nil
         }
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = vertex
-        descriptor.fragmentFunction = fragment
-        descriptor.colorAttachments[0]!.pixelFormat = .bgra8Unorm
-        descriptor.colorAttachments[0]!.isBlendingEnabled = true
-        descriptor.colorAttachments[0]!.rgbBlendOperation = .add
-        descriptor.colorAttachments[0]!.alphaBlendOperation = .add
-        descriptor.colorAttachments[0]!.sourceRGBBlendFactor = .one
-        descriptor.colorAttachments[0]!.sourceAlphaBlendFactor = .one
-        descriptor.colorAttachments[0]!.destinationRGBBlendFactor = .one
-        descriptor.colorAttachments[0]!.destinationAlphaBlendFactor = .one
+        func makeDescriptor(_ format: MTLPixelFormat) -> MTLRenderPipelineDescriptor {
+            let descriptor = MTLRenderPipelineDescriptor()
+            descriptor.vertexFunction = vertex
+            descriptor.fragmentFunction = fragment
+            descriptor.colorAttachments[0]!.pixelFormat = format
+            descriptor.colorAttachments[0]!.isBlendingEnabled = true
+            descriptor.colorAttachments[0]!.rgbBlendOperation = .add
+            descriptor.colorAttachments[0]!.alphaBlendOperation = .add
+            descriptor.colorAttachments[0]!.sourceRGBBlendFactor = .one
+            descriptor.colorAttachments[0]!.sourceAlphaBlendFactor = .one
+            descriptor.colorAttachments[0]!.destinationRGBBlendFactor = .one
+            descriptor.colorAttachments[0]!.destinationAlphaBlendFactor = .one
+            return descriptor
+        }
         let pipeline: MTLRenderPipelineState?
         do {
-            pipeline = try WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: descriptor) }
+            pipeline = try WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: makeDescriptor(.bgra8Unorm)) }
         } catch {
             return nil
         }
         guard let pipeline else { return nil }
         self.pipeline = pipeline
+        self.pipelineHDR = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: makeDescriptor(.rgba16Float)) }
     }
 
     func encode(
@@ -72,9 +80,14 @@ final class VolumetricLightPass {
         farZ: Float,
         light: VolumetricLightParameters
     ) -> Bool {
-        guard destination.textureType == .type2D,
-              destination.pixelFormat == .bgra8Unorm else {
-            return false
+        guard destination.textureType == .type2D else { return false }
+        let selectedPipeline: MTLRenderPipelineState
+        switch destination.pixelFormat {
+        case .bgra8Unorm: selectedPipeline = pipeline
+        case .rgba16Float:
+            guard let pipelineHDR else { return false }  // HDR 파이프라인 생성 실패(희귀) — 폴백 없이 스킵.
+            selectedPipeline = pipelineHDR
+        default: return false
         }
         var uniforms = VolumetricUniforms(
             cameraEye: SIMD4(cameraEye.x, cameraEye.y, cameraEye.z, 1),
@@ -95,7 +108,7 @@ final class VolumetricLightPass {
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
             return false
         }
-        encoder.setRenderPipelineState(pipeline)
+        encoder.setRenderPipelineState(selectedPipeline)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<VolumetricUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
