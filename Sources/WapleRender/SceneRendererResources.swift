@@ -706,7 +706,9 @@ extension SceneRenderer {
 
     /// F162/F163: 텍스처 자산의 ClampUVs 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x2)만 저비용
     /// 조회 — 헤더만 재파스(디코드 없음, 씬 빌드 1 회성이라 무해). 실패/부재는 false(=repeat, WE 기본 어드레싱).
-    private func resolveTextureClampUVs(_ name: String?, package: ScenePackage) -> Bool {
+    /// P⑥: internal 로 완화(기존 private) — SceneRenderer3D.buildCustomMeshShader 가 2D buildCustomLayerShader
+    /// 와 동형의 aux 텍스처 wrap/filter 산출에 재사용(다른 파일의 같은 타입 extension이라 private 미접근).
+    func resolveTextureClampUVs(_ name: String?, package: ScenePackage) -> Bool {
         guard let name else { return false }
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
         for c in candidates {
@@ -717,7 +719,7 @@ extension SceneRenderer {
 
     /// 감사 V06: 텍스처 자산의 NoInterpolation 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x1)만 저비용
     /// 조회 — 헤더만 재파스(resolveTextureClampUVs 와 동일 패턴). 실패/부재는 false(=linear, WE 기본 필터).
-    private func resolveTextureNoInterpolation(_ name: String?, package: ScenePackage) -> Bool {
+    func resolveTextureNoInterpolation(_ name: String?, package: ScenePackage) -> Bool {
         guard let name else { return false }
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
         for c in candidates {

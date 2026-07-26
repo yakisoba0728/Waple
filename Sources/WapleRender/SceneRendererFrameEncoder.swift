@@ -753,7 +753,7 @@ extension SceneRenderer {
                 // H4: REFRACT 메시(정적·비커스텀 한정): 여기까지의 acc(하위 order 2D 레이어+선행 메시 누적)를
                 // 스냅샷 떠 노멀 오프셋 재샘플·곱(인코더 분할 — encode3D 의 H4 분기와 동형). 스냅샷 실패 시
                 // 아래 일반 경로 폴터(무크래시).
-                if mesh.refract, let refractNormal = mesh.refractNormal, !useSkin, mesh.customPipeline == nil,
+                if mesh.refract, let refractNormal = mesh.refractNormal, !useSkin, mesh.customShader == nil,
                    let refractPipe = mesh.additive ? (meshPipelineRefractAdditive ?? meshPipelineRefract)
                                                  : meshPipelineRefract {
                     menc.endEncoding()

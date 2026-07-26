@@ -54,6 +54,95 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         XCTAssertTrue(true, "mount completed without crash")
     }
 
+    /// 정적(비스키닝) 쿼드 MDLV0023 — pos3+normal3+tangent4+uv2(stride 48), formatFlag 0x0f(normal+tangent, no skin).
+    private func staticQuadMDL() -> Data {
+        var d = Data("MDLV0023".utf8)
+        d.append(0)
+        func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func f32(_ v: Float) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        u32(0x0000000f); u32(1); u32(1)
+        d.append(Data("materials/quad.json".utf8)); d.append(0)
+        u32(0)
+        for v: Float in [-1, -1, 0, 1, 1, 0] { f32(v) }   // AABB
+        u32(0x0000000f)                                    // formatFlag: normal(0x2)+tangent(0x4), no skin
+        let verts: [(Float, Float, Float, Float)] = [       // 화면 가득 채우는 정면 쿼드
+            (-1, -1, 0, 1), (1, -1, 1, 1), (1, 1, 1, 0), (-1, 1, 0, 0),
+        ]
+        u32(UInt32(verts.count * 48))                       // 정적 스트라이드 48
+        for (x, y, u, v) in verts {
+            [x, y, 0, 0, 0, 1, 1, 0, 0, -1].forEach(f32)    // pos3, normal3(+Z), tangent4
+            f32(u); f32(v)
+        }
+        let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+        u32(UInt32(indices.count * 2))
+        for i in indices { var x = i.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        return d
+    }
+
+    /// P⑥: 커스텀 3D 메시 셰이더가 (a) buffer(1)=EngineU(304B) 정본을 바인딩하는지(g_Texture1Resolution
+    /// 이 아닌 값을 읽으면 MeshUniform 오독 — normalMatrix/tint 바이트가 텍셀 크기로 잡힘), (b) 정점
+    /// bufferIndex 0↔4 충돌을 회피해 머티리얼 상수(buffer(0))가 있어도 파이프라인이 실제로 빌드·드로우
+    /// 되는지(충돌 시 try? 가 조용히 nil→스톡 폴백, 커스텀 셰이더가 전혀 반영되지 않음), (c) 보조 텍스처
+    /// (materials textures[1])가 실제로 g_Texture1 슬롯에 바인딩되는지를 한 픽셀로 동시에 검증한다.
+    /// 기대 픽셀: R=머티리얼 상수(0.6, buffer(0) 정합) / G=aux 텍스처 blue 채널(0.8, 보조 텍스처 바인딩)
+    /// / B=g_Texture1Resolution.x/10(0.8, aux 는 8px 폭 — EngineU.texRes 정합). 세 값 모두 0/1 이 아닌
+    /// 임의값이라, 스톡 폴백(파이프라인 빌드 실패)이나 필드 오독이면 이 조합이 우연히 나오지 않는다.
+    func testCustomMeshShaderBindsEngineUniformMaterialAndAuxTexture() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"fov":50,"clearcolor":"0 0 0","ambientcolor":"1 1 1","skylightcolor":"1 1 1"},
+         "camera":{"eye":"0 0 3","center":"0 0 0","up":"0 1 0"},
+         "objects":[{"model":"models/quad.mdl","origin":"0 0 0"}]}
+        """
+        let material = """
+        {"passes":[{"shader":"tinttest","textures":["albedo","auxblue"],
+                     "constantshadervalues":{"tint":0.6}}]}
+        """
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+        """
+        let frag = """
+        uniform vec4 g_Texture1Resolution;
+        uniform float u_tint; // {"material":"tint","default":0.0}
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture1;
+        void main() {
+            vec4 aux = texSample2D(g_Texture1, v_TexCoord);
+            gl_FragColor = vec4(u_tint, aux.b, g_Texture1Resolution.x / 10.0, 1.0);
+        }
+        """
+        let files: [(String, Data)] = [
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/quad.mdl", staticQuadMDL()),
+            ("materials/quad.json", material.data(using: .utf8)!),
+            ("materials/albedo.tex", solidTex(255, 255, 255)),
+            ("materials/auxblue.tex", solidTex(0, 0, 204, w: 8, h: 8)),  // 204/255≈0.8, width=8
+            ("shaders/tinttest.vert", vert.data(using: .utf8)!),
+            ("shaders/tinttest.frag", frag.data(using: .utf8)!),
+        ]
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)),
+                    project: try project(files: files, id: "engineuniform"))
+        defer { r.teardown() }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_h1eu_out", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: dir).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 32))
+        XCTAssertEqual(Double(c.redComponent), 0.6, accuracy: 0.05,
+                       "머티리얼 상수(buffer(0)) 미반영 — bufferIndex 0/4 충돌 또는 파이프라인 폴백 의심")
+        XCTAssertEqual(Double(c.greenComponent), 0.8, accuracy: 0.05,
+                       "보조 텍스처(g_Texture1) 미바인딩 의심")
+        XCTAssertEqual(Double(c.blueComponent), 0.8, accuracy: 0.05,
+                       "g_Texture1Resolution(EngineU.texRes) 오독 의심 — MeshUniform 바인딩 잔존 가능성")
+    }
+
     // MARK: - H1 스키닝: 스키닝 메시 + 커스텀 셰이더
 
     /// 스키닝 쿼드 MDLV0023 + MDLS0004(2본) + MDLA0006(single, 본1 을 y+2 로 이동).

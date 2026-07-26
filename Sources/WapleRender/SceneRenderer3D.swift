@@ -34,8 +34,8 @@ extension SceneRenderer {
         /// F661: 로컬 AABB(정점 min/max, 바인드 포즈) — directional 오소 섀도우 피팅 입력.
         let boundsMin: SIMD3<Float>
         let boundsMax: SIMD3<Float>
-        /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 — nil = Mesh3DShaders 고정 경로.
-        var customPipeline: MTLRenderPipelineState? = nil
+        /// H1 Phase 2 + P⑥: 커스텀 머티리얼 셰이더 파이프라인 + 바인드 플랜 — nil = Mesh3DShaders 고정 경로.
+        var customShader: CustomMeshShader? = nil
         /// H1 스키닝: 커스텀 셰이더 메시용 CPU 프리스킨 8f 정점 링(스톡 GPU 본 스키닝 대신 rigid 계약).
         var customSkinRing: DynamicVertexBuffer? = nil
         /// CPU 프리스킨 입력 소스 — Model3D.meshes 인덱스(커스텀+스키닝 메시만 ≥0).
@@ -49,6 +49,16 @@ extension SceneRenderer {
         var refractAmount: Float = 0.05
         var refractNormal: MTLTexture? = nil   // textures[1] 노멀맵(resolveRefractNormal — rg88 플래그 동반)
         var refractRG88: Bool = false
+    }
+    /// P⑥: 3D 커스텀 메시 셰이더 파이프라인 + 바인드 플랜(2D CustomLayerShader 와 동형 — 번역 셰이더는
+    /// buffer(1)에 EngineU(304B, engineUniform() 이 단일 정본)를 기대하지, MeshUniform(256B)이 아니다).
+    struct CustomMeshShader {
+        let pipeline: MTLRenderPipelineState
+        let material: [SIMD4<Float>]                 // materialParams slot values(constantshadervalues)
+        let aux: [(slot: Int, tex: MTLTexture)]       // material texture slots > 0
+        let texRes: [SIMD4<Float>]                    // 8 slots; slot 0 = albedo
+        let texWrap: [Float]                          // 8 × 1=clamp / 0=repeat
+        let texFilter: [Float]                        // 8 × 1=nearest / 0=linear
     }
     /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 4×float4 = 256B).
     struct MeshUniform {
@@ -314,8 +324,8 @@ extension SceneRenderer {
                 // H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드(실패 시 nil → Mesh3DShaders 폴터).
                 // 스키닝 메시는 CPU 프리스킨(8f, prepare3DCustomSkinBuffers)으로 rigid 입력 계약을 맞춘다.
                 if mat.customShader != nil {
-                    gpuMesh.customPipeline = buildCustomMeshShader(mat, package: package, device: device)
-                    if skinned && gpuMesh.customPipeline != nil {
+                    gpuMesh.customShader = buildCustomMeshShader(mat, package: package, device: device)
+                    if skinned && gpuMesh.customShader != nil {
                         gpuMesh.customSkinRing = DynamicVertexBuffer()
                         gpuMesh.modelMeshIndex = modelMeshIdx
                     }
@@ -767,7 +777,7 @@ extension SceneRenderer {
     ///  a_BlendIndices 같은 미지원 attribute 를 선언하면 MSL 컴파일 실패 → 스톡 mv_skin 폴터).
     /// 셰이더 소스(.vert/.frag)는 씬 패키지 안 것만 인정(2D 경로와 동일 규칙 — 베이스 팩의 WE 빌트인
     /// 셰이더까지 이 경로로 빨려 들어오는 것을 차단). include(common.h 등)만 베이스 팩 폴터 허용.
-    func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice) -> MTLRenderPipelineState? {
+    func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice) -> CustomMeshShader? {
         guard let shaderName = mat.customShader else { return nil }
         let include: (String) -> String? = { header in
             for cand in ["shaders/\(header)", header] {
@@ -807,9 +817,12 @@ extension SceneRenderer {
         // 메시 정점 레이아웃 pos3+normal3+uv2(8f = 32B): a_Position=float3@0, a_TexCoord=float2@24.
         // (H1 Phase 2 초기의 stride 20/uv@12 는 2D 쿼드 레이아웃 잘못 옮긴 값 — 8f 메시와 불일치하는
         //  잠재 결함. 스키닝 메시도 CPU 프리스킨 후 동일 8f 라 같은 디스크립터를 쓴다.)
-        vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 0
-        vd.attributes[1].format = .float2; vd.attributes[1].offset = 24; vd.attributes[1].bufferIndex = 0
-        vd.layouts[0].stride = 32
+        // P⑥: bufferIndex 4(0 아님) — 번역 셰이더는 머티리얼 상수가 1개라도 있으면 `p [[buffer(0)]]`
+        // 를 선언(GLSLTranslator.swift:1628)하므로 stage_in 정점 버퍼를 0에 두면 슬롯이 충돌한다
+        // (2D 커스텀 레이어 경로가 이미 회피하는 것과 동일 계약 — translatedLayerPipeline 참조).
+        vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 4
+        vd.attributes[1].format = .float2; vd.attributes[1].offset = 24; vd.attributes[1].bufferIndex = 4
+        vd.layouts[4].stride = 32
         pd.vertexDescriptor = vd
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
@@ -819,7 +832,41 @@ extension SceneRenderer {
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
         a.destinationRGBBlendFactor = mat.additive ? .one : .oneMinusSourceAlpha
         a.destinationAlphaBlendFactor = mat.additive ? .one : .oneMinusSourceAlpha
-        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+        guard let pipe = try? WapleProfiler.pipe({ try device.makeRenderPipelineState(descriptor: pd) }) else {
+            return nil
+        }
+        // P⑥: 머티리얼 상수(constantshadervalues) → buffer(0) 슬롯 값. 2D buildCustomLayerShader 와 동형
+        // (t.materialParams 는 GLSL 유니폼 선언 순서 — sceneKey 로 mat.customConstants 조회, 없으면 셰이더
+        // 기본값). 스크립트(.scripted) 는 3D 머티리얼 파서가 애초에 뽑지 않아(loadMesh3DMaterial 스코프
+        // 밖) 대상 없음 — 2D 와 달리 per-frame 재평가는 미지원(정적 상수만).
+        let material: [SIMD4<Float>] = t.materialParams.map { p in
+            let v = mat.customConstants[p.sceneKey] ?? p.defaultValue
+            return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
+                                v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
+        }
+        let lw = Float(max(1, mat.texture.width)), lh = Float(max(1, mat.texture.height))
+        var texRes = [SIMD4<Float>](repeating: SIMD4(lw, lh, lw, lh), count: 8)
+        var texWrap = [Float](repeating: 0, count: 8)
+        var texFilter = [Float](repeating: 0, count: 8)
+        texRes[0] = SIMD4(lw, lh, lw, lh)
+        let albedoName: String? = mat.customTextures.first { $0 != nil } ?? nil
+        texWrap[0] = resolveTextureClampUVs(albedoName, package: package) ? 1 : 0
+        texFilter[0] = resolveTextureNoInterpolation(albedoName, package: package) ? 1 : 0
+        var aux: [(slot: Int, tex: MTLTexture)] = []
+        for slot in t.textureSlots where slot > 0 && slot < 128 {
+            let name = slot < mat.customTextures.count ? mat.customTextures[slot] : nil
+            if let tex = resolveTexture(name, package: package, device: device) {
+                aux.append((slot, tex))
+                if slot < 8 {
+                    let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
+                    texRes[slot] = SIMD4(w, h, w, h)
+                    texWrap[slot] = resolveTextureClampUVs(name, package: package) ? 1 : 0
+                    texFilter[slot] = resolveTextureNoInterpolation(name, package: package) ? 1 : 0
+                }
+            }
+        }
+        return CustomMeshShader(pipeline: pipe, material: material, aux: aux,
+                                texRes: texRes, texWrap: texWrap, texFilter: texFilter)
     }
 
     func shadow3DPipeline(lib: MTLLibrary, vertex: String, cutout: Bool,
@@ -1328,7 +1375,7 @@ extension SceneRenderer {
                     // target(acc)을 스냅샷(blit — 진행 중 타깃은 샘플 불가) 떠 노멀 오프셋 재샘플·곱. 인코더
                     // 분할은 runRefractLayer(2D)/F311 프레임버퍼 빌보드와 동일 패턴 — 분할 전 뎁스 .store 는
                     // needsDepthStore 게이트가 보장. 스냅샷 실패 시 아래 일반 경로로 폴터(무크래시).
-                    if mesh.refract, let refractNormal = mesh.refractNormal, !useSkin, mesh.customPipeline == nil,
+                    if mesh.refract, let refractNormal = mesh.refractNormal, !useSkin, mesh.customShader == nil,
                        let refractPipe = mesh.additive ? (meshPipelineRefractAdditive ?? meshPipelineRefract)
                                                        : meshPipelineRefract {
                         enc.endEncoding()
@@ -1376,8 +1423,8 @@ extension SceneRenderer {
                     var usedCustom = false
                     // H1 Phase 2: 커스텀 셰이더 파이프라인 우선. 스키닝 메시는 CPU 프리스킨(8f) 버퍼로
                     // rigid 입력 계약을 맞춘다(프리스킨 실패 시 스톡 GPU 스키닝 mv_skin 폴터).
-                    if let custom = mesh.customPipeline, !mesh.skinned || customSkinBuf != nil {
-                        pipe = custom
+                    if let custom = mesh.customShader, !mesh.skinned || customSkinBuf != nil {
+                        pipe = custom.pipeline
                         usedCustom = true
                         if let customSkinBuf { meshVBuf = customSkinBuf }
                     } else if (mesh.normalTexture != nil || mesh.maskTexture != nil), !useSkin,
@@ -1398,23 +1445,47 @@ extension SceneRenderer {
                         enc.setDepthStencilState(ds)
                     }
                     enc.setCullMode(mesh.cullBack ? .back : .none)
-                    enc.setVertexBuffer(meshVBuf, offset: 0, index: 0)
-                    // 커스텀 버텍스는 mul(v, mvp)=v·mvp 계약(GLSLTranslator 번역) — stock 의 mvp·v 와 동치가
-                    // 되도록 mvp 만 전치해 바인딩(사본 — u.mvp 는 렌더어블 공용이라 제자리 전치 금지).
-                    var bu = u
-                    if usedCustom { bu.mvp = bu.mvp.transpose }
-                    enc.setVertexBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                    // 커스텀 파이프라인(CPU 프리스킨)은 본 버퍼 불요 — 스톡 GPU 스키닝 경로만 buffer(2) 바인딩.
-                    if useSkin, !usedCustom, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
-                    enc.setFragmentBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
-                    enc.setFragmentTexture(mesh.texture, index: 0)
-                    // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
-                    // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
-                    enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
-                    // M3: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯).
-                    if pipe === meshPipelineNormal || pipe === meshPipelineNormalAdditive {
-                        if let normal = mesh.normalTexture { enc.setFragmentTexture(normal, index: 3) }
-                        if let mask = mesh.maskTexture { enc.setFragmentTexture(mask, index: 4) }
+                    // P⑥: 커스텀 파이프라인(번역 셰이더)은 buffer 계약이 스톡 mf_main/mv_main 과 다르다
+                    // (buffer(1)=EngineU 304B — engineUniform() 이 단일 정본, MeshUniform 256B 오독 해소.
+                    // 정점은 머티리얼 상수 p[[buffer(0)]] 와 충돌 회피 위해 buffer(4), 2D 커스텀 레이어
+                    // 경로(SceneRendererFrameEncoder.swift:1094-1099)와 동일 계약).
+                    if usedCustom, let custom = mesh.customShader {
+                        enc.setVertexBuffer(meshVBuf, offset: 0, index: 4)
+                        // mul(v, mvp)=v·mvp 계약(GLSLTranslator 번역) — stock 의 mvp·v 와 동치가 되도록
+                        // mvp 만 전치(사본 — u.mvp 는 렌더어블 공용이라 제자리 전치 금지).
+                        let mat = custom.material
+                        if !mat.isEmpty {
+                            mat.withUnsafeBytes {
+                                enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
+                                enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
+                            }
+                        }
+                        let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
+                                                texFilter: custom.texFilter, layerTint: u.tint, mvp: u.mvp.transpose)
+                        eng.withUnsafeBytes {
+                            enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
+                            enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
+                        }
+                        enc.setFragmentTexture(mesh.texture, index: 0)
+                        // 보조 텍스처(materials textures[1..]) — bindScene3DLighting 이 걸어 둔 texture(1)
+                        // 섀도우 아틀라스(depth2d_array)를 셰이더가 g_Texture1 을 선언한 슬롯에서만 덮어써
+                        // 타입 불일치를 해소한다(선언 안 하면 ef_main 인자 자체가 없어 무해).
+                        for (slot, tex) in custom.aux { enc.setFragmentTexture(tex, index: slot) }
+                    } else {
+                        enc.setVertexBuffer(meshVBuf, offset: 0, index: 0)
+                        var bu = u
+                        enc.setVertexBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                        if useSkin, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
+                        enc.setFragmentBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                        enc.setFragmentTexture(mesh.texture, index: 0)
+                        // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
+                        // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
+                        enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                        // M3: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯).
+                        if pipe === meshPipelineNormal || pipe === meshPipelineNormalAdditive {
+                            if let normal = mesh.normalTexture { enc.setFragmentTexture(normal, index: 3) }
+                            if let mask = mesh.maskTexture { enc.setFragmentTexture(mask, index: 4) }
+                        }
                     }
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
                                               indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
