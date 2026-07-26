@@ -78,6 +78,19 @@ final class HDRBloomTests: XCTestCase {
         return bytes
     }
 
+    /// rgba16Float(shared) 작업 버퍼 판독 — 피라미드 중간 레벨/합성물의 구조 단언용.
+    private func readFloat(_ texture: MTLTexture) -> [Float] {
+        var half = [Float16](repeating: 0, count: texture.width * texture.height * 4)
+        half.withUnsafeMutableBytes {
+            texture.getBytes(
+                $0.baseAddress!,
+                bytesPerRow: texture.width * 8,
+                from: MTLRegionMake2D(0, 0, texture.width, texture.height),
+                mipmapLevel: 0)
+        }
+        return half.map { Float($0) }
+    }
+
     private func encodePass(
         device: MTLDevice,
         source: MTLTexture,
@@ -274,39 +287,105 @@ final class HDRBloomTests: XCTestCase {
         return read(destination)
     }
 
-    /// H6: 3-레벨 피라미드가 단일 레벨보다 넓은 글로우를 생성.
-    func testPyramidWiderGlowThanSingleLevel() throws {
+    /// H6: 레벨 수 산출 — min(요청, 1/4 부터 1×1 까지 halving 수). Metal 불필요(순수 함수).
+    func testLevelCountClampsToAvailableMips() throws {
+        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 2048, sourceHeight: 1024), 8)
+        // 512×512: quarter 128×128 → 64/32/16/8/4/2/1 — 정확히 WE 실측 8단.
+        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 512, sourceHeight: 512), 8)
+        // 64×32: quarter 16×8 → 8×4/4×2/2×1/1×1 — 5단으로 클램프.
+        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 64, sourceHeight: 32), 5)
+        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 3, sourceWidth: 512, sourceHeight: 512), 3)
+        // 4×4: quarter 1×1 — 1단(인코드는 n≥2 요구로 거부 → 단일레벨 폴터 대상).
+        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 4, sourceHeight: 4), 1)
+    }
+
+    /// H6: 8-레벨 피라미드가 실제 생성·합성된다 — 다운체인(최심층 1×1 레벨에 스팟 에너지 도달)
+    /// + 업체인(합성물 S[0] 의 스팟 반대 코너가 0 초과 — 단일 레벨 blur13 반경 ≈48px 로는 256px
+    /// 떨어진 코너 도달 불가, 심층 레벨이 합성에 실제 기여했다는 구조 단언).
+    func testEightLevelPyramidReachesDeepestLevelAndFarCorner() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let width = 512, height = 512
+        let levelCount = HDRBloomPyramidPass.levelCount(
+            requested: 8, sourceWidth: width, sourceHeight: height)
+        XCTAssertEqual(levelCount, 8)
+        let source = try makeFloatTexture(
+            device: device, width: width, height: height,
+            spot: (x: 248..<264, y: 248..<264, value: 8))
+        let destination = try makeBGRATexture(device: device, width: width, height: height)
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let pass = try XCTUnwrap(HDRBloomPyramidPass(device: device))
+        var levels: [MTLTexture] = []
+        var scratches: [MTLTexture] = []
+        for i in 0..<levelCount {
+            let w = max(1, width >> (2 + i)), h = max(1, height >> (2 + i))
+            levels.append(try makeFloatTexture(device: device, width: w, height: h))
+            scratches.append(try makeFloatTexture(device: device, width: w, height: h))
+        }
+        let commandBuffer = try XCTUnwrap(queue.makeCommandBuffer())
+        XCTAssertTrue(pass.encode(
+            commandBuffer: commandBuffer,
+            source: source,
+            levels: levels,
+            scratches: scratches,
+            destination: destination,
+            parameters: HDRBloomPyramidParameters(
+                strength: 2, threshold: 1, feather: 0.1, tint: SIMD3(1, 1, 1), scatter: 1.619)))
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        // 다운체인: 최심층 1×1 레벨(8번째)이 비어있지 않다.
+        let deepest = readFloat(levels[7])
+        XCTAssertEqual(levels[7].width, 1)
+        XCTAssertEqual(levels[7].height, 1)
+        XCTAssertGreaterThan(max(deepest[0], max(deepest[1], deepest[2])), 0,
+                             "최심층 1×1 레벨까지 스팟이 도달하지 못함")
+        // 업체인: 합성물(S[0], float)의 스팟 반대 코너 — 심층 레벨 기여분이 0 초과.
+        let composite = readFloat(scratches[0])
+        XCTAssertGreaterThan(max(composite[0], max(composite[1], composite[2])), 0,
+                             "8-레벨 헤일로가 합성 코너에 도달하지 못함(심층 레벨 미합성)")
+        // 스팟 자신은 saturate 순백.
+        let px = read(destination)
+        let center = (256 * width + 256) * 4
+        XCTAssertEqual(max(px[center], max(px[center + 1], px[center + 2])), 255)
+    }
+
+    /// H6: 소스가 작으면 허용 mip 수(64×32 → 5단)로 클램프된 피라미드가 생성·합성되고,
+    /// 단일 레벨보다 넓은 글로우를 만든다(기존 3-레벨 테스트의 8-레벨 갱신판).
+    func testPyramidClampsLevelsForSmallSource() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let width = 64, height = 32
+        let levelCount = HDRBloomPyramidPass.levelCount(
+            requested: 8, sourceWidth: width, sourceHeight: height)
+        XCTAssertEqual(levelCount, 5)
         let source = try makeFloatTexture(
             device: device, width: width, height: height,
             spot: (x: 28..<36, y: 12..<20, value: 8))
         let destination = try makeBGRATexture(device: device, width: width, height: height)
         let queue = try XCTUnwrap(device.makeCommandQueue())
         let pass = try XCTUnwrap(HDRBloomPyramidPass(device: device))
-        let quarter = try makeFloatTexture(device: device, width: max(1, width / 4), height: max(1, height / 4))
-        let eighth = try makeFloatTexture(device: device, width: max(1, width / 8), height: max(1, height / 8))
-        let sixteenth = try makeFloatTexture(device: device, width: max(1, width / 16), height: max(1, height / 16))
-        let bloom = try makeFloatTexture(device: device, width: max(1, width / 8), height: max(1, height / 8))
+        var levels: [MTLTexture] = []
+        var scratches: [MTLTexture] = []
+        for i in 0..<levelCount {
+            let w = max(1, width >> (2 + i)), h = max(1, height >> (2 + i))
+            levels.append(try makeFloatTexture(device: device, width: w, height: h))
+            scratches.append(try makeFloatTexture(device: device, width: w, height: h))
+        }
         let commandBuffer = try XCTUnwrap(queue.makeCommandBuffer())
         XCTAssertTrue(pass.encode(
             commandBuffer: commandBuffer,
             source: source,
-            quarter: quarter,
-            eighth: eighth,
-            sixteenth: sixteenth,
-            bloom: bloom,
+            levels: levels,
+            scratches: scratches,
             destination: destination,
             parameters: HDRBloomPyramidParameters(
                 strength: 2, threshold: 1, feather: 0.1, tint: SIMD3(1, 1, 1), scatter: 1.619)))
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         let px = read(destination)
-        // 중심 스팟 주변에 0이 아닌 픽셀이 존재(글로우 확산).
+        // 클램프된 피라미드(최심층 1×1)의 전 화면 헤일로 — 0이 아닌 픽셀이 넓게 존재.
         var nonZero = 0
         for i in stride(from: 0, to: px.count, by: 4) {
             if px[i] > 0 || px[i + 1] > 0 || px[i + 2] > 0 { nonZero += 1 }
         }
-        XCTAssertGreaterThan(nonZero, 64, "3-레벨 피라미드 글로우가 너무 좁음")
+        XCTAssertGreaterThan(nonZero, 64, "클램프된 피라미드 글로우가 너무 좁음")
     }
 }

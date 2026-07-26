@@ -615,7 +615,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneWantsHDRBloom = false
     var hdrBloomParameters = HDRBloomParameters.defaults
     var hdrBloomPass: HDRBloomEncoding?
-    /// H6: HDR bloom 3-레벨 피라미드(기존 단일 레벨 대비 글로우 반경 확장).
+    /// H6: HDR bloom 8-레벨 피라미드(기존 단일 레벨 대비 글로우 반경 확장 — WE 실측 8단).
     var hdrBloomPyramidPass: HDRBloomPyramidEncoding?
     /// H5: 볼륨 라이트 샤프트 패스(castVolumetrics 라이트).
     var volumetricLightPass: VolumetricLightPass?

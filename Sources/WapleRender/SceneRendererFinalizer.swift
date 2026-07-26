@@ -23,32 +23,43 @@ extension SceneRenderer {
             // 자원/인코드 실패는 hdrPost(saturate 클램프)로 폴백(무크래시·동일 규약). pooledOffscreen(bgra:true)는 hdrActive
             // 에서 float(rgba16Float)로 자동 승격된다(중간 버퍼가 소스와 동일 float 계약).
             // 비-HDR 씬은 hdrActive=false 로 이 블록 자체에 도달 불가(격리 — 148씬 무접촉).
-            // H6: 3-레벨 피라미드 우선 — quarter 추출→eighth blur→sixteenth blur→additive 업샘플.
-            // 실패 시 기존 단일 레벨 HDRBloomPass 폴터(무회귀).
-            if sceneWantsHDRBloom, let hdrBloomPyramidPass,
-               let quarter = pooledOffscreen(
-                   max(1, source.width / 4), max(1, source.height / 4), device, bgra: true),
-               let eighth = pooledOffscreen(
-                   max(1, source.width / 8), max(1, source.height / 8), device, bgra: true),
-               let sixteenth = pooledOffscreen(
-                   max(1, source.width / 16), max(1, source.height / 16), device, bgra: true),
-               let bloom = pooledOffscreen(
-                   max(1, source.width / 8), max(1, source.height / 8), device, bgra: true),
-               hdrBloomPyramidPass.encode(
-                   commandBuffer: commandBuffer,
-                   source: source,
-                   quarter: quarter,
-                   eighth: eighth,
-                   sixteenth: sixteenth,
-                   bloom: bloom,
-                   destination: destination,
-                   parameters: HDRBloomPyramidParameters(
-                       strength: hdrBloomParameters.strength,
-                       threshold: hdrBloomParameters.threshold,
-                       feather: hdrBloomParameters.feather,
-                       tint: hdrBloomParameters.tint,
-                       scatter: 1.619)) {
-                return true
+            // H6: 8-레벨 피라미드 우선 — quarter 추출→레벨별 blur→additive 업샘플(소스가 작으면
+            // 허용 mip 수로 클램프). 자원/인코드 실패 시 기존 단일 레벨 HDRBloomPass 폴터(무회귀).
+            if sceneWantsHDRBloom, let hdrBloomPyramidPass {
+                let pyramidParameters = HDRBloomPyramidParameters(
+                    strength: hdrBloomParameters.strength,
+                    threshold: hdrBloomParameters.threshold,
+                    feather: hdrBloomParameters.feather,
+                    tint: hdrBloomParameters.tint,
+                    scatter: 1.619)
+                let levelCount = HDRBloomPyramidPass.levelCount(
+                    requested: pyramidParameters.levels,
+                    sourceWidth: source.width,
+                    sourceHeight: source.height)
+                var levels: [MTLTexture] = []
+                var scratches: [MTLTexture] = []
+                var allocated = levelCount >= 2
+                for i in 0..<levelCount where allocated {
+                    let w = max(1, source.width >> (2 + i))
+                    let h = max(1, source.height >> (2 + i))
+                    if let level = pooledOffscreen(w, h, device, bgra: true),
+                       let scratch = pooledOffscreen(w, h, device, bgra: true) {
+                        levels.append(level)
+                        scratches.append(scratch)
+                    } else {
+                        allocated = false
+                    }
+                }
+                if allocated,
+                   hdrBloomPyramidPass.encode(
+                       commandBuffer: commandBuffer,
+                       source: source,
+                       levels: levels,
+                       scratches: scratches,
+                       destination: destination,
+                       parameters: pyramidParameters) {
+                    return true
+                }
             }
             if sceneWantsHDRBloom, let hdrBloomPass,
                let quarter = pooledOffscreen(
