@@ -1879,6 +1879,18 @@ extension SceneDocument {
                 // 머티리얼 경로의 instance usertextures(:1270 인근)와 동일 정규화 규약.
                 if let uts = passDict["usertextures"] as? [Any] {
                     p.userTextureNames = uts.map { ($0 as? String) ?? (($0 as? [String: Any])?["name"] as? String) }
+                    // X-③: `$` 로 시작하지 않는(=시스템 키가 아닌) 유저 키는 레이어 material usertextures 와
+                    // 동일하게 파스 시점에 userProps 값으로 해석해 textureNames 슬롯을 덮어쓴다(usertextures
+                    // 가 textures 보다 우선 — :1637-1644 와 동형 규약). "$mediaThumbnail"/"$mediaPreviousThumbnail"
+                    // 같은 시스템 키는 라이브 미디어 폴링이 필요한 동적 값이라 여기서 해석 불가 — userTextureNames
+                    // 에 원문 키를 남겨 렌더러가 SceneRenderer.mediaArtworkTexture 로 별도 결속한다.
+                    for (slot, key) in p.userTextureNames.enumerated() {
+                        guard let key, !key.hasPrefix("$"),
+                              let override = userProps[key] as? String,
+                              !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                        while p.textureNames.count <= slot { p.textureNames.append(nil) }
+                        p.textureNames[slot] = override
+                    }
                 }
                 passList.append(p)
             }

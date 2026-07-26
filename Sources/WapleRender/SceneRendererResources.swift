@@ -44,6 +44,10 @@ extension SceneRenderer {
         /// X-②: command:"swap"(셰이더 없음, 실물 fluidsimulation velocity/dye 더블버퍼) — non-nil 이면
         /// draw 를 건너뛰고 fboTex.swapAt(source,target) 만 수행(무비용 핑퐁). pipeline 은 미사용 placeholder.
         let swapPair: (source: Int, target: Int)?
+        /// X-③: usertextures 의 시스템 키($mediaThumbnail/$mediaPreviousThumbnail) 슬롯 — fullFrameSlots
+        /// 와 동일 패턴(빌드 시점 흰색 1×1 폴백, draw 시점에 SceneRenderer.mediaArtworkTexture/
+        /// mediaPreviousArtworkTexture 로 덮어씀). previous=true 면 이전 프레임 아트워크.
+        let mediaArtworkSlots: [(slot: Int, previous: Bool)]
     }
     /// X-①: 이름 있는 FBO 1개의 할당 스펙 — scale(dst 비례) 또는 fixedWidth/fixedHeight(절대 픽셀,
     /// 실물 cursorripple fit:512·glitter width/height:256) 중 후자가 있으면 우선.
@@ -552,7 +556,8 @@ extension SceneRenderer {
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
                                          binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
                                          texRes: plan.texRes, texWrap: plan.texWrap, texFilter: plan.texFilter,
-                                         scripts: passScripts, fullFrameSlots: plan.fullFrameSlots, swapPair: nil))
+                                         scripts: passScripts, fullFrameSlots: plan.fullFrameSlots, swapPair: nil,
+                                         mediaArtworkSlots: plan.mediaArtworkSlots))
         }
         // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         guard passes.contains(where: { $0.target == nil }) else { return nil }
@@ -590,7 +595,7 @@ extension SceneRenderer {
                               binds: [(0, srcIdx)], target: tgtIdx, usesAudio: false,
                               texRes: [SIMD4<Float>](repeating: dims, count: 8), texWrap: wrap,
                               texFilter: [Float](repeating: 0, count: 8),  // fbo→fbo 복사 — 자산 없음, 선형 고정
-                              scripts: [], fullFrameSlots: [], swapPair: nil)
+                              scripts: [], fullFrameSlots: [], swapPair: nil, mediaArtworkSlots: [])
     }
 
     /// X-②: command:"swap"(셰이더 없음) — source/target fbo 이름을 인덱스로 해석해 포인터 교환만
@@ -607,7 +612,7 @@ extension SceneRenderer {
                               binds: [], target: nil, usesAudio: false,
                               texRes: [SIMD4<Float>](repeating: .zero, count: 8),
                               texWrap: [Float](repeating: 0, count: 8), texFilter: [Float](repeating: 0, count: 8),
-                              scripts: [], fullFrameSlots: [], swapPair: (srcIdx, tgtIdx))
+                              scripts: [], fullFrameSlots: [], swapPair: (srcIdx, tgtIdx), mediaArtworkSlots: [])
     }
 
     /// ③ 셰이더 이름 + 머티리얼 메타(combos/textures) 해석 — 패스에 shader 가 없으면 material JSON
@@ -678,7 +683,8 @@ extension SceneRenderer {
                                    compositeImageTextures: [Int: String] = [:],
                                    baseNoInterp: Bool = false)
         -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)],
-            texWrap: [Float], texFilter: [Float], target: Int?, fullFrameSlots: [Int])? {
+            texWrap: [Float], texFilter: [Float], target: Int?, fullFrameSlots: [Int],
+            mediaArtworkSlots: [(slot: Int, previous: Bool)])? {
         var binds: [(slot: Int, source: Int)] = []
         for b in mp.binds {
             // 신뢰불가 effect.json index — Metal frag 텍스처 인자테이블 상한(macOS 128) 밖이면
@@ -722,7 +728,17 @@ extension SceneRenderer {
         }
         var aux: [(slot: Int, tex: MTLTexture)] = []
         var fullFrameSlots: [Int] = []
+        var mediaArtworkSlots: [(slot: Int, previous: Bool)] = []
         for slot in t.textureSlots where slot > 0 && slot < 128 && !bindSlots.contains(slot) {
+            // X-③: usertextures 의 시스템 키($mediaThumbnail/$mediaPreviousThumbnail, 47씬/268슬롯) —
+            // 유저 키(비-시스템)는 이미 파스 시점에 textureNames 로 병합됐다(SceneDocument.parseEffects
+            // usertextures 루프) — 여기서는 라이브 미디어 폴링이 필요한 동적 슬롯만 별도 기록해
+            // draw 시점(applyEffect)에 SceneRenderer.mediaArtworkTexture 로 덮어쓴다(fullFrameSlots 와
+            // 동일 패턴 — 빌드 시점엔 흰색 1×1 로 무회귀 유지).
+            if slot < scenePass.userTextureNames.count, let uk = scenePass.userTextureNames[slot] {
+                if uk == "$mediaThumbnail" { mediaArtworkSlots.append((slot, false)) }
+                else if uk == "$mediaPreviousThumbnail" { mediaArtworkSlots.append((slot, true)) }
+            }
             var name = slot < scenePass.textureNames.count ? scenePass.textureNames[slot] : nil
             if name == nil, slot < matTextures.count { name = matTextures[slot] }
             // F-X4: 씬/머티리얼 어느 쪽도 슬롯을 지정하지 않으면 셰이더 샘플러 주석의
@@ -758,7 +774,7 @@ extension SceneRenderer {
         }
         let target: Int? = mp.target.flatMap { fboIndex[$0] }
         if mp.target != nil && target == nil { NSLog("%@", "[Waple] unknown target in \(effName)"); return nil }
-        return (binds, texRes, aux, texWrap, texFilter, target, fullFrameSlots)
+        return (binds, texRes, aux, texWrap, texFilter, target, fullFrameSlots, mediaArtworkSlots)
     }
 
     /// F162/F163: 텍스처 자산의 ClampUVs 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x2)만 저비용

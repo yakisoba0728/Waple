@@ -238,4 +238,31 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(pass.userTextureNames[1], "usertexture1")
         XCTAssertEqual(pass.userTextureNames[2], "$mediaThumbnail")  // {name,type} 는 name 정규화
     }
+
+    /// X-③: 이펙트 패스 usertextures 의 비-시스템(유저) 키는 파스 시점에 userProps 값으로 해석돼
+    /// textureNames 슬롯을 덮어써야 한다(레이어 material usertextures 와 동일 규약) — 종전엔
+    /// userTextureNames 에 원문 키만 남고 소비처가 0건이라 이펙트 슬롯이 상시 미바인드였다.
+    /// `$` 로 시작하는 시스템 키($mediaThumbnail)는 여기서 해석하지 않고(동적, 렌더 시점 결속) 그대로 보존.
+    func testEffectPassUserTextureNonSystemKeyResolvesFromUserProps() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"name":"img","image":"models/x.json","effects":[
+           {"file":"effects/tint/effect.json","visible":true,"passes":[
+             {"usertextures":[null,"customimage",{"name":"$mediaThumbnail","type":"system"}]}
+           ]}
+         ]}]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg, userProps: ["customimage": "materials/custom.tex"])
+        let eff = try XCTUnwrap(doc.layers.first?.effects.first)
+        let pass = try XCTUnwrap(eff.passList.first)
+        XCTAssertEqual(pass.textureNames.count, 2, "usertextures[1] 오버라이드로 textureNames 가 슬롯1까지 확장돼야 함")
+        XCTAssertEqual(pass.textureNames[1], "materials/custom.tex", "비-시스템 유저 키는 userProps 값으로 즉시 해석")
+        XCTAssertEqual(pass.userTextureNames[2], "$mediaThumbnail", "시스템 키는 원문 보존(동적 렌더-시점 결속용)")
+    }
 }

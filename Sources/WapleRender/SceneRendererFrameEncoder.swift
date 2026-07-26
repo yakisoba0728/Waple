@@ -1540,7 +1540,7 @@ extension SceneRenderer {
                                              binds: last.binds, target: nil, usesAudio: last.usesAudio,
                                              texRes: last.texRes, texWrap: last.texWrap, texFilter: last.texFilter,
                                              scripts: last.scripts, fullFrameSlots: last.fullFrameSlots,
-                                             swapPair: last.swapPair))
+                                             swapPair: last.swapPair, mediaArtworkSlots: last.mediaArtworkSlots))
             }
             // 멀티패스: 이름 있는 FBO(다운스케일 또는 X-① 절대 크기)를 풀에서 할당하고, 각 패스를
             // target(fbo|dst)에 순차 실행.
@@ -1598,6 +1598,14 @@ extension SceneRenderer {
                 // 씬 스냅샷이 있으면 여기서 덮어써 배경을 바인드(godrays/shine COPYBG). 없으면 무회귀.
                 if let snap = fullFrameSnapshot {
                     for slot in pass.fullFrameSlots where slot < 128 { enc.setFragmentTexture(snap, index: slot) }
+                }
+                // X-③: usertextures 시스템 키($mediaThumbnail/$mediaPreviousThumbnail) 슬롯 — 위 aux 루프가
+                // 이미 흰색 1×1 로 채웠으므로, 라이브 아트워크가 있으면 여기서 덮어쓴다(레이어 base 의 F722
+                // 배선과 동일 소스: self.mediaArtworkTexture/mediaPreviousArtworkTexture). 미수신(nil)이면 무회귀.
+                for (slot, previous) in pass.mediaArtworkSlots where slot < 128 {
+                    if let tex = previous ? mediaPreviousArtworkTexture : mediaArtworkTexture {
+                        enc.setFragmentTexture(tex, index: slot)
+                    }
                 }
                 if pass.usesAudio {  // 스펙트럼 버퍼(16:2/3, 32:5/6, 64:7/8).
                     func bind(_ arr: [Float], _ idx: Int) {

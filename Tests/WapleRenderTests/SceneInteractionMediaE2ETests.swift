@@ -424,4 +424,61 @@ final class SceneInteractionMediaE2ETests: XCTestCase {
         XCTAssertGreaterThan(delta, 0.02, "썸네일 색 미반영(배색 무변화): \(before) → \(after)")
         XCTAssertGreaterThan(after.r - before.r, 0.01, "빨강 아트워크 → 빨강 성분 증가 기대: \(before) → \(after)")
     }
+
+    /// X-③: 이펙트 패스 usertextures 의 시스템 키 `$mediaThumbnail`(47씬/268슬롯) — 종전엔 파스만
+    /// 되고 렌더 소비처가 0건이라 이펙트 슬롯이 항상 정적 흰색 1×1 이었다. 라이브 아트워크(초록)를
+    /// 주입한 뒤 그 슬롯을 그대로 출력하는 이펙트를 태워, 캡처가 초록으로 바뀌어야 한다.
+    func testEffectPassUserTextureMediaThumbnailBindsLiveArtwork() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        var art = [UInt8]()
+        for _ in 0..<64 { art.append(contentsOf: [0, 255, 0, 255]) }  // 순수 초록 아트워크
+        let artPNG = try XCTUnwrap(OffscreenCapture.png(rgba: art, width: 8, height: 8))
+
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        uniform sampler2D g_Texture1; // {"hidden":true}
+        void main() { gl_FragColor = texSample2D(g_Texture1, v_TexCoord); }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/artworktest/effect.json",
+             "passes":[{"usertextures":[null,{"name":"$mediaThumbnail","type":"system"}]}]}]}]}
+        """
+        let r = SceneRenderer()
+        r.nowPlayingProvider = FakeMediaProvider(artwork: artPNG)
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+                    project: try makeProject([
+                        ("scene.json", scene.data(using: .utf8)!),
+                        ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+                        ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+                        ("materials/w.tex", solidTex(255, 255, 255)),
+                        ("effects/artworktest/effect.json", #"{"passes":[{}]}"#.data(using: .utf8)!),
+                        ("shaders/effects/artworktest.vert", vert.data(using: .utf8)!),
+                        ("shaders/effects/artworktest.frag", frag.data(using: .utf8)!),
+                    ], id: "waple_media_usertex"))
+        defer { r.teardown() }
+
+        let deadline = Date().addingTimeInterval(10)
+        while r.mediaDeliveryCountForTesting < 1, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertGreaterThanOrEqual(r.mediaDeliveryCountForTesting, 1, "미디어 폴러 미배달")
+
+        let out = URL(fileURLWithPath: "/tmp/waple_media_usertex")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let c = try meanRGB(url)
+        NSLog("%@", "[Waple] usertextures $mediaThumbnail rgb=\(c)")
+        XCTAssertGreaterThan(c.g, 0.8, "$mediaThumbnail 슬롯이 라이브 아트워크(초록)로 바인드돼야 함: \(c)")
+        XCTAssertLessThan(c.r, 0.2, "흰색 1×1 폴백 잔존(미배선이면 백색): \(c)")
+    }
 }
