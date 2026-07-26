@@ -74,6 +74,49 @@ final class SceneCompositeConventionTests: XCTestCase {
         XCTAssertLessThan(c.greenComponent, 0.2, "미지원이면 흰색(green=1)")
     }
 
+    /// P⑤: isFrameBuffer(_rt_) + colorBlendMode 동시 저작 레이어(코퍼스 13씬 실측) — 종전엔
+    /// encodeDrawPlan 이 isFrameBuffer 를 colorBlendMode 보다 먼저 매치해 저작 블렌드 모드가 통째로
+    /// 무시되고 f_compose(그냥 tint 결과 통과)로만 그려졌다. 흰 배경 + 컴포지션 레이어(tint 효과로
+    /// srcTex 를 빨강으로 변환) + colorBlendMode=difference(18): 미수정이면 화면이 그냥 빨강(효과
+    /// 결과 그대로), 수정되면 difference(흰 배경, 빨강) = 시안이어야 한다.
+    func testFrameBufferLayerAppliesColorBlendModeAgainstBackdrop() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "colorBlendMode":18,
+            "effects":[{"file":"effects/tint/effect.json","passes":[{"combos":{"BLENDMODE":2},
+              "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],
+            "visible":{"value":true}}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbblend", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true,"passthrough":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "fbblend", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "fbblend", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbblend")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] fb+colorBlendMode px=(\(c.redComponent),\(c.greenComponent),\(c.blueComponent))")
+        XCTAssertLessThan(c.redComponent, 0.3, "difference(흰,빨강)=시안 이어야(빨강 채널 낮음) — 미수정이면 순수 빨강으로 남음")
+        XCTAssertGreaterThan(c.greenComponent, 0.7, "difference(흰,빨강)=시안(초록 채널 높음)")
+        XCTAssertGreaterThan(c.blueComponent, 0.7, "difference(흰,빨강)=시안(파랑 채널 높음)")
+    }
+
     /// 컴포지션 방향 보존: 상단 절반만 빨간 씬 + passthrough 컴포지션 → 빨강은 상단에 남아야(Y-플립 회귀 방지).
     func testFrameBufferPreservesOrientation() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }

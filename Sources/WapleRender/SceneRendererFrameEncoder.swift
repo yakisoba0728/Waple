@@ -256,15 +256,25 @@ extension SceneRenderer {
     /// 컴포지션(_rt_) 레이어 실행: 현재 encoder 를 닫고, acc 스냅샷(blit — 진행 중 타깃은 샘플 불가)에
     /// 레이어의 효과 체인을 적용한 뒤, 새 encoder(.load)로 레이어 지오메트리에 결과를 그린다.
     /// 반환된 encoder 로 나머지 drawPlan 을 계속한다. 실패 시 기존 흐름 유지 위해 새 encoder 만 연다.
+    /// P⑤: colorBlendMode 도 함께 저작된 레이어(코퍼스 13씬: _rt_ + colorBlendMode 동시 보유)는 종전
+    /// encodeDrawPlan 매치 순서(isFrameBuffer 가 colorBlendMode 보다 먼저 매치)때문에 f_compose 로만
+    /// 그려져 저작 블렌드 모드가 통째로 무시됐다(주석 명시 우선순위 lit>colorBlendMode>framebuffer 위반).
+    /// 매치 순서 자체를 바꾸면 colorBlendMode 경로(runBlendModeLayer)가 buildDisplayTextures 의 원본
+    /// 텍스처(효과 체인 스킵 — isFrameBuffer 는 사전계산 불가, :1485)를 쓰게 돼 이펙트 체인 결과를
+    /// 통째로 잃는다. 대신 이 함수 안에서 colorBlendMode 를 함께 반영: 효과 체인 실행 전 acc 스냅샷을
+    /// blendSnapshot 으로 보존해 encodeLayer 에 넘기면(:1113 의 f_blend 분기가 :1119 compose 분기보다
+    /// 우선) 이펙트 체인 결과(srcTex)는 그대로 유지한 채 저작 블렌드 모드가 적용된다.
     func runFrameBufferLayer(_ layer: GPULayer, acc: MTLTexture, cb: MTLCommandBuffer,
                                      ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
                                      camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         enc.endEncoding()
         var srcTex: MTLTexture? = nil
+        var backdrop: MTLTexture? = nil
         if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
            let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: acc, to: snap)
             blit.endEncoding()
+            backdrop = snap
             var current: MTLTexture = snap
             for eff in layer.effects {
                 guard let next = pooledOffscreen(acc.width, acc.height, device) else { break }
@@ -282,8 +292,11 @@ extension SceneRenderer {
             // NOTE: acc 는 premultiplied 누적이라 스냅샷도 premult — straight 규약과의 미세 오차는
             // 불투명 배경(일반 씬)에선 없음(설계 §4). fit/fill 시 aspectScale 이중 적용 에지도 §3 참고.
             // time/device 전달 — 누락 시 기본값(0/nil)으로 _rt_ 레이어의 애니·프로퍼티 스크립트 동결.
+            // P⑤: 효과 체인이 0패스(srcTex===backdrop)면 블렌드 소스=타깃 자기샘플이 되므로 blendSnapshot
+            // 생략(무회귀 f_compose 폴백) — 효과 체인이 실제로 다른 텍스처를 만들었을 때만 블렌드 적용.
+            let blendSnapshot: MTLTexture? = (layer.colorBlendMode != 0 && srcTex !== backdrop) ? backdrop : nil
             encodeLayer(layer, texture: srcTex, into: next, camOffset: &camOffset, aspectScale: &aspectScale,
-                        time: time, device: device)
+                        time: time, device: device, blendSnapshot: blendSnapshot)
         }
         return next
     }
