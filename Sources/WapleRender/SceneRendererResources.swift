@@ -1041,6 +1041,39 @@ extension SceneRenderer {
         })
     }
 
+    /// M3: mf_normal DecompressNormal 포맷 분류 — WE common_fragment.h:18-30 TEX1FORMAT 3분기 대응.
+    /// 0=블록압축(DXT1/2/3=BC1-3, 바이어스 0.965 분기), 1=RG88(2채널, 바이어스 없음 별도 채널),
+    /// 2=그 외(비압축 RGBA8888/R8/임베디드PNG 등, 바이어스 없음 w/y 분기). BC7 은 코퍼스 미관측이라 미분류.
+    private func normalMapFormatCode(_ payload: TexImage.PayloadKind) -> Float {
+        switch payload {
+        case .bc1, .bc2, .bc3: return 0
+        case .rg88: return 1
+        default: return 2
+        }
+    }
+
+    /// M3 노멀맵 텍스처 + DecompressNormal 포맷 분류(mf_normal 전용). resolveRefractNormal 과 동일
+    /// 디코드 경로(멀티페이지 스택/keepFullAtlas)라 알베도와 레이아웃 정합 — refract 의 rg88 단일 플래그와
+    /// 달리 mf_normal 은 라이팅용 정식 DecompressNormal(2채널+Z재구성)이 필요해 포맷 코드 3분기로 분리.
+    func resolveNormalMapFormat(_ name: String?, package: ScenePackage, device: MTLDevice)
+        -> (texture: MTLTexture, formatCode: Float)? {
+        guard let name else { return nil }
+        let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
+        return resolveRequiredAsset(candidates, package: package, decode: { d -> (texture: MTLTexture, formatCode: Float)? in
+            guard let tex = TexImage.parse(d) else { return nil }
+            let formatCode = normalMapFormatCode(tex.payload)
+            let multipage = tex.imageCount > 1
+            if multipage, !tex.frames.isEmpty, let stacked = stackedAtlas(tex: tex, data: d, device: device) {
+                return (stacked.texture, formatCode)
+            }
+            if let dec = makeImageTexture(tex: tex, data: d, device: device,
+                                          keepFullAtlas: !multipage && tex.frames.count > 1) {
+                return (dec.texture, formatCode)
+            }
+            return nil
+        })
+    }
+
     /// 다중 image 아틀라스 페이지를 **세로로 이어붙인 단일 텍스처**로 합치고 frame.y 에 페이지별 누적
     /// y-오프셋을 더한다(frame.imageId = 페이지). GPUParticleSystem/GPULayer.texture 단일 유지 → 프레임
     /// 인코더/blit 무변경. 실측(2026-07-10, 코퍼스 멀티페이지 7종): 페이지 dims 가 **불균일**하다(예

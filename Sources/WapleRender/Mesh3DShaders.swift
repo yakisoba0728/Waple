@@ -472,7 +472,7 @@ enum Mesh3DShaders {
 
     // M3: PBR 노멀맵/마스크 지원 — 스크린공간 미분으로 TBN 근사, 노멀맵 샘플로 법선 보정,
     // 마스크 텍스처로 per-pixel roughness/metallic 오버라이드.
-    // 노멀맵: texture(3), 마스크: texture(4).
+    // 노멀맵: texture(3), 마스크: texture(4), normalParams(포맷/보유 플래그): buffer(5).
     fragment float4 mf_normal(VOut in [[stage_in]],
                               texture2d<float> tex [[texture(0)]],
                               depth2d_array<float> shadowAtlas [[texture(1)]],
@@ -482,7 +482,10 @@ enum Mesh3DShaders {
                               constant MeshU& u [[buffer(1)]],
                               constant FrameU& frame [[buffer(2)]],
                               constant LightU* lights [[buffer(3)]],
-                              constant float4x4* shadowVP [[buffer(4)]]) {
+                              constant float4x4* shadowVP [[buffer(4)]],
+                              // x=DecompressNormal 포맷(0=블록압축/1=RG88/2=그 외), y=마스크 보유,
+                              // z=노멀맵 보유, w=미사용.
+                              constant float4& normalParams [[buffer(5)]]) {
         constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
         constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
         float4 sampled = tex.sample(s, in.uv) * u.tint;
@@ -497,17 +500,35 @@ enum Mesh3DShaders {
         }
 
         float3 albedo = sampled.rgb;
-        // M3: TBN 근사(스크린공간 미분). 정점 탄젠트 부재 시 ddx/ddy 로부터 탄젠트/비탄젠트 계산.
-        float3 dpx = dfdx(in.worldPos);
-        float3 dpy = dfdy(in.worldPos);
-        float2 duvx = dfdx(in.uv);
-        float2 duvy = dfdy(in.uv);
-        float3 T = normalizedOr(dpx * duvy.y - dpy * duvx.y, float3(1.0, 0.0, 0.0));
-        float3 B = normalizedOr(dpy * duvx.x - dpx * duvy.x, float3(0.0, 1.0, 0.0));
         float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
-        float3x3 TBN = float3x3(T, B, N);
-        float3 normalMap = normalTex.sample(s, in.uv).xyz * 2.0 - 1.0;
-        N = normalizedOr(TBN * normalMap, N);
+        // M3: 노멀맵 보유 시에만 TBN 근사(스크린공간 미분) + 언팩. WE common_fragment.h:18-30 DecompressNormal
+        // 포트(2채널 저장 + Z 재구성) — mf_refract(:571-576)의 DecompressNormalWithMask 와는 별개 함수라
+        // 바이어스가 다른 축에 실린다(DecompressNormal: 블록압축 x=alpha*2-1/y=green*2-0.965, WithMask 는
+        // x=alpha*2-0.965/y=green*2-1 — 통일하면 둘 중 하나가 깨지므로 의도된 차이, 임의 정리 금지).
+        // RG88 은 Waple 디코드가 byte0→(r,g,b) 복제·byte1→a(TexDecoder.swift rg88)라 x=.r/y=.a 로 대응.
+        if (normalParams.z > 0.5) {
+            float3 dpx = dfdx(in.worldPos);
+            float3 dpy = dfdy(in.worldPos);
+            float2 duvx = dfdx(in.uv);
+            float2 duvy = dfdy(in.uv);
+            float3 T = normalizedOr(dpx * duvy.y - dpy * duvx.y, float3(1.0, 0.0, 0.0));
+            float3 B = normalizedOr(dpy * duvx.x - dpx * duvy.x, float3(0.0, 1.0, 0.0));
+            float3x3 TBN = float3x3(T, B, N);
+            float4 nraw = normalTex.sample(s, in.uv);
+            float nx, ny;
+            if (normalParams.x < 0.5) {          // 블록압축(DXT5nm 등 BC1-3)
+                nx = nraw.a * 2.0 - 1.0;
+                ny = nraw.g * 2.0 - 0.965;
+            } else if (normalParams.x < 1.5) {   // RG88
+                nx = nraw.r * 2.0 - 1.0;
+                ny = nraw.a * 2.0 - 1.0;
+            } else {                              // 그 외(비압축) — 바이어스 없음
+                nx = nraw.a * 2.0 - 1.0;
+                ny = nraw.g * 2.0 - 1.0;
+            }
+            float nz = sqrt(saturate(1.0 - nx * nx - ny * ny));
+            N = normalizedOr(TBN * float3(nx, ny, nz), N);
+        }
 
         // M3: 마스크 텍스처로 per-pixel roughness/metallic 오버라이드(없으면 머티리얼 상수).
         float4 mask = maskTex.sample(s, in.uv);

@@ -43,6 +43,8 @@ extension SceneRenderer {
         /// M3: PBR 노멀맵/마스크 텍스처 — nil = 미사용.
         var normalTexture: MTLTexture? = nil
         var maskTexture: MTLTexture? = nil
+        /// M3: mf_normal DecompressNormal 포맷 코드(0=블록압축/1=RG88/2=그 외) — resolveNormalMapFormat.
+        var normalTextureFormat: Float = 0
         /// H4: REFRACT 콤보(스크린 굴절) — true 면 acc 스냅샷을 노멀 오프셋 재샘플·곱(mf_refract).
         /// 노멀맵 로드 실패/스키닝/커스텀 셰이더 시 미적용(기존 파이프라인 폴터, 무크래시).
         var refract: Bool = false
@@ -320,9 +322,16 @@ extension SceneRenderer {
                         gpuMesh.modelMeshIndex = modelMeshIdx
                     }
                 }
-                // M3: PBR 노멀맵/마스크 텍스처 로드.
+                // M3: PBR 노멀맵/마스크 텍스처 로드. normalTextureFormat 은 mf_normal 의 DecompressNormal
+                // 포맷 분기(resolveNormalMapFormat). 디코드 실패 시 종전과 동일하게 resolveTexture 의 흰
+                // 1×1 폴백으로 되돌아가(파이프라인 선택 :1383 무회귀), 그 경우 포맷 코드는 무의미(기본 0).
                 if let normalName = mat.normalTextureName {
-                    gpuMesh.normalTexture = resolveTexture(normalName, package: package, device: device)
+                    if let n = resolveNormalMapFormat(normalName, package: package, device: device) {
+                        gpuMesh.normalTexture = n.texture
+                        gpuMesh.normalTextureFormat = n.formatCode
+                    } else {
+                        gpuMesh.normalTexture = resolveTexture(normalName, package: package, device: device)
+                    }
                 }
                 if let maskName = mat.maskTextureName {
                     gpuMesh.maskTexture = resolveTexture(maskName, package: package, device: device)
@@ -1411,10 +1420,15 @@ extension SceneRenderer {
                     // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
                     // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
                     enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
-                    // M3: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯).
+                    // M3: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯). 노멀맵은 gradientTex 선례(:2421)와
+                    // 동일하게 미보유 시 자기 알베도로 슬롯을 채우고(미바인딩 텍스처 회피), 소비 여부는 셰이더가
+                    // normalParams.z(hasNormal) 플래그로만 게이트한다 — mask.r>0.0 류 값 기반 오폴백 방지(②).
                     if pipe === meshPipelineNormal || pipe === meshPipelineNormalAdditive {
-                        if let normal = mesh.normalTexture { enc.setFragmentTexture(normal, index: 3) }
+                        enc.setFragmentTexture(mesh.normalTexture ?? mesh.texture, index: 3)
                         if let mask = mesh.maskTexture { enc.setFragmentTexture(mask, index: 4) }
+                        var normalParams = SIMD4<Float>(mesh.normalTextureFormat, 0,
+                                                        mesh.normalTexture != nil ? 1 : 0, 0)
+                        enc.setFragmentBytes(&normalParams, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
                     }
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
                                               indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)

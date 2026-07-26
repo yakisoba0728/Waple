@@ -10,6 +10,21 @@ final class Mesh3DShadersTests: XCTestCase {
         XCTAssertNotNil(lib.makeFunction(name: "mv_main"))
         XCTAssertNotNil(lib.makeFunction(name: "mv_skin"))
         XCTAssertNotNil(lib.makeFunction(name: "mf_main"))
+        XCTAssertNotNil(lib.makeFunction(name: "mf_normal"))
+        XCTAssertNotNil(lib.makeFunction(name: "mf_refract"))
+    }
+
+    /// M3(②): mf_normal 이 실제로 파이프라인까지 링크된다(normalParams buffer(5) 추가 후 회귀 가드 —
+    /// MSL 은 런타임 컴파일이라 swift build 로는 안 잡힘, SceneRenderer3D.mesh3DNormalPipeline 과 동형 서술자).
+    func testMeshNormalPipelineCompiles() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal device") }
+        let lib = try device.makeLibrary(source: Mesh3DShaders.source, options: nil)
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "mv_main")
+        pd.fragmentFunction = lib.makeFunction(name: "mf_normal")
+        pd.colorAttachments[0].pixelFormat = .bgra8Unorm
+        pd.depthAttachmentPixelFormat = .depth32Float
+        XCTAssertNoThrow(try device.makeRenderPipelineState(descriptor: pd))
     }
 
     func testMeshShaderCarriesWorldSpacePBRInputs() {
