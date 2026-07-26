@@ -56,6 +56,46 @@ final class UserPropertyStoreTests: XCTestCase {
         XCTAssertEqual(raw["name"] as? String, "User")
     }
 
+    // MARK: - C①: project.json 기본값 계층(defaults < preset < user)
+
+    /// 유저가 전혀 건드리지 않은 키는 project.json 기본값으로 해석돼야(종전엔 이 함수 자체가 없어
+    /// SceneDocument.resolveUserBindings 가 baked scene.json 값을 그대로 남겼다).
+    func testProjectDefaultsFillUnsetKeys() {
+        let defaults: [WallpaperProperty] = [
+            .init(key: "grain", type: "slider", value: .number(0), order: nil, condition: nil),
+            .init(key: "tintcolor", type: "color", value: .string("0.8 0.4 0.05"), order: nil, condition: nil),
+            .init(key: "showclock", type: "bool", value: .bool(true), order: nil, condition: nil),
+        ]
+        let raw = UserPropertyStore.rawOverrides(id: "upt1", projectDefaults: defaults,
+                                                  presetOverrides: [:], presetResourceRoot: nil)
+        XCTAssertEqual(raw["grain"] as? Double, 0)
+        XCTAssertEqual(raw["tintcolor"] as? String, "0.8 0.4 0.05")
+        XCTAssertEqual(raw["showclock"] as? Bool, true)
+    }
+
+    /// 계층: defaults < preset < user — 유저가 건드린 키는 defaults/preset 을 모두 이긴다.
+    func testUserOverrideWinsOverProjectDefaultAndPreset() {
+        UserPropertyStore.set(.number(0.9), key: "grain", id: "upt1")
+        let defaults: [WallpaperProperty] = [
+            .init(key: "grain", type: "slider", value: .number(0), order: nil, condition: nil),
+        ]
+        let raw = UserPropertyStore.rawOverrides(
+            id: "upt1", projectDefaults: defaults,
+            presetOverrides: ["grain": .number(0.5)], presetResourceRoot: nil)
+        XCTAssertEqual(raw["grain"] as? Double, 0.9, "유저 값이 preset·defaults 를 모두 이겨야")
+    }
+
+    /// preset 은 defaults 를 이기지만 user 보다는 아래.
+    func testPresetOverridesProjectDefaultButLosesToUser() {
+        let defaults: [WallpaperProperty] = [
+            .init(key: "grain", type: "slider", value: .number(0), order: nil, condition: nil),
+        ]
+        let raw = UserPropertyStore.rawOverrides(
+            id: "upt1", projectDefaults: defaults,
+            presetOverrides: ["grain": .number(0.5)], presetResourceRoot: nil)
+        XCTAssertEqual(raw["grain"] as? Double, 0.5, "preset 이 project 기본값을 이겨야")
+    }
+
     func testPresetRelativeResourceOverridesResolveAgainstPresetRoot() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("waple-preset-root-\(UUID().uuidString)", isDirectory: true)
