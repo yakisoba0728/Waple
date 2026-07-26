@@ -617,6 +617,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var hdrBloomPass: HDRBloomEncoding?
     /// H6: HDR bloom 3-레벨 피라미드(기존 단일 레벨 대비 글로우 반경 확장).
     var hdrBloomPyramidPass: HDRBloomPyramidEncoding?
+    /// H5: 볼륨 라이트 샤프트 패스(castVolumetrics 라이트).
+    var volumetricLightPass: VolumetricLightPass?
     /// HDR 경로 실효 게이트(2D·3D 공통). 3D 씬도 acc/메시/파티클 파이프라인이 accPixelFormat(float)로
     /// 승격되므로(mesh3DPipeline/particle3DPipeline) HDRBloomPass 에 도달 — 유일 HDR 골든(3470948192=3D) 대조 가능.
     var hdrActive: Bool { sceneIsHDR }
@@ -1050,6 +1052,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if sceneWantsHDRBloom {
             hdrBloomPass = HDRBloomPass(device: device)
             hdrBloomPyramidPass = HDRBloomPyramidPass(device: device)
+        }
+        // H5: 볼륨 라이트 샤프트 패스(castVolumetrics 라이트가 있는 3D 씬).
+        if doc.camera3D != nil, doc.lights3D.contains(where: { $0.castVolumetrics }) {
+            volumetricLightPass = VolumetricLightPass(device: device)
         }
 
         let library = try WapleProfiler.compile(QuadShaders.source) { try device.makeLibrary(source: QuadShaders.source, options: nil) }

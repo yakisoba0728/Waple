@@ -317,7 +317,13 @@ extension SceneRenderer {
 
         // ── 빌보드(2D 이미지 레이어). 텍스처 로딩은 2D 경로와 동일(assetData→TexImage→TexDecoder). ──
         var bbLoaded = 0, bbSkipped = 0
-        for (bbLayerIndex, layer) in doc.layers.enumerated() {   // bbLayerIndex = JS layers 인덱스(F811)
+        // 감사 V06(F721): ortho 하이브리드는 mount 가 빌보드/3D 텍스트를 전량 폐기하고 2D buildLayers/buildTexts
+        // 가 같은 자산·스크립트를 재로드한다 — 이중 빌드(텍스처 디코드/효과 컴파일/스크립트 top-level 2회 실행)라
+        // 빌보드/텍스트 빌드를 건 뛴다. 판정은 mount 의 하이브리드 진입 조건(:1098)과 동일하게 둔다
+        // (objects3D 부재 씬의 build3D 직접 호출 — 테스트 하네스 — 은 종전대로 빌보드 빌드).
+        // 노드/메시 스크립트는 2D 대응물이 없어 종전대로.
+        let orthoHybrid = doc.camera3D == nil && !doc.objects3D.isEmpty
+        for (bbLayerIndex, layer) in doc.layers.enumerated() where !orthoHybrid {   // bbLayerIndex = JS layers 인덱스(F811)
             // 빌보드 텍스처도 2D 와 동일 공유 경로(makeImageTexture): BC 는 네이티브 업로드, 그 외 CPU 폴백.
             let mtl: MTLTexture, texW: Int, texH: Int
             if layer.textureEntryName.isEmpty {
@@ -391,7 +397,7 @@ extension SceneRenderer {
         // 3D 씬 text 컨트롤러 로드: 2D buildTexts(shared 통신용 엔진 로드)의 3D 대응. text 스크립트의
         // top-level + update 사이드이펙트(shared.vvv 등)가 3D 지오메트리 스크립트를 구동한다(미실행 시 NaN).
         // 픽셀 렌더는 미배선(3D 텍스트 스크린 오버레이 위치/크기 규약 미확정) — 사이드이펙트만 실행.
-        for t in doc.texts {
+        for t in doc.texts where !orthoHybrid {   // 감사 V06: ortho 하이브리드는 미빌드(2D buildTexts 가 담당)
             guard let src = t.script, let e = makeScriptEngine(src, layerName: t.name.isEmpty ? nil : t.name,
                                                                scriptPropsJSON: t.scriptProps) else { continue }
             // makeScriptEngine 생성 시 top-level 실행(shared 초기화) — update 보유분만 per-frame 재평가 대상.
@@ -678,6 +684,9 @@ extension SceneRenderer {
 
     /// 스키닝 본 버퍼를 그림자 6면/메인 패스가 공유하도록 프레임당 정확히 한 번 적재한다.
     func prepare3DSkinBuffers(time: Float, device: MTLDevice) -> [Int: MTLBuffer] {
+        // 감사 V06: 같은 time 의 재호출은 직전 결과 재사용(ortho 하이브리드는 drawPlan 인터리브로
+        // runOrtho3DMeshes 가 프레임당 2+회 호출 — 호출마다 3슬롯 링을 전진시키면 GPU in-flight 슬롯 덮어씀).
+        if let memo = skinBuffersFrameMemo, memo.time == time { return memo.buffers }
         var result: [Int: MTLBuffer] = [:]
         for (index, renderable) in meshRenderables.enumerated() {
             guard let model = renderable.model, let ring = renderable.boneRing, !model.bones.isEmpty else { continue }
@@ -686,6 +695,7 @@ extension SceneRenderer {
             guard !matrices.isEmpty, let buffer = ring.load(matrices, device: device) else { continue }
             result[index] = buffer
         }
+        skinBuffersFrameMemo = (time, result)
         return result
     }
 
@@ -1113,6 +1123,31 @@ extension SceneRenderer {
         // 재할당됐을 수 있으므로 현재 enc 를 사용(같은 depthTex 바인딩 유지).
         if hasParticles { encode3DParticles(time: time, liveDelta: particleDelta, viewProj: viewProj, right: right, up: camUp, nmap: nmap, into: enc, device: device) }
         enc.endEncoding()
+        // H5: 볼륨 라이트 샤프트 — castVolumetrics 라이트를 additive로 합성(3D 씬 렌더 후).
+        if let volumetricLightPass {
+            for light in scene3DLights where light.castVolumetrics {
+                _ = volumetricLightPass.encode(
+                    commandBuffer: cb,
+                    destination: target,
+                    cameraEye: eye,
+                    cameraFwd: fwd,
+                    cameraRight: right,
+                    cameraUp: camUp,
+                    fovY: fov,
+                    aspect: aspect,
+                    nearZ: cam.nearZ,
+                    farZ: cam.farZ,
+                    light: VolumetricLightParameters(
+                        color: SIMD3(light.color.x, light.color.y, light.color.z),
+                        position: SIMD3(light.origin.x, light.origin.y, light.origin.z),
+                        direction: SIMD3(light.angles.x, light.angles.y, light.angles.z),
+                        density: light.density,
+                        exponent: light.volumetricsExponent,
+                        intensity: light.intensity,
+                        innerCone: light.innerCone,
+                        outerCone: light.outerCone))
+            }
+        }
         return true
     }
 
