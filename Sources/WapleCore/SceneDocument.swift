@@ -8,6 +8,10 @@ public struct SceneEffectPass: Equatable {
     /// 상수 스크립트의 저장 `scriptproperties`(사용자 오버라이드) — 키 → JSON 문자열. 레이어/텍스트
     /// 스크립트와 동일 규약: 엔진 로드 시 주입해 소스 `createScriptProperties().addX({value})` 기본값 대체.
     public var constantScriptProps: [String: String] = [:]
+    /// X-⑦: 상수에 걸린 키프레임 애니메이션({animation:{...}} 바인딩, 55씬/287건) — 렌더러가
+    /// per-frame PropertyAnimation.value(component:atTime:base:) 로 평가(레이어 origin/scale/alpha
+    /// 애니와 동일 평가기 재사용). 정적 constants[key] 는 애니 없을 때의 기본값 겸 relative 애니의 base.
+    public var constantAnimations: [String: PropertyAnimation] = [:]
     public var textureNames: [String?] = []
     /// F697: 패스 `usertextures` 슬롯 — 머티리얼 경로(material/instance)와 동일하게 name 만 정규화
     /// (평문 문자열=유저 프로퍼티 키, {name,type}={"$mediaThumbnail","system"} 류 시스템 키 → name).
@@ -34,10 +38,13 @@ public struct SceneEffect: Equatable {
     public var passList: [SceneEffectPass] = []
     /// 초기 가시성(스크립트 있으면 정적 false 도 보존 — 오브젝트 레벨 initialVisible 게이트와 동일 규약).
     public var initialVisible: Bool = true
-    /// visible 프로퍼티 스크립트(단일 JS 소스, 상수처럼 키 맵이 아님). TODO(소비 미배선): per-frame
-    /// 재평가로 이펙트를 런타임에 토글하는 소비처는 아직 없음(코퍼스 저빈도로 YAGNI 보류) — 파스는
-    /// 이 필드가 있으면 initialVisible 이 false 라도 SceneEffect 를 드롭하지 않고 보존만 한다.
+    /// visible 프로퍼티 스크립트(단일 JS 소스, 상수처럼 키 맵이 아님). X-⑥: SceneRendererResources.
+    /// buildEffectChain 이 per-frame 재평가로 소비(레이어/텍스트 propertyScripts["visible"] 과 동형 규약)
+    /// — 이 필드가 있으면 initialVisible 이 false 라도 SceneEffect 를 드롭하지 않고 보존만 한다.
     public var visibleScript: String? = nil
+    /// X-⑥: visibleScript 의 scriptproperties(레이어/텍스트 visibleScriptProps 와 동일 규약) — 스크립트가
+    /// scriptProperties.<name> 참조 시 필요. 미보유 스크립트는 nil 이어도 무해(기본값 폴백).
+    public var visibleScriptProps: String? = nil
 
     public init(name: String, constants: [String: [Float]], textureNames: [String?], combos: [String: Int] = [:], file: String = "") {
         self.name = name; self.constants = constants; self.textureNames = textureNames; self.combos = combos; self.file = file
@@ -1912,10 +1919,14 @@ extension SceneDocument {
             // 않고 보존 — {script,value} 로 시작이 false 인 이펙트가 SceneEffect[] 에서 영구 제외되던 결함.
             var effInitialVisible = true
             var effVisibleScript: String? = nil
+            var effVisibleScriptProps: String? = nil
             if let vb = e["visible"] as? Bool { effInitialVisible = vb }
             else if let vis = e["visible"] as? [String: Any] {
                 if let v = vis["value"] as? Bool { effInitialVisible = v }
                 effVisibleScript = vis["script"] as? String
+                // X-⑥: 레이어/텍스트 visible 파스(:788-789)와 동형 — scriptproperties 미포집이면 스크립트가
+                // scriptProperties.<name> 참조 시 항상 기본값으로 폴백(무동작 수정 방지).
+                if effVisibleScript != nil { effVisibleScriptProps = Self.scriptPropsJSON(vis["scriptproperties"]) }
             }
             if !effInitialVisible && effVisibleScript == nil { continue }
             let file = (e["file"] as? String) ?? ""
@@ -1940,6 +1951,12 @@ extension SceneDocument {
                             p.constantScripts[k] = sc
                             // 스크립트가 있을 때만 저장 오버라이드 보존(레이어/텍스트 경로와 동일 규약).
                             if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { p.constantScriptProps[k] = sp }
+                        }
+                        // X-⑦: {animation:{...}} 키프레임 바인딩(55씬/287건) — 스크립트와 동일하게 value
+                        // 언랩보다 먼저 캡처(동일 이유: 아래 float(v)/{value} 언랩이 dict 를 소비해도 무관하게
+                        // 독립 필드에 보존). PropertyAnimation.parse 는 "animation" 키 부재 시 nil.
+                        if let dict = v as? [String: Any], let anim = PropertyAnimation.parse(dict) {
+                            p.constantAnimations[k] = anim
                         }
                         if let f = float(v) { p.constants[k] = [f] }
                         else if let s = v as? String {
@@ -1979,6 +1996,18 @@ extension SceneDocument {
                 // 머티리얼 경로의 instance usertextures(:1270 인근)와 동일 정규화 규약.
                 if let uts = passDict["usertextures"] as? [Any] {
                     p.userTextureNames = uts.map { ($0 as? String) ?? (($0 as? [String: Any])?["name"] as? String) }
+                    // X-③: `$` 로 시작하지 않는(=시스템 키가 아닌) 유저 키는 레이어 material usertextures 와
+                    // 동일하게 파스 시점에 userProps 값으로 해석해 textureNames 슬롯을 덮어쓴다(usertextures
+                    // 가 textures 보다 우선 — :1637-1644 와 동형 규약). "$mediaThumbnail"/"$mediaPreviousThumbnail"
+                    // 같은 시스템 키는 라이브 미디어 폴링이 필요한 동적 값이라 여기서 해석 불가 — userTextureNames
+                    // 에 원문 키를 남겨 렌더러가 SceneRenderer.mediaArtworkTexture 로 별도 결속한다.
+                    for (slot, key) in p.userTextureNames.enumerated() {
+                        guard let key, !key.hasPrefix("$"),
+                              let override = userProps[key] as? String,
+                              !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                        while p.textureNames.count <= slot { p.textureNames.append(nil) }
+                        p.textureNames[slot] = override
+                    }
                 }
                 passList.append(p)
             }
@@ -1988,6 +2017,7 @@ extension SceneDocument {
             eff.passList = passList
             eff.initialVisible = effInitialVisible
             eff.visibleScript = effVisibleScript
+            eff.visibleScriptProps = effVisibleScriptProps
             out.append(eff)
         }
         return out

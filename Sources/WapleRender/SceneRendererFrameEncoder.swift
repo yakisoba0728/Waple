@@ -33,12 +33,18 @@ extension SceneRenderer {
     /// EngineU 버퍼: mvp(항등) + timeAndPad(time,pointer,dt) + pointerLastAndPad + texRes[8](슬롯별 실제 dims)
     /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요)
     /// + texFilter[8](감사 V07: 슬롯별 1=nearest/0=linear, pass.texFilter 그대로 — TexImage.noInterpolation)
-    /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값).
+    /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값) + X-⑤ targetRes[4]
+    /// (g_TexelSize/g_TexelSizeHalf 전용 — 이펙트 체인 경로는 출력(dst) 해상도 고정값, 전 패스 불변).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
+    /// targetRes 는 의도적으로 기본값 없음(교차배치 리뷰 must_fix) — 신규 호출부는 자기 렌더 타깃
+    /// 해상도를 명시 전달할 것(예: 3D 커스텀 메시 경로라면 소스 texRes.first 근사). 기본값 (1,1,1,1)
+    /// 을 되살리면 그 호출부만 g_TexelSize=1.0 으로 조용히 깨진다 — 컴파일 에러가 나면 값을 채울 것,
+    /// 파라미터를 다시 옵셔널로 되돌리지 말 것.
     func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = [], texFilter: [Float] = [],
                        layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1),
+                       targetRes: SIMD4<Float>,
                        mvp: simd_float4x4? = nil) -> [Float] {
-        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4)
+        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4 + 4)
         let m = mvp ?? simd_float4x4(1)
         e[0] = m.columns.0.x; e[1] = m.columns.0.y; e[2] = m.columns.0.z; e[3] = m.columns.0.w
         e[4] = m.columns.1.x; e[5] = m.columns.1.y; e[6] = m.columns.1.z; e[7] = m.columns.1.w
@@ -56,6 +62,7 @@ extension SceneRenderer {
         for n in 0..<8 where n < texWrap.count { e[56 + n] = texWrap[n] }
         for n in 0..<8 where n < texFilter.count { e[64 + n] = texFilter[n] }  // 감사 V07: texWrap 직후
         e[72] = layerTint.x; e[73] = layerTint.y; e[74] = layerTint.z; e[75] = layerTint.w
+        e[76] = targetRes.x; e[77] = targetRes.y; e[78] = targetRes.z; e[79] = targetRes.w  // X-⑤
         return e
     }
 
@@ -267,9 +274,12 @@ extension SceneRenderer {
             blit.endEncoding()
             var current: MTLTexture = snap
             for eff in layer.effects {
+                guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(acc.width, acc.height, device) else { break }
                 // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
-                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
+                // F-X4: snap 은 이미 이 컴포지션 레이어가 그려지기 전 씬 컬러(_rt_FullFrameBuffer 의미)라
+                // godrays/shine 의 COPYBG aux 슬롯에도 동일 텍스처를 재사용(추가 블릿 불요).
+                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb, fullFrameSnapshot: snap) else { break }
                 current = next
             }
             srcTex = current
@@ -1101,8 +1111,15 @@ extension SceneRenderer {
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                 }
             }
+            // X-⑤ 스코프 밖: 이 경로는 tex0(custom.texRes.first, 레이어 자산 텍스처 해상도)를 그대로
+            // targetRes 에 실어 무회귀만 유지한다. 이펙트 체인 경로(위 g_TexelSize 정본)와 규약이
+            // 이원화된 상태이며, tex0=타깃이라는 근거는 확인되지 않았다(레이어 자산 해상도와 합성
+            // RT 해상도가 실제로 다른 경우가 흔함) — 알려진 미검증 괴리로 남겨둔 것이지 옳다고
+            // 확인된 근사가 아니다. 값을 바꾸는 것은 이번 배치 스코프 밖(무회귀 우선), 필요 시 라이브
+            // A/B 로 별도 재검증.
             let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
-                                    texFilter: custom.texFilter, layerTint: tint, mvp: m)
+                                    texFilter: custom.texFilter, layerTint: tint,
+                                    targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: m)
             eng.withUnsafeBytes {
                 enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                 enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
@@ -1463,6 +1480,7 @@ extension SceneRenderer {
             guard let src = t.texture, !t.effects.isEmpty else { return nil }
             var current: MTLTexture = src
             for eff in t.effects {
+                guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(src.width, src.height, device),
                       applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
                 current = next
@@ -1509,6 +1527,7 @@ extension SceneRenderer {
             // 베이스 복사 불필요: base 를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
             var current = base
             for eff in layer.effects {
+                guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(layer.texWidth, layer.texHeight, device) else { break }
                 // F532: 인코드 실패 시 미기록 next 를 표시 결과로 채택하지 않음(:877 가드와 정합).
                 guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
@@ -1519,10 +1538,24 @@ extension SceneRenderer {
         return out
     }
 
+    /// X-⑥: 이펙트 visible 스크립트 per-frame 재평가 — visibleGate 없으면(대다수) 무비용 true.
+    /// 호출부는 false 시 이 이펙트만 건너뛰고(continue, break 아님) 체인의 나머지·현재 텍스처를 보존한다
+    /// (레이어/텍스트 propertyScripts["visible"] 과 달리 이펙트 하나가 꺼진다고 레이어 전체가 안 꺼짐).
+    func effectVisible(_ eff: EffectGPU, time: Float) -> Bool {
+        guard let gate = eff.visibleGate else { return true }
+        gate.engine.setRuntime(Double(time))
+        gate.current = gate.engine.evaluateBool(current: gate.current) ?? gate.current
+        return gate.current
+    }
+
     /// 효과 1개를 src→dst 로 인코드. 반환값 = dst 기록 완료 여부(F532 — 조기 반환 시 dst 미기록을
     /// 호출부가 알 수 있게; 실패 시 호출부는 마지막 유효 텍스처를 유지하도록 break).
+    /// fullFrameSnapshot(F-X4): `_rt_FullFrameBuffer` aux 슬롯(godrays/shine COPYBG)에 바인딩할 씬 컬러
+    /// 스냅샷 — 이미 acc 스냅샷을 확보한 호출부(runFrameBufferLayer 등)만 넘긴다. nil(기본값)이면 빌드
+    /// 시점 흰색 1×1 폴백 그대로(무회귀 — 기존 호출부는 수정 불필요).
     @discardableResult
-    func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, time: Float, cb: MTLCommandBuffer) -> Bool {
+    func applyEffect(_ eff: EffectGPU, src: MTLTexture, dst: MTLTexture, time: Float, cb: MTLCommandBuffer,
+                     fullFrameSnapshot: MTLTexture? = nil) -> Bool {
         switch eff.bind {
         case .handPort(let params, let aux, let audio):
             let rpd = MTLRenderPassDescriptor()
@@ -1547,7 +1580,7 @@ extension SceneRenderer {
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             enc.endEncoding()
 
-        case .translated(var passes, let fboScales):
+        case .translated(var passes, let fboSpecs):
             guard let device else { return false }  // mount 이후 항상 존재 — 강제 언랩 제거(teardown 경합 안전)
             // 디버그: WAPLE_MP_TRUNC=n → 앞 n개 패스만 실행(마지막은 dst 로 강제) — 패스별 이분용.
             if let t = ProcessInfo.processInfo.environment["WAPLE_MP_TRUNC"], let n = Int(t), n > 0, n < passes.count {
@@ -1556,16 +1589,33 @@ extension SceneRenderer {
                 passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
                                              binds: last.binds, target: nil, usesAudio: last.usesAudio,
                                              texRes: last.texRes, texWrap: last.texWrap, texFilter: last.texFilter,
-                                             scripts: last.scripts))
+                                             scripts: last.scripts, fullFrameSlots: last.fullFrameSlots,
+                                             swapPair: last.swapPair, mediaArtworkSlots: last.mediaArtworkSlots,
+                                             animations: last.animations))
             }
-            // 멀티패스: 이름 있는 FBO(다운스케일)를 풀에서 할당하고, 각 패스를 target(fbo|dst)에 순차 실행.
+            // 멀티패스: 이름 있는 FBO(다운스케일 또는 X-① 절대 크기)를 풀에서 할당하고, 각 패스를
+            // target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
+            // X-⑤: g_TexelSize/g_TexelSizeHalf = 이펙트 출력(dst) 1텍셀, 체인 전 패스 불변 — 채택된
+            // 정본이며 "실측으로 확정"은 아니다(근거 판별력 한계는 GLSLTranslator.assemble 의
+            // EngineU/g_TexelSize 주석 참조). 다운스케일 fbo 를 타깃/소스로 쓰는 패스에서도 종전 tex0
+            // 근사(4× 과대 오프셋)가 아니라 이 값을 쓴다 — bokeh_blur 12씬 블러 폭은 라이브 A/B
+            // 판독 대기(BACKLOG.md 시각 충실도 표).
+            let targetRes = SIMD4<Float>(Float(baseW), Float(baseH), Float(baseW), Float(baseH))
             var fboTex: [MTLTexture] = []
-            for s in fboScales {
-                guard let t = pooledOffscreen(max(1, baseW / s), max(1, baseH / s), device) else { return false }
+            for spec in fboSpecs {
+                let w = spec.fixedWidth ?? max(1, baseW / spec.scale)
+                let h = spec.fixedHeight ?? max(1, baseH / spec.scale)
+                guard let t = pooledOffscreen(w, h, device) else { return false }
                 fboTex.append(t)
             }
             for pass in passes {
+                // X-②: command:"swap" — 무비용 포인터 교환(draw 없음). 인덱스 유효성만 재확인(빌드 시
+                // fboIndex 로 이미 확정됐지만 fboTex.count 는 fboSpecs.count 와 항상 같아 안전).
+                if let sp = pass.swapPair, sp.source < fboTex.count, sp.target < fboTex.count {
+                    fboTex.swapAt(sp.source, sp.target)
+                    continue
+                }
                 let target = pass.target.map { fboTex[$0] } ?? dst
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
@@ -1586,13 +1636,25 @@ extension SceneRenderer {
                             else if v.count == 1 { mat[sc.slot] = SIMD4(v[0], cur.y, cur.z, cur.w) }
                         }
                     }
+                    // X-⑦: constantshadervalues 의 {animation:{...}} 키프레임 — 레이어 origin/scale/alpha
+                    // 애니와 동일 평가기(PropertyAnimation.value)로 슬롯별 성분을 갱신. base = 현재(정적)값,
+                    // relative 애니는 그 base 에 가산. 컴포넌트 수는 tracks.count(선언된 c0..c2 만).
+                    for a in pass.animations {
+                        let cur = mat[a.slot]
+                        let base: [Float] = [cur.x, cur.y, cur.z, cur.w]
+                        var v = cur
+                        for comp in 0..<min(a.anim.tracks.count, 4) {
+                            v[comp] = a.anim.value(component: comp, atTime: time, base: base[comp])
+                        }
+                        mat[a.slot] = v
+                    }
                     mat.withUnsafeBytes {
                         enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 0)
                         enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                     }
                 }
                 let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: src, fboTex: fboTex),
-                                        texWrap: pass.texWrap, texFilter: pass.texFilter)
+                                        texWrap: pass.texWrap, texFilter: pass.texFilter, targetRes: targetRes)
                 eng.withUnsafeBytes {
                     enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
@@ -1601,6 +1663,19 @@ extension SceneRenderer {
                     enc.setFragmentTexture(source == -1 ? src : fboTex[source], index: slot)
                 }
                 for (slot, tex) in pass.aux { enc.setFragmentTexture(tex, index: slot) }
+                // F-X4: `_rt_FullFrameBuffer` 슬롯 — 위 aux 루프가 이미 흰색 1×1 로 채웠으므로, 실제
+                // 씬 스냅샷이 있으면 여기서 덮어써 배경을 바인드(godrays/shine COPYBG). 없으면 무회귀.
+                if let snap = fullFrameSnapshot {
+                    for slot in pass.fullFrameSlots where slot < 128 { enc.setFragmentTexture(snap, index: slot) }
+                }
+                // X-③: usertextures 시스템 키($mediaThumbnail/$mediaPreviousThumbnail) 슬롯 — 위 aux 루프가
+                // 이미 흰색 1×1 로 채웠으므로, 라이브 아트워크가 있으면 여기서 덮어쓴다(레이어 base 의 F722
+                // 배선과 동일 소스: self.mediaArtworkTexture/mediaPreviousArtworkTexture). 미수신(nil)이면 무회귀.
+                for (slot, previous) in pass.mediaArtworkSlots where slot < 128 {
+                    if let tex = previous ? mediaPreviousArtworkTexture : mediaArtworkTexture {
+                        enc.setFragmentTexture(tex, index: slot)
+                    }
+                }
                 if pass.usesAudio {  // 스펙트럼 버퍼(16:2/3, 32:5/6, 64:7/8).
                     func bind(_ arr: [Float], _ idx: Int) {
                         arr.withUnsafeBytes {

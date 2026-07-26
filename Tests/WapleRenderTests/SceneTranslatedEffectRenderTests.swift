@@ -229,6 +229,179 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertLessThan(c.greenComponent, 0.1)
     }
 
+    /// X-①: effect.json fbos[].fit(실물 cursorripple `_rt_EightBuffer1/2` fit:512) 는 dst 비례(scale)가
+    /// 아니라 절대 정사각 크기여야 한다. dst 는 64×36(테스트 캡처 해상도)인데 fbo fit:32 이면 그 fbo 는
+    /// 항상 32×32 — scale 기반으로 잘못 낙하하면(과거: fit 무시 → scale 기본값 1 → dst 크기) 프로브가 실패.
+    func testMultiPassEffectFBOFitIsAbsoluteSize() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let fragFill = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
+        """
+        let fragProbe = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            float ok = step(31.5, g_Texture0Resolution.x) * step(g_Texture0Resolution.x, 32.5)
+                     * step(31.5, g_Texture0Resolution.y) * step(g_Texture0Resolution.y, 32.5);
+            gl_FragColor = vec4(ok, ok, ok, 1.0);
+        }
+        """
+        let effectJSON = """
+        {"passes":[
+           {"material":"materials/effects/fit_fill.json","target":"_rt_Sq",
+            "bind":[{"name":"previous","index":0}]},
+           {"material":"materials/effects/fit_probe.json",
+            "bind":[{"name":"_rt_Sq","index":0}]}],
+         "fbos":[{"name":"_rt_Sq","fit":32,"format":"rgba8888"}]}
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/fittest/effect.json","passes":[{},{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_fit", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("effects/fittest/effect.json", effectJSON.data(using: .utf8)!),
+            ("materials/effects/fit_fill.json", #"{"passes":[{"shader":"effects/fit_fill"}]}"#.data(using: .utf8)!),
+            ("materials/effects/fit_probe.json", #"{"passes":[{"shader":"effects/fit_probe"}]}"#.data(using: .utf8)!),
+            ("shaders/effects/fit_fill.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/fit_fill.frag", fragFill.data(using: .utf8)!),
+            ("shaders/effects/fit_probe.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/fit_probe.frag", fragProbe.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "fit", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "fit", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_fit")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let luma = avgLuma(url)
+        NSLog("%@", "[Waple] fbo fit:32 resolution-probe luma=\(luma)")
+        XCTAssertGreaterThan(luma, 0.9, "fit:32 는 dst(64x36)와 무관하게 절대 32x32 여야 함(스케일 폴백이면 g_Texture0Resolution 불일치 → 검정)")
+    }
+
+    /// X-⑦: constantshadervalues 의 {animation:{...}} 키프레임(55씬/287건) — 종전엔 파스 자체가
+    /// 없어 정적 초기값(여기선 value:1.0)에 영구 고정됐다. c0 트랙이 frame0=0.1→frame30=1.0(fps30,
+    /// single) 이므로 t=0 은 alpha≈0.1(어둡게), t=1.0초(=30프레임)는 alpha≈1.0(밝게) — 정적이면 두
+    /// 시점 모두 luma≈1.0(value 그대로)이라 단일 프레임으로는 "애니 vs 정적"을 구분 못 함(advisor 지적) —
+    /// 두 시점을 모두 캡처해 서로 달라야 함을 단언.
+    func testConstantShaderValueAnimationKeyframesEvaluatePerFrame() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        uniform float g_UserAlpha; // {"material":"alpha","default":1.0}
+        void main() {
+            vec4 albedo = texSample2D(g_Texture0, v_TexCoord);
+            albedo.a *= g_UserAlpha;
+            gl_FragColor = albedo;
+        }
+        """
+        let scene = """
+        {"general": {"orthogonalprojection": {"width": 1920, "height": 1080}, "clearcolor": "0 0 0"}, "objects": [{"id": 1, "image": "models/w.json", "origin": "960 540 0", "size": "1920 1080", "effects": [{"file": "effects/animtest/effect.json", "passes": [{"constantshadervalues": {"alpha": {"value": 1.0, "animation": {"c0": [{"frame": 0, "value": 0.1, "front": {"enabled": false, "x": 0, "y": 0}, "back": {"enabled": false, "x": 0, "y": 0}}, {"frame": 30, "value": 1.0, "front": {"enabled": false, "x": 0, "y": 0}, "back": {"enabled": false, "x": 0, "y": 0}}], "options": {"fps": 30, "mode": "single"}}}}}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_anim", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("shaders/effects/animtest.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/animtest.frag", frag.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "anim", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "anim", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_anim")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 1.0], toDir: out)
+        XCTAssertEqual(urls.count, 2)
+        let lumaAtT0 = avgLuma(urls[0])
+        let lumaAtT1 = avgLuma(urls[1])
+        NSLog("%@", "[Waple] constantshadervalue animation lumaAtT0=\(lumaAtT0) lumaAtT1=\(lumaAtT1)")
+        XCTAssertEqual(lumaAtT0, 0.1, accuracy: 0.1, "t=0(frame0) → alpha≈0.1(어두움)")
+        XCTAssertEqual(lumaAtT1, 1.0, accuracy: 0.1, "t=1.0초(frame30) → alpha≈1.0(밝음)")
+        XCTAssertGreaterThan(lumaAtT1 - lumaAtT0, 0.5,
+                             "정적 고정(value:1.0)이면 두 시점 모두 luma≈1.0 이라 차이가 거의 0 — 애니가 실제로 평가돼야 함")
+    }
+
+    /// X-②: effect.json `command:"swap"`(실물 fluidsimulation velocity/dye 더블버퍼) — 종전엔 셰이더
+    /// 패스로 오해석돼(material/shader 부재 → "effects/<name>" 관례 조회 실패) 효과 전체가 드롭됐다.
+    /// pass0 이 _rt_A 에 빨강을 채우고, swap(A,B) 로 포인터를 교환한 뒤, pass2 가 _rt_B 를 읽어 그대로
+    /// 출력 — swap 이 실제 포인터 교환이면 빨강(luma≈0.33), 효과가 드롭되면 베이스(흰색, luma≈1.0).
+    func testSwapCommandPassSwapsBufferIdentity() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let fragRed = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
+        """
+        let fragPassthrough = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }
+        """
+        let effectJSON = """
+        {"passes":[
+           {"material":"materials/effects/swap_red.json","target":"_rt_A",
+            "bind":[{"name":"previous","index":0}]},
+           {"command":"swap","source":"_rt_A","target":"_rt_B"},
+           {"material":"materials/effects/swap_read.json",
+            "bind":[{"name":"_rt_B","index":0}]}],
+         "fbos":[{"name":"_rt_A","scale":1},{"name":"_rt_B","scale":1}]}
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/swaptest/effect.json","passes":[{},{},{}]}]}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("effects/swaptest/effect.json", effectJSON.data(using: .utf8)!),
+            ("materials/effects/swap_red.json", #"{"passes":[{"shader":"effects/swap_red"}]}"#.data(using: .utf8)!),
+            ("materials/effects/swap_read.json", #"{"passes":[{"shader":"effects/swap_read"}]}"#.data(using: .utf8)!),
+            ("shaders/effects/swap_red.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/swap_red.frag", fragRed.data(using: .utf8)!),
+            ("shaders/effects/swap_read.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/swap_read.frag", fragPassthrough.data(using: .utf8)!),
+        ], tag: "swaptest")
+        NSLog("%@", "[Waple] swap command luma=\(luma)")
+        XCTAssertLessThan(luma, 0.6, "swap 이 실제 포인터 교환이면 _rt_A 의 빨강이 _rt_B 를 통해 나와야 함(드롭되면 흰 베이스)")
+    }
+
     /// texRes per-slot(설계 §4): g_Texture1Resolution 은 aux 슬롯 1 텍스처의 실제 dims 여야 한다
     /// (레이어 dims 8x8 근사가 아니라). frag 가 x==4 를 검사해 백/흑으로 표출 — 4x2 aux 면 luma 1.
     func testAuxTextureResolutionPerSlot() throws {
@@ -402,5 +575,214 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         NSLog("%@", "[Waple] translated opacity luma=\(luma)")
         XCTAssertLessThan(luma, 0.7, "translated path must run (skip → ~1.0)")
         XCTAssertEqual(luma, 0.4, accuracy: 0.1, "translated opacity matches hand-port oracle (alpha 0.4)")
+    }
+
+    /// X-④a: 셰이더 샘플러 주석의 `"default":"경로"`(예: util/greenmark) 가 씬/머티리얼 어느 쪽도 슬롯을
+    /// 지정하지 않을 때 실제 자산으로 해석돼야 한다. 종전엔 어노테이션이 통째로 버려져 흰색 1×1(luma 1.0)
+    /// 이었다 — 초록 자산이 실제로 바인드되면 luma 는 초록의 (0+1+0)/3≈0.33.
+    func testSamplerDefaultAnnotationResolvesRealAsset() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        uniform sampler2D g_Texture1; // {"hidden":true,"default":"util/greenmark"}
+        void main() {
+            gl_FragColor = texSample2D(g_Texture1, v_TexCoord);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/defaulttex/effect.json","passes":[{}]}]}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("shaders/effects/defaulttex.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/defaulttex.frag", frag.data(using: .utf8)!),
+            ("materials/util/greenmark.tex", solidTex(0, 255, 0)),
+        ], tag: "defaulttex")
+        NSLog("%@", "[Waple] sampler default-annotation luma=\(luma)")
+        XCTAssertLessThan(luma, 0.6, "default 어노테이션이 해석되면 초록(luma≈0.33) — 미해석이면 흰색 폴백(luma≈1.0)")
+    }
+
+    /// X-④b: godrays/shine 의 COPYBG 콤보(`_rt_FullFrameBuffer` aux 슬롯)가 씬 컬러 스냅샷으로 실제
+    /// 바인드돼야 한다 — 컴포지션(fullscreenlayer) 레이어의 효과 체인에서 배경 레이어의 색이 그대로
+    /// 나와야 하고(luma≈0.33, 빨강), 미바인드면 흰색 1×1 폴백(luma≈1.0).
+    func testFullFrameBufferAuxSlotBindsSceneSnapshot() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        uniform sampler2D g_Texture1; // {"hidden":true,"default":"_rt_FullFrameBuffer"}
+        void main() {
+            gl_FragColor = texSample2D(g_Texture1, v_TexCoord);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "effects":[{"file":"effects/copybg/effect.json","passes":[{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_copybg", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/bg.json", #"{"material":"materials/bg.json"}"#.data(using: .utf8)!),
+            ("materials/bg.json", #"{"passes":[{"textures":["bg"]}]}"#.data(using: .utf8)!),
+            ("materials/bg.tex", solidTex(255, 0, 0)),
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+            ("shaders/effects/copybg.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/copybg.frag", frag.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "copybg", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "copybg", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_copybg")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let luma = avgLuma(url)
+        NSLog("%@", "[Waple] COPYBG fullframe-snapshot luma=\(luma)")
+        XCTAssertLessThan(luma, 0.6, "_rt_FullFrameBuffer 가 씬 스냅샷에 바인드되면 배경(빨강, luma≈0.33) — 미바인드면 흰색 폴백(luma≈1.0)")
+    }
+
+    /// X-⑤: g_TexelSize 를 이펙트 **출력(dst)** 해상도 기준으로 채택한 규약을 코드가 실제로 그렇게
+    /// 구현했는지 고정(pin)하는 회귀 테스트다 — 채택 근거(WE gaussian.vert `ratio = g_TexelSize *
+    /// g_Texture0Resolution`)는 정적으로는 판별력이 없어 "실측으로 확정"된 사실이 아니라 **라이브
+    /// A/B 재검증 대기 중인 채택안**임을 GLSLTranslator.swift 의 g_TexelSize 치환부 주석에 남겼다.
+    /// scale:4 다운샘플 fbo 를 거친 뒤 최종(타깃 없음=dst) 패스가 g_TexelSize.x 를 직접 색으로
+    /// 인코딩 — 이 규약(dst 기준, 레이어 텍스처 8×8)이면 0.125, 구 tex0(다운샘플 fbo 2×2) 근사면
+    /// 4× 과대(0.5)가 나온다.
+    func testTexelSizeUsesEffectOutputNotDownscaledSource() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let fragFill = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); }
+        """
+        let fragProbe = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        void main() { gl_FragColor = vec4(g_TexelSize.x, 0.0, 0.0, 1.0); }
+        """
+        let effectJSON = """
+        {"passes":[
+           {"material":"materials/effects/tx_down.json","target":"_rt_Q",
+            "bind":[{"name":"previous","index":0}]},
+           {"material":"materials/effects/tx_probe.json",
+            "bind":[{"name":"_rt_Q","index":0}]}],
+         "fbos":[{"name":"_rt_Q","scale":4,"format":"rgba8888"}]}
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/txtest/effect.json","passes":[{},{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_tx", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("effects/txtest/effect.json", effectJSON.data(using: .utf8)!),
+            ("materials/effects/tx_down.json", #"{"passes":[{"shader":"effects/tx_down"}]}"#.data(using: .utf8)!),
+            ("materials/effects/tx_probe.json", #"{"passes":[{"shader":"effects/tx_probe"}]}"#.data(using: .utf8)!),
+            ("shaders/effects/tx_down.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/tx_down.frag", fragFill.data(using: .utf8)!),
+            ("shaders/effects/tx_probe.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/tx_probe.frag", fragProbe.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "tx", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "tx", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_tx")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] g_TexelSize probe R=\(c.redComponent)")
+        // 레이어 베이스 텍스처(w.tex, solidTex 기본 8×8) = 효과 dst 크기. 채택 규약(dst 기준, 1/8=0.125)
+        // 을 코드가 지키는지 고정 — 다운샘플 소스(scale4→2×2, 1/2=0.5) 근사로 되돌아가면 4× 과대돼
+        // 이 어서션이 실패한다(규약 자체의 최종 확정은 라이브 A/B, BACKLOG.md 시각 충실도 표 참조).
+        XCTAssertEqual(Double(c.redComponent), 0.125, accuracy: 0.05,
+                      "g_TexelSize 는 다운스케일 소스(1/2)가 아니라 채택된 이펙트 dst(1/8) 규약을 따라야 함 — 4× 과대면 회귀")
+    }
+
+    /// X-⑥: 이펙트 `visible` 스크립트가 per-frame 재평가돼야 한다. value:false 로 시작해도 script 가
+    /// true 를 반환하면 켜지고(구: 파스 단계 initialVisible==false 로 SceneEffect 자체는 보존되지만
+    /// buildEffectChain 이 무조건 드롭 — 영구 미적용), value:false+script:false 는 계속 꺼진 채(감사가
+    /// 지목한 실 코퍼스 17씬 이벤트-훅 회귀 방지 — 스크립트가 실제로 true 를 반환할 때만 켜져야 한다).
+    func testEffectVisibleScriptTogglesPerFrame() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            vec4 albedo = texSample2D(g_Texture0, v_TexCoord);
+            albedo.rgb *= 0.4;
+            gl_FragColor = albedo;
+        }
+        """
+        func luma(visible: String, tag: String) throws -> Double {
+            let scene = """
+            {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+             "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+               "effects":[{"file":"effects/vistoggle/effect.json","visible":\(visible),"passes":[{}]}]}]}
+            """
+            return try renderLuma(scene: scene, extraFiles: [
+                ("shaders/effects/vistoggle.vert", vert.data(using: .utf8)!),
+                ("shaders/effects/vistoggle.frag", frag.data(using: .utf8)!),
+            ], tag: "vis_\(tag)")
+        }
+        let onLuma = try luma(visible: #"{"value":false,"script":"function init(){ return true; }"}"#, tag: "on")
+        let offLuma = try luma(visible: #"{"value":false,"script":"function init(){ return false; }"}"#, tag: "off")
+        NSLog("%@", "[Waple] visible-script on=\(onLuma) off=\(offLuma)")
+        XCTAssertEqual(onLuma, 0.4, accuracy: 0.1, "script 가 true 를 반환하면 이펙트가 켜져야(dim 40%)")
+        XCTAssertGreaterThan(offLuma, 0.7, "script 가 false 를 반환하면 계속 꺼진 채(17씬 이벤트훅 회귀 방지)")
+
+        // hasUpdate(동적) 경로 — 위 두 케이스는 init-only(정적 해석, buildEffectChain 이 빌드 시점에
+        // 게이트 없이 확정)만 실증한다. update 함수가 있는 스크립트는 EffectVisibleGate 로 렌더 체인에
+        // 남아 SceneRendererFrameEncoder.effectVisible(_:time:) 이 매 프레임 실제로 재평가해야 반영된다
+        // — 이 두 단정이 실패하면 effectVisible 헬퍼/5개 적용지점의 guard 가 죽은 코드라는 뜻.
+        let dynamicOnLuma = try luma(visible: #"{"value":false,"script":"export function update(v){ return true; }"}"#, tag: "dyn_on")
+        let dynamicOffLuma = try luma(visible: #"{"value":true,"script":"export function update(v){ return false; }"}"#, tag: "dyn_off")
+        NSLog("%@", "[Waple] visible-script dynamic on=\(dynamicOnLuma) off=\(dynamicOffLuma)")
+        XCTAssertEqual(dynamicOnLuma, 0.4, accuracy: 0.1,
+                      "게이트 initial=false 라도 update 가 true 를 반환하면 켜져야(게이트가 실제로 실행됨을 증명)")
+        XCTAssertGreaterThan(dynamicOffLuma, 0.7,
+                             "게이트 initial=true 라도 update 가 false 를 반환하면 꺼져야(continue 스킵 경로 실증)")
     }
 }

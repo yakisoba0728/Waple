@@ -326,4 +326,55 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(layer.origin, Vec2(x: 10, y: 10))  // 부모 미합성 — 저작 로컬 그대로
         XCTAssertEqual(layer.scale, Vec2(x: 1, y: 1))
     }
+
+    /// X-③: 이펙트 패스 usertextures 의 비-시스템(유저) 키는 파스 시점에 userProps 값으로 해석돼
+    /// textureNames 슬롯을 덮어써야 한다(레이어 material usertextures 와 동일 규약) — 종전엔
+    /// userTextureNames 에 원문 키만 남고 소비처가 0건이라 이펙트 슬롯이 상시 미바인드였다.
+    /// `$` 로 시작하는 시스템 키($mediaThumbnail)는 여기서 해석하지 않고(동적, 렌더 시점 결속) 그대로 보존.
+    func testEffectPassUserTextureNonSystemKeyResolvesFromUserProps() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"name":"img","image":"models/x.json","effects":[
+           {"file":"effects/tint/effect.json","visible":true,"passes":[
+             {"usertextures":[null,"customimage",{"name":"$mediaThumbnail","type":"system"}]}
+           ]}
+         ]}]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg, userProps: ["customimage": "materials/custom.tex"])
+        let eff = try XCTUnwrap(doc.layers.first?.effects.first)
+        let pass = try XCTUnwrap(eff.passList.first)
+        XCTAssertEqual(pass.textureNames.count, 2, "usertextures[1] 오버라이드로 textureNames 가 슬롯1까지 확장돼야 함")
+        XCTAssertEqual(pass.textureNames[1], "materials/custom.tex", "비-시스템 유저 키는 userProps 값으로 즉시 해석")
+        XCTAssertEqual(pass.userTextureNames[2], "$mediaThumbnail", "시스템 키는 원문 보존(동적 렌더-시점 결속용)")
+    }
+
+    // MARK: X-⑦ — 이펙트 패스 constantshadervalues {animation} 키프레임 파스
+
+    /// X-⑦: constantshadervalues 의 {"animation":{...}} 키프레임 바인딩(55씬/287건)이 파스 단계에서
+    /// 통째로 소실되지 않고 SceneEffectPass.constantAnimations 에 보존돼야 한다. 정적 value 도 병존
+    /// 캡처(애니 없을 때 기본값/기준값).
+    func testParsesEffectPassConstantAnimation() throws {
+        let scene = """
+        {"general": {"orthogonalprojection": {"width": 100, "height": 100}}, "objects": [{"id": 1, "name": "img", "image": "models/x.json", "effects": [{"file": "effects/pulse/effect.json", "visible": true, "passes": [{"constantshadervalues": {"multiply": {"value": 0.5, "animation": {"c0": [{"frame": 0, "value": 0.0, "front": {"enabled": false, "x": 0, "y": 0}, "back": {"enabled": false, "x": 0, "y": 0}}, {"frame": 30, "value": 1.0, "front": {"enabled": false, "x": 0, "y": 0}, "back": {"enabled": false, "x": 0, "y": 0}}], "options": {"fps": 30, "mode": "single"}}}}}]}]}]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let eff = try XCTUnwrap(doc.layers.first?.effects.first)
+        let pass = try XCTUnwrap(eff.passList.first)
+        let anim = try XCTUnwrap(pass.constantAnimations["multiply"], "animation 바인딩이 파스 단계에서 소실됨")
+        XCTAssertEqual(anim.value(component: 0, atTime: 0, base: 0), 0, accuracy: 1e-4)
+        XCTAssertEqual(anim.value(component: 0, atTime: 1, base: 0), 1, accuracy: 1e-4, "1초=30프레임(fps 30) 시점 = 마지막 키프레임값")
+        XCTAssertEqual(pass.constants["multiply"], [0.5], "정적 value 도 병존 캡처(기본값)")
+    }
 }

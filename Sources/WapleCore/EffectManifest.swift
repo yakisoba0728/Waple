@@ -24,8 +24,18 @@ public struct EffectManifest: Equatable {
     }
     public struct FBO: Equatable {
         public let name: String
-        public let scale: Int          // 해상도 나눗수(4 = 1/4)
-        public init(name: String, scale: Int) { self.name = name; self.scale = scale }
+        public let scale: Int          // 해상도 나눗수(4 = 1/4) — fixedWidth/fixedHeight 가 있으면 무시.
+        /// X-①: `fit`(정사각 고정 크기, 실물 cursorripple `_rt_EightBuffer1/2` fit:512) 또는
+        /// `width`+`height`(실물 glitter `_rt_GlitterTiles` 256×256) — dst 비례 대신 절대 픽셀 크기.
+        /// nil 이면 종전처럼 scale 기반(dst/scale).
+        public let fixedWidth: Int?
+        public let fixedHeight: Int?
+        /// X-①: `uvs:"repeat"` — 텍셀 랩(실물 glitter 타일 아틀라스). 기본 false(=clamp, 기존 bind-slot 관례).
+        public let uvsRepeat: Bool
+        public init(name: String, scale: Int, fixedWidth: Int? = nil, fixedHeight: Int? = nil, uvsRepeat: Bool = false) {
+            self.name = name; self.scale = scale
+            self.fixedWidth = fixedWidth; self.fixedHeight = fixedHeight; self.uvsRepeat = uvsRepeat
+        }
     }
 
     public let passes: [Pass]
@@ -54,7 +64,18 @@ public struct EffectManifest: Equatable {
         for f in (obj["fbos"] as? [[String: Any]]) ?? [] {
             guard let name = f["name"] as? String else { continue }
             let scale = safeInt(f["scale"]) ?? 1
-            fbos.append(FBO(name: name, scale: Swift.max(1, scale)))
+            // X-①: 8192 클램프 — 신뢰불가 effect.json 정수가 makeTexture 에 그대로 흘러가 과대 할당/
+            // 실패를 유발하지 않도록(B1 8192 가드와 동일 원칙). 0 이하는 무시(scale 기반 폴백 유지).
+            func clampedFixed(_ v: Any?) -> Int? {
+                guard let n = safeInt(v), n > 0 else { return nil }
+                return Swift.min(n, 8192)
+            }
+            var fixedW = clampedFixed(f["fit"])
+            var fixedH = fixedW
+            if let w = clampedFixed(f["width"]) { fixedW = w }
+            if let h = clampedFixed(f["height"]) { fixedH = h }
+            let uvsRepeat = (f["uvs"] as? String) == "repeat"
+            fbos.append(FBO(name: name, scale: Swift.max(1, scale), fixedWidth: fixedW, fixedHeight: fixedH, uvsRepeat: uvsRepeat))
         }
         return EffectManifest(passes: passes, fbos: fbos)
     }

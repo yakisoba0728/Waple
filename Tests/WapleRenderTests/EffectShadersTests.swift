@@ -18,8 +18,18 @@ final class EffectShadersTests: XCTestCase {
         }
     }
     func testShakeParams() {
-        XCTAssertEqual(EffectShaders.params(for: "shake", constants: ["amplitude": [0.02], "speed": [8]]), [0.02, 8])
-        XCTAssertEqual(EffectShaders.params(for: "shake", constants: [:])?.count, 2)  // defaults
+        XCTAssertEqual(EffectShaders.params(for: "shake", constants: ["amplitude": [0.02], "speed": [8]]), [0.02, 8, 0, 1])
+        let d = EffectShaders.params(for: "shake", constants: [:])
+        XCTAssertEqual(d?.count, 4)  // amp, speed, bounds.x, bounds.y
+        // F-X8: WE shake.frag g_Speed 실 기본값 1(구코드 5 는 실물과 5배 어긋남 — 코퍼스 실측 상례).
+        XCTAssertEqual(d?[1], 1, "speed 기본값은 WE 실물(shake.frag default:1) 과 일치해야 함")
+        XCTAssertEqual(d?[2], 0); XCTAssertEqual(d?[3], 1)  // bounds 기본 "0 1"
+    }
+    /// F-X8: bounds 키(WE shake.vert g_Bounds, 기본 "0 1")가 파라미터 슬롯으로 실제 전달돼야 한다.
+    func testShakeBoundsParam() {
+        let p = EffectShaders.params(for: "shake", constants: ["bounds": [0.994, 0.997]])
+        XCTAssertEqual(p?.count, 4)
+        XCTAssertEqual(p?[2], 0.994); XCTAssertEqual(p?[3], 0.997)
     }
     /// F265: WE shake.frag:82 `texCoordOffset = offset*g_Amp*g_Amp*flowMask` 대조 — 진폭 제곱 +
     /// flow map(texture1) 방향 구동. 구코드는 진폭 선형 + 합성 원형궤적(sin,cos*1.37)으로 flow 텍스처 미사용.
@@ -66,18 +76,26 @@ final class EffectShadersTests: XCTestCase {
         XCTAssertEqual(d?[9], 0)     // audioMode default off
     }
     func testWaterrippleParams() {
-        // order: strength, scale, scrollSpeed (time prepended at bind time)
-        let p = EffectShaders.params(for: "waterripple", constants: ["ui_editor_properties_ripple_strength": [0.3], "ui_editor_properties_ripple_scale": [2]])
+        // F-X8: 실코퍼스 material 키(스톡 waterripple.frag/.vert 주석 확정) = ripplestrength/scale/
+        // animationspeed. order: strength, scale, scrollSpeed(=animationspeed 구동, time 은 bind 시 별도 선두).
+        let p = EffectShaders.params(for: "waterripple", constants: ["ripplestrength": [0.3], "scale": [2], "animationspeed": [0.2]])
         XCTAssertEqual(p?.count, 3)
-        XCTAssertEqual(p?[0], 0.3); XCTAssertEqual(p?[1], 2)
-        // 실제 씬 키(설계 문서 §2 정찰: ripple_strength / ripple_scale).
-        let actual = EffectShaders.params(for: "waterripple", constants: ["ripple_strength": [0.3], "ripple_scale": [2]])
-        XCTAssertEqual(actual?[0], 0.3); XCTAssertEqual(actual?[1], 2)
-        // defaults
+        XCTAssertEqual(p?[0], 0.3); XCTAssertEqual(p?[1], 2); XCTAssertEqual(p?[2], 0.2)
+        // 구 키(ripple_strength/ripple_scale)도 폴백으로 여전히 인식(무회귀).
+        let legacy = EffectShaders.params(for: "waterripple", constants: ["ripple_strength": [0.3], "ripple_scale": [2]])
+        XCTAssertEqual(legacy?[0], 0.3); XCTAssertEqual(legacy?[1], 2)
+        // defaults — animationspeed 실 기본 0.15(WE waterripple.frag/.vert 주석), 구코드는 scrollspeed 0.05 오기본값.
         let d = EffectShaders.params(for: "waterripple", constants: [:])
         XCTAssertEqual(d?.count, 3)
-        XCTAssertEqual(d?[0], 0.1)  // default strength
-        XCTAssertEqual(d?[1], 1)    // default scale
+        XCTAssertEqual(d?[0], 0.1)   // default strength(ripplestrength)
+        XCTAssertEqual(d?[1], 1)     // default scale
+        XCTAssertEqual(d?[2] ?? -1, 0.15, accuracy: 1e-6)  // default animationspeed
+    }
+    /// F-X8: WE waterripple.frag `texCoord += normal.xy * g_Strength * g_Strength * mask` — 강도 제곱.
+    /// 선형 적용이면 기본값(0.1)에서 실제(0.01)보다 10배 과대 왜곡.
+    func testWaterrippleUsesSquaredStrength() throws {
+        let src = try XCTUnwrap(EffectShaders.source(for: "waterripple"))
+        XCTAssertTrue(src.contains("P[1] * P[1]"), "강도는 제곱(g_Strength*g_Strength)이어야 함: \(src)")
     }
     func testWaterrippleSourceExists() {
         let src = EffectShaders.source(for: "waterripple")

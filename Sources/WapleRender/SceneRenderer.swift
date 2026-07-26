@@ -534,10 +534,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     /// 미디어 소비 스크립트(media*Changed export)가 있을 때만 폴링 시작(웹과 같은 5초 규약).
     /// F722: $mediaThumbnail/$mediaPreviousThumbnail 요청 레이어가 있어도 시작(아트워크 텍스처 공급 필요).
+    /// X-③: 레이어 자신의 베이스 텍스처가 아니라 **이펙트 패스** usertextures 로만 $mediaThumbnail 을
+    /// 요청하는 경우(레이어/텍스트 effects[] 의 mediaArtworkSlots)도 동일하게 폴링을 트리거해야 한다 —
+    /// 그렇지 않으면 buildPassBindings 가 슬롯을 기록해도 mediaArtworkTexture 가 영원히 nil.
     func startMediaPollingIfNeeded() {
         let mediaHooks: Set<String> = ["mediaPlaybackChanged", "mediaPropertiesChanged",
                                        "mediaThumbnailChanged", "mediaTimelineChanged", "mediaStatusChanged"]
-        let wantsArtwork = layers.contains(where: { $0.mediaArtwork != .none })
+        func effectsWantArtwork(_ effects: [EffectGPU]) -> Bool {
+            effects.contains { eff in
+                guard case .translated(let passes, _) = eff.bind else { return false }
+                return passes.contains { !$0.mediaArtworkSlots.isEmpty }
+            }
+        }
+        let wantsArtwork = layers.contains(where: { $0.mediaArtwork != .none || effectsWantArtwork($0.effects) })
+            || textLayers.contains(where: { effectsWantArtwork($0.effects) })
         guard mediaPoller == nil,
               wantsArtwork || eventEngines.contains(where: { !$0.hookNames.isDisjoint(with: mediaHooks) }) else { return }
         func q(_ s: String) -> String {

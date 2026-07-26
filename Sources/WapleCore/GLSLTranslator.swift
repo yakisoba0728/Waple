@@ -37,6 +37,9 @@ public struct TranslatedShader: Equatable {
     public let materialParams: [MaterialParam]
     public let textureSlots: [Int]         // 선언된 g_TextureN 의 N 들(오름차순)
     public let usesAudio: Bool
+    /// F-X4: 샘플러 주석의 `"default":"경로"`(문자열) — 씬/머티리얼이 슬롯을 지정하지 않을 때의 텍스처
+    /// 폴백(WE 관례: util/noise, _rt_FullFrameBuffer 등). 슬롯 → 경로 문자열.
+    public let textureDefaults: [Int: String]
 }
 
 /// WE GLSL(방언) → MSL 소스-투-소스 변환기. 실패 시 nil(→ 손-포팅 폴백).
@@ -124,10 +127,14 @@ public enum GLSLTranslator {
         let allUniforms = mergeUniforms(vUniforms + fUniforms)
 
         var textures: [Int] = []
+        var textureDefaults: [Int: String] = [:]
         var materials: [MaterialParam] = []
         var usesAudio = false
         for u in allUniforms {
-            if u.type == .sampler2D, let n = textureIndex(u.name) { textures.append(n) }
+            if u.type == .sampler2D, let n = textureIndex(u.name) {
+                textures.append(n)
+                if let def = u.annotationDefaultTexture, !def.isEmpty { textureDefaults[n] = def }
+            }
             else if isEngine(u.name) { if u.name.contains("AudioSpectrum") { usesAudio = true } }
             else if u.type != .sampler2D {
                 let key = u.annotationMaterial ?? defaultKey(u.name)
@@ -420,7 +427,8 @@ public enum GLSLTranslator {
                            consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
                            vertBody: vertBody, fragBody: fragBody, structs: structBlock,
                            premultiplyOutput: premultiplyOutput)
-        return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio)
+        return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio,
+                                textureDefaults: textureDefaults)
     }
 
     // MARK: - 함수 파싱 (Stage 2)
@@ -1017,7 +1025,8 @@ public enum GLSLTranslator {
         return nil
     }
 
-    struct Uniform { let type: GLSLType; let name: String; let annotationMaterial: String?; let annotationDefault: [Float]? }
+    struct Uniform { let type: GLSLType; let name: String; let annotationMaterial: String?; let annotationDefault: [Float]?
+                     let annotationDefaultTexture: String? }
 
     static func parseUniforms(_ src: String) -> [Uniform] {
         var out: [Uniform] = []
@@ -1036,9 +1045,12 @@ public enum GLSLTranslator {
                 var name = rawName
                 if let br = name.firstIndex(of: "[") { name = String(name[..<br]) }  // 배열 유니폼(g_AudioSpectrum16Left[16])
                 guard !name.isEmpty else { continue }
+                // F-X4: sampler2D 의 "default" 는 텍스처 경로 문자열(예: "util/noise", "_rt_FullFrameBuffer")
+                // — jsonFloats 는 이를 숫자 파싱 실패로 빈 배열을 내므로 별도 jsonStr 로 포착.
                 out.append(Uniform(type: type, name: name,
                                    annotationMaterial: idx == 0 ? jsonStr(ann, "material") : nil,
-                                   annotationDefault: idx == 0 ? jsonFloats(ann, "default") : nil))
+                                   annotationDefault: idx == 0 ? jsonFloats(ann, "default") : nil,
+                                   annotationDefaultTexture: idx == 0 && type == .sampler2D ? jsonStr(ann, "default") : nil))
             }
         }
         return out
@@ -1164,19 +1176,33 @@ public enum GLSLTranslator {
         if name == "g_PointerPositionLast" { return "eng.pointerLastAndPad.xy" }
         // 실물 cursorripple/fluidsim: g_PointerState.z = 클릭 버튼 힘(미클릭 0). .z 만 참조되므로 pad 슬롯 재사용.
         if name == "g_PointerState" { return "float4(0.0, 0.0, eng.pointerLastAndPad.z, 0.0)" }
-        // F614: g_Screen = (width, height, width/height) — g_TexelSize 와 같은 texRes[0] 근사
-        // (이펙트 패스는 tex0=framebuffer=타깃 크기가 통례).
+        // F614: g_Screen = (width, height, width/height) — tex0(texRes[0]) 근사 유지(이펙트 패스는
+        // tex0=framebuffer=타깃 크기가 통례). X-⑤ 스코프 밖: g_TexelSize 와 달리 dst 전용 필드로
+        // 옮기지 않았다(감사 근거 없음 — g_Screen 은 별건). 교차배치 참고: 다른 배치가 g_Screen.z=
+        // aspect(w/h) 로 반사 오프셋을 스케일하는 소비처를 추가했을 수 있음 — 이 규약은 아직 한 곳에
+        // 고정 문서화되지 않았으니 g_Screen 을 건드리는 다음 변경 전에 실제 소비처를 재확인할 것.
         if name == "g_Screen" { return "float3(eng.texRes[0].xy, eng.texRes[0].x / eng.texRes[0].y)" }
         if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
         // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
         if name.hasPrefix("g_"), name.contains("Matrix") { return "float4x4(1.0)" }
-        // WE g_TexelSize = 렌더 타깃 1텍셀(UV). EngineU 에 타깃 dims 가 없어 tex0 해상도로 근사 —
-        // 효과 패스는 tex0(framebuffer)=타깃 크기가 통례라 대체로 정확(실물 bokeh 7패스 중 6 정확).
-        // 머티리얼로 오인되면 기본값 (0,0) → 0/0=NaN UV → 검정(3544152633 ×0.4 luma 손실 근원).
-        // ponytail: 스케일드 fbo 에서 타깃≠tex0 인 패스는 tex0 텍셀로 근사 — 타깃 dims 가 EngineU 에 실리면 교체.
-        if name == "g_TexelSize" { return "(1.0 / eng.texRes[0].xy)" }
-        if name == "g_TexelSizeHalf" { return "(0.5 / eng.texRes[0].xy)" }
+        // X-⑤: 이펙트 체인 경로는 g_TexelSize = 이펙트 **출력(dst)** 1텍셀(UV), 체인 전 패스에 걸쳐
+        // 고정값(패스별 타깃도 tex0 도 아님) 규약으로 채택했다. 근거는 WE gaussian.vert
+        // `ratio = g_TexelSize * g_Texture0Resolution` — 단, 이 근거는 **판별력이 없다**: ratio 는
+        // ratio.y/ratio.x 로만 소비되므로 dst 기준·tex0 기준 어느 해석이든 같은 값(1)이 나온다.
+        // bokeh_blur 7패스 전수 대조에서도 tex0≠target 인 유일한 소비 패스가 두 해석에서 우연히 같은
+        // 스케일비를 내 정적으로 더 갈리지 않는다. 확실한 것은 downsample.vert 가 소스 텍셀이 필요할
+        // 땐 g_TexelSize 가 아니라 `1.0/g_Texture0Resolution.zw` 를 쓴다는 것뿐(="소스 아님"만 지지).
+        // 따라서 이 규약은 "실측으로 확정"이 아니라 **채택된 정본(가장 근거 있는 후보) + 라이브 A/B
+        // 판독 대기 항목** — bokeh_blur 12씬의 블러 폭이 게이트다(BACKLOG.md 시각 충실도 표 참조).
+        // SceneRendererFrameEncoder 가 applyEffect 진입 시 dst 1 회로 eng.targetRes 를 채운다.
+        // 스케일드 fbo 를 패스 타깃/소스로 쓰는 체인(bokeh 등)에서 종전 tex0 근사(4× 과대 블러) 대신
+        // 이 정본을 쓴다. 레이어 커스텀 셰이더 경로는 여전히 tex0 근사(다른 정본) — 아래 X-⑤ 스코프
+        // 밖 주석 참조. 같은 심볼이 경로별로 다른 값을 낸다는 뜻이며, 어느 쪽도 실측으로 확정되지
+        // 않았으니 둘 다 향후 라이브 A/B 로 재검증 대상이다.
+        // 머티리얼로 오인되면 기본값 (0,0) → 0/0=NaN UV → 검정(3544152633 ×0.4 luma 손실 근원) — isEngine 등재 유지.
+        if name == "g_TexelSize" { return "(1.0 / eng.targetRes.xy)" }
+        if name == "g_TexelSizeHalf" { return "(0.5 / eng.targetRes.xy)" }
         // F744: g_LightAmbientColor 는 엔진 상수로 승격. 실제 scene ambientColor 연동 전 흰색 중립값.
         if name == "g_LightAmbientColor" { return "float4(1.0, 1.0, 1.0, 1.0)" }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
@@ -1571,7 +1597,10 @@ public enum GLSLTranslator {
         // bit0). bind 출처=선형(단, 체인 첫 이펙트의 previous=베이스 직결은 baseNoInterp), aux 출처=자산 플래그.
         // Swift 측 단일 빌더 SceneRendererFrameEncoder.engineUniform 과 레이아웃 동기 필수.
         // H1: layerTint = 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값으로 물변경.
-        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; };\n"
+        // X-⑤: targetRes(layerTint 뒤 추가 — 앞 오프셋 불변) = 이펙트 **출력(dst)** 해상도, 전 패스 불변.
+        // 채택 근거·이 근거의 판별력 한계·레이어 커스텀 경로와의 규약 이원화·라이브 A/B 대기 상태는
+        // 위 g_TexelSize 치환부(computeUV 근처) 주석 참조 — "실측으로 확정" 아님.
+        let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; float4 targetRes; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
         let uvHelpers = """
         inline float2 we_uv(float2 v) { return v; }
