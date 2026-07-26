@@ -21,6 +21,14 @@ public enum ShaderPreprocessor {
         let source = source.replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         var defines = combos
+        // F3: WE 는 GLSL 문법 셰이더를 항상 HLSL(D3D11) 백엔드로 컴파일한다(WE-2.8-clean-room-KR.md:266-267,
+        // 단일 백엔드 확정). base-assets 셰이더(composelayer.vert/effectcomposebackground.vert/
+        // passthroughblend.vert/common_particles.h/model_vertex_v1.h/model_fragment_v1.h 등)의
+        // `#ifdef HLSL`/`#if HLSL` 분기는 D3D11/Metal 공통의 화면공간 Y-플립 보정(v_ScreenCoord.y=-y 등)
+        // 이라 Metal 백엔드에도 필요 — 미시딩 시 GLSL(비-HLSL) 분기가 골라져 보정이 누락된다.
+        // HLSL_SM30(구형 SM3.0 텍스처 채널 워크어라운드)는 대상 밖이라 주입하지 않는다(정상 폴백 유지).
+        defines["HLSL"] = 1
+        defines["HLSL_SM40"] = 1
         // WE 컴파일러 내장 캐스트 매크로(헤더에 없음 — 실물 depthparallax 의 CAST3X3 등).
         // 소스가 자체 정의하면 그것이 우선(아래 builtinCasts 는 부재 시에만 주입).
         // [COMBO] 기본값(명시 combos 가 없을 때만 채움)

@@ -519,6 +519,30 @@ final class TextRasterizerTests: XCTestCase {
         XCTAssertGreaterThan(blank.height, two.height, "빈 줄이 높이에 반영되지 않음")
     }
 
+    /// F2(flip②): TextRasterizer 가 래스터 끝에서 불필요한 상하반전을 하면 첫 줄과 마지막 줄이 뒤바뀐다.
+    /// 잉크 밀도가 뚜렷이 다른 두 줄(빽빽한 첫 줄 "MMMMMM" vs 성긴 둘째 줄 ".")로 순서를 직접 단언 —
+    /// 반전 버그가 있으면 상단 밴드(row 낮은 쪽)의 잉크가 적고 하단 밴드가 많다(뒤집힘).
+    func testMultilineRowOrderNotFlipped() throws {
+        let r = try XCTUnwrap(TextRasterizer.render(text: "MMMMMM\n.", fontData: nil, systemFontName: nil, pointSize: 24))
+        let bytesPerRow = r.width * 4
+        func inkCount(_ rowRange: Range<Int>) -> Int {
+            var count = 0
+            r.rgba.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
+                for row in rowRange {
+                    let base = row * bytesPerRow
+                    for x in stride(from: 0, to: bytesPerRow, by: 4) where p[base + x + 3] > 0 { count += 1 }
+                }
+            }
+            return count
+        }
+        let mid = r.height / 2
+        let topHalf = inkCount(0..<mid)
+        let bottomHalf = inkCount(mid..<r.height)
+        XCTAssertGreaterThan(topHalf, bottomHalf * 3,
+                             "첫 줄(빽빽한 'MMMMMM')이 상단 밴드에 있어야 함 — 반전되면 성긴 '.'이 위로 옴 " +
+                             "(top=\(topHalf), bottom=\(bottomHalf))")
+    }
+
     /// D-B: pointSize 는 300-DPI 규약(≈×300/72≈4.17) — 화면 픽셀로 pointSize 의 ~5배 높이.
     /// 미적용 시 ~1.3배(asc+desc+lead)라 WE 대비 4~5배 작다. 하한 3×·상한 10×로 팩터를 괄호(정확값은 컨트롤러 픽셀대조).
     func testPointSizeScaledForWEDPI() throws {
@@ -619,8 +643,8 @@ final class TextRasterizerTests: XCTestCase {
     }
 
     /// 멀티라인 center 정렬: 짧은 행의 잉크가 좌측 flush(종전) 대신 블록 중앙으로 온다.
-    /// 버퍼 행 순서 주의(실측): 래스터 플립 규약상 마지막 줄('A')이 버퍼 상단 절반에 온다
-    /// (다운스트림 쿼드/샘플링이 재반전해 화면은 정순 — x 정렬 검증엔 영향 없음).
+    /// F2(flip②) 수정 후 버퍼 행 순서 = 화면 순서(row0=top=첫 줄) — 짧은 행 'A'(둘째 줄)는
+    /// 버퍼 하단 절반에 온다.
     func testMultilineCenterAlignsShortRow() throws {
         func firstInkX(_ r: TextRasterizer.Raster, rows: Range<Int>) -> Int? {
             var minX: Int? = nil
@@ -637,8 +661,8 @@ final class TextRasterizerTests: XCTestCase {
         let centered = try XCTUnwrap(TextRasterizer.render(text: "WWWWWWWW\nA", fontData: nil, systemFontName: nil,
                                                            pointSize: 24, align: "center"))
         XCTAssertEqual(centered.width, left.width, "정렬은 래스터 치수를 바꾸지 않아야")
-        let l = try XCTUnwrap(firstInkX(left, rows: 0..<(left.height / 2)))
-        let c = try XCTUnwrap(firstInkX(centered, rows: 0..<(centered.height / 2)))
+        let l = try XCTUnwrap(firstInkX(left, rows: (left.height / 2)..<left.height))
+        let c = try XCTUnwrap(firstInkX(centered, rows: (centered.height / 2)..<centered.height))
         XCTAssertGreaterThan(c, l + 4, "짧은 행 'A' 가 중앙 정렬되지 않음")
     }
 }

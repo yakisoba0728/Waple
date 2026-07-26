@@ -3,6 +3,18 @@ import MetalKit
 import simd
 import WapleCore
 
+/// F4: isGeometryFlipped 재적용 훅 — AppKit 이 백킹 레이어 지오메트리를 재동기화하는 시점(창 재부모화·
+/// 스페이스 전이 등)에 mount 1회 대입이 유실될 수 있어, 이 뷰가 창에 (재)부착될 때마다 멱등 재확인한다
+/// (draw(in:) 진입부의 매 프레임 재확인과 이중 방어 — 여기는 정지(paused) 상태에서도 즉시 반응).
+final class WapleMTKView: MTKView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        let want = SceneLivePresentationFix.needsDesktopFlipY
+        if layer?.isGeometryFlipped != want {
+            layer?.isGeometryFlipped = want
+        }
+    }
+}
 
 public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// Metal `PBRMaterialUniforms`: exactly two float4 values (32 bytes).
@@ -830,6 +842,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var audioProvider: SystemAudioSpectrumProvider?
     var effectVertexBuffer: MTLBuffer?
     var effectQuadInterleaved: MTLBuffer?   // 변환 효과용 인터리브드 풀스크린 쿼드(pos.xyz + uv.xy)
+    // F1(flip①): 커스텀 2D 레이어 전용 인터리브드 쿼드 — effectQuadInterleaved 와 포지션은 동일하지만
+    // uv 규약이 반대(local(-1,-1)→uv(0,0)=TL)다. 커스텀 레이어는 layerTransformMatrix(y-flip ortho)를
+    // 타므로 ev_main 용 effectQuadInterleaved(local(-1,-1)→uv(0,1))를 재사용하면 상하 반전된다 — 절대
+    // effectQuadInterleaved/이펙트 경로는 건드리지 않고 이 전용 버퍼만 커스텀 레이어 드로에 바인딩한다.
+    var customLayerQuadInterleaved: MTLBuffer?
     var particleSystems: [GPUParticleSystem] = []
     var hasParticles = false
     var assetBaseDir: URL?  // WE 공유 에셋 폴백 디렉터리(설정), 패키지에 없는 .tex 용
@@ -1253,7 +1270,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             drawPlan = Array(drawPlan.prefix(n))
         }
 
-        let view = MTKView(frame: container.bounds, device: device)
+        let view = WapleMTKView(frame: container.bounds, device: device)
         view.autoresizingMask = [.width, .height]
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = false  // 누적(acc) → drawable blit 대상이 되려면 필요(컴포지션 합성)
@@ -1262,9 +1279,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         view.delegate = self
         // 라이브 데스크탑 프레젠트 상하 뒤집힘 보정(macOS 26+, 실기기 27 확인) — 캡처(readback)는
         // drawable 을 안 타 무영향, 클릭 역매핑도 물리 좌표 기반이라 무영향(근거: SceneLivePresentationFix 상단 주석).
-        if SceneLivePresentationFix.needsDesktopFlipY {
-            view.layer?.isGeometryFlipped = true
-        }
+        // F4: 조건부(true 일 때만) 대입 대신 항상 명시 대입 — 이후 재부모화/재동기화로 값이 되돌아가도
+        // WapleMTKView.viewDidMoveToWindow + draw(in:) 진입부가 이 기대값을 멱등 재확인한다.
+        view.layer?.isGeometryFlipped = SceneLivePresentationFix.needsDesktopFlipY
         container.wantsLayer = true
         container.addSubview(view)
         self.mtkView = view
@@ -1297,6 +1314,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
              1,  1, 0,  1, 0,
         ]
         effectQuadInterleaved = device.makeBuffer(bytes: interleaved, length: MemoryLayout<Float>.stride * interleaved.count)
+        // F1(flip①): 같은 포지션, uv 는 표준 quadVertices 규약(TL=uv(0,0))으로 반전 — 커스텀 2D 레이어 전용.
+        let interleavedLayer: [Float] = [
+            -1, -1, 0,  0, 0,
+             1, -1, 0,  1, 0,
+            -1,  1, 0,  0, 1,
+             1,  1, 0,  1, 1,
+        ]
+        customLayerQuadInterleaved = device.makeBuffer(bytes: interleavedLayer, length: MemoryLayout<Float>.stride * interleavedLayer.count)
         shouldAnimate = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts || hasVideoLayer
             || cameraZoomAnim != nil  // 카메라 줌 인트로(single)도 연속 재생 필요
             || cameraShakeEnabled     // camerashake 전역 지터는 t 의존 → 연속 재생 필요
@@ -1449,6 +1474,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     public func draw(in view: MTKView) {
+        // F4: isGeometryFlipped 멱등 재확인 — WapleMTKView.viewDidMoveToWindow 가 놓칠 수 있는 경로
+        // (예: 창 자체는 그대로인데 AppKit 이 백킹 프로퍼티만 재동기화하는 경우) 대비 매 프레임 방어.
+        // 값이 이미 일치하면 대입을 건너뛰어(불일치 시에만 재대입) 매 프레임 비용을 최소화한다.
+        let wantFlip = SceneLivePresentationFix.needsDesktopFlipY
+        if view.layer?.isGeometryFlipped != wantFlip {
+            view.layer?.isGeometryFlipped = wantFlip
+        }
         // 가림 시 애니메이션 정지(배터리) + 오디오 캡처 중지(F289) + 클록 동결(F290).
         // drawable 획득 전에 검사해 drawable 낭비/stall 방지.
         let animGated = hasEffects || hasParticles || hasScriptedText || hasAnimations || has3DScripts
@@ -1784,6 +1816,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         pipelineNearest = nil; layerAdditiveNearestPipeline = nil  // 감사 V07: nearest 변형 해제(동일 근거)
         blendNearestPipeline = nil; composeNearestPipeline = nil; litNearestPipeline = nil
         effectVertexBuffer = nil; effectQuadInterleaved = nil  // 감사 V06: 해제 누락분(효과 풀스크린 쿼드 버퍼)
+        customLayerQuadInterleaved = nil  // F1(flip①): 커스텀 2D 레이어 전용 쿼드 버퍼
         camera3D = nil; is3D = false; has3DScripts = false; scene3DFog = Scene3DFog()  // F745
         ortho3DHybrid = false  // F721: 하이브리드 상태 리셋(마운트 재사용)
         scene3DLights = []; scene3DAmbient = .zero; scene3DSkylight = .zero

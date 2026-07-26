@@ -1471,12 +1471,20 @@ extension SceneRenderer {
                                             scale: SIMD3(bb.scale.x, bb.scale.y, 1))
         let m = pWorld * local
         let center = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
-        // 합성 스케일 크기(부모 스케일 포함) — 열 벡터 길이가 회전 무관하게 축별 배율을 준다.
-        let sx = simd_length(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z))
-        let sy = simd_length(SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z))
+        // 합성 스케일 크기(부모 스케일 포함) — 열 벡터 길이는 항상 ≥0 이라 회전 무관 배율은 주지만
+        // 음수 스케일(미러링) 부호는 소실된다. 로컬 회전은 항상 0(카메라-페이싱이라 무시 — 위 주석)이라
+        // local 의 열은 순수 diag(bb.scale.x, bb.scale.y, 1)이고 m = pWorld·local 이므로 m.columns.0 =
+        // bb.scale.x · pWorld.columns.0, m.columns.1 = bb.scale.y · pWorld.columns.1 — 즉 열의 부호는
+        // bb.scale 부호와 pWorld 자체가 반사를 섞지 않는 한 그대로 일치한다(2D 레이어 경로와 동등 근사 —
+        // 부모 스킨 행렬까지 반사를 섞는 극단 케이스는 미고려). F5: 부호를 bb.scale 에서 복원해 미러링을
+        // 보존하고, 축퇴(0/비정상) 판정 가드는 부호가 아닌 절대값 크기로 수행한다.
+        let sxMag = simd_length(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z))
+        let syMag = simd_length(SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z))
+        let sx = bb.scale.x < 0 ? -sxMag : sxMag
+        let sy = bb.scale.y < 0 ? -syMag : syMag
         let hw = bb.size.x * 0.5 * sx
         let hh = bb.size.y * 0.5 * sy
-        guard hw > 0, hh > 0, hw.isFinite, hh.isFinite else { return }
+        guard abs(hw) > 0, abs(hh) > 0, hw.isFinite, hh.isFinite else { return }
         let ca = cos(bb.angleZ), sa = sin(bb.angleZ)
         let rollRight = right * ca + up * sa
         let rollUp = -right * sa + up * ca
