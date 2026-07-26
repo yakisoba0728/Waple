@@ -1426,9 +1426,14 @@ extension SceneRenderer {
         if hasParticles { encode3DParticles(time: time, liveDelta: particleDelta, viewProj: viewProj, right: right, up: camUp, nmap: nmap, into: enc, device: device) }
         enc.endEncoding()
         // H5: 볼륨 라이트 샤프트 — castVolumetrics 라이트를 additive로 합성(3D 씬 렌더 후).
+        // P④: 방향은 SceneLight3D.forwardLightAxis(오일러→월드 forward, 2D 포워드 라이팅과 동일 변환기),
+        // 콘은 forwardSpotConeCosines(전각·도 → half-angle 코사인)로 정본 경유 — 셰이더가 코사인 슬롯을
+        // 기대하는데 종전엔 오일러 각·도 원값을 그대로 넘겨 방향/콘 감쇠가 무의미했다.
         if let volumetricLightPass {
             for light in scene3DLights where light.castVolumetrics {
-                _ = volumetricLightPass.encode(
+                let axis = SceneLight3D.forwardLightAxis(angles: light.angles)
+                let cone = SceneLight3D.forwardSpotConeCosines(inner: light.innerCone, outer: light.outerCone)
+                let ok = volumetricLightPass.encode(
                     commandBuffer: cb,
                     destination: target,
                     cameraEye: eye,
@@ -1442,12 +1447,15 @@ extension SceneRenderer {
                     light: VolumetricLightParameters(
                         color: SIMD3(light.color.x, light.color.y, light.color.z),
                         position: SIMD3(light.origin.x, light.origin.y, light.origin.z),
-                        direction: SIMD3(light.angles.x, light.angles.y, light.angles.z),
+                        direction: axis,
                         density: light.density,
                         exponent: light.volumetricsExponent,
                         intensity: light.intensity,
-                        innerCone: light.innerCone,
-                        outerCone: light.outerCone))
+                        innerCone: cone.inner,
+                        outerCone: cone.outer))
+                if !ok {
+                    WapleLog.warn("[Waple] VolumetricLightPass.encode 실패(light id=\(light.id), target format=\(target.pixelFormat)) — 갓레이 스킵")
+                }
             }
         }
         return true
