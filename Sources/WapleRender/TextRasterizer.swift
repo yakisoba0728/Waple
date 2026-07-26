@@ -124,7 +124,9 @@ public enum TextRasterizer {
                   let ctx = CGContext(data: base, width: w, height: h, bitsPerComponent: 8,
                                       bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
-            // 하단원점 컨텍스트: 첫 줄을 위(높은 y)에 그린다 → 마지막 전체 상하반전으로 텍스처 규약(row0=top) 정합.
+            // F2(flip②): CGBitmapContext 메모리 row0 = 그려진 이미지의 top(1회 실측 확인 — 아래 flip 제거
+            // 근거). 첫 줄을 사용자공간 최상단(y=h-1-ascent)에 그리면 이미 row0=첫 줄이라 텍스처 규약
+            // (row0=top)과 그대로 정합한다. 형제 4곳(TexDecoder.swift 등)과 동일하게 무반전으로 통일.
             for (i, line) in lines.enumerated() {
                 // 멀티라인 블록 내 행 정렬(horizontalalign) — 단일 행은 종전 x=1 그대로(무회귀).
                 var x: CGFloat = 1
@@ -146,15 +148,11 @@ public enum TextRasterizer {
             }
             return true
         }
-        // CoreText 는 하단 원점(row0=bottom) — 우리 텍스처 규약(row0=top)으로 상하 반전.
+        // F2(flip②): 여기서 반전하지 않는다 — 위 드로우가 이미 row0=top 규약을 만족한다(반전을 넣으면
+        // 글리프 상하 미러 + 멀티라인 행 순서 역전). 소비측(SceneRendererResources.rasterize → makeTexture,
+        // 텍스트 쿼드 uv(0,0)=TL)도 무반전을 전제한다.
         guard ok else { return nil }
-        var flipped = Data(capacity: w * h * 4)
-        pixels.withUnsafeBytes { (p: UnsafeRawBufferPointer) in
-            for row in stride(from: h - 1, through: 0, by: -1) {
-                flipped.append(contentsOf: p[(row * w * 4)..<((row + 1) * w * 4)])
-            }
-        }
-        return Raster(rgba: flipped, width: w, height: h)
+        return Raster(rgba: pixels, width: w, height: h)
     }
 
     private static func makeFont(fontData: Data?, systemFontName: String?, pointSize: CGFloat) -> CTFont {
