@@ -274,4 +274,58 @@ final class ShaderPreprocessorTests: XCTestCase {
         XCTAssertTrue(out.contains("float F;"), out)
         XCTAssertTrue(out.contains("float y = (3.0 * 2.0);"), out)
     }
+
+    // MARK: - F3: HLSL/HLSL_SM40 시딩(실물 WE composelayer.vert 화면공간 Y-플립 분기)
+
+    /// WE 는 항상 HLSL(D3D11) 백엔드로 컴파일 — `#ifdef HLSL` 화면공간 Y-플립 보정이 살아남아야 한다.
+    /// (실물 assets/shaders/composelayer.vert 발췌와 동일한 패턴.)
+    func testHLSLDefineSeededSelectsScreenFlipBranch() {
+        let src = """
+        vec3 position = vec3(a_TexCoord, 0.0);
+        #ifdef HLSL
+        position.y = 1.0 - position.y;
+        v_ScreenCoord.y = -v_ScreenCoord.y;
+        #endif
+        position.xy = position.xy * 2.0 - 1.0;
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("v_ScreenCoord.y = -v_ScreenCoord.y;"),
+                      "HLSL 미시딩 — 화면공간 Y-플립 보정이 누락됨: \(out)")
+        XCTAssertTrue(out.contains("position.y = 1.0 - position.y;"), out)
+    }
+
+    /// `#if HLSL`(defined 아닌 값 평가) 형태도 동일하게 참이어야 한다(실물 effectcomposebackground.vert).
+    func testHLSLValueFormSelectsTrueBranch() {
+        let src = """
+        v_ScreenCoord = mul(vec4(a_Position, 1.0), g_EffectModelViewProjectionMatrix).xyw;
+        #if HLSL
+        v_ScreenCoord.y = -v_ScreenCoord.y;
+        #endif
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("v_ScreenCoord.y = -v_ScreenCoord.y;"), out)
+    }
+
+    /// HLSL_SM30(구형 SM3.0 텍스처 채널 워크어라운드)는 대상 밖 — 시딩하지 않아 현대 GPU 분기(`.r`)가 유지돼야 한다.
+    func testHLSLSM30NotSeededKeepsModernBranch() {
+        let src = """
+        float ConvertSampleR8(vec4 s) {
+        #if HLSL_SM30
+            return s.a;
+        #else
+            return s.r;
+        #endif
+        }
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("return s.r;"), out)
+        XCTAssertFalse(out.contains("return s.a;"), out)
+    }
+
+    /// scene.json 콤보가 명시적으로 HLSL 을 지정해도(비정상 입력이나 방어) 엔진 확정값(HLSL=1)이 이긴다 —
+    /// combos 는 var defines = combos 로 먼저 깔리지만 이후 강제 대입되므로 항상 1.
+    func testHLSLCannotBeOverriddenByCombos() {
+        let out = ShaderPreprocessor.preprocess("#if HLSL\nyes\n#else\nno\n#endif", combos: ["HLSL": 0])
+        XCTAssertTrue(out.contains("yes"), out)
+    }
 }
