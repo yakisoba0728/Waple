@@ -39,6 +39,12 @@ extension SceneRenderer {
         /// M3: PBR 노멀맵/마스크 텍스처 — nil = 미사용.
         var normalTexture: MTLTexture? = nil
         var maskTexture: MTLTexture? = nil
+        /// H4: REFRACT 콤보(스크린 굴절) — true 면 acc 스냅샷을 노멀 오프셋 재샘플·곱(mf_refract).
+        /// 노멀맵 로드 실패/스키닝/커스텀 셰이더 시 미적용(기존 파이프라인 폴터, 무크래시).
+        var refract: Bool = false
+        var refractAmount: Float = 0.05
+        var refractNormal: MTLTexture? = nil   // textures[1] 노멀맵(resolveRefractNormal — rg88 플래그 동반)
+        var refractRG88: Bool = false
     }
     /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 4×float4 = 256B).
     struct MeshUniform {
@@ -201,6 +207,9 @@ extension SceneRenderer {
         // M3: PBR 노멀맵/마스크 파이프라인(정적 메시 한정 — 스키닝은 탄젠트 부재로 미지원).
         meshPipelineNormal = mesh3DNormalPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
         meshPipelineNormalAdditive = mesh3DNormalPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
+        // H4: REFRACT 메시 파이프라인(정적 메시 한정 — M3 와 동일 제약).
+        meshPipelineRefract = mesh3DRefractPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
+        meshPipelineRefractAdditive = mesh3DRefractPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         shadowPipelineStaticOpaque = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: false, device: device)
         shadowPipelineStaticCutout = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: true, device: device)
         shadowPipelineSkinOpaque = shadow3DPipeline(lib: lib, vertex: "sv_skin", cutout: false, device: device)
@@ -309,6 +318,15 @@ extension SceneRenderer {
                 }
                 if let maskName = mat.maskTextureName {
                     gpuMesh.maskTexture = resolveTexture(maskName, package: package, device: device)
+                }
+                // H4: REFRACT — 노멀맵(textures[1])을 resolveRefractNormal 로 로드(rg88 언팩 플래그 동반).
+                // 콤보 꺼짐/노멀맵 부재/로드 실패 시 refract 미적용 → 기존 파이프라인 폴터(무크래시).
+                if mat.refract, let normalName = mat.normalTextureName,
+                   let n = resolveRefractNormal(normalName, package: package, device: device) {
+                    gpuMesh.refract = true
+                    gpuMesh.refractAmount = mat.refractAmount
+                    gpuMesh.refractNormal = n.texture
+                    gpuMesh.refractRG88 = n.rg88
                 }
                 meshes.append(gpuMesh)
             }
@@ -511,6 +529,10 @@ extension SceneRenderer {
         /// M3: PBR 노멀맵/마스크 텍스처 이름(textures[1]/textures[2]). nil = 미사용.
         let normalTextureName: String?
         let maskTextureName: String?
+        /// H4: REFRACT 콤보 + refractAmount(기본 0.05 — 2D SceneDocument:999 와 동일 기본값).
+        /// 노멀맵(textures[1])은 normalTextureName 재사용; refract && 노멀맵 로드 성공 시에만 굴절 적용.
+        let refract: Bool
+        let refractAmount: Float
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
@@ -539,6 +561,9 @@ extension SceneRenderer {
         // M3: PBR 노멀맵/마스크 텍스처 이름(textures[1]/textures[2]).
         var normalTextureName: String? = nil
         var maskTextureName: String? = nil
+        // H4: REFRACT 콤보 + refractAmount(노멀맵 없으면 미적용 — build3D 게이트).
+        var refract = false
+        var refractAmount: Float = 0.05
         func fvec(_ any: Any?) -> [Float]? {
             if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
             if let n = any as? Double { return [Float(n)] }
@@ -575,11 +600,17 @@ extension SceneRenderer {
                 if let v = combos.first(where: { $0.key.lowercased() == "fog" })?.value {
                     foggy = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 1) != 0
                 }
+                // H4: REFRACT 콤보(2D SceneDocument:1083 과 동일 게이트 — 콤보 1 + textures[1] 노멀맵).
+                if let v = combos.first(where: { $0.key.lowercased() == "refract" })?.value {
+                    refract = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                }
             }
             if let csv = p0["constantshadervalues"] as? [String: Any] {
                 pbr = Scene3DMaterialValues.parse(csv)
                 if let c = fvec(csv["Color"] ?? csv["color"]), c.count >= 3 { color = SIMD3(c[0], c[1], c[2]) }
                 if let a = fvec(csv["Alpha"] ?? csv["alpha"])?.first { alpha = a }
+                // H4: g_RefractAmount 상수(2D SceneDocument:1085 와 동일 키 — ui_editor_properties_refract_amount).
+                if let r = fvec(csv["ui_editor_properties_refract_amount"])?.first { refractAmount = r }
             }
             // H1 Phase 2: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
             if let shader = p0["shader"] as? String { customShader = shader }
@@ -623,7 +654,8 @@ extension SceneRenderer {
                                        gradientTexture: gradientTexture, foggy: foggy,
                                        customShader: customShader, customCombos: customCombos,
                                        customConstants: customConstants, customTextures: customTextures,
-                                       normalTextureName: normalTextureName, maskTextureName: maskTextureName)
+                                       normalTextureName: normalTextureName, maskTextureName: maskTextureName,
+                                       refract: refract, refractAmount: refractAmount)
                 }
             }
         }
@@ -639,7 +671,8 @@ extension SceneRenderer {
                                   gradientTexture: gradientTexture, foggy: foggy,
                                   customShader: customShader, customCombos: customCombos,
                                   customConstants: customConstants, customTextures: customTextures,
-                                  normalTextureName: normalTextureName, maskTextureName: maskTextureName)
+                                  normalTextureName: normalTextureName, maskTextureName: maskTextureName,
+                                  refract: refract, refractAmount: refractAmount)
     }
 
     private func imageLayerCompositeID(_ name: String) -> Int? {
@@ -673,6 +706,23 @@ extension SceneRenderer {
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: vertex)
         pd.fragmentFunction = lib.makeFunction(name: "mf_normal")
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// H4: REFRACT 메시 파이프라인. frag=mf_refract(노멀 오프셋 씬 재샘플·곱) — 정적 메시 한정(M3 와 동일).
+    /// 노멀맵 texture(3), 씬 스냅샷 texture(4), refractParams buffer(5). 블렌드는 mesh3DPipeline 과 동치.
+    func mesh3DRefractPipeline(lib: MTLLibrary, vertex: String, additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: vertex)
+        pd.fragmentFunction = lib.makeFunction(name: "mf_refract")
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
         a.pixelFormat = accPixelFormat
@@ -1143,7 +1193,10 @@ extension SceneRenderer {
             // [Waple stability policy] receiver depth-space bias; native CPU/Metal 상수는 미확정.
             frameUniform.meta.w = 0.001
         }
+        // H4: refract 메시도 인코더 분할(아래 드로 루프의 H4 분기)이 생기므로 프레임버퍼 빌보드와 같은 이유로
+        // 뎁스 .store 게이트에 포함(분할 전 패스가 dontCare 면 재개 패스의 뎁스가 미정의 — F311 주석 참조).
         let needsDepthStore = billboards.contains { $0.isFrameBuffer }
+            || meshRenderables.contains { $0.meshes.contains { $0.refract && $0.refractNormal != nil } }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = target
         rpd.colorAttachments[0].loadAction = .clear
@@ -1234,6 +1287,53 @@ extension SceneRenderer {
                     // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
                     u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
                     let useSkin = mesh.skinned && boneBuf != nil
+                    // H4: REFRACT 메시(정적·비커스텀 한정 — 커스텀 셰이더/스키닝은 기존 경로 폴터): 여기까지의
+                    // target(acc)을 스냅샷(blit — 진행 중 타깃은 샘플 불가) 떠 노멀 오프셋 재샘플·곱. 인코더
+                    // 분할은 runRefractLayer(2D)/F311 프레임버퍼 빌보드와 동일 패턴 — 분할 전 뎁스 .store 는
+                    // needsDepthStore 게이트가 보장. 스냅샷 실패 시 아래 일반 경로로 폴터(무크래시).
+                    if mesh.refract, let refractNormal = mesh.refractNormal, !useSkin, mesh.customPipeline == nil,
+                       let refractPipe = mesh.additive ? (meshPipelineRefractAdditive ?? meshPipelineRefract)
+                                                       : meshPipelineRefract {
+                        enc.endEncoding()
+                        var snap: MTLTexture? = nil
+                        if let s = pooledOffscreen(target.width, target.height, device, bgra: true),
+                           let blit = cb.makeBlitCommandEncoder() {
+                            blit.copy(from: target, to: s); blit.endEncoding(); snap = s
+                        }
+                        let nextRPD = MTLRenderPassDescriptor()
+                        nextRPD.colorAttachments[0].texture = target
+                        nextRPD.colorAttachments[0].loadAction = .load
+                        nextRPD.depthAttachment.texture = depthTex
+                        nextRPD.depthAttachment.loadAction = .load
+                        nextRPD.depthAttachment.storeAction = needsDepthStore ? .store : .dontCare
+                        guard let nextEnc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return false }
+                        enc = nextEnc
+                        enc.setFrontFacing(.counterClockwise)
+                        bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                                            shadowMatrices: shadowResult.matrices,
+                                            shadowTexture: shadowResult.texture, into: enc)
+                        if let snap {
+                            enc.setRenderPipelineState(refractPipe)
+                            if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
+                                enc.setDepthStencilState(ds)
+                            }
+                            enc.setCullMode(mesh.cullBack ? .back : .none)
+                            enc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                            enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                            enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                            enc.setFragmentTexture(mesh.texture, index: 0)
+                            // gradientTex 인자 자리 채움(아래 mesh 루프와 동일 관례 — rim.w==0 이면 미샘플).
+                            enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                            enc.setFragmentTexture(refractNormal, index: 3)   // 노멀맵(g_Texture1)
+                            enc.setFragmentTexture(snap, index: 4)            // 씬 컬러 스냅샷(_rt_FullFrameBuffer)
+                            var rp = SIMD4<Float>(mesh.refractAmount, mesh.refractRG88 ? 1 : 0, 0, 0)
+                            enc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
+                            enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+                                                      indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                            continue
+                        }
+                        // 스냅샷 확보 실패 — 재개한 enc 에서 일반 파이프라인으로 identity 폴터.
+                    }
                     let pipe: MTLRenderPipelineState
                     // H1 Phase 2: 커스텀 셰이더 파이프라인 우선(스키닝 미지원 → 정적 메시 한정).
                     if let custom = mesh.customPipeline, !useSkin {

@@ -659,14 +659,17 @@ extension SceneRenderer {
             NSLog("%@", "[Waple] ortho 3D: mesh pipeline/depth unavailable — meshes skipped")
             return resume2D()
         }
+        // H4: refract 메시가 런에 있으면 인코더 분할 전 패스의 뎁스를 .store(분할 재개 시 .load 정합 —
+        // encode3D 의 needsDepthStore 게이트와 동일 이유).
+        let anyRefract = meshIndices.contains { meshRenderables[$0].meshes.contains { $0.refract && $0.refractNormal != nil } }
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].loadAction = .load
         rpd.depthAttachment.texture = depthTex
         rpd.depthAttachment.loadAction = .clear
         rpd.depthAttachment.clearDepth = 1.0
-        rpd.depthAttachment.storeAction = .dontCare
-        guard let menc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
+        rpd.depthAttachment.storeAction = anyRefract ? .store : .dontCare
+        guard var menc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
         // 직교 투영: z_ndc = 0.5 − z/(2F). F 는 WE ortho 기본 farz 와 같은 대칭 클립(오브젝트 z ≈ ±수백).
         let F: Float = 10000
         let sx = 2 / max(1, projW) * aspectScale.x
@@ -718,6 +721,50 @@ extension SceneRenderer {
                 // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
                 u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
                 let useSkin = mesh.skinned && boneBuf != nil
+                // H4: REFRACT 메시(정적·비커스텀 한정): 여기까지의 acc(하위 order 2D 레이어+선행 메시 누적)를
+                // 스냅샷 떠 노멀 오프셋 재샘플·곱(인코더 분할 — encode3D 의 H4 분기와 동형). 스냅샷 실패 시
+                // 아래 일반 경로 폴터(무크래시).
+                if mesh.refract, let refractNormal = mesh.refractNormal, !useSkin, mesh.customPipeline == nil,
+                   let refractPipe = mesh.additive ? (meshPipelineRefractAdditive ?? meshPipelineRefract)
+                                                 : meshPipelineRefract {
+                    menc.endEncoding()
+                    var snap: MTLTexture? = nil
+                    if let s = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+                       let blit = cb.makeBlitCommandEncoder() {
+                        blit.copy(from: acc, to: s); blit.endEncoding(); snap = s
+                    }
+                    let nextRPD = MTLRenderPassDescriptor()
+                    nextRPD.colorAttachments[0].texture = acc
+                    nextRPD.colorAttachments[0].loadAction = .load
+                    nextRPD.depthAttachment.texture = depthTex
+                    nextRPD.depthAttachment.loadAction = .load
+                    nextRPD.depthAttachment.storeAction = anyRefract ? .store : .dontCare
+                    guard let nextMenc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return nil }
+                    menc = nextMenc
+                    menc.setFrontFacing(.clockwise)
+                    bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
+                                        shadowMatrices: noShadow, shadowTexture: nil, into: menc)
+                    if let snap {
+                        menc.setRenderPipelineState(refractPipe)
+                        if let ds = meshDepthState(test: mesh.depthTest, write: mesh.depthWrite, device: device) {
+                            menc.setDepthStencilState(ds)
+                        }
+                        menc.setCullMode(mesh.cullBack ? .back : .none)
+                        menc.setVertexBuffer(mesh.vbuf, offset: 0, index: 0)
+                        menc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                        menc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                        menc.setFragmentTexture(mesh.texture, index: 0)
+                        menc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                        menc.setFragmentTexture(refractNormal, index: 3)   // 노멀맵(g_Texture1)
+                        menc.setFragmentTexture(snap, index: 4)            // 씬 컬러 스냅샷(_rt_FullFrameBuffer)
+                        var rp = SIMD4<Float>(mesh.refractAmount, mesh.refractRG88 ? 1 : 0, 0, 0)
+                        menc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
+                        menc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
+                                                   indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                        continue
+                    }
+                    // 스냅샷 확보 실패 — 재개한 menc 에서 일반 파이프라인으로 identity 폴터.
+                }
                 let pipe: MTLRenderPipelineState
                 if useSkin {
                     let skinPipe = mesh.additive ? (meshPipelineSkinAdditive ?? meshPipelineSkin) : meshPipelineSkin

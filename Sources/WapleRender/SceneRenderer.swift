@@ -913,6 +913,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var meshPipelineSkinAdditive: MTLRenderPipelineState?
     var meshPipelineNormal: MTLRenderPipelineState?    // M3: PBR 노멀맵/마스크(mf_normal)
     var meshPipelineNormalAdditive: MTLRenderPipelineState?
+    var meshPipelineRefract: MTLRenderPipelineState?   // H4: REFRACT 메시(mf_refract, 정적 한정)
+    var meshPipelineRefractAdditive: MTLRenderPipelineState?
     // 3D 파티클(원근 빌보드) — bgra8+depth32 타깃용(2D additivePipeline 은 acc 포맷이라 별도).
     var particle3DAdditive: MTLRenderPipelineState?
     var particle3DTranslucent: MTLRenderPipelineState?

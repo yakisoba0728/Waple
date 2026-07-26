@@ -542,5 +542,79 @@ enum Mesh3DShaders {
         applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
         return float4(lit * outAlpha, outAlpha);
     }
+
+    // H4: REFRACT(스크린 굴절) 메시 — mf_main 과 동형이나 알베도 샘플 직후 씬 컬러 스냅샷(fbTex=그리기
+    // 시점까지의 acc 누적)을 노멀맵 오프셋으로 재샘플해 **곱한다**(유리/물/열왜곡). 2D f_refract /
+    // pf_refract 와 동일 규약: 화면 UV 는 in.pos(프래그먼트 픽셀, y-down — 무플립), 노멀 언팩은
+    // common_fragment.h DecompressNormalWithMask 포트(DXT5nm vs RG88 분기), 곱 위치는 라이팅 전
+    // 알베도(2D 경로의 color=albedo*tint*bg 와 unlit 에서 동치).
+    // 편차: WE generic4 는 v_ScreenTangents 로 탄젠트공간 노멀을 스크린공간으로 변환하지만, 여기선
+    // 2D/스프라이트 경로와 같은 최소 근사(노멀맵 xy 를 스크린 오프셋으로 직용 — 스키닝/탄젠트 부재).
+    // 노멀맵 texture(3), 씬 스냅샷 texture(4), refractParams=(g_RefractAmount, rg88Flag, 0, 0) buffer(5).
+    fragment float4 mf_refract(VOut in [[stage_in]],
+                               texture2d<float> tex [[texture(0)]],
+                               depth2d_array<float> shadowAtlas [[texture(1)]],
+                               texture2d<float> gradientTex [[texture(2)]],
+                               texture2d<float> normalTex [[texture(3)]],
+                               texture2d<float> fbTex [[texture(4)]],
+                               constant MeshU& u [[buffer(1)]],
+                               constant FrameU& frame [[buffer(2)]],
+                               constant LightU* lights [[buffer(3)]],
+                               constant float4x4* shadowVP [[buffer(4)]],
+                               constant float4& refractParams [[buffer(5)]]) {
+        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
+        // 씬 스냅샷은 화면 경계 클램프(2D f_refract 와 동일 — repeat 면 오프셋이 가장자리에서 반대편을 샘플).
+        constexpr sampler fbSampler(filter::linear, address::clamp_to_edge);
+        float4 sampled = tex.sample(s, in.uv) * u.tint;
+        if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
+        // REFRACT: 노멀맵 오프셋으로 씬 스냅샷 재샘플 → 알베도에 곱(QuadShaders.f_refract 주석 참조).
+        float4 nraw = normalTex.sample(s, in.uv);
+        bool rg88 = refractParams.y > 0.5;
+        float nx = nraw.a * 2.0 - (rg88 ? 1.0 : 0.965);
+        float ny = nraw.g * 2.0 - 1.0;
+        float mask = rg88 ? 1.0 : nraw.r;
+        float2 off = refractParams.x * float2(nx, ny) * (mask * u.tint.a);
+        float2 ruv = in.pos.xy / float2(fbTex.get_width(), fbTex.get_height()) + off;
+        sampled.rgb *= fbTex.sample(fbSampler, ruv).rgb;
+        float mode = u.material.w;
+        float fogMode = u.specularTint.w;
+        if (mode < 0.5) {
+            float3 rgb = sampled.rgb;
+            float alpha = sampled.a;
+            applySceneFog(rgb, alpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
+            return float4(rgb * alpha, alpha);
+        }
+
+        float3 albedo = sampled.rgb;
+        float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
+        float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
+        float3 direct = float3(0.0);
+        int count = clamp(int(frame.meta.x + 0.5), 0, 8);
+        for (int i = 0; i < count; ++i) {
+            float kind = lights[i].shadow.z;
+            if (kind < 0.5) {
+                float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+                direct += visibility * pointPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                                u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            } else if (kind < 1.5) {
+                float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+                direct += visibility * directionalPBR(N, V, albedo, u.material.x, u.material.y,
+                                                      u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            } else {
+                direct += spotPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                  u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            }
+        }
+        float3 ambientColor = frame.ambient.xyz;
+        if (mode < 1.5) {
+            float hemisphere = clamp(dot(N, float3(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);
+            ambientColor = mix(frame.skylight.xyz, frame.ambient.xyz, hemisphere);
+        }
+        float3 lit = ambientColor * albedo + direct;
+        float outAlpha = sampled.a;
+        applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
+        return float4(lit * outAlpha, outAlpha);
+    }
     """
 }
