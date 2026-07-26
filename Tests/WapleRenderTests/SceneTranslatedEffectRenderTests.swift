@@ -662,4 +662,72 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         NSLog("%@", "[Waple] COPYBG fullframe-snapshot luma=\(luma)")
         XCTAssertLessThan(luma, 0.6, "_rt_FullFrameBuffer 가 씬 스냅샷에 바인드되면 배경(빨강, luma≈0.33) — 미바인드면 흰색 폴백(luma≈1.0)")
     }
+
+    /// X-⑤: g_TexelSize 는 이펙트 **출력(dst)** 해상도 기준(WE gaussian.vert `ratio = g_TexelSize *
+    /// g_Texture0Resolution` 실측 — bokeh_blur 최종 패스가 tex0=scale4 다운샘플 fbo 를 bind 해도 그 결과가
+    /// 소스/타깃 스케일비(1/4)가 되려면 g_TexelSize=1/dst 여야 성립). scale:4 다운샘플 fbo 를 거친 뒤
+    /// 최종(타깃 없음=dst) 패스가 g_TexelSize.x 를 직접 색으로 인코딩 — dst(레이어 텍스처 8×8) 기준이면
+    /// 0.125, 옛 tex0(다운샘플 fbo 2×2) 근사면 4× 과대(0.5)가 나온다.
+    func testTexelSizeUsesEffectOutputNotDownscaledSource() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let fragFill = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0); }
+        """
+        let fragProbe = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        void main() { gl_FragColor = vec4(g_TexelSize.x, 0.0, 0.0, 1.0); }
+        """
+        let effectJSON = """
+        {"passes":[
+           {"material":"materials/effects/tx_down.json","target":"_rt_Q",
+            "bind":[{"name":"previous","index":0}]},
+           {"material":"materials/effects/tx_probe.json",
+            "bind":[{"name":"_rt_Q","index":0}]}],
+         "fbos":[{"name":"_rt_Q","scale":4,"format":"rgba8888"}]}
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/txtest/effect.json","passes":[{},{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_tx", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("effects/txtest/effect.json", effectJSON.data(using: .utf8)!),
+            ("materials/effects/tx_down.json", #"{"passes":[{"shader":"effects/tx_down"}]}"#.data(using: .utf8)!),
+            ("materials/effects/tx_probe.json", #"{"passes":[{"shader":"effects/tx_probe"}]}"#.data(using: .utf8)!),
+            ("shaders/effects/tx_down.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/tx_down.frag", fragFill.data(using: .utf8)!),
+            ("shaders/effects/tx_probe.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/tx_probe.frag", fragProbe.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "tx", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "tx", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_tx")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] g_TexelSize probe R=\(c.redComponent)")
+        // 레이어 베이스 텍스처(w.tex, solidTex 기본 8×8) = 효과 dst 크기. dst 기준(1/8=0.125)이 정답 —
+        // 다운샘플 소스(scale4→2×2, 1/2=0.5) 근사로 되돌아가면 4× 과대돼 이 어서션이 실패한다.
+        XCTAssertEqual(Double(c.redComponent), 0.125, accuracy: 0.05,
+                      "g_TexelSize 는 다운스케일 소스(1/2)가 아니라 이펙트 dst(1/8) 기준이어야 함 — 4× 과대면 결함 재현")
+    }
 }

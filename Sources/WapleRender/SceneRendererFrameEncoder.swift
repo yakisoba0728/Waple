@@ -33,12 +33,14 @@ extension SceneRenderer {
     /// EngineU 버퍼: mvp(항등) + timeAndPad(time,pointer,dt) + pointerLastAndPad + texRes[8](슬롯별 실제 dims)
     /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요)
     /// + texFilter[8](감사 V07: 슬롯별 1=nearest/0=linear, pass.texFilter 그대로 — TexImage.noInterpolation)
-    /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값).
+    /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값) + X-⑤ targetRes[4]
+    /// (이펙트 출력(dst) 해상도, 전 패스 불변 — g_TexelSize/g_TexelSizeHalf 전용, 소스 텍스처 아님).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
     func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = [], texFilter: [Float] = [],
                        layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1),
+                       targetRes: SIMD4<Float> = SIMD4(1, 1, 1, 1),
                        mvp: simd_float4x4? = nil) -> [Float] {
-        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4)
+        var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4 + 4)
         let m = mvp ?? simd_float4x4(1)
         e[0] = m.columns.0.x; e[1] = m.columns.0.y; e[2] = m.columns.0.z; e[3] = m.columns.0.w
         e[4] = m.columns.1.x; e[5] = m.columns.1.y; e[6] = m.columns.1.z; e[7] = m.columns.1.w
@@ -56,6 +58,7 @@ extension SceneRenderer {
         for n in 0..<8 where n < texWrap.count { e[56 + n] = texWrap[n] }
         for n in 0..<8 where n < texFilter.count { e[64 + n] = texFilter[n] }  // 감사 V07: texWrap 직후
         e[72] = layerTint.x; e[73] = layerTint.y; e[74] = layerTint.z; e[75] = layerTint.w
+        e[76] = targetRes.x; e[77] = targetRes.y; e[78] = targetRes.z; e[79] = targetRes.w  // X-⑤
         return e
     }
 
@@ -1093,8 +1096,11 @@ extension SceneRenderer {
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                 }
             }
+            // X-⑤ 스코프 밖(레이어 커스텀 셰이더는 다운스케일 멀티패스 체인이 없어 tex0=타깃이 통례) —
+            // 종전 tex0 근사를 그대로 targetRes 에 실어 무회귀 유지.
             let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
-                                    texFilter: custom.texFilter, layerTint: tint, mvp: m)
+                                    texFilter: custom.texFilter, layerTint: tint,
+                                    targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: m)
             eng.withUnsafeBytes {
                 enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                 enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
@@ -1546,6 +1552,10 @@ extension SceneRenderer {
             // 멀티패스: 이름 있는 FBO(다운스케일 또는 X-① 절대 크기)를 풀에서 할당하고, 각 패스를
             // target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
+            // X-⑤: g_TexelSize/g_TexelSizeHalf = 이펙트 출력(dst) 1텍셀, 체인 전 패스 불변(WE gaussian.vert
+            // 실측 근거는 GLSLTranslator.assemble 의 EngineU 선언 주석) — 다운스케일 fbo 를 타깃/소스로 쓰는
+            // 패스에서도 종전 tex0 근사(4× 과대 오프셋, bokeh 12씬)가 아니라 이 값을 쓴다.
+            let targetRes = SIMD4<Float>(Float(baseW), Float(baseH), Float(baseW), Float(baseH))
             var fboTex: [MTLTexture] = []
             for spec in fboSpecs {
                 let w = spec.fixedWidth ?? max(1, baseW / spec.scale)
@@ -1598,7 +1608,7 @@ extension SceneRenderer {
                     }
                 }
                 let eng = engineUniform(time: time, texRes: runtimeTexRes(for: pass, src: src, fboTex: fboTex),
-                                        texWrap: pass.texWrap, texFilter: pass.texFilter)
+                                        texWrap: pass.texWrap, texFilter: pass.texFilter, targetRes: targetRes)
                 eng.withUnsafeBytes {
                     enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)
