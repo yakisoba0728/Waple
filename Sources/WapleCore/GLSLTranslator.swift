@@ -1176,8 +1176,9 @@ public enum GLSLTranslator {
         if name == "g_PointerPositionLast" { return "eng.pointerLastAndPad.xy" }
         // 실물 cursorripple/fluidsim: g_PointerState.z = 클릭 버튼 힘(미클릭 0). .z 만 참조되므로 pad 슬롯 재사용.
         if name == "g_PointerState" { return "float4(0.0, 0.0, eng.pointerLastAndPad.z, 0.0)" }
-        // F614: g_Screen = (width, height, width/height) — g_TexelSize 와 같은 texRes[0] 근사
-        // (이펙트 패스는 tex0=framebuffer=타깃 크기가 통례).
+        // F614: g_Screen = (width, height, width/height) — tex0(texRes[0]) 근사 유지(이펙트 패스는
+        // tex0=framebuffer=타깃 크기가 통례). X-⑤ 스코프 밖: g_TexelSize 와 달리 dst 전용 필드로
+        // 옮기지 않았다(감사 근거 없음 — g_Screen 은 별건).
         if name == "g_Screen" { return "float3(eng.texRes[0].xy, eng.texRes[0].x / eng.texRes[0].y)" }
         if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답

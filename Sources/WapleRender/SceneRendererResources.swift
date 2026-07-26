@@ -177,21 +177,36 @@ extension SceneRenderer {
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
         for eff in sceneEffects {
             // F201 후속 + X-⑥: parseEffects 는 visible={value:false,script} 이펙트도 SceneEffect[] 에
-            // 보존한다(데이터 무손실). 스크립트가 없는 순수 정적 initialVisible==false 만 여기서 드롭 —
-            // 스크립트 보유 이펙트는 항상 빌드해 아래 게이트로 per-frame 재평가(레이어/텍스트
-            // propertyScripts["visible"] 과 동형). 실 코퍼스 17씬(예 2902406982·3113287126·3538758087)의
-            // 이벤트-훅 이펙트는 initial=false 로 시작해(게이트 초기값) 스크립트가 실제로 true 를
-            // 반환할 때만 켜진다 — 구 "항상 드롭"의 근사가 아니라 WE 정합.
-            if !eff.initialVisible && eff.visibleScript == nil { continue }
-            if skipNames.contains(eff.name) { continue }
-            // X-⑥: visible 스크립트 게이트 준비(레이어 propScripts 와 동일 엔진/평가기). hasUpdate
-            // 스크립트(시간/오디오 등 정적 재평가 불가한 함수 참조)는 연속 렌더 필요 — buildPassMaterial
-            // 의 constantshadervalues 애니 마킹과 동일 규율.
+            // 보존한다(데이터 무손실). visible 스크립트를 update 유무로 분류한다:
+            //  · hasUpdate(진짜 시간/오디오 등 매 프레임 다른 값 가능) → per-frame 게이트로 effects 배열에
+            //    상시 보존(아래 visibleGate). 이 경우만 effects.isEmpty 의미가 "이번 프레임 무이펙트"에서
+            //    "이번 씬에 동적 이펙트 있음"으로 바뀐다 — noInterp nearest 판정(:1115 근방·SceneRenderer.swift
+            //    nearest 라이브러리 게이트)이 이 레이어를 linear 로 보게 되는 게 유일한 잔여 트레이드오프
+            //    (동적 게이트를 여는 대가 — 기존엔 이런 이펙트가 아예 존재할 수 없었으므로 신규 기능의
+            //    불가피한 부수효과이지 회귀가 아니다).
+            //  · update 없음(init-only, 이벤트 훅만 있고 update 없는 경우 포함 — 그런 스크립트는
+            //    evaluateBool 이 항상 nil 이라 아래서 eff.initialVisible 로 폴백) → 빌드 시점 1 회
+            //    정적 해석(engine.evaluateBool). 결과가 세션 내내 불변이므로 게이트 불요 —
+            //    effects.isEmpty 의미도 완전히 보존(비트동일: 해석 결과 false 면 구 "항상 드롭"과
+            //    동일하게 여기서 continue, true 면 무게이트로 항상 적용).
+            // 실 코퍼스 17씬(예 2902406982·3113287126·3538758087)의 이벤트-훅 이펙트는 update 도
+            // 의미있는 init 반환도 없어 정적 해석이 eff.initialVisible(false)로 폴백 → 구 드롭과 동치.
             var visibleGate: EffectVisibleGate? = nil
-            if let vs = eff.visibleScript, let engine = makeScriptEngine(vs, scriptPropsJSON: eff.visibleScriptProps) {
-                visibleGate = EffectVisibleGate(engine: engine, initial: eff.initialVisible)
-                if engine.hasUpdate { hasAnimations = true }
+            var effectiveInitialVisible = eff.initialVisible
+            if let vs = eff.visibleScript {
+                if let engine = makeScriptEngine(vs, scriptPropsJSON: eff.visibleScriptProps) {
+                    if engine.hasUpdate {
+                        visibleGate = EffectVisibleGate(engine: engine, initial: eff.initialVisible)
+                        hasAnimations = true  // buildPassMaterial 의 constantshadervalues 애니와 동일 규율
+                        effectiveInitialVisible = true  // 게이트가 실제 가시성을 판정 — 아래 드롭 우회
+                    } else {
+                        effectiveInitialVisible = engine.evaluateBool(current: eff.initialVisible) ?? eff.initialVisible
+                    }
+                }
+                // else: 엔진 생성 실패(문법 오류 등) — effectiveInitialVisible 은 정적 초기값 그대로(무회귀).
             }
+            if !effectiveInitialVisible { continue }
+            if skipNames.contains(eff.name) { continue }
             // 폴터 체인(Step 5, 2026-07-02 실물 검증 후 전환): **translated 우선** — pkg 동봉 GLSL 은
             // 실제 WE 셰이더라 손-포팅 근사보다 항상 정확(실측: 근사 shake 가 5중 체인에서 과대 팬).
             // GLSL 부재/번역·컴파일 실패 시 손-포팅(스톡 7종) 폴터 → 둘 다 실패 시 스킵+로그.
