@@ -36,6 +36,9 @@ extension SceneRenderer {
         let boundsMax: SIMD3<Float>
         /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 — nil = Mesh3DShaders 고정 경로.
         var customPipeline: MTLRenderPipelineState? = nil
+        /// M3: PBR 노멀맵/마스크 텍스처 — nil = 미사용.
+        var normalTexture: MTLTexture? = nil
+        var maskTexture: MTLTexture? = nil
     }
     /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 4×float4 = 256B).
     struct MeshUniform {
@@ -195,6 +198,9 @@ extension SceneRenderer {
         meshPipelineAdditive = mesh3DPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         meshPipelineSkin = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: false, device: device)
         meshPipelineSkinAdditive = mesh3DPipeline(lib: lib, vertex: "mv_skin", additive: true, device: device)
+        // M3: PBR 노멀맵/마스크 파이프라인(정적 메시 한정 — 스키닝은 탄젠트 부재로 미지원).
+        meshPipelineNormal = mesh3DNormalPipeline(lib: lib, vertex: "mv_main", additive: false, device: device)
+        meshPipelineNormalAdditive = mesh3DNormalPipeline(lib: lib, vertex: "mv_main", additive: true, device: device)
         shadowPipelineStaticOpaque = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: false, device: device)
         shadowPipelineStaticCutout = shadow3DPipeline(lib: lib, vertex: "sv_main", cutout: true, device: device)
         shadowPipelineSkinOpaque = shadow3DPipeline(lib: lib, vertex: "sv_skin", cutout: false, device: device)
@@ -296,6 +302,13 @@ extension SceneRenderer {
                 if mat.customShader != nil {
                     gpuMesh.customPipeline = buildCustomMeshShader(mat, package: package, device: device,
                                                                    skinned: skinned)
+                }
+                // M3: PBR 노멀맵/마스크 텍스처 로드.
+                if let normalName = mat.normalTextureName {
+                    gpuMesh.normalTexture = resolveTexture(normalName, package: package, device: device)
+                }
+                if let maskName = mat.maskTextureName {
+                    gpuMesh.maskTexture = resolveTexture(maskName, package: package, device: device)
                 }
                 meshes.append(gpuMesh)
             }
@@ -495,6 +508,9 @@ extension SceneRenderer {
         let customCombos: [String: Int]
         let customConstants: [String: [Float]]
         let customTextures: [String?]
+        /// M3: PBR 노멀맵/마스크 텍스처 이름(textures[1]/textures[2]). nil = 미사용.
+        let normalTextureName: String?
+        let maskTextureName: String?
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
@@ -520,6 +536,9 @@ extension SceneRenderer {
         var customCombos: [String: Int] = [:]
         var customConstants: [String: [Float]] = [:]
         var customTextures: [String?] = []
+        // M3: PBR 노멀맵/마스크 텍스처 이름(textures[1]/textures[2]).
+        var normalTextureName: String? = nil
+        var maskTextureName: String? = nil
         func fvec(_ any: Any?) -> [Float]? {
             if let s = any as? String { return s.split(separator: " ").compactMap { Float($0) } }
             if let n = any as? Double { return [Float(n)] }
@@ -577,6 +596,9 @@ extension SceneRenderer {
             }
             if let texs = p0["textures"] as? [Any] {
                 customTextures = texs.map { $0 as? String }
+                // M3: textures[1] = 노멀맵, textures[2] = 마스크(roughness/metallic).
+                if customTextures.count > 1 { normalTextureName = customTextures[1] }
+                if customTextures.count > 2 { maskTextureName = customTextures[2] }
             }
         } else {
             NSLog("%@", "[Waple] 3D: material json missing: \(path)")
@@ -600,7 +622,8 @@ extension SceneRenderer {
                                        rimAmount: pbr.rimAmount, rimExponent: pbr.rimExponent,
                                        gradientTexture: gradientTexture, foggy: foggy,
                                        customShader: customShader, customCombos: customCombos,
-                                       customConstants: customConstants, customTextures: customTextures)
+                                       customConstants: customConstants, customTextures: customTextures,
+                                       normalTextureName: normalTextureName, maskTextureName: maskTextureName)
                 }
             }
         }
@@ -615,7 +638,8 @@ extension SceneRenderer {
                                   rimAmount: pbr.rimAmount, rimExponent: pbr.rimExponent,
                                   gradientTexture: gradientTexture, foggy: foggy,
                                   customShader: customShader, customCombos: customCombos,
-                                  customConstants: customConstants, customTextures: customTextures)
+                                  customConstants: customConstants, customTextures: customTextures,
+                                  normalTextureName: normalTextureName, maskTextureName: maskTextureName)
     }
 
     private func imageLayerCompositeID(_ name: String) -> Int? {
@@ -632,6 +656,23 @@ extension SceneRenderer {
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: vertex)
         pd.fragmentFunction = lib.makeFunction(name: "mf_main")
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// M3: PBR 노멀맵/마스크 지원 파이프라인. frag=mf_normal(노멀맵+마스크 샘플).
+    /// 노멀맵 texture(3), 마스크 texture(4) — 파이프라인 빌드 시점에 바인딩 인덱스 고정.
+    func mesh3DNormalPipeline(lib: MTLLibrary, vertex: String, additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: vertex)
+        pd.fragmentFunction = lib.makeFunction(name: "mf_normal")
         pd.depthAttachmentPixelFormat = .depth32Float
         let a = pd.colorAttachments[0]!
         a.pixelFormat = accPixelFormat
@@ -1195,6 +1236,10 @@ extension SceneRenderer {
                     // H1 Phase 2: 커스텀 셰이더 파이프라인 우선(스키닝 미지원 → 정적 메시 한정).
                     if let custom = mesh.customPipeline, !useSkin {
                         pipe = custom
+                    } else if (mesh.normalTexture != nil || mesh.maskTexture != nil), !useSkin,
+                              let normalPipe = mesh.additive ? meshPipelineNormalAdditive : meshPipelineNormal {
+                        // M3: PBR 노멀맵/마스크 파이프라인(정적 메시 한정).
+                        pipe = normalPipe
                     } else if useSkin {
                         // F541(F-73): 스킨 파이프라인 nil 시 8f 셰이더(over/mv_main)로 16f 패킹 메시를
                         // 오렌더해 지오메트리 붕괴 — :937 주석과 같은 스킵으로 통일(skinAdditive→skin 폴백은
@@ -1217,6 +1262,11 @@ extension SceneRenderer {
                     // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
                     // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
                     enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
+                    // M3: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯).
+                    if pipe === meshPipelineNormal || pipe === meshPipelineNormalAdditive {
+                        if let normal = mesh.normalTexture { enc.setFragmentTexture(normal, index: 3) }
+                        if let mask = mesh.maskTexture { enc.setFragmentTexture(mask, index: 4) }
+                    }
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
                                               indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                 }

@@ -469,5 +469,78 @@ enum Mesh3DShaders {
         applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
         return float4(lit * outAlpha, outAlpha);
     }
+
+    // M3: PBR 노멀맵/마스크 지원 — 스크린공간 미분으로 TBN 근사, 노멀맵 샘플로 법선 보정,
+    // 마스크 텍스처로 per-pixel roughness/metallic 오버라이드.
+    // 노멀맵: texture(3), 마스크: texture(4).
+    fragment float4 mf_normal(VOut in [[stage_in]],
+                              texture2d<float> tex [[texture(0)]],
+                              depth2d_array<float> shadowAtlas [[texture(1)]],
+                              texture2d<float> gradientTex [[texture(2)]],
+                              texture2d<float> normalTex [[texture(3)]],
+                              texture2d<float> maskTex [[texture(4)]],
+                              constant MeshU& u [[buffer(1)]],
+                              constant FrameU& frame [[buffer(2)]],
+                              constant LightU* lights [[buffer(3)]],
+                              constant float4x4* shadowVP [[buffer(4)]]) {
+        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
+        float4 sampled = tex.sample(s, in.uv) * u.tint;
+        if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
+        float mode = u.material.w;
+        float fogMode = u.specularTint.w;
+        if (mode < 0.5) {
+            float3 rgb = sampled.rgb;
+            float alpha = sampled.a;
+            applySceneFog(rgb, alpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
+            return float4(rgb * alpha, alpha);
+        }
+
+        float3 albedo = sampled.rgb;
+        // M3: TBN 근사(스크린공간 미분). 정점 탄젠트 부재 시 ddx/ddy 로부터 탄젠트/비탄젠트 계산.
+        float3 dpx = dfdx(in.worldPos);
+        float3 dpy = dfdy(in.worldPos);
+        float2 duvx = dfdx(in.uv);
+        float2 duvy = dfdy(in.uv);
+        float3 T = normalizedOr(dpx * duvy.y - dpy * duvx.y, float3(1.0, 0.0, 0.0));
+        float3 B = normalizedOr(dpy * duvx.x - dpx * duvy.x, float3(0.0, 1.0, 0.0));
+        float3 N = normalizedOr(in.worldNormal, float3(0.0, 0.0, 1.0));
+        float3x3 TBN = float3x3(T, B, N);
+        float3 normalMap = normalTex.sample(s, in.uv).xyz * 2.0 - 1.0;
+        N = normalizedOr(TBN * normalMap, N);
+
+        // M3: 마스크 텍스처로 per-pixel roughness/metallic 오버라이드(없으면 머티리얼 상수).
+        float4 mask = maskTex.sample(s, in.uv);
+        float roughness = mask.r > 0.0 ? mask.r : u.material.x;
+        float metallic = mask.g > 0.0 ? mask.g : u.material.y;
+
+        float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
+        float3 direct = float3(0.0);
+        int count = clamp(int(frame.meta.x + 0.5), 0, 8);
+        for (int i = 0; i < count; ++i) {
+            float kind = lights[i].shadow.z;
+            if (kind < 0.5) {
+                float visibility = pointShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+                direct += visibility * pointPBR(in.worldPos, N, V, albedo, roughness, metallic,
+                                                u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            } else if (kind < 1.5) {
+                float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
+                direct += visibility * directionalPBR(N, V, albedo, roughness, metallic,
+                                                      u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            } else {
+                direct += spotPBR(in.worldPos, N, V, albedo, roughness, metallic,
+                                  u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            }
+        }
+        float3 ambientColor = frame.ambient.xyz;
+        if (mode < 1.5) {
+            float hemisphere = clamp(dot(N, float3(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);
+            ambientColor = mix(frame.skylight.xyz, frame.ambient.xyz, hemisphere);
+        }
+        float3 lit = ambientColor * albedo + direct;
+        float outAlpha = sampled.a;
+        applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
+        return float4(lit * outAlpha, outAlpha);
+    }
     """
 }
