@@ -688,6 +688,13 @@ public struct SceneDocument: Equatable {
     /// F692: `general.perspectiveoverridefov` — perspective:true 레이어(SceneLayer.perspective)의
     /// 원근 투영 FOV(도). 실측 전건 95.0(133씬 저작). nil = 미저작. 파스·보존 전용(렌더 소비 없음).
     public var perspectiveOverrideFov: Float? = nil
+
+    /// H7: WE 품질 설정(general.quality) — low/medium/high/ultra. 픽셀 포맷 분기에 사용.
+    /// 부재 시 ultra(기존 hdr 플래그 결정자와 동일 — 무회귀).
+    public enum Quality: String, Equatable {
+        case low, medium, high, ultra
+    }
+    public var quality: Quality = .ultra
 }
 
 public enum SceneDocumentError: Error, Equatable { case noScene }
@@ -733,6 +740,8 @@ extension SceneDocument {
         let parallaxMouseInfluence = float(general["cameraparallaxmouseinfluence"]) ?? 1
         // 부재 시 0(즉시) — 무회귀. 실물은 전부 필드 보유(기본 0.1).
         let parallaxDelay = max(0, float(general["cameraparallaxdelay"]) ?? 0)
+        // H7: 품질 설정(general.quality) — low/medium/high/ultra. 부재 시 ultra(무회귀).
+        let quality = Quality(rawValue: (general["quality"] as? String)?.lowercased() ?? "ultra") ?? .ultra
 
         // 3D 카메라(orthogonalprojection 이 딕셔너리가 아닌 3D 씬 + camera{eye,center,up}+fov 존재 시). 2D=nil.
         let (camera3D, cameraScripts) = parseCamera(scene: scene, general: general)
@@ -885,6 +894,8 @@ extension SceneDocument {
         // F695/F692: 씬 전역 줌 + perspective 레이어 원근 FOV(파스·보존 — 소비는 렌더러 책임).
         out.zoom = float(general["zoom"]) ?? 1
         out.perspectiveOverrideFov = float(general["perspectiveoverridefov"])
+        // H7: 품질 설정(general.quality).
+        out.quality = quality
         return out
     }
 

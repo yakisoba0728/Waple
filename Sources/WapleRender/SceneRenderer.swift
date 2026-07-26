@@ -622,7 +622,15 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var hdrActive: Bool { sceneIsHDR }
     /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
     /// HDR 이면 float(>1 보존) — mount 에서 sceneIsHDR 확정 후 파이프라인 생성에 사용.
-    var accPixelFormat: MTLPixelFormat { sceneIsHDR ? .rgba16Float : .bgra8Unorm }
+    /// H7: 품질 설정 반영 — low/medium 은 hdr 여도 bgra8Unorm(성능 우선), high/ultra 는 hdr 시 rgba16Float.
+    var accPixelFormat: MTLPixelFormat {
+        switch sceneQuality {
+        case .low, .medium: return .bgra8Unorm
+        case .high, .ultra: return sceneIsHDR ? .rgba16Float : .bgra8Unorm
+        }
+    }
+    /// H7: 품질 설정(general.quality) — 파스 시점 스냅샷.
+    var sceneQuality: SceneDocument.Quality = .ultra
     /// 씬당 라이트 유니폼(상수) — forwardLit=false(라이트 씬 아님)면 전 레이어 f_main(무회귀).
     var forwardLit = false
     var lightPositions = [SIMD4<Float>](repeating: .zero, count: 4)    // [4] xyz=world, w=exponent
@@ -1015,6 +1023,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             self.sceneIsHDR = true
             self.hdrPost = post
         }
+        // H7: 품질 설정 스냅샷(general.quality).
+        self.sceneQuality = doc.quality
         // LDR bloom is authored-policy gated, not HDR-pipeline-availability gated.
         // 디버그: WAPLE_NO_BLOOM=1 → bloom 강제 OFF(백화 파리티 이분용).
         sceneWantsLDRBloom = doc.bloom && !doc.hdr

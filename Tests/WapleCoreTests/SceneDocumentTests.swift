@@ -1273,4 +1273,18 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertFalse(doc.layers[0].refract)
         XCTAssertNil(doc.layers[0].normalTextureName)
     }
+
+    /// H7: 품질 설정(general.quality) 파싱.
+    func testParsesQualitySetting() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100},"quality":"high"},"objects":[]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.quality, .high)
+    }
+
+    /// H7: 품질 설정 부재 시 ultra(무회귀).
+    func testQualityDefaultsToUltra() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.quality, .ultra)
+    }
 }
