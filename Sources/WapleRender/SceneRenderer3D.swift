@@ -1469,7 +1469,9 @@ extension SceneRenderer {
                         enc.setFragmentTexture(mesh.texture, index: 0)
                         // 보조 텍스처(materials textures[1..]) — bindScene3DLighting 이 걸어 둔 texture(1)
                         // 섀도우 아틀라스(depth2d_array)를 셰이더가 g_Texture1 을 선언한 슬롯에서만 덮어써
-                        // 타입 불일치를 해소한다(선언 안 하면 ef_main 인자 자체가 없어 무해).
+                        // 타입 불일치를 해소한다(선언 안 하면 ef_main 인자 자체가 없어 무해). 원복은 이
+                        // 드로우 콜 "뒤"(아래 drawIndexedPrimitives 다음)에서 한다 — 여기서 하면 이번
+                        // 드로우 자체가 샘플할 aux 를 draw 도달 전에 되돌려버린다.
                         for (slot, tex) in custom.aux { enc.setFragmentTexture(tex, index: slot) }
                     } else {
                         enc.setVertexBuffer(meshVBuf, offset: 0, index: 0)
@@ -1489,6 +1491,13 @@ extension SceneRenderer {
                     }
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
                                               indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                    // P⑥: 인코더 텍스처 바인딩은 다음 draw 까지 지속된다(Metal encoder 상태) — 커스텀
+                    // 메시의 aux 가 slot 1(가장 흔한 textures[1])을 덮어썼다면, 같은 enc 로 뒤이어 그려질
+                    // 스톡/다른 커스텀 메시(그쪽은 texture(1)을 재바인딩하지 않고 루프 진입 전 1회
+                    // 바인딩에 의존한다)가 섀도우 아틀라스 대신 이 aux 색상 텍스처를 타입 불일치로
+                    // 샘플하는 회귀를 막기 위해, 이 드로우 콜이 끝난 뒤 즉시 원복한다(무aux/slot1
+                    // 미포함이면 무해한 재바인딩 — 이번 드로우 자체는 이미 위에서 aux 를 소비했다).
+                    if usedCustom { enc.setFragmentTexture(shadowResult.texture, index: 1) }
                 }
             }
         }

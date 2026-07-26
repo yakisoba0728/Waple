@@ -55,13 +55,16 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
     }
 
     /// 정적(비스키닝) 쿼드 MDLV0023 — pos3+normal3+tangent4+uv2(stride 48), formatFlag 0x0f(normal+tangent, no skin).
-    private func staticQuadMDL() -> Data {
+    /// materialPath 는 MDL 내부에 박히는 머티리얼 참조 문자열(파일명 규약과 무관 — loadMesh3DMaterial 이
+    /// mesh.material 값 그대로 자산을 찾는다) — 한 테스트에서 서로 다른 머티리얼의 모델 여러 개를 쓸 때는
+    /// 반드시 실제 파일 배치와 맞춰 명시해야 한다(디폴트 재사용 시 전부 같은 머티리얼을 참조하게 됨).
+    private func staticQuadMDL(materialPath: String = "materials/quad.json") -> Data {
         var d = Data("MDLV0023".utf8)
         d.append(0)
         func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
         func f32(_ v: Float) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
         u32(0x0000000f); u32(1); u32(1)
-        d.append(Data("materials/quad.json".utf8)); d.append(0)
+        d.append(Data(materialPath.utf8)); d.append(0)
         u32(0)
         for v: Float in [-1, -1, 0, 1, 1, 0] { f32(v) }   // AABB
         u32(0x0000000f)                                    // formatFlag: normal(0x2)+tangent(0x4), no skin
@@ -141,6 +144,90 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
                        "보조 텍스처(g_Texture1) 미바인딩 의심")
         XCTAssertEqual(Double(c.blueComponent), 0.8, accuracy: 0.05,
                        "g_Texture1Resolution(EngineU.texRes) 오독 의심 — MeshUniform 바인딩 잔존 가능성")
+    }
+
+    /// P⑥ 회귀: bindScene3DLighting 은 섀도우 아틀라스(depth2d_array)를 fragment texture(1)에 드로 루프
+    /// 진입 "전" 1회만 바인딩한다. 커스텀 메시가 보조 텍스처(materials textures[1], 가장 흔한 aux slot)를
+    /// texture(1)에 얹으면 그 바인딩이 같은 encoder 로 뒤이어 그려지는 스톡 섀도우-리시버 메시까지
+    /// 지속돼(Metal encoder 상태는 draw 간 유지) 아틀라스 대신 그 색상 텍스처를 타입 불일치로 샘플하게
+    /// 된다 — 원복 누락 시 리시버의 섀도우 항이 무너져 castshadow on/off 대비 밝기 차가 사라진다.
+    /// 화면 밖(scale 극소, 원점에서 멀리)에 커스텀 aux 메시를 리시버보다 먼저(order) 그리게 하고,
+    /// Scene3DPBRShadowRenderTests 와 동일한 오클루더/리시버 구성으로 그림자 대비가 여전히 나타나는지
+    /// (평균 휘도 하락)로 간접 검증한다.
+    func testCustomMeshAuxTextureAtSlot1DoesNotClobberShadowAtlasForLaterMeshes() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+
+        func capture(lightCastsShadow: Bool, tag: String) throws -> NSBitmapImageRep {
+            let scene = """
+            {"camera":{"eye":"3 0 5","center":"0 0 0","up":"0 1 0"},
+             "general":{"orthogonalprojection":null,"fov":50.0,"nearz":0.05,"farz":50,
+                        "clearcolor":"0 0 0","ambientcolor":"0.04 0.04 0.04","skylightcolor":"0.04 0.04 0.04"},
+             "objects":[
+               {"id":0,"name":"customaux","model":"models/aux.mdl","origin":"500 500 500","scale":"0.001 0.001 0.001"},
+               {"id":1,"name":"receiver","model":"models/plane.mdl","origin":"0 0 0","scale":"2.5 2.5 2.5","castshadow":false},
+               {"id":2,"name":"occluder","model":"models/plane.mdl","origin":"0 0 2","scale":"0.55 0.55 0.55","castshadow":true},
+               {"id":3,"name":"key","light":"lpoint","origin":"0 0 4","color":"1 1 1","intensity":2,
+                "radius":10,"exponent":2,"castshadow":\(lightCastsShadow ? "true" : "false")}
+             ]}
+            """
+            let planeMaterial = #"{"passes":[{"textures":["white"],"constantshadervalues":{"roughness":0.7,"metallic":0}}]}"#
+            let auxMaterial = #"{"passes":[{"shader":"auxslot1","textures":["_unused","auxcolor"]}]}"#
+            let vert = """
+            uniform mat4 g_ModelViewProjectionMatrix;
+            attribute vec3 a_Position;
+            attribute vec2 a_TexCoord;
+            varying vec2 v_TexCoord;
+            void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+            """
+            let frag = """
+            varying vec2 v_TexCoord;
+            uniform sampler2D g_Texture1;
+            void main() { gl_FragColor = texSample2D(g_Texture1, v_TexCoord); }
+            """
+            let files: [(String, Data)] = [
+                ("scene.json", Data(scene.utf8)),
+                ("models/plane.mdl", staticQuadMDL(materialPath: "materials/plane.json")),
+                ("materials/plane.json", Data(planeMaterial.utf8)),
+                ("materials/white.tex", solidTex(255, 255, 255, w: 2, h: 2)),
+                ("models/aux.mdl", staticQuadMDL(materialPath: "materials/aux.json")),
+                ("materials/aux.json", Data(auxMaterial.utf8)),
+                ("materials/_unused.tex", solidTex(255, 255, 255)),
+                ("materials/auxcolor.tex", solidTex(255, 0, 255)),
+                ("shaders/auxslot1.vert", Data(vert.utf8)),
+                ("shaders/auxslot1.frag", Data(frag.utf8)),
+            ]
+            let root = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("waple_p6aux_\(tag)_\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try encodePkg(files).write(to: root.appendingPathComponent("scene.pkg"))
+            let project = WallpaperProject(id: "p6aux_\(tag)", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                           title: "p6aux", tags: [], contentRating: nil, workshopId: nil,
+                                           dependency: nil, folderURL: root)
+            let renderer = SceneRenderer()
+            try renderer.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
+            defer { renderer.teardown(); try? FileManager.default.removeItem(at: root) }
+            let output = root.appendingPathComponent("capture", isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let url = try XCTUnwrap(renderer.captureFrames(width: 64, height: 64, times: [0], toDir: output).first)
+            return try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        }
+        func averageLuminance(_ image: NSBitmapImageRep) -> Double {
+            var total = 0.0, count = 0.0
+            for y in 0..<image.pixelsHigh {
+                for x in 0..<image.pixelsWide {
+                    guard let c = image.colorAt(x: x, y: y) else { continue }
+                    total += c.redComponent * 0.2126 + c.greenComponent * 0.7152 + c.blueComponent * 0.0722
+                    count += 1
+                }
+            }
+            return count > 0 ? total / count : 0
+        }
+        let withShadow = try capture(lightCastsShadow: true, tag: "on")
+        let withoutShadow = try capture(lightCastsShadow: false, tag: "off")
+        // 아틀라스가 aux 텍스처로 오염됐다면 castshadow on/off 가 리시버 셰이딩에 차이를 못 만든다
+        // (둘 다 같은 색 텍스처를 "그림자"로 오독하거나 타입 불일치로 동일하게 깨짐).
+        XCTAssertLessThan(averageLuminance(withShadow), averageLuminance(withoutShadow) - 0.01,
+                          "커스텀 메시의 aux 텍스처가 texture(1)을 오염시켜 뒤이은 스톡 메시의 섀도우 항이 무너진 것으로 보임")
     }
 
     // MARK: - H1 스키닝: 스키닝 메시 + 커스텀 셰이더
