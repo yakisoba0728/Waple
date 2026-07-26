@@ -1157,6 +1157,35 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(t.isSolid)
     }
 
+    /// C⑨: 텍스트 outline/outlinecolor/outlinethickness/opaquebackground/backgroundcolor 파싱(실물
+    /// 스키마 3737268876 "VHS Time and Date"/3047405322 "README" 그대로).
+    func testParsesTextOutlineAndBackgroundFields() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"text":"hello","font":"systemfont_arial","pointsize":16,"origin":"0 0 0",
+           "outline":true,"outlinecolor":"0.15294 0.15294 0.15294","outlinethickness":9.72,
+           "opaquebackground":true,"backgroundcolor":"0 0 0"}]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let t = try XCTUnwrap(doc.texts.first)
+        XCTAssertTrue(t.outline)
+        XCTAssertEqual(t.outlineColor.x, 0.15294, accuracy: 1e-4)
+        XCTAssertEqual(t.outlineColor.y, 0.15294, accuracy: 1e-4)
+        XCTAssertEqual(t.outlineColor.z, 0.15294, accuracy: 1e-4)
+        XCTAssertEqual(t.outlineThickness, 9.72, accuracy: 1e-4)
+        XCTAssertTrue(t.opaqueBackground)
+        XCTAssertEqual(t.backgroundColor, Vec3(x: 0, y: 0, z: 0))
+    }
+
+    /// C⑨ 무회귀: 미저작 시 기본값(전부 off/검정) — 종전 동작과 동일.
+    func testTextOutlineAndBackgroundFieldsDefaultOff() throws {
+        let scene = #"{"general":{"orthogonalprojection":{"width":100,"height":100}},"objects":[{"id":1,"text":"hello","font":"systemfont_arial","pointsize":16,"origin":"0 0 0"}]}"#
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let t = try XCTUnwrap(doc.texts.first)
+        XCTAssertFalse(t.outline)
+        XCTAssertFalse(t.opaqueBackground)
+    }
+
     /// H1: 머티리얼 passes[0] 의 shader/combos/constantshadervalues/textures 파스 보존.
     func testParsesMaterialCustomShaderFields() throws {
         let scene = """

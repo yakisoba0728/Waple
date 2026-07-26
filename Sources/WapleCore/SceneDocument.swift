@@ -258,6 +258,15 @@ public struct SceneTextLayer: Equatable {
     /// 레이어(SceneLayer.colorBlendMode)와 동일 필드이나 종전 텍스트 경로엔 아예 없었다. 텍스트도
     /// 동일 enum 을 저작하며(실측 코퍼스 9씬/24오브젝트, mode 31 최빈 — 시계/곡명 텍스트 가산 합성).
     public var colorBlendMode: Int = 0
+    /// C⑨: 아웃라인/배경 박스 — 파스·보존(실측 코퍼스: outline 1씬/3오브젝트, opaquebackground 5씬/12
+    /// 오브젝트 — 후자는 전건 visible=false(README/구분선 에디터 메모)라 실가시 사례 없음). 래스터
+    /// 소비는 outline 만 최소 구현(TextRasterizer 참조) — opaquebackground 는 파스만(실가시 0건이라
+    /// 렌더 리스크 대비 이득이 낮음, 필요 시 이 필드로 후속 구현 가능).
+    public var outline: Bool = false
+    public var outlineColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    public var outlineThickness: Float = 0
+    public var opaqueBackground: Bool = false
+    public var backgroundColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
 }
 
 /// 3D 씬 카메라(2D 의 orthogonalprojection 대체). look-at 파라미터 + 원근 fov.
@@ -1382,6 +1391,12 @@ extension SceneDocument {
         t.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
         // C⑥: colorBlendMode — 이미지 레이어(:1157 인근)와 동일 파스 규약.
         t.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
+        // C⑨: 아웃라인/배경 박스 파스·보존(실측 스키마: outlinecolor/backgroundcolor 는 "r g b" 벡터).
+        t.outline = (unwrap(obj["outline"]) as? Bool) ?? false
+        t.outlineColor = vec3(obj["outlinecolor"]) ?? Vec3(x: 0, y: 0, z: 0)
+        t.outlineThickness = float(obj["outlinethickness"]) ?? 0
+        t.opaqueBackground = (unwrap(obj["opaquebackground"]) as? Bool) ?? false
+        t.backgroundColor = vec3(obj["backgroundcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
         return t
     }
 
