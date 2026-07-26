@@ -178,6 +178,20 @@ public struct ParticleSimulator {
         li >= 0 && li < childDisplaysCache.count ? childDisplaysCache[li] : []
     }
 
+    /// F178(E1-③): 경로 기반 자손 파티클 표시 스냅샷 — path[0]=직계 자식 링크, path[1]=그 자식의
+    /// 자식 링크(손자)... 각 단계에서 해당 링크의 전 ChildInstance(uid별 다중 인스턴스 가능 — 예:
+    /// deathBurst 는 죽는 파티클마다 새 인스턴스)를 평탄화해 다음 단계 입력으로 삼는다. 손자 이상은
+    /// 중간 GPUParticleSystem.sim 이 더미(step 미호출)라 그 sim 에서 직접 childDisplay 를 못 타므로,
+    /// 렌더러는 항상 루트(실제 스텝되는) sim 에서 이 메서드를 호출해야 한다 — childStates 는 stepChildren
+    /// 이 매 프레임 재귀적으로 갱신하므로(각 ChildInstance.sim.step 호출이 그 sim 의 stepChildren 도 구동)
+    /// 이 경로는 항상 그 프레임의 최신 스냅샷을 반환한다.
+    public func descendantDisplay(path: [Int]) -> [Particle] {
+        guard let first = path.first, first >= 0, first < childStates.count else { return [] }
+        if path.count == 1 { return childDisplay(first) }
+        let rest = Array(path.dropFirst())
+        return childStates[first].flatMap { $0.sim.descendantDisplay(path: rest) }
+    }
+
     private mutating func rollProbability(_ p: Float) -> Bool {
         p >= 1 || rng.nextFloat() < p
     }

@@ -1584,7 +1584,8 @@ extension SceneRenderer {
     ///   가림/절전 갭 후에도 프레임당 유한 스텝(서브스텝 상한 dtCap)만 밟는다 — time-clock 무제한 캐치업 금지(감사 C1).
     /// - liveDelta=nil(캡처): particle3DClock(프레시 마운트/캡처 시작=0) → time 까지 전량 서브스텝 = 0→t 결정적
     ///   리플레이(2D 캡처 입도와 동일 — 방출/이동 반영). captureFrames 가 라이브 sim 을 프레시로 리셋해 재현 보장(I1).
-    /// 루트만 스텝, 자식은 부모 sim.childDisplay. 밟은 서브스텝 수를 particle3DLastStepCount 에 기록(테스트 관측).
+    /// 루트만 스텝, 자식/손자(F178: 임의 깊이)는 루트 sim.descendantDisplay(경로 기반). 밟은 서브스텝
+    /// 수를 particle3DLastStepCount 에 기록(테스트 관측).
     func stepParticleSnapshots(time: Float, liveDelta: Float?) -> [[Particle]] {
         let dtCap: Float = 1.0 / 30.0
         var snaps = [[Particle]](repeating: [], count: particleSystems.count)
@@ -1600,8 +1601,12 @@ extension SceneRenderer {
         } else {
             for i in rootIdxs { snaps[i] = particleSystems[i].sim.step(0) }   // 정지/재드로 — 현재 스냅샷 재방출.
         }
+        // F178(E1-③): 임의 깊이 — 루트까지 경로를 모아 descendantDisplay 로 조회(순서 무관, 루트
+        // childStates 를 직접 재귀 탐색하므로 이 루프의 i 순서가 부모/자식 순일 필요가 없다).
         for i in particleSystems.indices {
-            if let c = particleSystems[i].childOf { snaps[i] = particleSystems[c.parent].sim.childDisplay(c.link) }
+            if let (root, path) = particleDescendantPath(from: i) {
+                snaps[i] = particleSystems[root].sim.descendantDisplay(path: path)
+            }
         }
         particle3DLastStepCount = steps
         return snaps

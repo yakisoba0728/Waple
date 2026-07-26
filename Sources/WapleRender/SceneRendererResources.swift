@@ -1160,17 +1160,30 @@ extension SceneRenderer {
             g.noInterp = resolveTextureNoInterpolation(def.material?.textureName, package: package)
             return g
         }
+        // E1(③): F178 — children[]는 파스/시뮬 모두 깊이4 재귀를 지원하나(SceneDocument.parseParticleDef
+        // 의 visited.count<4 사이클/깊이 캡이 상한), 종전엔 이 GPU화 루프가 직계 자식(1단)만 순회해
+        // 손자 이상은 CPU/RNG 시뮬 비용만 내고 화면에 그려지지 않았다. def.children 를 재귀 순회해
+        // 모든 깊이의 자손에 GPUParticleSystem 을 만든다 — childOf.parent 는 항상 "직계" 부모의 GPU
+        // 배열 인덱스(트리 구조 그대로)이고, draw/step 소비처는 이 체인을 루트까지 거슬러 올라가 실제
+        // (스텝되는) 루트 sim 에서 경로 기반으로 표시 스냅샷을 얻는다(중간 자식의 sim 은 더미 — 미스텝).
+        func appendChildren(of def: ParticleSystemDef, parentIdx: Int, seed: UInt64, sp: SceneParticle, depth: Int) {
+            guard depth < 8 else { return }  // 방어적 상한(파스 단계 캡이 실질 상한 — 여긴 안전망)
+            for (li, link) in def.children.enumerated() {
+                let childSeed = seed &+ UInt64(li) &+ 1
+                if let child = makeSystem(def: link.def, seed: childSeed, sp: sp,
+                                          childOf: (parent: parentIdx, link: li)) {
+                    let childIdx = out.count
+                    out.append(child)
+                    appendChildren(of: link.def, parentIdx: childIdx, seed: childSeed, sp: sp, depth: depth + 1)
+                }
+            }
+        }
         for (i, sp) in doc.particles.enumerated() {
             let seed = UInt64(0x9E37_79B9_7F4A_7C15 &+ UInt64(i))
             guard let parent = makeSystem(def: sp.def, seed: seed, sp: sp) else { continue }
             let parentIdx = out.count
             out.append(parent)
-            for (li, link) in sp.def.children.enumerated() {
-                if let child = makeSystem(def: link.def, seed: seed &+ UInt64(li) &+ 1, sp: sp,
-                                          childOf: (parent: parentIdx, link: li)) {
-                    out.append(child)
-                }
-            }
+            appendChildren(of: sp.def, parentIdx: parentIdx, seed: seed, sp: sp, depth: 0)
         }
         // 이미터 오디오반응이 있으면 라이브 오디오 공급자 기동 대상(mount 의 hasAudio 게이트 → provider.start()).
         if out.contains(where: { $0.def.emitterAudio.contains { $0 != nil } }) { hasAudio = true }

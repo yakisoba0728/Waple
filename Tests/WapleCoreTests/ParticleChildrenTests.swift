@@ -72,6 +72,32 @@ final class ParticleChildrenTests: XCTestCase {
         }
     }
 
+    /// F178(E1-③): 손자(2단) 자식 — 시뮬은 깊이4 재귀를 지원하므로 자식의 자식도 실제로 스텝·방출된다.
+    /// descendantDisplay(path:) 로 루트에서 경로([자식링크, 손자링크])를 따라 조회 가능해야 한다.
+    func testGrandchildAlwaysChild_reachableViaDescendantDisplay() {
+        let grandLink = ChildLink(def: childDef(), trigger: .always, maxInstances: 1,
+                                  probability: 1, origin: Vec3(x: 999, y: 42, z: 0))
+        let childWithGrandchild = ParticleSystemDef(
+            emitters: [], initializers: [.lifetimeRandom(min: 10, max: 10)],
+            operators: [], renderer: .sprite, maxCount: 4, startTime: 0, material: nil,
+            children: [grandLink])
+        let link = ChildLink(def: childWithGrandchild, trigger: .always, maxInstances: 1,
+                             probability: 1, origin: Vec3(x: 500, y: -20, z: 0))
+        var sim = ParticleSimulator(def: parentDef(children: [link], emitters: []), seed: 40)
+        var grandkids: [Particle] = []
+        for i in 0..<10 {
+            _ = sim.step(0.05)
+            if i >= 7 { grandkids.append(contentsOf: sim.descendantDisplay(path: [0, 0])) }
+        }
+        XCTAssertFalse(grandkids.isEmpty, "손자도 경로 기반으로 조회 가능해야 함(시뮬은 이미 깊이4 지원)")
+        for k in grandkids {
+            XCTAssertEqual(k.pos.x, 999, accuracy: 0.01)
+            XCTAssertEqual(k.pos.y, 42, accuracy: 0.01)
+        }
+        // 직계 자식(childWithGrandchild) 자체는 emitters:[] 라 파티클을 방출하지 않음 — path:[0] 은 빈 배열(무회귀 가드).
+        XCTAssertTrue(sim.descendantDisplay(path: [0]).isEmpty)
+    }
+
     func testSpawnBurstChild_firesOnceThenDrains() {
         let link = ChildLink(def: childDef(burst: 3, rate: 0, lifetime: 0.2, maxCount: 10),
                              trigger: .spawnBurst, maxInstances: 4,

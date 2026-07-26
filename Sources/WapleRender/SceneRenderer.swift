@@ -1459,6 +1459,22 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         for case let v? in layers.map(\.video) { v.resume() }
     }
 
+    /// F178(E1-③): idx 가 자식/손자(비루트, particleSystems[idx].childOf != nil)면 childOf 체인을
+    /// 루트까지 거슬러 올라가 링크 경로(root→leaf 순)를 모은다. childOf 는 항상 "직계" 부모의 GPU
+    /// 배열 인덱스만 담으므로(트리 구조 그대로 buildParticles 가 배선), 중간 자식의 sim 은 더미(step
+    /// 미호출)라 경로 전체를 루트의 실제 스텝된 sim 에 물어야 한다(ParticleSimulator.descendantDisplay).
+    /// 루트면 nil(호출자는 자기 sim.step 을 직접 쓴다 — 상태 변이는 루트 전용).
+    func particleDescendantPath(from idx: Int) -> (root: Int, path: [Int])? {
+        guard let firstC = particleSystems[idx].childOf else { return nil }
+        var path = [firstC.link]
+        var cur = firstC.parent
+        while let cc = particleSystems[cur].childOf {
+            path.insert(cc.link, at: 0)
+            cur = cc.parent
+        }
+        return (root: cur, path: path)
+    }
+
     /// E1(⑥): draw() 자원 실패 조기 return 경로의 진단 로그 — 원인별 1회만(60fps 루프에서 매프레임
     /// 재실패해도 로그 폭주 방지). 종전엔 이 경로들이 전부 조용히 프레임을 스킵해 "화면이 멈췄다/비었다"
     /// 증상의 원인 특정이 불가능했다.
@@ -1586,9 +1602,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                             displayTextures: displayTextures,
                                             textTextures: textTextures,
                                             particleSnapshot: { [self] idx in
-                                                // 자식은 부모 sim 캐시를 그린다(drawPlan 이 부모를 먼저 스텝).
-                                                if let c = particleSystems[idx].childOf {
-                                                    return particleSystems[c.parent].sim.childDisplay(c.link)
+                                                // 자식/손자는 루트 sim 캐시를 경로 기반으로 그린다(drawPlan 이
+                                                // 루트를 먼저 스텝 — F178: 임의 깊이).
+                                                if let (root, path) = particleDescendantPath(from: idx) {
+                                                    return particleSystems[root].sim.descendantDisplay(path: path)
                                                 }
                                                 // 라이브 오디오반응: 신호 주입(무음이면 sim 이 스킵). 헤드리스 캡처는
                                                 // captureFrames 의 별도 로컬 sims 라 이 경로 밖 → 무음 A/B 비트동일 유지.
@@ -1731,8 +1748,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 displayTextures: displayTextures,
                                                 textTextures: textTextures,
                                                 particleSnapshot: { [self] idx in
-                                                    if let c = particleSystems[idx].childOf {
-                                                        return sims[c.parent].childDisplay(c.link)
+                                                    // F178(E1-③): 임의 깊이 — 루트까지 경로를 모아 로컬 sims 배열에서 조회.
+                                                    if let (root, path) = particleDescendantPath(from: idx) {
+                                                        return sims[root].descendantDisplay(path: path)
                                                     }
                                                     return sims[idx].step(0)
                                                 },
