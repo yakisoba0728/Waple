@@ -1736,6 +1736,10 @@ public final class TextScriptEngine {
             },
             // E1(⑤): IScene.destroyLayer/getLayerCount/getLayerByID 안전 심 — 종전 부재라
             // `thisScene.destroyLayer(x)` 호출 즉시 TypeError 로 update 전체가 죽었다(392).
+            // 주의: this.layers 의 위치 인덱스는 렌더러 read-back 채널(readBackScriptLayerState)이
+            // doc.layers 인덱스(=layer.uid)로 직접 참조하는 규약이라, splice 로 배열을 줄이면 그 뒤
+            // 모든 레이어/텍스트의 인덱스가 한 칸씩 밀려 다른 레이어 값이 잘못 적용된다. 슬롯을
+            // 보존하는 툼스톤(비가시 처리)으로 대체 — getLayerCount 만 툼스톤을 제외해 셈한다.
             destroyLayer: function(l) {
                 var idx = -1;
                 if (typeof l === 'string') {
@@ -1743,10 +1747,19 @@ public final class TextScriptEngine {
                 } else if (l) {
                     idx = this.layers.indexOf(l);
                 }
-                if (idx >= 0) { this.layers.splice(idx, 1); }
+                if (idx >= 0) {
+                    this.layers[idx].__wapleDestroyed = true;
+                    this.layers[idx].visible = false;
+                }
                 return idx >= 0;
             },
-            getLayerCount: function() { return this.layers.length; },
+            getLayerCount: function() {
+                var n = 0;
+                for (var i = 0; i < this.layers.length; i += 1) {
+                    if (!this.layers[i].__wapleDestroyed) { n += 1; }
+                }
+                return n;
+            },
             getLayerByID: function(id) {
                 for (var i = 0; i < this.layers.length; i += 1) {
                     if (this.layers[i].__wapleId === id) { return this.layers[i]; }

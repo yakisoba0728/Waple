@@ -412,6 +412,26 @@ final class TextScriptEngineSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(e.evaluate(current: ""), "2,1,b")
     }
 
+    /// destroyLayer 가 splice 로 배열을 줄이면 그 뒤 레이어들의 위치 인덱스가 한 칸씩 밀린다 —
+    /// 렌더러 read-back(readBackScriptLayerState)은 이름이 아니라 **위치 인덱스**(=doc.layers 인덱스)로
+    /// thisScene.layers[i] 를 직접 읽으므로, 시프트가 나면 인덱스 1 이후 모든 레이어가 다른 레이어의
+    /// origin/scale/angles/visible 을 뒤집어쓴다(툼스톤 대신 splice 를 쓰면 이 테스트가 실패해야 한다).
+    func testSceneDestroyLayerPreservesSubsequentLayerIndices() throws {
+        let a = SceneScriptLayerDescriptor(name: "a", id: 1)
+        let b = SceneScriptLayerDescriptor(name: "b", id: 2)
+        let c = SceneScriptLayerDescriptor(name: "c", origin: SIMD3<Float>(7, 8, 9), id: 3)
+        let scene = try XCTUnwrap(SceneScriptContext(layers: [a, b, c]))
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            thisScene.destroyLayer('b');
+            var atIndex2 = thisScene.layers[2];
+            return atIndex2.name + ',' + atIndex2.origin.x + ',' + thisScene.layers.length;
+        }
+        """, scene: scene, currentLayerIndex: 0))
+        XCTAssertEqual(e.evaluate(current: ""), "c,7,3",
+                        "destroyLayer 이후에도 'c' 는 그대로 인덱스 2 를 유지해야(splice 시프트 금지)")
+    }
+
     /// thisScene.createLayer 는 종전과 동일하게 무해 스텁(JS 배열에만 추가, GPU 렌더 미연결)이지만
     /// 이제 크래시 없이 반환값을 계속 조작할 수 있어야 한다(경고 로그는 별도 채널 — 반환 동작만 단언).
     func testCreateLayerStubRemainsHarmlessAndUsable() throws {
