@@ -64,6 +64,15 @@ extension SceneRenderer {
         /// x=g_RimAmount, y=g_RimExponent, z=RIMLIGHTING on/off, w=SHADINGGRADIENT on/off(F274).
         var rim: SIMD4<Float>
     }
+    /// M(④): MSL `FogU3D`(ParticleShaders.pf3d_fog)와 레이아웃 일치 — Scene3DFrameUniform 의 eye+포그
+    /// 4필드를 발췌(파티클은 라이팅/섀도우 유니폼이 불필요해 FrameU 전체 대신 축소 구조체를 쓴다).
+    struct Particle3DFogUniform {
+        var eye: SIMD4<Float>
+        var fogDistanceColor: SIMD4<Float>
+        var fogDistanceParams: SIMD4<Float>
+        var fogHeightColor: SIMD4<Float>
+        var fogHeightParams: SIMD4<Float>
+    }
     struct Script3D { let key: String; let engine: TextScriptEngine }
 
     /// 3D 변환 계층의 한 노드(그룹 or 모델 오브젝트) — per-frame 스크립트 평가로 로컬 변환/가시성 갱신.
@@ -776,6 +785,25 @@ extension SceneRenderer {
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
+    /// M(④): 3D 파티클 씬 포그 변형 — particle3DPipeline 과 동형(블렌드/타깃 동일)이나 vert/frag 가
+    /// pv3d_fog_main/pf3d_fog(worldPos 전달 + FogU3D 소비). foggy 플래그(GPUParticleSystem.foggy)
+    /// 시스템만 이 파이프라인을 타고, 그 외엔 종전 particle3DPipeline 로 폴터(무회귀).
+    func particle3DFogPipeline(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
+        guard let lib = try? WapleProfiler.compile(ParticleShaders.source, { try device.makeLibrary(source: ParticleShaders.source, options: nil) }) else { return nil }
+        let pd = MTLRenderPipelineDescriptor()
+        pd.vertexFunction = lib.makeFunction(name: "pv3d_fog_main")
+        pd.fragmentFunction = lib.makeFunction(name: "pf3d_fog")
+        pd.depthAttachmentPixelFormat = .depth32Float
+        let a = pd.colorAttachments[0]!
+        a.pixelFormat = accPixelFormat
+        a.isBlendingEnabled = true
+        a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+        a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
     /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드. 성공 시 파이프라인, 실패 시 nil(→ Mesh3DShaders 폴터).
     /// 메시 정점(pos3+normal3+uv2, 8f)을 GLSLTranslator VIn(a_Position/a_TexCoord)에 어댑트하는 버텍스 디스크립터.
     /// 스키닝 메시는 CPU 프리스킨(prepare3DCustomSkinBuffers)으로 같은 8f 레이아웃을 맞춘 뒤 이 파이프라인을 탄다
@@ -1446,7 +1474,16 @@ extension SceneRenderer {
         }
         // 파티클: 불투명 메시/빌보드 뒤에 원근 빌보드로(뎁스 read-only). enc 는 프레임버퍼 빌보드 경로에서
         // 재할당됐을 수 있으므로 현재 enc 를 사용(같은 depthTex 바인딩 유지).
-        if hasParticles { encode3DParticles(time: time, liveDelta: particleDelta, viewProj: viewProj, right: right, up: camUp, nmap: nmap, into: enc, device: device) }
+        if hasParticles {
+            // M(④): frameUniform 의 포그 유니폼을 그대로 발췌 — 메시(mf_main 등)와 동일 소스(scene3DFog).
+            let particleFog = Particle3DFogUniform(
+                eye: frameUniform.cameraEye, fogDistanceColor: frameUniform.fogDistanceColor,
+                fogDistanceParams: frameUniform.fogDistanceParams, fogHeightColor: frameUniform.fogHeightColor,
+                fogHeightParams: frameUniform.fogHeightParams)
+            let fogActive = frameUniform.fogDistanceColor.w > 0.5 || frameUniform.fogHeightColor.w > 0.5
+            encode3DParticles(time: time, liveDelta: particleDelta, viewProj: viewProj, right: right, up: camUp,
+                              nmap: nmap, fog: particleFog, fogActive: fogActive, into: enc, device: device)
+        }
         enc.endEncoding()
         // H5: 볼륨 라이트 샤프트 — castVolumetrics 라이트를 additive로 합성(3D 씬 렌더 후).
         if let volumetricLightPass {
@@ -1623,15 +1660,19 @@ extension SceneRenderer {
     ///   횃불은 부모 "Torches" 정적 비가시라 드롭이 정답).
     /// - 렌더: 파티클 로컬 pos 를 M 으로 월드 변환 → 카메라 right/up 으로 쿼드 전개 → viewProj. 뎁스는
     ///   read-only(메시에 가려짐, 미기록 — WE 투명 관례). 블렌드는 머티리얼(additive/translucent) 재사용.
+    /// M(④): fog — 씬 포그가 실제로 활성(frame 레벨)일 때만 fog 파이프라인을 태운다. 비활성 씬은 종전
+    /// particle3DAdditive/Translucent(pf_main) 그대로라 완전 무회귀(코드 경로 자체가 안 바뀜).
     func encode3DParticles(time: Float, liveDelta: Float?, viewProj: simd_float4x4,
                            right: SIMD3<Float>, up: SIMD3<Float>,
                            nmap: [Int: Scene3DMath.Node],
+                           fog: Particle3DFogUniform, fogActive: Bool,
                            into enc: MTLRenderCommandEncoder, device: MTLDevice) {
         guard !particleSystems.isEmpty else { return }
         let snaps = stepParticleSnapshots(time: time, liveDelta: liveDelta)
         // ── 드로우(씬 order 오름차순 — 뎁스가 메시 가림 처리, 파티클 간 정렬은 미적용: WE depth-sort 근거 없음). ──
         guard let dstate = meshDepthState(test: true, write: false, device: device) else { return }
         var vp = viewProj
+        var fogUniform = fog
         let dbg = Self.debugFlag("WAPLE_PARTICLE3D_DEBUG")
         var drawn = 0, skipInvis = 0, skipParent = 0, skipEmpty = 0
         for idx in particleSystems.indices.sorted(by: { particleSystems[$0].order < particleSystems[$1].order }) {
@@ -1649,13 +1690,23 @@ extension SceneRenderer {
             let verts = particle3DVertices(snapshot, sys, m: m, right: right, up: up)
             let vertexCount = verts.count / 9
             guard vertexCount > 0, let vbuf = sys.scratch.load(verts, device: device) else { continue }
-            guard let pipe = sys.blendAdditive ? particle3DAdditive : particle3DTranslucent else { continue }
+            let useFog = fogActive && sys.foggy
+            let pipe: MTLRenderPipelineState?
+            if useFog {
+                pipe = sys.blendAdditive ? particle3DFogAdditive : particle3DFogTranslucent
+            } else {
+                pipe = sys.blendAdditive ? particle3DAdditive : particle3DTranslucent
+            }
+            guard let pipe else { continue }
             enc.setRenderPipelineState(pipe)
             enc.setDepthStencilState(dstate)
             enc.setCullMode(.none)
             enc.setVertexBuffer(vbuf, offset: 0, index: 0)
             enc.setVertexBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 1)
             enc.setFragmentTexture(sys.texture, index: 0)
+            if useFog {
+                enc.setFragmentBytes(&fogUniform, length: MemoryLayout<Particle3DFogUniform>.stride, index: 0)
+            }
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
         }
         if dbg { NSLog("%@", "[Particle3D] t=\(time) drawn=\(drawn) skipInvis=\(skipInvis) skipParent=\(skipParent) skipEmpty=\(skipEmpty) of \(particleSystems.count)") }

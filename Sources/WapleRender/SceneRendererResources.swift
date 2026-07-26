@@ -1178,6 +1178,8 @@ extension SceneRenderer {
             // 감사 V07: 알베도 NoInterpolation(TexImage flags bit0) — encodeParticle 이 nearest 변형
             // 파이프라인을 선택(레이어 buildLayers 의 GPULayer.noInterp 배선과 동형).
             g.noInterp = resolveTextureNoInterpolation(def.material?.textureName, package: package)
+            // M(④): combos.FOG(기본 1) — encode3DParticles 가 pf3d_fog 파이프라인 선택에 사용.
+            g.foggy = def.material?.foggy ?? true
             return g
         }
         for (i, sp) in doc.particles.enumerated() {

@@ -79,6 +79,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         var normalRG88: Bool = false   // 노멀 텍스처가 WE RG88(2채널) 포맷 → 셰이더 언팩 분기
         /// 감사 V07: 알베도 NoInterpolation(TexImage flags bit0) — encodeParticle 이 nearest 변형 선택.
         var noInterp: Bool = false
+        /// M(④): combos.FOG(기본 1) — 3D 파티클 렌더(pf3d_fog)가 씬 포그에 참여할지(encode3DParticles).
+        /// 2D 파티클 경로는 씬 포그 개념이 없어 무영향(genericparticle.frag FOG 는 v_ViewDir 기반 3D 전용).
+        var foggy: Bool = true
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
     }
     /// 텍스트 레이어(시계/날짜/곡정보): 흰 글리프 텍스처 + tint. 콘텐츠 스크립트(engine)는 매 프레임 재평가
@@ -920,6 +923,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     // 3D 파티클(원근 빌보드) — bgra8+depth32 타깃용(2D additivePipeline 은 acc 포맷이라 별도).
     var particle3DAdditive: MTLRenderPipelineState?
     var particle3DTranslucent: MTLRenderPipelineState?
+    /// M(④): 씬 포그 참여(GPUParticleSystem.foggy) 3D 파티클 전용 변형(pv3d_fog_main/pf3d_fog).
+    var particle3DFogAdditive: MTLRenderPipelineState?
+    var particle3DFogTranslucent: MTLRenderPipelineState?
     /// 3D 파티클 시뮬의 마지막 진행 시각(캡처 전용 — 라이브는 클램프 dt 로 구동하며 clock 미사용). mount/캡처 시작에서 0.
     var particle3DClock: Float = 0
     /// 직전 stepParticleSnapshots 가 밟은 서브스텝 수(테스트 관측 — 라이브 프레임당 유한 스텝 보장 검증, 감사 C1).
@@ -1154,6 +1160,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     particle3DClock = 0   // 시뮬 t=0 기준. encode3D 가 매 프레임 time 까지 서브스텝(캡처 단일 프레임 포함).
                     particle3DAdditive = particle3DPipeline(additive: true, device: device)
                     particle3DTranslucent = particle3DPipeline(additive: false, device: device)
+                    particle3DFogAdditive = particle3DFogPipeline(additive: true, device: device)
+                    particle3DFogTranslucent = particle3DFogPipeline(additive: false, device: device)
                 }
             }
         }
@@ -1771,6 +1779,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView?.removeFromSuperview()
         mtkView = nil; layers = []; particleSystems = []; hasParticles = false
         particle3DAdditive = nil; particle3DTranslucent = nil; particle3DClock = 0  // 3D 파티클 상태 리셋(마운트 재사용)
+        particle3DFogAdditive = nil; particle3DFogTranslucent = nil   // M(④)
         forwardLit = false; litPipeline = nil; spriteFramePipeline = nil  // 라이트/스프라이트 추출 상태 리셋(마운트 간 스테일 방지)
         textLayers = []; hasScriptedText = false; hasAnimations = false
         sceneScript?.localStorageStore?.flush()  // F810: 마운트 해제 시 디바운스 대기분 즉시 기록(드래그 위치 유실 방지)
