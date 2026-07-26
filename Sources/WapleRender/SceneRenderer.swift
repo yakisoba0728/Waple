@@ -621,10 +621,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var volumetricLightPass: VolumetricLightPass?
     /// HDR 경로 실효 게이트(2D·3D 공통). 3D 씬도 acc/메시/파티클 파이프라인이 accPixelFormat(float)로
     /// 승격되므로(mesh3DPipeline/particle3DPipeline) HDRBloomPass 에 도달 — 유일 HDR 골든(3470948192=3D) 대조 가능.
-    var hdrActive: Bool { sceneIsHDR }
+    /// P①: accPixelFormat(레이어/메시/파티클 파이프라인 어태치먼트 포맷)과 동일 조건으로 좁힘 —
+    /// 종전엔 sceneIsHDR 단독이라 quality low/medium + hdr 씬에서 accPixelFormat 은 bgra8Unorm 인데
+    /// pooledOffscreen(bgra:true)(:242)의 float 승격은 hdrActive 만 보고 rgba16Float 를 만들어
+    /// 렌더 타깃-파이프라인 포맷이 불일치했다(감사 P① id 3/5/17/36/45, quality 키 보유 씬 0/460 —
+    /// 잠복이었으나 구성 가능한 입력). 이제 hdrActive 는 accPixelFormat 이 실제로 float 일 때만 true —
+    /// pooledOffscreen/finalizeScene(HDR 블룸·hdrPost 분기)이 전부 이 값 하나로 정합.
+    var hdrActive: Bool { sceneIsHDR && accPixelFormat == .rgba16Float }
     /// acc 를 타깃으로 하는 파이프라인(f_main/f_blend/f_lit/particle/text)의 컬러 어태치먼트 포맷.
     /// HDR 이면 float(>1 보존) — mount 에서 sceneIsHDR 확정 후 파이프라인 생성에 사용.
     /// H7: 품질 설정 반영 — low/medium 은 hdr 여도 bgra8Unorm(성능 우선), high/ultra 는 hdr 시 rgba16Float.
+    /// P①: 단일 소스 — hdrActive/pooledOffscreen 의 float 승격 판정이 이 계산을 그대로 미러링한다(위 참조).
     var accPixelFormat: MTLPixelFormat {
         switch sceneQuality {
         case .low, .medium: return .bgra8Unorm
