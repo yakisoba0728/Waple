@@ -663,11 +663,13 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertLessThan(luma, 0.6, "_rt_FullFrameBuffer 가 씬 스냅샷에 바인드되면 배경(빨강, luma≈0.33) — 미바인드면 흰색 폴백(luma≈1.0)")
     }
 
-    /// X-⑤: g_TexelSize 는 이펙트 **출력(dst)** 해상도 기준(WE gaussian.vert `ratio = g_TexelSize *
-    /// g_Texture0Resolution` 실측 — bokeh_blur 최종 패스가 tex0=scale4 다운샘플 fbo 를 bind 해도 그 결과가
-    /// 소스/타깃 스케일비(1/4)가 되려면 g_TexelSize=1/dst 여야 성립). scale:4 다운샘플 fbo 를 거친 뒤
-    /// 최종(타깃 없음=dst) 패스가 g_TexelSize.x 를 직접 색으로 인코딩 — dst(레이어 텍스처 8×8) 기준이면
-    /// 0.125, 옛 tex0(다운샘플 fbo 2×2) 근사면 4× 과대(0.5)가 나온다.
+    /// X-⑤: g_TexelSize 를 이펙트 **출력(dst)** 해상도 기준으로 채택한 규약을 코드가 실제로 그렇게
+    /// 구현했는지 고정(pin)하는 회귀 테스트다 — 채택 근거(WE gaussian.vert `ratio = g_TexelSize *
+    /// g_Texture0Resolution`)는 정적으로는 판별력이 없어 "실측으로 확정"된 사실이 아니라 **라이브
+    /// A/B 재검증 대기 중인 채택안**임을 GLSLTranslator.swift 의 g_TexelSize 치환부 주석에 남겼다.
+    /// scale:4 다운샘플 fbo 를 거친 뒤 최종(타깃 없음=dst) 패스가 g_TexelSize.x 를 직접 색으로
+    /// 인코딩 — 이 규약(dst 기준, 레이어 텍스처 8×8)이면 0.125, 구 tex0(다운샘플 fbo 2×2) 근사면
+    /// 4× 과대(0.5)가 나온다.
     func testTexelSizeUsesEffectOutputNotDownscaledSource() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let vert = """
@@ -725,10 +727,11 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
         NSLog("%@", "[Waple] g_TexelSize probe R=\(c.redComponent)")
-        // 레이어 베이스 텍스처(w.tex, solidTex 기본 8×8) = 효과 dst 크기. dst 기준(1/8=0.125)이 정답 —
-        // 다운샘플 소스(scale4→2×2, 1/2=0.5) 근사로 되돌아가면 4× 과대돼 이 어서션이 실패한다.
+        // 레이어 베이스 텍스처(w.tex, solidTex 기본 8×8) = 효과 dst 크기. 채택 규약(dst 기준, 1/8=0.125)
+        // 을 코드가 지키는지 고정 — 다운샘플 소스(scale4→2×2, 1/2=0.5) 근사로 되돌아가면 4× 과대돼
+        // 이 어서션이 실패한다(규약 자체의 최종 확정은 라이브 A/B, BACKLOG.md 시각 충실도 표 참조).
         XCTAssertEqual(Double(c.redComponent), 0.125, accuracy: 0.05,
-                      "g_TexelSize 는 다운스케일 소스(1/2)가 아니라 이펙트 dst(1/8) 기준이어야 함 — 4× 과대면 결함 재현")
+                      "g_TexelSize 는 다운스케일 소스(1/2)가 아니라 채택된 이펙트 dst(1/8) 규약을 따라야 함 — 4× 과대면 회귀")
     }
 
     /// X-⑥: 이펙트 `visible` 스크립트가 per-frame 재평가돼야 한다. value:false 로 시작해도 script 가

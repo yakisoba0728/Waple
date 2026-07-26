@@ -15,11 +15,13 @@ final class PointerUVTests: XCTestCase {
     /// 미주입(헤드리스/캡처)은 0 유지 = 무클릭 = 170씬 A/B 무변화 가드.
     func testPointerButtonStateFlowsToEngineU() {
         let r = SceneRenderer()
-        XCTAssertEqual(r.engineUniform(time: 0, texRes: [])[22], 0, "기본 무클릭 → 0(캡처 가드)")
+        // targetRes 는 이 테스트와 무관(g_PointerState 만 확인) — 명시 필수 인자라 더미값 전달.
+        let noTarget = SIMD4<Float>(1, 1, 1, 1)
+        XCTAssertEqual(r.engineUniform(time: 0, texRes: [], targetRes: noTarget)[22], 0, "기본 무클릭 → 0(캡처 가드)")
         r.setPointerButtonDown(true)
-        XCTAssertEqual(r.engineUniform(time: 0, texRes: [])[22], 1, "버튼 다운 → g_PointerState.z 슬롯 1")
+        XCTAssertEqual(r.engineUniform(time: 0, texRes: [], targetRes: noTarget)[22], 1, "버튼 다운 → g_PointerState.z 슬롯 1")
         r.setPointerButtonDown(false)
-        XCTAssertEqual(r.engineUniform(time: 0, texRes: [])[22], 0, "버튼 업 → 0")
+        XCTAssertEqual(r.engineUniform(time: 0, texRes: [], targetRes: noTarget)[22], 0, "버튼 업 → 0")
     }
 }
 

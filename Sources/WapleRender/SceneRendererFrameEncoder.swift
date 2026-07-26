@@ -34,11 +34,15 @@ extension SceneRenderer {
     /// + texWrap[8](F162/F163: 슬롯별 1=clamp/0=repeat, pass.texWrap 그대로 — 빌드 시 고정이라 런타임 재계산 불요)
     /// + texFilter[8](감사 V07: 슬롯별 1=nearest/0=linear, pass.texFilter 그대로 — TexImage.noInterpolation)
     /// + layerTint[4](H1: 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값) + X-⑤ targetRes[4]
-    /// (이펙트 출력(dst) 해상도, 전 패스 불변 — g_TexelSize/g_TexelSizeHalf 전용, 소스 텍스처 아님).
+    /// (g_TexelSize/g_TexelSizeHalf 전용 — 이펙트 체인 경로는 출력(dst) 해상도 고정값, 전 패스 불변).
     /// 레이아웃은 GLSLTranslator.assemble 의 EngineU 구조체 방출과 동기 필수.
+    /// targetRes 는 의도적으로 기본값 없음(교차배치 리뷰 must_fix) — 신규 호출부는 자기 렌더 타깃
+    /// 해상도를 명시 전달할 것(예: 3D 커스텀 메시 경로라면 소스 texRes.first 근사). 기본값 (1,1,1,1)
+    /// 을 되살리면 그 호출부만 g_TexelSize=1.0 으로 조용히 깨진다 — 컴파일 에러가 나면 값을 채울 것,
+    /// 파라미터를 다시 옵셔널로 되돌리지 말 것.
     func engineUniform(time: Float, texRes: [SIMD4<Float>], texWrap: [Float] = [], texFilter: [Float] = [],
                        layerTint: SIMD4<Float> = SIMD4(1, 1, 1, 1),
-                       targetRes: SIMD4<Float> = SIMD4(1, 1, 1, 1),
+                       targetRes: SIMD4<Float>,
                        mvp: simd_float4x4? = nil) -> [Float] {
         var e = [Float](repeating: 0, count: 16 + 8 + 32 + 8 + 8 + 4 + 4)
         let m = mvp ?? simd_float4x4(1)
@@ -1097,8 +1101,12 @@ extension SceneRenderer {
                     enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0)
                 }
             }
-            // X-⑤ 스코프 밖(레이어 커스텀 셰이더는 다운스케일 멀티패스 체인이 없어 tex0=타깃이 통례) —
-            // 종전 tex0 근사를 그대로 targetRes 에 실어 무회귀 유지.
+            // X-⑤ 스코프 밖: 이 경로는 tex0(custom.texRes.first, 레이어 자산 텍스처 해상도)를 그대로
+            // targetRes 에 실어 무회귀만 유지한다. 이펙트 체인 경로(위 g_TexelSize 정본)와 규약이
+            // 이원화된 상태이며, tex0=타깃이라는 근거는 확인되지 않았다(레이어 자산 해상도와 합성
+            // RT 해상도가 실제로 다른 경우가 흔함) — 알려진 미검증 괴리로 남겨둔 것이지 옳다고
+            // 확인된 근사가 아니다. 값을 바꾸는 것은 이번 배치 스코프 밖(무회귀 우선), 필요 시 라이브
+            // A/B 로 별도 재검증.
             let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
                                     texFilter: custom.texFilter, layerTint: tint,
                                     targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: m)
@@ -1565,9 +1573,11 @@ extension SceneRenderer {
             // 멀티패스: 이름 있는 FBO(다운스케일 또는 X-① 절대 크기)를 풀에서 할당하고, 각 패스를
             // target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
-            // X-⑤: g_TexelSize/g_TexelSizeHalf = 이펙트 출력(dst) 1텍셀, 체인 전 패스 불변(WE gaussian.vert
-            // 실측 근거는 GLSLTranslator.assemble 의 EngineU 선언 주석) — 다운스케일 fbo 를 타깃/소스로 쓰는
-            // 패스에서도 종전 tex0 근사(4× 과대 오프셋, bokeh 12씬)가 아니라 이 값을 쓴다.
+            // X-⑤: g_TexelSize/g_TexelSizeHalf = 이펙트 출력(dst) 1텍셀, 체인 전 패스 불변 — 채택된
+            // 정본이며 "실측으로 확정"은 아니다(근거 판별력 한계는 GLSLTranslator.assemble 의
+            // EngineU/g_TexelSize 주석 참조). 다운스케일 fbo 를 타깃/소스로 쓰는 패스에서도 종전 tex0
+            // 근사(4× 과대 오프셋)가 아니라 이 값을 쓴다 — bokeh_blur 12씬 블러 폭은 라이브 A/B
+            // 판독 대기(BACKLOG.md 시각 충실도 표).
             let targetRes = SIMD4<Float>(Float(baseW), Float(baseH), Float(baseW), Float(baseH))
             var fboTex: [MTLTexture] = []
             for spec in fboSpecs {

@@ -1178,16 +1178,28 @@ public enum GLSLTranslator {
         if name == "g_PointerState" { return "float4(0.0, 0.0, eng.pointerLastAndPad.z, 0.0)" }
         // F614: g_Screen = (width, height, width/height) — tex0(texRes[0]) 근사 유지(이펙트 패스는
         // tex0=framebuffer=타깃 크기가 통례). X-⑤ 스코프 밖: g_TexelSize 와 달리 dst 전용 필드로
-        // 옮기지 않았다(감사 근거 없음 — g_Screen 은 별건).
+        // 옮기지 않았다(감사 근거 없음 — g_Screen 은 별건). 교차배치 참고: 다른 배치가 g_Screen.z=
+        // aspect(w/h) 로 반사 오프셋을 스케일하는 소비처를 추가했을 수 있음 — 이 규약은 아직 한 곳에
+        // 고정 문서화되지 않았으니 g_Screen 을 건드리는 다음 변경 전에 실제 소비처를 재확인할 것.
         if name == "g_Screen" { return "float3(eng.texRes[0].xy, eng.texRes[0].x / eng.texRes[0].y)" }
         if name == "g_ModelViewProjectionMatrix" || name == "g_EffectModelViewProjectionMatrix" { return "eng.mvp" }
         // 레이어 모델/기타 행렬(...Matrix / ...MatrixInverse 등): 효과 쿼드 기준 항등이 정답
         // (레이어 회전·스케일은 v1 미반영 — 무회전 레이어 정확. 항등의 역/역전치도 항등).
         if name.hasPrefix("g_"), name.contains("Matrix") { return "float4x4(1.0)" }
-        // X-⑤: WE g_TexelSize = 이펙트 **출력(dst)** 1텍셀(UV), 체인 전 패스에 걸쳐 고정값(패스별 타깃도
-        // tex0 도 아님 — WE gaussian.vert 실측으로 확정, EngineU 선언 주석 참조). SceneRendererFrameEncoder
-        // 가 applyEffect 진입 시 dst 1 회로 eng.targetRes 를 채운다. 스케일드 fbo 를 패스 타깃/소스로 쓰는
-        // 체인(bokeh 등)에서 종전 tex0 근사(4× 과대 블러) 해소.
+        // X-⑤: 이펙트 체인 경로는 g_TexelSize = 이펙트 **출력(dst)** 1텍셀(UV), 체인 전 패스에 걸쳐
+        // 고정값(패스별 타깃도 tex0 도 아님) 규약으로 채택했다. 근거는 WE gaussian.vert
+        // `ratio = g_TexelSize * g_Texture0Resolution` — 단, 이 근거는 **판별력이 없다**: ratio 는
+        // ratio.y/ratio.x 로만 소비되므로 dst 기준·tex0 기준 어느 해석이든 같은 값(1)이 나온다.
+        // bokeh_blur 7패스 전수 대조에서도 tex0≠target 인 유일한 소비 패스가 두 해석에서 우연히 같은
+        // 스케일비를 내 정적으로 더 갈리지 않는다. 확실한 것은 downsample.vert 가 소스 텍셀이 필요할
+        // 땐 g_TexelSize 가 아니라 `1.0/g_Texture0Resolution.zw` 를 쓴다는 것뿐(="소스 아님"만 지지).
+        // 따라서 이 규약은 "실측으로 확정"이 아니라 **채택된 정본(가장 근거 있는 후보) + 라이브 A/B
+        // 판독 대기 항목** — bokeh_blur 12씬의 블러 폭이 게이트다(BACKLOG.md 시각 충실도 표 참조).
+        // SceneRendererFrameEncoder 가 applyEffect 진입 시 dst 1 회로 eng.targetRes 를 채운다.
+        // 스케일드 fbo 를 패스 타깃/소스로 쓰는 체인(bokeh 등)에서 종전 tex0 근사(4× 과대 블러) 대신
+        // 이 정본을 쓴다. 레이어 커스텀 셰이더 경로는 여전히 tex0 근사(다른 정본) — 아래 X-⑤ 스코프
+        // 밖 주석 참조. 같은 심볼이 경로별로 다른 값을 낸다는 뜻이며, 어느 쪽도 실측으로 확정되지
+        // 않았으니 둘 다 향후 라이브 A/B 로 재검증 대상이다.
         // 머티리얼로 오인되면 기본값 (0,0) → 0/0=NaN UV → 검정(3544152633 ×0.4 luma 손실 근원) — isEngine 등재 유지.
         if name == "g_TexelSize" { return "(1.0 / eng.targetRes.xy)" }
         if name == "g_TexelSizeHalf" { return "(0.5 / eng.targetRes.xy)" }
@@ -1586,8 +1598,8 @@ public enum GLSLTranslator {
         // Swift 측 단일 빌더 SceneRendererFrameEncoder.engineUniform 과 레이아웃 동기 필수.
         // H1: layerTint = 레이어 color×brightness/alpha — 이펙트는 (1,1,1,1) 기본값으로 물변경.
         // X-⑤: targetRes(layerTint 뒤 추가 — 앞 오프셋 불변) = 이펙트 **출력(dst)** 해상도, 전 패스 불변.
-        // WE 실물 gaussian.vert `ratio = g_TexelSize * g_Texture0Resolution`(bokeh_blur 최종 패스: tex0=
-        // _downscaled1(scale4), 그 결과가 소스/타깃 스케일비 1/4 이 되려면 g_TexelSize=1/dst 여야 성립) 로 확정.
+        // 채택 근거·이 근거의 판별력 한계·레이어 커스텀 경로와의 규약 이원화·라이브 A/B 대기 상태는
+        // 위 g_TexelSize 치환부(computeUV 근처) 주석 참조 — "실측으로 확정" 아님.
         let eng = "struct EngineU { float4x4 mvp; float4 timeAndPad; float4 pointerLastAndPad; float4 texRes[8]; float4 texWrap[2]; float4 texFilter[2]; float4 layerTint; float4 targetRes; };\n"
         // UV 암시적 절단(HLSL 방언 호환): 오버로드로 타입별 안전 절단.
         let uvHelpers = """
