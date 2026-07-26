@@ -1055,17 +1055,22 @@ extension SceneDocument {
                         }
                     }
                 }
-                // H2: usershadervalues — 머티리얼 상수 이름 → user property 키 매핑 파스·보존.
+                // C⑦a: usershadervalues — 실물 규약은 {JSON 키=user property 키, JSON 값=셰이더 상수/
+                // 머티리얼 토큰 이름}(fantasticcar body.json usershadervalues:{"carbodycolor":"paintcolor"},
+                // project.json 에 carbodycolor 만 유저프로퍼티로 등재 — car.frag 어노테이션 "material":
+                // "paintcolor" 로 교차검증). 이전 구현은 방향이 반대(k=토큰,v=유저키)라 userProps 룩업이
+                // 항상 미스했다. materialUserShaderValues 는 하류(:roughness/:metallic/:speculartint,
+                // GLSLTranslator sceneKey)와의 계약대로 여전히 [토큰: userKey]로 채운다.
                 // constantshadervalues 파스 후 적용해야 userProps 오버라이드가 기본값을 덮는다.
                 if let usv = p0["usershadervalues"] as? [String: Any] {
-                    for (k, v) in usv {
-                        guard let userKey = v as? String else { continue }
-                        materialUserShaderValues[k] = userKey
+                    for (userKey, v) in usv {
+                        guard let token = v as? String else { continue }
+                        materialUserShaderValues[token] = userKey
                         guard let raw = userProps[userKey] else { continue }
-                        if let f = float(raw) { materialConstants[k] = [f] }
+                        if let f = float(raw) { materialConstants[token] = [f] }
                         else if let s = raw as? String {
                             let f = floatList(s)
-                            if !f.isEmpty { materialConstants[k] = f }
+                            if !f.isEmpty { materialConstants[token] = f }
                         }
                     }
                     // 기존 PBR 필드도 usershadervalues 반영(roughness/metallic/speculartint).
@@ -1857,16 +1862,17 @@ extension SceneDocument {
                         }
                     }
                 }
-                // usershadervalues: 셰이더 상수 이름 → user property 키. 파스 시점에 userProps 룩업해
-                // constantshadervalues 와 동일 슬롯에 병합(런타임 변경은 현재 아키텍처에서 정적 해석).
+                // C⑦a: usershadervalues — {JSON 키=user property 키, JSON 값=셰이더 상수 토큰}(SceneDocument
+                // 이미지 레이어 경로와 동일 방향 정정, 상세 근거는 그쪽 주석 참조). 파스 시점에 userProps
+                // 룩업해 constantshadervalues 와 동일 슬롯에 병합(런타임 변경은 현재 아키텍처에서 정적 해석).
                 if let usv = passDict["usershadervalues"] as? [String: Any] {
-                    for (k, v) in usv {
-                        guard let userKey = v as? String else { continue }
+                    for (userKey, v) in usv {
+                        guard let token = v as? String else { continue }
                         if let raw = userProps[userKey] {
-                            if let f = float(raw) { p.constants[k] = [f] }
+                            if let f = float(raw) { p.constants[token] = [f] }
                             else if let s = raw as? String {
                                 let f = floatList(s)
-                                if !f.isEmpty { p.constants[k] = f }
+                                if !f.isEmpty { p.constants[token] = f }
                             }
                         }
                     }

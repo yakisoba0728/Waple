@@ -1199,7 +1199,10 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertTrue(doc.layers[0].materialConstants.isEmpty)
     }
 
-    /// H2: usershadervalues 가 머티리얼 상수를 user property 로 오버라이드.
+    /// H2/C⑦a: usershadervalues 가 머티리얼 상수를 user property 로 오버라이드.
+    /// 실물 규약(fantasticcar body.json)은 {JSON 키=user property 키, JSON 값=셰이더 상수 토큰} —
+    /// "tintcolor"(유저프로퍼티) → "color"(셰이더 상수 토큰) 처럼 서로 다른 이름일 때만 방향 결함이
+    /// 드러난다(같은 이름 roughness/metallic 은 방향이 반대여도 우연히 일치해 무증상이었다).
     func testParsesMaterialUserShaderValues() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
@@ -1207,7 +1210,7 @@ final class SceneDocumentTests: XCTestCase {
                      "angles":"0 0 0","alpha":1.0,"color":"1 1 1","brightness":1.0,"visible":true}]}
         """
         let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
-        let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"],"constantshadervalues":{"roughness":0.5,"metallic":0.2,"color":"1 1 1"},"usershadervalues":{"roughness":"roughness","metallic":"metallic","color":"tintcolor"}}]}"#
+        let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"],"constantshadervalues":{"roughness":0.5,"metallic":0.2,"color":"1 1 1"},"usershadervalues":{"roughness":"roughness","metallic":"metallic","tintcolor":"color"}}]}"#
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
         let userProps: [String: Any] = ["roughness": 0.9, "metallic": 0.7, "tintcolor": "0.1 0.2 0.3"]
         let doc = try SceneDocument.parse(package: p, userProps: userProps)

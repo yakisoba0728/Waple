@@ -432,6 +432,19 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(m.refractAmount, -0.1, accuracy: 1e-6)
     }
 
+    // C⑦a: usershadervalues 가 refract_amount 를 user property 로 오버라이드 — 실물 규약은
+    // {JSON 키=user property 키, JSON 값=셰이더 상수 토큰}(SceneDocument 이미지 레이어 경로와 동일 방향).
+    // 이전 구현은 usv[토큰]으로 조회해(방향 반대) 사용자가 고른 굴절 강도가 항상 무시됐다.
+    func testRefractAmountOverriddenByUserShaderValue() {
+        let m = ParticleMaterial.parse(json("""
+        {"passes":[{"blending":"translucent","combos":{"REFRACT":1},
+          "constantshadervalues":{"ui_editor_properties_refract_amount":0.1},
+          "usershadervalues":{"refractStrength":"ui_editor_properties_refract_amount"},
+          "textures":["particle/drop","particle/drop_normal"]}]}
+        """), userProps: ["refractStrength": 0.42])
+        XCTAssertEqual(m.refractAmount, 0.42, accuracy: 1e-6, "user property 오버라이드가 반영돼야")
+    }
+
     // 비굴절 머티리얼: refract=false, 노멀 nil, refract_amount 기본 0.05. + REFRACT 콤보라도 노멀 없으면 게이트 off.
     func testNonRefractAndRefractWithoutNormal() {
         let plain = ParticleMaterial.parse(json(#"{"passes":[{"blending":"additive","textures":["particle/snow"]}]}"#))
