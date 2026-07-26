@@ -1,5 +1,6 @@
 import Foundation
 import JavaScriptCore
+import WapleCore
 
 public struct SceneScriptLayerDescriptor {
     public var name: String
@@ -51,6 +52,8 @@ public final class SceneScriptContext {
     public weak var soundTransport: SceneAudioPlayer?
     /// F810: 씬 스크립트 localStorage 디스크 저장소. nil(기본) = 종전 인메모리 전용(헤드리스/테스트 무회귀).
     public let localStorageStore: ScriptLocalStorage?
+    /// E1(⑤): thisScene.createLayer 무해 스텁 경고 — 레이어 이름별 1회만(매 프레임 재호출 스팸 방지).
+    private var warnedCreateLayerNames: Set<String> = []
 
     /// width/height = 프로젝션(캔버스) 크기 — thisScene.size/screenSize/resolution·engine.canvasSize 의
     /// 실값(기본 1920×1080: 기존 호출부 무회귀). SceneRenderer mount 가 doc.projectionWidth/Height 전달.
@@ -70,6 +73,7 @@ public final class SceneScriptContext {
         ctx.evaluateScript("__setCanvasSize(\(TextScriptEngine.jsNumber(width)), \(TextScriptEngine.jsNumber(height)));")
         if TextScriptEngine.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
         installSoundBridge(ctx)
+        installWarnBridge(ctx)
         if !layers.isEmpty {
             ctx.evaluateScript("__setSceneLayers(\(Self.layersJSONArray(layers)));")
         }
@@ -108,6 +112,16 @@ public final class SceneScriptContext {
         ctx.setObject(isPlaying, forKeyedSubscript: "__wapleSoundIsPlaying" as NSString)
         ctx.setObject(getVolume, forKeyedSubscript: "__wapleSoundGetVolume" as NSString)
         ctx.setObject(setVolume, forKeyedSubscript: "__wapleSoundSetVolume" as NSString)
+    }
+
+    /// E1(⑤): thisScene.createLayer 무해 스텁 경고 브리지 — 이름별 1회(스팸 방지).
+    private func installWarnBridge(_ ctx: JSContext) {
+        let warnCreateLayer: @convention(block) (String) -> Void = { [weak self] name in
+            guard let self, !self.warnedCreateLayerNames.contains(name) else { return }
+            self.warnedCreateLayerNames.insert(name)
+            WapleLog.warn("[Waple] thisScene.createLayer(\"\(name)\") — JS 배열에만 추가되고 GPU 렌더 경로가 없어 화면에 나타나지 않습니다")
+        }
+        ctx.setObject(warnCreateLayer, forKeyedSubscript: "__wapleWarnCreateLayer" as NSString)
     }
 
     /// 오디오 스펙트럼 실데이터 주입(채널당 64빈): __audioBuffer 를 제자리 갱신(left/right·16/32/64·spectrum)
@@ -1603,7 +1617,14 @@ public final class TextScriptEngine {
             getTransformMatrix: function() { return __layerWorldMatrix(this); },
             animationLayerCount: 0,   // __setSceneLayers 가 디스크립터 값으로 덮어씀(F708)
             getAnimationLayerCount: function() { return this.animationLayerCount; },
-            getEffect: function() { return __noopProxy(); }
+            getEffect: function() { return __noopProxy(); },
+            // E1(⑤): ILayer.getVideoTexture/getParticleSystem/emitParticles 안전 심 — 종전 부재라
+            // 평객체 호출 즉시 TypeError 로 init/update 전체가 죽고(정적 visible=false 레이어가 영구
+            // 미표시로 굳는 등) 이후 스크립트 로직이 실행되지 않았다. getEffect 와 동일하게 noopProxy
+            // 반환(임의 체인 호출 안전 — 실 비디오/파티클 연결은 렌더 경로 책임, 보류).
+            getVideoTexture: function() { return __noopProxy(); },
+            getParticleSystem: function() { return __noopProxy(); },
+            emitParticles: function() { return this; }
         };
         return layer;
     }
@@ -1630,7 +1651,10 @@ public final class TextScriptEngine {
             createAnimationLayer: function() { return __makeAnimationLayer(); },
             getTransformMatrix: function() { return __mat4Identity(); },   // F707: 루트는 항등
             getAnimationLayerCount: function() { return 0; },              // F708
-            getEffect: function() { return __noopProxy(); }
+            getEffect: function() { return __noopProxy(); },
+            getVideoTexture: function() { return __noopProxy(); },        // E1(⑤)
+            getParticleSystem: function() { return __noopProxy(); },
+            emitParticles: function() { return root; }
         };
         root.parent = root;
         return root;
@@ -1702,10 +1726,32 @@ public final class TextScriptEngine {
                 return out;
             },
             createLayer: function(name) {
+                // E1(⑤): 무해 스텁 — JS layers 배열에만 추가(실 GPU 렌더 경로 연결은 보류, 별도 갭).
+                // 저작자가 이 반환 레이어를 이후 조작해도 화면엔 나타나지 않으므로 1회 경고.
+                if (typeof __wapleWarnCreateLayer === 'function') { __wapleWarnCreateLayer(String(name || '')); }
                 var l = __makeLayer();
                 l.name = String(name || '');
                 this.layers.push(l);
                 return l;
+            },
+            // E1(⑤): IScene.destroyLayer/getLayerCount/getLayerByID 안전 심 — 종전 부재라
+            // `thisScene.destroyLayer(x)` 호출 즉시 TypeError 로 update 전체가 죽었다(392).
+            destroyLayer: function(l) {
+                var idx = -1;
+                if (typeof l === 'string') {
+                    for (var i = 0; i < this.layers.length; i += 1) { if (this.layers[i].name === l) { idx = i; break; } }
+                } else if (l) {
+                    idx = this.layers.indexOf(l);
+                }
+                if (idx >= 0) { this.layers.splice(idx, 1); }
+                return idx >= 0;
+            },
+            getLayerCount: function() { return this.layers.length; },
+            getLayerByID: function(id) {
+                for (var i = 0; i < this.layers.length; i += 1) {
+                    if (this.layers[i].__wapleId === id) { return this.layers[i]; }
+                }
+                return null;
             },
             sortLayer: function() { return this; },
             getInitialLayerConfig: function() { return { origin: new Vec3(0, 0, 0), angles: new Vec3(0, 0, 0), scale: new Vec3(1, 1, 1) }; },
