@@ -553,7 +553,10 @@ extension SceneRenderer {
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
-    /// 규약: textures[] 첫 non-null 이름 → "materials/<이름>.tex"(resolveTexture 폴백 포함).
+    /// 규약: textures[0] = albedo 슬롯(WE generic4.frag g_Texture0) → "materials/<이름>.tex"
+    /// (resolveTexture 폴백 포함). null/공백/부재는 흰 1×1 폴백(resolveTexture 내장) — textures[1]
+    /// (노멀맵)로 흘러들어가지 않는다(③: 종전 "첫 non-null 문자열" 규약은 슬롯을 무시해 textures[0]=null
+    /// 인 재질에서 노멀맵이 알베도로 승격되는 결함이 있었다).
     /// nil = 디바이스 텍스처 생성 실패(흰색 1x1 폴백조차 불가)뿐 — 호출자는 서브메시 스킵.
     func loadMesh3DMaterial(_ path: String, package: ScenePackage, device: MTLDevice,
                             compositeImageTextures: [Int: String] = [:]) -> Mesh3DMaterialInfo? {
@@ -591,7 +594,11 @@ extension SceneRenderer {
         if let d = quietAssetData(path, package: package),
            let j = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
            let p0 = (j["passes"] as? [Any])?.first as? [String: Any] {
-            texName = (p0["textures"] as? [Any])?.compactMap { $0 as? String }.first { !$0.isEmpty }
+            // ③: textures[0] 슬롯만 albedo 후보 — "첫 non-null 문자열"(구규약)이면 textures[0]=null 인
+            // 재질(예: {"textures":[null,"foil_silver_normal"]})에서 slot1 노멀맵이 알베도로 승격된다.
+            if let firstSlot = (p0["textures"] as? [Any])?.first as? String, !firstSlot.isEmpty {
+                texName = firstSlot
+            }
             cullBack = (p0["cullmode"] as? String) != "nocull"
             let blend = (p0["blending"] as? String) ?? "normal"
             additive = blend == "additive"
