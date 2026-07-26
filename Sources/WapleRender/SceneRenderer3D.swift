@@ -1373,10 +1373,12 @@ extension SceneRenderer {
                     }
                     let pipe: MTLRenderPipelineState
                     var meshVBuf = mesh.vbuf
+                    var usedCustom = false
                     // H1 Phase 2: 커스텀 셰이더 파이프라인 우선. 스키닝 메시는 CPU 프리스킨(8f) 버퍼로
                     // rigid 입력 계약을 맞춘다(프리스킨 실패 시 스톡 GPU 스키닝 mv_skin 폴터).
                     if let custom = mesh.customPipeline, !mesh.skinned || customSkinBuf != nil {
                         pipe = custom
+                        usedCustom = true
                         if let customSkinBuf { meshVBuf = customSkinBuf }
                     } else if (mesh.normalTexture != nil || mesh.maskTexture != nil), !useSkin,
                               let normalPipe = mesh.additive ? meshPipelineNormalAdditive : meshPipelineNormal {
@@ -1397,10 +1399,14 @@ extension SceneRenderer {
                     }
                     enc.setCullMode(mesh.cullBack ? .back : .none)
                     enc.setVertexBuffer(meshVBuf, offset: 0, index: 0)
-                    enc.setVertexBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                    // 커스텀 버텍스는 mul(v, mvp)=v·mvp 계약(GLSLTranslator 번역) — stock 의 mvp·v 와 동치가
+                    // 되도록 mvp 만 전치해 바인딩(사본 — u.mvp 는 렌더어블 공용이라 제자리 전치 금지).
+                    var bu = u
+                    if usedCustom { bu.mvp = bu.mvp.transpose }
+                    enc.setVertexBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
                     // 커스텀 파이프라인(CPU 프리스킨)은 본 버퍼 불요 — 스톡 GPU 스키닝 경로만 buffer(2) 바인딩.
-                    if useSkin, pipe !== mesh.customPipeline, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
-                    enc.setFragmentBytes(&u, length: MemoryLayout<MeshUniform>.stride, index: 1)
+                    if useSkin, !usedCustom, let boneBuf { enc.setVertexBuffer(boneBuf, offset: 0, index: 2) }
+                    enc.setFragmentBytes(&bu, length: MemoryLayout<MeshUniform>.stride, index: 1)
                     enc.setFragmentTexture(mesh.texture, index: 0)
                     // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
                     // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
