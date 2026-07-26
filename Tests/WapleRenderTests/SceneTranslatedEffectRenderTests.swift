@@ -769,5 +769,17 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         NSLog("%@", "[Waple] visible-script on=\(onLuma) off=\(offLuma)")
         XCTAssertEqual(onLuma, 0.4, accuracy: 0.1, "script 가 true 를 반환하면 이펙트가 켜져야(dim 40%)")
         XCTAssertGreaterThan(offLuma, 0.7, "script 가 false 를 반환하면 계속 꺼진 채(17씬 이벤트훅 회귀 방지)")
+
+        // hasUpdate(동적) 경로 — 위 두 케이스는 init-only(정적 해석, buildEffectChain 이 빌드 시점에
+        // 게이트 없이 확정)만 실증한다. update 함수가 있는 스크립트는 EffectVisibleGate 로 렌더 체인에
+        // 남아 SceneRendererFrameEncoder.effectVisible(_:time:) 이 매 프레임 실제로 재평가해야 반영된다
+        // — 이 두 단정이 실패하면 effectVisible 헬퍼/5개 적용지점의 guard 가 죽은 코드라는 뜻.
+        let dynamicOnLuma = try luma(visible: #"{"value":false,"script":"export function update(v){ return true; }"}"#, tag: "dyn_on")
+        let dynamicOffLuma = try luma(visible: #"{"value":true,"script":"export function update(v){ return false; }"}"#, tag: "dyn_off")
+        NSLog("%@", "[Waple] visible-script dynamic on=\(dynamicOnLuma) off=\(dynamicOffLuma)")
+        XCTAssertEqual(dynamicOnLuma, 0.4, accuracy: 0.1,
+                      "게이트 initial=false 라도 update 가 true 를 반환하면 켜져야(게이트가 실제로 실행됨을 증명)")
+        XCTAssertGreaterThan(dynamicOffLuma, 0.7,
+                             "게이트 initial=true 라도 update 가 false 를 반환하면 꺼져야(continue 스킵 경로 실증)")
     }
 }
