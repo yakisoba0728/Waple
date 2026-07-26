@@ -202,6 +202,10 @@ public struct SceneParticle: Equatable {
     public var noInterpolation: Bool = false
     public var lockTransforms: Bool = false
     public var isSolid: Bool = false
+    /// M(⑤): 오브젝트 `attachment`(부모 퍼펫 모델 이름 부착점) — SceneLayer.attachment(62행)와 동일
+    /// 원시 문자열 규약. **파스만**: 3D 렌더 소비는 없음(SceneRenderer3D attachment grep 0건, wf8 id 66) —
+    /// 2D PuppetAttach 배선(SceneRendererResources.swift:329-341)과는 별개 경로. nil=일반 계층.
+    public var attachment: String? = nil
 }
 
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
@@ -364,6 +368,10 @@ public struct SceneObject3D: Equatable {
     /// F696: 오브젝트 `dependencies`(명시 렌더 선행 의존 id — 실측 model 오브젝트 23건). SceneLayer
     /// 와 동일하게 파스·보존 전용(순서 보장 소비는 렌더러 책임).
     public var dependencies: [Int] = []
+    /// M(⑤): 오브젝트 `attachment`(부모 퍼펫 모델 이름 부착점) — SceneLayer.attachment(62행)와 동일
+    /// 원시 문자열 규약. **파스만**: 3D 렌더 소비는 없음(SceneRenderer3D attachment grep 0건, wf8 id 66 —
+    /// 3D 씬 attachment 보유 model 오브젝트 19건이 부모 루트 변환으로만 배치되는 별개 갭). nil=일반 계층.
+    public var attachment: String? = nil
     public init(id: Int, name: String, model: String, origin: Vec3, angles: Vec3, scale: Vec3,
                 castShadow: Bool, parent: Int?, effects: [SceneEffect], order: Int = 0) {
         self.id = id; self.name = name; self.model = model
@@ -387,6 +395,12 @@ public struct SceneNode3D: Equatable {
     /// 프로퍼티 스크립트(origin/angles/scale/visible). 그룹 노드도 스크립트를 가진다 — 태양계 컨트롤러
     /// (Main: visible 스크립트로 shared 궤도 파라미터 세팅), 월드 스케일/화면 회전 노드(scale/angles 스크립트)가 모두 그룹.
     public var propertyScripts: [String: String] = [:]
+    /// M(⑤): 오브젝트 `attachment`(부모 퍼펫 모델 이름 부착점) — SceneLayer.attachment(62행)와 동일
+    /// 원시 문자열 규약. **파스만**: 실물 5씬(3629379075·3478434536·3486806915·3737268876·3492627662)의
+    /// 콘텐츠 없는 그룹(가면/머리 액세서리 부착)이 이 경로를 거치나, 이 5씬은 camera3D 부재(2D 퍼펫 씬)라
+    /// SceneRenderer3D(3D 렌더)를 타지 않는다 — 소비는 2D PuppetAttach 배선(SceneRendererResources.swift:
+    /// 329-341)의 몫이며 이 배치는 파스만 착지한다. nil=일반 계층.
+    public var attachment: String? = nil
     public init(id: Int, origin: Vec3, angles: Vec3, scale: Vec3, parent: Int?, visible: Bool) {
         self.id = id; self.origin = origin; self.angles = angles
         self.scale = scale; self.parent = parent; self.visible = visible
@@ -1231,6 +1245,7 @@ extension SceneDocument {
         var ps = transformScripts(obj)
         if let vs = visibleScript { ps["visible"] = vs }
         node.propertyScripts = ps
+        node.attachment = obj["attachment"] as? String   // M(⑤): 파스만(SceneNode3D.attachment 주석 참조)
         return node
     }
 
@@ -1384,6 +1399,7 @@ extension SceneDocument {
         o.animationLayers = parseAllAnimationLayers(obj["animationlayers"])
         // F696: 명시 렌더 의존 id 목록(레이어 경로와 동형 — 소비는 렌더러 책임).
         o.dependencies = (obj["dependencies"] as? [Any])?.compactMap { intVal($0) } ?? []
+        o.attachment = obj["attachment"] as? String   // M(⑤): 파스만(SceneObject3D.attachment 주석 참조)
         for key in ["origin", "angles", "scale", "alpha", "color"] {
             if let bind = obj[key] as? [String: Any], let a = PropertyAnimation.parse(bind), !a.events.isEmpty {
                 o.eventTimelines.append(a)
@@ -1708,6 +1724,7 @@ extension SceneDocument {
         p.angles3D = vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0)
         p.parent = intVal(obj["parent"])
         p.visible = initialVisible
+        p.attachment = obj["attachment"] as? String   // M(⑤): 파스만(SceneParticle.attachment 주석 참조)
         // F200: 레이어(parseLayer 의 parallaxDepth 언랩)와 동형 — 미지정 시 1(균일, 무회귀).
         p.parallaxDepth = vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1)
         // F199: visible 스크립트 캡처(레이어 693-741행과 동일 언랩 규약). obj 는 이미 파라미터로
