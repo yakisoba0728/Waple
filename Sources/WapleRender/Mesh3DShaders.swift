@@ -530,10 +530,17 @@ enum Mesh3DShaders {
             N = normalizedOr(TBN * float3(nx, ny, nz), N);
         }
 
-        // M3: 마스크 텍스처로 per-pixel roughness/metallic 오버라이드(없으면 머티리얼 상수).
-        float4 mask = maskTex.sample(s, in.uv);
-        float roughness = mask.r > 0.0 ? mask.r : u.material.x;
-        float metallic = mask.g > 0.0 ? mask.g : u.material.y;
+        // M3: 마스크 텍스처(PBRMASKS)로 per-pixel roughness/metallic 오버라이드(없으면 머티리얼 상수).
+        // generic4.frag:96/100 규약 — componentMaps.x(R)=metallic, .y(G)=roughness(① 종전 반전 수정).
+        // 게이트는 normalParams.y(hasMask) 플래그로만 판정 — 정당한 마스크 값 0(완전 무광/비금속)이
+        // "마스크 없음"으로 오폴백되던 종전 버그(mask.r>0.0 류 값 기반 게이트) 제거.
+        float roughness = u.material.x;
+        float metallic = u.material.y;
+        if (normalParams.y > 0.5) {
+            float4 mask = maskTex.sample(s, in.uv);
+            metallic = mask.r;
+            roughness = mask.g;
+        }
 
         float3 V = normalizedOr(frame.cameraEye.xyz - in.worldPos, float3(0.0, 0.0, 1.0));
         float3 direct = float3(0.0);

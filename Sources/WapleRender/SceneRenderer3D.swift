@@ -1420,13 +1420,15 @@ extension SceneRenderer {
                     // gradientTex 는 mf_main 이 항상 선언하는 인자 — shadingGradient 가 꺼져 있으면 절대
                     // 샘플되지 않으므로(u.rim.w==0) 자기 텍스처를 채워 넣어 바인딩 부재를 피한다.
                     enc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
-                    // M3: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯). 노멀맵은 gradientTex 선례(:2421)와
-                    // 동일하게 미보유 시 자기 알베도로 슬롯을 채우고(미바인딩 텍스처 회피), 소비 여부는 셰이더가
-                    // normalParams.z(hasNormal) 플래그로만 게이트한다 — mask.r>0.0 류 값 기반 오폴백 방지(②).
+                    // M3: PBR 노멀맵/마스크 텍스처 바인딩(mf_normal 전용 슬롯). 노멀맵/마스크 모두 gradientTex
+                    // 선례(:1421)와 동일하게 미보유 시 자기 알베도로 슬롯을 채우고(미바인딩 텍스처 회피),
+                    // 소비 여부는 셰이더가 normalParams.z(hasNormal)/y(hasMask) 플래그로만 게이트한다 —
+                    // mask.r>0.0 류 값 기반 오폴백(마스크 0 값이 "마스크 없음"으로 오인되는 결함, ①) 제거.
                     if pipe === meshPipelineNormal || pipe === meshPipelineNormalAdditive {
                         enc.setFragmentTexture(mesh.normalTexture ?? mesh.texture, index: 3)
-                        if let mask = mesh.maskTexture { enc.setFragmentTexture(mask, index: 4) }
-                        var normalParams = SIMD4<Float>(mesh.normalTextureFormat, 0,
+                        enc.setFragmentTexture(mesh.maskTexture ?? mesh.texture, index: 4)
+                        var normalParams = SIMD4<Float>(mesh.normalTextureFormat,
+                                                        mesh.maskTexture != nil ? 1 : 0,
                                                         mesh.normalTexture != nil ? 1 : 0, 0)
                         enc.setFragmentBytes(&normalParams, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
                     }
