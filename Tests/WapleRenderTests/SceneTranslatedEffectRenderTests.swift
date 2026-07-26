@@ -229,6 +229,72 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertLessThan(c.greenComponent, 0.1)
     }
 
+    /// X-①: effect.json fbos[].fit(실물 cursorripple `_rt_EightBuffer1/2` fit:512) 는 dst 비례(scale)가
+    /// 아니라 절대 정사각 크기여야 한다. dst 는 64×36(테스트 캡처 해상도)인데 fbo fit:32 이면 그 fbo 는
+    /// 항상 32×32 — scale 기반으로 잘못 낙하하면(과거: fit 무시 → scale 기본값 1 → dst 크기) 프로브가 실패.
+    func testMultiPassEffectFBOFitIsAbsoluteSize() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let fragFill = """
+        varying vec2 v_TexCoord;
+        void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }
+        """
+        let fragProbe = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+            float ok = step(31.5, g_Texture0Resolution.x) * step(g_Texture0Resolution.x, 32.5)
+                     * step(31.5, g_Texture0Resolution.y) * step(g_Texture0Resolution.y, 32.5);
+            gl_FragColor = vec4(ok, ok, ok, 1.0);
+        }
+        """
+        let effectJSON = """
+        {"passes":[
+           {"material":"materials/effects/fit_fill.json","target":"_rt_Sq",
+            "bind":[{"name":"previous","index":0}]},
+           {"material":"materials/effects/fit_probe.json",
+            "bind":[{"name":"_rt_Sq","index":0}]}],
+         "fbos":[{"name":"_rt_Sq","fit":32,"format":"rgba8888"}]}
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/fittest/effect.json","passes":[{},{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_fit", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("effects/fittest/effect.json", effectJSON.data(using: .utf8)!),
+            ("materials/effects/fit_fill.json", #"{"passes":[{"shader":"effects/fit_fill"}]}"#.data(using: .utf8)!),
+            ("materials/effects/fit_probe.json", #"{"passes":[{"shader":"effects/fit_probe"}]}"#.data(using: .utf8)!),
+            ("shaders/effects/fit_fill.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/fit_fill.frag", fragFill.data(using: .utf8)!),
+            ("shaders/effects/fit_probe.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/fit_probe.frag", fragProbe.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "fit", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "fit", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_fit")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let luma = avgLuma(url)
+        NSLog("%@", "[Waple] fbo fit:32 resolution-probe luma=\(luma)")
+        XCTAssertGreaterThan(luma, 0.9, "fit:32 는 dst(64x36)와 무관하게 절대 32x32 여야 함(스케일 폴백이면 g_Texture0Resolution 불일치 → 검정)")
+    }
+
     /// texRes per-slot(설계 §4): g_Texture1Resolution 은 aux 슬롯 1 텍스처의 실제 dims 여야 한다
     /// (레이어 dims 8x8 근사가 아니라). frag 가 x==4 를 검사해 백/흑으로 표출 — 4x2 aux 면 luma 1.
     func testAuxTextureResolutionPerSlot() throws {

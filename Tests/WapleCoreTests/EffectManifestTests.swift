@@ -65,4 +65,45 @@ final class EffectManifestTests: XCTestCase {
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
         XCTAssertEqual(m.fbos, [EffectManifest.FBO(name: "_rt", scale: 1)])
     }
+
+    /// X-①: 실물 cursorripple `_rt_EightBuffer1/2` {fit:512} — 정사각 고정 크기(scale 무관).
+    func testFBOFitParsedAsSquareFixedSize() throws {
+        let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt_EightBuffer1","fit":512,"format":"rgba8888"}]}"#
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.fbos[0].fixedWidth, 512)
+        XCTAssertEqual(m.fbos[0].fixedHeight, 512)
+    }
+
+    /// X-①: 실물 glitter `_rt_GlitterTiles` {width:256, height:256, uvs:"repeat"} — 비정사각도 지원 +
+    /// 타일 아틀라스 랩 플래그.
+    func testFBOWidthHeightAndUvsRepeatParsed() throws {
+        let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt_GlitterTiles","width":256,"height":128,"format":"r8","uvs":"repeat"}]}"#
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.fbos[0].fixedWidth, 256)
+        XCTAssertEqual(m.fbos[0].fixedHeight, 128)
+        XCTAssertTrue(m.fbos[0].uvsRepeat)
+    }
+
+    /// scale 만 있으면 fixedWidth/fixedHeight 는 nil(종전 dst 비례 경로 무회귀).
+    func testFBOWithoutFitOrSizeStaysScaleBased() throws {
+        let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt_Q","scale":4}]}"#
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertNil(m.fbos[0].fixedWidth)
+        XCTAssertNil(m.fbos[0].fixedHeight)
+        XCTAssertFalse(m.fbos[0].uvsRepeat)
+    }
+
+    /// X-① 클램프: fit 의 신뢰불가 초대형 값(safeInt 범위 밖)은 scale 과 동일하게 무시(nil) —
+    /// 트랩 없이 scale 기반 폴백으로 안전 낙하. 범위 안이지만 과대(>8192)한 값은 8192 로 클램프.
+    func testHugeFBOFitDoesNotTrap() throws {
+        let outOfRange = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","fit":1e300}]}"#
+        let m1 = try XCTUnwrap(EffectManifest.parse(Data(outOfRange.utf8)))
+        XCTAssertNil(m1.fbos[0].fixedWidth)
+        XCTAssertNil(m1.fbos[0].fixedHeight)
+
+        let overCap = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","fit":100000}]}"#
+        let m2 = try XCTUnwrap(EffectManifest.parse(Data(overCap.utf8)))
+        XCTAssertEqual(m2.fbos[0].fixedWidth, 8192)
+        XCTAssertEqual(m2.fbos[0].fixedHeight, 8192)
+    }
 }

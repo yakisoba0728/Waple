@@ -42,10 +42,12 @@ extension SceneRenderer {
         /// applyEffect(fullFrameSnapshot:) 로 실제 배경을 덮어 바인드한다(godrays/shine COPYBG).
         let fullFrameSlots: [Int]
     }
+    /// X-①: 이름 있는 FBO 1개의 할당 스펙 — scale(dst 비례) 또는 fixedWidth/fixedHeight(절대 픽셀,
+    /// 실물 cursorripple fit:512·glitter width/height:256) 중 후자가 있으면 우선.
+    struct FBOSpec { let scale: Int; let fixedWidth: Int?; let fixedHeight: Int? }
     enum EffectBind {
         case handPort(params: [Float], aux: [MTLTexture], audio: AudioParams?)
-        // fboScales: 이름 있는 FBO 의 해상도 나눗수(effect.json fbos[].scale) — 실행 시 dst 크기/scale 로 풀 할당.
-        case translated(passes: [TranslatedPass], fboScales: [Int])
+        case translated(passes: [TranslatedPass], fboSpecs: [FBOSpec])
     }
     struct EffectGPU { let pipeline: MTLRenderPipelineState; let bind: EffectBind }
 
@@ -546,7 +548,9 @@ extension SceneRenderer {
         if anyAudio { hasAudio = true }
         NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (passes=\(passes.count) fbos=\(manifest.fbos.count) audio=\(anyAudio))")
         return EffectGPU(pipeline: passes[0].pipeline,
-                         bind: .translated(passes: passes, fboScales: manifest.fbos.map { $0.scale }))
+                         bind: .translated(passes: passes, fboSpecs: manifest.fbos.map {
+                             FBOSpec(scale: $0.scale, fixedWidth: $0.fixedWidth, fixedHeight: $0.fixedHeight)
+                         }))
     }
 
     /// ① 매니페스트 로드: effect.json 이 없으면 관례 단일 패스("effects/<name>" 셰이더).
@@ -665,10 +669,21 @@ extension SceneRenderer {
         // (콘텐츠 경계 밖 랩은 아티팩트, W4a 실측). aux(실 자산) 슬롯은 아래에서 TexImage.clampUVs 로 채운다.
         var texWrap = [Float](repeating: 0, count: 8)
         for (slot, source) in binds where slot < 8 && source >= 0 {
-            let s = Float(manifest.fbos[source].scale)
-            texRes[slot] = SIMD4(lw / s, lh / s, lw / s, lh / s)
+            let fbo = manifest.fbos[source]
+            // X-①: fixedWidth/fixedHeight(fit·width/height) 가 있으면 dst 비례(scale) 대신 절대 크기.
+            if let fw = fbo.fixedWidth, let fh = fbo.fixedHeight {
+                texRes[slot] = SIMD4(Float(fw), Float(fh), Float(fw), Float(fh))
+            } else {
+                let s = Float(fbo.scale)
+                texRes[slot] = SIMD4(lw / s, lh / s, lw / s, lh / s)
+            }
         }
         for slot in bindSlots where slot < 8 { texWrap[slot] = 1 }
+        // X-①: `uvs:"repeat"` FBO(실물 glitter `_rt_GlitterTiles` 타일 아틀라스)를 소스로 삼는 bind 슬롯은
+        // 위의 기본 clamp 를 repeat 로 재정의.
+        for (slot, source) in binds where slot < 8 && source >= 0 && manifest.fbos[source].uvsRepeat {
+            texWrap[slot] = 0
+        }
         // 감사 V07: 슬롯별 샘플 필터(1=nearest/0=linear — TexImage.noInterpolation, WE tex Flags bit0).
         // previous(bind -1) 슬롯은 baseNoInterp(체인 첫 이펙트의 베이스 직결 — applyEffect 가 previous 를
         // 항상 효과 입력 src 로 바인드)일 때만 nearest, fbo bind 슬롯은 선형(FBO 출력 — 손-포팅 fbNearest

@@ -1530,7 +1530,7 @@ extension SceneRenderer {
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             enc.endEncoding()
 
-        case .translated(var passes, let fboScales):
+        case .translated(var passes, let fboSpecs):
             guard let device else { return false }  // mount 이후 항상 존재 — 강제 언랩 제거(teardown 경합 안전)
             // 디버그: WAPLE_MP_TRUNC=n → 앞 n개 패스만 실행(마지막은 dst 로 강제) — 패스별 이분용.
             if let t = ProcessInfo.processInfo.environment["WAPLE_MP_TRUNC"], let n = Int(t), n > 0, n < passes.count {
@@ -1541,11 +1541,14 @@ extension SceneRenderer {
                                              texRes: last.texRes, texWrap: last.texWrap, texFilter: last.texFilter,
                                              scripts: last.scripts, fullFrameSlots: last.fullFrameSlots))
             }
-            // 멀티패스: 이름 있는 FBO(다운스케일)를 풀에서 할당하고, 각 패스를 target(fbo|dst)에 순차 실행.
+            // 멀티패스: 이름 있는 FBO(다운스케일 또는 X-① 절대 크기)를 풀에서 할당하고, 각 패스를
+            // target(fbo|dst)에 순차 실행.
             let baseW = max(1, dst.width), baseH = max(1, dst.height)
             var fboTex: [MTLTexture] = []
-            for s in fboScales {
-                guard let t = pooledOffscreen(max(1, baseW / s), max(1, baseH / s), device) else { return false }
+            for spec in fboSpecs {
+                let w = spec.fixedWidth ?? max(1, baseW / spec.scale)
+                let h = spec.fixedHeight ?? max(1, baseH / spec.scale)
+                guard let t = pooledOffscreen(w, h, device) else { return false }
                 fboTex.append(t)
             }
             for pass in passes {
