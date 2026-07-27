@@ -112,8 +112,11 @@ enum ParticleShaders {
         float nx = nraw.a * 2.0 - (rg88 ? 1.0 : 0.965);
         float ny = nraw.g * 2.0 - 1.0;
         float mask = rg88 ? 1.0 : nraw.r;
-        // 스크린-정렬 2D 빌보드 → v_ScreenTangents = refractAmount·I (ViewRight/Up=축, 회전 생략:
-        // sprite refract 코퍼스에 회전 이니셜라이저 0건. ponytail: 회전 refract 발견 시 per-vertex 탄젠트).
+        // 스크린-정렬 2D 빌보드 → v_ScreenTangents = refractAmount·I (ViewRight/Up=축, 회전 생략).
+        // C4-(iii): spriteTrail(F790 신장 쿼드)도 이 경로에 진입 — 속도 방향 회전 쿼드(atan2 각도)라
+        // 엄밀한 축-정렬은 아니지만, 코퍼스 유일 실물(rain_on_the_glass1)의 시각 결과는 정접(수용된 근사 —
+        // 계획 문서상 "trail은 회전 쿼드라 탄젠트 근사 미세 차이 수용"). ponytail: 회전 refract 오차가
+        // 눈에 띄면 per-vertex 탄젠트로 축 정렬.
         // y 부호: WE GLSL 의 -offset.y 는 Metal y-down UV(in.pos) 규약과 상쇄 → 무플립(A/B 육안이 최종 게이트).
         float2 off = refractParams.x * float2(nx, ny) * (mask * in.color.a);
         float2 uv = in.pos.xy / float2(fbTex.get_width(), fbTex.get_height()) + off;
