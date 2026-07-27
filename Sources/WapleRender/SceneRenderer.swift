@@ -265,7 +265,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mtkView?.needsDisplay = true
     }
 
-    /// 포인터 이벤트 배달(씬 픽셀 좌표, 상단 원점 — WE worldPosition 규약).
+    /// 포인터 이벤트 배달(씬 픽셀 좌표, 하단원점/y-up — pointerSceneCoords()→sceneCoords() 경유,
+    /// W1-yaxis 정합. 스테일 정정: 종전 "상단 원점" 문구는 구 y-down pxToNDC 체제 잔재였음).
     /// event 필드는 실물 역추출: worldPosition(Vec3 — .x/.subtract 체이닝), button(0=좌).
     func dispatchPointerEvent(hook: String, x: Float, y: Float) {
         // F743(S-31): input.cursorWorldPosition/cursorScreenPosition/cursorLeftDown 폴ling 실데이터화
@@ -285,7 +286,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     public func setPointerButtonDown(_ down: Bool) { pointerDown = down }
 
     // ── cursorEnter/cursorLeave (레이어 호버 — 코퍼스 47패키지) ────────────────────
-    /// 레이어 스크린 AABB(씬 픽셀 y-down, pointerSceneCoords 와 동일 공간). origin=중심, 반너비=|size×scale|/2.
+    /// 레이어 스크린 AABB(씬 픽셀 y-up/하단원점, pointerSceneCoords 와 동일 공간 — W1-yaxis 정정,
+    /// 종전 "y-down" 문구는 스테일). origin=중심, 반너비=|size×scale|/2. origin 중심 대칭 AABB 라
+    /// 규약 반전에 값 자체는 불변 — 문구만 어긋나 있었음.
     /// 회전(angleZ)은 무시 — 축정렬 근사(호버 존은 대개 축정렬 UI). scale 은 mount 정적 스냅샷(퍼펫 합성 후 값).
     static func layerHitRect(origin: Vec2, size: Vec2, scale: Vec2) -> CGRect {
         let hw = abs(size.x * scale.x) * 0.5, hh = abs(size.y * scale.y) * 0.5
@@ -822,6 +825,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// → A/B t=6·정적·스크립트·카메라부재 씬 전수 .zero = 비트동일 가드).
     /// ponytail: y 부호는 캘리브 노브 — WE 팬 방향 실측 부재(클린룸; 게이트 t=6 중립이라 검증 불가). 인트로
     ///   t<3 병진 방향만 좌우하고, .zero 우회 씬엔 무영향. 교체 조건: WE 팬 부호 실측 확정 시 이 함수만 수정.
+    /// W1-yaxis(pxToNDC 전역 y-up 반전) 재검토: 이 +2·y/projH 부호는 구 y-down pxToNDC 체제에서
+    ///   유도됐으므로 산술적으로는 −2·y/projH 로 동반 반전해야 내부 일관 — 그러나 위 캘리브 노브 사유가
+    ///   먼저 존재해 원래도 WE 실측 없이는 부호를 확정할 수 없었던 값이다. 실측 없이 방향만 뒤집는
+    ///   추측 반전은 의도적으로 보류(2px 데드존 + 게이트 씬 전수 .zero 라 현재 실피해 없음 — 확인됨).
+    ///   교체 조건은 위와 동일(WE 팬 부호 실측 확정 시 이 함수만 수정), y-up 전환은 별도 트리거 아님.
     static func cameraOriginPanOffset(originXY: SIMD2<Float>, projW: Float, projH: Float) -> SIMD2<Float> {
         if abs(originXY.x) < 2 && abs(originXY.y) < 2 { return .zero }
         return SIMD2<Float>(-2 * originXY.x / max(1, projW), 2 * originXY.y / max(1, projH))

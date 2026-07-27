@@ -581,6 +581,10 @@ extension SceneRenderer {
     /// (W1-yaxis: §5 의 "제거 시 정상 3씬 파괴" 근거는 구 y-down pxToNDC 하에서 측정된 것이라
     /// 전역 y-flip 과 함께 무효 — 4종 게이트(3463520581 + §5 3씬) 전수 실측으로 제거가 맞음을
     /// 확인 후 착수. attachmentSceneDelta 의 Y-켤레도 동시에 제거(짝 관계, 아래 참조).
+    /// 기록 정정(병합 게이트 지적): 이 게이트의 "flipped == before 일치" 캡처 비교는 **퍼펫
+    /// 정립성(상하 방향)만** before 와 일치한다는 뜻이다 — before 자체가 구 y-down pxToNDC 산출물이라
+    /// 위젯/레이어 절대 위치 등 프레임 전체 레이아웃은 이 웨이브(전역 pxToNDC y-up 반전)로 인해
+    /// before 대비 달라졌다(예: 2809885105 의 시계 위젯 우상단→우하단 이동). "무회귀"로 오독 금지.
     static func puppetVertices(model: PuppetModel, positions: [SIMD3<Float>],
                                origin: Vec2, scale: Vec2, angleZ: Float,
                                projW: Float, projH: Float) -> [SIMD4<Float>] {
