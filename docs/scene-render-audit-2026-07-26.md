@@ -253,26 +253,37 @@ thumbs/3565190341.png`) 대비 A/B 확정 개선 — 이 아티팩트는 C2 이�
 **재판정(B4-②, 2026-07-27, main 6526db1)**: 3413921910 도 위 목록에서 **제외** — C2 착지 후
 고해상 재캡처 결과 지배 결함(Y축 반전)뿐 아니라 이 문서가 별도 2차 증상으로 지목했던 "잔디 텍스처
 오버바인드로 인한 상단 40% 보라/흰색 노이즈 밴드"도 재발 없음. 상단 노을 하늘 그라데이션·전신주
-실루엣·"MONDAY" 텍스트 위젯 전부 정상, 노이즈 밴드 영역 픽셀 통계(상단 40% RGB 평균/표준편차/최대값)에서
-이상 스파이크 없음. main-6526db1 표준 베이스라인 썸네일과 일치. 코드 변경 없음(재판정 전용, 문서만 갱신).
+실루엣·"MONDAY" 텍스트 위젯 전부 정상. 노이즈 밴드 영역(상단 40%, 960×540 재캡처 기준 216행)
+실측: 행별 평균 밝기 64.3~119.6(단조로운 노을 그라데이션 범위 내), 행별 표준편차 23.3~44.0(밴드 특유의
+국소 급증 없이 완만) — 밴드 경계에서의 스파이크 없음. main-6526db1 표준 베이스라인 썸네일과 일치.
+코드 변경 없음(재판정 전용, 문서만 갱신).
 
 **재판정(B4-③, 2026-07-27, main 6526db1)**: 3353695150 검정 블록도 위 목록에서 **제외** —
 직전 라운드에서 solidlayer(오브젝트 409/769/595/611, size 16~64·scale 최대 10) 자체의 size/color
 산술은 무죄로 실증되고 원인이 "Jake 캐릭터 몸통(오브젝트 30, `models/jake1.json` →
 `materials/jake1.json`, shader=genericimage4, combo SPRITESHEET:1)"으로 재귀속됐었다. C2(y-up)
 착지 후 고해상(960×540 + 1920×1080) 재캡처 결과 검정 블록·올리브색 왜곡·수직 노이즈 줄무늬 전부
-소멸 — Jake는 정상 주황색, 헤드폰·재생기 소품까지 WE preview.gif와 합치. 산술 근거: 4개
-solidlayer 픽셀 통계(hash/meanLuma)가 main-6526db1 표준 베이스라인과 일치(0.2792 vs 0.2792,
-95fad7a 구 베이스라인의 0.1939 대비 명확한 개선). **genericimage4 QuadShaders 고정 경로 자체는
-무죄로 확인**: `SceneRendererResources.buildCustomLayerShader`(:1032-1036 주석)가 씬 패키지 밖
-빌트인 셰이더(genericimage4 등)를 의도적으로 배제하고 QuadShaders 폴백을 taken하는 설계인데,
-Jake의 실제 머티리얼은 `LIGHTING`/`REFLECTION`/`BLENDMODE` 콤보가 전부 0(SPRITESHEET만 1)이라
+소멸 — Jake는 정상 주황색, 헤드폰·재생기 소품까지 WE preview.gif와 합치. 근거: 씬 전체 프레임
+meanLuma가 main-6526db1 표준 베이스라인과 일치(0.2792 vs 0.2792, 95fad7a 구 베이스라인의 0.1939
+대비 명확한 밝아짐 — 검정 블록 소멸과 정합. 개별 solidlayer 4건 각각의 픽셀 통계는 별도로
+분리 측정하지 않음, 씬 전체 값으로만 확인). **genericimage4 QuadShaders 고정 경로 자체는 무죄로
+확인**: `SceneRendererResources.buildCustomLayerShader`(:1032-1036 주석)가 씬 패키지 밖 빌트인
+셰이더(genericimage4 등)를 의도적으로 배제하고 QuadShaders 폴백을 taken하는 설계인데, Jake의
+실제 머티리얼은 `LIGHTING`/`REFLECTION`/`BLENDMODE` 콤보가 전부 0(SPRITESHEET만 1)이라
 genericimage4.frag의 분기 대부분이 no-op으로 축약되고(§120-199) — 순수 `texture0 × g_Color4`
-+ translucent 블렌드 + 스프라이트시트 프레임 전진만 필요한데, 이는 QuadShaders가 이미 구현하는
-집합(SceneDocument.spritesheet 게이트, colorBlendMode, forwardLit2D)과 정확히 겹친다. 즉 이
-씬에서는 QuadShaders 폴백이 실제로 "놓치는 의미"가 없음 — 검정 블록의 진짜 원인은 셰이더 콤보
-갭이 아니라 C2 이전의 solidlayer/Jake 좌표 배치(y-down 오독) 자체였다. 코드 변경 없음(재판정 전용,
-문서만 갱신).
++ translucent 블렌드 + 스프라이트시트 프레임 전진만 필요하다. 유일한 활성 콤보(SPRITESHEET)는
+구조적 주장(주석)이 아니라 **기능 검증**으로 확인했다: `jake1.tex-json`이 실제 7프레임/1초 시퀀스를
+저작(정지 이미지 아님, t=6 단일 캡처로는 애니 여부를 판별할 수 없다는 자체 한계 인지)하고, 프레임
+전진 게이트(`SceneDocument.spritesheet`)는 `SceneRendererResources.swift:277-286`에서 셰이더
+이름과 무관하게 텍스처 바인딩 단계(`resolveTextureWithFrames`)에서 결정된다 — 즉 genericimage4든
+QuadShaders든 동일 프레임을 받는다. 이 정확한 경로(제네릭 이미지 레이어 + 씬 패키지 밖 빌트인
+셰이더 + SPRITESHEET 콤보)를 `Tests/WapleRenderTests/SpriteSheetLayerRenderTests.swift`의
+`testSpriteComboLayerAdvancesFrames`(합성 genericimage2 씬, 로그로 "custom layer shader source
+missing: genericimage2" 확인 — genericimage4와 동일 폴백 경로)·`testRealEffectSpriteLayerAdvances`
+가 실동 mount+렌더+캡처로 시간에 따른 프레임 전진을 확정(둘 다 green, 재확인). 즉 이 씬에서
+QuadShaders 폴백이 실제로 "놓치는 의미"는 없음 — 검정 블록의 진짜 원인은 셰이더 콤보 갭이 아니라
+C2 이전의 solidlayer/Jake 좌표 배치(y-down 오독) 자체였다. 코드 변경 없음(재판정 전용, 문서만
+갱신), 위 스프라이트시트 테스트 7건 green 재확인.
 
 ### 소수 클러스터
 
@@ -327,11 +338,15 @@ C2(y-up) 위에 이미 병합돼 있었고, 해당 커밋이 스스로 명시한
 3465215190·3489263099 재캡처로 H3 판정 재확인 필요")이 이번 라운드까지 누락돼 있었다. 960×540
 재캡처 + 240×136 동일 해상도 페어 비교(구 베이스라인 95fad7a 대비 업/다운샘플 아티팩트 배제) 결과:
 3489263099는 창밖 도시 건물·창문 조명·달·별이 또렷이 보이는 가는 빗줄기(구 HEAD 회귀의 "불투명
-흰 블롭"이 도시를 가리던 증상 소멸, meanLuma 등 정성 확인), 3465215190는 우산·인물·계단 난간·출구
-표지판이 성긴 빗줄기 사이로 온전히 보임(구 베이스라인의 촘촘한 격자형 스트라이프 대비 개선 —
-NEAREST 4배 확대 비교에서 드러난 스트라이프는 240×136 원본 자체의 저해상 앤티에일리어싱
-아티팩트였음, 동일 해상도 페어 비교로 정정). WE preview.gif(정적 프레임)와도 스타일 합치. 코드
-변경 없음(재판정 전용, 문서만 갱신 — 실 수정은 2e09d84에 이미 존재).
+흰 블롭"이 도시를 가리던 증상 소멸), 3465215190는 우산·인물·계단 난간·출구 표지판이 성긴 빗줄기
+사이로 온전히 보임(구 베이스라인의 촘촘한 격자형 스트라이프 대비 개선 — NEAREST 4배 확대 비교에서
+드러난 스트라이프는 240×136 원본 자체의 저해상 앤티에일리어싱 아티팩트였음, 동일 해상도 페어
+비교로 정정). 표준 baseline manifest 실측 meanLuma(참고용, 방향성 보조지표 — "블롭이 가림→값이
+크다" 식 직접 등가는 아님): 3489263099 0.2297(95fad7a)→0.1030(6526db1), 3465215190
+0.4320(95fad7a)→0.1970(6526db1) — 둘 다 어두워짐, 두 씬 모두 흰 스트릭이 화면을 뒤덮던 구간이
+줄고 성긴 개별 줄기로 바뀐 육안 관찰과 같은 방향. 1차 근거는 위 육안 크롭 대조이며 meanLuma는
+보조 정합 확인. WE preview.gif(정적 프레임)와도 스타일 합치. 코드 변경 없음(재판정 전용, 문서만
+갱신 — 실 수정은 2e09d84에 이미 존재).
 
 ## 7. 수정 로드맵
 
