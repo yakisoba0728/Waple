@@ -859,13 +859,32 @@ extension SceneRenderer {
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
+    /// G①: WE 빌트인 generic 계열(스톡 팩 shaders/generic{,2,3,4}.vert|frag) 메시 셰이더 화이트리스트.
+    /// env WAPLE_BUILTIN_MESH_SHADERS=1 뒤에서만, 이 이름들 한정으로 베이스 에셋 팩 폴백을 허용한다
+    /// (b85f8c1 의 "pkg 전용" 정책은 기본값으로 유지 — 과거 2D 회귀(3394601417 주야 토글)와 동일 클래스
+    /// 사고 재발 방지). genericimage* 는 2D 레이어 전용 빌트인이라 여기 포함하지 않는다(buildCustomLayerShader
+    /// 소관, 무수정). genericparticle*도 파티클 전용이라 제외.
+    /// 주의(정책 결정 시 참고): generic/generic2/generic3/generic4.vert 는 전부 a_Normal 을 무조건 참조하는데
+    /// GLSLTranslator.swift:1592 의 VIn 은 a_Position/a_TexCoord 만 지원 — 현재로선 이 4개 모두 MSL 컴파일
+    /// 단계에서 실패해(안전) 스톡 폴백으로 떨어진다(실측: 3470948192/3589454154 A/B 무변화). 온전한 시각
+    /// 개선은 GLSLTranslator 의 attribute 화이트리스트 확장(a_Normal 추가)이 별도로 필요 — 이 웨이브 스코프 밖.
+    private static let builtinMeshShaderWhitelist: Set<String> = ["generic", "generic2", "generic3", "generic4"]
+
+    /// G①: 순수 판정 함수(테스트 편의 — env 뮤테이션 없이 화이트리스트/게이트 조합을 직접 검증).
+    static func builtinMeshShaderAllowed(_ shaderName: String, gateOn: Bool) -> Bool {
+        gateOn && builtinMeshShaderWhitelist.contains(shaderName)
+    }
+
     /// H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드. 성공 시 파이프라인, 실패 시 nil(→ Mesh3DShaders 폴터).
     /// 메시 정점(pos3+normal3+uv2, 8f)을 GLSLTranslator VIn(a_Position/a_TexCoord)에 어댑트하는 버텍스 디스크립터.
     /// 스키닝 메시는 CPU 프리스킨(prepare3DCustomSkinBuffers)으로 같은 8f 레이아웃을 맞춘 뒤 이 파이프라인을 탄다
     /// (GLSLTranslator VIn 에 본 attribute/본 유니폼 배열을 꿰는 대수술 대신 최소 충실안 — 셰이더가 스스로
     ///  a_BlendIndices 같은 미지원 attribute 를 선언하면 MSL 컴파일 실패 → 스톡 mv_skin 폴터).
-    /// 셰이더 소스(.vert/.frag)는 씬 패키지 안 것만 인정(2D 경로와 동일 규칙 — 베이스 팩의 WE 빌트인
-    /// 셰이더까지 이 경로로 빨려 들어오는 것을 차단). include(common.h 등)만 베이스 팩 폴터 허용.
+    /// 셰이더 소스(.vert/.frag)는 기본적으로 씬 패키지 안 것만 인정(2D 경로와 동일 규칙 — 베이스 팩의 WE
+    /// 빌트인 셰이더까지 이 경로로 빨려 들어오는 것을 차단). include(common.h 등)만 베이스 팩 폴터 허용.
+    /// G①: env 게이트 + 화이트리스트(위 builtinMeshShaderWhitelist) 통과 시에만 베이스 팩 자체도 소스로
+    /// 허용(quietAssetData — pkg 우선은 그대로, 없을 때만 베이스 폴백). 게이트 OFF/화이트리스트 밖은
+    /// 종전과 100% 동일(packageData, pkg 전용) — 기본 경로 비트동일 보장.
     func buildCustomMeshShader(_ mat: Mesh3DMaterialInfo, package: ScenePackage, device: MTLDevice) -> CustomMeshShader? {
         guard let shaderName = mat.customShader else { return nil }
         let include: (String) -> String? = { header in
@@ -874,8 +893,12 @@ extension SceneRenderer {
             }
             return BuiltinShaderIncludes.lookup(header)
         }
-        guard let vData = packageData("shaders/\(shaderName).vert", package: package),
-              let fData = packageData("shaders/\(shaderName).frag", package: package),
+        let allowBuiltin = Self.builtinMeshShaderAllowed(shaderName, gateOn: Self.debugFlag("WAPLE_BUILTIN_MESH_SHADERS"))
+        let sourceLoad: (String) -> Data? = allowBuiltin
+            ? { self.quietAssetData($0, package: package) }
+            : { self.packageData($0, package: package) }
+        guard let vData = sourceLoad("shaders/\(shaderName).vert"),
+              let fData = sourceLoad("shaders/\(shaderName).frag"),
               let vert = String(data: vData, encoding: .utf8),
               let frag = String(data: fData, encoding: .utf8) else {
             NSLog("%@", "[Waple] custom mesh shader source missing: \(shaderName)")

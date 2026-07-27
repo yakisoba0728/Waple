@@ -422,4 +422,139 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         XCTAssertEqual(passthrough[0], -1, accuracy: 1e-6)
         XCTAssertEqual(passthrough[1], -1, accuracy: 1e-6)
     }
+
+    // MARK: - G①: 빌트인 generic 계열 메시 셰이더 정책(env 게이트 + 화이트리스트)
+
+    /// 순수 판정 함수 — env 뮤테이션 없이 화이트리스트×게이트 조합을 전수 검증.
+    func testBuiltinMeshShaderAllowedWhitelistAndGate() throws {
+        XCTAssertFalse(SceneRenderer.builtinMeshShaderAllowed("generic4", gateOn: false),
+                       "게이트 OFF 는 화이트리스트 이름이어도 거부(기본 경로 비트동일 보장)")
+        for name in ["generic", "generic2", "generic3", "generic4"] {
+            XCTAssertTrue(SceneRenderer.builtinMeshShaderAllowed(name, gateOn: true),
+                         "\(name) 은 게이트 ON 이면 허용되어야 함")
+        }
+        XCTAssertFalse(SceneRenderer.builtinMeshShaderAllowed("genericimage4", gateOn: true),
+                       "genericimage4 는 2D 전용 빌트인 — 3D 메시 화이트리스트 밖")
+        XCTAssertFalse(SceneRenderer.builtinMeshShaderAllowed("genericparticle", gateOn: true),
+                       "genericparticle 는 파티클 전용 — 3D 메시 화이트리스트 밖")
+        XCTAssertFalse(SceneRenderer.builtinMeshShaderAllowed("mycustom", gateOn: true),
+                       "씬 저작 커스텀 이름은 화이트리스트에 없음(pkg 전용 경로로만 해석되어야 함)")
+    }
+
+    /// 게이트 OFF(기본값): 화이트리스트 이름이라도 소스가 pkg 안에 없으면(베이스 팩에만 존재) 여전히
+    /// nil(스톡 폴백) — b85f8c1 pkg-전용 정책이 3D 메시 경로에서도 기본 유지됨을 마운트 레벨로 증명.
+    func testBuiltinMeshShaderGateOffIgnoresBaseAssetsPack() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        unsetenv("WAPLE_BUILTIN_MESH_SHADERS")
+        let baseDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_g1_base_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir.appendingPathComponent("shaders"),
+                                                 withIntermediateDirectories: true)
+        try Self.builtinCompatibleVert.data(using: .utf8)!
+            .write(to: baseDir.appendingPathComponent("shaders/generic4.vert"))
+        try Self.builtinCompatibleFrag.data(using: .utf8)!
+            .write(to: baseDir.appendingPathComponent("shaders/generic4.frag"))
+        defer { try? FileManager.default.removeItem(at: baseDir) }
+
+        let mat = SceneRenderer.Mesh3DMaterialInfo(texture: try XCTUnwrap(makeSolidTexture(device: device)),
+                                     tint: SIMD4(1, 1, 1, 1), roughness: 0.7, metallic: 0,
+                                     specularTint: SIMD3(1, 1, 1), alphaCutoff: 0, shadowEligible: true,
+                                     unlit: true, cullBack: true, additive: false, depthTest: true, depthWrite: true,
+                                     rimLighting: false, shadingGradient: false, rimAmount: 0, rimExponent: 1,
+                                     gradientTexture: nil, foggy: false, customShader: "generic4", customCombos: [:],
+                                     customConstants: [:], customTextures: [], normalTextureName: nil,
+                                     maskTextureName: nil, refract: false, refractAmount: 0.05,
+                                     reflection: false, reflectivity: 0)
+        let r = SceneRenderer()
+        r.assetBaseDir = baseDir
+        let emptyPkg = try ScenePackage.parse(encodePkg([]))
+        let built = r.buildCustomMeshShader(mat, package: emptyPkg, device: device)
+        XCTAssertNil(built, "게이트 OFF 는 베이스 팩 전용 generic4 소스를 인정하면 안 됨(pkg 전용 정책 유지)")
+    }
+
+    /// 게이트 ON + 화이트리스트: pkg 에 없는 generic4 소스를 베이스 팩에서만 찾아 파이프라인을 빌드한다
+    /// (실제 WE generic4.vert 는 a_Normal 미지원 attribute 라 MSL 컴파일 실패 — 여기선 번역기 호환
+    /// (a_Position/a_TexCoord 만 참조) 대체 소스로 "베이스 팩 폴백 배선 자체"만 분리 검증).
+    func testBuiltinMeshShaderGateOnLoadsWhitelistedBaseAssetsSource() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        setenv("WAPLE_BUILTIN_MESH_SHADERS", "1", 1)
+        defer { unsetenv("WAPLE_BUILTIN_MESH_SHADERS") }
+        let baseDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_g1_base_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir.appendingPathComponent("shaders"),
+                                                 withIntermediateDirectories: true)
+        try Self.builtinCompatibleVert.data(using: .utf8)!
+            .write(to: baseDir.appendingPathComponent("shaders/generic4.vert"))
+        try Self.builtinCompatibleFrag.data(using: .utf8)!
+            .write(to: baseDir.appendingPathComponent("shaders/generic4.frag"))
+        defer { try? FileManager.default.removeItem(at: baseDir) }
+
+        let mat = SceneRenderer.Mesh3DMaterialInfo(texture: try XCTUnwrap(makeSolidTexture(device: device)),
+                                     tint: SIMD4(1, 1, 1, 1), roughness: 0.7, metallic: 0,
+                                     specularTint: SIMD3(1, 1, 1), alphaCutoff: 0, shadowEligible: true,
+                                     unlit: true, cullBack: true, additive: false, depthTest: true, depthWrite: true,
+                                     rimLighting: false, shadingGradient: false, rimAmount: 0, rimExponent: 1,
+                                     gradientTexture: nil, foggy: false, customShader: "generic4", customCombos: [:],
+                                     customConstants: [:], customTextures: [], normalTextureName: nil,
+                                     maskTextureName: nil, refract: false, refractAmount: 0.05,
+                                     reflection: false, reflectivity: 0)
+        let r = SceneRenderer()
+        r.assetBaseDir = baseDir
+        let emptyPkg = try ScenePackage.parse(encodePkg([]))
+        let built = r.buildCustomMeshShader(mat, package: emptyPkg, device: device)
+        XCTAssertNotNil(built, "게이트 ON + 화이트리스트(generic4) 는 베이스 팩 소스로 파이프라인을 빌드해야 함")
+    }
+
+    /// 게이트 ON 이어도 화이트리스트 밖 이름(씬 저작 커스텀)은 여전히 pkg 전용 — 베이스 팩에만 있으면 nil.
+    func testBuiltinMeshShaderGateOnRejectsNonWhitelistedName() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        setenv("WAPLE_BUILTIN_MESH_SHADERS", "1", 1)
+        defer { unsetenv("WAPLE_BUILTIN_MESH_SHADERS") }
+        let baseDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_g1_base_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDir.appendingPathComponent("shaders"),
+                                                 withIntermediateDirectories: true)
+        try Self.builtinCompatibleVert.data(using: .utf8)!
+            .write(to: baseDir.appendingPathComponent("shaders/mycustom.vert"))
+        try Self.builtinCompatibleFrag.data(using: .utf8)!
+            .write(to: baseDir.appendingPathComponent("shaders/mycustom.frag"))
+        defer { try? FileManager.default.removeItem(at: baseDir) }
+
+        let mat = SceneRenderer.Mesh3DMaterialInfo(texture: try XCTUnwrap(makeSolidTexture(device: device)),
+                                     tint: SIMD4(1, 1, 1, 1), roughness: 0.7, metallic: 0,
+                                     specularTint: SIMD3(1, 1, 1), alphaCutoff: 0, shadowEligible: true,
+                                     unlit: true, cullBack: true, additive: false, depthTest: true, depthWrite: true,
+                                     rimLighting: false, shadingGradient: false, rimAmount: 0, rimExponent: 1,
+                                     gradientTexture: nil, foggy: false, customShader: "mycustom", customCombos: [:],
+                                     customConstants: [:], customTextures: [], normalTextureName: nil,
+                                     maskTextureName: nil, refract: false, refractAmount: 0.05,
+                                     reflection: false, reflectivity: 0)
+        let r = SceneRenderer()
+        r.assetBaseDir = baseDir
+        let emptyPkg = try ScenePackage.parse(encodePkg([]))
+        let built = r.buildCustomMeshShader(mat, package: emptyPkg, device: device)
+        XCTAssertNil(built, "화이트리스트 밖 이름은 게이트 ON 이어도 베이스 팩 폴백을 타면 안 됨")
+    }
+
+    private func makeSolidTexture(device: MTLDevice) -> MTLTexture? {
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
+        var px: [UInt8] = [255, 255, 255, 255]
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &px, bytesPerRow: 4)
+        return tex
+    }
+
+    /// GLSLTranslator 가 지원하는 attribute(a_Position/a_TexCoord)만 참조하는 최소 정점 셰이더 —
+    /// 실물 generic4.vert(a_Normal 무조건 참조)와 달리 베이스 팩 폴백 "배선"만 분리 검증하기 위한 대역.
+    private static let builtinCompatibleVert = """
+    uniform mat4 g_ModelViewProjectionMatrix;
+    attribute vec3 a_Position;
+    attribute vec2 a_TexCoord;
+    varying vec2 v_TexCoord;
+    void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
+    """
+    private static let builtinCompatibleFrag = """
+    varying vec2 v_TexCoord;
+    void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0); }
+    """
 }
