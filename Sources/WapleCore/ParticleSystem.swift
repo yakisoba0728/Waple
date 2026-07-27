@@ -429,7 +429,8 @@ public struct ParticleSystemDef: Equatable {
                                           max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255),
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "alpharandom":
-                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
+                // C4-(i): min/max 부재 시 WE 실기본값은 0,0(불투명 아님 — bokeh 백화 원인).
+                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 0, max: pfloat(i["max"]) ?? 0,
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "velocityrandom":
                 inits.append(.velocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),

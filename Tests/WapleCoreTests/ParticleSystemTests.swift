@@ -246,6 +246,35 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(RendererKind.sprite.trailSampleCount, 0)
     }
 
+    /// C4-(i): alpharandom min/max 부재 → WE 실기본값 0,0(bokeh 백화 원인 — 종전 ??1 은 불투명 고정).
+    func testAlphaRandomMissingMinMaxDefaultsToZero() {
+        let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"alpharandom"}]}"#), material: nil)
+        XCTAssertTrue(d.initializers.contains(.alphaRandom(min: 0, max: 0, exponent: 1)))
+    }
+
+    /// C4-(i) 이어서: 기본값 변경(1→0)이 "알파만" 바뀌고 그 뒤를 잇는 다른 랜덤 이니셜라이저의 RNG
+    /// 시퀀스는 건드리지 않는지 확인 — alpharandom 은 min==max(고정폭)라 부재/명시 0,0 모두 동일하게
+    /// 드로우를 소비한다(스킵 아님). 이후 velocityrandom 결과가 두 케이스에서 동일해야 "값만" 바뀐
+    /// 표적 수정임이 증명된다(RNG 캐스케이드가 있었다면 이후 값이 갈렸을 것).
+    func testAlphaRandomDefaultChangeDoesNotShiftDownstreamRNG() throws {
+        func lastVelocity(alphaJSON: String) throws -> SIMD3<Float> {
+            let source = """
+            {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+             "initializer":[\(alphaJSON)
+               {"name":"velocityrandom","min":"0 0 0","max":"1 1 1"}],
+             "renderer":[{"name":"sprite"}],"maxcount":1}
+            """
+            let def = ParticleSystemDef.parse(json(source), material: nil)
+            var simulator = ParticleSimulator(def: def, seed: 7)
+            return try XCTUnwrap(simulator.step(0).first).vel
+        }
+        let omitted = try lastVelocity(alphaJSON: #"{"name":"alpharandom"},"#)
+        let explicitZero = try lastVelocity(alphaJSON: #"{"name":"alpharandom","min":0,"max":0},"#)
+        XCTAssertEqual(omitted.x, explicitZero.x, accuracy: 1e-6)
+        XCTAssertEqual(omitted.y, explicitZero.y, accuracy: 1e-6)
+        XCTAssertEqual(omitted.z, explicitZero.z, accuracy: 1e-6)
+    }
+
     // F188: drag 파싱 — movement 의 선형 drag(:497-498행)와 대칭. 실물 45/47 회귀·2/47 drag 실사용.
     func testAngularMovementParsesDrag() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"angularmovement","force":"0 0 2","drag":0.5}]}"#), material: nil)
