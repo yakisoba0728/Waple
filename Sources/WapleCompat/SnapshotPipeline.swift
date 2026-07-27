@@ -19,7 +19,10 @@ enum SnapshotPipeline {
     static let captureT: Float = 6.0   // 인트로 페이드가 끝난 정상상태(GT 규약과 동일)
     static let fitMode: FitMode = .fill
     /// 벽시계 텍스트(시계/날짜 레이어)가 재캡처마다 동일 픽셀이 되도록 JS Date 무인자/now 를 핀하는 고정
-    /// epoch(ms) — 임의 상수(2024-01-01 12:00:00 UTC). 변경 시 시계/날짜 씬 베이스라인 재생성 필요.
+    /// epoch(ms) — 임의 상수(2024-01-01 12:00:00 UTC = KST 21:00:00). 변경 시 시계/날짜 씬 베이스라인
+    /// 재생성 필요. S4①(2026-07-27): getHours() 등 로컬 getter 는 TextScriptEngine.dateOverrideJS 가
+    /// KST(UTC+9) 고정 오프셋으로 계산하므로 이 상수의 "KST 21:00" 해석은 캡처 머신의 실제 시스템 TZ 와
+    /// 무관하게 항상 성립(호스트 TZ 미고정이 원인이던 하네스 결함 수정).
     static let captureEpochMillis: Double = 1_704_110_400_000
 
     /// 폴링 없이 항상 "정지" — 미디어 씬이 osascript 를 스폰하지 않게(결정적·TCC 무).

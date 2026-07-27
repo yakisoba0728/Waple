@@ -132,10 +132,13 @@ final class TextEngineTests: XCTestCase {
     }
 
     /// captureDateEpochMillis 설정 시 시계 스크립트가 실 벽시계 대신 고정 epoch 를 렌더(캡처 결정성).
-    /// getHours 는 로컬 TZ 라 기대값도 로컬 TZ 로 계산 — 머신/CI TZ 무관하게 일치. defer 로 프로세스 전역
-    /// static 을 리셋(XCTest 단일 프로세스 — 미복원 시 testClockScriptReturnsCurrentTime(실시각 검증)에 누수).
+    /// S4①(2026-07-27) 정정: getHours() 는 dateOverrideJS 가 KST(UTC+9) 고정 오프셋으로 재계산하므로
+    /// 기대값도 `TimeZone.current`(=호스트 TZ, 수정 전 버그와 동형 계산이라 같은 TZ 머신에서 우연히 통과)가
+    /// 아니라 명시적 Asia/Seoul 로 계산 — CI/개발자 머신이 KST 가 아니어도 이 테스트가 그 사실을 잡아낸다.
+    /// defer 로 프로세스 전역 static 을 리셋(XCTest 단일 프로세스 — 미복원 시 testClockScriptReturnsCurrentTime
+    /// (실시각 검증)에 누수).
     func testCaptureDateEpochPinsClockAndDateNow() throws {
-        let fixed: Double = 1_704_110_400_000   // 2024-01-01 12:00:00 UTC
+        let fixed: Double = 1_704_110_400_000   // 2024-01-01 12:00:00 UTC = 2024-01-01 21:00:00 KST
         TextScriptEngine.captureDateEpochMillis = fixed
         defer { TextScriptEngine.captureDateEpochMillis = nil }
         let script = """
@@ -151,8 +154,28 @@ final class TextEngineTests: XCTestCase {
         let engine = try XCTUnwrap(TextScriptEngine(script: script))
         let out = try XCTUnwrap(engine.evaluate(current: ""))
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        f.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"), "테스트 환경에 Asia/Seoul TZ 데이터 필요")
         let expected = f.string(from: Date(timeIntervalSince1970: fixed / 1000)) + "|\(Int(fixed))"
-        XCTAssertEqual(out, expected, "고정 epoch 주입 시 Date 무인자/now 가 벽시계 아닌 FIXED 를 반환해야")
+        XCTAssertEqual(out, expected, "고정 epoch 주입 시 Date 무인자/now 가 벽시계 아닌 FIXED(KST 해석)를 반환해야")
+    }
+
+    /// S4①(2026-07-27) 회귀: dateOverrideJS 의 로컬 getter(getHours 등)가 JS 엔진/OS 의 실제 시스템 TZ 로
+    /// 위임하면 안 된다 — 위임하면 캡처를 실행하는 머신의 TZ 설정에 따라 hours 조건부 씬(예: 실물
+    /// 3563096027, `hours>=21&&hours<24`)이 같은 커밋에서도 다른 픽셀을 낸다(실측: WapleCompat --capture 를
+    /// TZ=Asia/Seoul vs TZ=UTC 로 동일 씬에 실행 시 56,578/2,073,600 바이트 상이, BACKLOG.md:144-145 참고).
+    /// getTimezoneOffset()이 항상 -540(KST, DST 없음)을 반환하면 로컬 getter 가 R.prototype(호스트 TZ)이
+    /// 아니라 하드코딩 오프셋 산술로 계산됐다는 증거 — 이 값은 호스트 TZ 데이터베이스를 전혀 참조하지
+    /// 않으므로 이 테스트는 머신 TZ 와 무관하게 항상 같은 결과를 내야 한다.
+    func testCaptureDateEpochLocalGettersAreTimezoneIndependent() throws {
+        TextScriptEngine.captureDateEpochMillis = 1_704_110_400_000
+        defer { TextScriptEngine.captureDateEpochMillis = nil }
+        let script = """
+        'use strict';
+        export function update(value) { return String(new Date().getTimezoneOffset()); }
+        """
+        let engine = try XCTUnwrap(TextScriptEngine(script: script))
+        XCTAssertEqual(try XCTUnwrap(engine.evaluate(current: "")), "-540",
+                        "로컬 getter 는 호스트 TZ 가 아니라 KST 고정 오프셋 산술로 계산돼야(하네스 신뢰성)")
     }
 
     /// 인자 있는 `new Date(ms)` 는 오버라이드 무관(무인자/now 만 핀) — 실 Date 계산 보존 확인.

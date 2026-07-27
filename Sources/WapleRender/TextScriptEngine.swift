@@ -279,6 +279,8 @@ public final class TextScriptEngine {
     /// 캡처/스냅샷 결정성 훅: 설정 시 JSContext 의 `new Date()`(무인자)/`Date.now()` 가 이 고정 epoch(ms)를
     /// 반환 — 벽시계 텍스트(시계/날짜 레이어)가 재캡처마다 동일 픽셀. nil(프로덕션 기본) = 실 벽시계 유지.
     /// SnapshotPipeline.pinRenderSettings 가 캡처 동안만 핀(defer 복원). 인자 있는 `new Date(ms)` 등은 불변.
+    /// S4①(2026-07-27): 로컬 getter(getHours 등)는 KST(UTC+9) 고정 오프셋으로 계산 — 캡처를 실행하는
+    /// 머신의 시스템 TZ 와 무관하게 동일 픽셀을 낸다(dateOverrideJS 참고, 실측 근거는 그쪽 주석).
     public static var captureDateEpochMillis: Double?
 
     /// engine.isScreensaver() 반환값(WE: 화면보호기로 구동 중이면 true). 프로세스 전역 — 실행 문맥이
@@ -288,14 +290,40 @@ public final class TextScriptEngine {
     public static var isScreensaver = false
 
     /// captureDateEpochMillis 주입용 JS: 전역 Date 를 감싸 무인자 생성/now 만 고정, 나머지는 실 Date 로 위임.
+    /// S4①(2026-07-27) 실측: `new R(FIXED)`(수정 전)의 `getHours()`/`getMinutes()` 등은 JS 엔진 프로토타입의
+    /// 로컬 getter → 캡처를 실행하는 프로세스의 시스템 TZ 로 FIXED epoch 를 재해석한다. 같은 커밋·같은
+    /// FIXED 로 씬 3563096027(레이어 4개가 `hours>=21&&hours<24` 알파 스크립트 보유, BACKLOG.md:144)을
+    /// `TZ=Asia/Seoul` vs `TZ=UTC` 로 캡처(WapleCompat --capture, 960×540)하면 56,578/2,073,600 바이트가
+    /// 상이했다 — "핀했는데도 벽시계 의존"의 실체는 host TZ 미고정이었다(하네스 신뢰성 결함, JS Date 자체는
+    /// 정상 스펙 동작). 기존 waple-baselines 는 KST(UTC+9) 머신에서 생성됐으므로, 무회귀로 그 관측치를
+    /// 보존하려면 "실제 host TZ" 대신 "KST 고정 오프셋"으로 로컬 getter 를 재계산해야 한다(UTC 등 다른
+    /// 오프셋으로 바꾸면 hours 조건부 씬 전수가 재베이스라인 필요 — 범위 밖). getUTC* 는 스펙상 이미
+    /// TZ-불변이라 FIXED+오프셋을 새 Date 로 만들어 그 getUTC*를 읽는 표준 기법을 쓴다. 코퍼스 패턴
+    /// (TextEngineTests 주석: mainClock 류 117씬)은 getHours()+getMinutes() 수동 조합이 지배적이라 스코프를
+    /// 그 게터들로 한정 — toString/toLocaleString 류(호스트 TZ 포맷팅)는 건드리지 않는다(잔여, 저빈도).
     static func dateOverrideJS(_ epochMillis: Double) -> String {
         let ms = epochMillis.isFinite ? epochMillis : 0
         return """
         (function(){
             var g = Function('return this')();
             var R = g.Date, FIXED = \(ms);
+            var OFFSET_MIN = 540;   // Asia/Seoul = UTC+9(DST 없음) — 기존 baseline 관측치 보존용 고정값
             function D() {
-                if (arguments.length === 0) { return new R(FIXED); }
+                if (arguments.length === 0) {
+                    var d = new R(FIXED);
+                    var s = new R(FIXED + OFFSET_MIN * 60000);
+                    d.getHours = function(){ return s.getUTCHours(); };
+                    d.getMinutes = function(){ return s.getUTCMinutes(); };
+                    d.getSeconds = function(){ return s.getUTCSeconds(); };
+                    d.getMilliseconds = function(){ return s.getUTCMilliseconds(); };
+                    d.getDay = function(){ return s.getUTCDay(); };
+                    d.getDate = function(){ return s.getUTCDate(); };
+                    d.getMonth = function(){ return s.getUTCMonth(); };
+                    d.getFullYear = function(){ return s.getUTCFullYear(); };
+                    d.getYear = function(){ return s.getUTCFullYear() - 1900; };
+                    d.getTimezoneOffset = function(){ return -OFFSET_MIN; };
+                    return d;
+                }
                 return new (R.bind.apply(R, [null].concat(Array.prototype.slice.call(arguments))))();
             }
             D.prototype = R.prototype;

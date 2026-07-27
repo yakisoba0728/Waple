@@ -128,15 +128,19 @@ final class TextScriptEngineSceneFixRegressionTests: XCTestCase {
     }
 
     /// 캡처 핀(captureDateEpochMillis) 시 timeOfDay 도 고정된다 — 스냅샷 결정성 계약.
+    /// S4①(2026-07-27) 정정: engine.timeOfDay 는 내부적으로 getHours/getMinutes/getSeconds(dateOverrideJS
+    /// 가 KST 고정 오프셋으로 계산)를 쓰므로, 기대값도 `Calendar.current`(호스트 TZ — 같은 TZ 머신에서
+    /// 우연히 통과하던 수정 전 계산)가 아니라 명시적 Asia/Seoul 캘린더로 계산한다.
     func testTimeOfDayPinnedUnderCapture() throws {
-        // 2024-01-01 06:00:00 UTC = 1704088800000 ms — 로컬 시각으로 변환돼도 같은 날 같은 시각.
+        // 2024-01-01 06:00:00 UTC = 1704088800000 ms = 2024-01-01 15:00:00 KST.
         TextScriptEngine.captureDateEpochMillis = 1_704_088_800_000
         defer { TextScriptEngine.captureDateEpochMillis = nil }
         let scene = try XCTUnwrap(SceneScriptContext())
         let e = try XCTUnwrap(TextScriptEngine(script: """
         export function update(v) { return engine.timeOfDay; }
         """, scene: scene))
-        let calendar = Calendar.current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"), "테스트 환경에 Asia/Seoul TZ 데이터 필요")
         let comps = calendar.dateComponents([.hour, .minute, .second],
                                             from: Date(timeIntervalSince1970: 1_704_088_800))
         let expect = Float(comps.hour! * 3600 + comps.minute! * 60 + comps.second!) / 86400
