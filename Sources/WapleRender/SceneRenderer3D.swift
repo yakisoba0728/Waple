@@ -80,6 +80,9 @@ extension SceneRenderer {
     }
     /// M(④): MSL `FogU3D`(ParticleShaders.pf3d_fog)와 레이아웃 일치 — Scene3DFrameUniform 의 eye+포그
     /// 4필드를 발췌(파티클은 라이팅/섀도우 유니폼이 불필요해 FrameU 전체 대신 축소 구조체를 쓴다).
+    /// C4-(ii): `eye.w` 는 mesh 쪽 FrameU.cameraEye.w 처럼 원래 미사용 패딩(항상 1)이었으나, 이 구조체
+    /// (파티클 전용)에 한해 encode3DParticles 가 매 파티클시스템 드로우 직전 overbright(기본 1)로
+    /// 덮어써 pf3d_fog 에 전달한다 — mesh FrameU.cameraEye 와는 별개 값(그쪽은 여전히 상시 1, 무관).
     struct Particle3DFogUniform {
         var eye: SIMD4<Float>
         var fogDistanceColor: SIMD4<Float>
@@ -1916,7 +1919,13 @@ extension SceneRenderer {
             enc.setVertexBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 1)
             enc.setFragmentTexture(sys.texture, index: 0)
             if useFog {
+                // C4-(ii): overbright — FogU3D.eye.w 는 거리 계산에 쓰이지 않는 패딩이라 재사용(기본 1).
+                fogUniform.eye.w = sys.overbright
                 enc.setFragmentBytes(&fogUniform, length: MemoryLayout<Particle3DFogUniform>.stride, index: 0)
+            } else {
+                // C4-(ii): pf_main(2D 경로와 공유) buffer 0 = overbright(기본 1 — 비트동일).
+                var overbright = sys.overbright
+                enc.setFragmentBytes(&overbright, length: MemoryLayout<Float>.stride, index: 0)
             }
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
         }

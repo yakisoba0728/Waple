@@ -658,11 +658,13 @@ extension SceneRenderer {
             case .mesh3D:
                 break  // 위 런 수집에서 처리(도달 불가)
             case .particle where particleSystems[item.idx].refract
-                              && !particleSystems[item.idx].isTrail
+                              && !particleSystems[item.idx].isRopeTrail
                               && particleSystems[item.idx].normalTexture != nil
-                              && refractParticlePipeline != nil:
-                // REFRACT 스프라이트: 여기까지의 acc(씬 컬러)를 스냅샷 떠 노멀 오프셋 재샘플(인코더 분할).
-                // 리본/rope refract 는 스코프 밖 → 아래 일반 .particle 로 identity 렌더(ponytail).
+                              && (particleSystems[item.idx].blendAdditive
+                                  ? refractParticlePipelineAdditive : refractParticlePipeline) != nil:
+                // REFRACT 스프라이트(+ C4-(iii): spriteTrail 신장 쿼드도 sprite 와 동형이라 포함): 여기까지의
+                // acc(씬 컬러)를 스냅샷 떠 노멀 오프셋 재샘플(인코더 분할). rope/ropeTrail(히스토리 리본) refract
+                // 는 스코프 밖 → 아래 일반 .particle 로 identity 렌더(ponytail).
                 guard let next = runRefractParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx),
                                                     acc: acc, cb: cb, ending: enc, device: device,
                                                     camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
@@ -1509,6 +1511,8 @@ extension SceneRenderer {
         var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 4). 파티클도 함께 흔들림. 비활성=0.
         enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
         enc.setFragmentTexture(sys.texture, index: 0)
+        var overbright = sys.overbright  // C4-(ii): pf_main buffer 0(기본 1 — 비트동일).
+        enc.setFragmentBytes(&overbright, length: MemoryLayout<Float>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
@@ -1528,7 +1532,9 @@ extension SceneRenderer {
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].loadAction = .load
         guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
-        if let snap, let pipe = refractParticlePipeline {
+        // C4-(iii): 머티리얼 블렌드(additive/translucent)에 맞는 REFRACT 파이프라인 변형 선택.
+        let refractPipe = sys.blendAdditive ? refractParticlePipelineAdditive : refractParticlePipeline
+        if let snap, let pipe = refractPipe {
             encodeRefractParticle(sys, snapshot: snapshot, framebuffer: snap, pipe: pipe, into: next,
                                   device: device, camOffset: &camOffset, aspectScale: &aspectScale)
         } else {
@@ -1558,7 +1564,8 @@ extension SceneRenderer {
         enc.setFragmentTexture(sys.texture, index: 0)     // 알베도(g_Texture0)
         enc.setFragmentTexture(normal, index: 1)          // 노멀맵(g_Texture1)
         enc.setFragmentTexture(framebuffer, index: 2)     // 씬 컬러 스냅샷(g_Texture3 = _rt_FullFrameBuffer)
-        var params = SIMD4<Float>(sys.refractAmount, sys.normalRG88 ? 1 : 0, 0, 0)
+        // C4-(ii): z 슬롯(종전 예약 0) = overbright(기본 1 — 비트동일).
+        var params = SIMD4<Float>(sys.refractAmount, sys.normalRG88 ? 1 : 0, sys.overbright, 0)
         enc.setFragmentBytes(&params, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }

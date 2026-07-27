@@ -1320,6 +1320,8 @@ extension SceneRenderer {
             g.noInterp = sp.noInterpolation || resolveTextureNoInterpolation(def.material?.textureName, package: package)
             // M(④): combos.FOG(기본 1) — encode3DParticles 가 pf3d_fog 파이프라인 선택에 사용.
             g.foggy = def.material?.foggy ?? true
+            // C4-(ii): g_Overbright(기본 1) — encodeParticle/encodeRefractParticle/encode3DParticles 가 소비.
+            g.overbright = def.material?.overbright ?? 1
             return g
         }
         // E1(③): F178 — children[]는 파스/시뮬 모두 깊이4 재귀를 지원하나(SceneDocument.parseParticleDef
@@ -1373,8 +1375,9 @@ extension SceneRenderer {
     }
 
     /// REFRACT 스프라이트 파이프라인. vert=pv_main 공유, frag=pf_refract(노멀 오프셋 씬 재샘플·곱).
-    /// 블렌드는 translucent(over) — refract 코퍼스는 전부 translucent(additive-refract 미관측).
-    func refractParticlePipelineBuild(device: MTLDevice) -> MTLRenderPipelineState? {
+    /// C4-(iii): translucent(over, 기존)/additive(가산 — 코퍼스 additive+REFRACT 10씬 실측) 두 블렌드
+    /// 변형을 additive 인자로 선택(프래그먼트 함수·소스는 공유, 블렌드 상태만 분기).
+    func refractParticlePipelineBuild(additive: Bool, device: MTLDevice) -> MTLRenderPipelineState? {
         guard let lib = try? WapleProfiler.compile(ParticleShaders.source, { try device.makeLibrary(source: ParticleShaders.source, options: nil) }) else { return nil }
         let pd = MTLRenderPipelineDescriptor()
         pd.vertexFunction = lib.makeFunction(name: "pv_main")
@@ -1384,8 +1387,8 @@ extension SceneRenderer {
         a.isBlendingEnabled = true
         a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
-        a.destinationRGBBlendFactor = .oneMinusSourceAlpha
-        a.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        a.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+        a.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 

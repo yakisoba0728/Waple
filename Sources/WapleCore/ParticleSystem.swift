@@ -136,6 +136,17 @@ public enum RendererKind: Equatable {
         }
     }
 
+    /// C4-(iii): REFRACT 디스패치 게이트 전용 — rope/ropeTrail(위치 히스토리 리본)만 배제한다.
+    /// spriteTrail(F790 신장 쿼드)은 sprite 와 동형의 쿼드 지오메트리라 REFRACT 정접 대상(코퍼스
+    /// additive+REFRACT 10씬 중 rain_on_the_glass1 등 spriteTrail 실측) — isTrail(위, 벡터
+    /// reservation/appendRibbon 분기용)과 달리 spriteTrail 을 false 로 분리한다.
+    public var isRopeTrail: Bool {
+        switch self {
+        case .rope, .ropeTrail: return true
+        default: return false
+        }
+    }
+
     /// 리본에 보관할 위치 히스토리 샘플 수(step 당 1샘플, captureFrames=30fps 가정).
     /// spriteTrail=maxlength(세그먼트 수 근사), ropeTrail=length(초)×30, rope=subdivision(F629,
     /// 부재/0 시 종전 고정 16). F625: 캡 24→240 — maxlength 100/ropetrail 수초 트레일이 24샘플
@@ -198,12 +209,15 @@ public struct ParticleMaterial: Equatable {
     /// M(④): combos.FOG(genericparticle.frag/genericropeparticle.frag 기본 1 — 명시 0 만 씬 포그 제외).
     /// 메시 경로(SceneRenderer3D.loadMesh3DMaterial `foggy`)와 동일 기본값·게이트 규약.
     public let foggy: Bool
+    /// C4-(ii): g_Overbright(genericparticle.frag/genericropeparticle.frag — material 유니폼,
+    /// 기본 1.0, range [0,5]). RGB 만 곱(알파 제외). 기본 1 이면 렌더 비트동일(무회귀).
+    public let overbright: Float
     public init(textureName: String?, blend: BlendKind,
                 refract: Bool = false, normalTextureName: String? = nil, refractAmount: Float = 0.05,
-                foggy: Bool = true) {
+                foggy: Bool = true, overbright: Float = 1) {
         self.textureName = textureName; self.blend = blend
         self.refract = refract; self.normalTextureName = normalTextureName; self.refractAmount = refractAmount
-        self.foggy = foggy
+        self.foggy = foggy; self.overbright = overbright
     }
 
     public static func parse(_ json: [String: Any], userProps: [String: Any] = [:]) -> ParticleMaterial {
@@ -232,9 +246,12 @@ public struct ParticleMaterial: Equatable {
            let v = combos.first(where: { $0.key.lowercased() == "fog" })?.value {
             foggy = ((v as? NSNumber)?.intValue ?? 1) != 0
         }
+        // C4-(ii): constantshadervalues.ui_editor_properties_overbright(refract_amount 와 동일 파스 패턴).
+        // 미명시 시 WE 기본 1.0(무변화 — 60씬 중 값이 다른 씬만 실질 변화).
+        let overbright = pfloat((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_overbright"]) ?? 1
         return ParticleMaterial(textureName: albedo, blend: blend,
                                 refract: refract && normalName != nil, normalTextureName: normalName,
-                                refractAmount: refractAmount, foggy: foggy)
+                                refractAmount: refractAmount, foggy: foggy, overbright: overbright)
     }
 }
 
@@ -437,6 +454,17 @@ public struct ParticleSystemDef: Equatable {
                                           max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255),
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "alpharandom":
+                // W2-① 원복: 032b66d(부재 기본값 1→0)를 되돌린다. 같은 파스 스위치의 관례상
+                // 부재 기본값은 항상 "중립값"이다 — colorrandom??(255,255,255)(최대), velocity/
+                // rotationrandom??0. 알파의 중립은 1(불투명)이며 0(완전 투명)이 아니다.
+                // 반증: wind-blur.json {"min":0.8}(max 부재)이 ??0 이면 역전 구간 [0,0.8]이 되어
+                // 저작 의도([0.8,1])와 반대로 감광된다. 3257043844(SakuraFront 단일 파티클계,
+                // min/max 둘 다 부재)는 WE 프리뷰에 꽃잎이 명확히 보이는데 ??0 이면
+                // initialAlpha=0 → alphafade 곱으로 전 파티클이 완전 투명해져 모순.
+                // 032b66d 근거였던 "3416122407 프리뷰에 bokeh 없음"은 무효 — 그 프리뷰엔
+                // fireworks/stars/butterflies/birds/leaves 도 안 보이는데 이는 알파 0이 아니라
+                // 해당 레이어들이 프로퍼티로 꺼져 있다는 증거다. bokeh 백화의 진범은 미구현
+                // overbright(halo_2_* 머티리얼의 overbright:0.25 + additive)였고 W2-②가 해소했다.
                 inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "velocityrandom":

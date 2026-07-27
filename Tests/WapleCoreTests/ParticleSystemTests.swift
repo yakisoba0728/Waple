@@ -246,6 +246,49 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(RendererKind.sprite.trailSampleCount, 0)
     }
 
+    /// C4-(iii): REFRACT 디스패치가 소비하는 isRopeTrail — spriteTrail 은 sprite 와 동형 쿼드 지오메트리라
+    /// REFRACT 정접 대상(false), rope/ropeTrail(히스토리 리본)만 배제(true). isTrail(위 테스트)과 대조적으로
+    /// spriteTrail 에서 갈린다.
+    func testIsRopeTrailExcludesOnlyHistoryRibbonRenderers() {
+        XCTAssertFalse(RendererKind.sprite.isRopeTrail)
+        XCTAssertFalse(RendererKind.spriteTrail(maxLength: 20, length: 0, minLength: 0).isRopeTrail)
+        XCTAssertTrue(RendererKind.rope(subdivision: 0).isRopeTrail)
+        XCTAssertTrue(RendererKind.ropeTrail(length: 0.4, subdivision: 2).isRopeTrail)
+    }
+
+    /// C4-(i): alpharandom min/max 부재 → WE 실기본값 0,0(bokeh 백화 원인 — 종전 ??1 은 불투명 고정).
+    /// W2-① 원복: 032b66d(부재 기본값 1→0)를 되돌렸다 — 부재 시 알파는 중립값 1(불투명)이어야
+    /// 한다. min-only(예: wind-blur.json {"min":0.8})가 ??0 이면 역전 구간 [0,0.8]이 되어 저작
+    /// 의도([0.8,1])와 반대가 되고, 양쪽 부재(3257043844 SakuraFront 등)가 ??0 이면 파티클이
+    /// alphafade 곱으로 완전 투명해져 WE 프리뷰(꽃잎 가시)와 모순된다.
+    func testAlphaRandomMissingMinMaxDefaultsToOne() {
+        let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"alpharandom"}]}"#), material: nil)
+        XCTAssertTrue(d.initializers.contains(.alphaRandom(min: 1, max: 1, exponent: 1)))
+    }
+
+    /// 위 원복이 "알파만" 바뀌고 그 뒤를 잇는 다른 랜덤 이니셜라이저의 RNG 시퀀스는 건드리지
+    /// 않는지 확인 — alpharandom 은 min==max(고정폭)라 부재/명시 1,1 모두 동일하게 드로우를
+    /// 소비한다(스킵 아님). 이후 velocityrandom 결과가 두 케이스에서 동일해야 "값만" 바뀐
+    /// 표적 수정임이 증명된다(RNG 캐스케이드가 있었다면 이후 값이 갈렸을 것).
+    func testAlphaRandomDefaultChangeDoesNotShiftDownstreamRNG() throws {
+        func lastVelocity(alphaJSON: String) throws -> SIMD3<Float> {
+            let source = """
+            {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+             "initializer":[\(alphaJSON)
+               {"name":"velocityrandom","min":"0 0 0","max":"1 1 1"}],
+             "renderer":[{"name":"sprite"}],"maxcount":1}
+            """
+            let def = ParticleSystemDef.parse(json(source), material: nil)
+            var simulator = ParticleSimulator(def: def, seed: 7)
+            return try XCTUnwrap(simulator.step(0).first).vel
+        }
+        let omitted = try lastVelocity(alphaJSON: #"{"name":"alpharandom"},"#)
+        let explicitOne = try lastVelocity(alphaJSON: #"{"name":"alpharandom","min":1,"max":1},"#)
+        XCTAssertEqual(omitted.x, explicitOne.x, accuracy: 1e-6)
+        XCTAssertEqual(omitted.y, explicitOne.y, accuracy: 1e-6)
+        XCTAssertEqual(omitted.z, explicitOne.z, accuracy: 1e-6)
+    }
+
     // F188: drag 파싱 — movement 의 선형 drag(:497-498행)와 대칭. 실물 45/47 회귀·2/47 drag 실사용.
     func testAngularMovementParsesDrag() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"angularmovement","force":"0 0 2","drag":0.5}]}"#), material: nil)
@@ -488,5 +531,24 @@ final class ParticleSystemTests: XCTestCase {
         let noNormal = ParticleMaterial.parse(json(#"{"passes":[{"combos":{"REFRACT":1},"textures":["only/albedo"]}]}"#))
         XCTAssertFalse(noNormal.refract)
         XCTAssertNil(noNormal.normalTextureName)
+    }
+
+    // C4-(ii): overbright(genericparticle.frag g_Overbright, material 유니폼) — refract_amount 와 동일
+    // constantshadervalues 파스 패턴(실물 dischargearc.json: ui_editor_properties_overbright=1.0).
+    func testOverbrightParsedFromConstantShaderValues() {
+        let m = ParticleMaterial.parse(json("""
+        {"passes":[{"blending":"additive",
+          "constantshadervalues":{"ui_editor_properties_overbright":2.5},
+          "textures":["particle/beam"]}]}
+        """))
+        XCTAssertEqual(m.overbright, 2.5, accuracy: 1e-6)
+    }
+
+    // 미명시 시 WE 기본 1.0 — 기존 씬(overbright 키 없음) 무회귀의 근거(색 곱 항등원).
+    func testOverbrightDefaultsToOneWhenAbsent() {
+        let m = ParticleMaterial.parse(json(#"{"passes":[{"blending":"translucent","textures":["particle/snow"]}]}"#))
+        XCTAssertEqual(m.overbright, 1, accuracy: 1e-6)
+        let empty = ParticleMaterial.parse(json("{}"))
+        XCTAssertEqual(empty.overbright, 1, accuracy: 1e-6)
     }
 }
