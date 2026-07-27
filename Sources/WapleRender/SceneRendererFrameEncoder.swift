@@ -283,10 +283,25 @@ extension SceneRenderer {
         enc.endEncoding()
         var srcTex: MTLTexture? = nil
         var backdrop: MTLTexture? = nil
-        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true),
-           let blit = cb.makeBlitCommandEncoder() {
-            blit.copy(from: acc, to: snap)
-            blit.endEncoding()
+        if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true) {
+            // B2-effects④: copyBackground(WE 컴포지션 레이어 "배경 복사") false 면 acc(기존 누적 화면)를
+            // 블릿하지 않고 투명으로 클리어 — 실물 확인(3629379075 "可调整组合层" blur, copybackground:false):
+            // Waple 이 이 플래그를 무시하고 항상 acc 를 블릿·블러해 전체 화면이 풀프레임 워시로 덮였다.
+            // false 소스는 투명이라 이펙트 체인(블러 등)을 거쳐도 대체로 투명 그대로 → f_compose 합성 시
+            // 기존 장면이 그대로 비쳐 보인다(레이어 자신은 실질 무-기여, WE 의도와 정합).
+            if layer.copyBackground {
+                guard let blit = cb.makeBlitCommandEncoder() else { return nil }
+                blit.copy(from: acc, to: snap)
+                blit.endEncoding()
+            } else {
+                let clearRPD = MTLRenderPassDescriptor()
+                clearRPD.colorAttachments[0].texture = snap
+                clearRPD.colorAttachments[0].loadAction = .clear
+                clearRPD.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                clearRPD.colorAttachments[0].storeAction = .store
+                guard let clearEnc = cb.makeRenderCommandEncoder(descriptor: clearRPD) else { return nil }
+                clearEnc.endEncoding()
+            }
             backdrop = snap
             var current: MTLTexture = snap
             for eff in layer.effects {

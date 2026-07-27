@@ -426,7 +426,7 @@ extension SceneRenderer {
                                 effects: effects, texWidth: effW, texHeight: effH,
                                 order: layer.order, uid: uid,
                                 blendAdditive: layer.blendMode == "additive",
-                                isFrameBuffer: layer.isFrameBuffer,
+                                isFrameBuffer: layer.isFrameBuffer, copyBackground: layer.copyBackground,
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty
                                       && attach == nil) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,

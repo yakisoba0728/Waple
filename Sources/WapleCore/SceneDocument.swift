@@ -152,7 +152,11 @@ public struct SceneLayer: Equatable {
     public var dependencies: [Int] = []
     /// 오브젝트-레벨 전파/렌더 플래그 파스·보존(소비는 렌더러 책임).
     public var disablePropagation: Bool = false
-    public var copyBackground: Bool = false
+    /// B2-effects④: WE 컴포지션(_rt_) 레이어 "배경 복사". 기본 true(코퍼스 실측: 명시값 255×true vs 56×
+    /// false — 미명시는 true 가 통상 케이스). false 는 렌더러가 acc(기존 누적 화면) 블릿을 건너뛰고
+    /// 투명에서 이펙트 체인을 시작(runFrameBufferLayer 소비 — 실물 3629379075 "可调整组合层" blur 풀프레임
+    /// 워시 수정의 근거).
+    public var copyBackground: Bool = true
     public var clampUVs: Bool = false
     public var noInterpolation: Bool = false
     public var spacing: Float? = nil
@@ -206,7 +210,7 @@ public struct SceneParticle: Equatable {
     public var visibleScriptProps: String? = nil
     /// 오브젝트-레벨 전파/렌더 플래그 파스·보존.
     public var disablePropagation: Bool = false
-    public var copyBackground: Bool = false
+    public var copyBackground: Bool = true
     public var clampUVs: Bool = false
     public var noInterpolation: Bool = false
     public var lockTransforms: Bool = false
@@ -272,7 +276,7 @@ public struct SceneTextLayer: Equatable {
     public var effects: [SceneEffect] = []
     /// 오브젝트-레벨 전파/렌더 플래그 파스·보존.
     public var disablePropagation: Bool = false
-    public var copyBackground: Bool = false
+    public var copyBackground: Bool = true
     public var clampUVs: Bool = false
     public var noInterpolation: Bool = false
     public var spacing: Float? = nil
@@ -1229,7 +1233,7 @@ extension SceneDocument {
         layer.dependencies = (obj["dependencies"] as? [Any])?.compactMap { intVal($0) } ?? []
         // M7/M5: object-level render flags + config passthrough.
         layer.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
-        layer.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? false
+        layer.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
         layer.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
         layer.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
         layer.spacing = float(obj["spacing"])
@@ -1439,7 +1443,7 @@ extension SceneDocument {
         t.effects = parseEffects(obj["effects"], userProps: userProps)
         // M7: object-level render flags.
         t.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
-        t.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? false
+        t.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
         t.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
         t.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
         t.spacing = float(obj["spacing"])
@@ -1988,7 +1992,7 @@ extension SceneDocument {
         }
         // M7: object-level render flags.
         p.disablePropagation = (unwrap(obj["disablepropagation"]) as? Bool) ?? false
-        p.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? false
+        p.copyBackground = (unwrap(obj["copybackground"]) as? Bool) ?? true
         p.clampUVs = (unwrap(obj["clampuvs"]) as? Bool) ?? false
         p.noInterpolation = (unwrap(obj["nointerpolation"]) as? Bool) ?? false
         p.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
