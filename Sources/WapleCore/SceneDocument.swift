@@ -246,7 +246,12 @@ public struct SceneTextLayer: Equatable {
     public let horizontalAlign: String   // left|center|right (origin 앵커 기준)
     public let verticalAlign: String     // top|center|bottom
     /// E1: parent 체인 합성이 파스 말미에 월드(프로젝션 픽셀) 값으로 덮어쓴다(레이어와 동일 규약) — 그래서 var.
+    /// (3D 씬은 composeTextParentTransforms 가 미실행 — camera3D!=nil 게이트 — 이라 origin.xy 는 로컬 그대로.)
     public var origin: Vec2
+    /// W-①: origin 의 3성분째(월드 z) — SceneLayer.originZ 와 동일 규약. 2D 씬에선 무시, 3D 씬 텍스트
+    /// 빌보드가 월드 위치로 사용(build3D). 코퍼스 3D 텍스트 실측: image 레이어와 동일 소수 단위(카메라
+    /// eye/center 스케일과 정합, 픽셀 스케일 아님) — "screen overlay" 가 아니라 world placement 가 정본.
+    public var originZ: Float = 0
     public var scale: Vec2               // 배율은 "scale" 필드(실측 "2 2") — "size" 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)
     /// W3-⑤: 정적 angleZ(scene.json "angles" 의 z 성분, 라디안 — 레이어 SceneLayer.angleZ 와 동일 규약).
     /// 스크립트 바인딩(propertyScripts["angles"])이 있으면 그 결과가 매 프레임 이 값을 대체(encodeText).
@@ -1419,6 +1424,9 @@ extension SceneDocument {
         // 스크립트 바인딩({"script":...})이어도 floats()→unwrap 이 "value" 스냅샷을 돌려주므로 초기값으로 안전.
         let textAngles = floats(obj["angles"])
         t.angleZ = textAngles.count >= 3 ? textAngles[2] : 0
+        // W-①: 3D 씬 텍스트 빌보드용 origin.z(월드) — SceneLayer.originZ(:1221 인근)와 동일 파스 규약.
+        let originFull = floats(obj["origin"])
+        t.originZ = originFull.count >= 3 ? originFull[2] : 0
         // "Limit width/rows" 체크(불리언 리터럴 — 코퍼스 1640건 전수)가 켜진 때만 유효값. maxwidth 는
         // 바인딩 dict({user/script,value} — 실물 32건)가 있어 float() 의 {value} 언랩 경유, 폴백은
         // 에디터 기본(maxwidth 500 — 1468건 / maxrows 1 — 1628건). 부재/미체크 nil = 무제한(무회귀).

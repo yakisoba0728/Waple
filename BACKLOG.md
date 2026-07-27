@@ -47,6 +47,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 - **E1 composelayer 삼각마스크 미재현** — 2902406982: 회색덩어리는 해소(화면좌표 f_compose), 그러나 三角模块N `_rt_imageLayerComposite_<id>` 그룹 자식 RT + clipping_mask 레이어간 샘플링 미구현
 - ~~A2 블룸 확산 패스~~ **F004 정정(2026-07-18): "파싱만(미소비)"는 역-스테일 — LDR/HDR 블룸 모두 추출→블러→가산으로 구현·소비됨**([LDRBloomPass.swift](Sources/WapleRender/LDRBloomPass.swift)/[HDRBloomPass.swift](Sources/WapleRender/HDRBloomPass.swift), `SceneRenderer.swift` `sceneWantsLDRBloom`/`sceneWantsHDRBloom`, 커밋 24cee5f·a3d2afb·8be4b89·cb9b80c·c1584da). 잔여는 refinement 뿐: 피라미드 완전확산(현재 2단 ÷4/÷8 근사, WE 는 8단) · strength CPU 변환규칙 미결 · 3D-HDR 골든 완전 파리티 미달(선재 3D 콘텐츠 갭, 위 참조)
 - **B1 텍스트 잔여** — 4.17× DPI로 8192px 래스터 가드 강화 → 긴 미줄바꿈 텍스트 소실(조용) 가능; 워드랩·MSDF·per-line 정렬·크기/위치 미세조정
+- **W-① 3D 씬 텍스트 빌보드 잔여**(2026-07-27, `08058c9`로 world-placement 배선 완료 — [SceneRenderer3D.swift](Sources/WapleRender/SceneRenderer3D.swift)) — origin/scale/angles/visible 만 attachScripts, 아래 2건은 의도적 미부착·미구현:
+  (a) **alpha/color 프로퍼티 스크립트 미부착** — 실측 3509243656 UI 패널이 dd/yp/num 얽힌 shared 상태머신이라 부착 시 무관 이미지 빌보드(id=449)가 잘못된 타이밍에 오노출되고 캡처 셀프체크가 비결정(frac 0.0176~0.025, 재현 가능)이 됨. 필요 시 캡처-세이프 격리(예: alpha 스크립트 보유 text 는 빌보드 자체를 만들지 않는 draw-gate) 부터 검토.
+  (b) **텍스트 '내용' 동적 재래스터 미지원** — F309 프라이밍이 확정한 1회 평가값(controllerOf[uid].last)만 래스터, update() 가 이후 콘텐츠를 바꿔도 화면엔 반영 안 됨(위치/스케일/회전/가시성만 매프레임 애니). 코퍼스 5씬(3470948192·3477054430·3589454154·3662790108·3737268876) A/B 캡처(1920×1080, main-6526db1 대비)로 블라스트 반경 확인 완료 — 3662790108(76텍스트)·3477054430(1)·3737268876(4) 는 byte-identical(새 빌보드가 캡처 시점 비가시), 3589454154·3470948192 는 소폭 개선(정보 텍스트 신규 노출, 왜곡 없음). 상세: [docs/scene-render-audit-2026-07-26.md](docs/scene-render-audit-2026-07-26.md) "3D/칸 메라/투영 잔여" 참조.
 - **A4 g_Color1~4 계열** — 그라디언트/파티클 다중색 유니폼(중립값 비단순), exact-name 스코프서 제외됨. 필요시 검토
 
 ## 잠재 결함 — 트리거: 실제 파일/사용에서 물릴 때

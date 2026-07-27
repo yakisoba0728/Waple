@@ -485,24 +485,34 @@ extension SceneRenderer {
             bbLoaded += 1
         }
 
-        // ── per-frame 평가/그리기 순서(씬 order). 평가는 스크립트 보유 노드/빌보드만. ──
-        var evalItems: [(order: Int, bb: Bool, idx: Int)] = []
-        for (i, n) in nodes3D.enumerated() where !n.scripts.isEmpty { evalItems.append((n.order, false, i)) }
-        for (i, b) in billboards.enumerated() where !b.scripts.isEmpty { evalItems.append((b.order, true, i)) }
-        // 안정 정렬(order, 삽입순) — 2D 경로와 동일 규약. 동률 order 의 상대 순서 고정.
-        eval3DOrder = evalItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
-        var drawItems: [(order: Int, bb: Bool, idx: Int)] = []
-        for (i, m) in meshRenderables.enumerated() { drawItems.append((m.order, false, i)) }
-        for (i, b) in billboards.enumerated() { drawItems.append((b.order, true, i)) }
-        draw3DOrder = drawItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
+        // ── per-frame 평가/그리기 순서(씬 order). 평가는 스크립트 보유 노드/빌보드만(이미지 빌보드까지만 —
+        // 텍스트 빌보드는 아래 W-① 블록에서 append 되므로 이 시점엔 존재하지 않는다). 원본과 동일 위치
+        // (text3DControllers 로드보다 먼저 — 순서를 바꾸면 makeScriptEngine top-level 사이드이펙트가 다른
+        // 씬 상태를 보게 될 위험이 있어 원본 상대순서를 그대로 보존한다). ──
+        func rebuildDrawOrders() {
+            var evalItems: [(order: Int, bb: Bool, idx: Int)] = []
+            for (i, n) in nodes3D.enumerated() where !n.scripts.isEmpty { evalItems.append((n.order, false, i)) }
+            for (i, b) in billboards.enumerated() where !b.scripts.isEmpty { evalItems.append((b.order, true, i)) }
+            // 안정 정렬(order, 삽입순) — 2D 경로와 동일 규약. 동률 order 의 상대 순서 고정.
+            eval3DOrder = evalItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
+            var drawItems: [(order: Int, bb: Bool, idx: Int)] = []
+            for (i, m) in meshRenderables.enumerated() { drawItems.append((m.order, false, i)) }
+            for (i, b) in billboards.enumerated() { drawItems.append((b.order, true, i)) }
+            draw3DOrder = drawItems.enumerated().sorted { ($0.1.order, $0.0) < ($1.1.order, $1.0) }.map { $0.1 }
+        }
+        rebuildDrawOrders()
         // 3D 씬 text 컨트롤러 로드: 2D buildTexts(shared 통신용 엔진 로드)의 3D 대응. text 스크립트의
         // top-level + update 사이드이펙트(shared.vvv 등)가 3D 지오메트리 스크립트를 구동한다(미실행 시 NaN).
-        // 픽셀 렌더는 미배선(3D 텍스트 스크린 오버레이 위치/크기 규약 미확정) — 사이드이펙트만 실행.
-        for t in doc.texts where !orthoHybrid {   // 감사 V06: ortho 하이브리드는 미빌드(2D buildTexts 가 담당)
+        // controllerOf[uid] = text3DControllers 인덱스(콘텐츠 확정은 프라이밍 이후 — 아래 W-① 참조).
+        var controllerOf: [Int: Int] = [:]   // doc.texts 인덱스 → text3DControllers 인덱스
+        for (uid, t) in doc.texts.enumerated() where !orthoHybrid {   // 감사 V06: ortho 하이브리드는 미빌드(2D buildTexts 가 담당)
             guard let src = t.script, let e = makeScriptEngine(src, layerName: t.name.isEmpty ? nil : t.name,
                                                                scriptPropsJSON: t.scriptProps) else { continue }
             // makeScriptEngine 생성 시 top-level 실행(shared 초기화) — update 보유분만 per-frame 재평가 대상.
-            if e.hasUpdate { text3DControllers.append((engine: e, last: t.text)) }
+            if e.hasUpdate {
+                controllerOf[uid] = text3DControllers.count
+                text3DControllers.append((engine: e, last: t.text))
+            }
         }
         // 카메라 스크립트 또는 활성 애니(스키닝) 가 있으면 연속 렌더 필요.
         let hasSkinAnim = meshRenderables.contains { $0.animIndex >= 0 }
@@ -516,7 +526,63 @@ extension SceneRenderer {
         // 역전이 이 1회로 흡수되어 shared(예: 3470948192 id=56→181→115 체인의 shared.xx/vvv)가 실호출
         // 이전에 정착값을 갖는다 — 첫 캡처/라이브 프레임부터 유한값(라이브의 1프레임 지연은 정상 거동으로
         // 보존, 캡처는 항상 프레시 마운트라 두 프로덕션 호출부 무수정으로 함께 해결).
+        // W-①: 이 1회 프라이밍이 text3DControllers[*].last 를 콘텐츠 스크립트의 유일한 evaluate() 호출로
+        // 확정한다 — 아래 텍스트 빌보드 블록은 이 결과를 "읽기만" 하고 evaluate() 를 다시 부르지 않는다
+        // (재호출 시 누적형 스크립트(value.x+=...)가 이중 적분되어 씬 다른 오브젝트의 shared 분기가
+        // 어긋난다 — 실측: 3509243656 에서 이중평가 시 무관 레이어가 조기 가시화되는 회귀 확인·기각).
         evaluate3DScripts(time: 0)
+
+        // ── 3D 씬 텍스트. W-①: 규약 확정 — 코퍼스 실측(3509243656 등)에서 3D 텍스트 오브젝트의
+        // origin/scale 은 Vec3(소수 단위, 카메라 eye/center·동일 씬 image 빌보드 origin 과 동일 스케일)로,
+        // "screen overlay"(씬 픽셀 0..1920) 가 아니라 image 레이어와 동형의 world placement 가 정본이다
+        // (composeTextParentTransforms 도 camera3D!=nil 이면 미실행 — SceneDocument.swift 참조 — 이라
+        // origin/scale/angleZ 는 로컬 그대로 부모 체인에 태운다). 그래서 이미지 빌보드와 동일하게
+        // 래스터(TextRasterizer, 2D buildTexts 와 동일 경로) → Billboard3D 로 배선한다. 콘텐츠는 위 프라이밍이
+        // 이미 확정한 text3DControllers[*].last(스크립트 없으면 t.text 그대로)로 1회만 래스터(동적 재래스터는
+        // 후속 과제 — 위치/스케일/가시성은 attachScripts 로 매프레임 애니, 텍스트 '내용' 갱신만 유보).
+        // W-①: alpha/color 프로퍼티 스크립트는 의도적으로 미부착(origin/scale/angles/visible 만) — 실측
+        // 3509243656 의 "RST문자" UI 패널이 dd/yp/num 공유 상태로 얽힌 페이드 인/아웃 체인(여러 오브젝트가
+        // 같은 shared 변수를 주고받는 복합 상태머신)이라, 지금까지 미실행이던 text alpha 스크립트를 새로
+        // 돌리면 무관 이미지 빌보드(예: "RST界面背景备用" id=449, 32×32 세계단위 검은 배경 패널)가 엉뚱한
+        // 타이밍에 불투명해져 화면을 가리고, 셀프체크 이중평가에서 비결정 스냅샷까지 발생했다(측정: frac
+        // 0.0176~0.025, 재현 가능). 위치/크기/회전/가시성(이 항목의 핵심 — "world placement" 배선)은 이
+        // 상태머신과 무관해 안전하게 부착. alpha/color 페이드 애니는 후속 과제(BACKLOG).
+        var textBBLoaded = 0, textBBSkipped = 0
+        for (uid, t) in doc.texts.enumerated() where !orthoHybrid {
+            let content = controllerOf[uid].map { text3DControllers[$0].last } ?? t.text
+            guard let r = TextRasterizer.render(text: content, fontData: quietAssetData(t.font, package: package),
+                                                systemFontName: (t.font.hasPrefix("systemfont_") || t.font.isEmpty) ? t.font : nil,
+                                                pointSize: t.pointSize, maxWidth: t.maxWidth, maxRows: t.maxRows,
+                                                ellipsis: t.overflowEllipsis, justify: t.justify, align: t.horizontalAlign),
+                  let mtl = makeTexture(r.rgba, r.width, r.height, device) else { textBBSkipped += 1; continue }
+            // W-①: depthWrite 는 항상 false — 텍스트 쿼드는 알파 배경이 대부분(글리프만 불투명)인데 depthWrite
+            // true 면 사각형 전체가 뎁스를 채워 그 뒤에 그려질 콘텐츠(장면 순서상 더 늦은 order)를 사각형
+            // 형태로 가려버린다(실측: 3509243656 id=2054 — 투명 배경 영역이 불투명 검은 사각형으로 보임).
+            // depthTest 는 유지(다른 메시/빌보드에 정상적으로 가려지는 건 맞는 동작).
+            let bb = Billboard3D(texture: mtl, size: SIMD2(Float(r.width), Float(r.height)),
+                                 parent: t.parent, order: t.order, additive: false, depthTest: true, depthWrite: false,
+                                 effects: [], texWidth: r.width, texHeight: r.height, isFrameBuffer: false,
+                                 origin: SIMD3(t.origin.x, t.origin.y, t.originZ), scale: SIMD2(t.scale.x, t.scale.y),
+                                 angleZ: t.angleZ, tint: SIMD4(t.color.x, t.color.y, t.color.z, t.alpha),
+                                 visible: t.initialVisible, lighting: false, roughness: 1, metallic: 0,
+                                 specularTint: SIMD3(1, 1, 1), layerIndex: -1, id: t.id)
+            attachScripts(bb, sources: t.propertyScripts.filter { ["origin", "scale", "angles", "visible"].contains($0.key) })
+            billboards.append(bb)
+            // billboardDefs 는 의도적으로 미추가(SceneLayer internal init — 타 모듈 WapleRender 에서 생성 불가,
+            // text 오브젝트엔 대응 SceneLayer 도 없음). SceneRenderer.swift:443 의 이벤트 마커 결속 루프가
+            // `where i < billboardDefs.count` 로 가드돼 있어, 이미지 빌보드(선행) 뒤에 붙는 이 텍스트
+            // 빌보드들은 그 루프에서 조용히 제외된다(무크래시 — text 는 애초에 puppet 이벤트 대상이 아니라
+            // 무영향). billboards.count > billboardDefs.count 는 이 루프에서만 유효한 의도된 불변식 이완.
+            textBBLoaded += 1
+        }
+        if textBBLoaded > 0 || textBBSkipped > 0 {
+            // 텍스트 빌보드는 프라이밍 이후 추가되므로 eval3DOrder/draw3DOrder 재계산(스크립트 보유분은
+            // encode3D 의 매프레임 evaluate3DScripts 가 그때부터 정상 평가 — 프라이밍 1회만 미적용, 무해
+            // — F309 프라이밍 목적은 mesh/node 가 text 콘텐츠발 shared 를 초회부터 보는 것뿐).
+            rebuildDrawOrders()
+            has3DScripts = !eval3DOrder.isEmpty || !cameraScripts.isEmpty || hasSkinAnim || !text3DControllers.isEmpty
+            NSLog("%@", "[Waple] 3D scene text: \(textBBLoaded) billboards (\(textBBSkipped) skipped)")
+        }
 
         NSLog("%@", "[Waple] 3D scene: \(loaded) meshes (\(skipped) skipped), \(bbLoaded) billboards (\(bbSkipped) skipped), " +
               "\(nodes3D.count) nodes, \(eval3DOrder.count) scripted, lights=\(doc.lights3D.count)")
@@ -1774,7 +1840,13 @@ extension SceneRenderer {
         let sy = bb.scale.y < 0 ? -syMag : syMag
         let hw = bb.size.x * 0.5 * sx
         let hh = bb.size.y * 0.5 * sy
-        guard abs(hw) > 0, abs(hh) > 0, hw.isFinite, hh.isFinite else { return }
+        // W-①: center(위치, columns.3)는 위 hw/hh 가드(columns 0/1 유래 스케일)로는 안 걸러진다 — origin
+        // 프로퍼티 스크립트가 미정 shared 값(예 shared.xx1)을 읽어 NaN 을 내면(1프레임 지연으로 자가 치유되는
+        // 라이브와 달리 단일 프레임 캡처는 못 고침 — F309 문서화 패턴과 동류) center 가 NaN 인 채로 아래
+        // 사변형이 그려져 화면에 임의 위치의 불투명 사각형(검은 상자)이 찍힌다(실측: 3509243656 텍스트
+        // 빌보드). 그려도 무의미하므로 여기서 스킵(무크래시 — 기존 빌보드도 동일 정책 확장, 회귀 없음).
+        guard abs(hw) > 0, abs(hh) > 0, hw.isFinite, hh.isFinite,
+              center.x.isFinite, center.y.isFinite, center.z.isFinite else { return }
         let ca = cos(bb.angleZ), sa = sin(bb.angleZ)
         let rollRight = right * ca + up * sa
         let rollUp = -right * sa + up * ca
