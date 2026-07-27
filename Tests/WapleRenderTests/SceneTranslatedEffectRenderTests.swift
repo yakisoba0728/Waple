@@ -929,4 +929,216 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertGreaterThan(abs(c0.redComponent - c1.redComponent), 0.15,
                              "waterwaves 가 no-op 이면(회귀) 두 시각 모두 그라디언트 중앙색으로 동일 — 변위가 살아있어야 시각별로 달라진다")
     }
+
+    /// B2-effects③ 지적 보강: 위 가드는 MASK/TIMEOFFSET 콤보를 전부 0(미바인드)으로 둔 채 변위 유무만
+    /// 봐서, 감사가 실제로 지적한 결함("waterwaves TIMEOFFSET 마스크 오바인드" — dig-effects-b.md §3,
+    /// 실물 waterwaves.frag:11-13 `g_Texture1`=`combo:"MASK"`, `g_Texture2`=`combo:"TIMEOFFSET"` 샘플러
+    /// 어노테이션)이 다시 깨져도 잡지 못한다. 이 테스트는 실물 waterwaves.frag/vert(#include 만 제거, MASK
+    /// 분기는 원문 그대로)를 그대로 번역해 MASK 텍스처가 실제로 읽혀 displacement 를 게이팅하는지 단언한다
+    /// — mask=1(흰 텍스처)은 기존 무마스크 가드와 동일하게 시간에 따라 변위해야 하고, mask=0(검정 텍스처)은
+    /// 완전히 정지해야 한다(둘 다 같은 값이면 g_Texture1 이 콘텐츠와 무관하게 상수로 오바인드된 것).
+    func testWaterwavesMaskComboGatesDisplacement() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        // [COMBO] {"material":"ui_editor_properties_perspective","combo":"PERSPECTIVE","type":"options","default":0}
+        // [COMBO] {"material":"ui_editor_properties_dual_waves","combo":"DUALWAVES","type":"options","default":0}
+
+        vec2 rotateVec2(vec2 v, float r) {
+            vec2 cs = vec2(cos(r), sin(r));
+            return vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);
+        }
+
+        uniform mat4 g_ModelViewProjectionMatrix;
+        uniform vec4 g_Texture1Resolution;
+        uniform vec4 g_Texture2Resolution;
+        uniform float g_Direction;
+
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+
+        varying vec4 v_TexCoord;
+        varying vec2 v_Direction;
+
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord.xyxy;
+        #if MASK
+            v_TexCoord.z *= g_Texture1Resolution.z / g_Texture1Resolution.x;
+            v_TexCoord.w *= g_Texture1Resolution.w / g_Texture1Resolution.y;
+        #else
+        #if TIMEOFFSET
+            v_TexCoord.z *= g_Texture2Resolution.z / g_Texture2Resolution.x;
+            v_TexCoord.w *= g_Texture2Resolution.w / g_Texture2Resolution.y;
+        #endif
+        #endif
+            v_Direction = rotateVec2(vec2(0, 1), g_Direction);
+        }
+        """
+        let frag = """
+        varying vec4 v_TexCoord;
+        varying vec2 v_Direction;
+        uniform sampler2D g_Texture0;
+        uniform sampler2D g_Texture1; // {"combo":"MASK"}
+        uniform sampler2D g_Texture2; // {"combo":"TIMEOFFSET"}
+        uniform float g_Time;
+        uniform float g_Speed;
+        uniform float g_Scale;
+        uniform float g_Exponent;
+        uniform float g_Strength;
+        #define M_PI_2 6.28318530718
+        void main() {
+        #if MASK
+            float mask = texSample2D(g_Texture1, v_TexCoord.zw).r;
+        #else
+            float mask = 1.0;
+        #endif
+            vec2 texCoord = v_TexCoord.xy;
+            vec2 texCoordMotion = texCoord;
+            float distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;
+        #if TIMEOFFSET
+            float timeOffset = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;
+            distance += timeOffset;
+        #endif
+            float strength = g_Strength * g_Strength;
+            vec2 offset = vec2(v_Direction.y, -v_Direction.x);
+            float val1 = sin(distance);
+            float s1 = sign(val1);
+            val1 = pow(abs(val1), g_Exponent);
+            texCoord += val1 * s1 * offset * strength * mask;
+            gl_FragColor = texSample2D(g_Texture0, texCoord);
+        }
+        """
+        func sample(maskTexName: String, at times: [Float]) throws -> [NSColor] {
+            let scene = """
+            {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+             "objects":[{"id":1,"image":"models/g.json","origin":"960 540 0","size":"1920 1080",
+               "effects":[{"file":"effects/waterwaves/effect.json",
+                 "passes":[{"constantshadervalues":{"speed":10,"scale":0,"strength":0.5,"exponent":1},
+                            "textures":[null,"\(maskTexName)"]}]}]}]}
+            """
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("waple_tr_ww_mask_\(maskTexName)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try encodePkg([
+                ("scene.json", scene.data(using: .utf8)!),
+                ("models/g.json", #"{"material":"materials/g.json"}"#.data(using: .utf8)!),
+                ("materials/g.json", #"{"passes":[{"textures":["g"]}]}"#.data(using: .utf8)!),
+                ("materials/g.tex", horizontalGradientTex(left: (0, 0, 0), right: (255, 255, 255), w: 64, h: 8)),
+                ("shaders/effects/waterwaves.vert", vert.data(using: .utf8)!),
+                ("shaders/effects/waterwaves.frag", frag.data(using: .utf8)!),
+                ("materials/\(maskTexName).tex", maskTexName == "wwmaskwhite" ? solidTex(255, 255, 255) : solidTex(0, 0, 0)),
+            ]).write(to: dir.appendingPathComponent("scene.pkg"))
+            let project = WallpaperProject(id: "ww_\(maskTexName)", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                           title: "ww", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+            let r = SceneRenderer()
+            try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+            defer { r.teardown() }
+            let outDir = URL(fileURLWithPath: "/tmp/waple_tr_ww_mask_\(maskTexName)")
+            try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+            let urls = r.captureFrames(width: 64, height: 36, times: times, toDir: outDir)
+            XCTAssertEqual(urls.count, times.count)
+            return try urls.map {
+                let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: $0)))
+                return try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+            }
+        }
+        let white = try sample(maskTexName: "wwmaskwhite", at: [0.1, 0.35])
+        let black = try sample(maskTexName: "wwmaskblack", at: [0.1, 0.35])
+        NSLog("%@", "[Waple] waterwaves MASK white t=0.1/0.35 red=\(white[0].redComponent)/\(white[1].redComponent) " +
+                     "black t=0.1/0.35 red=\(black[0].redComponent)/\(black[1].redComponent)")
+        XCTAssertGreaterThan(abs(white[0].redComponent - white[1].redComponent), 0.15,
+                             "mask=1(흰 텍스처)은 무마스크와 동형으로 시간에 따라 변위해야 함 — 동일하면 g_Texture1 미반영")
+        XCTAssertLessThan(abs(black[0].redComponent - black[1].redComponent), 0.02,
+                          "mask=0(검정 텍스처)은 변위가 완전히 0이어야 함 — 값이 남으면 MASK 콤보가 켜졌는데도 g_Texture1 내용이 무시된 것(오바인드)")
+    }
+
+    /// B2-effects③ 지적 보강(TIMEOFFSET 짝): 실물 waterwaves.frag `g_Texture2`(combo:"TIMEOFFSET")가 실제로
+    /// 위상 오프셋을 더하는지 단언 — 동일 시각에서 오프셋 텍스처 유무만 다른 두 렌더를 비교, 오프셋이
+    /// 절반 주기(≈π)를 더하면 sin(distance) 부호가 뒤집혀 변위 방향이 반대가 되고 색이 크게 갈린다.
+    /// 오프셋 텍스처가 오바인드(미반영/엉뚱한 슬롯)되면 두 렌더가 같은 색을 낸다.
+    func testWaterwavesTimeOffsetComboShiftsPhase() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        vec2 rotateVec2(vec2 v, float r) {
+            vec2 cs = vec2(cos(r), sin(r));
+            return vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);
+        }
+        uniform mat4 g_ModelViewProjectionMatrix;
+        uniform float g_Direction;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec4 v_TexCoord;
+        varying vec2 v_Direction;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord.xyxy;
+            v_Direction = rotateVec2(vec2(0, 1), g_Direction);
+        }
+        """
+        let frag = """
+        varying vec4 v_TexCoord;
+        varying vec2 v_Direction;
+        uniform sampler2D g_Texture0;
+        uniform sampler2D g_Texture2; // {"combo":"TIMEOFFSET"}
+        uniform float g_Time;
+        uniform float g_Speed;
+        uniform float g_Scale;
+        uniform float g_Exponent;
+        uniform float g_Strength;
+        #define M_PI_2 6.28318530718
+        void main() {
+            float mask = 1.0;
+            vec2 texCoord = v_TexCoord.xy;
+            vec2 texCoordMotion = texCoord;
+            float distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;
+        #if TIMEOFFSET
+            float timeOffset = texSample2D(g_Texture2, v_TexCoord.zw).r * M_PI_2;
+            distance += timeOffset;
+        #endif
+            float strength = g_Strength * g_Strength;
+            vec2 offset = vec2(v_Direction.y, -v_Direction.x);
+            float val1 = sin(distance);
+            float s1 = sign(val1);
+            val1 = pow(abs(val1), g_Exponent);
+            texCoord += val1 * s1 * offset * strength * mask;
+            gl_FragColor = texSample2D(g_Texture0, texCoord);
+        }
+        """
+        func sample(textures: String) throws -> NSColor {
+            let scene = """
+            {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+             "objects":[{"id":1,"image":"models/g.json","origin":"960 540 0","size":"1920 1080",
+               "effects":[{"file":"effects/waterwaves/effect.json",
+                 "passes":[{"constantshadervalues":{"speed":10,"scale":0,"strength":0.5,"exponent":1}\(textures)}]}]}]}
+            """
+            let tag = textures.isEmpty ? "off" : "on"
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_ww_toff_\(tag)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try encodePkg([
+                ("scene.json", scene.data(using: .utf8)!),
+                ("models/g.json", #"{"material":"materials/g.json"}"#.data(using: .utf8)!),
+                ("materials/g.json", #"{"passes":[{"textures":["g"]}]}"#.data(using: .utf8)!),
+                ("materials/g.tex", horizontalGradientTex(left: (0, 0, 0), right: (255, 255, 255), w: 64, h: 8)),
+                ("shaders/effects/waterwaves.vert", vert.data(using: .utf8)!),
+                ("shaders/effects/waterwaves.frag", frag.data(using: .utf8)!),
+                ("materials/wwoffset.tex", solidTex(128, 128, 128)),
+            ]).write(to: dir.appendingPathComponent("scene.pkg"))
+            let project = WallpaperProject(id: "ww_toff_\(tag)", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                           title: "ww", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+            let r = SceneRenderer()
+            try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+            defer { r.teardown() }
+            let outDir = URL(fileURLWithPath: "/tmp/waple_tr_ww_toff_\(tag)")
+            try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+            let urls = r.captureFrames(width: 64, height: 36, times: [0.2], toDir: outDir)
+            XCTAssertEqual(urls.count, 1)
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: urls[0])))
+            return try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        }
+        let noOffset = try sample(textures: "")
+        let withOffset = try sample(textures: #","textures":[null,null,"wwoffset"]"#)
+        NSLog("%@", "[Waple] waterwaves TIMEOFFSET off red=\(noOffset.redComponent) on red=\(withOffset.redComponent)")
+        XCTAssertGreaterThan(abs(noOffset.redComponent - withOffset.redComponent), 0.15,
+                             "TIMEOFFSET 텍스처(회색=반주기 오프셋)가 반영되면 변위 부호가 뒤집혀 색이 크게 갈라져야 함 — 같으면 g_Texture2 오바인드")
+    }
 }
