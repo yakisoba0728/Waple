@@ -24,6 +24,16 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         let outDir = URL(fileURLWithPath: "/tmp/waple_gt")
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
+        // S4①(2026-07-27): SnapshotPipeline.pinRenderSettings(WapleCompat --capture 경로)와 달리 이 GT
+        // 하네스는 여태 JS Date 를 핀하지 않았다 — engine.timeOfDay/hours 조건부 스크립트를 가진 씬은
+        // 테스트를 실행하는 실 벽시계(및 그 순간의 시스템 TZ)에 따라 luma 가 흔들려 luma_baseline.json
+        // 드리프트 경고가 "씬은 시간 함수"라는 오분류로 흡수되고 있었다(아래 주석 "하드 fail 은 오탐 위험"
+        // 참고 — 실은 우리 하네스가 벽시계를 핀 안 한 게 원인의 일부). SnapshotPipeline.captureEpochMillis 와
+        // 동일 상수로 핀(값은 WapleCompat 의존 없이 리터럴 중복 — TextEngineTests 등 기존 관례와 동형).
+        let oldEpoch = TextScriptEngine.captureDateEpochMillis
+        TextScriptEngine.captureDateEpochMillis = 1_704_110_400_000   // 2024-01-01 12:00:00 UTC
+        defer { TextScriptEngine.captureDateEpochMillis = oldEpoch }
+
         // WE base-assets(공유 텍스처 + common_*.h)가 있으면 연결 — common.h 헬퍼 의존 효과까지 실측.
         // env WAPLE_BASE_ASSETS 우선, 기본 ~/Downloads/wallpaper_dev/assets. 테스트 후 원복.
         let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
