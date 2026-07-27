@@ -289,6 +289,30 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(omitted.z, explicitOne.z, accuracy: 1e-6)
     }
 
+    /// S5④: hsvcolorrandom 전 필드 명시(실물 particleelementpreviews/hsvcolorrandom 예제) 파스.
+    func testHSVColorRandomParsesExplicitFields() {
+        let d = ParticleSystemDef.parse(json(
+            #"{"initializer":[{"name":"hsvcolorrandom","huemin":0,"huemax":1,"saturationmin":1,"saturationmax":1,"valuemin":1,"valuemax":1}]}"#
+        ), material: nil)
+        XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 1, satMax: 1, valMin: 1, valMax: 1)))
+    }
+
+    /// magic_color_sparkle 실물: saturationmin/valuemin 만 있고 max 부재 → max=min(고정폭) 채택.
+    func testHSVColorRandomMissingMaxDefaultsToMin() {
+        let d = ParticleSystemDef.parse(json(
+            #"{"initializer":[{"name":"hsvcolorrandom","huemin":0.49150327,"huemax":0.93267971,"saturationmin":1,"valuemin":1}]}"#
+        ), material: nil)
+        XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0.49150327, hueMax: 0.93267971,
+                                                               satMin: 1, satMax: 1, valMin: 1, valMax: 1)))
+    }
+
+    /// 필드 완전 부재(실물 inheritinitialvaluefromevent 예제) → 데모 기본값(hue 전스펙트럼, s/v=1)
+    /// 채택. 종전엔 case 미인식으로 initializer 자체가 통째 drop 됐다(무색 랜덤 = 백색 고정).
+    func testHSVColorRandomAllFieldsMissingUsesDemoDefaults() {
+        let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"hsvcolorrandom"}]}"#), material: nil)
+        XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 1, satMax: 1, valMin: 1, valMax: 1)))
+    }
+
     // F188: drag 파싱 — movement 의 선형 drag(:497-498행)와 대칭. 실물 45/47 회귀·2/47 drag 실사용.
     func testAngularMovementParsesDrag() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"angularmovement","force":"0 0 2","drag":0.5}]}"#), material: nil)
