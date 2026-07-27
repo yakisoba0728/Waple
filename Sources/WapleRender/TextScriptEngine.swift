@@ -133,7 +133,8 @@ public final class SceneScriptContext {
 
     /// F713(S-31): input.cursorWorldPosition/cursorScreenPosition 폴터 주입 — 제자리 갱신이라 스크립트가
     /// 보관한 참조도 따라온다. 렌더러의 포인터 이벤트 지점(SceneRenderer dispatchPointerEvent)이 프레임/
-    /// 이벤트마다 호출하는 연결점. world = 씬 픽셀(상단 원점), screen = 표현 좌표.
+    /// 이벤트마다 호출하는 연결점. world = 씬 픽셀(하단원점/y-up — dispatchPointerEvent 와 동일 정정,
+    /// W1-yaxis), screen = 표현 좌표.
     public func setCursorState(worldX: Float, worldY: Float, screenX: Float, screenY: Float, leftDown: Bool) {
         context.evaluateScript("__setCursorState(\(TextScriptEngine.jsNumber(worldX)), \(TextScriptEngine.jsNumber(worldY)), \(TextScriptEngine.jsNumber(screenX)), \(TextScriptEngine.jsNumber(screenY)), \(leftDown));")
     }
