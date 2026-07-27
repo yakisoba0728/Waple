@@ -1406,6 +1406,13 @@ public final class TextScriptEngine {
     };
     Vec2.prototype.copy = function () { return new Vec2(this.x, this.y); };
     Vec2.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y); };
+    // G③: Vec3.prototype.normalize(F705) 와 동일 보강 — Vec2 에는 없어 커서 추종 스크립트의
+    // `.subtract(...).normalize()` 체인이 TypeError 로 매프레임 update 사망(실물 3477054430 등
+    // WEMath 기반 회전 스크립트). add~length 와 동일한 새 Vec2 반환(비파괴) 규약.
+    Vec2.prototype.normalize = function () {
+        var l = this.length();
+        return l > 0 ? new Vec2(this.x / l, this.y / l) : new Vec2(0, 0);
+    };
     var __WEColor = {
         hsv2rgb: function(c) {
             var h = ((c.x % 1) + 1) % 1, s = c.y, v = c.z;
