@@ -908,6 +908,12 @@ extension SceneDocument {
                                               userProps: userProps))
             }
         }
+        // W3-①(C8): 2D 가시성 상속 전파 — 비가시 조상(정적 false 뿐 아니라 user-조건 바인딩이 false 로
+        // 해소된 부모도 포함, 3299228616 의 clocklocation 콤보 그룹)의 자식 중 자기 visibleScript 없는
+        // 레이어/텍스트/파티클을 initialVisible=false 로 마킹한다(geometry compose 이전— parent 필드는
+        // 이후 단계가 건드리지 않아 순서 무관하지만 논리적으로 먼저 둔다).
+        applyVisibilityInheritance(layers: &layers, texts: &texts, particles: &particles, nodes3D: nodes3D,
+                                   camera3D: camera3D, imageLayerCompositeIDs: imageLayerCompositeIDs)
         // F691: 2D 씬 라이트의 parent 체인 합성(로컬 origin → 월드 픽셀) — 레이어 합성 전에 실행
         // (composeParentTransforms 가 layers 를 월드로 덮어쓰면 부모-레이어 로컬값이 유실된다).
         // 3D 씬은 렌더러(Scene3DLighting.resolveLights)가 월드행렬을 합성하므로 제외(이중 적용 방지).
@@ -1511,6 +1517,57 @@ extension SceneDocument {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { light.propertyScripts[key] = sc }
         }
         return light
+    }
+
+    /// W3-①(C8): 2D 가시성 상속 전파 — 파스 말미에 비가시(정적 false, 스크립트 없음) 조상 집합을 만들고,
+    /// 자기 visibleScript 가 없는 자식 레이어/텍스트/파티클을 initialVisible=false 로 마킹한다(**드롭
+    /// 아님** — JS thisScene.layers 인덱스 정합 보존, F219 와 동일 원칙). "정적 false 부모"뿐 아니라
+    /// user-조건 바인딩이 스냅샷 false 로 해소된 부모도 포함된다(실물 3299228616: 'Clock Layer 2' 그룹
+    /// 은 clocklocation 콤보가 선택 안 된 값이라 resolveUserBindings 이후 평문 false 로 굳고,
+    /// 그 자식 'number.am.pm' 은 **다른** 콤보(clock24hformat)에 바인딩돼 있어 자기 자신은 true 로
+    /// 풀리지만 부모가 꺼져 있으면 같이 숨어야 한다 — WE 규약, 종전엔 부모 체인을 전혀 안 봐서 계속 그려짐).
+    /// 비가시 조상은 nodes3D 만으로 충분하다: 정적 비가시 콘텐츠 오브젝트(레이어/텍스트/파티클)도 id 가
+    /// 있으면 파스 루프가 이미 invNode(SceneNode3D, visible=false)로 보존한다(V06, :845 부근) — 진짜
+    /// 그룹 노드든 비가시로 드롭된 콘텐츠든 nodes3D 에 동일하게 나타난다.
+    /// imageLayerCompositeIDs 카브아웃(:845 와 동형) — composelayer 합성 소스로 참조되는 레이어는
+    /// 부모가 꺼져 있어도 숨기지 않는다(오프스크린 합성용이라 자기 자신의 화면 표시 여부와 무관).
+    /// 3D 는 이미 Scene3DMath.worldMatrix 가 조상 AND 로 처리하므로 손대지 않는다(camera3D!=nil 스킵).
+    /// 잔여 갭(의도적 무변경): 정적 false 부모 + **스크립트** 자식 조합의 런타임(초-프레임) 재평가는
+    /// 후속 — 여기는 파스-타임 정적 스냅샷만 다룬다.
+    private static func applyVisibilityInheritance(layers: inout [SceneLayer], texts: inout [SceneTextLayer],
+                                                    particles: inout [SceneParticle], nodes3D: [SceneNode3D],
+                                                    camera3D: SceneCamera3D?, imageLayerCompositeIDs: Set<Int>) {
+        guard camera3D == nil, !nodes3D.isEmpty else { return }
+        var parentOf: [Int: Int] = [:]
+        var invisible: Set<Int> = []
+        for n in nodes3D {
+            if let p = n.parent { parentOf[n.id] = p }
+            if !n.visible && n.propertyScripts["visible"] == nil { invisible.insert(n.id) }
+        }
+        guard !invisible.isEmpty else { return }
+        for l in layers where l.id != 0 { if let p = l.parent { parentOf[l.id] = p } }
+        for t in texts where t.id != 0 { if let p = t.parent { parentOf[t.id] = p } }
+        func hasInvisibleAncestor(_ id: Int?, depth: Int = 0) -> Bool {
+            guard let id, depth < 32 else { return false }
+            if invisible.contains(id) { return true }
+            return hasInvisibleAncestor(parentOf[id], depth: depth + 1)
+        }
+        for i in layers.indices {
+            guard layers[i].propertyScripts["visible"] == nil,
+                  !imageLayerCompositeIDs.contains(layers[i].id),
+                  hasInvisibleAncestor(layers[i].parent) else { continue }
+            layers[i].initialVisible = false
+        }
+        for i in texts.indices {
+            guard texts[i].propertyScripts["visible"] == nil,
+                  hasInvisibleAncestor(texts[i].parent) else { continue }
+            texts[i].initialVisible = false
+        }
+        for i in particles.indices {
+            guard particles[i].visibleScript == nil,
+                  hasInvisibleAncestor(particles[i].parent) else { continue }
+            particles[i].visible = false
+        }
     }
 
     /// 레이어 parent 체인 합성: 부모(트랜스폼 그룹 노드/레이어)의 origin/scale/angle 을 이어붙여

@@ -11,6 +11,61 @@ final class SceneComboVisibleTests: XCTestCase {
     private let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
     private let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"]}]}"#
 
+    /// W3-①(C8): 실물 3299228616 축소판 — 부모 그룹('Clock Layer 2')이 clocklocation 콤보로 꺼진 채,
+    /// 자식('number.am.pm')은 **다른** 콤보(clock24hformat)에 바인딩돼 자기 자신은 true 로 풀린다.
+    /// 종전엔 파스가 부모 체인을 전혀 안 봐서 자식이 계속 그려졌다 — 부모가 꺼지면 자식도 숨어야 한다.
+    func testInvisibleComboGroupHidesChildWithUnrelatedVisibleCondition() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"clockLayer2","visible":{"user":{"condition":"2","name":"clocklocation"},"value":false}},
+           {"id":2,"name":"ampm","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10",
+            "visible":{"user":"clock24hformat","value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let child = try XCTUnwrap(doc.layers.first { $0.name == "ampm" }, "드롭 금지 — JS 인덱스 정합상 배열엔 남아야 함")
+        XCTAssertFalse(child.initialVisible, "비가시 부모 상속으로 initialVisible=false 여야 함")
+    }
+
+    /// 대조군: 부모가 켜져 있으면(콤보 선택값 일치) 동일 구조의 자식이 그대로 보여야 한다(무회귀).
+    func testVisibleComboGroupKeepsChildVisible() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"clockLayer1","visible":{"user":{"condition":"1","name":"clocklocation"},"value":true}},
+           {"id":2,"name":"ampm","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10",
+            "visible":{"user":"clock24hformat","value":true}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let child = try XCTUnwrap(doc.layers.first { $0.name == "ampm" })
+        XCTAssertTrue(child.initialVisible, "가시 부모의 자식은 그대로 보여야 함(무회귀)")
+    }
+
+    /// imageLayerCompositeIDs 카브아웃 — composelayer 오프스크린 합성 소스로 참조되는 레이어(다른
+    /// json 이 `_rt_imageLayerComposite_<id>` 텍스처명으로 참조, referencedImageLayerCompositeIDs)는
+    /// 부모가 꺼져 있어도 숨기면 안 된다(:845 카브아웃과 동형 — 자체 화면 표시가 아니라 합성 재료용).
+    func testCompositeSourceLayerNotHiddenByInvisibleParent() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"offGroup","visible":{"user":{"condition":"2","name":"clocklocation"},"value":false}},
+           {"id":2,"name":"compositeSrc","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10",
+            "visible":true}]}
+        """
+        // 다른 이펙트 패스가 이 레이어(id=2)를 _rt_imageLayerComposite_2 텍스처명으로 참조 — 실물
+        // composelayer 배선과 동일한 매직 스트링 규약(referencedImageLayerCompositeIDs 정규식).
+        let composeRef = #"{"passes":[{"textures":["_rt_imageLayerComposite_2"]}]}"#
+        let p = try pkg([
+            ("scene.json", scene), ("models/x.json", model), ("materials/m.json", material),
+            ("effects/composelayer/effect.json", composeRef),
+        ])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let child = try XCTUnwrap(doc.layers.first { $0.name == "compositeSrc" })
+        XCTAssertTrue(child.initialVisible, "composelayer 소스는 부모 비가시에도 숨지 않아야")
+    }
+
     /// 유저가 combo `style`="1" 을 고르면 condition="1" variant 는 보이고 "2" variant 는 숨는다.
     /// 저작 스냅샷은 반대(A=false, B=true)라, nested 미해석이면 A 드롭·B 유지로 red.
     func testComboVisibleNestedSelectsChosenVariant() throws {
