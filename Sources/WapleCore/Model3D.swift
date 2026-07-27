@@ -167,7 +167,14 @@ public struct Model3D: Equatable {
             return r.value
         }
 
-        // 헤더: magic(8) | u8 0 | u32 formatFlag(9) | u32(=1, 13) | u32 meshCount(17)
+        // 헤더: magic(8) | u8 0 | u32 formatFlag(9) | u32 stringCount(13, 관측 1) | u32 meshCount(17)
+        // stringCount(13) 정정(2026-07-27, S3-mdl 지적 반영): 디컴파일(FUN_140261950:1149-1154,
+        // `param_3[1]` = 이 필드)은 헤더 직후 이 값을 cstring(FUN_14009c5d0) 리드 루프의 상한으로 쓴다
+        // — 이전 주석의 '=1, 값 미사용'은 오도(단순 상수가 아니라 문자열 개수 필드). 단일메시 파일(값=1)
+        // 은 이 문자열 1개가 우리 per-mesh 루프의 material cstring 1회 리드와 바이트가 정확히 겹쳐
+        // 검증됨 — 다만 이 필드가 모델 전체(총) 카운트인지 메시당 반복 카운트인지 자체는 미확정(다중메시
+        // 파일에서 mesh 1..N-1 이 자기 문자열을 어디서 읽는지는 이번 대조로 추적하지 않음; 174/174 로
+        // 통과하므로 어느 해석과도 모순은 없음). 코드 변경 불요.
         guard let meshCount = u32(17), meshCount > 0, meshCount < 100_000 else { return nil }
         var o = 21
         var meshes: [Mesh] = []
@@ -175,11 +182,21 @@ public struct Model3D: Equatable {
 
         for mi in 0..<Int(meshCount) {
             guard let material = cstring(&o) else { return nil }
-            guard let _ = u32(o) else { return nil }             // u32(관측 0, Kirby mesh1 은 2 — 값 미사용)
+            guard let _ = u32(o) else { return nil }             // u32 flag word(관측 0, Kirby mesh1 은 2) — 아래 프로브 근거 참고
             o += 4
             // 메시 헤더 프레이밍 프로브: z 뒤에 여분 u32 가 0..2개 올 수 있다(실측: 전 코퍼스 0개,
             // Kirby_puppet mesh1 만 1개(=1)). extra=0 이 기존 경로라 최우선 — vSize/스트라이드 정합
             // (표 나눗셈 or 인덱스 maxIndex+1 추론)이 성립하는 첫 프레이밍을 채택한다.
+            //
+            // S3-mdl(2026-07-27) 디컴파일 대조(FUN_140261950:1158-1165)로 위 브루트포스가 결정론적 규칙
+            // 임이 확인됨: 바로 위에서 읽은 flag word(z) 에 대해 `if (flag & 2) { extra = readU32(); }`
+            // — 즉 flag 의 **bit1 이 서면 u32 가 정확히 1개 더** 온다(0 또는 1 만 가능, 2 는 코드상 발생
+            // 안 함 — 우리 프로브가 실측에서 0/1 만 관측하고 2 를 한 번도 못 본 것과 정확히 일치). Kirby
+            // mesh1: z=2(bit1=1)→extra=1, 그 외 z=0(bit1=0)→extra=0. 스트림 위치 정합: 헤더 stringCount
+            // (위 주석)=1 이면 그 직전 cstring 루프가 정확히 1개를 소비 — 이게 바로 이 mesh 의 material
+            // 리드(177행)이므로, 디컴파일의 이 flag 리드가 곧 177행 직후 178행의 z 리드와 같은 스트림
+            // 위치가 된다(단일메시 기준; 다중메시는 위 stringCount 주석과 동일하게 미확정). 프로브 코드는
+            // 그대로 유지(동작 동일), 근거만 브루트포스에서 디컴파일 대조로 격상.
             //
             // 정점 포맷 플래그(실측 4종 대조로 확정): bit1(0x2)=normal 3f, bit2(0x4)=tangent 4f,
             // skinMask=본/웨이트. pos 3f 와 uv 2f 는 전 변형 공통(bit0/bit3 semantics 미상 — 무시).
@@ -187,6 +204,17 @@ public struct Model3D: Equatable {
             // 변종 스트라이드 자기기술 추론(2026-07-06, 실물 sl_puppet.mdl = 84 = 기지 80 + 미상 4B):
             // 표 스트라이드로 안 나눠지면 인덱스 블롭의 maxIndex+1 을 정점 수로 보고 vSize/count 가
             // 정수(20..96)면 채택. 필드는 꼬리 고정(uv@-8, weights@-24, bones@-40), 중간은 고전 오프셋.
+            // S3-mdl 참고(후속 착수점, bit0/bit3·84B 변종 미상을 known-unknown 으로 격상): AABB 게이트
+            // 직후 LAB_140261b0a(디컴파일 1179행)부터 언롤 24항(마스크 배열 base `_DAT_140484af0`,
+            // 기여값 배열 base `_DAT_140484a80`, 각 +4×index) + 루프 2항(`while (lVar23 != 0x1a)`, 같은
+            // 두 배열의 index 24-25 를 `lVar22+0x484a20/+0x4849b0+lVar23*4` 로 계속 인덱싱 — 두 산출
+            // 주소가 언롤부 시작 주소와 일치함을 직접 계산 확인) = **26개 (마스크,기여) 엔트리** 누산
+            // 테이블이 엔진에 존재, 헤더 오프셋9 formatFlag(uVar19=local_428, 위 z 와는 다른 필드)를
+            // 키로 쓰는 것으로 보인다. 단 합산 결과(local_2dc)는 이 함수 안에서 정의(1181/1207행)만
+            // 되고 이후 읽히는 곳이 없음(grep 확인) — 즉 소비처는 FUN_140261950 밖에 있다는 것까지가
+            // 이번 대조의 결론이고, 후속 착수 시 그 소비처 추적이 시작점. unknown-unknown 이 아니라
+            // "이 테이블의 특정 엔트리"라는 known-unknown 으로 격상, 구현은 보류(마스크 상수 값 자체와
+            // 4 서브그룹의 정확한 인덱스 대응은 미대조).
             var minx: Float = 0, miny: Float = 0, minz: Float = 0
             var maxx: Float = 0, maxy: Float = 0, maxz: Float = 0
             var formatFlag: UInt32 = 0
