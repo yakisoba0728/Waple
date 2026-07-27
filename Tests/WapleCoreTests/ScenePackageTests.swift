@@ -82,12 +82,15 @@ final class ScenePackageTests: XCTestCase {
         XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0024")))
     }
 
-    func testRejectsOutOfRangeVersion() {
-        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "PKGV0000"))) { e in
-            XCTAssertEqual(e as? ScenePackageError, .malformed)
-        }
-        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "PKGV0100"))) { e in
-            XCTAssertEqual(e as? ScenePackageError, .malformed)
-        }
+    /// [2026-07-27 정정] "PKGV" 뒤 4자리는 포맷 버전이다(로컬 코퍼스 169개 scene.pkg 매직 도수분포 —
+    /// distinct 14값, 0023×51/0022×47/0021×30/0024×12 … 롱테일 0001·0007·0008·0011·0012 각 1건 —
+    /// 는 전형적 버전 채택 곡선이지 per-file 난수 serial 이 아니다; WE-2.8-deep-KR.md B1 과 일치).
+    /// "0000"·"0100" 을 수락한다고 이 값들이 실존 버전이라는 뜻은 아니다 — RePKG PackageReader.cs 가
+    /// 매직을 버전 분기 없이 불투명 문자열로만 읽어 컨테이너 프레이밍이 관측된 모든 버전에서 불변이므로
+    /// 파서가 값 범위를 게이트할 이유가 없다는 뜻이다(구조: "PKGV"+4 ASCII 숫자만 검증).
+    func testDoesNotGateOnVersionValue() {
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0000")))
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0100")))
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV9999")))
     }
 }
