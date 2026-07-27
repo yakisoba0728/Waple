@@ -284,16 +284,34 @@ extension SceneRenderer {
         var srcTex: MTLTexture? = nil
         var backdrop: MTLTexture? = nil
         if let snap = pooledOffscreen(acc.width, acc.height, device, bgra: true) {
-            // B2-effects④: copyBackground(WE 컴포지션 레이어 "배경 복사") false 면 acc(기존 누적 화면)를
-            // 블릿하지 않고 투명으로 클리어 — 실물 확인(3629379075 "可调整组合层" blur, copybackground:false):
-            // Waple 이 이 플래그를 무시하고 항상 acc 를 블릿·블러해 전체 화면이 풀프레임 워시로 덮였다.
-            // false 소스는 투명이라 이펙트 체인(블러 등)을 거쳐도 대체로 투명 그대로 → f_compose 합성 시
-            // 기존 장면이 그대로 비쳐 보인다(레이어 자신은 실질 무-기여, WE 의도와 정합).
+            // B2-effects④: copyBackground(WE 컴포지션 레이어 "배경 복사") false 면 이 레이어 이펙트
+            // 체인의 *입력*(snap = chain src)은 acc(기존 누적 화면)를 블릿하지 않고 투명으로 시작한다 —
+            // 실물 확인(3629379075 "可调整组合层" blur, copybackground:false): Waple 이 이 플래그를 무시하고
+            // 항상 acc 를 블릿·블러해 전체 화면이 풀프레임 워시로 덮였다. Waple 은 WE 와 달리 compose
+            // 레이어별 자식 RT 가 없어 "자식 RT 대신 무(無)" 로 근사한다 — 이 근사는 입력을 재료로만
+            // 쓰는 필터형 체인(블러 등)엔 타당하지만, 입력과 무관하게 색을 새로 "쓰는" 생성형 체인
+            // (오디오바 등)에도 콘텐츠 손실이 없다는 보장은 아니다(코퍼스 블라스트 반경·근거는
+            // BACKLOG.md B2-effects④ 항목 참고 — 자식 RT 부재를 정면돌파하지 않는 한 구조적 한계).
+            //
+            // `_rt_FullFrameBuffer` aux 슬롯(godrays/shine 의 COPYBG 콤보, F-X4)은 chain src 와 별개
+            // 요청이다 — WE 실물 의미는 "이 시점까지의 씬 컬러" 이지 "이 레이어가 배경을 복사했는가"
+            // 가 아니므로, copyBackground 값과 무관하게 항상 실제 acc 스냅샷을 바인드해야 한다(fullFrame).
+            // 종전엔 이 둘을 같은 텍스처(snap)로 합쳐 써 copyBackground:false 컴포지션 레이어의
+            // godrays/shine 이 aux 슬롯까지 투명해지는 회귀 위험이 있었다 — 별도 블릿으로 분리.
+            var fullFrame: MTLTexture = snap
             if layer.copyBackground {
                 guard let blit = cb.makeBlitCommandEncoder() else { return nil }
                 blit.copy(from: acc, to: snap)
                 blit.endEncoding()
             } else {
+                // 풀 고갈(드문 경우)이면 fullFrame 은 snap(투명) 유지 — aux 슬롯만 무크래시 폴백,
+                // chain src(투명 클리어)는 항상 그대로 진행.
+                if let auxSnap = pooledOffscreen(acc.width, acc.height, device, bgra: true) {
+                    guard let auxBlit = cb.makeBlitCommandEncoder() else { return nil }
+                    auxBlit.copy(from: acc, to: auxSnap)
+                    auxBlit.endEncoding()
+                    fullFrame = auxSnap
+                }
                 let clearRPD = MTLRenderPassDescriptor()
                 clearRPD.colorAttachments[0].texture = snap
                 clearRPD.colorAttachments[0].loadAction = .clear
@@ -308,9 +326,7 @@ extension SceneRenderer {
                 guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(acc.width, acc.height, device) else { break }
                 // F532: 인코드 실패 시 미기록 next 대신 마지막 유효 텍스처 유지.
-                // F-X4: snap 은 이미 이 컴포지션 레이어가 그려지기 전 씬 컬러(_rt_FullFrameBuffer 의미)라
-                // godrays/shine 의 COPYBG aux 슬롯에도 동일 텍스처를 재사용(추가 블릿 불요).
-                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb, fullFrameSnapshot: snap) else { break }
+                guard applyEffect(eff, src: current, dst: next, time: time, cb: cb, fullFrameSnapshot: fullFrame) else { break }
                 current = next
             }
             srcTex = current

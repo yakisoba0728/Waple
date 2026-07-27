@@ -663,6 +663,66 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertLessThan(luma, 0.6, "_rt_FullFrameBuffer 가 씬 스냅샷에 바인드되면 배경(빨강, luma≈0.33) — 미바인드면 흰색 폴백(luma≈1.0)")
     }
 
+    /// B2-effects④ 지적: copybackground:false 로 이 컴포지션 레이어의 이펙트 체인 *입력*(chain src)이
+    /// 투명으로 시작해도, `_rt_FullFrameBuffer` aux 슬롯(godrays/shine COPYBG)은 chain src 와 별개 요청이라
+    /// 여전히 실제 씬 컬러를 바인드해야 한다(runFrameBufferLayer 의 fullFrame 분리) — 위 테스트와 동일
+    /// 씬에 copybackground:false 만 추가. frag 가 alpha 를 1로 강제해(원문과 달리) 결과를 acc 위에 항상
+    /// 불투명으로 덮어써 판독을 결정적으로 만든다(alpha 를 aux 그대로 두면 회귀해도 aux 가 투명이라
+    /// draw 자체가 무-기여가 되어 밑에 깔린 배경 레이어 색과 우연히 같아 보이는 위양성 통과가 생긴다 —
+    /// 최초 버전은 이 함정에 걸려 되돌린 소스로도 luma≈0.33 이 나와 회귀를 못 잡았다). 회귀 시(aux 가
+    /// chain src 와 같은 투명 텍스처를 공유하면) RGB=0(검정, luma≈0)이 된다.
+    func testFullFrameBufferAuxSlotBindsSceneSnapshotEvenWhenCopyBackgroundFalse() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        uniform sampler2D g_Texture1; // {"hidden":true,"default":"_rt_FullFrameBuffer"}
+        void main() {
+            vec3 c = texSample2D(g_Texture1, v_TexCoord).rgb;
+            gl_FragColor = vec4(c, 1.0);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/bg.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "copybackground":false,
+            "effects":[{"file":"effects/copybg/effect.json","passes":[{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_copybg_nocopy", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/bg.json", #"{"material":"materials/bg.json"}"#.data(using: .utf8)!),
+            ("materials/bg.json", #"{"passes":[{"textures":["bg"]}]}"#.data(using: .utf8)!),
+            ("materials/bg.tex", solidTex(255, 0, 0)),
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+            ("shaders/effects/copybg.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/copybg.frag", frag.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "copybg_nocopy", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "copybg_nocopy", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_copybg_nocopy")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let luma = avgLuma(url)
+        NSLog("%@", "[Waple] COPYBG fullframe-snapshot(copybackground:false) luma=\(luma)")
+        XCTAssertGreaterThan(luma, 0.2, "copybackground:false 라도 _rt_FullFrameBuffer aux 슬롯은 실제 씬 컬러(빨강, alpha 강제 1 이라 luma≈0.33)를 받아야 함 — chain src(투명)와 공유되면 검정(luma≈0)이 되어 이 하한을 못 넘는다")
+        XCTAssertLessThan(luma, 0.6, "흰색 1×1 폴백(aux 자체가 미바인드, luma≈1.0)도 아니어야 함")
+    }
+
     /// X-⑤: g_TexelSize 를 이펙트 **출력(dst)** 해상도 기준으로 채택한 규약을 코드가 실제로 그렇게
     /// 구현했는지 고정(pin)하는 회귀 테스트다 — 채택 근거(WE gaussian.vert `ratio = g_TexelSize *
     /// g_Texture0Resolution`)는 정적으로는 판별력이 없어 "실측으로 확정"된 사실이 아니라 **라이브

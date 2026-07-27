@@ -152,10 +152,13 @@ public struct SceneLayer: Equatable {
     public var dependencies: [Int] = []
     /// 오브젝트-레벨 전파/렌더 플래그 파스·보존(소비는 렌더러 책임).
     public var disablePropagation: Bool = false
-    /// B2-effects④: WE 컴포지션(_rt_) 레이어 "배경 복사". 기본 true(코퍼스 실측: 명시값 255×true vs 56×
-    /// false — 미명시는 true 가 통상 케이스). false 는 렌더러가 acc(기존 누적 화면) 블릿을 건너뛰고
-    /// 투명에서 이펙트 체인을 시작(runFrameBufferLayer 소비 — 실물 3629379075 "可调整组合层" blur 풀프레임
-    /// 워시 수정의 근거).
+    /// B2-effects④: WE 컴포지션(_rt_) 레이어 "배경 복사". 기본 true — WE 레퍼런스 shim 자체 기본값이
+    /// `copybackground | true`(references/.../lanes/L1-project-scene-model.md:230, shim:87, "배경 복사(뒤
+    /// 렌더 결과 샘플)")이고, 코퍼스 실측(명시값 255×true vs 56×false)도 이를 뒷받침한다(미명시는 true
+    /// 가 통상 케이스). false 는 렌더러가 acc(기존 누적 화면) 블릿을 건너뛰고 투명에서 이펙트 체인을
+    /// 시작(runFrameBufferLayer 소비 — 실물 3629379075 "可调整组合层" blur 풀프레임 워시 수정의 근거).
+    /// 단 Waple 은 compose 레이어별 자식 RT 가 없어 "자식 RT 대신 무(無)" 로 근사한 것 — 필터형 체인엔
+    /// 타당하나 생성형(입력과 무관하게 색을 새로 쓰는) 체인의 콘텐츠 손실까지 보장하는 것은 아니다.
     public var copyBackground: Bool = true
     public var clampUVs: Bool = false
     public var noInterpolation: Bool = false

@@ -72,6 +72,14 @@ extension SceneRenderer {
         let bind: EffectBind
         /// X-⑥: visibleScript 보유 이펙트만 non-nil(스크립트 없는 절대다수는 무비용 nil — 매 프레임 항상 적용).
         var visibleGate: EffectVisibleGate? = nil
+        /// B2-effects④: 오디오 스펙트럼(g_AudioSpectrum*) 참조 이펙트인지(translated 경로는 GLSLTranslator
+        /// usesAudio, hand-port 경로는 audioParams(for:) != nil 과 동일 판정 — 이미 hasAudio 전역 플래그가
+        /// 소비하던 신호를 EffectGPU 레벨에도 노출). compose(_rt_) 레이어의 copyBackground:false 게이트에
+        /// 소비(runFrameBufferLayer 호출 전 GPULayer 구성부) — 배경을 "읽어" 알파를 게이팅하는 생성형
+        /// 오디오 이펙트(예: TRANSPARENCY==INTERSECT/SUBTRACT 콤보)가 투명 입력을 받으면 콘텐츠가 통째로
+        /// 사라질 수 있어(실측 3299228616) 이런 레이어는 저작 copybackground 값과 무관하게 acc 블릿
+        /// 경로를 유지한다.
+        var usesAudio: Bool = false
     }
 
     func pkgURL(in folder: URL) -> URL? {
@@ -421,12 +429,20 @@ extension SceneRenderer {
                 ? Self.litRect(origin: layer.origin, size: layer.size, scale: layer.scale,
                           angleZ: layer.angleZ, alignment: layer.alignment, originZ: layer.originZ)
                 : (SIMD4<Float>.zero, SIMD4<Float>.zero)
+            // B2-effects④: compose(_rt_) 레이어가 오디오 스펙트럼 참조 이펙트(예: Simple_Audio_Bars 류
+            // 생성형 오디오 바)를 갖고 있으면 저작 copybackground:false 를 무시하고 acc 블릿 경로를
+            // 강제한다 — 실측(3299228616 "Bar 3"): 해당 이펙트가 TRANSPARENCY==INTERSECT 콤보로 알파를
+            // `scene.a * bar` 로 게이팅해, 투명 입력(scene.a=0)이면 바 전체가 alpha=0 으로 소실된다.
+            // 필터형(입력을 재료로만 쓰는) 체인은 이 게이트에 걸리지 않는다 — audioParams/usesAudio 는
+            // 오디오 스펙트럼 uniform 참조 유무만 보므로 스코프가 좁다(BACKLOG.md 참고).
+            let audioGatedCompose = layer.isFrameBuffer && effects.contains { $0.usesAudio }
             var gpuLayer = GPULayer(texture: mtl, vertexBuffer: vbuf, tint: tint,
                                 parallaxDepth: SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y),
                                 effects: effects, texWidth: effW, texHeight: effH,
                                 order: layer.order, uid: uid,
                                 blendAdditive: layer.blendMode == "additive",
-                                isFrameBuffer: layer.isFrameBuffer, copyBackground: layer.copyBackground,
+                                isFrameBuffer: layer.isFrameBuffer,
+                                copyBackground: layer.copyBackground || audioGatedCompose,
                                 def: (layer.animations.isEmpty && puppetModel == nil && propScripts.isEmpty
                                       && attach == nil) ? nil : layer,
                                 puppet: puppetModel, propScripts: propScripts,
@@ -537,7 +553,7 @@ extension SceneRenderer {
                 1, 1, device) else { break }
             aux.append(tex)
         }
-        return EffectGPU(pipeline: pipe, bind: .handPort(params: params, aux: aux, audio: audio))
+        return EffectGPU(pipeline: pipe, bind: .handPort(params: params, aux: aux, audio: audio), usesAudio: audio != nil)
     }
 
     /// GLSL→MSL 변환 효과 빌드(멀티패스): effect.json 매니페스트(passes/fbos) → 패스별 셰이더 로드 →
@@ -617,7 +633,7 @@ extension SceneRenderer {
         return EffectGPU(pipeline: passes[0].pipeline,
                          bind: .translated(passes: passes, fboSpecs: manifest.fbos.map {
                              FBOSpec(scale: $0.scale, fixedWidth: $0.fixedWidth, fixedHeight: $0.fixedHeight)
-                         }))
+                         }), usesAudio: anyAudio)
     }
 
     /// ① 매니페스트 로드: effect.json 이 없으면 관례 단일 패스("effects/<name>" 셰이더).

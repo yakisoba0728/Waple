@@ -87,6 +87,37 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 | 성능: 비가시 레이어 효과체인 스킵, acc+blit 생략(스냅샷 1회 확인 필요), TexImage 스캔 할당, ScenePackage 무복사 파스, DXT 블록 할당 | — | 감사 계획서 3계층 성능표 참조 |
 | 정리: 본체인 fold 6회·DXT 3벌·Process 헬퍼 3벌·JS 리터럴 4중·효과체인 루프 4중복·~~죽은 코드(resolveProjects, bitsRemaining, 미발행 이슈코드 8종, CLI 도움말)~~ **이슈코드 8종·CLI 도움말은 해소(F232/F235/F149, 2026-07-18)** | — | 기회 시(resolveProjects/bitsRemaining/fold/Process헬퍼/JS리터럴/효과체인루프 잔여) |
 
+## B2-effects④ copybackground:false 후속 — 트리거: 3D 컴포지션 레이어 사용/파티클·텍스트 copyBackground 소비 착수 시
+
+- **3D 경로 비대칭**: `SceneRenderer3D` 의 isFrameBuffer 빌보드 합성(`:1435`/`:1839` 부근)은 `copyBackground` 필드를
+  전혀 읽지 않는다 — 2D `runFrameBufferLayer` 는 이번에 acc 블릿/투명 클리어 분기 + `_rt_FullFrameBuffer` aux
+  슬롯 분리(fullFrame)를 소비하도록 고쳤지만, 3D 씬의 `copybackground:false` 컴포지션 레이어는 여전히 종전
+  (항상 acc 합성) 거동이다. 회귀는 아니다(2D 만 고쳤으므로 3D 는 그대로) — 다만 동일 결함이 3D 에 남아있다는
+  사실 기록. 3D 씬에서 실제로 체감되면 2D 와 동형 분기(fullFrame 분리 포함)를 이식할 것.
+- **SceneParticle/SceneTextLayer 의 copyBackground 기본값도 함께 true 로 뒤집혔으나 아직 미소비**(둘 다
+  `isFrameBuffer` 자체가 없어 렌더러가 이 필드를 읽는 지점이 없다 — 파스·보존 전용). 향후 이 두 타입에
+  프레임버퍼/컴포지션 소비부가 추가되면 "기본 true" 전제를 반드시 재검토할 것(레이어와 동일 근거 — WE shim
+  기본값·코퍼스 실측 255×true vs 56×false — 를 재확인 없이 그대로 가정하지 말 것).
+- **`GPULayer.usesAudio` 기반 생성형 이펙트 게이트의 스코프**: compose(_rt_) 레이어가 `g_AudioSpectrum*` 유니폼을
+  참조하는 이펙트(예: Simple_Audio_Bars 류)를 가지면 저작 `copybackground:false` 를 무시하고 acc 블릿 경로를
+  강제한다([SceneRendererResources.swift](Sources/WapleRender/SceneRendererResources.swift) `audioGatedCompose`) —
+  실측(3299228616 "Bar 3"): 오디오 이펙트가 `alpha = scene.a * bar`(TRANSPARENCY==INTERSECT 콤보)로 입력 알파를
+  게이팅해, 투명 입력이면 콘텐츠가 통째로 사라진다(shader-math 확정, 코퍼스 스캔+실캡처로 재현·수정 확인).
+  이 게이트는 "오디오 스펙트럼 유니폼 참조"만 구조적으로 탐지 — 오디오와 무관한 다른 생성형(입력 알파를
+  게이팅하되 오디오 미참조) 이펙트가 향후 코퍼스에 추가되면 이 휴리스틱으로 못 잡는다. 현재 코퍼스(169씬)
+  전수 스캔 결과 `copybackground:false` + `isFrameBuffer` 조합·이펙트 보유 22개 오브젝트/15씬 중 오디오
+  게이트 대상 외 나머지(3521337568 earth composition 등)는 shader-math 로 입력-독립 확인(tint BLENDMODE==0
+  이 albedo.rgb/a 를 무조건 재설정해 체인 전체가 배경과 무관) + `WapleCompat --compare` 실캡처로 베이스라인
+  main-6526db1 대비 픽셀 동일(frac=0) 확인 완료. 3565190341(shake) 도 동일하게 베이스라인과 픽셀 동일.
+- **①②③ 재조사 기록**(외부 `waple-scene-audit-2026-07/NEXT-WAVE-PLAN.md`·`gate-visual-adjudication.result.json`
+  §4 "기지결함" 목록 대조, 리포 밖이라 여기 요약만 남김): ③ waterwaves(2947302287) "TIMEOFFSET 마스크
+  오바인드로 파도 변위 미구현" 표기는 y-up 전역 전환(`0ce3e2c`) 이후 더 이상 재현되지 않음(`f1e7f7c` 가드
+  테스트 + 실측 A/B 36% 픽셀 차) — 신규 가드 2건을 실물 waterwaves.frag MASK/TIMEOFFSET 콤보로 보강해
+  해당 텍스처 바인딩 회귀도 감지하도록 확장(`SceneTranslatedEffectRenderTests.testWaterwavesMaskComboGatesDisplacement`/
+  `testWaterwavesTimeOffsetComboShiftsPhase`). ①(3250755486 opacity 마스크)·②(3276911872 colorkey 과다
+  키잉)은 이번 라운드에서 코드 변경 없이 재확인만(반증이 아니라 "미재현" — ②는 60프레임 애니 텍스처
+  전수 미스캔이 명시적 한계).
+
 ## 하네스 — 트리거: 게이트 오탐/소요가 거슬릴 때
 
 - **벽시계(Date) 오염** — 씬 스크립트 JS `Date`가 미스텁이라 시계 텍스트 씬(회귀 FAIL 58 중 45건 보유)의 diff에 캡처 시각차가 섞임(실측: 3047405322 mean 13.05가 전부 시계였음, 2026-07-11 판독). 같은-분 셀프체크는 "결정"으로 오분류. 수정 방향: 캡처 경로에서 shims에 Date 고정 주입 또는 시계 스크립트 보유 씬을 lax 버킷으로
