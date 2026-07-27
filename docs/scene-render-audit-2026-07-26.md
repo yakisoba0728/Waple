@@ -136,6 +136,23 @@ HEAD 회귀(구 베이스라인 대비)는 3걸뿐 — 나머지는 전부 기�
   WE 불일치였던 것. 잔여 갭: 정적 false 부모+스크립트 자식 조합(런타임 부모 평가는 후속).
 - **영향 씬**: 3299228616(확정). 3616389236은 **반박로 제외**(해당 오브젝트는 파스 타임 드롭이라
   렌더 불가 — 진짜 원인은 scale 스크립트 NaN/mediaThumbnail 계열).
+- **구현 완료(W3-①, 커밋 90dbb2f)**: 파스-타임 전파 패스 착지. **코퍼스 블라스트 반경 실측**
+  (`WapleCompat --vis-blast`, 170씬 파스 전수 — 렌더/캡처 아님): 46씬 영향, 831개 오브젝트
+  신규 initialVisible=false(레이어 598/텍스트 160/파티클 73). 상위 5씬(2955378002=249,
+  3299228616=43, 3565190341=35, 3538758087=31, 3463520581=29) 전건 단씬 hi-res A/B 캡처로
+  육안 확인 — **전건 "숨어야 할 것이 숨음"**(디버그 부모/캐릭터/언어 변형 콤보의 미선택 분기
+  중복 렌더 제거, over-marking 0건). 대조군(2325500626, 미영향 씬) 바이트동일 무회귀.
+  세부: 2955378002(Persona5 위젯, 249=콤보 변형 249/765=33% — 스타/코멘트 마커 다수, 주 콘텐츠
+  무변화), 3299228616(중복 시계 위젯 소실 + 부수적으로 이전엔 겹쳐 가려졌던 검은 고양이 본체
+  노출), 3565190341(달 장식 자식 2 + 캐릭터 변형 33 억제, 겹친 텍스트 위젯 판독 가능해짐),
+  3538758087(다국어 날짜 위젯 — 깨진 중첩 텍스트가 "1 JAN 2024" 로 정상화), 3463520581(퍼펫
+  characterssize 콤보 "lil" 변형 29개 자식 억제 — 겹쳐 있던 두 캐릭터가 각각 또렷해짐).
+- **런타임 토글 한계**: 없음(확인 완료). 이 마킹은 파스-타임 정적 스냅샷이지만
+  `LibraryViewModel.setProperty → reapplyIfCurrent → onApply → SceneRenderer.mount` 가 매번
+  `SceneDocument.parse` 를 새 userProps 스냅샷으로 재실행(remount = 전체 재파스, in-place 패치
+  경로 없음) — 유저가 라이브로 옵션을 켜면 다음 파스에서 마킹도 갱신된다("옵션을 켜도 자식이
+  계속 숨는" 고착 없음, `SceneComboVisibleTests.testVisibilityInheritanceRespondsToUserPropsSnapshot`).
+  진단용 `WAPLE_VIS_INHERIT=0` 게이트로 코퍼스 스캔/A-B 재현 가능(기본은 항상 켜짐).
 
 ### C6-(iii). project.json 유저 프로퍼티 기본값 미주입 (위젯 중앙 배치)
 
@@ -157,6 +174,17 @@ HEAD 회귀(구 베이스라인 대비)는 3걸뿐 — 나머지는 전부 기�
 - **해결책**(네이티브 150-250라인 + JS ~30라인): 심 필드 추가(dirty 플래그) + evaluate3DScripts
   말미 readback → target* 변경 시에만 칸 메라 오버라이드 + current* 역기록.
 - **회귀 위험**: 칸 메라 스크립트 없는 3D 씬은 dirty 게이트로 정적 유지(필수 조건).
+- **정정(W3-② 조사, 착수 보류)**: 위 "심 필드 추가+readback" 처방만으로는 **불충분/위험**함을
+  3737268876 실물 스크립트 역추적으로 확인. 근거 4가지: (1) 스크립트 `init()`이 `shared.camera`
+  를 통째로 재할당해 시드값이 무의미해진다. (2) 실제 렌더 채널은 `shared.camera` 가 아니라
+  `thisScene.setCameraTransforms(camera)` — 네이티브 브리지 자체가 없다(브리지 없이 필드만
+  추가하면 아무 효과 없음). (3) `__makeCameraTransforms()`가 저작 camera.eye/center/up 과 무관한
+  하드코드 스텁((0,0,0)/(0,0,-1))이라 readback 만 배선하면 카메라가 원점으로 튄다. (4) 무마우스
+  (헤드리스) 상태에서 스크립트가 매프레임 `shared.camera.targetPosition=null` 을 쓰고 mixValue 의
+  frameNormalizer(`engine.frametime*(1/engine.frametime)`)가 frametime=0 프레임에서 NaN 이 되는
+  파괴적 경로가 실증됨. **올바른 범위**는 (a) transforms 를 저작 카메라로 시딩 (b)
+  setCameraTransforms 내부 명시적 dirty 플래그 (c) NaN/Infinity 가드 (d) 무마우스 상태 A/B 검증까지
+  포함하는 더 큰 작업 — 이번 웨이브에서 억지 구현하지 않고 다음 웨이브로 이관.
 
 ---
 
@@ -215,8 +243,20 @@ HEAD 회귀(구 베이스라인 대비)는 3걸뿐 — 나머지는 전부 기�
 - **solidlayer size 무시**: 3353695150(size 16×16이 화면 1/4 암블록), 3640755971(纯色 박스).
 - **비디오 레이어 헤드리스 무출력**: 3605722997(추출 성공·프레임 공급 nil 추정).
 - **블룸 과다**: 3509243656(NO_BLOOM A/B 확정, bloomstrength 4.0).
-- **스크립트 평가 NaN**: 3616389236(scale=script 버텍스 소멸 — evaluateVec NaN 필터 부재).
-- **미디어 위젯 무신호 숨김 안 함**: 3713073223, 3385540784, 3367988661(무신호 핀 조건과의 관계 확인 필요).
+- **스크립트 평가 NaN**: 3616389236(scale=script 버텍스 소멸) — **정정(W3-③ 조사)**:
+  `resolved-as-no-op`(evaluateVec/floatArray NaN 필터는 착지했으나 이 씬 자체는 못 고침). 진짜
+  원인은 필터 부재가 아니라 **스크립트 수명주기 순서** — `applyUserProperties` 가 `init()` 보다
+  먼저 실행돼 `initScale` 참조가 undefined 로 throw, `speed` 가 영구 미할당으로 남고 update() 의
+  `WEMath.mix(a,b,undefined)` 결과 NaN 이 Vec2/Vec3 shim 생성자의 `x || 0` 관용(NaN 은 falsy)으로
+  이미 (0,0,0) 에 조용히 세탁된 뒤 evaluateVec 에 도달 — 필터가 보는 시점엔 이미 유한값(0)이라
+  거부할 대상이 없다. 코퍼스 6씬 공유 스크립트(__workshopId 3489089062)로 확인, 근본 수정은
+  차기 웨이브 이관(수명주기 순서 자체를 고쳐야 함). NaN 필터 자체는 다른 실물 경로(스칼라 반환 등,
+  Vec shim 을 안 거치는 경로)에 유효한 방어선이라 유지.
+- **미디어 위젯 무신호 숨김 안 함**: 3713073223, 3385540784, 3367988661 — **정정(W3-④ 조사):
+  오진**. project.json+scene.json 역추적 결과 세 씬 전부 동일 워크샵 템플릿(workshopId
+  3219510589, 'Media Info' 위젯)이고 `general.properties.mediainfo.value=false` +
+  루트 오브젝트 `visible.value=false` 가 **일치** — 저작 시점부터 명시적으로 꺼진 옵트인 위젯이다
+  (무신호 숨김 미구현이 아니라 애초에 항상 숨김이 정상 동작). 별도 위젯-숨김 휴리스틱 불필요.
 - **퍼펫 포즈 미적용**: 3444535389(cat_puppet.mdl, 플랫 쿼드 렌더).
 - **파츠 조립/합성 어긋남**: 3543159422, 3257043844, 3461168300(composeParentTransforms 계열 용의).
 - **스크립트 visible 상태기계 미수렴**: 3429479356(engine.frametime 누적 모델).
