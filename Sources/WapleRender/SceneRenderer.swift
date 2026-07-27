@@ -70,6 +70,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let texRatio: Float   // texH/texW (스프라이트 세로 비율)
         let order: Int        // scene objects[] 인덱스 — 레이어와 인터리브 z-순서
         let isTrail: Bool     // spritetrail/rope/ropetrail — 히스토리 리본으로 드로우
+        /// C4-(iii): REFRACT 게이트 전용 판별(WapleCore RendererKind.isRopeTrail 위임) — rope/ropeTrail
+        /// 만 배제, spriteTrail 은 REFRACT 정접 대상으로 포함.
+        var isRopeTrail: Bool { def.renderer.isRopeTrail }
         /// 자식 링크(부모 particleSystems 인덱스, 링크 인덱스). 자식은 자체 sim 을 스텝하지 않고
         /// 부모 sim.childDisplay(link) 를 그린다(sim 필드는 미사용 더미 — 드로우 파이프라인 공용 위해 유지).
         var childOf: (parent: Int, link: Int)? = nil
@@ -929,6 +932,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var additivePipeline: MTLRenderPipelineState?
     var translucentPipeline: MTLRenderPipelineState?
     var refractParticlePipeline: MTLRenderPipelineState?   // REFRACT 스프라이트(pf_refract, translucent)
+    /// C4-(iii): REFRACT 스프라이트 additive 블렌드 변형(pf_refract, additive — 코퍼스 additive+REFRACT
+    /// 10씬 실측). translucent 변형(위)과 별개 파이프라인(블렌드 상태만 다름, 동일 프래그먼트 함수).
+    var refractParticlePipelineAdditive: MTLRenderPipelineState?
     var refractLayerPipeline: MTLRenderPipelineState?     // H4: REFRACT 이미지 레이어(f_refract)
     /// 감사 V07: 알베도 NoInterpolation(GPUParticleSystem.noInterp) 전용 nearest 변형 — noInterp 시스템이
     /// 있을 때만 빌드, nil(미빌드/컴파일 실패)이면 encodeParticle 이 선형 폴터(무회귀·무크래시).
@@ -1303,9 +1309,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     additiveNearestPipeline = particlePipeline(additive: true, nearest: true, device: device)
                     translucentNearestPipeline = particlePipeline(additive: false, nearest: true, device: device)
                 }
-                // REFRACT 시스템이 하나라도 있으면 굴절 파이프라인 빌드(스냅샷 재샘플). 없으면 미빌드.
-                if particleSystems.contains(where: { $0.refract && $0.normalTexture != nil }) {
-                    refractParticlePipeline = refractParticlePipelineBuild(device: device)
+                // REFRACT 시스템이 있으면 굴절 파이프라인 빌드(스냅샷 재샘플). 블렌드 변형은 실제 필요한
+                // 쪽만(C4-(iii): additive+REFRACT 코퍼스 10씬 — translucent 뿐이던 종전 가정 반박).
+                if particleSystems.contains(where: { $0.refract && $0.normalTexture != nil && !$0.blendAdditive }) {
+                    refractParticlePipeline = refractParticlePipelineBuild(additive: false, device: device)
+                }
+                if particleSystems.contains(where: { $0.refract && $0.normalTexture != nil && $0.blendAdditive }) {
+                    refractParticlePipelineAdditive = refractParticlePipelineBuild(additive: true, device: device)
                 }
             }
             textLayers = buildTexts(doc: doc, package: package, device: device)
@@ -1929,6 +1939,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         loggedDrawFailureKeys.removeAll()
         puppetCascadePhase.removeAll(); puppetCascadeLastTime.removeAll()  // C④: 마운트 재사용 stale 위상 방지
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
+        refractParticlePipelineAdditive = nil   // C4-(iii)
         additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
         blendPipeline = nil; composePipeline = nil          // 감사 V06: 해제 누락분(마운트 반복 시 GPU 리소스 누적 방지)
         pipelineNearest = nil; layerAdditiveNearestPipeline = nil  // 감사 V07: nearest 변형 해제(동일 근거)

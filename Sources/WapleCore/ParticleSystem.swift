@@ -136,6 +136,17 @@ public enum RendererKind: Equatable {
         }
     }
 
+    /// C4-(iii): REFRACT 디스패치 게이트 전용 — rope/ropeTrail(위치 히스토리 리본)만 배제한다.
+    /// spriteTrail(F790 신장 쿼드)은 sprite 와 동형의 쿼드 지오메트리라 REFRACT 정접 대상(코퍼스
+    /// additive+REFRACT 10씬 중 rain_on_the_glass1 등 spriteTrail 실측) — isTrail(위, 벡터
+    /// reservation/appendRibbon 분기용)과 달리 spriteTrail 을 false 로 분리한다.
+    public var isRopeTrail: Bool {
+        switch self {
+        case .rope, .ropeTrail: return true
+        default: return false
+        }
+    }
+
     /// 리본에 보관할 위치 히스토리 샘플 수(step 당 1샘플, captureFrames=30fps 가정).
     /// spriteTrail=maxlength(세그먼트 수 근사), ropeTrail=length(초)×30, rope=subdivision(F629,
     /// 부재/0 시 종전 고정 16). F625: 캡 24→240 — maxlength 100/ropetrail 수초 트레일이 24샘플

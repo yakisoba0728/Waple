@@ -246,6 +246,16 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(RendererKind.sprite.trailSampleCount, 0)
     }
 
+    /// C4-(iii): REFRACT 디스패치가 소비하는 isRopeTrail — spriteTrail 은 sprite 와 동형 쿼드 지오메트리라
+    /// REFRACT 정접 대상(false), rope/ropeTrail(히스토리 리본)만 배제(true). isTrail(위 테스트)과 대조적으로
+    /// spriteTrail 에서 갈린다.
+    func testIsRopeTrailExcludesOnlyHistoryRibbonRenderers() {
+        XCTAssertFalse(RendererKind.sprite.isRopeTrail)
+        XCTAssertFalse(RendererKind.spriteTrail(maxLength: 20, length: 0, minLength: 0).isRopeTrail)
+        XCTAssertTrue(RendererKind.rope(subdivision: 0).isRopeTrail)
+        XCTAssertTrue(RendererKind.ropeTrail(length: 0.4, subdivision: 2).isRopeTrail)
+    }
+
     /// C4-(i): alpharandom min/max 부재 → WE 실기본값 0,0(bokeh 백화 원인 — 종전 ??1 은 불투명 고정).
     func testAlphaRandomMissingMinMaxDefaultsToZero() {
         let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"alpharandom"}]}"#), material: nil)

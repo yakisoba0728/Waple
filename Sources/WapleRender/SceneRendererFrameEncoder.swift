@@ -658,11 +658,13 @@ extension SceneRenderer {
             case .mesh3D:
                 break  // 위 런 수집에서 처리(도달 불가)
             case .particle where particleSystems[item.idx].refract
-                              && !particleSystems[item.idx].isTrail
+                              && !particleSystems[item.idx].isRopeTrail
                               && particleSystems[item.idx].normalTexture != nil
-                              && refractParticlePipeline != nil:
-                // REFRACT 스프라이트: 여기까지의 acc(씬 컬러)를 스냅샷 떠 노멀 오프셋 재샘플(인코더 분할).
-                // 리본/rope refract 는 스코프 밖 → 아래 일반 .particle 로 identity 렌더(ponytail).
+                              && (particleSystems[item.idx].blendAdditive
+                                  ? refractParticlePipelineAdditive : refractParticlePipeline) != nil:
+                // REFRACT 스프라이트(+ C4-(iii): spriteTrail 신장 쿼드도 sprite 와 동형이라 포함): 여기까지의
+                // acc(씬 컬러)를 스냅샷 떠 노멀 오프셋 재샘플(인코더 분할). rope/ropeTrail(히스토리 리본) refract
+                // 는 스코프 밖 → 아래 일반 .particle 로 identity 렌더(ponytail).
                 guard let next = runRefractParticle(particleSystems[item.idx], snapshot: particleSnapshot(item.idx),
                                                     acc: acc, cb: cb, ending: enc, device: device,
                                                     camOffset: &camOffset, aspectScale: &aspectScale) else { return nil }
@@ -1522,7 +1524,9 @@ extension SceneRenderer {
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].loadAction = .load
         guard let next = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
-        if let snap, let pipe = refractParticlePipeline {
+        // C4-(iii): 머티리얼 블렌드(additive/translucent)에 맞는 REFRACT 파이프라인 변형 선택.
+        let refractPipe = sys.blendAdditive ? refractParticlePipelineAdditive : refractParticlePipeline
+        if let snap, let pipe = refractPipe {
             encodeRefractParticle(sys, snapshot: snapshot, framebuffer: snap, pipe: pipe, into: next,
                                   device: device, camOffset: &camOffset, aspectScale: &aspectScale)
         } else {
