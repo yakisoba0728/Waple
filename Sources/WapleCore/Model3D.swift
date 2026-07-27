@@ -42,6 +42,20 @@ import simd
 ///
 /// 확정 근거(교차검증): 174/174 파스; 단일메시 40개 전부 maxIndex == vertexCount-1;
 ///   vsize % stride == 0(전수); normal/tangent 단위길이·weights 합 1.0(3개 witness); 6바이트 구분자 전수 0.
+///
+/// S3-mdl(2026-07-27) 디컴파일 대조: wallpaper64.exe MDL 디코더 `FUN_140261950`(RVA 0x260950,
+/// analysis/decompiled/all/…FUN_140261950.c) 바이트리더 트레이스(3302695207 人物_puppet.mdl 실물 대조)로
+/// 헤더 3필드가 **정확히 offset 9 부터 시작하는 단일 u32 formatFlag**(문서 corpus_scan/mdl-format.md 의
+/// "0x08 오프셋 lo/hi u16 쌍, hi=0x8000" 주장은 매직 cstring 리더가 byte8 의 NUL(=formatFlag 하위바이트
+/// 우연 일치)을 종단문자로 소비해 이후 리드가 1바이트 밀리는 것을 못 잡은 오프바이원 — 우리 구현이 이미
+/// 맞음, checklist match)임을 재확인. 버전 게이트(`if (iVar17 < 0x11)` 즉 <17 → AABB 없음)도 실행경로에서
+/// 직접 대조(hasAABB = version >= 17 과 바이트 일치). 스켈레톤/애니 매직 디스패치(MDLS0004→MDLA0006→
+/// MDAT0001→MDMP0001→MDLE0002)는 코드에 존재하나 meshCount>0(local_400≠0) 파일에서는 타지 않는 분기 —
+/// 그 경로 자체가 "확인됨"은 아니고, 우리 매직-스캔 방식이 그와 **모순되지 않음**만 근거. MDLE0002 서브블록
+/// 실측(코퍼스 다수 .mdl 바이트 직접 대조, 예 3463520581 8개 중 3개 보유): magic(8)|u8 0|u32 nextOff(=EOF-1)
+/// |u32 byteSize|byteSize/64 개의 64B 강체변환(4x4, 대개 [0]=미세회전+평행이동, 이후는 순수평행이동) —
+/// 퍼펫워프 에디터 핸들/핀 좌표로 추정(런타임 스키닝 무관: 미소비 상태로도 174/174 전수 파스+불변식 통과).
+/// 결함 귀속 없음 + 게이트 씬 보유 → 구현 보류(추측 구현이 무기여 상태에서 게이트를 흔들 위험).
 public struct Model3D: Equatable {
     /// 정점. 정적 메시는 boneIndices/weights 가 (0,0,0,0).
     public struct Vertex: Equatable {
