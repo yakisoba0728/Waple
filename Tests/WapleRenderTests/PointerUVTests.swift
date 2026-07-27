@@ -115,6 +115,31 @@ final class QuadAlignmentTests: XCTestCase {
         XCTAssertEqual(ys.min()!, 160, accuracy: 1e-2)   // 중심 ± hh(40)
         XCTAssertEqual(ys.max()!, 240, accuracy: 1e-2)
     }
+
+    /// 자문 지적: 회전×비대칭 앵커의 "합성" 은 어떤 단일 테스트도 커버하지 않았다 — alignedCenter 의
+    /// ay 부호 수정과 quadVertices 의 hh 코너 재페어링이 **서로 독립적으로** 맞아야만 앵커 코너가
+    /// 회전과 무관하게 origin 에 고정된다(alignedCenter: center=origin−R(ay 앵커), quadVertices:
+    /// 그 앵커 코너의 로컬 (lx,ly) 가 동일 (ax,ay) 를 써야 함 — 둘 중 하나만 고쳐졌으면 아래 assert 가
+    /// 깨진다). topleft→tl(v[0]), bottomright→br(v[2]) 두 대각 케이스 + 4개 angleZ 로 교차검증.
+    func testRotatedOffCenterAnchorStaysPinnedAtOrigin() {
+        let origin = Vec2(x: 500, y: 300)
+        let size = Vec2(x: 100, y: 60)
+        for angleZ: Float in [0, 0.7, .pi / 2, 2.1] {
+            let topleft = SceneRenderer.quadVertices(origin: origin, size: size, scale: Vec2(x: 1, y: 1),
+                                                      angleZ: angleZ, alignment: "topleft",
+                                                      projW: 1000, projH: 1000)
+            let (txs, tys) = scenePixels(topleft, proj: 1000)
+            XCTAssertEqual(txs[0], 500, accuracy: 1e-2, "topleft v[0](tl) angleZ=\(angleZ)")
+            XCTAssertEqual(tys[0], 300, accuracy: 1e-2, "topleft v[0](tl) angleZ=\(angleZ)")
+
+            let bottomright = SceneRenderer.quadVertices(origin: origin, size: size, scale: Vec2(x: 1, y: 1),
+                                                          angleZ: angleZ, alignment: "bottomright",
+                                                          projW: 1000, projH: 1000)
+            let (bxs, bys) = scenePixels(bottomright, proj: 1000)
+            XCTAssertEqual(bxs[2], 500, accuracy: 1e-2, "bottomright v[2](br) angleZ=\(angleZ)")
+            XCTAssertEqual(bys[2], 300, accuracy: 1e-2, "bottomright v[2](br) angleZ=\(angleZ)")
+        }
+    }
 }
 
 /// W1-yaxis 핵심 불변식: origin.y == projH/2 **이고 angleZ == 0** 인 레이어는 새/구 pxToNDC 가 부호만
