@@ -33,6 +33,30 @@ final class TextEngineTests: XCTestCase {
         XCTAssertTrue(out == now || out == oneMinuteEarlier, "got \(out), expected \(now) or \(oneMinuteEarlier)")
     }
 
+    /// W3-③: 스크립트가 undefined 피연산자로 NaN 을 만들어내고(WEMath.mix(a,b,undefined) 패턴) 그 값을
+    /// **기존 Vec3 를 직접 변경**(재구성 아닌 프로퍼티 대입)해 반환하면 evaluateVec 은 그 NaN 성분을
+    /// 그대로 통과시키면 안 되고 nil(호출부가 "이전 프레임 값 유지"로 처리)을 반환해야 한다. `new Vec3(x,y,z)`
+    /// 재구성 경로는 생성자의 `x||0` 관용구가 NaN 을 0 으로 이미 가리므로(별개의 기존 완화), 프로퍼티
+    /// 직접 대입 경로가 Swift 경계에 원시 NaN 이 실제로 도달하는 대표 사례다.
+    func testEvaluateVecRejectsNaNComponent() throws {
+        let engine = try XCTUnwrap(TextScriptEngine(
+            script: "export function update(v){ v.z = v.z * undefined; return v; }"))
+        XCTAssertNil(engine.evaluateVec(current: [1, 2, 3]), "NaN 성분 포함 벡터는 거부(이전값 유지)돼야 함")
+    }
+
+    /// Infinity 성분(0 나눗셈 등)도 동일하게 거부 — 스칼라 단일값 경로도 함께 커버.
+    func testEvaluateVecRejectsInfiniteScalar() throws {
+        let engine = try XCTUnwrap(TextScriptEngine(script: "export function update(v){ return 1 / 0; }"))
+        XCTAssertNil(engine.evaluateVec(current: [1]), "Infinity 스칼라는 거부돼야 함")
+    }
+
+    /// 회귀 가드: 유한값 벡터는 종전대로 통과.
+    func testEvaluateVecPassesFiniteVector() throws {
+        let engine = try XCTUnwrap(TextScriptEngine(
+            script: "export function update(v){ return new Vec3(v.x + 1, v.y + 1, v.z + 1); }"))
+        XCTAssertEqual(engine.evaluateVec(current: [1, 2, 3]), [2, 3, 4])
+    }
+
     /// createScriptProperties 심이 저장된 scriptproperties(사용자 오버라이드)를 소스 기본값보다 우선하는지.
     /// 미주입 시 Background color 스크립트가 소스 기본값 흰색(new Vec3(1,1,1))을 fallback 으로 반환 →
     /// 텍스처 tint=(1,1,1) 로 전화면 백화(3300031038 luma 0.9999). addColor 오버라이드는 "r g b" 문자열이라

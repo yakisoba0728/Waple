@@ -609,21 +609,36 @@ public final class TextScriptEngine {
     }
 
     /// 스크립트 반환값 → 수치 배열: 스칼라는 1개, Vec2/Vec3 형({x,y[,z]})은 성별 순, 배열 형은 앞에서부터.
+    /// W3-③: NaN/Infinity 성분이 하나라도 있으면 전체를 nil 로 거부(위 "예외/비수치 → nil" 계약의 연장 —
+    /// JS 의 NaN 은 typeof 'number' 라 isNumber 검사만으론 안 걸러진다). 호출부(evaluateVec)가 nil 을
+    /// "이전 프레임 값 유지"로 처리하므로, 스크립트가 undefined 피연산자로 NaN 을 만들어내도(실물
+    /// 3616389236: WEMath.mix(a,b,undefined) 의 speed 미초기화) 버텍스가 소멸하지 않고 직전 값을 유지한다.
     static func floatArray(from value: JSValue?) -> [Float]? {
         guard let value else { return nil }
-        if value.isNumber { return [Float(value.toDouble())] }
+        if value.isNumber {
+            let d = value.toDouble()
+            return d.isFinite ? [Float(d)] : nil
+        }
         guard value.isObject else { return nil }
         let x = value.objectForKeyedSubscript("x"), y = value.objectForKeyedSubscript("y"),
             z = value.objectForKeyedSubscript("z")
         if let x, let y, x.isNumber, y.isNumber {
-            if let z, z.isNumber { return [Float(x.toDouble()), Float(y.toDouble()), Float(z.toDouble())] }
-            return [Float(x.toDouble()), Float(y.toDouble())]
+            let xd = x.toDouble(), yd = y.toDouble()
+            guard xd.isFinite, yd.isFinite else { return nil }
+            if let z, z.isNumber {
+                let zd = z.toDouble()
+                guard zd.isFinite else { return nil }
+                return [Float(xd), Float(yd), Float(zd)]
+            }
+            return [Float(xd), Float(yd)]
         }
         if let len = value.objectForKeyedSubscript("length"), len.isNumber, len.toInt32() > 0 {
             var out: [Float] = []
             for i in 0..<len.toInt32() {
                 guard let e = value.objectAtIndexedSubscript(Int(i)), e.isNumber else { return nil }
-                out.append(Float(e.toDouble()))
+                let d = e.toDouble()
+                guard d.isFinite else { return nil }
+                out.append(Float(d))
             }
             return out
         }
