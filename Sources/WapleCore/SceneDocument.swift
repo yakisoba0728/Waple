@@ -923,8 +923,7 @@ extension SceneDocument {
         // 필드 자체가 없고 SceneParticle.parent 는 3D 마운트 경로 전용이라, 부모 붙은 텍스트/파티클이
         // 저작 로컬 좌표(대개 화면 밖/좌상단) 그대로 렌더됐다(가시 텍스트 177개/62씬).
         composeTextParentTransforms(texts: &texts, layers: layers, nodes3D: nodes3D, camera3D: camera3D)
-        composeParticleParentTransforms(particles: &particles, layers: layers, nodes3D: nodes3D, texts: texts,
-                                        camera3D: camera3D)
+        composeParticleParentTransforms(particles: &particles, layers: layers, nodes3D: nodes3D, camera3D: camera3D)
         // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다). texts 는
         // 위에서 이미 월드로 확정된 뒤라 "부모=텍스트" 인 이미지 자식(W3-⑤, 3701356561 Solide H/V)도 여기서
         // 정상 합성된다.
@@ -1768,13 +1767,16 @@ extension SceneDocument {
 
     /// E1: 2D 파티클 오브젝트의 parent 체인 합성 — origin/scale(Vec2, 2D 정사영 경로 전용) 만 굽는다.
     /// origin3D/scale3D/angles3D(3D 마운트 경로)는 SceneRenderer3D 가 별도로 parent3D 를 합성하므로 무관.
-    /// W3-⑤: texts 도 부모 후보(파티클이 텍스트에 붙는 씬 대비 — buildParentTransformMap 주석 참조).
+    /// W3-⑤: texts 는 의도적으로 미포함 — 이 함수는 composeTextParentTransforms **이후** 호출되므로
+    /// (:925-927) buildParentTransformMap 에 texts 를 넘기면 이미 월드로 확정된 텍스트에 parentOf 가
+    /// 등록돼 조상 체인이 재귀로 다시 합성(이중 적용)된다. "파티클이 텍스트에 붙는" 코퍼스 근거가 없어
+    /// 카브아웃 대신 범위에서 제외(스코프 최소주의) — 실물 필요 시 composeTextParentTransforms 처럼
+    /// 텍스트 스냅샷(뮤테이트 전)을 별도로 캡처해 전달해야 한다.
     private static func composeParticleParentTransforms(particles: inout [SceneParticle], layers: [SceneLayer],
-                                                         nodes3D: [SceneNode3D], texts: [SceneTextLayer],
-                                                         camera3D: SceneCamera3D?) {
+                                                         nodes3D: [SceneNode3D], camera3D: SceneCamera3D?) {
         guard camera3D == nil,
               particles.contains(where: { $0.parent != nil && !$0.disablePropagation }) else { return }
-        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D, texts: texts)
+        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D)
         for i in particles.indices {
             guard !particles[i].disablePropagation, let pid = particles[i].parent,
                   let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf, noPropagate: noPropagate)

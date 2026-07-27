@@ -362,6 +362,31 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(p.origin.y, 205, accuracy: 0.001)  // 200 + 5
     }
 
+    /// W3-⑤ 회귀 가드: 파티클은 텍스트를 부모 후보로 인식하지 않는다(의도적 스코프 제외 — 코퍼스 근거
+    /// 없음). buildParentTransformMap 에 texts 를 넘기면 composeTextParentTransforms 이후 호출 순서상
+    /// 이미 월드로 확정된 텍스트에 parentOf 가 재등록돼 조상 체인이 이중 합성될 위험이 있어(리뷰 확인),
+    /// composeParticleParentTransforms 는 texts 를 받지 않는다 — 텍스트를 parent 로 참조한 파티클은
+    /// 저작 로컬 좌표 그대로 유지돼야 한다(합성 안 됨, 크래시/이중스케일 없음).
+    func testParticleWithTextParentDoesNotComposeOrDoubleApply() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":2000,"height":2000}},
+         "objects":[
+           {"id":1,"name":"node","origin":"1000 500 0","scale":"2 2 1"},
+           {"id":2,"name":"midText","text":"mid","parent":1,"origin":"10 0 0"},
+           {"id":3,"name":"snow","particle":"particles/snow.json","parent":2,"origin":"5 0 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("particles/snow.json", d(#"{"renderer":[{"name":"sprite"}],"maxcount":1}"#)),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let p = try XCTUnwrap(doc.particles.first)
+        // 텍스트(2)가 부모 후보가 아니므로 합성 미실행 — 저작 로컬 좌표(5,0) 그대로.
+        XCTAssertEqual(p.origin.x, 5, accuracy: 0.001)
+        XCTAssertEqual(p.origin.y, 0, accuracy: 0.001)
+    }
+
     /// A1(852473d) 라디안 정정은 렌더 인코더(SceneRendererFrameEncoder.swift:405)만 고쳤고 이 파스-시
     /// 합성부(composeParentTransforms)는 미동기라 부모 회전이 `*.pi/180` 으로 재차 축소됐다. scene.json
     /// angles 는 이미 라디안이므로, 부모 angleZ=π/2(90°)면 자식 오프셋이 정확히 90° 회전해야 한다
