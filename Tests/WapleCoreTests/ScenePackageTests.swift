@@ -82,12 +82,12 @@ final class ScenePackageTests: XCTestCase {
         XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0024")))
     }
 
-    func testRejectsOutOfRangeVersion() {
-        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "PKGV0000"))) { e in
-            XCTAssertEqual(e as? ScenePackageError, .malformed)
-        }
-        XCTAssertThrowsError(try ScenePackage.parse(Self.makePkg([], version: "PKGV0100"))) { e in
-            XCTAssertEqual(e as? ScenePackageError, .malformed)
-        }
+    /// WE-ENGINE-ANALYSIS-2026-07-27.md §2: "PKGV" 뒤 4자리는 버전이 아니라 per-file serial(임의값)이라
+    /// 정해진 유효 범위가 없다 — entry_count(offset 0x0c)가 authoritative. "0000"·"0100" 등도 구조상
+    /// 정상 4자리 ASCII 숫자이므로 거부하면 안 된다(종전 1~99 범위 게이트는 의미상 오류였다).
+    func testAcceptsAnyFourDigitSerial() {
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0000")))
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0100")))
+        XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV9999")))
     }
 }

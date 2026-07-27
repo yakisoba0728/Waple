@@ -47,14 +47,15 @@ public struct ScenePackage {
         let vlen = try i32(p); p += 4
         guard vlen >= 0, p + vlen <= total else { throw ScenePackageError.malformed }
         let magic = String(decoding: data[(base + p)..<(base + p + vlen)], as: UTF8.self)
-        // PKGV0001 ~ PKGV0024 (및 gifscene PKGV0002) 실측 범위; 미래 버전은 99 까지 허용.
+        // WE-ENGINE-ANALYSIS-2026-07-27.md §2 (corpus_scan/pkgv_parse.py, 446씬·19,777엔트리 0파스에러
+        // 대조): "PKGV" 뒤 4자리는 **per-file serial**(임의값)이지 버전이 아니다 — authoritative 필드는
+        // 뒤따르는 entry_count(offset 0x0c, 아래 `count`)다. 종전 코드는 이를 "버전"으로 오인해 1~99
+        // 범위 게이트를 걸었다(실코퍼스 관측 1~24 내에선 무해했으나 의미상 오류 — serial 이 100 이상인
+        // 정상 pkg 를 향후 거부할 잠재 위험). 구조 검증(정확히 "PKGV"+4 ASCII 숫자)만 유지하고 값 범위
+        // 게이트는 제거 — serial 값 자체는 무의미하므로 파싱에 쓰지 않는다.
         guard magic.range(of: "^PKGV[0-9]{4}$", options: .regularExpression) != nil else {
             throw ScenePackageError.malformed
         }
-        guard let version = Int(magic.dropFirst("PKGV".count)), version >= 1, version <= 99 else {
-            throw ScenePackageError.malformed
-        }
-        _ = version
         p += vlen
         let count = try i32(p); p += 4
         guard count >= 0, count <= maxEntries else { throw ScenePackageError.malformed }
