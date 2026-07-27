@@ -512,17 +512,20 @@ extension SceneRenderer {
         let ca = cos(angleZ), sa = sin(angleZ)
         let aligned = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
         // model: translate(aligned) * rotateZ(angleZ) * scale(hw, hh)
+        // W1-yaxis: customLayerQuadInterleaved 는 local(-1,-1)→uv(0,0)=TL 로 고정(SceneRenderer.swift:889).
+        // quadVertices 와 동일하게 uv(0,0) 이 화면 위쪽에 오려면 local y-basis(columns.1) 를 반전해야
+        // local ly=-1 가 +hh(위) 로 매핑된다(quadVertices 의 hh 재페어링과 동형 보정).
         var model = simd_float4x4(1)
         model.columns.0 = SIMD4(ca * hw, sa * hw, 0, 0)
-        model.columns.1 = SIMD4(-sa * hh, ca * hh, 0, 0)
+        model.columns.1 = SIMD4(sa * hh, -ca * hh, 0, 0)
         model.columns.2 = SIMD4(0, 0, 1, 0)
         model.columns.3 = SIMD4(aligned.x, aligned.y, 0, 1)
-        // ortho: pixel → NDC (Y-flip, same as sceneToNDC)
+        // ortho: pixel → NDC(W1-yaxis: y-up, sceneToNDC/pxToNDC 와 동일 부호로 갱신)
         var ortho = simd_float4x4(1)
         ortho.columns.0 = SIMD4(2 / projW, 0, 0, 0)
-        ortho.columns.1 = SIMD4(0, -2 / projH, 0, 0)
+        ortho.columns.1 = SIMD4(0, 2 / projH, 0, 0)
         ortho.columns.2 = SIMD4(0, 0, 1, 0)
-        ortho.columns.3 = SIMD4(-1, 1, 0, 1)
+        ortho.columns.3 = SIMD4(-1, -1, 0, 1)
         // camera/shake translation
         let camX = camOffset.x * parallaxDepth.x + shakeOffset.x
         let camY = camOffset.y * parallaxDepth.y + shakeOffset.y
