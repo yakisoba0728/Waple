@@ -438,7 +438,13 @@ extension SceneRenderer {
             let effW = layer.isFrameBuffer ? Int(max(1, projW)) : texW
             let effH = layer.isFrameBuffer ? Int(max(1, projH)) : texH
             var effects: [EffectGPU] = []
-            for eff in layer.effects {
+            // W4b-③: 2D buildEffectChain(SceneRendererResources.swift:173-176)과 동일한 WAPLE_EFFECT_SKIP
+            // 파리티 게이트 — 종전엔 3D 빌보드(프레임버퍼 후처리 포함) 경로에 이 진단 스위치가 없어
+            // 3D 씬의 전화면 흑화(3706286085: water_caustics+cursorripple) 이분에 pkg 물리 패치가
+            // 필요했다(감사 evidence). 2D 와 동형 이름 필터만 — 판정 로직은 무변경.
+            let skipNames3D = Set((ProcessInfo.processInfo.environment["WAPLE_EFFECT_SKIP"] ?? "")
+                .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+            for eff in layer.effects where !skipNames3D.contains(eff.name) {
                 // F733(S-5 잔여): compositeImageTextures 전달 — 2D 경로(F720, SceneRendererResources:235)와
                 // 동형. 생략 시 기본 인자 [:] 로 `_rt_imageLayerComposite_<id>` 슬롯이 베이스 텍스처 치환 없이
                 // 흰색 1×1 폴터로 바인드돼 blend/clipping_mask 계열 콘텐츠가 소실된다.
