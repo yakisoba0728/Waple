@@ -256,9 +256,27 @@ thumbs/3565190341.png`) 대비 A/B 확정 개선 — 이 아티팩트는 C2 이�
 실루엣·"MONDAY" 텍스트 위젯 전부 정상, 노이즈 밴드 영역 픽셀 통계(상단 40% RGB 평균/표준편차/최대값)에서
 이상 스파이크 없음. main-6526db1 표준 베이스라인 썸네일과 일치. 코드 변경 없음(재판정 전용, 문서만 갱신).
 
+**재판정(B4-③, 2026-07-27, main 6526db1)**: 3353695150 검정 블록도 위 목록에서 **제외** —
+직전 라운드에서 solidlayer(오브젝트 409/769/595/611, size 16~64·scale 최대 10) 자체의 size/color
+산술은 무죄로 실증되고 원인이 "Jake 캐릭터 몸통(오브젝트 30, `models/jake1.json` →
+`materials/jake1.json`, shader=genericimage4, combo SPRITESHEET:1)"으로 재귀속됐었다. C2(y-up)
+착지 후 고해상(960×540 + 1920×1080) 재캡처 결과 검정 블록·올리브색 왜곡·수직 노이즈 줄무늬 전부
+소멸 — Jake는 정상 주황색, 헤드폰·재생기 소품까지 WE preview.gif와 합치. 산술 근거: 4개
+solidlayer 픽셀 통계(hash/meanLuma)가 main-6526db1 표준 베이스라인과 일치(0.2792 vs 0.2792,
+95fad7a 구 베이스라인의 0.1939 대비 명확한 개선). **genericimage4 QuadShaders 고정 경로 자체는
+무죄로 확인**: `SceneRendererResources.buildCustomLayerShader`(:1032-1036 주석)가 씬 패키지 밖
+빌트인 셰이더(genericimage4 등)를 의도적으로 배제하고 QuadShaders 폴백을 taken하는 설계인데,
+Jake의 실제 머티리얼은 `LIGHTING`/`REFLECTION`/`BLENDMODE` 콤보가 전부 0(SPRITESHEET만 1)이라
+genericimage4.frag의 분기 대부분이 no-op으로 축약되고(§120-199) — 순수 `texture0 × g_Color4`
++ translucent 블렌드 + 스프라이트시트 프레임 전진만 필요한데, 이는 QuadShaders가 이미 구현하는
+집합(SceneDocument.spritesheet 게이트, colorBlendMode, forwardLit2D)과 정확히 겹친다. 즉 이
+씬에서는 QuadShaders 폴백이 실제로 "놓치는 의미"가 없음 — 검정 블록의 진짜 원인은 셰이더 콤보
+갭이 아니라 C2 이전의 solidlayer/Jake 좌표 배치(y-down 오독) 자체였다. 코드 변경 없음(재판정 전용,
+문서만 갱신).
+
 ### 소수 클러스터
 
-- **solidlayer size 무시**: 3353695150(size 16×16이 화면 1/4 암블록), 3640755971(纯色 박스).
+- **solidlayer size 무시**: 3640755971(纯色 박스).
 - **비디오 레이어 헤드리스 무출력**: 3605722997(추출 성공·프레임 공급 nil 추정).
 - **블룸 과다**: 3509243656(NO_BLOOM A/B 확정, bloomstrength 4.0).
 - **스크립트 평가 NaN**: 3616389236(scale=script 버텍스 소멸) — **정정(W3-③ 조사)**:
