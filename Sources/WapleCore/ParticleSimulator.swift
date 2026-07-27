@@ -725,9 +725,11 @@ public struct ParticleSimulator {
 private func s3(_ v: Vec3) -> SIMD3<Float> { SIMD3(v.x, v.y, v.z) }
 
 /// HSV(0..1 각 축, h 는 순환) → RGB(0..1). 표준 6구간 변환 — hsvcolorrandom 이니셜라이저 전용.
+/// h 비유한(랜덤 범위 오버플로 등 극단 코퍼스값) 방어: Int(hh) 는 NaN/Inf 에서 트랩하므로 무크래시
+/// 그레이 폴백(감사 V06 포화 클램프·TexImage maxDim 가드와 동일 관례 — 오역보다 폴백).
 private func hsv2rgb(h: Float, s: Float, v: Float) -> SIMD3<Float> {
     let vv = max(0, min(1, v))
-    guard s > 0 else { return SIMD3(vv, vv, vv) }
+    guard h.isFinite, s > 0 else { return SIMD3(vv, vv, vv) }
     let ss = max(0, min(1, s))
     // h 순환(음수/1 초과 모두 [0,1) 로 랩) 후 6구간(색상환) 스케일.
     let hh = (h.truncatingRemainder(dividingBy: 1) + 1).truncatingRemainder(dividingBy: 1) * 6

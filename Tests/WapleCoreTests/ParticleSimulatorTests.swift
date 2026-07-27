@@ -532,6 +532,23 @@ final class ParticleSimulatorTests: XCTestCase {
         }
     }
 
+    /// hue 범위가 비유한을 낳을 수 있는 극단값(Float.greatestFiniteMagnitude)이어도 Int(hh) 트랩
+    /// (NaN/Inf 는 Swift 에서 크래시) 없이 무채색 폴백해야 한다 — "오역보다 폴백" 가드 증명.
+    func testHSVColorRandomExtremeHueRangeDoesNotCrash() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+            initializers: [.lifetimeRandom(min: 100, max: 100),
+                           .hsvColorRandom(hueMin: -Float.greatestFiniteMagnitude, hueMax: Float.greatestFiniteMagnitude,
+                                          satMin: 1, satMax: 1, valMin: 1, valMax: 1)],
+            operators: [], renderer: .sprite, maxCount: 8, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 11)
+        let ps = sim.step(0.1)
+        XCTAssertGreaterThan(ps.count, 0)
+        for p in ps {
+            XCTAssertFalse(p.color.x.isNaN); XCTAssertFalse(p.color.y.isNaN); XCTAssertFalse(p.color.z.isNaN)
+        }
+    }
+
     // MARK: - oscillatealpha (F184/F189/F190)
 
     /// 자매 oscillateSize 와 동형 직접보간 — peak=scaleMax, trough=scaleMin(구 감산식
