@@ -1370,8 +1370,10 @@ extension SceneRenderer {
         var tint = t.tint
         var vbuf = t.vertexBuffer
         var origin = t.def.origin, scale = t.def.scale
-        var angle: Float = 0
-        var quadDirty = false
+        // W3-⑤(b): 정적 angleZ(3146703458 등, ~178°) — rasterize() 가 굽는 초기 vbuf 는 무회전이라
+        // quadDirty 를 강제해야 아래 quadVertices 재계산이 실제로 회전을 반영한다(스크립트 없는 텍스트도).
+        var angle: Float = t.def.angleZ
+        var quadDirty = t.def.angleZ != 0
         // 모든 스크립트를 먼저 평가(shared 사이드이펙트 보존)한 뒤 visible 이 거짓이면 draw 스킵
         // (GPULayer.propScripts 루프와 동일 순서 원칙).
         for sc in t.propScripts {

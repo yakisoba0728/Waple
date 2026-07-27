@@ -259,6 +259,89 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(text.scale.x, 2, accuracy: 0.001)     // 부모 scale(2) × 자신 scale(기본 1)
     }
 
+    /// W3-⑤(a): "부모=텍스트" 케이스(실물 3701356561 Solide H/V) — 이미지 자식이 텍스트를 parent 로
+    /// 참조하면(텍스트에 id 필드가 없어 종전엔 룩업 자체가 불가) 저작 로컬 좌표 그대로 방치됐다.
+    /// composeParentTransforms(레이어) 가 texts 를 부모 후보로도 인식해야 한다.
+    func testImageChildOfTextParentComposed2D() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":20,"name":"clock","text":"00:00","origin":"1920 1145 0"},
+           {"id":42,"name":"Solide H","image":"models/x.json","parent":20,"origin":"282 -12 0",
+            "scale":"0.87 0.88 1"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let img = try XCTUnwrap(doc.layers.first { $0.name == "Solide H" })
+        // 텍스트(20) 는 루트(parent 없음) → 텍스트의 로컬=월드 그대로가 부모 트랜스폼: origin+scale(기본1)*자식로컬.
+        XCTAssertEqual(img.origin.x, 1920 + 282, accuracy: 0.01)
+        XCTAssertEqual(img.origin.y, 1145 - 12, accuracy: 0.01)
+    }
+
+    /// W3-⑤(a) 변종: 텍스트→텍스트 부모 체인(실물 3516106265: id 790/798/804 parent=783). 텍스트도
+    /// 서로의 부모가 될 수 있어야 한다.
+    func testTextChildOfTextParentComposed2D() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":783,"name":"parentText","text":"DAY","origin":"3710 2014 0"},
+           {"id":790,"name":"childText","text":"Date","parent":783,"origin":"10 5 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([("scene.json", d(scene))])
+        let doc = try SceneDocument.parse(package: pkg)
+        let child = try XCTUnwrap(doc.texts.first { $0.name == "childText" })
+        XCTAssertEqual(child.origin.x, 3710 + 10, accuracy: 0.01)
+        XCTAssertEqual(child.origin.y, 2014 + 5, accuracy: 0.01)
+    }
+
+    /// W3-⑤(a) 이중적용 가드: 조상(스케일≠1) → 텍스트 자식 → 이미지 손자. 이미지의 최종 월드 좌표가
+    /// (조상∘텍스트∘이미지) 합성 1회 적용값과 일치해야 한다(텍스트가 부모 후보로 등록되며 자기 자신의
+    /// 부모 체인까지 다시 얹혀 2중 합성되는 회귀를 잡는다 — buildParentTransformMap/composeParentTransforms
+    /// 의 parentOf 미등록 설계가 이걸 방지).
+    func testTextParentDoesNotDoubleApplyGrandparentChain() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":2000,"height":2000}},
+         "objects":[
+           {"id":1,"name":"node","origin":"1000 500 0","scale":"2 2 1"},
+           {"id":2,"name":"midText","text":"mid","parent":1,"origin":"10 0 0"},
+           {"id":3,"name":"leafImg","image":"models/x.json","parent":2,"origin":"5 0 0"}
+         ]}
+        """
+        let pkg = ScenePackage.assemble([
+            ("scene.json", d(scene)),
+            ("models/x.json", d(#"{"material":"materials/x.json"}"#)),
+            ("materials/x.json", d(#"{"passes":[{"textures":["x"]}]}"#)),
+            ("materials/x.tex", d("not-a-real-tex")),
+        ])
+        let doc = try SceneDocument.parse(package: pkg)
+        let text = try XCTUnwrap(doc.texts.first { $0.name == "midText" })
+        // 텍스트 자신은 기존 E1-① 규약대로 1회만 합성: 1000+2*10=1020.
+        XCTAssertEqual(text.origin.x, 1020, accuracy: 0.01)
+        let img = try XCTUnwrap(doc.layers.first { $0.name == "leafImg" })
+        // 이미지는 텍스트의 이미 합성된 월드값(1020, scale 2)을 부모로 1회만 더 얹는다: 1020+2*5=1030.
+        // 노드(1)의 원본 로컬이 다시 얹히면(이중 적용) 1000+2*1020=3040 같은 값으로 튄다.
+        XCTAssertEqual(img.origin.x, 1030, accuracy: 0.01)
+        XCTAssertEqual(img.origin.y, 500, accuracy: 0.01)
+    }
+
+    /// W3-⑤(b): 정적 angleZ(스크립트 없는 "angles" 의 z 성분) 파스 — 실물 3146703458 (178°≈3.115rad).
+    func testTextStaticAngleZParsed() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[{"id":1,"name":"t","text":"hi","origin":"100 100 0","angles":"0 0 3.11498"}]}
+        """
+        let pkg = ScenePackage.assemble([("scene.json", d(scene))])
+        let doc = try SceneDocument.parse(package: pkg)
+        XCTAssertEqual(doc.texts.first?.angleZ ?? -1, 3.11498, accuracy: 0.0001)
+    }
+
     /// 파티클 오브젝트도 2D 정사영 경로(origin/scale Vec2)에서 부모 체인이 전혀 합성되지 않아
     /// 부모에 붙은 파티클 시스템이 로컬 좌표(대개 화면 좌상단 근처)에 그려졌다.
     func testParticleParentTransformComposed2D() throws {

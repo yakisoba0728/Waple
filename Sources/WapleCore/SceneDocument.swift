@@ -220,6 +220,9 @@ public struct SceneParticle: Equatable {
 /// 텍스트 오브젝트(시계/날짜/곡정보 등). text 는 평문 또는 JS 프로퍼티 스크립트(script)로 계산.
 public struct SceneTextLayer: Equatable {
     public var name: String = ""
+    /// W3-⑤: scene.json objects[].id — 다른 오브젝트가 이 텍스트를 parent 로 참조할 때 룩업 키
+    /// (레이어/노드와 동일 규약). 0 = 미지정(그런 텍스트는 부모 후보에서 제외 — buildParentTransformMap 참조).
+    public var id: Int = 0
     /// E1: 부모 오브젝트 id(2D parent 체인 합성 룩업용 — 레이어와 동일 규약). nil=루트.
     /// origin/scale 은 파스 말미에 부모 체인이 합성된 월드(프로젝션 픽셀) 값으로 덮어쓴다(정적 부모 한정).
     public var parent: Int? = nil
@@ -238,6 +241,10 @@ public struct SceneTextLayer: Equatable {
     /// E1: parent 체인 합성이 파스 말미에 월드(프로젝션 픽셀) 값으로 덮어쓴다(레이어와 동일 규약) — 그래서 var.
     public var origin: Vec2
     public var scale: Vec2               // 배율은 "scale" 필드(실측 "2 2") — "size" 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)
+    /// W3-⑤: 정적 angleZ(scene.json "angles" 의 z 성분, 라디안 — 레이어 SceneLayer.angleZ 와 동일 규약).
+    /// 스크립트 바인딩(propertyScripts["angles"])이 있으면 그 결과가 매 프레임 이 값을 대체(encodeText).
+    /// 부모 체인 회전 누적(F057)은 별도 갭 — composeTextParentTransforms 는 origin/scale 만 굽는다.
+    public var angleZ: Float = 0
     /// "Limit width"(limitwidth) 체크 시 워드랩 폭 maxwidth(래스터 로컬 px — 실물 maxwidth 스크립트가
     /// 화면폭을 scale.x 로 나눠 전달 = 스케일 전 단위, d.ts "Max width in pixels"). nil = 무제한(무회귀).
     public var maxWidth: Float? = nil
@@ -910,11 +917,15 @@ extension SceneDocument {
         // 필드 자체가 없고 SceneParticle.parent 는 3D 마운트 경로 전용이라, 부모 붙은 텍스트/파티클이
         // 저작 로컬 좌표(대개 화면 밖/좌상단) 그대로 렌더됐다(가시 텍스트 177개/62씬).
         composeTextParentTransforms(texts: &texts, layers: layers, nodes3D: nodes3D, camera3D: camera3D)
-        composeParticleParentTransforms(particles: &particles, layers: layers, nodes3D: nodes3D, camera3D: camera3D)
-        // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다).
+        composeParticleParentTransforms(particles: &particles, layers: layers, nodes3D: nodes3D, texts: texts,
+                                        camera3D: camera3D)
+        // 레이어 parent 체인 합성(부모의 origin/scale/angle 을 이어붙여 로컬→월드 픽셀로 굽는다). texts 는
+        // 위에서 이미 월드로 확정된 뒤라 "부모=텍스트" 인 이미지 자식(W3-⑤, 3701356561 Solide H/V)도 여기서
+        // 정상 합성된다.
         composeParentTransforms(
             layers: &layers,
             nodes3D: nodes3D,
+            texts: texts,
             camera3D: camera3D,
             package: package,
             assets: resolvedAssets)
@@ -1391,6 +1402,11 @@ extension SceneDocument {
             origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
             scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),  // 배율은 scale 필드 — size 는 레이아웃 박스(오독 시 거대 글리프)
             order: order)
+        t.id = intVal(obj["id"]) ?? 0
+        // W3-⑤(b): 정적 angleZ — 레이어(:1163 인근) 와 동일하게 angles 배열의 z 성분(라디안, 이미 변환됨).
+        // 스크립트 바인딩({"script":...})이어도 floats()→unwrap 이 "value" 스냅샷을 돌려주므로 초기값으로 안전.
+        let textAngles = floats(obj["angles"])
+        t.angleZ = textAngles.count >= 3 ? textAngles[2] : 0
         // "Limit width/rows" 체크(불리언 리터럴 — 코퍼스 1640건 전수)가 켜진 때만 유효값. maxwidth 는
         // 바인딩 dict({user/script,value} — 실물 32건)가 있어 float() 의 {value} 언랩 경유, 폴백은
         // 에디터 기본(maxwidth 500 — 1468건 / maxrows 1 — 1628건). 부재/미체크 nil = 무제한(무회귀).
@@ -1504,6 +1520,7 @@ extension SceneDocument {
     /// 퍼펫 파스 실패(폴백 쿼드) 레이어만 종전 위치 유지(luma 가드). **2D 한정**: 3D 씬(camera3D)의
     /// 이미지 레이어는 빌보드 — 렌더러(encodeBillboard)가 부모 월드행렬을 매 프레임 합성(파스-시 합성은 이중 적용 → 제외).
     private static func composeParentTransforms(layers: inout [SceneLayer], nodes3D: [SceneNode3D],
+                                                texts: [SceneTextLayer],
                                                 camera3D: SceneCamera3D?, package: ScenePackage,
                                                 assets: ((String) -> Data?)?) {
         func puppetLoads(_ path: String) -> Bool {
@@ -1534,6 +1551,14 @@ extension SceneDocument {
             guard localT[n.id] == nil else { continue }
             localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
             if let p = n.parent { parentOf[n.id] = p }
+        }
+        // W3-⑤(a): "부모=텍스트" 케이스(3701356561 Solide H/V 등 이미지 자식) — composeTextParentTransforms
+        // 가 이 함수보다 먼저 실행돼(:919) texts 는 이미 월드(또는 루트 로컬=월드) 값으로 확정돼 있다.
+        // 그래서 parentOf 는 등록하지 않는다(등록하면 텍스트 자신의 부모 체인이 여기서 다시 합성돼
+        // 이중 적용된다 — F057 관련 별개 갭). 레이어/노드가 같은 id 를 이미 썼으면 그 쪽이 우선(F437 동형).
+        for t in texts where t.id != 0 {
+            guard localT[t.id] == nil else { continue }
+            localT[t.id] = (t.origin, t.scale, t.angleZ)
         }
         // A1/E1: angle 은 scene.json angles 그대로(이미 라디안 — 코퍼스 전부 ≤π 확정, 인코더 규약과 동일).
         // 종전 `* .pi/180` 은 이미 라디안인 값을 도(°)로 오인해 부모 오프셋 회전을 57× 축소했다
@@ -1614,10 +1639,12 @@ extension SceneDocument {
         }
     }
 
-    /// E1 공용: 레이어+노드에서 부모 체인 로컬 트랜스폼 맵을 구성(레이어 우선, F437 규약 동일).
+    /// E1 공용: 레이어+노드(+W3-⑤ 텍스트)에서 부모 체인 로컬 트랜스폼 맵을 구성(레이어 우선, F437 규약 동일).
     /// composeParentTransforms/composeLightParentTransforms 는 검증된 원본 그대로 두고, 신규 소비처
-    /// (텍스트/파티클)만 이 헬퍼를 공유한다.
-    private static func buildParentTransformMap(layers: [SceneLayer], nodes3D: [SceneNode3D])
+    /// (텍스트/파티클)만 이 헬퍼를 공유한다. texts 는 이 함수 호출부(composeTextParentTransforms 등)가
+    /// 스스로를 뮤테이트하기 **전** 스냅샷(값 타입 인자라 호출 시점 로컬값 고정)이라 이중 합성이 아니다 —
+    /// 텍스트→텍스트 부모 체인(3516106265: id 790/798/804 parent=783)도 재귀로 정상 합성된다.
+    private static func buildParentTransformMap(layers: [SceneLayer], nodes3D: [SceneNode3D], texts: [SceneTextLayer] = [])
         -> (localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)], parentOf: [Int: Int], noPropagate: Set<Int>) {
         var localT: [Int: (origin: Vec2, scale: Vec2, angle: Float)] = [:]
         var parentOf: [Int: Int] = [:]
@@ -1631,6 +1658,12 @@ extension SceneDocument {
             guard localT[n.id] == nil else { continue }
             localT[n.id] = (Vec2(x: n.origin.x, y: n.origin.y), Vec2(x: n.scale.x, y: n.scale.y), n.angles.z)
             if let p = n.parent { parentOf[n.id] = p }
+        }
+        for t in texts where t.id != 0 {
+            guard localT[t.id] == nil else { continue }
+            localT[t.id] = (t.origin, t.scale, t.angleZ)
+            if let p = t.parent { parentOf[t.id] = p }
+            if t.disablePropagation { noPropagate.insert(t.id) }
         }
         return (localT, parentOf, noPropagate)
     }
@@ -1653,14 +1686,17 @@ extension SceneDocument {
                 angle: pw.angle + t.angle)
     }
 
-    /// E1: 2D 텍스트 오브젝트의 parent 체인 합성 — 레이어/라이트와 동일 규약(로컬→월드 픽셀). 텍스트는
-    /// 렌더 회전 필드가 없어 origin/scale 만 굽는다(회전 미지원은 별도 갭, F057 — 무관 변경). 레이어 합성
-    /// 전에 실행해야 한다(레이어가 월드로 덮어써지면 부모-레이어 로컬값이 유실 — F691 라이트와 동일 이유).
+    /// E1: 2D 텍스트 오브젝트의 parent 체인 합성 — 레이어/라이트와 동일 규약(로컬→월드 픽셀). origin/scale
+    /// 만 굽는다 — 부모 각의 누적(자식 angleZ 에 부모 회전을 더하는 것)은 별도 갭(F057, 무관 변경). 레이어
+    /// 합성 전에 실행해야 한다(레이어가 월드로 덮어써지면 부모-레이어 로컬값이 유실 — F691 라이트와 동일
+    /// 이유). W3-⑤: buildParentTransformMap 에 texts 스냅샷도 넘겨 텍스트→텍스트 부모 체인(3516106265:
+    /// id 790/798/804 parent=783)과 "부모=텍스트" 인 이미지 자식(composeParentTransforms 쪽, 3701356561)
+    /// 을 모두 지원한다.
     private static func composeTextParentTransforms(texts: inout [SceneTextLayer], layers: [SceneLayer],
                                                      nodes3D: [SceneNode3D], camera3D: SceneCamera3D?) {
         guard camera3D == nil,
               texts.contains(where: { $0.parent != nil && !$0.disablePropagation }) else { return }
-        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D)
+        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D, texts: texts)
         for i in texts.indices {
             guard !texts[i].disablePropagation, let pid = texts[i].parent,
                   let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf, noPropagate: noPropagate)
@@ -1675,11 +1711,13 @@ extension SceneDocument {
 
     /// E1: 2D 파티클 오브젝트의 parent 체인 합성 — origin/scale(Vec2, 2D 정사영 경로 전용) 만 굽는다.
     /// origin3D/scale3D/angles3D(3D 마운트 경로)는 SceneRenderer3D 가 별도로 parent3D 를 합성하므로 무관.
+    /// W3-⑤: texts 도 부모 후보(파티클이 텍스트에 붙는 씬 대비 — buildParentTransformMap 주석 참조).
     private static func composeParticleParentTransforms(particles: inout [SceneParticle], layers: [SceneLayer],
-                                                         nodes3D: [SceneNode3D], camera3D: SceneCamera3D?) {
+                                                         nodes3D: [SceneNode3D], texts: [SceneTextLayer],
+                                                         camera3D: SceneCamera3D?) {
         guard camera3D == nil,
               particles.contains(where: { $0.parent != nil && !$0.disablePropagation }) else { return }
-        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D)
+        let (localT, parentOf, noPropagate) = buildParentTransformMap(layers: layers, nodes3D: nodes3D, texts: texts)
         for i in particles.indices {
             guard !particles[i].disablePropagation, let pid = particles[i].parent,
                   let pw = worldParentTransform(pid, 0, localT: localT, parentOf: parentOf, noPropagate: noPropagate)
