@@ -26,8 +26,10 @@ final class PointerUVTests: XCTestCase {
 }
 
 final class PuppetVerticesTests: XCTestCase {
-    /// 퍼펫 메시 → NDC 매핑. puppetVertices 자체는 W1-yaxis 로 손대지 않음(§5: 제거 시 정상 3씬
-    /// 파괴 확인됨) — 이 테스트는 그 함수의 (불변) 내부 산술에 새 pxToNDC(y-up) 만 반영해 갱신한다.
+    /// 퍼펫 메시 → NDC 매핑. W1-yaxis(2차): 씬이 y-up 으로 정정되며 모델(y-up) 과 규약이 일치해
+    /// puppetVertices 의 y 부호 반전을 제거(4종 게이트 — 3463520581 + §5 3씬 — 실측으로 확정,
+    /// §5 의 구 근거는 y-down pxToNDC 하 측정이라 이 변경엔 적용되지 않음. attachmentSceneDelta 의
+    /// Y-켤레 제거와 짝).
     func testMeshToNDCMapping() {
         var m = PuppetModel(material: "m",
                             vertices: [.init(position: SIMD3(0, 0, 0), boneIndices: SIMD4(0, 0, 0, 0),
@@ -45,9 +47,9 @@ final class PuppetVerticesTests: XCTestCase {
         XCTAssertEqual(v[0].y, 0, accuracy: 1e-4)
         XCTAssertEqual(v[0].z, 0.25)
         XCTAssertEqual(v[0].w, 0.75)
-        // 정점1: 메시 y-up → 로컬(200,-100) → 씬(1160,440) → NDC(새 pxToNDC: y/H·2−1, 1−y/H·2 아님)
+        // 정점1: 메시 y-up, 씬도 y-up → 부호 반전 없이 로컬(200,100) → 씬(1160,640) → NDC.
         XCTAssertEqual(v[1].x, (1160.0/1920)*2 - 1, accuracy: 1e-4)
-        XCTAssertEqual(v[1].y, (440.0/1080)*2 - 1, accuracy: 1e-4)
+        XCTAssertEqual(v[1].y, (640.0/1080)*2 - 1, accuracy: 1e-4)
     }
 
     /// A1 회귀: scene.json `angles` 는 이미 라디안(코퍼스 전부 ≤π 확정)이므로 quad/lit/puppetVertices 가

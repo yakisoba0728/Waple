@@ -569,9 +569,12 @@ extension SceneRenderer {
         return (SIMD4(c.x, c.y, hw, -hh), SIMD4(ca, sa, originZ, 0))
     }
 
-    /// 퍼펫 스킨 정점 → NDC 삼각형 리스트(quadVertices 와 동일 규약: 씬 픽셀 y-down, uv 그대로).
+    /// 퍼펫 스킨 정점 → NDC 삼각형 리스트(quadVertices 와 동일 규약, W1-yaxis: 씬 픽셀 y-up).
     /// 메시 좌표는 레이어 로컬 픽셀(원점 중심)·**y-up**(실측: 2809885105 프리뷰 대비 반전 확인) —
-    /// y 부호 반전 후 origin/scale/angleZ 적용, NDC 변환.
+    /// 씬도 이제 y-up 이라 모델 y-up 과 규약이 일치, 부호 반전 없이 그대로 origin/scale/angleZ 적용
+    /// (W1-yaxis: §5 의 "제거 시 정상 3씬 파괴" 근거는 구 y-down pxToNDC 하에서 측정된 것이라
+    /// 전역 y-flip 과 함께 무효 — 4종 게이트(3463520581 + §5 3씬) 전수 실측으로 제거가 맞음을
+    /// 확인 후 착수. attachmentSceneDelta 의 Y-켤레도 동시에 제거(짝 관계, 아래 참조).
     static func puppetVertices(model: PuppetModel, positions: [SIMD3<Float>],
                                origin: Vec2, scale: Vec2, angleZ: Float,
                                projW: Float, projH: Float) -> [SIMD4<Float>] {
@@ -583,7 +586,7 @@ extension SceneRenderer {
             let i = Int(idx)
             guard i < positions.count else { continue }
             let p = positions[i]
-            let lx = p.x * scale.x, ly = -p.y * scale.y
+            let lx = p.x * scale.x, ly = p.y * scale.y
             let sx = origin.x + lx * ca - ly * sa
             let sy = origin.y + lx * sa + ly * ca
             let ndc = pxToNDC(sx, sy, projW: projW, projH: projH)
@@ -592,17 +595,18 @@ extension SceneRenderer {
         return out
     }
 
-    /// attachment 씬공간 델타 D = P∘(Y·A·Y)∘P⁻¹ — 베이크된 자식 월드에 곱하면
-    /// childWorld(t) = P∘A(t)∘childLocal (P=부모 월드 T(o)·R(a)·S(s), 씬 y-down; A=부착점 프레임 4x4,
-    /// 퍼펫 모델공간 y-up; Y=diag(1,−1) 축 켤레). 반환 (m,t): p′ = m·p + t. 부모 스케일 퇴화(≈0) → nil.
+    /// attachment 씬공간 델타 D = P∘A∘P⁻¹ — 베이크된 자식 월드에 곱하면
+    /// childWorld(t) = P∘A(t)∘childLocal (P=부모 월드 T(o)·R(a)·S(s); A=부착점 프레임 4x4).
+    /// W1-yaxis: 씬도 이제 y-up 이라 모델 y-up 과 일치 — 구 Y-켤레(Y=diag(1,−1))가 항등이 되어
+    /// 제거(puppetVertices 의 부호 제거와 짝 — 한쪽만 바꾸면 부착물이 퍼펫 몸체에서 분리된다).
+    /// 반환 (m,t): p′ = m·p + t. 부모 스케일 퇴화(≈0) → nil.
     static func attachmentSceneDelta(frame A: simd_float4x4,
                                      parentOrigin po: SIMD2<Float>, parentScale ps: SIMD2<Float>,
                                      parentAngle pa: Float) -> (m: simd_float2x2, t: SIMD2<Float>)? {
         guard abs(ps.x) > 1e-6, abs(ps.y) > 1e-6 else { return nil }
-        // Y 켤레: 모델 y-up 2D 블록 → 씬 y-down (비대각 성분 부호 반전, 평행이동 y 반전).
-        let FL = simd_float2x2(SIMD2(A.columns.0.x, -A.columns.0.y),
-                               SIMD2(-A.columns.1.x, A.columns.1.y))
-        let Ft = SIMD2(A.columns.3.x, -A.columns.3.y)
+        let FL = simd_float2x2(SIMD2(A.columns.0.x, A.columns.0.y),
+                               SIMD2(A.columns.1.x, A.columns.1.y))
+        let Ft = SIMD2(A.columns.3.x, A.columns.3.y)
         let ca = cos(pa), sa = sin(pa)
         let PL = simd_float2x2(SIMD2(ca * ps.x, sa * ps.x), SIMD2(-sa * ps.y, ca * ps.y))
         let m = PL * FL * PL.inverse
