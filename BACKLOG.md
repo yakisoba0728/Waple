@@ -85,7 +85,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 | ApplyBlending 14–29 모드(내장 include) | 92종/141씬 | **BlendMSL.swift에 전 모드 MSL 이미 존재** → GLSL 내장 include로 이식만 |
 | systemfont 별칭·검증 (`consolas`/`comicsans`/`sansserif`) | ~211인스턴스 | TextRasterizer 별칭 테이블 + PostScript명 검증 |
 | REFRACT 파티클 굴절 | 129건/35씬 | 대형(배경 샘플 패스) — 씬 체감 시 |
-| wind/gravity 파티클 외력, vortex_v2, scriptproperties 주입 | 110씬/1씬/130씬 | 파스+배선 |
+| wind/gravity 파티클 외력, vortex_v2, scriptproperties 주입 | 110씬/1씬/130씬 | 파스+배선. S1-formats③ 재실측(2026-07-27): `gravitystrength` 필드 110/169씬(65%, 거의 전부 1.0·방향(0,-1,0)), `windenabled=true` 활성 1/169 — 적용 공식 미확정이라 포맷대조 레인 스코프 밖 보류, 착수 시 이 비율을 우선순위 근거로 사용 |
 | 번역기 폴백 강등 3건(`#if<TAB>` 정규화·`%=`·무공백 const) | 저빈도 | 검증 결과 컴파일실패→안전폴백(REFUTED) — 픽셀 무해, 폴백 회피용 |
 | 성능: 비가시 레이어 효과체인 스킵, acc+blit 생략(스냅샷 1회 확인 필요), TexImage 스캔 할당, ScenePackage 무복사 파스, DXT 블록 할당 | — | 감사 계획서 3계층 성능표 참조 |
 | 정리: 본체인 fold 6회·DXT 3벌·Process 헬퍼 3벌·JS 리터럴 4중·효과체인 루프 4중복·~~죽은 코드(resolveProjects, bitsRemaining, 미발행 이슈코드 8종, CLI 도움말)~~ **이슈코드 8종·CLI 도움말은 해소(F232/F235/F149, 2026-07-18)** | — | 기회 시(resolveProjects/bitsRemaining/fold/Process헬퍼/JS리터럴/효과체인루프 잔여) |

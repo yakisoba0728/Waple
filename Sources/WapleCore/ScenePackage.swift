@@ -47,12 +47,21 @@ public struct ScenePackage {
         let vlen = try i32(p); p += 4
         guard vlen >= 0, p + vlen <= total else { throw ScenePackageError.malformed }
         let magic = String(decoding: data[(base + p)..<(base + p + vlen)], as: UTF8.self)
-        // WE-ENGINE-ANALYSIS-2026-07-27.md §2 (corpus_scan/pkgv_parse.py, 446씬·19,777엔트리 0파스에러
-        // 대조): "PKGV" 뒤 4자리는 **per-file serial**(임의값)이지 버전이 아니다 — authoritative 필드는
-        // 뒤따르는 entry_count(offset 0x0c, 아래 `count`)다. 종전 코드는 이를 "버전"으로 오인해 1~99
-        // 범위 게이트를 걸었다(실코퍼스 관측 1~24 내에선 무해했으나 의미상 오류 — serial 이 100 이상인
-        // 정상 pkg 를 향후 거부할 잠재 위험). 구조 검증(정확히 "PKGV"+4 ASCII 숫자)만 유지하고 값 범위
-        // 게이트는 제거 — serial 값 자체는 무의미하므로 파싱에 쓰지 않는다.
+        // [2026-07-27 정정] 이전 주석은 WE-ENGINE-ANALYSIS-2026-07-27.md §2 의 "PKGV 뒤 4자리 = per-file
+        // serial(임의값), 버전 아님" 서술을 그대로 채택했으나, 로컬 코퍼스 169개 scene.pkg 의 매직 도수
+        // 분포로 반증됐다: distinct 14값 중 0023×51/0022×47/0021×30/0024×12/0018×8/0020×6/0019×5/
+        // 0017×3/0016×2, 롱테일 0001·0007·0008·0011·0012 각 1건 — 51중복 클러스터+구버전 롱테일은
+        // per-file 난수 serial 로는 나올 수 없는 전형적 "버전 채택 곡선"이다(WE-2.8-deep-KR.md B1 이
+        // 동일 결론 — PKGV0001~0024 14종 공존, 최빈 0023, 최신 0024 — 을 이미 확립해 둔 바 있다).
+        //
+        // 즉 4자리는 **포맷 버전**이다. 다만 값 범위 게이트를 두지 않는 근거는 바뀐다: RePKG
+        // PackageReader.cs(Magic 필드를 그대로 읽어 바로 ReadEntries 로 진입, 버전별 분기 전무)가
+        // 보여주듯 관측된 모든 버전에서 컨테이너 프레이밍(entry_count/index/data 레이아웃)이 불변이라,
+        // 값 게이트가 추가 검증을 사지 못한다(대비: Model3D.swift 의 MDLV 는 버전마다 메시 바이트
+        // 레이아웃이 실제로 달라 미목격 버전을 의도적으로 거부한다 — 두 정책은 상충이 아니라 포맷별
+        // 실제 위험 차이를 반영한다). 구조 검증(정확히 "PKGV"+4 ASCII 숫자)만 유지하고 값 범위 게이트는
+        // 생략한다 — 단 "버전"이므로 PKGV0100 이상 미래 버전도 낙관적으로 파싱을 시도한다는 뜻이며,
+        // 종전 주석의 "관측 1~24, 99까지 허용" 식 안전 여백과는 성격이 다르다.
         guard magic.range(of: "^PKGV[0-9]{4}$", options: .regularExpression) != nil else {
             throw ScenePackageError.malformed
         }
