@@ -162,16 +162,24 @@ public enum RendererKind: Equatable {
 
     /// F790: WE 공식 문서 확정 — spritetrail 은 히스토리 리본이 아니라 "속도 방향으로 신장된 쿼드":
     /// 이상 신장 = speed×length, [minlength, maxlength] 클램프, 쿼드 장축 = size×신장(단축 = size
-    /// 무신장). 1/1/1 이면 무신장 회전만(공식 문서의 우주선 예시). 실물 코퍼스 123건 키 조합 실측
-    /// (length 만 30건 / maxlength 만 26건 / minlength 포함 24건 — 부재·null 혼재) 기반 부재값 규칙:
-    /// length 부재/0/null → 1(곱 항등 — 아니면 maxlength 만 쓴 26건이 전부 소멸), minlength 부재 →
-    /// 0(하한 없음), maxlength 부재 → 1(공식 문서의 무신장 중립값). ponytail: 부재 기본 1 은 추론 —
-    /// 상한 개방이면 전부재 spritetrail 6씬(신장=속도 그대로, 수백 배)이 붕괴하고, 1 은 코퍼스 123건
-    /// 전 조합에서 모순 없음(ember 0.7–1.0 / 벚꽃 회전만 / wind-blur 20배 클램프 유지).
+    /// 무신장). 1/1/1 이면 무신장 회전만(공식 문서의 우주선 예시). minlength 부재 → 0(하한 없음),
+    /// maxlength 부재 → 1(공식 문서의 무신장 중립값).
+    ///
+    /// H3(핫픽스, 웨이브 W0b, 3489263099/3465215190 회귀 — F790 재해석 정정): length 는 speed 의
+    /// 유일한 승수라 length 부재 시엔 신장 자체가 정의되지 않는다. 종전엔 이 경우 "곱 항등 1"
+    /// (mul=1 → s=speed) 로 폴백했으나, 씬의 전형적 속도(수백 px/s)가 그대로 [minlength,maxlength]
+    /// 로 밀려 들어가 사실상 항상 maxlength 로 포화된다 — 신장의 speed 의존성 자체가 관측 불가해진다
+    /// (spriteTrailStretch(speed: 10) == spriteTrailStretch(speed: 1000)). rain_on_the_glass(워크샵
+    /// 2446129945, 14+씬 공유)·wind-blur·rainfall·Magic_Vortex·Random_sparks·Particle_flow·yuluj 등
+    /// length 미저작 코퍼스 전건이 동일 증상(구 베이스라인 95fad7a 리본 구현 대비 명백한 회귀 — 3489263099
+    /// 는 창밖 도시가 흰 스미어에 가려짐). length 를 실제로 저작한 씬(ember length=0.007 등)만 저작자가
+    /// 의도한 speed 의존 신장이 성립하므로, length 가 명시된 시스템에만 신장 산정을 적용하고 — 부재
+    /// (≤0)면 신장을 항등(1, 공식 문서의 회전만 케이스)으로 되돌린다. minlength/maxlength 단독 저작은
+    /// speed 승수 없이는 의미가 없어 이 폴백에 포함(코퍼스 123건 전 조합에서 모순 없음).
     public func spriteTrailStretch(speed: Float) -> Float {
         guard case let .spriteTrail(maxLength, length, minLength) = self else { return 1 }
-        let mul = length > 0 ? length : 1
-        var s = speed * mul
+        guard length > 0 else { return 1 }
+        var s = speed * length
         if minLength > 0 { s = max(s, minLength) }
         s = min(s, maxLength > 0 ? maxLength : 1)
         return s
