@@ -1533,9 +1533,16 @@ extension SceneDocument {
     /// 3D 는 이미 Scene3DMath.worldMatrix 가 조상 AND 로 처리하므로 손대지 않는다(camera3D!=nil 스킵).
     /// 잔여 갭(의도적 무변경): 정적 false 부모 + **스크립트** 자식 조합의 런타임(초-프레임) 재평가는
     /// 후속 — 여기는 파스-타임 정적 스냅샷만 다룬다.
+    /// 라이브 유저 프로퍼티 토글은 이 마킹을 "고정"시키지 않는다: LibraryViewModel.setProperty →
+    /// reapplyIfCurrent → onApply → SceneRenderer.mount 가 매번 SceneDocument.parse 를 새 userProps
+    /// 스냅샷으로 재실행하므로(remount = 전체 재파스), 부모 콤보가 켜지면 이 함수도 다음 파스에서
+    /// 그 조상을 invisible 집합에서 뺀다 — "정적 마킹이라 옵션을 켜도 자식이 계속 숨는다"는 우려는
+    /// 해당 없음(검증: reapplyIfCurrent 는 remount 를 거치지 않는 in-place 패치 경로가 없다).
+    /// WAPLE_VIS_INHERIT=0 이면 이 패스 전체를 건너뛴다(진단/코퍼스 블라스트 반경 측정용 — 기본은 항상 켜짐).
     private static func applyVisibilityInheritance(layers: inout [SceneLayer], texts: inout [SceneTextLayer],
                                                     particles: inout [SceneParticle], nodes3D: [SceneNode3D],
                                                     camera3D: SceneCamera3D?, imageLayerCompositeIDs: Set<Int>) {
+        guard ProcessInfo.processInfo.environment["WAPLE_VIS_INHERIT"] != "0" else { return }
         guard camera3D == nil, !nodes3D.isEmpty else { return }
         var parentOf: [Int: Int] = [:]
         var invisible: Set<Int> = []

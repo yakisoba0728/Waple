@@ -194,4 +194,49 @@ final class SceneComboVisibleTests: XCTestCase {
         // 무회귀: 스크립트 없는 정적 상수는 constantScriptProps 에 미포함.
         XCTAssertNil(pass.constantScriptProps["plain"], "정적 상수는 오버라이드 없음")
     }
+
+    /// 검증 지적 대응: WAPLE_VIS_INHERIT=0 이면 C8 전파 패스 전체를 건너뛴다(WapleCompat --vis-blast
+    /// 의 코퍼스 블라스트 반경 측정용 진단 게이트 — 기본은 항상 켜짐, 이 테스트는 게이트가 실제로
+    /// 두 파스 결과를 분기시키는지 고정). off(env=0) 는 종전(버그) 동작과 동일해야 한다.
+    func testVisInheritEnvGateDisablesPropagation() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"offGroup","visible":false},
+           {"id":2,"name":"child","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10",
+            "visible":true}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        setenv("WAPLE_VIS_INHERIT", "0", 1)
+        let off = try SceneDocument.parse(package: p, userProps: [:])
+        unsetenv("WAPLE_VIS_INHERIT")
+        let on = try SceneDocument.parse(package: p, userProps: [:])
+        XCTAssertTrue(try XCTUnwrap(off.layers.first { $0.name == "child" }).initialVisible,
+                      "WAPLE_VIS_INHERIT=0: 전파 꺼짐 — 자식은 종전처럼 계속 보임")
+        XCTAssertFalse(try XCTUnwrap(on.layers.first { $0.name == "child" }).initialVisible,
+                       "기본(env 미설정): 전파 켜짐 — 자식이 숨어야 함")
+    }
+
+    /// 검증 지적 대응(① 런타임 토글 한계 여부): 이 마킹은 파스-타임 정적 스냅샷이지만, 라이브 유저
+    /// 프로퍼티 변경은 SceneRenderer.mount 가 항상 SceneDocument.parse 를 새 userProps 로 재실행하므로
+    /// (reapplyIfCurrent → onApply → mount, 코드 경로 확인 — in-place 패치 경로 없음) "옵션을 켜도
+    /// 자식이 계속 숨는" 고착은 없다. 여기서는 parse 자체가 userProps 스냅샷에 반응해 동일 씬을 다르게
+    /// 마킹함을 고정(= remount 가 재파스인 이상 반드시 갱신됨을 뒷받침).
+    func testVisibilityInheritanceRespondsToUserPropsSnapshot() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"comboGroup","visible":{"user":{"condition":"1","name":"opt"},"value":false}},
+           {"id":2,"name":"child","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10",
+            "visible":true}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        // "꺼짐" 스냅샷(옵션 미선택) — 자식도 숨어야.
+        let off = try SceneDocument.parse(package: p, userProps: ["opt": "0"])
+        XCTAssertFalse(try XCTUnwrap(off.layers.first { $0.name == "child" }).initialVisible)
+        // 유저가 옵션을 "켜면"(라이브 재적용 = 새 userProps 로 재파스) 부모가 true 로 풀려 자식도 복귀.
+        let on = try SceneDocument.parse(package: p, userProps: ["opt": "1"])
+        XCTAssertTrue(try XCTUnwrap(on.layers.first { $0.name == "child" }).initialVisible,
+                     "재파스(remount) 로 옵션이 켜지면 정적 마킹이 고착되지 않고 갱신돼야 함")
+    }
 }

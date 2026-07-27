@@ -15,6 +15,7 @@ struct WapleCompatCLI {
     var label: String? = nil             // --label <name>: 베이스라인 폴더명(기본 git sha)
     var profileOut: String? = nil        // --profile <outDir>: 단일 씬(--only 필수) 성능 실측 JSON
     var inventoryOut: String? = nil      // --inventory <csv>: 표본 선정용 씬별 메타(파스만)
+    var visBlastOut: String? = nil       // --vis-blast <csv>: W3-① C8 가시성 상속 코퍼스 블라스트 반경(파스만)
     var remount = false                  // --remount: 프로세스 내 2차 마운트(웜) 비용 측정
     var frameRes = "1920x1080"           // --frame-res WxH: 실해상도 프레임 타이밍(GPU 예산 분모)
 
@@ -49,6 +50,8 @@ struct WapleCompatCLI {
                 profileOut = try value(for: "--profile")
             case "--inventory":
                 inventoryOut = try value(for: "--inventory")
+            case "--vis-blast":
+                visBlastOut = try value(for: "--vis-blast")
             case "--remount":
                 remount = true
             case "--frame-res":
@@ -65,13 +68,14 @@ struct WapleCompatCLI {
         }
     }
 
-    /// F150: 상호배타 최상위 모드 플래그(우선순위: inventory>profile>capture>compare>decode-ogg>deep>기본)를
+    /// F150: 상호배타 최상위 모드 플래그(우선순위: inventory>vis-blast>profile>capture>compare>decode-ogg>deep>기본)를
     /// 둘 이상 주면 실제 실행되는 것 1개만 밝히고 나머지는 무시됨을 stderr 로 경고(실행 자체는 그대로 —
     /// 발견성만 개선. 값 누락은 이미 `value(for:)` 의 missingValue 로 막혀 있었는데 이 조합만 사각지대였다).
     /// `--only`/`--json`/`--strict` 가 현재 모드에서 아예 소비되지 않는 조합도 함께 경고한다.
     private func warnIgnoredFlagCombinations() {
         let given: [(String, Bool)] = [
             ("--inventory", inventoryOut != nil),
+            ("--vis-blast", visBlastOut != nil),
             ("--profile", profileOut != nil),
             ("--capture", captureOut != nil),
             ("--compare", compareBaseline != nil),
@@ -90,7 +94,7 @@ struct WapleCompatCLI {
             fputs("WapleCompat: \u{26A0}\u{FE0F} --only \(o) 는 --deep 또는 --profile 모드에서만 적용됩니다 — 현재 모드(\(activeMode ?? "기본 스캔"))에서는 무시됩니다.\n", stderr)
         }
         // F521: decode-ogg 도 --json/--strict 미적용 모드 — 종전 목록 누락으로 무경고였다.
-        if (outputJSON || strict), (inventoryOut != nil || profileOut != nil || captureOut != nil || compareBaseline != nil || decodeOggIn != nil) {
+        if (outputJSON || strict), (inventoryOut != nil || visBlastOut != nil || profileOut != nil || captureOut != nil || compareBaseline != nil || decodeOggIn != nil) {
             fputs("WapleCompat: \u{26A0}\u{FE0F} --json/--strict 는 capture/compare/profile/inventory/decode-ogg 모드에 적용되지 않습니다(해당 모드는 자체 exit code 로만 결과를 알립니다).\n", stderr)
         }
     }
@@ -100,6 +104,10 @@ struct WapleCompatCLI {
         warnIgnoredFlagCombinations()
         if let inv = inventoryOut {
             let code = ProfilePipeline.runInventory(root: root, outCSV: URL(fileURLWithPath: NSString(string: inv).expandingTildeInPath))
+            Foundation.exit(code)
+        }
+        if let vb = visBlastOut {
+            let code = ProfilePipeline.runVisBlast(root: root, outCSV: URL(fileURLWithPath: NSString(string: vb).expandingTildeInPath))
             Foundation.exit(code)
         }
         if let out = profileOut {
@@ -171,6 +179,9 @@ struct WapleCompatCLI {
         Mode flags (mutually exclusive — priority order below, first given wins, rest are ignored
         with a warning; each mode has its own exit code and is unaffected by --json/--strict):
           --inventory <csv>       Write per-scene metadata CSV (parse-only, for sample selection).
+          --vis-blast <csv>       W3-① C8 visibility-inheritance blast radius: per-scene count of
+                                   layers/texts/particles newly marked hidden by the inheritance
+                                   pass (parse-only, WAPLE_VIS_INHERIT=0/on diff — no --capture).
           --profile <outDir>      Perf-profile a single scene (requires --only <sceneID>).
           --capture <outDir>      Capture pixel snapshots of the corpus + write a manifest.
           --compare <baselineDir> Capture + diff current build against a --capture baseline.

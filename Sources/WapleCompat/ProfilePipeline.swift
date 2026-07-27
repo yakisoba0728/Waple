@@ -74,6 +74,73 @@ enum ProfilePipeline {
         return 0
     }
 
+    // MARK: --vis-blast : W3-① C8 가시성 상속 전파의 코퍼스 블라스트 반경(파스만, 마운트 없음)
+
+    struct VisBlastRow { let id: String; let layers: Int; let texts: Int; let particles: Int
+                         var total: Int { layers + texts + particles } }
+
+    /// 씬마다 SceneDocument.parse 를 WAPLE_VIS_INHERIT=0(끔)/기본(켬) 두 번 돌려, 켬 쪽에서
+    /// initialVisible/visible 이 true→false 로 새로 마킹된 레이어/텍스트/파티클 수를 센다(드롭이 아니라
+    /// 마킹이라 두 파스의 배열 길이/순서가 항상 같음 — index 로 zip 비교). CSV 는 영향 있는 씬만 기록.
+    static func runVisBlast(root: String, outCSV: URL) -> Int32 {
+        let restore = SnapshotPipeline.pinRenderSettings(root: root)
+        defer { restore() }
+        let folders = SnapshotPipeline.sceneFolders(root: root)
+        guard !folders.isEmpty else {
+            fputs("[profile] ⚠️ 씬 0개 — root 지정 확인: \(root)\n", stderr); return 2
+        }
+        let rootURL = URL(fileURLWithPath: NSString(string: root).expandingTildeInPath, isDirectory: true).standardizedFileURL
+        let assetsDir = DeepScan.firstExisting([rootURL.appendingPathComponent("assets"),
+                                                rootURL.deletingLastPathComponent().appendingPathComponent("assets")])
+        var rows: [VisBlastRow] = []
+        for folder in folders {
+            let id = folder.lastPathComponent
+            autoreleasepool {
+                let pkgName = FileManager.default.fileExists(atPath: folder.appendingPathComponent("scene.pkg").path)
+                    ? "scene.pkg" : "gifscene.pkg"
+                guard let data = try? Data(contentsOf: folder.appendingPathComponent(pkgName)),
+                      let pkg = try? ScenePackage.parse(data) else { return }
+                let res = PkgAssets(package: pkg, assetsDir: assetsDir)
+                let assetsFn: (String) -> Data? = { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }
+                setenv("WAPLE_VIS_INHERIT", "0", 1)
+                guard let off = try? SceneDocument.parse(package: pkg, assets: assetsFn) else {
+                    unsetenv("WAPLE_VIS_INHERIT"); return
+                }
+                unsetenv("WAPLE_VIS_INHERIT")
+                guard let on = try? SceneDocument.parse(package: pkg, assets: assetsFn) else { return }
+                guard off.layers.count == on.layers.count, off.texts.count == on.texts.count,
+                      off.particles.count == on.particles.count else {
+                    fputs("[vis-blast] ⚠️ \(id): 두 파스 배열 길이 불일치(비결정 스킵)\n", stderr); return
+                }
+                var layersHidden = 0, textsHidden = 0, particlesHidden = 0
+                for i in off.layers.indices where off.layers[i].initialVisible && !on.layers[i].initialVisible {
+                    layersHidden += 1
+                }
+                for i in off.texts.indices where off.texts[i].initialVisible && !on.texts[i].initialVisible {
+                    textsHidden += 1
+                }
+                for i in off.particles.indices where off.particles[i].visible && !on.particles[i].visible {
+                    particlesHidden += 1
+                }
+                let row = VisBlastRow(id: id, layers: layersHidden, texts: textsHidden, particles: particlesHidden)
+                if row.total > 0 { rows.append(row) }
+            }
+        }
+        let sorted = rows.sorted { $0.total != $1.total ? $0.total > $1.total : $0.id < $1.id }
+        var csv = "id,layersHidden,textsHidden,particlesHidden,total\n"
+        for r in sorted { csv += "\(r.id),\(r.layers),\(r.texts),\(r.particles),\(r.total)\n" }
+        do { try csv.write(to: outCSV, atomically: true, encoding: .utf8) }
+        catch { fputs("[vis-blast] write failed: \(error)\n", stderr); return 2 }
+        let totalObjects = sorted.reduce(0) { $0 + $1.total }
+        let totalLayers = sorted.reduce(0) { $0 + $1.layers }
+        let totalTexts = sorted.reduce(0) { $0 + $1.texts }
+        let totalParticles = sorted.reduce(0) { $0 + $1.particles }
+        print("[vis-blast] scenes-scanned=\(folders.count) scenes-affected=\(sorted.count) " +
+              "objects-newly-hidden=\(totalObjects) (layers=\(totalLayers) texts=\(totalTexts) particles=\(totalParticles)) → \(outCSV.path)")
+        print("[vis-blast] top 5: " + sorted.prefix(5).map { "\($0.id)(\($0.total))" }.joined(separator: ", "))
+        return 0
+    }
+
     // MARK: --profile : 단일 씬 실측
 
     struct FormatAgg: Codable { var count = 0; var outBytes = 0; var inBytes = 0; var ms = 0.0 }
