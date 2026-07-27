@@ -785,4 +785,88 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertGreaterThan(dynamicOffLuma, 0.7,
                              "게이트 initial=true 라도 update 가 false 를 반환하면 꺼져야(continue 스킵 경로 실증)")
     }
+
+    /// B2-effects③: waterwaves 완전 no-op 의혹(2947302287) 회귀 가드 — 직전 라운드가 SKIP 과 픽셀 동일을
+    /// 실증했으나, 재조사 결과 현재 main(y-up 전환 이후) 에서는 이미 정상 변위가 관측됨(원인 미확정 —
+    /// 과거 라운드 대비 좌표계/버텍스 경로 변화로 추정, 재추적은 보류). 실물 waterwaves.frag/vert(WE
+    /// shaders/effects/waterwaves) 를 #include 없이 직접 임베드(rotateVec2 인라인, MASK/TIMEOFFSET/
+    /// PERSPECTIVE/DUALWAVES 콤보 전부 기본 0) — direction=0(기본) → v_Direction=(0,1) → offset=(1,0)
+    /// (가로 변위), scale=0 으로 공간항 제거해 distance=time*speed 만 남긴다. 가로 그라디언트 배경에서
+    /// 화면 중앙 픽셀을 두 시각(t=0.1/0.35, sin(distance) 부호가 반대)에 샘플 — 변위가 0 이면(no-op
+    /// 회귀) 두 시각 모두 그라디언트 중앙색(동일)이 나오고, 정상이면 서로 다른 색이 나온다.
+    func testWaterwavesProducesTimeVaryingDisplacementNotNoOp() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec4 v_TexCoord;
+        varying vec2 v_Direction;
+        uniform float g_Direction;
+        vec2 rotateVec2(vec2 v, float r) {
+            vec2 cs = vec2(cos(r), sin(r));
+            return vec2(v.x * cs.x - v.y * cs.y, v.x * cs.y + v.y * cs.x);
+        }
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord.xyxy;
+            v_Direction = rotateVec2(vec2(0, 1), g_Direction);
+        }
+        """
+        let frag = """
+        varying vec4 v_TexCoord;
+        varying vec2 v_Direction;
+        uniform sampler2D g_Texture0;
+        uniform float g_Time;
+        uniform float g_Speed;
+        uniform float g_Scale;
+        uniform float g_Exponent;
+        uniform float g_Strength;
+        void main() {
+            float mask = 1.0;
+            vec2 texCoord = v_TexCoord.xy;
+            vec2 texCoordMotion = texCoord;
+            float distance = g_Time * g_Speed + dot(texCoordMotion, v_Direction) * g_Scale;
+            float strength = g_Strength * g_Strength;
+            vec2 offset = vec2(v_Direction.y, -v_Direction.x);
+            float val1 = sin(distance);
+            float s1 = sign(val1);
+            val1 = pow(abs(val1), g_Exponent);
+            texCoord += val1 * s1 * offset * strength * mask;
+            gl_FragColor = texSample2D(g_Texture0, texCoord);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/g.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/waterwaves/effect.json",
+             "passes":[{"constantshadervalues":{"speed":10,"scale":0,"strength":0.5,"exponent":1}}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_ww", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/g.json", #"{"material":"materials/g.json"}"#.data(using: .utf8)!),
+            ("materials/g.json", #"{"passes":[{"textures":["g"]}]}"#.data(using: .utf8)!),
+            ("materials/g.tex", horizontalGradientTex(left: (0, 0, 0), right: (255, 255, 255), w: 64, h: 8)),
+            ("shaders/effects/waterwaves.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/waterwaves.frag", frag.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "ww", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "ww", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let outDir = URL(fileURLWithPath: "/tmp/waple_tr_ww")
+        try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let urls = r.captureFrames(width: 64, height: 36, times: [0.1, 0.35], toDir: outDir)
+        XCTAssertEqual(urls.count, 2)
+        let rep0 = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: urls[0])))
+        let rep1 = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: urls[1])))
+        let c0 = try XCTUnwrap(rep0.colorAt(x: 32, y: 18))
+        let c1 = try XCTUnwrap(rep1.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] waterwaves t=0.1 red=\(c0.redComponent) t=0.35 red=\(c1.redComponent)")
+        XCTAssertGreaterThan(abs(c0.redComponent - c1.redComponent), 0.15,
+                             "waterwaves 가 no-op 이면(회귀) 두 시각 모두 그라디언트 중앙색으로 동일 — 변위가 살아있어야 시각별로 달라진다")
+    }
 }
