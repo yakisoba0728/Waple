@@ -98,17 +98,26 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   `isFrameBuffer` 자체가 없어 렌더러가 이 필드를 읽는 지점이 없다 — 파스·보존 전용). 향후 이 두 타입에
   프레임버퍼/컴포지션 소비부가 추가되면 "기본 true" 전제를 반드시 재검토할 것(레이어와 동일 근거 — WE shim
   기본값·코퍼스 실측 255×true vs 56×false — 를 재확인 없이 그대로 가정하지 말 것).
-- **`GPULayer.usesAudio` 기반 생성형 이펙트 게이트의 스코프**: compose(_rt_) 레이어가 `g_AudioSpectrum*` 유니폼을
-  참조하는 이펙트(예: Simple_Audio_Bars 류)를 가지면 저작 `copybackground:false` 를 무시하고 acc 블릿 경로를
-  강제한다([SceneRendererResources.swift](Sources/WapleRender/SceneRendererResources.swift) `audioGatedCompose`) —
-  실측(3299228616 "Bar 3"): 오디오 이펙트가 `alpha = scene.a * bar`(TRANSPARENCY==INTERSECT 콤보)로 입력 알파를
-  게이팅해, 투명 입력이면 콘텐츠가 통째로 사라진다(shader-math 확정, 코퍼스 스캔+실캡처로 재현·수정 확인).
-  이 게이트는 "오디오 스펙트럼 유니폼 참조"만 구조적으로 탐지 — 오디오와 무관한 다른 생성형(입력 알파를
-  게이팅하되 오디오 미참조) 이펙트가 향후 코퍼스에 추가되면 이 휴리스틱으로 못 잡는다. 현재 코퍼스(169씬)
-  전수 스캔 결과 `copybackground:false` + `isFrameBuffer` 조합·이펙트 보유 22개 오브젝트/15씬 중 오디오
-  게이트 대상 외 나머지(3521337568 earth composition 등)는 shader-math 로 입력-독립 확인(tint BLENDMODE==0
-  이 albedo.rgb/a 를 무조건 재설정해 체인 전체가 배경과 무관) + `WapleCompat --compare` 실캡처로 베이스라인
-  main-6526db1 대비 픽셀 동일(frac=0) 확인 완료. 3565190341(shake) 도 동일하게 베이스라인과 픽셀 동일.
+- **생성형(오디오) 이펙트 콘텐츠 손실 가능성 — 코퍼스 실측으로 게이트 미도입 결정**: 코퍼스(169씬) 전수
+  스캔 결과 `copyBackground:false` + `isFrameBuffer` 조합·이펙트 보유 22개 오브젝트/15씬 중, 활성 상태로
+  실제 렌더되는 `Simple_Audio_Bars`/`enhanced_simple_audio_bars` 인스턴스는 3건뿐(3351179520·3543159422·
+  3517818807) — 셋 다 `TRANSPARENCY` 콤보 미지정으로 셰이더 기본값(`REPLACE`=1, `alpha = bar * u_BarOpacity`
+  — 입력 알파와 무관하게 자기결정)이라 투명 입력에도 콘텐츠 손실이 없다(shader-math 확정 + `WapleCompat
+  --compare` 베이스라인 main-6526db1 대비 캡처로 재확인). **정정**: 애초 "3299228616 'Bar 3'가
+  TRANSPARENCY==INTERSECT 로 콘텐츠를 잃는다" 는 주장으로 `GPULayer.usesAudio` 기반 좁은 게이트를 구현했다가
+  같은 라운드에서 재검증 중 오귀속임이 드러나 되돌렸다 — 실제로는 (a) 그 TRANSPARENCY:4/INTERSECT 콤보는
+  "Bar 3"(id 387)가 아니라 인접한 별개 오브젝트 "Bar 2"(id 678)의 것이었고, (b) "Bar 2"·"Bar 3" 양쪽 모두
+  해당 Simple_Audio_Bars 패스는 `visible:{user:{condition,name:"barstyle"},value:false}` 로 이 배포본에서
+  정적으로 꺼져 있어(파스 시점에 `SceneDocument.parseEffects` 가 드롭) 애초에 렌더되지 않는다. 즉 현재
+  코퍼스엔 이 문제를 촉발하는 실제 씬이 없다 — "트리거 전엔 하지 않는다" 원칙에 따라 코드 게이트는
+  두지 않음. **다만 구조적 위험 자체는 실재**: `TRANSPARENCY==INTERSECT`(4)/`SUBTRACT`(3)/`PRESERVE`(0)
+  콤보를 쓰는 오디오 생성형 이펙트가 향후 코퍼스에 authored 되면 투명 입력에서 콘텐츠(alpha)가 소실될
+  수 있다(수식: INTERSECT는 `alpha = scene.a * bar`, SUBTRACT는 `alpha = max(0, scene.a - bar*opacity)` —
+  둘 다 scene.a=0 이면 항상 0). 그런 씬이 실제로 나타나면 트리거 — 해당 compose 레이어만 acc 블릿 유지로
+  좁게 예외 처리할 것(전역 게이트가 아니라 씬별 처리 권장 — 이번에 시도한 "오디오 유니폼 참조" 휴리스틱은
+  근거였던 사례가 오귀속으로 무효화됐으므로 재도입 시 반드시 실제 유발 씬으로 재검증할 것).
+  3521337568(earth composition)·3565190341(shake) 는 별개로 shader-math(tint BLENDMODE==0 이
+  albedo.rgb/a 를 무조건 재설정해 체인 전체가 입력과 무관) + 실캡처로 콘텐츠 손실 0(픽셀 동일, frac=0) 확인 완료.
 - **①②③ 재조사 기록**(외부 `waple-scene-audit-2026-07/NEXT-WAVE-PLAN.md`·`gate-visual-adjudication.result.json`
   §4 "기지결함" 목록 대조, 리포 밖이라 여기 요약만 남김): ③ waterwaves(2947302287) "TIMEOFFSET 마스크
   오바인드로 파도 변위 미구현" 표기는 y-up 전역 전환(`0ce3e2c`) 이후 더 이상 재현되지 않음(`f1e7f7c` 가드

@@ -116,68 +116,6 @@ final class SceneCompositeConventionTests: XCTestCase {
         XCTAssertGreaterThan(c.blueComponent, 0.8, "위와 동일 근거 — 미수정이면 순수 빨강(green/blue 낮음)으로 워시")
     }
 
-    /// B2-effects④ 지적: copybackground:false 컴포지션 레이어가 오디오 스펙트럼(g_AudioSpectrum*) 참조
-    /// 이펙트를 가지면 저작 copybackground 값과 무관하게 acc 블릿 경로를 강제해야 한다 — 실측(3299228616
-    /// "Bar 3"): Simple_Audio_Bars 류 생성형 이펙트는 `alpha = scene.a * bar`(TRANSPARENCY==INTERSECT)
-    /// 처럼 입력 알파로 자기 알파를 게이팅해, 투명 입력(scene.a=0)이면 콘텐츠가 통째로 사라진다.
-    /// 이 테스트는 그 패턴을 직접 재현: 오디오 유니폼을 선언한 이펙트가 scene.a 를 그대로 자기 알파로
-    /// 쓰면서 RGB 는 항상 빨강 — 게이트가 동작하면(acc 블릿 유지) scene.a=1(흰 배경 불투명) → 최종 픽셀
-    /// 빨강. 게이트가 깨지면(다시 투명 클리어) scene.a=0 → 레이어 알파 0(무-기여) → 밑에 깔린 흰 배경이
-    /// 그대로 비쳐 흰색이 나온다.
-    func testFrameBufferCopyBackgroundFalseWithAudioEffectKeepsBackdrop() throws {
-        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
-        let vert = """
-        varying vec2 v_TexCoord;
-        void main() {
-            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
-            v_TexCoord = a_TexCoord;
-        }
-        """
-        let frag = """
-        varying vec2 v_TexCoord;
-        uniform sampler2D g_Texture0; // {"hidden":true}
-        uniform float g_AudioSpectrum16Left[16];
-        void main() {
-            vec4 scene = texSample2D(g_Texture0, v_TexCoord);
-            gl_FragColor = vec4(1.0, 0.0, 0.0, scene.a);
-        }
-        """
-        let scene = """
-        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
-         "objects":[
-           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
-           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
-            "copybackground":false,
-            "effects":[{"file":"effects/audiobar/effect.json","passes":[{}]}],
-            "visible":{"value":true}}]}
-        """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbaudiogate", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try encodePkg([
-            ("scene.json", scene.data(using: .utf8)!),
-            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
-            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
-            ("materials/w.tex", solidTex(255, 255, 255)),
-            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true,"passthrough":true}"#.data(using: .utf8)!),
-            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
-            ("shaders/effects/audiobar.vert", vert.data(using: .utf8)!),
-            ("shaders/effects/audiobar.frag", frag.data(using: .utf8)!),
-        ]).write(to: dir.appendingPathComponent("scene.pkg"))
-        let project = WallpaperProject(id: "fbaudiogate", type: .scene, fileName: "scene.pkg", previewName: nil,
-                                       title: "fbaudiogate", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
-        let r = SceneRenderer()
-        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
-        defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbaudiogate")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
-        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
-        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
-        NSLog("%@", "[Waple] fb copybackground:false+audio px=(\(c.redComponent),\(c.greenComponent),\(c.blueComponent))")
-        XCTAssertGreaterThan(c.redComponent, 0.8, "오디오 이펙트 보유 컴포지션 레이어는 acc 블릿 유지 게이트가 동작해 scene.a=1 → 빨강이어야")
-        XCTAssertLessThan(c.greenComponent, 0.2, "게이트가 깨지면(투명 클리어) 레이어 alpha=0 이 되어 밑의 흰 배경이 비쳐 흰색(green 높음)이 나온다")
-    }
-
     /// P⑤: isFrameBuffer(_rt_) + colorBlendMode 동시 저작 레이어(코퍼스 13씬 실측) — 종전엔
     /// encodeDrawPlan 이 isFrameBuffer 를 colorBlendMode 보다 먼저 매치해 저작 블렌드 모드가 통째로
     /// 무시되고 f_compose(그냥 tint 결과 통과)로만 그려졌다. 흰 배경 + 컴포지션 레이어(tint 효과로
