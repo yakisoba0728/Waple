@@ -731,12 +731,14 @@ extension SceneRenderer {
 
     /// F721(S-12): ortho(2D) 씬에 인터리브된 3D 메시 런. acc 를 load 하는 별도 패스(뎁스 부착)로
     /// 메시를 그린 뒤 2D 인코더를 재개한다(runFrameBufferLayer 와 같은 인코더 분할 패턴).
-    /// 투영: 2D v_main 과 같은 픽셀→NDC 직교 매핑(x_ndc=(2x/W−1)·aspectScale.x, y_ndc=(1−2y/H)·aspectScale.y)
-    /// + z 는 ±F 대칭 클립(z 클수록 앞 — 오브젝트 z 양수가 화면 앞). 씬 픽셀 좌표계를 2D 레이어와
-    /// 공유하므로 같은 화면 위치에 놓인다(실물 3354366708: 그룹 origin (1920,1080) = 화면 중앙).
-    /// 프런트 와인딩: 이 직교행렬의 det 부호는 perspective 경로와 반대(encode3D=CCW → 여기선 CW) —
-    /// 같은 메시 와인딩에서 동일 면이 컬링된다. 섀도우는 미지원(ortho 검증 부재, 스코프 밖) —
-    /// 라이트는 resolveLights/packLights 를 3D 경로와 동일하게 해석(ortho 씬 라이트는 같은 씬 픽셀 공간).
+    /// 투영: 2D v_main 과 같은 픽셀→NDC 직교 매핑(W1-yaxis: x_ndc=(2x/W−1)·aspectScale.x,
+    /// y_ndc=(2y/H−1)·aspectScale.y — pxToNDC 와 동일 y-up 부호) + z 는 ±F 대칭 클립(z 클수록
+    /// 앞 — 오브젝트 z 양수가 화면 앞). 씬 픽셀 좌표계를 2D 레이어와 공유하므로 같은 화면 위치에
+    /// 놓인다(실물 3354366708: 그룹 origin (1920,1080) = 화면 중앙).
+    /// 프런트 와인딩(W1-yaxis): sy 부호가 y-down→y-up 으로 바뀌며 이 직교행렬의 det 부호도 뒤집혀
+    /// perspective 경로(encode3D=CCW)와 이제 같은 부호가 된다 — CW→CCW 로 동반 전환(종전엔 sy 의
+    /// 구 부호 때문에 반대라 CW 였음). 섀도우는 미지원(ortho 검증 부재, 스코프 밖) — 라이트는
+    /// resolveLights/packLights 를 3D 경로와 동일하게 해석(ortho 씬 라이트는 같은 씬 픽셀 공간).
     func runOrtho3DMeshes(_ meshIndices: [Int], acc: MTLTexture, cb: MTLCommandBuffer,
                           ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
                           aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
@@ -768,17 +770,19 @@ extension SceneRenderer {
         rpd.depthAttachment.storeAction = needsStore ? .store : .dontCare
         guard var menc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
         // 직교 투영: z_ndc = 0.5 − z/(2F). F 는 WE ortho 기본 farz 와 같은 대칭 클립(오브젝트 z ≈ ±수백).
+        // W1-yaxis: sy/평행이동 y 를 pxToNDC 와 동일 부호(y-up)로 반전.
         let F: Float = 10000
         let sx = 2 / max(1, projW) * aspectScale.x
-        let sy = -2 / max(1, projH) * aspectScale.y
+        let sy = 2 / max(1, projH) * aspectScale.y
         var proj = simd_float4x4(columns: (
             SIMD4<Float>(sx, 0, 0, 0),
             SIMD4<Float>(0, sy, 0, 0),
             SIMD4<Float>(0, 0, -1 / (2 * F), 0),
-            SIMD4<Float>(-1, 1, 0.5, 1)))
+            SIMD4<Float>(-1, -1, 0.5, 1)))
         // camerashake/camera-origin 팬: 2D 레이어와 같은 화면 병진(clipTranslation — encode3D 와 동일 기법).
         if frameShakeOffset != .zero { proj = Scene3DMath.clipTranslation(frameShakeOffset) * proj }
-        menc.setFrontFacing(.clockwise)
+        // W1-yaxis: sy 부호 반전으로 det 부호가 perspective 경로와 같아져 CCW 로 동반 전환.
+        menc.setFrontFacing(.counterClockwise)
         // 월드행렬 입력(노드 계층) + 라이팅 바인드(섀도우 없음 — identity 행렬/nil 텍스처).
         var nmap: [Int: Scene3DMath.Node] = [:]
         nmap.reserveCapacity(nodes3D.count)
@@ -838,7 +842,7 @@ extension SceneRenderer {
                     nextRPD.depthAttachment.storeAction = needsStore ? .store : .dontCare
                     guard let nextMenc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return nil }
                     menc = nextMenc
-                    menc.setFrontFacing(.clockwise)
+                    menc.setFrontFacing(.counterClockwise)
                     bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                                         shadowMatrices: noShadow, shadowTexture: nil, into: menc)
                     if let snap {
@@ -881,7 +885,7 @@ extension SceneRenderer {
                     nextRPD.depthAttachment.storeAction = needsStore ? .store : .dontCare
                     guard let nextMenc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return nil }
                     menc = nextMenc
-                    menc.setFrontFacing(.clockwise)
+                    menc.setFrontFacing(.counterClockwise)
                     bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                                         shadowMatrices: noShadow, shadowTexture: nil, into: menc)
                     if let snap {
