@@ -26,7 +26,10 @@ final class PointerUVTests: XCTestCase {
 }
 
 final class PuppetVerticesTests: XCTestCase {
-    /// 퍼펫 메시 → NDC 매핑이 quadVertices 규약(씬 픽셀 y-down)과 일치.
+    /// 퍼펫 메시 → NDC 매핑. W1-yaxis(2차): 씬이 y-up 으로 정정되며 모델(y-up) 과 규약이 일치해
+    /// puppetVertices 의 y 부호 반전을 제거(4종 게이트 — 3463520581 + §5 3씬 — 실측으로 확정,
+    /// §5 의 구 근거는 y-down pxToNDC 하 측정이라 이 변경엔 적용되지 않음. attachmentSceneDelta 의
+    /// Y-켤레 제거와 짝).
     func testMeshToNDCMapping() {
         var m = PuppetModel(material: "m",
                             vertices: [.init(position: SIMD3(0, 0, 0), boneIndices: SIMD4(0, 0, 0, 0),
@@ -39,14 +42,14 @@ final class PuppetVerticesTests: XCTestCase {
                                              origin: Vec2(x: 960, y: 540), scale: Vec2(x: 2, y: 2), angleZ: 0,
                                              projW: 1920, projH: 1080)
         XCTAssertEqual(v.count, 3)
-        // 정점0: 씬 (960,540) = 화면 중앙 → NDC (0,0); uv 보존
+        // 정점0: 씬 (960,540) = 화면 중앙 → NDC (0,0)(중앙은 y-flip 과 무관, 무회귀); uv 보존
         XCTAssertEqual(v[0].x, 0, accuracy: 1e-4)
         XCTAssertEqual(v[0].y, 0, accuracy: 1e-4)
         XCTAssertEqual(v[0].z, 0.25)
         XCTAssertEqual(v[0].w, 0.75)
-        // 정점1: 메시 y-up → 로컬(200,-100) → 씬(1160,440) → NDC
+        // 정점1: 메시 y-up, 씬도 y-up → 부호 반전 없이 로컬(200,100) → 씬(1160,640) → NDC.
         XCTAssertEqual(v[1].x, (1160.0/1920)*2 - 1, accuracy: 1e-4)
-        XCTAssertEqual(v[1].y, 1 - (440.0/1080)*2, accuracy: 1e-4)
+        XCTAssertEqual(v[1].y, (640.0/1080)*2 - 1, accuracy: 1e-4)
     }
 
     /// A1 회귀: scene.json `angles` 는 이미 라디안(코퍼스 전부 ≤π 확정)이므로 quad/lit/puppetVertices 가
@@ -68,14 +71,14 @@ final class PuppetVerticesTests: XCTestCase {
 }
 
 final class QuadAlignmentTests: XCTestCase {
-    // NDC → 씬픽셀 역변환(pxToNDC 의 역): x=(ndcX+1)/2·proj, y=(1−ndcY)/2·proj.
+    // NDC → 씬픽셀 역변환(W1-yaxis: pxToNDC 의 역, y-up): x=(ndcX+1)/2·proj, y=(ndcY+1)/2·proj.
     private func scenePixels(_ v: [SIMD4<Float>], proj: Float) -> (xs: [Float], ys: [Float]) {
-        (v.map { ($0.x + 1) / 2 * proj }, v.map { (1 - $0.y) / 2 * proj })
+        (v.map { ($0.x + 1) / 2 * proj }, v.map { ($0.y + 1) / 2 * proj })
     }
 
     /// D2: alignment="bottomleft" 는 origin 이 좌하단 앵커여야 한다 — 사각형이 origin 기준 우측(+x)·
-    /// 위쪽(y-down 에서 −y)으로만 뻗는다(오디오 이퀄라이저 바: y=하단선 고정한 채 위로만 자람).
-    /// 종전(미반영)엔 origin 이 항상 중심이라 좌·아래로도 절반 편이 → 이 assert 가 red.
+    /// 위쪽(y-up 에서 +y)으로만 뻗는다(오디오 이퀄라이저 바: y=하단선 고정한 채 위로만 자람).
+    /// W1-yaxis: y-up 확정으로 "위=+y" — origin.y 가 최솟값(하단), origin.y+h 가 최댓값(상단).
     func testBottomLeftAnchorsOriginAtBottomLeft() {
         let v = SceneRenderer.quadVertices(origin: Vec2(x: 100, y: 200), size: Vec2(x: 40, y: 80),
                                            scale: Vec2(x: 1, y: 1), angleZ: 0, alignment: "bottomleft",
@@ -83,12 +86,12 @@ final class QuadAlignmentTests: XCTestCase {
         let (xs, ys) = scenePixels(v, proj: 1000)
         XCTAssertEqual(xs.min()!, 100, accuracy: 1e-2)   // 좌변 = origin.x (우측으로만)
         XCTAssertEqual(xs.max()!, 140, accuracy: 1e-2)   // origin.x + w
-        XCTAssertEqual(ys.min()!, 120, accuracy: 1e-2)   // 상단 = origin.y − h
-        XCTAssertEqual(ys.max()!, 200, accuracy: 1e-2)   // 하변 = origin.y (위로만)
+        XCTAssertEqual(ys.min()!, 200, accuracy: 1e-2)   // 하단 = origin.y (위로만 자람)
+        XCTAssertEqual(ys.max()!, 280, accuracy: 1e-2)   // 상단 = origin.y + h
     }
 
-    /// 반대 부호 가지(right→+hw, top→−hh) 잠금 — topright 는 origin 이 우상단 앵커여야:
-    /// 사각형이 좌측(−x)·아래(y-down 에서 +y)로만 뻗는다(bottomleft 와 대칭).
+    /// 반대 부호 가지(right→+hw, top→+hh) 잠금 — topright 는 origin 이 우상단 앵커여야:
+    /// 사각형이 좌측(−x)·아래(y-up 에서 −y)로만 뻗는다(bottomleft 와 대칭).
     func testTopRightAnchorsOriginAtTopRight() {
         let v = SceneRenderer.quadVertices(origin: Vec2(x: 100, y: 200), size: Vec2(x: 40, y: 80),
                                            scale: Vec2(x: 1, y: 1), angleZ: 0, alignment: "topright",
@@ -96,11 +99,12 @@ final class QuadAlignmentTests: XCTestCase {
         let (xs, ys) = scenePixels(v, proj: 1000)
         XCTAssertEqual(xs.min()!, 60, accuracy: 1e-2)    // origin.x − w
         XCTAssertEqual(xs.max()!, 100, accuracy: 1e-2)   // 우변 = origin.x (좌측으로만)
-        XCTAssertEqual(ys.min()!, 200, accuracy: 1e-2)   // 상단 = origin.y (아래로만)
-        XCTAssertEqual(ys.max()!, 280, accuracy: 1e-2)   // origin.y + h
+        XCTAssertEqual(ys.min()!, 120, accuracy: 1e-2)   // 하단 = origin.y − h
+        XCTAssertEqual(ys.max()!, 200, accuracy: 1e-2)   // 상단 = origin.y (아래로만 뻗음)
     }
 
-    /// alignment="center"(기본) 는 origin=중심 — 앵커 도입 전 정점과 완전 동일(무회귀).
+    /// alignment="center"(기본) 는 origin=중심 — y-flip 과 무관하게 대칭이라 정점 min/max 가
+    /// 종전 y-down 구현과 완전 동일(무회귀 불변 — advisor 도출: 대칭 박스는 재배치 없음).
     func testCenterAlignmentUnchanged() {
         let v = SceneRenderer.quadVertices(origin: Vec2(x: 100, y: 200), size: Vec2(x: 40, y: 80),
                                            scale: Vec2(x: 1, y: 1), angleZ: 0, alignment: "center",
@@ -110,5 +114,73 @@ final class QuadAlignmentTests: XCTestCase {
         XCTAssertEqual(xs.max()!, 120, accuracy: 1e-2)
         XCTAssertEqual(ys.min()!, 160, accuracy: 1e-2)   // 중심 ± hh(40)
         XCTAssertEqual(ys.max()!, 240, accuracy: 1e-2)
+    }
+
+    /// 자문 지적: 회전×비대칭 앵커의 "합성" 은 어떤 단일 테스트도 커버하지 않았다 — alignedCenter 의
+    /// ay 부호 수정과 quadVertices 의 hh 코너 재페어링이 **서로 독립적으로** 맞아야만 앵커 코너가
+    /// 회전과 무관하게 origin 에 고정된다(alignedCenter: center=origin−R(ay 앵커), quadVertices:
+    /// 그 앵커 코너의 로컬 (lx,ly) 가 동일 (ax,ay) 를 써야 함 — 둘 중 하나만 고쳐졌으면 아래 assert 가
+    /// 깨진다). topleft→tl(v[0]), bottomright→br(v[2]) 두 대각 케이스 + 4개 angleZ 로 교차검증.
+    func testRotatedOffCenterAnchorStaysPinnedAtOrigin() {
+        let origin = Vec2(x: 500, y: 300)
+        let size = Vec2(x: 100, y: 60)
+        for angleZ: Float in [0, 0.7, .pi / 2, 2.1] {
+            let topleft = SceneRenderer.quadVertices(origin: origin, size: size, scale: Vec2(x: 1, y: 1),
+                                                      angleZ: angleZ, alignment: "topleft",
+                                                      projW: 1000, projH: 1000)
+            let (txs, tys) = scenePixels(topleft, proj: 1000)
+            XCTAssertEqual(txs[0], 500, accuracy: 1e-2, "topleft v[0](tl) angleZ=\(angleZ)")
+            XCTAssertEqual(tys[0], 300, accuracy: 1e-2, "topleft v[0](tl) angleZ=\(angleZ)")
+
+            let bottomright = SceneRenderer.quadVertices(origin: origin, size: size, scale: Vec2(x: 1, y: 1),
+                                                          angleZ: angleZ, alignment: "bottomright",
+                                                          projW: 1000, projH: 1000)
+            let (bxs, bys) = scenePixels(bottomright, proj: 1000)
+            XCTAssertEqual(bxs[2], 500, accuracy: 1e-2, "bottomright v[2](br) angleZ=\(angleZ)")
+            XCTAssertEqual(bys[2], 300, accuracy: 1e-2, "bottomright v[2](br) angleZ=\(angleZ)")
+        }
+    }
+}
+
+/// W1-yaxis 핵심 불변식: origin.y == projH/2 **이고 angleZ == 0** 인 레이어는 새/구 pxToNDC 가 부호만
+/// 반대인 대칭식 + quadVertices 의 hh 재페어링이 정확히 상쇄되어 정점이 **비트동일**해야 한다
+/// (2325500626 무회귀 게이트와 동형 — 회전이 있으면 y-flip 이 회전 센스 자체를 켤레하므로 이 등식은
+/// 성립하지 않는다: 아래 testRotationIsCounterClockwiseInYUp 참고. 이 불변이 깨지면 hh 재페어링
+/// 누락 — 화면 중앙 레이어의 콘텐츠가 상하반전된 채로 남는다).
+final class QuadVerticesYUpInvariantTests: XCTestCase {
+    func testScreenCenteredUnrotatedLayerMatchesLegacyYDownOutput() {
+        let projW: Float = 1920, projH: Float = 1080
+        let legacy: (Float, Float) -> SIMD2<Float> = { x, y in SIMD2(x / projW * 2 - 1, 1 - y / projH * 2) }
+        func legacyQuad(origin: Vec2, size: Vec2) -> [SIMD4<Float>] {
+            let hw = size.x * 0.5, hh = size.y * 0.5
+            let tl = legacy(origin.x - hw, origin.y - hh), tr = legacy(origin.x + hw, origin.y - hh)
+            let br = legacy(origin.x + hw, origin.y + hh), bl = legacy(origin.x - hw, origin.y + hh)
+            return [SIMD4(tl.x, tl.y, 0, 0), SIMD4(tr.x, tr.y, 1, 0), SIMD4(br.x, br.y, 1, 1),
+                    SIMD4(tl.x, tl.y, 0, 0), SIMD4(br.x, br.y, 1, 1), SIMD4(bl.x, bl.y, 0, 1)]
+        }
+        let origin = Vec2(x: 733, y: projH / 2)
+        let size = Vec2(x: 120, y: 64)
+        let new = SceneRenderer.quadVertices(origin: origin, size: size, scale: Vec2(x: 1, y: 1),
+                                             angleZ: 0, alignment: "center", projW: projW, projH: projH)
+        let old = legacyQuad(origin: origin, size: size)
+        for i in 0..<new.count {
+            XCTAssertEqual(new[i].x, old[i].x, accuracy: 1e-4, "idx=\(i)")
+            XCTAssertEqual(new[i].y, old[i].y, accuracy: 1e-4, "idx=\(i)")
+        }
+    }
+
+    /// W1-yaxis: y-up 세계에서 angleZ 양수는 CCW(반시계) 여야 WE 규약과 일치(문서 §3-C2: "WE 양수=CCW").
+    /// 오른쪽을 가리키는 로컬 벡터(+x)를 +90° 돌리면 위(+y, 화면 상단)를 가리켜야 한다 — hh=0 퇴화
+    /// 박스로 tl/bl·tr/br 가 겹치게 만들어 회전 후 코너 하나의 화면상 상하 위치만 순수 검증.
+    func testRotationIsCounterClockwiseInYUp() {
+        let projW: Float = 1000, projH: Float = 1000
+        let origin = Vec2(x: 500, y: 500)
+        let v = SceneRenderer.quadVertices(origin: origin, size: Vec2(x: 200, y: 0),
+                                           scale: Vec2(x: 1, y: 1), angleZ: .pi / 2,
+                                           alignment: "center", projW: projW, projH: projH)
+        // v[1] = tr = corner(+hw, +hh=0) 회전 전 로컬(100,0)(→ 오른쪽) → +90°CCW 후 로컬(0,100)(→ 위).
+        // 화면 중앙(NDC 0,0) 대비 y 가 양수(위)여야 한다 — 시계방향이었다면 음수(아래)로 나온다.
+        XCTAssertEqual(v[1].x, 0, accuracy: 1e-3)
+        XCTAssertGreaterThan(v[1].y, 0.05, "angleZ=+π/2 는 CCW 여야(오른쪽 로컬점이 화면 위로 회전)")
     }
 }

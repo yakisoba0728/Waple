@@ -33,11 +33,11 @@ final class SceneInputMappingTests: XCTestCase {
                                           projW: 1920, projH: 1080, fitMode: .stretch)
         XCTAssertEqual(c?.x ?? -1, 960, accuracy: 0.01)
         XCTAssertEqual(c?.y ?? -1, 540, accuracy: 0.01)
-        // AppKit 하단-좌측 (0,0) → WE 상단원점에선 좌하단 = (0, projH)
+        // W1-yaxis: AppKit 하단-좌측 (0,0) → WE 도 하단원점(y-up)이라 씬 좌하단 = (0, 0)(직결, 무플립).
         let bl = SceneRenderer.sceneCoords(viewPoint: .zero, viewSize: size,
                                            projW: 1920, projH: 1080, fitMode: .stretch)
         XCTAssertEqual(bl?.x ?? -1, 0, accuracy: 0.01)
-        XCTAssertEqual(bl?.y ?? -1, 1080, accuracy: 0.01)
+        XCTAssertEqual(bl?.y ?? -1, 0, accuracy: 0.01)
     }
 
     // MARK: sceneCoords — fit (레터박스)
@@ -51,12 +51,13 @@ final class SceneInputMappingTests: XCTestCase {
     }
 
     func testSceneCoords_fit_contentTopEdgeMapsToSceneTop() {
-        // 콘텐츠 상단 경계: ndc'y=1 ⇔ ndc y=9/16 ⇔ v=(9/16+1)/2 → y=781.25
+        // 콘텐츠 상단 경계: ndc'y=1 ⇔ ndc y=9/16 ⇔ v=(9/16+1)/2 → y=781.25.
+        // W1-yaxis: WE 도 y-up 이라 "콘텐츠 상단"은 씬 y 의 **최댓값**(projH) — 종전 0(y-down 오구현).
         let r = SceneRenderer.sceneCoords(viewPoint: CGPoint(x: 500, y: 781.25),
                                           viewSize: CGSize(width: 1000, height: 1000),
                                           projW: 1920, projH: 1080, fitMode: .fit)
         XCTAssertEqual(r?.x ?? -1, 960, accuracy: 0.01)
-        XCTAssertEqual(r?.y ?? -1, 0, accuracy: 0.1)
+        XCTAssertEqual(r?.y ?? -1, 1080, accuracy: 0.1)
     }
 
     // MARK: sceneCoords — fill (크롭: 뷰 가장자리가 씬 내부에 대응)

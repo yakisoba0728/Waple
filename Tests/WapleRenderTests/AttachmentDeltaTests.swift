@@ -3,7 +3,9 @@ import simd
 @testable import WapleCore
 @testable import WapleRender
 
-/// P1 attachment 씬공간 델타 D = P∘(Y·A·Y)∘P⁻¹ 수학(순수 — Metal 불요).
+/// P1 attachment 씬공간 델타 D = P∘A∘P⁻¹ 수학(순수 — Metal 불요).
+/// W1-yaxis: 씬이 y-up 으로 정정되며 모델(y-up) 과의 Y-켤레가 항등이 되어 제거됨(puppetVertices
+/// 의 부호 제거와 짝) — 아래 기대값은 그 갱신을 반영(값 붙여넣기 아닌 재도출, 근거는 각 주석).
 /// 검증 성질: 베이크된 자식 월드(P∘childLocal)에 D 를 곱하면 P∘A∘childLocal.
 final class AttachmentDeltaTests: XCTestCase {
     private func translation(_ x: Float, _ y: Float) -> simd_float4x4 {
@@ -23,17 +25,17 @@ final class AttachmentDeltaTests: XCTestCase {
         XCTAssertEqual(d.t.y, 0, accuracy: 1e-3)
     }
 
-    func testModelSpaceTranslationYFlipsToScene() {
-        // 모델공간(y-up) +648y 이동 → 씬(y-down)에서 −648y(위로). 부모 항등.
+    func testModelSpaceTranslationMapsDirectlyToScene() {
+        // W1-yaxis: 모델공간(y-up) +648y 이동 → 씬도 y-up 이라 그대로 +648y(위로, 부호 유지). 부모 항등.
         let d = SceneRenderer.attachmentSceneDelta(frame: translation(31.7, 648),
                                                    parentOrigin: SIMD2(1919, 872),
                                                    parentScale: SIMD2(1, 1), parentAngle: 0)!
-        // 베이크된 자식 월드 = 부모 origin + childLocal(y-down). childLocal=(-69.8, 23.3):
+        // 베이크된 자식 월드 = 부모 origin + childLocal(y-up). childLocal=(-69.8, 23.3):
         let baked = SIMD2<Float>(1919 - 69.8, 872 + 23.3)
         let moved = d.m * baked + d.t
-        // 기대: 부모 + Y켤레(A)·childLocal = (1919+31.7-69.8, 872-648+23.3) — 실물 3538758087 주발이 머리로.
+        // 기대: 부모 + A·childLocal = (1919+31.7-69.8, 872+648+23.3).
         XCTAssertEqual(moved.x, 1919 + 31.7 - 69.8, accuracy: 1e-2)
-        XCTAssertEqual(moved.y, 872 - 648 + 23.3, accuracy: 1e-2)
+        XCTAssertEqual(moved.y, 872 + 648 + 23.3, accuracy: 1e-2)
     }
 
     func testParentScaleConjugation() {
@@ -46,19 +48,19 @@ final class AttachmentDeltaTests: XCTestCase {
         XCTAssertEqual(moved.y, 0, accuracy: 1e-3)
     }
 
-    func testModelRotationBecomesOppositeSignInYDown() {
-        // 모델공간(y-up) +90° 회전 본: y-down 씬 좌표계에선 −90°(화면상 같은 방향).
+    func testModelRotationKeepsSignInYUpScene() {
+        // W1-yaxis: 모델공간(y-up) +90° 회전 본 — 씬도 이제 y-up 이라 부호 유지(더 이상 반전 없음).
         var A = matrix_identity_float4x4
         A.columns.0 = SIMD4(0, 1, 0, 0)    // cos90, sin90
         A.columns.1 = SIMD4(-1, 0, 0, 0)
         let d = SceneRenderer.attachmentSceneDelta(frame: A, parentOrigin: SIMD2(0, 0),
                                                    parentScale: SIMD2(1, 1), parentAngle: 0)!
         let rot = atan2(d.m.columns.0.y, d.m.columns.0.x)
-        XCTAssertEqual(rot, -Float.pi / 2, accuracy: 1e-4)
-        // 회전 델타에 의한 위치: 자식(10, 0) → 씬 y-down 에서 (0, -10).
+        XCTAssertEqual(rot, Float.pi / 2, accuracy: 1e-4)
+        // 회전 델타에 의한 위치: 자식(10, 0) → 씬에서 (0, 10).
         let moved = d.m * SIMD2<Float>(10, 0) + d.t
         XCTAssertEqual(moved.x, 0, accuracy: 1e-4)
-        XCTAssertEqual(moved.y, -10, accuracy: 1e-4)
+        XCTAssertEqual(moved.y, 10, accuracy: 1e-4)
     }
 
     func testDegenerateParentScaleNil() {

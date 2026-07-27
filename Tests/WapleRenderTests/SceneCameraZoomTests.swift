@@ -74,10 +74,11 @@ final class SceneCameraZoomTests: XCTestCase {
         XCTAssertEqual(c?.x ?? -1, 960, accuracy: 0.01)
         XCTAssertEqual(c?.y ?? -1, 540, accuracy: 0.01)
         // 2× 줌: 뷰 우상단(AppKit 하단원점 (800,600)) → 씬 중심과 코너의 중간.
+        // W1-yaxis: 뷰 상단(AppKit y 큼) → 씬 y-up 도 큰 쪽(위) — 종전 270(y-down 오구현)은 810 으로.
         let p = SceneRenderer.sceneCoords(viewPoint: CGPoint(x: 800, y: 600), viewSize: size,
                                           projW: 1920, projH: 1080, fitMode: .stretch, zoom: 2)
         XCTAssertEqual(p?.x ?? -1, 1440, accuracy: 0.01)   // 960 + 960/2
-        XCTAssertEqual(p?.y ?? -1, 270, accuracy: 0.01)    // 540 − 540/2 (WE 상단원점)
+        XCTAssertEqual(p?.y ?? -1, 810, accuracy: 0.01)    // 540 + 540/2 (y-up, 뷰 상단 → 큰 scene-y)
         // 줌아웃 0.5×: 뷰 코너는 씬 밖(레터박스 유사) → nil.
         XCTAssertNil(SceneRenderer.sceneCoords(viewPoint: CGPoint(x: 800, y: 600), viewSize: size,
                                                projW: 1920, projH: 1080, fitMode: .stretch, zoom: 0.5))

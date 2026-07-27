@@ -90,7 +90,9 @@ extension SceneRenderer {
         func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { let p = sceneToNDC(x, y); return (p.x, p.y) }
         func appendQuad(_ p: Particle, stretch: Float = 1, angleOverride: Float? = nil) {
             let wx = sys.origin.x + sys.scale.x * p.pos.x
-            let wy = sys.origin.y - sys.scale.y * p.pos.y
+            // W1-yaxis: 파티클 sim 로컬은 y-up(눈/비 하강=음의 y). 씬 픽셀도 이제 y-up 이라 부호
+            // 일치(종전엔 씬을 y-down 으로 오구현해 `−` 로 상쇄) — 위치·속도(아래 wvy) 동일 부호.
+            let wy = sys.origin.y + sys.scale.y * p.pos.y
             let sizePx = p.size * sys.scale.x
             // 스프라이트시트(TEXS): mapsequence 는 스폰 확정 시퀀스, 아니면 age/frametime gif 애니.
             // UV = 프레임 서브렉트의 4코너(TL,TR,BR,BL). 회전 프레임이면 코너 배정을 rotationQuarters 만큼
@@ -127,7 +129,9 @@ extension SceneRenderer {
             func ndc(_ lx: Float, _ ly: Float) -> (Float, Float) {
                 return toNDC(wx + lx * ca - ly * sa, wy + lx * sa + ly * ca)
             }
-            let tl = ndc(-hw, -hh), tr = ndc(hw, -hh), br = ndc(hw, hh), bl = ndc(-hw, hh)
+            // W1-yaxis: quadVertices 와 동형 — uv(0,0) 이 화면 위쪽에 오도록 로컬 hh 코너 재페어링
+            // (스프라이트시트 프레임처럼 비대칭 콘텐츠가 있는 파티클의 상하반전 방지).
+            let tl = ndc(-hw, hh), tr = ndc(hw, hh), br = ndc(hw, -hh), bl = ndc(-hw, -hh)
             let r = p.color.x, g = p.color.y, b = p.color.z, al = p.alpha
             func v(_ pt: (Float, Float), _ u: (Float, Float)) {
                 verts.append(contentsOf: [pt.0, pt.1, u.0, u.1, r, g, b, al])
@@ -141,7 +145,8 @@ extension SceneRenderer {
         func appendSpriteTrailQuad(_ p: Particle) {
             let speed = sqrtf(p.vel.x * p.vel.x + p.vel.y * p.vel.y)  // 씬 로컬(Y-up) — 신장 산정
             guard speed > 0.5 else { appendQuad(p); return }  // ponytail: 방향 부정 임계 0.5px/s
-            let wvx = sys.scale.x * p.vel.x, wvy = -sys.scale.y * p.vel.y  // 월드 y-down — 각도
+            // W1-yaxis: 씬 픽셀도 y-up 이라 위치(wy)와 동일 부호(종전 월드 y-down 상쇄용 `−` 제거).
+            let wvx = sys.scale.x * p.vel.x, wvy = sys.scale.y * p.vel.y
             appendQuad(p, stretch: sys.def.renderer.spriteTrailStretch(speed: speed),
                        angleOverride: atan2(wvy, wvx))
         }
@@ -169,7 +174,8 @@ extension SceneRenderer {
         // 월드 px 로 변환.
         var pts: [(Float, Float)] = []
         pts.reserveCapacity(h.count)
-        for q in h { pts.append((sys.origin.x + sys.scale.x * q.x, sys.origin.y - sys.scale.y * q.y)) }
+        // W1-yaxis: appendQuad 의 wy 와 동일 부호(씬 픽셀 y-up).
+        for q in h { pts.append((sys.origin.x + sys.scale.x * q.x, sys.origin.y + sys.scale.y * q.y)) }
         // 유효 스팬 판정: bbox 대각선이 1px 미만이면 붕괴 → 쿼드.
         guard pts.count >= 2 else { return false }
         var minX = pts[0].0, maxX = pts[0].0, minY = pts[0].1, maxY = pts[0].1
@@ -424,11 +430,15 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 
-    /// 씬 픽셀 좌표(좌상단 원점, y-down) → NDC(-1..1, y-up). px→NDC 변환의 단일 정의 —
-    /// 파티클/리본/쿼드/퍼펫/텍스트 경로가 공유(동일식 5중 중복 제거, 2026-07-04).
+    /// W1-yaxis: 씬 픽셀 좌표(좌하단 원점, y-up — WE 전 씬 규약, RenderDoc 골든 3397690043 실측
+    /// 확정) → NDC(-1..1, y-up). px→NDC 변환의 단일 정의 — 파티클/리본/쿼드/퍼펫/텍스트 경로가 공유
+    /// (동일식 5중 중복 제거, 2026-07-04). 종전엔 y-down(`1 − y/H·2`)으로 오구현 — 부호만 반전하면
+    /// 위치는 고치지만 각 호출부의 로컬 지오메트리(quadVertices 코너 uv 페어링, alignedCenter
+    /// top/bottom, ortho 모델 y-basis 등)가 "콘텐츠 상하반전"을 새로 유발하므로 해당 파생 지점은
+    /// 각자 별도 보정(이 함수 자체는 이 한 줄만 변경 — 회전은 자동 정합, 켤레 켤레 상쇄).
     @inline(__always)
     static func pxToNDC(_ x: Float, _ y: Float, projW: Float, projH: Float) -> SIMD2<Float> {
-        SIMD2(x / projW * 2 - 1, 1 - y / projH * 2)
+        SIMD2(x / projW * 2 - 1, y / projH * 2 - 1)
     }
 
     /// pxToNDC 의 인스턴스 프로젝션 크기(projW/projH) 버전.
@@ -441,16 +451,17 @@ extension SceneRenderer {
     ///   left/right → 앵커가 좌/우변(사각형은 반대쪽으로 뻗음), top/bottom → 상/하변, center=중심.
     /// effectiveCenter = origin − rotate(alignX,alignY) 이므로 기존 코너식(rotate(local)+center)·
     /// litRect 셰이더 재구성(center 가정)이 수식 변경 없이 그대로 앵커 정렬을 재현한다(회전 선형성).
-    /// y-down 씬픽셀: top=−hh(위=y작음)·bottom=+hh·left=−hw·right=+hw. center/미지정=이동 0(무회귀).
+    /// W1-yaxis: y-up 씬픽셀(위=y큼): top=+hh·bottom=−hh(종전 y-down 부호의 반대) · left=−hw·right=+hw
+    /// (x 는 y-flip 과 무관해 불변). center/미지정=이동 0(무회귀).
     @inline(__always)
     static func alignedCenter(origin: Vec2, alignment: String, hw: Float, hh: Float, ca: Float, sa: Float) -> Vec2 {
         let ax: Float = alignment.contains("left") ? -hw : (alignment.contains("right") ? hw : 0)
-        let ay: Float = alignment.contains("top") ? -hh : (alignment.contains("bottom") ? hh : 0)
+        let ay: Float = alignment.contains("top") ? hh : (alignment.contains("bottom") ? -hh : 0)
         if ax == 0 && ay == 0 { return origin }  // center/미지정: 중심 그대로(무회귀)
         return Vec2(x: origin.x - (ax * ca - ay * sa), y: origin.y - (ax * sa + ay * ca))
     }
 
-    /// 씬 픽셀 좌표(좌상단 원점, Y-down 가정) → NDC. Y-flip은 Task 7에서 실측 보정.
+    /// 씬 픽셀 좌표(좌하단 원점, W1-yaxis: y-up 확정) → NDC.
     static func quadVertices(layer: SceneLayer, projW: Float, projH: Float) -> [SIMD4<Float>] {
         quadVertices(origin: layer.origin, size: layer.size, scale: layer.scale, angleZ: layer.angleZ,
                      alignment: layer.alignment, projW: projW, projH: projH,
@@ -471,8 +482,11 @@ extension SceneRenderer {
             return SIMD2<Float>(c.x + rx, c.y + ry)
         }
         func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> { Self.pxToNDC(p.x, p.y, projW: projW, projH: projH) }
-        let tl = ndc(corner(-hw, -hh)), tr = ndc(corner(hw, -hh))
-        let br = ndc(corner(hw, hh)), bl = ndc(corner(-hw, hh))
+        // W1-yaxis: pxToNDC 가 이제 y-up(큰 scene-y → 화면 위)이므로, uv(0,0)=텍스처 상단이 화면
+        // 위쪽에 오려면 로컬 ly=+hh(큰 y) 코너를 "tl/tr" 로 써야 한다(종전 −hh 는 이제 시각적 하단).
+        // hw/x 축은 y-flip 과 무관해 그대로 — 코너 4점의 SET 은 불변(재라벨링만, 회전/와인딩 무영향).
+        let tl = ndc(corner(-hw, hh)), tr = ndc(corner(hw, hh))
+        let br = ndc(corner(hw, -hh)), bl = ndc(corner(-hw, -hh))
         // M4: perspective=true 레이어 원근 투영 근사 — FOV 기반 상단 축소(코퍼스 x/y angles=0 이라
         // 정사영과 출력 동일, 후속 진짜 원근 구현 시 제거).
         if perspective {
@@ -504,17 +518,24 @@ extension SceneRenderer {
         let ca = cos(angleZ), sa = sin(angleZ)
         let aligned = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
         // model: translate(aligned) * rotateZ(angleZ) * scale(hw, hh)
+        // W1-yaxis: customLayerQuadInterleaved 는 local(-1,-1)→uv(0,0)=TL 로 고정(SceneRenderer.swift:889).
+        // quadVertices 와 동일하게 uv(0,0) 이 화면 위쪽에 오려면 local y-basis(columns.1) 를 반전해야
+        // local ly=-1 가 +hh(위) 로 매핑된다(quadVertices 의 hh 재페어링과 동형 보정).
+        // 주의: quadVertices 는 코너 재라벨링(점 집합 불변)이라 삼각형 와인딩이 안 바뀌지만, 이 행렬
+        // 경로는 columns.1 반전으로 행렬식 부호가 뒤집혀 와인딩이 역전된다 — 이 파이프라인을 그리는
+        // 인코더는 setCullMode 를 호출하지 않아(grep 확인) Metal 기본값 .none 이라 무해(컬링 자체가
+        // 없음). 향후 이 경로에 컬링을 도입하면 이 반전을 함께 재검토해야 한다.
         var model = simd_float4x4(1)
         model.columns.0 = SIMD4(ca * hw, sa * hw, 0, 0)
-        model.columns.1 = SIMD4(-sa * hh, ca * hh, 0, 0)
+        model.columns.1 = SIMD4(sa * hh, -ca * hh, 0, 0)
         model.columns.2 = SIMD4(0, 0, 1, 0)
         model.columns.3 = SIMD4(aligned.x, aligned.y, 0, 1)
-        // ortho: pixel → NDC (Y-flip, same as sceneToNDC)
+        // ortho: pixel → NDC(W1-yaxis: y-up, sceneToNDC/pxToNDC 와 동일 부호로 갱신)
         var ortho = simd_float4x4(1)
         ortho.columns.0 = SIMD4(2 / projW, 0, 0, 0)
-        ortho.columns.1 = SIMD4(0, -2 / projH, 0, 0)
+        ortho.columns.1 = SIMD4(0, 2 / projH, 0, 0)
         ortho.columns.2 = SIMD4(0, 0, 1, 0)
-        ortho.columns.3 = SIMD4(-1, 1, 0, 1)
+        ortho.columns.3 = SIMD4(-1, -1, 0, 1)
         // camera/shake translation
         let camX = camOffset.x * parallaxDepth.x + shakeOffset.x
         let camY = camOffset.y * parallaxDepth.y + shakeOffset.y
@@ -547,12 +568,23 @@ extension SceneRenderer {
         let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
         let ca = cos(a), sa = sin(a)
         let c = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
-        return (SIMD4(c.x, c.y, hw, hh), SIMD4(ca, sa, originZ, 0))
+        // W1-yaxis: f_lit(QuadShaders.swift, 불변)의 `ly = (uv.y*2-1)*rect[0].w` 역산이 quadVertices 의
+        // 새 uv/코너 페어링(uv.y=0 → ly=+hh)과 맞으려면 −hh 를 패킹해야 한다(셰이더 소스 자체는 불변).
+        // rect[0].w 의 소비자는 f_lit 의 이 한 줄뿐(grep 확인, QuadShaders.swift) — 크기(양수)로 읽는
+        // 별도 소비자가 없어 부호반전 패킹이 무해함을 재확인.
+        return (SIMD4(c.x, c.y, hw, -hh), SIMD4(ca, sa, originZ, 0))
     }
 
-    /// 퍼펫 스킨 정점 → NDC 삼각형 리스트(quadVertices 와 동일 규약: 씬 픽셀 y-down, uv 그대로).
+    /// 퍼펫 스킨 정점 → NDC 삼각형 리스트(quadVertices 와 동일 규약, W1-yaxis: 씬 픽셀 y-up).
     /// 메시 좌표는 레이어 로컬 픽셀(원점 중심)·**y-up**(실측: 2809885105 프리뷰 대비 반전 확인) —
-    /// y 부호 반전 후 origin/scale/angleZ 적용, NDC 변환.
+    /// 씬도 이제 y-up 이라 모델 y-up 과 규약이 일치, 부호 반전 없이 그대로 origin/scale/angleZ 적용
+    /// (W1-yaxis: §5 의 "제거 시 정상 3씬 파괴" 근거는 구 y-down pxToNDC 하에서 측정된 것이라
+    /// 전역 y-flip 과 함께 무효 — 4종 게이트(3463520581 + §5 3씬) 전수 실측으로 제거가 맞음을
+    /// 확인 후 착수. attachmentSceneDelta 의 Y-켤레도 동시에 제거(짝 관계, 아래 참조).
+    /// 기록 정정(병합 게이트 지적): 이 게이트의 "flipped == before 일치" 캡처 비교는 **퍼펫
+    /// 정립성(상하 방향)만** before 와 일치한다는 뜻이다 — before 자체가 구 y-down pxToNDC 산출물이라
+    /// 위젯/레이어 절대 위치 등 프레임 전체 레이아웃은 이 웨이브(전역 pxToNDC y-up 반전)로 인해
+    /// before 대비 달라졌다(예: 2809885105 의 시계 위젯 우상단→우하단 이동). "무회귀"로 오독 금지.
     static func puppetVertices(model: PuppetModel, positions: [SIMD3<Float>],
                                origin: Vec2, scale: Vec2, angleZ: Float,
                                projW: Float, projH: Float) -> [SIMD4<Float>] {
@@ -564,7 +596,7 @@ extension SceneRenderer {
             let i = Int(idx)
             guard i < positions.count else { continue }
             let p = positions[i]
-            let lx = p.x * scale.x, ly = -p.y * scale.y
+            let lx = p.x * scale.x, ly = p.y * scale.y
             let sx = origin.x + lx * ca - ly * sa
             let sy = origin.y + lx * sa + ly * ca
             let ndc = pxToNDC(sx, sy, projW: projW, projH: projH)
@@ -573,17 +605,18 @@ extension SceneRenderer {
         return out
     }
 
-    /// attachment 씬공간 델타 D = P∘(Y·A·Y)∘P⁻¹ — 베이크된 자식 월드에 곱하면
-    /// childWorld(t) = P∘A(t)∘childLocal (P=부모 월드 T(o)·R(a)·S(s), 씬 y-down; A=부착점 프레임 4x4,
-    /// 퍼펫 모델공간 y-up; Y=diag(1,−1) 축 켤레). 반환 (m,t): p′ = m·p + t. 부모 스케일 퇴화(≈0) → nil.
+    /// attachment 씬공간 델타 D = P∘A∘P⁻¹ — 베이크된 자식 월드에 곱하면
+    /// childWorld(t) = P∘A(t)∘childLocal (P=부모 월드 T(o)·R(a)·S(s); A=부착점 프레임 4x4).
+    /// W1-yaxis: 씬도 이제 y-up 이라 모델 y-up 과 일치 — 구 Y-켤레(Y=diag(1,−1))가 항등이 되어
+    /// 제거(puppetVertices 의 부호 제거와 짝 — 한쪽만 바꾸면 부착물이 퍼펫 몸체에서 분리된다).
+    /// 반환 (m,t): p′ = m·p + t. 부모 스케일 퇴화(≈0) → nil.
     static func attachmentSceneDelta(frame A: simd_float4x4,
                                      parentOrigin po: SIMD2<Float>, parentScale ps: SIMD2<Float>,
                                      parentAngle pa: Float) -> (m: simd_float2x2, t: SIMD2<Float>)? {
         guard abs(ps.x) > 1e-6, abs(ps.y) > 1e-6 else { return nil }
-        // Y 켤레: 모델 y-up 2D 블록 → 씬 y-down (비대각 성분 부호 반전, 평행이동 y 반전).
-        let FL = simd_float2x2(SIMD2(A.columns.0.x, -A.columns.0.y),
-                               SIMD2(-A.columns.1.x, A.columns.1.y))
-        let Ft = SIMD2(A.columns.3.x, -A.columns.3.y)
+        let FL = simd_float2x2(SIMD2(A.columns.0.x, A.columns.0.y),
+                               SIMD2(A.columns.1.x, A.columns.1.y))
+        let Ft = SIMD2(A.columns.3.x, A.columns.3.y)
         let ca = cos(pa), sa = sin(pa)
         let PL = simd_float2x2(SIMD2(ca * ps.x, sa * ps.x), SIMD2(-sa * ps.y, ca * ps.y))
         let m = PL * FL * PL.inverse
@@ -714,12 +747,14 @@ extension SceneRenderer {
 
     /// F721(S-12): ortho(2D) 씬에 인터리브된 3D 메시 런. acc 를 load 하는 별도 패스(뎁스 부착)로
     /// 메시를 그린 뒤 2D 인코더를 재개한다(runFrameBufferLayer 와 같은 인코더 분할 패턴).
-    /// 투영: 2D v_main 과 같은 픽셀→NDC 직교 매핑(x_ndc=(2x/W−1)·aspectScale.x, y_ndc=(1−2y/H)·aspectScale.y)
-    /// + z 는 ±F 대칭 클립(z 클수록 앞 — 오브젝트 z 양수가 화면 앞). 씬 픽셀 좌표계를 2D 레이어와
-    /// 공유하므로 같은 화면 위치에 놓인다(실물 3354366708: 그룹 origin (1920,1080) = 화면 중앙).
-    /// 프런트 와인딩: 이 직교행렬의 det 부호는 perspective 경로와 반대(encode3D=CCW → 여기선 CW) —
-    /// 같은 메시 와인딩에서 동일 면이 컬링된다. 섀도우는 미지원(ortho 검증 부재, 스코프 밖) —
-    /// 라이트는 resolveLights/packLights 를 3D 경로와 동일하게 해석(ortho 씬 라이트는 같은 씬 픽셀 공간).
+    /// 투영: 2D v_main 과 같은 픽셀→NDC 직교 매핑(W1-yaxis: x_ndc=(2x/W−1)·aspectScale.x,
+    /// y_ndc=(2y/H−1)·aspectScale.y — pxToNDC 와 동일 y-up 부호) + z 는 ±F 대칭 클립(z 클수록
+    /// 앞 — 오브젝트 z 양수가 화면 앞). 씬 픽셀 좌표계를 2D 레이어와 공유하므로 같은 화면 위치에
+    /// 놓인다(실물 3354366708: 그룹 origin (1920,1080) = 화면 중앙).
+    /// 프런트 와인딩(W1-yaxis): sy 부호가 y-down→y-up 으로 바뀌며 이 직교행렬의 det 부호도 뒤집혀
+    /// perspective 경로(encode3D=CCW)와 이제 같은 부호가 된다 — CW→CCW 로 동반 전환(종전엔 sy 의
+    /// 구 부호 때문에 반대라 CW 였음). 섀도우는 미지원(ortho 검증 부재, 스코프 밖) — 라이트는
+    /// resolveLights/packLights 를 3D 경로와 동일하게 해석(ortho 씬 라이트는 같은 씬 픽셀 공간).
     func runOrtho3DMeshes(_ meshIndices: [Int], acc: MTLTexture, cb: MTLCommandBuffer,
                           ending enc: MTLRenderCommandEncoder, device: MTLDevice, time: Float,
                           aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
@@ -751,17 +786,19 @@ extension SceneRenderer {
         rpd.depthAttachment.storeAction = needsStore ? .store : .dontCare
         guard var menc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return nil }
         // 직교 투영: z_ndc = 0.5 − z/(2F). F 는 WE ortho 기본 farz 와 같은 대칭 클립(오브젝트 z ≈ ±수백).
+        // W1-yaxis: sy/평행이동 y 를 pxToNDC 와 동일 부호(y-up)로 반전.
         let F: Float = 10000
         let sx = 2 / max(1, projW) * aspectScale.x
-        let sy = -2 / max(1, projH) * aspectScale.y
+        let sy = 2 / max(1, projH) * aspectScale.y
         var proj = simd_float4x4(columns: (
             SIMD4<Float>(sx, 0, 0, 0),
             SIMD4<Float>(0, sy, 0, 0),
             SIMD4<Float>(0, 0, -1 / (2 * F), 0),
-            SIMD4<Float>(-1, 1, 0.5, 1)))
+            SIMD4<Float>(-1, -1, 0.5, 1)))
         // camerashake/camera-origin 팬: 2D 레이어와 같은 화면 병진(clipTranslation — encode3D 와 동일 기법).
         if frameShakeOffset != .zero { proj = Scene3DMath.clipTranslation(frameShakeOffset) * proj }
-        menc.setFrontFacing(.clockwise)
+        // W1-yaxis: sy 부호 반전으로 det 부호가 perspective 경로와 같아져 CCW 로 동반 전환.
+        menc.setFrontFacing(.counterClockwise)
         // 월드행렬 입력(노드 계층) + 라이팅 바인드(섀도우 없음 — identity 행렬/nil 텍스처).
         var nmap: [Int: Scene3DMath.Node] = [:]
         nmap.reserveCapacity(nodes3D.count)
@@ -821,7 +858,7 @@ extension SceneRenderer {
                     nextRPD.depthAttachment.storeAction = needsStore ? .store : .dontCare
                     guard let nextMenc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return nil }
                     menc = nextMenc
-                    menc.setFrontFacing(.clockwise)
+                    menc.setFrontFacing(.counterClockwise)
                     bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                                         shadowMatrices: noShadow, shadowTexture: nil, into: menc)
                     if let snap {
@@ -864,7 +901,7 @@ extension SceneRenderer {
                     nextRPD.depthAttachment.storeAction = needsStore ? .store : .dontCare
                     guard let nextMenc = cb.makeRenderCommandEncoder(descriptor: nextRPD) else { return nil }
                     menc = nextMenc
-                    menc.setFrontFacing(.clockwise)
+                    menc.setFrontFacing(.counterClockwise)
                     bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                                         shadowMatrices: noShadow, shadowTexture: nil, into: menc)
                     if let snap {

@@ -16,7 +16,8 @@ import Foundation
 /// 좌표 변환(view.convert, pointerSceneCoords → sceneCoords)은 화면·윈도우 물리 좌표(AppKit
 /// 하단원점, CALayer 와 무관) 기반이라 전혀 건드리지 않는다 — 시각이 바로잡히면 클릭 역매핑도
 /// 수학적으로 함께 정합된다(별도 보정 불요, sceneCoords 의 "뷰 좌표(AppKit 하단원점) → 씬 픽셀
-/// (WE 상단원점)" 가정이 애초에 isGeometryFlipped=false 표준 프레젠트를 전제하기 때문).
+/// (W1-yaxis: WE 도 하단원점/y-up)" 매핑이 애초에 isGeometryFlipped=false 표준 프레젠트를
+/// 전제하기 때문 — 이 독립성 자체는 씬 y 규약과 무관해 W1-yaxis 로 변경되지 않음).
 ///
 /// macOS 14(프로젝트 최소 타깃)~15 는 video/web 이 정상이고 이 회귀의 필드 보고가 없어 정상으로
 /// 추정하나 실기기로 확증하지는 못했다 — 무조건 flip 은 만약 14/15 가 실은 정상이었다면 그걸
