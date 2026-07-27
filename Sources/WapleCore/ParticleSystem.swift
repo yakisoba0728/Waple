@@ -446,8 +446,18 @@ public struct ParticleSystemDef: Equatable {
                                           max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255),
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "alpharandom":
-                // C4-(i): min/max 부재 시 WE 실기본값은 0,0(불투명 아님 — bokeh 백화 원인).
-                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 0, max: pfloat(i["max"]) ?? 0,
+                // W2-① 원복: 032b66d(부재 기본값 1→0)를 되돌린다. 같은 파스 스위치의 관례상
+                // 부재 기본값은 항상 "중립값"이다 — colorrandom??(255,255,255)(최대), velocity/
+                // rotationrandom??0. 알파의 중립은 1(불투명)이며 0(완전 투명)이 아니다.
+                // 반증: wind-blur.json {"min":0.8}(max 부재)이 ??0 이면 역전 구간 [0,0.8]이 되어
+                // 저작 의도([0.8,1])와 반대로 감광된다. 3257043844(SakuraFront 단일 파티클계,
+                // min/max 둘 다 부재)는 WE 프리뷰에 꽃잎이 명확히 보이는데 ??0 이면
+                // initialAlpha=0 → alphafade 곱으로 전 파티클이 완전 투명해져 모순.
+                // 032b66d 근거였던 "3416122407 프리뷰에 bokeh 없음"은 무효 — 그 프리뷰엔
+                // fireworks/stars/butterflies/birds/leaves 도 안 보이는데 이는 알파 0이 아니라
+                // 해당 레이어들이 프로퍼티로 꺼져 있다는 증거다. bokeh 백화의 진범은 미구현
+                // overbright(halo_2_* 머티리얼의 overbright:0.25 + additive)였고 W2-②가 해소했다.
+                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "velocityrandom":
                 inits.append(.velocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),

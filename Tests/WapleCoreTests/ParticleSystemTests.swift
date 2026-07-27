@@ -257,14 +257,18 @@ final class ParticleSystemTests: XCTestCase {
     }
 
     /// C4-(i): alpharandom min/max 부재 → WE 실기본값 0,0(bokeh 백화 원인 — 종전 ??1 은 불투명 고정).
-    func testAlphaRandomMissingMinMaxDefaultsToZero() {
+    /// W2-① 원복: 032b66d(부재 기본값 1→0)를 되돌렸다 — 부재 시 알파는 중립값 1(불투명)이어야
+    /// 한다. min-only(예: wind-blur.json {"min":0.8})가 ??0 이면 역전 구간 [0,0.8]이 되어 저작
+    /// 의도([0.8,1])와 반대가 되고, 양쪽 부재(3257043844 SakuraFront 등)가 ??0 이면 파티클이
+    /// alphafade 곱으로 완전 투명해져 WE 프리뷰(꽃잎 가시)와 모순된다.
+    func testAlphaRandomMissingMinMaxDefaultsToOne() {
         let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"alpharandom"}]}"#), material: nil)
-        XCTAssertTrue(d.initializers.contains(.alphaRandom(min: 0, max: 0, exponent: 1)))
+        XCTAssertTrue(d.initializers.contains(.alphaRandom(min: 1, max: 1, exponent: 1)))
     }
 
-    /// C4-(i) 이어서: 기본값 변경(1→0)이 "알파만" 바뀌고 그 뒤를 잇는 다른 랜덤 이니셜라이저의 RNG
-    /// 시퀀스는 건드리지 않는지 확인 — alpharandom 은 min==max(고정폭)라 부재/명시 0,0 모두 동일하게
-    /// 드로우를 소비한다(스킵 아님). 이후 velocityrandom 결과가 두 케이스에서 동일해야 "값만" 바뀐
+    /// 위 원복이 "알파만" 바뀌고 그 뒤를 잇는 다른 랜덤 이니셜라이저의 RNG 시퀀스는 건드리지
+    /// 않는지 확인 — alpharandom 은 min==max(고정폭)라 부재/명시 1,1 모두 동일하게 드로우를
+    /// 소비한다(스킵 아님). 이후 velocityrandom 결과가 두 케이스에서 동일해야 "값만" 바뀐
     /// 표적 수정임이 증명된다(RNG 캐스케이드가 있었다면 이후 값이 갈렸을 것).
     func testAlphaRandomDefaultChangeDoesNotShiftDownstreamRNG() throws {
         func lastVelocity(alphaJSON: String) throws -> SIMD3<Float> {
@@ -279,10 +283,10 @@ final class ParticleSystemTests: XCTestCase {
             return try XCTUnwrap(simulator.step(0).first).vel
         }
         let omitted = try lastVelocity(alphaJSON: #"{"name":"alpharandom"},"#)
-        let explicitZero = try lastVelocity(alphaJSON: #"{"name":"alpharandom","min":0,"max":0},"#)
-        XCTAssertEqual(omitted.x, explicitZero.x, accuracy: 1e-6)
-        XCTAssertEqual(omitted.y, explicitZero.y, accuracy: 1e-6)
-        XCTAssertEqual(omitted.z, explicitZero.z, accuracy: 1e-6)
+        let explicitOne = try lastVelocity(alphaJSON: #"{"name":"alpharandom","min":1,"max":1},"#)
+        XCTAssertEqual(omitted.x, explicitOne.x, accuracy: 1e-6)
+        XCTAssertEqual(omitted.y, explicitOne.y, accuracy: 1e-6)
+        XCTAssertEqual(omitted.z, explicitOne.z, accuracy: 1e-6)
     }
 
     // F188: drag 파싱 — movement 의 선형 drag(:497-498행)와 대칭. 실물 45/47 회귀·2/47 drag 실사용.
