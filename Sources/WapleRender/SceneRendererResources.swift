@@ -1581,14 +1581,19 @@ extension SceneRenderer {
         case "right": x0 = g.def.origin.x - w
         default: x0 = g.def.origin.x - w / 2
         }
+        // W1-yaxis: y0 은 항상 "박스의 작은 쪽 scene-y"(y0+h 가 큰 쪽) — top/bottom 케이스는
+        // quadVertices/alignedCenter 의 새 y-up 부호(top→+hh, bottom→−hh)와 정합하도록 스왑
+        // (textAlignmentString 주석의 "정확히 일치" 불변 유지 — encodeText 의 애니 재계산 경로가
+        // quadVertices 를 그대로 쓰므로 이 정적 경로도 같은 관례를 따라야 함).
         let y0: Float
         switch g.def.verticalAlign {
-        case "top": y0 = g.def.origin.y
-        case "bottom": y0 = g.def.origin.y - h
+        case "top": y0 = g.def.origin.y - h
+        case "bottom": y0 = g.def.origin.y
         default: y0 = g.def.origin.y - h / 2
         }
-        let tl = sceneToNDC(x0, y0), tr = sceneToNDC(x0 + w, y0)
-        let br = sceneToNDC(x0 + w, y0 + h), bl = sceneToNDC(x0, y0 + h)
+        // uv(0,0) 이 화면 위쪽(scene-y 큰 쪽 = y0+h)에 오도록 quadVertices 와 동형으로 재페어링.
+        let tl = sceneToNDC(x0, y0 + h), tr = sceneToNDC(x0 + w, y0 + h)
+        let br = sceneToNDC(x0 + w, y0), bl = sceneToNDC(x0, y0)
         let verts: [SIMD4<Float>] = [
             SIMD4(tl.x, tl.y, 0, 0), SIMD4(tr.x, tr.y, 1, 0), SIMD4(br.x, br.y, 1, 1),
             SIMD4(tl.x, tl.y, 0, 0), SIMD4(br.x, br.y, 1, 1), SIMD4(bl.x, bl.y, 0, 1),
