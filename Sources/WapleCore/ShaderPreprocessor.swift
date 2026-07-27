@@ -29,6 +29,16 @@ public enum ShaderPreprocessor {
         // HLSL_SM30(구형 SM3.0 텍스처 채널 워크어라운드)는 대상 밖이라 주입하지 않는다(정상 폴백 유지).
         defines["HLSL"] = 1
         defines["HLSL_SM40"] = 1
+        // S2-shaderlab②(정정): WE 는 HLSL/HLSL_SM40 외 SHADERVERSION 도 시딩한다 — wallpaper64.exe 를
+        // 직접 hexdump 확인(`xxd -s 0x48BF38 -l 64`): 실제 파일 오프셋 0x48BF38 에 "SHADERVERSION",
+        // 0x48BF48 에 "69"(뒤이어 ifndef/ifdef/define/elif/if/endif 지시문 키워드 풀 — 메모리의
+        // SHDV0069 와도 일치). 미시딩 시 실물 소비처 assets/shaders/generic3.frag:83,
+        // genericimage3.frag:88 의 `#if SHADERVERSION < 62` 가 undefined→0 평가로 항상 참이 되어
+        // 구형 PerformLighting_Deprecated 분기를 고른다(WE 는 69<62=false 로 최신 분기).
+        // 로컬 코퍼스(backgrounds/ 460씬) 실측: LIGHTS_POINT/SPOT/TUBE/DIRECTIONAL 콤보 참조 0건 —
+        // 콤보가 없으면 두 분기 내부의 `#if LIGHTS_*` 서브블록이 양쪽 다 사라져 `vec3 light = CAST3(0);
+        // return light;` 로 텍스트 동일 → 오늘 시점 렌더 무변화, WE 정합만 개선(장래 라이트 콤보 지원 대비).
+        defines["SHADERVERSION"] = 69
         // WE 컴파일러 내장 캐스트 매크로(헤더에 없음 — 실물 depthparallax 의 CAST3X3 등).
         // 소스가 자체 정의하면 그것이 우선(아래 builtinCasts 는 부재 시에만 주입).
         // [COMBO] 기본값(명시 combos 가 없을 때만 채움)
@@ -36,9 +46,14 @@ public enum ShaderPreprocessor {
         var included = inlineIncludes(source, include: include, depth: 0)
         // CAST3X3(mat4) 는 GLSL 에선 상단 3x3 절단이지만 MSL 엔 float3x3(float4x4) 생성자가 없다 —
         // 번역기 프리앰블의 오버로드 헬퍼 we_cast3x3(절단/통과) 로 위임(실물 depthparallax).
-        // S2-shaderlab①: WE 바이너리 임베디드 셰이더 shim(0x486bf6-0x486cec, WE-ENGINE-ANALYSIS §5) 전수 —
-        // CASTI/CASTU/CASTF/CAST4U 4 종이 기존 목록에 없었다(model_vertex_v1.h 의 MORPHING 모프타깃 블렌딩이
-        // 소비 — 현재 Waple 은 MORPHING 콤보를 절대 세우지 않아 실사용 경로는 죽어 있지만, 완전성 갭은 실재).
+        // S2-shaderlab①(정정): WE 바이너리 임베디드 셰이더 shim(strings 파일 오프셋 0x486bf6-0x486cec —
+        // 실제 파일 오프셋으로 보려면 +0xD0 보정 필요, WE-ENGINE-ANALYSIS §5) 전수 대조 결과 CASTI/
+        // CASTU/CASTF/CAST4U 4 종이 기존 목록에 없었다. WE shim 은 이 4종 + 기존 CAST2/CAST3/CAST4/
+        // CAST3X3 총 8종뿐 — 아래 CAST2X2/CAST4X4 는 WE shim 에 없는 로컬 추가(무해한 상위집합)라
+        // 우리 주입 목록 = WE 8종 ∪ 로컬 2종. 실사용처(로컬 코퍼스 전수 실측): CASTU 69회·CASTF 12회
+        // (model_vertex_v1.h 모프타깃 블렌딩 + generic3/genericimage3 라이팅 루프 `CASTU(LIGHTS_POINT)`
+        // 등 양쪽) — CASTI·CAST4U 는 전 셰이더 자산 0회(4종 모두가 MORPHING 소비라는 서술은 부정확,
+        // 완전성 갭이 실재해 4종 다 주입은 유지).
         // CASTU/CASTI/CASTF 는 스칼라라 MSL 생성자 스펠링이 GLSL 과 동일(uint/int/float) — 별도 치환 불요.
         // CAST4U(x)=((uint4)(x)) 는 HLSL/MSL 공통 스펠링(uint4)이라 vecN 계열과 달리 typeAndMacroRenames
         // 경유 없이 바로 유효.

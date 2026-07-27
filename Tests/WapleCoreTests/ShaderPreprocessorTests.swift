@@ -331,7 +331,9 @@ final class ShaderPreprocessorTests: XCTestCase {
 
     // S2-shaderlab①: WE 바이너리 임베디드 shim 전수(CASTI/CASTU/CASTF/CAST2/CAST3/CAST4U/CAST4/CAST3X3) 중
     // CASTI/CASTU/CASTF/CAST4U 는 종전 주입 목록에 없어 사용 시 미확장 그대로 방출(→ MSL 컴파일 실패)됐다.
-    // model_vertex_v1.h 의 모프타깃 블렌딩(morphMapIndex % CASTU(...) 등)이 실물 소비처.
+    // 실사용처(정정): CASTU/CASTF 는 model_vertex_v1.h 모프타깃 블렌딩(morphMapIndex % CASTU(...) 등) +
+    // generic3/genericimage3 라이팅 루프 양쪽에서 실측(69회/12회) — CASTI/CAST4U 는 로컬 코퍼스 0회지만
+    // 완전성 갭 해소를 위해 동일하게 주입한다.
     func testCastIUFAndCast4UMacrosExpand() {
         let src = """
         void main() {
@@ -373,6 +375,40 @@ final class ShaderPreprocessorTests: XCTestCase {
         let outBoth = ShaderPreprocessor.preprocess(both, combos: [:])
         XCTAssertTrue(outBoth.contains("uint4 a = ((uint4)(1));"), outBoth)
         XCTAssertTrue(outBoth.contains("vec4 b = vec4(2.0);"), outBoth)
+    }
+
+    // MARK: - S2-shaderlab②(정정): SHADERVERSION 시딩
+
+    /// 실물 generic3.frag:83/genericimage3.frag:88 패턴(`#if SHADERVERSION < 62`) — WE 는 69 를 시딩해
+    /// 최신(`#else`) 분기를 고른다. 두 분기 모두 동일한 함수명(`PerformLighting_Deprecated`)을 정의하는
+    /// 실물 구조라 함수명 존재 여부로는 분기를 구분할 수 없다 — 분기별 고유 마커로 판별해야 한다.
+    func testShaderVersionSeededSelectsModernBranchOverDeprecated() {
+        let src = """
+        #if SHADERVERSION < 62
+        markerDeprecated
+        #else
+        markerModern
+        #endif
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("markerModern"),
+                      "SHADERVERSION 미시딩 — 69<62=false 인 최신 분기가 선택돼야: \(out)")
+        XCTAssertFalse(out.contains("markerDeprecated"), out)
+    }
+
+    /// 본문 텍스트 치환(#if 평가와 별개 경로) — 소스가 SHADERVERSION 값을 직접 읽는 경우도 69 로 치환돼야 한다.
+    func testShaderVersionSubstitutedAsSixtyNineInBody() {
+        let out = ShaderPreprocessor.preprocess("int v = SHADERVERSION;", combos: [:])
+        XCTAssertTrue(out.contains("int v = 69;"), out)
+    }
+
+    /// scene.json 콤보가 명시적으로 SHADERVERSION 을 지정해도(비정상 입력이나 방어) 엔진 확정값(69)이
+    /// 이긴다 — HLSL 과 동일하게 combos 보다 나중에 강제 대입되므로 항상 69.
+    func testShaderVersionCannotBeOverriddenByCombos() {
+        let out = ShaderPreprocessor.preprocess("#if SHADERVERSION < 62\nold\n#else\nnew\n#endif",
+                                                 combos: ["SHADERVERSION": 1])
+        XCTAssertTrue(out.contains("new"), out)
+        XCTAssertFalse(out.contains("old"), out)
     }
 
     // S2-shaderlab: 단어 경계 헬퍼 자체의 직접 단위 검증.
