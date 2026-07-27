@@ -424,11 +424,15 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 
-    /// 씬 픽셀 좌표(좌상단 원점, y-down) → NDC(-1..1, y-up). px→NDC 변환의 단일 정의 —
-    /// 파티클/리본/쿼드/퍼펫/텍스트 경로가 공유(동일식 5중 중복 제거, 2026-07-04).
+    /// W1-yaxis: 씬 픽셀 좌표(좌하단 원점, y-up — WE 전 씬 규약, RenderDoc 골든 3397690043 실측
+    /// 확정) → NDC(-1..1, y-up). px→NDC 변환의 단일 정의 — 파티클/리본/쿼드/퍼펫/텍스트 경로가 공유
+    /// (동일식 5중 중복 제거, 2026-07-04). 종전엔 y-down(`1 − y/H·2`)으로 오구현 — 부호만 반전하면
+    /// 위치는 고치지만 각 호출부의 로컬 지오메트리(quadVertices 코너 uv 페어링, alignedCenter
+    /// top/bottom, ortho 모델 y-basis 등)가 "콘텐츠 상하반전"을 새로 유발하므로 해당 파생 지점은
+    /// 각자 별도 보정(이 함수 자체는 이 한 줄만 변경 — 회전은 자동 정합, 켤레 켤레 상쇄).
     @inline(__always)
     static func pxToNDC(_ x: Float, _ y: Float, projW: Float, projH: Float) -> SIMD2<Float> {
-        SIMD2(x / projW * 2 - 1, 1 - y / projH * 2)
+        SIMD2(x / projW * 2 - 1, y / projH * 2 - 1)
     }
 
     /// pxToNDC 의 인스턴스 프로젝션 크기(projW/projH) 버전.
@@ -441,16 +445,17 @@ extension SceneRenderer {
     ///   left/right → 앵커가 좌/우변(사각형은 반대쪽으로 뻗음), top/bottom → 상/하변, center=중심.
     /// effectiveCenter = origin − rotate(alignX,alignY) 이므로 기존 코너식(rotate(local)+center)·
     /// litRect 셰이더 재구성(center 가정)이 수식 변경 없이 그대로 앵커 정렬을 재현한다(회전 선형성).
-    /// y-down 씬픽셀: top=−hh(위=y작음)·bottom=+hh·left=−hw·right=+hw. center/미지정=이동 0(무회귀).
+    /// W1-yaxis: y-up 씬픽셀(위=y큼): top=+hh·bottom=−hh(종전 y-down 부호의 반대) · left=−hw·right=+hw
+    /// (x 는 y-flip 과 무관해 불변). center/미지정=이동 0(무회귀).
     @inline(__always)
     static func alignedCenter(origin: Vec2, alignment: String, hw: Float, hh: Float, ca: Float, sa: Float) -> Vec2 {
         let ax: Float = alignment.contains("left") ? -hw : (alignment.contains("right") ? hw : 0)
-        let ay: Float = alignment.contains("top") ? -hh : (alignment.contains("bottom") ? hh : 0)
+        let ay: Float = alignment.contains("top") ? hh : (alignment.contains("bottom") ? -hh : 0)
         if ax == 0 && ay == 0 { return origin }  // center/미지정: 중심 그대로(무회귀)
         return Vec2(x: origin.x - (ax * ca - ay * sa), y: origin.y - (ax * sa + ay * ca))
     }
 
-    /// 씬 픽셀 좌표(좌상단 원점, Y-down 가정) → NDC. Y-flip은 Task 7에서 실측 보정.
+    /// 씬 픽셀 좌표(좌하단 원점, W1-yaxis: y-up 확정) → NDC.
     static func quadVertices(layer: SceneLayer, projW: Float, projH: Float) -> [SIMD4<Float>] {
         quadVertices(origin: layer.origin, size: layer.size, scale: layer.scale, angleZ: layer.angleZ,
                      alignment: layer.alignment, projW: projW, projH: projH,
@@ -471,8 +476,11 @@ extension SceneRenderer {
             return SIMD2<Float>(c.x + rx, c.y + ry)
         }
         func ndc(_ p: SIMD2<Float>) -> SIMD2<Float> { Self.pxToNDC(p.x, p.y, projW: projW, projH: projH) }
-        let tl = ndc(corner(-hw, -hh)), tr = ndc(corner(hw, -hh))
-        let br = ndc(corner(hw, hh)), bl = ndc(corner(-hw, hh))
+        // W1-yaxis: pxToNDC 가 이제 y-up(큰 scene-y → 화면 위)이므로, uv(0,0)=텍스처 상단이 화면
+        // 위쪽에 오려면 로컬 ly=+hh(큰 y) 코너를 "tl/tr" 로 써야 한다(종전 −hh 는 이제 시각적 하단).
+        // hw/x 축은 y-flip 과 무관해 그대로 — 코너 4점의 SET 은 불변(재라벨링만, 회전/와인딩 무영향).
+        let tl = ndc(corner(-hw, hh)), tr = ndc(corner(hw, hh))
+        let br = ndc(corner(hw, -hh)), bl = ndc(corner(-hw, -hh))
         // M4: perspective=true 레이어 원근 투영 근사 — FOV 기반 상단 축소(코퍼스 x/y angles=0 이라
         // 정사영과 출력 동일, 후속 진짜 원근 구현 시 제거).
         if perspective {
@@ -547,7 +555,9 @@ extension SceneRenderer {
         let a = angleZ   // A1: scene.json angles 는 이미 라디안(코퍼스 전부 ≤π 확정) — 종전 *.pi/180 은 라디안을 도로 오인해 회전 57× 축소
         let ca = cos(a), sa = sin(a)
         let c = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
-        return (SIMD4(c.x, c.y, hw, hh), SIMD4(ca, sa, originZ, 0))
+        // W1-yaxis: f_lit(QuadShaders.swift, 불변)의 `ly = (uv.y*2-1)*rect[0].w` 역산이 quadVertices 의
+        // 새 uv/코너 페어링(uv.y=0 → ly=+hh)과 맞으려면 −hh 를 패킹해야 한다(셰이더 소스 자체는 불변).
+        return (SIMD4(c.x, c.y, hw, -hh), SIMD4(ca, sa, originZ, 0))
     }
 
     /// 퍼펫 스킨 정점 → NDC 삼각형 리스트(quadVertices 와 동일 규약: 씬 픽셀 y-down, uv 그대로).
