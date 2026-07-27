@@ -26,6 +26,14 @@ final class SingleSceneProbeTests: XCTestCase {
         if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
             BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)
         }
+        // S4①(2026-07-27): 이 프로브는 코드 변경 A/B(두 태그를 뒤이어 캡처해 diff)가 주 용도인데, JS Date 를
+        // 핀하지 않으면 hours 조건부/timeOfDay 씬은 두 캡처 사이에 흐른 실제 벽시계 시간(및 그 순간의 시스템
+        // TZ)만으로도 픽셀이 갈려 코드 변경 유무와 무관한 diff 를 낼 수 있었다 — SnapshotPipeline 과 동일
+        // 상수로 핀(WAPLE_PROBE_EPOCH_MS 로 다른 순간을 의도적으로 프로브하고 싶을 때만 재지정).
+        let oldEpoch = TextScriptEngine.captureDateEpochMillis
+        let epoch = Double(ProcessInfo.processInfo.environment["WAPLE_PROBE_EPOCH_MS"] ?? "") ?? 1_704_110_400_000
+        TextScriptEngine.captureDateEpochMillis = epoch
+        defer { TextScriptEngine.captureDateEpochMillis = oldEpoch }
         let out = URL(fileURLWithPath: "/tmp/waple_probe")
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let project = try ProjectJSONParser.parse(folderURL: folder)

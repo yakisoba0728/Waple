@@ -26,6 +26,11 @@ final class ThreeDV3CaptureTests: XCTestCase {
         if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
             BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)
         }
+        // S4①(2026-07-27): 형제 하네스(SingleSceneProbeTests)와 동일 사유 — 시각 캡처는 재실행/태그 간
+        // A/B 판정용이라 JS Date 미핀 시 실 벽시계(및 시스템 TZ)가 diff 에 섞일 수 있다.
+        let oldEpoch = TextScriptEngine.captureDateEpochMillis
+        TextScriptEngine.captureDateEpochMillis = 1_704_110_400_000   // 2024-01-01 12:00:00 UTC
+        defer { TextScriptEngine.captureDateEpochMillis = oldEpoch }
         let out = URL(fileURLWithPath: "/tmp/waple_3dv3")
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let tag = ProcessInfo.processInfo.environment["WAPLE_3DV3_TAG"] ?? ""
