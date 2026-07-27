@@ -968,14 +968,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var nodes3D: [Node3D] = []                 // scene order(계층 합성 입력)
     var meshRenderables: [MeshRenderable] = []
     var billboards: [Billboard3D] = []
-    /// billboards[i] 의 원본 SceneLayer(록스텝 — build3D 가 같은 지점에서 append).
-    /// 이벤트 마커 타임라인(def.animations 의 options.events — 젤다 눈꺼풀 blink 등) 결속용.
+    /// billboards[i] 의 원본 SceneLayer(록스텝 — build3D 가 같은 지점에서 append). 이벤트 마커 타임라인
+    /// (def.animations 의 options.events — 젤다 눈꺼풀 blink 등) 결속용. W-①: 이미지 빌보드(선행) 뒤에
+    /// build3D 가 텍스트 빌보드도 billboards 에 append 하지만(3D 씬 text 배선) billboardDefs 엔 대응
+    /// 항목이 없다(SceneLayer 가 없음, internal init) — billboards.count > billboardDefs.count 가 그 구간만
+    /// 유효한 의도된 불변식 이완이며, 소비부(:443 근방)는 `i < billboardDefs.count` 가드로 안전.
     var billboardDefs: [SceneLayer] = []
-    /// 3D 씬 text 오브젝트의 스크립트 컨트롤러(shared 사이드이펙트 전용 — 렌더 미배선).
+    /// 3D 씬 text 오브젝트의 스크립트 컨트롤러(shared 사이드이펙트 재평가 + 텍스트 갱신용 last 보관).
     /// 실물 3470948192: text id=181 이 shared.vvv 를 세팅하고 Hollow Cylinder 스케일 스크립트가 소비
     /// (미실행 시 vvv 미정의 → 스케일 NaN → 워프 튜너 소실). 2D buildTexts 와 동일하게 엔진 로드(top-level
-    /// + shared 통신)하되, 3D 텍스트의 스크린 오버레이 위치/크기 규약이 미확정이라 픽셀 렌더는 미배선.
-    /// (last 는 evaluate(current:) 재평가 입력 — 시계 등 값 구동 스크립트의 이전 표시값).
+    /// + shared 통신). W-①: 픽셀 렌더도 이제 배선됨(billboards 에 append, world placement 정본 확정) —
+    /// 여기 last 는 build3D 의 F309 프라이밍이 확정한 콘텐츠 문자열(텍스트 빌보드 최초 래스터 입력)이자,
+    /// 이후 evaluate(current:) 재평가 입력(시계 등 값 구동 스크립트의 이전 표시값 — 동적 재래스터는 후속 과제).
     var text3DControllers: [(engine: TextScriptEngine, last: String)] = []
     /// per-frame 스크립트 평가 순서(씬 order — 컨트롤러(Main)가 이를 읽는 스크립트보다 먼저 실행).
     /// (order, isBillboard, idx). 스크립트 없는 노드/빌보드는 제외.
