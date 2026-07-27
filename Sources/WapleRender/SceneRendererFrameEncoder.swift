@@ -90,7 +90,9 @@ extension SceneRenderer {
         func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { let p = sceneToNDC(x, y); return (p.x, p.y) }
         func appendQuad(_ p: Particle, stretch: Float = 1, angleOverride: Float? = nil) {
             let wx = sys.origin.x + sys.scale.x * p.pos.x
-            let wy = sys.origin.y - sys.scale.y * p.pos.y
+            // W1-yaxis: 파티클 sim 로컬은 y-up(눈/비 하강=음의 y). 씬 픽셀도 이제 y-up 이라 부호
+            // 일치(종전엔 씬을 y-down 으로 오구현해 `−` 로 상쇄) — 위치·속도(아래 wvy) 동일 부호.
+            let wy = sys.origin.y + sys.scale.y * p.pos.y
             let sizePx = p.size * sys.scale.x
             // 스프라이트시트(TEXS): mapsequence 는 스폰 확정 시퀀스, 아니면 age/frametime gif 애니.
             // UV = 프레임 서브렉트의 4코너(TL,TR,BR,BL). 회전 프레임이면 코너 배정을 rotationQuarters 만큼
@@ -127,7 +129,9 @@ extension SceneRenderer {
             func ndc(_ lx: Float, _ ly: Float) -> (Float, Float) {
                 return toNDC(wx + lx * ca - ly * sa, wy + lx * sa + ly * ca)
             }
-            let tl = ndc(-hw, -hh), tr = ndc(hw, -hh), br = ndc(hw, hh), bl = ndc(-hw, hh)
+            // W1-yaxis: quadVertices 와 동형 — uv(0,0) 이 화면 위쪽에 오도록 로컬 hh 코너 재페어링
+            // (스프라이트시트 프레임처럼 비대칭 콘텐츠가 있는 파티클의 상하반전 방지).
+            let tl = ndc(-hw, hh), tr = ndc(hw, hh), br = ndc(hw, -hh), bl = ndc(-hw, -hh)
             let r = p.color.x, g = p.color.y, b = p.color.z, al = p.alpha
             func v(_ pt: (Float, Float), _ u: (Float, Float)) {
                 verts.append(contentsOf: [pt.0, pt.1, u.0, u.1, r, g, b, al])
@@ -141,7 +145,8 @@ extension SceneRenderer {
         func appendSpriteTrailQuad(_ p: Particle) {
             let speed = sqrtf(p.vel.x * p.vel.x + p.vel.y * p.vel.y)  // 씬 로컬(Y-up) — 신장 산정
             guard speed > 0.5 else { appendQuad(p); return }  // ponytail: 방향 부정 임계 0.5px/s
-            let wvx = sys.scale.x * p.vel.x, wvy = -sys.scale.y * p.vel.y  // 월드 y-down — 각도
+            // W1-yaxis: 씬 픽셀도 y-up 이라 위치(wy)와 동일 부호(종전 월드 y-down 상쇄용 `−` 제거).
+            let wvx = sys.scale.x * p.vel.x, wvy = sys.scale.y * p.vel.y
             appendQuad(p, stretch: sys.def.renderer.spriteTrailStretch(speed: speed),
                        angleOverride: atan2(wvy, wvx))
         }
@@ -169,7 +174,8 @@ extension SceneRenderer {
         // 월드 px 로 변환.
         var pts: [(Float, Float)] = []
         pts.reserveCapacity(h.count)
-        for q in h { pts.append((sys.origin.x + sys.scale.x * q.x, sys.origin.y - sys.scale.y * q.y)) }
+        // W1-yaxis: appendQuad 의 wy 와 동일 부호(씬 픽셀 y-up).
+        for q in h { pts.append((sys.origin.x + sys.scale.x * q.x, sys.origin.y + sys.scale.y * q.y)) }
         // 유효 스팬 판정: bbox 대각선이 1px 미만이면 붕괴 → 쿼드.
         guard pts.count >= 2 else { return false }
         var minX = pts[0].0, maxX = pts[0].0, minY = pts[0].1, maxY = pts[0].1
