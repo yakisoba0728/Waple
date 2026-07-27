@@ -70,6 +70,49 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertEqual(mirrorValue(renderer.billboards[1], "isFrameBuffer", as: Bool.self), true)
     }
 
+    /// W4b-③: 2D buildEffectChain 의 WAPLE_EFFECT_SKIP(파리티 이분 스위치)가 3D 빌보드 경로엔 없어서
+    /// (3706286085 전화면 흑화 이분에 pkg 물리 패치가 필요했다 — 감사 evidence) 3D 씬의 이펙트를
+    /// 이름으로 끌 방법이 없었다. 게이트 부재 자체가 결함(진단 불가) — 이름 일치 시 해당 이펙트만
+    /// 빌드에서 제외되는지, 미설정 시 종전대로 전부 빌드되는지 둘 다 확인한다.
+    func test3DBillboardEffectBuildRespectsEffectSkipEnvVar() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"camera":{"eye":"0 0 5","center":"0 0 0","up":"0 1 0"},
+         "general":{"orthogonalprojection":null,"fov":50.0,"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":2,"image":"models/solid.json","origin":"0 0 0","size":"2 2","color":"1 1 1","alpha":1,
+            "effects":[{"file":"effects/tint/effect.json","passes":[{"constantshadervalues":{"color":"1 0 0","alpha":1}}]}]}
+         ]}
+        """
+        let package = try pkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/solid.json", #"{"material":"materials/solid.json"}"#.data(using: .utf8)!),
+            ("materials/solid.json", #"{"passes":[{"shader":"flat","depthtest":"disabled","depthwrite":"disabled"}]}"#.data(using: .utf8)!),
+        ])
+        let doc = try SceneDocument.parse(package: package)
+
+        // 미설정 — 종전대로 이펙트 빌드(무회귀 베이스라인).
+        unsetenv("WAPLE_EFFECT_SKIP")
+        let baseline = SceneRenderer()
+        baseline.sceneScript = SceneScriptContext()
+        baseline.projW = Float(doc.projectionWidth)
+        baseline.projH = Float(doc.projectionHeight)
+        baseline.build3D(doc: doc, package: package, device: device)
+        XCTAssertEqual(mirrorValue(baseline.billboards[0], "effects", as: [SceneRenderer.EffectGPU].self)?.count, 1,
+                       "unset WAPLE_EFFECT_SKIP must not change existing behavior")
+
+        // 이름 일치 — 3D 경로도 2D 와 동형으로 해당 이펙트를 빌드에서 제외해야 한다.
+        setenv("WAPLE_EFFECT_SKIP", "tint", 1)
+        defer { unsetenv("WAPLE_EFFECT_SKIP") }
+        let skipped = SceneRenderer()
+        skipped.sceneScript = SceneScriptContext()
+        skipped.projW = Float(doc.projectionWidth)
+        skipped.projH = Float(doc.projectionHeight)
+        skipped.build3D(doc: doc, package: package, device: device)
+        XCTAssertEqual(mirrorValue(skipped.billboards[0], "effects", as: [SceneRenderer.EffectGPU].self)?.count, 0,
+                       "WAPLE_EFFECT_SKIP=tint must filter the named effect out of the 3D billboard build")
+    }
+
     func test3DMaterialRuntimeCompositeUsesReferencedImageTexture() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let package = try pkg([
