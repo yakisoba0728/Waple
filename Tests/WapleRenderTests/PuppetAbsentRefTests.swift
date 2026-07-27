@@ -183,6 +183,39 @@ final class PuppetAbsentRefTests: XCTestCase {
             + "(수정 전에는 def 정적 origin 을 써서 계속 밝음)")
     }
 
+    /// H1(W0a) 회귀: attachment 없는 퍼펫 레이어의 scale 프로퍼티 스크립트가 미할당 변수를 산술에
+    /// 섞어 NaN 을 만들어도(실물 3622495963 워크샵 공유 호버-스케일 스크립트: applyUserProperties 가
+    /// init 전에 던져 `speed` 가 영구 undefined 로 남고, update() 의 WEMath.mix(a,b,undefined)→NaN)
+    /// 퍼펫 스킨 메시가 통째로 사라지면 안 된다. 함정: Vec2/Vec3 shim 생성자의 `x || 0` 관용이 NaN 을
+    /// 조용히 (0,0,0) 으로 흡수해(NaN 은 falsy) TextScriptEngine.evaluateVec 의 NaN/Inf 가드를 그냥
+    /// 통과한다 — 그래서 `new Vec3(NaN,NaN,NaN)` 을 직접 반환하는 스크립트로는 이 결함을 재현할 수 없다
+    /// (shim 이 이미 세탁한 값을 받으므로). 이 테스트는 실제 결함 경로(값에 undefined 를 곱해 update()
+    /// 반환 Vec3 내부에서 NaN→0 세탁이 일어나는 형태)를 그대로 재현한다.
+    /// 실제 수정 지점은 evaluateVec 가 아니라 SceneRendererFrameEncoder 의 퍼펫 스킨 메시 배치
+    /// (effectiveTransform.scale 이 양 축 모두 0이면 def 정적 scale 로 폴백) — evaluateVec 의 NaN/Inf
+    /// 가드는 원시 NaN 이 살아남는 다른 경로(예: 스칼라 반환)에 대한 별개의 방어선이다.
+    func testScaleScriptUndefinedMultiplyDoesNotVanishPuppetMesh() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":64,"height":36},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/p.json","origin":"32 18 0","size":"64 36",
+           "scale":{"script":"let leakVar; export function update(value){ return new Vec3(value.x*leakVar, value.y*leakVar, value.z*leakVar); }","value":"1 1 1"},
+           "angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":true}]}
+        """
+        let pkgData = encodePkg([
+            ("scene.json", Data(scene.utf8)),
+            ("models/p.json", Data(#"{"material":"materials/m.json","puppet":"models/p.mdl"}"#.utf8)),
+            ("materials/m.json", Data(#"{"passes":[{}]}"#.utf8)),   // 무텍스처 → solid 흰 퍼펫 메시
+            ("models/p.mdl", singleClipPuppetMDL()),
+        ])
+        let (r, urls) = try mountAndCapture(pkgData, id: "scaleundef", times: [0.5])
+        _ = try XCTUnwrap(r.layers.first?.puppet, "합성 퍼펫이 로드돼야(픽스처 새너티)")
+        XCTAssertEqual(urls.count, 1)
+        let b = try brightness(urls[0])
+        XCTAssertGreaterThan(b, 0.9, "scale 스크립트가 미할당 변수를 곱해 NaN→(0,0,0) 세탁돼도 퍼펫 스킨 메시가 "
+            + "화면을 덮어야(원 위치 origin=화면 중앙 유지, def scale 폴백) — brightness=\(b) (가드 없으면 메시 소멸→어두움)")
+    }
+
     private func mountAndCapture(_ pkg: Data, id: String, times: [Float]) throws -> (SceneRenderer, [URL]) {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_alscript_\(id)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

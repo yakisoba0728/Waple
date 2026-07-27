@@ -1208,7 +1208,15 @@ extension SceneRenderer {
             // attachedTransform(attachment 전용) ?? def 정적값으로 떨어져, attachment 없는 퍼펫의 애니/
             // 스크립트 변환이 계산만 되고 버려졌다(6씬 398오브젝트 실측 — 감사 C② wf3#20). 애니/스크립트/
             // attachment가 전무하면 effectiveTransform == def 정적값이라 비트동일(무회귀).
-            let (po, ps, pa) = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
+            let (po, psRaw, pa) = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
+            // H1(W0a): 스크립트 산출 scale 이 양 축 모두 0(완전 퇴화)이면 def 정적 scale 로 폴백 — 스크립트가
+            // 미할당 변수를 산술에 섞어 NaN 을 만들면(예 WEMath.mix(a,b,undefined)) Vec2/Vec3 shim 생성자의
+            // `x || 0` 관용이 이를 조용히 (0,0) 으로 흡수해 evaluateVec 의 NaN/Inf 가드를 통과해버린다
+            // (실물 3622495963: 워크샵 공유 호버-스케일 스크립트가 applyUserProperties 초기화 경합으로
+            // speed 미할당 → 9레이어 치비 스프라이트가 스킨 메시 자체는 로드됐는데 화면에서 통째로 소멸).
+            // 정상 애니메이션이 스케일을 지나가는 경우는 순간적(0 근방을 스칠 뿐)이라, 캡처 시점에 정확히
+            // 양 축 모두 0으로 고정 관측되는 경우는 사실상 결함 신호로 간주해도 안전(원점/각도는 유효 변환 유지).
+            let ps = (psRaw.x == 0 && psRaw.y == 0) ? def.scale : psRaw
             let verts = SceneRenderer.puppetVertices(model: pm, positions: pos,
                                                      origin: po, scale: ps, angleZ: pa,
                                                      projW: projW, projH: projH)

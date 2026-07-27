@@ -563,20 +563,28 @@ public final class TextScriptEngine {
     }
 
     /// update({x,y,z...}) 호출 → 수치 배열(스칼라는 1개). 예외/비수치 → nil.
+    /// W0a: NaN/Inf 성분이 하나라도 있으면 전체 배열을 nil 로 fail-closed(current 유지) — 스크립트
+    /// 산술이 비유한값(0/0, 미할당 변수 곱 등)을 만들어도 이를 그대로 쓰면 지오메트리(스케일/원점/각도)가
+    /// 소멸·발산할 수 있다 — 다른 실패 경로(예외/비해석)와 동일한 계약. 단, Vec2/Vec3 shim 생성자가
+    /// `x || 0` 관용으로 NaN 을 조용히 0 으로 흡수하는 경로는 이 가드가 볼 수 없다(별도 사안).
     public func evaluateVec(current: [Float]) -> [Float]? {
         return withExceptionCapture("constant script exception") { failed -> [Float]? in
             guard let arg = vecArgument(current), !failed() else { return nil }
             let initValue = callInitIfNeeded(argument: arg)
             guard !failed() else { return nil }
+            let result: [Float]?
             if let updateFn {
                 let updateArg: Any = initValue ?? arg   // F712: init 수정값을 첫 update 의 current 로
                 guard let out = updateFn.call(withArguments: [updateArg]), !failed() else { return nil }
-                return Self.floatArray(from: out)
+                result = Self.floatArray(from: out)
+            } else {
+                // F712(S-38): update 없는 init-only 프로퍼티 스크립트(실물 3367988661 드래그 패밀리의
+                // `return localStorage.get(storageName) || thisLayer.origin`) — WE 는 init 반환값을 바운드
+                // 프로퍼티에 적용하므로 per-frame 동일값으로 서빙(매 프레임 nil 이면 정적값에 묻힌다).
+                result = Self.floatArray(from: initValue ?? initReturnValue)
             }
-            // F712(S-38): update 없는 init-only 프로퍼티 스크립트(실물 3367988661 드래그 패밀리의
-            // `return localStorage.get(storageName) || thisLayer.origin`) — WE 는 init 반환값을 바운드
-            // 프로퍼티에 적용하므로 per-frame 동일값으로 서빙(매 프레임 nil 이면 정적값에 묻힌다).
-            return Self.floatArray(from: initValue ?? initReturnValue)
+            guard let result, result.allSatisfy({ $0.isFinite }) else { return nil }
+            return result
         }
     }
 
