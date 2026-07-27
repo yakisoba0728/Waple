@@ -197,6 +197,24 @@ final class TextScriptEngineSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(e.evaluate(current: ""), "1,1,0,0.6,0.8,0")
     }
 
+    // MARK: G③ — Vec2 normalize(F705 와 동형, Vec2 에는 누락되어 있었음)
+
+    /// Vec2 에는 add~length 만 있고 normalize 가 없어 `.subtract(...).normalize()` 체이닝(커서 추종
+    /// 회전 스크립트 등)이 TypeError 로 매프레임 update 사망(실물 3477054430). Vec3.normalize(F705)와
+    /// 동일 규약(새 Vec2 반환, 영벡터는 (0,0)).
+    func testVec2Normalize() throws {
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            var n = new Vec2(3, 4).normalize();             // 길이 5 → (0.6, 0.8)
+            var zero = new Vec2(0, 0).normalize();           // 영벡터 → (0,0) (NaN 아님)
+            var chained = new Vec2(5, 5).subtract(new Vec2(1, 1)).normalize();   // 체이닝 경로(실물 패턴)
+            return [n.x, n.y, zero.x, zero.y, chained.x.toFixed(3), chained.y.toFixed(3)].join(',');
+        }
+        """, scene: scene))
+        XCTAssertEqual(e.evaluate(current: ""), "0.6,0.8,0,0,0.707,0.707")
+    }
+
     // MARK: S-42 / F706 — WEVector import 실심
 
     /// `import * as WEVector from 'WEVector'` 가 실심 바인딩 — 도(degree) 단위 왕복.
