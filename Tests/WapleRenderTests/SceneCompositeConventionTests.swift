@@ -74,6 +74,48 @@ final class SceneCompositeConventionTests: XCTestCase {
         XCTAssertLessThan(c.greenComponent, 0.2, "미지원이면 흰색(green=1)")
     }
 
+    /// B2-effects④: copybackground:false 컴포지션 레이어 — WE 실물(3629379075 "可调整组合层" blur,
+    /// copybackground:false)에서 Waple 이 이 플래그를 무시하고 항상 acc(누적 화면)를 블릿·이펙트에
+    /// 흘려 화면 전체가 이펙트(tint→빨강)로 뒤덮였다(풀프레임 워시). copybackground:false 는 acc 를
+    /// 복사하지 않고 투명에서 시작해야(WE 컴포지션 레이어의 "배경 복사 끔") 하므로 흰 배경이 그대로
+    /// 남아야 한다 — 미수정이면 testFrameBufferLayerAppliesEffectToScene 과 동형으로 화면이 빨강이 된다.
+    func testFrameBufferCopyBackgroundFalseDoesNotWashScene() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"},
+           {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
+            "copybackground":false,
+            "effects":[{"file":"effects/tint/effect.json","passes":[{"combos":{"BLENDMODE":2},
+              "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],
+            "visible":{"value":true}}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbnobg", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("models/util/fullscreenlayer.json", #"{"material":"materials/util/fullscreenlayer.json","fullscreen":true,"passthrough":true}"#.data(using: .utf8)!),
+            ("materials/util/fullscreenlayer.json", #"{"passes":[{"shader":"passthrough","textures":["_rt_FullFrameBuffer"]}]}"#.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "fbnobg", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "fbnobg", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbnobg")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] fb copybackground:false px=(\(c.redComponent),\(c.greenComponent),\(c.blueComponent))")
+        XCTAssertGreaterThan(c.greenComponent, 0.8, "copybackground:false 면 컴포지션 레이어가 화면을 뒤덮지 않고 흰 배경이 남아야")
+        XCTAssertGreaterThan(c.blueComponent, 0.8, "위와 동일 근거 — 미수정이면 순수 빨강(green/blue 낮음)으로 워시")
+    }
+
     /// P⑤: isFrameBuffer(_rt_) + colorBlendMode 동시 저작 레이어(코퍼스 13씬 실측) — 종전엔
     /// encodeDrawPlan 이 isFrameBuffer 를 colorBlendMode 보다 먼저 매치해 저작 블렌드 모드가 통째로
     /// 무시되고 f_compose(그냥 tint 결과 통과)로만 그려졌다. 흰 배경 + 컴포지션 레이어(tint 효과로
