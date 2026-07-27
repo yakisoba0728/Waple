@@ -64,4 +64,20 @@ final class TextStaticAngleRenderTests: XCTestCase {
         XCTAssertTrue(hasInkNear(rep, 85, 100), "angleZ=π: 180° 회전으로 origin 좌측(85,100) 에 글리프가 와야")
         XCTAssertFalse(hasInkNear(rep, 115, 100), "angleZ=π: origin 우측(115,100) 은 이제 비어 있어야")
     }
+
+    /// 검증 지적 대응(⑤b 변화 표면): `quadDirty = angleZ != 0` 가 극소각(코퍼스 실측, 예 -0.02687rad)
+    /// 텍스트를 rasterize() 정적 경로에서 quadVertices() 동적 경로로 갈아탄다 — 회전 반영 자체가
+    /// 아니라 "위치가 같이 튀지 않는가"가 관건. angleZ=0(정적 경로)과 angleZ=0.001(동적 경로, 회전
+    /// 자체는 육안/잉크스캔 해상도 아래)의 잉크 위치가 동일 판정 범위 내에 있어야 한다 — 다르면
+    /// 경로 전환 자체가 앵커를 이동시키는 회귀(TextAngleZeroCornerParityTests 의 대수 증명의 렌더 대조).
+    func testMicroAngleDoesNotJumpFromStaticPath() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let staticRep = try capture(scene: scene(angles: "0"), id: "waple_w3_5_angle_static")
+        let microRep = try capture(scene: scene(angles: "0.001"), id: "waple_w3_5_angle_micro")
+        // 정적 경로가 잉크를 낸 지점(우측)엔 동적 경로도 잉크가 있어야 하고, 비어있던 지점(좌측)은
+        // 계속 비어 있어야 한다 — 극소 회전이 앵커를 옮기지 않았음을 렌더 레벨에서 재확인.
+        XCTAssertTrue(hasInkNear(staticRep, 115, 100))
+        XCTAssertTrue(hasInkNear(microRep, 115, 100), "angleZ=0.001: 정적 경로와 같은 위치(115,100)에 잉크가 있어야 — 경로 전환이 위치를 옮기면 안 됨")
+        XCTAssertFalse(hasInkNear(microRep, 85, 100), "angleZ=0.001: origin 좌측은 여전히 비어 있어야")
+    }
 }
