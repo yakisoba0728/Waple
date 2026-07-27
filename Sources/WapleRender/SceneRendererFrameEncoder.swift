@@ -521,6 +521,10 @@ extension SceneRenderer {
         // W1-yaxis: customLayerQuadInterleaved 는 local(-1,-1)→uv(0,0)=TL 로 고정(SceneRenderer.swift:889).
         // quadVertices 와 동일하게 uv(0,0) 이 화면 위쪽에 오려면 local y-basis(columns.1) 를 반전해야
         // local ly=-1 가 +hh(위) 로 매핑된다(quadVertices 의 hh 재페어링과 동형 보정).
+        // 주의: quadVertices 는 코너 재라벨링(점 집합 불변)이라 삼각형 와인딩이 안 바뀌지만, 이 행렬
+        // 경로는 columns.1 반전으로 행렬식 부호가 뒤집혀 와인딩이 역전된다 — 이 파이프라인을 그리는
+        // 인코더는 setCullMode 를 호출하지 않아(grep 확인) Metal 기본값 .none 이라 무해(컬링 자체가
+        // 없음). 향후 이 경로에 컬링을 도입하면 이 반전을 함께 재검토해야 한다.
         var model = simd_float4x4(1)
         model.columns.0 = SIMD4(ca * hw, sa * hw, 0, 0)
         model.columns.1 = SIMD4(sa * hh, -ca * hh, 0, 0)
@@ -566,6 +570,8 @@ extension SceneRenderer {
         let c = Self.alignedCenter(origin: origin, alignment: alignment, hw: hw, hh: hh, ca: ca, sa: sa)
         // W1-yaxis: f_lit(QuadShaders.swift, 불변)의 `ly = (uv.y*2-1)*rect[0].w` 역산이 quadVertices 의
         // 새 uv/코너 페어링(uv.y=0 → ly=+hh)과 맞으려면 −hh 를 패킹해야 한다(셰이더 소스 자체는 불변).
+        // rect[0].w 의 소비자는 f_lit 의 이 한 줄뿐(grep 확인, QuadShaders.swift) — 크기(양수)로 읽는
+        // 별도 소비자가 없어 부호반전 패킹이 무해함을 재확인.
         return (SIMD4(c.x, c.y, hw, -hh), SIMD4(ca, sa, originZ, 0))
     }
 
