@@ -747,8 +747,12 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
     }
 
-    /// 뷰 좌표(AppKit 하단원점) → 씬 픽셀(WE 상단원점). aspectScale 역적용으로 fit 레터박스/
-    /// fill 크롭 보정 — fit 레터박스 밖 클릭은 nil(대응하는 씬 좌표가 없음). (순수)
+    /// 뷰 좌표(AppKit 하단원점) → 씬 픽셀(W1-yaxis: WE 도 하단원점/y-up — pxToNDC 의 역).
+    /// aspectScale 역적용으로 fit 레터박스/fill 크롭 보정 — fit 레터박스 밖 클릭은 nil(대응하는
+    /// 씬 좌표가 없음). **주의**: 이 좌표는 pointerSceneCoords()(스크립트 cursorMove/hover 히트
+    /// 테스트, layerHitRect — 둘 다 layer.origin 그대로 비교)로만 흐른다. pointerUV(fromNormalized:,
+    /// SceneRenderer.swift:723)는 g_PointerPosition(이펙트 셰이더 유니폼) 전용 별개 경로라
+    /// 절대 건드리지 않는다(이펙트/합성 패스 UV 불변 제약). (순수)
     static func sceneCoords(viewPoint: CGPoint, viewSize: CGSize, projW: Float, projH: Float,
                             fitMode: FitMode, zoom: Float = 1) -> SIMD2<Float>? {
         guard viewSize.width > 0, viewSize.height > 0, projW > 0, projH > 0, zoom > 0 else { return nil }
@@ -758,7 +762,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let nx = Float(viewPoint.x / viewSize.width * 2 - 1) / (s.x * zoom)
         let ny = Float(viewPoint.y / viewSize.height * 2 - 1) / (s.y * zoom)
         guard abs(nx) <= 1, abs(ny) <= 1 else { return nil }
-        return SIMD2((nx + 1) / 2 * projW, (1 - (ny + 1) / 2) * projH)
+        return SIMD2((nx + 1) / 2 * projW, (ny + 1) / 2 * projH)
     }
     let maxShift: Float = 0.1
     var projAspect: Float = 16.0 / 9.0
