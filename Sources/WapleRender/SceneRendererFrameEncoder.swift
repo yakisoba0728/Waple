@@ -88,6 +88,22 @@ extension SceneRenderer {
         var verts: [Float] = []
         verts.reserveCapacity(snapshot.count * (sys.isTrail ? 200 : 48))
         func toNDC(_ x: Float, _ y: Float) -> (Float, Float) { let p = sceneToNDC(x, y); return (p.x, p.y) }
+        // H3(핫픽스, 3489263099/3465215190 공유 회귀): spriteTrailStretch(F790)는 speed×length 를
+        // [minlength,maxlength] 클램프하는데, length 부재(항등=1) + 중력 가속 큰 씬에서는 speed 가
+        // 순식간에 maxlength 를 넘어 스트레치가 "항상 maxlength" 로 포화된다(스트레치의 speed 의존성이
+        // 관측 불가 — advisor 검증: spriteTrailStretch(10) == spriteTrailStretch(1000) for maxLength 6).
+        // rain_on_the_glass(워크샵 2446129945, 14+씬 공유) 는 sizerandom 70-150 에 maxlength 6 이 곱해져
+        // 장축이 화면 폭의 30%+ 를 덮는 불투명 흰 블록으로 뭉친다(구 베이스라인 95fad7a 는 리본 기반 구현
+        // 으로 얇은 대각선 스트릭 — 참조 대비 명백한 회귀). WE 공식 문서에 length/min/maxlength 의 정확한
+        // 단위가 없고(구 B3-particles.md 는 maxlength=샘플수 4..24 로 기술 — F790 재해석과 직접 상충),
+        // 포뮬러 자체를 다시 유도하는 대신(코퍼스 123건 전수 재검 필요 — Wave2 범위) 결과물(장축 픽셀)만
+        // 씬 폭 대비 관대한 상한으로 클램프한다. **단조감소 전용**: 이미 작은 stretch(예: 정상 범위) 는
+        // 무영향 — 기존 검증 씬(wind-blur 20배 등)에 새 회귀를 만들 수 없다(상한을 넘을 때만 축소).
+        func stretchGuard(_ stretch: Float, sizePx: Float) -> Float {
+            guard sizePx > 0, stretch > 1 else { return stretch }
+            let maxHalfWidth = max(sizePx * 0.5, projW * 0.015)  // 절대 축소 없음(원본 반폭 이상 보장) + 상한 1.5%
+            return min(stretch, maxHalfWidth / (sizePx * 0.5))
+        }
         func appendQuad(_ p: Particle, stretch: Float = 1, angleOverride: Float? = nil) {
             let wx = sys.origin.x + sys.scale.x * p.pos.x
             let wy = sys.origin.y - sys.scale.y * p.pos.y
@@ -142,7 +158,8 @@ extension SceneRenderer {
             let speed = sqrtf(p.vel.x * p.vel.x + p.vel.y * p.vel.y)  // 씬 로컬(Y-up) — 신장 산정
             guard speed > 0.5 else { appendQuad(p); return }  // ponytail: 방향 부정 임계 0.5px/s
             let wvx = sys.scale.x * p.vel.x, wvy = -sys.scale.y * p.vel.y  // 월드 y-down — 각도
-            appendQuad(p, stretch: sys.def.renderer.spriteTrailStretch(speed: speed),
+            let stretch = sys.def.renderer.spriteTrailStretch(speed: speed)
+            appendQuad(p, stretch: stretchGuard(stretch, sizePx: p.size * sys.scale.x),
                        angleOverride: atan2(wvy, wvx))
         }
         for p in snapshot {
