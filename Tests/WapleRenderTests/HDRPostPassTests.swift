@@ -116,10 +116,10 @@ final class HDRPostPassTests: XCTestCase {
     func testTonemapPassNotVerticallyFlipped() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         func topBand(hdr: Bool, tag: String) throws -> (top: CGFloat, bottom: CGFloat) {
-            // 상단 밴드(scene y 0..270, 원점 y=135) 만 brightness=3, 나머지는 clear 0.
+            // 상단 밴드(y-up: scene y 810..1080, 원점 y=945) 만 brightness=3, 나머지는 clear 0.
             let scene = """
             {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0","hdr":\(hdr)},
-             "objects":[{"id":1,"image":"models/w.json","origin":"960 135 0","size":"1920 270","brightness":3.0}]}
+             "objects":[{"id":1,"image":"models/w.json","origin":"960 945 0","size":"1920 270","brightness":3.0}]}
             """
             let files: [(String, Data)] = [
                 ("scene.json", scene.data(using: .utf8)!),

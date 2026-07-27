@@ -21,14 +21,16 @@ final class TextAngleZeroCornerParityTests: XCTestCase {
         case "right": x0 = t.origin.x - w
         default: x0 = t.origin.x - w / 2
         }
+        // W1-yaxis: y-up — y0 은 박스의 작은 쪽 scene-y(top 앵커는 origin 이 위쪽 변 = y0=origin−h).
         let y0: Float
         switch t.v {
-        case "top": y0 = t.origin.y
-        case "bottom": y0 = t.origin.y - h
+        case "top": y0 = t.origin.y - h
+        case "bottom": y0 = t.origin.y
         default: y0 = t.origin.y - h / 2
         }
         func ndc(_ x: Float, _ y: Float) -> SIMD2<Float> { SceneRenderer.pxToNDC(x, y, projW: projW, projH: projH) }
-        return [ndc(x0, y0), ndc(x0 + w, y0), ndc(x0 + w, y0 + h), ndc(x0, y0 + h)]
+        // 실물 rasterize() 코너 순서와 동형: [tl, tr, br, bl] — tl = (x0, y0+h)(scene-y 큰 쪽 = 화면 위).
+        return [ndc(x0, y0 + h), ndc(x0 + w, y0 + h), ndc(x0 + w, y0), ndc(x0, y0)]
     }
 
     /// quadVertices(angleZ: 0, ...) 의 4 코너(TL/TR/BR/BL) — encodeText 동적 경로가 실제로 쓰는 함수.

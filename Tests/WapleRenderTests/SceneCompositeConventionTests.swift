@@ -123,7 +123,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0.2"},
          "objects":[
-           {"id":1,"image":"models/w.json","origin":"960 270 0","size":"1920 540"},
+           {"id":1,"image":"models/w.json","origin":"960 810 0","size":"1920 540"},
            {"id":2,"image":"models/util/fullscreenlayer.json","origin":"960 540 0","size":"1920 1080",
             "effects":[{"file":"effects/tint/effect.json","passes":[{"combos":{"BLENDMODE":2},
               "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],

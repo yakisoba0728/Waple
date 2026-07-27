@@ -50,8 +50,8 @@ final class LayerPropertyScriptTransformTests: XCTestCase {
                      "origin":{"value":"20 20 0","script":"export function update(v){ return new Vec2(80,80); }"}}]}
         """
         let rep = try capture(scene: scene, id: "waple_f331_origin")
-        XCTAssertTrue(isRed(rep, 80, 80), "스크립트가 재배치한 (80,80) 에 사각형이 그려져야")
-        XCTAssertFalse(isRed(rep, 20, 20), "저작 초기 origin (20,20) 에는 더 이상 그려지면 안 됨(동결 회귀)")
+        XCTAssertTrue(isRed(rep, 80, 20), "스크립트가 재배치한 씬 (80,80) — y-up 이라 이미지 y=20 — 에 사각형이 그려져야")
+        XCTAssertFalse(isRed(rep, 20, 80), "저작 초기 origin 씬 (20,20)=이미지 (20,80) 에는 더 이상 그려지면 안 됨(동결 회귀)")
     }
 
     /// 실물 2885492021 오디오반응 스케일 축소판: 스크립트가 정적 scale(1)을 3배로 재계산.
