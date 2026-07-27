@@ -36,9 +36,16 @@ public enum ShaderPreprocessor {
         var included = inlineIncludes(source, include: include, depth: 0)
         // CAST3X3(mat4) 는 GLSL 에선 상단 3x3 절단이지만 MSL 엔 float3x3(float4x4) 생성자가 없다 —
         // 번역기 프리앰블의 오버로드 헬퍼 we_cast3x3(절단/통과) 로 위임(실물 depthparallax).
+        // S2-shaderlab①: WE 바이너리 임베디드 셰이더 shim(0x486bf6-0x486cec, WE-ENGINE-ANALYSIS §5) 전수 —
+        // CASTI/CASTU/CASTF/CAST4U 4 종이 기존 목록에 없었다(model_vertex_v1.h 의 MORPHING 모프타깃 블렌딩이
+        // 소비 — 현재 Waple 은 MORPHING 콤보를 절대 세우지 않아 실사용 경로는 죽어 있지만, 완전성 갭은 실재).
+        // CASTU/CASTI/CASTF 는 스칼라라 MSL 생성자 스펠링이 GLSL 과 동일(uint/int/float) — 별도 치환 불요.
+        // CAST4U(x)=((uint4)(x)) 는 HLSL/MSL 공통 스펠링(uint4)이라 vecN 계열과 달리 typeAndMacroRenames
+        // 경유 없이 바로 유효.
         for (name, body) in [("CAST2", "vec2(x)"), ("CAST3", "vec3(x)"), ("CAST4", "vec4(x)"),
-                             ("CAST2X2", "mat2(x)"), ("CAST3X3", "we_cast3x3(x)"), ("CAST4X4", "mat4(x)")]
-        where !included.contains("#define \(name)") && included.contains(name) {
+                             ("CAST2X2", "mat2(x)"), ("CAST3X3", "we_cast3x3(x)"), ("CAST4X4", "mat4(x)"),
+                             ("CASTI", "int(x)"), ("CASTU", "uint(x)"), ("CASTF", "float(x)"), ("CAST4U", "uint4(x)")]
+        where !identifierDefined(name, in: included) && identifierReferenced(name, in: included) {
             included = "#define \(name)(x) \(body)\n" + included
         }
         // 인라인된 헤더의 [COMBO] 기본값도 반영
@@ -384,6 +391,22 @@ public enum ShaderPreprocessor {
     }
 
     // MARK: - 작은 헬퍼
+
+    /// S2-shaderlab: 단어 경계 참조 판별 — 단순 `String.contains` 부분일치는 `CAST4`⊂`CAST4U`,
+    /// `CAST2`⊂`CAST2X2`류를 오매치한다(현재는 둘 다 우리 주입 목록에 공존 — CAST4/CAST4U 신규 추가로
+    /// 실제 충돌 표면이 생겼다). `\b` 는 앞뒤가 식별자 문자(영문/숫자/`_`)가 아닐 때만 성립해
+    /// "CAST4U" 안의 "CAST4" 는 경계 미성립으로 제외된다.
+    static func identifierReferenced(_ name: String, in source: String) -> Bool {
+        let pattern = "\\b\(NSRegularExpression.escapedPattern(for: name))\\b"
+        return source.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// S2-shaderlab: `#define NAME` 선행 정의 판별(경계 인지) — `#define CAST4U` 를 `#define CAST4`
+    /// 정의로 오인해 실제로 미정의인 CAST4 주입을 스킵하는 것 방지.
+    static func identifierDefined(_ name: String, in source: String) -> Bool {
+        let pattern = "#define\\s+\(NSRegularExpression.escapedPattern(for: name))\\b"
+        return source.range(of: pattern, options: .regularExpression) != nil
+    }
 
     /// F422: `#define MODE (2)` / `((3))` — 바깥 괄호로 감싼 10진 정수 리터럴을 벗겨 파스.
     /// 괄호가 아니거나 안쪽이 정수가 아니면 nil(`(2)+(3)`, `(0x10)` 등).
