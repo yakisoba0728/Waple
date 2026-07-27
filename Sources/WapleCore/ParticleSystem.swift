@@ -40,6 +40,12 @@ public enum Initializer: Equatable {
     case angularVelocityRandom(min: Vec3, max: Vec3, exponent: Float = 1)   // radians/s
     case turbulentVelocityRandom(speedMin: Float, speedMax: Float, scale: Float, offset: Float)
     case colorList(colors: [Vec3])                     // 0..1 (실물 "r g b" 문자열 목록) — 균등 랜덤 선택
+    /// S5④: HSV 공간 색 랜덤(magic_color_sparkle 등 프리셋 — 실물 예제 huemin/huemax/saturationmin/max/
+    /// valuemin/max, 전부 0..1 스케일). 종전 case 이름 불인식 → 전 initializer drop(무색 랜덤 = 백색 고정).
+    /// h/s/v 는 colorRandom(공유 t, RGB 라인 보간)과 달리 서로 무관한 축이라 velocityRandom 과 같이
+    /// 채널별 독립 t. [보존/추측] "huesteps"(코퍼스 실측 2/4 존재, 이산 색상환 스텝 수)는 미구현 —
+    /// 연속 hue 랜덤으로 근사(전무→근사, 폴백 방향 유지). 반증 시 재검토.
+    case hsvColorRandom(hueMin: Float, hueMax: Float, satMin: Float, satMax: Float, valMin: Float, valMax: Float)
     /// 스프라이트시트 프레임 선택(스폰 시 확정). between=false: CP0 기준 각도 → 시퀀스,
     /// true: CP0→CP1 구간 투영 → 시퀀스. count=시퀀스 길이(시트 프레임 수와 다를 수 있음 — mirror 폴드).
     case mapSequence(count: Float, mirror: Bool, between: Bool)
@@ -486,6 +492,21 @@ public struct ParticleSystemDef: Equatable {
                 // 실물: colors = ["r g b", ...] 0..1 스케일(colorrandom 의 0..255 와 다름 — 실측).
                 let colors = (i["colors"] as? [Any] ?? []).compactMap { pvec3($0) }
                 if !colors.isEmpty { inits.append(.colorList(colors: colors)) }
+            case "hsvcolorrandom":
+                // 실물 예제(particleelementpreviews/hsvcolorrandom) 전 필드 명시값 huemin=0/huemax=1/
+                // saturationmin=max=1/valuemin=max=1 — 필드 완전 부재(inheritinitialvaluefromevent) 시
+                // 이 값들을 기본값으로 채택(전 스펙트럼 hue 랜덤 + 채도·명도 고정 — 데모가 곧 신규노드
+                // 기본값이라는 정황 일치). max 개별 부재는 magic_color_sparkle(saturationmin=1, max 부재)
+                // 관례상 max=min(고정값, 무작위폭 0)로 채운다.
+                let hueMin = pfloat(i["huemin"]) ?? 0
+                let hueMax = pfloat(i["huemax"]) ?? 1
+                let satMin = pfloat(i["saturationmin"]) ?? 1
+                let satMax = pfloat(i["saturationmax"]) ?? satMin
+                let valMin = pfloat(i["valuemin"]) ?? 1
+                let valMax = pfloat(i["valuemax"]) ?? valMin
+                inits.append(.hsvColorRandom(hueMin: hueMin, hueMax: hueMax,
+                                             satMin: satMin, satMax: satMax,
+                                             valMin: valMin, valMax: valMax))
             case "mapsequencearoundcontrolpoint":
                 inits.append(.mapSequence(count: pfloat(i["count"]) ?? 0,
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: false))

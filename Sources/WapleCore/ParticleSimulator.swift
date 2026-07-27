@@ -582,6 +582,13 @@ public struct ParticleSimulator {
             let idx = min(colors.count - 1, Int(rng.nextFloat() * Float(colors.count)))
             let c = s3(colors[idx])   // 0..1 스케일(실측 — colorrandom 의 /255 와 다름)
             p.initialColor = c; p.color = c
+        case let .hsvColorRandom(hueMin, hueMax, satMin, satMax, valMin, valMax):
+            // h/s/v 는 서로 무관한 축 — velocityRandom 과 같이 채널별 독립 t(공유 t 아님).
+            let h = randomRange(hueMin, hueMax, exponent: 1)
+            let s = randomRange(satMin, satMax, exponent: 1)
+            let v = randomRange(valMin, valMax, exponent: 1)
+            let c = hsv2rgb(h: h, s: s, v: v)
+            p.initialColor = c; p.color = c
         case let .mapSequence(count, _, between):
             // 시퀀스 위치 t(0..1) → frame = t·count. 시트 폴드(mirror/loop)는 렌더 시 sheetFrameIndex.
             let t: Float
@@ -716,6 +723,28 @@ public struct ParticleSimulator {
 }
 
 private func s3(_ v: Vec3) -> SIMD3<Float> { SIMD3(v.x, v.y, v.z) }
+
+/// HSV(0..1 각 축, h 는 순환) → RGB(0..1). 표준 6구간 변환 — hsvcolorrandom 이니셜라이저 전용.
+private func hsv2rgb(h: Float, s: Float, v: Float) -> SIMD3<Float> {
+    let vv = max(0, min(1, v))
+    guard s > 0 else { return SIMD3(vv, vv, vv) }
+    let ss = max(0, min(1, s))
+    // h 순환(음수/1 초과 모두 [0,1) 로 랩) 후 6구간(색상환) 스케일.
+    let hh = (h.truncatingRemainder(dividingBy: 1) + 1).truncatingRemainder(dividingBy: 1) * 6
+    let i = Int(hh) % 6
+    let f = hh - hh.rounded(.down)
+    let p = vv * (1 - ss)
+    let q = vv * (1 - ss * f)
+    let t = vv * (1 - ss * (1 - f))
+    switch i {
+    case 0: return SIMD3(vv, t, p)
+    case 1: return SIMD3(q, vv, p)
+    case 2: return SIMD3(p, vv, t)
+    case 3: return SIMD3(p, q, vv)
+    case 4: return SIMD3(t, p, vv)
+    default: return SIMD3(vv, p, q)
+    }
+}
 
 // MARK: - 결정적 값노이즈(외부 의존 無)
 
