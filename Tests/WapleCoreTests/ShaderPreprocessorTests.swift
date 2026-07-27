@@ -328,4 +328,94 @@ final class ShaderPreprocessorTests: XCTestCase {
         let out = ShaderPreprocessor.preprocess("#if HLSL\nyes\n#else\nno\n#endif", combos: ["HLSL": 0])
         XCTAssertTrue(out.contains("yes"), out)
     }
+
+    // S2-shaderlab①: WE 바이너리 임베디드 shim 전수(CASTI/CASTU/CASTF/CAST2/CAST3/CAST4U/CAST4/CAST3X3) 중
+    // CASTI/CASTU/CASTF/CAST4U 는 종전 주입 목록에 없어 사용 시 미확장 그대로 방출(→ MSL 컴파일 실패)됐다.
+    // 실사용처(정정): CASTU/CASTF 는 model_vertex_v1.h 모프타깃 블렌딩(morphMapIndex % CASTU(...) 등) +
+    // generic3/genericimage3 라이팅 루프 양쪽에서 실측(69회/12회) — CASTI/CAST4U 는 로컬 코퍼스 0회지만
+    // 완전성 갭 해소를 위해 동일하게 주입한다.
+    func testCastIUFAndCast4UMacrosExpand() {
+        let src = """
+        void main() {
+            int i = CASTI(1.5);
+            uint u = CASTU(2.5);
+            float f = CASTF(3);
+            uint4 v = CAST4U(1);
+        }
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        // WE 원본은 `((int)(x))` 류 C 스타일 캐스트지만, 기존 CAST2/CAST3/CAST4 와 동일하게
+        // MSL 친화적 생성자 스타일("int(x)")로 시딩한다(둘 다 동일 값 — 표현만 다름).
+        XCTAssertTrue(out.contains("int i = int(1.5);"), out)
+        XCTAssertTrue(out.contains("uint u = uint(2.5);"), out)
+        XCTAssertTrue(out.contains("float f = float(3);"), out)
+        XCTAssertTrue(out.contains("uint4 v = uint4(1);"), out)
+    }
+
+    // S2-shaderlab①: `CAST4U` 추가로 `CAST4` 와 접두 충돌 표면이 생겼다 — 단순 substring 매치였다면
+    // "CAST4U(" 만 있는 소스에서도 `included.contains("CAST4")` 가 참이 되어 미사용 CAST4 매크로가
+    // (무해하게) 끼어들거나, 반대로 `#define CAST4U(...)` 자체 정의를 `#define CAST4` 로 오인해
+    // 진짜 미정의 CAST4 참조의 주입을 건너뛸 수 있다. 단어 경계 판별로 두 방향 모두 정확해야 한다.
+    func testCast4AndCast4UDoNotCrossContaminate() {
+        // CAST4U 만 쓰는 소스 — CAST4 는 참조되지 않으므로 굳이 주입될 필요는 없지만, 주입되더라도
+        // CAST4U 확장 자체가 깨지면 안 된다(핵심 불변식).
+        let onlyU = "uint4 v = CAST4U(0);"
+        let outU = ShaderPreprocessor.preprocess(onlyU, combos: [:])
+        XCTAssertTrue(outU.contains("uint4 v = uint4(0);"), outU)
+
+        // 소스가 CAST4U 를 자체 정의해도(엔진 부재 시나리오 방어) CAST4 는 별도로 참조되면 여전히
+        // 정상 주입돼야 한다 — "#define CAST4U" 를 "#define CAST4" 로 오인해 스킵하면 안 됨.
+        let both = """
+        #define CAST4U(x) ((uint4)(x))
+        void main() {
+            uint4 a = CAST4U(1);
+            vec4 b = CAST4(2.0);
+        }
+        """
+        let outBoth = ShaderPreprocessor.preprocess(both, combos: [:])
+        XCTAssertTrue(outBoth.contains("uint4 a = ((uint4)(1));"), outBoth)
+        XCTAssertTrue(outBoth.contains("vec4 b = vec4(2.0);"), outBoth)
+    }
+
+    // MARK: - S2-shaderlab②(정정): SHADERVERSION 시딩
+
+    /// 실물 generic3.frag:83/genericimage3.frag:88 패턴(`#if SHADERVERSION < 62`) — WE 는 69 를 시딩해
+    /// 최신(`#else`) 분기를 고른다. 두 분기 모두 동일한 함수명(`PerformLighting_Deprecated`)을 정의하는
+    /// 실물 구조라 함수명 존재 여부로는 분기를 구분할 수 없다 — 분기별 고유 마커로 판별해야 한다.
+    func testShaderVersionSeededSelectsModernBranchOverDeprecated() {
+        let src = """
+        #if SHADERVERSION < 62
+        markerDeprecated
+        #else
+        markerModern
+        #endif
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        XCTAssertTrue(out.contains("markerModern"),
+                      "SHADERVERSION 미시딩 — 69<62=false 인 최신 분기가 선택돼야: \(out)")
+        XCTAssertFalse(out.contains("markerDeprecated"), out)
+    }
+
+    /// 본문 텍스트 치환(#if 평가와 별개 경로) — 소스가 SHADERVERSION 값을 직접 읽는 경우도 69 로 치환돼야 한다.
+    func testShaderVersionSubstitutedAsSixtyNineInBody() {
+        let out = ShaderPreprocessor.preprocess("int v = SHADERVERSION;", combos: [:])
+        XCTAssertTrue(out.contains("int v = 69;"), out)
+    }
+
+    /// scene.json 콤보가 명시적으로 SHADERVERSION 을 지정해도(비정상 입력이나 방어) 엔진 확정값(69)이
+    /// 이긴다 — HLSL 과 동일하게 combos 보다 나중에 강제 대입되므로 항상 69.
+    func testShaderVersionCannotBeOverriddenByCombos() {
+        let out = ShaderPreprocessor.preprocess("#if SHADERVERSION < 62\nold\n#else\nnew\n#endif",
+                                                 combos: ["SHADERVERSION": 1])
+        XCTAssertTrue(out.contains("new"), out)
+        XCTAssertFalse(out.contains("old"), out)
+    }
+
+    // S2-shaderlab: 단어 경계 헬퍼 자체의 직접 단위 검증.
+    func testIdentifierReferencedAndDefinedAreWordBoundaryAware() {
+        XCTAssertFalse(ShaderPreprocessor.identifierReferenced("CAST4", in: "uint4 v = CAST4U(0);"))
+        XCTAssertTrue(ShaderPreprocessor.identifierReferenced("CAST4", in: "vec4 v = CAST4(0.0);"))
+        XCTAssertFalse(ShaderPreprocessor.identifierDefined("CAST4", in: "#define CAST4U(x) ((uint4)(x))"))
+        XCTAssertTrue(ShaderPreprocessor.identifierDefined("CAST4", in: "#define CAST4(x) ((float4)(x))"))
+    }
 }
