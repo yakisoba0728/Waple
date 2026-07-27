@@ -36,11 +36,15 @@ enum ParticleShaders {
         PVOut o; o.pos = viewProj * float4(wp, 1.0); o.uv = uv; o.color = col; return o;
     }
 
-    fragment float4 pf_main(PVOut in [[stage_in]], texture2d<float> tex [[texture(0)]]) {
+    // C4-(ii): overbright(genericparticle.frag "color.rgb *= g_Overbright" — material 유니폼, 기본
+    // 1.0, range[0,5]). 곱셈은 순서 무관(스칼라)이라 premultiply 전/후 어디에 곱해도 동치 — 기본 1 이면
+    // 렌더 비트동일. 3D 비-포그 파티클(particle3DAdditive/Translucent)도 이 함수를 공유해 함께 적용됨.
+    fragment float4 pf_main(PVOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
+                            constant float& overbright [[buffer(0)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float4 t = tex.sample(s, in.uv);
         float A = t.a * in.color.a;
-        return float4(t.rgb * in.color.rgb * A, A);
+        return float4(t.rgb * in.color.rgb * A * overbright, A);
     }
 
     // M(④): 3D 파티클 씬 포그(genericparticle.frag FOG 콤보 기본 1 — 3706286085 실증). 별도 MSL
@@ -67,6 +71,8 @@ enum ParticleShaders {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float4 t = tex.sample(s, in.uv);
         float3 rgb = t.rgb * in.color.rgb;
+        // C4-(ii): overbright — eye.xyz 만 거리 계산에 쓰이고 .w 는 미사용 패딩이라 재사용(기본 1, 무회귀).
+        rgb *= fog.eye.w;
         float alpha = t.a * in.color.a;
         float viewDist = distance(fog.eye.xyz, in.worldPos);
         float heightFactor = 0.0;
@@ -90,7 +96,7 @@ enum ParticleShaders {
     // REFRACT(스크린 굴절 — WE genericparticle.frag:103-116). 파티클 컬러에 씬 컬러 타깃(fb=뒤 배경
     // 누적 스냅샷)을 노멀맵 오프셋으로 재샘플해 **곱한다**(유리/물방울/열왜곡). vert 는 pv_main 공유
     // (8-float 정점) — 화면 UV 는 in.pos(렌더타깃 픽셀)에서 얻어 f_compose 규약과 동일(y-flip 없음).
-    // refractParams = (g_RefractAmount, rg88Flag, 0, 0).
+    // refractParams = (g_RefractAmount, rg88Flag, g_Overbright(C4-(ii), 기본 1), 0).
     fragment float4 pf_refract(PVOut in [[stage_in]],
                                texture2d<float> albedoTex [[texture(0)]],
                                texture2d<float> normalTex [[texture(1)]],
@@ -113,6 +119,7 @@ enum ParticleShaders {
         float2 uv = in.pos.xy / float2(fbTex.get_width(), fbTex.get_height()) + off;
         float3 bg = fbTex.sample(s, uv).rgb;
         float3 rgb = t.rgb * in.color.rgb * bg;   // WE: color.rgb = v_Color*albedo; color.rgb *= framebuffer.rgb
+        rgb *= refractParams.z;                   // C4-(ii): overbright(기본 1, 무회귀)
         float A = t.a * in.color.a;
         return float4(rgb * A, A);                // premultiplied(블렌드 src=one)
     }

@@ -1501,6 +1501,8 @@ extension SceneRenderer {
         var shake = frameShakeOffset  // camerashake 전역 지터(pv_main buffer 4). 파티클도 함께 흔들림. 비활성=0.
         enc.setVertexBytes(&shake, length: MemoryLayout<SIMD2<Float>>.stride, index: 4)
         enc.setFragmentTexture(sys.texture, index: 0)
+        var overbright = sys.overbright  // C4-(ii): pf_main buffer 0(기본 1 — 비트동일).
+        enc.setFragmentBytes(&overbright, length: MemoryLayout<Float>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }
 
@@ -1550,7 +1552,8 @@ extension SceneRenderer {
         enc.setFragmentTexture(sys.texture, index: 0)     // 알베도(g_Texture0)
         enc.setFragmentTexture(normal, index: 1)          // 노멀맵(g_Texture1)
         enc.setFragmentTexture(framebuffer, index: 2)     // 씬 컬러 스냅샷(g_Texture3 = _rt_FullFrameBuffer)
-        var params = SIMD4<Float>(sys.refractAmount, sys.normalRG88 ? 1 : 0, 0, 0)
+        // C4-(ii): z 슬롯(종전 예약 0) = overbright(기본 1 — 비트동일).
+        var params = SIMD4<Float>(sys.refractAmount, sys.normalRG88 ? 1 : 0, sys.overbright, 0)
         enc.setFragmentBytes(&params, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertexCount)
     }

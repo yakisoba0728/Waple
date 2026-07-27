@@ -1320,6 +1320,8 @@ extension SceneRenderer {
             g.noInterp = sp.noInterpolation || resolveTextureNoInterpolation(def.material?.textureName, package: package)
             // M(④): combos.FOG(기본 1) — encode3DParticles 가 pf3d_fog 파이프라인 선택에 사용.
             g.foggy = def.material?.foggy ?? true
+            // C4-(ii): g_Overbright(기본 1) — encodeParticle/encodeRefractParticle/encode3DParticles 가 소비.
+            g.overbright = def.material?.overbright ?? 1
             return g
         }
         // E1(③): F178 — children[]는 파스/시뮬 모두 깊이4 재귀를 지원하나(SceneDocument.parseParticleDef

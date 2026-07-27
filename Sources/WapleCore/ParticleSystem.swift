@@ -190,12 +190,15 @@ public struct ParticleMaterial: Equatable {
     /// M(④): combos.FOG(genericparticle.frag/genericropeparticle.frag 기본 1 — 명시 0 만 씬 포그 제외).
     /// 메시 경로(SceneRenderer3D.loadMesh3DMaterial `foggy`)와 동일 기본값·게이트 규약.
     public let foggy: Bool
+    /// C4-(ii): g_Overbright(genericparticle.frag/genericropeparticle.frag — material 유니폼,
+    /// 기본 1.0, range [0,5]). RGB 만 곱(알파 제외). 기본 1 이면 렌더 비트동일(무회귀).
+    public let overbright: Float
     public init(textureName: String?, blend: BlendKind,
                 refract: Bool = false, normalTextureName: String? = nil, refractAmount: Float = 0.05,
-                foggy: Bool = true) {
+                foggy: Bool = true, overbright: Float = 1) {
         self.textureName = textureName; self.blend = blend
         self.refract = refract; self.normalTextureName = normalTextureName; self.refractAmount = refractAmount
-        self.foggy = foggy
+        self.foggy = foggy; self.overbright = overbright
     }
 
     public static func parse(_ json: [String: Any], userProps: [String: Any] = [:]) -> ParticleMaterial {
@@ -224,9 +227,12 @@ public struct ParticleMaterial: Equatable {
            let v = combos.first(where: { $0.key.lowercased() == "fog" })?.value {
             foggy = ((v as? NSNumber)?.intValue ?? 1) != 0
         }
+        // C4-(ii): constantshadervalues.ui_editor_properties_overbright(refract_amount 와 동일 파스 패턴).
+        // 미명시 시 WE 기본 1.0(무변화 — 60씬 중 값이 다른 씬만 실질 변화).
+        let overbright = pfloat((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_overbright"]) ?? 1
         return ParticleMaterial(textureName: albedo, blend: blend,
                                 refract: refract && normalName != nil, normalTextureName: normalName,
-                                refractAmount: refractAmount, foggy: foggy)
+                                refractAmount: refractAmount, foggy: foggy, overbright: overbright)
     }
 }
 

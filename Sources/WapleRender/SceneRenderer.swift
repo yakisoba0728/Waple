@@ -94,6 +94,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         /// M(④): combos.FOG(기본 1) — 3D 파티클 렌더(pf3d_fog)가 씬 포그에 참여할지(encode3DParticles).
         /// 2D 파티클 경로는 씬 포그 개념이 없어 무영향(genericparticle.frag FOG 는 v_ViewDir 기반 3D 전용).
         var foggy: Bool = true
+        /// C4-(ii): g_Overbright(genericparticle.frag, material 유니폼) — pf_main/pf_refract/pf3d_fog
+        /// 출력 rgb 에 곱(알파 제외). 기본 1(무회귀). 2D/3D 파티클 공용(머티리얼 파스는 경로 무관).
+        var overbright: Float = 1
         let scratch = DynamicVertexBuffer()  // per-frame 파티클 정점 재사용
         /// E1(④): 2D 정사영 경로의 초기 가시성(SceneParticle.visible — 정적 스크립트 없음이면 이 값이
         /// 종신, 무회귀). 3D 는 visible3D(별개 채널)를 계속 쓴다.

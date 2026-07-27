@@ -518,4 +518,23 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertFalse(noNormal.refract)
         XCTAssertNil(noNormal.normalTextureName)
     }
+
+    // C4-(ii): overbright(genericparticle.frag g_Overbright, material 유니폼) — refract_amount 와 동일
+    // constantshadervalues 파스 패턴(실물 dischargearc.json: ui_editor_properties_overbright=1.0).
+    func testOverbrightParsedFromConstantShaderValues() {
+        let m = ParticleMaterial.parse(json("""
+        {"passes":[{"blending":"additive",
+          "constantshadervalues":{"ui_editor_properties_overbright":2.5},
+          "textures":["particle/beam"]}]}
+        """))
+        XCTAssertEqual(m.overbright, 2.5, accuracy: 1e-6)
+    }
+
+    // 미명시 시 WE 기본 1.0 — 기존 씬(overbright 키 없음) 무회귀의 근거(색 곱 항등원).
+    func testOverbrightDefaultsToOneWhenAbsent() {
+        let m = ParticleMaterial.parse(json(#"{"passes":[{"blending":"translucent","textures":["particle/snow"]}]}"#))
+        XCTAssertEqual(m.overbright, 1, accuracy: 1e-6)
+        let empty = ParticleMaterial.parse(json("{}"))
+        XCTAssertEqual(empty.overbright, 1, accuracy: 1e-6)
+    }
 }
