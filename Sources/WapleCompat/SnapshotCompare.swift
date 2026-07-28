@@ -27,6 +27,15 @@ extension SnapshotPipeline {
             fputs("[snap] 베이스라인 썸네일 크기 \(baseline.thumbWidth)x\(baseline.thumbHeight) ≠ 현재 \(thumbW)x\(thumbH) — --capture 로 베이스라인 재생성 필요\n", stderr)
             return 2
         }
+        // F2-puppet 지적: WAPLE_CAPTURE_TIME 이 SnapshotPipeline.captureTimes/primaryCaptureTime 을 거쳐
+        // 캡처 시각 자체를 바꾸는데(①), 이 셸 변수가 --compare 로 잔류 전파돼도 아무도 검사하지 않으면
+        // 베이스라인과 다른 시각의 프레임을 대조해 전면 허위 회귀가 나고, 출력만 봐선 정상 게이트 결과와
+        // 구분되지 않는다. 매니페스트에 실제로 기록된 사실(baseline.captureTime)과 이번 비교가 캐논으로
+        // 쓸 시각(primaryCaptureTime)을 직접 대조 — activeDebugGates() 의 env 재구성 경로에 기대지 않는
+        // 가장 직접적인 형태.
+        if baseline.captureTime != primaryCaptureTime {
+            fputs("[snap] ⚠️ 캡처 시각 불일치 — 베이스라인=\(baseline.captureTime)s, 이번 비교=\(primaryCaptureTime)s(WAPLE_CAPTURE_TIME 확인) — 이 상태로는 서로 다른 시각의 프레임을 비교해 전면 허위 회귀가 날 수 있습니다.\n", stderr)
+        }
         // F145: 베이스라인 캡처 당시 활성이던 렌더-변형 게이트와 지금 활성인 게이트가 다르면 diff 가
         // 게이트 차이 때문일 수 있음을 경고(하드 실패는 아님 — 게이트는 기본적으로 전부 꺼져 있어야
         // 정상이므로 대부분의 실행에선 둘 다 빈 배열이라 무해).

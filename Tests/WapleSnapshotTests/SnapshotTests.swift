@@ -120,4 +120,33 @@ final class SnapshotTests: XCTestCase {
     func testManifestRejectsGarbage() {
         XCTAssertThrowsError(try SnapshotManifest.decode(Data("{not json".utf8)))
     }
+
+    // MARK: 캡처 시각 파싱(F2-puppet①)
+
+    func testParseCaptureTimesNilUsesFallback() {
+        XCTAssertEqual(parseCaptureTimes(nil, fallback: [6.0]), [6.0])
+    }
+
+    func testParseCaptureTimesEmptyUsesFallback() {
+        XCTAssertEqual(parseCaptureTimes("", fallback: [6.0]), [6.0])
+        XCTAssertEqual(parseCaptureTimes("   ", fallback: [6.0]), [6.0])
+    }
+
+    func testParseCaptureTimesSingleValue() {
+        XCTAssertEqual(parseCaptureTimes("12", fallback: [6.0]), [12.0])
+    }
+
+    func testParseCaptureTimesMultiplePreservesOrder() {
+        // 정렬하지 않고 입력 순서 그대로 — 캡처 파이프라인이 정렬 여부를 스스로 결정.
+        XCTAssertEqual(parseCaptureTimes("0, 2,6,12, 30", fallback: [6.0]), [0.0, 2.0, 6.0, 12.0, 30.0])
+    }
+
+    func testParseCaptureTimesSkipsInvalidTokensButKeepsValid() {
+        // 빈 토큰/문자열 토큰은 무시되지만, 나머지 유효 값은 살아남는다(전부 무효일 때만 fallback).
+        XCTAssertEqual(parseCaptureTimes("0,,abc, 6.5 ,", fallback: [6.0]), [0.0, 6.5])
+    }
+
+    func testParseCaptureTimesAllInvalidUsesFallback() {
+        XCTAssertEqual(parseCaptureTimes("abc,def", fallback: [6.0]), [6.0])
+    }
 }
