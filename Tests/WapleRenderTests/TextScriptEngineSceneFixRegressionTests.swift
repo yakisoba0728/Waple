@@ -467,4 +467,45 @@ final class TextScriptEngineSceneFixRegressionTests: XCTestCase {
         """, scene: scene))
         XCTAssertEqual(e.evaluate(current: ""), "2,1", "루트+신규 레이어 = 2, 신규 레이어 origin 조작 반영")
     }
+
+    // MARK: F1-nondet(2026-07-28) — captureRandomSeed 핀 시 Math.random 결정화
+
+    /// 실물 3300031038(팔레트 컨트롤러 "3 Color Picker") 재현: 헤드리스 마운트는 localStorage 가 항상
+    /// 빈 상태(F810, 메모리 전용)라 매 마운트마다 `loadPaletteFromStorage()` 가 실패하고 `Math.random()`
+    /// 분기로 떨어진다 — captureRandomSeed 미핀 시 두 독립 SceneScriptContext(=두 독립 마운트)가 서로
+    /// 다른 Math.random 시퀀스를 내 shared.paletteColor2 소비 레이어(플레이어 배경 tint)가 캡처마다
+    /// 달라지는 비결정을 재현했다. 핀하면 두 컨텍스트가 완전히 동일한 시퀀스를 내야 한다.
+    func testMathRandomPinnedUnderCaptureIsDeterministicAcrossMounts() throws {
+        TextScriptEngine.captureRandomSeed = 0x1234_5678
+        defer { TextScriptEngine.captureRandomSeed = nil }
+        let script = """
+        export function update(v) { return [Math.random(), Math.random(), Math.random()]; }
+        """
+        // 별개 SceneScriptContext 2개 = SceneRenderer.mount 2회(자기-일관 셀프체크·재캡처)를 흉내.
+        let sceneA = try XCTUnwrap(SceneScriptContext())
+        let engineA = try XCTUnwrap(TextScriptEngine(script: script, scene: sceneA))
+        let sceneB = try XCTUnwrap(SceneScriptContext())
+        let engineB = try XCTUnwrap(TextScriptEngine(script: script, scene: sceneB))
+        let a = try XCTUnwrap(engineA.evaluateVec(current: [0, 0, 0]))
+        let b = try XCTUnwrap(engineB.evaluateVec(current: [0, 0, 0]))
+        XCTAssertEqual(a, b, "captureRandomSeed 핀 시 독립 마운트 간 Math.random 시퀀스가 동일해야(캡처 결정성)")
+        // 시드 자체는 진짜 난수가 아니라 결정적 PRNG여야 — [0,1) 범위·비퇴화(전부 0/동일값 아님)도 확인.
+        XCTAssertTrue(a.allSatisfy { $0 >= 0 && $0 < 1 })
+        XCTAssertFalse(a[0] == a[1] && a[1] == a[2], "mulberry32 가 매 호출 다른 값을 내야(상태 진행 확인)")
+    }
+
+    /// 미핀(nil, 프로덕션/라이브 데스크탑 기본) 시에는 실 Math.random 그대로 — 최초 팔레트 선택 같은
+    /// "정상적인 1회성 랜덤"을 캡처 결정성 목적으로 부당하게 결정화하지 않는다(무회귀 가드).
+    func testMathRandomUnpinnedByDefaultStaysRealRandom() throws {
+        XCTAssertNil(TextScriptEngine.captureRandomSeed, "테스트 격리 전제 — 다른 테스트가 값을 남기면 안 됨")
+        let scene = try XCTUnwrap(SceneScriptContext())
+        let e = try XCTUnwrap(TextScriptEngine(script: """
+        export function update(v) {
+            var r = Math.random();
+            return (typeof r === 'number' && r >= 0 && r < 1) ? 1 : 0;
+        }
+        """, scene: scene))
+        XCTAssertEqual(try XCTUnwrap(e.evaluateVec(current: [0])).first ?? -1, 1,
+                       "미핀 상태에서도 Math.random 은 정상 [0,1) 실수를 내야(엔진 자체 무회귀)")
+    }
 }
