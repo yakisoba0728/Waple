@@ -1235,6 +1235,36 @@ final class SceneDocumentTests: XCTestCase {
         let t = try XCTUnwrap(doc.texts.first)
         XCTAssertFalse(t.outline)
         XCTAssertFalse(t.opaqueBackground)
+        // F4-polish①: 무저작 기본값 — anchor="none"/padding=(0,0)/backgroundBrightness=1(0 아님 — 부재 시
+        // 0 이면 향후 소비부에서 검정 박스로 오염되는 잠재 함정).
+        XCTAssertEqual(t.anchor, "none")
+        XCTAssertEqual(t.padding, Vec2(x: 0, y: 0))
+        XCTAssertEqual(t.backgroundBrightness, 1)
+    }
+
+    /// F4-polish①: anchor/padding/backgroundbrightness 파싱 — 실측 코퍼스 스키마 그대로(3526096300/
+    /// 3538758087 등). padding 은 **혼합 타입**(스칼라 정수/실수 vs "x y" 벡터 문자열) 둘 다 저작되므로
+    /// 두 형태를 모두 커버(스칼라 케이스가 결함 포착 지점 — vec2()/float() 개별로는 어느 한쪽만 처리).
+    func testParsesTextAnchorPaddingBackgroundBrightness() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"id":1,"text":"a","font":"systemfont_arial","pointsize":16,"origin":"0 0 0",
+             "anchor":"center","padding":32,"backgroundbrightness":1.0},
+           {"id":2,"text":"b","font":"systemfont_arial","pointsize":16,"origin":"0 0 0",
+             "anchor":"topright","padding":"24.00000 48.00000","backgroundbrightness":0.5}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.texts.count, 2)
+        let scalar = doc.texts[0]
+        XCTAssertEqual(scalar.anchor, "center")
+        XCTAssertEqual(scalar.padding, Vec2(x: 32, y: 32))   // 스칼라 → 양축 확장
+        XCTAssertEqual(scalar.backgroundBrightness, 1.0, accuracy: 1e-4)
+        let vector = doc.texts[1]
+        XCTAssertEqual(vector.anchor, "topright")
+        XCTAssertEqual(vector.padding, Vec2(x: 24, y: 48))   // "x y" 벡터 문자열
+        XCTAssertEqual(vector.backgroundBrightness, 0.5, accuracy: 1e-4)
     }
 
     /// H1: 머티리얼 passes[0] 의 shader/combos/constantshadervalues/textures 파스 보존.

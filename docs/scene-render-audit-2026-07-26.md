@@ -167,6 +167,24 @@ HEAD 회귀(구 베이스라인 대비)는 2건 — 나머지는 전부 기존 �
   적용 후 전량 재감사 필수.
 - **영향 씬**: 3302695207, 3461168300 + 잠재 다수.
 
+**재판정(F4-polish④, 2026-07-28, main `093dd91`)**: **해소 확인** — 이 문서가 처방한 해결책과
+정확히 일치하는 형태로 이미 착지됨(`fda60df`, "fix(C①): {user,value} 바인딩 기본값 시딩", 2026-07-27,
+82f3307..093dd91 구간의 "수정 배치 C" 병합 `5ab171c`에 포함). 코드 대조: `SceneRenderer.swift:1075`
+`mount()`가 `WallpaperProperties.parse(folderURL:)`로 project.json 기본값(`baseProps`)을 doc 파스
+**이전**에 확보해 `UserPropertyStore.rawOverrides(id:projectDefaults:presetOverrides:presetResourceRoot:)`
+(신규 4-인자 오버로드, `UserPropertyStore.swift:29-36`)로 `SceneDocument.parse(..., userProps:)` 에
+defaults < preset < user 우선순위로 합성해 전달 — 처방된 "parse 이전에 effective 맵을 만들어 전달"과
+동형. `resolveUserBindings`(현재 `SceneDocument.swift:2225`, 위 루트코즈가 인용한 `:1901-1919`는
+82f3307 당시 라인으로 이후 드리프트) 자체 코드·주석 재확인 결과 "userProps 에 키가 있을 때만 갱신,
+없으면 저작 스냅샷 유지" 계약은 그대로이고 — 이제 project.json 기본값이 파스 시점 userProps 에 이미
+합류돼 있어 종전엔 "미변경(키 없음)"이던 프로퍼티가 "있음(기본값)"으로 바뀌어 그대로 픽업된다.
+**회귀 위험 각주("적용 후 전량 재감사 필수")는 이미 충족**됨 — 이 기본값 시딩이 포함된 상태로 이후
+y-up 전역 전환(W1)·C1~C8 나머지 배치까지 거친 170씬 전수가 재캡처돼 본 라운드 베이스라인
+(`waple-baselines/main-093dd91`, empty 0)으로 굳었다(별도 전량 재감사를 다시 돌릴 필요 없음 — 이미
+그 결과 위에서 이번 F4-polish 라운드가 출발함). 근거는 위 코드 대조가 전부이며 씬별 전/후 A/B 재캡처는
+하지 않았다(3302695207 단발 재캡처를 시도했으나 사전 baseline 부재로 판별력 없는 관측이라 §3-C2
+반례 기각과 동일 기준으로 제외 — 3461168300 도 동일 사유로 미시도). 문서 갱신만, 코드 변경 없음.
+
 ### C6-(i). 스크립트 칸 메라 shared.camera 소비자 부재 (3737268876)
 
 - **루트코즈**: JS 제공(`TextScriptEngine.swift:1497-1505,1659,1841`)은 있으나 네이티브 readback
