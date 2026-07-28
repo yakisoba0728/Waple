@@ -167,6 +167,24 @@ HEAD 회귀(구 베이스라인 대비)는 2건 — 나머지는 전부 기존 �
   적용 후 전량 재감사 필수.
 - **영향 씬**: 3302695207, 3461168300 + 잠재 다수.
 
+**재판정(F4-polish④, 2026-07-28, main `093dd91`)**: **해소 확인** — 이 문서가 처방한 해결책과
+정확히 일치하는 형태로 이미 착지됨(`fda60df`, "fix(C①): {user,value} 바인딩 기본값 시딩", 2026-07-27,
+82f3307..093dd91 구간의 "수정 배치 C" 병합 `5ab171c`에 포함). 코드 대조: `SceneRenderer.swift:1075`
+`mount()`가 `WallpaperProperties.parse(folderURL:)`로 project.json 기본값(`baseProps`)을 doc 파스
+**이전**에 확보해 `UserPropertyStore.rawOverrides(id:projectDefaults:presetOverrides:presetResourceRoot:)`
+(신규 4-인자 오버로드, `UserPropertyStore.swift:29-36`)로 `SceneDocument.parse(..., userProps:)` 에
+defaults < preset < user 우선순위로 합성해 전달 — 처방된 "parse 이전에 effective 맵을 만들어 전달"과
+동형. `resolveUserBindings` 는 변경 없이도(키 존재 여부만 봄) 이제 미변경 키가 project.json 기본값을
+받는다. **회귀 위험 각주("적용 후 전량 재감사 필수")는 이미 충족**됨 — 이 기본값 시딩이 포함된 상태로
+이후 y-up 전역 전환(W1)·C1~C8 나머지 배치까지 거친 170씬 전수가 재캡처돼 본 라운드 베이스라인
+(`waple-baselines/main-093dd91`, empty 0)으로 굳었다(별도 전량 재감사를 다시 돌릴 필요 없음 — 이미
+그 결과 위에서 이번 F4-polish 라운드가 출발함). 영향 씬 3302695207 현재 렌더(960×540 재캡처,
+2026-07-28) 육안 확인: 상단 시계/오디오바 위젯이 화면 중앙이 아니라 좌상단(오디오)·우상단(도장
+아이콘) 배치로 정상 — "중앙 고정" 증상 미관측(단, 저작 project.json 기본값 자체가 우연히 0.5에
+가까운 씬은 이 단일 캡처만으로 판별력이 낮음 — 코드 대조가 1차 근거, 캡처는 보조 확인). 3461168300
+은 개별 재캡처하지 않음(코드 경로가 씬 무관 공통 로직이라 대조 불필요 판단). 문서 갱신만, 코드
+변경 없음.
+
 ### C6-(i). 스크립트 칸 메라 shared.camera 소비자 부재 (3737268876)
 
 - **루트코즈**: JS 제공(`TextScriptEngine.swift:1497-1505,1659,1841`)은 있으나 네이티브 readback
