@@ -443,6 +443,46 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
     }
 
+    /// F4-polish②: Forward+ 라이팅 유니폼(g_LPoint_*/g_LSpot_*/g_LTube_*/g_LDirectional_*/
+    /// g_LFeature_Shadow*, 실물 assets/shaders/generic3.frag `#if LIGHTS_POINT` 등 블록 — 로컬 코퍼스는
+    /// 콤보 참조 0건이라 오늘 시점 이 블록이 커스텀 경로에 도달하진 않지만, 콤보 가드 없이 직접
+    /// 선언하는 셰이더가 나타나도 g_TexelSize 급 오분류(머티리얼 sceneKey 편입 → 팬텀 슬롯)는 막아야
+    /// 한다는 것이 이 테스트의 요지 — **인식(비-머티리얼) + 중립값**만 검증, 인덱스 `[l]` 구독 안전성은
+    /// 스코프 밖(위 isEngine 주석 "잔여 한계" 참조, 배열 아닌 스칼라 참조로 케이스를 단순화).
+    func testForwardLightingUniformsAreEngineNotMaterial() throws {
+        let frag = """
+        varying vec3 v_WorldPos;
+        uniform sampler2D g_Texture0;
+        uniform vec4 g_LPoint_Color;
+        uniform vec4 g_LPoint_Origin;
+        uniform vec4 g_LSpot_Color;
+        uniform vec4 g_LSpot_Origin;
+        uniform vec4 g_LSpot_Direction;
+        uniform vec4 g_LTube_Color;
+        uniform vec4 g_LTube_OriginA;
+        uniform vec4 g_LTube_OriginB;
+        uniform vec4 g_LDirectional_Color;
+        uniform vec4 g_LDirectional_Direction;
+        uniform vec4 g_LFeature_ShadowPointProjection;
+        uniform vec4 g_LFeature_ShadowProjectionTransform;
+        uniform mat4 g_LFeature_ShadowProjection;
+        varying vec2 v_TexCoord;
+        void main() {
+            vec3 lightDelta = g_LPoint_Origin.xyz - v_WorldPos;
+            vec3 projected = (g_LFeature_ShadowProjection * vec4(lightDelta, 1.0)).xyz + g_LFeature_ShadowProjectionTransform.xyz
+                + g_LFeature_ShadowPointProjection.xyz;
+            vec3 light = g_LPoint_Color.rgb + g_LSpot_Color.rgb + g_LSpot_Origin.xyz + g_LSpot_Direction.xyz
+                + g_LTube_Color.rgb + g_LTube_OriginA.xyz + g_LTube_OriginB.xyz
+                + g_LDirectional_Color.rgb + g_LDirectional_Direction.xyz + projected;
+            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * vec4(light, 1.0);
+        }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
+        XCTAssertTrue(t.msl.contains("float4(0.0, 0.0, 0.0, 0.0)"), "vec4 계열 → 0 벡터 중립값:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float4x4(1.0)"), "g_LFeature_ShadowProjection(mat4) → 항등:\n\(t.msl)")
+    }
+
     func testFrametimeAndPointerLastAreEngineUniforms() throws {
         // 실물 fluidsim/cursorripple: bare g_Frametime(dt 시간적분) + g_PointerPositionLast(이전 프레임 포인터).
         // 머티리얼-0 고정이면 시간적분 동결/유령 링플. ★두 유니폼은 짝 — dt 없이 last 만 주면 발산.

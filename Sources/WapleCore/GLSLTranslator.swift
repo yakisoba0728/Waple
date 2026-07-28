@@ -1163,6 +1163,26 @@ public enum GLSLTranslator {
             || name == "g_LightAmbientColor"
             || (name.hasPrefix("g_") && name.contains("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder);
                                                                    // ...MatrixInverse/...MatrixInverseTranspose 변형 포함(실물 depthparallax)
+            // F4-polish②: Forward+ 라이팅 유니폼(generic3.frag/genericimage3.frag PerformLighting_Deprecated
+            // 실측 — g_LPoint_Color/Origin, g_LSpot_Color/Origin/Direction, g_LTube_Color/OriginA/OriginB,
+            // g_LDirectional_Color/Direction, g_LFeature_Shadow{Projection,ProjectionTransform,
+            // PointProjection,PointProjectionTransform}) — **인식만(재분류 차단), 실값 주입 없음**.
+            // 네이티브 3D 라이팅은 Scene3DLighting.swift 가 전담(Cook–Torrance PBR, 최대 4 lpoint +
+            // point-shadow atlas)하고 커스텀 GLSL→MSL 번역 경로는 이 라이트 피드에 도달하지 않는다
+            // (buildCustomMeshShader 는 라이트 유니폼 버퍼를 바인딩하지 않음). 미등재 시 g_TexelSize
+            // 사고와 동형 클래스로 머티리얼 파라미터(sceneKey 소문자화)에 잘못 편입돼 팬텀 슬롯이 된다.
+            // **잔여 한계(의도적 미해결)**: WE 선언은 배열(`vec4 g_LPoint_Color[LIGHTS_POINT]`)이고
+            // 사용부는 `g_LPoint_Color[l].rgb` 인덱스 접근이다 — 아래 engineReplacement 가 돌려주는
+            // 스칼라 float4(0)/항등 리터럴은 `[l]`과 결합하면(예: `float4(0.0)[l]`은 스칼라 컴포넌트
+            // 접근이 되어 뒤따르는 `.rgb`가 MSL 컴파일 실패) 인덱스 배열 접근에는 컴파일 안전하지 않다
+            // — 이 등재는 순수 "머티리얼 오분류 차단"용이며 실제 인덱스 피드 배선은 스코프 밖(로컬
+            // 코퍼스 460씬 LIGHTS_POINT/SPOT/TUBE/DIRECTIONAL 콤보 참조 0건이라 ShaderPreprocessor
+            // 의 `#if LIGHTS_*` 게이트가 이 블록 자체를 항상 전처리 단계에서 제거함 —
+            // ShaderPreprocessor.swift:38-40 참조, 오늘 시점 커스텀 경로 도달 0건 확정). 콤보가 없어도
+            // 이 이름을 그대로 무가드 선언하는 셰이더가 나타나면(에디터가 막지 않음) 여전히 위 subscript
+            // 갭이 남는다 — 실물 관측 시 인덱스 가능한 constant 배열 피드로 교체할 것.
+            || name.hasPrefix("g_LPoint_") || name.hasPrefix("g_LSpot_") || name.hasPrefix("g_LTube_")
+            || name.hasPrefix("g_LDirectional_") || name.hasPrefix("g_LFeature_Shadow")
     }
     static func engineReplacement(_ name: String) -> String {
         if name == "g_Time" { return "eng.timeAndPad.x" }
@@ -1205,6 +1225,16 @@ public enum GLSLTranslator {
         if name == "g_TexelSizeHalf" { return "(0.5 / eng.targetRes.xy)" }
         // F744: g_LightAmbientColor 는 엔진 상수로 승격. 실제 scene ambientColor 연동 전 흰색 중립값.
         if name == "g_LightAmbientColor" { return "float4(1.0, 1.0, 1.0, 1.0)" }
+        // F4-polish②: Forward+ 라이팅 유니폼 — 위 isEngine 주석의 "인식만, 인덱스 배열 피드는 스코프
+        // 밖" 한계를 그대로 유지. g_LFeature_ShadowProjection 만 실측 mat4(WE HLSL 크로스컴파일형
+        // `const float4x4 g_LFeature_ShadowProjection[...]`, A2-pbr-lighting.md:238) — 항등 반환.
+        // 나머지(Color/Origin/Direction/OriginA/OriginB/Exponent/…Transform/PointProjection)는 전부
+        // vec4 — 0 벡터 반환(radius/exponent 로 쓰이는 .w 도 0 = 광량 0과 동형, 안전).
+        if name == "g_LFeature_ShadowProjection" { return "float4x4(1.0)" }
+        if name.hasPrefix("g_LPoint_") || name.hasPrefix("g_LSpot_") || name.hasPrefix("g_LTube_")
+            || name.hasPrefix("g_LDirectional_") || name.hasPrefix("g_LFeature_Shadow") {
+            return "float4(0.0, 0.0, 0.0, 0.0)"
+        }
         if name == "g_AudioSpectrum16Left" { return "audioL" }
         if name == "g_AudioSpectrum16Right" { return "audioR" }
         if name == "g_AudioSpectrum32Left" { return "audioL32" }
