@@ -254,6 +254,13 @@ enum SnapshotPipeline {
         if let v = env["WAPLE_EFFECT_SKIP"], !v.isEmpty { active.append("WAPLE_EFFECT_SKIP=\(v)") }
         if env["WAPLE_DISABLE_TRANSLATED"] == "1" { active.append("WAPLE_DISABLE_TRANSLATED=1") }
         if env["WAPLE_BC_NATIVE"] == "0" { active.append("WAPLE_BC_NATIVE=0") }
+        // F2-puppet 지적: WAPLE_CAPTURE_TIME(위 captureTimes)도 캡처 시각을 바꿔 diff 결과를 좌우하는
+        // 렌더-변형 게이트인데 이 목록에 빠져 있으면 runCompare 의 F145 게이트 불일치 경고와 매니페스트의
+        // activeDebugGates 기록 양쪽에서 누락된다. fallback([captureT])과 실제로 다를 때만 등재해
+        // "값은 있지만 기본값과 같아 무효과"인 경우를 활성으로 오표기하지 않는다.
+        if env["WAPLE_CAPTURE_TIME"] != nil, captureTimes != [captureT] {
+            active.append("WAPLE_CAPTURE_TIME=\(captureTimes.map { "\($0)" }.joined(separator: ","))")
+        }
         return active.sorted()
     }
 
