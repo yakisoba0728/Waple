@@ -303,6 +303,19 @@ public struct SceneTextLayer: Equatable {
     public var outlineThickness: Float = 0
     public var opaqueBackground: Bool = false
     public var backgroundColor: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    /// F4-polish①: 배경 박스 앵커(에디터 "Anchor" — 실측 코퍼스 anchor:1478/1642, 값 7종
+    /// none:1409(대다수 미지정) center:51 left:8 right:6 top:3 topright:1 bottomright:1). "none"이면
+    /// 박스가 텍스트 origin 을 그대로 따름(WE 기본). **파스·보존만** — opaqueBackground 와 동형으로
+    /// 렌더 소비(배경박스 앵커 오프셋 적용)는 최소구현 정책 밖(실가시 임팩트 낮음, 필요 시 이 필드로 후속).
+    public var anchor: String = "none"
+    /// F4-polish①: 배경 박스 패딩(에디터 "Padding" — 실측 padding:1642 전건, **혼합 타입**: 단일
+    /// 스칼라(정수/실수, 1459건, 예 `32`)와 "x y" 벡터 문자열(168건, 예 `"32.00000 32.00000"`) 둘 다
+    /// 저작됨 — 스칼라는 양축 동일값으로 확장. 기본 (0,0) = 무패딩(무회귀). 파스·보존만(anchor 와 동일 정책).
+    public var padding: Vec2 = Vec2(x: 0, y: 0)
+    /// F4-polish①: 배경 박스 밝기(에디터 "Background Brightness" — 실측 backgroundbrightness:1474/1642,
+    /// 관측값 전건 1.0·170건 부재). 기본 1 = 원색 그대로(부재 시 0 이면 검정 박스로 오염되는 잠재
+    /// 함정이라 1 로 폴백). 파스·보존만(anchor/padding 과 동일 정책).
+    public var backgroundBrightness: Float = 1
 }
 
 /// 3D 씬 카메라(2D 의 orthogonalprojection 대체). look-at 파라미터 + 원근 fov.
@@ -1468,6 +1481,10 @@ extension SceneDocument {
         t.outlineThickness = float(obj["outlinethickness"]) ?? 0
         t.opaqueBackground = (unwrap(obj["opaquebackground"]) as? Bool) ?? false
         t.backgroundColor = vec3(obj["backgroundcolor"]) ?? Vec3(x: 0, y: 0, z: 0)
+        // F4-polish①: anchor/padding/backgroundbrightness — 파스·보존만(SceneTextLayer 필드 주석 참조).
+        t.anchor = (obj["anchor"] as? String) ?? "none"
+        t.padding = uniformVec2(obj["padding"]) ?? Vec2(x: 0, y: 0)
+        t.backgroundBrightness = float(obj["backgroundbrightness"]) ?? 1
         return t
     }
 
@@ -2263,6 +2280,13 @@ extension SceneDocument {
     }
     private static func vec2(_ v: Any?) -> Vec2? {
         let f = floats(v); return f.count >= 2 ? Vec2(x: f[0], y: f[1]) : nil
+    }
+    /// F4-polish①: 스칼라(단일 숫자, `float()` 경유) 또는 "x y" 벡터 문자열(`vec2()` 경유) 둘 다 저작되는
+    /// 필드(실측: text.padding — 정수/실수 스칼라 1459건 + "x y" 168건). 스칼라는 양축 동일값으로 확장.
+    private static func uniformVec2(_ v: Any?) -> Vec2? {
+        if let v2 = vec2(v) { return v2 }
+        if let s = float(v) { return Vec2(x: s, y: s) }
+        return nil
     }
     private static func vec3(_ v: Any?) -> Vec3? {
         let f = floats(v); return f.count >= 3 ? Vec3(x: f[0], y: f[1], z: f[2]) : nil
