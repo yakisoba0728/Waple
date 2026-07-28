@@ -70,6 +70,7 @@ public final class SceneScriptContext {
         if let store = localStorageStore { installStorageBridge(ctx, store: store) }
         ctx.evaluateScript(TextScriptEngine.shims)
         if let ms = TextScriptEngine.captureDateEpochMillis { ctx.evaluateScript(TextScriptEngine.dateOverrideJS(ms)) }
+        if let seed = TextScriptEngine.captureRandomSeed { ctx.evaluateScript(TextScriptEngine.randomOverrideJS(seed)) }
         ctx.evaluateScript("__setCanvasSize(\(TextScriptEngine.jsNumber(width)), \(TextScriptEngine.jsNumber(height)));")
         if TextScriptEngine.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
         installSoundBridge(ctx)
@@ -283,6 +284,37 @@ public final class TextScriptEngine {
     /// 머신의 시스템 TZ 와 무관하게 동일 픽셀을 낸다(dateOverrideJS 참고, 실측 근거는 그쪽 주석).
     public static var captureDateEpochMillis: Double?
 
+    /// F1-nondet(2026-07-28): 캡처/스냅샷 결정성 훅 — 설정 시 JSContext 의 전역 `Math.random`을 이 시드
+    /// 기반 결정적 PRNG(mulberry32)로 치환. nil(프로덕션 기본) = 실 Math.random 유지(진짜 WE 는 최초
+    /// 로드 시 localStorage 미보유 컨트롤러가 `Math.random()`으로 초기값을 고르고 이후 영속 — 라이브
+    /// 데스크탑에선 이 "최초 1회 랜덤"이 정상 동작이라 건드리지 않는다). 헤드리스 캡처는
+    /// `container.window == nil` 경로라 localStorageStore 가 항상 nil(F810, 메모리 전용·매 마운트
+    /// 리셋) — 실물 3300031038(팔레트 컨트롤러 `3 Color Picker`, origin 스크립트) 의 `init()` 이
+    /// `loadPaletteFromStorage()` 실패마다 `pickNewPalette()` → `Math.random()` 분기로 떨어져 마운트마다
+    /// 다른 팔레트를 골랐다 — `shared.paletteColor2`(플레이어 배경 tint 이펙트가 소비)가 매 캡처 달라져
+    /// 자기-일관성 셀프체크가 비결정으로 잡았다(bbox x66-304·y184-240, 480×270 캔버스 — 음악 플레이어
+    /// 라운드코너 배경 tint). Date/파티클 시드와 동일 철학(SnapshotPipeline "결정성 확보" 규약) —
+    /// SnapshotPipeline.pinRenderSettings 가 캡처 동안만 고정 상수로 핀(defer 복원).
+    public static var captureRandomSeed: UInt64?
+
+    /// captureRandomSeed 주입용 JS: 전역 Math.random 을 mulberry32(순수 결정적, 암호학 강도 불필요 —
+    /// 캡처 재현성만 목적) 로 교체. 시드는 32비트로 접어 넣는다(algorithm 자체가 32비트 상태).
+    static func randomOverrideJS(_ seed: UInt64) -> String {
+        let s = UInt32(truncatingIfNeeded: seed)
+        return """
+        (function(){
+            var g = Function('return this')();
+            var state = \(s) >>> 0;
+            g.Math.random = function(){
+                state |= 0; state = (state + 0x6D2B79F5) | 0;
+                var t = Math.imul(state ^ (state >>> 15), 1 | state);
+                t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        })();
+        """
+    }
+
     /// engine.isScreensaver() 반환값(WE: 화면보호기로 구동 중이면 true). 프로세스 전역 — 실행 문맥이
     /// 컨텍스트 생성 전 1회 설정. 기본 false(데스크탑 배경 = 화면보호기 아님; 캡처·기존 앱 경로 무변화 가드).
     /// 현 Waple 화면보호기(WapleSaverView)는 동영상 전용이라 씬 스크립트 경로가 없어 상시 false —
@@ -391,6 +423,7 @@ public final class TextScriptEngine {
         }
         ctx.evaluateScript(Self.shims)
         if let ms = Self.captureDateEpochMillis { ctx.evaluateScript(Self.dateOverrideJS(ms)) }
+        if let seed = Self.captureRandomSeed { ctx.evaluateScript(Self.randomOverrideJS(seed)) }
         if Self.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
         Self.injectScriptPropOverrides(ctx, json: scriptPropsJSON)
         scriptPropOverridesSnapshot = Self.currentScriptPropOverrides(ctx)   // F475

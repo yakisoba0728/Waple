@@ -24,6 +24,11 @@ enum SnapshotPipeline {
     /// KST(UTC+9) 고정 오프셋으로 계산하므로 이 상수의 "KST 21:00" 해석은 캡처 머신의 실제 시스템 TZ 와
     /// 무관하게 항상 성립(호스트 TZ 미고정이 원인이던 하네스 결함 수정).
     static let captureEpochMillis: Double = 1_704_110_400_000
+    /// F1-nondet(2026-07-28): 씬 스크립트 `Math.random()` 결정화 시드 — 임의 상수(변경 시 팔레트/랜덤
+    /// 분기 의존 씬 베이스라인 재생성 필요). TextScriptEngine.captureRandomSeed 참고(팔레트 컨트롤러
+    /// 실물 3300031038 — localStorage 미보유 헤드리스 마운트마다 다른 초기 팔레트를 골라 셀프체크
+    /// 비결정으로 잡히던 근본원인).
+    static let captureRandomSeed: UInt64 = 0xC0FFEE_1038
 
     /// 폴링 없이 항상 "정지" — 미디어 씬이 osascript 를 스폰하지 않게(결정적·TCC 무).
     struct StoppedNowPlaying: NowPlayingProvider { func fetch() -> NowPlayingInfo? { nil } }
@@ -189,12 +194,15 @@ enum SnapshotPipeline {
         let oldBase = BaseAssetsSettings.baseAssetsDirectory
         let oldEpoch = TextScriptEngine.captureDateEpochMillis
         TextScriptEngine.captureDateEpochMillis = captureEpochMillis
+        let oldRandomSeed = TextScriptEngine.captureRandomSeed
+        TextScriptEngine.captureRandomSeed = captureRandomSeed
         let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"] ?? (root + "/assets")
         if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
             BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)
         }
         return { SceneRenderSettings.fitMode = oldFit; BaseAssetsSettings.baseAssetsDirectory = oldBase
-                 TextScriptEngine.captureDateEpochMillis = oldEpoch }
+                 TextScriptEngine.captureDateEpochMillis = oldEpoch
+                 TextScriptEngine.captureRandomSeed = oldRandomSeed }
     }
 
     /// F145: 렌더 출력을 변형하는 WAPLE_* 디버그 게이트(mount/encode 시 ProcessInfo 에서 라이브로 읽힘 —
