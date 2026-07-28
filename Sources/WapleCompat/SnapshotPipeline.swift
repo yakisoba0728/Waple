@@ -17,6 +17,17 @@ enum SnapshotPipeline {
     static let thumbW = ProcessInfo.processInfo.environment["WAPLE_THUMB_W"].flatMap(Int.init) ?? 256
     static let thumbH = ProcessInfo.processInfo.environment["WAPLE_THUMB_H"].flatMap(Int.init) ?? 144
     static let captureT: Float = 6.0   // 인트로 페이드가 끝난 정상상태(GT 규약과 동일)
+    /// F2-puppet①: 애니메이션 시간의존 누적 결함(퍼펫 등)은 t=6.0 단일 프레임으로 노출되지 않는다.
+    /// WAPLE_CAPTURE_TIME=<초>(콤마구분 복수 가능, 예 "0,2,6,12,30")로 캡처 시각을 오버라이드할 수 있게
+    /// 확장 — 미설정 시 [captureT] 그대로라 코퍼스 --capture/--compare(베이스라인)는 무회귀. 다중 시각을
+    /// 지정하면 captureFrame() 이 한 마운트에서 전부 렌더하고, runCapture() 가 captureT 에 대응하는
+    /// 프레임만 기존 <id>.png 캐논 썸네일/매니페스트 entry 로 쓰며 나머지는 진단용 <id>_t<초>.png 로
+    /// thumbs/ 옆에 남긴다(매니페스트 스키마 불변 — SnapshotEntry/SnapshotManifest 필드 추가 없음).
+    static let captureTimes: [Float] = parseCaptureTimes(
+        ProcessInfo.processInfo.environment["WAPLE_CAPTURE_TIME"], fallback: [captureT])
+    /// 캐논(매니페스트 entry/self-check/해시 대상) 캡처 시각 — captureTimes 에 captureT 가 포함되면 그것,
+    /// 아니면(명시적으로 6.0 을 뺀 진단 실행) 첫 값으로 폴백. 기본 경로(오버라이드 없음)에선 항상 captureT.
+    static let primaryCaptureTime: Float = captureTimes.contains(captureT) ? captureT : (captureTimes.first ?? captureT)
     static let fitMode: FitMode = .fill
     /// 벽시계 텍스트(시계/날짜 레이어)가 재캡처마다 동일 픽셀이 되도록 JS Date 무인자/now 를 핀하는 고정
     /// epoch(ms) — 임의 상수(2024-01-01 12:00:00 UTC = KST 21:00:00). 변경 시 시계/날짜 씬 베이스라인
@@ -60,16 +71,36 @@ enum SnapshotPipeline {
     // MARK: 단일 캡처(마운트 → 고정조건 렌더 → 256×144 PNG)
 
     /// 프레임을 내면 .pixels(정규화 RGBA + PNG경로), 픽셀이 없으면(비디오-백드 등) .empty.
-    /// 마운트 스로우는 호출자로 전파(→ failures 버킷).
+    /// 마운트 스로우는 호출자로 전파(→ failures 버킷). captureTimes 가 복수면 한 마운트에서 전부 렌더해
+    /// tmp 에 frame_t<초>.png 로 남기고(진단용, runCapture 가 골라 복사), 반환값은 항상 primaryCaptureTime
+    /// 프레임 하나 — 기본 경로(오버라이드 없음)에선 종전과 완전히 동일한 단일 프레임 캡처.
     static func captureFrame(project: WallpaperProject, into tmp: URL) throws -> Frame {
+        // F2-puppet①: tmp 는 runCapture 호출 전체(전 씬 + self-check 2차 캡처)에 걸쳐 재사용되는 PID-스코프
+        // 고정 경로 — 이번 호출이 특정 시각의 프레임을 못 내면(writeFramePNG 실패) 그 파일명 자리에 "이전
+        // 씬/이전 호출"이 남긴 동명 PNG가 그대로 남아 있을 수 있다. 매 호출 시작에 이번에 요청한 시각들의
+        // 예상 파일명을 먼저 지워 "이번 호출이 실제로 쓴 파일만" 아래서 보이게 한다.
+        let fm = FileManager.default
+        for t in captureTimes {
+            try? fm.removeItem(at: tmp.appendingPathComponent("frame_t\(String(format: "%.1f", t)).png"))
+        }
         let r = SceneRenderer()
         r.nowPlayingProvider = StoppedNowPlaying()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: thumbW, height: thumbH)), project: project)
         r.pause()                    // 라이브 입력(오디오 캡처·시차) 정지 → 결정성
         r.setSpectrum(.silent)       // 오디오-반응 효과를 무신호로 고정
-        let urls = r.captureFrames(width: thumbW, height: thumbH, times: [captureT], toDir: tmp)
+        let urls = r.captureFrames(width: thumbW, height: thumbH, times: captureTimes, toDir: tmp)
         r.teardown()
+        let primaryName = "frame_t\(String(format: "%.1f", primaryCaptureTime)).png"
+        if let exact = urls.first(where: { $0.lastPathComponent == primaryName }) {
+            guard let rgba = pngToRGBA(exact, width: thumbW, height: thumbH) else { return .empty }
+            return .pixels(rgba, png: exact)
+        }
+        // primaryCaptureTime 프레임 자체가 없다(예: captureTimes 가 명시적으로 captureT 를 빼고 지정돼
+        // primaryCaptureTime 이 첫 값으로 폴백했는데 그 프레임마저 못 나온 경우) — urls.first 로 대체하되
+        // 매니페스트의 captureTime 필드(=primaryCaptureTime)와 실제 반환 프레임의 시각이 어긋난다는 사실을
+        // 표면화한다(조용히 다른 시각 프레임을 "캐논"으로 둔갑시키지 않기 위함).
         guard let png = urls.first, let rgba = pngToRGBA(png, width: thumbW, height: thumbH) else { return .empty }
+        fputs("[snap] ⚠️ primaryCaptureTime(\(primaryCaptureTime)) 프레임 없음 — \(png.lastPathComponent) 로 대체(매니페스트 captureTime 값과 실제 프레임 시각 불일치 가능)\n", stderr)
         return .pixels(rgba, png: png)
     }
 
@@ -135,6 +166,19 @@ enum SnapshotPipeline {
                     // 으로 회귀 커버리지를 조용히 잃는다 — 실패를 stderr 로 표면화(캡처 자체는 계속).
                     do { try fm.copyItem(at: png1, to: thumbs.appendingPathComponent("\(id).png")) }
                     catch { fputs("[snap] ⚠️ 썸네일 복사 실패 \(id): \(error) — 이후 compare 에서 이 씬은 skip 됩니다\n", stderr) }
+                    // F2-puppet①: WAPLE_CAPTURE_TIME 로 다중 시각을 지정했으면 진단용 부가 프레임을
+                    // <id>_t<초>.png 로 thumbs/ 옆에 남긴다(매니페스트 entry/self-check 은 캐논 1장만 —
+                    // 스키마 불변). 셀프체크(2차 캡처)가 tmp 를 덮어쓰기 전에 먼저 복사해야 한다.
+                    if captureTimes.count > 1 {
+                        for t in captureTimes where t != primaryCaptureTime {
+                            let name = "frame_t\(String(format: "%.1f", t)).png"
+                            let src = tmp.appendingPathComponent(name)
+                            guard fm.fileExists(atPath: src.path) else { continue }
+                            let dst = thumbs.appendingPathComponent("\(id)_t\(String(format: "%.1f", t)).png")
+                            try? fm.removeItem(at: dst)
+                            try? fm.copyItem(at: src, to: dst)
+                        }
+                    }
                     // 셀프체크: 독립 재마운트로 두 번째 캡처 → 프레임 산출 씬만 2× (empty/fail 은 1×).
                     // F522: 스키마 규약(SnapshotEntry.selfMaxDiff "셀프체크 안 했으면 -1")에 맞춰 2차 캡처가
                     // 픽셀을 내지 못하면 -1 유지 — 종전엔 0 이 기록돼 "실행했는데 최대차 0"과 구분 불가였다.
@@ -159,7 +203,7 @@ enum SnapshotPipeline {
 
         let manifest = SnapshotManifest(
             gitSHA: sha, label: lbl, thumbWidth: thumbW, thumbHeight: thumbH,
-            captureTime: captureT, createdAt: ISO8601DateFormatter().string(from: Date()),
+            captureTime: primaryCaptureTime, createdAt: ISO8601DateFormatter().string(from: Date()),
             entries: entries.sorted { $0.id < $1.id }, empties: empties.sorted(), failures: failures.sorted(),
             activeDebugGates: activeDebugGates())
         do {

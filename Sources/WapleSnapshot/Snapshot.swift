@@ -121,6 +121,17 @@ public func passes(_ m: DiffMetrics, _ t: DiffThreshold) -> Bool {
     m.meanAbsDiff <= t.meanAbsDiff && m.fracExceeding <= t.fracExceeding
 }
 
+// MARK: - 캡처 시각 파싱
+
+/// "6.0,12,,abc, 30" 같은 콤마구분 캡처 시각(초) 문자열을 파싱. nil/공백/전부 무효면 fallback.
+/// 입력 순서를 보존(정렬 안 함) — 호출자가 필요하면 별도로 정렬. F2-puppet①: 애니메이션 시간의존
+/// 누적 결함(퍼펫 등)을 다중 시각 캡처로 재현하기 위한 WAPLE_CAPTURE_TIME 오버라이드 파싱 코어.
+public func parseCaptureTimes(_ raw: String?, fallback: [Float]) -> [Float] {
+    guard let raw, !raw.trimmingCharacters(in: .whitespaces).isEmpty else { return fallback }
+    let vals = raw.split(separator: ",").compactMap { Float($0.trimmingCharacters(in: .whitespaces)) }
+    return vals.isEmpty ? fallback : vals
+}
+
 // MARK: - 해시 / luma
 
 /// FNV-1a 64비트 hex — 썸네일 동일성 빠른 판정/로깅용(게이트는 픽셀 diff 가 담당).
