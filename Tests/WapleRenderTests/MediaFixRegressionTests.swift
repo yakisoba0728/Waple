@@ -294,9 +294,9 @@ extension MediaFixRegressionTests {
     /// TEX 헤더 + 임의 페이로드(VideoTextureExtractorTests 와 동일 구조).
     private func makeTex(payload: [UInt8]) -> Data {
         var b: [UInt8] = []
-        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(0) + i32(0) + i32(100) + i32(100) + i32(100) + i32(100)
-        b += Array("TEXB0001".utf8) + [0] + payload
+        b += bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(0), i32b(0), i32b(100), i32b(100), i32b(100), i32b(100))
+        b += bytes(tag("TEXB0001"), payload)
         return Data(b)
     }
 

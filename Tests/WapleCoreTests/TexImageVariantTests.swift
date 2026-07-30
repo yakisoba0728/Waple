@@ -15,20 +15,20 @@ final class TexImageVariantTests: XCTestCase {
         -> (data: Data, defaultRange: Range<Int>, variantRanges: [Int: Range<Int>]) {
         let dec = ((w + 3) / 4) * ((h + 3) / 4) * 16
         var b: [UInt8] = []
-        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(4) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)
-        b += Array("TEXB0004".utf8) + [0]
-        b += i32(1) + i32(-1) + i32(variants.count)                 // imageCount, imageFormat=-1, 변형수
-        for v in variants { b += i32(1) + i32(v.idx) + i32(0) + cond(v.value) + [0] }   // [1][idx][0][json NUL]
+        b += bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(4), i32(0), i32(w), i32(h), i32(w), i32(h))
+        b += tag("TEXB0004")
+        b += bytes(i32(1), i32(-1), i32(variants.count))             // imageCount, imageFormat=-1, 변형수
+        for v in variants { b += bytes(i32(1), i32(v.idx), i32(0), cond(v.value), [0]) }   // [1][idx][0][json NUL]
         b += i32(1)                                                 // 기본 mipCount
-        b += i32(w) + i32(h) + i32(0) + i32(dec) + i32(defaultPayload.count)   // w,h,isLZ4=0,dec,comp
+        b += bytes(i32(w), i32(h), i32(0), i32(dec), i32(defaultPayload.count))   // w,h,isLZ4=0,dec,comp
         let defaultStart = b.count
         b += defaultPayload
         let defaultRange = defaultStart..<(defaultStart + defaultPayload.count)
-        b += i32(1) + i32(variants.count)                           // 변형 섹션: imageCount, 변형수
+        b += bytes(i32(1), i32(variants.count))                     // 변형 섹션: imageCount, 변형수
         var ranges: [Int: Range<Int>] = [:]
         for v in variants {
-            b += i32(1) + i32(v.idx) + i32(0) + i32(0) + i32(w) + i32(h) + i32(13) + i32(v.payload.count)
+            b += bytes(i32(1), i32(v.idx), i32(0), i32(0), i32(w), i32(h), i32(13), i32(v.payload.count))
             let s = b.count
             b += v.payload
             ranges[v.idx] = s..<(s + v.payload.count)
@@ -96,10 +96,10 @@ final class TexImageVariantTests: XCTestCase {
     /// 비-조건 BC3 텍스처: variants 는 []이고 기본 mip 정상(무회귀 — selectedMip 는 항상 기본).
     func testNonConditionalHasNoVariants() {
         let payload = [UInt8](repeating: 7, count: 16)
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(4) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)
-        b += Array("TEXB0004".utf8) + [0] + i32(1) + i32(-1) + i32(0) + i32(1)   // v4 필드=0(변형 없음), mipCount=1
-        b += i32(4) + i32(4) + i32(0) + i32(16) + i32(payload.count) + payload
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(4), i32(0), i32(4), i32(4), i32(4), i32(4))
+        b += bytes(tag("TEXB0004"), i32(1), i32(-1), i32(0), i32(1))   // v4 필드=0(변형 없음), mipCount=1
+        b += bytes(i32(4), i32(4), i32(0), i32(16), i32(payload.count), payload)
         let t = TexImage.parse(Data(b))
         XCTAssertEqual(t?.payload, .bc3)
         XCTAssertEqual(t?.variants.count, 0)
@@ -110,13 +110,13 @@ final class TexImageVariantTests: XCTestCase {
     /// 변형 섹션 헤더가 체인 수와 불일치하면 variants=[](기본 mip 무회귀 — 방어).
     func testMalformedVariantSectionFallsBackToDefault() {
         let payload = [UInt8](repeating: 0x44, count: 16)
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(4) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)
-        b += Array("TEXB0004".utf8) + [0] + i32(1) + i32(-1) + i32(2)            // 변형수 2
-        b += i32(1) + i32(1) + i32(0) + Self.cond("2") + [0]                     // 조건 2개
-        b += i32(1) + i32(2) + i32(0) + Self.cond("1") + [0]
-        b += i32(1) + i32(4) + i32(4) + i32(0) + i32(16) + i32(payload.count) + payload  // 기본 mip
-        b += i32(1) + i32(99)                                                    // 섹션 변형수=99 ≠ 체인 2
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(4), i32(0), i32(4), i32(4), i32(4), i32(4))
+        b += bytes(tag("TEXB0004"), i32(1), i32(-1), i32(2))                     // 변형수 2
+        b += bytes(i32(1), i32(1), i32(0), Self.cond("2"), [0])                  // 조건 2개
+        b += bytes(i32(1), i32(2), i32(0), Self.cond("1"), [0])
+        b += bytes(i32(1), i32(4), i32(4), i32(0), i32(16), i32(payload.count), payload)  // 기본 mip
+        b += bytes(i32(1), i32(99))                                              // 섹션 변형수=99 ≠ 체인 2
         let t = TexImage.parse(Data(b))
         XCTAssertEqual(t?.payload, .bc3)
         XCTAssertEqual(t?.variants.count, 0, "섹션 변형수 불일치 → 변형 없음")

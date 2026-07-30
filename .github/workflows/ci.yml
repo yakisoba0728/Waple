@@ -1,9 +1,14 @@
 name: CI
 
+# 문서만 바뀐 푸시로 macOS 러너를 태우지 않는다(README/BACKLOG/docs 커밋이 잦다).
+# 코드 경로가 하나라도 섞이면 정상 실행된다 — paths-ignore 는 전 변경이 목록에 들 때만 스킵.
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE", ".gitignore", ".gitattributes"]
   pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE", ".gitignore", ".gitattributes"]
+  workflow_dispatch:   # 브랜치에서 손으로 돌려 워크플로 자체를 반복 검증(PR 없이)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -11,55 +16,46 @@ concurrency:
 
 jobs:
   build-test:
-    runs-on: macos-14
-    timeout-minutes: 90
+    # macos-14 는 deprecated 이고 이미지 최신 Xcode 가 16.2(Swift 6.0.3) — 이 코드베이스의
+    # 타입체커 한계 진단이 로컬(Swift 6.4)과 갈려 CI 전용 컴파일 에러를 냈다. macos-26 은
+    # 기본 Xcode 26.x 로 로컬 툴체인과 정합하고, 러너 세대도 최신이라 컴파일이 빠르다.
+    runs-on: macos-26
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # 러너 기본 Xcode(15.4 = Swift 5.10)는 이 코드베이스에서 오진단을 낸다
-      # (@Sendable 캡처 var 에러화, ?? 체인 리터럴 오추론, 타입체크 타임아웃 등 —
-      #  로컬 최신 툴체인과 진단이 달라 CI 전용 에러 6파일+테스트 2파일을 유발).
-      # 이미지 안의 최신 Xcode 로 고정해 로컬 개발 툴체인과 진단을 맞춘다.
-      - name: Select latest Xcode
+      # 러너 실측치 기록: 코어 수/메모리/Xcode 목록 — 잡 시간 예산과 병렬화 판단의 근거.
+      - name: Runner + toolchain facts
         run: |
-          LATEST="$(ls -d /Applications/Xcode*.app | grep -vi beta | sort -V | tail -1)"
-          echo "Selecting $LATEST"
-          sudo xcode-select -s "$LATEST/Contents/Developer"
-          swift --version
+          sw_vers
+          echo "image=${ImageVersion:-unknown} cores=$(sysctl -n hw.ncpu) mem=$(( $(sysctl -n hw.memsize) / 1024 / 1024 ))MB"
           xcodebuild -version
+          swift --version
+          ls -d /Applications/Xcode*.app
 
-      # zero-dep 프로젝트라 Package.resolved 가 없으므로 캐시 키는 Package.swift 해시 + 러너 이미지 버전.
+      # zero-dep 프로젝트라 Package.resolved 가 없다 — 캐시 키는 Package.swift 해시,
+      # 프리픽스는 러너 이미지 + 툴체인(툴체인이 바뀌면 오브젝트가 무효).
       - name: Compute .build cache key
         id: cache-key
         run: |
-          prefix="macos-img${ImageVersion:-unknown}-spm"
+          toolchain="$(swift --version 2>&1 | head -1 | tr -cs '[:alnum:].' '-')"
+          prefix="spm-${ImageVersion:-unknown}-${toolchain}"
           echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
           echo "key=$prefix-$(shasum -a 256 Package.swift | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v6
         with:
           path: .build
           key: ${{ steps.cache-key.outputs.key }}
           restore-keys: |
             ${{ steps.cache-key.outputs.prefix }}-
 
-      - name: Build
-        run: swift build
+      # 빌드와 테스트 실행을 분리한다 — 종전엔 `swift build` 뒤 `swift test` 가 테스트 타깃을
+      # 다시 컴파일해, 스텝 시간이 "컴파일 + 실행" 으로 뭉쳐 어디가 느린지 알 수 없었다.
+      - name: Build (sources + tests)
+        run: swift build --build-tests
 
-      # 테스트 전체 실행. 출력을 파일로 남겨 실패 스텝에서 요약/tail 에 재사용한다.
-      - name: Test
-        run: |
-          set -o pipefail
-          swift test 2>&1 | tee test-output.log
-
-      - name: Show failure summary
-        if: failure()
-        run: |
-          grep -E "error:|failed|Fatal" test-output.log | head -50 || true
-          echo "--- tail ---"
-          tail -100 test-output.log
-
-      # 화멘보호기(Sources/WapleSaver)는 SPM 밖 Obj-C 라서 swift test 커버리지 밖.
+      # 화면보호기(Sources/WapleSaver)는 SPM 밖 Obj-C 라서 swift test 커버리지 밖.
       # package-app.sh:42-46 과 동일한 플래그로 번들 컴파일만 검증(서명/DMG 불요).
       - name: Compile screensaver bundle
         run: |
@@ -69,3 +65,23 @@ jobs:
             -framework QuartzCore -framework ScreenSaver \
             Sources/WapleSaver/WapleSaverView.m \
             -o "$OUT"
+
+      - name: Test
+        run: |
+          set -o pipefail
+          swift test --skip-build 2>&1 | tee test-output.log
+
+      - name: Show failure summary
+        if: failure()
+        run: |
+          grep -E "error:|failed|Fatal" test-output.log | head -50 || true
+          echo "--- tail ---"
+          tail -100 test-output.log
+
+      # 실패해도 캐시를 남긴다. 종전 통합 actions/cache 는 잡이 실패하면 post 스텝이 스킵돼
+      # 캐시가 한 번도 생성되지 않았고(로그: "Cache not found"), 매 런이 콜드 빌드였다.
+      - uses: actions/cache/save@v6
+        if: always()
+        with:
+          path: .build
+          key: ${{ steps.cache-key.outputs.key }}

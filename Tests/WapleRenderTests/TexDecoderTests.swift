@@ -8,9 +8,9 @@ import WapleCore
 
 final class TexDecoderTests: XCTestCase {
     private func texHeader(format: Int, w: Int, h: Int) -> [UInt8] {
-        return Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-            + i32(format) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)
-            + Array("TEXB0001".utf8) + [0]
+        return bytes(tag("TEXV0005"), tag("TEXI0001"),
+                     i32b(format), i32b(0), i32b(w), i32b(h), i32b(w), i32b(h),
+                     tag("TEXB0001"))
     }
 
     /// ImageIO로 PNG 생성(손으로 친 바이트 위험 회피).
@@ -54,10 +54,10 @@ final class TexDecoderTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(n, 0)
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32bytes(0) + i32bytes(0) + i32bytes(2) + i32bytes(2) + i32bytes(2) + i32bytes(2)  // texFormat 무시됨
-        b += Array("TEXB0003".utf8) + [0] + i32bytes(1) + i32bytes(13) + i32bytes(1)            // imageCount, imageFormat=PNG, mipCount
-        b += i32bytes(2) + i32bytes(2) + i32bytes(1) + i32bytes(raw.count) + i32bytes(n)        // w,h,isLZ4=1,dec,comp
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(0), i32b(0), i32b(2), i32b(2), i32b(2), i32b(2))       // texFormat 무시됨
+        b += bytes(tag("TEXB0003"), i32b(1), i32b(13), i32b(1))               // imageCount, imageFormat=PNG, mipCount
+        b += bytes(i32b(2), i32b(2), i32b(1), i32b(raw.count), i32b(n))       // w,h,isLZ4=1,dec,comp
         b += Array(comp[0..<n])
         let data = Data(b)
         let tex = try XCTUnwrap(TexImage.parse(data))
@@ -105,10 +105,10 @@ final class TexDecoderTests: XCTestCase {
     /// 종전(fmt9→BC3 오분류)엔 전백(全白)으로 디코드돼 마스크가 무효화→전화면 흑화면이었다.
     func testDecodesR8AsGrayscale() throws {
         let r8: [UInt8] = (0..<64).map { UInt8($0 * 4) }   // 8x8 램프(0,4,8,…,252)
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(9) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)
-        b += Array("TEXB0004".utf8) + [0] + i32(1) + i32(-1) + i32(0) + i32(1)
-        b += i32(8) + i32(8) + i32(0) + i32(64) + i32(r8.count) + r8   // isLZ4=0(비압축), dec=64
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(9), i32b(0), i32b(8), i32b(8), i32b(8), i32b(8))
+        b += bytes(tag("TEXB0004"), i32b(1), i32b(-1), i32b(0), i32b(1))
+        b += bytes(i32b(8), i32b(8), i32b(0), i32b(64), i32b(r8.count), r8)   // isLZ4=0(비압축), dec=64
         let data = Data(b)
         let tex = try XCTUnwrap(TexImage.parse(data))
         XCTAssertEqual(tex.payload, .r8)
@@ -128,11 +128,6 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertNil(TexDecoder.rgba(from: tex, data: data))
     }
 
-    private func i32bytes(_ v: Int) -> [UInt8] {
-        let u = UInt32(truncatingIfNeeded: v)
-        return [UInt8(u & 0xff), UInt8((u >> 8) & 0xff), UInt8((u >> 16) & 0xff), UInt8((u >> 24) & 0xff)]
-    }
-
     /// format-0 LZ4 RGBA .tex 합성: decode dims dw×dh, image dims iw×ih, LZ4_RAW 압축 body.
     private func makeLZ4RGBATex(dw: Int, dh: Int, iw: Int, ih: Int, raw: [UInt8]) -> Data {
         let cap = raw.count * 2 + 64
@@ -143,10 +138,10 @@ final class TexDecoderTests: XCTestCase {
                                           srcp.bindMemory(to: UInt8.self).baseAddress!, raw.count, nil, COMPRESSION_LZ4_RAW)
             }
         }
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32bytes(0) + i32bytes(0) + i32bytes(dw) + i32bytes(dh) + i32bytes(iw) + i32bytes(ih)
-        b += Array("TEXB0003".utf8) + [0] + i32bytes(1) + i32bytes(-1) + i32bytes(1)
-            + i32bytes(dw) + i32bytes(dh) + i32bytes(1) + i32bytes(dw * dh * 4) + i32bytes(n)
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(0), i32b(0), i32b(dw), i32b(dh), i32b(iw), i32b(ih))
+        b += bytes(tag("TEXB0003"), i32b(1), i32b(-1), i32b(1),
+                   i32b(dw), i32b(dh), i32b(1), i32b(dw * dh * 4), i32b(n))
         b += Array(comp[0..<n])
         return Data(b)
     }
@@ -196,11 +191,11 @@ final class TexDecoderTests: XCTestCase {
     func testDecodesMultiImagePagesByIndex() throws {
         let page0: [UInt8] = [10, 20, 30, 40]
         let page1: [UInt8] = [200, 150, 100, 50]
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32bytes(0) + i32bytes(0) + i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(1)   // fmt0, 1x1
-        b += Array("TEXB0003".utf8) + [0] + i32bytes(2) + i32bytes(-1)                            // imageCount=2
-        b += i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(0) + i32bytes(4) + i32bytes(4) + page0
-        b += i32bytes(1) + i32bytes(1) + i32bytes(1) + i32bytes(0) + i32bytes(4) + i32bytes(4) + page1
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(0), i32b(0), i32b(1), i32b(1), i32b(1), i32b(1))   // fmt0, 1x1
+        b += bytes(tag("TEXB0003"), i32b(2), i32b(-1))                     // imageCount=2
+        b += bytes(i32b(1), i32b(1), i32b(1), i32b(0), i32b(4), i32b(4), page0)
+        b += bytes(i32b(1), i32b(1), i32b(1), i32b(0), i32b(4), i32b(4), page1)
         let data = Data(b)
         let tex = try XCTUnwrap(TexImage.parse(data))
         XCTAssertEqual(tex.imageCount, 2)
@@ -212,12 +207,12 @@ final class TexDecoderTests: XCTestCase {
 
     /// BC3 페이로드가 손상돼 LZ4 디코드가 decompressedSize 와 다른 길이를 내면 nil.
     func testBC3WithCorruptLZ4ReturnsNil() throws {
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32bytes(4) + i32bytes(0) + i32bytes(4) + i32bytes(4) + i32bytes(4) + i32bytes(4)  // format=4=DXT5
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(4), i32b(0), i32b(4), i32b(4), i32b(4), i32b(4))  // format=4=DXT5
         // decompressedSize=16 선언, 압축 body 는 디코드해도 16B 가 되지 않는 가비지.
         let garbage: [UInt8] = [0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x11]
-        b += Array("TEXB0003".utf8) + [0] + i32bytes(1) + i32bytes(-1) + i32bytes(1)
-            + i32bytes(4) + i32bytes(4) + i32bytes(1) + i32bytes(16) + i32bytes(garbage.count)
+        b += bytes(tag("TEXB0003"), i32b(1), i32b(-1), i32b(1),
+                   i32b(4), i32b(4), i32b(1), i32b(16), i32b(garbage.count))
         b += garbage
         let data = Data(b)
         let tex = try XCTUnwrap(TexImage.parse(data))
@@ -240,9 +235,10 @@ final class TexDecoderTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(n, 0)
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32bytes(6) + i32bytes(0) + i32bytes(4) + i32bytes(4) + i32bytes(4) + i32bytes(4)   // format=6=DXT3/BC2
-        b += Array("TEXB0003".utf8) + [0] + i32bytes(1) + i32bytes(-1) + i32bytes(1) + i32bytes(4) + i32bytes(4) + i32bytes(1) + i32bytes(16) + i32bytes(n)
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(6), i32b(0), i32b(4), i32b(4), i32b(4), i32b(4))   // format=6=DXT3/BC2
+        b += bytes(tag("TEXB0003"), i32b(1), i32b(-1), i32b(1),
+                   i32b(4), i32b(4), i32b(1), i32b(16), i32b(n))
         b += Array(comp[0..<n])
         let data = Data(b)
         let tex = try XCTUnwrap(TexImage.parse(data))
@@ -295,9 +291,10 @@ final class TexDecoderTests: XCTestCase {
             }
         }
         XCTAssertGreaterThan(n, 0)
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(4) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)   // format=4=DXT5
-        b += Array("TEXB0003".utf8) + [0] + i32(1) + i32(-1) + i32(1) + i32(4) + i32(4) + i32(1) + i32(16) + i32(n)
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(4), i32b(0), i32b(4), i32b(4), i32b(4), i32b(4))   // format=4=DXT5
+        b += bytes(tag("TEXB0003"), i32b(1), i32b(-1), i32b(1),
+                   i32b(4), i32b(4), i32b(1), i32b(16), i32b(n))
         b += Array(comp[0..<n])
         let data = Data(b)
         let tex = try XCTUnwrap(TexImage.parse(data))

@@ -94,8 +94,8 @@ final class SceneParticleModelFixRegressionTests: XCTestCase {
     // MARK: F433 — raw RGBA 페이로드가 TEXV 헤더를 포함하지 않음
 
     func testF433_RawRGBAPayloadSkipsTEXVHeader() {
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(0) + i32(0) + i32(2) + i32(2) + i32(2) + i32(2)   // format=0, flags, texW/H, imgW/H
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(0), i32(0), i32(2), i32(2), i32(2), i32(2))  // format=0, flags, texW/H, imgW/H
         b += Array(repeating: UInt8(0xAB), count: 16)              // 2×2 RGBA 픽셀(TEXB 컨테이너 없음)
         let t = TexImage.parse(Data(b))
         XCTAssertEqual(t?.payload, .rawRGBA8888)

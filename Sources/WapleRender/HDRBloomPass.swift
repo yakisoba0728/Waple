@@ -118,7 +118,9 @@ final class HDRBloomPass: HDRBloomEncoding {
         parameters: HDRBloomParameters
     ) -> Bool {
         // 격리 가드: 이 패스는 float 씬 소스 전용 — LDR(bgra8) 텍스처 유입은 인코드 전 거부(hdrPost 클램프 폴백).
-        guard [source, quarter, eighth, bloom].allSatisfy({
+        // 배열 리터럴을 guard 조건 안에 두면 타입체커가 조건 전체와 함께 풀어 185ms 를 태운다 — 지역 상수로 분리.
+        let floatInputs: [MTLTexture] = [source, quarter, eighth, bloom]
+        guard floatInputs.allSatisfy({
                   $0.textureType == .type2D && $0.pixelFormat == .rgba16Float
               }),
               destination.textureType == .type2D,

@@ -26,6 +26,19 @@ func i32(_ n: Int) -> Data {
     return Data(bytes: &v, count: 4)
 }
 
+/// 위 i32 의 [UInt8] 반환판(바이트 동일) — 헤더를 [UInt8] 로 조립하는 픽스처용.
+func i32b(_ n: Int) -> [UInt8] { Array(i32(n)) }
+
+/// 청크를 순서대로 이어붙인다. 긴 `+` 체인(6~10항)은 항마다 오버로드 후보가 곱해져 타입체커가
+/// 지수 폭발한다 — 특히 Data 와 [UInt8] 가 한 체인에 섞이면 항마다 결과 타입 후보가 둘로 갈린다.
+/// 구형 툴체인(CI 러너 Xcode 16.2 / Swift 6.0.3)에선 "unable to type-check this expression in
+/// reasonable time" 컴파일 에러로 CI 를 세웠고, 최신 툴체인에서도 한 식에 1.3초를 태웠다.
+/// 인자 타입이 [UInt8] 로 고정되는 가변인자 헬퍼는 항 수에 선형이다.
+func bytes(_ chunks: [UInt8]...) -> [UInt8] { chunks.flatMap { $0 } }
+
+/// NUL 종단 태그 바이트("TEXV0005" + 0x00) — 컨테이너 시그니처/블록 헤더 규약.
+func tag(_ s: String) -> [UInt8] { Array(s.utf8) + [0] }
+
 /// 최소 PKGV0001 컨테이너 인코드(ScenePackage.parse 와 동일 구조).
 func encodePkg(_ files: [(String, Data)]) -> Data {
     var out = Data()

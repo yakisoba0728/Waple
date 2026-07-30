@@ -449,7 +449,13 @@ public struct Model3D: Equatable {
                 guard vs > 0, q + 8 + vs <= bytes.count else { continue }
                 let skin = (flag & skinMask) != 0
                 var lay = vertexLayout(for: flag)
-                var s = lay?.stride ?? (12 + (flag & 0x2 != 0 ? 12 : 0) + (flag & 0x4 != 0 ? 16 : 0) + (skin ? 32 : 0) + 8)
+                // 폴백 스트라이드는 항별 누적으로 계산한다 — 리터럴+삼항 5항 `+` 체인 한 줄은
+                // 타입체커에 1.2초를 태웠다(구형 툴체인에선 식 폐기 위험). 합계는 종전과 동일.
+                var fallback = 12 + 8                                    // pos(12) + uv(8)
+                if flag & 0x2 != 0 { fallback += 12 }                     // normal
+                if flag & 0x4 != 0 { fallback += 16 }                     // tangent/color
+                if skin { fallback += 32 }                                // boneIdx+weights
+                var s = lay?.stride ?? fallback
                 if vs % s != 0 {
                     guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 8 + vs, vSize: vs),
                           inferred >= 20 else { continue }   // pos(12)+uv(8) 최소

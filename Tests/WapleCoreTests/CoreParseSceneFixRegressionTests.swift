@@ -12,10 +12,10 @@ final class CoreParseSceneFixRegressionTests: XCTestCase {
 
     func testZeroFrametimeTEXSFramesAreKept() {
         // 실물 3554161528 materials/particle/3.tex 패턴(13프레임 전부 frametime 0)의 2프레임 축약.
-        var texs: [UInt8] = Array("TEXS0003".utf8) + [0]
-        texs += i32(2) + i32(4) + i32(4)  // count, gifWidth, gifHeight
+        var texs = tag("TEXS0003")
+        texs += bytes(i32(2), i32(4), i32(4))  // count, gifWidth, gifHeight
         for i in 0..<2 {
-            texs += i32(i) + f32(0) + f32(0) + f32(0) + f32(4) + f32(0) + f32(0) + f32(4)
+            texs += bytes(i32(i), f32(0), f32(0), f32(0), f32(4), f32(0), f32(0), f32(4))
         }
         let t = TexImage.parse(TexImageTests.makeTex(format: 0, w: 8, h: 4, payload: [0, 0, 0, 0] + texs))
         XCTAssertEqual(t?.frames.count, 2, "frametime==0 프레임이 시트 전체 폐기(return [])로 이어지면 안 됨")

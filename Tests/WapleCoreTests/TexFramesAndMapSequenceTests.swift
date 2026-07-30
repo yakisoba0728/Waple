@@ -20,9 +20,9 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         b += i32(2)          // frameCount
         b += i32(256) + i32(256)   // gifW, gifH (v3)
         // frame0: id0, t0.2, x0, y0, w256, unk, unk, h256
-        b += i32(0) + f32(0.2) + f32(0) + f32(0) + f32(256) + f32(0) + f32(0) + f32(256)
+        b += bytes(i32(0), f32(0.2), f32(0), f32(0), f32(256), f32(0), f32(0), f32(256))
         // frame1: x=256
-        b += i32(0) + f32(0.2) + f32(256) + f32(0) + f32(256) + f32(0) + f32(0) + f32(256)
+        b += bytes(i32(0), f32(0.2), f32(256), f32(0), f32(256), f32(0), f32(0), f32(256))
         return Data(b)
     }
 
@@ -40,13 +40,13 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         var b = [UInt8]()
         b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
         b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
-        b += i32(0) + i32(0) + i32(2) + i32(1) + i32(2) + i32(1)
+        b += bytes(i32(0), i32(0), i32(2), i32(1), i32(2), i32(1))
         b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])
         b.append(contentsOf: Array("TEXS0003".utf8)); b.append(0)
         b += i32(1)                 // frameCount
         b += i32(256) + i32(256)    // gifW, gifH
         // id0, t0.2, x256, y0, Width0, WidthY0, HeightX(-256), Height128 → 90/270° 회전
-        b += i32(0) + f32(0.2) + f32(256) + f32(0) + f32(0) + f32(0) + f32(-256) + f32(128)
+        b += bytes(i32(0), f32(0.2), f32(256), f32(0), f32(0), f32(0), f32(-256), f32(128))
         return Data(b)
     }
 
@@ -77,11 +77,11 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         var b = [UInt8]()
         b.append(contentsOf: Array("TEXV0005".utf8)); b.append(0)
         b.append(contentsOf: Array("TEXI0001".utf8)); b.append(0)
-        b += i32(0) + i32(0) + i32(2) + i32(1) + i32(2) + i32(1)
+        b += bytes(i32(0), i32(0), i32(2), i32(1), i32(2), i32(1))
         b.append(contentsOf: [255, 0, 0, 255,  0, 255, 0, 255])
         b.append(contentsOf: Array("TEXS0003".utf8)); b.append(0)
-        b += i32(1) + i32(256) + i32(256)
-        b += i32(0) + f32(0.2) + f32(0) + f32(0) + f32(0) + f32(0) + f32(0) + f32(0)  // Width=Height=HeightX=WidthY=0
+        b += bytes(i32(1), i32(256), i32(256))
+        b += bytes(i32(0), f32(0.2), f32(0), f32(0), f32(0), f32(0), f32(0), f32(0))  // Width=Height=HeightX=WidthY=0
         // 퇴화 프레임은 드롭하되 parse 자체는 성공해야 한다 — if-let 형태는 nil 회귀를 조용히 통과시키므로 XCTUnwrap 으로 잠근다.
         let tex = try XCTUnwrap(TexImage.parse(Data(b)), "퇴화 프레임 입력도 전체 거부가 아니라 파스 성공이어야")
         XCTAssertEqual(tex.frames, [])
@@ -107,8 +107,8 @@ final class TexFramesAndMapSequenceTests: XCTestCase {
         b.append(contentsOf: Array("TEXS0001".utf8)); b.append(0)
         b += i32(2)             // frameCount (v1: gifW/H 없음)
         // v1 프레임 32B: i32 id | f32 frametime | i32 x | i32 y | i32 w | i32 widthY | i32 heightX | i32 h
-        b += i32(0) + f32(0.2) + i32(0)   + i32(0) + i32(256) + i32(0) + i32(0) + i32(256)
-        b += i32(0) + f32(0.2) + i32(256) + i32(0) + i32(256) + i32(0) + i32(0) + i32(256)
+        b += bytes(i32(0), f32(0.2), i32(0),   i32(0), i32(256), i32(0), i32(0), i32(256))
+        b += bytes(i32(0), f32(0.2), i32(256), i32(0), i32(256), i32(0), i32(0), i32(256))
         return Data(b)
     }
 

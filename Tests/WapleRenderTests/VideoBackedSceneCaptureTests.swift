@@ -10,9 +10,9 @@ import AppKit
 final class VideoBackedSceneCaptureTests: XCTestCase {
     private func makeTex(format: Int, w: Int, h: Int, payload: [UInt8]) -> Data {
         var b: [UInt8] = []
-        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(format) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)
-        b += Array("TEXB0001".utf8) + [0] + payload
+        b += bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(format), i32b(0), i32b(w), i32b(h), i32b(w), i32b(h))
+        b += bytes(tag("TEXB0001"), payload)
         return Data(b)
     }
 

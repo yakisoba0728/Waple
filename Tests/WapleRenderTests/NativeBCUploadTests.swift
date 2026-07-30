@@ -9,21 +9,21 @@ final class NativeBCUploadTests: XCTestCase {
     /// 단일-image BC .tex 합성(format 4=BC3/6=BC2/7=BC1). decode dims dw×dh, image dims iw×ih.
     /// mip 은 비압축 저장(isLZ4=0) — LZ4_RAW 는 소형/비압축 블록에서 0 을 반환하므로 픽스처엔 부적합.
     private func makeBCTex(format: Int, dw: Int, dh: Int, iw: Int, ih: Int, blocks: [UInt8]) -> Data {
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(format) + i32(0) + i32(dw) + i32(dh) + i32(iw) + i32(ih)
-        b += Array("TEXB0003".utf8) + [0] + i32(1) + i32(-1) + i32(1)
-            + i32(dw) + i32(dh) + i32(0) + i32(blocks.count) + i32(blocks.count)   // isLZ4=0, dec, comp
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(format), i32b(0), i32b(dw), i32b(dh), i32b(iw), i32b(ih))
+        b += bytes(tag("TEXB0003"), i32b(1), i32b(-1), i32b(1),
+                   i32b(dw), i32b(dh), i32b(0), i32b(blocks.count), i32b(blocks.count))   // isLZ4=0, dec, comp
         b += blocks
         return Data(b)
     }
 
     /// 2-image(멀티페이지) BC3 .tex — nativeBC 가 거부해야(CPU 스택 필요).
     private func makeMultipageBCTex(dw: Int, dh: Int, block: [UInt8]) -> Data {
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(4) + i32(0) + i32(dw) + i32(dh) + i32(dw) + i32(dh)
-        b += Array("TEXB0003".utf8) + [0] + i32(2) + i32(-1)   // imageCount=2
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(4), i32b(0), i32b(dw), i32b(dh), i32b(dw), i32b(dh))
+        b += bytes(tag("TEXB0003"), i32b(2), i32b(-1))   // imageCount=2
         for _ in 0..<2 {
-            b += i32(1) + i32(dw) + i32(dh) + i32(0) + i32(block.count) + i32(block.count) + block
+            b += bytes(i32b(1), i32b(dw), i32b(dh), i32b(0), i32b(block.count), i32b(block.count), block)
         }
         return Data(b)
     }
@@ -54,14 +54,16 @@ final class NativeBCUploadTests: XCTestCase {
 
     func testRejectsNonBC() throws {
         // RGBA(fmt0) raw
-        let rgba = Data(Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-            + i32(0) + i32(0) + i32(1) + i32(1) + i32(1) + i32(1)) + Data([0, 0, 0, 0])
+        let rgba = Data(bytes(tag("TEXV0005"), tag("TEXI0001"),
+                              i32b(0), i32b(0), i32b(1), i32b(1), i32b(1), i32b(1),
+                              [0, 0, 0, 0]))
         let tRGBA = try XCTUnwrap(TexImage.parse(rgba))
         XCTAssertNil(TexDecoder.nativeBC(from: tRGBA, data: rgba), "RGBA 는 네이티브 대상 아님")
         // R8(fmt9)
-        var r8b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        r8b += i32(9) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)
-        r8b += Array("TEXB0003".utf8) + [0] + i32(1) + i32(-1) + i32(1) + i32(4) + i32(4) + i32(0) + i32(16) + i32(16)
+        var r8b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        r8b += bytes(i32b(9), i32b(0), i32b(4), i32b(4), i32b(4), i32b(4))
+        r8b += bytes(tag("TEXB0003"), i32b(1), i32b(-1), i32b(1),
+                     i32b(4), i32b(4), i32b(0), i32b(16), i32b(16))
         r8b += [UInt8](repeating: 0, count: 16)
         let tR8 = try XCTUnwrap(TexImage.parse(Data(r8b)))
         XCTAssertEqual(tR8.payload, .r8)

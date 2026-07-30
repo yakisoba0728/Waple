@@ -9,13 +9,13 @@ final class TexMipChainUploadTests: XCTestCase {
 
     private func makeChainTex(format: Int, texW: Int, texH: Int, imgW: Int, imgH: Int,
                               levels: [(w: Int, h: Int, lz4: Int, dec: Int, payload: [UInt8])]) -> Data {
-        var b = Data("TEXV0005".utf8) + Data([0]) + Data("TEXI0001".utf8) + Data([0])
-        b += i32(format) + i32(0) + i32(texW) + i32(texH) + i32(imgW) + i32(imgH)
-        b += Data("TEXB0003".utf8) + Data([0]) + i32(1) + i32(-1) + i32(levels.count)
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(format), i32b(0), i32b(texW), i32b(texH), i32b(imgW), i32b(imgH))
+        b += bytes(tag("TEXB0003"), i32b(1), i32b(-1), i32b(levels.count))
         for l in levels {
-            b += i32(l.w) + i32(l.h) + i32(l.lz4) + i32(l.dec) + i32(l.payload.count) + Data(l.payload)
+            b += bytes(i32b(l.w), i32b(l.h), i32b(l.lz4), i32b(l.dec), i32b(l.payload.count), l.payload)
         }
-        return b
+        return Data(b)
     }
 
     private func solidRGBA(_ w: Int, _ h: Int, _ px: (UInt8, UInt8, UInt8, UInt8)) -> [UInt8] {

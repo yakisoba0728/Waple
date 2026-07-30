@@ -478,7 +478,7 @@ final class Model3DTests: XCTestCase {
         u(1, into: &d)                                       // 여분 u32(실물 값 1)
         for _ in 0..<6 { f(0, into: &d) }                    // AABB 전부 0(실물)
         u(0x00800021, into: &d)
-        let positions: [SIMD3<Float>] = (0..<8).map { SIMD3(Float(443 + $0), Float(650 - $0), 0) }
+        let positions: [SIMD3<Float>] = (0..<8).map { SIMD3<Float>(Float(443 + $0), Float(650 - $0), 0) }
         u(UInt32(8 * 44), into: &d)
         for (i, p) in positions.enumerated() {
             f(p.x, into: &d); f(p.y, into: &d); f(p.z, into: &d)   // pos @0

@@ -66,9 +66,9 @@ final class SceneRendererAuditV06RegressionTests: XCTestCase {
     /// video 페이로드를 담는 최소 .tex(TEXB0001 — VideoBackedSceneCaptureTests.makeTex 와 동형).
     private func makeVideoTex(w: Int, h: Int, payload: Data) -> Data {
         var b: [UInt8] = []
-        b += Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(0) + i32(0) + i32(w) + i32(h) + i32(w) + i32(h)
-        b += Array("TEXB0001".utf8) + [0] + payload
+        b += bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(0), i32b(0), i32b(w), i32b(h), i32b(w), i32b(h))
+        b += bytes(tag("TEXB0001"), Array(payload))
         return Data(b)
     }
 

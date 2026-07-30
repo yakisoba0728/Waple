@@ -10,13 +10,13 @@ final class TexMipChainParseTests: XCTestCase {
     private func makeChainTex(format: Int, texW: Int, texH: Int, imgW: Int, imgH: Int,
                               levels: [(w: Int, h: Int, lz4: Int, dec: Int, payload: [UInt8])],
                               declaredMipCount: Int? = nil) -> Data {
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(format) + i32(0) + i32(texW) + i32(texH) + i32(imgW) + i32(imgH)
-        b += Array("TEXB0003".utf8) + [0]
-        b += i32(1) + i32(-1)                       // imageCount=1, imageFormat=-1(raw)
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(format), i32(0), i32(texW), i32(texH), i32(imgW), i32(imgH))
+        b += tag("TEXB0003")
+        b += bytes(i32(1), i32(-1))                 // imageCount=1, imageFormat=-1(raw)
         b += i32(declaredMipCount ?? levels.count)  // mipCount
         for l in levels {
-            b += i32(l.w) + i32(l.h) + i32(l.lz4) + i32(l.dec) + i32(l.payload.count) + l.payload
+            b += bytes(i32(l.w), i32(l.h), i32(l.lz4), i32(l.dec), i32(l.payload.count), l.payload)
         }
         return Data(b)
     }
@@ -83,14 +83,15 @@ final class TexMipChainParseTests: XCTestCase {
     /// 다음 image 오프셋 전진은 종전과 동일(각 image 의 나머지 레벨은 건너뛴다).
     func testMultiImageLeavesChainEmpty() throws {
         func rec(_ w: Int, _ h: Int, _ v: UInt8) -> [UInt8] {
-            i32(w) + i32(h) + i32(0) + i32(w * h * 4) + i32(w * h * 4) + [UInt8](repeating: v, count: w * h * 4)
+            bytes(i32(w), i32(h), i32(0), i32(w * h * 4), i32(w * h * 4),
+                  [UInt8](repeating: v, count: w * h * 4))
         }
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(0) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)
-        b += Array("TEXB0003".utf8) + [0]
-        b += i32(2) + i32(-1)                       // imageCount=2, imageFormat=-1
-        b += i32(2) + rec(4, 4, 0x10) + rec(2, 2, 0x11)   // image0: mipCount=2
-        b += i32(2) + rec(4, 4, 0x20) + rec(2, 2, 0x21)   // image1: mipCount=2
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(0), i32(0), i32(4), i32(4), i32(4), i32(4))
+        b += tag("TEXB0003")
+        b += bytes(i32(2), i32(-1))                 // imageCount=2, imageFormat=-1
+        b += bytes(i32(2), rec(4, 4, 0x10), rec(2, 2, 0x11))   // image0: mipCount=2
+        b += bytes(i32(2), rec(4, 4, 0x20), rec(2, 2, 0x21))   // image1: mipCount=2
         let data = Data(b)
         let tex = try XCTUnwrap(TexImage.parse(data))
         XCTAssertEqual(tex.imageCount, 2)
@@ -115,8 +116,8 @@ final class TexMipChainParseTests: XCTestCase {
     /// PNG/JPEG/임베디드 페이로드는 단일 인코딩 이미지 — 저장 mip 자체가 없으므로 mipChain=[] (무회귀).
     func testEncodedPayloadsHaveNoChain() throws {
         // fast-path .png(컨테이너 파스 실패 → 시그니처 라우팅).
-        var pngB: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        pngB += i32(0) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)
+        var pngB = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        pngB += bytes(i32(0), i32(0), i32(4), i32(4), i32(4), i32(4))
         pngB += [0x89, 0x50, 0x4E, 0x47, 1, 2, 3]
         let pngTex = try XCTUnwrap(TexImage.parse(Data(pngB)))
         XCTAssertEqual(pngTex.payload, .png)
@@ -124,10 +125,10 @@ final class TexMipChainParseTests: XCTestCase {
 
         // imageFormat=13(PNG) 임베디드(컨테이너 파스 성공, 인코딩 파일 라우팅).
         let payload: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 9, 9]
-        var embB: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        embB += i32(0) + i32(0) + i32(4) + i32(4) + i32(4) + i32(4)
-        embB += Array("TEXB0003".utf8) + [0] + i32(1) + i32(13) + i32(1)   // imageCount, imageFormat=PNG, mipCount
-        embB += i32(4) + i32(4) + i32(0) + i32(payload.count) + i32(payload.count) + payload
+        var embB = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        embB += bytes(i32(0), i32(0), i32(4), i32(4), i32(4), i32(4))
+        embB += bytes(tag("TEXB0003"), i32(1), i32(13), i32(1))   // imageCount, imageFormat=PNG, mipCount
+        embB += bytes(i32(4), i32(4), i32(0), i32(payload.count), i32(payload.count), payload)
         let embTex = try XCTUnwrap(TexImage.parse(Data(embB)))
         XCTAssertEqual(embTex.payload, .embeddedImage)
         XCTAssertTrue(embTex.mipChain.isEmpty, "임베디드 인코딩 이미지는 체인 없음")
@@ -135,13 +136,13 @@ final class TexMipChainParseTests: XCTestCase {
 
     /// TEXB0001(v1 — isLZ4/dec 필드 부재, w|h|comp|payload) 다중 mip 도 체인 수집.
     func testTEXB0001Chain() throws {
-        var b: [UInt8] = Array("TEXV0005".utf8) + [0] + Array("TEXI0001".utf8) + [0]
-        b += i32(4) + i32(0) + i32(8) + i32(8) + i32(8) + i32(8)      // fmt4(BC3)
-        b += Array("TEXB0001".utf8) + [0]
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(4), i32(0), i32(8), i32(8), i32(8), i32(8))    // fmt4(BC3)
+        b += tag("TEXB0001")
         b += i32(1)                                                  // imageCount
         b += i32(2)                                                  // mipCount=2
-        b += i32(8) + i32(8) + i32(64) + [UInt8](repeating: 0x5A, count: 64)   // L0: w,h,comp,payload
-        b += i32(4) + i32(4) + i32(16) + [UInt8](repeating: 0x6B, count: 16)   // L1
+        b += bytes(i32(8), i32(8), i32(64), [UInt8](repeating: 0x5A, count: 64))   // L0: w,h,comp,payload
+        b += bytes(i32(4), i32(4), i32(16), [UInt8](repeating: 0x6B, count: 16))   // L1
         let tex = try XCTUnwrap(TexImage.parse(Data(b)))
         XCTAssertEqual(tex.payload, .bc3)
         XCTAssertEqual(tex.mipChain.count, 2)

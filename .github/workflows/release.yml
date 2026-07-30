@@ -13,18 +13,17 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
-    timeout-minutes: 90
+    # ci.yml 과 동일 러너/툴체인 — 릴리스 산출물이 CI 가 검증한 것과 같은 컴파일러로 만들어진다.
+    runs-on: macos-26
+    timeout-minutes: 40
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # 러너 기본 Xcode(구형 Swift) 회피 — ci.yml 과 동일한 이유로 최신 Xcode 고정.
-      - name: Select latest Xcode
+      - name: Toolchain facts
         run: |
-          LATEST="$(ls -d /Applications/Xcode*.app | grep -vi beta | sort -V | tail -1)"
-          echo "Selecting $LATEST"
-          sudo xcode-select -s "$LATEST/Contents/Developer"
+          sw_vers
+          xcodebuild -version
           swift --version
 
       # swift test 는 여기서 실행하지 않는다 — ci.yml 워크플로가 이미 push/PR 마다
