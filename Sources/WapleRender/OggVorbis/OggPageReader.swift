@@ -34,9 +34,10 @@ struct OggPageReader {
             guard b[pos] == 0x4F, b[pos+1] == 0x67, b[pos+2] == 0x67, b[pos+3] == 0x53 else {
                 throw OggError.truncated   // 페이지 경계 어긋남
             }
-            let granule = Int64(bitPattern:
-                UInt64(b[pos+6]) | UInt64(b[pos+7]) << 8 | UInt64(b[pos+8]) << 16 | UInt64(b[pos+9]) << 24 |
-                UInt64(b[pos+10]) << 32 | UInt64(b[pos+11]) << 40 | UInt64(b[pos+12]) << 48 | UInt64(b[pos+13]) << 56)
+            // 구형 컴파일러(Swift 5.10, CI macos-14)가 단일 OR 체인의 타입체크에 실패해 lo/hi 로 분할.
+            let granuleLo = UInt64(b[pos+6]) | UInt64(b[pos+7]) << 8 | UInt64(b[pos+8]) << 16 | UInt64(b[pos+9]) << 24
+            let granuleHi = UInt64(b[pos+10]) << 32 | UInt64(b[pos+11]) << 40 | UInt64(b[pos+12]) << 48 | UInt64(b[pos+13]) << 56
+            let granule = Int64(bitPattern: granuleLo | granuleHi)
             let serial = UInt32(b[pos+14]) | UInt32(b[pos+15]) << 8 | UInt32(b[pos+16]) << 16 | UInt32(b[pos+17]) << 24
             let nsegs = Int(b[pos+26])
             let segTableStart = pos + 27

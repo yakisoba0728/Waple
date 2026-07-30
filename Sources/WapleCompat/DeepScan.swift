@@ -15,6 +15,13 @@ import WapleRender
 
 // MARK: - Aggregator
 
+/// WapleRender 의 SemaphoreResultBox(internal)는 모듈 밖이라 못 쓰므로 로컬 사본 —
+/// Swift 5.10 @Sendable Task 캡처 var 변경 에러(CI macos-14) 대응. signal→wait 가 직렬화를 보장.
+private final class SemaphoreResultBox<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
+}
+
 final class DeepAgg {
     private let lock = NSLock()
     func sync<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
@@ -670,19 +677,19 @@ enum DeepScan {
             // 과 같은 세마포어 브리지로 기다린다. 행위 보존: 로드 실패/예외는 unplayable 취급.
             let asset = AVURLAsset(url: url)
             let sem = DispatchSemaphore(value: 0)
-            var playable = false
+            let playable = SemaphoreResultBox(false)   // Swift 5.10 캡처 var 에러 대응(아래 정의)
             Task {
                 let ok = (try? await asset.load(.isPlayable)) ?? false
                 let hasVideo = ((try? await asset.load(.tracks)) ?? []).contains { $0.mediaType == .video }
-                playable = ok && hasVideo
+                playable.value = ok && hasVideo
                 sem.signal()
             }
             sem.wait()
             agg.sync {
                 agg.videoTotal += 1
-                if playable { agg.videoNativePlayable += 1 } else { agg.videoNativeUnplayable += 1; agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file)") }
+                if playable.value { agg.videoNativePlayable += 1 } else { agg.videoNativeUnplayable += 1; agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file)") }
             }
-            return playable
+            return playable.value
         } else if VideoRenderer.unsupportedExtensions.contains(ext) {
             agg.sync { agg.videoTotal += 1; agg.videoConvertible += 1 }
             return true   // supported-in-principle via FFmpegConverter (availability reported separately)

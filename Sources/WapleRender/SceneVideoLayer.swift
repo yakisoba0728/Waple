@@ -55,6 +55,14 @@ struct VideoTrackOrientation: Equatable {
 /// 스코프 밖(근거 없어 미구현): 비디오 오디오 트랙(무음 — 씬 sound 레이어는 SceneAudioPlayer 별도),
 /// 비디오 이펙트 체인(단, 레이어에 효과가 있으면 기존 buildDisplayTextures 체인이 프레임 위에 자연 적용),
 /// HDR video.
+/// Swift 5.10 부터 @Sendable Task 본문에서 캡처한 var 변경이 에러(CI macos-14 기본 툴체인)라,
+/// 세마포어 동기 대기 브리지의 결과 전달은 참조형 박스로 한다. signal→wait 쌍이 happens-before 를
+/// 보장하므로 별도 락 없이 @unchecked Sendable 로 충분. internal: FFmpegConverter 도 공유.
+final class SemaphoreResultBox<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
+}
+
 public final class SceneVideoLayer {
     public let mp4URL: URL
 
@@ -88,13 +96,13 @@ public final class SceneVideoLayer {
     private lazy var duration: Double = {
         let asset = AVURLAsset(url: mp4URL)
         let sem = DispatchSemaphore(value: 0)
-        var loaded: CMTime?
+        let loaded = SemaphoreResultBox<CMTime?>(nil)
         Task {
-            loaded = try? await asset.load(.duration)
+            loaded.value = try? await asset.load(.duration)
             sem.signal()
         }
         sem.wait()
-        return loaded?.seconds ?? 0
+        return loaded.value?.seconds ?? 0
     }()
 
     public init(mp4URL: URL) {
@@ -181,22 +189,22 @@ public final class SceneVideoLayer {
     /// 세마포어로 동기 대기(mount 1회 startLive 비용 — 매 프레임 호출 아님).
     private func resolveTrackOrientation(asset: AVAsset) {
         let sem = DispatchSemaphore(value: 0)
-        var transform = CGAffineTransform.identity
+        let transform = SemaphoreResultBox<CGAffineTransform>(.identity)
         Task {
             if let track = try? await asset.loadTracks(withMediaType: .video).first,
                let t = try? await track.load(.preferredTransform) {
-                transform = t
+                transform.value = t
             }
             sem.signal()
         }
         sem.wait()
-        guard !transform.isIdentity else { trackOrientation = .identity; return }
-        if let o = VideoTrackOrientation.classify(transform) {
+        guard !transform.value.isIdentity else { trackOrientation = .identity; return }
+        if let o = VideoTrackOrientation.classify(transform.value) {
             trackOrientation = o
         } else {
             trackOrientation = .identity
             WapleLog.warn("[Waple] video live track transform unsupported (not 90°-multiple/mirror) — " +
-                          "orientation correction skipped: \(transform)")
+                          "orientation correction skipped: \(transform.value)")
         }
     }
 

@@ -127,14 +127,15 @@ public enum FFmpegConverter {
               let size = attrs[.size] as? NSNumber,
               size.int64Value > 0 else { return false }
         // load(.isPlayable) 비동기 — 호출부(convert/run)가 백그라운드 큐라 세마포어 동기 대기로 충분.
+        // (박스 패턴 근거는 SceneVideoLayer.swift 의 SemaphoreResultBox 주석 참조 — Swift 5.10 캡처 var 에러 대응)
         let sem = DispatchSemaphore(value: 0)
-        var playable = false
+        let playable = SemaphoreResultBox(false)
         Task {
-            playable = (try? await AVURLAsset(url: url).load(.isPlayable)) ?? false
+            playable.value = (try? await AVURLAsset(url: url).load(.isPlayable)) ?? false
             sem.signal()
         }
         sem.wait()
-        return playable
+        return playable.value
     }
 
     /// 실제 변환(백그라운드). videotoolbox 실패 시 libx264 재시도. 부분 파일이 캐시로 남지 않도록

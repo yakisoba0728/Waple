@@ -77,9 +77,10 @@ enum EffectShaders {
             // 이 손포팅의 단일탭 모델에서는 애니메이션 구동원 슬롯(P[3])을 animationspeed 가 맡는다(WE
             // vert: v_TexCoordRipple = coords + g_Time*g_AnimationSpeed² + scroll — scroll 은 scrollspeed
             // 이지만 통상 0이라 animationspeed 가 주 구동). 구 키는 폴백으로 유지(무회귀).
-            let strength = c["ripplestrength"]?.first ?? c["ripple_strength"]?.first ?? c["strength"]?.first ?? 0.1
-            let scale = c["scale"]?.first ?? c["ripple_scale"]?.first ?? 1
-            let scrollSpeed = c["animationspeed"]?.first ?? c["scrollspeed"]?.first ?? c["speed"]?.first ?? 0.15
+            // (Float 명시: 구형 컴파일러(Swift 5.10)는 ?? 체인의 리터럴을 오추론해 에러 — CI macos-14 대응)
+            let strength: Float = c["ripplestrength"]?.first ?? c["ripple_strength"]?.first ?? c["strength"]?.first ?? 0.1
+            let scale: Float = c["scale"]?.first ?? c["ripple_scale"]?.first ?? 1
+            let scrollSpeed: Float = c["animationspeed"]?.first ?? c["scrollspeed"]?.first ?? c["speed"]?.first ?? 0.15
             return [strength, scale, scrollSpeed]
         case "scroll":
             // F267: WE scroll 머티리얼명은 repeat(g_Scale)·speedx/speedy(g_ScrollX/Y, 별도 스칼라 키, 기본
@@ -90,8 +91,8 @@ enum EffectShaders {
             // 폴백으로 유지(무회귀).
             let sc = c["repeat"] ?? c["scale"] ?? [1, 1]
             let legacySpeed = c["speed"] ?? c["scrollspeed"]
-            let sxRaw = c["speedx"]?.first ?? legacySpeed?.first ?? 0.2
-            let syRaw = c["speedy"]?.first ?? ((legacySpeed?.count ?? 0) > 1 ? legacySpeed![1] : 0.2)
+            let sxRaw: Float = c["speedx"]?.first ?? legacySpeed?.first ?? 0.2
+            let syRaw: Float = c["speedy"]?.first ?? ((legacySpeed?.count ?? 0) > 1 ? legacySpeed![1] : 0.2)
             func signSq(_ v: Float) -> Float { (v < 0 ? -1 : 1) * v * v }
             let sx = sc.count > 0 ? sc[0] : 1, sy = sc.count > 1 ? sc[1] : sx
             return [sx, sy, signSq(sxRaw), signSq(syRaw)]
@@ -107,8 +108,8 @@ enum EffectShaders {
             // F-X8: WE shake.frag g_Speed 실 기본값은 1(구코드 폴백 5 는 실물과 5배 어긋남 — 코퍼스
             // 실측: speed 미지정 씬이 상례). bounds(g_Bounds, 기본 "0 1")는 문턱 리매핑
             // (offset = saturate((offset-bounds.x)/(bounds.y-bounds.x)))용 슬롯 추가 — P[2]/P[3].
-            let amp = c["amplitude"]?.first ?? c["amount"]?.first ?? c["strength"]?.first ?? 0.006
-            let spd = c["speed"]?.first ?? c["roughness"]?.first ?? 1
+            let amp: Float = c["amplitude"]?.first ?? c["amount"]?.first ?? c["strength"]?.first ?? 0.006
+            let spd: Float = c["speed"]?.first ?? c["roughness"]?.first ?? 1
             let bounds = c["bounds"] ?? [0, 1]
             let boundsLo = bounds.count > 0 ? bounds[0] : 0
             let boundsHi = bounds.count > 1 ? bounds[1] : 1

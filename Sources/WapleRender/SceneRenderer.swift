@@ -882,7 +882,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let norm = 1 / (1 + rough)   // 오버톤 추가해도 피크 ≈ amplitude 유지(발산 억제)
         let x = (baseX + rough * roughX) * norm
         let y = (baseY + rough * roughY) * norm
-        return SIMD2<Float>(x, y) * (amplitude * SceneRenderer.shakeNDCScale)
+        // 성분별 곱으로 명시 — 구형 컴파일러(Swift 5.10, CI macos-14)가 SIMD×스칼라 연산자를 오해상.
+        // (x,y)*s ≡ (x*s, y*s) 라 비트동일.
+        let s = amplitude * SceneRenderer.shakeNDCScale
+        return SIMD2<Float>(x * s, y * s)
     }
 
     /// 이번 프레임 지터 오프셋(비활성 = .zero → 비트동일 가드). cameraZoom(at:) 과 동형 디스패치.
