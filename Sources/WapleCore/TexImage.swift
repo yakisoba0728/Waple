@@ -116,6 +116,14 @@ public struct TexImage {
     /// 모든 image 의 mip0(다중 image = 아틀라스 페이지, frame.imageId 가 페이지 인덱스). 단일 image 면 [mip].
     /// 비-mip 페이로드(.png/.video 등)는 []. `mip` 은 mips.first(호환) — 소비처는 imageCount 로 다중 판정.
     public var mips: [CompressedMip] = []
+    /// 기본 image(image 0)의 **전체 mip 체인** — 체인[0] == mip0(mips.first 와 동일). mipCount>1 텍스처만
+    /// 2개 이상; PNG/JPEG/임베디드(단일 인코딩 이미지라 저장 mip 자체가 없음)·다중 image(페이지 스택 경로,
+    /// 레이아웃이 달라 체인 미적용)·조건 변형(변형 섹션은 관측상 mip 1개/변형)은 [](= 기존 경로 무회귀).
+    /// 레벨 L 의 imageWidth/Height = 헤더 imgW/imgH 를 1/2^L floor 축소(최소 1) — TexDecoder 의 레벨별
+    /// alloc/orig 크롭 규약과 정합. 수집 근거(추론): TEXB 가 전체 체인을 저장(실물 DJK_1.tex 9레벨)하고
+    /// WE 렌더러는 축소 시 mip 필터링을 쓰므로, 엔진이 저장 mip 을 파일에 쓰는 실질적 이유는 GPU 업로드
+    /// 외에 없음 — 정적 분석상 "거의 확실" 추론이며 RE 대조 확정은 아님(2026-07-28).
+    public var mipChain: [CompressedMip] = []
     public var imageCount: Int { max(mips.count, mip == nil ? 0 : 1) }
     /// 스프라이트시트 프레임 목록(TEXS 부재 시 []).
     public var frames: [TexFrame] = []
@@ -171,11 +179,13 @@ public struct TexImage {
               texW <= maxDim, texH <= maxDim, imgW <= maxDim, imgH <= maxDim else { return nil }
 
         func make(_ kind: PayloadKind, _ range: Range<Int>, _ mip: CompressedMip?,
-                  mips: [CompressedMip] = [], variants: [Variant] = []) -> TexImage {
+                  mips: [CompressedMip] = [], variants: [Variant] = [],
+                  mipChain: [CompressedMip] = []) -> TexImage {
             var t = TexImage(width: imgW, height: imgH, format: format, payload: kind, payloadRange: range, mip: mip)
             t.flags = flags
             t.mips = mips
             t.variants = variants
+            t.mipChain = mipChain
             t.frames = parseFrames(b)
             return t
         }
@@ -187,7 +197,7 @@ public struct TexImage {
         //    이고 v4 서브레이아웃이 둘 — splash_*(표준 mip → 여기서 .embeddedImage) 와 lut/*(mip 에 여분 int
         //    → parseMip 실패 → 아래 fast-path .png). 둘 다 정상 디코드(어느 쪽도 payloadRange 오정렬 없음).
         let container = parseMip(b, imgW: imgW, imgH: imgH, format: format)
-        if let (mips, imageFormat, _) = container {
+        if let (mips, imageFormat, _, _) = container {
             let mip = mips[0]
             switch imageFormat {
             case -1 where flags & 0x20 != 0:                                     // TEXB0003 비디오: imageFormat 부재(-1)라 IsVideoTexture
@@ -215,7 +225,7 @@ public struct TexImage {
         // fmt9=R8 실측 근거(2026-07-04, 3598808038 opacity 마스크): LZ4 해제 후 raw 바이트가
         // 부드러운 비네트 그라디언트(edge 255/center 0, 정확히 w×h 바이트) — DXT5 블록 구조가 아님.
         // WE 포맷 enum: 8=RG88, 9=R8. 종전 코드가 9 를 4(DXT5)에 묶어 마스크가 전백(全白)→전화면 흑화면.
-        if let (mips, _, variants) = container {
+        if let (mips, _, variants, mipChain) = container {
             let mip = mips[0]
             let kind: PayloadKind
             switch format {
@@ -229,7 +239,8 @@ public struct TexImage {
             }
             // 다중 image(아틀라스 페이지)는 format-based(raw/DXT) 페이로드에만 의미 — mips 전체 보존.
             // 조건 변형(variants)도 여기서만 유효(전부 imageFormat=-1 → format 기반 디코드).
-            return make(kind, mip.payloadRange, mip, mips: mips, variants: variants)
+            // mipChain 은 image 0 전체 레벨(단일 image + mipCount>1 일 때만 2개 이상 — 소비처: TexDecoder.rgbaLevels/nativeBC).
+            return make(kind, mip.payloadRange, mip, mips: mips, variants: variants, mipChain: mipChain)
         }
         // 4) 비압축 raw RGBA(드묾).
         // F433: 픽셀은 42B TEXV 헤더(TEXV0005\0+TEXI0001\0+6×i32) 뒤에서 시작 — 종전 0..<b.count 는
@@ -245,7 +256,10 @@ public struct TexImage {
     ///   image별: (v4 조건 변형 체인 ×N) i32 mipCount | mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 dec | i32 comp | payload
     /// (mip0 외 mip 은 크기만큼 스킵). 종전 "compressedSize 가 EOF 에 닿는 int 스캔" 휴리스틱은 다중 mip
     /// 파일(DJK_1.tex mip 9개 등)에서 실패해 3D 모델 텍스처 대부분이 흰색 폴백이었다.
-    private static func parseMip(_ b: [UInt8], imgW: Int, imgH: Int, format: Int) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant])? {
+    /// mipChain: **단일 image** 일 때 image 0 의 전체 레벨도 수집(레벨 L 의 image dims = imgW/imgH >> L,
+    /// 최소 1 — 레벨 레코드의 w/h 는 alloc dims 라 orig 는 축소식에서 온다). 다중 image 는 페이지 스택 경로가
+    /// 레이아웃을 바꾸므로 [](무회귀). 어느 레벨이든 파스 실패 시 체인 폐기(mip0 경로 그대로 — 종전과 동일).
+    private static func parseMip(_ b: [UInt8], imgW: Int, imgH: Int, format: Int) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant], mipChain: [CompressedMip])? {
         guard let ti = indexOf(b, Array("TEXB".utf8)), ti + 9 <= b.count else { return nil }
         let version = Int(String(bytes: b[ti + 4..<ti + 8], encoding: .ascii) ?? "") ?? 0
         guard version >= 1, version <= 4 else { return nil }
@@ -254,7 +268,8 @@ public struct TexImage {
             return Int(Int32(bitPattern: UInt32(b[o]) | UInt32(b[o + 1]) << 8 | UInt32(b[o + 2]) << 16 | UInt32(b[o + 3]) << 24))
         }
         /// 단일 mip 레코드 파스: w | h | (v2+) isLZ4 | dec | comp | payload → (mip, 다음 오프셋).
-        func readMip(_ start: Int) -> (CompressedMip, Int)? {
+        /// origW/H = 이 레벨의 orig(image) dims — mip0 은 헤더 imgW/imgH, 레벨 L 은 1/2^L(호출자 계산).
+        func readMip(_ start: Int, origW: Int, origH: Int) -> (CompressedMip, Int)? {
             var q = start
             guard let w = i32(q), let h = i32(q + 4), w > 0, h > 0, w <= 16384, h <= 16384 else { return nil }
             q += 8
@@ -268,7 +283,7 @@ public struct TexImage {
             if isLZ4 == 0 { dec = comp }  // 비압축: payload 그대로
             // dec 는 공격자 제어 필드. 단일 mip 의 정당한 한계(512MB)를 넘으면 거부해 ~4GB 할당 DoS 차단.
             guard dec > 0, dec <= 512 << 20 else { return nil }
-            let mip = CompressedMip(decodeWidth: w, decodeHeight: h, imageWidth: imgW, imageHeight: imgH,
+            let mip = CompressedMip(decodeWidth: w, decodeHeight: h, imageWidth: origW, imageHeight: origH,
                                     decompressedSize: dec, payloadRange: q..<(q + comp), lz4: isLZ4 != 0)
             return (mip, q + comp)
         }
@@ -279,8 +294,9 @@ public struct TexImage {
         if version >= 3 { imageFormat = i32(p) ?? -1; p += 4 }   // imageFormat 직독(RePKG: !=-1 이면 인코딩 파일)
         if version >= 4 { p += 4 }   // 0004 추가 필드(실측 0/1 = isVideoMp4; 조건 변형 텍스처는 변형 수 1/3)
         var mips: [CompressedMip] = []
+        var mipChain: [CompressedMip] = []                 // image 0 전체 레벨(단일 image 일 때만 확정)
         var chain: [(idx: Int, json: String)] = []   // v4 조건 변형 블록(idx, 조건 JSON) — mipCount 앞 체인
-        for _ in 0..<imageCount {
+        for imageIdx in 0..<imageCount {
             // v4 조건 변형 체인: [i32 1][i32 idx][i32 0][json NUL] × N 이 mipCount 앞에 온다 — idx/JSON 보존.
             if version >= 4 {
                 while let blk = conditionVariantBlock(b, from: p, i32: i32) {
@@ -289,15 +305,19 @@ public struct TexImage {
             }
             guard let mipCount = i32(p), mipCount > 0 else { break }
             p += 4
-            guard let (mip0, after0) = readMip(p) else { break }   // 페이지의 mip0 = 아틀라스 페이지 픽셀
+            guard let (mip0, after0) = readMip(p, origW: imgW, origH: imgH) else { break }   // 페이지의 mip0 = 아틀라스 페이지 픽셀
             mips.append(mip0)
             p = after0
             var ok = true
-            for _ in 1..<mipCount {                                // mip0 외 mip 은 스킵(다음 image 위치까지 전진)
-                guard let (_, afterK) = readMip(p) else { ok = false; break }
+            var levels: [CompressedMip] = [mip0]
+            for level in 1..<mipCount {                             // 나머지 레벨: 다음 image 위치까지 전진(+ image 0 은 수집)
+                guard let (mipK, afterK) = readMip(p, origW: max(1, imgW >> level),
+                                                   origH: max(1, imgH >> level)) else { ok = false; break }
+                levels.append(mipK)
                 p = afterK
             }
             if !ok { break }
+            if imageIdx == 0 { mipChain = levels }                  // 전 레벨 파스 성공 시에만 확정
         }
         // v4 조건 변형: 기본 image(위) 뒤에 [imageCount][변형수] 헤더 + 변형별 image 가 온다(실측 8종 전부
         // imageCount==1). 파스 실패/미일치 시 variants=[](기본 mip 경로 무회귀 — 0xEE 잔재 픽스처 등 방어).
@@ -306,7 +326,9 @@ public struct TexImage {
             variants = parseVariantSection(b, from: p, chain: chain, format: format,
                                            imgW: imgW, imgH: imgH, i32: i32)
         }
-        return mips.isEmpty ? nil : (mips, imageFormat, variants)
+        // 다중 image 는 페이지 스택(stackedAtlas)이 레이아웃을 바꾸므로 체인 미적용 — 소비처 가드와 일치.
+        if imageCount != 1 { mipChain = [] }
+        return mips.isEmpty ? nil : (mips, imageFormat, variants, mipChain)
     }
 
     /// TEXB0004 조건 변형 블록 1개: [i32 1][i32 variantIdx][i32 0][condition JSON NUL]. 프로퍼티 값(예

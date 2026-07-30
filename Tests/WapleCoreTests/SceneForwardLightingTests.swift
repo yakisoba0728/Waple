@@ -121,7 +121,7 @@ final class SceneForwardLightingTests: XCTestCase {
     }
 
     func testAttenuationMatchesHandComputation() {
-        let eps: Float = 6.103515625e-5
+        let eps: Float = 1.17549435e-38  // WE 2.8.42 HLSL lane: pow(falloff + FLT_MIN, exponent)
         let attenuation = SceneLight3D.finiteLightFalloff(distance: 5, radius: 10, exponent: 2)
         XCTAssertEqual(attenuation, powf(0.5 + eps, 2), accuracy: 1e-6)
     }
@@ -137,15 +137,16 @@ final class SceneForwardLightingTests: XCTestCase {
             distance: 5,
             radius: u.colorRadius[0].w,
             exponent: u.positions[0].w)
-        let eps: Float = 6.103515625e-5
+        let eps: Float = 1.17549435e-38  // WE 2.8.42 HLSL lane: pow(falloff + FLT_MIN, exponent)
         XCTAssertEqual(attenuation, powf(0.5 + eps, 3), accuracy: 1e-5)
     }
 
-    func testZeroExponentIsUnclampedInsideRadiusAndZeroOutside() {
+    func testZeroExponentIsUnattenuatedInsideAndOutsideRadius() {
+        // WE 2.8.42 HLSL lane: exponent=0 이면 pow(falloff + FLT_MIN, 0) == 1 — 반경 컷오프 없는 전역 무감쇠.
         let inside = SceneLight3D.finiteLightFalloff(distance: 5, radius: 10, exponent: 0)
         let outside = SceneLight3D.finiteLightFalloff(distance: 15, radius: 10, exponent: 0)
         XCTAssertEqual(inside, 1, accuracy: 1e-6)
-        XCTAssertEqual(outside, 0, accuracy: 1e-6)
+        XCTAssertEqual(outside, 1, accuracy: 1e-6)
     }
 
     func testRadiusAndDistanceGuardsMatchMetal() {
@@ -176,7 +177,7 @@ final class SceneForwardLightingTests: XCTestCase {
         let c = SceneLight3D.evaluateLighting(
             at: SIMD3(0, 0, 0), u,
             roughness: 1, metallic: 0)
-        let eps: Float = 6.103515625e-5
+        let eps: Float = 1.17549435e-38  // WE 2.8.42 HLSL lane: pow(falloff + FLT_MIN, exponent)
         let common = (0.97 / Float.pi) * powf(0.5 + eps, 2)
         XCTAssertEqual(c.x, 2 * common, accuracy: 1e-5)
         XCTAssertEqual(c.y, 0, accuracy: 1e-6)

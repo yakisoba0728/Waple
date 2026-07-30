@@ -59,14 +59,17 @@ struct Scene3DMaterialValues: Equatable {
     }
 }
 
-/// 3D 라이트 종류. rawValue 는 MSL `LightU.shadow.z` 타입 플래그와 동일 규약(0/1/2).
+/// 3D 라이트 종류. rawValue 는 MSL `LightU.shadow.z` 타입 플래그와 동일 규약(0/1/2/4).
+/// tube=4: WE 정본 라이트 4종(point/spot/tube/directional — A2-pbr-lighting.md §4.4) 중 마지막 갭.
+/// 3 을 건너뛰는 것은 기존 0/1/2 비교 경계(kind<0.5/<1.5/<2.5)를 비트동일로 보존하기 위함이다.
 enum Scene3DLightKind: Float, Equatable {
-    case point = 0, directional = 1, spot = 2
+    case point = 0, directional = 1, spot = 2, tube = 4
     init?(type: String) {
         switch type.lowercased() {
         case "lpoint": self = .point
         case "ldirectional": self = .directional
         case "lspot": self = .spot
+        case "ltube": self = .tube
         default: return nil
         }
     }
@@ -86,6 +89,9 @@ struct Scene3DResolvedLight: Equatable {
     /// F780(S-47): `cascadedistance0-2`(친 치수 상승 far 경계). 소비는 directional + castShadow 한정
     /// (DirectionalShadowMath.validCascades) — WE 에디터는 라이트 종 무관 기록이라 point/spot 도 파스는 보존.
     var cascadeDistances: SIMD3<Float>? = nil
+    /// tube 세그먼트 단점 B(월드 — WE g_LTube_OriginB). tube 외 kind 는 nil(셰이더가 kind 로 분기).
+    /// 부모-로컬 `originb` 를 부모 체인 행렬로 월드화한 값(resolveLights — origin 과 동일 공간 규약).
+    var originB: SIMD3<Float>? = nil
 }
 
 /// MSL `FrameU`와 필드/정렬이 같은 per-frame 3D 라이팅 상수(8×float4).
@@ -107,9 +113,10 @@ struct Scene3DFrameUniform {
 struct Scene3DLightUniform {
     var positionExponent: SIMD4<Float>
     var colorRadius: SIMD4<Float>
-    /// x=shadow array slice(-1이면 비활성), y=shadow VP 시작 인덱스, z=kind(0/1/2), w=spot 콘 inner cos.
+    /// x=shadow array slice(-1이면 비활성), y=shadow VP 시작 인덱스, z=kind(0/1/2/4), w=spot 콘 inner cos.
     var shadow: SIMD4<Float>
     /// xyz=월드 forward(+Z blue축), w=spot 콘 outer cos. directional/spot 전용.
+    /// tube(kind 4)는 xyz=세그먼트 단점 B(WE g_LTube_OriginB — cone/forward 미사용 슬롯 재활용), w=0.
     var axis: SIMD4<Float>
     /// F780: directional CSM far 경계 xyz + w=캐스케이드 수(3=CSM, 0=단일 오소/기타).
     /// spot cone 필드와 달리 directional 이 아니면 항상 .zero.
@@ -122,7 +129,7 @@ enum Scene3DLighting {
     // 코퍼스 최대 6(젤다) — 8 은 상한 여유 포함. 셰이더 루프 상한(Mesh3DShaders mf_main)도 동일하게 올린다.
     static let maximumLights = 8
 
-    /// lpoint / ldirectional / lspot 을 월드 공간으로 해석한다. 입력 순서를 보존하고(first-N 정책),
+    /// lpoint / ldirectional / lspot / ltube 를 월드 공간으로 해석한다. 입력 순서를 보존하고(first-N 정책),
     /// 부모가 있으면 그 부모의 현재 월드행렬/가시성을 적용한다.
     ///
     /// 방향 규약(2026-07 확정): scene.json `angles`(라디안) → Scene3DMath 모델행렬(T·Rz·Ry·Rx·S,
@@ -130,6 +137,7 @@ enum Scene3DLighting {
     /// (`lib.sceneScript.d.ts`) `Mat4.forward() = Blue axis`, `right=Red(+X)`, `up=Green(+Y)`,
     /// `compose = T*R*S`. directional 은 무감쇠(radiance=color×intensity), L=-forward.
     /// spot 섀도우는 스코프 밖(코퍼스 spot 전원 castshadow:false) → castShadow 는 point/directional 만 존중.
+    /// ltube: origin=단점A/originb=단점B(부모-로컬 동일 공간), 무섀도우(WE 정본 — A2-pbr-lighting.md §4.4).
     static func resolveLights(_ lights: [SceneLight3D],
                               nodes: [Int: Scene3DMath.Node]) -> [Scene3DResolvedLight] {
         var result: [Scene3DResolvedLight] = []
@@ -153,14 +161,18 @@ enum Scene3DLighting {
                 origin: SIMD3(light.origin.x, light.origin.y, light.origin.z),
                 angles: SIMD3(light.angles.x, light.angles.y, light.angles.z),
                 scale: SIMD3(1, 1, 1))
-            let worldMatrix: simd_float4x4
+            // 부모 행렬을 분리 보관 — tube 단점 B(originb)는 origin 과 같은 부모-로컬 공간 점이라
+            // 라이트 자체 회전(R)이 아니라 부모 체인만으로 월드화한다(WE g_LTube_OriginA/B 는
+            // 동일 공간의 두 단점 — generic3.frag:110 PointSegmentDelta 소비). 무parent = 항등(비트동일).
+            let parentMatrix: simd_float4x4
             if let parent = light.parent {
                 guard let transform = Scene3DMath.worldMatrix(id: parent, nodes: nodes),
                       transform.visible else { continue }
-                worldMatrix = transform.matrix * localMatrix
+                parentMatrix = transform.matrix
             } else {
-                worldMatrix = localMatrix
+                parentMatrix = matrix_identity_float4x4
             }
+            let worldMatrix = parentMatrix * localMatrix
             let position = SIMD3(worldMatrix.columns.3.x, worldMatrix.columns.3.y, worldMatrix.columns.3.z)
             let forward = normalizedOr(
                 SIMD3(worldMatrix.columns.2.x, worldMatrix.columns.2.y, worldMatrix.columns.2.z),
@@ -178,13 +190,23 @@ enum Scene3DLighting {
                     light.radius),
                 // F661: spot 섀도우만 스코프 밖(코퍼스 spot 전원 castshadow:false). directional 은
                 // 단일 오소 맵 최소 근사 지원(DirectionalShadowMath) — castshadow:true 3씬.
-                castsShadow: kind != .spot && light.castShadow,
+                // tube 도 섀도우 없음이 정본(WE PerformLighting_V1: tube 는 shadowFactor=1.0 고정 —
+                // A2-pbr-lighting.md §4.4/§4.5 "Tube (섀도우 없음)").
+                castsShadow: kind != .spot && kind != .tube && light.castShadow,
                 kind: kind,
                 forward: forward)
             if kind == .spot {
                 let cone = spotConeCosines(inner: light.innerCone, outer: light.outerCone)
                 resolved.coneInnerCos = cone.inner
                 resolved.coneOuterCos = cone.outer
+            }
+            if kind == .tube {
+                // originb 미저작은 A==B 퇴화 — WE PointSegmentDelta(common_pbr.h:13-14)가 v==0 이면
+                // A-pos 반환이라 point 와 수치 동치(드롭하지 않는다).
+                let b = light.originB ?? light.origin
+                let wb = parentMatrix * SIMD4(b.x, b.y, b.z, 1)
+                guard wb.x.isFinite, wb.y.isFinite, wb.z.isFinite else { continue }
+                resolved.originB = SIMD3(wb.x, wb.y, wb.z)
             }
             // F780: cascadeDistances 는 종 무관 보존(유효성·소비 게이트는 packLights/뎁스 패스).
             if let cd = light.cascadeDistances {
@@ -235,7 +257,11 @@ enum Scene3DLighting {
                 positionExponent: SIMD4(light.position.x, light.position.y, light.position.z, light.exponent),
                 colorRadius: light.colorRadius,
                 shadow: SIMD4(slice, slice >= 0 ? slice * 6 : -1, light.kind.rawValue, light.coneInnerCos),
-                axis: SIMD4(light.forward.x, light.forward.y, light.forward.z, light.coneOuterCos),
+                // tube: axis.xyz = 단점 B(월드). resolveLights 가 originb 부재 시 A==B 로 채우므로 ?? 는 방어.
+                axis: light.kind == .tube
+                    ? SIMD4((light.originB ?? light.position).x, (light.originB ?? light.position).y,
+                            (light.originB ?? light.position).z, 0)
+                    : SIMD4(light.forward.x, light.forward.y, light.forward.z, light.coneOuterCos),
                 cascades: csm)
         }
         return packed
@@ -320,6 +346,9 @@ enum PointShadowMath {
 /// 2×3 셀 배치의 셀 i 에 기록(VP 슬롯 slice*6+i, maximumLights*6 패턴 유지).
 /// WE 의 캐스케이드 피팅 정밀 수학은 미확정 — 여기서는 "cascadedistance = 카메라 기준 far 경계"(C-shaders
 /// 문서 확정 의미)만 소비하는 표준 CSM 으로 근사하고, 경계가 유효하지 않으면 추측 대신 단일 오소로 폴터.
+/// **근사 유지 항목(동적 캡처 대기)**: 셰이더 측 선택은 WE mix 체인(투영 박스 포함 검사 — Mesh3DShaders
+/// directionalShadowVisibility)으로 정합했으나, VP 피팅 자체(슬라이스 hull 타이트핏 + 씬 AABB 깊이 확장
+/// + 5% 패드)는 WE 내부 수식 미확정 근사다. 실씬 동적 캡처로 WE 아틀라스와 대조 가능해지면 재보정한다.
 enum DirectionalShadowMath {
     /// CSM 소비 가능한 경계인가: 전 성분 유한·양·친 치수 상승. 부분 저작/역전/0 은 WE 의미 미확정이라 부적격.
     static func validCascades(_ distances: SIMD3<Float>?) -> SIMD3<Float>? {

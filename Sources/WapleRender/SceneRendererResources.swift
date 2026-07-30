@@ -1460,12 +1460,60 @@ extension SceneRenderer {
         case .bc3: pf = .bc3_rgba
         }
         guard bc.width > 0, bc.height > 0 else { return nil }
-        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pf, width: bc.width, height: bc.height, mipmapped: false)
+        // mipCount>1(bc.levels>1)이면 mipmapLevelCount 전체 할당 + 레벨별 업로드(TEX 저장 mip 체인 —
+        // TexDecoder.nativeBC 가 레벨별 크롭 규약으로 채움). 레벨 검증 실패 시 단일 레벨(종전 동작 무회귀).
+        let levels = validMipLevels(bc)
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pf, width: bc.width, height: bc.height,
+                                                            mipmapped: levels.count > 1)
+        if levels.count > 1 { desc.mipmapLevelCount = levels.count }   // 저장 체인이 최대 레벨보다 짧을 수 있음(실물 DJK_1: 9/11)
         guard let t = device.makeTexture(descriptor: desc) else { return nil }
-        bc.blocks.withUnsafeBytes { ptr in
-            guard let base = ptr.baseAddress else { return }
-            t.replace(region: MTLRegionMake2D(0, 0, bc.width, bc.height), mipmapLevel: 0,
-                      withBytes: base, bytesPerRow: bc.bytesPerRow)
+        for (i, lv) in levels.enumerated() {
+            lv.blocks.withUnsafeBytes { ptr in
+                guard let base = ptr.baseAddress else { return }
+                t.replace(region: MTLRegionMake2D(0, 0, lv.width, lv.height), mipmapLevel: i,
+                          withBytes: base, bytesPerRow: lv.bytesPerRow)
+            }
+        }
+        return t
+    }
+
+    /// mip 체인 업로드 전 검증: 레벨별 타깃 dims == max(1, base >> L) 진행 + Metal 허용 레벨 수 이내.
+    /// 하나라도 어긋나면 첫 레벨만 반환(= 단일 레벨 업로드, 종전과 비트동일).
+    private func validMipLevels(_ bc: TexDecoder.NativeBCUpload) -> [TexDecoder.NativeBCUpload.NativeBCMipLevel] {
+        let first = bc.levels.first ?? TexDecoder.NativeBCUpload.NativeBCMipLevel(
+            blocks: bc.blocks, width: bc.width, height: bc.height, bytesPerRow: bc.bytesPerRow)
+        guard bc.levels.count > 1 else { return [first] }
+        let maxLevels = 1 + Int(log2(Double(max(bc.width, bc.height))).rounded(.down))
+        guard bc.levels.count <= maxLevels else { return [first] }
+        for (i, lv) in bc.levels.enumerated() {
+            guard lv.width > 0, lv.height > 0,
+                  lv.width == max(1, bc.width >> i), lv.height == max(1, bc.height >> i) else { return [first] }
+        }
+        return bc.levels
+    }
+
+    /// 다중 mip rgba8 업로드(mipCount>1 텍스처의 CPU 경로): levels[0] = mip0(makeTexture 와 동일 내용·dims).
+    /// 레벨 검증(dims 진행 = max(1, base >> L), 픽셀 수, Metal 레벨 상한) 실패 시 nil → 호출자가 단일 레벨
+    /// makeTexture 폴백(무회귀). generateMipmaps 미사용 — WE 가 저장한 mip 을 그대로 올리는 게 정본 근접
+    /// (저장 데이터가 곧 엔진이 축소 시 샘플하는 데이터라는 추론 — RE 확정 아님, TexImage.mipChain 주석 참조).
+    func makeMipmappedTexture(_ levels: [(pixels: Data, width: Int, height: Int)], _ device: MTLDevice) -> MTLTexture? {
+        guard let first = levels.first, levels.count > 1, first.width > 0, first.height > 0 else { return nil }
+        let maxLevels = 1 + Int(log2(Double(max(first.width, first.height))).rounded(.down))
+        guard levels.count <= maxLevels else { return nil }
+        for (i, lv) in levels.enumerated() {
+            guard lv.width == max(1, first.width >> i), lv.height == max(1, first.height >> i),
+                  lv.pixels.count >= lv.width * lv.height * 4 else { return nil }
+        }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: first.width,
+                                                            height: first.height, mipmapped: true)
+        desc.mipmapLevelCount = levels.count
+        guard let t = device.makeTexture(descriptor: desc) else { return nil }
+        for (i, lv) in levels.enumerated() {
+            lv.pixels.withUnsafeBytes { ptr in
+                guard let base = ptr.baseAddress else { return }
+                t.replace(region: MTLRegionMake2D(0, 0, lv.width, lv.height), mipmapLevel: i,
+                          withBytes: base, bytesPerRow: lv.width * 4)
+            }
         }
         return t
     }
@@ -1482,6 +1530,14 @@ extension SceneRenderer {
            let bc = TexDecoder.nativeBC(from: tex, data: data, properties: variantProperties, keepFullAtlas: keepFullAtlas),
            let t = makeBCTexture(bc, device) {
             return (t, bc.width, bc.height)
+        }
+        // CPU 경로 mip 체인(mipCount>1 + 기본 image + 비아틀라스 — rgbaLevels 가 자격 판정): 전체 레벨 디코드·
+        // 업로드. 반환 dims 는 levels[0] = rgba() 와 동일(파리티). 자격 외/검증 실패 시 nil → 기존 단일 레벨 경로.
+        if let levels = TexDecoder.rgbaLevels(from: tex, data: data, properties: variantProperties,
+                                              keepFullAtlas: keepFullAtlas),
+           let first = levels.first,
+           let t = makeMipmappedTexture(levels, device) {
+            return (t, first.width, first.height)
         }
         guard let dec = TexDecoder.rgba(from: tex, data: data, properties: variantProperties, keepFullAtlas: keepFullAtlas),
               let t = makeTexture(dec.pixels, dec.width, dec.height, device) else { return nil }

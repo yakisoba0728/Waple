@@ -20,7 +20,7 @@ enum QuadShaders {
     fragment float4 f_main(VOut in [[stage_in]],
                            texture2d<float> tex [[texture(0)]],
                            constant float4 &tint [[buffer(0)]]) {
-        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
         // 파이프라인 규약(설계 §3): 입력(텍스처/이펙트 결과)은 straight-alpha.
         // 블렌드가 src=one(premultiplied-over)이므로 여기서 단 한 번 premultiply 한다.
@@ -50,7 +50,7 @@ enum QuadShaders {
     fragment float4 f_compose(VOut in [[stage_in]],
                               texture2d<float> tex [[texture(0)]],
                               constant float4 &tint [[buffer(0)]]) {
-        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float2 uv = float2(in.pos.x / float(tex.get_width()), in.pos.y / float(tex.get_height()));
         float4 c = tex.sample(s, uv);
         float a = c.a * tint.a;
@@ -64,7 +64,7 @@ enum QuadShaders {
                             texture2d<float> dst [[texture(1)]],
                             constant float4 &tint [[buffer(0)]],
                             constant int &mode [[buffer(1)]]) {
-        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
         float2 duv = float2(in.pos.x / float(dst.get_width()), in.pos.y / float(dst.get_height()));
         float4 d = dst.sample(s, duv);
@@ -82,7 +82,7 @@ enum QuadShaders {
                               texture2d<float> fbTex [[texture(2)]],
                               constant float4& tint [[buffer(0)]],
                               constant float4& refractParams [[buffer(1)]]) {
-        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 t = albedoTex.sample(s, in.uv);
         float4 nraw = normalTex.sample(s, in.uv);
         bool rg88 = refractParams.y > 0.5;
@@ -98,13 +98,13 @@ enum QuadShaders {
         float A = t.a * tint.a;
         return float4(rgb * A, A);            // premultiplied(블렌드 src=one)
     }
-    // WE genericimage4 유한광 감쇠의 GLSL/Metal 포트. 반경 경계는 0^0 스파이크를 막도록 hard zero.
+    // WE genericimage4 유한광 감쇠의 HLSL lane/Metal 포트. 반경 컷오프 없음(exponent=0 이면 전역 무감쇠).
     inline float finiteLightFalloff(float dist, float radius, float exponent) {
-        // F543(F-75): radius<=0 가드(Mesh3DShaders:142 사본과 대칭) — 호출부(f_lit)가 선차단하지만 방어 일관성.
+        // F543(F-75): radius<=0 가드(Mesh3DShaders 사본과 대칭) — 호출부(f_lit)가 선차단하지만 방어 일관성.
         if (radius <= 0.0) return 0.0;
         float falloff = clamp(1.0 - dist / radius, 0.0, 1.0);
-        constexpr float eps = 6.103515625e-5;
-        return falloff >= eps ? pow(falloff + eps, exponent) : 0.0;
+        // WE 2.8.42 HLSL lane(Mesh3DShaders 사본과 대칭): pow(falloff + 1.17549435e-38, exponent).
+        return pow(falloff + 1.17549435e-38, exponent);
     }
     // 영벡터 방어 정규화(Mesh3DShaders:48 사본과 대칭) — 라이트 축/L 정규화 전용.
     inline float3 normalizedOr(float3 value, float3 fallback) {
@@ -145,6 +145,9 @@ enum QuadShaders {
     //   directionalPBR/spotPBR) 확정 수식의 2D 포트. kind/axis/cone 데이터는 ForwardUniforms
     //   (WapleCore SceneDocument.swift)가 blue축(Rz·Ry·Rx col2 = WE Mat4.forward 규약)·half-angle
     //   코사인으로 팩한다. buffer 6/7 은 상위 5개 슬롯 규약을 건드리지 않는 후방 확장.
+    //   tube(kind 4): 세그먼트 최근접점 유한광 — WE genericimage3.frag:115/157
+    //   PointSegmentDelta(common_pbr.h:9-16) 포트(무섀도우, A2-pbr-lighting.md §4.4). axis 슬롯은
+    //   tube 에선 forward 가 아니라 단점 B(g_LTube_OriginB)를 실는다(ForwardUniforms 주석 참조).
     fragment float4 f_lit(VOut in [[stage_in]],
                           texture2d<float> tex [[texture(0)]],
                           constant float4 &tint [[buffer(0)]],
@@ -153,9 +156,9 @@ enum QuadShaders {
                           constant float4 *lightCol [[buffer(3)]],  // [4] rgb=color×intensity, w=radius
                           constant float4 &ambient [[buffer(4)]],   // xyz=flat ambient (genericimage4)
                           constant PBRMaterialUniforms &material [[buffer(5)]],
-                          constant float4 *lightAxisCone [[buffer(6)]],  // [4] xyz=forward, w=cone outer cos
-                          constant float4 *lightKindCone [[buffer(7)]]) { // [4] x=kind(0/1/2), y=cone inner cos
-        constexpr sampler s(filter::linear, address::clamp_to_edge);
+                          constant float4 *lightAxisCone [[buffer(6)]],  // [4] xyz=forward|tube 단점B, w=cone outer cos
+                          constant float4 *lightKindCone [[buffer(7)]]) { // [4] x=kind(0/1/2/4), y=cone inner cos
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
         // uv(0..1) → 레이어 로컬(-hw..hw) → 회전 → 월드 픽셀(quadVertices 역산). z = 레이어 originZ.
         float lx = (in.uv.x * 2.0 - 1.0) * rect[0].z;
@@ -181,7 +184,17 @@ enum QuadShaders {
             } else {
                 float radius = lightCol[i].w;
                 if (radius <= 0.0) continue;
-                float3 delta = lightPos[i].xyz - world;
+                float3 delta;
+                if (kind == 4) {
+                    // tube: 세그먼트 최근접점까지의 델타 — WE common_pbr.h:9-16 PointSegmentDelta 1:1
+                    // (saturate=clamp(x,0,1); A==B 퇴화(v==0)는 A-pos 반환이라 아래 point 경로와 동치).
+                    float3 a = lightPos[i].xyz;
+                    float3 ab = lightAxisCone[i].xyz - a;
+                    float vv = dot(ab, ab);
+                    delta = (vv == 0.0 ? a : a + clamp(dot(world - a, ab) / vv, 0.0, 1.0) * ab) - world;
+                } else {
+                    delta = lightPos[i].xyz - world;
+                }
                 float dist = length(delta);
                 if (dist < 1e-5) continue;
                 L = delta / dist;
@@ -221,9 +234,10 @@ enum QuadShaders {
     """
     /// 감사 V07: 베이스 레이어 NoInterpolation(TexImage flags bit0) 전용 nearest 변형 — 4개 frag
     /// (f_main/f_blend/f_compose/f_lit)의 유일한 선형 샘플러 선언만 filter::nearest 로 치환.
-    /// 어드레스 모드(clamp_to_edge)는 보존(WE NoInterpolation 은 필터만 point). v_main/f_spriteframe 은
-    /// 샘플러가 없거나 이미 nearest 라 무영향. 원본 source 는 불변 — 기존 선형 파이프라인 비트동일(무회귀).
+    /// 어드레스 모드(clamp_to_edge)·mip 필터(linear — 1단계 mip 활성화, 단일레벨은 LOD 클램프로 무연산)는
+    /// 보존(WE NoInterpolation 은 min/mag 필터만 point). v_main/f_spriteframe 은 샘플러가 없거나 이미
+    /// nearest 라 무영향. 원본 source 는 불변 — 기존 선형 파이프라인 비트동일(무회귀).
     static let nearestSource = source.replacingOccurrences(
-        of: "constexpr sampler s(filter::linear, address::clamp_to_edge);",
-        with: "constexpr sampler s(filter::nearest, address::clamp_to_edge);")
+        of: "constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);",
+        with: "constexpr sampler s(filter::nearest, mip_filter::linear, address::clamp_to_edge);")
 }

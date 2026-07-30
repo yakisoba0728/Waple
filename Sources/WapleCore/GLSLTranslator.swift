@@ -1,7 +1,7 @@
 import Foundation
 
 public enum GLSLType: String, Equatable {
-    case float, vec2, vec3, vec4, mat2, mat3, mat4, sampler2D
+    case float, vec2, vec3, vec4, mat2, mat3, mat4, mat4x3, sampler2D
 
     /// GLSL(vec2)·HLSL(float2) 타입명 겸용 해석 — WE 방언은 혼용한다(실물 rand_1_05(in float2 uv)).
     public static func from(_ s: String) -> GLSLType? {
@@ -9,6 +9,12 @@ public enum GLSLType: String, Equatable {
         switch s {
         case "float2": return .vec2; case "float3": return .vec3; case "float4": return .vec4
         case "float2x2": return .mat2; case "float3x3": return .mat3; case "float4x4": return .mat4
+        case "float4x3": return .mat4x3
+        // WE shim(wallpaper64.exe 임베디드, shader-strings.txt :44): #define uvec4 uint4 — ivec/2/3성분
+        // 포함 정수 벡터는 크기 추론용으로 vecN 등가 취급(MSL 스펠링 치환은 typeAndMacroRenames/mslType).
+        case "uvec2", "ivec2": return .vec2; case "uvec3", "ivec3": return .vec3
+        case "uvec4", "ivec4": return .vec4
+        case "sampler2DBackBuffer": return .sampler2D   // WE shim :22 — texture2d<float> 취급
         default: return nil
         }
     }
@@ -17,6 +23,7 @@ public enum GLSLType: String, Equatable {
         switch self {
         case .float: return "float"; case .vec2: return "float2"; case .vec3: return "float3"
         case .vec4: return "float4"; case .mat2: return "float2x2"; case .mat3: return "float3x3"; case .mat4: return "float4x4"
+        case .mat4x3: return "float4x3"   // WE shim :46 #define mat4x3 float4x3(MSL float4x3 존재)
         case .sampler2D: return "texture2d<float>"
         }
     }
@@ -205,6 +212,9 @@ public enum GLSLTranslator {
         if vert["a_Position"] == nil { vert["a_Position"] = "vin.a_Position" }
         if vert["a_TexCoord"] == nil { vert["a_TexCoord"] = "vin.a_TexCoord" }
         frag["gl_FragCoord"] = "in.gl_Position"  // [[position]] = 픽셀 좌표
+        // WE PS_INPUT 의 gl_Position 도 픽셀 좌표(RE: gl_Position 심 — vertex 측 out.gl_Position(:1399)
+        // 과는 별개 매핑). frag 본문의 gl_Position 참조를 in.gl_Position 로.
+        frag["gl_Position"] = "in.gl_Position"
 
         // 함수 파싱은 주석 제거본에서(annotation JSON 중괄호가 balance 를 깨지 않도록).
         var vFns = parseFunctions(vClean, structs: structNames)
@@ -450,7 +460,11 @@ public enum GLSLTranslator {
         case "void", "float", "int", "uint", "bool": return glsl
         case "vec2", "float2": return "float2"; case "vec3", "float3": return "float3"; case "vec4", "float4": return "float4"
         case "mat2", "float2x2": return "float2x2"; case "mat3", "float3x3": return "float3x3"; case "mat4", "float4x4": return "float4x4"
-        case "sampler2D": return "texture2d<float>"
+        case "mat4x3", "float4x3": return "float4x3"      // WE shim :46 #define mat4x3 float4x3
+        // WE shim :44 #define uvec4 uint4(ivec/2/3성분 〃) — 헬퍼 시그니처의 정수 벡터 타입.
+        case "uvec2": return "uint2"; case "uvec3": return "uint3"; case "uvec4": return "uint4"
+        case "ivec2": return "int2"; case "ivec3": return "int3"; case "ivec4": return "int4"
+        case "sampler2D", "sampler2DBackBuffer": return "texture2d<float>"   // BackBuffer: WE shim :22
         default: return structs.contains(glsl) ? glsl : nil
         }
     }
@@ -1344,6 +1358,9 @@ public enum GLSLTranslator {
     }
     private static func typeAndMacroRenames() -> [String: String] {
         ["vec2": "float2", "vec3": "float3", "vec4": "float4", "mat2": "float2x2", "mat3": "float3x3", "mat4": "float4x4",
+         // WE shim :44/#define uvec4 uint4(ivec/2/3성분 〃), :46 #define mat4x3 float4x3.
+         "uvec2": "uint2", "uvec3": "uint3", "uvec4": "uint4",
+         "ivec2": "int2", "ivec3": "int3", "ivec4": "int4", "mat4x3": "float4x3",
          "CAST2": "float2", "CAST3": "float3", "CAST4": "float4",
          "frac": "fract", "lerp": "mix", "ddx": "dfdx", "ddy": "dfdy", "inverse": "we_inverse", "mod": "we_mod",
          "M_PI": "3.14159265359", "M_PI_HALF": "1.57079632679",
@@ -1372,6 +1389,20 @@ public enum GLSLTranslator {
         }
         s = rewriteCall(s, "texSample2D") { args in
             guard args.count == 2 else { return nil }
+            let smp = perTextureSampler ? perTextureSamplerExpr(args[0]) : "smp"
+            return "\(args[0]).sample(\(smp), we_uv(\(args[1])))"
+        }
+        // 2a2) texLoad2D(s, u, r) → 정수 texel fetch — WE shim :66 `#define texLoad2D(s, u, r)
+        //      s.Load(int3((u) * (r), 0))` 의 MSL 대응(read 는 lod 기본 0).
+        s = rewriteCall(s, "texLoad2D") { args in
+            guard args.count == 3 else { return nil }
+            return "\(args[0]).read(uint2((\(args[1])) * (\(args[2]))))"
+        }
+        // 2a3) texSample2DBackBuffer(s, u, r) → 비MS 변형 texSample2D(s, u) 로 하강(WE shim :70-71 —
+        //      두 #define 중 MS Load 변형이 아닌 sample 형태). sampler2DBackBuffer 선언은
+        //      texture2d<float> 취급(GLSLType.from).
+        s = rewriteCall(s, "texSample2DBackBuffer") { args in
+            guard args.count == 3 else { return nil }
             let smp = perTextureSampler ? perTextureSamplerExpr(args[0]) : "smp"
             return "\(args[0]).sample(\(smp), we_uv(\(args[1])))"
         }
@@ -1516,8 +1547,9 @@ public enum GLSLTranslator {
                       "g_AudioSpectrum32Left", "g_AudioSpectrum32Right",
                       "g_AudioSpectrum64Left", "g_AudioSpectrum64Right"] where refs.contains(n) { caps.append(.audio(n)) }
             // 텍스처 샘플링(자기 파라미터의 sampler2D 포함)엔 공용 샘플러가 필요.
-            if refs.contains("texSample2D") || refs.contains("texSample2DLod")
-                || h.params.contains(where: { $0.type == "sampler2D" }) || caps.contains(where: { if case .texture = $0 { return true }; return false }) {
+            if refs.contains("texSample2D") || refs.contains("texSample2DLod") || refs.contains("texSample2DBackBuffer")
+                || h.params.contains(where: { $0.type == "sampler2D" || $0.type == "sampler2DBackBuffer" })
+                || caps.contains(where: { if case .texture = $0 { return true }; return false }) {
                 caps.append(.sampler)
             }
             out[h.name] = caps
@@ -1692,13 +1724,16 @@ public enum GLSLTranslator {
         """
         let fragSig = """
         fragment float4 ef_main(Vary in [[stage_in]]\(pFrag), constant EngineU& eng [[buffer(1)]]\(fragTex)\(audioFrag)) {
-            constexpr sampler smp(filter::linear, address::clamp_to_edge);
+            // 1단계 mip 활성화(mip_filter::linear): mipCount>1 텍스처는 실제 mip 샘플, 단일레벨은 LOD 클램프로 비트동일.
+            // level() 명시 LOD 도 none 이면 base 클램프(TexMipChainUploadTests 실측 주석)였던 것이
+            // linear 로 지정 레벨이 유효해진다 — WE texture2DLod 의미론 복원이며 단일레벨은 역시 동일(클램프).
+            constexpr sampler smp(filter::linear, mip_filter::linear, address::clamp_to_edge);
             // F162/F163: 최상위 본문 텍스처 샘플 호출은 슬롯별 eng.texWrap 로 smp(clamp)/smpRepeat 런타임 분기
             // (perTextureSamplerExpr) — 헬퍼 내부·전달용 smp 는 위 clamp 그대로(캡처 매커니즘 무변경).
-            constexpr sampler smpRepeat(filter::linear, address::repeat);
+            constexpr sampler smpRepeat(filter::linear, mip_filter::linear, address::repeat);
             // 감사 V07: NoInterpolation(eng.texFilter) 용 nearest 쌍 — 필터만 point, 어드레스 모드 보존.
-            constexpr sampler smpNearest(filter::nearest, address::clamp_to_edge);
-            constexpr sampler smpRepeatNearest(filter::nearest, address::repeat);
+            constexpr sampler smpNearest(filter::nearest, mip_filter::linear, address::clamp_to_edge);
+            constexpr sampler smpRepeatNearest(filter::nearest, mip_filter::linear, address::repeat);
         \(indent(fragBody))
         }
         """

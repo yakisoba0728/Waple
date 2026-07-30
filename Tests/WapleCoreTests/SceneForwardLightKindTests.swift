@@ -26,8 +26,9 @@ final class SceneForwardLightKindTests: XCTestCase {
         XCTAssertEqual(SceneLight3D.forwardLightKind("lpoint"), 0)
         XCTAssertEqual(SceneLight3D.forwardLightKind("ldirectional"), 1)
         XCTAssertEqual(SceneLight3D.forwardLightKind("lspot"), 2)
-        // 미지 type 은 point 폴터 — 종전 f_lit 전원 point 처리와 동일(무회귀).
-        XCTAssertEqual(SceneLight3D.forwardLightKind("ltube"), 0)
+        // ltube 는 정식 tube 경로(kind 4 — WE genericimage3.frag PointSegmentDelta 소비).
+        // 미지 type 만 point 폴터 — 종전 전원 point 처리와 동일(무회귀).
+        XCTAssertEqual(SceneLight3D.forwardLightKind("ltube"), 4)
         XCTAssertEqual(SceneLight3D.forwardLightKind(""), 0)
     }
 

@@ -41,7 +41,7 @@ enum ParticleShaders {
     // 렌더 비트동일. 3D 비-포그 파티클(particle3DAdditive/Translucent)도 이 함수를 공유해 함께 적용됨.
     fragment float4 pf_main(PVOut in [[stage_in]], texture2d<float> tex [[texture(0)]],
                             constant float& overbright [[buffer(0)]]) {
-        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 t = tex.sample(s, in.uv);
         float A = t.a * in.color.a;
         return float4(t.rgb * in.color.rgb * A * overbright, A);
@@ -68,7 +68,7 @@ enum ParticleShaders {
 
     fragment float4 pf3d_fog(PVOut3DFog in [[stage_in]], texture2d<float> tex [[texture(0)]],
                              constant FogU3D& fog [[buffer(0)]]) {
-        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 t = tex.sample(s, in.uv);
         float3 rgb = t.rgb * in.color.rgb;
         // C4-(ii): overbright — eye.xyz 만 거리 계산에 쓰이고 .w 는 미사용 패딩이라 재사용(기본 1, 무회귀).
@@ -102,7 +102,7 @@ enum ParticleShaders {
                                texture2d<float> normalTex [[texture(1)]],
                                texture2d<float> fbTex [[texture(2)]],
                                constant float4& refractParams [[buffer(0)]]) {
-        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 t = albedoTex.sample(s, in.uv);
         float4 nraw = normalTex.sample(s, in.uv);
         bool rg88 = refractParams.y > 0.5;
@@ -128,9 +128,9 @@ enum ParticleShaders {
     }
     """
     /// 감사 V07: 파티클 알베도 NoInterpolation(TexImage flags bit0) 전용 nearest 변형 — pf_main/pf_refract
-    /// 의 유일한 선형 샘플러 선언만 filter::nearest 로 치환. 어드레스 모드(clamp_to_edge)는 보존(WE
-    /// NoInterpolation 은 필터만 point). 원본 source 는 불변 — 기존 선형 파이프라인 비트동일(무회귀).
+    /// 의 유일한 선형 샘플러 선언만 filter::nearest 로 치환. 어드레스 모드(clamp_to_edge)·mip 필터(linear)는
+    /// 보존(WE NoInterpolation 은 min/mag 필터만 point). 원본 source 는 불변 — 기존 선형 파이프라인 비트동일(무회귀).
     static let nearestSource = source.replacingOccurrences(
-        of: "constexpr sampler s(filter::linear, address::clamp_to_edge);",
-        with: "constexpr sampler s(filter::nearest, address::clamp_to_edge);")
+        of: "constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);",
+        with: "constexpr sampler s(filter::nearest, mip_filter::linear, address::clamp_to_edge);")
 }

@@ -50,6 +50,58 @@ enum ScenePBRMath {
     ) -> SIMD3<Float> {
         guard radius > 0 else { return .zero }
         let delta = lightPosition - world
+        return finiteContribution(delta: delta, lightColor: lightColor, radius: radius,
+                                  exponent: exponent, normal: normal, view: view, albedo: albedo,
+                                  roughness: roughness, metallic: metallic, specularTint: specularTint)
+    }
+
+    /// WE common_pbr.h:9-16 PointSegmentDelta 1:1 — 세그먼트 최근접점까지의 델타.
+    /// A==B 퇴화(v==0)는 A-pos 반환(point 와 동치). saturate = clamp(x,0,1).
+    static func pointSegmentDelta(_ pos: SIMD3<Float>, _ a: SIMD3<Float>, _ b: SIMD3<Float>) -> SIMD3<Float> {
+        let delta = b - a
+        let v = simd_dot(delta, delta)
+        if v == 0 { return a - pos }
+        let t = max(0, min(1, simd_dot(pos - a, delta) / v))
+        return a + t * delta - pos
+    }
+
+    /// tube(kind 4): 세그먼트 최근접점을 광원점으로 하는 유한광 — WE PerformLighting_V1 tube 분기
+    /// (A2-pbr-lighting.md §4.4: shadowFactor=1.0 무섀도우, radius=Color.w, exponent=OriginA.w).
+    /// pointContribution 과의 유일한 차이는 델타 산출 — QuadShaders f_lit tube 분기의 CPU 미러.
+    static func tubeContribution(
+        world: SIMD3<Float>,
+        segmentA: SIMD3<Float>,
+        segmentB: SIMD3<Float>,
+        lightColor: SIMD3<Float>,
+        radius: Float,
+        exponent: Float,
+        normal: SIMD3<Float>,
+        view: SIMD3<Float>,
+        albedo: SIMD3<Float>,
+        roughness: Float,
+        metallic: Float,
+        specularTint: SIMD3<Float>
+    ) -> SIMD3<Float> {
+        guard radius > 0 else { return .zero }
+        let delta = pointSegmentDelta(world, segmentA, segmentB)
+        return finiteContribution(delta: delta, lightColor: lightColor, radius: radius,
+                                  exponent: exponent, normal: normal, view: view, albedo: albedo,
+                                  roughness: roughness, metallic: metallic, specularTint: specularTint)
+    }
+
+    /// point/tube 공통 유한광 BRDF 코어(f_lit 루프 본문의 CPU 미러 — 종전 pointContribution 본문 그대로).
+    private static func finiteContribution(
+        delta: SIMD3<Float>,
+        lightColor: SIMD3<Float>,
+        radius: Float,
+        exponent: Float,
+        normal: SIMD3<Float>,
+        view: SIMD3<Float>,
+        albedo: SIMD3<Float>,
+        roughness: Float,
+        metallic: Float,
+        specularTint: SIMD3<Float>
+    ) -> SIMD3<Float> {
         let distance = simd_length(delta)
         guard distance >= 1e-5 else { return .zero }
 
@@ -74,12 +126,13 @@ enum ScenePBRMath {
 }
 
 public extension SceneLight3D {
-    /// P1 GLSL finite-light falloff. Radius boundary remains hard-zero even when exponent is zero.
+    /// WE 2.8.42 HLSL lane finite-light falloff(#define HLSL 1 크로스컴파일 — wallpaper64.exe @0x485698):
+    /// pow(falloff + 1.17549435e-38, exponent), 반경 컷오프 없음 — exponent=0 이면 반경 무관 1.0(전역 무감쇠).
+    /// GPU MSL 2곳(Mesh3DShaders/QuadShaders)과 동일 수식(CPU↔GPU 비트 일치 규약).
     static func finiteLightFalloff(distance: Float, radius: Float, exponent: Float) -> Float {
         guard radius > 0 else { return 0 }
         let falloff = max(0, min(1, 1 - distance / radius))
-        let epsilon: Float = 6.103515625e-5
-        return falloff >= epsilon ? powf(falloff + epsilon, exponent) : 0
+        return powf(falloff + 1.17549435e-38, exponent)
     }
 
     /// Runtime-independent CPU oracle for the reachable orthographic `QuadShaders.f_lit` path.
@@ -97,6 +150,25 @@ public extension SceneLight3D {
         for i in 0..<min(uniforms.count, 4) {
             let position = uniforms.positions[i]
             let colorRadius = uniforms.colorRadius[i]
+            if Int(uniforms.kindCone[i].x + 0.5) == 4 {
+                // tube(kind 4): 세그먼트 최근접점 유한광 — f_lit tube 분기의 CPU 미러.
+                // (directional/spot 는 이 오라클이 kind 지원 이전부터 point 근사로 두는 기존 한계 유지 —
+                //  여기서는 정본 수식이 확정된 tube 만 정식 경로로 싣는다.)
+                result += ScenePBRMath.tubeContribution(
+                    world: world,
+                    segmentA: SIMD3(position.x, position.y, position.z),
+                    segmentB: SIMD3(uniforms.axisCone[i].x, uniforms.axisCone[i].y, uniforms.axisCone[i].z),
+                    lightColor: SIMD3(colorRadius.x, colorRadius.y, colorRadius.z),
+                    radius: colorRadius.w,
+                    exponent: position.w,
+                    normal: normal,
+                    view: view,
+                    albedo: albedo,
+                    roughness: roughness,
+                    metallic: metallic,
+                    specularTint: specularTint)
+                continue
+            }
             result += ScenePBRMath.pointContribution(
                 world: world,
                 lightPosition: SIMD3(position.x, position.y, position.z),

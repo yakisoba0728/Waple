@@ -82,9 +82,23 @@ public struct PuppetModel: Equatable {
             for v in mesh.vertices {
                 verts.append(Vertex(position: v.position, boneIndices: v.boneIndices, weights: v.weights, uv: v.uv))
             }
-            for idx in mesh.indices {
-                let gi = Int(idx) + baseVertex
-                indices.append(gi <= 0xFFFF ? UInt16(gi) : 0)  // 2D 퍼펫은 정점 <65535 — 초과는 안전 클램프
+            // 2D 퍼펫 인덱스는 u16 — 병합 정점이 0xFFFF 를 넘으면 0 클램프(정점 0 으로 찌그러진
+            // 삼각형 = 메시 손상) 대신 초과 삼각형을 통째로 드롭한다(실물은 전부 단일메시라 미발동,
+            // 방어 수준). 삼각형 단위 드롭이라 인덱스 나열의 %3 정합은 보존.
+            var k = 0
+            while k + 2 < mesh.indices.count {
+                let a = Int(mesh.indices[k]) + baseVertex
+                let b = Int(mesh.indices[k + 1]) + baseVertex
+                let c = Int(mesh.indices[k + 2]) + baseVertex
+                if a <= 0xFFFF, b <= 0xFFFF, c <= 0xFFFF {
+                    indices.append(UInt16(a)); indices.append(UInt16(b)); indices.append(UInt16(c))
+                }
+                k += 3
+            }
+            while k < mesh.indices.count {   // %3 잔여(비정형) — 피팅하면 보존, 아니면 드롭
+                let a = Int(mesh.indices[k]) + baseVertex
+                if a <= 0xFFFF { indices.append(UInt16(a)) }
+                k += 1
             }
             baseVertex += mesh.vertices.count
         }
@@ -116,11 +130,26 @@ public struct PuppetModel: Equatable {
         o = c.next
 
         // 정점 블롭 크기: 이후 16바이트 내 관용 탐색(%52==0, 0<size≤잔여). 미상 u32(0) 등을 건너뛴다.
+        // 오탐 방어(2026-07-28): 후보 수용 전에 그 직후 인덱스 블롭(u32 iSize + u16 인덱스, iSize>0,
+        // %2==0, maxIndex+1 ≤ 정점수)까지 검증 — 미상 필드가 우연히 %52==0(z-flag≠0 등)이면 종전엔
+        // 그것을 vSize 로 오인해 이후 iSize 가드에서 모델 전체가 드롭됐다. 불일치 후보는 제외하고 계속 탐색.
         var vSize: Int? = nil
         var probe = o
         while probe <= o + 16, probe + 4 <= bytes.count {
             if let v = u32(probe), v > 0, v % 52 == 0, Int(v) <= bytes.count - probe - 4 {
-                vSize = Int(v); o = probe + 4; break
+                let vs = Int(v)
+                let iOff = probe + 4 + vs
+                if let iSizeU = u32(iOff), iSizeU > 0, iSizeU % 2 == 0,
+                   iOff + 4 + Int(iSizeU) <= bytes.count {
+                    var maxIdx = -1
+                    var k = iOff + 4
+                    let iEnd = iOff + 4 + Int(iSizeU)
+                    while k + 1 < iEnd {
+                        maxIdx = max(maxIdx, Int(bytes[k]) | (Int(bytes[k + 1]) << 8))
+                        k += 2
+                    }
+                    if maxIdx < vs / 52 { vSize = vs; o = probe + 4; break }
+                }
             }
             probe += 4
         }

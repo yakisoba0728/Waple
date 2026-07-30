@@ -28,7 +28,7 @@ final class ParticleAudioTests: XCTestCase {
         XCTAssertEqual(a0.freqEnd, 10)
         XCTAssertEqual(a0.exponent, 5)
         XCTAssertEqual(a0.freqStart, 0)          // 부재 기본
-        XCTAssertEqual(a0.bounds.x, 0)           // bounds 부재 기본 [0,1]
+        XCTAssertEqual(a0.bounds.x, 0.8, accuracy: 1e-6)  // bounds 부재 기본 [0.8,1.0](@0x48e1b8, 귀속 추정)
         XCTAssertEqual(a0.bounds.y, 1)
 
         let a1 = try XCTUnwrap(def.emitterAudio[1])

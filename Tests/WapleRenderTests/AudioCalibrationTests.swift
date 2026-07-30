@@ -152,8 +152,10 @@ final class AudioCalibrationTests: XCTestCase {
     // ── 퇴행 가드: loud vs quiet 사인 → 라우드니스 민감도 스펙(FIX 후에도 생존) ──
     func testRegressionGuard_loudnessSensitivity() {
         let guardCfg = Cfg(bounds: [0.0, 1.0], power: 1.0, mul: 1.0, fmin: 0, fmax: 1, weight: 0)
-        let loud = mags(sine(1.0, 1000, fftSize))          // 0 dBFS
-        let quiet = mags(sine(0.1259, 1000, fftSize))      // −18 dB
+        // Hann 제거(테이퍼 미적용, FUN_1400d0380:285-308)로 mags 진폭이 약 2배 — 고정게인(0.02326, 동적
+        // 캡처 캘리브 대기) 하에서 0 dBFS 는 smoothstep 을 포화(=1)시키므로 자극을 1/2 스케일해 (0,1) 개구간 유지.
+        let loud = mags(sine(0.5, 1000, fftSize))          // −6 dBFS(Hann 시절 0 dBFS 등가)
+        let quiet = mags(sine(0.06295, 1000, fftSize))     // loud −18 dB
         // (C) 진폭 보존 경로 = FIX 목표 거동. 라우드니스에 단조 반응해야.
         func respC(_ m: [Float]) -> Float { let (l, r) = candidates[2].xf(m, m); return respond(l, r, guardCfg) }
         let rc = (respC(loud), respC(quiet))
@@ -174,8 +176,9 @@ final class AudioCalibrationTests: XCTestCase {
             let s = AudioSpectrum.spectrum(fromMagnitudes: m, binCount: 64)   // 프로덕션 경로
             return respond(s, s, guardCfg)
         }
-        let loud = respProd(mags(sine(1.0, 1000, fftSize)))        // 0 dBFS
-        let quiet = respProd(mags(sine(0.1259, 1000, fftSize)))    // −18 dB
+        // 위 testRegressionGuard 와 같은 이유(Hann 제거로 진폭 ≈2배)로 자극 1/2 스케일.
+        let loud = respProd(mags(sine(0.5, 1000, fftSize)))        // −6 dBFS(Hann 시절 0 dBFS 등가)
+        let quiet = respProd(mags(sine(0.06295, 1000, fftSize)))   // loud −18 dB
         NSLog("%@", "[PROD] AudioSpectrum.spectrum()  loud=\(loud)  quiet=\(quiet)")
         XCTAssertGreaterThan(loud, quiet + 1e-3, "프로덕션 경로: loud 응답 > quiet (라우드니스 민감)")
         XCTAssertTrue(loud > 0 && loud < 1, "loud 은 (0,1) 개구간")

@@ -45,7 +45,8 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
         """), material: nil)
         XCTAssertEqual(parsed.emitterSpeed, [SIMD2<Float>(0, 0)])
         let plain = ParticleSystemDef(
-            emitters: [.sphere(origin: Vec3(x: 10, y: 20, z: 0), directions: Vec3(x: 1, y: 1, z: 1),
+            // directions (1,1,0): 파스 디폴트가 엔진 정본("1 1 0" @0x48e288)으로 변경됨 — 기준 측도 갱신.
+            emitters: [.sphere(origin: Vec3(x: 10, y: 20, z: 0), directions: Vec3(x: 1, y: 1, z: 0),
                                distanceMin: 5, distanceMax: 50, rate: 100, burst: 0,
                                sign: Vec3(x: 0, y: 0, z: 0))],
             initializers: [.lifetimeRandom(min: 100, max: 100)],
@@ -385,7 +386,7 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
                       "audioprocessingmode":3,"audioprocessingbounds":"0.6 1"}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(axis, dIn, dOut, sIn, sOut, _) = def.operators.first else {
+        guard case let .vortex(axis, dIn, dOut, sIn, sOut, _, _, _, _, _, _) = def.operators.first else {
             return XCTFail("vortex_v2 가 vortex 로 매핑되어야 한다")
         }
         XCTAssertEqual(axis, Vec3(x: 0, y: 0, z: 1))
@@ -416,7 +417,8 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
          "renderer":[{"name":"sprite"}],"maxcount":100}
         """), material: nil)
         let plain = ParticleSystemDef(
-            emitters: [.sphere(origin: Vec3(x: 0, y: 0, z: 0), directions: Vec3(x: 1, y: 1, z: 1),
+            // directions (1,1,0): 파스 디폴트가 엔진 정본("1 1 0" @0x48e288)으로 변경됨 — 동치 가드의 기준 측도 갱신.
+            emitters: [.sphere(origin: Vec3(x: 0, y: 0, z: 0), directions: Vec3(x: 1, y: 1, z: 0),
                                distanceMin: 1, distanceMax: 10, rate: 50, burst: 0,
                                sign: Vec3(x: 0, y: 0, z: 0)),
                        .box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 20, y: 10, z: 0),

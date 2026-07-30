@@ -31,12 +31,12 @@ final class GLSLTranslatorNoInterpolationTests: XCTestCase {
         XCTAssertTrue(t.msl.contains("float4 texWrap[2]; float4 texFilter[2];"), t.msl)
     }
 
-    /// nearest 샘플러 쌍 방출: 필터만 point, 어드레스 모드는 wrap 차원이 그대로 결정(WE 의미론 —
-    /// NoInterpolation 은 mag/min 만 nearest, repeat/clamp 보존).
+    /// nearest 샘플러 쌍 방출: min/mag 필터만 point, 어드레스 모드·mip 필터(linear — 1단계 mip 활성화,
+    /// 단일레벨은 LOD 클램프로 무연산)는 보존(WE 의미론 — NoInterpolation 은 mag/min 만 nearest).
     func testNearestSamplerTwinsDeclared() throws {
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("constexpr sampler smpNearest(filter::nearest, address::clamp_to_edge);"), t.msl)
-        XCTAssertTrue(t.msl.contains("constexpr sampler smpRepeatNearest(filter::nearest, address::repeat);"), t.msl)
+        XCTAssertTrue(t.msl.contains("constexpr sampler smpNearest(filter::nearest, mip_filter::linear, address::clamp_to_edge);"), t.msl)
+        XCTAssertTrue(t.msl.contains("constexpr sampler smpRepeatNearest(filter::nearest, mip_filter::linear, address::repeat);"), t.msl)
     }
 
     /// 최상위 texSample2D 는 슬롯별 2×2 런타임 삼항(바깥=filter, 안쪽=wrap)으로 번역 — 슬롯 0/1 각각.

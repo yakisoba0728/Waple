@@ -45,10 +45,25 @@ public enum Initializer: Equatable {
     /// h/s/v 는 colorRandom(공유 t, RGB 라인 보간)과 달리 서로 무관한 축이라 velocityRandom 과 같이
     /// 채널별 독립 t. [보존/추측] "huesteps"(코퍼스 실측 2/4 존재, 이산 색상환 스텝 수)는 미구현 —
     /// 연속 hue 랜덤으로 근사(전무→근사, 폴백 방향 유지). 반증 시 재검토.
-    case hsvColorRandom(hueMin: Float, hueMax: Float, satMin: Float, satMax: Float, valMin: Float, valMax: Float)
+    case hsvColorRandom(hueMin: Float, hueMax: Float, satMin: Float, satMax: Float, valMin: Float, valMax: Float,
+                        hueSteps: Int = 0, hueNoise: Float = 0, satNoise: Float = 0, valNoise: Float = 0)
+    // hueSteps = 실물키 huesteps(코퍼스 실측 2/4, 이산 색상환 스텝 수 — [추정] 구간 등분 인덱스 선택,
+    // 0=연속 랜덤 레거시). hueNoise/satNoise/valNoise = 실물키 huenoise/saturationnoise/valuenoise
+    // (@0x48e3c0–0x48e3e0 — [추정] 스폰 위치 값노이즈로 채널 t 산출, 0=부재 시 레거시 rng 드로
+    // — 무키 씬 비트동일).
     /// 스프라이트시트 프레임 선택(스폰 시 확정). between=false: CP0 기준 각도 → 시퀀스,
     /// true: CP0→CP1 구간 투영 → 시퀀스. count=시퀀스 길이(시트 프레임 수와 다를 수 있음 — mirror 폴드).
     case mapSequence(count: Float, mirror: Bool, between: Bool)
+    /// 스폰 위치 오프셋 랜덤(실물키 positionoffsetrandom 의 offsetmin/offsetmax @0x48e380/398).
+    /// [보존/추측] velocityRandom 과 동형 성분별 독립 t.
+    case positionOffsetRandom(offsetMin: Vec3, offsetMax: Vec3)
+    /// 파스·보존 전용(이벤트 시스템 연동 보류 — 시뮬레이터 무시, RNG 드로 0).
+    /// 실물 inheritcontrolpointvelocity: CP 속도 상속 [추정].
+    case inheritControlPointVelocity(controlPoint: Int, scale: Float)
+    /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 inheritinitialvaluefromevent / inheritvaluefromevent.
+    case inheritValueFromEvent(name: String, valueName: String?)
+    /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 remapinitialvalue — 출력 리맵 스펙 미확정.
+    case remapInitialValue(output: String?, min: Vec3?, max: Vec3?)
 }
 
 /// 시퀀스 인덱스(스폰 시 0..count) → 시트 프레임 인덱스. mirror=핑퐁(주기 2N-2), 아니면 순환.
@@ -63,6 +78,20 @@ public func sheetFrameIndex(sequence: Float, frameCount: Int, mirror: Bool) -> I
         return m < frameCount ? m : period - m
     }
     return s % frameCount
+}
+
+/// vortex_v2 ring 키(ringradius/ringpulldistance/ringpullforce/ringwidth @0x48e8a8–0x48e8e0).
+/// [추정] 링 근사: 회전면 반경 dist 가 링 대역(|dist−radius| ≤ width/2) 밖이고 pullDistance 이내이면
+/// 링 원주를 향한 반경 방향 인력(pullForce)을 가한다(대역 안·범위 밖은 묵영향).
+public struct VortexRing: Equatable {
+    public let radius: Float
+    public let pullDistance: Float
+    public let pullForce: Float
+    public let width: Float
+    public init(radius: Float, pullDistance: Float, pullForce: Float, width: Float) {
+        self.radius = radius; self.pullDistance = pullDistance
+        self.pullForce = pullForce; self.width = width
+    }
 }
 
 public enum ParticleOperator: Equatable {
@@ -82,10 +111,18 @@ public enum ParticleOperator: Equatable {
     case oscillatePosition(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
                            phaseMin: Float, phaseMax: Float, mask: Vec3)
     /// 컨트롤포인트로의 인력/척력. 실물키: scale(가속, 음수=척력), threshold(근접 반경), origin(대상, 헤드리스=기본 0).
-    case controlPointAttract(scale: Float, threshold: Float, target: Vec3)
+    /// deleteThreshold = 실물키 deletethreshold(@0x48e788): threshold 이내 근접 파티클 삭제(기본 false =
+    /// 기존 min(1,threshold/dist) 감쇠 추정 경로 무회귀).
+    case controlPointAttract(scale: Float, threshold: Float, target: Vec3, deleteThreshold: Bool = false)
     /// 축 기준 소용돌이. 실물키: axis, distanceinner/outer, speedinner/outer, offset(중심).
+    /// 확장 키: centerforce(@0x48e7c8, 축 중심을 향한 반경 인력 — 의미 명확, 구현),
+    /// variablestrength/reductioninner/reductionouter(@0x48e7e0–0x48e840 — 의미 부호화 불가,
+    /// 파스·보존 전용), ring(vortex_v2 의 ringradius/ringpulldistance/ringpullforce/ringwidth
+    /// @0x48e8a8–0x48e8e0 — [추정] 링 대역 인력 근사, 부재 시 기존 경로).
     case vortex(axis: Vec3, distanceInner: Float, distanceOuter: Float,
-                speedInner: Float, speedOuter: Float, offset: Vec3)
+                speedInner: Float, speedOuter: Float, offset: Vec3,
+                centerForce: Float = 0, variableStrength: Float = 0,
+                reductionInner: Float = 0, reductionOuter: Float = 0, ring: VortexRing? = nil)
     /// 결정적 노이즈 흐름장 난류. 실물키(정찰 55인스턴스): speedmin/speedmax(파티클별 속도 범위),
     /// scale(공간 주파수, 기본 0.01), timescale(시간 진화 속도, 기본 0=정적장), mask(축별 게이트 "x y z"),
     /// phasemin/phasemax(파티클별 위상 오프셋). 노이즈장 속도로 위치를 이류(advection)한다(vel 미누적 → 유계).
@@ -99,11 +136,104 @@ public enum ParticleOperator: Equatable {
     /// 노이즈 리맵: velocity = 범위 보간(덮어쓰기, 매 스텝) / speed = 적분 속도 배수(비파괴 — 복리 방지).
     /// 노이즈 입력은 파티클별 위상 + age (근사 — WE 정의 미공개, 유계·탈동기·결정성 보장).
     case remapValue(output: RemapOutput, fbm: Bool, inputScale: Float)
+    /// remapvalue 확장 파이프라인(엔진 어휘 전종 — input/operation/transform/동사형 출력/blend 창).
+    /// 확장 키가 하나라도 있거나 출력이 velocity/speed 외 동사형이면 이 케이스로 파스된다.
+    case remapValueEx(spec: RemapSpec)
 }
 
 public enum RemapOutput: Equatable {
+    /// 레거시 출력 "velocity" — 엔진 어휘 setvelocity 계열로 해석(매 스텝 덮어쓰기). 동작 무회귀.
     case velocity(min: Vec3, max: Vec3)
+    /// 레거시 출력 "speed" — 엔진 어휘 multiplyspeed 계열로 해석(적분 속도 비파괴 배수). 동작 무회귀.
     case speed(min: Float, max: Float)
+}
+
+/// remapvalue 출력 동사(wallpaper64.exe 스트링 @0x490dd0–0x490eb0). set*=덮어쓰기, add*=가산
+/// ([추정] rotation/angularvelocity 는 프레임 독립을 위해 dt 곱 가산율), multiply*=곱.
+/// opacity/color/size 는 표시 파생(display 단계) 적용, velocity/speed/rotation/angularvelocity 는
+/// 스텝 적분 단계 적용. 레거시 문자열 매핑: "velocity"→setVelocity, "speed"→multiplySpeed.
+public enum RemapVerb: String, Equatable {
+    case setVelocity = "setvelocity"
+    case addVelocity = "addvelocity"
+    case multiplySpeed = "multiplyspeed"
+    case setOpacity = "setopacity"
+    case multiplyOpacity = "multiplyopacity"
+    case setColor = "setcolor"
+    case multiplyColor = "multiplycolor"
+    case setSize = "setsize"
+    case multiplySize = "multiplysize"
+    case setRotation = "setrotation"
+    case addRotation = "addrotation"
+    case setAngularVelocity = "setangularvelocity"
+    case addAngularVelocity = "addangularvelocity"
+}
+
+/// remapvalue 입력 소스(wallpaper64.exe 스트링 @0x490c78–0x490d60). [추정] 시계열 류(layertime/
+/// runtime/timeofday)는 헤드리스 결정성 우선으로 시뮬 누적시간 근사. directiontocontrolpoint 는
+/// component 키로 성분 선택(기본 x).
+public enum RemapInput: String, Equatable {
+    case lifetimeFraction = "lifetimefraction"
+    case particleSystemTime = "particlesystemtime"
+    case layerTime = "layertime"
+    case velocity = "velocity"
+    case deltaToControlPoint = "deltatocontrolpoint"
+    case distanceToControlPoint = "distancetocontrolpoint"
+    case directionToControlPoint = "directiontocontrolpoint"
+    case positionBetweenControlPoints = "positionbetweentwocontrolpoints"
+    case layerOrigin = "layerorigin"
+    case runtime = "runtime"
+    case timeOfDay = "timeofday"
+}
+
+/// remapvalue operation(엔진 어휘). [추정] 정규화값 v∈[0,1] 의 단항 셰이핑으로 해석(제2 피연산자
+/// 부재): remap=항등(기본), subtract=1−v, square=v². multiply/average 는 단항 의미 부호화 불가 —
+/// 파스·보존 전용(항등 적용).
+public enum RemapOperation: String, Equatable {
+    case remap, subtract, multiply, average, square
+}
+
+/// remapvalue transformfunction(엔진 어휘). [추정] simplexnoise 는 코퍼스에 심플렉스 구현이 없어
+/// 단일 옥타브 값노이즈 근사. fbmnoise 는 transformoctaves(@0x48e6d8, 기본 3) 옥타브 합성.
+public enum RemapTransform: String, Equatable {
+    case triangle, simplexnoise, fbmnoise
+}
+
+/// remapvalue 확장 스펙(엔진 어휘 전종 파스). 의미 구현 가능한 것만 시뮬레이터가 소비하고
+/// 나머지(outputcontrolpoint0/1, multiply/average operation)는 보존 전용.
+public struct RemapSpec: Equatable {
+    public let verb: RemapVerb
+    /// nil = input 키 부재 → 레거시 동형 노이즈 입력((remapPhase+age)·K·inputScale).
+    public let input: RemapInput?
+    public let operation: RemapOperation      // 부재 remap
+    public let transform: RemapTransform?     // nil = 변환 없음(입력을 0..1 클램프해 직접 매핑 [추정])
+    public let octaves: Int                   // transformoctaves (기본 3)
+    public let inputScale: Float              // transforminputscale (기본 1)
+    public let outMin: Vec3                   // outputrangemin (스칼라 브로드캐스트)
+    public let outMax: Vec3                   // outputrangemax
+    /// blendinstart/end · blendoutstart/end (@0x48e650–0x48e680): 수명 비율 창에서 효과 가중
+    /// 0→1(in)/1→0(out) 램프 [추정]. 전부 0(부재)이면 가중 1(무창).
+    public let blendInStart: Float
+    public let blendInEnd: Float
+    public let blendOutStart: Float
+    public let blendOutEnd: Float
+    public let inputCP0: Int                  // inputcontrolpoint0 (기본 0)
+    public let inputCP1: Int                  // inputcontrolpoint1 (기본 1)
+    public let outputCP0: Int                 // outputcontrolpoint0/1 — 파스·보존 전용(소비처 보류)
+    public let outputCP1: Int
+    public let component: Int                 // component: 0=x/1=y/2=z (기본 0)
+    public init(verb: RemapVerb, input: RemapInput?, operation: RemapOperation,
+                transform: RemapTransform?, octaves: Int, inputScale: Float,
+                outMin: Vec3, outMax: Vec3,
+                blendInStart: Float, blendInEnd: Float, blendOutStart: Float, blendOutEnd: Float,
+                inputCP0: Int, inputCP1: Int, outputCP0: Int, outputCP1: Int, component: Int) {
+        self.verb = verb; self.input = input; self.operation = operation
+        self.transform = transform; self.octaves = octaves; self.inputScale = inputScale
+        self.outMin = outMin; self.outMax = outMax
+        self.blendInStart = blendInStart; self.blendInEnd = blendInEnd
+        self.blendOutStart = blendOutStart; self.blendOutEnd = blendOutEnd
+        self.inputCP0 = inputCP0; self.inputCP1 = inputCP1
+        self.outputCP0 = outputCP0; self.outputCP1 = outputCP1; self.component = component
+    }
 }
 
 /// F622: 실물 def 최상위 "animationmode"(스프라이트시트 재생 모드). 부재/미지 = frametime 기반
@@ -322,14 +452,15 @@ public struct AudioProcessing: Equatable {
 
     /// 이미터/오퍼레이터 json 의 audioprocessing* 키 → AudioProcessing. mode 1..3 아니면 nil.
     /// 기본값은 셰이더 오디오 경로(SceneRendererResources.audioParams)와 정합: freqStart 0·freqEnd 15·exponent 1.
-    /// bounds 부재 → [0,1](실측 modal "0 1"; A/B 무관 — 무음은 어떤 bounds 든 스킵).
+    /// bounds 부재 → [0.8,1.0](wallpaper64.exe 스트링 "0.8 1.0" @0x48e1b8; 키 귀속은 인접 추정 —
+    /// "audioprocessingbounds" @0x48e220 과 같은 audioprocessing* 스트링 클러스터 내).
     static func parse(_ o: [String: Any]) -> AudioProcessing? {
         guard let mode = strictInt(o["audioprocessingmode"]), mode >= 1, mode <= 3 else { return nil }
         return AudioProcessing(
             mode: mode,
             freqStart: strictFloat(o["audioprocessingfrequencystart"]) ?? 0,
             freqEnd: strictFloat(o["audioprocessingfrequencyend"]) ?? 15,
-            bounds: bounds2(o["audioprocessingbounds"]) ?? SIMD2(0, 1),  // ponytail: 부재 기본 [0,1]
+            bounds: bounds2(o["audioprocessingbounds"]) ?? SIMD2(0.8, 1.0),  // 귀속 추정(위 doc 참조)
             exponent: strictFloat(o["audioprocessingexponent"]) ?? 1)
     }
 }
@@ -340,6 +471,44 @@ private func bounds2(_ v: Any?) -> SIMD2<Float>? {
     let parts = s.split(separator: " ").compactMap { Float($0) }
     guard parts.count >= 2 else { return nil }
     return SIMD2(parts[0], parts[1])
+}
+
+/// rope/ropetrail 렌더러 확장 키(fadealpha/fadesize/uvscale/uvscrolling/uvsmoothing/segments
+/// — wallpaper64.exe 스트링 @0x48e9b0–0x48ea18). 파스·모델 노출 전용 — 렌더 소비는 WapleRender
+/// 배선 보류. nil = 키 부재(WE 기본값 미확정이라 보존까지만).
+public struct RopeRenderOptions: Equatable {
+    public var fadeAlpha: Float? = nil
+    public var fadeSize: Float? = nil
+    public var uvScale: Float? = nil
+    public var uvScrolling: Float? = nil
+    public var uvSmoothing: Bool? = nil
+    public var segments: Int? = nil
+    public init() {}
+    public var isEmpty: Bool {
+        fadeAlpha == nil && fadeSize == nil && uvScale == nil
+            && uvScrolling == nil && uvSmoothing == nil && segments == nil
+    }
+}
+
+// MARK: - 주기(periodic) 방출
+
+/// 이미터 주기 방출(wallpaper64.exe 스트링: minperiodicduration @0x48e1c0, maxperiodicduration
+/// @0x48e1d8, minperiodicdelay @0x48e228?, maxperiodicdelay, maxtoemitperperiod @0x48e2b8 —
+/// 0x48e1c0–0x48e2b8 클러스터). [추정] 의미론(WE 에디터 어휘 규약): ON 윈도우(duration 구간 랜덤)
+/// 동안 rate/burst 방출(창당 maxtoemitperperiod 상한, 0=무상한) → OFF 딜레이(delay 구간 랜덤) → 반복.
+/// rate==0 && burst==0 이면 창 내에 maxtoemitperperiod 를 균등 분배(암시 rate = quota/duration).
+/// 키 부재 이미터(nil)는 기존 방출 경로(RNG 드로 순서 포함)와 비트동일.
+public struct PeriodicEmission: Equatable {
+    public let durationMin: Float   // minperiodicduration
+    public let durationMax: Float   // maxperiodicduration (부재 시 min 승계)
+    public let delayMin: Float      // minperiodicdelay
+    public let delayMax: Float      // maxperiodicdelay (부재 시 min 승계)
+    public let maxPerPeriod: Int    // maxtoemitperperiod (0 = 창 내 상한 없음)
+    public init(durationMin: Float, durationMax: Float, delayMin: Float, delayMax: Float, maxPerPeriod: Int) {
+        self.durationMin = durationMin; self.durationMax = durationMax
+        self.delayMin = delayMin; self.delayMax = delayMax
+        self.maxPerPeriod = maxPerPeriod
+    }
 }
 
 // MARK: - 시스템 정의
@@ -366,6 +535,9 @@ public struct ParticleSystemDef: Equatable {
     /// F624: vortex 오퍼레이터별 오디오반응(def.operators 중 vortex 출현 순 병렬; nil=묵반응).
     /// WE 문서: vortex 오디오반응은 "particle speed 를 오디오에 연결" → 속도 배수.
     public var vortexAudio: [AudioProcessing?] = []
+    /// 이미터별 주기 방출(emitters 와 병렬; nil=무주기 — 기존 rate/burst 경로 비트동일).
+    /// 병렬 배열 관례(emitterAudio/emitterSpeed/boxDistanceMin 동형) — Emitter 케이스 시그니처 무회귀.
+    public var emitterPeriodic: [PeriodicEmission?] = []
     /// F623: 실물 def "flags" 비트(1=worldspace, 4=perspective z-원근 — snowperspective 프리셋 실측).
     /// 파스·보존 전용(렌더 소비는 WapleRender 경로 후속).
     public var flags: Int = 0
@@ -376,6 +548,8 @@ public struct ParticleSystemDef: Equatable {
     public var orientation: ParticleOrientation = .screen
     /// F630: mapsequencearoundcontrolpoint "axis"(회전 평면 선택, 기본 z축=XY 평면 레거시).
     public var mapSequenceAxis: Vec3? = nil
+    /// rope/ropetrail 렌더러 확장 키(@0x48e9b0–0x48ea18) — 모델 노출 전용(렌더 소비 보류).
+    public var ropeOptions: RopeRenderOptions? = nil
 
     public init(emitters: [Emitter], initializers: [Initializer], operators: [ParticleOperator],
                 renderer: RendererKind, maxCount: Int, startTime: Float, material: ParticleMaterial?,
@@ -383,6 +557,16 @@ public struct ParticleSystemDef: Equatable {
         self.emitters = emitters; self.initializers = initializers; self.operators = operators
         self.renderer = renderer; self.maxCount = maxCount; self.startTime = startTime; self.material = material
         self.children = children
+    }
+
+    /// remapvalue 출력 문자열 → 동사. 레거시 "velocity"/"speed" 는 엔진 어휘 setvelocity/multiplyspeed
+    /// 계열로 해석해 같은 동사에 매핑(레거시 비트동일 경로는 확장 키 부재 시에만 — 위 파스 분기 참조).
+    private static func remapVerb(_ output: String?) -> RemapVerb? {
+        switch output {
+        case "velocity", "setvelocity": return .setVelocity
+        case "speed", "multiplyspeed": return .multiplySpeed
+        default: return output.flatMap { RemapVerb(rawValue: $0) }
+        }
     }
 
     /// resolveChild: 자식 json 경로 → def (호출측이 pkg/머티리얼/재귀 리졸브 담당). nil 리졸브 = 링크 드롭+로그.
@@ -398,6 +582,21 @@ public struct ParticleSystemDef: Equatable {
         // F620/F627: speedmin/speedmax·box distancemin 도 emitters 와 병렬로 함께 append.
         var emitterSpeed: [SIMD2<Float>] = []
         var boxDistanceMin: [Vec3?] = []
+        // 주기 방출(minperiodicduration…maxtoemitperperiod @0x48e1c0–0x48e2b8)도 emitters 와 병렬.
+        var emitterPeriodic: [PeriodicEmission?] = []
+        /// [추정] 주기 키가 하나라도 있으면 PeriodicEmission 조립(부재 채널은 중립 기본값:
+        /// duration 1s, delay 0, max부재→min 승계, quota 0=무상한 — WE 에디터 신규 이미터 기본 정황).
+        func parsePeriodic(_ e: [String: Any]) -> PeriodicEmission? {
+            let dMin = pfloat(e["minperiodicduration"]), dMax = pfloat(e["maxperiodicduration"])
+            let pMin = pfloat(e["minperiodicdelay"]), pMax = pfloat(e["maxperiodicdelay"])
+            let quota = pint(e["maxtoemitperperiod"])
+            guard dMin != nil || dMax != nil || pMin != nil || pMax != nil || quota != nil else { return nil }
+            let lo = dMin ?? dMax ?? 1
+            let plo = pMin ?? pMax ?? 0
+            return PeriodicEmission(durationMin: lo, durationMax: dMax ?? lo,
+                                    delayMin: plo, delayMax: pMax ?? plo,
+                                    maxPerPeriod: max(0, quota ?? 0))
+        }
         for case let e as [String: Any] in (json["emitter"] as? [Any] ?? []) {
             // F620: speedmin 부재 시 0, speedmax 부재 시 speedmin 승계(고정속도) — 부호 있는 초기속도.
             let speedMin = pfloat(e["speedmin"]) ?? 0
@@ -406,7 +605,8 @@ public struct ParticleSystemDef: Equatable {
             case "sphererandom":
                 emitters.append(.sphere(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    directions: pvec3(e["directions"]) ?? Vec3(x: 1, y: 1, z: 1),
+                    // 부재 기본 (1,1,0): wallpaper64.exe 스트링 "1 1 0" @0x48e288("directions" @0x48e290 에 인접).
+                    directions: pvec3(e["directions"]) ?? Vec3(x: 1, y: 1, z: 0),
                     distanceMin: pfloat(e["distancemin"]) ?? 0,
                     distanceMax: pfloat(e["distancemax"]) ?? 0,
                     rate: pfloat(e["rate"]) ?? 0,
@@ -415,6 +615,7 @@ public struct ParticleSystemDef: Equatable {
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
                 boxDistanceMin.append(nil)
+                emitterPeriodic.append(parsePeriodic(e))
             case "boxrandom":
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -424,6 +625,7 @@ public struct ParticleSystemDef: Equatable {
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
+                emitterPeriodic.append(parsePeriodic(e))
             case "layerimage":
                 // E1(②): layerimage(레이어 이미지 픽셀에서 방출) — 케이스 자체가 없어 무조건 드롭돼
                 // 이 이미터만 가진 시스템은 emitters=[] 로 파티클을 0개도 생성하지 못했다. 픽셀 불투명
@@ -440,6 +642,7 @@ public struct ParticleSystemDef: Equatable {
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
+                emitterPeriodic.append(parsePeriodic(e))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
             }
@@ -479,7 +682,9 @@ public struct ParticleSystemDef: Equatable {
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "rotationrandom":
                 inits.append(.rotationRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                             // 부재 기본 max (0,0,2π): wallpaper64.exe 스트링
+                                             // "0 0 6.28318530717" @0x48e498(키 귀속은 인접 추정).
+                                             max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 6.28318530717),
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "angularvelocityrandom":
                 inits.append(.angularVelocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -506,7 +711,11 @@ public struct ParticleSystemDef: Equatable {
                 let valMax = pfloat(i["valuemax"]) ?? valMin
                 inits.append(.hsvColorRandom(hueMin: hueMin, hueMax: hueMax,
                                              satMin: satMin, satMax: satMax,
-                                             valMin: valMin, valMax: valMax))
+                                             valMin: valMin, valMax: valMax,
+                                             hueSteps: max(0, pint(i["huesteps"]) ?? 0),
+                                             hueNoise: pfloat(i["huenoise"]) ?? 0,
+                                             satNoise: pfloat(i["saturationnoise"]) ?? 0,
+                                             valNoise: pfloat(i["valuenoise"]) ?? 0))
             case "mapsequencearoundcontrolpoint":
                 inits.append(.mapSequence(count: pfloat(i["count"]) ?? 0,
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: false))
@@ -515,6 +724,22 @@ public struct ParticleSystemDef: Equatable {
             case "mapsequencebetweencontrolpoints":
                 inits.append(.mapSequence(count: pfloat(i["count"]) ?? 0,
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: true))
+            case "positionoffsetrandom":
+                inits.append(.positionOffsetRandom(offsetMin: pvec3(i["offsetmin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                                   offsetMax: pvec3(i["offsetmax"]) ?? Vec3(x: 0, y: 0, z: 0)))
+            case "inheritcontrolpointvelocity":
+                // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
+                inits.append(.inheritControlPointVelocity(controlPoint: pint(i["controlpoint"]) ?? 0,
+                                                          scale: pfloat(i["scale"]) ?? 1))
+            case "inheritinitialvaluefromevent", "inheritvaluefromevent":
+                // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
+                inits.append(.inheritValueFromEvent(name: i["name"] as? String ?? "",
+                                                    valueName: i["value"] as? String))
+            case "remapinitialvalue":
+                // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
+                inits.append(.remapInitialValue(output: i["output"] as? String,
+                                                min: pvec3OrScalar(i["min"]),
+                                                max: pvec3OrScalar(i["max"])))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported initializer dropped: \(other ?? "nil")")
             }
@@ -632,26 +857,44 @@ public struct ParticleSystemDef: Equatable {
                 }
                 ops.append(.controlPointAttract(scale: pfloat(o["scale"]) ?? 0,
                                                 threshold: pfloat(o["threshold"]) ?? 0,
-                                                target: pvec3(o["origin"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                                                target: pvec3(o["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                                deleteThreshold: (pint(o["deletethreshold"]) ?? 0) != 0))
             case "vortex":
                 ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),
                                    distanceInner: pfloat(o["distanceinner"]) ?? 0,
                                    distanceOuter: pfloat(o["distanceouter"]) ?? 0,
                                    speedInner: pfloat(o["speedinner"]) ?? 0,
                                    speedOuter: pfloat(o["speedouter"]) ?? 0,
-                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                   centerForce: pfloat(o["centerforce"]) ?? 0,
+                                   variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
+                                   reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
+                                   reductionOuter: pfloat(o["reductionouter"]) ?? 0))      // 보존 전용(의미 보류)
                 vortexAudio.append(AudioProcessing.parse(o))
             case "vortex_v2":
                 // F631: 실측 2인스턴스(3585875739)는 ring 키 없이 표준 vortex 파라미터(distanceinner/
                 // outer·speedinner)만 — 표준 vortex 로 근사 매핑(종전 default 드롭 → 소용돌이 복원).
                 // axis/offset 부재 = vortex 기본과 동일, speedouter 부재 = speedinner 승계.
                 let sIn = pfloat(o["speedinner"]) ?? 0
+                // ring 키(@0x48e8a8–0x48e8e0)는 하나라도 있을 때만 조립(부재 시 nil → 기존 경로).
+                let ring: VortexRing? = {
+                    let r = pfloat(o["ringradius"]), pd = pfloat(o["ringpulldistance"])
+                    let pf = pfloat(o["ringpullforce"]), w = pfloat(o["ringwidth"])
+                    guard r != nil || pd != nil || pf != nil || w != nil else { return nil }
+                    return VortexRing(radius: r ?? 0, pullDistance: pd ?? 0,
+                                      pullForce: pf ?? 0, width: w ?? 0)
+                }()
                 ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),
                                    distanceInner: pfloat(o["distanceinner"]) ?? 0,
                                    distanceOuter: pfloat(o["distanceouter"]) ?? 0,
                                    speedInner: sIn,
                                    speedOuter: pfloat(o["speedouter"]) ?? sIn,
-                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
+                                   centerForce: pfloat(o["centerforce"]) ?? 0,
+                                   variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
+                                   reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
+                                   reductionOuter: pfloat(o["reductionouter"]) ?? 0,       // 보존 전용(의미 보류)
+                                   ring: ring))
                 vortexAudio.append(AudioProcessing.parse(o))
             case "turbulence":
                 // 실물 기본값: speed 부재 → 0(무동작), scale 부재 → 0.01(공간 변동 확보),
@@ -675,17 +918,44 @@ public struct ParticleSystemDef: Equatable {
             case "remapvalue":
                 let fbm = (o["transformfunction"] as? String) == "fbmnoise"
                 let scale = pfloat(o["transforminputscale"]) ?? 1
-                switch o["output"] as? String {
-                case "velocity":
+                let outputName = (o["output"] as? String)?.lowercased()
+                // 확장 키(엔진 어휘) 존재 여부 — 전부 부재 + 레거시 출력(velocity/speed)이면
+                // 기존 .remapValue 경로(시뮬 비트동일 무회귀).
+                let extKeys = ["input", "operation", "transformoctaves",
+                               "blendinstart", "blendinend", "blendoutstart", "blendoutend",
+                               "inputcontrolpoint0", "inputcontrolpoint1",
+                               "outputcontrolpoint0", "outputcontrolpoint1", "component"]
+                let hasExt = extKeys.contains { o[$0] != nil }
+                if !hasExt, outputName == "velocity" {
                     ops.append(.remapValue(output: .velocity(min: pvec3OrScalar(o["outputrangemin"]) ?? Vec3(x: 0, y: 0, z: 0),
                                                              max: pvec3OrScalar(o["outputrangemax"]) ?? Vec3(x: 0, y: 0, z: 0)),
                                            fbm: fbm, inputScale: scale))
-                case "speed":
+                } else if !hasExt, outputName == "speed" {
                     ops.append(.remapValue(output: .speed(min: pfloat(o["outputrangemin"]) ?? 0,
                                                           max: pfloat(o["outputrangemax"]) ?? 1),
                                            fbm: fbm, inputScale: scale))
-                case let other:
-                    WapleLog.warn("[Waple] remapvalue unsupported output dropped: \(other ?? "nil")")
+                } else if let verb = Self.remapVerb(outputName) {
+                    let spec = RemapSpec(
+                        verb: verb,
+                        input: (o["input"] as? String).flatMap { RemapInput(rawValue: $0.lowercased()) },
+                        operation: (o["operation"] as? String).flatMap { RemapOperation(rawValue: $0.lowercased()) } ?? .remap,
+                        transform: (o["transformfunction"] as? String).flatMap { RemapTransform(rawValue: $0.lowercased()) },
+                        octaves: max(1, pint(o["transformoctaves"]) ?? 3),
+                        inputScale: scale,
+                        outMin: pvec3OrScalar(o["outputrangemin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                        outMax: pvec3OrScalar(o["outputrangemax"]) ?? Vec3(x: 1, y: 1, z: 1),
+                        blendInStart: pfloat(o["blendinstart"]) ?? 0,
+                        blendInEnd: pfloat(o["blendinend"]) ?? 0,
+                        blendOutStart: pfloat(o["blendoutstart"]) ?? 0,
+                        blendOutEnd: pfloat(o["blendoutend"]) ?? 0,
+                        inputCP0: pint(o["inputcontrolpoint0"]) ?? 0,
+                        inputCP1: pint(o["inputcontrolpoint1"]) ?? 1,
+                        outputCP0: pint(o["outputcontrolpoint0"]) ?? 0,
+                        outputCP1: pint(o["outputcontrolpoint1"]) ?? 1,
+                        component: pcomponent(o["component"]) ?? 0)
+                    ops.append(.remapValueEx(spec: spec))
+                } else {
+                    WapleLog.warn("[Waple] remapvalue unsupported output dropped: \(outputName ?? "nil")")
                 }
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
@@ -694,6 +964,7 @@ public struct ParticleSystemDef: Equatable {
 
         var renderer: RendererKind = .unsupported("none")
         var orientation: ParticleOrientation = .screen
+        var ropeOpts: RopeRenderOptions? = nil
         if let r0 = (json["renderer"] as? [Any])?.first as? [String: Any] {
             let n = r0["name"] as? String ?? "none"
             switch n {
@@ -715,6 +986,20 @@ public struct ParticleSystemDef: Equatable {
             case "upright": orientation = .upright
             case "fixed": orientation = .fixed(axis: pvec3(r0["axis"]) ?? Vec3(x: 0, y: 0, z: 1))
             default: orientation = .screen
+            }
+            // rope/ropetrail 확장 키(@0x48e9b0–0x48ea18) — 하나라도 있으면 조립(전부 부재 시 nil,
+            // 모델 노출까지만 — 렌더 소비 보류). uvsmoothing 은 체크박스형(≠0)으로 해석 [추정].
+            switch renderer {
+            case .rope, .ropeTrail:
+                var opts = RopeRenderOptions()
+                opts.fadeAlpha = pfloat(r0["fadealpha"])
+                opts.fadeSize = pfloat(r0["fadesize"])
+                opts.uvScale = pfloat(r0["uvscale"])
+                opts.uvScrolling = pfloat(r0["uvscrolling"])
+                if let sm = pint(r0["uvsmoothing"]) { opts.uvSmoothing = sm != 0 }
+                opts.segments = pint(r0["segments"])
+                if !opts.isEmpty { ropeOpts = opts }
+            default: break
             }
         }
 
@@ -764,8 +1049,9 @@ public struct ParticleSystemDef: Equatable {
             for (id, off) in ov.controlPoints where id >= 0 && id < 8 { controlPoints[id] = off }
         }
         for (i, cpid) in attractCPIds {
-            if case let .controlPointAttract(scale, threshold, _) = ops[i] {
-                ops[i] = .controlPointAttract(scale: scale, threshold: threshold, target: controlPoints[cpid])
+            if case let .controlPointAttract(scale, threshold, _, deleteThreshold) = ops[i] {
+                ops[i] = .controlPointAttract(scale: scale, threshold: threshold,
+                                              target: controlPoints[cpid], deleteThreshold: deleteThreshold)
             }
         }
 
@@ -778,6 +1064,7 @@ public struct ParticleSystemDef: Equatable {
         def.emitterAudio = emitterAudio
         def.emitterSpeed = emitterSpeed
         def.boxDistanceMin = boxDistanceMin
+        def.emitterPeriodic = emitterPeriodic
         def.vortexAudio = vortexAudio
         def.flags = pint(json["flags"]) ?? 0                                        // F623
         // F622: animationmode("sequence"/"randomframe")·sequencemultiplier(배속, 기본 1).
@@ -785,6 +1072,7 @@ public struct ParticleSystemDef: Equatable {
         def.sequenceMultiplier = pfloat(json["sequencemultiplier"]) ?? 1
         def.orientation = orientation
         def.mapSequenceAxis = mapSeqAxis
+        def.ropeOptions = ropeOpts
         return def
     }
 }
@@ -812,4 +1100,16 @@ private func pvec3OrScalar(_ v: Any?) -> Vec3? {
     if let vec = pvec3(v) { return vec }
     if let s = pfloat(v) { return Vec3(x: s, y: s, z: s) }
     return nil
+}
+/// remapvalue "component": "x"/"y"/"z" 문자열 또는 0/1/2 숫자 → 0/1/2.
+private func pcomponent(_ v: Any?) -> Int? {
+    if let s = v as? String {
+        switch s.lowercased() {
+        case "x": return 0
+        case "y": return 1
+        case "z": return 2
+        default: return Int(s)
+        }
+    }
+    return pint(v)
 }

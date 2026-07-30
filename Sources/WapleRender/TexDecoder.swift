@@ -68,11 +68,37 @@ public enum TexDecoder {
     /// blocks 는 decode dims 레이아웃(ceil(decodeW/4) 블록/행), bytesPerRow 는 그 소스 stride —
     /// 텍스처를 image dims 로 만들고 이 stride 를 주면 Metal 이 패딩 블록을 건너뛰어 크롭을 무비용 처리한다.
     public struct NativeBCUpload {
+        /// mip 1레벨분 네이티브 업로드 단위(레벨별 alloc/orig 크롭 규약 적용 후).
+        public struct NativeBCMipLevel {
+            public let blocks: Data
+            public let width: Int         // 이 레벨의 타깃 dims(레벨 0 의 크롭 규칙을 레벨마다 적용)
+            public let height: Int
+            public let bytesPerRow: Int   // 이 레벨의 소스 블록 stride = ceil(decodeW_L/4)*blockBytes
+            public init(blocks: Data, width: Int, height: Int, bytesPerRow: Int) {
+                self.blocks = blocks; self.width = width; self.height = height; self.bytesPerRow = bytesPerRow
+            }
+        }
         public let blocks: Data
         public let format: BCFormat
         public let width: Int         // 타깃 텍스처 폭(= rgba()+cropped() 반환 폭, 파리티)
         public let height: Int
         public let bytesPerRow: Int   // 소스 블록 stride = ceil(decodeW/4)*blockBytes
+        /// 전체 mip 체인(levels[0] = 위 플랫 필드와 동일 내용). mipCount>1 텍스처면 2개 이상 —
+        /// makeBCTexture 가 mipmapLevelCount 전체 할당 + 레벨별 업로드. 1개면 기존 단일 레벨(무회귀).
+        /// TEXB 가 전체 체인을 저장(실물 DJK_1.tex 9레벨)하고 축소 필터링에 쓰인다는 추론 근거(엔진이
+        /// 저장 mip 을 쓰는 실질적 이유는 업로드 외에 없음 — 정적 분석 "거의 확실", RE 대조 확정 아님).
+        public let levels: [NativeBCMipLevel]
+
+        public init(blocks: Data, format: BCFormat, width: Int, height: Int, bytesPerRow: Int) {
+            self.blocks = blocks; self.format = format; self.width = width; self.height = height
+            self.bytesPerRow = bytesPerRow
+            self.levels = [NativeBCMipLevel(blocks: blocks, width: width, height: height, bytesPerRow: bytesPerRow)]
+        }
+        public init(blocks: Data, format: BCFormat, width: Int, height: Int, bytesPerRow: Int,
+                    levels: [NativeBCMipLevel]) {
+            self.blocks = blocks; self.format = format; self.width = width; self.height = height
+            self.bytesPerRow = bytesPerRow; self.levels = levels
+        }
     }
 
     /// BC(DXT) 텍스처를 Metal 네이티브 BC 로 올릴 후보 추출(LZ4 만 해제, RGBA 전개 안 함). 불가면 nil →
@@ -107,7 +133,55 @@ public enum TexDecoder {
         else if iw == dw && ih == dh { (w, h) = (dw, dh) }
         else if iw > 0, ih > 0, iw <= dw, ih <= dh { (w, h) = (iw, ih) }
         else { (w, h) = (dw, dh) }
-        return NativeBCUpload(blocks: blocks, format: format, width: w, height: h, bytesPerRow: bytesPerRow)
+        // 전체 mip 체인: 기본 image 선택(변형 미매치) + 비아틀라스 + mipChain 수집(단일 image, mipCount>1).
+        // 어느 레벨이든 해제/검증 실패 시 체인 포기 → levels=[mip0](종전 단일 레벨과 동일 — 무회귀).
+        var levels = [NativeBCUpload.NativeBCMipLevel(blocks: blocks, width: w, height: h, bytesPerRow: bytesPerRow)]
+        if !keepFullAtlas, mip == tex.mip, tex.mipChain.count > 1 {
+            var chain: [NativeBCUpload.NativeBCMipLevel] = []
+            var chainOK = true
+            for levelMip in tex.mipChain.dropFirst() {
+                guard let lb = mipBytes(mip: levelMip, data: data) else { chainOK = false; break }
+                let ldw = levelMip.decodeWidth, ldh = levelMip.decodeHeight
+                guard ldw > 0, ldh > 0,
+                      lb.count >= ((ldw + 3) / 4) * ((ldh + 3) / 4) * blockBytes else { chainOK = false; break }
+                let lbpr = ((ldw + 3) / 4) * blockBytes
+                // 레벨별 크롭 규약 = 레벨 0 규칙의 keepFullAtlas=false 분기(alloc/orig 둘 다 레벨마다 1/2 축소는 파스가 반영).
+                let liw = levelMip.imageWidth, lih = levelMip.imageHeight
+                let lw: Int, lh: Int
+                if liw == ldw && lih == ldh { (lw, lh) = (ldw, ldh) }
+                else if liw > 0, lih > 0, liw <= ldw, lih <= ldh { (lw, lh) = (liw, lih) }
+                else { (lw, lh) = (ldw, ldh) }
+                chain.append(NativeBCUpload.NativeBCMipLevel(blocks: lb, width: lw, height: lh, bytesPerRow: lbpr))
+            }
+            if chainOK { levels.append(contentsOf: chain) }
+        }
+        return NativeBCUpload(blocks: blocks, format: format, width: w, height: h, bytesPerRow: bytesPerRow,
+                              levels: levels)
+    }
+
+    /// 기본 image 의 **전체 mip 체인** 레벨별 CPU 디코드(mipCount>1 텍스처 전용 신규 경로 — makeImageTexture
+    /// CPU 경로용). 레벨별 alloc/orig 크롭 규약 적용(레벨 L 의 orig = imgW/imgH >> L — TexImage.mipChain
+    /// 이 파스 시 반영). nil = 기존 단일 레벨 경로 사용(무회귀): mipCount==1, PNG/JPEG/임베디드(체인 부재),
+    /// 다중 image(페이지 스택), 변형 선택(properties 매치 — 변형엔 체인 없음), keepFullAtlas(스프라이트
+    /// 아틀라스), 어느 레벨이든 디코드 실패. levels[0] 는 rgba(from:data:) 반환과 동일(동일 코드 경로).
+    public static func rgbaLevels(from tex: TexImage, data: Data,
+                                  properties: [String: PropertyValue] = [:],
+                                  keepFullAtlas: Bool = false)
+        -> [(pixels: Data, width: Int, height: Int)]? {
+        guard !keepFullAtlas, tex.imageCount <= 1, tex.mipChain.count > 1 else { return nil }
+        switch tex.payload {
+        case .bc3, .bc2, .bc1, .r8, .rg88, .lz4RGBA: break
+        default: return nil
+        }
+        guard tex.selectedMip(properties: properties) == tex.mip else { return nil }   // 변형 선택 시 무회귀
+        var out: [(pixels: Data, width: Int, height: Int)] = []
+        out.reserveCapacity(tex.mipChain.count)
+        for levelMip in tex.mipChain {
+            guard let d = decodeMip(payload: tex.payload, mip: levelMip, data: data, keepFullAtlas: false)
+            else { return nil }
+            out.append(d)
+        }
+        return out
     }
 
     /// mip 기반(raw/DXT) 포맷 1장 디코드 + 패딩 크롭. 단일/다중 페이지 공용(mip 인자로 페이지 선택).

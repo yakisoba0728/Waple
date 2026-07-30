@@ -64,7 +64,7 @@ public enum GLSLTypeAdapter {
         case .some(.vec2): return 2
         case .some(.vec3): return 3
         case .some(.vec4): return 4
-        case .some(.mat2), .some(.mat3), .some(.mat4), .some(.sampler2D): return 0
+        case .some(.mat2), .some(.mat3), .some(.mat4), .some(.mat4x3), .some(.sampler2D): return 0
         case .none:
             // uint 도 int 와 동일한 스칼라(1) — nil 이면 uint 선언이 statement(:173)에서 선언으로
             // 인식되지 않아 intVars 등록(:195)·min/max 모호성 캐스트가 누락된다.
@@ -542,7 +542,8 @@ public enum GLSLTypeAdapter {
 
     private static func callSize(_ name: String, argSizes: [Int], env: Env) -> Int {
         if let n = typeSize(name), n > 0 { return n }               // vecN/floatN 생성자
-        if name == "texSample2D" || name == "texSample2DLod" { return 4 }
+        if name == "texSample2D" || name == "texSample2DLod" || name == "texLoad2D"
+            || name == "texSample2DBackBuffer" { return 4 }   // 텍스처 페치/샘플 계열은 float4(RE shim :66/:70-71)
         if name == "cross" { return 3 }
         if scalarFns.contains(name) { return 1 }
         if broadcastFns.contains(name) {

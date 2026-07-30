@@ -59,11 +59,15 @@ public struct ParticleSimulator {
     private enum CachedRemap {
         case velocity(min: SIMD3<Float>, max: SIMD3<Float>, fbm: Bool, scale: Float)
         case speed(min: Float, max: Float, fbm: Bool, scale: Float)
+        case general(RemapSpec)   // remapValueEx — 엔진 어휘 확장 파이프라인
     }
     private let remaps: [CachedRemap]
-    private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>)]
+    /// remapValueEx 중 표시 파생(opacity/color/size) 동사 보유 — display() 조기 우회 게이트.
+    private let hasDisplayRemaps: Bool
+    private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>, delete: Bool)]
     private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
-                            offset: SIMD3<Float>, audio: AudioProcessing?)]   // F624: 오디오반응 속도 배수
+                            offset: SIMD3<Float>, audio: AudioProcessing?,   // F624: 오디오반응 속도 배수
+                            centerForce: Float, ring: VortexRing?)]
     // F628: 난류 흐름장 배열(전 turbulence 오퍼레이터 누적 — 종전 "first wins"는 2번째를 드롭).
     // 파티클별 속도/위상 범위(smin/smax, pmin/pmax)는 스폰 시 뽑아 고정, 나머지는 장 파라미터.
     private let turbulences: [(smin: Float, smax: Float, scale: Float, timeScale: Float,
@@ -74,6 +78,21 @@ public struct ParticleSimulator {
     private let speedCap: Float?
     // 이미터 오디오반응 보유 여부(무보유 시 rate 스케일 전면 우회 → 기존 방출 경로 비트동일).
     private let hasEmitterAudio: Bool
+
+    // MARK: - 주기(periodic) 방출 상태 (키 보유 이미터만 활성 — 묵보유 이미터는 기존 경로 비트동일)
+
+    /// [추정] 주기 컨트롤러 상태(WE 에디터 어휘 규약 — 스트링 @0x48e1c0–0x48e2b8, 시뮬 코드는
+    /// 디컴파일 코퍼스 누락). ON 윈도우(duration) 동안 rate/버스트 방출(창당 quota 상한),
+    /// 잔여 소진 시 OFF 딜레이(delay) 드로 → 다시 ON 드로 반복. 드로 순서: duration → spawn → delay.
+    private struct PeriodicState {
+        var enabled = false
+        var started = false         // 첫 ON 진입(duration 드로) 완료
+        var on = false              // 현재 ON 윈도우 진행 중
+        var remaining: Float = 0    // 현재 페이즈 잔여 시간
+        var emitted = 0             // 현재 ON 윈도우 내 누적 방출 수(quota 판정)
+        var window: Float = 0       // 현재 ON 윈도우 총 길이(암시 rate 산정용)
+    }
+    private var periodicStates: [PeriodicState]
 
     // MARK: 자식 시스템 상태 (부모 sim 이 링크별 자식 sim 인스턴스를 구동)
 
@@ -107,8 +126,8 @@ public struct ParticleSimulator {
         var af: (Float, Float)? = nil
         var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
         var oa: (Float, Float, Float, Float, Float, Float)? = nil
-        var attr: [(Float, Float, SIMD3<Float>)] = []
-        var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>)] = []
+        var attr: [(Float, Float, SIMD3<Float>, Bool)] = []
+        var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?)] = []
         // F628: 전 turbulence 오퍼레이터 누적(종전 first-wins 드롭 — 3000562427 의 지배 성분 손실).
         var turb: [(Float, Float, Float, Float, SIMD3<Float>, Float, Float)] = []
         var osz: (Float, Float, Float, Float, Float, Float)? = nil
@@ -127,10 +146,11 @@ public struct ParticleSimulator {
                 if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
             case let .oscillateAlpha(fmin, fmax, smin, smax, pmin, pmax):
                 if oa == nil { oa = (fmin, fmax, smin, smax, pmin, pmax) }
-            case let .controlPointAttract(scale, threshold, target):
-                attr.append((scale, threshold, s3(target)))
-            case let .vortex(axis, dIn, dOut, sIn, sOut, offset):
-                vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset)))
+            case let .controlPointAttract(scale, threshold, target, deleteThreshold):
+                attr.append((scale, threshold, s3(target), deleteThreshold))
+            case let .vortex(axis, dIn, dOut, sIn, sOut, offset, centerForce, _, _, _, ring):
+                // variablestrength/reductioninner/reductionouter(위치인자 7–9)는 파스·보존 전용 — 소비 안 함.
+                vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset), centerForce, ring))
             case let .turbulence(smin, smax, scale, timeScale, mask, pmin, pmax):
                 turb.append((smin, smax, scale, timeScale, s3(mask), pmin, pmax))
             case let .oscillateSize(fmin, fmax, smin, smax, pmin, pmax):
@@ -142,6 +162,8 @@ public struct ParticleSimulator {
                 case let .velocity(mn, mx): rms.append(.velocity(min: s3(mn), max: s3(mx), fbm: fbm, scale: scale))
                 case let .speed(mn, mx): rms.append(.speed(min: mn, max: mx, fbm: fbm, scale: scale))
                 }
+            case let .remapValueEx(spec):
+                rms.append(.general(spec))
             }
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
@@ -151,17 +173,30 @@ public struct ParticleSimulator {
         alphaFade = af.map { (fin: $0.0, fout: $0.1) }
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
-        attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2) }
+        attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2, delete: $0.3) }
         vortices = vort.indices.map { (axis: vort[$0].0, dIn: vort[$0].1, dOut: vort[$0].2,
                                         sIn: vort[$0].3, sOut: vort[$0].4, offset: vort[$0].5,
-                                        audio: $0 < def.vortexAudio.count ? def.vortexAudio[$0] : nil) }   // F624
+                                        audio: $0 < def.vortexAudio.count ? def.vortexAudio[$0] : nil,
+                                        centerForce: vort[$0].6, ring: vort[$0].7) }   // F624
         turbulences = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
         oscSizeOp = osz.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         alphaChanges = ac
         remaps = rms
+        hasDisplayRemaps = rms.contains {
+            guard case let .general(spec) = $0 else { return false }
+            switch spec.verb {
+            case .setOpacity, .multiplyOpacity, .setColor, .multiplyColor, .setSize, .multiplySize: return true
+            default: return false
+            }
+        }
         trailSamples = def.renderer.trailSampleCount
         speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
         hasEmitterAudio = def.emitterAudio.contains { $0 != nil }
+        periodicStates = def.emitters.indices.map { i in
+            var st = PeriodicState()
+            st.enabled = i < def.emitterPeriodic.count && def.emitterPeriodic[i] != nil
+            return st
+        }
         parentSeed = seed
         childStates = def.children.map { _ in [] }
         childDisplaysCache = def.children.map { _ in [] }
@@ -227,6 +262,13 @@ public struct ParticleSimulator {
             let wasEmpty = particles.isEmpty  // 버스트 재발화 판정은 스텝 진입 시점 기준(다중 이미터 동시 발화)
             for i in def.emitters.indices {
                 let e = def.emitters[i]
+                if periodicStates[i].enabled {
+                    // 주기 키 보유 이미터: 주기 컨트롤러가 표준 rate/burst 방출을 대체한다
+                    // ("전멸 시 재버스트" 추정(아래 레거시 분기)과의 관계 — 주기 키가 있으면 전멸
+                    // 조건 대신 ON 윈도우 진입이 버스트/방출 트리거. 없으면 레거시 무회귀).
+                    stepPeriodicEmission(i, e, dt: dt)
+                    continue
+                }
                 if e.burst > 0, wasEmpty {
                     // ponytail: 전멸 시 재버스트 루프 — 실 WE 는 자식(eventfollow) 트리거가 주 용법,
                     // Stage B(children)에서 트리거 발화로 대체 예정.
@@ -269,6 +311,7 @@ public struct ParticleSimulator {
             // F440: 덮어쓰기는 힘 오퍼레이터 **이전**에 — 종전엔 같은 스텝의 attract/vortex 가속을
             // 전량 덮어써 힘 오퍼레이터가 묠력화됐다(speedCap 도 그 경로에서는 무의미).
             var speedFactor: Float = 1
+            var remapAddVel = SIMD3<Float>(0, 0, 0)   // remapValueEx addvelocity — 이번 스텝 적분 전용(비파괴)
             if !remaps.isEmpty {
                 let base = (particles[k].remapPhase + particles[k].age) * Self.remapInputK
                 for r in remaps {
@@ -281,6 +324,29 @@ public struct ParticleSimulator {
                         particles[k].vel = mn + (mx - mn) * t
                     case let .speed(mn, mx, fbm, scale):
                         speedFactor *= mn + (mx - mn) * remapNoise01(fbm, base * scale, SIMD3(7.7, 33.1, 61.9))
+                    case let .general(spec):
+                        // 확장 파이프라인 — 물리 동사는 여기서, 표시 파생 동사는 display() 에서 적용.
+                        let (val, w) = remapEval(spec, particles[k])
+                        guard w > 0 else { continue }
+                        switch spec.verb {
+                        case .setVelocity:
+                            particles[k].vel += (val - particles[k].vel) * w   // w=1 → 덮어쓰기(레거시 동형)
+                        case .addVelocity:
+                            remapAddVel += val * w
+                        case .multiplySpeed:
+                            speedFactor *= 1 + (val.x - 1) * w                 // w=1 → val.x(레거시 동형)
+                        case .setRotation:
+                            particles[k].rotation += (val - particles[k].rotation) * w
+                        case .addRotation:
+                            particles[k].rotation += val * (w * dt)            // [추정] 가산율(dt 곱)
+                        case .setAngularVelocity:
+                            particles[k].angularVel += (val - particles[k].angularVel) * w
+                        case .addAngularVelocity:
+                            particles[k].angularVel += val * (w * dt)
+                        case .setOpacity, .multiplyOpacity, .setColor, .multiplyColor,
+                             .setSize, .multiplySize:
+                            break   // 표시 파생 — display() 적용
+                        }
                     }
                 }
             }
@@ -290,12 +356,18 @@ public struct ParticleSimulator {
             if !attractors.isEmpty || !vortices.isEmpty {
                 var vel = particles[k].vel
                 let pos = particles[k].pos
-                for a in attractors { applyAttract(a, to: &vel, pos: pos, dt: dt) }
+                // deletethreshold: 어느 attractor 든 근접 삭제 판정 시 true — 전 attractor 는 끝까지
+                // 적용(단락 평가 금지 — 호출 생략이 없어야 delete=false 경로 산술이 종전과 동일).
+                var attractDelete = false
+                for a in attractors { attractDelete = applyAttract(a, to: &vel, pos: pos, dt: dt) || attractDelete }
                 for v in vortices {
                     // F624: vortex 오디오반응 = 접선 속도 × 응답 배수(무신호/묵보유 1 → 비트동일).
                     applyVortex(v, to: &vel, pos: pos, dt: dt, audioScale: audioResponseScale(v.audio))
                 }
                 particles[k].vel = vel
+                // 근접 삭제(deletethreshold 키 보유 attractor 한정): 수명 초과로 마킹 — 아래 컬 경로
+                // (deathBurst 자식 발화 포함)를 그대로 탄다. RNG 드로 無 → 무키 씬 비트동일.
+                if attractDelete { particles[k].age = particles[k].lifetime + 1 }
             }
             if let cap = speedCap {
                 let sp = simd_length(particles[k].vel)
@@ -305,7 +377,13 @@ public struct ParticleSimulator {
                 particles[k].vel += m.gravity * dt
                 if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
             }
-            particles[k].pos += particles[k].vel * speedFactor * dt
+            // remapValueEx addvelocity: remapAddVel==0 이면 종전 산술 그대로(레거시 비트동일),
+            // 아니면 이번 스텝 적분에만 가산(저장 vel 불변 — speed 배수와 같은 비파괴 규약).
+            if remapAddVel == SIMD3<Float>(0, 0, 0) {
+                particles[k].pos += particles[k].vel * speedFactor * dt
+            } else {
+                particles[k].pos += (particles[k].vel + remapAddVel) * speedFactor * dt
+            }
             // 난류 이류(advection): 노이즈 흐름장 속도로 위치를 이동. vel 에 누적하지 않으므로
             // |변위| ≤ turbSpeed·dt 로 유계(속도 상한 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
             // F628: 전 turbulence 오퍼레이터 누적 — 첫 번째는 turbSpeed/turbPhase(기존 비트동일),
@@ -395,6 +473,64 @@ public struct ParticleSimulator {
             insts.removeAll { $0.sim.emissionPaused && $0.sim.liveCount == 0 }
             childStates[li] = insts
             childDisplaysCache[li] = displays
+        }
+    }
+
+    // MARK: - 주기(periodic) 방출
+
+    /// [추정] 주기 방출 컨트롤러(PeriodicEmission 키 보유 이미터 전용 — 표준 rate/burst 경로 대체,
+    /// WE 에디터 어휘 규약). 사이클: ON(duration 구간 드로) — 창 내 rate 방출(quota=maxtoemitperperiod
+    /// 상한, rate==0 && burst==0 이면 quota 를 창 길이에 균등 분배하는 암시 rate) → OFF(delay 구간
+    /// 드로) → 반복. burst>0 이면 매 ON 진입 시 창 버스트(레거시 "전멸 재버스트"의 주기형 대응).
+    private mutating func stepPeriodicEmission(_ i: Int, _ e: Emitter, dt: Float) {
+        guard i < def.emitterPeriodic.count, let per = def.emitterPeriodic[i] else { return }
+        var st = periodicStates[i]
+        if !st.started { st.started = true; periodicEnterOn(&st, i, e, per) }
+        // 방출이 잔여 감소/전이보다 먼저 — remaining 이 이번 스텝에 0 이 되는 경계 스텝도 창 내 방출로 센다.
+        if st.on {
+            var rate = e.rate * emitterRateScale(i)
+            if rate <= 0, e.burst == 0, per.maxPerPeriod > 0, st.window > 0 {
+                rate = Float(per.maxPerPeriod) / st.window   // [추정] 창 내 균등 분배
+            }
+            acc[i] += rate * dt
+            while acc[i] >= 1, particles.count < def.maxCount,
+                  per.maxPerPeriod == 0 || st.emitted < per.maxPerPeriod {
+                acc[i] -= 1
+                particles.append(spawn(e, index: i))
+                st.emitted += 1
+            }
+            if particles.count >= def.maxCount
+                || (per.maxPerPeriod > 0 && st.emitted >= per.maxPerPeriod) { acc[i] = min(acc[i], 1) }
+        }
+        st.remaining -= dt
+        // 페이즈 전이. duration/delay 가 연속 0 이면 remaining 이 양수로 안 돌아오는 설정이
+        // 가능 — 홉 상한 16 으로 무한루프 방호(무크래시 폴터 관례).
+        var hops = 0
+        while st.remaining <= 0, hops < 16 {
+            hops += 1
+            if st.on {
+                st.on = false
+                st.remaining += max(0, rng.range(per.delayMin, per.delayMax))
+            } else {
+                periodicEnterOn(&st, i, e, per)
+            }
+        }
+        periodicStates[i] = st
+    }
+
+    /// ON 윈도우 진입: duration 드로 → 쿼터 리셋 → (burst>0 이면) 창 진입 버스트(quota/캡 상한).
+    private mutating func periodicEnterOn(_ st: inout PeriodicState, _ i: Int, _ e: Emitter, _ per: PeriodicEmission) {
+        st.on = true
+        st.window = max(0, rng.range(per.durationMin, per.durationMax))
+        st.remaining += st.window
+        st.emitted = 0
+        if e.burst > 0 {
+            let quota = per.maxPerPeriod > 0 ? per.maxPerPeriod : .max
+            let n = max(0, min(e.burst, quota, def.maxCount - particles.count))
+            for _ in 0..<n {
+                particles.append(spawn(e, index: i))
+                st.emitted += 1
+            }
         }
     }
 
@@ -504,21 +640,28 @@ public struct ParticleSimulator {
 
     /// controlpointattract: 대상(헤드리스=origin, 기본 0)을 향한(scale>0)/반대(scale<0) 가속.
     /// 감쇠 = min(1, threshold/dist) → 근접 시 최대, 멀수록 1/r 로 약화(폭주 억제). |scale|=px/s^2.
-    private func applyAttract(_ a: (scale: Float, threshold: Float, target: SIMD3<Float>),
-                              to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) {
+    /// delete=true(deletethreshold @0x48e788)이면 threshold 이내 근접 파티클을 삭제(true 반환) —
+    /// 엔진 어휘상 근접 삭제가 정본, 영구 잔류+감쇠 추정은 키 부재 씬의 폴터로만 유지(무회귀).
+    private func applyAttract(_ a: (scale: Float, threshold: Float, target: SIMD3<Float>, delete: Bool),
+                              to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) -> Bool {
         let d = a.target - pos
         let dist = simd_length(d)
-        guard dist > 1e-4 else { return }
+        if a.delete, a.threshold > 0, dist < a.threshold { return true }
+        guard dist > 1e-4 else { return false }
         let dir = d / dist
         let atten: Float = a.threshold > 0 ? min(1, a.threshold / dist) : 1
         vel += dir * (a.scale * atten) * dt
+        return false
     }
 
     /// vortex: axis 를 회전축, offset 를 중심으로 하는 소용돌이. 회전면 반경 dist 에 따라
     /// speedInner(distanceInner)→speedOuter(distanceOuter) 보간한 접선 속도를 가속으로 부여.
     /// F624: audioScale = 오디오반응 배수(WE 문서: particle speed 를 오디오에 연결 — 1 이면 무영향).
+    /// centerForce(@0x48e7c8): 축을 향한 반경 인력(−radial 방향, 의미 명확). ring(vortex_v2
+    /// @0x48e8a8–0x48e8e0): [추정] 링 대역 밖 & pullDistance 이내 → 링 원주 방향 반경 인력.
     private func applyVortex(_ v: (axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
-                                   offset: SIMD3<Float>, audio: AudioProcessing?),
+                                   offset: SIMD3<Float>, audio: AudioProcessing?,
+                                   centerForce: Float, ring: VortexRing?),
                              to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float, audioScale: Float) {
         let axisN = normalizeSafe(v.axis)
         guard simd_length(axisN) > 1e-6 else { return }
@@ -530,6 +673,17 @@ public struct ParticleSimulator {
         let speed = v.sIn + (v.sOut - v.sIn) * t
         let tangent = normalizeSafe(simd_cross(axisN, radial))
         vel += tangent * (speed * audioScale) * dt
+        let radialN = radial / dist
+        // centerforce: 축 중심을 향한 반경 인력(음수면 척력 — sign 은 scale 과 같은 규약).
+        if v.centerForce != 0 { vel -= radialN * (v.centerForce * dt) }
+        // ring [추정 근사]: 대역(|dist−radius| ≤ width/2, width 0 이면 원주선) 밖에서만 링을 향해 당김.
+        if let ring = v.ring, ring.pullForce != 0 {
+            let delta = dist - ring.radius
+            let halfW = max(0, ring.width) * 0.5
+            if abs(delta) > halfW, abs(delta) - halfW <= max(0, ring.pullDistance) {
+                vel -= radialN * (ring.pullForce * dt) * (delta > 0 ? 1 : -1)
+            }
+        }
     }
 
     /// Particle initializer 분포 성형. exponent==1은 종전 raw 산술과 RNG 시퀀스를 보존한다.
@@ -582,11 +736,33 @@ public struct ParticleSimulator {
             let idx = min(colors.count - 1, Int(rng.nextFloat() * Float(colors.count)))
             let c = s3(colors[idx])   // 0..1 스케일(실측 — colorrandom 의 /255 와 다름)
             p.initialColor = c; p.color = c
-        case let .hsvColorRandom(hueMin, hueMax, satMin, satMax, valMin, valMax):
+        case let .hsvColorRandom(hueMin, hueMax, satMin, satMax, valMin, valMax, hueSteps, hueNoise, satNoise, valNoise):
             // h/s/v 는 서로 무관한 축 — velocityRandom 과 같이 채널별 독립 t(공유 t 아님).
-            let h = randomRange(hueMin, hueMax, exponent: 1)
-            let s = randomRange(satMin, satMax, exponent: 1)
-            let v = randomRange(valMin, valMax, exponent: 1)
+            // 노이즈 키(huenoise/saturationnoise/valuenoise) 보유 채널은 rng 드로 대신 스폰 위치 기반
+            // 값노이즈로 t 산출 [추정 — 근처 파티클이 유사 채널값 공유]. 노이즈 채널은 드로 0 — 키 부재
+            // 채널만 레거시 드로를 소비하므로 무키 씬은 드로 3 으로 비트동일.
+            let h: Float
+            if hueNoise != 0 {
+                h = hueMin + (hueMax - hueMin) * 0.5 * (1 + valueNoise3(p.pos * hueNoise + SIMD3<Float>(11.1, 0, 0)))
+            } else if hueSteps > 0 {
+                // huesteps [추정]: [hueMin,hueMax] steps 등분 이산 선택 — 드로 1(레거시와 동일 개수).
+                let k = min(hueSteps - 1, Int(rng.nextFloat() * Float(hueSteps)))
+                h = hueMin + (hueMax - hueMin) * (hueSteps > 1 ? Float(k) / Float(hueSteps - 1) : 0)
+            } else {
+                h = randomRange(hueMin, hueMax, exponent: 1)
+            }
+            let s: Float
+            if satNoise != 0 {
+                s = satMin + (satMax - satMin) * 0.5 * (1 + valueNoise3(p.pos * satNoise + SIMD3<Float>(0, 23.7, 0)))
+            } else {
+                s = randomRange(satMin, satMax, exponent: 1)
+            }
+            let v: Float
+            if valNoise != 0 {
+                v = valMin + (valMax - valMin) * 0.5 * (1 + valueNoise3(p.pos * valNoise + SIMD3<Float>(0, 0, 41.3)))
+            } else {
+                v = randomRange(valMin, valMax, exponent: 1)
+            }
             let c = hsv2rgb(h: h, s: s, v: v)
             p.initialColor = c; p.color = c
         case let .mapSequence(count, _, between):
@@ -613,6 +789,13 @@ public struct ParticleSimulator {
                 t = (angle + .pi) / (2 * .pi)
             }
             p.frame = t * max(0, count)
+        case let .positionOffsetRandom(mn, mx):
+            // [보존/추측] velocityRandom 과 동형 성분별 독립 t(드로 3).
+            p.pos += SIMD3(randomRange(mn.x, mx.x, exponent: 1),
+                           randomRange(mn.y, mx.y, exponent: 1),
+                           randomRange(mn.z, mx.z, exponent: 1))
+        case .inheritControlPointVelocity, .inheritValueFromEvent, .remapInitialValue:
+            break   // 이벤트 시스템 연동 보류 — 시뮬 무시(RNG 드로 0)
         }
     }
 
@@ -655,6 +838,24 @@ public struct ParticleSimulator {
             a *= lerp(oa.smin, oa.smax, osc01)
         }
         d.alpha = max(0, min(1, a))
+        // remapValueEx 표시 파생 동사(opacity/color/size) — age/time 기반 파생값이라 display 단계에서
+        // 재평가(age 기반 파생 재계산 아키텍처와 동형). w=1 이면 set*=덮어쓰기/multiply*=그대로 곱.
+        if hasDisplayRemaps {
+            for r in remaps {
+                guard case let .general(spec) = r else { continue }
+                let (val, w) = remapEval(spec, p)
+                guard w > 0 else { continue }
+                switch spec.verb {
+                case .setSize: d.size += (val.x - d.size) * w
+                case .multiplySize: d.size *= 1 + (val.x - 1) * w
+                case .setColor: d.color += (val - d.color) * w
+                case .multiplyColor: d.color *= SIMD3<Float>(1, 1, 1) + (val - SIMD3<Float>(1, 1, 1)) * w
+                case .setOpacity: d.alpha = max(0, min(1, d.alpha + (val.x - d.alpha) * w))
+                case .multiplyOpacity: d.alpha = max(0, min(1, d.alpha * (1 + (val.x - 1) * w)))
+                default: break   // 물리 동사는 _step 적분 단계 적용
+                }
+            }
+        }
         // pos 진동 오프셋(절대식, base 에 비누적) — 트레일 히스토리 기록(_step/spawn)과 동일 공식 공유.
         d.pos = p.pos + oscPositionOffset(p)
         return d
@@ -689,6 +890,85 @@ public struct ParticleSimulator {
             n = valueNoise3(p)
         }
         return 0.5 * (1 + max(-1, min(1, n)))
+    }
+
+    /// [0,1] N옥타브 값노이즈(계수 1, 1/2, 1/4… 합 정규화) — remapValueEx transformoctaves 소비.
+    /// 레거시 remapNoise01(fbm=true) 와 octaves=3 은 동일 산술(레거시는 기존 함수 유지 — 비트동일).
+    private func remapNoiseOctaves(_ octaves: Int, _ x: Float, _ salt: SIMD3<Float>) -> Float {
+        var sum: Float = 0, amp: Float = 1, norm: Float = 0
+        var p = SIMD3<Float>(x, 0, 0) + salt
+        for _ in 0..<max(1, octaves) {
+            sum += amp * valueNoise3(p)
+            norm += amp
+            amp *= 0.5
+            p *= 2
+        }
+        return 0.5 * (1 + max(-1, min(1, sum / norm)))
+    }
+
+    /// remapValueEx 입력 CP 룩업(범위 밖 id → 원점).
+    private func remapCP(_ id: Int) -> SIMD3<Float> {
+        id >= 0 && id < def.controlPoints.count ? s3(def.controlPoints[id]) : SIMD3(0, 0, 0)
+    }
+
+    /// remapValueEx 평가(순수 — RNG 無, 스폰 시드 remapPhase 만 참조): 입력 신호 → transform([0,1])
+    /// → operation 셰이핑 → 출력 범위 매핑 + blend 창(수명 비율) 가중. step/display 양쪽에서 결정적 재평가.
+    private func remapEval(_ spec: RemapSpec, _ p: Particle) -> (value: SIMD3<Float>, weight: Float) {
+        let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
+        // 1) 입력 신호([추정] 의미론 — RemapInput doc 주석 참조).
+        let x: Float
+        switch spec.input {
+        case .none:
+            x = (p.remapPhase + p.age) * Self.remapInputK * spec.inputScale   // 레거시 동형
+        case .some(.lifetimeFraction):
+            x = n * spec.inputScale
+        case .some(.particleSystemTime), .some(.layerTime), .some(.runtime), .some(.timeOfDay):
+            x = time * spec.inputScale   // [추정] 시계열 근사(헤드리스 결정성 우선)
+        case .some(.velocity):
+            x = simd_length(p.vel) * spec.inputScale
+        case .some(.deltaToControlPoint), .some(.distanceToControlPoint):
+            x = simd_length(p.pos - remapCP(spec.inputCP0)) * spec.inputScale
+        case .some(.directionToControlPoint):
+            let d = normalizeSafe(remapCP(spec.inputCP0) - p.pos)
+            x = d[min(2, max(0, spec.component))] * spec.inputScale
+        case .some(.positionBetweenControlPoints):
+            let a = remapCP(spec.inputCP0), b = remapCP(spec.inputCP1)
+            let ab = b - a
+            let len2 = simd_length_squared(ab)
+            x = (len2 > 1e-8 ? max(0, min(1, simd_dot(p.pos - a, ab) / len2)) : 0) * spec.inputScale
+        case .some(.layerOrigin):
+            x = simd_length(p.pos) * spec.inputScale
+        }
+        // 2) transform → v01 ∈ [0,1]. 노이즈는 remapPhase 솔트로 파티클 탈동기(레거시 동형).
+        let v01: Float
+        switch spec.transform {
+        case .none:
+            v01 = max(0, min(1, x))
+        case .some(.triangle):
+            let f = x - x.rounded(.down)
+            v01 = 1 - abs(2 * f - 1)
+        case .some(.simplexnoise):
+            v01 = remapNoiseOctaves(1, x, SIMD3(p.remapPhase, 0, 0))   // [추정] 값노이즈 근사
+        case .some(.fbmnoise):
+            v01 = remapNoiseOctaves(spec.octaves, x, SIMD3(p.remapPhase, 0, 0))
+        }
+        // 3) operation 단항 셰이핑(RemapOperation doc 주석 참조 — multiply/average 는 항등 보류).
+        let v: Float
+        switch spec.operation {
+        case .remap, .multiply, .average: v = v01
+        case .subtract: v = 1 - v01
+        case .square: v = v01 * v01
+        }
+        // 4) blend 창(수명 비율) [추정]: in 램프업 × out 램프다운. 전부 0(부재)이면 가중 1.
+        var w: Float = 1
+        if spec.blendInEnd > spec.blendInStart {
+            w *= max(0, min(1, (n - spec.blendInStart) / (spec.blendInEnd - spec.blendInStart)))
+        }
+        if spec.blendOutEnd > spec.blendOutStart {
+            w *= 1 - max(0, min(1, (n - spec.blendOutStart) / (spec.blendOutEnd - spec.blendOutStart)))
+        }
+        let mn = s3(spec.outMin), mx = s3(spec.outMax)
+        return (mn + (mx - mn) * v, w)
     }
 
     // MARK: - 난류 흐름장

@@ -100,6 +100,10 @@ public struct SceneLayer: Equatable {
     /// 3D 씬 빌보드용 머티리얼 depth 플래그. 2D 경로는 무시.
     public var depthTest: Bool = true
     public var depthWrite: Bool = true
+    /// 머티리얼 패스 `alphawriting`("default"|"enabled" — json-keys.txt:622 A 0x0048a4c0; 코퍼스 실측
+    /// 806엔트리 중 enabled 16건). 파스·보존 전용 — 알파 채널 기록 제어 의미로 추정, 렌더 소비 보류.
+    /// 기본 "default"(항등 — :1107 depthtest/depthwrite 와 같은 패스 키 군).
+    public var alphaWriting: String = "default"
     /// 오브젝트 colorBlendMode(common_blending.h ApplyBlending enum 0-32; 0=normal).
     /// != 0 이면 렌더러가 acc 스냅샷 대비 블렌드 합성(컴포지션 스냅샷 패턴). 코퍼스 121레이어/30씬.
     public var colorBlendMode: Int = 0
@@ -255,7 +259,8 @@ public struct SceneTextLayer: Equatable {
     public var scale: Vec2               // 배율은 "scale" 필드(실측 "2 2") — "size" 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)
     /// W3-⑤: 정적 angleZ(scene.json "angles" 의 z 성분, 라디안 — 레이어 SceneLayer.angleZ 와 동일 규약).
     /// 스크립트 바인딩(propertyScripts["angles"])이 있으면 그 결과가 매 프레임 이 값을 대체(encodeText).
-    /// 부모 체인 회전 누적(F057)은 별도 갭 — composeTextParentTransforms 는 origin/scale 만 굽는다.
+    /// F057: 2D 씬 parent 체인이 있으면 파스 말미에 부모 누적 각이 더해진 월드 각으로 덮어쓴다
+    /// (composeTextParentTransforms — origin/scale 과 동일 규약, 그래서 var).
     public var angleZ: Float = 0
     /// "Limit width"(limitwidth) 체크 시 워드랩 폭 maxwidth(래스터 로컬 px — 실물 maxwidth 스크립트가
     /// 화면폭을 scale.x 로 나눠 전달 = 스케일 전 단위, d.ts "Max width in pixels"). nil = 무제한(무회귀).
@@ -290,6 +295,11 @@ public struct SceneTextLayer: Equatable {
     public var spacing: Float? = nil
     public var lockTransforms: Bool = false
     public var isSolid: Bool = false
+    /// 텍스트 오브젝트 `depthtest`(scene-json-schema.md:123 텍스트 키 목록 — SceneLayer.depthTest 의
+    /// 머티리얼 패스 키(SceneDocument.swift:1107)와는 별개 오브젝트 레벨). 실측 코퍼스는 문자열
+    /// "enabled"(1394건, 불리언 형태도 관용 파스). 기본 true(항등). 파스·보존 전용 — 2D 텍스트 경로는
+    /// 페인터 z-순서라 depth 소비 없음(3D 빌보드는 SceneLayer.depthTest 가 담당).
+    public var depthTest: Bool = true
     /// C⑥: 오브젝트 colorBlendMode(common_blending.h ApplyBlending enum 0-32; 0=normal) — 이미지
     /// 레이어(SceneLayer.colorBlendMode)와 동일 필드이나 종전 텍스트 경로엔 아예 없었다. 텍스트도
     /// 동일 enum 을 저작하며(실측 코퍼스 9씬/24오브젝트, mode 31 최빈 — 시계/곡명 텍스트 가산 합성).
@@ -476,7 +486,7 @@ public struct SceneNode3D: Equatable {
     }
 }
 
-/// 3D 라이트 오브젝트. type: "lpoint"(점) | "ldirectional"(방향) | "lspot"(스팟).
+/// 3D 라이트 오브젝트. type: "lpoint"(점) | "ldirectional"(방향) | "lspot"(스팟) | "ltube"(선형).
 /// general.lightconfig 가 활성 라이트 종류/개수를 요약(point/directional/…shadow 카운트).
 public struct SceneLight3D: Equatable {
     public let id: Int
@@ -484,7 +494,12 @@ public struct SceneLight3D: Equatable {
     public let type: String
     /// 로컬(부모 상대) 위치. 2D 씬은 파스 말미에 부모 체인을 합성한 월드 좌표로 덮어쓴다
     /// (F691 — composeLightParentTransforms; 레이어 composeParentTransforms 와 동일 규약)라 var.
+    /// ltube 는 이 필드가 세그먼트 단점 A(WE g_LTube_OriginA).
     public var origin: Vec3
+    /// ltube 세그먼트 단점 B(scene.json `originb` — wallpaper64.exe 스트링/에디터 키 실측, 소문자).
+    /// WE 셰이더 g_LTube_OriginB(A2-pbr-lighting.md §4.3). origin 과 같은 부모-로컬 공간이라
+    /// 2D 씬은 origin 과 함께 월드로 덮어쓴다(composeLightParentTransforms). nil = 미저작(비-tube 포함).
+    public var originB: Vec3? = nil
     public let angles: Vec3
     public let color: Vec3
     public let radius: Float
@@ -517,9 +532,9 @@ public struct SceneLight3D: Equatable {
                 innerCone: Float = 0, outerCone: Float = 0,
                 castShadow: Bool, parent: Int?, order: Int = 0,
                 cascadeDistances: Vec3? = nil, castVolumetrics: Bool = false,
-                volumetricsExponent: Float = 1, density: Float = 2) {
+                volumetricsExponent: Float = 1, density: Float = 2, originB: Vec3? = nil) {
         self.id = id; self.name = name; self.type = type
-        self.origin = origin; self.angles = angles; self.color = color
+        self.origin = origin; self.originB = originB; self.angles = angles; self.color = color
         self.radius = radius; self.intensity = intensity; self.exponent = exponent
         self.innerCone = innerCone; self.outerCone = outerCone
         self.castShadow = castShadow; self.parent = parent; self.order = order
@@ -574,17 +589,19 @@ public extension SceneLight3D {
     ///   코퍼스 번역 이펙트 0건이 이 유니폼을 참조해 미확정. 블로아웃(고강도 씬)의 최대 레버(보고 참조).
     /// - `ambientTerm`: flat ambient (genericimage4).
     /// - F800(S-9): `axisCone`/`kindCone` — 라이트 kind/axis/cone. 3D 경로(Scene3DLighting.swift)의
-    ///   확정 규약을 2D 로 가져온 포트: kind 는 Scene3DLightKind rawValue 와 동일(0=point/1=directional/2=spot,
-    ///   미지 type 은 point 폴터 — 종전 전원 point 처리와 동일이라 무회귀), axis 는 모델회전(Rz·Ry·Rx)의
+    ///   확정 규약을 2D 로 가져온 포트: kind 는 Scene3DLightKind rawValue 와 동일(0=point/1=directional/2=spot
+    ///   /4=tube, 미지 type 은 point 폴터 — 종전 전원 point 처리와 동일이라 무회귀), axis 는 모델회전(Rz·Ry·Rx)의
     ///   blue축(+Z, col2) = WE 스크립트 API `Mat4.forward()` 규약, cone 은 spot 전각(도)→half-angle
     ///   코사인(Scene3DLighting.spotConeCosines 와 동일 변환). point 는 axis/cone 미사용(셰이더가 kind 로 분기).
+    ///   tube(kind 4)는 axisCone.xyz 가 forward 가 아니라 **세그먼트 단점 B**(WE g_LTube_OriginB —
+    ///   genericimage3.frag:115/157 PointSegmentDelta 소비, cone 미사용이라 동 슬롯 재활용).
     struct ForwardUniforms: Equatable {
         public var positions: [SIMD4<Float>]   // xyz=world, w=finite-light exponent
         public var colorRadius: [SIMD4<Float>] // rgb=color×intensity, w=radius
         public var ambientTerm: SIMD3<Float>
         public var count: Int
-        public var axisCone: [SIMD4<Float>]    // xyz=월드 forward(blue축), w=spot cone outer cos
-        public var kindCone: [SIMD4<Float>]    // x=kind(0/1/2), y=spot cone inner cos
+        public var axisCone: [SIMD4<Float>]    // xyz=월드 forward(blue축) | tube=단점B, w=spot cone outer cos
+        public var kindCone: [SIMD4<Float>]    // x=kind(0/1/2/4), y=spot cone inner cos
         public init(positions: [SIMD4<Float>], colorRadius: [SIMD4<Float>],
                     ambientTerm: SIMD3<Float>, count: Int,
                     axisCone: [SIMD4<Float>] = [SIMD4<Float>](repeating: .zero, count: 4),
@@ -596,11 +613,13 @@ public extension SceneLight3D {
     }
 
     /// F800(S-9): 2D 포워드 라이트 kind — Scene3DLightKind(type:) 와 동일 매핑(WapleRender 소속이라
-    /// 직접 참조 불가, rawValue 규약 0/1/2 동기 유지). 미지 type 은 point 폴터(무회귀).
+    /// 직접 참조 불가, rawValue 규약 0/1/2/4 동기 유지). 미지 type 은 point 폴터(무회귀).
+    /// ltube(4): WE 정식 tube 경로(genericimage3.frag:112-118/154-160) — 종전 point 오분류 폴터 제거.
     static func forwardLightKind(_ type: String) -> Int {
         switch type.lowercased() {
         case "ldirectional": return 1
         case "lspot": return 2
+        case "ltube": return 4
         default: return 0   // lpoint + 미지
         }
     }
@@ -648,7 +667,14 @@ public extension SceneLight3D {
                 let cone = forwardSpotConeCosines(inner: l.innerCone, outer: l.outerCone)
                 innerCos = cone.inner; outerCos = cone.outer
             }
-            ac[i] = SIMD4(axis.x, axis.y, axis.z, outerCos)
+            if kind == 4 {
+                // tube: axis 슬롯 = 세그먼트 단점 B(월드). originb 미저작은 A==B 퇴화 — WE
+                // PointSegmentDelta(common_pbr.h:13-14)가 v==0 이면 A-pos 를 반환해 point 와 동치.
+                let b = l.originB ?? l.origin
+                ac[i] = SIMD4(b.x, b.y, b.z, 0)
+            } else {
+                ac[i] = SIMD4(axis.x, axis.y, axis.z, outerCos)
+            }
             kc[i] = SIMD4(Float(kind), innerCos, 0, 0)
         }
         let amb = SIMD3(ambient.x, ambient.y, ambient.z)
@@ -686,6 +712,13 @@ public struct SceneSound: Equatable {
     public var volumeScript: String? = nil
     /// volume 스크립트의 저장 scriptproperties(사용자 오버라이드) — 레이어/텍스트와 동일 규약.
     public var volumeScriptProps: String? = nil
+    /// `spatialization`/`attenuation`/`mindistance`(json-keys.txt:935 A 0x0048f8d8 / :933 A 0x0048f8b8 /
+    /// :928 A 0x0048f868 — 실측 3737268876 등 32오브젝트, attenuation 전건 1.0·mindistance 최빈 1.0).
+    /// 파스·보존 전용 — 실제 공간 감쇠 재생은 별도 기능(M6)이라 미소비. 기본값(false/1/1)은 비공간화
+    /// 현행 재생과 동치(무회귀).
+    public var spatialization: Bool = false
+    public var attenuation: Float = 1
+    public var minDistance: Float = 1
     public init(id: Int, name: String = "", sounds: [String], volume: Float, playbackMode: String,
                 startSilent: Bool, minTime: Float, maxTime: Float) {
         self.id = id; self.name = name; self.sounds = sounds; self.volume = volume; self.playbackMode = playbackMode
@@ -772,6 +805,24 @@ public struct SceneDocument: Equatable {
     /// 원근 투영 FOV(도). 실측 전건 95.0(133씬 저작). nil = 미저작. 파스·보존 전용(렌더 소비 없음).
     public var perspectiveOverrideFov: Float? = nil
 
+    /// `general.clearenabled`(json-keys.txt:667 A 0x0048d558) — false 면 렌더러가 프레임 누적(acc)
+    /// 버퍼를 지우지 않는다(잔상 누적 = 엔진 동작 — SceneRenderer.clearEnabled 소비). 부재 시 true
+    /// (무회귀). 코퍼스 실측 161/161 전건 true 저작(비활성 실물 사례 없음).
+    public var clearEnabled: Bool = true
+    /// `general.camerafade`(json-keys.txt:686 A 0x0048d6c8) — 파스만(의미 미확정 — 소비 보류).
+    /// 부재 시 true(코퍼스 161/161 전건 true 저작과 동치).
+    public var cameraFade: Bool = true
+    /// `general.windenabled/windstrength/winddirection` + `gravitystrength/gravitydirection`
+    /// (json-keys.txt:696-700) — 파스·보존 전용(소비자 의미론 미확정: 파티클 외력 추정 — 소비 보류).
+    /// 코퍼스 실측 109/161씬 보유: direction 은 "x y z" vec3 문자열(2802243144 등 전건 동일 형태 —
+    /// corpus_scan/scene-json-schema.md:80-82 의 "float radians" 기술은 실물과 불일치, 실측이 정본).
+    /// 기본값 = 코퍼스 전건 모달값(에디터 기본 저작치 — 부재 시 명시 저작과 동치라 무회귀).
+    public var windEnabled: Bool = false
+    public var windStrength: Float = 1
+    public var windDirection: Vec3 = Vec3(x: 0.707, y: 0.707, z: 0)
+    public var gravityStrength: Float = 1
+    public var gravityDirection: Vec3 = Vec3(x: 0, y: -1, z: 0)
+
     /// H7: WE 품질 설정(general.quality) — low/medium/high/ultra. 픽셀 포맷 분기에 사용.
     /// 부재 시 ultra(기존 hdr 플래그 결정자와 동일 — 무회귀).
     public enum Quality: String, Equatable {
@@ -851,7 +902,9 @@ extension SceneDocument {
             guard let obj = any as? [String: Any] else { continue }
             // 사운드 오브젝트("sound" 키): 트랜스폼/계층 무시(전역 재생), 실측 필드만 파스.
             // 콘텐츠 키(image/model/…)가 없어 아래 그룹-노드 분기로 새면 nodes3D 로 오분류되므로 먼저 처리.
-            if obj["sound"] is [Any] {
+            // sound 는 배열(플레이리스트) 또는 단수 경로 문자열(scene-json-schema.md:141 "path to audio
+            // entry" 단수형 기술) — 종전엔 배열 전용 게이트라 문자열 형태가 조용히 누락됐다(관용 파스).
+            if obj["sound"] is [Any] || obj["sound"] is String {
                 if let s = parseSound(obj) { sounds.append(s) }
                 continue
             }
@@ -992,6 +1045,17 @@ extension SceneDocument {
         // F695/F692: 씬 전역 줌 + perspective 레이어 원근 FOV(파스·보존 — 소비는 렌더러 책임).
         out.zoom = float(general["zoom"]) ?? 1
         out.perspectiveOverrideFov = float(general["perspectiveoverridefov"])
+        // clearenabled/camerafade(json-keys.txt:667/686) — clearenabled=false 는 acc 미클리어(잔상)라
+        // 렌더러가 소비(SceneRenderer.clearEnabled). camerafade 는 의미 미확정이라 파스만(소비 보류).
+        out.clearEnabled = (unwrap(general["clearenabled"]) as? Bool) ?? true
+        out.cameraFade = (unwrap(general["camerafade"]) as? Bool) ?? true
+        // wind/gravity(json-keys.txt:696-700) — 소비자 의미론 미확정, 파스·보존 전용(필드 주석 참조).
+        // direction 실측 형태는 "x y z" vec3 문자열(코퍼스 109/161씬) — float()/vec3() 가 {value} 언랩 공통 처리.
+        out.windEnabled = (unwrap(general["windenabled"]) as? Bool) ?? false
+        out.windStrength = float(general["windstrength"]) ?? 1
+        out.windDirection = vec3(general["winddirection"]) ?? Vec3(x: 0.707, y: 0.707, z: 0)
+        out.gravityStrength = float(general["gravitystrength"]) ?? 1
+        out.gravityDirection = vec3(general["gravitydirection"]) ?? Vec3(x: 0, y: -1, z: 0)
         // H7: 품질 설정(general.quality).
         out.quality = quality
         return out
@@ -1075,6 +1139,7 @@ extension SceneDocument {
         var blendMode = "normal"
         var depthTest = true
         var depthWrite = true
+        var alphaWriting = "default"   // 머티리얼 패스 alphawriting — 파스·보존 전용(필드 주석 참조)
         var spritesheetCombo = false
         var lightingCombo = false
         var roughness: Float = 0.7
@@ -1106,6 +1171,7 @@ extension SceneDocument {
                 if let bl = p0["blending"] as? String { blendMode = bl }
                 depthTest = (p0["depthtest"] as? String) != "disabled"
                 depthWrite = (p0["depthwrite"] as? String) != "disabled"
+                if let aw = p0["alphawriting"] as? String { alphaWriting = aw }
                 // SPRITESHEET 콤보(대/소문자 무시, 값 !=0) → 이 레이어는 .tex TEXS 프레임 시간축 재생.
                 // LIGHTING 콤보(!=0) → 포워드 라이팅 대상(씬 라이트에 반응). 둘 다 대소문자 무시 매치.
                 if let combos = p0["combos"] as? [String: Any] {
@@ -1221,6 +1287,7 @@ extension SceneDocument {
         layer.blendMode = blendMode
         layer.depthTest = depthTest
         layer.depthWrite = depthWrite
+        layer.alphaWriting = alphaWriting
         layer.spritesheet = spritesheetCombo
         layer.lighting = lightingCombo
         layer.roughness = roughness
@@ -1291,9 +1358,11 @@ extension SceneDocument {
         return (camera, scripts)
     }
 
-    /// 사운드 오브젝트("sound" 배열) → SceneSound. 빈 경로면 nil(호출부는 sound 키 존재 시 항상 continue).
+    /// 사운드 오브젝트("sound" 배열 또는 단수 경로 문자열) → SceneSound. 빈 경로면 nil(호출부는 sound 키 존재 시 항상 continue).
     private static func parseSound(_ obj: [String: Any]) -> SceneSound? {
-        let paths = (obj["sound"] as? [Any])?.compactMap { $0 as? String } ?? []
+        // 단수 문자열("path to audio entry" — scene-json-schema.md:141)은 1개짜리 사운드로 관용 파스.
+        let paths = (obj["sound"] as? [Any])?.compactMap { $0 as? String }
+            ?? ((obj["sound"] as? String).map { [$0] } ?? [])
         guard !paths.isEmpty else { return nil }
         // multi(플레이리스트)/startsilent(트리거 대기)는 의미 확정·재생기 반영(2026-07-09) — "unhandled" 로그 제거.
         var snd = SceneSound(
@@ -1313,6 +1382,10 @@ extension SceneDocument {
             snd.volumeScript = sc
             if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { snd.volumeScriptProps = j }
         }
+        // 공간화 키(json-keys.txt:935/933/928 — 실측 3737268876 등 32오브젝트) — 파스만(필드 주석 참조).
+        snd.spatialization = (unwrap(obj["spatialization"]) as? Bool) ?? false
+        snd.attenuation = float(obj["attenuation"]) ?? 1
+        snd.minDistance = float(obj["mindistance"]) ?? 1
         return snd
     }
 
@@ -1473,6 +1546,10 @@ extension SceneDocument {
         t.spacing = float(obj["spacing"])
         t.lockTransforms = (unwrap(obj["locktransforms"]) as? Bool) ?? false
         t.isSolid = (unwrap(obj["solid"]) as? Bool) ?? false
+        // 텍스트 오브젝트 depthtest(scene-json-schema.md:123) — 실측 문자열 "enabled"(1394건)이 정본,
+        // 불리언 형태도 관용. 기본 true(항등). 파스·보존 전용(SceneTextLayer.depthTest 주석 참조).
+        if let s = obj["depthtest"] as? String { t.depthTest = s != "disabled" }
+        else if let b = unwrap(obj["depthtest"]) as? Bool { t.depthTest = b }
         // C⑥: colorBlendMode — 이미지 레이어(:1157 인근)와 동일 파스 규약.
         t.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
         // C⑨: 아웃라인/배경 박스 파스·보존(실측 스키마: outlinecolor/backgroundcolor 는 "r g b" 벡터).
@@ -1542,7 +1619,9 @@ extension SceneDocument {
             cascadeDistances: cascades,
             castVolumetrics: (obj["castvolumetrics"] as? Bool) ?? false,
             volumetricsExponent: float(obj["volumetricsexponent"]) ?? 1,
-            density: float(obj["density"]) ?? 2)
+            density: float(obj["density"]) ?? 2,
+            // ltube 세그먼트 단점 B(WE g_LTube_OriginB — 키는 wallpaper64.exe 스트링 실측 소문자).
+            originB: vec3(obj["originb"]))
         // SceneObject3D/SceneNode3D 의 propertyScripts/transformScripts 와 동형 캡처(파스만 — TODO 위 참조).
         for key in ["color", "intensity", "radius", "origin", "angles"] {
             if let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String { light.propertyScripts[key] = sc }
@@ -1648,9 +1727,9 @@ extension SceneDocument {
             if let p = n.parent { parentOf[n.id] = p }
         }
         // W3-⑤(a): "부모=텍스트" 케이스(3701356561 Solide H/V 등 이미지 자식) — composeTextParentTransforms
-        // 가 이 함수보다 먼저 실행돼(:919) texts 는 이미 월드(또는 루트 로컬=월드) 값으로 확정돼 있다.
-        // 그래서 parentOf 는 등록하지 않는다(등록하면 텍스트 자신의 부모 체인이 여기서 다시 합성돼
-        // 이중 적용된다 — F057 관련 별개 갭). 레이어/노드가 같은 id 를 이미 썼으면 그 쪽이 우선(F437 동형).
+        // 가 이 함수보다 먼저 실행돼(:919) texts 는 이미 월드(또는 루트 로컬=월드) 값으로 확정돼 있다
+        // (F057 해소로 angleZ 도 부모 누적 반영 완료). 그래서 parentOf 는 등록하지 않는다(등록하면 텍스트
+        // 자신의 부모 체인이 여기서 다시 합성돼 이중 적용된다). 레이어/노드가 같은 id 를 이미 썼으면 그 쪽이 우선(F437 동형).
         for t in texts where t.id != 0 {
             guard localT[t.id] == nil else { continue }
             localT[t.id] = (t.origin, t.scale, t.angleZ)
@@ -1731,6 +1810,14 @@ extension SceneDocument {
             lights[i].origin = Vec3(x: pw.origin.x + sx * ca - sy * sa,
                                     y: pw.origin.y + sx * sa + sy * ca,
                                     z: pw.z + lights[i].origin.z)
+            // ltube 단점 B 도 origin 과 같은 부모-로컬 공간 좌표라 동일 합성으로 월드화한다.
+            if var b = lights[i].originB {
+                let bx = pw.scale.x * b.x, by = pw.scale.y * b.y
+                b = Vec3(x: pw.origin.x + bx * ca - by * sa,
+                         y: pw.origin.y + bx * sa + by * ca,
+                         z: pw.z + b.z)
+                lights[i].originB = b
+            }
         }
     }
 
@@ -1782,7 +1869,8 @@ extension SceneDocument {
     }
 
     /// E1: 2D 텍스트 오브젝트의 parent 체인 합성 — 레이어/라이트와 동일 규약(로컬→월드 픽셀). origin/scale
-    /// 만 굽는다 — 부모 각의 누적(자식 angleZ 에 부모 회전을 더하는 것)은 별도 갭(F057, 무관 변경). 레이어
+    /// 에 더해 F057: 부모 누적 각(pw.angle)을 자식 angleZ 에도 누산한다(이미지 레이어 합성 composed() 와
+    /// 동일 의미론 — 텍스트→텍스트 체인 포함. 실물 3146703458 의 ~178° 텍스트, 3516106265 체인). 레이어
     /// 합성 전에 실행해야 한다(레이어가 월드로 덮어써지면 부모-레이어 로컬값이 유실 — F691 라이트와 동일
     /// 이유). W3-⑤: buildParentTransformMap 에 texts 스냅샷도 넘겨 텍스트→텍스트 부모 체인(3516106265:
     /// id 790/798/804 parent=783)과 "부모=텍스트" 인 이미지 자식(composeParentTransforms 쪽, 3701356561)
@@ -1801,6 +1889,9 @@ extension SceneDocument {
             let sx = pw.scale.x * texts[i].origin.x, sy = pw.scale.y * texts[i].origin.y
             texts[i].origin = Vec2(x: pw.origin.x + sx * ca - sy * sa, y: pw.origin.y + sx * sa + sy * ca)
             texts[i].scale = Vec2(x: pw.scale.x * texts[i].scale.x, y: pw.scale.y * texts[i].scale.y)
+            // F057: 부모 누적 각 상속 — 이미지 레이어 composed()(:1730)와 동일 의미론. pw.angle 은 조상 체인
+            // 누적분(worldParentTransform)이라 자신의 로컬 각(angleZ 에 이미 있음)은 여기서 더하지 않는다.
+            texts[i].angleZ += pw.angle
         }
     }
 

@@ -152,11 +152,20 @@ final class Scene3DCSMShadowTests: XCTestCase {
     // MARK: 셰이더 계약
 
     func testMeshShaderCarriesCSMSliceSelection() {
-        // LightU 5번째 float4 + 카메라 거리 슬라이스 선택 + 셀 매핑이 소스에 존재해야 한다.
-        XCTAssertTrue(Mesh3DShaders.source.contains("float4 cascades;"))
-        XCTAssertTrue(Mesh3DShaders.source.contains("light.cascades.w > 2.5"))
-        XCTAssertTrue(Mesh3DShaders.source.contains("pointShadowCell(cascade)"))
-        XCTAssertTrue(Mesh3DShaders.source.contains("light.cascades.z"))
+        // LightU 5번째 float4 + WE mix 체인(캐스케이드별 투영 박스 포함 검사 — common_pbr_2.h:131-147
+        // /A2-pbr-lighting.md §4.4) + 셀 매핑이 소스에 존재해야 한다.
+        // 종전 radial 거리 선택(F780 근사: distance(frame.cameraEye.xyz, worldPos) + cascades.z 조기반환)은
+        // WE 정본이 아니라 제거됨 — 경계 밖 lit 폴터는 out2(마지막 캐스케이드 박스 밖)가 계승한다.
+        let source = Mesh3DShaders.source
+        XCTAssertTrue(source.contains("float4 cascades;"))
+        XCTAssertTrue(source.contains("light.cascades.w > 2.5"))
+        XCTAssertTrue(source.contains("pointShadowCell(cascade)"))
+        // WE CalculateProjectedCoordsCascades 의 0.99 박스 임계 + mix(mix(a,b,w0),c,w1) 체인.
+        XCTAssertTrue(source.contains("step(0.99, max(abs(ndc0.x)"))
+        XCTAssertTrue(source.contains("mix(mix(0.0, 1.0, out0), 2.0, out1)"))
+        XCTAssertTrue(source.contains("mix(mix(ndc0, ndc1, out0), ndc2, out1)"))
+        XCTAssertFalse(source.contains("distance(frame.cameraEye.xyz, worldPos)"),
+                       "radial 거리 선택은 WE 정본 mix 체인으로 대체됨")
     }
 
     private func ndc3(_ vp: simd_float4x4, _ world: SIMD3<Float>) -> SIMD3<Float> {

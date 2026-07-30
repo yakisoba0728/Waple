@@ -31,8 +31,8 @@ enum Mesh3DShaders {
     struct LightU {
         float4 positionExponent;
         float4 colorRadius;
-        float4 shadow;        // x=slice, y=vp start, z=kind(0=point,1=directional,2=spot), w=spot inner cos
-        float4 axis;          // xyz=forward(+Z blue축, 광자 진행 방향), w=spot outer cos
+        float4 shadow;        // x=slice, y=vp start, z=kind(0=point,1=directional,2=spot,4=tube), w=spot inner cos
+        float4 axis;          // xyz=forward(+Z blue축, 광자 진행 방향), w=spot outer cos | tube: xyz=단점B(g_LTube_OriginB)
         float4 cascades;      // F780: directional CSM far 경계 xyz, w=캐스케이드 수(3=CSM, 0=단일 오소)
     };
     struct VOut {
@@ -139,7 +139,7 @@ enum Mesh3DShaders {
     fragment void sf_cutout(ShadowVOut in [[stage_in]],
                             texture2d<float> tex [[texture(0)]],
                             constant MeshU& u [[buffer(1)]]) {
-        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::repeat);
         float alpha = tex.sample(s, in.uv).a * u.tint.a;
         if (alpha < u.material.z) discard_fragment();
     }
@@ -147,9 +147,19 @@ enum Mesh3DShaders {
     inline float finiteLightFalloff(float distance, float radius, float exponent) {
         if (radius <= 0.0) return 0.0;
         float falloff = clamp(1.0 - distance / radius, 0.0, 1.0);
-        constexpr float epsilon = 6.103515625e-5;
-        // Native GLSL lane: radius 경계에서 exponent=0이어도 hard zero.
-        return falloff >= epsilon ? pow(falloff + epsilon, exponent) : 0.0;
+        // WE 2.8.42 HLSL lane(#define HLSL 1 크로스컴파일 — wallpaper64.exe 스트링 @0x485698):
+        // pow(falloff + 1.17549435e-38, exponent), 반경 컷오프 없음. exponent=0 이면 pow(x,0)=1
+        // 이라 반경 무관 전역 무감쇠가 엔진 동작(구 GLSL lane 의 hard zero 는 오이식).
+        return pow(falloff + 1.17549435e-38, exponent);
+    }
+
+    // WE common_pbr.h:9-16 PointSegmentDelta 1:1 — 표면에서 세그먼트(tube 광축) 최근접점까지의 델타.
+    // A==B 퇴화(v==0)는 A-pos 반환이라 point 라이트와 수치 동치. saturate = clamp(x,0,1).
+    inline float3 pointSegmentDelta(float3 pos, float3 segmentA, float3 segmentB) {
+        float3 delta = segmentB - segmentA;
+        float v = dot(delta, delta);
+        if (v == 0.0) return segmentA - pos;
+        return segmentA + clamp(dot(pos - segmentA, delta) / v, 0.0, 1.0) * delta - pos;
     }
 
     inline float Distribution_GGX(float3 N, float3 H, float roughness) {
@@ -180,8 +190,8 @@ enum Mesh3DShaders {
     // Cook–Torrance BRDF × NL (source-confirmed generic4 코어). radiance 는 호출부가 곱한다.
     // NL<=0 이면 최종 *NL 로 0(포인트 조기반환과 수치 동일). point/directional/spot 공유.
     // F274(RIMLIGHTING/SHADINGGRADIENT — common_pbr.h:53-75 1:1 이식): rim=(g_RimAmount,g_RimExponent,
-    // RIMLIGHTING on/off,SHADINGGRADIENT on/off). lightColorRaw 는 감쇠 적용 "전" 광원색(WE 의
-    // step(0.01, lightColor.x+y+z) 게이트와 동일 — 감쇠된 radiance 가 아니라 광원 자체의 세기를 본다).
+    // RIMLIGHTING on/off,SHADINGGRADIENT on/off). lightColorRaw 는 감쇠 적용 "전" 광원색(WE V1 lane 의
+    // step(0.001, lightColor.x+y+z) 게이트와 동일 — 감쇠된 radiance 가 아니라 광원 자체의 세기를 본다).
     inline float3 pbrDirect(float3 N, float3 V, float3 L, float3 albedo,
                             float roughness, float metallic, float3 specularTint,
                             float3 lightColorRaw, float4 rim,
@@ -210,7 +220,8 @@ enum Mesh3DShaders {
         if (rim.z > 0.5) {
             float NV = max(dot(N, V), 0.0);
             float rimTerm = pow(1.0 - NV, rim.y) * rim.x * NL
-                           * step(0.01, lightColorRaw.x + lightColorRaw.y + lightColorRaw.z);
+                           * step(0.001, lightColorRaw.x + lightColorRaw.y + lightColorRaw.z);
+                           // ^ WE 2.8.42 V1 lane: common_pbr_2.h:294/305/342/353 (0.01 은 구경로 common_pbr.h 값).
             NL = max(NL, rimTerm);
             adjustedMetallic -= saturate(rimTerm);
         }
@@ -273,6 +284,27 @@ enum Mesh3DShaders {
                          light.colorRadius.xyz, rim, gradientTex, gradientSampler) * radiance;
     }
 
+    // tube: 세그먼트 최근접점을 광원점으로 하는 유한광 — WE PerformLighting_V1 tube 분기
+    // (A2-pbr-lighting.md §4.4: lightDelta=PointSegmentDelta(worldPos, OriginA, OriginB),
+    //  ComputePBRLightShadow(..., Color.w=radius, OriginA.w=exponent, shadowFactor=1.0 — tube 무섀도우).
+    // pointPBR 과의 유일한 차이는 델타 산출(세그먼트 최근접점)뿐 — 패킹 규약(OriginA.w=exponent,
+    // Color.w=radius)은 point 와 동형(A2 §4.5 표).
+    inline float3 tubePBR(float3 worldPos, float3 N, float3 V, float3 albedo,
+                          float roughness, float metallic, float3 specularTint,
+                          constant LightU& light, float4 rim,
+                          texture2d<float> gradientTex, sampler gradientSampler) {
+        float3 delta = pointSegmentDelta(worldPos, light.positionExponent.xyz, light.axis.xyz);
+        float distance = length(delta);
+        if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
+        float3 L = delta / distance;
+        if (dot(N, L) <= 0.0) return float3(0.0);
+        float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
+                                               light.positionExponent.w);
+        float3 radiance = light.colorRadius.xyz * attenuation;
+        return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint,
+                         light.colorRadius.xyz, rim, gradientTex, gradientSampler) * radiance;
+    }
+
     inline int pointShadowFace(float3 delta) {
         float3 absolute = abs(delta);
         if (absolute.x >= absolute.y && absolute.x >= absolute.z) return delta.x >= 0.0 ? 0 : 1;
@@ -289,8 +321,8 @@ enum Mesh3DShaders {
         return float2(1.0, 2.0);
     }
 
-    // F661(S-47): directional 섀도우 — F780 이후 2단계. cascades.w==3 이면 CSM 3-스플릿: 카메라 거리로
-    // 캐스케이드를 골라 point 와 같은 2×3 셀 배치의 셀(0..2)을 샘플(VP 슬롯 shadow.y+cascade). 아니면
+    // F661(S-47): directional 섀도우 — F780 이후 2단계. cascades.w==3 이면 CSM 3-스플릿: WE mix 체인
+    // (캐스케이드별 투영 박스 포함 검사, 아래 주석)으로 골라 point 와 같은 2×3 셀 배치의 셀(0..2)을 샘플(VP 슬롯 shadow.y+cascade). 아니면
     // 종전 단일 오소(아틀라스 슬라이스 전체, VP shadow.y 하나). PCF 는 point 경로와 동일 9탭 공유.
     inline float directionalShadowVisibility(float3 worldPos,
                                              constant LightU& light,
@@ -302,14 +334,31 @@ enum Mesh3DShaders {
         float2 uv, uvMin, uvMax;
         float referenceDepth;
         if (light.cascades.w > 2.5) {
-            // F780: CSM — 카메라-표면 거리로 슬라이스 선택. 마지막 경계 밖은 맵 없음(lit 폴터).
-            float viewDist = distance(frame.cameraEye.xyz, worldPos);
-            if (viewDist >= light.cascades.z) return 1.0;
-            int cascade = viewDist < light.cascades.x ? 0 : (viewDist < light.cascades.y ? 1 : 2);
-            float4 projected = shadowVP[int(light.shadow.y + 0.5) + cascade] * float4(worldPos, 1.0);
-            if (projected.w <= 0.0) return 1.0;
-            float3 ndc = projected.xyz / projected.w;
-            if (ndc.z < 0.0 || ndc.z > 1.0) return 1.0;
+            // CSM 선택 — WE 정본(common_pbr_2.h:131-147 CalculateProjectedCoordsCascades +
+            // A2-pbr-lighting.md §4.4 directional mix 체인): 각 캐스케이드 VP 로 투영해 NDC 박스
+            // (|xy|<0.99, z 가장자리 이내) 포함 여부로 mix — 종전 radial distance(eye, worldPos)
+            // 비교(F780 근사)를 대체한다. 캐스케이드 xy 피팅이 카메라 프러스텀 슬라이스([near,d0]/
+            // [d0,d1]/[d1,d2])라 박스 선택은 사실상 뷰 z(far 평면) 기준이며 측면 범위 검사도 겸한다.
+            // (cameraForward 유니폼 신설 없이 기존 shadowVP 만으로 결정되므로 dot(worldPos-eye, fwd)
+            //  근사보다 엔진 수식 그대로인 이 형태를 택했다.)
+            int vpBase = int(light.shadow.y + 0.5);
+            float4 p0 = shadowVP[vpBase + 0] * float4(worldPos, 1.0);
+            float4 p1 = shadowVP[vpBase + 1] * float4(worldPos, 1.0);
+            float4 p2 = shadowVP[vpBase + 2] * float4(worldPos, 1.0);
+            if (p0.w <= 0.0 || p1.w <= 0.0 || p2.w <= 0.0) return 1.0;
+            float3 ndc0 = p0.xyz / p0.w;
+            float3 ndc1 = p1.xyz / p1.w;
+            float3 ndc2 = p2.xyz / p2.w;
+            // WE: step(1.0, dot(CAST3(1.0), step(0.99, abs(proj.xyz)))) — 비-REVERSEDEPTH lane.
+            // Metal NDC z(0..1)는 WE GLSL z(-1..1)와 달리 ±1 로 재중심해 같은 0.99 임계를 쓴다.
+            float out0 = step(0.99, max(abs(ndc0.x), max(abs(ndc0.y), abs(ndc0.z * 2.0 - 1.0))));
+            float out1 = step(0.99, max(abs(ndc1.x), max(abs(ndc1.y), abs(ndc1.z * 2.0 - 1.0))));
+            float out2 = step(0.99, max(abs(ndc2.x), max(abs(ndc2.y), abs(ndc2.z * 2.0 - 1.0))));
+            // mix 체인(A2 §4.4): mix(mix(pc0,pc1,w0),pc2,w1) — 인덱스도 같은 체인(uvTransforms 대응).
+            // 전 캐스케이드 밖(out2=1)은 WE 의 max(pc3.w, shadow)=1 과 동치라 lit 폴터.
+            if (out2 > 0.5) return 1.0;
+            int cascade = int(mix(mix(0.0, 1.0, out0), 2.0, out1) + 0.5);
+            float3 ndc = mix(mix(ndc0, ndc1, out0), ndc2, out1);
             // 셀 낭비 없이 point 경로와 동일 규약(0.49 보정, y 플립, 2×3 배치)으로 셀 i 에 매핑.
             float2 cell = pointShadowCell(cascade);
             float2 localUV = ndc.xy * float2(0.49, -0.49) + 0.5;
@@ -423,7 +472,7 @@ enum Mesh3DShaders {
                             constant FrameU& frame [[buffer(2)]],
                             constant LightU* lights [[buffer(3)]],
                             constant float4x4* shadowVP [[buffer(4)]]) {
-        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::repeat);
         // gradient_toon_smooth 는 clampuvs 자산(F274 실측) — 램프 끝(NL≈0/1)에서 wrap 대신 edge 고정.
         constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
         float4 sampled = tex.sample(s, in.uv) * u.tint;
@@ -454,8 +503,11 @@ enum Mesh3DShaders {
                 float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
                 direct += visibility * directionalPBR(N, V, albedo, u.material.x, u.material.y,
                                                       u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
-            } else {                   // spot: 감쇠 + 콘(섀도우 스코프 밖)
+            } else if (kind < 2.5) {   // spot: 감쇠 + 콘(섀도우 스코프 밖)
                 direct += spotPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                  u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            } else {                   // tube(kind 4): 세그먼트 최근접점 유한광(무섀도우 — WE 정본)
+                direct += tubePBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
                                   u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
             }
         }
@@ -486,7 +538,7 @@ enum Mesh3DShaders {
                               // x=DecompressNormal 포맷(0=블록압축/1=RG88/2=그 외), y=마스크 보유,
                               // z=노멀맵 보유, w=미사용.
                               constant float4& normalParams [[buffer(5)]]) {
-        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::repeat);
         constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
         float4 sampled = tex.sample(s, in.uv) * u.tint;
         if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
@@ -555,8 +607,11 @@ enum Mesh3DShaders {
                 float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
                 direct += visibility * directionalPBR(N, V, albedo, roughness, metallic,
                                                       u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
-            } else {
+            } else if (kind < 2.5) {   // spot
                 direct += spotPBR(in.worldPos, N, V, albedo, roughness, metallic,
+                                  u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            } else {                   // tube(kind 4 — 무섀도우)
+                direct += tubePBR(in.worldPos, N, V, albedo, roughness, metallic,
                                   u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
             }
         }
@@ -590,7 +645,7 @@ enum Mesh3DShaders {
                                constant LightU* lights [[buffer(3)]],
                                constant float4x4* shadowVP [[buffer(4)]],
                                constant float4& refractParams [[buffer(5)]]) {
-        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::repeat);
         constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
         // 씬 스냅샷은 화면 경계 클램프(2D f_refract 와 동일 — repeat 면 오프셋이 가장자리에서 반대편을 샘플).
         constexpr sampler fbSampler(filter::linear, address::clamp_to_edge);
@@ -629,8 +684,11 @@ enum Mesh3DShaders {
                 float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
                 direct += visibility * directionalPBR(N, V, albedo, u.material.x, u.material.y,
                                                       u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
-            } else {
+            } else if (kind < 2.5) {   // spot
                 direct += spotPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                  u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+            } else {                   // tube(kind 4 — 무섀도우)
+                direct += tubePBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
                                   u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
             }
         }
@@ -666,7 +724,7 @@ enum Mesh3DShaders {
                                constant float4x4* shadowVP [[buffer(4)]],
                                constant float4& reflectParams [[buffer(5)]],
                                constant float4x4& viewProj [[buffer(6)]]) {
-        constexpr sampler s(filter::linear, mip_filter::none, address::repeat);
+        constexpr sampler s(filter::linear, mip_filter::linear, address::repeat);
         constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
         // 씬 스냅샷은 화면 경계 클램프(REFRACT 의 fbSampler 와 동일 규약).
         constexpr sampler fbSampler(filter::linear, address::clamp_to_edge);
@@ -696,8 +754,11 @@ enum Mesh3DShaders {
                     float visibility = directionalShadowVisibility(in.worldPos, lights[i], frame, shadowVP, shadowAtlas);
                     direct += visibility * directionalPBR(N, V, albedo, u.material.x, u.material.y,
                                                           u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
-                } else {
+                } else if (kind < 2.5) {
                     direct += spotPBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
+                                      u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
+                } else {               // tube(kind 4 — 무섀도우)
+                    direct += tubePBR(in.worldPos, N, V, albedo, u.material.x, u.material.y,
                                       u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
                 }
             }

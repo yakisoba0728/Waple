@@ -31,9 +31,15 @@ import simd
 /// 서브메시×meshCount:
 ///   cstring 머티리얼 | u32(=0) | AABB(min 3f, max 3f = 24B) | u32 formatFlag | u32 정점블롭크기 |
 ///   정점×N | u32 인덱스블롭크기 | u16 트라이앵글 인덱스
-///   [메시 사이 구분자 6×u8 0]
+///   [v≥21 메시 트레일러: u8 gateA[≠0: u32+u32 size+blob] | u8 gateB[≠0: u32 size+blob(16B×N)]
+///    | (v≥23) u32 모프count+레코드 — 전부 0 이면 v23 은 정확히 6바이트(= 종전 '6×u8 0 구분자').
+///    마지막 메시 뒤에도 존재. v<21 은 트레일러 부재(엔진 정본 :1214 v 게이트)]
 /// (스키닝 모델) "MDLS0004" | u8 0 | u32 nextOff | u32 본수 |
-///   본별: cstring 이름 | u32 flags | i32 부모 | u32 64 | float4x4 바인드 | cstring props
+///   본별: cstring 이름 | u32 flags | i32 부모 | u32 64 | float4x4 바인드 | cstring props |
+///   꼬리 T1..T7(태그 레코드/게이트 mat4/제약/중첩 그룹/링크/(3f+mat4)×본수/u32×본수 ×2)
+///   — parseSkeletonTail 로 파스해 skeletonTail 에 노출(파스·보존, 소비 보류). 레이아웃 상세는
+///   SkeletonTail 주석 참조(디컴파일+어셈블리 대조, 실물 418파일 전수 착지 검증).
+/// 파일 말미에는 단일 0x00 종단자(엔진 섹션 루프의 빈 cstring — 실물 418/418).
 /// (스키닝 모델) "MDAT0001" 이름-본 부착점 섹션 — parseAttachments()로 파싱, "MDLA0006" 애니메이션 섹션.
 ///
 /// 정점 포맷(formatFlag 하위 바이트 0x0f = pos+normal+tangent+uv; 비트 0x01800000 = 스키닝):
@@ -81,6 +87,47 @@ public struct Model3D: Equatable {
         public let skinned: Bool
         public let vertices: [Vertex]
         public let indices: [UInt16]           // 트라이앵글 리스트(count % 3 == 0)
+        /// v≥21 메시 트레일러(게이트A/B 블롭 + v≥23 모프 레코드). 전부 0 인 트레일러(= 종전
+        /// '6바이트 구분자')는 nil — 데이터가 있을 때만 채운다. 파스·보존, 렌더 소비는 범위 밖.
+        public var trailer: MeshTrailer? = nil
+    }
+
+    /// 메시 트레일러 gateA 블롭 — u32 word + u32 size + size 바이트
+    /// (어셈블리 0x140261c3b-0x140261c66: u8 게이트 ≠ 0 시 u32(FUN_14009c630, 값 미소비) +
+    /// 블롭(FUN_14009c690 = u32 size + bytes)).
+    public struct GateBlob: Equatable {
+        public let word: UInt32
+        public let data: Data
+        public init(word: UInt32, data: Data) { self.word = word; self.data = data }
+    }
+
+    /// v≥23 모프/마스크 레코드 — 스트림: u64 id | cstring name | u32 flags | u32 n1 | n1×u32 |
+    /// u32 n2 | n2×u32 (디컴파일 :1227-1457 + 어셈블리 0x140261cb0-0x1402620e3 — 첫 리드는
+    /// func_0x000140261780 = u64, 두 번째가 FUN_14009c5d0 cstring). 인덱스들은 gateB 16B 레코드
+    /// 참조(엔진은 레코드 수 N 이상 시 trap — 어셈블리 `cmp r12d,[rbp+0x110]`). 실물 12파일:
+    /// name 은 전부 "masks/clipping_mask_*". 모프 렌더 소비는 범위 밖 — 파스·보존.
+    public struct MorphTarget: Equatable {
+        public let id: UInt64                  // 선행 8B — 의미 미확정(실물 값 소수, 상위 u32 는 0)
+        public let name: String
+        public let flags: UInt32
+        public let indicesA: [UInt32]          // n1×u32
+        public let indicesB: [UInt32]          // n2×u32
+        public init(id: UInt64, name: String, flags: UInt32, indicesA: [UInt32], indicesB: [UInt32]) {
+            self.id = id; self.name = name; self.flags = flags
+            self.indicesA = indicesA; self.indicesB = indicesB
+        }
+    }
+
+    /// v≥21 메시 트레일러(디컴파일 :1214-1457 + 실물 418파일 전수 착지 검증 2026-07-28).
+    /// 실물 관측: gateA 86파일(전부 단일메시 퍼펫, word=1, blob = 정점수×12B vec3 — 퍼펫워프
+    /// 데이터 추정, 미확정), gateB 190파일(16B×N 레코드 — 실물 다수가 12B 0 + u32 패턴),
+    /// 모프 12파일. 전부 파스·보존(소비 보류).
+    public struct MeshTrailer: Equatable {
+        public var gateA: GateBlob? = nil      // gateA ≠ 0 일 때만
+        public var gateB: Data? = nil          // gateB ≠ 0 일 때만(16B×N 레코드 원바이트)
+        public var morphs: [MorphTarget] = []  // v≥23, count > 0 일 때만
+        public init() {}
+        public var isEmpty: Bool { gateA == nil && gateB == nil && morphs.isEmpty }
     }
 
     /// 스켈레톤 본(스키닝 모델만). 좌표계·부모 규약은 2D 퍼펫과 동일. bind = 부모상대 로컬 레스트 변환
@@ -131,8 +178,122 @@ public struct Model3D: Equatable {
         }
     }
 
+    /// MDLS0002/0003/0004 스켈레톤 꼬리(T1..T7) — 본 레코드 뒤·다음 섹션 앞 블록들의 타입화 파스.
+    /// 근거: 디컴파일 FUN_140261950:262-1059 + 어셈블리(wallpaper64.exe 0x14026269a-0x140263a00,
+    /// 디컴파일 결락분 복구) + 실물 418파일 전수 착지 검증(2026-07-28 — 다음 섹션 매직/말미 NUL
+    /// 로의 정확 착지). **전부 파스·보존, 런타임 소비 보류** — IK/스프링을 포즈 평가에 반영하는
+    /// 소비처 공식은 이 디코더 함수 밖에 있어 이번 대조에서 읽히지 않는다(추측 구현 금지).
+    /// 스트림 레이아웃(본 레코드 직후 순서):
+    ///   T1  u16 C1 | C1 × (cstring tag | u32 bone | u32 flags | 64B mat4)     [어셈 0x1402626a0-0x1402627d9]
+    ///   T2  u8 gate | gate≠0: 본수 × 64B mat4                                 [디컴 :284-328]
+    ///   T3  u32 C2 | C2 × (u32 bone | f32 | f32 | [MDLS≥4: u32 flags | flags&2: f32 f32])
+    ///                                                               [어셈 0x14026292f-0x140262a22, v 게이트 `cmp r15d,4`]
+    ///   T4a u16 C3 | C3×u32 | C3 × (u16 D | D × (u32 | f32 | f32 | u32))      [어셈 0x140262b04-0x140262ca0 — 디컴파일 결락]
+    ///   T4b u16 C4 | C4 × (u32 bone | u32 B | B×u32 | u16 C | C × (u32 idx | u16 D |
+    ///               D × (16B | u16 E | E×u32)))                             [어셈 0x140262d9b-0x140263500]
+    ///   T5  u8 gate | gate≠0: 본수 × (3f + mat4) = 76B                        [디컴 :857-940]
+    ///   T6  u8 gate | gate≠0: 본수 × u32                                      [디컴 :941-1002]
+    ///   T7  [MDLS≥3] u8 gate | gate≠0: 본수 × u32                             [디컴 :1003-1059, v 게이트 `2 < ver`]
+    public struct SkeletonTail: Equatable {
+        /// T1 태그 레코드 — 마스터 문서 §4 의 본 태그('gd'/'m '/'tf'/'ik'/'ikce'/'se'/'re') 대응
+        /// 데이터. 실물 418파일 중 1파일·8레코드만 존재(tag 는 전부 빈 문자열). flags==1 이면
+        /// 엔진이 bone→레코드 매핑에 등록(T3 제약의 리다이렉트 대상 — 디컴파일 :410-427).
+        public struct TagRecord: Equatable {
+            public let tag: String
+            public let bone: UInt32
+            public let flags: UInt32
+            public let matrix: simd_float4x4
+            public init(tag: String, bone: UInt32, flags: UInt32, matrix: simd_float4x4) {
+                self.tag = tag; self.bone = bone; self.flags = flags; self.matrix = matrix
+            }
+        }
+
+        /// T3 제약 엔트리(엔진은 0x14B 로 저장: flags + 4f). a/b = 선행 2f, flags = MDLS0004
+        /// 전용 4번째 워드(그 미만 버전은 필드 부재 → 0), extra = flags&2 시 추가 2f(엔진은
+        /// 두 번째 값에 하한 클램프 — 디컴파일 :380-388, 의미 미확정). 실물 418파일 전부 C2=0.
+        public struct Constraint: Equatable {
+            public let bone: UInt32
+            public let a: Float
+            public let b: Float
+            public let flags: UInt32
+            public let extra: SIMD2<Float>?
+            public init(bone: UInt32, a: Float, b: Float, flags: UInt32, extra: SIMD2<Float>?) {
+                self.bone = bone; self.a = a; self.b = b; self.flags = flags; self.extra = extra
+            }
+        }
+
+        /// T4a 16B 레코드(u32 | f32 | f32 | u32) — 실물(cat11): index 는 본 인덱스,
+        /// x/y 는 ~±1 부동소수(스프링 파라미터 추정, 미확정), value 는 0.
+        public struct GroupRecord: Equatable {
+            public let index: UInt32
+            public let x: Float
+            public let y: Float
+            public let value: UInt32
+            public init(index: UInt32, x: Float, y: Float, value: UInt32) {
+                self.index = index; self.x = x; self.y = y; self.value = value
+            }
+        }
+
+        /// T4a 블록 — values = 선행 C3×u32 배열(실물은 f32 비트 해석이 자연스러움: 6~37 범위),
+        /// groups = 외측 C3 개의 u16 D-그룹(실물은 C3==본수). 스프링본 블록 추정(미확정).
+        public struct GroupBlock: Equatable {
+            public let values: [UInt32]
+            public let groups: [[GroupRecord]]
+            public init(values: [UInt32], groups: [[GroupRecord]]) {
+                self.values = values; self.groups = groups
+            }
+        }
+
+        /// T4b D-원소: 16B(4f) + u16 E + E×u32.
+        public struct LinkElem: Equatable {
+            public let vec: SIMD4<Float>
+            public let indices: [UInt32]
+            public init(vec: SIMD4<Float>, indices: [UInt32]) { self.vec = vec; self.indices = indices }
+        }
+
+        /// T4b 서브레코드: u32 idx(엔진은 본수 미만 검사) | u16 D | D×LinkElem.
+        public struct LinkSub: Equatable {
+            public let index: UInt32
+            public let elems: [LinkElem]
+            public init(index: UInt32, elems: [LinkElem]) { self.index = index; self.elems = elems }
+        }
+
+        /// T4b C4 레코드: u32 bone | u32 B | B×u32 | u16 C | C×LinkSub. refs 는 T1 태그
+        /// 레코드 인덱스(엔진은 T1 수 미만 검사 — 어셈블리 `sar rax,7; cmp` 후 trap; 실물 cat11 유효).
+        public struct LinkRecord: Equatable {
+            public let bone: UInt32
+            public let refs: [UInt32]
+            public let subs: [LinkSub]
+            public init(bone: UInt32, refs: [UInt32], subs: [LinkSub]) {
+                self.bone = bone; self.refs = refs; self.subs = subs
+            }
+        }
+
+        /// T5 본 변환: 3f 오프셋 + mat4(실물 다수 파일 보유, 회전+평행이동 패턴).
+        public struct BoneTransform: Equatable {
+            public let offset: SIMD3<Float>
+            public let matrix: simd_float4x4
+            public init(offset: SIMD3<Float>, matrix: simd_float4x4) {
+                self.offset = offset; self.matrix = matrix
+            }
+        }
+
+        public var tags: [TagRecord] = []            // T1
+        public var extraBinds: [simd_float4x4] = []  // T2 게이트 시 본수 개
+        public var constraints: [Constraint] = []    // T3
+        public var groups: GroupBlock? = nil         // T4a
+        public var links: [LinkRecord] = []          // T4b
+        public var boneTransforms: [BoneTransform] = []  // T5 게이트 시 본수 개
+        public var boneIndices: [UInt32] = []        // T6 게이트 시 본수 개(실물 cat11: 0..<본수 순열 — 본 인덱스 재배열)
+        public var boneParams: [UInt32] = []         // T7 게이트 시 본수 개(MDLS≥3; 실물 cat11: 정수 오프셋열, 의미 미확정)
+        public init() {}
+    }
+
     public let meshes: [Mesh]
     public var bones: [Bone] = []
+    /// MDLS 꼬리(T1..T7) — bones 파스 성공 + 꼬리 프레이밍이 다음 섹션 매직/EOF 로 검증된
+    /// 경우에만 채운다(검증 실패 시 nil, 종전 매직 스캔 폴백과 동일 동작). 파스·보존 전용.
+    public var skeletonTail: SkeletonTail? = nil
     /// MDAT0001 부착점(스켈레톤 트레일러 뒤·MDLA 앞). 없으면 빈 배열(무부착).
     public var attachments: [Attachment] = []
     /// MDLA0006 애니 섹션 존재 여부(매직 탐지 — animations 가 비어도 마커는 true).
@@ -143,6 +304,58 @@ public struct Model3D: Equatable {
     /// 스키닝 정점 포맷 비트(formatFlag & 이 마스크 != 0 → 스키닝 선언 — 실제 본/웨이트 필드 존재는
     /// 스트라이드 여유(skinFieldsFit)로 최종 판정).
     private static let skinMask: UInt32 = 0x0180_0000
+
+    /// 정점 채널 — 아는 채널만 읽고 미지 채널(.skip)은 크기만큼 건너뛴다.
+    private enum VertexChannel { case position, normal, tangent, boneIndices, weights, uv, skip }
+
+    /// 정점 레이아웃 테이블(wallpaper64.exe .rdata 원본 덤프로 확정 — FUN_1400d8060.c:81-96 의
+    /// (마스크,기여) 26엔트리 누산 루프와 동일 데이터: stride = set bit 기여 합산, 채널 오프셋은
+    /// **테이블 인덱스 오름차순** 누적(비트 값 순이 아님 — idx5 0x800000 이 idx9 0x20 보다 앞).
+    /// 검산(전부 일치): 0x0f→48, 0x0f|skinMask→80, 0x09|skin→52, Kirby 0x00800021→44(pos@0,
+    /// boneIdx@12, TEXCOORD0 float4@28), sl_puppet 0x0181000e→84. TEXCOORD1-5(idx10-24)는 비트
+    /// 대응 미대조라 미포함 — 해당 비트를 달리는 플래그는 테이블 불해결 → 기존 추측 경로 유지(무회귀).
+    private static let vertexLayoutTable: [(bit: UInt32, size: Int, ch: VertexChannel)] = [
+        (0x0000_0001, 12, .position),     // idx0 POSITION float3
+        (0x0001_0000, 16, .position),     // idx1 16B pos계열(morph 후보 — idx0 부재 시 pos 로 읽음, sl_puppet)
+        (0x0200_0000, 12, .position),     // idx2 12B pos계열(〃)
+        (0x0000_0002, 12, .normal),       // idx3 NORMAL float3
+        (0x0000_0004, 16, .tangent),      // idx4 TANGENT float4(w=handedness)
+        (0x0080_0000, 16, .boneIndices),  // idx5 BLENDINDICES uint4(R32G32B32A32_UINT)
+        (0x0100_0000, 16, .weights),      // idx6 BLENDWEIGHT float4
+        (0x0000_0008,  8, .uv),           // idx7 TEXCOORD0 float2
+        (0x0000_0010, 12, .uv),           // idx8 TEXCOORD0 float3(uv=.xy)
+        (0x0000_0020, 16, .uv),           // idx9 TEXCOORD0 float4(uv=.xy — Kirby)
+        (0x0000_8000, 16, .skip),         // idx25 float4 채널(color 후보 — 미독)
+    ]
+
+    /// 테이블 산출 레이아웃(오프셋은 정점 선두 기준 바이트). uv 는 float2/3/4 공통 선두 .xy 만 읽는다.
+    private struct VertexLayout {
+        var stride = 0
+        var pos: Int? = nil, normal: Int? = nil, tangent: Int? = nil
+        var boneIndices: Int? = nil, weights: Int? = nil, uv: Int? = nil
+    }
+
+    /// 테이블로 stride/채널 오프셋 산출 — set bit 가 전부 기지 테이블에 있을 때만 성공. 미지 비트가
+    /// 하나라도 있으면 nil(호출측이 기존 축약 공식 + inferStride 추측 경로로 분기 — 무회귀).
+    private static func vertexLayout(for flag: UInt32) -> VertexLayout? {
+        var known: UInt32 = 0
+        for e in vertexLayoutTable { known |= e.bit }
+        guard flag != 0, flag & ~known == 0 else { return nil }
+        var l = VertexLayout()
+        for e in vertexLayoutTable where flag & e.bit != 0 {
+            switch e.ch {
+            case .position: if l.pos == nil { l.pos = l.stride }   // pos계열 다수 시 첫 채널(idx0 우선)
+            case .normal: l.normal = l.stride
+            case .tangent: l.tangent = l.stride
+            case .boneIndices: l.boneIndices = l.stride
+            case .weights: l.weights = l.stride
+            case .uv: if l.uv == nil { l.uv = l.stride }
+            case .skip: break
+            }
+            l.stride += e.size
+        }
+        return l
+    }
 
     /// 수용 버전(전부 실물 바이트 대조 완료 2026-07-09): 0023 정본; 0021 동일 레이아웃(3367988661 전수,
     /// 스켈레톤 매직은 MDLS0003 — 본 레코드는 0004 와 바이트 동형, 코퍼스 17퍼펫 matrix size 64 전수);
@@ -201,25 +414,25 @@ public struct Model3D: Equatable {
             // 정점 포맷 플래그(실측 4종 대조로 확정): bit1(0x2)=normal 3f, bit2(0x4)=tangent 4f,
             // skinMask=본/웨이트. pos 3f 와 uv 2f 는 전 변형 공통(bit0/bit3 semantics 미상 — 무시).
             //   0x0f(48/80)  0x09(52, V0016)  0x0e(sl_puppet 84 변종)  0x21(Kirby channelmap 44).
+            // 정점 레이아웃은 vertexLayoutTable(stride·채널 오프셋)로 산출한다 — set bit 가 전부 기지
+            // 테이블이면 그대로 채택(표준 0x0f/0x09/+skin 은 종전 공식과 바이트 동일, Kirby 0x00800021
+            // 의 pos@0/boneIdx@12/TEXCOORD0 float4@28 도 이 테이블이 산출).
             // 변종 스트라이드 자기기술 추론(2026-07-06, 실물 sl_puppet.mdl = 84 = 기지 80 + 미상 4B):
-            // 표 스트라이드로 안 나눠지면 인덱스 블롭의 maxIndex+1 을 정점 수로 보고 vSize/count 가
-            // 정수(20..96)면 채택. 필드는 꼬리 고정(uv@-8, weights@-24, bones@-40), 중간은 고전 오프셋.
-            // S3-mdl 참고(후속 착수점, bit0/bit3·84B 변종 미상을 known-unknown 으로 격상): AABB 게이트
-            // 직후 LAB_140261b0a(디컴파일 1179행)부터 언롤 24항(마스크 배열 base `_DAT_140484af0`,
-            // 기여값 배열 base `_DAT_140484a80`, 각 +4×index) + 루프 2항(`while (lVar23 != 0x1a)`, 같은
-            // 두 배열의 index 24-25 를 `lVar22+0x484a20/+0x4849b0+lVar23*4` 로 계속 인덱싱 — 두 산출
-            // 주소가 언롤부 시작 주소와 일치함을 직접 계산 확인) = **26개 (마스크,기여) 엔트리** 누산
-            // 테이블이 엔진에 존재, 헤더 오프셋9 formatFlag(uVar19=local_428, 위 z 와는 다른 필드)를
-            // 키로 쓰는 것으로 보인다. 단 합산 결과(local_2dc)는 이 함수 안에서 정의(1181/1207행)만
-            // 되고 이후 읽히는 곳이 없음(grep 확인) — 즉 소비처는 FUN_140261950 밖에 있다는 것까지가
-            // 이번 대조의 결론이고, 후속 착수 시 그 소비처 추적이 시작점. unknown-unknown 이 아니라
-            // "이 테이블의 특정 엔트리"라는 known-unknown 으로 격상, 구현은 보류(마스크 상수 값 자체와
-            // 4 서브그룹의 정확한 인덱스 대응은 미대조).
+            // 테이블 불해결(미지 비트)이거나 테이블 stride 로 안 나눠지면 인덱스 블롭의 maxIndex+1 을
+            // 정점 수로 보고 vSize/count 가 정수(20..96)면 채택. 이 추론 경로의 필드는 종전대로
+            // 꼬리 고정(uv@-8, weights@-24, bones@-40), 중간은 고전 오프셋(테이블 미적용).
+            // S3-mdl(2026-07-27) 대조로 엔진 측 원본 확인: AABB 게이트 직후 LAB_140261b0a(디컴파일
+            // 1179행)부터 언롤 24항(마스크 배열 base `_DAT_140484af0`, 기여값 배열 base
+            // `_DAT_140484a80`, 각 +4×index) + 루프 2항(`while (lVar23 != 0x1a)`) = **26개
+            // (마스크,기여) 엔트리** 누산 테이블, 헤더 오프셋9 formatFlag 를 키로 사용. 이후
+            // .rdata 테이블 원본 덤프(FUN_1400d8060.c:81-96 의 소비처 — D3D 입력 레이아웃의
+            // AlignedByteOffset 누적)으로 마스크/기여 상수 전수 확정 → vertexLayoutTable 로 구현.
             var minx: Float = 0, miny: Float = 0, minz: Float = 0
             var maxx: Float = 0, maxy: Float = 0, maxz: Float = 0
             var formatFlag: UInt32 = 0
             var stride = 0
             var vSize = 0
+            var layout: VertexLayout? = nil
             var framed = false
             probe: for extra in 0...2 {
                 var q = o + extra * 4
@@ -235,15 +448,17 @@ public struct Model3D: Equatable {
                 let vs = Int(vsRaw)
                 guard vs > 0, q + 8 + vs <= bytes.count else { continue }
                 let skin = (flag & skinMask) != 0
-                var s = 12 + (flag & 0x2 != 0 ? 12 : 0) + (flag & 0x4 != 0 ? 16 : 0) + (skin ? 32 : 0) + 8
+                var lay = vertexLayout(for: flag)
+                var s = lay?.stride ?? (12 + (flag & 0x2 != 0 ? 12 : 0) + (flag & 0x4 != 0 ? 16 : 0) + (skin ? 32 : 0) + 8)
                 if vs % s != 0 {
                     guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 8 + vs, vSize: vs),
                           inferred >= 20 else { continue }   // pos(12)+uv(8) 최소
                     s = inferred
+                    lay = nil   // 추론 스트라이드는 테이블 산출이 아님 — 채널 오프셋도 꼬리고정 경로로
                 }
                 (minx, miny, minz) = (box[0], box[1], box[2])
                 (maxx, maxy, maxz) = (box[3], box[4], box[5])
-                formatFlag = flag; stride = s; vSize = vs
+                formatFlag = flag; stride = s; vSize = vs; layout = lay
                 o = q + 8
                 framed = true
                 break
@@ -253,39 +468,56 @@ public struct Model3D: Equatable {
             let hasNormal = formatFlag & 0x2 != 0
             let hasTangent = formatFlag & 0x4 != 0
             let vCount = vSize / stride
-            // 본/웨이트 필드는 스트라이드에 실제 자리가 있을 때만 읽는다. 스키닝 선언이라도 자리가 없으면
-            // (Kirby channelmap: flag 0x00800021, stride 44 = pos+미상24B+uv) pos+uv 만 — 가중 0 스킨 합성으로
-            // 정점이 원점 붕괴하는 것보다 정적 메시가 낫다(graceful degradation).
-            let skinFieldsFit = skinned && stride >= 12 + (hasNormal ? 12 : 0) + (hasTangent ? 16 : 0) + 40
+            // 본/웨이트 필드는 실제 채널이 있을 때만 읽는다. 스키닝 선언이라도 웨이트 채널이 없으면
+            // (Kirby channelmap: flag 0x00800021 — 테이블상 pos@0, boneIdx@12, TEXCOORD0 float4@28,
+            // weights 부재) pos+uv 만 — 가중 0 스킨 합성으로 정점이 원점 붕괴하는 것보다 정적 메시가
+            // 낫다(graceful degradation).
+            let skinFieldsFit: Bool
+            if let l = layout {
+                skinFieldsFit = skinned && l.boneIndices != nil && l.weights != nil && l.uv != nil
+            } else {
+                skinFieldsFit = skinned && stride >= 12 + (hasNormal ? 12 : 0) + (hasTangent ? 16 : 0) + 40
+            }
 
             var vertices: [Vertex] = []
             vertices.reserveCapacity(vCount)
             for vi in 0..<vCount {
                 let b = o + vi * stride
-                guard let px = f32(b), let py = f32(b + 4), let pz = f32(b + 8) else { return nil }
-                let pos = SIMD3<Float>(px, py, pz)
+                var pos = SIMD3<Float>.zero
                 var nrm = SIMD3<Float>(0, 0, 1)                       // 부재 시 기본(2D 퍼펫은 미사용)
-                if hasNormal {
-                    guard let nx = f32(b + 12), let ny = f32(b + 16), let nz = f32(b + 20) else { return nil }
+                var tan = SIMD4<Float>(1, 0, 0, 1)
+                // 채널 오프셋: 테이블 레이아웃이면 테이블 값, 아니면 종전 고전/꼬리고정 오프셋.
+                let posOff = layout?.pos ?? 0
+                guard let px = f32(b + posOff), let py = f32(b + posOff + 4), let pz = f32(b + posOff + 8)
+                else { return nil }
+                pos = SIMD3<Float>(px, py, pz)
+                let readNormal = layout.map { $0.normal != nil } ?? hasNormal
+                if readNormal, let no = layout?.normal ?? (hasNormal ? 12 : nil) {
+                    guard let nx = f32(b + no), let ny = f32(b + no + 4), let nz = f32(b + no + 8) else { return nil }
                     nrm = SIMD3(nx, ny, nz)
                 }
-                var tan = SIMD4<Float>(1, 0, 0, 1)
-                if hasTangent {
-                    let to = b + 12 + (hasNormal ? 12 : 0)
-                    guard let tx = f32(to), let ty = f32(to + 4), let tz = f32(to + 8), let tw = f32(to + 12)
+                let readTangent = layout.map { $0.tangent != nil } ?? hasTangent
+                if readTangent, let to = layout?.tangent ?? (hasTangent ? 12 + (hasNormal ? 12 : 0) : nil) {
+                    guard let tx = f32(b + to), let ty = f32(b + to + 4), let tz = f32(b + to + 8), let tw = f32(b + to + 12)
                     else { return nil }
                     tan = SIMD4(tx, ty, tz, tw)
                 }
                 if skinFieldsFit {
-                    let bo = b + stride - 40, wo = b + stride - 24, uo = b + stride - 8
+                    // 테이블: 채널 오프셋 직독 / 추론 경로: 종전 꼬리고정.
+                    let bo = b + (layout?.boneIndices ?? stride - 40)
+                    let wo = b + (layout?.weights ?? stride - 24)
+                    let uo = b + (layout?.uv ?? stride - 8)
                     guard let b0 = u32(bo), let b1 = u32(bo + 4), let b2 = u32(bo + 8), let b3 = u32(bo + 12),
                           let w0 = f32(wo), let w1 = f32(wo + 4), let w2 = f32(wo + 8), let w3 = f32(wo + 12),
                           let u = f32(uo), let v = f32(uo + 4) else { return nil }
                     vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v),
                                            boneIndices: SIMD4(b0, b1, b2, b3), weights: SIMD4(w0, w1, w2, w3)))
-                } else {
-                    guard let u = f32(b + stride - 8), let v = f32(b + stride - 4) else { return nil }
+                } else if let uo = layout?.uv ?? (stride >= 8 ? stride - 8 : nil) {
+                    // TEXCOORD0 가 float3/float4 여도 선두 .xy 만 읽는다(Kirby float4@28 — RE 테이블).
+                    guard let u = f32(b + uo), let v = f32(b + uo + 4) else { return nil }
                     vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v)))
+                } else {
+                    vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: .zero))
                 }
             }
             o += vSize
@@ -306,11 +538,24 @@ public struct Model3D: Equatable {
                                boundsMin: SIMD3(minx, miny, minz), boundsMax: SIMD3(maxx, maxy, maxz),
                                skinned: skinFieldsFit, vertices: vertices, indices: indices))
 
-            // 메시 사이 트레일러: u8 0 | u8 count | count×(u32 size | size 바이트) | u32 tail.
-            // 실측: 전 코퍼스 count=0(= 종전 '6바이트 0 구분자'와 바이트 동일), Kirby_puppet 만
-            // count=1(16B 블롭, 총 26B — 스킵하면 mesh1 'Kirby_channelmap' 이 정상 파스).
-            // 구조 불일치 시 종전 +6 폴백(무회귀). 마지막 메시 뒤에는 없음.
-            if mi < Int(meshCount) - 1 { o = meshTrailerEnd(bytes: bytes, at: o) ?? (o + 6) }
+            // 메시 트레일러(v≥21) — 엔진 정본 게이트 구조 정식 파스(디컴파일 FUN_140261950:1214-1457 +
+            // 어셈블리 0x140261c3b-0x1402620e3; 실물 418파일 전수 착지 검증 2026-07-28):
+            //   u8 gateA[≠0: u32 word + u32 size + blob] | u8 gateB[≠0: u32 size + blob(16B×N)]
+            //   | (v≥23) u32 모프count + 레코드.
+            // 전부 0 이면 v23 은 정확히 6바이트(= 종전 '6바이트 구분자'와 바이트 동형 — Kirby 의
+            // gateB=1+16B 도 동형이라 종전 휴리스틱이 우연히 통과했던 것), v21/22 는 2바이트,
+            // v<21 은 트레일러 자체 부재(엔진이 v≥21 에서만 리드 — 디컴파일 :1214 `if (0x14 < iVar17)`,
+            // 실물 v<21 파일은 전부 단일메시라 영향 없음). 마지막 메시 뒤에도 존재(실물 390/390).
+            // 구조 불일치(손상) 시: 메시 사이는 종전 +6 폴백(무회귀), 마지막 메시 뒤는 진행
+            // 없이 매직 스캔(종전과 동일).
+            if version >= 21 {
+                if let t = parseMeshTrailer(bytes: bytes, at: o, version: version) {
+                    o = t.end
+                    if !t.trailer.isEmpty { meshes[mi].trailer = t.trailer }
+                } else if mi < Int(meshCount) - 1 {
+                    o += 6
+                }
+            }
         }
 
         var model = Model3D(meshes: meshes)
@@ -319,10 +564,11 @@ public struct Model3D: Equatable {
         // 마지막 메시와 스켈레톤 사이에 비제로 부가 블록이 있어(실물 3384019940 5/5 실측) 종전
         // '제로-스킵 후 정확 착지'로는 도달 불가였다. 실패/구조 불일치는 본 없이 반환(정적 메시 렌더 가능).
         // MDLS0002(V0016/17/19)는 본 레코드가 0004 와 동일(cstring|flags|parent|64|mat4|props cstring —
-        // WLOP GIRL 64본 props JSON 실측)하고, 레코드 뒤에 13+80×본수 바이트 꼬리가 더 있을 뿐이다.
-        // MDLS0003(MDLV0021 짝)도 본 레코드 바이트 동형(코퍼스 17퍼펫/7씬 matrix size 64 전수 실측).
-        // 꼬리는 파스하지 않는다 — 다음 섹션(MDLA)은 아래 매직 스캔이 찾는다.
-        // 수용 버전 0002/0003/0004 — 미목격 버전은 계속 거부(추측 파스 금지).
+        // WLOP GIRL 64본 props JSON 실측)하고, MDLS0003(MDLV0021 짝)도 본 레코드 바이트 동형
+        // (코퍼스 17퍼펫/7씬 matrix size 64 전수 실측). 본 레코드 뒤 꼬리(T1..T7 블록)는
+        // parseSkeletonTail 로 정식 파스해 skeletonTail 에 노출 — 종전의 '13+80×본수 꼬리' 기록은
+        // T1..T6 블록의 조합 근사치이고, '꼬리는 파스하지 않는다'는 정식 파스로 대체(실물 418파일
+        // 전수 착지 검증 2026-07-28). 수용 버전 0002/0003/0004 — 미목격 버전은 계속 거부(추측 파스 금지).
         if let si = findMagic("MDLS000", in: bytes, from: o), si + 9 <= bytes.count,
            (UInt8(ascii: "2")...UInt8(ascii: "4")).contains(bytes[si + 7]) {
             var p = si + 8 + 1  // magic + lead u8(0)
@@ -348,7 +594,18 @@ public struct Model3D: Equatable {
                     bones.append(Bone(name: name, parent: Int32(bitPattern: parentRaw),
                                       bind: simd_float4x4(cols[0], cols[1], cols[2], cols[3]), properties: props))
                 }
-                if boneOK { model.bones = bones }
+                if boneOK {
+                    model.bones = bones
+                    // MDLS 꼬리(T1..T7) 정식 파스 — 착지가 다음 섹션 매직/EOF/말미 NUL 로
+                    // 검증될 때만 노출하고 스캔 기준점을 전진(꼬리 내부 블롭의 매직 오탐 제거).
+                    // 검증 실패(손상/미지 변종)는 노출·전진 없음 — 종전 매직 스캔과 동일(무회귀).
+                    let mdlsVersion = Int(bytes[si + 7] - UInt8(ascii: "0"))
+                    if let (tail, end) = parseSkeletonTail(bytes: bytes, at: p, mdlsVersion: mdlsVersion,
+                                                           boneCount: Int(boneCount)) {
+                        model.skeletonTail = tail
+                        o = end
+                    }
+                }
             }
         }
 
@@ -371,7 +628,10 @@ public struct Model3D: Equatable {
     }
 
     /// MDAT0001 부착점 파스. 레이아웃(실측 7씬 다중 엔트리 정렬 전수 일치):
-    /// "MDAT0001" | u8 0 | u32 nextOff | u8 count | u8 padding |
+    /// "MDAT0001" | u8 0 | u32 nextOff | u16 count |
+    /// count×(u16 본인덱스 | cstring 이름(UTF-8) | 64B float4x4 로컬).
+    /// count 는 u16(엔진 정본: 디컴파일 FUN_140261950:1092-1099 의 FUN_140261750 u16 리드 — 종전
+    /// u8+pad 리드와 하위바이트 동일이라 pad=0 인 전 코퍼스에서 바이트 무차별, ≥256 도 수용).
     /// count×(u16 본인덱스 | cstring 이름(UTF-8) | 64B float4x4 로컬).
     /// 구조 불일치(본 인덱스 범위 밖 포함)는 빈 배열 — 추측 파스로 이상 부착을 만드느니 무부착이 낫다.
     static func parseAttachments(bytes: [UInt8], at magicOff: Int, boneCount: Int) -> [Attachment] {
@@ -381,10 +641,8 @@ public struct Model3D: Equatable {
         }
         func f32(_ o: Int) -> Float? { readU32LE(bytes, at: o).map { Float(bitPattern: $0) } }
         var p = magicOff + 8 + 1 + 4   // magic + u8(0) + u32 nextOff
-        guard p + 2 <= bytes.count else { return [] }
-        let count = Int(bytes[p])
-        guard count > 0, count < 256 else { return [] }
-        p += 2  // u8 count + 1 byte padding
+        guard let count = u16(p), count > 0 else { return [] }
+        p += 2  // u16 count
         var out: [Attachment] = []
         out.reserveCapacity(count)
         for _ in 0..<count {
@@ -520,20 +778,226 @@ public struct Model3D: Equatable {
     /// stride-2 인덱스 순회 헬퍼.
     private static func stride16(_ size: Int) -> StrideTo<Int> { stride(from: 0, to: size, by: 2) }
 
-    /// 메시 간 트레일러 파스: u8 0 | u8 count(≤16) | count×(u32 size | size 바이트) | u32 tail → 끝 오프셋.
-    /// count=0 이면 정확히 6바이트(종전 구분자와 동일). 패턴 불일치는 nil(호출측 +6 폴백).
-    private static func meshTrailerEnd(bytes: [UInt8], at p: Int) -> Int? {
-        guard p + 6 <= bytes.count, bytes[p] == 0 else { return nil }
-        let count = Int(bytes[p + 1])
-        guard count <= 16 else { return nil }
-        var q = p + 2
-        for _ in 0..<count {
-            guard q + 4 <= bytes.count else { return nil }
-            let size = Int(UInt32(bytes[q]) | (UInt32(bytes[q + 1]) << 8) | (UInt32(bytes[q + 2]) << 16) | (UInt32(bytes[q + 3]) << 24))
-            guard size >= 0, size <= bytes.count - q - 8 else { return nil }
-            q += 4 + size
+    /// 메시 트레일러 정식 파스(v≥21) — 성공 시 (끝 오프셋, 트레일러), 구조 불일치(트렁케이트/폭주
+    /// 카운트)는 nil(호출측 폴백). 근거: 디컴파일 FUN_140261950:1214-1457 + 어셈블리
+    /// (wallpaper64.exe): gateA 0x140261c3b-0x140261c66(u8 | u32 + u32 size + blob),
+    /// gateB 0x140261c6b-0x140261ca7(u8 | u32 size + blob, size>>4 = 16B 레코드 수),
+    /// 모프 0x140261ca7 `cmp edi,0x17`(v≥23 게이트) — 레코드: u64(func_0x000140261780) |
+    /// cstring(FUN_14009c5d0) | u32 flags | u32 n1 | n1×u32 | u32 n2 | n2×u32.
+    private static func parseMeshTrailer(bytes: [UInt8], at p: Int, version: Int) -> (end: Int, trailer: MeshTrailer)? {
+        func u32list(_ o: inout Int, _ n: Int) -> [UInt32]? {
+            guard n >= 0, o + n * 4 <= bytes.count else { return nil }
+            var out: [UInt32] = []
+            out.reserveCapacity(n)
+            for _ in 0..<n { out.append(readU32LE(bytes, at: o)!); o += 4 }   // 경계 사전검사 완료
+            return out
         }
-        return q + 4
+        var t = MeshTrailer()
+        var o = p
+        guard o + 1 <= bytes.count else { return nil }
+        let gateA = bytes[o]; o += 1
+        if gateA != 0 {
+            guard let word = readU32LE(bytes, at: o), let size = readU32LE(bytes, at: o + 4) else { return nil }
+            let s = Int(size)
+            guard o + 8 + s <= bytes.count else { return nil }
+            t.gateA = GateBlob(word: word, data: Data(bytes[o + 8 ..< o + 8 + s]))
+            o += 8 + s
+        }
+        guard o + 1 <= bytes.count else { return nil }
+        let gateB = bytes[o]; o += 1
+        if gateB != 0 {
+            guard let size = readU32LE(bytes, at: o) else { return nil }
+            let s = Int(size)
+            guard o + 4 + s <= bytes.count else { return nil }
+            t.gateB = Data(bytes[o + 4 ..< o + 4 + s])
+            o += 4 + s
+        }
+        if version >= 23 {
+            guard let mc = readU32LE(bytes, at: o), mc <= 4096 else { return nil }   // 실물 최대 6 — 폭주 캡
+            o += 4
+            var morphs: [MorphTarget] = []
+            morphs.reserveCapacity(Int(mc))
+            for _ in 0..<Int(mc) {
+                guard let lo = readU32LE(bytes, at: o), let hi = readU32LE(bytes, at: o + 4),
+                      let name = readCString(bytes, at: o + 8),
+                      let flags = readU32LE(bytes, at: name.next),
+                      let n1 = readU32LE(bytes, at: name.next + 4), n1 <= 1_048_576 else { return nil }
+                var o2 = name.next + 8
+                guard let ia = u32list(&o2, Int(n1)) else { return nil }
+                guard let n2 = readU32LE(bytes, at: o2), n2 <= 1_048_576 else { return nil }
+                o2 += 4
+                guard let ib = u32list(&o2, Int(n2)) else { return nil }
+                morphs.append(MorphTarget(id: UInt64(hi) << 32 | UInt64(lo), name: name.value,
+                                          flags: flags, indicesA: ia, indicesB: ib))
+                o = o2
+            }
+            t.morphs = morphs
+        }
+        return (o, t)
+    }
+
+    /// MDLS 꼬리(T1..T7) 정식 파스 — 성공+착지 검증 시 (꼬리, 착지 오프셋), 그 외 nil.
+    /// 착지 검증: 파스 끝이 다음 섹션 매직(MDLS/MDAT/MDLA/MDMP/MDLE) 또는 EOF 또는 말미 NUL
+    /// (엔진 섹션 루프 종단 빈 cstring — 실물 418/418 파일의 마지막 바이트) 중 하나여야 한다.
+    /// 이 검증이 실물 418파일 전수를 정확 착지시킨 기준과 동일(2026-07-28 하니스 대조).
+    private static func parseSkeletonTail(bytes: [UInt8], at start: Int, mdlsVersion v: Int,
+                                          boneCount: Int) -> (SkeletonTail, Int)? {
+        func u16(_ o: Int) -> Int? { readU16LE(bytes, at: o).map(Int.init) }
+        func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
+        func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
+        func mat4(_ o: Int) -> simd_float4x4? {
+            var cols: [SIMD4<Float>] = []
+            for c in 0..<4 {
+                guard let x = f32(o + c * 16), let y = f32(o + c * 16 + 4),
+                      let z = f32(o + c * 16 + 8), let w = f32(o + c * 16 + 12) else { return nil }
+                cols.append(SIMD4(x, y, z, w))
+            }
+            return simd_float4x4(cols[0], cols[1], cols[2], cols[3])
+        }
+        func u32list(_ o: inout Int, _ n: Int) -> [UInt32]? {
+            guard n >= 0, o + n * 4 <= bytes.count else { return nil }
+            var out: [UInt32] = []
+            out.reserveCapacity(n)
+            for _ in 0..<n { out.append(readU32LE(bytes, at: o)!); o += 4 }   // 경계 사전검사 완료
+            return out
+        }
+        var tail = SkeletonTail()
+        var o = start
+        // T1 태그 레코드(어셈블리 0x1402626a0-0x1402627d9: u16 C1 | C1 × (cstring | u32 | u32 | 64B)).
+        // 캡은 방어용(실물 최대 8) — 엔진 자체는 본수 상한 0x80 만 강제(디컴파일 :242).
+        guard let c1 = u16(o), c1 <= 1024 else { return nil }
+        o += 2
+        for _ in 0..<c1 {
+            guard let tag = readCString(bytes, at: o),
+                  let bone = u32(tag.next), let flags = u32(tag.next + 4),
+                  tag.next + 8 + 64 <= bytes.count,
+                  let m = mat4(tag.next + 8) else { return nil }
+            o = tag.next + 8 + 64
+            tail.tags.append(SkeletonTail.TagRecord(tag: tag.value, bone: bone, flags: flags, matrix: m))
+        }
+        // T2 u8 게이트 — 본수 × 64B(디컴파일 :284-328).
+        guard o + 1 <= bytes.count else { return nil }
+        if bytes[o] != 0 {
+            o += 1
+            guard o + boneCount * 64 <= bytes.count else { return nil }
+            for _ in 0..<boneCount {
+                guard let m = mat4(o) else { return nil }
+                tail.extraBinds.append(m)
+                o += 64
+            }
+        } else { o += 1 }
+        // T3 u32 C2 | 엔트리(어셈블리 0x14026292f-0x140262a22; 4번째 워드는 MDLS≥4 전용 `cmp r15d,4`).
+        guard let c2 = u32(o), c2 <= 1_048_576 else { return nil }
+        o += 4
+        for _ in 0..<Int(c2) {
+            guard let bone = u32(o), let a = f32(o + 4), let b = f32(o + 8) else { return nil }
+            o += 12
+            var flags: UInt32 = 0
+            var extra: SIMD2<Float>? = nil
+            if v >= 4 {
+                guard let fl = u32(o) else { return nil }
+                flags = fl
+                o += 4
+                if fl & 2 != 0 {
+                    guard let x = f32(o), let y = f32(o + 4) else { return nil }
+                    extra = SIMD2(x, y)
+                    o += 8
+                }
+            }
+            tail.constraints.append(SkeletonTail.Constraint(bone: bone, a: a, b: b, flags: flags, extra: extra))
+        }
+        // T4a u16 C3 | C3×u32 | C3 × (u16 D | D × 16B) — 디컴파일 결락분(어셈블리
+        // 0x140262b04-0x140262ca0 로 복구: 외측 루프 C3 회 `cmp r13d,ebx`, 내측 D × (u32|2f|u32)).
+        guard let c3 = u16(o), c3 <= 1024 else { return nil }
+        o += 2
+        if c3 > 0 {
+            var values: [UInt32] = []
+            for _ in 0..<c3 {
+                guard let x = u32(o) else { return nil }
+                values.append(x)
+                o += 4
+            }
+            var groups: [[SkeletonTail.GroupRecord]] = []
+            for _ in 0..<c3 {
+                guard let d = u16(o), d <= 4096 else { return nil }
+                o += 2
+                var g: [SkeletonTail.GroupRecord] = []
+                for _ in 0..<d {
+                    guard let idx = u32(o), let x = f32(o + 4), let y = f32(o + 8), let val = u32(o + 12) else { return nil }
+                    g.append(SkeletonTail.GroupRecord(index: idx, x: x, y: y, value: val))
+                    o += 16
+                }
+                groups.append(g)
+            }
+            tail.groups = SkeletonTail.GroupBlock(values: values, groups: groups)
+        }
+        // T4b u16 C4 | C4 × (u32 bone | u32 B | B×u32 | u16 C | C × (u32 idx | u16 D |
+        // D × (16B | u16 E | E×u32))) — 어셈블리 0x140262d9b-0x140263500.
+        guard let c4 = u16(o), c4 <= 1024 else { return nil }
+        o += 2
+        for _ in 0..<c4 {
+            guard let bone = u32(o), let nb = u32(o + 4), nb <= 1_048_576 else { return nil }
+            o += 8
+            guard let refs = u32list(&o, Int(nb)) else { return nil }
+            guard let nc = u16(o), nc <= 4096 else { return nil }
+            o += 2
+            var subs: [SkeletonTail.LinkSub] = []
+            for _ in 0..<nc {
+                guard let idx = u32(o), let nd = u16(o + 4), nd <= 4096 else { return nil }
+                o += 6
+                var elems: [SkeletonTail.LinkElem] = []
+                for _ in 0..<nd {
+                    guard let x = f32(o), let y = f32(o + 4), let z = f32(o + 8), let w = f32(o + 12),
+                          let ne = u16(o + 16), ne <= 4096 else { return nil }
+                    o += 18
+                    guard let indices = u32list(&o, ne) else { return nil }
+                    elems.append(SkeletonTail.LinkElem(vec: SIMD4(x, y, z, w), indices: indices))
+                }
+                subs.append(SkeletonTail.LinkSub(index: idx, elems: elems))
+            }
+            tail.links.append(SkeletonTail.LinkRecord(bone: bone, refs: refs, subs: subs))
+        }
+        // T5 u8 게이트 — 본수 × (3f + mat4)(디컴파일 :857-940).
+        guard o + 1 <= bytes.count else { return nil }
+        if bytes[o] != 0 {
+            o += 1
+            guard o + boneCount * 76 <= bytes.count else { return nil }
+            for _ in 0..<boneCount {
+                guard let ox = f32(o), let oy = f32(o + 4), let oz = f32(o + 8), let m = mat4(o + 12) else { return nil }
+                tail.boneTransforms.append(SkeletonTail.BoneTransform(offset: SIMD3(ox, oy, oz), matrix: m))
+                o += 76
+            }
+        } else { o += 1 }
+        // T6 u8 게이트 — 본수 × u32(디컴파일 :941-1002; 엔진은 본수-1 클램프 — 본 인덱스열).
+        guard o + 1 <= bytes.count else { return nil }
+        if bytes[o] != 0 {
+            o += 1
+            guard let list = u32list(&o, boneCount) else { return nil }
+            tail.boneIndices = list
+        } else { o += 1 }
+        // T7 (MDLS v≥3) u8 게이트 — 본수 × u32(디컴파일 :1003-1059).
+        if v >= 3 {
+            guard o + 1 <= bytes.count else { return nil }
+            if bytes[o] != 0 {
+                o += 1
+                guard let list = u32list(&o, boneCount) else { return nil }
+                tail.boneParams = list
+            } else { o += 1 }
+        }
+        // 착지 검증 — 다음 섹션 매직/EOF/말미 NUL(실물 파일 종단자) 중 하나.
+        guard o == bytes.count || (o == bytes.count - 1 && bytes[o] == 0) || isSectionMagic(bytes, at: o)
+        else { return nil }
+        return (tail, o)
+    }
+
+    /// 꼬리 착지 검증용 섹션 매직 접두 판정(MDLS000x/MDAT0001/MDLA000x/MDMP0001/MDLE0002).
+    private static func isSectionMagic(_ bytes: [UInt8], at o: Int) -> Bool {
+        guard o + 8 <= bytes.count, (0x31...0x39).contains(bytes[o + 7]) else { return false }
+        return findMagic("MDLS000", in: bytes, from: o) == o
+            || findMagic("MDAT0001", in: bytes, from: o) == o
+            || findMagic("MDLA000", in: bytes, from: o) == o
+            || findMagic("MDMP0001", in: bytes, from: o) == o
+            || findMagic("MDLE0002", in: bytes, from: o) == o
     }
 
     /// 변종 정점 스트라이드 추론: 정점 블롭 직후의 인덱스 블롭(u32 크기 + u16 인덱스)에서

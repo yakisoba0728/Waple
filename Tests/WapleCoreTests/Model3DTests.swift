@@ -456,7 +456,10 @@ final class Model3DTests: XCTestCase {
     }
 
     /// Kirby_puppet.mdl(3441873795) 클래스: 스킨드 멀티메시 + 메시 간 26B 트레일러(u8 0|u8 1|u32 16|
-    /// 16B|u32 0) + mesh1 헤더에 여분 u32 1개 + channelmap 정점 stride 44(pos|미상 24B|uv, 본/웨이트 없음).
+    /// 16B|u32 0) + mesh1 헤더에 여분 u32 1개 + channelmap 정점 stride 44. 정점 레이아웃은 엔진 .rdata
+    /// 테이블(FUN_1400d8060.c:81-96 덤프) 확정대로 pos@0(12)|boneIdx 16B@12(weights 채널 부재라
+    /// 미독·정적 폴터)|TEXCOORD0 float4@28(uv=.xy) — 종전 이 테스트의 'pos|미상 24B|uv@-8' 기록은
+    /// 구(오독) 해석이라 테이블 도입과 함께 정본 레이아웃으로 갱신.
     /// 종전 고정 '+6 스킵'은 mesh1 cstring 중간에 착지해 전체 파스 실패(377/378 의 마지막 1).
     func testParsesSkinnedMultiMeshWithStructuredTrailerAndStride44() throws {
         let vSkin = SynthVert(pos: SIMD3(1, 1, 0), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
@@ -478,9 +481,10 @@ final class Model3DTests: XCTestCase {
         let positions: [SIMD3<Float>] = (0..<8).map { SIMD3(Float(443 + $0), Float(650 - $0), 0) }
         u(UInt32(8 * 44), into: &d)
         for (i, p) in positions.enumerated() {
-            f(p.x, into: &d); f(p.y, into: &d); f(p.z, into: &d)
-            for _ in 0..<6 { f(0, into: &d) }                // 미상 24B(실물 대부분 0)
-            f(Float(i) / 8, into: &d); f(0.5, into: &d)      // uv @stride-8
+            f(p.x, into: &d); f(p.y, into: &d); f(p.z, into: &d)   // pos @0
+            for _ in 0..<4 { f(0, into: &d) }                      // boneIdx 16B @12(실물 대부분 0, weights 부재로 미독)
+            f(Float(i) / 8, into: &d); f(0.5, into: &d)            // uv = TEXCOORD0 float4 의 .xy @28
+            f(0, into: &d); f(0, into: &d)                         // float4 의 .zw @36
         }
         let idx: [UInt16] = [0, 1, 2, 2, 3, 4, 4, 5, 6, 6, 7, 0]
         u(UInt32(idx.count * 2), into: &d)

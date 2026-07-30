@@ -59,7 +59,18 @@ public enum ShaderPreprocessor {
         // 경유 없이 바로 유효.
         for (name, body) in [("CAST2", "vec2(x)"), ("CAST3", "vec3(x)"), ("CAST4", "vec4(x)"),
                              ("CAST2X2", "mat2(x)"), ("CAST3X3", "we_cast3x3(x)"), ("CAST4X4", "mat4(x)"),
-                             ("CASTI", "int(x)"), ("CASTU", "uint(x)"), ("CASTF", "float(x)"), ("CAST4U", "uint4(x)")]
+                             ("CASTI", "int(x)"), ("CASTU", "uint(x)"), ("CASTF", "float(x)"), ("CAST4U", "uint4(x)"),
+                             // WE shim(shader-strings.txt :59-62)의 샘플러 선언/전달 매크로:
+                             //   DECLARE_SAMPLER2D_PARAMETER(t)      → Texture2D t, SamplerState t##SamplerState
+                             //   MAKE_SAMPLER2D_ARGUMENT(t)          → t, t##SamplerState (COMPARE 계열 〃)
+                             // Waple 의 MSL 조립은 텍스처(texture2d<float>)와 샘플러(공용 smp 캡처 threading)를
+                             // 쌍 네이밍이 아니라 별도 축으로 다루므로, 전개 결과가 그 규약에서 유효한 선언이
+                             // 되도록 sampler2D t / t 로 주입한다(COMPARE 는 SampleCmp 미지원 — 사용 시
+                             // 기존과 동일하게 번역 실패 폴터, 선언 전개만 수용).
+                             ("DECLARE_SAMPLER2D_PARAMETER", "sampler2D x"),
+                             ("MAKE_SAMPLER2D_ARGUMENT", "x"),
+                             ("DECLARE_SAMPLER2D_COMPARE_PARAMETER", "sampler2D x"),
+                             ("MAKE_SAMPLER2D_COMPARE_ARGUMENT", "x")]
         where !identifierDefined(name, in: included) && identifierReferenced(name, in: included) {
             included = "#define \(name)(x) \(body)\n" + included
         }

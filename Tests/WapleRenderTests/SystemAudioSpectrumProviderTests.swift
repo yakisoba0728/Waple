@@ -23,7 +23,7 @@ final class SystemAudioSpectrumProviderTests: XCTestCase {
         XCTAssertEqual(out.count, fftSize / 2)
     }
 
-    /// 정확히 k 사이클/윈도우인 정현파는 bin k 에서 최대(Hann 창이라 인접 bin 으로 번지지만 피크는 k).
+    /// 정확히 k 사이클/윈도우인 정현파는 bin k 에서 최대(무윈도우라 누설 없이 피크는 정확히 k — WE 는 테이퍼 미적용).
     func testSineWavePeaksAtItsBin() throws {
         for k in [16, 64, 128] {
             let samples = (0..<fftSize).map { Float(sin(2.0 * Double.pi * Double(k) * Double($0) / Double(fftSize))) }

@@ -707,6 +707,14 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var lightAmbient = SIMD4<Float>(0, 0, 0, 0)                        // xyz=flat ambient (genericimage4)
     var layers: [GPULayer] = []
     var clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+    /// `general.clearenabled`(SceneDocument.clearEnabled) — false 면 2D acc 를 매 프레임 지우지 않고
+    /// 누적한다(잔상 = 엔진 동작). 기본 true(무회귀 — 코퍼스 161/161 전건 true).
+    var clearEnabled = true
+    /// clearenabled=false 씬 전용 누적 버퍼 — 풀 텍스처(pooledOffscreen)는 체크아웃 순서 변동(이펙트
+    /// 가시성 토글 등)으로 프레임 간 동일성이 깨질 수 있고 신규 할당분은 내용이 미정의라, 전용 유지 +
+    /// 첫 프레임 1회 클리어(trailAccPrimed)로 정의된 시작을 보장한다. 마운트/리사이즈 시 재확보.
+    var trailAcc: MTLTexture? = nil
+    var trailAccPrimed = false
     var cameraOffset = SIMD2<Float>(0, 0)
     /// 마우스가 지정한 목표 시차 오프셋. cameraOffset 는 delay 시상수로 여기로 프레임마다 수렴(WE 스무딩).
     var targetCameraOffset = SIMD2<Float>(0, 0)
@@ -1219,6 +1227,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
         clearColor = MTLClearColor(red: Double(doc.clearColor.x), green: Double(doc.clearColor.y),
                                    blue: Double(doc.clearColor.z), alpha: 1)
+        // clearenabled=false: acc 미클리어(잔상 누적) — 마운트마다 누적 버퍼 재확보(이전 씬 잔상 차단).
+        clearEnabled = doc.clearEnabled
+        trailAcc = nil
+        trailAccPrimed = false
         projW = Float(max(1, doc.projectionWidth)); projH = Float(max(1, doc.projectionHeight))
         projAspect = projW / projH
         // camera 의사-오브젝트 → 2D 뷰 줌(3D 는 미소비 — draw 3D 분기가 zoom 상태를 안 읽는다).
@@ -1701,18 +1713,37 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         frameShakeOffset += SceneRenderer.cameraOriginPanOffset(originXY: cameraOrigin(at: time), projW: projW, projH: projH)  // camera origin.xy 팬(중립/스크립트/정적 = .zero 데드존 → 비트동일)
         // 누적(acc) 합성: 컴포지션(_rt_) 레이어가 "그 시점까지의 화면"을 샘플할 수 있도록
         // 오프스크린에 합성 후 마지막에 drawable 로 blit(뷰는 mount 에서 framebufferOnly=false).
-        guard let acc = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else {
-            logDrawFailureOnce("2d-acc", "2D 오프스크린(acc) 확보 실패 — 프레임 스킵")
-            cb.commit(); return
+        // clearenabled=false 면 전용 누적 버퍼(trailAcc — 풀 체크아웃 순서 변동/미정의 초기내용 회피,
+        // 프로퍼티 주석 참조)를 쓰고 클리어하지 않는다(프레임 누적 잔상 = 엔진 동작).
+        let acc: MTLTexture
+        if clearEnabled {
+            guard let a = pooledOffscreen(drawable.texture.width, drawable.texture.height, device, bgra: true) else {
+                logDrawFailureOnce("2d-acc", "2D 오프스크린(acc) 확보 실패 — 프레임 스킵")
+                cb.commit(); return
+            }
+            acc = a
+        } else {
+            let dw = drawable.texture.width, dh = drawable.texture.height
+            if trailAcc?.width != dw || trailAcc?.height != dh {
+                trailAcc = hdrActive ? makeOffscreenHDR(dw, dh, device) : makeOffscreenBGRA(dw, dh, device)
+                trailAccPrimed = false   // 신규 할당분은 내용 미정의 — 이번 프레임 1회 클리어로 정의된 시작
+            }
+            guard let a = trailAcc else {
+                logDrawFailureOnce("2d-acc", "2D 오프스크린(acc) 확보 실패 — 프레임 스킵")
+                cb.commit(); return
+            }
+            acc = a
         }
+        let accPrime = !clearEnabled && !trailAccPrimed
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = acc
         rpd.colorAttachments[0].clearColor = clearColor
-        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].loadAction = (clearEnabled || accPrime) ? .clear : .load
         guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else {
             logDrawFailureOnce("2d-encoder", "렌더 커맨드 인코더 생성 실패 — 프레임 스킵")
             cb.commit(); return
         }
+        if accPrime { trailAccPrimed = true }
         // 씬 오브젝트 순서대로 레이어·파티클·텍스트 인터리브(z-순서 — fg 레이어가 파티클을 가릴 수 있음).
         guard let finalEnc = encodeDrawPlan(startingWith: enc, acc: acc, cb: cb, device: device, time: time,
                                             displayTextures: displayTextures,
@@ -1826,6 +1857,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 fitMode: SceneRenderSettings.fitMode)
         // 자식 GPU 시스템의 로컬 sim 은 더미 — 부모 sim 이 자식을 구동하므로 웜업/스텝에서 제외.
         let rootIdxs = sims.indices.filter { particleSystems[$0].childOf == nil }
+        // clearenabled=false: 캡처 시퀀스도 acc 를 프레임 간 누적(잔상 = 엔진 동작) — 단 첫 프레임은
+        // 항상 클리어해 정의된 상태에서 시작(결정론 계약 — 누적 시작점이 미정의 내용이면 A/B 발산).
+        var captureAccPrimed = false
         for t in times.sorted() {
             while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in rootIdxs { _ = sims[i].step(s) }; simTime += s }
             guard let cb = queue.makeCommandBuffer() else { continue }
@@ -1841,11 +1875,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             } else {
                 acc = sceneWantsLDRBloom ? (pooledOffscreen(width, height, device, bgra: true) ?? target) : target
             }
+            let accPrime = !clearEnabled && !captureAccPrimed
             let rpd = MTLRenderPassDescriptor()
             rpd.colorAttachments[0].texture = acc
-            rpd.colorAttachments[0].loadAction = .clear
+            rpd.colorAttachments[0].loadAction = (clearEnabled || accPrime) ? .clear : .load
             rpd.colorAttachments[0].clearColor = clearColor
             guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
+            if accPrime { captureAccPrimed = true }
             // camera zoom: 라이브 draw 와 동일하게 t 에 평가(A/B 캡처가 줌 씬을 판독해야 한다).
             var asp = aspBase
             let capZoomRaw = cameraZoom(at: t)
