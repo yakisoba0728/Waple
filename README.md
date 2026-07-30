@@ -35,8 +35,8 @@ Legend: ✅ implemented · 🟡 partial (the gap is named) · ❌ not implemente
 | Area | Status | What is covered |
 | --- | --- | --- |
 | GLSL → MSL transpiler | 🟡 | Source-to-source translation executed on the GPU; ~99.9% of the effect shader variants in the measured local corpus compile. Preprocessor (combos / `#include` / function-like macros), expression-level type inference (HLSL implicit vector truncation), GLSL structs, arrays, `inverse()`. Forward+ light *array* uniforms are registered but fed neutral scalars — no corpus scene enables those combos |
-| Textures | ✅ | Packed `.tex` (LZ4 blocks), DXT1/3/5, RG88, R8, mip chains, sprite-sheet frames (`TEXS0001`–`0003`), condition variants |
-| Particles | ✅ | Sphere/box emitters, bursts, the full initializer/operator set (movement, lifetime, oscillate, control-point attraction, turbulence, remap, …), child systems (`eventfollow`/`spawn`/`death`), sprite and trail renderers, `mapsequence` |
+| Textures | 🟡 | Packed `.tex` (LZ4 blocks), DXT1/3/5, RG88, R8, mip chains, sprite-sheet frames (`TEXS0001`–`0003`), condition variants. The `Flags & 0x40` depth bit is unhandled, so depth/volume textures may fail to parse |
+| Particles | 🟡 | Sphere/box emitters, bursts, child systems (`eventfollow`/`spawn`/`death`), sprite and trail renderers, `mapsequence`, and the common initializers/operators (movement, lifetime, oscillate, control-point attraction, turbulence, remap, …). Tokens outside that set are dropped with a log rather than emulated |
 | Layers | ✅ | Keyframe animation (position, size, rotation, alpha, colour, mirrored ping-pong), property scripts (JS), composition (`_rt_`) layers, all 32 `colorBlendMode` values using the real `common_blending.h` formulas |
 | 3D scenes | ✅ | Look-at camera, `.mdl` meshes (`MDLV0023` and variants), billboards, parent transform hierarchy, GPU skinning, Cook–Torrance PBR with point-shadow atlas |
 | Puppet warp | ✅ | `MDLV0013` meshes, bones, mirrored bone animation, CPU skinning |
@@ -53,14 +53,14 @@ silently. "It gets logged" is a general design direction, not a guarantee.
 Known gaps that are tracked rather than hidden live in [BACKLOG.md](BACKLOG.md) and
 [docs/](docs/); a few current examples: `_rt_` composite triangle masks in one corpus scene, word
 wrap for very long unwrapped text (an 8192px raster guard can silently drop it), `g_Color1`–`4`
-gradient uniforms, `.tex` depth/volume flag (`Flags & 0x40`), and `SHDV0069` shader-cache parsing.
+gradient uniforms, and `SHDV0069` shader-cache parsing.
 
 ## Requirements
 
 | | Requirement | Notes |
 | --- | --- | --- |
 | OS | macOS 14 or later, Apple Silicon | The screensaver bundle targets macOS 13+; Intel is untested |
-| Build | Swift 5.9+ toolchain (Xcode command line tools) | Zero external package dependencies |
+| Build | Xcode 26 / Swift 6.3+ | Zero external package dependencies. `Package.swift` declares `swift-tools-version:5.9`, but that governs the manifest API only — CI builds on Swift 6.3.2 and development on 6.4; older toolchains (Xcode 16 / Swift 6.0 and earlier) are not verified and have failed to type-check this codebase in the past |
 | Optional | `ffmpeg` (`brew install ffmpeg`) | Converts `.webm`/`.mkv`/`.avi` found inside scene packages |
 | Optional | `steamcmd` + a Steam Web API key | Workshop browse/download tab only. The API key is stored in the Keychain; the download uses your own cached `steamcmd` session |
 | Optional | Wallpaper Engine shared base assets | Required for scenes that reference shared textures/shader headers — see below |
