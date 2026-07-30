@@ -17,13 +17,20 @@ final class RendererFactoryTests: XCTestCase {
         XCTAssertTrue(RendererFactory.makeRenderer(for: project(type: .video, file: "a.mp4")) is VideoRenderer)
     }
 
+    /// ffmpeg 유무로 갈리는 라우팅. else 분기의 종전 단언(7종 전부 WebRenderer)은 F556 이전 규약이었고,
+    /// ffmpeg 가 깔린 개발 머신에서는 이 분기 자체를 타지 않아 낡은 채로 남아 있었다(CI 러너에 ffmpeg
+    /// 부재 → 6종 실패로 노출). 현 규약: ffmpeg 없으면 WKWebView 가 실제 재생 가능한 webm 만 폴백하고,
+    /// 나머지는 nil — 검은 화면을 apply 성공으로 오표시하지 않기 위해 지원 불가로 표면화한다.
+    /// (컨테이너 판정 자체의 결정론적 커버리지는 MediaFixRegressionTests 의 F556 회귀 테스트.)
     func testUnsupportedCodecVideoRoutesByFFmpegAvailability() {
         for ext in ["webm", "mkv", "avi", "wmv", "flv", "ogv", "mpg"] {
             let r = RendererFactory.makeRenderer(for: project(type: .video, file: "a.\(ext)"))
             if FFmpegConverter.isAvailable {
                 XCTAssertTrue(r is VideoRenderer, "\(ext) should route to VideoRenderer for ffmpeg conversion")
-            } else {
+            } else if RendererFactory.webViewPlayableContainer(ext) {
                 XCTAssertTrue(r is WebRenderer, "\(ext) should fall back to WebRenderer when ffmpeg is unavailable")
+            } else {
+                XCTAssertNil(r, "\(ext) is unplayable without ffmpeg — must surface as unsupported, not a black WebRenderer")
             }
         }
     }

@@ -246,16 +246,25 @@ final class WebHardPauseTests: XCTestCase {
         XCTAssertEqual(try object(web, "window.__counts")["timeout"] as? Int, 1)
     }
 
+    /// 재개 직후 "남은 지연이 아직 안 지났다" 는 negative 단언은 벽시계에 의존한다 — 러너 부하로 eval
+    /// 왕복이 길어지면 일시정지 시점의 경과가 커지고(CI 실측 180~280ms), 남은 지연이 아래 스핀 창보다
+    /// 짧아져 정상 동작이 조기 발화로 보인다(런 30541571683 에서 remaining 1 != 0 로 실패).
+    /// 경과를 JS 로 실측해 창보다 확실히 여유가 있을 때만 단정한다. 일시정지 중 미발화(무조건)와
+    /// 재개 후 정확히 1회 발화(무조건)는 그대로 잠근다.
     func testPausedCreationCrossClearAndRemainingDelay() throws {
+        let keepDelayMS = 280.0
+        let resumeSpin = 0.10
         let web = makeControllerWebView()
         _ = pumpEvalJS(web, """
         window.__fired = {
           timeout: 0, interval: 0, raf: 0, remaining: 0, stringHandler: 0
         };
-        var keep = setTimeout(function () { window.__fired.remaining += 1; }, 280);
+        window.__meta = { t0: performance.now(), elapsedAtPause: -1 };
+        var keep = setTimeout(function () { window.__fired.remaining += 1; }, \(Int(keepDelayMS)));
         """)
         spin(0.07)
         _ = pumpEvalJS(web, """
+        window.__meta.elapsedAtPause = performance.now() - window.__meta.t0;
         window.__wapleHardPauseController.setPaused(true);
         var timeoutID = setTimeout(function () { window.__fired.timeout += 1; }, 20);
         var intervalID = setInterval(function () { window.__fired.interval += 1; }, 20);
@@ -267,9 +276,14 @@ final class WebHardPauseTests: XCTestCase {
         """)
         spin(0.30)
         XCTAssertEqual(try object(web, "window.__fired")["remaining"] as? Int, 0)
+        let elapsedAtPause = try XCTUnwrap(object(web, "window.__meta")["elapsedAtPause"] as? Double)
         _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
-        spin(0.10)
-        XCTAssertEqual(try object(web, "window.__fired")["remaining"] as? Int, 0)
+        spin(resumeSpin)
+        let remainingMS = keepDelayMS - elapsedAtPause
+        if remainingMS > resumeSpin * 1000 + 50 {
+            XCTAssertEqual(try object(web, "window.__fired")["remaining"] as? Int, 0,
+                           "남은 지연 \(remainingMS)ms > 스핀 \(resumeSpin * 1000)ms 이므로 아직 미발화여야")
+        }
         XCTAssertTrue(waitUntil {
             (try? self.object(web, "window.__fired")["remaining"] as? Int) == 1
         })
