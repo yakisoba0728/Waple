@@ -33,22 +33,12 @@ jobs:
           swift --version
           ls -d /Applications/Xcode*.app
 
-      # zero-dep 프로젝트라 Package.resolved 가 없다 — 캐시 키는 Package.swift 해시,
-      # 프리픽스는 러너 이미지 + 툴체인(툴체인이 바뀌면 오브젝트가 무효).
-      - name: Compute .build cache key
-        id: cache-key
-        run: |
-          toolchain="$(swift --version 2>&1 | head -1 | tr -cs '[:alnum:].' '-')"
-          prefix="spm-${ImageVersion:-unknown}-${toolchain}"
-          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
-          echo "key=$prefix-$(shasum -a 256 Package.swift | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache/restore@v6
-        with:
-          path: .build
-          key: ${{ steps.cache-key.outputs.key }}
-          restore-keys: |
-            ${{ steps.cache-key.outputs.prefix }}-
+      # .build 캐시는 두지 않는다 — 실측 결과 값이 없다.
+      # 런 30542156132: 캐시 적중(135MB, 복원 4s)에도 Build 는 53s, 콜드(30541571683)는 59s.
+      # zero-dep 프로젝트라 캐시에 담길 게 오브젝트뿐인데, llbuild 는 파일 시그니처로 판정하고
+      # actions/checkout 이 매 런 mtime 을 새로 주므로 사실상 전량 재컴파일한다. 여기에 동일 키
+      # 재저장이 매 런 "Failed to save: Unable to reserve cache" 를 남겨 오해까지 부른다.
+      # 다시 도입하려면 위 두 런의 Build 스텝 시간을 먼저 재현·비교할 것.
 
       # 빌드와 테스트 실행을 분리한다 — 종전엔 `swift build` 뒤 `swift test` 가 테스트 타깃을
       # 다시 컴파일해, 스텝 시간이 "컴파일 + 실행" 으로 뭉쳐 어디가 느린지 알 수 없었다.
@@ -71,17 +61,14 @@ jobs:
           set -o pipefail
           swift test --skip-build 2>&1 | tee test-output.log
 
+      # 실패 원인부터 먼저 뽑는다 — 종전 패턴("failed" 포함)은 정상 로그의 "load failed"·"save failed"
+      # 진단문에 파묻혀 실제 실패 단언이 head -50 밖으로 밀려났다(런 30541571683 에서 실측).
       - name: Show failure summary
         if: failure()
         run: |
-          grep -E "error:|failed|Fatal" test-output.log | head -50 || true
+          echo "--- failing assertions ---"
+          grep -E "error: -\[|' failed \(" test-output.log | head -40 || true
+          echo "--- compile errors ---"
+          grep -E "error: .*(type-check|cannot|unable)" test-output.log | head -20 || true
           echo "--- tail ---"
-          tail -100 test-output.log
-
-      # 실패해도 캐시를 남긴다. 종전 통합 actions/cache 는 잡이 실패하면 post 스텝이 스킵돼
-      # 캐시가 한 번도 생성되지 않았고(로그: "Cache not found"), 매 런이 콜드 빌드였다.
-      - uses: actions/cache/save@v6
-        if: always()
-        with:
-          path: .build
-          key: ${{ steps.cache-key.outputs.key }}
+          tail -60 test-output.log
