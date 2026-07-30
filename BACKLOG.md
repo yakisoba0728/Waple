@@ -74,6 +74,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
    - **결과**: 잡 7m48s(테스트 0개 실행) → **4m5s 그린**(러너 macOS 26.4·3코어·7GB·Swift 6.3.2 / Build 53~59s + .saver 4s + Test 140~164s, 2125 테스트·46 스킵). CI 가 잡아낸 테스트 결함 2건(ffmpeg 부재 분기의 F556 이전 낡은 단언, 3코어에서만 깨지는 WebHardPause 타이밍 창)은 커밋 3863411 에서 수정 — 프로덕션 무변경. 다음 지렛대는 `swift test --parallel`(Test 스텝 ~160s 단축)이나 3코어·타이밍 테스트 다수라 플레이크 위험이 커 미적용
 4. ~~LICENSE 결정 (README "미정")~~ → **해소(2026-07-28)**: MIT 로 결정 — LICENSE 신설 + README 라이선스 섹션 갱신. F016 잔여 3점도 해소: ①NOTICE 신설로 RePKG(MIT, © 2019 notscuffed) 고지 보존·인용 위치 명기 ②GPL(OWE/WaifuX) 인용 주석 3곳 전수 개념/관행 참조 판정(코드 이식 없음) — NOTICE 에 페이퍼트레일 기재 ③WE 상표 명목적 사용·상호운용성 목적 리버스엔지니어링 고지 NOTICE 명기(README 상단 비공식/상표 고지는 기존 유지)
 5. 코드사인/공증, GUI 스모크, 워크샵 E2E
+   - **릴리스 파이프라인 macos-26 실검증 완료(2026-07-30, 태그 `v0.1.0-beta.2` / 런 30547526365, 3m15s)**: `package-app.sh` 전 구간(plist·`.saver` clang·중첩 포함 ad-hoc `codesign --deep`·`hdiutil` UDZO) 통과, 태그→버전 규약 확인(`v0.1.0-beta.2` → plist `0.1.0`, CFBundleVersion=런번호), `-` 포함 태그는 즉시 prerelease. 산출물 직접 검증: sha256 노트값 일치·DMG 마운트·`Waple.saver`/`Waple.icns` 동봉·app·saver 모두 arm64·`codesign --verify --deep --strict` 통과. 릴리스 노트는 영어 + ad-hoc 일 때만 Gatekeeper 절. 잔여는 Developer ID/공증(유료 계정 = 배포 스코프C)뿐이며, 그때 `.p12` 키체인 임포트 스텝을 워크플로에 추가해야 한다. **주의: `workflow_dispatch` 로 release.yml 을 시험할 수 없다**(`GITHUB_REF_NAME`=main → 버전 추출 붕괴) — 버릴 프리릴리즈 태그를 쓸 것
 6. 접근성(그리드 타일 VoiceOver/키보드), 현지화(하드코딩 한국어 40+) — [AUDIT.md](AUDIT.md) §4–5
 
 ## 감사 2026-07-11 잔여 — 트리거: 해당 씬 사용/체감 시 (수정 26건은 완료·머지됨)
