@@ -307,16 +307,36 @@ final class WebHardPauseTests: XCTestCase {
         XCTAssertEqual(fired["stringHandler"] as? Int, 1)
     }
 
+    /// interval 재개 규약: 첫 발화는 "남은 위상"(주기 − 일시정지 전 경과) 뒤, 그 다음부터 원래 주기.
+    /// 종전 경계값(80/230, 180/330)은 일시정지 전 경과가 spin(0.08) 만큼이라는 가정에 못박혀 있었다 —
+    /// 3코어 러너에서 경과가 162ms 로 커지자 남은 위상이 78ms 가 되어 `> 80` 이 깨졌다(런 30543293662).
+    /// 경과를 페이지 시계로 실측해 남은 위상·주기 기준 상대 경계로 단정한다(부하로 늦는 건 허용,
+    /// 이르게 발화하면 회귀).
     func testIntervalResumesAtRemainingPhaseThenUsesOriginalPeriod() throws {
+        let periodMS = 240.0
         let web = makeControllerWebView()
         _ = pumpEvalJS(web, """
         window.__intervalFires = [];
+        window.__t0 = performance.now();
         setInterval(function () {
           window.__intervalFires.push(performance.now());
-        }, 240);
+        }, \(Int(periodMS)));
         """)
         spin(0.08)
-        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(true);")
+        let pauseState = try object(web, """
+        (function () {
+          var elapsed = performance.now() - window.__t0;
+          window.__wapleHardPauseController.setPaused(true);
+          return { elapsed: elapsed, firesBeforePause: window.__intervalFires.length };
+        })()
+        """)
+        let elapsedAtPause = try XCTUnwrap(pauseState["elapsed"] as? Double)
+        // 남은 위상 계산은 "일시정지 전 미발화" 를 전제한다. 머신이 주기(240ms)보다 느리게 여기 닿으면
+        // 전제가 깨지므로 조용히 통과시키지 않고 스킵한다(가짜 그린 금지).
+        try XCTSkipIf(
+            (pauseState["firesBeforePause"] as? Int ?? 0) > 0 || elapsedAtPause >= periodMS,
+            "환경이 느려 일시정지 전에 이미 발화(경과 \(elapsedAtPause)ms ≥ 주기 \(periodMS)ms) — 위상 전제 불성립"
+        )
         spin(0.25)
         let resumedAt = try XCTUnwrap(
             pumpEvalJS(web, """
@@ -324,14 +344,17 @@ final class WebHardPauseTests: XCTestCase {
             performance.now();
             """) as? Double
         )
-        XCTAssertTrue(waitUntil(timeout: 1.2) {
+        XCTAssertTrue(waitUntil(timeout: 2) {
             (pumpEvalJS(web, "window.__intervalFires.length") as? Int ?? 0) >= 2
-        })
+        }, "재개 후 남은 위상 + 주기 안에 2회 발화해야")
         let times = try XCTUnwrap(pumpEvalJS(web, "window.__intervalFires") as? [Double])
-        XCTAssertGreaterThan(times[0] - resumedAt, 80)
-        XCTAssertLessThan(times[0] - resumedAt, 230)
-        XCTAssertGreaterThan(times[1] - times[0], 180)
-        XCTAssertLessThan(times[1] - times[0], 330)
+        let remainingPhase = periodMS - elapsedAtPause
+        XCTAssertGreaterThan(times[0] - resumedAt, remainingPhase - 40,
+                             "첫 발화가 남은 위상 \(remainingPhase)ms 보다 이르다(위상 무시 회귀)")
+        XCTAssertLessThan(times[0] - resumedAt, remainingPhase + 120,
+                          "첫 발화가 남은 위상 \(remainingPhase)ms 보다 한참 늦다(주기 재시작 회귀)")
+        XCTAssertGreaterThan(times[1] - times[0], periodMS - 60, "두 번째부터는 원래 주기")
+        XCTAssertLessThan(times[1] - times[0], periodMS + 90, "두 번째부터는 원래 주기")
     }
 
     func testOnlyRunningAudioContextsResumeAndPausedCreationResumesOnRelease() throws {
