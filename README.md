@@ -104,4 +104,4 @@ scripts/         package-app.sh(앱/화면보호기 번들), window-id.swift(창
 
 ## 라이선스
 
-미정.
+MIT — [LICENSE](LICENSE) 참조. 서드파티 고지·상표 표기는 [NOTICE](NOTICE) 참조.

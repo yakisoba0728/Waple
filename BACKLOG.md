@@ -69,8 +69,8 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 
 1. ~~notify() NSLog-only~~ → **부분 해소(2026-07-12 SP1′)**: 메인창 열림 시 창 내 배너(StatusBanner)로 표시. 잔여: 창 닫힘 상태의 오류는 여전히 NSLog only → UNUserNotification 승격은 배포 결심 시
 2. 최초 실행 온보딩 + base-assets/ffmpeg 미설정 안내 → **F008 정정(2026-07-18): 온보딩·ffmpeg 안내 둘 다 해소** — 커밋 fb093cd/f214cc8/156740c(병합)로 최초 실행 1회 온보딩 시트가 완전히 구현·배선됨([OnboardingView.swift](Sources/Waple/Shell/OnboardingView.swift), `waple.onboardingCompleted` 플래그, 배경/공유에셋/ffmpeg 3항목 체크리스트 — ffmpeg 항목이 미설정 안내를 겸함). base-assets 조용한 저하도 부분 해소: 실제 필수 공유 에셋 miss 때 설정 경로를 StatusBanner로 앱 세션·설정 fingerprint당 1회 안내. 잔여: 메인창 닫힘 상태의 base-assets NSLog-only 안내뿐
-3. CI 구축 — 현재 저장소에 CI 자체가 없음(`.github/workflows` 부재). `.saver`(WapleSaverView.m) clang 컴파일 스텝 포함(현재 `swift test` 커버리지 밖). **F400 실측(2026-07-18)**: 전체 1233 테스트 중 GPU(Metal 부재) 스킵 ~116사이트(32파일)·실물 코퍼스 부재 스킵 ~22사이트(14파일) — 렌더-출력/GT 계층(합성·블렌드·HDR/LDR 블룸·3D PBR·텍스트·스프라이트시트)이 사실상 전부 이 게이트 뒤라, CI 없이는 헤드리스/신규 체크아웃에서 "전건 green"이 이 개발자 1대 머신 상태에만 의존
-4. LICENSE 결정 (README "미정") — **F016 IP 위생 잔여 3점**(개인배포는 저위험, 공개/상용 전환 시 검토): ①MIT 고지 미보존(RePKG 포맷 규약을 TexImage.swift 등이 인용하나 NOTICE/LICENSE 파일 없음 — 필드는 비저작 사실이라 실질 저위험) ②GPL(OWE/WaifuX) 개념 인용 주석 3곳의 소스 접근 페이퍼트레일 ③WE 독점 포맷 리버스엔지니어링 + UI 내 "Wallpaper Engine" 명목적 사용
+3. ~~CI 구축~~ → **해소(2026-07-28)**: `.github/workflows/ci.yml` 추가(GitHub Actions macos-14 — `swift build` + `swift test` + `.saver`(WapleSaverView.m) clang 번들 컴파일 스텝 포함). 첫 푸시 후 활성화. 잔여: 실물 코퍼스 부재 스킵(F400, ~22사이트)은 CI 에서도 동일 — 실물 시각 회귀 골든은 계속 수동 파이프라인(F402/F403 참조)
+4. ~~LICENSE 결정 (README "미정")~~ → **해소(2026-07-28)**: MIT 로 결정 — LICENSE 신설 + README 라이선스 섹션 갱신. F016 잔여 3점도 해소: ①NOTICE 신설로 RePKG(MIT, © 2019 notscuffed) 고지 보존·인용 위치 명기 ②GPL(OWE/WaifuX) 인용 주석 3곳 전수 개념/관행 참조 판정(코드 이식 없음) — NOTICE 에 페이퍼트레일 기재 ③WE 상표 명목적 사용·상호운용성 목적 리버스엔지니어링 고지 NOTICE 명기(README 상단 비공식/상표 고지는 기존 유지)
 5. 코드사인/공증, GUI 스모크, 워크샵 E2E
 6. 접근성(그리드 타일 VoiceOver/키보드), 현지화(하드코딩 한국어 40+) — [AUDIT.md](AUDIT.md) §4–5
 

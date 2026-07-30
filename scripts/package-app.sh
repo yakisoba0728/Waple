@@ -2,6 +2,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 버전/빌드 번호/서명 아이덴티티는 env 로 주입한다(기본값은 하드코딩 시절과 동일 → 무회귀).
+#   WAPLE_VERSION       CFBundleShortVersionString (기본 0.1)
+#   WAPLE_BUILD         CFBundleVersion            (기본 1)
+#   WAPLE_SIGN_IDENTITY codesign 아이덴티티        (기본 "-" = ad-hoc)
+# Developer ID 를 지정하면 Gatekeeper 통과를 위해 --options runtime(hardened runtime)을 추가한다.
+WAPLE_VERSION="${WAPLE_VERSION:-0.1}"
+WAPLE_BUILD="${WAPLE_BUILD:-1}"
+WAPLE_SIGN_IDENTITY="${WAPLE_SIGN_IDENTITY:--}"
+
 CONFIG=release
 swift build -c "$CONFIG"
 
@@ -14,7 +23,7 @@ cp ".build/$CONFIG/Waple" "$APP/Contents/MacOS/Waple"
 mkdir -p "$APP/Contents/Resources"
 cp "scripts/Waple.icns" "$APP/Contents/Resources/Waple.icns"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -22,8 +31,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleName</key><string>Waple</string>
   <key>CFBundleDisplayName</key><string>Waple</string>
   <key>CFBundleIdentifier</key><string>kr.yaki.waple</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
+  <key>CFBundleVersion</key><string>${WAPLE_BUILD}</string>
+  <key>CFBundleShortVersionString</key><string>${WAPLE_VERSION}</string>
   <key>CFBundleExecutable</key><string>Waple</string>
   <key>CFBundleIconFile</key><string>Waple</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -45,7 +54,7 @@ xcrun clang -fobjc-arc -bundle -mmacosx-version-min=13.0 \
   Sources/WapleSaver/WapleSaverView.m \
   -o "$SAVER/Contents/MacOS/WapleSaver"
 
-cat > "$SAVER/Contents/Info.plist" <<'PLIST'
+cat > "$SAVER/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -54,16 +63,21 @@ cat > "$SAVER/Contents/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>kr.yaki.waple.saver</string>
   <key>CFBundleExecutable</key><string>WapleSaver</string>
   <key>CFBundlePackageType</key><string>BNDL</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
+  <key>CFBundleVersion</key><string>${WAPLE_BUILD}</string>
+  <key>CFBundleShortVersionString</key><string>${WAPLE_VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSPrincipalClass</key><string>WapleSaverView</string>
 </dict>
 </plist>
 PLIST
 
-# --deep 이 중첩 번들(saver)까지 ad-hoc 서명한다.
-codesign --force --deep --sign - --identifier kr.yaki.waple "$APP"
+# --deep 이 중첩 번들(saver)까지 서명한다. 기본 "-" = ad-hoc.
+# Developer ID 지정 시 hardened runtime(--options runtime)을 함께 건다(공증 전제 조건).
+SIGN_ARGS=(--force --deep --sign "$WAPLE_SIGN_IDENTITY")
+if [ "$WAPLE_SIGN_IDENTITY" != "-" ]; then
+  SIGN_ARGS+=(--options runtime)
+fi
+codesign "${SIGN_ARGS[@]}" --identifier kr.yaki.waple "$APP"
 echo "Built $APP"
 
 # ── 배포용 DMG ──────────────────────────────────────────────────────────
@@ -78,3 +92,6 @@ cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 hdiutil create -volname "Waple" -srcfolder "$STAGING" -ov -format UDZO "$DMG"
 echo "Built $DMG"
+
+# 릴리스 노트/Homebrew cask 갱신에 쓸 sha256 을 항상 출력한다.
+shasum -a 256 "$DMG"

@@ -1,0 +1,88 @@
+# NOTICE
+
+이 파일은 Waple 이 참조하는 서드파티 자료와의 관계를 기록한다. Waple 자체의
+라이선스는 [LICENSE](LICENSE)(MIT)를 따른다.
+
+## 1. RePKG — MIT
+
+Waple 의 `.pkg`/`.tex` 바이너리 포맷 처리는 RePKG
+(<https://github.com/notscuffed/repkg>)가 리버스엔지니어링해 공개한 포맷 규약을
+소스 주석에서 교차검증 근거로 인용한다. RePKG 의 코드는 Waple 에 포함돼 있지
+않으며, 인용 대상은 필드 순서·플래그 비트·버전별 레이아웃 같은 포맷 사실이다
+(구현은 전부 독자적인 Swift 코드).
+
+RePKG 라이선스 고지 원문:
+
+```
+MIT License
+
+Copyright (c) 2019 notscuffed
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+Waple 내 인용 위치(라인은 2026-07-29 시점 — 이후 드리프트 가능하니 심볼 grep 권장):
+
+- `Sources/WapleCore/TexImage.swift` — `.tex` 컨테이너(TEXB)·스프라이트시트(TEXS) 파싱 전반:
+  - :26 TEXS 프레임 필드 순서(TexFrameInfoContainerReader)
+  - :42 회전 프레임의 부호 있는 유효 폭/높이(TexToImageConverter)
+  - :51 회전 각도식
+  - :111 TexHeader flags@22 비트 의미(TexFlags)
+  - :194, :294 imageFormat != -1 이면 인코딩 파일(TexMipmapFormatGetter 규약)
+  - :253–254 다중 image = 아틀라스 페이지 + TEXB 레이아웃(TexReader + hexdump 교차검증)
+  - :433 TEXS0001(v1) 지오메트리 i32(TexFrameInfoContainerReader 실측)
+  - :443 frametime==0 프레임 유효(TexToImageConverter 딜레이 0 클램프)
+  - :450 회전 프레임 Width|Height==0 처리
+- `Sources/WapleCore/ScenePackage.swift:57` — PKGV 4자리 = 포맷 버전, 값 범위 게이트
+  생략 근거(PackageReader.cs 가 버전 분기 없이 컨테이너를 읽음)
+- `Sources/WapleRender/TexDecoder.swift`
+  - :58 아틀라스 페이지 인덱스(ConvertToGif)
+  - :232–236 RG88 채널 순서 — RePKG RG88.cs 와 정반대 결론을 실물 셰이더 근거로 자체
+    확정한 대조 참조(이 경로는 RePKG 판정을 따르지 않는다고 주석이 명시)
+- 테스트: `Tests/WapleCoreTests/TexImageTests.swift`(:81, :159, :244),
+  `TexFramesAndMapSequenceTests.swift`(:37, :97), `ScenePackageTests.swift`(:88)
+
+## 2. GPL 프로젝트 개념 참조 — 코드 미포함
+
+아래 GPL 프로젝트들의 **관찰된 동작·관행·기능 개념**만 주석에서 인용한다. 이들
+프로젝트의 소스 코드는 Waple 에 복사·번역·이식되지 않았다(구현은 전부 독자적인
+Swift 코드이며, 아래 판정은 2026-07-29 에 해당 파일을 직접 읽고 확인한 것).
+
+- OWE — "Open Wallpaper Engine" 계열 macOS 오픈소스 프로젝트(GPL-3.0 계보):
+  - `Sources/Waple/VideoImport.swift:7` — 원시 동영상 파일을 최소 `project.json`
+    배경으로 감싸 가져오는 기능의 개념 계보("OWE 계보") 인용. 구현(FileManager
+    복사 + AVFoundation 미리보기 생성 + JSON 기록)은 독자적.
+- WaifuX (<https://github.com/jipika/WaifuX>, GPL-3.0):
+  - `Sources/WapleCore/PropertyDecoration.swift:4` — WE 워크샵의 장식 프로퍼티
+    (HTML 광고·링크·구분선) 관행에 대한 실측 근거 인용. 판정 로직(키 접두사
+    `imgsrc`/`brimgsrc` + 텍스트 태그 부분문자열 검사)은 독자적.
+  - `Sources/Waple/DesktopVisibilityMonitor.swift:31` — 가림 자동 일시정지의 커버
+    비율 임계값(30–100%) 관행 인용. 합집합 면적 계산 등 구현은 독자적.
+
+## 3. Wallpaper Engine 상표·리버스엔지니어링
+
+- "Wallpaper Engine"은 해당 소유자의 상표다. Waple 은 Valve/Steam/Wallpaper
+  Engine 과 무관한 비공식 클린룸 재구현이며, 이 이름은 호환 대상을 가리키는
+  명목적 사용(nominative use)에 한한다(UI·문서의 "Wallpaper Engine" 표기 전부).
+- `.pkg`/`.tex`/`.mdl` 등 독점 포맷에 대한 리버스엔지니어링은 상호운용성(사용자가
+  이미 보유한 로컬 파일의 재생) 목적에 한한다. Waple 은 Wallpaper Engine 의
+  바이너리·코드·에셋을 포함하지 않고, 씬이 참조하는 공유 베이스 에셋은 저작권상
+  기본 번들하지 않으며 사용자가 제공한다(README "공유 베이스 에셋" 참조).
+- Steam 접속·다운로드·인증 우회를 하지 않는다. 창작마당 탭은 Valve 공식 수단
+  (steamcmd, Steam Web API + 사용자 발급 API 키)만 사용한다.

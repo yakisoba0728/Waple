@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # zero-dep 프로젝트라 Package.resolved 가 없으므로 캐시 키는 Package.swift 해시 + 러너 이미지 버전.
+      - name: Compute .build cache key
+        id: cache-key
+        run: |
+          prefix="macos-img${ImageVersion:-unknown}-spm"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          echo "key=$prefix-$(shasum -a 256 Package.swift | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            ${{ steps.cache-key.outputs.prefix }}-
+
+      - name: Toolchain info
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Build
+        run: swift build
+
+      # 테스트 전체 실행. 출력을 파일로 남겨 실패 스텝에서 요약/tail 에 재사용한다.
+      - name: Test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test-output.log
+
+      - name: Show failure summary
+        if: failure()
+        run: |
+          grep -E "error:|failed|Fatal" test-output.log | head -50 || true
+          echo "--- tail ---"
+          tail -100 test-output.log
+
+      # 화멘보호기(Sources/WapleSaver)는 SPM 밖 Obj-C 라서 swift test 커버리지 밖.
+      # package-app.sh:42-46 과 동일한 플래그로 번들 컴파일만 검증(서명/DMG 불요).
+      - name: Compile screensaver bundle
+        run: |
+          OUT="$(mktemp -d)/WapleSaver"
+          xcrun clang -fobjc-arc -bundle -mmacosx-version-min=13.0 \
+            -framework AppKit -framework AVFoundation -framework CoreMedia \
+            -framework QuartzCore -framework ScreenSaver \
+            Sources/WapleSaver/WapleSaverView.m \
+            -o "$OUT"

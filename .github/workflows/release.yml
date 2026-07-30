@@ -1,0 +1,99 @@
+# 태그 push(v*)가 릴리스의 시작점이다.
+# 패키징 자체는 로컬과 동일하게 scripts/package-app.sh 만 호출한다(zero-dep 원칙 유지 —
+# 릴리스 산출물이 로컬 실행과 CI 실행에서 같은 절차로 만들어진다).
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # gh release create 에 필요
+
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # swift test 는 여기서 실행하지 않는다 — ci.yml 워크플로가 이미 push/PR 마다
+      # 전수 테스트를 돌리므로, 태그는 "테스트가 그린인 커밋"에만 붙인다는 운영 전제를 둔다.
+      # (릴리스 잡에서 다시 돌리면 macOS 러너 비용/시간이 2배로 든다.)
+
+      - name: Extract version from tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"          # e.g. v0.2.0 또는 v0.1.0-beta.1
+          VERSION="${TAG#v}"                # v 접두사 제거 → 0.2.0
+          PLIST_VERSION="${VERSION%%-*}"    # 프리릴리즈 접미사 제거 → 0.1.0 (CFBundleShortVersionString 은 숫자+점만 허용)
+          echo "WAPLE_VERSION=$PLIST_VERSION" >> "$GITHUB_ENV"
+          echo "WAPLE_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          echo "Releasing version: $VERSION (plist: $PLIST_VERSION, build $GITHUB_RUN_NUMBER)"
+
+      # Developer ID 서명/공증은 secrets 이 설정된 경우에만 활성화된다.
+      # secrets 가 없으면 ad-hoc 서명으로 폴 back 한다(로컬 패키징과 동일).
+      # 주의: 실제 Developer ID 서명이 동작하려면 인증서(.p12)가 러너 키체인에
+      # 임포트되어 있어야 한다 — secrets 를 설정할 때 security import 스텝을 함께 추가할 것.
+      - name: Detect signing configuration
+        id: signing
+        env:
+          DEV_ID: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          NOTARY: ${{ secrets.NOTARY_PROFILE }}
+        run: |
+          if [ -n "$DEV_ID" ] && [ -n "$NOTARY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "WAPLE_SIGN_IDENTITY=$DEV_ID" >> "$GITHUB_ENV"
+            echo "Developer ID 서명 + 공증 모드: $DEV_ID"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "WAPLE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "secrets 미설정 — ad-hoc 서명으로 진행"
+          fi
+
+      # WAPLE_VERSION/WAPLE_BUILD/WAPLE_SIGN_IDENTITY 는 앞 스텝들이 GITHUB_ENV 로 주입한다.
+      - name: Package app (Waple.app + Waple.dmg)
+        run: scripts/package-app.sh
+
+      # Developer ID 로 서명된 경우에만 공증(notarization) 후 티켓을 DMG 에 스테이플한다.
+      - name: Notarize DMG
+        if: steps.signing.outputs.available == 'true'
+        run: |
+          xcrun notarytool submit Waple.dmg --keychain-profile "${{ secrets.NOTARY_PROFILE }}" --wait
+          xcrun stapler staple Waple.dmg
+
+      - name: Compute SHA-256
+        run: |
+          SHA="$(shasum -a 256 Waple.dmg | awk '{print $1}')"
+          echo "sha256=$SHA" >> "$GITHUB_ENV"
+          shasum -a 256 Waple.dmg
+
+      # 공개 규약: 태그에 "-" 가 있으면(semver 프리릴리즈, 예: v0.1.0-beta.1) draft 없이
+      # 즉시 prerelease 로 공개한다. 정식 태그는 draft 로 생성 — 웹 UI 에서 검토 후 Publish.
+      # 릴리스 본문에 sha256 을 포함한다(Homebrew cask 의 sha256 필드 갱신에 그대로 사용).
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > release-notes.md <<EOF
+          ## Waple ${GITHUB_REF_NAME}
+
+          다운로드: \`Waple.dmg\` — 열어서 Waple.app 을 /Applications 로 드래그.
+
+          ### 검증
+
+          \`\`\`
+          SHA-256 (Waple.dmg): ${sha256}
+          \`\`\`
+
+          Homebrew cask 갱신 시 위 sha256 값을 사용 (docs/RELEASING.md §3 참조).
+          EOF
+          FLAGS="--draft"
+          case "$GITHUB_REF_NAME" in
+            *-*) FLAGS="--prerelease" ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" Waple.dmg \
+            $FLAGS \
+            --title "Waple ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md
