@@ -258,13 +258,13 @@ final class Model3DTests: XCTestCase {
             d.append(0)
         }
         appendAnim("test|glance_bone", "loop", 84)
-        appendEvents([(31.0 / 30, "Look Left"), (10.0 / 30, "Look Right")])   // 실물 link_adult 값
+        appendEvents([(Float(31) / 30, "Look Left"), (Float(10) / 30, "Look Right")])   // 실물 link_adult 값
         appendAnim("test|nod_bone", "loop", 240)
-        appendEvents([(1.0, "点头错帧")])                                      // 실물 3396722575 값(UTF-8)
+        appendEvents([(Float(1), "点头错帧")])                                      // 실물 3396722575 값(UTF-8)
         // 디렉토리 레코드(실측 두-패밀리: 짧은 이름 + 빈 모드) — 이벤트는 이름 매칭 본클립에 병합,
         // 렌더 클립 목록엔 미포함.
         appendAnim("Glance", "", 84)
-        appendEvents([(2.0 / 30, "dir_evt")])
+        appendEvents([(Float(2) / 30, "dir_evt")])
 
         let m = try XCTUnwrap(Model3D.parse(d))
         XCTAssertEqual(m.animations.count, 2, "디렉토리 레코드는 클립 목록 미포함(포즈 선택 무회귀)")
