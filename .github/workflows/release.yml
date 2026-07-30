@@ -78,7 +78,9 @@ jobs:
 
       # 공개 규약: 태그에 "-" 가 있으면(semver 프리릴리즈, 예: v0.1.0-beta.1) draft 없이
       # 즉시 prerelease 로 공개한다. 정식 태그는 draft 로 생성 — 웹 UI 에서 검토 후 Publish.
-      # 릴리스 본문에 sha256 을 포함한다(Homebrew cask 의 sha256 필드 갱신에 그대로 사용).
+      # 본문은 영어(README 와 동일 기조, 공개 대상). sha256 은 Homebrew cask 갱신에 그대로 쓴다.
+      # 첫 실행 Gatekeeper 안내는 ad-hoc 서명일 때만 붙인다 — Developer ID + 공증이 켜지면
+      # 그 안내가 거짓이 되므로 signing 스텝 출력으로 분기한다.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -86,16 +88,37 @@ jobs:
           cat > release-notes.md <<EOF
           ## Waple ${GITHUB_REF_NAME}
 
-          다운로드: \`Waple.dmg\` — 열어서 Waple.app 을 /Applications 로 드래그.
+          Download \`Waple.dmg\`, open it, and drag **Waple.app** into \`/Applications\`.
+          Requires macOS 14 or later on Apple Silicon.
 
-          ### 검증
+          ### Verify
 
           \`\`\`
           SHA-256 (Waple.dmg): ${sha256}
           \`\`\`
-
-          Homebrew cask 갱신 시 위 sha256 값을 사용 (docs/RELEASING.md §3 참조).
           EOF
+          if [ "${{ steps.signing.outputs.available }}" != "true" ]; then
+            cat >> release-notes.md <<'EOF'
+
+          ### First launch
+
+          This build is **ad-hoc signed and not notarized**, so Gatekeeper blocks the first launch.
+          Approve it once with either:
+
+          ```
+          xattr -dr com.apple.quarantine /Applications/Waple.app
+          ```
+
+          …or right-click the app and choose *Open*.
+          EOF
+          fi
+          cat >> release-notes.md <<'EOF'
+
+          Supported wallpaper types and the scene feature matrix are in the
+          [README](../../blob/main/README.md). When updating a Homebrew cask, use the sha256 above
+          (see `docs/RELEASING.md` §3).
+          EOF
+          echo "--- release notes ---"; cat release-notes.md
           FLAGS="--draft"
           case "$GITHUB_REF_NAME" in
             *-*) FLAGS="--prerelease" ;;
