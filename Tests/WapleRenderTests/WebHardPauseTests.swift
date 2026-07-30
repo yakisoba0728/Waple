@@ -246,21 +246,28 @@ final class WebHardPauseTests: XCTestCase {
         XCTAssertEqual(try object(web, "window.__counts")["timeout"] as? Int, 1)
     }
 
-    /// 재개 직후 "남은 지연이 아직 안 지났다" 는 negative 단언은 벽시계에 의존한다 — 러너 부하로 eval
-    /// 왕복이 길어지면 일시정지 시점의 경과가 커지고(CI 실측 180~280ms), 남은 지연이 아래 스핀 창보다
-    /// 짧아져 정상 동작이 조기 발화로 보인다(런 30541571683 에서 remaining 1 != 0 로 실패).
-    /// 경과를 JS 로 실측해 창보다 확실히 여유가 있을 때만 단정한다. 일시정지 중 미발화(무조건)와
-    /// 재개 후 정확히 1회 발화(무조건)는 그대로 잠근다.
+    /// 규약(WebHardPauseJS.swift:156·170): 일시정지 때 `remaining = deadline - now` 를 저장하고 재개 때
+    /// 그 remaining 으로 재무장한다 — 즉 재개 후 "남은 지연" 만큼 지나서 발화해야 하며, 전체 지연 재시작도
+    /// 즉시 발화도 아니다.
+    ///
+    /// 종전 단언은 재개 후 100ms 스핀 스냅샷으로 "아직 미발화" 를 봤는데, 그 창은 테스트 프로세스의
+    /// 벽시계에 의존한다 — 3코어 러너에서 `spin` 뒤 eval 왕복이 수십~100ms 라 관측 시점이 예정 발화
+    /// 시각을 넘겨, 정상 동작이 조기 발화로 보였다(런 30541571683 → 창 게이트 추가 후에도 30542607905
+    /// 에서 "남은 지연 152ms" 인데 관측이 발화 후). 창 자체가 잘못된 접근이라 폐기하고, 발화 시각을
+    /// 페이지 시계(shim 과 동일한 performance.now)로 직접 재서 규약을 단정한다 — 머신 속도와 무관하고,
+    /// 부하로 늦게 발화하는 건 허용하되 남은 지연보다 이르게 발화하면 잡는다.
     func testPausedCreationCrossClearAndRemainingDelay() throws {
         let keepDelayMS = 280.0
-        let resumeSpin = 0.10
         let web = makeControllerWebView()
         _ = pumpEvalJS(web, """
         window.__fired = {
           timeout: 0, interval: 0, raf: 0, remaining: 0, stringHandler: 0
         };
-        window.__meta = { t0: performance.now(), elapsedAtPause: -1 };
-        var keep = setTimeout(function () { window.__fired.remaining += 1; }, \(Int(keepDelayMS)));
+        window.__meta = { t0: performance.now(), elapsedAtPause: -1, resumedAt: -1, firedAt: -1 };
+        var keep = setTimeout(function () {
+          window.__fired.remaining += 1;
+          window.__meta.firedAt = performance.now();
+        }, \(Int(keepDelayMS)));
         """)
         spin(0.07)
         _ = pumpEvalJS(web, """
@@ -275,18 +282,24 @@ final class WebHardPauseTests: XCTestCase {
         cancelAnimationFrame(rafID);
         """)
         spin(0.30)
-        XCTAssertEqual(try object(web, "window.__fired")["remaining"] as? Int, 0)
-        let elapsedAtPause = try XCTUnwrap(object(web, "window.__meta")["elapsedAtPause"] as? Double)
-        _ = pumpEvalJS(web, "window.__wapleHardPauseController.setPaused(false);")
-        spin(resumeSpin)
-        let remainingMS = keepDelayMS - elapsedAtPause
-        if remainingMS > resumeSpin * 1000 + 50 {
-            XCTAssertEqual(try object(web, "window.__fired")["remaining"] as? Int, 0,
-                           "남은 지연 \(remainingMS)ms > 스핀 \(resumeSpin * 1000)ms 이므로 아직 미발화여야")
-        }
+        XCTAssertEqual(try object(web, "window.__fired")["remaining"] as? Int, 0,
+                       "일시정지 300ms 동안에는 발화 금지")
+        _ = pumpEvalJS(web, """
+        window.__meta.resumedAt = performance.now();
+        window.__wapleHardPauseController.setPaused(false);
+        """)
         XCTAssertTrue(waitUntil {
             (try? self.object(web, "window.__fired")["remaining"] as? Int) == 1
-        })
+        }, "재개 후 남은 지연 안에 정확히 1회 발화해야")
+        let meta = try object(web, "window.__meta")
+        let elapsedAtPause = try XCTUnwrap(meta["elapsedAtPause"] as? Double)
+        let resumedAt = try XCTUnwrap(meta["resumedAt"] as? Double)
+        let firedAt = try XCTUnwrap(meta["firedAt"] as? Double)
+        let remainingMS = keepDelayMS - elapsedAtPause
+        let firedAfterResume = firedAt - resumedAt
+        XCTAssertGreaterThan(firedAfterResume, remainingMS - 40,
+                             "재개 후 \(firedAfterResume)ms 에 발화 — 남은 지연 \(remainingMS)ms 를 무시했다"
+                             + "(전체 지연 재시작/즉시 발화 회귀)")
         let fired = try object(web, "window.__fired")
         XCTAssertEqual(fired["timeout"] as? Int, 0)
         XCTAssertEqual(fired["interval"] as? Int, 0)
