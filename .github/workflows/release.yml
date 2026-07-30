@@ -19,6 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 러너 기본 Xcode(구형 Swift) 회피 — ci.yml 과 동일한 이유로 최신 Xcode 고정.
+      - name: Select latest Xcode
+        run: |
+          LATEST="$(ls -d /Applications/Xcode*.app | grep -vi beta | sort -V | tail -1)"
+          echo "Selecting $LATEST"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+          swift --version
+
       # swift test 는 여기서 실행하지 않는다 — ci.yml 워크플로가 이미 push/PR 마다
       # 전수 테스트를 돌리므로, 태그는 "테스트가 그린인 커밋"에만 붙인다는 운영 전제를 둔다.
       # (릴리스 잡에서 다시 돌리면 macOS 러너 비용/시간이 2배로 든다.)

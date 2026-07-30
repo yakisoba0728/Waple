@@ -16,6 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 러너 기본 Xcode(15.4 = Swift 5.10)는 이 코드베이스에서 오진단을 낸다
+      # (@Sendable 캡처 var 에러화, ?? 체인 리터럴 오추론, 타입체크 타임아웃 등 —
+      #  로컬 최신 툴체인과 진단이 달라 CI 전용 에러 6파일+테스트 2파일을 유발).
+      # 이미지 안의 최신 Xcode 로 고정해 로컬 개발 툴체인과 진단을 맞춘다.
+      - name: Select latest Xcode
+        run: |
+          LATEST="$(ls -d /Applications/Xcode*.app | grep -vi beta | sort -V | tail -1)"
+          echo "Selecting $LATEST"
+          sudo xcode-select -s "$LATEST/Contents/Developer"
+          swift --version
+          xcodebuild -version
+
       # zero-dep 프로젝트라 Package.resolved 가 없으므로 캐시 키는 Package.swift 해시 + 러너 이미지 버전.
       - name: Compute .build cache key
         id: cache-key
@@ -30,11 +42,6 @@ jobs:
           key: ${{ steps.cache-key.outputs.key }}
           restore-keys: |
             ${{ steps.cache-key.outputs.prefix }}-
-
-      - name: Toolchain info
-        run: |
-          swift --version
-          xcodebuild -version
 
       - name: Build
         run: swift build
