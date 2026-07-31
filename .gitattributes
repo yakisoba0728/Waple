@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# 커밋된 스냅샷 기준선: 썸네일은 바이너리
+spec/golden/snapshot/**/*.png binary

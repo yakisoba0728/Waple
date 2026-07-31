@@ -1,0 +1,12 @@
+Test Suite 'Selected tests' started at 2026-07-31 21:59:12.460.
+Test Suite 'WapleRenderTests.xctest' started at 2026-07-31 21:59:12.461.
+Test Suite 'TexVariantDecodeCorpusTests' started at 2026-07-31 21:59:12.461.
+Test Case '-[WapleRenderTests.TexVariantDecodeCorpusTests testChildlinkTunicVariantsDecodeDistinctColors]' started.
+Test Case '-[WapleRenderTests.TexVariantDecodeCorpusTests testChildlinkTunicVariantsDecodeDistinctColors]' passed (0.045 seconds).
+Test Suite 'TexVariantDecodeCorpusTests' passed at 2026-07-31 21:59:12.507.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.045 (0.045) seconds
+Test Suite 'WapleRenderTests.xctest' passed at 2026-07-31 21:59:12.507.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.045 (0.045) seconds
+Test Suite 'Selected tests' passed at 2026-07-31 21:59:12.507.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.045 (0.046) seconds
+[variant] tuniccolor 0/green=(13,102,13) 1/red=(111,4,4) 2/blue=(8,27,103) 3/dark=(9,9,9)

@@ -1,0 +1,67 @@
+# spec/golden/snapshot/ — 커밋된 스냅샷 기준선
+
+지금까지 이 리포에는 **커밋된 골든이 하나도 없었다**(BACKLOG F402/F403). 기준선이
+처분성 `/tmp/waple_gt` 에 저장되고 드리프트는 `NSLog` 경고로만 남았으며, 하드 오라클이
+"마운트 무크래시 + PNG 존재" 뿐이라 **완전히 검은 프레임도 통과**했다.
+
+여기가 그 안전망이다. 변경이 무엇을 바꿨는지 판정하는 기준이 된다.
+
+## `baseline-81098bb` — 최초 기준선
+
+WE 엔진 이식 작업(공유 에셋 동봉 + 유니폼 규약 교정)을 **시작하기 전** 상태다.
+
+| 항목 | 값 |
+| --- | --- |
+| gitSHA | `81098bb` (main, 작업 트리 청결) |
+| 캡처 시각 | `captureTime: 6` (고정) |
+| entries / empties / failures | **170 / 0 / 0** |
+| 완전 검정 프레임 | **0장** (PIL `getbbox()` · manifest `meanLuma==0` · 컨택트 시트 육안, 3중 확인) |
+| meanLuma 범위 | 0.0021 ~ 0.8704 |
+| 결정성 | 결정 **169** / 비결정 **1** |
+| activeDebugGates | `[]` |
+| 캡처 환경 | macOS, Apple M5, Swift 6.4 / Xcode 27.0 |
+| 코퍼스 | scene.pkg **170종** |
+| 소요 | **1,694초 (28.2분)** — **debug 빌드** |
+
+## 읽을 때 반드시 알아야 할 것 셋
+
+**① 이 기준선은 debug 빌드다.**
+`docs/snapshot-regression.md` 의 기존 실측 ≈611초는 **release** 이고 구성도 달랐다
+(146 캡처 + 24 empty). 이번은 debug + 170 캡처다. 씬당으로 보면 4.2s(release) vs
+10.0s(debug)로 2.4배다. **시간을 비교할 때 빌드 구성을 맞춰야 한다.**
+
+**② 비디오-백드 24종은 머신 간 재현이 보장되지 않는다.**
+`empties: 0` 은 H1 수정 이후 비디오-백드 씬이 `entries` 에 처음 들어온 결과다. 이들은
+AVFoundation 산출이라 다른 머신에서 `--compare` 하면 strict 불일치가 날 수 있다.
+**그건 회귀가 아니라 예고된 현상이고, 대응은 lax 강등이다.**
+
+**③ 비결정 씬 1종.**
+`3363252053` — 파티클·광원이 많은 3D 씬. `selfMaxDiff=189`, self-diff mean 5.27 /
+frac 0.1559 로 `deterministic:false` 로 기록됐다. 나머지 169종은 `selfMaxDiff=0`
+(2회 재마운트 픽셀 완전 동일)이다. 이 씬은 회귀 판정에서 제외하거나 별도 임계를 쓴다.
+
+## 재생성
+
+```bash
+export WAPLE_REAL_PKGS=<코퍼스>/backgrounds
+export WAPLE_BASE_ASSETS=<코퍼스>/assets
+swift run -c release WapleCompat --capture <출력디렉터리> --label <라벨> <코퍼스루트>
+```
+
+**macOS 는 GUI 로그인 세션 밖에서 Metal 을 주지 않는다.** SSH 로 돌리면 GPU 작업이
+실패가 아니라 **조용히 스킵**된다. 반드시 `launchctl asuser $(id -u) ...` 로 감쌀 것.
+
+코퍼스가 실제로 잡혔는지는 센티넬로 확인한다 — `TexVariantDecodeCorpusTests`(1건),
+`PuppetBlendRealSceneTests`(2건). 스킵되면 코퍼스 미발견이다.
+
+## 구성
+
+```
+baseline-81098bb/
+├── manifest.json   씬별 hash · meanLuma · selfMaxDiff · deterministic (검증 계약)
+├── thumbs/         170장 256×144 PNG (시각 diff 용)
+└── sentinel.log    코퍼스 접근 확인 로그
+```
+
+`manifest.json` 이 **기계 검증의 계약**이고, `thumbs/` 는 사람이 무엇이 바뀌었는지
+보기 위한 것이다. 캡처 전문 로그(2.9MB)는 커밋하지 않는다.
