@@ -8,14 +8,7 @@ import WapleLibrary
 @MainActor
 final class WorkshopPagingTests: XCTestCase {
 
-    /// transport 는 오프메인에서 호출될 수 있으므로 락으로 기록한다.
-    private final class URLRecorder: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stored: [URL] = []
-        func record(_ u: URL) { lock.lock(); stored.append(u); lock.unlock() }
-        var urls: [URL] { lock.lock(); defer { lock.unlock() }; return stored }
-    }
-
+    /// transport 는 오프메인에서 호출될 수 있으므로 실패 플래그를 락으로 보호한다.
     private final class FailSwitch: @unchecked Sendable {
         private let lock = NSLock()
         private var _failing: Bool
@@ -46,11 +39,6 @@ final class WorkshopPagingTests: XCTestCase {
         let details = ids.map { "{\"publishedfileid\":\"\($0)\",\"title\":\"t\($0)\"}" }
             .joined(separator: ",")
         return Data("{\"response\":{\"publishedfiledetails\":[\(details)]}}".utf8)
-    }
-
-    private func queryValue(_ url: URL, _ name: String) -> String? {
-        URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first { $0.name == name }?.value
     }
 
     private var tempDirs: [URL] = []
@@ -97,7 +85,7 @@ final class WorkshopPagingTests: XCTestCase {
         let recorder = URLRecorder()
         let vm = makeVM { url in
             recorder.record(url)
-            let page = self.queryValue(url, "page")
+            let page = queryValue(url, "page")
             // 2페이지는 29·30을 중복 포함(스팀 페이징 시프트 재현) — 중복 id 는 버려져야 한다
             return (self.itemsJSON(ids: page == "1" ? 1...30 : 29...58), 200)
         }
@@ -112,7 +100,7 @@ final class WorkshopPagingTests: XCTestCase {
         let recorder = URLRecorder()
         let vm = makeVM { url in
             recorder.record(url)
-            return (self.itemsJSON(ids: self.queryValue(url, "page") == "1" ? 1...30 : 31...33), 200)
+            return (self.itemsJSON(ids: queryValue(url, "page") == "1" ? 1...30 : 31...33), 200)
         }
         await vm.search()
         await vm.loadMore()
@@ -136,8 +124,8 @@ final class WorkshopPagingTests: XCTestCase {
         let failing = FailSwitch(true)
         let vm = makeVM { url in
             recorder.record(url)
-            if self.queryValue(url, "page") == "2" && failing.failing { throw URLError(.timedOut) }
-            return (self.itemsJSON(ids: self.queryValue(url, "page") == "1" ? 1...30 : 31...60), 200)
+            if queryValue(url, "page") == "2" && failing.failing { throw URLError(.timedOut) }
+            return (self.itemsJSON(ids: queryValue(url, "page") == "1" ? 1...30 : 31...60), 200)
         }
         await vm.search()
         await vm.loadMore()                       // 실패
@@ -155,7 +143,7 @@ final class WorkshopPagingTests: XCTestCase {
         let proceed = Latch()   // 최신 검색이 적용된 뒤 낡은 검색을 재개시킨다
         let vm = makeVM { url in
             // 정렬로 두 응답 구분: subscriptions(query_type 9)=낡은 검색, latest(1)=최신 검색
-            if self.queryValue(url, "query_type") == "9" {
+            if queryValue(url, "query_type") == "9" {
                 await entered.signal()
                 await proceed.wait()
                 return (self.itemsJSON(ids: 1...5), 200)      // 낡은 데이터 — 반영되면 안 됨
@@ -226,7 +214,7 @@ final class WorkshopPagingTests: XCTestCase {
     func testCancelledLoadMoreDoesNotSetFailureMessage() async {
         let cancelled = FailSwitch(true)
         let vm = makeVM { url in
-            if self.queryValue(url, "page") == "2" && cancelled.failing { throw URLError(.cancelled) }
+            if queryValue(url, "page") == "2" && cancelled.failing { throw URLError(.cancelled) }
             return (self.itemsJSON(ids: 1...30), 200)
         }
         await vm.search()

@@ -220,39 +220,6 @@ final class Render3DSceneFixRegressionTests: XCTestCase {
 
     // MARK: - GPU end-to-end(합성 씬 — Scene3DPBRShadowRenderTests 하네스 동형)
 
-    /// +Z 노멀 평면 1장의 최소 MDL(Scene3DPBRShadowRenderTests.planeModel 과 동일 포맷).
-    private func planeModel() -> Data {
-        var data = Data("MDLV0023".utf8)
-        data.append(0)
-        func u32(_ value: UInt32) {
-            var little = value.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        func f32(_ value: Float) {
-            var little = value
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        u32(0x0000000f); u32(1); u32(1)
-        data.append(Data("materials/plane.json".utf8)); data.append(0)
-        u32(0)
-        f32(-1); f32(-1); f32(0); f32(1); f32(1); f32(0)
-        u32(0x0000000f)
-        let vertices: [(Float, Float, Float, Float)] = [
-            (-1, -1, 0, 1), (1, -1, 1, 1), (1, 1, 1, 0), (-1, 1, 0, 0),
-        ]
-        u32(UInt32(vertices.count * 48))
-        for (x, y, u, v) in vertices {
-            [x, y, 0, 0, 0, 1, 1, 0, 0, -1, u, v].forEach(f32)
-        }
-        let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
-        u32(UInt32(indices.count * MemoryLayout<UInt16>.stride))
-        for index in indices {
-            var little = index.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        return data
-    }
-
     private let litMeshMaterial =
         #"{"passes":[{"textures":["white"],"constantshadervalues":{"roughness":0.7,"metallic":0}}]}"#
 

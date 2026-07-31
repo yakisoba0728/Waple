@@ -33,9 +33,6 @@ final class WallpaperPropertiesMetaTests: XCTestCase {
 }
 
 final class SceneUserBindingTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
     private let model = #"{"material":"materials/m.json"}"#
     private let material = #"{"passes":[{"textures":["pic"]}]}"#
 

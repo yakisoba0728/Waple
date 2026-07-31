@@ -5,9 +5,6 @@ import simd
 /// 파티클 이미터 오디오반응(WE audioprocessing*) — 파스 + rate 변조 + 무음 폴백 가드.
 /// 코퍼스 13씬(audioprocessingmode) 대상. 무신호(캡처 무음/공급자 부재) 시 기존 경로와 비트동일이어야 한다.
 final class ParticleAudioTests: XCTestCase {
-    private func json(_ s: String) -> [String: Any] {
-        try! JSONSerialization.jsonObject(with: s.data(using: .utf8)!) as! [String: Any]
-    }
 
     // MARK: - 파스 (실측 스키마)
 

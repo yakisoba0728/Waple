@@ -30,39 +30,6 @@ final class SceneRendererAuditV06RegressionTests: XCTestCase {
         return (renderer, root)
     }
 
-    /// 유효 MDLV0023(비스키닝, ±1 XY 평면 4정점 — SceneRendererSceneFixRegressionTests.planeModel 과 동일 바이트).
-    private func planeModel() -> Data {
-        var data = Data("MDLV0023".utf8)
-        data.append(0)
-        func u32(_ value: UInt32) {
-            var little = value.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        func f32(_ value: Float) {
-            var little = value
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        u32(0x0000000f); u32(1); u32(1)
-        data.append(Data("materials/plane.json".utf8)); data.append(0)
-        u32(0)
-        f32(-1); f32(-1); f32(0); f32(1); f32(1); f32(0)
-        u32(0x0000000f)
-        let vertices: [(Float, Float, Float, Float)] = [
-            (-1, -1, 0, 1), (1, -1, 1, 1), (1, 1, 1, 0), (-1, 1, 0, 0),
-        ]
-        u32(UInt32(vertices.count * 48))
-        for (x, y, u, v) in vertices {
-            [x, y, 0, 0, 0, 1, 1, 0, 0, -1, u, v].forEach(f32)
-        }
-        let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
-        u32(UInt32(indices.count * MemoryLayout<UInt16>.stride))
-        for index in indices {
-            var little = index.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        return data
-    }
-
     /// video 페이로드를 담는 최소 .tex(TEXB0001 — VideoBackedSceneCaptureTests.makeTex 와 동형).
     private func makeVideoTex(w: Int, h: Int, payload: Data) -> Data {
         var b: [UInt8] = []

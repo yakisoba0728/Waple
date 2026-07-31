@@ -158,20 +158,7 @@ final class VideoRendererLifecycleTests: XCTestCase {
         renderer.teardown()
     }
 
-    private func project(id: String, fileName: String, dir: URL) -> WallpaperProject {
-        WallpaperProject(id: id, type: .video, fileName: fileName, previewName: nil,
-                         title: id, tags: [], contentRating: nil, workshopId: nil,
-                         dependency: nil, folderURL: dir)
-    }
-
     private func playerLayers(in view: NSView) -> [AVPlayerLayer] {
         view.layer?.sublayers?.compactMap { $0 as? AVPlayerLayer } ?? []
-    }
-
-    private func tempDir() throws -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
     }
 }

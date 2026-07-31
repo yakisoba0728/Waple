@@ -8,9 +8,6 @@ import simd
 /// S-26 orientation(F626) / S-28 box distancemin(F627) / S-65 다중 turbulence(F628) /
 /// S-67 mapsequence axis(F630) / S-63 vortex_v2(F631).
 final class ParticleSceneFixRegressionTests: XCTestCase {
-    private func json(_ s: String) -> [String: Any] {
-        try! JSONSerialization.jsonObject(with: s.data(using: .utf8)!) as! [String: Any]
-    }
 
     // MARK: - F620 (S-3): 이미터 speedmin/speedmax → 방출 방향 초기속도
 

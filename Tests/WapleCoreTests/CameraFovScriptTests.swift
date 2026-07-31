@@ -6,9 +6,6 @@ import XCTest
 /// 9씬(예 3706286085 createScriptProperties() 슬라이더 연동 줌). base 는 cam.scripts 에 "fov" 키가
 /// 아예 안 생겨 카메라 fov(줌) 애니 일부가 정지한다.
 final class CameraFovScriptTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
 
     /// fov={value,script} → cam.scripts["fov"] 캡처(기존 origin/zoom 과 동형).
     func testFovScriptCaptured() throws {

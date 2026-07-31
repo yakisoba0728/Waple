@@ -10,9 +10,6 @@ import XCTest
 /// - F751(S-20): 모델 json 루트 `cropoffset` — 1차는 RE 문서 의미 미확정으로 기각. 실물 전수 분석으로
 ///   의미 확정(크롭 영역 중심 − 원본 이미지 중심, px — 전수 1386 컴포넌트가 0.5 배수) 후 파스·보존.
 final class ScenePreserveFieldsIntegrationTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
 
     // MARK: - F750(S-47): 라이트 CSM/볼류메트릭 필드
 

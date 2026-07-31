@@ -10,19 +10,6 @@ final class MediaFixRegressionTests: XCTestCase {
 
     // MARK: 공용 헬퍼
 
-    private func tempDir() throws -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-
-    private func project(id: String, fileName: String, dir: URL) -> WallpaperProject {
-        WallpaperProject(id: id, type: .video, fileName: fileName, previewName: nil,
-                         title: id, tags: [], contentRating: nil, workshopId: nil,
-                         dependency: nil, folderURL: dir)
-    }
-
     private func spin(until predicate: () -> Bool, timeout: TimeInterval = 3) {
         let deadline = Date().addingTimeInterval(timeout)
         while !predicate(), Date() < deadline {

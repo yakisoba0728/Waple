@@ -2,9 +2,6 @@ import XCTest
 @testable import WapleCore
 
 final class ParticleSystemTests: XCTestCase {
-    private func json(_ s: String) -> [String: Any] {
-        try! JSONSerialization.jsonObject(with: s.data(using: .utf8)!) as! [String: Any]
-    }
 
     // 실제 presets/snow/.../snowperspective.json 구조.
     private let snow = """
