@@ -51,7 +51,7 @@ fail to decode, or shader compile validation on a machine with no GPU device —
 silently. "It gets logged" is a general design direction, not a guarantee.
 
 Known gaps that are tracked rather than hidden live in [BACKLOG.md](BACKLOG.md) and
-[docs/](docs/); a few current examples: `_rt_` composite triangle masks in one corpus scene, word
+[docs/README.md](docs/README.md); a few current examples: `_rt_` composite triangle masks in one corpus scene, word
 wrap for very long unwrapped text (an 8192px raster guard can silently drop it), `g_Color1`–`4`
 gradient uniforms, and `SHDV0069` shader-cache parsing.
 
@@ -96,6 +96,10 @@ swift test                      # full test suite + real-scene ground truth
 swift build -c release          # release build
 bash scripts/package-app.sh     # build Waple.app (bundling the .saver screensaver) + Waple.dmg
 ```
+
+**Working on the code?** Read [AGENTS.md](AGENTS.md) first — module map, what the corpus-gated
+tests do and do not verify, and the traps this codebase actually fell into. It is written for both
+human contributors and AI agents. Documentation index: [docs/README.md](docs/README.md).
 
 ## Desktop integration
 
