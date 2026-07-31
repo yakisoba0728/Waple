@@ -1,0 +1,711 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_binaries.py",
+ "note": "wallpaperui.exe 는 UI 라 엔진 분석 대상이 아니다. 크기 비교용으로만 기록한다.",
+ "entries": [
+  {
+   "id": "binary.wallpaper64.exe.fileBytes",
+   "value": 5360112,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 설치본)",
+     "note": "렌더러 본체"
+    }
+   ]
+  },
+  {
+   "id": "binary.wallpaper64.exe.codeBytes",
+   "value": 4344076,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 설치본)",
+     "note": "렌더러 본체"
+    }
+   ]
+  },
+  {
+   "id": "binary.wallpaper64.exe.importedDLLs",
+   "value": [
+    "ADVAPI32.dll",
+    "DWrite.dll",
+    "GDI32.dll",
+    "KERNEL32.dll",
+    "MFReadWrite.dll",
+    "SHELL32.dll",
+    "SHLWAPI.dll",
+    "USER32.dll",
+    "WINMM.dll",
+    "WTSAPI32.dll",
+    "d3d11.dll",
+    "dwmapi.dll",
+    "ole32.dll"
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 설치본)",
+     "note": "렌더러 본체"
+    }
+   ]
+  },
+  {
+   "id": "binary.wallpaper64.exe.sections",
+   "value": [
+    {
+     "name": ".text",
+     "vsize": 4344076
+    },
+    {
+     "name": ".rdata",
+     "vsize": 741804
+    },
+    {
+     "name": ".data",
+     "vsize": 56764
+    },
+    {
+     "name": ".pdata",
+     "vsize": 177504
+    },
+    {
+     "name": ".fptable",
+     "vsize": 256
+    },
+    {
+     "name": "_RDATA",
+     "vsize": 48
+    },
+    {
+     "name": ".rsrc",
+     "vsize": 39352
+    },
+    {
+     "name": ".reloc",
+     "vsize": 11820
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 설치본)",
+     "note": "렌더러 본체"
+    }
+   ]
+  },
+  {
+   "id": "binary.scenescript64.dll.fileBytes",
+   "value": 28730352,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll (WE 2.8.42 설치본)",
+     "note": "스크립트 엔진(V8 정적링크)"
+    }
+   ]
+  },
+  {
+   "id": "binary.scenescript64.dll.codeBytes",
+   "value": 24852188,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll (WE 2.8.42 설치본)",
+     "note": "스크립트 엔진(V8 정적링크)"
+    }
+   ]
+  },
+  {
+   "id": "binary.scenescript64.dll.importedDLLs",
+   "value": [
+    "ADVAPI32.dll",
+    "KERNEL32.dll",
+    "WINMM.dll",
+    "dbghelp.dll"
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll (WE 2.8.42 설치본)",
+     "note": "스크립트 엔진(V8 정적링크)"
+    }
+   ]
+  },
+  {
+   "id": "binary.scenescript64.dll.sections",
+   "value": [
+    {
+     "name": ".text",
+     "vsize": 24852188
+    },
+    {
+     "name": "malloc_h",
+     "vsize": 304
+    },
+    {
+     "name": ".rdata",
+     "vsize": 2884366
+    },
+    {
+     "name": ".data",
+     "vsize": 353404
+    },
+    {
+     "name": ".pdata",
+     "vsize": 692796
+    },
+    {
+     "name": ".fptable",
+     "vsize": 256
+    },
+    {
+     "name": ".rsrc",
+     "vsize": 480
+    },
+    {
+     "name": ".reloc",
+     "vsize": 72352
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll (WE 2.8.42 설치본)",
+     "note": "스크립트 엔진(V8 정적링크)"
+    }
+   ]
+  },
+  {
+   "id": "binary.mediaextensions64.dll.fileBytes",
+   "value": 3484144,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/mediaextensions64.dll (WE 2.8.42 설치본)",
+     "note": "미디어 파이프라인"
+    }
+   ]
+  },
+  {
+   "id": "binary.mediaextensions64.dll.codeBytes",
+   "value": 2122963,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/mediaextensions64.dll (WE 2.8.42 설치본)",
+     "note": "미디어 파이프라인"
+    }
+   ]
+  },
+  {
+   "id": "binary.mediaextensions64.dll.importedDLLs",
+   "value": [
+    "KERNEL32.dll",
+    "SHELL32.dll",
+    "WINMM.dll",
+    "ole32.dll"
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/mediaextensions64.dll (WE 2.8.42 설치본)",
+     "note": "미디어 파이프라인"
+    }
+   ]
+  },
+  {
+   "id": "binary.mediaextensions64.dll.sections",
+   "value": [
+    {
+     "name": ".text",
+     "vsize": 2122963
+    },
+    {
+     "name": ".rdata",
+     "vsize": 1079944
+    },
+    {
+     "name": ".data",
+     "vsize": 531600
+    },
+    {
+     "name": ".pdata",
+     "vsize": 94380
+    },
+    {
+     "name": ".fptable",
+     "vsize": 256
+    },
+    {
+     "name": "_RDATA",
+     "vsize": 141584
+    },
+    {
+     "name": ".rsrc",
+     "vsize": 480
+    },
+    {
+     "name": ".reloc",
+     "vsize": 14832
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/mediaextensions64.dll (WE 2.8.42 설치본)",
+     "note": "미디어 파이프라인"
+    }
+   ]
+  },
+  {
+   "id": "binary.resourcecompiler64.exe.fileBytes",
+   "value": 6752240,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourcecompiler64.exe (WE 2.8.42 설치본)",
+     "note": "에셋 컴파일러"
+    }
+   ]
+  },
+  {
+   "id": "binary.resourcecompiler64.exe.codeBytes",
+   "value": 4554220,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourcecompiler64.exe (WE 2.8.42 설치본)",
+     "note": "에셋 컴파일러"
+    }
+   ]
+  },
+  {
+   "id": "binary.resourcecompiler64.exe.importedDLLs",
+   "value": [
+    "ADVAPI32.dll",
+    "FreeImage64.dll",
+    "KERNEL32.dll",
+    "USER32.dll",
+    "assimp-vc143-mt64.dll",
+    "ole32.dll"
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourcecompiler64.exe (WE 2.8.42 설치본)",
+     "note": "에셋 컴파일러"
+    }
+   ]
+  },
+  {
+   "id": "binary.resourcecompiler64.exe.sections",
+   "value": [
+    {
+     "name": ".text",
+     "vsize": 4554220
+    },
+    {
+     "name": ".rdata",
+     "vsize": 1634510
+    },
+    {
+     "name": ".data",
+     "vsize": 119349252
+    },
+    {
+     "name": ".pdata",
+     "vsize": 149844
+    },
+    {
+     "name": ".fptable",
+     "vsize": 256
+    },
+    {
+     "name": "_RDATA",
+     "vsize": 304
+    },
+    {
+     "name": ".rsrc",
+     "vsize": 480
+    },
+    {
+     "name": ".reloc",
+     "vsize": 34472
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourcecompiler64.exe (WE 2.8.42 설치본)",
+     "note": "에셋 컴파일러"
+    }
+   ]
+  },
+  {
+   "id": "binary.resourceutil64.dll.fileBytes",
+   "value": 1322480,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourceutil64.dll (WE 2.8.42 설치본)",
+     "note": "리소스 유틸"
+    }
+   ]
+  },
+  {
+   "id": "binary.resourceutil64.dll.codeBytes",
+   "value": 1077980,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourceutil64.dll (WE 2.8.42 설치본)",
+     "note": "리소스 유틸"
+    }
+   ]
+  },
+  {
+   "id": "binary.resourceutil64.dll.importedDLLs",
+   "value": [
+    "FreeImage64.dll",
+    "KERNEL32.dll"
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourceutil64.dll (WE 2.8.42 설치본)",
+     "note": "리소스 유틸"
+    }
+   ]
+  },
+  {
+   "id": "binary.resourceutil64.dll.sections",
+   "value": [
+    {
+     "name": ".text",
+     "vsize": 1077980
+    },
+    {
+     "name": ".rdata",
+     "vsize": 170400
+    },
+    {
+     "name": ".data",
+     "vsize": 14328
+    },
+    {
+     "name": ".pdata",
+     "vsize": 48228
+    },
+    {
+     "name": ".fptable",
+     "vsize": 256
+    },
+    {
+     "name": ".rsrc",
+     "vsize": 480
+    },
+    {
+     "name": ".reloc",
+     "vsize": 3616
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourceutil64.dll (WE 2.8.42 설치본)",
+     "note": "리소스 유틸"
+    }
+   ]
+  },
+  {
+   "id": "binary.cloneextensions64.dll.fileBytes",
+   "value": 657392,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/cloneextensions64.dll (WE 2.8.42 설치본)",
+     "note": "화면 클론"
+    }
+   ]
+  },
+  {
+   "id": "binary.cloneextensions64.dll.codeBytes",
+   "value": 515356,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/cloneextensions64.dll (WE 2.8.42 설치본)",
+     "note": "화면 클론"
+    }
+   ]
+  },
+  {
+   "id": "binary.cloneextensions64.dll.importedDLLs",
+   "value": [
+    "KERNEL32.dll",
+    "USER32.dll",
+    "d3d11.dll",
+    "dcomp.dll"
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/cloneextensions64.dll (WE 2.8.42 설치본)",
+     "note": "화면 클론"
+    }
+   ]
+  },
+  {
+   "id": "binary.cloneextensions64.dll.sections",
+   "value": [
+    {
+     "name": ".text",
+     "vsize": 515356
+    },
+    {
+     "name": ".rdata",
+     "vsize": 97036
+    },
+    {
+     "name": ".data",
+     "vsize": 9332
+    },
+    {
+     "name": ".pdata",
+     "vsize": 24900
+    },
+    {
+     "name": ".fptable",
+     "vsize": 256
+    },
+    {
+     "name": ".rsrc",
+     "vsize": 480
+    },
+    {
+     "name": ".reloc",
+     "vsize": 2192
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/cloneextensions64.dll (WE 2.8.42 설치본)",
+     "note": "화면 클론"
+    }
+   ]
+  },
+  {
+   "id": "binary.webwallpaper64.exe.fileBytes",
+   "value": 1337840,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/webwallpaper64.exe (WE 2.8.42 설치본)",
+     "note": "웹 배경 호스트"
+    }
+   ]
+  },
+  {
+   "id": "binary.webwallpaper64.exe.codeBytes",
+   "value": 1057068,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/webwallpaper64.exe (WE 2.8.42 설치본)",
+     "note": "웹 배경 호스트"
+    }
+   ]
+  },
+  {
+   "id": "binary.webwallpaper64.exe.importedDLLs",
+   "value": [
+    "ADVAPI32.dll",
+    "KERNEL32.dll",
+    "USER32.dll",
+    "libcef.dll",
+    "ole32.dll"
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/webwallpaper64.exe (WE 2.8.42 설치본)",
+     "note": "웹 배경 호스트"
+    }
+   ]
+  },
+  {
+   "id": "binary.webwallpaper64.exe.sections",
+   "value": [
+    {
+     "name": ".text",
+     "vsize": 1057068
+    },
+    {
+     "name": ".rdata",
+     "vsize": 190122
+    },
+    {
+     "name": ".data",
+     "vsize": 24564
+    },
+    {
+     "name": ".pdata",
+     "vsize": 52548
+    },
+    {
+     "name": ".fptable",
+     "vsize": 256
+    },
+    {
+     "name": ".rsrc",
+     "vsize": 1512
+    },
+    {
+     "name": ".reloc",
+     "vsize": 8548
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/webwallpaper64.exe (WE 2.8.42 설치본)",
+     "note": "웹 배경 호스트"
+    }
+   ]
+  },
+  {
+   "id": "binary.wallpaperui.exe.fileBytes",
+   "value": 12742640,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe (WE 2.8.42 설치본)",
+     "note": "UI — 엔진 무관, 분석 제외 대상"
+    }
+   ]
+  },
+  {
+   "id": "binary.wallpaperui.exe.codeBytes",
+   "value": 10357007,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe (WE 2.8.42 설치본)",
+     "note": "UI — 엔진 무관, 분석 제외 대상"
+    }
+   ]
+  },
+  {
+   "id": "binary.wallpaperui.exe.importedDLLs",
+   "value": [
+    "ADVAPI32.dll",
+    "COMCTL32.dll",
+    "CRYPT32.dll",
+    "DWrite.dll",
+    "FreeImage64.dll",
+    "GDI32.dll",
+    "KERNEL32.dll",
+    "MSWSOCK.dll",
+    "POWRPROF.dll",
+    "SHELL32.dll",
+    "SHLWAPI.dll",
+    "USER32.dll",
+    "WINMM.dll",
+    "WINTRUST.dll",
+    "WS2_32.dll",
+    "assimp-vc143-mt64.dll",
+    "d3d11.dll",
+    "dwmapi.dll",
+    "dxgi.dll",
+    "gdiplus.dll",
+    "libcef.dll",
+    "ole32.dll"
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe (WE 2.8.42 설치본)",
+     "note": "UI — 엔진 무관, 분석 제외 대상"
+    }
+   ]
+  },
+  {
+   "id": "binary.wallpaperui.exe.sections",
+   "value": [
+    {
+     "name": ".text",
+     "vsize": 10357007
+    },
+    {
+     "name": ".rdata",
+     "vsize": 1778016
+    },
+    {
+     "name": ".data",
+     "vsize": 343348
+    },
+    {
+     "name": ".pdata",
+     "vsize": 344604
+    },
+    {
+     "name": ".fptable",
+     "vsize": 256
+    },
+    {
+     "name": "_RDATA",
+     "vsize": 48
+    },
+    {
+     "name": ".rsrc",
+     "vsize": 30568
+    },
+    {
+     "name": ".reloc",
+     "vsize": 45172
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe (WE 2.8.42 설치본)",
+     "note": "UI — 엔진 무관, 분석 제외 대상"
+    }
+   ]
+  }
+ ]
+}
