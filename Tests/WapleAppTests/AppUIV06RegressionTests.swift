@@ -11,11 +11,6 @@ final class AppUIV06RegressionTests: XCTestCase {
                      bookmark: Data(), tags: tags, contentRating: rating)
     }
 
-    private func applyIds(_ entries: [LibraryEntry], _ c: LibraryFilterCriteria) -> [String] {
-        LibraryFiltering.apply(entries, search: "", criteria: c, sort: .recentFirst,
-                               isFavorite: { _ in false }).map(\.id)
-    }
-
     // MARK: - 감사 V06(1): 선택 집합 = 그 축의 available 전체 → 무필터
 
     func testSelectAllTags_isUnfilteredSoUntaggedEntriesStay() {

@@ -9,9 +9,6 @@ import simd
 /// hsvcolorrandom huesteps/노이즈 3종(@0x48e3c0–0x48e3e0).
 /// 시뮬 의미론은 WE 에디터 어휘 규약에 따른 [추정] — 각 테스트는 파스(키/기본값) + 행동을 단언한다.
 final class ParticleExtendedKeysTests: XCTestCase {
-    private func json(_ s: String) -> [String: Any] {
-        try! JSONSerialization.jsonObject(with: s.data(using: .utf8)!) as! [String: Any]
-    }
 
     private func makeDef(emitters: [Emitter]? = nil,
                          initializers extraInits: [Initializer] = [],

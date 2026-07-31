@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import AVFoundation
 import WebKit
+import WapleCore
 import WapleRender
 
 // WapleRenderTests 공용 테스트 스캐폴딩 — 종전 11개 파일의 로컬 중복 사본 통합(2026-07-06 감사 §2).
@@ -226,6 +227,99 @@ func makeOrientedMP4(at url: URL, transform: CGAffineTransform, size: Int = 64) 
         throw NSError(domain: "makeOrientedMP4", code: 5, userInfo: [
             NSLocalizedDescriptionKey: "finishWriting 실패: \(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")"])
     }
+}
+
+/// 최소 유효 MDLV0023 평면 메시 데이터(material path = "materials/plane.json"). 정점 4개(quad),
+/// 인덱스 6개, pos3+normal3+tangent4+uv2 = 48B/vertex. 3D 렌더 테스트 7개 파일에서 동일 사본이었음.
+func planeModel() -> Data {
+    var data = Data("MDLV0023".utf8)
+    data.append(0)
+    func u32(_ value: UInt32) {
+        var little = value.littleEndian
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+    func f32(_ value: Float) {
+        var little = value
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+    u32(0x0000000f); u32(1); u32(1)
+    data.append(Data("materials/plane.json".utf8)); data.append(0)
+    u32(0)
+    f32(-1); f32(-1); f32(0); f32(1); f32(1); f32(0)
+    u32(0x0000000f)
+    let vertices: [(Float, Float, Float, Float)] = [
+        (-1, -1, 0, 1), (1, -1, 1, 1), (1, 1, 1, 0), (-1, 1, 0, 0),
+    ]
+    u32(UInt32(vertices.count * 48))
+    for (x, y, u, v) in vertices {
+        [x, y, 0, 0, 0, 1, 1, 0, 0, -1, u, v].forEach(f32)
+    }
+    let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+    u32(UInt32(indices.count * MemoryLayout<UInt16>.stride))
+    for index in indices {
+        var little = index.littleEndian
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+    return data
+}
+
+/// planeModel() 의 material path 지정판 — Reflect/Refract 테스트에서 동일 사본 2개 통합.
+func planeModel(material: String) -> Data {
+    var data = Data("MDLV0023".utf8)
+    data.append(0)
+    func u32(_ value: UInt32) {
+        var little = value.littleEndian
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+    func f32(_ value: Float) {
+        var little = value
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+    u32(0x0000000f); u32(1); u32(1)
+    data.append(Data(material.utf8)); data.append(0)
+    u32(0)
+    f32(-1); f32(-1); f32(0); f32(1); f32(1); f32(0)
+    u32(0x0000000f)
+    let vertices: [(Float, Float, Float, Float)] = [
+        (-1, -1, 0, 1), (1, -1, 1, 1), (1, 1, 1, 0), (-1, 1, 0, 0),
+    ]
+    u32(UInt32(vertices.count * 48))
+    for (x, y, u, v) in vertices {
+        [x, y, 0, 0, 0, 1, 1, 0, 0, -1, u, v].forEach(f32)
+    }
+    let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+    u32(UInt32(indices.count * MemoryLayout<UInt16>.stride))
+    for index in indices {
+        var little = index.littleEndian
+        withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+    }
+    return data
+}
+
+/// 임시 디렉토리 생성(UUID 기반 고유 경로). Video/Media 테스트 3개 파일 동일 사본 통합.
+func tempDir() throws -> URL {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+}
+
+/// 최소 비디오 WallpaperProject 생성. Video/Media 테스트 3개 파일 동일 사본 통합.
+/// 주의: 이름이 짧지만 호출부가 `project(id:fileName:dir:)` 로 고정되어 이 시그니처 유지.
+func project(id: String, fileName: String, dir: URL) -> WallpaperProject {
+    WallpaperProject(id: id, type: .video, fileName: fileName, previewName: nil,
+                     title: id, tags: [], contentRating: nil, workshopId: nil,
+                     dependency: nil, folderURL: dir)
+}
+
+/// makeTex(format:w:h:payload:) — 최소 TEXV0005+TEXI0001+TEXB0001 컨테이너.
+/// VideoTextureExtractor/VideoBackedSceneCapture 테스트 동일 사본 통합.
+func makeTex(format: Int, w: Int, h: Int, payload: [UInt8]) -> Data {
+    var b: [UInt8] = []
+    b += bytes(tag("TEXV0005"), tag("TEXI0001"))
+    b += bytes(i32b(format), i32b(0), i32b(w), i32b(h), i32b(w), i32b(h))
+    b += bytes(tag("TEXB0001"), payload)
+    return Data(b)
 }
 
 /// 캡처 PNG 의 평균 luma((r+g+b)/3 평균) — 최대 ~40×40 그리드 서브샘플. 실패 시 -1.

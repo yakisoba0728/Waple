@@ -3,9 +3,6 @@ import XCTest
 
 /// 3D 씬(카메라 eye/center/up + fov, .mdl 모델 오브젝트) 파싱 — 합성 pkg 단위 테스트.
 final class Scene3DTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
 
     /// orthogonalprojection == null + camera{eye,center,up} + fov 존재 → camera3D 세팅.
     func testDetects3DCameraWhenOrthographicAbsent() throws {

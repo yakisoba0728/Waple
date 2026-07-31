@@ -3,14 +3,6 @@ import XCTest
 @testable import WapleCore
 
 final class VideoTextureExtractorTests: XCTestCase {
-    /// TEX 헤더 + 임의 페이로드.
-    private func makeTex(format: Int, w: Int, h: Int, payload: [UInt8]) -> Data {
-        var b: [UInt8] = []
-        b += bytes(tag("TEXV0005"), tag("TEXI0001"))
-        b += bytes(i32b(format), i32b(0), i32b(w), i32b(h), i32b(w), i32b(h))
-        b += bytes(tag("TEXB0001"), payload)
-        return Data(b)
-    }
     private func scenePkg(videoTex: Bool) throws -> ScenePackage {
         let scene = Data(#"{"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},"objects":[{"image":"models/m.json","origin":"50 50 0","size":"100 100","scale":"1 1 1","angles":"0 0 0","alpha":1,"color":"1 1 1","brightness":1,"visible":{"value":true}}]}"#.utf8)
         let model = Data(#"{"material":"materials/mat.json"}"#.utf8)

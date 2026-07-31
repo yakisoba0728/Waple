@@ -6,9 +6,6 @@ import XCTest
 /// HLSL lane `pow(falloff + 1.17549435e-38, exponent)`(common_pbr_2.h:265-266); 파티클 디폴트는
 /// wallpaper64.exe 스트링 테이블.
 final class EngineDefaultFixRegressionTests: XCTestCase {
-    private func json(_ s: String) -> [String: Any] {
-        try! JSONSerialization.jsonObject(with: s.data(using: .utf8)!) as! [String: Any]
-    }
 
     // MARK: - 감쇠 HLSL lane (ScenePBRLighting CPU 오라클 — GPU MSL 2곳과 동일 수식 규약)
 

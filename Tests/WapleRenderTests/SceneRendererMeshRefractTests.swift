@@ -10,40 +10,6 @@ final class SceneRendererMeshRefractTests: XCTestCase {
 
     // MARK: 공용 스캐폴드
 
-    /// 유효 MDLV0023(비스키닝, ±1 XY 평면 4정점 — Scene3DPBRShadowRenderTests.planeModel 과 동일 레이아웃).
-    /// 머티리얼 경로만 파라미터(배경/굴절 평면이 서로 다른 머티리얼을 쓰므로).
-    private func planeModel(material: String) -> Data {
-        var data = Data("MDLV0023".utf8)
-        data.append(0)
-        func u32(_ value: UInt32) {
-            var little = value.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        func f32(_ value: Float) {
-            var little = value
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        u32(0x0000000f); u32(1); u32(1)
-        data.append(Data(material.utf8)); data.append(0)
-        u32(0)
-        f32(-1); f32(-1); f32(0); f32(1); f32(1); f32(0)
-        u32(0x0000000f)
-        let vertices: [(Float, Float, Float, Float)] = [
-            (-1, -1, 0, 1), (1, -1, 1, 1), (1, 1, 1, 0), (-1, 1, 0, 0),
-        ]
-        u32(UInt32(vertices.count * 48))
-        for (x, y, u, v) in vertices {
-            [x, y, 0, 0, 0, 1, 1, 0, 0, -1, u, v].forEach(f32)
-        }
-        let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
-        u32(UInt32(indices.count * MemoryLayout<UInt16>.stride))
-        for index in indices {
-            var little = index.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        return data
-    }
-
     /// 좌반=적/우반=청 64×64 배경 패턴 .tex(solidTex 와 같은 TEXV0005+PNG 인코딩).
     private func splitTex() -> Data {
         let w = 64, h = 64

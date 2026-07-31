@@ -5,9 +5,6 @@ import XCTest
 /// 수치 근거: WE 공식 문서(Length=speed 곱, Min/Max Length=클램프, 1/1/1=무신장 회전)와
 /// 실물 코퍼스 123건 키 조합(ember/rainrefractive/Cherry_Blossoms_2/rainfall 실측 JSON).
 final class ParticleSpriteTrailStretchTests: XCTestCase {
-    private func json(_ s: String) -> [String: Any] {
-        try! JSONSerialization.jsonObject(with: s.data(using: .utf8)!) as! [String: Any]
-    }
 
     // MARK: - 파스 (실물 스키마)
 

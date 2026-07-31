@@ -5,9 +5,6 @@ import XCTest
 /// 문법으로 인코딩된다(bare-string bool 바인딩과 별개). resolveUserBindings 가 nested 를 스킵하면
 /// 저작 시점 default variant 가 영구 고착 — 유저가 콤보를 바꿔도 화면이 안 바뀐다.
 final class SceneComboVisibleTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
     private let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
     private let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"]}]}"#
 

@@ -11,11 +11,6 @@ final class AppUIV07RegressionTests: XCTestCase {
                      bookmark: Data(), tags: nil, contentRating: nil)
     }
 
-    private func applyIds(_ entries: [LibraryEntry], _ c: LibraryFilterCriteria) -> [String] {
-        LibraryFiltering.apply(entries, search: "", criteria: c, sort: .recentFirst,
-                               isFavorite: { _ in false }).map(\.id)
-    }
-
     // MARK: - 감사 V07(1): 유형 축도 "선택 집합 = 그 축의 available 전체 → 무필터"(감사 V06 과 동일 규약)
 
     func testSelectAllTypes_isUnfilteredSoAllMappedEntriesStay() {

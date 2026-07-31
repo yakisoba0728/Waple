@@ -7,9 +7,6 @@ import XCTest
 /// **범위**: 파스만. 3D 렌더 소비(본 추종 배선)는 별건(wf8 id 66) — 5씬 재현 그룹은 camera3D 부재(2D
 /// 퍼펫 씬)라 SceneRenderer3D 를 타지 않고, 소비는 2D PuppetAttach 경로의 몫이다.
 final class SceneAttachment3DParseTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
 
     /// 콘텐츠 키 없는 그룹(마스크류) — attachment 가 SceneNode3D 까지 보존돼야 한다.
     func testGroupNodeParsesAttachment() throws {

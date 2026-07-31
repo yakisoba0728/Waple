@@ -7,37 +7,6 @@ import Metal
 /// M2(①): mf_normal PBRMASKS(textures[2]) 채널 스왑 수정 — WE generic4.frag:96-100 규약(x/R=metallic,
 /// y/G=roughness) 대조 + `mask.r>0.0` 값 기반 오폴백 게이트를 normalParams.y(hasMask) 플래그로 교체.
 final class Scene3DMeshPBRMaskTests: XCTestCase {
-    private func planeModel() -> Data {
-        var data = Data("MDLV0023".utf8)
-        data.append(0)
-        func u32(_ value: UInt32) {
-            var little = value.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        func f32(_ value: Float) {
-            var little = value
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        u32(0x0000000f); u32(1); u32(1)
-        data.append(Data("materials/plane.json".utf8)); data.append(0)
-        u32(0)
-        f32(-1); f32(-1); f32(0); f32(1); f32(1); f32(0)
-        u32(0x0000000f)
-        let vertices: [(Float, Float, Float, Float)] = [
-            (-1, -1, 0, 1), (1, -1, 1, 1), (1, 1, 1, 0), (-1, 1, 0, 0),
-        ]
-        u32(UInt32(vertices.count * 48))
-        for (x, y, u, v) in vertices {
-            [x, y, 0, 0, 0, 1, 1, 0, 0, -1, u, v].forEach(f32)
-        }
-        let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
-        u32(UInt32(indices.count * MemoryLayout<UInt16>.stride))
-        for index in indices {
-            var little = index.littleEndian
-            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
-        }
-        return data
-    }
 
     private func project(files: [(String, Data)], id: String) throws -> (WallpaperProject, URL) {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())

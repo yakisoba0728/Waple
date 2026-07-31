@@ -121,17 +121,4 @@ final class VideoSceneFixRegressionTests: XCTestCase {
         try gen.run(); gen.waitUntilExit()
         try XCTSkipUnless(gen.terminationStatus == 0, "ffmpeg hev1 fixture generation failed (libx265 missing?)")
     }
-
-    private func project(id: String, fileName: String, dir: URL) -> WallpaperProject {
-        WallpaperProject(id: id, type: .video, fileName: fileName, previewName: nil,
-                         title: id, tags: [], contentRating: nil, workshopId: nil,
-                         dependency: nil, folderURL: dir)
-    }
-
-    private func tempDir() throws -> URL {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
 }

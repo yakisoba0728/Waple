@@ -6,9 +6,6 @@ import XCTest
 /// transformScripts 로 캡처하는 것과 비대칭). 실측: intensity 스크립트 8건(주야 조명 감쇠),
 /// color 스크립트 1건(3737268876 젤다). 파스 캡처만 추가(per-frame 소비는 코퍼스 저빈도 → TODO).
 final class LightPropertyScriptTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
 
     /// intensity/color 스크립트가 SceneLight3D.propertyScripts 에 캡처돼야(정적 value 는 기존대로 유지).
     func testIntensityAndColorScriptsCaptured() throws {

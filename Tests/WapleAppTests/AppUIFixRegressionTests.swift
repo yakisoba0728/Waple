@@ -65,11 +65,6 @@ final class AppUIFixRegressionTests: XCTestCase {
         return vm
     }
 
-    /// VM 콜백이 Task { @MainActor } 로 한 번 홉하므로 메인 액터 큐를 비워 적용을 기다린다.
-    private func pump() async {
-        for _ in 0..<3 { await Task.yield() }
-    }
-
     private func entry(_ id: String) -> LibraryEntry {
         LibraryEntry(id: id, title: "t\(id)", typeRaw: "video",
                      fileName: nil, previewName: nil, bookmark: Data())

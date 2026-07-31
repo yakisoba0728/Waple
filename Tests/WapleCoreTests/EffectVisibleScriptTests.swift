@@ -6,9 +6,6 @@ import XCTest
 /// 오브젝트 레벨(visible 게이트: visibleScript!=nil 이면 정적 false 여도 보존)이 이미 구축한 패턴을
 /// 이 중첩된 effects[] 처리에 이식 — 파스 보존만(런타임 토글 소비는 TODO, 코퍼스 저빈도).
 final class EffectVisibleScriptTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
     private let model = #"{"width":100,"height":100,"material":"materials/m.json"}"#
     private let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"]}]}"#
 

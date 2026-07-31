@@ -79,11 +79,6 @@ final class WorkshopDownloadTests: XCTestCase {
         return folder
     }
 
-    /// VM 콜백이 Task { @MainActor } 로 한 번 홉하므로 메인 액터 큐를 비워 적용을 기다린다.
-    private func pump() async {
-        for _ in 0..<3 { await Task.yield() }
-    }
-
     func testDownloadStartsAndMapsProgressToPhases() async {
         let fake = FakeDownloader()
         let vm = makeVM(fake: fake)

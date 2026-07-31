@@ -5,13 +5,6 @@ import XCTest
 @MainActor
 final class DiscoverViewModelTests: XCTestCase {
 
-    private final class URLRecorder: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stored: [URL] = []
-        func record(_ u: URL) { lock.lock(); stored.append(u); lock.unlock() }
-        var urls: [URL] { lock.lock(); defer { lock.unlock() }; return stored }
-    }
-
     private final class FailSwitch: @unchecked Sendable {
         private let lock = NSLock()
         private var _failing = true
@@ -35,11 +28,6 @@ final class DiscoverViewModelTests: XCTestCase {
         let details = (1...count).map { "{\"publishedfileid\":\"\($0)\",\"title\":\"t\($0)\"}" }
             .joined(separator: ",")
         return Data("{\"response\":{\"publishedfiledetails\":[\(details)]}}".utf8)
-    }
-
-    private func queryValue(_ url: URL, _ name: String) -> String? {
-        URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first { $0.name == name }?.value
     }
 
     func testLoadPopulatesAllRowsWithSortSpecificQueries() async {
@@ -69,7 +57,7 @@ final class DiscoverViewModelTests: XCTestCase {
     func testRowFailureIsIsolatedAndRetryRecovers() async {
         let failing = FailSwitch()
         let vm = DiscoverViewModel(client: WorkshopClient(transport: { url in
-            if self.queryValue(url, "query_type") == "1" && failing.failing { throw URLError(.timedOut) }
+            if queryValue(url, "query_type") == "1" && failing.failing { throw URLError(.timedOut) }
             return (self.itemsJSON(count: 2), 200)
         }), keyProvider: { "KEY" })
 

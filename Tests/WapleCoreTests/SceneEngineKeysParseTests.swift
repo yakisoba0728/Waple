@@ -11,9 +11,6 @@ import XCTest
 /// - F057: 텍스트 자식의 부모 회전(angleZ) 상속(텍스트→텍스트 체인 포함)
 /// 기본값은 전부 항등(키 부재 시 종전 동작과 동치)이어야 한다.
 final class SceneEngineKeysParseTests: XCTestCase {
-    private func pkg(_ files: [(String, String)]) throws -> ScenePackage {
-        try ScenePackage.parse(ScenePackageTests.makePkg(files.map { ($0.0, Data($0.1.utf8)) }))
-    }
 
     private func doc(_ scene: String, _ extra: [(String, String)] = []) throws -> SceneDocument {
         try SceneDocument.parse(package: pkg([("scene.json", scene)] + extra))
