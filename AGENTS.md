@@ -108,6 +108,35 @@ CI 에서만 터진 실패 이력이 있다(`db90fc2` 타입체커 폭발, `14dc
 WE 호환을 위한 의도적 전수 처리다. 인식하지 못한 토큰을 로그만 남기고 버리는 것도 설계다.
 줄여서 정합성을 잃지 마라.
 
+## 정본(spec/)
+
+WE 동작에 대한 사실은 코드 주석이 아니라 [spec/](spec/) 에 둔다. 이전에 역공학
+산출물(`analysis/`)이 통째로 사라져 근거가 주석에만 남은 적이 있다 — 지금 코드가
+인용하는 `analysis/decompiled/all/...` 은 리포에 없다.
+
+- 모든 항목에 **근거가 필수**다. 없으면 `scripts/spec/validate.py` 가 거부한다.
+- 상태는 `확정`(직접 측정 + 재현 스크립트) / `보고`(정찰, 미재현) / `추정` 셋뿐이고,
+  **`확정` 만 테스트를 생성한다.**
+- WE 설치본이 있으면 `python scripts/spec/measure_*.py` 로 전부 재생성된다.
+  **재생성 후 `git status` 가 비어야 정상이다** — 안 비면 측정에 비결정성이 있거나
+  WE 가 업데이트된 것이다.
+- 도구는 Python **stdlib 전용**이다. 외부 의존 0 원칙을 도구에도 적용한다
+  (`pefile` 대신 `struct` 로 PE 를 직접 읽는다).
+
+```bash
+python scripts/spec/validate.py                  # 정본 검증
+python scripts/spec/tests/test_validate.py       # 검증기 자체 테스트
+python scripts/spec/tests/test_rosetta.py        # 로제타석 검증기 테스트
+python scripts/spec/verify_rosetta.py            # .obj ↔ .mdl 실물 대조
+```
+
+**공유 에셋이 동봉돼 있다.** `Sources/WapleRender/Resources/WEAssets/`(2,940파일 75.8MB).
+워크샵 pkg 가 `common_*.h` 를 하나도 담지 않아서(162개 전수 0건) 없으면 씬이 불완전하게
+그려진다. WE 가 업데이트되면 `spec/assets/manifest.json` 의 해시가 어긋나 드리프트가 드러난다.
+
+**커밋된 스냅샷 기준선이 있다.** `spec/golden/snapshot/`. 읽기 전에 그 README 를 볼 것 —
+비디오-백드 24종은 머신 간 재현이 안 되고(strict 불일치는 회귀가 아니다), 비결정 씬이 1종 있다.
+
 ## 관례
 
 **커밋 메시지**는 한국어 서술형이다. `feat:` 같은 접두사를 쓰지 않는다. 근거를 괄호에 담는
