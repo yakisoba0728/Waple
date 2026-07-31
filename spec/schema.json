@@ -1,0 +1,24 @@
+{
+ "$comment": "spec/ 정본 문서의 형식. 검사는 scripts/spec/validate.py 가 stdlib 로 수행한다(외부 의존 0 원칙).",
+ "document": {
+  "weVersion": "문자열. 반드시 '2.8.42' — 정본이 어느 WE 빌드에서 나왔는지 고정한다",
+  "generatedBy": "문자열. 이 문서를 만든 스크립트 경로. 재현 방법이다",
+  "entries": "항목 배열"
+ },
+ "entry": {
+  "id": "점으로 구분된 고유 식별자. 문서 안에서 중복 불가",
+  "value": "정본 값. 형태는 항목마다 다르다",
+  "status": "확정 | 보고 | 추정",
+  "evidence": "근거 배열. 비면 안 된다"
+ },
+ "evidence": {
+  "kind": "corpus | binary | asset | shader | script | file | recon | doc",
+  "ref": "구체적 참조 — 경로, 주소, 수치, 명령",
+  "note": "선택. 부연"
+ },
+ "statusRules": {
+  "확정": "직접 측정했고 generatedBy 스크립트로 재현된다. evidence 에 corpus/binary/asset/shader/script/file 중 하나가 반드시 있어야 한다. 이 항목만 테스트를 생성한다",
+  "보고": "정찰 에이전트가 보고했으나 재현하지 않았다. 테스트를 생성하지 않는다",
+  "추정": "근거가 불충분하다. 테스트를 생성하지 않으며, 구현이 이 값에 의존하면 주석에 명시해야 한다"
+ }
+}
