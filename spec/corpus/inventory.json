@@ -1,0 +1,88 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_corpus.py",
+ "entries": [
+  {
+   "id": "corpus.typeDistribution",
+   "value": {
+    "scene": 162,
+    "video": 145,
+    "web": 138,
+    "(없음)": 1
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 전수 스캔 (scene.pkg 162개)"
+    }
+   ]
+  },
+  {
+   "id": "corpus.typeDistributionRaw",
+   "value": {
+    "video": 134,
+    "scene": 114,
+    "web": 94,
+    "Scene": 48,
+    "Web": 44,
+    "Video": 11,
+    "(없음)": 1
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "project.json type 원문(대소문자 보존)",
+     "note": "대소문자 혼용이라 정확 비교는 일부를 놓친다"
+    }
+   ]
+  },
+  {
+   "id": "corpus.pkgParsed",
+   "value": 162,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 전수 스캔 (scene.pkg 162개)"
+    }
+   ]
+  },
+  {
+   "id": "corpus.pkgParseErrors",
+   "value": {},
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 전수 스캔 (scene.pkg 162개)"
+    }
+   ]
+  },
+  {
+   "id": "corpus.entryExtensions",
+   "value": {
+    ".json": 10470,
+    ".tex": 4680,
+    ".frag": 1689,
+    ".vert": 1689,
+    ".mdl": 423,
+    ".mp3": 338,
+    ".ttf": 225,
+    ".otf": 144,
+    ".wav": 70,
+    ".ogg": 44,
+    ".flac": 6,
+    ".ttc": 3
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 전수 스캔 (scene.pkg 162개)"
+    }
+   ]
+  }
+ ]
+}

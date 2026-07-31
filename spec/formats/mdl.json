@@ -1,0 +1,57 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_corpus.py",
+ "entries": [
+  {
+   "id": "format.mdl.corpusVersions",
+   "value": {
+    "MDLV0023": 378,
+    "MDLV0019": 18,
+    "MDLV0021": 17,
+    "MDLV0016": 8,
+    "MDLV0017": 2
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 전수 스캔 (scene.pkg 162개)"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.bundledVersions",
+   "value": {
+    "MDLV0014": 15,
+    "MDLV0004": 8,
+    "MDLV0023": 4,
+    "MDLV0017": 1
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "WE 설치본 하위 .mdl 전수",
+     "note": "WE 자체 번들. 코퍼스와 버전 분포가 다르다"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.v0004Layout",
+   "value": {
+    "header": "magic \"MDLV0004\" | u8 0 | u32 formatFlag | u32 const1 | u32 meshCount",
+    "mesh": "cstring materialPath | u32 0 | u32 vertexBlobBytes | vertices | ...",
+    "formatFlag0x09": "pos(3f) + uv(2f) = stride 20B, 법선/탄젠트 없음",
+    "hasAABB": "version >= 17 에서만 존재. 0004 는 없음"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/audiophile/models/audiophile/glow.mdl (156B)",
+     "note": "짝 glow.obj 와 대조: 정점4·UV4·법선없음, 첫 정점 x=-3.285059"
+    }
+   ]
+  }
+ ]
+}

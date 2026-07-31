@@ -1,0 +1,49 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_corpus.py",
+ "entries": [
+  {
+   "id": "format.pkg.layout",
+   "value": {
+    "header": "i32 vlen | vlen bytes magic | i32 entryCount",
+    "entry": "i32 nameLen | nameLen bytes name | i32 offset | i32 size",
+    "blobBase": "엔트리 표 직후",
+    "compression": "없음 — 무압축 TOC 아카이브"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "162/162 파싱 성공, 오류 0건",
+     "note": "전건 성공이 곧 규약의 검증이다"
+    }
+   ]
+  },
+  {
+   "id": "format.pkg.magicDistribution",
+   "value": {
+    "PKGV0023": 50,
+    "PKGV0022": 46,
+    "PKGV0021": 28,
+    "PKGV0024": 13,
+    "PKGV0020": 6,
+    "PKGV0018": 5,
+    "PKGV0019": 5,
+    "PKGV0017": 3,
+    "PKGV0002": 1,
+    "PKGV0007": 1,
+    "PKGV0008": 1,
+    "PKGV0012": 1,
+    "PKGV0011": 1,
+    "PKGV0016": 1
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 전수 스캔 (scene.pkg 162개)"
+    }
+   ]
+  }
+ ]
+}

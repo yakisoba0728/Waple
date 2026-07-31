@@ -1,0 +1,65 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_corpus.py",
+ "entries": [
+  {
+   "id": "format.tex.magicDistribution",
+   "value": {
+    "TEXV0005": 4680
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 전수 스캔 (scene.pkg 162개)"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.containerDistribution",
+   "value": {
+    "TEXI0001": 4680,
+    "TEXB0004": 2746,
+    "TEXB0003": 1934
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 전수 스캔 (scene.pkg 162개)"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.transcodeIsNotDecoder",
+   "value": {
+    "claim": "resourcecompiler64.exe -transcode 는 RGBA8888 디코더가 아니다",
+    "observed": "5표본 중 3 무변화(패스스루), 2 재압축. 출력이 여전히 TEXV0005/TEXI0001",
+    "deterministic": true
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourcecompiler64.exe -transcode -i <in> -o <out>",
+     "note": "5표본 215B~2.8MB, 2회 실행 SHA 동일"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.paddedVsImageDims",
+   "value": {
+    "note": "저장은 블록정렬 texW x texH, 실제 이미지는 imgW x imgH 로 다르다",
+    "witness": "plant1.tex — 저장 512x1024 / 이미지 512x875"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "assets/.../plant1.tex",
+     "note": "-transcode 출력이 패딩을 제거해 512x875 로 바뀐 것으로 확인"
+    }
+   ]
+  }
+ ]
+}
