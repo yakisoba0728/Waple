@@ -96,6 +96,78 @@ class TestCanonPathFilter(unittest.TestCase):
         self.assertFalse(validate.is_canon_path("spec/schema.json"))
 
 
+class TestCrossDocChecks(unittest.TestCase):
+    """검증기가 문서 하나만 보면 영역 간 모순을 못 잡는다 — 실제로 4건이 오류 0 을 통과했다."""
+
+    def _doc(self, gen, entries):
+        return {"weVersion": "2.8.42", "generatedBy": gen, "entries": entries}
+
+    def _e(self, eid, value="v", status="확정", ev=None):
+        return {"id": eid, "value": value, "status": status,
+                "evidence": ev or [{"kind": "corpus", "ref": "r"}]}
+
+    def test_same_id_in_two_files_is_reported(self):
+        docs = {
+            "spec/a.json": self._doc("g1", [self._e("format.tex.layout")]),
+            "spec/b.json": self._doc("g2", [self._e("format.tex.layout")]),
+        }
+        warns = validate.cross_document_checks(docs)
+        self.assertTrue(any("format.tex.layout" in w for w in warns),
+                        f"같은 id 가 두 파일에 있는데 안 잡혔다: {warns}")
+
+    def test_distinct_ids_are_clean(self):
+        docs = {
+            "spec/a.json": self._doc("g1", [self._e("format.tex.layout")]),
+            "spec/b.json": self._doc("g2", [self._e("format.mdl.layout")]),
+        }
+        self.assertEqual(validate.cross_document_checks(docs), [])
+
+    def test_dangling_cross_ref_is_reported(self):
+        docs = {
+            "spec/a.json": self._doc("g1", [
+                self._e("x.y", value={"crossRef": "format.tex.nonexistent"})]),
+        }
+        warns = validate.cross_document_checks(docs)
+        self.assertTrue(any("nonexistent" in w for w in warns), warns)
+
+    def test_resolvable_cross_ref_is_clean(self):
+        docs = {
+            "spec/a.json": self._doc("g1", [
+                self._e("x.y", value={"crossRef": "format.tex.layout"})]),
+            "spec/b.json": self._doc("g2", [self._e("format.tex.layout")]),
+        }
+        self.assertEqual(validate.cross_document_checks(docs), [])
+
+    def test_supersedes_target_must_exist(self):
+        docs = {
+            "spec/a.json": self._doc("g1", [
+                self._e("x.y", value={"supersedes": "format.tex.gone"})]),
+        }
+        warns = validate.cross_document_checks(docs)
+        self.assertTrue(any("gone" in w for w in warns), warns)
+
+
+class TestHedgeTriage(unittest.TestCase):
+    """확정 항목 안에 '미확인/추정' 이 섞이면 보고한다. 실패는 아니고 검토 대상이다."""
+
+    def test_hedge_in_confirmed_value_is_flagged(self):
+        e = {"id": "a.b", "value": {"note": "의미는 미확인"}, "status": "확정",
+             "evidence": [{"kind": "corpus", "ref": "r"}]}
+        hits = validate.hedge_triage([e], "t.json")
+        self.assertEqual(len(hits), 1)
+        self.assertIn("미확인", hits[0])
+
+    def test_hedge_in_report_status_is_not_flagged(self):
+        e = {"id": "a.b", "value": {"note": "의미는 미확인"}, "status": "보고",
+             "evidence": [{"kind": "recon", "ref": "r"}]}
+        self.assertEqual(validate.hedge_triage([e], "t.json"), [])
+
+    def test_clean_confirmed_value_is_not_flagged(self):
+        e = {"id": "a.b", "value": {"count": 162}, "status": "확정",
+             "evidence": [{"kind": "corpus", "ref": "r"}]}
+        self.assertEqual(validate.hedge_triage([e], "t.json"), [])
+
+
 class TestSpecfmt(unittest.TestCase):
     def test_entry_builds_expected_shape(self):
         e = specfmt.entry("a.b", 3, "확정", [{"kind": "corpus", "ref": "r"}])

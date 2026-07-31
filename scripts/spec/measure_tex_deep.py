@@ -866,7 +866,9 @@ def build(m):
         "format.tex.transcode.isDecoder",
         {"claim": "-transcode 는 BC(DXT1/3/5) 입력을 RGBA8888(format 0)로 **디코드**한다",
          "default": "출력 format=0, 크기는 imageWidth×imageHeight(패딩 크롭 완료), LZ4 재압축",
-         "supersedes": "spec/formats/tex.json format.tex.transcodeIsNotDecoder — "
+         # [2026-08-01] 대체 대상이던 format.tex.transcodeIsNotDecoder 는 이미 제거되고
+        # format.tex.transcodeDecodes 로 교체됐다. 링크가 끊겨 있던 것을 검증기가 잡았다.
+        "supersedes": "spec/formats/tex.json format.tex.transcodeDecodes — "
                        "그 5표본은 전부 format 0/8/9(= 아래 통과 조건에 걸리는 포맷)였다. "
                        "관측 자체는 정확했고, 표본이 BC 포맷을 안 담았을 뿐이다",
          "witness": {"in": cli.get("transcodeSourceHeader"), "outDefault": tm.get("default")},
