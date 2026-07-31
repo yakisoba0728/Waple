@@ -1,5 +1,24 @@
 # Waple 백로그
 
+**현재 상태** (2026-07-31): 유지보수 모드. 테스트 2,125개 · 실패 0 · CI 그린(`macos-26`).
+아래 항목은 "해야 할 일"이 아니라 **트리거가 오면 할 일**이다. 트리거 전에는 하지 않는다.
+
+이 문서는 **날짜순 기록**이다. `>` 인용 블록과 취소선(~~항목~~)은 그 시점의 사실이며 이후
+해소된 것도 근거 보존을 위해 남겨둔다. 지금 열려 있는 것만 보려면 아래 표에서 섹션으로 가라.
+
+| 섹션 | 트리거 | 주요 잔여 |
+| --- | --- | --- |
+| [시각 충실도](#시각-충실도) | 해당 씬을 실제 배경으로 쓸 때 | H7 Ultra EOTF · E1 삼각마스크 · 텍스트 워드랩 · LDR 블룸 피라미드화 · g_Color1~4 |
+| [잠재 결함](#잠재-결함) | 실제 파일·사용에서 물릴 때 | combo Picker 값-타입 · ffmpeg 캐시 증가 · 볼륨/배속 라이브 반영 |
+| [제품화](#제품화) | 배포 결심 | Developer ID 공증 · 접근성 · 현지화(하드코딩 한국어 40+) |
+| [감사 2026-07-11 잔여](#감사-2026-07-11-잔여) | 해당 씬 사용·체감 시 | REFRACT 파티클 · wind/gravity 외력 · M6 사운드 3D |
+| [copybackground 후속](#copybackgroundfalse-후속) | 3D 컴포지션 레이어 사용 시 | 3D 경로 비대칭 · 파스·보존 전용 필드 소비 |
+| [하네스](#하네스) | 게이트 오탐·소요가 거슬릴 때 | F402/F403 골든 미커밋 · F398 벽시계 결합 33사이트 · F144 임계 고정 |
+
+상세 근거는 [AUDIT.md](AUDIT.md)(감사 리포트, 2026-07-06 — 이력)와 [docs/README.md](docs/README.md) 참조.
+
+---
+
 > 2026-07-10 확정: 코퍼스(실물 460종) 기준 기능 완성 — scene 170/170 마운트, 시각 회귀 게이트
 > 그린, 전 스위트 통과. 이 시점부터 **유지보수 모드**. 아래는 "해야 할 일"이 아니라
 > **트리거가 오면 할 일**이다. 트리거 전에는 하지 않는다. 상세 근거는 [AUDIT.md](AUDIT.md)(감사
@@ -7,12 +26,12 @@
 
 > 2026-07-21~22: 씬 구현 심층 감사·수정 라운드(명시 요청으로 수행) — 코퍼스 정적 분석으로
 > 109건 발견, 영역별 워크트리 스웜으로 전량 처리. 전 스위트 1,677개 그린·GT 170/170.
-> 수정·개선 내역과 잔여 후속 과제는 [docs/scene-deep-fix-2026-07-21.md](docs/scene-deep-fix-2026-07-21.md) 참조.
+> 수정·개선 내역과 잔여 후속 과제는 [docs/scene-deep-fix-2026-07-21.md](docs/history/scene-deep-fix-2026-07-21.md) 참조.
 
 > 2026-07-25~26: 스웜 감사 로드맵(H1–H8/M1–M10) 마감 라운드 — H1–H6·H8·M1–M5·M7–M10 전량
 > 구현·검증(워크트리 스웜 3개 병렬: H6 bloom 8레벨·H4 3D REFRACT·H1 스키닝 커스텀 셰이더).
 > 잔여는 H7(Ultra EOTF/color grading)·M6(사운드 3D) 뿐. 상태 확정·트레이드오프·실씬 A/B
-> 게이트는 [docs/roadmap-h1-h8-closeout-2026-07-26.md](docs/roadmap-h1-h8-closeout-2026-07-26.md) 참조.
+> 게이트는 [docs/roadmap-h1-h8-closeout-2026-07-26.md](docs/history/roadmap-h1-h8-closeout-2026-07-26.md) 참조.
 > 전 타겟 스위트 0 failures(main `4f2779a`).
 
 ## UI 네이티브 재구축 (2026-07-12~13, 명시 요청으로 수행) — **완료·트랙 마감**
@@ -23,16 +42,18 @@ SP1′~5′ **전부 완료·판정 통과**: 통합 툴바 셸·그리드·상�
 (grouped Form 5섹션) + 트레이 6항목 축소(일시정지 신설). 부수 수정: 액세서리 앱 mainMenu 부재로
 전 텍스트 필드 ⌘V 불가 → 최소 편집 메뉴 장착. SP4′ 실데이터는 사용자 키 입력 후 실사용 확인.
 macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
-스펙: [2026-07-12-native-ui-redesign](docs/superpowers/specs/2026-07-12-native-ui-redesign.md),
-플랜: [SP4′](docs/superpowers/plans/2026-07-13-sp4-discover-workshop.md) ·
-[SP5′](docs/superpowers/plans/2026-07-13-sp5-settings-tray.md).
+스펙: [2026-07-12-native-ui-redesign](docs/history/specs/2026-07-12-native-ui-redesign.md),
+플랜: [SP4′](docs/history/plans/2026-07-13-sp4-discover-workshop.md) ·
+[SP5′](docs/history/plans/2026-07-13-sp5-settings-tray.md).
 
 잔여 소항목 — 트리거: 해당 기능 사용 중 체감 시:
 - "이미 설치됨" 배지(창작마당 타일) — publishedfileid ≠ project.json id 라 대조 키 부재로 스코프아웃. 필요 시 다운로드 시점 매핑 저장부터.
 - 설정 창이 열려 있는 동안 적용 전환으로 바뀐 동영상 대상은 미러링하지 않음(재오픈 시 refresh) — 표시 문제, 체감 시.
 - [PropertyEditorView.swift:55](Sources/Waple/PropertyEditorView.swift:55) deprecated 1-파라미터 `onChange` 1건(재구축 이전부터 존재) — 기회 시.
 
-## 시각 충실도 — 트리거: 해당 씬을 실제 배경으로 쓸 때
+## 시각 충실도
+
+*트리거: 해당 씬을 실제 배경으로 쓸 때.*
 
 | 항목 | 영향 | 메모 |
 | --- | --- | --- |
@@ -45,16 +66,18 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 **Scene Wave3 티어1 후속** (2026-07-13, 명시요청 수행 — B1 텍스트·A2 HDR톤맵·E1 composelayer·A4 유니폼 완료·main 머지). 잔여:
 - ~~2881 이펙트-헤비 HDR 빨강~~ **해소** — 원인은 이펙트가 아니라 `f_compose` 파이프라인 포맷 불일치(bgra8 하드코딩 vs float acc)였고 SceneRenderer.swift 의 `accPixelFormat` 대입부(F003 정정: `715aaa6` 당시 674행이었으나 이후 커밋으로 하향 이동 — 2026-07-18 기준 [SceneRenderer.swift:964](Sources/WapleRender/SceneRenderer.swift:964), 라인은 향후도 드리프트 가능하니 `accPixelFormat` 으로 grep 권장)으로 수정(2026-07-13 리뷰 Critical). 11개 hdr+compose 씬(2881·2902 등)의 빨강/분홍 아티팩트 제거. 잔여 충실도만: 2881 오디오무입력 캡처 어두움·이펙트, 2902 삼각마스크(아래 항목)
 - **E1 composelayer 삼각마스크 미재현** — 2902406982: 회색덩어리는 해소(화면좌표 f_compose), 그러나 三角模块N `_rt_imageLayerComposite_<id>` 그룹 자식 RT + clipping_mask 레이어간 샘플링 미구현
-- ~~A2 블룸 확산 패스~~ **F004 정정(2026-07-18): "파싱만(미소비)"는 역-스테일 — LDR/HDR 블룸 모두 추출→블러→가산으로 구현·소비됨**([LDRBloomPass.swift](Sources/WapleRender/LDRBloomPass.swift)/[HDRBloomPass.swift](Sources/WapleRender/HDRBloomPass.swift), `SceneRenderer.swift` `sceneWantsLDRBloom`/`sceneWantsHDRBloom`, 커밋 24cee5f·a3d2afb·8be4b89·cb9b80c·c1584da). 잔여는 refinement 뿐: 피라미드 완전확산(현재 2단 ÷4/÷8 근사, WE 는 8단) · strength CPU 변환규칙 미결 · 3D-HDR 골든 완전 파리티 미달(선재 3D 콘텐츠 갭, 위 참조)
+- ~~A2 블룸 확산 패스~~ **F004 정정(2026-07-18): "파싱만(미소비)"는 역-스테일 — LDR/HDR 블룸 모두 추출→블러→가산으로 구현·소비됨**([LDRBloomPass.swift](Sources/WapleRender/LDRBloomPass.swift)/[HDRBloomPass.swift](Sources/WapleRender/HDRBloomPass.swift), `SceneRenderer.swift` `sceneWantsLDRBloom`/`sceneWantsHDRBloom`, 커밋 24cee5f·a3d2afb·8be4b89·cb9b80c·c1584da). 잔여는 refinement 뿐: **HDR 피라미드는 H6(2026-07-25~26)에서 8레벨로 완료**됐으므로 "2단 ÷4/÷8 근사" 표기는 무효 — 현재 `bloomhdriterations` 를 받아 `min(8, 허용 mip 수)` 로 클램프하고 2단 미만이면 단일레벨로 폴백한다([HDRBloomPyramidPass.swift](Sources/WapleRender/HDRBloomPyramidPass.swift) `levels` 기본값 8). 실제 잔여는 ①LDR 경로는 아직 피라미드가 아니라 3-패스([LDRBloomPass.swift](Sources/WapleRender/LDRBloomPass.swift)) ②피라미드 upsample blend state 미결(`HDRBloomPass.swift:46`) ③strength CPU 변환규칙 미결 ④3D-HDR 골든 완전 파리티 미달(선재 3D 콘텐츠 갭, 위 참조)
 - **B1 텍스트 잔여** — 4.17× DPI로 8192px 래스터 가드 강화 → 긴 미줄바꿈 텍스트 소실(조용) 가능; 워드랩·MSDF·per-line 정렬·크기/위치 미세조정
 - **W-① 3D 씬 텍스트 빌보드 잔여**(2026-07-27, `08058c9`로 world-placement 배선 완료 — [SceneRenderer3D.swift](Sources/WapleRender/SceneRenderer3D.swift)) — origin/scale/angles/visible 만 attachScripts, 아래 2건은 의도적 미부착·미구현:
   (a) **alpha/color 프로퍼티 스크립트 미부착** — 실측 3509243656 UI 패널이 dd/yp/num 얽힌 shared 상태머신이라 부착 시 무관 이미지 빌보드(id=449)가 잘못된 타이밍에 오노출되고 캡처 셀프체크가 비결정(frac 0.0176~0.025, 재현 가능)이 됨. 필요 시 캡처-세이프 격리(예: alpha 스크립트 보유 text 는 빌보드 자체를 만들지 않는 draw-gate) 부터 검토.
-  (b) **텍스트 '내용' 동적 재래스터 미지원** — F309 프라이밍이 확정한 1회 평가값(controllerOf[uid].last)만 래스터, update() 가 이후 콘텐츠를 바꿔도 화면엔 반영 안 됨(위치/스케일/회전/가시성만 매프레임 애니). 코퍼스 5씬(3470948192·3477054430·3589454154·3662790108·3737268876) A/B 캡처(1920×1080, main-6526db1 대비)로 블라스트 반경 확인 완료 — 3662790108(76텍스트)·3477054430(1)·3737268876(4) 는 byte-identical(새 빌보드가 캡처 시점 비가시), 3589454154·3470948192 는 소폭 개선(정보 텍스트 신규 노출, 왜곡 없음). 상세: [docs/scene-render-audit-2026-07-26.md](docs/scene-render-audit-2026-07-26.md) "3D/칸 메라/투영 잔여" 참조.
+  (b) **텍스트 '내용' 동적 재래스터 미지원** — F309 프라이밍이 확정한 1회 평가값(controllerOf[uid].last)만 래스터, update() 가 이후 콘텐츠를 바꿔도 화면엔 반영 안 됨(위치/스케일/회전/가시성만 매프레임 애니). 코퍼스 5씬(3470948192·3477054430·3589454154·3662790108·3737268876) A/B 캡처(1920×1080, main-6526db1 대비)로 블라스트 반경 확인 완료 — 3662790108(76텍스트)·3477054430(1)·3737268876(4) 는 byte-identical(새 빌보드가 캡처 시점 비가시), 3589454154·3470948192 는 소폭 개선(정보 텍스트 신규 노출, 왜곡 없음). 상세: [docs/scene-render-audit-2026-07-26.md](docs/history/scene-render-audit-2026-07-26.md) "3D/칸 메라/투영 잔여" 참조.
 - **A4 g_Color1~4 계열** — 그라디언트/파티클 다중색 유니폼(중립값 비단순), exact-name 스코프서 제외됨. 필요시 검토
 - **F4-polish① 텍스트 anchor/padding/backgroundbrightness 렌더 소비** (2026-07-28 파스 착지) — `SceneTextLayer.anchor`/`padding`/`backgroundBrightness` 3필드 파스·보존 완료([SceneDocument.swift](Sources/WapleCore/SceneDocument.swift) parseText). anchor 비-none 70건(코퍼스 1642 오브젝트 중)·padding 전건·backgroundbrightness 1474건은 값이 있지만 opaqueBackground 와 동형으로 **렌더 소비는 아직 없음**(배경박스 최소구현 정책 유지 — outline 만 TextRasterizer 가 그림). 배경박스 자체를 그리는 후속이 착수되면 이 3필드로 앵커 오프셋·패딩 여백·밝기 배율을 함께 적용할 것.
 - **F4-polish② Forward+ 라이팅 유니폼 인덱스 배열 피드** (2026-07-28 인식-전용 착지) — `g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`/`g_LFeature_Shadow*` 를 `GLSLTranslator.isEngine` 에 등재해 머티리얼 오분류(g_TexelSize 동형 사고)만 차단([GLSLTranslator.swift](Sources/WapleCore/GLSLTranslator.swift) isEngine/engineReplacement). WE 실선언은 배열(`g_LPoint_Color[LIGHTS_POINT]`)·사용부는 `[l].rgb` 인덱스 접근인데, 이번 등재의 대체값(0 벡터/항등)은 비-배열 스칼라라 인덱스 구독엔 컴파일 안전하지 않음 — 로컬 코퍼스 460씬이 `LIGHTS_POINT/SPOT/TUBE/DIRECTIONAL` 콤보를 전혀 참조하지 않아(`ShaderPreprocessor.swift:38-40`) 이 블록이 항상 전처리로 제거되므로 오늘 시점 도달 0건. 콤보 지원이 실제로 켜지는 씬이 나타나면 인덱스 가능한 constant 배열 피드로 교체할 것(네이티브 Scene3DLighting 은 이미 구현돼 있어 스코프는 커스텀 셰이더 경로 한정).
 
-## 잠재 결함 — 트리거: 실제 파일/사용에서 물릴 때
+## 잠재 결함
+
+*트리거: 실제 파일·사용에서 물릴 때.*
 
 - ~~PuppetModel 2D cstring Latin-1 3곳~~ → **해소(F007 정정, 2026-07-18 확인)** — 공용 [BinaryReading.swift](Sources/WapleCore/BinaryReading.swift):readCString 이 이미 `String(decoding:as: UTF8.self)` 로 전면 통합돼 있고 [PuppetModel.swift](Sources/WapleCore/PuppetModel.swift) 의 머티리얼명·본 이름·애니메이션 name/mode 3곳 전부 이 헬퍼만 경유(직접 Latin-1 디코드 없음). CJK 경로(`materials/models/太空球/…`) mojibake 방지가 목적이며 이미 반영됨
 - **combo Picker 값-타입 불일치** → 편집기 무선택 표시 ([WallpaperProperties.swift:67](Sources/WapleCore/WallpaperProperties.swift:67) — 옵션만 `type:""` 파싱)
@@ -65,7 +88,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 - ~~LibraryStore.remove 부재~~ → **해소(2026-07-12 SP2′)** — `remove(id:)` + 재생목록/모니터/즐겨찾기/폴더 orphan 정리
 - 기타 low 항목은 [AUDIT.md](AUDIT.md) §1–3 참조 (inferStride 재검증, 리싱크 오인, LE 리더/cstring 중복 등)
 
-## 제품화 — 트리거: 배포 결심
+## 제품화
+
+*트리거: 배포 결심.*
 
 1. ~~notify() NSLog-only~~ → **부분 해소(2026-07-12 SP1′)**: 메인창 열림 시 창 내 배너(StatusBanner)로 표시. 잔여: 창 닫힘 상태의 오류는 여전히 NSLog only → UNUserNotification 승격은 배포 결심 시
 2. 최초 실행 온보딩 + base-assets/ffmpeg 미설정 안내 → **F008 정정(2026-07-18): 온보딩·ffmpeg 안내 둘 다 해소** — 커밋 fb093cd/f214cc8/156740c(병합)로 최초 실행 1회 온보딩 시트가 완전히 구현·배선됨([OnboardingView.swift](Sources/Waple/Shell/OnboardingView.swift), `waple.onboardingCompleted` 플래그, 배경/공유에셋/ffmpeg 3항목 체크리스트 — ffmpeg 항목이 미설정 안내를 겸함). base-assets 조용한 저하도 부분 해소: 실제 필수 공유 에셋 miss 때 설정 경로를 StatusBanner로 앱 세션·설정 fingerprint당 1회 안내. 잔여: 메인창 닫힘 상태의 base-assets NSLog-only 안내뿐
@@ -77,7 +102,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
    - **릴리스 파이프라인 macos-26 실검증 완료(2026-07-30, 태그 `v0.1.0-beta.2` / 런 30547526365, 3m15s)**: `package-app.sh` 전 구간(plist·`.saver` clang·중첩 포함 ad-hoc `codesign --deep`·`hdiutil` UDZO) 통과, 태그→버전 규약 확인(`v0.1.0-beta.2` → plist `0.1.0`, CFBundleVersion=런번호), `-` 포함 태그는 즉시 prerelease. 산출물 직접 검증: sha256 노트값 일치·DMG 마운트·`Waple.saver`/`Waple.icns` 동봉·app·saver 모두 arm64·`codesign --verify --deep --strict` 통과. 릴리스 노트는 영어 + ad-hoc 일 때만 Gatekeeper 절. 잔여는 Developer ID/공증(유료 계정 = 배포 스코프C)뿐이며, 그때 `.p12` 키체인 임포트 스텝을 워크플로에 추가해야 한다. **주의: `workflow_dispatch` 로 release.yml 을 시험할 수 없다**(`GITHUB_REF_NAME`=main → 버전 추출 붕괴) — 버릴 프리릴리즈 태그를 쓸 것
 6. 접근성(그리드 타일 VoiceOver/키보드), 현지화(하드코딩 한국어 40+) — [AUDIT.md](AUDIT.md) §4–5
 
-## 감사 2026-07-11 잔여 — 트리거: 해당 씬 사용/체감 시 (수정 26건은 완료·머지됨)
+## 감사 2026-07-11 잔여
+
+*트리거: 해당 씬 사용·체감 시. CONFIRMED 26건은 이미 수정·머지됨.*
 
 > 병렬 감사(12에이전트 리뷰 + 적대 검증 36건 판정)에서 CONFIRMED 26건은 수정 완료(git log
 > "감사" 참조). 아래는 검증 후 **의도적으로 남긴** 것들.
@@ -95,7 +122,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 | 성능: 비가시 레이어 효과체인 스킵, acc+blit 생략(스냅샷 1회 확인 필요), TexImage 스캔 할당, ScenePackage 무복사 파스, DXT 블록 할당 | — | 감사 계획서 3계층 성능표 참조 |
 | 정리: 본체인 fold 6회·DXT 3벌·Process 헬퍼 3벌·JS 리터럴 4중·효과체인 루프 4중복·~~죽은 코드(resolveProjects, bitsRemaining, 미발행 이슈코드 8종, CLI 도움말)~~ **이슈코드 8종·CLI 도움말은 해소(F232/F235/F149, 2026-07-18)** | — | 기회 시(resolveProjects/bitsRemaining/fold/Process헬퍼/JS리터럴/효과체인루프 잔여) |
 
-## B2-effects④ copybackground:false 후속 — 트리거: 3D 컴포지션 레이어 사용/파티클·텍스트 copyBackground 소비 착수 시
+## copybackground:false 후속
+
+*트리거: 3D 컴포지션 레이어 사용, 또는 파티클·텍스트의 copyBackground 소비 착수 시.*
 
 - **3D 경로 비대칭**: `SceneRenderer3D` 의 isFrameBuffer 빌보드 합성(`:1435`/`:1839` 부근)은 `copyBackground` 필드를
   전혀 읽지 않는다 — 2D `runFrameBufferLayer` 는 이번에 acc 블릿/투명 클리어 분기 + `_rt_FullFrameBuffer` aux
@@ -135,7 +164,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   키잉)은 이번 라운드에서 코드 변경 없이 재확인만(반증이 아니라 "미재현" — ②는 60프레임 애니 텍스처
   전수 미스캔이 명시적 한계).
 
-## 하네스 — 트리거: 게이트 오탐/소요가 거슬릴 때
+## 하네스
+
+*트리거: 게이트 오탐·소요가 거슬릴 때.*
 
 - **벽시계(Date) 오염** — 씬 스크립트 JS `Date`가 미스텁이라 시계 텍스트 씬(회귀 FAIL 58 중 45건 보유)의 diff에 캡처 시각차가 섞임(실측: 3047405322 mean 13.05가 전부 시계였음, 2026-07-11 판독). 같은-분 셀프체크는 "결정"으로 오분류. 수정 방향: 캡처 경로에서 shims에 Date 고정 주입 또는 시계 스크립트 보유 씬을 lax 버킷으로
 - 스냅샷 드리프트 2씬(3000562427, 3448290956) 부하 내성 — 순정에서도 요동하는 크로스-프로세스 비결정, 현재는 판독 시 제외 규약

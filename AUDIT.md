@@ -1,5 +1,18 @@
 # Waple 코드베이스 감사 리포트
 
+> ⚠️ **이력 문서다.** 2026-07-06 시점의 감사 결과이며 이후 상당수가 해소됐다.
+> **현재 잔여 과제는 [BACKLOG.md](BACKLOG.md) 를 봐라.** 이 문서의 값은 결론이 아니라
+> 그때 무엇을 어떤 근거로 판단했는지에 있다. 본문은 기록 보존을 위해 고치지 않았다.
+>
+> 이후 해소가 확인된 예(2026-07-31 대조): `LICENSE` 부재 → MIT 신설(`NOTICE` 포함) ·
+> 최초 실행 온보딩 전무 → [OnboardingView.swift](Sources/Waple/Shell/OnboardingView.swift) 구현 ·
+> 테스트 스캐폴딩 중복 → 타깃별 `TestSupport.swift` 로 통합(`efe73cc`) ·
+> 정적 SwiftUI UI → 네이티브 재구축 완료(BACKLOG "UI 네이티브 재구축" 절) ·
+> `PuppetModel` Latin-1 디코드 → `BinaryReading.readCString` 로 통합.
+>
+> 여전히 유효한 것도 있다 — `.saver` 소스는 `Package.swift` 에 타깃이 없어 지금도
+> `swift test` 커버리지 밖이다. 테스트 수는 이 문서 작성 시점 이후 2,125개로 늘었다.
+
 > 생성일 2026-07-06 · 다중 에이전트 병렬 감사(탐색 22개, read-only) · **코드 미수정 — 실행 항목만 정리** · verify 단계 없음
 > 상태: 완료 (탐색 22/22 반영)
 
