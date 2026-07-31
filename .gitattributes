@@ -3,3 +3,33 @@
 
 # 커밋된 스냅샷 기준선: 썸네일은 바이너리
 spec/golden/snapshot/**/*.png binary
+
+# 동봉된 WE 에셋(Sources/WapleRender/Resources/WEAssets)
+#
+# 바이너리는 정규화가 닿으면 내용이 깨진다.
+Sources/WapleRender/Resources/WEAssets/**/*.tex binary
+Sources/WapleRender/Resources/WEAssets/**/*.png binary
+Sources/WapleRender/Resources/WEAssets/**/*.jpg binary
+Sources/WapleRender/Resources/WEAssets/**/*.gif binary
+Sources/WapleRender/Resources/WEAssets/**/*.tga binary
+Sources/WapleRender/Resources/WEAssets/**/*.ttf binary
+Sources/WapleRender/Resources/WEAssets/**/*.otf binary
+Sources/WapleRender/Resources/WEAssets/**/*.ttc binary
+Sources/WapleRender/Resources/WEAssets/**/*.mdl binary
+Sources/WapleRender/Resources/WEAssets/**/*.gxs binary
+Sources/WapleRender/Resources/WEAssets/**/*.dxs binary
+Sources/WapleRender/Resources/WEAssets/**/*.mp4 binary
+Sources/WapleRender/Resources/WEAssets/**/*.webm binary
+Sources/WapleRender/Resources/WEAssets/**/*.mp3 binary
+Sources/WapleRender/Resources/WEAssets/**/*.ogg binary
+Sources/WapleRender/Resources/WEAssets/**/*.wav binary
+#
+# 텍스트지만 정규화하지 않는다(-text). WE 원문은 CRLF 이고 ShaderPreprocessor 가
+# 그걸 전제로 정규화해 읽는다. 리포가 임의로 LF 로 바꾸면 원문과 바이트가 달라져
+# spec/assets/manifest.json 의 해시가 매번 어긋난다.
+Sources/WapleRender/Resources/WEAssets/**/*.vert -text
+Sources/WapleRender/Resources/WEAssets/**/*.frag -text
+Sources/WapleRender/Resources/WEAssets/**/*.geom -text
+Sources/WapleRender/Resources/WEAssets/**/*.h    -text
+Sources/WapleRender/Resources/WEAssets/**/*.json -text
+Sources/WapleRender/Resources/WEAssets/**/*.txt  -text

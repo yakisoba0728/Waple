@@ -1,0 +1,182 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_assets.py",
+ "entries": [
+  {
+   "id": "assets.fileCount",
+   "value": 2940,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "WE 2.8.42 설치본의 assets/ 디렉터리"
+    }
+   ]
+  },
+  {
+   "id": "assets.totalBytes",
+   "value": 79515997,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "WE 2.8.42 설치본의 assets/ 디렉터리"
+    }
+   ]
+  },
+  {
+   "id": "assets.dirBreakdown",
+   "value": {
+    "effects": {
+     "files": 1041,
+     "bytes": 22469223
+    },
+    "fonts": {
+     "files": 19,
+     "bytes": 2544830
+    },
+    "materials": {
+     "files": 586,
+     "bytes": 45183984
+    },
+    "models": {
+     "files": 7,
+     "bytes": 37222
+    },
+    "particles": {
+     "files": 6,
+     "bytes": 9085
+    },
+    "presets": {
+     "files": 880,
+     "bytes": 8614755
+    },
+    "scenes": {
+     "files": 249,
+     "bytes": 284044
+    },
+    "scripts": {
+     "files": 4,
+     "bytes": 40404
+    },
+    "shaders": {
+     "files": 137,
+     "bytes": 315011
+    },
+    "zcompat": {
+     "files": 11,
+     "bytes": 17439
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "WE 2.8.42 설치본의 assets/ 디렉터리"
+    }
+   ]
+  },
+  {
+   "id": "assets.extensionBreakdown",
+   "value": {
+    ".json": {
+     "files": 1698,
+     "bytes": 1321896
+    },
+    ".tex": {
+     "files": 311,
+     "bytes": 59711842
+    },
+    ".tex-json": {
+     "files": 298,
+     "bytes": 31370
+    },
+    ".frag": {
+     "files": 242,
+     "bytes": 498047
+    },
+    ".vert": {
+     "files": 242,
+     "bytes": 276386
+    },
+    ".gif": {
+     "files": 52,
+     "bytes": 1259614
+    },
+    ".tga": {
+     "files": 32,
+     "bytes": 13022592
+    },
+    ".png": {
+     "files": 17,
+     "bytes": 650381
+    },
+    ".h": {
+     "files": 14,
+     "bytes": 56759
+    },
+    ".ttf": {
+     "files": 11,
+     "bytes": 2411704
+    },
+    ".dxs": {
+     "files": 5,
+     "bytes": 14909
+    },
+    ".otf": {
+     "files": 4,
+     "bytes": 116068
+    },
+    ".txt": {
+     "files": 4,
+     "bytes": 17058
+    },
+    ".js": {
+     "files": 4,
+     "bytes": 40404
+    },
+    ".geom": {
+     "files": 4,
+     "bytes": 17603
+    },
+    ".mdl": {
+     "files": 2,
+     "bytes": 69364
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "WE 2.8.42 설치본의 assets/ 디렉터리"
+    }
+   ]
+  },
+  {
+   "id": "assets.bundledAt",
+   "value": "Sources/WapleRender/Resources/WEAssets",
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/Resources/WEAssets",
+     "note": "앱 번들 동봉 위치. 해석 순서상 마지막 폴백"
+    }
+   ]
+  },
+  {
+   "id": "assets.whyBundled",
+   "value": {
+    "reason": "워크샵 pkg 는 공유 셰이더 헤더를 동봉하지 않는다",
+    "evidence": "코퍼스 162개 전수에서 common_*.h 동봉 0건"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "162개 scene.pkg 엔트리 목록 전수 스캔"
+    }
+   ]
+  }
+ ]
+}
