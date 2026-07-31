@@ -227,16 +227,7 @@ public struct TexImage {
         // WE 포맷 enum: 8=RG88, 9=R8. 종전 코드가 9 를 4(DXT5)에 묶어 마스크가 전백(全白)→전화면 흑화면.
         if let (mips, _, variants, mipChain) = container {
             let mip = mips[0]
-            let kind: PayloadKind
-            switch format {
-            case 0: kind = .lz4RGBA
-            case 4: kind = .bc3
-            case 6: kind = .bc2   // DXT3(BC2): 명시 4bit 알파 + 4-색 컬러. 실측(2026-07-06): 태양계 fmt6 16개
-            case 7: kind = .bc1
-            case 8: kind = .rg88   // 2B/px (r=루마, g=알파 — 실물 common_fragment.h ConvertTexture0Format .rrrg)
-            case 9: kind = .r8
-            default: kind = .unknown
-            }
+            let kind: PayloadKind = payloadKind(forFormat: format)
             // 다중 image(아틀라스 페이지)는 format-based(raw/DXT) 페이로드에만 의미 — mips 전체 보존.
             // 조건 변형(variants)도 여기서만 유효(전부 imageFormat=-1 → format 기반 디코드).
             // mipChain 은 image 0 전체 레벨(단일 image + mipCount>1 일 때만 2개 이상 — 소비처: TexDecoder.rgbaLevels/nativeBC).
@@ -404,17 +395,7 @@ public struct TexImage {
     private static func parseFrames(_ b: [UInt8]) -> [TexFrame] {
         let sig = Array("TEXS000".utf8)
         guard b.count > sig.count + 6 else { return [] }
-        var ti = -1
-        var i = b.count - sig.count - 2
-        while i >= 0 {  // 마지막 출현 탐색 — 첫바이트 선비교 무할당(Model3D.findMagic 동형).
-            if b[i] == sig[0] {   // TEXS 없는 일반 텍스처의 전체 역스캔에서 반복 할당 방지
-                var match = true
-                for j in 1..<sig.count where b[i + j] != sig[j] { match = false; break }
-                if match { ti = i; break }
-            }
-            i -= 1
-        }
-        guard ti >= 0 else { return [] }
+        guard let ti = findLastSignature(b, sig) else { return [] }
         let version = Int(b[ti + 7]) - 0x30
         guard version >= 1, version <= 3 else { return [] }
         func i32(_ o: Int) -> Int? {
@@ -467,6 +448,38 @@ public struct TexImage {
             i += 1
         }
         return nil
+    }
+
+    /// 바이트 배열에서 sig 의 **마지막** 출현 위치를 역방향 탐색(LZ4 페이로드 내 우연 일치 회피).
+    /// 첫바이트 선비교 → 전체 대조(Model3D.findMagic 동형 — 무할당). 미발견 시 nil.
+    private static func findLastSignature(_ b: [UInt8], _ sig: [UInt8]) -> Int? {
+        var i = b.count - sig.count - 2
+        while i >= 0 {
+            if b[i] == sig[0] {
+                var match = true
+                for j in 1..<sig.count where b[i + j] != sig[j] { match = false; break }
+                if match { return i }
+            }
+            i -= 1
+        }
+        return nil
+    }
+
+    /// TEXB format 필드 → PayloadKind 매핑(순수 계산). format 기반 디코드 경로에서만 사용.
+    /// fmt4=DXT5, fmt7=DXT1 실측 근거(2026-07-03): decompressedSize 가 paddedW×H×bpp 전수 일치.
+    /// fmt6=DXT3(BC2) 실측(2026-07-06): 태양계 fmt6 16개.
+    /// fmt8=RG88: 2B/px (r=루마, g=알파 — 실물 common_fragment.h ConvertTexture0Format .rrrg).
+    /// fmt9=R8 실측(2026-07-04): opacity 마스크 w×h 바이트.
+    private static func payloadKind(forFormat format: Int) -> PayloadKind {
+        switch format {
+        case 0: return .lz4RGBA
+        case 4: return .bc3
+        case 6: return .bc2
+        case 7: return .bc1
+        case 8: return .rg88
+        case 9: return .r8
+        default: return .unknown
+        }
     }
 
     private static func indexOf(_ b: [UInt8], _ sig: [UInt8]) -> Int? {

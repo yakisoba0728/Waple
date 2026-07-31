@@ -586,7 +586,15 @@ public enum WallpaperCompatibilityAnalyzer {
         let sceneText = String(data: sceneData, encoding: .utf8) ?? ""
         if sceneText.contains(#""script""#) { features.insert("sceneScript") }
 
-        for case let object as [String: Any] in scene["objects"] as? [Any] ?? [] {
+        features.formUnion(sceneObjectFeatures(from: scene["objects"] as? [Any] ?? []))
+
+        return Array(features)
+    }
+
+    /// scene.json の objects 배열에서 키 존재 여부로 feature 태그를 수집(순수 계산).
+    private static func sceneObjectFeatures(from objects: [Any]) -> Set<String> {
+        var features: Set<String> = []
+        for case let object as [String: Any] in objects {
             if object["image"] != nil { features.insert("sceneLayer") }
             if object["particle"] != nil { features.insert("sceneParticle") }
             if object["text"] != nil { features.insert("sceneText") }
@@ -595,8 +603,7 @@ public enum WallpaperCompatibilityAnalyzer {
             if object["light"] != nil { features.insert("sceneLight") }
             if object["effects"] != nil { features.insert("sceneEffect") }
         }
-
-        return Array(features)
+        return features
     }
 
     private static func scenePackageURL(in folderURL: URL) -> URL? {

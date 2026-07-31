@@ -569,88 +569,12 @@ public struct ParticleSystemDef: Equatable {
         }
     }
 
-    /// resolveChild: 자식 json 경로 → def (호출측이 pkg/머티리얼/재귀 리졸브 담당). nil 리졸브 = 링크 드롭+로그.
-    /// instanceOverride: 씬 오브젝트 "instanceoverride"(루트 def 전용 — 자식 children 은 비전파 보수 규약).
-    /// 파스 **중** 적용해야 하는 이유: controlpointattract 의 target 이 CP 로 베이크되므로(아래 attractCPIds
-    /// 재바인딩) CP 오버라이드는 베이크 전에 반영돼야 한다 — 사후 def 복제는 이 지점에 못 미친다.
-    public static func parse(_ json: [String: Any], material: ParticleMaterial?,
-                             instanceOverride: ParticleInstanceOverride? = nil,
-                             resolveChild: ((String) -> ParticleSystemDef?)? = nil) -> ParticleSystemDef {
-        var emitters: [Emitter] = []
-        // emitters 와 병렬(같은 case 에서 함께 append) — 오디오반응 rate 변조에 이미터별 파라미터 공급.
-        var emitterAudio: [AudioProcessing?] = []
-        // F620/F627: speedmin/speedmax·box distancemin 도 emitters 와 병렬로 함께 append.
-        var emitterSpeed: [SIMD2<Float>] = []
-        var boxDistanceMin: [Vec3?] = []
-        // 주기 방출(minperiodicduration…maxtoemitperperiod @0x48e1c0–0x48e2b8)도 emitters 와 병렬.
-        var emitterPeriodic: [PeriodicEmission?] = []
-        /// [추정] 주기 키가 하나라도 있으면 PeriodicEmission 조립(부재 채널은 중립 기본값:
-        /// duration 1s, delay 0, max부재→min 승계, quota 0=무상한 — WE 에디터 신규 이미터 기본 정황).
-        func parsePeriodic(_ e: [String: Any]) -> PeriodicEmission? {
-            let dMin = pfloat(e["minperiodicduration"]), dMax = pfloat(e["maxperiodicduration"])
-            let pMin = pfloat(e["minperiodicdelay"]), pMax = pfloat(e["maxperiodicdelay"])
-            let quota = pint(e["maxtoemitperperiod"])
-            guard dMin != nil || dMax != nil || pMin != nil || pMax != nil || quota != nil else { return nil }
-            let lo = dMin ?? dMax ?? 1
-            let plo = pMin ?? pMax ?? 0
-            return PeriodicEmission(durationMin: lo, durationMax: dMax ?? lo,
-                                    delayMin: plo, delayMax: pMax ?? plo,
-                                    maxPerPeriod: max(0, quota ?? 0))
-        }
-        for case let e as [String: Any] in (json["emitter"] as? [Any] ?? []) {
-            // F620: speedmin 부재 시 0, speedmax 부재 시 speedmin 승계(고정속도) — 부호 있는 초기속도.
-            let speedMin = pfloat(e["speedmin"]) ?? 0
-            let speedMax = pfloat(e["speedmax"]) ?? speedMin
-            switch e["name"] as? String {
-            case "sphererandom":
-                emitters.append(.sphere(
-                    origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    // 부재 기본 (1,1,0): wallpaper64.exe 스트링 "1 1 0" @0x48e288("directions" @0x48e290 에 인접).
-                    directions: pvec3(e["directions"]) ?? Vec3(x: 1, y: 1, z: 0),
-                    distanceMin: pfloat(e["distancemin"]) ?? 0,
-                    distanceMax: pfloat(e["distancemax"]) ?? 0,
-                    rate: pfloat(e["rate"]) ?? 0,
-                    burst: pint(e["instantaneous"]) ?? 0,
-                    sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
-                emitterAudio.append(AudioProcessing.parse(e))
-                emitterSpeed.append(SIMD2(speedMin, speedMax))
-                boxDistanceMin.append(nil)
-                emitterPeriodic.append(parsePeriodic(e))
-            case "boxrandom":
-                emitters.append(.box(
-                    origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    rate: pfloat(e["rate"]) ?? 0,
-                    burst: pint(e["instantaneous"]) ?? 0))
-                emitterAudio.append(AudioProcessing.parse(e))
-                emitterSpeed.append(SIMD2(speedMin, speedMax))
-                boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
-                emitterPeriodic.append(parsePeriodic(e))
-            case "layerimage":
-                // E1(②): layerimage(레이어 이미지 픽셀에서 방출) — 케이스 자체가 없어 무조건 드롭돼
-                // 이 이미터만 가진 시스템은 emitters=[] 로 파티클을 0개도 생성하지 못했다. 픽셀 불투명
-                // 분포 샘플링은 디코드 텍스처(WapleRender 전용) 접근이 필요해 파스 단계(WapleCore)에서는
-                // 불가 — sphererandom/boxrandom과 동일한 공용 필드(origin/distancemax/distancemin/rate/
-                // instantaneous)만 읽어 균등 박스 방출로 폴백한다. 캐비엇: 이미지 알파 마스크는 반영하지
-                // 않음(균등분포) — 코퍼스 실측 n=1(rate 외 필드 미관측)이라 이 필드들은 부재 시 boxrandom과
-                // 동일한 원점 스폰(distanceMax=0)으로 퇴화한다(무크래시, "0개"보다는 개선).
-                emitters.append(.box(
-                    origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    rate: pfloat(e["rate"]) ?? 0,
-                    burst: pint(e["instantaneous"]) ?? 0))
-                emitterAudio.append(AudioProcessing.parse(e))
-                emitterSpeed.append(SIMD2(speedMin, speedMax))
-                boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
-                emitterPeriodic.append(parsePeriodic(e))
-            case let other:
-                WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
-            }
-        }
-
+    /// initializer JSON 배열 → (이니셜라이저 목록, mapSequenceAxis) 조립.
+    /// F630: mapsequencearoundcontrolpoint "axis" — 마지막 지정 축이 승.
+    private static func parseInitializers(_ jsonArray: [Any]) -> (inits: [Initializer], mapSeqAxis: Vec3?) {
         var inits: [Initializer] = []
         var mapSeqAxis: Vec3? = nil   // F630: mapsequencearoundcontrolpoint "axis"
-        for case let i as [String: Any] in (json["initializer"] as? [Any] ?? []) {
+        for case let i as [String: Any] in jsonArray {
             switch i["name"] as? String {
             case "lifetimerandom":
                 inits.append(.lifetimeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
@@ -744,74 +668,20 @@ public struct ParticleSystemDef: Equatable {
                 WapleLog.warn("[Waple] SP4 unsupported initializer dropped: \(other ?? "nil")")
             }
         }
+        return (inits, mapSeqAxis)
+    }
 
-        // 인스턴스 오버라이드(배수) 적용 — 이미터 rate/버스트, 이니셜라이저 min/max.
-        // 배수 대상 이니셜라이저가 프리셋에 없으면 주입(스폰 기본 1 × 배수 = 배수 자체; m==1 은 무의미라
-        // 생략). speed 는 속도원 부재 시 0×배수=0 — 주입 없음. 색 배수는 colorrandom(0..255)·colorlist
-        // (0..1) 양쪽에 성분별 곱(선형 배수라 스페이스 무관), 색 이니셜라이저 부재 시 colorList([배수]) 주입
-        // (스폰 기본 백색 × 배수 = 배수 자체).
-        if let ov = instanceOverride, !ov.isEmpty {
-            func mul(_ v: Vec3, _ m: Vec3) -> Vec3 { Vec3(x: v.x * m.x, y: v.y * m.y, z: v.z * m.z) }
-            func scale(_ v: Vec3, _ m: Float) -> Vec3 { Vec3(x: v.x * m, y: v.y * m, z: v.z * m) }
-            func scaledBurst(_ b: Int, _ m: Float) -> Int { saturatedCount(Float(b) * m) }  // 감사 V06: 포화 클램프
-            if ov.rate != nil || ov.count != nil {
-                let rm = ov.rate ?? 1, cm = ov.count ?? 1
-                emitters = emitters.map { e in
-                    switch e {
-                    case let .sphere(origin, directions, dMin, dMax, rate, burst, sign):
-                        return .sphere(origin: origin, directions: directions, distanceMin: dMin,
-                                       distanceMax: dMax, rate: rate * rm, burst: scaledBurst(burst, cm), sign: sign)
-                    case let .box(origin, distanceMax, rate, burst):
-                        return .box(origin: origin, distanceMax: distanceMax,
-                                    rate: rate * rm, burst: scaledBurst(burst, cm))
-                    }
-                }
-            }
-            inits = inits.map { i in
-                switch i {
-                case let .lifetimeRandom(mn, mx, e) where ov.lifetime != nil:
-                    return .lifetimeRandom(min: mn * ov.lifetime!, max: mx * ov.lifetime!, exponent: e)
-                case let .sizeRandom(mn, mx, e) where ov.size != nil:
-                    return .sizeRandom(min: mn * ov.size!, max: mx * ov.size!, exponent: e)
-                case let .alphaRandom(mn, mx, e) where ov.alpha != nil:
-                    return .alphaRandom(min: mn * ov.alpha!, max: mx * ov.alpha!, exponent: e)
-                case let .velocityRandom(mn, mx, e) where ov.speed != nil:
-                    return .velocityRandom(min: scale(mn, ov.speed!), max: scale(mx, ov.speed!), exponent: e)
-                case let .turbulentVelocityRandom(sMin, sMax, sc, off) where ov.speed != nil:
-                    return .turbulentVelocityRandom(speedMin: sMin * ov.speed!, speedMax: sMax * ov.speed!,
-                                                    scale: sc, offset: off)
-                case let .colorRandom(mn, mx, e) where ov.colorMultiplier != nil:
-                    return .colorRandom(min: mul(mn, ov.colorMultiplier!), max: mul(mx, ov.colorMultiplier!), exponent: e)
-                case let .colorList(colors) where ov.colorMultiplier != nil:
-                    return .colorList(colors: colors.map { mul($0, ov.colorMultiplier!) })
-                default:
-                    return i
-                }
-            }
-            func lacks(_ isKind: (Initializer) -> Bool) -> Bool { !inits.contains(where: isKind) }
-            if let m = ov.size, m != 1, lacks({ if case .sizeRandom = $0 { return true } else { return false } }) {
-                inits.append(.sizeRandom(min: m, max: m))
-            }
-            if let m = ov.alpha, m != 1, lacks({ if case .alphaRandom = $0 { return true } else { return false } }) {
-                inits.append(.alphaRandom(min: m, max: m, exponent: 1))
-            }
-            if let m = ov.lifetime, m != 1, lacks({ if case .lifetimeRandom = $0 { return true } else { return false } }) {
-                inits.append(.lifetimeRandom(min: m, max: m))
-            }
-            if let c = ov.colorMultiplier, c != Vec3(x: 1, y: 1, z: 1),
-               lacks({ if case .colorRandom = $0 { return true }
-                       if case .colorList = $0 { return true } else { return false } }) {
-                inits.append(.colorList(colors: [c]))
-            }
-        }
-
+    /// operator JSON 배열 → (파싱된 오퍼레이터, attract CP 인덱스 쌍, vortex 오디오반응) 조립.
+    /// controlpointattract 의 CP id 는 controlpoint 배열이 오퍼레이터보다 뒤에 파스되므로
+    /// (ops 인덱스, cpid) 만 보관했다가 def 조립 직전에 target 재조립(감사 V04).
+    private static func parseOperators(_ jsonArray: [Any]) -> (ops: [ParticleOperator],
+                                                               attractCPIds: [(op: Int, cp: Int)],
+                                                               vortexAudio: [AudioProcessing?]) {
         var ops: [ParticleOperator] = []
-        // controlpointattract 의 CP id — controlpoint 배열이 오퍼레이터보다 뒤에 파스되므로
-        // (ops 인덱스, cpid)만 보관했다가 def 조립 직전에 target 재조립(감사 V04).
         var attractCPIds: [(op: Int, cp: Int)] = []
         // F624: vortex 출현 순 병렬 오디오반응(WE: vortex 오디오반응 = particle speed 를 오디오에 연결).
         var vortexAudio: [AudioProcessing?] = []
-        for case let o as [String: Any] in (json["operator"] as? [Any] ?? []) {
+        for case let o as [String: Any] in jsonArray {
             switch o["name"] as? String {
             case "movement":
                 ops.append(.movement(gravity: pvec3(o["gravity"]) ?? Vec3(x: 0, y: 0, z: 0), drag: pfloat(o["drag"]) ?? 0))
@@ -934,7 +804,7 @@ public struct ParticleSystemDef: Equatable {
                     ops.append(.remapValue(output: .speed(min: pfloat(o["outputrangemin"]) ?? 0,
                                                           max: pfloat(o["outputrangemax"]) ?? 1),
                                            fbm: fbm, inputScale: scale))
-                } else if let verb = Self.remapVerb(outputName) {
+                } else if let verb = remapVerb(outputName) {
                     let spec = RemapSpec(
                         verb: verb,
                         input: (o["input"] as? String).flatMap { RemapInput(rawValue: $0.lowercased()) },
@@ -961,6 +831,151 @@ public struct ParticleSystemDef: Equatable {
                 WapleLog.warn("[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
             }
         }
+        return (ops, attractCPIds, vortexAudio)
+    }
+
+    /// resolveChild: 자식 json 경로 → def (호출측이 pkg/머티리얼/재귀 리졸브 담당). nil 리졸브 = 링크 드롭+로그.
+    /// instanceOverride: 씬 오브젝트 "instanceoverride"(루트 def 전용 — 자식 children 은 비전파 보수 규약).
+    /// 파스 **중** 적용해야 하는 이유: controlpointattract 의 target 이 CP 로 베이크되므로(아래 attractCPIds
+    /// 재바인딩) CP 오버라이드는 베이크 전에 반영돼야 한다 — 사후 def 복제는 이 지점에 못 미친다.
+    public static func parse(_ json: [String: Any], material: ParticleMaterial?,
+                             instanceOverride: ParticleInstanceOverride? = nil,
+                             resolveChild: ((String) -> ParticleSystemDef?)? = nil) -> ParticleSystemDef {
+        var emitters: [Emitter] = []
+        // emitters 와 병렬(같은 case 에서 함께 append) — 오디오반응 rate 변조에 이미터별 파라미터 공급.
+        var emitterAudio: [AudioProcessing?] = []
+        // F620/F627: speedmin/speedmax·box distancemin 도 emitters 와 병렬로 함께 append.
+        var emitterSpeed: [SIMD2<Float>] = []
+        var boxDistanceMin: [Vec3?] = []
+        // 주기 방출(minperiodicduration…maxtoemitperperiod @0x48e1c0–0x48e2b8)도 emitters 와 병렬.
+        var emitterPeriodic: [PeriodicEmission?] = []
+        /// [추정] 주기 키가 하나라도 있으면 PeriodicEmission 조립(부재 채널은 중립 기본값:
+        /// duration 1s, delay 0, max부재→min 승계, quota 0=무상한 — WE 에디터 신규 이미터 기본 정황).
+        func parsePeriodic(_ e: [String: Any]) -> PeriodicEmission? {
+            let dMin = pfloat(e["minperiodicduration"]), dMax = pfloat(e["maxperiodicduration"])
+            let pMin = pfloat(e["minperiodicdelay"]), pMax = pfloat(e["maxperiodicdelay"])
+            let quota = pint(e["maxtoemitperperiod"])
+            guard dMin != nil || dMax != nil || pMin != nil || pMax != nil || quota != nil else { return nil }
+            let lo = dMin ?? dMax ?? 1
+            let plo = pMin ?? pMax ?? 0
+            return PeriodicEmission(durationMin: lo, durationMax: dMax ?? lo,
+                                    delayMin: plo, delayMax: pMax ?? plo,
+                                    maxPerPeriod: max(0, quota ?? 0))
+        }
+        for case let e as [String: Any] in (json["emitter"] as? [Any] ?? []) {
+            // F620: speedmin 부재 시 0, speedmax 부재 시 speedmin 승계(고정속도) — 부호 있는 초기속도.
+            let speedMin = pfloat(e["speedmin"]) ?? 0
+            let speedMax = pfloat(e["speedmax"]) ?? speedMin
+            switch e["name"] as? String {
+            case "sphererandom":
+                emitters.append(.sphere(
+                    origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    // 부재 기본 (1,1,0): wallpaper64.exe 스트링 "1 1 0" @0x48e288("directions" @0x48e290 에 인접).
+                    directions: pvec3(e["directions"]) ?? Vec3(x: 1, y: 1, z: 0),
+                    distanceMin: pfloat(e["distancemin"]) ?? 0,
+                    distanceMax: pfloat(e["distancemax"]) ?? 0,
+                    rate: pfloat(e["rate"]) ?? 0,
+                    burst: pint(e["instantaneous"]) ?? 0,
+                    sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                emitterAudio.append(AudioProcessing.parse(e))
+                emitterSpeed.append(SIMD2(speedMin, speedMax))
+                boxDistanceMin.append(nil)
+                emitterPeriodic.append(parsePeriodic(e))
+            case "boxrandom":
+                emitters.append(.box(
+                    origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    rate: pfloat(e["rate"]) ?? 0,
+                    burst: pint(e["instantaneous"]) ?? 0))
+                emitterAudio.append(AudioProcessing.parse(e))
+                emitterSpeed.append(SIMD2(speedMin, speedMax))
+                boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
+                emitterPeriodic.append(parsePeriodic(e))
+            case "layerimage":
+                // E1(②): layerimage(레이어 이미지 픽셀에서 방출) — 케이스 자체가 없어 무조건 드롭돼
+                // 이 이미터만 가진 시스템은 emitters=[] 로 파티클을 0개도 생성하지 못했다. 픽셀 불투명
+                // 분포 샘플링은 디코드 텍스처(WapleRender 전용) 접근이 필요해 파스 단계(WapleCore)에서는
+                // 불가 — sphererandom/boxrandom과 동일한 공용 필드(origin/distancemax/distancemin/rate/
+                // instantaneous)만 읽어 균등 박스 방출로 폴백한다. 캐비엇: 이미지 알파 마스크는 반영하지
+                // 않음(균등분포) — 코퍼스 실측 n=1(rate 외 필드 미관측)이라 이 필드들은 부재 시 boxrandom과
+                // 동일한 원점 스폰(distanceMax=0)으로 퇴화한다(무크래시, "0개"보다는 개선).
+                emitters.append(.box(
+                    origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    rate: pfloat(e["rate"]) ?? 0,
+                    burst: pint(e["instantaneous"]) ?? 0))
+                emitterAudio.append(AudioProcessing.parse(e))
+                emitterSpeed.append(SIMD2(speedMin, speedMax))
+                boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
+                emitterPeriodic.append(parsePeriodic(e))
+            case let other:
+                WapleLog.warn("[Waple] SP4 unsupported emitter dropped: \(other ?? "nil")")
+            }
+        }
+
+        var (inits, mapSeqAxis) = Self.parseInitializers(json["initializer"] as? [Any] ?? [])
+
+        // 인스턴스 오버라이드(배수) 적용 — 이미터 rate/버스트, 이니셜라이저 min/max.
+        // 배수 대상 이니셜라이저가 프리셋에 없으면 주입(스폰 기본 1 × 배수 = 배수 자체; m==1 은 무의미라
+        // 생략). speed 는 속도원 부재 시 0×배수=0 — 주입 없음. 색 배수는 colorrandom(0..255)·colorlist
+        // (0..1) 양쪽에 성분별 곱(선형 배수라 스페이스 무관), 색 이니셜라이저 부재 시 colorList([배수]) 주입
+        // (스폰 기본 백색 × 배수 = 배수 자체).
+        if let ov = instanceOverride, !ov.isEmpty {
+            func mul(_ v: Vec3, _ m: Vec3) -> Vec3 { Vec3(x: v.x * m.x, y: v.y * m.y, z: v.z * m.z) }
+            func scale(_ v: Vec3, _ m: Float) -> Vec3 { Vec3(x: v.x * m, y: v.y * m, z: v.z * m) }
+            func scaledBurst(_ b: Int, _ m: Float) -> Int { saturatedCount(Float(b) * m) }  // 감사 V06: 포화 클램프
+            if ov.rate != nil || ov.count != nil {
+                let rm = ov.rate ?? 1, cm = ov.count ?? 1
+                emitters = emitters.map { e in
+                    switch e {
+                    case let .sphere(origin, directions, dMin, dMax, rate, burst, sign):
+                        return .sphere(origin: origin, directions: directions, distanceMin: dMin,
+                                       distanceMax: dMax, rate: rate * rm, burst: scaledBurst(burst, cm), sign: sign)
+                    case let .box(origin, distanceMax, rate, burst):
+                        return .box(origin: origin, distanceMax: distanceMax,
+                                    rate: rate * rm, burst: scaledBurst(burst, cm))
+                    }
+                }
+            }
+            inits = inits.map { i in
+                switch i {
+                case let .lifetimeRandom(mn, mx, e) where ov.lifetime != nil:
+                    return .lifetimeRandom(min: mn * ov.lifetime!, max: mx * ov.lifetime!, exponent: e)
+                case let .sizeRandom(mn, mx, e) where ov.size != nil:
+                    return .sizeRandom(min: mn * ov.size!, max: mx * ov.size!, exponent: e)
+                case let .alphaRandom(mn, mx, e) where ov.alpha != nil:
+                    return .alphaRandom(min: mn * ov.alpha!, max: mx * ov.alpha!, exponent: e)
+                case let .velocityRandom(mn, mx, e) where ov.speed != nil:
+                    return .velocityRandom(min: scale(mn, ov.speed!), max: scale(mx, ov.speed!), exponent: e)
+                case let .turbulentVelocityRandom(sMin, sMax, sc, off) where ov.speed != nil:
+                    return .turbulentVelocityRandom(speedMin: sMin * ov.speed!, speedMax: sMax * ov.speed!,
+                                                    scale: sc, offset: off)
+                case let .colorRandom(mn, mx, e) where ov.colorMultiplier != nil:
+                    return .colorRandom(min: mul(mn, ov.colorMultiplier!), max: mul(mx, ov.colorMultiplier!), exponent: e)
+                case let .colorList(colors) where ov.colorMultiplier != nil:
+                    return .colorList(colors: colors.map { mul($0, ov.colorMultiplier!) })
+                default:
+                    return i
+                }
+            }
+            func lacks(_ isKind: (Initializer) -> Bool) -> Bool { !inits.contains(where: isKind) }
+            if let m = ov.size, m != 1, lacks({ if case .sizeRandom = $0 { return true } else { return false } }) {
+                inits.append(.sizeRandom(min: m, max: m))
+            }
+            if let m = ov.alpha, m != 1, lacks({ if case .alphaRandom = $0 { return true } else { return false } }) {
+                inits.append(.alphaRandom(min: m, max: m, exponent: 1))
+            }
+            if let m = ov.lifetime, m != 1, lacks({ if case .lifetimeRandom = $0 { return true } else { return false } }) {
+                inits.append(.lifetimeRandom(min: m, max: m))
+            }
+            if let c = ov.colorMultiplier, c != Vec3(x: 1, y: 1, z: 1),
+               lacks({ if case .colorRandom = $0 { return true }
+                       if case .colorList = $0 { return true } else { return false } }) {
+                inits.append(.colorList(colors: [c]))
+            }
+        }
+
+        var (ops, attractCPIds, vortexAudio) = Self.parseOperators(json["operator"] as? [Any] ?? [])
 
         var renderer: RendererKind = .unsupported("none")
         var orientation: ParticleOrientation = .screen

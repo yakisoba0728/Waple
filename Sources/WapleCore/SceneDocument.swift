@@ -1025,39 +1025,7 @@ extension SceneDocument {
         out.skylightColor = skylightColor
         out.hdr = hdr
         out.bloom = bloom
-        // camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13/168씬). {"user"/"value"} 바인딩(클린룸 15씬)
-        // 대비 unwrap. 수식은 렌더러(코퍼스 값분포 근사) — 여기선 원시 파라미터만 보존.
-        out.cameraShake = (unwrap(general["camerashake"]) as? Bool) ?? false
-        out.cameraShakeAmplitude = float(general["camerashakeamplitude"]) ?? 0.5
-        out.cameraShakeRoughness = float(general["camerashakeroughness"]) ?? 1
-        out.cameraShakeSpeed = float(general["camerashakespeed"]) ?? 3
-        // LDR uses the WE defaults; float/vec3 retain numeric-string and {value} unwrapping without clamps.
-        out.bloomStrength = float(general["bloomstrength"]) ?? 2
-        out.bloomThreshold = float(general["bloomthreshold"]) ?? 0.65
-        out.bloomTint = vec3(general["bloomtint"]) ?? Vec3(x: 1, y: 1, z: 1)
-        // HDR 판(#22): 기본값 = 클린룸 확정치(선언부 주석 참조). float/intVal 이 {"user":…,"value":…}
-        // 바인딩(실코퍼스 3470948192 등)과 문자열 숫자를 공통 언랩한다.
-        out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 0
-        out.bloomHDRThreshold = float(general["bloomhdrthreshold"]) ?? 1
-        out.bloomHDRFeather = float(general["bloomhdrfeather"]) ?? 0.1
-        out.bloomHDRIterations = intVal(general["bloomhdriterations"]) ?? 8
-        out.bloomHDRScatter = float(general["bloomhdrscatter"]) ?? 1.619
-        // F695/F692: 씬 전역 줌 + perspective 레이어 원근 FOV(파스·보존 — 소비는 렌더러 책임).
-        out.zoom = float(general["zoom"]) ?? 1
-        out.perspectiveOverrideFov = float(general["perspectiveoverridefov"])
-        // clearenabled/camerafade(json-keys.txt:667/686) — clearenabled=false 는 acc 미클리어(잔상)라
-        // 렌더러가 소비(SceneRenderer.clearEnabled). camerafade 는 의미 미확정이라 파스만(소비 보류).
-        out.clearEnabled = (unwrap(general["clearenabled"]) as? Bool) ?? true
-        out.cameraFade = (unwrap(general["camerafade"]) as? Bool) ?? true
-        // wind/gravity(json-keys.txt:696-700) — 소비자 의미론 미확정, 파스·보존 전용(필드 주석 참조).
-        // direction 실측 형태는 "x y z" vec3 문자열(코퍼스 109/161씬) — float()/vec3() 가 {value} 언랩 공통 처리.
-        out.windEnabled = (unwrap(general["windenabled"]) as? Bool) ?? false
-        out.windStrength = float(general["windstrength"]) ?? 1
-        out.windDirection = vec3(general["winddirection"]) ?? Vec3(x: 0.707, y: 0.707, z: 0)
-        out.gravityStrength = float(general["gravitystrength"]) ?? 1
-        out.gravityDirection = vec3(general["gravitydirection"]) ?? Vec3(x: 0, y: -1, z: 0)
-        // H7: 품질 설정(general.quality).
-        out.quality = quality
+        applyGeneralSettings(to: &out, general: general, quality: quality)
         return out
     }
 
@@ -1168,98 +1136,28 @@ extension SceneDocument {
                let matD = package.data(for: matPath) ?? assets?(matPath),
                let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
                let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any] {
-                if let bl = p0["blending"] as? String { blendMode = bl }
-                depthTest = (p0["depthtest"] as? String) != "disabled"
-                depthWrite = (p0["depthwrite"] as? String) != "disabled"
-                if let aw = p0["alphawriting"] as? String { alphaWriting = aw }
-                // SPRITESHEET 콤보(대/소문자 무시, 값 !=0) → 이 레이어는 .tex TEXS 프레임 시간축 재생.
-                // LIGHTING 콤보(!=0) → 포워드 라이팅 대상(씬 라이트에 반응). 둘 다 대소문자 무시 매치.
-                if let combos = p0["combos"] as? [String: Any] {
-                    spritesheetCombo = combos.contains { $0.key.lowercased() == "spritesheet" && (intVal($0.value) ?? 0) != 0 }
-                    lightingCombo = combos.contains { $0.key.lowercased() == "lighting" && (intVal($0.value) ?? 0) != 0 }
-                }
-                if let constants = p0["constantshadervalues"] as? [String: Any] {
-                    let r = scriptedConstant(constants["roughness"])
-                    if let f = lenientFloat(r.value) { roughness = f }
-                    if let script = r.script { materialScripts["roughness"] = script }
-                    if let props = r.scriptProps { materialScriptProps["roughness"] = props }
-                    let m = scriptedConstant(constants["metallic"])
-                    if let f = lenientFloat(m.value) { metallic = f }
-                    if let script = m.script { materialScripts["metallic"] = script }
-                    if let props = m.scriptProps { materialScriptProps["metallic"] = props }
-                    let s = scriptedConstant(constants["speculartint"])
-                    if let v = vec3(s.value) { specularTint = v }
-                    if let script = s.script { materialScripts["speculartint"] = script }
-                    if let props = s.scriptProps { materialScriptProps["speculartint"] = props }
-                }
-                // H1: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
-                if let shader = p0["shader"] as? String { materialShader = shader }
-                if let combos = p0["combos"] as? [String: Any] {
-                    for (k, v) in combos {
-                        if let i = intVal(v) { materialCombos[k] = i }
-                    }
-                }
-                if let csv = p0["constantshadervalues"] as? [String: Any] {
-                    for (k, v) in csv {
-                        if let dict = v as? [String: Any], let sc = dict["script"] as? String {
-                            materialConstantScripts[k] = sc
-                            if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { materialConstantScriptProps[k] = sp }
-                        }
-                        if let f = float(v) { materialConstants[k] = [f] }
-                        else if let s = v as? String {
-                            let f = floatList(s)
-                            if !f.isEmpty { materialConstants[k] = f }
-                        }
-                        else if let dict = v as? [String: Any] {
-                            if let f = float(dict["value"]) { materialConstants[k] = [f] }
-                            else if let sv = dict["value"] as? String {
-                                let f = floatList(sv)
-                                if !f.isEmpty { materialConstants[k] = f }
-                            }
-                        }
-                    }
-                }
-                // C⑦a: usershadervalues — 실물 규약은 {JSON 키=user property 키, JSON 값=셰이더 상수/
-                // 머티리얼 토큰 이름}(fantasticcar body.json usershadervalues:{"carbodycolor":"paintcolor"},
-                // project.json 에 carbodycolor 만 유저프로퍼티로 등재 — car.frag 어노테이션 "material":
-                // "paintcolor" 로 교차검증). 이전 구현은 방향이 반대(k=토큰,v=유저키)라 userProps 룩업이
-                // 항상 미스했다. materialUserShaderValues 는 하류(:roughness/:metallic/:speculartint,
-                // GLSLTranslator sceneKey)와의 계약대로 여전히 [토큰: userKey]로 채운다.
-                // constantshadervalues 파스 후 적용해야 userProps 오버라이드가 기본값을 덮는다.
-                if let usv = p0["usershadervalues"] as? [String: Any] {
-                    for (userKey, v) in usv {
-                        guard let token = v as? String else { continue }
-                        materialUserShaderValues[token] = userKey
-                        guard let raw = userProps[userKey] else { continue }
-                        if let f = float(raw) { materialConstants[token] = [f] }
-                        else if let s = raw as? String {
-                            let f = floatList(s)
-                            if !f.isEmpty { materialConstants[token] = f }
-                        }
-                    }
-                    // 기존 PBR 필드도 usershadervalues 반영(roughness/metallic/speculartint).
-                    if let key = materialUserShaderValues["roughness"], let raw = userProps[key],
-                       let f = float(raw) { roughness = f }
-                    if let key = materialUserShaderValues["metallic"], let raw = userProps[key],
-                       let f = float(raw) { metallic = f }
-                    if let key = materialUserShaderValues["speculartint"], let raw = userProps[key],
-                       let v = vec3(raw) { specularTint = v }
-                }
-                if let texs = p0["textures"] as? [Any] {
-                    materialTextureNames = texs.map { $0 as? String }
-                }
-                // H4: REFRACT 콤보 + 노멀맵(textures[1]) + refractAmount 파싱. 노멀맵 없으면 refract=false.
-                let refractCombo = ((p0["combos"] as? [String: Any])?["REFRACT"] as? NSNumber)?.intValue == 1
-                let normalName = materialTextureNames.count > 1 ? materialTextureNames[1] : nil
-                var refractAmt = float((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
-                // usershadervalues 오버라이드(H2 와 동일 규약).
-                if let key = materialUserShaderValues["ui_editor_properties_refract_amount"],
-                   let raw = userProps[key], let f = float(raw) {
-                    refractAmt = f
-                }
-                refract = refractCombo && normalName != nil
-                normalTextureName = normalName
-                refractAmount = refractAmt
+                let matResult: MaterialPassResult = parseMaterialPassProperties(p0, userProps: userProps)
+                blendMode = matResult.blendMode
+                depthTest = matResult.depthTest
+                depthWrite = matResult.depthWrite
+                alphaWriting = matResult.alphaWriting
+                spritesheetCombo = matResult.spritesheetCombo
+                lightingCombo = matResult.lightingCombo
+                roughness = matResult.roughness
+                metallic = matResult.metallic
+                specularTint = matResult.specularTint
+                materialScripts = matResult.materialScripts
+                materialScriptProps = matResult.materialScriptProps
+                materialShader = matResult.materialShader
+                materialCombos = matResult.materialCombos
+                materialConstants = matResult.materialConstants
+                materialConstantScripts = matResult.materialConstantScripts
+                materialConstantScriptProps = matResult.materialConstantScriptProps
+                materialTextureNames = matResult.materialTextureNames
+                materialUserShaderValues = matResult.materialUserShaderValues
+                refract = matResult.refract
+                normalTextureName = matResult.normalTextureName
+                refractAmount = matResult.refractAmount
             }
         }
         var layer = SceneLayer(
@@ -2392,5 +2290,174 @@ extension SceneDocument {
             return (unwrap(dict["value"]), script, props)
         }
         return (unwrap(dict["value"]), nil, nil)
+    }
+
+    // MARK: - parseLayer 머티리얼 패스 추출 헬퍼
+
+    /// parseLayer 에서 머티리얼 패스(p0) 파싱 결과를 운반하는 내부 구조체.
+    private struct MaterialPassResult {
+        var blendMode: String = "normal"
+        var depthTest: Bool = true
+        var depthWrite: Bool = true
+        var alphaWriting: String = "default"
+        var spritesheetCombo: Bool = false
+        var lightingCombo: Bool = false
+        var roughness: Float = 0.7
+        var metallic: Float = 0
+        var specularTint: Vec3 = Vec3(x: 1, y: 1, z: 1)
+        var materialScripts: [String: String] = [:]
+        var materialScriptProps: [String: String] = [:]
+        var materialShader: String? = nil
+        var materialCombos: [String: Int] = [:]
+        var materialConstants: [String: [Float]] = [:]
+        var materialConstantScripts: [String: String] = [:]
+        var materialConstantScriptProps: [String: String] = [:]
+        var materialTextureNames: [String?] = []
+        var materialUserShaderValues: [String: String] = [:]
+        var refract: Bool = false
+        var normalTextureName: String? = nil
+        var refractAmount: Float = 0.05
+    }
+
+    /// 머티리얼 패스(passes[0]) 딕셔너리에서 렌더 속성·콤보·상수·텍스처를 추출하는 순수 계산.
+    /// parseLayer 에서 분리 — 타입체커 식 깊이 분산 목적(기능 동치, 2026-07-31).
+    private static func parseMaterialPassProperties(
+        _ p0: [String: Any],
+        userProps: [String: Any]
+    ) -> MaterialPassResult {
+        var result: MaterialPassResult = MaterialPassResult()
+        if let bl = p0["blending"] as? String { result.blendMode = bl }
+        result.depthTest = (p0["depthtest"] as? String) != "disabled"
+        result.depthWrite = (p0["depthwrite"] as? String) != "disabled"
+        if let aw = p0["alphawriting"] as? String { result.alphaWriting = aw }
+        // SPRITESHEET 콤보(대/소문자 무시, 값 !=0) → 이 레이어는 .tex TEXS 프레임 시간축 재생.
+        // LIGHTING 콤보(!=0) → 포워드 라이팅 대상(씬 라이트에 반응). 둘 다 대소문자 무시 매치.
+        if let combos = p0["combos"] as? [String: Any] {
+            result.spritesheetCombo = combos.contains { $0.key.lowercased() == "spritesheet" && (intVal($0.value) ?? 0) != 0 }
+            result.lightingCombo = combos.contains { $0.key.lowercased() == "lighting" && (intVal($0.value) ?? 0) != 0 }
+        }
+        if let constants = p0["constantshadervalues"] as? [String: Any] {
+            let r = scriptedConstant(constants["roughness"])
+            if let f = lenientFloat(r.value) { result.roughness = f }
+            if let script = r.script { result.materialScripts["roughness"] = script }
+            if let props = r.scriptProps { result.materialScriptProps["roughness"] = props }
+            let m = scriptedConstant(constants["metallic"])
+            if let f = lenientFloat(m.value) { result.metallic = f }
+            if let script = m.script { result.materialScripts["metallic"] = script }
+            if let props = m.scriptProps { result.materialScriptProps["metallic"] = props }
+            let s = scriptedConstant(constants["speculartint"])
+            if let v = vec3(s.value) { result.specularTint = v }
+            if let script = s.script { result.materialScripts["speculartint"] = script }
+            if let props = s.scriptProps { result.materialScriptProps["speculartint"] = props }
+        }
+        // H1: 커스텀 머티리얼 셰이더/콤보/상수/텍스처 파스 보존.
+        if let shader = p0["shader"] as? String { result.materialShader = shader }
+        if let combos = p0["combos"] as? [String: Any] {
+            for (k, v) in combos {
+                if let i = intVal(v) { result.materialCombos[k] = i }
+            }
+        }
+        if let csv = p0["constantshadervalues"] as? [String: Any] {
+            for (k, v) in csv {
+                if let dict = v as? [String: Any], let sc = dict["script"] as? String {
+                    result.materialConstantScripts[k] = sc
+                    if let sp = Self.scriptPropsJSON(dict["scriptproperties"]) { result.materialConstantScriptProps[k] = sp }
+                }
+                if let f = float(v) { result.materialConstants[k] = [f] }
+                else if let s = v as? String {
+                    let f = floatList(s)
+                    if !f.isEmpty { result.materialConstants[k] = f }
+                }
+                else if let dict = v as? [String: Any] {
+                    if let f = float(dict["value"]) { result.materialConstants[k] = [f] }
+                    else if let sv = dict["value"] as? String {
+                        let f = floatList(sv)
+                        if !f.isEmpty { result.materialConstants[k] = f }
+                    }
+                }
+            }
+        }
+        // C⑦a: usershadervalues — 실물 규약은 {JSON 키=user property 키, JSON 값=셰이더 상수/
+        // 머티리얼 토큰 이름}(fantasticcar body.json usershadervalues:{"carbodycolor":"paintcolor"},
+        // project.json 에 carbodycolor 만 유저프로퍼티로 등재 — car.frag 어노테이션 "material":
+        // "paintcolor" 로 교차검증). 이전 구현은 방향이 반대(k=토큰,v=유저키)라 userProps 룩업이
+        // 항상 미스했다. materialUserShaderValues 는 하류(:roughness/:metallic/:speculartint,
+        // GLSLTranslator sceneKey)와의 계약대로 여전히 [토큰: userKey]로 채운다.
+        // constantshadervalues 파스 후 적용해야 userProps 오버라이드가 기본값을 덮는다.
+        if let usv = p0["usershadervalues"] as? [String: Any] {
+            for (userKey, v) in usv {
+                guard let token = v as? String else { continue }
+                result.materialUserShaderValues[token] = userKey
+                guard let raw = userProps[userKey] else { continue }
+                if let f = float(raw) { result.materialConstants[token] = [f] }
+                else if let s = raw as? String {
+                    let f = floatList(s)
+                    if !f.isEmpty { result.materialConstants[token] = f }
+                }
+            }
+            // 기존 PBR 필드도 usershadervalues 반영(roughness/metallic/speculartint).
+            if let key = result.materialUserShaderValues["roughness"], let raw = userProps[key],
+               let f = float(raw) { result.roughness = f }
+            if let key = result.materialUserShaderValues["metallic"], let raw = userProps[key],
+               let f = float(raw) { result.metallic = f }
+            if let key = result.materialUserShaderValues["speculartint"], let raw = userProps[key],
+               let v = vec3(raw) { result.specularTint = v }
+        }
+        if let texs = p0["textures"] as? [Any] {
+            result.materialTextureNames = texs.map { $0 as? String }
+        }
+        // H4: REFRACT 콤보 + 노멀맵(textures[1]) + refractAmount 파싱. 노멀맵 없으면 refract=false.
+        let refractCombo: Bool = ((p0["combos"] as? [String: Any])?["REFRACT"] as? NSNumber)?.intValue == 1
+        let normalName: String? = result.materialTextureNames.count > 1 ? result.materialTextureNames[1] : nil
+        var refractAmt: Float = float((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
+        // usershadervalues 오버라이드(H2 와 동일 규약).
+        if let key = result.materialUserShaderValues["ui_editor_properties_refract_amount"],
+           let raw = userProps[key], let f = float(raw) {
+            refractAmt = f
+        }
+        result.refract = refractCombo && normalName != nil
+        result.normalTextureName = normalName
+        result.refractAmount = refractAmt
+        return result
+    }
+
+    // MARK: - parse general 후처리 추출 헬퍼
+
+    /// parse() 후반의 general 딕셔너리 기반 씬 글로벌 설정 적용(순수 할당, 흐름 제어 없음).
+    /// 타입체커 식 깊이 분산 목적(기능 동치, 2026-07-31).
+    private static func applyGeneralSettings(to out: inout SceneDocument, general: [String: Any], quality: Quality) {
+        // camerashake 전역 지터(D 재감사 #16, 코퍼스 활성 13/168씬). {"user"/"value"} 바인딩(클린룸 15씬)
+        // 대비 unwrap. 수식은 렌더러(코퍼스 값분포 근사) — 여기선 원시 파라미터만 보존.
+        out.cameraShake = (unwrap(general["camerashake"]) as? Bool) ?? false
+        out.cameraShakeAmplitude = float(general["camerashakeamplitude"]) ?? 0.5
+        out.cameraShakeRoughness = float(general["camerashakeroughness"]) ?? 1
+        out.cameraShakeSpeed = float(general["camerashakespeed"]) ?? 3
+        // LDR uses the WE defaults; float/vec3 retain numeric-string and {value} unwrapping without clamps.
+        out.bloomStrength = float(general["bloomstrength"]) ?? 2
+        out.bloomThreshold = float(general["bloomthreshold"]) ?? 0.65
+        out.bloomTint = vec3(general["bloomtint"]) ?? Vec3(x: 1, y: 1, z: 1)
+        // HDR 판(#22): 기본값 = 클린룸 확정치(선언부 주석 참조). float/intVal 이 {"user":…,"value":…}
+        // 바인딩(실코퍼스 3470948192 등)과 문자열 숫자를 공통 언랩한다.
+        out.bloomHDRStrength = float(general["bloomhdrstrength"]) ?? 0
+        out.bloomHDRThreshold = float(general["bloomhdrthreshold"]) ?? 1
+        out.bloomHDRFeather = float(general["bloomhdrfeather"]) ?? 0.1
+        out.bloomHDRIterations = intVal(general["bloomhdriterations"]) ?? 8
+        out.bloomHDRScatter = float(general["bloomhdrscatter"]) ?? 1.619
+        // F695/F692: 씬 전역 줌 + perspective 레이어 원근 FOV(파스·보존 — 소비는 렌더러 책임).
+        out.zoom = float(general["zoom"]) ?? 1
+        out.perspectiveOverrideFov = float(general["perspectiveoverridefov"])
+        // clearenabled/camerafade(json-keys.txt:667/686) — clearenabled=false 는 acc 미클리어(잔상)라
+        // 렌더러가 소비(SceneRenderer.clearEnabled). camerafade 는 의미 미확정이라 파스만(소비 보류).
+        out.clearEnabled = (unwrap(general["clearenabled"]) as? Bool) ?? true
+        out.cameraFade = (unwrap(general["camerafade"]) as? Bool) ?? true
+        // wind/gravity(json-keys.txt:696-700) — 소비자 의미론 미확정, 파스·보존 전용(필드 주석 참조).
+        // direction 실측 형태는 "x y z" vec3 문자열(코퍼스 109/161씬) — float()/vec3() 가 {value} 언랩 공통 처리.
+        out.windEnabled = (unwrap(general["windenabled"]) as? Bool) ?? false
+        out.windStrength = float(general["windstrength"]) ?? 1
+        out.windDirection = vec3(general["winddirection"]) ?? Vec3(x: 0.707, y: 0.707, z: 0)
+        out.gravityStrength = float(general["gravitystrength"]) ?? 1
+        out.gravityDirection = vec3(general["gravitydirection"]) ?? Vec3(x: 0, y: -1, z: 0)
+        // H7: 품질 설정(general.quality).
+        out.quality = quality
     }
 }

@@ -57,20 +57,7 @@ public enum ShaderPreprocessor {
         // CASTU/CASTI/CASTF 는 스칼라라 MSL 생성자 스펠링이 GLSL 과 동일(uint/int/float) — 별도 치환 불요.
         // CAST4U(x)=((uint4)(x)) 는 HLSL/MSL 공통 스펠링(uint4)이라 vecN 계열과 달리 typeAndMacroRenames
         // 경유 없이 바로 유효.
-        for (name, body) in [("CAST2", "vec2(x)"), ("CAST3", "vec3(x)"), ("CAST4", "vec4(x)"),
-                             ("CAST2X2", "mat2(x)"), ("CAST3X3", "we_cast3x3(x)"), ("CAST4X4", "mat4(x)"),
-                             ("CASTI", "int(x)"), ("CASTU", "uint(x)"), ("CASTF", "float(x)"), ("CAST4U", "uint4(x)"),
-                             // WE shim(shader-strings.txt :59-62)의 샘플러 선언/전달 매크로:
-                             //   DECLARE_SAMPLER2D_PARAMETER(t)      → Texture2D t, SamplerState t##SamplerState
-                             //   MAKE_SAMPLER2D_ARGUMENT(t)          → t, t##SamplerState (COMPARE 계열 〃)
-                             // Waple 의 MSL 조립은 텍스처(texture2d<float>)와 샘플러(공용 smp 캡처 threading)를
-                             // 쌍 네이밍이 아니라 별도 축으로 다루므로, 전개 결과가 그 규약에서 유효한 선언이
-                             // 되도록 sampler2D t / t 로 주입한다(COMPARE 는 SampleCmp 미지원 — 사용 시
-                             // 기존과 동일하게 번역 실패 폴터, 선언 전개만 수용).
-                             ("DECLARE_SAMPLER2D_PARAMETER", "sampler2D x"),
-                             ("MAKE_SAMPLER2D_ARGUMENT", "x"),
-                             ("DECLARE_SAMPLER2D_COMPARE_PARAMETER", "sampler2D x"),
-                             ("MAKE_SAMPLER2D_COMPARE_ARGUMENT", "x")]
+        for (name, body) in builtinCastMacros
         where !identifierDefined(name, in: included) && identifierReferenced(name, in: included) {
             included = "#define \(name)(x) \(body)\n" + included
         }
@@ -473,6 +460,21 @@ public enum ShaderPreprocessor {
         }
         return Int(num)
     }
+
+    /// WE 컴파일러 내장 캐스트/샘플러 매크로 — 소스가 자체 정의하면 그것이 우선(부재 시에만 주입).
+    /// S2-shaderlab①: WE 바이너리 셰이더 shim 전수 대조 8종 + 로컬 확장 2종 + 샘플러 전달 매크로 4종.
+    /// CASTU/CASTI/CASTF 는 스칼라라 MSL 생성자 스펠링 동일 — 별도 치환 불요.
+    /// DECLARE_SAMPLER2D_PARAMETER/MAKE_SAMPLER2D_ARGUMENT: 텍스처/샘플러를 Waple MSL 규약에 맞게
+    /// `sampler2D t` / `t` 로 전개(COMPARE 계열은 SampleCmp 미지원 — 사용 시 번역 실패 폴터, 선언만 수용).
+    private static let builtinCastMacros: [(String, String)] = [
+        ("CAST2", "vec2(x)"), ("CAST3", "vec3(x)"), ("CAST4", "vec4(x)"),
+        ("CAST2X2", "mat2(x)"), ("CAST3X3", "we_cast3x3(x)"), ("CAST4X4", "mat4(x)"),
+        ("CASTI", "int(x)"), ("CASTU", "uint(x)"), ("CASTF", "float(x)"), ("CAST4U", "uint4(x)"),
+        ("DECLARE_SAMPLER2D_PARAMETER", "sampler2D x"),
+        ("MAKE_SAMPLER2D_ARGUMENT", "x"),
+        ("DECLARE_SAMPLER2D_COMPARE_PARAMETER", "sampler2D x"),
+        ("MAKE_SAMPLER2D_COMPARE_ARGUMENT", "x"),
+    ]
 }
 
 /// `#if` 식 평가기. **안전**: 임의 코드 실행이 아니라 직접 작성한 재귀하강 정수 파서다.

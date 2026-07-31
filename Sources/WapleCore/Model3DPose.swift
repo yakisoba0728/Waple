@@ -22,16 +22,21 @@ public enum Model3DPose {
                                       scale: a.scale + (b.scale - a.scale) * t)
     }
 
+    /// 바인드 월드(부모 체인 합성) — PuppetPose.bindWorlds 의 Model3D.Bone 판. 부모 인덱스가 자신 이후면(비정상 순서) 루트 취급.
+    private static func buildBindWorlds(_ bones: [Model3D.Bone]) -> [simd_float4x4] {
+        var bw = [simd_float4x4](repeating: matrix_identity_float4x4, count: bones.count)
+        for (i, b) in bones.enumerated() {
+            let p = Int(b.parent)
+            bw[i] = (b.parent >= 0 && p < i) ? bw[p] * b.bind : b.bind
+        }
+        return bw
+    }
+
     /// 본별 스킨 행렬. animation 인덱스 범위 밖 → 전부 항등(바인드 포즈 = 정지). rate 는 재생 배속.
     public static func skinMatrices(model: Model3D, animation: Int, time: Float, rate: Float = 1) -> [simd_float4x4] {
         let n = model.bones.count
         guard n > 0 else { return [] }
-        // 바인드 월드(부모 체인 합성). 부모 인덱스가 자신 이후면(비정상 순서) 항등 처리.
-        var bindWorld = [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
-        for (i, b) in model.bones.enumerated() {
-            let p = Int(b.parent)
-            bindWorld[i] = (b.parent >= 0 && p < i) ? bindWorld[p] * b.bind : b.bind
-        }
+        let bindWorld = buildBindWorlds(model.bones)
         guard animation >= 0, animation < model.animations.count else {
             return [simd_float4x4](repeating: matrix_identity_float4x4, count: n)
         }
