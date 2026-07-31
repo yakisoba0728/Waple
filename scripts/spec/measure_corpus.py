@@ -139,12 +139,32 @@ def main():
     specfmt.dump(specfmt.doc("scripts/spec/measure_corpus.py", [
         specfmt.entry("format.tex.magicDistribution", dict(tex_magic.most_common()), "확정", [corpus_ev]),
         specfmt.entry("format.tex.containerDistribution", dict(tex_cont.most_common()), "확정", [corpus_ev]),
-        specfmt.entry("format.tex.transcodeIsNotDecoder", {
-            "claim": "resourcecompiler64.exe -transcode 는 RGBA8888 디코더가 아니다",
-            "observed": "5표본 중 3 무변화(패스스루), 2 재압축. 출력이 여전히 TEXV0005/TEXI0001",
+        # [정정 2026-07-31] 이 항목은 처음에 "-transcode 는 디코더가 아니다" 로 확정 기록됐다.
+        # 틀렸다. 표본 5개가 전부 패스스루 포맷(R8/RG88/raw)이라 디코드를 보여줄 수 없는
+        # 표본으로 부정을 결론냈다 — 표본 추출 오류다. BC 포맷으로 재검증해 반증했다.
+        specfmt.entry("format.tex.transcodeDecodes", {
+            "command": "resourcecompiler64.exe -transcode -i <in.tex> -o <out.tex> -maxmipmaps 1",
+            "decodes": {
+                "4 (BC3/DXT5)": "-> format 0 RGBA8888",
+                "6 (BC2)": "-> format 0",
+                "7 (BC1)": "-> format 0",
+            },
+            "passthrough": {"8 (RG88)": "바이트 동일", "9 (R8)": "바이트 동일"},
+            "cropOnly": {"0 (raw)": "패딩 제거만 — 2048x2048 -> 1920x1080"},
             "deterministic": True,
-        }, "확정", [specfmt.ev("binary", "bin/resourcecompiler64.exe -transcode -i <in> -o <out>",
-                              "5표본 215B~2.8MB, 2회 실행 SHA 동일")]),
+            "note": "출력은 패딩이 크롭돼 texW/texH 가 imgW/imgH 로 갱신된다",
+        }, "확정", [specfmt.ev("binary",
+                              "bin/resourcecompiler64.exe -transcode, 코퍼스 6포맷 표본 실행",
+                              "fmt4 1.05MB->2.33MB / fmt6 22.9KB->19.6KB / fmt7 59.9KB->90.0KB "
+                              "전부 출력 format 0. fmt8/9 는 SHA 동일. 2회 실행 결정적")]),
+        specfmt.entry("format.tex.transcodeOpensGoldenOracle", {
+            "claim": "코퍼스 4,680 + 공유 311 텍스처에 대해 WE 자체 디코더 기준 골든이 가능하다",
+            "caveats": [
+                "패스스루 포맷(8/9)은 대조 의미가 없다 — 원본 그대로다",
+                "mip1 이상은 크롭된 mip0 에서 재생성된 것이므로 mip0 만 정본으로 쓴다",
+                "-maxmipmaps 1 로 mip0 단일 출력을 받는 것이 대조에 적합하다",
+            ],
+        }, "확정", [specfmt.ev("binary", "위 transcodeDecodes 실측")]),
         specfmt.entry("format.tex.paddedVsImageDims", {
             "note": "저장은 블록정렬 texW x texH, 실제 이미지는 imgW x imgH 로 다르다",
             "witness": "plant1.tex — 저장 512x1024 / 이미지 512x875",

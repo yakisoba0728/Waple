@@ -5,3 +5,7 @@
 .DS_Store
 Waple.app/
 Waple.dmg
+
+# Python 캐시
+__pycache__/
+*.pyc
