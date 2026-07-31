@@ -12,6 +12,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specfmt
 
 
+# spec/ 아래에 정본이 아닌 것도 산다:
+#  - golden/  : WapleCompat 이 만든 캡처 산출물(스냅샷 매니페스트). 스키마가 다르다
+#  - schema.json : 정본의 형식을 기술한 문서지 정본 항목이 아니다
+# 이걸 정본으로 검사하면 오탐이 쏟아진다(실제로 512건 났다).
+NON_CANON_DIRS = ("golden",)
+NON_CANON_FILES = ("schema.json",)
+
+
+def is_canon_path(path):
+    parts = path.replace("\\", "/").split("/")
+    if parts[-1] in NON_CANON_FILES:
+        return False
+    return not any(seg in NON_CANON_DIRS for seg in parts)
+
+
 def validate_doc(d, path):
     errs = []
     p = os.path.basename(path)
@@ -75,8 +90,11 @@ def validate_doc(d, path):
 
 def main(argv):
     root = argv[1] if len(argv) > 1 else "spec"
-    paths = sorted(glob.glob(os.path.join(root, "**", "*.json"), recursive=True))
-    paths = [p for p in paths if os.path.basename(p) != "schema.json"]
+    found = sorted(glob.glob(os.path.join(root, "**", "*.json"), recursive=True))
+    paths = [p for p in found if is_canon_path(p)]
+    skipped = len(found) - len(paths)
+    if skipped:
+        print(f"(정본 아님으로 건너뜀 {skipped}개 — golden/ 캡처 산출물, schema.json)")
     if not paths:
         print(f"검사 대상 없음: {root}")
         return 1

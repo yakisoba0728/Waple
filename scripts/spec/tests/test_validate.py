@@ -77,6 +77,25 @@ class TestValidateDoc(unittest.TestCase):
         self.assertTrue(any("ref" in e for e in errs))
 
 
+class TestCanonPathFilter(unittest.TestCase):
+    """spec/ 아래에 정본이 아닌 것도 산다 — 캡처 산출물을 정본으로 검사하면 안 된다."""
+
+    def test_golden_artifacts_are_not_canon(self):
+        self.assertFalse(validate.is_canon_path(os.path.join("spec", "golden", "snapshot",
+                                                             "baseline-x", "manifest.json")))
+
+    def test_golden_artifacts_are_not_canon_posix(self):
+        self.assertFalse(validate.is_canon_path("spec/golden/snapshot/baseline-x/manifest.json"))
+
+    def test_canon_docs_are_canon(self):
+        for p in ("spec/binaries.json", "spec/formats/tex.json",
+                  "spec/engine/uniforms.json", "spec/assets/manifest.json"):
+            self.assertTrue(validate.is_canon_path(p), p)
+
+    def test_schema_is_not_canon(self):
+        self.assertFalse(validate.is_canon_path("spec/schema.json"))
+
+
 class TestSpecfmt(unittest.TestCase):
     def test_entry_builds_expected_shape(self):
         e = specfmt.entry("a.b", 3, "확정", [{"kind": "corpus", "ref": "r"}])

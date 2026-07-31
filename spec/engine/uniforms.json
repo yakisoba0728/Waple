@@ -1,0 +1,605 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_engine_symbols.py",
+ "entries": [
+  {
+   "id": "engine.uniforms.count",
+   "value": 144,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 문자열 전수 스캔 (PE 섹션 매핑 포함)"
+    }
+   ]
+  },
+  {
+   "id": "engine.uniforms",
+   "value": {
+    "g_Alpha": {
+     "va": "0x14048d180",
+     "section": ".rdata"
+    },
+    "g_AltModelMatrix": {
+     "va": "0x14048d2b0",
+     "section": ".rdata"
+    },
+    "g_AltNormalModelMatrix": {
+     "va": "0x14048d298",
+     "section": ".rdata"
+    },
+    "g_AltViewProjectionMatrix": {
+     "va": "0x14048d278",
+     "section": ".rdata"
+    },
+    "g_AudioSpectrum16Left": {
+     "va": "0x14048da38",
+     "section": ".rdata"
+    },
+    "g_AudioSpectrum16Right": {
+     "va": "0x14048da20",
+     "section": ".rdata"
+    },
+    "g_AudioSpectrum32Left": {
+     "va": "0x14048da08",
+     "section": ".rdata"
+    },
+    "g_AudioSpectrum32Right": {
+     "va": "0x14048d9f0",
+     "section": ".rdata"
+    },
+    "g_AudioSpectrum64Left": {
+     "va": "0x14048da98",
+     "section": ".rdata"
+    },
+    "g_AudioSpectrum64Right": {
+     "va": "0x14048da80",
+     "section": ".rdata"
+    },
+    "g_BlendMap": {
+     "va": "0x14048db50",
+     "section": ".rdata"
+    },
+    "g_Bones": {
+     "va": "0x1404875f3",
+     "section": ".rdata"
+    },
+    "g_BonesAlpha": {
+     "va": "0x14048db60",
+     "section": ".rdata"
+    },
+    "g_Color": {
+     "va": "0x14048d178",
+     "section": ".rdata"
+    },
+    "g_Color4": {
+     "va": "0x14048d1b0",
+     "section": ".rdata"
+    },
+    "g_Daytime": {
+     "va": "0x14048d188",
+     "section": ".rdata"
+    },
+    "g_EffectModelMatrix": {
+     "va": "0x14048d338",
+     "section": ".rdata"
+    },
+    "g_EffectModelViewProjectionMatrix": {
+     "va": "0x14048d310",
+     "section": ".rdata"
+    },
+    "g_EffectModelViewProjectionMatrixInverse": {
+     "va": "0x14048d2e0",
+     "section": ".rdata"
+    },
+    "g_EffectTextureProjectionMatrix": {
+     "va": "0x14048d3c8",
+     "section": ".rdata"
+    },
+    "g_EffectTextureProjectionMatrixInverse": {
+     "va": "0x14048d3a0",
+     "section": ".rdata"
+    },
+    "g_EyePosition": {
+     "va": "0x14048d378",
+     "section": ".rdata"
+    },
+    "g_FogDistanceColor": {
+     "va": "0x14048dd18",
+     "section": ".rdata"
+    },
+    "g_FogDistanceParams": {
+     "va": "0x14048dd00",
+     "section": ".rdata"
+    },
+    "g_FogHeightColor": {
+     "va": "0x14048dce8",
+     "section": ".rdata"
+    },
+    "g_FogHeightParams": {
+     "va": "0x14048dd70",
+     "section": ".rdata"
+    },
+    "g_Frametime": {
+     "va": "0x14048d198",
+     "section": ".rdata"
+    },
+    "g_HDRParams": {
+     "va": "0x14048dd60",
+     "section": ".rdata"
+    },
+    "g_LDirectional_Color": {
+     "va": "0x14048780d",
+     "section": ".rdata"
+    },
+    "g_LDirectional_Direction": {
+     "va": "0x1404877ad",
+     "section": ".rdata"
+    },
+    "g_LFeature_ShadowPointProjection": {
+     "va": "0x1404878b5",
+     "section": ".rdata"
+    },
+    "g_LFeature_ShadowPointProjectionTransform": {
+     "va": "0x1404878e5",
+     "section": ".rdata"
+    },
+    "g_LFeature_ShadowProjection": {
+     "va": "0x140487857",
+     "section": ".rdata"
+    },
+    "g_LFeature_ShadowProjectionTransform": {
+     "va": "0x14048791d",
+     "section": ".rdata"
+    },
+    "g_LPoint_Color": {
+     "va": "0x140487695",
+     "section": ".rdata"
+    },
+    "g_LPoint_Origin": {
+     "va": "0x140487665",
+     "section": ".rdata"
+    },
+    "g_LSpot_Color": {
+     "va": "0x1404876fd",
+     "section": ".rdata"
+    },
+    "g_LSpot_Direction": {
+     "va": "0x1404876bd",
+     "section": ".rdata"
+    },
+    "g_LSpot_Exponent": {
+     "va": "0x1404876dd",
+     "section": ".rdata"
+    },
+    "g_LSpot_Origin": {
+     "va": "0x14048771d",
+     "section": ".rdata"
+    },
+    "g_LTube_Color": {
+     "va": "0x14048778d",
+     "section": ".rdata"
+    },
+    "g_LTube_OriginA": {
+     "va": "0x14048773d",
+     "section": ".rdata"
+    },
+    "g_LTube_OriginB": {
+     "va": "0x14048775d",
+     "section": ".rdata"
+    },
+    "g_LayerModelMatrix": {
+     "va": "0x14048d388",
+     "section": ".rdata"
+    },
+    "g_LightAmbientColor": {
+     "va": "0x14048d9a0",
+     "section": ".rdata"
+    },
+    "g_LightSkylightColor": {
+     "va": "0x14048d988",
+     "section": ".rdata"
+    },
+    "g_LightsColorPremultiplied": {
+     "va": "0x14048d9d0",
+     "section": ".rdata"
+    },
+    "g_LightsColorRadius": {
+     "va": "0x14048d928",
+     "section": ".rdata"
+    },
+    "g_LightsPosition": {
+     "va": "0x14048d9b8",
+     "section": ".rdata"
+    },
+    "g_ModelMatrix": {
+     "va": "0x14048d1c0",
+     "section": ".rdata"
+    },
+    "g_ModelMatrixInverse": {
+     "va": "0x14048d260",
+     "section": ".rdata"
+    },
+    "g_ModelViewProjectionMatrix": {
+     "va": "0x14048d228",
+     "section": ".rdata"
+    },
+    "g_ModelViewProjectionMatrixInverse": {
+     "va": "0x14048d200",
+     "section": ".rdata"
+    },
+    "g_MorphBoneRules": {
+     "va": "0x14048db90",
+     "section": ".rdata"
+    },
+    "g_MorphBoneTransform": {
+     "va": "0x14048dba8",
+     "section": ".rdata"
+    },
+    "g_MorphOffsets": {
+     "va": "0x14048db40",
+     "section": ".rdata"
+    },
+    "g_MorphWeights": {
+     "va": "0x14048db30",
+     "section": ".rdata"
+    },
+    "g_NormalModelMatrix": {
+     "va": "0x14048d2c8",
+     "section": ".rdata"
+    },
+    "g_OrientationForward": {
+     "va": "0x14048d3e8",
+     "section": ".rdata"
+    },
+    "g_OrientationRight": {
+     "va": "0x14048d460",
+     "section": ".rdata"
+    },
+    "g_OrientationUp": {
+     "va": "0x14048d450",
+     "section": ".rdata"
+    },
+    "g_ParallaxPosition": {
+     "va": "0x14048dad0",
+     "section": ".rdata"
+    },
+    "g_PointerPosition": {
+     "va": "0x14048da50",
+     "section": ".rdata"
+    },
+    "g_PointerPositionLast": {
+     "va": "0x14048da68",
+     "section": ".rdata"
+    },
+    "g_PointerState": {
+     "va": "0x14048dae8",
+     "section": ".rdata"
+    },
+    "g_RenderVar0": {
+     "va": "0x14048dac0",
+     "section": ".rdata"
+    },
+    "g_RenderVar1": {
+     "va": "0x14048dab0",
+     "section": ".rdata"
+    },
+    "g_RenderVar2": {
+     "va": "0x14048db20",
+     "section": ".rdata"
+    },
+    "g_RenderVar3": {
+     "va": "0x14048db10",
+     "section": ".rdata"
+    },
+    "g_RenderVar4": {
+     "va": "0x14048db00",
+     "section": ".rdata"
+    },
+    "g_Screen": {
+     "va": "0x14048d1d0",
+     "section": ".rdata"
+    },
+    "g_TexelSize": {
+     "va": "0x14048d1f0",
+     "section": ".rdata"
+    },
+    "g_TexelSizeHalf": {
+     "va": "0x14048d1e0",
+     "section": ".rdata"
+    },
+    "g_Texture": {
+     "va": "0x14048d120",
+     "section": ".rdata"
+    },
+    "g_Texture0": {
+     "va": "0x14048d440",
+     "section": ".rdata"
+    },
+    "g_Texture0MipMapInfo": {
+     "va": "0x14048d8b0",
+     "section": ".rdata"
+    },
+    "g_Texture0MipMapped": {
+     "va": "0x140477be8",
+     "section": ".rdata"
+    },
+    "g_Texture0Resolution": {
+     "va": "0x14048d720",
+     "section": ".rdata"
+    },
+    "g_Texture0Rotation": {
+     "va": "0x14048d540",
+     "section": ".rdata"
+    },
+    "g_Texture0Texel": {
+     "va": "0x14048d7a8",
+     "section": ".rdata"
+    },
+    "g_Texture0Translation": {
+     "va": "0x14048d5d0",
+     "section": ".rdata"
+    },
+    "g_Texture1": {
+     "va": "0x14048d430",
+     "section": ".rdata"
+    },
+    "g_Texture1MipMapInfo": {
+     "va": "0x14048d898",
+     "section": ".rdata"
+    },
+    "g_Texture1Noise": {
+     "va": "0x140477c00",
+     "section": ".rdata"
+    },
+    "g_Texture1Resolution": {
+     "va": "0x14048d708",
+     "section": ".rdata"
+    },
+    "g_Texture1Rotation": {
+     "va": "0x14048d528",
+     "section": ".rdata"
+    },
+    "g_Texture1Texel": {
+     "va": "0x14048d798",
+     "section": ".rdata"
+    },
+    "g_Texture1Translation": {
+     "va": "0x14048d5b8",
+     "section": ".rdata"
+    },
+    "g_Texture2": {
+     "va": "0x14048d4a8",
+     "section": ".rdata"
+    },
+    "g_Texture2Clouds": {
+     "va": "0x140477c10",
+     "section": ".rdata"
+    },
+    "g_Texture2MipMapInfo": {
+     "va": "0x14048d880",
+     "section": ".rdata"
+    },
+    "g_Texture2Resolution": {
+     "va": "0x14048d6f0",
+     "section": ".rdata"
+    },
+    "g_Texture2Rotation": {
+     "va": "0x14048d510",
+     "section": ".rdata"
+    },
+    "g_Texture2Texel": {
+     "va": "0x14048d818",
+     "section": ".rdata"
+    },
+    "g_Texture2Translation": {
+     "va": "0x14048d660",
+     "section": ".rdata"
+    },
+    "g_Texture3": {
+     "va": "0x14048d498",
+     "section": ".rdata"
+    },
+    "g_Texture3MipMapInfo": {
+     "va": "0x14048d868",
+     "section": ".rdata"
+    },
+    "g_Texture3Resolution": {
+     "va": "0x14048d6d8",
+     "section": ".rdata"
+    },
+    "g_Texture3Rotation": {
+     "va": "0x14048d4f8",
+     "section": ".rdata"
+    },
+    "g_Texture3Texel": {
+     "va": "0x14048d808",
+     "section": ".rdata"
+    },
+    "g_Texture3Translation": {
+     "va": "0x14048d648",
+     "section": ".rdata"
+    },
+    "g_Texture4": {
+     "va": "0x14048d488",
+     "section": ".rdata"
+    },
+    "g_Texture4MipMapInfo": {
+     "va": "0x14048d910",
+     "section": ".rdata"
+    },
+    "g_Texture4Resolution": {
+     "va": "0x14048d780",
+     "section": ".rdata"
+    },
+    "g_Texture4Rotation": {
+     "va": "0x14048d5a0",
+     "section": ".rdata"
+    },
+    "g_Texture4Texel": {
+     "va": "0x14048d7f8",
+     "section": ".rdata"
+    },
+    "g_Texture4Translation": {
+     "va": "0x14048d630",
+     "section": ".rdata"
+    },
+    "g_Texture5": {
+     "va": "0x14048d478",
+     "section": ".rdata"
+    },
+    "g_Texture5MipMapInfo": {
+     "va": "0x14048d8f8",
+     "section": ".rdata"
+    },
+    "g_Texture5Resolution": {
+     "va": "0x14048d768",
+     "section": ".rdata"
+    },
+    "g_Texture5Rotation": {
+     "va": "0x14048d588",
+     "section": ".rdata"
+    },
+    "g_Texture5Texel": {
+     "va": "0x14048d7e8",
+     "section": ".rdata"
+    },
+    "g_Texture5Translation": {
+     "va": "0x14048d618",
+     "section": ".rdata"
+    },
+    "g_Texture6": {
+     "va": "0x14048d4e8",
+     "section": ".rdata"
+    },
+    "g_Texture6MipMapInfo": {
+     "va": "0x14048d8e0",
+     "section": ".rdata"
+    },
+    "g_Texture6Resolution": {
+     "va": "0x14048d750",
+     "section": ".rdata"
+    },
+    "g_Texture6Rotation": {
+     "va": "0x14048d570",
+     "section": ".rdata"
+    },
+    "g_Texture6Texel": {
+     "va": "0x14048d858",
+     "section": ".rdata"
+    },
+    "g_Texture6Translation": {
+     "va": "0x14048d6c0",
+     "section": ".rdata"
+    },
+    "g_Texture7": {
+     "va": "0x14048d4d8",
+     "section": ".rdata"
+    },
+    "g_Texture7MipMapInfo": {
+     "va": "0x14048d8c8",
+     "section": ".rdata"
+    },
+    "g_Texture7Resolution": {
+     "va": "0x14048d738",
+     "section": ".rdata"
+    },
+    "g_Texture7Rotation": {
+     "va": "0x14048d558",
+     "section": ".rdata"
+    },
+    "g_Texture7Texel": {
+     "va": "0x14048d848",
+     "section": ".rdata"
+    },
+    "g_Texture7Translation": {
+     "va": "0x14048d6a8",
+     "section": ".rdata"
+    },
+    "g_Texture8": {
+     "va": "0x14048d4c8",
+     "section": ".rdata"
+    },
+    "g_Texture8MipMapInfo": {
+     "va": "0x14048d970",
+     "section": ".rdata"
+    },
+    "g_Texture8Resolution": {
+     "va": "0x14048d7d0",
+     "section": ".rdata"
+    },
+    "g_Texture8Rotation": {
+     "va": "0x14048d600",
+     "section": ".rdata"
+    },
+    "g_Texture8Texel": {
+     "va": "0x14048d838",
+     "section": ".rdata"
+    },
+    "g_Texture8Translation": {
+     "va": "0x14048d690",
+     "section": ".rdata"
+    },
+    "g_Texture9": {
+     "va": "0x14048d4b8",
+     "section": ".rdata"
+    },
+    "g_Texture9MipMapInfo": {
+     "va": "0x14048d958",
+     "section": ".rdata"
+    },
+    "g_Texture9Resolution": {
+     "va": "0x14048d7b8",
+     "section": ".rdata"
+    },
+    "g_Texture9Rotation": {
+     "va": "0x14048d5e8",
+     "section": ".rdata"
+    },
+    "g_Texture9Texel": {
+     "va": "0x14048d828",
+     "section": ".rdata"
+    },
+    "g_Texture9Translation": {
+     "va": "0x14048d678",
+     "section": ".rdata"
+    },
+    "g_TextureReductionScale": {
+     "va": "0x14048d940",
+     "section": ".rdata"
+    },
+    "g_Time": {
+     "va": "0x14048d1a4",
+     "section": ".rdata"
+    },
+    "g_ViewForward": {
+     "va": "0x14048d420",
+     "section": ".rdata"
+    },
+    "g_ViewProjectionMatrix": {
+     "va": "0x14048d248",
+     "section": ".rdata"
+    },
+    "g_ViewRight": {
+     "va": "0x14048d410",
+     "section": ".rdata"
+    },
+    "g_ViewUp": {
+     "va": "0x14048d400",
+     "section": ".rdata"
+    },
+    "g_ViewportViewProjectionMatrices": {
+     "va": "0x14048d350",
+     "section": ".rdata"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 문자열 전수 스캔 (PE 섹션 매핑 포함)"
+    }
+   ]
+  }
+ ]
+}

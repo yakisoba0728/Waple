@@ -1,0 +1,113 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_engine_symbols.py",
+ "entries": [
+  {
+   "id": "engine.renderTargets.count",
+   "value": 21,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 문자열 전수 스캔 (PE 섹션 매핑 포함)"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderTargets",
+   "value": {
+    "_alias_lightCookie": {
+     "va": "0x14048b498",
+     "section": ".rdata"
+    },
+    "_rt_4FrameBuffer": {
+     "va": "0x14048e058",
+     "section": ".rdata"
+    },
+    "_rt_8FrameBuffer": {
+     "va": "0x14048e040",
+     "section": ".rdata"
+    },
+    "_rt_Bloom": {
+     "va": "0x14048e030",
+     "section": ".rdata"
+    },
+    "_rt_FullAlphaMask": {
+     "va": "0x140490d28",
+     "section": ".rdata"
+    },
+    "_rt_FullAlphaMaskIntermediate": {
+     "va": "0x140490d40",
+     "section": ".rdata"
+    },
+    "_rt_FullFrameBuffer": {
+     "va": "0x14048b588",
+     "section": ".rdata"
+    },
+    "_rt_FullFrameBufferMultiSampled": {
+     "va": "0x14048e2e8",
+     "section": ".rdata"
+    },
+    "_rt_MipMappedFrameBuffer": {
+     "va": "0x14048b568",
+     "section": ".rdata"
+    },
+    "_rt_Reflection": {
+     "va": "0x14048b538",
+     "section": ".rdata"
+    },
+    "_rt_editor_backbuffer_resolve": {
+     "va": "0x140485b70",
+     "section": ".rdata"
+    },
+    "_rt_imageLayerAlbedo_": {
+     "va": "0x140490d78",
+     "section": ".rdata"
+    },
+    "_rt_imageLayerComposite_": {
+     "va": "0x1404906f8",
+     "section": ".rdata"
+    },
+    "_rt_pluginCpuBuffer1": {
+     "va": "0x14048e2c8",
+     "section": ".rdata"
+    },
+    "_rt_pluginCpuBuffer2": {
+     "va": "0x14048e2b0",
+     "section": ".rdata"
+    },
+    "_rt_pluginCpuDownsample": {
+     "va": "0x14048e1b8",
+     "section": ".rdata"
+    },
+    "_rt_shadowAtlas": {
+     "va": "0x14048b920",
+     "section": ".rdata"
+    },
+    "_rt_volumetricsBack": {
+     "va": "0x14048e650",
+     "section": ".rdata"
+    },
+    "_rt_volumetricsLightBuffer": {
+     "va": "0x14048e618",
+     "section": ".rdata"
+    },
+    "_rt_volumetricsLightBufferB": {
+     "va": "0x14048e6f0",
+     "section": ".rdata"
+    },
+    "_rt_volumetricsSingle": {
+     "va": "0x14048e638",
+     "section": ".rdata"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 문자열 전수 스캔 (PE 섹션 매핑 포함)"
+    }
+   ]
+  }
+ ]
+}
