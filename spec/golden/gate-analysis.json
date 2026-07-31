@@ -1,0 +1,108 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_oracle_gate.py",
+ "entries": [
+  {
+   "id": "oracle.gate.unusedManifestFields",
+   "value": {
+    "recorded": [
+     "hash",
+     "meanLuma",
+     "selfMaxDiff"
+    ],
+    "readBySnapshotCompare": [
+     "deterministic"
+    ],
+    "consequence": "세 필드는 기록만 되고 판정에 안 들어간다. hash 로 '픽셀 동일' 을 즉시 판정할 수 있는데 매번 diff 를 돌린다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCompat/SnapshotCompare.swift:81-82",
+     "note": "entry.deterministic 만 읽는다. hash/meanLuma/selfMaxDiff 참조 0건"
+    }
+   ]
+  },
+  {
+   "id": "oracle.gate.thresholds",
+   "value": {
+    "strict": {
+     "meanAbsDiff": 1.5,
+     "fracExceeding": 0.004
+    },
+    "lax": {
+     "meanAbsDiff": 14.0,
+     "fracExceeding": 0.2
+    },
+    "unit": "0..255 절대값",
+    "flaw": "절대 단위라 어두운 씬일수록 실효 게이트가 느슨해진다. 상대(대비 정규화) 지표가 없다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleSnapshot/Snapshot.swift:113-117"
+    }
+   ]
+  },
+  {
+   "id": "oracle.gate.blindScenes",
+   "value": {
+    "definition": "전면 검정으로 바꿔도 strict/lax 평균 임계를 통과하는 씬 (meanLuma × 255 <= threshold)",
+    "count": 3,
+    "scenes": [
+     {
+      "id": "3444535389",
+      "meanLuma": 0.00208,
+      "blackoutMeanDiff": 0.531,
+      "threshold": 1.5
+     },
+     {
+      "id": "1612750231",
+      "meanLuma": 0.00322,
+      "blackoutMeanDiff": 0.82,
+      "threshold": 1.5
+     },
+     {
+      "id": "3662790108",
+      "meanLuma": 0.00342,
+      "blackoutMeanDiff": 0.872,
+      "threshold": 1.5
+     }
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "spec/golden/snapshot/baseline-81098bb/manifest.json",
+     "note": "커밋된 기준선 170종의 meanLuma 분포"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleSnapshot/Snapshot.swift:113-117",
+     "note": "임계값 출처"
+    }
+   ]
+  },
+  {
+   "id": "oracle.gate.lumaDistribution",
+   "value": {
+    "n": 170,
+    "min": 0.00208,
+    "p05": 0.05619,
+    "median": 0.38962,
+    "max": 0.87044
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "spec/golden/snapshot/baseline-81098bb/manifest.json",
+     "note": "커밋된 기준선 170종의 meanLuma 분포"
+    }
+   ]
+  }
+ ]
+}
