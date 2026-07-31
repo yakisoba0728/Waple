@@ -305,121 +305,7 @@ public struct ParticleSimulator {
         }
         // 적분(controlpointattract/vortex 힘 → movement/angularMovement) + 노화.
         for k in particles.indices {
-            particles[k].age += dt
-            // remapvalue: velocity 는 매 스텝 덮어쓰기(작가가 낙하속도를 노이즈로 직접 기술),
-            // speed 는 이번 스텝 적분에만 곱하는 비파괴 배수(저장 vel 불변 → 복리 폭주 없음).
-            // F440: 덮어쓰기는 힘 오퍼레이터 **이전**에 — 종전엔 같은 스텝의 attract/vortex 가속을
-            // 전량 덮어써 힘 오퍼레이터가 묠력화됐다(speedCap 도 그 경로에서는 무의미).
-            var speedFactor: Float = 1
-            var remapAddVel = SIMD3<Float>(0, 0, 0)   // remapValueEx addvelocity — 이번 스텝 적분 전용(비파괴)
-            if !remaps.isEmpty {
-                let base = (particles[k].remapPhase + particles[k].age) * Self.remapInputK
-                for r in remaps {
-                    switch r {
-                    case let .velocity(mn, mx, fbm, scale):
-                        let x = base * scale
-                        let t = SIMD3(remapNoise01(fbm, x, SIMD3(0, 0, 0)),
-                                      remapNoise01(fbm, x, SIMD3(19.3, 71.7, 5.1)),
-                                      remapNoise01(fbm, x, SIMD3(53.2, 11.9, 97.4)))
-                        particles[k].vel = mn + (mx - mn) * t
-                    case let .speed(mn, mx, fbm, scale):
-                        speedFactor *= mn + (mx - mn) * remapNoise01(fbm, base * scale, SIMD3(7.7, 33.1, 61.9))
-                    case let .general(spec):
-                        // 확장 파이프라인 — 물리 동사는 여기서, 표시 파생 동사는 display() 에서 적용.
-                        let (val, w) = remapEval(spec, particles[k])
-                        guard w > 0 else { continue }
-                        switch spec.verb {
-                        case .setVelocity:
-                            particles[k].vel += (val - particles[k].vel) * w   // w=1 → 덮어쓰기(레거시 동형)
-                        case .addVelocity:
-                            remapAddVel += val * w
-                        case .multiplySpeed:
-                            speedFactor *= 1 + (val.x - 1) * w                 // w=1 → val.x(레거시 동형)
-                        case .setRotation:
-                            particles[k].rotation += (val - particles[k].rotation) * w
-                        case .addRotation:
-                            particles[k].rotation += val * (w * dt)            // [추정] 가산율(dt 곱)
-                        case .setAngularVelocity:
-                            particles[k].angularVel += (val - particles[k].angularVel) * w
-                        case .addAngularVelocity:
-                            particles[k].angularVel += val * (w * dt)
-                        case .setOpacity, .multiplyOpacity, .setColor, .multiplyColor,
-                             .setSize, .multiplySize:
-                            break   // 표시 파생 — display() 적용
-                        }
-                    }
-                }
-            }
-            // 힘 오퍼레이터는 movement 적분 전에 속도를 갱신(같은 step 위치에 반영).
-            // vel/pos 로컬 호이스트: `&particles[k].vel` inout 과 같은 배열 읽기가 한 호출에 겹치면
-            // 호출마다 배열 전체가 COW 복사된다(attractor×particle×step — 무거운 씬 실측 병목).
-            if !attractors.isEmpty || !vortices.isEmpty {
-                var vel = particles[k].vel
-                let pos = particles[k].pos
-                // deletethreshold: 어느 attractor 든 근접 삭제 판정 시 true — 전 attractor 는 끝까지
-                // 적용(단락 평가 금지 — 호출 생략이 없어야 delete=false 경로 산술이 종전과 동일).
-                var attractDelete = false
-                for a in attractors { attractDelete = applyAttract(a, to: &vel, pos: pos, dt: dt) || attractDelete }
-                for v in vortices {
-                    // F624: vortex 오디오반응 = 접선 속도 × 응답 배수(무신호/묵보유 1 → 비트동일).
-                    applyVortex(v, to: &vel, pos: pos, dt: dt, audioScale: audioResponseScale(v.audio))
-                }
-                particles[k].vel = vel
-                // 근접 삭제(deletethreshold 키 보유 attractor 한정): 수명 초과로 마킹 — 아래 컬 경로
-                // (deathBurst 자식 발화 포함)를 그대로 탄다. RNG 드로 無 → 무키 씬 비트동일.
-                if attractDelete { particles[k].age = particles[k].lifetime + 1 }
-            }
-            if let cap = speedCap {
-                let sp = simd_length(particles[k].vel)
-                if sp > cap { particles[k].vel *= cap / sp }
-            }
-            for m in movements {
-                particles[k].vel += m.gravity * dt
-                if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
-            }
-            // remapValueEx addvelocity: remapAddVel==0 이면 종전 산술 그대로(레거시 비트동일),
-            // 아니면 이번 스텝 적분에만 가산(저장 vel 불변 — speed 배수와 같은 비파괴 규약).
-            if remapAddVel == SIMD3<Float>(0, 0, 0) {
-                particles[k].pos += particles[k].vel * speedFactor * dt
-            } else {
-                particles[k].pos += (particles[k].vel + remapAddVel) * speedFactor * dt
-            }
-            // 난류 이류(advection): 노이즈 흐름장 속도로 위치를 이동. vel 에 누적하지 않으므로
-            // |변위| ≤ turbSpeed·dt 로 유계(속도 상한 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
-            // F628: 전 turbulence 오퍼레이터 누적 — 첫 번째는 turbSpeed/turbPhase(기존 비트동일),
-            // 2번째 이후는 turbExtra(다중 오퍼레이터 시스템만 신규 드로).
-            if !turbulences.isEmpty {
-                if particles[k].turbSpeed > 0 {
-                    let v = turbulenceVelocity(turbulences[0], pos: particles[k].pos, speed: particles[k].turbSpeed,
-                                               phase: particles[k].turbPhase, time: time)
-                    particles[k].pos += v * dt
-                }
-                for (ti, extra) in particles[k].turbExtra.enumerated() where extra.speed > 0 {
-                    guard ti + 1 < turbulences.count else { break }
-                    let v = turbulenceVelocity(turbulences[ti + 1], pos: particles[k].pos, speed: extra.speed,
-                                               phase: extra.phase, time: time)
-                    particles[k].pos += v * dt
-                }
-            }
-            // F431/F439: 선형 movement(위 280-283행)와 동형 — force/drag 는 전 오퍼레이터에 누적하고
-            // rotation 적분은 스텝당 1회. 종전엔 루프 안에서 적분해 angularmovement N개면 N회 중복
-            // 적분(F439), 0개면 angularvelocityrandom 의 초기 각속도가 영구 사장(F431)됐다.
-            for a in angulars {
-                // 선형 movement(위 280-283행)와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
-                // 등가속 무감쇠 누적(무회귀).
-                particles[k].angularVel += a.force * dt
-                if a.drag > 0 { particles[k].angularVel *= max(0, 1 - a.drag * dt) }
-            }
-            particles[k].rotation += particles[k].angularVel * dt
-            // 트레일 위치 히스토리(dt>0 만 — step(0) 스냅샷 중복 방지). 링버퍼로 trailSamples 유지.
-            // display() 반환 스냅샷(d.pos)과 동형으로 oscillateposition 오프셋을 반영(F177) — base pos
-            // 만 기록하면 spriteTrail/rope 리본이 sprite 쿼드(d.pos 사용)와 달리 진동을 놓친다.
-            if trailSamples > 0, dt > 0 {
-                particles[k].history.append(particles[k].pos + oscPositionOffset(particles[k]))
-                if particles[k].history.count > trailSamples {
-                    particles[k].history.removeFirst(particles[k].history.count - trailSamples)
-                }
-            }
+            _integrateParticle(at: k, dt: dt)
         }
         // 컬(+deathBurst 자식은 사망 위치에서 발화).
         let hasDeathLinks = def.children.contains { $0.trigger == .deathBurst }
@@ -439,6 +325,127 @@ public struct ParticleSimulator {
         stepChildren(dt)
         // 표시 스냅샷.
         return particles.map { display($0) }
+    }
+
+    /// 개별 파티클 적분: remap → 힘(attract/vortex) → speedCap → movement → 위치 → 난류 → 각속도 → 트레일.
+    /// _step 핫루프에서 호출 — 배열 할당 없음, RNG 드로 없음(결정적 시퀀스 불변).
+    @inline(__always)
+    private mutating func _integrateParticle(at k: Int, dt: Float) {
+        particles[k].age += dt
+        // remapvalue: velocity 는 매 스텝 덮어쓰기(작가가 낙하속도를 노이즈로 직접 기술),
+        // speed 는 이번 스텝 적분에만 곱하는 비파괴 배수(저장 vel 불변 → 복리 폭주 없음).
+        // F440: 덮어쓰기는 힘 오퍼레이터 **이전**에 — 종전엔 같은 스텝의 attract/vortex 가속을
+        // 전량 덮어써 힘 오퍼레이터가 묠력화됐다(speedCap 도 그 경로에서는 무의미).
+        var speedFactor: Float = 1
+        var remapAddVel = SIMD3<Float>(0, 0, 0)   // remapValueEx addvelocity — 이번 스텝 적분 전용(비파괴)
+        if !remaps.isEmpty {
+            let base = (particles[k].remapPhase + particles[k].age) * Self.remapInputK
+            for r in remaps {
+                switch r {
+                case let .velocity(mn, mx, fbm, scale):
+                    let x = base * scale
+                    let t = SIMD3(remapNoise01(fbm, x, SIMD3(0, 0, 0)),
+                                  remapNoise01(fbm, x, SIMD3(19.3, 71.7, 5.1)),
+                                  remapNoise01(fbm, x, SIMD3(53.2, 11.9, 97.4)))
+                    particles[k].vel = mn + (mx - mn) * t
+                case let .speed(mn, mx, fbm, scale):
+                    speedFactor *= mn + (mx - mn) * remapNoise01(fbm, base * scale, SIMD3(7.7, 33.1, 61.9))
+                case let .general(spec):
+                    // 확장 파이프라인 — 물리 동사는 여기서, 표시 파생 동사는 display() 에서 적용.
+                    let (val, w) = remapEval(spec, particles[k])
+                    guard w > 0 else { continue }
+                    switch spec.verb {
+                    case .setVelocity:
+                        particles[k].vel += (val - particles[k].vel) * w   // w=1 → 덮어쓰기(레거시 동형)
+                    case .addVelocity:
+                        remapAddVel += val * w
+                    case .multiplySpeed:
+                        speedFactor *= 1 + (val.x - 1) * w                 // w=1 → val.x(레거시 동형)
+                    case .setRotation:
+                        particles[k].rotation += (val - particles[k].rotation) * w
+                    case .addRotation:
+                        particles[k].rotation += val * (w * dt)            // [추정] 가산율(dt 곱)
+                    case .setAngularVelocity:
+                        particles[k].angularVel += (val - particles[k].angularVel) * w
+                    case .addAngularVelocity:
+                        particles[k].angularVel += val * (w * dt)
+                    case .setOpacity, .multiplyOpacity, .setColor, .multiplyColor,
+                         .setSize, .multiplySize:
+                        break   // 표시 파생 — display() 적용
+                    }
+                }
+            }
+        }
+        // 힘 오퍼레이터는 movement 적분 전에 속도를 갱신(같은 step 위치에 반영).
+        // vel/pos 로컬 호이스트: `&particles[k].vel` inout 과 같은 배열 읽기가 한 호출에 겹치면
+        // 호출마다 배열 전체가 COW 복사된다(attractor×particle×step — 무거운 씬 실측 병목).
+        if !attractors.isEmpty || !vortices.isEmpty {
+            var vel = particles[k].vel
+            let pos = particles[k].pos
+            // deletethreshold: 어느 attractor 든 근접 삭제 판정 시 true — 전 attractor 는 끝까지
+            // 적용(단락 평가 금지 — 호출 생략이 없어야 delete=false 경로 산술이 종전과 동일).
+            var attractDelete = false
+            for a in attractors { attractDelete = applyAttract(a, to: &vel, pos: pos, dt: dt) || attractDelete }
+            for v in vortices {
+                // F624: vortex 오디오반응 = 접선 속도 × 응답 배수(무신호/묵보유 1 → 비트동일).
+                applyVortex(v, to: &vel, pos: pos, dt: dt, audioScale: audioResponseScale(v.audio))
+            }
+            particles[k].vel = vel
+            // 근접 삭제(deletethreshold 키 보유 attractor 한정): 수명 초과로 마킹 — 아래 컬 경로
+            // (deathBurst 자식 발화 포함)를 그대로 탄다. RNG 드로 無 → 무키 씬 비트동일.
+            if attractDelete { particles[k].age = particles[k].lifetime + 1 }
+        }
+        if let cap = speedCap {
+            let sp = simd_length(particles[k].vel)
+            if sp > cap { particles[k].vel *= cap / sp }
+        }
+        for m in movements {
+            particles[k].vel += m.gravity * dt
+            if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
+        }
+        // remapValueEx addvelocity: remapAddVel==0 이면 종전 산술 그대로(레거시 비트동일),
+        // 아니면 이번 스텝 적분에만 가산(저장 vel 불변 — speed 배수와 같은 비파괴 규약).
+        if remapAddVel == SIMD3<Float>(0, 0, 0) {
+            particles[k].pos += particles[k].vel * speedFactor * dt
+        } else {
+            particles[k].pos += (particles[k].vel + remapAddVel) * speedFactor * dt
+        }
+        // 난류 이류(advection): 노이즈 흐름장 속도로 위치를 이동. vel 에 누적하지 않으므로
+        // |변위| ≤ turbSpeed·dt 로 유계(속도 상한 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
+        // F628: 전 turbulence 오퍼레이터 누적 — 첫 번째는 turbSpeed/turbPhase(기존 비트동일),
+        // 2번째 이후는 turbExtra(다중 오퍼레이터 시스템만 신규 드로).
+        if !turbulences.isEmpty {
+            if particles[k].turbSpeed > 0 {
+                let v = turbulenceVelocity(turbulences[0], pos: particles[k].pos, speed: particles[k].turbSpeed,
+                                           phase: particles[k].turbPhase, time: time)
+                particles[k].pos += v * dt
+            }
+            for (ti, extra) in particles[k].turbExtra.enumerated() where extra.speed > 0 {
+                guard ti + 1 < turbulences.count else { break }
+                let v = turbulenceVelocity(turbulences[ti + 1], pos: particles[k].pos, speed: extra.speed,
+                                           phase: extra.phase, time: time)
+                particles[k].pos += v * dt
+            }
+        }
+        // F431/F439: 선형 movement(위 280-283행)와 동형 — force/drag 는 전 오퍼레이터에 누적하고
+        // rotation 적분은 스텝당 1회. 종전엔 루프 안에서 적분해 angularmovement N개면 N회 중복
+        // 적분(F439), 0개면 angularvelocityrandom 의 초기 각속도가 영구 사장(F431)됐다.
+        for a in angulars {
+            // 선형 movement(위 280-283행)와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
+            // 등가속 무감쇠 누적(무회귀).
+            particles[k].angularVel += a.force * dt
+            if a.drag > 0 { particles[k].angularVel *= max(0, 1 - a.drag * dt) }
+        }
+        particles[k].rotation += particles[k].angularVel * dt
+        // 트레일 위치 히스토리(dt>0 만 — step(0) 스냅샷 중복 방지). 링버퍼로 trailSamples 유지.
+        // display() 반환 스냅샷(d.pos)과 동형으로 oscillateposition 오프셋을 반영(F177) — base pos
+        // 만 기록하면 spriteTrail/rope 리본이 sprite 쿼드(d.pos 사용)와 달리 진동을 놓친다.
+        if trailSamples > 0, dt > 0 {
+            particles[k].history.append(particles[k].pos + oscPositionOffset(particles[k]))
+            if particles[k].history.count > trailSamples {
+                particles[k].history.removeFirst(particles[k].history.count - trailSamples)
+            }
+        }
     }
 
     /// 자식 인스턴스 일괄 스텝: follow 는 부모 현재 위치로 방출 원점 갱신(부모 사망 → 방출 정지 후 드레인),

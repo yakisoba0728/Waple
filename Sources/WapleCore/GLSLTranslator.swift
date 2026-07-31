@@ -113,6 +113,32 @@ public enum GLSLTranslator {
         return result
     }
 
+    /// MSL 예약어/C++ 대체 토큰/방출 파라미터명과 충돌하는 GLSL 식별자의 안전 리네임 사전.
+    /// 전 엔트리 순수 리터럴 — 런타임 불변(매 호출 사전 재구성 배제).
+    /// 실물: test_shader(`vec2 fragment`), dot_matrix(`vec2 or`), geodraw(`float2 p`).
+    private static let mslReservedRenames: [String: String] = [
+        "fragment": "we_fragment", "vertex": "we_vertex", "kernel": "we_kernel",
+        "device": "we_device", "thread": "we_thread", "threadgroup": "we_threadgroup",
+        "constant": "we_constant", "using": "we_using", "namespace": "we_namespace",
+        "half": "we_half",
+        // C++ 대체 토큰(MSL 예약어)이 GLSL 식별자로 쓰이는 실물(dot_matrix 의 지역 `vec2 or`).
+        "or": "we_or", "and": "we_and", "not": "we_not", "xor": "we_xor",
+        "compl": "we_compl", "bitand": "we_bitand", "bitor": "we_bitor",
+        // 우리 방출 파라미터명과의 충돌(실물 geodraw: 지역 float2 p)
+        "p": "we_p", "eng": "we_eng", "smp": "we_smp", "vin": "we_vin",
+    ]
+
+    /// 정적 엔진 심볼의 벡터 크기(overloadSizeEnv/sizeEnv 공용 초기값).
+    /// F618: g_PointerState = float4.
+    /// F771: 미등재 시 식 전체를 0(불투명)으로 오염 → 필요한 절단 누락.
+    private static let engineSymbolSizes: [String: Int] = [
+        "gl_FragColor": 4, "gl_FragCoord": 4, "gl_Position": 4,
+        "g_Time": 1, "g_PointerPosition": 2, "g_ParallaxPosition": 2,
+        "g_Frametime": 1, "g_PointerPositionLast": 2,
+        "g_PointerState": 4,
+        "a_TexCoord": 2, "a_Position": 3,
+    ]
+
     private static func _translate(vertex: String, fragment: String, combos: [String: Int],
                                    include: (String) -> String?, premultiplyOutput: Bool) -> TranslatedShader? {
         // [COMBO] 기본값은 스테이지 합집합 — vert 에만 선언된 콤보(실물 auto_sway 의 AA_VERSION)를
@@ -154,15 +180,7 @@ public enum GLSLTranslator {
         // (parseUniforms/varyings/attributes 는 `//` JSON 어노테이션이 필요해 줄 주석만 보존 — 블록 주석은 위에서 제거.)
         // MSL 예약어가 GLSL 식별자(파라미터/지역 등)로 쓰이는 실물(test_shader 의 `vec2 fragment`) —
         // 소스 수준에서 안전 리네임. 우리가 방출하는 `fragment float4 ef_main` 은 이후 생성이라 무관.
-        let reservedRenames = ["fragment": "we_fragment", "vertex": "we_vertex", "kernel": "we_kernel",
-                               "device": "we_device", "thread": "we_thread", "threadgroup": "we_threadgroup",
-                               "constant": "we_constant", "using": "we_using", "namespace": "we_namespace",
-                               "half": "we_half",
-                               // C++ 대체 토큰(MSL 예약어)이 GLSL 식별자로 쓰이는 실물(dot_matrix 의 지역 `vec2 or`).
-                               "or": "we_or", "and": "we_and", "not": "we_not", "xor": "we_xor",
-                               "compl": "we_compl", "bitand": "we_bitand", "bitor": "we_bitor",
-                               // 우리 방출 파라미터명과의 충돌(실물 geodraw: 지역 float2 p)
-                               "p": "we_p", "eng": "we_eng", "smp": "we_smp", "vin": "we_vin"]
+        let reservedRenames = mslReservedRenames
         let vClean = replaceIdentifiers(stripComments(vsrc), reservedRenames)
         let fClean = replaceIdentifiers(stripComments(fsrc), reservedRenames)
         // 소스 정의 struct(실물 dot_matrix 의 `struct Grid`): 함수 파싱 전에 이름 등록(반환/파라미터 타입 통과).
@@ -219,12 +237,7 @@ public enum GLSLTranslator {
         // 함수 파싱은 주석 제거본에서(annotation JSON 중괄호가 balance 를 깨지 않도록).
         var vFns = parseFunctions(vClean, structs: structNames)
         var fFns = parseFunctions(fClean, structs: structNames)
-        var overloadSizeEnv: [String: Int] = ["gl_FragColor": 4, "gl_FragCoord": 4, "gl_Position": 4,
-                                              "g_Time": 1, "g_PointerPosition": 2, "g_ParallaxPosition": 2,
-                                              "g_Frametime": 1, "g_PointerPositionLast": 2,
-                                              // F618: g_PointerState = float4(치환/capture 정합) — 어댑터 크기 환경 등재.
-                                              "g_PointerState": 4,
-                                              "a_TexCoord": 2, "a_Position": 3]
+        var overloadSizeEnv: [String: Int] = engineSymbolSizes
         for vy in varyings { overloadSizeEnv[vy.name] = vy.type.components }
         for m in materials { overloadSizeEnv[m.glslName] = m.type.components }
         for id in bodyIds where isEngine(id) && (id.hasSuffix("Resolution") || id.hasSuffix("Texel")) { overloadSizeEnv[id] = 4 }
@@ -277,21 +290,8 @@ public enum GLSLTranslator {
             guard !n.isEmpty, constByName[n] == nil else { continue }
             constByName[n] = line; constOrder.append(n)
         }
-        var mustDemote = Set<String>()
-        for n in constOrder {
-            let line = constByName[n]!
-            if identifiers(in: line).contains(where: { isEngine($0) || materialNames0.contains($0) })
-                || constInitHasRuntimeCall(line) { mustDemote.insert(n) }
-        }
-        var demoteChanged = true
-        while demoteChanged {
-            demoteChanged = false
-            for n in constOrder where !mustDemote.contains(n) {
-                if identifiers(in: constByName[n]!).contains(where: { $0 != n && mustDemote.contains($0) }) {
-                    mustDemote.insert(n); demoteChanged = true
-                }
-            }
-        }
+        let mustDemote = computeConstDemoteSet(constOrder: constOrder, constByName: constByName,
+                                                materialNames: materialNames0)
 
         // 강등 const 를 참조하는 헬퍼 → 본문 선두에 const 선언 주입(캡처 계산 전 — 우변 엔진/머티리얼 심볼이
         // 파라미터로 승격되도록). 실물 radial_blur: `const vec2 type = ...(g_Texture0Resolution...)` 를 computeUV 가 사용.
@@ -307,14 +307,7 @@ public enum GLSLTranslator {
 
         // Stage-3 phase 2: 식-레벨 타입체커 — HLSL-관용 벡터 크기 혼합을 절단 삽입으로 MSL 화.
         // 확실한 크기만 개입(미지 0 = 무개입). 스테이지별 env(frag 는 frag 선언 varying 타입 우선).
-        var sizeEnv: [String: Int] = ["gl_FragColor": 4, "gl_FragCoord": 4, "gl_Position": 4,
-                                      "g_Time": 1, "g_PointerPosition": 2,
-                                      "g_PointerState": 4,  // F618: float4 치환과 정합 — 절단 추론 활성
-                                      // F771: overloadSizeEnv 와 같은 정적 엔진 심볼 — 미등재 시 그 토큰이
-                                      // 0(불투명)으로 식 전체를 오염시켜 필요한 절단이 빠진다(실물 shadow 의
-                                      // `float atFactor = (…g_ParallaxPosition…)` — vec2 우변이 float 로).
-                                      "g_ParallaxPosition": 2, "g_Frametime": 1, "g_PointerPositionLast": 2,
-                                      "a_TexCoord": 2, "a_Position": 3]
+        var sizeEnv: [String: Int] = engineSymbolSizes
         for vy in varyings { sizeEnv[vy.name] = vy.type.components }
         for m in materials { sizeEnv[m.glslName] = m.type.components }
         for id in bodyIds where isEngine(id) && (id.hasSuffix("Resolution") || id.hasSuffix("Texel")) { sizeEnv[id] = 4 }
@@ -439,6 +432,29 @@ public enum GLSLTranslator {
                            premultiplyOutput: premultiplyOutput)
         return TranslatedShader(msl: msl, materialParams: materials, textureSlots: textures, usesAudio: usesAudio,
                                 textureDefaults: textureDefaults)
+    }
+
+    /// 파일 스코프 const 중 전역 MSL `constant` 가 될 수 없는 이름 집합(전이 폐쇄 포함).
+    /// ① 엔진/머티리얼 심볼 참조, ② 비-constexpr 초기화, ③ ①②에 해당하는 다른 const 참조.
+    private static func computeConstDemoteSet(constOrder: [String], constByName: [String: String],
+                                              materialNames: Set<String>) -> Set<String> {
+        var mustDemote = Set<String>()
+        for n in constOrder {
+            let line = constByName[n]!
+            if identifiers(in: line).contains(where: { isEngine($0) || materialNames.contains($0) })
+                || constInitHasRuntimeCall(line) { mustDemote.insert(n) }
+        }
+        // ③ 전이 폐쇄 — 이미 강등 대상인 const 를 참조하는 다른 const 도 강등.
+        var changed = true
+        while changed {
+            changed = false
+            for n in constOrder where !mustDemote.contains(n) {
+                if identifiers(in: constByName[n]!).contains(where: { $0 != n && mustDemote.contains($0) }) {
+                    mustDemote.insert(n); changed = true
+                }
+            }
+        }
+        return mustDemote
     }
 
     // MARK: - 함수 파싱 (Stage 2)

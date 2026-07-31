@@ -471,20 +471,7 @@ public enum GLSLTypeAdapter {
                 // MSL 은 min/max/clamp 의 정수·실수 혼합 오버로드가 모호(실물 rounded_mask `max(1, x/y)`).
                 // 다른 인자가 실수/벡터면 정수 리터럴 인자를 실수 리터럴로 승격.
                 if ["min", "max", "clamp", "mix", "step", "pow", "mod"].contains(t), argTexts.count >= 2 {
-                    func isIntLiteral(_ x: String) -> Bool {
-                        let c = x.trimmingCharacters(in: .whitespaces)
-                        // F615: 음수 정수 리터럴(`-1`)도 승격 대상 — `-` 미포함 오목으로 미승격 시
-                        // MSL (int,float) 혼합 오버로드 모호 LOUD 폴 fallback 클래스.
-                        let digits = c.hasPrefix("-") ? c.dropFirst() : c[...]
-                        return !digits.isEmpty && digits.allSatisfy { $0.isNumber }
-                    }
-                    let anyNonInt = argTexts.contains { !isIntLiteral($0) }
-                    if anyNonInt {
-                        for i in argTexts.indices where isIntLiteral(argTexts[i]) {
-                            let lead = argTexts[i].prefix(while: { $0 == " " || $0 == "\t" })
-                            argTexts[i] = lead + argTexts[i].trimmingCharacters(in: .whitespaces) + ".0"
-                        }
-                    }
+                    promoteIntLiteralsInArgs(&argTexts)
                 }
                 // broadcast 빌트인(mix/clamp/min/max/step/pow/…)의 벡터 인자 크기 불일치 → 최소 벡터 크기로
                 // 절단(HLSL 관용 — 실물 shift_hue 의 mix(albedo /*4*/, newAlbedo /*3*/, mask)). 스칼라(1)·미지(0)
@@ -500,20 +487,7 @@ public enum GLSLTypeAdapter {
                 // 파라미터*/, step()*step() /*float*/)). int 변수 인자와 non-int 인자가 섞이면 int 인자를 float() 로
                 // 캐스트. 정수 리터럴은 위 블록에서 이미 .0 승격되어 여기선 intVar 만 대상.
                 if ["min", "max", "clamp"].contains(t) {
-                    func isIntVar(_ x: String) -> Bool {
-                        let c = x.trimmingCharacters(in: .whitespaces)
-                        return p.intVars.contains(c) || c.hasPrefix("int(") || c.hasPrefix("uint(")
-                    }
-                    func isIntish(_ x: String) -> Bool {
-                        let c = x.trimmingCharacters(in: .whitespaces)
-                        return isIntVar(x) || (!c.isEmpty && c.allSatisfy { $0.isNumber })
-                    }
-                    if argTexts.contains(where: isIntVar), argTexts.contains(where: { !isIntish($0) }) {
-                        for i in argTexts.indices where isIntVar(argTexts[i]) {
-                            let lead = argTexts[i].prefix(while: { $0 == " " || $0 == "\t" })
-                            argTexts[i] = lead + "float(" + argTexts[i].trimmingCharacters(in: .whitespaces) + ")"
-                        }
-                    }
+                    castIntVarsToFloat(&argTexts, intVars: p.intVars)
                 }
                 // 알려진 헬퍼: 인자를 파라미터 크기로 절단(HLSL 관용 — 실물 shimmer).
                 if let ps = p.env.functionParams[t] {
@@ -553,5 +527,44 @@ public enum GLSLTypeAdapter {
         }
         if let r = env.functions[name] { return r }
         return 0
+    }
+
+    // MARK: - 호출 인자 타입 승격/캐스트 헬퍼
+
+    /// 정수 리터럴 인자를 실수 리터럴로 승격(`.0` 접미).
+    /// MSL min/max/clamp/mix/step/pow/mod 의 정수·실수 혼합 오버로드 모호성 해소용.
+    /// F615: 음수 정수 리터럴(`-1`)도 승격 대상.
+    private static func promoteIntLiteralsInArgs(_ argTexts: inout [String]) {
+        func isIntLiteral(_ x: String) -> Bool {
+            let c = x.trimmingCharacters(in: .whitespaces)
+            let digits = c.hasPrefix("-") ? c.dropFirst() : c[...]
+            return !digits.isEmpty && digits.allSatisfy { $0.isNumber }
+        }
+        let anyNonInt: Bool = argTexts.contains { !isIntLiteral($0) }
+        if anyNonInt {
+            for i in argTexts.indices where isIntLiteral(argTexts[i]) {
+                let lead = argTexts[i].prefix(while: { $0 == " " || $0 == "\t" })
+                argTexts[i] = lead + argTexts[i].trimmingCharacters(in: .whitespaces) + ".0"
+            }
+        }
+    }
+
+    /// int 변수 인자를 float() 로 캐스트 — MSL min/max/clamp (int, float) 오버로드 모호성 해소.
+    /// 정수 리터럴은 promoteIntLiteralsInArgs 에서 이미 `.0` 승격되어 여기선 intVar 만 대상.
+    private static func castIntVarsToFloat(_ argTexts: inout [String], intVars: Set<String>) {
+        func isIntVar(_ x: String) -> Bool {
+            let c = x.trimmingCharacters(in: .whitespaces)
+            return intVars.contains(c) || c.hasPrefix("int(") || c.hasPrefix("uint(")
+        }
+        func isIntish(_ x: String) -> Bool {
+            let c = x.trimmingCharacters(in: .whitespaces)
+            return isIntVar(x) || (!c.isEmpty && c.allSatisfy { $0.isNumber })
+        }
+        if argTexts.contains(where: isIntVar), argTexts.contains(where: { !isIntish($0) }) {
+            for i in argTexts.indices where isIntVar(argTexts[i]) {
+                let lead = argTexts[i].prefix(while: { $0 == " " || $0 == "\t" })
+                argTexts[i] = lead + "float(" + argTexts[i].trimmingCharacters(in: .whitespaces) + ")"
+            }
+        }
     }
 }

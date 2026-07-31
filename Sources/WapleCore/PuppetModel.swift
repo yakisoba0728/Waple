@@ -118,6 +118,20 @@ public struct PuppetModel: Equatable {
         return pm
     }
 
+    /// 바이트 배열에서 리틀엔디안 float4x4 (64B, 열 우선) 디코드. Model3D.readFloat4x4 과 동일 로직이나
+    /// 접근수준 분리(private) — BinaryReading 으로 끌어올리면 TexImage 등과의 의존이 얽혀 별도 유지.
+    private static func readFloat4x4(_ bytes: [UInt8], at o: Int) -> simd_float4x4? {
+        guard o >= 0, o + 64 <= bytes.count else { return nil }
+        func f(_ p: Int) -> Float? { readU32LE(bytes, at: p).map { Float(bitPattern: $0) } }
+        guard let c0x = f(o),      let c0y = f(o + 4),  let c0z = f(o + 8),  let c0w = f(o + 12),
+              let c1x = f(o + 16), let c1y = f(o + 20), let c1z = f(o + 24), let c1w = f(o + 28),
+              let c2x = f(o + 32), let c2y = f(o + 36), let c2z = f(o + 40), let c2w = f(o + 44),
+              let c3x = f(o + 48), let c3y = f(o + 52), let c3z = f(o + 56), let c3w = f(o + 60)
+        else { return nil }
+        return simd_float4x4(SIMD4(c0x, c0y, c0z, c0w), SIMD4(c1x, c1y, c1z, c1w),
+                             SIMD4(c2x, c2y, c2z, c2w), SIMD4(c3x, c3y, c3z, c3w))
+    }
+
     private static func parseV0013(_ bytes: [UInt8]) -> PuppetModel? {
         guard bytes.count > 30 else { return nil }
         func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
@@ -198,15 +212,9 @@ public struct PuppetModel: Equatable {
                 guard let _ = u32(o), let parentRaw = u32(o + 4), let msz = u32(o + 8), msz == 64,
                       o + 12 + 64 + 1 <= bytes.count else { return model }
                 o += 12
-                var cols: [SIMD4<Float>] = []
-                for c in 0..<4 {
-                    guard let x = f32(o + c * 16), let y = f32(o + c * 16 + 4),
-                          let z = f32(o + c * 16 + 8), let w = f32(o + c * 16 + 12) else { return model }
-                    cols.append(SIMD4(x, y, z, w))
-                }
+                guard let bindMat = readFloat4x4(bytes, at: o) else { return model }
                 o += 64 + 1  // matrix + pad
-                bones.append(Bone(name: name, parent: Int32(bitPattern: parentRaw),
-                                  bind: simd_float4x4(cols[0], cols[1], cols[2], cols[3])))
+                bones.append(Bone(name: name, parent: Int32(bitPattern: parentRaw), bind: bindMat))
             }
             model.bones = bones
         }

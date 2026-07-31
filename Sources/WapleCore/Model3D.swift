@@ -485,47 +485,10 @@ public struct Model3D: Equatable {
                 skinFieldsFit = skinned && stride >= 12 + (hasNormal ? 12 : 0) + (hasTangent ? 16 : 0) + 40
             }
 
-            var vertices: [Vertex] = []
-            vertices.reserveCapacity(vCount)
-            for vi in 0..<vCount {
-                let b = o + vi * stride
-                var pos = SIMD3<Float>.zero
-                var nrm = SIMD3<Float>(0, 0, 1)                       // 부재 시 기본(2D 퍼펫은 미사용)
-                var tan = SIMD4<Float>(1, 0, 0, 1)
-                // 채널 오프셋: 테이블 레이아웃이면 테이블 값, 아니면 종전 고전/꼬리고정 오프셋.
-                let posOff = layout?.pos ?? 0
-                guard let px = f32(b + posOff), let py = f32(b + posOff + 4), let pz = f32(b + posOff + 8)
-                else { return nil }
-                pos = SIMD3<Float>(px, py, pz)
-                let readNormal = layout.map { $0.normal != nil } ?? hasNormal
-                if readNormal, let no = layout?.normal ?? (hasNormal ? 12 : nil) {
-                    guard let nx = f32(b + no), let ny = f32(b + no + 4), let nz = f32(b + no + 8) else { return nil }
-                    nrm = SIMD3(nx, ny, nz)
-                }
-                let readTangent = layout.map { $0.tangent != nil } ?? hasTangent
-                if readTangent, let to = layout?.tangent ?? (hasTangent ? 12 + (hasNormal ? 12 : 0) : nil) {
-                    guard let tx = f32(b + to), let ty = f32(b + to + 4), let tz = f32(b + to + 8), let tw = f32(b + to + 12)
-                    else { return nil }
-                    tan = SIMD4(tx, ty, tz, tw)
-                }
-                if skinFieldsFit {
-                    // 테이블: 채널 오프셋 직독 / 추론 경로: 종전 꼬리고정.
-                    let bo = b + (layout?.boneIndices ?? stride - 40)
-                    let wo = b + (layout?.weights ?? stride - 24)
-                    let uo = b + (layout?.uv ?? stride - 8)
-                    guard let b0 = u32(bo), let b1 = u32(bo + 4), let b2 = u32(bo + 8), let b3 = u32(bo + 12),
-                          let w0 = f32(wo), let w1 = f32(wo + 4), let w2 = f32(wo + 8), let w3 = f32(wo + 12),
-                          let u = f32(uo), let v = f32(uo + 4) else { return nil }
-                    vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v),
-                                           boneIndices: SIMD4(b0, b1, b2, b3), weights: SIMD4(w0, w1, w2, w3)))
-                } else if let uo = layout?.uv ?? (stride >= 8 ? stride - 8 : nil) {
-                    // TEXCOORD0 가 float3/float4 여도 선두 .xy 만 읽는다(Kirby float4@28 — RE 테이블).
-                    guard let u = f32(b + uo), let v = f32(b + uo + 4) else { return nil }
-                    vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v)))
-                } else {
-                    vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: .zero))
-                }
-            }
+            guard let vertices = readVertices(bytes: bytes, at: o, count: vCount, stride: stride,
+                                                layout: layout,
+                                                skinFieldsFit: skinFieldsFit,
+                                                hasNormal: hasNormal, hasTangent: hasTangent) else { return nil }
             o += vSize
 
             guard let iSizeRaw = u32(o) else { return nil }
@@ -588,17 +551,11 @@ public struct Model3D: Equatable {
                           let _ = u32(p), let parentRaw = u32(p + 4), let msz = u32(p + 8), msz == 64,
                           p + 12 + 64 <= bytes.count else { boneOK = false; break }
                     p += 12
-                    var cols: [SIMD4<Float>] = []
-                    for c in 0..<4 {
-                        guard let x = f32(p + c * 16), let y = f32(p + c * 16 + 4),
-                              let z = f32(p + c * 16 + 8), let w = f32(p + c * 16 + 12) else { boneOK = false; break }
-                        cols.append(SIMD4(x, y, z, w))
-                    }
-                    if !boneOK { break }
+                    guard let bindMat = readFloat4x4(bytes, at: p) else { boneOK = false; break }
                     p += 64
                     guard let props = cstring(&p) else { boneOK = false; break }
                     bones.append(Bone(name: name, parent: Int32(bitPattern: parentRaw),
-                                      bind: simd_float4x4(cols[0], cols[1], cols[2], cols[3]), properties: props))
+                                      bind: bindMat, properties: props))
                 }
                 if boneOK {
                     model.bones = bones
@@ -645,7 +602,6 @@ public struct Model3D: Equatable {
             guard o >= 0, o + 2 <= bytes.count else { return nil }
             return Int(bytes[o]) | (Int(bytes[o + 1]) << 8)
         }
-        func f32(_ o: Int) -> Float? { readU32LE(bytes, at: o).map { Float(bitPattern: $0) } }
         var p = magicOff + 8 + 1 + 4   // magic + u8(0) + u32 nextOff
         guard let count = u16(p), count > 0 else { return [] }
         p += 2  // u16 count
@@ -655,15 +611,9 @@ public struct Model3D: Equatable {
             guard let bone = u16(p), bone < boneCount,
                   let name = readCString(bytes, at: p + 2) else { return [] }
             p = name.next
-            var cols: [SIMD4<Float>] = []
-            for c in 0..<4 {
-                guard let x = f32(p + c * 16), let y = f32(p + c * 16 + 4),
-                      let z = f32(p + c * 16 + 8), let w = f32(p + c * 16 + 12) else { return [] }
-                cols.append(SIMD4(x, y, z, w))
-            }
+            guard let localMat = readFloat4x4(bytes, at: p) else { return [] }
             p += 64
-            out.append(Attachment(name: name.value, bone: Int32(bone),
-                                  local: simd_float4x4(cols[0], cols[1], cols[2], cols[3])))
+            out.append(Attachment(name: name.value, bone: Int32(bone), local: localMat))
         }
         return out
     }
@@ -791,13 +741,6 @@ public struct Model3D: Equatable {
     /// 모프 0x140261ca7 `cmp edi,0x17`(v≥23 게이트) — 레코드: u64(func_0x000140261780) |
     /// cstring(FUN_14009c5d0) | u32 flags | u32 n1 | n1×u32 | u32 n2 | n2×u32.
     private static func parseMeshTrailer(bytes: [UInt8], at p: Int, version: Int) -> (end: Int, trailer: MeshTrailer)? {
-        func u32list(_ o: inout Int, _ n: Int) -> [UInt32]? {
-            guard n >= 0, o + n * 4 <= bytes.count else { return nil }
-            var out: [UInt32] = []
-            out.reserveCapacity(n)
-            for _ in 0..<n { out.append(readU32LE(bytes, at: o)!); o += 4 }   // 경계 사전검사 완료
-            return out
-        }
         var t = MeshTrailer()
         var o = p
         guard o + 1 <= bytes.count else { return nil }
@@ -829,10 +772,10 @@ public struct Model3D: Equatable {
                       let flags = readU32LE(bytes, at: name.next),
                       let n1 = readU32LE(bytes, at: name.next + 4), n1 <= 1_048_576 else { return nil }
                 var o2 = name.next + 8
-                guard let ia = u32list(&o2, Int(n1)) else { return nil }
+                guard let ia = readU32Array(bytes, at: &o2, count: Int(n1)) else { return nil }
                 guard let n2 = readU32LE(bytes, at: o2), n2 <= 1_048_576 else { return nil }
                 o2 += 4
-                guard let ib = u32list(&o2, Int(n2)) else { return nil }
+                guard let ib = readU32Array(bytes, at: &o2, count: Int(n2)) else { return nil }
                 morphs.append(MorphTarget(id: UInt64(hi) << 32 | UInt64(lo), name: name.value,
                                           flags: flags, indicesA: ia, indicesB: ib))
                 o = o2
@@ -851,22 +794,6 @@ public struct Model3D: Equatable {
         func u16(_ o: Int) -> Int? { readU16LE(bytes, at: o).map(Int.init) }
         func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
-        func mat4(_ o: Int) -> simd_float4x4? {
-            var cols: [SIMD4<Float>] = []
-            for c in 0..<4 {
-                guard let x = f32(o + c * 16), let y = f32(o + c * 16 + 4),
-                      let z = f32(o + c * 16 + 8), let w = f32(o + c * 16 + 12) else { return nil }
-                cols.append(SIMD4(x, y, z, w))
-            }
-            return simd_float4x4(cols[0], cols[1], cols[2], cols[3])
-        }
-        func u32list(_ o: inout Int, _ n: Int) -> [UInt32]? {
-            guard n >= 0, o + n * 4 <= bytes.count else { return nil }
-            var out: [UInt32] = []
-            out.reserveCapacity(n)
-            for _ in 0..<n { out.append(readU32LE(bytes, at: o)!); o += 4 }   // 경계 사전검사 완료
-            return out
-        }
         var tail = SkeletonTail()
         var o = start
         // T1 태그 레코드(어셈블리 0x1402626a0-0x1402627d9: u16 C1 | C1 × (cstring | u32 | u32 | 64B)).
@@ -877,7 +804,7 @@ public struct Model3D: Equatable {
             guard let tag = readCString(bytes, at: o),
                   let bone = u32(tag.next), let flags = u32(tag.next + 4),
                   tag.next + 8 + 64 <= bytes.count,
-                  let m = mat4(tag.next + 8) else { return nil }
+                  let m = readFloat4x4(bytes, at: tag.next + 8) else { return nil }
             o = tag.next + 8 + 64
             tail.tags.append(SkeletonTail.TagRecord(tag: tag.value, bone: bone, flags: flags, matrix: m))
         }
@@ -887,7 +814,7 @@ public struct Model3D: Equatable {
             o += 1
             guard o + boneCount * 64 <= bytes.count else { return nil }
             for _ in 0..<boneCount {
-                guard let m = mat4(o) else { return nil }
+                guard let m = readFloat4x4(bytes, at: o) else { return nil }
                 tail.extraBinds.append(m)
                 o += 64
             }
@@ -944,7 +871,7 @@ public struct Model3D: Equatable {
         for _ in 0..<c4 {
             guard let bone = u32(o), let nb = u32(o + 4), nb <= 1_048_576 else { return nil }
             o += 8
-            guard let refs = u32list(&o, Int(nb)) else { return nil }
+            guard let refs = readU32Array(bytes, at: &o, count: Int(nb)) else { return nil }
             guard let nc = u16(o), nc <= 4096 else { return nil }
             o += 2
             var subs: [SkeletonTail.LinkSub] = []
@@ -956,7 +883,7 @@ public struct Model3D: Equatable {
                     guard let x = f32(o), let y = f32(o + 4), let z = f32(o + 8), let w = f32(o + 12),
                           let ne = u16(o + 16), ne <= 4096 else { return nil }
                     o += 18
-                    guard let indices = u32list(&o, ne) else { return nil }
+                    guard let indices = readU32Array(bytes, at: &o, count: ne) else { return nil }
                     elems.append(SkeletonTail.LinkElem(vec: SIMD4(x, y, z, w), indices: indices))
                 }
                 subs.append(SkeletonTail.LinkSub(index: idx, elems: elems))
@@ -969,7 +896,7 @@ public struct Model3D: Equatable {
             o += 1
             guard o + boneCount * 76 <= bytes.count else { return nil }
             for _ in 0..<boneCount {
-                guard let ox = f32(o), let oy = f32(o + 4), let oz = f32(o + 8), let m = mat4(o + 12) else { return nil }
+                guard let ox = f32(o), let oy = f32(o + 4), let oz = f32(o + 8), let m = readFloat4x4(bytes, at: o + 12) else { return nil }
                 tail.boneTransforms.append(SkeletonTail.BoneTransform(offset: SIMD3(ox, oy, oz), matrix: m))
                 o += 76
             }
@@ -978,7 +905,7 @@ public struct Model3D: Equatable {
         guard o + 1 <= bytes.count else { return nil }
         if bytes[o] != 0 {
             o += 1
-            guard let list = u32list(&o, boneCount) else { return nil }
+            guard let list = readU32Array(bytes, at: &o, count: boneCount) else { return nil }
             tail.boneIndices = list
         } else { o += 1 }
         // T7 (MDLS v≥3) u8 게이트 — 본수 × u32(디컴파일 :1003-1059).
@@ -986,7 +913,7 @@ public struct Model3D: Equatable {
             guard o + 1 <= bytes.count else { return nil }
             if bytes[o] != 0 {
                 o += 1
-                guard let list = u32list(&o, boneCount) else { return nil }
+                guard let list = readU32Array(bytes, at: &o, count: boneCount) else { return nil }
                 tail.boneParams = list
             } else { o += 1 }
         }
@@ -1024,6 +951,85 @@ public struct Model3D: Equatable {
         guard count > 0, vSize % count == 0 else { return nil }
         let s = vSize / count
         return (20...96).contains(s) ? s : nil
+    }
+
+    /// bytes[o..<o+n*4] 에서 n 개의 리틀엔디안 u32 를 읽어 배열로 반환하고 o 를 전진시킨다.
+    /// 범위 밖이면 nil(o 미변경). parseMeshTrailer·parseSkeletonTail 공통 패턴 통합.
+    private static func readU32Array(_ bytes: [UInt8], at o: inout Int, count n: Int) -> [UInt32]? {
+        guard n >= 0, o + n * 4 <= bytes.count else { return nil }
+        var out: [UInt32] = []
+        out.reserveCapacity(n)
+        for _ in 0..<n { out.append(readU32LE(bytes, at: o)!); o += 4 }   // 경계 사전검사 완료
+        return out
+    }
+
+    /// 정점 블롭에서 vCount 개 정점을 읽어 반환한다. 바이트 범위 밖이면 nil(호출측 parse failure).
+    /// 채널 오프셋은 layout(테이블 산출) 또는 고전/꼬리고정 규칙을 그대로 따른다.
+    /// 오프셋 산수 보존 근거: posOff, normal, tangent, boneIndices, weights, uv 오프셋 계산식이
+    /// 인라인 원본과 동일(식 복사, 변수명만 파라미터화). stride·skinFieldsFit·hasNormal·hasTangent
+    /// 판정은 호출측이 원본 그대로 계산해 넘긴다.
+    private static func readVertices(bytes: [UInt8], at offset: Int, count vCount: Int, stride: Int,
+                                     layout: VertexLayout?,
+                                     skinFieldsFit: Bool, hasNormal: Bool, hasTangent: Bool) -> [Vertex]? {
+        func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
+        func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
+        var vertices: [Vertex] = []
+        vertices.reserveCapacity(vCount)
+        for vi in 0..<vCount {
+            let b = offset + vi * stride
+            var pos = SIMD3<Float>.zero
+            var nrm = SIMD3<Float>(0, 0, 1)                       // 부재 시 기본(2D 퍼펫은 미사용)
+            var tan = SIMD4<Float>(1, 0, 0, 1)
+            // 채널 오프셋: 테이블 레이아웃이면 테이블 값, 아니면 종전 고전/꼬리고정 오프셋.
+            let posOff = layout?.pos ?? 0
+            guard let px = f32(b + posOff), let py = f32(b + posOff + 4), let pz = f32(b + posOff + 8)
+            else { return nil }
+            pos = SIMD3<Float>(px, py, pz)
+            let readNormal = layout.map { $0.normal != nil } ?? hasNormal
+            if readNormal, let no = layout?.normal ?? (hasNormal ? 12 : nil) {
+                guard let nx = f32(b + no), let ny = f32(b + no + 4), let nz = f32(b + no + 8) else { return nil }
+                nrm = SIMD3(nx, ny, nz)
+            }
+            let readTangent = layout.map { $0.tangent != nil } ?? hasTangent
+            if readTangent, let to = layout?.tangent ?? (hasTangent ? 12 + (hasNormal ? 12 : 0) : nil) {
+                guard let tx = f32(b + to), let ty = f32(b + to + 4), let tz = f32(b + to + 8), let tw = f32(b + to + 12)
+                else { return nil }
+                tan = SIMD4(tx, ty, tz, tw)
+            }
+            if skinFieldsFit {
+                // 테이블: 채널 오프셋 직독 / 추론 경로: 종전 꼬리고정.
+                let bo = b + (layout?.boneIndices ?? stride - 40)
+                let wo = b + (layout?.weights ?? stride - 24)
+                let uo = b + (layout?.uv ?? stride - 8)
+                guard let b0 = u32(bo), let b1 = u32(bo + 4), let b2 = u32(bo + 8), let b3 = u32(bo + 12),
+                      let w0 = f32(wo), let w1 = f32(wo + 4), let w2 = f32(wo + 8), let w3 = f32(wo + 12),
+                      let u = f32(uo), let v = f32(uo + 4) else { return nil }
+                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v),
+                                       boneIndices: SIMD4(b0, b1, b2, b3), weights: SIMD4(w0, w1, w2, w3)))
+            } else if let uo = layout?.uv ?? (stride >= 8 ? stride - 8 : nil) {
+                // TEXCOORD0 가 float3/float4 여도 선두 .xy 만 읽는다(Kirby float4@28 — RE 테이블).
+                guard let u = f32(b + uo), let v = f32(b + uo + 4) else { return nil }
+                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: SIMD2(u, v)))
+            } else {
+                vertices.append(Vertex(position: pos, normal: nrm, tangent: tan, uv: .zero))
+            }
+        }
+        return vertices
+    }
+
+    /// bytes[at..<at+64] 로부터 column-major float4x4 를 읽는다. 범위 밖이면 nil.
+    /// 반복 패턴(parse·parseAttachments·parseSkeletonTail 3개소) 통합 — 오프셋 산수: 열 c = at + c*16,
+    /// 행 r = 열 시작 + r*4, 합 64B(실물 전수 stride 64 검산 완료).
+    private static func readFloat4x4(_ bytes: [UInt8], at o: Int) -> simd_float4x4? {
+        guard o >= 0, o + 64 <= bytes.count else { return nil }
+        func f(_ p: Int) -> Float? { readU32LE(bytes, at: p).map { Float(bitPattern: $0) } }
+        guard let c0x = f(o),      let c0y = f(o + 4),  let c0z = f(o + 8),  let c0w = f(o + 12),
+              let c1x = f(o + 16), let c1y = f(o + 20), let c1z = f(o + 24), let c1w = f(o + 28),
+              let c2x = f(o + 32), let c2y = f(o + 36), let c2z = f(o + 40), let c2w = f(o + 44),
+              let c3x = f(o + 48), let c3y = f(o + 52), let c3z = f(o + 56), let c3w = f(o + 60)
+        else { return nil }
+        return simd_float4x4(SIMD4(c0x, c0y, c0z, c0w), SIMD4(c1x, c1y, c1z, c1w),
+                             SIMD4(c2x, c2y, c2z, c2w), SIMD4(c3x, c3y, c3z, c3w))
     }
 
     private static func findMagic(_ magic: String, in bytes: [UInt8], from: Int) -> Int? {
