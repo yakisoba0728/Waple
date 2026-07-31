@@ -1,0 +1,601 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_mdl_deep.py",
+ "note": "verify_rosetta.py 와 파서를 공유한다 — 16쌍 바이트 대조와 451개 착지 검증이 같은 코드로 돌아야 한다",
+ "entries": [
+  {
+   "id": "format.mdl.parseCoverage",
+   "value": {
+    "파일수": 451,
+    "착지성공": 451,
+    "실패": 0,
+    "메시수": 986,
+    "착지분포": {
+     "말미NUL": 189,
+     "EOF": 8,
+     "섹션매직": 254
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.header",
+   "value": {
+    "레이아웃": "cstring magic \"MDLV%04d\" (9B, NUL 포함) | u32 formatFlag | u32 skinCount | u32 meshCount",
+    "총 21바이트": true,
+    "formatFlag@9": "정점 포맷 기본값. v>=15 는 메시마다 덮어쓴다",
+    "skinCount@13": "메시마다 읽는 머티리얼 cstring 개수(스킨 = 같은 메시의 재질 변형). meshCount 가 아니다 — 실물에 skinCount=1·meshCount=64 파일이 있다",
+    "meshCount@17": "서브메시 개수"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140261950 (RVA 0x261880)",
+     "note": "MDL 디코더 디컴파일"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    },
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/audiophile/models/grid/grid.{mdl,json}",
+     "note": "모델 옵션 json 의 skins 2개 ↔ .mdl skinCount=2 ↔ 머티리얼 cstring 2개. 같은 메시의 fantasticcar 짝은 skins 1개/문자열 1개, 파일 크기 차 25B = \"materials/grid/grid2.json\\0\" 길이와 정확히 일치"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.stringLoopIsPerMesh",
+   "value": {
+    "결론": "머티리얼 cstring 은 파일 선두의 전역 문자열 표가 아니라 메시 블록마다 skinCount 개씩 온다",
+    "근거1": "디컴파일: 메시 do-루프 **안**에서 `if (param_3[1] != 0) do { cstring } while (i < param_3[1])` — param_3[1] 이 헤더 오프셋 13 필드",
+    "근거2": "실물 skinCount=1·meshCount=3/4 파일(orbitaleffects/orbitsmall)이 메시마다 서로 다른 머티리얼을 갖고 전수 착지"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140261950 (RVA 0x261880)",
+     "note": "MDL 디코더 디컴파일"
+    },
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/*/models/*.{obj,mdl} 16쌍",
+     "note": "scripts/spec/verify_rosetta.py — 16/16 대조 통과"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.meshLayout",
+   "value": {
+    "공통": "skinCount×cstring material | u32 gateWord | [gateWord&2: u32 extra] | [v>=17: AABB min3f max3f = 24B] | [v>=15: u32 formatFlag] | u32 vertexBytes | 정점 | u32 indexBytes | u16 인덱스 | [v>=21: 메시 트레일러]",
+    "gateWord": "메시 능력 플래그. bit1(0x2)=여분 u32 1개, bit10/11/12/13 은 MDMP 레코드 구성을 게이팅",
+    "인덱스": "u16 트라이앵글 리스트. 실측 maxIndex == vertexCount-1 이 986/986"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140261950 (RVA 0x261880)",
+     "note": "MDL 디코더 디컴파일"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.versionGates",
+   "value": {
+    "AABB": "version >= 17 (디컴파일 `if (iVar11 < 0x11)`)",
+    "perMeshFormatFlag": "version >= 15 (디컴파일 `if (0xe < iVar11) goto 읽기`) — v<=14 는 헤더 formatFlag 를 그대로 쓴다",
+    "gateWord": "version >= 4 (디컴파일 `if (iVar11 < 4) gate = 0`)",
+    "메시트레일러": "version >= 21 (디컴파일 `if (0x14 < iVar11)`)",
+    "모프레코드": "version >= 23 (디컴파일 `if (0x16 < iVar11)`)",
+    "관측버전": {
+     "MDLV0004": 8,
+     "MDLV0014": 15,
+     "MDLV0016": 8,
+     "MDLV0017": 3,
+     "MDLV0019": 18,
+     "MDLV0021": 17,
+     "MDLV0023": 382
+    },
+    "미관측": "0015/0018/0020/0022 — 게이트 경계값 15 는 바이너리에서만 확인(실물 없음)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140261950 (RVA 0x261880)",
+     "note": "MDL 디코더 디컴파일"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.formatFlagBits",
+   "value": {
+    "표": "stride = set bit 의 기여 합, 채널 오프셋은 테이블 인덱스 오름차순 누적",
+    "비트": {
+     "0x00000001": "POSITION float3 (12B)",
+     "0x00010000": "16B 위치 계열 (0x1 부재 시 이것이 위치)",
+     "0x02000000": "12B 위치 계열",
+     "0x00000002": "NORMAL float3 (12B) — 옵션 json `normals`",
+     "0x00000004": "TANGENT float4 (16B, w=handedness) — 옵션 json `tangentspace`",
+     "0x00800000": "BLENDINDICES uint4 (16B) — 옵션 json `skinning`",
+     "0x01000000": "BLENDWEIGHT float4 (16B) — 옵션 json `skinning`",
+     "0x00000008": "TEXCOORD0 float2 (8B)",
+     "0x00000010": "TEXCOORD0 float3 (12B)",
+     "0x00000020": "TEXCOORD float4 (16B) = UV0 in .xy + UV1 in .zw — 옵션 json `seconduvchannel`",
+     "0x00008000": "float4 채널 (16B) — 의미 미독"
+    },
+    "실측 flag->stride": {
+     "0x00000009": {
+      "stride": 20,
+      "메시수": 19
+     },
+     "0x0000000b": {
+      "stride": 32,
+      "메시수": 10
+     },
+     "0x0000000f": {
+      "stride": 48,
+      "메시수": 536
+     },
+     "0x00000027": {
+      "stride": 56,
+      "메시수": 6
+     },
+     "0x00800021": {
+      "stride": 44,
+      "메시수": 1
+     },
+     "0x01800009": {
+      "stride": 52,
+      "메시수": 6
+     },
+     "0x0180000f": {
+      "stride": 80,
+      "메시수": 404
+     },
+     "0x0181000e": {
+      "stride": 84,
+      "메시수": 4
+     }
+    },
+    "헤더flag != 메시flag 인 메시": 219,
+    "결론": "per-mesh flag 가 있으면 그쪽이 정본이다 — 헤더 flag 와 다른 메시가 실물에 있다",
+    "채널 오프셋 검증": {
+     "방법": "stride 가 맞아도 채널 자리는 안 맞을 수 있다(위치는 늘 오프셋 0 이라 위치 대조로는 못 잡는다). 표가 산출한 오프셋에서 값을 꺼내 그 채널이어야만 성립하는 성질을 본다 — 메시당 최대 256정점 균등 샘플",
+     "normal 단위길이": "221112/221112",
+     "tangent xyz 단위길이": "218684/218684",
+     "tangent w = ±1": "218684/218684",
+     "weights 4성분 합 = 1.0": "91565/91566",
+     "boneIndices < 4096": "91574/91574",
+     "의의": "웨이트 합 1.0 이 스키닝 레이아웃(boneIndices/weights 오프셋)을 독립으로 확증한다 — 로제타석 16쌍은 전부 정적 메시라 이 경로를 하나도 안 밟는다. boneIndices 는 weights 와 인접이라 함께 결정된다"
+    },
+    "0x00010000 채널 4번째 성분": {
+     "표본": 1126,
+     "값 1.0": 3,
+     "값 0.0": 1092,
+     "결론": "동차좌표 w 가 아니다 — 1.0 은 거의 없고 대부분 0.0 이다. 앞 3성분만 위치로 읽고 4번째는 무시하는 현행 처리가 맞다(4번째의 의미는 미상)"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    },
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/*/models/*.{obj,mdl} 16쌍",
+     "note": "scripts/spec/verify_rosetta.py — 16/16 대조 통과"
+    },
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/arsenal/models/pistols/pistols.{mdl,json}",
+     "note": "json 이 {\"normals\":true,\"seconduvchannel\":true,\"tangentspace\":true} 이고 flag=0x27(=0x1|0x2|0x4|0x20, stride 56). uv float4 의 .xy 는 u∈[0.002,1.999] 타일링, .zw 는 [0.002,0.998] 로 서로 다른 UV 집합 — 2채널 패킹 확증"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.compilerOptionMapping",
+   "value": {
+    "옵션json": "모델 .mdl 과 같은 이름의 .json 이 resourcecompiler 굽기 옵션이다",
+    "키": "normals / tangentspace / seconduvchannel / skinning / normalizeuvs / skins / materialbasedirectory / materialdirectory",
+    "대조": {
+     "일치": 14,
+     "불일치": 0,
+     "불일치목록": []
+    },
+    "주의": "빈 {} json 은 대조에서 제외한다. **이걸 '기본값 = 0x9' 로 읽으면 안 된다** — 실물에 {}+0x9(flow/glow)와 {}+0x0f(assets/models/editor/camera, elementpreviews/collisionmodel/sphere)가 둘 다 있다. 빈 json 은 '이 파일이 굽기 옵션을 안 담고 있다' 는 뜻이지 옵션이 기본값이라는 뜻이 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/resourcecompiler64.exe FUN_140020260 (RVA 0x20260)",
+     "note": ".mdl 굽기 경로 — MDLV0023 문자열과 skins/normals/tangentspace 옵션 키를 같이 참조"
+    },
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/*/models/*/*.json",
+     "note": "설치본 모델 옵션 json ↔ .mdl formatFlag/skinCount 대조"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.meshTrailer",
+   "value": {
+    "게이트": "version >= 21",
+    "레이아웃": "u8 gateA [≠0: u32 word | u32 size | size바이트] | u8 gateB [≠0: u32 size | size바이트(16B 레코드 N개)] | [v>=23: u32 morphCount | morphCount×(u64 id | cstring name | u32 flags | u32 n1 | n1×u32 | u32 n2 | n2×u32)]",
+    "전부 0 일 때 크기": "v>=23 은 6바이트, v21/22 는 2바이트"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140261950 (RVA 0x261880)",
+     "note": "MDL 디코더 디컴파일"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.sectionLoop",
+   "value": {
+    "구조": "메시 섹션 뒤는 `cstring 을 읽어 매직으로 strncmp 디스패치` 하는 do-루프다(디컴파일에서 루프와 5개 분기를 직접 확인)",
+    "종단자": "실측으로 확정된 것은 '메시/섹션 끝 뒤에 단일 0x00 이 온다'(189파일) 뿐이다. 그 0x00 이 '빈 cstring 이라 루프가 끝난다' 는 해석은 루프 구조와 모순이 없을 뿐 종료 조건을 디컴파일에서 짚어 확인한 것은 아니다(추정)",
+    "디스패치": [
+     "MDLS0002/0003/0004",
+     "MDLA0003..0006",
+     "MDAT0001",
+     "MDMP0001",
+     "MDLE0002"
+    ],
+    "실측 착지": {
+     "말미NUL": 189,
+     "EOF": 8,
+     "섹션매직": 254
+    },
+    "실측 섹션 도수": {
+     "MDAT0001": 50,
+     "MDLA0003": 6,
+     "MDLA0004": 2,
+     "MDLA0005": 18,
+     "MDLA0006": 210,
+     "MDLE0002": 87,
+     "MDLS0002": 26,
+     "MDLS0003": 17,
+     "MDLS0004": 211,
+     "MDMP0001": 5
+    },
+    "MDLV0004 예외": "v0004 파일 8개는 종단 NUL 없이 정확히 EOF 에서 끝난다 (리더가 EOF 를 빈 문자열로 보고 루프를 끝내므로 동작은 동일)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140261950 (RVA 0x261880)",
+     "note": "MDL 디코더 디컴파일"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.mdmpSection",
+   "value": {
+    "레이아웃": "\"MDMP0001\" | u8 0 | u32 nextOff | 메시마다: u16 recordCount | [≠0: f32 weight | u32 morphVertexCount | recordCount×레코드]",
+    "레코드": "u64 id | cstring name | u32 size + 블롭(size == morphVertexCount*6) | [gate&0x400: 같은 크기 블롭] | [gate&0x800: 같은 크기 블롭] | [gate&0x1000: u32 size + 블롭(size == morphVertexCount*2)] | [gate&0x2000: u32 bone | u32 | f32 | f32]",
+    "gate": "그 메시의 gateWord(머티리얼 cstring 직후 u32). 디컴파일이 참조하는 것은 메시 구조체 +0x18 이라 그것이 gateWord 라는 동정 자체는 간접인데, 실물이 이를 뒷받침한다 — bit10..13 중 하나라도 선 메시는 전 코퍼스에 8개뿐이고 그 파일이 정확히 MDMP0001 보유 파일과 일치한다",
+    "bit10..13 보유 메시": [
+     {
+      "file": "3517818807:小猫_puppet.mdl",
+      "mesh": 0,
+      "gate": "0x1000",
+      "hasMDMP": true
+     },
+     {
+      "file": "3577990983:sl_puppet.mdl",
+      "mesh": 0,
+      "gate": "0x100c",
+      "hasMDMP": true
+     },
+     {
+      "file": "3641860575:cat11_puppet.mdl",
+      "mesh": 0,
+      "gate": "0x1004",
+      "hasMDMP": true
+     },
+     {
+      "file": "3641860575:RW0_puppet.mdl",
+      "mesh": 0,
+      "gate": "0x1004",
+      "hasMDMP": true
+     },
+     {
+      "file": "3706286085:BoostModel.mdl",
+      "mesh": 0,
+      "gate": "0x400",
+      "hasMDMP": true
+     },
+     {
+      "file": "3706286085:BoostModel.mdl",
+      "mesh": 1,
+      "gate": "0x400",
+      "hasMDMP": true
+     },
+     {
+      "file": "3706286085:BoostModel.mdl",
+      "mesh": 2,
+      "gate": "0x400",
+      "hasMDMP": true
+     },
+     {
+      "file": "3706286085:BoostModel.mdl",
+      "mesh": 3,
+      "gate": "0x400",
+      "hasMDMP": true
+     }
+    ],
+    "블롭 해석": "6B/정점 = half3 위치 델타(추정), 2B/정점 = u16 정점 인덱스(희소 모프). 엔진은 크기가 어긋나면 즉시 trap 하므로 단위는 확정, **의미는 추정**",
+    "실측": {
+     "보유파일": 5,
+     "파스+착지성공": 5,
+     "실패": [],
+     "예시": [
+      {
+       "file": "3517818807:小猫_puppet.mdl",
+       "name": "Shape 202",
+       "id": 202,
+       "morphVertexCount": 18,
+       "blobs": [
+        {
+         "gateBit": "필수",
+         "bytes": 108
+        },
+        {
+         "gateBit": "0x1000",
+         "bytes": 36
+        }
+       ]
+      },
+      {
+       "file": "3577990983:sl_puppet.mdl",
+       "name": "Shape 437",
+       "id": 437,
+       "morphVertexCount": 19,
+       "blobs": [
+        {
+         "gateBit": "필수",
+         "bytes": 114
+        },
+        {
+         "gateBit": "0x1000",
+         "bytes": 38
+        }
+       ]
+      },
+      {
+       "file": "3641860575:cat11_puppet.mdl",
+       "name": "Shape 1055",
+       "id": 1055,
+       "morphVertexCount": 11,
+       "blobs": [
+        {
+         "gateBit": "필수",
+         "bytes": 66
+        },
+        {
+         "gateBit": "0x1000",
+         "bytes": 22
+        }
+       ]
+      },
+      {
+       "file": "3641860575:RW0_puppet.mdl",
+       "name": "Shape 601",
+       "id": 601,
+       "morphVertexCount": 6,
+       "blobs": [
+        {
+         "gateBit": "필수",
+         "bytes": 36
+        },
+        {
+         "gateBit": "0x1000",
+         "bytes": 12
+        }
+       ]
+      },
+      {
+       "file": "3706286085:BoostModel.mdl",
+       "name": "length-",
+       "id": 0,
+       "morphVertexCount": 164,
+       "blobs": [
+        {
+         "gateBit": "필수",
+         "bytes": 984
+        },
+        {
+         "gateBit": "0x400",
+         "bytes": 984
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140261950 (RVA 0x261880)",
+     "note": "MDL 디코더 디컴파일"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.indexWidth",
+   "value": {
+    "규칙": "인덱스 원소 폭은 정점 수가 정한다 — vertexCount <= 65535 면 u16, 넘으면 u32",
+    "실측": "u16 메시 969개(최대 vertexCount 64157) / u32 메시 17개(최소 vertexCount 69396) — 이 규칙으로 읽으면 maxIndex == vertexCount-1 이 986/986",
+    "오판시 증상": "u32 블롭을 u16 로 읽으면 상위 워드 0 이 섞여 maxIndex 가 정확히 0xFFFF 로 찍히고(실측 17메시 전부) 삼각형이 뒤죽박죽이 된다. 정점 수보다 작으므로 'maxIndex < vertexCount' 류의 검사로는 절대 안 걸린다",
+    "경계": "직접 목격한 경계는 (64157, 69396] 구간이다. 65535 라는 값 자체는 u16 주소지정 한계에서 온 추론이지 그 경계의 파일을 본 것은 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.aabb",
+   "value": {
+    "위치": "v>=17 메시 헤더의 6f (min xyz, max xyz)",
+    "정적 메시": "529/532 이 그 메시 정점 위치의 최소/최대와 1e-4 이내 일치",
+    "정적 예외": [
+     {
+      "file": "3354366708:初音未来 头_puppet.mdl",
+      "mesh": 0,
+      "편차": 79.0,
+      "flag": "0xf"
+     },
+     {
+      "file": "3360328570:IMG_0690_puppet.mdl",
+      "mesh": 0,
+      "편차": 1925.0,
+      "flag": "0xf"
+     },
+     {
+      "file": "3465215190:图层 53_puppet.mdl",
+      "mesh": 0,
+      "편차": 170.0,
+      "flag": "0xf"
+     }
+    ],
+    "예외 해석": "예외 3개는 전부 *_puppet.mdl 이다 — 정점 플래그에 스키닝 비트가 없어 '정적' 으로 분류됐을 뿐 스켈레톤을 달고 움직이는 모델이다. 즉 경계는 '스키닝 비트' 가 아니라 '애니메이션 여부' 로 갈리는 것으로 보인다(추정)",
+    "스키닝 메시": "193/409 만 일치. 나머지는 크게 벗어난다(최대 편차 3553.6 단위) — 바인드 포즈 정점이 아니라 애니메이션을 포함한 넉넉한 경계로 보인다(미확정)",
+    "결론": "움직이지 않는 메시에 한해 '정점 바운딩 박스' 다. 애니메이션 모델의 산출식은 미상 — 컬링에 쓸 때 바인드 포즈 박스로 대체하면 안 된다(포즈가 박스를 벗어나 잘려 사라진다)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    },
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/*/models/*.{obj,mdl} 16쌍",
+     "note": "scripts/spec/verify_rosetta.py — 16/16 대조 통과"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.uvOriginFlip",
+   "value": {
+    "결론": "구운 UV 의 V 는 OBJ 의 1-v 다(텍스처 원점 규약 차)",
+    "실측": "로제타석 16쌍 전부 뒤집힌 집합에 포함. 그중 11쌍은 원본 집합과 불일치라 방향이 유일하게 결정되고, 5쌍은 UV 가 0/1 코너뿐이라 두 집합이 같아 판정 불가"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/*/models/*.{obj,mdl} 16쌍",
+     "note": "scripts/spec/verify_rosetta.py — 16/16 대조 통과"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.skinCountDistribution",
+   "value": {
+    "skinCount": {
+     "1": 450,
+     "2": 1
+    },
+    "meshCount 상위": {
+     "1": 360,
+     "2": 39,
+     "4": 10,
+     "3": 7,
+     "5": 7,
+     "6": 6,
+     "8": 5,
+     "7": 3,
+     "9": 2,
+     "64": 1
+    },
+    "gateWord 값": {
+     "0x0": 950,
+     "0x1": 17,
+     "0x2": 1,
+     "0x4": 10,
+     "0x400": 4,
+     "0x1000": 1,
+     "0x1004": 2,
+     "0x100c": 1
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 내부 .mdl + 설치본 .mdl 전수 451개",
+     "note": "scripts/spec/measure_mdl_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.mdl.vertexDedupRule",
+   "value": {
+    "관측": "mdl 정점 수는 obj `v` 수 이상이다(면 코너 전개로 복제). 16쌍 중 12쌍은 obj 면 코너의 고유 (v,vt,vn) 조합 수와 정확히 같지만 4쌍은 어긋난다 (flow 153→163, dome 145→236, jet 48→60, shadow 184→90)",
+    "해석": "리소스컴파일러가 법선/탄젠트를 재생성한 뒤 그 값으로 분할·병합하는 것으로 보인다 (dome/jet 의 obj 는 vn 이 아예 없고, shadow 는 mdl 이 법선을 담지 않는다). OBJ 만으로 재현할 수 없어 검증기는 '줄지 않는다' 만 강제한다",
+    "미해결": "정확한 분할 기준(스무딩 각도 등)"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "projects/defaultprojects/*/models/*.{obj,mdl} 16쌍",
+     "note": "scripts/spec/verify_rosetta.py — 16/16 대조 통과"
+    }
+   ]
+  }
+ ]
+}

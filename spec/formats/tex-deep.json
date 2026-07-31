@@ -1,0 +1,1393 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_tex_deep.py",
+ "measuredAt": {
+  "corpusTexFiles": 4991,
+  "texJsonFiles": 388
+ },
+ "entries": [
+  {
+   "id": "format.tex.texi.fieldLayout",
+   "value": {
+    "order": [
+     "i32 format",
+     "i32 flags",
+     "i32 texWidth",
+     "i32 texHeight",
+     "i32 imageWidth",
+     "i32 imageHeight",
+     "i32 texDepth  — flags & 0x40 일 때만 존재",
+     "u32 previewColor(RGBA 바이트 순) — TEXI 버전 > 0 일 때만"
+    ],
+    "headerBytesWithoutDepth": 46,
+    "headerBytesWithDepth": 50,
+    "note": "TEXB 는 이 헤더 직후에 붙는다. Waple 은 6필드만 읽고 TEXB 를 스캔한다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14015c760 (TEXI 리더) 디컴파일",
+     "note": "슬롯 [0]fmt [1]flags(|=) [2]texW [3]texH [5]imgW [6]imgH, flags&0x40 이면 [4]depth, ver>0 이면 [7]"
+    },
+    {
+     "kind": "corpus",
+     "ref": "코퍼스 4991/4991 파스 성공, 오류 0종",
+     "note": "종전 46B 고정 가정은 flags&0x40 인 28개(LUT)에서 전건 실패했다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.flags.bits",
+   "value": {
+    "0x1": "nointerpolation — 차분 측정 확정",
+    "0x2": "clampuvs — 차분 측정 확정",
+    "0x4": "스프라이트시트(gif) — spritesheetsequences 를 주면 켜지고 TEXS 섹션이 붙는다",
+    "0x8": "파일 입력이 **아니다** — 코퍼스 4991개 중 bit3 이 켜진 파일 0개. 엔진 로더가 프레임 수 < 2 일 때 스스로 세우고, -transcode 출력에도 그대로 찍혀 나온다(입력 flags 2 → 출력 10 관측). 리더는 이 비트를 무시해야 한다",
+    "0x20": "비디오 텍스처(mp4 페이로드). 코퍼스 38개, 전부 TEXB0003",
+    "0x40": "3D 슬라이스(volume). 헤더에 i32 texDepth 가 추가된다. slice3d:true 로 재현",
+    "0x80000": "alphachannelpriority — 차분 측정 확정(코퍼스 82개)",
+    "0x100000/0x200000/0x400000/0x800000": "미상 — 코퍼스 30개, 전부 *_mask_*.tex",
+    "observedBitCounts": {
+     "1": 4382,
+     "2": 216,
+     "19": 82,
+     "0": 53,
+     "5": 38,
+     "6": 28,
+     "23": 15,
+     "21": 7,
+     "20": 6,
+     "22": 2
+    },
+    "observedValues": {
+     "2": 4033,
+     "0": 547,
+     "6": 142,
+     "524290": 66,
+     "4": 43,
+     "34": 38,
+     "3": 31,
+     "66": 28,
+     "7": 21,
+     "8388610": 14,
+     "524292": 10,
+     "524288": 6,
+     "1048578": 3,
+     "3145730": 2,
+     "4194306": 1,
+     "10485762": 1,
+     "2097152": 1,
+     "3145728": 1,
+     "2097154": 1,
+     "6291458": 1,
+     "1": 1
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "resourcecompiler64.exe -tex 차분 컴파일(.tex-json 키 1개씩 토글)",
+     "note": "{\"nointerpolation\": \"0x1\", \"clampuvs\": \"0x2\", \"alphachannelpriority\": \"0x80000\", \"spritesheetsequences\": \"0x4\", \"slice3d\": \"0x40\"}"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14015e580 — 프레임 수 < 2 이면 flags |= 8"
+    },
+    {
+     "kind": "corpus",
+     "ref": "4991개 전수 비트 도수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.texs.fieldLayout",
+   "value": {
+    "position": "TEXB 섹션 **바로 뒤**(엔진 섹션 루프는 앞에서부터 마법값을 읽는다). Waple 은 파일 꼬리에서 역방향 스캔한다 — 결과는 같지만 위치는 계산 가능하다",
+    "order": [
+     "'TEXS000N' + NUL",
+     "i32 frameCount",
+     "i32 gifWidth, i32 gifHeight — **버전 3 이상만**. v1/v2 는 헤더 imageWidth/imageHeight 를 그대로 쓴다(엔진 기본값)",
+     "frameCount × 32B 레코드"
+    ],
+    "record": [
+     "i32 imageId (아틀라스 페이지 = mips 인덱스)",
+     "f32 frametime",
+     "지오메트리 6개 = x, y, width, widthY, heightX, height — **v1 은 i32, v2 이상은 f32**(레코드 크기는 모두 32B)"
+    ],
+    "engineNormalizesUV": "엔진은 지오메트리를 저장할 때 그 imageId 의 **mip0 alloc(=패딩) 크기**로 나눠 0..1 UV 로 만든다(x/w, y/h, width/w, widthY/h, heightX/w, height/h). imgW/imgH 가 아니라 decode dims 가 분모다",
+    "wapleNote": "Waple TexFrame 은 픽셀 좌표를 그대로 들고 주석에 '좌표는 imgW×imgH 이미지 픽셀 공간' 이라고 적어 뒀다. 엔진 기준 분모는 decode dims 라서 주석이 어긋난다. 다만 실제 소비처(keepFullAtlas 경로)가 decode dims 텍스처를 쓰므로 결과는 일치한다",
+    "versionDistribution": {
+     "None": 4775,
+     "TEXS0003": 207,
+     "TEXS0002": 9
+    },
+    "parseEndsExactlyAtEOF": {
+     "True": 216
+    },
+    "noTexsFilesEndAtTexbEnd": {
+     "True": 4767,
+     "False": 8
+    },
+    "tailIsVariantSection": "TEXS 도 없고 꼬리가 남는 파일은 전부 조건 변형 텍스처다 — variantCount>0 여부 {'True': 8}"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14015e1d0(TEXS 리더) 디컴파일",
+     "note": "version==1 분기에서 (float)(int)로 캐스팅 — v1 지오메트리가 i32 라는 뜻"
+    },
+    {
+     "kind": "corpus",
+     "ref": "4991개 전수 — TEXS 를 TEXB 끝에서 이어 읽어 파스 끝이 EOF 와 일치하는지 검사"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.texs.halfScalePath",
+   "value": {
+    "observation": "엔진은 TEXB 리더가 특정 코드(1)를 돌려주면 모든 TEXS 프레임 지오메트리 6개를 0.5 배 한다",
+    "constants": "곱하는 값은 .rdata 0x140492dd0 / 0x140492dd4 = 둘 다 정확히 0.5f",
+    "unknown": "TEXB 리더가 그 코드를 언제 돌려주는지는 확인하지 못했다(절반 해상도 로드 경로로 추정). 코퍼스에서 재현 조건을 못 잡았다",
+    "wapleImpact": "Waple 에는 대응 경로가 없다. 조건이 밝혀지기 전까지는 무시해도 무방하나, 스프라이트 UV 가 절반으로 어긋나는 케이스가 보고되면 여기부터 볼 것"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14015e580 — iVar9==1 일 때 프레임 레코드 +8..+0x1f 을 0.5 배"
+    },
+    {
+     "kind": "binary",
+     "ref": ".rdata 0x140492dd0/0x140492dd4 원시 바이트 00 00 00 3f = 0.5f"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.flags.maskBits",
+   "value": {
+    "bits": [
+     20,
+     21,
+     22,
+     23
+    ],
+    "counts": {
+     "23": 15,
+     "21": 7,
+     "20": 6,
+     "22": 2
+    },
+    "observedCombinations": [
+     "8388610",
+     "1048578",
+     "3145730",
+     "4194306",
+     "10485762",
+     "2097152",
+     "3145728",
+     "2097154",
+     "6291458"
+    ],
+    "note": "연속한 4비트 니블이고 관측 파일이 전부 이펙트 마스크(*_mask_*.tex)다. 비트필드인지 작은 enum 인지 코퍼스만으로는 구분되지 않는다"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "코퍼스 관측 — 파일명 패턴 외 근거 없음"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.format.enum",
+   "value": {
+    "0": "rgba8888",
+    "1": "rgb888",
+    "2": "rgb565",
+    "3": "ETC1",
+    "4": "dxt5(BC3)",
+    "5": "ETC2",
+    "6": "dxt3(BC2)",
+    "7": "dxt1(BC1)",
+    "8": "rg88",
+    "9": "r8",
+    "10": "rg1616f",
+    "11": "r16f",
+    "12": "bc7",
+    "13": "rgba1010102",
+    "14": "rgba16161616f",
+    "15": "rgb161616f",
+    "16": "(미상 — 어느 표에도 없음)",
+    "17": "rgba16161616",
+    "18": "rgb161616",
+    "19": "rgba16161616S",
+    "20": "rgb161616S",
+    "21": "rgba8888s",
+    "notInThisMap": [
+     "rgb_backbuffer",
+     "rgba_backbuffer"
+    ],
+    "corpusDistribution": {
+     "4": 1796,
+     "0": 1435,
+     "9": 1333,
+     "8": 316,
+     "7": 73,
+     "6": 38
+    },
+    "corpusBytesPerPixel": {
+     "(4, 1.0)": 1796,
+     "(9, 1.0)": 1333,
+     "(0, 4.0)": 559,
+     "(8, 2.0)": 316,
+     "(7, 0.5)": 73,
+     "(6, 1.0)": 38
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1401e54bf — 이름→enum std::map 정적 초기화 19항목 직독",
+     "note": "rgba8888=0/rgb888=1 은 rsp 상대 저장이라 원시 바이트(48 c7 44 24 30 08 / c7 44 24 68 01)로 확인"
+    },
+    {
+     "kind": "binary",
+     "ref": "resourcecompiler64.exe FUN_140063c70 — -f ETC2→5 / ETC1→3 / RGBA8→0"
+    },
+    {
+     "kind": "binary",
+     "ref": "-tex 차분 컴파일: dxt5→4 dxt3→6 dxt1→7 rg88→8 r8→9 bc7→12 rgba8888→0"
+    },
+    {
+     "kind": "corpus",
+     "ref": "4991개 관측 포맷은 0/4/6/7/8/9 뿐"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.transcode.isDecoder",
+   "value": {
+    "claim": "-transcode 는 BC(DXT1/3/5) 입력을 RGBA8888(format 0)로 **디코드**한다",
+    "default": "출력 format=0, 크기는 imageWidth×imageHeight(패딩 크롭 완료), LZ4 재압축",
+    "supersedes": "spec/formats/tex.json format.tex.transcodeIsNotDecoder — 그 5표본은 전부 format 0/8/9(= 아래 통과 조건에 걸리는 포맷)였다. 관측 자체는 정확했고, 표본이 BC 포맷을 안 담았을 뿐이다",
+    "witness": {
+     "in": {
+      "format": 4,
+      "flags": 0,
+      "texW": 64,
+      "texH": 64,
+      "imgW": 48,
+      "imgH": 48,
+      "depth": null,
+      "previewColor": "0xffe5d0c8",
+      "mipCount": 4,
+      "mipDims": [
+       [
+        64,
+        64
+       ],
+       [
+        32,
+        32
+       ],
+       [
+        16,
+        16
+       ],
+       [
+        8,
+        8
+       ]
+      ]
+     },
+     "outDefault": {
+      "format": 0,
+      "flags": 0,
+      "texW": 48,
+      "texH": 48,
+      "imgW": 48,
+      "imgH": 48,
+      "depth": null,
+      "previewColor": "0xffe5d0c8",
+      "mipCount": 4,
+      "mipDims": [
+       [
+        48,
+        48
+       ],
+       [
+        24,
+        24
+       ],
+       [
+        12,
+        12
+       ],
+       [
+        6,
+        6
+       ]
+      ]
+     }
+    },
+    "passthrough": {
+     "fmt8": {
+      "srcFormat": 8,
+      "srcFlags": 2,
+      "depth": null,
+      "byteIdentical": true
+     },
+     "fmt9": {
+      "srcFormat": 9,
+      "srcFlags": 2,
+      "depth": null,
+      "byteIdentical": true
+     },
+     "depth>1": {
+      "srcFormat": 0,
+      "srcFlags": 66,
+      "depth": 32,
+      "byteIdentical": true
+     },
+     "flags&0x20": {
+      "srcFormat": 0,
+      "srcFlags": 34,
+      "depth": null,
+      "byteIdentical": true
+     }
+    },
+    "passthroughRule": [
+     "무조건 통과: format == 8(rg88) · format == 9(r8) · texDepth > 1 · flags & 0x20",
+     "조건부 통과: format == 1(rgb888) 은 (-c force 이면서 -f 가 ETC1/ETC2 로 풀린) 경우가 **아닐 때만** 통과한다 — 원식 `fmt==1 && (!force || !etcSelected)`",
+     "그 외(0/4/6/7)는 변환한다. 코퍼스에 format 1 파일은 0개라 조건부 분기는 디컴파일 근거뿐이고 실물로는 못 밟았다"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "resourcecompiler64.exe -transcode 실행 — DXT5 입력 format 4→0, mip0 dec 65536→262144"
+    },
+    {
+     "kind": "binary",
+     "ref": "FUN_140063c70 통과 조건 디컴파일 — iStack_728∈{1,8,9} / 1<depth / flags&0x20"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.transcode.args",
+   "value": {
+    "modes": {
+     "-tex": "텍스처 인코더(1)",
+     "-mdl": "모델 인코더(2)",
+     "-pkg": "패키지 인코더(3)",
+     "-transcode": "텍스처 트랜스코더(4)",
+     "-generateDepthMap": "깊이맵 생성(별도 경로)"
+    },
+    "-transcode": {
+     "-i": "입력 .tex",
+     "-o": "출력 .tex",
+     "-f": "ETC1|ETC2|RGBA8 **셋뿐**(대소문자 구분). 그 외/미지정은 RGBA8 취급",
+     "-c": "force 하나뿐. -f 없이 -c force 만 주면 기본이 ETC2 가 된다",
+     "-shrink N": "mip 체인을 N 배 축소한 레벨에서 시작(헤더 texW/H·imgW/H 는 갱신 안 됨)",
+     "-maxmipmaps N": "mip 체인을 N 레벨로 자른다"
+    },
+    "-tex": {
+     "-i": "입력 이미지",
+     "-o": "출력 .tex",
+     "-nolz4": "LZ4 생략",
+     "note": "-f/-c/-shrink/-maxmipmaps 는 -tex 가 읽지 않는다(트랜스코더 전용)"
+    },
+    "-generateDepthMap": [
+     "-src",
+     "-dst",
+     "-blurSize",
+     "-outlineCompensationPercent",
+     "-autoContrast",
+     "-invertDepth",
+     "-quality"
+    ],
+    "-pngExport": {
+     "args": [
+      "-src",
+      "-out"
+     ],
+     "status": "인자 파싱은 확인했지만(main 디컴파일) .tex/.pkg/디렉터리 어느 입력으로도 산출물이 나오지 않았다",
+     "producedFiles": []
+    },
+    "other": [
+     "-dlc(-generateDepthMap 분기)"
+    ],
+    "⚠️ 절대경로 함정": "-tex 에 **절대경로**를 -i 로 주면 무한 루프에 빠진다(실측 22분 스핀, CPU 1353s, 출력 0). 같은 파일을 cwd 상대경로로 주면 즉시 끝난다. 자동화는 반드시 cwd + 상대경로 + timeout 으로 호출할 것",
+    "measured": {
+     "default": {
+      "format": 0,
+      "mipDims": [
+       [
+        48,
+        48
+       ],
+       [
+        24,
+        24
+       ],
+       [
+        12,
+        12
+       ]
+      ]
+     },
+     "f_RGBA8": {
+      "format": 0,
+      "mipDims": [
+       [
+        48,
+        48
+       ],
+       [
+        24,
+        24
+       ],
+       [
+        12,
+        12
+       ]
+      ]
+     },
+     "f_ETC1": {
+      "format": 3,
+      "mipDims": [
+       [
+        64,
+        64
+       ],
+       [
+        32,
+        32
+       ],
+       [
+        16,
+        16
+       ]
+      ]
+     },
+     "f_ETC2": {
+      "format": 5,
+      "mipDims": [
+       [
+        64,
+        64
+       ],
+       [
+        32,
+        32
+       ],
+       [
+        16,
+        16
+       ]
+      ]
+     },
+     "f_dxt5": {
+      "format": 0,
+      "mipDims": [
+       [
+        48,
+        48
+       ],
+       [
+        24,
+        24
+       ],
+       [
+        12,
+        12
+       ]
+      ]
+     },
+     "f_rgba8888": {
+      "format": 0,
+      "mipDims": [
+       [
+        48,
+        48
+       ],
+       [
+        24,
+        24
+       ],
+       [
+        12,
+        12
+       ]
+      ]
+     },
+     "c_force": {
+      "format": 5,
+      "mipDims": [
+       [
+        64,
+        64
+       ],
+       [
+        32,
+        32
+       ],
+       [
+        16,
+        16
+       ]
+      ]
+     },
+     "shrink2": {
+      "format": 0,
+      "mipDims": [
+       [
+        48,
+        48
+       ],
+       [
+        24,
+        24
+       ],
+       [
+        12,
+        12
+       ]
+      ]
+     },
+     "maxmipmaps2": {
+      "format": 0,
+      "mipDims": [
+       [
+        48,
+        48
+       ],
+       [
+        24,
+        24
+       ]
+      ]
+     }
+    },
+    "goldenOracle": "임의의 BC .tex → `-transcode -i x.tex -o y.tex` → y 의 mip0 을 LZ4 해제하면 WE 자신이 디코드한 straight-alpha RGBA8888(image dims)이다. 4,680개 텍스처 전부에 쓸 수 있는 골든 오라클"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "resourcecompiler64.exe FUN_140064fa0(main) 디컴파일 — 모드 인덱스 1..4 분기와 인자 소비처"
+    },
+    {
+     "kind": "binary",
+     "ref": "FUN_140063c70 — param_3 vs 'force', param_4 vs 'ETC2'/'ETC1'/'RGBA8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "실행 검증: -f ETC1→format 3, -f ETC2→format 5, -c force→format 5"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.bcDecodeRounding",
+   "value": {
+    "we": {
+     "565to8": "비트 복제 — (r<<3)|(r>>2), (g<<2)|(g>>4), (b<<3)|(b>>2)",
+     "colorLerp": "floor — (x*(3-t) + y*t) / 3",
+     "bc3AlphaLerp8": "반올림 — ((7-i)*a0 + i*a1 + 3) / 7",
+     "bc3AlphaLerp6": "반올림 — ((5-i)*a0 + i*a1 + 2) / 5"
+    },
+    "waple": {
+     "565to8": "c*255/31 (·255/63)",
+     "bc3AlphaLerp": "floor"
+    },
+    "result": "위 규약으로 12/12 표본이 WE 트랜스코더 출력과 **바이트 동일**",
+    "wapleRuleMaxChannelDelta": [
+     0,
+     1
+    ],
+    "colorLerpRounding": "포맷별 첫 표본을 반올림 lerp 로 다시 디코드했을 때의 불일치 바이트: fmt4→1261B, fmt7→0B, fmt6→71970B. 0B 인 표본은 그 이미지가 4색 보간 슬롯을 안 쓴 것뿐이고, 판별력이 있는 표본에서는 전부 floor 만 일치한다",
+    "caveat": "이 오라클은 resourcecompiler64 의 **CPU** 디코더다. Waple 의 nativeBC 경로는 BC 블록을 Metal 에 그대로 올려 **하드웨어**가 디코드한다. CPU 경로만 여기에 맞추면 Waple 내부에서 CPU/GPU 결과가 서로 어긋나므로, 적용 전에 GPU 파리티 판단이 먼저다",
+    "samples": [
+     {
+      "srcFormat": 4,
+      "dstFormat": 0,
+      "srcDims": [
+       64,
+       64,
+       48,
+       48
+      ],
+      "dstDims": [
+       48,
+       48,
+       48,
+       48
+      ],
+      "bytes": [
+       9216,
+       9216
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact",
+      "roundedColorLerpByteDiffs": 1261,
+      "wapleRuleMaxChannelDelta": 1
+     },
+     {
+      "srcFormat": 4,
+      "dstFormat": 0,
+      "srcDims": [
+       352,
+       216,
+       351,
+       216
+      ],
+      "dstDims": [
+       351,
+       216,
+       351,
+       216
+      ],
+      "bytes": [
+       303264,
+       303264
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     },
+     {
+      "srcFormat": 4,
+      "dstFormat": 0,
+      "srcDims": [
+       364,
+       232,
+       362,
+       232
+      ],
+      "dstDims": [
+       362,
+       232,
+       362,
+       232
+      ],
+      "bytes": [
+       335936,
+       335936
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     },
+     {
+      "srcFormat": 4,
+      "dstFormat": 0,
+      "srcDims": [
+       192,
+       128,
+       187,
+       128
+      ],
+      "dstDims": [
+       187,
+       128,
+       187,
+       128
+      ],
+      "bytes": [
+       95744,
+       95744
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     },
+     {
+      "srcFormat": 7,
+      "dstFormat": 0,
+      "srcDims": [
+       4,
+       4,
+       1,
+       1
+      ],
+      "dstDims": [
+       1,
+       1,
+       1,
+       1
+      ],
+      "bytes": [
+       4,
+       4
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact",
+      "roundedColorLerpByteDiffs": 0,
+      "wapleRuleMaxChannelDelta": 0
+     },
+     {
+      "srcFormat": 6,
+      "dstFormat": 0,
+      "srcDims": [
+       304,
+       304,
+       290,
+       290
+      ],
+      "dstDims": [
+       290,
+       290,
+       290,
+       290
+      ],
+      "bytes": [
+       336400,
+       336400
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact",
+      "roundedColorLerpByteDiffs": 71970,
+      "wapleRuleMaxChannelDelta": 1
+     },
+     {
+      "srcFormat": 7,
+      "dstFormat": 0,
+      "srcDims": [
+       224,
+       240,
+       214,
+       230
+      ],
+      "dstDims": [
+       214,
+       230,
+       214,
+       230
+      ],
+      "bytes": [
+       196880,
+       196880
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     },
+     {
+      "srcFormat": 7,
+      "dstFormat": 0,
+      "srcDims": [
+       224,
+       240,
+       214,
+       230
+      ],
+      "dstDims": [
+       214,
+       230,
+       214,
+       230
+      ],
+      "bytes": [
+       196880,
+       196880
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     },
+     {
+      "srcFormat": 6,
+      "dstFormat": 0,
+      "srcDims": [
+       576,
+       256,
+       532,
+       198
+      ],
+      "dstDims": [
+       532,
+       198,
+       532,
+       198
+      ],
+      "bytes": [
+       421344,
+       421344
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     },
+     {
+      "srcFormat": 7,
+      "dstFormat": 0,
+      "srcDims": [
+       224,
+       240,
+       214,
+       230
+      ],
+      "dstDims": [
+       214,
+       230,
+       214,
+       230
+      ],
+      "bytes": [
+       196880,
+       196880
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     },
+     {
+      "srcFormat": 6,
+      "dstFormat": 0,
+      "srcDims": [
+       672,
+       256,
+       651,
+       240
+      ],
+      "dstDims": [
+       651,
+       240,
+       651,
+       240
+      ],
+      "bytes": [
+       624960,
+       624960
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     },
+     {
+      "srcFormat": 6,
+      "dstFormat": 0,
+      "srcDims": [
+       512,
+       512,
+       501,
+       489
+      ],
+      "dstDims": [
+       501,
+       489,
+       501,
+       489
+      ],
+      "bytes": [
+       979956,
+       979956
+      ],
+      "maxChannelDelta": 0,
+      "status": "exact"
+     }
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "resourcecompiler64.exe -transcode 출력 vs 파이썬 미러 픽셀 대조"
+    },
+    {
+     "kind": "corpus",
+     "ref": "코퍼스 BC 텍스처 표본(format 4/6/7)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.texb.variantCount",
+   "value": {
+    "field": "TEXB0004 의 imageFormat 다음 i32 = **조건 변형 항목 수**(0 이면 없음)",
+    "entry": "i32 ×3 + NUL 종단 JSON — 그 수만큼 연속한다",
+    "corpusDistribution": {
+     "0": 2865,
+     "None": 2118,
+     "1": 7,
+     "3": 1
+    },
+    "wapleModel": "isVideoMp4 불리언으로 보고 건너뛴 뒤 패턴 휴리스틱으로 블록을 스캔한다",
+    "modelMismatchOnCorpus": 0,
+    "note": "카운트 기반 정답과 Waple 휴리스틱이 코퍼스 TEXB0004 전건에서 동일한 결과를 낸다(불일치 0건) — 모델은 틀렸지만 출력은 같다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14015c8d0 — 이 i32 를 루프 횟수로 쓴다(0 이면 루프 없음)"
+    },
+    {
+     "kind": "corpus",
+     "ref": "TEXB0004 2873개 두 방식 대조"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.container.versionDistribution",
+   "value": {
+    "texb": {
+     "TEXB0004": 2873,
+     "TEXB0003": 2047,
+     "TEXB0001": 42,
+     "TEXB0002": 29
+    },
+    "imageFormat": {
+     "-1": 4124,
+     "13": 766,
+     "None": 71,
+     "2": 30
+    },
+    "imageCount": {
+     "1": 4984,
+     "7": 3,
+     "3": 2,
+     "2": 1,
+     "5": 1
+    },
+    "mip0ChainLength": {
+     "1": 2443,
+     "5": 766,
+     "4": 750,
+     "3": 546,
+     "8": 118,
+     "2": 111,
+     "9": 102,
+     "7": 83,
+     "10": 41,
+     "6": 30,
+     "11": 1
+    },
+    "depthValues": {
+     "32": 28
+    },
+    "layout": {
+     "TEXB0001": "imageCount 없음(1 고정), isLZ4/dec 없음",
+     "TEXB0002": "isLZ4 + decompressedSize 추가",
+     "TEXB0003": "imageFormat(i32) 추가",
+     "TEXB0004": "variantCount(i32) 추가"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "4991개 전수"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14015c8d0 버전 분기(<1 / <3 / <4)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.texi.previewColor",
+   "value": {
+    "field": "TEXI0001 헤더 마지막 u32 — 바이트 순 R,G,B,A",
+    "measured": {
+     "red": "0xff0000ff",
+     "gray": "0xff000000",
+     "gradient(mean=126,126,126)": "0xff7d51a9"
+    },
+    "corpusMostCommon": "0xff000000(불투명 검정)이 최빈값",
+    "notAverage": "그라디언트(산술 평균 126,126,126) 입력이 평균값을 내지 않았고 무채색(128,128,128) 입력은 0 이 됐다 — 단순 평균이 아니다",
+    "consumer": "렌더 경로 소비처를 찾지 못했다. 에디터/UI 힌트로 보이며 Waple 영향은 미상"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "resourcecompiler64.exe -tex 단색 PNG 컴파일 — red→0xff0000ff, blue→0xffff0000"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14015c760 — TEXI ver>0 일 때만 읽는 필드"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.texJson.keys",
+   "value": {
+    "files": 388,
+    "observedInCorpus": {
+     "format": 379,
+     "clampuvs": 324,
+     "nonpoweroftwo": 291,
+     "nomip": 170,
+     "alphachannelpriority": 82,
+     "spritesheetsequences": 58,
+     "spritesheetsequences.[].duration": 58,
+     "spritesheetsequences.[].frames": 58,
+     "spritesheetsequences.[].height": 58,
+     "spritesheetsequences.[].width": 58,
+     "bleedtransparentcolors": 51,
+     "nointerpolation": 47,
+     "srgb": 10,
+     "spritesheet": 6,
+     "frameduration": 3,
+     "imagesequence": 3,
+     "halfmip": 2,
+     "forcerawcompression": 2
+    },
+    "observedValues": {
+     "format": {
+      "'rgba8888'": 224,
+      "'r8'": 60,
+      "'rg88'": 50,
+      "'rgba8888n'": 19,
+      "'dxt5n'": 9,
+      "'dxt5n+'": 6
+     },
+     "clampuvs": {
+      "True": 261,
+      "False": 63
+     },
+     "nonpoweroftwo": {
+      "True": 291
+     },
+     "nomip": {
+      "True": 167,
+      "False": 3
+     },
+     "alphachannelpriority": {
+      "True": 82
+     },
+     "spritesheetsequences": {},
+     "spritesheetsequences.[].duration": {
+      "1": 55,
+      "0.6": 3
+     },
+     "spritesheetsequences.[].frames": {
+      "64": 15,
+      "30": 12,
+      "4": 6,
+      "16": 5,
+      "8": 3,
+      "32": 3
+     },
+     "spritesheetsequences.[].height": {
+      "128": 26,
+      "102.4": 9,
+      "64": 8,
+      "24": 6,
+      "51.2": 3,
+      "256": 1
+     },
+     "spritesheetsequences.[].width": {
+      "128": 24,
+      "85.334": 12,
+      "64": 7,
+      "24": 6,
+      "256": 2,
+      "32": 2
+     },
+     "bleedtransparentcolors": {
+      "True": 49,
+      "False": 2
+     },
+     "nointerpolation": {
+      "True": 36,
+      "False": 11
+     },
+     "srgb": {
+      "True": 10
+     },
+     "spritesheet": {
+      "True": 6
+     },
+     "frameduration": {
+      "0.20000000298023224": 1,
+      "0.4": 1,
+      "0.1": 1
+     },
+     "imagesequence": {},
+     "halfmip": {
+      "True": 2
+     },
+     "forcerawcompression": {
+      "True": 2
+     }
+    },
+    "acceptedByCompiler": [
+     "format",
+     "nointerpolation",
+     "clampuvs",
+     "croptoaspectratio",
+     "nomip",
+     "halfmip",
+     "bilateralfilterkernel",
+     "bilateralfilterstrength",
+     "wildcard",
+     "frameduration",
+     "imagesequence",
+     "file",
+     "duration",
+     "spritesheetsequences",
+     "bleedtransparentcolors",
+     "forcerawcompression",
+     "ignoresizefornativecompression",
+     "cropandresize",
+     "cropresizewidth",
+     "cropresizeheight",
+     "alphachannelpriority",
+     "normalmapflipx",
+     "normalmapflipy",
+     "slice3d",
+     "variants",
+     "options",
+     "blend",
+     "variantcondition",
+     "alphablend",
+     "component",
+     "width",
+     "height",
+     "frames",
+     "force"
+    ],
+    "measuredHeaderEffect": {
+     "nointerpolation": "0x1",
+     "clampuvs": "0x2",
+     "alphachannelpriority": "0x80000",
+     "spritesheetsequences": "0x4",
+     "slice3d": "0x40"
+    },
+    "deadKeys": {
+     "nonpoweroftwo": "resourcecompiler64/wallpaper64 문자열 표에 없다. wallpaperui.exe(에디터) 템플릿에만 있다 — 컴파일 무영향",
+     "srgb": "세 바이너리 어디에도 독립 토큰이 없다",
+     "spritesheet": "독립 토큰 없음(spritesheetsequences / spritesheetrefreshsync 의 부분문자열일 뿐)"
+    },
+    "binaryTokenCounts": {
+     "resourcecompiler64.exe": {
+      "format": 1,
+      "nointerpolation": 1,
+      "clampuvs": 1,
+      "croptoaspectratio": 1,
+      "nomip": 1,
+      "halfmip": 1,
+      "bilateralfilterkernel": 1,
+      "bilateralfilterstrength": 1,
+      "wildcard": 1,
+      "frameduration": 1,
+      "imagesequence": 1,
+      "file": 1,
+      "duration": 1,
+      "spritesheetsequences": 1,
+      "bleedtransparentcolors": 1,
+      "forcerawcompression": 1,
+      "ignoresizefornativecompression": 1,
+      "cropandresize": 1,
+      "cropresizewidth": 1,
+      "cropresizeheight": 1,
+      "alphachannelpriority": 1,
+      "normalmapflipx": 1,
+      "normalmapflipy": 1,
+      "slice3d": 1,
+      "variants": 1,
+      "options": 1,
+      "blend": 1,
+      "variantcondition": 1,
+      "alphablend": 1,
+      "component": 1,
+      "width": 1,
+      "height": 1,
+      "frames": 1,
+      "force": 1,
+      "nonpoweroftwo": 0,
+      "srgb": 0,
+      "spritesheet": 0
+     },
+     "wallpaperui.exe": {
+      "format": 1,
+      "nointerpolation": 1,
+      "clampuvs": 1,
+      "croptoaspectratio": 0,
+      "nomip": 1,
+      "halfmip": 0,
+      "bilateralfilterkernel": 1,
+      "bilateralfilterstrength": 1,
+      "wildcard": 0,
+      "frameduration": 1,
+      "imagesequence": 1,
+      "file": 1,
+      "duration": 1,
+      "spritesheetsequences": 0,
+      "bleedtransparentcolors": 1,
+      "forcerawcompression": 0,
+      "ignoresizefornativecompression": 0,
+      "cropandresize": 1,
+      "cropresizewidth": 1,
+      "cropresizeheight": 1,
+      "alphachannelpriority": 0,
+      "normalmapflipx": 1,
+      "normalmapflipy": 1,
+      "slice3d": 0,
+      "variants": 1,
+      "options": 1,
+      "blend": 1,
+      "variantcondition": 1,
+      "alphablend": 0,
+      "component": 1,
+      "width": 1,
+      "height": 1,
+      "frames": 0,
+      "force": 1,
+      "nonpoweroftwo": 1,
+      "srgb": 0,
+      "spritesheet": 0
+     },
+     "wallpaper64.exe": {
+      "format": 1,
+      "nointerpolation": 1,
+      "clampuvs": 1,
+      "croptoaspectratio": 0,
+      "nomip": 0,
+      "halfmip": 0,
+      "bilateralfilterkernel": 0,
+      "bilateralfilterstrength": 0,
+      "wildcard": 0,
+      "frameduration": 0,
+      "imagesequence": 0,
+      "file": 1,
+      "duration": 1,
+      "spritesheetsequences": 0,
+      "bleedtransparentcolors": 0,
+      "forcerawcompression": 0,
+      "ignoresizefornativecompression": 0,
+      "cropandresize": 0,
+      "cropresizewidth": 0,
+      "cropresizeheight": 0,
+      "alphachannelpriority": 0,
+      "normalmapflipx": 0,
+      "normalmapflipy": 0,
+      "slice3d": 0,
+      "variants": 0,
+      "options": 1,
+      "blend": 1,
+      "variantcondition": 0,
+      "alphablend": 0,
+      "component": 0,
+      "width": 1,
+      "height": 1,
+      "frames": 0,
+      "force": 1,
+      "nonpoweroftwo": 0,
+      "srgb": 0,
+      "spritesheet": 0
+     }
+    },
+    "note": "format 값에 '+' 접미사(dxt5n+)가 코퍼스에 6건 있는데 컴파일러는 dxt5n 과 동일하게 처리한다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": ".tex-json 388개 전수 수확(설치 assets + 워크샵)"
+    },
+    {
+     "kind": "binary",
+     "ref": "세 바이너리 문자열 표 토큰 존재 검사"
+    },
+    {
+     "kind": "binary",
+     "ref": "-tex 차분 컴파일로 헤더 변화 측정"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.slice3d",
+   "value": {
+    "layout": "flags |= 0x40, texW/texH = 슬라이스 한 장 크기, imgW = texW × depth, imgH = texH, 그리고 헤더에 i32 depth 가 추가된다",
+    "mipRecordLayout": "mip 레코드에도 depth 가 하나 더 들어간다 — i32 w | i32 h | **i32 depth** | i32 isLZ4 | i32 dec | i32 comp | payload. Waple 이 'lut/* 는 mip 에 여분 int 가 있어 parseMip 실패' 라고 적어 둔 필드가 이것이다",
+    "mipParseBefore": "여분 필드를 모르면 코퍼스 28개(LUT)의 mip 테이블이 전건 파스 실패한다",
+    "measured": {
+     "format": 0,
+     "flags": 64,
+     "texW": 32,
+     "texH": 32,
+     "imgW": 1024,
+     "imgH": 32,
+     "depth": 32,
+     "previewColor": "0xff48489c",
+     "mipCount": 4,
+     "mipDims": [
+      [
+       32,
+       32
+      ],
+      [
+       16,
+       16
+      ],
+      [
+       8,
+       8
+      ],
+      [
+       4,
+       4
+      ]
+     ]
+    },
+    "corpus": "설치 assets/materials/lut/*.tex 28개 — 전부 32×32×32 LUT(imgW=1024, depth=32)",
+    "transcodeRefuses": "depth > 1 이면 -transcode 가 바이트 그대로 복사한다",
+    "wapleImpact": "Waple 은 이 텍스처를 1024×32 2D 로 읽는다(TEXB 스캔 덕에 파스는 성공). 3D LUT 로 샘플링해야 하는 소비처가 있으면 depth 를 알아야 한다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "-tex + .tex-json {\"slice3d\":true} 차분 컴파일 — flags 0x40, depth 32 삽입"
+    },
+    {
+     "kind": "asset",
+     "ref": "assets/materials/lut/aliens_2.tex — flags 0x42, depth 32, TEXB@50"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  }
+ ]
+}

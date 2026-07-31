@@ -1,0 +1,2423 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_workshop_shaders.py",
+ "selfTest": "python scripts/spec/measure_workshop_shaders.py --selftest",
+ "entries": [
+  {
+   "id": "workshop.shaders.inventory",
+   "value": {
+    "fragFiles": 1689,
+    "vertFiles": 1689,
+    "totalFiles": 3378,
+    "pkgsWithShaders": 153,
+    "uniqueByContent": 385,
+    "identicalToBundledStock": 9,
+    "uniqueAuthored": 384,
+    "decodeFailures": 0,
+    "allUnderShadersPrefix": true,
+    "note": "3378 파일 중 내용 유니크는 385 — 워크샵 아이템이 남의 이펙트를 그대로 재동봉한다. 번역기가 실제로 마주치는 서로 다른 소스는 이 수"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.pairing",
+   "value": {
+    "pairs": 1689,
+    "unpairedFrag": 0,
+    "unpairedVert": 0,
+    "note": "번역 단위는 (vert, frag) 쌍 — 한 스테이지만 거부돼도 translate 는 nil (GLSLTranslator.swift:248-249)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.pkgBundlesNoHeaders",
+   "value": {
+    "shaderEntryExtensions": {
+     ".frag": 1689,
+     ".vert": 1689
+    },
+    "headerEntriesInPkg": 0,
+    "claim": "pkg 는 .h/.hlsli/.glsl/.inc 를 한 건도 동봉하지 않는다 — #include 는 100% 외부 해석"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.includeDirectives",
+   "value": {
+    "occurrencesVisibleToWaple": {
+     "common.h": 1101,
+     "common_blending.h": 543,
+     "common_perspective.h": 224,
+     "common_blur.h": 145,
+     "common_fragment.h": 41,
+     "common_composite.h": 28,
+     "common_vertex.h": 11
+    },
+    "shaderFilesIncluding": {
+     "common.h": 1101,
+     "common_blending.h": 543,
+     "common_perspective.h": 224,
+     "common_blur.h": 145,
+     "common_fragment.h": 41,
+     "common_composite.h": 28,
+     "common_vertex.h": 11
+    },
+    "commentedOutIgnoredByBoth": {
+     "common.hlsli": 5
+    },
+    "spacedHashInclude": {},
+    "distinctHeaders": 7,
+    "note": "가시 = 트림 후 '#include' 로 시작하는 줄만(ShaderPreprocessor.swift:113). `//#include` 는 WE·Waple 양쪽 다 무시하므로 요구가 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.includeResolution",
+   "value": {
+    "resolverOrder": "pkg shaders/<h> → pkg <h> → 베이스에셋 → BuiltinShaderIncludes",
+    "builtinCoverage": [
+     "common_blending.h"
+    ],
+    "withBaseAssets": {
+     "unresolved": {},
+     "silentlyDroppedOccurrences": 0
+    },
+    "withoutBaseAssets": {
+     "unresolved": {
+      "common.h": 1101,
+      "common_perspective.h": 224,
+      "common_blur.h": 145,
+      "common_fragment.h": 41,
+      "common_composite.h": 28,
+      "common_vertex.h": 11
+     },
+     "silentlyDroppedOccurrences": {
+      "common.h": 1101,
+      "common_perspective.h": 224,
+      "common_blur.h": 145,
+      "common_fragment.h": 41,
+      "common_composite.h": 28,
+      "common_vertex.h": 11
+     }
+    },
+    "failureMode": "미해석 #include 는 경고 후 빈 줄로 대체(ShaderPreprocessor.swift:120-122) — 거부가 아니라 조용한 드롭. 헤더 심볼 참조가 미정의로 남아 MSL 컴파일 단계에서 실패",
+    "note": "베이스에셋(WE 설치본 assets/)은 사용자가 설정하거나 ~/Downloads/{wallpaper_dev/,}assets 자동탐지로만 붙는다(BaseAssetsSettings.swift:17-46). 미설정 = withoutBaseAssets 열"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_workshop_shaders.py",
+     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRendererResources.swift:558-563"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.includeDropImpact",
+   "value": {
+    "byHeader": {
+     "common.h": {
+      "symbolsDefined": 9,
+      "filesIncludingAndUsing": 961,
+      "filesUsingWithoutIncluding": 2,
+      "topSymbols": {
+       "rotateVec2": 505,
+       "M_PI_2": 315,
+       "M_PI": 234,
+       "greyscale": 67,
+       "hsv2rgb": 52,
+       "rgb2hsv": 51,
+       "M_PI_HALF": 2
+      }
+     },
+     "common_blending.h": {
+      "symbolsDefined": 51,
+      "filesIncludingAndUsing": 529,
+      "filesUsingWithoutIncluding": 0,
+      "topSymbols": {
+       "ApplyBlending": 529,
+       "BlendSoftLight": 33,
+       "RGBToHSL": 29,
+       "BlendLinearDodge": 9,
+       "BlendOpacity": 9,
+       "ContrastSaturationBrightness": 5,
+       "HSLToRGB": 1
+      }
+     },
+     "common_blur.h": {
+      "symbolsDefined": 10,
+      "filesIncludingAndUsing": 145,
+      "filesUsingWithoutIncluding": 0,
+      "topSymbols": {
+       "blur13a": 137,
+       "blur3a": 137,
+       "blur7a": 137,
+       "blurRadial13a": 8,
+       "blurRadial3a": 8,
+       "blurRadial7a": 8
+      }
+     },
+     "common_composite.h": {
+      "symbolsDefined": 2,
+      "filesIncludingAndUsing": 28,
+      "filesUsingWithoutIncluding": 0,
+      "topSymbols": {
+       "ApplyComposite": 28,
+       "ApplyCompositeOffset": 28
+      }
+     },
+     "common_fragment.h": {
+      "symbolsDefined": 22,
+      "filesIncludingAndUsing": 30,
+      "filesUsingWithoutIncluding": 0,
+      "topSymbols": {
+       "FORMAT_R8": 27,
+       "FORMAT_RG88": 27,
+       "DecompressNormal": 3
+      }
+     },
+     "common_perspective.h": {
+      "symbolsDefined": 2,
+      "filesIncludingAndUsing": 221,
+      "filesUsingWithoutIncluding": 0,
+      "topSymbols": {
+       "squareToQuad": 221,
+       "inverse": 213
+      }
+     }
+    },
+    "builtinBlendingPort": {
+     "realHeaderSymbols": 51,
+     "builtinPortSymbols": 13,
+     "missingFromPort": [
+      "BlendAdd",
+      "BlendAverage",
+      "BlendColor",
+      "BlendColorBurn",
+      "BlendColorBurnf",
+      "BlendColorDodge",
+      "BlendColorDodgef",
+      "BlendDarken",
+      "BlendDarkenf",
+      "BlendDifference",
+      "BlendExclusion",
+      "BlendGlow",
+      "BlendHardLight",
+      "BlendHardMix",
+      "BlendHardMixf",
+      "BlendHue",
+      "BlendLighten",
+      "BlendLightenf",
+      "BlendLinearBurn",
+      "BlendLinearBurnf",
+      "BlendLinearDodge",
+      "BlendLinearDodgef",
+      "BlendLinearLight",
+      "BlendLinearLightf",
+      "BlendLuminosity",
+      "BlendMultiply",
+      "BlendNegation",
+      "BlendNormal",
+      "BlendOpacity",
+      "BlendOverlay",
+      "BlendOverlayf",
+      "BlendPhoenix",
+      "BlendPinLight",
+      "BlendPinLightf",
+      "BlendReflect",
+      "BlendReflectf",
+      "BlendSaturation",
+      "BlendScreen",
+      "BlendScreenf",
+      "BlendSoftLightf",
+      "BlendSubstract",
+      "BlendTint",
+      "BlendVividLight",
+      "BlendVividLightf",
+      "ContrastSaturationBrightness",
+      "Desaturate",
+      "HSLToRGB",
+      "HueToRGB",
+      "RGBToHSL"
+     ],
+     "filesIncludingBlendingAndUsingMissingSymbol": 43,
+     "missingSymbolsActuallyUsed": {
+      "RGBToHSL": 29,
+      "BlendLinearDodge": 9,
+      "BlendOpacity": 9,
+      "ContrastSaturationBrightness": 5,
+      "HSLToRGB": 1
+     }
+    },
+    "note": "베이스에셋 미설정 시 드롭되는 헤더가 제공하던 심볼을 코퍼스가 얼마나 참조하는가. filesIncludingAndUsing = 그 헤더를 인클루드하면서 심볼도 쓰는 파일(=드롭 시 확실히 깨짐). filesUsingWithoutIncluding = 인클루드 없이 동명 심볼을 쓰는 파일 — 실물 확인 결과 2건 모두 `#define M_PI 3.14159…` 자체 정의라 드롭 영향 없음(dithering.frag / dot_matrix_mobile_fix.frag)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders/*.h (번들 베이스에셋 14헤더)"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.gUniformCensus",
+   "value": {
+    "distinctCount": 270,
+    "totalOccurrences": 56377,
+    "top40ByOccurrence": {
+     "g_Texture0": 5025,
+     "g_Texture1Resolution": 4042,
+     "g_Texture0Resolution": 3416,
+     "g_Texture1": 2996,
+     "g_ModelViewProjectionMatrix": 2919,
+     "g_Time": 2783,
+     "g_Texture2Resolution": 2024,
+     "g_Texture2": 1819,
+     "g_Scale": 1330,
+     "g_AudioFrequencyMax": 1072,
+     "g_AudioFrequencyMin": 1072,
+     "g_Speed": 1020,
+     "g_Direction": 944,
+     "g_Texture3Resolution": 926,
+     "g_Strength": 768,
+     "g_NoiseAmount": 573,
+     "g_Point0": 466,
+     "g_Point1": 466,
+     "g_AudioSpectrum16Left": 457,
+     "g_AudioSpectrum16Right": 457,
+     "g_Power": 452,
+     "g_NoiseScale": 450,
+     "g_Point2": 450,
+     "g_Point3": 450,
+     "g_Ratio": 433,
+     "g_Texture3": 431,
+     "g_Friction": 430,
+     "g_AudioBounds": 402,
+     "g_AnimationSpeed": 385,
+     "g_Feather": 369,
+     "g_Texture7Resolution": 350,
+     "g_Phase": 345,
+     "g_NoiseSpeed": 330,
+     "g_Bounds": 315,
+     "g_Multiply": 292,
+     "g_Inertia": 280,
+     "g_TexelSize": 278,
+     "g_BlendAngle": 276,
+     "g_CornerWeights": 275,
+     "g_PulseThresholds": 275
+    },
+    "top40ByShaderFileCount": {
+     "g_Texture0": 1693,
+     "g_ModelViewProjectionMatrix": 1440,
+     "g_Texture1": 1261,
+     "g_Texture0Resolution": 1098,
+     "g_Time": 974,
+     "g_Texture1Resolution": 912,
+     "g_Texture2": 849,
+     "g_Scale": 547,
+     "g_Texture2Resolution": 432,
+     "g_Speed": 401,
+     "g_Direction": 342,
+     "g_Strength": 251,
+     "g_AudioSpectrum16Left": 230,
+     "g_AudioSpectrum16Right": 230,
+     "g_Point0": 229,
+     "g_Point1": 229,
+     "g_Point2": 221,
+     "g_Point3": 221,
+     "g_Texture3": 208,
+     "g_NoiseAmount": 204,
+     "g_Power": 171,
+     "g_Ratio": 170,
+     "g_Texture3Resolution": 162,
+     "g_NoiseScale": 157,
+     "g_NoiseSpeed": 147,
+     "g_Phase": 145,
+     "g_AudioBounds": 134,
+     "g_AudioFrequencyMax": 134,
+     "g_AudioFrequencyMin": 134,
+     "g_AudioMultiply": 134,
+     "g_AudioPower": 134,
+     "g_Exponent": 125,
+     "g_Bounds": 120,
+     "g_UserAlpha": 112,
+     "g_Friction": 100,
+     "g_TexelSize": 96,
+     "g_AudioSpectrum64Left": 95,
+     "g_AudioSpectrum64Right": 95,
+     "g_AudioSpectrum32Left": 92,
+     "g_AudioSpectrum32Right": 92
+    },
+    "inWEUniformList": 42,
+    "notInWEUniformList": 228,
+    "textureSlotsReferenced": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7
+    ],
+    "activeSurfaceIncludingInlinedHeadersDistinct": 214,
+    "activeSurfaceIncludingInlinedHeadersTop20": {
+     "g_Texture0": 10352,
+     "g_ModelViewProjectionMatrix": 2730,
+     "g_Texture1Resolution": 2248,
+     "g_Time": 2219,
+     "g_Texture0Resolution": 2072,
+     "g_Texture1": 1884,
+     "g_Texture2": 1153,
+     "g_Scale": 1020,
+     "g_Speed": 803,
+     "g_Direction": 627,
+     "g_Strength": 583,
+     "g_Power": 341,
+     "g_NoiseAmount": 334,
+     "g_Bounds": 315,
+     "g_NoiseScale": 314,
+     "g_Ratio": 304,
+     "g_PulseThresholds": 273,
+     "g_NoiseSpeed": 268,
+     "g_Phase": 235,
+     "g_FlowSpeed": 230
+    },
+    "note": "g_* 는 엔진 유니폼(WE 선언 144종)과 저작 머티리얼 파라미터(관례상 g_ 접두)가 섞여 있다. activeSurface* 는 전처리 활성 라인 기준이되 **인라인된 베이스에셋 헤더의 g_* 도 포함**한다 — 저작 표면도 순수 저작 코드도 아닌 '번역기 입력 전체' 통계다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    },
+    {
+     "kind": "file",
+     "ref": "spec/engine/uniforms.json",
+     "note": "engine.uniforms 144종 대조"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.gUniformEngineClassification",
+   "value": {
+    "wapleIsEngineTrue": 31,
+    "weDeclaredButWapleIsEngineFalse": [
+     "g_Alpha",
+     "g_Color4",
+     "g_TextureReductionScale"
+    ],
+    "samplerHandledOutsideIsEngine": [
+     "g_Texture0",
+     "g_Texture1",
+     "g_Texture2",
+     "g_Texture3",
+     "g_Texture4",
+     "g_Texture5",
+     "g_Texture6",
+     "g_Texture7"
+    ],
+    "neutralDefaultCovered": [
+     "g_Alpha",
+     "g_Color4",
+     "g_TextureReductionScale"
+    ],
+    "phantomSlotRisk": {},
+    "indexedLightArrayUses": {},
+    "undeclaredAtPairLevel": {},
+    "undeclaredNote": "vert+frag 유니폼 합집합 + 번들 헤더 선언 + 지역 선언을 뺀 잔여. 잔여 이름은 실제로는 지역 변수 재선언(circular_text.vert 의 `float g_Texture1ResolutionX = …`)이라 진성 미선언은 0건",
+    "failureMode": "isEngine=false → 머티리얼 파라미터 강등(sceneKey = 이름 소문자화). 씬 constantshadervalues 에 키가 없고 어노테이션 default 도 없으면 0 폴백 = 팬텀 슬롯(NaN UV·검정 레이어). engineNeutralDefault 등재분은 1.0 폴백이라 제외"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_workshop_shaders.py",
+     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/GLSLTranslator.swift:1178-1216,1289-1312"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.declaredTypes",
+   "value": {
+    "byKeywordAndType": {
+     "uniform float": 11407,
+     "uniform sampler2D": 4146,
+     "varying vec2": 3581,
+     "varying vec4": 3309,
+     "uniform vec2": 3064,
+     "uniform vec4": 2956,
+     "varying float": 2096,
+     "attribute vec2": 1689,
+     "attribute vec3": 1689,
+     "uniform mat4": 1599,
+     "uniform vec3": 1066,
+     "varying vec3": 687
+    },
+    "unsupportedByGLSLTypeFrom": {},
+    "samplerUniformNames": {
+     "g_Texture0": 1693,
+     "g_Texture1": 1261,
+     "g_Texture2": 839,
+     "g_Texture3": 205,
+     "g_Texture4": 42,
+     "g_Texture5": 38,
+     "g_Texture6": 34,
+     "g_Texture7": 34
+    },
+    "failureMode": "GLSLType.from 이 nil 이면 parseUniforms/parseVaryings/parseAttributes 가 그 선언을 통째로 건너뛴다(GLSLTranslator.swift:1070,1096,1116) → 본문 참조가 미정의 → MSL 컴파일 실패(라우드 폴백)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/GLSLTranslator.swift:7-20,1061-1120"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.helperFunctionTypes",
+   "value": {
+    "returnTypes": {
+     "float": 815,
+     "vec3": 399,
+     "vec2": 157,
+     "vec4": 96,
+     "void": 51,
+     "Grid": 7,
+     "mat2": 5
+    },
+    "paramTypes": {
+     "float": 2104,
+     "vec2": 890,
+     "vec3": 646,
+     "vec4": 127,
+     "int": 37,
+     "bool": 2,
+     "float2": 2
+    },
+    "outsideMslTypeSet": {},
+    "shaderFilesWithoutVoidMain": 0,
+    "failureMode": "mslType nil → helperSignature nil → 헬퍼 정의 스킵(GLSLTranslator.swift:365) — 호출부만 남아 MSL 컴파일 실패. 조용한 오역이 아니라 라우드 폴백",
+    "note": "함수 시그니처는 단일 줄 파라미터 목록 가정 정규식 근사(다중 줄 선언은 누락 가능)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/GLSLTranslator.swift:474-486"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.syntaxFeatures",
+   "value": {
+    "shaderFilesWithFeature": {
+     "glFragColor": 1689,
+     "weTexSample2D": 1643,
+     "mulIntrinsic": 1472,
+     "castMacro": 1130,
+     "hlslIntrinsic": 997,
+     "arrayDecl": 469,
+     "objectLikeMacro": 339,
+     "forLoop": 334,
+     "uniformArrayDecl": 230,
+     "ternaryInBody": 89,
+     "funcLikeMacro": 37,
+     "inoutParam": 23,
+     "moduloInBody": 21,
+     "outVarDecl": 4,
+     "structDecl": 4
+    },
+    "totalOccurrences": {
+     "weTexSample2D": 6306,
+     "objectLikeMacro": 4934,
+     "castMacro": 3156,
+     "hlslIntrinsic": 3030,
+     "glFragColor": 2419,
+     "mulIntrinsic": 1966,
+     "arrayDecl": 1624,
+     "uniformArrayDecl": 826,
+     "forLoop": 662,
+     "ternaryInBody": 288,
+     "inoutParam": 205,
+     "funcLikeMacro": 50,
+     "moduloInBody": 37,
+     "outVarDecl": 4,
+     "structDecl": 4
+    },
+    "absentFeatures": [
+     "bitwiseInBody",
+     "discard",
+     "doWhile",
+     "extensionDirective",
+     "glFragCoord",
+     "glFragData",
+     "glPointSize",
+     "glVertexID",
+     "glslTexture2DBuiltin",
+     "includeInsideConditional",
+     "layoutQualifier",
+     "lineDirective",
+     "macroLineContinuation",
+     "pragmaDirective",
+     "precisionQualifier",
+     "switchStmt",
+     "undefDirective",
+     "versionDirective",
+     "weTexLoad2D",
+     "whileLoop"
+    ],
+    "uniformArrayDeclarations": {
+     "byName": {
+      "g_AudioSpectrum16Left": 226,
+      "g_AudioSpectrum16Right": 226,
+      "g_AudioSpectrum64Left": 95,
+      "g_AudioSpectrum64Right": 95,
+      "g_AudioSpectrum32Left": 92,
+      "g_AudioSpectrum32Right": 92
+     },
+     "authoredNonEngine": [],
+     "claim": "배열 유니폼은 전부 g_AudioSpectrum{16,32,64}{Left,Right} — 저작 배열 유니폼 0건. parseUniforms 의 `[` 절단(GLSLTranslator.swift:1076)이 스칼라 머티리얼로 오등록할 표면이 코퍼스에 없다"
+    },
+    "note": "정규식 계측(주석 제거본 기준, 지시문/매크로 항목만 원문 기준). absentFeatures 는 코퍼스에 0건인 기능 = 번역기가 지원할 필요가 (아직) 없는 것"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.conditionalComplexity",
+   "value": {
+    "ifElifExprs": 22723,
+    "shaderFilesWithAnyConditional": 2577,
+    "maxNestingHistogram": {
+     "1": 1650,
+     "0": 796,
+     "2": 744,
+     "3": 140,
+     "4": 48
+    },
+    "operatorHistogram": {
+     "==": 15215,
+     ">=": 1751,
+     "||": 1376,
+     "&&": 509,
+     "!=": 391,
+     "!": 341,
+     "(": 171,
+     ")": 171,
+     "<=": 23,
+     "<": 2,
+     ".멤버": 1
+    },
+    "topByExprCount": [
+     {
+      "shader": "3462491575/scene.pkg::shaders/workshop/3235948233/effects/auto_sway.frag",
+      "ifElifExprs": 159,
+      "copiesInCorpus": 8
+     },
+     {
+      "shader": "3353695150/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 116,
+      "copiesInCorpus": 30
+     },
+     {
+      "shader": "3577990983/scene.pkg::shaders/workshop/3444196917/effects/_________________________________.frag",
+      "ifElifExprs": 116,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3354366708/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 111,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3351163962/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 106,
+      "copiesInCorpus": 3
+     },
+     {
+      "shader": "3706286085/scene.pkg::shaders/workshop/3577764342/effects/audio.frag",
+      "ifElifExprs": 103,
+      "copiesInCorpus": 1
+     },
+     {
+      "shader": "3151551777/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 102,
+      "copiesInCorpus": 4
+     },
+     {
+      "shader": "3326873240/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 102,
+      "copiesInCorpus": 2
+     }
+    ],
+    "topByNestingDepth": [
+     {
+      "shader": "3151551777/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 4
+     },
+     {
+      "shader": "3326873240/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3351163962/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 3
+     },
+     {
+      "shader": "3353695150/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 30
+     },
+     {
+      "shader": "3354366708/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3395777145/scene.pkg::shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3577990983/scene.pkg::shaders/workshop/3444196917/effects/_________________________________.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3585875739/scene.pkg::shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     }
+    ],
+    "note": "연산자 도수는 ExprEval 토크나이저 기준(&& 와 & 를 혼동하지 않는다)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_workshop_shaders.py",
+     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.preprocessorRefusals",
+   "value": {
+    "withBaseAssets": {
+     "refusedFiles": 0,
+     "refusedPairs": 0,
+     "pairsTotal": 1689,
+     "causes": {}
+    },
+    "withoutBaseAssets": {
+     "refusedFiles": 0,
+     "refusedPairs": 0,
+     "causes": {}
+    },
+    "unsupportedExpressions": {
+     "g_Texture0Resolution.x < g_Texture0Resolution.y": {
+      "count": 1,
+      "firstSeen": "2904908532/scene.pkg::shaders/workshop/2872146492/effects/lens_distorsion.frag"
+     }
+    },
+    "portFidelity": "이 수치는 Swift 를 실행해 얻은 것이 아니다(이 머신에 Swift 툴체인 없음). ShaderPreprocessor/ExprEval 의 거부 판정 경로를 Python 으로 1:1 포팅하고 Swift 회귀테스트의 기대값(거부 16·통과 9·분기선택 6·인클루드 2 케이스)으로 포트를 검증했다. 미커버 경로에서 발산할 가능성은 남는다 — macOS 에서 GLSLTranslator.translate 를 코퍼스에 직접 돌려 재확인할 것",
+    "verdict": "ShaderPreprocessor 가 거부하는 워크샵 셰이더는 0건. 22,723 개 #if/#elif 식 중 ExprEval 이 평가 못 하는 것은 1개뿐이고 그마저 F610 동일-분기 관용으로 통과한다",
+    "combosCaveat": "측정은 [COMBO] 기본값(스테이지 합집합) 기준. 씬/머티리얼이 콤보를 명시하면 활성 분기가 바뀐다(resolvePassCombos/samplerCombos)",
+    "comboIndependence": {
+     "claim": "콤보 값이 무엇이든 거부는 0 — 세 거부 경로가 모두 콤보와 무관하게 비어 있다",
+     "unsupportedExprsAnywhere": 1,
+     "unsupportedExprToleratedBy": "F610 동일-분기(원문 텍스트 비교라 콤보 무관)",
+     "suspectDefineCandidates": 46,
+     "suspectDefineCandidatesTop": {
+      "DEG2PCT": 80,
+      "DEG2RAD": 80,
+      "mask": 63,
+      "LG2": 46,
+      "M_D_PI_2": 44,
+      "LOG5_2": 39,
+      "endGamma": 38,
+      "startGamma": 38,
+      "iterations": 18,
+      "M_PI_D2": 16,
+      "M_PI_F": 13,
+      "blurPreciseLimit": 11
+     },
+     "suspectNamesReferencedInIf": {},
+     "note": "거부 트리거는 ① 미지원 식 ② suspect define 참조 ③ 잔여 토큰뿐이고 셋 다 식 원문으로 결정된다. 콤보는 값만 바꾸므로 활성 분기를 바꿔도 새 거부를 만들 수 없다 — 단 ①이 있는 셰이더에서 분기 텍스트가 갈리는 신규 저작물은 예외"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_workshop_shaders.py",
+     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.refusalToleranceAblation",
+   "value": {
+    "byDisabledTolerance": {
+     "directiveComment": {
+      "refusedFiles": 48,
+      "refusedPairs": 35,
+      "causes": {
+       "residualTokens": 48
+      }
+     },
+     "ifParen": {
+      "refusedFiles": 0,
+      "refusedPairs": 0,
+      "causes": {}
+     },
+     "trailingSemicolon": {
+      "refusedFiles": 3,
+      "refusedPairs": 3,
+      "causes": {
+       "unknownChar": 3
+      }
+     },
+     "identicalBranches": {
+      "refusedFiles": 1,
+      "refusedPairs": 1,
+      "causes": {
+       "memberAccess": 1
+      }
+     },
+     "parentActive": {
+      "refusedFiles": 0,
+      "refusedPairs": 0,
+      "causes": {}
+     },
+     "(전부 끔)": {
+      "refusedFiles": 49,
+      "refusedPairs": 36,
+      "causes": {
+       "residualTokens": 45,
+       "unknownChar": 3,
+       "memberAccess": 1
+      }
+     }
+    },
+    "note": "관용 하나씩 끄고 전수 재측정 — 각 관용이 실제로 몇 파일을 살리는지. directiveComment=지시문 주석 절단, ifParen=`#if(` 정규화, trailingSemicolon=후행 `;` 절단, identicalBranches=F610 동일분기, parentActive=비활성 부모 관용",
+    "ifParenCaveat": "ifParen 을 꺼도 거부는 0 — 실패 모드가 다르다. `#if(` 는 prefix 검사에 안 걸려 지시문 줄이 그대로 MSL 로 새고 짝 #endif 만 소비된다(조용한 파손). 코퍼스 실사용 6건",
+    "ifParenOccurrences": 6
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_workshop_shaders.py",
+     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.combos",
+   "value": {
+    "declSites": 4590,
+    "distinctCombos": 224,
+    "topByShaderFileCount": {
+     "BLENDMODE": 557,
+     "MODE": 196,
+     "KERNEL": 180,
+     "PERSPECTIVE": 179,
+     "NOISE": 154,
+     "AUDIOPROCESSING": 134,
+     "BLURALPHA": 122,
+     "WRITEALPHA": 111,
+     "TRANSPARENCY": 92,
+     "RESOLUTION": 90,
+     "SHAPE": 90,
+     "DUALWAVES": 80,
+     "ANTIALIAS": 78,
+     "CLIP_HIGH": 78,
+     "CLIP_LOW": 78,
+     "TRANSFORMREPEAT": 70,
+     "TRANSFORMUV": 70,
+     "GREYSCALE": 68,
+     "DIRECTION": 65,
+     "PULSEALPHA": 58,
+     "PULSECOLOR": 58,
+     "REPEAT": 57,
+     "TRANSFORM": 53,
+     "ANAMORPHIC": 51,
+     "BAR_STYLE": 49,
+     "HOLLOW": 49,
+     "V_REMAPPING": 46,
+     "DEFORMITY": 44,
+     "HID_BTM": 44,
+     "INVERT": 44,
+     "QUALITY": 44,
+     "SEGMENT": 44,
+     "BACKGROUND": 40,
+     "ELLIPTICAL": 38,
+     "GAMMA": 38,
+     "EDGEGLOW": 36,
+     "SAMPLES": 36,
+     "COPYBG": 35,
+     "A_SMOOTH_CURVE": 34,
+     "INVERTCOLOR": 34
+    },
+    "defaultsByCombo": {
+     "BLENDMODE": {
+      "0": 265,
+      "9": 103,
+      "31": 57,
+      "30": 54,
+      "2": 29,
+      "12": 28,
+      "32": 16,
+      "22": 3,
+      "29": 2
+     },
+     "MODE": {
+      "0": 196
+     },
+     "KERNEL": {
+      "0": 157,
+      "1": 23
+     },
+     "PERSPECTIVE": {
+      "0": 178,
+      "1": 1
+     },
+     "NOISE": {
+      "0": 118,
+      "1": 36
+     },
+     "AUDIOPROCESSING": {
+      "0": 134
+     },
+     "BLURALPHA": {
+      "1": 122
+     },
+     "WRITEALPHA": {
+      "0": 111
+     },
+     "TRANSPARENCY": {
+      "1": 78,
+      "4": 5,
+      "2": 4,
+      "3": 4,
+      "0": 1
+     },
+     "RESOLUTION": {
+      "32": 90
+     },
+     "SHAPE": {
+      "0": 90
+     },
+     "DUALWAVES": {
+      "0": 80
+     },
+     "ANTIALIAS": {
+      "1": 44,
+      "0": 34
+     },
+     "CLIP_HIGH": {
+      "0": 78
+     },
+     "CLIP_LOW": {
+      "0": 78
+     },
+     "TRANSFORMREPEAT": {
+      "0": 70
+     },
+     "TRANSFORMUV": {
+      "0": 70
+     },
+     "GREYSCALE": {
+      "0": 49,
+      "1": 19
+     },
+     "DIRECTION": {
+      "0": 65
+     },
+     "PULSEALPHA": {
+      "0": 58
+     },
+     "PULSECOLOR": {
+      "1": 58
+     },
+     "REPEAT": {
+      "1": 47,
+      "0": 10
+     },
+     "TRANSFORM": {
+      "0": 53
+     },
+     "ANAMORPHIC": {
+      "0": 51
+     },
+     "BAR_STYLE": {
+      "1": 49
+     },
+     "HOLLOW": {
+      "0": 49
+     },
+     "V_REMAPPING": {
+      "0": 46
+     },
+     "DEFORMITY": {
+      "3": 44
+     },
+     "HID_BTM": {
+      "0": 44
+     },
+     "INVERT": {
+      "0": 44
+     },
+     "QUALITY": {
+      "2": 24,
+      "1": 20
+     },
+     "SEGMENT": {
+      "0": 44
+     },
+     "BACKGROUND": {
+      "0": 30,
+      "1": 10
+     },
+     "ELLIPTICAL": {
+      "1": 37,
+      "0": 1
+     },
+     "GAMMA": {
+      "0": 38
+     },
+     "EDGEGLOW": {
+      "0": 36
+     },
+     "SAMPLES": {
+      "0": 21,
+      "1": 15
+     },
+     "COPYBG": {
+      "0": 35
+     },
+     "A_SMOOTH_CURVE": {
+      "0": 34
+     },
+     "INVERTCOLOR": {
+      "0": 34
+     }
+    },
+    "declaredDomains": {
+     "AA_CATEGORY": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "AA_INFO_A": [
+      "type:options"
+     ],
+     "AA_INFO_B": [
+      "type:options"
+     ],
+     "AA_VERSION": [
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "AA__MODE": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "AB_TYPECOLOR": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "type:options"
+     ],
+     "AB_TYPEUV": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "ACCMULATION_RATE_REMAPPING_METHON": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "ACCUMULATE_DECRE": [
+      "type:options"
+     ],
+     "ACCUMULATE_INCRE": [
+      "type:options"
+     ],
+     "AC_COLORMODE": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "AD": [
+      "type:options"
+     ],
+     "ADAPT": [
+      "type:options"
+     ],
+     "ADVANCED": [
+      "type:options"
+     ],
+     "AD_PERSPECTIVE": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "type:options"
+     ],
+     "ALIGNMENT": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "ANAMORPHIC": [
+      "type:options"
+     ],
+     "ANTIALIAS": [
+      "type:options"
+     ],
+     "ARTIFACTS": [
+      "type:options"
+     ],
+     "AT": [
+      "type:options"
+     ],
+     "AUDIOPROCESSING": [
+      "type:audioprocessingoptions"
+     ],
+     "AUDIOSAMPLES": [
+      "16",
+      "32",
+      "64",
+      "type:options"
+     ],
+     "AUDIOTHICKNESS": [
+      "type:options"
+     ],
+     "AUDIO_BANDS": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "AUDIO_CHANNEL": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "type:options"
+     ],
+     "AUTOFOCUS": [
+      "type:options"
+     ],
+     "AUTO_CUT": [
+      "type:options"
+     ],
+     "AUTO_SCALE": [
+      "type:options"
+     ],
+     "AUTO_TIMEOFFSET": [
+      "type:options"
+     ],
+     "AUTO_TIMEOFFSET_INTERPOLATION": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "2",
+      "3",
+      "4",
+      "5",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "AUTO_ZERO": [
+      "type:options"
+     ],
+     "AXIS": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "A_SMOOTH_CURVE": [
+      "type:options"
+     ],
+     "A_TOP": [
+      "type:options"
+     ],
+     "BACKGROUND": [
+      "type:options"
+     ],
+     "BARSTYLE": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "BAR_STYLE": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "BASE_SHAPE": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "BGTRANSPARENT": [
+      "type:options"
+     ],
+     "BG_BLEND": [
+      "type:options"
+     ],
+     "BLACKBORDERS": [
+      "type:options"
+     ],
+     "BLENDMODE": [
+      "type:imageblending"
+     ],
+     "BLEND_MODE": [
+      "0",
+      "1"
+     ],
+     "BLURALPHA": [
+      "type:options"
+     ],
+     "BOUNDS": [
+      "type:options"
+     ],
+     "B_BOTTOM": [
+      "type:options"
+     ],
+     "B_SQUARE": [
+      "type:options"
+     ],
+     "CA": [
+      "type:options"
+     ],
+     "CASTER": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "CBS_CONTRAST_KERNEL_TYPE": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "CBS_FLIP_CONTRAST_MAP": [
+      "type:options"
+     ],
+     "CBS_FLIP_OPAICTY_MAP": [
+      "type:options"
+     ],
+     "CBS_KERNEL_TYPE": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "type:options"
+     ],
+     "CBS_RENDER_LAYER_TYPE": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "type:options"
+     ],
+     "CHANNEL_RES": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "CIRC_RATE_SLIDER": [
+      "type:options"
+     ],
+     "CLAMP": [
+      "type:options"
+     ],
+     "CLAMPUV": [
+      "type:options"
+     ],
+     "CLIPCOLOR": [
+      "type:options"
+     ],
+     "CLIP_HIGH": [
+      "type:options"
+     ],
+     "CLIP_LOW": [
+      "type:options"
+     ],
+     "COC": [
+      "type:options"
+     ],
+     "COLORBLEND": [
+      "type:options"
+     ],
+     "COLORMODE": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "COLORS": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "type:options"
+     ],
+     "COLOR_MODE": [
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "COMPAT_TS": [
+      "type:options"
+     ],
+     "COMPOSITE": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "COMPOSITEMONO": [
+      "type:options"
+     ],
+     "COPYBG": [
+      "type:options"
+     ],
+     "CURVEIMAGE": [
+      "type:options"
+     ],
+     "CUSTOM_CURSOR_POS": [
+      "type:options"
+     ],
+     "CUSTOM_RESOLUTION": [
+      "type:options"
+     ],
+     "C_ALPHA_ONLY": [
+      "type:options"
+     ],
+     "C_LEFT": [
+      "type:options"
+     ],
+     "C_TRANSPARENCY": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "C_TYPE": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "DAMPING": [
+      "type:options"
+     ],
+     "DEBUG": [
+      "type:options"
+     ],
+     "DEBUG_NO_ALPHA": [
+      "type:options"
+     ],
+     "DEFORMITY": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "DEPTHLEVELS": [
+      "type:options"
+     ],
+     "DIRECTION": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "DISABLE_CROSS_FEATHER": [
+      "type:options"
+     ],
+     "DOUBLESIDED": [
+      "type:options"
+     ],
+     "DRAW_STYLE": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "DUALWAVES": [
+      "type:options"
+     ],
+     "D_ALIGNMENT": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "type:options"
+     ],
+     "D_RIGHT": [
+      "type:options"
+     ],
+     "EDGEDETECT": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "EDGEGLOW": [
+      "type:options"
+     ],
+     "EDGEMAP": [
+      "type:options"
+     ],
+     "EDGES": [
+      "2",
+      "3",
+      "4",
+      "5",
+      "type:options"
+     ],
+     "EDIT_GRID_TRANSFORM": [
+      "type:options"
+     ],
+     "ELLIPTICAL": [
+      "type:options"
+     ],
+     "EQUALIZE": [
+      "type:options"
+     ],
+     "EXPONENT": [
+      "type:options"
+     ],
+     "FEATHER": [
+      "type:options"
+     ],
+     "FILLNOTCH": [
+      "type:options"
+     ],
+     "FILMCOMBO": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "FIXSCALE": [
+      "type:options"
+     ],
+     "FLATTEN": [
+      "type:options"
+     ],
+     "FLIP": [
+      "type:options"
+     ],
+     "FLOW": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "FOLLOWCURSOR": [
+      "type:options"
+     ],
+     "FPOINT": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "F_TRANSPARENCY": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "GAMMA": [
+      "type:options"
+     ],
+     "GLOBAL_ROTATION": [
+      "type:options"
+     ],
+     "GLOBAL_STRENGTH": [
+      "type:options"
+     ],
+     "GLOW": [
+      "type:options"
+     ],
+     "GRADIENT": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "GREYSCALE": [
+      "type:options"
+     ],
+     "GRID": [
+      "type:options"
+     ],
+     "GRID_TYPE": [
+      "1",
+      "2",
+      "type:options"
+     ],
+     "HID_BTM": [
+      "type:options"
+     ],
+     "HIGH_QUALITY": [
+      "type:options"
+     ],
+     "HOLLOW": [
+      "type:options"
+     ],
+     "IL": [
+      "type:options"
+     ],
+     "INNER": [
+      "type:options"
+     ],
+     "INTERPOLATION": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "type:options"
+     ],
+     "INVERT": [
+      "type:options"
+     ],
+     "INVERTARTIFACTS": [
+      "type:options"
+     ],
+     "INVERTARTIFACTS2": [
+      "type:options"
+     ],
+     "INVERTCOLOR": [
+      "type:options"
+     ],
+     "INVERTMASK": [
+      "type:options"
+     ],
+     "INVERTVALUE": [
+      "type:options"
+     ],
+     "IS_MONOCHROME": [
+      "type:options"
+     ],
+     "IS_POST_PROCESSING_LAYER": [
+      "type:options"
+     ],
+     "KERNEL": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "LAYERED": [
+      "type:options"
+     ],
+     "LENS": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "LINEAR": [
+      "type:options"
+     ],
+     "LOG_SCALE": [
+      "type:options"
+     ],
+     "LUT_FLIP_Y": [
+      "type:options"
+     ],
+     "Limit": [
+      "type:options"
+     ],
+     "MANUALCONTROL": [
+      "type:options"
+     ],
+     "MASK": [
+      "type:options"
+     ],
+     "METHOD": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "MODE": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "type:options"
+     ],
+     "MOVE": [
+      "type:options"
+     ],
+     "MULTIPLY": [
+      "type:options"
+     ],
+     "NCOLORS": [
+      "12",
+      "16",
+      "20",
+      "24",
+      "8",
+      "type:options"
+     ],
+     "NODE_COUNT": [
+      "10",
+      "11",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "NOI": [
+      "type:options"
+     ],
+     "NOISE": [
+      "type:options"
+     ],
+     "NOISE_BLENDMODE": [
+      "type:imageblending"
+     ],
+     "NORMAL_OFFSET": [
+      "type:options"
+     ],
+     "NUMBLENDTEXTURES": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "type:options"
+     ],
+     "OBJRELATIVE": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "OVERLAP": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "PARALLAX": [
+      "type:options"
+     ],
+     "PERSPECTIVE": [
+      "type:options"
+     ],
+     "PERSPSWITCH": [
+      "type:options"
+     ],
+     "PMASK_CHANNEL": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "POINTFILTER": [
+      "type:options"
+     ],
+     "POS": [
+      "0",
+      "1",
+      "10",
+      "type:options"
+     ],
+     "PRESERVE": [
+      "type:options"
+     ],
+     "PRESERVELIGHTNESS": [
+      "type:options"
+     ],
+     "PROPERTIES": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "type:options"
+     ],
+     "PULSEALPHA": [
+      "type:options"
+     ],
+     "PULSECOLOR": [
+      "type:options"
+     ],
+     "QUAD_MASK": [
+      "type:options"
+     ],
+     "QUAD_SIZE": [
+      "16",
+      "64",
+      "type:options"
+     ],
+     "QUALITY": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "RAYCORNER": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "RAYMODE": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "REFLECTION": [
+      "type:options"
+     ],
+     "REF_RES": [
+      "type:options"
+     ],
+     "RENDERING": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "REPEAT": [
+      "type:options"
+     ],
+     "RESOLUTION": [
+      "16",
+      "32",
+      "64",
+      "type:options"
+     ],
+     "RETAIN": [
+      "type:options"
+     ],
+     "RETAIN_ORIG": [
+      "type:options"
+     ],
+     "REVERSE_PMASK": [
+      "type:options"
+     ],
+     "SAMPLE": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "SAMPLES": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "type:options"
+     ],
+     "SCALE": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "SCALECORNERS": [
+      "type:options"
+     ],
+     "SEDIRECTION": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "SEGMENT": [
+      "type:options"
+     ],
+     "SHADING": [
+      "type:options"
+     ],
+     "SHADOWMASK": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "type:options"
+     ],
+     "SHADOW_TYPE": [
+      "0",
+      "1",
+      "2",
+      "3"
+     ],
+     "SHAPE": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "SHAPE_TYPE": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "type:options"
+     ],
+     "SHOW_GRID": [
+      "type:options"
+     ],
+     "SOFT": [
+      "type:options"
+     ],
+     "SOLIDCOLOR": [
+      "type:options"
+     ],
+     "SOURCE": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "SPECIFY_RANGE": [
+      "type:options"
+     ],
+     "STD_TIME": [
+      "type:options"
+     ],
+     "STYLE": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "SUBPIXEL": [
+      "type:options"
+     ],
+     "SUN": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "SUPPRESS": [
+      "type:options"
+     ],
+     "TILE": [
+      "type:options"
+     ],
+     "TIMEOFFSET": [
+      "type:options"
+     ],
+     "TONEMAP": [
+      "0",
+      "1",
+      "10",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "TOOLS": [
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "type:options"
+     ],
+     "TRANSFORM": [
+      "type:options"
+     ],
+     "TRANSFORMREPEAT": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "TRANSFORMUV": [
+      "type:options"
+     ],
+     "TRANSPARENCY": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "TRIANGLE": [
+      "type:options"
+     ],
+     "TS_ALIGNMENT": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "TS_STRATEGY": [
+      "0",
+      "1",
+      "type:options"
+     ],
+     "TYPE": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "USECURSOR": [
+      "type:options"
+     ],
+     "USE_BIT_DEPTH": [
+      "type:options"
+     ],
+     "UVMODE": [
+      "type:options"
+     ],
+     "VARIATION": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "VERTICAL_AUTO_MASK": [
+      "type:options"
+     ],
+     "VERTICAL_LINKAGE": [
+      "type:options"
+     ],
+     "VERTICAL_RELATIVE_WIDTH": [
+      "type:options"
+     ],
+     "V_REMAPPING": [
+      "0",
+      "1",
+      "10",
+      "11",
+      "12",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "type:options"
+     ],
+     "WALPHA": [
+      "type:options"
+     ],
+     "WAVE": [
+      "type:options"
+     ],
+     "WORLEYMIX": [
+      "type:options"
+     ],
+     "WRAPGRADIENT": [
+      "type:options"
+     ],
+     "WRITEALPHA": [
+      "type:options"
+     ],
+     "Z_DEBUG_MARK": [
+      "type:options"
+     ],
+     "Z_H_ALIGN": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ],
+     "Z_V_ALIGN": [
+      "0",
+      "1",
+      "2",
+      "type:options"
+     ]
+    },
+    "topShadersByComboCount": [
+     {
+      "shader": "3585875739/scene.pkg::shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag",
+      "comboDecls": 14,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3706286085/scene.pkg::shaders/workshop/3577764342/effects/audio.frag",
+      "comboDecls": 13,
+      "copiesInCorpus": 1
+     },
+     {
+      "shader": "2867182492/scene.pkg::shaders/workshop/2906937488/effects/procedural_noise.frag",
+      "comboDecls": 12,
+      "copiesInCorpus": 5
+     },
+     {
+      "shader": "3151551777/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "comboDecls": 12,
+      "copiesInCorpus": 4
+     },
+     {
+      "shader": "3395777145/scene.pkg::shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag",
+      "comboDecls": 12,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3353695150/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "comboDecls": 11,
+      "copiesInCorpus": 30
+     },
+     {
+      "shader": "3354366708/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "comboDecls": 11,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3577990983/scene.pkg::shaders/workshop/3444196917/effects/_________________________________.frag",
+      "comboDecls": 11,
+      "copiesInCorpus": 2
+     }
+    ],
+    "note": "값 도메인은 어노테이션이 선언한 것뿐 — 런타임 실값은 scene.json/머티리얼에서 오고 샘플러 바인딩만으로 켜지는 콤보도 있다(GLSLTranslator.samplerCombos)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.hardCases",
+   "value": {
+    "unevaluableIfExpression": {
+     "expr": "g_Texture0Resolution.x < g_Texture0Resolution.y",
+     "files": 1,
+     "firstSeen": "2904908532/scene.pkg::shaders/workshop/2872146492/effects/lens_distorsion.frag",
+     "why": "유니폼 멤버 접근(`.x`)은 ExprEval 토크나이저가 미지원 문자로 본다. 이 건은 양 분기 텍스트가 동일해 F610 관용으로 통과 — 저작자가 분기를 다르게 쓰면 즉시 거부"
+    },
+    "topByDistinctGUniforms": [
+     {
+      "shader": "3462491575/scene.pkg::shaders/workshop/3235948233/effects/auto_sway.vert",
+      "distinctG": 51,
+      "copiesInCorpus": 8
+     },
+     {
+      "shader": "3462491575/scene.pkg::shaders/workshop/3235948233/effects/auto_sway.frag",
+      "distinctG": 45,
+      "copiesInCorpus": 8
+     },
+     {
+      "shader": "3351179520/scene.pkg::shaders/workshop/3344883766/effects/multistage_wave.frag",
+      "distinctG": 44,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3351179520/scene.pkg::shaders/workshop/3344883766/effects/multistage_wave.vert",
+      "distinctG": 27,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3517818807/scene.pkg::shaders/effects/2.vert",
+      "distinctG": 21,
+      "copiesInCorpus": 1
+     },
+     {
+      "shader": "3448290956/scene.pkg::shaders/workshop/2973943998/effects/iris_movement__.vert",
+      "distinctG": 19,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3276911872/scene.pkg::shaders/effects/lightshafts.frag",
+      "distinctG": 18,
+      "copiesInCorpus": 27
+     },
+     {
+      "shader": "2911866381/scene.pkg::shaders/effects/blend.frag",
+      "distinctG": 15,
+      "copiesInCorpus": 13
+     }
+    ],
+    "topByExprCount": [
+     {
+      "shader": "3462491575/scene.pkg::shaders/workshop/3235948233/effects/auto_sway.frag",
+      "ifElifExprs": 159,
+      "copiesInCorpus": 8
+     },
+     {
+      "shader": "3353695150/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 116,
+      "copiesInCorpus": 30
+     },
+     {
+      "shader": "3577990983/scene.pkg::shaders/workshop/3444196917/effects/_________________________________.frag",
+      "ifElifExprs": 116,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3354366708/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 111,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3351163962/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 106,
+      "copiesInCorpus": 3
+     },
+     {
+      "shader": "3706286085/scene.pkg::shaders/workshop/3577764342/effects/audio.frag",
+      "ifElifExprs": 103,
+      "copiesInCorpus": 1
+     },
+     {
+      "shader": "3151551777/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 102,
+      "copiesInCorpus": 4
+     },
+     {
+      "shader": "3326873240/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "ifElifExprs": 102,
+      "copiesInCorpus": 2
+     }
+    ],
+    "topByNestingDepth": [
+     {
+      "shader": "3151551777/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 4
+     },
+     {
+      "shader": "3326873240/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3351163962/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 3
+     },
+     {
+      "shader": "3353695150/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 30
+     },
+     {
+      "shader": "3354366708/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3395777145/scene.pkg::shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3577990983/scene.pkg::shaders/workshop/3444196917/effects/_________________________________.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3585875739/scene.pkg::shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag",
+      "maxNesting": 4,
+      "copiesInCorpus": 2
+     }
+    ],
+    "topByComboCount": [
+     {
+      "shader": "3585875739/scene.pkg::shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag",
+      "comboDecls": 14,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3706286085/scene.pkg::shaders/workshop/3577764342/effects/audio.frag",
+      "comboDecls": 13,
+      "copiesInCorpus": 1
+     },
+     {
+      "shader": "2867182492/scene.pkg::shaders/workshop/2906937488/effects/procedural_noise.frag",
+      "comboDecls": 12,
+      "copiesInCorpus": 5
+     },
+     {
+      "shader": "3151551777/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "comboDecls": 12,
+      "copiesInCorpus": 4
+     },
+     {
+      "shader": "3395777145/scene.pkg::shaders/workshop/2799421411/effects/audio_responsive_oscilloscope.frag",
+      "comboDecls": 12,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3353695150/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "comboDecls": 11,
+      "copiesInCorpus": 30
+     },
+     {
+      "shader": "3354366708/scene.pkg::shaders/workshop/3082978660/effects/Simple_Audio_Bars.frag",
+      "comboDecls": 11,
+      "copiesInCorpus": 2
+     },
+     {
+      "shader": "3577990983/scene.pkg::shaders/workshop/3444196917/effects/_________________________________.frag",
+      "comboDecls": 11,
+      "copiesInCorpus": 2
+     }
+    ],
+    "structuralRarities": {
+     "filesWithSourceStructs": 4,
+     "filesWithFunctionLikeMacros": 37,
+     "filesWithInoutOutParams": 23,
+     "filesWithModuloInBody": 21,
+     "filesWithBitwiseInBody": 0
+    },
+    "note": "난이도 축은 ① 지시문 밀도 ② 중첩 깊이 ③ 콤보 수 ④ 컨텍스트 심볼 수(헬퍼 캡처 승격 부담) ⑤ 희귀 문법. 원문은 싣지 않는다(정본 규약 3)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_workshop_shaders.py",
+     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+    }
+   ]
+  },
+  {
+   "id": "workshop.shaders.translationRiskSummary",
+   "value": {
+    "loudRefusePreprocessor": 0,
+    "silentIncludeDropWithoutBaseAssets": 1550,
+    "silentIncludeDropWithBaseAssets": 0,
+    "phantomSlotRiskNames": [],
+    "skippedDeclTypes": 0,
+    "skippedHelperTypes": 0,
+    "brokenByBuiltinBlendingGapWithoutBaseAssets": 43,
+    "filesNeedingDroppedHeaderSymbolsWithoutBaseAssets": 1385,
+    "emittedVsRawLines": {
+     "emitted": 269419,
+     "rawSource": 232127,
+     "note": "emitted 는 인라인된 헤더 줄을 포함하므로 1을 넘을 수 있다"
+    },
+    "note": "번역 실패의 3분류: ① 라우드 거부(전처리) ② 조용한 인클루드 드롭 ③ 조용한 강등(g_* 머티리얼 오분류). 이 코퍼스에서 ①은 0, ③도 0 — 위험은 전부 ②에 있다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_workshop_shaders.py",
+     "note": "ShaderPreprocessor.swift:17-67,136-333,483-609 / GLSLTranslator.swift:1178-1216 거부 판정 경로 포트. --selftest 로 Swift 회귀테스트 기대값(거부 14·통과 9·분기선택 6 케이스) 대조 통과"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg 전수 (.frag 1689 + .vert 1689 = 3378)"
+    }
+   ]
+  }
+ ]
+}

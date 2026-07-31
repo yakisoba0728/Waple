@@ -1,0 +1,1514 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_media.py",
+ "entries": [
+  {
+   "id": "engine.media.mediaextensions.isOpenAL",
+   "value": {
+    "claim": "bin/mediaextensions64.dll 은 비디오와 무관한 오디오 DLL 이다",
+    "exportCount": 177,
+    "openALExports": 175,
+    "weSpecificExports": [
+     "CreateMediaExtensions",
+     "WallpaperEngineMedaExtensionVersion"
+    ],
+    "imports": {
+     "KERNEL32.dll": 143,
+     "WINMM.dll": 3,
+     "SHELL32.dll": 1,
+     "ole32.dll": 5
+    },
+    "mediaFoundationImports": 0,
+    "note": "export 177 중 175 가 OpenAL Soft(al*/alc*/alsoft*). 임포트는 KERNEL32/WINMM/SHELL32/ole32 뿐 — MF·DShow·D3D 가 하나도 없다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.mediaextensions.weExports",
+   "value": {
+    "CreateMediaExtensions": "ordinal 1 — 유일한 팩토리 진입점",
+    "WallpaperEngineMedaExtensionVersion": "ordinal 2 — 원문 오타(Meda) 그대로",
+    "alsoft_get_version": "OpenAL Soft 버전 질의 — 이 DLL 이 openal-soft 임을 자증한다",
+    "signatures": {
+     "openAL175": "OpenAL 1.1 + ALC + *SOFT 확장의 공개 ABI 를 그대로 따른다. 시그니처는 WE 고유가 아니라 규격의 것이다 — 재구현은 ABI 를 복원할 게 아니라 동등한 오디오 스택(macOS: AVAudioEngine 등)을 놓으면 된다.",
+     "CreateMediaExtensions": "미복원. 반환형·인자 개수를 확인하지 않았다",
+     "WallpaperEngineMedaExtensionVersion": "미복원"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.video.host",
+   "value": {
+    "binary": "wallpaper64.exe",
+    "staticImports": {
+     "d3d11.dll": [
+      "D3D11CreateDevice"
+     ],
+     "MFReadWrite.dll": [
+      "MFCreateSourceReaderFromURL",
+      "MFCreateSourceReaderFromByteStream"
+     ]
+    },
+    "delayImports": {
+     "MF.dll": [
+      "MFCreateTopology",
+      "MFCreateMediaSession",
+      "MFCreateAudioRendererActivate",
+      "MFCreateVideoRendererActivate",
+      "MFCreateTopologyNode",
+      "MFGetService"
+     ],
+     "MFPlat.DLL": [
+      "MFCreateSourceResolver",
+      "MFCreateDXGIDeviceManager",
+      "MFCreateAsyncResult",
+      "MFInvokeCallback",
+      "MFShutdown",
+      "MFStartup",
+      "MFCreateAttributes"
+     ],
+     "pdh.dll": [
+      "PdhCloseQuery",
+      "PdhAddCounterW",
+      "PdhCollectQueryDataEx",
+      "PdhGetFormattedCounterArrayW",
+      "PdhOpenQueryW"
+     ]
+    },
+    "note": "MFReadWrite 는 정적, MF.dll/MFPlat.DLL 은 지연로드. 지연로드 실패 시 'install the latest Media Feature Pack' 메시지박스를 띄운다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.video.frameworks",
+   "value": {
+    "settingKey": "general/user/videoframework",
+    "default": "mfEngine",
+    "values": {
+     "mfEngine": {
+      "uiLabel": "Scene DX11 (HDR Support)",
+      "impl": "IMFMediaEngine/IMFMediaEngineEx + MFCreateDXGIDeviceManager(D3D11)",
+      "render": "assets/scenes/videoplayer/scene.json 씬의 usertexture 'videotex' 로 합성"
+     },
+     "mf": {
+      "uiLabel": "Windows DX9",
+      "impl": "MFCreateMediaSession + MFCreateTopology + MFCreateVideoRendererActivate(EVR)"
+     },
+     "dshow.lav.vmr9": {
+      "uiLabel": "DirectShow (LAV Decoder)",
+      "impl": "CLSID_FilterGraph + 'LAV Splitter Source' + 'LAV Video Decoder' + CLSID_DSoundRender"
+     }
+    },
+    "otherKeys": {
+     "videoreadmode": [
+      "fromdisk(기본)",
+      "frommemory"
+     ],
+     "videoloopmode": [
+      "default(기본)",
+      "syncclock",
+      "synctopo"
+     ],
+     "videoaudiooutput": "bool(기본 true)",
+     "videohardwareacceleration": "bool(기본 true)",
+     "videomfstutterhack": "bool(기본 false) — UI 조건상 videoframework=='mf' 일 때만 노출",
+     "webmframework": [
+      "cef",
+      "native"
+     ]
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "file",
+     "ref": "Z:\\SteamLibrary\\steamapps\\common\\wallpaper_engine\\ui/dist/scripts/scripts.js",
+     "note": "videoFrameworkOptions/videoReadOptions/videoLoopOptions/webmFrameworkOptions"
+    },
+    {
+     "kind": "file",
+     "ref": "Z:\\SteamLibrary\\steamapps\\common\\wallpaper_engine\\locale/ui_en-us.json",
+     "note": "ui_settings_video_framework_prefer_* 라벨"
+    },
+    {
+     "kind": "file",
+     "ref": "Z:\\SteamLibrary\\steamapps\\common\\wallpaper_engine\\config.json",
+     "note": "실설치본의 현재 값"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.video.containerAllowlist",
+   "value": {
+    "extensions": [
+     ".mp4",
+     ".wmv",
+     ".avi",
+     ".m4v",
+     ".mov",
+     ".webm",
+     ".mkv"
+    ],
+    "count": 7,
+    "where": "wallpaper64.exe 0x14016ff50 의 함수-지역 static unordered_set 초기화",
+    "note": "확장자 허용목록은 WE 가 고정한다. 코덱은 고정하지 않는다 — 실제 디코드 가능 여부는 OS 의 MF/LAV 스택에 위임된다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x140170169..0x1401701e0 — .mp4 .wmv .avi .m4v .mov .webm .mkv 를 차례로 적재하고 버킷 수 8/마스크 7 로 세트를 만든다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.color.delegation",
+   "value": {
+    "claim": "WE 는 YUV→RGB 행렬도 full/limited range 도 스스로 정하지 않는다",
+    "referencedColorAttributes": [
+     "MF_MT_TRANSFER_FUNCTION",
+     "MF_MT_VIDEO_PRIMARIES"
+    ],
+    "absentColorAttributes": [
+     "MF_MT_YUV_MATRIX",
+     "MF_MT_VIDEO_NOMINAL_RANGE",
+     "MF_MT_VIDEO_CHROMA_SITING"
+    ],
+    "absentSubtypes": [
+     "MFVideoFormat_NV12",
+     "MFVideoFormat_ARGB32",
+     "MFVideoFormat_RGB32"
+    ],
+    "conversionPoint": "IMFMediaEngineEx::TransferVideoFrame — MF 내부가 변환한다",
+    "outputFormatRaw": 87,
+    "consequence": "colr 박스가 없을 때의 기본값은 WE 쪽 상수가 아니다. Media Foundation 의 기본 추정(해상도 기반 BT.601/BT.709, limited range)이 그대로 적용된다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe .rdata GUID 전수 스캔 — MF_MT_YUV_MATRIX/MF_MT_VIDEO_NOMINAL_RANGE 바이트열 부재"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f239d: 41b857000000",
+     "note": "mov r8d, 0x57 — MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT = 87"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.color.hdrProbe",
+   "value": {
+    "where": "wallpaper64.exe 0x1400f2750 (짝: 0x1400f2952)",
+    "source": "MFCreateSourceReaderFromURL 로 연 IMFSourceReader 의 GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM=0xFFFFFFFC)",
+    "reads": {
+     "MF_MT_FRAME_SIZE": "GetUINT64 — 상위 32비트=width, 하위 32비트=height",
+     "MF_MT_FRAME_RATE": "GetUINT64 — fps = (상위)/(하위), float 로 저장",
+     "MF_MT_TRANSFER_FUNCTION": "GetUINT32 — 15 → 내부값 2, 16 → 내부값 1, 그 외 무시",
+     "MF_MT_VIDEO_PRIMARIES": "GetUINT32 — 9 일 때만 플래그 1"
+    },
+    "acceptedTransferValues": [
+     15,
+     16
+    ],
+    "acceptedPrimariesValue": 9,
+    "byteStreamVariant": "0x1400f2952 는 같은 4개 속성을 읽는 짝 함수이고 MFCreateSourceReaderFromByteStream 을 쓴다 (videoreadmode=frommemory 에 대응하는 것으로 보인다)",
+    "callSiteCounts": {
+     "MFCreateSourceReaderFromURL": 1,
+     "MFCreateSourceReaderFromByteStream": 1
+    },
+    "note": "이 프로브가 읽는 색 속성은 이 둘뿐이다. 행렬·레인지·크로마사이팅은 읽지 않는다. IMFSourceReader 는 두 곳 모두 프로브 후 즉시 Release 된다 — 디코드에 쓰이지 않는다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f2867: 83e80f740a",
+     "note": "sub eax, 0xF / je — MF_MT_TRANSFER_FUNCTION == 15 분기"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f286c: 83f8017510",
+     "note": "cmp eax, 1 / jne — MF_MT_TRANSFER_FUNCTION == 16 분기"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f28a0: 837c24680975",
+     "note": "cmp dword [rsp+0x68], 9 / jne — MF_MT_VIDEO_PRIMARIES == 9 분기"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe IAT 0x140426690/0x140426698 참조 전수 — 각각 호출 지점 1곳(0x1401200a1, 0x1400f2b8b)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.mfEngine.pipeline",
+   "value": {
+    "mfStartup": {
+     "version": "0x20070",
+     "flags": "MFSTARTUP_NOSOCKET(1)"
+    },
+    "d3d11CreateDevice": {
+     "driverType": 1,
+     "flags": "0x800",
+     "featureLevels": [
+      "0xb100",
+      "0xb000",
+      "0xa100",
+      "0xa000"
+     ],
+     "sdkVersion": 7
+    },
+    "attributes": {
+     "MF_MEDIA_ENGINE_CALLBACK": "IMFMediaEngineNotify 구현체(SetUnknown)",
+     "MF_MEDIA_ENGINE_DXGI_MANAGER": "MFCreateDXGIDeviceManager + ResetDevice(D3D11)",
+     "MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT": 87,
+     "MF_MEDIA_ENGINE_EXTENSION": "오디오 출력이 꺼졌을 때만 설치"
+    },
+    "createInstanceFlags": {
+     "base": "0x12",
+     "plusWhenAudioDisabled": "0x4"
+    },
+    "d3d11Multithread": "ID3D11Multithread 를 QI 해 SetMultithreadProtected(TRUE)",
+    "sharedSurface": "IDXGIKeyedMutex 로 보호되는 공유 텍스처. AcquireSync(key=0, 1000ms) → TransferVideoFrame → ReleaseSync(key=0)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f2245: b970000200",
+     "note": "mov ecx, 0x20070 — MFStartup(MF_VERSION=0x20070, MFSTARTUP_NOSOCKET)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f2025: 41b900080000",
+     "note": "mov r9d, 0x800 — D3D11CreateDevice Flags=D3D11_CREATE_DEVICE_VIDEO_SUPPORT"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f239d: 41b857000000",
+     "note": "mov r8d, 0x57 — MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT = 87"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f2415: 83ca12",
+     "note": "or edx, 0x12 — MediaEngine CreateInstance dwFlags 기본값"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f2407: 4180f601",
+     "note": "xor r14b, 1 — 오디오 비활성이면 dwFlags 에 0x4 를 더한다"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f350e: 41b8e8030000",
+     "note": "mov r8d, 0x3E8 — 직후 call [rax+0x40] (키드뮤텍스 1000ms)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.mfEngine.framePacing",
+   "value": {
+    "model": "풀(pull) 기반 — WE 는 프레임 타이머를 돌리지 않는다. 엔진에 '새 프레임 있냐'를 묻고 있을 때만 텍스처로 옮긴다",
+    "measuredSites": {
+     "0x1400f3774": [
+      "IMFMediaEngine +0x160 호출, 반환값을 r14d 에 보관",
+      "+0xA0 호출 결과가 0 이 아니면 0x1400f38c0 으로 분기(그 프레임 처리 종료)",
+      "+0xD8 호출 결과가 0 이 아니면 같은 곳으로 분기"
+     ],
+     "0x1400f34ac": [
+      "IDXGIKeyedMutex +0x40 (key=0, 1000ms)",
+      "IMFMediaEngineEx +0x158 — (dst 서페이스, srcRect 포인터, dstRect{0,0,w,h}, 경계색 BGRA(0,0,0,0xFF))",
+      "IDXGIKeyedMutex +0x48 (key=0)"
+     ]
+    },
+    "caution": "두 지점은 서로 다른 .pdata 청크다. 위 두 블록이 한 프레임 안에서 이 순서로 이어진다는 것은 추론이며 직접 관측하지 않았다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f377f: ff9060010000",
+     "note": "call qword [rax+0x160] — IMFMediaEngine +0x160"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f378f: ff92a0000000",
+     "note": "call qword [rdx+0xA0] — 결과가 0 이 아니면 프레임 스킵"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f37a9: ff92d8000000",
+     "note": "call qword [rdx+0xD8] — 결과가 0 이 아니면 프레임 스킵"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f353f: ff9058010000",
+     "note": "call qword [rax+0x158] — IMFMediaEngineEx +0x158"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f350e: 41b8e8030000",
+     "note": "mov r8d, 0x3E8 — 직후 call [rax+0x40] (키드뮤텍스 1000ms)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f34ff: c6442453ff",
+     "note": "mov byte [rsp+0x53], 0xFF — 경계색 알파 255"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.mfEngine.stallWatchdog",
+   "value": {
+    "where": "wallpaper64.exe 0x1400f37b7-0x1400f38c0",
+    "algorithm": [
+     "프레임 델타 dt 를 구해 0.1초로 상한(minss)",
+     "IMFMediaEngine +0x80 → 현재 재생시각 t (double)",
+     "백오프 타이머 b>0 이면 b = max(b-dt, 0) 후 Sleep(1)",
+     "b < 5.0 이고 t > 0 이고 t 가 직전 프레임 값과 **비트 단위로 동일**하면 정지 후보",
+     "정지 누적시간 += dt. 0.2초를 넘으면 복구: +0x108 → +0x88(0.0) → Sleep(100) → +0x88(t) → +0x100",
+     "복구 후 b = 4*b + 10 (지수적 백오프), 정지 누적 리셋"
+    ],
+    "constants": {
+     "frameDeltaClampSec": 0.1,
+     "stallThresholdSec": 0.2,
+     "backoffGateSec": 5.0,
+     "backoffGrow": "next = 4*cur + 10",
+     "recoverySleepMs": 100
+    },
+    "note": "Media Session 경로의 videomfstutterhack 와 목적은 같으나 별개 코드다. 이쪽은 설정 스위치가 없다 — 항상 동작한다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f37d1: f30f5d35",
+     "note": "minss xmm6, [rip+0x39ee7b] — 프레임 델타를 0.1초로 상한"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f37dc: ff9080000000",
+     "note": "call qword [rax+0x80] — IMFMediaEngine +0x80"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f3824: 660f2e7b40",
+     "note": "ucomisd xmm7, [rbx+0x40] — 직전 시각과 완전 동일한지"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f3836: 0f2f35",
+     "note": "comiss xmm6, [rip+0x39ee3f] — 정지 누적 임계 0.2초"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f384b: ff9008010000",
+     "note": "call qword [rax+0x108] — 복구 1단계"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f385b: ff9088000000",
+     "note": "call qword [rax+0x88] — 복구 2단계 (인자 0.0)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f3861: b964000000",
+     "note": "mov ecx, 0x64 — 직후 Sleep(100)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f3883: ff9000010000",
+     "note": "call qword [rax+0x100] — 복구 4단계"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.floatAnchors",
+   "value": {
+    "0x140492654": {
+     "value": 0.10000000149011612,
+     "meaning": "프레임 델타 상한(초)"
+    },
+    "0x14049267c": {
+     "value": 0.20000000298023224,
+     "meaning": "정지 판정 누적 임계(초)"
+    },
+    "0x140492858": {
+     "value": 5.0,
+     "meaning": "복구 재시도 허용 백오프 상한"
+    },
+    "0x140492868": {
+     "value": 10.0,
+     "meaning": "백오프 갱신 상수 — next = 4*cur + 10"
+    },
+    "0x140492880": {
+     "value": 10000000.0,
+     "meaning": "100ns → 초 (Media Session 스터터 검출)"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.mfEngine.videotex",
+   "value": {
+    "scene": "assets/scenes/videoplayer/scene.json",
+    "model": "models/background.json — autosize, nopadding",
+    "material": "materials/background.json — shader 'genericimage', usertextures [{name:'videotex', keepaspect:true}]",
+    "shaderDoesNoColorConversion": "genericimage.frag 은 texSample2D 후 밝기/알파/감마만 적용한다. YUV 변환 코드가 없다.",
+    "wiring": "0x140120050 이 씬의 wproperties.videotex.value 에 비디오 파일 경로를 넣는다",
+    "sourceReaderRole": "MFCreateSourceReaderFromURL 은 이 지점에서 메타데이터 프로브 전용으로 쓰이고 즉시 Release 된다 — 디코드 경로가 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe IAT 0x140426690 참조 전수 — 호출 지점 1곳",
+     "note": "MFCreateSourceReaderFromURL 이 재생 경로에 쓰였다면 호출 지점이 더 있어야 한다"
+    },
+    {
+     "kind": "asset",
+     "ref": "Z:\\SteamLibrary\\steamapps\\common\\wallpaper_engine\\assets/scenes/videoplayer/materials/background.json"
+    },
+    {
+     "kind": "asset",
+     "ref": "Z:\\SteamLibrary\\steamapps\\common\\wallpaper_engine\\assets/shaders/genericimage.frag"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x14012009f: ff15eb653000",
+     "note": "call [MFReadWrite!MFCreateSourceReaderFromURL]"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.loop",
+   "value": {
+    "mfEngine": "생성 직후 +0xE8(인자 0)과 +0xF8(인자 1)을 연달아 호출한다. 루프는 엔진 내부 기능이고 WE 는 seek 로 감지 않는다.",
+    "settingKey": "videoloopmode",
+    "values": [
+     "default",
+     "syncclock",
+     "synctopo"
+    ],
+    "uiLabels": [
+     "Default",
+     "Sync clock",
+     "Sync topology"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f243b: 33d2",
+     "note": "xor edx, edx — 직후 call [rax+0xE8] (인자 FALSE)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f2443: ff90e8000000",
+     "note": "call qword [rax+0xE8] — IMFMediaEngine +0xE8"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f244d: ba01000000",
+     "note": "mov edx, 1 — 직후 call [rax+0xF8] (인자 TRUE)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400f2455: ff90f8000000",
+     "note": "call qword [rax+0xF8] — IMFMediaEngine +0xF8"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.mfSession.stutterHack",
+   "value": {
+    "settingKey": "videomfstutterhack",
+    "default": false,
+    "where": "wallpaper64.exe 0x140121830",
+    "algorithm": [
+     "IMFClock::GetState(0,&s) 가 1(RUNNING)인지 확인",
+     "IMFClock::GetCorrelatedTime(0,&t,&sys) → t/1e7 초",
+     "직전 폴링값과 **정확히 같으면** 시계가 멈춘 것으로 판정",
+     "'Video stutter detected' 로그 → IMFMediaSession::Stop() → Start(NULL, VT_I8 max(저장위치, 현재시각))",
+     "복구 후 4회 폴링을 건너뛴다. 미재생 상태에서는 직전값을 -1.0f 로 리셋"
+    ],
+    "scope": "Media Session(EVR) 경로 전용 — Media Engine 경로에는 이 코드가 없다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x140121830-0x140121974"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1401218b9: f20f5e05",
+     "note": "divsd xmm0, [rip+0x370fbf] — 나눗셈 상수 1e7 (100ns 단위 → 초)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.audio.paths",
+   "value": {
+    "sceneAudio": {
+     "impl": "OpenAL Soft (bin/mediaextensions64.dll 에 정적 링크)",
+     "entry": "CreateMediaExtensions (LoadLibraryW 로 동적 로드)",
+     "evidence": "alcOpenDevice/alSourcePlay/alBufferData 등 175개 export"
+    },
+    "videoAudio": {
+     "impl": "Media Engine 내부 오디오 렌더러",
+     "volume": "IMFMediaEngine +0x128 (double). 오디오 출력이 켜졌을 때만 호출",
+     "mute": "오디오 출력이 꺼지면 CreateInstance dwFlags 에 0x4 를 더한다"
+    },
+    "mfSessionAudio": "MFCreateAudioRendererActivate + IMFAudioStreamVolume (mf 경로)",
+    "dshowAudio": "CLSID_DSoundRender + IID_IBasicAudio (dshow.lav.vmr9 경로)",
+    "settingKey": "videoaudiooutput"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.guids.present",
+   "value": {
+    "CLSID_DSoundRender": {
+     "guid": "79376820-07D0-11CF-A24D-0020AFD79767",
+     "va": "0x14042c350",
+     "section": ".rdata"
+    },
+    "CLSID_EnhancedVideoRenderer": {
+     "guid": "FA10746C-9B63-4B6C-BC49-FC300EA5F256",
+     "va": "0x14042c360",
+     "section": ".rdata"
+    },
+    "CLSID_FilterGraph": {
+     "guid": "E436EBB3-524F-11CE-9F53-0020AF0BA770",
+     "va": "0x14042c340",
+     "section": ".rdata"
+    },
+    "CLSID_MFMediaEngineClassFactory": {
+     "guid": "B44392DA-499B-446B-A4CB-005FEAD0E6D5",
+     "va": "0x140486148",
+     "section": ".rdata"
+    },
+    "ID3D11Multithread": {
+     "guid": "9B7E4E00-342C-4106-A19F-4F2704F689F0",
+     "va": "0x140487198",
+     "section": ".rdata"
+    },
+    "ID3D11Texture2D": {
+     "guid": "6F15AAF2-D208-4E89-9AB4-489535D34F9C",
+     "va": "0x140477ef0",
+     "section": ".rdata"
+    },
+    "IDXGIKeyedMutex": {
+     "guid": "9D8E1289-D7B3-465F-8126-250E349AF85D",
+     "va": "0x140487078",
+     "section": ".rdata"
+    },
+    "IDXGIResource": {
+     "guid": "035F3AB4-482E-4E50-B41F-8A7F8BD8960B",
+     "va": "0x140487188",
+     "section": ".rdata"
+    },
+    "IID_IBaseFilter": {
+     "guid": "56A86895-0AD4-11CE-B03A-0020AF0BA770",
+     "va": "0x14042c390",
+     "section": ".rdata"
+    },
+    "IID_IBasicAudio": {
+     "guid": "56A868B3-0AD4-11CE-B03A-0020AF0BA770",
+     "va": "0x14048a228",
+     "section": ".rdata"
+    },
+    "IID_IFileSourceFilter": {
+     "guid": "56A868A6-0AD4-11CE-B03A-0020AF0BA770",
+     "va": "0x14042c3a0",
+     "section": ".rdata"
+    },
+    "IID_IGraphBuilder": {
+     "guid": "56A868A9-0AD4-11CE-B03A-0020AF0BA770",
+     "va": "0x14048a248",
+     "section": ".rdata"
+    },
+    "IID_IMediaControl": {
+     "guid": "56A868B1-0AD4-11CE-B03A-0020AF0BA770",
+     "va": "0x14048a238",
+     "section": ".rdata"
+    },
+    "IID_IMediaEventEx": {
+     "guid": "56A868C0-0AD4-11CE-B03A-0020AF0BA770",
+     "va": "0x14048a268",
+     "section": ".rdata"
+    },
+    "IID_IMediaSeeking": {
+     "guid": "36B73880-C2C8-11CF-8B46-00805F6CEF60",
+     "va": "0x14048a258",
+     "section": ".rdata"
+    },
+    "IMFAttributes": {
+     "guid": "2CD2D921-C447-44A7-A13C-4ADABFC247E3",
+     "va": "0x140489f50",
+     "section": ".rdata"
+    },
+    "IMFAudioStreamVolume": {
+     "guid": "76B1BBDB-4EC8-4F36-B106-70A9316DF593",
+     "va": "0x140489f90",
+     "section": ".rdata"
+    },
+    "IMFByteStream": {
+     "guid": "AD4C1B00-4BF7-422F-9175-756693D9130D",
+     "va": "0x140487168",
+     "section": ".rdata"
+    },
+    "IMFMediaEngineClassFactory": {
+     "guid": "4D645ACE-26AA-4688-9BE1-DF3516990B93",
+     "va": "0x1404871a8",
+     "section": ".rdata"
+    },
+    "IMFMediaEngineEx": {
+     "guid": "83015EAD-B1E6-40D0-A98A-37145FFE1AD1",
+     "va": "0x140487178",
+     "section": ".rdata"
+    },
+    "IMFMediaEngineNotify": {
+     "guid": "FEE7C112-E776-42B5-9BBF-0048524E2BD5",
+     "va": "0x140487250",
+     "section": ".rdata"
+    },
+    "IMFMediaSource": {
+     "guid": "279A808D-AEC7-40C8-9C6B-A6B492C78A66",
+     "va": "0x1404872e8",
+     "section": ".rdata"
+    },
+    "IMFRateControl": {
+     "guid": "88DDCD21-03C3-4275-91ED-55EE3929328F",
+     "va": "0x140489f70",
+     "section": ".rdata"
+    },
+    "IMFVideoDisplayControl": {
+     "guid": "A490B1E4-AB84-4D31-A1B2-181E03B1077A",
+     "va": "0x140489f60",
+     "section": ".rdata"
+    },
+    "IMFVideoProcessor": {
+     "guid": "6AB0000C-FECE-4D1F-A2AC-A9573530656E",
+     "va": "0x140489fa0",
+     "section": ".rdata"
+    },
+    "MFMediaType_Audio": {
+     "guid": "73647561-0000-0010-8000-00AA00389B71",
+     "va": "0x14042c320",
+     "section": ".rdata"
+    },
+    "MFMediaType_Video": {
+     "guid": "73646976-0000-0010-8000-00AA00389B71",
+     "va": "0x14042c330",
+     "section": ".rdata"
+    },
+    "MF_MEDIA_ENGINE_CALLBACK": {
+     "guid": "C60381B8-83A4-41F8-A3D0-DE05076849A9",
+     "va": "0x140486178",
+     "section": ".rdata"
+    },
+    "MF_MEDIA_ENGINE_DXGI_MANAGER": {
+     "guid": "065702DA-1094-486D-8617-EE7CC4EE4648",
+     "va": "0x140486188",
+     "section": ".rdata"
+    },
+    "MF_MEDIA_ENGINE_EXTENSION": {
+     "guid": "3109FD46-060D-4B62-8DCF-FAFF811318D2",
+     "va": "0x140486168",
+     "section": ".rdata"
+    },
+    "MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT": {
+     "guid": "5066893C-8CF9-42BC-8B8A-472212E52726",
+     "va": "0x140486158",
+     "section": ".rdata"
+    },
+    "MF_MT_FRAME_RATE": {
+     "guid": "C459A2E8-3D2C-4E44-B132-FEE5156C7BB0",
+     "va": "0x14042c2f0",
+     "section": ".rdata"
+    },
+    "MF_MT_FRAME_SIZE": {
+     "guid": "1652C33D-D6B2-4012-B834-72030849A37D",
+     "va": "0x14042c2e0",
+     "section": ".rdata"
+    },
+    "MF_MT_TRANSFER_FUNCTION": {
+     "guid": "5FB0FCE9-BE5C-4935-A811-EC838F8EED93",
+     "va": "0x14042c300",
+     "section": ".rdata"
+    },
+    "MF_MT_VIDEO_PRIMARIES": {
+     "guid": "DBFBE4D7-0740-4EE0-8192-850AB0E21935",
+     "va": "0x14042c310",
+     "section": ".rdata"
+    },
+    "MF_PD_DURATION": {
+     "guid": "6C990D33-BB8E-477A-8598-0D5D96FCD88A",
+     "va": "0x140474288",
+     "section": ".rdata"
+    },
+    "MF_TOPOLOGY_DXVA_MODE": {
+     "guid": "1E8D34F6-F5AB-4E23-BB88-874AA3A1A74D",
+     "va": "0x1404742e8",
+     "section": ".rdata"
+    },
+    "MR_VIDEO_RENDER_SERVICE": {
+     "guid": "1092A86C-AB1A-459A-A336-831FBC4D11FF",
+     "va": "0x14042c370",
+     "section": ".rdata"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.guids.absent",
+   "value": {
+    "note": "wallpaper64.exe 에 바이트열이 존재하지 않는 GUID. 부재가 곧 결론이다.",
+    "names": [
+     "CLSID_VideoMixingRenderer9",
+     "IMF2DBuffer",
+     "IMFDXGIBuffer",
+     "IMFMediaEngine",
+     "MFVideoFormat_ARGB32",
+     "MFVideoFormat_H264",
+     "MFVideoFormat_HEVC",
+     "MFVideoFormat_NV12",
+     "MFVideoFormat_RGB32",
+     "MF_MT_MAJOR_TYPE",
+     "MF_MT_SUBTYPE",
+     "MF_MT_VIDEO_CHROMA_SITING",
+     "MF_MT_VIDEO_NOMINAL_RANGE",
+     "MF_MT_YUV_MATRIX",
+     "MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS",
+     "MF_SOURCE_READER_D3D_MANAGER",
+     "MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.byteAnchors",
+   "value": {
+    "0x1400f2025": {
+     "bytes": "41b900080000",
+     "meaning": "mov r9d, 0x800 — D3D11CreateDevice Flags=D3D11_CREATE_DEVICE_VIDEO_SUPPORT"
+    },
+    "0x1400f2245": {
+     "bytes": "b970000200",
+     "meaning": "mov ecx, 0x20070 — MFStartup(MF_VERSION=0x20070, MFSTARTUP_NOSOCKET)"
+    },
+    "0x1400f239d": {
+     "bytes": "41b857000000",
+     "meaning": "mov r8d, 0x57 — MF_MEDIA_ENGINE_VIDEO_OUTPUT_FORMAT = 87"
+    },
+    "0x1400f2407": {
+     "bytes": "4180f601",
+     "meaning": "xor r14b, 1 — 오디오 비활성이면 dwFlags 에 0x4 를 더한다"
+    },
+    "0x1400f2415": {
+     "bytes": "83ca12",
+     "meaning": "or edx, 0x12 — MediaEngine CreateInstance dwFlags 기본값"
+    },
+    "0x1400f243b": {
+     "bytes": "33d2",
+     "meaning": "xor edx, edx — 직후 call [rax+0xE8] (인자 FALSE)"
+    },
+    "0x1400f2443": {
+     "bytes": "ff90e8000000",
+     "meaning": "call qword [rax+0xE8] — IMFMediaEngine +0xE8"
+    },
+    "0x1400f244d": {
+     "bytes": "ba01000000",
+     "meaning": "mov edx, 1 — 직후 call [rax+0xF8] (인자 TRUE)"
+    },
+    "0x1400f2455": {
+     "bytes": "ff90f8000000",
+     "meaning": "call qword [rax+0xF8] — IMFMediaEngine +0xF8"
+    },
+    "0x1400f2867": {
+     "bytes": "83e80f740a",
+     "meaning": "sub eax, 0xF / je — MF_MT_TRANSFER_FUNCTION == 15 분기"
+    },
+    "0x1400f286c": {
+     "bytes": "83f8017510",
+     "meaning": "cmp eax, 1 / jne — MF_MT_TRANSFER_FUNCTION == 16 분기"
+    },
+    "0x1400f28a0": {
+     "bytes": "837c24680975",
+     "meaning": "cmp dword [rsp+0x68], 9 / jne — MF_MT_VIDEO_PRIMARIES == 9 분기"
+    },
+    "0x1400f34ff": {
+     "bytes": "c6442453ff",
+     "meaning": "mov byte [rsp+0x53], 0xFF — 경계색 알파 255"
+    },
+    "0x1400f350e": {
+     "bytes": "41b8e8030000",
+     "meaning": "mov r8d, 0x3E8 — 직후 call [rax+0x40] (키드뮤텍스 1000ms)"
+    },
+    "0x1400f353f": {
+     "bytes": "ff9058010000",
+     "meaning": "call qword [rax+0x158] — IMFMediaEngineEx +0x158"
+    },
+    "0x1400f377f": {
+     "bytes": "ff9060010000",
+     "meaning": "call qword [rax+0x160] — IMFMediaEngine +0x160"
+    },
+    "0x1400f378f": {
+     "bytes": "ff92a0000000",
+     "meaning": "call qword [rdx+0xA0] — 결과가 0 이 아니면 프레임 스킵"
+    },
+    "0x1400f37a9": {
+     "bytes": "ff92d8000000",
+     "meaning": "call qword [rdx+0xD8] — 결과가 0 이 아니면 프레임 스킵"
+    },
+    "0x1400f37d1": {
+     "bytes": "f30f5d35",
+     "meaning": "minss xmm6, [rip+0x39ee7b] — 프레임 델타를 0.1초로 상한"
+    },
+    "0x1400f37dc": {
+     "bytes": "ff9080000000",
+     "meaning": "call qword [rax+0x80] — IMFMediaEngine +0x80"
+    },
+    "0x1400f3824": {
+     "bytes": "660f2e7b40",
+     "meaning": "ucomisd xmm7, [rbx+0x40] — 직전 시각과 완전 동일한지"
+    },
+    "0x1400f3836": {
+     "bytes": "0f2f35",
+     "meaning": "comiss xmm6, [rip+0x39ee3f] — 정지 누적 임계 0.2초"
+    },
+    "0x1400f384b": {
+     "bytes": "ff9008010000",
+     "meaning": "call qword [rax+0x108] — 복구 1단계"
+    },
+    "0x1400f385b": {
+     "bytes": "ff9088000000",
+     "meaning": "call qword [rax+0x88] — 복구 2단계 (인자 0.0)"
+    },
+    "0x1400f3861": {
+     "bytes": "b964000000",
+     "meaning": "mov ecx, 0x64 — 직후 Sleep(100)"
+    },
+    "0x1400f3883": {
+     "bytes": "ff9000010000",
+     "meaning": "call qword [rax+0x100] — 복구 4단계"
+    },
+    "0x14012009f": {
+     "bytes": "ff15eb653000",
+     "meaning": "call [MFReadWrite!MFCreateSourceReaderFromURL]"
+    },
+    "0x1401218b9": {
+     "bytes": "f20f5e05",
+     "meaning": "divsd xmm0, [rip+0x370fbf] — 나눗셈 상수 1e7 (100ns 단위 → 초)"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.stringAnchors",
+   "value": {
+    "videoframework": {
+     "va": "0x140476cf0",
+     "section": ".rdata"
+    },
+    "videoreadmode": {
+     "va": "0x140476f50",
+     "section": ".rdata"
+    },
+    "videoloopmode": {
+     "va": "0x140476f40",
+     "section": ".rdata"
+    },
+    "videoaudiooutput": {
+     "va": "0x140476f70",
+     "section": ".rdata"
+    },
+    "videohardwareacceleration": {
+     "va": "0x140476f88",
+     "section": ".rdata"
+    },
+    "videomfstutterhack": {
+     "va": "0x140476fa8",
+     "section": ".rdata"
+    },
+    "webmframework": {
+     "va": "0x140477150",
+     "section": ".rdata"
+    },
+    "videosequence": {
+     "va": "0x140478210",
+     "section": ".rdata"
+    },
+    "mfEngine": {
+     "va": "0x140476f30",
+     "section": ".rdata"
+    },
+    "mfEngine.muted": {
+     "va": "0x1404884b0",
+     "section": ".rdata"
+    },
+    "dshow.lav.vmr9": {
+     "va": "0x1404884d0",
+     "section": ".rdata"
+    },
+    "fromdisk": {
+     "va": "0x140476f60",
+     "section": ".rdata"
+    },
+    "assets/scenes/videoplayer/scene.json": {
+     "va": "0x140489d10",
+     "section": ".rdata"
+    },
+    "videotex": {
+     "va": "0x140489d38",
+     "section": ".rdata"
+    },
+    "getVideoTexture": {
+     "va": "0x140490e08",
+     "section": ".rdata"
+    },
+    "Media Foundation": {
+     "va": "0x1404887a8",
+     "section": ".rdata"
+    },
+    "Media Foundation (muted)": {
+     "va": "0x1404887c0",
+     "section": ".rdata"
+    },
+    "DirectShow, LAV, VMR9": {
+     "va": "0x140488768",
+     "section": ".rdata"
+    },
+    ".mp4": {
+     "va": "0x14048a800",
+     "section": ".rdata"
+    },
+    ".wmv": {
+     "va": "0x14048a7f8",
+     "section": ".rdata"
+    },
+    ".avi": {
+     "va": "0x14048a830",
+     "section": ".rdata"
+    },
+    ".m4v": {
+     "va": "0x14048a828",
+     "section": ".rdata"
+    },
+    ".mov": {
+     "va": "0x14048a820",
+     "section": ".rdata"
+    },
+    ".webm": {
+     "va": "0x140488af8",
+     "section": ".rdata"
+    },
+    ".mkv": {
+     "va": "0x14048a818",
+     "section": ".rdata"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/mediaextensions64.dll 직접 파싱 (export·import·GUID·명령바이트)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "corpus.video.projects",
+   "value": {
+    "count": 145,
+    "byExtension": {
+     ".mp4": 145
+    },
+    "parseErrors": {}
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 video 145종 + scene.pkg 161개 ISO BMFF 직접 파싱"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "corpus.video.codecs",
+   "value": {
+    "ftypBrand": {
+     "mp42": 87,
+     "isom": 56,
+     "mp41": 1,
+     "dash": 1
+    },
+    "videoSampleEntry": {
+     "avc1": 144,
+     "hev1": 1
+    },
+    "audioSampleEntry": {
+     "mp4a": 108,
+     "Opus": 2
+    },
+    "trackShape": {
+     "v1a1": 110,
+     "v1a0": 35
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 video 145종 + scene.pkg 161개 ISO BMFF 직접 파싱"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "corpus.video.colr",
+   "value": {
+    "colrBox": {
+     "(colr 없음)": 107,
+     "nclx": 38
+    },
+    "primariesTransferMatrix": {
+     "1/1/1": 30,
+     "1/13/1": 5,
+     "0/1/1": 1,
+     "1/2/1": 1,
+     "2/2/1": 1
+    },
+    "fullRangeFlag": {
+     "(nclx 아님)": 107,
+     "False": 38
+    },
+    "bitDepthField": {
+     "24": 143,
+     "0": 2
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 video 145종 + scene.pkg 161개 ISO BMFF 직접 파싱"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "corpus.video.geometry",
+   "value": {
+    "resolution": {
+     "3840x2160": 74,
+     "1920x1080": 44,
+     "2560x1440": 15,
+     "2560x1080": 1,
+     "2290x1290": 1,
+     "1440x1080": 1,
+     "368x416": 1,
+     "1920x3200": 1,
+     "2880x1620": 1,
+     "3840x2152": 1,
+     "2160x1080": 1,
+     "3840x2558": 1,
+     "1280x720": 1,
+     "2116x1440": 1,
+     "3200x1800": 1
+    },
+    "fps": {
+     "60.0": 46,
+     "24.0": 41,
+     "30.0": 30,
+     "29.97": 4,
+     "23.98": 2,
+     "25.0": 2,
+     "10.0": 2,
+     "60.02": 1,
+     "30.03": 1,
+     "10.09": 1,
+     "20.0": 1,
+     "29.89": 1,
+     "59.94": 1,
+     "16.0": 1,
+     "50.0": 1,
+     "60.19": 1,
+     "72.0": 1,
+     "48.0": 1,
+     "54.93": 1,
+     "240.0": 1,
+     "12.0": 1,
+     "90.0": 1,
+     "60.24": 1,
+     "60.05": 1
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 video 145종 + scene.pkg 161개 ISO BMFF 직접 파싱"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.color.corpusImplication",
+   "value": {
+    "claim": "colr 박스가 없는 파일이 다수이므로 '기본값'이 실제 화면을 지배한다",
+    "videoProjectsWithoutColr": 107,
+    "videoProjectsTotal": 145,
+    "nclxFullRangeTrue": 0,
+    "sceneEmbeddedWithoutColr": 29,
+    "sceneEmbeddedTotal": 38,
+    "consequence": "WE 는 이 기본값을 코드에 갖고 있지 않다. 따라서 재구현은 'WE 와 같은 상수'를 베낄 수 없고, 각 플랫폼 미디어 스택의 기본 추정에 동일하게 위임해야 화면이 맞는다.",
+    "observedFullRange": "코퍼스의 nclx 파일 전부 full_range_flag=0(limited). full range 표본이 0개라 full range 경로는 코퍼스로 검증할 수 없다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 video 145종 + scene.pkg 161개 ISO BMFF 직접 파싱"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 에 MF_MT_VIDEO_NOMINAL_RANGE / MF_MT_YUV_MATRIX 바이트열 부재"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "corpus.video.outliers",
+   "value": {
+    "note": "재구현이 실제로 걸려 넘어지는 표본. id 는 워크샵 아이템 id 다.",
+    "nonAvc1": [
+     {
+      "id": "3448728208",
+      "codec": "hev1",
+      "colr": null,
+      "size": "1920x1080"
+     }
+    ],
+    "nonBt709": [
+     {
+      "id": "3456524251",
+      "primaries": 0,
+      "transfer": 1,
+      "matrix": 1
+     },
+     {
+      "id": "3519888361",
+      "primaries": 1,
+      "transfer": 13,
+      "matrix": 1
+     },
+     {
+      "id": "3531878415",
+      "primaries": 1,
+      "transfer": 13,
+      "matrix": 1
+     },
+     {
+      "id": "3553595416",
+      "primaries": 1,
+      "transfer": 13,
+      "matrix": 1
+     },
+     {
+      "id": "3578271888",
+      "primaries": 1,
+      "transfer": 2,
+      "matrix": 1
+     },
+     {
+      "id": "3582809467",
+      "primaries": 1,
+      "transfer": 13,
+      "matrix": 1
+     },
+     {
+      "id": "3613206617",
+      "primaries": 1,
+      "transfer": 13,
+      "matrix": 1
+     },
+     {
+      "id": "821372791",
+      "primaries": 2,
+      "transfer": 2,
+      "matrix": 1
+     }
+    ],
+    "nonBt709Criterion": "colr 삼중항 중 하나라도 1(BT.709) 이 아닌 표본. primaries=0/2 는 예약/미지정이라 플랫폼마다 추정이 갈린다.",
+    "nonAvc1Note": "3448728208 은 Waple VideoRenderer.swift 의 F600 주석이 이름을 짚은 바로 그 표본이다 — WE 는 재생하고 AVFoundation 은 isPlayable=false 를 준다.",
+    "noAudioTrackCount": 35
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 video 145종 + scene.pkg 161개 ISO BMFF 직접 파싱"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "corpus.sceneEmbeddedMp4",
+   "value": {
+    "method": "scene.pkg 원본 바이트에서 평문 `....ftyp` 박스 시그니처를 찾는다",
+    "caveat": "**이 수치는 하한이다.** .tex mip 페이로드가 LZ4 로 압축된 비디오는 평문 ftyp 가 없어 이 스캔에 잡히지 않는다 (Waple TexImage.swift 가 lz4=true 인 video 페이로드 존재를 기록한다). 또 gifscene.pkg 는 스캔하지 않는다 — 그래서 scenePkgs 가 spec/corpus/inventory.json 의 162 와 다르다.",
+    "scenePkgs": 161,
+    "pkgsWithEmbeddedMp4": 24,
+    "embeddedMp4Count": 38,
+    "ftypBrand": {
+     "mp42": 22,
+     "isom": 16
+    },
+    "videoSampleEntry": {
+     "avc1": 38
+    },
+    "audioSampleEntry": {
+     "mp4a": 30
+    },
+    "colrBox": {
+     "(colr 없음)": 29,
+     "nclx": 9
+    },
+    "primariesTransferMatrix": {
+     "1/1/1": 9
+    },
+    "resolution": {
+     "3840x2160": 23,
+     "2560x1440": 4,
+     "580x326": 1,
+     "1920x1080": 1,
+     "1280x686": 1,
+     "2252x2306": 1,
+     "4090x2300": 1,
+     "2500x2500": 1,
+     "1616x1276": 1,
+     "960x1008": 1,
+     "2324x2474": 1,
+     "960x540": 1,
+     "4000x2300": 1
+    },
+    "fps": {
+     "60.0": 22,
+     "30.0": 7,
+     "59.94": 4,
+     "24.0": 2,
+     "23.98": 1,
+     "29.97": 1,
+     "60.08": 1
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 video 145종 + scene.pkg 161개 ISO BMFF 직접 파싱"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_media.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.enumInterpretation",
+   "value": {
+    "note": "아래 이름 대응은 Windows SDK 헤더 기준 해석이다. 이 머신에 SDK 가 없어 재현 검증하지 못했다. 수치와 분기 구조는 확정 항목에 있다.",
+    "DXGI_FORMAT 87": "DXGI_FORMAT_B8G8R8A8_UNORM (dxgiformat.h)",
+    "D3D11_CREATE_DEVICE 0x800": "D3D11_CREATE_DEVICE_VIDEO_SUPPORT",
+    "D3D_FEATURE_LEVEL 0xb100/0xb000/0xa100/0xa000": "11_1 / 11_0 / 10_1 / 10_0",
+    "MFVideoTransferFunction 15": "MFVideoTransFunc_2084 (PQ)",
+    "MFVideoTransferFunction 16": "MFVideoTransFunc_HLG",
+    "MFVideoPrimaries 9": "MFVideoPrimaries_BT2020",
+    "MF_MEDIA_ENGINE_CREATEFLAGS 0x2/0x4/0x10": "WAITFORSTABLE_STATE / FORCEMUTE / DISABLE_LOCAL_PLUGINS",
+    "IMFMediaEngine vtable +0xE8/+0xF8/+0x128/+0x158/+0x160": "SetAutoPlay / SetLoop / SetVolume / TransferVideoFrame(Ex) / OnVideoStreamTick",
+    "IDXGIKeyedMutex vtable +0x40/+0x48": "AcquireSync / ReleaseSync",
+    "IMFClock vtable +0x20/+0x30": "GetCorrelatedTime / GetState",
+    "IMFMediaSession vtable +0x48/+0x58": "Start / Stop"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "doc",
+     "ref": "Windows SDK mfapi.h/mfmediaengine.h/dxgiformat.h/d3d11.h/dxgi.h"
+    },
+    {
+     "kind": "binary",
+     "ref": "호출 지점의 명령 바이트는 engine.media.byteAnchors 에 있다"
+    }
+   ]
+  },
+  {
+   "id": "engine.media.unknowns",
+   "value": {
+    "GUID 0x14042c380": "073CD2FC-6CF4-40B7-8859-E89552C841F8 — EVR 관련 인터페이스로 보이나 식별하지 못했다",
+    "MF_MEDIA_ENGINE_EXTENSION 의 용도": "오디오 출력이 꺼졌을 때만 설치된다는 사실은 확정. 왜 그런지는 미확인",
+    "videoloopmode 의 syncclock/synctopo 동작": "열거값과 라벨만 확보. 코드 경로 미추적",
+    "webmframework cef/native 의 분기": "열거값만 확보",
+    "frommemory 모드": "MFCreateSourceReaderFromByteStream 호출 지점이 프로브 함수 0x1400f2952 한 곳뿐이라, 이 모드가 프로브에만 영향을 주는지 Media Engine 소스 로딩까지 바꾸는지 확정하지 못했다",
+    "mediaextensions64.dll 의 WE 전용 export 2개 시그니처": "CreateMediaExtensions(ordinal 1, 0x180002808) 와 WallpaperEngineMedaExtensionVersion(ordinal 2, 0x1803119e0) 의 시그니처를 복원하지 않았다. 오디오 경로라 비디오 질문에 영향이 없어 우선순위를 낮췄다.",
+    "IMFMediaEngine 인터페이스 GUID 부재": "IMFMediaEngineEx / IMFMediaEngineClassFactory / IMFMediaEngineNotify 는 있는데 IMFMediaEngine 은 없다. Ex 로만 QI 한다는 뜻으로 보이나 미확인"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "recon",
+     "ref": "wallpaper64.exe 정적 분석 범위 밖"
+    }
+   ]
+  }
+ ]
+}

@@ -177,14 +177,26 @@ def main():
         specfmt.entry("format.mdl.bundledVersions", dict(bundled.most_common()), "확정",
                       [specfmt.ev("asset", "WE 설치본 하위 .mdl 전수",
                                   "WE 자체 번들. 코퍼스와 버전 분포가 다르다")]),
+        # [정정 2026-08-01] 이 항목은 처음에 오프셋 13 을 "const1", 메시 문자열을
+        # "cstring materialPath" 1개로 적었다. 둘 다 틀렸다 — 표본(glow.mdl)이
+        # skinCount=1·meshCount=1 이라 세 해석이 전부 같은 바이트를 낳는 표본이었다.
+        # spec/formats/mdl-deep.json format.mdl.header / .stringLoopIsPerMesh 가
+        # 디컴파일(FUN_140261950) + 코퍼스 451개로 확정했다. 여기는 요약만 남기고
+        # 정본은 mdl-deep.json 이다(중복 사실을 두 곳에서 유지하지 않는다).
         specfmt.entry("format.mdl.v0004Layout", {
-            "header": 'magic "MDLV0004" | u8 0 | u32 formatFlag | u32 const1 | u32 meshCount',
-            "mesh": "cstring materialPath | u32 0 | u32 vertexBlobBytes | vertices | ...",
+            "canonicalIn": "spec/formats/mdl-deep.json (format.mdl.header, "
+                           "format.mdl.meshLayout, format.mdl.versionGates)",
+            "header": 'magic "MDLV0004" | u8 0 | u32 formatFlag | u32 skinCount | u32 meshCount',
+            "mesh": "cstring material × skinCount | u32 gateWord | u32 vertexBlobBytes | "
+                    "vertices | u32 indexBytes | indices",
             "formatFlag0x09": "pos(3f) + uv(2f) = stride 20B, 법선/탄젠트 없음",
             "hasAABB": "version >= 17 에서만 존재. 0004 는 없음",
         }, "확정", [specfmt.ev("file",
                               "projects/defaultprojects/audiophile/models/audiophile/glow.mdl (156B)",
-                              "짝 glow.obj 와 대조: 정점4·UV4·법선없음, 첫 정점 x=-3.285059")]),
+                              "짝 glow.obj 와 대조: 정점4·UV4·법선없음, 첫 정점 x=-3.285059"),
+                   specfmt.ev("file", "spec/formats/mdl-deep.json",
+                              "오프셋 13 = skinCount, 문자열 루프가 메시 루프 안 — "
+                              "audiophile grid.mdl(skinCount=2) 이 반례")]),
     ]), os.path.join("spec", "formats", "mdl.json"))
 
     print(f"pkg {pkgs}개 파싱, 오류 {sum(errors.values())}건")

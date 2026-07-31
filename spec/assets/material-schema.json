@@ -1,0 +1,3011 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_material_schema.py",
+ "entries": [
+  {
+   "id": "material.populations",
+   "value": {
+    "번들 effect(최상위)": 46,
+    "번들 effect(preview)": 76,
+    "번들 material(materials/)": 95,
+    "번들 material(effects/ 하위)": 236,
+    "코퍼스 effect": 1405,
+    "코퍼스 material": 5665,
+    "분류규약": "effect = basename 이 정확히 \"effect.json\"; material = passes[0].shader 보유",
+    "번들 모집단 경계": "이 문서의 번들 material 은 WEAssets/materials/ 와 WEAssets/effects/ 두 트리만 센다. presets/ 와 scenes/ 아래에도 passes 를 가진 머티리얼 JSON 이 있으나 그건 에디터 콘텐츠 라이브러리·에디터 호스트 씬이라 제외했다(spec/assets/misc-schema.json presets.editorOnly / scenes.editorHosts). spec/engine/render-state.json 은 반대로 네 트리를 전부 세므로 분모가 크다 — 둘 다 옳고 세는 대상이 다르다. 도수를 비교할 때 이 경계를 먼저 맞춰라",
+    "범위 밖": "scene.json 의 objects[].effects[].passes[] (씬이 이펙트 패스의 combos/constantshadervalues/textures 를 덮어쓰는 층)는 spec/corpus/scene-schema.json 의 scene.effects.schema 소관이다. 이 문서는 에셋 쪽 material/effect JSON 만 다룬다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.classificationAudit",
+   "value": {
+    "코퍼스 pkg": 162,
+    "코퍼스 effects/ 하위 JSON 엔트리": 1405,
+    "이 중 effect 로 분류": 1405,
+    "코퍼스 materials/ 하위 JSON 엔트리": 5665,
+    "이 중 material 로 분류": 5665,
+    "차이": {
+     "effects": 0,
+     "materials": 0
+    },
+    "차이가 0인 의미": "effects/ 아래 JSON 은 전부 effect.json 이고, materials/ 아래 JSON 은 전부 머티리얼이다. 분류가 경로와 완전히 일치하므로 이 표의 도수는 표본이 아니라 전수다",
+    "함정": "느슨한 endswith(\"effect.json\") 매칭은 3300031038/materials/Paper Effect.json 을 effect 로 오분류한다. 그러면 effect 패스 키 표에 material 키(shader/blending/cullmode/textures…)가 1건씩 섞여 들어간다. basename 정확 일치만 쓴다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.jsonDialect",
+   "value": {
+    "허용": [
+     "// 줄 주석",
+     "트레일링 콤마"
+    ],
+    "엄격 파싱 실패 파일 수(materials/ + effects/)": 27,
+    "그중 effects/ 최상위": [
+     "effects/fluidsimulation/effect.json"
+    ],
+    "그중 preview 하위": 26,
+    "원인 도수": {
+     "comment": 25,
+     "trailing-comma": 2
+    },
+    "코퍼스 pkg 안 JSON": {
+     "strict": 10470,
+     "lenient": 0
+    },
+    "note": "코퍼스 pkg 는 resourcecompiler 가 정규화해 전건 엄격 JSON. 비엄격은 WE 배포 에셋 원본에만 있다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.jsonDialect.strictFailures",
+   "value": [
+    {
+     "path": "effects/blend/preview/effects/blend/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/blur/preview/effects/blur/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/blurprecise/preview/effects/blurprecise/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/clouds/preview/effects/clouds/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/colorkey/preview/effects/colorkey/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/edgedetection/preview/effects/edgedetection/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/filmgrain/preview/effects/filmgrain/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/fire/preview/effects/fire/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/fisheye/preview/effects/fisheye/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/fluidsimulation/effect.json",
+     "needs": "trailing-comma",
+     "recoverable": true
+    },
+    {
+     "path": "effects/fluidsimulation/preview/effects/fluidsimulation/effect.json",
+     "needs": "trailing-comma",
+     "recoverable": true
+    },
+    {
+     "path": "effects/foliagesway/preview/effects/foliagesway/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/godrays/preview/effects/godrays/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/localcontrast/preview/effects/localcontrast/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/motionblur/preview/effects/motionblur/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/nitro/preview/effects/nitro/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/opacity/preview/effects/opacity/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/perspective/preview/effects/perspective/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/pulse/preview/effects/colorkey/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/pulse/preview/effects/pulse/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/reflection/preview/effects/reflection/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/skew/preview/effects/skew/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/tint/preview/effects/tint/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/transform/preview/effects/transform/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/waterflow/preview/effects/waterflow/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/waterripple/preview/effects/waterripple/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    },
+    {
+     "path": "effects/waterwaves/preview/effects/waterwaves/effect.json",
+     "needs": "comment",
+     "recoverable": true
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.topLevelKeys",
+   "value": {
+    "번들 materials/": {
+     "passes": 95
+    },
+    "번들 effects/ 하위": {
+     "passes": 236
+    },
+    "코퍼스": {
+     "passes": 5665
+    },
+    "note": "material JSON 의 최상위 키는 passes 하나뿐이다 — 전 모집단 예외 0"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.passCount",
+   "value": {
+    "번들 materials/": {
+     "1": 95
+    },
+    "번들 effects/ 하위": {
+     "1": 236
+    },
+    "코퍼스": {
+     "1": 5665
+    },
+    "note": "passes 는 배열이지만 실측 길이는 전 모집단 1. 멀티패스 머티리얼은 존재하지 않는다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.passKeys",
+   "value": {
+    "번들 materials/": {
+     "shader": 95,
+     "depthwrite": 79,
+     "depthtest": 78,
+     "cullmode": 69,
+     "blending": 60,
+     "textures": 47,
+     "combos": 28,
+     "constantshadervalues": 1,
+     "culling": 1,
+     "usershadervalues": 1
+    },
+    "번들 effects/ 하위": {
+     "blending": 236,
+     "depthtest": 236,
+     "depthwrite": 236,
+     "shader": 236,
+     "cullmode": 232,
+     "textures": 54,
+     "combos": 20,
+     "constantshadervalues": 6,
+     "alphawriting": 5
+    },
+    "코퍼스": {
+     "shader": 5665,
+     "cullmode": 5402,
+     "depthtest": 5402,
+     "depthwrite": 5402,
+     "blending": 5401,
+     "textures": 3850,
+     "combos": 3068,
+     "constantshadervalues": 839,
+     "alphawriting": 799,
+     "usertextures": 121
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.stateValueDomains",
+   "value": {
+    "blending": {
+     "번들 materials/": {
+      "translucent": 46,
+      "normal": 8,
+      "additive": 6
+     },
+     "번들 effects/ 하위": {
+      "normal": 188,
+      "translucent": 47,
+      "additive": 1
+     },
+     "코퍼스": {
+      "translucent": 2568,
+      "normal": 2241,
+      "additive": 552,
+      "alphatocoverage": 40
+     }
+    },
+    "cullmode": {
+     "번들 materials/": {
+      "nocull": 66,
+      "normal": 3
+     },
+     "번들 effects/ 하위": {
+      "nocull": 231,
+      "normal": 1
+     },
+     "코퍼스": {
+      "nocull": 4953,
+      "normal": 449
+     }
+    },
+    "culling": {
+     "번들 materials/": {
+      "nocull": 1
+     },
+     "번들 effects/ 하위": {},
+     "코퍼스": {}
+    },
+    "depthtest": {
+     "번들 materials/": {
+      "disabled": 68,
+      "enabled": 10
+     },
+     "번들 effects/ 하위": {
+      "disabled": 236
+     },
+     "코퍼스": {
+      "disabled": 4763,
+      "enabled": 639
+     }
+    },
+    "depthwrite": {
+     "번들 materials/": {
+      "disabled": 74,
+      "enabled": 5
+     },
+     "번들 effects/ 하위": {
+      "disabled": 236
+     },
+     "코퍼스": {
+      "disabled": 4771,
+      "enabled": 631
+     }
+    },
+    "alphawriting": {
+     "번들 materials/": {},
+     "번들 effects/ 하위": {
+      "enabled": 4,
+      "default": 1
+     },
+     "코퍼스": {
+      "default": 783,
+      "enabled": 16
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.cullingTypo",
+   "value": {
+    "관측": "materials/util/flatpointalphavertexcolor.json 이 cullmode 대신 \"culling\":\"nocull\" 을 쓴다",
+    "도수": {
+     "번들": 1,
+     "코퍼스": 0
+    },
+    "판정": "WE 에셋 쪽 오타. 별개 키가 아니다 — 파서가 인식하면 안 된다(WE 도 무시할 것으로 보이나 미검증)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/flatpointalphavertexcolor.json"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.shaders",
+   "value": {
+    "번들 materials/": {
+     "uniq": 43,
+     "top15": {
+      "passthrough": 10,
+      "flat": 9,
+      "font": 8,
+      "editorsprite": 5,
+      "combine_hdr": 4,
+      "editorpaintbrush": 4,
+      "hdr_downsample": 4,
+      "composelayer": 3,
+      "genericimage3": 3,
+      "genericimage4": 3,
+      "minimalalpha": 3,
+      "wireframe": 3,
+      "blur_k3": 2,
+      "combine": 2,
+      "genericimage2": 2
+     }
+    },
+    "번들 effects/ 하위": {
+     "uniq": 71,
+     "top15": {
+      "genericimage2": 45,
+      "effects/blur_gaussian": 8,
+      "effects/tint": 7,
+      "effects/blur_precise_gaussian": 6,
+      "effects/localcontrast_gaussian": 6,
+      "effects/blend": 5,
+      "effects/opacity": 5,
+      "effects/scroll": 5,
+      "effects/blur_combine": 4,
+      "effects/blur_downsample4": 4,
+      "effects/colorkey": 4,
+      "effects/fisheye": 4,
+      "effects/fluidsimulation_advection": 4,
+      "effects/godrays_gaussian": 4,
+      "effects/shine_gaussian": 4
+     }
+    },
+    "코퍼스": {
+     "uniq": 340,
+     "top20": {
+      "genericimage4": 1978,
+      "genericparticle": 805,
+      "generic4": 664,
+      "genericimage2": 240,
+      "effects/waterwaves": 83,
+      "effects/opacity": 70,
+      "workshop/2981960200/effects/blur_precise_gaussian": 70,
+      "genericimage3": 66,
+      "effects/shake": 63,
+      "effects/blur_precise_gaussian": 62,
+      "effects/foliagesway": 54,
+      "workshop/2798319181/effects/gaussian": 44,
+      "effects/waterflow": 43,
+      "effects/godrays_gaussian": 38,
+      "effects/blur_gaussian": 36,
+      "effects/pulse": 35,
+      "workshop/3082978660/effects/Simple_Audio_Bars": 35,
+      "effects/waterripple": 30,
+      "effects/scroll": 28,
+      "workshop/2795521260/effects/color_grading": 28
+     }
+    },
+    "note": "값은 확장자 없는 셰이더 베이스 경로. 로더가 shaders/<값>.vert/.frag 로 해석한다. workshop/<id>/... 접두는 워크샵 의존 이펙트가 자기 셰이더를 동봉한 경우다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.textures",
+   "value": {
+    "길이분포": {
+     "번들 materials/": {
+      "1": 43,
+      "2": 3,
+      "0": 1
+     },
+     "번들 effects/ 하위": {
+      "1": 47,
+      "3": 4,
+      "2": 3
+     },
+     "코퍼스": {
+      "1": 3582,
+      "2": 151,
+      "3": 117
+     }
+    },
+    "null 슬롯 수": {
+     "번들 materials/": 1,
+     "번들 effects/ 하위": 11,
+     "코퍼스": 245
+    },
+    "값 종류": {
+     "번들 materials/": {
+      "_rt_*": 33,
+      "에셋경로": 8,
+      "util/*": 7
+     },
+     "번들 effects/ 하위": {
+      "에셋경로": 54
+     },
+     "코퍼스": {
+      "에셋경로": 3692,
+      "util/*": 265,
+      "_rt_*": 33
+     }
+    },
+    "코퍼스 상위 이름": {
+     "util/white": 263,
+     "particle/halo": 136,
+     "particle/drop": 62,
+     "particle/halo_4": 51,
+     "effects/waterflowphase": 43,
+     "particle/halo_6": 42,
+     "particle/chromaticdot": 37,
+     "effects/waterripplenormal": 30,
+     "背景": 29,
+     "particle/fog/fog1": 28,
+     "particle/halo_2": 25,
+     "particle/流星": 25,
+     "particle/nature/rosepetals": 21,
+     "赞助": 21,
+     "particle/halo_3": 19
+    },
+    "null 의 의미": "슬롯을 비워 두고 상위(effect bind / scene 패스 오버라이드)가 채운다. effectcomposebackground 의 [null, _rt_FullFrameBuffer] 가 표준형"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.combos",
+   "value": {
+    "번들 materials/": {
+     "uniq": 19,
+     "keys": {
+      "version": 6,
+      "COLORFONT": 4,
+      "MSDF": 4,
+      "UPSAMPLE": 2,
+      "VERTICAL": 2,
+      "vertexcolor": 2,
+      "BICUBIC": 1,
+      "BLOOM": 1,
+      "BLUR": 1,
+      "CLEARALPHA": 1,
+      "COMBINEDBG": 1,
+      "DISPLAYHDR": 1,
+      "FULLSCREEN": 1,
+      "LIGHTING": 1,
+      "LINEAR": 1,
+      "PINCH": 1,
+      "REFLECTION": 1,
+      "SPIN": 1,
+      "VERSION": 1
+     }
+    },
+    "번들 effects/ 하위": {
+     "uniq": 5,
+     "keys": {
+      "VERTICAL": 14,
+      "DYE": 2,
+      "ENABLEMASK": 1,
+      "FOG": 1,
+      "VERSION": 1
+     }
+    },
+    "코퍼스": {
+     "uniq": 19,
+     "keys": {
+      "VERSION": 254,
+      "VERTICAL": 207,
+      "REFRACT": 186,
+      "LIGHTING": 100,
+      "ENABLEMASK": 95,
+      "REFLECTION": 65,
+      "spritesheet": 60,
+      "version": 45,
+      "SPRITESHEET": 44,
+      "PRECISE": 24,
+      "FOG": 18,
+      "CUTOUT": 10,
+      "TINTMASKALPHA": 8,
+      "RIMLIGHTING": 7,
+      "SHADINGGRADIENT": 7,
+      "DOUBLESIDEDLIGHTING": 3,
+      "BLENDROWCOUNT": 1,
+      "FOLIAGEDEBUG": 1,
+      "LEAVESUVMODE": 1
+     }
+    },
+    "값 타입": {
+     "번들": {
+      "<int>": 52
+     },
+     "코퍼스": {
+      "<int>": 1136
+     }
+    },
+    "대소문자 혼용": "VERSION/version, SPRITESHEET/spritesheet 이 같은 코퍼스 안에 공존한다 — 콤보 키 매칭은 대소문자 무시여야 한다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.constantShaderValues",
+   "value": {
+    "코퍼스 키": {
+     "uniq": 27,
+     "top20": {
+      "Alpha": 374,
+      "Color": 368,
+      "color": 299,
+      "roughness": 291,
+      "metallic": 232,
+      "ui_editor_properties_overbright": 227,
+      "ui_editor_properties_refract_amount": 82,
+      "alpha": 39,
+      "brightness": 39,
+      "emissivebrightness": 15,
+      "emissivecolor": 12,
+      "reflectivity": 9,
+      "ui_editor_properties_cutout_end": 4,
+      "ui_editor_properties_cutout_opacity": 4,
+      "ui_editor_properties_cutout_start": 4,
+      "Brightness": 3,
+      "rimamount": 3,
+      "rimexponent": 3,
+      "Brigtness": 2,
+      " ‏‏‎ ": 1
+     }
+    },
+    "번들 키": {
+     "dissipation": 4,
+     "reflectivity": 1,
+     "roughness": 1,
+     "ui_editor_properties_overbright": 1
+    },
+    "값 타입": {
+     "번들": {
+      "<float>": 7
+     },
+     "코퍼스": {
+      "<int>": 677,
+      "<str>": 665,
+      "<float>": 634,
+      "<dict>": 42
+     }
+    },
+    "dict 형태": {
+     "user+value": 20,
+     "script+scriptproperties+value": 12,
+     "script+value": 8,
+     "animation+script+value": 2
+    },
+    "note": "<str> 은 공백 구분 벡터(\"1.0 0.5 0.25\"). <int>/<float> 은 스칼라. <dict> 은 바인딩이고 4형태다 — {user,value}=project.json 프로퍼티 참조, {script,value}/{script,scriptproperties,value}=JS 바인딩, {animation,script,value}=키프레임 타임라인 + JS(코퍼스 2건)",
+    "이상치": "키 이름이 신뢰할 수 없다 — Brightness/Brigtness(오타) 공존, 제로폭 문자만으로 된 키(U+200F/U+200E)도 1건 있다. 키 정규화·화이트리스트에 기대면 안 된다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.userShaderValues",
+   "value": {
+    "번들 도수": 1,
+    "코퍼스 도수": 0,
+    "값 타입": {
+     "<str>": 1
+    },
+    "실물": "materials/util/fade.json — {\"schemecolor\": \"tint\"}",
+    "note": "코퍼스 5665개 머티리얼에 0건. 번들 1건뿐인 희귀 키다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/fade.json"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.userTextures",
+   "value": {
+    "번들 도수": 0,
+    "코퍼스 도수": 121,
+    "형태": {
+     "<list>": 121,
+     "항목:<str>": 71,
+     "항목:<dict>": 50,
+     "항목키:name+type": 50
+    },
+    "실물": [
+     "{\"usertextures\": [\"background\"]}  — 평문 유저프로퍼티 키",
+     "{\"usertextures\": [{\"name\": \"$mediaThumbnail\", \"type\": \"system\"}]}  — 시스템 미디어 키"
+    ],
+    "note": "textures 와 동일 슬롯 인덱스. 배열이지 딕셔너리가 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.topLevelKeys",
+   "value": {
+    "번들최상위": {
+     "dependencies": 46,
+     "group": 46,
+     "passes": 46,
+     "replacementkey": 46,
+     "version": 46,
+     "description": 45,
+     "name": 45,
+     "preview": 45,
+     "gizmos": 12,
+     "performance": 10,
+     "fbos": 9,
+     "functions": 1
+    },
+    "번들preview": {
+     "dependencies": 76,
+     "description": 76,
+     "group": 76,
+     "name": 76,
+     "passes": 76,
+     "preview": 50,
+     "version": 18,
+     "replacementkey": 17,
+     "fbos": 14,
+     "gizmos": 6,
+     "performance": 2
+    },
+    "코퍼스": {
+     "dependencies": 1405,
+     "group": 1405,
+     "name": 1405,
+     "passes": 1405,
+     "version": 1404,
+     "replacementkey": 1396,
+     "description": 1082,
+     "preview": 1082,
+     "editable": 272,
+     "gizmos": 258,
+     "fbos": 213,
+     "performance": 197
+    },
+    "렌더 계약": [
+     "passes",
+     "fbos"
+    ],
+    "메타(렌더 무관)": [
+     "version",
+     "name",
+     "description",
+     "group",
+     "performance",
+     "preview",
+     "replacementkey",
+     "dependencies",
+     "editable",
+     "gizmos",
+     "functions"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.passCount",
+   "value": {
+    "번들최상위": {
+     "1": 36,
+     "2": 3,
+     "3": 2,
+     "4": 2,
+     "5": 2,
+     "20": 1
+    },
+    "번들preview": {
+     "1": 61,
+     "4": 5,
+     "2": 4,
+     "3": 3,
+     "5": 2,
+     "20": 1
+    },
+    "코퍼스": {
+     "1": 1182,
+     "2": 113,
+     "4": 36,
+     "5": 36,
+     "3": 17,
+     "7": 12,
+     "16": 9
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.passKeys",
+   "value": {
+    "번들최상위": {
+     "material": 83,
+     "bind": 43,
+     "target": 39,
+     "command": 3,
+     "source": 3,
+     "compose": 1,
+     "conditions": 1
+    },
+    "번들preview": {
+     "material": 124,
+     "bind": 60,
+     "target": 51,
+     "command": 4,
+     "source": 4,
+     "compose": 1,
+     "conditions": 1
+    },
+    "코퍼스": {
+     "material": 2002,
+     "bind": 702,
+     "target": 596,
+     "compose": 10,
+     "command": 9,
+     "source": 9
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.pass.target",
+   "value": {
+    "종류 도수": {
+     "번들최상위": {
+      "(없음)=이펙트 출력": 47,
+      "_rt_*": 39
+     },
+     "번들preview": {
+      "(없음)=이펙트 출력": 77,
+      "_rt_*": 51
+     },
+     "코퍼스": {
+      "(없음)=이펙트 출력": 1415,
+      "_rt_*": 384,
+      "자유이름": 212
+     }
+    },
+    "코퍼스 이름 전수(uniq 26)": {
+     "(target 없음)": 1415,
+     "_rt_FullCompoBuffer1": 104,
+     "_rt_HalfCompoBuffer1": 72,
+     "_rt_HalfCompoBuffer2": 72,
+     "_rt_QuarterCompoBuffer1": 68,
+     "_rt_QuarterCompoBuffer2": 34,
+     "blur_start_2": 27,
+     "blur_start_4": 27,
+     "blur_start_8": 27,
+     "_downscaled1": 24,
+     "blur_start_16": 18,
+     "_coc": 12,
+     "_downscaled2": 12,
+     "_full1": 12,
+     "_full2": 12,
+     "_rt_FullCompoBuffer2": 9,
+     "blur_end_16": 9,
+     "blur_end_2": 9,
+     "blur_end_4": 9,
+     "blur_end_8": 9,
+     "_rt_EightBuffer1": 8,
+     "_rt_EightBuffer2": 8,
+     "render_target": 5,
+     "_rt_buffer1": 4,
+     "_rt_GlitterTiles": 3,
+     "_rt_buffer2": 2
+    },
+    "번들최상위 이름 전수": {
+     "(target 없음)": 47,
+     "_rt_SmokePressure1": 5,
+     "_rt_SmokePressure2": 5,
+     "_rt_HalfCompoBuffer1": 4,
+     "_rt_HalfCompoBuffer2": 4,
+     "_rt_QuarterCompoBuffer1": 4,
+     "_rt_SmokeVelocity2": 3,
+     "_rt_FullCompoBuffer1": 2,
+     "_rt_QuarterCompoBuffer2": 2,
+     "_rt_SmokeDye2": 2,
+     "_rt_EightBuffer1": 1,
+     "_rt_EightBuffer2": 1,
+     "_rt_FullCompoBuffer2": 1,
+     "_rt_GlitterTiles": 1,
+     "_rt_SmokeCurl": 1,
+     "_rt_SmokeDivergence": 1,
+     "_rt_SmokeNormal": 1,
+     "_rt_SmokeVelocity1": 1
+    },
+    "규약": "target 부재 = 이펙트 출력에 직접 기록. 존재 = fbos[] 의 이름",
+    "함정": "이름이 _rt_ 접두라는 보장이 없다 — 코퍼스에 blur_start_2, _coc, _downscaled1, _full1 같은 자유 이름 타깃이 있다. fbos[].name 과의 문자열 일치만이 유일한 규약이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.pass.bind",
+   "value": {
+    "bind 항목 키": {
+     "번들최상위": {
+      "index": 68,
+      "name": 68,
+      "conditions": 2
+     },
+     "코퍼스": {
+      "index": 987,
+      "name": 987
+     }
+    },
+    "source 종류 전수": {
+     "번들최상위": {
+      "_rt_*": 54,
+      "previous": 14
+     },
+     "번들preview": {
+      "_rt_*": 66,
+      "previous": 20,
+      "prev(축약)": 2
+     },
+     "코퍼스": {
+      "_rt_*": 392,
+      "previous": 323,
+      "자유이름": 272
+     }
+    },
+    "index 분포": {
+     "번들최상위": {
+      "0": 43,
+      "1": 20,
+      "2": 4,
+      "4": 1
+     },
+     "코퍼스": {
+      "0": 702,
+      "1": 192,
+      "2": 93
+     }
+    },
+    "코퍼스 이름 전수(uniq 26)": {
+     "previous": 323,
+     "_rt_FullCompoBuffer1": 104,
+     "_rt_HalfCompoBuffer1": 72,
+     "_rt_HalfCompoBuffer2": 72,
+     "_rt_QuarterCompoBuffer1": 68,
+     "_coc": 60,
+     "_downscaled1": 36,
+     "_rt_QuarterCompoBuffer2": 34,
+     "blur_start_2": 27,
+     "blur_start_4": 27,
+     "blur_start_8": 27,
+     "blur_start_16": 18,
+     "_rt_EightBuffer2": 16,
+     "_downscaled2": 12,
+     "_full1": 12,
+     "_full2": 12,
+     "_rt_FullCompoBuffer2": 9,
+     "blur_end_16": 9,
+     "blur_end_2": 9,
+     "blur_end_4": 9,
+     "blur_end_8": 9,
+     "_rt_EightBuffer1": 8,
+     "render_target": 5,
+     "_rt_buffer1": 4,
+     "_rt_GlitterTiles": 3,
+     "_rt_buffer2": 2
+    },
+    "번들최상위 이름 전수": {
+     "previous": 14,
+     "_rt_SmokeDivergence": 9,
+     "_rt_SmokePressure1": 6,
+     "_rt_SmokePressure2": 5,
+     "_rt_HalfCompoBuffer1": 4,
+     "_rt_HalfCompoBuffer2": 4,
+     "_rt_QuarterCompoBuffer1": 4,
+     "_rt_SmokeVelocity1": 4,
+     "_rt_SmokeVelocity2": 4,
+     "_rt_EightBuffer2": 2,
+     "_rt_FullCompoBuffer1": 2,
+     "_rt_QuarterCompoBuffer2": 2,
+     "_rt_SmokeDye2": 2,
+     "_rt_EightBuffer1": 1,
+     "_rt_FullCompoBuffer2": 1,
+     "_rt_GlitterTiles": 1,
+     "_rt_SmokeCurl": 1,
+     "_rt_SmokeDye1": 1,
+     "_rt_SmokeNormal": 1
+    },
+    "규약": "\"previous\" = 이펙트 입력(레이어 베이스 또는 이전 이펙트 출력). 그 외 = fbos[] 이름. index = 셰이더 텍스처 슬롯 번호",
+    "함정": "\"prev\" 축약형이 딱 1개 파일에 있다 — effects/blur/preview/effects/blur/effect.json 이 같은 자리에 \"prev\" 를 쓴다(최상위 effects/blur/effect.json 은 \"previous\"). 번들 최상위 0건 / 코퍼스 0건 — 별칭인지 WE 도 못 읽는 오타인지는 미확인"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.pass.command",
+   "value": {
+    "값": {
+     "번들최상위": {
+      "swap (source=True, target=True)": 2,
+      "copy (source=True, target=True)": 1
+     },
+     "번들preview": {
+      "copy (source=True, target=True)": 2,
+      "swap (source=True, target=True)": 2
+     },
+     "코퍼스": {
+      "copy (source=True, target=True)": 9
+     }
+    },
+    "형식": "<command> (source=<유무>, target=<유무>)",
+    "copy": "source fbo → target fbo 복사(셰이더 없음). 실물 motionblur 의 프레임 간 누적 버퍼 지속",
+    "swap": "source/target fbo 포인터 교환(드로우 없음). 실물 fluidsimulation velocity/dye 더블버퍼"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.pass.compose.occurrence",
+   "value": {
+    "타입": "bool",
+    "관측된 값": {
+     "번들최상위": {
+      "true": 1
+     },
+     "번들preview": {
+      "true": 1
+     },
+     "코퍼스": {
+      "true": 10
+     }
+    },
+    "실물": [
+     {
+      "file": "effects/refraction/effect.json",
+      "pass": {
+       "material": "materials/util/effectcomposebackground.json",
+       "compose": true
+      }
+     },
+     {
+      "file": "2802243144/effects/blurprecise/effect.json",
+      "pass": {
+       "material": "materials/effects/blur_precise_gaussian_x.json",
+       "compose": true
+      }
+     },
+     {
+      "file": "2955378002/effects/workshop/3248335727/blurprecise/effect.json",
+      "pass": {
+       "compose": true,
+       "material": "materials/workshop/3248335727/effects/blur_precise_gaussian_x.json"
+      }
+     },
+     {
+      "file": "3219908811/effects/workshop/2413251683/blurprecise/effect.json",
+      "pass": {
+       "compose": true,
+       "material": "materials/workshop/2413251683/effects/blur_precise_gaussian_x.json"
+      }
+     }
+    ],
+    "note": "항상 true. false 는 관측되지 않았다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.pass.compose.semantics",
+   "value": {
+    "후보1": "이 패스를 '배경 합성' 패스로 표시 — 이펙트 출력이 아니라 씬 배경(_rt_FullFrameBuffer)을 먼저 확보해 두는 준비 패스",
+    "후보2": "이 패스의 출력을 이펙트 체인의 누적(compose) 대상으로 삼는다",
+    "근거상황": "witness 2종뿐이고 둘의 머티리얼이 다르다 — refraction 은 util/effectcomposebackground (textures[0]=null, [1]=_rt_FullFrameBuffer), 워크샵 blurprecise 는 blur_precise_gaussian_x. 머티리얼 공통점이 없어 의미를 좁힐 수 없다",
+    "확정된 것": "키 존재·타입·출현 위치뿐(effect.pass.compose.occurrence)"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/effects/refraction/effect.json"
+    },
+    {
+     "kind": "corpus",
+     "ref": "2802243144/effects/blurprecise/effect.json"
+    }
+   ]
+  },
+  {
+   "id": "effect.fbos.keys",
+   "value": {
+    "번들최상위": {
+     "format": 23,
+     "name": 23,
+     "scale": 13,
+     "unique": 9,
+     "fit": 8,
+     "clear": 6,
+     "conditions": 1,
+     "height": 1,
+     "uvs": 1,
+     "width": 1
+    },
+    "번들preview": {
+     "format": 32,
+     "name": 32,
+     "scale": 25,
+     "unique": 10,
+     "clear": 6,
+     "fit": 6,
+     "conditions": 1,
+     "height": 1,
+     "uvs": 1,
+     "width": 1
+    },
+    "코퍼스": {
+     "format": 413,
+     "name": 413,
+     "scale": 299,
+     "unique": 81,
+     "fit": 16,
+     "height": 3,
+     "uvs": 3,
+     "width": 3
+    },
+    "필수": [
+     "name",
+     "format"
+    ],
+    "크기 키 조합(전수)": {
+     "번들최상위": {
+      "scale": 13,
+      "fit": 8,
+      "(크기 키 없음)": 1,
+      "height+width": 1
+     },
+     "번들preview": {
+      "scale": 25,
+      "fit": 6,
+      "height+width": 1
+     },
+     "코퍼스": {
+      "scale": 299,
+      "(크기 키 없음)": 95,
+      "fit": 16,
+      "height+width": 3
+     }
+    },
+    "크기 결정": "scale(=dst 나눗수) | fit(정사각 절대 픽셀) | width+height(절대 픽셀) | 아무것도 없음. 넷 중 하나이고 조합은 관측되지 않았다(scale 과 fit 을 함께 쓴 fbo 0건)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.fbos.missingSizeKey",
+   "value": {
+    "도수": {
+     "번들최상위": 1,
+     "번들preview": 0,
+     "코퍼스": 95
+    },
+    "비율": "코퍼스 fbo 413개 중 95개(23%)가 크기 키를 하나도 갖지 않는다",
+    "실물": [
+     {
+      "file": "effects/blurprecise/effect.json",
+      "fbo": {
+       "name": "_rt_FullCompoBuffer1",
+       "format": "rgba_backbuffer"
+      }
+     },
+     {
+      "file": "2904908532/effects/blurprecise/effect.json",
+      "fbo": {
+       "name": "_rt_FullCompoBuffer1",
+       "format": "rgba_backbuffer"
+      }
+     },
+     {
+      "file": "2911866381/effects/blurprecise/effect.json",
+      "fbo": {
+       "name": "_rt_FullCompoBuffer1",
+       "format": "rgba_backbuffer"
+      }
+     },
+     {
+      "file": "2981249186/effects/workshop/2981960200/blurprecise/effect.json",
+      "fbo": {
+       "format": "rgba_backbuffer",
+       "name": "_rt_FullCompoBuffer1"
+      }
+     }
+    ],
+    "공통점": "관측된 무크기 fbo 는 전부 blurprecise 계열의 {\"name\":\"_rt_FullCompoBuffer1\",\"format\":\"rgba_backbuffer\"} 다 — 이름·포맷까지 동일하다",
+    "경고": "크기 키를 필수로 보고 파싱하면 이 96건이 전부 '형식 오류'가 된다. 선택 키다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.fbos.missingSizeDefault",
+   "value": {
+    "질문": "크기 키가 없는 fbo 의 실제 해상도는 무엇인가",
+    "Waple 현행": "EffectManifest.swift:66 이 safeInt(f[\"scale\"]) ?? 1 → dst 전체 해상도",
+    "그럴듯한 이유": "이름이 _rt_FullCompoBuffer1(\"Full\")이고 포맷이 rgba_backbuffer 다 — 풀해상도 의도로 읽힌다",
+    "확정 못 한 것": "WE 가 정말 1(풀해상도)로 기본값을 잡는지. 에셋만으로는 판별 불가 — wallpaper64.exe 의 fbo 생성 경로를 디컴파일해야 확정된다"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/effects/blurprecise/effect.json"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/EffectManifest.swift:66"
+    }
+   ]
+  },
+  {
+   "id": "effect.fbos.scale",
+   "value": {
+    "번들최상위": {
+     "2": 7,
+     "4": 4,
+     "1": 2
+    },
+    "번들preview": {
+     "4": 12,
+     "2": 7,
+     "1": 6
+    },
+    "코퍼스": {
+     "4": 126,
+     "2": 90,
+     "1": 47,
+     "16": 18,
+     "8": 18
+    },
+    "의미": "dst 해상도 나눗수(4 = 1/4). fit/width/height 가 있으면 scale 은 없다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.fbos.format",
+   "value": {
+    "번들최상위": {
+     "rgba_backbuffer": 11,
+     "rgba8888": 5,
+     "r16f": 4,
+     "rg1616f": 2,
+     "r8": 1
+    },
+    "번들preview": {
+     "rgba8888": 23,
+     "r16f": 4,
+     "rg1616f": 2,
+     "rgba_backbuffer": 2,
+     "r8": 1
+    },
+    "코퍼스": {
+     "rgba_backbuffer": 358,
+     "rgba8888": 32,
+     "rg88": 12,
+     "rgb161616f": 8,
+     "r8": 3
+    },
+    "전수(합집합)": [
+     "r16f",
+     "r8",
+     "rg1616f",
+     "rg88",
+     "rgb161616f",
+     "rgba8888",
+     "rgba_backbuffer"
+    ],
+    "해석": {
+     "rgba_backbuffer": "(추론) 백버퍼와 동일 포맷. 이름 규칙에서 읽은 것이지 측정된 것이 아니다",
+     "rgba8888": "8비트 UNORM 4채널",
+     "r8": "8비트 UNORM 1채널",
+     "rg88": "8비트 UNORM 2채널",
+     "r16f": "half float 1채널",
+     "rg1616f": "half float 2채널",
+     "rgb161616f": "half float 3채널"
+    },
+    "note": "해석 열은 이름 규칙에서 읽은 것이다 — 채널수·비트폭은 이름이 직접 말하지만 float/UNORM 구분은 f 접미 관례에 의존한다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.fbos.otherKeys",
+   "value": {
+    "번들최상위": {
+     "clear": {
+      "0 0 0 0": 6
+     },
+     "fit": {
+      "256": 6,
+      "512": 2
+     },
+     "height": {
+      "256": 1
+     },
+     "unique": {
+      "true": 9
+     },
+     "uvs": {
+      "repeat": 1
+     },
+     "width": {
+      "256": 1
+     }
+    },
+    "번들preview": {
+     "clear": {
+      "0 0 0 0": 6
+     },
+     "fit": {
+      "256": 6
+     },
+     "height": {
+      "256": 1
+     },
+     "unique": {
+      "true": 10
+     },
+     "uvs": {
+      "repeat": 1
+     },
+     "width": {
+      "256": 1
+     }
+    },
+    "코퍼스": {
+     "fit": {
+      "512": 14,
+      "256": 2
+     },
+     "height": {
+      "256": 3
+     },
+     "unique": {
+      "true": 81
+     },
+     "uvs": {
+      "repeat": 3
+     },
+     "width": {
+      "256": 3
+     }
+    },
+    "실물": [
+     "{\"name\":\"_rt_SmokeVelocity1\",\"fit\":256,\"format\":\"rg1616f\",\"clear\":\"0 0 0 0\",\"unique\":true}",
+     "{\"name\":\"_rt_GlitterTiles\",\"width\":256,\"height\":256,\"format\":\"r8\",\"uvs\":\"repeat\"}",
+     "{\"name\":\"_rt_FullCompoBuffer1\",\"scale\":1,\"format\":\"rgba_backbuffer\",\"unique\":true}"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.conditions",
+   "value": {
+    "출현 위치·도수": {
+     "번들최상위": {
+      "bind.conditions": 2,
+      "fbo.conditions": 1,
+      "pass.conditions": 1
+     },
+     "번들preview": {
+      "bind.conditions": 2,
+      "fbo.conditions": 1,
+      "pass.conditions": 1
+     },
+     "코퍼스": {}
+    },
+    "관측된 형태": [
+     {
+      "file": "effects/fluidsimulation/effect.json",
+      "where": "pass",
+      "value": [
+       {
+        "LIGHTING": 1
+       }
+      ]
+     },
+     {
+      "file": "effects/fluidsimulation/effect.json",
+      "where": "bind",
+      "value": [
+       {
+        "LIGHTING": 1
+       }
+      ]
+     },
+     {
+      "file": "effects/fluidsimulation/effect.json",
+      "where": "bind",
+      "value": [
+       {
+        "RENDERING": 3
+       }
+      ]
+     },
+     {
+      "file": "effects/fluidsimulation/effect.json",
+      "where": "fbo",
+      "value": [
+       {
+        "LIGHTING": 1
+       }
+      ]
+     },
+     {
+      "file": "effects/fluidsimulation/preview/effects/fluidsimulation/effect.json",
+      "where": "pass",
+      "value": [
+       {
+        "LIGHTING": 1
+       }
+      ]
+     },
+     {
+      "file": "effects/fluidsimulation/preview/effects/fluidsimulation/effect.json",
+      "where": "bind",
+      "value": [
+       {
+        "LIGHTING": 1
+       }
+      ]
+     }
+    ],
+    "형태1": "리스트-of-딕트 {콤보이름: 정수}: [{\"LIGHTING\": 1}], [{\"RENDERING\": 3}] — pass.conditions / bind[].conditions / fbos[].conditions 세 자리 모두 이 형태다",
+    "형태2": "딕트-of-비교: {\"POINTEMITTER\": {\"op\": \"ge\", \"value\": 1}} — gizmos[].condition(단수형, 별개 키)",
+    "출처": "세 자리 전부 effects/fluidsimulation/effect.json 단 하나에서 나온다. 표본이 1개다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.conditions.semantics",
+   "value": {
+    "읽는 방식(추정)": "콤보 값에 대한 조건 — 만족하지 않으면 그 fbo/bind/pass 를 생성·실행하지 않는다",
+    "미확인": "op 의 전수(ge 만 관측), 다중 조건의 AND/OR, 콤보 값의 출처(머티리얼 combos vs 씬 오버라이드)"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/effects/fluidsimulation/effect.json",
+     "note": "fbos[].conditions = [{\"LIGHTING\":1}]"
+    }
+   ]
+  },
+  {
+   "id": "effect.functions",
+   "value": {
+    "도수": {
+     "번들최상위": 1,
+     "코퍼스": 0
+    },
+    "실물": [
+     {
+      "file": "effects/fluidsimulation/effect.json",
+      "value": {
+       "clearVelocity": {
+        "action": "clear",
+        "fbos": [
+         "_rt_SmokeVelocity1",
+         "_rt_SmokeVelocity2"
+        ]
+       },
+       "clearDye": {
+        "action": "clear",
+        "fbos": [
+         "_rt_SmokeDye1",
+         "_rt_SmokeDye2"
+        ]
+       }
+      }
+     }
+    ],
+    "형태": "{ <함수명>: {\"action\": \"clear\", \"fbos\": [<fbo 이름>...] } }",
+    "note": "번들 fluidsimulation 단 1건. 사용자 상호작용(리셋 버튼 등)으로 호출되는 것으로 보이나 호출 경로는 미확인"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/effects/fluidsimulation/effect.json"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.corpusVsBundledSchema",
+   "value": {
+    "결론": "같은 스키마다. 워크샵 pkg 의 material/effect JSON 은 번들 에셋과 키·값 도메인이 동일하다",
+    "차이1": "JSON 방언 — pkg 안 JSON 엔트리는 전건 엄격 JSON(10470/10470, material/effect 외 포함), 번들 원본 27건에는 주석·트레일링 콤마가 있다. resourcecompiler 가 패키징 시 정규화하는 것으로 보인다",
+    "차이2": "코퍼스에만 있는 키: usertextures(121), editable(272). 번들에만 있는 키: usershadervalues(1), functions(1), fbos.clear, fbos.conditions, bind.conditions, pass.conditions, command:swap",
+    "차이3": "코퍼스에만 있는 blending 값: alphatocoverage(40). 코퍼스에만 있는 fbo format: rg88, rgb161616f",
+    "차이4": "코퍼스 target/bind 이름에 자유 이름(_rt_ 아님)이 흔하다 — 번들 최상위는 전부 _rt_ 접두",
+    "차이5": "코퍼스 shader 값에 workshop/<id>/... 접두가 있다(이펙트 의존성 동봉)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.util.fileBreakdown",
+   "value": {
+    "총 파일": 88,
+    "확장자별": {
+     ".json": 62,
+     ".png": 8,
+     ".tex": 9,
+     ".tex-json": 9
+    },
+    "머티리얼 JSON": 62,
+    "note": "'util 88개' 는 파일 수다. 그중 머티리얼 JSON 은 62개이고 나머지는 공유 텍스처(black/white/noise/clouds_256/perlin_256/uniform_256/flatnormal/fur/noflow + webthumbnailfallback)의 .png/.tex/.tex-json 이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.util.catalog",
+   "value": {
+    "backbufferpassthrough": {
+     "shader": "passthroughlinear",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "blur_h_bloom": {
+     "shader": "blur_h_bloom",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_8FrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "ccsimple": {
+     "shader": "ccsimple",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "clippingmaskimage4": {
+     "shader": "clippingmaskimage4",
+     "blending": "translucent",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "combine": {
+     "shader": "combine",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer",
+      "util/black"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "combine_dhdr_upsample": {
+     "shader": "combine_hdr",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "combos": {
+      "DISPLAYHDR": 1
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "combine_hdr_editor": {
+     "shader": "combine_hdr_editor",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "combine_hdr_upsample": {
+     "shader": "combine_hdr",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "combine_hdr_upsample_dbg": {
+     "shader": "combine_hdr",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "combos": {
+      "COMBINEDBG": 1
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "combine_hdr_upsample_linear": {
+     "shader": "combine_hdr",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "combos": {
+      "LINEAR": 1
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "combine_ldr": {
+     "shader": "combine",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer",
+      "_rt_Bloom"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "combine_srgb": {
+     "shader": "passthroughsrgb",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "combine_video_hdr": {
+     "shader": "combine_video_hdr",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "compiler_backdrop": {
+     "shader": "compilerbackdrop",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "composelayer": {
+     "shader": "composelayer",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 73
+    },
+    "composelayer_clearalpha": {
+     "shader": "composelayer",
+     "blending": "normal",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "combos": {
+      "CLEARALPHA": 1
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "composelayer_depthtest": {
+     "shader": "composelayer",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "enabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "debugrt": {
+     "shader": "passthrough",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "debugrt_fb": {
+     "shader": "passthrough",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "debugrt_fb_bloom": {
+     "shader": "passthrough",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_Bloom"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "debugrt_fb_eighth": {
+     "shader": "passthrough",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_EighthFrameBuffer"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "debugrt_fb_quarter": {
+     "shader": "passthrough",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_QuarterFrameBuffer"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "debugrt_reflection": {
+     "shader": "passthrough",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_Reflection"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "downsample_eighth_blur_v": {
+     "shader": "downsample_eighth_blur_v",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_4FrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "downsample_quarter": {
+     "shader": "downsample_quarter",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "downsample_quarter_bloom": {
+     "shader": "downsample_quarter_bloom",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "downsample_quarter_linear": {
+     "shader": "downsample_quarter_linear",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "effectcomposebackground": {
+     "shader": "effectcomposebackground",
+     "blending": "normal",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      null,
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 3
+    },
+    "effectpassthrough": {
+     "shader": "genericimage3",
+     "blending": "normal",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "effectpassthrough_4": {
+     "shader": "genericimage4",
+     "blending": "normal",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "error": {
+     "shader": "error",
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "fade": {
+     "shader": "fade",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "usershadervalues": {
+      "schemecolor": "tint"
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "flat": {
+     "shader": "flat",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "flatalpha": {
+     "shader": "flat",
+     "blending": "translucent",
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "flatalphavertexcolor": {
+     "shader": "flat",
+     "blending": "translucent",
+     "combos": {
+      "vertexcolor": 1
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "flatpointalphavertexcolor": {
+     "shader": "flatpoint",
+     "blending": "translucent",
+     "culling": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "flattexture": {
+     "shader": "minimalalpha",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "fullscreenlayer": {
+     "shader": "passthrough",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 55
+    },
+    "gizmo": {
+     "shader": "flat",
+     "cullmode": "nocull",
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "gizmovertexcolor": {
+     "shader": "flat",
+     "cullmode": "nocull",
+     "combos": {
+      "vertexcolor": 1
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "hdr_downsample": {
+     "shader": "hdr_downsample",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "hdr_downsample_bloom": {
+     "shader": "hdr_downsample",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "combos": {
+      "BLOOM": 1
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "hdr_upsample": {
+     "shader": "hdr_downsample",
+     "blending": "additive",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "combos": {
+      "UPSAMPLE": 1
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "hdr_upsample_cubic": {
+     "shader": "hdr_downsample",
+     "blending": "additive",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "combos": {
+      "UPSAMPLE": 1,
+      "BICUBIC": 1
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "occlusiontest": {
+     "shader": "occlusiontest",
+     "cullmode": "nocull",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "passthrough": {
+     "shader": "passthrough",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "shadowcaster": {
+     "shader": "shadowcaster",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "solidlayer": {
+     "shader": "flat",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 84
+    },
+    "solidlayer_depthtest": {
+     "shader": "flat",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "enabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 5
+    },
+    "solidlayer_instance": {
+     "shader": "genericimage2",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "util/white"
+     ],
+     "combos": {
+      "version": 2
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 8
+    },
+    "solidlayer_instance_3": {
+     "shader": "genericimage3",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "util/white"
+     ],
+     "combos": {
+      "version": 2
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "solidlayer_instance_4": {
+     "shader": "genericimage4",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "util/white"
+     ],
+     "combos": {
+      "version": 2
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 42
+    },
+    "solidlayer_instance_depthtest": {
+     "shader": "genericimage2",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "enabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "util/white"
+     ],
+     "combos": {
+      "version": 2
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "solidlayer_instance_depthtest_3": {
+     "shader": "genericimage3",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "enabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "util/white"
+     ],
+     "combos": {
+      "version": 2
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    },
+    "solidlayer_instance_depthtest_4": {
+     "shader": "genericimage4",
+     "blending": "translucent",
+     "cullmode": "nocull",
+     "depthtest": "enabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "util/white"
+     ],
+     "combos": {
+      "version": 2
+     },
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 5
+    },
+    "volumetrics_back": {
+     "shader": "volumetricsback",
+     "blending": "normal",
+     "cullmode": "normal",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "volumetrics_blur_h": {
+     "shader": "blur_k3",
+     "blending": "normal",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_volumetricsLightBuffer"
+     ],
+     "combos": {
+      "VERTICAL": 0
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "volumetrics_blur_v": {
+     "shader": "blur_k3",
+     "blending": "normal",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_volumetricsLightBufferB"
+     ],
+     "combos": {
+      "VERTICAL": 1
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "volumetrics_combine": {
+     "shader": "passthrough",
+     "blending": "additive",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "textures": [
+      "_rt_volumetricsLightBuffer"
+     ],
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "volumetrics_front": {
+     "shader": "volumetricsfront",
+     "blending": "additive",
+     "cullmode": "normal",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "volumetrics_fullscreen": {
+     "shader": "volumetricsfront",
+     "blending": "additive",
+     "cullmode": "nocull",
+     "depthtest": "disabled",
+     "depthwrite": "disabled",
+     "combos": {
+      "FULLSCREEN": 1
+     },
+     "inWallpaper64Exe": true,
+     "corpusPkgRefs": 0
+    },
+    "wireframe": {
+     "shader": "wireframe",
+     "depthwrite": "disabled",
+     "inWallpaper64Exe": false,
+     "corpusPkgRefs": 0
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/*.json"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 안 'util/<name>' 리터럴 문자열 존재 여부"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "material.util.roles",
+   "value": {
+    "backbufferpassthrough": "백버퍼 통과(선형 감마)",
+    "blur_h_bloom": "LDR 블룸 수평 블러 — 1/8 버퍼 입력",
+    "ccsimple": "단순 컬러 커렉션 — 풀프레임 입력",
+    "clippingmaskimage4": "클리핑 마스크 적용(이미지4 계열)",
+    "combine": "최종 합성 — 풀프레임 + 블룸(기본 util/black = 블룸 없음)",
+    "combine_dhdr_upsample": "combine_hdr 의 DISPLAYHDR=1 변종(디스플레이 HDR 출력)",
+    "combine_hdr_editor": "combine_hdr 의 에디터 변종",
+    "combine_hdr_upsample": "HDR 최종 합성 + 블룸 업샘플",
+    "combine_hdr_upsample_dbg": "combine_hdr 의 COMBINEDBG=1 디버그 변종",
+    "combine_hdr_upsample_linear": "combine_hdr 의 LINEAR=1 변종",
+    "combine_ldr": "LDR 최종 합성 — 풀프레임 + _rt_Bloom",
+    "combine_srgb": "sRGB 통과 합성",
+    "combine_video_hdr": "비디오 레이어 HDR 합성",
+    "compiler_backdrop": "에디터/컴파일러 배경판",
+    "composelayer": "_rt_ 프레임버퍼 레이어 합성(컴포지트 레이어의 기본 머티리얼)",
+    "composelayer_clearalpha": "composelayer 의 CLEARALPHA=1 + blending normal 변종",
+    "composelayer_depthtest": "composelayer 의 depthtest enabled 변종",
+    "debugrt": "디버그 — 렌더타깃 표시(풀프레임)",
+    "debugrt_fb": "디버그 — 프레임버퍼 표시",
+    "debugrt_fb_bloom": "디버그 — _rt_Bloom 표시",
+    "debugrt_fb_eighth": "디버그 — 1/8 프레임버퍼 표시",
+    "debugrt_fb_quarter": "디버그 — 1/4 프레임버퍼 표시",
+    "debugrt_reflection": "디버그 — _rt_Reflection 표시",
+    "downsample_eighth_blur_v": "1/8 다운샘플 + 수직 블러(_rt_4FrameBuffer 입력)",
+    "downsample_quarter": "1/4 다운샘플",
+    "downsample_quarter_bloom": "1/4 다운샘플(블룸 임계 적용)",
+    "downsample_quarter_linear": "1/4 다운샘플(선형)",
+    "effectcomposebackground": "이펙트 배경 합성 — textures[0]=null(=bind 로 주입), [1]=_rt_FullFrameBuffer. compose:true 패스가 참조하는 유일한 머티리얼(refraction)",
+    "effectpassthrough": "이펙트 통과 — 레이어 이미지 셰이더(genericimage3) 재사용",
+    "effectpassthrough_4": "이펙트 통과 — genericimage4 판",
+    "error": "로드 실패 표시(에러 머티리얼)",
+    "fade": "페이드 — usershadervalues{schemecolor:tint}",
+    "flat": "단색(플랫) 지오메트리",
+    "flatalpha": "단색 + 알파(translucent)",
+    "flatalphavertexcolor": "단색 + 알파 + 정점색(vertexcolor=1)",
+    "flatpointalphavertexcolor": "포인트 스프라이트 단색 + 정점색",
+    "flattexture": "최소 알파 텍스처(minimalalpha)",
+    "fullscreenlayer": "풀스크린 레이어 — passthrough + _rt_FullFrameBuffer",
+    "gizmo": "에디터 기즈모(플랫)",
+    "gizmovertexcolor": "에디터 기즈모(정점색)",
+    "hdr_downsample": "HDR 블룸 피라미드 다운샘플",
+    "hdr_downsample_bloom": "HDR 블룸 피라미드 다운샘플(BLOOM=1, 임계 적용)",
+    "hdr_upsample": "HDR 블룸 피라미드 업샘플(UPSAMPLE=1, additive)",
+    "hdr_upsample_cubic": "HDR 블룸 업샘플 + BICUBIC=1(additive)",
+    "occlusiontest": "오클루전 질의 전용(프래그 53B)",
+    "passthrough": "통과 — 풀프레임 그대로",
+    "shadowcaster": "그림자 캐스터 패스",
+    "solidlayer": "단색 레이어 기본 머티리얼(flat, translucent)",
+    "solidlayer_depthtest": "solidlayer 의 depthtest enabled 변종",
+    "solidlayer_instance": "인스턴스 단색 레이어 — genericimage2 + version=2 + util/white",
+    "solidlayer_instance_3": "인스턴스 단색 레이어 — genericimage3 판",
+    "solidlayer_instance_4": "인스턴스 단색 레이어 — genericimage4 판",
+    "solidlayer_instance_depthtest": "solidlayer_instance 의 depthtest 변종",
+    "solidlayer_instance_depthtest_3": "solidlayer_instance_3 의 depthtest 변종",
+    "solidlayer_instance_depthtest_4": "solidlayer_instance_4 의 depthtest 변종",
+    "volumetrics_back": "볼류메트릭 라이트 — 백페이스 깊이",
+    "volumetrics_blur_h": "볼류메트릭 라이트 버퍼 수평 블러(VERTICAL=0)",
+    "volumetrics_blur_v": "볼류메트릭 라이트 버퍼 수직 블러(VERTICAL=1)",
+    "volumetrics_combine": "볼류메트릭 라이트 버퍼 additive 합성",
+    "volumetrics_front": "볼류메트릭 라이트 — 프론트 레이마치(additive)",
+    "volumetrics_fullscreen": "볼류메트릭 라이트 — 풀스크린 판(FULLSCREEN=1)",
+    "wireframe": "와이어프레임(에디터)"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "recon",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/*.json 의 shader·textures·combos",
+     "note": "역할 문구는 그 측정치로부터의 해석이다"
+    },
+    {
+     "kind": "recon",
+     "ref": "렌더러 호출 경로(wallpaper64.exe)로는 검증되지 않았다"
+    }
+   ]
+  },
+  {
+   "id": "material.util.mostUsed",
+   "value": {
+    "코퍼스 pkg 참조 도수(0 제외)": {
+     "solidlayer": 84,
+     "composelayer": 73,
+     "fullscreenlayer": 55,
+     "solidlayer_instance_4": 42,
+     "solidlayer_instance": 8,
+     "solidlayer_depthtest": 5,
+     "solidlayer_instance_depthtest_4": 5,
+     "effectcomposebackground": 3
+    },
+    "코퍼스 참조 0인 util 머티리얼 수": 54,
+    "note": "참조 도수는 pkg 단위다(한 pkg 안 중복은 1로 센다). 0 인 것 대부분은 에디터/디버그/HDR 파이프라인 전용이라 씬 저작물에 이름이 안 남는다 — 미사용이라는 뜻이 아니다. wallpaper64.exe 문자열 유무(catalog.inWallpaper64Exe)가 보완 지표다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.keyLiteralCoverage",
+   "value": {
+    "설명": "Sources/**/*.swift 안에 각 스키마 키가 따옴표 리터럴(\"<key>\")로 등장하는지. false = 그 키를 읽는 코드가 아예 없다(미소비 확정). true 는 존재만 보증하고 정확성은 보증하지 않는다",
+    "결과": {
+     "shader": true,
+     "blending": true,
+     "cullmode": true,
+     "culling": false,
+     "depthtest": true,
+     "depthwrite": true,
+     "alphawriting": true,
+     "textures": true,
+     "combos": true,
+     "constantshadervalues": true,
+     "usershadervalues": true,
+     "usertextures": true,
+     "passes": true,
+     "fbos": true,
+     "bind": true,
+     "target": true,
+     "material": true,
+     "command": true,
+     "source": true,
+     "compose": false,
+     "conditions": false,
+     "functions": false,
+     "dependencies": true,
+     "replacementkey": false,
+     "editable": false,
+     "performance": false,
+     "scale": true,
+     "format": false,
+     "unique": false,
+     "fit": true,
+     "uvs": true,
+     "clear": false
+    },
+    "미등장": [
+     "clear",
+     "compose",
+     "conditions",
+     "culling",
+     "editable",
+     "format",
+     "functions",
+     "performance",
+     "replacementkey",
+     "unique"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/**/*.swift"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.gap.fboFormatDropped",
+   "value": {
+    "정본": "fbos[].format 은 필수 키다(번들·코퍼스 전건 존재). 7종 — r16f, r8, rg1616f, rg88, rgb161616f, rgba8888, rgba_backbuffer",
+    "Waple": "EffectManifest.FBO 에 format 필드가 없다. FBOSpec 은 {scale, fixedWidth, fixedHeight} 뿐이고 SceneRendererFrameEncoder 가 pooledOffscreen → makeOffscreen 으로 전부 .rgba8Unorm 으로 만든다",
+    "영향(확정)": "half-float 포맷(r16f/rg1616f/rgb161616f)이 8비트 UNORM 으로 붕괴한다 — [0,1] 클램프 + 정밀도 손실. fluidsimulation 의 velocity(rg1616f)·pressure/divergence/curl(r16f)은 부호·범위 초과 값을 담아야 하므로 시뮬레이션이 성립하지 않는다. 포맷 이름의 f 접미가 float 을 뜻한다는 관례에만 의존한다",
+    "영향(추정)": "rgba_backbuffer 를 '백버퍼와 동일 포맷'으로 읽으면 HDR 씬에서 rgba16Float 를 따라야 하는데 고정 rgba8Unorm 이라 이펙트 체인이 HDR 을 잘라낸다. 다만 rgba_backbuffer 의 의미 자체가 이름에서 추론한 것이라 이 절은 추정이다",
+    "위치": "Sources/WapleCore/EffectManifest.swift:25-39, Sources/WapleRender/SceneRendererResources.swift:57,619-621,1422-1425, Sources/WapleRender/SceneRendererFrameEncoder.swift:1847-1853"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRendererResources.swift:1422",
+     "note": "makeOffscreen: pixelFormat: .rgba8Unorm 고정"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.gap.fboClearAndUnique",
+   "value": {
+    "정본": "fbos[].clear(\"0 0 0 0\", 번들 12건) 과 fbos[].unique(true, 번들 19건 / 코퍼스 81건)",
+    "Waple": "\"clear\"/\"unique\" 리터럴이 Sources 어디에도 없다. FBO 는 pooledOffscreen 의 (w,h) 키 풀에서 재사용되고 매 패스 loadAction=.clear 로 시작한다",
+    "영향(추정)": "unique 는 '이 fbo 를 공유 풀에서 빼라'(=프레임 간 내용 보존)로 읽힌다. Waple 의 풀은 같은 크기 요청 순서가 프레임마다 같으면 우연히 같은 텍스처를 돌려주지만 보장이 아니다. motionblur 누적 버퍼·fluidsimulation 더블버퍼가 이 우연에 의존한다",
+    "확정된 것": "키가 존재한다는 것과 Waple 이 그 키를 읽지 않는다는 것"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRendererFrameEncoder.swift:1847"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.gap.strictJSON",
+   "value": {
+    "정본": "WE 의 effect.json 은 // 주석과 트레일링 콤마를 쓴다",
+    "Waple": "EffectManifest.parse 가 JSONSerialization(엄격)을 쓴다 → 파싱 실패 시 nil → loadEffectManifest 가 단일 무-타깃 패스로 폴백해 멀티패스 구조가 통째로 사라진다",
+    "실제 영향 범위": {
+     "번들 최상위 effect.json 중 엄격 실패": [
+      "effects/fluidsimulation/effect.json"
+     ],
+     "코퍼스 pkg 안": 0,
+     "코퍼스 씬이 pkg 미동봉 effect.json 을 참조하는 건수": 0
+    },
+    "note": "코퍼스 162씬은 참조하는 effect.json 을 전건 pkg 에 동봉한다. 따라서 이 결함은 지금 코퍼스에서는 발현하지 않는다 — 베이스 에셋 폴백 경로(BaseAssetsSettings)로만 도달하는 잠재 결함이다",
+    "위치": "Sources/WapleCore/EffectManifest.swift:47"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/EffectManifest.swift:47"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.gap.bindPrevAlias",
+   "value": {
+    "정본": "\"prev\" 가 bind.name 자리에 쓰인 파일이 1개 있다 — effects/blur/preview/effects/blur/effect.json (번들 최상위 0건 / preview 2건 / 코퍼스 0건)",
+    "Waple": "SceneRendererResources.swift:754 이 b.name == \"previous\" 정확 일치만 본다. \"prev\" 는 fboIndex 조회로 떨어지고 미해석 → 그 슬롯이 이펙트 입력에 연결되지 않는다",
+    "우선순위": "낮다. preview 트리 1파일뿐이고 코퍼스 참조 0. 별칭 지원 여부 자체가 미확인이므로 지금 구현하면 근거 없는 관대함이 된다 — 기록만 남긴다",
+    "위치": "Sources/WapleRender/SceneRendererResources.swift:754"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRendererResources.swift:754"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.gap.cullmodeInMaterialPass",
+   "value": {
+    "정본": "material passes[0].cullmode 는 코퍼스 5401건에 존재하고 그중 449건이 normal(백페이스 컬 켬)이다",
+    "Waple": "SceneDocument.parseMaterialPassProperties(:2324-2422)가 blending/depthtest/depthwrite/alphawriting/combos/constantshadervalues/shader/usershadervalues/textures 를 읽고 cullmode 는 읽지 않는다. cullmode 리터럴은 SceneRenderer3D:718 에만 있다(3D 메시 경로)",
+    "영향(추정)": "2D 레이어 경로에서 백페이스 컬 지정이 소실된다. 2D 쿼드는 대부분 단면이라 가시적 차이가 없을 수 있으나 뒤집힌 트랜스폼(음수 스케일) 레이어에서는 달라진다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift:2324",
+     "note": "parseMaterialPassProperties — cullmode 미참조"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.gap.composeAndConditions",
+   "value": {
+    "미소비 렌더 키": [
+     "compose",
+     "conditions",
+     "functions"
+    ],
+    "정본 도수": {
+     "pass.compose": 11,
+     "conditions(fbo/bind/pass 합)": 4,
+     "functions": 1
+    },
+    "note": "의미가 미확정이라 지금 구현할 수 없다. 다만 '읽지 않는다'는 사실은 확정이고, conditions 를 무시하면 조건부 fbo 가 항상 생성돼 콤보 off 상태에서 낭비가 생긴다",
+    "갭 아님": "editable / performance / replacementkey 도 Sources 에 없지만 이건 에디터 메타데이터라 렌더에 영향이 없다 — 미소비가 정상이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/{materials,effects}/**/*.json",
+     "note": "WE 2.8.42 동봉 에셋 전수"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/**/*.swift"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.gap.comboCaseFolding",
+   "value": {
+    "정본": "콤보 키는 대소문자가 혼용된다 — 코퍼스에 VERSION(254)/version(45), SPRITESHEET(44)/spritesheet(60) 가 공존한다",
+    "Waple 이 접는 것": "SceneDocument.swift:2336-2337 이 spritesheet 와 lighting 딱 둘만 lowercased() 비교한다",
+    "Waple 이 안 접는 것": [
+     "2356-2358 materialCombos[k] = i — 원문 대소문자를 그대로 보존해 하류 셰이더 콤보 해석에 넘긴다. VERSION 과 version 이 서로 다른 콤보 이름으로 도착한다",
+     "2410 (p0[\"combos\"])?[\"REFRACT\"] — 정확 대소문자 + NSNumber 캐스트 + == 1. refract(소문자)나 REFRACT:2 는 false 로 읽힌다"
+    ],
+    "영향": "콤보가 매치되지 않으면 셰이더 분기가 기본값으로 컴파일된다 — 조용히 다른 그림이 나온다",
+    "위치": "Sources/WapleCore/SceneDocument.swift:2336-2337, 2356-2358, 2410"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 안의 JSON 엔트리 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift:2356"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.ok.handledKeys",
+   "value": {
+    "확인": "아래는 Waple 이 이미 읽는다 — 갭 표와 구분하기 위해 명시한다",
+    "material": {
+     "blending(alphatocoverage 포함)": "SceneRenderer3D.swift:721",
+     "constantshadervalues 의 <str> 공백벡터": "SceneDocument.swift:2367 floatList",
+     "constantshadervalues 의 {script,scriptproperties,value}": "SceneDocument.swift:2286 scriptedConstant",
+     "usershadervalues": "SceneDocument.swift:2387 (키=유저프로퍼티, 값=셰이더 토큰)",
+     "usertextures(문자열 | {name,type})": "SceneDocument.swift:1925, 2180",
+     "combos 대소문자 무시 — 단 2키(spritesheet/lighting)만": "SceneDocument.swift:2336-2337. 일반 콤보 폴딩은 갭이다(waple.gap.comboCaseFolding 참조)"
+    },
+    "effect": {
+     "passes/material/shader/target/bind{name,index}": "EffectManifest.swift:46-62",
+     "command copy/swap + source": "SceneRendererResources.swift:570-583",
+     "fbos scale/fit/width/height/uvs": "EffectManifest.swift:63-79"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/EffectManifest.swift"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_schema.py"
+    }
+   ]
+  }
+ ]
+}

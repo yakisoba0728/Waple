@@ -1,0 +1,828 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_render_state.py",
+ "scope": "wallpaper64.exe D3D11 렌더 상태 객체",
+ "entries": [
+  {
+   "id": "renderState.authoring.passKeys",
+   "value": {
+    "keys": [
+     "blending",
+     "cullmode",
+     "depthtest",
+     "depthwrite",
+     "alphawriting"
+    ],
+    "corpusCounts": {
+     "blending": 5401,
+     "cullmode": 5402,
+     "depthtest": 5402,
+     "depthwrite": 5402,
+     "alphawriting": 799
+    },
+    "assetCounts": {
+     "blending": 602,
+     "cullmode": 608,
+     "depthtest": 621,
+     "depthwrite": 623,
+     "alphawriting": 60
+    },
+    "note": "material JSON 의 passes[] 항목. 없으면 엔진 기본값"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 material JSON 5665건 전수"
+    },
+    {
+     "kind": "asset",
+     "ref": "WEAssets 머티리얼 JSON 639건 전수",
+     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다(material-schema material.jsonDialect.strictFailures 31건)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.authoring.valueDistribution",
+   "value": {
+    "blending": {
+     "corpus": {
+      "translucent": 2568,
+      "normal": 2241,
+      "additive": 552,
+      "alphatocoverage": 40
+     },
+     "assets": {
+      "normal": 205,
+      "translucent": 200,
+      "additive": 197
+     }
+    },
+    "cullmode": {
+     "corpus": {
+      "nocull": 4953,
+      "normal": 449
+     },
+     "assets": {
+      "nocull": 603,
+      "normal": 5
+     }
+    },
+    "depthtest": {
+     "corpus": {
+      "disabled": 4763,
+      "enabled": 639
+     },
+     "assets": {
+      "disabled": 607,
+      "enabled": 14
+     }
+    },
+    "depthwrite": {
+     "corpus": {
+      "disabled": 4771,
+      "enabled": 631
+     },
+     "assets": {
+      "disabled": 617,
+      "enabled": 6
+     }
+    },
+    "alphawriting": {
+     "corpus": {
+      "default": 783,
+      "enabled": 16
+     },
+     "assets": {
+      "default": 56,
+      "enabled": 4
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 material JSON 5665건 전수"
+    },
+    {
+     "kind": "asset",
+     "ref": "WEAssets 머티리얼 JSON 639건 전수",
+     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다(material-schema material.jsonDialect.strictFailures 31건)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.authoring.blendingVsDepthwrite",
+   "value": {
+    "crosstab": {
+     "translucent|disabled": 2314,
+     "normal|disabled": 1908,
+     "additive|disabled": 548,
+     "normal|enabled": 333,
+     "translucent|enabled": 254,
+     "alphatocoverage|enabled": 40,
+     "additive|enabled": 4,
+     "None|disabled": 1
+    },
+    "why": "엔진은 blending 이 translucent/additive 면 저작된 depthwrite 와 무관하게 뎁스 쓰기를 강제로 끈다(renderState.depthStencil.table 의 select 규칙). 이 교차표의 translucent|enabled + additive|enabled 행이 그 강제가 실제로 저작을 덮어쓰는 건수다",
+    "overriddenRows": 258
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 material JSON 5665건 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.authoring.enumEncoding",
+   "value": {
+    "blending": {
+     "normal": 0,
+     "translucent": 1,
+     "additive": 2,
+     "alphatocoverage": 3
+    },
+    "alphawriting": {
+     "default": 0,
+     "enabled": 1,
+     "disabled": 2
+    },
+    "depthtest": {
+     "enabled": 0,
+     "disabled": 1
+    },
+    "depthwrite": {
+     "enabled": 0,
+     "disabled": 1
+    },
+    "cullmode": {
+     "normal": 0,
+     "nocull": 1
+    },
+    "propertyIds": {
+     "blending": 496,
+     "alphawriting": 497,
+     "depthtest": 498,
+     "depthwrite": 499,
+     "cullmode": 500
+    },
+    "note": "depthtest/depthwrite 는 enabled=0/disabled=1 로 뒤집혀 있다",
+    "alphawritingUnmapped": "alphawriting 만 D3D11 디스크립터 필드로 가는 경로를 추적하지 못했다(renderState.blend.flagBits 참조)",
+    "stringVAs": {
+     "blending": {
+      "va": "0x14048b638",
+      "section": ".rdata"
+     },
+     "cullmode": {
+      "va": "0x14048b690",
+      "section": ".rdata"
+     },
+     "depthtest": {
+      "va": "0x14048b6b0",
+      "section": ".rdata"
+     },
+     "depthwrite": {
+      "va": "0x14048b6a0",
+      "section": ".rdata"
+     },
+     "alphawriting": {
+      "va": "0x14048b6c0",
+      "section": ".rdata"
+     },
+     "normal": {
+      "va": "0x140476fd0",
+      "section": ".rdata"
+     },
+     "translucent": {
+      "va": "0x14048b500",
+      "section": ".rdata"
+     },
+     "additive": {
+      "va": "0x14048b520",
+      "section": ".rdata"
+     },
+     "alphatocoverage": {
+      "va": "0x14048b510",
+      "section": ".rdata"
+     },
+     "nocull": {
+      "va": "0x14048b52c",
+      "section": ".rdata"
+     },
+     "enabled": {
+      "va": "0x140473fb0",
+      "section": ".rdata"
+     },
+     "disabled": {
+      "va": "0x140476ea0",
+      "section": ".rdata"
+     },
+     "default": {
+      "va": "0x140476ef8",
+      "section": ".rdata"
+     },
+     "msaa": {
+      "va": "0x140476e68",
+      "section": ".rdata"
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_1401577e0 @ 0x1401577e0",
+     "note": "머티리얼 pass 프로퍼티 등록자. 문자열과 정수를 짝지어 등록한다"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_1401531c0 @ 0x1401531c0",
+     "note": "역매핑 0→normal / 1→translucent / 2→additive / 3→alphatocoverage"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.blend.byBlendingMode",
+   "value": {
+    "descLayout": "D3D11_BLEND_DESC(264B): +0 AlphaToCoverage, +4 IndependentBlend, RT[0] +8 BlendEnable, +12 SrcBlend, +16 DestBlend, +20 BlendOp, +24 SrcBlendAlpha, +28 DestBlendAlpha, +32 BlendOpAlpha, +36 WriteMask",
+    "normal": {
+     "blendEnable": false,
+     "srcBlend": "ONE",
+     "destBlend": "ZERO",
+     "blendOp": "ADD",
+     "srcBlendAlpha": "ONE",
+     "destBlendAlpha": "ZERO",
+     "blendOpAlpha": "ADD",
+     "writeMask": 7,
+     "meaning": "불투명 덮어쓰기. 알파 채널은 쓰지 않는다"
+    },
+    "translucent": {
+     "blendEnable": true,
+     "srcBlend": "SRC_ALPHA",
+     "destBlend": "INV_SRC_ALPHA",
+     "blendOp": "ADD",
+     "srcBlendAlpha": "SRC_ALPHA",
+     "destBlendAlpha": "INV_SRC_ALPHA",
+     "blendOpAlpha": "ADD",
+     "writeMask": 7,
+     "meaning": "스트레이트(비-프리멀티) 알파 오버"
+    },
+    "additive": {
+     "blendEnable": true,
+     "srcBlend": "SRC_ALPHA",
+     "destBlend": "ONE",
+     "blendOp": "ADD",
+     "srcBlendAlpha": "SRC_ALPHA",
+     "destBlendAlpha": "ONE",
+     "blendOpAlpha": "ADD",
+     "writeMask": 7,
+     "meaning": "dst += src.rgb * src.a"
+    },
+    "alphatocoverage": {
+     "alphaToCoverageEnable": true,
+     "blendEnable": false,
+     "srcBlend": "ONE",
+     "destBlend": "ZERO",
+     "blendOp": "ADD",
+     "srcBlendAlpha": "ONE",
+     "destBlendAlpha": "ZERO",
+     "blendOpAlpha": "ADD",
+     "writeMask": 7,
+     "meaning": "normal 과 같고 AlphaToCoverage 만 켠다"
+    },
+    "writeMask7": "0x7 = RGB. 머티리얼 드로우는 기본적으로 알파를 쓰지 않는다",
+    "sampleMask": "0xffffffff (OMSetBlendState 3번째 인자)",
+    "blendFactor": "NULL (기본 1,1,1,1)",
+    "descriptorsAreMeasured": "네 디스크립터의 필드값은 함수 바이트에서 직접 읽었다",
+    "labelingBasis": "어느 디스크립터가 어느 blending 값인가는 데이터흐름을 끝까지 추적한 게 아니라 스위치 인덱스 0..3 과 열거값 0..3 의 일치로 붙였다. index 3 만 AlphaToCoverageEnable 을 켜고 열거값 3 의 이름이 alphatocoverage 라는 점, index 0 이 블렌딩 미사용(=normal)이라는 점이 이 대응의 근거다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099f60 @ 0x140099f60 (본문 SHA256[:16]=c90ef09b71f93e3b)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.blend.flagBits",
+   "value": {
+    "key": "블렌드 상태 캐시 키 = (상태워드 uint16) | (blending 열거값 0..3)",
+    "bit0_2": "blending 열거값(위 표)",
+    "bit3_4(0x18)": "WriteMask 를 0xF(RGBA)로 승격",
+    "bit4(0x10)": "추가로 BlendOpAlpha=MAX, Src/DestBlendAlpha=ONE (알파 마스크 누적)",
+    "bit5(0x20)": "BlendOp=MAX, Src/DestBlendAlpha=ONE",
+    "bit6(0x40)": "BlendOp=MIN, Src/DestBlendAlpha=ONE",
+    "bit7(0x80)": "SrcBlend=ONE, DestBlend=INV_SRC_ALPHA, Src/DestBlendAlpha=ONE (프리멀티플라이드 오버 + 알파 누적)",
+    "bit8(0x100)": "SrcBlend=DEST_COLOR, Src/DestBlendAlpha=ONE",
+    "bit9(0x200)": "머티리얼 blending 값을 쓸지(clear 면 캐시키 하위 3비트에 4 를 OR)",
+    "keyValue4": "캐시키 하위 3비트가 4 인 분기는 WriteMask 를 8(ALPHA only)로만 쓴다. 이 분기만 거치면 SrcBlend 등이 memset 0 으로 남아 D3D11 이 거부하는 디스크립터가 된다 — 따라서 (a) 이 값이 실제로는 도달 불가이거나 (b) 위 플래그 비트 중 하나가 항상 같이 켜져 팩터를 채운다. 어느 쪽인지 호출부를 추적하지 않았다. WriteMask=8 을 쓰는 코드가 있다는 사실만 확인된 것이다",
+    "alphawritingNotLinked": "머티리얼 alphawriting(프로퍼티 497, 코퍼스 799건 중 enabled 16건)이 RenderTargetWriteMask 로 가는 경로는 추적하지 않았다. 위 0x18 비트(마스크 0xF 승격)가 그 경로일 것 같지만, 플래그는 blending 값(오브젝트+0x26)과 다른 상태워드(오브젝트+0x28)에 있다. **alphawriting 이 무효라는 뜻이 아니다 — 미추적이라는 뜻이다**",
+    "caution": "네 개의 blending 모드 디스크립터는 직접 디코드했으나, 이 플래그 비트들의 **호출부 의미**(어느 패스가 어느 비트를 켜는가)는 추적하지 않았다"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099f60 @ 0x140099f60 (본문 SHA256[:16]=c90ef09b71f93e3b)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.depthStencil.table",
+   "value": {
+    "descLayout": "D3D11_DEPTH_STENCIL_DESC(52B): +0 DepthEnable, +4 DepthWriteMask, +8 DepthFunc, +12 StencilEnable, +16 ReadMask, +17 WriteMask, +20 FrontFace, +36 BackFace",
+    "slots": [
+     {
+      "index": 0,
+      "depthEnable": true,
+      "depthWriteMask": "ALL",
+      "depthFunc": "GREATER"
+     },
+     {
+      "index": 1,
+      "depthEnable": true,
+      "depthWriteMask": "ZERO",
+      "depthFunc": "GREATER"
+     },
+     {
+      "index": 2,
+      "depthEnable": false,
+      "depthWriteMask": "ZERO",
+      "depthFunc": "GREATER"
+     },
+     {
+      "index": 3,
+      "aliasOf": 2
+     }
+    ],
+    "stencil": "전 슬롯 StencilEnable=FALSE (스텐실 미사용)",
+    "stencilRef": "OMSetDepthStencilState 두번째 인자 = 0",
+    "select": "index = (머티리얼 depthtest 비트) | (blending 이 translucent/additive 면 1)",
+    "depthFuncGreater": "DepthFunc=GREATER — 표준 LESS 가 아니다(역-Z 계열 규약)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099050 @ 0x140099050 (본문 SHA256[:16]=f8034fd3565c892e)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.rasterizer.table",
+   "value": {
+    "descLayout": "D3D11_RASTERIZER_DESC(40B): +0 FillMode, +4 CullMode, +8 FrontCounterClockwise, +12 DepthBias, +16 DepthBiasClamp, +20 SlopeScaledDepthBias, +24 DepthClipEnable, +28 ScissorEnable, +32 MultisampleEnable, +36 AntialiasedLineEnable",
+    "common": {
+     "fillMode": "SOLID",
+     "frontCounterClockwise": true,
+     "depthBias": 0,
+     "depthBiasClamp": 0.0,
+     "depthClipEnable": true,
+     "scissorEnable": false,
+     "antialiasedLineEnable": false,
+     "multisampleEnable": "설정 msaa != none 이면 TRUE"
+    },
+    "slots": [
+     {
+      "index": 0,
+      "cullMode": "BACK",
+      "slopeScaledDepthBias": 0.0
+     },
+     {
+      "index": 1,
+      "cullMode": "FRONT",
+      "slopeScaledDepthBias": 0.0
+     },
+     {
+      "index": 2,
+      "cullMode": "NONE",
+      "slopeScaledDepthBias": 0.0
+     },
+     {
+      "index": 3,
+      "aliasOf": 2
+     },
+     {
+      "index": 4,
+      "cullMode": "NONE",
+      "slopeScaledDepthBias": -4.0
+     },
+     {
+      "index": 5,
+      "cullMode": "FRONT",
+      "slopeScaledDepthBias": -4.0
+     },
+     {
+      "index": 6,
+      "cullMode": "NONE",
+      "slopeScaledDepthBias": -4.0
+     },
+     {
+      "index": 7,
+      "aliasOf": 6
+     }
+    ],
+    "asymmetry": "바이어스 없는 조는 BACK/FRONT/NONE 인데 바이어스 조는 NONE/FRONT/NONE 이다 — index 4 만 BACK 이 아니다(디스어셈블리에서 CullMode 를 다시 쓰지 않는다). 의도인지 WE 의 누락인지는 미확인",
+    "scissor": "ScissorEnable=FALSE — 시저는 상태로 쓰지 않는다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099050 @ 0x140099050 (본문 SHA256[:16]=f8034fd3565c892e)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.sampler.cache",
+   "value": {
+    "descLayout": "D3D11_SAMPLER_DESC(52B): +0 Filter, +4 AddressU, +8 AddressV, +12 AddressW, +16 MipLODBias, +20 MaxAnisotropy, +24 ComparisonFunc, +28 BorderColor[4], +44 MinLOD, +48 MaxLOD",
+    "constant": {
+     "mipLODBias": 0.0,
+     "borderColor": [
+      0,
+      0,
+      0,
+      0
+     ],
+     "minLOD": 0.0,
+     "maxLOD": "FLT_MAX (0x7f7fffff)"
+    },
+    "keyBits": {
+     "bit0": "1 = MIN_MAG_MIP_POINT(니어리스트), 0 = 선형/이방성",
+     "bit1": "1 = AddressU/V/W = CLAMP, 0 = WRAP",
+     "bit26(0x4000000)": "AddressU/V/W = BORDER",
+     "bit27(0x8000000)": "비교(그림자) 샘플러 — Filter=COMPARISON_MIN_MAG_MIP_LINEAR(0x95), Address=BORDER, ComparisonFunc=GREATER",
+     "bit31": "1 = MIN_MAG_MIP_LINEAR(0x15), 0 = ANISOTROPIC(0x55) + MaxAnisotropy=8"
+    },
+    "addressUVWAlwaysEqual": true,
+    "comparisonFuncDefault": "ALWAYS (비교 샘플러가 아니면)",
+    "maxAnisotropy": "Filter==ANISOTROPIC 일 때만 8, 그 외 1",
+    "cache": "FNV-1a 해시 키의 unordered_map — 상태는 재사용된다",
+    "authoring": "필터/어드레스는 머티리얼이 아니라 텍스처 사이드카(.tex-json)가 정한다: clampuvs → bit1, nointerpolation → bit0",
+    "texJsonCounts": {
+     "clampuvs": {
+      "True": 205,
+      "False": 61
+     },
+     "nointerpolation": {
+      "False": 10,
+      "True": 2
+     },
+     "nomip": {
+      "True": 119,
+      "False": 3
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099980 @ 0x140099980 (본문 SHA256[:16]=904bd4b240de2ac4)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "asset",
+     "ref": "WEAssets 머티리얼 JSON 639건 전수",
+     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다(material-schema material.jsonDialect.strictFailures 31건)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.alpha.straightNotPremultiplied",
+   "value": {
+    "claim": "WE 의 머티리얼 셰이더는 스트레이트(비-프리멀티) 알파를 출력하고, 블렌드 상태가 SrcBlend=SRC_ALPHA 로 곱한다",
+    "shaderEvidence": [
+     "shaders/genericimage2.frag:160 `gl_FragColor = color;` — rgb 에 a 를 곱하지 않는다",
+     "shaders/genericimage4.frag:201 동일",
+     "shaders/generic4.frag:183 `gl_FragColor = albedo;` 동일",
+     "shaders/genericparticle.frag:131 동일",
+     "shaders/font.frag:89 드롭섀도 합성이 `/ max(outAlpha,1e-6)` 로 명시적으로 언프리멀티 — 파이프라인이 스트레이트를 기대한다는 직접 증거"
+    ],
+    "blendEvidence": "translucent = SRC_ALPHA / INV_SRC_ALPHA, additive = SRC_ALPHA / ONE",
+    "equivalence": "RGB 결과만 보면 (프리멀티 셰이더 + ONE) 와 수식이 같다. 갈라지는 곳은 알파 채널 — WE 는 WriteMask=7 로 알파를 아예 쓰지 않는다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders/*.frag"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099f60 @ 0x140099f60 (본문 SHA256[:16]=c90ef09b71f93e3b)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.device.creation",
+   "value": {
+    "import": "wallpaper64.exe 는 d3d11.dll 에서 D3D11CreateDevice 하나만 임포트한다 (D3D11CreateDeviceAndSwapChain 아님 — 스왑체인은 DXGI COM 경유)",
+    "dxgiNotImported": "dxgi.dll 임포트 없음. IDXGIFactory 는 디바이스에서 QueryInterface 로 얻는다",
+    "flags": "0x20 = D3D11_CREATE_DEVICE_BGRA_SUPPORT",
+    "featureLevels": [
+     "11_1",
+     "11_0",
+     "10_1",
+     "10_0"
+    ],
+    "interfaceGuidsPresent": {
+     "IDXGIFactory1": true,
+     "IDXGIFactory2": true,
+     "IDXGIDevice": true,
+     "IDXGIOutput6": true,
+     "IDXGISwapChain1": false,
+     "IDXGISwapChain2": false,
+     "IDXGISwapChain3": false,
+     "IDXGISwapChain4": false,
+     "ID3D11Texture2D": true
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 임포트 테이블 + .rdata IID 전수 스캔"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14005deb0 @ 0x14005deb0",
+     "note": "D3D11CreateDevice(NULL, HARDWARE, NULL, 0x20, levels, 4, D3D11_SDK_VERSION=7, ...)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.backbuffer.noSRGBViewNoHDROutput",
+   "value": {
+    "rtv": "백버퍼 RTV 는 CreateRenderTargetView(backbuffer, pDesc=NULL, &rtv) 로 만든다 → 포맷 오버라이드 없음 = sRGB 뷰를 쓰지 않는다",
+    "hdrOutput": "IDXGISwapChain3/IDXGISwapChain4 IID 가 바이너리에 없다 → SetColorSpace1 호출 불가 → HDR10/scRGB 디스플레이 출력 경로가 없다",
+    "hdrDisplayQuery": "IDXGIOutput6 IID 는 있다 — HDR 디스플레이 '감지'만 한다",
+    "sceneHDRisInternal": "씬의 general.hdr 는 내부 float 렌더타깃 이야기지 출력 포맷이 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099050 @ 0x140099050",
+     "note": "IDXGISwapChain::GetBuffer(0, IID_ID3D11Texture2D) → CreateRenderTargetView(.., NULL, ..)"
+    },
+    {
+     "kind": "binary",
+     "ref": ".rdata IID 전수 스캔 — SwapChain3/4 부재"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.backbuffer.swapchainFormat",
+   "value": {
+    "value": "DXGI_FORMAT_B8G8R8A8_UNORM(87) 로 추정",
+    "why": "D3D11_CREATE_DEVICE_BGRA_SUPPORT 를 켜고, RTV 포맷 오버라이드가 없고, sRGB 뷰를 쓰지 않는다",
+    "notMeasured": "DXGI_SWAP_CHAIN_DESC 를 채우는 지점을 특정하지 못했다. IDXGIFactory::CreateSwapChain(vtbl+0x50)/ForHwnd(+0x78) 호출부를 변위 스캔으로 좁히지 못했다"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 임포트/IID/RTV 생성 경로 정황"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.msaa",
+   "value": {
+    "scope": "애플리케이션 설정이다. 씬이 정하지 않는다",
+    "sceneJsonHasMsaa": 0,
+    "scenesScanned": 161,
+    "configKey": "config.json → <user>/general/user/msaa",
+    "values": [
+     "none",
+     "x2",
+     "x4",
+     "x8"
+    ],
+    "default": "none (이 설치본의 실제 값)",
+    "rasterizerCoupling": "MultisampleEnable = (msaa != none)",
+    "renderTarget": "_rt_FullFrameBufferMultiSampled 가 존재한다(spec/engine/render-targets.json)",
+    "sampleCountNotMeasured": "x2/x4/x8 이 D3D11_TEXTURE2D_DESC.SampleDesc.Count 2/4/8 로 간다는 것은 자연스럽지만 직접 읽지 않았다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 162개 material JSON 5665건 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Z:\\SteamLibrary\\steamapps\\common\\wallpaper_engine\\config.json",
+     "note": "general/user/msaa = none"
+    },
+    {
+     "kind": "file",
+     "ref": "Z:\\SteamLibrary\\steamapps\\common\\wallpaper_engine\\ui\\dist\\scripts\\scripts.js",
+     "note": "msaa:\"none\"/\"x2\" 및 \"MSAA x2/x4/x8\" 라벨"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.binary.fingerprints",
+   "value": {
+    "FUN_140099050": {
+     "range": [
+      "0x140099050",
+      "0x140099304"
+     ],
+     "sha256_16": "f8034fd3565c892e",
+     "role": "DS/RS 상태 생성"
+    },
+    "FUN_140099f60": {
+     "range": [
+      "0x140099f60",
+      "0x14009a358"
+     ],
+     "sha256_16": "c90ef09b71f93e3b",
+     "role": "블렌드 상태 캐시 + 상태 적용"
+    },
+    "FUN_140099980": {
+     "range": [
+      "0x140099980",
+      "0x140099f55"
+     ],
+     "sha256_16": "904bd4b240de2ac4",
+     "role": "샘플러 상태 캐시"
+    },
+    "note": "WE 판올림 시 이 해시가 바뀐다 = 위 표를 다시 읽어야 한다는 신호",
+    "vtableSlots": {
+     "ID3D11Device::CreateBlendState": "0xa0",
+     "ID3D11Device::CreateDepthStencilState": "0xa8",
+     "ID3D11Device::CreateRasterizerState": "0xb0",
+     "ID3D11Device::CreateSamplerState": "0xb8",
+     "ID3D11DeviceContext::OMSetBlendState": "0x118",
+     "ID3D11DeviceContext::OMSetDepthStencilState": "0x120",
+     "ID3D11DeviceContext::RSSetState": "0x158",
+     "ID3D11DeviceContext::RSSetViewports": "0x160"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099050 @ 0x140099050 (본문 SHA256[:16]=f8034fd3565c892e)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099f60 @ 0x140099f60 (본문 SHA256[:16]=c90ef09b71f93e3b)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099980 @ 0x140099980 (본문 SHA256[:16]=904bd4b240de2ac4)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  },
+  {
+   "id": "renderState.binary.rawImmediates",
+   "value": {
+    "FUN_140099050.depthStencilWriteSequence": [
+     {
+      "off": 0,
+      "val": 1
+     },
+     {
+      "off": 4,
+      "val": 1
+     },
+     {
+      "off": 8,
+      "val": 5
+     }
+    ],
+    "FUN_140099050.rasterizerWriteSequence": [
+     {
+      "off": 0,
+      "val": 3
+     },
+     {
+      "off": 4,
+      "val": 3
+     },
+     {
+      "off": 24,
+      "val": 1
+     },
+     {
+      "off": 8,
+      "val": 1
+     },
+     {
+      "off": 4,
+      "val": 2
+     },
+     {
+      "off": 4,
+      "val": 1
+     },
+     {
+      "off": 20,
+      "val": 3229614080
+     },
+     {
+      "off": 4,
+      "val": 2
+     },
+     {
+      "off": 4,
+      "val": 1
+     }
+    ],
+    "FUN_140099f60.stackImmediateCount": 38,
+    "FUN_140099980.stackImmediateCount": 8,
+    "note": "위 해석 표의 원자료다. off 는 디스크립터 선두 기준 바이트 오프셋, val 은 그 지점에서 기록된 즉시값. 실행 순서 그대로이고 create 호출은 그 사이사이에 놓인다 — 그래서 슬롯 표가 이 순서열에서 나온다. 레지스터로 기록되는 필드(0 으로 밀거나 조건값)는 여기 안 나온다",
+    "example": "rasterizer 순서열 [(0,3),(4,3),(8,1),(24,1),(4,2),(4,1),(20,0xc0800000),(4,2),(4,1)] → BACK / FRONT / NONE / (bias -4) NONE / FRONT / NONE"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099050 @ 0x140099050 (본문 SHA256[:16]=f8034fd3565c892e)",
+     "note": "함수 범위는 .pdata 로, 값은 mov imm 오퍼랜드로 직접 재추출"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_state.py"
+    }
+   ]
+  }
+ ]
+}

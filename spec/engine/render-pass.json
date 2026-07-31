@@ -1,0 +1,2031 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_render_pass.py",
+ "binary": "wallpaper64.exe",
+ "entries": [
+  {
+   "id": "engine.renderPass.sceneFrameFunction",
+   "value": {
+    "va": "0x14017fa70",
+    "chunkCount": 2,
+    "ranges": [
+     [
+      "0x14017fa70",
+      "0x14017fcfc"
+     ],
+     [
+      "0x14017fcfc",
+      "0x1401816cc"
+     ]
+    ],
+    "postprocessMaterialLoaderFns": [
+     "0x14017fa70"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.materialInputs",
+   "value": {
+    "materials/util/backbufferpassthrough.json": {
+     "shader": "passthroughlinear",
+     "textures": [],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/blur_h_bloom.json": {
+     "shader": "blur_h_bloom",
+     "textures": [
+      "_rt_8FrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/ccsimple.json": {
+     "shader": "ccsimple",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/clippingmaskimage4.json": {
+     "shader": "clippingmaskimage4",
+     "textures": [],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/combine.json": {
+     "shader": "combine",
+     "textures": [
+      "_rt_FullFrameBuffer",
+      "util/black"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/combine_dhdr_upsample.json": {
+     "shader": "combine_hdr",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": {
+      "DISPLAYHDR": 1
+     }
+    },
+    "materials/util/combine_hdr_editor.json": {
+     "shader": "combine_hdr_editor",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/combine_hdr_upsample.json": {
+     "shader": "combine_hdr",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/combine_hdr_upsample_dbg.json": {
+     "shader": "combine_hdr",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": {
+      "COMBINEDBG": 1
+     }
+    },
+    "materials/util/combine_hdr_upsample_linear.json": {
+     "shader": "combine_hdr",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": {
+      "LINEAR": 1
+     }
+    },
+    "materials/util/combine_ldr.json": {
+     "shader": "combine",
+     "textures": [
+      "_rt_FullFrameBuffer",
+      "_rt_Bloom"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/combine_srgb.json": {
+     "shader": "passthroughsrgb",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/combine_video_hdr.json": {
+     "shader": "combine_video_hdr",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/compiler_backdrop.json": {
+     "shader": "compilerbackdrop",
+     "textures": [],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/composelayer.json": {
+     "shader": "composelayer",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/composelayer_clearalpha.json": {
+     "shader": "composelayer",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": "normal",
+     "combos": {
+      "CLEARALPHA": 1
+     }
+    },
+    "materials/util/composelayer_depthtest.json": {
+     "shader": "composelayer",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/debugrt.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/debugrt_fb.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/debugrt_fb_bloom.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_Bloom"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/debugrt_fb_eighth.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_EighthFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/debugrt_fb_quarter.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_QuarterFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/debugrt_reflection.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_Reflection"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/downsample_eighth_blur_v.json": {
+     "shader": "downsample_eighth_blur_v",
+     "textures": [
+      "_rt_4FrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/downsample_quarter.json": {
+     "shader": "downsample_quarter",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/downsample_quarter_bloom.json": {
+     "shader": "downsample_quarter_bloom",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/downsample_quarter_linear.json": {
+     "shader": "downsample_quarter_linear",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/effectcomposebackground.json": {
+     "shader": "effectcomposebackground",
+     "textures": [
+      null,
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": "normal",
+     "combos": null
+    },
+    "materials/util/effectpassthrough.json": {
+     "shader": "genericimage3",
+     "textures": [],
+     "blending": "normal",
+     "combos": null
+    },
+    "materials/util/effectpassthrough_4.json": {
+     "shader": "genericimage4",
+     "textures": [],
+     "blending": "normal",
+     "combos": null
+    },
+    "materials/util/error.json": {
+     "shader": "error",
+     "textures": [],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/fade.json": {
+     "shader": "fade",
+     "textures": [],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/flat.json": {
+     "shader": "flat",
+     "textures": [],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/flatalpha.json": {
+     "shader": "flat",
+     "textures": [],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/flatalphavertexcolor.json": {
+     "shader": "flat",
+     "textures": [],
+     "blending": "translucent",
+     "combos": {
+      "vertexcolor": 1
+     }
+    },
+    "materials/util/flatpointalphavertexcolor.json": {
+     "shader": "flatpoint",
+     "textures": [],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/flattexture.json": {
+     "shader": "minimalalpha",
+     "textures": [],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/fullscreenlayer.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/gizmo.json": {
+     "shader": "flat",
+     "textures": [],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/gizmovertexcolor.json": {
+     "shader": "flat",
+     "textures": [],
+     "blending": null,
+     "combos": {
+      "vertexcolor": 1
+     }
+    },
+    "materials/util/hdr_downsample.json": {
+     "shader": "hdr_downsample",
+     "textures": [],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/hdr_downsample_bloom.json": {
+     "shader": "hdr_downsample",
+     "textures": [],
+     "blending": null,
+     "combos": {
+      "BLOOM": 1
+     }
+    },
+    "materials/util/hdr_upsample.json": {
+     "shader": "hdr_downsample",
+     "textures": [],
+     "blending": "additive",
+     "combos": {
+      "UPSAMPLE": 1
+     }
+    },
+    "materials/util/hdr_upsample_cubic.json": {
+     "shader": "hdr_downsample",
+     "textures": [],
+     "blending": "additive",
+     "combos": {
+      "UPSAMPLE": 1,
+      "BICUBIC": 1
+     }
+    },
+    "materials/util/occlusiontest.json": {
+     "shader": "occlusiontest",
+     "textures": [],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/passthrough.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_FullFrameBuffer"
+     ],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/shadowcaster.json": {
+     "shader": "shadowcaster",
+     "textures": [],
+     "blending": null,
+     "combos": null
+    },
+    "materials/util/solidlayer.json": {
+     "shader": "flat",
+     "textures": [],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/solidlayer_depthtest.json": {
+     "shader": "flat",
+     "textures": [],
+     "blending": "translucent",
+     "combos": null
+    },
+    "materials/util/solidlayer_instance.json": {
+     "shader": "genericimage2",
+     "textures": [
+      "util/white"
+     ],
+     "blending": "translucent",
+     "combos": {
+      "version": 2
+     }
+    },
+    "materials/util/solidlayer_instance_3.json": {
+     "shader": "genericimage3",
+     "textures": [
+      "util/white"
+     ],
+     "blending": "translucent",
+     "combos": {
+      "version": 2
+     }
+    },
+    "materials/util/solidlayer_instance_4.json": {
+     "shader": "genericimage4",
+     "textures": [
+      "util/white"
+     ],
+     "blending": "translucent",
+     "combos": {
+      "version": 2
+     }
+    },
+    "materials/util/solidlayer_instance_depthtest.json": {
+     "shader": "genericimage2",
+     "textures": [
+      "util/white"
+     ],
+     "blending": "translucent",
+     "combos": {
+      "version": 2
+     }
+    },
+    "materials/util/solidlayer_instance_depthtest_3.json": {
+     "shader": "genericimage3",
+     "textures": [
+      "util/white"
+     ],
+     "blending": "translucent",
+     "combos": {
+      "version": 2
+     }
+    },
+    "materials/util/solidlayer_instance_depthtest_4.json": {
+     "shader": "genericimage4",
+     "textures": [
+      "util/white"
+     ],
+     "blending": "translucent",
+     "combos": {
+      "version": 2
+     }
+    },
+    "materials/util/volumetrics_back.json": {
+     "shader": "volumetricsback",
+     "textures": [],
+     "blending": "normal",
+     "combos": null
+    },
+    "materials/util/volumetrics_blur_h.json": {
+     "shader": "blur_k3",
+     "textures": [
+      "_rt_volumetricsLightBuffer"
+     ],
+     "blending": "normal",
+     "combos": {
+      "VERTICAL": 0
+     }
+    },
+    "materials/util/volumetrics_blur_v.json": {
+     "shader": "blur_k3",
+     "textures": [
+      "_rt_volumetricsLightBufferB"
+     ],
+     "blending": "normal",
+     "combos": {
+      "VERTICAL": 1
+     }
+    },
+    "materials/util/volumetrics_combine.json": {
+     "shader": "passthrough",
+     "textures": [
+      "_rt_volumetricsLightBuffer"
+     ],
+     "blending": "additive",
+     "combos": null
+    },
+    "materials/util/volumetrics_front.json": {
+     "shader": "volumetricsfront",
+     "textures": [],
+     "blending": "additive",
+     "combos": null
+    },
+    "materials/util/volumetrics_fullscreen.json": {
+     "shader": "volumetricsfront",
+     "textures": [],
+     "blending": "additive",
+     "combos": {
+      "FULLSCREEN": 1
+     }
+    },
+    "materials/util/wireframe.json": {
+     "shader": "wireframe",
+     "textures": [],
+     "blending": null,
+     "combos": null
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/*.json"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.symbolRefs",
+   "value": {
+    "_rt_Reflection": {
+     "stringVA": "0x14048b538",
+     "refs": [
+      {
+       "at": "0x14000218d",
+       "fn": "0x140002170"
+      },
+      {
+       "at": "0x140181c54",
+       "fn": "0x140181af0"
+      }
+     ]
+    },
+    "_rt_FullFrameBuffer": {
+     "stringVA": "0x14048b588",
+     "refs": [
+      {
+       "at": "0x1400021ef",
+       "fn": "0x140002170"
+      },
+      {
+       "at": "0x14017f59f",
+       "fn": "0x14017f1b0"
+      },
+      {
+       "at": "0x1401e8f82",
+       "fn": "0x1401e8aa0"
+      },
+      {
+       "at": "0x1401e9b28",
+       "fn": "0x1401e8aa0"
+      },
+      {
+       "at": "0x1401ea0fe",
+       "fn": "0x1401e8aa0"
+      },
+      {
+       "at": "0x140236801",
+       "fn": "0x1402366f0"
+      }
+     ]
+    },
+    "_rt_MipMappedFrameBuffer": {
+     "stringVA": "0x14048b568",
+     "refs": [
+      {
+       "at": "0x140002239",
+       "fn": "0x140002170"
+      },
+      {
+       "at": "0x140181cef",
+       "fn": "0x140181af0"
+      }
+     ]
+    },
+    "_rt_editor_backbuffer_resolve": {
+     "stringVA": "0x140485b70",
+     "refs": [
+      {
+       "at": "0x14009ba5f",
+       "fn": "0x14009b7b0"
+      }
+     ]
+    },
+    "materials/util/backbufferpassthrough.json": {
+     "stringVA": "0x140485b40",
+     "refs": [
+      {
+       "at": "0x14009bb6e",
+       "fn": "0x14009b7b0"
+      }
+     ]
+    },
+    "_rt_shadowAtlas": {
+     "stringVA": "0x14048b920",
+     "refs": [
+      {
+       "at": "0x1400ec5e2",
+       "fn": "0x1400ec220"
+      },
+      {
+       "at": "0x140193896",
+       "fn": "0x140190c80"
+      }
+     ]
+    },
+    "_rt_pluginCpuDownsample": {
+     "stringVA": "0x14048e1b8",
+     "refs": [
+      {
+       "at": "0x140113278",
+       "fn": "0x140110630"
+      }
+     ]
+    },
+    "_rt_pluginCpuBuffer1": {
+     "stringVA": "0x14048e2c8",
+     "refs": [
+      {
+       "at": "0x1401132ce",
+       "fn": "0x140110630"
+      }
+     ]
+    },
+    "_rt_pluginCpuBuffer2": {
+     "stringVA": "0x14048e2b0",
+     "refs": [
+      {
+       "at": "0x14011330d",
+       "fn": "0x140110630"
+      }
+     ]
+    },
+    "materials/util/downsample_quarter_linear.json": {
+     "stringVA": "0x14048e280",
+     "refs": [
+      {
+       "at": "0x14011336b",
+       "fn": "0x140110630"
+      }
+     ]
+    },
+    "materials/util/downsample_quarter.json": {
+     "stringVA": "0x14048e258",
+     "refs": [
+      {
+       "at": "0x140113374",
+       "fn": "0x140110630"
+      },
+      {
+       "at": "0x1401d3f2c",
+       "fn": "0x1401d3ae0"
+      },
+      {
+       "at": "0x1401d3f5d",
+       "fn": "0x1401d3ae0"
+      }
+     ]
+    },
+    "materials/util/shadowcaster.json": {
+     "stringVA": "0x14048b648",
+     "refs": [
+      {
+       "at": "0x140156534",
+       "fn": "0x140155fc0"
+      },
+      {
+       "at": "0x140156c72",
+       "fn": "0x140155fc0"
+      }
+     ]
+    },
+    "_rt_4FrameBuffer": {
+     "stringVA": "0x14048e058",
+     "refs": [
+      {
+       "at": "0x14017f5c9",
+       "fn": "0x14017f1b0"
+      }
+     ]
+    },
+    "_rt_8FrameBuffer": {
+     "stringVA": "0x14048e040",
+     "refs": [
+      {
+       "at": "0x14017f62d",
+       "fn": "0x14017f1b0"
+      }
+     ]
+    },
+    "_rt_Bloom": {
+     "stringVA": "0x14048e030",
+     "refs": [
+      {
+       "at": "0x14017f671",
+       "fn": "0x14017f1b0"
+      }
+     ]
+    },
+    "materials/util/combine_dhdr_upsample.json": {
+     "stringVA": "0x14048e000",
+     "refs": [
+      {
+       "at": "0x14017fb4c",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/combine_hdr_upsample.json": {
+     "stringVA": "0x14048e0e0",
+     "refs": [
+      {
+       "at": "0x14017fb58",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/combine_ldr.json": {
+     "stringVA": "0x14048e0c0",
+     "refs": [
+      {
+       "at": "0x14017fb5f",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/combine_srgb.json": {
+     "stringVA": "0x14048e070",
+     "refs": [
+      {
+       "at": "0x14017fb8b",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/combine_video_hdr.json": {
+     "stringVA": "0x14048e098",
+     "refs": [
+      {
+       "at": "0x14017fb97",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/hdr_downsample.json": {
+     "stringVA": "0x14048e190",
+     "refs": [
+      {
+       "at": "0x14017fba7",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/hdr_downsample_bloom.json": {
+     "stringVA": "0x14048e160",
+     "refs": [
+      {
+       "at": "0x14017fbbd",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/hdr_upsample.json": {
+     "stringVA": "0x14048e138",
+     "refs": [
+      {
+       "at": "0x14017fbd3",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/hdr_upsample_cubic.json": {
+     "stringVA": "0x14048e110",
+     "refs": [
+      {
+       "at": "0x14017fbe9",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/downsample_quarter_bloom.json": {
+     "stringVA": "0x14048e228",
+     "refs": [
+      {
+       "at": "0x14017fc08",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/downsample_eighth_blur_v.json": {
+     "stringVA": "0x14048e1f8",
+     "refs": [
+      {
+       "at": "0x14017fc14",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/blur_h_bloom.json": {
+     "stringVA": "0x14048e1d0",
+     "refs": [
+      {
+       "at": "0x14017fc2a",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/compiler_backdrop.json": {
+     "stringVA": "0x14048e3e0",
+     "refs": [
+      {
+       "at": "0x140180e96",
+       "fn": "0x14017fa70"
+      }
+     ]
+    },
+    "materials/util/fade.json": {
+     "stringVA": "0x14048e308",
+     "refs": [
+      {
+       "at": "0x140181bd1",
+       "fn": "0x140181af0"
+      }
+     ]
+    },
+    "_rt_FullFrameBufferMultiSampled": {
+     "stringVA": "0x14048e2e8",
+     "refs": [
+      {
+       "at": "0x140181e21",
+       "fn": "0x140181af0"
+      }
+     ]
+    },
+    "materials/util/ccsimple.json": {
+     "stringVA": "0x14048e348",
+     "refs": [
+      {
+       "at": "0x1401828fb",
+       "fn": "0x140181f30"
+      },
+      {
+       "at": "0x140182cba",
+       "fn": "0x140181f30"
+      }
+     ]
+    },
+    "_rt_volumetricsBack": {
+     "stringVA": "0x14048e650",
+     "refs": [
+      {
+       "at": "0x140196da4",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "_rt_volumetricsSingle": {
+     "stringVA": "0x14048e638",
+     "refs": [
+      {
+       "at": "0x140196e22",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "_rt_volumetricsLightBuffer": {
+     "stringVA": "0x14048e618",
+     "refs": [
+      {
+       "at": "0x140196e84",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "_rt_volumetricsLightBufferB": {
+     "stringVA": "0x14048e6f0",
+     "refs": [
+      {
+       "at": "0x140196eb4",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "materials/util/volumetrics_blur_h.json": {
+     "stringVA": "0x14048e6c8",
+     "refs": [
+      {
+       "at": "0x140196ef9",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "materials/util/volumetrics_blur_v.json": {
+     "stringVA": "0x14048e6a0",
+     "refs": [
+      {
+       "at": "0x140196f1a",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "materials/util/volumetrics_combine.json": {
+     "stringVA": "0x14048e678",
+     "refs": [
+      {
+       "at": "0x140196f42",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "materials/util/volumetrics_back.json": {
+     "stringVA": "0x140491af0",
+     "refs": [
+      {
+       "at": "0x14019757c",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "materials/util/volumetrics_fullscreen.json": {
+     "stringVA": "0x140491aa0",
+     "refs": [
+      {
+       "at": "0x14019845a",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "materials/util/volumetrics_front.json": {
+     "stringVA": "0x140491b70",
+     "refs": [
+      {
+       "at": "0x14019847b",
+       "fn": "0x140196ce0"
+      }
+     ]
+    },
+    "_rt_imageLayerComposite_": {
+     "stringVA": "0x1404906f8",
+     "refs": [
+      {
+       "at": "0x1401ea7a6",
+       "fn": "0x1401ea500"
+      }
+     ]
+    },
+    "materials/util/effectpassthrough_4.json": {
+     "stringVA": "0x1404907d0",
+     "refs": [
+      {
+       "at": "0x1401ebe3a",
+       "fn": "0x1401ebbc0"
+      },
+      {
+       "at": "0x1401ecafe",
+       "fn": "0x1401ecae0"
+      },
+      {
+       "at": "0x140257b17",
+       "fn": "0x140257840"
+      }
+     ]
+    },
+    "materials/util/effectpassthrough.json": {
+     "stringVA": "0x1404907f8",
+     "refs": [
+      {
+       "at": "0x1401ebe41",
+       "fn": "0x1401ebbc0"
+      },
+      {
+       "at": "0x1401ecb05",
+       "fn": "0x1401ecae0"
+      },
+      {
+       "at": "0x140257b1e",
+       "fn": "0x140257840"
+      }
+     ]
+    },
+    "_rt_FullAlphaMask": {
+     "stringVA": "0x140490d28",
+     "refs": [
+      {
+       "at": "0x14020887b",
+       "fn": "0x140208670"
+      },
+      {
+       "at": "0x140208d5a",
+       "fn": "0x140208c80"
+      },
+      {
+       "at": "0x1402090ab",
+       "fn": "0x140208c80"
+      }
+     ]
+    },
+    "_rt_FullAlphaMaskIntermediate": {
+     "stringVA": "0x140490d40",
+     "refs": [
+      {
+       "at": "0x14020888c",
+       "fn": "0x140208670"
+      },
+      {
+       "at": "0x140208909",
+       "fn": "0x140208670"
+      },
+      {
+       "at": "0x140208bda",
+       "fn": "0x140208670"
+      },
+      {
+       "at": "0x140208d6b",
+       "fn": "0x140208c80"
+      },
+      {
+       "at": "0x140208de5",
+       "fn": "0x140208c80"
+      },
+      {
+       "at": "0x1402090b2",
+       "fn": "0x140208c80"
+      }
+     ]
+    },
+    "materials/util/fullscreenlayer.json": {
+     "stringVA": "0x140490d90",
+     "refs": [
+      {
+       "at": "0x140209e58",
+       "fn": "0x140209540"
+      },
+      {
+       "at": "0x140209fc2",
+       "fn": "0x140209540"
+      },
+      {
+       "at": "0x14020aaa9",
+       "fn": "0x140209540"
+      }
+     ]
+    },
+    "_rt_imageLayerAlbedo_": {
+     "stringVA": "0x140490d78",
+     "refs": [
+      {
+       "at": "0x140209fea",
+       "fn": "0x140209540"
+      }
+     ]
+    },
+    "materials/util/clippingmaskimage4.json": {
+     "stringVA": "0x140490db8",
+     "refs": [
+      {
+       "at": "0x14020ad83",
+       "fn": "0x140209540"
+      }
+     ]
+    },
+    "materials/util/flattexture.json": {
+     "stringVA": "0x140490d08",
+     "refs": [
+      {
+       "at": "0x14020d9f0",
+       "fn": "0x14020d6a0"
+      }
+     ]
+    },
+    "materials/util/occlusiontest.json": {
+     "stringVA": "0x140491658",
+     "refs": [
+      {
+       "at": "0x1402566c2",
+       "fn": "0x140256560"
+      }
+     ]
+    },
+    "materials/util/composelayer_clearalpha.json": {
+     "stringVA": "0x140491780",
+     "refs": [
+      {
+       "at": "0x140258a81",
+       "fn": "0x140258900"
+      }
+     ]
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.frameObjectFields",
+   "value": {
+    "0x3090": "rt._rt_Reflection",
+    "0x3098": "rt._rt_FullFrameBuffer",
+    "0x30a0": "rt._rt_4FrameBuffer",
+    "0x30a8": "rt._rt_8FrameBuffer",
+    "0x30b0": "rt._rt_Bloom",
+    "0x30b8": "rt.hdrBloomPyramid[0]",
+    "0x30f8": "rt._rt_MipMappedFrameBuffer",
+    "0x3100": "rt._rt_FullFrameBufferMultiSampled",
+    "0x3150": "mat.combine",
+    "0x3158": "mat.combine_srgb|combine_video_hdr",
+    "0x3160": "mat.downsample_quarter_bloom",
+    "0x3170": "mat.downsample_eighth_blur_v",
+    "0x3178": "mat.blur_h_bloom",
+    "0x3180": "mat.fade",
+    "0x3188": "mat.ccsimple",
+    "0x3190": "mat.hdr_downsample_bloom",
+    "0x3198": "mat.hdr_downsample",
+    "0x31a0": "mat.hdr_upsample",
+    "0x31a8": "mat.hdr_upsample_cubic"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.fieldUseOrder",
+   "value": [
+    {
+     "at": "0x14017fb33",
+     "field": "0x3150",
+     "slot": "mat.combine"
+    },
+    {
+     "at": "0x14017fb72",
+     "field": "0x3150",
+     "slot": "mat.combine"
+    },
+    {
+     "at": "0x14017fbae",
+     "field": "0x3158",
+     "slot": "mat.combine_srgb|combine_video_hdr"
+    },
+    {
+     "at": "0x14017fbc4",
+     "field": "0x3198",
+     "slot": "mat.hdr_downsample"
+    },
+    {
+     "at": "0x14017fbda",
+     "field": "0x3190",
+     "slot": "mat.hdr_downsample_bloom"
+    },
+    {
+     "at": "0x14017fbf0",
+     "field": "0x31a0",
+     "slot": "mat.hdr_upsample"
+    },
+    {
+     "at": "0x14017fbff",
+     "field": "0x31a8",
+     "slot": "mat.hdr_upsample_cubic"
+    },
+    {
+     "at": "0x14017fc1b",
+     "field": "0x3160",
+     "slot": "mat.downsample_quarter_bloom"
+    },
+    {
+     "at": "0x14017fc31",
+     "field": "0x3170",
+     "slot": "mat.downsample_eighth_blur_v"
+    },
+    {
+     "at": "0x14017fc40",
+     "field": "0x3178",
+     "slot": "mat.blur_h_bloom"
+    },
+    {
+     "at": "0x140180740",
+     "field": "0x3090",
+     "slot": "rt._rt_Reflection"
+    },
+    {
+     "at": "0x14018076a",
+     "field": "0x3090",
+     "slot": "rt._rt_Reflection"
+    },
+    {
+     "at": "0x14018089f",
+     "field": "0x3090",
+     "slot": "rt._rt_Reflection"
+    },
+    {
+     "at": "0x1401808d1",
+     "field": "0x3090",
+     "slot": "rt._rt_Reflection"
+    },
+    {
+     "at": "0x140180a82",
+     "field": "0x3098",
+     "slot": "rt._rt_FullFrameBuffer"
+    },
+    {
+     "at": "0x140180a8f",
+     "field": "0x30f8",
+     "slot": "rt._rt_MipMappedFrameBuffer"
+    },
+    {
+     "at": "0x140180aa6",
+     "field": "0x30f8",
+     "slot": "rt._rt_MipMappedFrameBuffer"
+    },
+    {
+     "at": "0x140180b2f",
+     "field": "0x30b8",
+     "slot": "rt.hdrBloomPyramid[0]"
+    },
+    {
+     "at": "0x140180b36",
+     "field": "0x3150",
+     "slot": "mat.combine"
+    },
+    {
+     "at": "0x140180b48",
+     "field": "0x3150",
+     "slot": "mat.combine"
+    },
+    {
+     "at": "0x140180b5e",
+     "field": "0x3150",
+     "slot": "mat.combine"
+    },
+    {
+     "at": "0x140180b76",
+     "field": "0x30f8",
+     "slot": "rt._rt_MipMappedFrameBuffer"
+    },
+    {
+     "at": "0x140180b8d",
+     "field": "0x30f8",
+     "slot": "rt._rt_MipMappedFrameBuffer"
+    },
+    {
+     "at": "0x140180b9f",
+     "field": "0x3098",
+     "slot": "rt._rt_FullFrameBuffer"
+    },
+    {
+     "at": "0x140180bac",
+     "field": "0x3158",
+     "slot": "mat.combine_srgb|combine_video_hdr"
+    },
+    {
+     "at": "0x140180bc2",
+     "field": "0x3158",
+     "slot": "mat.combine_srgb|combine_video_hdr"
+    },
+    {
+     "at": "0x140180bd5",
+     "field": "0x3188",
+     "slot": "mat.ccsimple"
+    },
+    {
+     "at": "0x140180bdf",
+     "field": "0x3098",
+     "slot": "rt._rt_FullFrameBuffer"
+    },
+    {
+     "at": "0x140180bec",
+     "field": "0x3188",
+     "slot": "mat.ccsimple"
+    },
+    {
+     "at": "0x140180c02",
+     "field": "0x3188",
+     "slot": "mat.ccsimple"
+    },
+    {
+     "at": "0x140180c99",
+     "field": "0x3180",
+     "slot": "mat.fade"
+    },
+    {
+     "at": "0x140180cbc",
+     "field": "0x3180",
+     "slot": "mat.fade"
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.ccsimpleAfterBloom",
+   "value": {
+    "result": true,
+    "answer": "ccsimple(색보정)은 블룸 **후**다. 그리고 fade 는 ccsimple 후다.",
+    "combineLastUseAt": "0x140180bc2",
+    "ccsimpleFirstUseAt": "0x140180bd5",
+    "fadeFirstUseAt": "0x140180c99",
+    "method": "프레임 함수 두 청크 전체에서 필드 오프셋 disp32 출현 주소를 모아 비교. 블룸 합성 머티리얼(0x3150 combine / 0x3158 combine_srgb)의 마지막 지점이 ccsimple(0x3188) 최초 지점보다 앞서고, ccsimple 이 fade(0x3180) 보다 앞선다. 두 분기(블룸 on/off)가 모두 ccsimple 앞에서 합류한다.",
+    "why": "ccsimple 바인드 직전(0x140180bdf)에 _rt_FullFrameBuffer(0x3098) 객체의 vtable+8 = '현재 프레임버퍼를 이 RT 로 캡처'가 호출된다. ccsimple.json 의 입력이 _rt_FullFrameBuffer 이므로, ccsimple 이 읽는 것은 블룸 합성이 끝난 화면이다. 순서가 반대라면 이 캡처가 불필요하다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.order",
+   "value": [
+    {
+     "n": 1,
+     "pass": "reflection",
+     "cond": "scene flags bit0 (_rt_Reflection 생성 조건과 동일)",
+     "out": "_rt_Reflection",
+     "note": "FUN_140183550(obj,1). MSAA 경로를 타지 않는다(param2!=0)."
+    },
+    {
+     "n": 2,
+     "pass": "scene",
+     "cond": "항상",
+     "out": "_rt_FullFrameBufferMultiSampled 가 있으면 그것, 없으면 현재 타깃(백버퍼)",
+     "note": "FUN_140183550(obj,0) → FUN_14018aac0. 레이어/이펙트/파티클/3D 가 여기 안에서 그려진다."
+    },
+    {
+     "n": 3,
+     "pass": "msaa-resolve",
+     "cond": "_rt_FullFrameBufferMultiSampled != 0",
+     "in": "_rt_FullFrameBufferMultiSampled",
+     "out": "직전 타깃(_rt_FullFrameBuffer 또는 백버퍼)",
+     "note": "FUN_140183550 끝. RT vtable+0x10 → ID3D11DeviceContext::ResolveSubresource. 즉 resolve 는 씬 렌더 직후, 어떤 후처리보다 앞이다."
+    },
+    {
+     "n": 4,
+     "pass": "framebuffer-capture",
+     "cond": "블룸 분기(B)에서 항상",
+     "out": "_rt_FullFrameBuffer",
+     "note": "RT vtable+8. MSAA면 resolve, 아니면 CopyResource."
+    },
+    {
+     "n": 5,
+     "pass": "mipmapped-framebuffer",
+     "cond": "_rt_MipMappedFrameBuffer != 0 && (settings>>7 & 1)",
+     "out": "_rt_MipMappedFrameBuffer",
+     "note": "vtable+8(캡처) → vtable+0x20(GenerateMips). 씬 렌더 직후·블룸 앞. 굴절/반사 셰이더(generic*.frag g_Texture3)가 다음 프레임에 이걸 읽는다."
+    },
+    {
+     "n": 6,
+     "pass": "bloom-chain",
+     "cond": "(settings & 0x40) && (scene flags>>1 & 1) && 씬 리스트 비어있지 않음",
+     "in": "_rt_FullFrameBuffer",
+     "out": "_rt_Bloom(LDR) / 피라미드 레벨0(HDR)",
+     "note": "FUN_140183610. 아래 bloomChain.* 참조."
+    },
+    {
+     "n": 7,
+     "pass": "combine",
+     "cond": "블룸 분기 B",
+     "in": [
+      "_rt_FullFrameBuffer",
+      "_rt_Bloom 또는 피라미드 레벨0"
+     ],
+     "out": "현재 타깃(백버퍼)",
+     "note": "머티리얼 = combine_ldr / combine_hdr_upsample / combine_dhdr_upsample. HDR 일 때 g_Texture1(오프셋 0xd8)에 피라미드 레벨0 SRV 를 코드에서 직접 꽂는다."
+    },
+    {
+     "n": 7.1,
+     "pass": "combine_srgb",
+     "cond": "블룸 분기 A(블룸 off) && HDR",
+     "in": "_rt_FullFrameBuffer",
+     "out": "현재 타깃",
+     "note": "머티리얼 combine_srgb(셰이더 passthroughsrgb) 또는 bit16 이면 combine_video_hdr. LDR + 블룸 off 면 이 패스도 없다(씬이 이미 타깃에 있음)."
+    },
+    {
+     "n": 8,
+     "pass": "ccsimple",
+     "cond": "ccsimple 머티리얼이 로드돼 있으면(색보정 사용 시)",
+     "in": "_rt_FullFrameBuffer(직전에 재캡처)",
+     "out": "현재 타깃",
+     "note": "COL 콤보 = brightness/contrast/saturation/hue(g_Params), LUT 콤보 = 3D LUT. **블룸 후**."
+    },
+    {
+     "n": 9,
+     "pass": "fade",
+     "cond": "플레이리스트 전환 알파 > 0 && fade 머티리얼 로드됨",
+     "out": "현재 타깃",
+     "note": "materials/util/fade.json, translucent. 마지막 전면 패스."
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.bloomChain.ldr",
+   "value": [
+    {
+     "material": "materials/util/downsample_quarter_bloom.json",
+     "in": "_rt_FullFrameBuffer",
+     "out": "_rt_4FrameBuffer(1/4)"
+    },
+    {
+     "material": "materials/util/downsample_eighth_blur_v.json",
+     "in": "_rt_4FrameBuffer",
+     "out": "_rt_8FrameBuffer(1/8)"
+    },
+    {
+     "material": "materials/util/blur_h_bloom.json",
+     "in": "_rt_8FrameBuffer",
+     "out": "_rt_Bloom(1/8)"
+    },
+    {
+     "material": "materials/util/combine_ldr.json",
+     "in": [
+      "_rt_FullFrameBuffer",
+      "_rt_Bloom"
+     ],
+     "out": "현재 타깃"
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/*.json"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.bloomChain.hdrPyramid",
+   "value": {
+    "levelCountField": "0x3108 (int)",
+    "levelRTField": "0x30b8 + i*8 (i = 0..N-1)",
+    "down": [
+     {
+      "i": 0,
+      "material": "materials/util/hdr_downsample_bloom.json (BLOOM=1)",
+      "in": "_rt_FullFrameBuffer",
+      "out": "level[0]"
+     },
+     {
+      "i": "1..N-1",
+      "material": "materials/util/hdr_downsample.json",
+      "in": "level[i-1]",
+      "out": "level[i]"
+     }
+    ],
+    "up": [
+     {
+      "i": "N-1..1 (역순)",
+      "material": "i >= N-2 이면 hdr_upsample_cubic.json(UPSAMPLE=1,BICUBIC=1), 아니면 hdr_upsample.json(UPSAMPLE=1)",
+      "in": "level[i]",
+      "out": "level[i-1]",
+      "blend": "additive"
+     }
+    ],
+    "texelScale": "다운샘플 i 는 2^i, 업샘플 i 는 2^i 배로 g_RenderVar0(오브젝트 0xb8..0xc4, float4 = (+t.x,+t.y,-t.x,-t.y)) 를 스케일",
+    "combine": "combine_hdr(g_Texture0=_rt_FullFrameBuffer, g_Texture1=level[0] 을 코드가 머티리얼 0xd8 슬롯에 직접 대입)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/*.json"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.conditions",
+   "value": {
+    "objectFlagsField": "0x128 (uint) — 씬 렌더러 설정 비트",
+    "bit0": "리플렉션(_rt_Reflection 생성/렌더)",
+    "bit6 (0x40)": "블룸 활성(설정). 씬 플래그 bit1 및 씬 리스트 비어있지 않음과 AND",
+    "bit7 (0x80)": "_rt_MipMappedFrameBuffer 캡처+GenerateMips 수행 여부",
+    "bit11 (0x800)": "_rt_MipMappedFrameBuffer 생성 여부(씬 플래그 쪽)",
+    "bit13 (0x2000)": "HDR 파이프라인 — 이 비트로 LDR 3패스 블룸 / HDR 피라미드가 갈린다",
+    "bit14": "bit13 과 함께면 combine_dhdr_upsample(DISPLAYHDR=1)",
+    "bit16": "combine_srgb 대신 combine_video_hdr",
+    "note": "비트 위치는 디스어셈에서 확정. 각 비트의 저작(UI) 이름 대응은 미확인."
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.notResolved",
+   "value": {
+    "_rt_FullAlphaMask / _rt_FullAlphaMaskIntermediate": "씬 전역 패스가 아니다. 참조가 0x140208670 / 0x140208d4f / 0x140209563 (이미지 레이어·클리핑마스크 계열)에 있고, 1/2 해상도(divisor 2, format 0x1b)로 레이어 단위 생성된다. 씬 후처리 순서와는 무관 — 별도 조사 필요.",
+    "_rt_volumetrics*": "라이트 단위. 0x140196ce0(생성) / 0x140196f65 / 0x140198124 에서 volumetrics_back → blur_h → blur_v → combine(additive) 로 쓰인다. 씬 렌더(FUN_14018aac0) 내부라 프레임 함수 레벨 순서에는 나타나지 않는다. 미재현.",
+    "포맷 코드": "RT 생성 인자의 0x16/0x18/0x1b/0x1a 는 WE 내부 포맷 enum 이며 DXGI_FORMAT 과의 대응은 확인하지 못했다.",
+    "combine 분기 3번째 조건": "*(scene+0x158) != *(scene+0x160) 벡터가 무엇인지 미확인.",
+    "웹/비디오 벽지": "이 문서는 씬(scene) 벽지 경로만 다룬다. webwallpaper64.exe / 비디오 경로는 미조사."
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.rtClassVtable",
+   "value": {
+    "base": "0x140486768",
+    "slots": {
+     "0x0": "0x1400d3220",
+     "0x8": "0x1400d3310",
+     "0x10": "0x1400d33b0",
+     "0x18": "0x1400d3410",
+     "0x20": "0x1400d3430",
+     "0x28": "0x1400d3460",
+     "0x30": "0x1400d3490",
+     "0x38": "0x1400d34a0",
+     "0x40": "0x1400d3500",
+     "0x48": "0x1400d3920",
+     "0x50": "0x1400d39a0"
+    },
+    "matchesDecompiled": true,
+    "semantics": {
+     "0x0": "소멸자",
+     "0x8": "현재 프레임버퍼를 이 RT 로 캡처 (ResolveSubresource(this←top) 또는 CopyResource)",
+     "0x10": "이 RT 를 현재 프레임버퍼로 resolve (ResolveSubresource(top←this)) — MSAA resolve",
+     "0x18": "CopyResource(this←인자)",
+     "0x20": "ID3D11DeviceContext::GenerateMips(this.srv) — 밉 생성",
+     "0x48": "바인드: OMSetRenderTargets(1, this.rtv, dsv) + 뷰포트 설정",
+     "0x50": "언바인드: 이전 타깃 재바인드"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.d3d11Slots",
+   "value": {
+    "Draw": {
+     "slot": 13,
+     "vtableOffset": "0x68"
+    },
+    "DrawIndexed": {
+     "slot": 12,
+     "vtableOffset": "0x60"
+    },
+    "OMSetRenderTargets": {
+     "slot": 33,
+     "vtableOffset": "0x108"
+    },
+    "PSSetShaderResources": {
+     "slot": 8,
+     "vtableOffset": "0x40"
+    },
+    "ClearRenderTargetView": {
+     "slot": 50,
+     "vtableOffset": "0x190"
+    },
+    "GenerateMips": {
+     "slot": 54,
+     "vtableOffset": "0x1b0",
+     "sites": [
+      {
+       "at": "0x1400d344e",
+       "insn": "jmp"
+      },
+      {
+       "at": "0x140328618",
+       "insn": "call"
+      }
+     ]
+    },
+    "ResolveSubresource": {
+     "slot": 57,
+     "vtableOffset": "0x1c8",
+     "sites": [
+      {
+       "at": "0x14009b945",
+       "insn": "call"
+      },
+      {
+       "at": "0x1400d3369",
+       "insn": "call"
+      },
+      {
+       "at": "0x1400d33fd",
+       "insn": "call"
+      }
+     ]
+    },
+    "CopyResource": {
+     "slot": 47,
+     "vtableOffset": "0x178",
+     "sites": [
+      {
+       "at": "0x14009b95e",
+       "insn": "call"
+      },
+      {
+       "at": "0x14009b96a",
+       "insn": "call"
+      },
+      {
+       "at": "0x14009bbcc",
+       "insn": "call"
+      },
+      {
+       "at": "0x1400d3427",
+       "insn": "jmp"
+      },
+      {
+       "at": "0x14030beef",
+       "insn": "call"
+      },
+      {
+       "at": "0x140320919",
+       "insn": "call"
+      }
+     ]
+    },
+    "RSSetViewports": {
+     "slot": 44,
+     "vtableOffset": "0x160"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\um\\d3d11.h"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.materialsInBinary",
+   "value": {
+    "inBinary": [
+     "materials/util/backbufferpassthrough.json",
+     "materials/util/blur_h_bloom.json",
+     "materials/util/ccsimple.json",
+     "materials/util/clippingmaskimage4.json",
+     "materials/util/combine_dhdr_upsample.json",
+     "materials/util/combine_hdr_upsample.json",
+     "materials/util/combine_ldr.json",
+     "materials/util/combine_srgb.json",
+     "materials/util/combine_video_hdr.json",
+     "materials/util/compiler_backdrop.json",
+     "materials/util/composelayer_clearalpha.json",
+     "materials/util/downsample_eighth_blur_v.json",
+     "materials/util/downsample_quarter.json",
+     "materials/util/downsample_quarter_bloom.json",
+     "materials/util/downsample_quarter_linear.json",
+     "materials/util/effectpassthrough.json",
+     "materials/util/effectpassthrough_4.json",
+     "materials/util/fade.json",
+     "materials/util/flattexture.json",
+     "materials/util/fullscreenlayer.json",
+     "materials/util/hdr_downsample.json",
+     "materials/util/hdr_downsample_bloom.json",
+     "materials/util/hdr_upsample.json",
+     "materials/util/hdr_upsample_cubic.json",
+     "materials/util/occlusiontest.json",
+     "materials/util/shadowcaster.json",
+     "materials/util/volumetrics_back.json",
+     "materials/util/volumetrics_blur_h.json",
+     "materials/util/volumetrics_blur_v.json",
+     "materials/util/volumetrics_combine.json",
+     "materials/util/volumetrics_front.json",
+     "materials/util/volumetrics_fullscreen.json"
+    ],
+    "notInBinary": [
+     "materials/util/combine.json",
+     "materials/util/combine_hdr_editor.json",
+     "materials/util/combine_hdr_upsample_dbg.json",
+     "materials/util/combine_hdr_upsample_linear.json",
+     "materials/util/composelayer.json",
+     "materials/util/composelayer_depthtest.json",
+     "materials/util/debugrt.json",
+     "materials/util/debugrt_fb.json",
+     "materials/util/debugrt_fb_bloom.json",
+     "materials/util/debugrt_fb_eighth.json",
+     "materials/util/debugrt_fb_quarter.json",
+     "materials/util/debugrt_reflection.json",
+     "materials/util/effectcomposebackground.json",
+     "materials/util/error.json",
+     "materials/util/flat.json",
+     "materials/util/flatalpha.json",
+     "materials/util/flatalphavertexcolor.json",
+     "materials/util/flatpointalphavertexcolor.json",
+     "materials/util/gizmo.json",
+     "materials/util/gizmovertexcolor.json",
+     "materials/util/passthrough.json",
+     "materials/util/solidlayer.json",
+     "materials/util/solidlayer_depthtest.json",
+     "materials/util/solidlayer_instance.json",
+     "materials/util/solidlayer_instance_3.json",
+     "materials/util/solidlayer_instance_4.json",
+     "materials/util/solidlayer_instance_depthtest.json",
+     "materials/util/solidlayer_instance_depthtest_3.json",
+     "materials/util/solidlayer_instance_depthtest_4.json",
+     "materials/util/wireframe.json"
+    ],
+    "meaning": "바이너리 문자열 풀에 경로 리터럴이 있으면 코드가 그 이름으로 직접 로드한다. ccsimple/fade/combine_*/hdr_*/downsample_*/volumetrics_* 가 여기 든다. debugrt*·gizmo*·wireframe·error·combine_hdr_editor·combine_hdr_upsample_dbg 는 없다.",
+    "caveat": "**없다고 에디터 전용은 아니다.** solidlayer/composelayer/passthrough 처럼 런타임 머티리얼인데도 없는 것이 있다(씬 JSON 이나 문자열 조립으로 로드되는 듯). 이 항목은 '있다'만 근거로 쓴다.",
+    "ccsimpleIsLive": "ccsimple 이 에디터 전용이 아니라는 결정적 근거는 이 목록이 아니라 라이브 프레임 함수 FUN_14017fa70 안의 사용 지점(0x140180bd5/bec/c02)이다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/*.json"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.fullFrameBufferIsSnapshot",
+   "value": {
+    "fact": "_rt_FullFrameBuffer 는 렌더 타깃으로 **바인드되지 않는다**. 프레임 함수에서 이 필드(0x3098)가 쓰이는 세 곳(0x140180a82 / 0x140180b9f / 0x140180bdf)은 전부 vtable+0x08 = '현재 프레임버퍼를 이 RT 로 캡처'다.",
+    "consequence": "WE 의 후처리는 '스냅샷 → 현재 타깃으로 되그리기'의 반복이다. 각 전면 패스 직전에 현재 화면을 _rt_FullFrameBuffer 로 복사하고, 머티리얼이 그것을 g_Texture0 으로 읽어 같은 타깃(백버퍼)에 그린다.",
+    "bindSites": "0x30f8(_rt_MipMappedFrameBuffer)도 같다 — 캡처(+8) 후 GenerateMips(+0x20)."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.hdrPyramidAllocation",
+   "value": {
+    "where": "FUN_14017f1b0, 최대 8회 루프",
+    "levelField": "obj[0x617 + i] (바이트 0x30b8 + i*8)",
+    "divisor": "레벨 i 의 divisor = 2 << i = 2^(i+1) → **레벨 0 은 1/2 해상도**",
+    "names": "동적 생성. \"_rt_\"(0x14048dfe8) + str(divisor) + \"FrameBuffer\"(0x14048dff0) → _rt_2FrameBuffer, _rt_4FrameBuffer, _rt_8FrameBuffer, _rt_16FrameBuffer …",
+    "stop": "min(w,h) 를 매 단계 반으로 나눠 1 미만이 되면 그 레벨부터 해제. 가용 레벨 수는 obj+0x310c 에 저장",
+    "loopCount": "FUN_140183610 은 obj+0x3108 을 레벨 수로 쓴다. 조합식은 N = clamp(min(bloomhdriterations, availableLevels(0x310c)), 1, ...) — spec/engine/uniform-feed.json engine.uniformFeed.hdrBloom.materialParams 가 VA 0x14017f7f7 실측으로 확정했다(정본은 그쪽)",
+    "format": "0x1b (WE 내부 enum)",
+    "warning": "LDR 경로와 다르다. LDR 은 풀 → 1/4 → 1/8 로 바로 내려가지만, HDR 피라미드는 1/2 부터 시작한다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.toBackbuffer",
+   "value": {
+    "livePath": "별도 백버퍼 패스가 없다. RT 스택이 비면 현재 타깃이 스왑체인 백버퍼이고, combine / ccsimple / fade 가 모두 거기에 직접 그린다. 그 뒤 Present.",
+    "editorPath": "FUN_14009b7fd 이 materials/util/backbufferpassthrough.json(0x140485b40, 셰이더 passthroughlinear)을 로드해 그린다. 입력 SRV 는 _rt_editor_backbuffer_resolve(0x140485b70)로 만들어진다. 샘플 수 >= 2 면 ResolveSubresource(0x14009b945) 후 CopyResource, 아니면 CopyResource 만. 이름이 말하듯 에디터/미리보기 경로다.",
+    "note": "따라서 '씬 → … → 백버퍼'의 마지막 링크는 별도 패스가 아니라 '후처리가 처음부터 백버퍼에 그린다'이다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/*.json"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.msaaResolve",
+   "value": {
+    "where": "FUN_140183550(sceneObj, 0) 끝 — 씬 렌더 직후, 모든 후처리 앞",
+    "how": "RT vtable+0x10 (=0x1400d33b0) → ID3D11DeviceContext::ResolveSubresource (vtable off 0x1c8, 호출 지점 0x1400d33fd) dst = RT 스택 상단, 비어 있으면 스왑체인 백버퍼. src = this. 라이브 씬 프레임에서는 이 시점에 스택이 비어 있으므로 **백버퍼**다 — _rt_FullFrameBuffer 로 가지 않는다(그건 별도의 vtable+0x08 캡처).",
+    "sequence": [
+     "_rt_FullFrameBufferMultiSampled 가 있으면 vtable+0x48 로 바인드",
+     "FUN_14018aac0 로 씬 draw",
+     "vtable+0x50 로 언바인드(또는 이전 타깃 재바인드)",
+     "vtable+0x10 로 resolve"
+    ],
+    "notForReflection": "FUN_140183550 의 2번째 인자가 0 일 때만. 리플렉션 패스(인자 1)는 MSAA 타깃을 쓰지 않는다.",
+    "creation": "FUN_140181af0 에서 sampleCount(오브젝트 [0x37]) != 0 일 때만 생성. 이름 _rt_FullFrameBufferMultiSampled, format 0x18, misc 0x20."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.mipGeneration",
+   "value": {
+    "target": "_rt_MipMappedFrameBuffer (오브젝트 필드 0x30f8)",
+    "where": "씬 렌더 + MSAA resolve 직후, 블룸 체인/합성 **앞**. 두 분기 모두에서 수행된다.",
+    "how": [
+     "RT vtable+0x08 — 현재 프레임버퍼를 _rt_MipMappedFrameBuffer 로 캡처",
+     "RT vtable+0x20 (=0x1400d3430) — ID3D11DeviceContext::GenerateMips (vtable off 0x1b0, 호출 지점 0x1400d344e, tail-jmp 인코딩)"
+    ],
+    "cond": "_rt_MipMappedFrameBuffer != 0 && (settings>>7 & 1)",
+    "sitesInFrameFn": {
+     "branchB(블룸 on)": [
+      "0x140180a8f",
+      "0x140180aa6"
+     ],
+     "branchA(블룸 off)": [
+      "0x140180b76",
+      "0x140180b8d"
+     ]
+    },
+    "creation": "FUN_140181af0, 씬 플래그 bit11 일 때. mipLevels = 1 또는 (품질 비트 set 시) 0xf, format 0x1b, misc 0x10. 생성 직후 한 번 바인드해서 흰색(1,1,1,1)으로 클리어한다.",
+    "consumer": "generic3/generic4/chroma4/foliage4/fur4.frag 의 굴절·반사 경로가 _rt_MipMappedFrameBuffer 를 샘플러로 받는다(에셋 셰이더 소스에서 확인).",
+    "note": "즉 이 텍스처는 '블룸/색보정 전 씬 컬러'다 — 후처리 결과가 아니다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.ccsimple",
+   "value": {
+    "material": "materials/util/ccsimple.json",
+    "input": "_rt_FullFrameBuffer (패스 직전에 vtable+8 로 재캡처 — 블룸 합성 결과)",
+    "combos": {
+     "COL": "밝기/대비/채도/색상(g_Params = vec4)",
+     "LUT": "3D LUT(g_Texture1 = sampler3D)",
+     "HDR": "LUT 경로에서 1.0 초과분 overbright 보정"
+    },
+    "materialParams": {
+     "params": {
+      "va": "0x14048e33c",
+      "count": 4,
+      "shader": "uniform vec4 g_Params"
+     },
+     "lutparams": {
+      "va": "0x14048e328",
+      "count": 1,
+      "shader": "uniform float g_LutParams"
+     },
+     "lutPathPrefix": {
+      "va": "0x14048e334",
+      "value": "lut/"
+     }
+    },
+    "comboStrings": {
+     "LUT": "0x14048e2e0",
+     "COL": "0x14048e2e4"
+    },
+    "loadedAt": "FUN_140181f30 — 콤보 목록을 만들고 FUN_140150110 으로 로드해 오브젝트 필드 0x3188 에 저장. 색보정도 LUT 도 없으면 0 을 넣는다.",
+    "runtimeGuard": "프레임 함수에서 if (obj[0x3188] != 0) — 즉 항상 도는 패스가 아니다.",
+    "shaderMath": "ccsimple.frag: mix(0.5, albedo, g_Params.y) 로 대비 → rgb2hsv → v*=g_Params.x, s*=g_Params.z, h+=g_Params.w → hsv2rgb. 알파는 보존(gl_FragColor = albedo)."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/materials/util/*.json"
+    },
+    {
+     "kind": "shader",
+     "ref": "WEAssets/shaders/ccsimple.frag"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe Ghidra 디컴파일 (FUN_14017fa70 / FUN_140183610 / FUN_140183550 / FUN_140181f30 / RT vtable 0x140486768)"
+    }
+   ]
+  },
+  {
+   "id": "engine.renderPass.d3d11CallSiteNote",
+   "value": {
+    "method": "FF /2 (call) 와 FF /4 (jmp, 테일콜) 의 disp32 바이트 스캔. 디스어셈블러가 아니라 바이트 패턴이라 오탐이 있다.",
+    "GenerateMips 0x140328618": "오탐 — 해당 함수는 텍스트 파서다. 진짜 호출은 0x1400d344e 하나뿐이다.",
+    "ResolveSubresource 0x14009b945": "백버퍼/프레젠트 경로(0x14009b7fd, materials/util/backbufferpassthrough.json 참조 함수). 씬 후처리 순서와 별개.",
+    "warning": "GenerateMips 는 call 이 아니라 **테일 jmp** 로 인코딩돼 있어 call-only 스캔으로는 0건이 나온다. 반드시 /4 도 훑어야 한다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_render_pass.py"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe — 문자열 VA + .text RIP 상대 참조 + .pdata 체인 언와인드"
+    }
+   ]
+  }
+ ]
+}

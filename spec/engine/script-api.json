@@ -1,0 +1,5299 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_script_api.py",
+ "area": "scenescript64.dll 바인딩 API",
+ "sources": {
+  "dts": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts",
+  "baseclasses": "assets/scripts/jsclasses/baseclasses.js",
+  "jsmodules": "assets/scripts/jsmodules/*.js",
+  "dll": "bin/scenescript64.dll",
+  "exe": "wallpaper64.exe"
+ },
+ "note": "V8 은 오픈소스라 다루지 않는다. WE 자체 바인딩만 담는다. 네이티브 근거는 .rdata 문자열 군집이라 '이름이 등록됐다'까지 증명하고 인자 개수/타입은 증명하지 않는다 — 그건 d.ts 근거다.",
+ "entries": [
+  {
+   "id": "script.dll.fileBytes",
+   "value": 28730352,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll",
+     "note": "24.3MB 라는 사전 보고와 다르다 — 실측값"
+    }
+   ]
+  },
+  {
+   "id": "script.dll.exports",
+   "value": [
+    {
+     "ordinal": 1,
+     "name": "CrashForExceptionInNonABICompliantCodeRange",
+     "rva": "0x2d99a0",
+     "va": "0x1802d99a0",
+     "role": "V8(Chromium) 표준 크래시 핸들러 — WE 것이 아니다",
+     "origin": "V8/Chromium"
+    },
+    {
+     "ordinal": 2,
+     "name": "CreateSceneScriptEngine",
+     "rva": "0x167c010",
+     "va": "0x18167c010",
+     "role": "씬 1개당 스크립트 엔진 인스턴스 생성. 유일한 실팩토리",
+     "origin": "WE"
+    },
+    {
+     "ordinal": 3,
+     "name": "GetSceneScriptVersion",
+     "rva": "0x167bf10",
+     "va": "0x18167bf10",
+     "role": "바인딩 ABI 버전 질의",
+     "origin": "WE"
+    },
+    {
+     "ordinal": 4,
+     "name": "Init",
+     "rva": "0x167bf20",
+     "va": "0x18167bf20",
+     "role": "엔진 전역 1회 초기화(V8 플랫폼/스냅샷). CreateSceneScriptEngine 앞에 온다",
+     "origin": "WE"
+    },
+    {
+     "ordinal": 5,
+     "name": "NoHotPatch",
+     "rva": "0x1aa9dc0",
+     "va": "0x181aa9dc0",
+     "role": "Chromium 빌드 관용 더미 — WE 것이 아니다",
+     "origin": "V8/Chromium"
+    },
+    {
+     "ordinal": 6,
+     "name": "Shutdown",
+     "rva": "0x167bfc0",
+     "va": "0x18167bfc0",
+     "role": "Init 의 짝 — 전역 해제",
+     "origin": "WE"
+    }
+   ],
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll export 디렉터리"
+    }
+   ]
+  },
+  {
+   "id": "script.dll.surface",
+   "value": {
+    "exportCount": 6,
+    "weExports": 4,
+    "v8Exports": 2,
+    "note": "표면이 4개뿐이라 API 는 export 가 아니라 .rdata 바인딩 문자열로만 드러난다. 이 문서의 네이티브 근거는 전부 그 군집이다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll export 디렉터리"
+    }
+   ]
+  },
+  {
+   "id": "script.binding.ownershipSplit",
+   "value": {
+    "scenescript64.dll": {
+     "owns": "전역(thisScene/thisLayer/thisObject/engine/localStorage/console/input), IScene·IEngine·ILocalStorage·IInput 전 멤버, 컴포넌트 훅 19종, IModelData, 커서/미디어 이벤트 필드",
+     "inBindingCluster": 33,
+     "sampleTotal": 33,
+     "absentInExe": [
+      "getLayer",
+      "getLayerByID",
+      "getLayerCount",
+      "enumerateLayers",
+      "createLayer",
+      "destroyLayer",
+      "sortLayer",
+      "getLayerIndex",
+      "getInitialLayerConfig",
+      "getCameraTransforms",
+      "setCameraTransforms",
+      "createModelData",
+      "destroyModelData",
+      "registerAsset",
+      "registerAudioBuffers",
+      "setTimeout",
+      "setInterval",
+      "clearTimeout",
+      "openUserShortcut",
+      "isObjectValid",
+      "timeOfDay",
+      "frametime",
+      "canvasSize",
+      "screenResolution",
+      "userProperties",
+      "cursorWorldPosition",
+      "cursorScreenPosition",
+      "cursorLeftDown",
+      "thisScene",
+      "thisLayer",
+      "thisObject",
+      "localStorage",
+      "engine"
+     ]
+    },
+    "wallpaper64.exe": {
+     "owns": "ILayer/IEffect/IMaterial/IAnimationLayer/ITextureAnimation/IVideoTexture/IParticleSystem 의 메서드 이름 — 씬그래프를 쥔 쪽이 등록한다",
+     "inBindingRegion": 48,
+     "sampleTotal": 48,
+     "absentInDll": [
+      "getTransformMatrix",
+      "rotateObjectSpace",
+      "lookAt",
+      "lookAtYaw",
+      "setParent",
+      "getParent",
+      "getChildren",
+      "getAttachmentIndex",
+      "getAttachmentMatrix",
+      "getAttachmentOrigin",
+      "getAttachmentAngles",
+      "transformAttachmentToTexture",
+      "getEffect",
+      "getEffectCount",
+      "getMaterial",
+      "getMaterialCount",
+      "setMaterialProperty",
+      "executeMaterialFunction",
+      "getTextureAnimation",
+      "getVideoTexture",
+      "getAnimationLayer",
+      "getAnimationLayerCount",
+      "createAnimationLayer",
+      "playSingleAnimation",
+      "destroyAnimationLayer",
+      "getBoneCount",
+      "getBoneIndex",
+      "getBoneParentIndex",
+      "getBoneTransform",
+      "setBoneTransform",
+      "getLocalBoneTransform",
+      "setLocalBoneTransform",
+      "getLocalBoneAngles",
+      "setLocalBoneAngles",
+      "getLocalBoneOrigin",
+      "setLocalBoneOrigin",
+      "applyBonePhysicsImpulse",
+      "resetBonePhysicsSimulation",
+      "getBlendShapeIndex",
+      "getBlendShapeWeight",
+      "setBlendShapeWeight",
+      "emitParticles",
+      "addEndedCallback",
+      "parallaxDepth",
+      "getCurrentTime",
+      "setCurrentTime",
+      "rootmotion"
+     ]
+    },
+    "결론": "레이어 API 이름이 DLL 에 없다고 없는 API 가 아니다. 등록 주체가 EXE 다. 재구현은 두 바이너리를 합쳐야 전수가 된다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe .rdata 문자열 전수 스캔"
+    }
+   ]
+  },
+  {
+   "id": "script.binding.registration",
+   "value": {
+    "globalInstaller": {
+     "range": [
+      "0x181647e2f",
+      "0x18164abef"
+     ],
+     "bytes": 11712,
+     "does": "커서/미디어 이벤트 필드 → AudioBuffers → scriptProperties 설정 키 → IObject.getAnimation·CameraTransforms → thisObject·thisLayer → console(log/error 먼저) → engine(멤버 23개 먼저) → input → localStorage → scripts/jsclasses/baseclasses.js 로드 → _Vec2.._Mat4·_Internal 핸들 회수",
+     "pattern": "객체는 **멤버를 먼저 등록하고 마지막에 객체 이름**을 심는다. log(0x181648fcf)/error(0x181649065) 다음 console(0x181649119), IEngine 멤버 23개 다음 engine(0x181649d5e), cursor* 3개 다음 input(0x181649f11), set/get/delete/clear/LOCATION_* 다음 localStorage(0x18164a2d8) — 전부 같은 모양",
+     "trace": [
+      {
+       "site": "0x181648430",
+       "name": "button"
+      },
+      {
+       "site": "0x18164846f",
+       "name": "worldPosition"
+      },
+      {
+       "site": "0x1816484ae",
+       "name": "localPosition"
+      },
+      {
+       "site": "0x1816484ed",
+       "name": "hitBox"
+      },
+      {
+       "site": "0x18164852c",
+       "name": "title"
+      },
+      {
+       "site": "0x18164856b",
+       "name": "artist"
+      },
+      {
+       "site": "0x1816485aa",
+       "name": "albumArtist"
+      },
+      {
+       "site": "0x1816485e9",
+       "name": "albumTitle"
+      },
+      {
+       "site": "0x181648628",
+       "name": "subTitle"
+      },
+      {
+       "site": "0x181648667",
+       "name": "genres"
+      },
+      {
+       "site": "0x1816486a6",
+       "name": "contentType"
+      },
+      {
+       "site": "0x1816486e5",
+       "name": "hasThumbnail"
+      },
+      {
+       "site": "0x181648724",
+       "name": "primaryColor"
+      },
+      {
+       "site": "0x181648763",
+       "name": "secondaryColor"
+      },
+      {
+       "site": "0x1816487a2",
+       "name": "tertiaryColor"
+      },
+      {
+       "site": "0x1816487e1",
+       "name": "textColor"
+      },
+      {
+       "site": "0x181648820",
+       "name": "highContrastColor"
+      },
+      {
+       "site": "0x18164885f",
+       "name": "state"
+      },
+      {
+       "site": "0x18164889e",
+       "name": "position"
+      },
+      {
+       "site": "0x1816488dd",
+       "name": "duration"
+      },
+      {
+       "site": "0x18164891c",
+       "name": "enabled"
+      },
+      {
+       "site": "0x18164895b",
+       "name": "left"
+      },
+      {
+       "site": "0x18164899a",
+       "name": "right"
+      },
+      {
+       "site": "0x1816489d9",
+       "name": "average"
+      },
+      {
+       "site": "0x181648a18",
+       "name": "__workshopId"
+      },
+      {
+       "site": "0x181648a57",
+       "name": "scriptProperties"
+      },
+      {
+       "site": "0x181648a96",
+       "name": "label"
+      },
+      {
+       "site": "0x181648ad5",
+       "name": "mode"
+      },
+      {
+       "site": "0x181648b14",
+       "name": "order"
+      },
+      {
+       "site": "0x181648b53",
+       "name": "min"
+      },
+      {
+       "site": "0x181648b92",
+       "name": "max"
+      },
+      {
+       "site": "0x181648bd1",
+       "name": "options"
+      },
+      {
+       "site": "0x181648c10",
+       "name": "value"
+      },
+      {
+       "site": "0x181648c4f",
+       "name": "getAnimation"
+      },
+      {
+       "site": "0x181648c8e",
+       "name": "model"
+      },
+      {
+       "site": "0x181648ccd",
+       "name": "eye"
+      },
+      {
+       "site": "0x181648d0c",
+       "name": "center"
+      },
+      {
+       "site": "0x181648d4b",
+       "name": "up"
+      },
+      {
+       "site": "0x181648d8a",
+       "name": "zoom"
+      },
+      {
+       "site": "0x181648de3",
+       "name": "thisObject"
+      },
+      {
+       "site": "0x181648e39",
+       "name": "thisLayer"
+      },
+      {
+       "site": "0x181648fcf",
+       "name": "log"
+      },
+      {
+       "site": "0x181649065",
+       "name": "error"
+      },
+      {
+       "site": "0x181649119",
+       "name": "console"
+      },
+      {
+       "site": "0x1816491c3",
+       "name": "isRunningInEditor"
+      },
+      {
+       "site": "0x18164925c",
+       "name": "isPortrait"
+      },
+      {
+       "site": "0x1816492f5",
+       "name": "isLandscape"
+      },
+      {
+       "site": "0x18164938e",
+       "name": "registerAudioBuffers"
+      },
+      {
+       "site": "0x181649427",
+       "name": "registerAsset"
+      },
+      {
+       "site": "0x1816494c0",
+       "name": "setTimeout"
+      },
+      {
+       "site": "0x181649559",
+       "name": "setInterval"
+      },
+      {
+       "site": "0x1816495f2",
+       "name": "clearTimeout"
+      },
+      {
+       "site": "0x18164968b",
+       "name": "isMobileDevice"
+      },
+      {
+       "site": "0x181649724",
+       "name": "isDesktopDevice"
+      },
+      {
+       "site": "0x1816497bd",
+       "name": "isWallpaper"
+      },
+      {
+       "site": "0x181649856",
+       "name": "isScreensaver"
+      },
+      {
+       "site": "0x1816498ef",
+       "name": "isObjectValid"
+      },
+      {
+       "site": "0x181649988",
+       "name": "openUserShortcut"
+      },
+      {
+       "site": "0x1816499cf",
+       "name": "screenResolution"
+      },
+      {
+       "site": "0x181649a2b",
+       "name": "canvasSize"
+      },
+      {
+       "site": "0x181649a87",
+       "name": "userProperties"
+      },
+      {
+       "site": "0x181649ae3",
+       "name": "timeOfDay"
+      },
+      {
+       "site": "0x181649b3f",
+       "name": "frametime"
+      },
+      {
+       "site": "0x181649b9b",
+       "name": "runtime"
+      },
+      {
+       "site": "0x181649c17",
+       "name": "AUDIO_RESOLUTION_16"
+      },
+      {
+       "site": "0x181649c77",
+       "name": "AUDIO_RESOLUTION_32"
+      },
+      {
+       "site": "0x181649cd7",
+       "name": "AUDIO_RESOLUTION_64"
+      },
+      {
+       "site": "0x181649d5e",
+       "name": "engine"
+      },
+      {
+       "site": "0x181649db6",
+       "name": "cursorWorldPosition"
+      },
+      {
+       "site": "0x181649e12",
+       "name": "cursorScreenPosition"
+      },
+      {
+       "site": "0x181649e6e",
+       "name": "cursorLeftDown"
+      },
+      {
+       "site": "0x181649f11",
+       "name": "input"
+      },
+      {
+       "site": "0x181649fbb",
+       "name": "set"
+      },
+      {
+       "site": "0x18164a054",
+       "name": "get"
+      },
+      {
+       "site": "0x18164a0ed",
+       "name": "delete"
+      },
+      {
+       "site": "0x18164a186",
+       "name": "clear"
+      },
+      {
+       "site": "0x18164a1cd",
+       "name": "global"
+      },
+      {
+       "site": "0x18164a1f9",
+       "name": "LOCATION_GLOBAL"
+      },
+      {
+       "site": "0x18164a239",
+       "name": "screen"
+      },
+      {
+       "site": "0x18164a265",
+       "name": "LOCATION_SCREEN"
+      },
+      {
+       "site": "0x18164a2d8",
+       "name": "localStorage"
+      },
+      {
+       "site": "0x18164a35d",
+       "name": "context"
+      },
+      {
+       "site": "0x18164a3c4",
+       "name": "scripts/jsclasses/baseclasses.js"
+      },
+      {
+       "site": "0x18164a485",
+       "name": "_Vec2"
+      },
+      {
+       "site": "0x18164a517",
+       "name": "_Vec3"
+      },
+      {
+       "site": "0x18164a5a9",
+       "name": "_Vec4"
+      },
+      {
+       "site": "0x18164a63b",
+       "name": "_Mat3"
+      },
+      {
+       "site": "0x18164a6cd",
+       "name": "_Mat4"
+      },
+      {
+       "site": "0x18164a75f",
+       "name": "_Internal"
+      },
+      {
+       "site": "0x18164a824",
+       "name": "convertUserProperties"
+      },
+      {
+       "site": "0x18164a8ea",
+       "name": "updateScriptProperties"
+      },
+      {
+       "site": "0x18164a9b0",
+       "name": "stringifyConfig"
+      },
+      {
+       "site": "0x18164aa6c",
+       "name": "JS base class error: %s"
+      }
+     ]
+    },
+    "sceneTemplate": {
+     "range": [
+      "0x1816311d0",
+      "0x181631c8c"
+     ],
+     "bytes": 2748,
+     "does": "IScene 메서드 14개 등록 후 thisScene 전역, 이어서 IModelData (applyData/replaceData/prototype)",
+     "trace": [
+      {
+       "site": "0x1816312bd",
+       "name": "getLayer"
+      },
+      {
+       "site": "0x18163133b",
+       "name": "getLayerByID"
+      },
+      {
+       "site": "0x1816313b6",
+       "name": "getLayerCount"
+      },
+      {
+       "site": "0x181631437",
+       "name": "enumerateLayers"
+      },
+      {
+       "site": "0x1816314b5",
+       "name": "destroyLayer"
+      },
+      {
+       "site": "0x181631530",
+       "name": "createLayer"
+      },
+      {
+       "site": "0x1816315b1",
+       "name": "sortLayer"
+      },
+      {
+       "site": "0x18163162f",
+       "name": "getLayerIndex"
+      },
+      {
+       "site": "0x1816316aa",
+       "name": "getInitialLayerConfig"
+      },
+      {
+       "site": "0x18163172b",
+       "name": "getCameraTransforms"
+      },
+      {
+       "site": "0x1816317a9",
+       "name": "setCameraTransforms"
+      },
+      {
+       "site": "0x181631824",
+       "name": "getAnimation"
+      },
+      {
+       "site": "0x1816318a5",
+       "name": "createModelData"
+      },
+      {
+       "site": "0x181631923",
+       "name": "destroyModelData"
+      },
+      {
+       "site": "0x181631a4f",
+       "name": "thisScene"
+      },
+      {
+       "site": "0x181631af0",
+       "name": "applyData"
+      },
+      {
+       "site": "0x181631b6b",
+       "name": "replaceData"
+      },
+      {
+       "site": "0x181631bd4",
+       "name": "IModelData"
+      },
+      {
+       "site": "0x181631c1c",
+       "name": "prototype"
+      }
+     ]
+    },
+    "moduleResolver": {
+     "range": [
+      "0x1816469c0",
+      "0x1816476e2"
+     ],
+     "bytes": 3362,
+     "does": "'scripts/jsmodules/' + 모듈명 + '.js' 로 import 를 해석한다",
+     "trace": [
+      {
+       "site": "0x18164710e",
+       "name": "scripts/jsmodules/"
+      },
+      {
+       "site": "0x181647168",
+       "name": ".js"
+      },
+      {
+       "site": "0x181647185",
+       "name": ".js"
+      },
+      {
+       "site": "0x1816476c8",
+       "name": "unordered_map/set too long"
+      },
+      {
+       "site": "0x1816476d5",
+       "name": "invalid hash bucket count"
+      }
+     ]
+    },
+    "sceneRenderProps": "IScene 의 bloom/clearcolor/ambientcolor/fov/nearz/farz/camerashake* 등 렌더 프로퍼티는 이 함수에서 등록되지 않는다 — 이름 기반 일반 프로퍼티 경로(wallpaper64.exe)로 흐르는 것으로 보인다. 미확증"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "scenescript64.dll .text 의 RIP 상대 lea 전수 + .pdata(RUNTIME_FUNCTION) 함수 경계",
+     "note": "휴리스틱 없음 — 함수 경계는 x64 예외 디렉터리가 정확히 알려준다"
+    }
+   ]
+  },
+  {
+   "id": "script.globals",
+   "value": {
+    "count": 9,
+    "table": {
+     "thisLayer": {
+      "dtsType": "ILayer",
+      "bindingVA": "0x1819a35d8",
+      "inBindingCluster": true,
+      "anywhereInDll": true
+     },
+     "thisScene": {
+      "dtsType": "IScene",
+      "bindingVA": "0x1819a3070",
+      "inBindingCluster": true,
+      "anywhereInDll": true
+     },
+     "console": {
+      "dtsType": "IConsole",
+      "bindingVA": "0x1819a35f0",
+      "inBindingCluster": true,
+      "anywhereInDll": true,
+      "note": "군집 0x1819a35f0. 바로 앞 0x1819a35e4 'log' / 0x1819a35e8 'error' 가 IConsole 의 두 메서드. 출력 접두 문자열도 군집 끝에 있다('Log: ' 0x1819a3af0, 'Error: ' 0x1819a3ae8)"
+     },
+     "renderContext": {
+      "dtsType": "IRenderContext",
+      "bindingVA": null,
+      "inBindingCluster": false,
+      "anywhereInDll": false
+     },
+     "input": {
+      "dtsType": "IInput",
+      "bindingVA": "0x1819a37e0",
+      "inBindingCluster": true,
+      "anywhereInDll": true,
+      "note": "군집 0x1819a37e0 — ILocalStorage set/get/delete/clear 바로 앞"
+     },
+     "localStorage": {
+      "dtsType": "ILocalStorage",
+      "bindingVA": "0x1819a3830",
+      "inBindingCluster": true,
+      "anywhereInDll": true
+     },
+     "engine": {
+      "dtsType": "IEngine",
+      "bindingVA": "0x1819a3794",
+      "inBindingCluster": true,
+      "anywhereInDll": true
+     },
+     "shared": {
+      "dtsType": "Object",
+      "bindingVA": null,
+      "inBindingCluster": false,
+      "anywhereInDll": true,
+      "note": "**군집에 없다.** baseclasses.js 마지막 줄 `this.shared = {};` 가 실체다 — 네이티브가 만드는 객체가 아니라 베이스클래스가 심어 두는 빈 객체이고, 그래서 씬 안 모든 스크립트가 같은 참조를 본다"
+     },
+     "thisObject": {
+      "dtsType": null,
+      "bindingVA": "0x1819a35c8",
+      "inBindingCluster": true,
+      "anywhereInDll": true,
+      "note": "d.ts 미선언. 군집에서 thisLayer(0x1819a35d8) 바로 앞. 전역인지 컴포넌트 문맥 멤버인지는 문자열 인접만으로는 못 가른다"
+     }
+    },
+    "vaMeaning": "bindingVA 는 scenescript64.dll .rdata 의 WE 바인딩 군집 안 주소다. 군집 밖에 같은 바이트열이 있어도 세지 않는다(V8/CRT 문자열)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    },
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsclasses/baseclasses.js (1457행, 38,646B)"
+    }
+   ]
+  },
+  {
+   "id": "script.hooks",
+   "value": {
+    "count": 19,
+    "dispatchTable": {
+     "va": "0x1819a3ee0",
+     "entries": 19,
+     "stride": 8,
+     "type": "const char*[19]",
+     "bounds": "앞은 0x0(0x1819a3ed8), 뒤는 코드 포인터(0x1819a3f78~) — 19개에서 딱 끊긴다",
+     "meaning": "이건 문자열 인접이 아니라 실제 훅 디스패치 테이블이다. 슬롯 번호가 곧 훅 ID 이고 19개가 전부다"
+    },
+    "table": {
+     "init": {
+      "slot": 0,
+      "nameVA": "0x1819a3904",
+      "slotVA": "0x1819a3ee0",
+      "inDts": true,
+      "arg": "value: Number | Boolean | String | Vec2 | Vec3 | Vec4 | Mat4 | Mat3"
+     },
+     "update": {
+      "slot": 1,
+      "nameVA": "0x1819a390c",
+      "slotVA": "0x1819a3ee8",
+      "inDts": true,
+      "arg": "value: Number | Boolean | String | Vec2 | Vec3 | Vec4 | Mat4 | Mat3"
+     },
+     "resizeScreen": {
+      "slot": 2,
+      "nameVA": "0x1819a3918",
+      "slotVA": "0x1819a3ef0",
+      "inDts": true,
+      "arg": "size: Vec2"
+     },
+     "destroy": {
+      "slot": 3,
+      "nameVA": "0x1819a3928",
+      "slotVA": "0x1819a3ef8",
+      "inDts": true,
+      "arg": null
+     },
+     "applyUserProperties": {
+      "slot": 4,
+      "nameVA": "0x1819a3930",
+      "slotVA": "0x1819a3f00",
+      "inDts": true,
+      "arg": "changedUserProperties: Object"
+     },
+     "applyGeneralSettings": {
+      "slot": 5,
+      "nameVA": "0x1819a3948",
+      "slotVA": "0x1819a3f08",
+      "inDts": true,
+      "arg": "changedGeneralSettings: Object"
+     },
+     "animationEvent": {
+      "slot": 6,
+      "nameVA": "0x1819a3960",
+      "slotVA": "0x1819a3f10",
+      "inDts": false,
+      "arg": null
+     },
+     "cursorHitTest": {
+      "slot": 7,
+      "nameVA": "0x1819a3970",
+      "slotVA": "0x1819a3f18",
+      "inDts": false,
+      "arg": null
+     },
+     "cursorEnter": {
+      "slot": 8,
+      "nameVA": "0x1819a3980",
+      "slotVA": "0x1819a3f20",
+      "inDts": true,
+      "arg": "event: CursorEvent"
+     },
+     "cursorLeave": {
+      "slot": 9,
+      "nameVA": "0x1819a3990",
+      "slotVA": "0x1819a3f28",
+      "inDts": true,
+      "arg": "event: CursorEvent"
+     },
+     "cursorMove": {
+      "slot": 10,
+      "nameVA": "0x1819a39a0",
+      "slotVA": "0x1819a3f30",
+      "inDts": true,
+      "arg": "event: CursorEvent"
+     },
+     "cursorClick": {
+      "slot": 11,
+      "nameVA": "0x1819a39b0",
+      "slotVA": "0x1819a3f38",
+      "inDts": true,
+      "arg": "event: CursorEvent"
+     },
+     "cursorDown": {
+      "slot": 12,
+      "nameVA": "0x1819a39c0",
+      "slotVA": "0x1819a3f40",
+      "inDts": true,
+      "arg": "event: CursorEvent"
+     },
+     "cursorUp": {
+      "slot": 13,
+      "nameVA": "0x1819a39d0",
+      "slotVA": "0x1819a3f48",
+      "inDts": true,
+      "arg": "event: CursorEvent"
+     },
+     "mediaStatusChanged": {
+      "slot": 14,
+      "nameVA": "0x1819a39e0",
+      "slotVA": "0x1819a3f50",
+      "inDts": true,
+      "arg": "event: MediaStatusEvent"
+     },
+     "mediaPlaybackChanged": {
+      "slot": 15,
+      "nameVA": "0x1819a39f8",
+      "slotVA": "0x1819a3f58",
+      "inDts": true,
+      "arg": "event: MediaPlaybackEvent"
+     },
+     "mediaPropertiesChanged": {
+      "slot": 16,
+      "nameVA": "0x1819a3a10",
+      "slotVA": "0x1819a3f60",
+      "inDts": true,
+      "arg": "event: MediaPropertiesEvent"
+     },
+     "mediaThumbnailChanged": {
+      "slot": 17,
+      "nameVA": "0x1819a3a28",
+      "slotVA": "0x1819a3f68",
+      "inDts": true,
+      "arg": "event: MediaThumbnailEvent"
+     },
+     "mediaTimelineChanged": {
+      "slot": 18,
+      "nameVA": "0x1819a3a40",
+      "slotVA": "0x1819a3f70",
+      "inDts": true,
+      "arg": "event: MediaTimelineEvent"
+     }
+    },
+    "dtsMissing": [
+     "animationEvent",
+     "cursorHitTest"
+    ],
+    "export규약": "스크립트가 `export function <hook>(...)` 로 내보내면 네이티브가 이 테이블의 이름으로 모듈 export 를 찾아 부른다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    },
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "scenescript64.dll .rdata 0x1819a3ee0 의 const char*[19] 포인터 배열",
+     "note": "훅 문자열 VA 를 qword 로 검색해 발견 — 슬롯 순서까지 실측"
+    }
+   ]
+  },
+  {
+   "id": "script.undocumented",
+   "value": {
+    "cursorHitTest": {
+     "kind": "컴포넌트 훅",
+     "nameVA": "0x1819a3970",
+     "evidence": "훅 디스패치 테이블 슬롯 7 (0x1819a3ee0 기준 7번째). cursorEnter 바로 앞 — 커서 이벤트 전달 전에 히트 판정을 스크립트에 물어보는 훅으로 읽힌다(이름 근거, 시그니처 미확증)",
+     "dts": "IComponent 에 없음"
+    },
+    "animationEvent": {
+     "kind": "컴포넌트 훅",
+     "nameVA": "0x1819a3960",
+     "evidence": "훅 디스패치 테이블 슬롯 6. d.ts 는 AnimationEvent{name, frame} 클래스만 선언하고 그걸 받는 훅은 선언하지 않는다",
+     "dts": "IComponent 에 없음 / AnimationEvent 클래스는 있음"
+    },
+    "isObjectValid": {
+     "kind": "IEngine 메서드",
+     "nameVA": "0x1819a36c8",
+     "evidence": "전역 설치 함수의 IEngine 멤버 등록 런 안(0x1816498ef) — isScreensaver(0x181649856)와 openUserShortcut(0x181649988) 사이. 문서화된 멤버들과 같은 스트라이드로 심긴다",
+     "dts": "IEngine 에 없음"
+    },
+    "clearTimeout": {
+     "kind": "IEngine 메서드",
+     "nameVA": "0x1819a3678",
+     "evidence": "IEngine 멤버 등록 런 안(0x1816495f2) — setInterval(0x181649559) 바로 다음. 전용 스코프 가드 문자열도 있다: 0x1819a3bf8 'timeout cannot be cleared from global scope.' 죽은 심볼이 아니라 살아있는 경로다",
+     "dts": "주석 처리 — 'Not implemented. Use returned function to clear.'"
+    },
+    "thisObject": {
+     "kind": "전역",
+     "nameVA": "0x1819a35c8",
+     "evidence": "전역 설치 함수 안(0x181648de3)에서 thisLayer(0x181648e39) 직전에 같은 스트라이드로 심긴다. 같은 함수가 console/engine/input/localStorage 전역도 심는다 — 컴포넌트 문맥 멤버가 아니라 전역이다",
+     "likelyType": "d.ts 의 IThisPropertyObjectBase extends IObject ('The object this property is bound to'). 이 인터페이스는 선언돼 있는데 그걸 담는 전역 declare 가 d.ts 에 없다. 등록 직전에 IObject 의 유일 멤버 getAnimation(0x181648c4f)이 심기는 것도 이 해석과 맞는다. 타입 자체는 미확증",
+     "dts": "선언 없음"
+    },
+    "button": {
+     "kind": "CursorEvent 필드",
+     "nameVA": "0x1819a3434",
+     "evidence": "CursorEvent 필드 등록 런 선두(0x181648430) — worldPosition(0x18164846f)/localPosition/hitBox 와 63바이트 등간격",
+     "dts": "주석 처리(NOT USED)"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    },
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "scenescript64.dll .text 의 RIP 상대 lea 전수 + .pdata(RUNTIME_FUNCTION) 함수 경계",
+     "note": "휴리스틱 없음 — 함수 경계는 x64 예외 디렉터리가 정확히 알려준다"
+    }
+   ]
+  },
+  {
+   "id": "script.dts.unbacked",
+   "value": {
+    "renderContext": {
+     "ascii_dll": false,
+     "ascii_exe": false,
+     "utf16_dll": false,
+     "utf16_exe": false,
+     "dts": "declare let renderContext: IRenderContext — IRenderContext 는 빈 인터페이스"
+    },
+    "thisProperty": {
+     "ascii_dll": false,
+     "ascii_exe": false,
+     "utf16_dll": false,
+     "utf16_exe": false,
+     "dts": "IThisPropertyObjectBase 인터페이스만 있고 전역 declare 는 없다"
+    },
+    "IModel": {
+     "ascii_dll": false,
+     "ascii_exe": false,
+     "utf16_dll": false,
+     "utf16_exe": false,
+     "dts": "ILayer extends … IModel … 로 참조되나 정의가 없다(d.ts 자체 미정의 참조)"
+    },
+    "IAssetHandle": {
+     "ascii_dll": false,
+     "ascii_exe": false,
+     "utf16_dll": false,
+     "utf16_exe": false,
+     "dts": "registerAsset 반환형/createLayer 인자로 참조되나 정의가 없다"
+    }
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "scenescript64.dll · wallpaper64.exe ASCII+UTF-16LE 전수 검색"
+    },
+    {
+     "kind": "note",
+     "ref": "부재 증거라 약하다. 런타임 조립 이름이면 문자열로 안 잡힌다. 실행 검증(스크립트에서 typeof renderContext) 전까지 보고 유지"
+    }
+   ]
+  },
+  {
+   "id": "script.api.IScene",
+   "value": {
+    "global": "thisScene",
+    "memberCount": 33,
+    "members": {
+     "getLayer": {
+      "kind": "fn",
+      "dllVA": "0x1819a2f70",
+      "args": "name: String|Number",
+      "returns": "ILayer"
+     },
+     "getLayerByID": {
+      "kind": "fn",
+      "dllVA": "0x1819a2f80",
+      "args": "id: String",
+      "returns": "ILayer"
+     },
+     "getLayerCount": {
+      "kind": "fn",
+      "dllVA": "0x1819a2f90",
+      "args": "",
+      "returns": "Number"
+     },
+     "enumerateLayers": {
+      "kind": "fn",
+      "dllVA": "0x1819a2fa0",
+      "args": "",
+      "returns": "[ILayer]"
+     },
+     "destroyLayer": {
+      "kind": "fn",
+      "dllVA": "0x1819a2fb0",
+      "args": "layer: String|Number|ILayer",
+      "returns": "Boolean"
+     },
+     "createLayer": {
+      "kind": "fn",
+      "dllVA": "0x1819a2fc0",
+      "args": "configuration: String|Object|IAssetHandle|IModelData",
+      "returns": "ILayer"
+     },
+     "sortLayer": {
+      "kind": "fn",
+      "dllVA": "0x1819a2fd0",
+      "args": "layer: String|Number|ILayer, index: Number",
+      "returns": "Boolean"
+     },
+     "getLayerIndex": {
+      "kind": "fn",
+      "dllVA": "0x1819a2fe0",
+      "args": "layer: String|ILayer",
+      "returns": "Number"
+     },
+     "getInitialLayerConfig": {
+      "kind": "fn",
+      "dllVA": "0x1819a2ff0",
+      "args": "layer: String|Number|ILayer",
+      "returns": "Object"
+     },
+     "getCameraTransforms": {
+      "kind": "fn",
+      "dllVA": "0x1819a3008",
+      "args": "",
+      "returns": "CameraTransforms"
+     },
+     "setCameraTransforms": {
+      "kind": "fn",
+      "dllVA": "0x1819a3020",
+      "args": "cameraTransforms: CameraTransforms",
+      "returns": "void"
+     },
+     "getAnimation": {
+      "kind": "fn",
+      "dllVA": "0x1819a3038",
+      "args": "name?: String",
+      "returns": "IAnimation"
+     },
+     "createModelData": {
+      "kind": "fn",
+      "dllVA": "0x1819a3048",
+      "args": "configuration: Object",
+      "returns": "IModelData"
+     },
+     "destroyModelData": {
+      "kind": "fn",
+      "dllVA": "0x1819a3058",
+      "args": "modelDataHandle: IModelData",
+      "returns": "void"
+     },
+     "bloom": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Boolean"
+     },
+     "bloomstrength": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "bloomthreshold": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "clearenabled": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Boolean"
+     },
+     "clearcolor": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Vec3"
+     },
+     "ambientcolor": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Vec3"
+     },
+     "skylightcolor": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Vec3"
+     },
+     "fov": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "nearz": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "farz": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "camerafade": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Boolean"
+     },
+     "camerashake": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Boolean"
+     },
+     "camerashakespeed": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "camerashakeamplitude": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "camerashakeroughness": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "cameraparallax": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Boolean"
+     },
+     "cameraparallaxamount": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "cameraparallaxdelay": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     },
+     "cameraparallaxmouseinfluence": {
+      "kind": "prop",
+      "dllVA": null,
+      "type": "Number"
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.api.IEngine",
+   "value": {
+    "global": "engine",
+    "memberCount": 21,
+    "members": {
+     "isRunningInEditor": {
+      "kind": "fn",
+      "dllVA": "0x1819a35f8",
+      "args": "",
+      "returns": "Boolean"
+     },
+     "isPortrait": {
+      "kind": "fn",
+      "dllVA": "0x1819a3610",
+      "args": "",
+      "returns": "Boolean"
+     },
+     "isLandscape": {
+      "kind": "fn",
+      "dllVA": "0x1819a3620",
+      "args": "",
+      "returns": "Boolean"
+     },
+     "isDesktopDevice": {
+      "kind": "fn",
+      "dllVA": "0x1819a3698",
+      "args": "",
+      "returns": "Boolean"
+     },
+     "isMobileDevice": {
+      "kind": "fn",
+      "dllVA": "0x1819a3688",
+      "args": "",
+      "returns": "Boolean"
+     },
+     "isWallpaper": {
+      "kind": "fn",
+      "dllVA": "0x1819a36a8",
+      "args": "",
+      "returns": "Boolean"
+     },
+     "isScreensaver": {
+      "kind": "fn",
+      "dllVA": "0x1819a36b8",
+      "args": "",
+      "returns": "Boolean"
+     },
+     "AUDIO_RESOLUTION_16": {
+      "kind": "prop",
+      "dllVA": "0x1819a3750",
+      "type": "Number",
+      "value": "16",
+      "readonly": true
+     },
+     "AUDIO_RESOLUTION_32": {
+      "kind": "prop",
+      "dllVA": "0x1819a3768",
+      "type": "Number",
+      "value": "32",
+      "readonly": true
+     },
+     "AUDIO_RESOLUTION_64": {
+      "kind": "prop",
+      "dllVA": "0x1819a3780",
+      "type": "Number",
+      "value": "64",
+      "readonly": true
+     },
+     "registerAudioBuffers": {
+      "kind": "fn",
+      "dllVA": "0x1819a3630",
+      "args": "resolution: Number",
+      "returns": "AudioBuffers"
+     },
+     "registerAsset": {
+      "kind": "fn",
+      "dllVA": "0x1819a3648",
+      "args": "file: String, precache: Boolean",
+      "returns": "IAssetHandle"
+     },
+     "setTimeout": {
+      "kind": "fn",
+      "dllVA": "0x1819a3658",
+      "args": "callback: Function, delay?: Number",
+      "returns": "Function"
+     },
+     "setInterval": {
+      "kind": "fn",
+      "dllVA": "0x1819a3668",
+      "args": "callback: Function, delay?: Number",
+      "returns": "Function"
+     },
+     "openUserShortcut": {
+      "kind": "fn",
+      "dllVA": "0x1819a36d8",
+      "args": "userPropertyName: String",
+      "returns": "Boolean"
+     },
+     "screenResolution": {
+      "kind": "prop",
+      "dllVA": "0x1819a36f0",
+      "type": "Vec2"
+     },
+     "canvasSize": {
+      "kind": "prop",
+      "dllVA": "0x1819a3708",
+      "type": "Vec2"
+     },
+     "userProperties": {
+      "kind": "prop",
+      "dllVA": "0x1819a3718",
+      "type": "Object"
+     },
+     "timeOfDay": {
+      "kind": "prop",
+      "dllVA": "0x1819a3728",
+      "type": "Number"
+     },
+     "frametime": {
+      "kind": "prop",
+      "dllVA": "0x1819a3738",
+      "type": "Number"
+     },
+     "runtime": {
+      "kind": "prop",
+      "dllVA": "0x1819a3748",
+      "type": "Number"
+     }
+    },
+    "dts미선언_추가": {
+     "clearTimeout": "0x1819a3678",
+     "isObjectValid": "0x1819a36c8"
+    },
+    "commentedOutInDts": [
+     "clearTimeout"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.api.ILocalStorage",
+   "value": {
+    "global": "localStorage",
+    "memberCount": 6,
+    "members": {
+     "LOCATION_GLOBAL": {
+      "kind": "prop",
+      "dllVA": "0x1819a3808",
+      "type": "String",
+      "value": "'global'",
+      "static": true,
+      "readonly": true
+     },
+     "LOCATION_SCREEN": {
+      "kind": "prop",
+      "dllVA": "0x1819a3820",
+      "type": "String",
+      "value": "'screen'",
+      "static": true,
+      "readonly": true
+     },
+     "set": {
+      "kind": "fn",
+      "dllVA": "0x1819a37e8",
+      "args": "key: String, value: Any, location?: String",
+      "returns": "void"
+     },
+     "get": {
+      "kind": "fn",
+      "dllVA": "0x1819a37ec",
+      "args": "key: String, location?: String",
+      "returns": "Any"
+     },
+     "delete": {
+      "kind": "fn",
+      "dllVA": "0x1819a37f0",
+      "args": "key: String, location?: String",
+      "returns": "Boolean"
+     },
+     "clear": {
+      "kind": "fn",
+      "dllVA": "0x1819a37f8",
+      "args": "location?: String",
+      "returns": "void"
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.api.IInput",
+   "value": {
+    "global": "input",
+    "memberCount": 3,
+    "members": {
+     "cursorWorldPosition": {
+      "kind": "prop",
+      "dllVA": "0x1819a37a0",
+      "type": "Vec3"
+     },
+     "cursorScreenPosition": {
+      "kind": "prop",
+      "dllVA": "0x1819a37b8",
+      "type": "Vec2"
+     },
+     "cursorLeftDown": {
+      "kind": "prop",
+      "dllVA": "0x1819a37d0",
+      "type": "Boolean"
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.api.IConsole",
+   "value": {
+    "global": "console",
+    "memberCount": 2,
+    "members": {
+     "log": {
+      "kind": "fn",
+      "dllVA": "0x1819a35e4",
+      "args": "...name: any",
+      "returns": "void"
+     },
+     "error": {
+      "kind": "fn",
+      "dllVA": "0x1819a35e8",
+      "args": "...name: any",
+      "returns": "void"
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.api.ILayer",
+   "value": {
+    "global": "thisLayer",
+    "composition": [
+     "IObject",
+     "IImageLayer",
+     "ISoundLayer",
+     "IEffectLayer",
+     "ITextLayer",
+     "IParticleSystem",
+     "IModel",
+     "ICamera"
+    ],
+    "note": "d.ts 의 ILayer extends 목록에 IModel 이 있으나 IModel 정의는 d.ts 에 없다(미정의 참조). IModelLayer 가 실제 모델 레이어 인터페이스다.",
+    "method": "wallpaper64.exe .text 의 RIP 상대 lea 전수 + .pdata 함수 경계. 이 계열 이름을 5개 이상, 1000바이트당 1개 이상 밀도로 참조하는 함수를 '등록자'로 잡았다(13개). 그 안에서 참조되는 이름만 바인딩으로 인정한다 — 문자열이 EXE 어딘가에 있다는 사실은 근거로 세지 않는다. 밀도 조건이 씬 JSON 파서를 걸러낸다(27KB 함수에 5개 = 0.19/1000B)",
+    "registrars": {
+     "0x140177f70": {
+      "bytes": 1921,
+      "names": 11,
+      "bestMatch": "IAnimation",
+      "coverage": 1.0,
+      "registers": [
+       "duration",
+       "fps",
+       "frameCount",
+       "getFrame",
+       "isPlaying",
+       "name",
+       "pause",
+       "play",
+       "rate",
+       "setFrame",
+       "stop"
+      ]
+     },
+     "0x1401e0530": {
+      "bytes": 3673,
+      "names": 17,
+      "bestMatch": "ILayer",
+      "coverage": 0.94,
+      "registers": [
+       "angles",
+       "getAttachmentAngles",
+       "getAttachmentIndex",
+       "getAttachmentMatrix",
+       "getAttachmentOrigin",
+       "getChildren",
+       "getParent",
+       "getTransformMatrix",
+       "lookAt",
+       "lookAtYaw",
+       "name",
+       "origin",
+       "parallaxDepth",
+       "rotateObjectSpace",
+       "scale",
+       "setParent",
+       "solid"
+      ]
+     },
+     "0x1401ee520": {
+      "bytes": 3064,
+      "names": 7,
+      "bestMatch": "IEffectLayer",
+      "coverage": 0.8,
+      "registers": [
+       "alpha",
+       "color",
+       "getEffect",
+       "perspective",
+       "size",
+       "transformAttachmentToTexture",
+       "visible"
+      ]
+     },
+     "0x1401efca0": {
+      "bytes": 1296,
+      "names": 6,
+      "bestMatch": "IEffect",
+      "coverage": 1.0,
+      "registers": [
+       "executeMaterialFunction",
+       "getMaterial",
+       "getMaterialCount",
+       "name",
+       "setMaterialProperty",
+       "visible"
+      ]
+     },
+     "0x1401f7090": {
+      "bytes": 2822,
+      "names": 5,
+      "bestMatch": "ISoundLayer",
+      "coverage": 1.0,
+      "registers": [
+       "isPlaying",
+       "pause",
+       "play",
+       "stop",
+       "volume"
+      ]
+     },
+     "0x1402110be": {
+      "bytes": 4516,
+      "names": 24,
+      "bestMatch": "IImageLayer",
+      "coverage": 0.92,
+      "registers": [
+       "alignment",
+       "applyBonePhysicsImpulse",
+       "createAnimationLayer",
+       "destroyAnimationLayer",
+       "getAnimationLayer",
+       "getAnimationLayerCount",
+       "getBlendShapeIndex",
+       "getBlendShapeWeight",
+       "getBoneCount",
+       "getBoneIndex",
+       "getBoneParentIndex",
+       "getBoneTransform",
+       "getLocalBoneAngles",
+       "getLocalBoneOrigin",
+       "getLocalBoneTransform",
+       "getTextureAnimation",
+       "getVideoTexture",
+       "playSingleAnimation",
+       "resetBonePhysicsSimulation",
+       "setBlendShapeWeight",
+       "setBoneTransform",
+       "setLocalBoneAngles",
+       "setLocalBoneOrigin",
+       "setLocalBoneTransform"
+      ]
+     },
+     "0x1402131a0": {
+      "bytes": 1754,
+      "names": 10,
+      "bestMatch": "ITextureAnimation",
+      "coverage": 1.0,
+      "registers": [
+       "duration",
+       "frameCount",
+       "getFrame",
+       "isPlaying",
+       "join",
+       "pause",
+       "play",
+       "rate",
+       "setFrame",
+       "stop"
+      ]
+     },
+     "0x140214050": {
+      "bytes": 1865,
+      "names": 10,
+      "bestMatch": "IVideoTexture",
+      "coverage": 1.0,
+      "registers": [
+       "addEndedCallback",
+       "duration",
+       "getCurrentTime",
+       "isPlaying",
+       "loop",
+       "pause",
+       "play",
+       "rate",
+       "setCurrentTime",
+       "stop"
+      ]
+     },
+     "0x140227470": {
+      "bytes": 2017,
+      "names": 8,
+      "bestMatch": "IModelLayer",
+      "coverage": 1.0,
+      "registers": [
+       "createAnimationLayer",
+       "destroyAnimationLayer",
+       "getAnimationLayer",
+       "getAnimationLayerCount",
+       "perspective",
+       "playSingleAnimation",
+       "rootmotion",
+       "visible"
+      ]
+     },
+     "0x14024cb00": {
+      "bytes": 1314,
+      "names": 7,
+      "bestMatch": "IParticleSystem",
+      "coverage": 1.0,
+      "registers": [
+       "emitParticles",
+       "instance",
+       "isPlaying",
+       "pause",
+       "play",
+       "stop",
+       "visible"
+      ]
+     },
+     "0x14024d940": {
+      "bytes": 4142,
+      "names": 15,
+      "bestMatch": "IParticleSystemInstance",
+      "coverage": 1.0,
+      "registers": [
+       "alpha",
+       "colorn",
+       "controlpoint0",
+       "controlpoint1",
+       "controlpoint2",
+       "controlpoint3",
+       "controlpoint4",
+       "controlpoint5",
+       "controlpoint6",
+       "controlpoint7",
+       "count",
+       "lifetime",
+       "rate",
+       "size",
+       "speed"
+      ]
+     },
+     "0x140258ca0": {
+      "bytes": 6771,
+      "names": 13,
+      "bestMatch": "ITextLayer",
+      "coverage": 0.87,
+      "registers": [
+       "anchor",
+       "backgroundcolor",
+       "font",
+       "horizontalalign",
+       "limitrows",
+       "limitwidth",
+       "maxrows",
+       "maxwidth",
+       "opaquebackground",
+       "padding",
+       "pointsize",
+       "text",
+       "verticalalign"
+      ]
+     },
+     "0x14026c980": {
+      "bytes": 3166,
+      "names": 14,
+      "bestMatch": "IAnimationLayer",
+      "coverage": 1.0,
+      "registers": [
+       "addEndedCallback",
+       "blend",
+       "duration",
+       "fps",
+       "frameCount",
+       "getFrame",
+       "isPlaying",
+       "name",
+       "pause",
+       "play",
+       "rate",
+       "setFrame",
+       "stop",
+       "visible"
+      ]
+     }
+    },
+    "registrarNote": "등록자 함수가 d.ts 인터페이스와 거의 일대일로 대응한다 — bestMatch/coverage 가 그 대응이다. 인터페이스 분해가 문서상 편의가 아니라 구현 구조 그대로라는 뜻",
+    "resolvedLowercase": {
+     "count": 62,
+     "names": [
+      "ILayer.origin",
+      "ILayer.angles",
+      "ILayer.scale",
+      "ILayer.name",
+      "ILayer.visible",
+      "IImageLayer.alpha",
+      "IImageLayer.color",
+      "IImageLayer.alignment",
+      "ISoundLayer.volume",
+      "IEffectLayer.size",
+      "IEffectLayer.perspective",
+      "IEffectLayer.solid",
+      "ITextLayer.text",
+      "ITextLayer.color",
+      "ITextLayer.alpha",
+      "ITextLayer.opaquebackground",
+      "ITextLayer.backgroundcolor",
+      "ITextLayer.pointsize",
+      "ITextLayer.font",
+      "ITextLayer.padding",
+      "ITextLayer.horizontalalign",
+      "ITextLayer.verticalalign",
+      "ITextLayer.anchor",
+      "ITextLayer.limitrows",
+      "ITextLayer.maxrows",
+      "ITextLayer.limitwidth",
+      "ITextLayer.maxwidth",
+      "IParticleSystem.instance",
+      "IParticleSystemInstance.alpha",
+      "IParticleSystemInstance.size",
+      "IParticleSystemInstance.count",
+      "IParticleSystemInstance.speed",
+      "IParticleSystemInstance.lifetime",
+      "IParticleSystemInstance.rate",
+      "IParticleSystemInstance.colorn",
+      "IParticleSystemInstance.controlpoint0",
+      "IParticleSystemInstance.controlpoint1",
+      "IParticleSystemInstance.controlpoint2",
+      "IParticleSystemInstance.controlpoint3",
+      "IParticleSystemInstance.controlpoint4",
+      "IParticleSystemInstance.controlpoint5",
+      "IParticleSystemInstance.controlpoint6",
+      "IParticleSystemInstance.controlpoint7",
+      "IModelLayer.perspective",
+      "IModelLayer.rootmotion",
+      "IEffect.visible",
+      "IEffect.name",
+      "IAnimation.fps",
+      "IAnimation.duration",
+      "IAnimation.name",
+      "IAnimation.rate",
+      "IAnimationLayer.fps",
+      "IAnimationLayer.duration",
+      "IAnimationLayer.name",
+      "IAnimationLayer.rate",
+      "IAnimationLayer.blend",
+      "IAnimationLayer.visible",
+      "ITextureAnimation.duration",
+      "ITextureAnimation.rate",
+      "IVideoTexture.duration",
+      "IVideoTexture.rate",
+      "IVideoTexture.loop"
+     ],
+     "note": "전소문자라 종전에 확증 불가로 남겼던 멤버 중 레이어 바인딩 함수 안에서 참조가 잡힌 것들"
+    },
+    "stillAmbiguous": {
+     "count": 1,
+     "names": [
+      "ICamera.fov"
+     ]
+    },
+    "interfaces": {
+     "ILayer": {
+      "extends": [
+       "IObject",
+       "IImageLayer",
+       "ISoundLayer",
+       "IEffectLayer",
+       "ITextLayer",
+       "IParticleSystem",
+       "IModel",
+       "ICamera"
+      ],
+      "members": {
+       "origin": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x14048f4dc",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "angles": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x14048fc5c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "scale": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x14048f64c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "parallaxDepth": {
+        "kind": "prop",
+        "type": "Vec2",
+        "nameVA": "0x1404902c8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "name": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x1404748b8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401e0530",
+         "0x1401efca0",
+         "0x14026c980"
+        ]
+       },
+       "visible": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x1404903a0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x1401efca0",
+         "0x140227470",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "getTransformMatrix": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Mat4",
+        "nameVA": "0x1404902e8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "rotateObjectSpace": {
+        "kind": "fn",
+        "args": "angles: Vec3",
+        "returns": "void",
+        "nameVA": "0x140490268",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "lookAt": {
+        "kind": "fn",
+        "args": "center: Vec3, up?: Vec3",
+        "returns": "void",
+        "nameVA": "0x14049027c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "lookAtYaw": {
+        "kind": "fn",
+        "args": "center: Vec3, up?: Vec3",
+        "returns": "void",
+        "nameVA": "0x140490288",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "setParent": {
+        "kind": "fn",
+        "args": "parent: String|Number|ILayer, attachment: String|Number, adjustTransform?: Boolean",
+        "returns": "void",
+        "nameVA": "0x140490298",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "getParent": {
+        "kind": "fn",
+        "args": "",
+        "returns": "ILayer",
+        "nameVA": "0x140490350",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "getChildren": {
+        "kind": "fn",
+        "args": "",
+        "returns": "[ILayer]",
+        "nameVA": "0x140490360",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "getAttachmentIndex": {
+        "kind": "fn",
+        "args": "name: String",
+        "returns": "Number",
+        "nameVA": "0x140490370",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "getAttachmentMatrix": {
+        "kind": "fn",
+        "args": "attachment: String|Number",
+        "returns": "Mat4",
+        "nameVA": "0x140490388",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "getAttachmentOrigin": {
+        "kind": "fn",
+        "args": "attachment: String|Number",
+        "returns": "Vec3",
+        "nameVA": "0x140490300",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       },
+       "getAttachmentAngles": {
+        "kind": "fn",
+        "args": "attachment: String|Number",
+        "returns": "Vec3",
+        "nameVA": "0x140490318",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       }
+      }
+     },
+     "IObject": {
+      "extends": [],
+      "members": {
+       "getAnimation": {
+        "kind": "fn",
+        "args": "name?: String",
+        "returns": "IAnimation",
+        "nameVA": "0x1819a3038",
+        "boundIn": "scenescript64.dll"
+       }
+      }
+     },
+     "IImageLayer": {
+      "extends": [],
+      "members": {
+       "alpha": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140486af0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x14024d940"
+        ]
+       },
+       "color": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x140489070",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520"
+        ]
+       },
+       "alignment": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x140488490",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getTextureAnimation": {
+        "kind": "fn",
+        "args": "",
+        "returns": "ITextureAnimation",
+        "nameVA": "0x140490df0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getVideoTexture": {
+        "kind": "fn",
+        "args": "",
+        "returns": "IVideoTexture",
+        "nameVA": "0x140490e08",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getAnimationLayerCount": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Number",
+        "nameVA": "0x140490ec0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "getAnimationLayer": {
+        "kind": "fn",
+        "args": "name: String|Number",
+        "returns": "IAnimationLayer",
+        "nameVA": "0x140490ea8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "createAnimationLayer": {
+        "kind": "fn",
+        "args": "animation: String|Object, config?: Object",
+        "returns": "IAnimationLayer",
+        "nameVA": "0x140490ed8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "playSingleAnimation": {
+        "kind": "fn",
+        "args": "animation: String|Object, config?: Object",
+        "returns": "IAnimationLayer",
+        "nameVA": "0x140490ef0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "destroyAnimationLayer": {
+        "kind": "fn",
+        "args": "animationLayer: String|Object|IAnimationLayer",
+        "returns": "Boolean",
+        "nameVA": "0x140490e50",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "getBoneCount": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Number",
+        "nameVA": "0x140490e68",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getBoneTransform": {
+        "kind": "fn",
+        "args": "bone: String|Number",
+        "returns": "Mat4",
+        "nameVA": "0x140490e78",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "setBoneTransform": {
+        "kind": "fn",
+        "args": "bone: String|Number, transform: Mat4",
+        "returns": "void",
+        "nameVA": "0x140490e90",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getLocalBoneTransform": {
+        "kind": "fn",
+        "args": "bone: String|Number",
+        "returns": "Mat4",
+        "nameVA": "0x140490f68",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "setLocalBoneTransform": {
+        "kind": "fn",
+        "args": "bone: String|Number, transform: Mat4",
+        "returns": "void",
+        "nameVA": "0x140490f80",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getLocalBoneAngles": {
+        "kind": "fn",
+        "args": "bone: String|Number",
+        "returns": "Vec3",
+        "nameVA": "0x140490f98",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "setLocalBoneAngles": {
+        "kind": "fn",
+        "args": "bone: String|Number, angles: Vec3",
+        "returns": "void",
+        "nameVA": "0x140490fb0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getLocalBoneOrigin": {
+        "kind": "fn",
+        "args": "bone: String|Number",
+        "returns": "Vec3",
+        "nameVA": "0x140490f08",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "setLocalBoneOrigin": {
+        "kind": "fn",
+        "args": "bone: String|Number, origin: Vec3",
+        "returns": "void",
+        "nameVA": "0x140490f20",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getBoneIndex": {
+        "kind": "fn",
+        "args": "name: String",
+        "returns": "Number",
+        "nameVA": "0x140491028",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getBoneParentIndex": {
+        "kind": "fn",
+        "args": "child: Number|String",
+        "returns": "Number",
+        "nameVA": "0x140491038",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "applyBonePhysicsImpulse": {
+        "kind": "fn",
+        "args": "bone?: String|Number, directionalImpulse: Vec3, angularImpulse: Vec3",
+        "returns": "void",
+        "nameVA": "0x140491050",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "resetBonePhysicsSimulation": {
+        "kind": "fn",
+        "args": "bone?: String|Number",
+        "returns": "void",
+        "nameVA": "0x140490fc8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getBlendShapeIndex": {
+        "kind": "fn",
+        "args": "name: String",
+        "returns": "Number",
+        "nameVA": "0x140490f38",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "getBlendShapeWeight": {
+        "kind": "fn",
+        "args": "blendShape: String|Number",
+        "returns": "Number",
+        "nameVA": "0x140490f50",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       },
+       "setBlendShapeWeight": {
+        "kind": "fn",
+        "args": "blendShape: String|Number, weight: Number",
+        "returns": "void",
+        "nameVA": "0x140491010",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be"
+        ]
+       }
+      }
+     },
+     "ISoundLayer": {
+      "extends": [],
+      "members": {
+       "isPlaying": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Boolean",
+        "nameVA": "0x14048de88",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "play": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b3c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "stop": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b34",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "pause": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b2c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "volume": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x14048849c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401f7090"
+        ]
+       }
+      }
+     },
+     "IEffectLayer": {
+      "extends": [],
+      "members": {
+       "getEffect": {
+        "kind": "fn",
+        "args": "name: String|Number",
+        "returns": "IEffect",
+        "nameVA": "0x140490908",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520"
+        ]
+       },
+       "transformAttachmentToTexture": {
+        "kind": "fn",
+        "args": "attachmentLayer:String|Number|ILayer, attachmentName: String|Number",
+        "returns": "Mat3",
+        "nameVA": "0x140490928",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520"
+        ]
+       },
+       "size": {
+        "kind": "prop",
+        "type": "Vec2",
+        "nameVA": "0x14048fb5c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x14024d940"
+        ]
+       },
+       "perspective": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x140490890",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x140227470"
+        ]
+       },
+       "solid": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x14049032c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401e0530"
+        ]
+       }
+      }
+     },
+     "ITextLayer": {
+      "extends": [],
+      "members": {
+       "text": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x140488b08",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "color": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x140489070",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520"
+        ]
+       },
+       "alpha": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140486af0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x14024d940"
+        ]
+       },
+       "opaquebackground": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x140491810",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "backgroundcolor": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x1404917d8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "pointsize": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1404917e8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "font": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x140491948",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "padding": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140491870",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "horizontalalign": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x1404918d8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "verticalalign": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x140491930",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "anchor": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x140491940",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "limitrows": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x140491838",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "maxrows": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140491890",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "limitwidth": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x140491828",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       },
+       "maxwidth": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140491880",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140258ca0"
+        ]
+       }
+      }
+     },
+     "IParticleSystem": {
+      "extends": [],
+      "members": {
+       "play": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b3c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "pause": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b2c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "stop": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b34",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "isPlaying": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Boolean",
+        "nameVA": "0x14048de88",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "emitParticles": {
+        "kind": "fn",
+        "args": "count?: Number",
+        "returns": "void",
+        "nameVA": "0x1404913e0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024cb00"
+        ]
+       },
+       "instance": {
+        "kind": "prop",
+        "type": "IParticleSystemInstance",
+        "nameVA": "0x140490c48",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024cb00"
+        ]
+       }
+      }
+     },
+     "IParticleSystemInstance": {
+      "extends": [],
+      "members": {
+       "alpha": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140486af0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x14024d940"
+        ]
+       },
+       "size": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x14048fb5c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x14024d940"
+        ]
+       },
+       "count": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x14048f72c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "speed": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1404913f0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "lifetime": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1404913f8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "rate": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1404884a4",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024d940",
+         "0x14026c980"
+        ]
+       },
+       "colorn": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x14048fd44",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "controlpoint0": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x140491408",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "controlpoint1": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x1404914a8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "controlpoint2": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x1404914d0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "controlpoint3": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x140491458",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "controlpoint4": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x140491480",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "controlpoint5": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x140491538",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "controlpoint6": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x140491560",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       },
+       "controlpoint7": {
+        "kind": "prop",
+        "type": "Vec3",
+        "nameVA": "0x1404914f8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14024d940"
+        ]
+       }
+      }
+     },
+     "IModelLayer": {
+      "extends": [],
+      "members": {
+       "perspective": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x140490890",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x140227470"
+        ]
+       },
+       "rootmotion": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x1404912f0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140227470"
+        ]
+       },
+       "getAnimationLayerCount": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Number",
+        "nameVA": "0x140490ec0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "getAnimationLayer": {
+        "kind": "fn",
+        "args": "name: String|Number",
+        "returns": "IAnimationLayer",
+        "nameVA": "0x140490ea8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "createAnimationLayer": {
+        "kind": "fn",
+        "args": "animation: String|Object",
+        "returns": "IAnimationLayer",
+        "nameVA": "0x140490ed8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "playSingleAnimation": {
+        "kind": "fn",
+        "args": "animation: String|Object, config?: Object",
+        "returns": "IAnimationLayer",
+        "nameVA": "0x140490ef0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       },
+       "destroyAnimationLayer": {
+        "kind": "fn",
+        "args": "animationLayer: String|Object|IAnimationLayer",
+        "returns": "Boolean",
+        "nameVA": "0x140490e50",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402110be",
+         "0x140227470"
+        ]
+       }
+      }
+     },
+     "ICamera": {
+      "extends": [],
+      "members": {
+       "fov": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": null,
+        "boundIn": null,
+        "evidence": "레이어 바인딩 함수에서 참조되지 않는다 — d.ts 선언이 유일 근거"
+       },
+       "zoom": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1819a35c0",
+        "boundIn": "scenescript64.dll"
+       }
+      }
+     },
+     "IEffect": {
+      "extends": [
+       "IObject"
+      ],
+      "members": {
+       "getMaterial": {
+        "kind": "fn",
+        "args": "index: Number",
+        "returns": "IMaterial",
+        "nameVA": "0x140490948",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401efca0"
+        ]
+       },
+       "getMaterialCount": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Number",
+        "nameVA": "0x1404908c0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401efca0"
+        ]
+       },
+       "setMaterialProperty": {
+        "kind": "fn",
+        "args": "propertyName: String, value: Number|Vec2|Vec3|Vec4",
+        "returns": "void",
+        "nameVA": "0x1404908d8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401efca0"
+        ]
+       },
+       "executeMaterialFunction": {
+        "kind": "fn",
+        "args": "propertyName: String",
+        "returns": "void",
+        "nameVA": "0x1404908f0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401efca0"
+        ]
+       },
+       "visible": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x1404903a0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x1401efca0",
+         "0x140227470",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "name": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x1404748b8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401e0530",
+         "0x1401efca0",
+         "0x14026c980"
+        ]
+       }
+      }
+     },
+     "IMaterial": {
+      "extends": [
+       "IObject"
+      ],
+      "members": {}
+     },
+     "IAnimation": {
+      "extends": [],
+      "members": {
+       "fps": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140476edc",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x14026c980"
+        ]
+       },
+       "frameCount": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x14048de98",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       },
+       "duration": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140489b60",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14026c980"
+        ]
+       },
+       "name": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x1404748b8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401e0530",
+         "0x1401efca0",
+         "0x14026c980"
+        ]
+       },
+       "rate": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1404884a4",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024d940",
+         "0x14026c980"
+        ]
+       },
+       "play": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b3c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "pause": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b2c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "stop": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b34",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "isPlaying": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Boolean",
+        "nameVA": "0x14048de88",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "getFrame": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Number",
+        "nameVA": "0x14048de68",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       },
+       "setFrame": {
+        "kind": "fn",
+        "args": "frame: Number",
+        "returns": "void",
+        "nameVA": "0x14048de78",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       }
+      }
+     },
+     "IAnimationLayer": {
+      "extends": [
+       "IObject"
+      ],
+      "members": {
+       "fps": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140476edc",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x14026c980"
+        ]
+       },
+       "frameCount": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x14048de98",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       },
+       "duration": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140489b60",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14026c980"
+        ]
+       },
+       "name": {
+        "kind": "prop",
+        "type": "String",
+        "nameVA": "0x1404748b8",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401e0530",
+         "0x1401efca0",
+         "0x14026c980"
+        ]
+       },
+       "rate": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1404884a4",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024d940",
+         "0x14026c980"
+        ]
+       },
+       "blend": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x14048e374",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x14026c980"
+        ]
+       },
+       "visible": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x1404903a0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1401ee520",
+         "0x1401efca0",
+         "0x140227470",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "play": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b3c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "pause": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b2c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "stop": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b34",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "isPlaying": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Boolean",
+        "nameVA": "0x14048de88",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "getFrame": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Number",
+        "nameVA": "0x14048de68",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       },
+       "setFrame": {
+        "kind": "fn",
+        "args": "frame: Number",
+        "returns": "void",
+        "nameVA": "0x14048de78",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       },
+       "addEndedCallback": {
+        "kind": "fn",
+        "args": "callback: Function",
+        "returns": "void",
+        "nameVA": "0x140491068",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140214050",
+         "0x14026c980"
+        ]
+       }
+      }
+     },
+     "ITextureAnimation": {
+      "extends": [],
+      "members": {
+       "frameCount": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x14048de98",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       },
+       "duration": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140489b60",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14026c980"
+        ]
+       },
+       "rate": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1404884a4",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024d940",
+         "0x14026c980"
+        ]
+       },
+       "play": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b3c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "pause": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b2c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "stop": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b34",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "isPlaying": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Boolean",
+        "nameVA": "0x14048de88",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "getFrame": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Number",
+        "nameVA": "0x14048de68",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       },
+       "setFrame": {
+        "kind": "fn",
+        "args": "frame: Number",
+        "returns": "void",
+        "nameVA": "0x14048de78",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x14026c980"
+        ]
+       },
+       "join": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140490fe4",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x1402131a0"
+        ]
+       }
+      },
+      "commentedOutInDts": [
+       "loop"
+      ]
+     },
+     "IVideoTexture": {
+      "extends": [],
+      "members": {
+       "duration": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x140489b60",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14026c980"
+        ]
+       },
+       "rate": {
+        "kind": "prop",
+        "type": "Number",
+        "nameVA": "0x1404884a4",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024d940",
+         "0x14026c980"
+        ]
+       },
+       "loop": {
+        "kind": "prop",
+        "type": "Boolean",
+        "nameVA": "0x140490a74",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140214050"
+        ]
+       },
+       "play": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b3c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "pause": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b2c",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "stop": {
+        "kind": "fn",
+        "args": "",
+        "returns": "void",
+        "nameVA": "0x140473b34",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "isPlaying": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Boolean",
+        "nameVA": "0x14048de88",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140177f70",
+         "0x1401f7090",
+         "0x1402131a0",
+         "0x140214050",
+         "0x14024cb00",
+         "0x14026c980"
+        ]
+       },
+       "getCurrentTime": {
+        "kind": "fn",
+        "args": "",
+        "returns": "Number",
+        "nameVA": "0x140491000",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140214050"
+        ]
+       },
+       "setCurrentTime": {
+        "kind": "fn",
+        "args": "time: Number",
+        "returns": "void",
+        "nameVA": "0x140490ff0",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140214050"
+        ]
+       },
+       "addEndedCallback": {
+        "kind": "fn",
+        "args": "callback: Function",
+        "returns": "void",
+        "nameVA": "0x140491068",
+        "boundIn": "wallpaper64.exe",
+        "registrarFn": [
+         "0x140214050",
+         "0x14026c980"
+        ]
+       }
+      }
+     },
+     "IModelData": {
+      "extends": [
+       "IObject"
+      ],
+      "members": {
+       "applyData": {
+        "kind": "fn",
+        "args": "shapes: Object|Array",
+        "returns": "void",
+        "nameVA": "0x1819a3080",
+        "boundIn": "scenescript64.dll"
+       },
+       "replaceData": {
+        "kind": "fn",
+        "args": "shapes: Object|Array",
+        "returns": "void",
+        "nameVA": "0x1819a3090",
+        "boundIn": "scenescript64.dll"
+       },
+       "POSITION": {
+        "kind": "prop",
+        "type": "String",
+        "value": "'position'",
+        "nameVA": null,
+        "boundIn": "baseclasses.js (JS static)"
+       },
+       "NORMAL": {
+        "kind": "prop",
+        "type": "String",
+        "value": "'normal'",
+        "nameVA": null,
+        "boundIn": "baseclasses.js (JS static)"
+       },
+       "TANGENT_SIGNED": {
+        "kind": "prop",
+        "type": "String",
+        "value": "'tangentSigned'",
+        "nameVA": null,
+        "boundIn": "baseclasses.js (JS static)"
+       },
+       "UV": {
+        "kind": "prop",
+        "type": "String",
+        "value": "'uv'",
+        "nameVA": null,
+        "boundIn": "baseclasses.js (JS static)"
+       },
+       "COLOR": {
+        "kind": "prop",
+        "type": "String",
+        "value": "'color'",
+        "nameVA": null,
+        "boundIn": "baseclasses.js (JS static)"
+       }
+      }
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe .text RIP 상대 lea 전수 + .pdata(RUNTIME_FUNCTION) 함수 경계"
+    }
+   ]
+  },
+  {
+   "id": "script.binding.closure",
+   "value": {
+    "meaning": "각 인터페이스에 대해 네이티브가 실제 등록하는 이름 집합과 d.ts 선언 집합의 차. missing 이 비면 선언이 등록을 다 덮고, extra 가 비면 선언이 과하지 않다 — 둘 다 비면 그 인터페이스의 전수는 증명된 것이다",
+    "table": {
+     "IConsole": {
+      "registered": 2,
+      "declared": 2,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "terminator": "console"
+     },
+     "IEngine": {
+      "registered": 23,
+      "declared": 21,
+      "extra(등록됐는데 d.ts 에 없음)": [
+       "clearTimeout",
+       "isObjectValid"
+      ],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "terminator": "engine"
+     },
+     "IInput": {
+      "registered": 3,
+      "declared": 3,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "terminator": "input"
+     },
+     "ILocalStorage": {
+      "registered": 6,
+      "declared": 6,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "terminator": "localStorage"
+     },
+     "IScene": {
+      "registered": 14,
+      "declared": 33,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [
+       "ambientcolor",
+       "bloom",
+       "bloomstrength",
+       "bloomthreshold",
+       "camerafade",
+       "cameraparallax",
+       "cameraparallaxamount",
+       "cameraparallaxdelay",
+       "cameraparallaxmouseinfluence",
+       "camerashake",
+       "camerashakeamplitude",
+       "camerashakeroughness",
+       "camerashakespeed",
+       "clearcolor",
+       "clearenabled",
+       "farz",
+       "fov",
+       "nearz",
+       "skylightcolor"
+      ],
+      "terminator": "thisScene"
+     },
+     "IAnimation": {
+      "registered": 11,
+      "declared": 11,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x140177f70"
+     },
+     "ILayer": {
+      "registered": 16,
+      "declared": 17,
+      "extra(등록됐는데 d.ts 에 없음)": [
+       "solid"
+      ],
+      "missing(선언됐는데 이 런에 없음)": [
+       "visible"
+      ],
+      "registrarFn": "0x1401e0530"
+     },
+     "IEffectLayer": {
+      "registered": 4,
+      "declared": 5,
+      "extra(등록됐는데 d.ts 에 없음)": [
+       "alpha",
+       "color",
+       "visible"
+      ],
+      "missing(선언됐는데 이 런에 없음)": [
+       "solid"
+      ],
+      "registrarFn": "0x1401ee520"
+     },
+     "IEffect": {
+      "registered": 6,
+      "declared": 6,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x1401efca0"
+     },
+     "ISoundLayer": {
+      "registered": 5,
+      "declared": 5,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x1401f7090"
+     },
+     "IImageLayer": {
+      "registered": 24,
+      "declared": 26,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [
+       "alpha",
+       "color"
+      ],
+      "registrarFn": "0x1402110be"
+     },
+     "ITextureAnimation": {
+      "registered": 10,
+      "declared": 10,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x1402131a0"
+     },
+     "IVideoTexture": {
+      "registered": 10,
+      "declared": 10,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x140214050"
+     },
+     "IModelLayer": {
+      "registered": 7,
+      "declared": 7,
+      "extra(등록됐는데 d.ts 에 없음)": [
+       "visible"
+      ],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x140227470"
+     },
+     "IParticleSystem": {
+      "registered": 6,
+      "declared": 6,
+      "extra(등록됐는데 d.ts 에 없음)": [
+       "visible"
+      ],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x14024cb00"
+     },
+     "IParticleSystemInstance": {
+      "registered": 15,
+      "declared": 15,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x14024d940"
+     },
+     "ITextLayer": {
+      "registered": 13,
+      "declared": 15,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [
+       "alpha",
+       "color"
+      ],
+      "registrarFn": "0x140258ca0"
+     },
+     "IAnimationLayer": {
+      "registered": 14,
+      "declared": 14,
+      "extra(등록됐는데 d.ts 에 없음)": [],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "registrarFn": "0x14026c980"
+     },
+     "IComponent(훅)": {
+      "registered": 19,
+      "declared": 17,
+      "extra(등록됐는데 d.ts 에 없음)": [
+       "animationEvent",
+       "cursorHitTest"
+      ],
+      "missing(선언됐는데 이 런에 없음)": [],
+      "terminator": "const char*[19] @0x1819a3ee0"
+     }
+    },
+    "mixinDrift": "ILayer 계열의 extra/missing 은 '없는 멤버'가 아니라 d.ts 와 네이티브가 멤버를 서로 다른 믹스인에 넣은 것이다: solid 는 ILayer 등록자가 심는데 d.ts 는 IEffectLayer 에 선언하고, alpha/color 는 IEffectLayer 등록자가 심는데 d.ts 는 IImageLayer/ITextLayer 에 선언하며, visible 은 ILayer/IModelLayer/IParticleSystem/IEffect 등록자가 각각 심는다. ILayer 가 이 믹스인들의 합집합이라 스크립트가 보는 표면은 동일하다 — 재구현 시 믹스인 경계를 d.ts 대로 나눌 이유가 없다는 뜻",
+    "IScene.renderProps": "IScene 의 missing 은 bloom/clearcolor/ambientcolor/fov/nearz/farz/camerashake*/cameraparallax* 등 렌더 프로퍼티다. 씬 템플릿 함수에서 등록되지 않는다 — 이름 기반 일반 프로퍼티 경로로 흐르는 것으로 보이나 그 경로는 미확인"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "scenescript64.dll .text 의 RIP 상대 lea 전수 + .pdata(RUNTIME_FUNCTION) 함수 경계",
+     "note": "휴리스틱 없음 — 함수 경계는 x64 예외 디렉터리가 정확히 알려준다"
+    },
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    }
+   ]
+  },
+  {
+   "id": "script.binding.clusterResidue",
+   "value": {
+    "clusterNames": 170,
+    "unexplained": [
+     "context"
+    ],
+    "note": "군집 170개 중 d.ts 멤버·훅·scriptProperties 설정 키·IModelData 셰이프 키·위에서 밝힌 미문서 6종·에셋 경로/JSON 잡음으로 설명되지 않는 나머지. 비어 있으면 일곱 번째 미문서 이름은 없다",
+    "context": {
+     "nameVA": "0x1819a3840",
+     "site": "0x18164a35d",
+     "position": "전역 설치 함수에서 localStorage 등록 직후, scripts/jsclasses/baseclasses.js 로드 직전",
+     "status": "추정 — baseclasses.js 는 `this._Vec2 = …` / `this.shared = {}` 처럼 this 에 심는다. 그 this 로 쓰이는 객체의 이름일 가능성이 있으나 확인 못 했다. d.ts 의 renderContext 와는 무관해 보인다(그 문자열은 어느 바이너리에도 없다)"
+    },
+    "pointerTables": [
+     {
+      "va": "0x1819a3ee0",
+      "count": 19,
+      "names": [
+       "init",
+       "update",
+       "resizeScreen",
+       "destroy",
+       "applyUserProperties",
+       "applyGeneralSettings",
+       "animationEvent",
+       "cursorHitTest",
+       "cursorEnter",
+       "cursorLeave",
+       "cursorMove",
+       "cursorClick",
+       "cursorDown",
+       "cursorUp",
+       "mediaStatusChanged",
+       "mediaPlaybackChanged",
+       "mediaPropertiesChanged",
+       "mediaThumbnailChanged",
+       "mediaTimelineChanged"
+      ]
+     }
+    ],
+    "pointerTableNote": "군집 문자열을 원소로 갖는 8바이트 포인터 배열 전수(길이 3 이상). 훅 디스패치 테이블 하나만 나오면 훅이 19개로 닫힌다는 뜻"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    },
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    }
+   ]
+  },
+  {
+   "id": "script.api.IParticleSystemInstance.extra",
+   "value": {
+    "names": {
+     "controlpointangle0": "0x140491490",
+     "controlpointangle1": "0x1404914b8",
+     "controlpointangle2": "0x140491440",
+     "controlpointangle3": "0x140491468",
+     "controlpointangle4": null,
+     "controlpointangle5": null,
+     "controlpointangle6": "0x1404914e0",
+     "controlpointangle7": null,
+     "emitterimage": "0x140491418",
+     "instanceoverride": "0x140491428"
+    },
+    "dts": "IParticleSystemInstance 는 controlpoint0..7 만 선언한다",
+    "caveat": "전소문자라 파티클 JSON 키일 수도 있다 — JS 바인딩 확증은 XREF 필요"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe .rdata 문자열 전수 스캔"
+    }
+   ]
+  },
+  {
+   "id": "script.baseclasses",
+   "value": {
+    "loadPath": "scripts/jsclasses/baseclasses.js",
+    "loadPathVA": null,
+    "moduleResolution": {
+     "prefix": null,
+     "suffix": ".js",
+     "note": "import * as X from 'X' → scripts/jsmodules/X.js. WEMath/WEVector/WEColor 이름 자체는 바이너리에 없다 — 스크립트의 import 문에서 온다"
+    },
+    "errorString": "JS base class error: %s",
+    "nativeHandles": {
+     "_Vec2": "0x1819a386c",
+     "_Vec3": "0x1819a3874",
+     "_Vec4": "0x1819a387c",
+     "_Mat3": "0x1819a3884",
+     "_Mat4": "0x1819a388c",
+     "_Internal": "0x1819a3898",
+     "__modelDataToken": "0x1819a31c0",
+     "__workshopId": "0x1819a3560"
+    },
+    "handleMeaning": "baseclasses.js 가 `this._Vec3 = Vec3.prototype` 로 프로토타입을 내주면 네이티브가 그 핸들로 Vec3 인스턴스를 직접 만들어 스크립트에 넘긴다. 즉 Vec2/Vec3/Vec4/Mat3/Mat4 는 네이티브 클래스가 아니라 이 JS 파일이 정본이다",
+    "classes": {
+     "Vec2": {
+      "methodCount": 36,
+      "methods": [
+       "constructor",
+       "length",
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "normalize",
+       "copy",
+       "equals",
+       "isFinite",
+       "negate",
+       "add",
+       "subtract",
+       "multiply",
+       "divide",
+       "dot",
+       "reflect",
+       "perpendicular",
+       "project",
+       "angle",
+       "angleBetween",
+       "rotate",
+       "mix",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ],
+      "statics": []
+     },
+     "Vec3": {
+      "methodCount": 36,
+      "methods": [
+       "constructor",
+       "length",
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "normalize",
+       "copy",
+       "equals",
+       "isFinite",
+       "negate",
+       "add",
+       "subtract",
+       "multiply",
+       "divide",
+       "cross",
+       "dot",
+       "reflect",
+       "refract",
+       "project",
+       "angleBetween",
+       "toSpherical",
+       "mix",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ],
+      "statics": [
+       "fromSpherical"
+      ]
+     },
+     "Vec4": {
+      "methodCount": 32,
+      "methods": [
+       "constructor",
+       "length",
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "normalize",
+       "copy",
+       "equals",
+       "isFinite",
+       "negate",
+       "add",
+       "subtract",
+       "multiply",
+       "divide",
+       "dot",
+       "reflect",
+       "project",
+       "mix",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ],
+      "statics": []
+     },
+     "Mat3": {
+      "methodCount": 22,
+      "methods": [
+       "constructor",
+       "right",
+       "up",
+       "forward",
+       "translation",
+       "angle",
+       "add",
+       "subtract",
+       "multiply",
+       "translate",
+       "rotate",
+       "scale",
+       "transformPoint",
+       "transformDirection",
+       "transpose",
+       "determinant",
+       "inverse",
+       "decompose",
+       "copy",
+       "equals",
+       "toString",
+       "toConfigString"
+      ],
+      "statics": [
+       "identity",
+       "fromTranslation",
+       "fromScale",
+       "fromRotation",
+       "fromBasis",
+       "fromMat4",
+       "compose"
+      ]
+     },
+     "Mat4": {
+      "methodCount": 23,
+      "methods": [
+       "constructor",
+       "translation",
+       "right",
+       "up",
+       "forward",
+       "add",
+       "subtract",
+       "multiply",
+       "translate",
+       "rotate",
+       "scale",
+       "transformPoint",
+       "transformDirection",
+       "transpose",
+       "inverse",
+       "determinant",
+       "extractEuler",
+       "normalMatrix",
+       "decompose",
+       "copy",
+       "equals",
+       "toString",
+       "toConfigString"
+      ],
+      "statics": [
+       "identity",
+       "fromTranslation",
+       "fromScale",
+       "fromRotation",
+       "fromEuler",
+       "fromBasis",
+       "lookAt",
+       "compose"
+      ]
+     },
+     "MediaPlaybackEvent": {
+      "methodCount": 0,
+      "methods": [],
+      "statics": [
+       "PLAYBACK_STOPPED",
+       "PLAYBACK_PLAYING",
+       "PLAYBACK_PAUSED"
+      ]
+     },
+     "IModelData": {
+      "methodCount": 1,
+      "methods": [
+       "toConfigString"
+      ],
+      "statics": [
+       "POSITION",
+       "NORMAL",
+       "UV",
+       "TANGENT_SIGNED",
+       "COLOR"
+      ]
+     }
+    },
+    "injectedGlobals": [
+     "_Vec2",
+     "_Vec3",
+     "_Vec4",
+     "_Mat4",
+     "_Mat3",
+     "IModelData",
+     "_Internal",
+     "createScriptProperties",
+     "shared"
+    ],
+    "repoCopyIdentical": true,
+    "repoCopyPath": "Sources/WapleRender/Resources/WEAssets/scripts"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsclasses/baseclasses.js (1457행, 38,646B)"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.protocol._Internal",
+   "value": {
+    "members": [
+     "updateScriptProperties",
+     "convertUserProperties",
+     "stringifyConfig"
+    ],
+    "va": {
+     "_Internal": "0x1819a3898",
+     "convertUserProperties": "0x1819a38a8",
+     "updateScriptProperties": "0x1819a38c0",
+     "stringifyConfig": "0x1819a38d8"
+    },
+    "direction": "네이티브 → JS. 세 함수 모두 baseclasses.js 에 있고 네이티브가 이름으로 호출한다",
+    "updateScriptProperties(script, varsJSON)": "JSON 문자열을 파싱해 script.scriptProperties 의 **기존 키만** 덮어쓴다. 기존 값이 Vec3 이면 새 값을 new Vec3(문자열) 로 승격한다 — 색 프로퍼티가 'r g b' 문자열로 와도 스크립트는 Vec3 메서드를 쓸 수 있다",
+    "convertUserProperties(pJSON)": "{key:{type,value}} 를 {key: 원시값} 으로 평탄화한다. type=='color' 는 new Vec3(value), type=='usershortcut' 은 {isbound, commandtype, file} 객체, 나머지는 value 그대로. → engine.userProperties 는 래퍼가 아니라 원시값 맵이다",
+    "stringifyConfig(obj)": "JSON.stringify(obj, stringifyAdapter). stringifyAdapter 는 값에 toConfigString 이 있으면 그것을 쓴다 — Vec2/Vec3/Vec4/Mat3/Mat4/IModelData 가 전부 toConfigString 을 가지므로 설정 왕복 시 'x y z' 공백구분 문자열로 직렬화된다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsclasses/baseclasses.js (1457행, 38,646B)"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.protocol.scriptProperties",
+   "value": {
+    "factory": "createScriptProperties()",
+    "factoryMethods": [
+     "addSlider",
+     "addCheckbox",
+     "addText",
+     "addCombo",
+     "addColor",
+     "finish"
+    ],
+    "factoryInBinary": false,
+    "factoryNote": "네이티브에 이 이름이 없다. 스크립트가 부르는 JS 팩토리라 네이티브는 결과 객체만 읽는다 — 부재가 곧 방향(JS→네이티브)의 증거",
+    "produces": "addX({name, value, label, ...}) 마다 vars[name]=value 와 vars[name+'_config']={order, label, ...} 를 함께 만든다. finish() 가 vars 반환",
+    "configKeys": {
+     "scriptProperties": "0x1819a3570",
+     "_config": "0x1819a3a58",
+     "order": "0x1819a3594",
+     "label": "0x1819a3584",
+     "mode": "0x1819a358c",
+     "options": "0x1819a35a8",
+     "combo": "0x1819a3a64"
+    },
+    "modes": {
+     "addSlider": "options.integer===true 이면 mode:'int', 아니면 mode 없음(float). min/max 동반",
+     "addCombo": "mode:'combo', options 배열 그대로. 초기값은 options[0].value",
+     "addCheckbox": "mode 없음(bool)",
+     "addText": "mode 없음",
+     "addColor": "mode 없음"
+    },
+    "runtimeUpdate": "사용자가 편집기에서 값을 바꾸면 네이티브가 _Internal.updateScriptProperties(script, JSON) 을 호출한다. 스크립트는 script.scriptProperties.<name> 을 그냥 읽으면 된다",
+    "exportName": "스크립트는 `export let scriptProperties = createScriptProperties()...finish();`"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsclasses/baseclasses.js (1457행, 38,646B)"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.contract.update",
+   "value": {
+    "binding": "SceneScript 는 프로퍼티 바인딩이다 — 스크립트 1개가 레이어의 프로퍼티 1개에 붙는다",
+    "init.args": "value: Number | Boolean | String | Vec2 | Vec3 | Vec4 | Mat4 | Mat3",
+    "init.returns": "Number | Boolean | String | Vec2 | Vec3 | Vec4",
+    "update.args": "value: Number | Boolean | String | Vec2 | Vec3 | Vec4 | Mat4 | Mat3",
+    "update.returns": "Number | Boolean | String | Vec2 | Vec3 | Vec4",
+    "rule1_returnValue": "update 는 바인딩된 프로퍼티와 **정확히 같은 타입**을 반환해야 한다. Color 에 붙었으면 Vec3 를 받아 Vec3 를 반환한다",
+    "rule2_assignmentException": "여러 프로퍼티를 한 번에 바꿔야 하면 직접 대입(thisLayer.scale = new Vec3(...))이 허용되고 권장된다 — 무거운 오디오 처리를 프로퍼티마다 복제하지 않기 위해",
+    "rule3_preferHooks": "update 는 선택이고 매 프레임 돈다. init/resizeScreen/applyUserProperties/cursorClick 로 옮길 수 있으면 옮기라는 것이 공식 지침",
+    "rule4_useStrict": "모든 프로퍼티 스크립트는 'use strict' 를 쓰라고 명시",
+    "generalPurposeSlot": "레이어 하나에 붙일 범용 스크립트는 관례상 Visibility 프로퍼티에 바인딩",
+    "typeAsymmetry": "init/update 의 인자 유니온에는 Mat4|Mat3 가 있는데 반환 유니온에는 없다. d.ts 오타인지 실제로 행렬 프로퍼티는 대입 전용인지는 미확정",
+    "scopeGuards": [
+     " cannot be accessed from global scope.",
+     " cannot be called from global scope.",
+     "registerAudioBuffers can only be called from global scope.",
+     "registerAsset can only be called from global scope.",
+     "setTimeout cannot be called from global scope.",
+     "setInterval cannot be called from global scope.",
+     "timeout cannot be cleared from global scope."
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.api.events",
+   "value": {
+    "CursorEvent": {
+     "fields": {
+      "worldPosition": {
+       "type": "Vec3",
+       "va": "0x1819a3440"
+      },
+      "localPosition": {
+       "type": "Vec3",
+       "va": "0x1819a3450"
+      },
+      "hitBox": {
+       "type": "String",
+       "va": "0x1819a3460"
+      }
+     },
+     "commentedOutInDts": [
+      "screenPosition",
+      "button"
+     ]
+    },
+    "AnimationEvent": {
+     "fields": {
+      "name": {
+       "type": "String",
+       "va": null
+      },
+      "frame": {
+       "type": "Number",
+       "va": null
+      }
+     },
+     "hook": "animationEvent(event) — d.ts IComponent 미선언, DLL 훅 런에 존재"
+    },
+    "MediaPlaybackEvent": {
+     "fields": {
+      "state": {
+       "type": "Number",
+       "va": "0x1819a3524"
+      },
+      "PLAYBACK_STOPPED": {
+       "type": "Number",
+       "va": null,
+       "value": "0",
+       "static": true
+      },
+      "PLAYBACK_PLAYING": {
+       "type": "Number",
+       "va": null,
+       "value": "1",
+       "static": true
+      },
+      "PLAYBACK_PAUSED": {
+       "type": "Number",
+       "va": null,
+       "value": "2",
+       "static": true
+      }
+     },
+     "jsDefinedIn": "baseclasses.js — PLAYBACK_STOPPED=0 / PLAYBACK_PLAYING=1 / PLAYBACK_PAUSED=2 가 JS static 필드로 실재한다(네이티브 문자열 없음)"
+    },
+    "MediaStatusEvent": {
+     "fields": {
+      "enabled": {
+       "type": "Boolean",
+       "va": "0x1819a3540"
+      }
+     }
+    },
+    "MediaPropertiesEvent": {
+     "fields": {
+      "title": {
+       "type": "String",
+       "va": "0x1819a3468"
+      },
+      "artist": {
+       "type": "String",
+       "va": "0x1819a3470"
+      },
+      "subTitle": {
+       "type": "String",
+       "va": "0x1819a3498"
+      },
+      "albumTitle": {
+       "type": "String",
+       "va": "0x1819a3488"
+      },
+      "albumArtist": {
+       "type": "String",
+       "va": "0x1819a3478"
+      },
+      "genres": {
+       "type": "String",
+       "va": "0x1819a34a4"
+      },
+      "contentType": {
+       "type": "String",
+       "va": "0x1819a34b0"
+      }
+     }
+    },
+    "MediaThumbnailEvent": {
+     "fields": {
+      "hasThumbnail": {
+       "type": "Boolean",
+       "va": "0x1819a34c0"
+      },
+      "primaryColor": {
+       "type": "Vec3",
+       "va": "0x1819a34d0"
+      },
+      "secondaryColor": {
+       "type": "Vec3",
+       "va": "0x1819a34e0"
+      },
+      "tertiaryColor": {
+       "type": "Vec3",
+       "va": "0x1819a34f0"
+      },
+      "textColor": {
+       "type": "Vec3",
+       "va": "0x1819a3500"
+      },
+      "highContrastColor": {
+       "type": "Vec3",
+       "va": "0x1819a3510"
+      }
+     }
+    },
+    "MediaTimelineEvent": {
+     "fields": {
+      "position": {
+       "type": "Number",
+       "va": "0x1819a2f08"
+      },
+      "duration": {
+       "type": "Number",
+       "va": "0x1819a3530"
+      }
+     }
+    },
+    "CameraTransforms": {
+     "fields": {
+      "eye": {
+       "type": "Vec3",
+       "va": "0x1819a35b0"
+      },
+      "center": {
+       "type": "Vec3",
+       "va": "0x1819a35b4"
+      },
+      "up": {
+       "type": "Vec3",
+       "va": "0x1819a35bc"
+      },
+      "zoom": {
+       "type": "Number",
+       "va": "0x1819a35c0"
+      }
+     }
+    },
+    "AudioBuffers": {
+     "fields": {
+      "left": {
+       "type": "Float32Array",
+       "va": "0x1819a3548"
+      },
+      "right": {
+       "type": "Float32Array",
+       "va": "0x1819a3550"
+      },
+      "average": {
+       "type": "Float32Array",
+       "va": "0x1819a3558"
+      }
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    },
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsclasses/baseclasses.js (1457행, 38,646B)"
+    }
+   ]
+  },
+  {
+   "id": "script.api.vectors",
+   "value": {
+    "definedIn": "assets/scripts/jsclasses/baseclasses.js — 순수 JS. 네이티브 바인딩이 아니다",
+    "dtsVsJs": "d.ts 선언과 JS 구현이 Vec2/Vec3/Vec4/Mat4 에서 정확히 일치한다(onlyInDts 전부 빈 배열) — 선언이 실물을 따라간다는 뜻이라 d.ts 를 근거로 쓸 수 있다",
+    "undocumentedInJS": {
+     "Vec2": [
+      "toConfigString"
+     ],
+     "Vec3": [
+      "toConfigString"
+     ],
+     "Vec4": [
+      "toConfigString"
+     ],
+     "Mat3": [
+      "forward",
+      "right",
+      "toConfigString",
+      "up"
+     ],
+     "Mat4": [
+      "toConfigString"
+     ]
+    },
+    "undocumentedNote": "toConfigString 은 다섯 클래스 모두에 있으나 d.ts 에 없다(설정 직렬화용). Mat3.right()/up()/forward() 는 구현돼 있는데 d.ts 가 Mat4 쪽에만 선언한다",
+    "epsilon": 1e-05,
+    "angleUnit": "도(degree). deg2rad/rad2deg 상수가 파일 상단에 있고 angle()/rotate()/fromRotation()/fromEuler() 가 전부 도를 쓴다",
+    "matrixLayout": "컬럼메이저. Mat4.m[12..14] = 평행이동, Mat3.m[6..7] = 평행이동",
+    "toConfigString": "모든 클래스가 toString 과 동일한 공백구분 문자열을 낸다 — 설정 왕복 형식",
+    "classes": {
+     "Vec2": {
+      "jsMethods": [
+       "constructor",
+       "length",
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "normalize",
+       "copy",
+       "equals",
+       "isFinite",
+       "negate",
+       "add",
+       "subtract",
+       "multiply",
+       "divide",
+       "dot",
+       "reflect",
+       "perpendicular",
+       "project",
+       "angle",
+       "angleBetween",
+       "rotate",
+       "mix",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ],
+      "jsStatics": [],
+      "jsMethodCount": 36,
+      "onlyInJS": [
+       "toConfigString"
+      ],
+      "onlyInDts": []
+     },
+     "Vec3": {
+      "jsMethods": [
+       "constructor",
+       "length",
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "normalize",
+       "copy",
+       "equals",
+       "isFinite",
+       "negate",
+       "add",
+       "subtract",
+       "multiply",
+       "divide",
+       "cross",
+       "dot",
+       "reflect",
+       "refract",
+       "project",
+       "angleBetween",
+       "toSpherical",
+       "mix",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ],
+      "jsStatics": [
+       "fromSpherical"
+      ],
+      "jsMethodCount": 36,
+      "onlyInJS": [
+       "toConfigString"
+      ],
+      "onlyInDts": []
+     },
+     "Vec4": {
+      "jsMethods": [
+       "constructor",
+       "length",
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "normalize",
+       "copy",
+       "equals",
+       "isFinite",
+       "negate",
+       "add",
+       "subtract",
+       "multiply",
+       "divide",
+       "dot",
+       "reflect",
+       "project",
+       "mix",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ],
+      "jsStatics": [],
+      "jsMethodCount": 32,
+      "onlyInJS": [
+       "toConfigString"
+      ],
+      "onlyInDts": []
+     },
+     "Mat3": {
+      "jsMethods": [
+       "constructor",
+       "right",
+       "up",
+       "forward",
+       "translation",
+       "angle",
+       "add",
+       "subtract",
+       "multiply",
+       "translate",
+       "rotate",
+       "scale",
+       "transformPoint",
+       "transformDirection",
+       "transpose",
+       "determinant",
+       "inverse",
+       "decompose",
+       "copy",
+       "equals",
+       "toString",
+       "toConfigString"
+      ],
+      "jsStatics": [
+       "identity",
+       "fromTranslation",
+       "fromScale",
+       "fromRotation",
+       "fromBasis",
+       "fromMat4",
+       "compose"
+      ],
+      "jsMethodCount": 22,
+      "onlyInJS": [
+       "forward",
+       "right",
+       "toConfigString",
+       "up"
+      ],
+      "onlyInDts": []
+     },
+     "Mat4": {
+      "jsMethods": [
+       "constructor",
+       "translation",
+       "right",
+       "up",
+       "forward",
+       "add",
+       "subtract",
+       "multiply",
+       "translate",
+       "rotate",
+       "scale",
+       "transformPoint",
+       "transformDirection",
+       "transpose",
+       "inverse",
+       "determinant",
+       "extractEuler",
+       "normalMatrix",
+       "decompose",
+       "copy",
+       "equals",
+       "toString",
+       "toConfigString"
+      ],
+      "jsStatics": [
+       "identity",
+       "fromTranslation",
+       "fromScale",
+       "fromRotation",
+       "fromEuler",
+       "fromBasis",
+       "lookAt",
+       "compose"
+      ],
+      "jsMethodCount": 23,
+      "onlyInJS": [
+       "toConfigString"
+      ],
+      "onlyInDts": []
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsclasses/baseclasses.js (1457행, 38,646B)"
+    },
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    }
+   ]
+  },
+  {
+   "id": "script.api.modules",
+   "value": {
+    "resolution": "import ... from 'NAME' → scripts/jsmodules/NAME.js (ES module, export)",
+    "modules": {
+     "WEMath": {
+      "file": "wemath.js",
+      "exports": [
+       "deg2rad",
+       "rad2deg",
+       "smoothStep",
+       "mix"
+      ]
+     },
+     "WEVector": {
+      "file": "wevector.js",
+      "exports": [
+       "angleVector2",
+       "vectorAngle2"
+      ]
+     },
+     "WEColor": {
+      "file": "wecolor.js",
+      "exports": [
+       "rgb2hsv",
+       "hsv2rgb",
+       "normalizeColor",
+       "expandColor"
+      ]
+     }
+    },
+    "WEMath.smoothStep": "실구현은 Hermite: x=clamp((v-min)/(max-min),0,1); return x*x*(3-2*x). d.ts 문구('[0,1] 재매핑')만으로는 선형/Hermite 를 못 가르는데 소스가 가른다",
+    "WEMath.mix": "a+(b-a)*v — 클램프 없음",
+    "WEVector.angleVector2": "도 → (cos, sin) Vec2",
+    "WEColor": "rgb2hsv/hsv2rgb 는 정규화 [0,1] 도메인, normalizeColor/expandColor 가 255 환산"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsmodules/{wemath,wevector,wecolor}.js"
+    },
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    }
+   ]
+  },
+  {
+   "id": "script.api.IModelData",
+   "value": {
+    "createdBy": "thisScene.createModelData(config) / thisScene.destroyModelData(handle)",
+    "vertexFormatConstants": [
+     "POSITION",
+     "NORMAL",
+     "UV",
+     "TANGENT_SIGNED",
+     "COLOR"
+    ],
+    "constantsFrom": "baseclasses.js `this.IModelData = class IModelData {…}` — POSITION/NORMAL/UV/TANGENT_SIGNED/COLOR 문자열 상수와 toConfigString",
+    "shapeConfigKeys": [
+     "vertexBuffer",
+     "indexBuffer",
+     "vertexFormat",
+     "material",
+     "isVertexBufferDynamic",
+     "isIndexBufferDynamic",
+     "shapes",
+     "boundingBoxMins",
+     "boundingBoxMaxs"
+    ],
+    "vertexFormatOrder": "position, normal, tangentSigned, uv, color 순서 고정. 재배열 불가(구성만 켜고 끌 수 있다)",
+    "handleToken": "__modelDataToken — toConfigString 이 이 토큰을 반환한다",
+    "updateRestrictions": [
+     "Vertex buffer size cannot increase",
+     "Index buffer size cannot increase",
+     "Model data not created as dynamic",
+     "Cannot add shapes in IModelData.update",
+     "Cannot delete shape or buffers in IModelData.update",
+     "Material cannot be changed in IModelData.update",
+     "Vertex format cannot be changed in IModelData.update",
+     "Vertex buffer missing.",
+     "Vertex format in incorrect order.",
+     "Vertex format missing.",
+     "IModelData.replace cannot be called in update.",
+     "Cannot execute user command outside of cursor callbacks."
+    ],
+    "applyData_vs_replaceData": "applyData 는 매 프레임 update 에서 호출 가능(버퍼 길이·포맷 동일 전제). replaceData 는 update 안에서 호출 금지 — 예외를 던진다",
+    "coordinateScale": "2D 배경 기본 문맥은 1 유닛 = 1 픽셀. 0~1 정규화 좌표를 쓰지 말라고 명시",
+    "winding": "삼각형 CCW"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsclasses/baseclasses.js (1457행, 38,646B)"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    }
+   ]
+  },
+  {
+   "id": "script.api.ILocalStorage.locations",
+   "value": {
+    "LOCATION_GLOBAL": {
+     "value": "global",
+     "va": "0x1819a3800",
+     "meaning": "모든 배경 인스턴스가 공유"
+    },
+    "LOCATION_SCREEN": {
+     "value": "screen",
+     "va": "0x1819a3818",
+     "meaning": "화면(배경 인스턴스)별. 기본값"
+    },
+    "constVA": {
+     "LOCATION_GLOBAL": "0x1819a3808",
+     "LOCATION_SCREEN": "0x1819a3820"
+    },
+    "methods": [
+     "set",
+     "get",
+     "delete",
+     "clear"
+    ],
+    "methodVA": {
+     "set": "0x1819a37e8",
+     "get": "0x1819a37ec",
+     "delete": "0x1819a37f0",
+     "clear": "0x1819a37f8"
+    },
+    "layout": "set/get/delete/clear/global/screen/LOCATION_GLOBAL/LOCATION_SCREEN 이 0x1819a37e8~0x1819a3830 에 연속 — localStorage 전역(0x1819a3830) 바로 앞",
+    "workshopKey": {
+     "__workshopId": "0x1819a3560",
+     "workshop": "0x1819a3a80",
+     "추정": "저장 네임스페이스를 워크샵 ID 로 가르는 것으로 보이나 미확증"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll .rdata 문자열 군집 0x1819a2b50~0x1819a3c10",
+     "note": "PE 섹션 매핑 후 인쇄가능 런 전수 — scripts/spec/measure_script_api.py"
+    },
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    }
+   ]
+  },
+  {
+   "id": "waple.coverage",
+   "value": {
+    "engine": "JavaScriptCore + 손으로 쓴 shim prelude(TextScriptEngine.swift 내 문자열 리터럴)",
+    "method": "TextScriptEngine.swift 전문에 대한 식별자 grep 이다. missing = 소스 어디에도 그 이름이 없다(강한 주장). 반대로 '있다'는 약한 주장이다 — 올바른 객체에 붙어 있는지도, 의미가 맞는지도 보지 않는다. 예: lookAt 은 카메라 심에만 있고 ILayer 에는 없는데 grep 은 '있음'으로 센다",
+    "loadsBaseclassesJS": false,
+    "shippedButUnused": "Sources/WapleRender/Resources/WEAssets/scripts/ 아래 baseclasses.js·wemath.js·wevector.js·wecolor.js 4개가 WE 설치본과 바이트 동일하게 동봉돼 있으나 Swift 어디에서도 로드하지 않는다",
+    "hooks": {
+     "waple": [
+      "cursorClick",
+      "cursorDown",
+      "cursorUp",
+      "cursorMove",
+      "cursorEnter",
+      "cursorLeave",
+      "animationEvent",
+      "mediaPlaybackChanged",
+      "mediaPropertiesChanged",
+      "mediaThumbnailChanged",
+      "mediaTimelineChanged",
+      "mediaStatusChanged"
+     ],
+     "weTotal": 19,
+     "missing": [
+      "resizeScreen",
+      "destroy",
+      "applyGeneralSettings",
+      "cursorHitTest"
+     ],
+     "note": "init/update/applyUserProperties 는 eventHookNames 밖에서 따로 처리한다"
+    },
+    "vectors": {
+     "Vec2": {
+      "weMethodCount": 35,
+      "wapleMethodCount": 8,
+      "missing": [
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "equals",
+       "isFinite",
+       "negate",
+       "dot",
+       "reflect",
+       "perpendicular",
+       "project",
+       "angle",
+       "angleBetween",
+       "rotate",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ]
+     },
+     "Vec3": {
+      "weMethodCount": 35,
+      "wapleMethodCount": 9,
+      "missing": [
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "equals",
+       "isFinite",
+       "negate",
+       "cross",
+       "dot",
+       "refract",
+       "project",
+       "angleBetween",
+       "toSpherical",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ]
+     },
+     "Vec4": {
+      "weMethodCount": 31,
+      "wapleMethodCount": 0,
+      "missing": [
+       "length",
+       "lengthSqr",
+       "distance",
+       "distanceSqr",
+       "normalize",
+       "copy",
+       "equals",
+       "isFinite",
+       "negate",
+       "add",
+       "subtract",
+       "multiply",
+       "divide",
+       "dot",
+       "reflect",
+       "project",
+       "mix",
+       "min",
+       "max",
+       "clamp",
+       "abs",
+       "sign",
+       "round",
+       "floor",
+       "ceil",
+       "fract",
+       "mod",
+       "step",
+       "smoothStep",
+       "toString",
+       "toConfigString"
+      ]
+     },
+     "Mat3": {
+      "weMethodCount": 21,
+      "wapleMethodCount": 0,
+      "missing": [
+       "right",
+       "up",
+       "forward",
+       "translation",
+       "angle",
+       "add",
+       "subtract",
+       "multiply",
+       "translate",
+       "rotate",
+       "scale",
+       "transformPoint",
+       "transformDirection",
+       "transpose",
+       "determinant",
+       "inverse",
+       "decompose",
+       "copy",
+       "equals",
+       "toString",
+       "toConfigString"
+      ]
+     },
+     "Mat4": {
+      "weMethodCount": 22,
+      "wapleMethodCount": 0,
+      "missing": [
+       "translation",
+       "right",
+       "up",
+       "forward",
+       "add",
+       "subtract",
+       "multiply",
+       "translate",
+       "rotate",
+       "scale",
+       "transformPoint",
+       "transformDirection",
+       "transpose",
+       "inverse",
+       "determinant",
+       "extractEuler",
+       "normalMatrix",
+       "decompose",
+       "copy",
+       "equals",
+       "toString",
+       "toConfigString"
+      ]
+     }
+    },
+    "Mat3": "Waple 에 전무. WE 는 Mat3 를 IEffectLayer.transformAttachmentToTexture 반환형과 Mat4.normalMatrix() 반환형으로 쓴다",
+    "Mat4": "심은 {m:[16]} 평면 객체 + 부모체인 합성뿐. WE Mat4 의 31개 메서드/스태틱 중 인스턴스 메서드는 하나도 없다 — .inverse()/.multiply()/.transformPoint() 호출은 TypeError",
+    "IScene.missing": [
+     "createModelData",
+     "destroyModelData"
+    ],
+    "IScene.presentButStub": "getLayerByID/sortLayer/getInitialLayerConfig 는 이름만 있고 각각 uid 비교·no-op·고정 항등 설정을 돌려준다. destroyLayer 는 배열에서 지우지 않고 툼스톤 처리한다(렌더러 인덱스 규약 때문)",
+    "IEngine.missing": [
+     "registerAsset",
+     "openUserShortcut",
+     "screenResolution",
+     "isObjectValid"
+    ],
+    "IEngine.proxyFallback": "engine 은 Proxy 라 미지 멤버가 noop 객체로 흡수된다. registerAsset/openUserShortcut/screenResolution 호출이 예외로 죽지는 않지만 값은 전부 무의미하다",
+    "ILayer.missing": [
+     "rotateObjectSpace",
+     "lookAtYaw",
+     "getAttachmentIndex",
+     "getAttachmentMatrix",
+     "getAttachmentOrigin",
+     "getAttachmentAngles",
+     "transformAttachmentToTexture",
+     "getEffectCount",
+     "getMaterial",
+     "getMaterialCount",
+     "setMaterialProperty",
+     "executeMaterialFunction",
+     "playSingleAnimation",
+     "destroyAnimationLayer",
+     "getBoneCount",
+     "getBoneIndex",
+     "getBoneParentIndex",
+     "getBoneTransform",
+     "setBoneTransform",
+     "getLocalBoneTransform",
+     "setLocalBoneTransform",
+     "getLocalBoneAngles",
+     "setLocalBoneAngles",
+     "getLocalBoneOrigin",
+     "setLocalBoneOrigin",
+     "applyBonePhysicsImpulse",
+     "resetBonePhysicsSimulation",
+     "getBlendShapeIndex",
+     "getBlendShapeWeight",
+     "setBlendShapeWeight",
+     "addEndedCallback",
+     "parallaxDepth",
+     "getCurrentTime",
+     "setCurrentTime",
+     "join",
+     "rootmotion"
+    ],
+    "ILayer.extraNonWE": "Waple shim 은 WE 에 없는 이름을 다수 만든다(getName/setName/getOrigin/setOrigin/setAngles/setScale/setVisible/setAlpha/setText/getTexture/addChild/playAnimation/…). 실물 스크립트는 이것들을 부르지 않으므로 무해하지만 정본은 아니다",
+    "WEMath": "smoothStep/mix/deg2rad/rad2deg 4개 — 실제 wemath.js 와 표면 일치. 갭 없음",
+    "WEVector": "angleVector2/vectorAngle2 2개 — wevector.js 와 일치. 갭 없음",
+    "WEColor": "rgb2hsv/hsv2rgb 2개. wecolor.js 는 normalizeColor/expandColor 도 export 한다",
+    "input.cursorScreenPosition": "Waple 은 Vec3 로 만든다. d.ts 는 Vec2 — .z 접근 시 동작이 갈린다",
+    "engine.userProperties": "Waple 은 원시값 맵으로 주입한다 — _Internal.convertUserProperties 결과와 일치(정합)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/TextScriptEngine.swift (2067행)"
+    },
+    {
+     "kind": "asset",
+     "ref": "assets/scripts/jsclasses/baseclasses.js (1457행, 38,646B)"
+    },
+    {
+     "kind": "file",
+     "ref": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (2570행, 66,051B)",
+     "note": "편집기 Monaco 자동완성용 공식 배포물 — 헤더 'OFFICIAL SCENESCRIPT TYPE DECLARATION - VERSION 2.8'"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe .rdata 문자열 전수 스캔"
+    }
+   ]
+  }
+ ]
+}

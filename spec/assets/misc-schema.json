@@ -1,0 +1,2174 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_misc_assets.py",
+ "entries": [
+  {
+   "id": "misc.consumerMap",
+   "value": {
+    "zcompat": {
+     "wallpaperui.exe": 2,
+     "webwallpaper64.exe": 1
+    },
+    "assets/zcompat/web": {
+     "webwallpaper64.exe": 1
+    },
+    "assets/zcompat/scene/shaders": {
+     "wallpaperui.exe": 1
+    },
+    "maximumprojectid": {
+     "wallpaperui.exe": 1
+    },
+    "assets/scenes/videoplayer/scene.json": {
+     "wallpaper64.exe": 1,
+     "wallpaperui.exe": 1
+    },
+    "assets/scenes/gifs": {
+     "wallpaper64.exe": 1,
+     "wallpaperui.exe": 1
+    },
+    "projects/temp/gifs": {
+     "wallpaper64.exe": 1,
+     "wallpaperui.exe": 1
+    },
+    "gifscene.json": {
+     "wallpaper64.exe": 1,
+     "wallpaperui.exe": 1
+    },
+    "videotex": {
+     "ui/dist/scripts/scripts.js": 3,
+     "wallpaper64.exe": 1,
+     "wallpaperui.exe": 2
+    },
+    "assets/scenes/particleeditor/project.json": {
+     "wallpaperui.exe": 1
+    },
+    "assets/scenes/particleeditor3dscale/project.json": {
+     "wallpaperui.exe": 1
+    },
+    "assets/scenes/modeleditor/project.json": {
+     "wallpaperui.exe": 1
+    },
+    "scenes/particleelementpreviews/": {
+     "wallpaperui.exe": 1
+    },
+    "assets/particles/example.json": {
+     "ui/dist/scripts/scripts.js": 1,
+     "wallpaperui.exe": 1
+    },
+    "assets/particles/example3d.json": {
+     "ui/dist/scripts/scripts.js": 1
+    },
+    "declarations.json": {
+     "wallpaperui.exe": 1
+    },
+    "preset.json": {
+     "wallpaperui.exe": 1
+    },
+    "scripts/jsclasses/baseclasses.js": {
+     "scenescript64.dll": 1
+    },
+    "scripts/jsmodules/": {
+     "scenescript64.dll": 1
+    },
+    "models/util/solidlayer.json": {
+     "scenescript64.dll": 1,
+     "wallpaperui.exe": 1
+    },
+    "models/util/solidlayer_depthtest.json": {
+     "scenescript64.dll": 1,
+     "wallpaperui.exe": 1
+    },
+    "models/util/": {
+     "scenescript64.dll": 2,
+     "wallpaperui.exe": 6
+    },
+    "materials/util/": {
+     "wallpaper64.exe": 34,
+     "wallpaperui.exe": 41
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe / bin/scenescript64.dll / bin/webwallpaper64.exe / bin/wallpaperui.exe / ui/dist/scripts/scripts.js 바이트 카운트",
+     "note": "런타임(앞 3개)에 없고 UI 에만 있으면 에디터 전용이다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "misc.distributionIsCopy",
+   "value": {
+    "wallpaper64.exe": true,
+    "scenescript64.dll": true,
+    "webwallpaper64.exe": true,
+    "wallpaperui.exe": true
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "distribution/ 아래 사본과 sha256[:16] 대조",
+     "note": "동일하므로 문자열 카운트에서 distribution/ 은 제외한다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.web.files",
+   "value": {
+    "780658164.json": {
+     "sha16": "f93f21c387bdc410",
+     "bytes": 533,
+     "actionCount": 4,
+     "files": [
+      "index_files/index.min.js.Download",
+      "js/index.min.js",
+      "js/index2.min.js",
+      "js/index3.min.js"
+     ]
+    },
+    "780662613.json": {
+     "sha16": "f93f21c387bdc410",
+     "bytes": 533,
+     "actionCount": 4,
+     "files": [
+      "index_files/index.min.js.Download",
+      "js/index.min.js",
+      "js/index2.min.js",
+      "js/index3.min.js"
+     ]
+    },
+    "780675904.json": {
+     "sha16": "f93f21c387bdc410",
+     "bytes": 533,
+     "actionCount": 4,
+     "files": [
+      "index_files/index.min.js.Download",
+      "js/index.min.js",
+      "js/index2.min.js",
+      "js/index3.min.js"
+     ]
+    },
+    "784979889.json": {
+     "sha16": "09be69d3f19dea0d",
+     "bytes": 264,
+     "actionCount": 1,
+     "files": [
+      "js/index.js"
+     ]
+    },
+    "854685299.json": {
+     "sha16": "f93f21c387bdc410",
+     "bytes": 533,
+     "actionCount": 4,
+     "files": [
+      "index_files/index.min.js.Download",
+      "js/index.min.js",
+      "js/index2.min.js",
+      "js/index3.min.js"
+     ]
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.web.schema",
+   "value": {
+    "path": "assets/zcompat/web/<steamWorkshopId>.json",
+    "root": {
+     "actions": "배열"
+    },
+    "action": {
+     "file": "월페이퍼 디렉터리 기준 상대 경로",
+     "replace": "찾을 문자열 리터럴",
+     "insert": "대체할 문자열 리터럴"
+    },
+    "note": "정규식이 아니라 리터럴이다. 대상은 워크샵 아이템이 배포한 .js 파일이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.web.consumer",
+   "value": {
+    "binary": "bin/webwallpaper64.exe",
+    "function": {
+     "start": "0x14000bd80",
+     "end": "0x14000d978"
+    },
+    "symbols": {
+     "431960": {
+      "stringVA": [
+       "0x14011ab3c"
+      ],
+      "codeRefs": [
+       "0x14000c404"
+      ]
+     },
+     "assets/zcompat/web": {
+      "stringVA": [
+       "0x14011ab48"
+      ],
+      "codeRefs": [
+       "0x14000c47c"
+      ]
+     },
+     ".json": {
+      "stringVA": [
+       "0x14011ab5c"
+      ],
+      "codeRefs": [
+       "0x14000c4d0",
+       "0x14000c4ea"
+      ]
+     },
+     "actions": {
+      "stringVA": [
+       "0x14011ab68"
+      ],
+      "codeRefs": [
+       "0x14000c758"
+      ]
+     },
+     "file": {
+      "stringVA": [
+       "0x14011ab70"
+      ],
+      "codeRefs": [
+       "0x14000c82d",
+       "0x14000c899",
+       "0x140018ced"
+      ]
+     },
+     "replace": {
+      "stringVA": [
+       "0x14011ab78"
+      ],
+      "codeRefs": [
+       "0x14000c851",
+       "0x14000c8bf"
+      ]
+     },
+     "insert": {
+      "stringVA": [
+       "0x14011ab80"
+      ],
+      "codeRefs": [
+       "0x14000c875",
+       "0x14000c8e5"
+      ]
+     },
+     "Failed writing compat fix at %S\n": {
+      "stringVA": [
+       "0x14011ab18"
+      ],
+      "codeRefs": [
+       "0x14000cf7e"
+      ]
+     }
+    },
+    "reading": "웹 월페이퍼 로드 경로에서 실행된다 — 런타임이다. 경로에 Steam AppID 431960 이 있을 때만 동작하고, 패치 결과를 월페이퍼 파일에 되쓴다(실패 시 'Failed writing compat fix at %S')"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/webwallpaper64.exe .pdata 함수 경계 + RIP 상대 LEA 역참조"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.scene.entries",
+   "value": {
+    "2078835426": {
+     "config": {
+      "frag": "pixelate.frag",
+      "maximumprojectid": "9223372036854775807",
+      "vert": "pixelate.vert"
+     },
+     "files": [
+      "config.json",
+      "pixelate.frag",
+      "pixelate.vert"
+     ]
+    },
+    "2084198056": {
+     "config": {
+      "frag": "Simple_Audio_Bars.frag",
+      "maximumprojectid": "2638335396",
+      "vert": "Simple_Audio_Bars.vert"
+     },
+     "files": [
+      "Simple_Audio_Bars.frag",
+      "Simple_Audio_Bars.vert",
+      "config.json"
+     ]
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.scene.consumer",
+   "value": {
+    "binary": "bin/wallpaperui.exe",
+    "function": {
+     "start": "0x14003d1e0",
+     "end": "0x140042434"
+    },
+    "stringVA": "0x140ab5950",
+    "codeRef": "0x14003fb99",
+    "functionIdentity": [
+     " -f ETC2",
+     "-transcode -i \"",
+     "MPKG_VFS://",
+     "ui_browse_mobile_transcoder_error_failed_converting_video",
+     "ui_browse_mobile_transcoder_error_failed_copying_project_file",
+     "ui_browse_mobile_transcoder_error_failed_copying_wallpaper_files",
+     "ui_browse_mobile_transcoder_error_failed_creating_thumbnail",
+     "ui_browse_mobile_transcoder_error_failed_opening_pkg",
+     "ui_browse_mobile_transcoder_error_failed_unpacking_files",
+     "ui_browse_mobile_transcoder_progress_converting_project",
+     "wallpaper.mp4"
+    ],
+    "notInRuntime": {
+     "wallpaper64.exe": 0,
+     "scenescript64.dll": 0
+    },
+    "reading": "'zcompat' 문자열이 씬 렌더러(wallpaper64.exe)에 0회 나온다. scene zcompat 은 wallpaperui.exe 의 모바일 변환(convert to mobile) 함수 안에서만 소비된다 — 데스크톱 재생 경로가 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe 0x14003d1e0-0x140042434 의 리터럴 이웃"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.scene.lookupKey",
+   "value": {
+    "candidateFiles": "프로젝트 루트 기준 첫 경로 요소가 'shaders' 이고 확장자가 .vert/.frag/.geom",
+    "zcompatDir": "assets/zcompat/scene/shaders/<filename(parent(parent(file)))>",
+    "guard": "filename(parent(parent(parent(file)))) 를 대소문자 무시 비교해 'workshop' 이어야 한다",
+    "corpusLayout": "코퍼스 pkg 는 남의 워크샵에서 가져온 셰이더를 shaders/workshop/<originWorkshopId>/... 로 저장한다 — 위 규칙과 정확히 맞는다",
+    "replacement": {
+     ".frag": "config.json 의 'frag' 값",
+     ".vert": "config.json 의 'vert' 값",
+     ".geom": "config.json 에 대응 키가 없다 — 치환되지 않는다"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe FUN@0x14003d0e0 디컴파일 — parent_path 3회 + _stricmp(...,'workshop')"
+    },
+    {
+     "kind": "corpus",
+     "ref": "pkg 엔트리 이름 정규식 ^shaders/workshop/(\\d+)/"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.scene.maximumProjectIdUnused",
+   "value": {
+    "stringVA": [
+     "0x140ab5990"
+    ],
+    "codeRefs": [
+     "0x14003fceb"
+    ],
+    "pointerInDataTables": 0,
+    "assertedBytes": {
+     "from": "0x14003fd24",
+     "to": "0x14003fd44",
+     "hex": "807c24380475174885f67412488d4c2430e8765a1f00488bc8e80ed0fcff488d"
+    },
+    "disassembly": [
+     "CMP byte ptr [RSP+0x38], 0x4     ; JSON 값 타입 == string",
+     "JNZ  0x14003fd42",
+     "TEST RSI,RSI",
+     "JZ   0x14003fd42",
+     "LEA  RCX,[RSP+0x30]",
+     "CALL 0x1402357b0                 ; json string -> const char*",
+     "MOV  RCX,RAX",
+     "CALL 0x14000cd50                 ; strtoull(s, 0, 10)",
+     "LEA  RCX,[RBP+0x698]             ; <- RAX 를 읽지 않는다"
+    ],
+    "reading": "2.8.42 에서 maximumprojectid 는 읽고 10진 파싱까지 하지만 결과를 아무도 쓰지 않는다. 즉 치환은 프로젝트 ID 와 무관하게 무조건 적용된다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe 0x14003fd24..0x14003fd44 바이트 고정 + 0x140ab5990 포인터가 데이터 테이블에 0회"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.scene.corpusImpact",
+   "value": {
+    "scenePkgs": 162,
+    "itemsImportingForeignShaders": 121,
+    "distinctOriginIds": 125,
+    "zcompatCoveredOriginIds": 2,
+    "perZcompatDir": {
+     "2078835426": {
+      "corpusItems": [
+       "2867182492",
+       "3000562427",
+       "3300031038",
+       "3353695150",
+       "3489263099"
+      ],
+      "count": 5,
+      "wouldBeFilteredByMaxProjectId": 5,
+      "maximumprojectid": "9223372036854775807"
+     },
+     "2084198056": {
+      "corpusItems": [
+       "2842323353",
+       "2902406982",
+       "2955378002",
+       "3019043758",
+       "3147346398",
+       "3151551777",
+       "3174556087",
+       "3300031038",
+       "3351179520",
+       "3396722575",
+       "3644280276",
+       "3690417937"
+      ],
+      "count": 12,
+      "wouldBeFilteredByMaxProjectId": 0,
+      "maximumprojectid": "2638335396"
+     }
+    },
+    "distinctAffectedItems": 16,
+    "affectedItems": [
+     "2842323353",
+     "2867182492",
+     "2902406982",
+     "2955378002",
+     "3000562427",
+     "3019043758",
+     "3147346398",
+     "3151551777",
+     "3174556087",
+     "3300031038",
+     "3351179520",
+     "3353695150",
+     "3396722575",
+     "3489263099",
+     "3644280276",
+     "3690417937"
+    ],
+    "note": "maximumprojectid 가 쓰이지 않으므로(zcompat.scene.maximumProjectIdUnused) 무조건 적용 기준의 수가 정본이다. wouldBeFilteredByMaxProjectId 는 참고값"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "zcompat.wapleImpact",
+   "value": {
+    "sceneZcompat": "Waple 0건이 옳다 — 데스크톱 재생 경로에 없다(모바일 익스포트 전용)",
+    "webZcompat": "웹 월페이퍼를 구현할 때만 필요하다. 런타임이고 파일을 되쓴다",
+    "risk": "코퍼스 16개 씬에 대해 WE 데스크톱과 Waple 은 **같은 셰이더 원문을 입력으로 받는다** — WE 도 재생 시에는 치환하지 않기 때문이다. 렌더 결과 동일성은 별개 문제이며 여기서 주장하지 않는다(Swift 툴체인·골든 A/B 없음)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 에 'zcompat' 0회"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "scenes.subtrees",
+   "value": {
+    "gifs": 4,
+    "modeleditor": 2,
+    "particleeditor": 2,
+    "particleeditor3dscale": 2,
+    "particleelementpreviews": 231,
+    "videoplayer": 8,
+    "(합계)": 249
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "scenes.videoplayer.sceneGeneral",
+   "value": {
+    "crossRef": "이 씬의 모델/머티리얼/videotex 배선은 spec/engine/media.json 의 engine.media.mfEngine.videotex 와 engine.media.video.frameworks 가 정본이다. 여기는 그쪽이 안 담은 **씬 general 블록**만 더한다",
+    "general": {
+     "bloom": false,
+     "bloomhdrstrength": 0,
+     "clearcolor": "0.000 0.00 0.000",
+     "orthogonalprojection": {
+      "auto": true
+     },
+     "spritesheetrefreshsync": true
+    },
+    "objectCount": 1,
+    "object": {
+     "angles": "0.000 0.000 0.000",
+     "image": "models/background.json",
+     "origin": "0 0 0.000",
+     "scale": "1.0 1 1.000"
+    },
+    "reading": "번들 비디오 씬은 general 에서 bloom 을 끄고(bloom=false, bloomhdrstrength=0) 직교투영을 auto 로, clearcolor 를 검정으로 고정하고 spritesheetrefreshsync 를 켠다. 오브젝트는 정확히 1개다. 즉 WE 의 비디오 경로는 **씬 파이프라인을 타되 후처리는 명시적으로 비운** 형태다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "scenes.gifs",
+   "value": {
+    "loadedBy": "wallpaper64.exe (리터럴 'assets/scenes/gifs', 'projects/temp/gifs', 'gifscene.json')",
+    "flow": "assets/scenes/gifs 템플릿을 projects/temp/gifs 로 복사하고 .gif 를 함께 복사한 뒤 gifscene.json 을 씬으로 연다",
+    "scene": {
+     "general": {
+      "bloom": false,
+      "clearcolor": "0.000 0.00 0.000",
+      "orthogonalprojection": {
+       "auto": true
+      },
+      "spritesheetrefreshsync": true
+     },
+     "object": {
+      "angles": "0.000 0.000 0.000",
+      "image": "models/background.json",
+      "origin": "0 0 0.000",
+      "scale": "1.0 1 1.000"
+     }
+    },
+    "material": {
+     "passes": [
+      {
+       "cullmode": "nocull",
+       "depthtest": "disabled",
+       "depthwrite": "disabled",
+       "shader": "genericimage",
+       "textures": [
+        "background"
+       ],
+       "combos": {
+        "spritesheet": 1
+       }
+      }
+     ]
+    },
+    "texJson": {
+     "nonpoweroftwo": true,
+     "nointerpolation": true,
+     "clampuvs": true,
+     "nomip": true,
+     "format": "rgba8888"
+    },
+    "reading": "GIF 도 씬이다. videoplayer 와 구조가 같고 텍스처를 스프라이트시트 combo 로 돌린다는 점만 다르다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe: 'assets/scenes/gifs', 'projects/temp/gifs', 'gifscene.json', 'Failed copying gif template from %S to'"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "scenes.particleElementPreviews",
+   "value": {
+    "count": 48,
+    "files": 231,
+    "elements": [
+     "alphachange",
+     "alphafade",
+     "alpharandom",
+     "angularmovement",
+     "angularvelocityrandom",
+     "boids",
+     "boxrandom",
+     "capvelocity",
+     "collisionbounds",
+     "collisionmodel",
+     "collisionplane",
+     "collisionquad",
+     "collisionsphere",
+     "colorchange",
+     "colorlist",
+     "colorrandom",
+     "controlpointattract",
+     "hsvcolorrandom",
+     "inheritcontrolpointvelocity",
+     "inheritinitialvaluefromevent",
+     "inheritvaluefromevent",
+     "layerimage",
+     "lifetimerandom",
+     "maintaindistancebetweencontrolpoints",
+     "maintaindistancetocontrolpoint",
+     "mapsequencearoundcontrolpoint",
+     "mapsequencebetweencontrolpoints",
+     "movement",
+     "oscillatealpha",
+     "oscillateposition",
+     "oscillatesize",
+     "positionoffsetrandom",
+     "reducemovementnearcontrolpoint",
+     "remapinitialvalue",
+     "remapvalue",
+     "rope",
+     "ropetrail",
+     "rotationrandom",
+     "sizechange",
+     "sizerandom",
+     "sphererandom",
+     "sprite",
+     "spritetrail",
+     "turbulence",
+     "turbulentvelocityrandom",
+     "velocityrandom",
+     "vortex",
+     "vortex_v2"
+    ],
+    "layout": "<element>/{project.json, scene.json, particles/new_particle_system.json, materials/particle/halo_1.json} (+ 일부는 template.json / effects / models)",
+    "consumer": "bin/wallpaperui.exe (리터럴 'scenes/particleelementpreviews/' + '/project.json')",
+    "reading": "에디터가 파티클 요소(emitter/initializer/operator/renderer)를 고를 때 보여주는 미리보기 씬들이다. 부수적으로 **WE 가 문서화하는 파티클 요소 이름 목록**이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe 'scenes/particleelementpreviews/'"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "scenes.videoplayerShaderBlobs",
+   "value": {
+    "path": "scenes/videoplayer/shaders/blobsSM40/<40자 hex>.dxs",
+    "files": {
+     "011d928bbe4fd8d46d91c2aba72c9deeeaaf41dc.dxs": {
+      "bytes": 2887,
+      "magic": "SHDV0069",
+      "payloadTag": "\u0000DX",
+      "declaredSize": 253952
+     },
+     "1aa4fb0aeda3b649b2f880c9c744fc4bcf311fa2.dxs": {
+      "bytes": 3670,
+      "magic": "SHDV0069",
+      "payloadTag": "\u0000DX",
+      "declaredSize": 388096
+     },
+     "381e2d24b193d4203c6b32db817e553d186ecec7.dxs": {
+      "bytes": 3670,
+      "magic": "SHDV0069",
+      "payloadTag": "\u0000DX",
+      "declaredSize": 388096
+     },
+     "4889eab208d5d1dd0238d6de6016503a78761d11.dxs": {
+      "bytes": 3072,
+      "magic": "SHDV0069",
+      "payloadTag": "\u0000DX",
+      "declaredSize": 429056
+     },
+     "be980a718f19b831f952cc29cb39fd0d5871c168.dxs": {
+      "bytes": 1610,
+      "magic": "SHDV0069",
+      "payloadTag": "\u0000DX",
+      "declaredSize": 159744
+     }
+    },
+    "measured": "매직 'SHDV0069' + u32 + 오프셋 12에 'DXB'(DXBC 컨테이너). 파일명은 전부 40자 hex, 디렉터리 이름은 blobsSM40",
+    "reading": "컴파일된 D3D 셰이더 바이너리다(SM4.0). Metal 이식에는 못 쓴다. 번들 씬에도 이 캐시가 동봉된다는 사실만 기록한다. 파일명이 소스 해시인지 조합 키인지는 확인하지 않았다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "scenes.editorHosts",
+   "value": {
+    "particleeditor": "assets/scenes/particleeditor/project.json",
+    "particleeditor3dscale": "assets/scenes/particleeditor3dscale/project.json",
+    "modeleditor": "assets/scenes/modeleditor/project.json",
+    "consumer": "bin/wallpaperui.exe 전용",
+    "reading": "파티클/모델 에디터가 편집 대상을 띄우는 호스트 씬. 런타임 무관"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe 리터럴"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "particles.templates",
+   "value": {
+    "files": [
+     "example.json",
+     "example3d.json",
+     "examplecursoravoid.json",
+     "examplecursorfollow.json",
+     "exampleturbolence.json",
+     "exampleturbolence3d.json"
+    ],
+    "referencedInEditorUI": {
+     "example.json": 1,
+     "example3d.json": 1,
+     "examplecursoravoid.json": 1,
+     "examplecursorfollow.json": 1,
+     "exampleturbolence.json": 1,
+     "exampleturbolence3d.json": 1
+    },
+    "uiLists": [
+     "particleDefaultPresets",
+     "particleDefaultPresets3d"
+    ],
+    "reading": "6개 전부 에디터가 '새 파티클 시스템'을 만들 때 쓰는 시작 템플릿이다. 런타임 바이너리에는 없다 — Waple 은 0건이어도 된다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "ui/dist/scripts/scripts.js 의 particleDefaultPresets/3d 목록"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/wallpaperui.exe 'assets/particles/example.json'"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "models.util.archetypes",
+   "value": {
+    "files": {
+     "composelayer.json": {
+      "material": "materials/util/composelayer.json",
+      "passthrough": true
+     },
+     "composelayer_depthtest.json": {
+      "material": "materials/util/composelayer_depthtest.json",
+      "passthrough": true
+     },
+     "fullscreenlayer.json": {
+      "material": "materials/util/fullscreenlayer.json",
+      "fullscreen": true,
+      "passthrough": true
+     },
+     "projectlayer.json": {
+      "material": "materials/util/composelayer.json",
+      "passthrough": true,
+      "autosize": true,
+      "projectlayer": true
+     },
+     "solidlayer.json": {
+      "material": "materials/util/solidlayer.json",
+      "solidlayer": true
+     },
+     "solidlayer_depthtest.json": {
+      "material": "materials/util/solidlayer_depthtest.json",
+      "solidlayer": true
+     }
+    },
+    "distinctKeys": [
+     "autosize",
+     "fullscreen",
+     "material",
+     "passthrough",
+     "projectlayer",
+     "solidlayer"
+    ],
+    "reading": "6개는 씬 JSON 의 오브젝트가 \"image\": \"models/util/<name>.json\" 으로 직접 참조하는 **공유 레이어 원형**이다. 워크샵 pkg 는 이걸 동봉하지 않는다. 각 파일은 material 경로 하나 + 불리언 플래그 몇 개가 전부다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "models.util.flagSemantics",
+   "value": {
+    "passthrough": "머티리얼 패스를 그대로 통과시키는 레이어로 읽힌다",
+    "fullscreen": "화면 전체 쿼드로 읽힌다",
+    "autosize": "텍스처 해상도에 맞춰 크기 자동으로 읽힌다",
+    "projectlayer": "프로젝트(투사) 레이어로 읽힌다",
+    "solidlayer": "단색/솔리드 레이어로 읽힌다",
+    "왜 추정인가": "플래그 이름과 참조 머티리얼로부터의 해석이다. wallpaper64.exe 는 이 키 이름들을 문자열로 갖고 있지만(passthrough/solidlayer/projectlayer/nopadding/autosize) 각각의 렌더 동작을 디스어셈블로 확인하지는 않았다"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 에 키 이름 리터럴 존재"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "misc.corpusSharedAssetReferences",
+   "value": {
+    "measurement": "pkg blob **본문** 정규식. 엔트리 이름이 아니다 — 공유 에셋 경로는 코드 리터럴이 아니라 씬/머티리얼 JSON 데이터에서 온다",
+    "itemsPerName": "그 이름을 참조하는 pkg 개수(한 pkg 안 중복은 1)",
+    "patterns": {
+     "assets/ absolute": {
+      "items": 0,
+      "rawMatches": 0,
+      "itemsPerName": {}
+     },
+     "jsmodule import": {
+      "items": 63,
+      "rawMatches": 854,
+      "itemsPerName": {
+       "from 'WEMath'": 57,
+       "from 'WEColor'": 11,
+       "from 'WEVector'": 10
+      }
+     },
+     "materials/util": {
+      "items": 52,
+      "rawMatches": 94,
+      "itemsPerName": {
+       "materials/util/solidlayer_instance_4.json": 42,
+       "materials/util/solidlayer_instance.json": 8,
+       "materials/util/solidlayer_instance_depthtest_4.json": 5,
+       "materials/util/effectcomposebackground.json": 3
+      }
+     },
+     "models/util": {
+      "items": 115,
+      "rawMatches": 1031,
+      "itemsPerName": {
+       "models/util/solidlayer.json": 84,
+       "models/util/composelayer.json": 73,
+       "models/util/fullscreenlayer.json": 55,
+       "models/util/projectlayer.json": 21,
+       "models/util/solidlayer_depthtest.json": 5
+      }
+     },
+     "presets copy": {
+      "items": 105,
+      "rawMatches": 1528,
+      "itemsPerName": {
+       "materials/presets/trail_1.json": 26,
+       "particles/presets/trail_1.json": 26,
+       "materials/presets/snowperspective.json": 21,
+       "particles/presets/snowperspective.json": 21,
+       "materials/presets/ember.json": 20,
+       "particles/presets/ember.json": 20,
+       "materials/presets/emberglow.json": 19,
+       "particles/presets/emberglow.json": 19,
+       "materials/presets/fireflies.json": 18,
+       "particles/presets/fireflies.json": 18
+      }
+     },
+     "util texture": {
+      "items": 144,
+      "rawMatches": 1449,
+      "itemsPerName": {
+       "\"util/noise\"": 108,
+       "\"util/black\"": 103,
+       "\"util/white\"": 98,
+       "\"util/noflow\"": 83,
+       "\"util/clouds_256\"": 67,
+       "\"util/perlin_256\"": 13,
+       "\"util/uniform_256\"": 6
+      }
+     }
+    },
+    "crossRef": "materials/util 상세 카탈로그는 spec/assets/material-schema.json 의 material.util.* 가 정본이다. 여기서는 models/util 대조용으로만 같이 센다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "pkg blob 본문 정규식"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "models.util.runtimeProof",
+   "value": {
+    "corpusItemsReferencing": 115,
+    "scenePkgs": 162,
+    "perFileItems": {
+     "models/util/solidlayer.json": 84,
+     "models/util/composelayer.json": 73,
+     "models/util/fullscreenlayer.json": 55,
+     "models/util/projectlayer.json": 21,
+     "models/util/solidlayer_depthtest.json": 5
+    },
+    "weOwnProjects": [
+     "projects/defaultprojects/dino_run/scene.json",
+     "projects/defaultprojects/neon_sunset/scene.json"
+    ],
+    "reading": "wallpaper64.exe 에 'models/util/' 리터럴이 없다고 에디터 전용이 아니다. 경로는 씬 JSON 데이터에서 온다. 코퍼스 115/162 씬이 참조하므로 런타임 필수다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "WE 기본 프로젝트 scene.json 의 \"image\":\"models/util/fullscreenlayer.json\""
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "models.editorCamera",
+   "value": {
+    "path": "models/editor/camera/camera.mdl",
+    "bytes": 36668,
+    "magic": "MDLV0017",
+    "reading": "에디터 뷰포트의 카메라 기즈모 메시. 런타임 무관"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "presets.catalogue",
+   "value": {
+    "categories": 20,
+    "libraryFiles": 217,
+    "perCategory": {
+     "abstract": {
+      "name": "ui_editor_preset_abstract_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 1,
+      "previews": [
+       "previewdna/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "bubbles": {
+      "name": "ui_editor_preset_bubbles_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 2,
+      "previews": [
+       "previewbubbles1/project.json",
+       "previewbubbles2/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "clock": {
+      "name": "ui_editor_preset_clock_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 2,
+      "previews": [
+       "previewclock/project.json",
+       "preview3dclock/project.json"
+      ],
+      "dependencyKinds": [],
+      "dependencyForms": []
+     },
+     "countdown": {
+      "name": "ui_editor_preset_countdown_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 1,
+      "previews": [
+       "previewcountdown/project.json"
+      ],
+      "dependencyKinds": [],
+      "dependencyForms": []
+     },
+     "ember": {
+      "name": "ui_editor_preset_ember_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 3,
+      "previews": [
+       "preview_beams/project.json",
+       "preview_large/project.json",
+       "preview_small/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "fern": {
+      "name": null,
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "flat",
+      "disabledKeys": [
+       "DISABLED_name"
+      ],
+      "variants": 1,
+      "previews": [
+       "preview/project.json"
+      ],
+      "dependencyKinds": [
+       "effects",
+       "materials",
+       "models"
+      ],
+      "dependencyForms": [
+       "{file,node}",
+       "문자열"
+      ]
+     },
+     "fire": {
+      "name": "ui_editor_preset_fire_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 2,
+      "previews": [
+       "previewtorch/project.json",
+       "previewwildfire/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "fireworks": {
+      "name": "ui_editor_preset_fireworks_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 3,
+      "previews": [
+       "preview_fireworks1/project.json",
+       "preview_fireworks2/project.json",
+       "preview_fireworks3/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "fog": {
+      "name": "ui_editor_preset_fog_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 2,
+      "previews": [
+       "previewfog1/project.json",
+       "previewfog2/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "interactive": {
+      "name": "ui_editor_preset_interactive_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 4,
+      "previews": [
+       "previewtrails0/project.json",
+       "previewtrails1/project.json",
+       "previewtrails2/project.json",
+       "previewfireflies/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "leaves": {
+      "name": "ui_editor_preset_leaves_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 5,
+      "previews": [
+       "previewleaves1/project.json",
+       "previewleaves2/project.json",
+       "previewleaves3/project.json",
+       "previewleaves4/project.json",
+       "previewleaves5/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "lightning": {
+      "name": "ui_editor_preset_lightning_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 5,
+      "previews": [
+       "previewlightning1/project.json",
+       "previewlightning2/project.json",
+       "previewdischarge/project.json",
+       "previewdischargearc/project.json",
+       "previewthunderbolt/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "lightshafts": {
+      "name": "ui_editor_preset_light_shafts_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 7,
+      "previews": [
+       "previewlscorner/project.json",
+       "previewlsradial/project.json",
+       "previewlslinear/project.json",
+       "previewdustmotes0/project.json",
+       "previewlightshafts0/project.json",
+       "previewlightshafts1/project.json",
+       "previewlightshafts2/project.json"
+      ],
+      "dependencyKinds": [
+       "effects",
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "{file}",
+       "문자열"
+      ]
+     },
+     "magic": {
+      "name": "ui_editor_preset_magic_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 13,
+      "previews": [
+       "previewcharge/project.json",
+       "previewsparkle/project.json",
+       "previewgravitation/project.json",
+       "previewvortex0/project.json",
+       "previewvortex1/project.json",
+       "previewglyphs0/project.json",
+       "previewglyphs1/project.json",
+       "previewfocus/project.json",
+       "previewtrinity/project.json",
+       "previewpulse/project.json",
+       "previewpowerup/project.json",
+       "previewcolorsparkle/project.json",
+       "previewvortexorb/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "rain": {
+      "name": "ui_editor_preset_rain_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 6,
+      "previews": [
+       "previewperspective/project.json",
+       "previewdownpour/project.json",
+       "previewrefractive/project.json",
+       "previewrainsplashes/project.json",
+       "previewrainscreen/project.json",
+       "previewrainscreen/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "smoke": {
+      "name": "ui_editor_preset_smoke_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 5,
+      "previews": [
+       "previewvapor0/project.json",
+       "previewvapor1/project.json",
+       "previewsmoke2/project.json",
+       "previewsmoke1/project.json",
+       "previewash/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "snow": {
+      "name": "ui_editor_preset_snow_particles_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 3,
+      "previews": [
+       "previewperspective/project.json",
+       "previewflat/project.json",
+       "previewstorm/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "spark": {
+      "name": "ui_editor_preset_spark_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 1,
+      "previews": [
+       "preview/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "stars": {
+      "name": "ui_editor_preset_stars_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 3,
+      "previews": [
+       "previewstarfield/project.json",
+       "previewstarcircle/project.json",
+       "previewshootingstar/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     },
+     "water": {
+      "name": "ui_editor_preset_water_title",
+      "tag": "scene2d",
+      "group": "preset",
+      "schemaShape": "variants",
+      "disabledKeys": [],
+      "variants": 6,
+      "previews": [
+       "previewdrippingwater/project.json",
+       "previewdrippingwatersingle/project.json",
+       "previewwaterdropletsperiodic/project.json",
+       "previewwaterfaucet/project.json",
+       "previewwaterfaucetlarge/project.json",
+       "previewwaterimpact/project.json"
+      ],
+      "dependencyKinds": [
+       "materials",
+       "particles"
+      ],
+      "dependencyForms": [
+       "문자열"
+      ]
+     }
+    },
+    "presetJsonFiles": 81,
+    "schemaMix": {
+     "objects": 7,
+     "variants": 74
+    },
+    "legacySchemaFiles": [
+     "presets/fern/preset.json",
+     "presets/fern/preview/presets/fern/preset.json",
+     "presets/interactive/previewfireflies/presets/fireflies/preset.json",
+     "presets/rain/previewrefractive/presets/refractiverain/preset.json",
+     "presets/snow/previewflat/presets/snowparticles/preset.json",
+     "presets/spark/preview/presets/spark/preset.json",
+     "presets/stars/previewstarfield/presets/stars/preset.json"
+    ],
+    "schemaNote": "preset.json 은 두 형태가 공존한다. 신형은 options.droplistOptions + variants[]{preview,objects,dependencies}, 구형은 최상위에 preview/objects/dependencies 를 바로 둔다(variants 없음). 구형 일부는 tag 대신 'scene':'2d' 를 쓴다",
+    "disabledConvention": "키 앞에 DISABLED_ 를 붙여 항목을 끈다 — 예: presets/fern/preset.json 의 'DISABLED_name'. name 이 없는 프리셋은 에디터 목록에 안 뜬다는 뜻으로 읽힌다(추정 아님: 키 실재)",
+    "descriptorSchema": {
+     "name": "로케일 키",
+     "description": "로케일 키",
+     "tag": "scene2d 등",
+     "group": "preset",
+     "options.droplistOptions": "[{label, value}]",
+     "variants[].preview": "미니 프로젝트 project.json 경로",
+     "variants[].objects": "씬에 삽입할 오브젝트 배열",
+     "variants[].dependencies": "프로젝트로 복사할 파일 목록"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "presets.editorOnly",
+   "value": {
+    "runtimeLiteral": {
+     "wallpaper64.exe 'preset.json'": 0,
+     "wallpaperui.exe 'preset.json'": 1
+    },
+    "corpusItemsWithCopies": 105,
+    "corpusEntries": 670,
+    "distinctNames": 128,
+    "namesFoundInSharedLibrary": 128,
+    "contentClassification": {
+     "바이트 동일": 436,
+     "이름 동일·내용 변경": 234
+    },
+    "corpusPathsIntoAssetsPresets": 0,
+    "sharedFallbackDirsExist": {
+     "assets/materials/presets": false,
+     "assets/particles/presets": false
+    },
+    "reading": "assets/presets/ 는 **에디터 콘텐츠 라이브러리**다. 에디터가 preset.json 의 variants[].dependencies 를 프로젝트로 복사하므로, 워크샵 프로젝트는 항상 자기 사본을 들고 다닌다. 런타임이 assets/presets/ 를 해석하는 일은 없다. 코퍼스에서 이름은 128/128 가 공유 라이브러리에 있고 상당수는 바이트까지 같다 — 복사본이라는 직접 증거다. 게다가 공유 에셋에는 materials/presets/ 도 particles/presets/ 도 아예 없으므로, 프로젝트가 사본을 빠뜨리면 **폴백이 없다**"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "binary",
+     "ref": "'preset.json' 은 bin/wallpaperui.exe 에만 있다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "presets.jsonTrailingCommas",
+   "value": {
+    "bundledJsonFiles": 1996,
+    "strictParseFailuresAllTrees": 31,
+    "failuresByTree": {
+     "effects": 27,
+     "presets": 4
+    },
+    "presetsFailures": [
+     {
+      "path": "presets/fern/preview/presets/fern/preset.json",
+      "needs": "comment"
+     },
+     {
+      "path": "presets/snow/previewflat/presets/snowparticles/preset.json",
+      "needs": "comment"
+     },
+     {
+      "path": "presets/water/preset.json",
+      "needs": "trailing-comma"
+     },
+     {
+      "path": "presets/water/previewwaterfaucet/presets/water/preset.json",
+      "needs": "trailing-comma"
+     }
+    ],
+    "corpusPkgJsonEntries": 10470,
+    "corpusStrictParseFailures": 0,
+    "presetsNeeds": {
+     "comment": 2,
+     "trailing-comma": 2
+    },
+    "crossRef": "effects/·materials/ 쪽 27개는 spec/assets/material-schema.json 의 material.jsonDialect / waple.gap.strictJSON 이 정본이다. 여기서는 presets/ 4개만 새로 더한다",
+    "reading": "WE 의 JSON 방언은 **후행 쉼표와 `//` 줄 주석**을 둘 다 허용한다. presets/ 의 4개가 엄격 파서로 거부되고 needs 로 분류하면 {'comment': 2, 'trailing-comma': 2} 다. 워크샵 pkg 안 JSON 은 10470개 전건 엄격 통과 — 비엄격 JSON 은 WE 배포 에셋 원본에만 있다. Waple 이 presets 를 읽을 계획이 없으면 무해하지만, 동봉 에셋 로더가 트리 전체를 훑는 순간 이것들이 조용히 실패한다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "scripts.assetInventory",
+   "value": {
+    "files": {
+     "scripts/jsclasses/baseclasses.js": 38646,
+     "scripts/jsmodules/wecolor.js": 1178,
+     "scripts/jsmodules/wemath.js": 275,
+     "scripts/jsmodules/wevector.js": 305
+    },
+    "moduleExports": {
+     "wecolor.js": {
+      "exports": [
+       "expandColor",
+       "hsv2rgb",
+       "normalizeColor",
+       "rgb2hsv"
+      ],
+      "imports": []
+     },
+     "wemath.js": {
+      "exports": [
+       "deg2rad",
+       "mix",
+       "rad2deg",
+       "smoothStep"
+      ],
+      "imports": []
+     },
+     "wevector.js": {
+      "exports": [
+       "angleVector2",
+       "vectorAngle2"
+      ],
+      "imports": [
+       "WEMath"
+      ]
+     }
+    },
+    "resolution": "bin/scenescript64.dll 이 'scripts/jsmodules/' + <모듈명> + '.js' 로 만든다",
+    "nameMapping": {
+     "WEMath": "wemath.js",
+     "WEColor": "wecolor.js",
+     "WEVector": "wevector.js"
+    },
+    "nested": "wevector.js 자신이 `import * as WEMath from 'WEMath'` 를 한다 — 모듈 간 import 가 된다",
+    "topLevelSymbolsOfBaseclasses": {
+     "class": [
+      "Vec2",
+      "Vec3",
+      "Vec4",
+      "Mat3",
+      "Mat4",
+      "MediaPlaybackEvent"
+     ],
+     "const": [
+      "_Epsilon",
+      "deg2rad",
+      "rad2deg"
+     ],
+     "function": [
+      "stringifyAdapter"
+     ],
+     "var": [
+      "vars",
+      "obj"
+     ]
+    },
+    "crossRef": "클래스 메서드 표·d.ts 대조·네이티브 핸들은 spec/engine/script-api.json 의 script.baseclasses / script.api.vectors / script.api.modules 가 정본이다. 여기는 **에셋 쪽 사실**(파일·크기·export 목록·해석 규칙)만 담는다",
+    "reading": "assets/scripts/ 4개 파일은 전부 런타임(bin/scenescript64.dll)이 읽는다. 에디터 전용이 아니다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "binary",
+     "ref": "bin/scenescript64.dll"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "scripts.corpusUsage",
+   "value": {
+    "itemsImportingAnyModule": 63,
+    "scenePkgs": 162,
+    "importsByModule": {
+     "WEColor": 62,
+     "WEMath": 736,
+     "WEVector": 56
+    },
+    "callsByFunction": {
+     "WEMath.mix": {
+      "calls": 1097,
+      "items": 44
+     },
+     "WEMath.smoothStep": {
+      "calls": 865,
+      "items": 18
+     },
+     "WEVector.angleVector2": {
+      "calls": 56,
+      "items": 9
+     },
+     "WEColor.hsv2rgb": {
+      "calls": 30,
+      "items": 4
+     },
+     "WEMath.rad2deg": {
+      "calls": 4,
+      "items": 3
+     },
+     "WEVector.vectorAngle2": {
+      "calls": 2,
+      "items": 1
+     },
+     "WEMath.deg2rad": {
+      "calls": 1,
+      "items": 1
+     }
+    },
+    "unusedExports": [
+     "WEColor.expandColor",
+     "WEColor.normalizeColor",
+     "WEColor.rgb2hsv"
+    ],
+    "reading": "코퍼스 63/162 씬이 공유 JS 모듈을 import 한다. 호출 도수가 구현 우선순위를 준다 — WEMath.mix/smoothStep 이 압도적이고 unusedExports 는 코퍼스에서 한 번도 안 불린다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "shaders.declarations",
+   "value": {
+    "path": "shaders/declarations.json",
+    "consumer": {
+     "wallpaperui.exe": 1,
+     "wallpaper64.exe": 0
+    },
+    "groups": {
+     "animatedimageshaders": {
+      "value": "imagegenericspritesheet",
+      "shader": "genericimage4",
+      "combos": {
+       "SPRITESHEET": 1
+      },
+      "blending": "translucent",
+      "depthtest": "disabled",
+      "depthwrite": "disabled",
+      "cullmode": "nocull",
+      "formats": [
+       "rgba8888",
+       "dxt5",
+       "dxt1"
+      ],
+      "texConfig": {
+       "clampuvs": true,
+       "format": "rgba8888",
+       "halfmip": true,
+       "nointerpolation": true,
+       "nomip": true,
+       "nonpoweroftwo": true
+      }
+     },
+     "animatedimageshadersn": {
+      "value": "imagegenericspritesheet",
+      "shader": "genericimage4",
+      "combos": {
+       "SPRITESHEET": 1
+      },
+      "blending": "translucent",
+      "depthtest": "disabled",
+      "depthwrite": "disabled",
+      "cullmode": "nocull",
+      "formats": [
+       "rgba8888n",
+       "dxt5n"
+      ],
+      "texConfig": {
+       "clampuvs": true,
+       "format": "rgba8888",
+       "halfmip": true,
+       "nointerpolation": true,
+       "nomip": true,
+       "nonpoweroftwo": true
+      }
+     },
+     "animatedimageshaderssmooth": {
+      "value": "imagegenericspritesheet",
+      "shader": "genericimage4",
+      "combos": {
+       "SPRITESHEET": 1
+      },
+      "blending": "translucent",
+      "depthtest": "disabled",
+      "depthwrite": "disabled",
+      "cullmode": "nocull",
+      "formats": [
+       "rgba8888",
+       "dxt5"
+      ],
+      "texConfig": {
+       "clampuvs": true,
+       "format": "rgba8888",
+       "halfmip": true,
+       "nomip": true,
+       "nonpoweroftwo": true
+      }
+     },
+     "imageshaders": {
+      "value": "imagegeneric",
+      "shader": "genericimage4",
+      "combos": {},
+      "blending": "translucent",
+      "depthtest": "disabled",
+      "depthwrite": "disabled",
+      "cullmode": "nocull",
+      "formats": [
+       "rgba8888",
+       "dxt5",
+       "dxt1"
+      ],
+      "texConfig": {
+       "clampuvs": true,
+       "halfmip": true,
+       "nonpoweroftwo": true
+      }
+     },
+     "imageshadersn": {
+      "value": "imagegeneric",
+      "shader": "genericimage4",
+      "combos": {},
+      "blending": "translucent",
+      "depthtest": "disabled",
+      "depthwrite": "disabled",
+      "cullmode": "nocull",
+      "formats": [
+       "rg88n",
+       "rgba8888n",
+       "dxt5n"
+      ],
+      "texConfig": {
+       "clampuvs": true,
+       "format": "rg88n",
+       "halfmip": true,
+       "nonpoweroftwo": true
+      }
+     },
+     "imageshadersr8": {
+      "value": "imagegeneric",
+      "shader": "genericimage4",
+      "combos": {},
+      "blending": "translucent",
+      "depthtest": "disabled",
+      "depthwrite": "disabled",
+      "cullmode": "nocull",
+      "formats": [
+       "r8"
+      ],
+      "texConfig": {
+       "clampuvs": true,
+       "format": "r8",
+       "halfmip": true,
+       "nomip": true,
+       "nonpoweroftwo": true
+      }
+     },
+     "imageshadersrg88": {
+      "value": "imagegeneric",
+      "shader": "genericimage4",
+      "combos": {},
+      "blending": "translucent",
+      "depthtest": "disabled",
+      "depthwrite": "disabled",
+      "cullmode": "nocull",
+      "formats": [
+       "rg88"
+      ],
+      "texConfig": {
+       "clampuvs": true,
+       "halfmip": true,
+       "nonpoweroftwo": true
+      }
+     },
+     "shaders": {
+      "value": "default",
+      "shader": "generic4",
+      "combos": {},
+      "blending": null,
+      "depthtest": null,
+      "depthwrite": null,
+      "cullmode": null,
+      "formats": [
+       "rgba8888",
+       "rg88",
+       "dxt5"
+      ],
+      "texConfig": {
+       "format": "dxt5"
+      }
+     }
+    },
+    "schema": {
+     "<group>": "[{value, shader, label, blending, depthtest, depthwrite, cullmode, combos, textures:[{suffix, formats:[{value,label}], config}]}]"
+    },
+    "reading": "에디터 임포터의 **기본 머티리얼 선언표**다. 이미지/모델을 프로젝트에 넣을 때 어떤 셰이더·블렌딩·텍스처 포맷을 기본으로 쓸지 정한다. 런타임은 읽지 않는다(wallpaper64.exe 0회). Waple 에게는 '임포트된 이미지 레이어의 기본 상태'를 알려주는 대조표로 값이 있다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "binary",
+     "ref": "'declarations.json' 은 bin/wallpaperui.exe 에만"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.sourceStringCensus",
+   "value": {
+    "zcompat": {
+     "hits": 0,
+     "files": []
+    },
+    "models/util": {
+     "hits": 3,
+     "files": [
+      "WapleCompat/ProfilePipeline.swift",
+      "WapleCore/SceneDocument.swift"
+     ]
+    },
+    "keepaspect": {
+     "hits": 0,
+     "files": []
+    },
+    "normalizeColor": {
+     "hits": 0,
+     "files": []
+    },
+    "expandColor": {
+     "hits": 0,
+     "files": []
+    },
+    "videoplayer": {
+     "hits": 0,
+     "files": []
+    },
+    "videotex": {
+     "hits": 0,
+     "files": []
+    },
+    "jsmodules": {
+     "hits": 0,
+     "files": []
+    },
+    "baseclasses": {
+     "hits": 0,
+     "files": []
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/**/*.swift 문자열 카운트"
+    },
+    {
+     "kind": "script",
+     "ref": "Swift 툴체인이 없어 빌드/실행은 못 했다 — 존재 여부만"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.ok.zcompatZero",
+   "value": {
+    "waple": "'zcompat' 문자열 0회 — 0건 구현",
+    "정본": "scene zcompat 은 모바일 익스포트 전용이라 데스크톱 렌더러가 구현할 것이 없다",
+    "판정": "현행이 옳다. 다만 web 월페이퍼를 구현하면 zcompat/web 은 런타임이라 필요해진다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 에 'zcompat' 0회"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/**/*.swift"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.note.videoPathDivergence",
+   "value": {
+    "정본": "WE 는 type=video 를 **씬**으로 돌린다 — assets/scenes/videoplayer/scene.json 을 열고 디코딩 프레임을 usertexture 'videotex' 로 바인딩한다(배선 상세는 spec/engine/media.json)",
+    "Waple": "RendererFactory 가 .video 를 VideoRenderer(AVPlayer/AVPlayerLayer)로 라우팅한다 — 씬 그래프를 타지 않는다",
+    "측정된 것": {
+     "keepaspect 를 아는 Waple 소스": 0,
+     "코퍼스 pkg 안 'keepaspect' 참조 pkg 수": 0,
+     "번들 씬 general 의 후처리": "bloom=false, bloomhdrstrength=0"
+    },
+    "판정": "결함이 아니라 **구조 분기**다. WE 의 videotex 씬은 후처리를 명시적으로 비운 1오브젝트 씬이라 AVPlayer 직접 합성과 화면 결과가 갈릴 이유가 지금은 없다. 코퍼스 어느 씬도 keepaspect 를 쓰지 않으므로 현행 코퍼스에서 관측 가능한 차이는 0이다",
+    "언제 문제가 되나": "비디오 위에 씬 이펙트/레이어를 얹는 기능(WE 는 씬이므로 공짜)을 구현하려 할 때, Waple 은 경로를 합쳐야 한다",
+    "확인 못 한 것": "keepaspect + autosize + orthogonalprojection.auto 의 조합이 fit 인지 fill 인지는 파일 검사만으로 안 갈린다 — 빌드/골든이 없다"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "scenes/videoplayer/{scene,models/background,materials/background}.json"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/RendererFactory.swift case .video"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.gap.weColorMissingExports",
+   "value": {
+    "정본": "wecolor.js 는 4개를 export 한다: expandColor, hsv2rgb, normalizeColor, rgb2hsv",
+    "Waple": "TextScriptEngine 의 __WEColor 는 hsv2rgb / rgb2hsv 2개뿐 — normalizeColor(0회) / expandColor(0회) 가 없다",
+    "실패 시나리오": "스크립트가 WEColor.normalizeColor(c) 를 부르면 undefined 호출로 예외",
+    "코퍼스 영향": {
+     "WEColor.normalizeColor": {
+      "calls": 0,
+      "items": 0
+     },
+     "WEColor.expandColor": {
+      "calls": 0,
+      "items": 0
+     },
+     "WEColor.rgb2hsv": {
+      "calls": 0,
+      "items": 0
+     },
+     "WEColor.hsv2rgb": {
+      "calls": 30,
+      "items": 4
+     }
+    },
+    "판정": "코퍼스 호출 0건이라 지금은 발현하지 않는다. 구현은 4줄이고 원문이 동봉돼 있다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources\\WapleRender\\Resources\\WEAssets"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/TextScriptEngine.swift __WEColor"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.ok.modelsUtilResolved",
+   "value": {
+    "정본": "코퍼스 115/162 씬이 models/util/*.json 을 경로로 참조한다 — 런타임 필수",
+    "Waple": "SceneDocument 가 공유 base-assets 리졸버로 models/util/*.json 을 푼다. config 의 passthrough / solidlayer / projectlayer 플래그도 파싱한다",
+    "확인 못 한 것": "fullscreen / autosize 플래그가 models/util JSON 최상위에서(오브젝트 config 가 아니라) 읽히는지는 소스 문자열만으로는 못 가린다 — 빌드가 없다",
+    "판정": "현행이 맞는 방향. 세부 플래그 커버리지는 미확인"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.pkg/gifscene.pkg 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift:843"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_misc_assets.py"
+    }
+   ]
+  }
+ ]
+}

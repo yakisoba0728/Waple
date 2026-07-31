@@ -1,0 +1,5408 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_scene_schema.py",
+ "entries": [
+  {
+   "id": "scene.corpus.population",
+   "value": {
+    "scenes": 162,
+    "byPackage": {
+     "scene.pkg/scene.json": 161,
+     "gifscene.pkg/gifscene.json": 1
+    },
+    "parseErrors": {},
+    "note": "corpus/inventory.json 의 scene 162 와 일치. gifscene.pkg/gifscene.json 1건 포함 (project.json type 이 아니라 pkg 안의 scene.json 존재로 선별 — type 대소문자 함정 회피)",
+    "remeasureCaveat": "이 파일은 코퍼스뿐 아니라 Sources/WapleCore/SceneDocument.swift 에도 의존한다(waple.* 항목). 재측정 diff 의 원인은 셋이다 — 측정 비결정성, WE 업데이트, **그리고 SceneDocument.swift 변경**. 마지막은 정상이며, 갭이 메워졌다는 뜻이다(spec/README.md 의 2원인 설명에 대한 예외)",
+    "topLevelKeys": {
+     "camera": 162,
+     "general": 162,
+     "objects": 162,
+     "version": 159
+    },
+    "version": {
+     "5": 63,
+     "1": 33,
+     "4": 32,
+     "3": 31,
+     "None": 3
+    },
+    "dimension": {
+     "2D(orthogonalprojection dict)": 155,
+     "3D(camera+fov)": 7
+    },
+    "cameraKeys": {
+     "center": 162,
+     "eye": 162,
+     "up": 162
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.general.keys",
+   "value": {
+    "ambientcolor": {
+     "n": 162,
+     "types": {
+      "str": 159,
+      "dict": 2,
+      "null": 1
+     },
+     "waple": true,
+     "distinctValues": 13
+    },
+    "bloom": {
+     "n": 162,
+     "types": {
+      "bool": 147,
+      "dict": 15
+     },
+     "waple": true,
+     "values": {
+      "False": 138,
+      "True": 24
+     }
+    },
+    "bloomstrength": {
+     "n": 162,
+     "types": {
+      "float": 157,
+      "dict": 4,
+      "null": 1
+     },
+     "waple": true
+    },
+    "bloomthreshold": {
+     "n": 162,
+     "types": {
+      "float": 159,
+      "dict": 2,
+      "null": 1
+     },
+     "waple": true
+    },
+    "camerafade": {
+     "n": 162,
+     "types": {
+      "bool": 162
+     },
+     "waple": true,
+     "values": {
+      "True": 161,
+      "False": 1
+     }
+    },
+    "cameraparallax": {
+     "n": 162,
+     "types": {
+      "bool": 142,
+      "dict": 20
+     },
+     "waple": true,
+     "values": {
+      "False": 106,
+      "True": 56
+     }
+    },
+    "cameraparallaxamount": {
+     "n": 162,
+     "types": {
+      "float": 160,
+      "dict": 2
+     },
+     "waple": true
+    },
+    "cameraparallaxdelay": {
+     "n": 162,
+     "types": {
+      "float": 160,
+      "dict": 2
+     },
+     "waple": true
+    },
+    "cameraparallaxmouseinfluence": {
+     "n": 162,
+     "types": {
+      "float": 154,
+      "dict": 7,
+      "int": 1
+     },
+     "waple": true,
+     "values": {
+      "0": 1
+     }
+    },
+    "camerapreview": {
+     "n": 162,
+     "types": {
+      "bool": 162
+     },
+     "waple": false,
+     "values": {
+      "True": 158,
+      "False": 4
+     }
+    },
+    "camerashake": {
+     "n": 162,
+     "types": {
+      "bool": 148,
+      "dict": 14
+     },
+     "waple": true,
+     "values": {
+      "False": 150,
+      "True": 12
+     }
+    },
+    "camerashakeamplitude": {
+     "n": 162,
+     "types": {
+      "float": 161,
+      "dict": 1
+     },
+     "waple": true
+    },
+    "camerashakeroughness": {
+     "n": 162,
+     "types": {
+      "float": 161,
+      "int": 1
+     },
+     "waple": true,
+     "values": {
+      "1": 1
+     }
+    },
+    "camerashakespeed": {
+     "n": 162,
+     "types": {
+      "float": 159,
+      "dict": 2,
+      "int": 1
+     },
+     "waple": true,
+     "values": {
+      "3": 1
+     }
+    },
+    "clearcolor": {
+     "n": 162,
+     "types": {
+      "str": 161,
+      "dict": 1
+     },
+     "waple": true,
+     "distinctValues": 18
+    },
+    "clearenabled": {
+     "n": 162,
+     "types": {
+      "bool": 161,
+      "null": 1
+     },
+     "waple": true,
+     "values": {
+      "True": 161
+     }
+    },
+    "orthogonalprojection": {
+     "n": 162,
+     "types": {
+      "dict": 155,
+      "null": 7
+     },
+     "waple": true
+    },
+    "skylightcolor": {
+     "n": 162,
+     "types": {
+      "str": 160,
+      "dict": 1,
+      "null": 1
+     },
+     "waple": true,
+     "values": {
+      "0.30000 0.30000 0.30000": 152,
+      "0.00000 0.00000 0.00000": 2,
+      "0.300 0.300 0.300": 2,
+      "1.00000 1.00000 1.00000": 2,
+      "0.21961 0.25098 0.32941": 1,
+      "0.23922 0.23922 0.23922": 1,
+      "0.37255 0.37255 0.37255": 1
+     }
+    },
+    "farz": {
+     "n": 161,
+     "types": {
+      "float": 161
+     },
+     "waple": true
+    },
+    "fov": {
+     "n": 161,
+     "types": {
+      "float": 160,
+      "dict": 1
+     },
+     "waple": true
+    },
+    "nearz": {
+     "n": 161,
+     "types": {
+      "float": 161
+     },
+     "waple": true
+    },
+    "bloomhdrfeather": {
+     "n": 159,
+     "types": {
+      "float": 159
+     },
+     "waple": true
+    },
+    "bloomhdrscatter": {
+     "n": 159,
+     "types": {
+      "float": 157,
+      "dict": 2
+     },
+     "waple": true
+    },
+    "bloomhdrstrength": {
+     "n": 159,
+     "types": {
+      "float": 156,
+      "dict": 3
+     },
+     "waple": true
+    },
+    "bloomhdrthreshold": {
+     "n": 159,
+     "types": {
+      "float": 158,
+      "dict": 1
+     },
+     "waple": true
+    },
+    "hdr": {
+     "n": 159,
+     "types": {
+      "bool": 159
+     },
+     "waple": true,
+     "values": {
+      "False": 143,
+      "True": 16
+     }
+    },
+    "zoom": {
+     "n": 159,
+     "types": {
+      "float": 155,
+      "dict": 4
+     },
+     "waple": true
+    },
+    "bloomhdriterations": {
+     "n": 157,
+     "types": {
+      "int": 156,
+      "dict": 1
+     },
+     "waple": true,
+     "values": {
+      "8": 149,
+      "2": 2,
+      "3": 2,
+      "6": 2,
+      "4": 1,
+      "5": 1
+     }
+    },
+    "bloomtint": {
+     "n": 142,
+     "types": {
+      "str": 140,
+      "dict": 2
+     },
+     "waple": true,
+     "values": {
+      "1.00000 1.00000 1.00000": 134,
+      "0.00000 0.00000 0.00000": 1,
+      "0.00000 1.00000 1.00000": 1,
+      "0.19608 0.27843 0.73333": 1,
+      "0.41569 0.47059 0.65098": 1,
+      "0.74118 1.00000 1.00000": 1,
+      "0.83922 0.83922 0.83922": 1,
+      "0.89412 0.89412 0.69804": 1,
+      "1.00000 0.00000 0.00000": 1
+     }
+    },
+    "perspectiveoverridefov": {
+     "n": 130,
+     "types": {
+      "float": 130
+     },
+     "waple": true
+    },
+    "gravitydirection": {
+     "n": 109,
+     "types": {
+      "str": 109
+     },
+     "waple": true,
+     "values": {
+      "0.00000 -1.00000 0.00000": 104,
+      "-0.00000 -1.00000 0.00000": 2,
+      "0.06976 -0.99756 0.00000": 2,
+      "0.00000 1.00000 0.00000": 1
+     }
+    },
+    "gravitystrength": {
+     "n": 109,
+     "types": {
+      "float": 109
+     },
+     "waple": true
+    },
+    "winddirection": {
+     "n": 109,
+     "types": {
+      "str": 109
+     },
+     "waple": true,
+     "values": {
+      "0.70700 0.70700 0.00000": 107,
+      "-0.18729 0.98230 0.00000": 1,
+      "-0.96568 -0.25974 0.00000": 1
+     }
+    },
+    "windenabled": {
+     "n": 109,
+     "types": {
+      "bool": 109
+     },
+     "waple": true,
+     "values": {
+      "False": 108,
+      "True": 1
+     }
+    },
+    "windstrength": {
+     "n": 109,
+     "types": {
+      "float": 109
+     },
+     "waple": true
+    },
+    "lightconfig": {
+     "n": 11,
+     "types": {
+      "dict": 11
+     },
+     "waple": false
+    },
+    "transparentsorting": {
+     "n": 3,
+     "types": {
+      "bool": 3
+     },
+     "waple": false,
+     "values": {
+      "True": 3
+     }
+    },
+    "fogdistance": {
+     "n": 2,
+     "types": {
+      "bool": 2
+     },
+     "waple": false,
+     "values": {
+      "True": 2
+     }
+    },
+    "fogdistancecolor": {
+     "n": 2,
+     "types": {
+      "dict": 1,
+      "str": 1
+     },
+     "waple": false,
+     "values": {
+      "0.00000 0.00000 0.00000": 1,
+      "0.63529 0.74510 0.75294": 1
+     }
+    },
+    "fogdistanceend": {
+     "n": 2,
+     "types": {
+      "dict": 1,
+      "float": 1
+     },
+     "waple": false
+    },
+    "fogdistanceenddensity": {
+     "n": 2,
+     "types": {
+      "float": 2
+     },
+     "waple": false
+    },
+    "fogdistancestart": {
+     "n": 2,
+     "types": {
+      "float": 2
+     },
+     "waple": false
+    },
+    "fogdistancestartdensity": {
+     "n": 2,
+     "types": {
+      "float": 2
+     },
+     "waple": false
+    },
+    "fogheight": {
+     "n": 1,
+     "types": {
+      "bool": 1
+     },
+     "waple": false,
+     "values": {
+      "True": 1
+     }
+    },
+    "fogheightcolor": {
+     "n": 1,
+     "types": {
+      "dict": 1
+     },
+     "waple": false,
+     "values": {
+      "0.63137 0.80392 1.00000": 1
+     }
+    },
+    "fogheightend": {
+     "n": 1,
+     "types": {
+      "dict": 1
+     },
+     "waple": false
+    },
+    "fogheightenddensity": {
+     "n": 1,
+     "types": {
+      "float": 1
+     },
+     "waple": false
+    },
+    "fogheightstart": {
+     "n": 1,
+     "types": {
+      "float": 1
+     },
+     "waple": false
+    },
+    "fogheightstartdensity": {
+     "n": 1,
+     "types": {
+      "float": 1
+     },
+     "waple": false
+    },
+    "spritesheetrefreshsync": {
+     "n": 1,
+     "types": {
+      "bool": 1
+     },
+     "waple": false,
+     "values": {
+      "True": 1
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift",
+     "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    }
+   ]
+  },
+  {
+   "id": "scene.objects.typeTaxonomy",
+   "value": {
+    "resolution": "콘텐츠 키의 존재로만 결정된다 — scene.json objects[] 에 type 필드는 없다",
+    "precedence": [
+     "sound",
+     "node(콘텐츠 키 없음)",
+     "image",
+     "particle",
+     "text",
+     "model",
+     "light",
+     "camera",
+     "shape+effects"
+    ],
+    "counts": {
+     "image": 4713,
+     "text": 1597,
+     "node": 997,
+     "particle": 997,
+     "sound": 378,
+     "model": 273,
+     "camera": 58,
+     "shape": 41,
+     "light": 27
+    },
+    "contentKeyExplicitNull": {
+     "particle.image": 17,
+     "particle.model": 17,
+     "text.image": 2,
+     "text.model": 2,
+     "text.particle": 2
+    },
+    "multipleContentKeys": 0,
+    "objectsWithoutId": {},
+    "lightTypeDomain": {
+     "lpoint": 17,
+     "ldirectional": 5,
+     "lspot": 5
+    },
+    "shapeDomain": {
+     "quad": 41
+    },
+    "cameraDomain": {
+     "default": 58
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.objects.keysByType",
+   "value": {
+    "image": {
+     "id": {
+      "n": 4713,
+      "scenes": 162,
+      "types": {
+       "int": 4713
+      },
+      "range": [
+       6,
+       487886
+      ],
+      "distinct": 2456,
+      "distinctValues": 2456,
+      "waple": "parse"
+     },
+     "image": {
+      "n": 4713,
+      "scenes": 162,
+      "types": {
+       "str": 4713
+      },
+      "distinctValues": 1941,
+      "waple": "parse"
+     },
+     "name": {
+      "n": 4713,
+      "scenes": 162,
+      "types": {
+       "str": 4713
+      },
+      "distinctValues": 2621,
+      "waple": "parseLayer"
+     },
+     "size": {
+      "n": 4599,
+      "scenes": 161,
+      "types": {
+       "str": 4599
+      },
+      "range": [
+       0.0,
+       30000.0
+      ],
+      "distinct": 1666,
+      "distinctValues": 1666,
+      "waple": "parseLayer"
+     },
+     "origin": {
+      "n": 4301,
+      "scenes": 161,
+      "types": {
+       "str": 3963,
+       "dict": 338
+      },
+      "range": [
+       -7732.74316,
+       15854.50977
+      ],
+      "distinct": 2542,
+      "distinctValues": 2542,
+      "waple": "parseLayer"
+     },
+     "castshadow": {
+      "n": 4138,
+      "scenes": 130,
+      "types": {
+       "bool": 4138
+      },
+      "values": {
+       "False": 4138
+      },
+      "waple": null
+     },
+     "angles": {
+      "n": 3264,
+      "scenes": 132,
+      "types": {
+       "str": 2841,
+       "dict": 423
+      },
+      "range": [
+       -3.14159,
+       3.14159
+      ],
+      "distinct": 269,
+      "distinctValues": 269,
+      "waple": "parseLayer"
+     },
+     "scale": {
+      "n": 3055,
+      "scenes": 140,
+      "types": {
+       "str": 2443,
+       "dict": 612
+      },
+      "range": [
+       -17.93832,
+       4000.0
+      ],
+      "distinct": 864,
+      "distinctValues": 864,
+      "waple": "parseLayer"
+     },
+     "effects": {
+      "n": 3035,
+      "scenes": 151,
+      "types": {
+       "list": 3035
+      },
+      "waple": "parseLayer"
+     },
+     "parent": {
+      "n": 2889,
+      "scenes": 95,
+      "types": {
+       "int": 2889
+      },
+      "range": [
+       14,
+       79800
+      ],
+      "distinct": 573,
+      "distinctValues": 573,
+      "waple": "parseLayer"
+     },
+     "visible": {
+      "n": 2348,
+      "scenes": 133,
+      "types": {
+       "dict": 1973,
+       "bool": 375
+      },
+      "values": {
+       "True": 1193,
+       "False": 1155
+      },
+      "waple": "parse"
+     },
+     "disablepropagation": {
+      "n": 2097,
+      "scenes": 63,
+      "types": {
+       "bool": 2097
+      },
+      "values": {
+       "False": 2063,
+       "True": 34
+      },
+      "waple": "parseLayer"
+     },
+     "clampuvs": {
+      "n": 1674,
+      "scenes": 51,
+      "types": {
+       "bool": 1674
+      },
+      "values": {
+       "True": 1662,
+       "False": 12
+      },
+      "waple": "parseLayer"
+     },
+     "parallaxDepth": {
+      "n": 1573,
+      "scenes": 121,
+      "types": {
+       "str": 1569,
+       "dict": 4
+      },
+      "range": [
+       -110.0,
+       50.0
+      ],
+      "distinct": 196,
+      "distinctValues": 196,
+      "waple": "parseLayer"
+     },
+     "color": {
+      "n": 1372,
+      "scenes": 110,
+      "types": {
+       "dict": 906,
+       "str": 466
+      },
+      "range": [
+       0.0,
+       1.0
+      ],
+      "distinct": 166,
+      "distinctValues": 166,
+      "waple": "parseLayer"
+     },
+     "alpha": {
+      "n": 1042,
+      "scenes": 105,
+      "types": {
+       "float": 531,
+       "dict": 511
+      },
+      "range": [
+       0.0,
+       3.0
+      ],
+      "distinct": 71,
+      "waple": "parseLayer"
+     },
+     "colorBlendMode": {
+      "n": 782,
+      "scenes": 83,
+      "types": {
+       "int": 782
+      },
+      "range": [
+       0,
+       32
+      ],
+      "distinct": 24,
+      "distinctValues": 24,
+      "waple": "parseLayer"
+     },
+     "animationlayers": {
+      "n": 656,
+      "scenes": 60,
+      "types": {
+       "list": 656
+      },
+      "waple": "parseLayer"
+     },
+     "locktransforms": {
+      "n": 575,
+      "scenes": 70,
+      "types": {
+       "bool": 575
+      },
+      "values": {
+       "True": 532,
+       "False": 43
+      },
+      "waple": "parseLayer"
+     },
+     "alignment": {
+      "n": 556,
+      "scenes": 64,
+      "types": {
+       "str": 556
+      },
+      "values": {
+       "bottom": 179,
+       "left": 166,
+       "center": 121,
+       "right": 49,
+       "bottomleft": 18,
+       "top": 15,
+       "topright": 5,
+       "bottomright": 3
+      },
+      "waple": "parseLayer"
+     },
+     "instance": {
+      "n": 321,
+      "scenes": 51,
+      "types": {
+       "dict": 321
+      },
+      "waple": "parseLayer"
+     },
+     "brightness": {
+      "n": 248,
+      "scenes": 26,
+      "types": {
+       "float": 231,
+       "dict": 17
+      },
+      "range": [
+       0.5,
+       5.0
+      ],
+      "distinct": 14,
+      "waple": "parseLayer"
+     },
+     "copybackground": {
+      "n": 198,
+      "scenes": 34,
+      "types": {
+       "bool": 198
+      },
+      "values": {
+       "True": 142,
+       "False": 56
+      },
+      "waple": "parseLayer"
+     },
+     "solid": {
+      "n": 149,
+      "scenes": 26,
+      "types": {
+       "bool": 149
+      },
+      "values": {
+       "True": 139,
+       "False": 10
+      },
+      "waple": "parseLayer"
+     },
+     "config": {
+      "n": 133,
+      "scenes": 24,
+      "types": {
+       "dict": 133
+      },
+      "waple": "parseLayer"
+     },
+     "attachment": {
+      "n": 112,
+      "scenes": 19,
+      "types": {
+       "str": 112
+      },
+      "distinctValues": 37,
+      "waple": "parseLayer"
+     },
+     "perspective": {
+      "n": 88,
+      "scenes": 28,
+      "types": {
+       "bool": 88
+      },
+      "values": {
+       "False": 65,
+       "True": 23
+      },
+      "waple": "parseLayer"
+     },
+     "ledsource": {
+      "n": 69,
+      "scenes": 15,
+      "types": {
+       "bool": 69
+      },
+      "values": {
+       "False": 65,
+       "True": 4
+      },
+      "waple": "parseLayer"
+     },
+     "dependencies": {
+      "n": 65,
+      "scenes": 17,
+      "types": {
+       "list": 65
+      },
+      "waple": "parseLayer"
+     },
+     "nointerpolation": {
+      "n": 5,
+      "scenes": 2,
+      "types": {
+       "bool": 5
+      },
+      "values": {
+       "True": 5
+      },
+      "waple": "parseLayer"
+     }
+    },
+    "text": {
+     "font": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "str": 1597
+      },
+      "distinctValues": 136,
+      "waple": "parseText"
+     },
+     "horizontalalign": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "str": 1597
+      },
+      "values": {
+       "center": 1334,
+       "left": 164,
+       "right": 99
+      },
+      "waple": "parseText"
+     },
+     "id": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "int": 1597
+      },
+      "range": [
+       19,
+       228537
+      ],
+      "distinct": 708,
+      "distinctValues": 708,
+      "waple": "parse"
+     },
+     "name": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "str": 1597
+      },
+      "distinctValues": 369,
+      "waple": "parseText"
+     },
+     "padding": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "int": 1426,
+       "str": 171
+      },
+      "range": [
+       0,
+       300
+      ],
+      "distinct": 26,
+      "distinctValues": 31,
+      "waple": "parseText"
+     },
+     "pointsize": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "float": 918,
+       "dict": 679
+      },
+      "range": [
+       3.0,
+       250.97
+      ],
+      "distinct": 84,
+      "waple": "parseText"
+     },
+     "size": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "str": 1597
+      },
+      "range": [
+       2.0,
+       8316.0
+      ],
+      "distinct": 684,
+      "distinctValues": 684,
+      "waple": null
+     },
+     "text": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "dict": 1381,
+       "str": 216
+      },
+      "distinctValues": 355,
+      "waple": "parse"
+     },
+     "verticalalign": {
+      "n": 1597,
+      "scenes": 123,
+      "types": {
+       "str": 1597
+      },
+      "values": {
+       "center": 1482,
+       "top": 86,
+       "bottom": 29
+      },
+      "waple": "parseText"
+     },
+     "limitrows": {
+      "n": 1594,
+      "scenes": 121,
+      "types": {
+       "bool": 1594
+      },
+      "values": {
+       "False": 1418,
+       "True": 176
+      },
+      "waple": "parseText"
+     },
+     "limituseellipsis": {
+      "n": 1594,
+      "scenes": 121,
+      "types": {
+       "bool": 1594
+      },
+      "values": {
+       "False": 1512,
+       "True": 82
+      },
+      "waple": "parseText"
+     },
+     "limitwidth": {
+      "n": 1594,
+      "scenes": 121,
+      "types": {
+       "bool": 1594
+      },
+      "values": {
+       "False": 1434,
+       "True": 160
+      },
+      "waple": "parseText"
+     },
+     "maxrows": {
+      "n": 1594,
+      "scenes": 121,
+      "types": {
+       "int": 1594
+      },
+      "range": [
+       1,
+       30
+      ],
+      "distinct": 7,
+      "values": {
+       "1": 1582,
+       "2": 4,
+       "3": 2,
+       "4": 2,
+       "5": 2,
+       "13": 1,
+       "30": 1
+      },
+      "waple": "parseText"
+     },
+     "maxwidth": {
+      "n": 1594,
+      "scenes": 121,
+      "types": {
+       "float": 1562,
+       "dict": 32
+      },
+      "range": [
+       10.0,
+       7294.4795
+      ],
+      "distinct": 61,
+      "waple": "parseText"
+     },
+     "origin": {
+      "n": 1541,
+      "scenes": 123,
+      "types": {
+       "str": 845,
+       "dict": 696
+      },
+      "range": [
+       -1555.17896,
+       5200.0
+      ],
+      "distinct": 611,
+      "distinctValues": 611,
+      "waple": "parseText"
+     },
+     "anchor": {
+      "n": 1429,
+      "scenes": 111,
+      "types": {
+       "str": 1429
+      },
+      "values": {
+       "none": 1361,
+       "center": 50,
+       "left": 8,
+       "right": 5,
+       "top": 3,
+       "bottomright": 1,
+       "topright": 1
+      },
+      "waple": "parseText"
+     },
+     "backgroundcolor": {
+      "n": 1426,
+      "scenes": 110,
+      "types": {
+       "str": 1426
+      },
+      "range": [
+       0.0,
+       0.74902
+      ],
+      "distinct": 3,
+      "values": {
+       "0.00000 0.00000 0.00000": 1400,
+       "0.43922 0.00000 0.74902": 24,
+       "0.000 0.000 0.000": 2
+      },
+      "waple": "parseText"
+     },
+     "opaquebackground": {
+      "n": 1426,
+      "scenes": 110,
+      "types": {
+       "bool": 1426
+      },
+      "values": {
+       "False": 1422,
+       "True": 4
+      },
+      "waple": "parseText"
+     },
+     "backgroundbrightness": {
+      "n": 1424,
+      "scenes": 109,
+      "types": {
+       "float": 1424
+      },
+      "range": [
+       1.0,
+       1.0
+      ],
+      "distinct": 1,
+      "waple": "parseText"
+     },
+     "blockalign": {
+      "n": 1423,
+      "scenes": 108,
+      "types": {
+       "bool": 1423
+      },
+      "values": {
+       "False": 1410,
+       "True": 13
+      },
+      "waple": "parseText"
+     },
+     "scale": {
+      "n": 1395,
+      "scenes": 115,
+      "types": {
+       "dict": 779,
+       "str": 616
+      },
+      "range": [
+       -0.90281,
+       37.40955
+      ],
+      "distinct": 228,
+      "distinctValues": 228,
+      "waple": "parseText"
+     },
+     "castshadow": {
+      "n": 1391,
+      "scenes": 101,
+      "types": {
+       "bool": 1391
+      },
+      "values": {
+       "False": 1391
+      },
+      "waple": null
+     },
+     "depthtest": {
+      "n": 1391,
+      "scenes": 101,
+      "types": {
+       "str": 1391
+      },
+      "values": {
+       "enabled": 1391
+      },
+      "waple": "parseText"
+     },
+     "angles": {
+      "n": 1315,
+      "scenes": 104,
+      "types": {
+       "str": 1311,
+       "dict": 4
+      },
+      "range": [
+       -1.5708,
+       3.11498
+      ],
+      "distinct": 59,
+      "distinctValues": 59,
+      "waple": "parseText"
+     },
+     "parent": {
+      "n": 1236,
+      "scenes": 88,
+      "types": {
+       "int": 1236
+      },
+      "range": [
+       20,
+       227702
+      ],
+      "distinct": 226,
+      "distinctValues": 226,
+      "waple": "parseText"
+     },
+     "visible": {
+      "n": 1223,
+      "scenes": 110,
+      "types": {
+       "dict": 1165,
+       "bool": 58
+      },
+      "values": {
+       "False": 710,
+       "True": 513
+      },
+      "waple": "parse"
+     },
+     "color": {
+      "n": 1200,
+      "scenes": 101,
+      "types": {
+       "dict": 1036,
+       "str": 164
+      },
+      "range": [
+       0.0,
+       1.0
+      ],
+      "distinct": 80,
+      "distinctValues": 80,
+      "waple": "parseText"
+     },
+     "parallaxDepth": {
+      "n": 956,
+      "scenes": 77,
+      "types": {
+       "str": 877,
+       "dict": 79
+      },
+      "range": [
+       -5.0,
+       25.0
+      ],
+      "distinct": 27,
+      "distinctValues": 27,
+      "waple": null
+     },
+     "disablepropagation": {
+      "n": 742,
+      "scenes": 53,
+      "types": {
+       "bool": 742
+      },
+      "values": {
+       "False": 742
+      },
+      "waple": "parseText"
+     },
+     "alpha": {
+      "n": 641,
+      "scenes": 81,
+      "types": {
+       "dict": 480,
+       "float": 161
+      },
+      "range": [
+       0.0,
+       2.0
+      ],
+      "distinct": 40,
+      "waple": "parseText"
+     },
+     "clampuvs": {
+      "n": 571,
+      "scenes": 40,
+      "types": {
+       "bool": 571
+      },
+      "values": {
+       "True": 571
+      },
+      "waple": "parseText"
+     },
+     "brightness": {
+      "n": 568,
+      "scenes": 69,
+      "types": {
+       "float": 568
+      },
+      "range": [
+       0.0,
+       6.24
+      ],
+      "distinct": 12,
+      "waple": null
+     },
+     "effects": {
+      "n": 450,
+      "scenes": 85,
+      "types": {
+       "list": 450
+      },
+      "waple": "parseText"
+     },
+     "spacing": {
+      "n": 171,
+      "scenes": 13,
+      "types": {
+       "str": 171
+      },
+      "range": [
+       0.0,
+       0.0
+      ],
+      "distinct": 1,
+      "values": {
+       "0.00000 0.00000": 171
+      },
+      "waple": "parseText"
+     },
+     "locktransforms": {
+      "n": 132,
+      "scenes": 26,
+      "types": {
+       "bool": 132
+      },
+      "values": {
+       "True": 127,
+       "False": 5
+      },
+      "waple": "parseText"
+     },
+     "solid": {
+      "n": 52,
+      "scenes": 12,
+      "types": {
+       "bool": 52
+      },
+      "values": {
+       "True": 35,
+       "False": 17
+      },
+      "waple": "parseText"
+     },
+     "colorBlendMode": {
+      "n": 41,
+      "scenes": 14,
+      "types": {
+       "int": 41
+      },
+      "range": [
+       0,
+       31
+      ],
+      "distinct": 7,
+      "values": {
+       "0": 18,
+       "31": 12,
+       "11": 4,
+       "12": 2,
+       "17": 2,
+       "24": 2,
+       "28": 1
+      },
+      "waple": "parseText"
+     },
+     "copybackground": {
+      "n": 35,
+      "scenes": 9,
+      "types": {
+       "bool": 35
+      },
+      "values": {
+       "True": 35
+      },
+      "waple": "parseText"
+     },
+     "perspective": {
+      "n": 9,
+      "scenes": 8,
+      "types": {
+       "bool": 9
+      },
+      "values": {
+       "False": 6,
+       "True": 3
+      },
+      "waple": null
+     },
+     "ledsource": {
+      "n": 6,
+      "scenes": 5,
+      "types": {
+       "bool": 6
+      },
+      "values": {
+       "False": 6
+      },
+      "waple": null
+     },
+     "attachment": {
+      "n": 3,
+      "scenes": 2,
+      "types": {
+       "str": 3
+      },
+      "values": {
+       "右耳朵": 2,
+       "音频封面1": 1
+      },
+      "waple": null
+     },
+     "outline": {
+      "n": 3,
+      "scenes": 1,
+      "types": {
+       "bool": 3
+      },
+      "values": {
+       "True": 3
+      },
+      "waple": "parseText"
+     },
+     "outlinecolor": {
+      "n": 3,
+      "scenes": 1,
+      "types": {
+       "str": 3
+      },
+      "range": [
+       0.0,
+       0.33725
+      ],
+      "distinct": 3,
+      "values": {
+       "0.00000 0.00000 0.00000": 1,
+       "0.15294 0.15294 0.15294": 1,
+       "0.33725 0.00000 0.00000": 1
+      },
+      "waple": "parseText"
+     },
+     "outlinethickness": {
+      "n": 3,
+      "scenes": 1,
+      "types": {
+       "float": 3
+      },
+      "range": [
+       1.25,
+       9.72
+      ],
+      "distinct": 3,
+      "waple": "parseText"
+     },
+     "image": {
+      "n": 2,
+      "scenes": 2,
+      "types": {
+       "null": 2
+      },
+      "waple": "parse"
+     },
+     "model": {
+      "n": 2,
+      "scenes": 2,
+      "types": {
+       "null": 2
+      },
+      "waple": "parse"
+     },
+     "particle": {
+      "n": 2,
+      "scenes": 2,
+      "types": {
+       "null": 2
+      },
+      "waple": "parse"
+     }
+    },
+    "particle": {
+     "id": {
+      "n": 997,
+      "scenes": 131,
+      "types": {
+       "int": 997
+      },
+      "range": [
+       18,
+       1123194
+      ],
+      "distinct": 731,
+      "distinctValues": 731,
+      "waple": "parse"
+     },
+     "name": {
+      "n": 997,
+      "scenes": 131,
+      "types": {
+       "str": 997
+      },
+      "distinctValues": 323,
+      "waple": null
+     },
+     "particle": {
+      "n": 997,
+      "scenes": 131,
+      "types": {
+       "str": 997
+      },
+      "distinctValues": 220,
+      "waple": "parse"
+     },
+     "origin": {
+      "n": 972,
+      "scenes": 130,
+      "types": {
+       "str": 959,
+       "dict": 13
+      },
+      "range": [
+       -4129.07178,
+       8159.86621
+      ],
+      "distinct": 779,
+      "distinctValues": 779,
+      "waple": "parseParticle"
+     },
+     "instanceoverride": {
+      "n": 960,
+      "scenes": 130,
+      "types": {
+       "dict": 869,
+       "null": 91
+      },
+      "waple": "parseParticle"
+     },
+     "angles": {
+      "n": 641,
+      "scenes": 110,
+      "types": {
+       "str": 638,
+       "dict": 3
+      },
+      "range": [
+       -3.142,
+       3.22886
+      ],
+      "distinct": 290,
+      "distinctValues": 290,
+      "waple": "parseParticle"
+     },
+     "visible": {
+      "n": 628,
+      "scenes": 119,
+      "types": {
+       "dict": 585,
+       "bool": 43
+      },
+      "values": {
+       "True": 487,
+       "False": 141
+      },
+      "waple": "parse"
+     },
+     "scale": {
+      "n": 604,
+      "scenes": 114,
+      "types": {
+       "str": 590,
+       "dict": 14
+      },
+      "range": [
+       -6.0,
+       50.0
+      ],
+      "distinct": 321,
+      "distinctValues": 321,
+      "waple": "parseParticle"
+     },
+     "disablepropagation": {
+      "n": 408,
+      "scenes": 53,
+      "types": {
+       "bool": 408
+      },
+      "values": {
+       "False": 408
+      },
+      "waple": "parseParticle"
+     },
+     "solid": {
+      "n": 408,
+      "scenes": 53,
+      "types": {
+       "bool": 408
+      },
+      "values": {
+       "True": 408
+      },
+      "waple": "parseParticle"
+     },
+     "parent": {
+      "n": 348,
+      "scenes": 51,
+      "types": {
+       "int": 348
+      },
+      "range": [
+       16,
+       65823
+      ],
+      "distinct": 135,
+      "distinctValues": 135,
+      "waple": "parseParticle"
+     },
+     "parallaxDepth": {
+      "n": 321,
+      "scenes": 75,
+      "types": {
+       "str": 321
+      },
+      "range": [
+       -150.0,
+       4.0
+      ],
+      "distinct": 69,
+      "distinctValues": 69,
+      "waple": "parseParticle"
+     },
+     "locktransforms": {
+      "n": 146,
+      "scenes": 26,
+      "types": {
+       "bool": 146
+      },
+      "values": {
+       "True": 118,
+       "False": 28
+      },
+      "waple": "parseParticle"
+     },
+     "attachment": {
+      "n": 53,
+      "scenes": 12,
+      "types": {
+       "str": 53
+      },
+      "distinctValues": 15,
+      "waple": "parseParticle"
+     },
+     "image": {
+      "n": 17,
+      "scenes": 7,
+      "types": {
+       "null": 17
+      },
+      "waple": "parse"
+     },
+     "model": {
+      "n": 17,
+      "scenes": 7,
+      "types": {
+       "null": 17
+      },
+      "waple": "parse"
+     }
+    },
+    "node": {
+     "id": {
+      "n": 997,
+      "scenes": 68,
+      "types": {
+       "int": 997
+      },
+      "range": [
+       18,
+       38512
+      ],
+      "distinct": 736,
+      "distinctValues": 736,
+      "waple": "parse"
+     },
+     "name": {
+      "n": 997,
+      "scenes": 68,
+      "types": {
+       "str": 997
+      },
+      "distinctValues": 443,
+      "waple": null
+     },
+     "angles": {
+      "n": 809,
+      "scenes": 48,
+      "types": {
+       "str": 700,
+       "dict": 109
+      },
+      "range": [
+       -3.14159,
+       4.71239
+      ],
+      "distinct": 37,
+      "distinctValues": 37,
+      "waple": "parseNode"
+     },
+     "parent": {
+      "n": 704,
+      "scenes": 37,
+      "types": {
+       "int": 704
+      },
+      "range": [
+       28,
+       38478
+      ],
+      "distinct": 258,
+      "distinctValues": 258,
+      "waple": "parseNode"
+     },
+     "origin": {
+      "n": 657,
+      "scenes": 67,
+      "types": {
+       "str": 399,
+       "dict": 258
+      },
+      "range": [
+       -3600.0,
+       3840.0
+      ],
+      "distinct": 228,
+      "distinctValues": 228,
+      "waple": "parseNode"
+     },
+     "disablepropagation": {
+      "n": 595,
+      "scenes": 36,
+      "types": {
+       "bool": 595
+      },
+      "values": {
+       "False": 595
+      },
+      "waple": null
+     },
+     "solid": {
+      "n": 595,
+      "scenes": 36,
+      "types": {
+       "bool": 595
+      },
+      "values": {
+       "True": 595
+      },
+      "waple": null
+     },
+     "visible": {
+      "n": 446,
+      "scenes": 58,
+      "types": {
+       "dict": 441,
+       "bool": 5
+      },
+      "values": {
+       "True": 301,
+       "False": 145
+      },
+      "waple": "parse"
+     },
+     "scale": {
+      "n": 308,
+      "scenes": 46,
+      "types": {
+       "str": 182,
+       "dict": 126
+      },
+      "range": [
+       -1.0,
+       900.0
+      ],
+      "distinct": 82,
+      "distinctValues": 82,
+      "waple": "parseNode"
+     },
+     "parallaxDepth": {
+      "n": 191,
+      "scenes": 40,
+      "types": {
+       "str": 155,
+       "dict": 36
+      },
+      "range": [
+       -15.0,
+       3.2
+      ],
+      "distinct": 54,
+      "distinctValues": 54,
+      "waple": null
+     },
+     "locktransforms": {
+      "n": 29,
+      "scenes": 9,
+      "types": {
+       "bool": 29
+      },
+      "values": {
+       "True": 29
+      },
+      "waple": null
+     },
+     "attachment": {
+      "n": 13,
+      "scenes": 6,
+      "types": {
+       "str": 13
+      },
+      "values": {
+       "头发": 4,
+       "Head": 3,
+       "头": 3,
+       "五官头发": 2,
+       "身体：上半身": 1
+      },
+      "waple": "parseNode"
+     }
+    },
+    "sound": {
+     "id": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "int": 378
+      },
+      "range": [
+       20,
+       79325
+      ],
+      "distinct": 356,
+      "distinctValues": 356,
+      "waple": "parse"
+     },
+     "maxtime": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "float": 378
+      },
+      "range": [
+       1.0,
+       240.0
+      ],
+      "distinct": 7,
+      "waple": "parseSound"
+     },
+     "mintime": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "float": 378
+      },
+      "range": [
+       1.0,
+       120.0
+      ],
+      "distinct": 4,
+      "waple": "parseSound"
+     },
+     "muteineditor": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "bool": 378
+      },
+      "values": {
+       "True": 278,
+       "False": 100
+      },
+      "waple": null
+     },
+     "name": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "str": 378
+      },
+      "distinctValues": 368,
+      "waple": "parseSound"
+     },
+     "playbackmode": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "str": 378
+      },
+      "values": {
+       "loop": 211,
+       "single": 158,
+       "random": 9
+      },
+      "waple": "parseSound"
+     },
+     "sound": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "list": 378
+      },
+      "waple": "parse"
+     },
+     "startsilent": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "bool": 378
+      },
+      "values": {
+       "True": 224,
+       "False": 154
+      },
+      "waple": "parseSound"
+     },
+     "volume": {
+      "n": 378,
+      "scenes": 123,
+      "types": {
+       "dict": 202,
+       "float": 176
+      },
+      "range": [
+       0.0,
+       1.5
+      ],
+      "distinct": 33,
+      "waple": "parseSound"
+     },
+     "disablepropagation": {
+      "n": 188,
+      "scenes": 53,
+      "types": {
+       "bool": 188
+      },
+      "values": {
+       "False": 188
+      },
+      "waple": null
+     },
+     "solid": {
+      "n": 188,
+      "scenes": 53,
+      "types": {
+       "bool": 188
+      },
+      "values": {
+       "True": 188
+      },
+      "waple": null
+     },
+     "angles": {
+      "n": 133,
+      "scenes": 22,
+      "types": {
+       "str": 133
+      },
+      "range": [
+       -3.14159,
+       3.14159
+      ],
+      "distinct": 10,
+      "values": {
+       "0.00000 -0.00000 0.00000": 113,
+       "-0.00000 -0.00000 -0.32671": 6,
+       "0.00000 0.00000 0.00000": 6,
+       "3.14159 -0.84518 3.14159": 2,
+       "-0.00000 -0.62735 0.00000": 1,
+       "0.000 0.000 0.000": 1,
+       "0.00000 1.57080 0.00000": 1,
+       "3.14159 -1.57079 -3.14159": 1,
+       "3.14159 -1.57079 3.14159": 1,
+       "3.14159 -1.57080 3.14159": 1
+      },
+      "waple": null
+     },
+     "parent": {
+      "n": 130,
+      "scenes": 13,
+      "types": {
+       "int": 130
+      },
+      "range": [
+       59,
+       2558
+      ],
+      "distinct": 35,
+      "distinctValues": 35,
+      "waple": null
+     },
+     "origin": {
+      "n": 88,
+      "scenes": 29,
+      "types": {
+       "str": 88
+      },
+      "range": [
+       -10180.75391,
+       1920.0
+      ],
+      "distinct": 42,
+      "distinctValues": 42,
+      "waple": null
+     },
+     "attenuation": {
+      "n": 32,
+      "scenes": 1,
+      "types": {
+       "float": 32
+      },
+      "range": [
+       1.0,
+       1.0
+      ],
+      "distinct": 1,
+      "waple": "parseSound"
+     },
+     "mindistance": {
+      "n": 32,
+      "scenes": 1,
+      "types": {
+       "float": 32
+      },
+      "range": [
+       1.0,
+       100.0
+      ],
+      "distinct": 4,
+      "waple": "parseSound"
+     },
+     "spatialization": {
+      "n": 32,
+      "scenes": 1,
+      "types": {
+       "bool": 32
+      },
+      "values": {
+       "True": 20,
+       "False": 12
+      },
+      "waple": "parseSound"
+     },
+     "scale": {
+      "n": 29,
+      "scenes": 9,
+      "types": {
+       "str": 29
+      },
+      "range": [
+       -61.81834,
+       175.4386
+      ],
+      "distinct": 9,
+      "values": {
+       "1.00000 1.00000 1.00000": 6,
+       "100.00000 100.00000 100.00000": 5,
+       "2.39343 2.11038 1.40685": 5,
+       "166.66667 166.66667 166.66667": 4,
+       "175.43860 175.43860 175.43860": 4,
+       "175.43858 175.43860 175.43858": 2,
+       "-61.81834 -24.20698 1.60275": 1,
+       "1.000 1.000 1.000": 1,
+       "1.06436 1.05061 0.63517": 1
+      },
+      "waple": null
+     },
+     "locktransforms": {
+      "n": 22,
+      "scenes": 17,
+      "types": {
+       "bool": 22
+      },
+      "values": {
+       "True": 15,
+       "False": 7
+      },
+      "waple": null
+     },
+     "parallaxDepth": {
+      "n": 7,
+      "scenes": 6,
+      "types": {
+       "str": 7
+      },
+      "range": [
+       1.0,
+       1.0
+      ],
+      "distinct": 2,
+      "values": {
+       "1.00000 1.00000": 6,
+       "1.000 1.000": 1
+      },
+      "waple": null
+     },
+     "attachment": {
+      "n": 1,
+      "scenes": 1,
+      "types": {
+       "str": 1
+      },
+      "values": {
+       "Center": 1
+      },
+      "waple": null
+     }
+    },
+    "model": {
+     "id": {
+      "n": 273,
+      "scenes": 8,
+      "types": {
+       "int": 273
+      },
+      "range": [
+       14,
+       17578
+      ],
+      "distinct": 267,
+      "distinctValues": 267,
+      "waple": "parse"
+     },
+     "model": {
+      "n": 273,
+      "scenes": 8,
+      "types": {
+       "str": 273
+      },
+      "distinctValues": 195,
+      "waple": "parse"
+     },
+     "name": {
+      "n": 273,
+      "scenes": 8,
+      "types": {
+       "str": 273
+      },
+      "distinctValues": 218,
+      "waple": "parseModel"
+     },
+     "disablepropagation": {
+      "n": 265,
+      "scenes": 6,
+      "types": {
+       "bool": 265
+      },
+      "values": {
+       "False": 265
+      },
+      "waple": null
+     },
+     "solid": {
+      "n": 265,
+      "scenes": 6,
+      "types": {
+       "bool": 265
+      },
+      "values": {
+       "True": 248,
+       "False": 17
+      },
+      "waple": null
+     },
+     "scale": {
+      "n": 261,
+      "scenes": 8,
+      "types": {
+       "str": 239,
+       "dict": 22
+      },
+      "range": [
+       0.0002,
+       10000.0
+      ],
+      "distinct": 75,
+      "distinctValues": 75,
+      "waple": "parseModel"
+     },
+     "parent": {
+      "n": 247,
+      "scenes": 7,
+      "types": {
+       "int": 247
+      },
+      "range": [
+       55,
+       3695
+      ],
+      "distinct": 108,
+      "distinctValues": 108,
+      "waple": "parseModel"
+     },
+     "angles": {
+      "n": 231,
+      "scenes": 8,
+      "types": {
+       "str": 211,
+       "dict": 20
+      },
+      "range": [
+       -3.14159,
+       3.14159
+      ],
+      "distinct": 46,
+      "distinctValues": 46,
+      "waple": "parseModel"
+     },
+     "origin": {
+      "n": 137,
+      "scenes": 8,
+      "types": {
+       "str": 121,
+       "dict": 16
+      },
+      "range": [
+       -423.18134,
+       53.4168
+      ],
+      "distinct": 105,
+      "distinctValues": 105,
+      "waple": "parseModel"
+     },
+     "visible": {
+      "n": 131,
+      "scenes": 5,
+      "types": {
+       "dict": 131
+      },
+      "values": {
+       "False": 114,
+       "True": 17
+      },
+      "waple": "parse"
+     },
+     "animationlayers": {
+      "n": 38,
+      "scenes": 2,
+      "types": {
+       "list": 38
+      },
+      "waple": "parseModel"
+     },
+     "castshadow": {
+      "n": 31,
+      "scenes": 7,
+      "types": {
+       "bool": 31
+      },
+      "values": {
+       "False": 31
+      },
+      "waple": "parseModel"
+     },
+     "dependencies": {
+      "n": 23,
+      "scenes": 4,
+      "types": {
+       "list": 23
+      },
+      "waple": "parseModel"
+     }
+    },
+    "camera": {
+     "camera": {
+      "n": 58,
+      "scenes": 37,
+      "types": {
+       "str": 58
+      },
+      "values": {
+       "default": 58
+      },
+      "waple": "parse"
+     },
+     "fov": {
+      "n": 58,
+      "scenes": 37,
+      "types": {
+       "float": 48,
+       "dict": 10
+      },
+      "range": [
+       25.42,
+       72.8
+      ],
+      "distinct": 12,
+      "waple": "parseCameraObject"
+     },
+     "id": {
+      "n": 58,
+      "scenes": 37,
+      "types": {
+       "int": 58
+      },
+      "range": [
+       21,
+       1297271
+      ],
+      "distinct": 38,
+      "distinctValues": 38,
+      "waple": "parse"
+     },
+     "name": {
+      "n": 58,
+      "scenes": 37,
+      "types": {
+       "str": 58
+      },
+      "distinctValues": 24,
+      "waple": "parseCameraObject"
+     },
+     "path": {
+      "n": 58,
+      "scenes": 37,
+      "types": {
+       "str": 58
+      },
+      "distinctValues": 30,
+      "waple": "parseCameraObject"
+     },
+     "queuemode": {
+      "n": 58,
+      "scenes": 37,
+      "types": {
+       "str": 58
+      },
+      "values": {
+       "random": 57,
+       "sequential": 1
+      },
+      "waple": "parseCameraObject"
+     },
+     "zoom": {
+      "n": 58,
+      "scenes": 37,
+      "types": {
+       "dict": 31,
+       "float": 27
+      },
+      "range": [
+       0.75,
+       10.0
+      ],
+      "distinct": 7,
+      "waple": "parseCameraObject"
+     },
+     "origin": {
+      "n": 57,
+      "scenes": 37,
+      "types": {
+       "dict": 29,
+       "str": 28
+      },
+      "range": [
+       -650.2804,
+       2434.38477
+      ],
+      "distinct": 35,
+      "distinctValues": 35,
+      "waple": "parseCameraObject"
+     },
+     "angles": {
+      "n": 45,
+      "scenes": 26,
+      "types": {
+       "str": 42,
+       "dict": 3
+      },
+      "range": [
+       -3.09855,
+       3.14159
+      ],
+      "distinct": 19,
+      "distinctValues": 19,
+      "waple": null
+     },
+     "disablepropagation": {
+      "n": 34,
+      "scenes": 14,
+      "types": {
+       "bool": 34
+      },
+      "values": {
+       "False": 34
+      },
+      "waple": "parseCameraObject"
+     },
+     "solid": {
+      "n": 34,
+      "scenes": 14,
+      "types": {
+       "bool": 34
+      },
+      "values": {
+       "True": 34
+      },
+      "waple": "parseCameraObject"
+     },
+     "visible": {
+      "n": 28,
+      "scenes": 11,
+      "types": {
+       "dict": 28
+      },
+      "values": {
+       "False": 17,
+       "True": 11
+      },
+      "waple": "parse"
+     },
+     "parent": {
+      "n": 19,
+      "scenes": 2,
+      "types": {
+       "int": 19
+      },
+      "range": [
+       274,
+       2092
+      ],
+      "distinct": 6,
+      "values": {
+       "2080": 7,
+       "274": 6,
+       "2092": 3,
+       "2083": 1,
+       "401": 1,
+       "415": 1
+      },
+      "waple": null
+     },
+     "locktransforms": {
+      "n": 3,
+      "scenes": 3,
+      "types": {
+       "bool": 3
+      },
+      "values": {
+       "True": 3
+      },
+      "waple": "parseCameraObject"
+     },
+     "scale": {
+      "n": 3,
+      "scenes": 2,
+      "types": {
+       "dict": 2,
+       "str": 1
+      },
+      "range": [
+       0.5,
+       1.0
+      ],
+      "distinct": 2,
+      "values": {
+       "1.00000 1.00000 1.00000": 2,
+       "0.50000 0.50000 0.50000": 1
+      },
+      "waple": null
+     }
+    },
+    "light": {
+     "castshadow": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "bool": 27
+      },
+      "values": {
+       "False": 18,
+       "True": 9
+      },
+      "waple": "parseLight"
+     },
+     "color": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "str": 20,
+       "dict": 7
+      },
+      "range": [
+       0.0,
+       1.0
+      ],
+      "distinct": 14,
+      "distinctValues": 14,
+      "waple": "parseLight"
+     },
+     "density": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "float": 27
+      },
+      "range": [
+       0.65,
+       4.12
+      ],
+      "distinct": 7,
+      "waple": "parseLight"
+     },
+     "exponent": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "float": 26,
+       "dict": 1
+      },
+      "range": [
+       0.0,
+       4.0
+      ],
+      "distinct": 11,
+      "waple": "parseLight"
+     },
+     "id": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "int": 27
+      },
+      "range": [
+       38,
+       107296
+      ],
+      "distinct": 27,
+      "distinctValues": 27,
+      "waple": "parse"
+     },
+     "intensity": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "float": 18,
+       "dict": 9
+      },
+      "range": [
+       0.0,
+       100.0
+      ],
+      "distinct": 18,
+      "waple": "parseLight"
+     },
+     "light": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "str": 27
+      },
+      "values": {
+       "lpoint": 17,
+       "ldirectional": 5,
+       "lspot": 5
+      },
+      "waple": "parse"
+     },
+     "name": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "str": 27
+      },
+      "values": {
+       "": 18,
+       "Torch Light": 4,
+       "BoostLight": 1,
+       "Main Light": 1,
+       "Navi Light": 1,
+       "SunLight": 1,
+       "雷": 1
+      },
+      "waple": "parseLight"
+     },
+     "parallaxDepth": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "str": 27
+      },
+      "range": [
+       0.0,
+       0.0
+      ],
+      "distinct": 1,
+      "values": {
+       "0.00000 0.00000": 27
+      },
+      "waple": null
+     },
+     "radius": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "float": 27
+      },
+      "range": [
+       1.58,
+       999999.0
+      ],
+      "distinct": 20,
+      "waple": "parseLight"
+     },
+     "volumetricsexponent": {
+      "n": 27,
+      "scenes": 11,
+      "types": {
+       "float": 27
+      },
+      "range": [
+       1.0,
+       3.04
+      ],
+      "distinct": 6,
+      "waple": "parseLight"
+     },
+     "origin": {
+      "n": 26,
+      "scenes": 10,
+      "types": {
+       "str": 24,
+       "dict": 2
+      },
+      "range": [
+       -552.05774,
+       12733.82715
+      ],
+      "distinct": 26,
+      "distinctValues": 26,
+      "waple": "parseLight"
+     },
+     "angles": {
+      "n": 21,
+      "scenes": 10,
+      "types": {
+       "str": 19,
+       "dict": 2
+      },
+      "range": [
+       -2.06849,
+       3.14159
+      ],
+      "distinct": 13,
+      "distinctValues": 13,
+      "waple": "parseLight"
+     },
+     "disablepropagation": {
+      "n": 16,
+      "scenes": 7,
+      "types": {
+       "bool": 16
+      },
+      "values": {
+       "False": 16
+      },
+      "waple": null
+     },
+     "solid": {
+      "n": 16,
+      "scenes": 7,
+      "types": {
+       "bool": 16
+      },
+      "values": {
+       "True": 16
+      },
+      "waple": null
+     },
+     "cascadedistance0": {
+      "n": 15,
+      "scenes": 9,
+      "types": {
+       "float": 15
+      },
+      "range": [
+       0.3,
+       1536.0
+      ],
+      "distinct": 8,
+      "waple": "parseLight"
+     },
+     "cascadedistance1": {
+      "n": 15,
+      "scenes": 9,
+      "types": {
+       "float": 15
+      },
+      "range": [
+       0.4,
+       3072.0
+      ],
+      "distinct": 9,
+      "waple": "parseLight"
+     },
+     "cascadedistance2": {
+      "n": 15,
+      "scenes": 9,
+      "types": {
+       "float": 15
+      },
+      "range": [
+       8.0,
+       5632.0
+      ],
+      "distinct": 9,
+      "waple": "parseLight"
+     },
+     "parent": {
+      "n": 14,
+      "scenes": 7,
+      "types": {
+       "int": 14
+      },
+      "range": [
+       14,
+       3691
+      ],
+      "distinct": 8,
+      "values": {
+       "1203": 4,
+       "130": 2,
+       "14": 2,
+       "459": 2,
+       "304": 1,
+       "3691": 1,
+       "657": 1,
+       "756": 1
+      },
+      "waple": "parseLight"
+     },
+     "scale": {
+      "n": 7,
+      "scenes": 5,
+      "types": {
+       "str": 6,
+       "dict": 1
+      },
+      "range": [
+       1.0,
+       100.0
+      ],
+      "distinct": 6,
+      "values": {
+       "1.93502 1.93502 1.93502": 2,
+       "1.00000 1.00000 1.00000": 1,
+       "1.30000 1.30000 1.00000": 1,
+       "100.00000 100.00000 100.00000": 1,
+       "6.93225 9.99991 9.24864": 1,
+       "7.04461 9.99722 9.00063": 1
+      },
+      "waple": null
+     },
+     "visible": {
+      "n": 7,
+      "scenes": 4,
+      "types": {
+       "dict": 6,
+       "bool": 1
+      },
+      "values": {
+       "True": 6,
+       "False": 1
+      },
+      "waple": "parse"
+     },
+     "innercone": {
+      "n": 5,
+      "scenes": 2,
+      "types": {
+       "float": 5
+      },
+      "range": [
+       10.63,
+       20.0
+      ],
+      "distinct": 2,
+      "waple": "parseLight"
+     },
+     "outercone": {
+      "n": 5,
+      "scenes": 2,
+      "types": {
+       "float": 5
+      },
+      "range": [
+       14.28,
+       30.0
+      ],
+      "distinct": 2,
+      "waple": "parseLight"
+     },
+     "castvolumetrics": {
+      "n": 4,
+      "scenes": 3,
+      "types": {
+       "bool": 4
+      },
+      "values": {
+       "True": 4
+      },
+      "waple": "parseLight"
+     },
+     "lightsourcesize": {
+      "n": 3,
+      "scenes": 2,
+      "types": {
+       "float": 3
+      },
+      "range": [
+       1.0,
+       10000.0
+      ],
+      "distinct": 2,
+      "waple": null
+     },
+     "attachment": {
+      "n": 1,
+      "scenes": 1,
+      "types": {
+       "str": 1
+      },
+      "values": {
+       "Center": 1
+      },
+      "waple": null
+     }
+    },
+    "shape": {
+     "effects": {
+      "n": 41,
+      "scenes": 23,
+      "types": {
+       "list": 41
+      },
+      "waple": "effectQuadLayer"
+     },
+     "id": {
+      "n": 41,
+      "scenes": 23,
+      "types": {
+       "int": 41
+      },
+      "range": [
+       47,
+       18661
+      ],
+      "distinct": 37,
+      "distinctValues": 37,
+      "waple": "parse"
+     },
+     "name": {
+      "n": 41,
+      "scenes": 23,
+      "types": {
+       "str": 41
+      },
+      "values": {
+       "光束 - 角": 17,
+       "Light shafts - linear": 9,
+       "光束 - 线性": 6,
+       "光束 - 径向": 3,
+       "Light shafts - corner": 2,
+       "黄昏光": 2,
+       "dusk6": 1,
+       "night8": 1
+      },
+      "waple": "effectQuadLayer"
+     },
+     "origin": {
+      "n": 41,
+      "scenes": 23,
+      "types": {
+       "str": 35,
+       "dict": 6
+      },
+      "range": [
+       -3084.04297,
+       4560.29883
+      ],
+      "distinct": 29,
+      "distinctValues": 29,
+      "waple": null
+     },
+     "shape": {
+      "n": 41,
+      "scenes": 23,
+      "types": {
+       "str": 41
+      },
+      "values": {
+       "quad": 41
+      },
+      "waple": "isEffectQuad"
+     },
+     "castshadow": {
+      "n": 39,
+      "scenes": 21,
+      "types": {
+       "bool": 39
+      },
+      "values": {
+       "False": 39
+      },
+      "waple": null
+     },
+     "angles": {
+      "n": 30,
+      "scenes": 14,
+      "types": {
+       "str": 30
+      },
+      "range": [
+       -2.92017,
+       1.86469
+      ],
+      "distinct": 13,
+      "distinctValues": 13,
+      "waple": null
+     },
+     "scale": {
+      "n": 23,
+      "scenes": 12,
+      "types": {
+       "str": 23
+      },
+      "range": [
+       -2.25033,
+       5.0
+      ],
+      "distinct": 13,
+      "distinctValues": 13,
+      "waple": null
+     },
+     "visible": {
+      "n": 22,
+      "scenes": 15,
+      "types": {
+       "dict": 22
+      },
+      "values": {
+       "True": 15,
+       "False": 7
+      },
+      "waple": "parse"
+     },
+     "parent": {
+      "n": 16,
+      "scenes": 5,
+      "types": {
+       "int": 16
+      },
+      "range": [
+       129,
+       18660
+      ],
+      "distinct": 15,
+      "distinctValues": 15,
+      "waple": null
+     },
+     "disablepropagation": {
+      "n": 14,
+      "scenes": 7,
+      "types": {
+       "bool": 14
+      },
+      "values": {
+       "False": 14
+      },
+      "waple": null
+     },
+     "parallaxDepth": {
+      "n": 13,
+      "scenes": 6,
+      "types": {
+       "str": 13
+      },
+      "range": [
+       -0.08,
+       0.2
+      ],
+      "distinct": 3,
+      "values": {
+       "0.00000 0.00000": 7,
+       "0.06000 0.20000": 4,
+       "-0.08000 0.08000": 2
+      },
+      "waple": "effectQuadLayer"
+     },
+     "clampuvs": {
+      "n": 12,
+      "scenes": 5,
+      "types": {
+       "bool": 12
+      },
+      "values": {
+       "True": 12
+      },
+      "waple": null
+     },
+     "locktransforms": {
+      "n": 8,
+      "scenes": 3,
+      "types": {
+       "bool": 8
+      },
+      "values": {
+       "True": 8
+      },
+      "waple": null
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift",
+     "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    }
+   ]
+  },
+  {
+   "id": "scene.bindings.forms",
+   "value": {
+    "definition": "{user|script|animation|value|scriptproperties} 로만 이루어진 객체. animationlayers[] 원소도 animation 키를 갖지만 name/blend/rate 를 동반해 제외된다",
+    "forms": {
+     "user|value": 12517,
+     "script|scriptproperties|value": 3709,
+     "script|value": 3613,
+     "animation|value": 925,
+     "script|user|value": 575,
+     "animation|script|value": 198,
+     "script|scriptproperties|user|value": 51,
+     "animation|script|scriptproperties|value": 13
+    },
+    "note": "관측된 모든 바인딩이 value 를 동반한다 — unwrapValue 의 {\"value\":X} 언랩이 전건 성립. 즉 평문 값을 기대하는 코드는 unwrap 만 통과하면 바인딩 형태를 놓치지 않는다",
+    "withoutValue": {},
+    "excludedImpureShapes": {
+     "additive|animation|blend|blendin|blendout|blendtime|id|name|rate|visible": 1374,
+     "additive|animation|blend|id|name|rate|visible": 8
+    },
+    "byKeyPath": {
+     "camera.angles": {
+      "script|value": 3
+     },
+     "camera.fov": {
+      "script|scriptproperties|value": 8,
+      "script|value": 1,
+      "user|value": 1
+     },
+     "camera.origin": {
+      "script|scriptproperties|value": 22,
+      "animation|value": 7
+     },
+     "camera.scale": {
+      "animation|value": 1,
+      "user|value": 1
+     },
+     "camera.visible": {
+      "user|value": 18,
+      "script|value": 10
+     },
+     "camera.zoom": {
+      "user|value": 22,
+      "animation|value": 9
+     },
+     "general.ambientcolor": {
+      "script|value": 1,
+      "user|value": 1
+     },
+     "general.bloom": {
+      "user|value": 15
+     },
+     "general.bloomhdriterations": {
+      "user|value": 1
+     },
+     "general.bloomhdrscatter": {
+      "user|value": 2
+     },
+     "general.bloomhdrstrength": {
+      "user|value": 3
+     },
+     "general.bloomhdrthreshold": {
+      "user|value": 1
+     },
+     "general.bloomstrength": {
+      "user|value": 4
+     },
+     "general.bloomthreshold": {
+      "user|value": 2
+     },
+     "general.bloomtint": {
+      "user|value": 2
+     },
+     "general.cameraparallax": {
+      "user|value": 20
+     },
+     "general.cameraparallaxamount": {
+      "user|value": 2
+     },
+     "general.cameraparallaxdelay": {
+      "user|value": 2
+     },
+     "general.cameraparallaxmouseinfluence": {
+      "user|value": 7
+     },
+     "general.camerashake": {
+      "user|value": 14
+     },
+     "general.camerashakeamplitude": {
+      "user|value": 1
+     },
+     "general.camerashakespeed": {
+      "user|value": 2
+     },
+     "general.clearcolor": {
+      "user|value": 1
+     },
+     "general.fogdistancecolor": {
+      "user|value": 1
+     },
+     "general.fogdistanceend": {
+      "user|value": 1
+     },
+     "general.fogheightcolor": {
+      "user|value": 1
+     },
+     "general.fogheightend": {
+      "user|value": 1
+     },
+     "general.fov": {
+      "script|value": 1
+     },
+     "general.skylightcolor": {
+      "user|value": 1
+     },
+     "general.zoom": {
+      "user|value": 3,
+      "script|value": 1
+     },
+     "image.alpha": {
+      "script|value": 142,
+      "animation|value": 141,
+      "user|value": 141,
+      "script|scriptproperties|value": 47,
+      "animation|script|value": 36,
+      "animation|script|scriptproperties|value": 4
+     },
+     "image.angles": {
+      "animation|value": 375,
+      "script|value": 38,
+      "script|scriptproperties|value": 10
+     },
+     "image.brightness": {
+      "script|value": 9,
+      "script|scriptproperties|value": 5,
+      "user|value": 3
+     },
+     "image.color": {
+      "script|user|value": 429,
+      "script|value": 235,
+      "user|value": 200,
+      "script|scriptproperties|value": 32,
+      "animation|value": 9,
+      "animation|script|scriptproperties|value": 1
+     },
+     "image.origin": {
+      "script|value": 124,
+      "script|scriptproperties|value": 115,
+      "animation|value": 95,
+      "animation|script|value": 3,
+      "animation|script|scriptproperties|value": 1
+     },
+     "image.parallaxDepth": {
+      "user|value": 4
+     },
+     "image.scale": {
+      "script|scriptproperties|value": 293,
+      "script|value": 253,
+      "user|value": 37,
+      "animation|value": 15,
+      "animation|script|value": 8,
+      "animation|script|scriptproperties|value": 3,
+      "script|scriptproperties|user|value": 3
+     },
+     "image.visible": {
+      "user|value": 1235,
+      "script|value": 495,
+      "script|scriptproperties|value": 151,
+      "script|user|value": 65,
+      "script|scriptproperties|user|value": 27
+     },
+     "light.angles": {
+      "animation|value": 1,
+      "script|value": 1
+     },
+     "light.color": {
+      "user|value": 6,
+      "animation|script|value": 1
+     },
+     "light.exponent": {
+      "script|scriptproperties|value": 1
+     },
+     "light.intensity": {
+      "script|scriptproperties|value": 7,
+      "animation|value": 2
+     },
+     "light.origin": {
+      "script|value": 2
+     },
+     "light.scale": {
+      "script|value": 1
+     },
+     "light.visible": {
+      "script|value": 4,
+      "script|scriptproperties|value": 1,
+      "user|value": 1
+     },
+     "model.angles": {
+      "script|value": 15,
+      "animation|value": 4,
+      "script|scriptproperties|value": 1
+     },
+     "model.origin": {
+      "script|value": 10,
+      "animation|script|value": 4,
+      "animation|value": 1,
+      "script|scriptproperties|value": 1
+     },
+     "model.scale": {
+      "script|value": 16,
+      "script|scriptproperties|value": 5,
+      "animation|value": 1
+     },
+     "model.visible": {
+      "script|value": 118,
+      "user|value": 10,
+      "script|scriptproperties|value": 3
+     },
+     "node.angles": {
+      "script|value": 99,
+      "script|scriptproperties|value": 10
+     },
+     "node.origin": {
+      "script|scriptproperties|value": 199,
+      "script|value": 42,
+      "animation|script|value": 8,
+      "animation|value": 7,
+      "animation|script|scriptproperties|value": 2
+     },
+     "node.parallaxDepth": {
+      "user|value": 36
+     },
+     "node.scale": {
+      "user|value": 89,
+      "script|scriptproperties|value": 14,
+      "script|value": 14,
+      "animation|value": 8,
+      "animation|script|value": 1
+     },
+     "node.visible": {
+      "user|value": 387,
+      "script|scriptproperties|value": 24,
+      "script|value": 15,
+      "script|user|value": 10,
+      "script|scriptproperties|user|value": 5
+     },
+     "particle.angles": {
+      "script|scriptproperties|value": 2,
+      "animation|value": 1
+     },
+     "particle.origin": {
+      "script|value": 7,
+      "animation|value": 6
+     },
+     "particle.scale": {
+      "animation|value": 9,
+      "user|value": 4,
+      "script|scriptproperties|value": 1
+     },
+     "particle.visible": {
+      "user|value": 549,
+      "script|value": 24,
+      "script|user|value": 12
+     },
+     "shape.origin": {
+      "animation|value": 6
+     },
+     "shape.visible": {
+      "user|value": 22
+     },
+     "sound.volume": {
+      "user|value": 189,
+      "script|scriptproperties|user|value": 4,
+      "script|value": 4,
+      "script|user|value": 3,
+      "animation|value": 1,
+      "script|scriptproperties|value": 1
+     },
+     "text.alpha": {
+      "user|value": 337,
+      "script|scriptproperties|value": 72,
+      "script|value": 52,
+      "animation|value": 11,
+      "animation|script|value": 8
+     },
+     "text.angles": {
+      "script|scriptproperties|value": 3,
+      "script|value": 1
+     },
+     "text.color": {
+      "user|value": 987,
+      "script|value": 43,
+      "script|scriptproperties|value": 5,
+      "script|user|value": 1
+     },
+     "text.maxwidth": {
+      "script|value": 24,
+      "user|value": 6,
+      "animation|value": 2
+     },
+     "text.origin": {
+      "script|scriptproperties|value": 648,
+      "script|value": 39,
+      "animation|script|value": 6,
+      "animation|value": 3
+     },
+     "text.parallaxDepth": {
+      "user|value": 79
+     },
+     "text.pointsize": {
+      "user|value": 677,
+      "animation|value": 2
+     },
+     "text.scale": {
+      "script|scriptproperties|value": 722,
+      "script|value": 30,
+      "user|value": 26,
+      "animation|value": 1
+     },
+     "text.text": {
+      "script|scriptproperties|value": 960,
+      "script|value": 287,
+      "user|value": 121,
+      "script|user|value": 13
+     },
+     "text.visible": {
+      "user|value": 1086,
+      "script|value": 40,
+      "script|user|value": 24,
+      "script|scriptproperties|value": 12,
+      "script|scriptproperties|user|value": 3
+     }
+    },
+    "nestedByPrefix": {
+     "image.animationlayers[].blend": {
+      "user|value": 9
+     },
+     "image.animationlayers[].rate": {
+      "script|value": 432,
+      "user|value": 13
+     },
+     "image.animationlayers[].visible": {
+      "script|scriptproperties|value": 121,
+      "user|value": 28,
+      "script|scriptproperties|user|value": 8
+     },
+     "image.effects[].passes[].constantshadervalues.*": {
+      "user|value": 832,
+      "script|value": 766,
+      "animation|value": 172,
+      "script|scriptproperties|value": 131,
+      "animation|script|value": 56,
+      "script|user|value": 8,
+      "animation|script|scriptproperties|value": 1,
+      "script|scriptproperties|user|value": 1
+     },
+     "image.effects[].passes[].constantshadervalues.*.scriptproperties.*": {
+      "user|value": 77
+     },
+     "image.effects[].visible": {
+      "user|value": 1368,
+      "script|value": 146,
+      "script|scriptproperties|value": 2
+     },
+     "model.animationlayers[].blend": {
+      "animation|script|value": 38,
+      "script|value": 5,
+      "script|scriptproperties|value": 3
+     },
+     "model.animationlayers[].rate": {
+      "script|scriptproperties|value": 4
+     },
+     "shape.effects[].passes[].constantshadervalues.*": {
+      "animation|value": 2,
+      "user|value": 1
+     },
+     "text.effects[].passes[].constantshadervalues.*": {
+      "user|value": 112,
+      "script|scriptproperties|value": 48,
+      "animation|script|value": 28,
+      "script|value": 25,
+      "animation|value": 22,
+      "script|user|value": 6
+     },
+     "text.effects[].passes[].constantshadervalues.*.scriptproperties.*": {
+      "user|value": 1
+     },
+     "text.effects[].visible": {
+      "user|value": 183,
+      "script|user|value": 4
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.objects.colorBlendMode",
+   "value": {
+    "byType": {
+     "image": {
+      "31": 447,
+      "0": 132,
+      "11": 45,
+      "6": 37,
+      "2": 29,
+      "1": 16,
+      "22": 12,
+      "7": 11,
+      "32": 10,
+      "9": 9,
+      "30": 7,
+      "12": 5,
+      "23": 4,
+      "24": 4,
+      "3": 3,
+      "21": 2,
+      "4": 2,
+      "15": 1,
+      "16": 1,
+      "18": 1,
+      "19": 1,
+      "27": 1,
+      "28": 1,
+      "8": 1
+     },
+     "text": {
+      "0": 18,
+      "31": 12,
+      "11": 4,
+      "12": 2,
+      "17": 2,
+      "24": 2,
+      "28": 1
+     }
+    },
+    "range": "common_blending.h ApplyBlending enum 0-32 — 범위 밖 값 0건",
+    "note": "키는 camelCase colorBlendMode(스키마 대다수의 소문자 규칙에서 벗어난다). parallaxDepth 도 동일 예외"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.effects.schema",
+   "value": {
+    "effectKeys": {
+     "file": 6418,
+     "id": 6418,
+     "name": 6418,
+     "passes": 6418,
+     "visible": 6418
+    },
+    "passKeys": {
+     "id": 7525,
+     "constantshadervalues": 7292,
+     "textures": 3013,
+     "combos": 2301,
+     "usertextures": 261
+    },
+    "visibleValueTypes": {
+     "bool": 4715,
+     "dict": 1703
+    },
+    "textureElementTypes": {
+     "textures": {
+      "str": 3476,
+      "null": 3426
+     },
+     "usertextures": {
+      "null": 261,
+      "str": 153,
+      "dict": 120
+     }
+    },
+    "combosKeyDomain": {
+     "VERTICAL": 557,
+     "BLENDMODE": 506,
+     "ENABLEMASK": 338,
+     "WRITEALPHA": 212,
+     "INVERTCOLOR": 182,
+     "SHAPE": 150,
+     "AUDIOPROCESSING": 140,
+     "RESOLUTION": 104,
+     "TRANSFORMUV": 94,
+     "TRANSPARENCY": 76,
+     "ANTIALIAS": 62,
+     "KERNEL": 54,
+     "DIRECTION": 50,
+     "DEBUG": 46,
+     "NODE_COUNT": 45,
+     "MODE": 44,
+     "DIRECTDRAW": 41,
+     "BACKGROUND": 40,
+     "GLOBAL_ROTATION": 37,
+     "TRANSFORMREPEAT": 35,
+     "PERSPECTIVE": 34,
+     "EDGEGLOW": 33,
+     "REPEAT": 31,
+     "TONEMAP": 29,
+     "TRANSFORM": 29,
+     "V_REMAPPING": 29,
+     "PRECISE": 28,
+     "PROPERTIES": 27,
+     "RENDERING": 27,
+     "BAR_STYLE": 25,
+     "RAYCORNER": 24,
+     "CLIP_LOW": 23,
+     "RAYMODE": 22,
+     "CLAMP": 21,
+     "DUALWAVES": 21,
+     "CLIP_HIGH": 20,
+     "DISABLE_CROSS_FEATHER": 20,
+     "FEATHER": 17,
+     "SHAPE_TYPE": 17,
+     "GAMMA": 16
+    },
+    "combosKeyCase": "전건 대문자(AUDIOPROCESSING/BLENDMODE/…) — 케이스 혼용 0건",
+    "constantKeyCaseClashWithinSameEffect": [
+     {
+      "effect": "effects/workshop/2822917890/bloom/effect.json",
+      "key": "gamma",
+      "spellings": {
+       "gamma": 10,
+       "Gamma": 5
+      }
+     },
+     {
+      "effect": "effects/workshop/2822917890/bloom/effect.json",
+      "key": "opacity",
+      "spellings": {
+       "opacity": 100,
+       "Opacity": 20
+      }
+     },
+     {
+      "effect": "effects/workshop/2822917890/bloom/effect.json",
+      "key": "threshold",
+      "spellings": {
+       "threshold": 10,
+       "Threshold": 5
+      }
+     }
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.animationLayers.schema",
+   "value": {
+    "keys": {
+     "additive": 1382,
+     "animation": 1382,
+     "blend": 1382,
+     "id": 1382,
+     "name": 1382,
+     "rate": 1382,
+     "visible": 1382,
+     "blendin": 1374,
+     "blendout": 1374,
+     "blendtime": 1374
+    },
+    "valueTypes": {
+     "additive": {
+      "bool": 1382
+     },
+     "animation": {
+      "int": 1382
+     },
+     "blend": {
+      "float": 1327,
+      "dict": 55
+     },
+     "blendin": {
+      "bool": 1374
+     },
+     "blendout": {
+      "bool": 1374
+     },
+     "blendtime": {
+      "float": 1374
+     },
+     "id": {
+      "int": 1382
+     },
+     "name": {
+      "str": 1382
+     },
+     "rate": {
+      "float": 933,
+      "dict": 449
+     },
+     "visible": {
+      "bool": 1225,
+      "dict": 157
+     }
+    },
+    "layersPerObject": {
+     "1": 159,
+     "2": 466,
+     "3": 40,
+     "4": 10,
+     "5": 8,
+     "6": 2,
+     "7": 1,
+     "8": 3,
+     "9": 4,
+     "12": 1
+    },
+    "blendtimeOnMultiLayerObjects": 1223
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.keyCaseVariants",
+   "value": {
+    "variants": {},
+    "conclusion": "scene.json 키에는 대소문자 혼용이 **없다**. corpus/inventory.json 의 project.json type(video/Video) 함정은 여기에 재현되지 않는다 — scene.json 은 camelCase 예외 2개(colorBlendMode/parallaxDepth)를 제외하면 전부 소문자이고 각 키의 철자가 코퍼스 전체에서 단일하다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "scene.anomalies",
+   "value": {
+    "duplicateObjectIds": {
+     "scenes": 0,
+     "detail": {}
+    },
+    "danglingParentIds": {
+     "scenes": 0,
+     "detail": {}
+    },
+    "selfParent": 0,
+    "alphaOutside01": {
+     "text:2.0": 4,
+     "image:1.5": 1,
+     "image:3.0": 1
+    },
+    "negativeScaleComponents": {
+     "image": 172,
+     "particle": 70,
+     "node": 8,
+     "text": 4,
+     "shape": 2,
+     "sound": 1
+    },
+    "negativeParallaxDepth": {
+     "text": 321,
+     "image": 265,
+     "node": 74,
+     "particle": 74,
+     "shape": 2
+    },
+    "zeroParallaxDepth": {
+     "image": 920,
+     "text": 515,
+     "particle": 94,
+     "node": 73,
+     "light": 27,
+     "shape": 7
+    },
+    "orthogonalProjectionExtraKeys": {
+     "auto": 1
+    },
+    "generalNullValues": {
+     "ambientcolor": 1,
+     "bloomstrength": 1,
+     "bloomthreshold": 1,
+     "clearenabled": 1,
+     "orthogonalprojection": 7,
+     "skylightcolor": 1
+    },
+    "note": "벡터는 전부 문자열('x y z')이라 JSON 숫자 음수는 0건 — 음수는 문자열 성분 파스 후에만 보인다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.parsedKeysByFunction",
+   "value": {
+    "note": "SceneDocument.swift 를 함수 경계로 잘라 뽑은 JSON 키 리터럴 중, 코퍼스 scene.json 에 실제로 등장하는 것만 남긴 교집합. 타입 → 함수 매핑은 TYPE_FUNCS 참조",
+    "byFunction": {
+     "applyGeneralSettings": [
+      "bloomhdrfeather",
+      "bloomhdriterations",
+      "bloomhdrscatter",
+      "bloomhdrstrength",
+      "bloomhdrthreshold",
+      "bloomstrength",
+      "bloomthreshold",
+      "bloomtint",
+      "camerafade",
+      "camerashake",
+      "camerashakeamplitude",
+      "camerashakeroughness",
+      "camerashakespeed",
+      "clearenabled",
+      "gravitydirection",
+      "gravitystrength",
+      "perspectiveoverridefov",
+      "winddirection",
+      "windenabled",
+      "windstrength",
+      "zoom"
+     ],
+     "effectQuadLayer": [
+      "alpha",
+      "brightness",
+      "color",
+      "effects",
+      "id",
+      "name",
+      "parallaxDepth",
+      "visible"
+     ],
+     "isEffectQuad": [
+      "effects",
+      "shape"
+     ],
+     "parse": [
+      "ambientcolor",
+      "angles",
+      "bloom",
+      "camera",
+      "cameraparallax",
+      "cameraparallaxamount",
+      "cameraparallaxdelay",
+      "cameraparallaxmouseinfluence",
+      "clearcolor",
+      "hdr",
+      "id",
+      "image",
+      "light",
+      "model",
+      "origin",
+      "orthogonalprojection",
+      "parent",
+      "particle",
+      "scale",
+      "skylightcolor",
+      "sound",
+      "text",
+      "visible"
+     ],
+     "parseAllAnimationLayers": [
+      "additive",
+      "animation",
+      "blend",
+      "name",
+      "rate",
+      "visible"
+     ],
+     "parseCamera": [
+      "camera",
+      "center",
+      "eye",
+      "farz",
+      "fov",
+      "nearz",
+      "orthogonalprojection",
+      "up"
+     ],
+     "parseCameraObject": [
+      "disablepropagation",
+      "fov",
+      "id",
+      "locktransforms",
+      "name",
+      "origin",
+      "path",
+      "queuemode",
+      "solid",
+      "zoom"
+     ],
+     "parseEffects": [
+      "combos",
+      "constantshadervalues",
+      "file",
+      "name",
+      "passes",
+      "textures",
+      "usertextures",
+      "visible"
+     ],
+     "parseLayer": [
+      "alignment",
+      "alpha",
+      "angles",
+      "animationlayers",
+      "attachment",
+      "brightness",
+      "center",
+      "clampuvs",
+      "color",
+      "colorBlendMode",
+      "config",
+      "copybackground",
+      "dependencies",
+      "disablepropagation",
+      "effects",
+      "id",
+      "instance",
+      "ledsource",
+      "locktransforms",
+      "name",
+      "nointerpolation",
+      "origin",
+      "parallaxDepth",
+      "parent",
+      "passes",
+      "perspective",
+      "scale",
+      "size",
+      "solid",
+      "spacing",
+      "visible"
+     ],
+     "parseLight": [
+      "angles",
+      "cascadedistance0",
+      "cascadedistance1",
+      "cascadedistance2",
+      "castshadow",
+      "castvolumetrics",
+      "color",
+      "density",
+      "exponent",
+      "id",
+      "innercone",
+      "intensity",
+      "name",
+      "origin",
+      "outercone",
+      "parent",
+      "radius",
+      "volumetricsexponent"
+     ],
+     "parseModel": [
+      "alpha",
+      "angles",
+      "animationlayers",
+      "attachment",
+      "castshadow",
+      "color",
+      "dependencies",
+      "effects",
+      "id",
+      "name",
+      "origin",
+      "parent",
+      "scale",
+      "visible"
+     ],
+     "parseNode": [
+      "angles",
+      "attachment",
+      "camera",
+      "id",
+      "image",
+      "light",
+      "model",
+      "origin",
+      "parent",
+      "particle",
+      "scale",
+      "text",
+      "visible"
+     ],
+     "parseParticle": [
+      "angles",
+      "attachment",
+      "clampuvs",
+      "copybackground",
+      "disablepropagation",
+      "instanceoverride",
+      "locktransforms",
+      "nointerpolation",
+      "origin",
+      "parallaxDepth",
+      "parent",
+      "scale",
+      "solid",
+      "visible"
+     ],
+     "parseSound": [
+      "attenuation",
+      "id",
+      "maxtime",
+      "mindistance",
+      "mintime",
+      "name",
+      "playbackmode",
+      "sound",
+      "spatialization",
+      "startsilent",
+      "volume"
+     ],
+     "parseText": [
+      "alpha",
+      "anchor",
+      "angles",
+      "backgroundbrightness",
+      "backgroundcolor",
+      "blockalign",
+      "center",
+      "clampuvs",
+      "color",
+      "colorBlendMode",
+      "copybackground",
+      "depthtest",
+      "disablepropagation",
+      "effects",
+      "font",
+      "horizontalalign",
+      "id",
+      "limitrows",
+      "limituseellipsis",
+      "limitwidth",
+      "locktransforms",
+      "maxrows",
+      "maxwidth",
+      "name",
+      "nointerpolation",
+      "opaquebackground",
+      "origin",
+      "outline",
+      "outlinecolor",
+      "outlinethickness",
+      "padding",
+      "parent",
+      "pointsize",
+      "scale",
+      "solid",
+      "spacing",
+      "text",
+      "verticalalign",
+      "visible"
+     ],
+     "transformScripts": [
+      "angles",
+      "origin",
+      "scale"
+     ]
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift",
+     "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    }
+   ]
+  },
+  {
+   "id": "waple.unparsedObjectKeys",
+   "value": {
+    "method": "타입별 파스 함수 + parse() 공통 전처리 키만 '파싱됨'으로 친다. literalElsewhereInFile=true 는 다른 타입 경로에는 있으나 이 타입에는 없다는 뜻. deliberate 는 소스에 '왜 버리는지' 주석이 있는 것(미인지 누락과 구분), uniformValue=true 는 코퍼스 관측값이 단일이라 파싱해도 결과가 같은 것",
+    "caveat": "'읽는다'와 '보존한다'는 다르다. 이 표는 리터럴 존재만 보증한다. 확인된 3건: (a) id — parse() 가 가시성 게이트 판정에 obj[\"id\"] 를 읽지만 SceneParticle 에 id 필드가 없어 파티클은 parent 룩업 대상이 못 된다(waple.parentTransformRegistration). (b) camera.visible — SceneCameraObject 에 visible 필드가 없고 parseCameraObject 의 스크립트 캡처는 origin/zoom/fov 뿐이라 script 형 10건이 유실된다(정적 false 10건은 게이트가 드롭). (c) light.visible — SceneLight3D 에도 visible 필드가 없어 script 형 5건이 유실(스크립트로 껐다 켜는 라이트가 상시 켜짐)",
+    "keys": [
+     {
+      "type": "image",
+      "key": "castshadow",
+      "objects": 4138,
+      "scenes": 130,
+      "valueTypes": {
+       "bool": 4138
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 4138
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "text",
+      "key": "size",
+      "objects": 1597,
+      "scenes": 123,
+      "valueTypes": {
+       "str": 1597
+      },
+      "distinctValues": 684,
+      "topValues": {
+       "2.00000 2.00000": 36,
+       "375.00000 161.00000": 30,
+       "1840.00000 179.00000": 29,
+       "390.00000 109.00000": 24
+      },
+      "range": [
+       2.0,
+       8316.0
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "parseText: 배율은 scale 필드 — size 는 parseLayer 전용 레이아웃 박스(오독 시 거대 글리프)",
+      "uniformValue": false
+     },
+     {
+      "type": "text",
+      "key": "castshadow",
+      "objects": 1391,
+      "scenes": 101,
+      "valueTypes": {
+       "bool": 1391
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 1391
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "node",
+      "key": "name",
+      "objects": 997,
+      "scenes": 68,
+      "valueTypes": {
+       "str": 997
+      },
+      "distinctValues": 443,
+      "topValues": {
+       "": 205,
+       "scy": 28,
+       "帧率位置": 27,
+       "sy": 21
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "particle",
+      "key": "name",
+      "objects": 997,
+      "scenes": 131,
+      "valueTypes": {
+       "str": 997
+      },
+      "distinctValues": 323,
+      "topValues": {
+       "Ocean bubbles": 26,
+       "Fireflies": 23,
+       "Trails 2": 23,
+       "Blinking Stars_01": 19
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "text",
+      "key": "parallaxDepth",
+      "objects": 956,
+      "scenes": 77,
+      "valueTypes": {
+       "str": 877,
+       "dict": 79
+      },
+      "distinctValues": 27,
+      "topValues": {
+       "0.00000 0.00000": 515,
+       "-0.70000 -0.70000": 281,
+       "1.00000 1.00000": 83,
+       "-0.10000 0.00000": 24
+      },
+      "range": [
+       -5.0,
+       25.0
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "node",
+      "key": "disablepropagation",
+      "objects": 595,
+      "scenes": 36,
+      "valueTypes": {
+       "bool": 595
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 595
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "node",
+      "key": "solid",
+      "objects": 595,
+      "scenes": 36,
+      "valueTypes": {
+       "bool": 595
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "True": 595
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "text",
+      "key": "brightness",
+      "objects": 568,
+      "scenes": 69,
+      "valueTypes": {
+       "float": 568
+      },
+      "distinctValues": 12,
+      "topValues": null,
+      "range": [
+       0.0,
+       6.24
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "sound",
+      "key": "muteineditor",
+      "objects": 378,
+      "scenes": 123,
+      "valueTypes": {
+       "bool": 378
+      },
+      "distinctValues": 2,
+      "topValues": {
+       "True": 278,
+       "False": 100
+      },
+      "range": null,
+      "literalElsewhereInFile": false,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "model",
+      "key": "disablepropagation",
+      "objects": 265,
+      "scenes": 6,
+      "valueTypes": {
+       "bool": 265
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 265
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "model",
+      "key": "solid",
+      "objects": 265,
+      "scenes": 6,
+      "valueTypes": {
+       "bool": 265
+      },
+      "distinctValues": 2,
+      "topValues": {
+       "True": 248,
+       "False": 17
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "node",
+      "key": "parallaxDepth",
+      "objects": 191,
+      "scenes": 40,
+      "valueTypes": {
+       "str": 155,
+       "dict": 36
+      },
+      "distinctValues": 54,
+      "topValues": {
+       "0.00000 0.00000": 73,
+       "-0.92000 -0.92000": 22,
+       "-1.00000 -1.00000": 9,
+       "-0.61000 -0.61000": 7
+      },
+      "range": [
+       -15.0,
+       3.2
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "sound",
+      "key": "disablepropagation",
+      "objects": 188,
+      "scenes": 53,
+      "valueTypes": {
+       "bool": 188
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 188
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "sound",
+      "key": "solid",
+      "objects": 188,
+      "scenes": 53,
+      "valueTypes": {
+       "bool": 188
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "True": 188
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "sound",
+      "key": "angles",
+      "objects": 133,
+      "scenes": 22,
+      "valueTypes": {
+       "str": 133
+      },
+      "distinctValues": 10,
+      "topValues": {
+       "0.00000 -0.00000 0.00000": 113,
+       "-0.00000 -0.00000 -0.32671": 6,
+       "0.00000 0.00000 0.00000": 6,
+       "3.14159 -0.84518 3.14159": 2
+      },
+      "range": [
+       -3.14159,
+       3.14159
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "parse(): 사운드 오브젝트는 트랜스폼/계층 무시(전역 재생)",
+      "uniformValue": false
+     },
+     {
+      "type": "sound",
+      "key": "parent",
+      "objects": 130,
+      "scenes": 13,
+      "valueTypes": {
+       "int": 130
+      },
+      "distinctValues": 35,
+      "topValues": {
+       "606": 59,
+       "1587": 10,
+       "160": 7,
+       "193": 6
+      },
+      "range": [
+       59,
+       2558
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "parse(): 사운드 오브젝트는 트랜스폼/계층 무시(전역 재생)",
+      "uniformValue": false
+     },
+     {
+      "type": "sound",
+      "key": "origin",
+      "objects": 88,
+      "scenes": 29,
+      "valueTypes": {
+       "str": 88
+      },
+      "distinctValues": 42,
+      "topValues": {
+       "-3982.37744 -505.57507 0.00000": 10,
+       "-1920.00000 -1080.00000 0.00000": 9,
+       "-401.55573 -909.21008 0.00000": 7,
+       "0.00000 0.00000 0.00000": 5
+      },
+      "range": [
+       -10180.75391,
+       1920.0
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "parse(): 사운드 오브젝트는 트랜스폼/계층 무시(전역 재생)",
+      "uniformValue": false
+     },
+     {
+      "type": "camera",
+      "key": "angles",
+      "objects": 45,
+      "scenes": 26,
+      "valueTypes": {
+       "str": 42,
+       "dict": 3
+      },
+      "distinctValues": 19,
+      "topValues": {
+       "0.00000 -0.00000 0.00000": 19,
+       "0.00000 -0.00000 -0.00000": 9,
+       "-0.01400 1.52599 0.00000": 1,
+       "-0.06981 0.00000 0.00000": 1
+      },
+      "range": [
+       -3.09855,
+       3.14159
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "shape",
+      "key": "origin",
+      "objects": 41,
+      "scenes": 23,
+      "valueTypes": {
+       "str": 35,
+       "dict": 6
+      },
+      "distinctValues": 29,
+      "topValues": {
+       "-129.66199 706.48511 0.00000": 6,
+       "1841.91895 1052.11389 0.00000": 3,
+       "266.33936 -1671.66479 0.00000": 3,
+       "16.56018 2257.22803 0.00000": 2
+      },
+      "range": [
+       -3084.04297,
+       4560.29883
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "effectQuadLayer: 풀스크린 고정 승격이라 저작 트랜스폼·parent 를 버린다",
+      "uniformValue": false
+     },
+     {
+      "type": "shape",
+      "key": "castshadow",
+      "objects": 39,
+      "scenes": 21,
+      "valueTypes": {
+       "bool": 39
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 39
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "shape",
+      "key": "angles",
+      "objects": 30,
+      "scenes": 14,
+      "valueTypes": {
+       "str": 30
+      },
+      "distinctValues": 13,
+      "topValues": {
+       "0.00000 -0.00000 0.00000": 14,
+       "0.00000 -0.00000 -2.83211": 3,
+       "0.00000 -0.00000 -2.92017": 3,
+       "-0.00000 -0.00000 -0.19516": 1
+      },
+      "range": [
+       -2.92017,
+       1.86469
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "effectQuadLayer: 풀스크린 고정 승격이라 저작 트랜스폼·parent 를 버린다",
+      "uniformValue": false
+     },
+     {
+      "type": "node",
+      "key": "locktransforms",
+      "objects": 29,
+      "scenes": 9,
+      "valueTypes": {
+       "bool": 29
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "True": 29
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "sound",
+      "key": "scale",
+      "objects": 29,
+      "scenes": 9,
+      "valueTypes": {
+       "str": 29
+      },
+      "distinctValues": 9,
+      "topValues": {
+       "1.00000 1.00000 1.00000": 6,
+       "100.00000 100.00000 100.00000": 5,
+       "2.39343 2.11038 1.40685": 5,
+       "166.66667 166.66667 166.66667": 4
+      },
+      "range": [
+       -61.81834,
+       175.4386
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "parse(): 사운드 오브젝트는 트랜스폼/계층 무시(전역 재생)",
+      "uniformValue": false
+     },
+     {
+      "type": "light",
+      "key": "parallaxDepth",
+      "objects": 27,
+      "scenes": 11,
+      "valueTypes": {
+       "str": 27
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "0.00000 0.00000": 27
+      },
+      "range": [
+       0.0,
+       0.0
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "shape",
+      "key": "scale",
+      "objects": 23,
+      "scenes": 12,
+      "valueTypes": {
+       "str": 23
+      },
+      "distinctValues": 13,
+      "topValues": {
+       "2.06018 2.06018 2.06018": 6,
+       "2.00000 2.00000 1.00000": 3,
+       "2.95971 2.00000 1.00000": 3,
+       "4.00000 4.00000 1.00000": 2
+      },
+      "range": [
+       -2.25033,
+       5.0
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "effectQuadLayer: 풀스크린 고정 승격이라 저작 트랜스폼·parent 를 버린다",
+      "uniformValue": false
+     },
+     {
+      "type": "sound",
+      "key": "locktransforms",
+      "objects": 22,
+      "scenes": 17,
+      "valueTypes": {
+       "bool": 22
+      },
+      "distinctValues": 2,
+      "topValues": {
+       "True": 15,
+       "False": 7
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "camera",
+      "key": "parent",
+      "objects": 19,
+      "scenes": 2,
+      "valueTypes": {
+       "int": 19
+      },
+      "distinctValues": 6,
+      "topValues": {
+       "2080": 7,
+       "274": 6,
+       "2092": 3,
+       "2083": 1
+      },
+      "range": [
+       274,
+       2092
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "light",
+      "key": "disablepropagation",
+      "objects": 16,
+      "scenes": 7,
+      "valueTypes": {
+       "bool": 16
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 16
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "light",
+      "key": "solid",
+      "objects": 16,
+      "scenes": 7,
+      "valueTypes": {
+       "bool": 16
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "True": 16
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "shape",
+      "key": "parent",
+      "objects": 16,
+      "scenes": 5,
+      "valueTypes": {
+       "int": 16
+      },
+      "distinctValues": 15,
+      "topValues": {
+       "2065": 2,
+       "1155": 1,
+       "129": 1,
+       "1375": 1
+      },
+      "range": [
+       129,
+       18660
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "effectQuadLayer: parent 를 남기면 composeParentTransforms 가 풀스크린 지오메트리를 재배치한다",
+      "uniformValue": false
+     },
+     {
+      "type": "shape",
+      "key": "disablepropagation",
+      "objects": 14,
+      "scenes": 7,
+      "valueTypes": {
+       "bool": 14
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 14
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "shape",
+      "key": "clampuvs",
+      "objects": 12,
+      "scenes": 5,
+      "valueTypes": {
+       "bool": 12
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "True": 12
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "text",
+      "key": "perspective",
+      "objects": 9,
+      "scenes": 8,
+      "valueTypes": {
+       "bool": 9
+      },
+      "distinctValues": 2,
+      "topValues": {
+       "False": 6,
+       "True": 3
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "shape",
+      "key": "locktransforms",
+      "objects": 8,
+      "scenes": 3,
+      "valueTypes": {
+       "bool": 8
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "True": 8
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "light",
+      "key": "scale",
+      "objects": 7,
+      "scenes": 5,
+      "valueTypes": {
+       "str": 6,
+       "dict": 1
+      },
+      "distinctValues": 6,
+      "topValues": {
+       "1.93502 1.93502 1.93502": 2,
+       "1.00000 1.00000 1.00000": 1,
+       "1.30000 1.30000 1.00000": 1,
+       "100.00000 100.00000 100.00000": 1
+      },
+      "range": [
+       1.0,
+       100.0
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "sound",
+      "key": "parallaxDepth",
+      "objects": 7,
+      "scenes": 6,
+      "valueTypes": {
+       "str": 7
+      },
+      "distinctValues": 2,
+      "topValues": {
+       "1.00000 1.00000": 6,
+       "1.000 1.000": 1
+      },
+      "range": [
+       1.0,
+       1.0
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": "parse(): 사운드 오브젝트는 트랜스폼/계층 무시(전역 재생)",
+      "uniformValue": false
+     },
+     {
+      "type": "text",
+      "key": "ledsource",
+      "objects": 6,
+      "scenes": 5,
+      "valueTypes": {
+       "bool": 6
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "False": 6
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "camera",
+      "key": "scale",
+      "objects": 3,
+      "scenes": 2,
+      "valueTypes": {
+       "dict": 2,
+       "str": 1
+      },
+      "distinctValues": 2,
+      "topValues": {
+       "1.00000 1.00000 1.00000": 2,
+       "0.50000 0.50000 0.50000": 1
+      },
+      "range": [
+       0.5,
+       1.0
+      ],
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "light",
+      "key": "lightsourcesize",
+      "objects": 3,
+      "scenes": 2,
+      "valueTypes": {
+       "float": 3
+      },
+      "distinctValues": 2,
+      "topValues": null,
+      "range": [
+       1.0,
+       10000.0
+      ],
+      "literalElsewhereInFile": false,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "text",
+      "key": "attachment",
+      "objects": 3,
+      "scenes": 2,
+      "valueTypes": {
+       "str": 3
+      },
+      "distinctValues": 2,
+      "topValues": {
+       "右耳朵": 2,
+       "音频封面1": 1
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": false
+     },
+     {
+      "type": "light",
+      "key": "attachment",
+      "objects": 1,
+      "scenes": 1,
+      "valueTypes": {
+       "str": 1
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "Center": 1
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     },
+     {
+      "type": "sound",
+      "key": "attachment",
+      "objects": 1,
+      "scenes": 1,
+      "valueTypes": {
+       "str": 1
+      },
+      "distinctValues": 1,
+      "topValues": {
+       "Center": 1
+      },
+      "range": null,
+      "literalElsewhereInFile": true,
+      "deliberate": null,
+      "uniformValue": true
+     }
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift",
+     "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    }
+   ]
+  },
+  {
+   "id": "waple.unparsedGeneralKeys",
+   "value": {
+    "keys": [
+     {
+      "key": "camerapreview",
+      "scenes": 162,
+      "valueTypes": {
+       "bool": 162
+      },
+      "topValues": {
+       "True": 158,
+       "False": 4
+      }
+     },
+     {
+      "key": "lightconfig",
+      "scenes": 11,
+      "valueTypes": {
+       "dict": 11
+      },
+      "topValues": null
+     },
+     {
+      "key": "transparentsorting",
+      "scenes": 3,
+      "valueTypes": {
+       "bool": 3
+      },
+      "topValues": {
+       "True": 3
+      }
+     },
+     {
+      "key": "fogdistance",
+      "scenes": 2,
+      "valueTypes": {
+       "bool": 2
+      },
+      "topValues": {
+       "True": 2
+      }
+     },
+     {
+      "key": "fogdistancecolor",
+      "scenes": 2,
+      "valueTypes": {
+       "dict": 1,
+       "str": 1
+      },
+      "topValues": {
+       "0.00000 0.00000 0.00000": 1,
+       "0.63529 0.74510 0.75294": 1
+      }
+     },
+     {
+      "key": "fogdistanceend",
+      "scenes": 2,
+      "valueTypes": {
+       "dict": 1,
+       "float": 1
+      },
+      "topValues": null
+     },
+     {
+      "key": "fogdistanceenddensity",
+      "scenes": 2,
+      "valueTypes": {
+       "float": 2
+      },
+      "topValues": null
+     },
+     {
+      "key": "fogdistancestart",
+      "scenes": 2,
+      "valueTypes": {
+       "float": 2
+      },
+      "topValues": null
+     },
+     {
+      "key": "fogdistancestartdensity",
+      "scenes": 2,
+      "valueTypes": {
+       "float": 2
+      },
+      "topValues": null
+     },
+     {
+      "key": "fogheight",
+      "scenes": 1,
+      "valueTypes": {
+       "bool": 1
+      },
+      "topValues": {
+       "True": 1
+      }
+     },
+     {
+      "key": "fogheightcolor",
+      "scenes": 1,
+      "valueTypes": {
+       "dict": 1
+      },
+      "topValues": {
+       "0.63137 0.80392 1.00000": 1
+      }
+     },
+     {
+      "key": "fogheightend",
+      "scenes": 1,
+      "valueTypes": {
+       "dict": 1
+      },
+      "topValues": null
+     },
+     {
+      "key": "fogheightenddensity",
+      "scenes": 1,
+      "valueTypes": {
+       "float": 1
+      },
+      "topValues": null
+     },
+     {
+      "key": "fogheightstart",
+      "scenes": 1,
+      "valueTypes": {
+       "float": 1
+      },
+      "topValues": null
+     },
+     {
+      "key": "fogheightstartdensity",
+      "scenes": 1,
+      "valueTypes": {
+       "float": 1
+      },
+      "topValues": null
+     },
+     {
+      "key": "spritesheetrefreshsync",
+      "scenes": 1,
+      "valueTypes": {
+       "bool": 1
+      },
+      "topValues": {
+       "True": 1
+      }
+     }
+    ],
+    "wapleParsedButNeverAuthored": [
+     "quality"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift",
+     "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    }
+   ]
+  },
+  {
+   "id": "waple.valueShapeMismatch",
+   "value": {
+    "method": "Waple 이 스칼라 Float 로 읽는 키에 코퍼스가 공백 구분 벡터 문자열을 넣는 경우. lenientFloat(Float(\"0.00000 0.00000\")) 는 nil 이라 값이 통째로 사라진다",
+    "found": {
+     "text.spacing": {
+      "0.00000 0.00000": 171
+     }
+    },
+    "wapleCode": "SceneDocument.parseText: t.spacing = float(obj[\"spacing\"]) — SceneTextLayer.spacing 은 Float? 이라 벡터를 담을 수 없다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift",
+     "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    }
+   ]
+  },
+  {
+   "id": "waple.textParallaxScope",
+   "value": {
+    "method": "text.parallaxDepth 는 parseText 가 읽지 않고 SceneRendererFrameEncoder 의 텍스트 드로우가 parallaxDepth=1 로 고정한다. 실효 범위는 cameraparallax 가 켜진 씬뿐",
+    "parallaxEnabledScenes": 56,
+    "textObjectsInThoseScenes": {
+     "0(시차 없음) — Waple 은 1 로 그린다": 269,
+     "기타(음수)": 184,
+     "(미저작 → WE 기본)": 145,
+     "1(Waple 하드코드와 동일)": 48,
+     "기타(양수)": 29
+    },
+    "wapleCode": "encodeText: `var depth = SIMD2<Float>(1, 1)` → setVertexBytes(index 2). 같은 파일에서 이미지 레이어는 `layer.parallaxDepth`, 파티클은 `sys.parallaxDepth`"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRendererFrameEncoder.swift:1519",
+     "note": "코드 실독: encodeText 의 depth 는 리터럴 (1,1). 대조군 :449 layer.parallaxDepth / :1578 sys.parallaxDepth"
+    }
+   ]
+  },
+  {
+   "id": "waple.parentTransformRegistration",
+   "value": {
+    "method": "buildParentTransformMap/composeParentTransforms 가 localT 에 넣는 것은 layers(image·shape) + nodes3D(콘텐츠 없음 또는 정적 비가시) + texts 뿐. SceneParticle/SceneObject3D/SceneCameraObject/SceneSound 는 id 등록이 없다",
+    "resolved": {
+     "image<-image:layer": 1382,
+     "image<-node:node": 1325,
+     "text<-node:node": 992,
+     "node<-node:node": 637,
+     "model<-node:node": 242,
+     "text<-image:layer": 150,
+     "particle<-node:node": 135,
+     "image<-image:invNode": 132,
+     "particle<-image:layer": 87,
+     "sound<-image:layer": 82,
+     "text<-text:text": 66,
+     "node<-image:layer": 37,
+     "particle<-image:invNode": 35,
+     "sound<-node:node": 26,
+     "node<-image:invNode": 25,
+     "text<-text:invNode": 21,
+     "particle<-particle:invNode": 18,
+     "image<-text:text": 16,
+     "camera<-node:node": 11,
+     "shape<-node:node": 10,
+     "light<-node:node": 8,
+     "text<-image:invNode": 7,
+     "sound<-text:text": 6,
+     "shape<-image:invNode": 5,
+     "light<-image:invNode": 2,
+     "shape<-image:layer": 1
+    },
+    "unresolved": {
+     "2D particle<-particle": 57,
+     "3D image<-model": 34,
+     "3D particle<-model": 16,
+     "3D sound<-model": 16,
+     "3D camera<-model": 8,
+     "3D model<-model": 5,
+     "3D node<-model": 5,
+     "3D light<-model": 4
+    },
+    "note": "3D 씬(camera3D!=nil)은 composeParentTransforms 자체를 스킵하므로 3D 항목은 SceneRenderer3D 월드행렬 경로의 몫이다 — 2D 항목만 파스 갭이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_scene_schema.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift",
+     "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    }
+   ]
+  },
+  {
+   "id": "waple.gapImpact",
+   "value": {
+    "caveat": "이 머신에 Swift 툴체인이 없어 렌더 대조를 못 했다. 아래는 측정치 + 소스 독해의 해석이다",
+    "live": [
+     {
+      "what": "text.parallaxDepth 미파싱",
+      "measured": "text 오브젝트 956개(전체 1597)가 이 키를 가진다. cameraparallax 활성 56씬 안에서만 482개가 실효 — 그중 269개는 0(시차 없음), 184개는 음수(역시차)",
+      "expect": "WE 는 이 텍스트들을 마우스와 함께 움직이지 않거나 반대로 움직인다. Waple 은 전부 depth=1(배경과 같은 속도)로 그린다"
+     },
+     {
+      "what": "animationlayers[].blendin/blendout/blendtime 미파싱",
+      "measured": "1374 레이어 전건 보유(blendin/blendout=bool, blendtime=0.5 균일). 그중 1223 이 2층 이상 캐스케이드 오브젝트에 붙어 있다",
+      "expect": "퍼펫/모델 애니 레이어 전환이 WE 에서는 0.5초 크로스페이드, Waple 은 즉시 전환"
+     },
+     {
+      "what": "가시 particle 을 parent 로 쓰는 오브젝트(2D 57건)",
+      "measured": "SceneParticle 에 id 필드가 없어 buildParentTransformMap 에 등록되지 않는다. 자식·부모 모두 disablepropagation=false/미저작이라 자기배제도 아니다",
+      "expect": "그 자식들이 저작 로컬 좌표 그대로 남는다(부모 파티클 위치가 원점에서 멀수록 어긋난다)"
+     },
+     {
+      "what": "text.brightness 미파싱(568 오브젝트)",
+      "measured": "float 스칼라. SceneTextLayer 에 brightness 필드 자체가 없다",
+      "expect": "밝기 배수를 준 텍스트가 기본 밝기로 그려진다"
+     },
+     {
+      "what": "light.visible 스크립트 유실(5건)",
+      "measured": "SceneLight3D 에 visible 필드가 없고 parseLight 의 스크립트 캡처는 color/intensity/radius/origin/angles 뿐. 정적 false 1건은 게이트가 드롭",
+      "expect": "스크립트로 켰다 껐다 하는 라이트가 Waple 에서는 상시 켜짐"
+     },
+     {
+      "what": "camera.visible 스크립트 유실(10건)",
+      "measured": "SceneCameraObject 에 visible 필드가 없고 parseCameraObject 의 스크립트 캡처는 origin/zoom/fov 뿐. 정적 false 10건은 게이트가 드롭",
+      "expect": "카메라 프리셋 전환(여러 카메라 오브젝트 중 스크립트로 하나만 활성)이 무시된다 — 다만 Waple 의 카메라 오브젝트 소비는 zoom/origin 애니뿐이라 실피해 범위는 미확인"
+     }
+    ],
+    "inert": [
+     {
+      "what": "image/text/shape.castshadow(5568 오브젝트)",
+      "why": "관측값 전건 false — 파싱해도 같은 결과"
+     },
+     {
+      "what": "node.disablepropagation(595)/node.solid(595)",
+      "why": "관측값 단일(각각 false/true)"
+     },
+     {
+      "what": "text.spacing(171)",
+      "why": "전건 \"0.00000 0.00000\" — 벡터/스칼라 형상 불일치지만 값이 항등"
+     },
+     {
+      "what": "sound.muteineditor(378)",
+      "why": "에디터 전용 플래그, 런타임 재생과 무관"
+     }
+    ],
+    "notGaps": [
+     {
+      "what": "general.quality",
+      "why": "Waple 이 파싱하지만 코퍼스 162씬 중 0건이 저작 — 게이트가 죽어 있다"
+     },
+     {
+      "what": "scene.version(1/3/4/5, 159씬)",
+      "why": "Waple 이 아예 읽지 않는다. 4세대 스키마를 한 파서로 처리 중이며 지금까지는 문제가 관측되지 않았다"
+     },
+     {
+      "what": "general.camerapreview(162)/lightconfig(11)/transparentsorting(3)/fog*(2)",
+      "why": "에디터 메타 또는 미구현 기능. 렌더 소비처가 없다"
+     }
+    ]
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 코퍼스 scene.json 전수 162씬"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift",
+     "note": "함수 경계로 잘라 타입별 파스 함수의 JSON 키 리터럴만 대조"
+    }
+   ]
+  }
+ ]
+}
