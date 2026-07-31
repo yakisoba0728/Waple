@@ -43,7 +43,7 @@ Legend: ✅ implemented · 🟡 partial (the gap is named) · ❌ not implemente
 | Text | 🟡 | Fonts, alignment, colour, clock/date/media scripts (JavaScriptCore `update(value)`). In 3D scenes a text billboard animates placement and visibility per frame, but its *string* is rasterized once. `anchor`/`padding`/`backgroundBrightness` are parsed and preserved, not yet drawn |
 | Audio | 🟡 | Audio-reactive effects (pulse, spectrum bars) and scene-embedded sound (mp3). Sound is mixed globally in 2D — `spatialization`/`mindistance`/`attenuation` are parsed but not spatialized |
 | Mouse | ✅ | Parallax, `g_PointerPosition` cursor reaction, `cursorClick`/`Down`/`Up`/`Move` hooks |
-| HDR / bloom | 🟡 | ACES tonemap and bloom (extract → blur → add) for both LDR and HDR paths; the blur pyramid is a 2-step (÷4, ÷8) approximation where WE uses 8 steps |
+| HDR / bloom | 🟡 | Bloom on both the LDR and HDR paths. The HDR path is a full 8-level pyramid driven by the authored `bloomhdriterations`, clamped to `min(8, available mips)` and falling back to a single-level pass below 2 levels. There is **no ACES or filmic tone curve**: WE 2.8's final step is a plain `saturate` clamp, so the earlier ACES pass was removed as a deviation. The LDR path is still the 3-pass extract → blur → composite rather than a pyramid, and the pyramid's upsample blend state is not yet reverse-engineered |
 
 **Waple does not claim full Wallpaper Engine runtime compatibility.** Most unsupported scene features
 are skipped with a log entry, but some paths — for example a layer texture whose bytes are present but
