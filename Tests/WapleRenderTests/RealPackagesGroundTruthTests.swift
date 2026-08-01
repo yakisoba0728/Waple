@@ -34,6 +34,14 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         TextScriptEngine.captureDateEpochMillis = 1_704_110_400_000   // 2024-01-01 12:00:00 UTC
         defer { TextScriptEngine.captureDateEpochMillis = oldEpoch }
 
+        // 같은 계통의 두 번째 미핀 입력: **마우스 커서**. mount 가 마우스 모니터를 켜면 그 순간의
+        // 실제 커서 위치가 g_PointerPosition 으로 들어가 캡처 픽셀에 구워진다(스냅샷 파이프라인에서
+        // 세션마다 29종이 달랐던 근본원인 — spec/golden/nondeterminism.json → oracle.nondet.rootCause).
+        // SnapshotPipeline.capturePointerUV 와 동일한 중앙 고정(리터럴 중복은 위 epoch 과 동형 관례).
+        let oldPointer = SceneRenderer.capturePointerUV
+        SceneRenderer.capturePointerUV = SIMD2<Float>(0.5, 0.5)
+        defer { SceneRenderer.capturePointerUV = oldPointer }
+
         // WE base-assets(공유 텍스처 + common_*.h)가 있으면 연결 — common.h 헬퍼 의존 효과까지 실측.
         // env WAPLE_BASE_ASSETS 우선, 기본 ~/Downloads/wallpaper_dev/assets. 테스트 후 원복.
         let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"]
