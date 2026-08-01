@@ -1,0 +1,170 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_embedded_mips.py",
+ "entries": [
+  {
+   "id": "format.tex.embedded.hasStoredMips",
+   "value": {
+    "claimRefuted": "임베디드(PNG/JPEG) 텍스처는 단일 인코딩 이미지라 저장 mip 이 없다",
+    "truth": "WE 는 레벨마다 **독립 인코딩 파일**을 TEXB 레벨 레코드에 넣는다",
+    "encodedTextures": 796,
+    "perFormat": {
+     "JPEG": 30,
+     "PNG": 766
+    },
+    "withMultipleMips": 701,
+    "chainLengthDistribution": {
+     "2": 19,
+     "3": 108,
+     "4": 276,
+     "5": 240,
+     "6": 9,
+     "7": 14,
+     "8": 13,
+     "9": 9,
+     "10": 13
+    },
+    "levelPayloads": {
+     "decodable": 2432,
+     "badSignature": 0,
+     "lz4Failure": 0
+    },
+    "positiveControl": "임베디드 텍스처를 0개 찾으면 필터가 깨진 것이다 — 실제 796개 관측(대조 성립)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "4991개 .tex 전수(워크샵 scene.pkg + 설치 assets)",
+     "note": "scripts/spec/measure_embedded_mips.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/TexImage.swift",
+     "note": "종전 .embeddedImage 분기가 파스한 mipChain 을 버렸다"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.embedded.levelDims",
+   "value": {
+    "rule": "레벨 L 의 디코드 치수 = (max(1, imgW>>L), max(1, imgH>>L))",
+    "exactMatches": 2432,
+    "mismatches": 0,
+    "mismatchSamples": [],
+    "mip0EqualsHeader": {
+     "ok": 701,
+     "bad": 0
+    },
+    "whyItMatters": "SceneRendererResources.makeMipmappedTexture 가 lv.width == max(1, first.width >> i) 를 검증한다. 치수가 어긋나면 체인을 통째로 거부하고 단일 레벨로 폴백한다.",
+    "noCropNeeded": "인코딩 이미지는 BC 블록 패딩이 없어 alloc==orig — raw/DXT 경로의 레벨별 크롭 규약이 필요 없다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "4991개 .tex 전수(워크샵 scene.pkg + 설치 assets)",
+     "note": "scripts/spec/measure_embedded_mips.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.embedded.compression",
+   "value": {
+    "lz4CompressedAmongMultiMip": 0,
+    "note": "임베디드 인코딩 이미지는 이미 압축 포맷이라 WE 가 LZ4 를 다시 걸지 않는다. 다만 코드 경로는 mipBytes 를 거치므로 압축본이 와도 동작한다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "4991개 .tex 전수(워크샵 scene.pkg + 설치 assets)",
+     "note": "scripts/spec/measure_embedded_mips.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.embedded.singleImage",
+   "value": {
+    "encodedWithImageCountGreaterThan1": 0,
+    "consequence": "TexDecoder.swift 의 '임베디드 이미지 페이지는 단일' 가정이 코퍼스에서 반례 0건으로 성립한다. rgbaLevels 의 imageCount<=1 가드가 임베디드를 걸러내지 않는다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "4991개 .tex 전수(워크샵 scene.pkg + 설치 assets)",
+     "note": "scripts/spec/measure_embedded_mips.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.embedded.reach",
+   "value": {
+    "workshopScenes": 146,
+    "installedAssets": 7,
+    "installedAssetSamples": [
+     "assets/effects/depthparallax/preview/materials/mountain_peak_summit_altitude_top_extreme_mountaineering_trekking-892149.tex",
+     "assets/materials/particle/bubbles/bubble3.tex",
+     "assets/materials/particle/water/splash_3.tex",
+     "assets/materials/particle/water/splash_5.tex",
+     "assets/materials/particle/water/splash_6.tex",
+     "assets/materials/particle/water/splash_7.tex",
+     "assets/materials/particle/water/splash_8.tex"
+    ],
+    "workshopIdSamples": [
+     "2111201226",
+     "2188368235",
+     "2358773685",
+     "2800248288",
+     "2802243144",
+     "2827816001",
+     "2842323353",
+     "2844219893",
+     "2867182492",
+     "2885492021",
+     "2899965423",
+     "2902406982"
+    ],
+    "rawBCPackagesAlreadyWorking": 288,
+    "symptom": "축소 렌더 시 mip 없이 mip0 를 샘플 → 지글거림(에일리어싱). QuadShaders/GLSLTranslator 는 이미 mip_filter::linear 라 체인만 올리면 즉시 샘플된다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "4991개 .tex 전수(워크샵 scene.pkg + 설치 assets)",
+     "note": "scripts/spec/measure_embedded_mips.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/QuadShaders.swift",
+     "note": "constexpr sampler s(filter::linear, mip_filter::linear, …)"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.embedded.staleCommentOrigin",
+   "value": {
+    "what": "TexImage.swift 의 '코퍼스 임베디드 35개' 는 **설치 assets 한정** 수치였다",
+    "assetsOnly": 35,
+    "corpusWide": 796,
+    "why": "그 측정(2026-07-09)은 assets 의 splash_*/lut/* 서브레이아웃을 보는 게 목적이라 워크샵 scene.pkg 를 돌지 않았다. 수치는 맞았고 '코퍼스' 라는 말이 틀렸다.",
+    "lesson": "측정값을 주석에 적을 때 **표본 범위**를 함께 적어야 한다. 범위 없는 숫자는 나중에 전수 수치로 오독된다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "4991개 .tex 전수(워크샵 scene.pkg + 설치 assets)",
+     "note": "scripts/spec/measure_embedded_mips.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/TexImage.swift",
+     "note": "종전 .embeddedImage 분기가 파스한 mipChain 을 버렸다"
+    }
+   ]
+  }
+ ]
+}

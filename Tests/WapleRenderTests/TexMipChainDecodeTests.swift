@@ -1,11 +1,14 @@
 import XCTest
 import Compression
+import CoreGraphics
+import ImageIO
 @testable import WapleRender
 import WapleCore
 
 /// TexDecoder 레벨별 디코드(rgbaLevels / nativeBC.levels) 검증: raw/LZ4/BC 각 포맷 + alloc/orig 크롭 규약의
 /// 레벨별 적용(alloc/orig 둘 다 레벨마다 1/2 축소, 최소 1 — TexImage.mipChain 파스 규약과 정합).
-/// 무회귀: 자격 외(mipCount==1/다중 image/keepFullAtlas/비-mip 페이로드)는 nil 또는 levels.count==1.
+/// 임베디드 인코딩 이미지(PNG/JPEG)는 레벨마다 **독립 파일**이라 decodeEncoded 로 각각 디코드한다(2026-08-01 편입).
+/// 무회귀: 자격 외(mipCount==1/다중 image/keepFullAtlas/체인 없는 페이로드)는 nil 또는 levels.count==1.
 final class TexMipChainDecodeTests: XCTestCase {
 
     /// TEXB0003 다중 mip 합성(imageCount=1, imageFormat=-1). levels = (w, h, isLZ4, dec, payload).
@@ -145,6 +148,87 @@ final class TexMipChainDecodeTests: XCTestCase {
         XCTAssertEqual(bc.levels.count, 2)
         XCTAssertEqual([UInt8](bc.levels[0].blocks), l0, "L0 블록 = L0 페이로드")
         XCTAssertEqual([UInt8](bc.levels[1].blocks), l1, "L1 블록 = L1 페이로드(레벨 오정렬 아님)")
+    }
+
+    // MARK: 임베디드 인코딩 이미지(PNG) — 레벨마다 **독립 파일**
+
+    /// 단색 PNG 를 실제로 인코딩한다(레벨 payload 가 진짜 PNG 여야 CGImageSource 가 디코드한다).
+    private func solidPNG(_ w: Int, _ h: Int, _ rgb: (UInt8, UInt8, UInt8)) -> [UInt8]? {
+        var px = [UInt8](); px.reserveCapacity(w * h * 4)
+        for _ in 0..<(w * h) { px.append(contentsOf: [rgb.0, rgb.1, rgb.2, 255]) }
+        guard let provider = CGDataProvider(data: Data(px) as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
+                                bytesPerRow: w * 4, space: space,
+                                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                provider: provider, decode: nil, shouldInterpolate: false,
+                                intent: .defaultIntent) else { return nil }
+        let out = NSMutableData()
+        guard let dst = CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dst, img, nil)
+        guard CGImageDestinationFinalize(dst) else { return nil }
+        return [UInt8](out as Data)
+    }
+
+    /// imageFormat=13(PNG) 임베디드 체인 합성. 레벨 L 의 레코드 dims = imgW/imgH >> L(실물 규약).
+    private func makeEmbeddedChainTex(imgW: Int, imgH: Int, levels: [[UInt8]]) -> Data {
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32b(0), i32b(0), i32b(imgW), i32b(imgH), i32b(imgW), i32b(imgH))
+        b += bytes(tag("TEXB0003"), i32b(1), i32b(13), i32b(levels.count))
+        for (i, p) in levels.enumerated() {
+            b += bytes(i32b(max(1, imgW >> i)), i32b(max(1, imgH >> i)), i32b(0), i32b(p.count), i32b(p.count), p)
+        }
+        return Data(b)
+    }
+
+    /// **[신규 2026-08-01]** 임베디드 PNG 체인이 레벨별로 각각 디코드되는가. 종전엔 rgbaLevels 의
+    /// payload 스위치 default 에서 nil 이 나가 146개 워크샵 씬이 축소 시 mip 없이 샘플됐다(지글거림).
+    /// 레벨마다 **다른 색**을 넣은 이유: 세 레벨이 같은 색이면 mip0 을 3번 디코드한 것과 구분되지 않는다.
+    func testEmbeddedPNGLevelsDecodeIndependently() throws {
+        let colors: [(UInt8, UInt8, UInt8)] = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+        var payloads: [[UInt8]] = []
+        for (i, c) in colors.enumerated() {
+            payloads.append(try XCTUnwrap(solidPNG(max(1, 8 >> i), max(1, 8 >> i), c), "PNG 인코딩"))
+        }
+        let data = makeEmbeddedChainTex(imgW: 8, imgH: 8, levels: payloads)
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.payload, .embeddedImage)
+        XCTAssertEqual(tex.mipChain.count, 3, "파스가 체인을 넘긴다")
+
+        let levels = try XCTUnwrap(TexDecoder.rgbaLevels(from: tex, data: data),
+                                   "임베디드 체인 디코드 — 종전엔 payload 스위치에서 nil 이었다")
+        XCTAssertEqual(levels.count, 3)
+        XCTAssertEqual(levels.map { [$0.width, $0.height] }, [[8, 8], [4, 4], [2, 2]],
+                       "인코딩 이미지는 BC 패딩이 없어 디코드 치수가 곧 실치수")
+        for (i, c) in colors.enumerated() {
+            let p = [UInt8](levels[i].pixels.prefix(4))
+            XCTAssertEqual([p[0], p[1], p[2]], [c.0, c.1, c.2], "L\(i) 는 자기 레벨 payload 를 디코드해야 한다")
+        }
+        // levels[0] 은 기존 단일 경로 rgba() 와 비트동일해야 한다(파리티 — 화면 변화는 축소 시에만).
+        let single = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data))
+        XCTAssertEqual([single.width, single.height], [levels[0].width, levels[0].height])
+        XCTAssertEqual(single.pixels, levels[0].pixels, "L0 == 기존 rgba() 결과")
+    }
+
+    /// 임베디드 mipCount==1 무회귀: 신규 경로 미발동, 기존 단일 디코드는 그대로.
+    func testEmbeddedSingleMipStaysSingleLevel() throws {
+        let p = try XCTUnwrap(solidPNG(4, 4, (10, 20, 30)))
+        let data = makeEmbeddedChainTex(imgW: 4, imgH: 4, levels: [p])
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.mipChain.count, 1)
+        XCTAssertNil(TexDecoder.rgbaLevels(from: tex, data: data), "단일 레벨은 신규 경로 미발동")
+        XCTAssertNotNil(TexDecoder.rgba(from: tex, data: data), "기존 경로는 그대로")
+    }
+
+    /// 어느 레벨이든 디코드 실패하면 체인 전체 포기 → nil(호출자가 단일 레벨 폴백, 무회귀).
+    func testEmbeddedBrokenLevelFallsBack() throws {
+        let l0 = try XCTUnwrap(solidPNG(8, 8, (1, 2, 3)))
+        let broken: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0xDE, 0xAD, 0xBE, 0xEF]   // PNG 시그니처지만 내용 없음
+        let data = makeEmbeddedChainTex(imgW: 8, imgH: 8, levels: [l0, broken])
+        let tex = try XCTUnwrap(TexImage.parse(data))
+        XCTAssertEqual(tex.mipChain.count, 2)
+        XCTAssertNil(TexDecoder.rgbaLevels(from: tex, data: data), "손상 레벨 → 체인 포기")
+        XCTAssertNotNil(TexDecoder.rgba(from: tex, data: data), "mip0 단일 경로는 살아 있다")
     }
 
     // MARK: 무회귀 가드

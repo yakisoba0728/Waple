@@ -17,6 +17,7 @@ final class RealTexMipChainProbeTests: XCTestCase {
         var found = 0          // mipChain>1(mip>1 저장) .tex 수
         var decoded = 0        // rgbaLevels 전 레벨 디코드 성공 수
         var nativeOK = 0       // BC 네이티브 후보 levels==chain 일치 수
+        var embedded = 0       // 그중 임베디드 인코딩 이미지(PNG/JPEG) — 2026-08-01 신규 편입
         var failures: [String] = []
         for folder in folders {
             for pkgName in ["scene.pkg", "gifscene.pkg"] {
@@ -28,9 +29,12 @@ final class RealTexMipChainProbeTests: XCTestCase {
                     guard tex.mipChain.count > 1 else { continue }
                     found += 1
                     let tag = "\(folder.lastPathComponent)/\(e.name)"
-                    // mip 기반 페이로드만 디코드 단언(.unknown 등은 기존처럼 디코드 불가 — 무회귀 대상 외).
+                    // 체인을 소비하는 페이로드만 디코드 단언(.unknown/.video 등은 기존처럼 디코드 불가 — 대상 외).
+                    // [2026-08-01] .embeddedImage 편입: 인코딩 이미지도 레벨별 독립 PNG/JPEG 를 담고 있다
+                    // (코퍼스 실측 701개). 종전엔 파스가 체인을 버려 found 에도 안 잡혔다.
                     switch tex.payload {
                     case .bc3, .bc2, .bc1, .r8, .rg88, .lz4RGBA: break
+                    case .embeddedImage: embedded += 1
                     default: continue
                     }
                     guard let levels = TexDecoder.rgbaLevels(from: tex, data: raw) else {
@@ -58,7 +62,8 @@ final class RealTexMipChainProbeTests: XCTestCase {
                 }
             }
         }
-        NSLog("%@", "[mipchain-probe] found=\(found) decoded=\(decoded) nativeBC=\(nativeOK) failures=\(failures.count)")
+        NSLog("%@", "[mipchain-probe] found=\(found) decoded=\(decoded) embedded=\(embedded) "
+                  + "nativeBC=\(nativeOK) failures=\(failures.count)")
         if found == 0 { throw XCTSkip("코퍼스에 mip>1 .tex 부재 — 프로브 불능") }
         XCTAssertEqual(decoded, found, "mip>1 전건 디코드 성공. 실패: \(failures.prefix(5))")
     }

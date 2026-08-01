@@ -3,7 +3,9 @@ import XCTest
 
 /// TEX 전체 mip 체인 수집(TexImage.mipChain) 파스 검증: 레벨 수/레벨별 alloc·orig 크기/데이터 오프셋 단언.
 /// 실물 근거: DJK_1.tex 클래스(TEXB 가 mip 9개 보유) — 종전은 mip0 만 수집하고 나머지를 스킵했다.
-/// 무회귀: mipCount==1·PNG/JPEG/임베디드·다중 image 는 mipChain 이 1개 이하/빈 값(소비처 no-op).
+/// 무회귀: mipCount==1·PNG/JPEG **fast-path**(TEXB 부재)·다중 image 는 mipChain 이 1개 이하/빈 값
+/// (소비처 no-op). 임베디드 인코딩 이미지는 **체인을 수집한다** — 종전 "체인 없음" 은 거짓 전제였다
+/// (2026-08-01 정정, testEmbeddedEncodedCollectsFullChain 주석 참조).
 final class TexMipChainParseTests: XCTestCase {
 
     /// TEXB0003 다중 mip 합성(imageCount=1, imageFormat=-1). levels = (w, h, isLZ4, dec, payload).
@@ -113,25 +115,54 @@ final class TexMipChainParseTests: XCTestCase {
         XCTAssertTrue(tex.mipChain.isEmpty, "불완전 체인은 폐기 → 단일 레벨 경로")
     }
 
-    /// PNG/JPEG/임베디드 페이로드는 단일 인코딩 이미지 — 저장 mip 자체가 없으므로 mipChain=[] (무회귀).
-    func testEncodedPayloadsHaveNoChain() throws {
-        // fast-path .png(컨테이너 파스 실패 → 시그니처 라우팅).
+    /// fast-path .png/.jpeg(TEXB 컨테이너 **자체가 없어** 레벨 레코드가 존재하지 않는 경로)만 체인이 빈다.
+    func testFastPathEncodedHasNoChain() throws {
         var pngB = bytes(tag("TEXV0005"), tag("TEXI0001"))
         pngB += bytes(i32(0), i32(0), i32(4), i32(4), i32(4), i32(4))
         pngB += [0x89, 0x50, 0x4E, 0x47, 1, 2, 3]
         let pngTex = try XCTUnwrap(TexImage.parse(Data(pngB)))
         XCTAssertEqual(pngTex.payload, .png)
-        XCTAssertTrue(pngTex.mipChain.isEmpty)
+        XCTAssertTrue(pngTex.mipChain.isEmpty, "TEXB 부재 → 레벨 레코드 없음")
+    }
 
-        // imageFormat=13(PNG) 임베디드(컨테이너 파스 성공, 인코딩 파일 라우팅).
+    /// **[정정 2026-08-01]** 종전 testEncodedPayloadsHaveNoChain 은 "임베디드 인코딩 이미지는 체인 없음"
+    /// 을 단언해 거짓 전제를 테스트로 굳혀 두고 있었다. 코퍼스 전수 실측이 반대다 — 인코딩(PNG 766 ·
+    /// JPEG 30) 796개 중 701개가 mipCount>1 이고, level>0 페이로드 2,432개 전부 시그니처 정상 +
+    /// 치수가 정확히 (imgW>>L, imgH>>L)(불일치 0). WE 는 레벨마다 **독립 인코딩 파일**을 넣는다.
+    /// 근거: scripts/spec/measure_embedded_mips.py
+    func testEmbeddedEncodedCollectsFullChain() throws {
+        // 레벨별 독립 PNG 파일을 흉내낸다(파스는 디코드하지 않으므로 시그니처+길이만 다르면 충분).
+        func png(_ n: Int) -> [UInt8] { [0x89, 0x50, 0x4E, 0x47] + [UInt8](repeating: UInt8(n), count: n) }
+        let l0 = png(16), l1 = png(8), l2 = png(4)
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(0), i32(0), i32(8), i32(8), i32(8), i32(8))
+        b += bytes(tag("TEXB0003"), i32(1), i32(13), i32(3))      // imageCount=1, imageFormat=PNG, mipCount=3
+        for (w, h, p) in [(8, 8, l0), (4, 4, l1), (2, 2, l2)] {
+            b += bytes(i32(w), i32(h), i32(0), i32(p.count), i32(p.count), p)
+        }
+        let tex = try XCTUnwrap(TexImage.parse(Data(b)))
+        XCTAssertEqual(tex.payload, .embeddedImage)
+        XCTAssertEqual(tex.imageCount, 1, "임베디드는 단일 image(코퍼스 실측 imageCount>1 은 0건)")
+        XCTAssertEqual(tex.mipChain.count, 3, "레벨 3개 전부 수집 — 종전엔 여기서 버렸다")
+        XCTAssertEqual(tex.mipChain[0], tex.mip, "체인[0] == mip0(호환)")
+        XCTAssertEqual(tex.mipChain.map { $0.imageWidth }, [8, 4, 2], "레벨 L 의 orig = imgW>>L")
+        // 레벨별로 **서로 다른** payload 를 가리켜야 한다(같은 범위를 3번 가리키면 업로드가 무의미).
+        XCTAssertEqual(Set(tex.mipChain.map { $0.payloadRange.lowerBound }).count, 3)
+        XCTAssertEqual(tex.mipChain.map { $0.payloadRange.count }, [20, 12, 8])
+        XCTAssertEqual(tex.mipChain[2].payloadRange.upperBound, b.count, "마지막 레벨이 EOF 에 닿음")
+    }
+
+    /// 임베디드라도 mipCount==1 이면 체인은 [mip0] 1개 — 소비처(rgbaLevels)가 count>1 에서만 발동하므로
+    /// 실질 무회귀. 위 테스트와 짝: "체인을 넘긴다" 가 "단일 레벨 텍스처의 경로를 바꾼다" 를 뜻하지 않는다.
+    func testEmbeddedSingleMipStillSingleLevel() throws {
         let payload: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 9, 9]
-        var embB = bytes(tag("TEXV0005"), tag("TEXI0001"))
-        embB += bytes(i32(0), i32(0), i32(4), i32(4), i32(4), i32(4))
-        embB += bytes(tag("TEXB0003"), i32(1), i32(13), i32(1))   // imageCount, imageFormat=PNG, mipCount
-        embB += bytes(i32(4), i32(4), i32(0), i32(payload.count), i32(payload.count), payload)
-        let embTex = try XCTUnwrap(TexImage.parse(Data(embB)))
-        XCTAssertEqual(embTex.payload, .embeddedImage)
-        XCTAssertTrue(embTex.mipChain.isEmpty, "임베디드 인코딩 이미지는 체인 없음")
+        var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
+        b += bytes(i32(0), i32(0), i32(4), i32(4), i32(4), i32(4))
+        b += bytes(tag("TEXB0003"), i32(1), i32(13), i32(1))
+        b += bytes(i32(4), i32(4), i32(0), i32(payload.count), i32(payload.count), payload)
+        let tex = try XCTUnwrap(TexImage.parse(Data(b)))
+        XCTAssertEqual(tex.payload, .embeddedImage)
+        XCTAssertEqual(tex.mipChain.count, 1, "1개 = 소비처 no-op")
     }
 
     /// TEXB0001(v1 — isLZ4/dec 필드 부재, w|h|comp|payload) 다중 mip 도 체인 수집.

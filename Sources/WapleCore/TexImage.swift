@@ -117,8 +117,17 @@ public struct TexImage {
     /// 비-mip 페이로드(.png/.video 등)는 []. `mip` 은 mips.first(호환) — 소비처는 imageCount 로 다중 판정.
     public var mips: [CompressedMip] = []
     /// 기본 image(image 0)의 **전체 mip 체인** — 체인[0] == mip0(mips.first 와 동일). mipCount>1 텍스처만
-    /// 2개 이상; PNG/JPEG/임베디드(단일 인코딩 이미지라 저장 mip 자체가 없음)·다중 image(페이지 스택 경로,
-    /// 레이아웃이 달라 체인 미적용)·조건 변형(변형 섹션은 관측상 mip 1개/변형)은 [](= 기존 경로 무회귀).
+    /// 2개 이상; PNG/JPEG **fast-path**(TEXB 컨테이너 자체가 없어 레벨 레코드가 없음)·다중 image(페이지
+    /// 스택 경로, 레이아웃이 달라 체인 미적용)·조건 변형(변형 섹션은 관측상 mip 1개/변형)은 [](기존 경로 무회귀).
+    ///
+    /// [정정 2026-08-01] 종전 주석은 "임베디드(단일 인코딩 이미지라 저장 mip 자체가 없음)" 라며
+    /// .embeddedImage 도 체인 없음으로 단정했다. **거짓이었다.** 코퍼스 전수 실측:
+    ///   imageFormat 인코딩(PNG 766 · JPEG 30) 796개 중 **701개가 mipCount>1**(체인 길이 2~10),
+    ///   level>0 페이로드 2,432개 전부 PNG IHDR/JPEG SOF 시그니처 정상 + 치수가 정확히
+    ///   (imgW>>L, imgH>>L) — 불일치 0 · LZ4 해제 실패 0 · mip0 치수 불일치 0.
+    /// 즉 WE 는 인코딩 이미지에도 축소본을 레벨별 **독립 PNG/JPEG 파일**로 넣어 둔다.
+    /// 버리고 있던 탓에 워크샵 씬 146종이 축소 시 mip 없이 샘플돼 지글거렸다.
+    /// 근거 스크립트: scripts/spec/measure_embedded_mips.py (spec/formats/tex-embedded-mips.json)
     /// 레벨 L 의 imageWidth/Height = 헤더 imgW/imgH 를 1/2^L floor 축소(최소 1) — TexDecoder 의 레벨별
     /// alloc/orig 크롭 규약과 정합. 수집 근거(추론): TEXB 가 전체 체인을 저장(실물 DJK_1.tex 9레벨)하고
     /// WE 렌더러는 축소 시 mip 필터링을 쓰므로, 엔진이 저장 mip 을 파일에 쓰는 실질적 이유는 GPU 업로드
@@ -193,18 +202,23 @@ public struct TexImage {
         // 1) mip 컨테이너를 먼저 파스(순수 함수). imageFormat(FreeImage) != -1 이면 mip payload = 그 타입
         //    인코딩 파일이며 texFormat 은 무시한다(RePKG TexMipmapFormatGetter 규약). 스캔보다 우선하는 이유:
         //    LZ4 압축 임베디드 이미지는 첫 literal 로 시그니처가 누출돼 아래 512B 스캔이 .png 로 오라우팅한 뒤
-        //    압축 바이트를 PNG 로 디코드 실패하기 때문. 실측(2026-07-09): 코퍼스 임베디드 35개는 전부 비압축
-        //    이고 v4 서브레이아웃이 둘 — splash_*(표준 mip → 여기서 .embeddedImage) 와 lut/*(mip 에 여분 int
-        //    → parseMip 실패 → 아래 fast-path .png). 둘 다 정상 디코드(어느 쪽도 payloadRange 오정렬 없음).
+        //    압축 바이트를 PNG 로 디코드 실패하기 때문. 실측(2026-07-09): **설치 assets 안의** 임베디드
+        //    35개는 전부 비압축이고 v4 서브레이아웃이 둘 — splash_*(표준 mip → 여기서 .embeddedImage) 와
+        //    lut/*(mip 에 여분 int → parseMip 실패 → 아래 fast-path .png). 둘 다 정상 디코드(어느 쪽도
+        //    payloadRange 오정렬 없음).
+        //    [정정 2026-08-01] 종전엔 이 35 를 "코퍼스" 라고 적었다. assets 한정 수치이고 워크샵
+        //    scene.pkg 를 합친 전수는 796개다(그중 701개가 mipCount>1). 아래 mipChain 전달 참조.
         let container = parseMip(b, imgW: imgW, imgH: imgH, format: format)
-        if let (mips, imageFormat, _, _) = container {
+        if let (mips, imageFormat, _, chain) = container {
             let mip = mips[0]
             switch imageFormat {
             case -1 where flags & 0x20 != 0:                                     // TEXB0003 비디오: imageFormat 부재(-1)라 IsVideoTexture
                 return make(.video, mip.payloadRange, mip)                       // 플래그 직독(실측 2958411739 등 14페이지: flags=0x22, payload=ftyp mp4).
             case -1: break                                                       // raw → format 기반 디코드(아래 3)
             case 35: return make(.video, mip.payloadRange, mip)                  // MP4(ponytail: LZ4-mp4 는 추출기 해제 미지원 — 보류)
-            default: return make(.embeddedImage, mip.payloadRange, mip)          // 인코딩 파일(JPEG=2 PNG=13 GIF=25 …) — ImageIO 가 내용으로 판별
+            // 인코딩 파일(JPEG=2 PNG=13 GIF=25 …) — ImageIO 가 내용으로 판별. 레벨별로 독립 인코딩
+            // 파일이 들어 있으므로 체인도 함께 넘긴다(디코드는 TexDecoder.rgbaLevels 의 encoded 분기).
+            default: return make(.embeddedImage, mip.payloadRange, mip, mipChain: chain)
             }
         }
 

@@ -159,9 +159,14 @@ public enum TexDecoder {
                               levels: levels)
     }
 
-    /// 기본 image 의 **전체 mip 체인** 레벨별 CPU 디코드(mipCount>1 텍스처 전용 신규 경로 — makeImageTexture
-    /// CPU 경로용). 레벨별 alloc/orig 크롭 규약 적용(레벨 L 의 orig = imgW/imgH >> L — TexImage.mipChain
-    /// 이 파스 시 반영). nil = 기존 단일 레벨 경로 사용(무회귀): mipCount==1, PNG/JPEG/임베디드(체인 부재),
+    /// 기본 image 의 **전체 mip 체인** 레벨별 CPU 디코드(mipCount>1 텍스처 전용 — makeImageTexture
+    /// CPU 경로용). 두 갈래다:
+    ///   - mip 기반(raw/DXT): decodeMip 으로 레벨별 alloc/orig 크롭 규약 적용(레벨 L 의 orig =
+    ///     imgW/imgH >> L — TexImage.mipChain 이 파스 시 반영).
+    ///   - 임베디드(PNG/JPEG/GIF): 레벨마다 **독립 인코딩 파일**이라 decodeEncoded 로 각각 디코드한다.
+    ///     크롭 규약이 없다 — 인코딩 이미지엔 BC 블록 패딩이 없어 디코드 치수가 곧 실치수다
+    ///     (코퍼스 실측: level>0 2,432개 전부 치수가 정확히 (imgW>>L, imgH>>L), 불일치 0).
+    /// nil = 기존 단일 레벨 경로 사용(무회귀): mipCount==1, PNG/JPEG **fast-path**(TEXB 부재 → 체인 없음),
     /// 다중 image(페이지 스택), 변형 선택(properties 매치 — 변형엔 체인 없음), keepFullAtlas(스프라이트
     /// 아틀라스), 어느 레벨이든 디코드 실패. levels[0] 는 rgba(from:data:) 반환과 동일(동일 코드 경로).
     public static func rgbaLevels(from tex: TexImage, data: Data,
@@ -169,17 +174,26 @@ public enum TexDecoder {
                                   keepFullAtlas: Bool = false)
         -> [(pixels: Data, width: Int, height: Int)]? {
         guard !keepFullAtlas, tex.imageCount <= 1, tex.mipChain.count > 1 else { return nil }
+        let encoded: Bool
         switch tex.payload {
-        case .bc3, .bc2, .bc1, .r8, .rg88, .lz4RGBA: break
+        case .bc3, .bc2, .bc1, .r8, .rg88, .lz4RGBA: encoded = false
+        case .embeddedImage: encoded = true
         default: return nil
         }
         guard tex.selectedMip(properties: properties) == tex.mip else { return nil }   // 변형 선택 시 무회귀
         var out: [(pixels: Data, width: Int, height: Int)] = []
         out.reserveCapacity(tex.mipChain.count)
         for levelMip in tex.mipChain {
-            guard let d = decodeMip(payload: tex.payload, mip: levelMip, data: data, keepFullAtlas: false)
-            else { return nil }
-            out.append(d)
+            if encoded {
+                guard let raw = mipBytes(mip: levelMip, data: data),
+                      let d = decodeEncoded(raw, inBytes: levelMip.payloadRange.count, format: "embedded")
+                else { return nil }
+                out.append((pixels: d.0, width: d.1, height: d.2))
+            } else {
+                guard let d = decodeMip(payload: tex.payload, mip: levelMip, data: data, keepFullAtlas: false)
+                else { return nil }
+                out.append(d)
+            }
         }
         return out
     }
