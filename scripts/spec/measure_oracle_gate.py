@@ -96,12 +96,37 @@ def main():
                 "whyOnlyThis": "일반 드리프트를 하드 실패로 올리면 의도적 렌더 변경마다 "
                                "재베이스라인 전까지 스위트가 빨간불이 된다. 반면 화면이 "
                                "사라지는 것은 의도된 적이 없다.",
-                "status": "구현했으나 음성 대조 재실행으로 확인되지 않았다",
+                "status": "음성 대조 재실행으로 확인됨",
+            },
+            "verified": {
+                "brokenStateFails": "2867182492 0.361 -> 0.0085(42배 하락) · "
+                                    "2593802559 0.666 -> 0.032(21배) 가 structureLoss 로 하드 실패",
+                "selectivity": "드리프트 4건 중 2건만 하드 실패. 0.60배·0.80배는 로그로만 남았다",
+                "noFalsePositive": "원복 후 structureLoss 0건, 스위트 통과",
             },
             "lesson": "오라클을 강화했으면 **일부러 깨뜨려 잡히는지 확인해야 한다**. "
-                      "이 프로젝트에서 안전망이 조용히 무력했던 사건이 여섯 번째다.",
+                      "이 프로젝트에서 안전망이 조용히 무력했던 사건이 여섯 번째인데 "
+                      "이번엔 처음으로 사전에 잡혔다.",
         }, "확정", [specfmt.ev("file", "Tests/WapleRenderTests/RealPackagesGroundTruthTests.swift"),
                     specfmt.ev("file", "macOS 세션 2026-08-01 음성 대조 실측")]),
+
+        specfmt.entry("oracle.gate.knownBandGap", {
+            "what": "structureLoss 문턱(0.5배)과 로그 전용 드리프트(0.02 절대) 사이에 "
+                    "하드 게이트가 없는 구간이 있다",
+            "evidence": "음성 대조에서 3351179520 이 0.511 -> 0.305(0.60배)로 **실제로 깨진 "
+                        "상태였는데 통과**했다",
+            "whyNotJustTighten": "같은 실행에서 3302695207 이 0.80배인데 이건 **안 깨진 "
+                                 "상태**다. 문턱을 0.7 로 조이면 0.60 은 잡지만 데이터 두 점에 "
+                                 "맞춘 것이고, 조건 차이가 커지면 오탐이 된다.",
+            "rootCause": "GT 가 자기 캡처를 **다른 하네스가 뜬 기준선**과 비교하고 있다. "
+                         "GT 하네스는 640x360 이고 스냅샷 파이프라인은 256x144 에 "
+                         "pause/silent-spectrum/fitMode 를 핀한다. 0.80배는 그 계통 편차다.",
+            "fixPath": "임계 조정이 아니라 **두 하네스의 캡처 조건을 일치**시키는 것. "
+                       "또는 GT 전용 기준선을 같은 하네스로 떠서 커밋한다.",
+            "interimPolicy": "그 전까지 0.5 배는 '화면이 사라졌는가' 를 잡는 성긴 그물로 둔다. "
+                             "오탐 0 으로 실증됐고, 놓치는 구간이 있다는 것을 알고 쓴다.",
+        }, "확정", [specfmt.ev("file", "macOS 세션 2026-08-01 — 음성 대조 드리프트 4건 관측"),
+                    specfmt.ev("file", "Tests/WapleRenderTests/RealPackagesGroundTruthTests.swift")]),
 
         specfmt.entry("oracle.gate.lumaDistribution", {
             "n": len(lumas),
