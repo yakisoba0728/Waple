@@ -106,7 +106,35 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         XCTAssertGreaterThan(mounted, 0, "실측 씬이 하나도 마운트되지 않음")
         XCTAssertEqual(failed.count, 0, "mount 실패: \(failed)")
         XCTAssertEqual(captured, mounted, "캡처 누락: \(missingCapture)")
+
+        // F402/F403: 종전 단언은 "마운트 무크래시 + PNG 존재" 뿐이라 완전히 검은 프레임도
+        // 통과했다. 커밋된 기준선(spec/golden/snapshot/)이 생겼으므로 픽셀 내용을 본다.
+        if let baseline = GoldenBaseline.load() {
+            var blackFrames: [String] = []
+            var lumaDrift: [String] = []
+            for (sceneId, luma) in lumas {
+                // ① 완전 검정 거부 — 기준선에 검은 프레임이 하나도 없으므로 새로 생기면 결함이다.
+                if luma <= 0.0 { blackFrames.append(sceneId) }
+                // ② 기준선 대비 luma 드리프트. 비결정 씬은 제외한다.
+                guard let ref = baseline.entry(id: sceneId), ref.deterministic else { continue }
+                if abs(Double(luma) - ref.meanLuma) > Self.lumaDriftTolerance {
+                    lumaDrift.append("\(sceneId): \(ref.meanLuma) -> \(luma)")
+                }
+            }
+            XCTAssertTrue(blackFrames.isEmpty, "완전 검정 프레임: \(blackFrames)")
+            if !lumaDrift.isEmpty {
+                // 드리프트는 의도적 변경일 수 있으므로 실패시키지 않고 크게 남긴다.
+                // 의도된 변경이면 기준선을 재생성하고 라벨을 갱신할 것.
+                NSLog("%@", "[WapleGT] 기준선 대비 luma 드리프트 \(lumaDrift.count)건: \(lumaDrift.prefix(20))")
+            }
+        } else {
+            NSLog("%@", "[WapleGT] 커밋된 기준선을 못 읽었다 — 픽셀 오라클 미적용")
+        }
     }
+
+    /// 기준선 대비 평균 luma 허용 편차. 캡처 환경(GPU·드라이버) 차이를 흡수하되
+    /// 눈에 보이는 밝기 변화는 잡는 폭. 0.02 는 8비트로 약 5단계다.
+    static let lumaDriftTolerance: Double = 0.02
 
     /// PNG 평균 luma(0..1). 디코드 실패 → nil.
     static func meanLuma(_ url: URL) -> Float? {
