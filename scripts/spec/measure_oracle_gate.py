@@ -19,11 +19,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specfmt
 
-# 현행 기준선 — 2026-08-02 포인터 핀(f3a17da) 이후 release 로 다시 뜬 것.
+# 현행 기준선 — 2026-08-02 포인터 핀 + HDR 블룸 WE 구조 교체(31fecaa) 이후 release 로 뜬 것.
 # 두 캡처 사이에 커서를 옮겨 비트동일을 확인하고 설치했다(scripts/mac-session/rebaseline-golden.sh).
 # 이식 전 기준선(baseline-81098bb)은 이력으로 남기고, 게이트 분석은 **현행**을 본다 —
 # 무방비 씬·luma 분포는 "지금 무엇을 못 잡는가" 여야 의미가 있다.
-BASELINE = os.path.join("spec", "golden", "snapshot", "baseline-f3a17da", "manifest.json")
+BASELINE = os.path.join("spec", "golden", "snapshot", "baseline-31fecaa", "manifest.json")
 
 # Sources/WapleSnapshot/Snapshot.swift:113-117
 STRICT_MEAN = 1.5          # /255

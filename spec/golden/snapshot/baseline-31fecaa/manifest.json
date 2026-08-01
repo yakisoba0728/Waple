@@ -3,7 +3,7 @@
 
   ],
   "captureTime" : 6,
-  "createdAt" : "2026-08-01T17:47:32Z",
+  "createdAt" : "2026-08-01T19:27:31Z",
   "empties" : [
 
   ],
@@ -136,10 +136,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "9c295a395d4acd9e",
+      "hash" : "d0dde43cfc7f707c",
       "height" : 144,
       "id" : "2881558311",
-      "meanLuma" : 0.0024155560661764707,
+      "meanLuma" : 0.0026510799632352942,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -154,10 +154,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "e8d996323ed0cc0e",
+      "hash" : "aeb469e32157cc02",
       "height" : 144,
       "id" : "2899965423",
-      "meanLuma" : 0.42657991366253184,
+      "meanLuma" : 0.42677786703007625,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -298,10 +298,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "8e13aa7f44537207",
+      "hash" : "f2bb74d7a6afb580",
       "height" : 144,
       "id" : "3147346398",
-      "meanLuma" : 0.35037811446844225,
+      "meanLuma" : 0.3496936452163304,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -487,10 +487,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "8dba8dddd1eedbad",
+      "hash" : "4944887a7f8d7cf9",
       "height" : 144,
       "id" : "3299228616",
-      "meanLuma" : 0.21925699614481375,
+      "meanLuma" : 0.2211583740766272,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -568,10 +568,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "9d98272674bf8b4e",
+      "hash" : "711578dc778ad5eb",
       "height" : 144,
       "id" : "3352517853",
-      "meanLuma" : 0.37523097873263495,
+      "meanLuma" : 0.37537415683720976,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -973,10 +973,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "dc381f6c02bf923c",
+      "hash" : "5aff564e2f99f165",
       "height" : 144,
       "id" : "3470948192",
-      "meanLuma" : 0.02051193863614214,
+      "meanLuma" : 0.020628490413102916,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1045,10 +1045,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "232503c2fbd8d251",
+      "hash" : "c825db3752532de4",
       "height" : 144,
       "id" : "3509243656",
-      "meanLuma" : 0.051960558576730896,
+      "meanLuma" : 0.052239741625818965,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1261,10 +1261,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "a8b4d4db2275a410",
+      "hash" : "1d893b3d8fe7fa5",
       "height" : 144,
       "id" : "3589454154",
-      "meanLuma" : 0.09132881338083519,
+      "meanLuma" : 0.08709815974350475,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1423,10 +1423,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "b7be285623bab375",
+      "hash" : "846a6e30743921d2",
       "height" : 144,
       "id" : "3662790108",
-      "meanLuma" : 0.0034197459235430286,
+      "meanLuma" : 0.0034228112447235847,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1542,8 +1542,8 @@
   "failures" : [
 
   ],
-  "gitSHA" : "f3a17da",
-  "label" : "baseline-f3a17da",
+  "gitSHA" : "31fecaa",
+  "label" : "baseline-31fecaa",
   "thumbHeight" : 144,
   "thumbWidth" : 256
 }
