@@ -726,6 +726,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     let parallax = ParallaxController()
     /// WE 포인터 UV(0..1, 상단 원점). 마우스 미구동/헤드리스 = 중앙(0.5,0.5).
     var pointerUV = SIMD2<Float>(0.5, 0.5)
+    /// 캡처 하네스용 포인터 핀 — 설정하면 mount 가 **마우스 모니터를 아예 켜지 않고** pointerUV 를
+    /// 이 값으로 고정한다(nil = 라이브 커서, 기존 동작).
+    ///
+    /// 왜 필요한가(2026-08-02 실측, spec/golden/nondeterminism.json → oracle.nondet.rootCause):
+    /// mount 가 `parallaxEnabled || hasEffects` 면 마우스 모니터를 켜고 그 콜백이 pointerUV 를
+    /// 라이브 커서로 채우는데, 이 값이 이펙트 유니폼 g_PointerPosition 으로 들어간다. 캡처는 시각·
+    /// 오디오·난수·fitMode 를 전부 핀하면서 포인터만 안 핀했고, 그래서 **캡처할 때 사람 커서가 어디
+    /// 있었는지가 골든 픽셀에 구워졌다** — 전 코퍼스 170종 중 29종이 세션마다 다른 값을 냈고
+    /// (커서가 제자리로 돌아오면 이전 값이 그대로 재현됐다) 셀프체크는 같은 프로세스라 못 봤다.
+    /// pause() 는 monitor 를 멈추지만 이미 들어온 pointerUV 는 되돌리지 않는다 — 그래서 시작 자체를 막는다.
+    public static var capturePointerUV: SIMD2<Float>?
     /// 직전 draw 프레임의 포인터 UV(g_PointerPositionLast — cursorripple 이전 위치). draw 종료 시 이월.
     var pointerUVLast = SIMD2<Float>(0.5, 0.5)
     /// 포인터 좌버튼 다운 상태(g_PointerState.z — cursorripple/fluidsim 클릭 힘). 미주입/헤드리스 = false(무클릭).
@@ -1419,10 +1430,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         cameraShakeRoughness = doc.cameraShakeRoughness
         cameraShakeSpeed = doc.cameraShakeSpeed
         // 마우스 모니터는 시차 + 포인터 유니폼(g_PointerPosition — 커서 반응 효과) 공용.
-        if parallaxEnabled || hasEffects {
-            parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
-            parallax.start()
-        }
+        if parallaxEnabled || hasEffects { startPointerMonitor() }
 
         effectVertexBuffer = device.makeBuffer(bytes: fullscreenQuad, length: MemoryLayout<SIMD2<Float>>.stride * fullscreenQuad.count)
         // 변환 효과용 인터리브드 쿼드(triangleStrip): pos.xyz + uv.xy. uv 는 손-포팅 vert(ev_main)의
@@ -1486,8 +1494,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         hasCursorMoveHook = eventEngines.contains(where: { $0.hookNames.contains("cursorMove") })
         buildHoverTargets(doc: doc)   // cursorEnter/Leave 레이어 AABB 해석
         if hasCursorMoveHook || !hoverTargets.isEmpty {
-            parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
-            parallax.start()  // 이미 켜져 있으면 no-op(내부 nil 가드)
+            startPointerMonitor()  // 이미 켜져 있으면 no-op(내부 nil 가드)
         }
         startMediaPollingIfNeeded()
         // 오디오-반응 효과가 있으면 시스템 오디오 스펙트럼 캡처 시작(Screen Recording 권한 필요).
@@ -1532,7 +1539,28 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var blendModeSnapshotTexture: MTLTexture?
 
 
+    /// 마우스 모니터 기동(mount 두 게이트 + resume 공용). 캡처 핀이 걸려 있으면 **아예 켜지 않는다** —
+    /// `ParallaxController.start()` 가 즉시 emit() 해서 그 순간의 실제 커서를 pointerUV 로 밀어 넣기
+    /// 때문이다(pause() 는 모니터를 멈출 뿐 이미 들어온 값을 되돌리지 않는다).
+    /// 기동 지점이 셋이라 한 곳만 막으면 샌다 — 실제로 mount 의 두 번째 게이트(cursorMove/호버 씬)로
+    /// 새고 있었다. 근거: spec/golden/nondeterminism.json → oracle.nondet.rootCause.
+    func startPointerMonitor() {
+        if let pinned = SceneRenderer.capturePointerUV {
+            pointerUV = pinned
+            pointerUVLast = pinned
+            return
+        }
+        parallax.onOffset = { [weak self] off in self?.updateParallax(off) }
+        parallax.start()
+    }
+
     func updateParallax(_ off: CGPoint) {
+        // 이중 안전망: 핀이 걸린 상태에서 어떤 경로로든 라이브 오프셋이 들어오면 무시한다.
+        if let pinned = SceneRenderer.capturePointerUV {
+            pointerUV = pinned
+            pointerUVLast = pinned
+            return
+        }
         pointerUV = SceneRenderer.pointerUV(fromNormalized: off)
         if parallaxEnabled {
             let s = parallaxAmount * parallaxMouseInfluence * maxShift
@@ -1976,7 +2004,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         if hasAudio { audioProvider?.start() }
         // mount 의 두 기동 게이트 합집합과 동일 — 호버/cursorMove 전용 씬도 pause 가 멈춘 마우스 모니터 재기동.
-        if parallaxEnabled || hasEffects || hasCursorMoveHook || !hoverTargets.isEmpty { parallax.start() }
+        if parallaxEnabled || hasEffects || hasCursorMoveHook || !hoverTargets.isEmpty { startPointerMonitor() }
         sceneAudio?.resume()
     }
     public func teardown() {

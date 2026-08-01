@@ -41,6 +41,10 @@ enum SnapshotPipeline {
     /// 비결정으로 잡히던 근본원인).
     static let captureRandomSeed: UInt64 = 0xC0FFEE_1038
 
+    /// 캡처 포인터 핀 값(0..1 UV, 상단 원점) — 마우스 미구동 규약과 동일한 중앙.
+    /// 변경 시 포인터 반응 씬(g_PointerPosition 소비) 베이스라인 재생성 필요.
+    static let capturePointerUV = SIMD2<Float>(0.5, 0.5)
+
     /// 폴링 없이 항상 "정지" — 미디어 씬이 osascript 를 스폰하지 않게(결정적·TCC 무).
     struct StoppedNowPlaying: NowPlayingProvider { func fetch() -> NowPlayingInfo? { nil } }
 
@@ -254,13 +258,19 @@ enum SnapshotPipeline {
         TextScriptEngine.captureDateEpochMillis = captureEpochMillis
         let oldRandomSeed = TextScriptEngine.captureRandomSeed
         TextScriptEngine.captureRandomSeed = captureRandomSeed
+        // 포인터 핀(2026-08-02) — 이걸 안 하면 캡처 시점의 **실제 마우스 커서 위치**가
+        // g_PointerPosition 으로 들어가 픽셀에 구워진다(세션마다 29종이 달랐던 근본원인,
+        // spec/golden/nondeterminism.json → oracle.nondet.rootCause). 중앙 고정 = 마우스 미구동 규약.
+        let oldPointer = SceneRenderer.capturePointerUV
+        SceneRenderer.capturePointerUV = capturePointerUV
         let assetsPath = ProcessInfo.processInfo.environment["WAPLE_BASE_ASSETS"] ?? (root + "/assets")
         if FileManager.default.fileExists(atPath: assetsPath + "/shaders/common.h") {
             BaseAssetsSettings.baseAssetsDirectory = URL(fileURLWithPath: assetsPath, isDirectory: true)
         }
         return { SceneRenderSettings.fitMode = oldFit; BaseAssetsSettings.baseAssetsDirectory = oldBase
                  TextScriptEngine.captureDateEpochMillis = oldEpoch
-                 TextScriptEngine.captureRandomSeed = oldRandomSeed }
+                 TextScriptEngine.captureRandomSeed = oldRandomSeed
+                 SceneRenderer.capturePointerUV = oldPointer }
     }
 
     /// F145: 렌더 출력을 변형하는 WAPLE_* 디버그 게이트(mount/encode 시 ProcessInfo 에서 라이브로 읽힘 —

@@ -304,7 +304,12 @@
      "Metal 셰이더 캐시(치우고 떠도 값이 안 바뀐다)",
      "부하·씬 간 상태 누수·TZ·CWD·바이너리·디스크 입력"
     ],
-    "fixDirection": "캡처 하네스에서 포인터를 핀한다 — 헤드리스 캡처에서는 마우스 모니터를 시작하지 않거나 pointerUV 를 고정값(중앙 0.5,0.5)으로 둔다. GT 하네스(RealPackagesGroundTruthTests)도 같은 구멍을 갖는지 함께 볼 것. **포인터 반응 씬의 골든 재베이스라인이 따라온다.**",
+    "fix": {
+     "what": "SceneRenderer.capturePointerUV(정적 옵셔널) 도입 — 설정되면 마우스 모니터를 **아예 켜지 않고** pointerUV/pointerUVLast 를 그 값으로 고정한다. SnapshotPipeline.pinRenderSettings 와 GT 하네스가 중앙(0.5,0.5)으로 핀한다.",
+     "whyNotStopInstead": "pause() 는 모니터를 멈출 뿐 이미 들어온 값을 되돌리지 않는다.",
+     "threeStartSites": "기동 지점이 셋이라(mount 의 parallax/effects 게이트, mount 의 cursorMove·호버 게이트, resume) **한 곳만 막으면 샌다** — 실제로 첫 수정 후에도 커서 의존이 그대로였고, 새던 곳은 두 번째 게이트였다. 지금은 공용 startPointerMonitor() 로 모으고 updateParallax 에도 이중 안전망을 뒀다.",
+     "verified": "커서를 현위치·(10,10)·(1400,800)·복귀로 옮겨 가며 같은 씬을 떠서 **네 위치 전부 같은 해시**(수정 전에는 위치마다 달랐다). 유닛 회귀는 CapturePointerPinTests — 핀 분기를 지우면 pointerUV 가 실제 커서값(1.0, 0.0)으로 바뀌며 깨지는 것까지 확인했다(음성 대조)."
+    },
     "captureCaveat": "다중 시각 마운트의 t=6 프레임은 t=6 단독 캡처와 다르다(캡처 루프가 프레임 간 스크립트/파티클 연속성을 유지 — 실측). 진단 프레임은 같은 WAPLE_CAPTURE_TIME 끼리만 비교할 것."
    },
    "status": "확정",
