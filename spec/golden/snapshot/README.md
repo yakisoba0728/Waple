@@ -6,13 +6,17 @@
 
 여기가 그 안전망이다. 변경이 무엇을 바꿨는지 판정하는 기준이 된다.
 
-## `baseline-f3a17da` — **현행 기준선**(2026-08-02)
+## `baseline-31fecaa` — **현행 기준선**(2026-08-02)
 
 판정은 이걸 기준으로 한다(`GoldenBaseline.currentLabel`). 아래 `baseline-81098bb` 는 이력이다.
 
+**HEAD 에는 기준선을 둘만 둔다** — 현행 + 이식 전 이력. 그 사이의 중간 기준선
+(예: 포인터 핀 직후의 `baseline-f3a17da`)은 커밋 이력에 남아 있으므로 필요하면 거기서 꺼낸다
+(하나가 11MB 라 전부 쌓으면 리포가 비대해진다).
+
 | 항목 | 값 |
 | --- | --- |
-| gitSHA | `f3a17da` (feat/we-engine-port-design, Sources 청결) |
+| gitSHA | `31fecaa` (feat/we-engine-port-design, Sources 청결) |
 | 빌드 | **release** (아래 ① 참고 — 이식 전 기준선은 debug 였다) |
 | entries / empties / failures | **170 / 0 / 0** |
 | meanLuma 범위 | 0.00149 ~ 0.86892 |
@@ -21,10 +25,12 @@
 | activeDebugGates | `[]` |
 | 캡처 | `scripts/mac-session/rebaseline-golden.sh` · 각 165초 |
 
-**왜 다시 떴는가**: 캡처가 **실제 마우스 커서 위치**를 픽셀에 굽고 있었다 —
+**왜 다시 떴는가**: ① 캡처가 **실제 마우스 커서 위치**를 픽셀에 굽고 있었다 —
 `mount` 가 마우스 모니터를 켜면 그 순간의 커서가 `g_PointerPosition` 으로 들어갔고, 그래서
 세션이 갈리면 170종 중 29종이 다른 값을 냈다(`spec/golden/nondeterminism.json` →
-`oracle.nondet.rootCause`). 포인터를 핀한 뒤(f3a17da) 뜬 것이 이 기준선이다.
+`oracle.nondet.rootCause`). 포인터를 핀했다(f3a17da).
+② 그 다음 **HDR 블룸 필터 체인을 WE 평문 구조로 교체**했다(31fecaa) — 9씬의 헤일로 모양이
+바뀌었다(에너지 보존, meanLuma 배율 0.95~1.10). 이 기준선은 둘 다 반영한 상태다.
 
 **설치 게이트**: 두 캡처를 뜨되 **사이에 커서를 옮기고**, 비트동일할 때만 설치한다.
 이번 설치에서 상이 **0종**이었다(수정 전 같은 대조는 28~29종이었다). 재생성도 같은 스크립트로:

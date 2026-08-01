@@ -60,8 +60,8 @@
      },
      {
       "id": "2881558311",
-      "meanLuma": 0.00242,
-      "blackoutMeanDiff": 0.616,
+      "meanLuma": 0.00265,
+      "blackoutMeanDiff": 0.676,
       "threshold": 1.5
      },
      {
@@ -73,7 +73,7 @@
      {
       "id": "3662790108",
       "meanLuma": 0.00342,
-      "blackoutMeanDiff": 0.872,
+      "blackoutMeanDiff": 0.873,
       "threshold": 1.5
      }
     ]
@@ -82,7 +82,7 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": "spec/golden/snapshot/baseline-f3a17da/manifest.json",
+     "ref": "spec/golden/snapshot/baseline-31fecaa/manifest.json",
      "note": "커밋된 기준선 170종의 meanLuma 분포"
     },
     {
@@ -213,7 +213,7 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": "spec/golden/snapshot/baseline-f3a17da/manifest.json",
+     "ref": "spec/golden/snapshot/baseline-31fecaa/manifest.json",
      "note": "커밋된 기준선 170종의 meanLuma 분포"
     }
    ]
