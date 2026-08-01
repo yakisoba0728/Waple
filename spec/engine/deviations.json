@@ -17,8 +17,7 @@
      "targets": ["3470948192", "3589454154", "3662790108"],
      "pixelChange": "0 — 최대 채널차 0, FNV 해시 170/170 일치, 썸네일 PNG 바이트 170/170 동일",
      "verifiedLive": "대상 3종 전부 라이트 보유(2/2/1)로 GGX 경로가 실제로 실행됐다",
-     "note": "코퍼스 t=6.0 프레임에서 화면이 안 바뀐다는 뜻이지, 제거해도 안전하다는 뜻은 아니다. "
-             "제거하면 코퍼스에 없는 입력(roughness=0, N·H=1)에서 NaN 경로가 되살아난다."
+     "note": "코퍼스 t=6.0 프레임에서 화면이 안 바뀐다는 뜻이지, 제거해도 안전하다는 뜻은 아니다. 제거하면 코퍼스에 없는 입력(roughness=0, N·H=1)에서 NaN 경로가 되살아난다."
     },
     "waplesBehaviorIsStrictlyBetter": "그 지점에서 WE 는 NaN 을 내고 Waple 은 0 을 낸다. NaN 은 픽셀을 오염시킨다"
    },
@@ -40,11 +39,8 @@
     "alsoIdentical": {
      "FresnelSchlick": "WE 와 Waple 둘 다 pow(max(1.0 - lightTheta, 0.001), 5.0)"
     },
-    "howTheErrorHappened": "감사가 '0.001 하한 = Waple 이 넣은 안전장치' 로 분류했으나 WE 원문을 대조하지 않았다. "
-                           "0.001 은 WE 자신의 값이다.",
-    "abMeasurementWasInvalid": "A/B 패치가 ScenePBRLighting.swift(데드코드)만 건드리고 라이브 본체 "
-                               "Mesh3DShaders.swift:182-183 은 손대지 않아 애초에 측정되지 않았다. "
-                               "그러나 원문 대조로 이탈이 아님이 확정돼 재측정이 불필요해졌다."
+    "howTheErrorHappened": "감사가 '0.001 하한 = Waple 이 넣은 안전장치' 로 분류했으나 WE 원문을 대조하지 않았다. 0.001 은 WE 자신의 값이다.",
+    "abMeasurementWasInvalid": "A/B 패치가 ScenePBRLighting.swift(데드코드)만 건드리고 라이브 본체 Mesh3DShaders.swift:182-183 은 손대지 않아 애초에 측정되지 않았다. 그러나 원문 대조로 이탈이 아님이 확정돼 재측정이 불필요해졌다."
    },
    "status": "확정",
    "evidence": [
@@ -73,8 +69,7 @@
               "Sources/WapleCore/BuiltinShaderIncludes.swift:29,32,52"],
     "abResult": {
      "pixelChange": "0",
-     "sampleThinness": "패치된 모드를 쓰는 씬이 8종/18레이어인데 그중 HDR 은 3287715210 하나뿐이다. "
-                       "D3 는 [0,1] 밖에서만 갈리므로 실질 표본이 1종이다 — 근거가 얇다"
+     "sampleThinness": "패치된 모드를 쓰는 씬이 8종/18레이어인데 그중 HDR 은 3287715210 하나뿐이다. D3 는 [0,1] 밖에서만 갈리므로 실질 표본이 1종이다 — 근거가 얇다"
     }
    },
    "status": "확정",
@@ -91,8 +86,7 @@
     "sourcesReferences": 0,
     "testReferences": ["Tests/WapleCoreTests/SceneForwardLightingTests.swift",
                        "Tests/WapleRenderTests/TubeLightCSMandMipTests.swift"],
-    "consequence": "라이브 PBR 은 전부 Mesh3DShaders.swift 의 MSL 이다. CPU 미러를 고쳐도 화면은 안 바뀐다. "
-                   "이 사실을 몰라서 A/B 패치가 D2 를 데드코드에만 적용했다.",
+    "consequence": "라이브 PBR 은 전부 Mesh3DShaders.swift 의 MSL 이다. CPU 미러를 고쳐도 화면은 안 바뀐다. 이 사실을 몰라서 A/B 패치가 D2 를 데드코드에만 적용했다.",
     "risk": "두 구현이 갈라져도 테스트가 CPU 쪽만 보므로 드리프트를 못 잡는다"
    },
    "status": "확정",
@@ -107,9 +101,7 @@
     "releaseVsDebug": {
      "captureSeconds": {"debug": 1692.5, "release": 159.5},
      "speedup": "9.6배",
-     "warning": "debug 와 release 는 픽셀이 다르다. 대조군 26종이 바뀐 것처럼 보였는데 "
-                "A(debug) vs A'(release,무패치) 대조로 전부 빌드 효과임이 드러났다. "
-                "A/B 는 반드시 같은 빌드 구성끼리 비교해야 한다.",
+     "warning": "debug 와 release 는 픽셀이 다르다. 대조군 26종이 바뀐 것처럼 보였는데 A(debug) vs A'(release,무패치) 대조로 전부 빌드 효과임이 드러났다. A/B 는 반드시 같은 빌드 구성끼리 비교해야 한다.",
      "determinism": "release 에서는 3363252053 도 결정이 됐다(170/170). debug 에서만 비결정이었다"
     },
     "relMetricFlaw": {
@@ -118,8 +110,7 @@
      "affected": "3662790108 (lumaA 0.0034 -> 0.87)",
      "note": "대비 정규화를 노렸는데 정작 가장 어두운 씬에서 작동하지 않았다"
     },
-    "targetOvercount": "종전 도달 산정이 objects[].model 만 봤다. PBR 루프는 라이트가 있어야 도는데 "
-                       "3509243656 은 모델 8개·라이트 0이라 GGX 를 아예 안 탄다. 라이트 조건을 추가해 정정"
+    "targetOvercount": "종전 도달 산정이 objects[].model 만 봤다. PBR 루프는 라이트가 있어야 도는데 3509243656 은 모델 8개·라이트 0이라 GGX 를 아예 안 탄다. 라이트 조건을 추가해 정정"
    },
    "status": "확정",
    "evidence": [
