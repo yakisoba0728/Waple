@@ -45,7 +45,7 @@ cap() {
         "$BIN" --capture "$OUT" --label "$1" "$ROOT" 2>&1 | tail -4
 }
 
-cap "cand-$SHA"
+cap "baseline-$SHA"
 "$TMP/cursor" 37 613 >/dev/null   # ← 두 캡처 사이에 커서를 옮긴다(핀이 빠지면 여기서 갈린다)
 echo "커서 이동: $ORIG → $("$TMP/cursor")"
 cap "verify-$SHA"
@@ -59,7 +59,7 @@ def man(d):
     with open(os.path.join(out, d, "manifest.json"), encoding="utf-8") as fh:
         m = json.load(fh)
     return m, {e["id"]: e for e in m["entries"]}
-m1, a = man(f"cand-{sha}")
+m1, a = man(f"baseline-{sha}")
 _, b = man(f"verify-{sha}")
 diff = sorted(i for i in a if i in b and a[i]["hash"] != b[i]["hash"])
 print(f"\n씬 {len(a)}종 · empties {len(m1['empties'])} · failures {len(m1['failures'])}")
@@ -77,7 +77,7 @@ if dark:
 dst = os.path.join(repo, "spec", "golden", "snapshot", f"baseline-{sha}")
 if os.path.exists(dst):
     shutil.rmtree(dst)
-shutil.copytree(os.path.join(out, f"cand-{sha}"), dst)
+shutil.copytree(os.path.join(out, f"baseline-{sha}"), dst)
 n = len(os.listdir(os.path.join(dst, "thumbs")))
 print(f"\n설치: spec/golden/snapshot/baseline-{sha}/ (manifest + thumbs {n}장)")
 print("README(spec/golden/snapshot/README.md)에 새 기준선 항목을 추가할 것.")
