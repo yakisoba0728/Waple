@@ -79,21 +79,32 @@ def we_facts():
 
 
 def waple_facts():
+    """Waple 현재 구현(HDRBloomPyramidPass.swift)의 필터 구조를 소스에서 읽는다.
+
+    2026-08-02 WE 구조 교체 후: 탭은 공용 헬퍼 weDownsample4 로 모였고(±0.5 소스 텍셀),
+    가우시안 패스는 없어졌으며, 업샘플/합성이 4탭을 쓴다. 교체 전 값은 아래 PRE_SWAP 상수.
+    """
     s = read(WSRC)
     f = {}
-    m = re.search(r"hdrBloomExtract.*?float2 t = u\.sourceTexelSize;(.*?)\) \* 0\.25", s, re.S)
-    f["extractTapOffsets"] = sorted(set(re.findall(r"float2\(\s*(-?[0-9.]+),\s*(-?[0-9.]+)\)",
-                                                   m.group(1)))) if m else []
-    m = re.search(r"fragment float4 hdrBloomDownsample.*?\) \* 0\.25", s, re.S)
-    f["downsampleTapOffsets"] = sorted(set(re.findall(r"float2\(\s*(-?[0-9.]+),\s*(-?[0-9.]+)\)",
-                                                      m.group(0)))) if m else []
-    f["hasBlur13"] = "blur13" in s
-    m = re.search(r"fragment float4 hdrBloomUpsample.*?\n    \}", s, re.S)
-    f["upsampleSampleCount"] = len(re.findall(r"\.sample\(", m.group(0))) if m else None
-    m = re.search(r"fragment float4 hdrBloomCombine.*?\n    \}", s, re.S)
-    f["combineSampleCount"] = len(re.findall(r"\.sample\(", m.group(0))) if m else None
+    m = re.search(r"float3 weDownsample4\(.*?\n    \}", s, re.S)
+    helper = m.group(0) if m else ""
+    f["sharedTapHelper"] = bool(m)
+    f["helperTapScale"] = "0.5 / 텍스처크기" if "0.5 / float2(src.get_width()" in helper else "미확인"
+    f["helperTapCount"] = len(re.findall(r"\.sample\(", helper))
+    # 주석에 'blur13' 이라는 낱말이 남아 있어도 잡히면 안 된다(교체 이력을 주석에 적어 뒀다) —
+    # 실제 함수/프래그먼트 정의만 본다.
+    f["hasBlur13"] = bool(re.search(r"float3 blur13\(|fragment float4 hdrBloomBlur", s))
+    for name in ("hdrBloomExtract", "hdrBloomDownsample", "hdrBloomUpsample", "hdrBloomCombine"):
+        m = re.search(r"fragment float4 " + name + r".*?\n    \}", s, re.S)
+        body = m.group(0) if m else ""
+        f[name + "UsesHelper"] = "weDownsample4" in body
+        f[name + "DirectSamples"] = len(re.findall(r"\.sample\(", body))
     f["topLevelUpsampleFlipped"] = bool(
-        re.search(r"e\.setFragmentTexture\(top, index: 0\)\s*\n\s*e\.setFragmentTexture\(L\[0\], index: 1\)", s))
+        re.search(r"e\.setFragmentTexture\(top, index: 0\)", s))
+    f["uniformUpsampleRule"] = bool(
+        re.search(r"for i in stride\(from: n - 2, through: 0, by: -1\)", s))
+    f["levelZeroScale"] = ("1/2" if ">> (1 + i)" in s else ("1/4" if ">> (2 + i)" in s else "미확인"))
+    f["upsampleWeight"] = ("0.25 x scatter" if "parameters.scatter * 0.25" in s else "scatter")
     return f
 
 
@@ -127,9 +138,17 @@ def corpus_defaults():
     return n, {k: dict(v.most_common(4)) for k, v in c.items()}
 
 
-def float_hits(v):
-    data = open(os.path.join(T.WE, "wallpaper64.exe"), "rb").read()
-    return len(re.findall(re.escape(struct.pack("<f", v)), data))
+def float_hits(x):
+    """wallpaper64.exe 안에 float32 리터럴 x 가 몇 번 등장하는지.
+
+    exe 는 윈도우 설치본에만 있다(맥 작업 환경에는 없다). 없으면 None 을 돌려주고
+    호출부가 "이번 실행에서는 재측정 안 함" 으로 적는다 — 없는 값을 지어내지 않는다.
+    """
+    p = os.path.join(T.WE, "wallpaper64.exe")
+    if not os.path.exists(p):
+        return None
+    data = open(p, "rb").read()
+    return data.count(struct.pack("<f", x))
 
 
 def build():
@@ -168,56 +187,54 @@ def build():
                 "distribution": corp,
                 "verdict": "scatter 1.619 · feather 0.1 · threshold 1.0 · strength 2.0 · iterations 8 "
                            "— Waple 기본값과 전부 일치.",
-                "scatterIsWEDefault": f"1.619 가 wallpaper64.exe 에 float 로 {float_hits(1.619)}회 등장하고 "
-                                      "코퍼스 140/161 이 그 값을 저작한다 — 에디터가 쓰는 기본값이다.",
-            },
-            "downsampleTaps": {
-                "wapleOffsets": wp["downsampleTapOffsets"],
-                "weOffsetMagnitude": we["renderVar0Scale"],
-                "match": all(abs(float(a)) == we["renderVar0Scale"] and abs(float(b)) == we["renderVar0Scale"]
-                             for a, b in wp["downsampleTapOffsets"]) if wp["downsampleTapOffsets"] else None,
+                "scatterIsWEDefault": (
+                    f"1.619 가 wallpaper64.exe 에 float 로 {float_hits(1.619)}회 등장하고 "
+                    "코퍼스 140/161 이 그 값을 저작한다 — 에디터가 쓰는 기본값이다."
+                    if float_hits(1.619) is not None else
+                    "1.619 는 윈도우 측정에서 wallpaper64.exe 에 float 로 1회 등장했다"
+                    "(이번 실행 환경엔 exe 가 없어 재측정하지 않음). "
+                    "코퍼스 140/161 이 그 값을 저작한다 — 에디터가 쓰는 기본값이다."),
             },
         }, "확정", [shader_ev, code_ev,
                     specfmt.ev("corpus", f"{n}개 씬 general.bloomhdr* 분포"),
                     specfmt.ev("binary", "wallpaper64.exe float 1.619")]),
 
         specfmt.entry("engine.bloom.hdr.filterShapeDeviations", {
-            "summary": "임계 수식과 파라미터는 맞고 **필터 모양**이 갈린다. "
-                       "오차 부호가 서로 반대다.",
-            "widerThanWE": [
-                {"id": "W1", "what": "추출 4탭이 ±1.0 소스 텍셀",
-                 "we": "±0.5 텍셀", "waple": wp["extractTapOffsets"],
-                 "note": "같은 파일의 hdrBloomDownsample 은 ±0.5 라 내부적으로도 불일치한다 — "
-                         "이 불일치 자체가 ±0.5 해석을 뒷받침한다."},
-                {"id": "W2", "what": "레벨마다 blur13(13탭 가우시안) h/v 패스",
-                 "we": "그런 패스가 **없다**(순수 4탭 듀얼 필터)", "waple": wp["hasBlur13"],
-                 "note": "이게 가장 큰 모양 차이다."},
-            ],
-            "narrowerThanWE": [
-                {"id": "N1", "what": "업샘플이 단일 탭",
-                 "we": "4탭 × 0.25 × scatter + additive 블렌딩",
-                 "waple": f"sample 호출 {wp['upsampleSampleCount']}회(base+add)",
-                 "note": "0.25×scatter 가중 자체는 Waple 도 적용한다 — 빠진 건 탭 모양이다."},
-                {"id": "N2", "what": "합성이 블룸을 단일 탭으로 읽음",
-                 "we": f"combine_hdr.frag 가 ±텍셀 {we['combineBloomTaps']}탭 평균 후 가산",
-                 "waple": f"sample 호출 {wp['combineSampleCount']}회"},
-            ],
-            "structural": [
-                {"id": "S1", "what": "최상위 업샘플의 가중이 뒤집혀 있다",
-                 "detail": "중간 단계는 `L[i] + acc*w`(WE 규약과 일치)인데 최상위만 "
-                           "`acc + L[0]*w` 라 **추출 레벨이 감쇠**되고 누적이 전가중이다.",
-                 "detected": wp["topLevelUpsampleFlipped"]},
-            ],
-            "orderingConstraint": "W1·W2 는 결과를 넓히고 N1·N2 는 좁힌다. **일부만 고치면 더 나빠진다** — "
-                                  "예컨대 blur13 만 제거하면 WE 보다 훨씬 뾰족해지고, "
-                                  "합성 4탭만 추가하면 이미 넓은 결과가 더 번진다. "
-                                  "필터 체인을 **한 번에** WE 구조로 갈아야 한다.",
-            "whyCurrentLooksPlausible": "현 구현은 blur13 로 넓히고 단일 탭으로 좁히는 조합이 "
-                                        "서로 상쇄돼 육안으로는 그럴듯하다. 그래서 개별 항목을 "
-                                        "'명백한 버그' 로 보고 하나씩 고치면 회귀한다.",
-            "reach": "HDR 블룸 사용 씬(코퍼스 bloomhdr* 저작분) — 골든 영향 추정 7종",
-            "doNotFixPiecemeal": "한 항목씩 커밋하지 마라. 전체 교체 + 재베이스라인이 한 단위다.",
-        }, "보고", [shader_ev, mat_ev, code_ev]),
+            "summary": "임계 수식과 파라미터는 처음부터 맞았고 **필터 모양**이 갈렸다. "
+                       "오차 부호가 서로 반대라 일부만 고치면 더 나빠지는 구조였다.",
+            "status": "**2026-08-02 한 단위로 교체 완료** — 아래 preSwap 5건이 전부 해소됐다.",
+            "preSwap": {
+                "W1": "추출 4탭이 ±1.0 소스 텍셀(WE ±0.5)",
+                "W2": "레벨마다 blur13(13탭 가우시안) h/v 패스 — WE 엔 그런 패스가 없다",
+                "N1": "업샘플이 단일 탭(WE 는 4탭)",
+                "N2": "합성이 블룸을 단일 탭으로 읽음(WE 는 ±텍셀 4탭 평균)",
+                "S1": "최상위 업샘플만 가중이 뒤집혀 추출 레벨이 감쇠",
+                "levelZero": "피라미드가 1/4 에서 시작(WE 는 매 단계 절반이라 1/2)",
+            },
+            "postSwapMeasured": wp,
+            "orderingConstraint": "W1·W2 는 결과를 넓히고 N1·N2 는 좁힌다. 일부만 고치면 더 나빠지므로 "
+                                  "한 번에 갈아야 했다 — 실제로 그렇게 했다.",
+            "abResult": {
+                "baseline": "spec/golden/snapshot/baseline-f3a17da (교체 직전)",
+                "changedScenes": 9,
+                "lumaRatioRange": "0.95 ~ 1.10",
+                "maxMeanAbsDiff": 2.84,
+                "reading": "에너지는 보존되고 헤일로 모양만 바뀌었다 — 필터 교체의 기대 형상.",
+            },
+        }, "확정", [shader_ev, mat_ev, code_ev]),
+
+        specfmt.entry("engine.bloom.hdr.upsampleWeightUnknown", {
+            "question": "WE 셰이더 문면대로면 업샘플 가중이 **평균 x g_BloomScatter** 인데, "
+                        "저작값 scatter=1.619 를 그대로 넣으면 레벨마다 곱해져 발산한다.",
+            "measured": "그대로 구현해 전 코퍼스를 뜨니 3589454154 의 meanLuma 가 "
+                        "0.0913 → 0.4198(4.6배)로 화면이 백화됐다. 9씬 중 5씬이 2배 이상 밝아졌다.",
+            "whatWeDo": "탭 모양만 WE 로 맞추고 **가중은 종전 캘리브(0.25 x scatter)를 유지**한다. "
+                        "이 값은 발산하지 않고 A/B 에서 에너지 보존이 확인된다.",
+            "openQuestion": "저작 bloomhdrscatter(1.619)가 셰이더 g_BloomScatter 로 그대로 가는지, "
+                            "엔진이 레벨 수로 정규화하는지 미확인. 셰이더 주석의 material 기본값은 1 이다.",
+            "howToClose": "wallpaper64.exe 에서 scatter 머티리얼 프로퍼티를 셰이더 상수로 넘기는 지점을 "
+                          "찾거나(정적 분석), 윈도우에서 같은 씬을 캡처해 헤일로 감쇠율을 재면 된다.",
+        }, "추정", [shader_ev, mat_ev, code_ev]),
     ]
 
 
@@ -230,14 +247,15 @@ def main():
     print("WE 구조:", st["pipeline"])
     print(f"  다운샘플 {st['downsampleTapCount']}탭{st.get('downsampleTapSwizzles', '')} · "
           f"가우시안 패스 없음={st['noGaussianPass']} · 합성 {st['combineTaps']}탭")
-    print(f"  Waple 다운샘플 일치: {v['engine.bloom.hdr.wapleMatches']['downsampleTaps']}")
+    print(f"  Waple 현재 구조(소스 실측): {v['engine.bloom.hdr.filterShapeDeviations']['postSwapMeasured']}")
     print()
-    print("차이:")
-    for k in ("widerThanWE", "narrowerThanWE", "structural"):
-        for d in dv[k]:
-            print(f"  [{d['id']}] {d['what']}")
+    print("교체 전 차이(해소됨):")
+    for k, d in v["engine.bloom.hdr.filterShapeDeviations"]["preSwap"].items():
+        print(f"  [{k}] {d}")
     print()
-    print("  " + dv["orderingConstraint"][:100] + "…")
+    ab = v["engine.bloom.hdr.filterShapeDeviations"]["abResult"]
+    print(f"  A/B: {ab['changedScenes']}씬 변화 · luma {ab['lumaRatioRange']} · maxMeanΔ {ab['maxMeanAbsDiff']}")
+    print(f"  미해결: {v['engine.bloom.hdr.upsampleWeightUnknown']['openQuestion']}")
     print(f"\n기록: {OUT}")
 
 

@@ -360,21 +360,22 @@ final class HDRBloomTests: XCTestCase {
         return read(destination)
     }
 
-    /// H6: 레벨 수 산출 — min(요청, 1/4 부터 1×1 까지 halving 수). Metal 불필요(순수 함수).
+    /// 레벨 수 산출 — min(요청, **1/2** 부터 1×1 까지 halving 수). Metal 불필요(순수 함수).
+    /// 2026-08-02 WE 구조 교체: WE 는 매 단계 절반이라 레벨 0 이 1/2 다(종전 1/4 시작).
     func testLevelCountClampsToAvailableMips() throws {
         XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 2048, sourceHeight: 1024), 8)
-        // 512×512: quarter 128×128 → 64/32/16/8/4/2/1 — 정확히 WE 실측 8단.
+        // 512×512: half 256×256 → 128/…/1 = 9단 가능, 요청 8 로 클램프.
         XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 512, sourceHeight: 512), 8)
-        // 64×32: quarter 16×8 → 8×4/4×2/2×1/1×1 — 5단으로 클램프.
-        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 64, sourceHeight: 32), 5)
+        // 64×32: half 32×16 → 16×8/8×4/4×2/2×1/1×1 — 6단으로 클램프.
+        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 64, sourceHeight: 32), 6)
         XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 3, sourceWidth: 512, sourceHeight: 512), 3)
-        // 4×4: quarter 1×1 — 1단(인코드는 n≥2 요구로 거부 → 단일레벨 폴터 대상).
-        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 4, sourceHeight: 4), 1)
+        // 4×4: half 2×2 → 1×1 = 2단(인코드 n≥2 최소치를 정확히 만족).
+        XCTAssertEqual(HDRBloomPyramidPass.levelCount(requested: 8, sourceWidth: 4, sourceHeight: 4), 2)
     }
 
-    /// H6: 8-레벨 피라미드가 실제 생성·합성된다 — 다운체인(최심층 1×1 레벨에 스팟 에너지 도달)
-    /// + 업체인(합성물 S[0] 의 스팟 반대 코너가 0 초과 — 단일 레벨 blur13 반경 ≈48px 로는 256px
-    /// 떨어진 코너 도달 불가, 심층 레벨이 합성에 실제 기여했다는 구조 단언).
+    /// 8-레벨 피라미드가 실제 생성·합성된다 — 다운체인(최심층 레벨에 스팟 에너지 도달)
+    /// + 업체인(합성물 S[0] 의 스팟 반대 코너가 0 초과). 2026-08-02 이후 가우시안 패스가 없으므로
+    /// 코너 도달은 **오직 심층 레벨 기여**로만 설명된다 — 구조 단언이 더 강해졌다.
     func testEightLevelPyramidReachesDeepestLevelAndFarCorner() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let width = 512, height = 512
@@ -390,7 +391,7 @@ final class HDRBloomTests: XCTestCase {
         var levels: [MTLTexture] = []
         var scratches: [MTLTexture] = []
         for i in 0..<levelCount {
-            let w = max(1, width >> (2 + i)), h = max(1, height >> (2 + i))
+            let w = max(1, width >> (1 + i)), h = max(1, height >> (1 + i))
             levels.append(try makeFloatTexture(device: device, width: w, height: h))
             scratches.append(try makeFloatTexture(device: device, width: w, height: h))
         }
@@ -405,10 +406,10 @@ final class HDRBloomTests: XCTestCase {
                 strength: 2, threshold: 1, feather: 0.1, tint: SIMD3(1, 1, 1), scatter: 1.619)))
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        // 다운체인: 최심층 1×1 레벨(8번째)이 비어있지 않다.
+        // 다운체인: 최심층(8번째 = 512>>8 = 2×2)이 비어있지 않다.
         let deepest = readFloat(levels[7])
-        XCTAssertEqual(levels[7].width, 1)
-        XCTAssertEqual(levels[7].height, 1)
+        XCTAssertEqual(levels[7].width, 2)
+        XCTAssertEqual(levels[7].height, 2)
         XCTAssertGreaterThan(max(deepest[0], max(deepest[1], deepest[2])), 0,
                              "최심층 1×1 레벨까지 스팟이 도달하지 못함")
         // 업체인: 합성물(S[0], float)의 스팟 반대 코너 — 심층 레벨 기여분이 0 초과.
@@ -421,14 +422,14 @@ final class HDRBloomTests: XCTestCase {
         XCTAssertEqual(max(px[center], max(px[center + 1], px[center + 2])), 255)
     }
 
-    /// H6: 소스가 작으면 허용 mip 수(64×32 → 5단)로 클램프된 피라미드가 생성·합성되고,
+    /// 소스가 작으면 허용 mip 수(64×32 → 6단)로 클램프된 피라미드가 생성·합성되고,
     /// 단일 레벨보다 넓은 글로우를 만든다(기존 3-레벨 테스트의 8-레벨 갱신판).
     func testPyramidClampsLevelsForSmallSource() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let width = 64, height = 32
         let levelCount = HDRBloomPyramidPass.levelCount(
             requested: 8, sourceWidth: width, sourceHeight: height)
-        XCTAssertEqual(levelCount, 5)
+        XCTAssertEqual(levelCount, 6)
         let source = try makeFloatTexture(
             device: device, width: width, height: height,
             spot: (x: 28..<36, y: 12..<20, value: 8))
@@ -438,7 +439,7 @@ final class HDRBloomTests: XCTestCase {
         var levels: [MTLTexture] = []
         var scratches: [MTLTexture] = []
         for i in 0..<levelCount {
-            let w = max(1, width >> (2 + i)), h = max(1, height >> (2 + i))
+            let w = max(1, width >> (1 + i)), h = max(1, height >> (1 + i))
             levels.append(try makeFloatTexture(device: device, width: w, height: h))
             scratches.append(try makeFloatTexture(device: device, width: w, height: h))
         }
