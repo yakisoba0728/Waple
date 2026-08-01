@@ -286,28 +286,53 @@
    ]
   },
   {
-   "id": "oracle.nondet.cause",
+   "id": "oracle.nondet.rootCause",
    "value": {
-    "status": "원인 미상 — 마운트/로드 시점까지는 좁혔다(oracle.nondet.divergesAtMount)",
-    "candidates": [
-     "텍스처 디코드·업로드 결과(특히 저장 mip 체인 — 불안정 29종이 전부 그 영향권)",
-     "시스템/GPU 메모리 레이아웃",
-     "드라이버·파이프라인 캐시류"
+    "what": "캡처 픽셀에 **실제 마우스 커서 위치**가 구워진다 — 캡처 하네스가 포인터를 핀하지 않는다",
+    "mechanism": "SceneRenderer.mount 는 `parallaxEnabled || hasEffects` 면 마우스 모니터를 켜고, 그 콜백(updateParallax)이 `pointerUV` 를 라이브 커서로 채운다. pointerUV 는 이펙트 유니폼 버퍼의 g_PointerPosition 슬롯으로 들어간다. SnapshotPipeline.pinRenderSettings 는 시각·오디오·난수·fitMode·베이스에셋은 핀하는데 **포인터는 핀하지 않는다**.",
+    "proof": "같은 씬을 커서만 옮겨 가며 캡처: 현위치·(10,10)·(1400,800) 이 전부 다른 해시, (10,10) 로 돌아오면 그 값이 그대로 재현. 1포인트 차이(1799.98 vs 1799.0)도 값을 바꾼다.",
+    "explains": {
+     "sameSessionIdentical": "커서가 그대로면 프로세스를 몇 개 띄워도 같은 값이 나온다",
+     "crossSessionDiffers": "세션 사이에 사람이 커서를 움직이면 값이 갈린다",
+     "statesRecur": "커서가 이전 위치로 돌아오면 **이전 상태가 통째로 재현된다** — 실제로 상태 F 가 어제 상태 C 와 29종 전부 비트동일했다",
+     "divergesAtT0": "유니폼이라 첫 프레임에 이미 다르다",
+     "logsIdentical": "로드하는 것은 같고 유니폼 값만 다르니 NSLog 는 한 줄도 안 다르다",
+     "gateMatrix": "게이트 매트릭스에서 `WAPLE_DISABLE_TRANSLATED=1` 만 상태 간 4/4 동일 — 포인터가 픽셀에 닿는 경로가 번역 이펙트라는 뜻(WAPLE_BC_NATIVE=0 · WAPLE_NO_BLOOM · WAPLE_LAYER_TRUNC 은 전부 계속 갈렸다)"
+    },
+    "notTheCause": [
+     "임베디드 mip 체인 수정(불안정 29종이 그 영향권 안인 것은 상관이지 원인이 아니다)",
+     "Metal 셰이더 캐시(치우고 떠도 값이 안 바뀐다)",
+     "부하·씬 간 상태 누수·TZ·CWD·바이너리·디스크 입력"
     ],
-    "whyNotScriptsOrSim": "t=0 발산이라 파티클/스크립트 누적은 원인이 아니다. 로드 로그도 두 상태가 완전히 같다.",
-    "nextStep": "게이트 매트릭스(WAPLE_BC_NATIVE=0 · WAPLE_DISABLE_TRANSLATED=1 · WAPLE_LAYER_TRUNC=n · WAPLE_NO_BLOOM)를 상태마다 떠서 **상태 간에도 동일해지는 설정**을 찾는다. 그 설정이 끄는 경로가 원인이다.",
+    "fixDirection": "캡처 하네스에서 포인터를 핀한다 — 헤드리스 캡처에서는 마우스 모니터를 시작하지 않거나 pointerUV 를 고정값(중앙 0.5,0.5)으로 둔다. GT 하네스(RealPackagesGroundTruthTests)도 같은 구멍을 갖는지 함께 볼 것. **포인터 반응 씬의 골든 재베이스라인이 따라온다.**",
     "captureCaveat": "다중 시각 마운트의 t=6 프레임은 t=6 단독 캡처와 다르다(캡처 루프가 프레임 간 스크립트/파티클 연속성을 유지 — 실측). 진단 프레임은 같은 WAPLE_CAPTURE_TIME 끼리만 비교할 것."
    },
-   "status": "추정",
+   "status": "확정",
    "evidence": [
     {
      "kind": "script",
-     "ref": "scripts/mac-session/probe-session-nondeterminism.sh",
-     "note": "세션 내 재현성·부하 개입·TZ·CWD 배제를 다시 뜨는 프로토콜"
+     "ref": "scripts/mac-session/probe-pointer-uniform.sh",
+     "note": "커서를 옮겨 가며 같은 씬을 떠서 해시가 갈리는 것을 보인다"
     },
     {
-     "kind": "script",
-     "ref": "scripts/mac-session/capture-tsweep.sh"
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRenderer.swift:1421-1425",
+     "note": "parallaxEnabled || hasEffects 면 마우스 모니터 start"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRenderer.swift:1535-1537",
+     "note": "updateParallax 가 pointerUV 를 라이브 커서로 채운다"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRendererFrameEncoder.swift:53",
+     "note": "pointerUV → 이펙트 유니폼 g_PointerPosition"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCompat/SnapshotPipeline.swift:249-264",
+     "note": "핀 목록에 포인터가 없다"
     }
    ]
   }
