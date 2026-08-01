@@ -14,10 +14,14 @@ import specfmt
 
 
 # spec/ 아래에 정본이 아닌 것도 산다:
-#  - golden/  : WapleCompat 이 만든 캡처 산출물(스냅샷 매니페스트). 스키마가 다르다
-#  - schema.json : 정본의 형식을 기술한 문서지 정본 항목이 아니다
+#  - golden/snapshot/ : WapleCompat 이 만든 캡처 산출물(스냅샷 매니페스트). 스키마가 다르다
+#  - schema.json      : 정본의 형식을 기술한 문서지 정본 항목이 아니다
 # 이걸 정본으로 검사하면 오탐이 쏟아진다(실제로 512건 났다).
-NON_CANON_DIRS = ("golden",)
+#
+# [2026-08-01] 종전엔 `golden` 디렉터리를 **통째로** 뺐다. 그 바람에 같은 디렉터리에 사는
+# 진짜 정본 문서(gate-analysis.json)가 한 번도 검사된 적이 없었는데, 건너뛴 개수만 세고
+# 무엇을 건너뛰는지는 안 찍어서 아무도 몰랐다. 캡처 산출물이 사는 golden/snapshot/ 만 뺀다.
+NON_CANON_PATH_PAIRS = (("golden", "snapshot"),)
 NON_CANON_FILES = ("schema.json",)
 
 
@@ -25,7 +29,10 @@ def is_canon_path(path):
     parts = path.replace("\\", "/").split("/")
     if parts[-1] in NON_CANON_FILES:
         return False
-    return not any(seg in NON_CANON_DIRS for seg in parts)
+    for a, b in NON_CANON_PATH_PAIRS:
+        if any(parts[i] == a and parts[i + 1] == b for i in range(len(parts) - 1)):
+            return False
+    return True
 
 
 def validate_doc(d, path):
@@ -180,7 +187,7 @@ def main(argv):
     paths = [p for p in found if is_canon_path(p)]
     skipped = len(found) - len(paths)
     if skipped:
-        print(f"(정본 아님으로 건너뜀 {skipped}개 — golden/ 캡처 산출물, schema.json)")
+        print(f"(정본 아님으로 건너뜀 {skipped}개 — golden/snapshot/ 캡처 산출물, schema.json)")
     if not paths:
         print(f"검사 대상 없음: {root}")
         return 1

@@ -1,0 +1,315 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_nondeterminism.py",
+ "entries": [
+  {
+   "id": "oracle.nondet.axisIsCrossSession",
+   "value": {
+    "what": "골든 캡처는 **같은 세션 안에서는 완전히 재현되고, 세션이 갈리면 갈린다**",
+    "withinSession": [
+     {
+      "session": "C",
+      "pair": [
+       "C-runA",
+       "C-runB"
+      ],
+      "differing": 0
+     },
+     {
+      "session": "D",
+      "pair": [
+       "D-R1",
+       "D-R2"
+      ],
+      "differing": 0
+     },
+     {
+      "session": "D",
+      "pair": [
+       "D-R1",
+       "D-R3"
+      ],
+      "differing": 0
+     },
+     {
+      "session": "D",
+      "pair": [
+       "D-R2",
+       "D-R3"
+      ],
+      "differing": 0
+     }
+    ],
+    "withinSessionDiffering": 0,
+    "crossSessionDiffering": 29,
+    "sessionsMeasured": [
+     {
+      "session": "A",
+      "captures": [
+       "A-mips"
+      ]
+     },
+     {
+      "session": "B",
+      "captures": [
+       "B-head"
+      ]
+     },
+     {
+      "session": "C",
+      "captures": [
+       "C-runA",
+       "C-runB"
+      ]
+     },
+     {
+      "session": "D",
+      "captures": [
+       "D-R1",
+       "D-R2",
+       "D-R3"
+      ]
+     }
+    ],
+    "consequence": "한 세션 안에서 뜬 A/B 캡처 대조는 신뢰할 수 있다. 커밋된 기준선처럼 **세션을 건너뛴 대조**에만 이 씬들이 잡음으로 섞인다.",
+    "howItWasMissed": "셀프체크(deterministic)는 2차 캡처를 같은 프로세스에서 떠서 프로세스 간·세션 간 변동을 구조적으로 못 본다.",
+    "crossRef": "oracle.gate.selfCheckIsIntraProcess"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "spec/golden/snapshot/nondet-2026-08-01/README.md",
+     "note": "전 코퍼스 캡처 8개(세션 A~D + PRE)의 매니페스트 — 뜬 방법·바이너리 동일성 근거"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/mac-session/probe-session-nondeterminism.sh",
+     "note": "세션 내 재현성·부하 개입·TZ·CWD 배제를 다시 뜨는 프로토콜"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCompat/SnapshotPipeline.swift:187-212",
+     "note": "셀프체크가 같은 프로세스라 이 변동을 볼 수 없다"
+    }
+   ]
+  },
+  {
+   "id": "oracle.nondet.unstableSet",
+   "value": {
+    "count": 29,
+    "ids": [
+     "3287715210",
+     "3299228616",
+     "3300031038",
+     "3302695207",
+     "3363252053",
+     "3373818743",
+     "3388330010",
+     "3409595232",
+     "3413921910",
+     "3426865175",
+     "3441873795",
+     "3448290956",
+     "3448877775",
+     "3450697231",
+     "3516174947",
+     "3517818807",
+     "3527811827",
+     "3538758087",
+     "3543159422",
+     "3544152633",
+     "3544823846",
+     "3629379075",
+     "3641860575",
+     "3644280276",
+     "3659877246",
+     "3665954520",
+     "3691570025",
+     "3696323523",
+     "3706286085"
+    ],
+    "distinctValuesPerScene": {
+     "4": 17,
+     "3": 10,
+     "2": 2
+    },
+    "distinctValuesLegend": "키 = 세션 4개에서 관측된 서로 다른 픽셀 해시의 개수",
+    "misreportedAsDeterministic": 28,
+    "sortedIndexRange": [
+     49,
+     165
+    ],
+    "totalScenes": 170,
+    "meanLumaSpreadTop5": [
+     {
+      "id": "3302695207",
+      "spread": 0.12223
+     },
+     {
+      "id": "3363252053",
+      "spread": 0.03221
+     },
+     {
+      "id": "3388330010",
+      "spread": 0.02444
+     },
+     {
+      "id": "3450697231",
+      "spread": 0.01919
+     },
+     {
+      "id": "3659877246",
+      "spread": 0.01034
+     }
+    ],
+    "stability": "네 세션 어디서 잡아도 같은 가족이다 — 세션 쌍을 바꿔도 멤버가 1종 이내로만 흔들린다(A~B 29종, C~D 28종, 차집합 1종)."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "spec/golden/snapshot/nondet-2026-08-01/README.md",
+     "note": "전 코퍼스 캡처 8개(세션 A~D + PRE)의 매니페스트 — 뜬 방법·바이너리 동일성 근거"
+    }
+   ]
+  },
+  {
+   "id": "oracle.nondet.mipCorrelation",
+   "value": {
+    "mipAffectedScenes": 123,
+    "unstableInsideMipAffected": 29,
+    "unstableOutsideMipAffected": 0,
+    "definition": "mip 영향권 = 임베디드 mip 체인 수정 전(PRE-eaaee0c) 대비 픽셀이 바뀐 씬",
+    "positionalConfound": {
+     "what": "불안정 씬은 전부 정렬 인덱스 49 이상에 있고, 그보다 앞에 있는 mip 영향 씬 38종은 한 번도 흔들리지 않았다",
+     "whyNotConclusive": "인덱스는 씬 ID 정렬이라 워크샵 연식(=콘텐츠 복잡도)과 교락돼 있다. '순서가 원인' 과 '옛 씬이 단순해서 갈릴 게 없다' 를 아직 못 가른다.",
+     "howToSeparate": "심링크로 정렬 순서를 뒤집어 같은 씬을 앞쪽 인덱스에 놓고 다시 뜬다."
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "spec/golden/snapshot/nondet-2026-08-01/README.md",
+     "note": "전 코퍼스 캡처 8개(세션 A~D + PRE)의 매니페스트 — 뜬 방법·바이너리 동일성 근거"
+    }
+   ]
+  },
+  {
+   "id": "oracle.nondet.eliminatedFactors",
+   "value": {
+    "what": "세션 간 값을 바꾸지 **못한** 것들 — 전부 실측으로 배제했다",
+    "sameBinary": "세션 C 와 D 는 같은 바이너리 파일(sha256 44b6017a…, 재링크 없음)로 떴는데 28종이 갈렸다",
+    "loadInterleave": "단건 캡처 → 전 코퍼스 170종 캡처(165초) → 단건 캡처 순으로 떠도 앞뒤가 비트동일",
+    "sequenceVsSingle": "같은 세션 안에서 단건 캡처 값 = 170종 순차 캡처 안의 값(3씬×3회 확인)",
+    "timezone": "TZ=UTC / Asia/Tokyo / Pacific/Kiritimati / America/Los_Angeles 4종 전부 동일 해시",
+    "workingDirectory": "작업 디렉터리 3종 전부 동일 해시",
+    "diskInputs": "공유 베이스 에셋·mp4 캐시·script-storage·코퍼스 전부 무변경(mtime 확인)",
+    "systemEvents": "두 세션 사이에 절전·재부팅 없음(pmset -g log)",
+    "notAColorTransform": "같은 입력값 픽셀의 출력 표준편차가 24~59 — 전역 톤 커브가 아니라 콘텐츠 차이"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/mac-session/probe-session-nondeterminism.sh",
+     "note": "세션 내 재현성·부하 개입·TZ·CWD 배제를 다시 뜨는 프로토콜"
+    }
+   ]
+  },
+  {
+   "id": "oracle.nondet.divergesAtMount",
+   "value": {
+    "what": "발산은 **첫 프레임(t=0)에 이미 있다** — 프레임 누적 상태가 아니라 마운트/로드 시점이다",
+    "method": "상태 D 와 E(연속한 두 세션)에서 불안정 29종을 `WAPLE_CAPTURE_TIME=0,0.1,1,6` 으로 한 마운트에 4프레임씩 떠서 프레임 해시를 대조",
+    "byTime": {
+     "canon": {
+      "states": [
+       "D",
+       "E"
+      ],
+      "scenes": 29,
+      "identical": 1,
+      "differing": 28
+     },
+     "t0.0": {
+      "states": [
+       "D",
+       "E"
+      ],
+      "scenes": 29,
+      "identical": 3,
+      "differing": 26
+     },
+     "t0.1": {
+      "states": [
+       "D",
+       "E"
+      ],
+      "scenes": 29,
+      "identical": 1,
+      "differing": 28
+     },
+     "t1.0": {
+      "states": [
+       "D",
+       "E"
+      ],
+      "scenes": 29,
+      "identical": 1,
+      "differing": 28
+     }
+    },
+    "reading": "t=0 에서 이미 26/29 가 다르다. 나머지 3종도 t=0.1 이면 갈린다(1종 제외). 즉 시뮬레이션(파티클·스크립트 누적)이 아니라 **로드된 것 자체**가 세션마다 다르다.",
+    "narrowsTo": "텍스처 업로드·디코드, 셰이더 번역 결과, 에셋 해석, 초기 유니폼 — 이 넷 중 하나.",
+    "logsAreIdentical": "같은 씬을 두 상태에서 단건 캡처해 NSLog 를 정규화 대조하면 **한 줄도 다르지 않다**(에셋 해석·셰이더 번역 로그 포함). 따라서 '무엇을 로드했는가' 가 아니라 '로드된 내용/결과' 가 다르다.",
+    "crossRef": "oracle.nondet.unstableSet"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "spec/golden/snapshot/nondet-2026-08-01/tsweep/D.json",
+     "note": "상태 D 의 프레임 해시(29종 × 4시각)"
+    },
+    {
+     "kind": "file",
+     "ref": "spec/golden/snapshot/nondet-2026-08-01/tsweep/E.json",
+     "note": "상태 E 의 프레임 해시 — 같은 명령"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/mac-session/capture-tsweep.sh",
+     "note": "다음 상태에서 같은 매트릭스를 뜨는 스크립트"
+    }
+   ]
+  },
+  {
+   "id": "oracle.nondet.cause",
+   "value": {
+    "status": "원인 미상 — 마운트/로드 시점까지는 좁혔다(oracle.nondet.divergesAtMount)",
+    "candidates": [
+     "텍스처 디코드·업로드 결과(특히 저장 mip 체인 — 불안정 29종이 전부 그 영향권)",
+     "시스템/GPU 메모리 레이아웃",
+     "드라이버·파이프라인 캐시류"
+    ],
+    "whyNotScriptsOrSim": "t=0 발산이라 파티클/스크립트 누적은 원인이 아니다. 로드 로그도 두 상태가 완전히 같다.",
+    "nextStep": "게이트 매트릭스(WAPLE_BC_NATIVE=0 · WAPLE_DISABLE_TRANSLATED=1 · WAPLE_LAYER_TRUNC=n · WAPLE_NO_BLOOM)를 상태마다 떠서 **상태 간에도 동일해지는 설정**을 찾는다. 그 설정이 끄는 경로가 원인이다.",
+    "captureCaveat": "다중 시각 마운트의 t=6 프레임은 t=6 단독 캡처와 다르다(캡처 루프가 프레임 간 스크립트/파티클 연속성을 유지 — 실측). 진단 프레임은 같은 WAPLE_CAPTURE_TIME 끼리만 비교할 것."
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/mac-session/probe-session-nondeterminism.sh",
+     "note": "세션 내 재현성·부하 개입·TZ·CWD 배제를 다시 뜨는 프로토콜"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/mac-session/capture-tsweep.sh"
+    }
+   ]
+  }
+ ]
+}
