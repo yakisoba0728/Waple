@@ -1,0 +1,481 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_particle_fields.py",
+ "entries": [
+  {
+   "id": "engine.particle.fieldCensus",
+   "value": {
+    "particleJsons": 809,
+    "scenesWithParticles": 131,
+    "operatorInstances": 6691,
+    "operatorKinds": 27,
+    "distinctFields": 158,
+    "sections": [
+     "emitter",
+     "initializer",
+     "operator"
+    ],
+    "note": "emitter/initializer/operator 세 섹션이 같은 (name + 필드) 형태다. 최상위 키는 `operator`(단수) — `operators` 가 아니다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 파티클 JSON 809개 (131씬) 전수",
+     "note": "scripts/spec/measure_particle_fields.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.particle.unreadFields",
+   "value": {
+    "what": "코퍼스에 **명시**돼 있는데 Waple 파서가 읽지 않는 필드",
+    "kinds": 29,
+    "explicitInstances": 187,
+    "scenes": 70,
+    "top": [
+     {
+      "op": "emitter:sphererandom",
+      "field": "flags",
+      "present": 50,
+      "total": 543,
+      "omitted": 493,
+      "scenesExplicit": 44
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "duration",
+      "present": 17,
+      "total": 543,
+      "omitted": 526,
+      "scenesExplicit": 13
+     },
+     {
+      "op": "initializer:turbulentvelocityrandom",
+      "field": "timescale",
+      "present": 15,
+      "total": 114,
+      "omitted": 99,
+      "scenesExplicit": 11
+     },
+     {
+      "op": "operator:vortex",
+      "field": "flags",
+      "present": 14,
+      "total": 18,
+      "omitted": 4,
+      "scenesExplicit": 11
+     },
+     {
+      "op": "initializer:turbulentvelocityrandom",
+      "field": "phasemax",
+      "present": 12,
+      "total": 114,
+      "omitted": 102,
+      "scenesExplicit": 10
+     },
+     {
+      "op": "initializer:mapsequencearoundcontrolpoint",
+      "field": "speedmax",
+      "present": 10,
+      "total": 15,
+      "omitted": 5,
+      "scenesExplicit": 10
+     },
+     {
+      "op": "initializer:mapsequencearoundcontrolpoint",
+      "field": "speedmin",
+      "present": 10,
+      "total": 15,
+      "omitted": 5,
+      "scenesExplicit": 10
+     },
+     {
+      "op": "initializer:mapsequencearoundcontrolpoint",
+      "field": "bounds",
+      "present": 7,
+      "total": 15,
+      "omitted": 8,
+      "scenesExplicit": 6
+     },
+     {
+      "op": "operator:remapvalue",
+      "field": "flags",
+      "present": 6,
+      "total": 18,
+      "omitted": 12,
+      "scenesExplicit": 6
+     },
+     {
+      "op": "emitter:boxrandom",
+      "field": "flags",
+      "present": 5,
+      "total": 268,
+      "omitted": 263,
+      "scenesExplicit": 4
+     },
+     {
+      "op": "initializer:turbulentvelocityrandom",
+      "field": "audioprocessingbounds",
+      "present": 5,
+      "total": 114,
+      "omitted": 109,
+      "scenesExplicit": 3
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "controlpoint",
+      "present": 4,
+      "total": 543,
+      "omitted": 539,
+      "scenesExplicit": 3
+     },
+     {
+      "op": "initializer:turbulentvelocityrandom",
+      "field": "audioprocessingmode",
+      "present": 4,
+      "total": 114,
+      "omitted": 110,
+      "scenesExplicit": 3
+     },
+     {
+      "op": "initializer:turbulentvelocityrandom",
+      "field": "forward",
+      "present": 4,
+      "total": 114,
+      "omitted": 110,
+      "scenesExplicit": 2
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "cone",
+      "present": 3,
+      "total": 543,
+      "omitted": 540,
+      "scenesExplicit": 2
+     }
+    ],
+    "whyPresentNotOmitted": "안 읽는 필드는 생략률이 높을수록 오히려 안전하다(어차피 기본 동작). 위험은 **명시된** 인스턴스에 있다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 파티클 JSON 809개 (131씬) 전수",
+     "note": "scripts/spec/measure_particle_fields.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/ParticleSystem.swift",
+     "note": "`case \"<이름>\":` 블록 단위 키 리터럴 추출"
+    }
+   ]
+  },
+  {
+   "id": "engine.particle.systemFlagsUnused",
+   "value": {
+    "what": "파티클 시스템 최상위 `flags` 비트 중 렌더가 소비하지 않는 것",
+    "valueDistribution": {
+     "(부재)": 450,
+     "4": 113,
+     "0": 112,
+     "1": 87,
+     "2": 20,
+     "3": 13,
+     "7": 6,
+     "6": 5,
+     "5": 2,
+     "32": 1
+    },
+    "scenesPerBit": {
+     "1": 58,
+     "2": 26,
+     "4": 70,
+     "32": 1
+    },
+    "consumedByWaple": [
+     "bit1"
+    ],
+    "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2050 — (sys.def.flags & 1)",
+    "notConsumed": [
+     "bit2",
+     "bit4",
+     "그 외 상위 비트"
+    ],
+    "impact": "bit4 는 70씬이 저작하는데 파스만 되고 화면에 안 쓰인다. bit2 는 26씬.",
+    "staleComment": "Sources\\WapleCore\\ParticleSystem.swift 의 flags 주석이 '파스·보존 전용(렌더 소비는 후속)' 이라고 적혀 있는데 bit1 은 이미 소비된다 — 주석이 낡았다.",
+    "bundledVocabulary": "WE 번들 프리셋도 같은 어휘를 쓴다(1·2·4·8, 조합 3/6/7/9, thunderbolt_child_spawner 는 248=상위 비트 다수). 즉 코퍼스만의 방언이 아니라 엔진 어휘다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 파티클 JSON 809개 (131씬) 전수",
+     "note": "scripts/spec/measure_particle_fields.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRenderer3D.swift:2050"
+    },
+    {
+     "kind": "asset",
+     "ref": "assets/presets/**/particles/presets/*.json",
+     "note": "번들 프리셋 232개의 flags 분포"
+    }
+   ]
+  },
+  {
+   "id": "engine.particle.flagBitMeaning",
+   "value": {
+    "bit1": "worldspace — Waple 이 이미 이 해석으로 소비 중",
+    "bit4": "perspective(z 원근 스케일) — Waple 주석의 종전 판독(snowperspective 프리셋)",
+    "bit2": "미상. 코퍼스·번들 모두에서 흔한데 의미를 확인하지 못했다.",
+    "notVerified": "wallpaper64.exe 에서 비트를 읽는 코드를 짚지 않았다. bit4 를 구현하려면 먼저 이 확인이 필요하다 — '원근' 이 스프라이트 크기 스케일인지 깊이 정렬인지에 따라 결과가 다르다."
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/ParticleSystem.swift",
+     "note": "flags 비트 주석(F623)"
+    },
+    {
+     "kind": "asset",
+     "ref": "assets/presets/fog/previewfog2/particles/presets/snowstorm.json",
+     "note": "flags=4 실례"
+    }
+   ]
+  },
+  {
+   "id": "engine.particle.defaultedFields",
+   "value": {
+    "what": "Waple 이 `?? 기본값` 으로 읽는 필드 — 기본값이 WE 와 다르면 틀린다",
+    "kinds": 113,
+    "top": [
+     {
+      "op": "initializer:lifetimerandom",
+      "field": "exponent",
+      "present": 43,
+      "total": 809,
+      "omitted": 766,
+      "scenesExplicit": 39
+     },
+     {
+      "op": "initializer:sizerandom",
+      "field": "exponent",
+      "present": 74,
+      "total": 811,
+      "omitted": 737,
+      "scenesExplicit": 54
+     },
+     {
+      "op": "initializer:colorrandom",
+      "field": "exponent",
+      "present": 13,
+      "total": 681,
+      "omitted": 668,
+      "scenesExplicit": 9
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "audioprocessingfrequencystart",
+      "present": 1,
+      "total": 543,
+      "omitted": 542,
+      "scenesExplicit": 1
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "maxperiodicdelay",
+      "present": 1,
+      "total": 543,
+      "omitted": 542,
+      "scenesExplicit": 1
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "maxperiodicduration",
+      "present": 1,
+      "total": 543,
+      "omitted": 542,
+      "scenesExplicit": 1
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "minperiodicdelay",
+      "present": 1,
+      "total": 543,
+      "omitted": 542,
+      "scenesExplicit": 1
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "minperiodicduration",
+      "present": 1,
+      "total": 543,
+      "omitted": 542,
+      "scenesExplicit": 1
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "audioprocessingexponent",
+      "present": 2,
+      "total": 543,
+      "omitted": 541,
+      "scenesExplicit": 2
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "audioprocessingmode",
+      "present": 3,
+      "total": 543,
+      "omitted": 540,
+      "scenesExplicit": 3
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "audioprocessingfrequencyend",
+      "present": 9,
+      "total": 543,
+      "omitted": 534,
+      "scenesExplicit": 9
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "audioprocessingbounds",
+      "present": 13,
+      "total": 543,
+      "omitted": 530,
+      "scenesExplicit": 9
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "speedmin",
+      "present": 36,
+      "total": 543,
+      "omitted": 507,
+      "scenesExplicit": 31
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "speedmax",
+      "present": 49,
+      "total": 543,
+      "omitted": 494,
+      "scenesExplicit": 38
+     },
+     {
+      "op": "emitter:sphererandom",
+      "field": "sign",
+      "present": 68,
+      "total": 543,
+      "omitted": 475,
+      "scenesExplicit": 45
+     }
+    ],
+    "exponentEvidence": {
+     "field": "initializer:*.exponent — 생략 인스턴스가 가장 많다",
+     "wapleDefault": 1,
+     "explicitValues": {
+      "initializer:alpharandom.exponent": {
+       "2": 28
+      },
+      "initializer:lifetimerandom.exponent": {
+       "2": 30,
+       "1": 7,
+       "10": 5,
+       "100": 1
+      },
+      "initializer:sizerandom.exponent": {
+       "2": 51,
+       "5": 7,
+       "1": 7,
+       "3": 6,
+       "30": 3
+      },
+      "initializer:velocityrandom.exponent": {
+       "1": 10,
+       "0.5": 1
+      },
+      "initializer:angularvelocityrandom.exponent": {
+       "0.2": 1
+      },
+      "initializer:rotationrandom.exponent": {
+       "0.2": 1,
+       "1": 1,
+       "2": 1
+      },
+      "initializer:colorrandom.exponent": {
+       "1": 10,
+       "5": 1,
+       "0.1": 1,
+       "2": 1
+      }
+     },
+     "reading": "명시된 값 중 `1` 이 여러 오퍼레이터에서 흔하다. 에디터가 기본값을 안 쓴다면 1 이 나타나지 않아야 하므로 이 관측은 기본값 1 과 모순되지 않는다. Waple 의 `?? 1` 을 바꿀 근거가 없다."
+    },
+    "flagsExplicitValues": {
+     "operator:vortex.flags": {
+      "0": 9,
+      "1": 5
+     },
+     "emitter:sphererandom.flags": {
+      "2": 46,
+      "0": 3,
+      "4": 1
+     },
+     "emitter:boxrandom.flags": {
+      "2": 4,
+      "0": 1
+     },
+     "operator:remapvalue.flags": {
+      "3": 6
+     },
+     "operator:movement.flags": {
+      "1": 3
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 파티클 JSON 809개 (131씬) 전수",
+     "note": "scripts/spec/measure_particle_fields.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/ParticleSystem.swift",
+     "note": "`case \"<이름>\":` 블록 단위 키 리터럴 추출"
+    }
+   ]
+  },
+  {
+   "id": "engine.particle.handoffClaimCorrected",
+   "value": {
+    "claim": "파티클 오퍼레이터 WE 기본값 테이블 부재로 최대 114씬이 틀린다",
+    "measured": {
+     "scenesWithParticles": 131,
+     "scenesWithUnreadExplicitFields": 70,
+     "scenesAuthoringFlagBit4": 70,
+     "scenesAuthoringFlagBit2": 26
+    },
+    "correction": "문제의 모양이 다르다. 최대 도달은 '기본값 테이블' 이 아니라 (a) 시스템 flags bit4 미소비 70씬 (b) 명시됐는데 안 읽는 필드 70씬 이다. 가장 생략이 잦은 기본값(exponent)은 현재 값이 맞을 가능성이 높다.",
+    "priority": "bit4 → 미읽기 필드 → 기본값 순. 다만 bit4 는 의미 확인이 선행돼야 한다(engine.particle.flagBitMeaning.notVerified)."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 파티클 JSON 809개 (131씬) 전수",
+     "note": "scripts/spec/measure_particle_fields.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/ParticleSystem.swift",
+     "note": "`case \"<이름>\":` 블록 단위 키 리터럴 추출"
+    }
+   ]
+  }
+ ]
+}
