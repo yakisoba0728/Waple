@@ -123,3 +123,13 @@ bash scripts/mac-session/probe-nondeterminism.sh   # runB
 - 50GB 전체 코퍼스를 대상으로 한 전수 스캔(맥은 170종만 보유)
 
 둘 다 지금 당장 필요한 항목은 없다.
+
+## 6. 바이너리 분석 도구
+
+`scripts/re/` — `xref.py`(표준 라이브러리만) · `disasm.py`(capstone). 사용법과 함정은
+[scripts/re/README.md](../scripts/re/README.md).
+
+**`wallpaper64.exe` 자체는 저장소에 없다.** 유료 상용 제품의 실행 파일이라 공개 리포에
+올리지 않는다(브랜치를 지워도 히스토리·포크·캐시가 남아 "임시" 가 성립하지 않는다).
+각자 자기 Steam 설치본을 `WE_ROOT` 로 가리키면 된다. 맥으로 옮길 때는 GitHub 말고
+직접 전송할 것 — 예: Tailscale 로 `scp`.
