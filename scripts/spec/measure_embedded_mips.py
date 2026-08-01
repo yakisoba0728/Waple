@@ -203,9 +203,10 @@ def build(r):
         specfmt.entry("format.tex.embedded.reach", {
             "workshopScenes": len(ws),
             "installedAssets": len(loose),
-            "installedAssetSamples": [p.replace("\\", "/").split("wallpaper_engine/")[-1]
-                                      for p in loose[:8]],
-            "workshopIdSamples": [os.path.basename(os.path.dirname(p)) for p in ws[:12]],
+            "installedAssetPaths": [p.replace("\\", "/").split("wallpaper_engine/")[-1] for p in loose],
+            # 표본이 아니라 **전량**이다 — 골든 대조가 "예상한 씬만 바뀌었는가" 를 물으려면
+            # 기대 집합이 완전해야 한다. 이 목록 밖의 씬이 바뀌면 그건 조사 대상이다.
+            "workshopIds": sorted({os.path.basename(os.path.dirname(p)) for p in ws}),
             "rawBCPackagesAlreadyWorking": len(r["rawPkgs"]),
             "symptom": "축소 렌더 시 mip 없이 mip0 를 샘플 → 지글거림(에일리어싱). "
                        "QuadShaders/GLSLTranslator 는 이미 mip_filter::linear 라 "
