@@ -148,6 +148,11 @@ def scan():
         "sysFlagBitScenes": collections.defaultdict(set),
         "particleScenes": set(),
         "explicitValues": collections.defaultdict(collections.Counter),
+        # 2D 씬의 원근 투영 FOV(general.perspectiveoverridefov) — bit4 구현에 필요한 값
+        "povFovAll": collections.Counter(),
+        "povFovBit4": collections.Counter(),
+        "bit4Scenes": set(),
+        "bit4WithoutPov": set(),
     }
     for wid in sorted(os.listdir(T.WS)):
         d = os.path.join(T.WS, wid)
@@ -160,6 +165,17 @@ def scan():
             _, entries, base = T.parse_pkg(raw)
         except Exception:
             continue
+        # 씬 general 의 원근 FOV 를 먼저 읽어 둔다(아래 bit4 판정과 짝지어 집계).
+        pov = None
+        for name, off, size in entries:
+            if name != "scene.json":
+                continue
+            try:
+                sc = json.loads(raw[base + off:base + off + size].decode("utf-8-sig", "replace"))
+                pov = (sc.get("general") or {}).get("perspectiveoverridefov")
+            except Exception:
+                pov = None
+        sceneHadBit4 = False
         for name, off, size in entries:
             if not name.lower().endswith(".json"):
                 continue
@@ -183,6 +199,8 @@ def scan():
                 for bit in (1, 2, 4, 8, 16, 32, 64, 128):
                     if fv & bit:
                         r["sysFlagBitScenes"][bit].add(wid)
+                if fv & 4:
+                    sceneHadBit4 = True
             for section in SECTIONS:
                 for o in (j.get(section) or []):
                     if not isinstance(o, dict) or not isinstance(o.get("name"), str):
@@ -198,6 +216,12 @@ def scan():
                         r["fieldScenes"][(op, k)].add(wid)
                         if k in ("exponent", "flags"):
                             r["explicitValues"][f"{op}.{k}"][str(v)] += 1
+        r["povFovAll"][str(pov)] += 1
+        if sceneHadBit4:
+            r["bit4Scenes"].add(wid)
+            r["povFovBit4"][str(pov)] += 1
+            if pov is None:
+                r["bit4WithoutPov"].add(wid)
     return r
 
 
@@ -301,15 +325,67 @@ def build(r):
             "bit4": "perspective(z 원근 **크기 스케일**) — 프리셋 A/B 가 이 쪽을 지지한다"
                     "(engine.particle.bit4PresetAB). Waple 주석의 종전 판독과도 일치.",
             "bit2": "미상. 코퍼스·번들 모두에서 흔한데 의미를 확인하지 못했다.",
-            "notVerified": "wallpaper64.exe 에서 비트를 읽는 코드를 짚지 않았다. A/B 는 "
-                           "'크기 스케일' 쪽을 가리키지만 **공식**을 주지 않는다 — "
-                           "기준 거리가 무엇인지, 1/z 인지 FOV 기반인지 모르면 구현할 수 없다. "
-                           "구현 전에 RE 또는 화면 대조로 공식을 확정할 것.",
-            "doNotGuessFormula": "그럴듯한 원근 공식을 지어 넣지 마라. 크기가 틀리면 "
-                                 "지금처럼 스케일이 아예 없는 것보다 더 눈에 띌 수 있다.",
+            "howItWorks": "별도 크기 공식이 아니라 **투영 교체**다 — "
+                          "engine.particle.bit4IsProjectionNotSizeFormula 참조.",
         }, "추정", [specfmt.ev("file", PSRC.replace(os.sep, "/"), "flags 비트 주석(F623)"),
                     specfmt.ev("asset", "assets/presets/fog/previewfog2/particles/presets/snowstorm.json",
                                "flags=4 실례")]),
+
+        specfmt.entry("engine.particle.bit4IsProjectionNotSizeFormula", {
+            "finding": "bit4 는 파티클 크기에 곱하는 **공식이 아니다**. 그 시스템을 "
+                       "평면(직교) 대신 **원근 투영**으로 그리는 스위치다. "
+                       "겉보기 크기 축소는 원근 나눗셈에서 저절로 나온다.",
+            "shaderProof": {
+                "what": "WE 는 GLSL 을 평문으로 배포하므로 파티클 정점 경로를 직접 읽을 수 있다",
+                "genericparticle.vert": "크기는 정점 속성 in_ParticleSize(a_TexCoordVec4.w). "
+                                        "쿼드를 ComputeParticlePosition 으로 만들고 "
+                                        "g_ModelViewProjectionMatrix 를 곱하는 게 전부다.",
+                "genericparticle.geom": "GS 경로도 동일 — CreateParticleVertex 가 같은 MVP 만 곱한다.",
+                "common_particles.h": "원근·거리 관련 항이 **하나도 없다**.",
+                "conclusion": "셰이더에 z 기반 크기 항이 없으므로 bit4 는 셰이더 쪽 공식일 수 없다. "
+                              "남는 건 MVP(투영) 교체뿐이다.",
+            },
+            "weOwnDocs": {
+                "source": "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts (WE 배포 API 정의)",
+                "ILayer.perspective": "If set to true, the layer will use perspective rendering "
+                                      "instead of flat rendering.",
+                "createLayer": "For model-based layers, you likely also want to set perspective "
+                               "to `true` for true 3D rendering (including in 2D scenes).",
+                "why": "WE 자신이 'perspective = 평면 렌더 대신 원근 렌더', 그리고 "
+                       "**2D 씬에서도** 성립한다고 적어 뒀다.",
+            },
+            "uiLabel": "ui_editor_properties_perspective = \"Perspective rendering\" "
+                       "(locale/ui_en-us.json) — 크기 조절이 아니라 렌더 방식 이름이다.",
+            "fovSource": {
+                "key": "general.perspectiveoverridefov",
+                "whyNotSceneFov": "scene 의 fov 는 API 정의가 'For 3D scenes only' 라고 명시한다"
+                                  "(2D 는 zoom). 2D 씬의 원근 렌더는 별도 override FOV 를 쓴다.",
+                "distributionAllParticleScenes": dict(r["povFovAll"].most_common(8)),
+                "distributionBit4Scenes": dict(r["povFovBit4"].most_common(8)),
+                "bit4ScenesMissingKey": len(r["bit4WithoutPov"]),
+                "wapleAlreadyUses95": "SceneRendererFrameEncoder.swift 의 레이어 원근 근사가 "
+                                      "perspectiveFov 기본을 95 로 하드코딩해 뒀다. 코퍼스 최빈값은 "
+                                      "90(다음 95)이라 이 기본값은 **재확인이 필요**하다.",
+            },
+            "stillUnknown": [
+                "카메라 eye 거리 규약(원근 평면이 직교 평면과 어디서 일치하는가)",
+                "perspectiveoverridefov 부재 시 WE 기본값",
+                "bit4 파티클이 레이어 perspective 와 같은 카메라를 쓰는지",
+            ],
+            "derivableConstraint": "z=0 에서 원근과 직교가 일치해야 한다 — 아니면 플래그를 켜는 "
+                                   "것만으로 평평한 시스템까지 크기가 변한다. 이 연속성 조건이 "
+                                   "eye 거리를 d = (projH/2) / tan(fov/2) 로 묶는다. "
+                                   "다만 이건 **유도**지 측정이 아니다.",
+            "doNotGuessFormula": "위 미상 항목을 채우기 전에 구현하지 마라. 크기가 틀리면 "
+                                 "지금처럼 스케일이 아예 없는 것보다 더 눈에 띌 수 있다.",
+        }, "보고", [specfmt.ev("shader", "assets/shaders/genericparticle.vert",
+                               "크기는 정점 속성, 원근 항 없음"),
+                    specfmt.ev("shader", "assets/shaders/common_particles.h"),
+                    specfmt.ev("file", "ui/dist/monaco/autocomplete/lib.sceneScript.d.ts",
+                               "WE 배포 API 정의의 perspective 설명"),
+                    specfmt.ev("asset", "locale/ui_en-us.json",
+                               "ui_editor_properties_perspective"),
+                    specfmt.ev("corpus", "워크샵 파티클 보유 씬의 general.perspectiveoverridefov 분포")]),
 
         specfmt.entry("engine.particle.defaultedFields", {
             "what": "Waple 이 `?? 기본값` 으로 읽는 필드 — 기본값이 WE 와 다르면 틀린다",
