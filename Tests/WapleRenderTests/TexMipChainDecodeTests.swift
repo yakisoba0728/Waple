@@ -2,6 +2,7 @@ import XCTest
 import Compression
 import CoreGraphics
 import ImageIO
+import UniformTypeIdentifiers
 @testable import WapleRender
 import WapleCore
 
@@ -153,18 +154,19 @@ final class TexMipChainDecodeTests: XCTestCase {
     // MARK: 임베디드 인코딩 이미지(PNG) — 레벨마다 **독립 파일**
 
     /// 단색 PNG 를 실제로 인코딩한다(레벨 payload 가 진짜 PNG 여야 CGImageSource 가 디코드한다).
+    /// 생성 방식은 TexDecoderTests.png() 와 동일한 CGContext 경로 — 손으로 친 바이트 위험 회피.
     private func solidPNG(_ w: Int, _ h: Int, _ rgb: (UInt8, UInt8, UInt8)) -> [UInt8]? {
-        var px = [UInt8](); px.reserveCapacity(w * h * 4)
-        for _ in 0..<(w * h) { px.append(contentsOf: [rgb.0, rgb.1, rgb.2, 255]) }
-        guard let provider = CGDataProvider(data: Data(px) as CFData),
-              let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
-                                bytesPerRow: w * 4, space: space,
-                                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-                                provider: provider, decode: nil, shouldInterpolate: false,
-                                intent: .defaultIntent) else { return nil }
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.setFillColor(CGColor(red: CGFloat(rgb.0) / 255, green: CGFloat(rgb.1) / 255,
+                                 blue: CGFloat(rgb.2) / 255, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        guard let img = ctx.makeImage() else { return nil }
         let out = NSMutableData()
-        guard let dst = CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil) else { return nil }
+        guard let dst = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil)
+        else { return nil }
         CGImageDestinationAddImage(dst, img, nil)
         guard CGImageDestinationFinalize(dst) else { return nil }
         return [UInt8](out as Data)
@@ -200,10 +202,16 @@ final class TexMipChainDecodeTests: XCTestCase {
         XCTAssertEqual(levels.count, 3)
         XCTAssertEqual(levels.map { [$0.width, $0.height] }, [[8, 8], [4, 4], [2, 2]],
                        "인코딩 이미지는 BC 패딩이 없어 디코드 치수가 곧 실치수")
-        for (i, c) in colors.enumerated() {
+        // 정확한 RGB 대신 **우세 채널**로 본다 — CGColor→sRGB 컨텍스트 변환이 값을 몇 단위 흔들 수 있고,
+        // 이 테스트가 증명하려는 건 색 정확도가 아니라 "레벨마다 자기 payload 를 디코드했다" 이다.
+        // 우세 채널 셋이 서로 다르면 세 레벨이 같은 mip0 을 3번 디코드한 경우와 구분된다.
+        var dominant: [Int] = []
+        for i in 0..<3 {
             let p = [UInt8](levels[i].pixels.prefix(4))
-            XCTAssertEqual([p[0], p[1], p[2]], [c.0, c.1, c.2], "L\(i) 는 자기 레벨 payload 를 디코드해야 한다")
+            let ch = [Int(p[0]), Int(p[1]), Int(p[2])]
+            dominant.append(ch.firstIndex(of: ch.max()!)!)
         }
+        XCTAssertEqual(dominant, [0, 1, 2], "L0 적색 · L1 녹색 · L2 청색 — 레벨별 독립 디코드")
         // levels[0] 은 기존 단일 경로 rgba() 와 비트동일해야 한다(파리티 — 화면 변화는 축소 시에만).
         let single = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data))
         XCTAssertEqual([single.width, single.height], [levels[0].width, levels[0].height])
