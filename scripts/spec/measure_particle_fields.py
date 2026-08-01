@@ -63,6 +63,80 @@ def waple_block_keys():
     return out, common
 
 
+PRESETS = os.path.join(T.WE, "assets", "presets")
+
+
+def _vec(v):
+    if isinstance(v, str):
+        try:
+            return [float(x) for x in v.split()]
+        except ValueError:
+            return []
+    if isinstance(v, (int, float)):
+        return [float(v)]
+    if isinstance(v, list):
+        return [float(x) for x in v if isinstance(x, (int, float))]
+    return []
+
+
+def preset_ab():
+    """번들 프리셋을 flags&4 유무로 갈라 **크기·깊이 관련 특징**을 비교한다.
+
+    bit4 가 '원근 크기 스케일' 인지 '깊이 정렬' 인지를 가르는 게 목적이다.
+    정렬이라면 저작자가 크기를 다르게 쓸 이유가 그대로 남는다. 크기 스케일이라면
+    엔진이 z 로 크기를 만들어 주므로 저작자가 크기 변화를 직접 넣을 이유가 사라진다.
+    """
+    groups = {True: [], False: []}
+    for root, _dirs, files in os.walk(PRESETS):
+        for fn in files:
+            if not fn.endswith(".json"):
+                continue
+            try:
+                j = json.load(open(os.path.join(root, fn), encoding="utf-8-sig"))
+            except Exception:
+                continue
+            if not isinstance(j, dict) or ("emitter" not in j and "initializer" not in j):
+                continue
+            fv = int(j.get("flags") or 0)
+            groups[bool(fv & 4)].append(j)
+
+    def summarize(js):
+        inits = [{i.get("name"): i for i in (j.get("initializer") or [])
+                  if isinstance(i, dict)} for j in js]
+        ops = [{o.get("name") for o in (j.get("operator") or []) if isinstance(o, dict)}
+               for j in js]
+        ems = [[e for e in (j.get("emitter") or []) if isinstance(e, dict)] for j in js]
+        ratios, dirz, dmax, velz = [], [], [], []
+        for k, e in zip(inits, ems):
+            sr = k.get("sizerandom") or {}
+            lo, hi = _vec(sr.get("min")), _vec(sr.get("max"))
+            if lo and hi and lo[0] > 0:
+                ratios.append(hi[0] / lo[0])
+            z = [_vec(x.get("directions"))[2] for x in e if len(_vec(x.get("directions"))) > 2]
+            if z:
+                dirz.append(max(z))
+            dm = [_vec(x.get("distancemax")) for x in e if _vec(x.get("distancemax"))]
+            if dm:
+                dmax.append(max(x[0] for x in dm))
+            vr = k.get("velocityrandom") or {}
+            vlo, vhi = _vec(vr.get("min")), _vec(vr.get("max"))
+            if len(vlo) > 2 and len(vhi) > 2:
+                velz.append(abs(vhi[2] - vlo[2]))
+
+        def med(xs):
+            return round(sorted(xs)[len(xs) // 2], 2) if xs else None
+        return {
+            "n": len(js),
+            "sizeRandomRatioMedian": med(ratios),
+            "emitterDirectionsZMedian": med(dirz),
+            "emitterDistanceMaxMedian": med(dmax),
+            "velocityZSpreadMax": round(max(velz), 2) if velz else None,
+            "usesSizeChange": sum(1 for o in ops if "sizechange" in o),
+            "usesOscillateSize": sum(1 for o in ops if "oscillatesize" in o),
+        }
+    return {"withBit4": summarize(groups[True]), "withoutBit4": summarize(groups[False])}
+
+
 def scan():
     r = {
         "files": 0, "instances": 0,
@@ -128,6 +202,7 @@ def scan():
 
 
 def build(r):
+    ab = preset_ab()
     bk, common = waple_block_keys()
     unread, defaulted, nocase = [], [], []
     for op, fields in r["present"].items():
@@ -190,6 +265,12 @@ def build(r):
             "notConsumed": ["bit2", "bit4", "그 외 상위 비트"],
             "impact": f"bit4 는 {bits.get('4', 0)}씬이 저작하는데 파스만 되고 화면에 안 쓰인다. "
                       f"bit2 는 {bits.get('2', 0)}씬.",
+            "reachIsNotExpectedChangeCount": "이 씬 수는 '해당 비트를 저작한 파티클 시스템을 "
+                                             "하나라도 가진 씬' 이다. flags 는 파티클 시스템마다 "
+                                             "따로 있고 한 씬이 여러 개를 갖는다. 고쳤을 때 골든이 "
+                                             "움직이는 씬은 그 시스템이 **실제로 보이는** 경우로 "
+                                             "한정되므로 이보다 적다 — 나중에 이 숫자를 기대 변화 "
+                                             "수로 놓고 '고침이 안 먹었다' 고 판단하지 마라.",
             "staleComment": f"{PSRC} 의 flags 주석이 '파스·보존 전용(렌더 소비는 후속)' 이라고 "
                             "적혀 있는데 bit1 은 이미 소비된다 — 주석이 낡았다.",
             "bundledVocabulary": "WE 번들 프리셋도 같은 어휘를 쓴다(1·2·4·8, 조합 3/6/7/9, "
@@ -200,13 +281,32 @@ def build(r):
                     specfmt.ev("asset", "assets/presets/**/particles/presets/*.json",
                                "번들 프리셋 232개의 flags 분포")]),
 
+        specfmt.entry("engine.particle.bit4PresetAB", {
+            "question": "bit4 는 **크기 스케일**인가 **깊이 정렬**인가. 둘은 다른 코드가 필요하다.",
+            "method": "번들 프리셋 232개를 flags&4 유무로 갈라 크기·깊이 특징을 비교",
+            "result": ab,
+            "reading": "bit4 조는 (a) 이미터 z 방향이 전건 1(나머지는 중앙값 0) "
+                       "(b) 방출 거리 중앙값이 두 자릿수 배 크고 "
+                       "(c) **속도 z 산포가 0 이 아닌 유일한 조**다 — 즉 깊이가 있는 부피에 뿌린다. "
+                       "동시에 (d) sizerandom 비율이 거의 1(균일 크기)이고 "
+                       "(e) sizechange·oscillatesize 를 **한 건도** 쓰지 않는다.",
+            "inference": "깊이 정렬이라면 저작자가 크기를 직접 다룰 이유가 그대로 남는다. "
+                         "크기 연산자를 전건 버렸다는 것은 **엔진이 z 로 크기를 만들어 준다**는 쪽을 가리킨다.",
+            "strength": "상관 근거다. 인과(엔진이 실제로 무엇을 하는지)는 확인하지 않았다.",
+        }, "확정", [specfmt.ev("asset", "assets/presets/**/*.json",
+                               "번들 프리셋 232개 A/B, scripts/spec/measure_particle_fields.py")]),
+
         specfmt.entry("engine.particle.flagBitMeaning", {
             "bit1": "worldspace — Waple 이 이미 이 해석으로 소비 중",
-            "bit4": "perspective(z 원근 스케일) — Waple 주석의 종전 판독(snowperspective 프리셋)",
+            "bit4": "perspective(z 원근 **크기 스케일**) — 프리셋 A/B 가 이 쪽을 지지한다"
+                    "(engine.particle.bit4PresetAB). Waple 주석의 종전 판독과도 일치.",
             "bit2": "미상. 코퍼스·번들 모두에서 흔한데 의미를 확인하지 못했다.",
-            "notVerified": "wallpaper64.exe 에서 비트를 읽는 코드를 짚지 않았다. "
-                           "bit4 를 구현하려면 먼저 이 확인이 필요하다 — "
-                           "'원근' 이 스프라이트 크기 스케일인지 깊이 정렬인지에 따라 결과가 다르다.",
+            "notVerified": "wallpaper64.exe 에서 비트를 읽는 코드를 짚지 않았다. A/B 는 "
+                           "'크기 스케일' 쪽을 가리키지만 **공식**을 주지 않는다 — "
+                           "기준 거리가 무엇인지, 1/z 인지 FOV 기반인지 모르면 구현할 수 없다. "
+                           "구현 전에 RE 또는 화면 대조로 공식을 확정할 것.",
+            "doNotGuessFormula": "그럴듯한 원근 공식을 지어 넣지 마라. 크기가 틀리면 "
+                                 "지금처럼 스케일이 아예 없는 것보다 더 눈에 띌 수 있다.",
         }, "추정", [specfmt.ev("file", PSRC.replace(os.sep, "/"), "flags 비트 주석(F623)"),
                     specfmt.ev("asset", "assets/presets/fog/previewfog2/particles/presets/snowstorm.json",
                                "flags=4 실례")]),

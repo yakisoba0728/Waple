@@ -203,6 +203,7 @@
      "그 외 상위 비트"
     ],
     "impact": "bit4 는 70씬이 저작하는데 파스만 되고 화면에 안 쓰인다. bit2 는 26씬.",
+    "reachIsNotExpectedChangeCount": "이 씬 수는 '해당 비트를 저작한 파티클 시스템을 하나라도 가진 씬' 이다. flags 는 파티클 시스템마다 따로 있고 한 씬이 여러 개를 갖는다. 고쳤을 때 골든이 움직이는 씬은 그 시스템이 **실제로 보이는** 경우로 한정되므로 이보다 적다 — 나중에 이 숫자를 기대 변화 수로 놓고 '고침이 안 먹었다' 고 판단하지 마라.",
     "staleComment": "Sources\\WapleCore\\ParticleSystem.swift 의 flags 주석이 '파스·보존 전용(렌더 소비는 후속)' 이라고 적혀 있는데 bit1 은 이미 소비된다 — 주석이 낡았다.",
     "bundledVocabulary": "WE 번들 프리셋도 같은 어휘를 쓴다(1·2·4·8, 조합 3/6/7/9, thunderbolt_child_spawner 는 248=상위 비트 다수). 즉 코퍼스만의 방언이 아니라 엔진 어휘다."
    },
@@ -225,12 +226,51 @@
    ]
   },
   {
+   "id": "engine.particle.bit4PresetAB",
+   "value": {
+    "question": "bit4 는 **크기 스케일**인가 **깊이 정렬**인가. 둘은 다른 코드가 필요하다.",
+    "method": "번들 프리셋 232개를 flags&4 유무로 갈라 크기·깊이 특징을 비교",
+    "result": {
+     "withBit4": {
+      "n": 30,
+      "sizeRandomRatioMedian": 1.07,
+      "emitterDirectionsZMedian": 1.0,
+      "emitterDistanceMaxMedian": 750.0,
+      "velocityZSpreadMax": 500.0,
+      "usesSizeChange": 0,
+      "usesOscillateSize": 0
+     },
+     "withoutBit4": {
+      "n": 202,
+      "sizeRandomRatioMedian": 2.0,
+      "emitterDirectionsZMedian": 0.0,
+      "emitterDistanceMaxMedian": 16.0,
+      "velocityZSpreadMax": 0.0,
+      "usesSizeChange": 99,
+      "usesOscillateSize": 7
+     }
+    },
+    "reading": "bit4 조는 (a) 이미터 z 방향이 전건 1(나머지는 중앙값 0) (b) 방출 거리 중앙값이 두 자릿수 배 크고 (c) **속도 z 산포가 0 이 아닌 유일한 조**다 — 즉 깊이가 있는 부피에 뿌린다. 동시에 (d) sizerandom 비율이 거의 1(균일 크기)이고 (e) sizechange·oscillatesize 를 **한 건도** 쓰지 않는다.",
+    "inference": "깊이 정렬이라면 저작자가 크기를 직접 다룰 이유가 그대로 남는다. 크기 연산자를 전건 버렸다는 것은 **엔진이 z 로 크기를 만들어 준다**는 쪽을 가리킨다.",
+    "strength": "상관 근거다. 인과(엔진이 실제로 무엇을 하는지)는 확인하지 않았다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "assets/presets/**/*.json",
+     "note": "번들 프리셋 232개 A/B, scripts/spec/measure_particle_fields.py"
+    }
+   ]
+  },
+  {
    "id": "engine.particle.flagBitMeaning",
    "value": {
     "bit1": "worldspace — Waple 이 이미 이 해석으로 소비 중",
-    "bit4": "perspective(z 원근 스케일) — Waple 주석의 종전 판독(snowperspective 프리셋)",
+    "bit4": "perspective(z 원근 **크기 스케일**) — 프리셋 A/B 가 이 쪽을 지지한다(engine.particle.bit4PresetAB). Waple 주석의 종전 판독과도 일치.",
     "bit2": "미상. 코퍼스·번들 모두에서 흔한데 의미를 확인하지 못했다.",
-    "notVerified": "wallpaper64.exe 에서 비트를 읽는 코드를 짚지 않았다. bit4 를 구현하려면 먼저 이 확인이 필요하다 — '원근' 이 스프라이트 크기 스케일인지 깊이 정렬인지에 따라 결과가 다르다."
+    "notVerified": "wallpaper64.exe 에서 비트를 읽는 코드를 짚지 않았다. A/B 는 '크기 스케일' 쪽을 가리키지만 **공식**을 주지 않는다 — 기준 거리가 무엇인지, 1/z 인지 FOV 기반인지 모르면 구현할 수 없다. 구현 전에 RE 또는 화면 대조로 공식을 확정할 것.",
+    "doNotGuessFormula": "그럴듯한 원근 공식을 지어 넣지 마라. 크기가 틀리면 지금처럼 스케일이 아예 없는 것보다 더 눈에 띌 수 있다."
    },
    "status": "추정",
    "evidence": [

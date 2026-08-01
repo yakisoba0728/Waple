@@ -538,8 +538,18 @@ public struct ParticleSystemDef: Equatable {
     /// 이미터별 주기 방출(emitters 와 병렬; nil=무주기 — 기존 rate/burst 경로 비트동일).
     /// 병렬 배열 관례(emitterAudio/emitterSpeed/boxDistanceMin 동형) — Emitter 케이스 시그니처 무회귀.
     public var emitterPeriodic: [PeriodicEmission?] = []
-    /// F623: 실물 def "flags" 비트(1=worldspace, 4=perspective z-원근 — snowperspective 프리셋 실측).
-    /// 파스·보존 전용(렌더 소비는 WapleRender 경로 후속).
+    /// F623: 실물 def "flags" 비트(1=worldspace, 4=perspective z-원근).
+    ///
+    /// [정정 2026-08-01] 종전 주석은 "파스·보존 전용(렌더 소비는 후속)" 이라고 적혀 있었는데
+    /// **bit1 은 이미 소비된다** — SceneRenderer3D.swift:2050 `(sys.def.flags & 1)`.
+    /// 실제 소비 현황(코퍼스 전수 실측, spec/engine/particle-fields.json):
+    ///   bit1 worldspace  — 58씬 저작 · **소비됨**
+    ///   bit2 (의미 미상) — 26씬 저작 · 미소비
+    ///   bit4 perspective — **70씬 저작 · 미소비** (현재 최대 갭)
+    /// bit4 는 번들 프리셋 A/B 가 '깊이 정렬' 이 아니라 '원근 **크기 스케일**' 을 지지한다
+    /// (bit4 조는 z 부피에 뿌리면서 sizechange·oscillatesize 를 0/30 으로 안 쓴다 —
+    ///  엔진이 z 로 크기를 만들어 준다는 뜻). 다만 **공식은 모른다** — 기준 거리도 1/z 여부도
+    /// 미확인이라 그럴듯한 원근식을 지어 넣으면 안 된다(스케일 부재보다 더 눈에 띌 수 있다).
     public var flags: Int = 0
     /// F622: 스프라이트시트 재생 모드/배속. animationMode nil = frametime 기반 기본 재생(기존 폴터).
     public var animationMode: ParticleAnimationMode? = nil
