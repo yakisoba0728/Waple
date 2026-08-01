@@ -380,6 +380,78 @@ launchctl asuser $(id -u) swift test --filter GoldenBaselineOracleTests
 ```
 Expected: 4 tests PASS
 
+- [ ] **Step 3b: `SnapshotCompare` 가 기록해둔 필드를 실제로 쓰게 한다**
+
+> **실측으로 드러난 것(`spec/golden/gate-analysis.json`):** 게이트가 매니페스트의
+> `hash`·`meanLuma`·`selfMaxDiff` 를 **한 번도 읽지 않는다**(`SnapshotCompare.swift:81-82` 는
+> `deterministic` 만 쓴다). 그리고 `strict` 임계가 **절대 단위**(`meanAbsDiff 1.5/255`)라
+> 어두운 씬일수록 느슨해진다 — **전면 검정으로 바꿔도 통과하는 씬이 3종**이다
+> (`3444535389` 0.00208 · `1612750231` 0.00322 · `3662790108` 0.00342).
+>
+> 고칠 게 많지 않다. **이미 기록 중인 값을 읽기만 해도 즉시 강해진다.**
+
+`Sources/WapleCompat/SnapshotCompare.swift` 의 판정부(`:80-82`)를 다음으로 바꾼다:
+
+```swift
+                    let m = diffRGBA(cur, base)
+                    let thr: DiffThreshold = entry.deterministic ? .strict : .lax
+                    // ① 해시 동일이면 픽셀이 완전히 같다 — diff 를 볼 것도 없이 통과.
+                    //    (지금까지 이 필드를 기록만 하고 안 읽었다.)
+                    let identical = m.maxAbsDiff == 0
+                    // ② 절대 임계는 어두운 씬에서 무력하다. 기준선 meanLuma 로 정규화한
+                    //    상대 지표를 함께 본다 — 둘 중 하나라도 넘으면 FAIL.
+                    //    분모를 0.02(=luma 5/255)로 하한 클램프하는 이유: 그보다 어두우면
+                    //    상대비가 발산해 오탐이 된다. 그 구간은 아래 ③ 이 맡는다.
+                    let relDiff = m.meanAbsDiff / (max(entry.meanLuma, 0.02) * 255.0)
+                    // ③ 아주 어두운 씬(기준선 meanLuma < 0.02)은 절대·상대 모두 둔하다.
+                    //    "구조가 사라졌는가" 로 본다 — 비검정 픽셀 비율의 급락.
+                    let structureLoss = entry.meanLuma < 0.02
+                        && m.meanAbsDiff > entry.meanLuma * 255.0 * 0.5
+                    let pass = identical
+                        || (passes(m, thr) && relDiff <= Self.relativeTolerance && !structureLoss)
+                    rows.append(CompareRow(id: entry.id, metrics: m,
+                                           deterministic: entry.deterministic, pass: pass))
+```
+
+그리고 클래스에 상수를 추가한다:
+
+```swift
+    /// 기준선 밝기로 정규화한 허용 편차. 절대 임계(strict 1.5/255)가 어두운 씬에서
+    /// 무력한 것을 보완한다 — spec/golden/gate-analysis.json 참조.
+    static let relativeTolerance: Double = 0.05
+```
+
+`SnapshotManifest.Entry` 에 `meanLuma` 가 디코드되는지 확인하고, 없으면 추가한다
+(`Sources/WapleSnapshot/Snapshot.swift`). **기록은 이미 하고 있으므로 스키마 변경이 아니다.**
+
+- [ ] **Step 3c: 게이트가 실제로 잡는지 합성 검증**
+
+`Tests/WapleSnapshotTests/` 에 순수 유닛을 추가한다(코퍼스·GPU 불필요, CI 에서 돈다):
+
+```swift
+    /// 어두운 씬을 전면 검정으로 바꾸면 잡혀야 한다.
+    /// 종전 절대 임계만으로는 3종이 통과했다(spec/golden/gate-analysis.json).
+    func testBlackoutOfDarkSceneIsCaught() {
+        // 기준선 meanLuma 0.0034 인 씬을 전면 검정으로: 평균 절대차 ≈ 0.87
+        let m = DiffMetrics(meanAbsDiff: 0.87, maxAbsDiff: 3, fracExceeding: 0.0)
+        XCTAssertTrue(passes(m, .strict), "절대 임계만으로는 통과한다(종전 동작)")
+        let rel = 0.87 / (max(0.0034, 0.02) * 255.0)
+        let structureLoss = 0.0034 < 0.02 && 0.87 > 0.0034 * 255.0 * 0.5
+        XCTAssertTrue(structureLoss, "구조 소실 판정이 이걸 잡아야 한다")
+        _ = rel
+    }
+
+    /// 밝은 씬의 미세 인코딩 노이즈는 통과해야 한다(오탐 방지).
+    func testMinorNoiseOnBrightSceneStillPasses() {
+        let m = DiffMetrics(meanAbsDiff: 0.4, maxAbsDiff: 3, fracExceeding: 0.0005)
+        let rel = 0.4 / (max(0.39, 0.02) * 255.0)   // median 밝기 씬
+        XCTAssertTrue(passes(m, .strict))
+        XCTAssertLessThanOrEqual(rel, 0.05)
+    }
+```
+
+`DiffMetrics` 의 실제 이니셜라이저 시그니처를 먼저 확인하고 맞출 것.
+
 - [ ] **Step 4: GT 하드 오라클에 픽셀 단언 추가**
 
 `Tests/WapleRenderTests/RealPackagesGroundTruthTests.swift:106-108` 의 세 줄 **뒤에** 추가한다
