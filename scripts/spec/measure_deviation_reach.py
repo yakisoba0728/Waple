@@ -104,7 +104,10 @@ def main():
                 lit.add(wid)
             if has_blend:
                 blend_nonzero.add(wid)
-            if is_hdr and has_model:
+            # [정정 2026-08-01] 종전엔 model 만으로 D1/D2 도달을 셌다. 틀렸다 —
+            # PBR 루프는 라이트가 있어야 돈다. 3509243656 은 모델 8개인데 라이트 0이라
+            # 대상에 넣었지만 GGX 경로를 아예 타지 않았다(A/B 실측으로 드러남).
+            if is_hdr and has_model and has_light:
                 hdr_and_model.add(wid)
             if is_hdr and has_blend:
                 hdr_and_blend.add(wid)
@@ -121,8 +124,8 @@ def main():
             "what": "GGX 분모 바닥값 1e-4 · nl/nv 하한 0.001",
             "where": ["Sources/WapleCore/ScenePBRLighting.swift:7,15,27,28",
                       "Sources/WapleRender/Mesh3DShaders.swift:171"],
-            "path": "3D 메시 PBR — objects[].model 이 있는 씬",
-            "reachAllScenes": {"count": len(model3d), "ids": sorted(model3d)},
+            "path": "3D 메시 PBR — objects[].model 과 objects[].light 를 둘 다 가진 씬(라이트 없으면 PBR 루프 자체를 안 탄다)",
+            "reachAllScenes": {"count": len(model3d & lit), "ids": sorted(model3d & lit)},
             "reachHDROnly": {"count": len(hdr_and_model), "ids": sorted(hdr_and_model)},
             "note": "[0,1] 입력에서는 WE 와 등가라 비-HDR 씬은 A/B 가 동일해야 한다. "
                     "그게 A/B 의 대조군이 된다 — 비-HDR 3D 씬이 바뀌면 수정이 잘못된 것이다.",

@@ -54,14 +54,12 @@
      "Sources/WapleCore/ScenePBRLighting.swift:7,15,27,28",
      "Sources/WapleRender/Mesh3DShaders.swift:171"
     ],
-    "path": "3D 메시 PBR — objects[].model 이 있는 씬",
+    "path": "3D 메시 PBR — objects[].model 과 objects[].light 를 둘 다 가진 씬(라이트 없으면 PBR 루프 자체를 안 탄다)",
     "reachAllScenes": {
-     "count": 8,
+     "count": 6,
      "ids": [
-      "3354366708",
       "3470948192",
       "3477054430",
-      "3509243656",
       "3589454154",
       "3662790108",
       "3706286085",
@@ -69,10 +67,9 @@
      ]
     },
     "reachHDROnly": {
-     "count": 4,
+     "count": 3,
      "ids": [
       "3470948192",
-      "3509243656",
       "3589454154",
       "3662790108"
      ]
