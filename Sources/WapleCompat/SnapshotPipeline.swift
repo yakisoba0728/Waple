@@ -184,7 +184,20 @@ enum SnapshotPipeline {
                             try? fm.copyItem(at: src, to: dst)
                         }
                     }
-                    // 셀프체크: 독립 재마운트로 두 번째 캡처 → 프레임 산출 씬만 2× (empty/fail 은 1×).
+                    // 셀프체크: 재마운트로 두 번째 캡처 → 프레임 산출 씬만 2× (empty/fail 은 1×).
+                    //
+                    // [정정 2026-08-01] 종전 주석은 "**독립** 재마운트" 였는데 독립이 아니다.
+                    // 2차 캡처가 **같은 프로세스** 안에서 일어나므로 프로세스 시작 시 정해지는 것
+                    // (RNG 시드·정적 캐시·딕셔너리 순회 순서·셰이더 컴파일 순서 등)이 두 캡처에서
+                    // 동일하다. 그 값이 실행마다 달라지면 화면이 달라지는데 여기선 항상 일치한다.
+                    // 실측(macOS 2026-08-01): 같은 커밋·같은 빌드로 전 코퍼스를 두 번 떠서 대조하니
+                    // **29종이 실행마다 다른데** 전부 deterministic=true / selfMaxDiff=0 으로 기록됐다.
+                    // 그래서 이 필드는 이름이 약속하는 "재현 가능한가" 가 아니라
+                    // **"같은 프로세스 안에서 두 번 그리면 같은가"** 만 답한다.
+                    // 여파: SnapshotCompare 가 이 값으로 strict/lax 임계를 고르므로(:85) 비결정 씬에
+                    // 오히려 strict 를 적용한다 — 방향이 반대다.
+                    // 고치려면 2차 캡처를 별도 프로세스에서 돌리거나 교차 실행 재현성을 별도 필드로 둔다.
+                    // 근거·수치: spec/golden/gate-analysis.json (oracle.gate.selfCheckIsIntraProcess)
                     // F522: 스키마 규약(SnapshotEntry.selfMaxDiff "셀프체크 안 했으면 -1")에 맞춰 2차 캡처가
                     // 픽셀을 내지 못하면 -1 유지 — 종전엔 0 이 기록돼 "실행했는데 최대차 0"과 구분 불가였다.
                     var deterministic = true, selfMax = -1, note: String? = nil

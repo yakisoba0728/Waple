@@ -144,6 +144,40 @@
    ]
   },
   {
+   "id": "oracle.gate.selfCheckIsIntraProcess",
+   "value": {
+    "what": "셀프체크(deterministic/selfMaxDiff)가 **프로세스 간** 변동을 구조적으로 못 잡는다",
+    "code": "SnapshotPipeline.swift:191 — 2차 캡처가 같은 프로세스 안에서 captureFrame 재호출. 주석은 '독립 재마운트' 라고 적혀 있지만 프로세스는 하나다.",
+    "whyItMisses": "프로세스 시작 시 정해지는 것들(RNG 시드, 정적 캐시, 딕셔너리 순회 순서, 셰이더 컴파일 순서 등)이 두 캡처에서 동일하다. 그 값이 실행마다 달라지면 화면이 달라지는데 셀프체크는 항상 일치한다고 보고한다.",
+    "measured": {
+     "method": "macOS 검증 2026-08-01 — **같은 커밋·같은 빌드**로 전체 코퍼스를 두 번 캡처해 대조",
+     "nonDeterministicScenes": 29,
+     "reportedByPipeline": "그 29종을 deterministic=true, selfMaxDiff=0 으로 보고"
+    },
+    "consequence": "골든 대조의 '변화 N종' 에 실행 간 잡음이 섞인다. 실측 사례: 변화 123종 중 29종이 비결정 오염이었다. 또 SnapshotCompare 는 deterministic 으로 임계를 고르므로(strict/lax) 비결정 씬에 **strict** 임계를 적용한다 — 반대로 돼 있다.",
+    "isolationEvidence": "3696323523: 단일씬 재캡처는 커밋 전후가 동일했고, 전체 코퍼스 캡처는 같은 빌드 2회가 서로 달랐다 — 커밋 무관, 실행 간 변동으로 격리 확인.",
+    "fixDirection": "셀프체크를 **별도 프로세스**에서 돌리거나, 매니페스트에 '교차 실행 재현성' 을 별도 필드로 둔다. 지금 필드는 이름과 달리 '같은 프로세스 안에서 두 번 그리면 같은가' 만 답한다.",
+    "lesson": "이 저장소에서 안전망이 조용히 무력했던 **일곱 번째** 사례다. 앞의 여섯과 같은 모양 — 필드 이름이 약속하는 것과 코드가 재는 것이 다르다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCompat/SnapshotPipeline.swift:187-198",
+     "note": "2차 캡처가 같은 프로세스"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCompat/SnapshotCompare.swift:85",
+     "note": "deterministic 으로 임계 선택"
+    },
+    {
+     "kind": "file",
+     "ref": "macOS 세션 2026-08-01 — 같은 빌드 2회 캡처 대조 29종"
+    }
+   ]
+  },
+  {
    "id": "oracle.gate.lumaDistribution",
    "value": {
     "n": 170,

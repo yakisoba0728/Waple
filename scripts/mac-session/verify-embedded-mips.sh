@@ -3,8 +3,8 @@
 #
 # 이 변경은 **의도적으로 픽셀을 바꾼다** — 그래서 검증 질문이 평소와 다르다.
 # "안 바뀌었는가" 가 아니라 **"바뀌어야 할 씬만 바뀌었는가"** 다.
-# 기대 집합(146종)은 spec/formats/tex-embedded-mips.json 의
-# format.tex.embedded.reach.workshopIds 에 전량 들어 있다.
+# 기대 집합은 **실행 시점에 코퍼스를 직접 스캔해** 산출한다(정적 목록 아님).
+# spec 의 목록은 윈도우 162씬 기준이라 170씬 코퍼스에서 7종이 누락됐었다.
 #
 # 필요:
 #   WAPLE_REAL_PKGS       실물 배경 디렉터리 (기본 ~/Downloads/wallpaper_dev/backgrounds)
@@ -42,7 +42,7 @@ for f in TexMipChainParseTests TexMipChainDecodeTests TexDecoderTests; do
     if launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
         WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
         swift test -c release --filter "$f" 2>&1 | tee "$OUT/$f.log" \
-        | grep -qE "Executed .* tests.*with 0 failures"; then
+        | grep -qE "Executed [0-9]+ tests?,.*with 0 failures"; then
         ok "$f 통과"
     else
         bad "$f 실패 — $OUT/$f.log"
@@ -59,7 +59,8 @@ launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
 PROBE=$(grep -o "\[mipchain-probe\].*" "$OUT/probe.log" | tail -1)
 echo "  $PROBE"
 EMB=$(printf '%s' "$PROBE" | sed -n 's/.*embedded=\([0-9]*\).*/\1/p')
-if grep -qE "Executed .* tests.*with 0 failures" "$OUT/probe.log"; then
+if grep -qE "Executed [0-9]+ tests?,.*with 0 failures" "$OUT/probe.log" \
+   && ! grep -qE "with [1-9][0-9]* failures?" "$OUT/probe.log"; then
     if [ "${EMB:-0}" -gt 0 ]; then
         ok "프로브 통과 · 임베디드 $EMB 개 전 레벨 디코드 (윈도우 실측 기대치 701)"
     else
@@ -76,13 +77,20 @@ T0=$SECONDS
 launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
     WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
     swift test -c release 2>&1 | tee "$OUT/full.log" | tail -20
-if grep -qE "with 0 failures" "$OUT/full.log"; then ok "전 스위트 통과 ($((SECONDS-T0))초)"
+if grep -qE "with [1-9][0-9]* failures?" "$OUT/full.log"; then
+    bad "전 스위트 실패 — $OUT/full.log"
+    grep -E "error:|XCTAssert.*failed|with [1-9][0-9]* failures?" "$OUT/full.log" | head -20 | sed 's/^/      /'
+elif grep -qE "with 0 failures" "$OUT/full.log"; then ok "전 스위트 통과 ($((SECONDS-T0))초)"
 else
     bad "전 스위트 실패 — $OUT/full.log"
     grep -E "error:|failed \(" "$OUT/full.log" | head -20 | sed 's/^/      /'
 fi
-TESTS=$(grep -oE "Executed [0-9]+ tests" "$OUT/full.log" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s}')
-echo "  Executed 합: ${TESTS:-?}"
+# [수정 2026-08-01] 종전 합산은 클래스 단위 소계까지 더해 6411 로 부풀었다(실제 2,143).
+# 번들('*.xctest')의 "Test Suite ... passed/failed" 직후 줄만 센다.
+echo "  번들별:"
+grep -A1 -E "Test Suite '.*\.xctest'.*(passed|failed)" "$OUT/full.log" 2>/dev/null     | grep -oE "Executed [0-9]+ tests?, with [0-9]+ failures?" | sed 's/^/    /'
+TESTS=$(grep -A1 -E "Test Suite '.*\.xctest'.*(passed|failed)" "$OUT/full.log" 2>/dev/null     | grep -oE "Executed [0-9]+ tests?" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+echo "  번들 합: ${TESTS:-?}  (종전 기준 2,143)"
 
 hr; echo "5. 골든 — **바뀌어야 할 씬만** 바뀌었는가"; hr
 PRE="${WAPLE_PRE_BASELINE:-}"
@@ -99,14 +107,86 @@ if [ -z "$PRE" ] || [ ! -d "$PRE/thumbs" ]; then
     echo "     이렇게 떠서 WAPLE_PRE_BASELINE 으로 지정할 것:"
     echo "       git stash && swift run -c release WapleCompat --capture ~/Downloads/waple-pre --label pre $ROOT && git stash pop"
 else
-python3 - "$PRE" "$OUT/$LABEL" "$REPO/spec/formats/tex-embedded-mips.json" <<'PY'
+python3 - "$PRE" "$OUT/$LABEL" "$WAPLE_REAL_PKGS" <<'PY'
 import json, os, sys
-pre, post, spec = sys.argv[1], sys.argv[2], sys.argv[3]
-doc = json.load(open(spec, encoding="utf-8"))
+import struct
+pre, post, corpus = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# [수정 2026-08-01] 기대 집합을 spec 의 **정적 목록**에서 읽던 것을 **실행 시점 코퍼스 산출**로 바꿨다.
+# 그 목록은 윈도우 코퍼스 162씬 기준인데 macOS 코퍼스는 170씬이라, 정당하게 바뀐 7종이
+# "기대 집합 밖 = 조사 대상" 으로 잘못 떴다(실측 8건 중 7건). 코퍼스에서 직접 세면
+# 표본이 달라져도 성립한다.
+def embedded_multimip(pkg_path):
+    """이 패키지가 임베디드(PNG/JPEG/GIF) mipCount>1 텍스처를 하나라도 갖는가."""
+    try:
+        b = open(pkg_path, "rb").read()
+    except OSError:
+        return False
+    try:
+        n = struct.unpack_from("<i", b, 0)[0]
+        p = 4 + n
+        cnt = struct.unpack_from("<i", b, p)[0]
+        p += 4
+        ents = []
+        for _ in range(cnt):
+            ln = struct.unpack_from("<i", b, p)[0]
+            p += 4
+            name = b[p:p + ln].decode("utf-8", "replace")
+            p += ln
+            off, size = struct.unpack_from("<2i", b, p)
+            p += 8
+            ents.append((name, off, size))
+        base = p
+    except Exception:
+        return False
+    for name, off, size in ents:
+        if not name.lower().endswith(".tex"):
+            continue
+        t = b[base + off:base + off + size]
+        if len(t) < 60 or t[:4] != b"TEXV":
+            continue
+        try:
+            flags = struct.unpack_from("<i", t, 22)[0]
+            q = 42
+            if flags & 0x40:
+                q += 4
+            if int(t[13:17]) > 0:
+                q += 4
+            if t[q:q + 4] != b"TEXB":
+                continue
+            ver = int(t[q + 4:q + 8])
+            q += 9 + 4                     # 매직+NUL, imageCount
+            if ver < 3:
+                continue
+            imageFormat = struct.unpack_from("<i", t, q)[0]
+            q += 4
+            if ver >= 4:
+                q += 4
+            if imageFormat not in (2, 13, 25):
+                continue
+            mipCount = struct.unpack_from("<i", t, q)[0]
+            if 1 < mipCount < 64:
+                return True
+        except Exception:
+            continue
+    return False
+
 expected = set()
-for e in doc["entries"]:
-    if e["id"] == "format.tex.embedded.reach":
-        expected = set(e["value"]["workshopIds"])
+if os.path.isdir(corpus):
+    for sid in sorted(os.listdir(corpus)):
+        d = os.path.join(corpus, sid)
+        if not os.path.isdir(d):
+            continue
+        for fn in ("scene.pkg", "gifscene.pkg"):
+            fp = os.path.join(d, fn)
+            if os.path.exists(fp) and embedded_multimip(fp):
+                expected.add(sid)
+                break
+print("  기대 집합(코퍼스 산출): %d종" % len(expected))
+if not expected:
+    print("  !! 코퍼스에서 임베디드 mip>1 을 0종 찾았다 — 파서가 깨졌거나 경로가 틀렸다.")
+    print("     이 상태의 '기대 집합 밖' 판정은 신뢰할 수 없다.")
+    sys.exit(1)
 try:
     from PIL import Image
 except ImportError:

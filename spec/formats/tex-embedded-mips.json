@@ -278,6 +278,70 @@
    ]
   },
   {
+   "id": "format.tex.embedded.mipDarkeningIsAlphaCoverage",
+   "value": {
+    "observation": "mip 체인을 올리자 일부 씬의 평균 밝기가 크게 떨어졌다. macOS 검증에서 3394601417 이 luma 0.0600 -> 0.0116(0.194배)로 GT structureLoss 게이트를 발화시켰다.",
+    "verdict": "버그가 아니다. **WE 자신이 저장한 픽셀**이 그렇다.",
+    "measurement": "코퍼스 25씬 · 임베디드 mip>=3 텍스처 140개를 파이썬으로 직접 디코드해 레벨별 밝기를 쟀다(알파 가중 / 순수 색 / 알파 분리).",
+    "result": {
+     "rgbOnlyRatio": "레벨을 내려가도 **색은 안 어두워진다**(중앙 ~0.99)",
+     "alphaRatio": "떨어지는 건 알파(커버리지) 쪽 — 최저 0.038",
+     "alphaDrivenVsColorDriven": "절반 아래로 떨어진 사례의 주도 요인: 알파 11 · 색 0",
+     "extreme": "3300031038/materials/Paper Effect.tex 는 WE 자신의 L3 가 L0 대비 0.038배(rgb 0.989 · alpha 0.038)"
+    },
+    "why": "투명 배경 위 가는 밝은 선/스파스 스프라이트를 축소하면 커버리지가 평균된다. 색은 유지되고 알파가 준다 — 밉맵의 정의 그대로다. 종전 Waple 은 mip0 만 샘플해 그 선들이 축소돼도 살아남았다(에일리어싱).",
+    "consequenceForGate": "GT 의 structureLoss(기준선 대비 0.5배 미만 = 하드 실패)는 **알파 가중 밝기**를 본다. 올바른 밉맵 적용이 그 지표를 정당하게 절반 아래로 떨어뜨릴 수 있다. 즉 이 발화는 오탐이 아니라 **의도된 변화의 정확한 검출**이고, 대응은 게이트 완화가 아니라 **재베이스라인**이다.",
+    "doNotWeakenGate": "이 사례를 이유로 structureLoss 문턱을 낮추지 마라. 게이트는 제 일을 했다 — 큰 변화를 세우고 사람이 판정했다. 문턱을 낮추면 '화면이 사라지는' 진짜 사고를 놓친다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "임베디드 mip>=3 텍스처 140개 레벨별 PNG 디코드",
+     "note": "scratchpad/mip_luma_corpus.py — 알파/색 분리 측정"
+    },
+    {
+     "kind": "file",
+     "ref": "Tests/WapleRenderTests/RealPackagesGroundTruthTests.swift",
+     "note": "structureLoss 판정부"
+    },
+    {
+     "kind": "file",
+     "ref": "macOS 세션 2026-08-01 검증 — 3394601417 발화"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.embedded.reachCorpusBasis",
+   "value": {
+    "issue": "reach.workshopIds(146종)는 **윈도우 코퍼스 162씬** 기준이다. macOS 검증 코퍼스는 170씬이라 7종이 목록에 없다.",
+    "missingFromList": [
+     "1412044563",
+     "2593802559",
+     "2809885105",
+     "2881558311",
+     "2947302287",
+     "3047405322",
+     "3394601417"
+    ],
+    "verified": "이 7종은 윈도우 워크샵 디렉터리에 **존재하지 않는다**(전수 확인). 코드 누수가 아니라 측정 표본 범위 차이다. 예: 3394601417 은 임베디드 mip>1 PNG 13개 보유(macOS 실측).",
+    "consequence": "검증 스크립트의 '기대 집합 밖' 판정은 이 목록이 완전하다고 가정한다. 목록이 부분집합이면 정당한 변화가 '조사 대상' 으로 잘못 뜬다 — 실제로 8건 중 7건이 그랬다.",
+    "fixApplied": "verify-embedded-mips.sh 가 이제 기대 집합을 **실행 시점에 코퍼스를 직접 스캔해** 산출한다(정적 목록 미사용). 윈도우에서 대조 검증: 그 파서가 이 생성기와 동일한 146종을 낸다(차집합 0). macOS 170씬 코퍼스에서는 153종이 나와 7종 오탐이 사라진다.",
+    "guard": "코퍼스 산출이 0종이면 스크립트가 즉시 실패한다 — 파서가 깨진 채로 '기대 밖 변화 0' 이라는 무의미한 통과를 내지 않도록."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "윈도우 워크샵 431960 디렉터리 존재 여부 전수 대조"
+    },
+    {
+     "kind": "file",
+     "ref": "macOS 세션 2026-08-01 — 기대 집합 밖 8종 분석"
+    }
+   ]
+  },
+  {
    "id": "format.tex.embedded.staleCommentOrigin",
    "value": {
     "what": "TexImage.swift 의 '코퍼스 임베디드 35개' 는 **설치 assets 한정** 수치였다",
