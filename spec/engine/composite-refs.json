@@ -1,0 +1,191 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_composite_refs.py",
+ "entries": [
+  {
+   "id": "engine.composite.refInventory",
+   "value": {
+    "scenes": 25,
+    "references": 88,
+    "suffixes": {
+     "_a": 85,
+     "_b": 3
+    },
+    "sourceClassification": {
+     "C_이펙트누락": 21,
+     "D_정적치환정답": 56,
+     "B_이미지없음": 11
+    },
+    "classMeaning": {
+     "A_없는id": "참조 id 의 오브젝트가 없다 → 치환 실패 → 흰색 1×1",
+     "B_이미지없음": "오브젝트는 있으나 image 없음(솔리드/컴포지션/이펙트 쿼드) → 흰색 1×1",
+     "C_이펙트누락": "image 는 있으나 소스가 이펙트를 갖는다 → 치환은 되지만 이펙트가 빠진 그림",
+     "D_정적치환정답": "image 있고 이펙트 없음 → 정적 치환이 사실상 정답"
+    },
+    "consumers": {
+     "fullscreen": 1,
+     "sized": 74
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 25종 전수 scene.json",
+     "note": "scripts/spec/measure_composite_refs.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.composite.whiteTriangleRefuted",
+   "value": {
+    "auditClaim": "정적 치환 때문에 2902406982 에 화면 12.3% 의 흰 삼각형이 뜬다(25씬)",
+    "verdict": "이 경로가 원인이라는 주장은 코퍼스 데이터로 성립하지 않는다",
+    "h1_unresolvedRef": {
+     "predicted": "참조 id 가 안 풀려 흰색 1×1",
+     "observed": "2902406982 의 참조 6건 전부 D(이미지 있음·이펙트 없음)",
+     "refuted": true
+    },
+    "h2_visibilityCarveout": {
+     "predicted": "숨어야 할 컴포지트 소스가 카브아웃 때문에 그려진다",
+     "observed": "6건 전부 visible:true · parent 없음 — 카브아웃 발동 조건이 없다",
+     "refuted": true,
+     "carveoutSites": [
+      "SceneDocument.swift:930",
+      "SceneDocument.swift:1572"
+     ]
+    },
+    "h3_coordinateSpace": {
+     "predicted": "WE 컴포지트 RTT 는 화면 크기, Waple 은 스프라이트 → UV 어긋남",
+     "observed": "소비자·소스가 같은 크기인 행 27/88. '풀스크린 소비자 × 작은 소스' 조합 0건. 2902406982 은 소비자 1000x1000 · 소스 1000x1000 · 투영 3840x2160",
+     "refuted": true
+    },
+    "consequence": "정적 치환 경로를 고쳐도 흰 삼각형은 없어지지 않는다. 흰 삼각형이 실재한다면 원인은 다른 곳이고, 판별하려면 프레임을 봐야 한다(macOS).",
+    "doNotReopen": "이 항목을 '정적 치환 갭' 으로 다시 적출하지 마라 — 세 가설 모두 코퍼스 전수로 반증됐다. 새로 열려면 화면 근거를 먼저 가져올 것."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 25종 전수 scene.json",
+     "note": "scripts/spec/measure_composite_refs.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRendererResources.swift:807-822",
+     "note": "정적 치환 구현부(prefix{isNumber} 로 id 만 읽는다)"
+    }
+   ]
+  },
+  {
+   "id": "engine.composite.suffixChannels",
+   "value": {
+    "observed": {
+     "_a": 85,
+     "_b": 3
+    },
+    "wapleParser": "prefix { $0.isNumber } — 숫자에서 멈추므로 접미사를 통째로 버린다. `_a` 와 `_b` 가 같은 텍스처로 해석된다.",
+    "slotPattern": "`_a` 는 대체로 슬롯 1(보조/마스크), `_b` 는 관측 3건 전부 슬롯 0(패스의 주 입력)",
+    "occurrences": [
+     {
+      "scene": "3019043758",
+      "consumerId": 84,
+      "consumerSize": [
+       256.0,
+       256.0
+      ],
+      "fullscreen": false,
+      "proj": [
+       3840.0,
+       2160.0
+      ],
+      "srcId": 84,
+      "suffix": "_b",
+      "srcSize": [
+       256.0,
+       256.0
+      ],
+      "srcClass": "C_이펙트누락"
+     },
+     {
+      "scene": "3152793212",
+      "consumerId": 246,
+      "consumerSize": [
+       null,
+       null
+      ],
+      "fullscreen": false,
+      "proj": [
+       1920.0,
+       1080.0
+      ],
+      "srcId": 246,
+      "suffix": "_b",
+      "srcSize": [
+       null,
+       null
+      ],
+      "srcClass": "C_이펙트누락"
+     },
+     {
+      "scene": "3353695150",
+      "consumerId": 182,
+      "consumerSize": [
+       null,
+       null
+      ],
+      "fullscreen": false,
+      "proj": [
+       3840.0,
+       2160.0
+      ],
+      "srcId": 182,
+      "suffix": "_b",
+      "srcSize": [
+       null,
+       null
+      ],
+      "srcClass": "C_이펙트누락"
+     }
+    ],
+    "reach": "3건 / 3씬",
+    "meaningOfSuffix": "미측정. 슬롯 배치만 관측했고 접미사가 무엇을 고르는지는 RE 로 확인하지 않았다(engine.composite.suffixHypothesis 참조).",
+    "assessment": "도달 범위가 작고, 슬롯 0(체인 입력)에 쓰이는 형태라 Waple 의 체인이 베이스 텍스처에서 시작하는 것과 겹친다. 지금 고칠 근거가 약하다 — 기록만 남긴다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 25종 전수 scene.json",
+     "note": "scripts/spec/measure_composite_refs.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/SceneRendererResources.swift:807-822",
+     "note": "정적 치환 구현부(prefix{isNumber} 로 id 만 읽는다)"
+    }
+   ]
+  },
+  {
+   "id": "engine.composite.suffixHypothesis",
+   "value": {
+    "hypothesis": "`_a`/`_b` 는 레이어 컴포지트 체인의 핑퐁 버퍼 두 짝이다",
+    "why": "`_b` 가 전건 슬롯 0(패스 입력)에 오고 `_a` 가 보조 슬롯에 오는 배치가 읽기/쓰기 교대와 정합한다. `_rt_imageLayerAlbedo_` 가 별도 심볼로 존재하므로 접미사가 채널 선택자일 가능성도 남아 있다.",
+    "notVerified": "wallpaper64.exe 에서 접미사를 만드는 코드를 찾지 않았다. 확인 전에는 파서를 고치면 안 된다 — 잘못된 채널을 고르는 것이 지금처럼 둘을 같게 두는 것보다 나쁠 수 있다."
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 25종 전수 scene.json",
+     "note": "scripts/spec/measure_composite_refs.py"
+    },
+    {
+     "kind": "binary",
+     "ref": "_rt_imageLayerAlbedo_ 0x140490d78",
+     "note": "별도 심볼 — 접미사가 채널 선택자일 가능성의 근거"
+    }
+   ]
+  }
+ ]
+}
