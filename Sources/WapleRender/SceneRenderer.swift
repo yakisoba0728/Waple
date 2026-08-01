@@ -947,6 +947,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         return .data(data)
     }
 
+    /// 여러 루트를 우선순위대로 훑는다. 첫 `.data` 를 반환.
+    ///
+    /// `.rejected`(경로 이탈)는 **즉시 반환한다** — 이건 보안 판정이지 "이 루트에 없음"이
+    /// 아니다. 다음 루트로 흘려보내면 이탈 경로가 다른 루트에서 성공할 수 있다.
+    static func sharedAssetProbe(_ name: String, roots: [URL]) -> SharedAssetProbeResult {
+        for root in roots {
+            switch sharedAssetProbe(name, root: root) {
+            case .data(let d): return .data(d)
+            case .rejected: return .rejected
+            case .missing: continue
+            }
+        }
+        return .missing
+    }
+
     /// 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 값(기본값+유저/프리셋 오버라이드).
     /// mount 시 스냅샷 — 프로퍼티 변경은 reapply(=remount)로 반영(LibraryViewModel.setProperty→onApply).
     var variantProperties: [String: PropertyValue] = [:]
@@ -1090,8 +1105,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             package = try WapleProfiler.time("pkgParse") { try ScenePackage.parse(data) }
             // 공유(base-assets) 리졸버: pkg 에 없는 util 모델/머티리얼 JSON(솔리드 레이어 등) 폴백.
             doc = try WapleProfiler.time("docParse") {
-                try SceneDocument.parse(package: package, sharedAssetProbe: { name in
-                    Self.sharedAssetProbe(name, root: BaseAssetsSettings.baseAssetsDirectory)
+                let assetRoots = BaseAssetsSettings.searchRoots
+                return try SceneDocument.parse(package: package, sharedAssetProbe: { name in
+                    Self.sharedAssetProbe(name, roots: assetRoots)
                 }, onMissingRequiredAsset: { [weak self] in
                     self?.markMissingRequiredSharedAsset()
                 }, userProps: UserPropertyStore.rawOverrides(

@@ -46,6 +46,33 @@ public enum BaseAssetsSettings {
             && isDir.boolValue
     }
 
+    /// 앱 번들에 동봉된 WE 2.8.42 공유 에셋. 해석 순서상 **마지막 폴백**이다.
+    /// 사용자가 최신·수정된 WE 설치본을 갖고 있으면 그쪽이 이긴다.
+    public static var bundledAssetsDirectory: URL? {
+        guard let url = Bundle.module.resourceURL?
+            .appendingPathComponent("WEAssets", isDirectory: true) else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+              isDir.boolValue else { return nil }
+        return url
+    }
+
+    /// 공유 에셋 검색 루트 — **우선순위 순**.
+    /// 1) 사용자 지정 / 자동 탐지 (기존 `baseAssetsDirectory`)
+    /// 2) 앱 동봉본
+    ///
+    /// 동봉본을 마지막에 두는 이유: 사용자 설치본이 더 새롭거나 수정돼 있을 수 있고,
+    /// 그 의도를 앱이 덮어쓰면 안 된다. 동봉본은 "없을 때의 바닥"이다.
+    public static var searchRoots: [URL] {
+        var roots: [URL] = []
+        if let user = baseAssetsDirectory { roots.append(user) }
+        if let bundled = bundledAssetsDirectory,
+           !roots.contains(where: { $0.standardizedFileURL == bundled.standardizedFileURL }) {
+            roots.append(bundled)
+        }
+        return roots
+    }
+
     /// 자동 탐지 채택 1회 로그(F471) — 무관 폴터 채택 시 사용자가 원인을 추적할 수 있게.
     private static var loggedAutoDetectedPaths: Set<String> = []
     private static func logAutoDetectedOnce(_ url: URL) {
