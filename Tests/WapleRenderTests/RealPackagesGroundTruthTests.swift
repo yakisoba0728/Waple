@@ -111,19 +111,42 @@ final class RealPackagesGroundTruthTests: XCTestCase {
         // 통과했다. 커밋된 기준선(spec/golden/snapshot/)이 생겼으므로 픽셀 내용을 본다.
         if let baseline = GoldenBaseline.load() {
             var blackFrames: [String] = []
+            var structureLoss: [String] = []
             var lumaDrift: [String] = []
             for (sceneId, luma) in lumas {
-                // ① 완전 검정 거부 — 기준선에 검은 프레임이 하나도 없으므로 새로 생기면 결함이다.
+                // ① 완전 검정 거부.
+                //
+                // [보강 2026-08-01] 이것만으로는 부족하다. 음성 대조에서 clearColor 를
+                // 검정 고정으로 깨뜨렸는데 **테스트가 통과했다** — 씬이 클리어 컬러 위에
+                // 콘텐츠를 그려서 luma 가 정확히 0 에 닿지 않기 때문이다. 아래 ② 를 추가한다.
                 if luma <= 0.0 { blackFrames.append(sceneId) }
-                // ② 기준선 대비 luma 드리프트. 비결정 씬은 제외한다.
+
                 guard let ref = baseline.entry(id: sceneId), ref.deterministic else { continue }
+
+                // ② 구조 소실 — 화면이 사라졌는가.
+                //
+                // 절대 임계는 어두운 씬에서 무력하다(spec/golden/gate-analysis.json:
+                // 전면 검정으로 바꿔도 통과하는 씬이 3종). 그래서 "기준선 대비 밝기가
+                // 절반 아래로 떨어졌는가" 로 본다. SnapshotCompare 의 structureLoss 와
+                // 같은 판정이라 두 경로가 대칭이 된다.
+                //
+                // **이것만 하드 실패다.** 일반 드리프트(③)는 의도적 렌더 변경일 수 있지만
+                // 화면이 사라지는 것은 의도된 적이 없다.
+                if ref.meanLuma > 0, Double(luma) < ref.meanLuma * 0.5 {
+                    structureLoss.append("\(sceneId): \(ref.meanLuma) -> \(luma)")
+                }
+
+                // ③ 일반 드리프트 — 기록만 한다.
                 if abs(Double(luma) - ref.meanLuma) > Self.lumaDriftTolerance {
                     lumaDrift.append("\(sceneId): \(ref.meanLuma) -> \(luma)")
                 }
             }
             XCTAssertTrue(blackFrames.isEmpty, "완전 검정 프레임: \(blackFrames)")
+            XCTAssertTrue(structureLoss.isEmpty,
+                          "기준선 대비 밝기가 절반 아래로 떨어진 씬(구조 소실): \(structureLoss)")
             if !lumaDrift.isEmpty {
                 // 드리프트는 의도적 변경일 수 있으므로 실패시키지 않고 크게 남긴다.
+                // 하드 실패로 올리면 렌더를 고칠 때마다 재베이스라인 전까지 스위트가 빨간불이 된다.
                 // 의도된 변경이면 기준선을 재생성하고 라벨을 갱신할 것.
                 NSLog("%@", "[WapleGT] 기준선 대비 luma 드리프트 \(lumaDrift.count)건: \(lumaDrift.prefix(20))")
             }

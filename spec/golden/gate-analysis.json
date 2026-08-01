@@ -87,6 +87,36 @@
    ]
   },
   {
+   "id": "oracle.gate.negativeControl",
+   "value": {
+    "what": "게이트 강화가 실제로 잡는지 일부러 깨뜨려 확인한 결과",
+    "method": "clearColor 를 검정 고정으로 바꾸고 GT 스위트 실행",
+    "firstAttempt": {
+     "result": "실패 — 테스트가 통과했다",
+     "why": "하드 단언이 luma <= 0.0(정확히 검정)이었는데 씬이 클리어 컬러 **위에 콘텐츠를 그려서** luma 가 0 에 닿지 않는다. 드리프트는 설계상 NSLog 만 남긴다.",
+     "observedDrift": "2593802559: 0.666 -> 0.032 · 2867182492: 0.361 -> 0.008 등 4건"
+    },
+    "fix": {
+     "what": "GT 경로에 structureLoss 판정 추가 — 기준선 대비 밝기가 절반 아래로 떨어지면 하드 실패",
+     "why": "SnapshotCompare 에는 이미 들어간 판정인데 GT 경로에 대응물이 없어 두 오라클이 비대칭이었다",
+     "whyOnlyThis": "일반 드리프트를 하드 실패로 올리면 의도적 렌더 변경마다 재베이스라인 전까지 스위트가 빨간불이 된다. 반면 화면이 사라지는 것은 의도된 적이 없다.",
+     "status": "구현했으나 음성 대조 재실행으로 확인되지 않았다"
+    },
+    "lesson": "오라클을 강화했으면 **일부러 깨뜨려 잡히는지 확인해야 한다**. 이 프로젝트에서 안전망이 조용히 무력했던 사건이 여섯 번째다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Tests/WapleRenderTests/RealPackagesGroundTruthTests.swift"
+    },
+    {
+     "kind": "file",
+     "ref": "macOS 세션 2026-08-01 음성 대조 실측"
+    }
+   ]
+  },
+  {
    "id": "oracle.gate.lumaDistribution",
    "value": {
     "n": 170,
