@@ -1,0 +1,1549 @@
+{
+  "activeDebugGates" : [
+
+  ],
+  "captureTime" : 6,
+  "createdAt" : "2026-08-01T12:07:33Z",
+  "empties" : [
+
+  ],
+  "entries" : [
+    {
+      "deterministic" : true,
+      "hash" : "7bbb752671c976f8",
+      "height" : 144,
+      "id" : "1412044563",
+      "meanLuma" : 0.21308632067844402,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "139a5731a6380387",
+      "height" : 144,
+      "id" : "1612750231",
+      "meanLuma" : 0.0032161392378131774,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "f7bc3daff5460ec6",
+      "height" : 144,
+      "id" : "2111201226",
+      "meanLuma" : 0.7906685645809055,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "76826dfa90d0827d",
+      "height" : 144,
+      "id" : "2188368235",
+      "meanLuma" : 0.820011706197237,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "4d823b784bacf053",
+      "height" : 144,
+      "id" : "2325500626",
+      "meanLuma" : 0.2864301321656778,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "785bc8bfaea8d276",
+      "height" : 144,
+      "id" : "2358773685",
+      "meanLuma" : 0.3355421461184347,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "4dc0dfcfad5746a3",
+      "height" : 144,
+      "id" : "2593802559",
+      "meanLuma" : 0.6657624421296295,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "1dfd3859bc2f04b2",
+      "height" : 144,
+      "id" : "2800248288",
+      "meanLuma" : 0.514492227605016,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "92ff42a561be587f",
+      "height" : 144,
+      "id" : "2802243144",
+      "meanLuma" : 0.5143460808781055,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "3f8d24a270f827d5",
+      "height" : 144,
+      "id" : "2809885105",
+      "meanLuma" : 0.5176384361380862,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "2dd9c237059c7446",
+      "height" : 144,
+      "id" : "2827816001",
+      "meanLuma" : 0.2562356888914424,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "6b9ef32b3f58ab7",
+      "height" : 144,
+      "id" : "2842323353",
+      "meanLuma" : 0.44344907045717424,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "d6fcba148caae486",
+      "height" : 144,
+      "id" : "2844219893",
+      "meanLuma" : 0.2162908774382245,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "8b1709a58ac5a550",
+      "height" : 144,
+      "id" : "2867182492",
+      "meanLuma" : 0.36074708594995875,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "e6fc7631c29ffe47",
+      "height" : 144,
+      "id" : "2881558311",
+      "meanLuma" : 0.010176887595315903,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "24a4a1e5677ed840",
+      "height" : 144,
+      "id" : "2885492021",
+      "meanLuma" : 0.17184503250950636,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a2305518c0421ac2",
+      "height" : 144,
+      "id" : "2899965423",
+      "meanLuma" : 0.43322017303666316,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "4fba37701c19f91",
+      "height" : 144,
+      "id" : "2902406982",
+      "meanLuma" : 0.42130896597136397,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "5d95270caa871a37",
+      "height" : 144,
+      "id" : "2904908532",
+      "meanLuma" : 0.45753226826320254,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "361ae57c48a2b205",
+      "height" : 144,
+      "id" : "2905844074",
+      "meanLuma" : 0.7068412874242551,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "d0e4b11dc71c5905",
+      "height" : 144,
+      "id" : "2911866381",
+      "meanLuma" : 0.13984634959236142,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "e4b2c8a0584e5517",
+      "height" : 144,
+      "id" : "2947302287",
+      "meanLuma" : 0.30255358785658676,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "5a9397f5294fcbe1",
+      "height" : 144,
+      "id" : "2955378002",
+      "meanLuma" : 0.24836667379409036,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "d151ff970036e77b",
+      "height" : 144,
+      "id" : "2958411739",
+      "meanLuma" : 0.7694184108625943,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a4e0ac8744a7c63c",
+      "height" : 144,
+      "id" : "2981249186",
+      "meanLuma" : 0.1236082846115827,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "8b44f84b1d7293a8",
+      "height" : 144,
+      "id" : "3000562427",
+      "meanLuma" : 0.12154411445563056,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "16129924207a052d",
+      "height" : 144,
+      "id" : "3019043758",
+      "meanLuma" : 0.09519345947795986,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "d1bf661e75440c52",
+      "height" : 144,
+      "id" : "3025975631",
+      "meanLuma" : 0.5115570907160414,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "7383c2baa445f0f4",
+      "height" : 144,
+      "id" : "3047405322",
+      "meanLuma" : 0.06475937372344465,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b8e4659e69428cc3",
+      "height" : 144,
+      "id" : "3100052627",
+      "meanLuma" : 0.577661274297053,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "cfc347a372f36cdb",
+      "height" : 144,
+      "id" : "3113287126",
+      "meanLuma" : 0.4309752860540924,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9404bdc02a79828",
+      "height" : 144,
+      "id" : "3146703458",
+      "meanLuma" : 0.49959249153218493,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "8e13aa7f44537207",
+      "height" : 144,
+      "id" : "3147346398",
+      "meanLuma" : 0.35037811446844225,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "649a26f9c88fcaee",
+      "height" : 144,
+      "id" : "3151551777",
+      "meanLuma" : 0.4387385396454592,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "112764b20f9243eb",
+      "height" : 144,
+      "id" : "3152793212",
+      "meanLuma" : 0.10326421132474789,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "61e3a588dd416451",
+      "height" : 144,
+      "id" : "3171024295",
+      "meanLuma" : 0.30499359277130433,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9bd1436b015e6ba9",
+      "height" : 144,
+      "id" : "3174556087",
+      "meanLuma" : 0.32807852051845804,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9cf91e3951f8dbfc",
+      "height" : 144,
+      "id" : "3189665546",
+      "meanLuma" : 0.515858676619526,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "2abb1e57a65a10ec",
+      "height" : 144,
+      "id" : "3195212886",
+      "meanLuma" : 0.7637146937549423,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b5a3bae96db44343",
+      "height" : 144,
+      "id" : "3200802205",
+      "meanLuma" : 0.17312994493799866,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "16e118f9cf30b275",
+      "height" : 144,
+      "id" : "3219908811",
+      "meanLuma" : 0.652594935491562,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "2781eb3ecb6ac323",
+      "height" : 144,
+      "id" : "3233141951",
+      "meanLuma" : 0.42504421253744706,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "3817d076c81f5a5a",
+      "height" : 144,
+      "id" : "3250755486",
+      "meanLuma" : 0.4981085897075743,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "14ec3404509b5c0",
+      "height" : 144,
+      "id" : "3257043844",
+      "meanLuma" : 0.42803908398866136,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "ba35676eeb8c8182",
+      "height" : 144,
+      "id" : "3258032485",
+      "meanLuma" : 0.17463198561328436,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "f69bd7309b199565",
+      "height" : 144,
+      "id" : "3264258426",
+      "meanLuma" : 0.22794943438094914,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "c016accbff75ccd0",
+      "height" : 144,
+      "id" : "3272946494",
+      "meanLuma" : 0.6313108990970807,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "57061183873107f4",
+      "height" : 144,
+      "id" : "3276911872",
+      "meanLuma" : 0.5381203570729345,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "fe901c4f087ecfc",
+      "height" : 144,
+      "id" : "3278399262",
+      "meanLuma" : 0.5403183778850034,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "4a5546a7a93278f3",
+      "height" : 144,
+      "id" : "3287715210",
+      "meanLuma" : 0.6951201147407836,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "c70094c9b8c9ad6a",
+      "height" : 144,
+      "id" : "3288381550",
+      "meanLuma" : 0.564746251723351,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "bc8669aa7decf245",
+      "height" : 144,
+      "id" : "3288383262",
+      "meanLuma" : 0.6185976188044222,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "ae431d50bcedca55",
+      "height" : 144,
+      "id" : "3292508781",
+      "meanLuma" : 0.7836442468979914,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "87ca3840643b26b3",
+      "height" : 144,
+      "id" : "3299228616",
+      "meanLuma" : 0.21948389671841026,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a4169d0e238e6ab6",
+      "height" : 144,
+      "id" : "3300031038",
+      "meanLuma" : 0.35356613657831065,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "2bdd4fa47bdddc7a",
+      "height" : 144,
+      "id" : "3301542557",
+      "meanLuma" : 0.7129774140668057,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "fec5d4fc85abf413",
+      "height" : 144,
+      "id" : "3302695207",
+      "meanLuma" : 0.5290982571870296,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "4b34018c4d8123fd",
+      "height" : 144,
+      "id" : "3305861843",
+      "meanLuma" : 0.8346543015557039,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "bd0cf9bb2b2a88c1",
+      "height" : 144,
+      "id" : "3312410308",
+      "meanLuma" : 0.48210761708113065,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "ba6cd177697739ff",
+      "height" : 144,
+      "id" : "3326873240",
+      "meanLuma" : 0.5136333552474812,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "c197de4c9196d840",
+      "height" : 144,
+      "id" : "3351163962",
+      "meanLuma" : 0.7763451629309128,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "78e1388eeefbf69e",
+      "height" : 144,
+      "id" : "3351179520",
+      "meanLuma" : 0.5106846466928748,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "8a6d91017bb420df",
+      "height" : 144,
+      "id" : "3352517853",
+      "meanLuma" : 0.3771896307785317,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "fe5806c8d0db1f00",
+      "height" : 144,
+      "id" : "3353695150",
+      "meanLuma" : 0.278118135340075,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "1388d41e55a8f5f8",
+      "height" : 144,
+      "id" : "3354366708",
+      "meanLuma" : 0.3468085883246543,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "ece309c93d6dfc13",
+      "height" : 144,
+      "id" : "3360328570",
+      "meanLuma" : 0.16475942946621705,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "eea82bb71d654667",
+      "height" : 144,
+      "id" : "3363252053",
+      "meanLuma" : 0.482400724656182,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "40fe756a708c4006",
+      "height" : 144,
+      "id" : "3363473482",
+      "meanLuma" : 0.5330974012586788,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "758711aca88d3f61",
+      "height" : 144,
+      "id" : "3367988661",
+      "meanLuma" : 0.5467982113375212,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "654aca13814a5c08",
+      "height" : 144,
+      "id" : "3373818743",
+      "meanLuma" : 0.2000623554304631,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a4bb635bfa3f6065",
+      "height" : 144,
+      "id" : "3379048027",
+      "meanLuma" : 0.4672951286764612,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "5d49a067b18deb67",
+      "height" : 144,
+      "id" : "3379996991",
+      "meanLuma" : 0.24905276096983883,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "2bcf78738d14b8f1",
+      "height" : 144,
+      "id" : "3384019940",
+      "meanLuma" : 0.3203791641135583,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "73fbd84248492d",
+      "height" : 144,
+      "id" : "3385540784",
+      "meanLuma" : 0.37667949197473494,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "520881e37eba5655",
+      "height" : 144,
+      "id" : "3388330010",
+      "meanLuma" : 0.3693974827452719,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b03162adaff704c2",
+      "height" : 144,
+      "id" : "3394601417",
+      "meanLuma" : 0.059996683517156923,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "add16dbe9b481ad8",
+      "height" : 144,
+      "id" : "3395777145",
+      "meanLuma" : 0.24523963014025052,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9572d07767128f78",
+      "height" : 144,
+      "id" : "3396722575",
+      "meanLuma" : 0.1827054549206841,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "dd3c8ed736e23080",
+      "height" : 144,
+      "id" : "3397690043",
+      "meanLuma" : 0.6979675737634459,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "79aaf4961279aa81",
+      "height" : 144,
+      "id" : "3400879974",
+      "meanLuma" : 0.20669402392683897,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "e7daa677bc644a4a",
+      "height" : 144,
+      "id" : "3404976219",
+      "meanLuma" : 0.6561309251174232,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "8b8938da57dae29a",
+      "height" : 144,
+      "id" : "3407317466",
+      "meanLuma" : 0.39032883050790745,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9fd2d2ec241d6634",
+      "height" : 144,
+      "id" : "3409595232",
+      "meanLuma" : 0.6799755642360985,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9de096d4120e98c0",
+      "height" : 144,
+      "id" : "3410266156",
+      "meanLuma" : 0.5772076546330303,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "fafdb74a7d26768d",
+      "height" : 144,
+      "id" : "3411850907",
+      "meanLuma" : 0.16341224713622007,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "d80858c4696f3b33",
+      "height" : 144,
+      "id" : "3413921910",
+      "meanLuma" : 0.33513911217915876,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b9e84fc3484a5910",
+      "height" : 144,
+      "id" : "3416122407",
+      "meanLuma" : 0.6843998329844097,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "6e2c04920a20d85c",
+      "height" : 144,
+      "id" : "3417957645",
+      "meanLuma" : 0.7324032594634998,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "ee02941719b4688c",
+      "height" : 144,
+      "id" : "3426865175",
+      "meanLuma" : 0.58635808110788,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "145ce7f9e4427d08",
+      "height" : 144,
+      "id" : "3427824116",
+      "meanLuma" : 0.23887383280570723,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "65bf54a386f812e3",
+      "height" : 144,
+      "id" : "3429479356",
+      "meanLuma" : 0.045526808236317086,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9e63cb3a105bc6d1",
+      "height" : 144,
+      "id" : "3436033033",
+      "meanLuma" : 0.6399315213737353,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "5539fe3d9c656184",
+      "height" : 144,
+      "id" : "3441006668",
+      "meanLuma" : 0.4872526361868601,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a49eb88f2e9eb003",
+      "height" : 144,
+      "id" : "3441873795",
+      "meanLuma" : 0.563188103383711,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "c9d8ce8711a0a001",
+      "height" : 144,
+      "id" : "3444535389",
+      "meanLuma" : 0.0020814185049019608,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b749e74344850d45",
+      "height" : 144,
+      "id" : "3445534475",
+      "meanLuma" : 0.44836523288568886,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "e74d7bf332da2cbf",
+      "height" : 144,
+      "id" : "3448290956",
+      "meanLuma" : 0.6167372991557797,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b88b4c04d74d7cb0",
+      "height" : 144,
+      "id" : "3448877775",
+      "meanLuma" : 0.18043148754511631,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b1ffe8d0c9909e20",
+      "height" : 144,
+      "id" : "3450697231",
+      "meanLuma" : 0.5086099627459296,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "2f732ea415ca93f6",
+      "height" : 144,
+      "id" : "3454792257",
+      "meanLuma" : 0.32078733883526894,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "cfb5cc64dc0e94f9",
+      "height" : 144,
+      "id" : "3459506773",
+      "meanLuma" : 0.015504726434845191,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "c40a79d6b2a6b0d",
+      "height" : 144,
+      "id" : "3460973721",
+      "meanLuma" : 0.24998654652181357,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "915ce80629d6f848",
+      "height" : 144,
+      "id" : "3461168300",
+      "meanLuma" : 0.614400596256308,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "dc39a0851d0cd696",
+      "height" : 144,
+      "id" : "3462491575",
+      "meanLuma" : 0.5213138442095743,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "136bb78f4b41a854",
+      "height" : 144,
+      "id" : "3463520581",
+      "meanLuma" : 0.530947372429888,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "8f8ae93628bd2bfa",
+      "height" : 144,
+      "id" : "3465215190",
+      "meanLuma" : 0.19700462941687102,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "7667219ee62cae21",
+      "height" : 144,
+      "id" : "3470764447",
+      "meanLuma" : 0.5548425115315403,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "dc381f6c02bf923c",
+      "height" : 144,
+      "id" : "3470948192",
+      "meanLuma" : 0.02051193863614214,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "4432dbdf9c5b383c",
+      "height" : 144,
+      "id" : "3477054430",
+      "meanLuma" : 0.12228611791937194,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9f1a0df0efcabd16",
+      "height" : 144,
+      "id" : "3478434536",
+      "meanLuma" : 0.63152739502487,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "eabc62384d21389e",
+      "height" : 144,
+      "id" : "3479521040",
+      "meanLuma" : 0.3132625956350663,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "be3c347edab5b22c",
+      "height" : 144,
+      "id" : "3483456356",
+      "meanLuma" : 0.7928224994468214,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "6076ae14bb479a88",
+      "height" : 144,
+      "id" : "3486806915",
+      "meanLuma" : 0.6328711958743017,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "d6c37b44e786f952",
+      "height" : 144,
+      "id" : "3489263099",
+      "meanLuma" : 0.08972160192418226,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "ebec7920f37393e5",
+      "height" : 144,
+      "id" : "3492627662",
+      "meanLuma" : 0.7436308749063868,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "e66875acca157b20",
+      "height" : 144,
+      "id" : "3509243656",
+      "meanLuma" : 0.0561927623740466,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "6daba8deff7c47f2",
+      "height" : 144,
+      "id" : "3510729512",
+      "meanLuma" : 0.453713171785633,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "7ee7ffaf75bf884d",
+      "height" : 144,
+      "id" : "3513984171",
+      "meanLuma" : 0.10294416104985075,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "aa928068a78e1ef4",
+      "height" : 144,
+      "id" : "3516106265",
+      "meanLuma" : 0.33897682781012584,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "555d8d4399d81dd5",
+      "height" : 144,
+      "id" : "3516174947",
+      "meanLuma" : 0.5380105546406894,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "be84ecc18b1649d5",
+      "height" : 144,
+      "id" : "3517818807",
+      "meanLuma" : 0.7950285662615508,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "35f27aa3584b8b87",
+      "height" : 144,
+      "id" : "3521337568",
+      "meanLuma" : 0.31926744695923126,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9ff1965bd9a5a3bf",
+      "height" : 144,
+      "id" : "3526096300",
+      "meanLuma" : 0.8704393299378509,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "2d3f60056d1eed65",
+      "height" : 144,
+      "id" : "3527811827",
+      "meanLuma" : 0.206279471656287,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "6cbb40fefafe6dba",
+      "height" : 144,
+      "id" : "3538758087",
+      "meanLuma" : 0.45483420479303055,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "7b38c5f82578b9c",
+      "height" : 144,
+      "id" : "3540566685",
+      "meanLuma" : 0.5622385671977204,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "2393e0f547020cee",
+      "height" : 144,
+      "id" : "3543159422",
+      "meanLuma" : 0.43817161905127344,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "222b861db6e416ef",
+      "height" : 144,
+      "id" : "3544152633",
+      "meanLuma" : 0.34921151684199114,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "e6646c858c430fdd",
+      "height" : 144,
+      "id" : "3544823846",
+      "meanLuma" : 0.3903294743157691,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "19ae1930a87a6821",
+      "height" : 144,
+      "id" : "3550590706",
+      "meanLuma" : 0.5701873376650627,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "f07aa9ec871b63b0",
+      "height" : 144,
+      "id" : "3552064521",
+      "meanLuma" : 0.4102966305402258,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "f1151a9398e7cf62",
+      "height" : 144,
+      "id" : "3554161528",
+      "meanLuma" : 0.4008241954529038,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "8fb2e66c3144d092",
+      "height" : 144,
+      "id" : "3558034522",
+      "meanLuma" : 0.7601701417611153,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "1933c9f8c4898f4b",
+      "height" : 144,
+      "id" : "3563056203",
+      "meanLuma" : 0.38218662651908625,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "5cdb6550edb78e95",
+      "height" : 144,
+      "id" : "3563096027",
+      "meanLuma" : 0.1535356611264245,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "800e3821e8e73e47",
+      "height" : 144,
+      "id" : "3565190341",
+      "meanLuma" : 0.1557671089920289,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "d65ccf0b420c89d2",
+      "height" : 144,
+      "id" : "3573378561",
+      "meanLuma" : 0.706589958107786,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "7573f38624574ca5",
+      "height" : 144,
+      "id" : "3577990983",
+      "meanLuma" : 0.17035017595144286,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "85ffaa069ede2214",
+      "height" : 144,
+      "id" : "3585875739",
+      "meanLuma" : 0.2679663899739427,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "af536e9ea1ec63fc",
+      "height" : 144,
+      "id" : "3589454154",
+      "meanLuma" : 0.09152129640268977,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "58113c3b4e7d6214",
+      "height" : 144,
+      "id" : "3596044309",
+      "meanLuma" : 0.341849403424568,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "3a2e98cc41a76c3",
+      "height" : 144,
+      "id" : "3596485909",
+      "meanLuma" : 0.21080012988919666,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "be641da770243b1c",
+      "height" : 144,
+      "id" : "3598808038",
+      "meanLuma" : 0.19421084314150744,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "c44c9cd002ee6d5c",
+      "height" : 144,
+      "id" : "3602673806",
+      "meanLuma" : 0.7404391783470665,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "7110b62262ae26bf",
+      "height" : 144,
+      "id" : "3603712208",
+      "meanLuma" : 0.2958793877229829,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b53f2794388254a2",
+      "height" : 144,
+      "id" : "3605722997",
+      "meanLuma" : 0.25704058180996636,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "ec4094cf9ebf3dd6",
+      "height" : 144,
+      "id" : "3616389236",
+      "meanLuma" : 0.06425740421602641,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "1503d287493f8ef2",
+      "height" : 144,
+      "id" : "3622495963",
+      "meanLuma" : 0.3849247435193721,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "11686671b137c04f",
+      "height" : 144,
+      "id" : "3625792732",
+      "meanLuma" : 0.37024537249795825,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "fa4ed5e67af1b23",
+      "height" : 144,
+      "id" : "3629379075",
+      "meanLuma" : 0.8001538492306516,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "3bf913bcb4c8bf4e",
+      "height" : 144,
+      "id" : "3640755971",
+      "meanLuma" : 0.32319202473960756,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "f1dd2cee887e351a",
+      "height" : 144,
+      "id" : "3641860575",
+      "meanLuma" : 0.5262768877017177,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "20390f137bfcd8e5",
+      "height" : 144,
+      "id" : "3644280276",
+      "meanLuma" : 0.3013573014535663,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "42d6d5e99f9a2006",
+      "height" : 144,
+      "id" : "3650475846",
+      "meanLuma" : 0.6802908003131625,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a3a28000268411af",
+      "height" : 144,
+      "id" : "3653641024",
+      "meanLuma" : 0.21809072935812282,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "291df12b0c41c91e",
+      "height" : 144,
+      "id" : "3659877246",
+      "meanLuma" : 0.29859860174974,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "35d64eb2643db67c",
+      "height" : 144,
+      "id" : "3660962877",
+      "meanLuma" : 0.6311090179908795,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "b7be285623bab375",
+      "height" : 144,
+      "id" : "3662790108",
+      "meanLuma" : 0.0034197459235430286,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "1bfa6d718f696d9a",
+      "height" : 144,
+      "id" : "3663810817",
+      "meanLuma" : 0.38962418247463926,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "4d38da58ab7e025d",
+      "height" : 144,
+      "id" : "3665954520",
+      "meanLuma" : 0.09376303338609089,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "3c8c00a7dc37c9dd",
+      "height" : 144,
+      "id" : "3687818927",
+      "meanLuma" : 0.5814633518858772,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a09fb8b8fdc178c3",
+      "height" : 144,
+      "id" : "3690417937",
+      "meanLuma" : 0.09041797715398724,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a40a72f31c5377a",
+      "height" : 144,
+      "id" : "3691570025",
+      "meanLuma" : 0.20255943340227825,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "9e152c634059d5d3",
+      "height" : 144,
+      "id" : "3696323523",
+      "meanLuma" : 0.24518535879626693,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "53c42412f8319217",
+      "height" : 144,
+      "id" : "3701356561",
+      "meanLuma" : 0.6942691055197695,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "173a86aee5bd9063",
+      "height" : 144,
+      "id" : "3706286085",
+      "meanLuma" : 0.18893916983678144,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "f06511796cd85d0e",
+      "height" : 144,
+      "id" : "3713073223",
+      "meanLuma" : 0.3043955834481539,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "6b7801589e586c9d",
+      "height" : 144,
+      "id" : "3726503096",
+      "meanLuma" : 0.009005682359749642,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "d5822e43f5d933e9",
+      "height" : 144,
+      "id" : "3737268876",
+      "meanLuma" : 0.571072849754083,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    },
+    {
+      "deterministic" : true,
+      "hash" : "a7af8b9bf97bdcec",
+      "height" : 144,
+      "id" : "3753921460",
+      "meanLuma" : 0.23213266027114776,
+      "selfMaxDiff" : 0,
+      "width" : 256
+    }
+  ],
+  "failures" : [
+
+  ],
+  "gitSHA" : "eaaee0c",
+  "label" : "pre",
+  "thumbHeight" : 144,
+  "thumbWidth" : 256
+}

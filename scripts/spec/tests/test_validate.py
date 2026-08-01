@@ -95,6 +95,11 @@ class TestCanonPathFilter(unittest.TestCase):
     def test_schema_is_not_canon(self):
         self.assertFalse(validate.is_canon_path("spec/schema.json"))
 
+    def test_golden_analysis_docs_are_canon(self):
+        """golden/ 을 통째로 빼면 이 문서들이 조용히 검사에서 빠진다(2026-08-01 실제 사고)."""
+        self.assertTrue(validate.is_canon_path("spec/golden/gate-analysis.json"))
+        self.assertTrue(validate.is_canon_path("spec/golden/nondeterminism.json"))
+
 
 class TestCrossDocChecks(unittest.TestCase):
     """검증기가 문서 하나만 보면 영역 간 모순을 못 잡는다 — 실제로 4건이 오류 0 을 통과했다."""

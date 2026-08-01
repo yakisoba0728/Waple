@@ -139,31 +139,28 @@ def main():
                                              "재현 여부와 무관하게 이 필드는 프로세스 간 변동을 "
                                              "**측정할 수 없다** — 잡을 게 없어서 0 이 나오는 것과 "
                                              "잡을 능력이 없어서 0 이 나오는 것을 구분하지 못한다.",
-            "empiricalClaimDidNotReproduce": {
+            "empiricalClaimResolved": {
                 "firstObservation": "macOS 2026-08-01 검증 세션 — 같은 커밋·같은 빌드 전 코퍼스 "
-                                    "2회 캡처에서 **29종이 달랐다**고 보고됨. "
-                                    "3696323523 은 단일씬 재캡처로 커밋 무관까지 격리 확인.",
+                                    "2회 캡처에서 **29종이 달랐다**고 보고됨(mips-82fcd08 vs head-rerun). "
+                                    "두 매니페스트가 남아 있어 그대로 재계산된다.",
                 "controlledProbe": "같은 날 probe-nondeterminism.sh 로 별도 프로세스 2회 캡처 "
-                                   "(runA/runB, 각 170종, 각 ~165초) → **차이 0종**.",
-                "status": "재현 실패. 29 라는 수치를 정본으로 쓰면 안 된다.",
-                "whatThisDoesAndDoesNotMean": "0/170 은 '결정적임' 의 증명이 아니라 "
-                                              "'이번엔 발현하지 않았다' 이다. 반대로 첫 관측도 "
-                                              "취소되지 않는다 — 둘을 합치면 **간헐적**이라는 뜻이고, "
-                                              "간헐적 비결정은 진단이 더 어렵지 더 쉬운 게 아니다.",
-                "leadingHypothesis": "두 관측의 환경 차이가 후보다. 첫 관측은 전 스위트 실행 "
-                                     "직후의 캡처였고 프로브는 유휴 상태 연속 2회였다. "
-                                     "전 코퍼스 캡처는 170씬을 **한 프로세스에서 순차 마운트**하므로 "
-                                     "메모리/GPU 상태 압력에 따라 씬 간 상태 누수가 달라질 수 있다.",
-                "discriminatingNextStep": "프로브 실행 순서를 바꿔 runB 직전에 "
-                                          "`swift test -c release` 전 스위트를 끼워 넣고 재실행. "
-                                          "29 가 재등장하면 부하/상태 의존으로 확정된다.",
+                                   "(runA/runB, 각 170종) → **차이 0종**.",
+                "status": "[2026-08-01 심야] 두 관측은 모순이 아니었다. 축이 '실행 간' 이 아니라 "
+                          "**'세션 간'** 이다 — 같은 세션 안에서는 프로세스를 갈라도 전 코퍼스가 "
+                          "비트동일하고(전 코퍼스 3회·단건 반복 전부 0종), 세션이 갈리면 29종이 갈린다. "
+                          "29 는 정본으로 쓸 수 있다.",
+                "measuredIn": "oracle.nondet.axisIsCrossSession · oracle.nondet.unstableSet "
+                              "(spec/golden/nondeterminism.json)",
+                "whatWasRefuted": "이 항목이 적어 뒀던 유력 가설(전 스위트 부하 → 씬 간 상태 누수)과 "
+                                  "판별 실험(runB 직전에 스위트를 끼워 재실행)은 **반증됐다**. "
+                                  "단건 캡처 값이 순차 캡처 안의 값과 같고, 캡처 사이에 전 코퍼스 "
+                                  "캡처를 끼워도 앞뒤가 비트동일하다.",
             },
-            "retractedConsequence": "이 항목이 처음에 '골든 변화 123종 중 29종이 비결정 오염' 이라고 "
-                                    "적었는데 그 귀속은 **근거가 없어졌다**. 같은 이유로 "
-                                    "3696323523(기대 집합 밖 1종)을 '비결정' 으로 닫은 것도 "
-                                    "재개해야 한다 — 간헐적일 뿐 설명된 게 아니다.",
-            "consequence": "골든 대조의 '변화 N종' 에 실행 간 잡음이 섞일 수 있다. "
-                           "다만 그 규모는 미정이다 — 아래 empiricalClaimDidNotReproduce 참조.",
+            "consequence": "**같은 세션 안에서 뜬 A/B 대조는 신뢰할 수 있다.** "
+                           "커밋된 기준선처럼 세션을 건너뛴 대조에만 29종이 잡음으로 섞인다 — "
+                           "그 29종은 고정 가족이고 id 목록이 oracle.nondet.unstableSet 에 있다.",
+            "reopened3696323523": "'기대 집합 밖 1종' 을 '비결정' 으로 닫았던 것은 이제 근거가 있다 — "
+                                  "이 씬은 불안정 29종 안에 있고 네 세션에서 네 값이 나온다.",
             "thresholdMisclassification": {
                 "code": "SnapshotCompare.swift:85 — `entry.deterministic ? .strict : .lax`",
                 "designIsCorrect": "결정적 씬에 strict, 비결정 씬에 lax 는 **의도대로 맞다**. "
@@ -177,21 +174,26 @@ def main():
             },
             "isolationEvidence": "3696323523: 단일씬 재캡처는 커밋 전후가 동일했고, "
                                  "전체 코퍼스 캡처는 같은 빌드 2회가 서로 달랐다 — "
-                                 "커밋 무관, 실행 간 변동으로 격리 확인.",
+                                 "커밋 무관까지 격리됐다. 그 '2회' 가 세션을 건너뛴 쌍이었다는 것은 "
+                                 "나중에 밝혀졌다(oracle.nondet.axisIsCrossSession).",
             "fixDirection": "셀프체크를 **별도 프로세스**에서 돌리거나, 매니페스트에 "
                             "'교차 실행 재현성' 을 별도 필드로 둔다. 지금 필드는 이름과 달리 "
                             "'같은 프로세스 안에서 두 번 그리면 같은가' 만 답한다.",
             "lesson": "필드 이름이 약속하는 것('재현 가능한가')과 코드가 재는 것('같은 프로세스 "
                       "안에서 두 번 그리면 같은가')이 다르다 — 이 저장소에서 반복돼 온 실패 모양이다. "
-                      "다만 이번엔 **피해 규모를 아직 못 재고 있다**: 구조적 맹점은 확실한데 "
-                      "그 맹점을 통과하는 실제 변동이 얼마나 되는지는 재현에 실패했다. "
-                      "'안전망이 무력했다' 와 '무력한 안전망을 통과한 사고가 있었다' 는 다른 주장이고, "
-                      "지금 증명된 것은 앞엣것뿐이다.",
+                      "피해 규모도 이제 재어져 있다: 세션을 건너뛴 대조에서 **29종/170종**. "
+                      "덧붙여 '재현 실패' 를 결론으로 적을 뻔했는데, 실제로는 **재현 조건이 "
+                      "달랐을 뿐**이었다 — 0/170 을 '결정적' 으로도 '간헐적' 으로도 읽지 않고 "
+                      "축을 다시 고른 것이 답을 냈다.",
+            "crossRef": "oracle.nondet.axisIsCrossSession",
         }, "확정", [specfmt.ev("file", "Sources/WapleCompat/SnapshotPipeline.swift:187-198",
                                "2차 캡처가 같은 프로세스"),
                     specfmt.ev("file", "Sources/WapleCompat/SnapshotCompare.swift:85",
                                "deterministic 으로 임계 선택"),
-                    specfmt.ev("file", "macOS 세션 2026-08-01 — 같은 빌드 2회 캡처 대조 29종")]),
+                    specfmt.ev("script", "scripts/spec/measure_nondeterminism.py",
+                               "커밋된 세션 매니페스트 8개로 29종을 재계산한다"),
+                    specfmt.ev("script", "scripts/mac-session/probe-session-nondeterminism.sh",
+                               "세션 내 재현성·부하·TZ·CWD 배제를 다시 뜨는 프로토콜")]),
 
         specfmt.entry("oracle.gate.lumaDistribution", {
             "n": len(lumas),
