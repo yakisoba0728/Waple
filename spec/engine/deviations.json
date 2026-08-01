@@ -1,7 +1,7 @@
 {
  "weVersion": "2.8.42",
  "generatedBy": "손 작성 — WE 원문(WEAssets/shaders/common_pbr.h, common_blending.h)과 Waple 소스 직접 대조 + macOS A/B 캡처 실측",
- "note": "'의도적 이탈 3건' 으로 시작했으나 대조 결과 하나(D2)는 이탈이 아니었다. 남은 둘은 A/B 로 화면 영향이 0 임을 실측했다.",
+ "note": "'의도적 이탈 3건' 으로 시작했으나 대조 결과 하나(D2)는 이탈이 아니었다. 남은 둘(D1·D3)은 A/B 로 화면 영향 0 을 실측하고 **유지**로 확정했다.",
  "entries": [
   {
    "id": "deviation.D1.ggxDenominatorFloor",
@@ -10,11 +10,17 @@
     "what": "GGX 분모에 바닥값 1e-4 를 씌운다",
     "we": "float denominator = (NH * NH * (rSqr2 - 1.0) + 1.0); return rSqr2 / (M_PI * denominator * denominator);",
     "waple": "float denominator = max(rawDenominator, 1e-4); return r4 / (pi * denominator * denominator);",
-    "where": ["Sources/WapleRender/Mesh3DShaders.swift:171 (라이브)",
-              "Sources/WapleCore/ScenePBRLighting.swift:15 (데드코드 미러 — Sources 참조 0건)"],
+    "where": [
+     "Sources/WapleRender/Mesh3DShaders.swift:171 (라이브)",
+     "Sources/WapleCore/ScenePBRLighting.swift:15 (데드코드 미러 — Sources 참조 0건)"
+    ],
     "divergesWhen": "roughness=0 이고 N·H=1 일 때. 그 지점에서 WE 는 0/0 = NaN, Waple 은 0",
     "abResult": {
-     "targets": ["3470948192", "3589454154", "3662790108"],
+     "targets": [
+      "3470948192",
+      "3589454154",
+      "3662790108"
+     ],
      "pixelChange": "0 — 최대 채널차 0, FNV 해시 170/170 일치, 썸네일 PNG 바이트 170/170 동일",
      "verifiedLive": "대상 3종 전부 라이트 보유(2/2/1)로 GGX 경로가 실제로 실행됐다",
      "note": "코퍼스 t=6.0 프레임에서 화면이 안 바뀐다는 뜻이지, 제거해도 안전하다는 뜻은 아니다. 제거하면 코퍼스에 없는 입력(roughness=0, N·H=1)에서 NaN 경로가 되살아난다."
@@ -23,9 +29,18 @@
    },
    "status": "확정",
    "evidence": [
-    {"kind": "shader", "ref": "Sources/WapleRender/Resources/WEAssets/shaders/common_pbr.h:18-25"},
-    {"kind": "file", "ref": "Sources/WapleRender/Mesh3DShaders.swift:165-173"},
-    {"kind": "file", "ref": "macOS A/B 캡처 2026-08-01 — A(release,무패치) vs B(D1·D3 제거) 완전 동일"}
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders/common_pbr.h:18-25"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/Mesh3DShaders.swift:165-173"
+    },
+    {
+     "kind": "file",
+     "ref": "macOS A/B 캡처 2026-08-01 — A(release,무패치) vs B(D1·D3 제거) 완전 동일"
+    }
    ]
   },
   {
@@ -44,8 +59,14 @@
    },
    "status": "확정",
    "evidence": [
-    {"kind": "shader", "ref": "Sources/WapleRender/Resources/WEAssets/shaders/common_pbr.h:34-37 (GeoSmith), :4-7 (FresnelSchlick)"},
-    {"kind": "file", "ref": "Sources/WapleRender/Mesh3DShaders.swift:181-188"}
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders/common_pbr.h:34-37 (GeoSmith), :4-7 (FresnelSchlick)"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/Mesh3DShaders.swift:181-188"
+    }
    ]
   },
   {
@@ -64,9 +85,17 @@
      "divergesWhen": "s > 1(HDR 슈퍼브라이트) 또는 s < 0(음수 틴트)",
      "concreteExample": "s=2.0 일 때 WE 는 min(base/(1-2), 1) = -base 로 음수를 낸다. Waple 은 1.0 클램프"
     },
-    "affectedModes": ["3 ColorBurn", "8 ColorDodge", "14 VividLight", "21 Reflect", "22 Glow"],
-    "where": ["Sources/WapleRender/BlendMSL.swift:9,10,16",
-              "Sources/WapleCore/BuiltinShaderIncludes.swift:29,32,52"],
+    "affectedModes": [
+     "3 ColorBurn",
+     "8 ColorDodge",
+     "14 VividLight",
+     "21 Reflect",
+     "22 Glow"
+    ],
+    "where": [
+     "Sources/WapleRender/BlendMSL.swift:9,10,16",
+     "Sources/WapleCore/BuiltinShaderIncludes.swift:29,32,52"
+    ],
     "abResult": {
      "pixelChange": "0",
      "sampleThinness": "패치된 모드를 쓰는 씬이 8종/18레이어인데 그중 HDR 은 3287715210 하나뿐이다. D3 는 [0,1] 밖에서만 갈리므로 실질 표본이 1종이다 — 근거가 얇다"
@@ -74,9 +103,18 @@
    },
    "status": "확정",
    "evidence": [
-    {"kind": "shader", "ref": "Sources/WapleRender/Resources/WEAssets/shaders/common_blending.h:114,115,119"},
-    {"kind": "file", "ref": "Sources/WapleRender/BlendMSL.swift:8-16"},
-    {"kind": "file", "ref": "macOS A/B 캡처 2026-08-01"}
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders/common_blending.h:114,115,119"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/BlendMSL.swift:8-16"
+    },
+    {
+     "kind": "file",
+     "ref": "macOS A/B 캡처 2026-08-01"
+    }
    ]
   },
   {
@@ -84,22 +122,33 @@
    "value": {
     "what": "ScenePBRMath(Sources/WapleCore/ScenePBRLighting.swift)는 데드코드다",
     "sourcesReferences": 0,
-    "testReferences": ["Tests/WapleCoreTests/SceneForwardLightingTests.swift",
-                       "Tests/WapleRenderTests/TubeLightCSMandMipTests.swift"],
+    "testReferences": [
+     "Tests/WapleCoreTests/SceneForwardLightingTests.swift",
+     "Tests/WapleRenderTests/TubeLightCSMandMipTests.swift"
+    ],
     "consequence": "라이브 PBR 은 전부 Mesh3DShaders.swift 의 MSL 이다. CPU 미러를 고쳐도 화면은 안 바뀐다. 이 사실을 몰라서 A/B 패치가 D2 를 데드코드에만 적용했다.",
     "risk": "두 구현이 갈라져도 테스트가 CPU 쪽만 보므로 드리프트를 못 잡는다"
    },
    "status": "확정",
    "evidence": [
-    {"kind": "file", "ref": "grep -rn ScenePBRMath Sources/ -> 정의 파일 외 0건"},
-    {"kind": "file", "ref": "grep -rln ScenePBRMath Tests/ -> 2파일"}
+    {
+     "kind": "file",
+     "ref": "grep -rn ScenePBRMath Sources/ -> 정의 파일 외 0건"
+    },
+    {
+     "kind": "file",
+     "ref": "grep -rln ScenePBRMath Tests/ -> 2파일"
+    }
    ]
   },
   {
    "id": "deviation.abMethod.lessons",
    "value": {
     "releaseVsDebug": {
-     "captureSeconds": {"debug": 1692.5, "release": 159.5},
+     "captureSeconds": {
+      "debug": 1692.5,
+      "release": 159.5
+     },
      "speedup": "9.6배",
      "warning": "debug 와 release 는 픽셀이 다르다. 대조군 26종이 바뀐 것처럼 보였는데 A(debug) vs A'(release,무패치) 대조로 전부 빌드 효과임이 드러났다. A/B 는 반드시 같은 빌드 구성끼리 비교해야 한다.",
      "determinism": "release 에서는 3363252053 도 결정이 됐다(170/170). debug 에서만 비결정이었다"
@@ -114,8 +163,48 @@
    },
    "status": "확정",
    "evidence": [
-    {"kind": "file", "ref": "macOS A/B 세션 2026-08-01 실측"},
-    {"kind": "file", "ref": "scripts/ab-deviations/03-ab-diff.py:69"}
+    {
+     "kind": "file",
+     "ref": "macOS A/B 세션 2026-08-01 실측"
+    },
+    {
+     "kind": "file",
+     "ref": "scripts/ab-deviations/03-ab-diff.py:69"
+    }
+   ]
+  },
+  {
+   "id": "deviation.decision",
+   "value": {
+    "decided": true,
+    "decidedOn": "2026-08-01",
+    "basis": "WE 원문 대조 + macOS A/B 캡처(release) 실측",
+    "D1": {
+     "verdict": "유지",
+     "why": "갈리는 지점이 roughness=0 · N·H=1 하나뿐이고 거기서 WE 는 0/0 = NaN 을, Waple 은 0 을 낸다. NaN 은 픽셀을 오염시키므로 Waple 쪽이 엄밀히 낫다. A/B 실측 화면 영향 0.",
+     "limits": "A/B 가 답한 것은 '코퍼스 t=6.0 에서 화면이 안 바뀐다' 이지 '제거해도 안전하다' 가 아니다. 반대 방향의 근거는 아니다."
+    },
+    "D2": {
+     "verdict": "이탈 아님 — 목록에서 삭제",
+     "why": "WE common_pbr.h 원문과 바이트 단위로 동일하다. 0.001 은 WE 자신의 값이다."
+    },
+    "D3": {
+     "verdict": "유지",
+     "why": "A/B 화면 영향 0. 다만 [0,1] 밖 입력을 실제로 만드는 표본이 HDR 1종(3287715210)뿐이라 근거가 얇다 — 제거할 이유가 없다는 쪽이 제거할 이유가 있다는 쪽보다 강하다.",
+     "revisitTrigger": "블렌드 모드를 쓰는 HDR 씬이 늘거나, 슈퍼브라이트 입력에서 육안 이상이 보고되면 재검토한다."
+    },
+    "doNotRediscover": "이 셋은 조사 완료 항목이다. 소스 주석이 이 정본을 가리키므로 '안전장치처럼 보이는 이탈' 로 다시 적출하지 마라."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "spec/engine/deviations.json deviation.D1/D2/D3"
+    },
+    {
+     "kind": "file",
+     "ref": "macOS A/B 캡처 2026-08-01 — A(release) vs B 완전 동일"
+    }
    ]
   }
  ]

@@ -6,6 +6,16 @@ enum BlendMSL {
     inline float3 we_overlay(float3 b, float3 s) { return select(2.0*b*s, 1.0-2.0*(1.0-b)*(1.0-s), b >= 0.5); }
     // F542(F-74): 경계 등호를 GLSL 내장본(BuiltinShaderIncludes.commonBlending step)과 일치 — colorburn 은
     // s≤0(step(s,0)), colordodge 는 s≥1(step(1,s))에서 상수 선택(HDR 슈퍼브라이트/음수 틴트 발산 해소).
+    //
+    // [의도적 이탈 — 유지 확정 2026-08-01] WE common_blending.h:114,115,119 는 **정확 비교**다:
+    //   (blend == 1.0) ? blend : min(base/(1.0-blend), 1.0)
+    // 여기는 범위 비교(s >= 1.0)라 s in [0,1] 에서는 동일하고 s>1 또는 s<0 에서만 갈린다.
+    // s=2.0 이면 WE 는 min(base/(1-2), 1) = -base 로 **음수**를 내고 여기는 1.0 으로 클램프한다.
+    // A/B(release) 화면 영향 0. 단 [0,1] 밖 입력을 만드는 표본이 HDR 1종뿐이라 근거는 얇다.
+    //
+    // 참고: max(s,1e-5) 엡실론 자체는 **무해하다** — 발동 구간이 이미 min(...,1)/max(...,0) 으로
+    // 클램프되는 영역이라 결과가 같다. 진짜 이탈은 가드 조건의 범위 쪽이다.
+    // 근거·A/B·재검토 조건: spec/engine/deviations.json (deviation.D3, deviation.decision)
     inline float3 we_colorburn(float3 b, float3 s) { return select(max(1.0-(1.0-b)/max(s,1e-5), 0.0), float3(0.0), s <= 0.0); }
     inline float3 we_colordodge(float3 b, float3 s) { return select(min(b/max(1.0-s,1e-5), 1.0), float3(1.0), s >= 1.0); }
     inline float3 we_softlight(float3 b, float3 s) { return select(2.0*b*s + b*b*(1.0-2.0*s), sqrt(max(b,0.0))*(2.0*s-1.0)+2.0*b*(1.0-s), s >= 0.5); }

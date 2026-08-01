@@ -167,7 +167,11 @@ enum Mesh3DShaders {
         float r4 = r2 * r2;
         float NH = max(dot(N, H), 0.0);
         float rawDenominator = NH * NH * (r4 - 1.0) + 1.0;
-        // [safety deviation] Native의 roughness=0,NH=1 0/0만 방지. 상단은 무클램프.
+        // [의도적 이탈 — 유지 확정 2026-08-01] WE common_pbr.h:23 에는 바닥값이 없다.
+        // 갈리는 지점은 roughness=0 · N·H=1 하나뿐이고 거기서 WE 는 0/0 = NaN, 여기는 0 이다.
+        // NaN 이 픽셀을 오염시키므로 이쪽이 엄밀히 낫다. HDR 씬 A/B(release) 화면 영향 0 실측.
+        // 근거·A/B 결과·재검토 조건: spec/engine/deviations.json (deviation.D1, deviation.decision)
+        // 이건 조사 완료 항목이다 — "안전장치처럼 보이는 이탈" 로 다시 적출하지 마라.
         float denominator = max(rawDenominator, 1e-4);
         return r4 / (3.14159265359 * denominator * denominator);
     }
@@ -178,6 +182,9 @@ enum Mesh3DShaders {
         return ND / (ND * (1.0 - k) + k);
     }
 
+    // 아래 0.001 하한은 **이탈이 아니다** — WE common_pbr.h:36 GeoSmith 원문과 같은 값이다.
+    // (FresnelSchlick 의 max(1.0-cosTheta, 0.001) 도 WE common_pbr.h:6 과 동일.)
+    // 한 번 "Waple 이 넣은 안전장치" 로 오분류된 적이 있다 — spec/engine/deviations.json (deviation.D2).
     inline float GeometrySmith(float3 N, float3 V, float3 L, float roughness) {
         return Schlick_GGX(max(dot(N, V), 0.001), roughness)
              * Schlick_GGX(max(dot(N, L), 0.001), roughness);
