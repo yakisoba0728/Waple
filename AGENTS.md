@@ -5,6 +5,9 @@ Wallpaper Engine 을 macOS 에 재구현한 프로젝트다. 사용자용 소개
 
 이 문서는 **사람이든 AI 에이전트든 코드를 만지기 전에 읽어야 하는 것**만 담는다.
 
+> **작업 환경을 옮기는 중이라면** — 윈도우↔맥 이관 절차와 현재 항목별 상태는
+> [docs/mac-handoff-2026-08-01.md](docs/mac-handoff-2026-08-01.md).
+
 ## 모듈 지도
 
 ```
@@ -32,11 +35,12 @@ WapleCore ←── WapleLibrary ──┐
 
 ```bash
 swift build --build-tests      # ~20초 (유휴 상태 Apple Silicon)
-swift test                     # 2,125개
+swift test                     # 2,143개(코퍼스 있음, 2026-08-01 macOS 실측)
 swift run Waple                # 메뉴바 앱으로 실행
 ```
 
-테스트 수 **2,125** 는 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
+테스트 수 **2,143**(코퍼스 있음) 은 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
+번들 합으로 세야 한다 — 클래스 단위 소계까지 더하면 6,000대로 부풀어 무의미해진다.
 
 ## 코퍼스 — 이걸 모르면 검증했다고 착각한다
 
@@ -49,11 +53,13 @@ export WAPLE_REAL_PKGS=/path/to/backgrounds    # 미설정 시 ~/Downloads/wallp
 export WAPLE_BASE_ASSETS=/path/to/assets       # 미설정 시 ~/Downloads/wallpaper_dev/assets
 ```
 
-| 구성 | 실행 | 스킵 | 시간 |
-| --- | --- | --- | --- |
-| 코퍼스 있음 | 2,125 | 2 | ~30분 |
-| 코퍼스 없음 | 2,125 | 41 | ~95초 |
-| CI (코퍼스 없음) | 2,125 | 46 | ~150초 |
+| 구성 | 실행 | 스킵 | 시간 | 출처 |
+| --- | --- | --- | --- | --- |
+| 코퍼스 있음 | 2,143 | 2 | ~30분 | 2026-08-01 macOS 실측 |
+| 코퍼스 없음 | 2,125 | 41 | ~95초 | **낡음 — 재측정 필요** |
+| CI (코퍼스 없음) | 2,125 | 46 | ~150초 | **낡음 — 재측정 필요** |
+
+번들별(2026-08-01): WapleRenderTests 992(스킵 2) · WapleCoreTests 786 · WapleAppTests 289 · WapleLibraryTests 51 · WapleSnapshotTests 25.
 
 코퍼스가 사주는 39개가 실패키지 mount+capture, 실영상·웹 로딩, 실제 `.mdl` 파싱,
 TEX 디코드·밉체인, 실셰이더 GLSL→MSL 번역이다. **렌더러를 건드렸다면 이걸 돌려야 한다.**
