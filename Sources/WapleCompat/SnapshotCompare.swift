@@ -15,6 +15,10 @@ extension SnapshotPipeline {
         let pass: Bool
     }
 
+    /// 기준선 밝기로 정규화한 허용 편차. 절대 임계(strict 1.5/255)가 어두운 씬에서
+    /// 무력한 것을 보완한다 — spec/golden/gate-analysis.json 참조.
+    static let relativeTolerance: Double = 0.05
+
     static func runCompare(root: String, baselineDir: URL) -> Int32 {
         let start = Date()
         guard let mdata = try? Data(contentsOf: baselineDir.appendingPathComponent("manifest.json")),
@@ -79,7 +83,22 @@ extension SnapshotPipeline {
                     }
                     let m = diffRGBA(cur, base)
                     let thr: DiffThreshold = entry.deterministic ? .strict : .lax
-                    rows.append(CompareRow(id: entry.id, metrics: m, deterministic: entry.deterministic, pass: passes(m, thr)))
+                    // ① 해시 동일이면 픽셀이 완전히 같다 — diff 를 볼 것도 없이 통과.
+                    //    (지금까지 이 필드를 기록만 하고 안 읽었다.)
+                    let identical = m.maxAbsDiff == 0
+                    // ② 절대 임계는 어두운 씬에서 무력하다. 기준선 meanLuma 로 정규화한
+                    //    상대 지표를 함께 본다 — 둘 중 하나라도 넘으면 FAIL.
+                    //    분모를 0.02(=luma 5/255)로 하한 클램프하는 이유: 그보다 어두우면
+                    //    상대비가 발산해 오탐이 된다. 그 구간은 아래 ③ 이 맡는다.
+                    let relDiff = m.meanAbsDiff / (max(entry.meanLuma, 0.02) * 255.0)
+                    // ③ 아주 어두운 씬(기준선 meanLuma < 0.02)은 절대·상대 모두 둔하다.
+                    //    "구조가 사라졌는가" 로 본다 — 비검정 픽셀 비율의 급락.
+                    let structureLoss = entry.meanLuma < 0.02
+                        && m.meanAbsDiff > entry.meanLuma * 255.0 * 0.5
+                    let pass = identical
+                        || (passes(m, thr) && relDiff <= Self.relativeTolerance && !structureLoss)
+                    rows.append(CompareRow(id: entry.id, metrics: m,
+                                           deterministic: entry.deterministic, pass: pass))
                 } catch {
                     regressedToEmpty.append(entry.id)
                     fputs("[snap] 현재 마운트 실패(회귀) \(entry.id): \(error)\n", stderr)

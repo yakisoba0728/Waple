@@ -83,6 +83,31 @@ final class SnapshotTests: XCTestCase {
         XCTAssertFalse(passes(diffRGBA(a, b), .selfConsistent))
     }
 
+    // MARK: 게이트 보강 — 어두운 씬 사각지대(spec/golden/gate-analysis.json)
+
+    /// 어두운 씬을 전면 검정으로 바꾸면 잡혀야 한다.
+    /// 종전 절대 임계만으로는 3종이 통과했다(spec/golden/gate-analysis.json).
+    func testBlackoutOfDarkSceneIsCaught() {
+        // 기준선 meanLuma 0.0034 인 씬을 전면 검정으로: 평균 절대차 ≈ 0.87
+        let m = DiffMetrics(meanAbsDiff: 0.87, maxAbsDiff: 3, fracExceeding: 0.0)
+        XCTAssertTrue(passes(m, .strict), "절대 임계만으로는 통과한다(종전 동작)")
+        // 리터럴만으로는 `<` 오버로드가 모호해 타입체커가 거부한다 — 타입을 명시한다.
+        let baseLuma: Double = 0.0034      // 기준선 meanLuma
+        let meanAbs: Double = 0.87         // 전면 검정 시 평균 절대차
+        let rel = meanAbs / (max(baseLuma, 0.02) * 255.0)
+        let structureLoss = baseLuma < 0.02 && meanAbs > baseLuma * 255.0 * 0.5
+        XCTAssertTrue(structureLoss, "구조 소실 판정이 이걸 잡아야 한다")
+        _ = rel
+    }
+
+    /// 밝은 씬의 미세 인코딩 노이즈는 통과해야 한다(오탐 방지).
+    func testMinorNoiseOnBrightSceneStillPasses() {
+        let m = DiffMetrics(meanAbsDiff: 0.4, maxAbsDiff: 3, fracExceeding: 0.0005)
+        let rel = 0.4 / (max(0.39, 0.02) * 255.0)   // median 밝기 씬
+        XCTAssertTrue(passes(m, .strict))
+        XCTAssertLessThanOrEqual(rel, 0.05)
+    }
+
     // MARK: 해시 / luma
 
     func testFNVDeterministicAndDistinct() {
