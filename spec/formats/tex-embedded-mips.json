@@ -298,7 +298,7 @@
     {
      "kind": "corpus",
      "ref": "임베디드 mip>=3 텍스처 140개 레벨별 PNG 디코드",
-     "note": "scratchpad/mip_luma_corpus.py — 알파/색 분리 측정"
+     "note": "scripts/spec/measure_mip_luma.py — 알파/색 분리 측정"
     },
     {
      "kind": "file",

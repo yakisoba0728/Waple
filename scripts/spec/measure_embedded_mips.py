@@ -241,7 +241,7 @@ def build(r):
                                "게이트는 제 일을 했다 — 큰 변화를 세우고 사람이 판정했다. "
                                "문턱을 낮추면 '화면이 사라지는' 진짜 사고를 놓친다.",
         }, "확정", [specfmt.ev("corpus", "임베디드 mip>=3 텍스처 140개 레벨별 PNG 디코드",
-                               "scratchpad/mip_luma_corpus.py — 알파/색 분리 측정"),
+                               "scripts/spec/measure_mip_luma.py — 알파/색 분리 측정"),
                     specfmt.ev("file", "Tests/WapleRenderTests/RealPackagesGroundTruthTests.swift",
                                "structureLoss 판정부"),
                     specfmt.ev("file", "macOS 세션 2026-08-01 검증 — 3394601417 발화")]),
