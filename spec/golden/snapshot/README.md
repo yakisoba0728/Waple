@@ -6,7 +6,34 @@
 
 여기가 그 안전망이다. 변경이 무엇을 바꿨는지 판정하는 기준이 된다.
 
-## `baseline-81098bb` — 최초 기준선
+## `baseline-f3a17da` — **현행 기준선**(2026-08-02)
+
+판정은 이걸 기준으로 한다(`GoldenBaseline.currentLabel`). 아래 `baseline-81098bb` 는 이력이다.
+
+| 항목 | 값 |
+| --- | --- |
+| gitSHA | `f3a17da` (feat/we-engine-port-design, Sources 청결) |
+| 빌드 | **release** (아래 ① 참고 — 이식 전 기준선은 debug 였다) |
+| entries / empties / failures | **170 / 0 / 0** |
+| meanLuma 범위 | 0.00149 ~ 0.86892 |
+| 셀프체크 비결정 | **0종** (이식 전 기준선의 유일한 비결정 3363252053 도 지금은 자기일관) |
+| 완전 검정 프레임 | 0장 |
+| activeDebugGates | `[]` |
+| 캡처 | `scripts/mac-session/rebaseline-golden.sh` · 각 165초 |
+
+**왜 다시 떴는가**: 캡처가 **실제 마우스 커서 위치**를 픽셀에 굽고 있었다 —
+`mount` 가 마우스 모니터를 켜면 그 순간의 커서가 `g_PointerPosition` 으로 들어갔고, 그래서
+세션이 갈리면 170종 중 29종이 다른 값을 냈다(`spec/golden/nondeterminism.json` →
+`oracle.nondet.rootCause`). 포인터를 핀한 뒤(f3a17da) 뜬 것이 이 기준선이다.
+
+**설치 게이트**: 두 캡처를 뜨되 **사이에 커서를 옮기고**, 비트동일할 때만 설치한다.
+이번 설치에서 상이 **0종**이었다(수정 전 같은 대조는 28~29종이었다). 재생성도 같은 스크립트로:
+
+```bash
+bash scripts/mac-session/rebaseline-golden.sh
+```
+
+## `baseline-81098bb` — 최초 기준선(이력)
 
 WE 엔진 이식 작업(공유 에셋 동봉 + 유니폼 규약 교정)을 **시작하기 전** 상태다.
 

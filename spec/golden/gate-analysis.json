@@ -50,12 +50,18 @@
    "id": "oracle.gate.blindScenes",
    "value": {
     "definition": "전면 검정으로 바꿔도 strict/lax 평균 임계를 통과하는 씬 (meanLuma × 255 <= threshold)",
-    "count": 3,
+    "count": 4,
     "scenes": [
      {
       "id": "3444535389",
-      "meanLuma": 0.00208,
-      "blackoutMeanDiff": 0.531,
+      "meanLuma": 0.00149,
+      "blackoutMeanDiff": 0.38,
+      "threshold": 1.5
+     },
+     {
+      "id": "2881558311",
+      "meanLuma": 0.00242,
+      "blackoutMeanDiff": 0.616,
       "threshold": 1.5
      },
      {
@@ -76,7 +82,7 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": "spec/golden/snapshot/baseline-81098bb/manifest.json",
+     "ref": "spec/golden/snapshot/baseline-f3a17da/manifest.json",
      "note": "커밋된 기준선 170종의 meanLuma 분포"
     },
     {
@@ -198,16 +204,16 @@
    "id": "oracle.gate.lumaDistribution",
    "value": {
     "n": 170,
-    "min": 0.00208,
-    "p05": 0.05619,
+    "min": 0.00149,
+    "p05": 0.04527,
     "median": 0.38962,
-    "max": 0.87044
+    "max": 0.86892
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "file",
-     "ref": "spec/golden/snapshot/baseline-81098bb/manifest.json",
+     "ref": "spec/golden/snapshot/baseline-f3a17da/manifest.json",
      "note": "커밋된 기준선 170종의 meanLuma 분포"
     }
    ]
