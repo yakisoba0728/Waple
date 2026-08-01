@@ -25,8 +25,9 @@ extension SceneRenderer {
             // 에서 float(rgba16Float)로 자동 승격된다(중간 버퍼가 소스와 동일 float 계약) — accPixelFormat 과 단일소스.
             // 비-HDR 씬(또는 hdr 여도 quality low/medium)은 hdrActive=false 로 이 블록 자체에 도달 불가
             // (격리 — 후자는 rawCopy/LDR 경로로 안전 폴백, P① 참조).
-            // H6: 8-레벨 피라미드 우선 — quarter 추출→레벨별 blur→additive 업샘플(소스가 작으면
-            // 허용 mip 수로 클램프). 자원/인코드 실패 시 기존 단일 레벨 HDRBloomPass 폴터(무회귀).
+            // 8-레벨 피라미드 우선 — WE 평문 구조(half 추출→절반씩 4탭 다운샘플→4탭 additive
+            // 업샘플→±텍셀 4탭 합성). 소스가 작으면 허용 mip 수로 클램프하고, 자원/인코드 실패 시
+            // 기존 단일 레벨 HDRBloomPass 폴터(무회귀).
             if sceneWantsHDRBloom, let hdrBloomPyramidPass {
                 // P③: strength 는 raw(hdrBloomParameters.strength 의 ×iterations 보정은 단일레벨
                 // 폴백 전용 — 피라미드는 N레벨 가산 누적 자체가 그 보상이라 재적용하면 이중 보정된다),
@@ -46,8 +47,9 @@ extension SceneRenderer {
                 var scratches: [MTLTexture] = []
                 var allocated = levelCount >= 2
                 for i in 0..<levelCount where allocated {
-                    let w = max(1, source.width >> (2 + i))
-                    let h = max(1, source.height >> (2 + i))
+                    // WE 는 매 단계 절반이라 레벨 0 이 1/2 다(종전 1/4 시작 → 2026-08-02 교체).
+                    let w = max(1, source.width >> (1 + i))
+                    let h = max(1, source.height >> (1 + i))
                     if let level = pooledOffscreen(w, h, device, bgra: true),
                        let scratch = pooledOffscreen(w, h, device, bgra: true) {
                         levels.append(level)

@@ -2,11 +2,13 @@ import Metal
 import simd
 import WapleCore
 
-/// H6: HDR bloom 8-레벨 피라미드 — WE 실물 피라미드(bloomhdriterations 실측 8단,
-/// 1800×1130→14×8, HDRBloomPass 헤더 주석 참조) 이식. 3-레벨 축소판의 승격 — 넓은 소프트 헤일로 복원.
-/// quarter 추출 → 레벨별 blur13 h/v(1/8 은 h 블러에 2× 다운샘플 융합, 1/16 이하는 box 다운샘플 선행)
-/// → ×0.25×scatter additive 업샘플 체인(심층 레벨은 지나는 단계마다 가중이 누적 곱해짐 — 3-레벨
-/// 코드의 eighth/sixteenth 합성 규칙의 일반화) → saturate(base+bloom) 합성.
+/// HDR bloom 피라미드 — **WE 평문 셰이더 구조 그대로**(2026-08-02 교체).
+/// hdr_downsample.frag 하나를 콤보로 3역할에 쓰는 듀얼 필터: 추출(BLOOM 콤보) → 절반씩 4탭
+/// 다운샘플 → 4탭 x scatter 업샘플 가산 → combine_hdr 의 ±텍셀 4탭 평균 가산.
+/// 탭은 전부 **±0.5 소스 텍셀 코너**이고 **가우시안 패스는 없다**.
+/// 종전 구현과의 차이 5건(추출 ±1.0 텍셀 · 레벨별 blur13 h/v · 단일탭 업샘플 · 단일탭 합성 ·
+/// 최상위 가중 반전)은 **오차 부호가 서로 반대라 상쇄**되고 있었다 — 그래서 한 건씩 고치면
+/// 회귀한다(정본 spec/engine/hdr-bloom.json: doNotFixPiecemeal). 한 단위로 교체했다.
 /// 소스가 작아 8단이 안 되면 min(8, 허용 mip 수)로 클램프, 2단 미만은 거부(호출부의 단일레벨
 /// HDRBloomPass 폴터). strength/scatter 캘리브는 HDRBloomPass 와 동일.
 struct HDRBloomPyramidParameters: Equatable {
@@ -35,8 +37,8 @@ struct HDRBloomPyramidParameters: Equatable {
 }
 
 protocol HDRBloomPyramidEncoding {
-    /// levels/scratches 는 같은 해상도 쌍의 ping-pong 작업 버퍼 — levels[0] = 1/4 추출,
-    /// levels[i] = (1/4 >> i) 블러 레벨, scratches[i] = 같은 해상도 스크래치(합성 누적에 재사용).
+    /// levels/scratches 는 같은 해상도 쌍의 작업 버퍼 — levels[0] = **1/2** 추출,
+    /// levels[i] = (1/2 >> i) 다운샘플 레벨, scratches[i] = 업샘플 누적용 같은 해상도 버퍼.
     /// 실제 사용 레벨 수 n = min(parameters.levels, 소스 허용 mip 수, 배열 길이), n ≥ 2 필요.
     func encode(
         commandBuffer: MTLCommandBuffer,
@@ -50,13 +52,13 @@ protocol HDRBloomPyramidEncoding {
 
 final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
     private struct ExtractUniforms {
+        /// (미사용 — 탭 오프셋은 셰이더가 텍스처 크기에서 직접 계산한다. 레이아웃 유지용.)
         var sourceTexelSize: SIMD2<Float>
         var blendParams: SIMD4<Float>
         var tintStrength: SIMD4<Float>
     }
 
     private let extractPipeline: MTLRenderPipelineState
-    private let blurPipeline: MTLRenderPipelineState
     private let combinePipeline: MTLRenderPipelineState
     private let downsamplePipeline: MTLRenderPipelineState
     private let upsamplePipeline: MTLRenderPipelineState
@@ -65,7 +67,6 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
         guard let library = try? WapleProfiler.compile(Self.metalSource, { try device.makeLibrary(source: Self.metalSource, options: nil) }),
               let vertex = library.makeFunction(name: "hdrBloomVertex"),
               let extract = library.makeFunction(name: "hdrBloomExtract"),
-              let blur = library.makeFunction(name: "hdrBloomBlur"),
               let combine = library.makeFunction(name: "hdrBloomCombine"),
               let downsample = library.makeFunction(name: "hdrBloomDownsample"),
               let upsample = library.makeFunction(name: "hdrBloomUpsample") else {
@@ -81,25 +82,23 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
         }
 
         guard let extractPipeline = makePipeline(extract, format: .rgba16Float),
-              let blurPipeline = makePipeline(blur, format: .rgba16Float),
               let combinePipeline = makePipeline(combine, format: .bgra8Unorm),
               let downsamplePipeline = makePipeline(downsample, format: .rgba16Float),
               let upsamplePipeline = makePipeline(upsample, format: .rgba16Float) else {
             return nil
         }
         self.extractPipeline = extractPipeline
-        self.blurPipeline = blurPipeline
         self.combinePipeline = combinePipeline
         self.downsamplePipeline = downsamplePipeline
         self.upsamplePipeline = upsamplePipeline
     }
 
-    /// 소스가 허용하는 피라미드 레벨 수(1/4 부터 1×1 까지 halving)와 요청값의 min.
+    /// 소스가 허용하는 피라미드 레벨 수(1/2 부터 1×1 까지 halving)와 요청값의 min.
     /// 호출부는 이 값만큼 levels/scratches 쌍을 할당하면 된다(2 미만이면 인코드 거부).
     static func levelCount(requested: Int, sourceWidth: Int, sourceHeight: Int) -> Int {
         var count = 1
-        var w = max(1, sourceWidth / 4)
-        var h = max(1, sourceHeight / 4)
+        var w = max(1, sourceWidth / 2)
+        var h = max(1, sourceHeight / 2)
         while w > 1 || h > 1 {
             w = max(1, w / 2)
             h = max(1, h / 2)
@@ -150,8 +149,8 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
               source.height == destination.height,
               (L + S).allSatisfy({ $0.textureType == .type2D && $0.pixelFormat == .rgba16Float }),
               (0..<n).allSatisfy({ i in
-                  L[i].width == max(1, source.width >> (2 + i))
-                      && L[i].height == max(1, source.height >> (2 + i))
+                  L[i].width == max(1, source.width >> (1 + i))
+                      && L[i].height == max(1, source.height >> (1 + i))
                       && S[i].width == L[i].width
                       && S[i].height == L[i].height
               }) else {
@@ -176,71 +175,43 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
             return true
         }
 
-        // 분리형 blur13 h/v — fusedDownsample 시 h 단계가 2× 다운샘플을 융합(입력이 2배 해상도).
-        func blur(_ src: MTLTexture, _ tmp: MTLTexture, _ dst: MTLTexture, fusedDownsample: Bool) -> Bool {
-            var hStep = SIMD2<Float>((fusedDownsample ? 2 : 1) / Float(src.width), 0)
-            guard draw(blurPipeline, to: tmp, { e in
-                e.setFragmentTexture(src, index: 0)
-                e.setFragmentBytes(&hStep, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
-            }) else { return false }
-            var vStep = SIMD2<Float>(0, 1 / Float(tmp.height))
-            return draw(blurPipeline, to: dst, { e in
-                e.setFragmentTexture(tmp, index: 0)
-                e.setFragmentBytes(&vStep, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
-            })
-        }
-
         let knee = max(parameters.threshold * parameters.feather, 0)
         var extractUniforms = ExtractUniforms(
             sourceTexelSize: SIMD2(1 / Float(source.width), 1 / Float(source.height)),
             blendParams: SIMD4(parameters.threshold, parameters.threshold - knee, 2 * knee, 0.25 / (knee + 1e-5)),
             tintStrength: SIMD4(parameters.tint.x, parameters.tint.y, parameters.tint.z, parameters.strength))
 
-        // 1) 추출 → L[0] (1/4)
+        // 1) 추출 → L[0] (1/2) — WE hdr_downsample + BLOOM 콤보(4탭 x0.25 + 소프트-니).
         guard draw(extractPipeline, to: L[0], { e in
             e.setFragmentTexture(source, index: 0)
             e.setFragmentBytes(&extractUniforms, length: MemoryLayout<ExtractUniforms>.stride, index: 0)
         }) else { return false }
 
-        // 2) 1/8 레벨: h 블러에 2× 다운샘플 융합(기존 3-레벨 코드의 quarter→eighth 단계).
-        guard blur(L[0], S[1], L[1], fusedDownsample: true) else { return false }
-
-        // 3) 1/16 이하 레벨: box 다운샘플 → blur13 h/v.
-        for i in 2..<n {
+        // 2) 이후 레벨: 매 단계 절반으로 4탭 다운샘플(가우시안 패스 없음 — WE 는 순수 듀얼 필터).
+        for i in 1..<n {
             guard draw(downsamplePipeline, to: L[i], { e in
                 e.setFragmentTexture(L[i - 1], index: 0)
             }) else { return false }
-            guard blur(L[i], S[i], L[i], fusedDownsample: false) else { return false }
         }
 
-        // 4) 가중 합성(심층 → 천층): S[i] = L[i] + w·acc — w = 0.25×scatter, 단계마다 누적 곱.
+        // 3) 업샘플 체인(심층 → 천층): S[i] = L[i] + scatter x 4탭평균(acc).
+        // WE 는 hdr_upsample 머티리얼의 blending:additive 로 **고운 레벨 위에 가산**한다 —
+        // 규칙이 모든 레벨에 동일하다(최상위만 뒤집혀 추출 레벨이 감쇠되던 S1 결함 해소).
         var up = SIMD4<Float>(parameters.scatter * 0.25, 0, 0, 0)
         var acc = L[n - 1]
-        if n > 2 {
-            for i in stride(from: n - 2, through: 1, by: -1) {
-                let base = L[i]
-                let add = acc
-                guard draw(upsamplePipeline, to: S[i], { e in
-                    e.setFragmentTexture(base, index: 0)
-                    e.setFragmentTexture(add, index: 1)
-                    e.setFragmentBytes(&up, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-                }) else { return false }
-                acc = S[i]
-            }
+        for i in stride(from: n - 2, through: 0, by: -1) {
+            guard draw(upsamplePipeline, to: S[i], { e in
+                e.setFragmentTexture(L[i], index: 0)
+                e.setFragmentTexture(acc, index: 1)
+                e.setFragmentBytes(&up, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            }) else { return false }
+            acc = S[i]
         }
 
-        // 5) 최상위: 추출 레벨(L[0]) 가산 → S[0] (기존 3-레벨 코드의 eighth→quarter 단계와 동일 규칙).
-        let top = acc
-        guard draw(upsamplePipeline, to: S[0], { e in
-            e.setFragmentTexture(top, index: 0)
-            e.setFragmentTexture(L[0], index: 1)
-            e.setFragmentBytes(&up, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
-        }) else { return false }
-
-        // 6) 합성 source + S[0] → destination
+        // 4) 합성 source + 블룸(S[0]) → destination — WE combine_hdr 의 ±텍셀 4탭 평균 가산.
         return draw(combinePipeline, to: destination, { e in
             e.setFragmentTexture(source, index: 0)
-            e.setFragmentTexture(S[0], index: 1)
+            e.setFragmentTexture(acc, index: 1)
         })
     }
 
@@ -267,17 +238,23 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
         float4 tintStrength;
     };
 
+    /// WE hdr_downsample.frag 의 4탭: g_RenderVar0 = 0.5 x 소스 텍셀(BICUBIC 분기의
+    /// `texSize = 0.5 / g_RenderVar0.xy` 로 확정) — 즉 **±0.5 소스 텍셀 코너**. 선형 필터라
+    /// 탭 하나가 소스 2x2 를 평균하고, 4탭 x 0.25 로 4x4 상당의 박스가 된다.
+    float3 weDownsample4(texture2d<float> src, float2 uv) {
+        constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
+        float2 t = 0.5 / float2(src.get_width(), src.get_height());
+        return (src.sample(linearClamp, uv + float2(-t.x, -t.y)).rgb +
+                src.sample(linearClamp, uv + float2( t.x, -t.y)).rgb +
+                src.sample(linearClamp, uv + float2(-t.x,  t.y)).rgb +
+                src.sample(linearClamp, uv + float2( t.x,  t.y)).rgb) * 0.25;
+    }
+
     fragment float4 hdrBloomExtract(BloomVertexOut in [[stage_in]],
                                     texture2d<float> source [[texture(0)]],
                                     constant ExtractUniforms &u [[buffer(0)]]) {
-        constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
-        float2 t = u.sourceTexelSize;
-        float3 c = max((
-            source.sample(linearClamp, in.uv + t * float2(-1.0, -1.0)).rgb +
-            source.sample(linearClamp, in.uv + t * float2( 1.0, -1.0)).rgb +
-            source.sample(linearClamp, in.uv + t * float2(-1.0,  1.0)).rgb +
-            source.sample(linearClamp, in.uv + t * float2( 1.0,  1.0)).rgb
-        ) * 0.25, 0.0);
+        // WE 의 hdr_downsample + BLOOM 콤보 = 같은 4탭 다운샘플 뒤에 소프트-니 임계.
+        float3 c = max(weDownsample4(source, in.uv), 0.0);
         float4 P = u.blendParams;
         float m = max(c.r, max(c.g, c.b));
         float soft = clamp(m - P.y, 0.0, P.z);
@@ -287,54 +264,44 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
         return float4(rgb, 1.0);
     }
 
-    float3 blur13(texture2d<float> source, float2 uv, float2 step) {
-        constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
-        float3 rgb = source.sample(linearClamp, uv).rgb * 0.171834;
-        rgb += (source.sample(linearClamp, uv - step * 1.0).rgb + source.sample(linearClamp, uv + step * 1.0).rgb) * 0.156756;
-        rgb += (source.sample(linearClamp, uv - step * 2.0).rgb + source.sample(linearClamp, uv + step * 2.0).rgb) * 0.119007;
-        rgb += (source.sample(linearClamp, uv - step * 3.0).rgb + source.sample(linearClamp, uv + step * 3.0).rgb) * 0.075189;
-        rgb += (source.sample(linearClamp, uv - step * 4.0).rgb + source.sample(linearClamp, uv + step * 4.0).rgb) * 0.039533;
-        rgb += (source.sample(linearClamp, uv - step * 5.0).rgb + source.sample(linearClamp, uv + step * 5.0).rgb) * 0.017298;
-        rgb += (source.sample(linearClamp, uv - step * 6.0).rgb + source.sample(linearClamp, uv + step * 6.0).rgb) * 0.006299;
-        return rgb;
-    }
-
-    fragment float4 hdrBloomBlur(BloomVertexOut in [[stage_in]],
-                                 texture2d<float> source [[texture(0)]],
-                                 constant float2 &texelStep [[buffer(0)]]) {
-        return float4(blur13(source, in.uv, texelStep), 1.0);
-    }
-
     fragment float4 hdrBloomDownsample(BloomVertexOut in [[stage_in]],
                                        texture2d<float> source [[texture(0)]]) {
-        constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
-        float2 t = 1.0 / float2(source.get_width(), source.get_height());
-        float3 c = (
-            source.sample(linearClamp, in.uv + t * float2(-0.5, -0.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2( 0.5, -0.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2(-0.5,  0.5)).rgb +
-            source.sample(linearClamp, in.uv + t * float2( 0.5,  0.5)).rgb
-        ) * 0.25;
-        return float4(c, 1.0);
+        return float4(weDownsample4(source, in.uv), 1.0);
     }
 
+    /// WE hdr_downsample + UPSAMPLE 콤보 = 같은 4탭에 `x0.25 x g_BloomScatter`,
+    /// 머티리얼(hdr_upsample.json)이 blending:additive 라 **더 고운 레벨 위에 가산**된다.
+    /// 여기서는 별도 타깃에 쓰므로 base(고운 레벨)를 그대로 읽어 더한다 — 결과 동일.
+    ///
+    /// **가중은 종전 캘리브(0.25 x scatter)를 유지한다.** 셰이더 문면(4탭 합 x0.25 x scatter =
+    /// 평균 x scatter)을 그대로 쓰면 scatter=1.619 가 레벨마다 곱해져 발산한다 — 실측에서
+    /// 3589454154 의 luma 가 0.091 → 0.420 으로 화면이 백화됐다. 저작값 1.619 가 셰이더의
+    /// g_BloomScatter 로 그대로 들어가는지(엔진이 변환하는지)가 미확인이라, 확인 전에는
+    /// 발산하지 않는 종전 가중을 유지하고 **탭 모양만** WE 구조로 맞춘다.
+    /// 정본: spec/engine/hdr-bloom.json — engine.bloom.hdr.upsampleWeightUnknown.
     fragment float4 hdrBloomUpsample(BloomVertexOut in [[stage_in]],
                                      texture2d<float> base [[texture(0)]],
                                      texture2d<float> add [[texture(1)]],
                                      constant float4 &params [[buffer(0)]]) {
         constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
         float3 b = base.sample(linearClamp, in.uv).rgb;
-        float3 a = add.sample(linearClamp, in.uv).rgb * params.x;
+        float3 a = weDownsample4(add, in.uv) * params.x;   // params.x = 0.25 x scatter (아래 주석)
         return float4(b + a, 1.0);
     }
 
+    /// WE combine_hdr.frag: 블룸을 ±g_TexelSize 코너 4탭으로 평균해 가산한다.
+    /// g_TexelSize 는 패스 주 텍스처(=풀해상도 씬)의 텍셀이라 여기서도 source 기준으로 잡는다.
     fragment float4 hdrBloomCombine(BloomVertexOut in [[stage_in]],
                                     texture2d<float> source [[texture(0)]],
                                     texture2d<float> bloom [[texture(1)]]) {
         constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
         float4 base = source.sample(linearClamp, in.uv);
-        float3 C = base.rgb + bloom.sample(linearClamp, in.uv).rgb;
-        return float4(saturate(C), 1.0);
+        float2 t = 1.0 / float2(source.get_width(), source.get_height());
+        float3 b = (bloom.sample(linearClamp, in.uv + float2( t.x,  t.y)).rgb +
+                    bloom.sample(linearClamp, in.uv + float2(-t.x, -t.y)).rgb +
+                    bloom.sample(linearClamp, in.uv + float2( t.x, -t.y)).rgb +
+                    bloom.sample(linearClamp, in.uv + float2(-t.x,  t.y)).rgb) * 0.25;
+        return float4(saturate(base.rgb + b), 1.0);
     }
     """
 }
