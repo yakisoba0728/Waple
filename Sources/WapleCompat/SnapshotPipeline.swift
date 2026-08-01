@@ -194,8 +194,9 @@ enum SnapshotPipeline {
                     // **29종이 실행마다 다른데** 전부 deterministic=true / selfMaxDiff=0 으로 기록됐다.
                     // 그래서 이 필드는 이름이 약속하는 "재현 가능한가" 가 아니라
                     // **"같은 프로세스 안에서 두 번 그리면 같은가"** 만 답한다.
-                    // 여파: SnapshotCompare 가 이 값으로 strict/lax 임계를 고르므로(:85) 비결정 씬에
-                    // 오히려 strict 를 적용한다 — 방향이 반대다.
+                    // 여파: SnapshotCompare 가 이 값으로 strict/lax 임계를 고른다(:85).
+                    // 그 선택줄 자체는 **맞다**(결정적→strict, 비결정→lax). 문제는 분류가 틀려서
+                    // 실제로는 비결정인 29종이 strict 로 새는 것 — 고칠 곳은 :85 가 아니라 여기다.
                     // 고치려면 2차 캡처를 별도 프로세스에서 돌리거나 교차 실행 재현성을 별도 필드로 둔다.
                     // 근거·수치: spec/golden/gate-analysis.json (oracle.gate.selfCheckIsIntraProcess)
                     // F522: 스키마 규약(SnapshotEntry.selfMaxDiff "셀프체크 안 했으면 -1")에 맞춰 2차 캡처가

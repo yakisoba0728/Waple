@@ -141,9 +141,18 @@ def main():
                 "reportedByPipeline": "그 29종을 deterministic=true, selfMaxDiff=0 으로 보고",
             },
             "consequence": "골든 대조의 '변화 N종' 에 실행 간 잡음이 섞인다. 실측 사례: "
-                           "변화 123종 중 29종이 비결정 오염이었다. "
-                           "또 SnapshotCompare 는 deterministic 으로 임계를 고르므로(strict/lax) "
-                           "비결정 씬에 **strict** 임계를 적용한다 — 반대로 돼 있다.",
+                           "변화 123종 중 29종이 비결정 오염이었다.",
+            "thresholdMisclassification": {
+                "code": "SnapshotCompare.swift:85 — `entry.deterministic ? .strict : .lax`",
+                "designIsCorrect": "결정적 씬에 strict, 비결정 씬에 lax 는 **의도대로 맞다**. "
+                                   "극성을 뒤집으면 안 된다.",
+                "actualDefect": "그 29종이 deterministic=true 로 **잘못 분류**되는 바람에 "
+                                "비결정 씬인데 strict 로 샌다. 고칠 곳은 임계 선택줄이 아니라 "
+                                "분류(셀프체크)다.",
+                "correctionNote": "[정정 2026-08-01] 이 항목은 처음에 '방향이 반대다' 라고 "
+                                  "적혀 있었다. 틀렸다 — 그대로 믿고 :85 를 뒤집으면 "
+                                  "정상 동작을 깨뜨린다.",
+            },
             "isolationEvidence": "3696323523: 단일씬 재캡처는 커밋 전후가 동일했고, "
                                  "전체 코퍼스 캡처는 같은 빌드 2회가 서로 달랐다 — "
                                  "커밋 무관, 실행 간 변동으로 격리 확인.",
