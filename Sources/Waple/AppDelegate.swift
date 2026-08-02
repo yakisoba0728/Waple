@@ -108,6 +108,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 공유 에셋 해석 결과를 시작 시 1회 남긴다 — 이게 비면 씬이 흰 화면으로 나온다.
+        // 배포 산출물에서 동봉 에셋이 통째로 빠진 채 나간 적이 있어(v0.1.0-beta.3), 지원·검증
+        // 양쪽에서 "무엇을 잡았는가" 를 바로 볼 수 있어야 한다.
+        let roots = BaseAssetsSettings.searchRoots
+        NSLog("%@", roots.isEmpty
+              ? "[Waple] base assets: **없음** — 씬이 흰 화면으로 그려진다(설정에서 지정 필요)"
+              : "[Waple] base assets: " + roots.map(\.path).joined(separator: " | "))
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // 상태바 아이콘(w5d-tray) — 시스템 심볼 템플릿(라이트/다크 메뉴바 자동 적응) + 재생/정지/오류
         // 글리프·툴팁. 초기값도 refreshStatusIcon() 을 거쳐 이후 갱신과 동일 경로를 탄다.
