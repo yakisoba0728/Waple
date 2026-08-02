@@ -128,7 +128,7 @@ struct WallpaperGridView: View {
                     .font(.system(size: 32)).foregroundStyle(.secondary)
             }
             .frame(height: Metrics.tileThumbHeight)
-            Text("뒤로 — \(name)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(String(format: NSLocalizedString("뒤로 — %@", comment: "폴더 뒤로가기"), name)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 .padding(.horizontal, 2)
         }
         .contentShape(Rectangle())
@@ -291,7 +291,7 @@ struct WallpaperGridView: View {
                 if viewModel.screens.contains(where: { viewModel.assignedEntryTitle(forScreen: $0.key) != nil }) {
                     Divider()
                     ForEach(viewModel.screens.filter { viewModel.assignedEntryTitle(forScreen: $0.key) != nil }, id: \.key) { screen in
-                        Button("\(screen.name) 할당 해제") { viewModel.clearAssignment(forScreen: screen.key) }
+                        Button(String(format: NSLocalizedString("%@ 할당 해제", comment: "모니터 할당 해제"), screen.name)) { viewModel.clearAssignment(forScreen: screen.key) }
                     }
                 }
             }

@@ -59,7 +59,7 @@ struct RemoteTileView: View {
                 if let subs = item.subscriptions {
                     Label(subs.formatted(), systemImage: "person.2")
                         .font(.caption2).foregroundStyle(.tertiary)
-                        .help("구독 \(subs.formatted())")
+                        .help(String(format: NSLocalizedString("구독 %@", comment: "워크샵 구독 수"), subs.formatted()))
                 }
                 Spacer(minLength: 4)
                 control
@@ -113,7 +113,7 @@ struct RemoteTileView: View {
             if let v {
                 ProgressView(value: v, total: 100)
                     .frame(width: Metrics.downloadBarWidth)
-                    .help("다운로드 중 \(Int(v))%")
+                    .help(String(format: NSLocalizedString("다운로드 중 %lld%%", comment: "다운로드 진행률"), Int(v)))
             } else {
                 stage("다운로드 중")
             }

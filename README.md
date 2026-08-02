@@ -55,6 +55,12 @@ Known gaps that are tracked rather than hidden live in [BACKLOG.md](BACKLOG.md) 
 wrap for very long unwrapped text (an 8192px raster guard can silently drop it), `g_Color1`–`4`
 gradient uniforms, and `SHDV0069` shader-cache parsing.
 
+## Language
+
+The UI ships in **English and Korean**. macOS picks it from your system language; the app follows
+your preference automatically. Korean is the source language — English strings live in
+`Resources/en.lproj/Localizable.strings`.
+
 ## Requirements
 
 | | Requirement | Notes |
