@@ -2,16 +2,22 @@ name: CI
 
 # 문서만 바뀐 푸시로 macOS 러너를 태우지 않는다(README/BACKLOG/docs 커밋이 잦다).
 # 코드 경로가 하나라도 섞이면 정상 실행된다 — paths-ignore 는 전 변경이 목록에 들 때만 스킵.
+#
+# [2026-08-02] `branches: [main]` 제한을 없앤다. 기능 브랜치에 직접 푸시하는 흐름
+# (feat/we-engine-port-design 처럼 PR 없이 오래 사는 브랜치)에서 CI 가 **조용히 안 돌았다** —
+# 8커밋을 푸시하고도 검증이 0이었고, 그 사실을 알아채는 신호도 없었다.
+# 대신 아래 concurrency 를 head_ref 기준으로 묶어 PR 과 push 가 같은 브랜치를 두 번 태우지 않게 한다.
 on:
   push:
-    branches: [main]
     paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE", ".gitignore", ".gitattributes"]
   pull_request:
     paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE", ".gitignore", ".gitattributes"]
   workflow_dispatch:   # 브랜치에서 손으로 돌려 워크플로 자체를 반복 검증(PR 없이)
 
+# PR 이 열린 브랜치는 push 와 pull_request 두 이벤트가 모두 온다. head_ref(=PR 소스 브랜치)를
+# 우선 키로 쓰면 둘이 같은 그룹에 묶여 나중 것이 앞의 것을 취소한다 — 한 브랜치 상태당 실행 1회.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
