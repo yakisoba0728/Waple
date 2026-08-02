@@ -257,7 +257,12 @@ final class WebHardPauseTests: XCTestCase {
     /// 페이지 시계(shim 과 동일한 performance.now)로 직접 재서 규약을 단정한다 — 머신 속도와 무관하고,
     /// 부하로 늦게 발화하는 건 허용하되 남은 지연보다 이르게 발화하면 잡는다.
     func testPausedCreationCrossClearAndRemainingDelay() throws {
-        let keepDelayMS = 280.0
+        // [2026-08-02] 지연을 280 → 1500ms 로 올리고, 정지 중 관측 창을 **남은 지연에서 계산**한다.
+        // 종전 280ms 는 러너가 느리면 setPaused 전에 이미 만료돼(실측: 남은 지연 -12ms) "정지 중
+        // 발화 금지" 전제 자체가 깨졌다(run 30748596484). 상수만 키우면 정지 창이 원래 마감을 못 넘겨
+        // 단언이 무의미해지므로, 창을 remaining+200ms 로 잡아 **정지 상태로 원래 마감을 반드시 넘긴다**
+        // — 게이트 의미(정지가 고장이면 이 구간에 발화한다)를 유지한 채 머신 속도에만 둔감해진다.
+        let keepDelayMS = 1500.0
         let web = makeControllerWebView()
         _ = pumpEvalJS(web, """
         window.__fired = {
@@ -281,14 +286,23 @@ final class WebHardPauseTests: XCTestCase {
         clearTimeout(intervalID);
         cancelAnimationFrame(rafID);
         """)
-        spin(0.30)
+        // 전제 확인: 정지 시점에 타이머가 아직 대기 중이어야 이 테스트가 의미를 갖는다.
+        let elapsedAtPauseNow = try XCTUnwrap(
+            (try object(web, "window.__meta"))["elapsedAtPause"] as? Double)
+        let remainingAtPause = keepDelayMS - elapsedAtPauseNow
+        XCTAssertGreaterThan(remainingAtPause, 100,
+                             "정지 시점에 남은 지연이 \(remainingAtPause)ms — 전제가 깨졌다"
+                             + "(러너가 느려 준비 단계가 지연을 넘겼다). keepDelayMS 를 올릴 것")
+        // 정지 상태로 **원래 마감 시각을 넘긴다** — 정지가 고장이면 이 구간에 반드시 발화한다.
+        spin(remainingAtPause / 1000 + 0.2)
         XCTAssertEqual(try object(web, "window.__fired")["remaining"] as? Int, 0,
-                       "일시정지 300ms 동안에는 발화 금지")
+                       "일시정지 중에는 원래 마감을 넘겨도 발화 금지")
         _ = pumpEvalJS(web, """
         window.__meta.resumedAt = performance.now();
         window.__wapleHardPauseController.setPaused(false);
         """)
-        XCTAssertTrue(waitUntil {
+        // 재개하면 저장된 남은 지연(≈remainingAtPause)만큼 뒤에 발화한다 — 기본 3초로는 빠듯하다.
+        XCTAssertTrue(waitUntil(timeout: remainingAtPause / 1000 + 3) {
             (try? self.object(web, "window.__fired")["remaining"] as? Int) == 1
         }, "재개 후 남은 지연 안에 정확히 1회 발화해야")
         let meta = try object(web, "window.__meta")
