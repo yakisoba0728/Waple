@@ -59,7 +59,15 @@ final class DevToolsSceneFixRegressionTests: XCTestCase {
         }
 
         // 브리지 주입 대기(__wapleSetPaused 노출 = 프로덕션 pause 경로 사용 가능).
-        XCTAssertTrue(waitUntil {
+        //
+        // 여기만 상한이 길다(15초). 이 대기는 **콜드 스타트**를 기다리는 것이지 반응 지연을
+        // 재는 게 아니다 — WebKit 콘텐츠 프로세스 기동 + 로컬 파일 로드 + 유저스크립트 주입이
+        // 한 번에 일어난다. 아래 pause/resume 전이 대기는 페이지가 이미 살아 있는 상태의 반응이라
+        // 기본 3초로 둔다.
+        // 근거: CI(macos-26, 3코어) 실행 30748362460 에서 이 단언만 3초를 넘겨 실패했다.
+        // 같은 커밋이 같은 날 러너 부하가 낮을 때는 통과했다(30746196170) — 타이밍 창이다.
+        // 상한을 늘려도 게이트는 약해지지 않는다: 브리지가 끝내 안 뜨면 여전히 실패한다.
+        XCTAssertTrue(waitUntil(15) {
             pumpEvalJS(web, "typeof window.__wapleSetPaused") as? String == "function"
         }, "production bridge must install __wapleSetPaused")
 
