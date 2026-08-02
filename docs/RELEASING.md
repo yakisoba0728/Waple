@@ -54,6 +54,21 @@ WAPLE_VERSION=1.2.3 WAPLE_BUILD=45 WAPLE_SIGN_IDENTITY="Developer ID Application
 - `Waple.app` — 로컬 실행/설치용.
 - `Waple.dmg` — 배포용 압축 디스크 이미지(드래그 설치).
 
+### 배포 게이트 (package-app.sh)
+
+패키징은 두 게이트를 통과해야 DMG 를 만든다. 둘 다 실제 사고에서 나왔다.
+
+1. **리소스 번들 동봉 확인** — `.build/<config>/*.bundle` 을 전부 `Contents/Resources/` 에 넣고,
+   하나라도 없으면 실패한다. SwiftPM 의 `Bundle.module` 은 못 찾으면 경고가 아니라
+   **fatalError** 라, 빠뜨리면 앱이 실행 즉시 죽는다.
+2. **실행 스모크** — 패키징된 앱을 6초 띄워 살아 있는지 본다. GUI 세션이 없는 환경에서는
+   `WAPLE_SKIP_SMOKE=1` 로 끌 수 있다(끄면 ①만 남는다).
+
+> **왜 있는가**: `v0.1.0-beta.3` 이 **WEAssets 85MB 가 빠진 채**(DMG 2.9MB) 공개됐고,
+> 앱은 `unable to find bundle named Waple_WapleRender` 로 즉사했다. 그때까지의 릴리스 검증은
+> DMG 마운트·plist·arm64·codesign 만 봤다 — **앱을 실행해 본 적이 없었다.**
+> 정상 산출물 크기는 app ≈94MB / DMG ≈70MB 다.
+
 ### 서명/공증 정책
 
 - **CI**: 아래 secrets 가 **전부** 설정되면 Developer ID 서명 + `notarytool` 공증 +
