@@ -23,6 +23,12 @@ cp ".build/$CONFIG/Waple" "$APP/Contents/MacOS/Waple"
 mkdir -p "$APP/Contents/Resources"
 cp "scripts/Waple.icns" "$APP/Contents/Resources/Waple.icns"
 
+# 현지화 카탈로그 — 키가 곧 한국어 원문이라 ko.lproj 는 비어 있고, en.lproj 만 실제 번역을 담는다.
+# **앱 번들의 Contents/Resources** 에 놓는 것이 핵심이다: SwiftUI 의 Text("한국어") 리터럴은
+# Bundle.main 에서 LocalizedStringKey 를 찾으므로, SPM 리소스 번들에 두면 조회가 안 된다.
+# (그래서 `swift run Waple` 개발 실행은 항상 한국어로 나온다 — 의도된 차이다.)
+cp -R "Resources/en.lproj" "Resources/ko.lproj" "$APP/Contents/Resources/"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -39,6 +45,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- 원본 언어. 사용 가능한 언어는 Contents/Resources/*.lproj 가 스스로 선언하므로
+       CFBundleLocalizations 는 두지 않는다(둘 다 두면 목록이 중복된다). -->
+  <key>CFBundleDevelopmentRegion</key><string>ko</string>
 </dict>
 </plist>
 PLIST

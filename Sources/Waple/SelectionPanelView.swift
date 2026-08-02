@@ -112,7 +112,7 @@ struct SelectionPanelView: View {
                     } label: {
                         Label("라이브러리에서 제거", systemImage: "trash").frame(maxWidth: .infinity)
                     }
-                    .confirmationDialog("'\(entry.title)'을(를) 라이브러리에서 제거할까요?",
+                    .confirmationDialog(String(format: NSLocalizedString("'%@'을(를) 라이브러리에서 제거할까요?", comment: "라이브러리 제거 확인"), entry.title),
                                         isPresented: $confirmRemove) {
                         Button("제거(파일은 유지)", role: .destructive) { viewModel.remove(entry) }
                         Button("취소", role: .cancel) {}

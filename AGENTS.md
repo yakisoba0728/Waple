@@ -31,6 +31,19 @@ WapleCore ←── WapleLibrary ──┐
 `Package.swift` 는 `swift-tools-version:5.9` 지만 이건 매니페스트 API 버전일 뿐이고,
 실제 빌드는 Swift 6.3+ 이다.
 
+## UI 문자열(현지화)
+
+키가 곧 **한국어 원문**이다. SwiftUI 의 `Text("한국어")` 리터럴은 `LocalizedStringKey` 로
+해석되므로 호출부를 고칠 필요가 없고, 영어는 `Resources/en.lproj/Localizable.strings` 하나로 나온다.
+
+- **새 UI 문자열을 추가하면 en.lproj 에도 넣어라.** 빼먹으면 영어 시스템에서 그 자리만
+  한국어로 남는데 아무 것도 실패하지 않는다 — 그래서 `LocalizationCoverageTests` 가
+  소스와 strings 파일의 차집합을 **양방향으로** 잡는다(누락 + 고아 번역).
+- AppKit 경로(`NSMenuItem(title:)`, `window.title`)는 자동 해석이 없다 — `NSLocalizedString` 으로 감쌀 것.
+- 문자열에 값이 끼면(`"\(x)분"`) 포맷 지정자 추론이 모호해진다. `String(format: NSLocalizedString("%lld분", …), x)` 로 명시할 것.
+- `.lproj` 는 **앱 번들 `Contents/Resources`** 에 들어간다(`package-app.sh`). SPM 리소스 번들에
+  두면 `Bundle.main` 조회가 실패한다 — 그래서 `swift run Waple` 개발 실행은 항상 한국어다.
+
 ## 빌드와 테스트
 
 ```bash

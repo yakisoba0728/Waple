@@ -40,35 +40,82 @@ jobs:
           echo "Releasing version: $VERSION (plist: $PLIST_VERSION, build $GITHUB_RUN_NUMBER)"
 
       # Developer ID 서명/공증은 secrets 이 설정된 경우에만 활성화된다.
-      # secrets 가 없으면 ad-hoc 서명으로 폴 back 한다(로컬 패키징과 동일).
-      # 주의: 실제 Developer ID 서명이 동작하려면 인증서(.p12)가 러너 키체인에
-      # 임포트되어 있어야 한다 — secrets 를 설정할 때 security import 스텝을 함께 추가할 것.
+      # 하나라도 없으면 ad-hoc 서명으로 폴백한다(로컬 패키징과 동일) — 릴리스가 멈추지 않는다.
+      # 필요한 secrets(4개, docs/RELEASING.md §서명/공증 참조):
+      #   DEVELOPER_ID_APPLICATION   "Developer ID Application: NAME (TEAMID)"
+      #   DEVELOPER_ID_CERT_P12      .p12 를 base64 로 인코딩한 문자열
+      #   DEVELOPER_ID_CERT_PASSWORD .p12 내보내기 암호
+      #   NOTARY_APPLE_ID / NOTARY_TEAM_ID / NOTARY_PASSWORD  (앱 암호 방식)
       - name: Detect signing configuration
         id: signing
         env:
           DEV_ID: ${{ secrets.DEVELOPER_ID_APPLICATION }}
-          NOTARY: ${{ secrets.NOTARY_PROFILE }}
+          CERT: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
-          if [ -n "$DEV_ID" ] && [ -n "$NOTARY" ]; then
+          if [ -n "$DEV_ID" ] && [ -n "$CERT" ] && [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_PASSWORD" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
             echo "WAPLE_SIGN_IDENTITY=$DEV_ID" >> "$GITHUB_ENV"
             echo "Developer ID 서명 + 공증 모드: $DEV_ID"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
             echo "WAPLE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
-            echo "secrets 미설정 — ad-hoc 서명으로 진행"
+            echo "secrets 미설정 — ad-hoc 서명으로 진행(공증 없음, 첫 실행 Gatekeeper 안내가 릴리스 노트에 붙는다)"
           fi
+
+      # 러너는 매 실행 새 VM 이라 인증서가 없다 — 임시 키체인을 만들어 .p12 를 임포트한다.
+      # 임시 키체인을 쓰는 이유: login 키체인을 건드리지 않고 잡 종료 시 통째로 지우기 위함.
+      # set-key-partition-list 를 빼면 codesign 이 키 접근에서 GUI 프롬프트를 기다리다 잡이 멈춘다.
+      - name: Import Developer ID certificate
+        if: steps.signing.outputs.available == 'true'
+        env:
+          CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/waple-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "WAPLE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          # 검색 목록에 임시 키체인을 **앞에** 둔다(login 은 유지 — 다른 스텝이 쓸 수 있다).
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          echo "임포트된 서명 아이덴티티:"
+          security find-identity -v -p codesigning "$KEYCHAIN"
 
       # WAPLE_VERSION/WAPLE_BUILD/WAPLE_SIGN_IDENTITY 는 앞 스텝들이 GITHUB_ENV 로 주입한다.
       - name: Package app (Waple.app + Waple.dmg)
         run: scripts/package-app.sh
 
       # Developer ID 로 서명된 경우에만 공증(notarization) 후 티켓을 DMG 에 스테이플한다.
+      # 앱 암호(app-specific password) 방식 — 러너에 미리 저장된 notary 프로파일이 없기 때문이다
+      # (`--keychain-profile` 은 `notarytool store-credentials` 를 먼저 돌린 머신에서만 통한다).
+      # staple 까지 해야 오프라인에서도 Gatekeeper 가 티켓을 확인할 수 있다.
       - name: Notarize DMG
         if: steps.signing.outputs.available == 'true'
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: |
-          xcrun notarytool submit Waple.dmg --keychain-profile "${{ secrets.NOTARY_PROFILE }}" --wait
+          set -euo pipefail
+          xcrun notarytool submit Waple.dmg \
+            --apple-id "$NOTARY_APPLE_ID" \
+            --team-id "$NOTARY_TEAM_ID" \
+            --password "$NOTARY_PASSWORD" \
+            --wait
           xcrun stapler staple Waple.dmg
+          # 검증: 스테이플된 티켓과 서명이 실제로 통과하는지 확인한다(실패면 릴리스를 만들지 않는다).
+          xcrun stapler validate Waple.dmg
+          spctl -a -vvv -t install Waple.dmg || true
 
       - name: Compute SHA-256
         run: |
@@ -127,3 +174,8 @@ jobs:
             $FLAGS \
             --title "Waple ${GITHUB_REF_NAME}" \
             --notes-file release-notes.md
+
+      # 임시 키체인은 러너와 함께 사라지지만, 실패 경로에서도 남기지 않도록 명시적으로 지운다.
+      - name: Clean up signing keychain
+        if: always() && env.WAPLE_KEYCHAIN != ''
+        run: security delete-keychain "$WAPLE_KEYCHAIN" || true

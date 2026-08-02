@@ -205,7 +205,8 @@ struct NowPlayingBar: View {
             Toggle("자동 전환", isOn: Binding(
                 get: { viewModel.playlist.enabled },
                 set: { viewModel.playlist.enabled = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }))
-            Stepper("간격: \(viewModel.playlist.intervalMinutes)분", value: Binding(
+            Stepper(String(format: NSLocalizedString("간격: %lld분", comment: "재생목록 전환 간격"),
+                            viewModel.playlist.intervalMinutes), value: Binding(
                 get: { viewModel.playlist.intervalMinutes },
                 set: { viewModel.playlist.intervalMinutes = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }), in: 1...240)
             // w5d-playback: 고정 순서만 순환하던 자동 전환에 무작위 순서 옵션 추가.

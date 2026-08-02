@@ -116,20 +116,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 트레이 축소(SP5′): 설정은 전부 설정 창으로 — 창 없이 필요한 동작만 남긴다.
         let menu = NSMenu()
         menu.delegate = self   // 열 때마다 일시정지 항목 제목 최신화(menuNeedsUpdate)
-        menu.addItem(NSMenuItem(title: "Waple 열기",
+        menu.addItem(NSMenuItem(title: NSLocalizedString("Waple 열기", comment: ""),
                                 action: #selector(openLibrary), keyEquivalent: "l"))
         menu.addItem(recentMenuItem())  // 최근 배경 서브메뉴(작업 6 — 구현은 확장)
-        let pause = NSMenuItem(title: "일시정지",
+        let pause = NSMenuItem(title: NSLocalizedString("일시정지", comment: ""),
                                action: #selector(togglePauseFromMenu), keyEquivalent: "p")
         menu.addItem(pause)
         pauseMenuItem = pause
         // w5d-tray: 메뉴바 상주 앱의 핵심 가치(창을 열지 않고 즉시 조작) — 하단 바엔 이미 있던
         // "다음 배경"을 트레이에도. WE 본가 트레이의 'Change wallpaper' 대응.
-        let next = NSMenuItem(title: "다음 배경",
+        let next = NSMenuItem(title: NSLocalizedString("다음 배경", comment: ""),
                               action: #selector(advanceFromMenu), keyEquivalent: "]")
         menu.addItem(next)
         nextMenuItem = next
-        menu.addItem(NSMenuItem(title: "설정…",
+        menu.addItem(NSMenuItem(title: NSLocalizedString("설정…", comment: ""),
                                 action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Waple",
@@ -320,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindow == nil {
             let hosting = NSHostingController(rootView: SettingsView(vm: settingsVM))
             let window = NSWindow(contentViewController: hosting)
-            window.title = "Waple 설정"
+            window.title = NSLocalizedString("Waple 설정", comment: "")
             window.styleMask = [.titled, .closable]
             window.setContentSize(Metrics.settingsSize)
             window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
@@ -1052,7 +1052,7 @@ extension AppDelegate: NSMenuDelegate {
     }
 
     func recentMenuItem() -> NSMenuItem {
-        let item = NSMenuItem(title: "최근 배경", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: NSLocalizedString("최근 배경", comment: ""), action: nil, keyEquivalent: "")
         let m = NSMenu()
         m.delegate = self          // 열 때마다 menuNeedsUpdate 로 최신화
         item.submenu = m
@@ -1074,7 +1074,7 @@ extension AppDelegate: NSMenuDelegate {
         menu.removeAllItems()
         let entries = recentWallpaperIds.compactMap { id in store.entries.first(where: { $0.id == id }) }
         guard !entries.isEmpty else {
-            let empty = NSMenuItem(title: "(없음)", action: nil, keyEquivalent: "")
+            let empty = NSMenuItem(title: NSLocalizedString("(없음)", comment: ""), action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
             return

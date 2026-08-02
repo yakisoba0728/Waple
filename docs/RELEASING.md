@@ -56,16 +56,34 @@ WAPLE_VERSION=1.2.3 WAPLE_BUILD=45 WAPLE_SIGN_IDENTITY="Developer ID Application
 
 ### 서명/공증 정책
 
-- **CI**: secrets `DEVELOPER_ID_APPLICATION` + `NOTARY_PROFILE` 이 둘 다 설정되어 있으면
-  Developer ID 서명 + `notarytool` 공증 + `stapler staple` 까지 자동 수행. 하나라도 없으면
-  ad-hoc 서명으로 폴 back 한다. Developer ID 를 쓰려면 인증서(.p12)를 러너 키체인에
-  임포트하는 스텝도 워크플로에 추가해야 한다.
+- **CI**: 아래 secrets 가 **전부** 설정되면 Developer ID 서명 + `notarytool` 공증 +
+  `stapler staple` + 검증까지 자동 수행한다. 하나라도 없으면 ad-hoc 서명으로 폴백하고
+  릴리스 노트에 첫 실행 Gatekeeper 안내가 붙는다(릴리스 자체는 멈추지 않는다).
+
+| secret | 내용 |
+| --- | --- |
+| `DEVELOPER_ID_APPLICATION` | `Developer ID Application: NAME (TEAMID)` — codesign 아이덴티티 문자열 |
+| `DEVELOPER_ID_CERT_P12` | 인증서 `.p12` 를 base64 로 인코딩한 값 (`base64 -i cert.p12 \| pbcopy`) |
+| `DEVELOPER_ID_CERT_PASSWORD` | `.p12` 내보내기 암호 |
+| `NOTARY_APPLE_ID` | Apple ID (공증 제출 계정) |
+| `NOTARY_TEAM_ID` | 10자 팀 ID |
+| `NOTARY_PASSWORD` | **앱 암호**(app-specific password, 계정 암호 아님) |
+
+워크플로가 하는 일(순서): 임시 키체인 생성 → `.p12` 임포트 →
+`set-key-partition-list`(이걸 빼면 codesign 이 GUI 프롬프트를 기다리다 잡이 멈춘다) →
+패키징 → `notarytool submit --wait` → `stapler staple` → `stapler validate` + `spctl` →
+잡 종료 시 키체인 삭제(`if: always()`).
+
+`--keychain-profile` 방식은 쓰지 않는다 — 그건 `notarytool store-credentials` 를 미리
+돌린 머신에서만 통하고, 러너는 매 실행 새 VM 이다.
+
 - **수동**: ad-hoc 서명은 로컬/개인 배포용이다. 공개 배포 시 수동 절차:
 
 ```sh
 WAPLE_SIGN_IDENTITY="Developer ID Application: <NAME> (<TEAMID>)" scripts/package-app.sh
-xcrun notarytool submit Waple.dmg --keychain-profile "<PROFILE>" --wait
+xcrun notarytool submit Waple.dmg --apple-id <APPLE_ID> --team-id <TEAMID> --password <APP_PASSWORD> --wait
 xcrun stapler staple Waple.dmg
+xcrun stapler validate Waple.dmg
 ```
 
 ## 3. Homebrew Cask 템플릿

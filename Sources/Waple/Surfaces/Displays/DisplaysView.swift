@@ -223,7 +223,8 @@ struct DisplaysView: View {
             viewModel.assign(entry, toScreen: key)
         }
         .onDrag { NSItemProvider(object: entry.id as NSString) }
-        .help(supported ? entry.title : "\(entry.title) — 지원 예정")
+        .help(supported ? entry.title
+              : String(format: NSLocalizedString("%@ — 지원 예정", comment: "미지원 항목 툴팁"), entry.title))
     }
 
     @ViewBuilder
