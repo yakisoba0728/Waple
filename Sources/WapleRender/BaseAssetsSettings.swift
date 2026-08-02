@@ -48,13 +48,38 @@ public enum BaseAssetsSettings {
 
     /// 앱 번들에 동봉된 WE 2.8.42 공유 에셋. 해석 순서상 **마지막 폴백**이다.
     /// 사용자가 최신·수정된 WE 설치본을 갖고 있으면 그쪽이 이긴다.
+    ///
+    /// **`Bundle.module` 을 쓰지 않는다.** SwiftPM 이 생성하는 접근자는 못 찾으면 경고가 아니라
+    /// **fatalError** 이고, 탐색 후보가 빌드 시스템에 따라 다르다(swiftbuild = Contents/Resources,
+    /// native = 앱 루트 + 빌드 디렉터리 절대경로). 그래서 CI(native)로 만든 배포본이 실행 즉시
+    /// 죽었다(v0.1.0-beta.3 — `could not load resource bundle`). 앱 루트에는 codesign 이
+    /// 파일을 못 두게 하므로("unsealed contents present in the bundle root") 그 후보를 만족시킬
+    /// 방법도 없다. 그래서 **우리가 직접 찾는다** — 못 찾으면 nil(사용자 지정 경로로 폴백).
+    private final class BundleMarker {}
+
     public static var bundledAssetsDirectory: URL? {
-        guard let url = Bundle.module.resourceURL?
-            .appendingPathComponent("WEAssets", isDirectory: true) else { return nil }
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
-              isDir.boolValue else { return nil }
-        return url
+        let fm = FileManager.default
+        func directory(_ u: URL) -> URL? {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+            return u
+        }
+        var roots: [URL] = []
+        if let r = Bundle.main.resourceURL { roots.append(r) }   // 패키징된 .app/Contents/Resources
+        let own = Bundle(for: BundleMarker.self)
+        if let r = own.resourceURL { roots.append(r) }           // 테스트 번들 리소스
+        roots.append(own.bundleURL.deletingLastPathComponent())  // .build/<config>/ (개발·테스트)
+        roots.append(Bundle.main.bundleURL)                      // CLI: 실행 파일 옆
+        for r in roots {
+            // ① 폴더를 그대로 동봉한 경우 — package-app.sh 산출물.
+            if let u = directory(r.appendingPathComponent("WEAssets", isDirectory: true)) { return u }
+            // ② SwiftPM 리소스 번들 안 — 개발 실행·테스트.
+            let b = r.appendingPathComponent("Waple_WapleRender.bundle", isDirectory: true)
+            for inner in ["Contents/Resources/WEAssets", "WEAssets"] {
+                if let u = directory(b.appendingPathComponent(inner, isDirectory: true)) { return u }
+            }
+        }
+        return nil
     }
 
     /// 공유 에셋 검색 루트 — **우선순위 순**.

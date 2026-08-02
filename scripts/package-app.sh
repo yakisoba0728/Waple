@@ -29,22 +29,21 @@ cp "scripts/Waple.icns" "$APP/Contents/Resources/Waple.icns"
 # (그래서 `swift run Waple` 개발 실행은 항상 한국어로 나온다 — 의도된 차이다.)
 cp -R "Resources/en.lproj" "Resources/ko.lproj" "$APP/Contents/Resources/"
 
-# SwiftPM 리소스 번들(.build/<config>/*.bundle) — **반드시 앱 안에 넣어야 한다.**
-# Bundle.module 은 Bundle.main.resourceURL 아래에서 `<패키지>_<타깃>.bundle` 을 찾고, 못 찾으면
-# 경고가 아니라 **fatalError** 다(SwiftPM 이 생성하는 resource_bundle_accessor.swift).
-# 이걸 빠뜨린 채로 배포하면 앱이 실행 즉시 죽는다 — 실제로 v0.1.0-beta.3 이 그렇게 나갔고
-# (DMG 2.9MB, WEAssets 85MB 누락), 그때까지의 릴리스 검증은 마운트·plist·서명만 봐서 못 잡았다.
-shopt -s nullglob
-BUNDLES=(".build/$CONFIG"/*.bundle)
-shopt -u nullglob
-if [ ${#BUNDLES[@]} -eq 0 ]; then
-  echo "!! .build/$CONFIG 에 리소스 번들이 없다 — 빌드가 끝났는지 확인할 것" >&2
-  exit 1
-fi
-for b in "${BUNDLES[@]}"; do
-  cp -R "$b" "$APP/Contents/Resources/"
-  echo "  리소스 번들 동봉: $(basename "$b") ($(du -sh "$b" | cut -f1))"
+# WE 공유 에셋 — **앱 안에 반드시 들어가야 한다.** 없으면 씬이 흰 화면으로 그려진다
+# (실측: 에셋 차단 시 170종 중 156종 변화·113종 심각).
+#
+# SwiftPM 리소스 번들(Waple_WapleRender.bundle)을 통째로 넣지 않고 **WEAssets 폴더만** 넣는다.
+# 이유: `Bundle.module` 의 탐색 후보가 빌드 시스템마다 다르고(swiftbuild=Contents/Resources,
+# native=앱 루트+빌드 절대경로), 앱 루트에는 codesign 이 파일을 못 두게 한다. 그래서 코드가
+# Bundle.module 을 안 쓰고 직접 찾도록 바꿨고(BaseAssetsSettings), 그 첫 후보가 여기다.
+SRC_ASSETS=""
+for cand in ".build/$CONFIG/Waple_WapleRender.bundle/Contents/Resources/WEAssets" \
+            ".build/$CONFIG/Waple_WapleRender.bundle/WEAssets"; do
+  [ -d "$cand" ] && { SRC_ASSETS="$cand"; break; }
 done
+[ -n "$SRC_ASSETS" ] || { echo "!! .build/$CONFIG 에서 WEAssets 를 못 찾았다 — 빌드 확인" >&2; exit 1; }
+cp -R "$SRC_ASSETS" "$APP/Contents/Resources/WEAssets"
+echo "  WE 공유 에셋 동봉: $(du -sh "$APP/Contents/Resources/WEAssets" | cut -f1)"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -106,11 +105,9 @@ fi
 codesign "${SIGN_ARGS[@]}" --identifier kr.yaki.waple "$APP"
 
 # ── 배포 게이트 ────────────────────────────────────────────────────────
-# ① 구조: .build 에 있던 리소스 번들이 전부 앱 안에 있어야 한다.
-for b in "${BUNDLES[@]}"; do
-  name="$(basename "$b")"
-  [ -d "$APP/Contents/Resources/$name" ] || { echo "!! 앱에 $name 이 없다 — Bundle.module 이 fatalError 로 죽는다" >&2; exit 1; }
-done
+# ① 구조: 공유 에셋이 실제로 들어갔는지(대표 파일까지) 확인한다.
+[ -f "$APP/Contents/Resources/WEAssets/shaders/common.h" ] \
+  || { echo "!! 앱에 WEAssets/shaders/common.h 가 없다 — 씬이 흰 화면으로 나간다" >&2; exit 1; }
 
 # ② 실행: 앱을 실제로 띄워 **죽지 않는지** 본다. 마운트·plist·서명 검증만으로는
 #    v0.1.0-beta.3 의 즉사(Bundle.module fatalError)를 못 잡았다.
