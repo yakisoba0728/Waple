@@ -5,6 +5,12 @@
 
 브랜치 `feat/we-engine-port-design`. 전부 푸시돼 있고 작업 트리는 깨끗하다.
 
+> [갱신 2026-08-16] **이 브랜치는 이미 `main` 에 전부 병합됐다. 지금 작업 지점은 `main` 이다.**
+> `git rev-list --left-right --count main...origin/feat/we-engine-port-design` → `4  0`
+> (main 이 4커밋 앞서고, 브랜치에만 있는 커밋은 0). 위 §0 프롬프트의 "브랜치를 pull" 단계는
+> 그래서 더 이상 필요 없다 — `main` 을 pull 하면 된다. 문서 본문은 2026-08-01 인계 시점
+> 기록이므로 그대로 두고, 그 뒤 뒤집힌 것만 이런 `[갱신]` 표기로 덧붙인다.
+
 ---
 
 ## 0. 맥에 앉자마자 붙여넣을 프롬프트
@@ -67,7 +73,9 @@ ls ~/Downloads/wallpaper_dev/assets/shaders/hdr_downsample.frag \
 
 ## 2. 작업 방식 — 이걸 안 지키면 같은 실수를 반복한다
 
-이 저장소는 `spec/` 을 정본으로 쓴다(현재 확정 349 / 보고 17 / 추정 12, 오류 0).
+이 저장소는 `spec/` 을 정본으로 쓴다(2026-08-01 시점 확정 349 / 보고 17 / 추정 12, 오류 0).
+[갱신 2026-08-16: `python3 scripts/spec/validate.py` 실측 **확정 363 / 보고 16 / 추정 13**,
+오류 0 · 문서간 경고 1 · 확정 항목 헤지 표현 24 · 종료코드 0. 수치를 인용하기 전에 직접 돌릴 것.]
 규칙은 [`spec/README.md`](../spec/README.md) 에 있고, 실제로 지켜야 하는 건 이 셋이다.
 
 1. **확정에는 재현 스크립트가 있어야 한다.** 근거가 스크래치패드 경로를 가리키면
@@ -187,8 +195,19 @@ W1·W2 는 넓히고 N1·N2 는 좁혀서 서로 상쇄되고 있다.
 
 ### (b) `3394601417` GT 재베이스라인 — **끝났다(2026-08-02)**
 
-현행 기준선 `spec/golden/snapshot/baseline-f3a17da/`(release, 포인터 핀 이후)로 다시 떴고
-GT 오라클(`GoldenBaseline.currentLabel`)이 이걸 본다. 이 씬의 기준선 meanLuma 는
+당시 기준선 `spec/golden/snapshot/baseline-f3a17da/`(release, 포인터 핀 이후)로 다시 떴고
+GT 오라클(`GoldenBaseline.currentLabel`)이 이걸 봤다.
+
+> [갱신 2026-08-16] **현행 기준선은 `spec/golden/snapshot/baseline-31fecaa/` 다.**
+> 이 항목 직후 HDR 블룸을 WE 평문 구조로 교체하면서(§4(c), `31fecaa`) 한 번 더 떴다.
+> `baseline-f3a17da/` 디렉터리는 HEAD 에 없는데 이건 삭제 사고가 아니라 정책이다 —
+> HEAD 에는 현행 + 이식 전 이력 둘만 두고 중간 기준선은 커밋 이력에서 꺼낸다
+> (`spec/golden/snapshot/README.md:13-15`, 하나가 11MB). 확인: `GoldenBaseline.currentLabel`
+> = `"baseline-31fecaa"`(`Tests/WapleRenderTests/GoldenBaselineOracleTests.swift:26`).
+> 아래 수치는 그대로 유효하다 — `baseline-31fecaa/manifest.json` 의 3394601417 도
+> meanLuma `0.011621…` 로 같은 값이다(블룸 교체가 이 씬을 안 건드렸다).
+
+이 씬의 기준선 meanLuma 는
 0.0600 → **0.01162** 로 갱신됐고, GT 캡처(640×360, luma 0.0291)는 그 **2.5배**라 structureLoss
 문턱(0.5배)을 여유 있게 통과한다. 아래 근거는 그대로 유효하다 — 게이트는 제 일을 했고 대응이
 재베이스라인이었다.
@@ -213,7 +232,9 @@ WE 평문 구조(4탭 ±0.5 소스 텍셀 · 가우시안 패스 없음 · 4탭 
 **한 단위로** 교체했다. 차이 5건(W1·W2·N1·N2·S1)에 더해 피라미드 시작 해상도(1/4 → **1/2**,
 WE 는 매 단계 절반)까지 같이 맞췄다.
 
-- A/B(기준선 `baseline-f3a17da` 대비): **9씬 변화**, meanLuma 배율 0.95~1.10, 최대 평균차 2.84.
+- A/B(기준선 `baseline-f3a17da` 대비 — [갱신 2026-08-16: 그 디렉터리는 지금 HEAD 에 없다.
+  대조 당시엔 있었고, 지금은 커밋 이력에서 꺼낸다. 이 교체의 결과물이 현행 `baseline-31fecaa`]):
+  **9씬 변화**, meanLuma 배율 0.95~1.10, 최대 평균차 2.84.
   에너지는 보존되고 헤일로 모양만 바뀌었다 — 필터 교체의 기대 형상이다.
 - **함정 하나**: 셰이더 문면대로 업샘플 가중을 `평균 × scatter` 로 두면 레벨마다 1.619배가
   곱해져 발산한다(3589454154 luma 0.091 → 0.420, 화면 백화). 저작 `bloomhdrscatter` 가
@@ -258,6 +279,9 @@ WE 는 매 단계 절반)까지 같이 맞췄다.
 
 6. **테스트 수 기준값은 2,143**(코퍼스 있음, 2026-08-01 실측). **번들 합**으로 세야 한다 —
    클래스 단위 소계까지 더하면 6,000대로 부풀어 무의미해진다.
+   > [갱신 2026-08-16: 기준값은 **2,149** 다(AGENTS.md). 그리고 이 값은 **코퍼스 유무와 무관**하다 —
+   > `Executed` 가 스킵을 포함하므로 코퍼스 있음(스킵 9)·없음(40)·CI(47)가 전부 2,149 를 낸다.
+   > 2,143→2,149 는 회귀가 아니라 그 사이 늘어난 테스트 6개다. 번들 합으로 센다는 규칙은 그대로.]
 
 ---
 
@@ -265,10 +289,18 @@ WE 는 매 단계 절반)까지 같이 맞췄다.
 
 | 위치 | 용도 |
 | --- | --- |
-| `scripts/spec/measure_*.py` | 정본 생성기·측정 도구 23개 → 정본 문서 28개(`spec/**/*.json`) |
+| `scripts/spec/measure_*.py` | 정본 생성기·측정 도구 **24개** → 정본 문서 **29개** |
 | `scripts/spec/validate.py` | 정본 무결성(근거 유무·상호 참조·헤지 표현) 검사 |
 | `scripts/re/xref.py` · `disasm.py` | exe 정적 분석. 함정은 [README](../scripts/re/README.md) |
-| `scripts/mac-session/*.sh` | 검증·프로브 스크립트 3개 |
+| `scripts/mac-session/*.sh` | 검증·프로브 스크립트 **7개** |
+
+[갱신 2026-08-16] 위 세 수치는 2026-08-01 에 23 / 28 / 3 이었다. 실측 명령과 결과:
+`ls scripts/spec/measure_*.py | wc -l` → **24**,
+`ls scripts/mac-session/*.sh | wc -l` → **7**,
+정본 문서는 `find spec -name '*.json' | wc -l` → 42 중 `validate.py` 가 검사하는 것이 **29**
+(나머지 13은 골든 캡처 산출물 `spec/golden/snapshot/**` 과 `spec/schema.json` 이라 정본이 아니다 —
+`validate.py` 가 첫 줄에 "정본 아님으로 건너뜀 13개" 로 스스로 밝힌다). `spec/**/*.json` 을
+그대로 세면 42 가 나오니 그 표기는 지웠다.
 
 **RE 는 마지막 수단이다.** WE 는 아래를 평문 배포하고 그게 디스어셈보다 나은 1차 출처다 —
 파티클 bit4 도 결국 이쪽으로 갈렸다.

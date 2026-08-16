@@ -48,12 +48,15 @@ WapleCore ←── WapleLibrary ──┐
 
 ```bash
 swift build --build-tests      # ~20초 (유휴 상태 Apple Silicon)
-swift test                     # 2,143개(코퍼스 있음, 2026-08-01 macOS 실측)
+swift test                     # 2,149개(2026-08-16 macOS 실측 — 코퍼스 유무와 무관)
 swift run Waple                # 메뉴바 앱으로 실행
 ```
 
-테스트 수 **2,143**(코퍼스 있음) 은 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
+테스트 수 **2,149** 는 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
 번들 합으로 세야 한다 — 클래스 단위 소계까지 더하면 6,000대로 부풀어 무의미해진다.
+`실행` 은 스킵을 포함하므로 **이 값은 코퍼스 유무와 무관하다**(아래 표에서 네 구성이 모두 2,149).
+종전 기준값 2,143 은 2026-08-01 실측이었고 2026-08-16 재측정으로 2,149 로 갱신됐다 —
+그 사이 테스트가 6개 늘었을 뿐 회귀가 아니다.
 
 ## 코퍼스 — 이걸 모르면 검증했다고 착각한다
 
@@ -68,16 +71,59 @@ export WAPLE_BASE_ASSETS=/path/to/assets       # 미설정 시 ~/Downloads/wallp
 
 | 구성 | 실행 | 스킵 | 시간 | 출처 |
 | --- | --- | --- | --- | --- |
-| 코퍼스 있음 | 2,143 | 2 | ~30분 | 2026-08-01 macOS 실측 |
-| 코퍼스 없음 | 2,125 | 41 | ~95초 | **낡음 — 재측정 필요** |
-| CI (코퍼스 없음) | 2,125 | 46 | ~150초 | **낡음 — 재측정 필요** |
+| 코퍼스 있음(전량 460) | 2,149 | 2 | ~30분 | 실행수는 **추론**(정적 개수 = 축소 실측과 동일), 스킵 2 는 2026-08-01 실측 |
+| 코퍼스 있음(축소 38) | 2,149 | 9 | **~4.6분** | 2026-08-16 macOS 실측 (`--parallel --num-workers 6`, 아래 레시피) |
+| 코퍼스 없음 | 2,149 | 40 | ~110초 | 2026-08-16 macOS 실측 (`WAPLE_REAL_PKGS=/nonexistent/path swift test`, 2회 동일) |
+| CI (코퍼스 없음) | 2,149 | 47 | ~170초 | 2026-08-16 확인 — CI run `30934767197`(main @`4b2e1dd`, macos-26, 성공) 로그 |
 
-번들별(2026-08-01): WapleRenderTests 992(스킵 2) · WapleCoreTests 786 · WapleAppTests 289 · WapleLibraryTests 51 · WapleSnapshotTests 25.
+모든 구성 **실패 0**. `실행` 은 XCTest 의 `Executed N tests` 이고 **스킵을 포함한다** —
+그래서 스킵이 40/47/9 로 갈려도 네 구성이 전부 똑같이 2,149 를 낸다. 위 `~110초`는 증분 빌드까지
+포함한 명령 전체 벽시계이고 번들 실행 시간 합은 ~97초, CI 의 `~170초`는 로그의
+`in 170.403 seconds`(빌드 별도) 다.
 
-코퍼스가 사주는 39개가 실패키지 mount+capture, 실영상·웹 로딩, 실제 `.mdl` 파싱,
-TEX 디코드·밉체인, 실셰이더 GLSL→MSL 번역이다. **렌더러를 건드렸다면 이걸 돌려야 한다.**
+### 코퍼스 스위트를 30분 → 5분 안에 돌리는 레시피 (2026-08-16 확립)
+
+전량 460개는 ~30분이고 그중 `RealTexMipChainProbeTests` 하나가 688초다. 그런데 **코퍼스를
+요구하는 20개 파일 중 최소 개수를 단언하는 테스트가 하나도 없고**, 콕 집어 요구하는 패키지는
+27개뿐이다(`grep -rhoE '"[0-9]{9,10}"' $(grep -rl WAPLE_REAL_PKGS Tests/)`). 스윕 테스트는
+디렉터리를 훑을 뿐이라 코퍼스를 줄이면 선형으로 빨라진다.
+
+```bash
+# 1) 콕 집어 요구하는 27개 + 타입별 대표(video 6·web 3·other 2) = 38개로 축소 코퍼스를 만든다.
+#    ⚠️ 심링크는 안 된다 — WallpaperCompatibilityAnalyzer 의 .isDirectoryKey 필터가 걸러내
+#    totalProjects=0 이 되고 testRealWallpaperDevCorpusCanBeSummarizedWhenAvailable 가 실패한다.
+#    APFS 클론(cp -Rc)이면 즉시 + 디스크 추가소비 0 이다.
+cp -Rc ~/Downloads/wallpaper_dev/backgrounds/<id> /tmp/corpus-mini/<id>   # × 38
+
+# 2) 병렬 실행. 순차 8.5분 → 4.6분 (WapleRenderTests 486초가 병목이라 여기서 벌린다)
+env WAPLE_REAL_PKGS=/tmp/corpus-mini swift test --skip-build --parallel --num-workers 6
+```
+
+**이 레시피로 확정되는 것과 안 되는 것을 구분할 것.**
+- **확정**: `실행` 수. 테스트 메서드는 정적으로 결정되므로 코퍼스 크기가 개수를 못 바꾼다.
+- **확정 안 됨**: 스킵 수와 **커버리지**. 축소 코퍼스에선 특정 패키지를 못 찾아 스킵이 9로 늘었다
+  (그중 2건 `WAPLE_PROBE_ID`·`WAPLE_3DV3` 는 코퍼스와 무관한 옵트인이라 전량에서도 스킵 —
+  나머지 7건이 전량에선 풀려 2026-08-01 실측치 `스킵 2` 로 수렴한다).
+  **렌더러를 만졌으면 이 레시피로 갈음하지 마라.** 개수 확인용이지 검증용이 아니다.
+- **CI 가 로컬보다 7개 더 스킵하는 이유**(스킵 집합 대조, 로컬 집합은 CI 의 부분집합):
+  `ffmpeg not installed` 5건 + 기본 에셋 부재 1건(`TexDecoderTests.testDecodesRealEmbeddedImages`,
+  `WAPLE_BASE_ASSETS`) + 웹 타이밍 전제 불성립 1건(`WebHardPauseTests`). 로컬 측정은
+  `WAPLE_BASE_ASSETS` 를 기본값(`~/Downloads/wallpaper_dev/assets`, **이 머신엔 실재**)으로 두고 돌렸다.
+- GPU 스킵은 없었다 — Metal 은 로컬(로그인 세션)·CI 양쪽에서 잡혔다.
+
+번들별(2026-08-16, 코퍼스 있음/축소 38): WapleRenderTests 995(스킵 7) · WapleCoreTests 786(스킵 2) · WapleAppTests 292 · WapleLibraryTests 51 · WapleSnapshotTests 25.
+번들별(2026-08-01, 코퍼스 있음/전량): WapleRenderTests 992(스킵 2) · WapleCoreTests 786 · WapleAppTests 289 · WapleLibraryTests 51 · WapleSnapshotTests 25.
+번들별(2026-08-16, 코퍼스 없음): WapleRenderTests 995(스킵 26) · WapleCoreTests 786(스킵 14) · WapleAppTests 292 · WapleLibraryTests 51 · WapleSnapshotTests 25.
+(CI 는 번들을 `WaplePackageTests.xctest` 하나로 합쳐 2,149 한 줄로 낸다.)
+
+코퍼스가 사주는 38개(2026-08-16 실측 — 무코퍼스 스킵 40 중 옵트인 2건을 뺀 38 이 코퍼스로 풀린다.
+축소 38개로도 31건이 풀렸고 나머지 7건은 그 서브셋에 없는 패키지를 요구한 것이다. 종전 표기 39개는
+무코퍼스 스킵이 41 이던 시절 값이라 갱신)가 실패키지 mount+capture, 실영상·웹 로딩, 실제 `.mdl` 파싱,
+TEX 디코드·밉체인, 실셰이더 GLSL→MSL 번역이다. **렌더러를 건드렸다면 이걸 돌려야 한다** —
+그때는 위 축소 레시피가 아니라 전량이다.
 30분 중 `RealTexMipChainProbeTests` 하나가 688초인데, 460개 패키지의 스칼라 BC1 디코드라
-줄일 수 없는 비용이다.
+패키지당 ~1.5초로 선형이다. 즉 **전량에서는 줄일 수 없는 비용**이고, 코퍼스를 줄이면 그만큼
+선형으로 준다(축소 38개에서 이 클래스 포함 WapleRenderTests 전체가 486초).
 
 주의할 점 셋:
 

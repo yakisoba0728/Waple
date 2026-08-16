@@ -52,7 +52,9 @@ silently. "It gets logged" is a general design direction, not a guarantee.
 
 Known gaps that are tracked rather than hidden live in [BACKLOG.md](BACKLOG.md) and
 [docs/README.md](docs/README.md); a few current examples: `_rt_` composite triangle masks in one corpus scene, word
-wrap for very long unwrapped text (an 8192px raster guard can silently drop it), `g_Color1`–`4`
+wrap for very long unwrapped text (the 8192px raster guard no longer drops such a draw outright — it
+shrinks the point size and retries, so the text renders small instead of vanishing; the residual drop
+is the case where the retry cannot shrink any further), `g_Color1`–`4`
 gradient uniforms, and `SHDV0069` shader-cache parsing.
 
 ## Language
