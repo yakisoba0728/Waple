@@ -1,0 +1,377 @@
+{
+  "grid": [
+    64,
+    36
+  ],
+  "baseline": "/private/tmp/claude-501/-Users-yakisoba-Documents-GitHub-Waple/907efb05-4a1d-4bf7-b371-31e641426208/scratchpad/we-cap/now/thumbs",
+  "scenes": [
+    {
+      "scene": "3292508781",
+      "weShots": [
+        "instance-override_3292508781_01.png",
+        "instance-override_3292508781_02.png"
+      ],
+      "weDim": [
+        1626,
+        971
+      ],
+      "goldenDim": [
+        256,
+        144
+      ],
+      "waple_vs_we": {
+        "corr": 0.9807816657987134,
+        "meanLumaRef": 189.30803203125,
+        "meanLumaCmp": 198.24160043402776,
+        "lumaRatio": 1.0471906408815892,
+        "meanAbsLumaDiff": 9.482538541666665,
+        "chanRatio": [
+          1.0521721973966753,
+          1.0475626038488934,
+          1.0286007143621911
+        ],
+        "worstCell": {
+          "x": 23,
+          "y": 2,
+          "refLuma": 183.4178,
+          "cmpLuma": 243.3478
+        },
+        "alignedCorr": 0.9811523221014389,
+        "alignedAt": {
+          "zoom": 1.0,
+          "dx": 0.0,
+          "dy": 0.0
+        }
+      },
+      "noiseFloor_we_vs_we": {
+        "corr": 0.9974169203047349,
+        "meanLumaRef": 189.30803203125,
+        "meanLumaCmp": 189.26830399305555,
+        "lumaRatio": 0.9997901354868132,
+        "meanAbsLumaDiff": 1.1065702256944452,
+        "chanRatio": [
+          0.9999956720135267,
+          0.9997236039852643,
+          0.9997931783836213
+        ],
+        "worstCell": {
+          "x": 6,
+          "y": 21,
+          "refLuma": 234.33900000000003,
+          "cmpLuma": 201.7654
+        },
+        "alignedCorr": 0.9973177952683203
+      }
+    },
+    {
+      "scene": "3299228616",
+      "weShots": [
+        "cursor-ripple-hdr-bloom_3299228616_01.png",
+        "cursor-ripple-hdr-bloom_3299228616_02.png"
+      ],
+      "weDim": [
+        1626,
+        971
+      ],
+      "goldenDim": [
+        256,
+        144
+      ],
+      "waple_vs_we": {
+        "corr": 0.907953866726072,
+        "meanLumaRef": 67.90464053819444,
+        "meanLumaCmp": 60.23210651041667,
+        "lumaRatio": 0.8870101534449278,
+        "meanAbsLumaDiff": 16.17324704861111,
+        "chanRatio": [
+          0.8640968436042389,
+          0.8897654362938868,
+          0.8912542744795349
+        ],
+        "worstCell": {
+          "x": 15,
+          "y": 31,
+          "refLuma": 250.23479999999998,
+          "cmpLuma": 40.7178
+        },
+        "alignedCorr": 0.9067399957786646,
+        "alignedAt": {
+          "zoom": 1.0,
+          "dx": 0.0,
+          "dy": 0.0
+        }
+      },
+      "noiseFloor_we_vs_we": {
+        "corr": 0.990646921267537,
+        "meanLumaRef": 67.90464053819444,
+        "meanLumaCmp": 67.85809392361111,
+        "lumaRatio": 0.9993145149796991,
+        "meanAbsLumaDiff": 4.530516753472223,
+        "chanRatio": [
+          1.0019651599183688,
+          0.9989016558517118,
+          0.9999462763161789
+        ],
+        "worstCell": {
+          "x": 55,
+          "y": 27,
+          "refLuma": 214.727,
+          "cmpLuma": 89.9746
+        },
+        "alignedCorr": 0.9905859174983224
+      }
+    },
+    {
+      "scene": "3465215190",
+      "weShots": [
+        "attachment-refract_3465215190_01.png",
+        "attachment-refract_3465215190_02.png"
+      ],
+      "weDim": [
+        1626,
+        971
+      ],
+      "goldenDim": [
+        256,
+        144
+      ],
+      "waple_vs_we": {
+        "corr": 0.7166843189714016,
+        "meanLumaRef": 42.62045946180555,
+        "meanLumaCmp": 49.000006857638894,
+        "lumaRatio": 1.1496827187390524,
+        "meanAbsLumaDiff": 17.00857048611111,
+        "chanRatio": [
+          1.1525454202834309,
+          1.1543309486034143,
+          1.119902906016558
+        ],
+        "worstCell": {
+          "x": 39,
+          "y": 35,
+          "refLuma": 19.2996,
+          "cmpLuma": 156.96259999999998
+        },
+        "alignedCorr": 0.7150111814789751,
+        "alignedAt": {
+          "zoom": 1.0,
+          "dx": 0.0,
+          "dy": 0.0
+        }
+      },
+      "noiseFloor_we_vs_we": {
+        "corr": 0.9966824957393087,
+        "meanLumaRef": 42.62045946180555,
+        "meanLumaCmp": 44.06131302083333,
+        "lumaRatio": 1.0338065929700362,
+        "meanAbsLumaDiff": 2.292936545138889,
+        "chanRatio": [
+          1.0344764703757034,
+          1.0331317351552731,
+          1.0364750610383757
+        ],
+        "worstCell": {
+          "x": 40,
+          "y": 4,
+          "refLuma": 51.1166,
+          "cmpLuma": 73.56179999999999
+        },
+        "alignedCorr": 0.9966709548640221
+      }
+    },
+    {
+      "scene": "3470948192",
+      "weShots": [
+        "hdr-bloom-colorgrading_3470948192_ultra.png"
+      ],
+      "weDim": [
+        3600,
+        2260
+      ],
+      "goldenDim": [
+        256,
+        144
+      ],
+      "waple_vs_we": {
+        "corr": -0.0304468873909468,
+        "meanLumaRef": 12.588136631944444,
+        "meanLumaCmp": 5.050903298611111,
+        "lumaRatio": 0.4012430945935659,
+        "meanAbsLumaDiff": 9.255393923611111,
+        "chanRatio": [
+          0.3708318262566084,
+          0.39463790280825684,
+          0.5376203514986727
+        ],
+        "worstCell": {
+          "x": 32,
+          "y": 17,
+          "refLuma": 254.99999999999997,
+          "cmpLuma": 4.2166
+        },
+        "alignedCorr": 0.5123267879333838,
+        "alignedAt": {
+          "zoom": 0.52,
+          "dx": 0.06,
+          "dy": 0.12
+        }
+      },
+      "noiseFloor_we_vs_we": null
+    },
+    {
+      "scene": "3477054430",
+      "weShots": [
+        "3d-light-audio_3477054430_frame373.png"
+      ],
+      "weDim": [
+        3600,
+        2260
+      ],
+      "goldenDim": [
+        256,
+        144
+      ],
+      "waple_vs_we": {
+        "corr": 0.0004016156720670388,
+        "meanLumaRef": 41.780192708333324,
+        "meanLumaCmp": 30.820211979166668,
+        "lumaRatio": 0.7376751815542536,
+        "meanAbsLumaDiff": 42.515280555555556,
+        "chanRatio": [
+          0.7366594774970999,
+          0.7339787054139687,
+          0.77874073165588
+        ],
+        "worstCell": {
+          "x": 51,
+          "y": 8,
+          "refLuma": 254.99999999999997,
+          "cmpLuma": 0.0
+        },
+        "alignedCorr": 0.5302023071680375,
+        "alignedAt": {
+          "zoom": 0.6,
+          "dx": -0.06,
+          "dy": 0.12
+        }
+      },
+      "noiseFloor_we_vs_we": null
+    },
+    {
+      "scene": "3644280276",
+      "weShots": [
+        "depth-parallax_3644280276_01.png",
+        "depth-parallax_3644280276_02.png"
+      ],
+      "weDim": [
+        1626,
+        971
+      ],
+      "goldenDim": [
+        256,
+        144
+      ],
+      "waple_vs_we": {
+        "corr": 0.8596889498798655,
+        "meanLumaRef": 79.31561484375,
+        "meanLumaCmp": 78.66217204861111,
+        "lumaRatio": 0.991761473599018,
+        "meanAbsLumaDiff": 2.5223429687500003,
+        "chanRatio": [
+          0.9905673766537745,
+          0.9918587536538296,
+          0.9919862969270619
+        ],
+        "worstCell": {
+          "x": 60,
+          "y": 3,
+          "refLuma": 20.592,
+          "cmpLuma": 85.5222
+        },
+        "alignedCorr": 0.8535670436492508,
+        "alignedAt": {
+          "zoom": 1.0,
+          "dx": 0.0,
+          "dy": 0.0
+        }
+      },
+      "noiseFloor_we_vs_we": {
+        "corr": 0.9913428105821135,
+        "meanLumaRef": 79.31561484375,
+        "meanLumaCmp": 79.34329079861111,
+        "lumaRatio": 1.0003489218934596,
+        "meanAbsLumaDiff": 0.7599891493055559,
+        "chanRatio": [
+          0.9984432619567912,
+          1.0005507485065945,
+          1.000427997228639
+        ],
+        "worstCell": {
+          "x": 25,
+          "y": 26,
+          "refLuma": 49.5886,
+          "cmpLuma": 59.8184
+        },
+        "alignedCorr": 0.9896464294716562
+      }
+    },
+    {
+      "scene": "3690417937",
+      "weShots": [
+        "quad-lightshafts_3690417937_01.png",
+        "quad-lightshafts_3690417937_02.png"
+      ],
+      "weDim": [
+        1626,
+        971
+      ],
+      "goldenDim": [
+        256,
+        144
+      ],
+      "waple_vs_we": {
+        "corr": 0.8736730573421722,
+        "meanLumaRef": 26.02042109375,
+        "meanLumaCmp": 23.885177343749998,
+        "lumaRatio": 0.9179396574618642,
+        "meanAbsLumaDiff": 7.107674652777778,
+        "chanRatio": [
+          0.914386642932597,
+          0.9184234323854631,
+          0.9194184864183793
+        ],
+        "worstCell": {
+          "x": 34,
+          "y": 15,
+          "refLuma": 6.3622,
+          "cmpLuma": 252.87399999999997
+        },
+        "alignedCorr": 0.8745008499314993,
+        "alignedAt": {
+          "zoom": 1.0,
+          "dx": 0.0,
+          "dy": 0.0
+        }
+      },
+      "noiseFloor_we_vs_we": {
+        "corr": 0.9713061586507067,
+        "meanLumaRef": 26.02042109375,
+        "meanLumaCmp": 25.434747309027777,
+        "lumaRatio": 0.977491726205975,
+        "meanAbsLumaDiff": 3.516454861111111,
+        "chanRatio": [
+          0.9664869246647204,
+          0.9793461311272,
+          0.9785801465102233
+        ],
+        "worstCell": {
+          "x": 23,
+          "y": 17,
+          "refLuma": 130.0472,
+          "cmpLuma": 18.448800000000002
+        },
+        "alignedCorr": 0.9711803410848137
+      }
+    }
+  ]
+}
