@@ -27,6 +27,24 @@ enum QuadShaders {
         float a = c.a * tint.a;
         return float4(c.rgb * tint.rgb * a, a);
     }
+    // DIRECTDRAW 이펙트 체인 출력 전용 변형 — 입력이 **이미 premultiplied** 라 알파를 다시 곱하지 않는다.
+    // lightshafts(DIRECTDRAW=1)는 albedo=0 에서 시작해 ApplyBlending(31,·)=A+B·opacity 로
+    // rgb=fxColor·intensity·fx, a=fx 를 낸다 — 정의상 색×커버리지, 즉 premultiplied 다. f_main 의
+    // 규약대로 여기서 다시 a 를 곱하면 fx² 가 되고, 실측 fx 최대 0.0314 에서 fx²<1/255 라 광선이
+    // 8비트에서 통째로 소멸한다(성질이 다른 노이즈 텍스처들이 전부 "숨김"과 비트동일해진다).
+    // 알파/틴트는 그대로 곱한다(레이어 opacity) — 금지되는 것은 c.a 재곱 하나뿐이다.
+    // 반대안(체인 에필로그에서 rgb/a 로 straight 복원)은 기각했다: 이펙트 체인 중간 타깃이
+    // rgba8Unorm 고정이라 fxColor·intensity 가 1.0 에 클램프된다. 코퍼스 41건 중 intensity>1 이
+    // 다수이고(3690417937 id152 는 4.02 → 색이 1.92~4.02) 광선이 2~4배 어두워진다. 반대로
+    // premultiplied 로 두면 저장값이 곧 최종 기여분이라 8비트 양자화가 출력 정밀도와 같다.
+    fragment float4 f_main_premul(VOut in [[stage_in]],
+                                  texture2d<float> tex [[texture(0)]],
+                                  constant float4 &tint [[buffer(0)]]) {
+        constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
+        float4 c = tex.sample(s, in.uv);
+        float a = c.a * tint.a;
+        return float4(c.rgb * tint.rgb * tint.a, a);
+    }
     // 스프라이트 프레임 추출(spriteFrameTexture): 아틀라스 서브렉트를 프레임크기 dst 로 1:1 복사한다.
     // 종전 blit.copy 대체 — blit 은 BC 아틀라스를 CPU rgba8 로 강제했으나(BC→rgba8 blit 무효), 샘플은
     // BC 를 GPU 에서 디코드하므로 아틀라스가 네이티브 BC 로 상주할 수 있다(keepFullAtlas 네이티브 허용).

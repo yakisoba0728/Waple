@@ -1373,7 +1373,8 @@ extension SceneRenderer {
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             return
         }
-        // 파이프라인 선택: lit > colorBlendMode > framebuffer compose > material additive > 기본 over.
+        // 파이프라인 선택: lit > colorBlendMode > framebuffer compose > material additive >
+        // DIRECTDRAW premultiplied 출력 > 기본 over.
         // additive는 특수 경로가 아닌 일반 f_main 레이어에만 적용한다.
         // 감사 V07: 무효과 NoInterpolation 레이어는 nearest 변형 우선(미빌드 시 대응 선형 폴터 — 무회귀).
         // 효과 보유 레이어의 표시 텍스처는 체인 출력(FBO)이라 선형 유지가 WE 정합(손-포팅 fbNearest 의
@@ -1397,6 +1398,10 @@ extension SceneRenderer {
                   !layer.isFrameBuffer,
                   let layerAdditivePipeline {
             enc.setRenderPipelineState(near ? layerAdditiveNearestPipeline ?? layerAdditivePipeline : layerAdditivePipeline)
+        } else if premultipliedDisplayLayers.contains(layer.uid), let layerPremultipliedPipeline {
+            // DIRECTDRAW 이펙트 체인 출력: 블렌드 상태는 기본 over 와 같고 프래그먼트만 premultiply 생략.
+            // near 는 여기서 항상 false 다(near 는 effects.isEmpty 를 요구 — 이 분기는 체인 보유 레이어).
+            enc.setRenderPipelineState(layerPremultipliedPipeline)
         } else {
             enc.setRenderPipelineState(near ? pipelineNearest ?? pipeline : pipeline)
         }
@@ -1769,6 +1774,9 @@ extension SceneRenderer {
     /// 선택이 효과 체인 앞에 오므로 효과+스프라이트가 정상). 라이브 draw 와 헤드리스 captureFrames 가 공유.
     func buildDisplayTextures(device: MTLDevice, time: Float, cb: MTLCommandBuffer) -> [MTLTexture] {
         beginFramePool()  // 프레임 시작: 모든 풀 텍스처를 재사용 가능 상태로 + 미사용 크기 evict
+        // DIRECTDRAW 체인 출력 플래그는 매 프레임 재계산한다(이펙트 visible 스크립트가 프레임마다
+        // 마지막 실행 패스를 바꿀 수 있으므로 stale 유지 금지).
+        premultipliedDisplayLayers.removeAll(keepingCapacity: true)
         var out: [MTLTexture] = []
         for layer in layers {
             // 비디오 레이어: 프레임별 비디오 텍스처를 base 로(라이브=AVPlayerItemVideoOutput,
@@ -1801,13 +1809,18 @@ extension SceneRenderer {
             if layer.effects.isEmpty || layer.isFrameBuffer { out.append(base); continue }
             // 베이스 복사 불필요: base 를 직접 첫 src 로 사용(아래 루프는 항상 새 dst 로 출력).
             var current = base
+            // 실제로 마지막까지 실행된 이펙트의 규약만 남긴다 — 비가시(continue)·인코드 실패(break)로
+            // 건너뛴 이펙트는 결과 텍스처를 만들지 않았으므로 합성 규약도 바꾸지 않는다.
+            var premultiplied = false
             for eff in layer.effects {
                 guard effectVisible(eff, time: time) else { continue }  // X-⑥: 꺼진 이펙트만 건너뜀
                 guard let next = pooledOffscreen(layer.texWidth, layer.texHeight, device) else { break }
                 // F532: 인코드 실패 시 미기록 next 를 표시 결과로 채택하지 않음(:877 가드와 정합).
                 guard applyEffect(eff, src: current, dst: next, time: time, cb: cb) else { break }
                 current = next
+                premultiplied = eff.outputPremultiplied
             }
+            if premultiplied { premultipliedDisplayLayers.insert(layer.uid) }
             out.append(current)
         }
         return out

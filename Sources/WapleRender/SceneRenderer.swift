@@ -154,6 +154,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// visible 스크립트의 최근 평가값(레이어 고유 uid → 표시 여부). update(current) 에 이전 값을 전달.
     /// 키는 GPULayer.uid(doc.layers 인덱스) — order 는 씬에서 중복될 수 있어 키로 부적합(충돌).
     var scriptVisible: [Int: Bool] = [:]
+    /// 이번 프레임 이펙트 체인의 **출력이 premultiplied** 인 레이어(GPULayer.uid) — 곧 DIRECTDRAW 패스가
+    /// 체인의 마지막 실행 패스인 레이어다. buildDisplayTextures 가 매 프레임 재계산하고(X-⑥ 비가시
+    /// continue·F532 break 를 그대로 반영) encodeLayer 가 f_main 대신 f_main_premul 을 고르는 데 쓴다.
+    /// 키를 uid 로 두는 것은 scriptVisible 과 같은 근거(order 는 중복 가능).
+    var premultipliedDisplayLayers: Set<Int> = []
     /// 텍스트 visible 스크립트의 최근 평가값(GPUText.uid → 표시 여부, F219). scriptVisible 과 별개
     /// 인덱스 공간(레이어/텍스트는 서로 다른 배열이라 uid 가 겹칠 수 있음).
     var scriptTextVisible: [Int: Bool] = [:]
@@ -643,6 +648,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var pipeline: MTLRenderPipelineState?
     /// 일반 2D material additive용 v_main/f_main 파이프라인. nil이면 기본 over로 폴백.
     var layerAdditivePipeline: MTLRenderPipelineState?
+    /// DIRECTDRAW 이펙트 체인 출력 전용(f_main_premul) — 블렌드 상태는 `pipeline` 과 동일한
+    /// premultiplied-over(one, 1-srcA)이고 프래그먼트만 premultiply 를 생략한다.
+    /// nil(컴파일 실패)이면 encodeLayer 가 f_main 폴백(종전 이중곱 동작 — 무크래시).
+    var layerPremultipliedPipeline: MTLRenderPipelineState?
     var blendPipeline: MTLRenderPipelineState?
     /// 컴포지션(_rt_FullFrameBuffer) 레이어 파이프라인(f_compose) — 프레임버퍼를 화면좌표로 샘플.
     /// nil(컴파일 실패)이면 encodeLayer 가 f_main 폴백(종전 stretch 동작 — 무크래시).
@@ -1235,6 +1244,26 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         att.sourceRGBBlendFactor = .one; att.sourceAlphaBlendFactor = .one
         att.destinationRGBBlendFactor = .oneMinusSourceAlpha; att.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         self.pipeline = try WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pdesc) }
+        // DIRECTDRAW 이펙트 출력 전용: 블렌드 상태는 위와 동일(premultiplied-over)이고 프래그먼트만
+        // premultiply 를 생략한 f_main_premul 로 바꾼다 — 이펙트 결과가 이미 색×커버리지이기 때문
+        // (근거는 f_main_premul 주석). 아래 additive 는 다시 f_main 으로 되돌린 뒤 만든다.
+        //
+        // 왜 premultiplied-over 인가(WE 규약 추적 결과):
+        //  - 확정: WE 머티리얼 blending 4종은 normal=블렌딩 OFF(RGB 덮어쓰기) / translucent=
+        //    SRC_ALPHA·INV_SRC_ALPHA / additive=SRC_ALPHA·ONE / alphatocoverage 다
+        //    (spec/engine/render-state.json `renderState.blend.byBlendingMode`, 바이너리 실측).
+        //    **넷 중 어느 것도 premultiplied 소스를 옳게 합성하지 못한다** — translucent·additive 는
+        //    src.rgb 에 src.a 를 다시 곱하므로 정확히 이 버그(fx²)를 재현하고, normal 은 배경을 지운다.
+        //  - 확정: WE 는 그 밖에 상태 플래그 bit7(0x80) = SrcBlend ONE / DestBlend INV_SRC_ALPHA
+        //    (프리멀티플라이드 오버 + 알파 누적)를 갖는다(같은 파일 `renderState.blend.flagBits`).
+        //  - 정황: 그 비트의 **호출부**는 미추적이다(해당 항목 status=보고). 즉 "DIRECTDRAW 패스가
+        //    bit7 을 켠다"는 것은 확정이 아니라, premultiplied 출력과 아귀가 맞는 유일한 WE 상태라는
+        //    소거법 결론이다.
+        //  - 실측 A/B(3690417937, WE 실기 스크린샷 대조): 기준선 정렬후 0.918·휘도비 0.885 →
+        //    premult-over 0.917·1.005, additive(dst=ONE) 0.912·1.043. 두 지표 모두 premult-over 우세.
+        pdesc.fragmentFunction = library.makeFunction(name: "f_main_premul")
+        self.layerPremultipliedPipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pdesc) }
+        pdesc.fragmentFunction = library.makeFunction(name: "f_main")
         // 같은 v_main/f_main + accPixelFormat. premultiplied source를 destination에 그대로 더한다.
         att.destinationRGBBlendFactor = .one
         att.destinationAlphaBlendFactor = .one
@@ -2106,6 +2135,8 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneWantsHDRBloom = false
         hdrBloomParameters = .defaults
         hdrBloomPass = nil
-        pipeline = nil; layerAdditivePipeline = nil; queue = nil; device = nil
+        premultipliedDisplayLayers.removeAll()   // DIRECTDRAW 체인 출력 플래그(프레임 상태) 해제
+        pipeline = nil; layerAdditivePipeline = nil; layerPremultipliedPipeline = nil
+        queue = nil; device = nil
     }
 }

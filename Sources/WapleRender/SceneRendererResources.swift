@@ -72,6 +72,11 @@ extension SceneRenderer {
         let bind: EffectBind
         /// X-⑥: visibleScript 보유 이펙트만 non-nil(스크립트 없는 절대다수는 무비용 nil — 매 프레임 항상 적용).
         var visibleGate: EffectVisibleGate? = nil
+        /// 출력 패스(target==nil)의 콤보에 DIRECTDRAW=1 이 있는가 — true 면 이 이펙트의 체인 결과는
+        /// straight-alpha 가 아니라 **premultiplied** 다(WE 규약: DIRECTDRAW 는 albedo=0 에서
+        /// ApplyBlending(31)=A+B·opacity 로 색×커버리지를 직접 낸다). 소비처는 encodeLayer 의
+        /// f_main_premul 분기. 코퍼스 도달은 lightshafts 41패스/23씬 전건이다(아래 makeTranslatedEffect 주석).
+        var outputPremultiplied: Bool = false
     }
 
     func pkgURL(in folder: URL) -> URL? {
@@ -568,6 +573,8 @@ extension SceneRenderer {
         let lw = Float(max(1, texW)), lh = Float(max(1, texH))
         var passes: [TranslatedPass] = []
         var anyAudio = false
+        // 출력 패스(target==nil)가 DIRECTDRAW 면 체인 결과가 premultiplied — EffectGPU 로 실어 보낸다.
+        var outputPremultiplied = false
         for (i, mp) in manifest.passes.enumerated() {
             if mp.command == "copy" {
                 guard let copy = makeCopyPass(mp, effName: eff.name, fboIndex: fboIndex,
@@ -607,6 +614,7 @@ extension SceneRenderer {
                                                compositeImageTextures: compositeImageTextures,
                                                baseNoInterp: baseNoInterp) else { return nil }
             if t.usesAudio { anyAudio = true }
+            if plan.target == nil, combos["DIRECTDRAW"] == 1 { outputPremultiplied = true }
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
                                          binds: plan.binds, target: plan.target, usesAudio: t.usesAudio,
                                          texRes: plan.texRes, texWrap: plan.texWrap, texFilter: plan.texFilter,
@@ -617,10 +625,17 @@ extension SceneRenderer {
         guard passes.contains(where: { $0.target == nil }) else { return nil }
         if anyAudio { hasAudio = true }
         NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (passes=\(passes.count) fbos=\(manifest.fbos.count) audio=\(anyAudio))")
+        // DIRECTDRAW 체인 결과는 premultiplied — 합성서(f_main)가 알파를 한 번 더 곱하지 않도록 표시한다.
+        // 코퍼스 전수(460 pkg)에서 DIRECTDRAW 는 lightshafts 41패스/23씬이 전부이고, 전건이
+        // ① 이미지 없는 shape:quad 오브젝트의 ② 유일한 이펙트의 ③ 유일한(=출력) 패스이며
+        // ④ colorBlendMode=0 ⑤ 비-`_rt_` ⑥ 2D 오르토 씬(camera3D 없음)이다. 그래서 소비처는
+        // encodeLayer 의 f_main 분기 하나로 충분하다 — f_compose/f_blend/f_lit/3D 빌보드 경로에는
+        // 대응 변형을 두지 않았다(도달 0건). 도달이 생기면 그 경로는 종전 동작으로 남는다(무크래시).
         return EffectGPU(pipeline: passes[0].pipeline,
                          bind: .translated(passes: passes, fboSpecs: manifest.fbos.map {
                              FBOSpec(scale: $0.scale, fixedWidth: $0.fixedWidth, fixedHeight: $0.fixedHeight)
-                         }))
+                         }),
+                         outputPremultiplied: outputPremultiplied)
     }
 
     /// ① 매니페스트 로드: effect.json 이 없으면 관례 단일 패스("effects/<name>" 셰이더).
