@@ -799,8 +799,13 @@ extension SceneRenderer {
                     reflection = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
                 }
             }
+            // 셰이더 이름을 같이 넘긴다 — `generic`/`generic2` 는 상수 키(`Rough`/`Metal`)도 기본값(둘 다 0)도
+            // PBR 레인(`roughness`/`metallic`, 0.7/0)과 다르고, 스톡 GGX 스페큘러 자체가 그 레인에 없다
+            // (Scene3DMaterialValues 주석 참조). 상수 딕셔너리가 아예 없어도 규약은 적용돼야 하므로
+            // `if let csv` 밖에서 호출한다.
+            pbr = Scene3DMaterialValues.parse(p0["constantshadervalues"] as? [String: Any],
+                                              shader: p0["shader"] as? String)
             if let csv = p0["constantshadervalues"] as? [String: Any] {
-                pbr = Scene3DMaterialValues.parse(csv)
                 if let c = fvec(csv["Color"] ?? csv["color"]), c.count >= 3 { color = SIMD3(c[0], c[1], c[2]) }
                 if let a = fvec(csv["Alpha"] ?? csv["alpha"])?.first { alpha = a }
                 // H4: g_RefractAmount 상수(2D SceneDocument:1085 와 동일 키 — ui_editor_properties_refract_amount).

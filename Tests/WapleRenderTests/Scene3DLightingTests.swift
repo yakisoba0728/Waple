@@ -93,6 +93,50 @@ final class Scene3DLightingTests: XCTestCase {
         XCTAssertEqual(tie.roughness, 0.2, accuracy: 1e-6)
     }
 
+    // MARK: - 레거시 레인(generic/generic2) 상수 규약
+
+    func testLegacyLaneMaterialsDisableStockSpecularAndUseTheirOwnDefaults() {
+        // 실코퍼스 3470948192 "Hollow Cylinder/diffuse_0": shader generic2, Rough/Metal/Light 미저작.
+        // WE 는 여기서 GGX 가 아니라 지수 404 Blinn 로브(common_fragment.h:73)를 쓰므로 우리 스톡
+        // GGX 스페큘러는 꺼져야 한다 — 안 그러면 알베도와 무관하게 라이트 세기만큼 밝아진다.
+        let cylinder = Scene3DMaterialValues.parse([
+            "Alpha": 1,
+            "Brigtness": 1.5,
+            "Color": "0.80000 0.80000 0.80000",
+        ], shader: "generic2")
+        XCTAssertEqual(cylinder.specularTint, .zero)
+        XCTAssertEqual(cylinder.roughness, 0)   // generic2.frag:7 `Rough` 기본 0 (generic4 의 0.7 아님)
+        XCTAssertEqual(cylinder.metallic, 0)    // generic2.frag:6 `Metal` 기본 0
+
+        // 상수 딕셔너리가 아예 없어도 규약은 적용된다.
+        XCTAssertEqual(Scene3DMaterialValues.parse(nil, shader: "generic"),
+                       Scene3DMaterialValues(roughness: 0, metallic: 0, specularTint: .zero))
+    }
+
+    func testLegacyLaneReadsRoughMetalKeysAndIgnoresPBRLaneKeys() {
+        let legacy = Scene3DMaterialValues.parse([
+            "Rough": 0.4,
+            "Metal": 0.25,
+            "roughness": 0.9,       // PBR 레인 키 — 레거시 레인에선 읽지 않는다
+            "metallic": 0.9,
+            "speculartint": "1 1 1",  // PBR 레인 전용 상수 — 스페큘러 0 을 뒤집지 못한다
+        ], shader: "generic2")
+        XCTAssertEqual(legacy.roughness, 0.4, accuracy: 1e-6)
+        XCTAssertEqual(legacy.metallic, 0.25, accuracy: 1e-6)
+        XCTAssertEqual(legacy.specularTint, .zero)
+    }
+
+    func testPBRLaneShadersKeepTheirConventionIncludingGeneric3() {
+        // generic3 은 이름만 비슷할 뿐 common_pbr.h 를 include 하는 PBR 레인이다(generic3.frag:19/33-34).
+        for shader in ["generic3", "generic4", "genericimage4", "workshop/1/custom", ""] {
+            let values = Scene3DMaterialValues.parse(["roughness": 0.6, "metallic": 1], shader: shader)
+            XCTAssertEqual(values.roughness, 0.6, accuracy: 1e-6, "shader=\(shader)")
+            XCTAssertEqual(values.metallic, 1, "shader=\(shader)")
+            XCTAssertEqual(values.specularTint, SIMD3(1, 1, 1), "shader=\(shader)")
+            XCTAssertEqual(Scene3DMaterialValues.parse(nil, shader: shader).roughness, 0.7, "shader=\(shader)")
+        }
+    }
+
     func testNormalMatrixHandlesNonUniformScaleAndSingularFallback() {
         let model = Scene3DMath.modelMatrix(
             origin: .zero,

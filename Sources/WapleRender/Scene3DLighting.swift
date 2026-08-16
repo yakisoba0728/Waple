@@ -4,6 +4,22 @@ import WapleCore
 
 /// `generic4`의 상수형 metallic/roughness 머티리얼 값.
 /// PBR mask/normal map은 별도 후속 범위이며 여기서는 네이티브 기본값을 보존한다.
+///
+/// ⚠️ **WE 는 메시 머티리얼 레인이 둘이고 상수 규약이 서로 다르다.**
+/// - PBR 레인(`generic3`/`generic4`, `common_pbr*.h` → `ComputePBRLightShadow*`):
+///   키 `roughness`/`metallic`, 기본 0.7/0. 스페큘러는 GGX 이고 `specular * specularTint` 로
+///   diffuse 와 **같은 식** 안에서 합산된다(common_pbr_2.h:313/362). 우리 스톡 셰이더가 이식한 레인.
+/// - 레거시 레인(`generic`/`generic2`, `common_fragment.h:68` → `ComputeLightSpecular`):
+///   키 `Metal`/`Rough`/`Light`, **셋 다 기본 0**(generic2.frag:6-9). 스페큘러는 GGX 가 아니라
+///   Blinn 로브 `pow(dot(normalize(V+L),N), specularPower) * specularStrength * lightAttn * color` 를
+///   `specularResult` 에 따로 누적해(common_fragment.h:74) 마지막에
+///   `albedo.rgb = albedo.rgb * light + specularResult` 로 가산한다(generic2.frag:60-69)
+///   — **알베도와 곱해지지 않는다.**
+///   ⚠️ 여기서 `g_Light`(상수 `Light`)는 **스페큘러 게이트가 아니다** — `ComputeLightSpecular` 가
+///   `halfLambert` 인자로 받아 `lightDot = mix(lightDot, halfLambertLight, halfLambert)`(common_fragment.h:78)
+///   로 **diffuse 만** 성형한다. `specularResult +=` 는 무조건 실행된다. 스페큘러를 사실상 끄는 것은
+///   `Rough`/`Metal` 기본 0 이 만드는 지수 404 로브 쪽이다(아래 parse 주석).
+/// 두 레인의 상수 이름과 기본값은 하나도 겹치지 않는다.
 struct Scene3DMaterialValues: Equatable {
     var roughness: Float = 0.7
     var metallic: Float = 0
@@ -16,17 +32,46 @@ struct Scene3DMaterialValues: Equatable {
     /// M6(⑥): REFLECTION 콤보 g_Reflectivity(generic4.frag:66 — material key "reflectivity", 기본 1).
     var reflectivity: Float = 1.0
 
-    static func parse(_ constants: [String: Any]?) -> Self {
-        guard let constants else { return Self() }
+    /// 레거시 레인 머티리얼 셰이더(`common_fragment.h::ComputeLightSpecular`). 이름이 비슷한
+    /// `generic3` 은 **PBR 레인**이다(generic3.frag:22 `#include "common_pbr.h"`, 상수 키
+    /// `roughness`/`metallic` 기본 0.7/0) — 여기 넣으면 안 된다.
+    /// 2D 레이어 전용 `genericimage*`/`genericparticle` 도 메시 머티리얼이 아니라 대상 밖이다.
+    static let legacyLaneShaders: Set<String> = ["generic", "generic2"]
+
+    /// `passes[0].constantshadervalues` → 머티리얼 값. `shader` 는 같은 pass 의 셰이더 이름으로,
+    /// 어떤 상수 규약(키·기본값)을 적용할지 고른다. nil/미지 셰이더는 PBR 레인(종전 동작).
+    static func parse(_ constants: [String: Any]?, shader: String? = nil) -> Self {
+        var result = Self()
+        let legacy = shader.map(legacyLaneShaders.contains) ?? false
+        if legacy {
+            // generic2.frag:6-7 선언 기본값 — `Rough`/`Metal` 둘 다 0(generic4 의 0.7/0 이 아니다).
+            result.roughness = 0
+            result.metallic = 0
+            // ★ 이 커밋의 실제 수정. 스톡 셰이더의 스페큘러는 PBR 레인의 GGX 항이라 레거시 레인에는
+            // 존재하지 않는 것이다. 그대로 두면 `specular * specularTint` 가 **알베도와 무관하게**
+            // 라이트 세기에 비례해 그려져(3470948192 워프 터널: 알베도를 util/black 으로 바꿔도 평균
+            // 휘도 150.23 → 149.92 로 안 어두워지고, intensity 를 9.84→1.0 으로 낮추면 30.91 로 떨어짐)
+            // WE 대비 휘도비 11.99 의 블로우아웃이 된다.
+            // WE 의 이 레인 스페큘러는 지수 `(1.01-Rough)*mix(400,250,Metal)`, 세기
+            // `(0.5+Metal*0.5)*(1-Rough*0.9)` 의 Blinn 로브다(common_fragment.h:51-58,74). 코퍼스의
+            // 레거시 머티리얼은 `Rough`/`Metal` 을 저작하지 않거나 0 으로 저작하므로 전건이 지수 404 —
+            // 사실상 델타 함수라 평균 휘도 기여가 0 이다. 로브 자체를 이식하지 않는 이상(그러려면 diffuse
+            // 항도 같이 갈아야 한다: `albedo*(saturate(NL)+rim)*lightAttn²`, /π 없음) GGX 로브를
+            // 대신 그리는 것보다 끄는 쪽이 WE 에 가깝다.
+            // 온전한 해법은 GLSLTranslator 의 VIn 에 a_Normal 을 붙여 generic2 를 진짜로 번역하는 것이고
+            // (그러면 이 경로 자체를 안 탄다) 별도 작업 단위다.
+            result.specularTint = .zero
+        }
+        guard let constants else { return result }
         // case-only 중복 키(예: "Alpha"+"alpha")는 원본 키 정렬 후 첫 키를 채택해 결정적으로 병합한다.
         // (uniquingKeysWith 클로저는 값만 받으므로 정렬 없이는 dict 순회 비결정성이 런마다 결과를 가른다.)
         let values = Dictionary(
             constants.sorted { $0.key < $1.key }.map { ($0.key.lowercased(), $0.value) },
             uniquingKeysWith: { first, _ in first })
-        var result = Self()
-        if let roughness = numbers(values["roughness"])?.first { result.roughness = roughness }
-        if let metallic = numbers(values["metallic"])?.first { result.metallic = metallic }
-        if let tint = numbers(values["speculartint"]), tint.count >= 3 {
+        if let roughness = numbers(values[legacy ? "rough" : "roughness"])?.first { result.roughness = roughness }
+        if let metallic = numbers(values[legacy ? "metal" : "metallic"])?.first { result.metallic = metallic }
+        // `speculartint` 는 PBR 레인 전용 상수다 — 레거시 레인은 위에서 정한 0 을 저작으로 뒤집지 않는다.
+        if !legacy, let tint = numbers(values["speculartint"]), tint.count >= 3 {
             result.specularTint = SIMD3(tint[0], tint[1], tint[2])
         }
         if let rimAmount = numbers(values["rimamount"])?.first { result.rimAmount = rimAmount }
