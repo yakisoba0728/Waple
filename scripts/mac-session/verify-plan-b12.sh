@@ -35,10 +35,36 @@ else
     bad "Package.swift 에 resources 선언이 없다 — 동봉이 빌드에 안 들어간다"
 fi
 
-if grep -rq "Bundle.module" Sources/WapleRender/; then
-    ok "Bundle.module 참조 존재"
+# [수정 2026-08-16] 이 검사는 뒤집혀 있었다. 종전엔 `Bundle.module` 참조가 **있으면 OK** 였다.
+# 그런데 4b2e1dd("배포본 즉사 2차")가 그 유일한 사용처(BaseAssetsSettings)를 **의도적으로 걷어냈다** —
+# SwiftPM 이 생성하는 접근자는 못 찾으면 경고가 아니라 fatalError 이고 탐색 후보가 빌드 시스템마다
+# 다르다(swiftbuild=Contents/Resources, native=앱 루트+빌드 절대경로). 그래서 CI(native) 산출물이
+# 실행 즉시 죽었고(v0.1.0-beta.3 `could not load resource bundle`), 앱 루트 후보는 codesign 이
+# "unsealed contents present in the bundle root" 로 막아 만족시킬 방법조차 없다.
+# 대체는 `BaseAssetsSettings.bundledAssetsDirectory` 의 **직접 탐색**(후보 4 × 레이아웃 2, 실패 시 nil)이다.
+# 즉 지금의 불변식은 정반대다: **코드에 Bundle.module 이 0건**일 것 + **대체 구현이 실재**할 것.
+#
+# 조건만 뒤집으면 clean tree 에서 오탐이 난다 — BaseAssetsSettings.swift:52 의 근거 주석이
+# "`Bundle.module` 을 쓰지 않는다" 라고 그 단어를 그대로 적고 있다(지우면 안 되는 설계 근거).
+# 그래서 **주석 줄을 제외하고** 센다. 탐색 범위도 WapleRender/ → Sources/ 전체로 넓혔다
+# (4b2e1dd 의 의도는 "종속을 걷어낸다" 이지 한 타깃만 보는 게 아니다).
+CODE_HITS=$(grep -rn "Bundle\.module" Sources/ 2>/dev/null \
+            | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(///|//|\*|/\*)' || true)
+if [ -z "$CODE_HITS" ]; then
+    ok "Bundle.module 코드 참조 0건 (4b2e1dd 이후의 불변식)"
 else
-    bad "Bundle.module 참조 0건 — 코드가 번들 리소스를 안 읽는다"
+    bad "Bundle.module 코드 참조가 살아 있다 — 배포본이 실행 즉시 죽는다(v0.1.0-beta.3 재발)"
+    printf '%s\n' "$CODE_HITS" | head -5 | sed 's/^/    /'
+fi
+
+# 불변식의 나머지 반쪽 — 대체 구현이 실제로 있는가. 위 검사만 두면 "그냥 아무 데서도 안 읽는다"
+# 와 "직접 찾는다" 를 구별하지 못한다.
+ASSETS_SRC="Sources/WapleRender/BaseAssetsSettings.swift"
+if grep -q "bundledAssetsDirectory" "$ASSETS_SRC" \
+   && grep -q "Waple_WapleRender.bundle" "$ASSETS_SRC"; then
+    ok "대체 구현 존재 — bundledAssetsDirectory 의 직접 탐색($ASSETS_SRC)"
+else
+    bad "직접 탐색 구현이 없다 — 동봉 에셋을 읽을 경로가 아무 데도 없다 ($ASSETS_SRC)"
 fi
 
 hr; echo "3. 번들 산출물에 에셋이 실제로 있는가"; hr
@@ -48,6 +74,11 @@ hr; echo "3. 번들 산출물에 에셋이 실제로 있는가"; hr
 #       -> -L 로 링크를 따라가고 탐색 루트를 .build 로 넓힌다
 #   (b) macOS 번들은 $BND/Contents/Resources/... 레이아웃이다. $BND/WEAssets/... 로
 #       찾으면 없다 -> 두 레이아웃을 모두 본다
+# [확인 2026-08-16] 4b2e1dd 이후에도 이 검사는 유효하다. 그 커밋이 바꾼 것은 **앱 번들** 쪽이고
+# (Waple_WapleRender.bundle 통째 대신 WEAssets 폴더만 Contents/Resources 에 넣는다),
+# 여기가 보는 곳은 .app 이 아니라 .build 다. Package.swift:16 의 `.copy("Resources/WEAssets")`
+# 는 그대로이고, package-app.sh:40-44 가 아직도 .build/<config>/Waple_WapleRender.bundle 에서
+# WEAssets 를 꺼내 온다 — 이 번들이 없으면 패키징이 그 자리에서 exit 1 이다.
 BND=$(find -L .build -name "*WapleRender*.bundle" -maxdepth 6 2>/dev/null | head -1)
 if [ -n "$BND" ]; then
     N=$(find -L "$BND" -type f | wc -l | tr -d ' ')
@@ -99,7 +130,12 @@ echo "  테스트 수(전 Executed 줄 합): ${TESTS:-?}"
 echo "  번들별:"
 grep -E "Test Suite '.*\.xctest'.*(passed|failed)" -A1 "$OUT/full-suite.log" 2>/dev/null \
     | grep -oE "Executed [0-9]+ tests, with [0-9]+ failures.*" | sed 's/^/    /' | sort -u
-echo "  (종전 기준값 2,125. 이 숫자는 클래스 단위 소계가 섞여 부풀 수 있으니"
+# [수정 2026-08-16] 안내가 종전 기준값 2,125 를 가리키고 있었다. 같은 날 재측정으로 확정:
+# 기준값은 **2,149** 이고 코퍼스 유무와 무관하다 — XCTest 의 `Executed` 는 스킵을 포함하므로
+# 코퍼스 있음(스킵 9)·없음(40)·CI(47) 네 구성이 전부 2,149 를 낸다. 종전의 2,143/2,125 격차는
+# 축(코퍼스 유무)이 아니라 그냥 그 사이 늘어난 테스트였다.
+echo "  (기준값 2,149 — AGENTS.md, 2026-08-16 실측. 코퍼스 유무와 무관하다."
+echo "   클래스 단위 소계가 섞여 부풀 수 있으니"
 echo "   번들별 줄로 판단할 것 — AGENTS.md 의 기준값도 번들 합이다)"
 
 hr; echo "6. 골든 무변화 (Task 1·2 는 픽셀을 바꾸면 안 된다)"; hr
@@ -107,12 +143,22 @@ hr; echo "6. 골든 무변화 (Task 1·2 는 픽셀을 바꾸면 안 된다)"; h
 # 뜬다. debug<->release 는 코드 변경 없이도 30종이 달라진다(최대차 249, 실측).
 # 그래서 커밋 기준선과 직접 비교하면 항상 오탐이다.
 # 올바른 대조는 **구현 전 release 기준선**이다. 없으면 만들라고 안내하고 넘어간다.
+#
+# [수정 2026-08-16] 위 "커밋된 기준선은 debug 뿐" 은 더 이상 사실이 아니다.
+# 04e72db·1a6d3d3 이후 `spec/golden/snapshot/baseline-31fecaa/`(170종, **release**,
+# GoldenBaseline.currentLabel)가 커밋돼 있다. debug<->release 오탐 근거는 baseline-81098bb
+# 에만 해당한다. 그래도 **자동 기본값으로 삼지는 않는다** — 31fecaa 는 "이 구현 직전" 이
+# 아니라 "블룸 교체 직후" 라서 축이 다르고, 기본값을 바꾸면 게이트 의미가 조용히 달라진다.
+# 구현 직전 캡처가 없을 때 **차선의 후보**로만 쓸 것:
+#   WAPLE_PRE_RELEASE_BASELINE=spec/golden/snapshot/baseline-31fecaa
 PRE="${WAPLE_PRE_RELEASE_BASELINE:-}"
 if [ -z "$PRE" ] || [ ! -d "$PRE/thumbs" ]; then
     echo "  !! 구현 전 release 기준선이 없다. 이 대조는 성립하지 않는다."
     echo "     커밋된 baseline-81098bb 는 debug 라 release 캡처와 항상 30종이 어긋난다."
     echo "     구현 **전에** 아래를 떠 두고 WAPLE_PRE_RELEASE_BASELINE 으로 지정할 것:"
     echo "       git stash && swift run -c release WapleCompat --capture <dir> --label pre-release <corpus>"
+    echo "     차선책: 커밋된 release 기준선 spec/golden/snapshot/baseline-31fecaa 를"
+    echo "       WAPLE_PRE_RELEASE_BASELINE 로 지정 — 단 축이 '구현 직전' 이 아님을 알고 쓸 것."
     echo "     (이번 실행은 아래 캡처만 남기고 대조는 건너뛴다)"
     SKIP_GOLDEN_DIFF=1
 fi
