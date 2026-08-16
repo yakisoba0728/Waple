@@ -618,6 +618,54 @@ extension SceneRenderer {
         }
     }
 
+    /// 씬의 camera 의사-오브젝트를 3D 카메라로 승격한다(해당 없으면 nil → 호출부가 scene.camera 유지).
+    ///
+    /// **왜 필요한가.** `scene.camera`(parseCamera 의 eye/center/up)는 WE 에디터의 **수동/자유 카메라**
+    /// 상태이고, 씬이 실제로 그리는 카메라는 objects[] 의 camera 의사-오브젝트다. 종전에는 이 오브젝트의
+    /// `angles` 를 아예 파스하지 않아 방향이 소실됐고, 렌더러도 zoom·origin.xy 만 2D 팬/줌으로 소비했다
+    /// (그 2D 경로는 ortho 씬 30종이 쓰므로 여기서 건드리지 않는다 — applyCameraObjects 는 그대로다).
+    /// 실측(3477054430): 두 카메라가 **21.32 유닛** 떨어져 있고, scene.camera 로 투영하면 달(id=44)이
+    /// 광축에서 **55.64°** — fov 42.43 밖, 즉 화면 밖이다. 카메라 오브젝트로 투영하면 25.53° 이고
+    /// 화면 좌표 **(82%, 28%)** 로 WE 스크린샷의 (87.5%, 28%) 와 같은 자리다(세로가 정확히 맞아
+    /// up/right 규약까지 검산된다). WE 실기 스크린샷 대비 상관은 **−0.001 → 0.753**.
+    ///
+    /// **게이트 — 왜 "첫 카메라"가 아닌가.** 다중 카메라 씬에서 `cams[0]` 은 추측이고 실제로 틀린다.
+    /// 코퍼스 전수(3D 원근 7씬)에서 다중 카메라는 둘뿐이고 둘 다 구조가 같다:
+    ///   - `parent != nil` — 3706286085(8개)·3737268876(11개)의 카메라는 **전부** 부모를 가지며 그 부모가
+    ///     스크립트로 구동되는 노드다(소닉 추종 `CameraBoneMoveMesh`, 젤다 `Cam Link Root`/
+    ///     `Cam Look At Events`). 포즈가 오브젝트가 아니라 부모 체인에 있으므로 오브젝트 값만 쓰면
+    ///     카메라가 월드 원점에 놓인다 — 실제로 그렇게 해서 3706286085 가 0.520 → 0.396 으로 나빠졌었다.
+    ///   - `visible` 이 유저 프로퍼티 바인딩 — 사용자가 고르는 **대안 카메라**다. 3737268876 은
+    ///     `cameratype` 콤보 기본값이 `"0"`(Manual)이라 부모 체인의 조건(`==1`, `==2`)이 전부 거짓 →
+    ///     **11개 중 기본 활성이 하나도 없다**. 즉 그 씬에선 scene.camera 가 맞다.
+    /// 반대로 단일 카메라 7씬의 카메라는 parent 도 visible 키도 없다. 그래서 게이트는
+    /// "부모 없음 + visible 바인딩 없음" 이고, 두 조건 모두 결과에 맞춘 사후 규칙이 아니라 파스 구조와
+    /// "부모 체인을 못 푼다" 는 우리 렌더러의 한계에서 나온다. 부모 체인 합성 + 유저 조건 평가 +
+    /// 부모 스크립트 per-frame 구동을 갖추기 전에는 그 두 씬을 움직이지 않는 것이 맞다.
+    ///
+    /// **A/B 실측(WE 워크샵 preview 대비 상관, 8씬 전수)**: 3470948192 −0.210→0.111 · 3477054430
+    /// 0.000→0.198 · 3509243656 −0.077→0.062 · 3662790108 −0.043→0.164 (개선 4) ·
+    /// 3589454154 0.122→0.119 (중립) · 3706286085·3737268876 게이트 미통과로 무변화 ·
+    /// 3354366708 은 ortho 하이브리드(camera3D==nil)라 이 경로를 안 탄다. **악화 0.**
+    ///
+    /// 방향 규약은 Scene3DMath 와 동일하게 R = Rz·Ry·Rx(라디안 — scene.json 저장 규약이고
+    /// 스크립트 경계의 도(度)와 무관하다), 전방 = R·(0,0,−1), 상방 = R·(0,1,0).
+    /// nearZ/farZ 는 base(scene.camera)를 그대로 물려받는다 — 카메라 오브젝트에 그 필드가 없다.
+    static func camera3DFromObject(_ cams: [SceneCameraObject],
+                                   base: SceneCamera3D) -> SceneCamera3D? {
+        guard let cam = cams.first(where: { $0.parent == nil && !$0.hasVisibleBinding }) else { return nil }
+        let a = SIMD3<Float>(cam.angles.x, cam.angles.y, cam.angles.z)
+        let r = Scene3DMath.modelMatrix(origin: .zero, angles: a, scale: SIMD3(repeating: 1))
+        let fwd = -SIMD3(r.columns.2.x, r.columns.2.y, r.columns.2.z)
+        let up = SIMD3(r.columns.1.x, r.columns.1.y, r.columns.1.z)
+        let eye = SIMD3<Float>(cam.origin.x, cam.origin.y, cam.origin.z)
+        let ctr = eye + fwd
+        return SceneCamera3D(eye: Vec3(x: eye.x, y: eye.y, z: eye.z),
+                             center: Vec3(x: ctr.x, y: ctr.y, z: ctr.z),
+                             up: Vec3(x: up.x, y: up.y, z: up.z),
+                             fov: cam.fov, nearZ: base.nearZ, farZ: base.farZ)
+    }
+
     /// 노드/빌보드에 프로퍼티 스크립트 엔진 부착(씬 공유 컨텍스트 — top-level 사이드이펙트가 로드 시점에 실행).
     func attachScripts(_ n: Node3D, sources: [String: String]) {
         for key in ["visible", "origin", "angles", "scale"] {

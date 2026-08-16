@@ -1303,7 +1303,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 3D 씬(camera3D + .mdl 오브젝트): 메시 + 빌보드(2D 이미지 레이어) + 오브젝트/그룹 프로퍼티 스크립트.
         // 메시/빌보드가 하나도 안 올라오면(로드 실패) 기존 2D 폴백 유지.
         if let cam = doc.camera3D, !doc.objects3D.isEmpty {
-            camera3D = cam
+            // 3D 카메라는 camera 의사-오브젝트가 우선이다(게이트 통과 시) — scene.camera 는 WE 에디터의
+            // 수동 카메라라 씬이 실제로 그리는 구도와 다르다. 근거·게이트·A/B 는 camera3DFromObject 주석.
+            camera3D = Self.camera3DFromObject(doc.cameraObjects, base: cam) ?? cam
             build3D(doc: doc, package: package, device: device)
             is3D = !meshRenderables.isEmpty || !billboards.isEmpty
             // 3D 씬 파티클: 기존 CPU 시뮬(buildParticles 공용) 로 구동, encode3D 가 원근 빌보드로 렌더.

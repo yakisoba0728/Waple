@@ -368,6 +368,21 @@ public struct SceneCameraObject: Equatable {
     /// origin/zoom 프로퍼티 스크립트(키 → JS 소스 — 실물: 슬라이더 연동 카메라 위치).
     public var scripts: [String: String] = [:]
     public var origin: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    /// 오일러 각(라디안 — scene.json 저장 규약, SceneObject3D.angles 와 동일). 종전 파스 누락으로
+    /// 카메라 오브젝트의 **방향이 통째로 소실**돼 있었다. 소비는 조사 결과에 달려 있어 보류 —
+    /// 파스·보존만 한다(카메라 오브젝트를 3D 카메라로 승격하는 규칙이 미확정. 조사 결론은 아래 parent 주석).
+    public var angles: Vec3 = Vec3(x: 0, y: 0, z: 0)
+    /// 부모 오브젝트 id. 코퍼스 실측: 다중 카메라 씬(3706286085 8개 / 3737268876 11개)의 카메라는
+    /// **전부** parent 를 가지며 그 부모가 스크립트로 구동되는 노드다(소닉 추종 CameraBoneMoveMesh,
+    /// 젤다 Cam Link Root/Cam Look At Events). 즉 카메라 포즈가 오브젝트 자체가 아니라 부모 체인에
+    /// 있다 — 그래서 "카메라 오브젝트를 그대로 쓰기" 는 이들 씬에서 성립하지 않는다.
+    /// 반대로 단일 카메라 7씬(3D 원근)의 카메라는 parent 가 없다. 이 필드는 그 구분에 쓴다.
+    public var parent: Int? = nil
+    /// `visible` 키를 가지고 있었는가(값 무관). 다중 카메라 씬의 카메라는 이 키가 유저 프로퍼티
+    /// (bool/combo) 바인딩이라 활성 여부가 사용자 설정에 달려 있다 — 3737268876 은 `cameratype`
+    /// 기본값 "0"(Manual)이라 **11개 중 어느 것도 기본 활성이 아니다**. 무조건 활성인 카메라만
+    /// 골라내는 게이트로 쓴다.
+    public var hasVisibleBinding: Bool = false
     /// 칩 경로 스크립트 파일 참조 + 큐 모드(기본 random, sequential 1건).
     public var path: String? = nil
     public var queueMode: String = "random"
@@ -1359,6 +1374,12 @@ extension SceneDocument {
         cam.fov = float(obj["fov"]) ?? 50
         cam.zoom = float(obj["zoom"]) ?? 1
         cam.origin = vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0)
+        // angles/parent/visible 키 존재는 종전 전무했다 — 카메라 오브젝트의 방향과 계층이 파스에서
+        // 통째로 소실돼 있었다는 뜻이다. angles 는 라디안(scene.json 규약 — 스크립트 경계의 도(度)
+        // 변환과 무관하다). 필드 주석에 다중 카메라 실측 결론이 있다.
+        cam.angles = vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0)
+        cam.parent = intVal(obj["parent"])
+        cam.hasVisibleBinding = contentValue(obj["visible"]) != nil
         if let bind = obj["zoom"] as? [String: Any], let a = PropertyAnimation.parse(bind) {
             cam.zoomAnimation = a
         }
