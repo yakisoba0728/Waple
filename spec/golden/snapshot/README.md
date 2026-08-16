@@ -24,6 +24,12 @@
 | 완전 검정 프레임 | 0장 |
 | 캡처 | `scripts/mac-session/rebaseline-golden.sh` · 각 217s / 204s · **커서 이동 후 재캡처 상이 0종** |
 
+⚠️ **`3706286085` 은 이 기준선에서도 잔여 비결정이 있다 — 상이 0종은 간헐성 덕에 운이 좋았던 것이다.**
+실행마다 50~80% 확률로 1~14 픽셀(채널당 최대 3)이 갈린다. 원인은 3D 메시 패스의 mip 보간이고
+정렬·핀·클리어로 고칠 수 있는 것이 아니다 — 전문은 `spec/golden/nondeterminism.json` →
+`oracle.nondet.meshMipLodResidual`, 재현은 `scripts/mac-session/probe-scene-repeat.sh`.
+이 씬의 strict 불일치 1건은 회귀 판정에서 그렇게 읽어야 한다.
+
 **왜 다시 떴는가**: `c69f93c`(MDLV 인덱스 폭이 정점 수를 따르게 한 수정) 때문이다. 종전 기준선
 `31fecaa` 는 그 수정 **이전**이라, u32 인덱스 메시를 가진 씬 2종에 대해 **파괴 렌더를 기준으로
 삼고 있었다**:

@@ -257,6 +257,80 @@ def main():
                                "pointerUV → 이펙트 유니폼 g_PointerPosition"),
                     specfmt.ev("file", "Sources/WapleCompat/SnapshotPipeline.swift:249-264",
                                "핀 목록에 포인터가 없다")]),
+
+        # 2026-08-16: 포인터 핀 이후에도 남은 잔여분. 위 항목들과 달리 이 값은 nondet-2026-08-01
+        # 캡처 세트에서 나오지 않는다 — 아래 수치는 probe-scene-repeat.sh(+ 일회성 렌더 계측)의
+        # 실측이라 여기 상수로 박아 둔다. 다시 재려면 그 스크립트를 돌릴 것.
+        specfmt.entry("oracle.nondet.meshMipLodResidual", {
+            "what": "포인터 핀(oracle.nondet.rootCause) 이후에도 남는 비결정이 있고, 그것은 "
+                    "**3D 메시 패스의 mip 보간**에서 나온다. 측정 대상은 재베이스라인을 막고 있던 "
+                    "3706286085 한 종이다 — 불안정 29종의 나머지는 이 항목으로 다시 재지 않았다",
+            "rate": {
+                "crossProcess": "같은 빌드로 별도 프로세스 6회 캡처 → 해시 3종"
+                                "(5d0f07a9a18cb886 ×4 / f112326396c7cf37 / 13fcdfb5354c1c3)",
+                "sameProcess": "매니페스트 selfMaxDiff(같은 프로세스 두 마운트의 최대차)가 6회 중 4회 "
+                               "비영(0,3,0,2,3,3) — 프로세스 간만이 아니라 **마운트 간**에도 흔들린다",
+                "sameMount": "같은 마운트에서 같은 t 를 20회 재렌더해도 흔들린다"
+                             "(FBX_Stage 만 그릴 때 40회 중 14회 상이) — 캡처 프로세스/마운트를 "
+                             "고정해도 남는다",
+                "magnitude": "화면 36,864 픽셀 중 1~14 픽셀, 채널당 최대 3. "
+                             "meanLuma 는 소수 6자리까지 동일(0.262582)",
+            },
+            "locus": {
+                "pass": "3D 메시 드로우. 메시 드로우만 건너뛰면 별도 프로세스 5회가 전부 "
+                        "비트동일(selfMaxDiff 0/5)",
+                "renderable": "meshRenderables[1] = FBX_Stage(u32 인덱스 43 서브메시). 다른 렌더어블만 "
+                              "그리면(0=Sky 단독, 2·3=RioSonic+BoostModel1, 4~8) 각각 5회 전부 "
+                              "비트동일이고, FBX_Stage 단독은 5회에 해시 2종이 나온다",
+                "minimalRepro": "FBX_Stage 서브메시 37 단독 = 재렌더 39회 전부 동일, 38 단독 = 39회 전부 "
+                                "동일, **37+38 동시 = 39회 중 35회 상이**(픽셀 (50,73) 하나, R 채널 ±1). "
+                                "37 은 그 픽셀을 아예 덮지 않는다"
+                                "(단독 렌더 시 클리어색, 깊이 = 클리어값 0x3F800000)",
+            },
+            "carrier": {
+                "what": "Mesh3DShaders 의 알베도 샘플러 `mip_filter::linear`(3중선형 보간)이 "
+                        "유일한 전달 경로다",
+                "measurement": "`mip_filter::linear` → `mip_filter::nearest` 로 바꾸면 전 씬 캡처 8회가 "
+                               "**해시 1종 · selfMaxDiff 0/8**(= 16 렌더 전부 비트동일). "
+                               "최소 재현(37+38)도 39/39 동일",
+                "reading": "LOD 의 소수부(두 mip 레벨 사이 보간 가중치)가 제출마다 같은 값으로 "
+                           "재현되지 않는다. 정수 레벨만 쓰면 그 흔들림이 픽셀에 도달하지 못한다",
+                "caution": "nearest 로 바꾸면 픽셀이 달라진다(해시 d371c607628c290e) — 이건 "
+                           "**원인 규명용 측정**이지 채택된 수정이 아니다. WE 의 mip 필터 규약은 "
+                           "정본에 확정된 바 없다(TexImage.mipChain 주석)",
+            },
+            "eliminated": {
+                "what": "GPU 에 들어가는 입력은 전부 비트동일함을 실측으로 확인했다 — "
+                        "CPU 측에는 흔들릴 것이 남아 있지 않다",
+                "cpuInputs": "5 프로세스 × 2 마운트에서 viewProj · 노드 월드행렬 17개 · "
+                             "Scene3DFrameUniform · 라이트 유니폼 · 섀도우 VP 48개 · 드로우콜별 "
+                             "MeshUniform 과 파이프라인 플래그(130줄) · 메시 정점/인덱스 버퍼 · "
+                             "텍스처 내용(**모든 mip 레벨**, WAPLE_BC_NATIVE=0 로 rgba8 복호해 판독) "
+                             "전부 해시 동일",
+                "depthBuffer": "깊이 버퍼 전체가 12 렌더에서 비트동일(1eb836ebae51b7d2) — "
+                               "깊이 테스트 승자가 갈리는 것이 아니라 **이긴 표면의 색**이 갈린다",
+                "passes": "섀도우 아틀라스 비트동일(de6b3764ffe22325, 8 마운트) · 섀도우를 꺼도 재현 · "
+                          "파티클/빌보드/블룸/번역 이펙트를 각각 꺼도 재현 · finalizeScene 은 이 씬에서 "
+                          "항등(3D 패스 출력 = 최종 출력)",
+                "knobs": "3D 패스 뎁스 storeAction 을 .store 로 강제해도 재현(8회 해시 3종) · "
+                         "풀 텍스처를 할당 직후 0으로 채워도 재현(8회 해시 3종)",
+                "validation": "MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=1 로 떠도 위반 0건 — "
+                              "범위 밖 접근이나 미바인딩이 아니다",
+                "dictionaryOrder": "딕셔너리/집합 순회 순서는 원인이 아니다. Swift 의 해시 시드는 "
+                                   "**프로세스 수명 동안 고정**이라 같은 프로세스 안 두 마운트가 갈리는 "
+                                   "것을 설명하지 못하고, 실제로 위 CPU 입력 해시가 전부 동일하다. "
+                                   "렌더 순서에 정렬을 넣는 수정은 이 결함에 무효다",
+            },
+            "consequence": "rebaseline-golden.sh 의 '전 씬 비트동일' 게이트는 이 씬에서 실행마다 "
+                           "50~80% 확률로 걸린다. 게이트를 약화하는 것과 렌더 출력을 바꾸는 것"
+                           "(mip 필터) 중 하나를 고르기 전에는 재베이스라인이 확률에 기댄다",
+            "crossRef": "oracle.nondet.rootCause",
+        }, "확정", [specfmt.ev("script", "scripts/mac-session/probe-scene-repeat.sh",
+                               "씬 1종을 별도 프로세스로 N회 떠서 해시 종수·selfMaxDiff 재현률을 낸다"),
+                    specfmt.ev("file", "Sources/WapleRender/Mesh3DShaders.swift:482",
+                               "mf_main 의 알베도 샘플러 선언 — mip_filter::linear(전달 경로)"),
+                    specfmt.ev("file", "Sources/WapleRender/SceneRenderer3D.swift:1548",
+                               "encode3D 의 draw3DOrder 루프 — 흔들리는 드로우가 사는 곳(FBX_Stage)")]),
     ]
 
     specfmt.dump(specfmt.doc("scripts/spec/measure_nondeterminism.py", entries),
