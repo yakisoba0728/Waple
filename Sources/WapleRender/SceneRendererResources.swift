@@ -1318,7 +1318,10 @@ extension SceneRenderer {
             // 소비). 종전엔 어디서도 읽지 않아 저작자가 숨긴 파티클 시스템이 항상 렌더됐다.
             g.initialVisible = sp.visible
             if let src = sp.visibleScript {
-                g.visibleEngine = makeScriptEngine(src, scriptPropsJSON: sp.visibleScriptProps)
+                // detachedLayer: 파티클은 thisScene.layers 디스크립터에 없다 — 엔진 전용 thisLayer 를
+                // 줘야 `thisLayer.pause()`(WE IParticleSystem) 상태가 이 시스템에만 묶인다.
+                g.visibleEngine = makeScriptEngine(src, scriptPropsJSON: sp.visibleScriptProps,
+                                                   detachedLayer: true)
             }
             // REFRACT: 노멀맵(textures[1]) 로드 + refractAmount. 실패 시 refract 미설정 → identity 폴백(무크래시).
             if let mat = def.material, mat.refract, let normalName = mat.normalTextureName,

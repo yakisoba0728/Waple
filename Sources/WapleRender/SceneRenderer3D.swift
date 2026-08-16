@@ -1992,7 +1992,10 @@ extension SceneRenderer {
         var drawn = 0, skipInvis = 0, skipParent = 0, skipEmpty = 0
         for idx in particleSystems.indices.sorted(by: { particleSystems[$0].order < particleSystems[$1].order }) {
             let sys = particleSystems[idx]
-            guard sys.visible3D else { skipInvis += 1; continue }  // 정적 visible=false(스크립트 미평가 — ponytail).
+            // 정적 visible=false(스크립트 미평가 — ponytail). 3D 경로는 파티클 visible 스크립트를 아예
+            // 평가하지 않으므로 WE thisLayer.play/pause 방출 게이트도 여기선 미배선이다(2D 전용 —
+            // particleScriptVisible 참조). 실물 3737268876(rainfall/rain_impact)이 이 갭에 해당한다.
+            guard sys.visible3D else { skipInvis += 1; continue }
             var pWorld = matrix_identity_float4x4
             if let pid = sys.parent3D {
                 guard let pw = Scene3DMath.worldMatrix(id: pid, nodes: nmap), pw.visible else { skipParent += 1; continue }

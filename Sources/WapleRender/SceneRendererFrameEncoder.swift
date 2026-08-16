@@ -708,6 +708,10 @@ extension SceneRenderer {
                                 displayTextures: [MTLTexture],
                                 textTextures: [MTLTexture?] = [],   // F741(S-13): 텍스트 이펙트 적용 표시 텍스처(옵션)
                                 particleSnapshot: (Int) -> [Particle],
+                                // 파티클 visible 을 호출자가 **이미** 평가했을 때의 조회 클로저(캡처 경로 —
+                                // 방출 게이트를 웜업 스텝 전에 확정해야 해서 먼저 평가한다). nil = 여기서 평가
+                                // (라이브 draw — 종전 경로 그대로). 스크립트 프레임당 1회 평가 계약 유지용.
+                                particleVisible: ((Int) -> Bool)? = nil,
                                 camOffset: inout SIMD2<Float>, aspectScale: inout SIMD2<Float>) -> MTLRenderCommandEncoder? {
         var enc = enc
         var i = 0
@@ -728,7 +732,8 @@ extension SceneRenderer {
             // E1(④): 2D 파티클 visible(정적+스크립트) 게이트 — 레이어/텍스트와 동일 규약으로 스크립트를
             // 먼저 평가(shared 사이드이펙트 보존)한 뒤 거짓이면 draw 스킵. 종전엔 이 검사가 전무해
             // 저작자가 숨긴 파티클 시스템이 항상 렌더됐다.
-            if item.kind == .particle, !particleScriptVisible(item.idx, time: time) {
+            if item.kind == .particle,
+               !(particleVisible?(item.idx) ?? particleScriptVisible(item.idx, time: time)) {
                 i += 1
                 continue
             }
@@ -1571,6 +1576,10 @@ extension SceneRenderer {
         let cur = scriptParticleVisible[idx] ?? particleSystems[idx].initialVisible
         let v = engine.evaluateBool(current: cur) ?? cur
         scriptParticleVisible[idx] = v
+        // WE IParticleSystem.play/pause/stop — 같은 스크립트가 visible 반환과 **별개로** 방출을 켜고
+        // 끈다(실물 3690417937 bubbleclick: `return value` 로 visible 은 늘 true 인 채 클릭 여부로
+        // play/pause 만 토글한다). 스텝 직전에 sim 으로 옮겨진다 — 호출부 참조.
+        if let playing = engine.layerPlaying { scriptParticleEmissionPaused[idx] = !playing }
         return v
     }
 

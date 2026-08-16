@@ -28,6 +28,25 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(b[0].pos.x, 20, accuracy: 0.001)
     }
 
+    /// emissionPaused 계약(WE `thisLayer.pause()` = IParticleSystem.pause 의 결선 대상): 방출만 멈추고
+    /// 기존 파티클의 적분·노화는 계속돼 수명대로 빠진다. "시뮬레이션 통째 정지"가 아니다 — 얼려버리면
+    /// 실물 3737268876 rainfall 이 pause 될 때 빗줄기가 공중에 멈춰 선다. 종전엔 이 필드가 internal 이라
+    /// 부모 sim(고아/원샷 자식) 외에는 세울 수 없었고, 스크립트 play/pause 는 결선 자체가 없었다.
+    func testEmissionPausedStopsSpawningButKeepsIntegrating() {
+        var sim = ParticleSimulator(def: linearDef(lifetime: 3, maxCount: 8), seed: 1)
+        _ = sim.step(1.0)
+        XCTAssertEqual(sim.liveCount, 8, "정상 방출")
+        sim.emissionPaused = true
+        let after = sim.step(1.0)
+        XCTAssertEqual(sim.liveCount, 8, "pause 후 신규 방출 없음")
+        XCTAssertEqual(after[0].pos.x, 20, accuracy: 0.001, "기존 파티클은 계속 움직여야(정지 아님)")
+        _ = sim.step(3.0)
+        XCTAssertEqual(sim.liveCount, 0, "수명이 다하면 드레인돼 비어야")
+        sim.emissionPaused = false
+        _ = sim.step(1.0)
+        XCTAssertEqual(sim.liveCount, 8, "play 로 되돌리면 방출 재개")
+    }
+
     func testVelocityInitializerMovesWithoutMovementOperator() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],

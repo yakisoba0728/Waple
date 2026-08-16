@@ -372,6 +372,9 @@ public final class TextScriptEngine {
     private let applyUserPropertiesFn: JSValue?
     private var didCallInit = false
     private var didApplyUserProperties = false
+    /// 이 엔진의 스크립트가 본 `thisLayer` 객체 — layerPlaying 이 여기서 __waplePlaying 을 읽는다.
+    /// 공유 컨텍스트는 IIFE 가 되돌려주는 값, 단독 컨텍스트는 전역 thisLayer.
+    private var thisLayerValue: JSValue?
     /// Generic event hooks only. Lifecycle functions have dedicated storage and gates.
     private var hookFns: [String: JSValue] = [:]
 
@@ -439,6 +442,8 @@ public final class TextScriptEngine {
         for name in Self.eventHookNames {
             if let f = ctx.objectForKeyedSubscript(name), f.isObject { hookFns[name] = f }
         }
+        // 단독 컨텍스트는 심의 전역 thisLayer 가 곧 이 엔진 전용(컨텍스트가 엔진당 1개라 공유 없음).
+        thisLayerValue = ctx.objectForKeyedSubscript("thisLayer")
     }
 
     /// 씬 공유 컨텍스트 모드: 스크립트를 IIFE 로 감싸 평가(전역 오염/update 이름충돌 방지)하고
@@ -448,8 +453,11 @@ public final class TextScriptEngine {
     /// currentLayerIndex(F709/S-34): thisLayer 를 스크립트가 붙은 오브젝트 자체로 직결하는 디스크립터
     /// 인덱스 — 중복명/묪명 레이어에서 이름 조회는 첫 매치로 오바인딩된다(WE 계약은 객체 자체 바인딩).
     /// nil 이면 종전 이름 조회 폴터(무회귀).
+    /// detachedLayer: thisScene.layers 에 실물이 없는 오브젝트(파티클 시스템)의 스크립트 — 이 엔진
+    /// 전용 thisLayer 심을 새로 만든다(__wapleDetachedLayer 주석 참조). 기본 false = 종전 경로.
     public init?(script: String, scene: SceneScriptContext, currentLayerName: String? = nil,
-                 currentLayerIndex: Int? = nil, scriptPropsJSON: String? = nil) {
+                 currentLayerIndex: Int? = nil, scriptPropsJSON: String? = nil,
+                 detachedLayer: Bool = false) {
         guard Self.passesPracticalSafetyChecks(script) else { return nil }
         let ctx = scene.context
         context = ctx
@@ -469,14 +477,21 @@ public final class TextScriptEngine {
             .joined(separator: ", ")
         let layerArg = currentLayerName.map(Self.javascriptStringLiteral) ?? "null"
         let layerIndexArg = currentLayerIndex.map(String.init) ?? "null"
+        let layerExpr = detachedLayer
+            ? "__wapleDetachedLayer(\(layerArg))"
+            : "__wapleLayerForScript(\(layerArg), \(layerIndexArg))"
+        // __wapleThisLayerOut: 스크립트가 **실제로 본** thisLayer 를 되돌려받는다(스크립트가 지역
+        // thisLayer 를 재대입해도 원본을 잃지 않게 인자를 그대로 내보낸다). layerPlaying 이 이 객체의
+        // __waplePlaying 을 읽는다.
         let wrapped = """
         (function(__wapleThisLayer){
         var __wapleGlobal = Function('return this')();
         var thisLayer = __wapleThisLayer || __wapleGlobal.thisLayer;
+        var __wapleBoundLayer = thisLayer;
         var thisObject = thisLayer;
         \(cleaned)
-        ;return { \(exports) };
-        })(__wapleLayerForScript(\(layerArg), \(layerIndexArg)))
+        ;return { \(exports), __wapleThisLayerOut: __wapleBoundLayer };
+        })(\(layerExpr))
         """
         Self.injectScriptPropOverrides(context, json: scriptPropsJSON)
         scriptPropOverridesSnapshot = Self.currentScriptPropOverrides(context)   // F475
@@ -492,6 +507,8 @@ public final class TextScriptEngine {
             for name in Self.eventHookNames {
                 if let f = out.objectForKeyedSubscript(name), f.isObject { hookFns[name] = f }
             }
+            let bound = out.objectForKeyedSubscript("__wapleThisLayerOut")
+            thisLayerValue = (bound?.isObject == true) ? bound : nil
         } else {
             updateFn = nil
             initFn = nil
@@ -501,6 +518,15 @@ public final class TextScriptEngine {
 
     /// update 함수 보유 여부(false = 사이드이펙트 전용 스크립트 — evaluate 계열은 항상 nil).
     public var hasUpdate: Bool { updateFn != nil }
+
+    /// WE `thisLayer.play()/pause()/stop()` 이 남긴 재생 상태(__makeLayer 의 __waplePlaying).
+    /// 파티클 오브젝트의 visible 스크립트에서만 소비된다 — 호출자가 ParticleSimulator.emissionPaused
+    /// 로 옮긴다. thisLayer 를 못 잡았거나 플래그가 없으면 nil(= 판단 보류, 호출자는 재생 유지).
+    /// 스크립트가 한 번도 안 부르면 기본 true 라 무회귀.
+    public var layerPlaying: Bool? {
+        guard let v = thisLayerValue?.objectForKeyedSubscript("__waplePlaying"), v.isBoolean else { return nil }
+        return v.toBool()
+    }
 
     /// export 된 이벤트 훅 이름들(update 제외). 비어 있으면 이벤트 배달 대상 아님.
     public var hookNames: Set<String> { Set(hookFns.keys) }
@@ -1716,9 +1742,43 @@ public final class TextScriptEngine {
             // 반환(임의 체인 호출 안전 — 실 비디오/파티클 연결은 렌더 경로 책임, 보류).
             getVideoTexture: function() { return __noopProxy(); },
             getParticleSystem: function() { return __noopProxy(); },
-            emitParticles: function() { return this; }
+            emitParticles: function() { return this; },
+            // ILayer.play/pause/stop — WE 의 ILayer 는 인터페이스 **합집합**이고(IObject/IImageLayer/
+            // ISoundLayer/IEffectLayer/ITextLayer/IParticleSystem/IModel/ICamera), 이 트리오는
+            // IParticleSystem 과 ISoundLayer 쪽 멤버다(spec/engine/script-api.json 의 등록자
+            // 0x14024cb00 = emitParticles/instance/isPlaying/pause/play/stop/visible,
+            // 0x1401f7090 = isPlaying/pause/play/stop/volume). 즉 "무엇이 멈추는가"는 그 레이어의
+            // 실제 종류가 정한다.
+            //   · 파티클 레이어 → **방출 게이트**. __waplePlaying 을 네이티브(TextScriptEngine.layerPlaying)가
+            //     읽어 ParticleSimulator.emissionPaused 로 옮긴다. 코퍼스 실측: 파티클 visible 스크립트
+            //     36건/7씬 중 thisLayer 로 건드리는 멤버가 play/pause **뿐**이다(다른 멤버 0건).
+            //   · 사운드 레이어 → __makeSoundLayer 가 이 셋을 실 트랜스포트로 덮어쓴다(기존 배선).
+            //   · 그 외(이미지/텍스트/모델) → 플래그만 남는 no-op. WE 에도 이 레이어 종류엔 트리오가
+            //     없으므로 결선할 대상 자체가 없다. 예외로 죽지 않게 하는 것이 여기서의 전부다.
+            // stop() 이 pause() 와 같은 이유: WE 의 트리오 관례상 stop 은 "정지 + 리셋(기존 파티클 소거)"
+            // 일 가능성이 크지만 그 리셋 부분은 미확증이고 코퍼스 파티클 레이어에 stop() 호출이 0건이라
+            // 재현할 근거가 없다(사운드 레이어 3씬만 stop 을 쓴다 — 그건 위 트랜스포트가 처리). 확증된
+            // "적어도 멈춘다"까지만 구현한다.
+            __waplePlaying: true,
+            play: function() { this.__waplePlaying = true; return this; },
+            pause: function() { this.__waplePlaying = false; return this; },
+            stop: function() { this.__waplePlaying = false; return this; },
+            isPlaying: function() { return this.__waplePlaying; }
         };
         return layer;
+    }
+    // 파티클처럼 thisScene.layers 에 없는 오브젝트의 스크립트 전용 thisLayer — 디스크립터 배열은
+    // 이미지 레이어 + 텍스트만 담으므로(SceneRenderer.sceneScriptLayers) 파티클은 인덱스로 직결할
+    // 수단이 없고, 종전엔 그런 스크립트의 thisLayer 가 전역 기본값(layers[0], **남의 레이어**)이었다.
+    // 엔진마다 새 객체를 주면 play/pause 상태가 파티클 시스템별로 격리된다(공유 객체면 한 씬의 두
+    // 파티클이 같은 플래그를 밟는다 — 3737268876 이 실제로 그 형태다).
+    // 디스크립터 배열에 파티클을 끼워 넣는 방향은 택하지 않았다: 그 인덱스는 렌더러 read-back
+    // (readBackScriptLayerState/pushLiveSceneLayers, F723/F743)이 doc.layers 인덱스로 직접 참조하는
+    // 계약이라 한 칸만 밀려도 다른 레이어에 값이 적용된다.
+    function __wapleDetachedLayer(name) {
+        var l = __makeLayer();
+        if (typeof name === 'string') { l.name = name; }
+        return l;
     }
     function __makeRootLayer() {
         var root = {
@@ -1746,7 +1806,13 @@ public final class TextScriptEngine {
             getEffect: function() { return __noopProxy(); },
             getVideoTexture: function() { return __noopProxy(); },        // E1(⑤)
             getParticleSystem: function() { return __noopProxy(); },
-            emitParticles: function() { return root; }
+            emitParticles: function() { return root; },
+            // __makeLayer 의 트리오와 표면을 맞춘다(getParent() 반환값에 호출해도 TypeError 가 안 나게).
+            // 루트는 파티클도 사운드도 아니라 결선 대상이 없다 — 순수 no-op.
+            play: function() { return root; },
+            pause: function() { return root; },
+            stop: function() { return root; },
+            isPlaying: function() { return false; }
         };
         root.parent = root;
         return root;

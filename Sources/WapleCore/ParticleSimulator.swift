@@ -108,7 +108,10 @@ public struct ParticleSimulator {
     private var nextUID = 1
     /// 자식 인스턴스 제어(부모 sim 이 설정): 스폰 위치 오프셋 / 방출 정지(고아·원샷).
     var emitOrigin = SIMD3<Float>(0, 0, 0)
-    var emissionPaused = false
+    /// 방출 정지(적분·노화는 계속 — 기존 파티클은 수명대로 드레인). 부모 sim 이 고아/원샷 자식에
+    /// 쓰던 채널이고, WE `thisLayer.pause()`(IParticleSystem.pause) 결선도 같은 의미라 렌더러가
+    /// 밖에서 세울 수 있게 public 이다 — 가시성 폭만 넓혔고 동작은 불변.
+    public var emissionPaused = false
     /// 누적 시간이 방출 게이트(def.startTime)를 통과했는가 — 원샷 자식의 fired 판정(F432).
     var reachedStartTime: Bool { time >= def.startTime }
     /// 라이브 오디오 스펙트럼(렌더러가 매 프레임 주입). nil/무신호(silent) = 오디오반응 스킵 → 기존 rate.

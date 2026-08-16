@@ -160,6 +160,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// E1(④): 2D 파티클 visible 스크립트의 최근 평가값(particleSystems 인덱스 → 표시 여부).
     /// scriptVisible/scriptTextVisible 과 별개 인덱스 공간(파티클은 별도 배열).
     var scriptParticleVisible: [Int: Bool] = [:]
+    /// WE `thisLayer.pause()`(IParticleSystem.pause) 방출 게이트 — visible 스크립트가 매 평가마다
+    /// 남기는 재생 상태(particleSystems 인덱스 → 방출 정지 여부). 스텝 직전에 ParticleSimulator.
+    /// emissionPaused 로 옮긴다(라이브 draw 는 particleSnapshot 클로저, 캡처는 웜업 루프 앞).
+    /// 항목 부재 = 스크립트 미보유 또는 미호출 → 방출 유지(무회귀).
+    var scriptParticleEmissionPaused: [Int: Bool] = [:]
     /// C④: 퍼펫 animationlayers 캐스케이드 중 rate 가 스크립트로 매프레임 재평가되는 레이어의 dt 적분
     /// 누적 위상(GPULayer.uid → 캐스케이드 순서 배열, 인덱스는 eff/resolved 와 동일). 레이어 수 변경
     /// (visible 토글로 캐스케이드 구성이 바뀜) 시 길이 불일치로 자동 무효화(재시딩).
@@ -171,14 +176,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 이벤트 훅(cursorClick/media*Changed)을 export 한 엔진은 배달 대상으로 등록.
     /// F743(S-34): currentLayerIndex = thisScene.layers 디스크립터 인덱스(doc.layers+doc.texts 순서) —
     /// thisLayer 를 스크립트 소유 오브젝트 자체로 직결(중복명/묘명 오바인딩 해소). nil = 종전 이름 조회.
+    /// detachedLayer: 파티클처럼 thisScene.layers 에 실물이 없는 오브젝트 — 엔진 전용 thisLayer 심을
+    /// 준다(TextScriptEngine.__wapleDetachedLayer 주석). 종전엔 그런 스크립트의 thisLayer 가 전역
+    /// 기본값(layers[0])이어서 play/pause 상태가 남의 레이어와 뒤섞였다.
     func makeScriptEngine(_ src: String, layerName: String? = nil, currentLayerIndex: Int? = nil,
-                          scriptPropsJSON: String? = nil) -> TextScriptEngine? {
+                          scriptPropsJSON: String? = nil, detachedLayer: Bool = false) -> TextScriptEngine? {
         // 오디오 소비 스크립트 게이팅: 참조가 보이면 hasAudio 승격 → mount 말미의 provider 기동
         // (기존엔 셰이더 오디오 효과만 켰다). 모든 스크립트 로드는 mount 의 기동 검사보다 앞선다.
         if !hasAudio, Self.scriptWantsAudio(src) { hasAudio = true }
         let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName,
                                                         currentLayerIndex: currentLayerIndex,
-                                                        scriptPropsJSON: scriptPropsJSON) }
+                                                        scriptPropsJSON: scriptPropsJSON,
+                                                        detachedLayer: detachedLayer) }
             ?? TextScriptEngine(script: src, scriptPropsJSON: scriptPropsJSON)
         guard let engine else { return nil }
 
@@ -1814,6 +1823,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                 // 라이브 오디오반응: 신호 주입(무음이면 sim 이 스킵). 헤드리스 캡처는
                                                 // captureFrames 의 별도 로컬 sims 라 이 경로 밖 → 무음 A/B 비트동일 유지.
                                                 if hasAudio { particleSystems[idx].sim.currentAudio = currentSpectrum }
+                                                // WE thisLayer.play/pause 방출 게이트 — 이 클로저는 encodeDrawPlan 이
+                                                // particleScriptVisible(=평가) 직후에 부르므로 같은 프레임에 반영된다.
+                                                particleSystems[idx].sim.emissionPaused = scriptParticleEmissionPaused[idx] ?? false
                                                 return particleSystems[idx].sim.step(dt)
                                             },
                                             camOffset: &camOffset, aspectScale: &aspectScale) else {
@@ -1918,6 +1930,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 항상 클리어해 정의된 상태에서 시작(결정론 계약 — 누적 시작점이 미정의 내용이면 A/B 발산).
         var captureAccPrimed = false
         for t in times.sorted() {
+            // 파티클 visible 스크립트를 **웜업 스텝 앞에서** t 로 1회 평가한다 — 그 스크립트가 같이
+            // 남기는 WE thisLayer.play/pause 방출 게이트가 0→t 리플레이에 반영돼야 하기 때문이다.
+            // (라이브 draw 는 encodeDrawPlan 이 시스템별로 "평가 → 스텝" 순이라 이미 같은 순서다.
+            //  캡처는 웜업이 프레임 앞에 통째로 있어 여기서 순서를 맞춰준다.) 평가 결과는
+            //  particleVisible 로 넘겨 encodeDrawPlan 이 재평가하지 않게 한다(프레임당 1회 계약).
+            let capturedVisible = particleSystems.indices.map { particleScriptVisible($0, time: t) }
+            for i in rootIdxs { sims[i].emissionPaused = scriptParticleEmissionPaused[i] ?? false }
             while simTime < t - 1e-4 { let s = min(dt, t - simTime); for i in rootIdxs { _ = sims[i].step(s) }; simTime += s }
             guard let cb = queue.makeCommandBuffer() else { continue }
             // 효과 패스(오디오 포함, currentSpectrum 사용) 적용한 표시 텍스처.
@@ -1962,6 +1981,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                                         return sims[root].descendantDisplay(path: path)
                                                     }
                                                     return sims[idx].step(0)
+                                                },
+                                                particleVisible: { idx in
+                                                    idx < capturedVisible.count ? capturedVisible[idx] : true
                                                 },
                                                 camOffset: &camOff, aspectScale: &asp) else { cb.commit(); continue }
             finalEnc.endEncoding()
@@ -2045,6 +2067,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         scriptVisible.removeAll()
         scriptTextVisible.removeAll()
         scriptParticleVisible.removeAll()
+        // 형제 dict 와 같은 이유(마운트 재사용 stale 방지) + 이쪽은 더 고약하다: 스크립트 **없는**
+        // 파티클은 이 항목을 다시 쓰지 않으므로, 남아 있으면 다음 씬의 같은 인덱스가 영구 무방출로 굳는다.
+        scriptParticleEmissionPaused.removeAll()
         loggedDrawFailureKeys.removeAll()
         puppetCascadePhase.removeAll(); puppetCascadeLastTime.removeAll()  // C④: 마운트 재사용 stale 위상 방지
         additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
