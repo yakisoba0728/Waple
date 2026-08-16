@@ -93,7 +93,21 @@ extension SceneRenderer {
             // W1-yaxis: 파티클 sim 로컬은 y-up(눈/비 하강=음의 y). 씬 픽셀도 이제 y-up 이라 부호
             // 일치(종전엔 씬을 y-down 으로 오구현해 `−` 로 상쇄) — 위치·속도(아래 wvy) 동일 부호.
             let wy = sys.origin.y + sys.scale.y * p.pos.y
-            let sizePx = p.size * sys.scale.x
+            // 오브젝트 scale 은 **위치·이미터 기하에만** 곱한다. 스프라이트 크기에는 안 곱한다.
+            //
+            // 근거 ①(WE 평문 셰이더, 1차): `common_particles.h:54-58` 의 ComputeParticlePosition 은
+            // 쿼드를 `positionAndSize.w`(=size) 로만 전개하고, 그 공간에 `g_ModelViewProjectionMatrix`
+            // 를 곱한다(genericparticle.vert:88-89). 즉 엔진은 오브젝트 변환을 **위치에 미리 구워**
+            // 업로드하고 M 에는 스케일이 없다 — 크기는 배율을 안 탄다.
+            // 근거 ②(WE 실기 A/B): 3465215190 obj 2432(scale 3.145)를 네 변종으로 재패킹해 대조하면
+            // 위치×s·크기×1 이 정렬후 corr **0.987**(노이즈 바닥 0.997 = 구별불가)로 최고다.
+            // 종전(위치×s·크기×s)은 0.812, 크기에만 곱하면 0.598 로 최악. 3299228616 Fireflies 는
+            // WE 광점 등가 지름 13~53px 인데 종전 코드가 88~240px 을 냈다(4~8배).
+            // 반례로 보이던 둘은 반례가 아니다 — `fairy_glow_large`(scale 50)는 부모가 0.01 이라
+            // 월드 0.5 이고 3D 경로이며, `樱花`(scale 20)는 이미터가 캔버스 밖으로 나가 아무것도
+            // 안 그린다(중화 캡처 차분 0픽셀).
+            // ⚠️ 3D 경로(SceneRenderer3D.swift:2102 colScale)는 **미측정이다.** 같이 고치지 마라.
+            let sizePx = p.size
             // 스프라이트시트(TEXS): mapsequence 는 스폰 확정 시퀀스, 아니면 age/frametime gif 애니.
             // UV = 프레임 서브렉트의 4코너(TL,TR,BR,BL). 회전 프레임이면 코너 배정을 rotationQuarters 만큼
             // 회전(비회전 q=0 은 종전과 byte-identical — 코퍼스 무회귀).
@@ -183,7 +197,7 @@ extension SceneRenderer {
         if (maxX - minX) + (maxY - minY) < 1 { return false }
 
         let n = pts.count
-        let hw = max(0.5, p.size * sys.scale.x * 0.5)  // 리본 반폭(px)
+        let hw = max(0.5, p.size * 0.5)  // 리본 반폭(px) — scale 미적용(위 appendQuad 근거와 동일)
         let r = p.color.x, g = p.color.y, b = p.color.z
         // 접선(중앙차분, 끝은 편차). 0-길이는 직전 유효 접선 계승(NaN 방지 — normalizeSafe 미러).
         var lastT: (Float, Float) = (1, 0)
