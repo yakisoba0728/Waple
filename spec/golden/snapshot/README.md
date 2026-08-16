@@ -6,7 +6,44 @@
 
 여기가 그 안전망이다. 변경이 무엇을 바꿨는지 판정하는 기준이 된다.
 
-## `baseline-618d16f` — **현행 기준선**(2026-08-16)
+## `baseline-7075b74` — **현행 기준선**(2026-08-16, 2차)
+
+판정은 이걸 기준으로 한다(`GoldenBaseline.currentLabel`). `baseline-81098bb` 는 이식 전 이력이다.
+
+| 항목 | 값 |
+| --- | --- |
+| gitSHA | `7075b74` (main, Sources 청결) |
+| 빌드 | **release** |
+| entries / empties / failures | **170 / 0 / 0** |
+| meanLuma 범위 | 0.00149 ~ 0.86892 |
+| 셀프체크 비결정 | 0종 (⚠️ 아래 경고) |
+| 완전 검정 프레임 | 0장 |
+| 캡처 | `rebaseline-golden.sh` · 커서 이동 후 재캡처 **상이 0종** |
+
+**왜 다시 떴는가**: 2026-08-16 오후~밤의 결함 수정 9건이 의도적으로 픽셀을 바꿨다 —
+파티클 오브젝트 scale(위치에만 곱한다) · 가시성 전파에 파티클 포함 · `thisLayer.play/pause/stop` ·
+`angles` 스크립트 단위(도) · 3D 카메라를 카메라 오브젝트로 · 레거시 레인 스페큘러 제거 ·
+DIRECTDRAW 알파 이중 곱 제거. 근거는 각 커밋과 `docs/we-parity-2026-08-16.md` 에 있다.
+
+### ⚠️ `3706286085` 은 이 기준선에서 `deterministic=true` 로 박혔지만 실제로는 아니다
+
+이 씬은 **3D 메시 mip LOD 보간**이 제출마다 재현되지 않아 간헐적으로 1~2픽셀이 ±1~3 흔들린다
+(`spec/golden/nondeterminism.json` → `oracle.nondet.meshMipLodResidual`). 규명 근거:
+같은 프로세스·같은 마운트에서 20회 재렌더해도 갈리고, CPU 입력(유니폼·정점·인덱스·텍스처 전 mip·
+섀도우 아틀라스·**깊이 버퍼 전체**)은 비트동일하며, 서브메시 37·38 을 **각각 단독**으로 그리면
+39/39 동일한데 **둘을 같이 그리면 35/39 가 상이**하다. `mip_filter::nearest` 로 바꾸면 16렌더 전부
+비트동일해진다.
+
+즉 셀프체크가 `selfMaxDiff` 를 0 으로 기록할 확률이 절반쯤이고, **이 기준선은 그 절반에 걸린
+캡처다.** 따라서 `golden-gate.sh` 가 이 씬 하나를 `mean≈0.0x max≤3` 으로 간헐 FAIL 시킬 수 있다.
+**그건 회귀가 아니다** — `scripts/mac-session/probe-scene-repeat.sh` 로 반복 캡처해 확인하라.
+
+임계를 낮추거나 이 씬을 게이트에서 빼는 것으로 해결하지 마라. 근본 해결은 mip 필터 규약을
+WE 정본으로 확정하는 것이고, 그건 렌더 충실도 결정이라 별도 근거가 필요하다.
+
+---
+
+## `baseline-618d16f` — 이력(2026-08-16 1차, **HEAD 에 없음**)
 
 판정은 이걸 기준으로 한다(`GoldenBaseline.currentLabel`). 아래 `baseline-81098bb` 는 이력이다.
 
