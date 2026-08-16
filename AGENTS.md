@@ -54,7 +54,7 @@ swift run Waple                # 메뉴바 앱으로 실행
 
 테스트 수 **2,149** 는 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
 번들 합으로 세야 한다 — 클래스 단위 소계까지 더하면 6,000대로 부풀어 무의미해진다.
-`실행` 은 스킵을 포함하므로 **이 값은 코퍼스 유무와 무관하다**(아래 표에서 네 구성이 모두 2,149).
+`실행` 은 스킵을 포함하므로 **이 값은 코퍼스 유무와 무관하다**(아래 표에서 다섯 구성이 모두 2,149).
 종전 기준값 2,143 은 2026-08-01 실측이었고 2026-08-16 재측정으로 2,149 로 갱신됐다 —
 그 사이 테스트가 6개 늘었을 뿐 회귀가 아니다.
 
@@ -72,12 +72,13 @@ export WAPLE_BASE_ASSETS=/path/to/assets       # 미설정 시 ~/Downloads/wallp
 | 구성 | 실행 | 스킵 | 시간 | 출처 |
 | --- | --- | --- | --- | --- |
 | 코퍼스 있음(전량 460) | 2,149 | 2 | ~30분 | 실행수는 **추론**(정적 개수 = 축소 실측과 동일), 스킵 2 는 2026-08-01 실측 |
-| 코퍼스 있음(축소 38) | 2,149 | 9 | **~4.6분** | 2026-08-16 macOS 실측 (`--parallel --num-workers 6`, 아래 레시피) |
+| 코퍼스 있음(축소 38, release) | 2,149 | 9 | **162초** | 2026-08-16 실측 — `verify-plan-b12.sh` §5 (`swift test -c release`, 순차) |
+| 코퍼스 있음(축소 38, debug) | 2,149 | 9 | ~4.6분 | 2026-08-16 실측 (`--parallel --num-workers 6`, 아래 레시피) |
 | 코퍼스 없음 | 2,149 | 40 | ~110초 | 2026-08-16 macOS 실측 (`WAPLE_REAL_PKGS=/nonexistent/path swift test`, 2회 동일) |
 | CI (코퍼스 없음) | 2,149 | 47 | ~170초 | 2026-08-16 확인 — CI run `30934767197`(main @`4b2e1dd`, macos-26, 성공) 로그 |
 
 모든 구성 **실패 0**. `실행` 은 XCTest 의 `Executed N tests` 이고 **스킵을 포함한다** —
-그래서 스킵이 40/47/9 로 갈려도 네 구성이 전부 똑같이 2,149 를 낸다. 위 `~110초`는 증분 빌드까지
+그래서 스킵이 40/47/9 로 갈려도 다섯 구성이 전부 똑같이 2,149 를 낸다. 위 `~110초`는 증분 빌드까지
 포함한 명령 전체 벽시계이고 번들 실행 시간 합은 ~97초, CI 의 `~170초`는 로그의
 `in 170.403 seconds`(빌드 별도) 다.
 
@@ -95,8 +96,19 @@ export WAPLE_BASE_ASSETS=/path/to/assets       # 미설정 시 ~/Downloads/wallp
 #    APFS 클론(cp -Rc)이면 즉시 + 디스크 추가소비 0 이다.
 cp -Rc ~/Downloads/wallpaper_dev/backgrounds/<id> /tmp/corpus-mini/<id>   # × 38
 
-# 2) 병렬 실행. 순차 8.5분 → 4.6분 (WapleRenderTests 486초가 병목이라 여기서 벌린다)
+# 2) 병렬 실행. debug 순차 8.5분 → 4.6분 (WapleRenderTests 486초가 병목이라 여기서 벌린다)
 env WAPLE_REAL_PKGS=/tmp/corpus-mini swift test --skip-build --parallel --num-workers 6
+```
+
+**release 가 debug 보다 빠르다** — 축소 코퍼스는 BC1 디코드·캡처가 지배적이라 최적화가 그대로
+먹는다. 순차 release 가 162초로 debug 병렬(275초)보다 낫다. 빌드가 이미 release 로 warm 하면
+`--parallel` 없이 `swift test -c release` 만 써도 된다. `verify-plan-b12.sh` 를 통째로 돌릴
+때는 이 방식이 자동으로 적용된다(§5 가 release 다).
+
+```bash
+# 검증 스크립트 전체를 축소 코퍼스로 돌리는 법 — WAPLE_DEV_ROOT 하나만 갈아끼우면 된다.
+# (스크립트가 $ROOT/backgrounds·$ROOT/assets 를 export 하므로 그 레이아웃만 맞추면 된다)
+WAPLE_DEV_ROOT=/tmp/dev-root WAPLE_VERIFY_OUT=/tmp/verify-out bash scripts/mac-session/verify-plan-b12.sh
 ```
 
 **이 레시피로 확정되는 것과 안 되는 것을 구분할 것.**
@@ -136,8 +148,13 @@ TEX 디코드·밉체인, 실셰이더 GLSL→MSL 번역이다. **렌더러를 �
 
 ## CI
 
-`macos-26` 러너, 타임아웃 40분. `main` 푸시 · PR · `workflow_dispatch` 에서 돈다.
+`macos-26` 러너, 타임아웃 40분. **모든 브랜치의 푸시** · PR · `workflow_dispatch` 에서 돈다.
 문서만 바뀐 변경은 `paths-ignore` 로 스킵되지만, 코드가 하나라도 섞이면 정상 실행된다.
+
+`branches: [main]` 제한은 `e46e69d`(2026-08-02)에서 없앴다 — PR 없이 오래 사는 기능 브랜치
+(`feat/we-engine-port-design`)에 8커밋을 푸시하는 동안 CI 가 **조용히 한 번도 안 돌았고**,
+실패한 게 아니라 트리거 자체가 없어서 알려주는 신호도 없었다. 대신 concurrency 를
+`head_ref || ref` 로 묶어 PR 브랜치가 push·pull_request 두 이벤트로 두 번 타지 않게 한다.
 
 **로컬 통과 ≠ CI 통과.** CI 는 로컬과 다른 Xcode 를 쓰고, 이 리포에는 로컬에서는 통과하고
 CI 에서만 터진 실패 이력이 있다(`db90fc2` 타입체커 폭발, `14dcf72` Float 리터럴 추론,
