@@ -466,7 +466,7 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
                                      maskTextureName: nil, refract: false, refractAmount: 0.05,
                                      reflection: false, reflectivity: 0)
         let r = SceneRenderer()
-        r.assetBaseDir = baseDir
+        r.assetBaseRoots = [baseDir]
         let emptyPkg = try ScenePackage.parse(encodePkg([]))
         let built = r.buildCustomMeshShader(mat, package: emptyPkg, device: device)
         XCTAssertNil(built, "게이트 OFF 는 베이스 팩 전용 generic4 소스를 인정하면 안 됨(pkg 전용 정책 유지)")
@@ -499,7 +499,7 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
                                      maskTextureName: nil, refract: false, refractAmount: 0.05,
                                      reflection: false, reflectivity: 0)
         let r = SceneRenderer()
-        r.assetBaseDir = baseDir
+        r.assetBaseRoots = [baseDir]
         let emptyPkg = try ScenePackage.parse(encodePkg([]))
         let built = r.buildCustomMeshShader(mat, package: emptyPkg, device: device)
         XCTAssertNotNil(built, "게이트 ON + 화이트리스트(generic4) 는 베이스 팩 소스로 파이프라인을 빌드해야 함")
@@ -530,7 +530,7 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
                                      maskTextureName: nil, refract: false, refractAmount: 0.05,
                                      reflection: false, reflectivity: 0)
         let r = SceneRenderer()
-        r.assetBaseDir = baseDir
+        r.assetBaseRoots = [baseDir]
         let emptyPkg = try ScenePackage.parse(encodePkg([]))
         let built = r.buildCustomMeshShader(mat, package: emptyPkg, device: device)
         XCTAssertNil(built, "화이트리스트 밖 이름은 게이트 ON 이어도 베이스 팩 폴백을 타면 안 됨")

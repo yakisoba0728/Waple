@@ -12,7 +12,7 @@ final class SceneRendererPathFallbackTests: XCTestCase {
         try Data("inside".utf8).write(to: nested.appendingPathComponent("ok.bin"))
 
         let renderer = SceneRenderer()
-        renderer.assetBaseDir = base
+        renderer.assetBaseRoots = [base]
         let package = ScenePackage.assemble([])
 
         XCTAssertEqual(renderer.assetData("materials/ok.bin", package: package), Data("inside".utf8))
@@ -28,7 +28,7 @@ final class SceneRendererPathFallbackTests: XCTestCase {
         try Data("outside".utf8).write(to: parent.appendingPathComponent("secret.bin"))
 
         let renderer = SceneRenderer()
-        renderer.assetBaseDir = base
+        renderer.assetBaseRoots = [base]
         let package = ScenePackage.assemble([])
 
         XCTAssertNil(renderer.assetData("../secret.bin", package: package))
@@ -47,7 +47,7 @@ final class SceneRendererPathFallbackTests: XCTestCase {
         try fm.createSymbolicLink(at: base.appendingPathComponent("link"), withDestinationURL: outside)
 
         let renderer = SceneRenderer()
-        renderer.assetBaseDir = base
+        renderer.assetBaseRoots = [base]
         let package = ScenePackage.assemble([])
 
         XCTAssertNil(renderer.assetData("link/secret.bin", package: package))
@@ -88,7 +88,7 @@ final class SceneRendererPathFallbackTests: XCTestCase {
         )
         defer { try? FileManager.default.removeItem(at: base) }
         try Data("base".utf8).write(to: base.appendingPathComponent("materials/in-base.bin"))
-        renderer.assetBaseDir = base
+        renderer.assetBaseRoots = [base]
 
         XCTAssertEqual(
             renderer.resolveRequiredAsset(
@@ -124,8 +124,8 @@ final class SceneRendererPathFallbackTests: XCTestCase {
         )
         XCTAssertFalse(renderer.hasMissingRequiredSharedAssets)
 
-        renderer.assetBaseDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("waple-deleted-base-\(UUID().uuidString)", isDirectory: true)
+        renderer.assetBaseRoots = [FileManager.default.temporaryDirectory
+            .appendingPathComponent("waple-deleted-base-\(UUID().uuidString)", isDirectory: true)]
         XCTAssertNil(renderer.resolveRequiredAsset(
             ["materials/missing.tex", "missing.tex"], package: package, decode: { $0 }))
         XCTAssertTrue(renderer.hasMissingRequiredSharedAssets, "a selected but deleted base directory is a real miss")
@@ -158,7 +158,7 @@ final class SceneRendererPathFallbackTests: XCTestCase {
         try fm.createSymbolicLink(at: base.appendingPathComponent("link"), withDestinationURL: outside)
 
         let renderer = SceneRenderer()
-        renderer.assetBaseDir = base
+        renderer.assetBaseRoots = [base]
 
         XCTAssertNil(renderer.resolveRequiredAsset(
             ["link/secret.bin"],

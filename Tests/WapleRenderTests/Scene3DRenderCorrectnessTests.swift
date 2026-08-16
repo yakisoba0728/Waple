@@ -27,7 +27,7 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         try FileManager.default.createDirectory(at: base.appendingPathComponent("Materials/Models/Ship", isDirectory: true),
                                                 withIntermediateDirectories: true)
         try Data("base".utf8).write(to: base.appendingPathComponent("Materials/Models/Ship/Glow.JSON"))
-        renderer.assetBaseDir = base
+        renderer.assetBaseRoots = [base]
 
         XCTAssertEqual(renderer.quietAssetData("materials/models/ship/glow.json", package: ScenePackage.assemble([])),
                        Data("base".utf8))

@@ -38,7 +38,7 @@ public enum BaseAssetsSettings {
     /// 자동 탐지 후보의 WE 기본 에셋 팩 정합성(F471) — shaders/common.h 와 materials/ 디렉터리 모두
     /// 존재해야 한다. common.h 단독 검사는 우연히 같은 이름을 가진 무관 폴터(범용명 ~/Downloads/assets)를
     /// 기본 에셋 팩으로 오채택할 수 있다.
-    static func isValidBaseAssetsPack(_ url: URL) -> Bool {
+    public static func isValidBaseAssetsPack(_ url: URL) -> Bool {
         let fm = FileManager.default
         guard fm.fileExists(atPath: url.appendingPathComponent("shaders/common.h").path) else { return false }
         var isDir: ObjCBool = false

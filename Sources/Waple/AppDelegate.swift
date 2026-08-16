@@ -111,10 +111,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 공유 에셋 해석 결과를 시작 시 1회 남긴다 — 이게 비면 씬이 흰 화면으로 나온다.
         // 배포 산출물에서 동봉 에셋이 통째로 빠진 채 나간 적이 있어(v0.1.0-beta.3), 지원·검증
         // 양쪽에서 "무엇을 잡았는가" 를 바로 볼 수 있어야 한다.
-        let roots = BaseAssetsSettings.searchRoots
-        NSLog("%@", roots.isEmpty
-              ? "[Waple] base assets: **없음** — 씬이 흰 화면으로 그려진다(설정에서 지정 필요)"
-              : "[Waple] base assets: " + roots.map(\.path).joined(separator: " | "))
+        // 경로만 찍으면 안 된다 — 루트가 **잡혔다**와 그 루트가 **쓸모 있다**는 다르다. 동봉본이
+        // 포장에서 빠지거나 사용자가 엉뚱한 폴더를 지정하면 목록에는 뜨는데 shaders/common.h 가
+        // 없어 셰이더가 심볼 부재로 조용히 깨진다. 그래서 루트마다 유효 여부를 함께 남긴다.
+        let roots = SceneRenderer.resolvedAssetBaseRoots()
+        let valid = roots.filter { BaseAssetsSettings.isValidBaseAssetsPack($0) }
+        if roots.isEmpty {
+            NSLog("%@", "[Waple] base assets: **없음** — 씬이 흰 화면으로 그려진다(설정에서 지정 필요)")
+        } else {
+            let listed = roots.map { r in
+                (BaseAssetsSettings.isValidBaseAssetsPack(r) ? "ok " : "무효 ") + r.path
+            }.joined(separator: " | ")
+            NSLog("%@", "[Waple] base assets: 유효 \(valid.count)/\(roots.count) — " + listed)
+            if valid.isEmpty {
+                NSLog("%@", "[Waple] base assets: 유효한 루트가 하나도 없다 — "
+                      + "shaders/common.h 부재. 셰이더 #include 가 드롭돼 씬이 불완전하게 그려진다")
+            }
+        }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // 상태바 아이콘(w5d-tray) — 시스템 심볼 템플릿(라이트/다크 메뉴바 자동 적응) + 재생/정지/오류

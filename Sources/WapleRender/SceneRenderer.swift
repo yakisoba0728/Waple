@@ -932,7 +932,17 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var customLayerQuadInterleaved: MTLBuffer?
     var particleSystems: [GPUParticleSystem] = []
     var hasParticles = false
-    var assetBaseDir: URL?  // WE 공유 에셋 폴백 디렉터리(설정), 패키지에 없는 .tex 용
+    /// WE 공유 에셋 폴백 루트 — **우선순위 순**(사용자 지정/자동 탐지 → 앱 동봉본).
+    /// 패키지에 없는 `.tex`·셰이더 `#include`·이펙트 GLSL·머티리얼 JSON·폰트가 여기로 떨어진다.
+    ///
+    /// 종전엔 `baseAssetsDirectory` 단일 URL 이라 **동봉본이 이 경로에 닿지 않았다**. 동봉본은
+    /// `searchRoots` 에만 있었고 그건 `SceneDocument.parse(sharedAssetProbe:)` 한 곳에서만 쓰인다
+    /// — 즉 문서 파싱은 동봉본을 봤지만 셰이더 해석은 못 봤다. WE 미설치 머신에서 pkg 가 담지 않는
+    /// `common_*.h`(코퍼스 전수 0건 동봉)가 조용히 드롭돼 심볼 부재로 컴파일이 깨졌다.
+    var assetBaseRoots: [URL] = []
+
+    /// mount 가 심는 값과 같은 소스 — 배선이 어긋나지 않게 한 곳에서만 만든다.
+    public static func resolvedAssetBaseRoots() -> [URL] { BaseAssetsSettings.searchRoots }
 
     public private(set) var hasMissingRequiredSharedAssets = false
 
@@ -1156,7 +1166,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         guard let device = deviceOpt, let queue = queueOpt else { throw RendererError.unsupportedType }
         self.device = device
         self.queue = queue
-        self.assetBaseDir = BaseAssetsSettings.baseAssetsDirectory
+        self.assetBaseRoots = Self.resolvedAssetBaseRoots()
 
         // A2 HDR: 최종 클램프 파이프라인이 빌드돼야 sceneIsHDR 활성(실패 시 종전 LDR 폴백 = 무회귀).
         // 아래 파이프라인 생성보다 먼저 확정해야 accPixelFormat 이 float 로 잡힌다.

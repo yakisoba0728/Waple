@@ -104,7 +104,9 @@ extension SceneRenderer {
             NSLog("%@", "[Waple] rejected shared asset path: \(name)")
             return .rejected
         }
-        if let base = assetBaseDir {
+        // 루트를 우선순위대로 훑는다(사용자 설치본 → 동봉본). `.rejected` 는 **즉시 반환** —
+        // 이건 보안 판정이지 "이 루트에 없음"이 아니다(sharedAssetProbe(_:roots:) 와 같은 규약).
+        for base in assetBaseRoots {
             switch baseAssetURLProbe(for: name, root: base) {
             case .url(let url):
                 if let d = try? Data(contentsOf: url) {
@@ -903,7 +905,18 @@ extension SceneRenderer {
     /// assetData 의 조용한 버전: pkg→베이스에셋 조회하되 미스에 로그 없음(소스 프로브는 미스가 정상).
     func quietAssetData(_ name: String, package: ScenePackage) -> Data? {
         if let d = packageData(name, package: package) { return d }
-        if let base = assetBaseDir, let url = baseAssetURL(for: name, root: base) { return try? Data(contentsOf: url) }
+        // 다중 루트(사용자 설치본 → 동봉본). `.rejected` 는 즉시 nil — 경로 이탈을 다음 루트로
+        // 흘려보내면 거기서 성공할 수 있다(probeAssetData·sharedAssetProbe 와 같은 규약).
+        for base in assetBaseRoots {
+            switch baseAssetURLProbe(for: name, root: base) {
+            case .url(let url):
+                if let d = try? Data(contentsOf: url) { return d }
+            case .rejected:
+                return nil
+            case .missing:
+                break
+            }
+        }
         return nil
     }
 

@@ -134,7 +134,7 @@ Sources/
   WapleCompat/   Compatibility scan, snapshot capture/compare and performance profiling CLI harness
   WapleSaver/    Screensaver .saver bundle source (Objective-C — compiled directly by package-app.sh)
   WapleSnapshot/ Snapshot manifest schema and diff metrics (pure Foundation, unit-verifiable)
-Tests/           5 targets, 2,149 tests (synthetic units + real-corpus ground truth)
+Tests/           5 targets, 2,159 tests (synthetic units + real-corpus ground truth)
 scripts/         package-app.sh (app/screensaver bundle), window-id.swift (capture ID/bounds lookup),
                  make-icon.sh / make-icon.swift (app .icns), Waple.icns (generated)
 ```

@@ -90,7 +90,7 @@ fi
 echo "  번들별:"
 grep -A1 -E "Test Suite '.*\.xctest'.*(passed|failed)" "$OUT/full.log" 2>/dev/null     | grep -oE "Executed [0-9]+ tests?, with [0-9]+ failures?" | sed 's/^/    /'
 TESTS=$(grep -A1 -E "Test Suite '.*\.xctest'.*(passed|failed)" "$OUT/full.log" 2>/dev/null     | grep -oE "Executed [0-9]+ tests?" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
-echo "  번들 합: ${TESTS:-?}  (기준 2,149 — 2026-08-16 실측, 코퍼스 유무 무관. 종전 2,143)"
+echo "  번들 합: ${TESTS:-?}  (기준 2,159 — 2026-08-16 실측, 코퍼스 유무 무관. 종전 2,143)"
 
 hr; echo "5. 골든 — **바뀌어야 할 씬만** 바뀌었는가"; hr
 PRE="${WAPLE_PRE_BASELINE:-}"
