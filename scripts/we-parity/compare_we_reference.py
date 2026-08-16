@@ -147,7 +147,7 @@ def metrics(a, b):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("we_dir", help="WE 스크린샷 디렉터리(<name>_<sceneid>_<tag>.png)")
-    ap.add_argument("--baseline", default="spec/golden/snapshot/baseline-31fecaa/thumbs")
+    ap.add_argument("--baseline", default="spec/golden/snapshot/baseline-618d16f/thumbs")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
 

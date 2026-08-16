@@ -3,7 +3,7 @@
 
   ],
   "captureTime" : 6,
-  "createdAt" : "2026-08-01T19:27:31Z",
+  "createdAt" : "2026-08-16T10:25:09Z",
   "empties" : [
 
   ],
@@ -973,19 +973,19 @@
     },
     {
       "deterministic" : true,
-      "hash" : "5aff564e2f99f165",
+      "hash" : "584c0ce7e7dfc4cd",
       "height" : 144,
       "id" : "3470948192",
-      "meanLuma" : 0.020628490413102916,
+      "meanLuma" : 0.02039336086432141,
       "selfMaxDiff" : 0,
       "width" : 256
     },
     {
       "deterministic" : true,
-      "hash" : "4432dbdf9c5b383c",
+      "hash" : "d526485c3447539d",
       "height" : 144,
       "id" : "3477054430",
-      "meanLuma" : 0.12228611791937194,
+      "meanLuma" : 0.12228600877415134,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1261,10 +1261,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "1d893b3d8fe7fa5",
+      "hash" : "d7745c56bf2a4a33",
       "height" : 144,
       "id" : "3589454154",
-      "meanLuma" : 0.08709815974350475,
+      "meanLuma" : 0.002394727200776124,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1495,10 +1495,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "438ab86a340d8499",
+      "hash" : "5d0f07a9a18cb886",
       "height" : 144,
       "id" : "3706286085",
-      "meanLuma" : 0.18762633825232447,
+      "meanLuma" : 0.2625823380480672,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1542,8 +1542,8 @@
   "failures" : [
 
   ],
-  "gitSHA" : "31fecaa",
-  "label" : "baseline-31fecaa",
+  "gitSHA" : "618d16f",
+  "label" : "baseline-618d16f",
   "thumbHeight" : 144,
   "thumbWidth" : 256
 }
