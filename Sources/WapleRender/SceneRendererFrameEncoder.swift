@@ -908,7 +908,7 @@ extension SceneRenderer {
                         var rp = SIMD4<Float>(mesh.refractAmount, mesh.refractRG88 ? 1 : 0, 0, 0)
                         menc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
                         menc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
-                                                   indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                                                   indexType: .uint32, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                         continue
                     }
                     // 스냅샷 확보 실패 — 재개한 menc 에서 일반 파이프라인으로 identity 폴터.
@@ -952,7 +952,7 @@ extension SceneRenderer {
                         var vp = proj
                         menc.setFragmentBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 6)
                         menc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
-                                                   indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                                                   indexType: .uint32, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                         continue
                     }
                     // 스냅샷 확보 실패 — 재개한 menc 에서 일반 파이프라인으로 identity 폴터.
@@ -978,7 +978,7 @@ extension SceneRenderer {
                 // gradientTex 는 mf_main 선언 인자 — 미사용(u.rim.w==0) 시에도 자기 텍스처로 채워 바인딩 부재 방지.
                 menc.setFragmentTexture(mesh.gradientTexture ?? mesh.texture, index: 2)
                 menc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
-                                           indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                                           indexType: .uint32, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
             }
         }
         menc.endEncoding()

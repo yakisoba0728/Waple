@@ -1327,7 +1327,7 @@ extension SceneRenderer {
                             encoder.setFragmentTexture(mesh.texture, index: 0)
                         }
                         encoder.drawIndexedPrimitives(
-                            type: .triangle, indexCount: mesh.indexCount, indexType: .uint16,
+                            type: .triangle, indexCount: mesh.indexCount, indexType: .uint32,
                             indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                     }
                 }
@@ -1615,7 +1615,7 @@ extension SceneRenderer {
                             var rp = SIMD4<Float>(mesh.refractAmount, mesh.refractRG88 ? 1 : 0, 0, 0)
                             enc.setFragmentBytes(&rp, length: MemoryLayout<SIMD4<Float>>.stride, index: 5)
                             enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
-                                                      indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                                                      indexType: .uint32, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                             continue
                         }
                         // 스냅샷 확보 실패 — 재개한 enc 에서 일반 파이프라인으로 identity 폴터.
@@ -1660,7 +1660,7 @@ extension SceneRenderer {
                             var vp = viewProj
                             enc.setFragmentBytes(&vp, length: MemoryLayout<simd_float4x4>.stride, index: 6)
                             enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
-                                                      indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                                                      indexType: .uint32, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                             continue
                         }
                         // 스냅샷 확보 실패 — 재개한 enc 에서 일반 파이프라인으로 identity 폴터.
@@ -1749,7 +1749,7 @@ extension SceneRenderer {
                         }
                     }
                     enc.drawIndexedPrimitives(type: .triangle, indexCount: mesh.indexCount,
-                                              indexType: .uint16, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
+                                              indexType: .uint32, indexBuffer: mesh.ibuf, indexBufferOffset: 0)
                     // P⑥: 인코더 텍스처 바인딩은 다음 draw 까지 지속된다(Metal encoder 상태) — 커스텀
                     // 메시의 aux 가 slot 1(가장 흔한 textures[1])을 덮어썼다면, 같은 enc 로 뒤이어 그려질
                     // 스톡/다른 커스텀 메시(그쪽은 texture(1)을 재바인딩하지 않고 루프 진입 전 1회

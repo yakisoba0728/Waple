@@ -86,7 +86,10 @@ public struct Model3D: Equatable {
         public let boundsMax: SIMD3<Float>
         public let skinned: Bool
         public let vertices: [Vertex]
-        public let indices: [UInt16]           // 트라이앵글 리스트(count % 3 == 0)
+        // 원소 폭은 파일에서 u16/u32 로 갈리지만(정본 format.mdl.indexWidth) 저장은 u32 로 통일한다 —
+        // 폭을 타입으로 들고 다니면 GPU 인덱스버퍼 바인딩까지 분기가 번지고, u16 메시가 압도적
+        // 다수(실측 969/986)라 그 분기의 이득이 인덱스 메모리 2배보다 작다.
+        public let indices: [UInt32]           // 트라이앵글 리스트(count % 3 == 0)
         /// v≥21 메시 트레일러(게이트A/B 블롭 + v≥23 모프 레코드). 전부 0 인 트레일러(= 종전
         /// '6바이트 구분자')는 nil — 데이터가 있을 때만 채운다. 파스·보존, 렌더 소비는 범위 밖.
         public var trailer: MeshTrailer? = nil
@@ -494,11 +497,33 @@ public struct Model3D: Equatable {
             guard let iSizeRaw = u32(o) else { return nil }
             o += 4
             let iSize = Int(iSizeRaw)
-            guard iSize % 2 == 0, o + iSize <= bytes.count else { return nil }
-            var indices: [UInt16] = []
-            indices.reserveCapacity(iSize / 2)
-            for k in stride16(iSize) {
-                indices.append(UInt16(bytes[o + k]) | (UInt16(bytes[o + k + 1]) << 8))
+            // 인덱스 원소 폭은 **정점 수가 정한다** — u16 이 담을 수 없으면 u32 다
+            // (정본 spec/formats/mdl-deep.json `format.mdl.indexWidth`, 확정: u16 969메시 /
+            //  u32 17메시, 이 규칙으로 읽으면 maxIndex == vertexCount-1 이 986/986).
+            //
+            // 종전엔 무조건 u16 이었고 그게 **조용히** 틀렸다: u32 블롭을 u16 로 읽으면 상위 워드 0 이
+            // 섞여 maxIndex 가 정확히 0xFFFF 로 찍힌다. 정점 수보다 작으니 바로 아래 범위 가드를
+            // 통과하고, 인덱스 개수만 2배가 되어 파스가 "성공"한다. 실물 도달은 11파일/17메시이고
+            // 대형 메시가 정점 0 을 향한 슬리버 부채꼴로 그려졌다. 골든은 Waple-대-Waple 회귀라
+            // 이 클래스를 구조적으로 못 잡는다 — 회귀 핀은 Model3DIndexWidthTests 다.
+            let iWidth = vCount > 65535 ? 4 : 2
+            guard iSize % iWidth == 0, o + iSize <= bytes.count else { return nil }
+            var indices: [UInt32] = []
+            indices.reserveCapacity(iSize / iWidth)
+            if iWidth == 2 {
+                for k in stride16(iSize) {
+                    let lo = UInt32(bytes[o + k])
+                    let hi = UInt32(bytes[o + k + 1]) << 8
+                    indices.append(lo | hi)
+                }
+            } else {
+                for k in stride32(iSize) {
+                    var v = UInt32(bytes[o + k])
+                    v |= UInt32(bytes[o + k + 1]) << 8
+                    v |= UInt32(bytes[o + k + 2]) << 16
+                    v |= UInt32(bytes[o + k + 3]) << 24
+                    indices.append(v)
+                }
             }
             if let maxIndex = indices.max(), Int(maxIndex) >= vCount { return nil }
             o += iSize
@@ -733,6 +758,7 @@ public struct Model3D: Equatable {
 
     /// stride-2 인덱스 순회 헬퍼.
     private static func stride16(_ size: Int) -> StrideTo<Int> { stride(from: 0, to: size, by: 2) }
+    private static func stride32(_ size: Int) -> StrideTo<Int> { stride(from: 0, to: size, by: 4) }
 
     /// 메시 트레일러 정식 파스(v≥21) — 성공 시 (끝 오프셋, 트레일러), 구조 불일치(트렁케이트/폭주
     /// 카운트)는 nil(호출측 폴백). 근거: 디컴파일 FUN_140261950:1214-1457 + 어셈블리
