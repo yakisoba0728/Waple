@@ -111,6 +111,12 @@ env WAPLE_REAL_PKGS=/tmp/corpus-mini swift test --skip-build --parallel --num-wo
 WAPLE_DEV_ROOT=/tmp/dev-root WAPLE_VERIFY_OUT=/tmp/verify-out bash scripts/mac-session/verify-plan-b12.sh
 ```
 
+⚠️ **`--parallel` 은 개수 세기 전용이다 — 통과/실패 판정에 쓰지 마라.** 2026-08-16 실측:
+`SceneRenderSettingsTests`(UserDefaults 전역 상태)와 `SceneCompositeConventionTests` 가
+**병렬 3/3 실패, 순차 3/3 통과**로 갈린다. 클래스를 단독 필터해도 병렬이면 실패하므로 클래스 간
+오염이 아니라 워커 프로세스의 defaults 도메인 차이로 보인다(원인 미확정). 초록/빨강을 봐야 하면
+`swift test -c release` 를 순차로 돌려라 — release 순차가 162초로 debug 병렬(275초)보다 빠르기도 하다.
+
 **이 레시피로 확정되는 것과 안 되는 것을 구분할 것.**
 - **확정**: `실행` 수. 테스트 메서드는 정적으로 결정되므로 코퍼스 크기가 개수를 못 바꾼다.
 - **확정 안 됨**: 스킵 수와 **커버리지**. 축소 코퍼스에선 특정 패키지를 못 찾아 스킵이 9로 늘었다
