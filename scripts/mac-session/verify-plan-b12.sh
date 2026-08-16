@@ -36,7 +36,7 @@ else
 fi
 
 # [수정 2026-08-16] 이 검사는 뒤집혀 있었다. 종전엔 `Bundle.module` 참조가 **있으면 OK** 였다.
-# 그런데 4b2e1dd("배포본 즉사 2차")가 그 유일한 사용처(BaseAssetsSettings)를 **의도적으로 걷어냈다** —
+# 그런데 b901326("배포본 즉사 2차")가 그 유일한 사용처(BaseAssetsSettings)를 **의도적으로 걷어냈다** —
 # SwiftPM 이 생성하는 접근자는 못 찾으면 경고가 아니라 fatalError 이고 탐색 후보가 빌드 시스템마다
 # 다르다(swiftbuild=Contents/Resources, native=앱 루트+빌드 절대경로). 그래서 CI(native) 산출물이
 # 실행 즉시 죽었고(v0.1.0-beta.3 `could not load resource bundle`), 앱 루트 후보는 codesign 이
@@ -47,11 +47,11 @@ fi
 # 조건만 뒤집으면 clean tree 에서 오탐이 난다 — BaseAssetsSettings.swift:52 의 근거 주석이
 # "`Bundle.module` 을 쓰지 않는다" 라고 그 단어를 그대로 적고 있다(지우면 안 되는 설계 근거).
 # 그래서 **주석 줄을 제외하고** 센다. 탐색 범위도 WapleRender/ → Sources/ 전체로 넓혔다
-# (4b2e1dd 의 의도는 "종속을 걷어낸다" 이지 한 타깃만 보는 게 아니다).
+# (b901326 의 의도는 "종속을 걷어낸다" 이지 한 타깃만 보는 게 아니다).
 CODE_HITS=$(grep -rn "Bundle\.module" Sources/ 2>/dev/null \
             | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(///|//|\*|/\*)' || true)
 if [ -z "$CODE_HITS" ]; then
-    ok "Bundle.module 코드 참조 0건 (4b2e1dd 이후의 불변식)"
+    ok "Bundle.module 코드 참조 0건 (b901326 이후의 불변식)"
 else
     bad "Bundle.module 코드 참조가 살아 있다 — 배포본이 실행 즉시 죽는다(v0.1.0-beta.3 재발)"
     printf '%s\n' "$CODE_HITS" | head -5 | sed 's/^/    /'
@@ -74,7 +74,7 @@ hr; echo "3. 번들 산출물에 에셋이 실제로 있는가"; hr
 #       -> -L 로 링크를 따라가고 탐색 루트를 .build 로 넓힌다
 #   (b) macOS 번들은 $BND/Contents/Resources/... 레이아웃이다. $BND/WEAssets/... 로
 #       찾으면 없다 -> 두 레이아웃을 모두 본다
-# [확인 2026-08-16] 4b2e1dd 이후에도 이 검사는 유효하다. 그 커밋이 바꾼 것은 **앱 번들** 쪽이고
+# [확인 2026-08-16] b901326 이후에도 이 검사는 유효하다. 그 커밋이 바꾼 것은 **앱 번들** 쪽이고
 # (Waple_WapleRender.bundle 통째 대신 WEAssets 폴더만 Contents/Resources 에 넣는다),
 # 여기가 보는 곳은 .app 이 아니라 .build 다. Package.swift:16 의 `.copy("Resources/WEAssets")`
 # 는 그대로이고, package-app.sh:40-44 가 아직도 .build/<config>/Waple_WapleRender.bundle 에서
@@ -163,7 +163,7 @@ hr; echo "6. 골든 무변화 (Task 1·2 는 픽셀을 바꾸면 안 된다)"; h
 # 올바른 대조는 **구현 전 release 기준선**이다. 없으면 만들라고 안내하고 넘어간다.
 #
 # [수정 2026-08-16] 위 "커밋된 기준선은 debug 뿐" 은 더 이상 사실이 아니다.
-# 04e72db·1a6d3d3 이후 `spec/golden/snapshot/baseline-31fecaa/`(170종, **release**,
+# ba64c99·88c195e 이후 `spec/golden/snapshot/baseline-31fecaa/`(170종, **release**,
 # GoldenBaseline.currentLabel)가 커밋돼 있다. debug<->release 오탐 근거는 baseline-81098bb
 # 에만 해당한다. 그래도 **자동 기본값으로 삼지는 않는다** — 31fecaa 는 "이 구현 직전" 이
 # 아니라 "블룸 교체 직후" 라서 축이 다르고, 기본값을 바꾸면 게이트 의미가 조용히 달라진다.

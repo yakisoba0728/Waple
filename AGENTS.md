@@ -75,7 +75,7 @@ export WAPLE_BASE_ASSETS=/path/to/assets       # 미설정 시 ~/Downloads/wallp
 | 코퍼스 있음(축소 38, release) | 2,159 | 9 | **162초** | 2026-08-16 실측 — `verify-plan-b12.sh` §5 (`swift test -c release`, 순차) |
 | 코퍼스 있음(축소 38, debug) | 2,159 | 9 | ~4.6분 | 2026-08-16 실측 (`--parallel --num-workers 6`, 아래 레시피) |
 | 코퍼스 없음 | 2,159 | 40 | ~110초 | 2026-08-16 macOS 실측 (`WAPLE_REAL_PKGS=/nonexistent/path swift test`, 2회 동일) |
-| CI (코퍼스 없음) | 2,159 | 47 | ~170초 | 2026-08-16 확인 — CI run `30934767197`(main @`4b2e1dd`, macos-26, 성공) 로그 |
+| CI (코퍼스 없음) | 2,159 | 47 | ~170초 | 2026-08-16 확인 — CI run `30934767197`(main @`b901326`, macos-26, 성공) 로그 |
 
 모든 구성 **실패 0**. `실행` 은 XCTest 의 `Executed N tests` 이고 **스킵을 포함한다** —
 그래서 스킵이 40/47/9 로 갈려도 다섯 구성이 전부 똑같이 2,159 를 낸다. 위 `~110초`는 증분 빌드까지
@@ -157,7 +157,7 @@ TEX 디코드·밉체인, 실셰이더 GLSL→MSL 번역이다. **렌더러를 �
 `macos-26` 러너, 타임아웃 40분. **모든 브랜치의 푸시** · PR · `workflow_dispatch` 에서 돈다.
 문서만 바뀐 변경은 `paths-ignore` 로 스킵되지만, 코드가 하나라도 섞이면 정상 실행된다.
 
-`branches: [main]` 제한은 `e46e69d`(2026-08-02)에서 없앴다 — PR 없이 오래 사는 기능 브랜치
+`branches: [main]` 제한은 `509781d`(2026-08-02)에서 없앴다 — PR 없이 오래 사는 기능 브랜치
 (`feat/we-engine-port-design`)에 8커밋을 푸시하는 동안 CI 가 **조용히 한 번도 안 돌았고**,
 실패한 게 아니라 트리거 자체가 없어서 알려주는 신호도 없었다. 대신 concurrency 를
 `head_ref || ref` 로 묶어 PR 브랜치가 push·pull_request 두 이벤트로 두 번 타지 않게 한다.
