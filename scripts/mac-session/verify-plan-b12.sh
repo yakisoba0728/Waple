@@ -116,27 +116,45 @@ T0=$SECONDS
 launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
     WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
     swift test -c release 2>&1 | tee "$OUT/full-suite.log" | tail -20
-if grep -qE "with 0 failures|Executed .*, 0 failures" "$OUT/full-suite.log"; then
-    ok "전 스위트 통과 ($((SECONDS-T0))초)"
-else
-    bad "전 스위트 실패 — $OUT/full-suite.log"
+# [수정 2026-08-16] 이 절 — "가장 중요" 라고 적어 둔 그 절 — 의 판정과 출력이 둘 다 틀려 있었다.
+# 셋이 겹쳤다:
+#   (a) 통과 조건이 `grep -q "with 0 failures"` 였다. 로그 **아무 데나** 그 문자열이 있으면
+#       통과다. 번들이 5개라 하나가 깨져도 나머지가 찍은 "with 0 failures" 를 주워
+#       "전 스위트 통과" 를 냈다. 실측 확인: WapleCoreTests 가 4건 실패한 로그를 통과로 판정.
+#       §2 의 Bundle.module 게이트와 같은 종류의 결함이다 — 시끄럽게 틀리는 게 아니라 조용히 통과.
+#       -> 번들 요약 줄만 뽑아 **실패 수를 합산**한다. 요약 줄이 0개인 것도 실패로 본다
+#          (스위트가 아예 안 돌았거나 로그가 잘린 것을 통과로 오독하지 않기 위해).
+#   (b) 번들별 출력 정규식이 `with [0-9]+ failures` 라 **스킵이 있는 번들을 통째로 빠뜨렸다**
+#       (실제 형식은 "with 7 tests skipped and 0 failures"). 하필 가장 큰 두 번들
+#       (WapleRenderTests 995·WapleCoreTests 786)이 사라지고, 실패한 번들이 바로 그중
+#       하나여서 "번들별 줄로 판단할 것" 이라는 아래 안내 자체가 성립하지 않았다.
+#   (c) 테스트 수가 전 Executed 줄 합이라 6,429 로 부풀었다(클래스 소계 혼입).
+#       주석은 "번들 총계 줄들을 합산한다" 였는데 코드는 로그 전체를 훑고 있었다.
+#       -> 번들 합을 헤드라인으로 낸다. AGENTS.md 의 기준값도 번들 합이다.
+BUNDLE_SUMMARY=$(grep -A1 -E "^Test Suite '[A-Za-z0-9_]+\.xctest' (passed|failed) at" \
+                 "$OUT/full-suite.log" 2>/dev/null \
+                 | grep -oE "Executed [0-9]+ tests?, with ([0-9]+ tests? skipped and )?[0-9]+ failures?")
+NBUNDLE=$(printf '%s' "$BUNDLE_SUMMARY" | grep -c "Executed")
+NFAIL=$(printf '%s\n' "$BUNDLE_SUMMARY" | grep -oE "[0-9]+ failures?" \
+        | grep -oE "^[0-9]+" | awk '{s+=$1} END {print s+0}')
+TESTS=$(printf '%s\n' "$BUNDLE_SUMMARY" | grep -oE "Executed [0-9]+" \
+        | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+# 기대 번들 수는 Package.swift 에서 끌어온다 — 하드코딩하면 타깃이 늘 때 조용히 낡는다.
+# 이게 없으면 **잘린 로그가 통과한다**: 앞부분만 남은 로그에 통과 번들 하나만 들어 있으면
+# 실패 합이 0 이라 OK 가 된다(실측 확인). 번들 수까지 봐야 "다 돌고 다 통과" 가 된다.
+NEXPECT=$(grep -cE '^[[:space:]]*\.testTarget' Package.swift)
+if [ "$NBUNDLE" -ne "$NEXPECT" ]; then
+    bad "번들 요약 $NBUNDLE 개 — Package.swift 의 testTarget $NEXPECT 개와 다르다. 스위트가 다 안 돌았거나 로그가 잘렸다 ($OUT/full-suite.log)"
+    printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /'
+elif [ "$NFAIL" -ne 0 ]; then
+    bad "전 스위트 실패 — 번들 $NBUNDLE 개에서 실패 $NFAIL 건 ($OUT/full-suite.log)"
     grep -E "error:|failed \(" "$OUT/full-suite.log" | head -20 | sed 's/^/    /'
+else
+    ok "전 스위트 통과 — 번들 $NBUNDLE 개, 실패 0 ($((SECONDS-T0))초)"
 fi
-# [수정 2026-08-01] head -1 이라 첫 번들 값만 집어 "테스트 수: 4" 를 냈다.
-# 타깃이 5개라 번들별로 Executed 줄이 여러 개 나온다 — 마지막(=번들 총계) 줄들을 합산한다.
-TESTS=$(grep -oE "Executed [0-9]+ tests" "$OUT/full-suite.log" \
-        | grep -oE "[0-9]+" | awk '{s+=$1} END {print s}')
-echo "  테스트 수(전 Executed 줄 합): ${TESTS:-?}"
+echo "  번들 합: ${TESTS:-?}  (기준값 2,149 — AGENTS.md, 2026-08-16 실측. 코퍼스 유무와 무관하다)"
 echo "  번들별:"
-grep -E "Test Suite '.*\.xctest'.*(passed|failed)" -A1 "$OUT/full-suite.log" 2>/dev/null \
-    | grep -oE "Executed [0-9]+ tests, with [0-9]+ failures.*" | sed 's/^/    /' | sort -u
-# [수정 2026-08-16] 안내가 종전 기준값 2,125 를 가리키고 있었다. 같은 날 재측정으로 확정:
-# 기준값은 **2,149** 이고 코퍼스 유무와 무관하다 — XCTest 의 `Executed` 는 스킵을 포함하므로
-# 코퍼스 있음(스킵 9)·없음(40)·CI(47) 네 구성이 전부 2,149 를 낸다. 종전의 2,143/2,125 격차는
-# 축(코퍼스 유무)이 아니라 그냥 그 사이 늘어난 테스트였다.
-echo "  (기준값 2,149 — AGENTS.md, 2026-08-16 실측. 코퍼스 유무와 무관하다."
-echo "   클래스 단위 소계가 섞여 부풀 수 있으니"
-echo "   번들별 줄로 판단할 것 — AGENTS.md 의 기준값도 번들 합이다)"
+printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /'
 
 hr; echo "6. 골든 무변화 (Task 1·2 는 픽셀을 바꾸면 안 된다)"; hr
 # [수정 2026-08-01] 커밋된 baseline-81098bb 는 **debug** 캡처인데 여기서는 release 로
