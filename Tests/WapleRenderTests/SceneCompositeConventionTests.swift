@@ -499,4 +499,76 @@ final class SceneCompositeConventionTests: XCTestCase {
         NSLog("%@", "[Waple] chained translated opacity luma=\(luma)")
         XCTAssertEqual(luma, 0.49, accuracy: 0.05, "translated chain 0.7 × 0.7 = 0.49")
     }
+
+    /// DIRECTDRAW 패스는 straight-alpha 규약의 **예외**다 — albedo=0 에서 시작해
+    /// ApplyBlending(31,·)=A+B·opacity 로 색×커버리지(=premultiplied)를 직접 낸다. 합성서가 규약대로
+    /// 알파를 한 번 더 곱하면 기여분이 제곱돼(실물 lightshafts 는 fx≤0.0314 → fx²<1/255) 8비트에서
+    /// 통째로 소멸한다. 여기서는 그 제곱을 판별 가능한 크기로 재현한다: 이펙트가 rgb=0.5·a=0.5 를
+    /// 내면 검정 위 결과는 premultiplied 규약에서 0.5, 이중 곱이면 0.25 다.
+    func testDirectDrawEffectOutputIsNotPremultipliedTwice() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        // lightshafts 와 같은 구조: DIRECTDRAW 면 g_Texture0 을 읽지 않고 0 에서 가산(BLENDMODE 31).
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() {
+        #if DIRECTDRAW
+            vec4 albedo = vec4(0.0, 0.0, 0.0, 0.0);
+            albedo.rgb = albedo.rgb + vec3(1.0, 1.0, 1.0) * 0.5;
+            albedo.a = max(albedo.a, 0.5);
+        #else
+            vec4 albedo = texSample2D(g_Texture0, v_TexCoord);
+        #endif
+            gl_FragColor = albedo;
+        }
+        """
+        // 이미지 없는 shape:quad — 코퍼스 DIRECTDRAW 41건 전부가 이 형태다.
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"shape":"quad","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/ddpremul/effect.json","passes":[{"combos":{"DIRECTDRAW":1}}]}]}]}
+        """
+        let luma = try renderLuma(scene: scene, extraFiles: [
+            ("shaders/effects/ddpremul.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/ddpremul.frag", frag.data(using: .utf8)!),
+        ], tag: "ddpremul")
+        NSLog("%@", "[Waple] DIRECTDRAW premultiplied luma=\(luma)")
+        XCTAssertEqual(luma, 0.5, accuracy: 0.05, "DIRECTDRAW 출력은 이미 premultiplied — 이중 곱이면 0.25")
+    }
+
+    /// 위 판별의 반대편: DIRECTDRAW 콤보가 없으면 종전 straight 규약 그대로여야 한다(무회귀).
+    /// g_Texture0 통과 이펙트 + alpha 0.5 텍스처 → 0.5(합성서가 이중 곱을 하면 0.25).
+    func testNonDirectDrawEffectKeepsStraightAlphaConvention() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        varying vec2 v_TexCoord;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+        }
+        """
+        let frag = """
+        varying vec2 v_TexCoord;
+        uniform sampler2D g_Texture0;
+        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/ddpass/effect.json","passes":[{}]}]}]}
+        """
+        let luma = try renderLuma(scene: scene, texAlpha: 128, extraFiles: [
+            ("shaders/effects/ddpass.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/ddpass.frag", frag.data(using: .utf8)!),
+        ], tag: "ddpass")
+        NSLog("%@", "[Waple] non-DIRECTDRAW passthrough luma=\(luma)")
+        XCTAssertEqual(luma, 0.5, accuracy: 0.05, "비-DIRECTDRAW 체인은 straight-alpha 규약 유지")
+    }
 }

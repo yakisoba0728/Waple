@@ -252,8 +252,8 @@ final class TubeLightCSMandMipTests: XCTestCase {
 
     func testAllTargetSamplersEnableLinearMip() {
         XCTAssertEqual(QuadShaders.source.components(
-            separatedBy: "constexpr sampler s(filter::linear, mip_filter::linear,").count - 1, 5,
-            "QuadShaders 5곳(f_main/f_compose/f_blend/f_refract/f_lit)")
+            separatedBy: "constexpr sampler s(filter::linear, mip_filter::linear,").count - 1, 6,
+            "QuadShaders 6곳(f_main/f_main_premul/f_compose/f_blend/f_refract/f_lit)")
         XCTAssertEqual(Mesh3DShaders.source.components(
             separatedBy: "constexpr sampler s(filter::linear, mip_filter::linear,").count - 1, 5,
             "Mesh3DShaders 5곳(sf_cutout/mf_main/mf_normal/mf_refract/mf_reflect)")
