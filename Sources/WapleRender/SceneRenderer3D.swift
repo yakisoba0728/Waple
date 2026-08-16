@@ -116,7 +116,8 @@ extension SceneRenderer {
                 sc.engine.setRuntime(Double(time))
                 switch sc.key {
                 case "origin": if let v = sc.engine.evaluateVec(current: [o.x, o.y, o.z]), v.count >= 3 { o = SIMD3(v[0], v[1], v[2]) }
-                case "angles": if let v = sc.engine.evaluateVec(current: [a.x, a.y, a.z]), v.count >= 3 { a = SIMD3(v[0], v[1], v[2]) }
+                // 단위 경계(1/3): angles 만 evaluateAnglesVec(도↔라디안) — origin/scale 은 무단위.
+                case "angles": if let v = sc.engine.evaluateAnglesVec(currentRadians: [a.x, a.y, a.z]), v.count >= 3 { a = SIMD3(v[0], v[1], v[2]) }
                 case "scale":  if let v = sc.engine.evaluateVec(current: [s.x, s.y, s.z]), v.count >= 3 { s = SIMD3(v[0], v[1], v[2]) }
                 case "visible": visible = sc.engine.evaluateBool(current: visible) ?? visible
                 default: break
@@ -199,7 +200,8 @@ extension SceneRenderer {
                 sc.engine.setRuntime(Double(time))
                 switch sc.key {
                 case "origin": if let v = sc.engine.evaluateVec(current: [o.x, o.y, o.z]), v.count >= 3 { o = SIMD3(v[0], v[1], v[2]) }
-                case "angles": if let v = sc.engine.evaluateVec(current: [0, 0, a]), v.count >= 3 { a = v[2] }
+                // 단위 경계(1/3): 도↔라디안. 0 은 두 단위에서 같으므로 x/y 더미 성분은 그대로 0.
+                case "angles": if let v = sc.engine.evaluateAnglesVec(currentRadians: [0, 0, a]), v.count >= 3 { a = v[2] }
                 case "scale":  if let v = sc.engine.evaluateVec(current: [s.x, s.y, 1]), v.count >= 2 { s = SIMD2(v[0], v[1]) }
                 case "color":  if let v = sc.engine.evaluateVec(current: [t.x, t.y, t.z]), v.count >= 3 { t = SIMD4(v[0], v[1], v[2], t.w) }
                 case "alpha":  if let v = sc.engine.evaluateVec(current: [t.w]), let a = v.first { t.w = a }

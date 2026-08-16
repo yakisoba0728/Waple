@@ -159,6 +159,12 @@ public final class SceneScriptContext {
     }
 
     private static func layersJSONArray(_ layers: [SceneScriptLayerDescriptor]) -> String {
+        // 단위 경계(2/3): 디스크립터의 angles 는 렌더러 내부 표현인 **라디안**이고 JS 에서 보이는
+        // thisLayer/thisScene.layers[].angles 는 **도**다(근거는 evaluateAnglesVec 주석). 마운트
+        // (__setSceneLayers)와 프레임 말 갱신(__updateSceneLayers)이 둘 다 이 함수를 지나므로
+        // 여기 한 곳에서 바꾸면 첫 프레임과 이후 프레임의 단위가 갈리지 않는다.
+        // origin/scale 은 무단위 — 변환 금지.
+        let toDegrees = 180.0 / Double.pi
         let objects = layers.map { l -> [String: Any] in
             [
                 "name": l.name,
@@ -166,7 +172,8 @@ public final class SceneScriptContext {
                 "alpha": Double(l.alpha),
                 "origin": [Double(l.origin.x), Double(l.origin.y), Double(l.origin.z)],
                 "scale": [Double(l.scale.x), Double(l.scale.y), Double(l.scale.z)],
-                "angles": [Double(l.angles.x), Double(l.angles.y), Double(l.angles.z)],
+                "angles": [Double(l.angles.x) * toDegrees, Double(l.angles.y) * toDegrees,
+                           Double(l.angles.z) * toDegrees],
                 "size": [Double(l.size.x), Double(l.size.y)],
                 "solid": l.solid,
                 "text": l.text,
@@ -674,6 +681,38 @@ public final class TextScriptEngine {
             guard let result, result.allSatisfy({ $0.isFinite }) else { return nil }
             return result
         }
+    }
+
+    /// `angles` 프로퍼티 스크립트 전용 evaluateVec — **JS 경계에서만** 라디안↔도를 바꾼다.
+    ///
+    /// 불변식: 렌더러 내부(Node3D.angles, GPULayer.angleZ, SceneScriptLayerDescriptor.angles,
+    /// ScriptLayerReadBack.angles, scene.json 파스값)는 전부 **라디안**이고, JS 에서 보이는 값은
+    /// 전부 **도**다. 그래서 변환은 세 경계(이 함수 / layersJSONArray / readBackScriptLayerState)
+    /// 에만 있고 그 외 어디에도 없다.
+    ///
+    /// 근거 — WE 자신이 두 단위를 동시에 증명한다. 실물 3477054430 의 오브젝트 id=14 는 angles
+    /// 스크립트가 `new Vec3(0, -32, 0)` 를 반환하는데 같은 바인딩의 정적 `value` 는
+    /// `"0.00000 -0.55851 0.00000"` 로 저장돼 있다 — **-0.55851 rad = -32.0006°**. 즉 스크립트
+    /// 반환은 도, scene.json 저장은 라디안이다. 스크립트 쪽이 도라는 증인은 더 있다:
+    /// 3444535389 `cat_r` 의 `value.z = -90 + (180/Math.PI)*atan2(...)`(명시적 rad→deg),
+    /// 3000562427 의 `value.z -= 20; if (value.z <= 0) value.z = 360`(360 랩 — 라디안이면 무의미),
+    /// 3589454154 `sun` 의 `let deg = -atan2(z,x)*180/PI; value.y = deg - 90`,
+    /// 3737268876 `clock_hours` 의 `value.z = engine.timeOfDay * -720`(하루 2회전).
+    /// 같은 규약이 이미 이 파일의 JS 심에 박혀 있었다 — `__mat4FromTRS(origin, anglesDeg, scale)` 은
+    /// `Math.PI/180` 로 도를 가정한다. 즉 getTransformMatrix 경로만 도였고 프로퍼티 스크립트 경로는
+    /// 라디안이라 한 컨텍스트 안에서 두 단위가 모순돼 있었다.
+    ///
+    /// `current` 도 도로 넣어야 한다(양방향) — 위 3000562427 처럼 실물 컨트롤러가 current 를
+    /// 증분/누산하므로 라디안을 넣으면 증분 상수(20, 360)와 스케일이 안 맞는다.
+    ///
+    /// 실측 대조(3470948192 그룹 55 angles 갈아끼우기, 평균휘도): 종전 렌더 4.85 는 정적
+    /// `"0 60 0"`(=60 **라디안**)과 비트 수준으로 같았고, 60° 를 라디안으로 준 `value.y=1.0472`
+    /// 는 150.23 이었다 — 종전 동작이 "도를 라디안으로 먹은 결과"임이 실측으로 확정된다.
+    public func evaluateAnglesVec(currentRadians: [Float]) -> [Float]? {
+        let toDegrees = Float(180.0 / Double.pi)
+        let toRadians = Float(Double.pi / 180.0)
+        guard let out = evaluateVec(current: currentRadians.map { $0 * toDegrees }) else { return nil }
+        return out.map { $0 * toRadians }
     }
 
     private func takeInitFunctionIfNeeded() -> JSValue? {

@@ -1051,7 +1051,15 @@ extension SceneRenderer {
                   let z = (a[2] as? NSNumber)?.floatValue else { return nil }
             return SIMD3(x, y, z)
         }
-        rb.origin = vec("origin"); rb.scale = vec("scale"); rb.angles = vec("angles")
+        rb.origin = vec("origin"); rb.scale = vec("scale")
+        // 단위 경계(3/3): JS 의 angles 는 **도**, ScriptLayerReadBack 은 렌더러 내부 표현인
+        // **라디안**(근거는 TextScriptEngine.evaluateAnglesVec 주석). origin/scale 은 무단위라
+        // vec() 그대로, angles 만 여기서 되돌린다 — 그래서 아래 소비부(encodeLayer/encodeText 의
+        // rb.angles 적용)와 liveLayerStates 기록부는 손댈 필요가 없다.
+        // 부작용 하나: 라디안→도→라디안 왕복이 ~1 ulp 어긋나 `a.z != angle` 가드가 스크립트 보유
+        // 레이어에서 매 프레임 참이 된다(quadDirty 재계산 1회 추가). 결정적이고 시각적으로
+        // 무의미하며, 근거 없는 허용오차를 넣는 것보다 낫다고 판단해 그대로 둔다.
+        rb.angles = vec("angles").map { $0 * Float(Double.pi / 180.0) }
         return rb
     }
 
@@ -1142,7 +1150,8 @@ extension SceneRenderer {
                         scale = Vec2(x: v[0], y: v[1]); quadDirty = true
                     }
                 default:  // "angles"
-                    if let v = sc.engine.evaluateVec(current: [0, 0, angle]), v.count >= 3 {
+                    // 단위 경계(1/3): 도↔라디안(evaluateAnglesVec). 0 은 두 단위에서 같다.
+                    if let v = sc.engine.evaluateAnglesVec(currentRadians: [0, 0, angle]), v.count >= 3 {
                         angle = v[2]; quadDirty = true
                     }
                 }
@@ -1485,7 +1494,8 @@ extension SceneRenderer {
                     scale = Vec2(x: v[0], y: v[1]); quadDirty = true
                 }
             case "angles":
-                if let v = sc.engine.evaluateVec(current: [0, 0, angle]), v.count >= 3 {
+                // 단위 경계(1/3): 도↔라디안(evaluateAnglesVec) — 이미지 레이어(:1114 루프)와 동형.
+                if let v = sc.engine.evaluateAnglesVec(currentRadians: [0, 0, angle]), v.count >= 3 {
                     angle = v[2]; quadDirty = true
                 }
             case "color":
