@@ -29,8 +29,9 @@ WE 와 완전히 다름" 이 구조적으로 가능하다. 이 스크립트는 �
 
 ## 한계 (읽는 사람이 반드시 알아야 함)
 
-  - WE 스크린샷의 종횡비가 16:9 가 아니면 **중앙 크롭**한다. WE 가 창 종횡비에 맞춰
-    레터박스했는지 크롭했는지는 확인하지 않았다 — 프레이밍이 다르면 corr 이 과소평가된다.
+  - WE 스크린샷의 종횡비가 16:9 가 아니면 중앙 크롭한다. **프레이밍 차이는 corr 을 크게
+    끌어내린다** — 씬 ortho 가 16:9 인데 WE 창이 1626x971 이면 WE 샷은 씬 중앙의 94.2% 만
+    담는다(유도는 best_aligned_corr 주석). 그래서 `정렬후` 열을 반드시 같이 읽어라.
   - 시계·커서·애니 위상 차이는 노이즈 바닥에 부분적으로만 반영된다(두 WE 캡처가 같은
     세션이면 위상차가 작다).
   - 이건 **파리티 지표이지 게이트가 아니다.** 임계를 정해 CI 에 걸 물건이 아니다.
@@ -76,7 +77,7 @@ def load_raw(path):
     return img
 
 
-def best_aligned_corr(we_path, cmp_cells):
+def best_aligned_corr(we_path, cmp_cells, cmp_path=None):
     """프레이밍 차이를 분리한다.
 
     WE 창 캡처와 우리 16:9 캡처는 종횡비도 줌도 다르다. 중앙 크롭 하나만 재면 "내용이 다르다" 와
@@ -85,39 +86,91 @@ def best_aligned_corr(we_path, cmp_cells):
 
     naive corr 은 낮은데 aligned corr 이 높으면 → 내용은 맞고 **프레이밍/줌이 다르다**.
     둘 다 낮으면 → 내용 자체가 다르다. 이 구분이 없으면 어느 쪽인지 말할 수 없다.
+
+    ## 반드시 양방향이어야 한다 (2026-08-16 정정)
+
+    처음엔 WE 쪽만 줌인해 탐색했다. 그래서 "정렬해도 안 오른다 = 내용이 다르다" 는 결론이
+    나왔는데 **틀렸다.** 실제 관계가 정반대다 — WE 샷이 우리보다 **좁다**.
+
+    기하: 씬 ortho 가 16:9(1920x1080)인데 WE 창은 1626x971(=1.674). fill 이면 씬 폭
+    971x16/9 = 1726.2 를 렌더하고 창은 1626 만 보여준다 → 가로 0.942. 그 뒤 이 스크립트가
+    WE 를 다시 16:9 로 크롭하면 세로도 914.6/971 = 0.942. 결과적으로
+    **WE 샷 = 씬 중앙의 94.2%, 우리 캡처 = 100%** 다.
+
+    그래서 **대상(우리) 쪽도 크롭 후보에 넣는다.** 한쪽만 줌인하면 실제 관계가 반대일 때
+    탐색이 최적점에 닿지 못하고, "내용이 다르다" 로 오독하게 된다.
+
+    과적합 우려: 노이즈 바닥(WE1 vs WE2)도 **같은 자유도로** 탐색한다. 바닥이 안 움직이는데
+    대상만 오르면 그건 실제 정렬 이득이다(실측: 바닥 0.997/0.991/0.971 전부 불변).
     """
     img = load_raw(we_path)
     W, H = img.size
     target = GRID_W / GRID_H
     best = (-2.0, None)
-    lb = (cmp_cells @ LUMA).ravel()
-    if lb.std() < 1e-9:
+
+    def crops(im):
+        """(라벨, 셀배열) 후보 — 전체 + 중앙 z 비율 x 오프셋."""
+        w, h = im.size
+        out = []
+        for z in (1.00, 0.97, 0.942, 0.92, 0.88, 0.84, 0.76, 0.68, 0.60):
+            cw = w * z
+            ch = cw / target
+            if ch > h:
+                ch = h * z
+                cw = ch * target
+            if cw < 32 or ch < 32:
+                continue
+            for dx in (-0.08, -0.04, 0.0, 0.04, 0.08):
+                for dy in (-0.08, -0.04, 0.0, 0.04, 0.08):
+                    l0 = w / 2 + dx * w - cw / 2
+                    t0 = h / 2 + dy * h - ch / 2
+                    if l0 < 0 or t0 < 0 or l0 + cw > w or t0 + ch > h:
+                        continue
+                    c = im.crop((int(l0), int(t0), int(l0 + cw), int(t0 + ch)))
+                    arr = np.asarray(c.resize((GRID_W, GRID_H), Image.LANCZOS), dtype=np.float64)
+                    out.append(({"zoom": round(z, 3), "dx": dx, "dy": dy}, arr))
+        return out
+
+    lb_full = (cmp_cells @ LUMA).ravel()
+    if lb_full.std() < 1e-9:
         return float("nan"), None
-    # 줌: WE 프레임의 가운데 z 비율만 사용(1.0 = 전체). 오프셋: 중심에서 ±d.
-    for z in (1.00, 0.92, 0.84, 0.76, 0.68, 0.60, 0.52):
-        cw = W * z
-        ch = cw / target
-        if ch > H:                      # 세로가 모자라면 세로 기준으로 다시
-            ch = H * z
-            cw = ch * target
-        if cw < 32 or ch < 32:
+
+    # ① WE 쪽을 좁힌다 (대상은 그대로)
+    for par, arr in crops(img):
+        la = (arr @ LUMA).ravel()
+        if la.std() < 1e-9:
             continue
-        for dx in (-0.12, -0.06, 0.0, 0.06, 0.12):
-            for dy in (-0.12, -0.06, 0.0, 0.06, 0.12):
-                cx = W / 2 + dx * W
-                cy = H / 2 + dy * H
-                l = cx - cw / 2, cy - ch / 2
-                if l[0] < 0 or l[1] < 0 or l[0] + cw > W or l[1] + ch > H:
-                    continue
-                crop = img.crop((int(l[0]), int(l[1]), int(l[0] + cw), int(l[1] + ch)))
-                cells = np.asarray(crop.resize((GRID_W, GRID_H), Image.LANCZOS), dtype=np.float64)
-                la = (cells @ LUMA).ravel()
-                if la.std() < 1e-9:
-                    continue
-                c = float(np.corrcoef(la, lb)[0, 1])
-                if c > best[0]:
-                    best = (c, {"zoom": z, "dx": dx, "dy": dy})
+        c = float(np.corrcoef(la, lb_full)[0, 1])
+        if c > best[0]:
+            best = (c, {"side": "we", **par})
+
+    # ② 대상 쪽을 좁힌다 (WE 는 중앙 16:9 전체) — 실제로 이쪽이 맞는 방향이었다
+    we_full = (np.asarray(_center_169(img).resize((GRID_W, GRID_H), Image.LANCZOS),
+                          dtype=np.float64) @ LUMA).ravel()
+    if we_full.std() > 1e-9:
+        # 대상은 **원본 PNG** 에서 크롭한다 — 셀 격자(64x36)를 확대해 자르면 해상도를 잃는다.
+        cmp_img = load_raw(cmp_path) if cmp_path else \
+            Image.fromarray(cmp_cells.astype(np.uint8)).resize((512, 288), Image.LANCZOS)
+        for par, arr in crops(cmp_img):
+            lb = (arr @ LUMA).ravel()
+            if lb.std() < 1e-9:
+                continue
+            c = float(np.corrcoef(we_full, lb)[0, 1])
+            if c > best[0]:
+                best = (c, {"side": "waple", **par})
     return best[0], best[1]
+
+
+def _center_169(img):
+    w, h = img.size
+    t = GRID_W / GRID_H
+    if abs(w / h - t) <= 1e-3:
+        return img
+    if w / h > t:
+        nw = int(round(h * t)); off = (w - nw) // 2
+        return img.crop((off, 0, off + nw, h))
+    nh = int(round(w / t)); off = (h - nh) // 2
+    return img.crop((0, off, w, off + nh))
 
 
 def metrics(a, b):
@@ -181,12 +234,12 @@ def main():
 
         # 대표 WE 샷(첫 장) 대 골든.
         m = metrics(refs[0][1], g)
-        ac, apar = best_aligned_corr(refs[0][0], g)
+        ac, apar = best_aligned_corr(refs[0][0], g, cmp_path=golden)
         m["alignedCorr"] = ac
         m["alignedAt"] = apar
         # 노이즈 바닥도 같은 방식으로 — WE 샷끼리도 창 위치가 흔들릴 수 있다.
         if floor is not None:
-            fac, _ = best_aligned_corr(refs[0][0], refs[1][1])
+            fac, _ = best_aligned_corr(refs[0][0], refs[1][1], cmp_path=refs[1][0])
             floor["alignedCorr"] = fac
         rows.append({
             "scene": sid,

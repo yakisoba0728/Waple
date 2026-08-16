@@ -38,6 +38,7 @@
         },
         "alignedCorr": 0.9811523221014389,
         "alignedAt": {
+          "side": "we",
           "zoom": 1.0,
           "dx": 0.0,
           "dy": 0.0
@@ -94,9 +95,10 @@
           "refLuma": 250.23479999999998,
           "cmpLuma": 40.7178
         },
-        "alignedCorr": 0.9067399957786646,
+        "alignedCorr": 0.9502756118162968,
         "alignedAt": {
-          "zoom": 1.0,
+          "side": "waple",
+          "zoom": 0.942,
           "dx": 0.0,
           "dy": 0.0
         }
@@ -152,9 +154,10 @@
           "refLuma": 19.2996,
           "cmpLuma": 156.96259999999998
         },
-        "alignedCorr": 0.7150111814789751,
+        "alignedCorr": 0.8665139046335348,
         "alignedAt": {
-          "zoom": 1.0,
+          "side": "waple",
+          "zoom": 0.942,
           "dx": 0.0,
           "dy": 0.0
         }
@@ -209,11 +212,12 @@
           "refLuma": 254.99999999999997,
           "cmpLuma": 4.2166
         },
-        "alignedCorr": 0.5123267879333838,
+        "alignedCorr": 0.2963843861721758,
         "alignedAt": {
-          "zoom": 0.52,
-          "dx": 0.06,
-          "dy": 0.12
+          "side": "we",
+          "zoom": 0.6,
+          "dx": 0.08,
+          "dy": 0.08
         }
       },
       "noiseFloor_we_vs_we": null
@@ -248,11 +252,12 @@
           "refLuma": 254.99999999999997,
           "cmpLuma": 0.0
         },
-        "alignedCorr": 0.5302023071680375,
+        "alignedCorr": 0.4261390183469901,
         "alignedAt": {
+          "side": "we",
           "zoom": 0.6,
-          "dx": -0.06,
-          "dy": 0.12
+          "dx": -0.08,
+          "dy": 0.08
         }
       },
       "noiseFloor_we_vs_we": null
@@ -288,9 +293,10 @@
           "refLuma": 20.592,
           "cmpLuma": 85.5222
         },
-        "alignedCorr": 0.8535670436492508,
+        "alignedCorr": 0.924385506922448,
         "alignedAt": {
-          "zoom": 1.0,
+          "side": "waple",
+          "zoom": 0.942,
           "dx": 0.0,
           "dy": 0.0
         }
@@ -312,7 +318,7 @@
           "refLuma": 49.5886,
           "cmpLuma": 59.8184
         },
-        "alignedCorr": 0.9896464294716562
+        "alignedCorr": 0.9927361135689031
       }
     },
     {
@@ -348,6 +354,7 @@
         },
         "alignedCorr": 0.8745008499314993,
         "alignedAt": {
+          "side": "we",
           "zoom": 1.0,
           "dx": 0.0,
           "dy": 0.0
@@ -370,7 +377,7 @@
           "refLuma": 130.0472,
           "cmpLuma": 18.448800000000002
         },
-        "alignedCorr": 0.9711803410848137
+        "alignedCorr": 0.971361778282205
       }
     }
   ]
