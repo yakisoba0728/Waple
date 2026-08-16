@@ -6,21 +6,48 @@
    "id": "oracle.gate.unusedManifestFields",
    "value": {
     "recorded": [
+     "id",
+     "width",
+     "height",
      "hash",
      "meanLuma",
-     "selfMaxDiff"
+     "deterministic",
+     "selfMaxDiff",
+     "note"
     ],
-    "readBySnapshotCompare": [
-     "deterministic"
+    "readByRunCompare": [
+     "deterministic",
+     "id",
+     "meanLuma"
     ],
-    "consequence": "세 필드는 기록만 되고 판정에 안 들어간다. hash 로 '픽셀 동일' 을 즉시 판정할 수 있는데 매번 diff 를 돌린다."
+    "unread": [
+     "width",
+     "height",
+     "hash",
+     "selfMaxDiff",
+     "note"
+    ],
+    "source": "두 목록 모두 소스에서 추출한다 — SnapshotEntry 선언과 runCompare 본문의 entry.<field> 참조. 하드코딩하지 않는다.",
+    "correction": "[2026-08-16] 이 항목은 readBySnapshotCompare 를 ['deterministic'] 로 박아 두고 있었다. 6e2e713 이 meanLuma 를 판정에 넣은 **다음 날** 재생성됐는데도 그 문장이 그대로 나왔다.",
+    "hashIsStillUnread": "'픽셀 동일' 즉시 통과는 hash 가 아니라 m.maxAbsDiff == 0 으로 한다. diff 를 계산한 뒤에 보므로 diff 비용은 그대로다. 다만 지배적 비용은 캡처라서 이득의 상한이 작다.",
+    "widthHeightAreGuardedElsewhere": "width/height 는 entry 단위로 안 읽고 매니페스트 단위 가드가 대신 본다 — Sources/WapleCompat/SnapshotCompare.swift:30 가 썸네일 크기 불일치를 exit 2 로 막는다."
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "file",
-     "ref": "Sources/WapleCompat/SnapshotCompare.swift:81-82",
-     "note": "entry.deterministic 만 읽는다. hash/meanLuma/selfMaxDiff 참조 0건"
+     "ref": "Sources/WapleCompat/SnapshotCompare.swift:22-144",
+     "note": "runCompare 본문 — 여기의 entry.<field> 참조를 센다"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleSnapshot/Snapshot.swift",
+     "note": "SnapshotEntry 기록 필드"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_oracle_gate.py",
+     "note": "임계·판정식·읽는 필드를 소스에서 추출하고 썸네일을 디코드해 재계산한다"
     }
    ]
   },
@@ -36,59 +63,208 @@
      "fracExceeding": 0.2
     },
     "unit": "0..255 절대값",
-    "flaw": "절대 단위라 어두운 씬일수록 실효 게이트가 느슨해진다. 상대(대비 정규화) 지표가 없다."
+    "perPixelThreshold": 16,
+    "thresholdSelection": "Sources/WapleCompat/SnapshotCompare.swift:85 — 결정 씬 strict, 비결정 씬 lax",
+    "relative": {
+     "tolerance": 0.05,
+     "denominator": "max(entry.meanLuma, 0.02) * 255",
+     "why": "절대 단위만 보면 어두운 씬일수록 실효 게이트가 느슨해진다. 기준선 밝기로 정규화한 상대차를 함께 본다."
+    },
+    "structureLoss": {
+     "lumaCutoff": 0.02,
+     "factor": 0.5,
+     "why": "기준선 meanLuma < 0.02 구간은 절대·상대 둘 다 둔하다(분모 클램프가 걸린다). '구조가 사라졌는가' 로 본다."
+    },
+    "passExpression": "identical || (passes(m, thr) && relDiff <= Self.relativeTolerance && !structureLoss)",
+    "history": "[2026-08-16] 이 항목은 결함으로 '상대(대비 정규화) 지표가 없다' 를 적고 있었다. 6e2e713(2026-08-01)이 relDiff·structureLoss 를 넣어 그 결함을 닫았고, 그 뒤로 이 문장이 낡아 있었다. 값은 이제 소스에서 뽑는다."
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "file",
-     "ref": "Sources/WapleSnapshot/Snapshot.swift:113-117"
+     "ref": "Sources/WapleSnapshot/Snapshot.swift:113-115",
+     "note": "strict/lax 임계 출처"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCompat/SnapshotCompare.swift:98",
+     "note": "판정식 원문"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_oracle_gate.py",
+     "note": "임계·판정식·읽는 필드를 소스에서 추출하고 썸네일을 디코드해 재계산한다"
     }
    ]
   },
   {
    "id": "oracle.gate.blindScenes",
    "value": {
-    "definition": "전면 검정으로 바꿔도 strict/lax 평균 임계를 통과하는 씬 (meanLuma × 255 <= threshold)",
-    "count": 4,
-    "scenes": [
-     {
-      "id": "3444535389",
-      "meanLuma": 0.00149,
-      "blackoutMeanDiff": 0.38,
-      "threshold": 1.5
-     },
-     {
-      "id": "2881558311",
-      "meanLuma": 0.00265,
-      "blackoutMeanDiff": 0.676,
-      "threshold": 1.5
-     },
-     {
-      "id": "1612750231",
-      "meanLuma": 0.00322,
-      "blackoutMeanDiff": 0.82,
-      "threshold": 1.5
-     },
-     {
-      "id": "3662790108",
-      "meanLuma": 0.00342,
-      "blackoutMeanDiff": 0.873,
-      "threshold": 1.5
-     }
-    ]
+    "definition": "커밋된 기준선 썸네일을 **전면 검정(불투명 0,0,0,255)** 으로 바꿨을 때 현행 --compare 판정식이 그대로 통과시키는 씬",
+    "method": "기준선 170종의 썸네일을 디코드해 diffRGBA 와 같은 식으로 meanAbsDiff/maxAbsDiff/fracExceeding 을 계산하고, 소스에서 추출한 판정식(identical || (절대 && relDiff && !structureLoss))을 적용한다.",
+    "count": 0,
+    "scenes": [],
+    "formerlyFlagged": {
+     "what": "종전 항목이 무방비로 지목했던 씬들이 지금 어떤 판정을 받는지 씬별 실측. `caughtBy` 가 그 씬을 잡는 항이다.",
+     "scenes": [
+      {
+       "id": "3444535389",
+       "meanLuma": 0.00149,
+       "blackoutMeanAbsDiff": 0.2848,
+       "blackoutFracExceeding": 0.0037,
+       "blackoutMaxAbsDiff": 252,
+       "relDiff": 0.0558,
+       "caughtBy": [
+        "relDiff",
+        "structureLoss"
+       ],
+       "pass": false
+      },
+      {
+       "id": "2881558311",
+       "meanLuma": 0.00265,
+       "blackoutMeanAbsDiff": 0.507,
+       "blackoutFracExceeding": 0.009,
+       "blackoutMaxAbsDiff": 209,
+       "relDiff": 0.0994,
+       "caughtBy": [
+        "fracExceeding",
+        "relDiff",
+        "structureLoss"
+       ],
+       "pass": false
+      },
+      {
+       "id": "1612750231",
+       "meanLuma": 0.00322,
+       "blackoutMeanAbsDiff": 0.5171,
+       "blackoutFracExceeding": 0.0053,
+       "blackoutMaxAbsDiff": 255,
+       "relDiff": 0.1014,
+       "caughtBy": [
+        "fracExceeding",
+        "relDiff",
+        "structureLoss"
+       ],
+       "pass": false
+      },
+      {
+       "id": "3662790108",
+       "meanLuma": 0.00342,
+       "blackoutMeanAbsDiff": 0.6547,
+       "blackoutFracExceeding": 0.0182,
+       "blackoutMaxAbsDiff": 141,
+       "relDiff": 0.1284,
+       "caughtBy": [
+        "fracExceeding",
+        "relDiff",
+        "structureLoss"
+       ],
+       "pass": false
+      }
+     ]
+    },
+    "priorCountWasFour": {
+     "what": "종전 이 항목은 count 4 를 확정으로 실었다. 두 겹의 오차였다.",
+     "approximationError": "판정을 `meanLuma × 255 <= 평균 임계` 하나로 봤다. fracExceeding 을 무시했고, meanLuma × 255(RGB 가중 평균)는 실제 meanAbsDiff(RGBA 4채널 평균)와 다른 수다.",
+     "staleness": "6e2e713 이 relDiff·structureLoss 를 넣은 다음 날 재생성됐는데 스크립트가 그 둘을 안 봤다.",
+     "approxWouldFlag": [
+      "3444535389",
+      "2881558311",
+      "1612750231",
+      "3662790108"
+     ],
+     "actualUnderPreviousCode": [
+      "3444535389"
+     ]
+    },
+    "decoderCrossCheck": "디코드한 썸네일로 다시 계산한 meanLuma 가 매니페스트 값과 170종 전부 완전 일치한다(최대 오차 0). 파이썬 디코더와 Swift 산출이 같은 픽셀을 본다는 뜻이고, 썸네일이 매니페스트가 말하는 그 프레임이라는 뜻이기도 하다. 알파도 전량 255 라 전면 검정과의 알파차는 0 이다.",
+    "verifiedByRunningTheJudge": "위 4종을 전면 검정으로 바꾼 기준선 사본에 --compare 를 돌려 4/4 FAIL(exit 1)을 실측했고, Swift 가 찍은 mean/max/frac 이 여기 값과 일치한다 — oracle.gate.compareWiring 의 negativeControl."
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "file",
      "ref": "spec/golden/snapshot/baseline-31fecaa/manifest.json",
-     "note": "커밋된 기준선 170종의 meanLuma 분포"
+     "note": "커밋된 기준선 170종의 썸네일·meanLuma"
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleSnapshot/Snapshot.swift:113-117",
-     "note": "임계값 출처"
+     "ref": "Sources/WapleCompat/SnapshotCompare.swift:98",
+     "note": "판정식 원문"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_oracle_gate.py",
+     "note": "임계·판정식·읽는 필드를 소스에서 추출하고 썸네일을 디코드해 재계산한다"
+    }
+   ]
+  },
+  {
+   "id": "oracle.gate.compareWiring",
+   "value": {
+    "problem": "판정기를 정성껏 만들어 놓고 **아무도 부르지 않았다**. 2026-08-16 감사에서 `grep -rn -- \"--compare\" scripts/ .github/ Tests/` 의 히트 3건이 전부 '쓰지 않는다' 는 문장이었다(scripts/ab-deviations/README.md:20,24 · 03-ab-diff.py:4). 즉 3단 판정이 자동으로 실행되는 경로가 0 이었다.",
+    "callSites": [
+     "scripts/mac-session/golden-gate.sh:96"
+    ],
+    "ciCallSites": [],
+    "invokedBy": [
+     "scripts/mac-session/verify-plan-b12.sh:239"
+    ],
+    "howCounted": "주석/산문 줄을 뺀 셸 실행 줄만 센다. 단순 grep 은 ab-deviations 의 '쓰지 않는다' 문장을 호출로 세어 이 항목이 고치려는 그 거짓을 다시 만든다.",
+    "exitCodes": {
+     "0": "회귀 없음",
+     "1": "결정 씬 FAIL 또는 렌더→무픽셀 회귀",
+     "2": "환경 오류(베이스라인/코퍼스 부재, 썸네일 크기 불일치, compared=0)",
+     "source": "Sources/WapleCompat/SnapshotCompare.swift:144"
+    },
+    "whyNotCI": {
+     "decisive": "CI 러너에 코퍼스가 없다. 워크샵 pkg 는 커밋 대상이 아니고, 코퍼스가 없으면 --compare 는 베이스라인 entry 를 전부 skip 해 exit 2 를 낼 뿐 아무것도 검증하지 않는다.",
+     "secondary": "코퍼스를 넣더라도 수십 GB 전송 + 씬 170종 캡처가 40분 타임아웃 예산을 먹는다. 캡처 비용 자체는 이번 실측 140.6초(warm)이고 문서 실측은 1× 패스 ≈360초(cold)·피크 RSS ≈3.9GB 다 — 결정적인 것은 코퍼스 부재 쪽이다.",
+     "notTheReason": "GPU 가용성은 이유가 아니다. AGENTS.md 실측대로 Metal 은 CI 에서도 잡힌다."
+    },
+    "firstFullRun": {
+     "when": "2026-08-16, main @82e9414, release, 전 코퍼스",
+     "result": "compared=170 PASS=168 FAIL(결정)=2 · 렌더→무픽셀 0 · elapsed 140.6s",
+     "failed": [
+      "3706286085 mean=17.16 max=222 frac=0.5881",
+      "3589454154 mean=16.17 max=255 frac=0.1485"
+     ],
+     "reading": "3위 편차가 mean=0.05(max=7)이고 그 아래는 mean=0.00 이다. 커밋된 기준선은 이 머신에서 그대로 재현되고, 실제로 어긋난 것은 이 2종뿐이다.",
+     "why3589454154": "oracle.nondet.unstableSet **밖**이다. c69f93c(MDLV 인덱스 폭이 정점 수를 따르게 한 수정)의 커밋 메시지가 이 씬의 陨石.mdl 을 최대 사례로 이름까지 적는다(정점 3,144,456 → u32). 기준선 31fecaa 는 그 수정 이전이므로 이 씬에 대해 낡았다.",
+     "why3706286085": "oracle.nondet.unstableSet 29종 **안**이다. 그 가족은 세션이 갈리면 값이 달라지는데 셀프체크가 프로세스 내부만 재는 탓에 deterministic=true 로 실려 strict 로 샌다(oracle.gate.selfCheckIsIntraProcess). 커밋된 기준선 대조는 세션을 건너뛴 대조라, 이 FAIL 은 코드 변화인지 세션 잡음인지 이 대조 하나로는 갈리지 않는다. 원인 커밋은 좁히지 않았다 — 후보는 31fecaa..HEAD 의 렌더 커밋 10개다.",
+     "unstableFamilyThisRun": "29종 중 이번 실행에서 FAIL 은 3706286085 하나뿐이고 나머지 28종은 통과했다(전 코퍼스 3위 편차가 mean 0.05 이므로 그 28종의 평균 절대차는 0.05 이하다). '세션이 갈리면 29종이 갈린다' 는 상한이지 매 실행의 실측치가 아니다.",
+     "gateReadsThisForYou": "golden-gate.sh 는 FAIL 목록을 unstableSet 과 대조해 '불안정 가족 안/밖' 을 나눠 찍는다. 종료코드는 그대로 1 이다 — 판정을 무르게 하는 게 아니라 읽는 법을 붙인 것이다.",
+     "remedy": "3589454154 는 코드 회귀가 아니라 기준선 재생성 대상이다 — scripts/mac-session/rebaseline-golden.sh (코디네이터 판단). 재생성은 두 캡처 사이에 커서를 옮겨 비트동일을 확인하는 설치 게이트를 그대로 거친다."
+    },
+    "negativeControl": {
+     "method": "기준선 사본(리포 밖)에서 종전 무방비 4종의 썸네일을 전면 검정으로 바꾸고 --compare 실행. diff 는 대칭이라 이 수는 '현재 렌더가 전면 검정이 됐다' 와 같다.",
+     "broken": "compared=4 PASS=0 FAIL(결정)=4 → exit 1. 3662790108 mean=0.65 frac=0.0182 · 1612750231 mean=0.52 frac=0.0053 · 2881558311 mean=0.51 frac=0.0090 · 3444535389 mean=0.28 frac=0.0037",
+     "control": "같은 4종을 손대지 않은 사본으로 돌리면 compared=4 PASS=4 mean=0.00 max=0 → exit 0. 오탐 0.",
+     "crossCheck": "Swift 가 찍은 네 줄의 mean/max/frac 이 이 스크립트의 파이썬 재계산과 자릿수까지 같다. blindScenes count 0 은 파이썬 계산만이 아니라 **판정기 실행**으로도 확인된 값이다.",
+     "sharpestCase": "3444535389 은 전면 검정에서도 mean 0.28 <= strict 1.5 이고 frac 0.0037 <= 0.004 라 **절대 임계만으로는 통과**한다. relDiff 0.056 > 0.05 와 structureLoss 가 잡는다 — 6e2e713 이 무엇을 닫았는지가 이 한 줄에 있다.",
+     "why": "오라클을 강화했으면 일부러 깨뜨려 잡히는지 확인한다."
+    },
+    "crossRef": [
+     "oracle.nondet.unstableSet",
+     "oracle.gate.selfCheckIsIntraProcess"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "script",
+     "ref": "scripts/mac-session/golden-gate.sh",
+     "note": "게이트 실행 스크립트(라벨은 코드에서 읽는다)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/mac-session/verify-plan-b12.sh",
+     "note": "§7 이 이 게이트를 부르고 종료코드를 FAIL 에 반영한다"
+    },
+    {
+     "kind": "file",
+     "ref": "macOS 세션 2026-08-16 — 전 코퍼스 --compare 및 음성 대조 실측"
     }
    ]
   },
@@ -169,7 +345,7 @@
      "code": "SnapshotCompare.swift:85 — `entry.deterministic ? .strict : .lax`",
      "designIsCorrect": "결정적 씬에 strict, 비결정 씬에 lax 는 **의도대로 맞다**. 극성을 뒤집으면 안 된다.",
      "actualDefect": "그 29종이 deterministic=true 로 **잘못 분류**되는 바람에 비결정 씬인데 strict 로 샌다. 고칠 곳은 임계 선택줄이 아니라 분류(셀프체크)다.",
-     "correctionNote": "[정정 2026-08-01] 이 항목은 처음에 '방향이 반대다' 라고 적혀 있었다. 틀렸다 — 그대로 믿고 :85 를 뒤집으면 정상 동작을 깨뜨린다."
+     "correctionNote": "[정정 2026-08-01] 이 항목은 처음에 '방향이 반대다' 라고 적혀 있었다. 틀렸다 — 그대로 믿고 그 줄을 뒤집으면 정상 동작을 깨뜨린다."
     },
     "isolationEvidence": "3696323523: 단일씬 재캡처는 커밋 전후가 동일했고, 전체 코퍼스 캡처는 같은 빌드 2회가 서로 달랐다 — 커밋 무관까지 격리됐다. 그 '2회' 가 세션을 건너뛴 쌍이었다는 것은 나중에 밝혀졌다(oracle.nondet.axisIsCrossSession).",
     "fixDirection": "셀프체크를 **별도 프로세스**에서 돌리거나, 매니페스트에 '교차 실행 재현성' 을 별도 필드로 둔다. 지금 필드는 이름과 달리 '같은 프로세스 안에서 두 번 그리면 같은가' 만 답한다.",
@@ -214,7 +390,7 @@
     {
      "kind": "file",
      "ref": "spec/golden/snapshot/baseline-31fecaa/manifest.json",
-     "note": "커밋된 기준선 170종의 meanLuma 분포"
+     "note": "커밋된 기준선 170종의 썸네일·meanLuma"
     }
    ]
   }

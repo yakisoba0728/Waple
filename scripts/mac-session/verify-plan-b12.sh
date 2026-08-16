@@ -224,6 +224,29 @@ if changed:
 PY
 fi
 
+hr; echo "7. 골든 게이트 — 커밋된 기준선 대비 WapleCompat --compare 실판정"; hr
+# [추가 2026-08-16] §6 과 **축이 다르다**. §6 은 "이번 구현이 픽셀을 움직였는가"(구현 직전
+# 기준선 대비, 옵트인)이고, 여기는 "현재 빌드가 커밋된 골든과 같은가"(항상)다. 그래서 §6 의
+# `WAPLE_PRE_RELEASE_BASELINE` 기본값을 바꾸지 않고 절을 따로 뒀다 — 그 절의 주석이 경고한
+# "기본값을 바꾸면 게이트 의미가 조용히 달라진다" 를 그대로 지킨다.
+#
+# 왜 새로 붙였나: `SnapshotCompare.swift` 의 3단 판정(해시 동일 / 절대+상대 임계 / structureLoss)이
+# 리포 어디에서도 호출되지 않고 있었다(2026-08-16 감사). §6 은 PIL 로 직접 대조하는데다
+# `WAPLE_PRE_RELEASE_BASELINE` 미설정이면 통째로 건너뛰고, 그 결과가 FAIL 에 반영되지도 않는다.
+# 정성껏 만든 판정기가 안 돌면 없는 것과 같다.
+GOLDEN_OUT="$OUT/golden-gate"
+WAPLE_REPO="$REPO" WAPLE_DEV_ROOT="$ROOT" WAPLE_GOLDEN_OUT="$GOLDEN_OUT" \
+    bash scripts/mac-session/golden-gate.sh
+GRC=$?
+if [ "$GRC" = 0 ]; then
+    ok "골든 무회귀 (--compare exit 0)"
+else
+    bad "골든 게이트 실패 (exit $GRC) — $GOLDEN_OUT/compare.log"
+    echo "     FAIL 이 **의도된 렌더 변경** 때문이라면 기준선을 재생성하고 라벨을 갱신할 것:"
+    echo "       bash scripts/mac-session/rebaseline-golden.sh"
+    echo "     (판정 기준선 라벨은 GoldenBaselineOracleTests.swift 의 currentLabel 이다)"
+fi
+
 hr
 [ "$FAIL" = 0 ] && printf '\033[32m검증 통과\033[0m\n' || printf '\033[31mFAIL 있음 — 위 항목 확인\033[0m\n'
 echo "로그: $OUT"
