@@ -7,6 +7,50 @@ import XCTest
 final class SceneComboVisibleTests: XCTestCase {
     private let model = #"{"width":1920,"height":1080,"material":"materials/m.json"}"#
     private let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"]}]}"#
+    private let particleDef = #"{"renderer":[{"name":"sprite"}],"maxcount":1,"material":"materials/pm.json"}"#
+    private let particleMaterial = #"{"passes":[{"textures":["particle/snow"]}]}"#
+
+    /// 실물 3299228616 축소판(파티클 경유 체인): `543 Moving Stars_02 → 540 Blinking Stars_01(파티클,
+    /// visible true) → 239 LonelyCAT VIE(콤보 조건 false)`. 종전에는 parentOf 를 nodes3D + layers +
+    /// texts 로만 채워 **파티클 id 가 아예 없었고**, 그래서 부모가 가시 파티클인 자식은 조상 탐색이
+    /// parentOf[부모] 부재로 즉시 끝나 조건이 꺼져 있어도 계속 그려졌다(비가시 파티클은 invNode 로
+    /// nodes3D 에 들어가 우연히 동작 — 갭이 "가시 파티클 경유"에만 숨어 있었다).
+    func testHiddenAncestorPropagatesThroughVisibleParticleParent() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":239,"name":"LonelyCAT VIE","image":"models/x.json","origin":"50 50 0","size":"10 10",
+            "visible":{"user":{"condition":"2","name":"language"},"value":false}},
+           {"id":540,"name":"Blinking Stars_01","particle":"particles/p.json","parent":239,
+            "visible":{"user":"starreactive1","value":true}},
+           {"id":543,"name":"Moving Stars_02","particle":"particles/p.json","parent":540}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material),
+                         ("particles/p.json", particleDef), ("materials/pm.json", particleMaterial)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let mid = try XCTUnwrap(doc.particles.first { $0.id == 540 }, "중간 파티클은 배열에 남아야(드롭 금지)")
+        let leaf = try XCTUnwrap(doc.particles.first { $0.id == 543 })
+        XCTAssertFalse(mid.visible, "부모(239)가 콤보로 꺼져 있으므로 중간 파티클도 숨어야")
+        XCTAssertFalse(leaf.visible, "파티클(540)을 **거쳐** 비가시 조상(239)에 닿으므로 잎도 숨어야")
+    }
+
+    /// 대조군: 같은 체인에서 조상만 켜지면 파티클 두 개가 모두 보여야 한다(무회귀 — 새 parentOf 항목이
+    /// 가시 체인을 잘못 끄지 않음을 고정).
+    func testVisibleAncestorKeepsParticleChainVisible() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":239,"name":"LonelyCAT VIE","image":"models/x.json","origin":"50 50 0","size":"10 10",
+            "visible":{"user":{"condition":"2","name":"language"},"value":true}},
+           {"id":540,"name":"Blinking Stars_01","particle":"particles/p.json","parent":239},
+           {"id":543,"name":"Moving Stars_02","particle":"particles/p.json","parent":540}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material),
+                         ("particles/p.json", particleDef), ("materials/pm.json", particleMaterial)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        XCTAssertTrue(try XCTUnwrap(doc.particles.first { $0.id == 540 }).visible)
+        XCTAssertTrue(try XCTUnwrap(doc.particles.first { $0.id == 543 }).visible)
+    }
 
     /// W3-①(C8): 실물 3299228616 축소판 — 부모 그룹('Clock Layer 2')이 clocklocation 콤보로 꺼진 채,
     /// 자식('number.am.pm')은 **다른** 콤보(clock24hformat)에 바인딩돼 자기 자신은 true 로 풀린다.

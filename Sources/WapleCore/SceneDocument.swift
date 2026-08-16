@@ -199,6 +199,12 @@ public struct SceneParticle: Equatable {
     public var scale: Vec2
     /// scene.json objects[] 내 인덱스(레이어와 공유하는 z-순서).
     public var order: Int = 0
+    /// scene.json objects[].id — **다른 오브젝트가 이 파티클을 parent 로 참조할 때의 룩업 키**
+    /// (SceneLayer.id:58 / SceneTextLayer.id:236 과 동일 규약). 0 = 미지정.
+    /// 종전엔 이 필드 자체가 없어서 파티클이 부모 체인의 "중간 마디"가 될 수 없었다 —
+    /// applyVisibilityInheritance 의 parentOf 가 파티클을 담지 못해, 부모가 파티클인 자식은
+    /// 조상 탐색이 그 자리에서 끝났다(실물 3299228616: 30오브젝트가 파티클을 거치는 체인).
+    public var id: Int = 0
     /// 3D 씬 배치(camera3D 마운트 경로 전용 — 2D 정사영 경로는 origin/scale Vec2 그대로 사용).
     /// 파티클 오브젝트의 3D 트랜스폼(전 성분)·부모 노드 id·정적 가시성. 2D 씬에선 기본값(미사용).
     public var origin3D: Vec3 = Vec3(x: 0, y: 0, z: 0)
@@ -1534,9 +1540,12 @@ extension SceneDocument {
     /// 은 clocklocation 콤보가 선택 안 된 값이라 resolveUserBindings 이후 평문 false 로 굳고,
     /// 그 자식 'number.am.pm' 은 **다른** 콤보(clock24hformat)에 바인딩돼 있어 자기 자신은 true 로
     /// 풀리지만 부모가 꺼져 있으면 같이 숨어야 한다 — WE 규약, 종전엔 부모 체인을 전혀 안 봐서 계속 그려짐).
-    /// 비가시 조상은 nodes3D 만으로 충분하다: 정적 비가시 콘텐츠 오브젝트(레이어/텍스트/파티클)도 id 가
-    /// 있으면 파스 루프가 이미 invNode(SceneNode3D, visible=false)로 보존한다(V06, :845 부근) — 진짜
-    /// 그룹 노드든 비가시로 드롭된 콘텐츠든 nodes3D 에 동일하게 나타난다.
+    /// 비가시 **조상 집합**(invisible)은 nodes3D 만으로 충분하다: 정적 비가시 콘텐츠 오브젝트(레이어/
+    /// 텍스트/파티클)도 id 가 있으면 파스 루프가 이미 invNode(SceneNode3D, visible=false)로 보존한다
+    /// (V06, :845 부근) — 진짜 그룹 노드든 비가시로 드롭된 콘텐츠든 nodes3D 에 동일하게 나타난다.
+    /// 반면 **부모 체인**(parentOf)은 nodes3D 만으로 부족하다 — 조상 탐색이 거쳐 가는 중간 마디는
+    /// 가시 오브젝트일 수 있고 그건 nodes3D 에 없다. 그래서 레이어·텍스트·파티클의 parent 를 전부
+    /// 등록한다(아래 세 줄). 두 집합의 역할이 다르다는 것이 이 함수의 요점이다.
     /// imageLayerCompositeIDs 카브아웃(:845 와 동형) — composelayer 합성 소스로 참조되는 레이어는
     /// 부모가 꺼져 있어도 숨기지 않는다(오프스크린 합성용이라 자기 자신의 화면 표시 여부와 무관).
     /// 3D 는 이미 Scene3DMath.worldMatrix 가 조상 AND 로 처리하므로 손대지 않는다(camera3D!=nil 스킵).
@@ -1562,6 +1571,14 @@ extension SceneDocument {
         guard !invisible.isEmpty else { return }
         for l in layers where l.id != 0 { if let p = l.parent { parentOf[l.id] = p } }
         for t in texts where t.id != 0 { if let p = t.parent { parentOf[t.id] = p } }
+        // 파티클도 부모 체인의 중간 마디가 된다 — 종전엔 이 한 줄이 없어서 parentOf 에 파티클 id 가
+        // 아예 안 들어갔고, 부모가 **가시** 파티클인 자식은 hasInvisibleAncestor 가 parentOf[부모] 를
+        // 못 찾아 그 자리에서 false 로 끝났다(비가시 파티클은 :934 의 invNode 로 nodes3D 에 이미 있어
+        // 우연히 동작했다 — 그래서 갭이 "가시 파티클을 경유하는 체인"에만 숨어 있었다).
+        // 실물 3299228616: `543 Moving Stars_02 → 540 Blinking Stars_01(파티클, visible true)
+        // → 239 LonelyCAT VIE(language 콤보 조건 false)` — 540 은 정상 은닉되는데 543 은 계속 그려졌다
+        // (파티클을 거치는 체인 30오브젝트/1씬).
+        for p in particles where p.id != 0 { if let pp = p.parent { parentOf[p.id] = pp } }
         func hasInvisibleAncestor(_ id: Int?, depth: Int = 0) -> Bool {
             guard let id, depth < 32 else { return false }
             if invisible.contains(id) { return true }
@@ -1994,6 +2011,7 @@ extension SceneDocument {
         p.origin3D = vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0)
         p.scale3D = vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1)
         p.angles3D = vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0)
+        p.id = intVal(obj["id"]) ?? 0   // 부모 체인 룩업 키(SceneParticle.id 주석 참조)
         p.parent = intVal(obj["parent"])
         p.visible = initialVisible
         p.attachment = obj["attachment"] as? String   // M(⑤): 파스만(SceneParticle.attachment 주석 참조)
