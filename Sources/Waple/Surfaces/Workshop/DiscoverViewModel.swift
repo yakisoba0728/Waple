@@ -7,6 +7,7 @@ final class DiscoverViewModel: ObservableObject {
     enum RowState: Equatable {
         case loading
         case loaded([WorkshopItem])
+        /// 연관값은 **이미 현지화된 문구**다 — 뷰가 그대로 표시한다(§5.0).
         case failed(String)
     }
 
@@ -14,12 +15,19 @@ final class DiscoverViewModel: ObservableObject {
         let sort: WorkshopSort
         var state: RowState = .loading
         var id: Int { sort.rawValue }
+
+        /// 레일 제목. **이미 현지화된 문자열**이다 — `WorkshopSort.label` 과 같은 이유로
+        /// enum 계산 프로퍼티는 커버리지 스캐너에 잡히지 않아, 감싸지 않으면 영어 시스템에서
+        /// 레일 제목만 한국어로 남는다.
+        ///
+        /// 정렬 라벨(`WorkshopSort.label`)과 문구가 다른 것은 의도다 — 이쪽은 편집자가 붙인
+        /// 진열대 이름이고, 저쪽은 메뉴에서 고르는 축의 이름이라 어투가 다르다.
         var title: String {
             switch sort {
-            case .trend: return "인기 급상승"
-            case .latest: return "최신 등록"
-            case .subscriptions: return "구독 순"
-            case .votes: return "평점 순"
+            case .trend: return NSLocalizedString("인기 급상승", comment: "디스커버 레일 제목")
+            case .latest: return NSLocalizedString("최신 등록", comment: "디스커버 레일 제목")
+            case .subscriptions: return NSLocalizedString("구독 순", comment: "디스커버 레일 제목")
+            case .votes: return NSLocalizedString("평점 순", comment: "디스커버 레일 제목")
             }
         }
     }
@@ -68,7 +76,8 @@ final class DiscoverViewModel: ObservableObject {
 
     private func loadRow(at index: Int) async {
         guard let key = keyProvider() else {
-            rows[index].state = .failed("Steam Web API 키가 필요합니다.")
+            rows[index].state = .failed(NSLocalizedString("Steam Web API 키가 필요합니다.",
+                                                          comment: "레일 로드 중 키가 사라진 경우"))
             return
         }
         do {

@@ -21,6 +21,7 @@ struct DiscoverView: View {
     private var rails: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Metrics.gridSpacing + 6) {
+                // 이미 번역된 문구다(§5.0) — 워크샵 VM 이 만들 때 감싼다.
                 if let message = workshopVM.statusMessage {
                     Text(message).font(.caption).foregroundStyle(.secondary)
                         .padding(.horizontal, 20)

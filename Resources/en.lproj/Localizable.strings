@@ -210,6 +210,39 @@
 "동영상 가져오기에 실패했습니다: %@" = "Could not import the video: %@";
 
 /* MARK: Unit C — 창작마당·둘러보기 */
+"구독순" = "Subscriptions";
+"최신" = "Newest";
+"트렌드" = "Trending";
+"투표순" = "Rating";
+"인기 급상승" = "Trending now";
+"최신 등록" = "Recently added";
+"구독 순" = "Most subscribed";
+"평점 순" = "Top rated";
+"다운로드 중" = "Downloading";
+"검증 중" = "Verifying";
+"설치 중" = "Installing";
+"가져오는 중" = "Importing";
+"steamcmd 로 다운로드해 라이브러리에 추가" = "Download with steamcmd and add to your library";
+"steamcmd 가 필요합니다: brew install steamcmd" = "steamcmd is required: brew install steamcmd";
+"steamcmd 로그인 계정(username)을 먼저 입력하세요." = "Enter your steamcmd sign-in account (username) first.";
+"결과가 없습니다." = "No results.";
+"API 키를 저장하지 못했습니다." = "Could not save the API key.";
+"Steam Web API 키가 필요합니다." = "A Steam Web API key is required.";
+"검색 URL 을 만들 수 없습니다." = "Could not build the search URL.";
+"Steam 요청이 너무 잦습니다(HTTP 429). 잠시 후 다시 시도하세요." = "Too many requests to Steam (HTTP 429). Try again in a moment.";
+"API 키를 저장하지 못했습니다 — Keychain 이 기존 항목 삭제를 거부했습니다(권한/서명 변경 가능성). macOS '키체인 접근' 앱에서 'kr.yaki.waple.steam-api-key' 항목을 지운 뒤 다시 시도하세요." = "Could not save the API key — the Keychain refused to delete the existing item (its permissions or the app signature may have changed). Delete the 'kr.yaki.waple.steam-api-key' item in the macOS Keychain Access app, then try again.";
+
+/* Unit C — 보간이 들어가는 문자열 */
+"평점 %.1f/5" = "Rated %.1f/5";
+"검색 실패: %@" = "Search failed: %@";
+"더 불러오기 실패: %@" = "Could not load more: %@";
+"API 키를 저장하지 못했습니다(Keychain 오류 %d)." = "Could not save the API key (Keychain error %d).";
+"Steam 서버 응답 오류(HTTP %lld). 잠시 후 다시 시도하세요." = "Steam server error (HTTP %lld). Try again in a moment.";
+"Steam 응답 오류(HTTP %lld). API 키를 확인하세요." = "Steam returned an error (HTTP %lld). Check your API key.";
+"Steam 응답 오류(HTTP %lld)." = "Steam returned an error (HTTP %lld).";
+"‘%@’ 다운로드는 완료됐지만 결과 폴더를 찾지 못했습니다 — steamcmd 의 content 폴더 위치를 확인하세요." = "“%@” finished downloading but the result folder could not be found — check where steamcmd puts its content folder.";
+"‘%@’ 다운로드 실패 — 터미널에서 `steamcmd +login %@` 로 1회 로그인해 세션을 캐시했는지 확인하세요." = "“%@” failed to download — check that you signed in once in Terminal with `steamcmd +login %@` to cache the session.";
+"‘%@’ 다운로드 실패 — steamcmd 가 완료 신호를 내지 않았습니다(시간 초과·네트워크·실행 오류 가능). 터미널에서 `steamcmd +login %@` 세션 캐시를 확인하고 직접 시도해 원인을 파악하세요." = "“%@” failed to download — steamcmd never reported completion (timeout, network or launch error). Check the `steamcmd +login %@` session cache in Terminal and run it by hand to find the cause.";
 
 /* MARK: Unit D — 설정·온보딩·디스플레이 */
 

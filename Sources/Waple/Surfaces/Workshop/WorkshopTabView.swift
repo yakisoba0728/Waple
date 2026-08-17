@@ -20,6 +20,8 @@ struct WorkshopTabView: View {
     private var browser: some View {
         VStack(spacing: 0) {
             utilityStrip
+            // vm.statusMessage 는 생산 지점에서 이미 번역돼 있다 — 여기 붙는 오버로드는
+            // 번역을 하지 않으므로(§5.0) 뷰가 뒤늦게 감쌀 수 있는 것이 아니다.
             if let message = vm.statusMessage {
                 Text(message).font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

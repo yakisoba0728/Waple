@@ -16,12 +16,20 @@ enum WorkshopSort: Int, CaseIterable, Identifiable {
     case votes = 0
 
     var id: Int { rawValue }
+
+    /// 정렬 메뉴에 뜨는 이름. **이미 현지화된 문자열**이다.
+    ///
+    /// enum 계산 프로퍼티는 현지화 오라클의 사각지대다 — 커버리지 스캐너는 정해진 표시 API
+    /// 이름 목록으로만 리터럴을 찾으므로 `return "구독순"` 은 어디에도 걸리지 않는다.
+    /// 그래서 테스트가 초록인데 영어 시스템의 정렬 메뉴만 한국어로 남아 있었다.
+    /// 생산 지점에서 감싸 두면 스캐너의 패턴 1(`NSLocalizedString(`)에 그대로 잡히고,
+    /// 호출부는 `Text(sort.label)` 비현지화 오버로드여도 이미 번역된 값을 받는다.
     var label: String {
         switch self {
-        case .subscriptions: return "구독순"
-        case .latest: return "최신"
-        case .trend: return "트렌드"
-        case .votes: return "투표순"
+        case .subscriptions: return NSLocalizedString("구독순", comment: "워크샵 정렬 — 구독 수")
+        case .latest: return NSLocalizedString("최신", comment: "워크샵 정렬 — 최근 등록")
+        case .trend: return NSLocalizedString("트렌드", comment: "워크샵 정렬 — 인기 급상승")
+        case .votes: return NSLocalizedString("투표순", comment: "워크샵 정렬 — 평점")
         }
     }
 }
@@ -161,13 +169,20 @@ enum SteamAPIKeyStore {
         case aclDenied
         case other(OSStatus)
 
+        /// **이미 현지화된 문자열** — UI 는 그대로 표시하기만 한다.
+        /// 종전에는 리터럴 두 개를 `+` 로 이어 붙여 만들었는데, 그러면 키가 반 토막씩 두 개가 돼
+        /// 번역이 불가능하다(번역문의 어순이 원문과 같다는 보장이 없다). 키는 한 문장이어야 한다.
         var message: String {
             switch self {
             case .aclDenied:
-                return "API 키를 저장하지 못했습니다 — Keychain 이 기존 항목 삭제를 거부했습니다(권한/서명 변경 가능성). " +
-                       "macOS '키체인 접근' 앱에서 'kr.yaki.waple.steam-api-key' 항목을 지운 뒤 다시 시도하세요."
+                return NSLocalizedString(
+                    "API 키를 저장하지 못했습니다 — Keychain 이 기존 항목 삭제를 거부했습니다(권한/서명 변경 가능성). macOS '키체인 접근' 앱에서 'kr.yaki.waple.steam-api-key' 항목을 지운 뒤 다시 시도하세요.",
+                    comment: "Keychain ACL 거부로 API 키 저장 실패")
             case .other(let status):
-                return "API 키를 저장하지 못했습니다(Keychain 오류 \(status))."
+                // %d — OSStatus 는 Int32 다. %lld 로 받으면 폭이 어긋난다.
+                return String(format: NSLocalizedString("API 키를 저장하지 못했습니다(Keychain 오류 %d).",
+                                                        comment: "분류되지 않은 Keychain 저장 실패"),
+                              status)
             }
         }
     }
@@ -212,20 +227,26 @@ enum WorkshopError: Error, LocalizedError {
     /// 종전엔 모든 비-2xx 를 "API 키를 확인하세요"로 단일 처리해, 429(레이트리밋)·5xx(Steam 장애)도
     /// 키 오류로 오진단했다 — 실제로는 멀쩡한 키를 사용자가 재발급(파괴적 "API 키 변경")하도록
     /// 오도할 수 있다. 429/5xx는 재시도 안내로, 인증 실패(401/403)만 키 확인으로 분리한다.
+    /// **이미 현지화된 문자열.** 뷰모델이 그대로 `statusMessage` 에 담아 뷰가 표시한다 —
+    /// 보간으로 만들면 `Text(String)` 비현지화 오버로드에 닿아 영어 시스템에서도 한국어로 남는다.
     var errorDescription: String? {
         switch self {
         case .badURL:
-            return "검색 URL 을 만들 수 없습니다."
+            return NSLocalizedString("검색 URL 을 만들 수 없습니다.", comment: "URLComponents 조립 실패")
         case .http(let code):
             switch code {
             case 429:
-                return "Steam 요청이 너무 잦습니다(HTTP 429). 잠시 후 다시 시도하세요."
+                return NSLocalizedString("Steam 요청이 너무 잦습니다(HTTP 429). 잠시 후 다시 시도하세요.",
+                                         comment: "레이트리밋 — 키 오류가 아니다")
             case 500...599:
-                return "Steam 서버 응답 오류(HTTP \(code)). 잠시 후 다시 시도하세요."
+                return String(format: NSLocalizedString("Steam 서버 응답 오류(HTTP %lld). 잠시 후 다시 시도하세요.",
+                                                        comment: "Steam 장애 — 키 오류가 아니다"), code)
             case 401, 403:
-                return "Steam 응답 오류(HTTP \(code)). API 키를 확인하세요."
+                return String(format: NSLocalizedString("Steam 응답 오류(HTTP %lld). API 키를 확인하세요.",
+                                                        comment: "인증 실패 — 키 확인 안내"), code)
             default:
-                return "Steam 응답 오류(HTTP \(code))."
+                return String(format: NSLocalizedString("Steam 응답 오류(HTTP %lld).",
+                                                        comment: "분류되지 않은 HTTP 오류"), code)
             }
         }
     }

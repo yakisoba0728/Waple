@@ -97,7 +97,14 @@ struct RemoteTileView: View {
             .padding(.vertical, 3)
             .background(.ultraThinMaterial, in: Capsule())
             .padding(6)
-            .help(String(format: "평점 %.1f/5", score * 5))
+            .help(Self.ratingText(score))
+    }
+
+    /// 평점 툴팁·접근성 문구. 종전 `String(format: "평점 %.1f/5", …)` 는 `NSLocalizedString`
+    /// 밖이라 어떤 스캔 패턴에도 걸리지 않았고, 그래서 번역이 없는 줄 아무도 몰랐다.
+    static func ratingText(_ score: Double) -> String {
+        String(format: NSLocalizedString("평점 %.1f/5", comment: "스팀 투표 점수를 별 5점으로 환산"),
+               score * 5)
     }
 
     @ViewBuilder
@@ -107,19 +114,24 @@ struct RemoteTileView: View {
             Button("다운로드", action: onDownload)
                 .buttonStyle(.bordered).controlSize(.small)
                 .disabled(!steamcmdAvailable)
-                .help(steamcmdAvailable ? "steamcmd 로 다운로드해 라이브러리에 추가"
-                                        : "steamcmd 가 필요합니다: brew install steamcmd")
+                // 삼항으로 **문자열 리터럴**을 고르면 `(` 바로 뒤가 `"` 가 아니라 스캐너가 둘 다
+                // 놓친다(§5.3 사각지대). 생산 지점에서 감싸면 패턴 1 이 양쪽을 잡는다.
+                .help(steamcmdAvailable
+                      ? NSLocalizedString("steamcmd 로 다운로드해 라이브러리에 추가",
+                                          comment: "다운로드 버튼 툴팁")
+                      : NSLocalizedString("steamcmd 가 필요합니다: brew install steamcmd",
+                                          comment: "다운로더 미설치로 버튼 비활성"))
         case .downloading(let v):
             if let v {
                 ProgressView(value: v, total: 100)
                     .frame(width: Metrics.downloadBarWidth)
-                    .help(String(format: NSLocalizedString("다운로드 중 %lld%%", comment: "다운로드 진행률"), Int(v)))
+                    .help(Self.progressText(v))
             } else {
-                stage("다운로드 중")
+                stage(Text("다운로드 중"))
             }
-        case .verifying: stage("검증 중")
-        case .committing: stage("설치 중")
-        case .importing: stage("가져오는 중")
+        case .verifying: stage(Text("검증 중"))
+        case .committing: stage(Text("설치 중"))
+        case .importing: stage(Text("가져오는 중"))
         case .done:
             Button("적용", action: onApply)
                 .buttonStyle(.borderedProminent).controlSize(.small)
@@ -129,10 +141,17 @@ struct RemoteTileView: View {
         }
     }
 
-    private func stage(_ label: String) -> some View {
+    static func progressText(_ percent: Double) -> String {
+        String(format: NSLocalizedString("다운로드 중 %lld%%", comment: "다운로드 진행률"), Int(percent))
+    }
+
+    /// 파라미터가 `String` 이 아니라 `Text` 인 이유: `Text(someString)` 는 비현지화 오버로드라
+    /// 호출부의 한국어 리터럴이 조용히 번역을 잃는다. `Text` 로 받으면 리터럴이 호출부에 남아
+    /// `LocalizedStringKey` 로 해석되고 커버리지 스캐너에도 잡힌다(공유 컴포넌트와 같은 규약).
+    private func stage(_ label: Text) -> some View {
         HStack(spacing: 4) {
             ProgressView().controlSize(.small)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            label.font(.caption2).foregroundStyle(.secondary)
         }
     }
 }

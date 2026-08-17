@@ -14,6 +14,11 @@ final class WorkshopViewModel: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var isLoadingMore = false
     @Published private(set) var canLoadMore = false
+    /// 상태/오류 문구. **여기 담기는 값은 이미 현지화돼 있다** — 뷰는 `Text(message)` 로
+    /// 그대로 표시한다. 그 오버로드(`Text(_ content: some StringProtocol)`)는 번역을 하지
+    /// 않으므로, 번역은 문자열을 **만드는 쪽**에서 끝나 있어야 한다(청사진 §5.0 (a)).
+    /// 대안이던 `LocalizedStringKey` 로 타입을 바꾸는 길은 대입문이라 어떤 스캔 패턴에도
+    /// 걸리지 않아, 런타임 버그 하나를 고치면서 오라클 사각지대를 새로 만든다.
     @Published var statusMessage: String?
     @Published private(set) var hasAPIKey: Bool
     @Published var apiKeyInput = ""
@@ -85,7 +90,8 @@ final class WorkshopViewModel: ObservableObject {
             apiKeyInput = ""
             statusMessage = nil
         } else {
-            statusMessage = "API 키를 저장하지 못했습니다."
+            statusMessage = NSLocalizedString("API 키를 저장하지 못했습니다.",
+                                             comment: "저장은 성공했다는데 다시 읽으면 키가 없다")
         }
     }
 
@@ -126,7 +132,9 @@ final class WorkshopViewModel: ObservableObject {
             guard epoch == searchEpoch else { return }   // 더 새 검색이 떴다 → 이 응답 폐기
             results = fetched
             canLoadMore = fetched.count == pageSize
-            if fetched.isEmpty { statusMessage = "결과가 없습니다." }
+            if fetched.isEmpty {
+                statusMessage = NSLocalizedString("결과가 없습니다.", comment: "검색 결과 0건")
+            }
             // 성공 완료 시점에만 시도로 센다 — 실패/취소된 첫 로드는 탭 재진입 시 자동 재시도돼야 한다.
             attemptedInitialLoad = true
         } catch {
@@ -134,7 +142,9 @@ final class WorkshopViewModel: ObservableObject {
             if isCancellation(error) { return }
             guard epoch == searchEpoch else { return }
             results = []
-            statusMessage = (error as? LocalizedError)?.errorDescription ?? "검색 실패: \(error.localizedDescription)"
+            statusMessage = (error as? LocalizedError)?.errorDescription
+                ?? String(format: NSLocalizedString("검색 실패: %@", comment: "분류되지 않은 검색 오류"),
+                          error.localizedDescription)
         }
     }
 
@@ -158,7 +168,9 @@ final class WorkshopViewModel: ObservableObject {
         } catch {
             if isCancellation(error) { return }   // 취소는 실패가 아니다 — page/results/메시지 미변경
             guard epoch == searchEpoch else { return }
-            statusMessage = (error as? LocalizedError)?.errorDescription ?? "더 불러오기 실패: \(error.localizedDescription)"
+            statusMessage = (error as? LocalizedError)?.errorDescription
+                ?? String(format: NSLocalizedString("더 불러오기 실패: %@", comment: "다음 페이지 로드 오류"),
+                          error.localizedDescription)
         }
     }
 
@@ -166,11 +178,15 @@ final class WorkshopViewModel: ObservableObject {
 
     func download(_ item: WorkshopItem) {
         guard steamcmdAvailable else {
-            statusMessage = "steamcmd 가 필요합니다: brew install steamcmd"; return
+            statusMessage = NSLocalizedString("steamcmd 가 필요합니다: brew install steamcmd",
+                                              comment: "다운로더 미설치")
+            return
         }
         let username = usernameInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !username.isEmpty else {
-            statusMessage = "steamcmd 로그인 계정(username)을 먼저 입력하세요."; return
+            statusMessage = NSLocalizedString("steamcmd 로그인 계정(username)을 먼저 입력하세요.",
+                                              comment: "계정 미입력")
+            return
         }
         SteamCmdDownloader.username = username
         downloads[item.id] = DownloadUIState(phase: .downloading(nil), entryId: nil)
@@ -203,12 +219,23 @@ final class WorkshopViewModel: ObservableObject {
             // F492: 원인 불문 로그인 오진단 방지 — 관측된 steamcmd 신호로 실패 유형을 나눈다.
             // ERROR! 라인은 로그인/세션 계열이 대표적이라 기존 안내를 유지하고, 성공 후 폴더 부재와
             // 무신호(타임아웃·실행 실패·네트워크)는 로그인 무관 원인을 안내한다.
+            // 보간 대신 포맷 지정자 — 번역문에서 배경 제목과 계정명의 어순이 원문과 다를 수 있고,
+            // 보간으로 만든 문자열은 애초에 번역 대상이 되지 않는다(§5.0).
             if sawSuccessSignal.contains(item.id) {
-                statusMessage = "‘\(item.title)’ 다운로드는 완료됐지만 결과 폴더를 찾지 못했습니다 — steamcmd 의 content 폴더 위치를 확인하세요."
+                statusMessage = String(
+                    format: NSLocalizedString("‘%@’ 다운로드는 완료됐지만 결과 폴더를 찾지 못했습니다 — steamcmd 의 content 폴더 위치를 확인하세요.",
+                                              comment: "성공 신호는 봤는데 폴더가 없다"),
+                    item.title)
             } else if sawErrorSignal.contains(item.id) {
-                statusMessage = "‘\(item.title)’ 다운로드 실패 — 터미널에서 `steamcmd +login \(usernameInput)` 로 1회 로그인해 세션을 캐시했는지 확인하세요."
+                statusMessage = String(
+                    format: NSLocalizedString("‘%@’ 다운로드 실패 — 터미널에서 `steamcmd +login %@` 로 1회 로그인해 세션을 캐시했는지 확인하세요.",
+                                              comment: "ERROR! 라인 관측 — 로그인/세션 계열이 대표적"),
+                    item.title, usernameInput)
             } else {
-                statusMessage = "‘\(item.title)’ 다운로드 실패 — steamcmd 가 완료 신호를 내지 않았습니다(시간 초과·네트워크·실행 오류 가능). 터미널에서 `steamcmd +login \(usernameInput)` 세션 캐시를 확인하고 직접 시도해 원인을 파악하세요."
+                statusMessage = String(
+                    format: NSLocalizedString("‘%@’ 다운로드 실패 — steamcmd 가 완료 신호를 내지 않았습니다(시간 초과·네트워크·실행 오류 가능). 터미널에서 `steamcmd +login %@` 세션 캐시를 확인하고 직접 시도해 원인을 파악하세요.",
+                                              comment: "무신호 실패 — 로그인 무관 원인"),
+                    item.title, usernameInput)
             }
             sawErrorSignal.remove(item.id)
             sawSuccessSignal.remove(item.id)

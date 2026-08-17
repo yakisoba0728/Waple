@@ -21,6 +21,7 @@ struct APIKeyGateView: View {
             Button("저장") { vm.saveAPIKey() }
                 .buttonStyle(.borderedProminent)
                 .disabled(vm.apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            // 저장 실패 사유. 이미 번역된 문구다(§5.0 — SteamAPIKeyStore.SaveFailure.message).
             if let message = vm.statusMessage {
                 Text(message).foregroundStyle(.red).font(.caption)
             }
