@@ -46,7 +46,31 @@ enum ColorRole {
     // 세 단: 우물(콘텐츠) < 패널(크롬) < 재질(떠 있는 것). 깊이를 색이 아니라 층으로 표현한다.
 
     /// 콘텐츠 우물 — 그리드·레일이 놓이는 한 단 깊은 바닥.
-    static let well: Color = Color(nsColor: .underPageBackgroundColor)
+    ///
+    /// **종전 값 `underPageBackgroundColor` 를 걷어냈다(Unit E, 2026-08-17).** 그 값은
+    /// 다크에서만 "한 단" 이었고 라이트에서는 콘텐츠 열 전체를 회색 매트로 덮었다.
+    /// `darkAqua` 강제를 걷어내기 전에는 라이트가 존재하지 않아 드러날 수 없던 자리다.
+    ///
+    /// 실측(2026-08-17, macOS 26. 값은 API 가 아니라 **화면에 칠해 캡처로 읽은** 것이다 —
+    /// `underPageBackgroundColor` 는 라이트에서 `.cgColor` 가 0.972 를 돌려주는데 실제로
+    /// 그려지는 것은 0.685 다. Preview 의 페이지 둘레 회색이 바로 이 값이고, 페이지가
+    /// 얹히지 않는 우리 화면에서는 그냥 회색 판이 된다):
+    ///
+    /// | 색 | 라이트 | 다크 |
+    /// | --- | --- | --- |
+    /// | `underPageBackgroundColor`(종전) | **0.685** | 0.208 |
+    /// | `controlBackgroundColor`(현행) | 1.000 | 0.157 |
+    /// | 사이드바(시스템 소스리스트) | 0.925 | 0.213 |
+    ///
+    /// 종전 값은 라이트에서 사이드바(0.925)와 0.24 나 벌어져 콘텐츠 열만 비활성처럼 보였고,
+    /// 그 위에 놓인 `secondaryLabelColor` 본문(검정 50%)의 대비가 **3.5:1** 로 WCAG AA
+    /// (4.5:1)에 못 미쳤다. 흰 바닥에서는 7.7:1 이다 — 취향이 아니라 가독성 문제였다.
+    ///
+    /// `controlBackgroundColor` 를 고른 이유는 Apple 문서의 정의 그대로다("브라우저·테이블
+    /// 뷰 같은 큰 인터페이스 요소의 배경") — 우리 우물이 정확히 그리드와 레일이다.
+    /// 다크에서 우물이 0.208 → 0.157 로 한 단 내려가지만, 인접한 사이드바가 0.213 이라
+    /// "콘텐츠가 더 깊다" 는 층위는 오히려 또렷해진다.
+    static let well: Color = Color(nsColor: .controlBackgroundColor)
     /// 패널 — 인스펙터·사이드바처럼 우물 위에 얹히는 크롬 면.
     static let panel: Color = Color(nsColor: .windowBackgroundColor)
     /// 구분선. `Divider()` 로 충분하면 그걸 쓰고, 커스텀 스트로크가 필요할 때만.
