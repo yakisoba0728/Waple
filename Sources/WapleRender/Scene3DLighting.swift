@@ -36,8 +36,8 @@ struct Scene3DMaterialValues: Equatable {
     /// 소비 위치가 알베도가 아니라 라이팅·반사를 **다 더한 뒤**, 포그 **직전**이다
     /// (generic2.frag:79-81, generic4.frag:166-172). LIGHTING 콤보와 무관하게 발화한다 —
     /// unlit 머티리얼도 곱해야 한다(코퍼스 실물: 3470948192 `uc/材质` generic2 + LIGHTING:0 + 0.5).
-    /// HDR 게이트는 머티리얼이 아니라 **엔진이 주입하는 콤보**라(spec/engine/shaders.json
-    /// `shaders.combos.engineInjected`; 코퍼스 머티리얼 5,804건 중 HDR 콤보 저작 0건) 여기서는
+    /// HDR 게이트는 머티리얼이 아니라 **엔진이 주입하는 콤보**라(정본: spec/engine/material-brightness.json
+    /// `shaders.materialBrightness.hdrGateInjection` — 코퍼스 전수에서 HDR 콤보 저작 0건) 여기서는
     /// 저작값만 보존하고 씬 HDR 여부는 encode3D 가 곱한다.
     var brightness: Float = 1
 

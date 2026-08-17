@@ -1,0 +1,689 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_material_brightness.py",
+ "entries": [
+  {
+   "id": "shaders.materialBrightness.declarations",
+   "value": {
+    "note": "같은 유니폼(g_Brightness)인데 셰이더마다 머티리얼 키 철자가 다르다. `Brigtness` 는 오타가 아니라 **WE 원문 그대로**이며 generic2 에만 있다.",
+    "byShader": {
+     "chroma4.frag": {
+      "materialKey": "brightness",
+      "default": 1,
+      "range": [
+       0,
+       10
+      ],
+      "label": "ui_editor_properties_hdr_brightness",
+      "hdrGated": true,
+      "uses": [
+       {
+        "target": "albedo",
+        "line": 171,
+        "guardedBy": [
+         "HDR"
+        ]
+       }
+      ],
+      "colorWriteSequence": [
+       {
+        "line": 94,
+        "op": "=",
+        "operand": "other",
+        "guardedBy": [
+         "TINTMASKALPHA"
+        ]
+       },
+       {
+        "line": 127,
+        "op": "=",
+        "operand": "other",
+        "guardedBy": [
+         "TINTMASKALPHA"
+        ]
+       },
+       {
+        "line": 129,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": [
+         "!(TINTMASKALPHA)"
+        ]
+       },
+       {
+        "line": 160,
+        "op": "=",
+        "operand": "lighting",
+        "guardedBy": []
+       },
+       {
+        "line": 167,
+        "op": "+=",
+        "operand": "reflection",
+        "guardedBy": [
+         "REFLECTION"
+        ]
+       },
+       {
+        "line": 171,
+        "op": "*=",
+        "operand": "g_Brightness",
+        "guardedBy": [
+         "HDR"
+        ]
+       },
+       {
+        "line": 175,
+        "op": "+=",
+        "operand": "emissive",
+        "guardedBy": [
+         "HDR",
+         "(LIGHTING || REFLECTION) && EMISSIVE_MAP"
+        ]
+       },
+       {
+        "line": 181,
+        "op": "=",
+        "operand": "fog",
+        "guardedBy": [
+         "FOG_HEIGHT || FOG_DIST"
+        ]
+       }
+      ]
+     },
+     "foliage4.frag": {
+      "materialKey": "brightness",
+      "default": 1,
+      "range": [
+       0,
+       10
+      ],
+      "label": "ui_editor_properties_hdr_brightness",
+      "hdrGated": true,
+      "uses": [
+       {
+        "target": "albedo",
+        "line": 137,
+        "guardedBy": [
+         "HDR"
+        ]
+       }
+      ],
+      "colorWriteSequence": [
+       {
+        "line": 78,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": []
+       },
+       {
+        "line": 125,
+        "op": "=",
+        "operand": "lighting",
+        "guardedBy": []
+       },
+       {
+        "line": 133,
+        "op": "+=",
+        "operand": "reflection",
+        "guardedBy": [
+         "REFLECTION"
+        ]
+       },
+       {
+        "line": 137,
+        "op": "*=",
+        "operand": "g_Brightness",
+        "guardedBy": [
+         "HDR"
+        ]
+       },
+       {
+        "line": 141,
+        "op": "+=",
+        "operand": "emissive",
+        "guardedBy": [
+         "HDR",
+         "(LIGHTING || REFLECTION) && EMISSIVE_MAP"
+        ]
+       },
+       {
+        "line": 147,
+        "op": "=",
+        "operand": "fog",
+        "guardedBy": [
+         "FOG_HEIGHT || FOG_DIST"
+        ]
+       },
+       {
+        "line": 154,
+        "op": "=",
+        "operand": "other",
+        "guardedBy": [
+         "FOLIAGEDEBUG"
+        ]
+       }
+      ]
+     },
+     "fur4.frag": {
+      "materialKey": "brightness",
+      "default": 1,
+      "range": [
+       0,
+       10
+      ],
+      "label": "ui_editor_properties_hdr_brightness",
+      "hdrGated": true,
+      "uses": [
+       {
+        "target": "albedo",
+        "line": 142,
+        "guardedBy": [
+         "HDR"
+        ]
+       }
+      ],
+      "colorWriteSequence": [
+       {
+        "line": 84,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": []
+       },
+       {
+        "line": 130,
+        "op": "=",
+        "operand": "lighting",
+        "guardedBy": []
+       },
+       {
+        "line": 138,
+        "op": "+=",
+        "operand": "reflection",
+        "guardedBy": [
+         "REFLECTION"
+        ]
+       },
+       {
+        "line": 142,
+        "op": "*=",
+        "operand": "g_Brightness",
+        "guardedBy": [
+         "HDR"
+        ]
+       },
+       {
+        "line": 146,
+        "op": "+=",
+        "operand": "emissive",
+        "guardedBy": [
+         "HDR",
+         "(LIGHTING || REFLECTION) && EMISSIVE_MAP"
+        ]
+       },
+       {
+        "line": 154,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": []
+       },
+       {
+        "line": 158,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": []
+       },
+       {
+        "line": 163,
+        "op": "=",
+        "operand": "fog",
+        "guardedBy": [
+         "FOG_HEIGHT || FOG_DIST"
+        ]
+       }
+      ]
+     },
+     "generic2.frag": {
+      "materialKey": "Brigtness",
+      "default": 1,
+      "range": [
+       0,
+       10
+      ],
+      "label": null,
+      "hdrGated": true,
+      "uses": [
+       {
+        "target": "albedo",
+        "line": 80,
+        "guardedBy": [
+         "HDR"
+        ]
+       }
+      ],
+      "colorWriteSequence": [
+       {
+        "line": 41,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": []
+       },
+       {
+        "line": 46,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": [
+         "DETAILINALPHA"
+        ]
+       },
+       {
+        "line": 69,
+        "op": "=",
+        "operand": "lighting",
+        "guardedBy": []
+       },
+       {
+        "line": 76,
+        "op": "+=",
+        "operand": "other",
+        "guardedBy": [
+         "REFLECTION"
+        ]
+       },
+       {
+        "line": 80,
+        "op": "*=",
+        "operand": "g_Brightness",
+        "guardedBy": [
+         "HDR"
+        ]
+       }
+      ]
+     },
+     "generic3.frag": {
+      "materialKey": "brightness",
+      "default": 1,
+      "range": [
+       0,
+       10
+      ],
+      "label": "ui_editor_properties_hdr_brightness",
+      "hdrGated": true,
+      "uses": [
+       {
+        "target": "albedo",
+        "line": 260,
+        "guardedBy": [
+         "HDR"
+        ]
+       }
+      ],
+      "colorWriteSequence": [
+       {
+        "line": 174,
+        "op": "=",
+        "operand": "other",
+        "guardedBy": [
+         "TINTMASKALPHA"
+        ]
+       },
+       {
+        "line": 177,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": [
+         "!(TINTMASKALPHA)"
+        ]
+       },
+       {
+        "line": 224,
+        "op": "=",
+        "operand": "lighting",
+        "guardedBy": []
+       },
+       {
+        "line": 255,
+        "op": "+=",
+        "operand": "reflection",
+        "guardedBy": [
+         "REFLECTION"
+        ]
+       },
+       {
+        "line": 260,
+        "op": "*=",
+        "operand": "g_Brightness",
+        "guardedBy": [
+         "HDR"
+        ]
+       },
+       {
+        "line": 264,
+        "op": "+=",
+        "operand": "emissive",
+        "guardedBy": [
+         "HDR",
+         "(LIGHTING || REFLECTION) && EMISSIVE_MAP"
+        ]
+       }
+      ]
+     },
+     "generic4.frag": {
+      "materialKey": "brightness",
+      "default": 1,
+      "range": [
+       0,
+       10
+      ],
+      "label": "ui_editor_properties_hdr_brightness",
+      "hdrGated": true,
+      "uses": [
+       {
+        "target": "albedo",
+        "line": 167,
+        "guardedBy": [
+         "HDR"
+        ]
+       }
+      ],
+      "colorWriteSequence": [
+       {
+        "line": 81,
+        "op": "=",
+        "operand": "other",
+        "guardedBy": [
+         "TINTMASKALPHA"
+        ]
+       },
+       {
+        "line": 84,
+        "op": "*=",
+        "operand": "other",
+        "guardedBy": [
+         "!(TINTMASKALPHA)"
+        ]
+       },
+       {
+        "line": 131,
+        "op": "=",
+        "operand": "lighting",
+        "guardedBy": []
+       },
+       {
+        "line": 162,
+        "op": "+=",
+        "operand": "reflection",
+        "guardedBy": [
+         "REFLECTION"
+        ]
+       },
+       {
+        "line": 167,
+        "op": "*=",
+        "operand": "g_Brightness",
+        "guardedBy": [
+         "HDR"
+        ]
+       },
+       {
+        "line": 171,
+        "op": "+=",
+        "operand": "emissive",
+        "guardedBy": [
+         "HDR",
+         "(LIGHTING || REFLECTION) && EMISSIVE_MAP"
+        ]
+       },
+       {
+        "line": 177,
+        "op": "=",
+        "operand": "fog",
+        "guardedBy": [
+         "FOG_HEIGHT || FOG_DIST"
+        ]
+       }
+      ]
+     },
+     "genericimage.frag": {
+      "materialKey": "Bright",
+      "default": 1,
+      "range": [
+       0,
+       2
+      ],
+      "label": null,
+      "hdrGated": false,
+      "uses": [
+       {
+        "target": "albedo",
+        "line": 24,
+        "guardedBy": []
+       }
+      ],
+      "colorWriteSequence": [
+       {
+        "line": 24,
+        "op": "*=",
+        "operand": "g_Brightness",
+        "guardedBy": []
+       },
+       {
+        "line": 27,
+        "op": "=",
+        "operand": "other",
+        "guardedBy": []
+       }
+      ]
+     },
+     "genericimage2.frag": {
+      "materialKey": "Brightness",
+      "default": 1,
+      "range": [
+       0,
+       2
+      ],
+      "label": "ui_editor_properties_brightness",
+      "hdrGated": false,
+      "uses": [
+       {
+        "target": "color",
+        "line": 69,
+        "guardedBy": [
+         "!VERSION"
+        ]
+       }
+      ],
+      "colorWriteSequence": [
+       {
+        "line": 69,
+        "op": "*=",
+        "operand": "g_Brightness",
+        "guardedBy": [
+         "!VERSION"
+        ]
+       },
+       {
+        "line": 120,
+        "op": "=",
+        "operand": "lighting",
+        "guardedBy": [
+         "LIGHTING"
+        ]
+       },
+       {
+        "line": 147,
+        "op": "+=",
+        "operand": "reflection",
+        "guardedBy": [
+         "REFLECTION && NORMALMAP"
+        ]
+       },
+       {
+        "line": 153,
+        "op": "+=",
+        "operand": "emissive",
+        "guardedBy": [
+         "HDR && EMISSIVE_MAP"
+        ]
+       }
+      ]
+     }
+    },
+    "keys": [
+     "Bright",
+     "Brightness",
+     "Brigtness",
+     "brightness"
+    ]
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders (WE 2.8.42 동봉본)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_brightness.py"
+    }
+   ]
+  },
+  {
+   "id": "shaders.materialBrightness.consumptionOrder",
+   "value": {
+    "rule": "메시 레인(generic2/3/4·chroma4·fur4·foliage4)은 라이팅+반사 결과에 곱한다 — 알베도 샘플 직후가 아니다. 순서: CombineLighting → REFLECTION 가산 → **g_Brightness 곱** → ApplyFog.",
+    "derivedFrom": "위 byShader 의 colorWriteSequence — 최종색 변수에 대한 복합대입을 순서대로 나열한 것이다. g_Brightness 대입이 lighting/reflection 대입 **뒤**, fog 대입 **앞**에 온다(generic3/4 는 그 뒤에 같은 HDR 블록 안의 emissive overbright 가산이 하나 더 붙는다).",
+    "lightingIndependent": "곱은 `#if HDR` 안에만 있고 LIGHTING 콤보 밖이다 — unlit 머티리얼도 곱해진다.",
+    "twoDLaneIsDifferent": "genericimage(`Bright`)·genericimage2(`Brightness`)는 HDR 게이트가 없고 알베도 샘플 직후에 곱한다. 이름만 같은 **다른 규약**이다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders (WE 2.8.42 동봉본)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_brightness.py"
+    }
+   ]
+  },
+  {
+   "id": "shaders.materialBrightness.corpusReach",
+   "value": {
+    "byKeyAndShader": {
+     "brightness @ generic4": {
+      "materials": 39,
+      "scenes": 4,
+      "sceneIds": [
+       "3470948192",
+       "3509243656",
+       "3589454154",
+       "3662790108"
+      ],
+      "hdrScenes": 4
+     },
+     "Brightness @ genericimage2": {
+      "materials": 3,
+      "scenes": 1,
+      "sceneIds": [
+       "3521337568"
+      ],
+      "hdrScenes": 0
+     },
+     "Brigtness @ generic2": {
+      "materials": 2,
+      "scenes": 1,
+      "sceneIds": [
+       "3470948192"
+      ],
+      "hdrScenes": 1
+     },
+     "Bright @ workshop/2652493753/tint": {
+      "materials": 1,
+      "scenes": 1,
+      "sceneIds": [
+       "3288383262"
+      ],
+      "hdrScenes": 0
+     }
+    },
+    "materialsAuthoringHDRCombo": 0,
+    "hdrScenes": 17,
+    "observation": "메시 레인 키(Brigtness/brightness)를 저작한 씬은 전건 hdr:true 고, HDR 게이트가 없는 2D 레인 키(Bright/Brightness)를 저작한 씬은 전건 hdr:false 다. 저작 분포가 셰이더의 게이트와 일치한다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 170개 / 머티리얼 JSON 7261건 전수"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_material_brightness.py"
+    }
+   ]
+  },
+  {
+   "id": "shaders.materialBrightness.hdrGateInjection",
+   "value": {
+    "claim": "`HDR` 매크로는 씬의 HDR 파이프라인 활성 여부로 엔진이 주입한다(머티리얼 저작 대상 아님)",
+    "for": [
+     "shaders.combos.engineInjected(확정) 이 HDR 을 '#if 로 참조되지만 어디에도 선언이 없다' 로 분류한다",
+     "코퍼스 머티리얼에서 HDR 콤보를 저작한 건수 0 (위 materialsAuthoringHDRCombo)",
+     "engine.renderPass 의 씬 플래그 bit13 이 LDR 3패스 블룸 / HDR 피라미드를 가른다(비트 위치 확정)",
+     "PBR 레인 선언 라벨이 `ui_editor_properties_hdr_brightness` 다"
+    ],
+    "notEstablished": "bit13 ↔ scene general.hdr 의 대응은 디스어셈에서 확인되지 않았다(engine.renderPass.* 의 '각 비트의 저작(UI) 이름 대응은 미확인' 과 같은 공백). 그래서 이 항목은 추정이다 — 구현은 이 값에 의존한다.",
+    "wapleChoice": "Waple 은 sceneIsHDR(= general.hdr && HDR 톤맵 패스 빌드 성공)로 게이트한다. LDR 폴백에는 1 초과분을 흡수할 saturate 패스가 없어 그대로 백화가 되기 때문이다."
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders (WE 2.8.42 동봉본)"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 170개 / 머티리얼 JSON 7261건 전수"
+    },
+    {
+     "kind": "file",
+     "ref": "spec/engine/shaders.json shaders.combos.engineInjected"
+    },
+    {
+     "kind": "file",
+     "ref": "spec/engine/render-pass.json engine.renderPass.* (씬 플래그 bit13)"
+    }
+   ]
+  },
+  {
+   "id": "shaders.materialBrightness.wapleWiring",
+   "value": {
+    "parse": "Sources/WapleRender/Scene3DLighting.swift — Scene3DMaterialValues.brightnessKey/parse",
+    "uniform": "MeshUniform.extra.x ↔ MSL MeshU.extra.x (Mesh3DShaders.applyHDRBrightness)",
+    "encode": [
+     "Sources/WapleRender/SceneRenderer3D.swift encode3D (perspective 3D)",
+     "Sources/WapleRender/SceneRendererFrameEncoder.swift runOrtho3DMeshes (ortho 하이브리드)"
+    ],
+    "notImplemented": "2D 레인(genericimage `Bright` · genericimage2 `Brightness`). 게이트도 소비 위치도 달라 메시 레인 규약을 그대로 쓸 수 없다.",
+    "tests": "Tests/WapleRenderTests/SceneRendererMeshBrightnessTests.swift"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/Scene3DLighting.swift"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/Mesh3DShaders.swift"
+    },
+    {
+     "kind": "file",
+     "ref": "Tests/WapleRenderTests/SceneRendererMeshBrightnessTests.swift"
+    }
+   ]
+  }
+ ]
+}
