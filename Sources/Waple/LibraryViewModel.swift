@@ -4,6 +4,15 @@ import WapleCore
 import WapleLibrary
 import WapleRender
 
+/// 엔트리 하나의 프리뷰 해석 결과. 근거는 `LibraryViewModel.previewState(for:)`.
+enum EntryPreviewState: Equatable {
+    case image(URL)
+    /// 폴더는 있는데 프리뷰 파일이 없다 — 정상 상태다(가져온 동영상 등).
+    case noPreview
+    /// 북마크가 끊겼거나 원본 폴더가 사라졌다 — 적용하면 실패한다.
+    case missingFolder
+}
+
 final class LibraryViewModel: ObservableObject {
     @Published private(set) var entries: [LibraryEntry] = []
     @Published var selectedId: String?
@@ -363,9 +372,26 @@ final class LibraryViewModel: ObservableObject {
     }
 
     func previewURL(for entry: LibraryEntry) -> URL? {
-        guard let folder = store.resolveFolderURL(for: entry),
-              let preview = WallpaperPathSecurity.containedFileURL(entry.previewName, root: folder) else { return nil }
-        return preview
+        guard case .image(let url) = previewState(for: entry) else { return nil }
+        return url
+    }
+
+    /// 타일이 그려야 할 프리뷰 상태.
+    ///
+    /// **폴더 유실과 프리뷰 부재를 가른다.** 둘 다 화면에서는 똑같이 회색 사진 글리프로
+    /// 보이는데 원인도 대응도 전혀 다르다 — 앞은 원본이 사라졌거나 북마크가 끊긴 것이라
+    /// 다시 가져와야 하고(적용하면 실패한다), 뒤는 프리뷰 파일만 없는 정상 상태다.
+    /// 종전에는 `previewURL` 이 둘 다 nil 로 뭉개서 구분할 방법이 없었다.
+    ///
+    /// 한 번의 북마크 해석으로 둘을 함께 결정하는 것이 요점이다. 호출부가 `previewURL` 과
+    /// `folderURL` 을 따로 물으면 타일마다 해석이 두 번 일어나고, 그리드는 body 평가마다
+    /// 타일 수만큼 그걸 반복한다.
+    func previewState(for entry: LibraryEntry) -> EntryPreviewState {
+        guard let folder = store.resolveFolderURL(for: entry) else { return .missingFolder }
+        guard let preview = WallpaperPathSecurity.containedFileURL(entry.previewName, root: folder) else {
+            return .noPreview
+        }
+        return .image(preview)
     }
 
     func isSupported(_ entry: LibraryEntry) -> Bool {

@@ -304,6 +304,51 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertTrue(vm.entries.isEmpty)
     }
 
+    // MARK: - 프리뷰 상태(유실 vs 프리뷰 부재)
+
+    /// 실제 폴더를 만들고 스토어에 등록해 북마크가 유효한 엔트리를 얻는다.
+    private func importedEntry(into dir: URL, preview: String?) throws -> (LibraryViewModel, LibraryEntry) {
+        let store = LibraryStore(baseDirectory: dir)
+        let pkg = tempDir().appendingPathComponent("pkg", isDirectory: true)
+        try FileManager.default.createDirectory(at: pkg, withIntermediateDirectories: true)
+        var json: [String: Any] = ["type": "video", "file": "a.mp4", "title": "P"]
+        if let preview {
+            json["preview"] = preview
+            try Data("x".utf8).write(to: pkg.appendingPathComponent(preview))
+        }
+        try JSONSerialization.data(withJSONObject: json).write(to: pkg.appendingPathComponent("project.json"))
+        let entry = try store.importFolder(pkg)
+        let vm = LibraryViewModel(store: store, playlist: PlaylistStore(baseDirectory: dir),
+                                  monitors: MonitorAssignmentStore(baseDirectory: dir),
+                                  favorites: FavoritesStore(baseDirectory: dir),
+                                  folders: FolderStore(baseDirectory: dir))
+        return (vm, entry)
+    }
+
+    func testPreviewStateResolvesImageWhenPreviewFileExists() throws {
+        let (vm, entry) = try importedEntry(into: tempDir(), preview: "preview.jpg")
+        guard case .image(let url) = vm.previewState(for: entry) else {
+            return XCTFail("프리뷰 파일이 있으면 .image")
+        }
+        XCTAssertEqual(url.lastPathComponent, "preview.jpg")
+    }
+
+    /// 프리뷰 파일만 없는 것은 **정상**이다(가져온 동영상 등). 유실과 같은 값으로 뭉개면
+    /// 멀쩡한 배경에 경고 배지가 붙는다.
+    func testPreviewStateIsNoPreviewWhenOnlyThePreviewFileIsMissing() throws {
+        let (vm, entry) = try importedEntry(into: tempDir(), preview: nil)
+        XCTAssertEqual(vm.previewState(for: entry), .noPreview)
+    }
+
+    /// 북마크가 깨진 엔트리 — 종전에는 previewURL 이 nil 이라 '프리뷰 없음' 과 구별되지
+    /// 않았다. 이 항목은 적용하면 실패하므로 화면이 달라야 한다.
+    func testPreviewStateIsMissingFolderWhenBookmarkCannotResolve() {
+        let vm = makeVM(dir: tempDir())
+        XCTAssertEqual(vm.previewState(for: entry(id: "gone", title: "Gone")), .missingFolder)
+        XCTAssertNil(vm.previewURL(for: entry(id: "gone", title: "Gone")),
+                     "기존 previewURL 계약은 그대로 — 유실이든 부재든 URL 은 없다")
+    }
+
     // MARK: - 임포트 피드백
 
     /// 후보 폴더 n개를 담은 상위 폴더를 만든다. `valid` 개만 project.json 을 갖는다 —

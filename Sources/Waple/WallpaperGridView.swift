@@ -161,8 +161,12 @@ struct WallpaperGridView: View {
     private func tileSurface(_ entry: LibraryEntry, supported: Bool, applied: Bool) -> some View {
         let focused = viewModel.focusedId == entry.id
         let hovered = hoveredId == entry.id
+        // 프리뷰 해석은 타일당 한 번만 한다 — 북마크 해석은 파일시스템 접근이고, 그리드는
+        // body 평가마다 타일 수만큼 이걸 반복한다.
+        let preview = viewModel.previewState(for: entry)
         return VStack(alignment: .leading, spacing: Space.xs) {
-            thumbnail(entry, supported: supported, applied: applied, focused: focused, hovered: hovered)
+            thumbnail(entry, preview: preview, supported: supported,
+                      applied: applied, focused: focused, hovered: hovered)
             Text(entry.title)
                 .font(Typography.caption)
                 .foregroundStyle(focused ? .primary : .secondary)
@@ -175,24 +179,42 @@ struct WallpaperGridView: View {
         .onTapGesture(count: 2) { activate(entry, supported: supported) }
         .onTapGesture { viewModel.focusedId = entry.id }
         .tileAccessibility(label: Text(entry.title),
-                           value: tileStatus(applied: applied, supported: supported),
+                           value: tileStatus(applied: applied, supported: supported, preview: preview),
                            isSelected: applied,
                            onActivate: { activate(entry, supported: supported) })
     }
 
-    private func thumbnail(_ entry: LibraryEntry, supported: Bool,
+    private func thumbnail(_ entry: LibraryEntry, preview: EntryPreviewState, supported: Bool,
                            applied: Bool, focused: Bool, hovered: Bool) -> some View {
         ZStack {
-            preview(for: entry, animating: hovered)
+            previewView(preview, animating: hovered)
                 .frame(height: Metrics.tileThumbHeight)
                 .frame(maxWidth: .infinity)
         }
         .tileThumbnailClip()
         .tileRing(TileRing.tile(selected: applied, focused: focused))
+        .overlay(alignment: .topLeading) { missingBadge(preview) }
         .overlay(alignment: .topTrailing) { typeBadge(for: entry, supported: supported) }
         .overlay(alignment: .bottomLeading) { appliedGlyph(applied) }
         .saturation(supported ? 1 : ColorRole.unsupportedSaturation)
         .opacity(supported ? 1 : ColorRole.unsupportedOpacity)
+        // 링은 값이 바뀌는 순간 하드컷으로 나타났다 사라졌다. 종전 .animation 은 value 가
+        // hovered 로만 스코프돼 있어 선택·포커스 변화에는 걸리지 않았다.
+        .animation(Motion.stateChange, value: applied)
+        .animation(Motion.stateChange, value: focused)
+    }
+
+    /// 폴더 유실 배지.
+    ///
+    /// 유실과 "프리뷰가 없는 정상 배경" 은 화면에서 똑같이 회색 사진 글리프로 보였다.
+    /// 앞은 적용하면 실패하고 다시 가져와야 하는 상태이고 뒤는 아무 문제가 없다 —
+    /// 구분되지 않으면 사용자는 둘 다 고장 난 것으로 읽거나 둘 다 정상으로 읽는다.
+    @ViewBuilder
+    private func missingBadge(_ preview: EntryPreviewState) -> some View {
+        if preview == .missingFolder {
+            TypeBadge(symbol: "exclamationmark.triangle.fill", label: Text("유실"))
+                .foregroundStyle(ColorRole.warning)
+        }
     }
 
     /// 적용 중임을 색(액센트 링)만이 아니라 글리프로도 말한다 — 색만으로 상태를 전달하면
@@ -210,7 +232,11 @@ struct WallpaperGridView: View {
 
     /// 보조기술이 읽는 현재 상태. 라벨(무엇인가)에 이어 붙이지 않는 이유는 상태가 바뀔 때마다
     /// 항목 전체가 다시 읽히기 때문이다(청사진 §4.2).
-    private func tileStatus(applied: Bool, supported: Bool) -> Text? {
+    ///
+    /// 값은 하나뿐이므로 위계를 정해야 한다. 유실이 먼저다 — 그 항목은 아무 것도 할 수 없고
+    /// 다시 가져와야 하므로, 다른 무엇보다 먼저 알아야 하는 사실이다.
+    private func tileStatus(applied: Bool, supported: Bool, preview: EntryPreviewState) -> Text? {
+        if preview == .missingFolder { return Text("폴더 유실") }
         if applied { return Text("적용 중") }
         if !supported { return Text("지원 예정") }
         return nil
@@ -239,14 +265,15 @@ struct WallpaperGridView: View {
     }
 
     @ViewBuilder
-    private func preview(for entry: LibraryEntry, animating: Bool) -> some View {
-        let url = viewModel.previewURL(for: entry)
-        if let url, PreviewMedia.isAnimated(url) {
+    private func previewView(_ preview: EntryPreviewState, animating: Bool) -> some View {
+        if case .image(let url) = preview, PreviewMedia.isAnimated(url) {
             AnimatedPreviewView(url: url, animating: animating).scaledToFill()
-        } else {
+        } else if case .image(let url) = preview {
             // F500: 정지 프리뷰는 비동기 로드 뷰 — body 평가 중 메인 동기 디스크 읽기 제거.
-            // nil 도 이 뷰가 받는다(플레이스홀더 내장) — 호출부에서 다시 그리지 않는다.
             PreviewThumbnail(url: url)
+        } else {
+            // 플레이스홀더는 이 뷰가 내장한다 — 호출부에서 다시 그리지 않는다.
+            PreviewThumbnail(url: nil)
         }
     }
 
