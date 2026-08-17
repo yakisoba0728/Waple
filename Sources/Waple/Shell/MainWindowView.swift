@@ -180,8 +180,9 @@ struct MainWindowView: View {
     }
 
     /// 태그·나이 등급처럼 값이 동적이고 희소하게 쓰이는 축. 사이드바에 상주시키면 사이드바가
-    /// 길어지므로 툴바 팝오버로 뺀다. 내용은 종전 필터 뷰를 그대로 재사용한다 —
-    /// 전용 팝오버 뷰는 Phase 2(Unit B) 소관이고, 셸 교체와 섞으면 회귀 원인을 못 가린다.
+    /// 길어지므로 툴바 팝오버로 뺀다. Phase 1 에서는 종전 필터 뷰를 그대로 불렀고,
+    /// Phase 2(Unit B)에서 전용 팝오버로 갈아끼웠다 — 셸 교체와 필터 UI 재작성을 같은
+    /// 페이즈에 섞지 않으려고 두 단계로 나눈 것이다.
     private var filterButton: some View {
         Button { showFilters.toggle() } label: {
             Label("필터", systemImage: viewModel.criteria.isActive
@@ -189,7 +190,7 @@ struct MainWindowView: View {
         }
         .help("필터")
         .popover(isPresented: $showFilters, arrowEdge: .bottom) {
-            FilterSidebarView(viewModel: viewModel)
+            FilterPopover(viewModel: viewModel)
         }
     }
 

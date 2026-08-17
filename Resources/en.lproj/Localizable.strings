@@ -80,7 +80,6 @@
 "워크샵 검색" = "Search the Workshop";
 "워크샵을 검색하려면 본인 발급 API 키가 필요합니다. 아래에서 발급 후 붙여넣으세요. 키는 Keychain 에만 저장됩니다." = "Searching the Workshop requires your own API key. Get one below and paste it here. The key is stored only in your Keychain.";
 "위는 배경이 바뀔 때마다 자동으로, 아래는 지금 한 번만 실제 macOS 바탕화면에 반영합니다." = "The switch above mirrors every wallpaper change automatically; the button below does it once, right now.";
-"유형" = "Type";
 "음량" = "Volume";
 "이 배경에는 편집 가능한 속성이 없습니다." = "This wallpaper has no editable properties.";
 "일부 씬은 Wallpaper Engine 공유 에셋(assets) 폴더의 텍스처를 참조합니다." = "Some scenes reference textures from the Wallpaper Engine shared `assets` folder.";
@@ -98,7 +97,6 @@
 "제거(파일은 유지)" = "Remove (keep files)";
 "조건에 맞는 배경이 없습니다" = "No wallpapers match";
 "조작 창 열기" = "Open controls";
-"즐겨찾기만" = "Favorites only";
 "지금 바탕화면으로 한 번 굽기" = "Set as desktop picture now";
 "지우기" = "Clear";
 "창작마당 열기" = "Open the Workshop";
@@ -113,7 +111,6 @@
 "폴더 이름" = "Folder name";
 "폴더로 이동" = "Move to folder";
 "폴더에서 제거" = "Remove from folder";
-"표시" = "Show";
 "프레임 상한" = "Frame rate cap";
 "프레임 상한은 장면(씬) 배경에만 적용됩니다 — 동영상·웹 배경은 자체 페이싱을 씁니다." = "The frame rate cap applies to scene wallpapers only — video and web wallpapers pace themselves.";
 "필터" = "Filter";
@@ -175,7 +172,12 @@
 
 /* MARK: Unit B — 라이브러리(그리드·인스펙터·속성 편집·필터 팝오버) */
 "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요." = "Choose a Wallpaper Engine folder, a parent folder, a .zip, or a video (mp4/mov).";
+"가져온 배경에 태그나 나이 등급이 없습니다." = "The wallpapers you imported carry no tags or age ratings.";
 "가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요." = "No wallpapers were imported. Check that the folder you chose contains a valid project.json.";
+"거를 수 있는 항목이 없습니다" = "Nothing to filter by";
+"성인" = "Mature";
+"전체 이용가" = "Everyone";
+"주의" = "Questionable";
 "목록 제거" = "Remove from list";
 "적용 중" = "Playing";
 "지원 예정" = "Coming soon";

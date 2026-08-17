@@ -2,13 +2,12 @@ import Foundation
 import WapleCore
 import WapleLibrary
 
+/// 유형 필터 축. **표시 라벨은 더 이상 여기 없다** — 유형이 사이드바 항목으로 승격하면서
+/// 라벨의 주인이 사이드바(`SidebarView`)가 됐다. 계산 프로퍼티로 남겨 두면 사이드바 문구와
+/// 두 벌이 되고, 두 벌은 갈라진다(종전 라벨은 사이드바가 쓰는 "씬" 이 아니라 "장면" 이었다).
+/// `.all` 은 사이드바 행이 아니라 이 열거의 '무필터' 값이다(`LibraryFiltering.entryType` 참조).
 enum LibraryTypeFilter: String, CaseIterable {
     case all, scene, video, web
-    var label: String {
-        switch self {
-        case .all: return "전체"; case .scene: return "장면"; case .video: return "동영상"; case .web: return "웹"
-        }
-    }
 }
 
 enum LibrarySortOrder: String, CaseIterable {
