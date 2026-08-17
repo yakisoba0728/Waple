@@ -33,6 +33,7 @@ WE 엔진 이식 프로그램의 차터·스펙·계획은 [superpowers/](superp
 
 ## 문서 밖에 있는 것
 
+- [handoff-2026-08-17.md](handoff-2026-08-17.md) — 2026-08-17 중단 지점 인계. wip/ 브랜치 둘의 남은 완료 조건과 캡처 함정.
 - **`waple-baselines/`** — 시각 회귀 골든 이미지. 리포 밖이라 `git ls-files` 에 없다.
   `WapleCompat --capture` 로 재생성한다.
 - **실물 WE 코퍼스** — 저작권 때문에 리포에 없다. `WAPLE_REAL_PKGS`/`WAPLE_BASE_ASSETS`
