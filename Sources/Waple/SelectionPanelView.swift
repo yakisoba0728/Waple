@@ -63,10 +63,7 @@ struct SelectionPanelView: View {
             newFolderName: $newFolderName,
             remove: { viewModel.remove(entry) },
             reset: { resetProperties(for: entry) },
-            deleteFolder: { name in
-                viewModel.folders.removeFolder(name)
-                viewModel.objectWillChange.send()
-            },
+            deleteFolder: { name in viewModel.deleteFolder(name) },
             createFolder: { name in viewModel.moveToFolder(entry, folder: name) }))
     }
 

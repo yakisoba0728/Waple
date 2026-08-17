@@ -152,6 +152,19 @@ final class LibraryViewModel: ObservableObject {
         objectWillChange.send()
     }
 
+    /// 폴더 삭제(담긴 항목은 남는다).
+    ///
+    /// **보고 있던 폴더를 지우면 선택도 함께 푼다.** 안 그러면 `activeFolder` 가 없는 폴더를
+    /// 가리킨 채 남아 그리드가 0건이 되는데, 그 0 은 검색·필터가 활성이 아니라 무결과 안내도
+    /// 뜨지 않는다 — 아무 메시지 없는 빈 화면이고, 사이드바의 그 행도 이미 사라져서 되돌아갈
+    /// 곳이 보이지 않는다. 폴더 삭제 진입점이 인스펙터라 삭제하는 쪽과 보고 있는 쪽이 다를 수
+    /// 있으므로, 정리를 스토어 호출부마다 맡기지 않고 여기 한 곳에 둔다.
+    func deleteFolder(_ name: String) {
+        folders.removeFolder(name)
+        if activeFolder == name { activeFolder = nil }
+        objectWillChange.send()
+    }
+
     /// 그리드 우클릭 "선택(속성 보기)" 진입점(w5d-settings-ia) — 포커스와 함께 정보 패널을 노출한다.
     /// 패널이 접힌 상태에서 focusedId 만 바꾸면 라벨이 약속한 속성이 어디에도 나타나지 않는 데드엔드가
     /// 된다 — 포커스 설정과 패널 노출을 하나로 묶어 항상 결과가 보이게 한다.

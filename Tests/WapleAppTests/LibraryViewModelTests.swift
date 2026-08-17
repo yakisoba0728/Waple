@@ -304,6 +304,34 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertTrue(vm.entries.isEmpty)
     }
 
+    // MARK: - 폴더 삭제
+
+    /// 보고 있던 폴더를 지우면 사이드바 선택도 함께 풀려야 한다.
+    ///
+    /// 안 그러면 activeFolder 가 없는 폴더를 가리킨 채 남아 그리드가 0건이 되는데, 그 0 은
+    /// 검색·필터가 활성이 아니라 무결과 안내도 안 뜬다 — 사이드바의 그 행도 이미 사라져서
+    /// 되돌아갈 곳이 화면에 없다. 폴더 삭제 진입점이 인스펙터라 삭제하는 쪽과 보고 있는 쪽이
+    /// 다를 수 있어서 실제로 닿기 쉬운 경로다.
+    func testDeletingTheActiveFolderClearsTheSelection() {
+        let dir = tempDir()
+        let vm = makeVM(dir: dir)
+        vm.folders.createFolder("Anime")
+        vm.activeFolder = "Anime"
+        vm.deleteFolder("Anime")
+        XCTAssertNil(vm.activeFolder)
+        XCTAssertTrue(vm.folders.folders.isEmpty)
+    }
+
+    /// 다른 폴더를 지우는 것은 지금 보고 있는 자리를 흔들지 않는다.
+    func testDeletingAnotherFolderKeepsTheSelection() {
+        let vm = makeVM(dir: tempDir())
+        vm.folders.createFolder("Anime")
+        vm.folders.createFolder("Abstract")
+        vm.activeFolder = "Anime"
+        vm.deleteFolder("Abstract")
+        XCTAssertEqual(vm.activeFolder, "Anime")
+    }
+
     // MARK: - 프리뷰 상태(유실 vs 프리뷰 부재)
 
     /// 실제 폴더를 만들고 스토어에 등록해 북마크가 유효한 엔트리를 얻는다.

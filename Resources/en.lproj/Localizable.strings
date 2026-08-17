@@ -191,11 +191,13 @@
 "폴더만 사라지고 안에 있던 배경은 라이브러리에 그대로 남습니다." = "Only the folder goes away — the wallpapers inside stay in your library.";
 "목록 추가" = "Add to list";
 "유실" = "Missing";
+"이 폴더가 비어 있습니다" = "This folder is empty";
 "이름순" = "By name";
 "재생목록에 추가" = "Add to playlist";
 "재생목록에서 제거" = "Remove from playlist";
 "즐겨찾기 해제" = "Remove from favorites";
 "최근 추가순" = "Most recent";
+"타일을 우클릭해 폴더로 옮기거나, 인스펙터의 폴더 메뉴를 쓰세요." = "Right-click a tile to move it into a folder, or use the folder menu in the inspector.";
 "zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요." = "No wallpapers were imported from the zip. Check that it contains a project.json.";
 "'%@' 폴더를 삭제할까요?" = "Delete the folder “%@”?";
 "%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다." = "Imported %2$lld of %1$lld. The rest have no project.json, or it could not be read.";

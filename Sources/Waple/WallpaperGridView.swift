@@ -28,6 +28,8 @@ struct WallpaperGridView: View {
                 emptyState
             } else if isSearchOrFilterDeadEnd {
                 noResultsState
+            } else if viewModel.filteredEntries.isEmpty {
+                emptyFolderState
             } else {
                 ScrollView {
                     // 폴더 타일과 뒤로 타일은 없다 — 폴더 내비게이션은 전부 사이드바가 한다.
@@ -262,6 +264,19 @@ struct WallpaperGridView: View {
         case .preset: return "square.stack"
         case .application, .unknown: return "questionmark.circle"
         }
+    }
+
+    /// 빈 폴더.
+    ///
+    /// 라이브러리에 배경이 있고 검색·필터도 안 걸렸는데 결과가 0건인 경우는 하나뿐이다 —
+    /// 사이드바가 고른 폴더가 비어 있는 것. 폴더가 사이드바로 올라가면서 이 상태에 닿기가
+    /// 훨씬 쉬워졌는데, 위 두 안내는 어느 쪽도 해당하지 않아 아무 메시지 없는 빈 스크롤
+    /// 영역이 된다. 나가는 길(사이드바)은 화면에 이미 보이므로 버튼은 두지 않는다 —
+    /// 폴더 선택은 사이드바가 쓰고 그리드는 읽기만 한다(청사진 §7.3).
+    private var emptyFolderState: some View {
+        ContentUnavailableView("이 폴더가 비어 있습니다", systemImage: "folder",
+                               description: Text("타일을 우클릭해 폴더로 옮기거나, 인스펙터의 폴더 메뉴를 쓰세요."))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
