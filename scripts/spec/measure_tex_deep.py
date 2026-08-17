@@ -170,6 +170,15 @@ def parse_tex(b):
 
 def iter_tex():
     """(출처, 이름, 바이트) — pkg 내부 + 설치 assets 의 loose .tex."""
+    # 코퍼스가 없으면 조용히 건너뛰지 않는다. 건너뛰면 `corpusTexFiles` 가 0 이 되고
+    # 산문 근거("코퍼스 4991 중 bit3 켜진 파일 0개")가 "코퍼스 0 중 0개" 로 바뀌어
+    # **같은 문장이 반대 의미가 된다** — 0/0 은 아무 것도 증명하지 않는데 문장은 그대로
+    # 확정으로 남는다. exit 0 으로 통과하는 것이 이 구멍의 핵심이다.
+    if not os.path.isdir(WS):
+        raise SystemExit(
+            f"[measure_tex_deep] 코퍼스가 없다: {WS}\n"
+            f"  WE_WORKSHOP 으로 워크샵 코퍼스 루트를 지정하라.\n"
+            f"  (코퍼스 도수가 이 문서 근거의 대부분이다 — 없이 재생성하면 근거만 지워진다.)")
     if os.path.isdir(WS):
         for wid in sorted(os.listdir(WS)):
             d = os.path.join(WS, wid)

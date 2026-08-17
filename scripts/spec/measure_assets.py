@@ -39,6 +39,15 @@ def main():
     copy = "--no-copy" not in sys.argv
 
     if copy:
+        # 소스를 먼저 확인하고서 지운다. 종전엔 rmtree 가 앞에 있어서, WE 설치본이 없는
+        # 머신(맥 전부)에서 이 스크립트를 돌리면 **커밋된 WEAssets 2,940개를 지우고 나서**
+        # copytree 가 FileNotFoundError 로 죽었다 — 지우기만 하고 끝나는 것이다.
+        # 파괴적 단계 앞에 전제 검사를 두는 것이 순서다.
+        if not os.path.isdir(SRC):
+            raise SystemExit(
+                f"[measure_assets] WE 설치본 assets 가 없다: {SRC}\n"
+                f"  WE_ROOT 를 지정하거나, 복사 없이 동봉본만 재측정하려면 --no-copy 를 써라.\n"
+                f"  (이 검사가 없어서 {DST} 를 지우고 죽은 적이 있다.)")
         if os.path.isdir(DST):
             shutil.rmtree(DST)
         print(f"복사: {SRC} -> {DST}")

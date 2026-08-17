@@ -451,7 +451,14 @@ def scan_corpus():
                                           "mipCount": collections.Counter()})
     pkgs = 0
     if not os.path.isdir(WS):
-        return pkgs, {}
+        # 조용히 빈 결과를 돌려주면 안 된다. 호출부가 이걸 그대로 문서에 쓰기 때문에
+        # 코퍼스 없는 머신에서 한 번 돌리는 것만으로 `workshopCorpus` 블록 88줄이
+        # 통째로 사라지고, 그 도수를 근거로 삼던 항목들이 근거 없이 '확정' 으로 남는다.
+        # exit 0 이라 아무 것도 실패하지 않는다는 게 이 구멍의 핵심이다.
+        raise SystemExit(
+            f"[measure_texture_filtering] 코퍼스가 없다: {WS}\n"
+            f"  WE_WORKSHOP 또는 WAPLE_REAL_PKGS 로 워크샵 코퍼스 루트를 지정하라.\n"
+            f"  (코퍼스 도수는 이 문서의 근거다 — 없이 재생성하면 근거만 지워진다.)")
     for wid in sorted(os.listdir(WS)):
         for fn in ("scene.pkg", "gifscene.pkg"):
             path = os.path.join(WS, wid, fn)
