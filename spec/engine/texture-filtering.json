@@ -1,0 +1,943 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_texture_filtering.py",
+ "scope": "WE 의 텍스처 샘플러 필터 규약(특히 mip 축)",
+ "reproduce": {
+  "command": "WE_BIN=<wallpaper64.exe> WE_WORKSHOP=<워크샵 코퍼스 루트> python3 scripts/spec/measure_texture_filtering.py",
+  "binarySha256": "608d0fcbffed7dcd3b9b14b8921b543d41519ba7209df273f1f423591ddc1f89",
+  "binaryBytes": 5360320,
+  "peSectionShift": 208,
+  "note": "binarySha256 은 보관본 사본의 해시다. 설치본은 DOS 스텁 길이가 달라 파일 해시가 다를 수 있지만, 위 두 함수의 본문 SHA16 이 같으면 코드 바이트는 같다 — 스크립트가 그것을 강제한다"
+ },
+ "entries": [
+  {
+   "id": "textureFiltering.mipAxis.linearUnlessFullPoint",
+   "value": {
+    "claim": "WE 가 만드는 샘플러의 mip 축은 항상 LINEAR 다. 예외는 min/mag 까지 전부 POINT 인 하나뿐이고, 그때도 mip 만 POINT 로 낮추는 조합은 없다",
+    "filterDomain": {
+     "0x00": "MIN_MAG_MIP_POINT — 키 bit0(= .tex flags 의 nointerpolation)",
+     "0x15": "MIN_MAG_MIP_LINEAR — 기본",
+     "0x55": "ANISOTROPIC — 3번째 인자가 0 일 때(mip 축은 여전히 선형)",
+     "0x95": "COMPARISON_MIN_MAG_MIP_LINEAR — 키 bit27(그림자 비교 샘플러)"
+    },
+    "neverProduced": {
+     "0x14": "MIN_MAG_LINEAR_MIP_POINT — 이 값을 만드는 경로가 없다",
+     "0x05": "MIN_POINT_MAG_MIP_LINEAR — 없다",
+     "0x10": "MIN_LINEAR_MAG_MIP_POINT — 없다"
+    },
+    "howProven": "Filter 슬롯(desc+0 = rsp+0x20)에 값을 넣는 명령은 `mov [rsp+0x20], ecx` 하나뿐이고(즉시값 기록 0건), ecx 에 값이 실리는 경로는 셋뿐이다: xor ecx,ecx / mov ecx,0x95 / (shl ecx,6 | or ecx,0x15). 세 경로의 명령 바이트를 전부 패턴으로 고정했다",
+    "instructionEvidence": {
+     "descBase.filterStore": {
+      "offsets": [
+       "0x112"
+      ],
+      "means": "mov [rsp+0x20], ecx — Filter 슬롯에 쓰는 유일한 명령. ecx 가 곧 Filter 다"
+     },
+     "key.bit0.point": {
+      "offsets": [
+       "0xe1"
+      ],
+      "means": "test bl,1 / je — 키 bit0(= .tex flags 의 nointerpolation)이 서면 분기한다"
+     },
+     "filter.point.zero": {
+      "offsets": [
+       "0xe1"
+      ],
+      "means": "그 je 의 폴스루가 xor ecx,ecx — Filter = 0x00 MIN_MAG_MIP_POINT"
+     },
+     "key.bit27.comparison": {
+      "offsets": [
+       "0xcf"
+      ],
+      "means": "mov edx,ebx / shr edx,27 / and dl,1 — 키 bit27 = 비교(그림자) 샘플러"
+     },
+     "filter.comparison.0x95": {
+      "offsets": [
+       "0x1e7"
+      ],
+      "means": "mov ecx,0x95 — Filter = COMPARISON_MIN_MAG_MIP_LINEAR"
+     },
+     "filter.linearOrAniso": {
+      "offsets": [
+       "0x1f1"
+      ],
+      "means": "xor r8b,1 / movzx ecx,r8b / shl ecx,6 / or ecx,0x15 — 3번째 인자가 1 이면 0x15 MIN_MAG_MIP_LINEAR, 0 이면 0x55 ANISOTROPIC"
+     },
+     "key.bit31.fromArg3": {
+      "offsets": [
+       "0x20"
+      ],
+      "means": "shl ebx,31 — 3번째 인자를 캐시 키 bit31 로 접는다(한 키에 두 필터가 안 앉게)"
+     },
+     "address.border": {
+      "offsets": [
+       "0xf4"
+      ],
+      "means": "mov eax,4 / mov [rsp+0x24],eax — AddressU = BORDER(bit26 또는 bit27)"
+     },
+     "address.wrapOrClamp": {
+      "offsets": [
+       "0x20e"
+      ],
+      "means": "shr eax,1 / and eax,1 / add eax,eax / or eax,1 — 키 bit1(= clampuvs)이면 3 CLAMP, 아니면 1 WRAP"
+     },
+     "maxAnisotropy.select": {
+      "offsets": [
+       "0x141"
+      ],
+      "means": "cmp ecx,0x55 — Filter 가 ANISOTROPIC 일 때만 MaxAnisotropy=8, 그 외 1"
+     },
+     "lod.maxFltMax": {
+      "offsets": [
+       "0x144"
+      ],
+      "means": "mov dword [rsp+0x50], 0x7f7fffff — MaxLOD = FLT_MAX"
+     },
+     "lod.minZero": {
+      "offsets": [
+       "0x14c"
+      ],
+      "means": "mov dword [rsp+0x4c], 0 — MinLOD = 0"
+     },
+     "lod.biasZero": {
+      "offsets": [
+       "0x15a"
+      ],
+      "means": "mov dword [rsp+0x30], 0 — MipLODBias = 0"
+     },
+     "createSamplerState": {
+      "offsets": [
+       "0x17f"
+      ],
+      "means": "call qword [rax+0xB8] — ID3D11Device::CreateSamplerState"
+     }
+    },
+    "consequence": "삼중선형(또는 이방성) 보간이 WE 의 규약이다. mip 축만 POINT 로 내리는 것은 WE 를 흉내내는 것이 아니라 새로운 동작을 만드는 것이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099980 @ 0x140099980 (본문 SHA256[:16]=904bd4b240de2ac4)",
+     "note": "함수 범위는 .pdata 로, Filter 선택 경로는 명령 바이트 패턴으로 재확인한다. 패턴이 하나라도 없으면 스크립트가 FAIL 한다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.sampler.lodRangeIsUnclamped",
+   "value": {
+    "constant": {
+     "mipLODBias": 0.0,
+     "minLOD": 0.0,
+     "maxLOD": "FLT_MAX (0x7f7fffff)",
+     "borderColor": [
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "bothSites": "샘플러 캐시(FUN_140099980)와 디바이스 초기화(FUN_14005e490) 양쪽이 같은 값을 쓴다",
+    "consequence": "WE 는 LOD 를 샘플러로 자르지 않는다. 어떤 mip 이 존재하는지는 **저장된 체인 길이**가 전부 결정한다 — 즉 mip 을 쓸지 말지는 런타임 상태가 아니라 애셋 빌드 시점의 결정이다",
+    "wapleParity": "Waple 도 lodMinClamp/lodMaxClamp 를 쓰지 않는다(선언 0건). 단일 레벨 텍스처는 mip_filter::linear 여도 레벨 0 만 샘플되므로 비트 동일하다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099980 @ 0x140099980 (본문 SHA256[:16]=904bd4b240de2ac4)",
+     "note": "함수 범위는 .pdata 로, Filter 선택 경로는 명령 바이트 패턴으로 재확인한다. 패턴이 하나라도 없으면 스크립트가 FAIL 한다"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14005e490 @ 0x14005e490 (본문 SHA256[:16]=d32ef71145d43f8c)",
+     "note": "디바이스 초기화가 직접 만드는 전역 샘플러 2개"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.sampler.creationSites",
+   "value": {
+    "cache": {
+     "func": "0x140099980",
+     "sha256_16": "904bd4b240de2ac4",
+     "role": "FNV-1a 해시맵 캐시. 런타임 텍스처 바인딩이 전부 여기를 지난다",
+     "keyBits": {
+      "bit0": "1 = MIN_MAG_MIP_POINT. .tex flags 0x1 nointerpolation",
+      "bit1": "1 = Address CLAMP, 0 = WRAP. .tex flags 0x2 clampuvs",
+      "bit26(0x4000000)": "Address = BORDER",
+      "bit27(0x8000000)": "비교 샘플러 — Filter 0x95, BORDER, ComparisonFunc = GREATER(5)",
+      "bit31": "3번째 인자를 접어 넣은 자리 — 1 이면 0x15, 0 이면 0x55. 같은 키에 두 필터가 앉지 않게 하는 용도지 저작 비트가 아니다"
+     },
+     "addressUVWAlwaysEqual": true,
+     "comparisonFuncDefault": "ALWAYS(8)",
+     "maxAnisotropy": "Filter == ANISOTROPIC 일 때만 8, 그 외 1"
+    },
+    "deviceInit": {
+     "func": "0x14005e490",
+     "sha256_16": "d32ef71145d43f8c",
+     "role": "전역 샘플러 2개를 캐시를 거치지 않고 직접 만든다",
+     "samplers": [
+      {
+       "filter": "MIN_MAG_MIP_LINEAR(0x15)",
+       "address": "CLAMP(3)",
+       "maxAnisotropy": 1,
+       "comparisonFunc": "ALWAYS(8)",
+       "maxLOD": "FLT_MAX"
+      },
+      {
+       "filter": "MIN_MAG_MIP_LINEAR(0x15)",
+       "address": "WRAP(1)",
+       "maxAnisotropy": 1,
+       "comparisonFunc": "ALWAYS(8)",
+       "maxLOD": "FLT_MAX"
+      }
+     ],
+     "instructionEvidence": {
+      "filter.0x15": {
+       "offsets": [
+        "0x8c"
+       ],
+       "means": "mov dword [rsp+0x20], 0x15 — Filter = MIN_MAG_MIP_LINEAR"
+      },
+      "address.clamp": {
+       "offsets": [
+        "0xa6"
+       ],
+       "means": "mov dword [rsp+0x24], 3 — AddressU = CLAMP (1번 샘플러)"
+      },
+      "address.wrap": {
+       "offsets": [
+        "0xf7"
+       ],
+       "means": "mov dword [rsp+0x24], 1 — AddressU = WRAP (2번 샘플러)"
+      },
+      "maxAnisotropy.one": {
+       "offsets": [
+        "0xae"
+       ],
+       "means": "mov dword [rsp+0x34], 1 — MaxAnisotropy = 1"
+      },
+      "comparison.always": {
+       "offsets": [
+        "0xb6"
+       ],
+       "means": "mov dword [rsp+0x38], 8 — ComparisonFunc = ALWAYS"
+      },
+      "lod.maxFltMax": {
+       "offsets": [
+        "0xbe"
+       ],
+       "means": "mov dword [rsp+0x50], 0x7f7fffff — MaxLOD = FLT_MAX"
+      },
+      "createSamplerState": {
+       "offsets": [
+        "0xc9",
+        "0x102",
+        "0x531"
+       ],
+       "means": "call qword [rax+0xB8] — ID3D11Device::CreateSamplerState"
+      }
+     }
+    },
+    "callersOfCache": [
+     {
+      "callSite": "0x14009ab7a",
+      "inFunc": "0x14009aab0",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x14009ad7d",
+      "inFunc": "0x14009acd0",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": true
+     },
+     {
+      "callSite": "0x1400eb4e0",
+      "inFunc": "0x1400eb440",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x1400ebf5b",
+      "inFunc": "0x1400eb570",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x1400ed023",
+      "inFunc": "0x1400ec220",
+      "arg3": "객체 플래그 바이트 [obj+0x10] 의 bit1",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x1400eeff3",
+      "inFunc": "0x1400eef70",
+      "arg3": "객체 플래그 바이트 [obj+0x10] 의 bit1",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x1400ef88c",
+      "inFunc": "0x1400ef850",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": true
+     }
+    ],
+    "perCallSiteVariation": "호출 지점마다 갈리는 것은 (a) 3번째 인자로 고르는 LINEAR/ANISOTROPIC 과 (b) `bts edx,0x1a` 로 강제하는 BORDER 어드레스 둘뿐이다. **mip 축을 건드리는 인자는 애초에 존재하지 않는다** — 필터를 정하는 입력은 키 dword 와 bool 하나가 전부다",
+    "crossRef": "renderState.sampler.cache",
+    "supersedes": "renderState.sampler.cache 의 keyBits 표와 같은 내용이다. 그쪽은 디컴파일 산문이고 이쪽은 명령 바이트로 재확인된다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099980 @ 0x140099980 (본문 SHA256[:16]=904bd4b240de2ac4)",
+     "note": "함수 범위는 .pdata 로, Filter 선택 경로는 명령 바이트 패턴으로 재확인한다. 패턴이 하나라도 없으면 스크립트가 FAIL 한다"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_14005e490 @ 0x14005e490 (본문 SHA256[:16]=d32ef71145d43f8c)",
+     "note": "디바이스 초기화가 직접 만드는 전역 샘플러 2개"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.authoring.noFilterKnob",
+   "value": {
+    "claim": "저작(머티리얼 JSON · .tex-json · .tex 헤더)에 **mip 필터를 고르는 수단이 없다**. 고를 수 있는 것은 세 축뿐이다",
+    "axes": {
+     "nointerpolation": ".tex flags 0x1 — min/mag/mip 세 축을 한꺼번에 POINT 로",
+     "clampuvs": ".tex flags 0x2 — 어드레스 모드(필터가 아니다)",
+     "nomip": ".tex-json 전용 — 저장 mip 체인을 만들지 말라는 **빌드 시점** 지시"
+    },
+    "texJsonKeyDomain": {
+     "format": 298,
+     "clampuvs": 266,
+     "nonpoweroftwo": 231,
+     "nomip": 122,
+     "alphachannelpriority": 82,
+     "spritesheetsequences": 52,
+     "nointerpolation": 12,
+     "bleedtransparentcolors": 4,
+     "forcerawcompression": 2,
+     "halfmip": 2
+    },
+    "sampleDesign": "부정 결론이므로 표본이 그것을 보여줄 수 있는지 먼저 본다. 이 스캔은 .tex-json 의 키를 전수로 모으므로, 필터 키가 존재한다면 반드시 도수에 잡힌다. 실제로 nointerpolation 과 clampuvs 는 잡혔다(양성 대조 성립)",
+    "runtimeStrings": {
+     "nointerpolation": true,
+     "clampuvs": true,
+     "nomip": false,
+     "anisotropic": false,
+     "ANISOTROPIC": false,
+     "mipfilter": false,
+     "halfmip": false,
+     "g_Texture0MipMapped": true
+    },
+    "nomipIsBuildTime": "wallpaper64.exe 에 'nomip' 문자열이 없다 — 런타임이 읽는 키가 아니다. 반면 nointerpolation·clampuvs 는 있다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "동봉 WEAssets .tex 311건 · .tex-json 전수",
+     "note": "Sources/WapleRender/Resources/WEAssets/ 는 리포 안이라 이 수치는 머신 독립이다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.nomip.buildTimeCorrelation",
+   "value": {
+    "method": "동봉 WEAssets 에서 같은 스템의 .tex 와 .tex-json 을 짝지어 `nomip` 저작값과 실제 저장 mip 체인 길이를 대조했다",
+    "pairsMatched": 272,
+    "crosstab": {
+     "nomipTrue_chain1": 93,
+     "nomipTrue_chainGt1": 0,
+     "nomipAbsentOrFalse_chain1": 3,
+     "nomipAbsentOrFalse_chainGt1": 176
+    },
+    "reading": "nomip:true 인 애셋은 저장 체인이 1(= mip 없음)이다. 즉 mip 유무는 애셋별로 지정되고, 그 지정은 .tex 파일에 **결과로** 굳어 있다. 런타임 스위치가 아니다",
+    "crossRef": "textureFiltering.sampler.lodRangeIsUnclamped"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "동봉 WEAssets .tex 311건 · .tex-json 전수",
+     "note": "Sources/WapleRender/Resources/WEAssets/ 는 리포 안이라 이 수치는 머신 독립이다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.byAssetClass",
+   "value": {
+    "what": "텍스처 종류별로 규약이 갈리는지를 보려면 필터를 정하는 두 비트(flags 0x1 nointerpolation / 0x2 clampuvs)와 저장 mip 체인 길이의 분포를 종류별로 봐야 한다. 필터 규칙 자체는 종류를 보지 않는다 — 캐시가 하나이고 키가 .tex flags 에서만 나오기 때문이다",
+    "bundledAssets": {
+     "3dModel": {
+      "n": 2,
+      "flagsLow2": {
+       "0": 1,
+       "1": 1
+      },
+      "mipCount": {
+       "1": 1,
+       "6": 1
+      }
+     },
+     "effect": {
+      "n": 74,
+      "flagsLow2": {
+       "0": 11,
+       "2": 63
+      },
+      "mipCount": {
+       "1": 71,
+       "4": 1,
+       "7": 1,
+       "10": 1
+      }
+     },
+     "lut": {
+      "n": 28,
+      "flagsLow2": {
+       "2": 28
+      },
+      "mipCount": {
+       "1": 28
+      }
+     },
+     "other": {
+      "n": 42,
+      "flagsLow2": {
+       "0": 17,
+       "2": 24,
+       "3": 1
+      },
+      "mipCount": {
+       "1": 25,
+       "4": 1,
+       "5": 4,
+       "6": 2,
+       "7": 5,
+       "8": 4,
+       "9": 1
+      }
+     },
+     "particle": {
+      "n": 165,
+      "flagsLow2": {
+       "0": 63,
+       "2": 102
+      },
+      "mipCount": {
+       "1": 9,
+       "2": 1,
+       "4": 1,
+       "5": 14,
+       "6": 18,
+       "7": 30,
+       "8": 56,
+       "9": 21,
+       "10": 15
+      }
+     }
+    },
+    "workshopCorpus": {
+     "3dModel": {
+      "n": 260,
+      "flagsLow2": {
+       "0": 257,
+       "2": 3
+      },
+      "mipCount": {
+       "1": 198,
+       "3": 1,
+       "4": 1,
+       "7": 1,
+       "8": 6,
+       "9": 52,
+       "10": 1
+      }
+     },
+     "effect": {
+      "n": 94,
+      "flagsLow2": {
+       "0": 94
+      },
+      "mipCount": {
+       "1": 94
+      }
+     },
+     "other": {
+      "n": 4209,
+      "flagsLow2": {
+       "0": 160,
+       "2": 3999,
+       "3": 50
+      },
+      "mipCount": {
+       "1": 2018,
+       "2": 87,
+       "3": 526,
+       "4": 752,
+       "5": 724,
+       "6": 8,
+       "7": 25,
+       "8": 25,
+       "9": 17,
+       "10": 26,
+       "11": 1
+      }
+     },
+     "particle": {
+      "n": 202,
+      "flagsLow2": {
+       "0": 8,
+       "2": 191,
+       "3": 3
+      },
+      "mipCount": {
+       "1": 27,
+       "2": 26,
+       "3": 26,
+       "4": 25,
+       "5": 37,
+       "6": 1,
+       "7": 21,
+       "8": 30,
+       "9": 9
+      }
+     }
+    },
+    "corpusPkgs": 170,
+    "flagsLow2Legend": {
+     "0": "WRAP + 선형",
+     "1": "nointerpolation",
+     "2": "clampuvs",
+     "3": "둘 다"
+    },
+    "reading3dModel": "3D 모델 텍스처(materials/models/**)는 flags 하위 2비트가 0 인 쪽으로 크게 치우친다 = WRAP + 선형 필터. 2D 레이어 텍스처는 clampuvs 가 지배적이다. **갈리는 것은 어드레스 모드이지 mip 필터가 아니다**",
+    "classIsStorageNotSamplingContext": "분류는 .tex 의 **저장 경로**로 한다. 모델 머티리얼이 materials/models/ 밖의 텍스처를 참조하는 씬이 실제로 있으므로, '3dModel' 행은 '3D 패스가 샘플하는 텍스처 집합' 과 같지 않다. 필터 규칙은 어느 쪽이든 같다 — 캐시가 하나이고 키가 .tex flags 뿐이다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "동봉 WEAssets .tex 311건 · .tex-json 전수",
+     "note": "Sources/WapleRender/Resources/WEAssets/ 는 리포 안이라 이 수치는 머신 독립이다"
+    },
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 170개의 .tex 헤더 전수",
+     "note": "코퍼스 경로 = /Users/yakisoba/Downloads/wallpaper_dev/backgrounds. 코퍼스 크기가 다른 머신에서 재생성하면 이 도수는 달라진다 — 도수가 아니라 **분포의 형태**가 주장이다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.anisotropic.selector",
+   "value": {
+    "what": "0x55 ANISOTROPIC 분기는 코드에 살아 있다. 그것을 고르는 것은 샘플러 캐시의 3번째 인자다",
+    "callSites": [
+     {
+      "callSite": "0x14009ab7a",
+      "inFunc": "0x14009aab0",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x14009ad7d",
+      "inFunc": "0x14009acd0",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": true
+     },
+     {
+      "callSite": "0x1400eb4e0",
+      "inFunc": "0x1400eb440",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x1400ebf5b",
+      "inFunc": "0x1400eb570",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x1400ed023",
+      "inFunc": "0x1400ec220",
+      "arg3": "객체 플래그 바이트 [obj+0x10] 의 bit1",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x1400eeff3",
+      "inFunc": "0x1400eef70",
+      "arg3": "객체 플래그 바이트 [obj+0x10] 의 bit1",
+      "forcesBorderAddress": false
+     },
+     {
+      "callSite": "0x1400ef88c",
+      "inFunc": "0x1400ef850",
+      "arg3": "1 (LINEAR 고정)",
+      "forcesBorderAddress": true
+     }
+    ],
+    "hardcodedLinear": 5,
+    "fromObjectFlagBit": 2,
+    "noUserSetting": "wallpaper64.exe 에 'anisotropic'/'ANISOTROPIC' 문자열이 하나도 없다. 캡처 세션의 config.json 에도 이방성/필터 관련 키가 없다 — 사용자 설정으로 노출된 스위치가 아니다",
+    "notResolved": "객체 플래그 바이트 [obj+0x10] 의 bit1 이 어떤 텍스처 종류에서 서고 어디서 안 서는지는 이 스캔으로 좁히지 못했다",
+    "flagByteWrites": {
+     "or 0x4": 3,
+     "or 0x8": 2,
+     "xor 0x83": 2,
+     "or 0x0": 2,
+     "or 0x2": 1,
+     "or 0x3": 1
+    },
+    "flagByteWritesReading": "`op byte ptr [reg+0x10], imm8` 전수. 대부분 `or` 라 한 번 선 비트가 지워지지 않는 구조로 보이지만, 이 스캔은 명령 경계를 검증하지 않는 바이트 패턴이라 오탐이 섞인다(`or 0x0` 2건). `xor 0x83` 2건이 같은 객체 타입인지는 확인하지 못했다",
+    "whyItDoesNotChangeTheMipAnswer": "0x15 와 0x55 는 **둘 다 mip 축이 선형**이다. 이 미해결은 mip 규약을 흔들지 않는다"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099980 @ 0x140099980 (본문 SHA256[:16]=904bd4b240de2ac4)",
+     "note": "함수 범위는 .pdata 로, Filter 선택 경로는 명령 바이트 패턴으로 재확인한다. 패턴이 하나라도 없으면 스크립트가 FAIL 한다"
+    },
+    {
+     "kind": "file",
+     "ref": "wallpaper_dev/references/WallpaperEngine_RenderDoc_capture/backup/config_before_capture.json",
+     "note": "캡처 세션의 WE 설정 전문 — filter/aniso/mip 키 0건"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.noRuntimeMipGeneration",
+   "value": {
+    "claim": "wallpaper64.exe 에서 ID3D11DeviceContext::GenerateMips(vtbl+0x1B0) 호출을 찾지 못했다. mip 체인은 저장된 .tex 레벨에서만 온다",
+    "callSitesFound": [
+     "0x140328618"
+    ],
+    "caveat": "찾은 지점은 폰트 파서의 자체 vtable 이다(같은 함수가 '.notdef' 문자열을 참조한다). 또한 이 스캔은 SIB 바이트가 낀 `call [reg+idx+0x1B0]` 인코딩을 보지 못한다 — 그래서 이 항목은 보고다",
+    "wapleParity": "Waple 도 generateMipmaps 를 쓰지 않고 저장 체인을 그대로 올린다(SceneRendererResources.makeMipmappedTexture)"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099980 @ 0x140099980 (본문 SHA256[:16]=904bd4b240de2ac4)",
+     "note": "함수 범위는 .pdata 로, Filter 선택 경로는 명령 바이트 패턴으로 재확인한다. 패턴이 하나라도 없으면 스크립트가 FAIL 한다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.b8SlotIsAmbiguous",
+   "value": {
+    "why": "`call qword ptr [reg+0xB8]` 은 ID3D11Device::CreateSamplerState 와 ID3D11DeviceContext::GSSetShader 가 같이 쓰는 슬롯이다. 슬롯만 보고 세면 샘플러 생성 지점을 과대 계상한다",
+    "totalSites": 24,
+    "withSamplerDescSignature": 3,
+    "signature": "앞선 176 바이트 안에 MaxLOD=0x7f7fffff 즉시값과 D3D11_FILTER 열거값 즉시값이 함께 있을 것",
+    "sites": [
+     {
+      "site": "0x14005a067",
+      "func": "0x140058770",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x14005a684",
+      "func": "0x140058770",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x14005e559",
+      "func": "0x14005e490",
+      "samplerDescSignature": true,
+      "filterImmediates": [
+       "MIN_MAG_MIP_LINEAR"
+      ]
+     },
+     {
+      "site": "0x14005e592",
+      "func": "0x14005e490",
+      "samplerDescSignature": true,
+      "filterImmediates": [
+       "MIN_MAG_MIP_LINEAR"
+      ]
+     },
+     {
+      "site": "0x14005e9c1",
+      "func": "0x14005e490",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x140099aff",
+      "func": "0x140099980",
+      "samplerDescSignature": true,
+      "filterImmediates": [
+       "MIN_POINT_MAG_MIP_LINEAR"
+      ]
+     },
+     {
+      "site": "0x1400d76b4",
+      "func": "0x1400d7440",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1400d76bc",
+      "func": "0x1400d7440",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x140101d02",
+      "func": "0x140101c50",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x140175809",
+      "func": "0x140174a60",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1401818f2",
+      "func": "0x1401816d0",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1401f4de1",
+      "func": "0x1401f4c20",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1401f69ef",
+      "func": "0x1401f5980",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1401f6ad8",
+      "func": "0x1401f5980",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1401f6be3",
+      "func": "0x1401f5980",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1401f6d13",
+      "func": "0x1401f5980",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x140206680",
+      "func": "0x1402065e0",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x140209504",
+      "func": "0x140209360",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x140258a02",
+      "func": "0x140258900",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1402601fa",
+      "func": "0x14025ff50",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1403be595",
+      "func": "0x1403be440",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1403beb97",
+      "func": "0x1403be440",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1403d1b28",
+      "func": "0x1403d19d0",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     },
+     {
+      "site": "0x1403d1cf7",
+      "func": "0x1403d1bc0",
+      "samplerDescSignature": false,
+      "filterImmediates": []
+     }
+    ],
+    "residual": "서명이 없는 지점 중에 레지스터로만 디스크립터를 채우는 샘플러 생성이 숨어 있을 가능성은 이 스캔으로 배제되지 않는다. 그래서 '생성 지점은 정확히 셋' 은 보고다"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe FUN_140099980 @ 0x140099980 (본문 SHA256[:16]=904bd4b240de2ac4)",
+     "note": "함수 범위는 .pdata 로, Filter 선택 경로는 명령 바이트 패턴으로 재확인한다. 패턴이 하나라도 없으면 스크립트가 FAIL 한다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.probeScene.modelTextures",
+   "value": {
+    "why": "이 조사는 씬 3706286085 의 3D 메시 mip LOD 비결정에서 출발했다(oracle.nondet.meshMipLodResidual). 그 씬의 모델 텍스처가 실제로 어떤 샘플러를 받는지가 권고의 근거다",
+    "measured": {
+     "sceneId": "3706286085",
+     "available": true,
+     "modelTextures": 48,
+     "flagsLow2": {
+      "0": 47,
+      "2": 1
+     },
+     "mipCount": {
+      "4": 1,
+      "7": 1,
+      "8": 4,
+      "9": 42
+     }
+    },
+    "crossRef": "oracle.nondet.meshMipLodResidual",
+    "derivedSampler": "flags 하위 2비트가 0 이면 키 bit0=0 · bit1=0 → Filter = MIN_MAG_MIP_LINEAR(0x15) 또는 ANISOTROPIC(0x55), Address = WRAP(1), MipLODBias 0, MinLOD 0, MaxLOD FLT_MAX. 어느 쪽이든 mip 축은 선형이다",
+    "storedMipChains": "이 씬의 모델 텍스처는 저장 mip 체인을 갖는다 — mip 이 실제로 샘플되는 조건이 성립한다",
+    "consequence": "Waple 의 Mesh3DShaders 선언(filter::linear, mip_filter::linear, address::repeat)이 이 씬에 대해 WE 와 세 축 모두 일치한다. mip_filter::nearest 로 바꾸면 일치하던 축이 어긋난다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "워크샵 scene.pkg 170개의 .tex 헤더 전수",
+     "note": "코퍼스 경로 = /Users/yakisoba/Downloads/wallpaper_dev/backgrounds. 코퍼스 크기가 다른 머신에서 재생성하면 이 도수는 달라진다 — 도수가 아니라 **분포의 형태**가 주장이다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  },
+  {
+   "id": "textureFiltering.waple.declaredSamplers",
+   "value": {
+    "what": "Waple 셰이더가 선언한 constexpr sampler 전수. WE 규약과의 대조표다",
+    "byFile": {
+     "Sources/WapleCore/GLSLTranslator.swift": {
+      "filter::linear, mip_filter::linear, address::clamp_to_edge": 1,
+      "filter::linear, mip_filter::linear, address::repeat": 1,
+      "filter::nearest, mip_filter::linear, address::clamp_to_edge": 1,
+      "filter::nearest, mip_filter::linear, address::repeat": 1
+     },
+     "Sources/WapleRender/EffectShaders.swift": {
+      "filter::linear, address::clamp_to_edge": 6,
+      "filter::linear, address::repeat": 3
+     },
+     "Sources/WapleRender/HDRBloomPass.swift": {
+      "filter::linear, address::clamp_to_edge": 3
+     },
+     "Sources/WapleRender/HDRBloomPyramidPass.swift": {
+      "filter::linear, address::clamp_to_edge": 3
+     },
+     "Sources/WapleRender/HDRPostPass.swift": {
+      "filter::linear, address::clamp_to_edge": 1
+     },
+     "Sources/WapleRender/LDRBloomPass.swift": {
+      "filter::linear, address::clamp_to_edge": 3
+     },
+     "Sources/WapleRender/Mesh3DShaders.swift": {
+      "filter::linear, address::clamp_to_edge": 6,
+      "filter::linear, mip_filter::linear, address::repeat": 5,
+      "coord::normalized, filter::nearest, address::clamp_to_edge, compare_func::less_equal": 2
+     },
+     "Sources/WapleRender/ParticleShaders.swift": {
+      "filter::linear, mip_filter::linear, address::clamp_to_edge": 4,
+      "filter::nearest, mip_filter::linear, address::clamp_to_edge": 1
+     },
+     "Sources/WapleRender/QuadShaders.swift": {
+      "filter::linear, mip_filter::linear, address::clamp_to_edge": 7,
+      "filter::nearest, address::clamp_to_edge": 1,
+      "filter::nearest, mip_filter::linear, address::clamp_to_edge": 1
+     }
+    },
+    "matches": "3D 메시·파티클·쿼드·번역 셰이더가 모두 mip_filter::linear 다 → WE 의 0x15 MIN_MAG_MIP_LINEAR 와 mip 축이 일치한다",
+    "gaps": {
+     "nointerpolation": "WE 는 .tex flags 0x1 이면 세 축 전부 POINT 로 간다. Waple 의 3D 메시 경로(Mesh3DShaders)는 filter::linear 고정이라 그 플래그를 반영하지 않는다. GLSLTranslator 경로에는 smpNearest 가 있다",
+     "addressMode": "WE 는 .tex flags 0x2 이면 CLAMP, 아니면 WRAP 이다. Mesh3DShaders 는 address::repeat 고정, QuadShaders/ParticleShaders 는 address::clamp_to_edge 고정이다"
+    },
+    "notAMipIssue": "위 두 간극은 min/mag 축과 어드레스 축이다. mip 축은 어긋나 있지 않다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "file",
+     "ref": "Sources/WapleRender/Mesh3DShaders.swift",
+     "note": "3D 메시 알베도 샘플러 선언"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/GLSLTranslator.swift",
+     "note": "번역 셰이더의 샘플러 선언 4종"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_texture_filtering.py"
+    }
+   ]
+  }
+ ]
+}
