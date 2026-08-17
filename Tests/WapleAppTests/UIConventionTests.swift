@@ -129,9 +129,13 @@ final class UIConventionTests: XCTestCase {
     /// 실측(2026-08-17): `Sources/Waple` 전체에서 `.accessibilityLabel`/`Value`/`Hint`/
     /// `Element`/`AddTraits`·`.focusable` 참조가 **전부 0건**이다.
     func testTapDrivenViewsDeclareAccessibility() throws {
-        // 2026-08-17 기준 위반 2파일 중 WallpaperGridView 는 Unit B 가 지웠다.
+        // 2026-08-17 기준 위반 2파일이 **둘 다** 마이그레이션을 끝냈다 —
+        // WallpaperGridView(Unit B, 타일)와 DisplaysView(Unit D, railTile·monitorBox)가
+        // 각자 tileAccessibility 로 옮기며 지웠다.
+        //
+        // 목록이 비었다고 이 테스트를 지우지 마라 — 이제부터는 **새 위반을 막는**
+        // 역할이다. 접근성 표현 없는 onTapGesture 뷰를 새로 만들면 여기서 빨개진다.
         let pending: Set<String> = [
-            "Surfaces/Displays/DisplaysView.swift",   // Unit D (railTile·monitorBox)
         ]
         try assertConvention(
             violates: { text in

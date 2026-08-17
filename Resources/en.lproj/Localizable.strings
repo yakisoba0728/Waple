@@ -252,6 +252,8 @@
 
 /* MARK: Unit D — 설정·온보딩·디스플레이 */
 "(자동 탐지)" = "(auto-detected)";
+"전역 배경" = "Global wallpaper";
+"지원 예정" = "Coming soon";
 "로그인 항목 설정 실패: %@" = "Could not change the login item: %@";
 
 /* MARK: Unit E — 메뉴바·마감 */
