@@ -201,7 +201,7 @@
 "zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요." = "No wallpapers were imported from the zip. Check that it contains a project.json.";
 "'%@' 폴더를 삭제할까요?" = "Delete the folder “%@”?";
 "%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다." = "Imported %2$lld of %1$lld. The rest have no project.json, or it could not be read.";
-"배경 %lld개를 가져왔습니다." = "Imported %lld wallpapers.";
+"배경 %lld개를 가져왔습니다." = "Imported %lld wallpaper(s).";
 "%@ (현재: %@)" = "%@ (current: %@)";
 "%@ · 지원 예정" = "%@ · coming soon";
 "‘%@’을(를) 적용하지 못했습니다." = "Could not apply “%@”.";
