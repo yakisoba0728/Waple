@@ -18,14 +18,10 @@ import SwiftUI
 /// 나타남/사라짐은 짧은 페이드로 남긴다. 상태 변화가 하드컷으로 튀면 무엇이 바뀌었는지
 /// 놓치기 쉬워 오히려 접근성이 나빠진다.
 ///
-/// **왜 SwiftUI 환경값이 아니라 `NSWorkspace` 인가.** 이 앱은 `NSHostingController` 로 붙는
-/// AppKit 앱이고, 애니메이션 생성 지점이 뷰 바깥(`StatusBannerModel.show`, AppDelegate 콜백)
-/// 에도 있다. 환경값은 뷰 안에서만 읽히므로 그 자리들이 분기에서 빠진다.
-/// 대가는 하나 — 설정을 바꿔도 이미 그려진 뷰가 자동으로 재평가되지 않는다(다음 상태 변화나
-/// 재실행부터 반영). 접근성 설정은 세션 중 거의 바뀌지 않으므로 받아들인다.
+/// 설정 조회는 `SystemPreference` 가 담당한다(SwiftUI 환경값이 아닌 이유도 거기 적혀 있다).
 enum Motion {
     /// 시스템 "동작 줄이기" 설정.
-    static var isReduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    static var isReduced: Bool { SystemPreference.reduceMotion }
 
     // MARK: 곡선 파라미터
     //
