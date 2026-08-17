@@ -251,5 +251,7 @@
 "‘%@’ 다운로드 실패 — steamcmd 가 완료 신호를 내지 않았습니다(시간 초과·네트워크·실행 오류 가능). 터미널에서 `steamcmd +login %@` 세션 캐시를 확인하고 직접 시도해 원인을 파악하세요." = "“%@” failed to download — steamcmd never reported completion (timeout, network or launch error). Check the `steamcmd +login %@` session cache in Terminal and run it by hand to find the cause.";
 
 /* MARK: Unit D — 설정·온보딩·디스플레이 */
+"(자동 탐지)" = "(auto-detected)";
+"로그인 항목 설정 실패: %@" = "Could not change the login item: %@";
 
 /* MARK: Unit E — 메뉴바·마감 */

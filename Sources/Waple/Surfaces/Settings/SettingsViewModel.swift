@@ -19,7 +19,15 @@ final class SettingsViewModel: ObservableObject {
     @Published var stillSync = false
     @Published var saverSelected = ScreenSaverController.isSelected
     @Published var baseAssetsPath = ""
+    /// **이미 현지화된** 문구. 뷰는 `Text(String)`(비현지화 오버로드)로 표시하므로, 여기서
+    /// 완성해 넘기지 않으면 영어 시스템에서도 한국어로 남는다(청사진 §5.0 권장 (a)).
+    /// 이 방식을 고른 이유: 리터럴이 `NSLocalizedString(` 안에 남아 커버리지 오라클에 그대로 걸린다.
     @Published var statusMessage: String?
+
+    /// 공유 에셋 폴더 미지정 표시. 경로 자리에 들어가지만 경로가 아니라 UI 문구라 번역 대상이다.
+    private static var autoDetectedLabel: String {
+        NSLocalizedString("(자동 탐지)", comment: "공유 에셋 폴더 미지정")
+    }
 
     let saverBundled = Bundle.main.url(forResource: "Waple", withExtension: "saver") != nil
     var ffmpegStatus: String {
@@ -56,7 +64,7 @@ final class SettingsViewModel: ObservableObject {
         loginEnabled = LoginItemController.isEnabled
         stillSync = stillSyncEnabled()
         saverSelected = ScreenSaverController.isSelected
-        baseAssetsPath = BaseAssetsSettings.baseAssetsDirectory?.path ?? "(자동 탐지)"
+        baseAssetsPath = BaseAssetsSettings.baseAssetsDirectory?.path ?? Self.autoDetectedLabel
         statusMessage = nil
     }
 
@@ -102,7 +110,9 @@ final class SettingsViewModel: ObservableObject {
         do {
             try LoginItemController.setEnabled(on)
         } catch {
-            statusMessage = "로그인 항목 설정 실패: \(error.localizedDescription)"
+            statusMessage = String(format: NSLocalizedString("로그인 항목 설정 실패: %@",
+                                                            comment: "로그인 항목 토글 실패"),
+                                   error.localizedDescription)
         }
         loginEnabled = LoginItemController.isEnabled   // 실제 status 재조회(기존 관례)
     }
@@ -118,7 +128,7 @@ final class SettingsViewModel: ObservableObject {
 
     func chooseBaseAssets() {
         onChooseBaseAssets?()   // NSOpenPanel(runModal) — 반환 후 경로 재표시
-        baseAssetsPath = BaseAssetsSettings.baseAssetsDirectory?.path ?? "(자동 탐지)"
+        baseAssetsPath = BaseAssetsSettings.baseAssetsDirectory?.path ?? Self.autoDetectedLabel
     }
 
     func makeStillNow() {
