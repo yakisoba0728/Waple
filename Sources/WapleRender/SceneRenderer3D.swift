@@ -1753,8 +1753,9 @@ extension SceneRenderer {
                     // 경로(SceneRendererFrameEncoder.swift:1094-1099)와 동일 계약).
                     if usedCustom, let custom = mesh.customShader {
                         enc.setVertexBuffer(meshVBuf, offset: 0, index: 4)
-                        // mul(v, mvp)=v·mvp 계약(GLSLTranslator 번역) — stock 의 mvp·v 와 동치가 되도록
-                        // mvp 만 전치(사본 — u.mvp 는 렌더어블 공용이라 제자리 전치 금지).
+                        // 번역 셰이더의 mul(v, mvp) 는 mvp·v 로 방출된다(GLSLTranslator translateBody ①
+                        // 의 ((b)*(a)) 셰임) — stock 과 같은 규약이라 u.mvp 를 **전치 없이** 넘긴다.
+                        // 종전 .transpose 는 번역기가 v·mvp 로 방출하던 시기(d45c259)의 보정이었다.
                         let mat = custom.material
                         if !mat.isEmpty {
                             mat.withUnsafeBytes {
@@ -1769,7 +1770,7 @@ extension SceneRenderer {
                         // (UV 전체 1텍셀)이 돼 조용히 깨진다 — engineUniform 필수 인자화로 재발 방지.
                         let eng = engineUniform(time: time, texRes: custom.texRes, texWrap: custom.texWrap,
                                                 texFilter: custom.texFilter, layerTint: u.tint,
-                                                targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: u.mvp.transpose)
+                                                targetRes: custom.texRes.first ?? SIMD4(1, 1, 1, 1), mvp: u.mvp)
                         eng.withUnsafeBytes {
                             enc.setVertexBytes($0.baseAddress!, length: $0.count, index: 1)
                             enc.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1)

@@ -1391,11 +1391,33 @@ public enum GLSLTranslator {
     static func translateBody(_ body: String, symbols: [String: String], isFragment: Bool,
                               perTextureSampler: Bool = false) -> String? {
         var s = body
-        // 1) mul(a,b) → (a * b) — WE GLSL 방언의 mul 은 순서보존 곱(HLSL mul(v,M)=행벡터 v·M, GLSL
-        //    v*M=Mᵀ·v 로 동일 결과). 종전 (b*a) 는 전치 오역: 비대칭 행렬에서 결과가 뒤집힌다. MVP 는
-        //    이펙트 경로에서 항등(순서 무관)·2D 레이어는 하드코딩 v_main 이라 잠복해 있었고, 유일 발현이
-        //    lightshafts/cursorripple 의 squareToQuad 원근(vert): (b*a)→가로띠, (a*b)→저작 각도 광선.
-        s = rewriteCall(s, "mul") { args in args.count == 2 ? "(\(args[0]) * \(args[1]))" : nil }
+        // 1) mul(a,b) → (b * a) — **인자 순서를 뒤집는다.** WE 셰이더는 GLSL 문법으로 저작되지만
+        //    함수는 HLSL 네이티브를 쓴다(엔진이 매크로 프롤로그로 HLSL 트랜스파일 — `mul` 은 프롤로그에
+        //    정의되지 않아 HLSL 빌트인 그대로다). HLSL 은 m[행][열], GLSL/MSL 은 m[열][행]이라 **같은
+        //    소스 대입문이 만드는 행렬은 서로 전치**다. 그래서 HLSL `mul(v,M)`(행벡터 v·M)과 등가인
+        //    GLSL/MSL 식은 `M*v` 이고, `v*M` 은 전치된 다른 사상이다.
+        //
+        //    판별식(추론 아님): common_perspective.h 의 squareToQuad 는 정의상 단위정사각형 코너를
+        //    (p0,p1,p2,p3) 로 보내야 한다. 실측 — 실물 점열 p0=(0.67728,0.01297) p1=(0.76007,0.14043)
+        //    p2=(0.46654,1.09592) p3=(0.16363,0.44881) 에서
+        //      (b*a)=M·v : (0,0)(1,0)(1,1)(0,1) → p0,p1,p2,p3 **정확 일치**
+        //      (a*b)=v·M : → (-0.031,-0.757) (0.017,-0.831) (0.089,-0.768) (0.091,-0.652) — 전혀 다름
+        //    즉 (a*b) 로는 이 함수가 이름값을 못 한다. RE 산출물도 같은 결론을 독립 확립했다
+        //    (WE-2.8-COMPLETE-KR.md §A.1 / deep/lanes/A4 §1.4: "포팅 시 `#define mul(a,b) ((b)*(a))`").
+        //
+        //    이 순서는 벡터-우선(`mul(v,M)`)·행렬-우선(`mul(tangentSpace, lightDir)` — generic.vert)
+        //    두 형태 모두에 동시에 옳다. 그게 ((b)*(a)) 가 보편 셰임인 이유다.
+        //
+        //    d45c259 가 이걸 (a*b) 로 뒤집었고 근거는 "(b*a)→가로띠" 라는 육안 판정이었다. 그 판정은
+        //    2026-07-17 — DIRECTDRAW 출력에 알파가 이중으로 곱해져(3c57a8c 가 고침) 실제 fx 광선이
+        //    8비트에서 소멸해 있던 시기다. 즉 그때 본 것은 광선이 아니었다. 되돌린 뒤 실측:
+        //    lightshafts 41패스 중 mask≡0 이던 19패스가 전부 살아나고(GPU 알파 리드백), WE 실기
+        //    대조에서 3299228616 이 개선된다(파리티 표는 docs/we-parity-2026-08-16.md).
+        //
+        //    호출부 계약: 엔진이 올리는 MVP 는 이 순서에 맞춰 **전치하지 않은** 채로 바인딩한다
+        //    (SceneRendererFrameEncoder 커스텀 레이어·SceneRenderer3D 커스텀 메시). 이펙트 경로의
+        //    MVP 는 항등이라 순서 무관.
+        s = rewriteCall(s, "mul") { args in args.count == 2 ? "(\(args[1]) * \(args[0]))" : nil }
         // 2) texSample2DLod(t, uv, l) → t.sample(smp, uv, level(l)) / texSample2D(t, uv) → t.sample(smp, uv).
         //    UV 는 we_uv() 로 절단 — WE GLSL(HLSL 방언)은 vec3/vec4 를 UV 로 암시적 절단해 넘기는 걸 허용한다.
         s = rewriteCall(s, "texSample2DLod") { args in

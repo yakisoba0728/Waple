@@ -1327,14 +1327,16 @@ extension SceneRenderer {
         // H1: 커스텀 머티리얼 셰이더 경로 — QuadShaders 대체.
         if let custom = layer.customShader, let def = layer.def {
             let t = effectiveTransform ?? (origin: def.origin, scale: def.scale, angle: def.angleZ)
-            // 번역 셰이더 계약은 mul(v, eng.mvp)=v·M(HLSL 행벡터)라 M·v 규약의 layerTransformMatrix 는
-            // 전치해 바인딩(3D 커스텀 경로 47bd076 과 동일 수정). 무회전·축정렬 스케일만 있는 레이어는
-            // D=Dᵀ 이라 전치 여부가 무관해 기존 테스트에서 잠복해 있었다 — 회전 레이어에서 발현.
+            // 번역 셰이더의 mul(v, eng.mvp) 는 M·v 로 방출된다(GLSLTranslator translateBody ①의
+            // ((b)*(a)) 셰임 — HLSL 행벡터 규약과 등가). layerTransformMatrix 도 M·v 규약이라
+            // **전치 없이** 그대로 바인딩한다. 종전에는 번역기가 v·M 로 방출하던 시기(d45c259)의
+            // 보정으로 여기에 .transpose 가 붙어 있었고, 셰임을 되돌리면서 함께 걷어냈다.
+            // 무회전·축정렬 스케일만 있는 레이어는 D=Dᵀ 이라 전치 여부가 무관하다 — 회전 레이어에서만 발현.
             let m = layerTransformMatrix(origin: t.origin, size: def.size, scale: t.scale,
                                          angleZ: t.angle, alignment: def.alignment,
                                          parallaxDepth: Vec2(x: layer.parallaxDepth.x, y: layer.parallaxDepth.y),
                                          camOffset: camOffset, shakeOffset: frameShakeOffset,
-                                         aspectScale: aspectScale).transpose
+                                         aspectScale: aspectScale)
             enc.setRenderPipelineState(custom.pipeline)
             // F1(flip①): effectQuadInterleaved(ev_main 전용, local(-1,-1)→uv(0,1))는 여기서 재사용하면
             // layerTransformMatrix 의 y-flip ortho 와 겹쳐 텍스처가 상하 반전된다 — 전용 버퍼로 분리

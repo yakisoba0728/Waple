@@ -1,0 +1,151 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_mul_convention.py",
+ "entries": [
+  {
+   "id": "mul.shim",
+   "value": {
+    "weDialect": "GLSL 문법 + HLSL 네이티브 함수(엔진 프롤로그가 `mul` 을 정의하지 않는다)",
+    "hlslSemantics": "mul(v, M) = 행벡터 v·M, m[행][열]",
+    "portedShim": "#define mul(a,b) ((b)*(a))  // GLSL/MSL 은 m[열][행] — 같은 대입문이 만드는 행렬이 전치라 순서를 뒤집어야 등가",
+    "translatorEmits": "(b * a)",
+    "appliesToBothArgForms": "벡터-우선 mul(v,M) 과 행렬-우선 mul(M,v)(generic.vert 의 mul(tangentSpace, lightDir)) 모두에 동시에 옳다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "Sources/WapleRender/Resources/WEAssets/shaders/common_perspective.h (sha256_16 0b35309c894da7fd) — `#if HLSL` 분기가 같은 원문이 두 백엔드로 컴파일됨을 보인다"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/GLSLTranslator.swift translateBody ①"
+    },
+    {
+     "kind": "doc",
+     "ref": "wallpaper_dev/references/…/analysis/deep/lanes/A4-headers-blending-fog.md §1.4 — wallpaper64.exe strings 의 매크로 프롤로그에 `mul` 정의 0건, 포팅 시 `((b)*(a))` 필요"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_mul_convention.py"
+    }
+   ]
+  },
+  {
+   "id": "mul.squareToQuadCornerIdentity",
+   "value": {
+    "points": {
+     "g_Point0": [
+      0.67728,
+      0.01297
+     ],
+     "g_Point1": [
+      0.76007,
+      0.14043
+     ],
+     "g_Point2": [
+      0.46654,
+      1.09592
+     ],
+     "g_Point3": [
+      0.16363,
+      0.44881
+     ]
+    },
+    "pointsSource": "lightshafts.vert 어노테이션 default (원문 파싱)",
+    "byOrder": {
+     "(b*a) = M·v": {
+      "corners": {
+       "(0,0)": [
+        0.67728,
+        0.01297
+       ],
+       "(1,0)": [
+        0.76007,
+        0.14043
+       ],
+       "(1,1)": [
+        0.46654,
+        1.09592
+       ],
+       "(0,1)": [
+        0.16363,
+        0.44881
+       ]
+      },
+      "maxAbsError": 0.0,
+      "satisfiesSquareToQuad": true
+     },
+     "(a*b) = v·M": {
+      "corners": {
+       "(0,0)": [
+        -0.031219,
+        -0.756936
+       ],
+       "(1,0)": [
+        0.0166,
+        -0.831372
+       ],
+       "(1,1)": [
+        0.089288,
+        -0.768126
+       ],
+       "(0,1)": [
+        0.090681,
+        -0.652356
+       ]
+      },
+      "maxAbsError": 1.864045619,
+      "satisfiesSquareToQuad": false
+     },
+     "degenerateBranch": false
+    },
+    "verdict": "(b*a) 만 squareToQuad 계약(단위정사각형 코너 → p0,p1,p2,p3)을 만족한다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "shader",
+     "ref": "WEAssets/effects/lightshafts/shaders/effects/lightshafts.vert (sha256_16 fc65a0011fcae963)"
+    },
+    {
+     "kind": "shader",
+     "ref": "WEAssets/shaders/common_perspective.h (sha256_16 0b35309c894da7fd)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_mul_convention.py"
+    }
+   ]
+  },
+  {
+   "id": "mul.reach",
+   "value": {
+    "packagesScanned": 169,
+    "directDrawPasses": 41,
+    "directDrawScenes": 23,
+    "maskIdenticallyZeroPasses": {
+     "(b*a) = M·v": 0,
+     "(a*b) = v·M": 19
+    },
+    "nonEngineMatrixMulScenes": 122,
+    "nonEngineMatrixMulShaderFiles": 303
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "/Users/yakisoba/Downloads/wallpaper_dev/backgrounds — scene.pkg 169개 전수"
+    },
+    {
+     "kind": "shader",
+     "ref": "lightshafts.frag mask 체인 재현 (sha256_16 3e03ff559af5a8eb), 65² 격자"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_mul_convention.py"
+    }
+   ]
+  }
+ ]
+}

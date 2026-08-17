@@ -1296,9 +1296,11 @@ final class GLSLTranslatorTests: XCTestCase {
         XCTAssertEqual(GLSLTranslator.memoComputeCount, 2, "두 입력은 별도 실번역(스테일 히트 없음)")
     }
 
-    /// mul(a,b) 순서보존(a*b) — WE GLSL 방언의 mul 은 순서보존 곱. 종전 (b*a) 전치 오역이
-    /// lightshafts/cursorripple 의 squareToQuad 원근을 뒤집어 갓레이가 가로띠로 렌더됐다.
-    /// 비대칭 행렬 mul(vec, M) 이 (vec * M) 로 방출돼야 fxCoord.y 가 스크린 x 에 의존(=슬랜트).
+    /// mul(a,b) → (b*a) — **인자 순서를 뒤집어야** WE(HLSL) 와 같은 사상이 된다. HLSL 은 m[행][열],
+    /// MSL 은 m[열][행]이라 같은 소스 대입문이 만드는 행렬은 서로 전치이고, 그래서 HLSL `mul(v,M)`
+    /// (행벡터)의 MSL 등가식은 `M*v` 다. 종전 (a*b) 는 전치 오역이라 squareToQuad 원근이 뒤집혔고
+    /// lightshafts 41패스 중 19패스가 mask≡0(fx≡0)으로 소등돼 있었다.
+    /// 판별은 아래 testMulReproducesSquareToQuadCorners 가 수치로 한다 — 이 테스트는 방출 순서만 고정.
     func testMulPreservesOrderForPerspective() throws {
         let vert = """
         uniform mat4 g_ModelViewProjectionMatrix;
@@ -1317,21 +1319,95 @@ final class GLSLTranslatorTests: XCTestCase {
         void main() { gl_FragColor = vec4(v_Fx.xy / v_Fx.z, 0.0, 1.0); }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
-        // 순서보존: a_TexCoord 표현이 xform 앞에 온다(= vec * M). 전치 오역이면 (xform * ...) 순.
         // F388: vertex 스테이지 struct 존재만 전제조건으로 확인(과거엔 이 결과로 얻은 Range 를
         // 실제로 쓰지 않고 즉시 버렸다 — 아래 실제 어서션은 t.msl 전체를 다시 검색해 독립 계산됨).
         guard t.msl.contains("vertex Vary ev_main") else {
             return XCTFail("ev_main 미발견:\n\(t.msl)")
         }
-        // v_Fx 대입식에서 a_TexCoord 가 xform 보다 먼저 나오면 (a*b) 순서.
+        // v_Fx 대입식에서 xform 이 a_TexCoord 보다 먼저 나와야 (b*a) 순서 = M·v.
         let vfx = try XCTUnwrap(t.msl.range(of: "out.v_Fx = ("))
         let tail = String(t.msl[vfx.upperBound...]).prefix(120)
         let aPos = try XCTUnwrap(tail.range(of: "a_TexCoord"), "v_Fx 대입식에 a_TexCoord 토큰 부재:\n\(tail)")
         let mPos = try XCTUnwrap(tail.range(of: "xform"), "v_Fx 대입식에 xform 토큰 부재:\n\(tail)")
-        XCTAssertLessThan(aPos.lowerBound, mPos.lowerBound,
-                          "mul(vec, M) 은 (vec * M) 순서여야 — 전치 오역(M * vec)이면 갓레이 가로띠:\n\(tail)")
+        XCTAssertLessThan(mPos.lowerBound, aPos.lowerBound,
+                          "mul(vec, M) 은 (M * vec) 로 방출돼야 — (vec * M) 이면 원근이 전치된다:\n\(tail)")
         // MVP(항등) 경로는 순서와 무관하게 항상 정상(가드).
         XCTAssertTrue(t.msl.contains("eng.mvp"))
+    }
+
+    /// 판별식: `squareToQuad` 는 **정의상** 단위정사각형 코너를 (p0,p1,p2,p3) 로 보내야 한다.
+    /// common_perspective.h 를 그대로 인라인해 번역한 뒤, 방출된 곱셈 순서와 동일한 규약으로
+    /// CPU 에서 코너 4점을 통과시켜 저작 점열과 일치하는지 본다 — 순서가 뒤집히면(전치) 코너가
+    /// 전혀 다른 곳으로 간다(실물 3690417937 점열에서 (0,0)→(-0.031,-0.757), p0 는 (0.677,0.013)).
+    ///
+    /// 텍스트 어서션이 아니라 수치 어서션인 이유: 방출 순서만 보는 테스트는 "어느 쪽이 맞는가" 를
+    /// 판정하지 못한다(d45c259 가 정확히 그렇게 반대 방향을 고정했다). 이 함수는 이름이 곧 계약이다.
+    func testMulReproducesSquareToQuadCorners() throws {
+        let vert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec3 v_Fx;
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            mat3 m = mat3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+            m[0][0] = 0.1; m[0][1] = 0.2; m[0][2] = 0.3;
+            m[1][0] = 0.4; m[1][1] = 0.5; m[1][2] = 0.6;
+            m[2][0] = 0.7; m[2][1] = 0.8; m[2][2] = 1.0;
+            v_Fx = mul(vec3(a_TexCoord.xy, 1.0), m);
+        }
+        """
+        let frag = """
+        varying vec3 v_Fx;
+        void main() { gl_FragColor = vec4(v_Fx, 1.0); }
+        """
+        let t = try XCTUnwrap(GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]))
+        XCTAssertTrue(t.msl.contains("(m * float3(vin.a_TexCoord.xy, 1.0))"),
+                      "mul(v, m) → (m * v) 로 방출돼야 한다:\n\(t.msl)")
+
+        // 방출식과 같은 규약(M·v, MSL 열-우선 m[열][행])을 CPU 로 재현해 squareToQuad 계약을 검산한다.
+        // p0=(0.67728,0.01297) p1=(0.76007,0.14043) p2=(0.46654,1.09592) p3=(0.16363,0.44881) 은
+        // lightshafts.vert 의 실제 어노테이션 기본값이다.
+        let p0 = (x: 0.67728, y: 0.01297), p1 = (x: 0.76007, y: 0.14043)
+        let p2 = (x: 0.46654, y: 1.09592), p3 = (x: 0.16363, y: 0.44881)
+        // common_perspective.h squareToQuad 의 그대로: dx2/dy2 는 p3, dx3/dy3 는 p2.
+        let (dx0, dy0, dx1, dy1) = (p0.x, p0.y, p1.x, p1.y)
+        let (dx2, dy2, dx3, dy3) = (p3.x, p3.y, p2.x, p2.y)
+        let diffx1 = dx1 - dx3, diffy1 = dy1 - dy3
+        let diffx2 = dx2 - dx3, diffy2 = dy2 - dy3
+        let det = diffx1 * diffy2 - diffx2 * diffy1
+        let sumx = dx0 - dx1 + dx3 - dx2, sumy = dy0 - dy1 + dy3 - dy2
+        XCTAssertNotEqual(det, 0, "실물 점열은 비퇴화 — 퇴화 분기를 타면 이 검산이 무의미하다")
+        let ovdet = 1.0 / det
+        let g = (sumx * diffy2 - diffx2 * sumy) * ovdet
+        let h = (diffx1 * sumy - sumx * diffy1) * ovdet
+        // m[열][행] — GLSL/MSL 규약 그대로.
+        let m: [[Double]] = [[dx1 - dx0 + g * dx1, dy1 - dy0 + g * dy1, g],
+                             [dx2 - dx0 + h * dx2, dy2 - dy0 + h * dy2, h],
+                             [dx0, dy0, 1.0]]
+        // 방출식 (m * v): result[행] = Σ_열 m[열][행]·v[열].
+        func apply(_ u: Double, _ v: Double) -> (x: Double, y: Double) {
+            let vec = [u, v, 1.0]
+            var r = [0.0, 0.0, 0.0]
+            for row in 0..<3 { r[row] = (0..<3).reduce(0) { $0 + m[$1][row] * vec[$1] } }
+            return (r[0] / r[2], r[1] / r[2])
+        }
+        let corners = [((0.0, 0.0), p0), ((1.0, 0.0), p1), ((1.0, 1.0), p2), ((0.0, 1.0), p3)]
+        for ((u, v), want) in corners {
+            let got = apply(u, v)
+            XCTAssertEqual(got.x, want.x, accuracy: 1e-6, "squareToQuad(\(u),\(v)).x")
+            XCTAssertEqual(got.y, want.y, accuracy: 1e-6, "squareToQuad(\(u),\(v)).y")
+        }
+        // 네거티브: 전치 규약(v·M)이면 같은 행렬이 코너를 전혀 다른 곳으로 보낸다 — 검산이 유효함을 보증.
+        func applyTransposed(_ u: Double, _ v: Double) -> (x: Double, y: Double) {
+            let vec = [u, v, 1.0]
+            var r = [0.0, 0.0, 0.0]
+            for col in 0..<3 { r[col] = (0..<3).reduce(0) { $0 + m[col][$1] * vec[$1] } }
+            return (r[0] / r[2], r[1] / r[2])
+        }
+        let bad = applyTransposed(0, 0)
+        XCTAssertGreaterThan(abs(bad.x - p0.x) + abs(bad.y - p0.y), 0.5,
+                             "전치 규약이 우연히 같은 답을 내면 이 검산은 판별력이 없다")
     }
 
     func testPremultiplyOutputWrapsFragment() throws {

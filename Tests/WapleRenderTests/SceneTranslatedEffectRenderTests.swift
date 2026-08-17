@@ -473,12 +473,14 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertGreaterThan(luma, 0.9, "g_Texture0Resolution.x must be actual capture width 64, not projection width 1920")
     }
 
-    /// 갓레이 각도 회귀(#): vertex mul(vec, 비대칭행렬) 원근 전개. 종전 (b*a) 전치 오역은 fxCoord.y 를
-    /// 스크린 x 와 무관하게 만들어 가로띠로 렌더했다(lightshafts squareToQuad 실증). 순서보존(a*b) 이면
-    /// fxCoord.y = 0.8·u + w → 같은 행에서 좌<우(슬랜트). 셰이더 자족(인클루드 불요)이라 CI 이식.
+    /// 갓레이 각도 회귀(#): vertex mul(vec, 비대칭행렬) 원근 전개. mul(a,b)→(b*a)=M·v 가 WE(HLSL)
+    /// 규약이며(GLSLTranslator translateBody ① 주석의 코너 항등 판별식), 이 규약에서만 fxCoord.y 가
+    /// 스크린 x 에 의존한다 — 전치 규약(v·M)이면 y=v 로 스크린 x 와 무관해져 가로띠가 된다.
+    /// 셰이더 자족(인클루드 불요)이라 CI 이식.
     func testVertexPerspectiveMulSlantsNotHorizontal() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
-        // GLSL column-major mat3: 열 c0=(1,0,0) c1=(0.8,1,0) c2=(0,0,1). 비대칭 → 전치 판별 가능.
+        // GLSL column-major mat3: 열 c0=(1,0.8,0) c1=(0,1,0) c2=(0,0,1) → m[0][1]=0.8.
+        // M·v 이면 y = 0.8·u + v(슬랜트), v·M 이면 y = v(가로띠). 비대칭이라 전치 판별 가능.
         let vert = """
         uniform mat4 g_ModelViewProjectionMatrix;
         attribute vec3 a_Position;
@@ -486,7 +488,7 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         varying vec3 v_Fx;
         void main() {
             gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
-            mat3 xform = mat3(1.0, 0.0, 0.0, 0.8, 1.0, 0.0, 0.0, 0.0, 1.0);
+            mat3 xform = mat3(1.0, 0.8, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
             v_Fx = mul(vec3(a_TexCoord.xy, 1.0), xform);
         }
         """
@@ -521,13 +523,96 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
-        // 상단부 같은 행에서 좌/우 밝기(fxCoord.y = 0.8·u + w). 순서보존이면 우>좌, 전치면 동일(가로띠).
+        // 상단부 같은 행에서 좌/우 밝기(fxCoord.y = 0.8·u + v). M·v 면 우>좌, 전치(v·M)면 동일(가로띠).
         let yRow = rep.pixelsHigh / 8
         let left = try XCTUnwrap(rep.colorAt(x: 3, y: yRow)).brightnessComponent
         let right = try XCTUnwrap(rep.colorAt(x: rep.pixelsWide - 4, y: yRow)).brightnessComponent
         NSLog("%@", "[Waple] perspective-mul slant left=\(left) right=\(right)")
         XCTAssertGreaterThan(right - left, 0.3,
                              "vertex mul(vec, 비대칭M) 슬랜트: 우(\(right)) - 좌(\(left)) > 0.3 — 전치 오역이면 ≈0(가로띠)")
+    }
+
+    /// lightshafts 소등 회귀: **실물 squareToQuad + 실물 점열**로 `mask` 를 그대로 계산해, 화면 어딘가에
+    /// 반드시 0 보다 큰 값이 나오는지 본다. 전치 규약에서는 이 점열의 `v_TexCoordFx.z` 가 화면 전역에서
+    /// 음수라 `step(0,z)` 가 0 → **fx ≡ 0** 이 되고, 8비트 출력이 통째로 검게 나온다(실측: 코퍼스
+    /// DIRECTDRAW 41패스 중 렌더되는 34패스의 19패스가 이 상태였다 — GPU 알파 리드백 max=0).
+    ///
+    /// 점열은 3299228616 의 저작값(0.4 0.25 / 0.6 0.25 / 0.8 0.8 / 0.2 0.8)이고, 이 씬은 6패스 전부가
+    /// 소등돼 있었다. common_perspective.h 는 pkg 에 동봉해 자족(인클루드 탐색 무의존, CI 이식).
+    func testLightshaftsMaskIsNotIdenticallyZero() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let vert = """
+        #include "common_perspective.h"
+        uniform mat4 g_ModelViewProjectionMatrix;
+        uniform vec2 g_Point0; // {"material":"point0","default":"0.4 0.25"}
+        uniform vec2 g_Point1; // {"material":"point1","default":"0.6 0.25"}
+        uniform vec2 g_Point2; // {"material":"point2","default":"0.8 0.8"}
+        uniform vec2 g_Point3; // {"material":"point3","default":"0.2 0.8"}
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        varying vec3 v_TexCoordFx;
+        void main() {
+            mat3 xform = inverse(squareToQuad(g_Point0, g_Point1, g_Point2, g_Point3));
+            v_TexCoordFx = mul(vec3(a_TexCoord.xy, 1.0), xform);
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+        }
+        """
+        // lightshafts.frag 의 mask 체인(RAYMODE 0)만 발췌 — 노이즈·색은 빼고 커버리지만 본다.
+        let frag = """
+        varying vec3 v_TexCoordFx;
+        void main() {
+            vec2 fxCoord = v_TexCoordFx.xy / v_TexCoordFx.z;
+            float mask = step(0.0, v_TexCoordFx.z);
+            mask *= smoothstep(0.50001, 0.5 - 0.31, abs(fxCoord.x - 0.5));
+            mask *= smoothstep(0.50001, 0.5 - 0.31, abs(fxCoord.y - 0.5));
+            mask *= 1.0 - fxCoord.y;
+            mask = clamp(mask, 0.0, 1.0);
+            gl_FragColor = vec4(mask, mask, mask, 1.0);
+        }
+        """
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
+         "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080",
+           "effects":[{"file":"effects/lstest/effect.json","passes":[{}]}]}]}
+        """
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_tr_lsmask", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
+            ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
+            ("materials/w.tex", solidTex(255, 255, 255)),
+            ("shaders/effects/lstest.vert", vert.data(using: .utf8)!),
+            ("shaders/effects/lstest.frag", frag.data(using: .utf8)!),
+        ]).write(to: dir.appendingPathComponent("scene.pkg"))
+        let project = WallpaperProject(id: "lsmask", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                       title: "lsmask", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+        let r = SceneRenderer()
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)), project: project)
+        defer { r.teardown() }
+        let out = URL(fileURLWithPath: "/tmp/waple_tr_lsmask")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let url = try XCTUnwrap(r.captureFrames(width: 128, height: 72, times: [0.1], toDir: out).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        var peak = 0.0
+        var lit = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                let b = Double(try XCTUnwrap(rep.colorAt(x: x, y: y)).brightnessComponent)
+                if b > peak { peak = b }
+                if b > 0.02 { lit += 1 }
+            }
+        }
+        let total = rep.pixelsHigh * rep.pixelsWide
+        let coverage = Double(lit) / Double(total)
+        NSLog("%@", "[Waple] lightshafts mask peak=\(peak) coverage=\(coverage)")
+        // CPU 검산(129² 격자): peak 0.700, coverage 12.3%. 전치 규약이면 둘 다 정확히 0.
+        XCTAssertGreaterThan(peak, 0.4, "mask 가 화면 전역 0 이면 fx≡0 — 원근 전치 회귀")
+        XCTAssertGreaterThan(coverage, 0.02, "커버리지 2% 미만은 소등과 다름없다")
+        // 상한은 **폴백 감지**다: 번역/인클루드가 깨져 이펙트가 통째로 스킵되면 흰 레이어가 그대로
+        // 나와 peak≈1·coverage≈1 이 된다 — 그걸 통과로 세지 않는다.
+        XCTAssertLessThan(peak, 0.95, "peak≈1 이면 이펙트가 스킵돼 베이스 흰 레이어를 본 것이다")
+        XCTAssertLessThan(coverage, 0.40, "coverage≈1 이면 이펙트가 스킵된 것(마스크는 화면 일부만 덮는다)")
     }
 
     /// 실제 WE opacity GLSL 을 비-스톡 이름 "opacitytest" 로 변환·렌더 → 핸드포팅 오라클(alpha 0.4 → ~0.4)과 수치 일치.
