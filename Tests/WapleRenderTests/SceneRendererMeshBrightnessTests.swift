@@ -34,6 +34,24 @@ final class SceneRendererMeshBrightnessTests: XCTestCase {
         XCTAssertEqual(Scene3DMaterialValues.parse(["Alpha": 1], shader: "generic2").brightness, 1, accuracy: 1e-6)
     }
 
+    /// PBR 레인은 소문자 `brightness`(generic4.frag:37). 레인이 갈리면 키도 갈린다 — 직전 사이클의
+    /// `Rough`/`roughness` 오적용과 같은 함정이라 양방향으로 못박는다.
+    func testPBRLaneReadsLowercaseBrightnessOnly() {
+        for shader in ["generic3", "generic4", "chroma4", "fur4", "foliage4"] {
+            XCTAssertEqual(Scene3DMaterialValues.parse(["brightness": 4], shader: shader).brightness, 4,
+                           accuracy: 1e-6, "\(shader) 는 소문자 brightness 를 읽어야 한다")
+            XCTAssertEqual(Scene3DMaterialValues.parse(["Brigtness": 4], shader: shader).brightness, 1,
+                           accuracy: 1e-6, "\(shader) 에 generic2 의 오타 키는 존재하지 않는다")
+        }
+    }
+
+    /// generic2 는 반대로 PBR 레인 키를 읽지 않는다(실코퍼스 3470948192 는 두 레인을 동시에 쓴다 —
+    /// generic2 머티리얼 2건 + generic4 머티리얼 1건).
+    func testGeneric2IgnoresPBRLaneKey() {
+        XCTAssertEqual(Scene3DMaterialValues.parse(["brightness": 4], shader: "generic2").brightness, 1,
+                       accuracy: 1e-6)
+    }
+
     /// 같은 레거시 레인이어도 `generic` 에는 g_Brightness 선언 자체가 없다(generic.frag uniform 전수:
     /// Metal/Rough/Light/Color/Alpha + 샘플러). 레인으로 뭉뚱그려 읽으면 WE 가 무시하는 값을 곱하게 된다.
     func testGenericShaderHasNoBrightnessUniform() {
@@ -167,6 +185,21 @@ final class SceneRendererMeshBrightnessTests: XCTestCase {
         XCTAssertGreaterThan(plain, 0.2, "대조군이 검정이면 게이트를 잴 수 없다 — 실측 \(plain)")
         XCTAssertEqual(authored, plain, accuracy: 0.005,
                        "비HDR 씬에서 Brigtness 는 발화하면 안 됨 — plain=\(plain) authored=\(authored)")
+    }
+
+    /// PBR 레인(generic4 + 소문자 `brightness`)도 같은 배율을 픽셀까지 낸다.
+    /// 코퍼스 도달이 39건/4씬으로 레거시 레인(2건/1씬)보다 훨씬 크다 — 픽셀 단언을 따로 둔다.
+    func testHDRScenePBRLaneScalesByLowercaseBrightness() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        let plain = try centerLuma(capture(scene: scene(hdr: true),
+                                           files: files(brigtness: nil, shader: "generic4"),
+                                           tag: "hdr-pbr-none"))
+        let scaled = try centerLuma(capture(scene: scene(hdr: true),
+                                            files: files(brigtness: 2, key: "brightness", shader: "generic4"),
+                                            tag: "hdr-pbr-2x"))
+        XCTAssertGreaterThan(plain, 0.2, "대조군이 검정이면 배율을 잴 수 없다 — 실측 \(plain)")
+        XCTAssertEqual(scaled, plain * 2, accuracy: 0.03,
+                       "generic4 의 brightness 도 최종색에 곱해야 함 — plain=\(plain) scaled=\(scaled)")
     }
 
     /// 정상 철자로 저작하면 generic2 에서는 아무 일도 없어야 한다(철자 규약이 실제로 픽셀을 가른다).

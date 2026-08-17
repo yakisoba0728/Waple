@@ -48,14 +48,23 @@ struct Scene3DMaterialValues: Equatable {
     static let legacyLaneShaders: Set<String> = ["generic", "generic2"]
 
     /// `g_Brightness` 를 노출하는 머티리얼 키(소문자 정규화 후). nil = **그 셰이더엔 유니폼이 없다**.
-    /// 레인마다 철자가 갈리는 것이 이 유니폼의 함정이다:
+    /// 같은 유니폼인데 레인마다 철자가 갈리는 것이 이 값의 함정이다:
     /// - `generic2` → `Brigtness`. **WE 자신의 오타**다(generic2.frag:7 선언 주석 원문). 철자를
     ///   교정해 읽으면 저작값을 영영 못 만난다 — 코퍼스에서도 이 셰이더에만 이 철자가 붙는다.
+    /// - PBR 레인(`generic3`/`generic4`/`chroma4`/`fur4`/`foliage4`) → `brightness`(소문자,
+    ///   generic4.frag:37 label `ui_editor_properties_hdr_brightness`). 선언 기본값·범위·소비 위치는
+    ///   generic2 와 동일하다. 미지/무명 셰이더도 스톡 셰이딩이 PBR 레인이라 여기로 묶는다.
     /// - `generic` → 없음. 같은 레거시 레인이지만 generic.frag 에는 g_Brightness 선언 자체가 없어
     ///   (uniform 전수 대조: Metal/Rough/Light/Color/Alpha 뿐) 키를 읽는 것 자체가 오독이다.
     ///   레인 구분(legacyLaneShaders)과 키 유무가 일치하지 않으므로 별도 판정을 둔다.
+    /// 2D 레이어 레인(`genericimage` 키 `Bright`, `genericimage2` 키 `Brightness`)은 대상 밖이다 —
+    /// 그쪽은 `#if HDR` 게이트가 없고 소비 위치도 알베도 직후라 규약이 다른 별개 유니폼이다.
     static func brightnessKey(shader: String?) -> String? {
-        shader == "generic2" ? "brigtness" : nil
+        switch shader {
+        case "generic": return nil
+        case "generic2": return "brigtness"
+        default: return "brightness"
+        }
     }
 
     /// `passes[0].constantshadervalues` → 머티리얼 값. `shader` 는 같은 pass 의 셰이더 이름으로,
