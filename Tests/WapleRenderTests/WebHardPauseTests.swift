@@ -881,15 +881,46 @@ final class WebHardPauseTests: XCTestCase {
         XCTAssertEqual((events["same"] as? [String: Any])?["tick"] as? Int, 0)
         XCTAssertEqual((events["data"] as? [String: Any])?["tick"] as? Int, 0)
 
+        // 이 단언이 재려는 것은 **정지 중 억눌린 tick 이 재개 순간 한꺼번에 쏟아지는가** 다.
+        //
+        // 종전에는 개수 상한(`<= 5`)으로 쟀는데, 자식 프레임의 tick 은 `setInterval(…, 100)`
+        // 이라 그 상한은 사실상 **"재개 후 500ms 안에 관측하라"는 벽시계 예산**이었다.
+        // 폭주가 전혀 없어도 관측이 늦으면 깨진다 — 3코어 CI 에서 6 이 나와 빨개졌고
+        // (`947d9e7` 런), 같은 커밋이 로컬에서는 통과했다. `waitUntil` 의 폴 한 번이
+        // JS 왕복이라 부하가 걸린 러너에서는 첫 관측 자체가 600ms 를 넘긴다.
+        //
+        // 그래서 개수가 아니라 **속도**로 잰다: 경과 시간이 허용하는 tick 수를 넘으면 폭주다.
+        // 느린 러너는 경과도 같이 늘어나므로 통과하고, 진짜 백로그 플러시(짧은 시간에 다량)는
+        // 여전히 잡힌다. 여유 2 는 타이머 지터와 경계(정확히 n×100ms)를 흡수한다.
+        let tickPeriod = 0.1
+        let jitterAllowance = 2
+        let resumedAt = Date()
+        var sameAtFirstTick = 99
+        var dataAtFirstTick = 99
+        var observedAfter: TimeInterval = 0
         renderer.resume()
         XCTAssertTrue(waitUntil(timeout: 2) {
-            let current = try? self.object(web, "window.__frameEvents")
-            return ((current?["same"] as? [String: Any])?["tick"] as? Int ?? 0) >= 1 &&
-                ((current?["data"] as? [String: Any])?["tick"] as? Int ?? 0) >= 1
+            guard let current = try? self.object(web, "window.__frameEvents"),
+                  let same = (current["same"] as? [String: Any])?["tick"] as? Int,
+                  let data = (current["data"] as? [String: Any])?["tick"] as? Int,
+                  same >= 1, data >= 1
+            else { return false }
+            sameAtFirstTick = same
+            dataAtFirstTick = data
+            observedAfter = Date().timeIntervalSince(resumedAt)
+            return true
         })
-        events = try object(web, "window.__frameEvents")
-        XCTAssertLessThanOrEqual((events["same"] as? [String: Any])?["tick"] as? Int ?? 99, 5)
-        XCTAssertLessThanOrEqual((events["data"] as? [String: Any])?["tick"] as? Int ?? 99, 5)
+        let budget = Int(observedAfter / tickPeriod) + jitterAllowance
+        XCTAssertLessThanOrEqual(
+            sameAtFirstTick, budget,
+            "same 프레임이 \(String(format: "%.3f", observedAfter))초 동안 \(sameAtFirstTick)틱 — "
+                + "경과가 허용하는 \(budget)틱을 넘었다(백로그 플러시)"
+        )
+        XCTAssertLessThanOrEqual(
+            dataAtFirstTick, budget,
+            "data 프레임이 \(String(format: "%.3f", observedAfter))초 동안 \(dataAtFirstTick)틱 — "
+                + "경과가 허용하는 \(budget)틱을 넘었다(백로그 플러시)"
+        )
     }
 
     func testReloadReplaysEffectivePauseBeforePropertyDelivery() throws {
