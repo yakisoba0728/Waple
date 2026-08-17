@@ -179,8 +179,15 @@
 "전체 이용가" = "Everyone";
 "주의" = "Questionable";
 "목록 제거" = "Remove from list";
+"속성을 기본값으로 되돌릴까요?" = "Reset properties to their defaults?";
+"이 배경에 저장한 속성 변경이 모두 사라집니다." = "Every property change you saved for this wallpaper will be discarded.";
+"저장됨" = "Saved";
 "적용 중" = "Playing";
 "지원 예정" = "Coming soon";
+"편집할 속성이 없습니다" = "No editable properties";
+"평점" = "Rating";
+"폴더 없음" = "No folder";
+"폴더만 사라지고 안에 있던 배경은 라이브러리에 그대로 남습니다." = "Only the folder goes away — the wallpapers inside stay in your library.";
 "목록 추가" = "Add to list";
 "이름순" = "By name";
 "재생목록에 추가" = "Add to playlist";
@@ -188,6 +195,7 @@
 "즐겨찾기 해제" = "Remove from favorites";
 "최근 추가순" = "Most recent";
 "zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요." = "No wallpapers were imported from the zip. Check that it contains a project.json.";
+"'%@' 폴더를 삭제할까요?" = "Delete the folder “%@”?";
 "%@ (현재: %@)" = "%@ (current: %@)";
 "%@ · 지원 예정" = "%@ · coming soon";
 "‘%@’을(를) 적용하지 못했습니다." = "Could not apply “%@”.";
