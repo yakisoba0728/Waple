@@ -22,6 +22,18 @@ struct SelectionPanelView: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
+    /// 유형 + 미지원 꼬리표 한 줄. 조립을 뷰 밖으로 뺀 이유는 두 가지다.
+    ///
+    /// 종전에는 `유형라벨 + " · 지원 예정"` 문자열 덧셈이었다. 앞쪽은 이미 번역된 값인데
+    /// 뒤쪽 꼬리표는 생 한국어라, 영어 시스템에서 "Video · 지원 예정" 처럼 반만 번역된 줄이
+    /// 나온다. 완성된 문자열을 넘기려면 꼬리표까지 포함해 포맷 지정자로 조립해야 한다.
+    /// 그리고 뷰 빌더 안에서 조건 분기로 문자열을 만들면 그 자리의 식이 길어진다(타입체커).
+    private func metaLine(_ entry: LibraryEntry, supported: Bool) -> String {
+        let type = NowPlayingSubtitle.typeLabel(entry.typeRaw)
+        guard !supported else { return type }
+        return String(format: NSLocalizedString("%@ · 지원 예정", comment: "미지원 배경 메타 줄"), type)
+    }
+
     @ViewBuilder
     private func content(for entry: LibraryEntry) -> some View {
         let supported = viewModel.isSupported(entry)
@@ -53,10 +65,12 @@ struct SelectionPanelView: View {
                                 .foregroundStyle(viewModel.isFavorite(entry) ? Color.accentColor : .secondary)
                         }
                         .buttonStyle(.plain)
-                        .help(viewModel.isFavorite(entry) ? "즐겨찾기 해제" : "즐겨찾기")
+                        // 삼항으로 문자열을 고르면 어느 쪽도 스캔 패턴에 안 걸린다(여는 괄호 뒤가
+                        // 따옴표가 아니다). Text 를 골라야 둘 다 잡히고 둘 다 번역된다.
+                        .help(viewModel.isFavorite(entry) ? Text("즐겨찾기 해제") : Text("즐겨찾기"))
                     }
                     HStack(spacing: 6) {
-                        Text(NowPlayingSubtitle.typeLabel(entry.typeRaw) + (supported ? "" : " · 지원 예정"))
+                        Text(verbatim: metaLine(entry, supported: supported))
                         if let r = entry.rating {
                             Label(String(format: "%.1f/5", r * 5), systemImage: "star.fill")
                                 .foregroundStyle(.yellow)
@@ -92,8 +106,10 @@ struct SelectionPanelView: View {
                         Button {
                             viewModel.togglePlaylist(entry)
                         } label: {
-                            Label(viewModel.isInPlaylist(entry) ? "목록 제거" : "목록 추가",
-                                  systemImage: viewModel.isInPlaylist(entry) ? "minus.circle" : "plus.circle")
+                            // 이 자리가 영어 캡처에서 유일하게 한국어로 남아 있던 곳이다 —
+                            // 삼항이 고르던 것이 String 이라 번역이 조용히 사라졌다.
+                            Label(title: { viewModel.isInPlaylist(entry) ? Text("목록 제거") : Text("목록 추가") },
+                                  icon: { Image(systemName: viewModel.isInPlaylist(entry) ? "minus.circle" : "plus.circle") })
                         }
                         .disabled(!supported)
                     }

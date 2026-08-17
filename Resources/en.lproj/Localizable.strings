@@ -174,6 +174,22 @@
 /* MARK: Unit S — 공유 컴포넌트 */
 
 /* MARK: Unit B — 라이브러리(그리드·인스펙터·속성 편집·필터 팝오버) */
+"Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요." = "Choose a Wallpaper Engine folder, a parent folder, a .zip, or a video (mp4/mov).";
+"가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요." = "No wallpapers were imported. Check that the folder you chose contains a valid project.json.";
+"목록 제거" = "Remove from list";
+"목록 추가" = "Add to list";
+"이름순" = "By name";
+"재생목록에 추가" = "Add to playlist";
+"재생목록에서 제거" = "Remove from playlist";
+"즐겨찾기 해제" = "Remove from favorites";
+"최근 추가순" = "Most recent";
+"zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요." = "No wallpapers were imported from the zip. Check that it contains a project.json.";
+"%@ (현재: %@)" = "%@ (current: %@)";
+"%@ · 지원 예정" = "%@ · coming soon";
+"‘%@’을(를) 적용하지 못했습니다." = "Could not apply “%@”.";
+"‘%@’의 폴더를 찾을 수 없습니다. 다시 가져오세요." = "Could not find the folder for “%@”. Import it again.";
+"다운로드한 폴더를 가져오지 못했습니다: %@" = "Could not import the downloaded folder: %@";
+"동영상 가져오기에 실패했습니다: %@" = "Could not import the video: %@";
 
 /* MARK: Unit C — 창작마당·둘러보기 */
 

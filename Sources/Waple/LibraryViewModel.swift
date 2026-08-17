@@ -47,6 +47,11 @@ final class LibraryViewModel: ObservableObject {
     var onApply: ((URL) -> Bool)?
 
     /// 사용자에게 보여줄 오류 메시지를 AppDelegate 로 전달한다.
+    ///
+    /// **넘어가는 값은 이미 현지화가 끝난 문자열이다.** 싱크(상태 배너)가 받는 타입이 String 이라
+    /// 거기서는 자동 번역이 걸리지 않는다 — 그 자리에 도착한 뒤에는 손쓸 방법이 없으므로
+    /// 만드는 쪽에서 완성한다. 리터럴이 NSLocalizedString 안에 남아 현지화 커버리지 오라클에
+    /// 그대로 잡히는 것도 이 방향을 고른 이유다(청사진 §5.0 의 권장안 (a)).
     var onError: ((String) -> Void)?
 
     private let store: LibraryStore
@@ -198,7 +203,8 @@ final class LibraryViewModel: ObservableObject {
                 let imported = store.importFolders(folders)
                 self.entries = store.entries
                 if imported.isEmpty {
-                    onError?("가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요.")
+                    onError?(NSLocalizedString("가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요.",
+                                               comment: "상위 폴더 가져오기 전량 실패"))
                 }
             }
         }
@@ -216,7 +222,8 @@ final class LibraryViewModel: ObservableObject {
                 let imported = temp.map { store.importExtractedZip($0) } ?? []
                 self.entries = store.entries
                 if imported.isEmpty {
-                    self.onError?("zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요.")
+                    self.onError?(NSLocalizedString("zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요.",
+                                                    comment: "zip 가져오기 전량 실패"))
                 }
             }
         }
@@ -249,7 +256,9 @@ final class LibraryViewModel: ObservableObject {
                     // F583: 준비(관리 폴더에 복사 완료) 후 등록이 실패하면 부분 산출물이 고아로 남는다 —
                     // 이 임포트를 위해 만든 폴더이므로 정리한다(videoPrepare 계약 주석 참조).
                     if let folder { try? FileManager.default.removeItem(at: folder) }
-                    self.onError?("동영상 가져오기에 실패했습니다: \(url.lastPathComponent)")
+                    self.onError?(String(format: NSLocalizedString("동영상 가져오기에 실패했습니다: %@",
+                                                                   comment: "동영상 임포트 실패"),
+                                         url.lastPathComponent))
                     return
                 }
                 self.entries = store.entries
@@ -267,7 +276,9 @@ final class LibraryViewModel: ObservableObject {
     @discardableResult
     func importDownloaded(_ folderURL: URL) -> LibraryEntry? {
         guard let entry = try? store.importFolder(folderURL) else {
-            onError?("다운로드한 폴더를 가져오지 못했습니다: \(folderURL.lastPathComponent)")
+            onError?(String(format: NSLocalizedString("다운로드한 폴더를 가져오지 못했습니다: %@",
+                                                      comment: "워크샵 다운로드분 임포트 실패"),
+                            folderURL.lastPathComponent))
             return nil
         }
         entries = store.entries
@@ -278,13 +289,17 @@ final class LibraryViewModel: ObservableObject {
     @discardableResult
     func apply(_ entry: LibraryEntry) -> Bool {
         guard let folder = store.resolveFolderURL(for: entry) else {
-            onError?("‘\(entry.title)’의 폴더를 찾을 수 없습니다. 다시 가져오세요.")
+            onError?(String(format: NSLocalizedString("‘%@’의 폴더를 찾을 수 없습니다. 다시 가져오세요.",
+                                                      comment: "적용 실패 — 폴더 해석 불가"),
+                            entry.title))
             return false
         }
         // 적용(마운트) 성공이 확인된 뒤에만 선택을 영속·강조한다. 실패 시 기존 선택을 유지해
         // 강조/저장된 선택이 항상 실제로 표시되는 배경과 일치하도록 한다.
         guard onApply?(folder) == true else {
-            onError?("‘\(entry.title)’을(를) 적용하지 못했습니다.")
+            onError?(String(format: NSLocalizedString("‘%@’을(를) 적용하지 못했습니다.",
+                                                      comment: "적용 실패 — 마운트 거부"),
+                            entry.title))
             return false
         }
         store.select(entry.id)

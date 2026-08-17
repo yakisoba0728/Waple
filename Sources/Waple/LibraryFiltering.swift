@@ -13,7 +13,19 @@ enum LibraryTypeFilter: String, CaseIterable {
 
 enum LibrarySortOrder: String, CaseIterable {
     case recentFirst, name
-    var label: String { self == .recentFirst ? "최근 추가순" : "이름순" }
+    /// 정렬 메뉴 표시 라벨.
+    ///
+    /// 열거형 계산 프로퍼티는 현지화 오라클의 사각지대다 — 스캐너는 정해진 표시 API 이름 뒤의
+    /// 리터럴만 찾으므로 `return "최근 추가순"` 은 어떤 패턴에도 안 걸리고, 호출부는
+    /// `Text(order.label)` 비현지화 오버로드로 붙는다. 컴파일도 되고 테스트도 초록인데
+    /// 영어 시스템에서 정렬 메뉴만 한국어로 남는다(2026-08-17 실측 결함).
+    /// 여기서 완성해 넘기면 리터럴이 오라클에 잡히고 값도 이미 번역돼 있다.
+    var label: String {
+        switch self {
+        case .recentFirst: return NSLocalizedString("최근 추가순", comment: "라이브러리 정렬")
+        case .name: return NSLocalizedString("이름순", comment: "라이브러리 정렬")
+        }
+    }
 }
 
 /// 필터 기준(사이드바 상태). 빈 집합 = 그 축 무필터.

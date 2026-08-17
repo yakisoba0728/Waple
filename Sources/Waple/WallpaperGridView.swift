@@ -61,8 +61,14 @@ struct WallpaperGridView: View {
         }
         // 그리드 우클릭 "라이브러리에서 제거"(w5d-library) — SelectionPanelView 의 확인 대화상자와
         // 동일한 문구/역할로 그리드에서도 완결(우측 패널로 다시 포커스할 필요 없음).
+        // 제목이 끼는 문구는 String(format:) 로 조립한다 — 보간으로 만들면 그 문자열이
+        // 비현지화 오버로드로 붙어 영어에서 한국어가 그대로 나온다. 같은 문구를 인스펙터는
+        // 이미 이 방식으로 조립하고 있었고, 여기만 갈라져 있었다(2026-08-17 실측).
         .confirmationDialog(
-            removeConfirmEntry.map { "'\($0.title)'을(를) 라이브러리에서 제거할까요?" } ?? "",
+            removeConfirmEntry.map {
+                String(format: NSLocalizedString("'%@'을(를) 라이브러리에서 제거할까요?",
+                                                 comment: "라이브러리 제거 확인"), $0.title)
+            } ?? "",
             isPresented: Binding(get: { removeConfirmEntry != nil },
                                  set: { if !$0 { removeConfirmEntry = nil } })
         ) {
@@ -243,7 +249,12 @@ struct WallpaperGridView: View {
             Button("적용 + 조작 창 열기") { _ = viewModel.apply(entry); viewModel.onOpenInteraction?() }
         }
         if supported {
-            Button(viewModel.isInPlaylist(entry) ? "재생목록에서 제거" : "재생목록에 추가") { viewModel.togglePlaylist(entry) }
+            // 삼항으로 String 을 고르면 여는 괄호 뒤가 따옴표가 아니라 두 문구 다 커버리지
+            // 스캔에서 빠진다 — 실제로 이 넷은 번역이 통째로 없었는데 아무 것도 실패하지
+            // 않았다. Text 를 고르면 둘 다 잡히고 둘 다 번역된다(청사진 §5.3).
+            Button { viewModel.togglePlaylist(entry) } label: {
+                viewModel.isInPlaylist(entry) ? Text("재생목록에서 제거") : Text("재생목록에 추가")
+            }
             Menu("폴더로 이동") {
                 Button("새 폴더…") { folderPromptEntry = entry }
                 if !viewModel.folders.folders.isEmpty { Divider() }
@@ -257,9 +268,7 @@ struct WallpaperGridView: View {
             }
             Menu("모니터에 적용") {
                 ForEach(viewModel.screens, id: \.key) { screen in
-                    Button(screen.name + (viewModel.assignedEntryTitle(forScreen: screen.key).map { " (현재: \($0))" } ?? "")) {
-                        viewModel.assign(entry, toScreen: screen.key)
-                    }
+                    Button(screenMenuTitle(screen)) { viewModel.assign(entry, toScreen: screen.key) }
                 }
                 if viewModel.screens.contains(where: { viewModel.assignedEntryTitle(forScreen: $0.key) != nil }) {
                     Divider()
@@ -272,9 +281,20 @@ struct WallpaperGridView: View {
         // 정리 그룹(w5d-library) — 즐겨찾기·Finder·제거는 우측 패널로 다시 포커스하지 않아도
         // 그리드에서 벗어나지 않고 완결된다.
         Divider()
-        Button(viewModel.isFavorite(entry) ? "즐겨찾기 해제" : "즐겨찾기") { viewModel.toggleFavorite(entry) }
+        Button { viewModel.toggleFavorite(entry) } label: {
+            viewModel.isFavorite(entry) ? Text("즐겨찾기 해제") : Text("즐겨찾기")
+        }
         Button("Finder에서 보기") { revealInFinder(entry) }
         Button("라이브러리에서 제거", role: .destructive) { removeConfirmEntry = entry }
+    }
+
+    /// 모니터 메뉴 항목 제목 — 화면 이름 + 현재 할당된 배경. 종전엔 꼬리표를 문자열 보간으로
+    /// 붙여, 앞의 화면 이름은 시스템 값인데 꼬리표만 한국어로 남았다. 값이 둘이므로 포맷
+    /// 지정자를 명시해 조립한다(AGENTS: 보간은 지정자 추론이 모호해진다).
+    private func screenMenuTitle(_ screen: (key: String, name: String)) -> String {
+        guard let current = viewModel.assignedEntryTitle(forScreen: screen.key) else { return screen.name }
+        return String(format: NSLocalizedString("%@ (현재: %@)", comment: "모니터 메뉴 — 현재 할당"),
+                      screen.name, current)
     }
 
     /// 원본 폴더를 Finder 로 열어 선택 표시(macOS 보편 관례) — 해석 실패(북마크 stale 등) → 무동작.
@@ -315,7 +335,9 @@ enum ImportPanel {
         panel.canChooseFiles = true
         panel.allowedContentTypes = [.folder, .zip, .movie]
         panel.allowsMultipleSelection = false
-        panel.message = "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요."
+        // AppKit 경로는 자동 해석이 없다 — 감싸지 않으면 영어 시스템에서도 한국어로 뜬다.
+        panel.message = NSLocalizedString("Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요.",
+                                          comment: "가져오기 패널 안내")
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         viewModel.routeImport(url)
         return true
