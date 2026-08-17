@@ -9,12 +9,21 @@ struct DiscoverView: View {
 
     var body: some View {
         Group {
-            if workshopVM.hasAPIKey { rails } else { APIKeyGateView(vm: workshopVM) }
+            if workshopVM.hasAPIKey { browser } else { APIKeyGateView(vm: workshopVM) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .underPageBackgroundColor))
         .task(id: workshopVM.hasAPIKey) {
             if workshopVM.hasAPIKey { await vm.loadIfNeeded() }
+        }
+    }
+
+    /// 유틸리티 바가 여기에도 있는 이유는 그 파일 주석 참조 — 레일에서 다운로드를 시작한
+    /// 사용자에게 계정 입력 자리가 없어 안내가 막다른 길이었다.
+    private var browser: some View {
+        VStack(spacing: 0) {
+            WorkshopUtilityBar(vm: workshopVM)
+            rails
         }
     }
 

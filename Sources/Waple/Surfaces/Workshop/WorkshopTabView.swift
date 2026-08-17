@@ -19,7 +19,7 @@ struct WorkshopTabView: View {
 
     private var browser: some View {
         VStack(spacing: 0) {
-            utilityStrip
+            WorkshopUtilityBar(vm: vm)
             // vm.statusMessage 는 생산 지점에서 이미 번역돼 있다 — 여기 붙는 오버로드는
             // 번역을 하지 않으므로(§5.0) 뷰가 뒤늦게 감쌀 수 있는 것이 아니다.
             if let message = vm.statusMessage {
@@ -38,27 +38,6 @@ struct WorkshopTabView: View {
                 grid
             }
         }
-    }
-
-    /// steamcmd 상태 + 다운로드 계정 — 다운로드 전제조건이라 탭 안에 상시 노출(캡션 크기로 절제).
-    private var utilityStrip: some View {
-        HStack(spacing: Metrics.gap) {
-            if !vm.steamcmdAvailable {
-                Label("steamcmd 미설치 — `brew install steamcmd` 후 다시 실행", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            Spacer()
-            Text("steamcmd 계정").font(.caption).foregroundStyle(.secondary)
-            TextField("username", text: $vm.usernameInput)
-                .textFieldStyle(.roundedBorder).controlSize(.small)
-                .frame(width: Metrics.usernameFieldWidth)
-                .help("다운로드용 Steam 계정. 최초 1회 터미널에서 `steamcmd +login <계정>` 으로 로그인해 세션을 캐시하세요 — 비밀번호는 앱이 저장하지 않습니다.")
-            Button("API 키 변경") { vm.clearAPIKey() }
-                .controlSize(.small)
-                .help("Keychain 의 Steam Web API 키를 지우고 다시 입력")
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, Metrics.gap)
     }
 
     private var grid: some View {
