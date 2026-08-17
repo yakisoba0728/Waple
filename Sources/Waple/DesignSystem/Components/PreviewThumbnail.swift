@@ -51,10 +51,9 @@ enum PreviewImageCache {
 /// `if let url` 로 갈라 **플레이스홀더 ZStack 을 네 번 다시 적었고**, 그래서 값이 갈라졌다.
 /// nil 을 이 뷰가 받으므로 호출부는 더 이상 플레이스홀더를 그리지 않는다.
 ///
-/// 다만 지금 호출부에 남아 있는 `if let url` 분기는 **일부러 남긴 것**이다. 두 갈래가
-/// SwiftUI 에서 서로 다른 식별자를 갖기 때문에, 분기를 합치면 같은 자리의 뷰가 재사용되면서
-/// `@State` 가 살아남는다 — 아래 로드 규칙과 맞물려 동작이 바뀐다. 추출 커밋에서 동작을
-/// 바꾸지 않으려고 구조를 그대로 뒀다.
+/// 호출부에 아직 `if let url` 분기가 남아 있는 것은 추출 커밋에서 뷰 식별자를 바꾸지 않으려고
+/// 구조를 그대로 둔 흔적이다. 아래 `reloadIfNeeded()` 가 url 변경을 스스로 처리하므로
+/// **이제 합쳐도 된다** — 합치는 것은 그 화면을 맡는 단위가 자기 커밋에서 한다.
 ///
 /// ## 접근성 — 통째로 감춘다
 ///
@@ -66,6 +65,9 @@ struct PreviewThumbnail: View {
     var placeholderFont: Font
 
     @State private var image: NSImage?
+    /// `image` 가 어느 url 의 것인가. 재사용된 뷰에서 살아남은 `@State` 와 새로 들어온 `url` 을
+    /// 구별하는 유일한 수단이다 — 아래 `reloadIfNeeded()` 참조.
+    @State private var loadedURL: URL?
 
     /// - Parameters:
     ///   - url: 로컬 미리보기 파일. nil 이면 플레이스홀더만 그린다.
@@ -77,12 +79,13 @@ struct PreviewThumbnail: View {
         self.url = url
         self.placeholderFont = placeholderFont
         _image = State(initialValue: url.flatMap { PreviewImageCache.cached($0) })
+        _loadedURL = State(initialValue: url)
     }
 
     var body: some View {
         content
             .accessibilityHidden(true)
-            .task(id: url) { await loadIfNeeded() }
+            .task(id: url) { await reloadIfNeeded() }
     }
 
     @ViewBuilder
@@ -97,8 +100,35 @@ struct PreviewThumbnail: View {
         }
     }
 
-    private func loadIfNeeded() async {
-        guard image == nil, let url else { return }
-        image = await PreviewImageCache.load(url)
+    /// ## 왜 `image == nil` 만으로는 부족한가
+    ///
+    /// SwiftUI 는 같은 자리·같은 갈래의 뷰를 **재사용**한다. 재사용되면 `init` 은 다시 불려도
+    /// `State(initialValue:)` 는 버려지므로 이전 그림이 그대로 남는다. 종전 두 구현은 여기서
+    /// `image == nil` 만 보고 일찍 반환해, url 이 바뀌어도 **이전 배경의 썸네일을 계속 보여줬다**
+    /// (디스플레이 다이어그램에서 모니터를 다른 배경으로 다시 할당하면 재현된다).
+    /// 그래서 "채워졌는가" 가 아니라 **"지금 url 의 것으로 채워졌는가"** 를 본다.
+    ///
+    /// 첫 마운트에서는 `loadedURL == url` 이라 판정이 종전과 완전히 같다 —
+    /// 캐시 히트면 그대로 두고, 미스면 백그라운드 디코드로 간다.
+    ///
+    /// ## 취소된 task 의 늦은 완료
+    ///
+    /// url 이 바뀌면 `task(id:)` 가 이전 task 를 취소하지만, 취소는 협조적이고
+    /// `PreviewImageCache.load` 는 던지지 않는 `Task.detached` 의 값을 기다리므로 **중간에
+    /// 끊기지 않는다.** 느린 디스크의 이전 로드가 나중에 끝나면 이미 새 그림으로 채워진 자리에
+    /// 옛 그림을 덮어쓴다 — 이 함수가 없애려던 상태 그대로다. 그래서 대입 직전에 자기가 아직
+    /// 유효한 로드인지 다시 본다. 이전 task 는 `url` 이 옛 값이고 `loadedURL` 은 이미 새 값이라
+    /// 스스로 자기를 알아보고 물러난다.
+    private func reloadIfNeeded() async {
+        guard loadedURL != url || image == nil else { return }
+        loadedURL = url
+        guard let url else { image = nil; return }
+        if let hit = PreviewImageCache.cached(url) { image = hit; return }
+        // 다른 파일로 바뀌었는데 디코드가 걸리는 동안 이전 그림을 남겨 두면 그게 그 항목의
+        // 미리보기인 줄 읽힌다. 플레이스홀더를 잠깐 보여주는 편이 틀린 그림보다 낫다.
+        image = nil
+        let loaded = await PreviewImageCache.load(url)
+        guard loadedURL == url else { return }
+        image = loaded
     }
 }
