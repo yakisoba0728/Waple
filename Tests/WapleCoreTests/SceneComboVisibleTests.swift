@@ -285,7 +285,10 @@ final class SceneComboVisibleTests: XCTestCase {
     /// 매달려 있고 그 부모는 language 콤보가 선택하지 않은 값이라 false 로 굳는다. effectQuadLayer 는
     /// 풀스크린 승격 때문에 `parent` 를 버리므로 종전에는 조상 체인이 아예 없었고, 부모가 꺼져 있어도
     /// 쿼드가 계속 그려졌다(코퍼스 5오브젝트/1씬 — 6개 언어 변형 중 5개가 겹쳐 그려짐).
-    /// `visibilityParent` 로 가시성 축만 되살린다 — 지오메트리는 여전히 풀스크린 고정이어야 한다.
+    /// **2026-08-17 갱신**: 종전에는 `visibilityParent` 로 가시성 축만 되살리고 지오메트리는 풀스크린
+    /// 고정이었다. WE shape 기본 크기가 확정돼(spec/engine/shape-quad.json) 승격을 걷어냈으므로
+    /// 이제 `parent` 하나가 두 축을 다 탄다 — 이 테스트가 고정하는 것은 "비가시 부모의 쿼드는 숨는다"
+    /// 이고, 그 수단이 두 필드에서 한 필드로 줄었다는 점만 바뀌었다.
     func testEffectQuadInheritsVisibilityFromInvisibleParent() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
@@ -299,9 +302,11 @@ final class SceneComboVisibleTests: XCTestCase {
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
         let doc = try SceneDocument.parse(package: p, userProps: [:])
         let quad = try XCTUnwrap(doc.layers.first { $0.id == 259 }, "드롭 금지 — JS 인덱스 정합상 배열엔 남아야 함")
-        XCTAssertEqual(quad.visibilityParent, 239, "저작 parent 를 가시성 축에는 남겨야")
-        XCTAssertNil(quad.parent, "지오메트리 축은 그대로 풀스크린 고정(부모 체인 재배치 금지)")
-        XCTAssertEqual(quad.origin, Vec2(x: 50, y: 50), "승격된 풀스크린 중심 — 저작 origin 미반영")
+        XCTAssertEqual(quad.parent, 239, "저작 parent — 지오메트리·가시성 공용")
+        // composeParentTransforms 가 부모(239: origin 50,50 · scale 1)와 합성한 월드값.
+        XCTAssertEqual(quad.origin.x, 50 - 129.7, accuracy: 1e-3)
+        XCTAssertEqual(quad.origin.y, 50 + 706.5, accuracy: 1e-3)
+        XCTAssertEqual(quad.size, Vec2(x: 100, y: 100), "ortho height 100 → 100×100 정사각")
         XCTAssertFalse(quad.initialVisible, "부모(239)가 콤보로 꺼져 있으므로 이펙트 쿼드도 숨어야")
     }
 
@@ -322,7 +327,7 @@ final class SceneComboVisibleTests: XCTestCase {
         XCTAssertTrue(quad.initialVisible, "가시 부모의 이펙트 쿼드는 그대로 그려져야 함")
     }
 
-    /// 부모 없는 이펙트 쿼드(코퍼스 41개 중 25개)는 visibilityParent 가 nil 이라 이 패스와 무관해야 한다.
+    /// 부모 없는 이펙트 쿼드(코퍼스 41개 중 25개)는 parent 가 nil 이라 이 패스와 무관해야 한다.
     func testParentlessEffectQuadUnaffected() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
@@ -335,7 +340,7 @@ final class SceneComboVisibleTests: XCTestCase {
         let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
         let doc = try SceneDocument.parse(package: p, userProps: [:])
         let quad = try XCTUnwrap(doc.layers.first { $0.id == 3 })
-        XCTAssertNil(quad.visibilityParent)
+        XCTAssertNil(quad.parent)
         XCTAssertTrue(quad.initialVisible, "루트 쿼드는 다른 서브트리의 비가시와 무관")
         XCTAssertFalse(try XCTUnwrap(doc.layers.first { $0.id == 2 }).initialVisible, "센티넬: 패스가 실제로 돌았다")
     }

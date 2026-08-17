@@ -1048,8 +1048,13 @@ final class SceneDocumentTests: XCTestCase {
     // MARK: parseNode 콘텐츠키 디스패치 누수 (shape:"quad" 이펙트 캐리어 · camera 의사-오브젝트)
 
     /// shape:"quad" + effects 오브젝트(실측 23씬/41오브젝트 — 전건 lightshafts 갓레이)는 콘텐츠 키가
-    /// 없어 종전 parseNode 가 트랜스폼-노드로 흡수(통째 미표시). 솔리드 풀스크린 이펙트 레이어로 승격.
+    /// 없어 종전 parseNode 가 트랜스폼-노드로 흡수(통째 미표시). 솔리드 이펙트 레이어로 승격.
     /// isFrameBuffer 면 렌더러가 효과 체인을 스킵하므로 솔리드 캔버스(FB 아님)여야 한다.
+    /// **2026-08-17 갱신**: 종전 이 테스트는 "풀스크린 승격"(origin=프로젝션 중심, size=프로젝션,
+    /// scale=1, parent=nil, visibilityParent=저작 parent)을 고정했다. 그건 WE 의 shape 기본 크기를
+    /// 모르던 시절의 임시 규약이고, 크기가 바이트로 확정돼(spec/engine/shape-quad.json:
+    /// `"size"`→멤버 0x2F0 리플렉션 + vfunc+0x40 이 (float)(int)ortho.height 를 두 성분에 write)
+    /// 저작 트랜스폼을 되살렸다. 이 씬은 ortho 1080 높이라 기본 크기가 1080×1080 정사각이다.
     func testEffectQuadPromotedToFullscreenEffectLayer() throws {
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
@@ -1068,12 +1073,13 @@ final class SceneDocumentTests: XCTestCase {
         let quad = doc.layers[1]
         XCTAssertEqual(quad.textureEntryName, "", "솔리드 캔버스")
         XCTAssertFalse(quad.isFrameBuffer)
-        XCTAssertEqual(quad.origin, Vec2(x: 960, y: 540))
-        XCTAssertEqual(quad.size, Vec2(x: 1920, y: 1080))
-        XCTAssertEqual(quad.scale, Vec2(x: 1, y: 1))
-        XCTAssertNil(quad.parent, "풀스크린 승격 고정 — 부모 체인 재배치 방지")
-        XCTAssertEqual(quad.visibilityParent, 18660,
-                       "지오메트리는 버리되 가시성 상속용 부모는 남긴다(SceneComboVisibleTests 의 3299228616 케이스)")
+        XCTAssertEqual(quad.origin, Vec2(x: 266.3, y: -1671.7), "저작 origin — 승격이 아니라 그대로")
+        XCTAssertEqual(quad.size, Vec2(x: 1080, y: 1080),
+                       "WE shape 기본 크기 = (orthoHeight, orthoHeight) 정사각 — width(1920) 가 아니다")
+        XCTAssertEqual(quad.scale, Vec2(x: 2.96, y: 2.0), "저작 scale — 최종 크기는 size × scale")
+        XCTAssertEqual(quad.angleZ, -2.92, accuracy: 1e-5, "angles[2] 라디안 그대로")
+        XCTAssertEqual(quad.parent, 18660,
+                       "지오메트리·가시성을 한 필드로 — visibilityParent 는 parent 에 흡수돼 사라졌다")
         XCTAssertEqual(quad.id, 18661)
         XCTAssertEqual(quad.name, "dusk6")
         XCTAssertEqual(quad.order, 1, "z-순서(objects[] 인덱스) 보존")

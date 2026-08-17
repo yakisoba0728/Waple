@@ -63,15 +63,12 @@ public struct SceneLayer: Equatable {
     public var originZ: Float = 0
     /// 부모 오브젝트 id(3D 씬 빌보드의 트랜스폼 계층 — 태양계 이미지는 대부분 그룹 노드에 붙는다). nil=루트.
     public var parent: Int? = nil
-    /// **가시성 상속 전용** 부모 id — 지오메트리 합성에서는 제외된다. 이펙트 캐리어 quad
-    /// (effectQuadLayer)처럼 저작 트랜스폼을 버리고 풀스크린으로 승격되는 레이어만 쓴다:
-    /// `parent` 에 그대로 실으면 composeParentTransforms/composeLight·Text·ParticleParentTransforms
-    /// 네 곳이 풀스크린 지오메트리를 부모 좌표로 재배치한다(그 중 라이트 경로는 disablePropagation
-    /// 가드가 아예 없다). 반대로 버리기만 하면 applyVisibilityInheritance 가 조상 체인을 못 찾아
-    /// **비가시 부모의 이펙트가 계속 그려진다** — 실물 3299228616 의 언어 변형 6종이 그 사례다.
-    /// 두 요구를 한 필드로 만족시킬 수 없어서 가시성 축만 따로 뺐다. 승격을 걷어내고 저작
-    /// origin/scale/angles 를 살리게 되면 이 필드는 `parent` 로 흡수돼야 한다.
-    public var visibilityParent: Int? = nil
+    // **가시성 상속 전용 부모 id(`visibilityParent`)는 2026-08-17 에 `parent` 로 흡수돼 사라졌다.**
+    // 그 필드는 이펙트 캐리어 quad 의 풀스크린 승격이 만든 모순 — "지오메트리는 parent 를 버려야
+    // 하는데(부모 좌표로 재배치되면 풀스크린이 깨진다) 가시성은 parent 를 알아야 한다" — 을 두 축으로
+    // 쪼개서 우회한 것이었고, 그 필드 주석 자체가 "승격을 걷어내면 parent 로 흡수돼야 한다" 고 적어
+    // 두었다. WE shape 기본 크기가 확정돼(spec/engine/shape-quad.json) 승격을 걷어냈으므로 모순의
+    // 전제가 없어졌다 — 이제 쿼드도 다른 레이어와 똑같이 `parent` 하나로 지오메트리·가시성을 모두 탄다.
     /// 오브젝트 `attachment` — 부모 퍼펫 모델의 **이름 부착점**(.mdl MDAT 슬롯, 본 인덱스 바인딩)에 부착.
     /// 자식의 origin/angles 는 부착점 프레임 상대(실측 3538758087 주발/눈: 부모중심 상대면 허리 위치 —
     /// 부착점 상대만 머리에 정합). 렌더러가 per-frame `boneWorld(t)×attLocal` 씬 델타를 합성. nil=일반 계층.
@@ -1371,16 +1368,39 @@ extension SceneDocument {
     /// (mul 전치 수정 `d258b56` 으로 광선이 실제로 켜지기 전까지는 fx≡0 이 이 결함을 가리고 있었다).
     /// 그래서 parent 를 **visibilityParent** 로만 싣는다(지오메트리 합성 4곳은 그대로 미참조).
     /// 코퍼스 도달: 이펙트 캐리어 quad 41개 중 parent 보유 16개, 그중 비가시 조상 아래 5개 / 1씬.
+    ///
+    /// **정정(2026-08-17, 2차) — 풀스크린 승격 자체를 걷어낸다.** 위 두 문단의 *근거* 는 당시로선
+    /// 맞았다: WE 의 shape 쿼드 기본 크기를 몰랐으니 크기를 프로젝션으로 때우는 것 외에 방법이 없었고,
+    /// 그 상태에서 parent 만 살리면 "크기는 풀스크린인데 위치는 부모 좌표" 라는 더 나쁜 조합이 됐다.
+    /// 뒤집는 것은 *결론* 이다 — 기본 크기가 바이트로 확정됐다(spec/engine/shape-quad.json):
+    ///   ① 렌더러블 기반 클래스의 리플렉션 테이블(fn 0x1401ee520)이 프로퍼티 이름 `"size"` 를
+    ///      멤버 오프셋 **0x2F0** 에 직접 묶는다(같은 표: color→0x330, alpha→0x33C, brightness→0x340).
+    ///   ② shape 클래스의 vfunc+0x40(0x14025fac0)이 그 0x2F0 에 `(float)(int)ortho.height` 를
+    ///      movsd 로 **두 성분 다** 쓴다 → 저작 `size` 키가 없을 때의 기본값 = (orthoH, orthoH) 정사각.
+    ///   ③ 드로우 준비(fn 0x1401ebf60)가 `size × 0.5` 로 월드행렬 0·1행(x·y 기저)을 스케일한다 →
+    ///      쿼드는 origin 중심 **±size/2**. 이미지 레이어도 같은 기반 클래스라(vtable 슬롯
+    ///      +0x30/+0x38/+0x58/+0x70/+0x80/+0x88 동일 포인터) 풀스크린 이미지가 size 3840×2160 으로
+    ///      정확히 화면을 덮는다는 사실이 로컬 코너 ±1 규약을 되짚어 준다.
+    /// 크기를 알게 됐으므로 origin/scale/angles/parent 를 버릴 이유가 사라졌다. 코퍼스 shape 41개 중
+    /// `size` 키 보유 0개 — 전건이 이 기본값으로 간다. 최종 크기는 `size × scale`(scale 은 트랜스폼
+    /// 노드 쪽 필드라 월드행렬에 먼저 들어가고 그 위에 size/2 가 곱해진다 — ③ 의 순서 그대로다).
+    /// `visibilityParent` 는 이 변경으로 `parent` 에 흡수돼 필드째 사라졌다(그 필드 주석의 예고대로).
+    /// 이펙트 체인 RT 는 여전히 레이어 크기다(SceneRendererResources: 솔리드는 effW/H = layer.size) —
+    /// 즉 비-풀스크린 쿼드도 레이어-로컬 0..1 UV 를 받는다. WE 의 레이어별 RT 규약과 같은 축이다.
     private static func effectQuadLayer(_ obj: [String: Any], order: Int, pw: Int, ph: Int,
                                         visibleScript: String?, visibleScriptProps: String?,
                                         initialVisible: Bool,
                                         userProps: [String: Any] = [:]) -> SceneLayer {
+        // WE shape 기본 크기: (orthoHeight, orthoHeight) 정사각 — width 가 아니다(§shape.initWritesOrthoHeightPair
+        // 의 sourceIntOffset 0x88 = ctx 의 int 로 자른 ortho.height, 0x84 가 width).
+        let side = Float(ph)
+        let angles = floats(obj["angles"])
         var layer = SceneLayer(
             textureEntryName: "",
-            origin: Vec2(x: Float(pw) / 2, y: Float(ph) / 2),
-            size: Vec2(x: Float(pw), y: Float(ph)),
-            scale: Vec2(x: 1, y: 1),
-            angleZ: 0,
+            origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
+            size: Vec2(x: side, y: side),
+            scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),
+            angleZ: angles.count >= 3 ? angles[2] : 0,   // parseLayer 와 동일: 이미 라디안
             alpha: float(obj["alpha"]) ?? 1,
             color: vec3(obj["color"]) ?? Vec3(x: 1, y: 1, z: 1),
             brightness: float(obj["brightness"]) ?? 1,
@@ -1389,8 +1409,15 @@ extension SceneDocument {
             order: order)
         layer.name = (obj["name"] as? String) ?? ""
         layer.id = intVal(obj["id"]) ?? 0
-        layer.visibilityParent = intVal(obj["parent"])
+        layer.parent = intVal(obj["parent"])
         layer.initialVisible = initialVisible
+        // 저작 트랜스폼을 살렸으니 그 바인딩도 함께 산다 — 버려 두면 정적 값만 맞고 애니는 멈춘다
+        // (parseLayer 의 동일 루프. 이펙트 캐리어는 텍스처가 없으니 material 계열은 해당 없음).
+        for key in ["origin", "scale", "alpha", "angles", "color"] {
+            guard let bind = obj[key] as? [String: Any], let sc = bind["script"] as? String else { continue }
+            layer.propertyScripts[key] = sc
+            if let j = Self.scriptPropsJSON(bind["scriptproperties"]) { layer.propertyScriptProps[key] = j }
+        }
         if let vs = visibleScript { layer.propertyScripts["visible"] = vs }
         if let vp = visibleScriptProps { layer.propertyScriptProps["visible"] = vp }
         return layer
@@ -1599,8 +1626,9 @@ extension SceneDocument {
     /// 반면 **부모 체인**(parentOf)은 nodes3D 만으로 부족하다 — 조상 탐색이 거쳐 가는 중간 마디는
     /// 가시 오브젝트일 수 있고 그건 nodes3D 에 없다. 그래서 레이어·텍스트·파티클의 parent 를 전부
     /// 등록한다(아래 세 줄). 두 집합의 역할이 다르다는 것이 이 함수의 요점이다.
-    /// 레이어의 부모는 `parent ?? visibilityParent` 로 읽는다 — 이펙트 캐리어 quad 는 풀스크린 승격
-    /// 때문에 `parent` 를 비우고 저작 parent 를 visibilityParent 에만 남긴다(effectQuadLayer 주석).
+    /// 레이어의 부모는 `parent` 하나로 읽는다 — 종전 `parent ?? visibilityParent` 는 이펙트 캐리어
+    /// quad 가 풀스크린 승격 때문에 `parent` 를 비우던 시절의 이중 경로였고, 승격을 걷어내면서
+    /// visibilityParent 가 `parent` 로 흡수돼 사라졌다(effectQuadLayer 의 2차 정정 주석).
     /// imageLayerCompositeIDs 카브아웃(:845 와 동형) — composelayer 합성 소스로 참조되는 레이어는
     /// 부모가 꺼져 있어도 숨기지 않는다(오프스크린 합성용이라 자기 자신의 화면 표시 여부와 무관).
     /// 3D 는 이미 Scene3DMath.worldMatrix 가 조상 AND 로 처리하므로 손대지 않는다(camera3D!=nil 스킵).
@@ -1636,9 +1664,7 @@ extension SceneDocument {
             if !n.visible && n.propertyScripts["visible"] == nil { invisible.insert(n.id) }
         }
         guard !invisible.isEmpty else { return }
-        // 이펙트 캐리어 quad 는 지오메트리를 풀스크린으로 승격하며 parent 를 버리므로(effectQuadLayer)
-        // 여기서 쓸 부모 id 가 visibilityParent 쪽에만 남아 있다. 두 필드를 함께 보는 곳은 이 패스뿐이다.
-        for l in layers where l.id != 0 { if let p = l.parent ?? l.visibilityParent { parentOf[l.id] = p } }
+        for l in layers where l.id != 0 { if let p = l.parent { parentOf[l.id] = p } }
         for t in texts where t.id != 0 { if let p = t.parent { parentOf[t.id] = p } }
         // 파티클도 부모 체인의 중간 마디가 된다 — 종전엔 이 한 줄이 없어서 parentOf 에 파티클 id 가
         // 아예 안 들어갔고, 부모가 **가시** 파티클인 자식은 hasInvisibleAncestor 가 parentOf[부모] 를
@@ -1655,7 +1681,7 @@ extension SceneDocument {
         }
         for i in layers.indices {
             guard !imageLayerCompositeIDs.contains(layers[i].id),
-                  hasInvisibleAncestor(layers[i].parent ?? layers[i].visibilityParent) else { continue }
+                  hasInvisibleAncestor(layers[i].parent) else { continue }
             layers[i].hiddenByAncestor = true
             if layers[i].propertyScripts["visible"] == nil { layers[i].initialVisible = false }
         }
