@@ -296,8 +296,15 @@ def main():
                 "reading": "LOD 의 소수부(두 mip 레벨 사이 보간 가중치)가 제출마다 같은 값으로 "
                            "재현되지 않는다. 정수 레벨만 쓰면 그 흔들림이 픽셀에 도달하지 못한다",
                 "caution": "nearest 로 바꾸면 픽셀이 달라진다(해시 d371c607628c290e) — 이건 "
-                           "**원인 규명용 측정**이지 채택된 수정이 아니다. WE 의 mip 필터 규약은 "
-                           "정본에 확정된 바 없다(TexImage.mipChain 주석)",
+                           "**원인 규명용 측정**이지 채택된 수정이 아니다",
+                "canonSettled": "WE 의 mip 필터 규약은 이제 정본에 있다 — "
+                                "textureFiltering.mipAxis.linearUnlessFullPoint. "
+                                "WE 가 만드는 Filter 는 네 값뿐이고 mip 축만 POINT 로 "
+                                "내리는 조합(MIN_MAG_LINEAR_MIP_POINT)이 없다. "
+                                "이 씬의 모델 텍스처는 nointerpolation 이 아니므로 WE 는 "
+                                "mip 을 선형 보간한다(textureFiltering.probeScene."
+                                "modelTextures). **따라서 nearest 는 채택할 수 없다** — "
+                                "비결정 수정은 mip_filter::linear 를 유지한 채 이뤄져야 한다",
             },
             "eliminated": {
                 "what": "GPU 에 들어가는 입력은 전부 비트동일함을 실측으로 확인했다 — "
