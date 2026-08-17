@@ -105,16 +105,25 @@ enum LibraryFiltering {
     }
 }
 
-/// 폴더 가시성(WE 참조): 루트 = 폴더 타일 + 미소속 항목, 폴더 안 = 그 폴더 항목만.
+/// 폴더 스코프.
+///
+/// ## 루트가 더 이상 걸러내지 않는다 (2026-08-17)
+///
+/// 종전에는 WE 의 디렉터리 모델을 따랐다 — 루트 = 폴더 타일 + 미소속 항목, 폴더 안 = 그
+/// 폴더 항목만. 그 모델은 **그리드에 폴더 타일이 있다는 전제**로만 성립한다. 폴더가
+/// 사이드바로 올라가고 타일이 사라지면, 루트에서 걸러낸 항목은 그리드 어디에서도 보이지
+/// 않게 된다. 모든 배경을 폴더에 넣은 사용자는 '전체' 를 눌렀을 때 아무 메시지도 없는 빈
+/// 스크롤 영역을 본다(무결과 안내는 검색·필터가 활성일 때만 뜬다) — 조용한 데드엔드다.
+///
+/// 사이드바 모델에서 폴더는 디렉터리가 아니라 **걸러보기**다. 그래서 '전체' 는 말 그대로
+/// 전체이고, 폴더 행을 고르면 그 폴더로 좁힌다. 한 배경이 '전체' 와 자기 폴더 양쪽에
+/// 보이는 것은 사진 앱의 앨범과 같은 관계라 낯설지 않다.
 enum LibraryFolders {
-    static func visible(entries: [LibraryEntry], folders: [FolderStore.Folder],
-                        active: String?) -> (folders: [FolderStore.Folder], entries: [LibraryEntry]) {
-        if let active {
-            let ids = folders.first { $0.name == active }?.ids ?? []
-            let inFolder = entries.filter { ids.contains($0.id) }
-            return ([], inFolder)
-        }
-        let foldered = Set(folders.flatMap(\.ids))
-        return (folders, entries.filter { !foldered.contains($0.id) })
+    /// - Parameter active: 사이드바에서 고른 폴더. nil = 좁히지 않음.
+    static func scoped(_ entries: [LibraryEntry], folders: [FolderStore.Folder],
+                       active: String?) -> [LibraryEntry] {
+        guard let active else { return entries }
+        let ids = folders.first { $0.name == active }?.ids ?? []
+        return entries.filter { ids.contains($0.id) }
     }
 }

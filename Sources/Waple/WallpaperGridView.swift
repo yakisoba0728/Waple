@@ -30,13 +30,9 @@ struct WallpaperGridView: View {
                 noResultsState
             } else {
                 ScrollView {
+                    // 폴더 타일과 뒤로 타일은 없다 — 폴더 내비게이션은 전부 사이드바가 한다.
+                    // 그리드는 activeFolder 를 읽기만 하고 쓰지 않는다(청사진 §7.3).
                     LazyVGrid(columns: columns, spacing: Metrics.gridRowSpacing) {
-                        if let active = viewModel.activeFolder {
-                            backTile(active)
-                        }
-                        ForEach(viewModel.visibleFolders, id: \.name) { folder in
-                            folderTile(folder)
-                        }
                         ForEach(viewModel.filteredEntries, id: \.id) { entry in
                             tile(for: entry)
                         }
@@ -79,46 +75,6 @@ struct WallpaperGridView: View {
         } message: {
             Text("디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더에서 함께 제거됩니다.")
         }
-    }
-
-    private func folderTile(_ folder: FolderStore.Folder) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                RoundedRectangle(cornerRadius: Metrics.tileCorner)
-                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 40))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(height: Metrics.tileThumbHeight)
-            Text("\(folder.name)  ·  \(folder.ids.count)")
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                .padding(.horizontal, 2)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { viewModel.activeFolder = folder.name }
-        .contextMenu {
-            Button("폴더 삭제(항목은 유지)") {
-                viewModel.folders.removeFolder(folder.name)
-                viewModel.objectWillChange.send()
-            }
-        }
-    }
-
-    private func backTile(_ name: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                RoundedRectangle(cornerRadius: Metrics.tileCorner)
-                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.15))
-                Image(systemName: "arrow.uturn.backward")
-                    .font(.system(size: 32)).foregroundStyle(.secondary)
-            }
-            .frame(height: Metrics.tileThumbHeight)
-            Text(String(format: NSLocalizedString("뒤로 — %@", comment: "폴더 뒤로가기"), name)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                .padding(.horizontal, 2)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { viewModel.activeFolder = nil }
     }
 
     // 네이티브 빈 상태(w5d-polish) — WorkshopTabView:33 이 이미 채택한 ContentUnavailableView 문법 준용.

@@ -130,7 +130,6 @@
 "간격: %lld분" = "Interval: %lld min";
 "구독 %@" = "%@ subscribers";
 "다운로드 중 %lld%%" = "Downloading %lld%%";
-"뒤로 — %@" = "Back — %@";
 "전환 간격: %lld분" = "Switch interval: %lld min";
 
 /* ═══════════════════════════════════════════════════════════════════════════

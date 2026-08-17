@@ -18,17 +18,12 @@ final class LibraryViewModel: ObservableObject {
     @Published var sortOrder: LibrarySortOrder = .recentFirst
 
     var filteredEntries: [LibraryEntry] {
-        // 필터/검색 활성 시 폴더 스코프를 벗어나 전체에서 찾는다(사이드바 폴더 타일도 이때 숨김).
-        let scopeAll = activeFolder == nil && (!searchText.isEmpty || criteria.isActive)
-        let scoped = scopeAll ? entries
-            : LibraryFolders.visible(entries: entries, folders: folders.folders, active: activeFolder).entries
+        // 폴더는 사이드바가 고르는 걸러보기다 — 고르지 않았으면 좁히지 않는다(LibraryFolders 참조).
+        // 폴더 안에서의 검색은 그 폴더 안에서 한다: 사이드바가 폴더를 강조하고 있는데 결과가
+        // 폴더 밖까지 나오면 좌측 강조가 거짓말이 된다.
+        let scoped = LibraryFolders.scoped(entries, folders: folders.folders, active: activeFolder)
         return LibraryFiltering.apply(scoped, search: searchText, criteria: criteria,
                                       sort: sortOrder, isFavorite: { self.favorites.isFavorite($0) })
-    }
-    /// 루트에서만 노출되는 폴더 타일 목록(검색/필터 중엔 숨김 — 결과에 집중).
-    var visibleFolders: [FolderStore.Folder] {
-        guard activeFolder == nil, searchText.isEmpty, !criteria.isActive else { return [] }
-        return folders.folders
     }
     var availableTags: [String] {
         Array(Set(entries.flatMap { $0.tags ?? [] })).sorted()
