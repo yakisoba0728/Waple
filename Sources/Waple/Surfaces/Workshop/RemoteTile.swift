@@ -72,10 +72,21 @@ struct RemoteTileView: View {
         .onHover { hovered = $0 }
     }
 
+    /// ## 폭을 이미지가 아니라 컨테이너가 정하게 한다 (2026-08-17 캡처로 발견)
+    ///
+    /// 종전에는 프리뷰 자체에 `frame(maxWidth: .infinity)` 를 걸었다. 그리드에서는 셀이 확정
+    /// 폭을 내려주므로 맞게 잘렸지만, **가로 레일에서는 제안 폭이 없어** 그 프레임이 이미지의
+    /// 고유 폭(꽉 채우기 종횡비 × 썸네일 높이 ≈ 222pt)으로 확정됐다. 타일에 걸린 200pt 는
+    /// 배치만 200 으로 만들 뿐 이미 222 로 잘린 그림을 줄이지 못해, 양옆으로 11pt 씩 삐져나와
+    /// **타일 사이 간격 14pt 를 통째로 덮었다** — 레일 타일이 서로 맞붙어 보이던 원인이다.
+    ///
+    /// 고유 크기가 없는 면을 먼저 깔고 그림을 그 위에 얹으면, 폭은 항상 위에서 내려온 제안이
+    /// 정한다. 그리드는 셀 폭, 레일은 타일 폭 — 두 소비자 모두 자기가 아는 값으로 자른다.
     private var thumb: some View {
-        WorkshopPreview(url: item.previewURL)
+        Color.clear
             .frame(height: Metrics.tileThumbHeight)
             .frame(maxWidth: .infinity)
+            .overlay { WorkshopPreview(url: item.previewURL) }
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: Metrics.tileCorner))
             .overlay(
