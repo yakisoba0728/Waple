@@ -196,7 +196,8 @@ A 와 파일이 하나도 겹치지 않으므로 동시에 돌린다. **A 는 S 
 | `Tests/WapleAppTests/ComponentTests.swift` | 신규(순수 로직만 — `TileRing` 결정 등) |
 
 ⚠️ `PreviewImageCache` 는 `AppUIFixRegressionTests` 가 이름으로 참조한다(:240–264).
-**파일은 옮겨도 타입 이름·API 는 그대로 둬라.** 회귀 테스트 파일은 전 단위 동결이다(§7.3).
+**파일은 옮겨도 타입 이름·API 는 그대로 둬라.** 회귀 테스트 파일은 전 단위 동결이다
+(이 절 아래 "동결 파일" 목록).
 
 ### Unit B — 라이브러리 (Phase 2)
 
@@ -268,8 +269,9 @@ A 와 파일이 하나도 겹치지 않으므로 동시에 돌린다. **A 는 S 
 
 모든 단위가 문자열을 추가한다. 프로토콜:
 
-1. 각 단위는 파일 **맨 끝**에 자기 마커 블록을 하나 만들고 그 안에만 추가한다.
-   `/* MARK: Unit B — 라이브러리 (2026-08-17 개편, Phase 3 에서 정렬 통합) */`
+1. **마커 블록은 이미 만들어 두었다**(파일 하단, 단위 6개분). 자기 구역에만 추가한다.
+   **새로 만들지 마라** — 셋이 각자 파일 끝에 구역을 만들면 전부 같은 줄에 붙어
+   순차 머지가 전부 충돌한다. 미리 비워 둔 이유가 이것이다.
 2. 기존 줄은 **재정렬하지 않는다.** 정렬 욕구는 참아라 — 전체 재정렬 diff 는 무조건 충돌한다.
 3. **삭제**는 공용 영역을 건드린다(고아 번역 테스트 때문에 UI 문구를 지우면 여기서도 지워야 한다).
    삭제는 한 줄 단위라 서로 다른 줄이면 git 이 자동 병합한다. 인접 줄 삭제가 겹치면 충돌 —
@@ -801,6 +803,12 @@ SwiftUI 뷰를 인스턴스화하는 테스트가 **0개**다. 즉 **레이아�
 `.contextMenu` · `onTapGesture` 를 각각 넣어 3건 모두 빨강, 허용 파일의 위반을 없애 스테일
 경로도 빨강. 네 경로 전부 확인 후 되돌렸다.
 
+⚠️ **텍스트 스캔이라 주석에 눈이 없다 — 양방향으로.** 주석에 `tileAccessibility` 라고 적으면
+그 파일의 위반이 **침묵**하고, 주석에 `.spring(` 이라고 적으면 깨끗한 파일이 **오탐**한다
+(둘 다 파괴 검증 중 실제로 재현됐다). `LocalizationCoverageTests` 도 같은 이유로 주석 속
+한국어 리터럴을 잡는다. **규약 API 이름을 주석에 원문 그대로 쓰지 마라** — 설명이 필요하면
+백틱 없이 풀어 쓰거나 이름을 쪼개라.
+
 여전히 **자동으로 못 잡는 것**(사람이 캡처로 봐야 한다): 실제 레이아웃·잘림·대비·
 포커스 순서·VoiceOver 읽기 순서·영어 문구의 길이. 그래서 §6.5 의 육안 재판정을 건너뛰면 안 된다.
 
@@ -874,10 +882,12 @@ SwiftUI 뷰를 인스턴스화하는 테스트가 **0개**다. 즉 **레이아�
 넘어 **화면 가장자리까지** 뻗고, 하단 레일이 끝에서 잘린다. 모달 시트가 부모보다 큰 것은
 macOS 어디에도 없는 형태다.
 
-원인: `DisplaysView.swift:192-204` 의 `assignmentRail` — `ScrollView(.horizontal)` 은 콘텐츠의
-**이상 폭(ideal width)을 그대로 위로 전파**한다. 라이브러리 193개 × 타일 74pt + 간격이
-그대로 시트의 이상 폭이 되고, 루트에는 `minWidth` 만 있고 `maxWidth` 가 없어 막지 못한다.
-(`.frame(minWidth: Metrics.displaysMin.width, minHeight: …)`, :99)
+**팽창은 실측, 원인은 추정이다.** 유력한 설명: `DisplaysView.swift:192-204` 의
+`assignmentRail` — `ScrollView(.horizontal)` 이 콘텐츠의 **이상 폭(ideal width)을 그대로 위로
+전파**하고, 라이브러리 193개 × 타일 74pt + 간격이 시트의 이상 폭이 되며, 루트에는
+`minWidth` 만 있고 `maxWidth` 가 없어(`:99`) 막지 못한다. **Unit D 의 완료 조건에 "레일 항목
+수를 줄이면 폭이 함께 줄어드는지" 를 확인해 이 기전을 확정하는 것을 포함한다** — 기전이
+다르면 아래 수정 방향도 틀린다.
 
 수정 방향: 레일 쪽에서 이상 폭 전파를 끊는다 — 루트에 `maxWidth` 를 주거나, 레일을
 `.frame(maxWidth: .infinity)` 로 감싸 콘텐츠 폭이 컨테이너를 결정하지 못하게 한다.
@@ -990,6 +1000,7 @@ macOS 어디에도 없는 형태다.
 | 현행 | 토큰 | 위치 |
 | --- | --- | --- |
 | `cornerRadius: 6` ×3 | `Surface.thumbCorner` | NowPlayingBar(A) · DisplaysView(D) |
+| (배지 `Capsule()` ×2 — 반경 없음) | 그대로 `Capsule()` | 캡슐은 높이에 따라 반경이 정해지므로 토큰이 필요 없다. 실태 조사의 "코너 4종" 은 이 캡슐을 포함해 센 것이고, 명시 반경은 `grep cornerRadius` 기준 **3종**(8·6·10)이다 |
 | `Metrics.tileCorner` | `Surface.tileCorner`(별칭 유지) | B · C · D |
 | `cornerRadius: 10` | `Surface.cardCorner` | SelectionPanelView(B) |
 | `lineWidth: 2.5 / 1.5 / 1 / 3 / 4` | `strokeSelected` / `strokeFocus` / `strokeHairline` / `strokeEmphasis` / `strokeDropTarget` | B · C · D (또는 `S.tileRing`) |
