@@ -280,4 +280,63 @@ final class SceneComboVisibleTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(on.layers.first { $0.name == "child" }).initialVisible,
                      "재파스(remount) 로 옵션이 켜지면 정적 마킹이 고착되지 않고 갱신돼야 함")
     }
+
+    /// 실물 3299228616 축소판(이펙트 캐리어 quad): lightshafts 쿼드가 언어 변형 이미지에 parent 로
+    /// 매달려 있고 그 부모는 language 콤보가 선택하지 않은 값이라 false 로 굳는다. effectQuadLayer 는
+    /// 풀스크린 승격 때문에 `parent` 를 버리므로 종전에는 조상 체인이 아예 없었고, 부모가 꺼져 있어도
+    /// 쿼드가 계속 그려졌다(코퍼스 5오브젝트/1씬 — 6개 언어 변형 중 5개가 겹쳐 그려짐).
+    /// `visibilityParent` 로 가시성 축만 되살린다 — 지오메트리는 여전히 풀스크린 고정이어야 한다.
+    func testEffectQuadInheritsVisibilityFromInvisibleParent() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":239,"name":"LonelyCAT VIE","image":"models/x.json","origin":"50 50 0","size":"10 10",
+            "visible":{"user":{"condition":"2","name":"language"},"value":false}},
+           {"id":259,"name":"Light shafts - linear","shape":"quad","parent":239,
+            "origin":"-129.7 706.5 0.0","scale":"2.06 2.06 2.06",
+            "effects":[{"file":"effects/lightshafts/effect.json","passes":[{"combos":{"DIRECTDRAW":1}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let quad = try XCTUnwrap(doc.layers.first { $0.id == 259 }, "드롭 금지 — JS 인덱스 정합상 배열엔 남아야 함")
+        XCTAssertEqual(quad.visibilityParent, 239, "저작 parent 를 가시성 축에는 남겨야")
+        XCTAssertNil(quad.parent, "지오메트리 축은 그대로 풀스크린 고정(부모 체인 재배치 금지)")
+        XCTAssertEqual(quad.origin, Vec2(x: 50, y: 50), "승격된 풀스크린 중심 — 저작 origin 미반영")
+        XCTAssertFalse(quad.initialVisible, "부모(239)가 콤보로 꺼져 있으므로 이펙트 쿼드도 숨어야")
+    }
+
+    /// 대조군: 같은 구조에서 부모 콤보가 켜지면 쿼드는 그대로 그려져야 한다(무회귀 — 새 parentOf
+    /// 항목이 가시 체인을 잘못 끄지 않음을 고정). 실물 3299228616 의 ENG 변형이 이 경우다.
+    func testEffectQuadStaysVisibleUnderVisibleParent() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":246,"name":"LonelyCAT ENG","image":"models/x.json","origin":"50 50 0","size":"10 10",
+            "visible":{"user":{"condition":"1","name":"language"},"value":true}},
+           {"id":601,"name":"Light shafts - linear","shape":"quad","parent":246,
+            "effects":[{"file":"effects/lightshafts/effect.json","passes":[{"combos":{"DIRECTDRAW":1}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let quad = try XCTUnwrap(doc.layers.first { $0.id == 601 })
+        XCTAssertTrue(quad.initialVisible, "가시 부모의 이펙트 쿼드는 그대로 그려져야 함")
+    }
+
+    /// 부모 없는 이펙트 쿼드(코퍼스 41개 중 25개)는 visibilityParent 가 nil 이라 이 패스와 무관해야 한다.
+    func testParentlessEffectQuadUnaffected() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"offGroup","visible":false},
+           {"id":2,"name":"child","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10"},
+           {"id":3,"name":"shafts","shape":"quad",
+            "effects":[{"file":"effects/lightshafts/effect.json","passes":[{"combos":{"DIRECTDRAW":1}}]}]}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let quad = try XCTUnwrap(doc.layers.first { $0.id == 3 })
+        XCTAssertNil(quad.visibilityParent)
+        XCTAssertTrue(quad.initialVisible, "루트 쿼드는 다른 서브트리의 비가시와 무관")
+        XCTAssertFalse(try XCTUnwrap(doc.layers.first { $0.id == 2 }).initialVisible, "센티넬: 패스가 실제로 돌았다")
+    }
 }

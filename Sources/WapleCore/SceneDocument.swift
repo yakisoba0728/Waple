@@ -63,6 +63,15 @@ public struct SceneLayer: Equatable {
     public var originZ: Float = 0
     /// 부모 오브젝트 id(3D 씬 빌보드의 트랜스폼 계층 — 태양계 이미지는 대부분 그룹 노드에 붙는다). nil=루트.
     public var parent: Int? = nil
+    /// **가시성 상속 전용** 부모 id — 지오메트리 합성에서는 제외된다. 이펙트 캐리어 quad
+    /// (effectQuadLayer)처럼 저작 트랜스폼을 버리고 풀스크린으로 승격되는 레이어만 쓴다:
+    /// `parent` 에 그대로 실으면 composeParentTransforms/composeLight·Text·ParticleParentTransforms
+    /// 네 곳이 풀스크린 지오메트리를 부모 좌표로 재배치한다(그 중 라이트 경로는 disablePropagation
+    /// 가드가 아예 없다). 반대로 버리기만 하면 applyVisibilityInheritance 가 조상 체인을 못 찾아
+    /// **비가시 부모의 이펙트가 계속 그려진다** — 실물 3299228616 의 언어 변형 6종이 그 사례다.
+    /// 두 요구를 한 필드로 만족시킬 수 없어서 가시성 축만 따로 뺐다. 승격을 걷어내고 저작
+    /// origin/scale/angles 를 살리게 되면 이 필드는 `parent` 로 흡수돼야 한다.
+    public var visibilityParent: Int? = nil
     /// 오브젝트 `attachment` — 부모 퍼펫 모델의 **이름 부착점**(.mdl MDAT 슬롯, 본 인덱스 바인딩)에 부착.
     /// 자식의 origin/angles 는 부착점 프레임 상대(실측 3538758087 주발/눈: 부모중심 상대면 허리 위치 —
     /// 부착점 상대만 머리에 정합). 렌더러가 per-frame `boneWorld(t)×attLocal` 씬 델타를 합성. nil=일반 계층.
@@ -1341,6 +1350,13 @@ extension SceneDocument {
     /// isFrameBuffer 로 만들면 렌더러가 효과 체인을 스킵(encodeDrawPlan 규약)하므로 반드시 솔리드.
     /// 풀스크린 고정 승격이므로 저작 트랜스폼(origin/scale/angles)·parent 는 버린다 — parent 를 남기면
     /// composeParentTransforms 가 풀스크린 지오메트리를 재배치한다(실측: 쿼드에 붙는 자식 0건, 전건 2D 씬).
+    /// **정정(2026-08-17)**: "parent 를 버린다" 가 지오메트리에 대해서는 맞지만 **가시성까지 버린 것은
+    /// 결함이었다.** 쿼드는 저작 parent 가 꺼져 있어도 계속 그려졌다 — 실물 3299228616 의 lightshafts
+    /// 쿼드 6개가 각각 언어 변형 이미지(LonelyCAT ENG/VIE/RUS/CN/Spa/Fren)에 매달려 있는데 부모 중
+    /// visible 로 해소되는 것은 ENG 하나뿐이라, 6중으로 겹친 홍채색 덩어리가 화면 중앙을 덮었다
+    /// (mul 전치 수정 `d258b56` 으로 광선이 실제로 켜지기 전까지는 fx≡0 이 이 결함을 가리고 있었다).
+    /// 그래서 parent 를 **visibilityParent** 로만 싣는다(지오메트리 합성 4곳은 그대로 미참조).
+    /// 코퍼스 도달: 이펙트 캐리어 quad 41개 중 parent 보유 16개, 그중 비가시 조상 아래 5개 / 1씬.
     private static func effectQuadLayer(_ obj: [String: Any], order: Int, pw: Int, ph: Int,
                                         visibleScript: String?, visibleScriptProps: String?,
                                         initialVisible: Bool,
@@ -1359,6 +1375,7 @@ extension SceneDocument {
             order: order)
         layer.name = (obj["name"] as? String) ?? ""
         layer.id = intVal(obj["id"]) ?? 0
+        layer.visibilityParent = intVal(obj["parent"])
         layer.initialVisible = initialVisible
         if let vs = visibleScript { layer.propertyScripts["visible"] = vs }
         if let vp = visibleScriptProps { layer.propertyScriptProps["visible"] = vp }
@@ -1567,6 +1584,8 @@ extension SceneDocument {
     /// 반면 **부모 체인**(parentOf)은 nodes3D 만으로 부족하다 — 조상 탐색이 거쳐 가는 중간 마디는
     /// 가시 오브젝트일 수 있고 그건 nodes3D 에 없다. 그래서 레이어·텍스트·파티클의 parent 를 전부
     /// 등록한다(아래 세 줄). 두 집합의 역할이 다르다는 것이 이 함수의 요점이다.
+    /// 레이어의 부모는 `parent ?? visibilityParent` 로 읽는다 — 이펙트 캐리어 quad 는 풀스크린 승격
+    /// 때문에 `parent` 를 비우고 저작 parent 를 visibilityParent 에만 남긴다(effectQuadLayer 주석).
     /// imageLayerCompositeIDs 카브아웃(:845 와 동형) — composelayer 합성 소스로 참조되는 레이어는
     /// 부모가 꺼져 있어도 숨기지 않는다(오프스크린 합성용이라 자기 자신의 화면 표시 여부와 무관).
     /// 3D 는 이미 Scene3DMath.worldMatrix 가 조상 AND 로 처리하므로 손대지 않는다(camera3D!=nil 스킵).
@@ -1590,7 +1609,9 @@ extension SceneDocument {
             if !n.visible && n.propertyScripts["visible"] == nil { invisible.insert(n.id) }
         }
         guard !invisible.isEmpty else { return }
-        for l in layers where l.id != 0 { if let p = l.parent { parentOf[l.id] = p } }
+        // 이펙트 캐리어 quad 는 지오메트리를 풀스크린으로 승격하며 parent 를 버리므로(effectQuadLayer)
+        // 여기서 쓸 부모 id 가 visibilityParent 쪽에만 남아 있다. 두 필드를 함께 보는 곳은 이 패스뿐이다.
+        for l in layers where l.id != 0 { if let p = l.parent ?? l.visibilityParent { parentOf[l.id] = p } }
         for t in texts where t.id != 0 { if let p = t.parent { parentOf[t.id] = p } }
         // 파티클도 부모 체인의 중간 마디가 된다 — 종전엔 이 한 줄이 없어서 parentOf 에 파티클 id 가
         // 아예 안 들어갔고, 부모가 **가시** 파티클인 자식은 hasInvisibleAncestor 가 parentOf[부모] 를
@@ -1608,7 +1629,7 @@ extension SceneDocument {
         for i in layers.indices {
             guard layers[i].propertyScripts["visible"] == nil,
                   !imageLayerCompositeIDs.contains(layers[i].id),
-                  hasInvisibleAncestor(layers[i].parent) else { continue }
+                  hasInvisibleAncestor(layers[i].parent ?? layers[i].visibilityParent) else { continue }
             layers[i].initialVisible = false
         }
         for i in texts.indices {

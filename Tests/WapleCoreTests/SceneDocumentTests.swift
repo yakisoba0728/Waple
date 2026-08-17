@@ -1072,6 +1072,8 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertEqual(quad.size, Vec2(x: 1920, y: 1080))
         XCTAssertEqual(quad.scale, Vec2(x: 1, y: 1))
         XCTAssertNil(quad.parent, "풀스크린 승격 고정 — 부모 체인 재배치 방지")
+        XCTAssertEqual(quad.visibilityParent, 18660,
+                       "지오메트리는 버리되 가시성 상속용 부모는 남긴다(SceneComboVisibleTests 의 3299228616 케이스)")
         XCTAssertEqual(quad.id, 18661)
         XCTAssertEqual(quad.name, "dusk6")
         XCTAssertEqual(quad.order, 1, "z-순서(objects[] 인덱스) 보존")
