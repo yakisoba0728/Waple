@@ -62,7 +62,6 @@
 "배경화면 가져오기…" = "Import wallpaper…";
 "배속" = "Speed";
 "변경…" = "Change…";
-"보기" = "View";
 "새 폴더" = "New folder";
 "새 폴더…" = "New folder…";
 "선택" = "Select";
@@ -118,7 +117,6 @@
 "프레임 상한" = "Frame rate cap";
 "프레임 상한은 장면(씬) 배경에만 적용됩니다 — 동영상·웹 배경은 자체 페이싱을 씁니다." = "The frame rate cap applies to scene wallpapers only — video and web wallpapers pace themselves.";
 "필터" = "Filter";
-"필터 사이드바" = "Filter sidebar";
 "필터 초기화" = "Reset filters";
 "필터 초기화 / 검색 지우기" = "Reset filters / clear search";
 "할당 해제" = "Unassign";
@@ -154,6 +152,14 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /* MARK: Unit A — 셸·네비게이션(사이드바 항목·툴바·Now Playing 바) */
+"둘러보기" = "Discover";
+"라이브러리" = "Library";
+"사이드바" = "Sidebar";
+"씬" = "Scenes";
+"웹" = "Web";
+"즐겨찾기" = "Favorites";
+"창작마당" = "Workshop";
+"폴더" = "Folders";
 
 /* MARK: Unit S — 공유 컴포넌트 */
 

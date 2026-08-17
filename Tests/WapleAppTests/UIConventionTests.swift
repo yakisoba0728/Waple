@@ -81,8 +81,8 @@ final class UIConventionTests: XCTestCase {
     /// **0건**이고 애니메이션 진입점 6개가 무조건 실행된다.
     func testAnimationsComeFromMotionTokens() throws {
         // 2026-08-17 기준 위반 4파일. 담당 단위(부록 A §A.3)가 마이그레이션하며 지운다.
+        // MainWindowView 는 셸 개편에서 Motion 토큰으로 옮기며 지웠다.
         let pending: Set<String> = [
-            "Shell/MainWindowView.swift",      // Unit A
             "Shell/StatusBanner.swift",        // Unit A
             "Surfaces/Workshop/RemoteTile.swift",  // Unit C
             "WallpaperGridView.swift",         // Unit B

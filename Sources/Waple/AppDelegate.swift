@@ -233,17 +233,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 가림 자동 일시정지 폴링 시작(꺼져 있으면 no-op).
         scheduleOcclusionTimer()
 
-        // 스모크 확인용: 실행 시 메인창 자동 오픈 + 첫 항목 포커스(상세 패널이 채워진 상태로
-        // 캡처되도록 — 판정 게이트용). WAPLE_SMOKE=1 아닐 땐 no-op.
-        if ProcessInfo.processInfo.environment["WAPLE_SMOKE"] != nil {
+        // 스모크 확인용: 실행 시 메인창 자동 오픈 + 첫 항목 포커스(인스펙터가 채워진 상태로
+        // 캡처되도록 — 판정 게이트용). 해석은 전부 SmokeLaunch(순수 + 단위 테스트) 가 한다.
+        let smoke = SmokeLaunch.current
+        if smoke.opensLibrary {
             DispatchQueue.main.async { [weak self] in
                 self?.openLibrary()
+                guard smoke.focusesFirstEntry else { return }
                 self?.libraryVM.focusedId = self?.libraryVM.entries.first?.id
+                self?.libraryVM.panelVisible = smoke.showsInspector
             }
         }
 
         // 설정 창 캡처용(판정 게이트): WAPLE_SMOKE_SETTINGS=1 이면 설정 창 자동 오픈.
-        if ProcessInfo.processInfo.environment["WAPLE_SMOKE_SETTINGS"] != nil {
+        if smoke.opensSettings {
             DispatchQueue.main.async { [weak self] in self?.openSettings() }
         }
 
@@ -267,13 +270,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 첫 실행이면 라이브러리 창 + 안내 시트를 1회 띄운다. 스모크 캡처와 분리:
     /// WAPLE_SMOKE_ONBOARDING 은 (플래그 무관) 강제 표시, 그 외 WAPLE_SMOKE* 는 억제(기존 4종 무회귀).
     private func maybePresentOnboarding() {
-        let env = ProcessInfo.processInfo.environment
-        if env["WAPLE_SMOKE_ONBOARDING"] != nil {
-            DispatchQueue.main.async { [weak self] in self?.openLibrary(); self?.onboardingModel.present() }
+        let smoke = SmokeLaunch.current
+        if smoke.forcesOnboarding {
+            // 창 오픈은 위 smoke.opensLibrary 블록이 이미 예약했다(온보딩 강제도 그 집합에 든다).
+            DispatchQueue.main.async { [weak self] in self?.onboardingModel.present() }
             return
         }
         guard Onboarding.shouldPresent(completed: onboardingCompleted),
-              !env.keys.contains(where: { $0.hasPrefix("WAPLE_SMOKE") }) else { return }
+              !smoke.suppressesOnboarding else { return }
         onboardingCompleted = true   // 표시 시점에 확정 — 1회 보장(재표시 안 함)
         DispatchQueue.main.async { [weak self] in self?.openLibrary(); self?.onboardingModel.present() }
     }
