@@ -26,8 +26,11 @@
 "가져오기" = "Import";
 "가져오기…" = "Import…";
 "검색" = "Search";
+"검색 중…" = "Searching…";
 "검색어나 필터를 조정해보세요" = "Try a different search term or filter";
+"결과 없음" = "No results";
 "공유 에셋 폴더 (선택)" = "Shared assets folder (optional)";
+"기본 에셋 폴더" = "Base assets folder";
 "나이 등급" = "Age rating";
 "나중에 다시 확인해보세요." = "Check back later.";
 "다시 시도" = "Try again";
@@ -55,6 +58,7 @@
 "배경 추가" = "Add wallpaper";
 "배경으로 적용" = "Set as wallpaper";
 "배경을 바탕화면에도 자동 반영" = "Also mirror the wallpaper to the desktop automatically";
+"배경을 선택하세요" = "Select a wallpaper";
 "배경화면 가져오기…" = "Import wallpaper…";
 "배속" = "Speed";
 "변경…" = "Change…";
@@ -119,8 +123,10 @@
 "필터 초기화 / 검색 지우기" = "Reset filters / clear search";
 "할당 해제" = "Unassign";
 "항목 추가는 라이브러리 타일 우클릭 → 재생목록." = "To add items, right-click a library tile and choose Playlist.";
+"항목이 없습니다" = "No items";
 "현재 배경에서 정지 이미지를 만들어 모든 화면의 바탕화면으로 지정합니다(1회) — 위 자동 반영과 무관하게 즉시 동작합니다." = "Takes a still image of the current wallpaper and sets it as the desktop picture on every display, once — independent of the automatic mirroring above.";
 "화면 맞춤" = "Fit mode";
+"화면보호기" = "Screen saver";
 
 /* 보간이 들어가는 문자열 — 호출부에서 String(format:) 로 조립한다(포맷 지정자 고정). */
 "'%@'을(를) 라이브러리에서 제거할까요?" = "Remove “%@” from your library?";

@@ -20,9 +20,22 @@ final class LocalizationCoverageTests: XCTestCase {
     }
 
     /// UI 로 표시되는 리터럴을 뽑는 패턴. SwiftUI 표시 API + 명시 NSLocalizedString.
+    ///
+    /// **패턴에 없는 API 는 오라클의 사각지대다.** 2026-08-17 UI 개편 준비 중 실측:
+    /// `ContentUnavailableView`·`ProgressView`·`LabeledContent` 세 API 가 목록에 없어 한국어
+    /// 리터럴 6건이 영어 번역 없이 통과하고 있었다("결과 없음"·"검색 중…"·"배경을 선택하세요"·
+    /// "항목이 없습니다"·"기본 에셋 폴더"·"화면보호기"). 테스트는 초록인데 영어 시스템에서는
+    /// 그 자리만 한국어였다 — 이 테스트가 막으려던 바로 그 실패를 이 테스트가 못 잡고 있었다.
+    ///
+    /// 그래서 규약을 하나 덧붙인다: **문자열을 받는 새 뷰 API 를 도입하면 같은 커밋에서 이
+    /// 목록도 늘린다.** 늘리기 싫으면 호출부에서 `Text("…")` 로 감싸라 — `Text` 는 이미
+    /// 목록에 있으므로 어떤 API 에 넘기든 잡힌다(접근성 문자열도 이 방법으로 커버된다:
+    /// `.accessibilityValue(Text("적용 중"))`, `.accessibilityAction(named: Text("즐겨찾기"))`).
     private static let patterns = [
         #"NSLocalizedString\(\s*"((?:[^"\\]|\\.)*)""#,
         #"(?:Text|Button|Label|Toggle|Picker|Section|TextField|SecureField|Link|Menu|Stepper"#
+            + #"|ContentUnavailableView|ProgressView|LabeledContent|GroupBox|DisclosureGroup"#
+            + #"|NavigationLink|Slider|ColorPicker|Gauge"#
             + #"|navigationTitle|help|alert|confirmationDialog|accessibilityLabel|accessibilityHint)"#
             + #"\(\s*"((?:[^"\\]|\\.)*)""#,
         #"(?:label|title|message|placeholder|tooltip)\s*:\s*"((?:[^"\\]|\\.)*)""#,
