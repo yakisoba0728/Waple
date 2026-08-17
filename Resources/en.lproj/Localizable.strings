@@ -293,3 +293,15 @@
 "일시정지됨" = "Paused";
 "사용 가능 — %@" = "Available — %@";
 "일부 화면만 정지 배경으로 설정했습니다(%lld/%lld)" = "Set the desktop picture on only some displays (%lld/%lld)";
+"Wallpaper Engine 기본 에셋(assets) 폴더를 선택하세요. 패키지에 없는 공유 텍스처를 여기서 불러옵니다." = "Choose your Wallpaper Engine `assets` folder. Shared textures that are missing from a package are loaded from there.";
+"비디오" = "video";
+"웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요" = "No web wallpaper is running — apply a web wallpaper first";
+"적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다" = "Could not apply — project.json or the preset dependency could not be read";
+"적용된 배경이 없습니다" = "No wallpaper is running";
+"정지 배경을 만들 수 없습니다" = "Could not create a still image";
+"새 디스플레이가 연결됐습니다 — 화면마다 다른 배경을 지정하려면 '디스플레이' 버튼을 확인하세요" = "A new display was connected — use the Displays button to give each screen its own wallpaper";
+"비디오를 재생할 수 없습니다: %@" = "Could not play the video: %@";
+"적용 실패: %@" = "Could not apply: %@";
+"지원하지 않는 타입입니다: %@" = "Unsupported type: %@";
+"화면보호기 설치 실패: %@" = "Could not install the screen saver: %@";
+"잠금화면 스틸 기록 실패(무시): %@" = "Could not write the lock-screen still (ignored): %@";

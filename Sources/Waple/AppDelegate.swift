@@ -214,9 +214,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         videoFailureObserver = NotificationCenter.default.addObserver(
             forName: .wapleVideoPlaybackFailed, object: nil, queue: nil
         ) { [weak self] note in
-            let name = (note.userInfo?["url"] as? URL)?.lastPathComponent ?? "비디오"
+            let name = (note.userInfo?["url"] as? URL)?.lastPathComponent
+                ?? NSLocalizedString("비디오", comment: "파일명을 못 얻었을 때의 대체 표기")
             DispatchQueue.main.async {
-                _ = self?.notify("비디오를 재생할 수 없습니다: \(name)")
+                _ = self?.notify(String(format: NSLocalizedString("비디오를 재생할 수 없습니다: %@",
+                                                                  comment: "비디오 비동기 실패"), name))
             }
         }
 
@@ -292,8 +294,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "선택"
-        panel.message = "Wallpaper Engine 기본 에셋(assets) 폴더를 선택하세요. 패키지에 없는 공유 텍스처를 여기서 불러옵니다."
+        // NSOpenPanel 의 prompt·message 도 AppKit 경로라 자동 해석이 없다(청사진 §5.1).
+        panel.prompt = NSLocalizedString("선택", comment: "열기 패널 확인 버튼")
+        panel.message = NSLocalizedString(
+            "Wallpaper Engine 기본 에셋(assets) 폴더를 선택하세요. 패키지에 없는 공유 텍스처를 여기서 불러옵니다.",
+            comment: "공유 에셋 폴더 선택 안내")
         panel.directoryURL = BaseAssetsSettings.baseAssetsDirectory
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -309,7 +314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 화면 하나만 골라 여는 UI는 이번 스코프 밖이지만, 전부 열면 최소한 도달 불가 상태는 없앤다.
         let webRenderers = renderers.compactMap { $0 as? WebRenderer }
         guard !webRenderers.isEmpty else {
-            notify("웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요")
+            notify(NSLocalizedString("웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요",
+                                     comment: "조작 창 — 웹 배경 없음"))
             return
         }
         webRenderers.forEach { $0.openInteractionPanel() }
@@ -391,12 +397,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func apply(folderURL: URL) -> Bool {
         guard let project = projectForMount(folderURL: folderURL) else {
-            notify("적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다")
+            notify(NSLocalizedString("적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다",
+                                     comment: "적용 실패 — 파스 불가"))
             markApplyResult(success: false)
             return false
         }
         guard RendererFactory.makeRenderer(for: project) != nil else {
-            notify("지원하지 않는 타입입니다: \(project.type.storageString)")
+            notify(String(format: NSLocalizedString("지원하지 않는 타입입니다: %@",
+                                                    comment: "적용 실패 — 미지원 타입"),
+                          project.type.storageString))
             markApplyResult(success: false)
             return false
         }
@@ -502,7 +511,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             markApplyResult(success: true)
             return true
         case .failure(let error):
-            notify("적용 실패: \(error)")
+            notify(String(format: NSLocalizedString("적용 실패: %@", comment: "적용 실패 — 마운트 오류"),
+                          String(describing: error)))
             markApplyResult(success: false)
             return false
         }
@@ -556,7 +566,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = applyCurrentSelection()
 
         if newScreenDetected {
-            notify("새 디스플레이가 연결됐습니다 — 화면마다 다른 배경을 지정하려면 '디스플레이' 버튼을 확인하세요")
+            notify(NSLocalizedString(
+                "새 디스플레이가 연결됐습니다 — 화면마다 다른 배경을 지정하려면 '디스플레이' 버튼을 확인하세요",
+                comment: "새 모니터 감지 안내"))
         }
     }
 
@@ -698,7 +710,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func setStillWallpaper() {
         // F043: currentFolderURL(전역 선택)만 보면 화면별 할당-전용 모드(전역 nil)에서 배경이 실제로
         // 표시 중인데도 "없음" 오탐이 난다 — 실제 마운트된 렌더러 존재 여부로 판정.
-        guard !renderers.isEmpty else { notify("적용된 배경이 없습니다"); return }
+        guard !renderers.isEmpty else {
+            notify(NSLocalizedString("적용된 배경이 없습니다", comment: "정지 배경 — 대상 없음"))
+            return
+        }
         // F047: currentFolderURL 은 메인 전용 프로퍼티라 백그라운드 클로저에서 직접 읽으면(다른 apply
         // 가 마침 같은 순간 메인에서 값을 바꿀 수 있어) 동기화 없는 경합이 생긴다 — 큐 진입 '전'
         // 메인에서 스냅샷해 넘긴다.
@@ -712,7 +727,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// setStillWallpaper 의 메인 스레드 마무리 — 실제 OS 호출 결과에 따라 통지 문구를 정확히 고른다.
     private func finishSetStillWallpaper(images: [String: URL]) {
-        guard !images.isEmpty else { notify("정지 배경을 만들 수 없습니다"); return }
+        guard !images.isEmpty else {
+            notify(NSLocalizedString("정지 배경을 만들 수 없습니다", comment: "정지 배경 — 생성 실패"))
+            return
+        }
         backupOriginalsIfNeeded()   // F042: 덮어쓰기 전에 항상 먼저 백업(동기화 디바운스 경합과 무관)
         var successCount = 0
         let screens = NSScreen.screens
@@ -856,6 +874,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return output
     }
 
+    /// 상태 배너 + 로그. **`message` 는 이미 현지화된 문자열이어야 한다.**
+    ///
+    /// 싱크인 `StatusBanner` 는 `Label(msg, systemImage:)` 로 받는데 그 오버로드는
+    /// `StringProtocol` 이라 번역하지 않는다 — 한국어 리터럴을 그대로 넘기면 영어 시스템에서
+    /// 배너만 한국어로 남고 아무 것도 실패하지 않는다(청사진 §5.0). 싱크 타입을
+    /// `LocalizedStringKey` 로 바꾸는 대안은 리터럴을 대입문으로 만들어 스캔 사각지대를
+    /// 새로 판다 — 그래서 호출부 전부가 `NSLocalizedString` 으로 완성해서 넘긴다.
     @discardableResult
     private func notify(_ message: String) -> Bool {
         NSLog("%@", "[Waple] \(message)")
@@ -890,7 +915,10 @@ extension AppDelegate {
             ScreenSaverController.openSettings()  // 사용자가 바로 확인할 수 있게 잠금 화면 패널 열기
             return true
         } catch {
-            notify("화면보호기 설치 실패: \(error.localizedDescription)")
+            // 바깥 문구만 감싼다. 안쪽 localizedDescription 은 ScreenSaverController 가 만드는데
+            // 그 파일은 전 페이즈 동결이라 손대지 않았다 — 영어 UI 에서 사유만 한국어로 남는다(보고).
+            notify(String(format: NSLocalizedString("화면보호기 설치 실패: %@", comment: "화면보호기 설치 실패"),
+                          error.localizedDescription))
             return false
         }
     }
@@ -1025,7 +1053,11 @@ extension AppDelegate {
             do {
                 try png.write(to: dir.appendingPathComponent("lockscreen.png"), options: .atomic)
             } catch {
-                DispatchQueue.main.async { self.notify("잠금화면 스틸 기록 실패(무시): \(error.localizedDescription)") }
+                DispatchQueue.main.async {
+                    self.notify(String(format: NSLocalizedString("잠금화면 스틸 기록 실패(무시): %@",
+                                                                 comment: "잠금화면 스틸 기록 실패"),
+                                       error.localizedDescription))
+                }
             }
         }
     }
