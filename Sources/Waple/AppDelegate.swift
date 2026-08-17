@@ -326,7 +326,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.toolbarStyle = .unified
             window.setContentSize(Metrics.windowDefault)
             window.minSize = Metrics.windowMin
-            window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
+            // `window.appearance = NSAppearance(named: .darkAqua)` 를 걷어냈다(Unit E, 2026-08-17).
+            // 종전 주석은 "WE 관례 — 항상 다크" 였고 근거는 2026-07-12 스펙 §3("다크 하의 시맨틱
+            // 값만, 라이트 대응 없음")이었다. **그 근거를 읽고 뒤집었다**(청사진 §8.1, 사용자 승인).
+            // WE 가 항상 어둡다는 것은 WE 의 사정이지 macOS 앱이 시스템 외관을 무시할 이유가 아니다 —
+            // 이번 개편이 고른 "시스템이 공짜로 주는 것을 받아먹는다" 와 정면으로 모순된다.
+            // 실측이 그 강제의 크기를 보여줬다: 시스템을 라이트로 바꾸고 찍은 캡처가 다크 캡처와
+            // md5 까지 같았다 — 이 앱엔 라이트 모드가 아예 없었다.
+            // 걷어낼 수 있게 된 전제는 리터럴 색 13곳이 전부 `ColorRole` 시맨틱으로 옮겨진 것이다
+            // (Phase 2 완료). appearance 를 대입하지 않으면 창이 시스템 값을 상속한다.
+            // 스펙 §3 을 근거로 되돌리지 마라 — 몰라서 어긴 것이 아니라 읽고 뒤집은 결정이다.
             // 프로그램 생성 NSWindow 는 닫힐 때 기본적으로 release 되어, 강한 참조 프로퍼티가
             // 댕글링되고 재오픈 시 use-after-free 가 된다. 프로퍼티가 수명을 관리하도록 막는다.
             window.isReleasedWhenClosed = false
@@ -340,7 +349,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// 설정 창(SP5′) — openLibrary 와 같은 수명 규약: darkAqua·isReleasedWhenClosed=false·강한 참조.
+    /// 설정 창(SP5′) — openLibrary 와 같은 수명 규약: isReleasedWhenClosed=false·강한 참조.
+    /// (종전 이 줄은 "darkAqua·isReleasedWhenClosed=false·강한 참조" 였다 — darkAqua 강제를
+    /// 걷어냈으므로 규약에서도 뺀다. 근거는 openLibrary 쪽 주석.)
     @objc func openSettings() {
         if settingsWindow == nil {
             let hosting = NSHostingController(rootView: SettingsView(vm: settingsVM))
@@ -348,7 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.title = NSLocalizedString("Waple 설정", comment: "")
             window.styleMask = [.titled, .closable]
             window.setContentSize(Metrics.settingsSize)
-            window.appearance = NSAppearance(named: .darkAqua)   // WE 관례 — 항상 다크
+            // darkAqua 강제 제거 — 근거는 openLibrary 쪽 주석(청사진 §8.1).
             window.isReleasedWhenClosed = false
             window.center()   // F024: 최초 생성 시에만 — 재오픈마다 위치를 되돌리지 않는다.
             settingsWindow = window
