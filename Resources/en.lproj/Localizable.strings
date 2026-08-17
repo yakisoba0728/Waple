@@ -252,7 +252,14 @@
 
 /* MARK: Unit D — 설정·온보딩·디스플레이 */
 "(자동 탐지)" = "(auto-detected)";
+"30 fps (절전)" = "30 fps (power saving)";
+"60 fps (부드러움)" = "60 fps (smooth)";
+"끄기" = "Turn off";
+"늘이기" = "Stretch";
+"맞춤 (전체 표시)" = "Fit (show all)";
 "전역 배경" = "Global wallpaper";
+"채움 (꽉 채움)" = "Fill (cover)";
+"켜기" = "Turn on";
 "지원 예정" = "Coming soon";
 "로그인 항목 설정 실패: %@" = "Could not change the login item: %@";
 
