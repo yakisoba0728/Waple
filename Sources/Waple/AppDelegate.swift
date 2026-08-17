@@ -153,7 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: NSLocalizedString("설정…", comment: ""),
                                 action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Waple",
+        // 이 항목만 영어 원문("Quit Waple")이라 한국어 UI 에 영어가 섞여 있었다. 한글이 없어
+        // 커버리지 오라클도 한글 스윕도 못 잡는 역방향 결함이다 — 키를 한국어로 뒤집어야
+        // 오라클의 사정권에 들어온다(§9.3).
+        menu.addItem(NSMenuItem(title: NSLocalizedString("Waple 종료", comment: ""),
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
         statusMenu = menu
@@ -1101,7 +1104,13 @@ extension AppDelegate: NSMenuDelegate {
         if menu === statusMenu {
             // F040: 수동 사유만 보면 가림·슬립으로 실제 정지 중일 때도 "일시정지"로 오표시된다 —
             // 실제 렌더 상태(pauseGate.isPaused, 사유 무관)를 기준으로 라벨을 정한다.
-            pauseMenuItem?.title = pauseGate.isPaused ? "재개" : "일시정지"
+            // 생 한국어를 대입하면 :143 에서 NSLocalizedString 으로 만든 제목을 메뉴를 열
+            // 때마다 무효화한다 — 영어 UI 에서 "Pause" 로 떴다가 첫 클릭에 한국어로 바뀌었다.
+            // 삼항으로 **문자열**을 고르면 두 리터럴 다 오라클 패턴에 안 걸리므로(§5.3)
+            // 삼항 밖에서 각각 감싼다.
+            pauseMenuItem?.title = pauseGate.isPaused
+                ? NSLocalizedString("재개", comment: "트레이 일시정지 항목 — 정지 중")
+                : NSLocalizedString("일시정지", comment: "트레이 일시정지 항목 — 재생 중")
             // w5d-tray: 하단 바 NowPlayingBar 의 .disabled(ids.count < 2) 와 대칭.
             nextMenuItem?.isEnabled = PlaylistScheduling.canAdvance(count: playlistStore.ids.count)
             return

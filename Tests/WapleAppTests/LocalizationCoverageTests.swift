@@ -31,6 +31,13 @@ final class LocalizationCoverageTests: XCTestCase {
     /// 목록도 늘린다.** 늘리기 싫으면 호출부에서 `Text("…")` 로 감싸라 — `Text` 는 이미
     /// 목록에 있으므로 어떤 API 에 넘기든 잡힌다(접근성 문자열도 이 방법으로 커버된다:
     /// `.accessibilityValue(Text("적용 중"))`, `.accessibilityAction(named: Text("즐겨찾기"))`).
+    ///
+    /// 2026-08-17(Unit E): 세 번째 패턴에 `withTitle` 을 더했다. `NSMenu.addItem(withTitle:)`
+    /// 은 **이중 사각지대**였다 — 대문자 T 라 소문자 `title:` 만 보던 패턴에서 빠지고,
+    /// AppKit 이 자동 현지화도 하지 않는다. 그래서 `main.swift` 의 편집 메뉴 6개가 영어
+    /// 시스템에서 계속 한국어로 떴는데 이 스위트는 초록이었다. **패턴만 넣고 코드를 안
+    /// 고치면 거짓 초록이 된다** — strings 에 키가 생겨 "번역됨" 으로 보이지만 런타임은
+    /// 여전히 한국어다. 그래서 래핑과 이 패턴 추가를 한 커밋으로 묶었다.
     private static let patterns = [
         #"NSLocalizedString\(\s*"((?:[^"\\]|\\.)*)""#,
         #"(?:Text|Button|Label|Toggle|Picker|Section|TextField|SecureField|Link|Menu|Stepper"#
@@ -38,7 +45,7 @@ final class LocalizationCoverageTests: XCTestCase {
             + #"|NavigationLink|Slider|ColorPicker|Gauge"#
             + #"|navigationTitle|help|alert|confirmationDialog|accessibilityLabel|accessibilityHint)"#
             + #"\(\s*"((?:[^"\\]|\\.)*)""#,
-        #"(?:label|title|message|placeholder|tooltip)\s*:\s*"((?:[^"\\]|\\.)*)""#,
+        #"(?:label|title|withTitle|message|placeholder|tooltip)\s*:\s*"((?:[^"\\]|\\.)*)""#,
     ]
 
     private static func containsHangul(_ s: String) -> Bool {

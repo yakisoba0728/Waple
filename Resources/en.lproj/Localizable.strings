@@ -270,3 +270,11 @@
 "로그인 항목 설정 실패: %@" = "Could not change the login item: %@";
 
 /* MARK: Unit E — 메뉴바·마감 */
+"Waple 종료" = "Quit Waple";
+"재개" = "Resume";
+"실행 취소" = "Undo";
+"다시 실행" = "Redo";
+"오려두기" = "Cut";
+"복사" = "Copy";
+"붙여넣기" = "Paste";
+"전체 선택" = "Select All";
