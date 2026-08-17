@@ -1177,6 +1177,14 @@ extension SceneRenderer {
             ) {
                 return resolved
             }
+            // **이름이 있었는데 해석에 실패한** 경우만 시끄럽게 만든다. 흰 1×1 폴백 자체는 유지한다
+            // (미바인드 Metal 검증 실패보다 낫다는 기존 판단) — 문제는 그게 **조용했다**는 것이다.
+            // 흰색은 곱셈 항등원이라 마스크·그라디언트·노이즈 슬롯에서 "효과가 안 걸린 것처럼" 보이거나
+            // (fx0·fx1 = 1 로 노이즈가 통째로 사라짐) 반대로 전화면에 걸려, 진단이 상류 원인을 못 찾는다.
+            // 실측 사례: `util/clouds_N`(존재하는 것은 clouds_256) 이 조용히 백색이 됐다.
+            // 이름이 nil 인 호출(선언만 있고 아무도 바인드하지 않은 샘플러 슬롯 — lightshafts 의 MASK
+            // 미사용 g_Texture3 등)은 설계상 placeholder 라 로그하지 않는다.
+            WapleLog.warn("[Waple] texture unresolved → white 1×1 placeholder: \(name) (tried \(candidates.joined(separator: ", ")))")
         }
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }
     }

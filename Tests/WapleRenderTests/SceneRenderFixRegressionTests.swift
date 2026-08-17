@@ -315,4 +315,29 @@ final class SceneRenderFixRegressionTests: XCTestCase {
         XCTAssertTrue(captured.contains { $0.contains("texture decode failed") },
                       "디코드 실패가 경고 로그로 남아야 함(종전엔 무로그)")
     }
+
+    /// 미해결 텍스처의 **조용한 백색 폴백**. 폴백 자체는 유지(미바인드 방지)하되 로그가 남아야 한다 —
+    /// 흰색은 곱셈 항등원이라 노이즈/마스크/그라디언트 슬롯에서 결과가 "정상"처럼 보여 상류 원인을 가린다
+    /// (실측: `util/clouds_N` 이 조용히 백색이 됐다). 이름이 nil 인 슬롯(설계상 placeholder)은 무로그.
+    func testUnresolvedTextureFallbackIsLogged() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        var captured: [String] = []
+        let saved = WapleLog.warnHandler
+        defer { WapleLog.warnHandler = saved }
+        WapleLog.warnHandler = { captured.append($0) }
+
+        let renderer = SceneRenderer()
+        let p = ScenePackage.assemble([("scene.json", Data("{}".utf8))])
+
+        let missing = renderer.resolveTexture("util/definitely_not_here_N", package: p, device: device)
+        XCTAssertNotNil(missing, "폴백은 유지 — 미바인드로 두지 않는다")
+        XCTAssertEqual(missing?.width, 1)
+        XCTAssertTrue(captured.contains { $0.contains("texture unresolved") && $0.contains("definitely_not_here_N") },
+                      "미해결 텍스처의 백색 폴백은 경고로 남아야 한다: \(captured)")
+
+        captured.removeAll()
+        let placeholder = renderer.resolveTexture(nil, package: p, device: device)
+        XCTAssertNotNil(placeholder, "이름 없는 슬롯도 placeholder 를 받는다(무회귀)")
+        XCTAssertTrue(captured.isEmpty, "이름이 없으면 '미해결'이 아니다 — 로그 스팸 금지: \(captured)")
+    }
 }
