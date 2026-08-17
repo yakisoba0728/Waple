@@ -5,12 +5,29 @@ import WapleLibrary
 import WapleRender
 
 /// Now Playing 부제(순수): 타입 라벨 + 재생목록 상태. 뷰와 분리해 단위 테스트.
+///
+/// **문자열을 여기서 완성해 현지화까지 끝낸다.** 이 함수의 반환은 `String` 이라 뷰의
+/// `Text(_:)` 는 비현지화 오버로드로 붙는다 — 즉 여기서 번역하지 않으면 영어 시스템에서도
+/// 부제만 한국어로 남고 아무 것도 실패하지 않는다. 싱크 타입을 바꾸는 대신 생산 지점에서
+/// 완성하는 쪽을 택한 이유는, 리터럴이 `NSLocalizedString(` 안에 남아야 커버리지 오라클이
+/// 계속 볼 수 있기 때문이다(대입문으로 옮기면 어떤 스캔 패턴에도 안 걸린다).
+///
+/// 값이 끼는 두 조각은 보간이 아니라 포맷 지정자로 쓴다 — 보간은 en.lproj 키를 추론할 수
+/// 없게 만들고, 어순이 다른 언어에서 조립이 깨진다.
 enum NowPlayingSubtitle {
     static func text(typeRaw: String?, playlistCount: Int, intervalMinutes: Int, playlistEnabled: Bool) -> String {
-        guard let typeRaw else { return "라이브러리에서 배경을 선택하세요" }
+        guard let typeRaw else {
+            return NSLocalizedString("라이브러리에서 배경을 선택하세요", comment: "적용된 배경이 없을 때 하단 바 부제")
+        }
         var parts = [typeLabel(typeRaw)]
-        if playlistCount > 0 { parts.append("재생목록 \(playlistCount)개") }
-        if playlistEnabled, playlistCount > 0 { parts.append("\(intervalMinutes)분마다 전환") }
+        if playlistCount > 0 {
+            parts.append(String(format: NSLocalizedString("재생목록 %lld개", comment: "재생목록 항목 수"),
+                                playlistCount))
+        }
+        if playlistEnabled, playlistCount > 0 {
+            parts.append(String(format: NSLocalizedString("%lld분마다 전환", comment: "재생목록 자동 전환 간격"),
+                                intervalMinutes))
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -21,13 +38,15 @@ enum NowPlayingSubtitle {
         typeRaw.map { WallpaperType.from($0) == .video } ?? false
     }
 
+    /// 표시용 유형 라벨. 계산 프로퍼티/함수가 생 리터럴을 돌려주면 커버리지 스캔에 안 걸리므로
+    /// 열거 라벨은 전부 `NSLocalizedString` 으로 감싼다(미지 타입은 WE 원문이라 번역 대상 아님).
     static func typeLabel(_ raw: String) -> String {
         switch WallpaperType.from(raw) {
-        case .scene: return "장면"
-        case .video: return "동영상"
-        case .web: return "웹"
-        case .preset: return "프리셋"
-        case .application: return "응용 프로그램"
+        case .scene: return NSLocalizedString("장면", comment: "배경 유형")
+        case .video: return NSLocalizedString("동영상", comment: "배경 유형")
+        case .web: return NSLocalizedString("웹", comment: "배경 유형")
+        case .preset: return NSLocalizedString("프리셋", comment: "배경 유형")
+        case .application: return NSLocalizedString("응용 프로그램", comment: "배경 유형")
         case .unknown(let s): return s
         }
     }
@@ -59,6 +78,12 @@ struct NowPlayingBar: View {
     @ObservedObject var viewModel: LibraryViewModel
     @State private var showPlaylist = false
 
+    /// 제목·부제 블록의 최대 폭. 이 화면 하나만 쓰는 값이라 공용 토큰(`Metrics`)이 아니라
+    /// 여기 둔다 — 긴 제목이 오른쪽 컨트롤을 밀어내지 않게 하는 상한이다.
+    private static let textMaxWidth: CGFloat = 380
+    /// 재생목록 팝오버 폭. 역시 이 화면 전용 상수다.
+    private static let playlistPopoverWidth: CGFloat = 280
+
     private var appliedEntry: LibraryEntry? {
         // F495: 전역 선택만 볼 경우 할당-전용 세션에서 재생 중인데도 "적용된 배경 없음"으로 표시됨.
         // 감사 V06: 대상 id 는 키 정렬 순(결정적) — Dictionary values 순회는 실행마다 달랐다.
@@ -68,35 +93,32 @@ struct NowPlayingBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Space.stackGap) {
             thumb
-            VStack(alignment: .leading, spacing: 2) {
-                Text(appliedEntry?.title ?? "적용된 배경 없음")
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-                Text(NowPlayingSubtitle.text(typeRaw: appliedEntry?.typeRaw,
-                                             playlistCount: viewModel.playlist.ids.count,
-                                             intervalMinutes: viewModel.playlist.intervalMinutes,
-                                             playlistEnabled: viewModel.playlist.enabled))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: 380, alignment: .leading)
+            nowPlayingText
 
             Spacer()
 
+            // 아이콘 전용 버튼은 Label(문구)+iconOnly 로 만든다 — Label 이 접근성 이름이 되고
+            // .help 가 툴팁이 된다. Image 만 쓰면 보조기술에는 이름 없는 버튼으로 읽힌다.
+            // 삼항으로 String 을 고르면 두 리터럴 모두 커버리지 스캔에서 빠지므로 Text/Label 을 고른다.
             Button {
                 if let paused = viewModel.onTogglePause?() { viewModel.isPaused = paused }
             } label: {
-                Image(systemName: viewModel.isPaused ? "play.fill" : "pause.fill").font(.title3)
+                if viewModel.isPaused {
+                    Label("재생", systemImage: "play.fill").font(.title3)
+                } else {
+                    Label("일시정지", systemImage: "pause.fill").font(.title3)
+                }
             }
+            .labelStyle(.iconOnly)
             .buttonStyle(.plain)
-            .help(viewModel.isPaused ? "재생" : "일시정지")
+            .help(viewModel.isPaused ? Text("재생") : Text("일시정지"))
 
             Button { viewModel.onAdvancePlaylist?() } label: {
-                Image(systemName: "forward.fill").font(.title3)
+                Label("다음 배경", systemImage: "forward.fill").font(.title3)
             }
+            .labelStyle(.iconOnly)
             .buttonStyle(.plain)
             .disabled(viewModel.playlist.ids.count < 2)
             .help("다음 배경")
@@ -119,10 +141,35 @@ struct NowPlayingBar: View {
             }
             .help("Wallpaper Engine 폴더·zip·동영상 가져오기")
         }
-        .padding(.horizontal, 16)
-        .frame(height: Metrics.nowPlayingHeight)
-        .background(.bar)
+        .padding(.horizontal, Space.barInset)
+        // 고정 높이가 아니라 하한이다 — 큰 글씨 설정에서 고정 56pt 는 글자를 자른다.
+        .frame(minHeight: Metrics.nowPlayingHeight)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(Surface.chrome)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    /// 제목 + 부제. 보조기술에는 두 줄이 아니라 항목 하나로 읽혀야 한다.
+    private var nowPlayingText: some View {
+        VStack(alignment: .leading, spacing: Space.hairline) {
+            // 옵셔널 제목에 리터럴을 nil 병합으로 붙이면 인자 타입이 String 이 되어 비현지화
+            // 오버로드가 선택된다 — 리터럴을 눈앞에 적어 놓고도 번역이 사라지고, 커버리지
+            // 스캐너도 리터럴이 여는 괄호 바로 뒤에 오지 않아 놓친다. 영어 캡처에서 실제로 이
+            // 한 줄만 한국어로 남아 있었다. 그래서 폴백을 여기서 완성해 넘긴다.
+            Text(appliedEntry?.title
+                 ?? NSLocalizedString("적용된 배경 없음", comment: "하단 바 — 적용된 배경이 없을 때 제목"))
+                .font(Typography.bodyEmphasis)
+                .lineLimit(1)
+            Text(NowPlayingSubtitle.text(typeRaw: appliedEntry?.typeRaw,
+                                         playlistCount: viewModel.playlist.ids.count,
+                                         intervalMinutes: viewModel.playlist.intervalMinutes,
+                                         playlistEnabled: viewModel.playlist.enabled))
+                .font(Typography.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: Self.textMaxWidth, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -134,11 +181,13 @@ struct NowPlayingBar: View {
                 Image(systemName: "photo")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .quaternaryLabelColor).opacity(0.3))
+                    .background(ColorRole.placeholderFill)
             }
         }
         .frame(width: Metrics.nowPlayingThumb, height: Metrics.nowPlayingThumb)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: Surface.thumbCorner))
+        // 바로 옆 텍스트가 같은 정보를 말한다 — 보조기술에 두 번 읽히지 않게 장식으로 감춘다.
+        .accessibilityHidden(true)
     }
 
     /// 음량/배속 메뉴(w5d-settings-ia). F820 으로 리마운트 없는 라이브 반영이 됐지만, 연속
@@ -174,8 +223,11 @@ struct NowPlayingBar: View {
                 }
             }
         } label: {
-            Image(systemName: currentVideoVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill").font(.title3)
+            Label("동영상 음량 · 배속",
+                  systemImage: currentVideoVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.title3)
         }
+        .labelStyle(.iconOnly)
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("동영상 음량 · 배속")
@@ -199,7 +251,7 @@ struct NowPlayingBar: View {
 
     /// 재생목록 관리: 자동 전환·간격 + 선택 항목 추가/제거 + 목록.
     private var playlistPopover: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Space.md) {
             // playlist(PlaylistStore)는 @Published 가 아니라 직접 mutate 만으로는 body(간격 라벨·부제)가
             // 재평가되지 않는다 — togglePlaylist 전례처럼 owning VM 에 objectWillChange 를 쏘아 갱신을 건다.
             Toggle("자동 전환", isOn: Binding(
@@ -214,23 +266,32 @@ struct NowPlayingBar: View {
                 get: { viewModel.playlist.shuffle },
                 set: { viewModel.playlist.shuffle = $0; viewModel.objectWillChange.send(); viewModel.onPlaylistChanged?() }))
             if let focused = viewModel.focusedEntry {
-                Button(viewModel.isInPlaylist(focused) ? "'\(focused.title)' 제거" : "'\(focused.title)' 추가") {
-                    viewModel.togglePlaylist(focused)
+                // 종전엔 문자열 보간으로 라벨을 만들어 번역이 조용히 사라졌다(비현지화 오버로드).
+                // 포맷 지정자로 조립해 en.lproj 키를 고정한다.
+                Button { viewModel.togglePlaylist(focused) } label: {
+                    Text(playlistToggleLabel(for: focused))
                 }
             }
             Divider()
             if viewModel.playlist.ids.isEmpty {
                 Text("재생목록이 비어 있습니다 — 타일 우클릭 또는 위 버튼으로 추가하세요")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(Typography.caption).foregroundStyle(.secondary)
             } else {
                 ForEach(viewModel.playlist.ids, id: \.self) { id in
                     Text(viewModel.entries.first { $0.id == id }?.title ?? id)
-                        .font(.caption).lineLimit(1)
+                        .font(Typography.caption).lineLimit(1)
                 }
             }
         }
-        .padding(14)
-        .frame(width: 280)
+        .padding(Space.panelInset)
+        .frame(width: Self.playlistPopoverWidth)
+    }
+
+    private func playlistToggleLabel(for entry: LibraryEntry) -> String {
+        let format = viewModel.isInPlaylist(entry)
+            ? NSLocalizedString("'%@' 재생목록에서 제거", comment: "재생목록 토글 버튼")
+            : NSLocalizedString("'%@' 재생목록에 추가", comment: "재생목록 토글 버튼")
+        return String(format: format, entry.title)
     }
 
     /// '가져오기' = 디스크에서 임포트(WallpaperGridView 와 공유하는 ImportPanel — 폴더/zip/동영상).

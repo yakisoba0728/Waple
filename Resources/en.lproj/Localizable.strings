@@ -160,6 +160,16 @@
 "즐겨찾기" = "Favorites";
 "창작마당" = "Workshop";
 "폴더" = "Folders";
+"라이브러리에서 배경을 선택하세요" = "Choose a wallpaper from your library";
+"응용 프로그램" = "Application";
+"장면" = "Scene";
+"재생" = "Play";
+"적용된 배경 없음" = "No wallpaper applied";
+"프리셋" = "Preset";
+"'%@' 재생목록에 추가" = "Add “%@” to playlist";
+"'%@' 재생목록에서 제거" = "Remove “%@” from playlist";
+"%lld분마다 전환" = "Switches every %lld min";
+"재생목록 %lld개" = "%lld in playlist";
 
 /* MARK: Unit S — 공유 컴포넌트 */
 
