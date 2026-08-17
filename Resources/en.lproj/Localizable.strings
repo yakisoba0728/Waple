@@ -222,6 +222,12 @@
 "검증 중" = "Verifying";
 "설치 중" = "Installing";
 "가져오는 중" = "Importing";
+"평점" = "Rating";
+"구독" = "Subscribers";
+"라이브러리에 추가됨" = "Added to your library";
+"다운로드 실패" = "Download failed";
+"더 불러오는 중" = "Loading more";
+"불러오는 중" = "Loading";
 "steamcmd 로 다운로드해 라이브러리에 추가" = "Download with steamcmd and add to your library";
 "steamcmd 가 필요합니다: brew install steamcmd" = "steamcmd is required: brew install steamcmd";
 "steamcmd 로그인 계정(username)을 먼저 입력하세요." = "Enter your steamcmd sign-in account (username) first.";

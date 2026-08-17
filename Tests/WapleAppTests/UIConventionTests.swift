@@ -80,10 +80,14 @@ final class UIConventionTests: XCTestCase {
     /// `reduceMotion`·`accessibilityReduceTransparency`·`differentiateWithoutColor` 참조가
     /// **0건**이고 애니메이션 진입점 6개가 무조건 실행된다.
     func testAnimationsComeFromMotionTokens() throws {
-        // 2026-08-17 기준 위반 4파일 중 셋(MainWindowView·StatusBanner = Unit A,
-        // WallpaperGridView = Unit B)은 각자 개편에서 Motion 토큰으로 옮기며 지웠다.
+        // 2026-08-17 기준 위반 4파일이 **전부** 마이그레이션을 끝냈다 —
+        // MainWindowView·StatusBanner(Unit A, 셸 개편) · WallpaperGridView(Unit B,
+        // 라이브러리 개편) · RemoteTile(Unit C, 창작마당 개편)이 각자 호버 리프트
+        // 모디파이어와 Motion 토큰으로 옮기며 지웠다.
+        //
+        // 목록이 비었다고 이 테스트를 지우지 마라 — 이제부터는 **새 위반을 막는**
+        // 역할이다. 생 `.animation(.spring(…))` 을 새로 쓰면 여기서 빨개진다.
         let pending: Set<String> = [
-            "Surfaces/Workshop/RemoteTile.swift",  // Unit C
         ]
         try assertConvention(
             violates: { text in

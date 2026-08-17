@@ -12,7 +12,7 @@ struct WorkshopTabView: View {
             if vm.hasAPIKey { browser } else { APIKeyGateView(vm: vm) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(ColorRole.well)
         .task(id: vm.hasAPIKey) { await vm.searchIfNeeded() }  // 키 게이트에서 저장 직후에도 자동 로드(디스커버와 동일 규약)
         .onChange(of: vm.sort) { _, _ in Task { await vm.search() } }
     }
@@ -23,9 +23,10 @@ struct WorkshopTabView: View {
             // vm.statusMessage 는 생산 지점에서 이미 번역돼 있다 — 여기 붙는 오버로드는
             // 번역을 하지 않으므로(§5.0) 뷰가 뒤늦게 감쌀 수 있는 것이 아니다.
             if let message = vm.statusMessage {
-                Text(message).font(.caption).foregroundStyle(.secondary)
+                Text(message).font(Typography.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, Space.contentInset)
+                    .padding(.top, Space.controlGap)
             }
             if vm.isSearching && vm.results.isEmpty {
                 Spacer()
@@ -42,7 +43,7 @@ struct WorkshopTabView: View {
 
     private var grid: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: Metrics.gridSpacing + 6) {
+            LazyVGrid(columns: columns, spacing: Metrics.gridRowSpacing) {
                 ForEach(vm.results) { item in
                     RemoteTileView(item: item,
                                    download: vm.downloads[item.id],
@@ -54,9 +55,14 @@ struct WorkshopTabView: View {
                         }
                 }
             }
-            .padding(20)
+            .padding(Space.contentInset)
             if vm.isLoadingMore {
-                ProgressView().controlSize(.small).padding(.bottom, 16)
+                // 무한 스크롤은 보조기술에 조용하다 — 마지막 타일에 닿으면 onAppear 로 다음
+                // 페이지가 붙지만, 라벨 없는 스피너는 "무엇이 진행 중인지" 를 말하지 않는다.
+                // 글자를 띄우면 그리드 아래 레이아웃이 흔들리므로 이름만 붙인다.
+                ProgressView().controlSize(.small)
+                    .padding(.bottom, Space.lg)
+                    .accessibilityLabel("더 불러오는 중")
             }
         }
     }
