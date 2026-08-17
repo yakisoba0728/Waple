@@ -6,9 +6,12 @@ import WapleRender
 /// 시각은 전부 시스템: grouped Form·시맨틱 컬러·SF Symbols. 치수는 Metrics.settingsSize 만.
 struct SettingsView: View {
     /// 창을 어디까지 줄일 수 있는가. `Metrics` 는 Phase 0 이후 동결이라 여기 산다.
-    /// 오늘은 창이 리사이즈 불가라 이 값이 드러나지 않는다 — 스타일마스크에 `.resizable` 이
-    /// 붙는 날(그 코드는 AppDelegate 소유다) 바닥으로 쓰인다.
-    private static let minHeight: CGFloat = 420
+    ///
+    /// 2026-08-17(Unit E): `.resizable` 이 붙어 **실제로 바닥으로 쓰이기 시작했다** —
+    /// `AppDelegate.openSettings` 가 `contentMinSize` 에 이 값을 넣는다. 그래서 `private`
+    /// 를 뗐다. 종전 주석("오늘은 창이 리사이즈 불가라 이 값이 드러나지 않는다")은 더 이상
+    /// 사실이 아니라 여기서 정정한다.
+    static let minHeight: CGFloat = 420
 
     @ObservedObject var vm: SettingsViewModel
 

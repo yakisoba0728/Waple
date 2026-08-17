@@ -366,8 +366,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let hosting = NSHostingController(rootView: SettingsView(vm: settingsVM))
             let window = NSWindow(contentViewController: hosting)
             window.title = NSLocalizedString("Waple 설정", comment: "")
-            window.styleMask = [.titled, .closable]
+            // 세로만 리사이즈 가능하게 한다(청사진 §9.2 의 남은 절반).
+            //
+            // 섹션이 6개로 늘어 콘텐츠가 약 953pt 인데 창 안쪽은 820pt 다. Unit D 가 정정했듯
+            // **잘려서 도달 불가한 건 아니다** — grouped Form 은 스스로 스크롤한다(스크롤바를
+            // 항상 보이게 켜고 찍으면 종전 빌드에도 트랙이 있고 썸이 약 86%). 문제는 창을 키워
+            // 한눈에 볼 방법이 없다는 것이었고, 그래서 고치는 것은 스크롤이 아니라 리사이즈다.
+            //
+            // 높이를 키우는 방향은 택하지 않았다 — 항목은 앞으로도 늘고, Dynamic Type 큰
+            // 글씨에서는 어떤 고정 높이도 결국 넘친다(F090 선례). 첫 크기는 이상 크기 그대로
+            // 두고 상한만 풀어, 더 보고 싶은 사용자가 창을 늘리게 한다.
+            //
+            // setContentSize 는 남기되 더 이상 못 박지 않는다: .resizable 이 없던 종전에는
+            // 이 한 줄이 곧 최종 크기였고, 뷰가 이상 높이를 1000 으로 말해도 창은 560×848 로
+            // 되돌아갔다(Unit D 실측). 이제는 '첫 크기' 일 뿐이다.
+            //
+            // 폭은 잠근다. 뷰가 .frame(width: Metrics.settingsSize.width) 로 폭을 고정하고
+            // 있어서 가로로 늘리면 늘어난 만큼 빈 판만 생긴다 — 늘릴 수 있는데 늘려도 아무
+            // 일이 없는 것이 제일 나쁘다.
+            window.styleMask = [.titled, .closable, .resizable]
             window.setContentSize(Metrics.settingsSize)
+            window.contentMinSize = NSSize(width: Metrics.settingsSize.width,
+                                           height: SettingsView.minHeight)
+            window.contentMaxSize = NSSize(width: Metrics.settingsSize.width,
+                                           height: .greatestFiniteMagnitude)
             // darkAqua 강제 제거 — 근거는 openLibrary 쪽 주석(청사진 §8.1).
             window.isReleasedWhenClosed = false
             window.center()   // F024: 최초 생성 시에만 — 재오픈마다 위치를 되돌리지 않는다.
