@@ -112,14 +112,23 @@ enum ProfilePipeline {
                       off.particles.count == on.particles.count else {
                     fputs("[vis-blast] ⚠️ \(id): 두 파스 배열 길이 불일치(비결정 스킵)\n", stderr); return
                 }
+                // 종전 지표는 initialVisible 플립만 셌다 — 그건 **스크립트 없는** 자식만 잡는다.
+                // 자기 visible 스크립트를 가진 자식은 initialVisible 이 시드일 뿐이라 마킹 대상이 아니고
+                // hiddenByAncestor(런타임 하드 게이트)로 간다. 두 축을 다 세지 않으면 새 반경이 0 으로 보인다.
                 var layersHidden = 0, textsHidden = 0, particlesHidden = 0
-                for i in off.layers.indices where off.layers[i].initialVisible && !on.layers[i].initialVisible {
+                for i in off.layers.indices
+                where (off.layers[i].initialVisible && !on.layers[i].initialVisible)
+                    || (!off.layers[i].hiddenByAncestor && on.layers[i].hiddenByAncestor) {
                     layersHidden += 1
                 }
-                for i in off.texts.indices where off.texts[i].initialVisible && !on.texts[i].initialVisible {
+                for i in off.texts.indices
+                where (off.texts[i].initialVisible && !on.texts[i].initialVisible)
+                    || (!off.texts[i].hiddenByAncestor && on.texts[i].hiddenByAncestor) {
                     textsHidden += 1
                 }
-                for i in off.particles.indices where off.particles[i].visible && !on.particles[i].visible {
+                for i in off.particles.indices
+                where (off.particles[i].visible && !on.particles[i].visible)
+                    || (!off.particles[i].hiddenByAncestor && on.particles[i].hiddenByAncestor) {
                     particlesHidden += 1
                 }
                 let row = VisBlastRow(id: id, layers: layersHidden, texts: textsHidden, particles: particlesHidden)

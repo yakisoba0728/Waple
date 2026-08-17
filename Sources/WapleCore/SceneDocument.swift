@@ -119,6 +119,16 @@ public struct SceneLayer: Equatable {
     /// visible 의 정적 value(초기 표시). visible 스크립트가 있을 때만 false 로도 남는다 —
     /// 스크립트 없는 정적 false 는 파스에서 레이어 자체가 드롭된다.
     public var initialVisible: Bool = true
+    /// **영구 비가시 조상 상속**(applyVisibilityInheritance) — true 면 렌더러가 이 마운트 동안
+    /// 무조건 드로우를 건너뛴다. `initialVisible=false` 와 갈라 두는 이유는 소비 규약이 다르기
+    /// 때문이다: initialVisible 은 visible 스크립트의 **초기값(seed)** 일 뿐이라
+    /// `scriptVisible[uid] = evaluateBool(current:) ?? cur`(SceneRendererFrameEncoder)가 스크립트
+    /// 반환값으로 **덮어쓴다** — 자기 visible 스크립트를 가진 자식은 조상이 꺼져 있어도 다시 켜졌다.
+    /// 반면 조상 집합은 "정적 false + visible 스크립트 없음" 만 담으므로(같은 함수) 그 조상은 이
+    /// 마운트 동안 절대 켜지지 않는다 — 그래서 시드가 아니라 **하드 게이트**가 맞는 수단이다.
+    /// 스크립트는 계속 평가한다(shared 사이드이펙트 보존) — 게이트는 평가 **뒤** 드로우 스킵 지점이다.
+    /// 유저가 부모 콤보를 켜면 remount=전체 재파스라 이 플래그도 다음 파스에서 풀린다.
+    public var hiddenByAncestor: Bool = false
     /// 이미지 정렬(9점 앵커, WE IImageLayer.alignment): center(기본)/top/bottom/left/right/
     /// topleft/topright/bottomleft/bottomright. origin 이 사각형의 어느 앵커점인지 결정 — 렌더러
     /// quadVertices/litRect 가 앵커 기준으로 코너 산출. center 는 origin=중심(기존 동작, 무회귀).
@@ -221,6 +231,8 @@ public struct SceneParticle: Equatable {
     public var angles3D: Vec3 = Vec3(x: 0, y: 0, z: 0)
     public var parent: Int? = nil
     public var visible: Bool = true
+    /// 영구 비가시 조상 상속 하드 게이트 — SceneLayer.hiddenByAncestor 와 동일 규약(그 주석 참조).
+    public var hiddenByAncestor: Bool = false
     /// 마우스 시차(parallax) 가중치 — SceneLayer.parallaxDepth(69행)와 동형(F200). 기본 1(균일 시차,
     /// 파서가 값을 못 읽어도 기존 동작과 동일 — 무회귀). 코퍼스 실측: particle 오브젝트 53개 중 42개(79%) 보유.
     public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)
@@ -291,6 +303,8 @@ public struct SceneTextLayer: Equatable {
     /// visibleScript!=nil 인 오브젝트를 통과시켜도 이 필드가 없으면 스크립트 평가와 무관하게 항상
     /// 렌더링되던 결함(F219).
     public var initialVisible: Bool = true
+    /// 영구 비가시 조상 상속 하드 게이트 — SceneLayer.hiddenByAncestor 와 동일 규약(그 주석 참조).
+    public var hiddenByAncestor: Bool = false
     /// 프로퍼티 스크립트(origin/scale/alpha/color/angles/visible — 키 → JS 소스). SceneLayer.propertyScripts
     /// 와 동일 규약(parseLayer:731-739 형): per-frame 재평가는 재래스터가 아니라 인코드 시점 트랜스폼/
     /// 알파/가시성 적용(텍스트 '콘텐츠' 스크립트 위 script/scriptProps 와는 별개 채널).
@@ -1573,7 +1587,8 @@ extension SceneDocument {
 
     /// W3-①(C8): 2D 가시성 상속 전파 — 파스 말미에 비가시(정적 false, 스크립트 없음) 조상 집합을 만들고,
     /// 자기 visibleScript 가 없는 자식 레이어/텍스트/파티클을 initialVisible=false 로 마킹한다(**드롭
-    /// 아님** — JS thisScene.layers 인덱스 정합 보존, F219 와 동일 원칙). "정적 false 부모"뿐 아니라
+    /// 아님** — JS thisScene.layers 인덱스 정합 보존, F219 와 동일 원칙).
+    /// (스크립트를 **가진** 자식은 initialVisible 이 아니라 hiddenByAncestor 로 간다 — 아래 "해소" 참조.) "정적 false 부모"뿐 아니라
     /// user-조건 바인딩이 스냅샷 false 로 해소된 부모도 포함된다(실물 3299228616: 'Clock Layer 2' 그룹
     /// 은 clocklocation 콤보가 선택 안 된 값이라 resolveUserBindings 이후 평문 false 로 굳고,
     /// 그 자식 'number.am.pm' 은 **다른** 콤보(clock24hformat)에 바인딩돼 있어 자기 자신은 true 로
@@ -1591,6 +1606,18 @@ extension SceneDocument {
     /// 3D 는 이미 Scene3DMath.worldMatrix 가 조상 AND 로 처리하므로 손대지 않는다(camera3D!=nil 스킵).
     /// 잔여 갭(의도적 무변경): 정적 false 부모 + **스크립트** 자식 조합의 런타임(초-프레임) 재평가는
     /// 후속 — 여기는 파스-타임 정적 스냅샷만 다룬다.
+    /// **해소(2026-08-17)**: 위 보류의 *근거* 는 지금도 맞다 — `initialVisible` 은 시드일 뿐이라
+    /// 스크립트가 있는 자식에게 그것만 놓으면 `evaluateBool(current:) ?? cur`(프레임 인코더)가
+    /// 반환값으로 덮어써 조상 AND 가 사라진다. 그래서 **파스-타임 마킹을 스크립트 자식에게 확대하는
+    /// 것은 여전히 틀린 수단**이고 그 판단은 뒤집지 않는다. 뒤집는 것은 *결론* 이다: 조상 집합은
+    /// 정의상 "정적 false + visible 스크립트 없음" 뿐이라 그 조상은 이 마운트 동안 절대 켜지지 않고,
+    /// 따라서 자식은 자기 스크립트가 무엇을 반환하든 그려지면 안 된다(WE 계층 AND). 시드가 아니라
+    /// 하드 게이트가 맞는 수단이며 그것이 `hiddenByAncestor` 다 — 렌더러가 **스크립트를 다 평가한 뒤**
+    /// 드로우만 스킵하므로 F219 가 살려 둔 컨트롤러 사이드이펙트(실물 3394601417 'bt')도 그대로 돈다.
+    /// 코퍼스 도달(2D 씬, 자기 visible 스크립트 보유 + 비가시 조상): **116오브젝트 / 17씬**
+    /// (이미지 92·텍스트 24, 그중 `update()` 보유 86 = 종전 규약에서 스크립트가 되켜던 것들).
+    /// 진짜 잔여 갭은 이제 하나다: **조상 자신이 visible 스크립트를 가진 경우**(런타임 조상 평가)는
+    /// 여전히 미구현 — invisible 집합이 그런 조상을 애초에 담지 않는다.
     /// 라이브 유저 프로퍼티 토글은 이 마킹을 "고정"시키지 않는다: LibraryViewModel.setProperty →
     /// reapplyIfCurrent → onApply → SceneRenderer.mount 가 매번 SceneDocument.parse 를 새 userProps
     /// 스냅샷으로 재실행하므로(remount = 전체 재파스), 부모 콤보가 켜지면 이 함수도 다음 파스에서
@@ -1627,20 +1654,20 @@ extension SceneDocument {
             return hasInvisibleAncestor(parentOf[id], depth: depth + 1)
         }
         for i in layers.indices {
-            guard layers[i].propertyScripts["visible"] == nil,
-                  !imageLayerCompositeIDs.contains(layers[i].id),
+            guard !imageLayerCompositeIDs.contains(layers[i].id),
                   hasInvisibleAncestor(layers[i].parent ?? layers[i].visibilityParent) else { continue }
-            layers[i].initialVisible = false
+            layers[i].hiddenByAncestor = true
+            if layers[i].propertyScripts["visible"] == nil { layers[i].initialVisible = false }
         }
         for i in texts.indices {
-            guard texts[i].propertyScripts["visible"] == nil,
-                  hasInvisibleAncestor(texts[i].parent) else { continue }
-            texts[i].initialVisible = false
+            guard hasInvisibleAncestor(texts[i].parent) else { continue }
+            texts[i].hiddenByAncestor = true
+            if texts[i].propertyScripts["visible"] == nil { texts[i].initialVisible = false }
         }
         for i in particles.indices {
-            guard particles[i].visibleScript == nil,
-                  hasInvisibleAncestor(particles[i].parent) else { continue }
-            particles[i].visible = false
+            guard hasInvisibleAncestor(particles[i].parent) else { continue }
+            particles[i].hiddenByAncestor = true
+            if particles[i].visibleScript == nil { particles[i].visible = false }
         }
     }
 

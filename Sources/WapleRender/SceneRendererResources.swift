@@ -441,6 +441,7 @@ extension SceneRenderer {
                                 animLayerScripts: animLayerScripts,
                                 materialScripts: materialScripts,
                                 initialVisible: layer.initialVisible,
+                                hiddenByAncestor: layer.hiddenByAncestor,
                                 colorBlendMode: layer.colorBlendMode, frames: frames,
                                 isLit: layerLit,
                                 pbrMaterial: PBRMaterialUniforms(
@@ -1340,6 +1341,7 @@ extension SceneRenderer {
             // E1(④): 2D 정사영 경로 visible — 정적 초기값 + per-frame 재평가용 스크립트 엔진(F199 캡처
             // 소비). 종전엔 어디서도 읽지 않아 저작자가 숨긴 파티클 시스템이 항상 렌더됐다.
             g.initialVisible = sp.visible
+            g.hiddenByAncestor = sp.hiddenByAncestor
             if let src = sp.visibleScript {
                 // detachedLayer: 파티클은 thisScene.layers 디스크립터에 없다 — 엔진 전용 thisLayer 를
                 // 줘야 `thisLayer.pause()`(WE IParticleSystem) 상태가 이 시스템에만 묶인다.
@@ -1642,7 +1644,8 @@ extension SceneRenderer {
                             tint: SIMD4(t.color.x, t.color.y, t.color.z, t.alpha),
                             order: t.order, engine: engine, lastText: initial,
                             fontData: fontData, systemFontName: isSystem ? t.font : nil, def: t,
-                            uid: uid, initialVisible: t.initialVisible, propScripts: propScripts)
+                            uid: uid, initialVisible: t.initialVisible,
+                            hiddenByAncestor: t.hiddenByAncestor, propScripts: propScripts)
             rasterize(&g, device: device)
             // F741(S-13): 텍스트 effects[](F693 파스·보존)를 래스터 텍스처에 적용할 GPU 체인 —
             // 레이어와 동일 빌더(buildEffectChain). texRes 는 초기 래스터 dims 로 베이크(문자열이

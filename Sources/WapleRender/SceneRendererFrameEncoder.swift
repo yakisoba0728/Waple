@@ -1256,6 +1256,10 @@ extension SceneRenderer {
         }
         // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(레이어는 유지 — 런타임 토글 가능).
         if !(scriptVisible[layer.uid] ?? layer.initialVisible) { return }
+        // 영구 비가시 조상 상속(SceneLayer.hiddenByAncestor)은 스크립트 반환값보다 우선한다 — 조상이
+        // 정적 false + 스크립트 없음이라 이 마운트 동안 절대 켜지지 않기 때문이다. 위 스크립트 평가를
+        // **먼저** 끝낸 뒤 여기서 스킵하므로 컨트롤러 스크립트의 shared 사이드이펙트는 그대로 돈다.
+        if layer.hiddenByAncestor { return }
         var vertexCount = 6
         // 퍼펫: per-frame CPU 스키닝 → 메시 삼각형 리스트로 쿼드 대체.
         if let pm = layer.puppet, let def = layer.def, let device {
@@ -1554,6 +1558,7 @@ extension SceneRenderer {
             angles: SIMD3(0, 0, angle))
         // visible 스크립트 평가값(또는 정적 초기값)이 거짓 → draw 스킵(GPULayer 와 동일 규약).
         if !(scriptTextVisible[t.uid] ?? t.initialVisible) { return }
+        if t.hiddenByAncestor { return }   // 조상 상속 하드 게이트(encodeLayer 와 동일 규약)
         guard let vbuf else { return }
         var depth = SIMD2<Float>(1, 1)
         // C⑥: colorBlendMode — 이미지 레이어(encodeLayer)와 동일 f_blend 경로 재사용. 스냅샷 없으면
@@ -1590,7 +1595,8 @@ extension SceneRenderer {
     /// 케이스와 동일 규약 — 이전 평가값을 current 로 전달, 스크립트 없으면 정적 초기값). 반환값이 draw 게이트.
     func particleScriptVisible(_ idx: Int, time: Float) -> Bool {
         guard idx < particleSystems.count, let engine = particleSystems[idx].visibleEngine else {
-            return idx < particleSystems.count ? particleSystems[idx].initialVisible : true
+            guard idx < particleSystems.count else { return true }
+            return particleSystems[idx].initialVisible && !particleSystems[idx].hiddenByAncestor
         }
         engine.setRuntime(Double(time))
         let cur = scriptParticleVisible[idx] ?? particleSystems[idx].initialVisible
@@ -1600,7 +1606,9 @@ extension SceneRenderer {
         // 끈다(실물 3690417937 bubbleclick: `return value` 로 visible 은 늘 true 인 채 클릭 여부로
         // play/pause 만 토글한다). 스텝 직전에 sim 으로 옮겨진다 — 호출부 참조.
         if let playing = engine.layerPlaying { scriptParticleEmissionPaused[idx] = !playing }
-        return v
+        // 조상 상속 하드 게이트(encodeLayer 와 동일 규약) — 스크립트 평가와 play/pause 반영을 모두
+        // 끝낸 뒤에 가린다(방출 상태·사이드이펙트는 보존, 드로우만 스킵).
+        return v && !particleSystems[idx].hiddenByAncestor
     }
 
     /// 파티클 시스템 1개의 스냅샷을 빌보드 쿼드로 드로우(additive/translucent).

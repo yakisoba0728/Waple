@@ -339,4 +339,90 @@ final class SceneComboVisibleTests: XCTestCase {
         XCTAssertTrue(quad.initialVisible, "루트 쿼드는 다른 서브트리의 비가시와 무관")
         XCTAssertFalse(try XCTUnwrap(doc.layers.first { $0.id == 2 }).initialVisible, "센티넬: 패스가 실제로 돌았다")
     }
+
+    /// C8 잔여 갭 해소: 자기 `visible` **스크립트**를 가진 자식은 종전에 상속에서 면제됐다.
+    /// 그 보류의 근거(스크립트가 런타임에 가시성을 소유한다)는 맞지만, 그래서 필요한 수단은
+    /// `initialVisible` 시드가 아니라 하드 게이트다 — 시드는 프레임 인코더의
+    /// `evaluateBool(current:) ?? cur` 가 스크립트 반환값으로 덮어쓴다.
+    /// 조상 집합은 "정적 false + 스크립트 없음" 뿐이라 이 마운트 동안 절대 켜지지 않으므로,
+    /// 자식은 스크립트가 무엇을 반환하든 그려지면 안 된다(WE 계층 AND).
+    /// 코퍼스 도달 116오브젝트 / 17씬(2D).
+    func testScriptVisibleChildIsHardHiddenByInvisibleAncestor() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"offGroup","visible":{"user":{"condition":"2","name":"clocklocation"},"value":false}},
+           {"id":2,"name":"scriptChild","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10",
+            "visible":{"value":true,"script":"'use strict';\\nexport function update(v) { return true; }"}},
+           {"id":3,"name":"scriptText","text":"hi","parent":1,"origin":"50 50 0",
+            "visible":{"value":true,"script":"'use strict';\\nexport function update(v) { return true; }"}},
+           {"id":4,"name":"scriptParticle","particle":"particles/p.json","parent":1,
+            "visible":{"value":true,"script":"'use strict';\\nexport function update(v) { return true; }"}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material),
+                         ("particles/p.json", particleDef), ("materials/pm.json", particleMaterial)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let child = try XCTUnwrap(doc.layers.first { $0.name == "scriptChild" }, "드롭 금지 — JS 인덱스 정합")
+        XCTAssertTrue(child.hiddenByAncestor, "비가시 조상 아래의 스크립트 자식은 하드 게이트로 가려야")
+        XCTAssertTrue(child.initialVisible,
+                      "시드는 건드리지 않는다 — 스크립트가 어차피 덮어쓰므로 시드로는 못 막는다(수단 구분)")
+        XCTAssertNotNil(child.propertyScripts["visible"], "스크립트는 그대로 보존(사이드이펙트 평가 유지)")
+        let text = try XCTUnwrap(doc.texts.first { $0.name == "scriptText" })
+        XCTAssertTrue(text.hiddenByAncestor)
+        let particle = try XCTUnwrap(doc.particles.first { $0.id == 4 })
+        XCTAssertTrue(particle.hiddenByAncestor)
+        XCTAssertTrue(particle.visible, "파티클도 시드는 유지 — 게이트만 선다")
+    }
+
+    /// 대조군: 조상이 켜져 있으면 스크립트 자식에 하드 게이트가 서면 안 된다(무회귀).
+    func testScriptVisibleChildNotGatedUnderVisibleAncestor() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"onGroup","visible":{"user":{"condition":"1","name":"clocklocation"},"value":true}},
+           {"id":2,"name":"scriptChild","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10",
+            "visible":{"value":true,"script":"'use strict';\\nexport function update(v) { return true; }"}}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let child = try XCTUnwrap(doc.layers.first { $0.name == "scriptChild" })
+        XCTAssertFalse(child.hiddenByAncestor)
+        XCTAssertTrue(child.initialVisible)
+    }
+
+    /// 조상이 **자기 visible 스크립트를 가지면** 하드 게이트를 세우지 않는다 — 그 조상은 런타임에
+    /// 켜질 수 있어 "이 마운트 동안 영구 비가시" 전제가 깨지기 때문이다(남은 잔여 갭의 경계 고정).
+    func testScriptedAncestorDoesNotHardHideChild() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"scriptedGroup",
+            "visible":{"value":false,"script":"'use strict';\\nexport function update(v) { return true; }"}},
+           {"id":2,"name":"child","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10"}]}
+        """
+        let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let child = try XCTUnwrap(doc.layers.first { $0.name == "child" })
+        XCTAssertFalse(child.hiddenByAncestor, "스크립트 보유 조상은 영구 비가시가 아니다")
+        XCTAssertTrue(child.initialVisible)
+    }
+
+    /// composelayer 소스 카브아웃은 하드 게이트에도 그대로 적용돼야 한다(오프스크린 합성 재료).
+    func testCompositeSourceLayerNotHardHidden() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+         "objects":[
+           {"id":1,"name":"offGroup","visible":false},
+           {"id":2,"name":"compositeSrc","image":"models/x.json","parent":1,"origin":"50 50 0","size":"10 10",
+            "visible":{"value":true,"script":"'use strict';\\nexport function update(v) { return true; }"}}]}
+        """
+        let composeRef = #"{"passes":[{"textures":["_rt_imageLayerComposite_2"]}]}"#
+        let p = try pkg([
+            ("scene.json", scene), ("models/x.json", model), ("materials/m.json", material),
+            ("effects/composelayer/effect.json", composeRef),
+        ])
+        let doc = try SceneDocument.parse(package: p, userProps: [:])
+        let child = try XCTUnwrap(doc.layers.first { $0.name == "compositeSrc" })
+        XCTAssertFalse(child.hiddenByAncestor, "합성 소스는 부모 비가시에도 하드 게이트 대상이 아니다")
+    }
 }
