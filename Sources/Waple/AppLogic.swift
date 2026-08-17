@@ -257,11 +257,17 @@ enum StillDesktopSync {
 /// 여부를 전혀 세지 않고(try? 로 폐기) 무조건 성공 알림을 띄웠다 — 일부·전체 실패해도 사용자는
 /// 거짓 성공을 통지받았다. 실제 성공 화면 수를 반영해 성공/부분성공/전체실패를 구분한다.
 enum StillWallpaperNotice {
+    /// 반환값은 **이미 현지화된** 문자열이다. 싱크(StatusBanner)가 미현지화 `String` 을 받는
+    /// `Text` 오버로드라 뷰까지 나르면 조용히 번역이 사라진다 — 그래서 생산 지점에서 완성한다
+    /// (청사진 §5.0 의 권장안 (a)). 리터럴이 `NSLocalizedString(` 안에 남아 오라클에도 걸린다.
     static func message(successCount: Int, totalScreens: Int) -> String {
         switch successCount {
-        case 0: return "정지 배경 설정에 실패했습니다"
-        case totalScreens: return "정지 배경으로 설정했습니다"
-        default: return "일부 화면만 정지 배경으로 설정했습니다(\(successCount)/\(totalScreens))"
+        case 0: return NSLocalizedString("정지 배경 설정에 실패했습니다", comment: "정지 배경 전량 실패")
+        case totalScreens: return NSLocalizedString("정지 배경으로 설정했습니다", comment: "정지 배경 성공")
+        default:
+            return String(format: NSLocalizedString("일부 화면만 정지 배경으로 설정했습니다(%lld/%lld)",
+                                                    comment: "정지 배경 부분 성공"),
+                          successCount, totalScreens)
         }
     }
 }
@@ -387,23 +393,34 @@ enum PropertyControl {
 // MARK: - 설정 창 표시 카탈로그 (SP5′)
 
 /// 설정 창의 스텝 목록·상태 라벨 — 순수. 값은 기존 트레이 메뉴와 동일해야 저장값이 호환된다.
+/// ## 라벨은 여기서 이미 현지화해 내보낸다
+///
+/// 호출부가 `Text($0.label)` 로 받는데 그 오버로드는 `String` 이라 번역하지 않는다
+/// (청사진 §5.0). 싱크 타입을 `LocalizedStringKey` 로 바꾸는 대안은 리터럴이 대입문이
+/// 되어 어떤 스캔 패턴에도 안 걸리므로 택하지 않았다 — 런타임 버그 하나를 고치면서
+/// 오라클 사각지대를 새로 파는 셈이다. 생산 지점에서 `NSLocalizedString` 으로 완성하면
+/// 리터럴이 패턴 1 에 그대로 잡힌다.
+///
+/// `static let` 이 아니라 계산 프로퍼티인 것은 **언어가 프로세스 수명 중에 바뀔 수 있기**
+/// 때문이다. `let` 이면 앱 시작 시점의 번역에 고정된다(`Motion.fade` 가 `var` 인 것과 같은 이유).
 enum SettingsPresentation {
-    static let volumeSteps: [(label: String, value: Float)] = [
-        ("음소거", 0), ("25%", 0.25), ("50%", 0.5), ("75%", 0.75), ("100%", 1),
-    ]
+    static var volumeSteps: [(label: String, value: Float)] {
+        [(NSLocalizedString("음소거", comment: "음량 0%"), 0),
+         ("25%", 0.25), ("50%", 0.5), ("75%", 0.75), ("100%", 1)]
+    }
     static let rateSteps: [(label: String, value: Float)] = [
         ("0.5×", 0.5), ("1×", 1), ("1.5×", 1.5), ("2×", 2),
     ]
     static let playlistIntervalMinutes = [5, 15, 30, 60]
 
     /// 가림 정지 옵션(raw: -1=사용 안 함, 0=창 뜨면 즉시, 0.3/0.5/0.8=커버 비율) — 트레이 서브메뉴에서 이관.
-    static let occlusionOptions: [(label: String, raw: Double)] = [
-        ("사용 안 함", -1),
-        ("창이 뜨면 즉시", 0),
-        ("30% 이상 가려지면", 0.30),
-        ("50% 이상 가려지면", 0.50),
-        ("80% 이상 가려지면", 0.80),
-    ]
+    static var occlusionOptions: [(label: String, raw: Double)] {
+        [(NSLocalizedString("사용 안 함", comment: "옵션 끔 — 가림 정지·화면보호기 공용"), -1),
+         (NSLocalizedString("창이 뜨면 즉시", comment: "가림 정지 임계값"), 0),
+         (NSLocalizedString("30% 이상 가려지면", comment: "가림 정지 임계값"), 0.30),
+         (NSLocalizedString("50% 이상 가려지면", comment: "가림 정지 임계값"), 0.50),
+         (NSLocalizedString("80% 이상 가려지면", comment: "가림 정지 임계값"), 0.80)]
+    }
 
     /// 영속 상태(enabled+threshold) → Picker 선택 raw 역산. 미일치는 방어 폴백(-1).
     static func currentOcclusionRaw(enabled: Bool, threshold: Double) -> Double {
@@ -413,16 +430,25 @@ enum SettingsPresentation {
     }
 
     /// 화면보호기 행 상태. bundled = 앱 번들에 Waple.saver 존재(패키징 앱에서만 true).
+    /// "사용 안 함" 은 가림 정지 옵션과 이 자리가 **같은 키를 공유**한다. 영어 한 줄로
+    /// 둘 다 성립하는 "Off" 를 골랐다 — 문맥별로 갈라 쓰려고 한국어 원문을 손보면
+    /// 그건 영어를 위해 한국어 UI 를 바꾸는 것이라 하지 않는다.
     static func saverStatus(bundled: Bool, selected: Bool) -> (label: String, canToggle: Bool) {
         guard bundled else {
-            return ("패키징된 앱에서만 사용 가능 — scripts/package-app.sh", false)
+            return (NSLocalizedString("패키징된 앱에서만 사용 가능 — scripts/package-app.sh",
+                                      comment: "화면보호기 — 개발 실행"), false)
         }
-        return (selected ? "화면보호기로 사용 중" : "사용 안 함", true)
+        return (selected ? NSLocalizedString("화면보호기로 사용 중", comment: "화면보호기 선택됨")
+                         : NSLocalizedString("사용 안 함", comment: "옵션 끔 — 가림 정지·화면보호기 공용"),
+                true)
     }
 
+    /// 현재 값이 경로라 눈에 잘 띄지 않았을 뿐 같은 병이었다 — 보간이 끼므로 포맷 지정자를 명시한다.
     static func ffmpegStatus(available: Bool, path: String?) -> String {
-        available ? "사용 가능 — \(path ?? "")"
-                  : "미설치 — mkv/webm 동영상 변환에 필요합니다 (brew install ffmpeg)"
+        available
+            ? String(format: NSLocalizedString("사용 가능 — %@", comment: "ffmpeg 경로"), path ?? "")
+            : NSLocalizedString("미설치 — mkv/webm 동영상 변환에 필요합니다 (brew install ffmpeg)",
+                                comment: "ffmpeg 미설치")
     }
 }
 
@@ -437,10 +463,12 @@ enum StatusIconState {
     }
 
     /// 툴팁: 적용된 배경 제목(없으면 앱 이름) + 상태 문구(정상 재생 중이면 덧붙이지 않음).
+    /// 상태바 툴팁은 AppKit 경로(`NSStatusBarButton.toolTip`)라 자동 해석이 없다 —
+    /// 배경 제목은 사용자 데이터라 그대로 두고 상태 문구만 감싼다.
     static func tooltip(appliedTitle: String?, isPaused: Bool, hasError: Bool) -> String {
         var parts = [appliedTitle ?? "Waple"]
-        if hasError { parts.append("적용 실패") }
-        else if isPaused { parts.append("일시정지됨") }
+        if hasError { parts.append(NSLocalizedString("적용 실패", comment: "상태바 툴팁 — 적용 실패")) }
+        else if isPaused { parts.append(NSLocalizedString("일시정지됨", comment: "상태바 툴팁 — 정지")) }
         return parts.joined(separator: " · ")
     }
 }
