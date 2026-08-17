@@ -52,16 +52,17 @@ final class LibraryViewModel: ObservableObject {
 
     /// 사용자에게 보여줄 메시지를 AppDelegate 로 전달한다.
     ///
-    /// **이름은 `onError` 지만 실제로는 알림 채널이다.** 싱크는 상태 배너이고 배너는 중립
-    /// 스타일(info 글리프)이라, 성공·부분 실패 안내도 같은 통로로 나간다. 이름을 고치려면
-    /// 배선하는 쪽(AppDelegate)을 만져야 하는데 그 파일은 이 단위의 소유가 아니다 —
-    /// 마감 단계에서 함께 정리할 것.
+    /// **오류 전용이 아니라 알림 채널이다.** 싱크는 상태 배너이고 배너는 중립 스타일
+    /// (info 글리프)이라, 성공("배경 3개를 가져왔습니다")·부분 실패 안내도 같은 통로로 나간다.
+    /// 종전 이름은 `onError` 였고 그 사실과 어긋나 있었다 — 이름만 보고 "오류일 때만 부른다"
+    /// 고 읽으면 성공 통지용 채널을 새로 파게 된다. 이름을 고치려면 배선하는 AppDelegate 를
+    /// 만져야 해서 Unit B 가 마감(Unit E)으로 넘겼고, 2026-08-17 여기서 닫았다.
     ///
     /// **넘어가는 값은 이미 현지화가 끝난 문자열이다.** 싱크가 받는 타입이 String 이라
     /// 거기서는 자동 번역이 걸리지 않는다 — 그 자리에 도착한 뒤에는 손쓸 방법이 없으므로
     /// 만드는 쪽에서 완성한다. 리터럴이 NSLocalizedString 안에 남아 현지화 커버리지 오라클에
     /// 그대로 잡히는 것도 이 방향을 고른 이유다(청사진 §5.0 의 권장안 (a)).
-    var onError: ((String) -> Void)?
+    var onNotify: ((String) -> Void)?
 
     private let store: LibraryStore
     let playlist: PlaylistStore
@@ -241,13 +242,13 @@ final class LibraryViewModel: ObservableObject {
     /// 것처럼 보인다.
     private func reportImport(imported: Int, attempted: Int, emptyMessage: String) {
         if attempted == 0 || (imported == 0 && attempted > 0) {
-            onError?(emptyMessage)
+            onNotify?(emptyMessage)
         } else if imported < attempted {
-            onError?(String(format: NSLocalizedString("%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다.",
+            onNotify?(String(format: NSLocalizedString("%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다.",
                                                       comment: "부분 임포트 실패"),
                             attempted, imported))
         } else {
-            onError?(String(format: NSLocalizedString("배경 %lld개를 가져왔습니다.", comment: "임포트 완료"),
+            onNotify?(String(format: NSLocalizedString("배경 %lld개를 가져왔습니다.", comment: "임포트 완료"),
                             imported))
         }
     }
@@ -327,13 +328,13 @@ final class LibraryViewModel: ObservableObject {
                     // F583: 준비(관리 폴더에 복사 완료) 후 등록이 실패하면 부분 산출물이 고아로 남는다 —
                     // 이 임포트를 위해 만든 폴더이므로 정리한다(videoPrepare 계약 주석 참조).
                     if let folder { try? FileManager.default.removeItem(at: folder) }
-                    self.onError?(String(format: NSLocalizedString("동영상 가져오기에 실패했습니다: %@",
+                    self.onNotify?(String(format: NSLocalizedString("동영상 가져오기에 실패했습니다: %@",
                                                                    comment: "동영상 임포트 실패"),
                                          url.lastPathComponent))
                     return
                 }
                 self.entries = store.entries
-                self.onError?(String(format: NSLocalizedString("배경 %lld개를 가져왔습니다.", comment: "임포트 완료"), 1))
+                self.onNotify?(String(format: NSLocalizedString("배경 %lld개를 가져왔습니다.", comment: "임포트 완료"), 1))
             }
         }
     }
@@ -348,7 +349,7 @@ final class LibraryViewModel: ObservableObject {
     @discardableResult
     func importDownloaded(_ folderURL: URL) -> LibraryEntry? {
         guard let entry = try? store.importFolder(folderURL) else {
-            onError?(String(format: NSLocalizedString("다운로드한 폴더를 가져오지 못했습니다: %@",
+            onNotify?(String(format: NSLocalizedString("다운로드한 폴더를 가져오지 못했습니다: %@",
                                                       comment: "워크샵 다운로드분 임포트 실패"),
                             folderURL.lastPathComponent))
             return nil
@@ -361,7 +362,7 @@ final class LibraryViewModel: ObservableObject {
     @discardableResult
     func apply(_ entry: LibraryEntry) -> Bool {
         guard let folder = store.resolveFolderURL(for: entry) else {
-            onError?(String(format: NSLocalizedString("‘%@’의 폴더를 찾을 수 없습니다. 다시 가져오세요.",
+            onNotify?(String(format: NSLocalizedString("‘%@’의 폴더를 찾을 수 없습니다. 다시 가져오세요.",
                                                       comment: "적용 실패 — 폴더 해석 불가"),
                             entry.title))
             return false
@@ -369,7 +370,7 @@ final class LibraryViewModel: ObservableObject {
         // 적용(마운트) 성공이 확인된 뒤에만 선택을 영속·강조한다. 실패 시 기존 선택을 유지해
         // 강조/저장된 선택이 항상 실제로 표시되는 배경과 일치하도록 한다.
         guard onApply?(folder) == true else {
-            onError?(String(format: NSLocalizedString("‘%@’을(를) 적용하지 못했습니다.",
+            onNotify?(String(format: NSLocalizedString("‘%@’을(를) 적용하지 못했습니다.",
                                                       comment: "적용 실패 — 마운트 거부"),
                             entry.title))
             return false

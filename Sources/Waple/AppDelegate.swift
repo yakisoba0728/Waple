@@ -162,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu = menu
 
         libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) ?? false }
-        libraryVM.onError = { [weak self] message in self?.notify(message) }
+        libraryVM.onNotify = { [weak self] message in self?.notify(message) }
         libraryVM.screensProvider = { [weak self] in
             self?.desktopController.screenViews.enumerated().map { i, sv in
                 (key: sv.screenKey, name: NSScreen.screens.indices.contains(i)

@@ -4,8 +4,8 @@ import WapleCore
 import WapleLibrary
 
 /// 감사 V06 — LibraryViewModel.apply(_:) 3분기 커버리지(Sources/Waple/LibraryViewModel.swift:279-293).
-/// ① 북마크 해석 실패 → onError + 미적용(마운트 미시도·선택 미변경)
-/// ② onApply(마운트) false → onError + 기존 선택 유지(영속 없음)
+/// ① 북마크 해석 실패 → onNotify + 미적용(마운트 미시도·선택 미변경)
+/// ② onApply(마운트) false → onNotify + 기존 선택 유지(영속 없음)
 /// ③ 성공 → store.select 영속 + selectedId 갱신
 final class LibraryApplyBranchTests: XCTestCase {
 
@@ -45,7 +45,7 @@ final class LibraryApplyBranchTests: XCTestCase {
 
     // MARK: - ① 북마크 해석 실패
 
-    /// 깨진 북마크 → 폴더 해석 실패: onError 로 안내하고 마운트(onApply)는 시도하지 않으며
+    /// 깨진 북마크 → 폴더 해석 실패: onNotify 로 안내하고 마운트(onApply)는 시도하지 않으며
     /// 선택도 바뀌지 않아야 한다.
     func testApplyUnresolvableBookmarkReportsErrorWithoutMounting() {
         let dir = tempDir()
@@ -54,7 +54,7 @@ final class LibraryApplyBranchTests: XCTestCase {
                                  fileName: nil, previewName: nil, bookmark: Data("garbage".utf8))
         var errors: [String] = []
         var mountAttempts = 0
-        vm.onError = { errors.append($0) }
+        vm.onNotify = { errors.append($0) }
         vm.onApply = { _ in mountAttempts += 1; return true }
 
         XCTAssertFalse(vm.apply(ghost))
@@ -67,7 +67,7 @@ final class LibraryApplyBranchTests: XCTestCase {
 
     // MARK: - ② 마운트(onApply) 실패
 
-    /// 마운트 실패 → onError + 기존 선택 유지: 강조/저장된 선택이 항상 실제 표시되는 배경과
+    /// 마운트 실패 → onNotify + 기존 선택 유지: 강조/저장된 선택이 항상 실제 표시되는 배경과
     /// 일치하도록, 실패한 후보로 선택을 옮기지 않는다(소스 주석의 계약).
     func testApplyMountFailureKeepsExistingSelection() throws {
         let dir = tempDir()
@@ -78,7 +78,7 @@ final class LibraryApplyBranchTests: XCTestCase {
         vm.selectedId = "wp0"
         store.select("wp0")
         var errors: [String] = []
-        vm.onError = { errors.append($0) }
+        vm.onNotify = { errors.append($0) }
         vm.onApply = { _ in false }
 
         XCTAssertFalse(vm.apply(entry))
@@ -102,12 +102,12 @@ final class LibraryApplyBranchTests: XCTestCase {
         var mounted: [URL] = []
         var errors: [String] = []
         vm.onApply = { url in mounted.append(url); return true }
-        vm.onError = { errors.append($0) }
+        vm.onNotify = { errors.append($0) }
 
         XCTAssertTrue(vm.apply(entry))
         XCTAssertEqual(mounted.map { $0.standardizedFileURL.path },
                        [folder.standardizedFileURL.path], "북마크 해석된 원본 폴더로 마운트 요청")
-        XCTAssertTrue(errors.isEmpty, "성공 경로는 onError 를 타지 않는다")
+        XCTAssertTrue(errors.isEmpty, "성공 경로는 onNotify 를 타지 않는다")
         XCTAssertEqual(vm.selectedId, "wp1", "뷰모델 선택 갱신")
         XCTAssertEqual(LibraryStore(baseDirectory: dir).selectedId, "wp1",
                        "store.select 가 인덱스에 영속돼야 한다(재로드 검증)")

@@ -291,13 +291,13 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertEqual(vm.entries.map(\.title), ["Stub"])
     }
 
-    /// A2 실패 경로: 해제 불가 zip 도 메인 홉에서 onError 를 태운다(무응답 없이 오류 전달).
+    /// A2 실패 경로: 해제 불가 zip 도 메인 홉에서 onNotify 를 태운다(무응답 없이 오류 전달).
     func testImportZipExtractionFailureReportsError() {
         let dir = tempDir()
         let vm = makeVM(dir: dir)
         let exp = expectation(description: "오류 전달(메인 홉)")
         var message: String?
-        vm.onError = { msg in message = msg; exp.fulfill() }
+        vm.onNotify = { msg in message = msg; exp.fulfill() }
         vm.importZip(URL(fileURLWithPath: "/tmp/waple-missing-\(UUID().uuidString).zip"))
         wait(for: [exp], timeout: 10)
         XCTAssertNotNil(message)
@@ -399,7 +399,7 @@ final class LibraryViewModelTests: XCTestCase {
     private func waitForNotice(_ vm: LibraryViewModel, _ act: () -> Void) -> String? {
         let exp = expectation(description: "임포트 안내(메인 홉)")
         var message: String?
-        vm.onError = { msg in
+        vm.onNotify = { msg in
             guard message == nil else { return }
             message = msg
             exp.fulfill()

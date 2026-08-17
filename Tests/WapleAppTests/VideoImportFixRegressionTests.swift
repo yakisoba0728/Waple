@@ -32,7 +32,7 @@ final class VideoImportFixRegressionTests: XCTestCase {
         XCTAssertTrue(leftovers.isEmpty, "F583: 실패 시 만든 폴더를 정리해야 한다 — \(leftovers)")
     }
 
-    /// prepare 성공 후 스토어 등록(importFolder)이 실패하면 준비 폴더를 정리하고 onError 를 태운다.
+    /// prepare 성공 후 스토어 등록(importFolder)이 실패하면 준비 폴더를 정리하고 onNotify 를 태운다.
     func testImportVideoFileFailureCleansPreparedFolder() throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -43,7 +43,7 @@ final class VideoImportFixRegressionTests: XCTestCase {
         let vm = makeVM(dir: dir)
         vm.videoPrepare = { _ in prepared }
         let exp = expectation(description: "등록 실패 오류 전달(메인 홉)")
-        vm.onError = { _ in exp.fulfill() }
+        vm.onNotify = { _ in exp.fulfill() }
         vm.importVideoFile(URL(fileURLWithPath: "/tmp/source.mp4"))
         wait(for: [exp], timeout: 10)
         XCTAssertTrue(vm.entries.isEmpty)
@@ -76,7 +76,7 @@ final class VideoImportFixRegressionTests: XCTestCase {
         XCTAssertEqual(vm.entries.map(\.id), ["wp1"])
     }
 
-    /// 가져올 배경이 없는 폴더도 메인 홉에서 onError 를 태운다(무응답 없이 오류 전달).
+    /// 가져올 배경이 없는 폴더도 메인 홉에서 onNotify 를 태운다(무응답 없이 오류 전달).
     func testImportParentEmptyReportsError() {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -85,7 +85,7 @@ final class VideoImportFixRegressionTests: XCTestCase {
         let vm = makeVM(dir: dir)
         let exp = expectation(description: "오류 전달(메인 홉)")
         var message: String?
-        vm.onError = { msg in message = msg; exp.fulfill() }
+        vm.onNotify = { msg in message = msg; exp.fulfill() }
         vm.importParent(empty)
         wait(for: [exp], timeout: 10)
         XCTAssertNotNil(message)
