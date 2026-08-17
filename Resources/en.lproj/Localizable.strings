@@ -5,63 +5,126 @@
  * NSLocalizedString 으로 감싼 자리만 해당).
  *
  * 항목을 추가·삭제하면 LocalizationCoverageTests 가 소스와 이 파일의 차이를 잡는다.
+ *
+ * 2026-08-17(Unit E): UI 전면 개편 동안 병렬 머지 충돌을 막으려고 단위별로 나눠 두었던
+ * 마커 구역(A·S·B·C·D·E)을 걷고 **한 블록으로 합쳤다.** 구역이 필요했던 이유는 셋이
+ * 동시에 파일 끝에 추가하면 전부 같은 줄에 붙어 순차 머지가 전부 충돌하기 때문인데,
+ * 합류가 끝난 지금은 그 이유가 없어졌고 구역이 남아 있으면 같은 키가 두 구역에 생긴다
+ * (실제로 "평점"·"지원 예정" 이 각각 두 벌이었다 — 여기서 합치며 제거했다).
+ *
+ * 정렬은 **키의 UTF-8 바이트 순**이다(ASCII → 한글). 새 항목은 제자리에 넣어라.
+ * 보간이 들어가는 키는 아래 별도 블록에 모은다 — 포맷 지정자는 번역할 때 개수·순서·
+ * 종류를 그대로 지켜야 하고, 섞여 있으면 그 사실이 눈에 안 띈다.
  */
 
 "(없음)" = "(none)";
+"(자동 탐지)" = "(auto-detected)";
+"30 fps (절전)" = "30 fps (power saving)";
+"30% 이상 가려지면" = "When at least 30% is covered";
+"50% 이상 가려지면" = "When at least 50% is covered";
+"60 fps (부드러움)" = "60 fps (smooth)";
+"80% 이상 가려지면" = "When at least 80% is covered";
 "API 키 발급: steamcommunity.com/dev/apikey" = "Get an API key: steamcommunity.com/dev/apikey";
 "API 키 변경" = "Change API key";
 "API 키 붙여넣기" = "Paste API key";
+"API 키를 저장하지 못했습니다 — Keychain 이 기존 항목 삭제를 거부했습니다(권한/서명 변경 가능성). macOS '키체인 접근' 앱에서 'kr.yaki.waple.steam-api-key' 항목을 지운 뒤 다시 시도하세요." = "Could not save the API key — the Keychain refused to delete the existing item (its permissions or the app signature may have changed). Delete the 'kr.yaki.waple.steam-api-key' item in the macOS Keychain Access app, then try again.";
+"API 키를 저장하지 못했습니다." = "Could not save the API key.";
 "Finder에서 보기" = "Show in Finder";
 "Keychain 의 Steam Web API 키를 지우고 다시 입력" = "Remove the Steam Web API key from the Keychain and enter it again";
 "Steam Web API 키가 필요합니다" = "A Steam Web API key is required";
+"Steam Web API 키가 필요합니다." = "A Steam Web API key is required.";
+"Steam 요청이 너무 잦습니다(HTTP 429). 잠시 후 다시 시도하세요." = "Too many requests to Steam (HTTP 429). Try again in a moment.";
+"Wallpaper Engine 기본 에셋(assets) 폴더를 선택하세요. 패키지에 없는 공유 텍스처를 여기서 불러옵니다." = "Choose your Wallpaper Engine `assets` folder. Shared textures that are missing from a package are loaded from there.";
 "Wallpaper Engine 폴더·zip·동영상 가져오기" = "Import a Wallpaper Engine folder, zip or video";
 "Wallpaper Engine 폴더·zip·동영상을 드래그하거나 가져오세요" = "Drag in a Wallpaper Engine folder, zip or video — or use Import";
-"Waple 시작하기" = "Get started with Waple";
+"Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요." = "Choose a Wallpaper Engine folder, a parent folder, a .zip, or a video (mp4/mov).";
 "Waple 설정" = "Waple Settings";
+"Waple 시작하기" = "Get started with Waple";
 "Waple 열기" = "Open Waple";
+"Waple 종료" = "Quit Waple";
 "ffmpeg (선택)" = "ffmpeg (optional)";
+"steamcmd 가 필요합니다: brew install steamcmd" = "steamcmd is required: brew install steamcmd";
 "steamcmd 계정" = "steamcmd account";
+"steamcmd 로 다운로드해 라이브러리에 추가" = "Download with steamcmd and add to your library";
+"steamcmd 로그인 계정(username)을 먼저 입력하세요." = "Enter your steamcmd sign-in account (username) first.";
 "steamcmd 미설치 — `brew install steamcmd` 후 다시 실행" = "steamcmd not installed — run `brew install steamcmd`, then try again";
+"zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요." = "No wallpapers were imported from the zip. Check that it contains a project.json.";
 "가려지면 일시정지" = "Pause when covered";
 "가져오기" = "Import";
 "가져오기…" = "Import…";
+"가져오는 중" = "Importing";
+"가져오는 중…" = "Importing…";
+"가져온 배경에 태그나 나이 등급이 없습니다." = "The wallpapers you imported carry no tags or age ratings.";
+"가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요." = "No wallpapers were imported. Check that the folder you chose contains a valid project.json.";
+"거를 수 있는 항목이 없습니다" = "Nothing to filter by";
 "검색" = "Search";
+"검색 URL 을 만들 수 없습니다." = "Could not build the search URL.";
 "검색 중…" = "Searching…";
 "검색어나 필터를 조정해보세요" = "Try a different search term or filter";
+"검증 중" = "Verifying";
 "결과 없음" = "No results";
+"결과가 없습니다." = "No results.";
 "공유 에셋 폴더 (선택)" = "Shared assets folder (optional)";
+"구독" = "Subscribers";
+"구독 순" = "Most subscribed";
+"구독순" = "Subscriptions";
 "기본 에셋 폴더" = "Base assets folder";
+"끄기" = "Turn off";
 "나이 등급" = "Age rating";
 "나중에 다시 확인해보세요." = "Check back later.";
+"늘이기" = "Stretch";
 "다시 시도" = "Try again";
+"다시 실행" = "Redo";
 "다운로드" = "Download";
+"다운로드 실패" = "Download failed";
+"다운로드 중" = "Downloading";
 "다운로드용 Steam 계정. 최초 1회 터미널에서 `steamcmd +login <계정>` 으로 로그인해 세션을 캐시하세요 — 비밀번호는 앱이 저장하지 않습니다." = "Steam account used for downloads. Sign in once in Terminal with `steamcmd +login <account>` to cache the session — Waple never stores your password.";
 "다음 배경" = "Next wallpaper";
 "닫기" = "Close";
+"더 불러오는 중" = "Loading more";
 "동영상" = "Video";
 "동영상 음량 · 배속" = "Video volume and speed";
 "동영상이 적용 중일 때 메인 창 하단의 스피커 아이콘에서 조절합니다." = "Adjust these from the speaker icon at the bottom of the main window while a video is playing.";
+"둘러보기" = "Discover";
 "디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더에서 함께 제거됩니다." = "The original folder on disk is kept. The item is removed from the playlist, display assignments, favorites and folders.";
 "디스플레이" = "Displays";
+"라이브러리" = "Library";
 "라이브러리가 비어 있습니다" = "Your library is empty";
+"라이브러리에 추가됨" = "Added to your library";
+"라이브러리에서 배경을 선택하세요" = "Choose a wallpaper from your library";
 "라이브러리에서 제거" = "Remove from library";
 "로그인 시 시작" = "Launch at login";
 "만들기" = "Create";
+"맞춤 (전체 표시)" = "Fit (show all)";
 "모니터를 선택하세요" = "Select a display";
 "모니터별" = "Per display";
 "모니터별 배경 할당" = "Per-display wallpaper assignment";
 "모니터에 적용" = "Apply to display";
 "모바일" = "Mobile";
 "모바일 페어링은 지원하지 않습니다" = "Mobile pairing is not supported";
+"목록 제거" = "Remove from list";
+"목록 추가" = "Add to list";
+"미설치 — mkv/webm 동영상 변환에 필요합니다 (brew install ffmpeg)" = "Not installed — needed to convert mkv/webm videos (brew install ffmpeg)";
+"미완료" = "Not done";
 "바탕화면 반영" = "Mirror to desktop";
 "배경 재생" = "Play wallpaper";
 "배경 추가" = "Add wallpaper";
+"배경 패키지 안 mkv/webm 동영상 변환에 필요합니다 — brew install ffmpeg" = "Needed to convert mkv/webm videos inside wallpaper packages — brew install ffmpeg";
+"배경 폴더나 zip 을 창에 끌어다 놓거나, 창작마당 탭에서 내려받으세요." = "Drag a wallpaper folder or zip into the window, or download one from the Workshop.";
 "배경으로 적용" = "Set as wallpaper";
 "배경을 바탕화면에도 자동 반영" = "Also mirror the wallpaper to the desktop automatically";
 "배경을 선택하세요" = "Select a wallpaper";
 "배경화면 가져오기…" = "Import wallpaper…";
 "배속" = "Speed";
 "변경…" = "Change…";
+"복사" = "Copy";
+"불러오는 중" = "Loading";
+"붙여넣기" = "Paste";
+"비디오" = "video";
+"사용 가능 — 동영상 변환 준비됨." = "Available — ready to convert videos.";
+"사용 안 함" = "Off";
+"사이드바" = "Sidebar";
+"새 디스플레이가 연결됐습니다 — 화면마다 다른 배경을 지정하려면 '디스플레이' 버튼을 확인하세요" = "A new display was connected — use the Displays button to give each screen its own wallpaper";
 "새 폴더" = "New folder";
 "새 폴더…" = "New folder…";
 "선택" = "Select";
@@ -69,50 +132,108 @@
 "설정" = "Settings";
 "설정 열기" = "Open Settings";
 "설정…" = "Settings…";
+"설치 중" = "Installing";
+"성인" = "Mature";
 "셔플(무작위 순서)" = "Shuffle (random order)";
 "속성" = "Properties";
+"속성을 기본값으로 되돌릴까요?" = "Reset properties to their defaults?";
 "시스템 연동" = "System integration";
 "시작하기" = "Get started";
+"실행 취소" = "Undo";
+"씬" = "Scenes";
 "아래를 확인하면 바로 배경을 즐길 수 있어요. 모두 나중에 설정에서 바꿀 수 있습니다." = "Check the items below and you are ready to go. You can change all of them later in Settings.";
 "아래에서 배경을 클릭하거나 박스로 드래그하면 바로 적용됩니다" = "Click a wallpaper below, or drag one into the box, to apply it right away";
 "없음" = "None";
 "에셋·도구" = "Assets and tools";
+"오려두기" = "Cut";
+"완료" = "Done";
 "워크샵 검색" = "Search the Workshop";
 "워크샵을 검색하려면 본인 발급 API 키가 필요합니다. 아래에서 발급 후 붙여넣으세요. 키는 Keychain 에만 저장됩니다." = "Searching the Workshop requires your own API key. Get one below and paste it here. The key is stored only in your Keychain.";
+"웹" = "Web";
+"웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요" = "No web wallpaper is running — apply a web wallpaper first";
 "위는 배경이 바뀔 때마다 자동으로, 아래는 지금 한 번만 실제 macOS 바탕화면에 반영합니다." = "The switch above mirrors every wallpaper change automatically; the button below does it once, right now.";
+"유실" = "Missing";
 "음량" = "Volume";
+"음소거" = "Mute";
+"응용 프로그램" = "Application";
+"이 배경에 저장한 속성 변경이 모두 사라집니다." = "Every property change you saved for this wallpaper will be discarded.";
 "이 배경에는 편집 가능한 속성이 없습니다." = "This wallpaper has no editable properties.";
+"이 폴더가 비어 있습니다" = "This folder is empty";
+"이름순" = "By name";
+"인기 급상승" = "Trending now";
+"일부 씬은 Wallpaper Engine 공유 assets 폴더의 텍스처가 필요합니다." = "Some scenes need textures from the Wallpaper Engine shared assets folder.";
 "일부 씬은 Wallpaper Engine 공유 에셋(assets) 폴더의 텍스처를 참조합니다." = "Some scenes reference textures from the Wallpaper Engine shared `assets` folder.";
 "일시정지" = "Pause";
+"일시정지됨" = "Paused";
 "자동 전환" = "Auto-switch";
+"장면" = "Scene";
+"재개" = "Resume";
+"재생" = "Play";
 "재생목록" = "Playlist";
+"재생목록에 추가" = "Add to playlist";
+"재생목록에서 제거" = "Remove from playlist";
 "재생목록이 비어 있습니다 — 타일 우클릭 또는 위 버튼으로 추가하세요" = "The playlist is empty — right-click a tile, or use the button above, to add one";
 "저장" = "Save";
+"저장됨" = "Saved";
 "적용" = "Apply";
 "적용 + 조작 창 열기" = "Apply and open controls";
 "적용 성공 시 정지 이미지를 실제 바탕화면에도 반영합니다. 끄면 원본을 복원합니다." = "On success, also set a still image as the macOS desktop picture. Turning this off restores the original.";
+"적용 실패" = "Apply failed";
+"적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다" = "Could not apply — project.json or the preset dependency could not be read";
+"적용 중" = "Playing";
+"적용된 배경 없음" = "No wallpaper applied";
+"적용된 배경이 없습니다" = "No wallpaper is running";
+"전역 배경" = "Global wallpaper";
 "전체" = "All";
+"전체 선택" = "Select All";
+"전체 이용가" = "Everyone";
 "정렬" = "Sort";
 "정보 패널" = "Info panel";
+"정지 배경 설정에 실패했습니다" = "Could not set the still desktop picture";
+"정지 배경으로 설정했습니다" = "Set as the desktop picture";
+"정지 배경을 만들 수 없습니다" = "Could not create a still image";
 "제거(파일은 유지)" = "Remove (keep files)";
 "조건에 맞는 배경이 없습니다" = "No wallpapers match";
 "조작 창 열기" = "Open controls";
+"주의" = "Questionable";
+"즐겨찾기" = "Favorites";
+"즐겨찾기 해제" = "Remove from favorites";
 "지금 바탕화면으로 한 번 굽기" = "Set as desktop picture now";
 "지우기" = "Clear";
+"지원 예정" = "Coming soon";
+"창이 뜨면 즉시" = "As soon as a window appears";
+"창작마당" = "Workshop";
 "창작마당 열기" = "Open the Workshop";
+"채움 (꽉 채움)" = "Fill (cover)";
 "초기화" = "Reset";
 "최근 배경" = "Recent wallpapers";
+"최근 추가순" = "Most recent";
+"최신" = "Newest";
+"최신 등록" = "Recently added";
 "취소" = "Cancel";
+"켜기" = "Turn on";
+"타일을 우클릭해 폴더로 옮기거나, 인스펙터의 폴더 메뉴를 쓰세요." = "Right-click a tile to move it into a folder, or use the folder menu in the inspector.";
 "태그" = "Tags";
+"투표순" = "Rating";
 "툴바 검색창에 검색어를 입력하거나 정렬을 바꿔보세요." = "Type in the toolbar search field, or change the sort order.";
+"트렌드" = "Trending";
+"패키징된 앱에서만 사용 가능 — scripts/package-app.sh" = "Available only in a packaged app — scripts/package-app.sh";
 "편집" = "Edit";
+"편집할 속성이 없습니다" = "No editable properties";
+"평점" = "Rating";
+"평점 순" = "Top rated";
+"폴더" = "Folders";
 "폴더 삭제(항목은 유지)" = "Delete folder (keep items)";
 "폴더 선택…" = "Choose folder…";
+"폴더 없음" = "No folder";
+"폴더 유실" = "Folder missing";
 "폴더 이름" = "Folder name";
 "폴더로 이동" = "Move to folder";
+"폴더만 사라지고 안에 있던 배경은 라이브러리에 그대로 남습니다." = "Only the folder goes away — the wallpapers inside stay in your library.";
 "폴더에서 제거" = "Remove from folder";
 "프레임 상한" = "Frame rate cap";
 "프레임 상한은 장면(씬) 배경에만 적용됩니다 — 동영상·웹 배경은 자체 페이싱을 씁니다." = "The frame rate cap applies to scene wallpapers only — video and web wallpapers pace themselves.";
+"프리셋" = "Preset";
 "필터" = "Filter";
 "필터 초기화" = "Reset filters";
 "필터 초기화 / 검색 지우기" = "Reset filters / clear search";
@@ -122,186 +243,47 @@
 "현재 배경에서 정지 이미지를 만들어 모든 화면의 바탕화면으로 지정합니다(1회) — 위 자동 반영과 무관하게 즉시 동작합니다." = "Takes a still image of the current wallpaper and sets it as the desktop picture on every display, once — independent of the automatic mirroring above.";
 "화면 맞춤" = "Fit mode";
 "화면보호기" = "Screen saver";
+"화면보호기로 사용 중" = "In use as the screen saver";
 
-/* 보간이 들어가는 문자열 — 호출부에서 String(format:) 로 조립한다(포맷 지정자 고정). */
-"'%@'을(를) 라이브러리에서 제거할까요?" = "Remove “%@” from your library?";
-"%@ — 지원 예정" = "%@ — coming soon";
-"%@ 할당 해제" = "Unassign %@";
-"간격: %lld분" = "Interval: %lld min";
-"구독 %@" = "%@ subscribers";
-"다운로드 중 %lld%%" = "Downloading %lld%%";
-"전환 간격: %lld분" = "Switch interval: %lld min";
-
-/* ═══════════════════════════════════════════════════════════════════════════
- * 2026-08-17 UI 전면 개편 — 단위별 추가 구역.
- *
- * 화면별 에이전트가 병렬로 작업하는 동안 이 파일이 유일한 공용 파일이라, 각자
- * 자기 구역에만 추가하게 해 git 이 자동 병합할 수 있게 한다. **구역을 새로 만들지
- * 말고 아래 빈 구역을 채워라** — 셋이 각자 파일 끝에 구역을 만들면 전부 같은 줄에
- * 붙어 순차 머지가 전부 충돌한다(그래서 미리 비워 둔다).
- *
- * 기존 줄은 재정렬하지 마라. 전체 재정렬 diff 는 무조건 충돌한다.
- * 삭제(고아 번역 제거)는 공용 영역을 건드리지만 줄 단위라 보통 자동 병합된다.
- *
- * Phase 3(Unit E)에서 이 구역들을 걷어 위 알파벳 블록으로 합치고 마커를 지운다.
- * 규약 전문: docs/ui-redesign-2026-08-17.md §2·§5.
- * ═══════════════════════════════════════════════════════════════════════════ */
-
-/* MARK: Unit A — 셸·네비게이션(사이드바 항목·툴바·Now Playing 바) */
-"둘러보기" = "Discover";
-"라이브러리" = "Library";
-"사이드바" = "Sidebar";
-"씬" = "Scenes";
-"웹" = "Web";
-"즐겨찾기" = "Favorites";
-"창작마당" = "Workshop";
-"폴더" = "Folders";
-"라이브러리에서 배경을 선택하세요" = "Choose a wallpaper from your library";
-"응용 프로그램" = "Application";
-"장면" = "Scene";
-"재생" = "Play";
-"적용된 배경 없음" = "No wallpaper applied";
-"프리셋" = "Preset";
-"'%@' 재생목록에 추가" = "Add “%@” to playlist";
-"'%@' 재생목록에서 제거" = "Remove “%@” from playlist";
-"%lld분마다 전환" = "Switches every %lld min";
-"재생목록 %lld개" = "%lld in playlist";
-
-/* MARK: Unit S — 공유 컴포넌트 */
-
-/* MARK: Unit B — 라이브러리(그리드·인스펙터·속성 편집·필터 팝오버) */
-"Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요." = "Choose a Wallpaper Engine folder, a parent folder, a .zip, or a video (mp4/mov).";
-"가져오는 중…" = "Importing…";
-"가져온 배경에 태그나 나이 등급이 없습니다." = "The wallpapers you imported carry no tags or age ratings.";
-"가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요." = "No wallpapers were imported. Check that the folder you chose contains a valid project.json.";
-"거를 수 있는 항목이 없습니다" = "Nothing to filter by";
-"성인" = "Mature";
-"전체 이용가" = "Everyone";
-"주의" = "Questionable";
-"목록 제거" = "Remove from list";
-"속성을 기본값으로 되돌릴까요?" = "Reset properties to their defaults?";
-"이 배경에 저장한 속성 변경이 모두 사라집니다." = "Every property change you saved for this wallpaper will be discarded.";
-"저장됨" = "Saved";
-"적용 중" = "Playing";
-"지원 예정" = "Coming soon";
-"편집할 속성이 없습니다" = "No editable properties";
-"평점" = "Rating";
-"폴더 없음" = "No folder";
-"폴더 유실" = "Folder missing";
-"폴더만 사라지고 안에 있던 배경은 라이브러리에 그대로 남습니다." = "Only the folder goes away — the wallpapers inside stay in your library.";
-"목록 추가" = "Add to list";
-"유실" = "Missing";
-"이 폴더가 비어 있습니다" = "This folder is empty";
-"이름순" = "By name";
-"재생목록에 추가" = "Add to playlist";
-"재생목록에서 제거" = "Remove from playlist";
-"즐겨찾기 해제" = "Remove from favorites";
-"최근 추가순" = "Most recent";
-"타일을 우클릭해 폴더로 옮기거나, 인스펙터의 폴더 메뉴를 쓰세요." = "Right-click a tile to move it into a folder, or use the folder menu in the inspector.";
-"zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요." = "No wallpapers were imported from the zip. Check that it contains a project.json.";
-"'%@' 폴더를 삭제할까요?" = "Delete the folder “%@”?";
-"%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다." = "Imported %2$lld of %1$lld. The rest have no project.json, or it could not be read.";
-"배경 %lld개를 가져왔습니다." = "Imported %lld wallpaper(s).";
+/* 보간이 들어가는 문자열 — 호출부에서 String(format:) 로 조립한다(포맷 지정자 고정).
+ * %@ = String · %lld = Int · %d = Int32 · %.1f = Double. 번역에서 지정자를 빼거나
+ * 종류를 바꾸면 런타임에 잘못된 값이 찍히거나 크래시한다. 순서를 바꿔야 하면
+ * %1$@ 처럼 위치 지정자를 쓴다(아래 임포트 부분 실패 문구가 실제 사례다). */
 "%@ (현재: %@)" = "%@ (current: %@)";
 "%@ · 지원 예정" = "%@ · coming soon";
-"‘%@’을(를) 적용하지 못했습니다." = "Could not apply “%@”.";
-"‘%@’의 폴더를 찾을 수 없습니다. 다시 가져오세요." = "Could not find the folder for “%@”. Import it again.";
-"다운로드한 폴더를 가져오지 못했습니다: %@" = "Could not import the downloaded folder: %@";
-"동영상 가져오기에 실패했습니다: %@" = "Could not import the video: %@";
-
-/* MARK: Unit C — 창작마당·둘러보기 */
-"구독순" = "Subscriptions";
-"최신" = "Newest";
-"트렌드" = "Trending";
-"투표순" = "Rating";
-"인기 급상승" = "Trending now";
-"최신 등록" = "Recently added";
-"구독 순" = "Most subscribed";
-"평점 순" = "Top rated";
-"다운로드 중" = "Downloading";
-"검증 중" = "Verifying";
-"설치 중" = "Installing";
-"가져오는 중" = "Importing";
-"평점" = "Rating";
-"구독" = "Subscribers";
-"라이브러리에 추가됨" = "Added to your library";
-"다운로드 실패" = "Download failed";
-"더 불러오는 중" = "Loading more";
-"불러오는 중" = "Loading";
-"steamcmd 로 다운로드해 라이브러리에 추가" = "Download with steamcmd and add to your library";
-"steamcmd 가 필요합니다: brew install steamcmd" = "steamcmd is required: brew install steamcmd";
-"steamcmd 로그인 계정(username)을 먼저 입력하세요." = "Enter your steamcmd sign-in account (username) first.";
-"결과가 없습니다." = "No results.";
-"API 키를 저장하지 못했습니다." = "Could not save the API key.";
-"Steam Web API 키가 필요합니다." = "A Steam Web API key is required.";
-"검색 URL 을 만들 수 없습니다." = "Could not build the search URL.";
-"Steam 요청이 너무 잦습니다(HTTP 429). 잠시 후 다시 시도하세요." = "Too many requests to Steam (HTTP 429). Try again in a moment.";
-"API 키를 저장하지 못했습니다 — Keychain 이 기존 항목 삭제를 거부했습니다(권한/서명 변경 가능성). macOS '키체인 접근' 앱에서 'kr.yaki.waple.steam-api-key' 항목을 지운 뒤 다시 시도하세요." = "Could not save the API key — the Keychain refused to delete the existing item (its permissions or the app signature may have changed). Delete the 'kr.yaki.waple.steam-api-key' item in the macOS Keychain Access app, then try again.";
-
-/* Unit C — 보간이 들어가는 문자열 */
-"평점 %.1f/5" = "Rated %.1f/5";
-"검색 실패: %@" = "Search failed: %@";
-"더 불러오기 실패: %@" = "Could not load more: %@";
+"%@ — 지원 예정" = "%@ — coming soon";
+"%@ 할당 해제" = "Unassign %@";
+"%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다." = "Imported %2$lld of %1$lld. The rest have no project.json, or it could not be read.";
+"%lld분마다 전환" = "Switches every %lld min";
+"'%@' 재생목록에 추가" = "Add “%@” to playlist";
+"'%@' 재생목록에서 제거" = "Remove “%@” from playlist";
+"'%@' 폴더를 삭제할까요?" = "Delete the folder “%@”?";
+"'%@'을(를) 라이브러리에서 제거할까요?" = "Remove “%@” from your library?";
 "API 키를 저장하지 못했습니다(Keychain 오류 %d)." = "Could not save the API key (Keychain error %d).";
 "Steam 서버 응답 오류(HTTP %lld). 잠시 후 다시 시도하세요." = "Steam server error (HTTP %lld). Try again in a moment.";
-"Steam 응답 오류(HTTP %lld). API 키를 확인하세요." = "Steam returned an error (HTTP %lld). Check your API key.";
 "Steam 응답 오류(HTTP %lld)." = "Steam returned an error (HTTP %lld).";
-"‘%@’ 다운로드는 완료됐지만 결과 폴더를 찾지 못했습니다 — steamcmd 의 content 폴더 위치를 확인하세요." = "“%@” finished downloading but the result folder could not be found — check where steamcmd puts its content folder.";
-"‘%@’ 다운로드 실패 — 터미널에서 `steamcmd +login %@` 로 1회 로그인해 세션을 캐시했는지 확인하세요." = "“%@” failed to download — check that you signed in once in Terminal with `steamcmd +login %@` to cache the session.";
+"Steam 응답 오류(HTTP %lld). API 키를 확인하세요." = "Steam returned an error (HTTP %lld). Check your API key.";
 "‘%@’ 다운로드 실패 — steamcmd 가 완료 신호를 내지 않았습니다(시간 초과·네트워크·실행 오류 가능). 터미널에서 `steamcmd +login %@` 세션 캐시를 확인하고 직접 시도해 원인을 파악하세요." = "“%@” failed to download — steamcmd never reported completion (timeout, network or launch error). Check the `steamcmd +login %@` session cache in Terminal and run it by hand to find the cause.";
-
-/* MARK: Unit D — 설정·온보딩·디스플레이 */
-"(자동 탐지)" = "(auto-detected)";
-"30 fps (절전)" = "30 fps (power saving)";
-"60 fps (부드러움)" = "60 fps (smooth)";
-"끄기" = "Turn off";
-"늘이기" = "Stretch";
-"맞춤 (전체 표시)" = "Fit (show all)";
-"미완료" = "Not done";
-"배경 패키지 안 mkv/webm 동영상 변환에 필요합니다 — brew install ffmpeg" = "Needed to convert mkv/webm videos inside wallpaper packages — brew install ffmpeg";
-"배경 폴더나 zip 을 창에 끌어다 놓거나, 창작마당 탭에서 내려받으세요." = "Drag a wallpaper folder or zip into the window, or download one from the Workshop.";
-"사용 가능 — 동영상 변환 준비됨." = "Available — ready to convert videos.";
-"완료" = "Done";
-"일부 씬은 Wallpaper Engine 공유 assets 폴더의 텍스처가 필요합니다." = "Some scenes need textures from the Wallpaper Engine shared assets folder.";
-"전역 배경" = "Global wallpaper";
-"채움 (꽉 채움)" = "Fill (cover)";
-"켜기" = "Turn on";
-"지원 예정" = "Coming soon";
+"‘%@’ 다운로드 실패 — 터미널에서 `steamcmd +login %@` 로 1회 로그인해 세션을 캐시했는지 확인하세요." = "“%@” failed to download — check that you signed in once in Terminal with `steamcmd +login %@` to cache the session.";
+"‘%@’ 다운로드는 완료됐지만 결과 폴더를 찾지 못했습니다 — steamcmd 의 content 폴더 위치를 확인하세요." = "“%@” finished downloading but the result folder could not be found — check where steamcmd puts its content folder.";
+"‘%@’을(를) 적용하지 못했습니다." = "Could not apply “%@”.";
+"‘%@’의 폴더를 찾을 수 없습니다. 다시 가져오세요." = "Could not find the folder for “%@”. Import it again.";
+"간격: %lld분" = "Interval: %lld min";
+"검색 실패: %@" = "Search failed: %@";
+"구독 %@" = "%@ subscribers";
+"다운로드 중 %lld%%" = "Downloading %lld%%";
+"다운로드한 폴더를 가져오지 못했습니다: %@" = "Could not import the downloaded folder: %@";
+"더 불러오기 실패: %@" = "Could not load more: %@";
+"동영상 가져오기에 실패했습니다: %@" = "Could not import the video: %@";
 "로그인 항목 설정 실패: %@" = "Could not change the login item: %@";
-
-/* MARK: Unit E — 메뉴바·마감 */
-"Waple 종료" = "Quit Waple";
-"재개" = "Resume";
-"실행 취소" = "Undo";
-"다시 실행" = "Redo";
-"오려두기" = "Cut";
-"복사" = "Copy";
-"붙여넣기" = "Paste";
-"전체 선택" = "Select All";
-"음소거" = "Mute";
-"사용 안 함" = "Off";
-"창이 뜨면 즉시" = "As soon as a window appears";
-"30% 이상 가려지면" = "When at least 30% is covered";
-"50% 이상 가려지면" = "When at least 50% is covered";
-"80% 이상 가려지면" = "When at least 80% is covered";
-"패키징된 앱에서만 사용 가능 — scripts/package-app.sh" = "Available only in a packaged app — scripts/package-app.sh";
-"화면보호기로 사용 중" = "In use as the screen saver";
-"미설치 — mkv/webm 동영상 변환에 필요합니다 (brew install ffmpeg)" = "Not installed — needed to convert mkv/webm videos (brew install ffmpeg)";
-"정지 배경 설정에 실패했습니다" = "Could not set the still desktop picture";
-"정지 배경으로 설정했습니다" = "Set as the desktop picture";
-"적용 실패" = "Apply failed";
-"일시정지됨" = "Paused";
+"배경 %lld개를 가져왔습니다." = "Imported %lld wallpaper(s).";
+"비디오를 재생할 수 없습니다: %@" = "Could not play the video: %@";
 "사용 가능 — %@" = "Available — %@";
 "일부 화면만 정지 배경으로 설정했습니다(%lld/%lld)" = "Set the desktop picture on only some displays (%lld/%lld)";
-"Wallpaper Engine 기본 에셋(assets) 폴더를 선택하세요. 패키지에 없는 공유 텍스처를 여기서 불러옵니다." = "Choose your Wallpaper Engine `assets` folder. Shared textures that are missing from a package are loaded from there.";
-"비디오" = "video";
-"웹 월페이퍼가 적용되어 있지 않습니다 — 웹 배경을 먼저 적용하세요" = "No web wallpaper is running — apply a web wallpaper first";
-"적용 실패: project.json 또는 preset dependency 를 해석할 수 없습니다" = "Could not apply — project.json or the preset dependency could not be read";
-"적용된 배경이 없습니다" = "No wallpaper is running";
-"정지 배경을 만들 수 없습니다" = "Could not create a still image";
-"새 디스플레이가 연결됐습니다 — 화면마다 다른 배경을 지정하려면 '디스플레이' 버튼을 확인하세요" = "A new display was connected — use the Displays button to give each screen its own wallpaper";
-"비디오를 재생할 수 없습니다: %@" = "Could not play the video: %@";
-"적용 실패: %@" = "Could not apply: %@";
-"지원하지 않는 타입입니다: %@" = "Unsupported type: %@";
-"화면보호기 설치 실패: %@" = "Could not install the screen saver: %@";
 "잠금화면 스틸 기록 실패(무시): %@" = "Could not write the lock-screen still (ignored): %@";
+"재생목록 %lld개" = "%lld in playlist";
+"적용 실패: %@" = "Could not apply: %@";
+"전환 간격: %lld분" = "Switch interval: %lld min";
+"지원하지 않는 타입입니다: %@" = "Unsupported type: %@";
+"평점 %.1f/5" = "Rated %.1f/5";
+"화면보호기 설치 실패: %@" = "Could not install the screen saver: %@";
