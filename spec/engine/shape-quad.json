@@ -1,0 +1,243 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_shape_quad.py",
+ "entries": [
+  {
+   "id": "shape.valueStringNotInterpreted",
+   "value": {
+    "perBinary": {
+     "wallpaper64.exe": {
+      "bytes": 5360112,
+      "asciiQuad": 0,
+      "utf16Quad": 0,
+      "asciiShape": 1
+     },
+     "bin/wallpaperui.exe": {
+      "bytes": 12742640,
+      "asciiQuad": 0,
+      "utf16Quad": 0,
+      "asciiShape": 1
+     },
+     "bin/scenescript64.dll": {
+      "bytes": 28730352,
+      "asciiQuad": 0,
+      "utf16Quad": 0,
+      "asciiShape": 0
+     },
+     "bin/resourcecompiler64.exe": {
+      "bytes": 6752240,
+      "asciiQuad": 0,
+      "utf16Quad": 0,
+      "asciiShape": 0
+     },
+     "bin/webwallpaper64.exe": {
+      "bytes": 1337840,
+      "asciiQuad": 0,
+      "utf16Quad": 0,
+      "asciiShape": 0
+     }
+    },
+    "meaning": "`shape` 의 값 문자열(\"quad\")은 어떤 WE 바이너리에도 없다 — 엔진은 값을 해석하지 않고 키 존재와 JSON 타입만 본다. 코퍼스 값이 전건 \"quad\" 인 것은 에디터가 그렇게 쓰기 때문이지 엔진 분기 조건이 아니다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    }
+   ]
+  },
+  {
+   "id": "shape.dispatchGatesOnJsonTypeOnly",
+   "value": {
+    "stringVA": "0x14048e5f0",
+    "xrefs": [
+     "0x14019076b",
+     "0x140190786"
+    ],
+    "branchVA": "0x140190783",
+    "jsonTypeTag": 4,
+    "allocBytes": 1120,
+    "valueStringCompare": false
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift isEffectQuad — Waple 은 shape 존재 + effects 비어있지 않음으로 판정"
+    }
+   ]
+  },
+  {
+   "id": "shape.initWritesOrthoHeightPair",
+   "value": {
+    "vtableVA": "0x140491d10",
+    "initVA": "0x14025fac0",
+    "ctxFieldOffset": "0xc8",
+    "sourceIntOffset": "0x88",
+    "destFloatPairOffset": "0x2f0",
+    "writes": "movsd — float 2개(동일 값)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    }
+   ]
+  },
+  {
+   "id": "shape.contextOrthoIntFields",
+   "value": {
+    "parseSiteVA": "0x1401874ef",
+    "sceneWidthFloatOffset": "0x354",
+    "sceneHeightFloatOffset": "0x358",
+    "ctxWidthIntOffset": "0x84",
+    "ctxHeightIntOffset": "0x88"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    }
+   ]
+  },
+  {
+   "id": "shape.corpusUsage",
+   "value": {
+    "scanned": 461,
+    "shapeObjects": 41,
+    "scenes": 23,
+    "values": {
+     "quad": 41
+    },
+    "withEffects": 41,
+    "withSizeKey": 0,
+    "withParent": 16,
+    "objectsParentedToAQuad": 0
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "/Users/yakisoba/Downloads/wallpaper_dev/backgrounds (461 항목)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    }
+   ]
+  },
+  {
+   "id": "shape.previewBackSolveIsInvalid",
+   "value": {
+    "variants": {
+     "previewlscorner": {
+      "ortho": [
+       256,
+       256
+      ],
+      "origin": "135.21112 117.58400 0.00000",
+      "scale": 1.20791,
+      "sizeIfItExactlyFilledFrame": 211.9
+     },
+     "previewlsradial": {
+      "ortho": [
+       256,
+       256
+      ],
+      "origin": "128.00000 128.00000 0.00000",
+      "scale": 2.09076,
+      "sizeIfItExactlyFilledFrame": 122.4
+     },
+     "previewlslinear": {
+      "ortho": [
+       256,
+       256
+      ],
+      "origin": "126.79814 126.79816 0.00000",
+      "scale": 2.038,
+      "sizeIfItExactlyFilledFrame": 125.6
+     }
+    },
+    "spread": [
+     122.4,
+     125.6,
+     211.9
+    ],
+    "verdict": "프리뷰는 저작자가 손으로 배치·확대한 것이라 '프레임을 꽉 채운다'는 전제가 성립하지 않는다 — 이 역산으로는 기본 크기를 정할 수 없다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/presets/lightshafts/"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    }
+   ]
+  },
+  {
+   "id": "shape.defaultSizeHypothesis",
+   "value": {
+    "hypothesis": "shape 렌더러블의 기본 크기 = (orthoHeight, orthoHeight) 정사각 — §3 의 destFloatPairOffset 가 '레이어 크기' 라는 전제 위에서만 성립한다",
+    "whyUnconfirmed": [
+     "this+0x2F0/0x2F4 를 '크기' 로 읽은 근거는 정황뿐이다: 기본 생성자가 (1.0, 1.0) 로 두고, 바로 뒤 0x2F8/0x2FC/0x300 이 월드 행렬에 곱해지는 위치 벡터다. 이 두 성분을 **소비**하는 지점을 찾지 못했다.",
+     "이미지 레이어 타입은 별개 클래스(0x960)라 같은 오프셋으로 대조할 수 없었다."
+    ],
+    "abTest": {
+     "what": "effectQuadLayer 를 size=(orthoH,orthoH) + 저작 origin/scale/angles/parent 로 바꿔 코퍼스 5씬을 렌더 대조(1920×1080, t=6.0)",
+     "result": {
+      "3404976219": "개선 — 오른쪽 절반 백색 플레어가 좌상단 일부로 수축",
+      "3558034522": "개선 — 인물을 덮던 무지개 줄무늬가 좌상단으로 수축",
+      "3521337568": "악화 — scale 3/4 쿼드가 6480/8640px 로 커져 전면이 뿌옇게 뜬다",
+      "3460973721": "판정 애매 — 광선이 더 굵고 밝아진다"
+     },
+     "confounds": [
+      "3521337568 의 쿼드 부모(id 2065)의 scale 을 확인하지 않았다",
+      "우리 렌더러의 솔리드 레이어 이펙트 체인이 **비-풀스크린** 지오메트리에서 WE 와 같은 UV/RT 규약을 쓰는지 자체가 미검증이다 — 3404976219 결과에 WE 에는 없는 하드 엣지(rayfeather 대신 클리핑)가 남았다"
+     ],
+     "verdict": "반증이 아니라 **혼재·교란**. 가설은 살아 있고, 고치려면 두 교란 요인을 먼저 닫아야 한다."
+    }
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    },
+    {
+     "kind": "file",
+     "ref": "Sources/WapleCore/SceneDocument.swift effectQuadLayer"
+    }
+   ]
+  }
+ ]
+}
