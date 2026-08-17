@@ -1,6 +1,31 @@
 import AppKit
 import SwiftUI
 
+/// 미리보기 이미지 디코드 캐시(URL→NSImage). body 재평가마다의 반복 디스크 I/O 제거.
+/// F500: 최초 로드도 body 평가 중 메인 동기 읽기 대신 백그라운드 디코드로(느린 디스크에서의 스크롤
+/// 히치 방지) — cached() 는 조회만, load() 가 디코드+캐시를 담당한다. internal: 단위 테스트 대상.
+///
+/// 2026-08-17 개편에서 WallpaperGridView 로부터 이 파일로 옮겼다. 소비자가 그리드 하나가 아니라
+/// 아래 `PreviewThumbnail` 하나가 되므로 그 옆이 제자리다. **타입 이름과 API 는 옮기면서도
+/// 그대로 뒀다** — `AppUIFixRegressionTests` 가 이름으로 참조하는 동결 파일이라, 이름을 바꾸면
+/// 그건 리팩토링이 아니라 회귀 테스트 수정이 된다.
+enum PreviewImageCache {
+    private static let cache = NSCache<NSURL, NSImage>()
+
+    /// 캐시 히트만 동기 반환(디스크 읽기 없음 — body 평가 중 호출 안전).
+    static func cached(_ url: URL) -> NSImage? { cache.object(forKey: url as NSURL) }
+
+    /// 백그라운드 디코드 + 캐시. 히트면 즉시 반환, 실패(읽기 불가 등) → nil.
+    static func load(_ url: URL) async -> NSImage? {
+        if let hit = cached(url) { return hit }
+        return await Task.detached(priority: .userInitiated) {
+            guard let img = NSImage(contentsOf: url) else { return nil }
+            cache.setObject(img, forKey: url as NSURL)
+            return img
+        }.value
+    }
+}
+
 /// 로컬 파일 미리보기 썸네일 — 그리드 타일·디스플레이 다이어그램·레일이 공유한다.
 ///
 /// ## 왜 하나로 합치나
@@ -20,11 +45,16 @@ import SwiftUI
 /// 접근뿐이라 디스크를 읽지 않으므로 메인 스레드에서 안전하다 — 종전 구현이 하던 body 평가 중
 /// 동기 `NSImage(contentsOf:)` 와는 다르다.
 ///
-/// ## url 이 nil 이어도 호출부는 분기하지 않는다
+/// ## url 이 nil 이어도 같은 플레이스홀더가 나온다
 ///
 /// 미리보기가 없는 항목은 흔하다(가져온 동영상·손상된 패키지). 종전에는 호출부마다
 /// `if let url` 로 갈라 **플레이스홀더 ZStack 을 네 번 다시 적었고**, 그래서 값이 갈라졌다.
-/// nil 을 이 뷰가 받아 같은 플레이스홀더를 그린다.
+/// nil 을 이 뷰가 받으므로 호출부는 더 이상 플레이스홀더를 그리지 않는다.
+///
+/// 다만 지금 호출부에 남아 있는 `if let url` 분기는 **일부러 남긴 것**이다. 두 갈래가
+/// SwiftUI 에서 서로 다른 식별자를 갖기 때문에, 분기를 합치면 같은 자리의 뷰가 재사용되면서
+/// `@State` 가 살아남는다 — 아래 로드 규칙과 맞물려 동작이 바뀐다. 추출 커밋에서 동작을
+/// 바꾸지 않으려고 구조를 그대로 뒀다.
 ///
 /// ## 접근성 — 통째로 감춘다
 ///

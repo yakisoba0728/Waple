@@ -3,38 +3,9 @@ import AppKit
 import UniformTypeIdentifiers
 import WapleLibrary
 
-/// 다이어그램/레일 썸네일(감사 V06) — WallpaperGridView.PreviewImageCache 의 F500 패턴 재사용:
-/// 조회는 cached()(동기, body 평가 중 디스크 읽기 없음), 최초 디코드는 .task 의 load()(백그라운드).
-/// 종전 전용 DisplaysImageCache(F498)는 body 평가 중 메인 스레드 동기 NSImage(contentsOf:) 디코드였다
-/// (당시 주석의 "PreviewImageCache 는 file-private" 주장은 스테일 — 실제로는 internal 단위 테스트 대상).
-private struct DisplaysThumbView: View {
-    let url: URL
-    var placeholderFont: Font = .title2
-    @State private var image: NSImage?
-
-    init(url: URL, placeholderFont: Font = .title2) {
-        self.url = url
-        self.placeholderFont = placeholderFont
-        _image = State(initialValue: PreviewImageCache.cached(url))   // NSCache 조회만 — 디스크 읽기 없음
-    }
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                ZStack {
-                    Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
-                    Image(systemName: "photo").font(placeholderFont).foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .task(id: url) {
-            guard image == nil else { return }
-            image = await PreviewImageCache.load(url)
-        }
-    }
-}
+// 다이어그램/레일 썸네일(감사 V06)은 종전 이 파일의 DisplaysThumbView 였다. 2026-08-17 개편에서
+// 같은 F500 패턴의 그리드 쪽 복제와 함께 DesignSystem/Components/PreviewThumbnail 로 합쳤다 —
+// 두 벌이 갈라져 플레이스홀더 채움이 이미 0.25 와 0.3 으로 어긋나 있었다.
 
 /// NSScreen.frames(하단 원점) → 컨테이너 좌표(상단 원점) 비례 배치. 순수 함수 — 유닛 테스트 대상.
 enum DisplayDiagramLayout {
@@ -157,12 +128,9 @@ struct DisplaysView: View {
         let resolved = entry ?? viewModel.globalEntry
         Group {
             if let resolved, let url = viewModel.previewURL(for: resolved) {
-                DisplaysThumbView(url: url)
+                PreviewThumbnail(url: url, placeholderFont: .title2)
             } else {
-                ZStack {
-                    Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
-                    Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary)
-                }
+                PreviewThumbnail(url: nil, placeholderFont: .title2)
             }
         }
         .opacity(dimmed ? 0.55 : 1)
@@ -230,12 +198,9 @@ struct DisplaysView: View {
     @ViewBuilder
     private func railThumbnail(_ entry: LibraryEntry) -> some View {
         if let url = viewModel.previewURL(for: entry) {
-            DisplaysThumbView(url: url, placeholderFont: .caption)
+            PreviewThumbnail(url: url, placeholderFont: .caption)
         } else {
-            ZStack {
-                Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.25))
-                Image(systemName: "photo").font(.caption).foregroundStyle(.tertiary)
-            }
+            PreviewThumbnail(url: nil, placeholderFont: .caption)
         }
     }
 }
