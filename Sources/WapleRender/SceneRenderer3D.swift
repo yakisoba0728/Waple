@@ -55,6 +55,8 @@ extension SceneRenderer {
         /// 노멀맵과 미결합(기하 노멀만 — generic4.frag `#else normalize(v_WorldNormal)` 분기와 동치).
         var reflection: Bool = false
         var reflectivity: Float = 1.0
+        /// WE g_Brightness 저작값(HDR 씬에서만 발화 — encode3D 가 sceneIsHDR 로 게이트한다).
+        var brightness: Float = 1
     }
     /// P⑥: 3D 커스텀 메시 셰이더 파이프라인 + 바인드 플랜(2D CustomLayerShader 와 동형 — 번역 셰이더는
     /// buffer(1)에 EngineU(320B, engineUniform() 이 단일 정본)를 기대하지, MeshUniform(256B)이 아니다).
@@ -66,7 +68,7 @@ extension SceneRenderer {
         let texWrap: [Float]                          // 8 × 1=clamp / 0=repeat
         let texFilter: [Float]                        // 8 × 1=nearest / 0=linear
     }
-    /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 4×float4 = 256B).
+    /// MSL `MeshU`와 레이아웃 일치(3×float4x4 + 5×float4 = 272B).
     struct MeshUniform {
         var mvp: simd_float4x4
         var model: simd_float4x4
@@ -77,6 +79,10 @@ extension SceneRenderer {
         var specularTint: SIMD4<Float>
         /// x=g_RimAmount, y=g_RimExponent, z=RIMLIGHTING on/off, w=SHADINGGRADIENT on/off(F274).
         var rim: SIMD4<Float>
+        /// x=g_Brightness(HDR 최종 곱). 기존 네 슬롯은 성분이 전부 차 있어 새 float4 를 붙였다 —
+        /// 기본 (1,0,0,0) 이라 빌보드/합성처럼 이 값을 안 쓰는 호출부는 멤버와이즈 초기화가 그대로
+        /// 중립(×1)으로 남는다. y/z/w 는 예약.
+        var extra: SIMD4<Float> = SIMD4(1, 0, 0, 0)
     }
     /// M(④): MSL `FogU3D`(ParticleShaders.pf3d_fog)와 레이아웃 일치 — Scene3DFrameUniform 의 eye+포그
     /// 4필드를 발췌(파티클은 라이팅/섀도우 유니폼이 불필요해 FrameU 전체 대신 축소 구조체를 쓴다).
@@ -348,6 +354,7 @@ extension SceneRenderer {
                                         rimAmount: mat.rimAmount, rimExponent: mat.rimExponent,
                                         gradientTexture: mat.gradientTexture, foggy: mat.foggy,
                                         boundsMin: bMin, boundsMax: bMax)
+                gpuMesh.brightness = mat.brightness
                 // H1 Phase 2: 커스텀 머티리얼 셰이더 파이프라인 빌드(실패 시 nil → Mesh3DShaders 폴터).
                 // 스키닝 메시는 CPU 프리스킨(8f, prepare3DCustomSkinBuffers)으로 rigid 입력 계약을 맞춘다.
                 if mat.customShader != nil {
@@ -714,6 +721,10 @@ extension SceneRenderer {
         /// M6(⑥): REFLECTION 콤보 + g_Reflectivity(기본 1 — generic4.frag:66).
         let reflection: Bool
         let reflectivity: Float
+        /// WE g_Brightness — 저작값 그대로(HDR 게이트는 encode3D 소관, Scene3DMaterialValues 주석 참조).
+        /// 기본 1(=중립)을 달아 둔 것은 커스텀 셰이더 경로 테스트처럼 이 값과 무관한 호출부가
+        /// 멤버와이즈 초기화를 그대로 쓰게 하기 위함이다.
+        var brightness: Float = 1
     }
 
     /// 머티리얼 JSON(passes[0]) → 텍스처/블렌드/컬/뎁스 플래그. 로드 실패 → 흰 텍스처 + 기본 플래그.
@@ -855,7 +866,8 @@ extension SceneRenderer {
                                        customConstants: customConstants, customTextures: customTextures,
                                        normalTextureName: normalTextureName, maskTextureName: maskTextureName,
                                        refract: refract, refractAmount: refractAmount,
-                                       reflection: reflection, reflectivity: pbr.reflectivity)
+                                       reflection: reflection, reflectivity: pbr.reflectivity,
+                                       brightness: pbr.brightness)
                 }
             }
         }
@@ -873,7 +885,8 @@ extension SceneRenderer {
                                   customConstants: customConstants, customTextures: customTextures,
                                   normalTextureName: normalTextureName, maskTextureName: maskTextureName,
                                   refract: refract, refractAmount: refractAmount,
-                                  reflection: reflection, reflectivity: pbr.reflectivity)
+                                  reflection: reflection, reflectivity: pbr.reflectivity,
+                                  brightness: pbr.brightness)
     }
 
     private func imageLayerCompositeID(_ name: String) -> Int? {
@@ -1626,6 +1639,13 @@ extension SceneRenderer {
                     u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, fogMode)
                     // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
                     u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
+                    // WE `#if HDR albedo.rgb *= g_Brightness`(generic2.frag:79-81). 게이트를 doc.hdr 이
+                    // 아니라 sceneIsHDR(= HDR 파이프라인이 실제로 도는가)로 잡은 이유: WE 의 HDR 매크로는
+                    // 엔진이 렌더패스 상태에서 주입하는 콤보고(spec/engine/shaders.json
+                    // shaders.combos.engineInjected · render-pass bit13), LDR 폴백에서는 1 을 넘는 곱을
+                    // 흡수할 톤맵/saturate 패스가 아예 없어 그대로 백화가 된다.
+                    // 배치는 refract/reflect 분기보다 **위** — 세 드로우 경로가 같은 u 를 쓴다.
+                    u.extra = SIMD4(sceneIsHDR ? mesh.brightness : 1, 0, 0, 0)
                     let useSkin = mesh.skinned && boneBuf != nil
                     let customSkinBuf = customSkins?[meshIdx]
                     // H4: REFRACT 메시(정적·비커스텀 한정 — 커스텀 셰이더/스키닝은 기존 경로 폴터): 여기까지의

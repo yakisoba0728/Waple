@@ -16,6 +16,7 @@ enum Mesh3DShaders {
         float4 material;      // roughness, metallic, alphaCutoff, 0=unlit/1=mesh hemi/2=image flat
         float4 specularTint;
         float4 rim;            // x=g_RimAmount, y=g_RimExponent, z=RIMLIGHTING on/off, w=SHADINGGRADIENT on/off
+        float4 extra;          // x=g_Brightness(HDR 최종 곱 — 비HDR 씬은 CPU 가 1 로 중화). y/z/w 예약
     };
     struct FrameU {
         float4 cameraEye;
@@ -471,6 +472,15 @@ enum Mesh3DShaders {
         }
     }
 
+    // WE `#if HDR  albedo.rgb *= g_Brightness` — 소비 위치가 규약이다: 라이팅·반사를 **다 더한 뒤**,
+    // 포그 **직전**(generic2.frag:79-81, generic4.frag:166-172 = REFLECTION 블록 다음 · FOG 블록 앞).
+    // 알베도 샘플 직후가 아니다 — 거기 곱하면 스페큘러/반사 가산분이 배율을 안 받는다.
+    // LIGHTING 콤보와 무관하게 발화하므로 unlit 조기 반환 경로도 통과해야 한다.
+    // 비HDR 씬은 CPU 가 extra.x=1 을 실어 항등이 된다(게이트 근거는 SceneRenderer3D encode3D 주석).
+    inline float3 applyHDRBrightness(float3 color, constant MeshU& u) {
+        return color * u.extra.x;
+    }
+
     fragment float4 mf_main(VOut in [[stage_in]],
                             texture2d<float> tex [[texture(0)]],
                             depth2d_array<float> shadowAtlas [[texture(1)]],
@@ -491,6 +501,7 @@ enum Mesh3DShaders {
             // unlit 도 WE(generic4 CombineLighting 이후 ApplyFog)와 같이 fog 대상.
             float3 rgb = sampled.rgb;
             float alpha = sampled.a;
+            rgb = applyHDRBrightness(rgb, u);
             applySceneFog(rgb, alpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
             return float4(rgb * alpha, alpha);
         }
@@ -525,6 +536,7 @@ enum Mesh3DShaders {
         }
         float3 lit = ambientColor * albedo + direct;
         float outAlpha = sampled.a;
+        lit = applyHDRBrightness(lit, u);
         applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
         return float4(lit * outAlpha, outAlpha);
     }
@@ -554,6 +566,7 @@ enum Mesh3DShaders {
         if (mode < 0.5) {
             float3 rgb = sampled.rgb;
             float alpha = sampled.a;
+            rgb = applyHDRBrightness(rgb, u);
             applySceneFog(rgb, alpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
             return float4(rgb * alpha, alpha);
         }
@@ -629,6 +642,7 @@ enum Mesh3DShaders {
         }
         float3 lit = ambientColor * albedo + direct;
         float outAlpha = sampled.a;
+        lit = applyHDRBrightness(lit, u);
         applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
         return float4(lit * outAlpha, outAlpha);
     }
@@ -672,6 +686,7 @@ enum Mesh3DShaders {
         if (mode < 0.5) {
             float3 rgb = sampled.rgb;
             float alpha = sampled.a;
+            rgb = applyHDRBrightness(rgb, u);
             applySceneFog(rgb, alpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
             return float4(rgb * alpha, alpha);
         }
@@ -706,6 +721,7 @@ enum Mesh3DShaders {
         }
         float3 lit = ambientColor * albedo + direct;
         float outAlpha = sampled.a;
+        lit = applyHDRBrightness(lit, u);
         applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
         return float4(lit * outAlpha, outAlpha);
     }
@@ -796,6 +812,7 @@ enum Mesh3DShaders {
 
         float outAlpha = sampled.a;
         float fogMode = u.specularTint.w;
+        lit = applyHDRBrightness(lit, u);
         applySceneFog(lit, outAlpha, fogMode, in.worldPos, frame.cameraEye.xyz, frame);
         return float4(lit * outAlpha, outAlpha);
     }

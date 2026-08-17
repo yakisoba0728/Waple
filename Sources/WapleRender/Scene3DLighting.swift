@@ -32,11 +32,31 @@ struct Scene3DMaterialValues: Equatable {
     /// M6(⑥): REFLECTION 콤보 g_Reflectivity(generic4.frag:66 — material key "reflectivity", 기본 1).
     var reflectivity: Float = 1.0
 
+    /// WE `g_Brightness` — `#if HDR` 안에서 **최종색에 곱하는** 배율(기본 1, 범위 [0,10]).
+    /// 소비 위치가 알베도가 아니라 라이팅·반사를 **다 더한 뒤**, 포그 **직전**이다
+    /// (generic2.frag:79-81, generic4.frag:166-172). LIGHTING 콤보와 무관하게 발화한다 —
+    /// unlit 머티리얼도 곱해야 한다(코퍼스 실물: 3470948192 `uc/材质` generic2 + LIGHTING:0 + 0.5).
+    /// HDR 게이트는 머티리얼이 아니라 **엔진이 주입하는 콤보**라(spec/engine/shaders.json
+    /// `shaders.combos.engineInjected`; 코퍼스 머티리얼 5,804건 중 HDR 콤보 저작 0건) 여기서는
+    /// 저작값만 보존하고 씬 HDR 여부는 encode3D 가 곱한다.
+    var brightness: Float = 1
+
     /// 레거시 레인 머티리얼 셰이더(`common_fragment.h::ComputeLightSpecular`). 이름이 비슷한
     /// `generic3` 은 **PBR 레인**이다(generic3.frag:22 `#include "common_pbr.h"`, 상수 키
     /// `roughness`/`metallic` 기본 0.7/0) — 여기 넣으면 안 된다.
     /// 2D 레이어 전용 `genericimage*`/`genericparticle` 도 메시 머티리얼이 아니라 대상 밖이다.
     static let legacyLaneShaders: Set<String> = ["generic", "generic2"]
+
+    /// `g_Brightness` 를 노출하는 머티리얼 키(소문자 정규화 후). nil = **그 셰이더엔 유니폼이 없다**.
+    /// 레인마다 철자가 갈리는 것이 이 유니폼의 함정이다:
+    /// - `generic2` → `Brigtness`. **WE 자신의 오타**다(generic2.frag:7 선언 주석 원문). 철자를
+    ///   교정해 읽으면 저작값을 영영 못 만난다 — 코퍼스에서도 이 셰이더에만 이 철자가 붙는다.
+    /// - `generic` → 없음. 같은 레거시 레인이지만 generic.frag 에는 g_Brightness 선언 자체가 없어
+    ///   (uniform 전수 대조: Metal/Rough/Light/Color/Alpha 뿐) 키를 읽는 것 자체가 오독이다.
+    ///   레인 구분(legacyLaneShaders)과 키 유무가 일치하지 않으므로 별도 판정을 둔다.
+    static func brightnessKey(shader: String?) -> String? {
+        shader == "generic2" ? "brigtness" : nil
+    }
 
     /// `passes[0].constantshadervalues` → 머티리얼 값. `shader` 는 같은 pass 의 셰이더 이름으로,
     /// 어떤 상수 규약(키·기본값)을 적용할지 고른다. nil/미지 셰이더는 PBR 레인(종전 동작).
@@ -77,6 +97,9 @@ struct Scene3DMaterialValues: Equatable {
         if let rimAmount = numbers(values["rimamount"])?.first { result.rimAmount = rimAmount }
         if let rimExponent = numbers(values["rimexponent"])?.first { result.rimExponent = rimExponent }
         if let reflectivity = numbers(values["reflectivity"])?.first { result.reflectivity = reflectivity }
+        if let key = brightnessKey(shader: shader), let brightness = numbers(values[key])?.first {
+            result.brightness = brightness
+        }
         return result
     }
 
