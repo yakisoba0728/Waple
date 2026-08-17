@@ -121,20 +121,6 @@
        "pass": false
       },
       {
-       "id": "3589454154",
-       "meanLuma": 0.00239,
-       "blackoutMeanAbsDiff": 0.4547,
-       "blackoutFracExceeding": 0.0062,
-       "blackoutMaxAbsDiff": 255,
-       "relDiff": 0.0892,
-       "caughtBy": [
-        "fracExceeding",
-        "relDiff",
-        "structureLoss"
-       ],
-       "pass": false
-      },
-      {
        "id": "2881558311",
        "meanLuma": 0.00265,
        "blackoutMeanAbsDiff": 0.507,
@@ -161,20 +147,6 @@
         "structureLoss"
        ],
        "pass": false
-      },
-      {
-       "id": "3662790108",
-       "meanLuma": 0.00342,
-       "blackoutMeanAbsDiff": 0.6547,
-       "blackoutFracExceeding": 0.0182,
-       "blackoutMaxAbsDiff": 141,
-       "relDiff": 0.1284,
-       "caughtBy": [
-        "fracExceeding",
-        "relDiff",
-        "structureLoss"
-       ],
-       "pass": false
       }
      ]
     },
@@ -184,10 +156,8 @@
      "staleness": "6e2e713 이 relDiff·structureLoss 를 넣은 다음 날 재생성됐는데 스크립트가 그 둘을 안 봤다.",
      "approxWouldFlag": [
       "3444535389",
-      "3589454154",
       "2881558311",
-      "1612750231",
-      "3662790108"
+      "1612750231"
      ],
      "actualUnderPreviousCode": [
       "3444535389"
@@ -200,7 +170,7 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": "spec/golden/snapshot/baseline-618d16f/manifest.json",
+     "ref": "spec/golden/snapshot/baseline-7075b74/manifest.json",
      "note": "커밋된 기준선 170종의 썸네일·meanLuma"
     },
     {
@@ -396,15 +366,15 @@
    "value": {
     "n": 170,
     "min": 0.00149,
-    "p05": 0.02039,
-    "median": 0.38962,
+    "p05": 0.02476,
+    "median": 0.3754,
     "max": 0.86892
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "file",
-     "ref": "spec/golden/snapshot/baseline-618d16f/manifest.json",
+     "ref": "spec/golden/snapshot/baseline-7075b74/manifest.json",
      "note": "커밋된 기준선 170종의 썸네일·meanLuma"
     }
    ]
