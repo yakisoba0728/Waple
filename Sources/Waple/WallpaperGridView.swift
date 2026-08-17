@@ -253,7 +253,7 @@ struct WallpaperGridView: View {
 
     private var placeholderThumb: some View {
         ZStack {
-            Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.3))
+            Rectangle().fill(ColorRole.placeholderFill)
             Image(systemName: "photo").foregroundStyle(.tertiary)
         }
     }
@@ -368,7 +368,7 @@ private struct StillPreviewView: View {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
             } else {
                 ZStack {
-                    Rectangle().fill(Color(nsColor: .quaternaryLabelColor).opacity(0.3))
+                    Rectangle().fill(ColorRole.placeholderFill)
                     Image(systemName: "photo").foregroundStyle(.tertiary)
                 }
             }
