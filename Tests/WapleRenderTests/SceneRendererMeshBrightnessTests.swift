@@ -202,6 +202,29 @@ final class SceneRendererMeshBrightnessTests: XCTestCase {
                        "generic4 의 brightness 도 최종색에 곱해야 함 — plain=\(plain) scaled=\(scaled)")
     }
 
+    /// **ortho 하이브리드**(2D 레이어와 인터리브된 3D 메시 — runOrtho3DMeshes)도 같은 배율을 받는다.
+    /// 이 경로는 encode3D 와 별개로 자체 MeshUniform 을 조립한다. 첫 배선에서 여기를 빠뜨렸고
+    /// 골든 게이트가 잡았다 — 도달 4씬 중 2씬(3509243656 · 3589454154)이 픽셀 0변화였다.
+    func testOrthoHybridMeshAlsoScalesByBrightness() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        func orthoScene() -> String {
+            """
+            {"general":{"orthogonalprojection":{"width":64,"height":64},"hdr":true,
+                        "clearcolor":"0 0 0","ambientcolor":"1 1 1","skylightcolor":"1 1 1"},
+             "objects":[
+               {"id":2,"name":"fx","model":"models/fx.mdl","origin":"32 32 0","scale":"32 32 32"}
+             ]}
+            """
+        }
+        let plain = try centerLuma(capture(scene: orthoScene(), files: files(brigtness: nil),
+                                           tag: "ortho-none"))
+        let scaled = try centerLuma(capture(scene: orthoScene(), files: files(brigtness: 2),
+                                            tag: "ortho-2x"))
+        XCTAssertGreaterThan(plain, 0.2, "대조군이 검정이면 배율을 잴 수 없다 — 실측 \(plain)")
+        XCTAssertEqual(scaled, plain * 2, accuracy: 0.03,
+                       "ortho 하이브리드 메시 경로도 배율을 실어야 함 — plain=\(plain) scaled=\(scaled)")
+    }
+
     /// 정상 철자로 저작하면 generic2 에서는 아무 일도 없어야 한다(철자 규약이 실제로 픽셀을 가른다).
     func testCorrectSpellingIsInertOnGeneric2() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }

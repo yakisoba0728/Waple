@@ -887,6 +887,9 @@ extension SceneRenderer {
                 u.specularTint = SIMD4(mesh.specularTint.x, mesh.specularTint.y, mesh.specularTint.z, 0)
                 // F274: RIMLIGHTING/SHADINGGRADIENT 콤보 유니폼 + 게이트 플래그.
                 u.rim = SIMD4(mesh.rimAmount, mesh.rimExponent, mesh.rimLighting ? 1 : 0, mesh.shadingGradient ? 1 : 0)
+                // WE `#if HDR albedo.rgb *= g_Brightness` — encode3D 와 동일 규약(게이트 근거는 그쪽 주석).
+                // 이 경로는 자체 MeshUniform 을 만들므로 새 슬롯을 여기서도 실어야 한다.
+                u.extra = SIMD4(sceneIsHDR ? mesh.brightness : 1, 0, 0, 0)
                 let useSkin = mesh.skinned && boneBuf != nil
                 // H4: REFRACT 메시(정적·비커스텀 한정): 여기까지의 acc(하위 order 2D 레이어+선행 메시 누적)를
                 // 스냅샷 떠 노멀 오프셋 재샘플·곱(인코더 분할 — encode3D 의 H4 분기와 동형). 스냅샷 실패 시
