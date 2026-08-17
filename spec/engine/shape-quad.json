@@ -132,6 +132,149 @@
     "values": {
      "quad": 41
     },
+    "quadsWithOwnScale": 23,
+    "quadsWithScaledAncestor": 0,
+    "scaledQuads": [
+     {
+      "scene": "3276911872",
+      "id": 645,
+      "ownScale": 2.95971,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3276911872",
+      "id": 1376,
+      "ownScale": 2.0,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3276911872",
+      "id": 2525,
+      "ownScale": 2.95971,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3276911872",
+      "id": 6498,
+      "ownScale": 2.0,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3276911872",
+      "id": 11876,
+      "ownScale": 2.0,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3276911872",
+      "id": 18661,
+      "ownScale": 2.95971,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3287715210",
+      "id": 470,
+      "ownScale": 0.4,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3299228616",
+      "id": 259,
+      "ownScale": 2.06018,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3299228616",
+      "id": 565,
+      "ownScale": 2.06018,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3299228616",
+      "id": 601,
+      "ownScale": 2.06018,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3299228616",
+      "id": 1170,
+      "ownScale": 2.06018,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3299228616",
+      "id": 1529,
+      "ownScale": 2.06018,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3299228616",
+      "id": 1959,
+      "ownScale": 2.06018,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3454792257",
+      "id": 334,
+      "ownScale": 2.56678,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3461168300",
+      "id": 260,
+      "ownScale": 4.0,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3478434536",
+      "id": 314,
+      "ownScale": 2.21365,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3510729512",
+      "id": 2625,
+      "ownScale": 1.96518,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3521337568",
+      "id": 96,
+      "ownScale": 3.0,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3521337568",
+      "id": 100,
+      "ownScale": 4.0,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3538758087",
+      "id": 2625,
+      "ownScale": 3.40071,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3544152633",
+      "id": 9493,
+      "ownScale": -1.24456,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3622495963",
+      "id": 443,
+      "ownScale": 3.79016,
+      "ancestorScaleProduct": 1.0
+     },
+     {
+      "scene": "3640755971",
+      "id": 614,
+      "ownScale": 5.0,
+      "ancestorScaleProduct": 1.0
+     }
+    ],
+    "scaleNote": "쿼드의 최종 크기 = size × (자기 scale) × (조상 scale 누적). 조상 scale 이 1 이 아닌 쿼드는 quadsWithScaledAncestor 건뿐이다 — 3521337568 의 쿼드 부모(id 2065)는 scale 키가 없어 (1,1,1) 이고 평행이동만 한다.",
     "withEffects": 41,
     "withSizeKey": 0,
     "withParent": 16,
@@ -201,29 +344,146 @@
    ]
   },
   {
-   "id": "shape.defaultSizeHypothesis",
+   "id": "shape.sizeIsProperty0x2F0",
    "value": {
-    "hypothesis": "shape 렌더러블의 기본 크기 = (orthoHeight, orthoHeight) 정사각 — §3 의 destFloatPairOffset 가 '레이어 크기' 라는 전제 위에서만 성립한다",
-    "whyUnconfirmed": [
-     "this+0x2F0/0x2F4 를 '크기' 로 읽은 근거는 정황뿐이다: 기본 생성자가 (1.0, 1.0) 로 두고, 바로 뒤 0x2F8/0x2FC/0x300 이 월드 행렬에 곱해지는 위치 벡터다. 이 두 성분을 **소비**하는 지점을 찾지 못했다.",
-     "이미지 레이어 타입은 별개 클래스(0x960)라 같은 오프셋으로 대조할 수 없었다."
-    ],
-    "abTest": {
-     "what": "effectQuadLayer 를 size=(orthoH,orthoH) + 저작 origin/scale/angles/parent 로 바꿔 코퍼스 5씬을 렌더 대조(1920×1080, t=6.0)",
-     "result": {
-      "3404976219": "개선 — 오른쪽 절반 백색 플레어가 좌상단 일부로 수축",
-      "3558034522": "개선 — 인물을 덮던 무지개 줄무늬가 좌상단으로 수축",
-      "3521337568": "악화 — scale 3/4 쿼드가 6480/8640px 로 커져 전면이 뿌옇게 뜬다",
-      "3460973721": "판정 애매 — 광선이 더 굵고 밝아진다"
-     },
-     "confounds": [
-      "3521337568 의 쿼드 부모(id 2065)의 scale 을 확인하지 않았다",
-      "우리 렌더러의 솔리드 레이어 이펙트 체인이 **비-풀스크린** 지오메트리에서 WE 와 같은 UV/RT 규약을 쓰는지 자체가 미검증이다 — 3404976219 결과에 WE 에는 없는 하드 엣지(rayfeather 대신 클리핑)가 남았다"
-     ],
-     "verdict": "반증이 아니라 **혼재·교란**. 가설은 살아 있고, 고치려면 두 교란 요인을 먼저 닫아야 한다."
+    "registrarVA": "0x1401ee520",
+    "properties": {
+     "size": "0x2f0",
+     "color": "0x330",
+     "nointerpolation": "0x304"
     }
    },
-   "status": "추정",
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    }
+   ]
+  },
+  {
+   "id": "shape.sizeConsumedAsHalfExtent",
+   "value": {
+    "sites": [
+     {
+      "funcVA": "0x1401ebf60",
+      "siteVA": "0x1401ec428",
+      "constVA": "0x1404926c0",
+      "constant": 0.5
+     }
+    ],
+    "halfExtentConstant": 0.5,
+    "meaning": "size × 0.5 가 월드행렬의 x·y 기저 행에 곱해진다 → 쿼드는 origin 중심 ±size/2. 로컬 코너는 ±1(§9 의 이미지 레이어 공유가 되짚는다)."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    }
+   ]
+  },
+  {
+   "id": "shape.sharesRenderableBaseWithImageLayer",
+   "value": {
+    "allocToVtable": {
+     "0x2c0": "0x14048ec88",
+     "0x320": "0x140491338",
+     "0x360": "0x140490980",
+     "0x460": "0x140491d10",
+     "0x960": "0x1404915b0"
+    },
+    "imageVtableVA": "0x1404915b0",
+    "shapeSlots": 38,
+    "imageSlots": 21,
+    "sharedSlots": [
+     {
+      "slot": "0x8",
+      "fn": "0x140031a50"
+     },
+     {
+      "slot": "0x30",
+      "fn": "0x1401a3be0"
+     },
+     {
+      "slot": "0x38",
+      "fn": "0x1401a3dd0"
+     },
+     {
+      "slot": "0x58",
+      "fn": "0x140185000"
+     },
+     {
+      "slot": "0x70",
+      "fn": "0x140014c60"
+     },
+     {
+      "slot": "0x78",
+      "fn": "0x14000ec30"
+     },
+     {
+      "slot": "0x80",
+      "fn": "0x1401850a0"
+     },
+     {
+      "slot": "0x88",
+      "fn": "0x1400a36d0"
+     }
+    ],
+    "meaning": "shape(0x460)와 이미지(0x960)가 같은 기반 클래스 슬롯을 공유한다 — §7 의 size@0x2F0 은 두 타입 공통 필드다. 풀스크린 이미지가 저작 size=(프로젝션 w,h) 로 정확히 화면을 덮는다는 사실이 §8 의 ±size/2 와 맞물려 로컬 코너 ±1 을 확정한다(2배 모호성 해소)."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_shape_quad.py"
+    }
+   ]
+  },
+  {
+   "id": "shape.defaultSize",
+   "value": {
+    "defaultSize": "(ortho.height, ortho.height) — 정사각. width 가 아니다",
+    "geometry": "origin 중심 ±size/2. 최종 화면 크기 = size × scale(자기·조상 누적)",
+    "howConfirmed": [
+     "§shape.sizeIsProperty0x2F0 — 리플렉션 표가 이름 `\"size\"` 를 멤버 0x2F0 에 직접 묶는다. 추론이 아니라 바이너리가 스스로 이름을 댄다(대조 항목: color@0x330 · alpha@0x33C · brightness@0x340 — scene.json 키와 1:1).",
+     "§shape.initWritesOrthoHeightPair — shape 클래스 vfunc+0x40 이 그 0x2F0 에 (float)(int)ortho.height 를 movsd 로 두 성분 다 쓴다. 저작 `size` 키가 없을 때 남는 값이 곧 기본값이고, §shape.corpusUsage 의 withSizeKey=0 이 코퍼스 전건이 그 경로임을 보인다.",
+     "§shape.sizeConsumedAsHalfExtent — 드로우 준비가 size × 0.5 로 월드행렬 x·y 기저를 스케일한다. 0.5 는 rip-상대 상수를 실제로 읽어 확인했다.",
+     "§shape.sharesRenderableBaseWithImageLayer — 이미지 레이어(0x960)와 vtable 슬롯을 공유하므로 size@0x2F0 은 공통 필드다. 풀스크린 이미지가 저작 size=(프로젝션 w,h) 로 정확히 화면을 덮는다는 사실이 ±size/2 와 맞물려 로컬 코너 ±1 을 확정한다(size 가 반폭이 아니라 전폭이라는 2배 모호성 해소)."
+    ],
+    "supersedes": {
+     "wasStatus": "추정 (shape.defaultSizeHypothesis, 2026-08-17 1차)",
+     "whyItWasUnconfirmed": "당시엔 0x2F0 을 '크기' 로 읽은 근거가 정황(기본 생성자 1.0,1.0 + 뒤이은 위치 벡터)뿐이었고 소비 지점을 못 찾았다. 찾는 방법은 vtable 슬롯 클로저(1단계 호출까지)를 .pdata 함수 범위로 잘라 0x2E0~0x310 modrm disp32 를 훑는 것이었다 — 오프셋 하나만 정확히 찾는 스캔으로는 SIMD 블록 로드·lea 탈출을 놓친다.",
+     "abTestThatWasMixed": {
+      "3404976219": "개선",
+      "3558034522": "개선",
+      "3521337568": "악화",
+      "3460973721": "판정 애매"
+     },
+     "confoundsAndHowTheyClosed": [
+      "① 3521337568 쿼드 부모(id 2065)의 scale 미확인 → **닫힘**: scale 키가 없어 (1,1,1) 이고 평행이동만 한다(§shape.corpusUsage.scaledQuads). 즉 6480/8640px 은 쿼드 자신의 scale 3/4 이 만든 것이고, 그 크기는 WE 도 같다 — 부모로는 이 악화를 설명할 수 없다.",
+      "② 솔리드 레이어 이펙트 체인의 비-풀스크린 UV/RT 규약 미검증 → **부분적으로만 닫힘**: 우리 체인 RT 는 layer.size(SceneRendererResources) 라 레이어-로컬 0..1 UV 가 나오고, 이는 WE 의 레이어별 RT 축과 같다. 다만 `size × scale` 로 커진 쿼드에서 WE 가 RT 해상도를 무엇으로 잡는지는 **여전히 미확정**이다 — 아래 residual 참조."
+     ]
+    },
+    "residualDefectNotInThisEntry": {
+     "symptom": "scale 이 큰 쿼드(3521337568 scale 3·4, 3640755971 scale 5, 3461168300 scale 4)에서 화면이 뿌옇게 뜬다. scale 1 쿼드(3404976219·3558034522·3460973721·3690417937)는 뚜렷이 개선된다.",
+     "whyNotSize": "크기 자체는 위 네 근거로 WE 와 같다. 남는 축은 lightshafts 이펙트가 그 크기에서 만드는 **내용**이다 — 우리는 RT 를 size(=2160²)로 잡고 draw 에서 scale 배 늘리므로 광선·rayfeather 가 그대로 확대된다. WE 가 RT 를 화면 투영 크기로 잡는다면 광선은 확대되지 않고 촘촘해진다.",
+     "whatWouldSettleIt": "shape/이미지 렌더러블이 이펙트 체인 RT 를 만드는 지점의 width/height 인자 — CreateTexture2D 호출까지 역추적하거나, scale>1 쿼드가 있는 씬의 RenderDoc 캡처 1장이면 끝난다(현재 보유한 RDC 4종에는 shape 쿼드가 없다)."
+    }
+   },
+   "status": "확정",
    "evidence": [
     {
      "kind": "binary",
@@ -236,6 +496,14 @@
     {
      "kind": "file",
      "ref": "Sources/WapleCore/SceneDocument.swift effectQuadLayer"
+    },
+    {
+     "kind": "file",
+     "ref": "Tests/WapleCoreTests/SceneDocumentTests.swift testEffectQuadPromotedToFullscreenEffectLayer"
+    },
+    {
+     "kind": "asset",
+     "ref": "we-audit reference quad-lightshafts_3690417937 — 쿼드 3개가 전부 scale 1·angles 0·origin (1841.92, 1052.11) 이라 광선 구간의 좌우 끝이 곧 쿼드 폭이다. WE 실기 2프레임의 열-프로파일 상관이 승격 0.676 → 확정 크기 0.892 로 오른다"
     }
    ]
   }

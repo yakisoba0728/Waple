@@ -21,6 +21,16 @@
      ortho **height** 다.
   §5 코퍼스 — shape 오브젝트 전수(값·effects·size 키·parent·쿼드를 부모로 삼는 자식 수).
   §6 lightshafts 프리셋 프리뷰 3종의 scale 역산(=실패한 추론의 재현).
+  §7 **그 오프셋이 무엇인지** — 렌더러블 기반 클래스의 프로퍼티 리플렉션 등록 함수를 읽어
+     `(이름, 멤버 오프셋)` 쌍을 뽑는다. `"size"` 가 §3 의 S 와 같은 오프셋에 등록돼 있으면
+     추론이 아니라 바이너리가 스스로 이름을 대는 것이다(대조: color/alpha/brightness).
+  §8 **소비 지점** — 드로우 준비 함수가 `[this+S]`, `[this+S+4]` 를 **0.5 로 곱해** 월드행렬
+     0·1행에 각각 스케일해 상수 블록에 쓴다. 즉 쿼드는 origin 중심 ±size/2 다. 0.5 는
+     rip-상대 상수를 실제로 읽어 확인한다(하드코딩 아님).
+  §9 이미지 레이어 클래스(alloc 0x960)의 vtable 과 shape vtable(0x460)의 **슬롯 교집합** —
+     같은 기반 클래스를 공유하므로 §7 의 size@S 가 이미지 레이어에도 같은 자리다. 저작
+     `size`(풀스크린 이미지 = 프로젝션 크기)가 정확히 화면을 덮는다는 사실이 §8 의
+     "로컬 코너 ±1" 규약을 되짚어 준다(2배 모호성 해소).
 
 경로 환경변수: WE_ROOT(설치본) 또는 WE_BIN(wallpaper64.exe 직접), WE_WORKSHOP(코퍼스).
 
@@ -91,6 +101,55 @@ def rip_refs(pe, target):
 
 def at(pe, va, n):
     return pe.d[pe.rva2off(va - pe.base):pe.rva2off(va - pe.base) + n]
+
+
+def in_text(pe, va):
+    _nm, tva, _vsz, _ptr, rsz = pe.sec(".text")
+    return pe.base + tva <= va < pe.base + tva + rsz
+
+
+def fn_body(pe, va):
+    """va 가 속한 함수의 (바이트, 시작VA). .pdata 범위 기준(PE.funcs 는 병합돼 있다)."""
+    import bisect
+    f = pe.fn_start(va - pe.base)
+    if f is None:
+        return None, None
+    i = bisect.bisect_right(pe.starts, f) - 1
+    b, e = pe.funcs[i]
+    o1, o2 = pe.rva2off(b), pe.rva2off(e - 1)
+    if o1 is None or o2 is None:
+        return None, None
+    return pe.d[o1:o2 + 1], pe.base + b
+
+
+def vtable_slots(pe, vt, limit=80):
+    """vtable 의 .text 를 가리키는 연속 슬롯. 첫 비-.text 값에서 멈춘다."""
+    off = pe.rva2off(vt - pe.base)
+    out = []
+    for i in range(limit):
+        p = struct.unpack_from("<Q", pe.d, off + i * 8)[0]
+        if not in_text(pe, p):
+            break
+        out.append(p)
+    return out
+
+
+def call_closure(pe, roots, depth):
+    """roots(함수 VA들)에서 직접 호출(E8 rel32)로 depth 단계까지 닿는 함수 시작 VA 집합."""
+    seen, frontier = set(), list(roots)
+    for _ in range(depth + 1):
+        nxt = []
+        for v in frontier:
+            body, bva = fn_body(pe, v)
+            if body is None or bva in seen:
+                continue
+            seen.add(bva)
+            for m in re.finditer(rb"\xe8(....)", body, re.S):
+                tgt = bva + m.end() + struct.unpack("<i", m.group(1))[0]
+                if in_text(pe, tgt):
+                    nxt.append(tgt)
+        frontier = nxt
+    return seen
 
 
 # ── §1 값 문자열 부재 ──────────────────────────────────────────────────────
@@ -252,12 +311,28 @@ def load_scene(wid):
     return None
 
 
+def vec_first(s, default=1.0):
+    """`"3.00000 3.00000 1.00000"` → 3.0. dict 바인딩({user,value})도 언랩."""
+    if isinstance(s, dict):
+        s = s.get("value")
+    if s is None:
+        return default
+    try:
+        return float(str(s).split()[0])
+    except (ValueError, IndexError):
+        return default
+
+
 def measure_corpus():
     if not os.path.isdir(WS):
         fail("코퍼스가 없다: %s (WE_WORKSHOP/WAPLE_REAL_PKGS)" % WS)
     values = collections.Counter()
     total = withEffects = withSize = withParent = childrenOfQuad = 0
     scenes = set()
+    # 부모 체인의 scale 누적 — "부모가 쿼드를 키운다" 는 교란을 닫기 위한 실측.
+    ancestor_scaled = 0
+    self_scaled = 0
+    scaled_examples = []
     for wid in sorted(os.listdir(WS)):
         if not os.path.isdir(os.path.join(WS, wid)):
             continue
@@ -265,6 +340,7 @@ def measure_corpus():
         if not sc:
             continue
         objs = [o for o in sc.get("objects", []) if isinstance(o, dict)]
+        byid = {o["id"]: o for o in objs if isinstance(o.get("id"), int)}
         quad_ids = set()
         for o in objs:
             v = o.get("shape")
@@ -283,11 +359,31 @@ def measure_corpus():
                 withParent += 1
             if isinstance(o.get("id"), int):
                 quad_ids.add(o["id"])
+            own = vec_first(o.get("scale"))
+            chain, p, depth = 1.0, o.get("parent"), 0
+            while isinstance(p, int) and p in byid and depth < 32:
+                chain *= vec_first(byid[p].get("scale"))
+                p = byid[p].get("parent")
+                depth += 1
+            if abs(own - 1.0) > 1e-6:
+                self_scaled += 1
+            if abs(chain - 1.0) > 1e-6:
+                ancestor_scaled += 1
+            if abs(own * chain - 1.0) > 1e-6:
+                scaled_examples.append({"scene": wid, "id": o.get("id"),
+                                        "ownScale": round(own, 5),
+                                        "ancestorScaleProduct": round(chain, 5)})
         for o in objs:
             if isinstance(o.get("parent"), int) and o["parent"] in quad_ids:
                 childrenOfQuad += 1
     return {"scanned": len(os.listdir(WS)), "shapeObjects": total,
             "scenes": len(scenes), "values": dict(values),
+            "quadsWithOwnScale": self_scaled,
+            "quadsWithScaledAncestor": ancestor_scaled,
+            "scaledQuads": sorted(scaled_examples, key=lambda r: (r["scene"], r["id"] or 0)),
+            "scaleNote": "쿼드의 최종 크기 = size × (자기 scale) × (조상 scale 누적). 조상 scale 이 "
+                         "1 이 아닌 쿼드는 quadsWithScaledAncestor 건뿐이다 — 3521337568 의 "
+                         "쿼드 부모(id 2065)는 scale 키가 없어 (1,1,1) 이고 평행이동만 한다.",
             "withEffects": withEffects, "withSizeKey": withSize,
             "withParent": withParent, "objectsParentedToAQuad": childrenOfQuad}
 
@@ -318,6 +414,145 @@ def measure_preview_backsolve():
                        "전제가 성립하지 않는다 — 이 역산으로는 기본 크기를 정할 수 없다"}
 
 
+# ── §7 프로퍼티 리플렉션 테이블: 이름 → 멤버 오프셋 ─────────────────────────
+
+# 0x1401ee5bd 실측 바이트(오프셋/상대주소는 캡처):
+#   48 8D 15 rel32        lea rdx,[rip+..]      ; 프로퍼티 이름 문자열
+#   41 B8 imm32           mov r8d, <이름 길이>
+#   48 8D 4B 68           lea rcx,[rbx+0x68]    ; 등록 대상(디스크립터의 이름 슬롯)
+#   E8 rel32              call <문자열 assign>
+#   48 8D 05 rel32        lea rax,[rip+..]      ; getter/setter thunk
+#   C7 43 34 imm32        mov dword [rbx+0x34], <멤버 오프셋>   ← 이게 답이다
+PROPREG = re.compile(
+    rb"\x48\x8d\x15(....)\x41\xb8(....)\x48\x8d\x4b\x68\xe8....\x48\x8d\x05...."
+    rb"\xc7\x43\x34(....)", re.S)
+
+
+def measure_property_table(pe):
+    """`"size"` 문자열 xref 중 위 등록 시퀀스가 성립하는 곳을 찾아 그 함수의 전체 표를 뽑는다."""
+    vas = string_vas(pe, "size")
+    if len(vas) != 1:
+        fail("'size' 문자열이 %d 개다(기대 1)" % len(vas))
+    site = None
+    for r in rip_refs(pe, vas[0]):
+        m = PROPREG.match(at(pe, r - 3, 48))
+        if m:
+            site = r - 3
+            break
+    if site is None:
+        fail("'size' 프로퍼티 등록 시퀀스를 못 찾았다 — 리플렉션 표 형태가 바뀌었다")
+    body, bva = fn_body(pe, site)
+    if body is None:
+        fail("등록 함수의 .pdata 범위를 못 잡았다")
+    rows = {}
+    for m in PROPREG.finditer(body):
+        name_va = bva + m.start() + 7 + struct.unpack("<i", m.group(1))[0]
+        off = pe.rva2off(name_va - pe.base)
+        if off is None:
+            continue
+        end = pe.d.find(b"\0", off, off + 64)
+        name = pe.d[off:end].decode("ascii", "ignore")
+        strlen = struct.unpack("<I", m.group(2))[0]
+        if not name or len(name) != strlen:
+            continue          # 이름 길이 인자와 실제 문자열이 어긋나면 다른 시퀀스다
+        rows[name] = "0x%x" % struct.unpack("<I", m.group(3))[0]
+    if "size" not in rows:
+        fail("등록 표에서 'size' 를 못 뽑았다")
+    return {"registrarVA": hex(bva), "properties": rows}
+
+
+# ── §8 소비 지점: size × 0.5 로 월드행렬 x·y 기저를 스케일 ─────────────────
+
+# 0x1401ec428 실측(자기완결형 — 0.5 상수 로드가 시퀀스 안에 있다):
+#   F3 44 0F 10 86 off32   movss  xmm8,[rsi+size.x]
+#   44 0F 29 4C 24 xx      movaps [rsp+..],xmm9      (레지스터 대피 — 값 무관)
+#   F3 44 0F 10 8E off32   movss  xmm9,[rsi+size.y]
+#   44 0F 29 5C 24 xx      movaps [rsp+..],xmm11
+#   F3 44 0F 10 1D rel32   movss  xmm11,[rip+K]      ← K 를 읽어 0.5 임을 확인
+#   F3 45 0F 59 C3         mulss  xmm8,xmm11
+#   F3 45 0F 59 CB         mulss  xmm9,xmm11
+HALVE = re.compile(
+    rb"\xf3\x44\x0f\x10\x86(....)\x44\x0f\x29\x4c\x24."
+    rb"\xf3\x44\x0f\x10\x8e(....)\x44\x0f\x29\x5c\x24."
+    rb"\xf3\x44\x0f\x10\x1d(....)\xf3\x45\x0f\x59\xc3\xf3\x45\x0f\x59\xcb", re.S)
+
+
+def measure_size_consumer(pe, vtable, size_off):
+    """shape vtable 에서 1단계 안에 닿는 함수들 중 size 두 성분을 0.5 배 하는 곳."""
+    closure = call_closure(pe, vtable_slots(pe, vtable), 1)
+    hits = []
+    for fva in sorted(closure):
+        body, bva = fn_body(pe, fva)
+        if body is None:
+            continue
+        for m in HALVE.finditer(body):
+            sx, sy = (struct.unpack("<I", m.group(i))[0] for i in (1, 2))
+            if sx != size_off or sy != size_off + 4:
+                continue
+            # 상수 로드는 시퀀스 +30 에서 시작하는 9바이트 movss — rip 기준은 그 다음 명령(+39).
+            kva = bva + m.start() + 39 + struct.unpack("<i", m.group(3))[0]
+            k = struct.unpack("<f", at(pe, kva, 4))[0]
+            hits.append({"funcVA": hex(bva), "siteVA": hex(bva + m.start()),
+                         "constVA": hex(kva), "constant": k})
+    if not hits:
+        fail("size 두 성분을 상수배 하는 시퀀스를 못 찾았다 — 소비 규약이 바뀌었다")
+    ks = {round(h["constant"], 6) for h in hits}
+    if ks != {0.5}:
+        fail("size 스케일 상수가 0.5 가 아니다: %s" % sorted(ks))
+    # 같은 함수 안에서 size 두 성분을 읽는 movss 사이트 전수(회귀 감지용 개수)
+    return {"sites": hits, "halfExtentConstant": 0.5,
+            "meaning": "size × 0.5 가 월드행렬의 x·y 기저 행에 곱해진다 → 쿼드는 origin 중심 "
+                       "±size/2. 로컬 코너는 ±1(§9 의 이미지 레이어 공유가 되짚는다)."}
+
+
+# ── §9 이미지 레이어와의 기반 클래스 공유 ─────────────────────────────────
+
+def measure_shared_base(pe, dispatch_branch, shape_vt):
+    """디스패처에서 alloc 크기별 vtable 을 모으고, 이미지(0x960) vtable 과 슬롯 교집합을 낸다."""
+    body, bva = fn_body(pe, dispatch_branch)
+    if body is None:
+        fail("디스패처 함수 범위를 못 잡았다")
+    # `mov ecx,<객체 크기>; call operator new; ...; mov rdi,rax` — 크기 범위로 잡음을 거른다.
+    allocs = []
+    for m in re.finditer(rb"\xb9(....)\xe8....\x49\x8b", body, re.S):
+        v = struct.unpack("<I", m.group(1))[0]
+        if 0x40 <= v <= 0x4000:
+            allocs.append((bva + m.start(), v))
+    # alloc 직후 심는 vtable(.rdata 이면서 첫 슬롯이 .text)
+    def vt_after(pos):
+        blob = at(pe, pos, 160)
+        for m in re.finditer(rb"\x48\x8d\x05(....)", blob, re.S):
+            tgt = pos + m.end() + struct.unpack("<i", m.group(1))[0]
+            off = pe.rva2off(tgt - pe.base)
+            if off is None:
+                continue
+            if in_text(pe, struct.unpack_from("<Q", pe.d, off)[0]):
+                return tgt
+        return None
+    table = {}
+    for pos, sz in allocs:
+        vt = vt_after(pos)
+        if vt:
+            table.setdefault(sz, hex(vt))
+    img_vt = table.get(0x960)
+    if img_vt is None:
+        fail("이미지 레이어(alloc 0x960) 의 vtable 을 못 찾았다")
+    a = vtable_slots(pe, shape_vt)
+    b = vtable_slots(pe, int(img_vt, 16))
+    shared = [{"slot": hex(i * 8), "fn": hex(a[i])}
+              for i in range(min(len(a), len(b))) if a[i] == b[i]]
+    if len(shared) < 4:
+        fail("shape/이미지 vtable 공유 슬롯이 %d 개뿐이다 — 기반 클래스 공유 전제가 깨졌다"
+             % len(shared))
+    return {"allocToVtable": {hex(k): v for k, v in sorted(table.items())},
+            "imageVtableVA": img_vt, "shapeSlots": len(a), "imageSlots": len(b),
+            "sharedSlots": shared,
+            "meaning": "shape(0x460)와 이미지(0x960)가 같은 기반 클래스 슬롯을 공유한다 — "
+                       "§7 의 size@0x2F0 은 두 타입 공통 필드다. 풀스크린 이미지가 저작 "
+                       "size=(프로젝션 w,h) 로 정확히 화면을 덮는다는 사실이 §8 의 ±size/2 "
+                       "와 맞물려 로컬 코너 ±1 을 확정한다(2배 모호성 해소)."}
+
+
 # ── 조립 ──────────────────────────────────────────────────────────────────
 
 def main():
@@ -329,6 +564,13 @@ def main():
     ortho = measure_ortho(pe)
     corpus = measure_corpus()
     previews = measure_preview_backsolve()
+    proptable = measure_property_table(pe)
+    size_off = int(init["destFloatPairOffset"], 16)
+    if int(proptable["properties"]["size"], 16) != size_off:
+        fail("리플렉션 표의 size 오프셋(%s)이 init 이 쓰는 오프셋(0x%x)과 다르다"
+             % (proptable["properties"]["size"], size_off))
+    consumer = measure_size_consumer(pe, vt, size_off)
+    shared = measure_shared_base(pe, int(dispatch["branchVA"], 16), vt)
 
     binref = specfmt.ev("binary", "wallpaper64.exe (WE 2.8.42) — %s" % BIN)
     scriptref = specfmt.ev("script", "scripts/spec/measure_shape_quad.py")
@@ -366,35 +608,82 @@ def main():
                               "Sources/WapleRender/Resources/WEAssets/presets/lightshafts/"),
                    scriptref]),
         specfmt.entry(
-            "shape.defaultSizeHypothesis",
-            {"hypothesis": "shape 렌더러블의 기본 크기 = (orthoHeight, orthoHeight) 정사각 — "
-                           "§3 의 destFloatPairOffset 가 '레이어 크기' 라는 전제 위에서만 성립한다",
-             "whyUnconfirmed": [
-                 "this+0x2F0/0x2F4 를 '크기' 로 읽은 근거는 정황뿐이다: 기본 생성자가 (1.0, 1.0) 로 "
-                 "두고, 바로 뒤 0x2F8/0x2FC/0x300 이 월드 행렬에 곱해지는 위치 벡터다. 이 두 성분을 "
-                 "**소비**하는 지점을 찾지 못했다.",
-                 "이미지 레이어 타입은 별개 클래스(0x960)라 같은 오프셋으로 대조할 수 없었다.",
+            "shape.sizeIsProperty0x2F0",
+            proptable,
+            "확정", [binref, scriptref]),
+        specfmt.entry(
+            "shape.sizeConsumedAsHalfExtent",
+            consumer,
+            "확정", [binref, scriptref]),
+        specfmt.entry(
+            "shape.sharesRenderableBaseWithImageLayer",
+            shared,
+            "확정", [binref, scriptref]),
+        specfmt.entry(
+            "shape.defaultSize",
+            {"defaultSize": "(ortho.height, ortho.height) — 정사각. width 가 아니다",
+             "geometry": "origin 중심 ±size/2. 최종 화면 크기 = size × scale(자기·조상 누적)",
+             "howConfirmed": [
+                 "§shape.sizeIsProperty0x2F0 — 리플렉션 표가 이름 `\"size\"` 를 멤버 0x2F0 에 "
+                 "직접 묶는다. 추론이 아니라 바이너리가 스스로 이름을 댄다(대조 항목: "
+                 "color@0x330 · alpha@0x33C · brightness@0x340 — scene.json 키와 1:1).",
+                 "§shape.initWritesOrthoHeightPair — shape 클래스 vfunc+0x40 이 그 0x2F0 에 "
+                 "(float)(int)ortho.height 를 movsd 로 두 성분 다 쓴다. 저작 `size` 키가 없을 "
+                 "때 남는 값이 곧 기본값이고, §shape.corpusUsage 의 withSizeKey=0 이 "
+                 "코퍼스 전건이 그 경로임을 보인다.",
+                 "§shape.sizeConsumedAsHalfExtent — 드로우 준비가 size × 0.5 로 월드행렬 x·y "
+                 "기저를 스케일한다. 0.5 는 rip-상대 상수를 실제로 읽어 확인했다.",
+                 "§shape.sharesRenderableBaseWithImageLayer — 이미지 레이어(0x960)와 vtable "
+                 "슬롯을 공유하므로 size@0x2F0 은 공통 필드다. 풀스크린 이미지가 저작 "
+                 "size=(프로젝션 w,h) 로 정확히 화면을 덮는다는 사실이 ±size/2 와 맞물려 "
+                 "로컬 코너 ±1 을 확정한다(size 가 반폭이 아니라 전폭이라는 2배 모호성 해소).",
              ],
-             "abTest": {
-                 "what": "effectQuadLayer 를 size=(orthoH,orthoH) + 저작 origin/scale/angles/parent 로 "
-                         "바꿔 코퍼스 5씬을 렌더 대조(1920×1080, t=6.0)",
-                 "result": {
-                     "3404976219": "개선 — 오른쪽 절반 백색 플레어가 좌상단 일부로 수축",
-                     "3558034522": "개선 — 인물을 덮던 무지개 줄무늬가 좌상단으로 수축",
-                     "3521337568": "악화 — scale 3/4 쿼드가 6480/8640px 로 커져 전면이 뿌옇게 뜬다",
-                     "3460973721": "판정 애매 — 광선이 더 굵고 밝아진다",
+             "supersedes": {
+                 "wasStatus": "추정 (shape.defaultSizeHypothesis, 2026-08-17 1차)",
+                 "whyItWasUnconfirmed": "당시엔 0x2F0 을 '크기' 로 읽은 근거가 정황(기본 생성자 "
+                                        "1.0,1.0 + 뒤이은 위치 벡터)뿐이었고 소비 지점을 못 찾았다. "
+                                        "찾는 방법은 vtable 슬롯 클로저(1단계 호출까지)를 "
+                                        ".pdata 함수 범위로 잘라 0x2E0~0x310 modrm disp32 를 훑는 "
+                                        "것이었다 — 오프셋 하나만 정확히 찾는 스캔으로는 SIMD "
+                                        "블록 로드·lea 탈출을 놓친다.",
+                 "abTestThatWasMixed": {
+                     "3404976219": "개선", "3558034522": "개선",
+                     "3521337568": "악화", "3460973721": "판정 애매",
                  },
-                 "confounds": [
-                     "3521337568 의 쿼드 부모(id 2065)의 scale 을 확인하지 않았다",
-                     "우리 렌더러의 솔리드 레이어 이펙트 체인이 **비-풀스크린** 지오메트리에서 "
-                     "WE 와 같은 UV/RT 규약을 쓰는지 자체가 미검증이다 — 3404976219 결과에 "
-                     "WE 에는 없는 하드 엣지(rayfeather 대신 클리핑)가 남았다",
+                 "confoundsAndHowTheyClosed": [
+                     "① 3521337568 쿼드 부모(id 2065)의 scale 미확인 → **닫힘**: scale 키가 "
+                     "없어 (1,1,1) 이고 평행이동만 한다(§shape.corpusUsage.scaledQuads). "
+                     "즉 6480/8640px 은 쿼드 자신의 scale 3/4 이 만든 것이고, 그 크기는 "
+                     "WE 도 같다 — 부모로는 이 악화를 설명할 수 없다.",
+                     "② 솔리드 레이어 이펙트 체인의 비-풀스크린 UV/RT 규약 미검증 → "
+                     "**부분적으로만 닫힘**: 우리 체인 RT 는 layer.size(SceneRendererResources) "
+                     "라 레이어-로컬 0..1 UV 가 나오고, 이는 WE 의 레이어별 RT 축과 같다. "
+                     "다만 `size × scale` 로 커진 쿼드에서 WE 가 RT 해상도를 무엇으로 잡는지는 "
+                     "**여전히 미확정**이다 — 아래 residual 참조.",
                  ],
-                 "verdict": "반증이 아니라 **혼재·교란**. 가설은 살아 있고, 고치려면 두 교란 요인을 "
-                            "먼저 닫아야 한다.",
+             },
+             "residualDefectNotInThisEntry": {
+                 "symptom": "scale 이 큰 쿼드(3521337568 scale 3·4, 3640755971 scale 5, "
+                            "3461168300 scale 4)에서 화면이 뿌옇게 뜬다. scale 1 쿼드"
+                            "(3404976219·3558034522·3460973721·3690417937)는 뚜렷이 개선된다.",
+                 "whyNotSize": "크기 자체는 위 네 근거로 WE 와 같다. 남는 축은 lightshafts "
+                               "이펙트가 그 크기에서 만드는 **내용**이다 — 우리는 RT 를 "
+                               "size(=2160²)로 잡고 draw 에서 scale 배 늘리므로 광선·rayfeather 가 "
+                               "그대로 확대된다. WE 가 RT 를 화면 투영 크기로 잡는다면 광선은 "
+                               "확대되지 않고 촘촘해진다.",
+                 "whatWouldSettleIt": "shape/이미지 렌더러블이 이펙트 체인 RT 를 만드는 지점의 "
+                                      "width/height 인자 — CreateTexture2D 호출까지 역추적하거나, "
+                                      "scale>1 쿼드가 있는 씬의 RenderDoc 캡처 1장이면 끝난다"
+                                      "(현재 보유한 RDC 4종에는 shape 쿼드가 없다).",
              }},
-            "추정", [binref, scriptref,
-                   specfmt.ev("file", "Sources/WapleCore/SceneDocument.swift effectQuadLayer")]),
+            "확정", [binref, scriptref,
+                   specfmt.ev("file", "Sources/WapleCore/SceneDocument.swift effectQuadLayer"),
+                   specfmt.ev("file", "Tests/WapleCoreTests/SceneDocumentTests.swift "
+                                      "testEffectQuadPromotedToFullscreenEffectLayer"),
+                   specfmt.ev("asset", "we-audit reference quad-lightshafts_3690417937 — "
+                                       "쿼드 3개가 전부 scale 1·angles 0·origin (1841.92, 1052.11) "
+                                       "이라 광선 구간의 좌우 끝이 곧 쿼드 폭이다. WE 실기 2프레임의 "
+                                       "열-프로파일 상관이 승격 0.676 → 확정 크기 0.892 로 오른다")]),
     ]
     specfmt.dump(specfmt.doc("scripts/spec/measure_shape_quad.py", entries), OUT)
     print("[shape-quad] →", OUT)
@@ -410,6 +699,13 @@ def main():
           (corpus["shapeObjects"], corpus["scenes"], corpus["values"],
            corpus["withSizeKey"], corpus["withParent"], corpus["objectsParentedToAQuad"]))
     print("  §6 프리뷰 역산 spread=%s" % (previews["spread"],))
+    print("  §7 리플렉션 표 %s: %s" %
+          (proptable["registrarVA"],
+           " ".join("%s=%s" % kv for kv in proptable["properties"].items())))
+    print("  §8 소비 %d곳, size × %.1f → 월드행렬 x·y 기저 (±size/2)" %
+          (len(consumer["sites"]), consumer["halfExtentConstant"]))
+    print("  §9 이미지 vtable %s — shape 과 공유 슬롯 %d개" %
+          (shared["imageVtableVA"], len(shared["sharedSlots"])))
 
 
 if __name__ == "__main__":
