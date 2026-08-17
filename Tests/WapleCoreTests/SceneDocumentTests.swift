@@ -1090,6 +1090,38 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertFalse(doc.nodes3D.contains { $0.id == 18661 }, "트랜스폼-노드로 흡수되면 안 됨")
     }
 
+    /// `size` 는 **기본값이지 고정값이 아니다** — 저작되면 그 값이 이긴다.
+    ///
+    /// 리플렉션 표가 `"size"` 를 오프셋 0x2F0 에 이름으로 묶어 둔 저작 가능 프로퍼티다
+    /// (`spec/engine/shape-quad.json` §shape.sizeIsProperty0x2F0). vfunc+0x40 이 그 슬롯에
+    /// (orthoH, orthoH) 를 써 두는 것은 저작 키가 없을 때의 초기값일 뿐이다.
+    ///
+    /// 처음 이식할 때 초기값만 옮기고 저작 경로를 빼먹었고, 그래서 `size:"1920 1080"` 을 쓰던
+    /// `SceneCompositeConventionTests.testDirectDrawEffectOutputIsNotPremultipliedTwice` 가
+    /// 1080 정사각으로 그려져 화면의 56% 만 덮었다(기하 예측 0.5625 · 실측 휘도비 0.5647).
+    /// **증상이 "DIRECTDRAW 이중 곱 회귀" 와 똑같이 보였다** — 그 테스트가 재는 값이 0.5 → 0.28 로
+    /// 떨어져 이중 곱 값 0.25 에 가까웠기 때문이다. 원인은 합성이 아니라 기하였다.
+    /// 코퍼스 도달은 0건이라(shape 오브젝트 전수에 size 키 없음) 실사용 픽셀은 안 변한다.
+    func testEffectQuadHonorsAuthoredSize() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":1920,"height":1080}},
+         "objects":[
+           {"id":1,"shape":"quad","origin":"960 540 0","size":"1920 1080",
+            "effects":[{"file":"effects/lightshafts/effect.json","id":2,
+                        "passes":[{"combos":{"DIRECTDRAW":1}}]}]},
+           {"id":3,"shape":"quad","origin":"100 200 0",
+            "effects":[{"file":"effects/lightshafts/effect.json","id":4,
+                        "passes":[{"combos":{"DIRECTDRAW":1}}]}]}
+         ]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        XCTAssertEqual(doc.layers.count, 2)
+        XCTAssertEqual(doc.layers[0].size, Vec2(x: 1920, y: 1080),
+                       "저작 size 가 기본 정사각을 이긴다")
+        XCTAssertEqual(doc.layers[1].size, Vec2(x: 1080, y: 1080),
+                       "저작 없으면 (orthoHeight, orthoHeight) 정사각 — width 가 아니다")
+    }
+
     /// 정적 비가시 이펙트 쿼드는 종전 규약대로 렌더 대상에서 제외하되 비가시 노드로 계층만 보존(V06).
     func testEffectQuadStaticInvisiblePreservedAsNode() throws {
         let scene = """

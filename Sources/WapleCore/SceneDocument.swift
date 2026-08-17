@@ -1393,12 +1393,20 @@ extension SceneDocument {
                                         userProps: [String: Any] = [:]) -> SceneLayer {
         // WE shape 기본 크기: (orthoHeight, orthoHeight) 정사각 — width 가 아니다(§shape.initWritesOrthoHeightPair
         // 의 sourceIntOffset 0x88 = ctx 의 int 로 자른 ortho.height, 0x84 가 width).
+        //
+        // **기본값이지 고정값이 아니다.** `size` 는 리플렉션 표가 오프셋 0x2F0 에 이름으로 묶어 둔
+        // 저작 가능 프로퍼티다(§shape.sizeIsProperty0x2F0) — vfunc+0x40 이 그 슬롯에 정사각을 써 두는
+        // 것은 저작 키가 없을 때의 초기값일 뿐이고, 저작되면 그 값이 이긴다. 처음 이식할 때 초기값만
+        // 옮기고 저작 경로를 빼먹어서, `size:"1920 1080"` 을 쓴 DIRECTDRAW 회귀 테스트가 1080 정사각으로
+        // 그려져 화면의 56% 만 덮었다(예측 0.5625 vs 실측 0.5647). 이중 곱 회귀처럼 보였지만 기하 문제다.
+        // 코퍼스 도달은 0건이다(shape 오브젝트 전수에 size 키 없음) — 그래서 실사용 픽셀은 안 변한다.
         let side = Float(ph)
+        let authored = vec2(obj["size"])
         let angles = floats(obj["angles"])
         var layer = SceneLayer(
             textureEntryName: "",
             origin: vec2(obj["origin"]) ?? Vec2(x: 0, y: 0),
-            size: Vec2(x: side, y: side),
+            size: authored ?? Vec2(x: side, y: side),
             scale: vec2(obj["scale"]) ?? Vec2(x: 1, y: 1),
             angleZ: angles.count >= 3 ? angles[2] : 0,   // parseLayer 와 동일: 이미 라디안
             alpha: float(obj["alpha"]) ?? 1,
