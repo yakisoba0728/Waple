@@ -173,6 +173,55 @@ class TestHedgeTriage(unittest.TestCase):
         self.assertEqual(validate.hedge_triage([e], "t.json"), [])
 
 
+def ref_doc(ref):
+    return doc(entries=[{"id": "x.y", "value": 1, "status": "확정",
+                         "evidence": [{"kind": "file", "ref": ref}]}])
+
+
+class TestDanglingRepoRefs(unittest.TestCase):
+    """리포 안을 가리키는 근거는 실제로 있어야 한다.
+
+    이 검사가 없어서 gate-analysis.json 이 재베이스라인으로 지워진
+    baseline-618d16f/manifest.json 을 근거로 인용한 채 오류 0 으로 통과했다.
+    """
+
+    def test_existing_repo_path_passes(self):
+        self.assertEqual(validate.validate_doc(ref_doc("scripts/spec/validate.py"), "t.json"), [])
+
+    def test_existing_repo_path_with_line_citation_passes(self):
+        for ref in ("scripts/spec/validate.py:10",
+                    "scripts/spec/validate.py:10-20",
+                    "scripts/spec/validate.py:10,11,12",
+                    "scripts/spec/validate.py:10-20,"):
+            with self.subTest(ref=ref):
+                self.assertEqual(validate.validate_doc(ref_doc(ref), "t.json"), [])
+
+    def test_missing_repo_path_fails(self):
+        errs = validate.validate_doc(ref_doc("spec/golden/snapshot/baseline-deadbee/manifest.json"),
+                                     "t.json")
+        self.assertTrue(any("리포에 없다" in e for e in errs), errs)
+
+    def test_outside_repo_ref_is_not_checked(self):
+        # 설치본·코퍼스·바이너리는 머신마다 다르다 — 검사 대상이 아니다.
+        for ref in (r"Z:\SteamLibrary\steamapps\common\wallpaper_engine\assets",
+                    "wallpaper64.exe FUN_140099980 @ 0x140099980",
+                    "162 pkg 전수"):
+            with self.subTest(ref=ref):
+                self.assertEqual(validate.validate_doc(ref_doc(ref), "t.json"), [])
+
+    def test_glob_ref_checks_only_the_prefix_directory(self):
+        # 존재하는 디렉터리 아래의 글로브는 통과해야 한다(오탐 방지).
+        self.assertEqual(validate.validate_doc(ref_doc("scripts/spec/*.py"), "t.json"), [])
+        self.assertEqual(validate.validate_doc(ref_doc("scripts/spec/tests/**/*.py"), "t.json"), [])
+        # 없는 디렉터리 아래의 글로브는 잡혀야 한다.
+        errs = validate.validate_doc(ref_doc("Sources/NoSuchTarget/**/*.swift"), "t.json")
+        self.assertTrue(any("리포에 없다" in e for e in errs), errs)
+
+    def test_prose_after_path_is_ignored(self):
+        self.assertEqual(
+            validate.validate_doc(ref_doc("scripts/spec/validate.py 의 죽은 참조 검사"), "t.json"), [])
+
+
 class TestSpecfmt(unittest.TestCase):
     def test_entry_builds_expected_shape(self):
         e = specfmt.entry("a.b", 3, "확정", [{"kind": "corpus", "ref": "r"}])

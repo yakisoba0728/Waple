@@ -35,6 +35,44 @@ def is_canon_path(path):
     return True
 
 
+# 리포 안을 가리키는 근거는 실제로 그 자리에 있어야 한다.
+#
+# 이 검사가 없어서 `spec/golden/gate-analysis.json` 이 `baseline-618d16f/manifest.json` 을
+# 근거로 인용한 채 오류 0 으로 통과했다 — 재베이스라인하며 그 디렉터리를 지웠는데 문서를
+# 다시 뜨지 않았기 때문이다. 정본에서 가장 위험한 종류의 거짓말이다: 등급은 '확정' 인데
+# 근거를 따라가 보면 없다. 사람이 열어보기 전까지 아무 것도 실패하지 않는다.
+#
+# 리포 밖 참조(설치본 `Z:\...`, 코퍼스, wallpaper64.exe)는 머신마다 다르므로 검사 대상이
+# 아니다 — 리포 최상위 이름으로 시작하는 경로만 본다.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO_PREFIXES = ("spec/", "Sources/", "Tests/", "scripts/", "docs/", ".github/", "Package.swift")
+# 줄 인용을 벗긴다. 정본에 실재하는 형태가 여럿이다:
+#   "f.swift:12" · "f.swift:12-34" · "f.h:114,115,119" · "f.swift:1254-1257,"
+REF_LINE_SUFFIX = re.compile(r":[\d,\-]+,?$")
+# 글로브 메타문자. 이게 있으면 경로 자체는 존재할 수 없으므로 매칭이 아니라
+# **글로브가 아닌 최장 접두 디렉터리**가 있는지만 본다. 브레이스 확장(`{a,b}`)까지
+# 흉내내면 검사기 쪽이 오히려 틀리기 쉬워서, 확실히 판정되는 선까지만 검사한다.
+GLOB_CHARS = "*?[{"
+
+
+def repo_ref_path(ref):
+    """근거 ref 에서 검사할 리포 상대 경로를 뽑는다. 리포 밖을 가리키면 None."""
+    if not isinstance(ref, str):
+        return None
+    # ref 는 "경로 설명문" 처럼 뒤에 산문이 붙기도 하고 "#앵커" 가 붙기도 한다.
+    s = ref.replace("\\", "/").strip().split(" ", 1)[0].split("#", 1)[0]
+    s = REF_LINE_SUFFIX.sub("", s)
+    if not s.startswith(REPO_PREFIXES):
+        return None
+    if any(c in s for c in GLOB_CHARS):
+        # 글로브 앞의 마지막 디렉터리 경계까지만 남긴다. 남는 게 없으면 검사 포기.
+        cut = min(s.index(c) for c in GLOB_CHARS if c in s)
+        s = s[:cut].rsplit("/", 1)[0]
+        if not s.startswith(REPO_PREFIXES):
+            return None
+    return s or None
+
+
 def validate_doc(d, path):
     errs = []
     p = os.path.basename(path)
@@ -85,6 +123,11 @@ def validate_doc(d, path):
                 errs.append(f"{where}: evidence[{j}] 에 kind 가 없다")
             if not x.get("ref"):
                 errs.append(f"{where}: evidence[{j}] 에 ref 가 없다")
+            else:
+                rel = repo_ref_path(x["ref"])
+                if rel is not None and not os.path.exists(os.path.join(REPO_ROOT, rel)):
+                    errs.append(f"{where}: evidence[{j}] 의 ref 가 리포에 없다 — {rel!r} "
+                                f"(근거를 따라갈 수 없는 정본이다)")
             kinds.append(x.get("kind"))
 
         if status == "확정" and not any(k in specfmt.REPRODUCIBLE_KINDS for k in kinds):
