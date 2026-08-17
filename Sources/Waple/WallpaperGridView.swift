@@ -43,6 +43,7 @@ struct WallpaperGridView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ColorRole.well)
+        .overlay(alignment: .bottom) { importProgress }
         .onDrop(of: [.fileURL], isTargeted: nil) { handleDrop($0) }
         .alert("새 폴더", isPresented: Binding(get: { folderPromptEntry != nil },
                                               set: { if !$0 { folderPromptEntry = nil } })) {
@@ -75,6 +76,37 @@ struct WallpaperGridView: View {
         } message: {
             Text("디스크의 원본 폴더는 삭제되지 않습니다. 재생목록·모니터 할당·즐겨찾기·폴더에서 함께 제거됩니다.")
         }
+    }
+
+    /// 가져오는 중 표시.
+    ///
+    /// 임포트가 백그라운드 큐로 간 뒤(A2·F582) UI 는 더 이상 멈추지 않지만, 그 대신 **아무
+    /// 일도 일어나지 않는 것처럼 보인다** — 큰 zip 을 고르면 수 초간 화면이 그대로라 실패한
+    /// 줄 알고 다시 고르게 된다. 진행률은 알 수 없으므로(ditto 해제·동영상 디코드에 중간
+    /// 보고가 없다) 비결정 스피너를 쓴다. 가짜 막대보다 정직하다.
+    ///
+    /// 상태 배너와 같은 재질·캡슐이되 자리는 아래다 — 위에 두면 완료 배너와 겹친다.
+    private var importProgress: some View {
+        // 애니메이션은 **항상 있는** 컨테이너에 건다. 조건 안쪽에 걸면 뷰가 없을 때는 모디파이어도
+        // 없어서 등장 트랜지션이 발화하지 않는다(배너가 F093 에서 겪은 것과 같은 함정).
+        Group {
+            if viewModel.isImporting { importBadge }
+        }
+        .animation(Motion.fade, value: viewModel.isImporting)
+    }
+
+    private var importBadge: some View {
+        HStack(spacing: Space.controlGap) {
+            ProgressView().controlSize(.small)
+            Text("가져오는 중…")
+        }
+        .font(Typography.secondaryBody)
+        .padding(.horizontal, Space.lg)
+        .padding(.vertical, Space.sm)
+        .background(Surface.overlay, in: Capsule())
+        .overlay(Capsule().stroke(ColorRole.hairline, lineWidth: Surface.strokeHairline))
+        .padding(.bottom, Space.contentInset)
+        .transition(Motion.revealTransition(edge: .bottom))
     }
 
     // 네이티브 빈 상태(w5d-polish) — WorkshopTabView:33 이 이미 채택한 ContentUnavailableView 문법 준용.

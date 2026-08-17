@@ -303,4 +303,74 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertNotNil(message)
         XCTAssertTrue(vm.entries.isEmpty)
     }
+
+    // MARK: - 임포트 피드백
+
+    /// 후보 폴더 n개를 담은 상위 폴더를 만든다. `valid` 개만 project.json 을 갖는다 —
+    /// 나머지는 스토어가 조용히 건너뛰던 부분 실패의 재료다.
+    private func seedParent(valid: Int, invalid: Int) throws -> URL {
+        let parent = tempDir()
+        for i in 0..<valid {
+            let f = parent.appendingPathComponent("ok\(i)", isDirectory: true)
+            try FileManager.default.createDirectory(at: f, withIntermediateDirectories: true)
+            let json: [String: Any] = ["type": "video", "file": "a.mp4", "title": "ok\(i)"]
+            try JSONSerialization.data(withJSONObject: json).write(to: f.appendingPathComponent("project.json"))
+        }
+        for i in 0..<invalid {
+            let f = parent.appendingPathComponent("bad\(i)", isDirectory: true)
+            try FileManager.default.createDirectory(at: f, withIntermediateDirectories: true)
+        }
+        return parent
+    }
+
+    private func waitForNotice(_ vm: LibraryViewModel, _ act: () -> Void) -> String? {
+        let exp = expectation(description: "임포트 안내(메인 홉)")
+        var message: String?
+        vm.onError = { msg in
+            guard message == nil else { return }
+            message = msg
+            exp.fulfill()
+        }
+        act()
+        wait(for: [exp], timeout: 15)
+        return message
+    }
+
+    /// 다섯 중 셋만 들어왔는데 화면이 조용하던 것이 이 커밋 전의 동작이다 — 스토어가
+    /// `try?` 로 실패를 삼키고, 뷰모델은 전량 실패일 때만 말했다.
+    func testPartialParentImportTellsHowManyLanded() throws {
+        let vm = makeVM(dir: tempDir())
+        let parent = try seedParent(valid: 3, invalid: 2)
+        let message = waitForNotice(vm) { vm.importParent(parent) }
+        XCTAssertEqual(vm.entries.count, 3)
+        XCTAssertEqual(message, "5개 중 3개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다.")
+    }
+
+    /// 전량 성공도 알린다 — 이미 있던 배경을 다시 가져오면 그리드가 그대로라 아무 일도
+    /// 일어나지 않은 것처럼 보인다.
+    func testFullParentImportReportsSuccess() throws {
+        let vm = makeVM(dir: tempDir())
+        let parent = try seedParent(valid: 2, invalid: 0)
+        let message = waitForNotice(vm) { vm.importParent(parent) }
+        XCTAssertEqual(message, "배경 2개를 가져왔습니다.")
+    }
+
+    /// 전량 실패는 종전 문구를 그대로 쓴다(무회귀) — 부분 실패 문구로 뭉뚱그리면 "왜 하나도
+    /// 안 들어왔나" 에 답하지 못한다.
+    func testEmptyParentImportKeepsTheOriginalGuidance() throws {
+        let vm = makeVM(dir: tempDir())
+        let parent = try seedParent(valid: 0, invalid: 2)
+        let message = waitForNotice(vm) { vm.importParent(parent) }
+        XCTAssertEqual(message, "가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요.")
+    }
+
+    /// 진행 표시는 끝나면 반드시 내려가야 한다 — 남으면 스피너가 영원히 도는 화면이 된다.
+    func testImportProgressFlagRisesAndFalls() throws {
+        let vm = makeVM(dir: tempDir())
+        let parent = try seedParent(valid: 1, invalid: 0)
+        vm.importParent(parent)
+        XCTAssertTrue(vm.isImporting, "큐에 넣는 즉시 켜진다(백그라운드 완료를 기다리지 않는다)")
+        _ = waitForNotice(vm) {}
+        XCTAssertFalse(vm.isImporting)
+    }
 }

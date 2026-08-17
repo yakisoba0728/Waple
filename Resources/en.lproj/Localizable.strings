@@ -171,6 +171,7 @@
 
 /* MARK: Unit B — 라이브러리(그리드·인스펙터·속성 편집·필터 팝오버) */
 "Wallpaper Engine 폴더·상위 폴더·.zip·동영상(mp4/mov)을 선택하세요." = "Choose a Wallpaper Engine folder, a parent folder, a .zip, or a video (mp4/mov).";
+"가져오는 중…" = "Importing…";
 "가져온 배경에 태그나 나이 등급이 없습니다." = "The wallpapers you imported carry no tags or age ratings.";
 "가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요." = "No wallpapers were imported. Check that the folder you chose contains a valid project.json.";
 "거를 수 있는 항목이 없습니다" = "Nothing to filter by";
@@ -195,6 +196,8 @@
 "최근 추가순" = "Most recent";
 "zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요." = "No wallpapers were imported from the zip. Check that it contains a project.json.";
 "'%@' 폴더를 삭제할까요?" = "Delete the folder “%@”?";
+"%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다." = "Imported %2$lld of %1$lld. The rest have no project.json, or it could not be read.";
+"배경 %lld개를 가져왔습니다." = "Imported %lld wallpapers.";
 "%@ (현재: %@)" = "%@ (current: %@)";
 "%@ · 지원 예정" = "%@ · coming soon";
 "‘%@’을(를) 적용하지 못했습니다." = "Could not apply “%@”.";

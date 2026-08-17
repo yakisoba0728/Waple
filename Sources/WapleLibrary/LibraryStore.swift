@@ -204,6 +204,16 @@ public final class LibraryStore {
     /// temp 는 성공/실패 무관하게 항상 정리된다.
     @discardableResult
     public func importExtractedZip(_ temp: URL) -> [LibraryEntry] {
+        importExtractedZipCounting(temp).imported
+    }
+
+    /// 위와 같되 **시도한 개수**를 함께 돌려준다.
+    ///
+    /// 성공 개수만으로는 부분 실패를 사용자에게 전할 수 없다 — zip 안에 배경이 다섯인데 셋만
+    /// 들어와도 화면에는 아무 말이 없고, 왜 둘이 빠졌는지는 로그(F584)를 봐야만 알 수 있었다.
+    /// 시도 수를 아는 것은 이 루프뿐이라 여기서 함께 내보낸다. 기존 반환형을 바꾸지 않으려고
+    /// 메서드를 더한 것이다 — 이 타깃의 시그니처 변경은 최소로 한다.
+    public func importExtractedZipCounting(_ temp: URL) -> (imported: [LibraryEntry], attempted: Int) {
         let fm = FileManager.default
         defer { try? fm.removeItem(at: temp) }   // 임시 해제 작업공간 정리
 
@@ -212,7 +222,8 @@ public final class LibraryStore {
 
         var imported: [LibraryEntry] = []
         var usedNames = Set<String>()   // 이번 zip 안의 동명 루트(WE export 관례 `Wallpaper/`) 상호 덮어쓰기 방지
-        for root in ZipImporter.findProjectRoots(in: temp, fileManager: fm) {
+        let roots = ZipImporter.findProjectRoots(in: temp, fileManager: fm)
+        for root in roots {
             // F247: 관리 폴더명은 원본 래퍼 폴더명이 아니라 **project.json 이 선언한 id**
             // (workshopid 우선, 없으면 폴더명 폴백 — ProjectJSONParser.parse 와 동일 규칙)로 정한다.
             // 래퍼명(WE export 관례 `Wallpaper/`)은 비유일이라 그대로 쓰면, 동명이나 서로 다른
@@ -264,7 +275,7 @@ public final class LibraryStore {
             }
         }
         if !imported.isEmpty { save() }   // 감사 V06: 일괄 임포트 저장 일괄화(F582 패턴)
-        return imported
+        return (imported, roots.count)
     }
 
     private func uniqueManagedName(_ base: String, usedNames: Set<String>, in importedDir: URL, fm: FileManager) -> String {

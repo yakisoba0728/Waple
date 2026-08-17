@@ -41,9 +41,14 @@ final class LibraryViewModel: ObservableObject {
     /// 적용 요청을 AppDelegate 로 전달한다(폴더 URL). 마운트 성공 여부를 반환한다.
     var onApply: ((URL) -> Bool)?
 
-    /// 사용자에게 보여줄 오류 메시지를 AppDelegate 로 전달한다.
+    /// 사용자에게 보여줄 메시지를 AppDelegate 로 전달한다.
     ///
-    /// **넘어가는 값은 이미 현지화가 끝난 문자열이다.** 싱크(상태 배너)가 받는 타입이 String 이라
+    /// **이름은 `onError` 지만 실제로는 알림 채널이다.** 싱크는 상태 배너이고 배너는 중립
+    /// 스타일(info 글리프)이라, 성공·부분 실패 안내도 같은 통로로 나간다. 이름을 고치려면
+    /// 배선하는 쪽(AppDelegate)을 만져야 하는데 그 파일은 이 단위의 소유가 아니다 —
+    /// 마감 단계에서 함께 정리할 것.
+    ///
+    /// **넘어가는 값은 이미 현지화가 끝난 문자열이다.** 싱크가 받는 타입이 String 이라
     /// 거기서는 자동 번역이 걸리지 않는다 — 그 자리에 도착한 뒤에는 손쓸 방법이 없으므로
     /// 만드는 쪽에서 완성한다. 리터럴이 NSLocalizedString 안에 남아 현지화 커버리지 오라클에
     /// 그대로 잡히는 것도 이 방향을 고른 이유다(청사진 §5.0 의 권장안 (a)).
@@ -185,22 +190,66 @@ final class LibraryViewModel: ObservableObject {
     /// 직렬로 두어 종전(메인 직렬)과 같은 순차 실행을 유지한다(동명 관리 디렉터리 유일화 판정 경합 방지).
     private let importQueue = DispatchQueue(label: "waple.library.import", qos: .userInitiated)
 
+    /// 진행 중인 임포트가 있는가.
+    ///
+    /// 백그라운드화(A2·F582)로 UI 정지는 없어졌지만, 그 대가로 **아무 일도 일어나지 않는
+    /// 것처럼 보이게** 됐다 — 큰 zip 을 고르면 수 초 동안 화면에 아무 변화가 없고, 사용자는
+    /// 실패한 줄 알고 다시 고른다. 개수가 아니라 불리언인 이유는 진행률을 알 수 없기
+    /// 때문이다(ditto 해제·동영상 디코드는 중간 보고가 없다) — 알 수 없는 진행률을 가짜
+    /// 막대로 그리느니 비결정 스피너가 정직하다.
+    @Published private(set) var isImporting = false
+    /// 동시에 여러 번 가져오기를 걸 수 있다(드롭 연타). 마지막 하나가 끝날 때만 표시를 내린다.
+    private var importsInFlight = 0
+
+    private func beginImport() {
+        importsInFlight += 1
+        isImporting = true
+    }
+
+    private func endImport() {
+        importsInFlight = max(0, importsInFlight - 1)
+        isImporting = importsInFlight > 0
+    }
+
+    /// 여러 배경을 한 번에 가져온 결과를 사용자에게 알린다.
+    ///
+    /// 종전에는 **전량 실패일 때만** 말했다. 다섯 중 셋만 들어오면 화면은 조용하고, 왜 둘이
+    /// 빠졌는지는 로그(F584)를 봐야만 알 수 있었다 — 사용자에게 그 로그는 없는 것과 같다.
+    /// 성공도 알린다: 이미 있던 배경을 다시 가져오면 그리드가 그대로라 아무 일도 안 일어난
+    /// 것처럼 보인다.
+    private func reportImport(imported: Int, attempted: Int, emptyMessage: String) {
+        if attempted == 0 || (imported == 0 && attempted > 0) {
+            onError?(emptyMessage)
+        } else if imported < attempted {
+            onError?(String(format: NSLocalizedString("%lld개 중 %lld개만 가져왔습니다. 나머지는 project.json 이 없거나 읽을 수 없습니다.",
+                                                      comment: "부분 임포트 실패"),
+                            attempted, imported))
+        } else {
+            onError?(String(format: NSLocalizedString("배경 %lld개를 가져왔습니다.", comment: "임포트 완료"),
+                            imported))
+        }
+    }
+
     /// F582: 상위 폴더 가져오기도 zip/동영상과 같이 importQueue 를 거친다 — 후보 나열(디렉터리
     /// 순회 I/O)은 백그라운드, 스토어 등록(importFolders, 저장 일괄화)은 메인 홉(스토어 변경
     /// 메인 한정 규약 유지). 종전엔 호출 스레드=메인에서 전체 순회·파싱을 동기 실행해 UI 가 정지했다.
     func importParent(_ url: URL) {
         let store = self.store
+        beginImport()
         importQueue.async { [weak self] in
             guard let self else { return }
             let folders = store.scanImportableFolders(in: url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                defer { self.endImport() }
                 let imported = store.importFolders(folders)
                 self.entries = store.entries
-                if imported.isEmpty {
-                    onError?(NSLocalizedString("가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요.",
-                                               comment: "상위 폴더 가져오기 전량 실패"))
-                }
+                // 시도 수는 호출부가 이미 안다(후보 목록의 길이) — 이 경로는 스토어 시그니처를
+                // 바꿀 필요가 없다.
+                self.reportImport(
+                    imported: imported.count, attempted: folders.count,
+                    emptyMessage: NSLocalizedString("가져온 배경이 없습니다. 선택한 폴더에 유효한 project.json 이 있는지 확인하세요.",
+                                                    comment: "상위 폴더 가져오기 전량 실패"))
             }
         }
     }
@@ -209,17 +258,20 @@ final class LibraryViewModel: ObservableObject {
     /// (importExtractedZip → entries 갱신)은 메인 홉에서 한다(스토어 변경 메인 한정 규약 유지).
     func importZip(_ url: URL) {
         let store = self.store
+        beginImport()
         importQueue.async { [weak self] in
             guard let self else { return }
             let temp = store.extractZipToTemp(url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                let imported = temp.map { store.importExtractedZip($0) } ?? []
+                defer { self.endImport() }
+                // zip 은 안에 배경이 몇 개인지 호출부가 알 수 없다 — 시도 수를 스토어가 함께 낸다.
+                let outcome = temp.map { store.importExtractedZipCounting($0) } ?? (imported: [], attempted: 0)
                 self.entries = store.entries
-                if imported.isEmpty {
-                    self.onError?(NSLocalizedString("zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요.",
+                self.reportImport(
+                    imported: outcome.imported.count, attempted: outcome.attempted,
+                    emptyMessage: NSLocalizedString("zip 에서 가져온 배경이 없습니다. project.json 이 포함돼 있는지 확인하세요.",
                                                     comment: "zip 가져오기 전량 실패"))
-                }
             }
         }
     }
@@ -242,11 +294,13 @@ final class LibraryViewModel: ObservableObject {
     /// 스토어 등록(importFolder → entries 갱신)은 메인 홉에서 한다(스토어 변경 메인 한정 규약 유지).
     func importVideoFile(_ url: URL) {
         let store = self.store
+        beginImport()
         importQueue.async { [weak self] in
             guard let self else { return }
             let folder = self.videoPrepare(url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                defer { self.endImport() }
                 guard let folder, (try? store.importFolder(folder)) != nil else {
                     // F583: 준비(관리 폴더에 복사 완료) 후 등록이 실패하면 부분 산출물이 고아로 남는다 —
                     // 이 임포트를 위해 만든 폴더이므로 정리한다(videoPrepare 계약 주석 참조).
@@ -257,6 +311,7 @@ final class LibraryViewModel: ObservableObject {
                     return
                 }
                 self.entries = store.entries
+                self.onError?(String(format: NSLocalizedString("배경 %lld개를 가져왔습니다.", comment: "임포트 완료"), 1))
             }
         }
     }
