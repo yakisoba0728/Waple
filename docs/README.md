@@ -17,6 +17,7 @@
 | [../spec/README.md](../spec/README.md) | **WE 2.8.42 정본** — 바이너리·코퍼스·포맷·엔진 심볼·에셋. 근거 필수, 재측정 스크립트 동반 |
 | [../spec/golden/snapshot/README.md](../spec/golden/snapshot/README.md) | 커밋된 스냅샷 기준선과 읽을 때의 주의 3건 |
 | [we-parity-2026-08-16.md](we-parity-2026-08-16.md) | **WE 실기 대비 파리티 첫 정량 측정** — 골든이 못 재는 축(Waple↔WE). 7종 중 1종만 구별불가 |
+| [ui-redesign-2026-08-17.md](ui-redesign-2026-08-17.md) | **UI 전면 개편 청사진** — 사이드바 네비게이션 이관, 단위별 파일 소유(병렬 작업 기준), 접근성·현지화 규약, WAPLE_SMOKE 게이트 이관. UI 를 만지기 전에 읽는다 |
 
 WE 엔진 이식 프로그램의 차터·스펙·계획은 [superpowers/](superpowers/) 에 있다.
 정본 **데이터**는 리포 루트 [../spec/](../spec/) 이다.
