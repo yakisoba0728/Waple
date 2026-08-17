@@ -30,7 +30,7 @@ struct WallpaperGridView: View {
                 noResultsState
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: Metrics.gridSpacing + 6) {
+                    LazyVGrid(columns: columns, spacing: Metrics.gridRowSpacing) {
                         if let active = viewModel.activeFolder {
                             backTile(active)
                         }
@@ -41,12 +41,12 @@ struct WallpaperGridView: View {
                             tile(for: entry)
                         }
                     }
-                    .padding(20)
+                    .padding(Space.contentInset)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .underPageBackgroundColor))
+        .background(ColorRole.well)
         .onDrop(of: [.fileURL], isTargeted: nil) { handleDrop($0) }
         .alert("새 폴더", isPresented: Binding(get: { folderPromptEntry != nil },
                                               set: { if !$0 { folderPromptEntry = nil } })) {
@@ -153,64 +153,91 @@ struct WallpaperGridView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    @ViewBuilder
     private func tile(for entry: LibraryEntry) -> some View {
         let supported = viewModel.isSupported(entry)
-        let focused = viewModel.focusedId == entry.id
         let applied = viewModel.selectedId == entry.id
+        return tileSurface(entry, supported: supported, applied: applied)
+            .modifier(tileActions(entry, supported: supported))
+            .contextMenu { contextMenu(for: entry, supported: supported) }
+    }
+
+    /// 타일 본체 + 포인터 제스처 + 표준 접근성 표현.
+    ///
+    /// 종전에는 이 자리가 화면에서만 버튼이었다 — 보조기술에는 이미지 하나와 텍스트 하나가
+    /// 따로 읽히고, 누를 수 있다는 것도 지금 적용 중이라는 것도 전달되지 않았으며 키보드로는
+    /// 닿을 수조차 없었다. 표준 형태(청사진 §4.1)를 그대로 쓴다.
+    ///
+    /// 주 동작(Return)은 더블클릭과 **같은 조건**이다 — 미지원 배경은 마우스로도 적용되지
+    /// 않으므로 키보드에서만 되게 하면 두 경로가 갈린다. 미지원 타일도 포커스 대상으로는
+    /// 남긴다: 탭 순서에서 빠지면 그 항목이 있다는 사실 자체가 전달되지 않는다.
+    private func tileSurface(_ entry: LibraryEntry, supported: Bool, applied: Bool) -> some View {
+        let focused = viewModel.focusedId == entry.id
         let hovered = hoveredId == entry.id
-
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                preview(for: entry, animating: hovered)
-                    .frame(height: Metrics.tileThumbHeight)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Metrics.tileCorner))
-            .overlay(
-                RoundedRectangle(cornerRadius: Metrics.tileCorner)
-                    .stroke(applied ? Color.accentColor : (focused ? Color.secondary.opacity(0.6) : .clear),
-                            lineWidth: applied ? 2.5 : 1.5)
-            )
-            .overlay(alignment: .topTrailing) { typeBadge(for: entry, supported: supported) }
-            .overlay(alignment: .bottomLeading) {
-                if applied {
-                    Image(systemName: "play.circle.fill")
-                        .font(.body)
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, Color.accentColor)
-                        .padding(6)
-                }
-            }
-            .saturation(supported ? 1 : 0.4)
-            .opacity(supported ? 1 : 0.55)
-
+        return VStack(alignment: .leading, spacing: Space.xs) {
+            thumbnail(entry, supported: supported, applied: applied, focused: focused, hovered: hovered)
             Text(entry.title)
-                .font(.caption)
+                .font(Typography.caption)
                 .foregroundStyle(focused ? .primary : .secondary)
                 .lineLimit(1)
-                .padding(.horizontal, 2)
+                .padding(.horizontal, Space.captionInset)
         }
-        .scaleEffect(hovered ? 1.02 : 1)
-        .shadow(color: .black.opacity(hovered ? 0.45 : 0), radius: 9, y: 5)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: hovered)
+        .tileLift(hovered)
         .contentShape(Rectangle())
         .onHover { hoveredId = $0 ? entry.id : (hoveredId == entry.id ? nil : hoveredId) }
-        .onTapGesture(count: 2) { if supported { _ = viewModel.apply(entry) } }
+        .onTapGesture(count: 2) { activate(entry, supported: supported) }
         .onTapGesture { viewModel.focusedId = entry.id }
-        .contextMenu { contextMenu(for: entry, supported: supported) }
+        .tileAccessibility(label: Text(entry.title),
+                           value: tileStatus(applied: applied, supported: supported),
+                           isSelected: applied,
+                           onActivate: { activate(entry, supported: supported) })
+    }
+
+    private func thumbnail(_ entry: LibraryEntry, supported: Bool,
+                           applied: Bool, focused: Bool, hovered: Bool) -> some View {
+        ZStack {
+            preview(for: entry, animating: hovered)
+                .frame(height: Metrics.tileThumbHeight)
+                .frame(maxWidth: .infinity)
+        }
+        .tileThumbnailClip()
+        .tileRing(TileRing.tile(selected: applied, focused: focused))
+        .overlay(alignment: .topTrailing) { typeBadge(for: entry, supported: supported) }
+        .overlay(alignment: .bottomLeading) { appliedGlyph(applied) }
+        .saturation(supported ? 1 : ColorRole.unsupportedSaturation)
+        .opacity(supported ? 1 : ColorRole.unsupportedOpacity)
+    }
+
+    /// 적용 중임을 색(액센트 링)만이 아니라 글리프로도 말한다 — 색만으로 상태를 전달하면
+    /// 색약 사용자에게 링과 무링의 구분이 사라진다(청사진 §4.5).
+    @ViewBuilder
+    private func appliedGlyph(_ applied: Bool) -> some View {
+        if applied {
+            Image(systemName: "play.circle.fill")
+                .font(Typography.body)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(ColorRole.onMedia, ColorRole.selected)
+                .padding(Space.xs)
+        }
+    }
+
+    /// 보조기술이 읽는 현재 상태. 라벨(무엇인가)에 이어 붙이지 않는 이유는 상태가 바뀔 때마다
+    /// 항목 전체가 다시 읽히기 때문이다(청사진 §4.2).
+    private func tileStatus(applied: Bool, supported: Bool) -> Text? {
+        if applied { return Text("적용 중") }
+        if !supported { return Text("지원 예정") }
+        return nil
+    }
+
+    /// 주 동작 — 더블클릭과 Return 이 공유한다.
+    private func activate(_ entry: LibraryEntry, supported: Bool) {
+        guard supported else { return }
+        _ = viewModel.apply(entry)
     }
 
     private func typeBadge(for entry: LibraryEntry, supported: Bool) -> some View {
-        Label(supported ? NowPlayingSubtitle.typeLabel(entry.typeRaw) : "지원 예정",
-              systemImage: typeSymbol(entry.typeRaw))
-            .font(.caption2)
-            .labelStyle(.titleAndIcon)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(.ultraThinMaterial, in: Capsule())
-            .padding(6)
+        TypeBadge(symbol: typeSymbol(entry.typeRaw),
+                  label: supported ? Text(verbatim: NowPlayingSubtitle.typeLabel(entry.typeRaw))
+                                   : Text("지원 예정"))
     }
 
     private func typeSymbol(_ raw: String) -> String {
@@ -225,25 +252,49 @@ struct WallpaperGridView: View {
 
     @ViewBuilder
     private func preview(for entry: LibraryEntry, animating: Bool) -> some View {
-        if let url = viewModel.previewURL(for: entry) {
-            if PreviewMedia.isAnimated(url) {
-                AnimatedPreviewView(url: url, animating: animating).scaledToFill()
-            } else {
-                // F500: 정지 프리뷰는 비동기 로드 뷰 — body 평가 중 메인 동기 디스크 읽기 제거.
-                PreviewThumbnail(url: url)
-            }
+        let url = viewModel.previewURL(for: entry)
+        if let url, PreviewMedia.isAnimated(url) {
+            AnimatedPreviewView(url: url, animating: animating).scaledToFill()
         } else {
-            PreviewThumbnail(url: nil)
+            // F500: 정지 프리뷰는 비동기 로드 뷰 — body 평가 중 메인 동기 디스크 읽기 제거.
+            // nil 도 이 뷰가 받는다(플레이스홀더 내장) — 호출부에서 다시 그리지 않는다.
+            PreviewThumbnail(url: url)
         }
+    }
+
+    /// 우클릭 메뉴 항목과 1:1 로 대응하는 접근성 액션 묶음.
+    ///
+    /// 우클릭은 마우스 전용이다 — 이 메뉴의 항목 중 절반은 다른 어떤 경로로도 도달할 수
+    /// 없어서, 보조기술·키보드 사용자에게는 그 기능들이 존재하지 않는 것과 같았다.
+    /// 중첩 메뉴 둘(폴더로 이동·모니터에 적용)은 평탄화가 불가능하므로 대표 액션 하나로
+    /// **인스펙터를 여는 것**으로 대체한다. 인스펙터에 같은 컨트롤이 있고, 그쪽은 표준
+    /// 컨트롤이라 처음부터 접근 가능하다(청사진 §4.3).
+    private func tileActions(_ entry: LibraryEntry, supported: Bool) -> TileContextActions {
+        TileContextActions(
+            supported: supported,
+            isWeb: WallpaperType.from(entry.typeRaw) == .web,
+            playlistLabel: viewModel.isInPlaylist(entry) ? Text("재생목록에서 제거") : Text("재생목록에 추가"),
+            favoriteLabel: viewModel.isFavorite(entry) ? Text("즐겨찾기 해제") : Text("즐겨찾기"),
+            select: { showProperties(entry) },
+            apply: { _ = viewModel.apply(entry) },
+            applyAndOpenInteraction: { _ = viewModel.apply(entry); viewModel.onOpenInteraction?() },
+            togglePlaylist: { viewModel.togglePlaylist(entry) },
+            toggleFavorite: { viewModel.toggleFavorite(entry) },
+            reveal: { revealInFinder(entry) },
+            confirmRemove: { removeConfirmEntry = entry })
+    }
+
+    /// 패널이 접혀 있어도 즉시 보이도록(F103류 데드엔드 방지) 포커스와 노출을 함께 바꾼다.
+    private func showProperties(_ entry: LibraryEntry) {
+        Motion.run(Motion.reveal) { viewModel.selectForPropertiesView(entry) }
     }
 
     @ViewBuilder
     private func contextMenu(for entry: LibraryEntry, supported: Bool) -> some View {
-        Button("선택(속성 보기)") {
-            // 패널이 접혀 있어도 즉시 보이도록(F103류 데드엔드 방지) — MainWindowView 의 기존 패널
-            // 토글과 동일한 스프링으로 트랜지션(:127 .move(edge: .trailing))을 재사용한다.
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { viewModel.selectForPropertiesView(entry) }
-        }
+        // 패널 개폐 곡선은 Motion 토큰이 소유한다 — 화면이 직접 곡선을 만들면 그 자리만
+        // "동작 줄이기" 설정을 무시한다. 종전 값(response 0.3 / damping 0.85)이 그대로
+        // Motion.reveal 로 승격돼 있어 감각은 바뀌지 않는다.
+        Button("선택(속성 보기)") { showProperties(entry) }
         if supported { Button("적용") { _ = viewModel.apply(entry) } }
         if WallpaperType.from(entry.typeRaw) == .web {
             Button("적용 + 조작 창 열기") { _ = viewModel.apply(entry); viewModel.onOpenInteraction?() }
@@ -321,6 +372,62 @@ struct WallpaperGridView: View {
             }
         }
         return handled
+    }
+}
+
+/// 그리드 타일의 접근성 액션 묶음. `WallpaperGridView.tileActions(_:supported:)` 가 만든다.
+///
+/// 뷰 빌더 밖의 별도 타입으로 뺀 이유는 둘이다. 하나는 타입체커 — 액션이 아홉이라 호출부
+/// 체인에 그대로 이으면 그 자리의 식이 아홉 겹 더 깊어진다(이 저장소에서 네 번 터진 자리다).
+/// 다른 하나는 검증 — 우클릭 메뉴와 1:1 인지 확인하려면 목록이 한 곳에 모여 있어야 한다.
+///
+/// 파괴적 동작(`제거`)은 여기서도 바로 실행하지 않고 확인 대화상자를 연다. 보조기술
+/// 경로라고 확인 단계를 건너뛰면, 되돌릴 수 없는 동작이 로터에서 한 번에 발화한다.
+private struct TileContextActions: ViewModifier {
+    let supported: Bool
+    let isWeb: Bool
+    let playlistLabel: Text
+    let favoriteLabel: Text
+    let select: () -> Void
+    let apply: () -> Void
+    let applyAndOpenInteraction: () -> Void
+    let togglePlaylist: () -> Void
+    let toggleFavorite: () -> Void
+    let reveal: () -> Void
+    let confirmRemove: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if supported {
+            supportedActions(sharedActions(content))
+        } else {
+            sharedActions(content)
+        }
+    }
+
+    /// 지원 여부와 무관하게 늘 있는 것 — 우클릭 메뉴의 하단 정리 그룹과 같은 순서.
+    private func sharedActions<V: View>(_ view: V) -> some View {
+        view
+            .accessibilityAction(named: Text("선택(속성 보기)"), select)
+            .accessibilityAction(named: favoriteLabel, toggleFavorite)
+            .accessibilityAction(named: Text("Finder에서 보기"), reveal)
+            .accessibilityAction(named: Text("라이브러리에서 제거"), confirmRemove)
+    }
+
+    @ViewBuilder
+    private func supportedActions<V: View>(_ view: V) -> some View {
+        let base = view
+            .accessibilityAction(named: Text("적용"), apply)
+            .accessibilityAction(named: playlistLabel, togglePlaylist)
+            // 중첩 메뉴 둘의 대표 액션. 목적지가 동적(폴더 목록·모니터 목록)이라 평탄화할 수
+            // 없으므로 인스펙터를 열어 거기서 고르게 한다.
+            .accessibilityAction(named: Text("폴더로 이동"), select)
+            .accessibilityAction(named: Text("모니터에 적용"), select)
+        if isWeb {
+            base.accessibilityAction(named: Text("적용 + 조작 창 열기"), applyAndOpenInteraction)
+        } else {
+            base
+        }
     }
 }
 

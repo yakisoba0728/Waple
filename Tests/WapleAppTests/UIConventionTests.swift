@@ -80,11 +80,10 @@ final class UIConventionTests: XCTestCase {
     /// `reduceMotion`·`accessibilityReduceTransparency`·`differentiateWithoutColor` 참조가
     /// **0건**이고 애니메이션 진입점 6개가 무조건 실행된다.
     func testAnimationsComeFromMotionTokens() throws {
-        // 2026-08-17 기준 위반 4파일 중 Unit A 몫 둘(MainWindowView·StatusBanner)은 셸 개편에서
-        // Motion 토큰으로 옮기며 지웠다. 남은 둘은 담당 단위(부록 A §A.3) 몫이다.
+        // 2026-08-17 기준 위반 4파일 중 셋(MainWindowView·StatusBanner = Unit A,
+        // WallpaperGridView = Unit B)은 각자 개편에서 Motion 토큰으로 옮기며 지웠다.
         let pending: Set<String> = [
             "Surfaces/Workshop/RemoteTile.swift",  // Unit C
-            "WallpaperGridView.swift",         // Unit B
         ]
         try assertConvention(
             violates: { text in
@@ -107,8 +106,8 @@ final class UIConventionTests: XCTestCase {
     /// 메뉴 11개 중 5개(선택(속성 보기)·적용 + 조작 창 열기·폴더로 이동·Finder에서 보기·
     /// 폴더 삭제)는 다른 어떤 경로로도 도달할 수 없다.
     func testContextMenusHaveAccessibilityCounterpart() throws {
-        // 2026-08-17 기준 위반 1파일.
-        let pending: Set<String> = ["WallpaperGridView.swift"]   // Unit B
+        // 2026-08-17 기준 위반 1파일이었고, Unit B 가 라이브러리 개편에서 지웠다 — 목록은 비었다.
+        let pending: Set<String> = []
         try assertConvention(
             violates: { text in
                 text.contains(".contextMenu") && !text.contains(".accessibilityAction(")
@@ -126,10 +125,9 @@ final class UIConventionTests: XCTestCase {
     /// 실측(2026-08-17): `Sources/Waple` 전체에서 `.accessibilityLabel`/`Value`/`Hint`/
     /// `Element`/`AddTraits`·`.focusable` 참조가 **전부 0건**이다.
     func testTapDrivenViewsDeclareAccessibility() throws {
-        // 2026-08-17 기준 위반 2파일.
+        // 2026-08-17 기준 위반 2파일 중 WallpaperGridView 는 Unit B 가 지웠다.
         let pending: Set<String> = [
             "Surfaces/Displays/DisplaysView.swift",   // Unit D (railTile·monitorBox)
-            "WallpaperGridView.swift",                // Unit B (tile·folderTile·backTile)
         ]
         try assertConvention(
             violates: { text in
