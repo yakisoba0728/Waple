@@ -257,6 +257,12 @@
 "끄기" = "Turn off";
 "늘이기" = "Stretch";
 "맞춤 (전체 표시)" = "Fit (show all)";
+"미완료" = "Not done";
+"배경 패키지 안 mkv/webm 동영상 변환에 필요합니다 — brew install ffmpeg" = "Needed to convert mkv/webm videos inside wallpaper packages — brew install ffmpeg";
+"배경 폴더나 zip 을 창에 끌어다 놓거나, 창작마당 탭에서 내려받으세요." = "Drag a wallpaper folder or zip into the window, or download one from the Workshop.";
+"사용 가능 — 동영상 변환 준비됨." = "Available — ready to convert videos.";
+"완료" = "Done";
+"일부 씬은 Wallpaper Engine 공유 assets 폴더의 텍스처가 필요합니다." = "Some scenes need textures from the Wallpaper Engine shared assets folder.";
 "전역 배경" = "Global wallpaper";
 "채움 (꽉 채움)" = "Fill (cover)";
 "켜기" = "Turn on";
