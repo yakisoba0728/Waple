@@ -6,47 +6,6 @@
 
 여기가 그 안전망이다. 변경이 무엇을 바꿨는지 판정하는 기준이 된다.
 
-## `baseline-9a5f71a` — **현행 기준선**(2026-08-18, 4차)
-
-판정은 이걸 기준으로 한다(`GoldenBaseline.currentLabel`). `baseline-81098bb` 는 이식 전 이력이다.
-
-| 항목 | 값 |
-| --- | --- |
-| gitSHA | `9a5f71a` (main, Sources 청결) |
-| 빌드 | **release** |
-| entries / empties / failures | **170 / 0 / 0** |
-| 캡처 | `rebaseline-golden.sh` · **커서 이동 후 재캡처 상이 0종**(4차 시도) |
-| 설치 직후 게이트 | **PASS 170 / FAIL 0** |
-
-**왜 다시 떴는가**: translucent/additive 가 저작 `depthwrite` 를 무시하도록 고쳤고
-(`92bf959`, 정본 `renderState.authoring.blendingVsDepthwrite` 준수), 그것이 `3662790108`
-1종의 픽셀을 바꿨다. 육안 판정: **개선** — 뎁스에 가려 뭉개져 있던 안내 텍스트가 판독
-가능해졌다. 같은 사이클의 보조 모니터 오디오 수정(`aebd356`)은 픽셀을 바꾸지 않았다
-(헤드리스 가드가 살아 있다는 증거).
-
-`baseline-1eabf13` 의 **알려진 오답 2종**(`3521337568`·`3640755971` blown-out)은 이 기준선에도
-그대로 이월된다 — `spec/engine/shape-quad.json` §`shape.knownDefectScaledQuads20260818`.
-
-### ⚠️ 재베이스라인이 `3706286085` 때문에 세 번 막혔다 — 재시도할 때 캐시를 지워라
-
-자기검증이 3연속 "상이 1종"으로 거부했다. 두 가지를 기록해 둔다.
-
-**1. 출력 디렉터리를 지우지 않으면 재시도가 재시도가 아니다.** 스크립트가
-`baseline-<sha> 이미 있음 — 건너뜀` 으로 **옛 캡처를 재사용**해 같은 판정을 다시 출력한다.
-로그만 보면 다시 돈 것처럼 보인다. 재시도 전에
-`rm -rf ~/Downloads/waple-rebaseline/{baseline,verify}-<sha>` 를 하라.
-
-**2. "두 캡처가 다르다" 를 보면 어느 쪽이 나쁜지 확인하라.** 3차 실패의 매니페스트를
-열어 보니 1차 캡처가 **소수 해시**(`13fcdfb…`, 프로브 10회 중 1회)에 `selfMaxDiff=3`,
-2차가 **지배 해시**(`5d0f07a9…`, 8/10)에 `selfMaxDiff=0` 이었다 — 코인플립에 진 게 아니라
-**1차 캡처 자체가 오염된 것**이고 게이트가 옳게 거부했다.
-
-발화율 실측(`probe-scene-repeat.sh 3706286085 10`, 이 커밋 시점):
-프로세스 간 해시 3종 / 10회(지배 8) · `selfMaxDiff` 비영 **4/10**.
-설치된 이 기준선은 **지배 해시**로 잡혔다.
-
----
-
 ## `baseline-1eabf13` — **현행 기준선**(2026-08-18, 3차)
 
 판정은 이걸 기준으로 한다(`GoldenBaseline.currentLabel`). `baseline-81098bb` 는 이식 전 이력이다.

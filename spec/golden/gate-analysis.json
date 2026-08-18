@@ -170,7 +170,7 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": "spec/golden/snapshot/baseline-9a5f71a/manifest.json",
+     "ref": "spec/golden/snapshot/baseline-1eabf13/manifest.json",
      "note": "커밋된 기준선 170종의 썸네일·meanLuma"
     },
     {
@@ -366,7 +366,7 @@
    "value": {
     "n": 170,
     "min": 0.00149,
-    "p05": 0.03336,
+    "p05": 0.02332,
     "median": 0.37691,
     "max": 0.86892
    },
@@ -374,7 +374,7 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": "spec/golden/snapshot/baseline-9a5f71a/manifest.json",
+     "ref": "spec/golden/snapshot/baseline-1eabf13/manifest.json",
      "note": "커밋된 기준선 170종의 썸네일·meanLuma"
     }
    ]

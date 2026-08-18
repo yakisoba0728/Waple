@@ -3,7 +3,7 @@
 
   ],
   "captureTime" : 6,
-  "createdAt" : "2026-08-18T09:27:13Z",
+  "createdAt" : "2026-08-18T03:43:56Z",
   "empties" : [
 
   ],
@@ -1261,10 +1261,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "834b7688b4e7d539",
+      "hash" : "5bd5604f0c271a92",
       "height" : 144,
       "id" : "3589454154",
-      "meanLuma" : 0.007375959116285398,
+      "meanLuma" : 0.007402772033292477,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1423,10 +1423,10 @@
     },
     {
       "deterministic" : true,
-      "hash" : "5a272b28b471df",
+      "hash" : "6c8200682c6622f1",
       "height" : 144,
       "id" : "3662790108",
-      "meanLuma" : 0.033358171530331104,
+      "meanLuma" : 0.02332213945908248,
       "selfMaxDiff" : 0,
       "width" : 256
     },
@@ -1499,7 +1499,7 @@
       "height" : 144,
       "id" : "3706286085",
       "meanLuma" : 0.2625823380480672,
-      "selfMaxDiff" : 3,
+      "selfMaxDiff" : 0,
       "width" : 256
     },
     {
@@ -1542,8 +1542,8 @@
   "failures" : [
 
   ],
-  "gitSHA" : "9a5f71a",
-  "label" : "baseline-9a5f71a",
+  "gitSHA" : "1eabf13",
+  "label" : "baseline-1eabf13",
   "thumbHeight" : 144,
   "thumbWidth" : 256
 }
