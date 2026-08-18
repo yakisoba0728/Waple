@@ -101,8 +101,16 @@ final class TexDecoderTests: XCTestCase {
         XCTAssertEqual(out.pixels.count, 4)
     }
 
-    /// format=9 R8(단일채널) → 그레이스케일 RGBA(v,v,v,255). 실측: 3598808038 opacity 비네트 마스크.
+    /// format=9 R8(단일채널) → **(v,v,v,v)**. 실측: 3598808038 opacity 비네트 마스크.
     /// 종전(fmt9→BC3 오분류)엔 전백(全白)으로 디코드돼 마스크가 무효화→전화면 흑화면이었다.
+    ///
+    /// **2026-08-19: 알파를 255 고정에서 v 로 바꿨다.** 종전 규약은 마스크 경로(`.r` 을 직접
+    /// 읽는 `opacity.frag:12`·`depthparallax.frag:39`, 122씬)만 보고 정한 것이었고 **파티클
+    /// 경로를 빠뜨렸다** — `genericparticle.frag:79` 는 `ConvertTexture0Format` 을 거치는데
+    /// 그게 R8 을 `vec4(1,1,1,sample.r)` 로 펴서(`common_fragment.h:103-106`) 텍스처가
+    /// 모양(알파)만 주게 한다. 알파가 255 면 마스킹이 통째로 사라져 불투명 사각형이 된다.
+    /// 도달 44/169씬(WE 번들 파티클 텍스처 60개 중 56개가 r8).
+    /// `.r` 은 그대로라 마스크 경로는 무회귀다 — 아래 두 단언이 그 둘을 함께 고정한다.
     func testDecodesR8AsGrayscale() throws {
         let r8: [UInt8] = (0..<64).map { UInt8($0 * 4) }   // 8x8 램프(0,4,8,…,252)
         var b = bytes(tag("TEXV0005"), tag("TEXI0001"))
@@ -115,10 +123,10 @@ final class TexDecoderTests: XCTestCase {
         let out = try XCTUnwrap(TexDecoder.rgba(from: tex, data: data))
         XCTAssertEqual(out.width, 8); XCTAssertEqual(out.height, 8)
         let px = [UInt8](out.pixels)
-        // 픽셀0: 값 0 → (0,0,0,255)
-        XCTAssertEqual([px[0], px[1], px[2], px[3]], [0, 0, 0, 255])
-        // 픽셀10: 값 40 → (40,40,40,255) — r=g=b, alpha 불투명
-        XCTAssertEqual([px[40], px[41], px[42], px[43]], [40, 40, 40, 255])
+        // 픽셀0: 값 0 → (0,0,0,0) — 알파도 0(파티클에서 완전 투명)
+        XCTAssertEqual([px[0], px[1], px[2], px[3]], [0, 0, 0, 0])
+        // 픽셀10: 값 40 → (40,40,40,40) — .r=40(마스크 경로) · .a=40(파티클 경로)
+        XCTAssertEqual([px[40], px[41], px[42], px[43]], [40, 40, 40, 40])
     }
 
     /// mip 컨테이너가 없는(TEXB0001 헤더만) 압축 포맷은 .unknown → 디코드 nil(폴백은 호출부가 처리).

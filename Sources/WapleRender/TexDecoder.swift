@@ -228,8 +228,25 @@ public enum TexDecoder {
             guard let rgba = DXT5Decoder.decodeBC1(dec, width: w, height: h) else { return nil }
             return finish(rgba)
         case .r8:
-            // 단일 채널 8bit(WE fmt9). raw 바이트 = 픽셀당 값. 그레이스케일(v,v,v)+불투명(255)로 확장 —
-            // 소비처(opacity 마스크 등)는 .r 을 읽으므로 r=v 로 정확하고, 직접 표시 시에도 회색으로 자연스럽다.
+            // 단일 채널 8bit(WE fmt9). raw 바이트 = 픽셀당 값 → **(v,v,v,v)** 로 확장한다.
+            //
+            // 두 소비 경로가 채널을 다르게 읽기 때문에 이 형태여야 둘 다 맞는다:
+            //   · **파티클**(도달 44/169씬) — `genericparticle.frag:79` 가
+            //     `v_Color * ConvertTexture0Format(sample)` 이고, 그 변환이 R8 을
+            //     `vec4(1,1,1,sample.r)` 로 편다(`common_fragment.h:103-106`).
+            //     즉 텍스처는 **모양(알파)만** 주고 색은 파티클이 낸다 → `.a` 가 값이어야 한다.
+            //   · **마스크·뎁스**(도달 122씬) — `opacity.frag:12`·`depthparallax.frag:39` 가
+            //     `.r` 을 직접 읽는다 → `.r` 이 값이어야 한다.
+            //
+            // 종전 `(v,v,v,255)` 는 마스크 경로만 보고 정한 것이었다(주석에 그렇게 적혀 있었다).
+            // 파티클에서는 알파가 항상 255 라 **마스킹이 통째로 사라져 불투명 사각형**이 됐다.
+            // WE 번들 공유 파티클 텍스처 60개 중 56개가 r8 이다(fire/smoke/fog/lightning/rain/
+            // debris/shape) — 실물 영향이 큰 자리다.
+            //
+            // rgb 를 흰색(255)이 아니라 v 로 두는 것은 마스크 경로의 `.r` 을 지키기 위해서다.
+            // 파티클에서는 `t.rgb * color.rgb` 로 곱해져 WE(rgb=1) 대비 어두워질 수 있는데,
+            // 알파가 v 인 곳은 rgb 도 v 라 프리멀티플라이드처럼 동작해 합성 결과는 근접한다.
+            // **완전 동치는 셰이더가 텍스처 원본 포맷을 알고 분기해야 한다** — 별도 작업이다.
             guard w > 0, h > 0, dec.count >= w * h else { return nil }
             var rgba = Data(count: w * h * 4)
             dec.withUnsafeBytes { (src: UnsafeRawBufferPointer) in
@@ -237,7 +254,7 @@ public enum TexDecoder {
                     let s = src.bindMemory(to: UInt8.self), d = dst.bindMemory(to: UInt8.self)
                     for i in 0..<(w * h) {
                         let v = s[i]
-                        d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = v; d[i * 4 + 3] = 255
+                        d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = v; d[i * 4 + 3] = v
                     }
                 }
             }
