@@ -687,6 +687,61 @@ def measure_confound_verification():
 
 # ── 조립 ──────────────────────────────────────────────────────────────────
 
+def measure_known_defect_scaled_quads():
+    """scale>1 쿼드 두 종의 blown-out 을 **알려진 결함**으로 등재한다.
+
+    2026-08-18 골든 재베이스라인 때 굳혀진 픽셀 중 이 둘만 "틀린 줄 알면서 굳힌 것"이다.
+    기록하지 않으면 다음 사람이 골든을 정답으로 읽는다 — 골든의 존재 이유가 "무엇이
+    바뀌었는가" 를 재는 것이라, 그 안에 알려진 오답이 있으면 그 사실 자체가 정본이어야 한다.
+
+    등재 범위를 **관측된 2종으로 한정**하는 것이 중요하다. 직전 단위가 "scale>1 계열 6종이
+    같은 결함일 것" 이라고 예측했는데 전수 육안 판정에서 **반증**됐다(그 6종은 전부 개선).
+    scale>1 은 이 결함의 필요조건도 충분조건도 아니다 — 예측을 정본에 적으면 그게 사실로
+    굳는다."""
+    observed = []
+    for sid, note in (("3521337568", "좌상단 1/3 청백색 blown-out + 하단 무지개 띠"),
+                      ("3640755971", "우상단에 원화에 없는 하드엣지 회백색 사각형")):
+        sc = load_scene(sid)
+        if sc is None:
+            fail("%s scene.json 을 못 읽었다 — WE_WORKSHOP 확인" % sid)
+        ortho = sc["general"]["orthogonalprojection"]
+        quads = []
+        for o in sc.get("objects", []):
+            if isinstance(o, dict) and o.get("shape"):
+                scl = vec_first(o.get("scale")) if o.get("scale") else 1.0
+                quads.append({"id": o.get("id"), "scale": scl,
+                              "authoredSize": o.get("size"),
+                              "origin": o.get("origin"),
+                              "finalSizePx": round(ortho["height"] * scl, 1)})
+        observed.append({"scene": sid, "symptom": note,
+                         "orthogonalProjection": {"width": ortho["width"], "height": ortho["height"]},
+                         "quads": quads})
+    return {
+        "scenes": observed,
+        "bakedIntoGolden": True,
+        "howJudged": "1280×720 캡처를 작성자 preview 와 3원 대조(원본/기준선/현재). 두 씬의 "
+                     "증상은 작성자 원화에 없다.",
+        "ruledOut": {
+            "parentScale": "부모는 scale/angles 키가 없다(§shape.confoundVerification20260818).",
+            "uvAxis": "RT/UV 축은 정합 — UV 는 scale 과 무관하게 항상 레이어-로컬 0..1.",
+            "rtResolution": "RT 를 size×scale(투영 2배 상한)로 키워 재캡처했으나 픽셀이 거의 "
+                            "안 움직였다(3521337568 mean 0.122 / 3640755971 mean 0.091, "
+                            "blown-out 그대로) — 해상도는 원인이 아니다. 그 변경은 되돌렸다.",
+            "scaleItself": "scale>1 자체가 아니다. 같은 조건의 3299228616·3461168300·"
+                           "3478434536·3510729512·3622495963·3276911872 은 전수 육안 판정에서 "
+                           "개선으로 확인됐다.",
+        },
+        "remainingHypotheses": [
+            "lightshafts 의 rayfeather/감쇠가 쿼드-로컬 UV 기준이라 거대 쿼드에서 페이드 구간이 "
+            "화면 밖으로 밀려난다",
+            "DIRECTDRAW 가산이 겹치는 두 쿼드에서 포화된다",
+        ],
+        "beforeFixing": "WE 가 이 경우를 어떻게 그리는지에 대한 1차 근거를 먼저 확보할 것. "
+                        "이 축에서 근거 없는 수정이 이미 두 번 헛짚었다 — 전역 mul 뒤집기"
+                        "(2026-07-17, 되돌림)와 RT 해상도(2026-08-18, 되돌림).",
+    }
+
+
 def main():
     pe = PE(BIN)
     strings = measure_value_string_absent()
@@ -704,6 +759,7 @@ def main():
     consumer = measure_size_consumer(pe, vt, size_off)
     shared = measure_shared_base(pe, int(dispatch["branchVA"], 16), vt)
     confound_verification = measure_confound_verification()
+    known_defect = measure_known_defect_scaled_quads()
 
     binref = specfmt.ev("binary", "wallpaper64.exe (WE 2.8.42) — %s" % BIN)
     scriptref = specfmt.ev("script", "scripts/spec/measure_shape_quad.py")
@@ -828,6 +884,16 @@ def main():
                 specfmt.ev("asset", "we-audit reference cursor-ripple-hdr-bloom_3299228616_01.png"),
                 specfmt.ev("asset", "<backgrounds>/{3404976219,3521337568,3558034522,"
                                     "3460973721,3640755971}/preview.gif — 작성자 원본 대조"),
+            ]),
+        specfmt.entry(
+            "shape.knownDefectScaledQuads20260818",
+            known_defect,
+            "확정", [
+                specfmt.ev("corpus", "%s/{3521337568,3640755971}/scene.pkg" % WS),
+                specfmt.ev("asset", "<backgrounds>/{3521337568,3640755971}/preview.gif — "
+                                    "작성자 원본에 이 증상이 없다"),
+                specfmt.ev("file", "spec/golden/snapshot/README.md"),
+                scriptref,
             ]),
     ]
     specfmt.dump(specfmt.doc("scripts/spec/measure_shape_quad.py", entries), OUT)
