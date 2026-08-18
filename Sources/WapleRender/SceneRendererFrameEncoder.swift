@@ -197,7 +197,13 @@ extension SceneRenderer {
         if (maxX - minX) + (maxY - minY) < 1 { return false }
 
         let n = pts.count
-        let hw = max(0.5, p.size * 0.5)  // 리본 반폭(px) — scale 미적용(위 appendQuad 근거와 동일)
+        // **반폭 = size 그대로다.** WE `genericropeparticle.geom:79-80` 이
+        // `trailRightStart = normalize(cross(eye, CP)) * sizeStart` 로 중심에서 ±size 만큼
+        // 벌린다 — 즉 저작 size 는 리본의 **반폭**이고 전체폭은 2×size 다.
+        // 종전엔 쿼드 공식(`(uv.x-0.5)*size`, 전체폭=size)을 그대로 재사용해 `size*0.5` 였고,
+        // 그래서 모든 리본이 **정확히 절반 폭**으로 그려졌다. 쿼드 쪽(appendQuad)은 맞다 —
+        // 두 렌더러가 같은 CPU size 를 받지만 해석 규약이 다르다.
+        let hw = max(0.5, p.size)  // 리본 반폭(px) — scale 미적용(위 appendQuad 근거와 동일)
         let r = p.color.x, g = p.color.y, b = p.color.z
         // 접선(중앙차분, 끝은 편차). 0-길이는 직전 유효 접선 계승(NaN 방지 — normalizeSafe 미러).
         var lastT: (Float, Float) = (1, 0)
@@ -217,13 +223,20 @@ extension SceneRenderer {
             let A = toNDC(pts[i].0 + nx, pts[i].1 + ny)
             let B = toNDC(pts[i].0 - nx, pts[i].1 - ny)
             let u = Float(i) / Float(n - 1)
-            edges.append((A, B, u, p.alpha * u))          // tail(u=0)=투명 → head=불투명
+            // **위치 기반 페이드를 얹지 않는다.** WE 의 코멧 페이드(꼬리→머리 그라디언트)는
+            // `TRAILSCROLLALPHA`/`TRAILFADEALPHA` 콤보 뒤에 있고, 기본 `TRAILRENDERER` 경로는
+            // 각 히스토리 포인트 자신의 색·알파(`v_Color`)를 그대로 쓴다
+            // (`genericropeparticle.geom` — 콤보 밖에서 alpha 를 u 로 곱하는 코드가 없다).
+            // 종전엔 `p.alpha * u` 로 항상 페이드를 강제해, 저작이 균일 알파를 의도한 리본도
+            // 꼬리가 투명해졌다. 콤보 지원은 별개 작업이라 여기서는 강제만 걷는다.
+            edges.append((A, B, u, p.alpha))
         }
         func push(_ pt: (Float, Float), _ u: Float, _ vv: Float, _ al: Float) {
             verts.append(contentsOf: [pt.0, pt.1, u, vv, r, g, b, al])
         }
-        // 스프라이트시트: 선택 프레임 렉트로 u(길이)/v(가로) 재매핑(discharge rope 등 —
+        // 스프라이트시트: 선택 프레임 렉트로 u(가로)/v(길이) 재매핑(discharge rope 등 —
         // 미적용 시 시트 전 프레임이 리본에 통째로 늘어난다).
+        // 축 이름은 WE 규약 기준이다 — fu*=폭 방향, fv*=길이 방향(아래 삼각 조립 주석 참조).
         var fu0: Float = 0, fu1: Float = 1, fv0: Float = 0, fv1: Float = 1
         if !sys.frames.isEmpty {
             let fc = sys.frames.count
@@ -242,10 +255,15 @@ extension SceneRenderer {
         }
         for i in 0..<(n - 1) {
             let e0 = edges[i], e1 = edges[i + 1]
-            // 쿼드 (A0,B0,B1,A1) → 삼각 2개. u 는 길이, v 는 가로(0/1).
-            func U(_ u: Float) -> Float { fu0 + (fu1 - fu0) * u }
-            push(e0.a, U(e0.u), fv0, e0.alpha); push(e0.bEdge, U(e0.u), fv1, e0.alpha); push(e1.bEdge, U(e1.u), fv1, e1.alpha)
-            push(e0.a, U(e0.u), fv0, e0.alpha); push(e1.bEdge, U(e1.u), fv1, e1.alpha); push(e1.a, U(e1.u), fv0, e1.alpha)
+            // 쿼드 (A0,B0,B1,A1) → 삼각 2개.
+            //
+            // **u 가 가로(폭), v 가 길이다** — WE `genericropeparticle.geom:110·123·146·159` 가
+            // `v_TexCoord.xy = vec2(0 또는 1, uvMin..uvMax)` 로 낸다. 즉 x 성분이 좌우 엣지
+            // (0/1)이고 y 성분이 리본을 따라 흐른다. 종전엔 정확히 전치돼 있어서(u=길이,
+            // v=가로) 리본 텍스처가 90° 돌아간 채 늘어났다.
+            func V(_ t: Float) -> Float { fv0 + (fv1 - fv0) * t }
+            push(e0.a, fu0, V(e0.u), e0.alpha); push(e0.bEdge, fu1, V(e0.u), e0.alpha); push(e1.bEdge, fu1, V(e1.u), e1.alpha)
+            push(e0.a, fu0, V(e0.u), e0.alpha); push(e1.bEdge, fu1, V(e1.u), e1.alpha); push(e1.a, fu0, V(e1.u), e1.alpha)
         }
         return true
     }
