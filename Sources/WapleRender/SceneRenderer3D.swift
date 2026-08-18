@@ -829,6 +829,19 @@ extension SceneRenderer {
             pbr = Scene3DMaterialValues.parse(p0["constantshadervalues"] as? [String: Any],
                                               shader: p0["shader"] as? String)
             if let csv = p0["constantshadervalues"] as? [String: Any] {
+                // ⚠️ **키 우선순위를 뒤집지 마라 — 시도했고 회귀했다(2026-08-18).**
+                //
+                // generic4.frag 의 `material:` 선언은 전부 소문자이고(`color`/`alpha`/…),
+                // 코퍼스 실측으로 두 키를 다 가진 재질 290건 중 289건이 값이 다르다 —
+                // 대문자는 전부 `1 1 1`(기본값), 저작값은 소문자에 있다. 그래서 소문자
+                // 우선이 옳아 보였고, 실제로 3470948192 의 성단(반사만 보이는 검은 타원)이
+                // **처음으로 나왔다** — WE 레퍼런스와 위치·모양 일치.
+                //
+                // 그런데 같은 씬의 배경이 통째로 보라색으로 깨졌다. 다른 재질들이 대문자
+                // 기본값에 의존하는 상태로 나머지 파이프라인이 맞춰져 있다는 뜻이다.
+                // 순 이득이 아니므로 되돌렸다. 고치려면 **키 우선순위만이 아니라 그 재질들이
+                // 왜 소문자 값으로 깨지는지**를 먼저 봐야 한다(성단 소실의 진짜 관문은
+                // 여기가 아니라 반사 밉체인 부재 — Mesh3DShaders.swift:735 주석 참조).
                 if let c = fvec(csv["Color"] ?? csv["color"]), c.count >= 3 { color = SIMD3(c[0], c[1], c[2]) }
                 if let a = fvec(csv["Alpha"] ?? csv["alpha"])?.first { alpha = a }
                 // H4: g_RefractAmount 상수(2D SceneDocument:1085 와 동일 키 — ui_editor_properties_refract_amount).
