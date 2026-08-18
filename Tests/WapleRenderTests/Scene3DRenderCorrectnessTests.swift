@@ -146,6 +146,39 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertEqual(material.specularTint, SIMD3(0.2, 0.4, 0.6))
     }
 
+    /// renderState.authoring.blendingVsDepthwrite(확정, spec/engine/render-state.json) +
+    /// renderState.depthStencil.table(확정, wallpaper64.exe FUN_140099050): D3D11 depth-stencil
+    /// select 는 depthtest 비트와 blending 만 보고 저작 depthwrite 는 참조하지 않는다 —
+    /// translucent/additive 슬롯은 항상 DepthWriteMask=ZERO. 실물 3470948192 'uc' 재질(전면 대형
+    /// 평면, translucent, depthwrite:"enabled", alpha≈0.02)이 정확히 이 형태라 성단이 뎁스로
+    /// 가려졌다(핸드오프 2026-08-17 미착수 감사 항목).
+    func test3DMeshTranslucentOrAdditiveBlendForcesDepthWriteOffRegardlessOfAuthoredValue() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let renderer = SceneRenderer()
+        func material(_ blending: String, depthwrite: String) throws -> SceneRenderer.Mesh3DMaterialInfo {
+            let package = try pkg([
+                ("materials/mesh.json", Data(#"{"passes":[{"textures":["white"],"blending":"\#(blending)","depthwrite":"\#(depthwrite)"}]}"#.utf8)),
+                ("materials/white.tex", solidTex(255, 255, 255, w: 1, h: 1)),
+            ])
+            return try XCTUnwrap(renderer.loadMesh3DMaterial(
+                "materials/mesh.json", package: package, device: device))
+        }
+        // 실물 3470948192 'uc' 재질 그대로: translucent + depthwrite 저작 enabled → 그래도 뎁스 쓰기는 꺼져야 함.
+        XCTAssertFalse(try material("translucent", depthwrite: "enabled").depthWrite,
+                       "translucent 는 저작 depthwrite:enabled 와 무관하게 뎁스 쓰기가 꺼져야 한다")
+        XCTAssertFalse(try material("additive", depthwrite: "enabled").depthWrite,
+                       "additive 도 저작 depthwrite:enabled 와 무관하게 뎁스 쓰기가 꺼져야 한다")
+        // negative control — normal/alphatocoverage 블렌드는 이 강제 대상이 아니다(정본 crosstab에
+        // translucent|enabled 254 + additive|enabled 4 = overriddenRows 258 뿐, alphatocoverage는
+        // 별도 40건으로 여기 안 낀다). 저작값이 그대로 살아 있어야 이 오라클이 과잉 적용이 아님을 안다.
+        XCTAssertTrue(try material("normal", depthwrite: "enabled").depthWrite,
+                     "normal 블렌드까지 뎁스 쓰기를 꺼버리면 과잉 수정 — negative control")
+        XCTAssertTrue(try material("alphatocoverage", depthwrite: "enabled").depthWrite,
+                     "alphatocoverage 는 강제 대상이 아니다 — negative control")
+        // 저작이 이미 disabled 인 경우도 그대로 false(자명 케이스, 회귀 방지).
+        XCTAssertFalse(try material("translucent", depthwrite: "disabled").depthWrite)
+    }
+
     func test3DMeshLightingComboZeroParsesAsUnlit() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let renderer = SceneRenderer()
