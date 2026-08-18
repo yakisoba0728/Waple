@@ -258,6 +258,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// F535(F-50): 이 창이 프라이머리(NSScreen.screens.first = 메뉴 바) 화면에 있는지. 헤드리스
     /// (window == nil)는 false — 기존 캡처/테스트의 사운드 스킵(결정성) 계약과 동일. 멀티모니터 동일 씬
     /// 사운드의 N중 재생(시차 에코)을 프라이머리 화면 1개로 디듑하는 데 쓴다.
+    /// F833: sceneAudio(재생, mount:1534) 게이트로만 남는다 — audioProvider(스펙트럼 읽기, mount:1569)는
+    /// 겹쳐도 에코가 없어(SharedAudioCaptureCore 가 멀티-구독자) window != nil 만 검사한다. 여기서 다시
+    /// 합치고 싶어지면 그 전에 F535/F536 주석부터 다시 읽을 것 — 재생과 읽기는 겹침 부작용이 다르다.
     static func isPrimaryScreenWindow(_ window: NSWindow?) -> Bool {
         guard let screen = window?.screen, let primary = NSScreen.screens.first else { return false }
         return screen == primary
@@ -1552,9 +1555,18 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         }
         startMediaPollingIfNeeded()
         // 오디오-반응 효과가 있으면 시스템 오디오 스펙트럼 캡처 시작(Screen Recording 권한 필요).
-        // E1(⑦): 형제 sceneAudio 블록(:1333)과 동일한 헤드리스 결정성 가드 — 종전엔 이 블록만 누락돼
+        // E1(⑦): 형제 sceneAudio 블록(:1531)과 동일한 헤드리스 결정성 가드 — 종전엔 이 블록만 누락돼
         // 헤드리스(캡처/테스트) 경로에서도 SCStream 오디오 캡처가 무조건 기동됐다.
-        if hasAudio, Self.isPrimaryScreenWindow(container.window) {
+        // F833: sceneAudio 는 isPrimaryScreenWindow(프라이머리 1개만) 지만 여기는 window != nil(전 화면)로
+        // 다르게 좁힌다 — sceneAudio 는 *재생*(BGM)이라 같은 씬이 여러 화면에 뜨면 사운드가 겹쳐 에코가
+        // 나지만(F535), 이건 시스템 오디오를 *읽기*만 한다. 재생과 달리 겹쳐도 부작용이 없고, 그
+        // SharedAudioCaptureCore(F536, 파일 말미)가 SCStream 캡처 1개를 여러 구독자가 공유하도록 이미
+        // 멀티-구독자로 설계돼 있다 — 그런데 종전엔 프라이머리 게이트를 그대로 재사용해서 보조 모니터
+        // SceneRenderer 인스턴스는 currentSpectrum 이 .silent 로 고정됐다(오디오-반응 씬이 보조 모니터에만
+        // 있으면 프로세스 전체에서 provider 가 단 하나도 안 뜨는 최악의 경우까지 있었다). 형제
+        // WebRenderer(:36,122)는 이 게이트 자체가 없이 마운트마다 무조건 provider 를 만든다 — 안전성의
+        // 실증. window != nil 은 헤드리스(캡처/테스트, 위 sceneAudio 주석과 동일 계약) 배제 목적만 남긴다.
+        if hasAudio, container.window != nil {
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] spec in
                 // spec = 128(64L+64R, 채널별 FFT) — 16빈도 채널 분리 다운샘플.

@@ -257,6 +257,59 @@ final class SceneRenderFixRegressionTests: XCTestCase {
         XCTAssertNil(renderer.audioProvider, "헤드리스(window==nil)에서는 SCStream 캡처 프로바이더가 기동되면 안 됨")
     }
 
+    // MARK: - F833: 보조 모니터 SceneRenderer 도 오디오 스펙트럼 프로바이더를 얻어야 한다
+
+    /// 종전엔 audioProvider 게이트가 sceneAudio(재생)와 동일하게 isPrimaryScreenWindow 를 재사용해서,
+    /// 보조 모니터(비-프라이머리 화면)에 뜬 SceneRenderer 인스턴스는 currentSpectrum 이 init 값 .silent 에서
+    /// 영원히 안 바뀌었다(오디오-반응 씬이 보조 모니터에만 배정되면 프로세스 전체에서 provider 가 단 하나도
+    /// 안 뜨는 최악의 경우까지 있었다). 실제 보조 모니터 없이도 window.screen == nil(화면 밖으로 멀리 옮긴
+    /// 창)이면 isPrimaryScreenWindow 가 false 를 내므로 "비-프라이머리인데 헤드리스는 아님" 조건을
+    /// 재현할 수 있다 — 창 자체(container.window)는 non-nil 이라 새 게이트(window != nil)는 통과해야 한다.
+    func testMountNonPrimaryScreenWindowStillStartsAudioSpectrumCapture() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal device") }
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_f833_audio_secondary", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[{"id":1,"particle":"particles/x.json","origin":"10 10 0"}]}
+        """
+        let particle = """
+        {"emitter":[{"name":"sphererandom","rate":1,"audioprocessingmode":3}],
+         "renderer":[{"name":"sprite"}],"maxcount":10,"material":"materials/x.json"}
+        """
+        let material = #"{"passes":[{"textures":["x"]}]}"#
+        let pkgData = encodePkg([
+            ("scene.json", scene.data(using: .utf8)!),
+            ("particles/x.json", particle.data(using: .utf8)!),
+            ("materials/x.json", material.data(using: .utf8)!),
+            ("materials/x.tex", solidTex(255, 255, 255)),
+        ])
+        try pkgData.write(to: dir.appendingPathComponent("scene.pkg"))
+
+        let project = WallpaperProject(
+            id: "f833audio", type: .scene, fileName: "scene.pkg", previewName: nil, title: "f833audio",
+            tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
+
+        // 화면 경계 밖 좌표(1_000_000)에 얹은 창 — NSWindow.screen 은 창 프레임이 어느 화면과도 겹치지
+        // 않으면 nil 을 반환(경험적 확인). 실제 다중 모니터 없이 "비-프라이머리" 를 흉내내는 가장 단순한 경로.
+        let win = NSWindow(contentRect: NSRect(x: 1_000_000, y: 1_000_000, width: 100, height: 100),
+                           styleMask: [], backing: .buffered, defer: false)
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        win.contentView = container
+        XCTAssertNotNil(container.window, "창에 부착됐으므로 헤드리스가 아니다")
+        XCTAssertNil(win.screen, "화면 경계 밖 창은 screen 이 nil(전제 확인)")
+        XCTAssertFalse(SceneRenderer.isPrimaryScreenWindow(container.window),
+                       "screen==nil 이면 isPrimaryScreenWindow 는 false — 종전 게이트라면 이 인스턴스는 provider 를 못 얻었다")
+
+        let renderer = SceneRenderer()
+        try renderer.mount(in: container, project: project)
+        defer { renderer.teardown() }
+
+        XCTAssertTrue(renderer.hasAudio, "오디오반응 이미터가 있으면 hasAudio 는 true(무회귀)")
+        XCTAssertNotNil(renderer.audioProvider,
+                        "F833: 헤드리스가 아니면 비-프라이머리 화면이어도 스펙트럼 프로바이더가 기동돼야 한다")
+    }
+
     // MARK: - E1(⑥): buildLayers projW/projH 클램프 통일(projection 0 씬 NaN 방지)
 
     /// scene.json 이 orthogonalprojection width/height 를 명시적 0 으로 주면 파서가 그대로 통과시킨다
