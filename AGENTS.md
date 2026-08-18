@@ -48,17 +48,17 @@ WapleCore ←── WapleLibrary ──┐
 
 ```bash
 swift build --build-tests      # ~20초 (유휴 상태 Apple Silicon)
-swift test                     # 2,266개(2026-08-17 macOS 실측 — 코퍼스 유무와 무관)
+swift test                     # 2,267개(2026-08-17 macOS 실측 — 코퍼스 유무와 무관)
 swift run Waple                # 메뉴바 앱으로 실행
 ```
 
-테스트 수 **2,266** 는 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
+테스트 수 **2,267** 는 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
 번들 합으로 세야 한다 — 클래스 단위 소계까지 더하면 6,000대로 부풀어 무의미해진다.
 `실행` 은 스킵을 포함하므로 **이 값은 코퍼스 유무와 무관하다**(아래 표에서 다섯 구성이 모두 같은 수).
 종전 기준값 2,143 은 2026-08-01 실측이었고 2026-08-16 재측정으로 2,149, 같은 날 결함 수정에 붙은 신규 테스트로 2,180,
-2026-08-17 하루에 다섯이 붙어 2,266 이 됐다 — mul 전치 회귀 3 · UI 규약 오라클 3 · g_Brightness 14 ·
+2026-08-17 하루에 다섯이 붙어 2,267 이 됐다 — mul 전치 회귀 3 · UI 규약 오라클 3 · g_Brightness 14 ·
 공유 컴포넌트 7 · 셸 개편(스모크 순수화 11 + 네비 12) 23 · 가시성 전파 10 ·
-Phase 2 UI 개편 22(라이브러리 18 + 설정·디스플레이 4) · shape 저작 size 1 · 씬 음량 노출 1 · translucent depthwrite 1 · 보조 모니터 스펙트럼 1.
+Phase 2 UI 개편 22(라이브러리 18 + 설정·디스플레이 4) · shape 저작 size 1 · 씬 음량 노출 1 · translucent depthwrite 1 · 보조 모니터 스펙트럼 1 · generic4 color 키 1.
 회귀가 아니라 오라클이 늘어난 것이다. **주의**: 그날 병렬 단위 둘이 각자 2,180+3 을 계산해
 **둘 다 2,183 이라 적었다** — 서로의 3 을 모르고 있었다. 병렬로 오라클을 늘릴 때는 기준값을
 각자 갱신하지 말고 합류 후 한 번 재측정할 것.
@@ -76,14 +76,14 @@ export WAPLE_BASE_ASSETS=/path/to/assets       # 미설정 시 ~/Downloads/wallp
 
 | 구성 | 실행 | 스킵 | 시간 | 출처 |
 | --- | --- | --- | --- | --- |
-| 코퍼스 있음(전량 460) | 2,266 | 2 | ~30분 | 실행수는 **추론**(정적 개수 = 축소 실측과 동일), 스킵 2 는 2026-08-01 실측 |
-| 코퍼스 있음(축소 38, release) | 2,266 | 9 | **162초** | 시간·스킵은 2026-08-16 실측(`verify-plan-b12.sh` §5, `swift test -c release`, 순차). 실행수는 그 2,180 에 2026-08-17 신규 20 을 더한 **정적 추론** |
-| 코퍼스 있음(축소 38, debug) | 2,266 | 9 | ~4.6분 | 시간·스킵은 2026-08-16 실측(`--parallel --num-workers 6`, 아래 레시피). 실행수는 위와 같은 **정적 추론** |
-| 코퍼스 없음 | 2,266 | 40 | ~110초 | 2026-08-17 macOS 실측 (`WAPLE_REAL_PKGS=/nonexistent/path swift test`, 순차 — 번들별 25+1040+51+802+348) |
-| CI (코퍼스 없음) | 2,266 | 47 | ~170초 | 시간·스킵은 2026-08-16 CI run `30934767197`(main @`b901326`, macos-26, 성공) 로그의 2,180. 실행수는 신규 20 을 더한 **정적 추론** — 다음 CI 로 재확인할 것 |
+| 코퍼스 있음(전량 460) | 2,267 | 2 | ~30분 | 실행수는 **추론**(정적 개수 = 축소 실측과 동일), 스킵 2 는 2026-08-01 실측 |
+| 코퍼스 있음(축소 38, release) | 2,267 | 9 | **162초** | 시간·스킵은 2026-08-16 실측(`verify-plan-b12.sh` §5, `swift test -c release`, 순차). 실행수는 그 2,180 에 2026-08-17 신규 20 을 더한 **정적 추론** |
+| 코퍼스 있음(축소 38, debug) | 2,267 | 9 | ~4.6분 | 시간·스킵은 2026-08-16 실측(`--parallel --num-workers 6`, 아래 레시피). 실행수는 위와 같은 **정적 추론** |
+| 코퍼스 없음 | 2,267 | 40 | ~110초 | 2026-08-17 macOS 실측 (`WAPLE_REAL_PKGS=/nonexistent/path swift test`, 순차 — 번들별 25+1041+51+802+348) |
+| CI (코퍼스 없음) | 2,267 | 47 | ~170초 | 시간·스킵은 2026-08-16 CI run `30934767197`(main @`b901326`, macos-26, 성공) 로그의 2,180. 실행수는 신규 20 을 더한 **정적 추론** — 다음 CI 로 재확인할 것 |
 
 모든 구성 **실패 0**. `실행` 은 XCTest 의 `Executed N tests` 이고 **스킵을 포함한다** —
-그래서 스킵이 40/47/9 로 갈려도 다섯 구성이 전부 똑같이 2,266 를 낸다. 위 `~110초`는 증분 빌드까지
+그래서 스킵이 40/47/9 로 갈려도 다섯 구성이 전부 똑같이 2,267 를 낸다. 위 `~110초`는 증분 빌드까지
 포함한 명령 전체 벽시계이고 번들 실행 시간 합은 ~97초, CI 의 `~170초`는 로그의
 `in 170.403 seconds`(빌드 별도) 다.
 
@@ -134,11 +134,11 @@ WAPLE_DEV_ROOT=/tmp/dev-root WAPLE_VERIFY_OUT=/tmp/verify-out bash scripts/mac-s
   `WAPLE_BASE_ASSETS` 를 기본값(`~/Downloads/wallpaper_dev/assets`, **이 머신엔 실재**)으로 두고 돌렸다.
 - GPU 스킵은 없었다 — Metal 은 로컬(로그인 세션)·CI 양쪽에서 잡혔다.
 
-번들별(2026-08-17, 코퍼스 없음): WapleRenderTests 1040(스킵 26) · WapleCoreTests 802(스킵 14) · WapleAppTests 348 · WapleLibraryTests 51 · WapleSnapshotTests 25.
+번들별(2026-08-17, 코퍼스 없음): WapleRenderTests 1041(스킵 26) · WapleCoreTests 802(스킵 14) · WapleAppTests 348 · WapleLibraryTests 51 · WapleSnapshotTests 25.
 번들별(2026-08-16, 코퍼스 있음/축소 38): WapleRenderTests 995(스킵 7) · WapleCoreTests 786(스킵 2) · WapleAppTests 292 · WapleLibraryTests 51 · WapleSnapshotTests 25.
 번들별(2026-08-01, 코퍼스 있음/전량): WapleRenderTests 992(스킵 2) · WapleCoreTests 786 · WapleAppTests 289 · WapleLibraryTests 51 · WapleSnapshotTests 25.
 번들별(2026-08-16, 코퍼스 없음): WapleRenderTests 995(스킵 26) · WapleCoreTests 786(스킵 14) · WapleAppTests 292 · WapleLibraryTests 51 · WapleSnapshotTests 25.
-(CI 는 번들을 `WaplePackageTests.xctest` 하나로 합쳐 2,266 한 줄로 낸다.)
+(CI 는 번들을 `WaplePackageTests.xctest` 하나로 합쳐 2,267 한 줄로 낸다.)
 
 코퍼스가 사주는 38개(2026-08-16 실측 — 무코퍼스 스킵 40 중 옵트인 2건을 뺀 38 이 코퍼스로 풀린다.
 축소 38개로도 31건이 풀렸고 나머지 7건은 그 서브셋에 없는 패키지를 요구한 것이다. 종전 표기 39개는
