@@ -74,6 +74,24 @@ dark = [e["id"] for e in m1["entries"] if e["meanLuma"] <= 0.0]
 if dark:
     print(f"!! 완전 검정 프레임 {len(dark)}종 — 설치하지 않는다: {dark[:10]}"); sys.exit(1)
 
+# 매니페스트 **내부 모순** — deterministic=true 인데 selfMaxDiff!=0.
+#
+# 이 검사가 없어서 2026-08-18 에 3706286085 이 selfMaxDiff=3 인 채로 굳어졌고, CI 의
+# GoldenBaselineOracleTests.testDeterministicScenesHaveZeroSelfDiff 가 잡아 되돌려야 했다.
+# 위 커서-이동 대조는 **두 캡처가 서로 같은가**만 본다 — 한 캡처 안에서 두 마운트가
+# 어긋난 것은 못 본다. 설치 후 게이트를 돌려도 안 잡힌다(새 기준선 자신과 비교하므로
+# 당연히 통과한다). 그래서 사람이 오라클 테스트를 따로 돌려야 했는데, 기억에 의존하는
+# 규칙은 언젠가 또 빠진다 — 여기서 막는다.
+inconsistent = sorted(e["id"] for e in m1["entries"]
+                      if e.get("deterministic", True) and e.get("selfMaxDiff", 0) != 0)
+if inconsistent:
+    print(f"!! deterministic=true 인데 selfMaxDiff!=0 인 씬 {len(inconsistent)}종 — 설치하지 않는다:")
+    for i in inconsistent[:10]:
+        print(f"     {i}  selfMaxDiff={a[i].get('selfMaxDiff')}")
+    print("   같은 캡처 안에서 두 마운트가 어긋났다는 뜻이다. 캐시를 지우고 다시 떠라:")
+    print(f"     rm -rf {out}/{{baseline,verify}}-{sha}")
+    sys.exit(1)
+
 dst = os.path.join(repo, "spec", "golden", "snapshot", f"baseline-{sha}")
 if os.path.exists(dst):
     shutil.rmtree(dst)
