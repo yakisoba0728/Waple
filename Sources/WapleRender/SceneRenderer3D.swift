@@ -788,7 +788,12 @@ extension SceneRenderer {
             // D3D11 depth-stencil select 는 "(머티리얼 depthtest 비트) | (blending 이 translucent/
             // additive 면 1)" 뿐이라 저작 depthwrite 는 슬롯 선택에 아예 등장하지 않는다 — translucent/
             // additive 슬롯(1)은 항상 DepthWriteMask=ZERO 다. 저작값을 그대로 따르면 반투명 대형
-            // 평면이 알파와 무관하게 뎁스를 써 뒤 콘텐츠를 가린다(3470948192 'uc' 성단 소실 기전).
+            // 평면이 알파와 무관하게 뎁스를 써 뒤 콘텐츠를 가린다.
+            //
+            // ⚠️ 3470948192 의 성단 소실은 **이것이 아니었다**(2026-08-18 실측). 그 씬의 'uc' 가
+            // translucent + depthwrite:enabled 라 유력 기전으로 지목됐지만, 고친 뒤 WE 레퍼런스와
+            // 3원 대조해도 성단은 여전히 없다(텍스트 가독성만 개선). 이 수정의 근거는 정본
+            // 두 항목이지 그 씬이 아니다 — 성단 소실은 별개 원인으로 계속 열려 있다.
             if blend == "translucent" || additive { depthWrite = false }
             // combos.LIGHTING==0 → unlit(풀브라이트 albedo, generic4.frag:124-125). WE 기본 LIGHTING=1(lit). 키 대소문자 무시(2D SceneDocument:646 규약).
             if let combos = p0["combos"] as? [String: Any] {

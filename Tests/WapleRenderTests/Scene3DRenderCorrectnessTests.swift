@@ -150,8 +150,11 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
     /// renderState.depthStencil.table(확정, wallpaper64.exe FUN_140099050): D3D11 depth-stencil
     /// select 는 depthtest 비트와 blending 만 보고 저작 depthwrite 는 참조하지 않는다 —
     /// translucent/additive 슬롯은 항상 DepthWriteMask=ZERO. 실물 3470948192 'uc' 재질(전면 대형
-    /// 평면, translucent, depthwrite:"enabled", alpha≈0.02)이 정확히 이 형태라 성단이 뎁스로
-    /// 가려졌다(핸드오프 2026-08-17 미착수 감사 항목).
+    /// 평면, translucent, depthwrite:"enabled", alpha≈0.02)이 정확히 이 형태다.
+    ///
+    /// ⚠️ 다만 그 씬의 **성단 소실은 이 결함이 아니었다**(2026-08-18 실측) — 고친 뒤 WE
+    /// 레퍼런스와 3원 대조해도 성단은 없다. 이 오라클이 지키는 것은 정본 규약이지
+    /// 그 씬의 증상이 아니다.
     func test3DMeshTranslucentOrAdditiveBlendForcesDepthWriteOffRegardlessOfAuthoredValue() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let renderer = SceneRenderer()
