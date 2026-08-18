@@ -145,4 +145,35 @@ final class ParticleYAxisRegressionTests: XCTestCase {
                        "위치 기반 페이드를 얹지 않는다 — 강제되면 꼬리가 0")
         XCTAssertEqual(alphas.max()!, 0.5, accuracy: 1e-5)
     }
+
+    /// 2D 파티클도 3축 회전을 **정사영**으로 표현한다.
+    ///
+    /// 2D 경로에는 z 좌표가 없어 out-of-plane 회전을 못 담는다고 보기 쉽지만, 화면 기저에
+    /// 대해 접선을 구하고 xy 성분만 취하면 그게 정사영이다 — x·y 회전은 접선의 화면 성분을
+    /// **단축**시켜 기울어 납작해지는 효과(foreshortening)를 만든다.
+    ///
+    /// 이 경로가 없으면 3축 회전의 도달이 3D 파티클 5씬에 그친다(33씬이 저작한다).
+    func testParticle2DProjectsOutOfPlaneRotationAsForeshortening() {
+        func screen(_ rot: SIMD3<Float>) -> (r: SIMD2<Float>, u: SIMD2<Float>) {
+            let t = SceneRenderer.particleTangents(rotation: rot,
+                                                   right: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
+            return (SIMD2(t.right.x, t.right.y), SIMD2(t.up.x, t.up.y))
+        }
+        // ① z-only 는 종전 롤 공식과 **완전 동치** — 33씬 밖 파티클은 픽셀 불변이어야 한다.
+        for z in [Float(0.3), 1.2, -2.0] {
+            let s = screen(SIMD3(0, 0, z))
+            XCTAssertEqual(s.r.x, cos(z), accuracy: 1e-6)
+            XCTAssertEqual(s.r.y, sin(z), accuracy: 1e-6)
+            XCTAssertEqual(s.u.x, -sin(z), accuracy: 1e-6)
+            XCTAssertEqual(s.u.y, cos(z), accuracy: 1e-6)
+        }
+        // ② x 회전은 up 을 단축한다(화면 밖으로 기울어 짧아 보인다). right 는 x 축이라 불변.
+        let tiltX = screen(SIMD3(0.7, 0, 0))
+        XCTAssertLessThan(simd_length(tiltX.u), 0.9, "x 회전 → up 이 단축돼야 한다")
+        XCTAssertEqual(simd_length(tiltX.r), 1, accuracy: 1e-5, "x 회전은 right 를 안 건드린다")
+        // ③ y 회전은 right 를 단축한다.
+        let tiltY = screen(SIMD3(0, 0.7, 0))
+        XCTAssertLessThan(simd_length(tiltY.r), 0.9, "y 회전 → right 가 단축돼야 한다")
+        XCTAssertEqual(simd_length(tiltY.u), 1, accuracy: 1e-5)
+    }
 }

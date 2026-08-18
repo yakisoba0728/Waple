@@ -138,10 +138,27 @@ extension SceneRenderer {
                 ratio = upH / max(1, upW)
             }
             let hw = sizePx * 0.5 * stretch, hh = sizePx * ratio * 0.5  // F790: stretch = local X 신장
-            let ang = angleOverride ?? p.rotation.z
-            let ca = cos(ang), sa = sin(ang)
+            // 3축 회전(WE `common_particles.h` ComputeParticleTangents) 후 화면에 **정사영**한다.
+            //
+            // 2D 경로에는 z 좌표가 없어 out-of-plane 회전을 못 담는다고 보기 쉽지만, 화면
+            // 기저(right=(1,0,0), up=(0,1,0))에 대해 접선을 구하고 **xy 성분만 취하면** 그게
+            // 정사영이다 — x·y 회전은 접선의 화면 성분을 단축시켜 "기울어 납작해짐" 으로
+            // 나타난다(z 성분은 직교 투영이라 버린다). 원근 단축까지는 아니지만 저작 의도의
+            // 주된 효과인 foreshortening 이 살아난다.
+            //
+            // angleOverride(속도 정렬 등)가 있으면 종전대로 그 각만 쓴다 — 그 경로는 롤을
+            // 외부에서 정하는 규약이라 3축을 얹으면 이중 적용이 된다.
+            let ca: Float, sa: Float, upX: Float, upY: Float
+            if let ang = angleOverride {
+                ca = cos(ang); sa = sin(ang); upX = -sa; upY = ca
+            } else {
+                let t = SceneRenderer.particleTangents(rotation: p.rotation,
+                                                       right: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0))
+                ca = t.right.x; sa = t.right.y     // right 의 화면 성분
+                upX = t.up.x;   upY = t.up.y       // up 의 화면 성분
+            }
             func ndc(_ lx: Float, _ ly: Float) -> (Float, Float) {
-                return toNDC(wx + lx * ca - ly * sa, wy + lx * sa + ly * ca)
+                return toNDC(wx + lx * ca + ly * upX, wy + lx * sa + ly * upY)
             }
             // W1-yaxis: quadVertices 와 동형 — uv(0,0) 이 화면 위쪽에 오도록 로컬 hh 코너 재페어링
             // (스프라이트시트 프레임처럼 비대칭 콘텐츠가 있는 파티클의 상하반전 방지).
