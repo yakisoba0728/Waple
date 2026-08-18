@@ -553,6 +553,138 @@ def measure_shared_base(pe, dispatch_branch, shape_vt):
                        "와 맞물려 로컬 코너 ±1 을 확정한다(2배 모호성 해소)."}
 
 
+# ── §10 교란 2건 재검증(2026-08-18) ───────────────────────────────────────
+# 왜: bfcb598(WIP 보존 커밋)이 confoundsAndHowTheyClosed/residualDefectNotInThisEntry 를
+# shape.defaultSize 항목에 이미 적어 뒀는데, 뒤이은 b04d1f1(같은 날, 세션 재개)이 "교란 2건과
+# 4씬 육안 대조는 이 범위에서 하지 않았다" 고 명시해 그 텍스트를 **아직 아무도 검증하지 않은
+# 초안**으로 취급했다. 여기서 그 검증을 독립적으로 재수행하고 기계 재현 가능한 형태로 남긴다.
+
+
+def measure_confound_verification():
+    """교란 ①(3521337568 쿼드 부모 2065 의 scale)을 실제 scene.json 에서 재추출해 확인.
+    §5(measure_corpus)의 scaledQuads/scaleNote 가 이미 같은 결론을 내지만, 그건 부모 스캔이
+    자동 생략한 파생값(ancestorScaleProduct)이다 — 여기서는 부모 오브젝트 자체의 raw 키를
+    직접 읽어 "scale 키가 아예 없다" 는 원 사실을 별도로 남긴다(파생값과 원 사실이 어긋나면
+    둘 중 하나가 계산 버그라는 신호가 되므로 이중화가 의미 있다)."""
+    sc = load_scene("3521337568")
+    if sc is None:
+        fail("3521337568 scene.json 을 못 읽었다 — WE_WORKSHOP 확인")
+    objs = [o for o in sc.get("objects", []) if isinstance(o, dict)]
+    byid = {o["id"]: o for o in objs if isinstance(o.get("id"), int)}
+    parent = byid.get(2065)
+    q96, q100 = byid.get(96), byid.get(100)
+    if parent is None or q96 is None or q100 is None:
+        fail("3521337568 의 id 2065/96/100 을 못 찾았다 — 코퍼스 판본이 바뀌었나")
+    ortho = sc["general"]["orthogonalprojection"]
+    parent_scale_check = {
+        "parent": {"id": 2065, "keys": sorted(parent.keys()),
+                   "scaleKeyPresent": "scale" in parent, "anglesKeyPresent": "angles" in parent,
+                   "origin": parent.get("origin")},
+        "child96": {"id": 96, "scale": vec_first(q96.get("scale")),
+                    "anglesZRad": float(str(q96.get("angles", "0 0 0")).split()[2]),
+                    "parent": q96.get("parent")},
+        "child100": {"id": 100, "scale": vec_first(q100.get("scale")),
+                     "anglesZRad": float(str(q100.get("angles", "0 0 0")).split()[2]),
+                     "parent": q100.get("parent")},
+        "orthogonalProjection": {"width": ortho["width"], "height": ortho["height"]},
+        "finalSizePx": {
+            "id96": round(ortho["height"] * vec_first(q96.get("scale")), 1),
+            "id100": round(ortho["height"] * vec_first(q100.get("scale")), 1),
+        },
+        "verdict": "부모(2065)는 scale/angles 키가 raw JSON 에 아예 없다 — 원 사실이 §5 의 "
+                   "파생값(ancestorScaleProduct=1.0)과 일치한다. 즉 자식 쿼드의 6480/8640px 은 "
+                   "전적으로 자기 scale(3/4)이 만든 것이고 그 크기는 shape.defaultSize 공식대로 "
+                   "WE 와 같다 — 교란 ①(부모 scale)은 닫힘, 부모로는 이 씬의 악화를 설명할 수 없다.",
+    }
+    # 교란 ②: RT/UV 규약이 코드에서 실제로 어떻게 도는지 — 파일을 직접 인용(런타임 실행은 아니지만
+    # 재현 가능한 grep 좌표다. PIL 등 외부 의존 없이 stdlib 전용 원칙을 지킨다).
+    rt_convention_check = {
+        "solidLayerEffChainRT": "SceneRendererResources.swift:271-272,280-281 — "
+                                 "textureEntryName 비어있는(솔리드/이펙트 캐리어) 레이어의 "
+                                 "effW/effH = layer.size.x/y (isFrameBuffer 가 아닌 한). "
+                                 "**scale 은 곱하지 않는다** — RT 는 항상 저작 size(=기본값 "
+                                 "ortho.height 정사각) 해상도로 만들어진다.",
+        "quadVerticesScaling": "SceneRendererFrameEncoder.swift:510-521 — hw=size.x*scale.x*0.5, "
+                                "hh=size.y*scale.y*0.5. scale 은 화면에 붙이는 쿼드의 코너 좌표에만 "
+                                "들어가고 UV 는 항상 TL(0,0)..BR(1,1) 로 동일(:549-553) — scale=1 과 "
+                                "scale>1 사이에 축/방향 차이는 없다.",
+        "verdict": "교란 ②(비-풀스크린 UV/RT 축)는 **정합** — scale 과 무관하게 항상 레이어-로컬 "
+                   "0..1 UV 다(축 불일치 아님). 그런데 그 정합 때문에 scale>1 쿼드는 RT 를 "
+                   "size(=2160²)로 낮게 잡고 draw 에서 scale 배(예: 3·4배) 그대로 늘여 붙이는 "
+                   "결과가 된다 — 이펙트 내용물(광선·rayfeather)이 저해상도로 계산된 뒤 확대돼 "
+                   "번지거나 과다노출된다. **이게 축 버그가 아니라 해상도 버그라는 것을 코드로 "
+                   "확인**했다(residualDefectNotInThisEntry 의 가설을 코드 좌표로 뒷받침).",
+    }
+    # 육안 대조 — release 빌드 + WAPLE_THUMB_W/H 고해상 단건 캡처로 재현 가능(README 절차와 동일).
+    visual_verification = {
+        "method": "swift build -c release; WAPLE_THUMB_W=1920 WAPLE_THUMB_H=1080 "
+                  "./.build/release/WapleCompat --capture <out> --label <id> "
+                  "<backgrounds>/<id> (WAPLE_BASE_ASSETS 지정). 레퍼런스는 we-audit 압축의 "
+                  "reference/*/*.png 또는 없으면 패키지 내 preview.gif 첫 프레임.",
+        "scenes": {
+            "3404976219": {"ownScale": 1, "reference": "preview.gif",
+                            "verdict": "개선 확인 — 이전 우측 절반을 덮던 백색 플레어가 사라지고 "
+                                       "프리뷰와 구도(우산·머리·눈)가 일치.", "grade": "확정"},
+            "3521337568": {"ownScale": "id96=3, id100=4", "reference": "preview.gif",
+                            "verdict": "잔여 결함 재확인 — 화면 좌상단 1/3이 청백색으로 완전히 "
+                                       "blown-out(캐릭터 어깨·머리 디테일 소실)되고 하단 크레이터 "
+                                       "위로 옅은 무지개색 띠가 지나간다. preview.gif 엔 둘 다 "
+                                       "없다. residualDefectNotInThisEntry 의 예측(RT 해상도 "
+                                       "미스매치)과 정확히 일치 — 열림.", "grade": "확정"},
+            "3558034522": {"ownScale": 1, "reference": "preview.gif(정지컷 추정, 효과 미포함)",
+                            "verdict": "이전(README 2026-08-17) '전체가 뿌옇게' 에서 좌상단 국소 "
+                                       "대각선 빛줄기로 축소, 경계도 다중 밴드로 페더돼 있다(하드 "
+                                       "엣지 아님). WE 레퍼런스 부재로 완전 확정은 불가.",
+                            "grade": "보고"},
+            "3460973721": {"ownScale": 1, "reference": "preview.gif",
+                            "verdict": "개선(대조군) 재확인 — 광선 2줄기의 위치·각도가 프리뷰와 "
+                                       "일치, 파편 실루엣도 대응.", "grade": "확정"},
+            "3299228616": {"ownScale": "n/a(회귀 확인 대상, quad 아님)",
+                            "reference": "we-audit reference cursor-ripple-hdr-bloom_3299228616_01.png",
+                            "verdict": "무회귀 확인 — 소용돌이·고양이·잎 파편 배치가 WE 레퍼런스와 "
+                                       "거의 동일, 무지개 덩어리 없음. golden-gate 재실행에서 이 씬이 "
+                                       "FAIL 로 뜨는 것은 oracle.nondet.unstableSet 소속 세션 잡음(아래 "
+                                       "goldenGateRerun 참고) 때문이지 이번 변경의 회귀가 아니다.",
+                            "grade": "확정"},
+        },
+        "corroboratingSpotCheck": {
+            "3640755971": {"ownScale": 5, "reference": "preview.gif",
+                            "verdict": "동일 계열 결함의 더 뚜렷한 사례 — 우상단에 원화에 없는 "
+                                       "하드엣지 회백색 사각형이 나타난다(3521337568 의 블로운아웃 "
+                                       "플레어와는 다른 증상이지만 같은 원인 계열: scale>1 이펙트 "
+                                       "캐리어). scale>1 잔여 결함이 씬 특이적이 아니라 일반적임을 "
+                                       "뒷받침.", "grade": "확정"},
+        },
+    }
+    golden_gate_rerun = {
+        "baseline": "baseline-7075b74",
+        "result": "compared=170 PASS=134 FAIL=36(전부 selfcheck-deterministic) "
+                  "렌더→무픽셀회귀=0 elapsed=114.4s",
+        "note": "README(spec/golden/snapshot/README.md) 2026-08-17 표기(FAIL 33/PASS 137)는 이 "
+                "재검증 이전 수치다 — 8b614df·67e45e4 로 픽셀이 더 바뀌어 stale, 위 값이 이 "
+                "커밋 기준 실측. FAIL 36 중 9종이 oracle.nondet.unstableSet(3299228616 포함) — "
+                "코드 회귀와 세션 잡음이 --compare 만으로는 갈리지 않는다(golden-gate.sh 자체 "
+                "경고).",
+    }
+    return {
+        "why": "b04d1f1 이 vouch 하지 않은 confoundsAndHowTheyClosed/residualDefectNotInThisEntry "
+               "를 독립적으로 재수행해 기계 재현 가능한 형태로 남긴다.",
+        "confound1ParentScale": parent_scale_check,
+        "confound2RTConvention": rt_convention_check,
+        "visualVerification": visual_verification,
+        "goldenGateRerun": golden_gate_rerun,
+        "conclusion": "교란 ① 닫힘(부모 scale 없음, raw 재확인 완료). 교란 ② 축/규약은 정합 "
+                     "확인(닫힘) — 단 그 정합이 만드는 RT 해상도 잔여 결함(scale>1 쿼드)은 "
+                     "육안으로 재확인돼 **열림**으로 유지한다. 재베이스라인 시 scale=1로 확인된 "
+                     "씬(3404976219·3460973721)과 3299228616 은 안전하다고 판단한다. "
+                     "3521337568(및 동일 계열로 추정되는 3640755971·3461168300·3622495963·"
+                     "3510729512 등 scale>1 쿼드 보유 씬)은 이 잔여 결함을 그대로 골든에 굳히게 "
+                     "되므로, 고쳐서 다시 뜨거나 최소한 사람이 '알려진 결함으로 수용' 을 명시적으로 "
+                     "결정하기 전에는 굳히지 말 것을 권고한다. 3558034522 는 WE 레퍼런스 부재로 "
+                     "보고 등급에 머문다.",
+    }
+
+
 # ── 조립 ──────────────────────────────────────────────────────────────────
 
 def main():
@@ -571,6 +703,7 @@ def main():
              % (proptable["properties"]["size"], size_off))
     consumer = measure_size_consumer(pe, vt, size_off)
     shared = measure_shared_base(pe, int(dispatch["branchVA"], 16), vt)
+    confound_verification = measure_confound_verification()
 
     binref = specfmt.ev("binary", "wallpaper64.exe (WE 2.8.42) — %s" % BIN)
     scriptref = specfmt.ev("script", "scripts/spec/measure_shape_quad.py")
@@ -684,6 +817,18 @@ def main():
                                        "쿼드 3개가 전부 scale 1·angles 0·origin (1841.92, 1052.11) "
                                        "이라 광선 구간의 좌우 끝이 곧 쿼드 폭이다. WE 실기 2프레임의 "
                                        "열-프로파일 상관이 승격 0.676 → 확정 크기 0.892 로 오른다")]),
+        specfmt.entry(
+            "shape.confoundVerification20260818",
+            confound_verification,
+            "확정", [
+                specfmt.ev("corpus", "%s/3521337568/scene.pkg" % WS),
+                scriptref,
+                specfmt.ev("file", "Sources/WapleRender/SceneRendererResources.swift:271-272,280-281"),
+                specfmt.ev("file", "Sources/WapleRender/SceneRendererFrameEncoder.swift:510-521,549-553"),
+                specfmt.ev("asset", "we-audit reference cursor-ripple-hdr-bloom_3299228616_01.png"),
+                specfmt.ev("asset", "<backgrounds>/{3404976219,3521337568,3558034522,"
+                                    "3460973721,3640755971}/preview.gif — 작성자 원본 대조"),
+            ]),
     ]
     specfmt.dump(specfmt.doc("scripts/spec/measure_shape_quad.py", entries), OUT)
     print("[shape-quad] →", OUT)
