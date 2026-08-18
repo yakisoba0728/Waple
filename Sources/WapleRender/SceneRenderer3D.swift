@@ -2217,11 +2217,9 @@ extension SceneRenderer {
             let hw = p.size * colScale * 0.5
             let hh = hw * ratio
             guard hw > 0, hw.isFinite, hh.isFinite else { continue }
-            // 파티클 롤(rotation.z)을 배향 축에 적용(encodeBillboard angleZ 규약). UV 상단원점: 상단=+up.
-            // F732: screen 은 전달 축(right/up)과 동치라 비트동일, upright/fixed 는 축 고정 평면에서 롤.
-            let ca = cos(p.rotation.z), sa = sin(p.rotation.z)
-            let rRight = axisRight * ca + axisUp * sa
-            let rUp = -axisRight * sa + axisUp * ca
+            // 3축 회전(WE ComputeParticleTangents) — 상세는 particleTangents 주석 참조.
+            let (rRight, rUp) = Self.particleTangents(rotation: p.rotation,
+                                                      right: axisRight, up: axisUp)
             let r = rRight * hw, u = rUp * hh
             let tl = center - r + u, tr = center + r + u, br = center + r - u, bl = center - r - u
             let cr = p.color.x, cg = p.color.y, cb = p.color.z, al = p.alpha
@@ -2232,5 +2230,33 @@ extension SceneRenderer {
             v(tl, uv[0]); v(br, uv[2]); v(bl, uv[3])
         }
         return verts
+    }
+}
+
+extension SceneRenderer {
+    /// 파티클 3축 회전 → 빌보드 접선 기저(WE `common_particles.h:21-40` `ComputeParticleTangents`).
+    ///
+    /// WE 는 `Rz·Rx·Ry` 를 만들어 화면 배향 기저에 곱하고 거기서 right/up 을 뽑는다.
+    /// x·y 는 빌보드를 화면 밖으로 기울이는(foreshortening) 성분이라, z(롤)만 쓰면
+    /// 저작값이 폐기된다 — 코퍼스 도달 33씬(rotationrandom·angularvelocityrandom 의 x|y ≠ 0).
+    ///
+    /// **행렬 곱을 손으로 전개하지 않는다.** 한 번 전개했다가 부호를 틀렸고 수치 대조로 잡았다.
+    /// 전개식은 검산 없이 맞는지 알 수 없고 다음 사람도 같은 함정에 빠진다 — WE 소스와 1:1로
+    /// 읽히는 형태를 남긴다. `simd_float3x3(columns:)` 는 GLSL `mat3(...)` 와 인자 순서가 같다.
+    static func particleTangents(rotation: SIMD3<Float>,
+                                 right: SIMD3<Float>,
+                                 up: SIMD3<Float>) -> (right: SIMD3<Float>, up: SIMD3<Float>) {
+        let rc = SIMD3<Float>(cos(rotation.x), cos(rotation.y), cos(rotation.z))
+        let rs = SIMD3<Float>(sin(rotation.x), sin(rotation.y), sin(rotation.z))
+        let mZ = simd_float3x3(columns: (SIMD3(rc.z, -rs.z, 0), SIMD3(rs.z, rc.z, 0), SIMD3(0, 0, 1)))
+        let mX = simd_float3x3(columns: (SIMD3(1, 0, 0), SIMD3(0, rc.x, -rs.x), SIMD3(0, rs.x, rc.x)))
+        let mY = simd_float3x3(columns: (SIMD3(rc.y, 0, rs.y), SIMD3(0, 1, 0), SIMD3(-rs.y, 0, rc.y)))
+        // WE 의 `mul(a,b)` 는 HLSL 행벡터 규약이라 `b*a` 다(spec/engine/mul-convention.json).
+        let m = mY * (mX * mZ)
+        let r0 = SIMD3<Float>(m[0][0], m[1][0], m[2][0])   // mul(vec3(1,0,0), M)
+        let r1 = SIMD3<Float>(m[0][1], m[1][1], m[2][1])   // mul(vec3(0,1,0), M)
+        let fwd = simd_cross(right, up)
+        return (right * r0.x + up * r0.y + fwd * r0.z,
+                right * r1.x + up * r1.y + fwd * r1.z)
     }
 }

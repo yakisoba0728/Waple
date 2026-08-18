@@ -1,4 +1,5 @@
 import XCTest
+import simd
 import AppKit
 import Metal
 @testable import WapleCore
@@ -541,6 +542,41 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         let url = try XCTUnwrap(renderer.captureFrames(width: 64, height: 64, times: [0], toDir: output).first)
         let image = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         return try XCTUnwrap(image.colorAt(x: 32, y: 32))
+    }
+
+
+    /// 파티클 3축 회전 — WE `common_particles.h:21-40` `ComputeParticleTangents` 이식.
+    ///
+    /// 종전엔 `rotation.z`(롤)만 배향 축에 적용하고 x·y 를 폐기했다. x·y 는 빌보드를 화면
+    /// 밖으로 기울이는 성분이라 저작 의도가 사라진다 — 코퍼스 도달 **33씬**
+    /// (`rotationrandom`·`angularvelocityrandom` 의 x 또는 y ≠ 0).
+    ///
+    /// ⚠️ 이 행렬을 손으로 전개하지 마라. 한 번 전개했다가 부호를 틀렸고, 아래 z-only
+    /// 동치 단언이 그걸 잡았다. 전개식은 검산 없이는 맞는지 알 수 없다.
+    func test3DParticleTangentsUseAllThreeRotationAxes() throws {
+        let right = SIMD3<Float>(1, 0, 0), up = SIMD3<Float>(0, 1, 0)
+        func t(_ x: Float, _ y: Float, _ z: Float) -> (right: SIMD3<Float>, up: SIMD3<Float>) {
+            SceneRenderer.particleTangents(rotation: SIMD3(x, y, z), right: right, up: up)
+        }
+        // ① z-only 는 종전 롤 공식과 **완전 동치**여야 한다 — 33씬 밖은 무회귀.
+        for z in [Float(0.3), 1.2, -2.0] {
+            let (r, u) = t(0, 0, z)
+            XCTAssertEqual(r.x, cos(z), accuracy: 1e-6); XCTAssertEqual(r.y, sin(z), accuracy: 1e-6)
+            XCTAssertEqual(r.z, 0, accuracy: 1e-6)
+            XCTAssertEqual(u.x, -sin(z), accuracy: 1e-6); XCTAssertEqual(u.y, cos(z), accuracy: 1e-6)
+            XCTAssertEqual(u.z, 0, accuracy: 1e-6, "z-only 는 화면 평면을 벗어나면 안 된다")
+        }
+        // ② x 는 up 을 화면 밖으로 기울인다(right 는 x 축이라 불변) — 폐기되면 델타가 0 이다.
+        let base = t(0, 0, 0.5), withX = t(0.7, 0, 0.5)
+        XCTAssertGreaterThan(simd_length(base.up - withX.up), 0.1, "x 회전이 up 을 기울여야 한다")
+        // ③ y 는 right 를 기울인다.
+        let withY = t(0, 0.7, 0.5)
+        XCTAssertGreaterThan(simd_length(base.right - withY.right), 0.1, "y 회전이 right 를 기울여야 한다")
+        // ④ 기저는 정규직교를 유지한다 — 깨지면 빌보드가 찌그러진다.
+        let (pr, pu) = t(0.3, -0.8, 1.1)
+        XCTAssertEqual(simd_dot(pr, pu), 0, accuracy: 1e-5)
+        XCTAssertEqual(simd_length(pr), 1, accuracy: 1e-5)
+        XCTAssertEqual(simd_length(pu), 1, accuracy: 1e-5)
     }
 
     func test3DBillboardAdditiveBlendModeSumsPixelsOverBackground() throws {

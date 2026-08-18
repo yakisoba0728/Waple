@@ -152,7 +152,7 @@ elif [ "$NFAIL" -ne 0 ]; then
 else
     ok "전 스위트 통과 — 번들 $NBUNDLE 개, 실패 0 ($((SECONDS-T0))초)"
 fi
-echo "  번들 합: ${TESTS:-?}  (기준값 2,268 — AGENTS.md, 2026-08-17 실측. 코퍼스 유무와 무관하다)"
+echo "  번들 합: ${TESTS:-?}  (기준값 2,269 — AGENTS.md, 2026-08-17 실측. 코퍼스 유무와 무관하다)"
 echo "  번들별:"
 printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /'
 
