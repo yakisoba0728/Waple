@@ -2238,7 +2238,14 @@ extension SceneRenderer {
     ///
     /// WE 는 `Rz·Rx·Ry` 를 만들어 화면 배향 기저에 곱하고 거기서 right/up 을 뽑는다.
     /// x·y 는 빌보드를 화면 밖으로 기울이는(foreshortening) 성분이라, z(롤)만 쓰면
-    /// 저작값이 폐기된다 — 코퍼스 도달 33씬(rotationrandom·angularvelocityrandom 의 x|y ≠ 0).
+    /// 저작값이 폐기된다 — 코퍼스에서 x|y ≠ 0 을 저작한 씬이 33개다
+    /// (rotationrandom·angularvelocityrandom).
+    ///
+    /// ⚠️ **다만 이 함수를 부르는 곳은 3D 파티클 경로뿐이고, 3D 모델과 파티클을 동시에 가진
+    /// 씬은 코퍼스에 5개다.** 그래서 골든 픽셀은 이 수정으로 움직이지 않았다(FAIL 14 불변).
+    /// 33씬 대부분은 2D 평면 쿼드 경로(`SceneRendererFrameEncoder.appendQuad`)로 그려지는데,
+    /// 거기서는 out-of-plane 회전을 표현할 좌표계가 없다 — 2D 경로에 적용하려면 코너 계산을
+    /// 평면에서 3D 로 올리는 구조 변경이 선행돼야 한다(별도 작업).
     ///
     /// **행렬 곱을 손으로 전개하지 않는다.** 한 번 전개했다가 부호를 틀렸고 수치 대조로 잡았다.
     /// 전개식은 검산 없이 맞는지 알 수 없고 다음 사람도 같은 함정에 빠진다 — WE 소스와 1:1로
