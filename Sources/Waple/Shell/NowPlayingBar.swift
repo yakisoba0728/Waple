@@ -34,8 +34,29 @@ enum NowPlayingSubtitle {
     /// 하단 바 음량/배속 컨트롤(w5d-settings-ia) 노출 여부 — 적용된 배경이 동영상일 때만. 설정 창에
     /// 묻혀 있던 컨트롤을 재생 컨텍스트(appliedEntry)를 이미 아는 하단 바로 옮기며, 씬/웹/무배경일
     /// 때는 스피커 아이콘 자체를 숨겨 무의미한 컨트롤을 노출하지 않는다.
+    ///
+    /// **배속 전용 판정이다** — 음량은 `showsVolumeControl` 을 쓴다(아래 참조).
     static func showsVideoControls(typeRaw: String?) -> Bool {
         typeRaw.map { WallpaperType.from($0) == .video } ?? false
+    }
+
+    /// 음량 컨트롤 노출 여부 — 동영상 **또는 씬**.
+    ///
+    /// 씬도 소리를 낸다. `SceneAudioPlayer` 가 mp3/wav/flac/ogg 를 재생하고 코퍼스 실측으로
+    /// 자동재생 사운드 오브젝트 157개가 119씬에 있다. 그런데 그 최종 음량이
+    /// `오서 볼륨 × VideoSettings.volume(id:)` 이고 후자의 기본값이 0(음소거)이라
+    /// **씬 BGM 이 항상 들리지 않았다** — 재생은 실제로 되고 있었고 게인만 0이었다.
+    ///
+    /// 원인은 두 결정이 겹친 것이다. 하나는 "바탕화면이 예고 없이 소리 내지 않는다"(기본 0,
+    /// `VideoSettings.swift`) — 이건 지금도 옳다. 다른 하나는 이 컨트롤을 `.video` 로 좁힌
+    /// 것인데(w5d-settings-ia), 그때 씬 오디오가 **같은 볼륨 배관을 쓰고 있다는 사실**이
+    /// 반영되지 않았다. 각각은 합리적이었는데 합쳐지니 씬 사용자에게 올릴 방법이 없어졌다
+    /// (유일한 우회로가 `defaults write waple.video.volume.<id>` 였다).
+    ///
+    /// 배속은 여전히 동영상 전용이다 — `SceneAudioPlayer` 에 배속 개념이 없다.
+    static func showsVolumeControl(typeRaw: String?) -> Bool {
+        guard let t = typeRaw.map(WallpaperType.from) else { return false }
+        return t == .video || t == .scene
     }
 
     /// 표시용 유형 라벨. 계산 프로퍼티/함수가 생 리터럴을 돌려주면 커버리지 스캔에 안 걸리므로
@@ -125,7 +146,7 @@ struct NowPlayingBar: View {
 
             // w5d-settings-ia: 동영상 음량/배속 — 재생 컨텍스트(appliedEntry)를 이미 아는 하단 바로
             // 설정 창에서 이관. 적용된 배경이 동영상일 때만 노출(그 외엔 컨트롤할 대상이 없다).
-            if NowPlayingSubtitle.showsVideoControls(typeRaw: appliedEntry?.typeRaw) {
+            if NowPlayingSubtitle.showsVolumeControl(typeRaw: appliedEntry?.typeRaw) {
                 videoControlsMenu
             }
 
@@ -194,6 +215,11 @@ struct NowPlayingBar: View {
     /// 슬라이더는 드래그 틱마다 UserDefaults 쓰기+플레이어 조정을 유발하므로 이산 스텝 유지 —
     /// SettingsPresentation 의 기존 스텝을 재사용해 설정 창과 동일한 값 집합(저장값 호환).
     /// 대상은 videoTargetIds()(모니터별 할당 포함, 설정 창과 동일 소스).
+    /// 배속 섹션 노출 — 동영상일 때만. 음량은 씬에도 열려 있다(showsVolumeControl).
+    private var showsRate: Bool {
+        NowPlayingSubtitle.showsVideoControls(typeRaw: appliedEntry?.typeRaw)
+    }
+
     private var videoControlsMenu: some View {
         Menu {
             Section("음량") {
@@ -209,21 +235,25 @@ struct NowPlayingBar: View {
                     }
                 }
             }
-            Section("배속") {
-                ForEach(SettingsPresentation.rateSteps, id: \.value) { step in
-                    Button {
-                        applyToVideoTargets { VideoSettings.setRate(step.value, id: $0) }
-                    } label: {
-                        if step.value == currentVideoRate {
-                            Label(step.label, systemImage: "checkmark")
-                        } else {
-                            Text(step.label)
+            // 배속은 동영상 전용이다 — SceneAudioPlayer 에 배속 개념이 없고, 씬에 노출하면
+            // 눌러도 아무 일이 없는 컨트롤이 된다(이 메뉴를 씬에 연 이유가 음량 하나다).
+            if showsRate {
+                Section("배속") {
+                    ForEach(SettingsPresentation.rateSteps, id: \.value) { step in
+                        Button {
+                            applyToVideoTargets { VideoSettings.setRate(step.value, id: $0) }
+                        } label: {
+                            if step.value == currentVideoRate {
+                                Label(step.label, systemImage: "checkmark")
+                            } else {
+                                Text(step.label)
+                            }
                         }
                     }
                 }
             }
         } label: {
-            Label("동영상 음량 · 배속",
+            Label(showsRate ? "동영상 음량 · 배속" : "음량",
                   systemImage: currentVideoVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 .font(.title3)
         }
