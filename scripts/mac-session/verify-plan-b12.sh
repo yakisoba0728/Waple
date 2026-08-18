@@ -163,19 +163,19 @@ hr; echo "6. 골든 무변화 (Task 1·2 는 픽셀을 바꾸면 안 된다)"; h
 # 올바른 대조는 **구현 전 release 기준선**이다. 없으면 만들라고 안내하고 넘어간다.
 #
 # [수정 2026-08-16] 위 "커밋된 기준선은 debug 뿐" 은 더 이상 사실이 아니다.
-# ba64c99·88c195e 이후 `spec/golden/snapshot/baseline-7075b74/`(170종, **release**,
+# ba64c99·88c195e 이후 `spec/golden/snapshot/baseline-1eabf13/`(170종, **release**,
 # GoldenBaseline.currentLabel)가 커밋돼 있다. debug<->release 오탐 근거는 baseline-81098bb
 # 에만 해당한다. 그래도 **자동 기본값으로 삼지는 않는다** — 31fecaa 는 "이 구현 직전" 이
 # 아니라 "블룸 교체 직후" 라서 축이 다르고, 기본값을 바꾸면 게이트 의미가 조용히 달라진다.
 # 구현 직전 캡처가 없을 때 **차선의 후보**로만 쓸 것:
-#   WAPLE_PRE_RELEASE_BASELINE=spec/golden/snapshot/baseline-7075b74
+#   WAPLE_PRE_RELEASE_BASELINE=spec/golden/snapshot/baseline-1eabf13
 PRE="${WAPLE_PRE_RELEASE_BASELINE:-}"
 if [ -z "$PRE" ] || [ ! -d "$PRE/thumbs" ]; then
     echo "  !! 구현 전 release 기준선이 없다. 이 대조는 성립하지 않는다."
     echo "     커밋된 baseline-81098bb 는 debug 라 release 캡처와 항상 30종이 어긋난다."
     echo "     구현 **전에** 아래를 떠 두고 WAPLE_PRE_RELEASE_BASELINE 으로 지정할 것:"
     echo "       git stash && swift run -c release WapleCompat --capture <dir> --label pre-release <corpus>"
-    echo "     차선책: 커밋된 release 기준선 spec/golden/snapshot/baseline-7075b74 를"
+    echo "     차선책: 커밋된 release 기준선 spec/golden/snapshot/baseline-1eabf13 를"
     echo "       WAPLE_PRE_RELEASE_BASELINE 로 지정 — 단 축이 '구현 직전' 이 아님을 알고 쓸 것."
     echo "     (이번 실행은 아래 캡처만 남기고 대조는 건너뛴다)"
     SKIP_GOLDEN_DIFF=1

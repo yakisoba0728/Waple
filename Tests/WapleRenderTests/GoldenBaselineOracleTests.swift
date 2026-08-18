@@ -26,7 +26,7 @@ struct GoldenBaseline: Decodable {
     /// 두 캡처 **사이에 커서를 옮겨서** 뜨고 비트동일한 것을 확인해 설치했다
     /// (scripts/mac-session/rebaseline-golden.sh — 상이 0종). 중간 기준선(f3a17da·31fecaa)은
     /// HEAD 에서 지웠다 — 리포 비대를 막고, 필요하면 커밋 이력에서 꺼낸다.
-    static let currentLabel = "baseline-7075b74"
+    static let currentLabel = "baseline-1eabf13"
     /// WE 엔진 이식 **이전**(debug 캡처)의 최초 기준선. 이력 보존용 — 판정 기준이 아니다.
     static let historicalLabel = "baseline-81098bb"
 
@@ -50,7 +50,7 @@ final class GoldenBaselineOracleTests: XCTestCase {
     func testBaselineIsCommittedAndLoadable() throws {
         let b = try XCTUnwrap(GoldenBaseline.load(),
                               "커밋된 기준선을 못 읽었다 — spec/golden/snapshot/ 확인")
-        XCTAssertEqual(b.gitSHA, "7075b74")
+        XCTAssertEqual(b.gitSHA, "1eabf13")
         XCTAssertEqual(b.entries.count, 170)
     }
 
@@ -72,7 +72,7 @@ final class GoldenBaselineOracleTests: XCTestCase {
     /// 비결정 씬은 회귀 판정에서 제외해야 하므로, 몇 개인지 고정해 둔다.
     /// 늘어나면 렌더러에 새 비결정성이 생긴 것이다.
     ///
-    /// 현행 기준선(7075b74)은 **0종**이다. 이식 전 기준선에서 유일한 비결정이던 3363252053
+    /// 현행 기준선(1eabf13)은 **0종**이다. 이식 전 기준선에서 유일한 비결정이던 3363252053
     /// (파티클·광원 많은 3D 씬, selfMaxDiff=189)도 지금은 자기일관 캡처가 비트동일하다.
     /// 다만 이 필드가 재는 것은 **같은 프로세스 안의 2회 캡처**뿐이라는 것을 기억할 것 —
     /// 프로세스/세션 간 재현성은 별개이고, 그건 rebaseline-golden.sh 의 커서-이동 게이트가 본다
