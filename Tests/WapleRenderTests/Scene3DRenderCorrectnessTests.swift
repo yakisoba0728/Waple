@@ -130,6 +130,37 @@ final class Scene3DRenderCorrectnessTests: XCTestCase {
         XCTAssertEqual(material.texture.height, 2)
     }
 
+    /// `color` 는 **소문자가 정본 키**다 — `generic4.frag` 의 `material:` 선언이 전부 소문자다.
+    /// 코퍼스 실측: 두 키를 다 가진 재질 289건(전건 generic4)이 값이 다르고, 대문자는 전부
+    /// `1 1 1`(기본값)이다. 우선순위가 뒤집혀 있으면 **저작값을 버리고 기본값을 쓴다** —
+    /// 3470948192 의 'sd'(성단)가 `Color:"1 1 1"` / `color:"0 0 0"` 인데 WE 는 검게 그린다.
+    ///
+    /// ⚠️ `alpha` 는 **대문자 우선을 유지한다** — 같이 뒤집으면 그 씬 배경이 보라색으로 깨진다
+    /// (실측, 갈라서 원인 분리). 이 테스트가 그 비대칭을 고정한다.
+    func test3DMeshMaterialPrefersLowercaseColorButUppercaseAlpha() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        let renderer = SceneRenderer()
+        func material(_ csv: String) throws -> SceneRenderer.Mesh3DMaterialInfo {
+            let json = "{\"passes\":[{\"textures\":[\"white\"],\"constantshadervalues\":" + csv + "}]}"
+            let package = try pkg([
+                ("materials/mesh.json", Data(json.utf8)),
+                ("materials/white.tex", solidTex(255, 255, 255, w: 1, h: 1)),
+            ])
+            return try XCTUnwrap(renderer.loadMesh3DMaterial(
+                "materials/mesh.json", package: package, device: device))
+        }
+        // 실물 3470948192 'sd' 그대로.
+        let both = try material("{\"Color\":\"1 1 1\",\"color\":\"0 0 0\",\"Alpha\":1,\"alpha\":0.25}")
+        XCTAssertEqual(SIMD3(both.tint.x, both.tint.y, both.tint.z), SIMD3(0, 0, 0),
+                       "color 는 소문자가 저작값이다 — 대문자는 기본값 1 1 1")
+        XCTAssertEqual(both.tint.w, 1, accuracy: 1e-6,
+                       "alpha 는 대문자 우선 유지 — 뒤집으면 3470948192 배경이 보라색으로 깨진다")
+        // 대문자만 있으면 폴백으로 살아야 한다(코퍼스 78건) — negative control.
+        let upperOnly = try material("{\"Color\":\"0 1 0\",\"Alpha\":0.5}")
+        XCTAssertEqual(SIMD3(upperOnly.tint.x, upperOnly.tint.y, upperOnly.tint.z), SIMD3(0, 1, 0),
+                       "대문자만 있으면 그걸 쓴다 — 폴백을 잃으면 안 된다")
+        XCTAssertEqual(upperOnly.tint.w, 0.5, accuracy: 1e-6)
+    }
     func test3DMeshMaterialKeepsPBRConstantsWithoutUpperClamping() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
         let package = try pkg([
