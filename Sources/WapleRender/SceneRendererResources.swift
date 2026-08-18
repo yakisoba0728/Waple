@@ -1481,6 +1481,30 @@ extension SceneRenderer {
         return device.makeTexture(descriptor: d)
     }
 
+    /// 반사(REFLECTION) 전용 스냅샷 — **밉체인을 갖는다.**
+    ///
+    /// WE 는 `texSample2DLod(g_Texture3, uv, roughness * g_Texture3MipMapInfo)` 로 러프니스만큼
+    /// 흐려진 밉을 반사한다(`generic4.frag:159`). 우리 스냅샷은 밉이 없어 레벨 0 고정이었고,
+    /// 그래서 반사 소스가 가늘고 성긴 씬에서는 밝은 텍셀에 맞은 픽셀만 튀고 나머지는 검게 남았다
+    /// (3470948192 의 성단이 그 사례 — 검은 알베도라 반사가 유일한 광원인데, 블러가 없으니
+    /// 매끈한 흰 테 대신 알갱이진 점만 나왔다).
+    ///
+    /// `pooledOffscreen` 을 그대로 쓰지 않는 이유: 그 풀은 밉 없는 텍스처를 크기별로 재사용하고
+    /// acc 블릿·컴포지션 등 여러 경로가 공유한다. 밉을 켜면 그 전부의 메모리가 1.33배가 되고
+    /// blit 정합 전제도 흔들린다 — 반사만 별도 풀을 쓴다.
+    func reflectionSnapshot(_ w: Int, _ h: Int, _ device: MTLDevice, hdr: Bool) -> MTLTexture? {
+        let key = "refl\(hdr ? "h" : "b")\(max(w, 1))x\(max(h, 1))"
+        if let t = reflectionSnapshotPool[key] { return t }
+        let d = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: hdr ? .rgba16Float : .bgra8Unorm,
+            width: max(w, 1), height: max(h, 1), mipmapped: true)
+        d.usage = [.renderTarget, .shaderRead]
+        d.storageMode = .private   // 밉 생성이 GPU 전용이라 shared 일 이유가 없다
+        guard let t = device.makeTexture(descriptor: d) else { return nil }
+        reflectionSnapshotPool[key] = t
+        return t
+    }
+
     func makeTexture(_ rgba: Data, _ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: w, height: h, mipmapped: false)
         guard let t = device.makeTexture(descriptor: desc) else { return nil }

@@ -732,8 +732,12 @@ enum Mesh3DShaders {
     // mf_main 의 조기 unlit return 을 쓰지 않고 lit 베이스(unlit=albedo 그대로 / lit=ambient*albedo+direct)를
     // 계산한 뒤 반사를 공통으로 더한다. 노멀맵과 미결합(기하 노멀만 — WE 의 `#else normalize(v_WorldNormal)`
     // 분기와 동치, NORMALMAP 결합 마스크/탄젠트공간 변환은 과대 스코프라 미포함 — ⑥ caveat).
-    // mip 기반 roughness 블러(g_Texture3MipMapInfo)는 스냅샷이 밉체인을 갖지 않아(REFRACT 와 동일 최소
-    // 인프라) 레벨 0 고정 — REFLECTION_MAP(마스크 B채널) 도 미결합, g_Reflectivity 상수만 적용.
+    // mip 기반 roughness 블러(g_Texture3MipMapInfo)는 **2026-08-18 에 배선했다** — 반사 스냅샷이
+    // 밉체인을 갖고(SceneRenderer3D 반사 분기 generateMipmaps) roughness × (밉수-1) 로 LOD 를 고른다.
+    // ⚠️ 그런데 이것만으로 3470948192 의 성단은 **안 나온다**(실측). 밉 블러는 필요조건이었지
+    // 충분조건이 아니다 — 그 씬의 남은 관문은 따로 있다(REFLECTION_MAP 마스크 미결합? 반사 소스
+    // 시점? 미규명). 다음 사람이 "밉을 넣었는데 왜 안 나오지" 로 시간을 쓰지 않도록 적어 둔다.
+    // REFLECTION_MAP(마스크 B채널) 은 여전히 미결합, g_Reflectivity 상수만 적용.
     // 씬 스냅샷 texture(4), reflectParams=(g_Reflectivity, aspect=width/height, 0, 0) buffer(5),
     // viewProj(카메라 전용, 모델 미포함) buffer(6).
     fragment float4 mf_reflect(VOut in [[stage_in]],
@@ -805,7 +809,11 @@ enum Mesh3DShaders {
         screenUV += float2(reflectN.x, -reflectN.y) * pow(fresnelTerm, 4.0) * 10.0 * aspectScale;
         float clipReflection = smoothstep(1.3, 1.0, screenUV.x) * smoothstep(-0.3, 0.0, screenUV.x)
                               * smoothstep(1.3, 1.0, screenUV.y) * smoothstep(-0.3, 0.0, screenUV.y);
-        float3 reflectionColor = fbTex.sample(fbSampler, screenUV).rgb * clipReflection;
+        // WE: `texSample2DLod(g_Texture3, uv, roughness * g_Texture3MipMapInfo)`(generic4.frag:159).
+        // g_Texture3MipMapInfo 는 그 텍스처의 밉 개수라 roughness(0..1)를 밉 인덱스로 편다.
+        // 스냅샷이 이제 밉체인을 갖는다(SceneRenderer3D 반사 분기의 generateMipmaps).
+        float reflectLod = u.material.x * float(fbTex.get_num_mip_levels() - 1);
+        float3 reflectionColor = fbTex.sample(fbSampler, screenUV, level(reflectLod)).rgb * clipReflection;
         reflectionColor = reflectionColor * (1.0 - fresnelTerm) * reflectivity;
         reflectionColor = pow(max(float3(0.001), reflectionColor), float3(2.0 - u.material.y));
         lit += saturate(reflectionColor);

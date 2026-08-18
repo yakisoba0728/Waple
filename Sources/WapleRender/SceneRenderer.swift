@@ -1598,6 +1598,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     // 프레임 내에서는 checkout 을 단조 증가시켜 항상 distinct 텍스처를 보장(src/dst 충돌 방지).
     // 프레임 간 재사용은 비-heap tracked 텍스처라 Metal 자동 hazard tracking 이 동기화를 보장(무손상).
     var texturePool: [String: [MTLTexture]] = [:]
+    /// 반사 스냅샷 전용 풀(밉체인 보유) — `texturePool` 과 분리한다.
+    /// 이유는 `reflectionSnapshot(_:_:_:hdr:)` 주석 참조: 공용 풀에 밉을 켜면 그 풀을 쓰는
+    /// 전 경로의 메모리가 1.33배가 되고 blit 정합 전제도 흔들린다.
+    var reflectionSnapshotPool: [String: MTLTexture] = [:]
     var poolCheckout: [String: Int] = [:]
 
     // P⑦: colorBlendMode 레이어 전용 acc 스냅샷 캐시 — 풀에서 레이어마다 새 텍스처를 체크아웃하지 않고

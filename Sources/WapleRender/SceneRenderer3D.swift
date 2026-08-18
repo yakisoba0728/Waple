@@ -1682,9 +1682,16 @@ extension SceneRenderer {
                                                        : meshPipelineRefract {
                         enc.endEncoding()
                         var snap: MTLTexture? = nil
-                        if let s = pooledOffscreen(target.width, target.height, device, bgra: true),
+                        // 반사 스냅샷은 **밉체인을 갖는다** — WE 가 roughness 로 밉 LOD 를 고르기
+                        // 때문이다(generic4.frag:159 `texSample2DLod(…, roughness * g_Texture3MipMapInfo)`).
+                        // 레벨 0 고정이면 반사 소스가 성긴 씬에서 밝은 텍셀만 튀어 알갱이가 된다
+                        // (3470948192 성단: 검은 알베도라 반사가 유일한 광원인데 매끈한 흰 테 대신
+                        // 점만 나왔다). refract 분기는 종전 풀을 그대로 쓴다 — 그쪽은 LOD 규약이 다르다.
+                        if let s = reflectionSnapshot(target.width, target.height, device, hdr: hdrActive),
                            let blit = cb.makeBlitCommandEncoder() {
-                            blit.copy(from: target, to: s); blit.endEncoding(); snap = s
+                            blit.copy(from: target, to: s)
+                            blit.generateMipmaps(for: s)   // 러프니스 블러의 실체
+                            blit.endEncoding(); snap = s
                         }
                         let nextRPD = MTLRenderPassDescriptor()
                         nextRPD.colorAttachments[0].texture = target
