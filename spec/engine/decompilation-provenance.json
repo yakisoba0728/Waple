@@ -96,25 +96,28 @@
    "value": {
     "total": 39,
     "correctAsIs": 27,
-    "needsMinus0xD0": 3,
-    "indeterminate": 9,
+    "needsMinus0xD0": 7,
+    "indeterminate": 5,
     "needsMinus0xD0List": [
+     "0x14009c5d0",
+     "0x14009c630",
+     "0x14009c690",
      "0x1400d0380",
      "0x1400d8060",
+     "0x140261750",
      "0x140261950"
     ],
     "indeterminateList": [
      "0x140020260",
      "0x140063c70",
      "0x140064fa0",
-     "0x14009c5d0",
-     "0x14009c630",
-     "0x14009c690",
      "0x1401531c0",
-     "0x14015c760",
-     "0x140261750"
+     "0x14015c760"
     ],
-    "note": "미확정은 '틀렸다'가 아니다 — .pdata 는 unwind 정보를 가진 함수만 담으므로 리프 함수이거나 함수 중간을 가리키는 인용이면 어느 쪽에도 안 걸린다."
+    "note": "미확정은 '틀렸다'가 아니다 — .pdata 는 unwind 정보를 가진 함수만 담으므로 리프 함수이거나 함수 중간을 가리키는 인용이면 어느 쪽에도 안 걸린다.",
+    "signals": "① 원본 .pdata 함수 시작 ② −0xD0 한 값이 .pdata 함수 시작 ③ Ghidra 산출물 파일명(주입본 주소 공간, WE_DECOMPILED 지정 시). ③ 은 .pdata 에 없는 리프 함수를 잡아 종전 미확정 일부를 판정한다 — 파일이 인용 주소 그대로 있으면 그 인용은 주입본 기준이므로 needsMinus0xD0 다.",
+    "decompiledSignalUsed": true,
+    "decompiledFunctionCount": 11205
    },
    "status": "확정",
    "evidence": [
