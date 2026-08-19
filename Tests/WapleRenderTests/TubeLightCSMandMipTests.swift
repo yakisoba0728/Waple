@@ -252,6 +252,26 @@ final class TubeLightCSMandMipTests: XCTestCase {
 
     /// 소스의 `constexpr sampler <이름>(<인자>);` 선언 전수 — 이름 → 인자 문자열.
     /// (인자에 중첩 괄호가 없는 형태만 쓰인다 — 선언부 전수 확인됨.)
+    /// MSL 소스에서 주석(`/* */` 블록 · `//` 줄)을 지운다.
+    ///
+    /// 리터럴 검사의 대상은 셰이더 **코드**지 설명이 아니다. 실제로 이 결함(fbSampler 가
+    /// mip_filter 를 생략해 MSL 기본값 none 을 먹던 것)을 설명하는 주석이 Mesh3DShaders 에
+    /// 들어가자, `source.contains("mip_filter::none")` 단언이 그 산문에 걸려 깨졌다(2026-08-19 CI).
+    private func strippingComments(_ source: String) -> String {
+        var noBlock = ""
+        var first = true
+        for part in source.components(separatedBy: "/*") {
+            if first { noBlock += part; first = false; continue }
+            if let end = part.range(of: "*/") { noBlock += part[end.upperBound...] }
+        }
+        return noBlock.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                if let slashes = line.range(of: "//") { return line[..<slashes.lowerBound] }
+                return line
+            }
+            .joined(separator: "\n")
+    }
+
     private func samplerDeclarations(_ source: String) -> [String: String] {
         var out: [String: String] = [:]
         for raw in source.components(separatedBy: "constexpr sampler ").dropFirst() {
@@ -295,9 +315,10 @@ final class TubeLightCSMandMipTests: XCTestCase {
         XCTAssertEqual(ParticleShaders.source.components(
             separatedBy: "constexpr sampler s(filter::linear, mip_filter::linear,").count - 1, 3,
             "ParticleShaders 3곳(pf_main/pf3d_fog/pf_refract)")
-        XCTAssertFalse(Mesh3DShaders.source.contains("mip_filter::none"))
-        XCTAssertFalse(QuadShaders.source.contains("mip_filter::none"))
-        XCTAssertFalse(ParticleShaders.source.contains("mip_filter::none"))
+        // 주석을 걷어내고 본다 — 위 strippingComments 주석 참조.
+        XCTAssertFalse(strippingComments(Mesh3DShaders.source).contains("mip_filter::none"))
+        XCTAssertFalse(strippingComments(QuadShaders.source).contains("mip_filter::none"))
+        XCTAssertFalse(strippingComments(ParticleShaders.source).contains("mip_filter::none"))
 
         // [정정 2026-08-19] 위 두 종류 단언은 **이름이 `s` 인 샘플러 하나**만 리터럴로 셌고, 없는 토큰
         // (`mip_filter::none`)의 부재를 확인했다. mf_reflect 의 `fbSampler` 는 식별자가 다르고
