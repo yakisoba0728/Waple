@@ -89,6 +89,8 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
 
     /// 창 1개(채널별 fftSize 샘플)를 분석해 onFrame 디스패치. 무음 게이트 통과 창은 0 스펙트럼 공급
     /// (엔진도 무음 시 0 커밋 — FUN_1400d0380:419-424 플래그, :444-445 `func_0x000140421870(*param_1,0,0x200)`).
+    /// ⚠️ FUN_1400d0380 은 Ghidra 주소공간 — 원본 바이너리에서는 `0x1400d02b0`(−0xD0).
+    /// 사유와 전수 분류는 `spec/engine/decompilation-provenance.json`.
     private func analyzeWindow(left l: [Float], right r: [Float]) {
         guard let setup = fftSetup else { feedZeros(); return }
         guard let out = Self.analyzeWindow(l: l, r: r, fftSize: fftSize, log2n: log2n, setup: setup,

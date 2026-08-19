@@ -1,0 +1,129 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_decompilation_provenance.py",
+ "entries": [
+  {
+   "id": "decomp.analyzedBinary.sha256",
+   "value": "40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0",
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본)",
+     "note": "sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes"
+    }
+   ]
+  },
+  {
+   "id": "decomp.analyzedBinary.fileBytes",
+   "value": 5360112,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본)",
+     "note": "sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes"
+    }
+   ]
+  },
+  {
+   "id": "decomp.analyzedBinary.timeDateStamp",
+   "value": 1782743820,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본)",
+     "note": "sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes"
+    }
+   ]
+  },
+  {
+   "id": "decomp.analyzedBinary.eLfanew",
+   "value": 64,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본)",
+     "note": "sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes"
+    }
+   ]
+  },
+  {
+   "id": "decomp.analyzedBinary.imageBase",
+   "value": "0x140000000",
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본)",
+     "note": "sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes"
+    }
+   ]
+  },
+  {
+   "id": "decomp.pdataFunctionStarts",
+   "value": 14792,
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본)",
+     "note": "sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes"
+    }
+   ]
+  },
+  {
+   "id": "decomp.richHeaderShift",
+   "value": {
+    "bytes": 208,
+    "why": "Ghidra 가 매핑한 것은 rich header 주입본이다. 주입본은 원본 앞에 208바이트가 붙어 e_lfanew 가 0x40 → 0x110 이 되고, 디컴파일 산출물의 모든 주소가 +0xD0 밀린다.",
+    "appliesTo": "analysis/decompiled/all/*.c 의 파일명과 그 파일 안의 행 인용",
+    "doesNotApplyTo": "바이너리를 직접 관찰한 인용(어셈블리 주소·.rdata 덤프)"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본)",
+     "note": "sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes"
+    }
+   ]
+  },
+  {
+   "id": "decomp.citedAddressClassification",
+   "value": {
+    "total": 39,
+    "correctAsIs": 27,
+    "needsMinus0xD0": 3,
+    "indeterminate": 9,
+    "needsMinus0xD0List": [
+     "0x1400d0380",
+     "0x1400d8060",
+     "0x140261950"
+    ],
+    "indeterminateList": [
+     "0x140020260",
+     "0x140063c70",
+     "0x140064fa0",
+     "0x14009c5d0",
+     "0x14009c630",
+     "0x14009c690",
+     "0x1401531c0",
+     "0x14015c760",
+     "0x140261750"
+    ],
+    "note": "미확정은 '틀렸다'가 아니다 — .pdata 는 unwind 정보를 가진 함수만 담으므로 리프 함수이거나 함수 중간을 가리키는 인용이면 어느 쪽에도 안 걸린다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본)",
+     "note": "sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes"
+    }
+   ]
+  }
+ ]
+}
