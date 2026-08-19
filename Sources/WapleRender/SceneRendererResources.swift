@@ -570,7 +570,13 @@ extension SceneRenderer {
             return BuiltinShaderIncludes.lookup(header)
         }
         let manifest = loadEffectManifest(eff, package: package)
-        let fboIndex = Dictionary(uniqueKeysWithValues: manifest.fbos.enumerated().map { ($1.name, $0) })
+        // 중복 이름은 **뒤가 이긴다**. `EffectManifest`(:63-78)는 치수만 8192 로 클램프하고 이름
+        // 유일성은 보지 않으며, 매니페스트는 pkg 우선 조회(:644 quietAssetData)라 워크샵 pkg 가 자체
+        // `effects/<name>/effect.json` 을 실으면 그대로 도달한다. 이 줄은 loadEffectManifest 바로
+        // 다음이라 셰이더 해석보다 **먼저** 터졌다. 동봉 자산 101개 전수 파스에서 중복은 0건 —
+        // 정상 자산은 영향 없고, 저작 오류·악의 입력만 여기로 온다.
+        let fboIndex = Dictionary(manifest.fbos.enumerated().map { ($1.name, $0) },
+                                  uniquingKeysWith: { _, later in later })
         let lw = Float(max(1, texW)), lh = Float(max(1, texH))
         var passes: [TranslatedPass] = []
         var anyAudio = false

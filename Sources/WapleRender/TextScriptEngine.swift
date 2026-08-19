@@ -204,6 +204,7 @@ public final class SceneScriptContext {
 /// 나머지(fileURL/debounce/lock/saveQueue)는 let 이다. 컴파일러가 볼 수 없는 이 두 규율이
 /// 근거이고, 그래서 `checked` 가 아니라 `unchecked` 다. 규율을 깨는 변경(값에 직접 접근하는
 /// 새 메서드, pendingSave 를 큐 밖에서 만지는 코드)을 넣으려면 이 표기부터 다시 검토할 것.
+/// (2026-08-19) `totalBytes`·`warnedOverflow` 도 같은 `lock` 이 지킨다 — 규율은 그대로다.
 public final class ScriptLocalStorage: @unchecked Sendable {
     /// 기본 저장 루트(~/Library/Application Support/Waple/script-storage).
     public static func defaultBaseDirectory() -> URL {
@@ -211,8 +212,25 @@ public final class ScriptLocalStorage: @unchecked Sendable {
         return appSupport.appendingPathComponent("Waple/script-storage", isDirectory: true)
     }
 
+    /// 브리지 입력 상한. 형제 `WebRenderer.maxBridgeStringBytes`(F840, :70)가 이미 하는 일을
+    /// 이쪽 브리지만 하지 않고 있었다 — 수정의 전파 누락이다.
+    ///
+    /// 씬 스크립트는 워크샵 콘텐츠라 신뢰 경계 밖이고, `flush()` 가 디바운스마다 **전체 딕셔너리**를
+    /// `script-storage/<sceneId>.json` 에 재기록한다. 상한이 없으면 메모리와 디스크가 함께 자라고
+    /// **teardown 후에도 파일이 남아** 영구 누적이 된다. 원격 반출 경로는 없다 — 로컬 자원 소진이다.
+    private static let maxKeyBytes = 1024            // WebRenderer 형제와 동수
+    private static let maxValueBytes = 64 * 1024     // 값은 JSON 직렬화본이라 키보다 넉넉히
+    private static let maxEntries = 512
+    private static let maxTotalBytes = 4 * 1024 * 1024
+
     private let fileURL: URL
     private var values: [String: String] = [:]
+    /// `values` 안 문자열의 UTF-8 바이트 합. 매 set 마다 전수 합산하면 스크립트가 프레임마다
+    /// 부를 때 O(n) 이 되므로 증분으로 유지한다(lock 이 지킨다).
+    private var totalBytes = 0
+    /// 상한 경고는 씬당 한 번만 — 매 프레임 거절당하는 스크립트가 로그를 채우는 것도
+    /// 같은 종류의 자원 소진이다.
+    private var warnedOverflow = false
     private let lock = NSLock()
     private let saveQueue = DispatchQueue(label: "waple.script-localstorage", qos: .utility)
     private var pendingSave: DispatchWorkItem?
@@ -227,7 +245,17 @@ public final class ScriptLocalStorage: @unchecked Sendable {
         self.debounce = debounce
         if let data = try? Data(contentsOf: fileURL),
            let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] {
-            values = dict
+            // 디스크 파일도 신뢰 경계 밖이다 — 직전 실행의 스크립트가 쓴 것이다. 로드에도 같은
+            // 상한을 걸지 않으면 한 번 커진 파일이 영원히 남아 상한이 무의미해진다.
+            // 키 정렬 순회로 어떤 항목이 살아남는지 결정적으로 만든다.
+            for key in dict.keys.sorted() {
+                guard let v = dict[key],
+                      key.utf8.count <= Self.maxKeyBytes, v.utf8.count <= Self.maxValueBytes,
+                      values.count < Self.maxEntries,
+                      totalBytes + v.utf8.count <= Self.maxTotalBytes else { continue }
+                values[key] = v
+                totalBytes += v.utf8.count
+            }
         }
     }
 
@@ -242,19 +270,59 @@ public final class ScriptLocalStorage: @unchecked Sendable {
         return s
     }
 
+    /// 상한을 넘으면 **조용히 거절**한다(예외도 JS 오류도 아니다 — 실물 localStorage 의
+    /// QuotaExceeded 와 달리 스크립트를 멈추면 배경화면이 통째로 죽는다).
     public func set(key: String, json: String) {
-        lock.lock(); values[key] = json; lock.unlock()
+        guard key.utf8.count <= Self.maxKeyBytes else {
+            return rejectOnce("키 \(key.utf8.count)B > \(Self.maxKeyBytes)B")
+        }
+        guard json.utf8.count <= Self.maxValueBytes else {
+            return rejectOnce("값 \(json.utf8.count)B > \(Self.maxValueBytes)B")
+        }
+        lock.lock()
+        let previous = values[key]
+        let delta = json.utf8.count - (previous?.utf8.count ?? 0)
+        if previous == nil, values.count >= Self.maxEntries {
+            lock.unlock()
+            return rejectOnce("항목 수 상한 \(Self.maxEntries) 도달")
+        }
+        if totalBytes + delta > Self.maxTotalBytes {
+            lock.unlock()
+            return rejectOnce("총량 상한 \(Self.maxTotalBytes)B 초과")
+        }
+        totalBytes += delta
+        values[key] = json
+        lock.unlock()
         scheduleSave()
     }
 
     public func delete(key: String) {
-        lock.lock(); values.removeValue(forKey: key); lock.unlock()
+        lock.lock()
+        if let removed = values.removeValue(forKey: key) { totalBytes -= removed.utf8.count }
+        lock.unlock()
         scheduleSave()
     }
 
     public func clear() {
-        lock.lock(); values.removeAll(); lock.unlock()
+        lock.lock(); values.removeAll(); totalBytes = 0; lock.unlock()
         scheduleSave()
+    }
+
+    /// 테스트·진단용 현재 사용량(항목 수, UTF-8 바이트 합).
+    public var usage: (entries: Int, bytes: Int) {
+        lock.lock(); defer { lock.unlock() }
+        return (values.count, totalBytes)
+    }
+
+    /// lock 을 잡지 않은 상태에서만 부른다(위 세 경로 모두 unlock 뒤에 호출한다).
+    private func rejectOnce(_ reason: String) {
+        lock.lock()
+        let first = !warnedOverflow
+        warnedOverflow = true
+        lock.unlock()
+        guard first else { return }
+        NSLog("%@", "[Waple] script localStorage 상한 초과로 거절: \(reason) "
+                  + "(\(fileURL.lastPathComponent), 이후 동일 경고 생략)")
     }
 
     private func scheduleSave() {

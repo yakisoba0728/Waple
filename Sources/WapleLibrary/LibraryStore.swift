@@ -117,7 +117,7 @@ public final class LibraryStore: @unchecked Sendable {
                 }
             }
         }
-        let entry = LibraryEntry(
+        var entry = LibraryEntry(
             id: id,
             title: project.title,
             typeRaw: project.type.storageString,
@@ -127,6 +127,13 @@ public final class LibraryStore: @unchecked Sendable {
             tags: project.tags,
             contentRating: project.contentRating
         )
+        // 재임포트는 **project.json 에서 되살릴 수 있는 필드만** 다시 채운다. `rating` 은 워크샵
+        // vote_data 에서 다운로드 시점에만 오므로(WorkshopViewModel:253 → setRating) 여기서
+        // 되살릴 방법이 없다. 이관하지 않으면 아래 removeAll/append 교체로 nil 이 덮어써서,
+        // `importFolders(scanImportableFolders(in:))`(:152) 한 번에 **모든 평점이 무통지로
+        // 소실**됐다 — 재다운로드한 것만 복구되는 사용자 데이터 소실이다.
+        // id 가 uniqueEntryId 로 새로 발급된 경우엔 기존 엔트리가 없어 자연히 nil 이 된다(정상).
+        entry.rating = entries.first { $0.id == entry.id }?.rating
         entries.removeAll { $0.id == entry.id }
         entries.append(entry)
         if saving { save() }

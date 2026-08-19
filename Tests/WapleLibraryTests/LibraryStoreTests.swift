@@ -305,4 +305,33 @@ final class LibraryStoreTests: XCTestCase {
         let resolved = store.resolveFolderURL(for: entry)
         XCTAssertEqual(resolved?.standardizedFileURL, folder.standardizedFileURL)
     }
+
+    /// 재임포트가 **워크샵 평점을 지우면 안 된다**(사용자 데이터 소실).
+    ///
+    /// `importFolder` 는 `LibraryEntry` 를 `rating:` 없이 새로 만들고 기존 엔트리를 통째로
+    /// 교체한다. 평점은 워크샵 `vote_data` 에서 다운로드 시점에만 오므로 재임포트로 되살릴
+    /// 방법이 없는데 이관 코드가 없었다 — `importFolders(scanImportableFolders(in:))`
+    /// 한 번(= 라이브러리 새로고침)에 **모든 평점이 무통지로 소실**됐다.
+    func testReimportPreservesWorkshopRating() throws {
+        let folder = try makeWallpaperFolder(id: "rated")
+        let store = LibraryStore(baseDirectory: base())
+        let entry = try store.importFolder(folder)
+        store.setRating(0.87, id: entry.id)
+        XCTAssertEqual(store.entries.first { $0.id == entry.id }?.rating, 0.87)
+
+        // 같은 폴더 재임포트(라이브러리 새로고침 경로).
+        let again = try store.importFolder(folder)
+        XCTAssertEqual(again.id, entry.id, "같은 폴더는 같은 id 로 재임포트돼야 한다")
+        XCTAssertEqual(store.entries.first { $0.id == entry.id }?.rating, 0.87,
+                       "재임포트가 평점을 지웠다 — 사용자 데이터 소실")
+
+        // 일괄 경로(importFolders)도 같아야 한다.
+        _ = store.importFolders([folder])
+        XCTAssertEqual(store.entries.first { $0.id == entry.id }?.rating, 0.87,
+                       "importFolders 경로에서 평점이 소실됐다")
+
+        // 대조군: 평점이 없던 항목은 계속 nil 이어야 한다(이관이 없는 값을 지어내면 안 된다).
+        let plain = try store.importFolder(try makeWallpaperFolder(id: "unrated"))
+        XCTAssertNil(store.entries.first { $0.id == plain.id }?.rating)
+    }
 }

@@ -2,6 +2,31 @@ import XCTest
 @testable import WapleCore
 
 final class ShaderPreprocessorTests: XCTestCase {
+
+    /// 함수형 매크로의 **중복 파라미터**가 프로세스를 죽이면 안 된다.
+    ///
+    /// `#define FOO(a,a)` 는 애초에 불법 GLSL 이지만 pkg 안의 셰이더는 신뢰 경계 밖이다.
+    /// 종전 구현은 인자 **수**만 확인하고 `Dictionary(uniqueKeysWithValues:)` 로 매핑을 만들어
+    /// 중복 키에서 그대로 트랩했다 — 워크샵 배경화면 하나가 앱을 죽이는 경로다.
+    /// 형제 `PropertyConditionEvaluator.swift:12` 는 2026-08 에 같은 이유로 이미 고쳐졌는데
+    /// 이 자리로 오지 않았다.
+    func testDuplicateMacroParametersDoNotTrap() {
+        let src = """
+        #define FOO(a,a) a+a
+        float f() { return FOO(x,y); }
+        """
+        let out = ShaderPreprocessor.preprocess(src, combos: [:])
+        // 규약: 중복 키는 뒤가 이긴다 → a 는 두 번째 인자 y 로 치환된다.
+        XCTAssertTrue(out.contains("y+y"), "중복 파라미터는 뒤 인자가 이겨야 한다 — 실제: \(out)")
+        XCTAssertFalse(out.contains("FOO("), "매크로가 확장되지 않았다")
+    }
+
+    /// 대조군: 중복이 없는 정상 매크로는 종전과 똑같이 동작해야 한다(무회귀).
+    func testNormalFunctionMacroStillExpands() {
+        let out = ShaderPreprocessor.preprocess("#define ADD(a,b) (a+b)\nfloat f() { return ADD(p,q); }",
+                                                combos: [:])
+        XCTAssertTrue(out.contains("(p+q)"), "정상 매크로 확장이 깨졌다 — 실제: \(out)")
+    }
     // S5: `#if ((((…))))` 류 병리적 중첩이 재귀 파서를 스택 오버플로시키면 안 된다 — 캡(256) 초과는
     // 그레이스풀 0(미정의 취급)으로 폴백. 5000 중첩은 캡을 한참 넘어 안쪽 리터럴에 닿지 못하므로 0 이 맞다.
     func testExprEvalDeepNestingDoesNotCrash() {
