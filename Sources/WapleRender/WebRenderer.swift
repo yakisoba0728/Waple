@@ -47,6 +47,22 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     private var isEffectivelyPaused: Bool { pausedManually || pausedByOcclusion }
     private var userSelectedResourceOverrides: [String: String] = [:]
 
+    // MARK: F840 — 페이지 유발 파일시스템 열거 상한
+    //
+    // randomFile 브리지 메시지는 인자 타입만 검증하고 곧장 재귀 디렉터리 열거(+엔트리별 stat)를
+    // 백그라운드에 띄웠다. JS 한 줄(`for(;;) wallpaperRequestRandomFileForProperty(k, cb)`)이면
+    // 워크가 수천 개 동시에 뜨고, deliverFetchAllDirectories 는 didFinish 마다 같은 워크를 자동 실행한다.
+    // 세 방향으로 막는다: 인-플라이트 개수, 열거 엔트리 수, 브리지 문자열 길이.
+
+    /// 동시에 진행 가능한 재귀 디렉터리 열거 수(randomFile + fetchall 공용). 초과 요청은 빈 응답.
+    private static let maxInFlightDirectoryWalks = 2
+    /// 열거 1회가 방문할 엔트리 수 상한 — 사용자가 홈 디렉터리를 고른 경우의 폭주도 여기서 끊긴다.
+    private static let maxEnumeratedEntries = 20_000
+    /// 브리지 문자열 인자(name/requestId) 길이 상한(바이트). 초과 메시지는 폐기.
+    private static let maxBridgeStringBytes = 1024
+    /// 진행 중인 재귀 열거 수. 메인 큐에서만 읽고 쓴다(브리지 메시지·didFinish·완료 콜백 전부 메인).
+    private var inFlightDirectoryWalks = 0
+
     public init(mode: Mode) {
         self.mode = mode
         super.init()
@@ -302,18 +318,30 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             synchronizeEffectivePause()
         } else if type == "randomFile",
                   let name = dict["name"] as? String,
-                  let requestID = dict["requestId"] as? String {
+                  let requestID = dict["requestId"] as? String,
+                  // F840: 길이 검증(종전엔 String 인지만 봤다). 메가바이트급 문자열이 그대로
+                  // 프로퍼티 조회 키·JS 리터럴 인코딩을 타는 것을 막는다.
+                  name.utf8.count <= Self.maxBridgeStringBytes,
+                  requestID.utf8.count <= Self.maxBridgeStringBytes {
             switch randomFileTarget(forProperty: name) {
             case .file(let path):
                 deliverRandomFileResponse(requestID: requestID, propertyName: name, filePath: path)
             case .directory(let directoryURL):
+                // F840: 인-플라이트 상한 — 초과분은 워크를 띄우지 않고 빈 응답(콜백 계약은 지킨다).
+                guard inFlightDirectoryWalks < Self.maxInFlightDirectoryWalks else {
+                    deliverRandomFileResponse(requestID: requestID, propertyName: name, filePath: "")
+                    return
+                }
+                inFlightDirectoryWalks += 1
                 // F573: 디렉터리 재귀 열거+stat 은 파일 수만큼 I/O — 메인 프리즈 방지를 위해
                 // 백그라운드에서 해석. 응답은 requestId 매칭이라 비동기 전달이 안전하다.
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                     let path = self?.randomFilePath(in: directoryURL) ?? ""
                     DispatchQueue.main.async {
-                        self?.deliverRandomFileResponse(requestID: requestID, propertyName: name,
-                                                        filePath: path)
+                        guard let self else { return }
+                        self.inFlightDirectoryWalks -= 1
+                        self.deliverRandomFileResponse(requestID: requestID, propertyName: name,
+                                                       filePath: path)
                     }
                 }
             case nil:
@@ -384,6 +412,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             targets.append((key, directoryURL))
         }
         guard !targets.isEmpty else { return }
+        // F840: didFinish 마다 자동 실행되므로 페이지가 location.reload 로 반복 유발할 수 있다 —
+        // randomFile 과 같은 인-플라이트 상한을 공유한다(초과 시 이번 didFinish 분은 건너뛴다).
+        guard inFlightDirectoryWalks < Self.maxInFlightDirectoryWalks else { return }
+        inFlightDirectoryWalks += 1
         // F573: 재귀 열거+stat 은 파일 수만큼 I/O — 메인 프리즈 방지를 위해 백그라운드에서 해석 후
         // 메인으로 복귀해 전달(teardown 후면 webView 가 nil 이라 evaluateJavaScript 가 no-op).
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -394,6 +426,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             }
             DispatchQueue.main.async {
                 guard let self else { return }
+                self.inFlightDirectoryWalks -= 1
                 for (key, files) in resolved {
                     self.deliverDirectoryFilesAddedOrChanged(propertyName: key, files: files)
                 }
@@ -425,7 +458,15 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         ) else { return [] }
 
         var candidates: [URL] = []
+        var visited = 0
         for case let url as URL in enumerator {
+            // F840: 열거 엔트리 상한 — 상한이 없으면 워크 하나가 트리 크기만큼(홈 디렉터리를 고른
+            // 경우 수십만 stat) 돌아, 인-플라이트 상한만으로는 부족하다.
+            visited += 1
+            if visited > Self.maxEnumeratedEntries {
+                NSLog("%@", "[Waple] directory enumeration truncated at \(Self.maxEnumeratedEntries) entries: \(directoryURL.path)")
+                break
+            }
             if isRegularFile(url, containedIn: directoryURL) {
                 candidates.append(url)
             }
