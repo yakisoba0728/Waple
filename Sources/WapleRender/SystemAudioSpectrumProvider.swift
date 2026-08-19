@@ -243,8 +243,19 @@ struct AudioWindowAccumulator {
     mutating func append(left l: [Float], right r: [Float]) -> [(left: [Float], right: [Float])] {
         bufL.append(contentsOf: l)
         bufR.append(contentsOf: r)
+        // F840: 길이 어긋남 정렬. 종전에는 잔여 길이가 갈리면 짧은 쪽이 영원히 창을 못 채워
+        // 긴 쪽이 무한 증가한다(캡처 세션 내내 누적 = OOM). 어긋난 시점에서 이미 L/R 동일 길이
+        // 계약이 깨진 것이므로 긴 쪽의 꼬리(최신 샘플)를 버려 다시 맞춘다 — 앞쪽 정렬은 보존된다.
+        if bufL.count != bufR.count {
+            let aligned = min(bufL.count, bufR.count)
+            bufL.removeLast(bufL.count - aligned)
+            bufR.removeLast(bufR.count - aligned)
+        }
         var out: [(left: [Float], right: [Float])] = []
-        while bufL.count >= windowSize {
+        // F840: 종전 조건은 bufL 만 봤는데 removeFirst(windowSize) 는 bufR 에도 걸린다 —
+        // stereoSamples 가 r.isEmpty 만 특수 처리하므로 **길이가 다른** 스테레오 패킷
+        // (non-interleaved 버퍼 두 개의 mDataByteSize 가 갈리는 경우)이 오면 트랩이었다.
+        while bufL.count >= windowSize && bufR.count >= windowSize {
             out.append((Array(bufL.prefix(windowSize)), Array(bufR.prefix(windowSize))))
             bufL.removeFirst(windowSize)
             bufR.removeFirst(windowSize)

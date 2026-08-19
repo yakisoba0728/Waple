@@ -58,6 +58,21 @@ public enum FFmpegConverter {
         !path.isEmpty && !path.contains("\0") && path.hasPrefix("/")
     }
 
+    /// F840: isReusableConvertedOutput 의 동기 대기 상한(초).
+    static let assetProbeTimeoutSeconds: Double = 5
+
+    /// 캐시할 변환 결과 mp4 최대 개수. 초과 시 마지막 접근(mtime)이 오래된 것부터 evict.
+    /// F840: 종전엔 상한이 전혀 없어 webm/mkv 를 여러 개 시도할 때마다 수백 MB 결과물이
+    /// ~/Library/Application Support/Waple/converted 에 무한 축적됐다(사용자가 존재도 모르는 경로).
+    /// 정책·구현은 VideoTextureExtractor(maxCachedVideos=8, evictOldest)와 동일하게 맞춘다.
+    public static let maxCachedConversions = 8
+
+    /// 캐시 적중 파일의 mtime 을 now 로 갱신 — evictOldest 의 LRU 순서용
+    /// (VideoTextureExtractor.touch 와 동형. 그쪽은 private 이라 여기 같은 구현을 둔다).
+    private static func touchCacheHit(_ url: URL) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+    }
+
     /// 변환 캐시 디렉터리(~/Library/Application Support/Waple/converted).
     public static func cacheDir() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -102,6 +117,7 @@ public enum FFmpegConverter {
             let out = cachedURL(for: source)
             if FileManager.default.fileExists(atPath: out.path) {
                 if isReusableConvertedOutput(out) {
+                    touchCacheHit(out)   // LRU 갱신 — 최근 쓴 변환물이 evict 대상이 되지 않게
                     completeOnMain(completion, out)
                     return
                 }
@@ -134,7 +150,13 @@ public enum FFmpegConverter {
             playable.value = (try? await AVURLAsset(url: url).load(.isPlayable)) ?? false
             sem.signal()
         }
-        sem.wait()
+        // F840: 무한 대기 금지. 여기는 **직렬** workQueue 위라, Task 가 완료되지 않으면(협조 스레드풀
+        // 고갈·응답 없는 볼륨) 그 큐가 영구히 막혀 이후 모든 변환 요청이 조용히 사라진다.
+        // 타임아웃 시 박스를 읽지 않는다(락이 없어 늦게 도착한 쓰기와 경합) — 재사용 불가로 처리.
+        guard sem.wait(timeout: .now() + assetProbeTimeoutSeconds) == .success else {
+            WapleLog.warn("[Waple] ffmpeg cache probe timed out: \(url.lastPathComponent)")
+            return false
+        }
         return playable.value
     }
 
@@ -153,6 +175,8 @@ public enum FFmpegConverter {
             do {
                 try? FileManager.default.removeItem(at: output)
                 try FileManager.default.moveItem(at: tmp, to: output)
+                // 새 결과물 기록 후 상한 초과분 정리(방금 만든 output 은 mtime 최신이라 대상 아님).
+                VideoTextureExtractor.evictOldest(in: cacheDir(), keep: maxCachedConversions)
                 return output
             } catch {
                 WapleLog.warn("[Waple] ffmpeg cache move failed: \(error)")
