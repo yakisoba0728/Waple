@@ -222,7 +222,7 @@ jobs:
           echo "- skipped:  \`${SKIPPED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
-          # [2026-08-19] 트립와이어. 이제 정상 범위를 안다(실측 executed 2293 / skipped 46,
+          # [2026-08-19] 트립와이어. 이제 정상 범위를 안다(실측 executed 2299 / skipped 47,
           # run 32219037798 debug·release 양쪽).
           #
           # 막으려는 것은 **대량 무음 스킵**이다. XCTSkip("no Metal") 아래 테스트가 561개인데
@@ -234,8 +234,8 @@ jobs:
             exit 1
           fi
           # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          if [ "${EXECUTED:-0}" -lt 2293 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 2293 미만. 테스트가 사라졌다."
+          if [ "${EXECUTED:-0}" -lt 2299 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 2299 미만. 테스트가 사라졌다."
             exit 1
           fi
 
