@@ -390,7 +390,16 @@ enum Mesh3DShaders {
             referenceDepth = ndc.z - frame.meta.w;
         }
         uint slice = uint(light.shadow.x + 0.5);
-        constexpr sampler compareSampler(coord::normalized, filter::nearest,
+        // G-E1-3: 비교 샘플러는 **LINEAR** 여야 한다(= 하드웨어 PCF). WE 샘플러 캐시가 만들 수 있는
+        // 유일한 비교 필터값은 `0x95 = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR` 다
+        // (원본 0x140099b67 `mov ecx, 0x95`; Filter 슬롯에 쓰는 명령이 0x140099b05 앞의 한 곳뿐이고
+        // ecx 경로가 셋뿐이라 배타적으로 확정). 9탭 오프셋(0.81616/1.02323)은 이미 WE 와 같지만,
+        // nearest 로는 각 탭이 단일 비교라 visibility 가 k/9 의 10단계 계단값만 갖는다 — 그림자
+        // 반그림자 경계가 블록으로 보인다. linear 로 두면 탭마다 2×2 가중 비교가 걸려 연속값이 된다.
+        // `compare_func::less_equal` 은 WE 의 GREATER 와 어긋난 게 아니다 — WE 쪽이 리버스드-Z
+        // 규약(common_pbr_2.h `#if REVERSEDEPTH`)이라 Waple 의 정방향 깊이에서는 이쪽이 등가다.
+        // address 도 WE 는 BORDER 지만 Waple 은 uv 를 직접 clamp 하므로 무영향.
+        constexpr sampler compareSampler(coord::normalized, filter::linear,
                                          address::clamp_to_edge, compare_func::less_equal);
         float2 roundOffset = texel * 0.81616;
         float2 axialOffset = texel * 1.02323;
@@ -430,7 +439,16 @@ enum Mesh3DShaders {
         float2 cellMax = (cell + 1.0) * atlasScale - texel * 0.5;
         float referenceDepth = ndc.z - frame.meta.w;
         uint slice = uint(light.shadow.x + 0.5);
-        constexpr sampler compareSampler(coord::normalized, filter::nearest,
+        // G-E1-3: 비교 샘플러는 **LINEAR** 여야 한다(= 하드웨어 PCF). WE 샘플러 캐시가 만들 수 있는
+        // 유일한 비교 필터값은 `0x95 = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR` 다
+        // (원본 0x140099b67 `mov ecx, 0x95`; Filter 슬롯에 쓰는 명령이 0x140099b05 앞의 한 곳뿐이고
+        // ecx 경로가 셋뿐이라 배타적으로 확정). 9탭 오프셋(0.81616/1.02323)은 이미 WE 와 같지만,
+        // nearest 로는 각 탭이 단일 비교라 visibility 가 k/9 의 10단계 계단값만 갖는다 — 그림자
+        // 반그림자 경계가 블록으로 보인다. linear 로 두면 탭마다 2×2 가중 비교가 걸려 연속값이 된다.
+        // `compare_func::less_equal` 은 WE 의 GREATER 와 어긋난 게 아니다 — WE 쪽이 리버스드-Z
+        // 규약(common_pbr_2.h `#if REVERSEDEPTH`)이라 Waple 의 정방향 깊이에서는 이쪽이 등가다.
+        // address 도 WE 는 BORDER 지만 Waple 은 uv 를 직접 clamp 하므로 무영향.
+        constexpr sampler compareSampler(coord::normalized, filter::linear,
                                          address::clamp_to_edge, compare_func::less_equal);
         float2 roundOffset = texel * 0.81616;
         float2 axialOffset = texel * 1.02323;

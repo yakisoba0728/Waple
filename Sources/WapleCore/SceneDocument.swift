@@ -1403,7 +1403,13 @@ extension SceneDocument {
     /// camera 의사-오브젝트와 이펙트 캐리어 quad(shape+effects)도 콘텐츠로 취급 — 종전에는 여기서
     /// 트랜스폼-노드로 흡수돼 갓레이 41오브젝트(23씬)·카메라 fov/zoom(37씬)이 통째 드롭됐다.
     private static func parseNode(_ obj: [String: Any], initialVisible: Bool, visibleScript: String?) -> SceneNode3D? {
-        guard !["image", "model", "particle", "text", "light", "camera"].contains(where: { contentValue(obj[$0]) != nil }),
+        // G-D2-1: `sprite` 도 **콘텐츠 키**다. WE 오브젝트 팩토리가 `sprite`(문자열)에 0x270 바이트
+        // 전용 클래스를 생성하고 그 ctor 가 `materials/util/occlusiontest.json` 을 로드한다(= 하드웨어
+        // 오클루전으로 가림을 판정하는 태양/렌즈플레어 스프라이트). Waple 은 아직 이걸 그리지 못하지만,
+        // 여기서 제외하지 않으면 트랜스폼-온리 그룹 노드로 **조용히 흡수**돼 "노드는 있는데 아무것도
+        // 안 그려진다" 가 된다 — 갓레이 41오브젝트가 같은 방식으로 드롭됐던 것과 동형 사고다.
+        // 콘텐츠로 인식만 시켜 두면 미구현이 미구현으로 남고 렌더 목록 오염이 없다.
+        guard !["image", "model", "particle", "text", "light", "camera", "sprite"].contains(where: { contentValue(obj[$0]) != nil }),
               !isEffectQuad(obj),
               let nodeID = intVal(obj["id"]) else { return nil }
         var node = SceneNode3D(
@@ -1638,7 +1644,15 @@ extension SceneDocument {
             origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
             angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
             scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
-            castShadow: (unwrap(obj["castshadow"]) as? Bool) ?? false,   // {user,value} 바인딩도 읽는다(종전 평문 Bool 만 — 바인딩은 전부 false 로 접혔다)
+            // G-D2-10: **모델 오브젝트의 기본값은 true 다.** WE 오브젝트 팩토리의 `model` 분기가
+            // 생성 직후 `or WORD PTR [rdi+0x120], 0x800` 으로 castshadow 비트를 켠다(비트 11 =
+            // castshadow 는 액세서 썽크 `bts ecx, 0xB` 로 확정). `image`/`particle`/`shape`/`light`
+            // ctor 는 이 비트를 켜지 않으므로 **모델에만** 적용한다(아래 parseLight 는 false 유지).
+            // 도달이 결정적이다: WE 2.8.42 설치본 씬 전수에서 non-null `model` 오브젝트 **30개가
+            // 하나도 빠짐없이 `castshadow` 키를 생략한다** — 즉 종전 `?? false` 는 WE 자체 3D
+            // 배경의 그림자를 100% 없애고 있었다(접지감 소실 = 육안 차이 최대급).
+            // {user,value} 바인딩도 읽는다(종전 평문 Bool 만 — 바인딩은 전부 false 로 접혔다).
+            castShadow: (unwrap(obj["castshadow"]) as? Bool) ?? true,
             parent: intVal(obj["parent"]),
             effects: parseEffects(obj["effects"], userProps: userProps),
             order: order)

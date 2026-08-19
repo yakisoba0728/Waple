@@ -183,7 +183,10 @@ public struct PropertyAnimation: Equatable {
             return out.sorted { $0.frame < $1.frame }
         }
         var tracks: [[PropertyKeyframe]] = []
-        for key in ["c0", "c1", "c2"] {
+        // G-D2-8: 트랙은 **4개**다. WE 의 프로퍼티 바인딩 파서가 `c0`/`c1`/`c2`/`c3` 를 차례로
+        // FindMember 한다(원본 .rdata 의 네 키가 연속 배치). 4성분 프로퍼티(이펙트 패스의 float4
+        // `constantshadervalues` 등)에 키프레임이 걸리면 종전엔 넷째 채널이 정적값으로 굳었다.
+        for key in ["c0", "c1", "c2", "c3"] {
             // 누락 성분은 빈 트랙으로 자리 유지(value(component:) 가 위치 인덱싱) — break 는
             // c1/c2 만 있는 애니를 통째 드롭하고 c0+c2 에서 c2 를 유실한다.
             guard a[key] != nil else { tracks.append([]); continue }
@@ -202,7 +205,12 @@ public struct PropertyAnimation: Equatable {
             tracks: tracks,
             fps: f(opts["fps"]) ?? 30,
             length: f(opts["length"]) ?? (tracks.compactMap { $0.last?.frame }.max() ?? 0),
-            mode: (opts["mode"] as? String) ?? "single",
+            // G-D2-6: **부재 기본값은 loop 다.** WE 애니 헤더 초기화가 flags 를 0 으로 두고
+            // `"mirror"` 일 때만 `|= 0x1`, `"single"` 일 때만 `|= 0x2` 를 세운다 — 즉 `mode` 가
+            // 없거나 `"loop"` 면 둘 다 0 이고, 에디터가 아는 모드 집합이 {loop, single, mirror}
+            // 3개뿐이므로 0 은 배타적으로 loop 다. 종전 `?? "single"` 은 mode 를 생략한 애니를
+            // 마지막 키프레임에서 정지시켰다(회전 프로펠러·깜빡임·스크롤이 첫 사이클 뒤 멈춤).
+            mode: (opts["mode"] as? String) ?? "loop",
             relative: (a["relative"] as? Bool) ?? false,
             events: events,
             // C⑤: startpaused(=스크립트 play() 전까지 정지) — 부재/false 는 종전대로 무조건 재생(무회귀).
