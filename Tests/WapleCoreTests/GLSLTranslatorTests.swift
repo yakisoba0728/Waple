@@ -428,18 +428,29 @@ final class GLSLTranslatorTests: XCTestCase {
     }
 
     func testLightAmbientColorIsEngineUniformWithWhiteDefault() throws {
-        // F744: bare `uniform vec4 g_LightAmbientColor;` — 머티리얼로 오인되면 기본값 (0,0,0,0)으로
-        // 레이어가 검게 나옴. 엔진 유니폼: 흰색(1,1,1,1) 중립값.
+        // F744: bare `g_LightAmbientColor` 가 머티리얼로 오인되면 기본값 0 으로 레이어가 검게 나온다.
+        // 엔진 유니폼으로 인식 + 흰색 중립값이어야 한다.
+        //
+        // G-A2/A4/B2: **타입은 vec3 다.** 종전 픽스처는 `uniform vec4` 를 선언하고 방출이
+        // `float4(1,1,1,1)` 인지 봤는데, 동봉 WEAssets 에 vec4 선언은 **0건**이고 vec3 선언이
+        // **12건**이다(generic{,2,3,4}.vert · genericimage{2,3,4}.frag · genericparticle.frag ·
+        // genericropeparticle.frag · base/model_vertex_v1.h · fluidsimulation_combine.frag ×2).
+        // 즉 그 픽스처는 실물에 없는 형태였고, float4 를 주입하면 실제 소비처가 전부 타입
+        // 불일치로 MSL 컴파일에 실패한다. 실물 선언·실물 소비 형태로 바꾼다.
         let frag = """
         varying vec2 v_TexCoord;
         uniform sampler2D g_Texture0;
-        uniform vec4 g_LightAmbientColor;
+        uniform vec3 g_LightAmbientColor;
+        uniform vec3 g_LightSkylightColor;
         void main() {
-            gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * g_LightAmbientColor;
+            vec3 ambient = mix(g_LightSkylightColor, g_LightAmbientColor, 0.5);
+            gl_FragColor = vec4(texSample2D(g_Texture0, v_TexCoord).rgb * ambient, 1.0);
         }
         """
         let t = try XCTUnwrap(GLSLTranslator.translate(vertex: plainVert, fragment: frag, combos: [:]))
-        XCTAssertTrue(t.msl.contains("float4(1.0, 1.0, 1.0, 1.0)"), "g_LightAmbientColor → 흰색 중립값:\n\(t.msl)")
+        XCTAssertTrue(t.msl.contains("float3(1.0, 1.0, 1.0)"), "g_LightAmbientColor → vec3 흰색 중립값:\n\(t.msl)")
+        XCTAssertFalse(t.msl.contains("float4(1.0, 1.0, 1.0, 1.0)"),
+                       "vec4 주입 재유입 금지 — 실물 선언은 전건 vec3 다:\n\(t.msl)")
         XCTAssertTrue(t.materialParams.isEmpty, "머티리얼 파라미터로 오인 금지: \(t.materialParams.map(\.glslName))")
     }
 
