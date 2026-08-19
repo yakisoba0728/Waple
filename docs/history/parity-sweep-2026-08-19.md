@@ -1,0 +1,202 @@
+# WE 2.8.42 → Waple 파리티 전수 조사 (2026-08-19)
+
+Opus 에이전트 **20개**를 동시에 돌려 WE 원본 자산·바이너리와 Waple 구현을 축별로 전수 대조했다.
+이 문서는 그 산출을 하나로 합친 **갭 원장**이다. 조사 스코프는 "이미 고친 결함"이 아니라
+**아직 아무도 안 본 곳**이었다.
+
+## 0. 이 라운드가 바꾼 근거의 성격
+
+이전 라운드들과 결정적으로 다른 점: **디컴파일 코퍼스를 믿지 않고 원본 exe 를 직접 디스어셈블**했다.
+그 결과 종전에 "추정" 이던 것 다수가 확정으로 바뀌었고, 몇 건은 **뒤집혔다**.
+
+| 조사 | 새로 뚫은 1차 근거 |
+| --- | --- |
+| A5 | effect.json 파서 전문(`0x1401e7170`, 6,445 B) · conditions 평가기(`0x1401e63b0`) · 포맷 enum 테이블(`0x1401e53a0`, 20항목) |
+| C2 | 파티클 JSON 파서 3함수 + **요소 스키마 등록기 44개** → 요소별 키 집합·기본값 실측 |
+| D1 | 렌더 루프(`0x140120790`) · HDR 블룸 파라미터 조립(`0x14017f1b0`) · RT 생성기(`0x1401aadb0`) 호출부 20곳 전수 |
+| D2 | 오브젝트 팩토리(`0x14018FF60`) · `Obj::GetWorldMatrix`/`IsVisible`/`SetAngles` · **프로퍼티 등록 테이블 279 엔트리** |
+| E2 | `AudioProcessor` 생성자·캡처/FFT 스레드 → **오디오 스펙트럼 파이프라인 전체 복원** |
+| C3 | MDLA 오일러→쿼터니언 변환(`0x140264258`) → GLM 규약·회전 순서 확정 |
+| C4 | `lib.sceneScript.d.ts`(2,570행, 공식 타입 선언) · `scenescript64.dll` 훅 테이블 19개 실덤프 |
+| D4 | 에디터 changelog **459 리비전** · locale 3,332키 · **파티클 요소 프리뷰 씬 48개**(= 요소 전수 명부) |
+
+**Ghidra 산출물의 함정 2건이 실증됐다.** `FUN_140190030`(오브젝트 팩토리, 2,641 B)이 **100 B 로 잘려**
+있고, `FUN_140199850`(씬 프로퍼티 등록기, 7 KB)도 36 B 로 잘렸다. 주입본의 `.pdata` 가 −0xD0 로
+misalign 된 결과다. **디컴파일 코퍼스만 보고 "WE 에 그런 코드가 없다" 고 결론내면 틀린다.**
+
+## 1. 이미 고친 것 (이 브랜치)
+
+| 커밋 | 갭 | 근거 | 도달 |
+| --- | --- | --- | --- |
+| `7c8d1f1` | **언팩 프로젝트 폴더 마운트 불가** (G-E3-01) | WE `projects/` 21종이 전부 언팩, `.pkg` 0개 | WE 실물 씬 **71/71** |
+| `7c8d1f1` | `project.json` `file` 키 무시 (G-E3-02) | 씬 18개 중 4개가 `scene.json` 이 아님 | 4 |
+| `7c8d1f1` | `type` 부재 → preset → 렌더러 nil (G-E3-03) | project.json 21개 중 5개가 type 생략 | 5 |
+| `7c8d1f1` | `general.fov` 부재 → 3D 카메라 소실 (G-E3-04) | 3D 씬 **8/8** 이 fov 생략, fov 명시 4건은 전부 2D·전건 50.0 | 8 |
+| `7c8d1f1` | `g_LightAmbientColor` 를 float4 로 주입 | WEAssets 선언 **12/12 가 vec3**, vec4 0건 | 소비 셰이더 전부 |
+| `7c8d1f1` | 불투명 파라미터 오버로드 영구 미매칭 | `common_vertex.h` 의 `BuildTangentSpace` 3중 오버로드, 호출부 **9곳 전부** mat3 선두 | generic*/genericimage* 9종 |
+| `89236ce` | 모델 `castshadow` 기본값 false (G-D2-10) | 팩토리 `or [rdi+0x120], 0x800` · 비트11 = castshadow | WE 모델 오브젝트 **30/30** |
+| `89236ce` | HDR 블룸 정규화 부재 + 업샘플 0.25 이중 적용 (G-D1-01) | `powf`→`+1`→`divss`(0x14017f85e-88f) · **리포 정본이 이미 확정 등급으로 보유** | HDR 씬 |
+| `89236ce` | 그림자 비교 샘플러 nearest (G-E1-3) | WE 유일 비교 필터 `0x95` = COMPARISON_**LINEAR** | 3D 그림자 씬 전부 |
+| `89236ce` | 애니 `mode` 기본 single (G-D2-6) · `c3` 트랙 누락 (G-D2-8) | flags 0 = loop(배타) · 파서가 c0~c3 4트랙 | — |
+| `89236ce` | `sprite` 오브젝트가 트랜스폼 노드로 흡수 (G-D2-1) | 팩토리 전용 클래스 0x270 + `occlusiontest.json` | 1 |
+| `fafcd21` | effect.json 엄격 JSON (G-B2-01/B4-10/B1-1) | 동봉 **122개 중 27개**가 엄격 파스 실패, 27건 전부 복구 | 27 |
+| `fafcd21` | `replacementkey` 미파스 (G-B4-08) | 최상위 **46/46** 이 보유, **7개**가 디렉터리명과 다름 | 7 |
+| `fafcd21` | 미지 bind/target 이 이펙트 드롭 (G-A5-04) | WE 는 −1/0xFF 로 폴백(0x1401e7eef/0x1401e7a99) · **`"previous"` 리터럴 자체가 없음** | 잠재 |
+| `fafcd21` | 씬 패스 인덱스가 command 만큼 밀림 (G-B2-06) | motionblur 3↔2, fluidsimulation 20↔18 | 잠재 |
+
+## 2. 남은 갭 — 우선순위 순
+
+우선순위는 **도달 × 시각 영향 × 근거 등급**이다. `[짝]` 은 **반드시 한 커밋에 같이 가야 하는** 항목.
+
+### 2.1 최우선 — 하나의 자산이 통째로 살아나는 묶음
+
+| ID | 갭 | 근거 | 도달 |
+| --- | --- | --- | --- |
+| G-A5-06 / G-B2-02 `[짝]` | FBO `format` 미파스 → 전부 `rgba8Unorm` | 포맷 enum 20항목 실측(`0x1401e53a0`); `rgba_backbuffer` = HDR 시 `rgba16161616f`(`0x1401e7562-75d3`) | fbo 413/코퍼스, HDR 씬 17 |
+| G-A5-05 / G-B2-03 `[짝]` | `unique`/`clear` 미모델링 + `swap` 이 프레임-로컬 | flags bit0=unique/bit1=clear(`0x1401e7862`); `clear` 보유 6 fbo 가 **전건** unique | `unique` 코퍼스 81 |
+| G-A5-07 / G-B2-05 | `conditions`(fbo/bind/pass) 미평가 | 평가기 전문 확정: op 는 `ge/gt/le/lt` **4종뿐**, 누산 전부 AND, 미정의 콤보 = 0 | fluidsimulation |
+| G-B2-08 / G-B4-01 | 이펙트-로컬 자산 루트 부재 | 스톡 46종이 `effects/<name>/` 아래 자기 루트를 갖는데 Waple 은 팩 루트만 본다 → **베이스팩 폴백으로 46/46 해석 불가** | 잠재 + 번들 사장 |
+
+이 넷을 고치면 `fluidsimulation`(20패스·9 FBO) 하나가 통째로 살아나고, `motionblur` 누적이
+우연이 아니라 계약이 된다. **G-B2-02 없이 G-B2-03 만 고치면 유체는 여전히 안 돈다.**
+
+### 2.2 오디오 — 한 커밋으로 묶어야 하는 4건 `[짝]`
+
+E2 가 WE 오디오 파이프라인을 전부 복원했다. **현행 게인이 나머지 셋의 부재를 흡수하도록
+캘리브레이션돼 있어 따로 고치면 악화된다.**
+
+| ID | 갭 | WE 실측 |
+| --- | --- | --- |
+| G-E2-01 | 밴드 주파수 매핑 | 선형도 로그도 아님 — 저역 **29밴드는 FFT 빈 1:1**(23 Hz), 그 위는 `t^0.25`. 상한 14.68 kHz |
+| G-E2-02 | 밴드 리덕션 | WE `max`, Waple 평균 (`maxss` 0x1400d1d04) |
+| G-E2-03 | 스펙트럴 틸트 | `w = 0.501 − 0.499·cos(π t)`, 진폭에 `sqrt(w)` — 저역 22배 감쇠. **시간창이 아니라 주파수축 틸트** |
+| G-E2-04 | 절대 게인 | `162.56 = 0.001 × 2M × 127` 로 유도 가능. 현행 실측 캘리브값과 **약 3.41배** 차 |
+
+증상: 지금은 베이스 두 바만 크게 흔들고 62바가 거의 정지, 고역 22바는 항상 0.
+도달은 `g_AudioSpectrum*` 선언 셰이더 **230 파일**.
+
+### 2.3 파티클
+
+| ID | 갭 | 도달 |
+| --- | --- | --- |
+| G-C2-01 | 오퍼레이터 **12종** 미구현(boids/capvelocity/충돌 5종/컨트롤포인트 3종 등) | **Waple 동봉 프리셋** thunderbolt·dripping_water·magic_vortex_orb 계열 8파일 + 프리뷰 11씬 |
+| G-C2-02 | 컨트롤포인트 바인딩 미소비 — 이미터·vortex 가 원점에 붙음 | 동봉 CP flags 55 / parentcontrolpoint 31 |
+| G-C2-03 | 오퍼레이터 블렌딩(`blendin*`/`blendout*`)이 remapvalue 에만 | 동봉 17 인스턴스 |
+| G-C2-04 | `remapvalue` 가 **없는 키를 읽고**(`component`) 있는 키 5개를 안 읽음 | 동봉 15 |
+| G-C2-05 | `positionoffsetrandom` 이 없는 키(`offsetmin/max`)를 읽어 **전건 무동작** | 동봉 5 전건 |
+| G-C2-07 | `spritetrail` 기본값(length 0.05 / maxlength 10)과 신장 축 | 동봉 45 |
+
+`particleelementpreviews/` **48씬이 요소 1종당 1씬**이라 그대로 골든 스위트로 쓸 수 있다.
+
+### 2.4 스크립트
+
+| ID | 갭 | 비고 |
+| --- | --- | --- |
+| G-C4-03 / G-D3-1 | **동봉 `baseclasses.js`(1,456행)를 로드하지 않는다** | 두 조사가 독립 도달. `Vec3(0.5)` 가 WE 는 (0.5,0.5,0.5) 인데 Waple 은 (0.5,0,0) → 레이어 소멸. Vec4/Mat3/Mat4 클래스 자체가 없음. **심의 Vec2/Vec3/shared/createScriptProperties 를 먼저 제거해야 이름 충돌이 안 난다** |
+| G-C4-04 | `_Internal.convertUserProperties` 부재 → color 프로퍼티가 Vec3 이 아니라 문자열 | WE 기본 배경 유저 프로퍼티 타입 분포에서 **color 가 52.5% 로 최다** |
+| G-C4-01 / G-D4-02 | `thisObject` 가 항상 `thisLayer` | WE 기본 배경 13개 스크립트 중 **5개**가 깨짐(dino_run 은 TypeError 로 훅 전체 사망) |
+| G-C4-05 | `applyUserProperties` 가 `init` 보다 먼저 | dino_run 이 `init` 이 세팅한 변수를 첫 줄에서 참조 |
+| G-C4-10 | `console.log/error` 가 빈 함수 | **이 목록 전체의 조기 발견 장치**. 먼저 넣으면 나머지 우선순위를 실사용 로그로 판정할 수 있다 |
+| G-D4-03 | 에디터가 **자동 생성**하는 부착 스크립트가 없는 API 를 씀 + `getLayerByID` 문자열 인자 불일치 | 후자는 1줄 |
+
+### 2.5 3D · 씬 그래프
+
+| ID | 갭 | 도달 |
+| --- | --- | --- |
+| G-C3-02 `[짝 G-E3-04]` | `.mdl` **MDLV0004/0014 전면 거부** | WE 설치본 `.mdl` **28개 중 23개(82%)**. 9개 기본 3D 배경이 통째로 안 그려짐 |
+| G-C3-05 | `skinCount > 1` 미지원 | audiophile 바닥 그리드 1건 — G-C3-02 를 고치면 바로 대상이 됨 |
+| G-D2-5 | 가시성 상속이 파스-타임 스냅샷 | WE 는 `IsVisible` 이 매 조회마다 부모 체인을 live 로 걷는다(비가상 재귀). 3D 는 아예 전파 안 함 |
+| G-D2-4 | 2D 부모 변환이 4×4 가 아니라 분해 TRS → 전단 유실 | WE `GetWorldMatrix` 는 완전 4×4 합성 |
+| G-C3-04 | 본 애니 회전이 오일러 성분 lerp | WE 는 **GLM slerp**(임계 `1−eps` 까지 원문 일치). ±π 랩어라운드에서 본이 역방향 한 바퀴 |
+| G-C3-06 | 정점 탄젠트 미업로드 → TBN 이 스크린공간 미분 | `Model3D.Vertex.tangent` 는 이미 파스됨. 업로드 단계에서만 버려짐. arsenal/fantasticcar 8패스 |
+| G-E3-05 / G-C3-10 | `camera.paths` 미지원 | WE 3D 씬 **6개**가 보유. 카메라 이동이 유일한 움직임인 씬이 정지 화면이 됨 |
+
+### 2.6 라이팅 · 블렌딩 · 이펙트
+
+| ID | 갭 | 비고 |
+| --- | --- | --- |
+| G-A4-01 | `CombineLighting` 의 HDR 분기(saturate + overbright) 부재 | HDR 씬에서 채널당 최대 2.9배 밝음 |
+| G-A4-02 | `EMISSIVE_MAP` 전면 미구현 | 마스크 `.a` 채널을 읽지 않음. 네온·발광 요소가 주변과 같이 어두워짐 |
+| G-A4-03 | 정점 탄젠트(= G-C3-06) | 두 조사 독립 도달 |
+| G-A4-04 | 레거시 `"light":"point"` 파서 드롭 | arsenal/demon_core 라이트 3개 전멸 |
+| G-A1-1 / G-B2-04 | `#require LightingV1` 프롤로그 미합성 | 셰이더 **8개** 공통 뿌리. 1단계(라이트 0 본문 합성)만으로 8개 동시 해금 |
+| G-A3-1 | 콤보 키 대소문자 | WE 자기 자산 `fantasticcar` 가 `"paintwork":1`(소문자) vs `#ifdef PAINTWORK` → 차체가 안 칠해짐. 셰이더 콤보 저작 **46/61(75%)이 소문자** |
+| G-A3-2 | 파티클 LIGHTING 콤보 미구현 + `== 1` 비교 | WE `#if REFRACT` 는 **0 이 아닌 모든 값**에 참 |
+| G-B3-01 | `refraction` 의 `compose:true` 패스 무시 → 배경이 굴절되지 않음 | 굴절 효과가 사실상 무효 |
+| G-B3-02 | 정점 변위형(`skew` MODE=1)이 NDC 에 픽셀 오프셋을 더해 **레이어를 화면 밖으로 날림** | |
+| G-B1-2 | `g_ParallaxPosition` 을 생 커서 UV 로 별칭 | WE 는 `0.5·(1−influence) + cursor·influence` + 지연 스무딩 + Y 반전. `cameraparallax:false` 여도 Waple 은 계속 움직임 |
+| G-B4-02 | waterwaves `direction` 을 도(度)로 취급 | WE 저장은 **라디안**(에디터 `degreeConverter` 가 표시만 도). 코퍼스 도달 1위(83/162) |
+| G-B4-03/04 | waterripple 슬롯이 WE 와 뒤바뀜 + 수식 4항 누락 | 현재 **무동작**(중립 노멀 폴백 때문) |
+
+### 2.7 미디어 · 텍스처 · 프레임
+
+| ID | 갭 | 비고 |
+| --- | --- | --- |
+| G-E2-10 | 비디오 정렬이 앱 전역 3모드 | WE 는 **배경별** 5모드(Cover/Fill/Center/Stretch/Free) + 팬/줌/좌우반전. 코퍼스 비디오 145종 |
+| G-E2-12 | 볼륨/배속 변경이 렌더러 재장착 | WE 는 `IMFMediaEngine::SetVolume` 라이브 호출. 슬라이더 드래그마다 영상이 되감김 |
+| G-D1-02 | `general.quality` 는 **유령 키**(C1 이 독립 확인) | 실제로는 앱 설정 `postprocessing`. HDR 피라미드는 `ultra` 전용이고 medium/high 는 LDR 3패스 |
+| G-D1-03 | fps 가 30/60 뿐 | WE 는 10~주사율 임의 정수(이 설치본 24) |
+| G-E1-1 | slice3d(3D LUT) 를 2D 스트립으로 읽음 | 설치본 LUT 28개. `ccsimple` 소비처 자체가 없어 현재는 무해 |
+
+## 3. 반증된 것 — 다시 파지 마라
+
+이 라운드의 산출 중 **"고칠 게 없다" 는 결론**도 같은 무게로 중요하다.
+
+- **`spec/` 오염 신고는 오탐이다.** C3 가 `mdl-deep.json` 코퍼스 축소와 `mul-convention.json`
+  `translatorEmits` 반전을 보고했으나, 실측 결과 `translatorEmits` 는 `"(b * a)"` 그대로이고
+  `mul.reach` 도 존재하며 `mdl-deep.json` 의 `91565/91566` 도 그대로다. 워크트리는 HEAD 와 동일했다.
+- **씬 전역 wind/gravity 는 파티클 외력이 아니다** (C2). 문자열 6개 전부 씬 general 파서 클러스터에만
+  있고, 파티클 코드 영역(0x1b9000–0x1d9000)에서 그 오프셋을 읽는 부동소수 명령이 **하나도 없다**.
+  같은 리비전 블록이 "rope IK sim" 이다. → **rope/bone 물리 입력**으로 재범위화할 것.
+  `BACKLOG.md` 의 해당 항목을 파티클 축에서 닫아야 한다.
+- **블렌드 모드 32종은 전부 파리티다** (A5, 수식 단위 대조). 남은 차이는 `[0,1]` 밖 입력에서만
+  갈리는 D3 이탈뿐이고, 그 유일한 도달 경로(2D `Brightness`)가 미구현이라 **현재 도달 0**.
+- **`.tex` 는 WE 설치본 440개 전건 파스·디코드 성공** (E1). 밉 체인 262/262, TEXS 61/61 정확.
+- **LDR 블룸을 피라미드화할 필요가 없다** (D1). WE 의 LDR 블룸도 고정 3패스이고 13탭 계수까지 일치.
+- **`srgb` 는 죽은 키가 맞다** (E1). 헤더 비트 `0x10` 은 세우지만 런타임 소비처가 없다
+  (`FUN_1400d2a20` 포맷표에 sRGB DXGI 포맷 0개, 샘플러 키 비트에 미포함).
+- **3D 오일러 순서 `Rz·Ry·Rx` 는 확정이다** (C3·D2 독립 도달). `Scene3DMath.swift` 의 "미판정"
+  주석은 해소됐다. 행렬 규약(GLM 열우선 + DirectXMath 투영)도 정합.
+- **`depth`/`lockangle`/`magic`/`smoothing`/`camerapreview`/`depthwriting` 을 무시하는 것이 맞다**
+  (D2·E3). 전부 원본 `.rdata` 널구분 검색 0건이거나 에디터 전용, 또는 저작자 오타다.
+- **커스텀 스크립트 모듈 임포트는 도달 0** (C4). 코퍼스 162 패키지 엔트리에 `.js` 가 없다.
+- **`analysis/rtti-vtables.json` 은 채울 수 없다** (D2·D3 독립 도달). 엔진이 `/GR-` 로 빌드돼
+  자체 폴리모픽 클래스의 RTTI 디스크립터가 **0개**다(COM 셰임 4개만 예외).
+
+## 4. 정본(spec) 갱신이 필요한 것
+
+이 라운드에서 **추정 → 확정**으로 올릴 수 있게 된 항목:
+
+| 파일 | 항목 | 근거 |
+| --- | --- | --- |
+| `assets/material-schema.json` | `effect.fbos.missingSizeDefault` = 1 | `0x1401e77e7 mov byte [rbp+0xc], 1` |
+| " | `effect.conditions.semantics` 전문 | `FUN_1401e63b0` — op 4종·AND 누산·미정의 콤보 0 |
+| " | `effect.pass.compose.semantics` (후보1 확정, 후보2 기각) | `0x1401e7dc3` + `effectcomposebackground.frag:14` |
+| " | `waple.gap.fboFormatDropped` 의 "영향(추정)" | 포맷 enum 표 + HDR 분기 |
+| " | `waple.gap.bindPrevAlias` **재작성** | `"previous"` 리터럴 부재 → "fbos[] 밖은 전부 −1" |
+| `engine/composite-refs.json` | `suffixHypothesis` **확정·기각** | `"a"` 는 고정 리터럴, `_b` 생성기 부재 |
+| `engine/hdr-bloom.json` | `upsampleWeightUnknown` 삭제 | `uniform-feed.json` 과 모순이었고 후자가 맞았다 |
+| `engine/render-pass.json` | `conditions` 비트 의미 정정 | bit0 은 리플렉션이 **아니라** 포맷 선택 + UV V 반전 |
+| `engine/mul-convention.json` | `mul.eulerOrder` 신설 | `glm::qua(vec3)` 항별 일치 |
+| `formats/tex-deep.json` | `flags.bits` 에 **bit4 누락** | 코퍼스가 `projects/` 를 제외해서 안 보였다(10건) |
+| **신설** `engine/audio-spectrum.json` | 오디오 파이프라인 전체 | E2 §정본 갱신 권고 참조 |
+| **신설** `engine/scene-object-layout.json` | `Obj` 279 프로퍼티 + flags 비트 | D2 §G-D2-12 |
+
+## 5. 이 라운드가 드러낸 메타 패턴
+
+이전 스윕들이 세운 세 패턴(수정의 전파 누락 / ASCII-only 검색이 만든 허위 부재 / 도달 비약)에
+**네 번째**가 추가된다.
+
+> **④ 정본이 맞았는데 구현이 안 따라갔다.**
+> `spec/engine/uniform-feed.json` 은 HDR 블룸 강도 정규화 식을 **확정 등급으로** 갖고 있었고
+> "재구현에서 가장 놓치기 쉬운 부분" 이라는 경고까지 달아 뒀다. 그런데 `hdr-bloom.json` 은 같은
+> 항목을 "미확인 추정" 으로 적고 있었고 **구현은 후자를 따랐다.** 정본 안의 두 파일이 서로
+> 모순일 때 아무도 알아채지 못한 것이다.
+> → 대책: 같은 사실을 두 정본 파일이 말하면 **한쪽이 다른 쪽을 참조**하게 하고, 등급이 갈리면
+> CI 가 잡도록 한다.
+
+그리고 ②의 변종 하나가 새로 확인됐다.
+
+> **②′ 디컴파일 코퍼스의 잘린 함수를 "부재" 로 읽었다.**
+> 오브젝트 팩토리와 씬 프로퍼티 등록기가 각각 100 B / 36 B 로 잘려 있었다. 그 안에 `sprite`
+> 오브젝트 타입과 `castshadow` 기본값이 있었다. **"디컴파일에 없다" 는 "WE 에 없다" 가 아니다.**
