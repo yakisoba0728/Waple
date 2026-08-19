@@ -549,7 +549,7 @@
     {
      "kind": "corpus",
      "ref": "워크샵 scene.pkg 170개의 .tex 헤더 전수",
-     "note": "코퍼스 경로 = /Users/yakisoba/Downloads/wallpaper_dev/backgrounds. 코퍼스 크기가 다른 머신에서 재생성하면 이 도수는 달라진다 — 도수가 아니라 **분포의 형태**가 주장이다"
+     "note": "코퍼스 경로 = $WAPLE_REAL_PKGS. 코퍼스 크기가 다른 머신에서 재생성하면 이 도수는 달라진다 — 도수가 아니라 **분포의 형태**가 주장이다"
     },
     {
      "kind": "script",
@@ -864,7 +864,7 @@
     {
      "kind": "corpus",
      "ref": "워크샵 scene.pkg 170개의 .tex 헤더 전수",
-     "note": "코퍼스 경로 = /Users/yakisoba/Downloads/wallpaper_dev/backgrounds. 코퍼스 크기가 다른 머신에서 재생성하면 이 도수는 달라진다 — 도수가 아니라 **분포의 형태**가 주장이다"
+     "note": "코퍼스 경로 = $WAPLE_REAL_PKGS. 코퍼스 크기가 다른 머신에서 재생성하면 이 도수는 달라진다 — 도수가 아니라 **분포의 형태**가 주장이다"
     },
     {
      "kind": "script",

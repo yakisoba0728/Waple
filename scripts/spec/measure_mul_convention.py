@@ -357,7 +357,7 @@ def main():
             "mul.reach",
             corpus,
             "확정",
-            [specfmt.ev("corpus", f"{CORPUS} — scene.pkg {corpus['packagesScanned']}개 전수"),
+            [specfmt.ev("corpus", f"$WAPLE_REAL_PKGS — scene.pkg {corpus['packagesScanned']}개 전수"),
              specfmt.ev("shader", f"lightshafts.frag mask 체인 재현 (sha256_16 {sha16(LIGHTSHAFTS_FRAG)}), 65² 격자"),
              S]))
     else:
