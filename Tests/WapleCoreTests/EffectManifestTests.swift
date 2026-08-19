@@ -2,6 +2,31 @@ import XCTest
 @testable import WapleCore
 
 final class EffectManifestTests: XCTestCase {
+
+    /// 중복 FBO 이름이 파스를 통과하고, **소비처가 그것으로 죽지 않아야** 한다.
+    ///
+    /// `EffectManifest` 는 치수만 8192 로 클램프하고 이름 유일성은 보지 않는다(설계상 그대로 둔다 —
+    /// 파서는 파일이 말하는 것을 그대로 옮기는 게 맞다). 문제는 소비처였다:
+    /// `SceneRendererResources.swift:573` 이 `Dictionary(uniqueKeysWithValues:)` 로 이름→인덱스
+    /// 표를 만들면서 중복 키에 트랩했고, 그 줄이 `loadEffectManifest` 바로 다음이라
+    /// **셰이더 해석보다 먼저** 터졌다. 매니페스트는 pkg 우선 조회라 워크샵 pkg 가 자체
+    /// `effects/<name>/effect.json` 을 실으면 그대로 도달한다.
+    ///
+    /// 여기서는 파서가 중복을 보존하는지(= 소비처가 중복을 실제로 받게 되는지)를 고정한다.
+    /// 소비처의 무트랩 규약은 같은 커밋에서 `uniquingKeysWith:` 로 바뀌었다.
+    func testDuplicateFboNamesArePreservedForConsumers() throws {
+        let json = """
+        {"passes":[{"material":"materials/effects/a.json","target":"_rt_Dup"}],
+         "fbos":[{"name":"_rt_Dup","scale":1},{"name":"_rt_Dup","scale":4}]}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.fbos.count, 2, "파서는 중복을 접지 않는다 — 접으면 소비처가 중복을 못 본다")
+        XCTAssertEqual(m.fbos.map(\.name), ["_rt_Dup", "_rt_Dup"])
+        // 소비처가 쓰는 것과 같은 방식으로 표를 만들어도 트랩하지 않아야 한다(뒤가 이긴다).
+        let index = Dictionary(m.fbos.enumerated().map { ($1.name, $0) },
+                               uniquingKeysWith: { _, later in later })
+        XCTAssertEqual(index["_rt_Dup"], 1, "중복 이름은 뒤 선언이 이겨야 한다")
+    }
     /// 실물 localcontrast effect.json 구조 그대로.
     func testParsesPassesTargetsBindsFbos() throws {
         let json = """

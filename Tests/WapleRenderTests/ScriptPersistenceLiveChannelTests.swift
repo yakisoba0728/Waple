@@ -156,4 +156,47 @@ final class ScriptPersistenceLiveChannelTests: XCTestCase {
         renderer.sceneAudio = nil
         renderer.occlusionStopAudio()   // 오디오 없는 씬 — 안전 no-op(무회귀)
     }
+
+    /// 씬 스크립트 localStorage 에 **상한**이 있어야 한다.
+    ///
+    /// `flush()` 가 디바운스마다 전체 딕셔너리를 디스크에 재기록하고 teardown 후에도 파일이
+    /// 남으므로, 상한이 없으면 워크샵 스크립트 하나가 메모리와 디스크를 무제한 늘린다.
+    /// 형제 `WebRenderer.maxBridgeStringBytes`(F840, :70)는 1024B 상한이 이미 있었고
+    /// 이 브리지만 없었다 — 수정의 전파 누락이다.
+    func testScriptLocalStorageEnforcesCaps() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WapleStorageCaps-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ScriptLocalStorage(sceneId: "caps", baseDirectory: dir, debounce: 3600)
+
+        // 정상 항목은 통과한다(상한이 정상 사용을 막으면 안 된다).
+        store.set(key: "ok", json: "\"v\"")
+        XCTAssertEqual(store.usage.entries, 1)
+
+        // 거대 값 — 거절되고 사용량이 늘지 않아야 한다.
+        store.set(key: "big", json: String(repeating: "x", count: 200_000))
+        XCTAssertEqual(store.usage.entries, 1, "값 상한을 넘은 항목이 저장됐다")
+
+        // 거대 키 — 마찬가지.
+        store.set(key: String(repeating: "k", count: 4_000), json: "\"v\"")
+        XCTAssertEqual(store.usage.entries, 1, "키 상한을 넘은 항목이 저장됐다")
+
+        // 바이트 회계는 **항목 수 상한에 닿기 전에** 검증한다 — 상한에 닿은 뒤엔 set 이 정당하게
+        // 거절되므로 회계 증가를 볼 수 없다.
+        let before = store.usage.bytes
+        store.set(key: "acct", json: "\"1234567890\"")
+        XCTAssertGreaterThan(store.usage.bytes, before)
+        store.delete(key: "acct")
+        XCTAssertEqual(store.usage.bytes, before, "delete 후 바이트 회계가 원복되지 않았다")
+
+        // 항목 수 상한. 1,000개를 밀어넣어도 상한에서 멈춘다.
+        for i in 0..<1_000 { store.set(key: "k\(i)", json: "\"\(i)\"") }
+        let entries = store.usage.entries
+        XCTAssertLessThanOrEqual(entries, 512, "항목 수 상한이 걸리지 않았다(\(entries)개)")
+        XCTAssertGreaterThan(entries, 1, "상한이 너무 빡빡해 정상 사용까지 막는다")
+
+        store.clear()
+        XCTAssertEqual(store.usage.entries, 0)
+        XCTAssertEqual(store.usage.bytes, 0, "clear 후 바이트 회계가 0 이어야 한다")
+    }
 }

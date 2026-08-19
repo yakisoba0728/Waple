@@ -320,7 +320,14 @@ public enum ShaderPreprocessor {
                     } else if let m = def.fn {
                         lines[i] = GLSLTranslator.rewriteCall(before, def.name) { args in
                             guard args.count == m.params.count else { return nil }
-                            return GLSLTranslator.replaceIdentifiers(m.body, Dictionary(uniqueKeysWithValues: zip(m.params, args)))
+                            // 중복 키는 **뒤가 이긴다**(uniquingKeysWith). `#define FOO(a,a)` 는 애초에
+                            // 불법 GLSL 이지만, pkg 안의 셰이더는 신뢰 경계 밖이라 파서가 죽는 대신
+                            // 뭐라도 내야 한다 — 종전 `uniqueKeysWithValues` 는 그 입력에서 그대로 트랩했다.
+                            // 형제 `PropertyConditionEvaluator.swift:12` 가 2026-08 에 같은 이유로 같은
+                            // 선택을 했는데 이 자리로 오지 않았다(수정의 전파 누락).
+                            return GLSLTranslator.replaceIdentifiers(
+                                m.body,
+                                Dictionary(zip(m.params, args), uniquingKeysWith: { _, later in later }))
                         }
                     }
                     if lines[i] != before { changed = true }
