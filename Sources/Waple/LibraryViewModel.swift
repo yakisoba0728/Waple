@@ -26,13 +26,27 @@ final class LibraryViewModel: ObservableObject {
     @Published var activeFolder: String?
     @Published var sortOrder: LibrarySortOrder = .recentFirst
 
+    /// F840: 필터 결과 캐시. 종전에는 **읽을 때마다** 전체 엔트리를 걸러·정렬하고 Set 두 개
+    /// (allTags/allRatings)를 새로 만들었다. WallpaperGridView.body 가 한 패스에서 이 값을 세 번
+    /// 읽으므로 검색어 한 글자마다 전 엔트리 필터+정렬이 3회 돌았다.
+    /// 무효화는 `objectWillChange` 구독 하나로 한다(init) — 입력(entries/searchText/criteria/
+    /// sortOrder/activeFolder/폴더·즐겨찾기 스토어)이 바뀌는 모든 경로가 이미 그 신호를 낸다
+    /// (@Published 대입은 자동, 스토어 변경 경로는 명시 `objectWillChange.send()`).
+    /// 입력을 일일이 열거해 키를 만드는 대신 이 신호를 쓰면 "새 입력을 추가하며 무효화를 빠뜨리는"
+    /// 실수 자체가 생기지 않는다.
+    private var filteredCache: [LibraryEntry]?
+    private var invalidationCancellable: AnyCancellable?
+
     var filteredEntries: [LibraryEntry] {
+        if let cached = filteredCache { return cached }
         // 폴더는 사이드바가 고르는 걸러보기다 — 고르지 않았으면 좁히지 않는다(LibraryFolders 참조).
         // 폴더 안에서의 검색은 그 폴더 안에서 한다: 사이드바가 폴더를 강조하고 있는데 결과가
         // 폴더 밖까지 나오면 좌측 강조가 거짓말이 된다.
         let scoped = LibraryFolders.scoped(entries, folders: folders.folders, active: activeFolder)
-        return LibraryFiltering.apply(scoped, search: searchText, criteria: criteria,
-                                      sort: sortOrder, isFavorite: { self.favorites.isFavorite($0) })
+        let result = LibraryFiltering.apply(scoped, search: searchText, criteria: criteria,
+                                            sort: sortOrder, isFavorite: { self.favorites.isFavorite($0) })
+        filteredCache = result
+        return result
     }
     var availableTags: [String] {
         Array(Set(entries.flatMap { $0.tags ?? [] })).sorted()
@@ -102,6 +116,11 @@ final class LibraryViewModel: ObservableObject {
         self.folders = folders
         self.entries = store.entries
         self.selectedId = store.selectedId
+        // F840: 어떤 입력이 바뀌든 ObservableObject 는 objectWillChange 를 먼저 낸다(willSet 시점) —
+        // 그 순간 캐시를 버리면 다음 읽기가 새 값으로 다시 계산한다.
+        invalidationCancellable = objectWillChange.sink { [weak self] _ in
+            self?.filteredCache = nil
+        }
     }
 
     // MARK: - 재생목록/모니터별

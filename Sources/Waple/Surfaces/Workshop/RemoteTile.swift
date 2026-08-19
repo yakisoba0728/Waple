@@ -35,7 +35,11 @@ struct WorkshopPreview: View {
 
     private func load() async {
         image = nil
-        guard let url else { return }
+        // F840: 원격이 준 문자열에서 만든 URL 이다. URLSession 은 file:// 도 그대로 처리하므로
+        // 스킴 검증 없이 넘기면 원격이 지목한 로컬 파일을 앱이 읽어 타일에 그린다(로컬 파일 노출).
+        // 파서(WorkshopResponseParser)에서 이미 https 만 통과시키지만, 여기서도 한 번 더 확인한다 —
+        // 이 뷰는 임의의 URL 을 받을 수 있는 공개 소비자다(NowPlayingProvider.isValidArtworkURL, F564 와 동일 정책).
+        guard let url, url.scheme?.lowercased() == "https" else { return }
         if let cached = WorkshopPreviewCache.cache.object(forKey: url as NSURL) { image = cached; return }
         guard let (data, _) = try? await URLSession.shared.data(from: url),
               let img = NSImage(data: data) else { return }

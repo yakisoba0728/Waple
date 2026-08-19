@@ -310,7 +310,10 @@ enum OcclusionMode {
 /// 한 곳에서만 판정 — AppDelegate 가 반환 액션대로 renderers 에 적용한다(병렬 사본 아님). 사유마다
 /// pause/resume 를 손으로 가드하지 않으므로 한 사유가 다른 사유를 덮어쓰는 실수가 원천 차단된다.
 struct PauseGate {
-    enum Reason { case occlusion, manual, sleep }
+    /// F840: 시스템 슬립(.sleep)과 디스플레이 슬립(.displaySleep)은 **서로 다른 사유**다.
+    /// 종전에는 넷(willSleep/screensDidSleep/didWake/screensDidWake)이 전부 .sleep 하나를
+    /// 켜고 껐기 때문에, 둘 중 한쪽이 아직 자고 있어도 다른 쪽의 첫 웨이크가 정지를 풀었다.
+    enum Reason { case occlusion, manual, sleep, displaySleep }
     enum Action { case pause, resume, none }
 
     private(set) var reasons: Set<Reason> = []

@@ -311,11 +311,21 @@ public final class LibraryStore {
             return nil
         }
         // macOS 가 stale 을 표시하면 북마크를 재생성·영속화해야 향후 해석 실패를 막는다.
+        // F840: 그 영속화를 **다음 런루프로 미룬다**. resolveFolderURL 은 LibraryViewModel.previewState
+        // 경유로 SwiftUI `body` 평가 중에 불린다 — 종전에는 그 자리에서 entries 를 변형하고
+        // library.json 을 통째로 다시 쓰는 동기 디스크 I/O 가 일어났다(뷰 업데이트 중 상태 변경 +
+        // 그리드 스크롤마다 쓰기). 해석 결과는 지금 그대로 돌려주고 저장만 뒤로 미루면
+        // 재해석 비용도, 저장 목적(다음 실행에서의 해석 실패 방지)도 그대로다.
         if stale, let fresh = try? resolved.bookmarkData(
-            options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
-           let idx = entries.firstIndex(where: { $0.id == entry.id }) {
-            entries[idx].bookmark = fresh
-            save()
+            options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            let entryId = entry.id
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                      let idx = self.entries.firstIndex(where: { $0.id == entryId }),
+                      self.entries[idx].bookmark != fresh else { return }
+                self.entries[idx].bookmark = fresh
+                self.save()
+            }
         }
         return resolved
     }

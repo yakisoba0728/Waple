@@ -76,6 +76,17 @@ enum WorkshopQuery {
         return comps.url
     }
 
+    /// F840: publishedfileid 살균 — **숫자만**. 이 문자열은 steamcmd argv 와 파일 경로 두 곳으로
+    /// 흘러간다. 셸도 보간도 없지만 steamcmd 는 `+` 로 시작하는 argv 를 **새 명령**으로 해석하므로
+    /// id 하나가 `+runscript` 면 임의 명령이 주입되고(SteamCmdDownloader.arguments),
+    /// 같은 문자열이 `steamapps/workshop/content/<appid>/<id>` 경로 조각으로도 들어가
+    /// `../` 탈출이 된다(SteamCmdDownloader.resultPathCandidates).
+    /// LibraryStore 의 F580(패키지 선언 id 살균)과 같은 규율 — **값이 계에 들어오는 지점**에서 막는다.
+    /// 상한 20자리: 실제 publishedfileid 는 64비트 10진수라 최대 20자리다.
+    static func isValidPublishedFileID(_ id: String) -> Bool {
+        !id.isEmpty && id.count <= 20 && id.allSatisfy { $0.isASCII && $0.isNumber }
+    }
+
     private static func trimmed(_ s: String) -> String {
         s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -97,7 +108,12 @@ enum WorkshopResponseParser {
     private static func item(from obj: [String: Any]) -> WorkshopItem? {
         guard let id = lenientString(obj["publishedfileid"]), !id.isEmpty else { return nil }
         let title = lenientString(obj["title"]) ?? id
-        let preview = lenientString(obj["preview_url"]).flatMap(URL.init(string:))
+        // F840: preview_url 은 원격 문자열이다. URLSession 은 file:// 도 그대로 처리하므로
+        // 스킴 검증 없이 넘기면 원격이 지정한 로컬 파일을 앱이 읽어 화면에 그린다.
+        // https 만 허용(NowPlayingProvider.isValidArtworkURL 의 F564 와 같은 정책).
+        let preview = lenientString(obj["preview_url"])
+            .flatMap(URL.init(string:))
+            .flatMap { $0.scheme?.lowercased() == "https" ? $0 : nil }
         let vote = (obj["vote_data"] as? [String: Any]).flatMap { lenientDouble($0["score"]) }
         return WorkshopItem(
             id: id,
@@ -257,9 +273,22 @@ struct WorkshopClient {
     /// URL → (Data, HTTP status). 기본은 URLSession.
     var transport: (URL) async throws -> (Data, Int)
 
+    /// F840: `URLSession.shared` 를 쓰지 않는다. 공유 세션의 `URLCache.shared` 는 **전체 URL 문자열**을
+    /// 키로 디스크 캐시(`~/Library/Caches/<bundleid>/Cache.db`)를 만드는데, 검색 URL 은
+    /// `?key=<API 키>` 를 쿼리로 달고 나간다(WorkshopQuery.searchURL) — 캐시 가능한 응답이 한 번만
+    /// 와도 Keychain 전용이어야 할 키가 평문으로 디스크에 남는다. README·설정 UI 의
+    /// "키는 Keychain 에만 저장됩니다" 와 정면으로 모순되는 상태였다.
+    /// `.ephemeral` 은 캐시·쿠키·자격증명을 전부 메모리에만 둔다(urlCache=nil 로 한 번 더 못 박는다).
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: config)
+    }()
+
     static func live() -> WorkshopClient {
         WorkshopClient { url in
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await WorkshopClient.session.data(from: url)
             let code = (response as? HTTPURLResponse)?.statusCode ?? 200
             return (data, code)
         }

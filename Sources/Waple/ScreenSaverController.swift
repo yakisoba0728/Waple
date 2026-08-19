@@ -83,8 +83,12 @@ enum ScreenSaverController {
     static func enable(currentProject: WallpaperProject?) throws {
         guard let bundled = Bundle.main.url(forResource: ScreenSaverLogic.saverName,
                                             withExtension: "saver") else {
+            // F840: 이 문자열은 AppDelegate.toggleScreenSaverCore 의 알림에 `error.localizedDescription`
+            // 으로 그대로 실려 사용자에게 보인다 — 생 리터럴이면 영어 UI 에서 사유만 한국어로 남는다
+            // (그 호출부 주석이 "이 파일은 동결이라 손대지 않았다(보고)"로 남겨 둔 자리다).
             throw NSError(domain: "Waple", code: 1, userInfo: [NSLocalizedDescriptionKey:
-                "앱 번들에 Waple.saver 가 없습니다 — scripts/package-app.sh 로 패키징한 앱에서 실행하세요."])
+                NSLocalizedString("앱 번들에 Waple.saver 가 없습니다 — scripts/package-app.sh 로 패키징한 앱에서 실행하세요.",
+                                  comment: "화면보호기 설치 실패 — 앱 번들에 .saver 부재")])
         }
         let fm = FileManager.default
         try fm.createDirectory(at: screenSaversDirectory, withIntermediateDirectories: true)

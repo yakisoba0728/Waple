@@ -115,6 +115,17 @@ enum SteamCmdDownloader {
     static func download(itemId: String, username: String, timeout: TimeInterval = 900,
                          progress: @escaping (Progress) -> Void,
                          completion: @escaping (URL?) -> Void) {
+        // F840: itemId 는 원격(Steam Web API) 문자열이다. 셸도 문자열 보간도 없지만
+        //  (1) steamcmd 는 `+` 로 시작하는 argv 를 **새 명령**으로 읽는다 — id 가 `+runscript` 면
+        //      arguments() 가 만든 argv 에 명령이 하나 끼어든다.
+        //  (2) 같은 문자열이 resultPathCandidates 의 `content/<appid>/<id>` 경로 조각으로도 들어가
+        //      `../` 탈출이 된다.
+        // 그래서 계에 들어오는 이 지점에서 숫자로 확정한다(LibraryStore 의 F580 과 같은 규율).
+        guard WorkshopQuery.isValidPublishedFileID(itemId) else {
+            WapleLog.warn("[Waple] refusing steamcmd download for non-numeric workshop id: \(itemId)")
+            completeOnMain(completion, nil)
+            return
+        }
         guard let exe = executableURL else {
             WapleLog.warn("[Waple] steamcmd not found — 'brew install steamcmd' to download workshop items")
             completeOnMain(completion, nil)
