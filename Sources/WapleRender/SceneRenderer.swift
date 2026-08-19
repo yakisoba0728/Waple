@@ -1191,7 +1191,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             // 공유(base-assets) 리졸버: pkg 에 없는 util 모델/머티리얼 JSON(솔리드 레이어 등) 폴백.
             doc = try WapleProfiler.time("docParse") {
                 let assetRoots = BaseAssetsSettings.searchRoots
-                return try SceneDocument.parse(package: package, sceneFileName: project.fileName, sharedAssetProbe: { name in
+                return try SceneDocument.parse(package: package, sharedAssetProbe: { name in
                     Self.sharedAssetProbe(name, roots: assetRoots)
                 }, onMissingRequiredAsset: { [weak self] in
                     self?.markMissingRequiredSharedAsset()
@@ -1200,7 +1200,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     projectDefaults: baseProps,
                     presetOverrides: project.presetOverrides,
                     presetResourceRoot: project.presetFolderURL
-                ))
+                ), sceneFileName: project.fileName)
             }
         } catch {
             NSLog("%@", "[Waple] scene mount: failed to parse \(sourceDescription): \(error)")

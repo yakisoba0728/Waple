@@ -933,8 +933,8 @@ extension SceneDocument {
         // (`audiophile.json` `fantasticcar.json` `ricepod.json` `techno.json`, 그리고 GIF 템플릿의
         // `gifscene.json`). 워크샵 코퍼스는 전건 `scene.json` 이라 이 결함이 지금까지 안 잡혔다.
         // 호출자가 이름을 주지 않으면 종전 관례 순서로 폴백한다(무회귀).
-        let sceneCandidates = [sceneFileName, "scene.json", "gifscene.json"].compactMap { $0 }
-        guard let sceneData = sceneCandidates.lazy.compactMap({ package.data(for: $0) }).first,
+        let sceneCandidates: [String] = [sceneFileName, "scene.json", "gifscene.json"].compactMap { $0 }
+        guard let sceneData = sceneCandidates.compactMap({ package.data(for: $0) }).first,
               var scene = (try? JSONSerialization.jsonObject(with: sceneData)) as? [String: Any] else {
             throw SceneDocumentError.noScene
         }
