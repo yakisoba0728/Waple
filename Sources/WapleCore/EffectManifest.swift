@@ -40,10 +40,75 @@ public struct EffectManifest: Equatable {
 
     public let passes: [Pass]
     public let fbos: [FBO]
+    /// G-B4-08: 이 이펙트의 **자산 basename**. 디렉터리명과 다를 수 있다 — 동봉 WEAssets 최상위
+    /// effect.json 46개가 **전건** 이 키를 갖고, 그중 7개가 디렉터리명과 다르다:
+    /// `_empty→empty` · `blurprecise→blur_precise` · `blurradial→blur_radial` ·
+    /// `chromaticaberration→chromatic_aberration` · `depthparallax→iris` · `refraction→refract` ·
+    /// `watercaustics→caustics`. 머티리얼 JSON 을 못 읽어 관례 셰이더명으로 폴백할 때
+    /// `effects/<디렉터리명>` 을 쓰면 이 7종은 존재하지 않는 경로를 찾게 된다.
+    public let replacementKey: String?
 
-    public init(passes: [Pass], fbos: [FBO]) { self.passes = passes; self.fbos = fbos }
+    public init(passes: [Pass], fbos: [FBO], replacementKey: String? = nil) {
+        self.passes = passes; self.fbos = fbos; self.replacementKey = replacementKey
+    }
+
+    /// WE 의 JSON 파서는 관용이다 — 자기 자산이 그 관용에 의존한다. 동봉 WEAssets 실측:
+    /// effect.json 122개 중 **27개가 RFC 엄격 파스에 실패**한다(최상위 `fluidsimulation` 1개는
+    /// `dependencies` 배열의 트레일링 콤마, 나머지 26개 preview 는 `//` 줄 주석). 27개 전부
+    /// 아래 전처리로 복구된다.
+    ///
+    /// 그래서 **엄격 파스를 먼저 시도하고 실패했을 때만** 이 전처리를 쓴다 — 정상 자산은 종전
+    /// 경로 그대로라 무회귀이고, 관용은 딱 두 가지(줄 주석 · 트레일링 콤마)로 제한한다.
+    /// 스캐너는 문자열 리터럴 안을 절대 건드리지 않는다(이스케이프 처리 포함) — `{"a":"x,]"}`
+    /// 같은 값이 깨지면 안 된다.
+    static func relaxedJSON(_ data: Data) -> Data? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        var out = String(); out.reserveCapacity(text.count)
+        var inString = false
+        var i = text.startIndex
+        while i < text.endIndex {
+            let c = text[i]
+            if inString {
+                out.append(c)
+                if c == "\\" {
+                    let next = text.index(after: i)
+                    if next < text.endIndex { out.append(text[next]); i = text.index(after: next); continue }
+                } else if c == "\"" {
+                    inString = false
+                }
+                i = text.index(after: i); continue
+            }
+            if c == "\"" { inString = true; out.append(c); i = text.index(after: i); continue }
+            // 줄 주석: `//` 부터 개행 전까지 버린다(개행은 남긴다 — 줄 번호 보존).
+            if c == "/" {
+                let next = text.index(after: i)
+                if next < text.endIndex, text[next] == "/" {
+                    while i < text.endIndex, text[i] != "\n" { i = text.index(after: i) }
+                    continue
+                }
+            }
+            // 트레일링 콤마: `,` 뒤 공백만 지나 `]`/`}` 가 오면 그 콤마를 버린다.
+            if c == "," {
+                var j = text.index(after: i)
+                while j < text.endIndex, text[j] == " " || text[j] == "\t" || text[j] == "\r" || text[j] == "\n" {
+                    j = text.index(after: j)
+                }
+                if j < text.endIndex, text[j] == "]" || text[j] == "}" {
+                    i = text.index(after: i); continue
+                }
+            }
+            out.append(c); i = text.index(after: i)
+        }
+        return out.data(using: .utf8)
+    }
 
     public static func parse(_ data: Data) -> EffectManifest? {
+        if let strict = parseStrict(data) { return strict }
+        guard let relaxed = relaxedJSON(data) else { return nil }
+        return parseStrict(relaxed)
+    }
+
+    private static func parseStrict(_ data: Data) -> EffectManifest? {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let rawPasses = obj["passes"] as? [[String: Any]], !rawPasses.isEmpty else { return nil }
         var passes: [Pass] = []
@@ -83,7 +148,8 @@ public struct EffectManifest: Equatable {
             let uvsRepeat = (f["uvs"] as? String) == "repeat"
             fbos.append(FBO(name: name, scale: Swift.max(1, scale), fixedWidth: fixedW, fixedHeight: fixedH, uvsRepeat: uvsRepeat))
         }
-        return EffectManifest(passes: passes, fbos: fbos)
+        let replacementKey = (obj["replacementkey"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return EffectManifest(passes: passes, fbos: fbos, replacementKey: replacementKey)
     }
 
     private static func safeInt(_ v: Any?) -> Int? {

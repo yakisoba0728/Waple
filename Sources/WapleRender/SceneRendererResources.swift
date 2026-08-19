@@ -582,6 +582,12 @@ extension SceneRenderer {
         var anyAudio = false
         // 출력 패스(target==nil)가 DIRECTDRAW 면 체인 결과가 premultiplied — EffectGPU 로 실어 보낸다.
         var outputPremultiplied = false
+        // G-B2-06: 씬의 `effects[].passes[]` 는 **셰이더 패스만** 담는다(실측: motionblur 는
+        // effect.json 3패스 = 셰이더 2 + copy 1 인데 프리뷰 씬 패스는 2개, fluidsimulation 은
+        // 20 = 18 + swap 2 인데 씬 패스는 18개). 종전엔 매니페스트 인덱스를 그대로 씬 패스
+        // 인덱스로 써서, command 패스가 마지막 셰이더 패스보다 **앞**에 있으면 그 뒤가 전부
+        // 한 칸씩 밀렸다. 셰이더 패스만 세는 커서를 따로 둔다.
+        var scenePassCursor = 0
         for (i, mp) in manifest.passes.enumerated() {
             if mp.command == "copy" {
                 guard let copy = makeCopyPass(mp, effName: eff.name, fboIndex: fboIndex,
@@ -597,12 +603,13 @@ extension SceneRenderer {
                 passes.append(swap)
                 continue
             }
-            let meta = resolvePassShaderMeta(mp, eff: eff, package: package)
+            let meta = resolvePassShaderMeta(mp, eff: eff, manifest: manifest, package: package)
             guard let vData = quietAssetData("shaders/\(meta.base).vert", package: package),
                   let fData = quietAssetData("shaders/\(meta.base).frag", package: package),
                   let vert = String(data: vData, encoding: .utf8),
                   let frag = String(data: fData, encoding: .utf8) else { return nil }
-            let scenePass = i < eff.passList.count ? eff.passList[i] : SceneEffectPass()
+            let scenePass = scenePassCursor < eff.passList.count ? eff.passList[scenePassCursor] : SceneEffectPass()
+            scenePassCursor += 1
             let combos = resolvePassCombos(frag: frag, scenePass: scenePass,
                                            matCombos: meta.matCombos, matTextures: meta.matTextures)
             guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: include) else {
@@ -693,7 +700,8 @@ extension SceneRenderer {
 
     /// ③ 셰이더 이름 + 머티리얼 메타(combos/textures) 해석 — 패스에 shader 가 없으면 material JSON
     /// (passes[0])에서, 그마저 없으면 관례 "effects/<name>".
-    private func resolvePassShaderMeta(_ mp: EffectManifest.Pass, eff: SceneEffect, package: ScenePackage)
+    private func resolvePassShaderMeta(_ mp: EffectManifest.Pass, eff: SceneEffect,
+                                       manifest: EffectManifest, package: ScenePackage)
         -> (base: String, matCombos: [String: Int], matTextures: [String?]) {
         var shaderName = mp.shader
         var matCombos: [String: Int] = [:]
@@ -709,7 +717,9 @@ extension SceneRenderer {
             }
             if let texs = mp0["textures"] as? [Any] { matTextures = texs.map { $0 as? String } }
         }
-        return (shaderName ?? "effects/\(eff.name)", matCombos, matTextures)
+        // G-B4-08: 관례 폴백의 basename 은 디렉터리명이 아니라 `replacementkey` 다. 동봉 최상위
+        // effect.json 46개가 전건 이 키를 갖고 7개가 디렉터리명과 다르다(EffectManifest 주석 참조).
+        return (shaderName ?? "effects/\(manifest.replacementKey ?? eff.name)", matCombos, matTextures)
     }
 
     /// ④ 콤보 해석. 우선순위: 머티리얼 기본 < scene 패스 지정.
@@ -775,9 +785,19 @@ extension SceneRenderer {
             guard (0..<128).contains(b.index) else {
                 NSLog("%@", "[Waple] bind index oob \(b.index) in \(effName)"); return nil
             }
-            if b.name == "previous" { binds.append((b.index, -1)) }
-            else if let idx = fboIndex[b.name] { binds.append((b.index, idx)) }
-            else { NSLog("%@", "[Waple] unknown bind '\(b.name)' in \(effName)"); return nil }
+            // G-A5-04: WE 는 미지 이름에 **이펙트를 버리지 않는다**. effect.json 파서
+            // (원본 0x1401e7170)가 bind 소스를 `0xffffffff`(= −1, 이펙트 입력)로 초기화하고
+            // (0x1401e7eef) `fbos[]` 이름 선형 탐색에 **일치했을 때만** 덮어쓴다(0x1401e7f81).
+            // 그리고 원본 바이너리 전체에 `"previous"` 리터럴이 없다(ASCII 1건은
+            // `"#base: disabled by previous error"` 안, UTF-16LE 0건) — 즉 WE 의 규약은
+            // "previous 라는 이름"이 아니라 "**fbos[] 에 없는 이름은 전부 −1**" 이다.
+            // 종전처럼 드롭하면 이름 하나 틀린 워크샵 effect.json 에서 WE 는 (약간 틀리게라도)
+            // 그리고 Waple 은 이펙트가 통째로 사라진다. 진단 가치는 로그로 남긴다.
+            if let idx = fboIndex[b.name] { binds.append((b.index, idx)) }
+            else {
+                if b.name != "previous" { NSLog("%@", "[Waple] unknown bind '\(b.name)' in \(effName) — 이펙트 입력(-1)으로 폴백") }
+                binds.append((b.index, -1))
+            }
         }
         if binds.isEmpty { binds = [(0, -1)] }
         let bindSlots = Set(binds.map { $0.slot })
@@ -855,8 +875,12 @@ extension SceneRenderer {
                 }
             }
         }
+        // G-A5-04: 미지 target 도 마찬가지다. WE 는 target 인덱스를 `0xFF`(= 타깃 없음 =
+        // 이펙트 출력에 직접 기록)로 초기화하고(0x1401e7a99) 이름이 맞을 때만 덮어쓴다.
         let target: Int? = mp.target.flatMap { fboIndex[$0] }
-        if mp.target != nil && target == nil { NSLog("%@", "[Waple] unknown target in \(effName)"); return nil }
+        if mp.target != nil, target == nil {
+            NSLog("%@", "[Waple] unknown target '\(mp.target ?? "")' in \(effName) — 이펙트 출력으로 폴백")
+        }
         return (binds, texRes, aux, texWrap, texFilter, target, fullFrameSlots, mediaArtworkSlots)
     }
 

@@ -481,8 +481,11 @@ public enum DeepScan {
                 continue
             }
             let manifest = loadManifest(eff, res: res)
+            // G-B2-06 (렌더러와 동형): 씬 패스 배열은 셰이더 패스만 담는다 — command 패스를 세면
+            // 그 뒤가 한 칸씩 밀린다. 스캐너가 렌더러와 다른 콤보를 보고하지 않도록 같이 고친다.
+            var scenePassCursor = 0
             for (i, mp) in manifest.passes.enumerated() {
-                if mp.command == "copy" { continue }   // shader-less command pass
+                if mp.command == "copy" || mp.command == "swap" { continue }   // shader-less command pass
                 let meta = resolveShaderMeta(mp, eff: eff, res: res)
                 guard let vData = res.assetData("shaders/\(meta.base).vert"),
                       let fData = res.assetData("shaders/\(meta.base).frag"),
@@ -491,7 +494,8 @@ public enum DeepScan {
                     agg.sync { agg.effectShaderMissing += 1 }
                     continue
                 }
-                let scenePass = i < eff.passList.count ? eff.passList[i] : SceneEffectPass()
+                let scenePass = scenePassCursor < eff.passList.count ? eff.passList[scenePassCursor] : SceneEffectPass()
+                scenePassCursor += 1
                 let combos = resolveCombos(frag: frag, scenePass: scenePass, matCombos: meta.matCombos, matTextures: meta.matTextures)
                 let provenance = "\(projectID)/\(eff.name)#\(i) [\(meta.base)]"
                 agg.sync { agg.translateAttempt += 1 }
