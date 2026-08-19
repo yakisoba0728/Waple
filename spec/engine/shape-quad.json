@@ -43,7 +43,7 @@
    "evidence": [
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B — spec/binaries-fingerprint.json)"
     },
     {
      "kind": "script",
@@ -68,7 +68,7 @@
    "evidence": [
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B — spec/binaries-fingerprint.json)"
     },
     {
      "kind": "script",
@@ -94,7 +94,7 @@
    "evidence": [
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B — spec/binaries-fingerprint.json)"
     },
     {
      "kind": "script",
@@ -115,7 +115,7 @@
    "evidence": [
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B — spec/binaries-fingerprint.json)"
     },
     {
      "kind": "script",
@@ -284,7 +284,7 @@
    "evidence": [
     {
      "kind": "corpus",
-     "ref": "/Users/yakisoba/Downloads/wallpaper_dev/backgrounds (461 항목)"
+     "ref": "$WAPLE_REAL_PKGS (461 항목)"
     },
     {
      "kind": "script",
@@ -357,7 +357,7 @@
    "evidence": [
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B — spec/binaries-fingerprint.json)"
     },
     {
      "kind": "script",
@@ -383,7 +383,7 @@
    "evidence": [
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B — spec/binaries-fingerprint.json)"
     },
     {
      "kind": "script",
@@ -444,7 +444,7 @@
    "evidence": [
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B — spec/binaries-fingerprint.json)"
     },
     {
      "kind": "script",
@@ -487,7 +487,7 @@
    "evidence": [
     {
      "kind": "binary",
-     "ref": "wallpaper64.exe (WE 2.8.42) — /Users/yakisoba/Downloads/wallpaper_dev/WallpaperEngine-Windows/windows-reference/wallpaper_engine/wallpaper64.exe"
+     "ref": "wallpaper64.exe (WE 2.8.42) — $WE_BIN (sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 B — spec/binaries-fingerprint.json)"
     },
     {
      "kind": "script",
@@ -605,7 +605,7 @@
    "evidence": [
     {
      "kind": "corpus",
-     "ref": "/Users/yakisoba/Downloads/wallpaper_dev/backgrounds/3521337568/scene.pkg"
+     "ref": "$WAPLE_REAL_PKGS/3521337568/scene.pkg"
     },
     {
      "kind": "script",
@@ -693,7 +693,7 @@
    "evidence": [
     {
      "kind": "corpus",
-     "ref": "/Users/yakisoba/Downloads/wallpaper_dev/backgrounds/{3521337568,3640755971}/scene.pkg"
+     "ref": "$WAPLE_REAL_PKGS/{3521337568,3640755971}/scene.pkg"
     },
     {
      "kind": "asset",

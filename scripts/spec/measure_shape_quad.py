@@ -38,11 +38,22 @@
 (그 모듈 독스트링 참조) — 여기서는 그 리더를 그대로 재사용한다.
 """
 import collections
+import hashlib
 import json
 import os
 import re
 import struct
 import sys
+
+
+def _sha256_of(path):
+    """근거 ref 에 쓸 파일 지문. 경로 대신 이걸 적는다 — 경로는 머신마다 다르고
+    파일을 식별하지도 못한다(2026-08-19 스윕: 개인 경로가 정본에 12건 박혀 있었다)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specfmt
@@ -761,7 +772,10 @@ def main():
     confound_verification = measure_confound_verification()
     known_defect = measure_known_defect_scaled_quads()
 
-    binref = specfmt.ev("binary", "wallpaper64.exe (WE 2.8.42) — %s" % BIN)
+    # 근거에 **해석된 절대경로**를 박지 않는다 — 개인 머신 경로가 정본에 남고(§sweep 2026-08-19
+    # 에서 12건 발견) 다른 사람이 따라갈 수도 없다. 파일을 식별하는 것은 경로가 아니라 해시다.
+    binref = specfmt.ev("binary", "wallpaper64.exe (WE 2.8.42, sha256 %s, %d B) — $WE_BIN"
+                        % (_sha256_of(BIN), os.path.getsize(BIN)))
     scriptref = specfmt.ev("script", "scripts/spec/measure_shape_quad.py")
 
     entries = [
@@ -789,7 +803,7 @@ def main():
         specfmt.entry(
             "shape.corpusUsage",
             corpus,
-            "확정", [specfmt.ev("corpus", "%s (%d 항목)" % (WS, corpus["scanned"])), scriptref]),
+            "확정", [specfmt.ev("corpus", "$WAPLE_REAL_PKGS (%d 항목)" % corpus["scanned"]), scriptref]),
         specfmt.entry(
             "shape.previewBackSolveIsInvalid",
             previews,
@@ -877,7 +891,7 @@ def main():
             "shape.confoundVerification20260818",
             confound_verification,
             "확정", [
-                specfmt.ev("corpus", "%s/3521337568/scene.pkg" % WS),
+                specfmt.ev("corpus", "$WAPLE_REAL_PKGS/3521337568/scene.pkg"),
                 scriptref,
                 specfmt.ev("file", "Sources/WapleRender/SceneRendererResources.swift:271-272,280-281"),
                 specfmt.ev("file", "Sources/WapleRender/SceneRendererFrameEncoder.swift:510-521,549-553"),

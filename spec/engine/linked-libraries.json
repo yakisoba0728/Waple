@@ -1,0 +1,120 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_linked_libraries.py",
+ "entries": [
+  {
+   "id": "linkedLibs.sourcePaths",
+   "value": {
+    "DirectXMath": {
+     "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.26100.0\\um\\DirectXMathMatrix.inl": "0x476680"
+    },
+    "ffts": {
+     "D:\\dev\\we\\windows\\src\\ffts\\src\\ffts_static.c": "0x48a040"
+    },
+    "glm": {
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_mat3x3.inl": "0x485850",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_mat4x4.inl": "0x476c70",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec2.inl": "0x48db80",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec3.inl": "0x476bf0",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\detail\\type_vec4.inl": "0x476b20",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\gtc\\matrix_access.inl": "0x4857d0",
+     "D:\\dev\\we\\windows\\src\\lib\\include\\glm\\gtc\\quaternion.inl": "0x48fe80"
+    },
+    "json": {
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson/document.h": "0x4881d0",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\encodings.h": "0x4762f0",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal/stack.h": "0x476000",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal\\../allocators.h": "0x488330",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\internal\\pow10.h": "0x4756a0",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\reader.h": "0x475f60",
+     "D:\\dev\\we\\windows\\src\\json\\include\\rapidjson\\stream.h": "0x4763a0",
+     "D:\\dev\\we\\windows\\src\\json\\src\\json_reader.cpp": "0x483f00",
+     "D:\\dev\\we\\windows\\src\\json\\src\\json_value.cpp": "0x477440",
+     "D:\\dev\\we\\windows\\src\\json\\src\\json_writer.cpp": "0x4776a0"
+    },
+    "wallpaper": {
+     "D:\\dev\\we\\windows\\src\\wallpaper\\src\\wallpaper\\videowallpaper.cpp": "0x487370"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+    }
+   ]
+  },
+  {
+   "id": "linkedLibs.assertions",
+   "value": {
+    "glm": {
+     "(i) >= 0 && (i) < (this->length())": "0x476ba0",
+     "index >= 0 && index < m.length()": "0x485780",
+     "index >= 0 && index < m[0].length()": "0x48d210"
+    },
+    "DirectXMath": {
+     "NearZ > 0.f && FarZ > 0.f": "0x476730",
+     "!XMScalarNearEqual(FarZ, NearZ, 0.00001f)": "0x476770",
+     "!XMScalarNearEqual(FovAngleY, 0.0f, 0.00001f * 2.0f)": "0x4767d0",
+     "!XMScalarNearEqual(AspectRatio, 0.0f, 0.00001f)": "0x476840"
+    },
+    "json": {
+     "IsBool()": "0x488240",
+     "IsArray()": "0x488258",
+     "IsObject()": "0x488270"
+    },
+    "ffts": {
+     "N == 32": "0x48a0a0"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+    }
+   ]
+  },
+  {
+   "id": "linkedLibs.matrixConvention",
+   "value": {
+    "fact": "DirectXMath(행벡터·행우선)와 GLM(열벡터·열우선)이 **동시에** 링크돼 있다.",
+    "whyItMatters": "mul-convention.json 과 Scene3DMath 의 전치 논증은 행벡터 규약을 전제한다. 전제 자체는 XMMatrixPerspectiveFov* 어서션이 뒷받침하지만, GLM 병존은 **어느 행렬 경로가 어느 규약을 따르는가**를 미판정으로 만든다.",
+    "notAContradiction": "Scene3DMath.perspective 가 XMMatrixPerspectiveFovRH 와 성분 단위로 일치함은 별도로 확인됐다 — 이 항목은 '틀렸다'가 아니라 '근거가 하나 더 필요하다'는 기록이다.",
+    "nextStep": "gtc\\quaternion.inl 링크는 3D 오브젝트 회전 오일러 순서(Scene3DMath 가 '다축 혼합 회전 미판정' 으로 남긴 항목)를 정적으로 좁힐 출발점이다 — 쿼터니언 경유는 ZYX 내재 회전 관례를 함의한다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+    }
+   ]
+  },
+  {
+   "id": "linkedLibs.correctedClaims",
+   "value": {
+    "encoding": "이 문자열들은 전부 UTF-16LE 다. ASCII grep 은 0건을 낸다.",
+    "corrected": [
+     "'D:\\dev\\we\\... 경로·RapidJSON·FFTS 는 fabricated' → 20개 경로가 실존한다.",
+     "'no FFT/spectrum library strings' → FFTS 가 링크돼 있다(ffts_static.c).",
+     "'jsoncpp (NOT RapidJSON)' → 같은 src\\json\\ 트리에 병존한다. 그 판단의 근거로 인용된 파서 에러 문자열은 RapidJSON 자신의 GetParseError_En() 표다.",
+     "'GLM 언급 0건' → 링크돼 있다. 어느 정본도 몰랐다(양쪽 리포 grep 0건)."
+    ],
+    "rule": "바이너리 부재를 주장하려면 **어떤 인코딩으로 어떤 명령을 돌렸는지**를 함께 적을 것.",
+    "propagatedInto": "Waple 로 전파된 것은 docs/handoff-2026-08-17.md:176,234 두 줄뿐이었고 정정했다. spec/ 정본은 같은 검사를 전수 통과했다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe (WE 2.8.42 원본, sha256 40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0, 5360112 bytes)",
+     "note": "UTF-16LE 문자열 전수 스캔 · 값은 파일 오프셋 · 정규식 b'(?:[\\\\x20-\\\\x7e]\\\\x00){6,}'"
+    }
+   ]
+  }
+ ]
+}

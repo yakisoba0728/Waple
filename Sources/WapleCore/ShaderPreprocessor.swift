@@ -29,10 +29,17 @@ public enum ShaderPreprocessor {
         // HLSL_SM30(구형 SM3.0 텍스처 채널 워크어라운드)는 대상 밖이라 주입하지 않는다(정상 폴백 유지).
         defines["HLSL"] = 1
         defines["HLSL_SM40"] = 1
-        // S2-shaderlab②(정정): WE 는 HLSL/HLSL_SM40 외 SHADERVERSION 도 시딩한다 — wallpaper64.exe 를
-        // 직접 hexdump 확인(`xxd -s 0x48BF38 -l 64`): 실제 파일 오프셋 0x48BF38 에 "SHADERVERSION",
-        // 0x48BF48 에 "69"(뒤이어 ifndef/ifdef/define/elif/if/endif 지시문 키워드 풀 — 메모리의
-        // SHDV0069 와도 일치). 미시딩 시 실물 소비처 assets/shaders/generic3.frag:83,
+        // S2-shaderlab②(정정): WE 는 HLSL/HLSL_SM40 외 SHADERVERSION 도 시딩한다 — wallpaper64.exe 에
+        // "SHADERVERSION" 문자열이 있고 그 직후에 "69" 가 온다(뒤이어 ifndef/ifdef/define/elif/if/
+        // endif 지시문 키워드 풀 — 메모리의 SHDV0069 와도 일치).
+        //
+        // [오프셋 정정 2026-08-19] 종전 주석은 `0x48BF38` 을 "실제 파일 오프셋" 이라 불렀다.
+        // **반대다** — 0x48BF38 은 분석 리포의 rich-header **주입본**(5,360,320 B) 기준이고,
+        // 원본(5,360,112 B, sha256 40e2ce02…)에서는 `0x48BE68` 이다(정확히 −0xD0).
+        // 두 파일을 바이트 대조해 확인했다. 원본으로 보려면:  xxd -s 0x48BE68 -l 64
+        // 주입본은 삭제 예정 리포에만 있으므로, 남겨야 할 인용은 원본 기준이다.
+        // 규약은 `spec/engine/decompilation-provenance.json` 의 richHeaderShift 참조 —
+        // 다만 그 문서는 VA(0x140…) 39개만 분류하고 이 줄 같은 **파일 오프셋** 인용은 다루지 않는다. 미시딩 시 실물 소비처 assets/shaders/generic3.frag:83,
         // genericimage3.frag:88 의 `#if SHADERVERSION < 62` 가 undefined→0 평가로 항상 참이 되어
         // 구형 PerformLighting_Deprecated 분기를 고른다(WE 는 69<62=false 로 최신 분기).
         // 로컬 코퍼스(backgrounds/ 460씬) 실측: LIGHTS_POINT/SPOT/TUBE/DIRECTIONAL 콤보 참조 0건 —
@@ -46,10 +53,17 @@ public enum ShaderPreprocessor {
         var included = inlineIncludes(source, include: include, depth: 0)
         // CAST3X3(mat4) 는 GLSL 에선 상단 3x3 절단이지만 MSL 엔 float3x3(float4x4) 생성자가 없다 —
         // 번역기 프리앰블의 오버로드 헬퍼 we_cast3x3(절단/통과) 로 위임(실물 depthparallax).
-        // S2-shaderlab①(정정): WE 바이너리 임베디드 셰이더 shim(strings 파일 오프셋 0x486bf6-0x486cec —
-        // 실제 파일 오프셋으로 보려면 +0xD0 보정 필요, WE-ENGINE-ANALYSIS §5) 전수 대조 결과 CASTI/
+        // S2-shaderlab①(정정): WE 바이너리 임베디드 셰이더 shim 전수 대조 결과 CASTI/
         // CASTU/CASTF/CAST4U 4 종이 기존 목록에 없었다. WE shim 은 이 4종 + 기존 CAST2/CAST3/CAST4/
-        // CAST3X3 총 8종뿐 — 아래 CAST2X2/CAST4X4 는 WE shim 에 없는 로컬 추가(무해한 상위집합)라
+        // CAST3X3 총 8종뿐.
+        //
+        // [오프셋 정정 2026-08-19] 종전 주석은 이 shim 을 `0x486bf6-0x486cec` 로 인용하며
+        // "실제 파일 오프셋으로 보려면 +0xD0 보정 필요" 라고 썼다. **반대다** — `0x486bf6` 은
+        // 이미 **원본** 기준이고(원본에서 `#define CASTI` 가 정확히 그 자리), 주입본이 `0x486cc6` 다.
+        // 바로 위 SHADERVERSION 주석과 같은 파일 안에서 규약이 서로 반대로 적혀 있었다.
+        // 정확한 쪽 대조군: `SystemAudioSpectrumProvider.swift:92` · `Model3D.swift:54,320`(둘 다 −0xD0).
+        //
+        // 아래 CAST2X2/CAST4X4 는 WE shim 에 없는 로컬 추가(무해한 상위집합)라
         // 우리 주입 목록 = WE 8종 ∪ 로컬 2종. 실사용처(로컬 코퍼스 전수 실측): CASTU 69회·CASTF 12회
         // (model_vertex_v1.h 모프타깃 블렌딩 + generic3/genericimage3 라이팅 루프 `CASTU(LIGHTS_POINT)`
         // 등 양쪽) — CASTI·CAST4U 는 전 셰이더 자산 0회(4종 모두가 MORPHING 소비라는 서술은 부정확,
