@@ -907,8 +907,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 구간이 사라지고(데드락 표면 제거), `currentFolderURL` 스냅샷과 화면/슬롯 스냅샷이 같은
     /// 시점의 것이 된다(종전엔 그 사이에 큐 지연이 끼어 서로 다른 순간을 볼 수 있었다).
     private func stillCaptureInputs(globalFolderURL: URL?) -> StillCaptureInputs {
-        let screenSizes = Dictionary(uniqueKeysWithValues:
-            NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) })
+        // 중복 키는 뒤가 이긴다. `DesktopWindow.screenKey(for:)`(:9-14)는 `NSScreenNumber` 가
+        // 없을 때 `"name-\(localizedName)"` 으로 떨어지는데, **같은 모델 모니터 두 대**는
+        // localizedName 이 같다 — 그 조합에서 `uniqueKeysWithValues` 는 트랩이었다.
+        // 실기기 확인은 못 했지만(다중 모니터 필요) 코드 경로는 명확하고, 여기서 죽는 대신
+        // 한 화면 크기를 잃는 쪽이 옳다. 2026-08-19 스윕 §부록 ④ 의 unverified 항목.
+        let screenSizes = Dictionary(
+            NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) },
+            uniquingKeysWith: { _, later in later })
         let global = globalFolderURL.flatMap { projectForMount(folderURL: $0) }
         return StillCaptureInputs(screenSizes: screenSizes,
                                   mainScale: NSScreen.main?.backingScaleFactor ?? 2,
