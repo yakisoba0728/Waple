@@ -1586,13 +1586,23 @@ public final class TextScriptEngine {
         set: function(t, k, v) { t[k] = v; return true; }
     });
     // WE 스크립트 표준 벡터(메서드 체이닝) — 레이어 컬러 스크립트가 사용.
+    /// `"1 0.5 0.25"` → [1, 0.5, 0.25]. 정규식을 쓰지 않는다 — 이 셰임 전체가 Swift 의 **일반**
+    /// 다중행 문자열 리터럴 안이라 정규식의 백슬래시가 잘못된 이스케이프로 컴파일에 실패한다.
+    /// WE baseclasses.js 도 `split(' ')` 이라 이쪽이 원문에 더 가깝다(빈 토큰만 걸러낸다).
+    function __wapleSplitNums(str) {
+        var parts = String(str).split(' '), out = [];
+        for (var i = 0; i < parts.length; i++) {
+            if (parts[i] !== '') { out.push(parseFloat(parts[i])); }
+        }
+        return out;
+    }
     // G-C4-03/D4-01: WE 의 생성자 관용 두 가지를 맞춘다(동봉 baseclasses.js:4-23 원문).
     //  · **문자열**: `new Vec3("1 0.5 0.25")` = 공백 분해 + parseFloat. 씬 JSON 의 색/벡터 표기가
     //    전부 이 형태라 이게 없으면 x 에 문자열이 박혀 이후 산술이 NaN 으로 전파된다.
     //  · **스칼라 브로드캐스트**: `new Vec3(0.5)` = (0.5,0.5,0.5). 종전은 (0.5,0,0) 이라
     //    `thisLayer.scale = new Vec3(s)` 가 레이어를 **소멸**시켰다(y·z 가 0).
     function Vec3(x, y, z) {
-        if (typeof x === 'string') { var t = x.trim().split(/\s+/); x = parseFloat(t[0]); y = parseFloat(t[1]); z = parseFloat(t[2]); }
+        if (typeof x === 'string') { var t = __wapleSplitNums(x); x = t[0]; y = t[1]; z = t[2]; }
         if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; this.z = x.z || 0; return; }
         this.x = Number(x) || 0;
         this.y = (typeof y === 'number' && !isNaN(y)) ? y : this.x;
@@ -1624,7 +1634,7 @@ public final class TextScriptEngine {
         return new Vec3(this.x - d * (n.x || 0), this.y - d * (n.y || 0), this.z - d * (n.z || 0));
     };
     function Vec2(x, y) {
-        if (typeof x === 'string') { var t2 = x.trim().split(/\s+/); x = parseFloat(t2[0]); y = parseFloat(t2[1]); }
+        if (typeof x === 'string') { var t2 = __wapleSplitNums(x); x = t2[0]; y = t2[1]; }
         if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; return; }
         this.x = Number(x) || 0;
         this.y = (typeof y === 'number' && !isNaN(y)) ? y : this.x;
