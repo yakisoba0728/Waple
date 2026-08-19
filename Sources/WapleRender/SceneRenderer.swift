@@ -1155,17 +1155,22 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         sceneWantsHDRBloom = false
         hdrBloomParameters = .defaults
         hdrBloomPass = nil
-        guard let pkgURL = pkgURL(in: project.folderURL) else {
-            NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg in \(project.folderURL.path)")
-            throw RendererError.assetMissing
+        // G-E3-01: 씬은 `.pkg` 로도, **언팩 폴더**로도 온다. WE 2.8.42 설치본 실측: `projects/` 의
+        // 기본 배경 19종 + 템플릿 2종이 전부 언팩이고 `.pkg` 는 0개다. 에디터가 만드는 로컬
+        // 프로젝트도 언팩이다. pkg 를 우선하되(워크샵 배포본이 그 형태), 없으면 폴더를 그대로
+        // 마운트한다. 폴더 백엔드는 지연 파일 읽기라 38 MB 짜리 기본 프로젝트를 통째로 메모리에
+        // 올리지 않는다(ScenePackage.fromDirectory 주석 참조).
+        let pkgURL = pkgURL(in: project.folderURL)
+        var data = Data()
+        if let pkgURL {
+            do {
+                data = try WapleProfiler.time("pkgRead") { try Data(contentsOf: pkgURL) }
+            } catch {
+                NSLog("%@", "[Waple] scene mount: cannot read \(pkgURL.path): \(error)")
+                throw RendererError.assetMissing
+            }
         }
-        let data: Data
-        do {
-            data = try WapleProfiler.time("pkgRead") { try Data(contentsOf: pkgURL) }
-        } catch {
-            NSLog("%@", "[Waple] scene mount: cannot read \(pkgURL.path): \(error)")
-            throw RendererError.assetMissing
-        }
+        let sourceDescription = pkgURL?.path ?? project.folderURL.path
         // C①: project.json 기본값을 doc 파스보다 먼저 확보 — {user,value} 바인딩 해석(resolveUserBindings)
         // 이 project.json 기본값도 유효값으로 보게 하려면 파스 시점 userProps 에 이미 실려 있어야 한다
         // (종전엔 유저가 변경한 키만 실려, 미변경 키는 저작 스냅샷 baked value 로 남아 아래
@@ -1174,11 +1179,19 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         let package: ScenePackage
         let doc: SceneDocument
         do {
-            package = try WapleProfiler.time("pkgParse") { try ScenePackage.parse(data) }
+            if pkgURL != nil {
+                package = try WapleProfiler.time("pkgParse") { try ScenePackage.parse(data) }
+            } else {
+                guard let folderPackage = WapleProfiler.time("dirScan", { ScenePackage.fromDirectory(project.folderURL) }) else {
+                    NSLog("%@", "[Waple] scene mount: no scene.pkg/gifscene.pkg and no readable files in \(project.folderURL.path)")
+                    throw RendererError.assetMissing
+                }
+                package = folderPackage
+            }
             // 공유(base-assets) 리졸버: pkg 에 없는 util 모델/머티리얼 JSON(솔리드 레이어 등) 폴백.
             doc = try WapleProfiler.time("docParse") {
                 let assetRoots = BaseAssetsSettings.searchRoots
-                return try SceneDocument.parse(package: package, sharedAssetProbe: { name in
+                return try SceneDocument.parse(package: package, sceneFileName: project.fileName, sharedAssetProbe: { name in
                     Self.sharedAssetProbe(name, roots: assetRoots)
                 }, onMissingRequiredAsset: { [weak self] in
                     self?.markMissingRequiredSharedAsset()
@@ -1190,7 +1203,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 ))
             }
         } catch {
-            NSLog("%@", "[Waple] scene mount: failed to parse \(pkgURL.path): \(error)")
+            NSLog("%@", "[Waple] scene mount: failed to parse \(sourceDescription): \(error)")
             throw error
         }
         // 조건 변형 텍스처(TEXB0004, 예 tuniccolor) 선택용 유효 프로퍼티 스냅샷:

@@ -9,16 +9,22 @@ public struct ScenePackage {
         public let size: Int
     }
 
+    /// 바이트를 어디서 가져오는가. `.pkg` 는 단일 blob 슬라이스, 언팩 프로젝트 폴더는 지연 파일 읽기.
+    /// 폴더를 통째로 메모리에 올리지 않는 이유: WE 설치본 기본 프로젝트가 최대 38 MB 이고 그중
+    /// 상당량이 Waple 이 절대 읽지 않는 `.png` 원본(같은 자산의 `.tex` 와 병존)이다.
+    private enum Storage {
+        case blob(data: Data, base: Int)
+        case directory(root: URL)
+    }
+
     public let entries: [Entry]
-    private let blob: Data
-    private let blobBase: Int
+    private let storage: Storage
     private let entryByName: [String: Entry]
     private let entryByNormalizedName: [String: Entry]
 
-    private init(entries: [Entry], blob: Data, blobBase: Int) {
+    private init(entries: [Entry], storage: Storage) {
         self.entries = entries
-        self.blob = blob
-        self.blobBase = blobBase
+        self.storage = storage
         var index: [String: Entry] = [:]
         var normalizedIndex: [String: Entry] = [:]
         for entry in entries where index[entry.name] == nil {
@@ -84,14 +90,22 @@ public struct ScenePackage {
                 throw ScenePackageError.malformed
             }
         }
-        return ScenePackage(entries: entries, blob: data, blobBase: blobBase)
+        return ScenePackage(entries: entries, storage: .blob(data: data, base: blobBase))
     }
 
     public func data(for name: String) -> Data? {
         let e = entryByName[name] ?? entryByNormalizedName[Self.normalizedLookupKey(name)]
         guard let e else { return nil }
-        let start = blob.startIndex + blobBase + e.offset
-        return blob.subdata(in: start ..< start + e.size)
+        switch storage {
+        case .blob(let blob, let blobBase):
+            let start = blob.startIndex + blobBase + e.offset
+            return blob.subdata(in: start ..< start + e.size)
+        case .directory(let root):
+            // e.name 은 아래 `fromDirectory` 가 루트 상대 경로로만 만든다(심볼릭 링크·상위 경로 배제).
+            var url = root
+            for component in e.name.split(separator: "/") { url.appendPathComponent(String(component)) }
+            return try? Data(contentsOf: url)
+        }
     }
 
     private static func normalizedLookupKey(_ name: String) -> String {
@@ -108,6 +122,46 @@ public struct ScenePackage {
             blob.append(data)
             offset += data.count
         }
-        return ScenePackage(entries: entries, blob: blob, blobBase: 0)
+        return ScenePackage(entries: entries, storage: .blob(data: blob, base: 0))
+    }
+
+    /// G-E3-01: **언팩 프로젝트 폴더**를 패키지로 마운트한다.
+    ///
+    /// `scene.pkg` 는 워크샵 업로드 산출물일 뿐 저작·배포의 유일한 형태가 아니다. 실측(WE 2.8.42
+    /// 설치본): `projects/` 아래 기본 배경 19종 + 템플릿 2종이 **전부 언팩 폴더**이고 `.pkg` 는
+    /// 0개다. 에디터가 만드는 로컬 프로젝트도 언팩이다. 즉 종전의 `scene.pkg` 전용 마운트는
+    /// "워크샵에서 받은 것만 돌아간다" 는 뜻이었다 — WE 를 설치한 사용자가 자기 기본 배경을
+    /// 넣거나 에디터로 만든 배경을 넣으면 전건 "적용 실패" 다.
+    ///
+    /// 조회 키 규약은 `.pkg` 와 같아야 한다(`normalizedLookupKey` = 역슬래시→슬래시 + 소문자).
+    /// 그래서 엔트리 이름을 루트 상대 경로로 만들고 구분자를 `/` 로 고정한다.
+    ///
+    /// - Note: 심볼릭 링크는 건너뛴다(루트 밖 탈출 차단). 숨김 파일도 건너뛴다.
+    public static func fromDirectory(_ root: URL) -> ScenePackage? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        guard let walker = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return nil }
+
+        let rootComponents = root.standardizedFileURL.pathComponents
+        var entries: [Entry] = []
+        let maxEntries = 65_536
+        for case let url as URL in walker {
+            if entries.count >= maxEntries { break }
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true else { continue }
+            let components = url.standardizedFileURL.pathComponents
+            // 표준화 후에도 루트 접두가 유지되는 경로만 채택 — 링크를 타고 밖으로 나간 항목 배제.
+            guard components.count > rootComponents.count,
+                  Array(components.prefix(rootComponents.count)) == rootComponents else { continue }
+            let relative = components.dropFirst(rootComponents.count).joined(separator: "/")
+            entries.append(Entry(name: relative, offset: 0, size: values.fileSize ?? 0))
+        }
+        guard !entries.isEmpty else { return nil }
+        return ScenePackage(entries: entries, storage: .directory(root: root))
     }
 }
