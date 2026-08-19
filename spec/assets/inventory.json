@@ -15,7 +15,7 @@
   },
   {
    "id": "assets.totalBytes",
-   "value": 79512681,
+   "value": 79515997,
    "status": "확정",
    "evidence": [
     {
@@ -29,7 +29,7 @@
    "value": {
     "effects": {
      "files": 1041,
-     "bytes": 22468892
+     "bytes": 22469223
     },
     "fonts": {
      "files": 19,
@@ -37,7 +37,7 @@
     },
     "materials": {
      "files": 586,
-     "bytes": 45182669
+     "bytes": 45183984
     },
     "models": {
      "files": 7,
@@ -49,15 +49,15 @@
     },
     "presets": {
      "files": 880,
-     "bytes": 8614625
+     "bytes": 8614755
     },
     "scenes": {
      "files": 249,
-     "bytes": 284035
+     "bytes": 284044
     },
     "scripts": {
      "files": 4,
-     "bytes": 38873
+     "bytes": 40404
     },
     "shaders": {
      "files": 137,
@@ -89,7 +89,7 @@
     },
     ".tex-json": {
      "files": 298,
-     "bytes": 29585
+     "bytes": 31370
     },
     ".frag": {
      "files": 242,
@@ -125,11 +125,7 @@
     },
     ".js": {
      "files": 4,
-     "bytes": 38873
-    },
-    ".geom": {
-     "files": 4,
-     "bytes": 17603
+     "bytes": 40404
     },
     ".otf": {
      "files": 4,
@@ -138,6 +134,10 @@
     ".txt": {
      "files": 4,
      "bytes": 17058
+    },
+    ".geom": {
+     "files": 4,
+     "bytes": 17603
     },
     ".mdl": {
      "files": 2,
