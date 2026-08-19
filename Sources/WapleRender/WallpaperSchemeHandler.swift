@@ -18,6 +18,46 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         super.init()
     }
 
+    /// F840: 응답에 붙이는 Content-Security-Policy.
+    ///
+    /// 배경 — 브리지가 시스템 오디오 스펙트럼(`__wapleAudio`)과 Now-Playing 메타데이터
+    /// (제목/아티스트/앨범, `__wapleMedia`)를 페이지에 넘기는데, 내비게이션 게이트
+    /// (`WebRenderer.decidePolicyFor`)는 **내비게이션만** 다룬다(F571). 그래서 fetch/XHR/WebSocket/
+    /// 폼 전송이 무검증으로 열려 있었고, 캡처한 오디오·미디어 메타데이터를 그대로 반출할 수 있었다.
+    ///
+    /// F571 이 서브리소스를 열어 둔 이유(WE 자체가 네트워크를 허용 — 원격 이미지/스크립트를 쓰는
+    /// 실물 월페이퍼가 실재)는 그대로 존중한다. 그래서 전면 차단이 아니라 **원격 반출 채널만** 닫는다:
+    ///  - `connect-src` 에 **원격 스킴을 넣지 않는다** : fetch/XHR/WebSocket/EventSource/sendBeacon 이
+    ///    원격 호스트로 나갈 수 없다(= 캡처한 오디오·미디어 메타데이터의 POST 반출 차단).
+    ///  - `form-action` 도 같은 목록 : 폼 POST 반출 차단.
+    ///  - img/media/font/style/script 는 https: 를 계속 허용 → 원격 리소스 월페이퍼 무회귀.
+    ///  - default-src(= frame/worker/object/manifest 폴백)는 로컬만 — 원격 프레임은 어차피
+    ///    내비게이션 게이트가 이미 막고 있어 새 제약이 아니다.
+    ///
+    /// **`'none'` 이 아니라 로컬 허용으로 좁힌 이유**: 실물 웹 월페이퍼는 자기 패키지의 JSON/텍스트를
+    /// `fetch()`·XHR 로 읽는 것이 흔하다. `connect-src 'none'` 이면 그 로컬 읽기까지 죽는데, 그건
+    /// 보안에 아무것도 더해 주지 않는다 — waple-asset: 은 이 스킴 핸들러가 처리하는 **로컬 파일**이고
+    /// 반출 경로가 아니기 때문이다. 원격 스킴(http/https/ws/wss)이 목록에 없다는 사실이 차단의 전부다.
+    ///
+    /// 수용 한계(문서화): `<img src="https://…?d=…">` 같은 수동 비콘 반출은 여전히 가능하다.
+    /// 그걸 막으려면 img-src 를 로컬로 좁혀야 하는데 그건 F571 이 지키려는 월페이퍼를 깨뜨린다.
+    ///
+    /// `'unsafe-inline'`/`'unsafe-eval'` 은 WE 웹 월페이퍼가 인라인 스크립트 덩어리라 필수이고,
+    /// 브리지 주입(WKUserScript)이 CSP 에 걸리지 않게 하는 보험이기도 하다.
+    static let contentSecurityPolicy: String = {
+        let local = "'self' \(WallpaperSchemeHandler.scheme): blob: data:"
+        return [
+            "default-src \(local) 'unsafe-inline' 'unsafe-eval'",
+            "script-src \(local) https: 'unsafe-inline' 'unsafe-eval'",
+            "style-src \(local) https: 'unsafe-inline'",
+            "img-src \(local) https:",
+            "media-src \(local) https:",
+            "font-src \(local) https:",
+            "connect-src \(local)",
+            "form-action \(local)",
+        ].joined(separator: "; ")
+    }()
+
     /// 요청 경로를 루트 하위 파일 URL 로 안전하게 변환. 루트를 벗어나면 nil.
     public static func fileURL(forRequestPath path: String, root: URL) -> URL? {
         let root = root.standardizedFileURL
@@ -105,6 +145,7 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
             "Content-Type": WallpaperSchemeHandler.mimeType(for: fileURL),
             "Accept-Ranges": "bytes",
             "Access-Control-Allow-Origin": "\(WallpaperSchemeHandler.scheme)://\(WallpaperSchemeHandler.host)",
+            "Content-Security-Policy": WallpaperSchemeHandler.contentSecurityPolicy,
         ]
         let status: Int
         let body: Range<Int64>
@@ -161,7 +202,11 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         let target = url ?? URL(string: "waple-asset://wallpaper/")!
         let response = HTTPURLResponse(
             url: target, statusCode: status, httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": mime, "Access-Control-Allow-Origin": "\(WallpaperSchemeHandler.scheme)://\(WallpaperSchemeHandler.host)"]
+            headerFields: [
+                "Content-Type": mime,
+                "Access-Control-Allow-Origin": "\(WallpaperSchemeHandler.scheme)://\(WallpaperSchemeHandler.host)",
+                "Content-Security-Policy": WallpaperSchemeHandler.contentSecurityPolicy,
+            ]
         )!
         task.didReceive(response)
         task.didReceive(data)

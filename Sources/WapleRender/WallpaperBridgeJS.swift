@@ -188,7 +188,11 @@ enum WallpaperBridgeJS {
         pendingProps = props; pendingGeneral = general; flush();
         propagateProps(props, general);
       });
-      defineBridge('__wapleSetPaused', function (paused) {
+      // F840: defineFixed(비쓰기·비설정) — defineBridge 였을 때는 월페이퍼 페이지가
+      // `window.__wapleSetPaused = function(){}` 한 줄로 덮어써서 가림 정지를 통째로 무력화할 수 있었다
+      // (WebRenderer.setPausedJS 는 이 함수가 있으면 그것만 부르고 하드포즈 폴백으로 내려가지 않는다).
+      // 페이지가 정지를 거부할 수 있으면 절전·가림 정책이 성립하지 않는다.
+      defineFixed('__wapleSetPaused', function (paused) {
         paused = !!paused;
         if (lastPaused === paused) { return; }
         lastPaused = paused;
