@@ -199,6 +199,28 @@ jobs:
           set -o pipefail
           swift test --skip-build -c ${{ matrix.configuration }} ${{ matrix.testFlags }} 2>&1 | tee test-output.log
 
+      # [2026-08-19] 병렬 격리 회귀 게이트 — debug 레인에서만.
+      #
+      # `AGENTS.md` 는 오래 "`--parallel` 은 통과/실패 판정에 쓰지 마라 — `SceneRenderSettingsTests`
+      # 와 `SceneCompositeConventionTests` 가 병렬 3/3 실패" 라고 적고 원인을 미확정으로 뒀다.
+      # 원인은 둘 다 **공유 자원**이었다:
+      #   · SceneRenderSettings 가 `UserDefaults.standard`(프로세스가 아니라 **사용자** 단위)를 직접 씀
+      #   · SceneCompositeConventionTests 가 출력만 리터럴 `/tmp/waple_cc_<tag>` 로 씀
+      # 둘 다 고쳤다(주입 저장소 · PID 스코프). 그런데 **고쳤다는 것과 병렬이 통과한다는 것은
+      # 다른 명제**라, 실행으로 확인하지 않으면 다음 사람이 다시 미확정으로 돌려놓는다.
+      #
+      # 세 번 돌린다 — 경합은 한 번으로는 안 잡힌다. 실패하면 원인이 하나 더 남아 있는 것이다.
+      # 전 스위트가 아니라 이 두 클래스만 돌리므로 비용은 수십 초다.
+      - name: Parallel isolation gate
+        if: matrix.configuration == 'debug'
+        run: |
+          set -o pipefail
+          for i in 1 2 3; do
+            echo "── 병렬 시행 $i/3"
+            swift test --skip-build -c debug --parallel --num-workers 6 \
+              --filter 'SceneRenderSettingsTests|SceneCompositeConventionTests' 2>&1 | tail -5
+          done
+
       # [2026-08-19] 스킵 가시화 **및 게이트**.
       #
       # XCTSkip("no Metal") 이 76개 파일 322곳에 걸쳐 있고 그 아래 테스트가 561개다.
