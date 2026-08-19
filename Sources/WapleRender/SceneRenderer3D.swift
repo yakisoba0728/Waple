@@ -1686,15 +1686,19 @@ extension SceneRenderer {
                                                        : meshPipelineRefract {
                         enc.endEncoding()
                         var snap: MTLTexture? = nil
-                        // 반사 스냅샷은 **밉체인을 갖는다** — WE 가 roughness 로 밉 LOD 를 고르기
-                        // 때문이다(generic4.frag:159 `texSample2DLod(…, roughness * g_Texture3MipMapInfo)`).
-                        // 레벨 0 고정이면 반사 소스가 성긴 씬에서 밝은 텍셀만 튀어 알갱이가 된다
-                        // (3470948192 성단: 검은 알베도라 반사가 유일한 광원인데 매끈한 흰 테 대신
-                        // 점만 나왔다). refract 분기는 종전 풀을 그대로 쓴다 — 그쪽은 LOD 규약이 다르다.
-                        if let s = reflectionSnapshot(target.width, target.height, device, hdr: hdrActive),
+                        // [정정 2026-08-19] 이 자리(refract)가 **밉체인 스냅샷 + generateMipmaps** 를 쓰고
+                        // 아래 reflect 분기가 밉 없는 pooledOffscreen 을 썼다 — **두 할당기가 서로 바뀌어
+                        // 있었다.** 여기 있던 주석은 심지어 '반사 러프니스 LOD' 를 설명하고 있었는데, 정작
+                        // LOD 를 쓰는 셰이더는 mf_reflect 다(Mesh3DShaders:815
+                        // `reflectLod = u.material.x * float(fbTex.get_num_mip_levels() - 1)`).
+                        // mf_refract 는 level() 을 전혀 쓰지 않으므로(Mesh3DShaders:683 `fbTex.sample(fbSampler, ruv)`)
+                        // 여기서 밉은 전혀 소비되지 않고, 드로어블 크기 텍스처에 매 프레임 전 체인
+                        // generateMipmaps 비용만 태웠다. 반대로 반사는 항상 reflectLod==0 이라 블러 대신
+                        // 알갱이가 나왔다 — Mesh3DShaders:737 이 "밉을 넣었는데 왜 안 나오지" 로 남겨둔
+                        // 미규명 관문의 정체가 이것이다(동일 원인 둘째: fbSampler 의 mip_filter 누락).
+                        if let s = pooledOffscreen(target.width, target.height, device, bgra: true),
                            let blit = cb.makeBlitCommandEncoder() {
                             blit.copy(from: target, to: s)
-                            blit.generateMipmaps(for: s)   // 러프니스 블러의 실체
                             blit.endEncoding(); snap = s
                         }
                         let nextRPD = MTLRenderPassDescriptor()
@@ -1737,9 +1741,23 @@ extension SceneRenderer {
                         // 위 refract 분기가 우선 — 무회귀 선택, 코퍼스 실측상 상호배타적).
                         enc.endEncoding()
                         var snap: MTLTexture? = nil
-                        if let s = pooledOffscreen(target.width, target.height, device, bgra: true),
+                        // 반사 스냅샷은 **밉체인을 갖는다** — WE 가 roughness 로 밉 LOD 를 고르기
+                        // 때문이다(generic4.frag:159 `texSample2DLod(…, roughness * g_Texture3MipMapInfo)`,
+                        // MSL 대응은 Mesh3DShaders.mf_reflect 의 reflectLod). 레벨 0 고정이면 반사 소스가
+                        // 성긴 씬에서 밝은 텍셀만 튀어 알갱이가 된다(3470948192 성단: 검은 알베도라 반사가
+                        // 유일한 광원인데 매끈한 흰 테 대신 점만 나왔다).
+                        if let s = reflectionSnapshot(target.width, target.height, device, hdr: hdrActive),
                            let blit = cb.makeBlitCommandEncoder() {
-                            blit.copy(from: target, to: s); blit.endEncoding(); snap = s
+                            // **레벨 명시 copy.** target 은 밉 1개, s 는 mipmapped(밉 N개)라 전체 리소스
+                            // copy 오버로드(`copy(from:to:)`)의 mipmapLevelCount 일치 요구를 위반한다 —
+                            // Metal 검증에서 터지는 코드였다. level 0 만 복사하고 나머지는 generateMipmaps 가 채운다.
+                            blit.copy(from: target, sourceSlice: 0, sourceLevel: 0,
+                                      sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                                      sourceSize: MTLSize(width: target.width, height: target.height, depth: 1),
+                                      to: s, destinationSlice: 0, destinationLevel: 0,
+                                      destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                            blit.generateMipmaps(for: s)   // 러프니스 블러의 실체
+                            blit.endEncoding(); snap = s
                         }
                         let nextRPD = MTLRenderPassDescriptor()
                         nextRPD.colorAttachments[0].texture = target

@@ -170,12 +170,12 @@ enum QuadShaders {
                           texture2d<float> tex [[texture(0)]],
                           constant float4 &tint [[buffer(0)]],
                           constant float4 *rect [[buffer(1)]],      // [0]=(ox,oy,hw,hh) [1]=(cosA,sinA,z,_)
-                          constant float4 *lightPos [[buffer(2)]],  // [4] xyz=world, w=exponent
-                          constant float4 *lightCol [[buffer(3)]],  // [4] rgb=color×intensity, w=radius
+                          constant float4 *lightPos [[buffer(2)]],  // [8] xyz=world, w=exponent
+                          constant float4 *lightCol [[buffer(3)]],  // [8] rgb=color×intensity, w=radius
                           constant float4 &ambient [[buffer(4)]],   // xyz=flat ambient (genericimage4)
                           constant PBRMaterialUniforms &material [[buffer(5)]],
-                          constant float4 *lightAxisCone [[buffer(6)]],  // [4] xyz=forward|tube 단점B, w=cone outer cos
-                          constant float4 *lightKindCone [[buffer(7)]]) { // [4] x=kind(0/1/2/4), y=cone inner cos
+                          constant float4 *lightAxisCone [[buffer(6)]],  // [8] xyz=forward|tube 단점B, w=cone outer cos
+                          constant float4 *lightKindCone [[buffer(7)]]) { // [8] x=kind(0/1/2/4), y=cone inner cos
         constexpr sampler s(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 c = tex.sample(s, in.uv);
         // uv(0..1) → 레이어 로컬(-hw..hw) → 회전 → 월드 픽셀(quadVertices 역산). z = 레이어 originZ.
@@ -190,7 +190,10 @@ enum QuadShaders {
         float metallic = material.scalars.y;
         float3 F0 = mix(float3(0.04), albedo, metallic);
         float3 direct = float3(0.0);
-        for (int i = 0; i < 4; i++) {
+        // 슬롯 8 — 3D 레인(Scene3DLighting.maximumLights)과 같은 상한. F660 이 3D 를 8 로 올릴 때
+        // 이 2D 루프만 4 로 남아 5번째 라이트부터 2D 라이팅 레이어에서만 사라졌다.
+        // 바인딩 길이는 ForwardUniforms.slotCount(WapleCore) · SceneRenderer 의 light* 배열과 동기.
+        for (int i = 0; i < 8; i++) {
             int kind = int(lightKindCone[i].x + 0.5);
             float3 L;
             float3 radiance;

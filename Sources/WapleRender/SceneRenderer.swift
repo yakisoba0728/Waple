@@ -724,11 +724,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var sceneQuality: SceneDocument.Quality = .ultra
     /// 씬당 라이트 유니폼(상수) — forwardLit=false(라이트 씬 아님)면 전 레이어 f_main(무회귀).
     var forwardLit = false
-    var lightPositions = [SIMD4<Float>](repeating: .zero, count: 4)    // [4] xyz=world, w=exponent
-    var lightColorRadius = [SIMD4<Float>](repeating: .zero, count: 4)  // [4] rgb=color×intensity, w=radius
+    // 길이 8 = SceneDocument.ForwardUniforms.slotCount = QuadShaders.f_lit 루프 상한(셋이 같은 계약).
+    // 종전 4 는 F660 의 3D 8-라이트 상향이 2D 레인에 도달하지 않아 남아 있던 값이다.
+    var lightPositions = [SIMD4<Float>](repeating: .zero, count: SceneLight3D.ForwardUniforms.slotCount)    // [8] xyz=world, w=exponent
+    var lightColorRadius = [SIMD4<Float>](repeating: .zero, count: SceneLight3D.ForwardUniforms.slotCount)  // [8] rgb=color×intensity, w=radius
     // F800(S-9): kind/axis/cone — f_lit 버퍼 6/7. ForwardUniforms(WapleCore) 팩 그대로.
-    var lightAxisCone = [SIMD4<Float>](repeating: .zero, count: 4)     // [4] xyz=forward(blue축), w=cone outer cos
-    var lightKindCone = [SIMD4<Float>](repeating: .zero, count: 4)     // [4] x=kind(0/1/2), y=cone inner cos
+    var lightAxisCone = [SIMD4<Float>](repeating: .zero, count: SceneLight3D.ForwardUniforms.slotCount)     // [8] xyz=forward(blue축), w=cone outer cos
+    var lightKindCone = [SIMD4<Float>](repeating: .zero, count: SceneLight3D.ForwardUniforms.slotCount)     // [8] x=kind(0/1/2), y=cone inner cos
     var lightAmbient = SIMD4<Float>(0, 0, 0, 0)                        // xyz=flat ambient (genericimage4)
     var layers: [GPULayer] = []
     var clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
@@ -1098,9 +1100,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var meshDepthStates: [String: MTLDepthStencilState] = [:]  // "test-write" 키
     var depthTextures: [String: MTLTexture] = [:]     // 크기별 재사용(.depth32Float)
 
+    /// 프로세스 환경 **스냅샷 1회**. `ProcessInfo.processInfo.environment` 는 접근할 때마다 사전을
+    /// 새로 구성하는데, 아래 debugFlag/environmentValue 는 draw 루프에서 매 프레임 호출된다
+    /// (encode3D:1594 · encode3DParticles:2121 · runTranslatedEffect 의 WAPLE_MP_TRUNC).
+    /// 환경변수는 프로세스 수명 중 불변이므로 SceneLivePresentationFix.cachedNeedsDesktopFlipY(:44)와
+    /// 같은 방식으로 최초 접근 시 한 번만 읽는다(static let = 스레드 안전 1회 초기화).
+    private static let environmentSnapshot: [String: String] = ProcessInfo.processInfo.environment
+
     /// 디버그 env 플래그(`WAPLE_3D_*`).
     static func debugFlag(_ name: String) -> Bool {
-        ProcessInfo.processInfo.environment[name] == "1"
+        environmentSnapshot[name] == "1"
+    }
+
+    /// 위와 같은 근거의 env 값 조회("1" 이 아닌 값을 파싱하는 디버그 스위치용).
+    static func environmentValue(_ name: String) -> String? {
+        environmentSnapshot[name]
     }
 
     public override init() { super.init() }
@@ -1314,8 +1328,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                    blue: Double(doc.clearColor.z), alpha: 1)
         // clearenabled=false: acc 미클리어(잔상 누적) — 마운트마다 누적 버퍼 재확보(이전 씬 잔상 차단).
         clearEnabled = doc.clearEnabled
-        trailAcc = nil
-        trailAccPrimed = false
+        // 마운트 재사용 시 풀·캐시 일괄 해제(teardown 과 같은 함수). 종전엔 여기서 trailAcc 만 비웠고
+        // reflectionSnapshotPool 은 teardown·mount **양쪽 모두**에서 빠져 마운트마다 누적됐다.
+        releasePooledGPUTextures()
         projW = Float(max(1, doc.projectionWidth)); projH = Float(max(1, doc.projectionHeight))
         projAspect = projW / projH
         // camera 의사-오브젝트 → 2D 뷰 줌(3D 는 미소비 — draw 3D 분기가 zoom 상태를 안 읽는다).
@@ -2090,6 +2105,22 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if parallaxEnabled || hasEffects || hasCursorMoveHook || !hoverTargets.isEmpty { startPointerMonitor() }
         sceneAudio?.resume()
     }
+    /// GPU 텍스처 풀·캐시 **일괄** 해제. teardown 과 mount 양쪽에서 부른다.
+    ///
+    /// 이 목록은 종전 teardown 의 긴 대입 나열 속에 손으로 유지돼 있었고, 그래서 같은 종류의 누락이
+    /// 반복됐다 — 감사 V06·V07 태그가 각 라운드의 누락분(blendPipeline/composePipeline,
+    /// nearest 변형, 효과 쿼드 버퍼 …)을 기록해 두었는데 이번 라운드에도 `reflectionSnapshotPool` 이
+    /// 빠져 있었다(드로어블 크기 **mipmapped** 텍스처 — 4K rgba16Float 기준 엔트리당 ≈88MB,
+    /// 게다가 mount 에서도 리셋되지 않아 플레이리스트 회전마다 그대로 쌓였다).
+    /// 풀을 한 함수에 모아 호출 한 번으로 비운다 — 새 풀을 추가하는 사람은 여기만 보면 된다.
+    func releasePooledGPUTextures() {
+        texturePool.removeAll(); poolCheckout.removeAll()
+        reflectionSnapshotPool.removeAll()
+        blendModeSnapshotTexture = nil
+        depthTextures.removeAll()
+        trailAcc = nil; trailAccPrimed = false
+    }
+
     public func teardown() {
         for case let v? in layers.map(\.video) { v.teardown() }   // layers = nil (하단) 전에 — 플레이어/텍스처캐시 정리
         hasVideoLayer = false; videoLayersLive = false
@@ -2141,12 +2172,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         customSkinFrameMemo = nil    // H1: 커스텀 셰이더 CPU 프리스킨 메모도 같은 근거로 해제
         meshPipelineOver = nil; meshPipelineAdditive = nil
         meshPipelineSkin = nil; meshPipelineSkinAdditive = nil
+        // 종전 누락(V06/V07 과 같은 종류의 반복): 메시 파이프라인 6종 + 레이어 굴절 파이프라인.
+        meshPipelineNormal = nil; meshPipelineNormalAdditive = nil
+        meshPipelineRefract = nil; meshPipelineRefractAdditive = nil
+        meshPipelineReflect = nil; meshPipelineReflectAdditive = nil
+        refractLayerPipeline = nil
+        // 종전 누락: 패스 객체 2종(자체 파이프라인·중간 텍스처를 들고 있다 — hdrPost/ldrBloomPass 와 동급).
+        volumetricLightPass = nil
+        hdrBloomPyramidPass = nil
         shadowPipelineStaticOpaque = nil; shadowPipelineStaticCutout = nil
         shadowPipelineSkinOpaque = nil; shadowPipelineSkinCutout = nil
         pointShadowDepthState = nil; pointShadowAtlas = nil; pointShadowAtlasSlices = 0
-        meshDepthStates.removeAll(); depthTextures.removeAll()
-        texturePool.removeAll(); poolCheckout.removeAll()
-        blendModeSnapshotTexture = nil
+        meshDepthStates.removeAll()
+        // 풀·캐시는 releasePooledGPUTextures 하나로(texturePool/poolCheckout/reflectionSnapshotPool/
+        // blendModeSnapshotTexture/depthTextures/trailAcc) — 함수 주석의 누락 재발 이력 참조.
+        releasePooledGPUTextures()
         sceneIsHDR = false
         hdrPost = nil
         sceneWantsLDRBloom = false

@@ -754,7 +754,11 @@ enum Mesh3DShaders {
         constexpr sampler s(filter::linear, mip_filter::linear, address::repeat);
         constexpr sampler gradientSampler(filter::linear, address::clamp_to_edge);
         // 씬 스냅샷은 화면 경계 클램프(REFRACT 의 fbSampler 와 동일 규약).
-        constexpr sampler fbSampler(filter::linear, address::clamp_to_edge);
+        // **mip_filter::linear 필수** — MSL 은 mip_filter 를 안 적으면 mip_filter::none 이 기본이고,
+        // none 이면 아래 `level(reflectLod)` 가 통째로 무시돼 텍스처에 밉이 있어도 base 만 샘플된다
+        // (토큰을 안 쓴 것뿐이라 "mip_filter::none 이 없다" 는 검사로는 안 잡혔다 —
+        //  TubeLightCSMandMipTests 가 이 결함을 놓친 이유).
+        constexpr sampler fbSampler(filter::linear, mip_filter::linear, address::clamp_to_edge);
         float4 sampled = tex.sample(s, in.uv) * u.tint;
         if (u.material.z > 0.0 && sampled.a < u.material.z) discard_fragment();
 

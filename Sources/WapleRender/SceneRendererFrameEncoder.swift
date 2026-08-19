@@ -898,7 +898,12 @@ extension SceneRenderer {
             skylight: SIMD4(scene3DSkylight.x, scene3DSkylight.y, scene3DSkylight.z, 0),
             meta: SIMD4(Float(resolvedLights.count), 0, 0, 0))
         let lightUniforms = Scene3DLighting.packLights(resolvedLights)
-        let noShadow = [simd_float4x4](repeating: matrix_identity_float4x4, count: 24)
+        // 길이는 셰이더의 인덱스 공간과 **같아야 한다**: pointShadowVisibility 가 shadowVP[slice*6 + i]
+        // 를 읽고 slice < Scene3DLighting.maximumLights(8) 이라 최대 인덱스가 47 이다
+        // (encodePointShadows:1271 도 같은 식으로 maximumLights*6 개를 만든다). 종전 24 는 그 절반이라
+        // 잠재 out-of-bounds 였고, 지금까지 안 터진 이유는 meta.y == 0 조기 반환뿐이었다.
+        let noShadow = [simd_float4x4](repeating: matrix_identity_float4x4,
+                                       count: Scene3DLighting.maximumLights * 6)
         bindScene3DLighting(frame: &frameUniform, lights: lightUniforms,
                             shadowMatrices: noShadow, shadowTexture: nil, into: menc)
         let skinBuffers = prepare3DSkinBuffers(time: time, device: device)
@@ -977,9 +982,21 @@ extension SceneRenderer {
                     // 자리에 그대로 대입(둘 다 "world→clip, 모델 미포함" 인 동일 역할).
                     menc.endEncoding()
                     var snap: MTLTexture? = nil
-                    if let s = pooledOffscreen(acc.width, acc.height, device, bgra: true),
+                    // encode3D 반사 분기와 동일 정정(2026-08-19): 반사 스냅샷은 **밉체인**이 있어야 한다 —
+                    // mf_reflect 가 roughness 로 LOD 를 고르기 때문(Mesh3DShaders:815). 종전 이 경로는
+                    // 밉 없는 pooledOffscreen 이라 reflectLod 가 항상 0(블러 대신 알갱이)이었다.
+                    // refract 분기(위)는 level() 을 쓰지 않으므로 밉 없는 풀 그대로가 맞다.
+                    if let s = reflectionSnapshot(acc.width, acc.height, device, hdr: hdrActive),
                        let blit = cb.makeBlitCommandEncoder() {
-                        blit.copy(from: acc, to: s); blit.endEncoding(); snap = s
+                        // 레벨 명시 copy — acc 는 밉 1개, s 는 mipmapped 라 전체 리소스 copy 오버로드의
+                        // mipmapLevelCount 일치 요구를 위반한다(Metal 검증 실패).
+                        blit.copy(from: acc, sourceSlice: 0, sourceLevel: 0,
+                                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                                  sourceSize: MTLSize(width: acc.width, height: acc.height, depth: 1),
+                                  to: s, destinationSlice: 0, destinationLevel: 0,
+                                  destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                        blit.generateMipmaps(for: s)
+                        blit.endEncoding(); snap = s
                     }
                     let nextRPD = MTLRenderPassDescriptor()
                     nextRPD.colorAttachments[0].texture = acc
@@ -1919,7 +1936,8 @@ extension SceneRenderer {
         case .translated(var passes, let fboSpecs):
             guard let device else { return false }  // mount 이후 항상 존재 — 강제 언랩 제거(teardown 경합 안전)
             // 디버그: WAPLE_MP_TRUNC=n → 앞 n개 패스만 실행(마지막은 dst 로 강제) — 패스별 이분용.
-            if let t = ProcessInfo.processInfo.environment["WAPLE_MP_TRUNC"], let n = Int(t), n > 0, n < passes.count {
+            // env 는 캐시 스냅샷 경유(매 프레임·패스마다 사전 재구성 회피 — SceneRenderer.environmentSnapshot 주석).
+            if let t = Self.environmentValue("WAPLE_MP_TRUNC"), let n = Int(t), n > 0, n < passes.count {
                 passes = Array(passes.prefix(n))
                 let last = passes.removeLast()
                 passes.append(TranslatedPass(pipeline: last.pipeline, material: last.material, aux: last.aux,
