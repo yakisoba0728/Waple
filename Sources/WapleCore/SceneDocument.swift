@@ -925,9 +925,16 @@ extension SceneDocument {
         assets: ((String) -> Data?)? = nil,
         sharedAssetProbe: ((String) -> SharedAssetProbeResult)? = nil,
         onMissingRequiredAsset: (() -> Void)? = nil,
-        userProps: [String: Any] = [:]
+        userProps: [String: Any] = [:],
+        sceneFileName: String? = nil
     ) throws -> SceneDocument {
-        guard let sceneData = package.data(for: "scene.json") ?? package.data(for: "gifscene.json"),
+        // G-E3-02: 씬 문서의 이름은 `project.json` 의 `"file"` 이 정한다 — `scene.json` 은 관례일 뿐
+        // 규약이 아니다. WE 2.8.42 설치본 실측: 씬 프로젝트 18개 중 4개가 다른 이름을 쓴다
+        // (`audiophile.json` `fantasticcar.json` `ricepod.json` `techno.json`, 그리고 GIF 템플릿의
+        // `gifscene.json`). 워크샵 코퍼스는 전건 `scene.json` 이라 이 결함이 지금까지 안 잡혔다.
+        // 호출자가 이름을 주지 않으면 종전 관례 순서로 폴백한다(무회귀).
+        let sceneCandidates = [sceneFileName, "scene.json", "gifscene.json"].compactMap { $0 }
+        guard let sceneData = sceneCandidates.lazy.compactMap({ package.data(for: $0) }).first,
               var scene = (try? JSONSerialization.jsonObject(with: sceneData)) as? [String: Any] else {
             throw SceneDocumentError.noScene
         }
@@ -1338,7 +1345,16 @@ extension SceneDocument {
         guard !(general["orthogonalprojection"] is [String: Any]),
               let camDict = scene["camera"] as? [String: Any],
               let eye = vec3(camDict["eye"]), let center = vec3(camDict["center"]),
-              let up = vec3(camDict["up"]), let fov = float(general["fov"]) else { return (nil, [:]) }
+              let up = vec3(camDict["up"]) else { return (nil, [:]) }
+        // G-E3-04: `general.fov` 는 **선택** 키다. 종전엔 이걸 guard 에 넣어 fov 가 없으면 카메라를
+        // 통째로 버렸는데, 그러면 `camera3D == nil` + `objects3D` 비어있지 않음 → SceneRenderer 의
+        // ortho 하이브리드로 빠져 **픽셀 단위 정사영**이 된다. 모델 월드좌표가 ±5 단위인데 1920px
+        // 프러스텀에 넣으므로 씬이 화면 좌하단 서브픽셀로 붕괴한다(= 사용자는 clearcolor 만 본다).
+        // 실측(WE 2.8.42 설치본 전수): 3D 씬 8개(arsenal audiophile demon_core dna_fragment
+        // fantasticcar neon_sunset ricepod techno)가 **전부** fov 를 생략한다. fov 를 명시하는 4개는
+        // 전부 2D 이고 값이 **전건 정확히 50.0** 이다. 즉 WE 에디터 기본값 50 이 정본이며,
+        // `SceneCameraObject.fov = 50`(코퍼스 실측)과도 같은 값이다.
+        let fov = float(general["fov"]) ?? 50
         let camera = SceneCamera3D(eye: eye, center: center, up: up, fov: fov,
                                    nearZ: float(general["nearz"]) ?? 0.01,
                                    farZ: float(general["farz"]) ?? 10000)

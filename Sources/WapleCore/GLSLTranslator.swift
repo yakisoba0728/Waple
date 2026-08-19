@@ -141,6 +141,8 @@ public enum GLSLTranslator {
         "g_Frametime": 1, "g_PointerPositionLast": 2,
         "g_PointerState": 4,
         "a_TexCoord": 2, "a_Position": 3,
+        // 반구 앰비언트 짝 — WEAssets 선언 전건 vec3(vec4 선언 0건).
+        "g_LightAmbientColor": 3, "g_LightSkylightColor": 3,
     ]
 
     private static func _translate(vertex: String, fragment: String, combos: [String: Int],
@@ -773,15 +775,35 @@ public enum GLSLTranslator {
                 guard let candidates = overloads[name] else { continue }
                 out = rewriteCall(out, name) { args in
                     let argSizes = args.map { inferExpressionSize($0, vars: env, functionReturns: functionReturns) }
-                    let matches = candidates.filter { candidate in
-                        guard candidate.paramSizes.count == argSizes.count else { return false }
-                        for (want, got) in zip(candidate.paramSizes, argSizes) where want == 0 || got == 0 || want != got {
-                            return false
+                    // 2단계 매칭. 크기 0 은 "다른 크기"가 아니라 **미지**다 — mat2/mat3/mat4/mat4x3/
+                    // sampler2D 는 `GLSLTypeAdapter.typeSize` 가 0 을 내고 배열 파라미터도 0 이다.
+                    // 종전처럼 `want == 0 || got == 0` 을 즉시 실격 처리하면 **불투명 파라미터를 가진
+                    // 오버로드는 영원히 매칭되지 않는다**. 그런데 오버로드된 이름은 이미 전부 맹글링돼
+                    // 방출되므로(위 `renameByNameAndKey`), 매칭 실패 = 호출부가 존재하지 않는 원래
+                    // 이름을 부르는 것 = **정의되지 않은 심볼 → MSL 컴파일 실패 → 셰이더 통째 드롭**.
+                    // 실물: WEAssets `shaders/common_vertex.h` 가 `BuildTangentSpace` 를 3중 오버로드로
+                    // 정의하는데(:1 `(vec3,vec4)`, :8 `(mat3,vec3,vec4)`, :17 `(mat3,vec3,vec4,out vec3,
+                    // out vec3)`) 호출부 9곳이 **전부 mat3 를 첫 인자로 넘긴다**(generic{,2,3,4}.vert ·
+                    // genericimage{2,3,4}.vert · base/model_vertex_v1.h ×2).
+                    // 1단계는 아는 크기끼리만 대조하고 미지는 실격시키지 않는다. 2단계(엄격)는 종전
+                    // 규칙 그대로이며, 1단계가 모호할 때만 쓴다. 어느 단계든 생존자가 정확히 1일 때만
+                    // 재작성하므로 모호한 경우의 동작(재작성 안 함)은 종전과 같다.
+                    func resolve(strict: Bool) -> OverloadCandidate? {
+                        let matches = candidates.filter { candidate in
+                            guard candidate.paramSizes.count == argSizes.count else { return false }
+                            for (want, got) in zip(candidate.paramSizes, argSizes) {
+                                if strict {
+                                    if want == 0 || got == 0 || want != got { return false }
+                                } else if want != 0, got != 0, want != got {
+                                    return false
+                                }
+                            }
+                            return true
                         }
-                        return true
+                        return matches.count == 1 ? matches[0] : nil
                     }
-                    guard matches.count == 1 else { return nil }
-                    return "\(matches[0].mangledName)(\(args.joined(separator: ", ")))"
+                    guard let hit = resolve(strict: false) ?? resolve(strict: true) else { return nil }
+                    return "\(hit.mangledName)(\(args.joined(separator: ", ")))"
                 }
             }
             if out == beforePass { break }
@@ -1233,6 +1255,9 @@ public enum GLSLTranslator {
             // F744: 2D genericimage4/fluidsim 이 bare g_LightAmbientColor 선언 시 padDefault=0 폭백.
             // 엔진 상수로 승격해 흰색(1,1,1,1)을 주입; 실제 scene ambientColor 연동은 후속 범위.
             || name == "g_LightAmbientColor"
+            // 짝 유니폼 — generic{,2,3,4}.vert / genericimage{2,3,4}.frag / genericparticle.frag 가
+            // `mix(g_LightSkylightColor, g_LightAmbientColor, dot(n,+Y)*0.5+0.5)` 로 함께 소비한다.
+            || name == "g_LightSkylightColor"
             || (name.hasPrefix("g_") && name.contains("Matrix"))  // 레이어/이펙트 행렬 계열(실물 frame_builder);
                                                                    // ...MatrixInverse/...MatrixInverseTranspose 변형 포함(실물 depthparallax)
             // F4-polish②: Forward+ 라이팅 유니폼(generic3.frag/genericimage3.frag PerformLighting_Deprecated
@@ -1296,7 +1321,15 @@ public enum GLSLTranslator {
         if name == "g_TexelSize" { return "(1.0 / eng.targetRes.xy)" }
         if name == "g_TexelSizeHalf" { return "(0.5 / eng.targetRes.xy)" }
         // F744: g_LightAmbientColor 는 엔진 상수로 승격. 실제 scene ambientColor 연동 전 흰색 중립값.
-        if name == "g_LightAmbientColor" { return "float4(1.0, 1.0, 1.0, 1.0)" }
+        // G-A2/A4/B2: **타입은 vec3 다.** 동봉 WEAssets 의 선언 12건이 전부 `uniform vec3
+        // g_LightAmbientColor` 이고 vec4 선언은 0건(generic{,2,3,4}.vert · genericimage{2,3,4}.frag ·
+        // genericparticle.frag · genericropeparticle.frag · base/model_vertex_v1.h ·
+        // fluidsimulation_combine.frag ×2). float4 를 주입하면 소비처가 전부 타입 불일치로
+        // MSL 컴파일에 실패한다 — 예: fluidsimulation_combine.frag:117 `max(CAST3(0.001), g_LightAmbientColor)`.
+        if name == "g_LightAmbientColor" { return "float3(1.0, 1.0, 1.0)" }
+        // 같은 반구 앰비언트 짝(generic4.vert:9 등 `uniform vec3 g_LightSkylightColor`). 미등재 시
+        // 머티리얼 팬텀 슬롯(padDefault 0)으로 강등돼 위쪽 반구가 검게 죽는다.
+        if name == "g_LightSkylightColor" { return "float3(1.0, 1.0, 1.0)" }
         // F4-polish②: Forward+ 라이팅 유니폼 — 위 isEngine 주석의 "인식만, 인덱스 배열 피드는 스코프
         // 밖" 한계를 그대로 유지. g_LFeature_ShadowProjection 만 실측 mat4(WE HLSL 크로스컴파일형
         // `const float4x4 g_LFeature_ShadowProjection[...]`, A2-pbr-lighting.md:238) — 항등 반환.

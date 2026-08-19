@@ -31,7 +31,25 @@ public enum ProjectJSONParser {
         // 없을 때만 종전대로 폴더명에 폴백한다 — steamcmd 코퍼스는 폴더명 자체가 워크샵 id 라 무변화.
         let workshopId = parseStringOrNumber(obj["workshopid"])
         let id = workshopId ?? folderURL.lastPathComponent
-        let type = WallpaperType.from(obj["type"] as? String)
+        var type = WallpaperType.from(obj["type"] as? String)
+        // G-E3-03: `type` 은 **선택** 키다. WE 2.8.42 설치본 실측: project.json 21개 중 5개가 type 을
+        // 생략한다 — `sheep`(sheep.exe, application) `techno`/`audiophile`(*.json, scene)
+        // `templates/gif`(gifscene.json) `templates/flag`(scene.json). 워크샵 코퍼스에도 1건 있다.
+        // `WallpaperType.from(nil)` 이 `.preset` 을 내는 것 자체는 옳다(진짜 프리셋 폴더는 type 이
+        // 비는 게 관례) — 문제는 그 뒤 RendererFactory 가 `.preset` 에서 렌더러를 만들지 못해
+        // "라이브러리엔 보이는데 적용하면 아무것도 안 뜨는" 상태가 된다는 것이다. `preset`/
+        // `dependency` 가 없으면 진짜 프리셋이 아니므로 확장자로 추론한다. 두 키 가드가 프리셋
+        // 오분류를 막는다(무회귀).
+        if type == .preset, obj["preset"] == nil, obj["dependency"] == nil,
+           let file = obj["file"] as? String {
+            switch (file as NSString).pathExtension.lowercased() {
+            case "json": type = .scene
+            case "html", "htm": type = .web
+            case "exe": type = .application
+            case let ext where VideoFormats.nativeExtensions.contains(ext): type = .video
+            default: break
+            }
+        }
         let rawTitle = obj["title"] as? String
         let title = (rawTitle?.isEmpty == false) ? rawTitle! : id
         let tags = (obj["tags"] as? [String]) ?? []
