@@ -91,8 +91,13 @@ public final class SceneVideoLayer {
         g.maximumSize = CGSize(width: 1920, height: 1920)
         return g
     }()
+    /// F840: 세마포어 동기 대기의 상한. 무한 대기는 Task 가 영영 완료되지 않으면(협조 스레드풀 고갈,
+    /// 응답 없는 네트워크 볼륨의 mp4) 호출 스레드를 영구 블록한다 — 헤드리스 경로는 draw 스레드다.
+    /// 타임아웃 시 값을 **읽지 않고**(박스는 락이 없어 늦게 도착한 쓰기와 경합) 폴백으로 간다.
+    static let assetLoadTimeoutSeconds: Double = 5
+
     // load(.duration) 은 비동기 — 호출부(wrappedTime/headlessTexture)가 동기이고 헤드리스 디코드가
-    // 어차피 블로킹이라, 구조 변경 대신 세마포어로 동기 대기한다. 로드 실패 시 0 — wrap 이 t 를 그대로 통과(기존과 동일).
+    // 어차피 블로킹이라, 구조 변경 대신 세마포어로 동기 대기한다. 로드 실패/타임아웃 시 0 — wrap 이 t 를 그대로 통과(기존과 동일).
     private lazy var duration: Double = {
         let asset = AVURLAsset(url: mp4URL)
         let sem = DispatchSemaphore(value: 0)
@@ -101,7 +106,10 @@ public final class SceneVideoLayer {
             loaded.value = try? await asset.load(.duration)
             sem.signal()
         }
-        sem.wait()
+        guard sem.wait(timeout: .now() + SceneVideoLayer.assetLoadTimeoutSeconds) == .success else {
+            WapleLog.warn("[Waple] video duration load timed out — wrap disabled: \(mp4URL.lastPathComponent)")
+            return 0
+        }
         return loaded.value?.seconds ?? 0
     }()
 
@@ -197,7 +205,12 @@ public final class SceneVideoLayer {
             }
             sem.signal()
         }
-        sem.wait()
+        // F840: 무한 대기 금지(위 assetLoadTimeoutSeconds 주석 참조) — 여기는 startLive(마운트) 스레드다.
+        guard sem.wait(timeout: .now() + SceneVideoLayer.assetLoadTimeoutSeconds) == .success else {
+            WapleLog.warn("[Waple] video track transform load timed out — orientation correction skipped")
+            trackOrientation = .identity
+            return
+        }
         guard !transform.value.isIdentity else { trackOrientation = .identity; return }
         if let o = VideoTrackOrientation.classify(transform.value) {
             trackOrientation = o
@@ -335,10 +348,18 @@ public final class SceneVideoLayer {
         guard w > 0, h > 0 else { return nil }
         let bpr = w * 4
         var bytes = [UInt8](repeating: 0, count: bpr * h)
-        guard let ctx = CGContext(data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: bpr,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // F840: `&bytes` 는 inout 포인터가 호출 밖으로 새어나가는 UB — CGContext 가 그 버퍼를
+        // 계속 붙잡고 draw 까지 간다. 형제 경로(TexDecoder.draw·TextRasterizer.render)와 동일하게
+        // 컨텍스트 생성·드로잉을 withUnsafeMutableBytes 안에서 끝낸다.
+        let ok = bytes.withUnsafeMutableBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress,
+                  let ctx = CGContext(data: base, width: w, height: h, bitsPerComponent: 8, bytesPerRow: bpr,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard ok else { return nil }
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: w, height: h, mipmapped: false)
         desc.usage = [.shaderRead]
         guard let tex = device.makeTexture(descriptor: desc) else { return nil }

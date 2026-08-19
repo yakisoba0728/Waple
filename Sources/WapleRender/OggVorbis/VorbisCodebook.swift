@@ -94,6 +94,14 @@ struct VorbisCodebook {
             let valueBits = Int(r.read(4)) + 1
             let sequenceP = r.readBit() == 1
             let lookupValues: Int = (lookupType == 1) ? lookup1Values(entries, dimensions) : entries * dimensions
+            // F840: EOP·크기 검증을 **할당보다 먼저** 한다. 종전에는 multiplicands 를 먼저 잡고
+            // 다 읽은 뒤에야 EOP 를 봤기 때문에, 100바이트짜리 setup 패킷 하나가
+            // entries*dimensions(상한 2^24) 개의 Double = 134MB 할당을 그대로 유발했다.
+            // 남은 비트로 lookupValues×valueBits 를 채울 수 없으면 어차피 EOP 이므로 지금 거절한다.
+            if r.endOfPacket { throw VorbisError.corrupt("EOP before codebook VQ") }
+            guard lookupValues > 0, lookupValues <= r.bitsRemaining / valueBits else {
+                throw VorbisError.corrupt("codebook VQ lookupValues \(lookupValues) exceeds packet")
+            }
             var multiplicands = [Double](repeating: 0, count: lookupValues)
             for i in 0..<lookupValues { multiplicands[i] = Double(r.read(valueBits)) }
             if r.endOfPacket { throw VorbisError.corrupt("EOP in codebook VQ") }

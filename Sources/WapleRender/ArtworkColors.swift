@@ -54,11 +54,19 @@ public enum ArtworkColors {
         let w = min(cg.width, 64), h = min(cg.height, 64)
         guard w > 0, h > 0 else { return nil }
         var px = [UInt8](repeating: 0, count: w * h * 4)
-        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        ctx.interpolationQuality = .low
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // F840: `&px` 를 CGContext(data:) 에 넘기면 inout 로 만든 임시 포인터가 호출 밖으로 새어나간다(UB —
+        // 그 포인터의 유효 수명은 CGContext 생성 호출 뿐이다). 형제 경로(TexDecoder.draw·
+        // TextRasterizer.render)와 동일하게 컨텍스트 생성·드로잉을 withUnsafeMutableBytes 안에서 끝낸다.
+        let ok = px.withUnsafeMutableBytes { ptr -> Bool in
+            guard let base = ptr.baseAddress,
+                  let ctx = CGContext(data: base, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.interpolationQuality = .low
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard ok else { return nil }
         return palette(rgba: px, width: w, height: h)
     }
 

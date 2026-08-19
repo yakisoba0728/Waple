@@ -315,11 +315,26 @@ private final class VorbisStream {
 
     // MARK: 전체 디코드
 
+    /// 채널당 디코드 프레임 절대 상한. 씬 내장 사운드(project.json 의 짧은 루프)는 48kHz 기준
+    /// 10분이면 과할 만큼 넉넉하다 — 2,880만 프레임 = 채널당 115MB(Float).
+    /// F840: 종전 clamp 는 finalGranule 과 `audioPackets.count * blocksize1` 의 min 이었는데
+    /// **둘 다 파일 제어값**이라 상한 역할을 못 했다. 10MB 짜리 .ogg 가 런트 패킷 수백만 개를 담으면
+    /// 곱이 ~2.4e9 → 채널당 reserveCapacity(2.4e9) ≈ 10GB(스테레오 20GB)로 즉시 OOM 이었다.
+    /// 절대 상한으로 예약을 캡하고, 실제 산출이 그 선을 넘으면 예약 대신 깨끗이 실패시킨다.
+    static let maxDecodedFrames = 48_000 * 60 * 10
+
+    /// 선반영 예약의 상한(채널당 2M 프레임 = 8MB, 48kHz 기준 ~44초). 예약은 성능 최적화일 뿐이라
+    /// 이보다 긴 트랙도 Array 증분 성장으로 정상 디코드된다 — 상한을 maxDecodedFrames(115MB/채널)이
+    /// 아니라 여기 두는 이유는, 파일이 제어하는 값으로 그만한 메모리를 **미리** 잡게 두지 않기 위해서다.
+    static let maxReservedFrames = 1 << 21
+
     func decodeAll(finalGranule: Int64) throws -> DecodedAudio {
         var output = [[Float]](repeating: [], count: channels)
-        // granulepos 는 파일 제어값 — 실제 산출 가능한 최대 프레임 수(패킷수×최대블록)로 clamp(거대 예약 방지).
-        let frameCapacity = min(max(0, Int(clamping: finalGranule)), audioPackets.count * blocksize1)
-        for ch in 0..<channels { output[ch].reserveCapacity(frameCapacity) }
+        // granulepos 는 파일 제어값 — 실제 산출 가능한 최대 프레임 수(패킷수×최대블록)로 clamp 하되,
+        // 그 곱 자체도 파일 제어값이므로 예약 상한(maxReservedFrames)으로 한 번 더 캡한다(거대 예약 방지).
+        let frameLimit = Self.maxDecodedFrames
+        let estimate = min(max(0, Int(clamping: finalGranule)), audioPackets.count * blocksize1)
+        for ch in 0..<channels { output[ch].reserveCapacity(min(estimate, Self.maxReservedFrames)) }
 
         var prevWindow = [[Float]](repeating: [], count: channels)
         var prevLength = 0
@@ -420,6 +435,10 @@ private final class VorbisStream {
             for ch in 0..<channels { newPrev[ch] = Array(timeBuf[ch][rightStart..<rightStart + saveCount]) }
             if hadPrev {
                 for ch in 0..<channels { output[ch].append(contentsOf: timeBuf[ch][leftStart..<rightStart]) }
+                // 상한 초과는 '조용히 잘라내기' 대신 실패 — 잘라내면 손상 파일이 정상 재생처럼 보인다.
+                guard output[0].count <= frameLimit else {
+                    throw VorbisError.corrupt("decoded frames > \(frameLimit)")
+                }
             }
             prevWindow = newPrev
             prevLength = saveCount

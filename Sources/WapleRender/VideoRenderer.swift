@@ -42,6 +42,13 @@ public final class VideoRenderer: WallpaperRenderer {
         self.convert = convert
     }
 
+    /// teardown 미호출 경로 안전망(형제 렌더러 전원이 이미 보유: WebRenderer·SceneVideoLayer·SceneRenderer).
+    /// 이게 없으면 놓친 teardown 하나가 occlusionObserver(NotificationCenter 등록)를 남기고,
+    /// AVQueuePlayer 가 도달 불가능한 채로 디코드를 계속 돌린다. teardown() 은 옵셔널 해제 정리라 멱등.
+    deinit {
+        teardown()
+    }
+
     public func mount(in container: NSView, project: WallpaperProject) throws {
         mountToken &+= 1
         let token = mountToken
@@ -245,8 +252,18 @@ public final class VideoRenderer: WallpaperRenderer {
         return true
     }
 
+    /// 수동 정지·가림 정지의 합성(WebRenderer 의 isEffectivelyPaused 와 같은 모델).
+    private var isEffectivelyPaused: Bool { pausedManually || pausedByOcclusion }
+
     public func pause() { pausedManually = true; player?.pause() }
-    public func resume() { pausedManually = false; player?.play() }
+    /// F840: 종전 resume() 은 무조건 play() 라 **가려진 창의 영상이 되살아났다**(가림 정지의 목적인
+    /// 절전이 무효화되고, 이후 visible 복귀 시엔 pausedByOcclusion 이 여전히 true 라 상태도 어긋난다).
+    /// 가림 정지 중이면 플래그만 내리고 재생은 occlusion 옵저버의 visible 복귀에 맡긴다.
+    public func resume() {
+        pausedManually = false
+        guard !isEffectivelyPaused else { return }
+        player?.play()
+    }
 
     /// F820: 음량/배속 라이브 반영 — UserDefaults 에 이미 저장된 새 값을 실행 중인 플레이어에
     /// 직접 적용해, apply() 전체 리마운트(mkv/webm 은 ffmpeg 재변환 대기+재생 리셋) 없이 즉시 반영.

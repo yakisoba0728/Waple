@@ -85,18 +85,32 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
         return runningPlayer(bundleIds: running)
     }
 
-    /// osascript 실행 → stdout(성공 시). 실패/비정상 종료 → nil.
+    /// osascript 실행 → stdout(성공 시). 실패/비정상 종료/타임아웃 → nil.
     static func runOSAScript(_ source: String, timeout: TimeInterval = 2) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         p.arguments = ["-e", source]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = Pipe()
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        p.standardOutput = outPipe
+        p.standardError = errPipe
         do {
             try p.run()
         } catch {
             return nil
+        }
+        // F840: 파이프 배수를 종료 대기와 **동시에** 돌린다. 종전에는 waitUntilExit 뒤에야 읽었기 때문에
+        // 출력이 파이프 버퍼(64KB)를 넘으면 자식이 write 에서 블록 → 종료하지 않고, 대기 스레드가
+        // 그대로 붙잡혔다(타임아웃 terminate 가 있어도 그동안 유틸리티 스레드 하나가 통째로 정지).
+        // stderr 도 같은 이유로 배수 대상이다(종전엔 아무도 읽지 않는 Pipe 였다).
+        let outBox = SemaphoreResultBox(Data())
+        let drained = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            outBox.value = outPipe.fileHandleForReading.readDataToEndOfFile()
+            drained.signal()
+        }
+        DispatchQueue.global(qos: .utility).async {
+            _ = errPipe.fileHandleForReading.readDataToEndOfFile()
         }
         let finished = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .utility).async {
@@ -109,7 +123,10 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
             return nil
         }
         guard p.terminationStatus == 0 else { return nil }
-        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        // 자식이 끝났으면 쓰기단이 닫혀 배수도 곧 EOF 다. 그래도 상한을 두고, 미완이면 박스를
+        // 읽지 않는다(락 없는 박스 — 늦게 도착할 쓰기와 경합).
+        guard drained.wait(timeout: .now() + 1) == .success else { return nil }
+        return String(data: outBox.value, encoding: .utf8)
     }
 }
 
