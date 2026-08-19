@@ -161,7 +161,8 @@ public func meanLuma(rgba: [UInt8]) -> Double {
 /// 골든 비교 한 씬의 판정 결과.
 ///
 /// **이 로직이 여기 있는 이유는 모듈 경계 때문이다.** 원래는
-/// `Sources/WapleCompat/SnapshotCompare.swift` 의 `runCompare` **안 지역 상수**였는데,
+/// `SnapshotCompare.swift`(당시 `Sources/WapleCompat/`, 지금은 `Sources/WapleCompatCore/`) 의
+/// `runCompare` **안 지역 상수**였는데,
 /// `WapleCompat` 은 `.executableTarget` 이라 어떤 테스트 타깃도 의존할 수 없다
 /// (`grep -rn "import WapleCompat" Tests/` = 0건). 그래서 `SnapshotTests` 는 수식을
 /// 리터럴로 **베껴 자기 산수를 단언**했고 — 프로덕션 로직을 통째로 지워도 통과했다.

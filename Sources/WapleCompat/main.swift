@@ -1,4 +1,5 @@
 import Foundation
+import WapleCompatCore
 import WapleCore
 import WapleRender
 

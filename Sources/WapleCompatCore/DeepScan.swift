@@ -173,7 +173,7 @@ private struct DeepScanInputs: @unchecked Sendable {
     let assetsDir: URL?
 }
 
-enum DeepScan {
+public enum DeepScan {
     static let handPortNames: Set<String> = ["opacity", "tint", "pulse", "waterripple", "scroll", "waterwaves", "shake"]
 
     /// F681: ogg 디코드 누적 시간 예산(초). 순수 Swift Vorbis 디코드는 Debug 빌드에서 0.9MB ≈ 21s 라
@@ -193,7 +193,7 @@ enum DeepScan {
     /// - Returns: (마크다운 리포트, 프로젝트-레벨 미지원 건수 — F151 `--deep --strict` 게이트용. "미지원" 은
     ///   DeepReport 의 프로젝트-레벨 표(ALL 행)와 동일 기준: 핵심 에셋 파싱 실패, 위 리포트 각주 참고,
     ///   프로젝트 발견 여부 — false 면 루트/--only 오지정으로 스캔이 무의미, 호출측은 비정상 종료할 것.)
-    static func run(rootPath: String, only: String?) -> (report: String, unsupported: Int, projectsFound: Bool) {
+    public static func run(rootPath: String, only: String?) -> (report: String, unsupported: Int, projectsFound: Bool) {
         let root = URL(fileURLWithPath: NSString(string: rootPath).expandingTildeInPath, isDirectory: true).standardizedFileURL
         let assetsDir = firstExisting([root.appendingPathComponent("assets"),
                                        root.deletingLastPathComponent().appendingPathComponent("assets")])

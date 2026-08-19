@@ -9,7 +9,7 @@ import WapleSnapshot
 /// 렌더러는 호출만 — SceneRenderer.mount/captureFrames/pause/setSpectrum 공개 API 재사용.
 /// 헤드리스 캡처 규약은 RealPackagesGroundTruthTests 와 동일:
 /// nowPlaying 스텁 + 고정 시각 t + 오디오 무신호(pause+silent) + 고정 파티클 시드로 결정성 확보.
-enum SnapshotPipeline {
+public enum SnapshotPipeline {
 
     // 고정 캡처 조건(변경 시 베이스라인 재생성 필요).
     // WAPLE_THUMB_W/H: 골든 대비 고해상 단건 캘리브 캡처용 오버라이드(예: HDR bloom #22 — 256×144 는
@@ -143,7 +143,7 @@ enum SnapshotPipeline {
 
     // MARK: --capture (자기-일관 셀프체크 포함 → 결정/비결정 자동 분류)
 
-    static func runCapture(root: String, outDir: URL, label: String?) -> Int32 {
+    public static func runCapture(root: String, outDir: URL, label: String?) -> Int32 {
         let start = Date()
         let sha = gitSHA()
         let lbl = label ?? sha

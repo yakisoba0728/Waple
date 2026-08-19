@@ -19,7 +19,7 @@ extension SnapshotPipeline {
     // 여기 지역 상수로 두면 테스트 타깃이 닿을 수 없어(WapleCompat 은 executableTarget)
     // SnapshotTests 가 수식을 베껴 자기 산수를 단언하는 상태가 된다. 그쪽 doc 참조.
 
-    static func runCompare(root: String, baselineDir: URL) -> Int32 {
+    public static func runCompare(root: String, baselineDir: URL) -> Int32 {
         let start = Date()
         guard let mdata = try? Data(contentsOf: baselineDir.appendingPathComponent("manifest.json")),
               let baseline = try? SnapshotManifest.decode(mdata) else {

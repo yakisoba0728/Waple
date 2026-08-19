@@ -15,7 +15,7 @@ VideoRenderer 위임이 다른 레이어를 그리지 않기 때문(전체화면
 
 ## 도구
 
-- `WapleCompat --capture` / `--compare` (`Sources/WapleCompat/SnapshotPipeline.swift`,
+- `WapleCompat --capture` / `--compare` (`Sources/WapleCompatCore/SnapshotPipeline.swift`,
   `SnapshotCompare.swift`) — 캡처/비교 드라이버. 렌더러(`SceneRenderer`)는 공개 API 호출만.
 - `WapleSnapshot` (`Sources/WapleSnapshot/Snapshot.swift`) — GPU 무의존 순수 코어:
   매니페스트 스키마, diff 메트릭, 임계 판정, 해시. 유닛 테스트(`Tests/WapleSnapshotTests`).

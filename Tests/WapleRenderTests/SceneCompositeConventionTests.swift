@@ -8,6 +8,22 @@ import Metal
 /// - 반투명 텍스처 레이어(무-이펙트)가 올바르게 합성되는지 (기존엔 straight 출력 + src=one 이라 과다 밝음)
 /// - 알파 감소 효과 체인이 이중 premult 없이 곱해지는지 (0.7×0.7 → 0.49; 기존 버그 0.343)
 final class SceneCompositeConventionTests: XCTestCase {
+
+    /// 프로세스 스코프 임시 경로. **입력과 출력이 같은 규약을 써야 한다.**
+    ///
+    /// F148-sweep: 종전에는 입력이 `NSTemporaryDirectory()`(macOS 에서 프로세스별)인데
+    /// 출력만 리터럴 `/tmp/waple_cc_<tag>` 였다 — 11쌍 전부. 같은 리포가
+    /// `SnapshotCompare.swift:59` 에서 이미 PID 스코프(F148)를 도입해 두고 이 파일로
+    /// 전파되지 않았다. 귀결은 조용한 오통과가 아니라 **오실패/플레이크**이고,
+    /// `AGENTS.md` 가 병렬 실행에서 3/3 실패를 실측해 뒀다.
+    private static func scratchDir(_ name: String) -> URL {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_cc_\(pid)_\(name)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
     private func renderLuma(scene: String, texAlpha: UInt8 = 255, extraFiles: [(String, Data)] = [], tag: String) throws -> Double {
         var files: [(String, Data)] = [
             ("scene.json", scene.data(using: .utf8)!),
@@ -16,16 +32,14 @@ final class SceneCompositeConventionTests: XCTestCase {
             ("materials/w.tex", solidTex(255, 255, 255, alpha: texAlpha)),
         ]
         files.append(contentsOf: extraFiles)
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_\(tag)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("\(tag)")
         try encodePkg(files).write(to: dir.appendingPathComponent("scene.pkg"))
         let project = WallpaperProject(id: tag, type: .scene, fileName: "scene.pkg", previewName: nil,
                                        title: tag, tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { r.teardown() }
-        let outDir = URL(fileURLWithPath: "/tmp/waple_cc_\(tag)")
-        try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let outDir = Self.scratchDir("\(tag)_out")
         let urls = r.captureFrames(width: 64, height: 36, times: [0.1], toDir: outDir)
         return avgLuma(try XCTUnwrap(urls.first))
     }
@@ -49,8 +63,7 @@ final class SceneCompositeConventionTests: XCTestCase {
               "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],
             "visible":{"value":true}}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbtint", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("fbtint")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
@@ -64,8 +77,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbtint")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("fbtint_out")
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
@@ -91,8 +103,7 @@ final class SceneCompositeConventionTests: XCTestCase {
               "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],
             "visible":{"value":true}}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbnobg", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("fbnobg")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
@@ -106,8 +117,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbnobg")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("fbnobg_out")
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
@@ -133,8 +143,7 @@ final class SceneCompositeConventionTests: XCTestCase {
               "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],
             "visible":{"value":true}}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbblend", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("fbblend")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
@@ -148,8 +157,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbblend")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("fbblend_out")
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
@@ -171,8 +179,7 @@ final class SceneCompositeConventionTests: XCTestCase {
               "constantshadervalues":{"color":"1 0 0","alpha":1}}]}],
             "visible":{"value":true}}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbflip", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("fbflip")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
@@ -186,8 +193,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbflip")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("fbflip_out")
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         let top = try XCTUnwrap(rep.colorAt(x: 32, y: 5))
@@ -229,8 +235,7 @@ final class SceneCompositeConventionTests: XCTestCase {
            {"id":2,"image":"models/util/composelayer.json","origin":"1440 540 0","size":"960 1080",
             "visible":{"value":true}}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_fbpartial", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("fbpartial")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
@@ -244,8 +249,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_fbpartial")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("fbpartial_out")
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         // 컨트롤: 좌측(캡처 x=8 = 화면 240) = 흰띠 → 씬이 실제로 렌더됐음을 보증.
@@ -269,8 +273,7 @@ final class SceneCompositeConventionTests: XCTestCase {
                                    "options":{"fps":30,"length":60,"mode":"single"}},"value":1.0},
             "visible":{"value":true}}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_animA", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("animA")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
@@ -282,8 +285,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_animA")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("animA_out")
         let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 1.0, 2.0], toDir: out)
         XCTAssertEqual(urls.count, 3)
         // captureFrames 는 times 오름차순으로 반환(재정렬 불필요 — 파일명 사전순은 t≥10 에서 깨진다).
@@ -305,8 +307,7 @@ final class SceneCompositeConventionTests: XCTestCase {
                       "value":"240 540 0"},
             "visible":{"value":true}}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_animO", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("animO")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
@@ -318,8 +319,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_animO")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("animO_out")
         // captureFrames 는 times 오름차순으로 반환(재정렬 불필요 — 파일명 사전순은 t≥10 에서 깨진다).
         let urls = r.captureFrames(width: 64, height: 36, times: [0.0, 2.0], toDir: out)
         func px(_ url: URL, _ x: Int) -> Double {
@@ -342,16 +342,14 @@ final class SceneCompositeConventionTests: XCTestCase {
             "horizontalalign":"center","verticalalign":"center","origin":"960 540 0","size":"1 1",
             "visible":{"value":true}}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_text", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("text")
         try encodePkg([("scene.json", scene.data(using: .utf8)!)]).write(to: dir.appendingPathComponent("scene.pkg"))
         let project = WallpaperProject(id: "text", type: .scene, fileName: "scene.pkg", previewName: nil,
                                        title: "text", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 128, height: 72)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_text")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("text_out")
         let url = try XCTUnwrap(r.captureFrames(width: 128, height: 72, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         var bright = 0
@@ -391,8 +389,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
          "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_capturefit", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("capturefit")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
@@ -404,8 +401,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_capturefit")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("capturefit_out")
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         XCTAssertLessThan(try XCTUnwrap(rep.colorAt(x: 32, y: 2)).redComponent, 0.1, "fit should letterbox a 16:9 scene in a square capture")
@@ -422,8 +418,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
          "objects":[{"id":1,"image":"models/red.json","origin":"120 540 0","size":"240 1080"}]}
         """
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_cc_capturefill", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = Self.scratchDir("capturefill")
         try encodePkg([
             ("scene.json", scene.data(using: .utf8)!),
             ("models/red.json", #"{"material":"materials/red.json"}"#.data(using: .utf8)!),
@@ -435,8 +430,7 @@ final class SceneCompositeConventionTests: XCTestCase {
         let r = SceneRenderer()
         try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
         defer { r.teardown() }
-        let out = URL(fileURLWithPath: "/tmp/waple_cc_capturefill")
-        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let out = Self.scratchDir("capturefill_out")
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: out).first)
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
         XCTAssertLessThan(try XCTUnwrap(rep.colorAt(x: 2, y: 32)).redComponent, 0.1, "fill should crop the far-left scene stripe in a square capture")

@@ -126,7 +126,7 @@ def main():
                          "전 코퍼스 캡처 8개(세션 A~D + PRE)의 매니페스트 — 뜬 방법·바이너리 동일성 근거")
     ev_probe = specfmt.ev("script", "scripts/mac-session/probe-session-nondeterminism.sh",
                           "세션 내 재현성·부하 개입·TZ·CWD 배제를 다시 뜨는 프로토콜")
-    ev_self = specfmt.ev("file", "Sources/WapleCompat/SnapshotPipeline.swift:187-212",
+    ev_self = specfmt.ev("file", "Sources/WapleCompatCore/SnapshotPipeline.swift:187-212",
                          "셀프체크가 같은 프로세스라 이 변동을 볼 수 없다")
 
     entries = [
@@ -255,7 +255,7 @@ def main():
                                "updateParallax 가 pointerUV 를 라이브 커서로 채운다"),
                     specfmt.ev("file", "Sources/WapleRender/SceneRendererFrameEncoder.swift:53",
                                "pointerUV → 이펙트 유니폼 g_PointerPosition"),
-                    specfmt.ev("file", "Sources/WapleCompat/SnapshotPipeline.swift:249-264",
+                    specfmt.ev("file", "Sources/WapleCompatCore/SnapshotPipeline.swift:249-264",
                                "핀 목록에 포인터가 없다")]),
 
         # 2026-08-16: 포인터 핀 이후에도 남은 잔여분. 위 항목들과 달리 이 값은 nondet-2026-08-01

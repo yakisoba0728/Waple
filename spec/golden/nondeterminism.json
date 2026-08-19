@@ -89,7 +89,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompat/SnapshotPipeline.swift:187-212",
+     "ref": "Sources/WapleCompatCore/SnapshotPipeline.swift:187-212",
      "note": "셀프체크가 같은 프로세스라 이 변동을 볼 수 없다"
     }
    ]
@@ -337,7 +337,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompat/SnapshotPipeline.swift:249-264",
+     "ref": "Sources/WapleCompatCore/SnapshotPipeline.swift:249-264",
      "note": "핀 목록에 포인터가 없다"
     }
    ]

@@ -62,7 +62,9 @@ PINS = [
      "3D combos 7곳 + 파티클 frametime 폴터 1곳"),
     ("Sources/WapleRender/SceneRendererResources.swift", "safeInt(", 1, "머티리얼 combos"),
     ("Sources/WapleRender/EffectShaders.swift", "safeInt(", 1, "tint 이펙트 blendmode 상수"),
-    ("Sources/WapleCompat/DeepScan.swift", "safeInt(", 1, "머티리얼 combos(스캐너 사본)"),
+    ("Sources/WapleCompatCore/DeepScan.swift", "safeInt(", 1,
+     "머티리얼 combos(스캐너 사본). 2026-08-19 에 WapleCompat → WapleCompatCore 로 옮겼다 —\n"
+     "     실행파일 타깃이라 테스트가 의존할 수 없었던 것을 라이브러리로 분리했다"),
 ]
 
 # ── R4: 가드 없는 좁힘 총수 기준선 ───────────────────────────────────────────
