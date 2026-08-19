@@ -610,7 +610,7 @@ extension SceneRenderer {
                   let frag = String(data: fData, encoding: .utf8) else { return nil }
             let scenePass = scenePassCursor < eff.passList.count ? eff.passList[scenePassCursor] : SceneEffectPass()
             scenePassCursor += 1
-            let combos = resolvePassCombos(frag: frag, scenePass: scenePass,
+            let combos = resolvePassCombos(vert: vert, frag: frag, scenePass: scenePass,
                                            matCombos: meta.matCombos, matTextures: meta.matTextures)
             guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: include) else {
                 NSLog("%@", "[Waple] GLSL translate failed: \(eff.name) pass \(i)")
@@ -725,10 +725,33 @@ extension SceneRenderer {
     /// ④ 콤보 해석. 우선순위: 머티리얼 기본 < scene 패스 지정.
     /// WE 규약: 샘플러 주석의 "combo":"X" 는 그 슬롯에 텍스처가 바인딩되면 자동 활성
     /// (실물 reflection/waterwaves/shake 의 페인트 마스크 — 미적용 시 마스크 무시 = 전화면 적용 사고).
-    private func resolvePassCombos(frag: String, scenePass: SceneEffectPass,
+    private func resolvePassCombos(vert: String, frag: String, scenePass: SceneEffectPass,
                                    matCombos: [String: Int], matTextures: [String?]) -> [String: Int] {
-        var combos = matCombos
-        for (k, v) in scenePass.combos { combos[k] = v }
+        // G-A3-1: 저작 콤보 키의 **대소문자가 선언과 다를 수 있다.**
+        // 실측(동봉 WEAssets + WE 설치본 씬 전수):
+        //  · 셰이더 `[COMBO]` 선언 이름은 **82종 전부 대문자**(소문자·혼합 0종).
+        //  · 그런데 씬이 저작하는 콤보 키는 66종 중 **15종이 소문자**이고 그 사용이 **56회**다
+        //    (`paintwork` `normalmap` `lightmap` `reflection` `spritesheet` `metal` `selfillum` …).
+        // 즉 WE 는 대소문자를 무시하고 맞춘다. 종전의 정확일치 조회는 그 56회를 통째로 놓쳐
+        // 선언 기본값(대개 0)으로 굳혔다 — WE 자기 배경 `fantasticcar` 가 `"paintwork":1` 로
+        // 저작하는데 셰이더는 `#ifdef PAINTWORK` 라서 **차체가 칠해지지 않는다**.
+        //
+        // 규약: **정확일치 우선**, 없을 때만 선언 이름 집합에서 대소문자 무시로 찾아 그 철자로
+        // 정규화한다. 이러면 (a) 기존 대문자 저작은 비트동일이고 (b) 혼합 케이스 선언(워크샵
+        // 셰이더에 있을 수 있다 — 동봉 자산엔 0종)도 자기 철자로 정확히 맞는다.
+        let declared = ShaderPreprocessor.parseComboDefaults(vert)
+            .merging(ShaderPreprocessor.parseComboDefaults(frag), uniquingKeysWith: { a, _ in a })
+        var canonicalByLowercased: [String: String] = [:]
+        for name in declared.keys where canonicalByLowercased[name.lowercased()] == nil {
+            canonicalByLowercased[name.lowercased()] = name
+        }
+        func canonical(_ key: String) -> String {
+            if declared[key] != nil { return key }                 // 정확일치 우선
+            return canonicalByLowercased[key.lowercased()] ?? key  // 선언에 없으면 원문 보존
+        }
+        var combos: [String: Int] = [:]
+        for (k, v) in matCombos { combos[canonical(k)] = v }
+        for (k, v) in scenePass.combos { combos[canonical(k)] = v }
         for (slot, comboName) in GLSLTranslator.samplerCombos(frag) where combos[comboName] == nil {
             let sceneBound = slot < scenePass.textureNames.count && scenePass.textureNames[slot] != nil
             let matBound = slot < matTextures.count && matTextures[slot] != nil
