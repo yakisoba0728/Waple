@@ -15,9 +15,9 @@ extension SnapshotPipeline {
         let pass: Bool
     }
 
-    /// 기준선 밝기로 정규화한 허용 편차. 절대 임계(strict 1.5/255)가 어두운 씬에서
-    /// 무력한 것을 보완한다 — spec/golden/gate-analysis.json 참조.
-    static let relativeTolerance: Double = 0.05
+    // 판정 로직·임계는 `WapleSnapshot.goldenVerdict` 로 올렸다(2026-08-19).
+    // 여기 지역 상수로 두면 테스트 타깃이 닿을 수 없어(WapleCompat 은 executableTarget)
+    // SnapshotTests 가 수식을 베껴 자기 산수를 단언하는 상태가 된다. 그쪽 doc 참조.
 
     static func runCompare(root: String, baselineDir: URL) -> Int32 {
         let start = Date()
@@ -82,23 +82,11 @@ extension SnapshotPipeline {
                         regressedToEmpty.append(entry.id); return
                     }
                     let m = diffRGBA(cur, base)
-                    let thr: DiffThreshold = entry.deterministic ? .strict : .lax
-                    // ① 해시 동일이면 픽셀이 완전히 같다 — diff 를 볼 것도 없이 통과.
-                    //    (지금까지 이 필드를 기록만 하고 안 읽었다.)
-                    let identical = m.maxAbsDiff == 0
-                    // ② 절대 임계는 어두운 씬에서 무력하다. 기준선 meanLuma 로 정규화한
-                    //    상대 지표를 함께 본다 — 둘 중 하나라도 넘으면 FAIL.
-                    //    분모를 0.02(=luma 5/255)로 하한 클램프하는 이유: 그보다 어두우면
-                    //    상대비가 발산해 오탐이 된다. 그 구간은 아래 ③ 이 맡는다.
-                    let relDiff = m.meanAbsDiff / (max(entry.meanLuma, 0.02) * 255.0)
-                    // ③ 아주 어두운 씬(기준선 meanLuma < 0.02)은 절대·상대 모두 둔하다.
-                    //    "구조가 사라졌는가" 로 본다 — 비검정 픽셀 비율의 급락.
-                    let structureLoss = entry.meanLuma < 0.02
-                        && m.meanAbsDiff > entry.meanLuma * 255.0 * 0.5
-                    let pass = identical
-                        || (passes(m, thr) && relDiff <= Self.relativeTolerance && !structureLoss)
+                    // 판정은 WapleSnapshot 의 프로덕션 심볼 하나로 모은다 — 테스트도 같은 것을 부른다.
+                    let verdict = goldenVerdict(m, baselineMeanLuma: entry.meanLuma,
+                                                deterministic: entry.deterministic)
                     rows.append(CompareRow(id: entry.id, metrics: m,
-                                           deterministic: entry.deterministic, pass: pass))
+                                           deterministic: entry.deterministic, pass: verdict.pass))
                 } catch {
                     regressedToEmpty.append(entry.id)
                     fputs("[snap] 현재 마운트 실패(회귀) \(entry.id): \(error)\n", stderr)
@@ -134,10 +122,29 @@ extension SnapshotPipeline {
             fputs("[snap] ⚠️ 비결정 씬 \(ndFail.count)종이 관대 임계도 초과(참고): \(ndFail.map { $0.id }.prefix(12).joined(separator: ","))\n", stderr)
         }
 
-        // F520: 베이스라인 entry 전부 skip(코퍼스/썸네일 부재)이면 루트 오지정 또는 코퍼스 유실 —
-        // 회귀(1)가 아니라 환경 오류(2). compared=0 인데 exit 0 은 CI 가 성공으로 오인.
-        if !baseline.entries.isEmpty, skippedMissing.count == baseline.entries.count {
-            fputs("[snap] ⚠️ compared=0 — 베이스라인 \(baseline.entries.count)개 씬이 현재 코퍼스/썸네일에서 전부 누락. root 지정 확인: \(root)\n", stderr)
+        // F520: 베이스라인 entry 가 대량으로 skip(코퍼스/썸네일 부재)이면 루트 오지정 또는 코퍼스
+        // 유실 — 회귀(1)가 아니라 환경 오류(2). compared=0 인데 exit 0 은 CI 가 성공으로 오인한다.
+        //
+        // [수정 2026-08-19] 종전 조건은 `skippedMissing.count == baseline.entries.count` 였다 —
+        // **완전일치일 때만** 걸린다. 170개 중 169개가 사라져도 통과였고, 그 한 개가 비교돼
+        // 회귀가 없으면 호출자는 `OK 골든 무회귀` 를 초록으로 찍었다. 호출자 어느 쪽도 개수를
+        // 보지 않는다(`golden-gate.sh` 는 `$?` 와 `[snap compare]` 유무만, `verify-plan-b12.sh` §7
+        // 은 `$?` 만). 위 F520 주석이 **정확히 이 부류를 막으려고** 쓰였는데 compared==0 한 점만
+        // 막은 셈이다. 비율 하한으로 바꾼다.
+        //
+        // 90% 인 이유: 코퍼스가 조금 다른 머신(썸네일 몇 개 부재)은 정상 운용이라 통과해야 하고,
+        // "반쯤 유실된 채 무회귀" 는 막아야 한다. 이 값은 판정 임계가 아니라 **환경 온전성**
+        // 기준이다 — 픽셀 임계와 달리 느슨하게 잡아도 잡으려는 것을 놓치지 않는다.
+        //
+        // 정수 산술로 쓴다(비율을 Double 로 내고 `Int(...)` 로 되돌리면 그 자체가
+        // scripts/spec/check_int_narrowing.py 가 막는 부류가 된다 — 실제로 그 검사에 걸렸다).
+        let minComparedPercent = 90
+        if !baseline.entries.isEmpty, rows.count * 100 < baseline.entries.count * minComparedPercent {
+            let pct = rows.count * 100 / baseline.entries.count
+            fputs("[snap] ⚠️ compared=\(rows.count)/\(baseline.entries.count) (\(pct)%) — "
+                  + "하한 \(minComparedPercent)% 미만. 베이스라인 씬이 현재 코퍼스/썸네일에서 "
+                  + "대량 누락됐다 — 이 상태의 '무회귀' 는 의미가 없다. "
+                  + "root 지정 확인: \(root) (skip=\(skippedMissing.count))\n", stderr)
             return 2
         }
         let regressed = !detFail.isEmpty || !regressedToEmpty.isEmpty
