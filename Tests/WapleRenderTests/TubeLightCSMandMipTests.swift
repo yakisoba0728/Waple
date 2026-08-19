@@ -250,6 +250,41 @@ final class TubeLightCSMandMipTests: XCTestCase {
 
     // MARK: - mip 샘플러 활성화
 
+    /// 소스의 `constexpr sampler <이름>(<인자>);` 선언 전수 — 이름 → 인자 문자열.
+    /// (인자에 중첩 괄호가 없는 형태만 쓰인다 — 선언부 전수 확인됨.)
+    private func samplerDeclarations(_ source: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for raw in source.components(separatedBy: "constexpr sampler ").dropFirst() {
+            guard let open = raw.firstIndex(of: "("), let close = raw.firstIndex(of: ")"), open < close else { continue }
+            let name = raw[..<open].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else { continue }
+            out[name] = String(raw[raw.index(after: open)..<close])
+        }
+        return out
+    }
+
+    /// `.sample(<샘플러>, …, level(…))` — **명시 LOD** 로 샘플되는 샘플러 이름 전수(괄호 균형 파스).
+    private func samplersUsedWithExplicitLOD(_ source: String) -> Set<String> {
+        var out = Set<String>()
+        for raw in source.components(separatedBy: ".sample(").dropFirst() {
+            var depth = 1
+            var call = ""
+            for ch in raw {
+                if ch == "(" { depth += 1 }
+                if ch == ")" {
+                    depth -= 1
+                    if depth == 0 { break }
+                }
+                call.append(ch)
+            }
+            guard depth == 0, call.contains("level(") else { continue }
+            let name = (call.components(separatedBy: ",").first ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { out.insert(name) }
+        }
+        return out
+    }
+
     func testAllTargetSamplersEnableLinearMip() {
         XCTAssertEqual(QuadShaders.source.components(
             separatedBy: "constexpr sampler s(filter::linear, mip_filter::linear,").count - 1, 6,
@@ -263,6 +298,30 @@ final class TubeLightCSMandMipTests: XCTestCase {
         XCTAssertFalse(Mesh3DShaders.source.contains("mip_filter::none"))
         XCTAssertFalse(QuadShaders.source.contains("mip_filter::none"))
         XCTAssertFalse(ParticleShaders.source.contains("mip_filter::none"))
+
+        // [정정 2026-08-19] 위 두 종류 단언은 **이름이 `s` 인 샘플러 하나**만 리터럴로 셌고, 없는 토큰
+        // (`mip_filter::none`)의 부재를 확인했다. mf_reflect 의 `fbSampler` 는 식별자가 다르고
+        // mip_filter 를 **아예 적지 않았을** 뿐이라(MSL 기본값이 none) 두 단언을 모두 통과하면서
+        // `level(reflectLod)` 를 무시하고 있었다 — 결함이 살아 있는 동안 이 테스트는 계속 초록이었다.
+        // 아래는 하드코딩된 이름이 아니라 **명시 LOD 로 샘플되는 모든 샘플러**를 소스에서 찾아 검사한다.
+        var checked = 0
+        for (label, source) in [("QuadShaders", QuadShaders.source),
+                                ("QuadShaders.nearest", QuadShaders.nearestSource),
+                                ("Mesh3DShaders", Mesh3DShaders.source),
+                                ("ParticleShaders", ParticleShaders.source)] {
+            let decls = samplerDeclarations(source)
+            for name in samplersUsedWithExplicitLOD(source).sorted() {
+                guard let decl = decls[name] else {
+                    XCTFail("\(label): level() 로 샘플되는 \(name) 의 constexpr sampler 선언을 못 찾았다")
+                    continue
+                }
+                XCTAssertTrue(decl.contains("mip_filter::linear"),
+                              "\(label): \(name) 은 level(...) 로 샘플되는데 mip_filter 가 없다 — "
+                              + "MSL 기본 mip_filter::none 이면 명시 LOD 가 통째로 무시된다(선언: \(decl))")
+                checked += 1
+            }
+        }
+        XCTAssertGreaterThan(checked, 0, "level() 샘플이 하나도 안 잡히면 이 오라클은 죽은 것이다")
     }
 
     func testTranslatedShaderSamplersEnableLinearMip() throws {
