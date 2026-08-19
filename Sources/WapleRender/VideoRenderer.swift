@@ -7,11 +7,15 @@ import WapleCore
 /// asset.load Task)는 전부 첫 줄에서 DispatchQueue.main.async 로 홉한 뒤에야 필드를 만진다.
 /// mountToken 세대 가드가 그 위에서 늦게 도착한 콜백을 무효화한다.
 ///
-/// **원래 맞는 표기는 `@MainActor` 다.** 그걸 못 쓰는 이유는 코드가 아니라 빌드 구성이다: 테스트
-/// 타깃은 아직 Swift 5·minimal 이고 XCTest 메서드(비격리)에서 이 타입을 40여 곳에서 직접 생성·구동한다
-/// (VideoRendererLifecycleTests·MediaFixRegressionTests 등). 소스에 @MainActor 를 붙이면 그 호출들이
-/// **에러**가 되어 `swift test` 가 통째로 안 선다. 테스트 타깃을 같은 커밋에서 @MainActor 로 올릴 때
-/// 이 표기를 @MainActor 로 교체할 것 — 그때 아래 AppKit 관련 진단(container.bounds/window 등)도 같이 없어진다.
+/// **`@MainActor` 로 바꾸지 마라.** 표기상으로는 그쪽이 더 정확해 보이지만 두 곳이 막는다:
+///  1. `RendererFactory.makeRenderer` 가 **nonisolated 여야 한다** — AppDelegate.captureSceneStill(F486)이
+///     백그라운드 큐에서 그것을 부르고, 팩토리의 switch 안에 `VideoRenderer()` 생성이 있다.
+///     여기에 격리를 붙이면 그 경로가 컴파일되지 않아 F486(메인 수 초 정지 수정)이 되돌아간다.
+///  2. 테스트 타깃은 아직 Swift 5·minimal 인데 비격리 XCTest 메서드에서 이 타입을 40여 곳에서
+///     직접 생성·구동한다(VideoRendererLifecycleTests·MediaFixRegressionTests 등) — 소스에 @MainActor 를
+///     붙이면 그 호출이 **에러**가 되어 `swift test` 가 통째로 안 선다.
+/// 그래서 아래 AppKit 관련 진단(container.bounds/window/occlusionState 등)은 **남겨 둔다**.
+/// 실제 실행 규율은 위 문단(메인 큐 한정 + mountToken 세대 가드)이고, 그것이 이 표기의 근거다.
 public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
     /// Conservative AVFoundation-native containers used directly without conversion.
     /// F230: WapleCore.VideoFormats.nativeExtensions 가 단일 소스 — 여기서 다시 선언하지 않는다.
