@@ -164,7 +164,19 @@ final class HDRBloomPass: HDRBloomEncoding {
         extractEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         extractEncoder.endEncoding()
 
-        var horizontalStep = SIMD2<Float>(1 / Float(quarter.width), 0)
+        // F671-sweep: LDR 형제(`LDRBloomPass.swift:134`)가 2026-08 에 1 → 2 로 고친 것이
+        // 이 자리로 오지 않았다. WE 1차 근거를 직접 재확인했다 —
+        // `WEAssets/shaders/downsample_eighth_blur_v.vert:12` 와 `blur_h_bloom.vert:12` 가 둘 다
+        // `float localTexel = g_TexelSize.{x,y} * 8.0` 이고, `g_TexelSize` 는 **풀해상도** 텍셀이다.
+        // quarter 텍셀 = 풀 4텍셀이므로 8풀텍셀 = **2 quarter-텍셀**. 종전 1 은 정확히 절반이라
+        // 글로우가 WE 보다 좁았다.
+        //
+        // 골든 위험 없음: 이 패스는 **폴백 전용**이다(`SceneRendererFinalizer.swift:31-70` —
+        // 8-레벨 피라미드가 먼저 시도되고 성공하면 `return true`). 커밋된 기준선은 피라미드
+        // 경로로 떴으므로 이 줄은 그 픽셀에 관여하지 않는다.
+        // `strengthScale`(:53) 은 현재 1(항등)이고 **강도** 배수라 이 공간 스트라이드와 별개다.
+        // 둘째 블러(`verticalStep`, 아래)는 eighth 1텍셀 = 8 풀텍셀로 원래부터 WE 와 일치한다.
+        var horizontalStep = SIMD2<Float>(2 / Float(quarter.width), 0)
         guard let horizontalEncoder = makeEncoder(
             commandBuffer: commandBuffer,
             target: eighth,
