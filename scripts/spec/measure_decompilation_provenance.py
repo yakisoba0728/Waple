@@ -77,6 +77,23 @@ def function_starts(data, pdata_rva, pdata_size, sections):
     return starts
 
 
+def decompiled_function_starts():
+    """Ghidra 산출물 파일명에서 얻은 함수 시작 VA 집합(**주입본** 주소 공간).
+
+    `WE_DECOMPILED` 가 없거나 디렉터리가 아니면 빈 집합 — 그러면 이 신호 없이 종전대로 분류한다.
+    산출물은 삭제 예정 리포에만 있으므로, 이 함수가 비어도 스크립트는 돌아야 한다.
+    """
+    root = os.environ.get("WE_DECOMPILED", "")
+    if not root or not os.path.isdir(root):
+        return set()
+    out = set()
+    for name in os.listdir(root):
+        m = re.fullmatch(r"[0-9a-f]{16}__FUN_([0-9a-f]+)\.c", name)
+        if m:
+            out.add(int(m.group(1), 16))
+    return out
+
+
 def cited_addresses():
     """리포가 인용하는 FUN_140xxxxxx 주소 전수(중복 제거)."""
     out = subprocess.run(
@@ -96,12 +113,24 @@ def main():
     e_lfanew, timestamp, image_base, prva, psize, sections = pe_facts(data)
     starts = function_starts(data, prva, psize, sections)
 
+    # [2026-08-19] 세 번째 신호: Ghidra 디컴파일 산출물의 **파일명**.
+    #
+    # `.pdata` 는 unwind 정보를 가진 함수만 담는다 — 리프 함수는 없다. 그래서 위 두 검사로
+    # 어느 쪽에도 안 걸리는 인용이 생겼고(종전 '미확정' 9건), 그게 "틀렸다" 를 뜻하지 않았다.
+    # Ghidra 는 `.pdata` 없이도 함수를 찾으므로 그 산출물이 판정을 좁힌다.
+    #
+    # 주의: 산출물은 **주입본** 주소 공간으로 이름 붙어 있다(`FUN_140xxxxxx.c`).
+    # 그러므로 파일이 인용 주소 그대로 존재하면 그 인용은 **주입본 기준**이고,
+    # 원본에서 읽으려면 −0xD0 이 필요하다 — `shifted` 와 같은 부류다.
+    decompiled = decompiled_function_starts()
     raw_ok, shifted, indeterminate = [], [], []
     for rva in cited_addresses():
         if rva in starts:
             raw_ok.append(rva)
         elif (rva - RICH_SHIFT) in starts:
             shifted.append(rva)
+        elif (IMAGE_BASE + rva) in decompiled:
+            shifted.append(rva)   # Ghidra 가 함수로 인정 — 주입본 기준 인용
         else:
             indeterminate.append(rva)
 
@@ -132,6 +161,12 @@ def main():
             "indeterminateList": hexes(indeterminate),
             "note": "미확정은 '틀렸다'가 아니다 — .pdata 는 unwind 정보를 가진 함수만 담으므로 "
                     "리프 함수이거나 함수 중간을 가리키는 인용이면 어느 쪽에도 안 걸린다.",
+            "signals": "① 원본 .pdata 함수 시작 ② −0xD0 한 값이 .pdata 함수 시작 "
+                       "③ Ghidra 산출물 파일명(주입본 주소 공간, WE_DECOMPILED 지정 시). "
+                       "③ 은 .pdata 에 없는 리프 함수를 잡아 종전 미확정 일부를 판정한다 — "
+                       "파일이 인용 주소 그대로 있으면 그 인용은 주입본 기준이므로 needsMinus0xD0 다.",
+            "decompiledSignalUsed": bool(decompiled),
+            "decompiledFunctionCount": len(decompiled),
         }, "확정", [ev]),
     ]), os.path.join("spec", "engine", "decompilation-provenance.json"))
 
