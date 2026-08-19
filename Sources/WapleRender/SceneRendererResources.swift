@@ -719,7 +719,19 @@ extension SceneRenderer {
         }
         // G-B4-08: 관례 폴백의 basename 은 디렉터리명이 아니라 `replacementkey` 다. 동봉 최상위
         // effect.json 46개가 전건 이 키를 갖고 7개가 디렉터리명과 다르다(EffectManifest 주석 참조).
-        return (shaderName ?? "effects/\(manifest.replacementKey ?? eff.name)", matCombos, matTextures)
+        //
+        // 다만 **그 키를 맹신하지 않는다.** 7개 중 6개는 실제 자산명과 맞는데
+        // (`watercaustics→caustics` 의 머티리얼이 `caustics.json`, `blurprecise→blur_precise` 가
+        // `blur_precise_gaussian_x.json` …) `depthparallax→iris` 하나는 어긋난다 — 그 이펙트의
+        // 머티리얼은 `depthparallax.json` 이라, iris 를 복제해 만들고 키를 안 고친 저작 흔적으로
+        // 보인다. 그래서 replacementkey 로 만든 경로에 **셰이더가 실재할 때만** 채택하고,
+        // 아니면 디렉터리명으로 돌아간다. 폴백은 원래 최후 수단이라 이 한 번의 조회 비용은 무해하다.
+        if let shaderName { return (shaderName, matCombos, matTextures) }
+        if let key = manifest.replacementKey, key != eff.name,
+           quietAssetData("shaders/effects/\(key).frag", package: package) != nil {
+            return ("effects/\(key)", matCombos, matTextures)
+        }
+        return ("effects/\(eff.name)", matCombos, matTextures)
     }
 
     /// ④ 콤보 해석. 우선순위: 머티리얼 기본 < scene 패스 지정.
