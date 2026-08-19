@@ -27,9 +27,13 @@ Sources/WapleRender/Resources/WEAssets/**/*.wav binary
 # 텍스트지만 정규화하지 않는다(-text). WE 원문은 CRLF 이고 ShaderPreprocessor 가
 # 그걸 전제로 정규화해 읽는다. 리포가 임의로 LF 로 바꾸면 원문과 바이트가 달라져
 # spec/assets/manifest.json 의 해시가 매번 어긋난다.
-Sources/WapleRender/Resources/WEAssets/**/*.vert -text
-Sources/WapleRender/Resources/WEAssets/**/*.frag -text
-Sources/WapleRender/Resources/WEAssets/**/*.geom -text
-Sources/WapleRender/Resources/WEAssets/**/*.h    -text
-Sources/WapleRender/Resources/WEAssets/**/*.json -text
-Sources/WapleRender/Resources/WEAssets/**/*.txt  -text
+#
+# 확장자 열거를 그만두고 트리 전체를 덮는다(2026-08-19 정정). 종전엔 아래 여섯 줄을
+# 확장자별로 적었는데, 두 종류가 그 그물을 빠져나가 이미 정규화된 채 커밋돼 있었다:
+#   - *.tex-json 298개 — `*.json` 은 `foo.tex-json` 에 매치되지 않는다(json 앞이 `-`).
+#   - *.js 4개 — 열거에 아예 없었다(WE 자체 씬 스크립트 모듈).
+# 302개 파일에서 \r 3,316바이트가 사라졌고, manifest.json 은 그 손상된 바이트를
+# 기준으로 떠져 있었다. 즉 자체 검증은 영원히 통과하고 WE 원본과의 대조는 영원히
+# 어긋나는 상태였다 — 매니페스트의 존재 이유가 드리프트 감지인데 정반대로 동작했다.
+# 확장자를 하나 더 열거하는 대신 그물 자체를 없앤다. 새 확장자가 들어와도 안전하다.
+Sources/WapleRender/Resources/WEAssets/** -text
