@@ -195,8 +195,8 @@ jobs:
             exit 1
           fi
           # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          if [ "${EXECUTED:-0}" -lt 2270 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 2270 미만. 테스트가 사라졌다."
+          if [ "${EXECUTED:-0}" -lt 2272 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 2272 미만. 테스트가 사라졌다."
             exit 1
           fi
 
