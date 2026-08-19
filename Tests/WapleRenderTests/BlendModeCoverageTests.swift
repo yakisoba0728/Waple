@@ -115,10 +115,21 @@ final class BlendModeCoverageTests: XCTestCase {
         for m in (1...32).sorted() {
             print("[BlendModeCoverage]   mode \(m): \(signatures[m]!)")
         }
-        // 하한은 보수적으로 둔다. 일부 모드가 이 색 조합에서 우연히 겹치는 것은 정상이고
-        // (4≡20 은 설계상 동일), 잡으려는 것은 "전부 한두 종류로 붕괴" 다.
-        XCTAssertGreaterThanOrEqual(distinct.count, 12,
-            "32종이 \(distinct.count)종으로 붕괴했다 — 블렌딩이 통째로 폴백했을 가능성이 크다")
+        // [실측 2026-08-19, CI run 32222689131] 이 색 조합에서 **27종**이 나온다.
+        // 겹친 다섯 그룹은 전부 설명된다 — 셋은 설계상 항등이고(아래 항등 테스트가 단언한다),
+        // 둘은 이 색 조합의 우연이다:
+        //
+        //   1(Darken)   == 5(Min)       설계 — o=1 이면 mix(A,r,1)==r
+        //   6(Lighten)  == 10(Max)      설계 — 같은 이유
+        //   4(Subtract) == 20           설계 — 문자 그대로 같은 식
+        //   9(Add)      == 31(A+B·o)    우연 — min(A+B,1) 과 A+B 가 UNORM 클램프로 수렴
+        //   26(Hue)     == 28(Color)    우연 — 두 색의 채도가 근접해 HSL 합성 결과가 같아짐
+        //
+        // 색 조합이 고정이라 27 은 안정적인 값이다. 하한을 25 로 둔다 — 정당한 블렌딩 수정이
+        // 한둘을 움직여도 견디면서, 잡으려는 것("전부 한두 종류로 붕괴")은 확실히 잡는다.
+        // 27 을 등호로 박지 않는 이유는, 그러면 회귀 감지기가 아니라 변경 금지 자물쇠가 되기 때문이다.
+        XCTAssertGreaterThanOrEqual(distinct.count, 25,
+            "32종이 \(distinct.count)종으로 붕괴했다(실측 정상치 27) — 블렌딩이 통째로 폴백했을 가능성이 크다")
     }
 
     /// `BlendMSL.applyBlending` 에서 직접 읽히는 항등·비항등 관계.
