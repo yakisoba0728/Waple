@@ -13,6 +13,11 @@ on:
   pull_request:
     paths-ignore: ["**.md", "docs/**", "LICENSE", "NOTICE", ".gitignore", ".gitattributes"]
   workflow_dispatch:   # 브랜치에서 손으로 돌려 워크플로 자체를 반복 검증(PR 없이)
+    inputs:
+      golden_bootstrap:
+        description: "합성 픽셀 골든 기준선을 다시 뜬다 — 아티팩트로 받아 눈으로 확인한 뒤 커밋할 것"
+        type: boolean
+        default: false
 
 # PR 이 열린 브랜치는 push 와 pull_request 두 이벤트가 모두 온다. head_ref(=PR 소스 브랜치)를
 # 우선 키로 쓰면 둘이 같은 그룹에 묶여 나중 것이 앞의 것을 취소한다 — 한 브랜치 상태당 실행 1회.
@@ -147,17 +152,21 @@ jobs:
       - name: Test
         id: test
         continue-on-error: ${{ matrix.configuration == 'release' }}
+        env:
+          # 평소엔 0 — 기준선이 없으면 SyntheticPixelGoldenTests 가 **실패**한다(도장이 되지 않게).
+          # workflow_dispatch 로 golden_bootstrap 을 켤 때만 기준선을 다시 뜬다.
+          WAPLE_GOLDEN_BOOTSTRAP: ${{ inputs.golden_bootstrap && '1' || '0' }}
         run: |
           set -o pipefail
           swift test --skip-build -c ${{ matrix.configuration }} ${{ matrix.testFlags }} 2>&1 | tee test-output.log
 
-      # [2026-08-19] 스킵 가시화.
+      # [2026-08-19] 스킵 가시화 **및 게이트**.
       #
       # XCTSkip("no Metal") 이 76개 파일 322곳에 걸쳐 있고 그 아래 테스트가 561개다.
       # 스킵은 통과로 집계되므로, 러너 이미지가 바뀌거나 GPU 가 없는 세션에서 돌면
       # **전부 스킵된 채 초록**이 뜬다 — 통과 수를 세는 것만으로는 알아챌 수 없다.
-      # 아직 임계값을 모르므로(이 잡이 그 값을 처음 만든다) 지금은 게이트가 아니라
-      # 요약에 숫자를 남기는 단계다. 몇 런 쌓여 정상 범위가 서면 하한을 건다.
+      # 처음엔 숫자만 남기는 단계로 뒀고, 두 번의 실측(run 32219037798 debug·release)으로
+      # 정상 범위가 섰으므로 이제 하한/상한을 건다. 값과 근거는 아래 if 문 주석에.
       - name: Skip / execution census
         if: always()
         run: |
@@ -174,8 +183,33 @@ jobs:
           echo "- skipped:  \`${SKIPPED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
+          # [2026-08-19] 트립와이어. 이제 정상 범위를 안다(실측 executed 2270 / skipped 46~47,
+          # run 32219037798 debug·release 양쪽).
+          #
+          # 막으려는 것은 **대량 무음 스킵**이다. XCTSkip("no Metal") 아래 테스트가 561개인데
+          # 스킵은 통과로 집계되므로, 러너 이미지가 바뀌거나 GPU 없는 세션에서 돌면 전부
+          # 스킵된 채 초록이 뜬다 — 통과 수만 봐서는 알아챌 수 없다. 상한을 100 으로 둔다:
+          # 정상치의 두 배 여유가 있어 흔들리지 않고, 561 이 되는 실패 양상은 확실히 잡는다.
+          if [ "${SKIPPED:-0}" -gt 100 ]; then
+            echo "::error::스킵 ${SKIPPED}건 — 상한 100 초과. GPU/코퍼스 없이 대량 스킵되고 있을 가능성이 크다."
+            exit 1
+          fi
+          # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
+          if [ "${EXECUTED:-0}" -lt 2270 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 2270 미만. 테스트가 사라졌다."
+            exit 1
+          fi
+
       # 실패 원인부터 먼저 뽑는다 — 종전 패턴("failed" 포함)은 정상 로그의 "load failed"·"save failed"
       # 진단문에 파묻혀 실제 실패 단언이 head -50 밖으로 밀려났다(런 30541571683 에서 실측).
+      - name: Upload synthetic golden baseline
+        if: always() && inputs.golden_bootstrap && matrix.configuration == 'debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-golden-baseline
+          path: spec/golden/synthetic/
+          if-no-files-found: warn
+
       - name: Show failure summary
         if: failure()
         run: |

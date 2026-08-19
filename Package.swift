@@ -51,7 +51,11 @@ let package = Package(
         .testTarget(name: "WapleCoreTests", dependencies: ["WapleCore"]),
         .testTarget(name: "WapleSnapshotTests", dependencies: ["WapleSnapshot"]),
         .testTarget(name: "WapleLibraryTests", dependencies: ["WapleLibrary", "WapleCore"]),
-        .testTarget(name: "WapleRenderTests", dependencies: ["WapleRender", "WapleCore"]),
+        // WapleSnapshot 추가(2026-08-19): SyntheticPixelGoldenTests 가 diffRGBA/DiffThreshold/
+        // meanLuma 를 쓴다. 픽셀 비교 로직을 테스트 안에 다시 구현하지 않기 위한 것이다 —
+        // SnapshotTests 가 relDiff/structureLoss 를 인라인으로 재구현해 **자기 산수를 단언하는**
+        // 상태였고(프로덕션 로직을 지워도 통과했다), 같은 실수를 반복하지 않는다.
+        .testTarget(name: "WapleRenderTests", dependencies: ["WapleRender", "WapleCore", "WapleSnapshot"]),
         .testTarget(name: "WapleAppTests", dependencies: ["Waple", "WapleCore", "WapleLibrary", "WapleRender"]),
     ]
 )
