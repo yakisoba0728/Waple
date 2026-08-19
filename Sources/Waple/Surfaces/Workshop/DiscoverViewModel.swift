@@ -58,7 +58,11 @@ final class DiscoverViewModel: ObservableObject {
         rows = Self.rowSorts.map { Row(sort: $0) }    // 재로드 시 이전 결과 비우고 .loading 으로
         await withTaskGroup(of: Void.self) { group in
             for index in rows.indices {
-                group.addTask { @MainActor in await self.loadRow(at: index) }
+                // 클로저에 `@MainActor` 를 다시 붙이지 않는다 — 이 클래스가 이미 `@MainActor` 라
+                // `loadRow` 자체가 메인 액터에서 돌고(await 로 홉), `self` 는 그 덕에 Sendable 이다.
+                // 명시 어노테이션을 붙이면 region-based isolation 검사기가 "이해하지 못하는 패턴"
+                // 이라며 진단을 내는데(컴파일러 한계), 지우면 의미는 그대로면서 그 진단이 사라진다.
+                group.addTask { await self.loadRow(at: index) }
             }
         }
         // 탭 이탈 취소로 그룹이 조기 종료됐으면 시도로 세지 않는다 — 재진입 시 다시 로드돼야 한다.

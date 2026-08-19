@@ -14,7 +14,11 @@ protocol AudioSpectrumProviding: AnyObject {
 /// F536(F-51): 실제 SCStream 은 프로세스 전역 공유 코어(SharedAudioCaptureCore, 파일 말미)가 1개만
 /// 보유 — 멀티모니터(화멻다 SceneRenderer/WebRenderer 인스턴스)의 중복 캡처를 디듑한다. 캡처 대상은
 /// 화면 무관 전역 시스템 오디오라 공유가 정확하며, 각 인스턴스는 원시 버퍼를 넘겨받아 자체 FFT 를 돌린다.
-public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding {
+/// @unchecked Sendable: 이 타입은 애초에 멀티스레드 전제로 쓰인다 — start/stop 은 메인,
+/// process 는 캡처 콜백 큐(waple.audio)다. 그래서 가변 상태 둘(`running`·`accumulator`)을 아래
+/// `lock` 이 직렬화하고, 나머지는 let 이며, 소비자 콜백 `onFrame` 은 항상 메인 홉 뒤에 호출된다.
+/// 컴파일러가 볼 수 없는 그 규율이 근거라 `unchecked` 다(진단 :93/:125 의 메인 홉 self 캡처).
+public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding, @unchecked Sendable {
     public var onFrame: (([Float]) -> Void)?
 
     private let fftSize = 1024
@@ -294,7 +298,12 @@ public enum AudioInputSettings {
 /// F536(F-51): 프로세스 전역 단일 SCStream 캡처 코어. 구독자(SystemAudioSpectrumProvider)가 1명 이상이면
 /// 캡처를 유지하고 원시 sampleBuffer 를 전원에게 팬아웃, 0명이 되면 스트림을 닫는다(참조 카운트).
 /// 세대(generation) 관리는 구 per-instance 구현과 동형 — 급속 stop/start 시 고아 스트림 방지.
-private final class SharedAudioCaptureCore: NSObject, SCStreamOutput {
+/// @unchecked Sendable: 가변 상태(subscribers/stream/running/generation) **전부**가 아래 `lock`
+/// 임계 구역 안에서만 읽고 쓰인다 — add/remove/isCurrent/swapStreamIfCurrent/liveSubscribers/
+/// stopCaptureIfRunningLocked 가 접근점의 전부다(교착 회피를 위해 stopCapture 만 락 밖, F544).
+/// 이 코어는 애초에 여러 스레드(SCStream 콜백 큐 · 구독자 start/stop · startCapture Task)에서
+/// 불리도록 설계됐고 락이 그 계약이다 — 컴파일러가 못 보는 그 계약을 표기로 알린다.
+private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked Sendable {
     static let shared = SharedAudioCaptureCore()
 
     /// 약한 구독자 상자 — provider 가 stop 없이 해제돼도 코어가 영구 유지되지 않게 한다.
@@ -402,6 +411,10 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput {
         }
     }
 
+    /// SCStreamOutput 의 유일한 요구사항도 **optional @objc** 다 — 후킹이 풀리면 sampleBuffer 가 한 번도
+    /// 안 들어와 스펙트럼이 영구 무음이 되고(폴백 경로와 구분 불가) 실패가 조용하다. 셀렉터 고정 근거는
+    /// WebRenderer.swift 의 didFinish 주석 참조.
+    @objc(stream:didOutputSampleBuffer:ofType:)
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
         let live = liveSubscribers()

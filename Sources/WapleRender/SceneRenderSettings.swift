@@ -1,7 +1,9 @@
 import Foundation
 
 /// 배경이 화면에 맞춰지는 방식.
-public enum FitMode: String, CaseIterable {
+/// Sendable: 페이로드 없는 String rawValue enum — public 타입이라 자동 추론이 안 되고, 그러면
+/// 이 타입을 담는 상수(SnapshotPipeline.fitMode 등)가 "non-Sendable 전역" 진단을 받는다.
+public enum FitMode: String, CaseIterable, Sendable {
     case fit       // contain: 비율 유지, 전체 표시(다르면 여백)
     case fill      // cover: 비율 유지, 꽉 채움(넘치는 부분 잘림)
     case stretch   // 비율 무시, 화면에 늘여 채움

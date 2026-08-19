@@ -57,13 +57,20 @@ enum ScreenSaverLogic {
 
 /// 설치/선택/해제 부수효과. 메뉴 토글과 AppDelegate.apply 훅에서 호출한다.
 enum ScreenSaverController {
+    // 아래 넷은 **저장 프로퍼티가 아니라 계산 프로퍼티**다. `CFString` 은 Sendable 이 아니라
+    // `static let` 으로 두면 "비-Sendable 타입의 전역 가변 상태" 경고가 붙는데(엄격 동시성),
+    // 값이 전부 리터럴 브리지라 매번 새로 만들어도 되고 그러면 공유 상태 자체가 없어진다.
+    // `nonisolated(unsafe)` 로 덮는 것보다 이쪽이 정직하다 — 실제로 공유할 이유가 없는 상수다.
+    // 호출부(CFPreferences* 18곳)는 한 글자도 바뀌지 않는다. 브리지 비용은 무시할 수준이고
+    // (호출 자체가 CFPreferences 디스크 I/O), 이 경로는 메뉴 토글 때만 돈다.
+
     /// saver 가 읽는 앱→saver 공유 도메인(~/Library/Preferences/kr.yaki.waple.saver.plist).
-    private static let saverDomain = "kr.yaki.waple.saver" as CFString
+    private static var saverDomain: CFString { "kr.yaki.waple.saver" as CFString }
     /// 시스템 화면보호기 선택 도메인(ByHost).
-    private static let systemDomain = "com.apple.screensaver" as CFString
-    private static let moduleDictKey = "moduleDict" as CFString
+    private static var systemDomain: CFString { "com.apple.screensaver" as CFString }
+    private static var moduleDictKey: CFString { "moduleDict" as CFString }
     /// enable 이 덮어쓰기 전에 사용자의 원래 화면보호기 선택을 보관하는 키(앱 소유 도메인).
-    private static let backupKey = "backupModuleDict" as CFString
+    private static var backupKey: CFString { "backupModuleDict" as CFString }
 
     static var screenSaversDirectory: URL {
         FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]

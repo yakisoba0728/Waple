@@ -198,7 +198,13 @@ public final class SceneScriptContext {
 /// 저장 시점: 값 변경 디바운스(기본 0.75s) + flush()(마운트 해제 경로)의 최소 설계. 쓰기 실패는 로그만
 /// (저장 불가가 렌더를 죽이지 않음). WE 의 location 네임스페이스 분리(global/screen)는 의미 미확정 —
 /// F701 과 동일하게 단일 네임스페이스로 무시(추측 구현 안 함).
-public final class ScriptLocalStorage {
+/// @unchecked Sendable: 이 타입은 **자기 상태를 스스로 직렬화한다** — `values` 는 모든 접근이
+/// `lock` 구간 안이고(set/delete/clear/snapshotJSON/flush 전부), `pendingSave` 는 직렬 큐
+/// `saveQueue` 안에서만 읽고 쓴다(scheduleSave 의 async 블록 하나가 유일한 접근점),
+/// 나머지(fileURL/debounce/lock/saveQueue)는 let 이다. 컴파일러가 볼 수 없는 이 두 규율이
+/// 근거이고, 그래서 `checked` 가 아니라 `unchecked` 다. 규율을 깨는 변경(값에 직접 접근하는
+/// 새 메서드, pendingSave 를 큐 밖에서 만지는 코드)을 넣으려면 이 표기부터 다시 검토할 것.
+public final class ScriptLocalStorage: @unchecked Sendable {
     /// 기본 저장 루트(~/Library/Application Support/Waple/script-storage).
     public static func defaultBaseDirectory() -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -289,7 +295,12 @@ public final class TextScriptEngine {
     /// SnapshotPipeline.pinRenderSettings 가 캡처 동안만 핀(defer 복원). 인자 있는 `new Date(ms)` 등은 불변.
     /// S4①(2026-07-27): 로컬 getter(getHours 등)는 KST(UTC+9) 고정 오프셋으로 계산 — 캡처를 실행하는
     /// 머신의 시스템 TZ 와 무관하게 동일 픽셀을 낸다(dateOverrideJS 참고, 실측 근거는 그쪽 주석).
-    public static var captureDateEpochMillis: Double?
+    /// nonisolated(unsafe): 캡처 결정성 핀 3종(이것·captureRandomSeed·isScreensaver)은
+    /// **컨텍스트 생성 전에 한 번 쓰고 그 뒤로는 읽기만** 하는 프로세스 전역 스위치다
+    /// (SnapshotPipeline.pinRenderSettings 가 캡처 직전 설정 → defer 로 복원, 그 사이 캡처는
+    /// 단일 스레드로 순차 진행). 락도 액터도 그 계약을 대신하지 못한다 — 계약을 깨는 건
+    /// "캡처 중에 다른 스레드가 핀을 바꾸는" 경우인데 그건 결정성 자체가 무의미해지는 사용이다.
+    nonisolated(unsafe) public static var captureDateEpochMillis: Double?
 
     /// F1-nondet(2026-07-28): 캡처/스냅샷 결정성 훅 — 설정 시 JSContext 의 전역 `Math.random`을 이 시드
     /// 기반 결정적 PRNG(mulberry32)로 치환. nil(프로덕션 기본) = 실 Math.random 유지(진짜 WE 는 최초
@@ -302,7 +313,7 @@ public final class TextScriptEngine {
     /// 자기-일관성 셀프체크가 비결정으로 잡았다(bbox x66-304·y184-240, 480×270 캔버스 — 음악 플레이어
     /// 라운드코너 배경 tint). Date/파티클 시드와 동일 철학(SnapshotPipeline "결정성 확보" 규약) —
     /// SnapshotPipeline.pinRenderSettings 가 캡처 동안만 고정 상수로 핀(defer 복원).
-    public static var captureRandomSeed: UInt64?
+    nonisolated(unsafe) public static var captureRandomSeed: UInt64?
 
     /// captureRandomSeed 주입용 JS: 전역 Math.random 을 mulberry32(순수 결정적, 암호학 강도 불필요 —
     /// 캡처 재현성만 목적) 로 교체. 시드는 32비트로 접어 넣는다(algorithm 자체가 32비트 상태).
@@ -326,7 +337,7 @@ public final class TextScriptEngine {
     /// 컨텍스트 생성 전 1회 설정. 기본 false(데스크탑 배경 = 화면보호기 아님; 캡처·기존 앱 경로 무변화 가드).
     /// 현 Waple 화면보호기(WapleSaverView)는 동영상 전용이라 씬 스크립트 경로가 없어 상시 false —
     /// 씬 화면보호기 모드가 생기면 그 진입점이 true 설정(하드코딩 false 제거로 배관만 확보).
-    public static var isScreensaver = false
+    nonisolated(unsafe) public static var isScreensaver = false
 
     /// captureDateEpochMillis 주입용 JS: 전역 Date 를 감싸 무인자 생성/now 만 고정, 나머지는 실 Date 로 위임.
     /// S4①(2026-07-27) 실측: `new R(FIXED)`(수정 전)의 `getHours()`/`getMinutes()` 등은 JS 엔진 프로토타입의

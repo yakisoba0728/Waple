@@ -763,7 +763,11 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 있었는지가 골든 픽셀에 구워졌다** — 전 코퍼스 170종 중 29종이 세션마다 다른 값을 냈고
     /// (커서가 제자리로 돌아오면 이전 값이 그대로 재현됐다) 셀프체크는 같은 프로세스라 못 봤다.
     /// pause() 는 monitor 를 멈추지만 이미 들어온 pointerUV 는 되돌리지 않는다 — 그래서 시작 자체를 막는다.
-    public static var capturePointerUV: SIMD2<Float>?
+    /// nonisolated(unsafe): TextScriptEngine 의 캡처 결정성 핀 3종과 같은 계약이다 —
+    /// SnapshotPipeline.pinRenderSettings 가 **마운트 전에 한 번 쓰고**(defer 로 복원) 그 뒤 캡처는
+    /// 읽기만 한다. 마우스 모니터를 아예 켜지 않는 것이 이 핀의 목적이라, 캡처 중 이 값을 바꾸는
+    /// 경로는 설계상 존재하지 않는다(존재하면 결정성 자체가 무너진다).
+    nonisolated(unsafe) public static var capturePointerUV: SIMD2<Float>?
     /// 직전 draw 프레임의 포인터 UV(g_PointerPositionLast — cursorripple 이전 위치). draw 종료 시 이월.
     var pointerUVLast = SIMD2<Float>(0.5, 0.5)
     /// 포인터 좌버튼 다운 상태(g_PointerState.z — cursorripple/fluidsim 클릭 힘). 미주입/헤드리스 = false(무클릭).
@@ -1481,6 +1485,22 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             drawPlan = Array(drawPlan.prefix(n))
         }
 
+        // ── 격리 계약(2026-08-19, 엄격 동시성) ───────────────────────────────────────
+        // **이 뷰 생성 경로는 nonisolated 로 남겨야 한다. mount/captureFrames/teardown 에
+        // @MainActor 를 붙이지 마라.** AppDelegate.captureSceneStill(F486)이 마운트(셰이더 컴파일)와
+        // captureFrames(GPU 대기)를 백그라운드 큐에서 부르기 때문이다 — 종전에 그 둘을 main.sync 로
+        // 돌려 무거운 씬에서 메뉴/라이브러리 창이 수 초 정지했던 것(F049)이 F486 이 고친 결함이고,
+        // 여기에 격리를 붙이면 그 호출부(nonisolated)가 컴파일되지 않아 F486 이 자동으로 되돌아간다.
+        // (AppDelegate 쪽은 NSView 할당만 메인에 잠깐 다녀오고 나머지는 큐에 남겨 두었다 —
+        //  그 파일의 captureSceneStill 주석 "⚠️ 남는 긴장" 이 이 계약을 요청한 것이다.)
+        //
+        // 그래서 아래 MTKView 생성·프로퍼티 대입은 "메인 액터 API 를 비격리 컨텍스트에서 호출"
+        // 진단을 계속 낸다. 그건 표기 누락이 아니라 **의도된 오프메인 경로**다. 안전 근거는 F486 의
+        // 관찰 그대로다: 이 컨테이너는 어떤 창에도 속하지 않아 창 계층에 들어가지 않고, draw/이벤트가
+        // 발생하지 않으며(isPaused=true + enableSetNeedsDisplay), 캡처는 커맨드 인코딩과 readback 뿐이다.
+        // 라이브 데스크탑 경로는 반대로 항상 메인에서 마운트된다(AppDelegate.applyResolved).
+        // 이 진단을 없애려면 표기가 아니라 설계를 바꿔야 한다 — 캡처 경로를 뷰 없는 오프스크린
+        // 렌더 타깃으로 분리하는 것(그러면 AppKit 의존이 사라진다). 지금 규모의 변경은 별도 작업이다.
         let view = WapleMTKView(frame: container.bounds, device: device)
         view.autoresizingMask = [.width, .height]
         view.colorPixelFormat = .bgra8Unorm

@@ -2,7 +2,17 @@ import AppKit
 import AVFoundation
 import WapleCore
 
-public final class VideoRenderer: WallpaperRenderer {
+/// @unchecked Sendable: 이 렌더러의 상태는 **메인 큐 한정**이다 — mount/attachPlayer/pause/resume/
+/// teardown 은 메인에서 불리고, 비동기로 들어오는 세 경로(ffmpeg 변환 완료, AVPlayerItem.status KVO,
+/// asset.load Task)는 전부 첫 줄에서 DispatchQueue.main.async 로 홉한 뒤에야 필드를 만진다.
+/// mountToken 세대 가드가 그 위에서 늦게 도착한 콜백을 무효화한다.
+///
+/// **원래 맞는 표기는 `@MainActor` 다.** 그걸 못 쓰는 이유는 코드가 아니라 빌드 구성이다: 테스트
+/// 타깃은 아직 Swift 5·minimal 이고 XCTest 메서드(비격리)에서 이 타입을 40여 곳에서 직접 생성·구동한다
+/// (VideoRendererLifecycleTests·MediaFixRegressionTests 등). 소스에 @MainActor 를 붙이면 그 호출들이
+/// **에러**가 되어 `swift test` 가 통째로 안 선다. 테스트 타깃을 같은 커밋에서 @MainActor 로 올릴 때
+/// 이 표기를 @MainActor 로 교체할 것 — 그때 아래 AppKit 관련 진단(container.bounds/window 등)도 같이 없어진다.
+public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
     /// Conservative AVFoundation-native containers used directly without conversion.
     /// F230: WapleCore.VideoFormats.nativeExtensions 가 단일 소스 — 여기서 다시 선언하지 않는다.
     public static let nativeVideoExtensions: Set<String> = VideoFormats.nativeExtensions
@@ -86,8 +96,13 @@ public final class VideoRenderer: WallpaperRenderer {
         self.container = container   // teardown 이 nil 로 만들면 완료 콜백이 스킵(취소 신호)
         NSLog("%@", "[Waple] converting \(url.lastPathComponent) via ffmpeg…")
         convert(url) { [weak self] mp4 in
+            // weak 캡처를 여기서 강참조로 승격한다: weak 캡처는 가변 저장소라, 이어지는 메인 홉
+            // 클로저가 그것을 다시 참조하면 "concurrently-executing code 의 captured var" 진단이
+            // 난다(Swift 6 에선 에러). 승격 뒤 캡처되는 것은 불변 let 이다. 수명 영향은 메인 홉 한 번
+            // 동안의 유지뿐이고, 취소 신호는 종전대로 mountToken/container 로 메인에서 판정한다.
+            guard let self else { return }
             DispatchQueue.main.async {
-                guard let self, self.mountToken == token, let container = self.container else { return }
+                guard self.mountToken == token, let container = self.container else { return }
                 guard let mp4 else {
                     self.lastError = RendererError.unsupportedCodec
                     Self.postFailureNotification(RendererError.unsupportedCodec, url: url)   // F555: 변환 실패 표면화
@@ -220,8 +235,9 @@ public final class VideoRenderer: WallpaperRenderer {
         attemptedPlaybackRecovery = true
         NSLog("%@", "[Waple] attempting ffmpeg recovery for native video: \(url.lastPathComponent)")
         convert(url) { [weak self] mp4 in
+            guard let self else { return }   // 승격 근거는 mount 의 같은 패턴 주석 참조
             DispatchQueue.main.async {
-                guard let self, self.mountToken == token, let container = self.container else { return }
+                guard self.mountToken == token, let container = self.container else { return }
                 guard let mp4 else {
                     // F600: F600 경로(헤더 판정 → 회복 우선)는 여기까지 lastError 가 nil — 최종 실패를 기록.
                     self.lastError = RendererError.unsupportedCodec

@@ -112,9 +112,14 @@ enum SteamCmdDownloader {
     /// 완료는 반드시 stdout 의 "Success. Downloaded item" 라인 확인 후에만 결과 폴더를 스캔한다 —
     /// steamcmd 는 실패해도 exit 0 을 낼 수 있고 content/<id> 폴더가 이전 부분 다운로드로 미리 있을 수 있어,
     /// 존재만으로 임포트하면 stale 콘텐츠를 조용히 가져오게 된다.
+    ///
+    /// `progress`/`completion` 이 `@Sendable` 인 것은 표기가 아니라 **사실의 기술**이다 — 둘 다
+    /// 이 함수가 만든 백그라운드 큐(`.utility`)를 거쳐 `DispatchQueue.main` 으로 다시 넘어가므로,
+    /// 큐 경계를 최소 두 번 넘는다. 종전에는 그 사실이 타입에 없어 호출부가 무엇을 캡처해도
+    /// 컴파일러가 아무 말도 하지 않았다.
     static func download(itemId: String, username: String, timeout: TimeInterval = 900,
-                         progress: @escaping (Progress) -> Void,
-                         completion: @escaping (URL?) -> Void) {
+                         progress: @escaping @Sendable (Progress) -> Void,
+                         completion: @escaping @Sendable (URL?) -> Void) {
         // F840: itemId 는 원격(Steam Web API) 문자열이다. 셸도 문자열 보간도 없지만
         //  (1) steamcmd 는 `+` 로 시작하는 argv 를 **새 명령**으로 읽는다 — id 가 `+runscript` 면
         //      arguments() 가 만든 argv 에 명령이 하나 끼어든다.
@@ -169,7 +174,7 @@ enum SteamCmdDownloader {
         return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
     }
 
-    private static func completeOnMain(_ completion: @escaping (URL?) -> Void, _ result: URL?) {
+    private static func completeOnMain(_ completion: @escaping @Sendable (URL?) -> Void, _ result: URL?) {
         DispatchQueue.main.async { completion(result) }
     }
 
@@ -178,9 +183,10 @@ enum SteamCmdDownloader {
     /// (감사 V06: steamcmd 가 SIGTERM 을 무시하면 availableData/waitUntilExit 가 영구 블록돼
     /// 다운로드 스레드 정지 + WorkshopViewModel .downloading 고착 — 어떤 경로든 반환을 보장).
     /// 반환값 = ("완료" 라인을 봤는가, 성공 라인이 알려준 목적지 경로 — F499. 경로 미출력 포맷이면 nil).
+    /// `progress` 는 이 함수가 `DispatchQueue.main.async` 로 넘기므로 `@Sendable` 이다(download 와 동일 근거).
     static func run(exe: URL, args: [String], timeout: TimeInterval,
                     terminateGrace: TimeInterval = 5,
-                    progress: @escaping (Progress) -> Void) -> (sawSuccess: Bool, path: String?) {
+                    progress: @escaping @Sendable (Progress) -> Void) -> (sawSuccess: Bool, path: String?) {
         let proc = Process()
         proc.executableURL = exe
         proc.arguments = args

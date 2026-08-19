@@ -103,7 +103,9 @@ public func diffRGBA(_ a: [UInt8], _ b: [UInt8], perPixelThreshold: Int = 16) ->
 // MARK: - 임계 판정
 
 /// diff 가 이 이하이면 PASS. meanAbsDiff 와 fracExceeding 동시 만족.
-public struct DiffThreshold: Equatable {
+/// Sendable: 저장 프로퍼티가 Double 둘뿐인 값 타입 — 아래 strict/lax/selfConsistent 상수를 어느
+/// 스레드에서 읽어도 안전하다(엄격 동시성이 `static let` 의 타입에 Sendable 을 요구한다).
+public struct DiffThreshold: Equatable, Sendable {
     public var meanAbsDiff: Double
     public var fracExceeding: Double
     public init(meanAbsDiff: Double, fracExceeding: Double) {

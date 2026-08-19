@@ -18,6 +18,21 @@ struct ScreenCountBaseline {
     }
 }
 
+/// `@MainActor` — 2026-08-19 엄격 동시성 도입에서 붙였다.
+///
+/// 이 클래스는 상태바 아이템·NSWindow·NSOpenPanel·NSMenu 를 직접 만지고 SwiftUI 뷰모델을
+/// 소유한다. `NSApplicationDelegate`/`NSMenuDelegate` 콜백은 SDK 에서 이미 메인 액터이므로
+/// 실행 스레드는 처음부터 메인 하나였는데, 표기가 없어 컴파일러가 그 사실을 몰랐다
+/// (진단 65건 중 대부분이 "메인 액터 전용 API 를 nonisolated 문맥에서 호출").
+///
+/// **백그라운드로 나가는 경로는 표기로 지워지지 않는다** — 아래 셋은 의도적으로 오프메인이고
+/// `nonisolated` 로 명시했다:
+///   - `generateStillImages`/`stillImage`/`extractVideoFrame`/`captureSceneStill` (F047·F486)
+///   - `currentUserGeneratedUID` (dscl 서브프로세스 대기)
+/// 반대로 `DispatchQueue.main.async`/`Timer`/`DispatchWorkItem` 블록은 **실행되는 곳이 메인**이라
+/// `MainActor.assumeIsolated` 로 그 사실을 알린다. 이건 검사를 끄는 게 아니라 런타임 단언이다 —
+/// 규약이 깨져 오프메인에서 실행되면 조용한 경합 대신 즉시 트랩된다.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let desktopController = DesktopWindowController()
@@ -245,8 +260,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let name = (note.userInfo?["url"] as? URL)?.lastPathComponent
                 ?? NSLocalizedString("비디오", comment: "파일명을 못 얻었을 때의 대체 표기")
             DispatchQueue.main.async {
-                _ = self?.notify(String(format: NSLocalizedString("비디오를 재생할 수 없습니다: %@",
-                                                                  comment: "비디오 비동기 실패"), name))
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    _ = self.notify(String(format: NSLocalizedString("비디오를 재생할 수 없습니다: %@",
+                                                                     comment: "비디오 비동기 실패"), name))
+                }
             }
         }
 
@@ -276,16 +294,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let smoke = SmokeLaunch.current
         if smoke.opensLibrary {
             DispatchQueue.main.async { [weak self] in
-                self?.openLibrary()
-                guard smoke.focusesFirstEntry else { return }
-                self?.libraryVM.focusedId = self?.libraryVM.entries.first?.id
-                self?.libraryVM.panelVisible = smoke.showsInspector
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    self.openLibrary()
+                    guard smoke.focusesFirstEntry else { return }
+                    self.libraryVM.focusedId = self.libraryVM.entries.first?.id
+                    self.libraryVM.panelVisible = smoke.showsInspector
+                }
             }
         }
 
         // 설정 창 캡처용(판정 게이트): WAPLE_SMOKE_SETTINGS=1 이면 설정 창 자동 오픈.
         if smoke.opensSettings {
-            DispatchQueue.main.async { [weak self] in self?.openSettings() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated { self.openSettings() }
+            }
         }
 
         // 최초 실행 온보딩(앱셸 스코프 B). 항목 상태는 기존 감지에서, "해결"은 기존 배관을 재사용.
@@ -311,13 +335,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let smoke = SmokeLaunch.current
         if smoke.forcesOnboarding {
             // 창 오픈은 위 smoke.opensLibrary 블록이 이미 예약했다(온보딩 강제도 그 집합에 든다).
-            DispatchQueue.main.async { [weak self] in self?.onboardingModel.present() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated { self.onboardingModel.present() }
+            }
             return
         }
         guard Onboarding.shouldPresent(completed: onboardingCompleted),
               !smoke.suppressesOnboarding else { return }
         onboardingCompleted = true   // 표시 시점에 확정 — 1회 보장(재표시 안 함)
-        DispatchQueue.main.async { [weak self] in self?.openLibrary(); self?.onboardingModel.present() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.openLibrary(); self.onboardingModel.present() }
+        }
     }
 
     /// WE 기본(공유) 에셋 팩 폴더 선택. 일부 씬은 패키지에 없는 공유 텍스처(particle/halo 등)를
@@ -606,7 +636,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// scheduleDesktopStillSync 와 동일한 취소+재예약 패턴으로 흡수.
     @objc private func screensChanged() {
         screenChangeWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.performScreensChanged() }
+        // DispatchWorkItem 블록은 @Sendable 이지만 이 워크아이템은 바로 아래에서 메인 큐에만
+        // 예약된다 — 실행 위치가 메인임을 assumeIsolated 로 알린다(scheduleDesktopStillSync 도 동일).
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.performScreensChanged() }
+        }
         screenChangeWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
@@ -656,9 +691,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // F840: .common 모드 — scheduledTimer 는 .default 에만 등록돼 메뉴 트래킹·라이브 리사이즈
         // 동안 멈춘다(트레이 메뉴를 열어 둔 채로 자동 전환 시각이 지나가면 그 회차가 통째로 밀렸다).
         // 두 함수 아래 scheduleOcclusionTimer 가 같은 이유로 이미 .common 을 쓴다 — 규약을 맞춘다.
+        // Timer 블록은 @Sendable 이지만 바로 아래에서 RunLoop.main 에만 등록되므로 실행은 메인이다.
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            guard let self, PlaylistScheduling.shouldAdvanceNow(isPaused: self.pauseGate.isPaused) else { return }
-            self.advancePlaylist()
+            MainActor.assumeIsolated {
+                guard let self, PlaylistScheduling.shouldAdvanceNow(isPaused: self.pauseGate.isPaused) else { return }
+                self.advancePlaylist()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         playlistTimer = timer
@@ -711,7 +749,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         // .common 모드 — 메뉴 트래킹 중에도 폴링(scheduledTimer 는 .default 만 등록).
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.checkOcclusion() }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.checkOcclusion() }   // RunLoop.main 등록 — 실행은 메인
+        }
         RunLoop.main.add(timer, forMode: .common)
         occlusionTimer = timer
     }
@@ -806,11 +847,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // F047: currentFolderURL 은 메인 전용 프로퍼티라 백그라운드 클로저에서 직접 읽으면(다른 apply
         // 가 마침 같은 순간 메인에서 값을 바꿀 수 있어) 동기화 없는 경합이 생긴다 — 큐 진입 '전'
         // 메인에서 스냅샷해 넘긴다.
-        let globalFolderURL = currentFolderURL
+        let inputs = stillCaptureInputs(globalFolderURL: currentFolderURL)   // 메인 전용 값은 여기서 전부 스냅샷
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let images = self.generateStillImages(globalFolderURL: globalFolderURL)   // 블로킹 — 백그라운드(F047)
-            DispatchQueue.main.async { self.finishSetStillWallpaper(images: images) }
+            let images = self.generateStillImages(inputs)   // 블로킹 — 백그라운드(F047)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self.finishSetStillWallpaper(images: images) }
+            }
         }
     }
 
@@ -833,32 +876,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notify(StillWallpaperNotice.message(successCount: successCount, totalScreens: screens.count))
     }
 
-    /// still 산출 디렉터리(라이브러리 베이스/still).
-    private func stillDirectory() -> URL {
+    /// still 산출 디렉터리(라이브러리 베이스/still). `nonisolated` — 순수 경로 조립이고
+    /// `generateStillImages`(백그라운드)가 부른다.
+    nonisolated private func stillDirectory() -> URL {
         LibraryStore.defaultBaseDirectory().appendingPathComponent("still", isDirectory: true)
+    }
+
+    /// 백그라운드 스틸 캡처의 입력 — **메인에서 준비해 큐로 한 번만 건넨다.**
+    ///
+    /// `@unchecked Sendable` 근거: 전부 값 타입의 복사본이고, 만들어진 뒤에는 메인도 백그라운드도
+    /// 변형하지 않는다(단방향 인계, 읽기 전용). `WallpaperProject` 는 project.json 파스 결과라
+    /// 실제로 불변이지만 WapleCore 가 아직 `Sendable` 을 선언하지 않아 컴파일러가 그걸 볼 수 없다.
+    /// 이 상자가 곧 F047/F485/F486 이 말로 지키던 규율("메인 전용 값은 큐에 들어가기 전에
+    /// 스냅샷한다")을 타입으로 굳힌 것이다.
+    private struct StillCaptureInputs: @unchecked Sendable {
+        /// 화면키 → 화면 크기(pt). NSScreen 열거는 AppKit 이라 메인에서만.
+        let screenSizes: [String: CGSize]
+        /// 주 화면 배율(캡처 픽셀 크기 산출용).
+        let mainScale: CGFloat
+        /// 화면키 → 그 화면에 표시 중인 프로젝트(모니터별 할당 반영, applyResolved 와 동일 소스).
+        let slots: [(key: String, project: WallpaperProject?)]
+    }
+
+    /// 스틸 캡처가 필요로 하는 **메인 전용 값 전부**를 한 번에 스냅샷한다.
+    ///
+    /// F486 은 씬 캡처(마운트+GPU 대기)를 백그라운드로 내보냈고, F047/F485 는 그 대가로 NSScreen
+    /// 열거와 스토어 접근(projectForMount → folderForEntry → LibraryStore.entries)을
+    /// `DispatchQueue.main.sync` 두 번으로 되가져왔다. 호출부가 이미 메인 액터이므로 그 두 번을
+    /// **큐에 들어가기 전 한 번**으로 합친다. 얻는 것 둘: 백그라운드에서 메인을 동기 대기하는
+    /// 구간이 사라지고(데드락 표면 제거), `currentFolderURL` 스냅샷과 화면/슬롯 스냅샷이 같은
+    /// 시점의 것이 된다(종전엔 그 사이에 큐 지연이 끼어 서로 다른 순간을 볼 수 있었다).
+    private func stillCaptureInputs(globalFolderURL: URL?) -> StillCaptureInputs {
+        let screenSizes = Dictionary(uniqueKeysWithValues:
+            NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) })
+        let global = globalFolderURL.flatMap { projectForMount(folderURL: $0) }
+        return StillCaptureInputs(screenSizes: screenSizes,
+                                  mainScale: NSScreen.main?.backingScaleFactor ?? 2,
+                                  slots: resolvedScreenProjectSlots(global: global))
     }
 
     /// 화면키 → 그 화면에 실제로 표시 중인 프로젝트의 정지 이미지(F046). 모니터별 할당을 그대로
     /// 반영하는 MonitorMapping.resolveProjectSlots(applyResolved 와 동일 소스)로 화면별 프로젝트를
-    /// 구한 뒤, 같은 프로젝트를 쓰는 화면은 한 번만 생성해 공유한다. 화면/전역 모두 무배경이면 빈 dict.
-    /// ⚠️ 블로킹(AVFoundation 디코드·씬 GPU 캡처) — 백그라운드 큐에서 호출(F047). NSScreen 열거는
-    /// 메인에서 미리 끝내 두고 넘어온 값을 쓴다(AppKit 뷰 API 는 메인 스레드 전용). globalFolderURL 도
-    /// 호출부가 메인에서 스냅샷해 넘긴다(currentFolderURL 을 백그라운드에서 직접 읽는 경합 방지).
-    private func generateStillImages(globalFolderURL: URL?) -> [String: URL] {
-        // NSScreen 열거·backingScaleFactor 조회는 AppKit 이라 메인에서 미리 캡처(F486: 씬 캡처가
-        // 백그라운드로 남려가면서 NSScreen 접근은 전부 이 시점으로 모았다).
-        let (screenSizes, mainScale) = DispatchQueue.main.sync {
-            (Dictionary(uniqueKeysWithValues: NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.frame.size) }),
-             NSScreen.main?.backingScaleFactor ?? 2)
-        }
-        // F485: 전역 프리셋 해석(projectForMount → PresetResolver → folderForEntry → LibraryStore.entries
-        // 읽기 + stale 북마크 시 entries 갱신·save)을 백그라운드에서 직접 치면 락 없는 스토어 경합이다
-        // (F047 불완전 — 화면별 슬롯만 main.sync 였다). 슬롯 해석과 같은 main.sync 에서 함께 해석해
-        // 스토어 접근을 전부 메인에 모은다.
-        let (_, slots) = DispatchQueue.main.sync { () -> (WallpaperProject?, [(key: String, project: WallpaperProject?)]) in
-            let g = globalFolderURL.flatMap { self.projectForMount(folderURL: $0) }
-            return (g, self.resolvedScreenProjectSlots(global: g))
-        }
+    /// 구한 뒤(그 해석은 `stillCaptureInputs` 가 메인에서 끝내 둔다), 같은 프로젝트를 쓰는 화면은
+    /// 한 번만 생성해 공유한다. 화면/전역 모두 무배경이면 빈 dict.
+    /// ⚠️ 블로킹(AVFoundation 디코드·씬 GPU 캡처) — 백그라운드 큐에서 호출(F047). 그래서
+    /// `nonisolated` 다: AppDelegate 가 `@MainActor` 여도 이 함수만은 의도적으로 오프메인이다.
+    /// AppKit·스토어에 닿는 값은 하나도 여기서 읽지 않고 전부 `inputs` 로 넘어온다.
+    nonisolated private func generateStillImages(_ inputs: StillCaptureInputs) -> [String: URL] {
+        let screenSizes = inputs.screenSizes
+        let mainScale = inputs.mainScale
+        let slots = inputs.slots
         let stillDir = stillDirectory()
         try? FileManager.default.createDirectory(at: stillDir, withIntermediateDirectories: true)
 
@@ -904,8 +971,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 프로젝트 하나의 정지 이미지(공통 스위치 — 동영상/씬/프리뷰). 소스 해석 실패/추출 실패 → nil.
-    private func stillImage(for project: WallpaperProject, source: StillWallpaper.Source,
-                            size: CGSize, scale: CGFloat, stillDir: URL) -> URL? {
+    /// `nonisolated` — generateStillImages(백그라운드) 전용 하위 경로다.
+    nonisolated private func stillImage(for project: WallpaperProject, source: StillWallpaper.Source,
+                                        size: CGSize, scale: CGFloat, stillDir: URL) -> URL? {
         // F484: 크기 의존 소스(씬 캡처)만 출력 파일명에 크기를 넣는다 — 같은 씬의 크기별 스틸이 공존.
         let output = StillWallpaper.outputURL(projectId: project.id,
                                               size: StillWallpaper.isSizeDependent(source) ? size : nil,
@@ -919,7 +987,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 동영상 t=1s 프레임 → PNG(실패 시 t=0 폴백). 실패 → nil. AVFoundation 동기 디코드 — 백그라운드
     /// 큐에서 호출(F047, generateStillImages 경유).
-    private func extractVideoFrame(from videoURL: URL, to output: URL) -> URL? {
+    nonisolated private func extractVideoFrame(from videoURL: URL, to output: URL) -> URL? {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: videoURL))
         generator.appliesPreferredTrackTransform = true
         let cg: CGImage
@@ -945,10 +1013,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// captureFrames 는 Metal 커맨드 인코딩+PNG 쓰기뿐이라 스레드 안전하다 — F047 블로킹 큐에서
     /// 전 구간을 그대로 실행한다. NSScreen 이 필요한 scale 만 호출부가 메인에서 캡처해 넘기고,
     /// 완료 후 메인 홉은 호출부(finishSetStillWallpaper/finishSyncDesktopStill)가 담당한다.
-    private func captureSceneStill(project: WallpaperProject, size: CGSize, scale: CGFloat, to dir: URL, output: URL) -> URL? {
+    ///
+    /// 2026-08-19(엄격 동시성): **F486 을 되돌리지 않았다.** 마운트(셰이더 컴파일)와
+    /// `captureFrames`(GPU 대기)는 종전 그대로 이 백그라운드 큐에서 돈다 — 메인을 수 초 잡아먹던
+    /// 것이 그 둘이었지 뷰 한 개의 할당이 아니었다. 다만 `NSView.init(frame:)` 자체는 SDK 가 메인
+    /// 액터 전용으로 선언한 API 라 오프메인 호출을 타입으로 정당화할 방법이 없다. 그래서 **할당만**
+    /// 메인에 잠깐 다녀온다(포인터 하나 만드는 비용). `main.sync` 를 여기 쓰는 것이 안전한 이유는
+    /// 이 함수를 부르는 두 경로(setStillWallpaper·syncDesktopStill)가 메인을 붙잡지 않고
+    /// `DispatchQueue.global(...).async` 로 던지기 때문이다 — 메인이 이 큐를 기다리는 반대 방향의
+    /// 대기가 없으므로 사이클이 생기지 않는다.
+    ///
+    /// ⚠️ 남는 긴장: `renderer.mount(in:)` 안에서 MTKView 가 만들어지고 그것도 메인 액터 API 다.
+    /// 그 코드는 WapleRender(SceneRenderer)에 있고 이 파일에서 표현할 수 없다 — F486 을 유지하려면
+    /// 그쪽이 뷰 생성 경로를 오프메인에서 부를 수 있는 형태로 남겨야 한다.
+    nonisolated private func captureSceneStill(project: WallpaperProject, size: CGSize, scale: CGFloat, to dir: URL, output: URL) -> URL? {
         guard size.width > 0, size.height > 0,
               let renderer = RendererFactory.makeRenderer(for: project) as? SceneRenderer else { return nil }
-        let container = NSView(frame: CGRect(origin: .zero, size: size))
+        let container = DispatchQueue.main.sync {
+            MainActor.assumeIsolated { NSView(frame: CGRect(origin: .zero, size: size)) }
+        }
         do {
             try renderer.mount(in: container, project: project)
         } catch {
@@ -1061,7 +1144,10 @@ extension AppDelegate {
     func scheduleDesktopStillSync() {
         stillSyncWork?.cancel()
         guard desktopStillSync else { return }
-        let work = DispatchWorkItem { [weak self] in self?.syncDesktopStill() }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            MainActor.assumeIsolated { self.syncDesktopStill() }
+        }
         stillSyncWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
     }
@@ -1070,11 +1156,13 @@ extension AppDelegate {
     /// 할당 인지). 실패는 조용히 — 이 기능은 폴백일 뿐이다.
     private func syncDesktopStill() {
         guard desktopStillSync else { return }
-        let globalFolderURL = currentFolderURL   // F047: 메인에서 스냅샷 — 백그라운드 직접 읽기 경합 방지
+        let inputs = stillCaptureInputs(globalFolderURL: currentFolderURL)   // F047: 메인에서 스냅샷
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let images = self.generateStillImages(globalFolderURL: globalFolderURL)   // 블로킹 — 백그라운드(F047)
-            DispatchQueue.main.async { self.finishSyncDesktopStill(images: images) }
+            let images = self.generateStillImages(inputs)   // 블로킹 — 백그라운드(F047)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self.finishSyncDesktopStill(images: images) }
+            }
         }
     }
 
@@ -1088,7 +1176,11 @@ extension AppDelegate {
         }
         // 잠금화면은 시스템 전역 1장뿐이라 화면별로 나눌 수 없다 — 주 화면(NSScreen.main) 이미지를
         // 우선하고, 못 찾으면(드문 경우) 생성된 것 중 아무거나.
-        if let mainKey = NSScreen.main.map(DesktopWindow.screenKey(for:)), let mainImage = images[mainKey] {
+        // `NSScreen.main.map(DesktopWindow.screenKey(for:))` 는 **함수 참조**를 넘기는 형태라
+        // `@MainActor (NSScreen) -> String` → `(NSScreen) -> String` 변환이 되고, 그 변환은 전역
+        // 액터 표기를 잃어 엄격 동시성이 경고한다(클로저 리터럴과 달리 함수 참조는 격리를 물려받지
+        // 못한다). if-let 으로 풀면 호출이 이 메인 액터 문맥 안에 그대로 남는다 — 동작은 동일.
+        if let mainScreen = NSScreen.main, let mainImage = images[DesktopWindow.screenKey(for: mainScreen)] {
             writeLockscreenStill(mainImage)
         } else if let anyImage = images.values.first {
             writeLockscreenStill(anyImage)
@@ -1116,7 +1208,8 @@ extension AppDelegate {
     // MARK: - 잠금화면 스틸 (작업 2)
 
     /// dscl 로 현재 사용자 GeneratedUID 조회(잠금화면 스틸 경로 키). 실행 실패 → nil.
-    private func currentUserGeneratedUID() -> String? {
+    /// `nonisolated` — writeLockscreenStill 의 백그라운드 블록에서 불린다(dscl 서브프로세스 대기).
+    nonisolated private func currentUserGeneratedUID() -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/dscl")
         process.arguments = [".", "-read", "/Users/\(NSUserName())", "GeneratedUID"]
@@ -1140,7 +1233,7 @@ extension AppDelegate {
     /// 컴포넌트인지도 WallpaperPathSecurity 로 재확인한다(LibraryStore F580 과 같은 규율).
     /// (숫자만으로 좁히지 않는 이유: GeneratedUID 는 십진수가 아니라 UUID 다 —
     /// AppLogicTests 의 실측 예시 "ABCD1234-5678-90AB-CDEF-1234567890AB".)
-    static func isValidGeneratedUID(_ uid: String) -> Bool {
+    nonisolated static func isValidGeneratedUID(_ uid: String) -> Bool {
         guard !uid.isEmpty, uid.count <= 64,
               uid.allSatisfy({ $0.isASCII && ($0.isHexDigit || $0 == "-") }) else { return false }
         return WallpaperPathSecurity.normalizedPathComponent(uid) == uid
@@ -1165,9 +1258,11 @@ extension AppDelegate {
                 try png.write(to: dir.appendingPathComponent("lockscreen.png"), options: .atomic)
             } catch {
                 DispatchQueue.main.async {
-                    self.notify(String(format: NSLocalizedString("잠금화면 스틸 기록 실패(무시): %@",
-                                                                 comment: "잠금화면 스틸 기록 실패"),
-                                       error.localizedDescription))
+                    MainActor.assumeIsolated {
+                        _ = self.notify(String(format: NSLocalizedString("잠금화면 스틸 기록 실패(무시): %@",
+                                                                         comment: "잠금화면 스틸 기록 실패"),
+                                               error.localizedDescription))
+                    }
                 }
             }
         }

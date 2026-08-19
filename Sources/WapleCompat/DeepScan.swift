@@ -22,7 +22,12 @@ private final class SemaphoreResultBox<T>: @unchecked Sendable {
     init(_ value: T) { self.value = value }
 }
 
-final class DeepAgg {
+/// `@unchecked Sendable` 근거: **모든 가변 필드는 `sync {}`(NSLock) 안에서만 만진다.**
+/// 이 집계기는 `DispatchQueue.concurrentPerform` 워커 수십 개가 동시에 두드리는 유일한 공유
+/// 상태이고, 그래서 애초에 락을 들고 태어났다(`sync` 가 그 락이다). 락 밖에서 필드를 읽는 곳은
+/// 병렬 구간이 **전부 끝난 뒤**의 집계·리포트뿐이다(`DeepScan.run` 의 reduce, `Report.render`).
+/// 컴파일러는 그 규율을 볼 수 없다 — 새 필드를 더할 때도 접근은 반드시 `sync {}` 를 거칠 것.
+final class DeepAgg: @unchecked Sendable {
     private let lock = NSLock()
     func sync<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
 
@@ -155,6 +160,19 @@ struct PkgAssets {
 
 // MARK: - Deep scanner
 
+/// 병렬 스캔 워커에 넘기는 **읽기 전용** 입력 묶음.
+///
+/// `@unchecked Sendable` 근거: 세 필드 모두 스캔이 시작되기 전에 확정되고 그 뒤로는 아무도
+/// 변형하지 않는다(워커는 읽기만 한다). `WallpaperType` 은 연관값 없는 enum 이고 `URL` 은 이미
+/// Sendable 이지만, WapleCore 의 public 타입이라 자동 `Sendable` 추론을 받지 못해 컴파일러가
+/// 그 사실을 볼 수 없다 — `@preconcurrency import WapleCore` 로 모듈 전체를 덮는 대신 실제로
+/// 큐를 넘는 이 값들만 국소적으로 표시한다(WapleCore 가 나중에 Sendable 을 선언해도 무해).
+private struct DeepScanInputs: @unchecked Sendable {
+    let folders: [URL]
+    let knownTypes: [String: WallpaperType]
+    let assetsDir: URL?
+}
+
 enum DeepScan {
     static let handPortNames: Set<String> = ["opacity", "tint", "pulse", "waterripple", "scroll", "waterwaves", "shake"]
 
@@ -198,9 +216,14 @@ enum DeepScan {
         let agg = DeepAgg()
         let started = Date()
 
-        DispatchQueue.concurrentPerform(iterations: folders.count) { i in
+        // 병렬 워커에 넘기는 읽기 전용 입력을 상자 하나로 묶는다. `folders`/`knownTypes` 는 위에서
+        // `var` 로 조립되지만 여기서부터는 **아무도 고치지 않는다** — 상자에 담으면서 `let` 으로
+        // 굳어져 "동시 실행 코드에서 캡처된 var" 진단도 함께 사라진다.
+        let inputs = DeepScanInputs(folders: folders, knownTypes: knownTypes, assetsDir: assetsDir)
+        DispatchQueue.concurrentPerform(iterations: inputs.folders.count) { i in
             autoreleasepool {
-                scanProject(folders[i], assetsDir: assetsDir, knownTypes: knownTypes, agg: agg)
+                scanProject(inputs.folders[i], assetsDir: inputs.assetsDir,
+                            knownTypes: inputs.knownTypes, agg: agg)
             }
         }
 
@@ -430,8 +453,11 @@ enum DeepScan {
 
     static func scanAssetTextures(_ assetsDir: URL, agg: DeepAgg) {
         guard let en = FileManager.default.enumerator(at: assetsDir, includingPropertiesForKeys: nil) else { return }
-        var texFiles: [URL] = []
-        for case let u as URL in en where u.pathExtension.lowercased() == "tex" { texFiles.append(u) }
+        var collected: [URL] = []
+        for case let u as URL in en where u.pathExtension.lowercased() == "tex" { collected.append(u) }
+        // 열거가 끝난 뒤로는 목록이 바뀌지 않는다 — `let` 으로 굳혀 병렬 클로저가 `var` 를 캡처하지
+        // 않게 한다(URL 은 Sendable 이라 이 한 줄로 충분하다).
+        let texFiles = collected
         DispatchQueue.concurrentPerform(iterations: texFiles.count) { i in
             _ = decodeTex(name: texFiles[i].path, res: PkgAssets(package: ScenePackage.assemble([]), assetsDir: nil),
                           provenance: texFiles[i].lastPathComponent, agg: agg, asset: true)

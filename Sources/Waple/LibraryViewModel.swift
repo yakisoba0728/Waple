@@ -13,7 +13,26 @@ enum EntryPreviewState: Equatable {
     case missingFolder
 }
 
-final class LibraryViewModel: ObservableObject {
+/// `@unchecked Sendable`: 이 뷰모델의 상태는 **메인 큐 한정**이다. `@Published` 대입은 전부 SwiftUI
+/// 갱신을 일으키므로 애초에 그럴 수밖에 없고, 유일한 오프메인 경로인 세 임포트(`importParent`/
+/// `importZip`/`importVideoFile`)는 무거운 I/O 만 `importQueue` 에서 하고 스토어 등록·`entries`
+/// 갱신은 `DispatchQueue.main.async` 홉 뒤에서 한다. 큐를 넘는 것은 `self` **참조**뿐이고,
+/// 그 참조를 역참조하는 곳은 전부 그 메인 홉 안이다.
+///
+/// ★ 2026-08-19 여기서 **실제 경합 하나를 고쳤다.** `importVideoFile` 이 `importQueue` 안에서
+/// `self.videoPrepare` 라는 `var` 를 직접 읽고 있었다 — 메인이 같은 순간 그 프로퍼티에 대입하면
+/// (테스트가 실제로 그렇게 한다) 동기화가 전혀 없다. 이제 큐에 들어가기 전 메인에서 값을 읽어
+/// 넘기고, 세 경로 모두 백그라운드 블록이 `self` 를 아예 캡처하지 않는다.
+///
+/// **원래 맞는 표기는 `@MainActor` 다.** 못 쓰는 이유는 코드가 아니라 빌드 구성이다 —
+/// `VideoRenderer` 가 같은 이유로 같은 결론을 적어 둔 것과 동일하다. 테스트 타깃은 아직
+/// Swift 5·minimal 이고 비격리 XCTest 메서드에서 이 타입을 직접 만들어 구동하는 파일이 넷
+/// (`LibraryViewModelTests`·`VideoImportFixRegressionTests`·`LibraryRemovalTests`·
+/// `LibraryApplyBranchTests`)이다. 소스에 `@MainActor` 를 붙이면 그 호출들이 **에러**가 되어
+/// `swift test` 가 통째로 안 선다(같은 리포에서 `WorkshopViewModel`/`DiscoverViewModel` 을
+/// `@MainActor` 로 올릴 때 그 테스트 넷이 전부 `@MainActor` 로 함께 올라간 이유가 이것이다).
+/// **그 네 파일을 같은 커밋에서 `@MainActor` 로 올릴 때 이 표기를 `@MainActor` 로 교체할 것.**
+final class LibraryViewModel: ObservableObject, @unchecked Sendable {
     @Published private(set) var entries: [LibraryEntry] = []
     @Published var selectedId: String?
     // MARK: - 브라우즈 상태(메인창 UI) — selectedId(=적용됨)와 구분되는 패널 포커스.
@@ -278,8 +297,10 @@ final class LibraryViewModel: ObservableObject {
     func importParent(_ url: URL) {
         let store = self.store
         beginImport()
-        importQueue.async { [weak self] in
-            guard let self else { return }
+        // 백그라운드 블록은 self 를 캡처하지 않는다 — 순수 순회(scanImportableFolders)에 필요한 건
+        // store 참조와 url 뿐이고, 뷰모델 상태는 아래 메인 홉에서만 만진다. 종전에는 여기서
+        // `guard let self` 로 강한 참조를 잡아 두고 정작 쓰지는 않았다(캡처만 늘리는 코드였다).
+        importQueue.async {
             let folders = store.scanImportableFolders(in: url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -301,8 +322,8 @@ final class LibraryViewModel: ObservableObject {
     func importZip(_ url: URL) {
         let store = self.store
         beginImport()
-        importQueue.async { [weak self] in
-            guard let self else { return }
+        // 해제(ditto)는 인스턴스 상태를 건드리지 않는다 — 백그라운드 블록은 self 를 캡처하지 않는다.
+        importQueue.async {
             let temp = store.extractZipToTemp(url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -330,16 +351,21 @@ final class LibraryViewModel: ObservableObject {
     /// 동영상 준비(복사+프리뷰 생성 — 무거운 I/O) 클로저. 백그라운드 큐에서 호출된다.
     /// 테스트는 스텁을 주입해 실 복사/디코드·실 관리 디렉터리 쓰기를 생략한다.
     /// 반환된 폴더는 이 임포트 전용으로 새로 만든 것이어야 한다 — 등록 실패 시 제거된다(F583).
-    var videoPrepare: (URL) -> URL? = { VideoImport.prepare(from: $0) }
+    /// `@Sendable`: 이 클로저는 `importQueue`(백그라운드)에서 호출된다 — 종전에는 그 사실이 타입에
+    /// 없었고, 게다가 **백그라운드에서 이 `var` 를 직접 읽고 있었다**(메인의 대입과 경합). 이제
+    /// 호출부가 큐에 들어가기 전 메인에서 값을 읽어 넘기고, 타입이 오프메인 호출을 명시한다.
+    var videoPrepare: @Sendable (URL) -> URL? = { VideoImport.prepare(from: $0) }
 
     /// 원시 mp4/mov 가져오기(작업 5) — prepare(복사+프리뷰 디코드, 무거움)는 백그라운드 큐에서,
     /// 스토어 등록(importFolder → entries 갱신)은 메인 홉에서 한다(스토어 변경 메인 한정 규약 유지).
     func importVideoFile(_ url: URL) {
         let store = self.store
+        // ★ 경합 수정: 종전엔 백그라운드 블록이 `self.videoPrepare` 를 그 자리에서 읽었다.
+        //   메인이 같은 프로퍼티에 대입하는 것과 동기화가 없었다 — 큐에 들어가기 전 메인에서 읽는다.
+        let prepare = self.videoPrepare
         beginImport()
-        importQueue.async { [weak self] in
-            guard let self else { return }
-            let folder = self.videoPrepare(url)
+        importQueue.async {
+            let folder = prepare(url)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 defer { self.endImport() }

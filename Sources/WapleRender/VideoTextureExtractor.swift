@@ -109,7 +109,9 @@ public enum VideoTextureExtractor {
     /// 키는 standardizedFileURL.path — contentsOfDirectory 가 /var → /private/var 심링크를 해소해
     /// 돌려주므로 URL 직접 비교는 어긋난다(테스트로 확인).
     private static let activeLock = NSLock()
-    private static var activeRefCounts: [String: Int] = [:]
+    /// nonisolated(unsafe): 직렬화 주체는 바로 위 activeLock 이다 — markActive/unmarkActive/isActive
+    /// 세 접근점이 전부 lock/unlock 구간 안이다(컴파일러가 못 보는 그 사실만 표기로 알린다).
+    nonisolated(unsafe) private static var activeRefCounts: [String: Int] = [:]
 
     /// SceneVideoLayer 가 mp4 를 잡는 동안 등록(teardown/deinit 시 unmarkActive).
     static func markActive(_ url: URL) {

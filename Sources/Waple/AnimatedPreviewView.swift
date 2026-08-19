@@ -16,13 +16,23 @@ enum PreviewMedia {
 ///
 /// NSCache 는 스레드 안전 — 오프메인 디코드에서 채운다.
 private enum AnimatedImageCache {
-    private static let cache = NSCache<NSURL, NSImage>()
+    /// `nonisolated(unsafe)` 근거: `NSCache` 는 **자체 락으로 스레드 안전**이라고 Apple 이 문서로
+    /// 보증한다(여러 스레드가 동시에 넣고 빼도 된다). 컴파일러는 그 락을 볼 수 없어 "비-Sendable
+    /// 타입의 전역 가변 상태" 로 표시할 뿐이다. 참조 자체는 `let` 이라 재대입도 없다.
+    /// (`DesignSystem/Components/PreviewThumbnail.swift` 의 `PreviewImageCache` 도 같은 근거.)
+    nonisolated(unsafe) private static let cache = NSCache<NSURL, NSImage>()
     static func cached(_ url: URL) -> NSImage? { cache.object(forKey: url as NSURL) }
-    static func load(_ url: URL) -> NSImage? {
-        if let hit = cache.object(forKey: url as NSURL) { return hit }
-        guard let img = NSImage(contentsOf: url) else { return nil }
-        cache.setObject(img, forKey: url as NSURL)
-        return img
+    /// 히트면 즉시, 미스면 **오프메인**에서 디코드하고 캐시에 넣는다. 형태는 `PreviewImageCache.load`
+    /// 와 동일하게 맞췄다 — 종전의 `DispatchQueue.global` + `DispatchQueue.main` 이중 홉은 바깥
+    /// 클로저가 `@Sendable` 이라 비-Sendable 캡처(Coordinator)가 경고였고, 두 캐시가 같은 일을
+    /// 서로 다른 배관으로 하고 있을 이유도 없다.
+    static func load(_ url: URL) async -> NSImage? {
+        if let hit = cached(url) { return hit }
+        return await Task.detached(priority: .userInitiated) {
+            guard let img = NSImage(contentsOf: url) else { return nil }
+            cache.setObject(img, forKey: url as NSURL)
+            return img
+        }.value
     }
 }
 
@@ -57,18 +67,23 @@ struct AnimatedPreviewView: NSViewRepresentable {
 
     /// 캐시 히트는 메인에서 즉시(디스크 I/O 없음), 미스는 오프메인 디코드 후 메인에서 반영.
     /// 셀 재사용으로 url 이 바뀌면 늦게 온 디코드는 폐기(coordinator.url 대조)해 엉뚱한 타일 덮어쓰기 방지.
+    ///
+    /// 격리: `NSViewRepresentable` 은 `View` 를 통해 `@MainActor` 이므로 이 함수와 `v`·`coordinator`
+    /// 접근이 전부 메인 액터 안이다. `Task { @MainActor in }` 로 감싸면 디코드만 오프메인으로 나가고
+    /// (`AnimatedImageCache.load` 안의 `Task.detached`) 캡처는 전부 같은 격리에 남는다 — 종전
+    /// `DispatchQueue` 이중 홉이 만들던 `@Sendable` 클로저 캡처 문제가 사라진다.
     private func setImage(_ url: URL, on v: NSImageView, coordinator: Coordinator) {
         if let hit = AnimatedImageCache.cached(url) { v.image = hit; return }
         coordinator.url = url
-        DispatchQueue.global(qos: .userInitiated).async {
-            let img = AnimatedImageCache.load(url)
-            DispatchQueue.main.async {
-                guard coordinator.url == url else { return }   // 그 사이 셀이 다른 url 로 재사용됨 → 폐기
-                v.image = img
-            }
+        Task { @MainActor in
+            let img = await AnimatedImageCache.load(url)
+            guard coordinator.url == url else { return }   // 그 사이 셀이 다른 url 로 재사용됨 → 폐기
+            v.image = img
         }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(url: url) }
-    final class Coordinator { var url: URL; init(url: URL) { self.url = url } }
+    /// `@MainActor`: 이 상자는 makeNSView/updateNSView/setImage 에서만 읽고 쓰는데 그 셋이 전부
+    /// 메인 액터다. 명시하면 암묵적으로 `Sendable` 이 되어 위 `Task` 캡처도 검사에 통과한다.
+    @MainActor final class Coordinator { var url: URL; init(url: URL) { self.url = url } }
 }

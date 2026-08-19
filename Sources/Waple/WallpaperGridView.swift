@@ -464,6 +464,10 @@ private struct TileContextActions: ViewModifier {
 /// 배경 가져오기 패널(w5d-onboarding): NSOpenPanel(폴더·zip·동영상) → LibraryViewModel.routeImport 로
 /// 라우팅. WallpaperGridView(툴바)·NowPlayingBar(하단 가져오기)·AppDelegate(온보딩 "가져오기…")가
 /// 공유해 패널 설정이 세 벌로 갈라지지 않게 한다.
+/// `@MainActor`: `NSOpenPanel` 생성·`runModal()` 은 AppKit 메인 스레드 전용이고, 호출부 셋
+/// (WallpaperGridView·NowPlayingBar 는 `View`, AppDelegate 는 앱 델리게이트)이 전부 이미 메인
+/// 액터라 표기를 붙여도 호출부는 한 줄도 바뀌지 않는다 — 사실을 타입에 적는 것뿐이다.
+@MainActor
 enum ImportPanel {
     @discardableResult
     static func run(into viewModel: LibraryViewModel) -> Bool {

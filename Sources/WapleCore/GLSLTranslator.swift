@@ -67,13 +67,17 @@ public enum GLSLTranslator {
         let vRaw: String; let fRaw: String; let vInlined: String; let fInlined: String; let combos: String
         let premultiply: Bool
     }
-    private static var memoCache: [MemoKey: TranslatedShader?] = [:]
+    // nonisolated(unsafe): 직렬화 주체는 바로 아래 memoLock 이다(모든 읽기·쓰기가 lock/unlock 구간
+    // 안에 있다 — _memoizedTranslate·_resetTranslationMemoForTesting 이 전부). 컴파일러가 그 사실을
+    // 볼 수 없을 뿐이라 표기로 알린다. 락을 지우려면 이 표기도 같이 지워야 한다.
+    nonisolated(unsafe) private static var memoCache: [MemoKey: TranslatedShader?] = [:]
     private static let memoLock = NSLock()   // DeepScan.concurrentPerform 가 translate 를 동시 호출 → 필수.
     // 상한 불요: 유니크 키는 사용자 라이브러리의 유한 셰이더 수(수백~저수천)로 바운드,
     // 엔트리당 인라인소스+MSL 수십 KB → 수십 MB 천장. 필요 시 count 상한+FIFO 로 승격.
 
     /// 테스트 전용: 프로세스 전역 캐시라 테스트 간 격리·미스(실번역) 카운트 관측을 위해 제공(@testable).
-    public private(set) static var memoComputeCount = 0
+    /// nonisolated(unsafe): 증가·리셋 모두 memoLock 구간 안이다(위 memoCache 주석과 같은 근거).
+    nonisolated(unsafe) public private(set) static var memoComputeCount = 0
     static func _resetTranslationMemoForTesting() {
         memoLock.lock(); defer { memoLock.unlock() }
         memoCache.removeAll(); memoComputeCount = 0

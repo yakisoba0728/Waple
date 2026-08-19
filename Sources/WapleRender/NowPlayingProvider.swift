@@ -1,8 +1,10 @@
 import AppKit
 
 /// 지금 재생 중 정보(미디어 연동 — 웹 wallpaperRegisterMedia* 리스너용).
-public struct NowPlayingInfo: Equatable {
-    public enum State: Int { case stopped = 0, playing = 1, paused = 2 }
+/// Sendable: 전 필드가 값 타입(String/Double/Int enum) — MediaPoller 가 백그라운드 fetch 결과를
+/// 메인 큐로 넘기므로 필수다(public 타입은 Sendable 이 자동 추론되지 않는다).
+public struct NowPlayingInfo: Equatable, Sendable {
+    public enum State: Int, Sendable { case stopped = 0, playing = 1, paused = 2 }
     public var state: State
     public var title: String
     public var artist: String
@@ -185,13 +187,18 @@ extension AppleScriptNowPlayingProvider: ArtworkProviding {
         guard let out = Self.runOSAScript(Self.spotifyArtworkURLScript),
               let url = URL(string: out.trimmingCharacters(in: .whitespacesAndNewlines)),
               Self.isValidArtworkURL(url) else { return nil }
-        var result: Data?
+        // 지역 var 를 완료 클로저에서 변형하던 코드를 리포 관용(SemaphoreResultBox — SceneVideoLayer.swift:58,
+        // 이 파일 위쪽 runOSAScript 도 사용)으로 교체한다. 표기만의 문제가 아니었다: `_ = sem.wait(timeout:)`
+        // 는 **타임아웃이어도 그대로 진행**하므로, 10초를 넘긴 다운로드의 완료 콜백이 쓰는 동안 return 이
+        // 같은 변수를 읽는 실경합이 있었다(happens-before 는 signal→wait 성공 경로에만 성립).
+        // 박스 규약대로 타임아웃이면 값을 읽지 않고 nil 로 간다(SceneVideoLayer 의 같은 판단·같은 이유).
+        let box = SemaphoreResultBox<Data?>(nil)
         let sem = DispatchSemaphore(value: 0)
         URLSession.shared.dataTask(with: url) { data, resp, _ in
-            if let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) { result = data }
+            if let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) { box.value = data }
             sem.signal()
         }.resume()
-        _ = sem.wait(timeout: .now() + 10)
-        return result
+        guard sem.wait(timeout: .now() + 10) == .success else { return nil }
+        return box.value
     }
 }

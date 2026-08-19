@@ -52,9 +52,12 @@ final class WorkshopViewModel: ObservableObject {
     }
 
     /// 다운로드 실행 심 — 시그니처는 SteamCmdDownloader.download 와 같다(테스트에서 콜백 캡처용).
+    /// 콜백 둘이 `@Sendable` 인 것은 그쪽 시그니처를 따라간 것이다(백그라운드 큐 → 메인 큐를 거쳐
+    /// 불린다는 사실). 심의 파라미터 위치는 반변이라 `@Sendable` 아닌 클로저를 받는 테스트 페이크도
+    /// 그대로 대입된다 — 넓은 쪽이 좁은 쪽 자리에 들어가는 방향이기 때문이다.
     typealias Downloader = (_ itemId: String, _ username: String,
-                            _ progress: @escaping (SteamCmdDownloader.Progress) -> Void,
-                            _ completion: @escaping (URL?) -> Void) -> Void
+                            _ progress: @escaping @Sendable (SteamCmdDownloader.Progress) -> Void,
+                            _ completion: @escaping @Sendable (URL?) -> Void) -> Void
 
     init(client: WorkshopClient = .live(), library: LibraryViewModel,
          keyProvider: @escaping () -> String? = { SteamAPIKeyStore.load() },

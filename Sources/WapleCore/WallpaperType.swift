@@ -1,6 +1,6 @@
 import Foundation
 
-public enum WallpaperType: Equatable {
+public enum WallpaperType: Equatable, Sendable {   // 페이로드는 String 하나뿐 — 값 타입
     case video
     case scene
     case web
