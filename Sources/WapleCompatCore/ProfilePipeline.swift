@@ -9,7 +9,7 @@ import WapleRender
 ///
 /// 규약: 씬 1개 = 프로세스 1개(`--only <id>`) — 메모리 상주(phys_footprint) 오염 방지 + Metal
 /// 컴파일러 콜드 상태 재현. 캡처 결정 조건은 SnapshotPipeline 재사용(pin + StoppedNowPlaying + pause).
-enum ProfilePipeline {
+public enum ProfilePipeline {
 
     // MARK: 프로세스 상주 메모리(phys_footprint) — 통합메모리이므로 GPU 텍스처 포함.
 
@@ -29,7 +29,7 @@ enum ProfilePipeline {
     struct InventoryRow { let id: String; let is3D: Bool; let layers: Int; let effects: Int
                           let particles: Int; let texBytes: Int; let hdr: Bool; let bloom: Bool }
 
-    static func runInventory(root: String, outCSV: URL) -> Int32 {
+    public static func runInventory(root: String, outCSV: URL) -> Int32 {
         let restore = SnapshotPipeline.pinRenderSettings(root: root)
         defer { restore() }
         // F520: 루트 오지정으로 씬 0개면 빈 CSV 를 쓰고 exit 0 → CI 오인 방지(capture/compare 와 동일 가드).
@@ -82,7 +82,7 @@ enum ProfilePipeline {
     /// 씬마다 SceneDocument.parse 를 WAPLE_VIS_INHERIT=0(끔)/기본(켬) 두 번 돌려, 켬 쪽에서
     /// initialVisible/visible 이 true→false 로 새로 마킹된 레이어/텍스트/파티클 수를 센다(드롭이 아니라
     /// 마킹이라 두 파스의 배열 길이/순서가 항상 같음 — index 로 zip 비교). CSV 는 영향 있는 씬만 기록.
-    static func runVisBlast(root: String, outCSV: URL) -> Int32 {
+    public static func runVisBlast(root: String, outCSV: URL) -> Int32 {
         let restore = SnapshotPipeline.pinRenderSettings(root: root)
         defer { restore() }
         let folders = SnapshotPipeline.sceneFolders(root: root)
@@ -182,7 +182,7 @@ enum ProfilePipeline {
         let footBeforeBytes: Int, footAfterBytes: Int, footDeltaBytes: Int, deviceAllocBytes: Int
     }
 
-    static func runProfile(root: String, outDir: URL, only: String, remount: Bool, frameW: Int, frameH: Int) -> Int32 {
+    public static func runProfile(root: String, outDir: URL, only: String, remount: Bool, frameW: Int, frameH: Int) -> Int32 {
         let fm = FileManager.default
         try? fm.createDirectory(at: outDir, withIntermediateDirectories: true)
         // F520: 개발 루트/backgrounds/단일 씬 디렉터리 직접 지정 모두 수용(sceneFolders 와 동일 해석).

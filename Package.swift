@@ -41,15 +41,33 @@ let package = Package(
             dependencies: ["WapleCore", "WapleLibrary", "WapleRender"],
             swiftSettings: strictConcurrency
         ),
+        // [2026-08-19] `WapleCompat` 을 **라이브러리 + 얇은 실행파일**로 쪼갠다.
+        //
+        // 종전엔 전부가 하나의 `.executableTarget` 이라 **어떤 테스트 타깃도 의존할 수 없었다**
+        // (`grep -rn "import WapleCompat" Tests/` = 0건). 그래서 1,799줄(DeepScan 782 ·
+        // ProfilePipeline 329 · SnapshotPipeline 321 · SnapshotCompare 172 · Report 195)이
+        // 통째로 무테스트였고, `SnapshotTests` 는 판정 수식을 **베껴서 자기 산수를 단언**했다 —
+        // 프로덕션 로직을 지워도 통과하는 상태였다(그 임계는 WapleSnapshot 으로 올렸다).
+        //
+        // 실행파일에 남는 것은 `main.swift`(인자 파싱·종료코드) 하나뿐이고, 코어가 공개하는
+        // 표면은 진입점 6개(DeepScan.run · ProfilePipeline.run{Inventory,VisBlast,Profile} ·
+        // SnapshotPipeline.run{Capture,Compare})뿐이다. 나머지는 모듈 내부로 남는다.
+        .target(
+            name: "WapleCompatCore",
+            dependencies: ["WapleCore", "WapleRender", "WapleSnapshot"],
+            swiftSettings: strictConcurrency
+        ),
         .executableTarget(
             name: "WapleCompat",
-            dependencies: ["WapleCore", "WapleRender", "WapleSnapshot"],
+            dependencies: ["WapleCompatCore", "WapleCore", "WapleRender"],
             swiftSettings: strictConcurrency
         ),
         // 테스트 타깃에는 아직 걸지 않는다. 진단 목록을 먼저 소스에서 소진하고,
         // 그다음 테스트로 넓힌다 — 한 번에 켜면 어느 쪽 경고인지 로그에서 뒤섞인다.
         .testTarget(name: "WapleCoreTests", dependencies: ["WapleCore"]),
         .testTarget(name: "WapleSnapshotTests", dependencies: ["WapleSnapshot"]),
+        // [2026-08-19] 위 분리로 처음 생긴 타깃 — 종전엔 의존 자체가 불가능했다.
+        .testTarget(name: "WapleCompatCoreTests", dependencies: ["WapleCompatCore", "WapleCore", "WapleSnapshot"]),
         .testTarget(name: "WapleLibraryTests", dependencies: ["WapleLibrary", "WapleCore"]),
         // WapleSnapshot 추가(2026-08-19): SyntheticPixelGoldenTests 가 diffRGBA/DiffThreshold/
         // meanLuma 를 쓴다. 픽셀 비교 로직을 테스트 안에 다시 구현하지 않기 위한 것이다 —

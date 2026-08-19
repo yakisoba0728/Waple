@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specfmt
 
 SNAPSHOT_SWIFT = "Sources/WapleSnapshot/Snapshot.swift"
-COMPARE_SWIFT = "Sources/WapleCompat/SnapshotCompare.swift"
+COMPARE_SWIFT = "Sources/WapleCompatCore/SnapshotCompare.swift"
 LABEL_SWIFT = "Tests/WapleRenderTests/GoldenBaselineOracleTests.swift"
 GATE_SH = "scripts/mac-session/golden-gate.sh"
 
@@ -590,7 +590,7 @@ def main():
                       "달랐을 뿐**이었다 — 0/170 을 '결정적' 으로도 '간헐적' 으로도 읽지 않고 "
                       "축을 다시 고른 것이 답을 냈다.",
             "crossRef": "oracle.nondet.axisIsCrossSession",
-        }, "확정", [specfmt.ev("file", "Sources/WapleCompat/SnapshotPipeline.swift:187-198",
+        }, "확정", [specfmt.ev("file", "Sources/WapleCompatCore/SnapshotPipeline.swift:187-198",
                                "2차 캡처가 같은 프로세스"),
                     specfmt.ev("file", f"{COMPARE_SWIFT}:{k['lines']['thrSelect']}",
                                "deterministic 으로 임계 선택"),

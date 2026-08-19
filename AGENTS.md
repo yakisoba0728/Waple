@@ -133,9 +133,26 @@ WAPLE_DEV_ROOT=/tmp/dev-root WAPLE_VERIFY_OUT=/tmp/verify-out bash scripts/mac-s
 
 ⚠️ **`--parallel` 은 개수 세기 전용이다 — 통과/실패 판정에 쓰지 마라.** 2026-08-16 실측:
 `SceneRenderSettingsTests`(UserDefaults 전역 상태)와 `SceneCompositeConventionTests` 가
-**병렬 3/3 실패, 순차 3/3 통과**로 갈린다. 클래스를 단독 필터해도 병렬이면 실패하므로 클래스 간
-오염이 아니라 워커 프로세스의 defaults 도메인 차이로 보인다(원인 미확정). 초록/빨강을 봐야 하면
-`swift test -c release` 를 순차로 돌려라 — release 순차가 162초로 debug 병렬(275초)보다 빠르기도 하다.
+**병렬 3/3 실패, 순차 3/3 통과**로 갈린다. 초록/빨강을 봐야 하면 `swift test -c release` 를
+순차로 돌려라 — release 순차가 162초로 debug 병렬(275초)보다 빠르기도 하다.
+
+> **[2026-08-19] 둘 중 하나는 원인이 특정돼 고쳐졌다.**
+> `SceneCompositeConventionTests` 는 입력 디렉터리를 `NSTemporaryDirectory()`(macOS 에서
+> 프로세스별)로 잡으면서 **출력만 리터럴 `/tmp/waple_cc_<tag>`** 로 썼다 — 11쌍 전부.
+> 병렬 워커들이 같은 출력 경로에 캡처를 쓰니 서로의 프레임을 덮는다. 클래스를 단독 필터해도
+> 실패한 것과도 맞는다(워커는 여전히 여럿이다). `SnapshotCompare.swift:59` 가 같은 이유로
+> 이미 PID 스코프(F148)를 도입해 뒀는데 이 파일로 전파되지 않았다. 이제 입출력 모두
+> `scratchDir(_:)` 경유로 PID 스코프다.
+>
+> **다만 "이제 병렬이 통과한다" 고 말하지 않는다** — 이 스윕은 Linux 에서 돌아 실행 검증을
+> 못 했고, `SceneRenderSettingsTests` 쪽(UserDefaults 전역 상태)은 별개 원인으로 남아 있다.
+> macOS 에서 확인할 것:
+>
+> ```bash
+> swift test --parallel --num-workers 6 --filter SceneCompositeConventionTests   # 3회
+> ```
+>
+> 3/3 통과로 바뀌면 이 경고에서 그 클래스를 빼면 된다. 여전히 실패하면 원인이 하나 더 있다.
 
 **이 레시피로 확정되는 것과 안 되는 것을 구분할 것.**
 - **확정**: `실행` 수. 테스트 메서드는 정적으로 결정되므로 코퍼스 크기가 개수를 못 바꾼다.

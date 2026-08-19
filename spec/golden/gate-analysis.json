@@ -36,7 +36,7 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": "Sources/WapleCompat/SnapshotCompare.swift:22-144",
+     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:22-144",
      "note": "runCompare 본문 — 여기의 entry.<field> 참조를 센다"
     },
     {
@@ -87,7 +87,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompat/SnapshotCompare.swift:98",
+     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:98",
      "note": "판정식 원문"
     },
     {
@@ -175,7 +175,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompat/SnapshotCompare.swift:98",
+     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:98",
      "note": "판정식 원문"
     },
     {
@@ -341,12 +341,12 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": "Sources/WapleCompat/SnapshotPipeline.swift:187-198",
+     "ref": "Sources/WapleCompatCore/SnapshotPipeline.swift:187-198",
      "note": "2차 캡처가 같은 프로세스"
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompat/SnapshotCompare.swift:85",
+     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:85",
      "note": "deterministic 으로 임계 선택"
     },
     {
