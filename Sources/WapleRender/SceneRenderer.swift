@@ -1103,18 +1103,26 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 프로세스 환경 **스냅샷 1회**. `ProcessInfo.processInfo.environment` 는 접근할 때마다 사전을
     /// 새로 구성하는데, 아래 debugFlag/environmentValue 는 draw 루프에서 매 프레임 호출된다
     /// (encode3D:1594 · encode3DParticles:2121 · runTranslatedEffect 의 WAPLE_MP_TRUNC).
-    /// 환경변수는 프로세스 수명 중 불변이므로 SceneLivePresentationFix.cachedNeedsDesktopFlipY(:44)와
-    /// 같은 방식으로 최초 접근 시 한 번만 읽는다(static let = 스레드 안전 1회 초기화).
-    private static let environmentSnapshot: [String: String] = ProcessInfo.processInfo.environment
-
+    /// 비싼 것은 조회가 아니라 **딕셔너리 구성**이다. `ProcessInfo.processInfo.environment` 는
+    /// 접근할 때마다 environ 전체를 훑어 [String: String] 을 새로 만든다 — 프레임마다 여러 번
+    /// 부르면 그게 그대로 할당이 된다. getenv 는 그 구성을 건너뛴다.
+    ///
+    /// [정정 2026-08-19] 종전 수정은 이 자리를 `static let` 스냅샷으로 바꿨는데, 근거가
+    /// "환경변수는 프로세스 수명 중 불변" 이었다. **이 코드베이스에서는 거짓이다** —
+    /// 테스트가 런타임에 setenv 로 게이트를 켠다(AGENTS.md 의 env 게이트 규약, 21개 파일).
+    /// 스냅샷이 먼저 뜨면 그 뒤 setenv 가 영영 안 보여서
+    /// SceneRendererMeshCustomShaderTests.testBuiltinMeshShaderGateOnLoadsWhitelistedBaseAssetsSource
+    /// 가 CI 에서 깨졌다. getenv 는 할당을 없애면서 런타임 변경도 그대로 반영한다.
+    ///
     /// 디버그 env 플래그(`WAPLE_3D_*`).
     static func debugFlag(_ name: String) -> Bool {
-        environmentSnapshot[name] == "1"
+        environmentValue(name) == "1"
     }
 
     /// 위와 같은 근거의 env 값 조회("1" 이 아닌 값을 파싱하는 디버그 스위치용).
     static func environmentValue(_ name: String) -> String? {
-        environmentSnapshot[name]
+        guard let raw = getenv(name) else { return nil }
+        return String(cString: raw)
     }
 
     public override init() { super.init() }
