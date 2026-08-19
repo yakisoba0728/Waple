@@ -13,12 +13,18 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         return try XCTUnwrap(try? ProjectJSONParser.parse(folderURL: dir))
     }
 
-    /// H1 Phase 2: 커스텀 셰이더가 있는 3D 메시 머티리얼은 파이프라인 빌드를 시도한다(실패 시 Mesh3DShaders 폴터).
+    /// H1 Phase 2: 커스텀 셰이더가 있는 3D 메시 머티리얼이 **실제로 그 셰이더로 그려지는지**.
+    ///
+    /// [정정 2026-08-19] 종전 이 테스트의 픽스처는 `.mdl` 이 8바이트 매직("MDLV0023")뿐이라 파싱이
+    /// 곧바로 실패했고 — 즉 이름이 말하는 커스텀 메시 경로에 **한 번도 도달하지 못한 채** —
+    /// 마지막 줄이 리터럴 `XCTAssertTrue(true)` 였다. 무엇이 깨져도 초록인 테스트였다.
+    /// 같은 파일에 이미 있는 `staticQuadMDL(materialPath:)` 로 실제 메시를 만들고, 커스텀 프래그먼트가
+    /// **알베도를 뒤집어**(albedo 빨강 → 출력 초록) 내도록 해서 스톡 폴백(Mesh3DShaders)과 구분한다.
     func testMeshCustomShaderBuildsPipeline() throws {
-        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let scene = """
-        {"general":{"fov":50},
-         "camera":{"eye":"0 0 10","center":"0 0 0","up":"0 1 0"},
+        {"general":{"fov":50,"clearcolor":"0 0 0","ambientcolor":"1 1 1","skylightcolor":"1 1 1"},
+         "camera":{"eye":"0 0 3","center":"0 0 0","up":"0 1 0"},
          "objects":[{"model":"models/cube.mdl","origin":"0 0 0"}]}
         """
         let material = #"{"passes":[{"shader":"genericimage2","textures":["pic"]}]}"#
@@ -29,29 +35,39 @@ final class SceneRendererMeshCustomShaderTests: XCTestCase {
         varying vec2 v_TexCoord;
         void main() { gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix); v_TexCoord = a_TexCoord; }
         """
+        // 알베도(빨강 1,0,0)를 그대로 내지 않고 R 을 반전 — 커스텀이 돌면 (0,1,0), 스톡 폴터면 (1,0,0).
         let frag = """
         varying vec2 v_TexCoord;
         uniform sampler2D g_Texture0;
-        void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }
+        void main() {
+            vec4 albedo = texSample2D(g_Texture0, v_TexCoord);
+            gl_FragColor = vec4(1.0 - albedo.r, 1.0, 0.0, 1.0);
+        }
         """
-        // 최소 MDL: 1 삼각형, 정적(8 float 패킹).
-        var mdl = Data()
-        mdl.append(contentsOf: "MDLV0023".utf8)
-        // 간단한 큐브 MDL 생성은 복잡 — 대신 빌드 시도만 검증(파이프라인 빌드 성공 여부는 셰이더 존재 시).
         let files: [(String, Data)] = [
             ("scene.json", scene.data(using: .utf8)!),
-            ("models/cube.mdl", mdl),
+            ("models/cube.mdl", staticQuadMDL(materialPath: "materials/cube.json")),
             ("materials/cube.json", material.data(using: .utf8)!),
             ("materials/pic.tex", solidTex(255, 0, 0)),
             ("shaders/genericimage2.vert", vert.data(using: .utf8)!),
             ("shaders/genericimage2.frag", frag.data(using: .utf8)!),
         ]
         let r = SceneRenderer()
-        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 36)),
+        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)),
                     project: try project(files: files, id: "meshcustom"))
         defer { r.teardown() }
-        // MDL 파싱 실패 시 메시가 없을 수 있으므로, 빌드 시도 자체는 SceneRenderer 가 크래시 없이 완료해야 한다.
-        XCTAssertTrue(true, "mount completed without crash")
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("waple_h1p2_out", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: dir).first)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 32))
+        XCTAssertGreaterThan(Double(c.greenComponent), 0.5,
+                             "커스텀 프래그먼트 출력(G=1)이 안 나옴 — 메시 미생성 또는 스톡 폴터 의심")
+        XCTAssertLessThan(Double(c.redComponent), 0.2,
+                          "R = 1 - albedo.r 이어야 한다 — 스톡 폴터면 알베도 빨강이 그대로 남는다")
+        XCTAssertLessThan(Double(c.blueComponent), 0.2)
     }
 
     /// 정적(비스키닝) 쿼드 MDLV0023 — pos3+normal3+tangent4+uv2(stride 48), formatFlag 0x0f(normal+tangent, no skin).

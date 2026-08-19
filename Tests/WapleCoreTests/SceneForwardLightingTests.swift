@@ -26,11 +26,25 @@ final class SceneForwardLightingTests: XCTestCase {
         XCTAssertEqual(u.ambientTerm, SIMD3<Float>(0.3, 0.2, 0.1))   // genericimage4: flat ambient only
     }
 
-    func testForwardUniformsTakesFirstFour() {
-        let lights = (0..<5).map { light(Vec3(x: Float($0), y: 0, z: 0), Vec3(x: 1, y: 1, z: 1), intensity: 1, radius: 10) }
-        let u = SceneLight3D.forwardUniforms(lights, ambient: Vec3(x: 0, y: 0, z: 0), skylight: Vec3(x: 0, y: 0, z: 0))
-        XCTAssertEqual(u.count, 4)
-        XCTAssertEqual(u.positions[3], SIMD4<Float>(3, 0, 0, 1))     // 4번째(idx3), 5번째 미포함
+    /// F840: 2D 레인 상한을 4 → slotCount(8)로 올린 데 맞춘다.
+    ///
+    /// 종전 이름(TakesFirstFour)과 단언 4 는 **버그를 굳히고 있었다**. F660 이 3D 레인을
+    /// 8(Scene3DLighting.maximumLights)로 올릴 때 2D 레인만 4 로 남았고, 같은 씬의 5번째
+    /// 라이트부터 2D 라이팅 레이어에만 안 잡혔다 — 이 테스트는 그 어긋남을 정상으로
+    /// 기록하고 있었다. 리터럴 대신 slotCount 를 단언해 다음 상향 때 같은 일이 없게 한다.
+    func testForwardUniformsFillsUpToSlotCount() {
+        // 슬롯보다 적으면 전부 들어간다 — 종전엔 5개 중 4개만 들어갔다.
+        let five = (0..<5).map { light(Vec3(x: Float($0), y: 0, z: 0), Vec3(x: 1, y: 1, z: 1), intensity: 1, radius: 10) }
+        let u5 = SceneLight3D.forwardUniforms(five, ambient: Vec3(x: 0, y: 0, z: 0), skylight: Vec3(x: 0, y: 0, z: 0))
+        XCTAssertEqual(u5.count, 5)
+        XCTAssertEqual(u5.positions[4], SIMD4<Float>(4, 0, 0, 1))    // 5번째도 이제 들어간다
+
+        // 슬롯을 넘기면 앞 slotCount 개만.
+        let nine = (0..<9).map { light(Vec3(x: Float($0), y: 0, z: 0), Vec3(x: 1, y: 1, z: 1), intensity: 1, radius: 10) }
+        let u9 = SceneLight3D.forwardUniforms(nine, ambient: Vec3(x: 0, y: 0, z: 0), skylight: Vec3(x: 0, y: 0, z: 0))
+        XCTAssertEqual(u9.count, SceneLight3D.ForwardUniforms.slotCount)
+        XCTAssertEqual(SceneLight3D.ForwardUniforms.slotCount, 8)    // QuadShaders.f_lit 루프 상한과 같은 계약
+        XCTAssertEqual(u9.positions[7], SIMD4<Float>(7, 0, 0, 1))    // 8번째(idx7), 9번째 미포함
     }
 
     func testParsedExponentReachesPackedForwardUniform() throws {
