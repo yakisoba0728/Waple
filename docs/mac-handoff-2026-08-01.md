@@ -198,7 +198,13 @@ W1·W2 는 넓히고 N1·N2 는 좁혀서 서로 상쇄되고 있다.
 당시 기준선 `spec/golden/snapshot/baseline-f3a17da/`(release, 포인터 핀 이후)로 다시 떴고
 GT 오라클(`GoldenBaseline.currentLabel`)이 이걸 봤다.
 
-> [갱신 2026-08-16] **현행 기준선은 `spec/golden/snapshot/baseline-31fecaa/` 다.**
+> [갱신 2026-08-19] **현행 기준선은 `spec/golden/snapshot/baseline-6f0bcf0/` 다**
+(2026-08-19, 170/0/0 — `spec/golden/snapshot/README.md:9`). 종전에 이 자리가 가리키던
+`baseline-31fecaa` 는 **디렉터리째 없다**; 커밋된 것은 `baseline-6f0bcf0` 과 `baseline-81098bb` 둘이다.
+`GoldenBaseline.currentLabel` 도 `GoldenBaselineOracleTests.swift:29`(종전 인용 :26 은 밀렸다)에서
+`"baseline-6f0bcf0"` 을 가리킨다.
+
+[갱신 2026-08-16] ~~현행 기준선은 `spec/golden/snapshot/baseline-31fecaa/` 다.~~
 > 이 항목 직후 HDR 블룸을 WE 평문 구조로 교체하면서(§4(c), `31fecaa`) 한 번 더 떴다.
 > `baseline-f3a17da/` 디렉터리는 HEAD 에 없는데 이건 삭제 사고가 아니라 정책이다 —
 > HEAD 에는 현행 + 이식 전 이력 둘만 두고 중간 기준선은 커밋 이력에서 꺼낸다

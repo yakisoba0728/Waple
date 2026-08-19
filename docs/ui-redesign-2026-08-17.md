@@ -3,7 +3,7 @@
 > 상태: **청사진 확정, 화면 구현 상당 부분 출하됨.**
 >
 > [정정 2026-08-19] 종전 "화면 구현 미착수" 는 더 이상 사실이 아니다. HEAD 기준으로
-> `Sources/Waple/Surfaces/` 아래 네 면(Displays·Installed·Settings·Workshop, 12파일)과
+> `Sources/Waple/Surfaces/` 아래 네 면(Displays·Installed·Settings·Workshop, 11파일)과
 > `Sources/Waple/Shell/` 의 셸(MainWindowView·SidebarView·NowPlayingBar·LibrarySection·
 > StatusBanner·OnboardingView)이 존재한다. 다만 **어디까지가 이 청사진을 충족하는지는
 > 이 정정에서 판정하지 않았다** — 파일 존재만 확인했다. 항목별 충족 여부는 아래 각 절을
