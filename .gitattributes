@@ -1,8 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
-# 커밋된 스냅샷 기준선: 썸네일은 바이너리
-spec/golden/snapshot/**/*.png binary
+# 커밋된 골든 기준선: 이미지는 바이너리
+# snapshot/ 만 적으면 새 기준선 종류가 생길 때마다 같은 실수를 반복한다 —
+# WEAssets 의 확장자 열거가 tex-json/js 를 놓쳐 302개를 손상시킨 것과 같은 부류다.
+# spec/golden 아래 이미지를 통째로 덮는다(synthetic/ 포함).
+spec/golden/**/*.png binary
 
 # 동봉된 WE 에셋(Sources/WapleRender/Resources/WEAssets)
 #
