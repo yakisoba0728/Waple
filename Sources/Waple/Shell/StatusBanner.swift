@@ -54,7 +54,7 @@ struct StatusBanner: View {
             // ⚠️ msg 는 **이미 현지화된** String 이다 — 이 오버로드(`StringProtocol`)는 번역하지
             // 않으므로, 넘어오기 전에 완성돼 있어야 한다. 2026-08-17 Unit E 에서 생산 지점을
             // 전부 감쌌다(AppDelegate.notify 호출부 11곳 · LibraryViewModel 은 그 전부터 완성형 ·
-            // StillWallpaperNotice · BaseAssetsWarningGate 만 미착수 — 그 파일은 동결).
+            // StillWallpaperNotice 만 미착수). BaseAssetsWarningGate 는 F840 에서 감쌌다.
             // 싱크 타입을 LocalizedStringKey 로 바꾸는 길은 택하지 않았다: 리터럴이 대입문이
             // 되어 어떤 스캔 패턴에도 안 걸린다 — 런타임 버그 하나를 고치면서 오라클 사각지대를
             // 새로 파는 셈이다. **여기 타입을 바꾸려면 같은 커밋에서 스캔 패턴도 늘려야 한다.**

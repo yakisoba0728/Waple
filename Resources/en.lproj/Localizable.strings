@@ -64,6 +64,7 @@
 "검증 중" = "Verifying";
 "결과 없음" = "No results";
 "결과가 없습니다." = "No results.";
+"공유 기본 에셋을 찾지 못해 일부 씬 요소가 표시되지 않습니다 — 설정 > 에셋·도구에서 폴더를 지정하세요." = "Shared base assets could not be found, so some scene elements will not be drawn — choose the folder in Settings > Assets & Tools.";
 "공유 에셋 폴더 (선택)" = "Shared assets folder (optional)";
 "구독" = "Subscribers";
 "구독 순" = "Most subscribed";
@@ -143,6 +144,7 @@
 "씬" = "Scenes";
 "아래를 확인하면 바로 배경을 즐길 수 있어요. 모두 나중에 설정에서 바꿀 수 있습니다." = "Check the items below and you are ready to go. You can change all of them later in Settings.";
 "아래에서 배경을 클릭하거나 박스로 드래그하면 바로 적용됩니다" = "Click a wallpaper below, or drag one into the box, to apply it right away";
+"앱 번들에 Waple.saver 가 없습니다 — scripts/package-app.sh 로 패키징한 앱에서 실행하세요." = "The app bundle does not contain Waple.saver — run a build packaged with scripts/package-app.sh.";
 "없음" = "None";
 "에셋·도구" = "Assets and tools";
 "오려두기" = "Cut";

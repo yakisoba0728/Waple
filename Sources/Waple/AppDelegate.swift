@@ -94,6 +94,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var nextMenuItem: NSMenuItem?   // "다음 배경"(w5d-tray) — 후보 2개 미만이면 비활성
     private weak var statusMenu: NSMenu?
 
+    // MARK: F840 — 창이 닫혀 있을 때의 알림 경로
+    //
+    // 이 앱은 LSUIElement(메뉴바 상주)라 라이브러리 창은 **평소 닫혀 있다**. 그런데 notify() 는
+    // `libraryWindow.isVisible` 이 아니면 NSLog 만 남기고 반환했다 — 마운트 실패·비디오 비동기
+    // 실패·화면보호기 설치 실패·임포트 실패 등 실패 경로가 정상 사용 중에는 전부 무음이었다.
+    // 새 UI 를 만들지 않고 **이미 있는 두 자리**로 흘려보낸다:
+    //   1) 상태바 아이템 툴팁(refreshStatusIcon 이 마지막 메시지를 덧붙인다)
+    //   2) 트레이 메뉴 최상단의 비활성 항목(menuNeedsUpdate 가 표시/숨김을 갱신)
+    // 그리고 창이 열리는 순간 배너로 승격해 놓치지 않게 한다(openLibrary).
+    /// 창이 닫힌 동안 도착한 마지막 알림(표시되면 nil).
+    private var pendingNotice: String?
+    /// 트레이 메뉴 최상단 알림 항목 — 알림이 없으면 숨김.
+    private weak var noticeMenuItem: NSMenuItem?
+
     private static let pauseWhenOccludedKey = "pauseWhenOccluded"
     private var pauseWhenOccluded: Bool {
         get { UserDefaults.standard.bool(forKey: Self.pauseWhenOccludedKey) }   // 기본 false
@@ -137,6 +151,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 트레이 축소(SP5′): 설정은 전부 설정 창으로 — 창 없이 필요한 동작만 남긴다.
         let menu = NSMenu()
         menu.delegate = self   // 열 때마다 일시정지 항목 제목 최신화(menuNeedsUpdate)
+        // F840: 창이 닫힌 동안 도착한 알림 자리. 평소엔 숨김이라 기존 메뉴 모양은 그대로다.
+        let notice = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        notice.isEnabled = false
+        notice.isHidden = true
+        menu.addItem(notice)
+        noticeMenuItem = notice
         menu.addItem(NSMenuItem(title: NSLocalizedString("Waple 열기", comment: ""),
                                 action: #selector(openLibrary), keyEquivalent: "l"))
         menu.addItem(recentMenuItem())  // 최근 배경 서브메뉴(작업 6 — 구현은 확장)
@@ -163,11 +183,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         libraryVM.onApply = { [weak self] folder in self?.apply(folderURL: folder) ?? false }
         libraryVM.onNotify = { [weak self] message in self?.notify(message) }
+        // F840: 종전에는 desktopController.screenViews 스냅샷과 라이브 NSScreen.screens 를
+        // **배열 인덱스**로 짝지었다. 인덱스는 안정 식별자가 아니다 — 디스플레이를 뽑거나 주
+        // 디스플레이를 바꾸면 순서가 갈려, 키는 A 화면인데 이름만 B 화면 것이 붙는다.
+        // 사용자가 '디스플레이' 메뉴에서 "Studio Display" 를 골랐는데 내장 화면에 적용되는
+        // 조용한 오배정이었다. 안정 키(screenKey = CGDirectDisplayID)로 짝짓는다.
         libraryVM.screensProvider = { [weak self] in
-            self?.desktopController.screenViews.enumerated().map { i, sv in
-                (key: sv.screenKey, name: NSScreen.screens.indices.contains(i)
-                    ? NSScreen.screens[i].localizedName : sv.screenKey)
-            } ?? []
+            guard let self else { return [] }
+            let namesByKey = Dictionary(
+                NSScreen.screens.map { (DesktopWindow.screenKey(for: $0), $0.localizedName) },
+                uniquingKeysWith: { first, _ in first })
+            return self.desktopController.screenViews.map { sv in
+                (key: sv.screenKey, name: namesByKey[sv.screenKey] ?? sv.screenKey)
+            }
         }
         libraryVM.onAssignmentsChanged = { [weak self] in
             guard let self else { return }
@@ -224,13 +252,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 시스템/디스플레이 슬립 중 렌더 정지, 웨이크 시 재개(수동·가림 사유가 남아 있으면 유지).
         // NSWorkspace 알림은 default 센터가 아니라 workspace 전용 센터로 온다.
+        // F840: 시스템 슬립과 디스플레이 슬립을 **각각** 추적한다. 종전에는 넷이 전부 하나의
+        // .sleep 사유를 켜고 껐기 때문에, 한쪽이 아직 잠들어 있어도 다른 쪽의 첫 웨이크가
+        // 사유를 통째로 지웠다(예: 디스플레이만 깨어난 상태에서 렌더가 재개).
         let workspaceCenter = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
-            workspaceCenter.addObserver(self, selector: #selector(sleepBegan), name: name, object: nil)
-        }
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
-            workspaceCenter.addObserver(self, selector: #selector(sleepEnded), name: name, object: nil)
-        }
+        workspaceCenter.addObserver(self, selector: #selector(systemSleepBegan),
+                                    name: NSWorkspace.willSleepNotification, object: nil)
+        workspaceCenter.addObserver(self, selector: #selector(systemSleepEnded),
+                                    name: NSWorkspace.didWakeNotification, object: nil)
+        workspaceCenter.addObserver(self, selector: #selector(displaySleepBegan),
+                                    name: NSWorkspace.screensDidSleepNotification, object: nil)
+        workspaceCenter.addObserver(self, selector: #selector(displaySleepEnded),
+                                    name: NSWorkspace.screensDidWakeNotification, object: nil)
 
         // 마지막 선택 배경 복원.
         restoreLastWallpaper()
@@ -356,6 +389,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if libraryWindow?.isMiniaturized == true { libraryWindow?.deminiaturize(nil) }
         libraryWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // F840: 창이 닫힌 동안 쌓인 알림을 창이 열리는 순간 배너로 승격한다 — 상태바 툴팁/트레이
+        // 항목은 사용자가 찾아봐야 보이는 자리라, 창을 열었을 때 한 번 더 능동적으로 알린다.
+        if let notice = pendingNotice {
+            pendingNotice = nil
+            bannerModel.show(notice)
+            refreshStatusIcon()
+        }
     }
 
     /// 설정 창(SP5′) — openLibrary 와 같은 수명 규약: isReleasedWhenClosed=false·강한 참조.
@@ -585,7 +625,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 비디오 렌더러의 음량/배속 타깃(VideoSettingsTarget.projectIds)이 사라져 하단 바 조절이
         // 묵묵히 무시되는 상태가 됐다. 성공 시 applyResolved 가 screenProjects 기준으로 항상 재계산하므로 불필요.
         desktopController.rebuild()
-        _ = applyCurrentSelection()
+        // F840: rebuild() 는 옛 창을 **먼저 전부 놓아버린다**(DesktopWindowController.rebuild →
+        // teardown → orderOut). 그래서 재적용이 실패하면 위 F036 롤백이 보존한 renderers 는
+        // "이미 사라진 창에 마운트된" 렌더러가 된다 — 화면에는 아무 배경도 없는데 AVPlayer·
+        // MTKView·WKWebView 는 다음 성공까지 계속 디코드/드로우한다(F035/F036 주석이 "자원 정리를
+        // 성공 시점까지 지연"이라고 적어 둔 대가가 이것이다). 롤백 자체는 그대로 둔다(applyResolved
+        // 안에서 mount 실패 시 기존 렌더러를 지키는 안전망은 여전히 필요하다). 창이 사라진 뒤에는
+        // 보존할 대상이 아니므로, 실패가 확정된 이 시점에만 정리하고 다음 적용에 맡긴다.
+        if !applyCurrentSelection() {
+            renderers.forEach { $0.teardown() }
+            renderers = []
+            activeVideoProjectIds = []
+        }
 
         if newScreenDetected {
             notify(NSLocalizedString(
@@ -602,10 +653,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (수동 버튼/트레이의 canAdvance 가드와 대칭).
         guard PlaylistScheduling.shouldScheduleTimer(enabled: playlistStore.enabled, ids: playlistStore.ids) else { return }
         let interval = PlaylistScheduling.intervalSeconds(minutes: playlistStore.intervalMinutes)
-        playlistTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        // F840: .common 모드 — scheduledTimer 는 .default 에만 등록돼 메뉴 트래킹·라이브 리사이즈
+        // 동안 멈춘다(트레이 메뉴를 열어 둔 채로 자동 전환 시각이 지나가면 그 회차가 통째로 밀렸다).
+        // 두 함수 아래 scheduleOcclusionTimer 가 같은 이유로 이미 .common 을 쓴다 — 규약을 맞춘다.
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             guard let self, PlaylistScheduling.shouldAdvanceNow(isPaused: self.pauseGate.isPaused) else { return }
             self.advancePlaylist()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        playlistTimer = timer
     }
 
     private func advancePlaylist() {
@@ -710,17 +766,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusItem.button?.image = nil
             statusItem.button?.title = "🖼"   // 심볼 부재 시 이모지 폴백(기존 동작 유지)
         }
-        statusItem.button?.toolTip = StatusIconState.tooltip(
+        var tooltip = StatusIconState.tooltip(
             appliedTitle: libraryVM.appliedTitle, isPaused: pauseGate.isPaused, hasError: lastApplyFailed)
+        // F840: 창이 닫힌 동안 도착한 마지막 알림을 툴팁에 덧붙인다(호버만으로 확인 가능).
+        if let notice = pendingNotice { tooltip += "\n" + notice }
+        statusItem.button?.toolTip = tooltip
     }
 
     // MARK: - 시스템/디스플레이 슬립 자동 정지 (앱셸 스코프 A)
 
-    /// 슬립 진입(willSleep/screensDidSleep) — 슬립 사유 켜고 필요 시 정지.
-    @objc private func sleepBegan() { applyPause(pauseGate.set(.sleep, active: true)) }
+    /// 시스템 슬립 진입(willSleep) — 시스템 슬립 사유만 켠다.
+    @objc private func systemSleepBegan() { applyPause(pauseGate.set(.sleep, active: true)) }
 
-    /// 웨이크(didWake/screensDidWake) — 슬립 사유 끄고, 수동·가림 사유가 없을 때만 재개.
-    @objc private func sleepEnded() { applyPause(pauseGate.set(.sleep, active: false)) }
+    /// 시스템 웨이크(didWake) — 시스템 슬립 사유만 끈다. 디스플레이가 아직 자고 있으면
+    /// .displaySleep 사유가 남아 정지가 유지된다(F840 — 종전 단일 사유는 여기서 먼저 깨우면
+    /// 화면이 꺼진 채로 렌더가 되살아났다).
+    @objc private func systemSleepEnded() { applyPause(pauseGate.set(.sleep, active: false)) }
+
+    /// 디스플레이 슬립 진입(screensDidSleep) — 디스플레이 슬립 사유만 켠다.
+    @objc private func displaySleepBegan() { applyPause(pauseGate.set(.displaySleep, active: true)) }
+
+    /// 디스플레이 웨이크(screensDidWake) — 디스플레이 슬립 사유만 끈다.
+    @objc private func displaySleepEnded() { applyPause(pauseGate.set(.displaySleep, active: false)) }
 
     // MARK: - 정지 배경으로 설정 (작업 3)
 
@@ -903,12 +970,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 배너만 한국어로 남고 아무 것도 실패하지 않는다(청사진 §5.0). 싱크 타입을
     /// `LocalizedStringKey` 로 바꾸는 대안은 리터럴을 대입문으로 만들어 스캔 사각지대를
     /// 새로 판다 — 그래서 호출부 전부가 `NSLocalizedString` 으로 완성해서 넘긴다.
+    /// F840: 창이 닫혀 있으면 배너 대신 상태바(툴팁 + 트레이 항목)로 흘려보내고, 창이 열릴 때
+    /// 배너로 승격한다. **반환값 의미는 종전 그대로** "지금 배너로 보여줬는가" 다 —
+    /// BaseAssetsWarningGate 가 이 값으로 '경고 완료' 지문을 찍으므로, 창 밖 경로에서 true 를
+    /// 돌려주면 사용자가 못 본 경고가 영구히 소비된다(그래서 여기서는 false 를 유지한다).
     @discardableResult
     private func notify(_ message: String) -> Bool {
         NSLog("%@", "[Waple] \(message)")
         guard let window = libraryWindow, window.isVisible else {
+            pendingNotice = message
+            refreshStatusIcon()
             return false
         }
+        pendingNotice = nil
         bannerModel.show(message)
         return true
     }
@@ -937,8 +1011,9 @@ extension AppDelegate {
             ScreenSaverController.openSettings()  // 사용자가 바로 확인할 수 있게 잠금 화면 패널 열기
             return true
         } catch {
-            // 바깥 문구만 감싼다. 안쪽 localizedDescription 은 ScreenSaverController 가 만드는데
-            // 그 파일은 전 페이즈 동결이라 손대지 않았다 — 영어 UI 에서 사유만 한국어로 남는다(보고).
+            // 안쪽 localizedDescription 은 ScreenSaverController 가 만든다. F840 에서 그쪽도
+            // NSLocalizedString 으로 감쌌으므로 영어 UI 에서 사유까지 영어로 나온다
+            // (종전 주석의 "그 파일은 동결이라 손대지 않았다 — 사유만 한국어로 남는다(보고)"는 해소됨).
             notify(String(format: NSLocalizedString("화면보호기 설치 실패: %@", comment: "화면보호기 설치 실패"),
                           error.localizedDescription))
             return false
@@ -1058,6 +1133,19 @@ extension AppDelegate {
         return GeneratedUID.parse(dsclOutput: String(decoding: data, as: UTF8.self))
     }
 
+    /// F840: dscl stdout 은 외부 텍스트다. GeneratedUID.parse 는 라벨 뒤 첫 공백구분 토큰을
+    /// 관대하게 집어오므로 `../../..` 같은 값도 그대로 통과해 경로 컴포넌트가 된다 —
+    /// 이 앱에서 외부 텍스트가 WallpaperPathSecurity 를 거치지 않고 경로에 닿는 유일한 지점이었다.
+    /// GeneratedUID 는 UUID(16진수+하이픈)이므로 문자 집합을 그 형태로 제한하고, 단일 경로
+    /// 컴포넌트인지도 WallpaperPathSecurity 로 재확인한다(LibraryStore F580 과 같은 규율).
+    /// (숫자만으로 좁히지 않는 이유: GeneratedUID 는 십진수가 아니라 UUID 다 —
+    /// AppLogicTests 의 실측 예시 "ABCD1234-5678-90AB-CDEF-1234567890AB".)
+    static func isValidGeneratedUID(_ uid: String) -> Bool {
+        guard !uid.isEmpty, uid.count <= 64,
+              uid.allSatisfy({ $0.isASCII && ($0.isHexDigit || $0 == "-") }) else { return false }
+        return WallpaperPathSecurity.normalizedPathComponent(uid) == uid
+    }
+
     /// 잠금화면 스틸을 /Library/Caches/Desktop Pictures/<UID>/lockscreen.png 에 PNG 로 기록.
     /// 디렉터리 부재(신규 macOS 등)/권한 실패는 조용히 스킵(graceful) — 폴백 기능일 뿐.
     /// ⚠️ macOS 26+ 는 비공개 WallpaperExtensionKit 확장으로 잠금화면을 관리 — 범위 외(별도 SP).
@@ -1065,7 +1153,8 @@ extension AppDelegate {
     /// 백그라운드 큐로 넘어간다 — graceful 기능이라 호출부는 결과를 기다리지 않는다(fire-and-forget).
     private func writeLockscreenStill(_ image: URL) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self, let uid = self.currentUserGeneratedUID() else { return }
+            guard let self, let uid = self.currentUserGeneratedUID(),
+                  AppDelegate.isValidGeneratedUID(uid) else { return }
             let dir = URL(fileURLWithPath: "/Library/Caches/Desktop Pictures/\(uid)", isDirectory: true)
             guard FileManager.default.fileExists(atPath: dir.path) else { return }  // 디렉터리 부재 → 스킵
             // 원본이 PNG 가 아닐 수 있어(preview.jpg 등) PNG 로 재인코딩.
@@ -1167,6 +1256,9 @@ extension AppDelegate: NSMenuDelegate {
                 : NSLocalizedString("일시정지", comment: "트레이 일시정지 항목 — 재생 중")
             // w5d-tray: 하단 바 NowPlayingBar 의 .disabled(ids.count < 2) 와 대칭.
             nextMenuItem?.isEnabled = PlaylistScheduling.canAdvance(count: playlistStore.ids.count)
+            // F840: 창 밖에서 발생한 마지막 실패를 트레이에서도 볼 수 있게 한다(없으면 숨김).
+            noticeMenuItem?.title = pendingNotice ?? ""
+            noticeMenuItem?.isHidden = pendingNotice == nil
             return
         }
         guard menu === recentMenu else { return }
