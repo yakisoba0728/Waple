@@ -1,22 +1,9 @@
 import AppKit
-// [2026-08-19] @preconcurrency 필수 — 지우지 마라.
-//
-// 평범한 `import WebKit` 으로 -strict-concurrency=complete 를 켜면 SDK 가 델리게이트
-// 요구사항에 붙인 동시성 애너테이션 때문에 완료핸들러형 시그니처가 요구사항과
-// 어긋난다. 그러면 optional @objc 요구사항의 **witness 자격**을 잃고 → 암묵적 @objc
-// 상실 → 셀렉터 상실 → respondsToSelector: 가 NO → WebKit 이 기본값으로 진행한다.
-// 컴파일 오류 없이 경고 한 줄만 남는다. 실측(CI run 32214982769): 내비게이션 게이트가
-// 통째로 무력화돼 WebRendererSecurityTests 두 건이 debug·release 양쪽에서 실패했다.
-//   warning: instance method 'webView(_:decidePolicyFor:decisionHandler:)' nearly
-//            matches optional requirement ... of protocol 'WKNavigationDelegate'
-//
-// 셀렉터를 @objc(...) 로 못 박는 우회는 **안 된다**. SDK 는 같은 셀렉터를 async 형태
-// `webView(_:decidePolicyFor:)` 로도 노출하므로 핀이 그 요구사항과 충돌해 컴파일이
-// 깨진다(실측 run 32217958771: "conflicts with optional requirement method").
-// 근본 원인이 SDK 애너테이션이므로 import 지점에서 강등하는 것이 맞다.
-//
-// 앞으로: async 델리게이트 형태로 옮기면 @preconcurrency 없이도 정합한다. 그건 델리게이트
-// 타이밍이 바뀌는 변경이라 별도 작업으로 남긴다.
+// @preconcurrency 는 델리게이트 witness 문제의 해법이 **아니었다**(실측 run 32218275170:
+// 경고가 그대로 남았다). 게이트의 해법은 async 델리게이트 구현이고 근거는 그 메서드 주석에 있다.
+// 여기 @preconcurrency 를 남기는 이유는 별개다 — WebKit SDK 격리 애너테이션이 만드는
+// 부수 진단(초기화자·프로퍼티 접근)을 줄인다. 게이트와는 무관하니 게이트를 고치려고
+// 이 줄을 만지지 마라.
 @preconcurrency import WebKit
 import WapleCore
 
@@ -331,30 +318,40 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
 
     /// 톱/서브프레임 내비게이션 게이트.
     ///
-    /// **이 메서드가 WKNavigationDelegate 의 witness 로 인정돼야 한다** — 인정받지 못하면
-    /// 셀렉터가 사라지고 WebKit 이 기본값 .allow 로 진행해 게이트가 무음 무력화된다.
-    /// 그 조건이 파일 상단의 `@preconcurrency import WebKit` 이다(근거·CI 실측 그쪽 주석 참조).
-    /// 여기 시그니처를 바꾸거나 그 import 를 되돌리면 게이트가 조용히 죽는다.
+    /// **async 형태로 구현한다 — 완료핸들러 형태로 되돌리지 마라.**
+    ///
+    /// 완료핸들러형 `webView(_:decidePolicyFor:decisionHandler:)` 는 엄격 동시성 아래서
+    /// 요구사항과 시그니처가 어긋난다(SDK 가 클로저에 붙인 동시성 애너테이션 때문).
+    /// 어긋나면 optional @objc 요구사항의 **witness 자격**을 잃고 → 암묵적 @objc 상실 →
+    /// 셀렉터 상실 → respondsToSelector: 가 NO → WebKit 이 기본값 .allow 로 진행한다.
+    /// 컴파일 오류 없이 경고 한 줄만 남고 게이트는 무음으로 죽는다.
+    ///   warning: ... nearly matches optional requirement ... of protocol 'WKNavigationDelegate'
+    /// 실측 CI run 32214982769 에서 게이트가 통째로 무력화됐다.
+    ///
+    /// 앞서 두 가지 우회를 시도했고 둘 다 실패했다. 기록해 둔다:
+    ///  · `@objc(webView:decidePolicyForNavigationAction:decisionHandler:)` 로 셀렉터 고정 →
+    ///    SDK 가 같은 셀렉터를 async 요구사항으로도 노출하므로 충돌해 **컴파일 실패**
+    ///    (run 32217958771: "conflicts with optional requirement method 'webView(_:decidePolicyFor:)'").
+    ///  · `@preconcurrency import WebKit` → 경고가 그대로 남아 witness 미복원(run 32218275170).
+    ///
+    /// 그 실패한 시도가 정답을 알려줬다: SDK 에 async 요구사항 `webView(_:decidePolicyFor:)` 가
+    /// 실재한다. 클로저 애너테이션을 추측해 맞추는 대신 그쪽을 구현한다 — 이름이 달라
+    /// 모호성이 없고, WebKit 이 결과를 기다리므로 차단 의미도 그대로다.
+    ///
     /// WebRendererSecurityTests 의 두 건이 이 계약의 감시자다.
-    public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-                        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+    public func webView(_ webView: WKWebView,
+                        decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         if navigationAction.targetFrame?.isMainFrame != false {
-            guard Self.isAllowedTopFrameURL(navigationAction.request.url) else {
-                decisionHandler(.cancel)
-                return
-            }
+            guard Self.isAllowedTopFrameURL(navigationAction.request.url) else { return .cancel }
         } else {
             // 서브프레임(iframe 등) — 메인프레임만 게이팅하면 <iframe src="https://…"> 로 원격 콘텐츠가
             // 무검증 로드된다(egress/IP 유출, 감사 S1). 로컬(에셋/about:blank/data:)만 허용.
-            // F571: 이 게이트는 납비게이션(메인+서브프레임)만 다룬다. <img>/<script>/fetch 등
+            // F571: 이 게이트는 내비게이션(메인+서브프레임)만 다룬다. <img>/<script>/fetch 등
             // 서브리소스의 원격 로드는 WE 호환(WE 자체가 네트워크 허용)을 위해 열어 두는 의도된
             // 범위 — 전면 차단은 원격 리소스를 쓰는 WE 웹 월페이퍼를 깨므로 수용 한계로 문서화.
-            guard Self.isAllowedSubframeURL(navigationAction.request.url) else {
-                decisionHandler(.cancel)
-                return
-            }
+            guard Self.isAllowedSubframeURL(navigationAction.request.url) else { return .cancel }
         }
-        decisionHandler(.allow)
+        return .allow
     }
 
     public func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
