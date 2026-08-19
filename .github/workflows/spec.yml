@@ -1,0 +1,125 @@
+name: spec
+
+# **paths-ignore 가 없다.** 그게 이 워크플로가 따로 있는 이유다.
+#
+# `ci.yml` 은 문서 전용 푸시로 macOS 러너(잡당 ~10분)를 태우지 않으려고 `**.md`·`docs/**` 를
+# 무시한다 — 그 판단 자체는 옳다. 문제는 **spec 정본의 근거 중 `.md` 파일이 있다는 것**이다
+# (`spec/engine/shape-quad.json` · `spec/golden/nondeterminism.json` 의 확정 4항목).
+# 그 `.md` 만 지우는 커밋은 근거를 끊으면서 CI 를 통째로 건너뛴다. 실측: 커밋 `33e68d4`
+# (md 2파일 173행)에 대응하는 CI 실행이 없다. 다음 코드 커밋에서 잡히므로 영구 우회는
+# 아니지만, **지연되는 동안 정본이 근거 없이 초록**이다.
+#
+# 여기 있는 것은 전부 ubuntu 에서 수십 초에 끝나는 검사라 항상 돌려도 비용이 무시할 만하다.
+# macOS 잡은 `ci.yml` 에 그대로 두고 paths-ignore 도 유지한다.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # [2026-08-19] spec/ 파이썬 툴체인을 CI 에 넣는다.
+  #
+  # 종전엔 spec/** 변경이 paths-ignore 에 없어 macOS 러너를 태우면서도 validate.py 도
+  # spec 테스트도 한 번도 돌지 않았다. 검사가 없어서 실제로 놓친 사고가 있다:
+  # 동봉 WE 에셋 302개가 CRLF→LF 로 정규화된 채 커밋됐고, manifest.json 이 그 손상된
+  # 바이트로 기준선을 떠서 자체 검증은 영원히 통과하는 상태였다.
+  # GPU 도 Xcode 도 필요 없으므로 Linux 러너에서 10초면 끝난다 — macOS 잡과 동시에 돈다.
+  #
+  # [2026-08-19] `ci.yml` 에서 이 파일로 옮겼다 — paths-ignore 를 벗기기 위해서다(위 헤더 주석).
+  spec:
+    name: spec · python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate spec canon
+        run: python3 scripts/spec/validate.py
+
+      - name: Spec self-tests
+        run: |
+          python3 scripts/spec/tests/test_validate.py
+          python3 scripts/spec/tests/test_rosetta.py
+
+      # 신뢰 경계 밖(.pkg / scene.json / project.json) 숫자의 정수 좁힘이 가드를 건너뛰면 실패한다.
+      # Swift 의 Int(Float)·Int32(Int) 는 범위 밖에서 클램프가 아니라 **트랩**이라, 가드 없는
+      # 한 줄이면 워크샵 배경화면 하나가 앱을 죽인다. 2026-08-19 스윕에서 13곳이 나왔다.
+      # 스크립트 자체의 음성 대조(가드를 풀면 정말 실패하는지)는 doc 주석 참조.
+      - name: Untrusted int narrowing guards
+        run: python3 scripts/spec/check_int_narrowing.py
+
+      # 동봉 에셋이 매니페스트와 어긋나면 실패한다.
+      #
+      # measure_assets.py 를 돌려 git diff 로 보는 방법은 쓰지 않는다 — 그 스크립트의
+      # hashes 딕셔너리는 os.walk 삽입 순서를 따르는데 디렉터리 순회 순서가 파일시스템마다
+      # 달라서, 내용이 같아도 JSON 줄 순서가 갈려 거짓 실패가 난다. 순서 무관하게
+      # 의미로 비교한다.
+      - name: Asset manifest integrity
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, sys
+
+          SRC = "Sources/WapleRender/Resources/WEAssets"
+          man = json.load(open("spec/assets/manifest.json", encoding="utf-8"))
+          inv = json.load(open("spec/assets/inventory.json", encoding="utf-8"))
+          committed = next(e for e in man["entries"] if e["id"] == "assets.fileHashes")["value"]
+          claimed_bytes = next(e for e in inv["entries"] if e["id"] == "assets.totalBytes")["value"]
+          claimed_count = next(e for e in inv["entries"] if e["id"] == "assets.fileCount")["value"]
+
+          actual, total = {}, 0
+          for dirpath, _, files in os.walk(SRC):
+              for f in files:
+                  p = os.path.join(dirpath, f)
+                  rel = os.path.relpath(p, SRC).replace(os.sep, "/")
+                  total += os.path.getsize(p)
+                  h = hashlib.sha256()
+                  with open(p, "rb") as fh:
+                      for chunk in iter(lambda: fh.read(1 << 20), b""):
+                          h.update(chunk)
+                  actual[rel] = h.hexdigest()[:16]
+
+          missing = sorted(set(committed) - set(actual))
+          extra = sorted(set(actual) - set(committed))
+          bad = sorted(k for k in set(committed) & set(actual) if committed[k] != actual[k])
+
+          def show(label, items):
+              if items:
+                  print(f"{label}: {len(items)}")
+                  for k in items[:20]:
+                      print(f"   {k}")
+                  if len(items) > 20:
+                      print(f"   ... 외 {len(items) - 20}건")
+
+          show("매니페스트에 있으나 파일 없음", missing)
+          show("파일은 있으나 매니페스트에 없음", extra)
+          show("해시 불일치", bad)
+
+          ok = not (missing or extra or bad)
+          if total != claimed_bytes:
+              print(f"totalBytes 불일치: 실측 {total} vs 정본 {claimed_bytes}")
+              ok = False
+          if len(actual) != claimed_count:
+              print(f"fileCount 불일치: 실측 {len(actual)} vs 정본 {claimed_count}")
+              ok = False
+          if ok:
+              print(f"에셋 {len(actual)}개 / {total} bytes — 매니페스트와 일치")
+          sys.exit(0 if ok else 1)
+          PY
+
+      # CRLF 무결성. .gitattributes 가 WEAssets 트리 전체를 -text 로 덮는데, 종전엔
+      # 확장자를 열거해서 *.tex-json 과 *.js 가 그물을 빠져나갔다. 열거로 돌아가는
+      # 회귀를 잡는다 — 위 해시 검사와 달리 이건 **git 인덱스 쪽** 상태를 본다.
+      - name: WEAssets EOL attributes
+        run: |
+          BAD=$(git ls-files --eol -- Sources/WapleRender/Resources/WEAssets \
+                | grep -v 'attr/-text' | head -20 || true)
+          if [ -n "$BAD" ]; then
+            echo "-text 가 적용되지 않은 동봉 에셋이 있다 (.gitattributes 확인):"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "동봉 에셋 $(git ls-files -- Sources/WapleRender/Resources/WEAssets | wc -l | tr -d ' ')개 전부 attr/-text"
