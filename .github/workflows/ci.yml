@@ -211,37 +211,56 @@ jobs:
       #
       # 세 번 돌린다 — 경합은 한 번으로는 안 잡힌다. 실패하면 원인이 하나 더 남아 있는 것이다.
       # 전 스위트가 아니라 이 두 클래스만 돌리므로 비용은 수십 초다.
+      # [2026-08-19] 병렬 격리 회귀 게이트 — debug 레인에서만.
+      #
+      # `AGENTS.md` 는 오래 "`--parallel` 은 통과/실패 판정에 쓰지 마라 — 두 클래스가 병렬 3/3 실패"
+      # 를 싣고 원인을 미확정으로 뒀다. 원인은 **둘 다 공유 자원**이었고 서로 달랐다:
+      #   · SceneRenderSettings 가 `UserDefaults.standard`(프로세스가 아니라 **사용자** 단위)를 직접 씀
+      #     → 테스트마다 고유 suite 주입. **이건 실측으로 해소 확인됐다**(이 게이트 1차 실행).
+      #   · SceneCompositeConventionTests 의 두 캡처 테스트가 프로세스 전역 `fitMode` 를 서로 덮음
+      #     → 한 테스트로 합침. 1차 실행에서 회차마다 지는 쪽이 바뀌는 것으로 경합을 확인했다.
+      #
+      # **판정은 로그 문자열이 아니라 `--xunit-output` XML 로 한다.** 1차 판이 로그를 보다가
+      # 오판했다 — `--parallel` 은 전부 통과하면 XCTest 의 `Executed N tests` 줄을 안 찍는데
+      # 그걸 "필터가 0건 매치" 로 읽어 통과한 클래스를 실패로 보고했다. 이 리포가 반복해서
+      # 당한 "검사하는 척하는 검사" 를 내가 그대로 만든 셈이라, 기계가 읽는 형식으로 바꾼다.
       - name: Parallel isolation gate
         if: matrix.configuration == 'debug'
         run: |
           set -uo pipefail
-          # `--skip-build` 를 쓰지 않는다. 첫 판이 그걸 붙였다가 swift-testing 러너가
-          # "0 tests in 0 suites" 로 끝나고 exit 1 이 났다 — **격리 실패가 아니라 스텝 버그**였다.
-          # AGENTS.md:155 가 적어 둔 호출 형태(`--parallel --num-workers 6 --filter <클래스>`)를 쓴다.
-          # 클래스별로 따로 돌린다: 정규식 교대(`A|B`)가 매치 0 이어도 조용히 통과할 수 있어서다.
           fail=0
           for cls in SceneRenderSettingsTests SceneCompositeConventionTests; do
             for i in 1 2 3; do
-              echo "── $cls 병렬 시행 $i/3"
-              out=$(swift test -c debug --parallel --num-workers 6 --filter "$cls" 2>&1) || true
-              echo "$out" | tail -4
-              # ① 실제로 돌았는가 — 매치 0 을 통과로 오독하지 않는다(이 리포의 상습 결함 유형).
-              if ! echo "$out" | grep -qE "Executed [1-9][0-9]* test"; then
-                echo "::error::$cls: 필터가 테스트를 하나도 못 잡았다 — 게이트가 아니라 도장이 된다"
-                fail=1; continue
-              fi
-              # ② 실패가 있었는가 — 스킵 동반 요약도 잡는 정규식(verify-plan-b12.sh:136 과 동형).
-              n=$(echo "$out" | grep -oE "with ([0-9]+ tests? skipped and )?[0-9]+ failures?" \
-                  | grep -oE "[0-9]+ failures?" | grep -oE "^[0-9]+" | awk '{s+=$1} END {print s+0}')
-              if [ "${n:-0}" -ne 0 ]; then
-                echo "::error::$cls: 병렬 시행 $i 에서 실패 $n 건 — 공유 자원이 하나 더 남아 있다"
-                echo "$out" | grep -E "error:|failed \(" | head -10
-                fail=1
-              fi
+              xml="parallel-$cls-$i.xml"
+              swift test -c debug --parallel --num-workers 6 --filter "$cls" \
+                --xunit-output "$xml" >/dev/null 2>&1 || true
+              python3 - "$xml" "$cls" "$i" <<'PYEOF' || fail=1
+          import sys, xml.etree.ElementTree as ET
+          path, cls, run = sys.argv[1], sys.argv[2], sys.argv[3]
+          try:
+              root = ET.parse(path).getroot()
+          except Exception as e:
+              print(f"::error::{cls} #{run}: xunit XML 을 못 읽었다 ({e}) — 테스트가 아예 안 돌았다")
+              raise SystemExit(1)
+          suites = root.iter("testsuite")
+          tests = fails = errors = 0
+          for s in suites:
+              tests += int(s.get("tests", 0)); fails += int(s.get("failures", 0)); errors += int(s.get("errors", 0))
+          if tests == 0:
+              print(f"::error::{cls} #{run}: 실행된 테스트 0건 — 필터가 못 잡았다(게이트가 도장이 된다)")
+              raise SystemExit(1)
+          if fails or errors:
+              print(f"::error::{cls} #{run}: {tests}건 중 실패 {fails} 오류 {errors} — 공유 자원이 남아 있다")
+              for tc in root.iter("testcase"):
+                  if list(tc):
+                      print(f"    ✗ {tc.get('classname')}.{tc.get('name')}")
+              raise SystemExit(1)
+          print(f"  {cls} #{run}: {tests}건 통과")
+          PYEOF
             done
           done
           [ "$fail" -eq 0 ] || exit 1
-          echo "병렬 격리 OK — 두 클래스 × 3회, 실패 0" 
+          echo "병렬 격리 OK — 두 클래스 × 3회"
 
       # [2026-08-19] 스킵 가시화 **및 게이트**.
       #

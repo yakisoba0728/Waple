@@ -379,61 +379,81 @@ final class SceneCompositeConventionTests: XCTestCase {
         XCTAssertEqual(luma, 0.5, accuracy: 0.06, "검정 α0.5 솔리드가 흰 bg 를 절반 디밍해야 (드롭이면 1.0)")
     }
 
-    func testCaptureFramesUsesFitAspectScale() throws {
+    /// 캡처 fit/fill 종횡비 규약. **두 모드를 한 테스트에서 순차로 본다.**
+    ///
+    /// 종전엔 `testCaptureFramesUsesFitAspectScale` / `…FillAspectScale` 두 개였고, 각각
+    /// `SceneRenderSettings.fitMode` 를 자기 값으로 바꾼 뒤 defer 로 되돌렸다. `fitMode` 는
+    /// **프로세스 전역**이라 두 테스트가 같은 프로세스에서 동시에 돌면 서로의 모드를 덮는다 —
+    /// 2026-08-19 CI 실측(run 32245…, `--parallel --num-workers 6`, 3회): 1회차는 fit 이,
+    /// 2회차는 fill 이, 3회차는 다시 fit 이 실패했다. **어느 쪽이 지는지가 매번 달라지는 것**이
+    /// 경합의 서명이다.
+    ///
+    /// 순차 실행에서는 둘 다 통과했으므로 종전 코드가 "틀린" 것은 아니었다 — 병렬에서
+    /// 판정 불가였을 뿐이다. 그래서 `AGENTS.md` 가 오래 "`--parallel` 은 판정에 쓰지 마라" 로
+    /// 남아 있었다. 하나로 합치면 그 제약 없이 두 모드를 다 검사한다.
+    ///
+    /// 전역을 끄는 더 깊은 수정(캡처 인자로 모드 주입)은 프로덕션 API 변경이라 하지 않았다 —
+    /// 이 테스트가 유일한 소비자가 아니다(`SceneRenderSettingsTests` 가 왕복을 따로 검사한다).
+    func testCaptureFramesUsesFitAndFillAspectScale() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let oldMode = SceneRenderSettings.fitMode
-        SceneRenderSettings.fitMode = .fit
         defer { SceneRenderSettings.fitMode = oldMode }
 
-        let scene = """
+        // ── fit: 16:9 씬을 정사각 캡처에 넣으면 위아래가 레터박스여야 한다.
+        SceneRenderSettings.fitMode = .fit
+        let fitScene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
          "objects":[{"id":1,"image":"models/w.json","origin":"960 540 0","size":"1920 1080"}]}
         """
-        let dir = Self.scratchDir("capturefit")
+        let fitDir = Self.scratchDir("capturefit")
         try encodePkg([
-            ("scene.json", scene.data(using: .utf8)!),
+            ("scene.json", fitScene.data(using: .utf8)!),
             ("models/w.json", #"{"material":"materials/w.json"}"#.data(using: .utf8)!),
             ("materials/w.json", #"{"passes":[{"textures":["w"]}]}"#.data(using: .utf8)!),
             ("materials/w.tex", solidTex(255, 255, 255)),
-        ]).write(to: dir.appendingPathComponent("scene.pkg"))
-        let project = WallpaperProject(id: "capturefit", type: .scene, fileName: "scene.pkg", previewName: nil,
-                                       title: "capturefit", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
-        let r = SceneRenderer()
-        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
-        defer { r.teardown() }
-        let out = Self.scratchDir("capturefit_out")
-        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: out).first)
-        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
-        XCTAssertLessThan(try XCTUnwrap(rep.colorAt(x: 32, y: 2)).redComponent, 0.1, "fit should letterbox a 16:9 scene in a square capture")
-        XCTAssertGreaterThan(try XCTUnwrap(rep.colorAt(x: 32, y: 32)).redComponent, 0.9, "fit content center remains visible")
-    }
+        ]).write(to: fitDir.appendingPathComponent("scene.pkg"))
+        let fitProject = WallpaperProject(id: "capturefit", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                          title: "capturefit", tags: [], contentRating: nil, workshopId: nil,
+                                          dependency: nil, folderURL: fitDir)
+        do {
+            let r = SceneRenderer()
+            try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: fitProject)
+            defer { r.teardown() }
+            let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1],
+                                                    toDir: Self.scratchDir("capturefit_out")).first)
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+            XCTAssertLessThan(try XCTUnwrap(rep.colorAt(x: 32, y: 2)).redComponent, 0.1,
+                              "fit should letterbox a 16:9 scene in a square capture")
+            XCTAssertGreaterThan(try XCTUnwrap(rep.colorAt(x: 32, y: 32)).redComponent, 0.9,
+                                 "fit content center remains visible")
+        }
 
-    func testCaptureFramesUsesFillAspectScale() throws {
-        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
-        let oldMode = SceneRenderSettings.fitMode
+        // ── fill: 같은 정사각 캡처에서 좌측 끝 스트라이프가 잘려 나가야 한다.
         SceneRenderSettings.fitMode = .fill
-        defer { SceneRenderSettings.fitMode = oldMode }
-
-        let scene = """
+        let fillScene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
          "objects":[{"id":1,"image":"models/red.json","origin":"120 540 0","size":"240 1080"}]}
         """
-        let dir = Self.scratchDir("capturefill")
+        let fillDir = Self.scratchDir("capturefill")
         try encodePkg([
-            ("scene.json", scene.data(using: .utf8)!),
+            ("scene.json", fillScene.data(using: .utf8)!),
             ("models/red.json", #"{"material":"materials/red.json"}"#.data(using: .utf8)!),
             ("materials/red.json", #"{"passes":[{"textures":["red"]}]}"#.data(using: .utf8)!),
             ("materials/red.tex", solidTex(255, 0, 0)),
-        ]).write(to: dir.appendingPathComponent("scene.pkg"))
-        let project = WallpaperProject(id: "capturefill", type: .scene, fileName: "scene.pkg", previewName: nil,
-                                       title: "capturefill", tags: [], contentRating: nil, workshopId: nil, dependency: nil, folderURL: dir)
-        let r = SceneRenderer()
-        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: project)
-        defer { r.teardown() }
-        let out = Self.scratchDir("capturefill_out")
-        let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1], toDir: out).first)
-        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
-        XCTAssertLessThan(try XCTUnwrap(rep.colorAt(x: 2, y: 32)).redComponent, 0.1, "fill should crop the far-left scene stripe in a square capture")
+        ]).write(to: fillDir.appendingPathComponent("scene.pkg"))
+        let fillProject = WallpaperProject(id: "capturefill", type: .scene, fileName: "scene.pkg", previewName: nil,
+                                           title: "capturefill", tags: [], contentRating: nil, workshopId: nil,
+                                           dependency: nil, folderURL: fillDir)
+        do {
+            let r = SceneRenderer()
+            try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: 64, height: 64)), project: fillProject)
+            defer { r.teardown() }
+            let url = try XCTUnwrap(r.captureFrames(width: 64, height: 64, times: [0.1],
+                                                    toDir: Self.scratchDir("capturefill_out")).first)
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+            XCTAssertLessThan(try XCTUnwrap(rep.colorAt(x: 2, y: 32)).redComponent, 0.1,
+                              "fill should crop the far-left scene stripe in a square capture")
+        }
     }
 
     /// 알파 0.5 흰색 레이어(무-이펙트) over 검정 → luma ≈ 0.5. (straight 출력 + src=one 이면 1.0 이 됨.)
