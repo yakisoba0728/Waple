@@ -109,7 +109,10 @@ public enum ShaderPreprocessor {
     }
 
     /// `// [COMBO] {"combo":"NAME","default":N,...}` → [NAME: N].
-    static func parseComboDefaults(_ source: String) -> [String: Int] {
+    /// `public` 인 이유: 렌더러(WapleRender)가 **선언된 콤보 이름 집합**을 알아야 씬 저작 키의
+    /// 대소문자를 선언 철자로 정규화할 수 있다(G-A3-1 — `resolvePassCombos`). 반환값은 순수 파스
+    /// 결과라 노출에 위험이 없다.
+    public static func parseComboDefaults(_ source: String) -> [String: Int] {
         var out: [String: Int] = [:]
         for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
             guard line.contains("[COMBO]") else { continue }
