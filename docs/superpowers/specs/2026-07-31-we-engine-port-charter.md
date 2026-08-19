@@ -192,6 +192,12 @@ glow.mdl  : "MDLV0004" | 00 | flag 0x09(pos+uv) | 1 | meshCount 1
 
 각각 자기 스펙을 갖는다. 순서는 의존 관계다.
 
+> **[갱신 2026-08-19] 이 로드맵은 실제 작업과 어긋나 있다.** `WapleEngine` 타깃은 존재하지
+> 않는다(`grep -rn WapleEngine Package.swift AGENTS.md BACKLOG.md` = 0건). 파티클 scale ·
+> mul 전치 · shape:quad · lightshafts · camerashake 등 #3(scene 파리티)에 해당하는 작업이
+> **#2 없이** 기존 `WapleRender`/`WapleCore` 에 직접 반영됐다(`docs/we-parity-2026-08-16.md`).
+> 폐기할지 갱신할지는 소유자 결정이라 여기서는 **사실만 적는다** — 아래 표는 2026-07-31 계획이다.
+
 | # | 하위 프로젝트 | 산출물 | 상태 |
 | --- | --- | --- | --- |
 | **0** | **정본 기반 구축** | `spec/` 개설 · `assets/` 동봉 · 확정 이탈 교정 · L3 골든 확보 | [스펙 작성됨](2026-07-31-spec-00-canon-foundation.md) |
