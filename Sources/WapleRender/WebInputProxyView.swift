@@ -30,7 +30,9 @@ final class WebInputProxyView: NSView {
     func start() {
         guard timer == nil else { return }
         // ~12fps 미러 — takeSnapshot 은 메인큐 콜백(WKWebView 규약). 조작 창이 열려있는 동안만.
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
+        // `.common` 모드 — MediaPoller 와 같은 이유(AppDelegate:755 주석 참조). 이 타이머는
+        // 조작 창 미러링이라 메뉴를 여는 동안 멈추면 그대로 눈에 보인다.
+        let t = Timer(timeInterval: 1.0 / 12.0, repeats: true) { [weak self] _ in
             guard let self, let web = self.target, self.window?.isVisible == true else { return }
             let cfg = WKSnapshotConfiguration()
             web.takeSnapshot(with: cfg) { [weak self] image, _ in
@@ -39,6 +41,8 @@ final class WebInputProxyView: NSView {
                 self.needsDisplay = true
             }
         }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     func stop() {

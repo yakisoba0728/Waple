@@ -53,7 +53,12 @@ public final class SceneScriptContext {
     /// F810: 씬 스크립트 localStorage 디스크 저장소. nil(기본) = 종전 인메모리 전용(헤드리스/테스트 무회귀).
     public let localStorageStore: ScriptLocalStorage?
     /// E1(⑤): thisScene.createLayer 무해 스텁 경고 — 레이어 이름별 1회만(매 프레임 재호출 스팸 방지).
+    ///
+    /// F840-sweep: 이름은 **JS 인자**라 신뢰 경계 밖이다. `createLayer(String(Math.random()))` 를
+    /// 매 프레임 부르면 이 Set 과 시스템 로그가 함께 무제한으로 자란다(mount 당 컨텍스트 1개라
+    /// teardown 시 메모리는 회수되지만, 그때까지의 로그 오염은 남는다). 상한을 둔다.
     private var warnedCreateLayerNames: Set<String> = []
+    private static let maxWarnedCreateLayerNames = 64
 
     /// width/height = 프로젝션(캔버스) 크기 — thisScene.size/screenSize/resolution·engine.canvasSize 의
     /// 실값(기본 1920×1080: 기존 호출부 무회귀). SceneRenderer mount 가 doc.projectionWidth/Height 전달.
@@ -118,7 +123,8 @@ public final class SceneScriptContext {
     /// E1(⑤): thisScene.createLayer 무해 스텁 경고 브리지 — 이름별 1회(스팸 방지).
     private func installWarnBridge(_ ctx: JSContext) {
         let warnCreateLayer: @convention(block) (String) -> Void = { [weak self] name in
-            guard let self, !self.warnedCreateLayerNames.contains(name) else { return }
+            guard let self, !self.warnedCreateLayerNames.contains(name),
+                  self.warnedCreateLayerNames.count < Self.maxWarnedCreateLayerNames else { return }
             self.warnedCreateLayerNames.insert(name)
             WapleLog.warn("[Waple] thisScene.createLayer(\"\(name)\") — JS 배열에만 추가되고 GPU 렌더 경로가 없어 화면에 나타나지 않습니다")
         }

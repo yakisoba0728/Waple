@@ -170,7 +170,11 @@ final class VolumetricLightPass {
         float intensity = u.lightParams.z * falloff * cone;
 
         // 볼륨 산란 근사: 지수에 따라 샤프트 형상 조절.
-        float shaft = pow(intensity, u.lightParams.y);
+        // 베이스를 0 이상으로 클램프한다 — `pow(음수, 비정수)` 는 NaN 이고, NaN 이 additive 합성에
+        // 들어가면 그 픽셀이 통째로 오염된다(크래시는 아니고 시각 아티팩트). 두 입력 모두
+        // 저작값이라(`SceneDocument.swift:1659,1668` 무클램프 파스) 동시에 이상값이 올 수 있다.
+        // 기본 exponent 1 에서는 pow(x,1)=x 라 이 클램프가 정상 씬을 바꾸지 않는다.
+        float shaft = pow(max(intensity, 0.0), u.lightParams.y);
         return float4(u.lightColor.rgb * shaft, 1.0);
     }
     """

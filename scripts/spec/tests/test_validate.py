@@ -11,7 +11,8 @@ import validate
 def doc(**over):
     base = {
         "weVersion": "2.8.42",
-        "generatedBy": "scripts/spec/measure_x.py",
+        # 실재 경로여야 한다 — validate 가 generatedBy 가 가리키는 스크립트의 존재를 검사한다.
+        "generatedBy": "scripts/spec/validate.py",
         "entries": [
             {
                 "id": "x.y",
@@ -220,6 +221,31 @@ class TestDanglingRepoRefs(unittest.TestCase):
     def test_prose_after_path_is_ignored(self):
         self.assertEqual(
             validate.validate_doc(ref_doc("scripts/spec/validate.py 의 죽은 참조 검사"), "t.json"), [])
+
+
+class TestGeneratedByExists(unittest.TestCase):
+    """`generatedBy` 가 가리키는 스크립트가 실재하는지.
+
+    종전 검사는 "비어있지 않음" 만 봤다 — `evidence[].ref` 는 `os.path.exists` 로 검사하면서
+    generatedBy 는 안 보는 강도 비대칭이었다. 스크립트 이름이 바뀌거나 지워지면 그 문서는
+    재생성 방법을 잃는데 아무도 울지 않았다.
+    """
+
+    def test_missing_script_is_error(self):
+        errs = validate.validate_doc(doc(generatedBy="scripts/spec/nope.py"), "t.json")
+        self.assertTrue(any("generatedBy 가 가리키는 스크립트가 없다" in e for e in errs), errs)
+
+    def test_existing_script_passes(self):
+        self.assertEqual(validate.validate_doc(doc(generatedBy="scripts/spec/validate.py"), "t.json"), [])
+
+    def test_non_path_description_is_allowed(self):
+        """손 작성 문서는 경로가 아닌 설명을 싣는 것이 이 리포의 관례다
+        (`spec/engine/deviations.json` = "손 작성 — …"). `.py` 로 끝나는 것만 검사한다."""
+        self.assertEqual(validate.validate_doc(doc(generatedBy="손 작성 — 2026-08-19 수기 정리"), "t.json"), [])
+
+    def test_empty_is_still_an_error(self):
+        errs = validate.validate_doc(doc(generatedBy=""), "t.json")
+        self.assertTrue(any("generatedBy 가 없다" in e for e in errs), errs)
 
 
 class TestSpecfmt(unittest.TestCase):

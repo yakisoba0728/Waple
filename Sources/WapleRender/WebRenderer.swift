@@ -145,7 +145,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             web.load(URLRequest(url: url))
             let provider = audioProviderFactory()
             provider.onFrame = { [weak self] frame in
-                let csv = frame.map { String(format: "%.3f", $0) }.joined(separator: ",")
+                // F840-sweep: `String(format: "%.3f", .infinity)` 는 `"inf"` 를 내고 그건 유효한 JS
+                // 리터럴이 아니다 — 배열 하나가 통째로 파스 실패해 그 틱의 오디오 배달이 사라진다.
+                // 리포에 이미 `TextScriptEngine.jsNumber`(비유한 → "0") 가 있는데 이 자리가 안 거쳤다.
+                let csv = frame.map { TextScriptEngine.jsNumber($0) }.joined(separator: ",")
                 self?.webView?.evaluateJavaScript("if(window.__wapleAudio)window.__wapleAudio([\(csv)]);")
             }
             audioProvider = provider
@@ -624,7 +627,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             js("properties", "{ title: \(q(info.title)), artist: \(q(info.artist)), albumTitle: \(q(info.album)), subTitle: \(q(info.artist)) }")
         }
         poller.onTimeline = { info in
-            js("timeline", "{ position: \(info.position), duration: \(info.duration) }")
+            // F840-sweep: 같은 이유로 jsNumber 경유(비유한 → 0). osascript 파스 실패 시 0 이라
+            // 현재 도달은 미입증이지만, 가드가 있는데 안 거치는 상태를 남길 이유가 없다.
+            js("timeline", "{ position: \(TextScriptEngine.jsNumber(Float(info.position))), "
+                         + "duration: \(TextScriptEngine.jsNumber(Float(info.duration))) }")
         }
         // 썸네일(웹 규약 — 실물 3639973107 소비): thumbnail = dataURL 문자열, 색은 "#RRGGBB".
         // 아트워크 실패 시 poller 가 이벤트 자체를 생략(graceful).

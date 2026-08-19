@@ -15,7 +15,7 @@
 | [제품화](#제품화) | 배포 결심 | Developer ID 공증 · 접근성 · 현지화(하드코딩 한국어 40+) |
 | [감사 2026-07-11 잔여](#감사-2026-07-11-잔여) | 해당 씬 사용·체감 시 | REFRACT 파티클 · wind/gravity 외력 · M6 사운드 3D |
 | [copybackground 후속](#copybackgroundfalse-후속) | 3D 컴포지션 레이어 사용 시 | 3D 경로 비대칭 · 파스·보존 전용 필드 소비 |
-| [하네스](#하네스) | 게이트 오탐·소요가 거슬릴 때 | ~~F402/F403 골든 미커밋~~(해소 — `c8734e5b`·`f494c1b5`, `spec/golden/snapshot/baseline-7075b74`) · F398 벽시계 결합 33사이트 · F144 임계 고정 · **3538758087 비디오-백드 플레이크** · **🔴 3706286085 비결정으로 재베이스라인 차단**(아래) |
+| [하네스](#하네스) | 게이트 오탐·소요가 거슬릴 때 | ~~F402/F403 골든 미커밋~~(해소 — `c8734e5b`·`f494c1b5`, `spec/golden/snapshot/baseline-7075b74`) · F398 벽시계 결합 33사이트 · F144 임계 고정 · **3538758087 비디오-백드 플레이크** · ~~🔴 3706286085 비결정으로 재베이스라인 차단~~ → **해소** — `baseline-6f0bcf0`(2026-08-19) 이 현행 기준선이다(아래) |
 
 상세 근거는 [AUDIT.md](AUDIT.md)(감사 리포트, 2026-07-06 — 이력)와 [docs/README.md](docs/README.md) 참조.
 
@@ -85,7 +85,7 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 - **combo Picker 값-타입 불일치** → 편집기 무선택 표시 ([WallpaperProperties.swift:67](Sources/WapleCore/WallpaperProperties.swift:67) — 옵션만 `type:""` 파싱)
 - **GLSL vert/frag 공용 헬퍼의 스테이지별 하위 헬퍼 호출 리네임 누락** ([GLSLTranslator.swift:155](Sources/WapleCore/GLSLTranslator.swift:155)) — 2026-07-11 리뷰 #11, 추정 단계(재현 셰이더 미확보). 공용 헬퍼가 radial_blur식 스테이지별 computeUV 를 부르는 셰이더에서 frag 가 vert 버전을 받으면 조용한 오렌더 — 실물에서 관찰되면 착수
 - **셰이더 멀티라인 매크로 "호출" 미확장** ([ShaderPreprocessor.swift](Sources/WapleCore/ShaderPreprocessor.swift) `spliceDefineContinuations` ponytail 주석) — `#define` 줄연속은 2026-07-11 해소, 인자가 여러 줄에 걸친 호출은 실입력 미확인이라 유보
-- **FFmpeg `converted/` 캐시 무한 증가** ([FFmpegConverter.swift](Sources/WapleRender/FFmpegConverter.swift)) → 디스크가 차면 `VideoTextureExtractor.evictOldest` 재사용
+- ~~FFmpeg `converted/` 캐시 무한 증가~~ → **해소** — [FFmpegConverter.swift:68](Sources/WapleRender/FFmpegConverter.swift#L68) `maxCachedConversions = 8` + [:179](Sources/WapleRender/FFmpegConverter.swift#L179) 가 `VideoTextureExtractor.evictOldest` 를 실제로 부른다(정책은 `maxCachedVideos=8` 과 동일). 같은 섹션의 취소선 규약을 따라 표시만 밀려 있었다
 - **볼륨/배속 변경 = 렌더러 전체 재장착**(재생 리셋) — F005 정정: 위치 참조가 스테일했음(`AppDelegate.swift` 에 setVideoVolume/Rate 는 존재한 적 없음, 네이티브 UI 재구축 때부터 [SettingsViewModel.swift](Sources/Waple/Surfaces/Settings/SettingsViewModel.swift) setVolume/setRate + [VideoSettings.swift](Sources/WapleRender/VideoSettings.swift) 가 배관 — 동작 설명 자체는 정확) → mkv/webm 실사용에서 거슬리면 `queue.volume`/`defaultRate` 라이브 반영으로
 - ~~LibraryStore.remove 부재~~ → **해소(2026-07-12 SP2′)** — `remove(id:)` + 재생목록/모니터/즐겨찾기/폴더 orphan 정리
 - 기타 low 항목은 [AUDIT.md](AUDIT.md) §1–3 참조 (inferStride 재검증, 리싱크 오인, LE 리더/cstring 중복 등)
@@ -172,7 +172,15 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
 
 - **벽시계(Date) 오염** — 씬 스크립트 JS `Date`가 미스텁이라 시계 텍스트 씬(회귀 FAIL 58 중 45건 보유)의 diff에 캡처 시각차가 섞임(실측: 3047405322 mean 13.05가 전부 시계였음, 2026-07-11 판독). 같은-분 셀프체크는 "결정"으로 오분류. 수정 방향: 캡처 경로에서 shims에 Date 고정 주입 또는 시계 스크립트 보유 씬을 lax 버킷으로
 - 스냅샷 드리프트 2씬(3000562427, 3448290956) 부하 내성 — 순정에서도 요동하는 크로스-프로세스 비결정, 현재는 판독 시 제외 규약
-- **🟠 골든 재베이스라인 — `3706286085` 잔여 비결정**(2026-08-16, **원인 규명 완료 · 채택 결정 대기**)
+- ~~🟠 골든 재베이스라인 — `3706286085` 잔여 비결정~~ → **채택됨**(2026-08-19)
+
+  `spec/golden/snapshot/README.md:9` 가 `baseline-6f0bcf0`(2026-08-19, 170/0/0)을 **현행 기준선**으로
+  싣고 있고 디렉터리도 실재하며, `Tests/WapleRenderTests/GoldenBaselineOracleTests.swift:29`
+  `currentLabel = "baseline-6f0bcf0"` 가 그것을 실제 판정에 쓴다. `3706286085` 의 mip LOD 잔여
+  비결정 경고는 그 README 가 기준선 소개 안에 함께 싣는다 — 차단 사유가 아니라 **알려진 한계**로
+  이관됐다. 아래 분석은 그 경위 기록으로 남긴다.
+
+  (원 항목: 2026-08-16, 원인 규명 완료 · 채택 결정 대기)
 
   (종전 제목은 "프로세스 간 비결정" 이었다. 측정 결과 프로세스 간이 아니라 **같은 마운트 안에서도**
   갈리는 것으로 정정됐다 — 아래 참조.)
