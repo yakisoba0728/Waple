@@ -93,6 +93,33 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
         self.upsamplePipeline = upsamplePipeline
     }
 
+    /// WE 가 추출 단계에 먹이는 **정규화된 블룸 강도**.
+    ///
+    /// `g_BloomStrength = bloomhdrstrength / (bloomhdrscatter^(max(N,2)-2) + 1)`
+    ///
+    /// 이 나눗셈은 업샘플 가중과 **한 쌍**이다. WE 의 업샘플 머티리얼에는 저작 `scatter` 가
+    /// 그대로 들어가 레벨이 깊어질수록 기여가 `scatter^k` 로 커지는데, 그 발산을 추출 강도에서
+    /// 미리 나눠 상쇄한다. 둘 중 하나만 옮기면 화면이 백화되거나(가중만) 블룸이 좁아진다
+    /// (정규화만) — 종전 구현은 가중 쪽만 시도했다가 발산해서 되돌렸고, 그때 남긴 주석의
+    /// 미확인 항목("저작값 scatter 가 셰이더로 그대로 들어가는지")이 정확히 이것이다.
+    ///
+    /// 근거 두 갈래:
+    ///  · 이 리포의 정본 `spec/engine/uniform-feed.json`(entries[14],
+    ///    `hdrBloomStrengthNormalization`)이 **이미 확정 등급으로 같은 식을 담고 있었다** —
+    ///    구현만 따라오지 않은 전파 누락이다. 그 항목의 impact 문장도 "재구현에서 가장 놓치기
+    ///    쉬운 부분" 이라고 적어 두었다.
+    ///  · 원본 wallpaper64.exe 재측정: `powf(scatter, max(N,2)-2)`(0x14017f85e) →
+    ///    `+1.0`(0x14017f86b, 상수 [0x140492704]) → `divss`(0x14017f88f) →
+    ///    `setMaterialParam(mat, "bloomstrength", …)`(0x14017f89b). 업샘플 머티리얼에는
+    ///    scatter 원본이 그대로 실린다(0x14017f944 / 0x14017f96c).
+    ///
+    /// 기본 저작값(scatter 1.619, N 8)에서 분모는 약 19.01 → 실효 강도 약 0.105.
+    /// `max(N,2)-2` 클램프 때문에 N=1 과 N=2 는 같은 값(분모 2)을 낸다.
+    public static func normalizedStrength(strength: Float, scatter: Float, levels: Int) -> Float {
+        let exponent = Float(max(levels, 2) - 2)
+        return strength / (powf(scatter, exponent) + 1)
+    }
+
     /// 소스가 허용하는 피라미드 레벨 수(1/2 부터 1×1 까지 halving)와 요청값의 min.
     /// 호출부는 이 값만큼 levels/scratches 쌍을 할당하면 된다(2 미만이면 인코드 거부).
     static func levelCount(requested: Int, sourceWidth: Int, sourceHeight: Int) -> Int {
@@ -179,7 +206,9 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
         var extractUniforms = ExtractUniforms(
             sourceTexelSize: SIMD2(1 / Float(source.width), 1 / Float(source.height)),
             blendParams: SIMD4(parameters.threshold, parameters.threshold - knee, 2 * knee, 0.25 / (knee + 1e-5)),
-            tintStrength: SIMD4(parameters.tint.x, parameters.tint.y, parameters.tint.z, parameters.strength))
+            tintStrength: SIMD4(parameters.tint.x, parameters.tint.y, parameters.tint.z,
+                                Self.normalizedStrength(strength: parameters.strength,
+                                                        scatter: parameters.scatter, levels: n)))
 
         // 1) 추출 → L[0] (1/2) — WE hdr_downsample + BLOOM 콤보(4탭 x0.25 + 소프트-니).
         guard draw(extractPipeline, to: L[0], { e in
@@ -197,7 +226,7 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
         // 3) 업샘플 체인(심층 → 천층): S[i] = L[i] + scatter x 4탭평균(acc).
         // WE 는 hdr_upsample 머티리얼의 blending:additive 로 **고운 레벨 위에 가산**한다 —
         // 규칙이 모든 레벨에 동일하다(최상위만 뒤집혀 추출 레벨이 감쇠되던 S1 결함 해소).
-        var up = SIMD4<Float>(parameters.scatter * 0.25, 0, 0, 0)
+        var up = SIMD4<Float>(parameters.scatter, 0, 0, 0)
         var acc = L[n - 1]
         for i in stride(from: n - 2, through: 0, by: -1) {
             guard draw(upsamplePipeline, to: S[i], { e in
@@ -285,7 +314,7 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
                                      constant float4 &params [[buffer(0)]]) {
         constexpr sampler linearClamp(filter::linear, address::clamp_to_edge);
         float3 b = base.sample(linearClamp, in.uv).rgb;
-        float3 a = weDownsample4(add, in.uv) * params.x;   // params.x = 0.25 x scatter (아래 주석)
+        float3 a = weDownsample4(add, in.uv) * params.x;   // params.x = scatter (weDownsample4 가 이미 4탭 평균이다)
         return float4(b + a, 1.0);
     }
 
