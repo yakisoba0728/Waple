@@ -21,12 +21,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-test:
+  # [2026-08-19] 단일 잡을 구성 매트릭스로 나눈다.
+  #
+  # 종전 CI 는 debug 만 빌드했다. 그런데 골든 기준선은 전부 **release** 캡처이고,
+  # scripts/mac-session/verify-plan-b12.sh:160-161 이 코드 변경 없이 debug↔release 가
+  # 30씬/최대델타 249 만큼 갈린다고 실측해 뒀다 — 즉 CI 가 통과시키는 바이너리와
+  # 골든을 뜬 바이너리가 서로 다른 것이었다. 두 구성을 함께 세운다.
+  #
+  # fail-fast: false 가 핵심이다. 한쪽이 깨져도 다른 쪽을 끝까지 돌려야 "release 만
+  # 깨지는가 / 둘 다 깨지는가" 를 한 번의 실행으로 가른다 — 이게 없으면 진단에
+  # 왕복이 한 번 더 든다.
+  swift:
+    name: swift · ${{ matrix.configuration }}
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [debug, release]
     # macos-14 는 deprecated 이고 이미지 최신 Xcode 가 16.2(Swift 6.0.3) — 이 코드베이스의
     # 타입체커 한계 진단이 로컬(Swift 6.4)과 갈려 CI 전용 컴파일 에러를 냈다. macos-26 은
     # 기본 Xcode 26.x 로 로컬 툴체인과 정합하고, 러너 세대도 최신이라 컴파일이 빠르다.
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -51,11 +66,13 @@ jobs:
       # 빌드와 테스트 실행을 분리한다 — 종전엔 `swift build` 뒤 `swift test` 가 테스트 타깃을
       # 다시 컴파일해, 스텝 시간이 "컴파일 + 실행" 으로 뭉쳐 어디가 느린지 알 수 없었다.
       - name: Build (sources + tests)
-        run: swift build --build-tests
+        run: swift build --build-tests -c ${{ matrix.configuration }}
 
       # 화면보호기(Sources/WapleSaver)는 SPM 밖 Obj-C 라서 swift test 커버리지 밖.
-      # package-app.sh:42-46 과 동일한 플래그로 번들 컴파일만 검증(서명/DMG 불요).
+      # package-app.sh 의 clang 블록과 동일한 플래그로 번들 컴파일만 검증(서명/DMG 불요).
+      # 구성과 무관한 검사라 debug 레인에서만 한 번 돈다.
       - name: Compile screensaver bundle
+        if: matrix.configuration == 'debug'
         run: |
           OUT="$(mktemp -d)/WapleSaver"
           xcrun clang -fobjc-arc -bundle -mmacosx-version-min=13.0 \
@@ -64,10 +81,33 @@ jobs:
             Sources/WapleSaver/WapleSaverView.m \
             -o "$OUT"
 
+      # release 테스트는 **보고 전용**이다. 위 verify-plan-b12 실측대로 두 구성은 픽셀이
+      # 갈리므로, release 실패가 곧 회귀는 아니다. 그런데도 돌리는 이유는 release 에서만
+      # 나는 최적화 의존 결함(부동소수 재결합, 경계 조건)이 실제로 있기 때문이다.
+      # debug 는 그대로 차단 게이트로 둔다.
       - name: Test
+        id: test
+        continue-on-error: ${{ matrix.configuration == 'release' }}
         run: |
           set -o pipefail
-          swift test --skip-build 2>&1 | tee test-output.log
+          swift test --skip-build -c ${{ matrix.configuration }} 2>&1 | tee test-output.log
+
+      # [2026-08-19] 스킵 가시화.
+      #
+      # XCTSkip("no Metal") 이 76개 파일 322곳에 걸쳐 있고 그 아래 테스트가 561개다.
+      # 스킵은 통과로 집계되므로, 러너 이미지가 바뀌거나 GPU 가 없는 세션에서 돌면
+      # **전부 스킵된 채 초록**이 뜬다 — 통과 수를 세는 것만으로는 알아챌 수 없다.
+      # 아직 임계값을 모르므로(이 잡이 그 값을 처음 만든다) 지금은 게이트가 아니라
+      # 요약에 숫자를 남기는 단계다. 몇 런 쌓여 정상 범위가 서면 하한을 건다.
+      - name: Skip / execution census
+        if: always()
+        run: |
+          SKIPPED=$(grep -c "' skipped (" test-output.log || true)
+          EXECUTED=$(grep -oE "Executed [0-9]+ test" test-output.log | tail -1 | grep -oE "[0-9]+" || echo 0)
+          echo "### swift · ${{ matrix.configuration }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- executed: \`${EXECUTED}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- skipped:  \`${SKIPPED}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
       # 실패 원인부터 먼저 뽑는다 — 종전 패턴("failed" 포함)은 정상 로그의 "load failed"·"save failed"
       # 진단문에 파묻혀 실제 실패 단언이 head -50 밖으로 밀려났다(런 30541571683 에서 실측).
@@ -80,3 +120,97 @@ jobs:
           grep -E "error: .*(type-check|cannot|unable)" test-output.log | head -20 || true
           echo "--- tail ---"
           tail -60 test-output.log
+
+  # [2026-08-19] spec/ 파이썬 툴체인을 CI 에 넣는다.
+  #
+  # 종전엔 spec/** 변경이 paths-ignore 에 없어 macOS 러너를 태우면서도 validate.py 도
+  # spec 테스트도 한 번도 돌지 않았다. 검사가 없어서 실제로 놓친 사고가 있다:
+  # 동봉 WE 에셋 302개가 CRLF→LF 로 정규화된 채 커밋됐고, manifest.json 이 그 손상된
+  # 바이트로 기준선을 떠서 자체 검증은 영원히 통과하는 상태였다.
+  # GPU 도 Xcode 도 필요 없으므로 Linux 러너에서 10초면 끝난다 — macOS 잡과 동시에 돈다.
+  spec:
+    name: spec · python
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate spec canon
+        run: python3 scripts/spec/validate.py
+
+      - name: Spec self-tests
+        run: |
+          python3 scripts/spec/tests/test_validate.py
+          python3 scripts/spec/tests/test_rosetta.py
+
+      # 동봉 에셋이 매니페스트와 어긋나면 실패한다.
+      #
+      # measure_assets.py 를 돌려 git diff 로 보는 방법은 쓰지 않는다 — 그 스크립트의
+      # hashes 딕셔너리는 os.walk 삽입 순서를 따르는데 디렉터리 순회 순서가 파일시스템마다
+      # 달라서, 내용이 같아도 JSON 줄 순서가 갈려 거짓 실패가 난다. 순서 무관하게
+      # 의미로 비교한다.
+      - name: Asset manifest integrity
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, sys
+
+          SRC = "Sources/WapleRender/Resources/WEAssets"
+          man = json.load(open("spec/assets/manifest.json", encoding="utf-8"))
+          inv = json.load(open("spec/assets/inventory.json", encoding="utf-8"))
+          committed = next(e for e in man["entries"] if e["id"] == "assets.fileHashes")["value"]
+          claimed_bytes = next(e for e in inv["entries"] if e["id"] == "assets.totalBytes")["value"]
+          claimed_count = next(e for e in inv["entries"] if e["id"] == "assets.fileCount")["value"]
+
+          actual, total = {}, 0
+          for dirpath, _, files in os.walk(SRC):
+              for f in files:
+                  p = os.path.join(dirpath, f)
+                  rel = os.path.relpath(p, SRC).replace(os.sep, "/")
+                  total += os.path.getsize(p)
+                  h = hashlib.sha256()
+                  with open(p, "rb") as fh:
+                      for chunk in iter(lambda: fh.read(1 << 20), b""):
+                          h.update(chunk)
+                  actual[rel] = h.hexdigest()[:16]
+
+          missing = sorted(set(committed) - set(actual))
+          extra = sorted(set(actual) - set(committed))
+          bad = sorted(k for k in set(committed) & set(actual) if committed[k] != actual[k])
+
+          def show(label, items):
+              if items:
+                  print(f"{label}: {len(items)}")
+                  for k in items[:20]:
+                      print(f"   {k}")
+                  if len(items) > 20:
+                      print(f"   ... 외 {len(items) - 20}건")
+
+          show("매니페스트에 있으나 파일 없음", missing)
+          show("파일은 있으나 매니페스트에 없음", extra)
+          show("해시 불일치", bad)
+
+          ok = not (missing or extra or bad)
+          if total != claimed_bytes:
+              print(f"totalBytes 불일치: 실측 {total} vs 정본 {claimed_bytes}")
+              ok = False
+          if len(actual) != claimed_count:
+              print(f"fileCount 불일치: 실측 {len(actual)} vs 정본 {claimed_count}")
+              ok = False
+          if ok:
+              print(f"에셋 {len(actual)}개 / {total} bytes — 매니페스트와 일치")
+          sys.exit(0 if ok else 1)
+          PY
+
+      # CRLF 무결성. .gitattributes 가 WEAssets 트리 전체를 -text 로 덮는데, 종전엔
+      # 확장자를 열거해서 *.tex-json 과 *.js 가 그물을 빠져나갔다. 열거로 돌아가는
+      # 회귀를 잡는다 — 위 해시 검사와 달리 이건 **git 인덱스 쪽** 상태를 본다.
+      - name: WEAssets EOL attributes
+        run: |
+          BAD=$(git ls-files --eol -- Sources/WapleRender/Resources/WEAssets \
+                | grep -v 'attr/-text' | head -20 || true)
+          if [ -n "$BAD" ]; then
+            echo "-text 가 적용되지 않은 동봉 에셋이 있다 (.gitattributes 확인):"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "동봉 에셋 $(git ls-files -- Sources/WapleRender/Resources/WEAssets | wc -l | tr -d ' ')개 전부 attr/-text"
