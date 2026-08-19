@@ -1,5 +1,23 @@
 import AppKit
-import WebKit
+// [2026-08-19] @preconcurrency 필수 — 지우지 마라.
+//
+// 평범한 `import WebKit` 으로 -strict-concurrency=complete 를 켜면 SDK 가 델리게이트
+// 요구사항에 붙인 동시성 애너테이션 때문에 완료핸들러형 시그니처가 요구사항과
+// 어긋난다. 그러면 optional @objc 요구사항의 **witness 자격**을 잃고 → 암묵적 @objc
+// 상실 → 셀렉터 상실 → respondsToSelector: 가 NO → WebKit 이 기본값으로 진행한다.
+// 컴파일 오류 없이 경고 한 줄만 남는다. 실측(CI run 32214982769): 내비게이션 게이트가
+// 통째로 무력화돼 WebRendererSecurityTests 두 건이 debug·release 양쪽에서 실패했다.
+//   warning: instance method 'webView(_:decidePolicyFor:decisionHandler:)' nearly
+//            matches optional requirement ... of protocol 'WKNavigationDelegate'
+//
+// 셀렉터를 @objc(...) 로 못 박는 우회는 **안 된다**. SDK 는 같은 셀렉터를 async 형태
+// `webView(_:decidePolicyFor:)` 로도 노출하므로 핀이 그 요구사항과 충돌해 컴파일이
+// 깨진다(실측 run 32217958771: "conflicts with optional requirement method").
+// 근본 원인이 SDK 애너테이션이므로 import 지점에서 강등하는 것이 맞다.
+//
+// 앞으로: async 델리게이트 형태로 옮기면 @preconcurrency 없이도 정합한다. 그건 델리게이트
+// 타이밍이 바뀌는 변경이라 별도 작업으로 남긴다.
+@preconcurrency import WebKit
 import WapleCore
 
 /// WKUserContentController 는 등록된 메시지 핸들러를 강참조한다(Apple 문서 명시). WebRenderer 가
@@ -209,7 +227,6 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
 
     /// 조작 창 닫힘 — 12Hz 미러 타이머 정지(teardown 까지 상주하던 낭비 제거). 창은 보존(재오픈 재사용).
     /// NSWindowDelegate 도 optional @objc 요구사항이라 셀렉터를 고정한다(아래 WKNavigationDelegate 주석 참조).
-    @objc(windowWillClose:)
     public func windowWillClose(_ notification: Notification) {
         guard let win = notification.object as? NSWindow, win === interactionWindow else { return }
         (win.contentView as? WebInputProxyView)?.stop()
@@ -279,7 +296,6 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     // 셀렉터를 명시하면 witness 매칭 성공 여부와 무관하게 ObjC 진입점이 보장된다. 반대로 witness 가
     // 여전히 성립하는 메서드는 셀렉터가 틀리면 컴파일 에러가 나므로(요구사항 셀렉터와 불일치) 오타는
     // 조용히 지나가지 않는다. **이 어노테이션을 지우려면 위 두 테스트를 반드시 돌려라.**
-    @objc(webView:didFinishNavigation:)
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard Self.isAllowedTopFrameURL(webView.url) else { return }
         synchronizeEffectivePause(forceJavaScript: isEffectivelyPaused)
@@ -300,7 +316,6 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     /// 스크립트가 실행돼 리스너 등록 메시지가 리셋 뒤에 도착하고(didFinish 리셋은 등록을 지움),
     /// (2) 프래그먼트/pushState 같은 동일 문서 납비게이션은 JS 월드가 유지되며 didCommit 이
     /// 발생하지 않는다(리셋하면 살아 있는 문서의 등록이 고립된다).
-    @objc(webView:didCommitNavigation:)
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard Self.isAllowedTopFrameURL(webView.url) else { return }
         // 소비자가 있을 때만 동기화 — 미등록 문서(초기 로드 등)에서의 무조건 동기화는
@@ -314,9 +329,13 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         }
     }
 
-    /// 톱/서브프레임 내비게이션 게이트. **셀렉터 고정 필수** — 위 didFinish 주석의 CI 실측 참조
-    /// (이 메서드가 후킹되지 않으면 WebKit 이 기본값 .allow 로 진행해 게이트가 무음 무력화된다).
-    @objc(webView:decidePolicyForNavigationAction:decisionHandler:)
+    /// 톱/서브프레임 내비게이션 게이트.
+    ///
+    /// **이 메서드가 WKNavigationDelegate 의 witness 로 인정돼야 한다** — 인정받지 못하면
+    /// 셀렉터가 사라지고 WebKit 이 기본값 .allow 로 진행해 게이트가 무음 무력화된다.
+    /// 그 조건이 파일 상단의 `@preconcurrency import WebKit` 이다(근거·CI 실측 그쪽 주석 참조).
+    /// 여기 시그니처를 바꾸거나 그 import 를 되돌리면 게이트가 조용히 죽는다.
+    /// WebRendererSecurityTests 의 두 건이 이 계약의 감시자다.
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.targetFrame?.isMainFrame != false {
