@@ -36,7 +36,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        configuration: [debug, release]
+        include:
+          - configuration: debug
+            testFlags: ""
+          # release 에서 `@testable import` 는 대상 모듈이 -enable-testing 으로 빌드돼야
+          # 컴파일된다. SwiftPM 은 그 플래그를 **debug 에만** 자동으로 넣으므로
+          # `swift build --build-tests -c release` 는 그대로는 반드시 실패한다
+          # (실측: WapleSnapshot 'was not compiled for testing'). release 를 CI 에서
+          # 한 번도 세우지 않아 드러난 적이 없었을 뿐이다.
+          - configuration: release
+            testFlags: "-Xswiftc -enable-testing"
     # macos-14 는 deprecated 이고 이미지 최신 Xcode 가 16.2(Swift 6.0.3) — 이 코드베이스의
     # 타입체커 한계 진단이 로컬(Swift 6.4)과 갈려 CI 전용 컴파일 에러를 냈다. macos-26 은
     # 기본 Xcode 26.x 로 로컬 툴체인과 정합하고, 러너 세대도 최신이라 컴파일이 빠르다.
@@ -65,8 +74,17 @@ jobs:
 
       # 빌드와 테스트 실행을 분리한다 — 종전엔 `swift build` 뒤 `swift test` 가 테스트 타깃을
       # 다시 컴파일해, 스텝 시간이 "컴파일 + 실행" 으로 뭉쳐 어디가 느린지 알 수 없었다.
-      - name: Build (sources + tests)
-        run: swift build --build-tests -c ${{ matrix.configuration }}
+      # 배포되는 구성 그대로를 먼저 세운다 — 테스트 플래그가 섞이지 않은 상태.
+      # release 에서 이 스텝이 곧 "출하 바이너리가 컴파일되는가" 의 답이다.
+      - name: Build (sources)
+        run: swift build -c ${{ matrix.configuration }}
+
+      # 테스트 타깃은 위 matrix 주석의 이유로 release 에서만 플래그가 붙는다.
+      # 그래서 release 는 라이브러리를 두 번 컴파일한다(플래그가 달라 재사용 불가) —
+      # 비용을 아는 채로 감수한다. debug 레인이 빠른 차단 게이트이고, 이 레인의
+      # 목적은 최적화 의존 결함(부동소수 재결합·경계 조건)을 드러내는 것이다.
+      - name: Build (tests)
+        run: swift build --build-tests -c ${{ matrix.configuration }} ${{ matrix.testFlags }}
 
       # 화면보호기(Sources/WapleSaver)는 SPM 밖 Obj-C 라서 swift test 커버리지 밖.
       # package-app.sh 의 clang 블록과 동일한 플래그로 번들 컴파일만 검증(서명/DMG 불요).
@@ -90,7 +108,7 @@ jobs:
         continue-on-error: ${{ matrix.configuration == 'release' }}
         run: |
           set -o pipefail
-          swift test --skip-build -c ${{ matrix.configuration }} 2>&1 | tee test-output.log
+          swift test --skip-build -c ${{ matrix.configuration }} ${{ matrix.testFlags }} 2>&1 | tee test-output.log
 
       # [2026-08-19] 스킵 가시화.
       #
@@ -102,9 +120,15 @@ jobs:
       - name: Skip / execution census
         if: always()
         run: |
+          echo "### swift · ${{ matrix.configuration }}" >> "$GITHUB_STEP_SUMMARY"
+          # 빌드가 먼저 깨지면 로그 자체가 없다 — 그 사실을 요약에 남긴다.
+          # (종전엔 파일 없음이 그대로 스텝 실패가 되어 진짜 실패 원인을 가렸다.)
+          if [ ! -f test-output.log ]; then
+            echo "- 테스트 미실행(빌드 단계에서 중단)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           SKIPPED=$(grep -c "' skipped (" test-output.log || true)
           EXECUTED=$(grep -oE "Executed [0-9]+ test" test-output.log | tail -1 | grep -oE "[0-9]+" || echo 0)
-          echo "### swift · ${{ matrix.configuration }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- executed: \`${EXECUTED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- skipped:  \`${SKIPPED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
@@ -114,6 +138,12 @@ jobs:
       - name: Show failure summary
         if: failure()
         run: |
+          # 테스트까지 못 간 실패(빌드 단계)면 로그가 없다. 그때 이 스텝이 같이 죽으면
+          # 잡의 실패 원인이 둘로 보여 진단이 흐려진다 — 없으면 그렇다고만 말하고 끝낸다.
+          if [ ! -f test-output.log ]; then
+            echo "test-output.log 없음 — 빌드 단계에서 중단됐다. 위 Build 스텝 로그를 볼 것."
+            exit 0
+          fi
           echo "--- failing assertions ---"
           grep -E "error: -\[|' failed \(" test-output.log | head -40 || true
           echo "--- compile errors ---"
