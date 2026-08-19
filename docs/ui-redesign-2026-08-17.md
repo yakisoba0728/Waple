@@ -1,8 +1,16 @@
 # UI 전면 개편 청사진 (2026-08-17)
 
-> 상태: **청사진 확정, 화면 구현 미착수.**
-> 이미 커밋된 것: 디자인 토큰(`Sources/Waple/DesignSystem/`) · 현지화 오라클 구멍 3종 수리 ·
-> UI 규약 오라클 3건(`Tests/WapleAppTests/UIConventionTests.swift`).
+> 상태: **청사진 확정, 화면 구현 상당 부분 출하됨.**
+>
+> [정정 2026-08-19] 종전 "화면 구현 미착수" 는 더 이상 사실이 아니다. HEAD 기준으로
+> `Sources/Waple/Surfaces/` 아래 네 면(Displays·Installed·Settings·Workshop, 12파일)과
+> `Sources/Waple/Shell/` 의 셸(MainWindowView·SidebarView·NowPlayingBar·LibrarySection·
+> StatusBanner·OnboardingView)이 존재한다. 다만 **어디까지가 이 청사진을 충족하는지는
+> 이 정정에서 판정하지 않았다** — 파일 존재만 확인했다. 항목별 충족 여부는 아래 각 절을
+> 코드와 대조해 갱신할 것.
+>
+> 이미 커밋된 것(2026-08-17 시점 기록): 디자인 토큰(`Sources/Waple/DesignSystem/`) ·
+> 현지화 오라클 구멍 3종 수리 · UI 규약 오라클 3건(`Tests/WapleAppTests/UIConventionTests.swift`).
 > 이 문서는 화면별 병렬 에이전트의 **유일한 공통 기준**이다. 여기 없는 규약은 없는 것이다.
 >
 > 이 문서의 사실은 전부 2026-08-17 코드·캡처 실측이다. 추정은 "추정" 이라고 적었다.

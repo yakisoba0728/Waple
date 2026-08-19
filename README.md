@@ -83,8 +83,18 @@ defaults write kr.yaki.waple waple.baseAssetsPath /path/to/wallpaper_engine/asse
 ```
 
 If unset, Waple probes `~/Downloads/wallpaper_dev/assets` and `~/Downloads/assets`, validating the
-folder by the presence of `shaders/common.h`. These assets are not bundled with the app for copyright
-reasons — you have to supply them.
+folder by the presence of `shaders/common.h`.
+
+**These assets *are* bundled with the app.** `Package.swift` declares
+`resources: [.copy("Resources/WEAssets")]`, `scripts/package-app.sh` copies them into
+`Waple.app/Contents/Resources/`, and the release build *fails* if `WEAssets/shaders/common.h` is
+missing — so the shipped DMG always contains them (2,940 files / 75.8 MB of WE 2.8.42 `assets/`).
+Setting `waple.baseAssetsPath` points Waple at *your own* install instead, which is what you want if
+your WE version differs from the bundled one. See [NOTICE](NOTICE) §0 for provenance and hashes.
+
+*(This paragraph previously claimed the opposite — "not bundled for copyright reasons, you have to
+supply them". That was false in both directions: the app ships them, and the build enforces their
+presence. Corrected 2026-08-19.)*
 
 ## Install
 
@@ -134,7 +144,7 @@ Sources/
   WapleCompat/   Compatibility scan, snapshot capture/compare and performance profiling CLI harness
   WapleSaver/    Screensaver .saver bundle source (Objective-C — compiled directly by package-app.sh)
   WapleSnapshot/ Snapshot manifest schema and diff metrics (pure Foundation, unit-verifiable)
-Tests/           5 targets, 2,180 tests (synthetic units + real-corpus ground truth)
+Tests/           5 targets, 2,270 tests (synthetic units + real-corpus ground truth)
 scripts/         package-app.sh (app/screensaver bundle), window-id.swift (capture ID/bounds lookup),
                  make-icon.sh / make-icon.swift (app .icns), Waple.icns (generated)
 ```

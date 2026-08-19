@@ -200,7 +200,11 @@ def metrics(a, b):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("we_dir", help="WE 스크린샷 디렉터리(<name>_<sceneid>_<tag>.png)")
-    ap.add_argument("--baseline", default="spec/golden/snapshot/baseline-7075b74/thumbs")
+    # [정정 2026-08-19] 기본값이 baseline-7075b74 였는데 그 디렉터리는 HEAD 에 없다
+    # (현행은 baseline-6f0bcf0 — spec/golden/snapshot/README.md 최상단). 없는 경로를
+    # 기본값으로 두면 스크립트가 오류 없이 **빈 리포트**를 내서, 비교를 돌렸다고
+    # 착각하게 된다. 실패보다 나쁜 결과다.
+    ap.add_argument("--baseline", default="spec/golden/snapshot/baseline-6f0bcf0/thumbs")
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
 
