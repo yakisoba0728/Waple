@@ -48,11 +48,17 @@ WapleCore ←── WapleLibrary ──┐
 
 ```bash
 swift build --build-tests      # ~20초 (유휴 상태 Apple Silicon)
-swift test                     # 2,301개(2026-08-19 CI 실측 — 코퍼스 유무와 무관)
+swift test                     # 2,300개(2026-08-19 CI 실측 — 코퍼스 유무와 무관)
 swift run Waple                # 메뉴바 앱으로 실행
 ```
 
-테스트 수 **2,301** 은 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
+테스트 수 **2,300** 은 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
+
+> **[2026-08-19] 2,301 → 2,300 — 이 감소는 정당하다.** `SceneCompositeConventionTests` 의
+> 캡처 fit/fill 테스트 둘이 프로세스 전역 `fitMode` 를 서로 덮어 병렬에서 경합했다.
+> 하나로 합쳐 fit → fill 을 순차로 검사한다 — **단언은 그대로 남았고 커버리지는 줄지 않았다.**
+> 이 트립와이어가 그 감소를 잡아 준 것이 정상 동작이다(합칠 때 실수로 단언을 흘렸다면
+> 여기서 걸렸을 것이다).
 번들 합으로 세야 한다 — 클래스 단위 소계까지 더하면 6,000대로 부풀어 무의미해진다.
 `실행` 은 스킵을 포함하므로 **이 값은 코퍼스 유무와 무관하다**(아래 표에서 다섯 구성이 모두 같은 수).
 종전 기준값 2,143 은 2026-08-01 실측이었고 2026-08-16 재측정으로 2,149, 같은 날 결함 수정에 붙은 신규 테스트로 2,180,
@@ -75,7 +81,7 @@ localStorage 상한 1 · 재임포트 평점 유지 1 · 골든 판정 분기 1(
 각자 갱신하지 말고 합류 후 한 번 재측정할 것.
 
 [2026-08-19] 이 숫자는 이제 **CI 가 지킨다**. `.github/workflows/ci.yml` 의
-`Skip / execution census` 가 실행 하한 2,301 과 스킵 상한 100 을 건다. 손으로 세어 적는
+`Skip / execution census` 가 실행 하한 2,300 과 스킵 상한 100 을 건다. 손으로 세어 적는
 단계는 끝났고, 값을 바꾸려면 워크플로도 함께 고쳐야 한다 — 문서만 고치면 CI 가 막는다.
 스킵 상한을 두는 이유는 따로 있다: `XCTSkip("no Metal")` 아래 테스트가 561개라
 GPU 없는 환경에서 돌면 **전부 스킵된 채 초록**이 뜬다. 실행 수만 봐서는 못 잡는다
@@ -94,14 +100,14 @@ export WAPLE_BASE_ASSETS=/path/to/assets       # 미설정 시 ~/Downloads/wallp
 
 | 구성 | 실행 | 스킵 | 시간 | 출처 |
 | --- | --- | --- | --- | --- |
-| 코퍼스 있음(전량 460) | 2,301 | 2 | ~30분 | 실행수는 **추론**(정적 개수 = 축소 실측과 동일), 스킵 2 는 2026-08-01 실측 |
-| 코퍼스 있음(축소 38, release) | 2,301 | 9 | **162초** | 시간·스킵은 2026-08-16 실측(`verify-plan-b12.sh` §5, `swift test -c release`, 순차). 실행수는 그 2,180 에 2026-08-17 신규 20 을 더한 **정적 추론** |
-| 코퍼스 있음(축소 38, debug) | 2,301 | 9 | ~4.6분 | 시간·스킵은 2026-08-16 실측(`--parallel --num-workers 6`, 아래 레시피). 실행수는 위와 같은 **정적 추론** |
-| 코퍼스 없음 | 2,301 | 40 | ~110초 | 2026-08-17 macOS 실측 (`WAPLE_REAL_PKGS=/nonexistent/path swift test`, 순차 — 번들별 25+1044+51+802+348) |
-| CI (코퍼스 없음) | 2,301 | 47 | ~155초 | **전부 실측**(2026-08-19 CI run `32249224626`, macos-26). 종전 행은 실행수가 정적 추론이었고 "다음 CI 로 재확인할 것" 이라 적혀 있었다 — 그 재확인이 run `32222689131`(2,285/47)이었고, 이 행은 F530-sweep 이후 재측정이다. debug·release 두 레인이 실행·스킵·실패까지 동일했다 |
+| 코퍼스 있음(전량 460) | 2,300 | 2 | ~30분 | 실행수는 **추론**(정적 개수 = 축소 실측과 동일), 스킵 2 는 2026-08-01 실측 |
+| 코퍼스 있음(축소 38, release) | 2,300 | 9 | **162초** | 시간·스킵은 2026-08-16 실측(`verify-plan-b12.sh` §5, `swift test -c release`, 순차). 실행수는 그 2,180 에 2026-08-17 신규 20 을 더한 **정적 추론** |
+| 코퍼스 있음(축소 38, debug) | 2,300 | 9 | ~4.6분 | 시간·스킵은 2026-08-16 실측(`--parallel --num-workers 6`, 아래 레시피). 실행수는 위와 같은 **정적 추론** |
+| 코퍼스 없음 | 2,300 | 40 | ~110초 | 2026-08-17 macOS 실측 (`WAPLE_REAL_PKGS=/nonexistent/path swift test`, 순차 — 번들별 25+1044+51+802+348) |
+| CI (코퍼스 없음) | 2,300 | 46 | ~195초 | **전부 실측**(2026-08-19 CI run `32258859021`, macos-26). 종전 행은 실행수가 정적 추론이었고 "다음 CI 로 재확인할 것" 이라 적혀 있었다 — 그 재확인이 run `32222689131`(2,285/47)이었고, 이 행은 F530-sweep 이후 재측정이다. debug·release 두 레인이 실행·스킵·실패까지 동일했다 |
 
 모든 구성 **실패 0**. `실행` 은 XCTest 의 `Executed N tests` 이고 **스킵을 포함한다** —
-그래서 스킵이 40/47/9 로 갈려도 다섯 구성이 전부 똑같이 2,301 을 낸다. 위 `~110초`는 증분 빌드까지
+그래서 스킵이 40/46/9 로 갈려도 다섯 구성이 전부 똑같이 2,300 을 낸다. 위 `~110초`는 증분 빌드까지
 포함한 명령 전체 벽시계이고 번들 실행 시간 합은 ~97초, CI 의 `~162초`는 로그의
 `in 154.420 seconds`(빌드 별도, 2026-08-19 run `32238272072`) 다.
 
@@ -134,28 +140,42 @@ env WAPLE_REAL_PKGS=/tmp/corpus-mini swift test --skip-build --parallel --num-wo
 WAPLE_DEV_ROOT=/tmp/dev-root WAPLE_VERIFY_OUT=/tmp/verify-out bash scripts/mac-session/verify-plan-b12.sh
 ```
 
-⚠️ **`--parallel` 은 개수 세기 전용이다 — 통과/실패 판정에 쓰지 마라.** 2026-08-16 실측:
-`SceneRenderSettingsTests`(UserDefaults 전역 상태)와 `SceneCompositeConventionTests` 가
-**병렬 3/3 실패, 순차 3/3 통과**로 갈린다. 초록/빨강을 봐야 하면 `swift test -c release` 를
-순차로 돌려라 — release 순차가 162초로 debug 병렬(275초)보다 빠르기도 하다.
+✅ **`--parallel` 은 이제 판정에 써도 된다** — 종전 경고("개수 세기 전용")는 2026-08-19 에
+원인이 규명돼 해소됐다. CI 의 `Parallel isolation gate` 가 매 푸시마다 두 클래스를
+`--num-frontend-workers 6` 상당(`--num-workers 6`)으로 **3회씩** 돌려 회귀를 막는다.
 
-> **[2026-08-19] 둘 중 하나는 원인이 특정돼 고쳐졌다.**
-> `SceneCompositeConventionTests` 는 입력 디렉터리를 `NSTemporaryDirectory()`(macOS 에서
-> 프로세스별)로 잡으면서 **출력만 리터럴 `/tmp/waple_cc_<tag>`** 로 썼다 — 11쌍 전부.
-> 병렬 워커들이 같은 출력 경로에 캡처를 쓰니 서로의 프레임을 덮는다. 클래스를 단독 필터해도
-> 실패한 것과도 맞는다(워커는 여전히 여럿이다). `SnapshotCompare.swift:59` 가 같은 이유로
-> 이미 PID 스코프(F148)를 도입해 뒀는데 이 파일로 전파되지 않았다. 이제 입출력 모두
-> `scratchDir(_:)` 경유로 PID 스코프다.
->
-> **다만 "이제 병렬이 통과한다" 고 말하지 않는다** — 이 스윕은 Linux 에서 돌아 실행 검증을
-> 못 했고, `SceneRenderSettingsTests` 쪽(UserDefaults 전역 상태)은 별개 원인으로 남아 있다.
-> macOS 에서 확인할 것:
->
-> ```bash
-> swift test --parallel --num-workers 6 --filter SceneCompositeConventionTests   # 3회
-> ```
->
-> 3/3 통과로 바뀌면 이 경고에서 그 클래스를 빼면 된다. 여전히 실패하면 원인이 하나 더 있다.
+<details><summary>무엇이 문제였고 어떻게 밝혀졌나 (2026-08-16 → 08-19)</summary>
+
+종전 서술: "`SceneRenderSettingsTests`(UserDefaults 전역 상태)와 `SceneCompositeConventionTests`
+가 **병렬 3/3 실패, 순차 3/3 통과**로 갈린다 … 워커 프로세스의 defaults 도메인 차이로 보인다
+(원인 미확정)."
+
+**원인은 둘이었고 서로 달랐다. 도메인 차이는 둘 다 아니었다.**
+
+| 클래스 | 진짜 원인 | 수정 |
+| --- | --- | --- |
+| `SceneRenderSettingsTests` | `UserDefaults.standard` 는 프로세스가 아니라 **사용자** 단위라 워커 여럿이 같은 키를 공유한다 | `SceneRenderSettings.defaults` 주입점 + 테스트마다 고유 suite |
+| `SceneCompositeConventionTests` | 두 캡처 테스트가 프로세스 전역 `SceneRenderSettings.fitMode` 를 서로 덮었다 | 한 테스트로 합쳐 fit → fill 순차 검사 |
+
+**밝혀진 방식이 결론보다 중요하다.** 세 번의 CI 왕복이 필요했고 매번 다른 것을 배웠다:
+
+1. 1차 — 게이트가 `--skip-build` 때문에 테스트를 하나도 안 돌리고 exit 1. **검사가 아무것도
+   검사하지 않았다.**
+2. 2차 — 로그로 판정하다 오판. `--parallel` 은 전부 통과하면 XCTest 의 `Executed N tests` 줄을
+   찍지 않는데 그 부재를 "필터 0건 매치" 로 읽어, **이미 고쳐진 클래스를 실패로 보고**했다.
+   판정을 `--xunit-output` XML 로 바꿨다(기계가 쓰는 형식이라 추측이 끼어들지 않는다).
+3. 3차 — 6/6 통과. 그리고 `fitMode` 경합의 서명이 드러났다: **회차마다 지는 쪽이 바뀌었다**
+   (1회 fit, 2회 fill, 3회 fit).
+
+교훈 둘. **"고쳤다" 와 "통과한다" 는 다른 명제다** — 실행하지 않았으면 한쪽은 고쳤는데 못
+고쳤다고, 다른 쪽은 안 고쳤는데 고쳤다고 적었을 것이다. 그리고 **부재를 신호로 쓰지 마라** —
+"로그에 X 가 없다" 는 "X 가 일어나지 않았다" 가 아니다. 이 리포가 반복해서 당한
+"검사하는 척하는 검사" 가 바로 그 형태다.
+
+</details>
+
+초록/빨강을 순차로 보고 싶으면 `swift test -c release` 를 쓴다 — release 순차가 162초로
+debug 병렬(275초)보다 빠르다.
 
 **이 레시피로 확정되는 것과 안 되는 것을 구분할 것.**
 - **확정**: `실행` 수. 테스트 메서드는 정적으로 결정되므로 코퍼스 크기가 개수를 못 바꾼다.
@@ -176,7 +196,7 @@ WAPLE_DEV_ROOT=/tmp/dev-root WAPLE_VERIFY_OUT=/tmp/verify-out bash scripts/mac-s
 번들별(2026-08-16, 코퍼스 있음/축소 38): WapleRenderTests 995(스킵 7) · WapleCoreTests 786(스킵 2) · WapleAppTests 292 · WapleLibraryTests 51 · WapleSnapshotTests 25.
 번들별(2026-08-01, 코퍼스 있음/전량): WapleRenderTests 992(스킵 2) · WapleCoreTests 786 · WapleAppTests 289 · WapleLibraryTests 51 · WapleSnapshotTests 25.
 번들별(2026-08-16, 코퍼스 없음): WapleRenderTests 995(스킵 26) · WapleCoreTests 786(스킵 14) · WapleAppTests 292 · WapleLibraryTests 51 · WapleSnapshotTests 25.
-(CI 는 번들을 `WaplePackageTests.xctest` 하나로 합쳐 2,301 한 줄로 낸다.)
+(CI 는 번들을 `WaplePackageTests.xctest` 하나로 합쳐 2,300 한 줄로 낸다.)
 
 코퍼스가 사주는 38개(2026-08-16 실측 — 무코퍼스 스킵 40 중 옵트인 2건을 뺀 38 이 코퍼스로 풀린다.
 축소 38개로도 31건이 풀렸고 나머지 7건은 그 서브셋에 없는 패키지를 요구한 것이다. 종전 표기 39개는

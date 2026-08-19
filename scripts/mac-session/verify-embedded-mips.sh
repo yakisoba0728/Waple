@@ -107,7 +107,7 @@ else
 fi
 echo "  번들별:"
 printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /' 
-echo "  번들 합: ${TESTS:-?}  (기준 2,301 — 2026-08-19 CI 실측, 코퍼스 유무 무관. 종전 2,270)"
+echo "  번들 합: ${TESTS:-?}  (기준 2,300 — 2026-08-19 CI 실측, 코퍼스 유무 무관. 종전 2,270)"
 
 hr; echo "5. 골든 — **바뀌어야 할 씬만** 바뀌었는가"; hr
 PRE="${WAPLE_PRE_BASELINE:-}"
