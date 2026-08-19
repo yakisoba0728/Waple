@@ -520,7 +520,7 @@ enum DeepScan {
            let mp0 = (mjson["passes"] as? [Any])?.first as? [String: Any] {
             shaderName = mp0["shader"] as? String
             for (k, v) in (mp0["combos"] as? [String: Any]) ?? [:] {
-                if let n = v as? Int { matCombos[k] = n } else if let d = v as? Double { matCombos[k] = Int(d) }
+                if let n = v as? Int { matCombos[k] = n } else if let d = v as? Double, let g = safeInt(d) { matCombos[k] = g }
             }
             if let texs = mp0["textures"] as? [Any] { matTextures = texs.map { $0 as? String } }
         }

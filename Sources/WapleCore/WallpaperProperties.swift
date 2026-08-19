@@ -123,7 +123,10 @@ public enum WallpaperProperties {
             return CFGetTypeID(n) == CFBooleanGetTypeID() ? nil : n.intValue
         }
         if let i = raw as? Int { return i }
-        if let d = raw as? Double { return Int(d) }
+        // F530-sweep: project.json 은 신뢰 경계 밖이다 — `{"value": 1e300}` 하나로
+        // 맨 `Int(d)` 가 트랩했다. 이 자리는 스윕 6단계가 전부 놓쳤고
+        // scripts/spec/check_int_narrowing.py 의 R1 이 잡아냈다.
+        if let d = raw as? Double { return safeInt(d) }
         return nil
     }
 

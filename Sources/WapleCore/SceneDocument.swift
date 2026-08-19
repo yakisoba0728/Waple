@@ -1301,7 +1301,7 @@ extension SceneDocument {
         layer.refract = refract
         layer.normalTextureName = normalTextureName
         layer.refractAmount = refractAmount
-        layer.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
+        layer.colorBlendMode = blendModeVal(obj["colorBlendMode"])
         // 3D 씬 빌보드용: origin 의 z 성분(월드)과 부모 계층 보존(2D 경로는 origin.xy 만 사용 — 무영향).
         let originFull = floats(obj["origin"])
         layer.originZ = originFull.count >= 3 ? originFull[2] : 0
@@ -1598,7 +1598,7 @@ extension SceneDocument {
         if let s = obj["depthtest"] as? String { t.depthTest = s != "disabled" }
         else if let b = unwrap(obj["depthtest"]) as? Bool { t.depthTest = b }
         // C⑥: colorBlendMode — 이미지 레이어(:1157 인근)와 동일 파스 규약.
-        t.colorBlendMode = intVal(obj["colorBlendMode"]) ?? 0
+        t.colorBlendMode = blendModeVal(obj["colorBlendMode"])
         // C⑨: 아웃라인/배경 박스 파스·보존(실측 스키마: outlinecolor/backgroundcolor 는 "r g b" 벡터).
         t.outline = (unwrap(obj["outline"]) as? Bool) ?? false
         t.outlineColor = vec3(obj["outlinecolor"]) ?? Vec3(x: 0, y: 0, z: 0)
@@ -2443,6 +2443,20 @@ extension SceneDocument {
     }
     private static func intVal(_ v: Any?) -> Int? {
         lenientInt(unwrap(v))   // 실물 3577990983: id/parent 가 "35" 문자열 타입
+    }
+    /// colorBlendMode 정규화 — `common_blending.h` 의 ApplyBlending enum 은 **0…32** 뿐이다.
+    ///
+    /// F530-sweep: 종전엔 파스 값을 그대로 실었고, 소비처인 `SceneRendererFrameEncoder`
+    /// (`:1450` 이미지 · `:1629` 텍스트)가 `Int32(...)` 로 좁히면서 범위 밖 값에 **트랩**했다.
+    /// `"colorBlendMode": 2147483648` 이나 문자열 `"99999999999"`(실물 씬이 숫자를 문자열로
+    /// 싣는 사례는 `intVal` 주석 참조) 하나로 그 레이어가 처음 그려지는 프레임에 앱이 죽었다.
+    ///
+    /// 파스 지점에 거는 이유는 소비처가 둘이기 때문이다 — 한 자리에서 막으면 둘 다 덮인다.
+    /// **클램프가 아니라 0 으로 떨어뜨린다**: 32 로 잘라 붙이면 저작 의도와 무관한 모드
+    /// (Negative)가 조용히 적용된다. 미지정 기본값과 같은 normal 로 가는 게 맞다.
+    private static func blendModeVal(_ v: Any?) -> Int {
+        guard let n = intVal(v), (0...32).contains(n) else { return 0 }
+        return n
     }
     private static func vec2(_ v: Any?) -> Vec2? {
         let f = floats(v); return f.count >= 2 ? Vec2(x: f[0], y: f[1]) : nil

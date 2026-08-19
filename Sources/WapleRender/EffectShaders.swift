@@ -1,4 +1,5 @@
 import Foundation
+import WapleCore   // F530-sweep: safeInt(_:) — 신뢰 경계 밖 상수의 정수 좁힘 가드(정본 하나로 모은다)
 
 enum EffectShaders {
     /// 효과 이름 → MSL(공유 vert ev_main + 효과 frag ef_main).
@@ -54,7 +55,8 @@ enum EffectShaders {
             // BLENDMODE 은 콤보(0..32). (구버전 constants["blendmode"] 도 폴백.)
             // F672: 기본 = WE tint.frag [COMBO] default:30(Tint, 휘도보존 컬러라이즈) — 구 0(Normal)은
             // blendmode 키 부재 폴터에서 mix(A,B,o) 단색 워시였다.
-            let mode = Float(cb["BLENDMODE"] ?? Int(c["blendmode"]?.first ?? 30))
+            // F530-sweep: constantshadervalues 는 신뢰 경계 밖이라 맨 `Int(Float)` 는 트랩이었다.
+            let mode = Float(cb["BLENDMODE"] ?? safeInt(Double(c["blendmode"]?.first ?? 30)) ?? 30)
             return [r, g, b, f("alpha", 1), mode]
         case "pulse":
             // [speed,phase,amount,power,threshLo,threshHi, blendmode, pulseColor, pulseAlpha, audioMode, tintLo(3), tintHi(3),
