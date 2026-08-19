@@ -1,0 +1,231 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_absence_claims.py",
+ "entries": [
+  {
+   "id": "absence.audit.result",
+   "value": {
+    "binariesScanned": 42,
+    "claimsTested": 10,
+    "refutedClaims": [],
+    "verdict": "정본의 부재 주장 중 반증된 것 없음"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "WE 2.8.42 설치본 바이너리 42종 (/home/user/Waple-wallpaper-source/wallpaper_engine)",
+     "note": "독립 토큰 검사 · ASCII 와 UTF-16LE 양쪽 · 앞뒤 인쇄가능 문자 배제"
+    }
+   ]
+  },
+  {
+   "id": "absence.audit.claims",
+   "value": {
+    "anisotropic": {
+     "absentIn": "we",
+     "claim": "engine/texture-filtering.json:textureFiltering.authoring.noFilterKnob runtimeStrings.anisotropic=false — 저작에 mip 필터 노브가 없다는 부정 결론의 일부"
+    },
+    "ANISOTROPIC": {
+     "absentIn": "we",
+     "claim": "같은 항목 runtimeStrings.ANISOTROPIC=false. d3dcompiler_47.dll 의 히트는 마이크로소프트 HLSL 컴파일러라 WE 코드가 아니다(HLSL 필터 enum 이름)"
+    },
+    "mipfilter": {
+     "absentIn": "we",
+     "claim": "같은 항목 runtimeStrings.mipfilter=false"
+    },
+    "halfmip": {
+     "absentIn": "runtime",
+     "claim": "같은 항목 runtimeStrings.halfmip=false. **런타임 기준이다** — formats/tex-deep.json 의 binaryTokenCounts 는 resourcecompiler64=1 을 함께 기록한다"
+    },
+    "srgb": {
+     "absentIn": [
+      "wallpaper64.exe",
+      "wallpaperui.exe",
+      "resourcecompiler64.exe"
+     ],
+     "claim": "formats/tex-deep.json:format.tex.texJson.keys deadKeys.srgb — '세 바이너리 어디에도 독립 토큰이 없다'"
+    },
+    "nonpoweroftwo": {
+     "absentIn": [
+      "wallpaper64.exe",
+      "resourcecompiler64.exe"
+     ],
+     "claim": "같은 deadKeys — 'resourcecompiler64/wallpaper64 문자열 표에 없다. wallpaperui.exe(에디터) 템플릿에만 있다'"
+    },
+    "PKGV": {
+     "absentIn": "all",
+     "claim": "Sources/WapleCore/ScenePackage.swift:50-64 가 'PKGV 4자리 = per-file serial' 문서 서술을 반증한다 — 토큰 자체가 없다"
+    },
+    "WEMath": {
+     "absentIn": "all",
+     "claim": "엔진 수학 라이브러리 이름 후보 — 부재 확인용"
+    },
+    "g_Gravity": {
+     "absentIn": "we",
+     "claim": "BACKLOG wind/gravity 보류 근거 — WE 셰이더에 이 유니폼이 없다"
+    },
+    "g_Wind": {
+     "absentIn": "we",
+     "claim": "같은 근거"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "WE 2.8.42 설치본 바이너리 42종 (/home/user/Waple-wallpaper-source/wallpaper_engine)",
+     "note": "독립 토큰 검사 · ASCII 와 UTF-16LE 양쪽 · 앞뒤 인쇄가능 문자 배제"
+    }
+   ]
+  },
+  {
+   "id": "absence.audit.occurrences",
+   "value": {
+    "ANISOTROPIC": {
+     "d3dcompiler_47.dll": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "d3dcompiler_47_x32.dll": {
+      "ascii": 1,
+      "utf16le": 0
+     }
+    },
+    "halfmip": {
+     "resourcecompiler32.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "resourcecompiler64.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     }
+    },
+    "nonpoweroftwo": {
+     "wallpaperui.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     }
+    },
+    "nointerpolation": {
+     "wallpaper64.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "d3dcompiler_47.dll": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "d3dcompiler_47_x32.dll": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "dxcompiler.dll": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "libGLESv2.dll": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "resourcecompiler32.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "resourcecompiler64.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "wallpaperui.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     }
+    },
+    "clampuvs": {
+     "wallpaper64.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "resourcecompiler32.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "resourcecompiler64.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "wallpaperui.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     }
+    },
+    "nomip": {
+     "resourcecompiler32.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "resourcecompiler64.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     },
+     "wallpaperui.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "WE 2.8.42 설치본 바이너리 42종 (/home/user/Waple-wallpaper-source/wallpaper_engine)",
+     "note": "독립 토큰 검사 · ASCII 와 UTF-16LE 양쪽 · 앞뒤 인쇄가능 문자 배제"
+    }
+   ]
+  },
+  {
+   "id": "absence.audit.positiveControls",
+   "value": {
+    "why": "부정 결론은 양성 대조 없이 못 믿는다 — 스캐너가 아무것도 못 찾는 상태여도 '전부 없다' 는 결과가 나오기 때문이다.",
+    "expectations": {
+     "nointerpolation": "wallpaper64.exe 에 있어야 한다(.tex flags 0x1 저작 키)",
+     "clampuvs": "wallpaper64.exe 에 있어야 한다(.tex flags 0x2)",
+     "nomip": "resourcecompiler64.exe·wallpaperui.exe 에는 있고 wallpaper64.exe 에는 없다",
+     "nonpoweroftwo": "wallpaperui.exe(에디터)에만 있다"
+    },
+    "found": {
+     "nointerpolation": true,
+     "clampuvs": true,
+     "nomip": true,
+     "nonpoweroftwo": true
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "WE 2.8.42 설치본 바이너리 42종 (/home/user/Waple-wallpaper-source/wallpaper_engine)",
+     "note": "독립 토큰 검사 · ASCII 와 UTF-16LE 양쪽 · 앞뒤 인쇄가능 문자 배제"
+    }
+   ]
+  },
+  {
+   "id": "absence.audit.encodingRule",
+   "value": {
+    "rule": "이 바이너리들은 문자열 종류에 따라 인코딩이 다르다 — '전부 UTF-16' 도 '전부 ASCII' 도 아니다.",
+    "wide": "MSVC 가 넣는 어서션·`__FILE__` 소스 경로는 UTF-16LE (예: `D:\\dev\\we\\...`, `!XMScalarNearEqual(...)`).",
+    "narrow": "저작 스키마 키(.tex-json 키, 셰이더 유니폼 이름)는 ASCII — 런타임이 JSON·셰이더 텍스트에서 파싱하는 값이기 때문이다.",
+    "consequence": "부재를 주장하려면 **어느 종류의 문자열인지** 먼저 정하고, 어떤 인코딩으로 어떤 명령을 돌렸는지 함께 적을 것."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "WE 2.8.42 설치본 바이너리 42종 (/home/user/Waple-wallpaper-source/wallpaper_engine)",
+     "note": "독립 토큰 검사 · ASCII 와 UTF-16LE 양쪽 · 앞뒤 인쇄가능 문자 배제"
+    }
+   ]
+  }
+ ]
+}
