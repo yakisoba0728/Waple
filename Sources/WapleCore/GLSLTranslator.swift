@@ -317,13 +317,18 @@ public enum GLSLTranslator {
             fnSizes[h.name] = GLSLTypeAdapter.typeSize(h.ret) ?? 0
             fnParamSizes[h.name] = h.params.map { $0.array ? 0 : (GLSLTypeAdapter.typeSize($0.type) ?? 0) }
         }
+        // F612 재발 차단: 어댑터가 `.a`/`.st`/`.xy` 같은 **struct 필드 이름**을 스위즐로 오독하지
+        // 않도록 소스 struct 의 멤버 이름을 넘긴다(GLSLTypeAdapter.assignment/postfix 주석 참조).
+        let structFieldSet = structMemberNames(structDefs)
         var vertSizeEnv = sizeEnv
         for (name, type) in vVaryingTypes where type.components > 0 { vertSizeEnv[name] = type.components }
         let fragSizeEnv = sizeEnv  // varying 크기는 union(Vary 멤버 실타입) — frag 소형 선언은 어댑터가 coerce
         let fragMainBody = GLSLTypeAdapter.adapt(body: fragMainBodyPre,
-                                                 env: .init(vars: fragSizeEnv, functions: fnSizes, functionParams: fnParamSizes))
+                                                 env: .init(vars: fragSizeEnv, functions: fnSizes, functionParams: fnParamSizes,
+                                                            structFields: structFieldSet))
         let vertMainBody = GLSLTypeAdapter.adapt(body: vertMainF.body,
-                                                 env: .init(vars: vertSizeEnv, functions: fnSizes, functionParams: fnParamSizes))
+                                                 env: .init(vars: vertSizeEnv, functions: fnSizes, functionParams: fnParamSizes,
+                                                            structFields: structFieldSet))
 
         // Stage-3 ①②: 지역 섀도잉(varying/머티리얼과 동명의 로컬 선언) → 해당 본문 맵에서 제외
         // (치환하면 `float4 in.x = ...` 로 깨짐); fragment 의 varying 대입 → 로컬 사본으로 승격.
@@ -367,7 +372,9 @@ public enum GLSLTranslator {
             for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
             // int/uint 파라미터명은 어댑터에 int 로 알려 min/max(int,float) 모호성 해소(실물 multistage_wave).
             let intParams = Set(h.params.filter { $0.type == "int" || $0.type == "uint" }.map { $0.name })
-            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body, env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes, intVars: intParams),
+            let adaptedBody = GLSLTypeAdapter.adapt(body: h.body,
+                                                    env: .init(vars: helperEnv, functions: fnSizes, functionParams: fnParamSizes,
+                                                               intVars: intParams, structFields: structFieldSet),
                                                     returnSize: GLSLTypeAdapter.typeSize(h.ret))
             let withCalls = appendCaptureArgs(adaptedBody, helpers: helpers, captureOf: captureOf) { cap in
                 rawCaptureName(cap, materials: materials)
@@ -486,6 +493,34 @@ public enum GLSLTranslator {
     }
 
     struct GLSLStruct: Equatable { let name: String; let body: String }  // body = 원문 멤버 선언들(타입 리네임 전)
+
+    /// struct 본문(원문 멤버 선언들)에서 멤버 이름 집합 추출 — `;` 로 끊고 선언마다 첫 식별자(타입)를 버린다.
+    /// 배열 멤버(`float k[4]`)는 첨자를 버리고 이름만, 콤마 다중 선언(`vec3 st, xy`)은 전부 담는다.
+    /// 용도는 하나: 어댑터가 스위즐 글자 이름 필드를 스위즐로 오독하지 않게 하는 것(F612 재발 차단).
+    static func structMemberNames(_ defs: [GLSLStruct]) -> Set<String> {
+        var out = Set<String>()
+        for d in defs {
+            for decl in d.body.split(separator: ";") {
+                var ids: [String] = []
+                let chars = Array(decl)
+                var i = 0
+                while i < chars.count {
+                    if chars[i].isLetter || chars[i] == "_" {
+                        var t = ""
+                        while i < chars.count && (chars[i].isLetter || chars[i].isNumber || chars[i] == "_") {
+                            t.append(chars[i]); i += 1
+                        }
+                        ids.append(t)
+                    } else {
+                        i += 1
+                    }
+                }
+                guard ids.count >= 2 else { continue }   // ids[0] = 타입
+                out.formUnion(ids.dropFirst())
+            }
+        }
+        return out
+    }
 
     /// 파일 스코프 `struct <name> { <members> };` 파싱(주석 제거본 입력 가정). 함수 파싱 전에 이름을 등록해야
     /// struct 반환/파라미터 헬퍼가 mslType 을 통과한다(실물 dot_matrix: `Grid squareGrid(vec2)`).
@@ -1337,9 +1372,24 @@ public enum GLSLTranslator {
         return out
     }
 
-    /// `const <type> <name> ...` 에서 <name> 추출(기존 인라인 추출과 동일 규약).
+    /// `const <type> <name> ...` 에서 <name> 추출.
+    /// 종전 구현은 공백 split 이라 **`=` 앞에 공백이 없는 선언에서 무너졌다** — `const float x=1;` 이
+    /// 이름 "x=1;" 을 내고, 그러면 constByName/constNames 키와 identifiers(in:) 가 절대 만나지 않아
+    /// 전이 const 강등(computeConstDemoteSet)이 그 선언을 **조용히** 건너뛴다. 배열 선언
+    /// `const float k[3] = {…}` 도 같은 이유로 "k[3]" 이었다. 식별자 문자 경계로 토큰을 잘라
+    /// 두 번째 토큰(= 타입 다음)을 이름으로 쓴다(정밀도 한정자 형태는 종전과 동일하게 미지원).
     static func constDeclName(_ line: String) -> String {
-        line.dropFirst("const ".count).split(separator: " ").dropFirst().first.map(String.init) ?? ""
+        let chars = Array(line.dropFirst("const ".count))
+        func isIdent(_ c: Character) -> Bool { c == "_" || c.isLetter || c.isNumber }
+        var tokens: [String] = []
+        var i = 0
+        while i < chars.count && tokens.count < 2 {
+            guard isIdent(chars[i]) else { i += 1; continue }
+            var t = ""
+            while i < chars.count && isIdent(chars[i]) { t.append(chars[i]); i += 1 }
+            tokens.append(t)
+        }
+        return tokens.count >= 2 ? tokens[1] : ""
     }
 
     /// const 초기화 우변(`= …`)에 non-constructor 함수 호출이 있으면 컴파일타임 상수가 아니다 →
@@ -1391,6 +1441,13 @@ public enum GLSLTranslator {
     static func translateBody(_ body: String, symbols: [String: String], isFragment: Bool,
                               perTextureSampler: Bool = false) -> String? {
         var s = body
+        // 번역 실패 신호(Optional 반환의 실제 근거). WE 전용 인트린식을 **호출 형태로** 만났는데
+        // (rewriteCall 이 이름 뒤의 `(` 를 이미 확인했다) 인자 수가 계약과 달라 재작성하지 못한 경우다.
+        // 종전에는 그 자리에서 nil 을 돌려 원문을 그대로 흘려보냈고, 그래서 이 함수는 `-> String?`
+        // 이면서도 nil 을 절대 내지 않았다 — :350/:375/:411 의 폴백 3곳이 통째로 도달 불가였고,
+        // 실패는 makeLibrary 가 MSL 을 거부할 때까지(사유 로그 없이) 미뤄졌다.
+        // 이 다섯은 전부 MSL 내장이 아니므로 원문 통과 = 컴파일 실패 확정 — 여기서 끊어도 무회귀다.
+        var unsupported: [String] = []
         // 1) mul(a,b) → (b * a) — **인자 순서를 뒤집는다.** WE 셰이더는 GLSL 문법으로 저작되지만
         //    함수는 HLSL 네이티브를 쓴다(엔진이 매크로 프롤로그로 HLSL 트랜스파일 — `mul` 은 프롤로그에
         //    정의되지 않아 HLSL 빌트인 그대로다). HLSL 은 m[행][열], GLSL/MSL 은 m[열][행]이라 **같은
@@ -1417,30 +1474,33 @@ public enum GLSLTranslator {
         //    호출부 계약: 엔진이 올리는 MVP 는 이 순서에 맞춰 **전치하지 않은** 채로 바인딩한다
         //    (SceneRendererFrameEncoder 커스텀 레이어·SceneRenderer3D 커스텀 메시). 이펙트 경로의
         //    MVP 는 항등이라 순서 무관.
-        s = rewriteCall(s, "mul") { args in args.count == 2 ? "(\(args[1]) * \(args[0]))" : nil }
+        s = rewriteCall(s, "mul") { args in
+            guard args.count == 2 else { unsupported.append("mul/\(args.count)"); return nil }
+            return "(\(args[1]) * \(args[0]))"
+        }
         // 2) texSample2DLod(t, uv, l) → t.sample(smp, uv, level(l)) / texSample2D(t, uv) → t.sample(smp, uv).
         //    UV 는 we_uv() 로 절단 — WE GLSL(HLSL 방언)은 vec3/vec4 를 UV 로 암시적 절단해 넘기는 걸 허용한다.
         s = rewriteCall(s, "texSample2DLod") { args in
-            guard args.count == 3 else { return nil }
+            guard args.count == 3 else { unsupported.append("texSample2DLod/\(args.count)"); return nil }
             let smp = perTextureSampler ? perTextureSamplerExpr(args[0]) : "smp"
             return "\(args[0]).sample(\(smp), we_uv(\(args[1])), level(\(args[2])))"
         }
         s = rewriteCall(s, "texSample2D") { args in
-            guard args.count == 2 else { return nil }
+            guard args.count == 2 else { unsupported.append("texSample2D/\(args.count)"); return nil }
             let smp = perTextureSampler ? perTextureSamplerExpr(args[0]) : "smp"
             return "\(args[0]).sample(\(smp), we_uv(\(args[1])))"
         }
         // 2a2) texLoad2D(s, u, r) → 정수 texel fetch — WE shim :66 `#define texLoad2D(s, u, r)
         //      s.Load(int3((u) * (r), 0))` 의 MSL 대응(read 는 lod 기본 0).
         s = rewriteCall(s, "texLoad2D") { args in
-            guard args.count == 3 else { return nil }
+            guard args.count == 3 else { unsupported.append("texLoad2D/\(args.count)"); return nil }
             return "\(args[0]).read(uint2((\(args[1])) * (\(args[2]))))"
         }
         // 2a3) texSample2DBackBuffer(s, u, r) → 비MS 변형 texSample2D(s, u) 로 하강(WE shim :70-71 —
         //      두 #define 중 MS Load 변형이 아닌 sample 형태). sampler2DBackBuffer 선언은
         //      texture2d<float> 취급(GLSLType.from).
         s = rewriteCall(s, "texSample2DBackBuffer") { args in
-            guard args.count == 3 else { return nil }
+            guard args.count == 3 else { unsupported.append("texSample2DBackBuffer/\(args.count)"); return nil }
             let smp = perTextureSampler ? perTextureSamplerExpr(args[0]) : "smp"
             return "\(args[0]).sample(\(smp), we_uv(\(args[1])))"
         }
@@ -1466,6 +1526,11 @@ public enum GLSLTranslator {
             }
         } else {
             s = s.replacingOccurrences(of: "gl_Position", with: "out.gl_Position")
+        }
+        guard unsupported.isEmpty else {
+            // 폴백 경로(:350 전체 번역 포기 / :375 헬퍼 스킵 / :411 강등 const 스킵)가 여기서 살아난다.
+            WapleLog.warn("[Waple] GLSL translate failed — unsupported intrinsic arity: \(unsupported.joined(separator: ", "))")
+            return nil
         }
         return s
     }
@@ -1743,14 +1808,33 @@ public enum GLSLTranslator {
         let pFrag = materialCount > 0 ? ",\n                        constant float4* p [[buffer(0)]]" : ""
 
         var fragBody = fragBody
+        // 프리멀티플라이 주입. 종전엔 `return gl_FragColor;` 리터럴 치환 하나뿐이었는데, 그 리터럴은
+        // translateBody 가 **본문에 gl_FragColor 가 있을 때만** 만들어 붙인다(:1465 근처). 즉
+        // `return vec4(...)` 로 직접 반환하는 셰이더에서는 이 블록이 조용히 무연산이었고 tint·premult
+        // 가 통째로 빠졌다. 두 모양 모두 처리한다 — gl_FragColor 형은 검증된 기존 치환 그대로,
+        // 직접 반환형은 본문의 `return <식>;` 을 we_premultiply 로 감싼다(의미 동일).
+        var premulHelper = ""
         if premultiplyOutput {
-            fragBody = fragBody.replacingOccurrences(
-                of: "return gl_FragColor;",
-                with: """
-                gl_FragColor.rgb *= eng.layerTint.rgb;
-                gl_FragColor.a *= eng.layerTint.a;
-                return float4(gl_FragColor.rgb * gl_FragColor.a, gl_FragColor.a);
-                """)
+            premulHelper = """
+            // premultiplyOutput 전용: 레이어 tint 적용 후 alpha 프리멀티플라이(위 gl_FragColor 경로와 동일 식).
+            inline float4 we_premultiply(float4 c, float4 tint) {
+                float3 rgb = c.rgb * tint.rgb;
+                float a = c.a * tint.a;
+                return float4(rgb * a, a);
+            }
+
+            """
+            if fragBody.contains("return gl_FragColor;") {
+                fragBody = fragBody.replacingOccurrences(
+                    of: "return gl_FragColor;",
+                    with: """
+                    gl_FragColor.rgb *= eng.layerTint.rgb;
+                    gl_FragColor.a *= eng.layerTint.a;
+                    return float4(gl_FragColor.rgb * gl_FragColor.a, gl_FragColor.a);
+                    """)
+            } else {
+                fragBody = premultiplyReturns(fragBody)
+            }
         }
 
         let vertSig = """
@@ -1779,7 +1863,54 @@ public enum GLSLTranslator {
         let constBlock = consts.isEmpty ? "" : consts.joined(separator: "\n") + "\n"
         let protoBlock = helperProtos.isEmpty ? "" : helperProtos.joined(separator: "\n") + "\n"
         let defBlock = helperDefs.isEmpty ? "" : helperDefs.joined(separator: "\n\n") + "\n"
-        return "#include <metal_stdlib>\nusing namespace metal;\n\(structBlock)\(eng)\(vin)\(vary)\(uvHelpers)\(constBlock)\(protoBlock)\(defBlock)\n\(vertSig)\n\n\(fragSig)\n"
+        return "#include <metal_stdlib>\nusing namespace metal;\n\(structBlock)\(eng)\(vin)\(vary)\(uvHelpers)\(premulHelper)\(constBlock)\(protoBlock)\(defBlock)\n\(vertSig)\n\n\(fragSig)\n"
+    }
+
+    /// fragment main 본문의 `return <식>;` 을 `return we_premultiply(<식>, eng.layerTint);` 로 감싼다.
+    /// gl_FragColor 를 쓰지 않고 vec4 를 직접 반환하는 셰이더용(premultiplyOutput 경로 전용).
+    /// - 본문은 main 한 함수분이다(헬퍼는 helperDefs 로 따로 방출) — 다른 함수의 return 을 건드리지 않는다.
+    /// - `returnValue` 같은 식별자 오인 방지: `return` 뒤 문자가 식별자 문자면 건너뛴다.
+    /// - 값 없는 `return;`(있을 수 없지만 방어)은 감싸지 않는다.
+    static func premultiplyReturns(_ src: String) -> String {
+        let chars = Array(src)
+        var out = ""
+        var i = 0
+        let kw = "return"
+        while i < chars.count {
+            if chars[i] == "r", isWordStart(chars, i), i + kw.count <= chars.count,
+               String(chars[i..<i + kw.count]) == kw {
+                var j = i + kw.count
+                let boundary: Bool
+                if j < chars.count {
+                    let c = chars[j]
+                    boundary = !(c.isLetter || c.isNumber || c == "_")
+                } else {
+                    boundary = true
+                }
+                if boundary {
+                    var depth = 0
+                    var expr = ""
+                    var terminated = false
+                    while j < chars.count {
+                        let c = chars[j]
+                        if c == "(" || c == "[" { depth += 1 }
+                        if c == ")" || c == "]" { depth -= 1 }
+                        if c == ";" && depth == 0 { terminated = true; break }
+                        expr.append(c)
+                        j += 1
+                    }
+                    let trimmed = expr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if terminated && !trimmed.isEmpty {
+                        out += "return we_premultiply(\(trimmed), eng.layerTint);"
+                        i = j + 1
+                        continue
+                    }
+                }
+            }
+            out.append(chars[i])
+            i += 1
+        }
+        return out
     }
 
     private static func indent(_ s: String) -> String {

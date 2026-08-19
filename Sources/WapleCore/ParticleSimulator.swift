@@ -275,7 +275,10 @@ public struct ParticleSimulator {
                 if e.burst > 0, wasEmpty {
                     // ponytail: 전멸 시 재버스트 루프 — 실 WE 는 자식(eventfollow) 트리거가 주 용법,
                     // Stage B(children)에서 트리거 발화로 대체 예정.
-                    for _ in 0..<min(e.burst, def.maxCount - particles.count) {
+                    // max(0, …): periodicEnterOn(:539)의 동형 식과 맞춘다 — particles.count 가
+                    // def.maxCount 를 넘은 순간(자식 병합·인스턴스 오버라이드로 상한이 줄어든 경우)
+                    // 우변이 음수가 되고 `0..<음수` 는 Range 생성에서 곧바로 트랩한다.
+                    for _ in 0..<max(0, min(e.burst, def.maxCount - particles.count)) {
                         particles.append(spawn(e, index: i))
                     }
                 }

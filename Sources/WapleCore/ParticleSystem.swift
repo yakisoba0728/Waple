@@ -364,7 +364,12 @@ public struct ParticleMaterial: Equatable {
         let names = (p0["textures"] as? [Any])?.compactMap { $0 as? String } ?? []
         let albedo = names.first(where: { !$0.isEmpty })
         // combos.REFRACT==1 + textures[1] 노멀맵 + constantshadervalues.ui_editor_properties_refract_amount.
-        let refract = ((p0["combos"] as? [String: Any])?["REFRACT"] as? NSNumber)?.intValue == 1
+        // 콤보 값은 이 파일의 pint 로 읽는다(종전 `as? NSNumber`.intValue 직접 캐스트 — 헬퍼 우회).
+        // 파티클 규약은 **문자열 스칼라 거부·언랩 없음**(:1115 헬퍼 주석)이라 pint = strictInt 를 쓴다 —
+        // 씬 경로(SceneDocument 의 intVal)처럼 "1" 을 받아주지 않는 것은 이 파일의 의도된 계약이다.
+        var refractComboRaw: Any? = nil
+        if let combos = p0["combos"] as? [String: Any] { refractComboRaw = combos["REFRACT"] }
+        let refract = pint(refractComboRaw) == 1
         let normalName = (names.count > 1 && !names[1].isEmpty) ? names[1] : nil
         var refractAmount = pfloat((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
         // C⑦a: usershadervalues — {JSON 키=user property 키, JSON 값=셰이더 상수 토큰}(SceneDocument
@@ -1054,9 +1059,19 @@ public struct ParticleSystemDef: Equatable {
                     WapleLog.warn("[Waple] particle child unknown type '\(other ?? "")' → follow 취급: \(path)")
                     trigger = .follow
                 }
+                // 자식 maxInstances 에도 루트 maxCount 와 **같은 상한**을 건다(:1032-1037).
+                // 루트는 음수 0 클램프 + 65536 상한으로 CPU 시뮬을 묶어두는데 이 자리만 pint 원값을
+                // 그대로 썼다 — 자식 인스턴스는 스폰된 부모 파티클 하나당 ParticleSimulator 를 통째로
+                // 하나씩 할당하므로(ParticleSimulator:305) 루트 파티클 한 개보다 훨씬 비싼 단위인데
+                // 상한이 없었다. 새 한계를 발명하지 않고 루트와 같은 값을 쓰고, 잘리면 로그를 남긴다.
+                let rawMaxInstances = max(0, pint(c["maxcount"]) ?? (trigger == .always ? 1 : maxCount))
+                let maxInstances = min(65536, rawMaxInstances)
+                if maxInstances != rawMaxInstances {
+                    WapleLog.warn("[Waple] particle child maxcount \(rawMaxInstances) → \(maxInstances) 클램프: \(path)")
+                }
                 children.append(ChildLink(
                     def: childDef, trigger: trigger,
-                    maxInstances: pint(c["maxcount"]) ?? (trigger == .always ? 1 : maxCount),
+                    maxInstances: maxInstances,
                     probability: pfloat(c["probability"]) ?? 1,
                     origin: pvec3(c["origin"]) ?? Vec3(x: 0, y: 0, z: 0)))
             }
