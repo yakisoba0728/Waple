@@ -77,7 +77,48 @@ jobs:
       # 배포되는 구성 그대로를 먼저 세운다 — 테스트 플래그가 섞이지 않은 상태.
       # release 에서 이 스텝이 곧 "출하 바이너리가 컴파일되는가" 의 답이다.
       - name: Build (sources)
-        run: swift build -c ${{ matrix.configuration }}
+        run: |
+          set -o pipefail
+          swift build -c ${{ matrix.configuration }} 2>&1 | tee build-output.log
+
+      # [2026-08-19] 엄격 동시성 전환의 작업 목록을 만든다.
+      #
+      # Package.swift 가 -strict-concurrency=complete 를 **경고로** 켜 뒀다(주석 참조).
+      # 경고는 빌드를 세우지 않으므로 그냥 두면 수천 줄 로그에 묻힌다 — 파일:행 단위로
+      # 세어 요약에 남기고, 전문은 아티팩트로 올려 다음 작업의 입력으로 쓴다.
+      # 이 숫자가 0 이 되면 언어 모드를 .v6 로 올릴 수 있다.
+      - name: Concurrency diagnostics census
+        if: always() && matrix.configuration == 'debug'
+        run: |
+          [ -f build-output.log ] || { echo "빌드 로그 없음"; exit 0; }
+          TOTAL=$(grep -c "warning:" build-output.log || true)
+          echo "### 엄격 동시성 진단 (${{ matrix.configuration }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "총 warning: \`${TOTAL:-0}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 건수 | 파일 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ---: | --- |" >> "$GITHUB_STEP_SUMMARY"
+          grep "warning:" build-output.log \
+            | sed -E 's|^/Users/runner/work/Waple/Waple/||; s|:[0-9]+:[0-9]+: warning:.*||' \
+            | sort | uniq -c | sort -rn | head -30 \
+            | awk '{printf "| %s | `%s` |\n", $1, $2}' >> "$GITHUB_STEP_SUMMARY" || true
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<details><summary>진단 종류별</summary>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -oE "warning: .*" build-output.log \
+            | sed -E "s/'[^']*'/'X'/g" \
+            | sort | uniq -c | sort -rn | head -25 >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build log
+        if: always() && matrix.configuration == 'debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-${{ matrix.configuration }}
+          path: build-output.log
+          if-no-files-found: ignore
 
       # 테스트 타깃은 위 matrix 주석의 이유로 release 에서만 플래그가 붙는다.
       # 그래서 release 는 라이브러리를 두 번 컴파일한다(플래그가 달라 재사용 불가) —
