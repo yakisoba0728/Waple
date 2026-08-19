@@ -699,7 +699,7 @@ extension SceneRenderer {
             shaderName = mp0["shader"] as? String
             for (k, v) in (mp0["combos"] as? [String: Any]) ?? [:] {
                 if let n = v as? Int { matCombos[k] = n }
-                else if let d = v as? Double { matCombos[k] = Int(d) }
+                else if let d = v as? Double, let n = safeInt(d) { matCombos[k] = n }
             }
             if let texs = mp0["textures"] as? [Any] { matTextures = texs.map { $0 as? String } }
         }

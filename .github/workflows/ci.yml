@@ -248,6 +248,13 @@ jobs:
           python3 scripts/spec/tests/test_validate.py
           python3 scripts/spec/tests/test_rosetta.py
 
+      # 신뢰 경계 밖(.pkg / scene.json / project.json) 숫자의 정수 좁힘이 가드를 건너뛰면 실패한다.
+      # Swift 의 Int(Float)·Int32(Int) 는 범위 밖에서 클램프가 아니라 **트랩**이라, 가드 없는
+      # 한 줄이면 워크샵 배경화면 하나가 앱을 죽인다. 2026-08-19 스윕에서 13곳이 나왔다.
+      # 스크립트 자체의 음성 대조(가드를 풀면 정말 실패하는지)는 doc 주석 참조.
+      - name: Untrusted int narrowing guards
+        run: python3 scripts/spec/check_int_narrowing.py
+
       # 동봉 에셋이 매니페스트와 어긋나면 실패한다.
       #
       # measure_assets.py 를 돌려 git diff 로 보는 방법은 쓰지 않는다 — 그 스크립트의

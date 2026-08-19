@@ -764,6 +764,43 @@ final class SceneDocumentTests: XCTestCase {
         XCTAssertNil(effect.constants["bad"])
     }
 
+    /// 위 테스트가 덮지 못한 **정수·문자열** 경로.
+    ///
+    /// `1e300` 은 Double 이라 `lenientInt` → `safeInt` 에서 이미 걸렸다. 그런데 JSON 이
+    /// `2147483648`(Int) 이나 `"99999999999"`(문자열)로 주면 `lenientInt` 는 그대로 통과시키고,
+    /// 소비처인 `SceneRendererFrameEncoder:1450/:1629` 의 `Int32(...)` 좁힘에서 **트랩**했다.
+    /// 유효 범위는 `common_blending.h` ApplyBlending enum 의 0…32 뿐이다.
+    func testColorBlendModeOutOfRangeFallsBackToNormal() throws {
+        func mode(_ raw: String) throws -> Int {
+            let scene = """
+            {"general":{"orthogonalprojection":{"width":100,"height":100},"clearcolor":"0 0 0"},
+             "objects":[{"image":"models/x.json","id":1,"colorBlendMode":\(raw),
+                         "origin":"50 50 0","size":"10 10","visible":{"value":true}},
+                        {"text":"T","colorBlendMode":\(raw),"origin":"0 0 0","visible":{"value":true}}]}
+            """
+            let p = try pkg([("scene.json", scene), ("models/x.json", model), ("materials/m.json", material)])
+            let doc = try SceneDocument.parse(package: p)
+            let l = try XCTUnwrap(doc.layers.first).colorBlendMode
+            let t = try XCTUnwrap(doc.texts.first).colorBlendMode
+            XCTAssertEqual(l, t, "이미지·텍스트 두 소비처가 같은 파스 규약을 써야 한다(raw \(raw))")
+            return l
+        }
+        // Int32 를 넘는 정수 — 종전 트랩 지점.
+        XCTAssertEqual(try mode("2147483648"), 0)
+        XCTAssertEqual(try mode("-2147483649"), 0)
+        XCTAssertEqual(try mode("9223372036854775807"), 0)
+        // 문자열 숫자(실물 씬이 숫자를 문자열로 싣는 사례 — intVal 주석 참조).
+        XCTAssertEqual(try mode("\"99999999999\""), 0)
+        // Int32 안이지만 enum 밖 — 셰이더 switch default 로 새는 대신 파스에서 정규화한다.
+        XCTAssertEqual(try mode("33"), 0)
+        XCTAssertEqual(try mode("-1"), 0)
+        // 유효 범위는 그대로 보존돼야 한다(정규화가 정상 값을 먹으면 안 된다).
+        XCTAssertEqual(try mode("0"), 0)
+        XCTAssertEqual(try mode("2"), 2)
+        XCTAssertEqual(try mode("32"), 32)
+        XCTAssertEqual(try mode("\"18\""), 18, "문자열이어도 유효 범위면 통과")
+    }
+
     /// cameraparallax 가 {"user","value"} 바인딩 dict 인 씬(실물 21씬) — value 언랩해 활성화.
     func testCameraParallaxUserBindingDict() throws {
         let scene = """

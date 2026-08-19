@@ -28,7 +28,15 @@ func safeFloat(_ s: String) -> Float? {
     return f
 }
 /// Double → Int. 비유한·Int 범위 밖이면 nil.
-func safeInt(_ d: Double) -> Int? {
+///
+/// **모듈 밖으로 연 이유**(F530-sweep): 신뢰 경계 밖 JSON 숫자를 정수로 좁히는 자리가
+/// WapleRender·WapleCompat 에도 12곳 있었는데, 가드가 WapleCore 안에만 있어서 전부
+/// 맨 `Int()`/`Int32()` 를 썼다. Swift 의 `Int(Float)` 는 범위를 넘으면 클램프가 아니라
+/// **트랩**이므로 워크샵 콘텐츠가 프로세스를 죽일 수 있었다.
+/// 헬퍼를 하나 더 만드는 대신 이 정본 하나로 모으는 게 핵심이다 — 스윕이 확인한
+/// 지배적 실패 방식은 "가드가 없다" 가 아니라 "가드가 넷인데 아무도 안 거친다" 였다.
+/// 새로 좁히는 자리는 `scripts/spec/check_int_narrowing.py` 가 CI 에서 막는다.
+public func safeInt(_ d: Double) -> Int? {
     guard d.isFinite, d >= Double(Int.min), d < Double(Int.max) else { return nil }
     return Int(d)
 }

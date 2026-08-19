@@ -54,6 +54,45 @@ final class SceneIntegrationFixTests: XCTestCase {
                                                   frameCount: 4, mode: .sequence, seqMul: 1), 3)
     }
 
+    /// F530-sweep: **유한하지만 Int 범위를 넘는** 입력.
+    ///
+    /// 위 guards 테스트는 비유한(`.infinity`/`.nan`)만 덮었다. 종전 구현은 `guard v.isFinite`
+    /// 뒤에 맨 `Int(v)` 를 썼는데, Swift 의 `Int(Float)` 는 범위를 넘으면 클램프가 아니라
+    /// **트랩**이다 — `"sequencemultiplier": 1e19` 한 줄로 워크샵 배경화면이 앱을 죽였다.
+    /// 이 함수는 쿼드(`:123`)·로프(`:262`) 두 경로에서 **매 프레임** 불린다.
+    ///
+    /// 3D 형제(`SceneRenderer3D.swift` 파티클 frametime 폴터)도 같은 가드를 받았으나
+    /// 렌더 루프 내부라 여기서 직접 부를 수 없다 — 회귀는 이 테스트가 대표한다.
+    func testF530ParticleSheetFrameIndex_survivesFiniteButOutOfRangeInput() {
+        // sequence 경로: age/lifetime × fc × seqMul 이 Float(Int.max) 를 넘는다.
+        for mul in [Float(1e19), 1e30, .greatestFiniteMagnitude] {
+            XCTAssertEqual(
+                SceneRenderer.particleSheetFrameIndex(age: 0.5, lifetime: 1, frameTime: 0.1,
+                                                      frameCount: 2, mode: .sequence, seqMul: mul), 0,
+                "seqMul \(mul): 트랩 대신 프레임 0 폴백이어야 한다")
+        }
+        // frametime 폴터 경로: age 자체가 거대하거나 비유한. mode 가 nil 이면 종전엔
+        // isFinite 가드조차 없었다 — `.infinity` 는 sequence 경로에서만 막혔다.
+        for age in [Float(1e30), .greatestFiniteMagnitude, .infinity, .nan] {
+            XCTAssertEqual(
+                SceneRenderer.particleSheetFrameIndex(age: age, lifetime: 1, frameTime: 0.1,
+                                                      frameCount: 4, mode: nil, seqMul: 1), 0,
+                "age \(age): frametime 폴터도 트랩 대신 0 이어야 한다")
+        }
+        // 음수 age(시뮬 이상치)도 인덱스 음수를 만들지언정 죽지 않는다.
+        XCTAssertEqual(
+            SceneRenderer.particleSheetFrameIndex(age: -1e30, lifetime: 1, frameTime: 0.1,
+                                                  frameCount: 4, mode: nil, seqMul: 1), 0)
+
+        // 대조군: 가드를 넣으면서 **절사 규약이 반올림으로 바뀌지 않았는지**.
+        // 같은 파일의 safeFloatToInt 는 `.rounded()` 라 여기 쓰면 프레임이 한 칸 밀린다.
+        // 0.7×4×1 = 2.8 → 절사 2 (반올림이면 3).
+        XCTAssertEqual(
+            SceneRenderer.particleSheetFrameIndex(age: 0.7, lifetime: 1, frameTime: 0.1,
+                                                  frameCount: 4, mode: .sequence, seqMul: 1), 2,
+            "절사 규약이 반올림으로 바뀌었다 — 모든 스프라이트 애니가 한 프레임씩 밀린다")
+    }
+
     // MARK: - F742(S-19): dependencies depLater — 의존 타깃을 의존자 직전으로 이동
 
     private func layer(id: Int, order: Int, dependencies: [Int] = []) -> SceneLayer {

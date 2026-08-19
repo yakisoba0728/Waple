@@ -798,28 +798,28 @@ extension SceneRenderer {
             // combos.LIGHTING==0 → unlit(풀브라이트 albedo, generic4.frag:124-125). WE 기본 LIGHTING=1(lit). 키 대소문자 무시(2D SceneDocument:646 규약).
             if let combos = p0["combos"] as? [String: Any] {
                 if let v = combos.first(where: { $0.key.lowercased() == "lighting" })?.value {
-                    unlit = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 1) == 0
+                    unlit = ((v as? Int) ?? (v as? Double).flatMap { safeInt($0) } ?? 1) == 0
                 }
                 // F274(폐기 취소 — 실코퍼스 3470948192/3706286085 발화 확정): RIMLIGHTING/SHADINGGRADIENT
                 // 콤보 게이트. 둘 다 기본 0(WE 콤보 선언 default:0), require LIGHTING:1 이나 그 요건은
                 // generic4.frag 콤보 자체가 강제하므로 여기선 단순 플래그만 뽑는다(unlit 이면 셰이더가
                 // 라이팅 루프 전체를 스킵해 자연히 무효과).
                 if let v = combos.first(where: { $0.key.lowercased() == "rimlighting" })?.value {
-                    rimLighting = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                    rimLighting = ((v as? Int) ?? (v as? Double).flatMap { safeInt($0) } ?? 0) != 0
                 }
                 if let v = combos.first(where: { $0.key.lowercased() == "shadinggradient" })?.value {
-                    shadingGradient = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                    shadingGradient = ((v as? Int) ?? (v as? Double).flatMap { safeInt($0) } ?? 0) != 0
                 }
                 if let v = combos.first(where: { $0.key.lowercased() == "fog" })?.value {
-                    foggy = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 1) != 0
+                    foggy = ((v as? Int) ?? (v as? Double).flatMap { safeInt($0) } ?? 1) != 0
                 }
                 // H4: REFRACT 콤보(2D SceneDocument:1083 과 동일 게이트 — 콤보 1 + textures[1] 노멀맵).
                 if let v = combos.first(where: { $0.key.lowercased() == "refract" })?.value {
-                    refract = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                    refract = ((v as? Int) ?? (v as? Double).flatMap { safeInt($0) } ?? 0) != 0
                 }
                 // M6(⑥): REFLECTION 콤보(WE 기본 0 — generic4.frag:3 [COMBO] default:0).
                 if let v = combos.first(where: { $0.key.lowercased() == "reflection" })?.value {
-                    reflection = ((v as? Int) ?? (v as? Double).map { Int($0) } ?? 0) != 0
+                    reflection = ((v as? Int) ?? (v as? Double).flatMap { safeInt($0) } ?? 0) != 0
                 }
             }
             // 셰이더 이름을 같이 넘긴다 — `generic`/`generic2` 는 상수 키(`Rough`/`Metal`)도 기본값(둘 다 0)도
@@ -856,7 +856,7 @@ extension SceneRenderer {
             if let combos = p0["combos"] as? [String: Any] {
                 for (k, v) in combos {
                     if let i = v as? Int { customCombos[k] = i }
-                    else if let d = v as? Double { customCombos[k] = Int(d) }
+                    else if let d = v as? Double, let n = safeInt(d) { customCombos[k] = n }
                 }
             }
             if let csv = p0["constantshadervalues"] as? [String: Any] {
@@ -2220,7 +2220,8 @@ extension SceneRenderer {
                     let rate = sys.def.sequenceMultiplier.isFinite ? max(0, sys.def.sequenceMultiplier) : 0
                     fi = sheetFrameIndex(sequence: t * Float(fc) * rate, frameCount: fc, mirror: false)
                 }
-                else { fi = Int(p.age / max(0.016, sys.frames[0].time)) % fc }
+                // F530-sweep: 2D 형제(SceneRendererFrameEncoder.particleSheetFrameIndex)와 동일 가드.
+                else { fi = safeInt(Double(p.age / max(0.016, sys.frames[0].time))).map { $0 % fc } ?? 0 }
                 let fr = sys.frames[max(0, min(fc - 1, fi))]
                 let tw = Float(max(1, sys.texture.width)), th = Float(max(1, sys.texture.height))
                 let u0 = fr.atlasX / tw, v0 = fr.atlasY / th

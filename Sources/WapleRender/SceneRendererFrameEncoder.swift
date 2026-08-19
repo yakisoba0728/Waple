@@ -1447,7 +1447,7 @@ extension SceneRenderer {
             // colorBlendMode: 스냅샷 dst 대비 셰이더 블렌드(f_blend). 스냅샷 없으면 일반 합성 폴백.
             enc.setRenderPipelineState(near ? blendNearestPipeline ?? blendPipeline : blendPipeline)
             enc.setFragmentTexture(blendSnapshot, index: 1)
-            var mode = Int32(layer.colorBlendMode)
+            var mode = Int32(clamping: layer.colorBlendMode)  // F530-sweep: 범위 밖은 트랩이 아니라 포화(파스에서 이미 0 정규화, 여기는 이중 방어)
             enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
         } else if layer.isFrameBuffer, let composePipeline {
             // 컴포지션(_rt_FullFrameBuffer): texture=프레임버퍼 스냅샷을 화면좌표로 샘플(f_compose).
@@ -1626,7 +1626,7 @@ extension SceneRenderer {
             enc.setFragmentTexture(tex, index: 0)
             enc.setFragmentBytes(&tint, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
             enc.setFragmentTexture(blendSnapshot, index: 1)
-            var mode = Int32(t.def.colorBlendMode)
+            var mode = Int32(clamping: t.def.colorBlendMode)  // F530-sweep: 이미지 레이어(:1450)와 동형
             enc.setFragmentBytes(&mode, length: MemoryLayout<Int32>.stride, index: 1)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
             return
@@ -1754,10 +1754,15 @@ extension SceneRenderer {
             let m = seqMul.isFinite ? max(0, seqMul) : 1
             guard m > 0 else { return 0 }
             let v = age / lifetime * Float(fc) * m
-            guard v.isFinite else { return 0 }
-            return Int(v) % fc
+            // F530-sweep: 유한성만으로는 부족하다 — `sequencemultiplier: 1e19` 처럼 **유한하지만
+            // Int 범위를 넘는** 값에서 `Int(v)` 는 클램프가 아니라 트랩이었다(매 프레임 경로).
+            // safeFloatToInt(:1766)는 반올림 규약이라 여기 쓸 수 없다(프레임 인덱스는 절사).
+            guard let iv = safeInt(Double(v)) else { return 0 }
+            return iv % fc
         }
-        return Int(age / max(0.016, ft)) % fc
+        // 같은 트랩이 frametime 폴터에도 있었다(age 가 비유한이거나 거대하면 사망).
+        guard let iv = safeInt(Double(age / max(0.016, ft))) else { return 0 }
+        return iv % fc
     }
 
     /// F530(F-2/F-70): 유한하지만 Int 범위를 넘는 float 의 Int() 변환은 클램프 전에 트랩 — 비신뢰
