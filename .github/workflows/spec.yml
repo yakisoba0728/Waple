@@ -52,6 +52,15 @@ jobs:
       - name: Untrusted int narrowing guards
         run: python3 scripts/spec/check_int_narrowing.py
 
+      # 이 리포는 GLSL/MSL/JS 를 Swift 다중행 문자열 리터럴에 통째로 싣는다
+      # (TextScriptEngine.shims 880행, Mesh3DShaders.source, EffectShaders.frags …).
+      # 거기에 정규식을 그대로 붙여 넣으면 `\s` 가 **Swift 의 잘못된 이스케이프**가 되어
+      # 컴파일이 깨진다. JS 쪽에선 완벽히 정상인 코드라 눈으로 안 보이고, macOS 러너에서만
+      # 잡혀 왕복이 한 번 더 든다 — 2026-08-19 에 이 사고를 연달아 두 번 냈다.
+      # 스크립트는 실행 때마다 자기 음성 대조(--selftest)를 먼저 돌린다.
+      - name: Swift string-literal escapes
+        run: python3 scripts/spec/check_swift_escapes.py
+
       # 동봉 에셋이 매니페스트와 어긋나면 실패한다.
       #
       # measure_assets.py 를 돌려 git diff 로 보는 방법은 쓰지 않는다 — 그 스크립트의
