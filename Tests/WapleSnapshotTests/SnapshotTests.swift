@@ -87,25 +87,64 @@ final class SnapshotTests: XCTestCase {
 
     /// 어두운 씬을 전면 검정으로 바꾸면 잡혀야 한다.
     /// 종전 절대 임계만으로는 3종이 통과했다(spec/golden/gate-analysis.json).
+    ///
+    /// **[2026-08-19] 이 테스트는 종전에 자기 산수를 단언했다.** 판정 수식(`rel`/`structureLoss`)을
+    /// 리터럴로 재구현해 놓고 그 재구현을 확인했기 때문에, `SnapshotCompare` 의 프로덕션 로직을
+    /// 통째로 지워도 통과했다. 원인은 모듈 경계였다 — 판정이 `WapleCompat`(executableTarget)의
+    /// 함수 내부 지역 상수라 테스트가 닿을 수단이 없었다. 이제 `WapleSnapshot.goldenVerdict` 로
+    /// 올라갔으므로 **프로덕션 심볼을 직접** 부른다.
     func testBlackoutOfDarkSceneIsCaught() {
         // 기준선 meanLuma 0.0034 인 씬을 전면 검정으로: 평균 절대차 ≈ 0.87
         let m = DiffMetrics(meanAbsDiff: 0.87, maxAbsDiff: 3, fracExceeding: 0.0)
         XCTAssertTrue(passes(m, .strict), "절대 임계만으로는 통과한다(종전 동작)")
-        // 리터럴만으로는 `<` 오버로드가 모호해 타입체커가 거부한다 — 타입을 명시한다.
-        let baseLuma: Double = 0.0034      // 기준선 meanLuma
-        let meanAbs: Double = 0.87         // 전면 검정 시 평균 절대차
-        let rel = meanAbs / (max(baseLuma, 0.02) * 255.0)
-        let structureLoss = baseLuma < 0.02 && meanAbs > baseLuma * 255.0 * 0.5
-        XCTAssertTrue(structureLoss, "구조 소실 판정이 이걸 잡아야 한다")
-        _ = rel
+
+        let v = goldenVerdict(m, baselineMeanLuma: 0.0034, deterministic: true)
+        XCTAssertTrue(v.structureLoss, "구조 소실 판정이 이걸 잡아야 한다")
+        XCTAssertFalse(v.pass, "절대 임계를 통과해도 최종 판정은 FAIL 이어야 한다")
     }
 
     /// 밝은 씬의 미세 인코딩 노이즈는 통과해야 한다(오탐 방지).
     func testMinorNoiseOnBrightSceneStillPasses() {
         let m = DiffMetrics(meanAbsDiff: 0.4, maxAbsDiff: 3, fracExceeding: 0.0005)
-        let rel = 0.4 / (max(0.39, 0.02) * 255.0)   // median 밝기 씬
         XCTAssertTrue(passes(m, .strict))
-        XCTAssertLessThanOrEqual(rel, 0.05)
+        let v = goldenVerdict(m, baselineMeanLuma: 0.39, deterministic: true)   // median 밝기 씬
+        XCTAssertLessThanOrEqual(v.relDiff, goldenRelativeTolerance)
+        XCTAssertFalse(v.structureLoss)
+        XCTAssertTrue(v.pass, "밝은 씬의 미세 노이즈를 FAIL 로 잡으면 오탐이다")
+    }
+
+    /// 판정 분기 전수 — 이 테스트가 `goldenVerdict` 의 **각 항이 실제로 판정에 관여하는지**를
+    /// 고정한다. 하나를 지워도 위 두 테스트는 통과할 수 있으므로 따로 건다.
+    func testGoldenVerdictBranches() {
+        // ① 완전 동일: 다른 항을 볼 것도 없이 통과.
+        let identical = goldenVerdict(DiffMetrics(meanAbsDiff: 0, maxAbsDiff: 0, fracExceeding: 0),
+                                      baselineMeanLuma: 0.001, deterministic: true)
+        XCTAssertTrue(identical.identical)
+        XCTAssertTrue(identical.pass, "maxAbsDiff==0 이면 어떤 임계와도 무관하게 통과해야 한다")
+
+        // ② 상대 편차 초과 — 절대 임계는 통과하지만 어두운 씬이라 상대비가 터진다.
+        let relative = goldenVerdict(DiffMetrics(meanAbsDiff: 1.4, maxAbsDiff: 5, fracExceeding: 0.001),
+                                     baselineMeanLuma: 0.05, deterministic: true)
+        XCTAssertTrue(passes(DiffMetrics(meanAbsDiff: 1.4, maxAbsDiff: 5, fracExceeding: 0.001), .strict),
+                      "절대 임계로는 통과하는 입력이어야 대조가 성립한다")
+        XCTAssertGreaterThan(relative.relDiff, goldenRelativeTolerance)
+        XCTAssertFalse(relative.pass, "상대 편차 초과가 판정에 반영되지 않았다")
+
+        // ③ 비결정 씬은 관대 임계(.lax)를 쓴다 — 같은 입력이 deterministic 여부로 갈려야 한다.
+        // 8.0 이면 relDiff 가 0.0523 이라 허용치 0.05 를 아슬하게 넘어 비결정 씬도 FAIL 이 된다
+        // (손계산으로 확인). 7.0 이면 relDiff 0.0458 로 상대 항은 통과하고 **절대 임계만** 갈린다 —
+        // deterministic 인자 하나만 검사하는 대조가 되려면 그래야 한다.
+        let noisy = DiffMetrics(meanAbsDiff: 7.0, maxAbsDiff: 40, fracExceeding: 0.05)
+        XCTAssertFalse(goldenVerdict(noisy, baselineMeanLuma: 0.6, deterministic: true).pass,
+                       "결정 씬은 strict 로 걸러야 한다")
+        XCTAssertTrue(goldenVerdict(noisy, baselineMeanLuma: 0.6, deterministic: false).pass,
+                      "비결정 씬은 lax 로 통과해야 한다 — deterministic 인자가 무시되고 있다")
+
+        // ④ 밝기 하한: meanLuma 가 하한보다 크면 structureLoss 는 성립하지 않는다.
+        let bright = goldenVerdict(DiffMetrics(meanAbsDiff: 200, maxAbsDiff: 255, fracExceeding: 1.0),
+                                   baselineMeanLuma: goldenDarkLumaFloor + 0.01, deterministic: true)
+        XCTAssertFalse(bright.structureLoss, "밝기 하한 위에서는 structureLoss 가 꺼져야 한다")
+        XCTAssertFalse(bright.pass, "그래도 절대·상대 임계로 FAIL 이어야 한다")
     }
 
     // MARK: 해시 / luma

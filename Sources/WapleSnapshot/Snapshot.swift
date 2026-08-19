@@ -155,3 +155,54 @@ public func meanLuma(rgba: [UInt8]) -> Double {
     }
     return sum / Double(n / 4) / 255.0
 }
+
+// MARK: - 골든 판정
+
+/// 골든 비교 한 씬의 판정 결과.
+///
+/// **이 로직이 여기 있는 이유는 모듈 경계 때문이다.** 원래는
+/// `Sources/WapleCompat/SnapshotCompare.swift` 의 `runCompare` **안 지역 상수**였는데,
+/// `WapleCompat` 은 `.executableTarget` 이라 어떤 테스트 타깃도 의존할 수 없다
+/// (`grep -rn "import WapleCompat" Tests/` = 0건). 그래서 `SnapshotTests` 는 수식을
+/// 리터럴로 **베껴 자기 산수를 단언**했고 — 프로덕션 로직을 통째로 지워도 통과했다.
+/// 라이브러리 타깃인 여기로 올려서 테스트가 프로덕션 심볼을 직접 부른다.
+public struct GoldenVerdict: Equatable {
+    /// 픽셀이 완전 동일(maxAbsDiff == 0) — diff 를 볼 것도 없이 통과.
+    public let identical: Bool
+    /// 기준선 밝기로 정규화한 상대 편차. 절대 임계(strict 1.5/255)가 어두운 씬에서
+    /// 무력한 것을 보완한다(spec/golden/gate-analysis.json).
+    public let relDiff: Double
+    /// 아주 어두운 씬의 "구조가 사라졌는가". 절대·상대가 둘 다 둔한 구간을 맡는다.
+    public let structureLoss: Bool
+    public let pass: Bool
+}
+
+/// 상대 편차 허용치. 이보다 크면 FAIL.
+public let goldenRelativeTolerance: Double = 0.05
+
+/// 상대비 분모의 밝기 하한(= luma 5/255). 이보다 어두우면 상대비가 발산해 오탐이 되므로,
+/// 그 구간은 `structureLoss` 가 맡는다.
+public let goldenDarkLumaFloor: Double = 0.02
+
+/// 한 씬의 골든 통과 여부. `WapleCompat` 의 비교기와 `WapleSnapshotTests` 가 **같은 코드**를 쓴다.
+///
+/// - Parameters:
+///   - m: 기준선 대 현재 캡처의 픽셀 diff.
+///   - baselineMeanLuma: 기준선 썸네일의 평균 휘도(0…1).
+///   - deterministic: 같은 빌드 2회 캡처가 자기-일관인 씬인가(비결정 씬은 관대 임계).
+public func goldenVerdict(_ m: DiffMetrics,
+                          baselineMeanLuma: Double,
+                          deterministic: Bool) -> GoldenVerdict {
+    // ① 해시 동일이면 픽셀이 완전히 같다.
+    let identical = m.maxAbsDiff == 0
+    // ② 절대 임계는 어두운 씬에서 무력하다 — 기준선 meanLuma 로 정규화한 상대 지표를 함께 본다.
+    let relDiff = m.meanAbsDiff / (max(baselineMeanLuma, goldenDarkLumaFloor) * 255.0)
+    // ③ 아주 어두운 씬은 절대·상대 모두 둔하다 — 비검정 픽셀 비율의 급락으로 본다.
+    let structureLoss = baselineMeanLuma < goldenDarkLumaFloor
+        && m.meanAbsDiff > baselineMeanLuma * 255.0 * 0.5
+    let threshold: DiffThreshold = deterministic ? .strict : .lax
+    let pass = identical
+        || (passes(m, threshold) && relDiff <= goldenRelativeTolerance && !structureLoss)
+    return GoldenVerdict(identical: identical, relDiff: relDiff,
+                         structureLoss: structureLoss, pass: pass)
+}

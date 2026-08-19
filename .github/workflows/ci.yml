@@ -117,8 +117,28 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "</details>" >> "$GITHUB_STEP_SUMMARY"
 
+      # release 실패는 잡을 빨갛게 만들지 않는다(픽셀 분기가 정당한 실패를 낳는다).
+      # 그래도 **조용히 지나가서는 안 된다** — 실행 페이지 상단에 경고로 띄우고 요약에도 남긴다.
+      # 이게 없으면 초록 실행의 로그를 여는 사람이 없어 레인이 사실상 무의미해진다.
+      - name: Flag release-only failure
+        if: matrix.configuration == 'release' && steps.test.outcome == 'failure'
+        run: |
+          echo "::warning title=release 레인 테스트 실패::debug 는 통과했는데 release 가 실패했다 — 최적화 의존 결함(부동소수 재결합·경계 조건)일 수 있다. 이 잡은 설계상 초록으로 남는다."
+          {
+            echo "### ⚠️ release 전용 실패"
+            echo ""
+            echo "debug 레인과 달리 release 레인에서 테스트가 실패했다. 이 잡은 설계상 초록이지만"
+            echo "(두 구성은 픽셀이 갈린다) **최적화 의존 결함일 가능성**이 있으므로 확인이 필요하다."
+            echo ""
+            echo '```'
+            grep -E "error:|XCTAssert.*failed|failed \\(" test-output.log 2>/dev/null | head -25 || echo "(test-output.log 없음)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # release 빌드 로그도 올린다 — 이 레인의 존재 이유가 최적화 의존 결함인데
+      # 종전엔 debug 것만 올라와 정작 필요한 쪽 로그가 없었다.
       - name: Upload build log
-        if: always() && matrix.configuration == 'debug'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-output-${{ matrix.configuration }}
@@ -149,6 +169,14 @@ jobs:
       # 갈리므로, release 실패가 곧 회귀는 아니다. 그런데도 돌리는 이유는 release 에서만
       # 나는 최적화 의존 결함(부동소수 재결합, 경계 조건)이 실제로 있기 때문이다.
       # debug 는 그대로 차단 게이트로 둔다.
+      #
+      # [2026-08-19] 그런데 그 "보고" 가 실제로는 **아무 데도 보고하지 않고 있었다**.
+      # `continue-on-error` 스텝의 실패는 job conclusion 을 failure 로 만들지 않으므로
+      # 아래 `Show failure summary`(if: failure())가 release 레인에서는 **한 번도 실행되지
+      # 않았다**(실측: run 32218275170 · 32230929535 에서 debug 는 실행, release 는 skipped).
+      # 즉 최적화 의존 결함이 나와도 CI 는 통째로 초록이고, 매 푸시 macOS 러너 ~10분을 쓰면서
+      # 자동 검출은 0이었다. `continue-on-error` 자체는 위 근거대로 유지하되,
+      # `steps.test.outcome`(continue-on-error **이전**의 결과)으로 요약과 경고를 되살린다.
       - name: Test
         id: test
         continue-on-error: ${{ matrix.configuration == 'release' }}
@@ -183,7 +211,7 @@ jobs:
           echo "- skipped:  \`${SKIPPED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
-          # [2026-08-19] 트립와이어. 이제 정상 범위를 안다(실측 executed 2287 / skipped 46,
+          # [2026-08-19] 트립와이어. 이제 정상 범위를 안다(실측 executed 2292 / skipped 47,
           # run 32219037798 debug·release 양쪽).
           #
           # 막으려는 것은 **대량 무음 스킵**이다. XCTSkip("no Metal") 아래 테스트가 561개인데
@@ -195,8 +223,8 @@ jobs:
             exit 1
           fi
           # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          if [ "${EXECUTED:-0}" -lt 2287 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 2287 미만. 테스트가 사라졌다."
+          if [ "${EXECUTED:-0}" -lt 2292 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 2292 미만. 테스트가 사라졌다."
             exit 1
           fi
 
@@ -210,8 +238,10 @@ jobs:
           path: spec/golden/synthetic/
           if-no-files-found: warn
 
+      # `failure()` 만으로는 release 레인이 빠진다(위 Test 스텝 주석 참조).
+      # `steps.test.outcome` 은 continue-on-error 가 삼키기 **전**의 결과라 release 실패도 잡는다.
       - name: Show failure summary
-        if: failure()
+        if: failure() || steps.test.outcome == 'failure'
         run: |
           # 테스트까지 못 간 실패(빌드 단계)면 로그가 없다. 그때 이 스텝이 같이 죽으면
           # 잡의 실패 원인이 둘로 보여 진단이 흐려진다 — 없으면 그렇다고만 말하고 끝낸다.

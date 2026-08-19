@@ -77,20 +77,37 @@ T0=$SECONDS
 launchctl asuser "$(id -u)" env WAPLE_REAL_PKGS="$WAPLE_REAL_PKGS" \
     WAPLE_BASE_ASSETS="$WAPLE_BASE_ASSETS" \
     swift test -c release 2>&1 | tee "$OUT/full.log" | tail -20
-if grep -qE "with [1-9][0-9]* failures?" "$OUT/full.log"; then
-    bad "전 스위트 실패 — $OUT/full.log"
-    grep -E "error:|XCTAssert.*failed|with [1-9][0-9]* failures?" "$OUT/full.log" | head -20 | sed 's/^/      /'
-elif grep -qE "with 0 failures" "$OUT/full.log"; then ok "전 스위트 통과 ($((SECONDS-T0))초)"
+# [수정 2026-08-19] 이 절의 판정이 세 갈래로 틀려 있었다. 자매 스크립트 verify-plan-b12.sh 가
+# 2026-08-16 에 **똑같은 셋을 이미 고쳤는데**(그쪽 :119-148) 이 파일로 오지 않았다.
+#   (a) 실패 탐지 `grep -qE "with [1-9][0-9]* failures?"` 가 **스킵 동반 요약**을 못 잡는다.
+#       실제 형식은 "Executed 995 tests, with 7 tests skipped and 3 failures" 다.
+#       못 잡으면 다음 elif 로 떨어지고, 그 elif 는 로그 **아무 데서나** 다른 번들의
+#       "with 0 failures" 를 주워 `ok "전 스위트 통과"` 를 찍는다. 이 리포는 XCTSkip 을
+#       561개 테스트에 쓰므로 실패와 스킵이 한 번들에 같이 있는 상황이 실재한다.
+#   (b) 번들별 집계 정규식도 같은 형식을 빠뜨려 가장 큰 두 번들이 통째로 사라졌다.
+#   (c) 잘린 로그를 막을 수단이 없었다 — 통과 번들 하나만 남은 로그도 실패 0 이라 OK 가 된다.
+#       기대 번들 수를 Package.swift 에서 끌어와 대조한다(하드코딩하면 타깃이 늘 때 조용히 낡는다).
+BUNDLE_SUMMARY=$(grep -A1 -E "^Test Suite '[A-Za-z0-9_]+\.xctest' (passed|failed) at" \
+                 "$OUT/full.log" 2>/dev/null \
+                 | grep -oE "Executed [0-9]+ tests?, with ([0-9]+ tests? skipped and )?[0-9]+ failures?")
+NBUNDLE=$(printf '%s' "$BUNDLE_SUMMARY" | grep -c "Executed")
+NFAIL=$(printf '%s\n' "$BUNDLE_SUMMARY" | grep -oE "[0-9]+ failures?" \
+        | grep -oE "^[0-9]+" | awk '{s+=$1} END {print s+0}')
+TESTS=$(printf '%s\n' "$BUNDLE_SUMMARY" | grep -oE "Executed [0-9]+" \
+        | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
+NEXPECT=$(grep -cE '^[[:space:]]*\.testTarget' Package.swift)
+if [ "$NBUNDLE" -ne "$NEXPECT" ]; then
+    bad "번들 요약 $NBUNDLE 개 — Package.swift 의 testTarget $NEXPECT 개와 다르다. 스위트가 다 안 돌았거나 로그가 잘렸다 ($OUT/full.log)"
+    printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/      /'
+elif [ "$NFAIL" -ne 0 ]; then
+    bad "전 스위트 실패 — 번들 $NBUNDLE 개에서 실패 $NFAIL 건 ($OUT/full.log)"
+    grep -E "error:|XCTAssert.*failed|failed \(" "$OUT/full.log" | head -20 | sed 's/^/      /'
 else
-    bad "전 스위트 실패 — $OUT/full.log"
-    grep -E "error:|failed \(" "$OUT/full.log" | head -20 | sed 's/^/      /'
+    ok "전 스위트 통과 — 번들 $NBUNDLE 개, 실패 0 ($((SECONDS-T0))초)"
 fi
-# [수정 2026-08-01] 종전 합산은 클래스 단위 소계까지 더해 6411 로 부풀었다(실제 2,143).
-# 번들('*.xctest')의 "Test Suite ... passed/failed" 직후 줄만 센다.
 echo "  번들별:"
-grep -A1 -E "Test Suite '.*\.xctest'.*(passed|failed)" "$OUT/full.log" 2>/dev/null     | grep -oE "Executed [0-9]+ tests?, with [0-9]+ failures?" | sed 's/^/    /'
-TESTS=$(grep -A1 -E "Test Suite '.*\.xctest'.*(passed|failed)" "$OUT/full.log" 2>/dev/null     | grep -oE "Executed [0-9]+ tests?" | grep -oE "[0-9]+" | awk '{s+=$1} END {print s+0}')
-echo "  번들 합: ${TESTS:-?}  (기준 2,287 — 2026-08-19 CI 실측 run 32238272072, 코퍼스 유무 무관. 종전 2,270)"
+printf '%s\n' "$BUNDLE_SUMMARY" | sed 's/^/    /' 
+echo "  번들 합: ${TESTS:-?}  (기준 2,292 — 2026-08-19 CI 실측 run 32239978575, 코퍼스 유무 무관. 종전 2,270)"
 
 hr; echo "5. 골든 — **바뀌어야 할 씬만** 바뀌었는가"; hr
 PRE="${WAPLE_PRE_BASELINE:-}"
