@@ -142,11 +142,18 @@ struct Scene3DMaterialValues: Equatable {
 enum Scene3DLightKind: Float, Equatable {
     case point = 0, directional = 1, spot = 2, tube = 4
     init?(type: String) {
+        // G-A4-04: 접두 `l` 없는 레거시 표기도 받는다. WE 2.8.42 설치본 실측: 씬의 `"light"` 값이
+        // `"lpoint"` **3건**, `"point"` **3건**으로 반반이다(`arsenal` 오브젝트 2개, `demon_core` 1개가
+        // 후자). 그 씬들은 `version` 키가 아예 없는 최구 포맷이고, `arsenal` 은 `ambientcolor` 가
+        // 완전 검정이라 두 point 라이트를 버리면 WE 가 배포하는 대표 배경이 사실상 새까맣게 렌더된다.
+        // 종전 `default: return nil` 은 그 3건을 조용히 드롭했다.
+        // 미지 타입은 계속 nil 이다 — 2D 레인의 "미지 → point" 관용(forwardLightKind)은 여기 들이지
+        // 않는다(오타를 라이트로 승격시키는 쪽이 더 위험하다).
         switch type.lowercased() {
-        case "lpoint": self = .point
-        case "ldirectional": self = .directional
-        case "lspot": self = .spot
-        case "ltube": self = .tube
+        case "lpoint", "point": self = .point
+        case "ldirectional", "directional": self = .directional
+        case "lspot", "spot": self = .spot
+        case "ltube", "tube": self = .tube
         default: return nil
         }
     }

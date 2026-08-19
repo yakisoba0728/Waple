@@ -670,7 +670,17 @@ public final class TextScriptEngine {
             context.evaluateScript("""
             __wapleUserPropertiesRaw = (function (o) {
                 var r = {};
-                for (var k in o) { r[k] = o[k] ? o[k].value : o[k]; }
+                for (var k in o) {
+                    var e = o[k];
+                    if (!e || typeof e !== 'object') { r[k] = e; continue; }
+                    // G-C4-04: WE `_Internal.convertUserProperties`(baseclasses.js:1401-1418)는
+                    // **type 별로 다르게** 변환한다 — `color` 만 Vec3 이고 나머지는 원시값이다.
+                    // 종전엔 type 을 통째로 무시해 색 프로퍼티가 문자열("0.07 0.12 0.18")로 갔고,
+                    // `changedUserProperties.mycolor.multiply(2)` 가 TypeError 로 훅 전체를 죽였다.
+                    // 도달이 크다: WE 기본 배경들의 유저 프로퍼티 타입 분포에서 color 가 52.5% 로 최다다.
+                    if (e.type === 'color') { r[k] = new Vec3(String(e.value)); continue; }
+                    r[k] = e.value;
+                }
                 return r;
             })(__wapleUserProperties);
             engine.userProperties = __wapleUserPropertiesRaw;
@@ -1576,10 +1586,20 @@ public final class TextScriptEngine {
         set: function(t, k, v) { t[k] = v; return true; }
     });
     // WE 스크립트 표준 벡터(메서드 체이닝) — 레이어 컬러 스크립트가 사용.
+    // G-C4-03/D4-01: WE 의 생성자 관용 두 가지를 맞춘다(동봉 baseclasses.js:4-23 원문).
+    //  · **문자열**: `new Vec3("1 0.5 0.25")` = 공백 분해 + parseFloat. 씬 JSON 의 색/벡터 표기가
+    //    전부 이 형태라 이게 없으면 x 에 문자열이 박혀 이후 산술이 NaN 으로 전파된다.
+    //  · **스칼라 브로드캐스트**: `new Vec3(0.5)` = (0.5,0.5,0.5). 종전은 (0.5,0,0) 이라
+    //    `thisLayer.scale = new Vec3(s)` 가 레이어를 **소멸**시켰다(y·z 가 0).
     function Vec3(x, y, z) {
-        if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; this.z = x.z || 0; }
-        else { this.x = x || 0; this.y = y || 0; this.z = z || 0; }
+        if (typeof x === 'string') { var t = x.trim().split(/\s+/); x = parseFloat(t[0]); y = parseFloat(t[1]); z = parseFloat(t[2]); }
+        if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; this.z = x.z || 0; return; }
+        this.x = Number(x) || 0;
+        this.y = (typeof y === 'number' && !isNaN(y)) ? y : this.x;
+        this.z = (typeof z === 'number' && !isNaN(z)) ? z : this.x;
     }
+    /// WE baseclasses.js 는 `"x y z"` 를 낸다 — 문자열 비교/로그가 "[object Object]" 가 되지 않게.
+    Vec3.prototype.toString = function () { return this.x + ' ' + this.y + ' ' + this.z; };
     Vec3.prototype.add = function (o) { return (typeof o === 'number') ? new Vec3(this.x + o, this.y + o, this.z + o) : new Vec3(this.x + o.x, this.y + o.y, this.z + o.z); };
     Vec3.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec3(this.x - o, this.y - o, this.z - o) : new Vec3(this.x - o.x, this.y - o.y, this.z - o.z); };
     Vec3.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec3(this.x * o, this.y * o, this.z * o) : new Vec3(this.x * o.x, this.y * o.y, this.z * o.z); };
@@ -1604,9 +1624,12 @@ public final class TextScriptEngine {
         return new Vec3(this.x - d * (n.x || 0), this.y - d * (n.y || 0), this.z - d * (n.z || 0));
     };
     function Vec2(x, y) {
-        if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; }
-        else { this.x = x || 0; this.y = y || 0; }
+        if (typeof x === 'string') { var t2 = x.trim().split(/\s+/); x = parseFloat(t2[0]); y = parseFloat(t2[1]); }
+        if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; return; }
+        this.x = Number(x) || 0;
+        this.y = (typeof y === 'number' && !isNaN(y)) ? y : this.x;
     }
+    Vec2.prototype.toString = function () { return this.x + ' ' + this.y; };
     Vec2.prototype.add = function (o) { return (typeof o === 'number') ? new Vec2(this.x + o, this.y + o) : new Vec2(this.x + o.x, this.y + o.y); };
     Vec2.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec2(this.x - o, this.y - o) : new Vec2(this.x - o.x, this.y - o.y); };
     Vec2.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec2(this.x * o, this.y * o) : new Vec2(this.x * o.x, this.y * o.y); };

@@ -101,9 +101,19 @@ enum EffectShaders {
         case "waterwaves":
             // F268/F269: WE waterwaves.vert:48 `v_Direction = rotateVec2(vec2(0,1), g_Direction)` — 기준벡터
             // (0,1)(세로) 회전. 구 코드는 기준벡터 (1,0)(가로) 이라 direction=0(기본)에서 dir 이 90° 어긋났다
-            // (rotateVec2 정의 common.h:28 대조: rotate((0,1),a)=(-sin a, cos a)). 단위(rad/deg) 는 미확정 —
-            // 이 수정은 축(기준벡터) 만 정정, 기존 *.pi/180 변환은 그대로 둔다.
-            let a = f("direction", 0) * .pi / 180
+            // (rotateVec2 정의 common.h:28 대조: rotate((0,1),a)=(-sin a, cos a)).
+            //
+            // G-B4-02: 그때 "단위(rad/deg) 미확정" 으로 남겨 둔 `* .pi / 180` 을 **제거한다 — 저장 단위는
+            // 라디안이다.** 근거 셋:
+            //  · `rotateVec2(v, r)` 가 `cos(r)`/`sin(r)` 에 **인자를 그대로** 넣는다(common.h:28-32).
+            //  · 어노테이션이 `"range":[0,6.28]` 이다(도였다면 [0,360]). 그리고 같은 계열 유니폼의
+            //    `"default"` 가 `3.14159265358` / `3.141593` — π 를 기본 방향으로 저작한 것이지
+            //    3.14도가 아니다.
+            //  · `"conversion":"rad2deg"` 어노테이션이 존재한다 = "이 **라디안** 값을 도로 **표시**하라".
+            //    에디터 JS 의 `degreeConverter` 도 `$formatters=toDegrees` / `$parsers=toRadians` 로
+            //    표시만 도이고 저장은 라디안이다.
+            // 종전 동작은 UI 90°(=1.5708 저장)를 1.5708**도**(≈0.0274 rad)로 읽어 89.4° 어긋났다.
+            let a = f("direction", 0)
             return [-sin(a), cos(a), f("speed", 5), f("scale", 200), f("strength", 0.1), f("perspective", 0)]
         case "shake":
             // 단순화: flow/noise combo 없이 시간 기반 흔들림. amp/speed 키는 게이트서 확인.
