@@ -1,5 +1,8 @@
 import Foundation
-import ScreenCaptureKit
+// @preconcurrency — WebRenderer.swift 상단의 근거와 동일(SDK 동시성 애너테이션이
+// 델리게이트 요구사항 매칭을 깬다). SCStreamOutput 은 required 라 불일치가 컴파일
+// 오류로 드러나지만, 강등해 두는 편이 진단 소음도 함께 없앤다.
+@preconcurrency import ScreenCaptureKit
 import AVFoundation
 import Accelerate
 
@@ -414,7 +417,6 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
     /// SCStreamOutput 의 유일한 요구사항도 **optional @objc** 다 — 후킹이 풀리면 sampleBuffer 가 한 번도
     /// 안 들어와 스펙트럼이 영구 무음이 되고(폴백 경로와 구분 불가) 실패가 조용하다. 셀렉터 고정 근거는
     /// WebRenderer.swift 의 didFinish 주석 참조.
-    @objc(stream:didOutputSampleBuffer:ofType:)
     public func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
         let live = liveSubscribers()

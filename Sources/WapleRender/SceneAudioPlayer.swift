@@ -242,7 +242,6 @@ final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
     /// 동시성/언어 모드 전환으로 witness 매칭이 깨지면 암묵 @objc 노출이 사라지고, 곡이 끝나도 다음 곡이
     /// 시작되지 않는 **무음 실패**가 된다(에러도 로그도 없다). 유닛 테스트는 이 메서드를 직접 호출하므로
     /// 후킹 여부를 잡지 못한다 — 그래서 코드로 고정한다.
-    @objc(audioPlayerDidFinishPlaying:successfully:)
     func audioPlayerDidFinishPlaying(_ p: AVAudioPlayer, successfully flag: Bool) {
         // 콜백 스레드 미보장(Apple 문서) — 상태 갱신은 메인으로 홉(비메인이면 pause/teardown 과 경합).
         if !Thread.isMainThread {
