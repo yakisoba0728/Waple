@@ -61,7 +61,13 @@ public struct EffectManifest: Equatable {
                                source: p["source"] as? String))
         }
         var fbos: [FBO] = []
+        // X-①-sweep: **개수**도 상한을 둔다. 종전엔 치수(8192)만 클램프했는데, 소비처
+        // (`SceneRendererFrameEncoder.swift:1958-1963`, `:301-315`)가 선언된 FBO 를 **사용 여부와
+        // 무관하게 매 프레임 체크아웃**하므로 개수만으로 GPU 메모리와 프레임 시간을 밀어낼 수 있다.
+        // 64 인 이유: 동봉 자산 101개 effect.json 의 최대가 한 자릿수라 정상 저작은 근처에도 안 온다.
+        let maxFBOs = 64
         for f in (obj["fbos"] as? [[String: Any]]) ?? [] {
+            guard fbos.count < maxFBOs else { break }
             guard let name = f["name"] as? String else { continue }
             let scale = safeInt(f["scale"]) ?? 1
             // X-①: 8192 클램프 — 신뢰불가 effect.json 정수가 makeTexture 에 그대로 흘러가 과대 할당/

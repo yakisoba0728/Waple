@@ -29,10 +29,15 @@ public final class MediaPoller: @unchecked Sendable {
 
     public func start() {
         guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // `.common` 런루프 모드 — `scheduledTimer` 는 `.default` 에만 등록돼 메뉴 트래킹·라이브
+        // 리사이즈 중 멈춘다. `AppDelegate.swift:701,756` 이 이미 이 규약을 쓰고 :755 주석이
+        // 이유를 적어 뒀는데 이 자리로 전파되지 않았다.
+        let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
             self?.poll()
         }
-        timer?.fire()
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+        t.fire()
     }
 
     public func stop() {

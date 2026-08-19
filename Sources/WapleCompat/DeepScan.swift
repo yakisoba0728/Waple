@@ -180,6 +180,10 @@ enum DeepScan {
     /// 음악 다수 씬에서 전수 디코드가 스캔 벽시계를 지배한다(실측 2522s 중 2519s). 예산 초과분은
     /// 디코드 없이 참조 존재만 집계(oggSkippedBudget — 실패가 아니라 시간 상한에 의한 걸러넘김).
     /// WAPLE_DEEP_OGG_BUDGET 환경변수로 오버라이드 가능(예산 경로 검증 등 디버그 게이트).
+    /// AVAsset 로드 한 건의 상한. `SceneVideoLayer.assetLoadTimeoutSeconds`(5초)와 같은 값·같은 이유다 —
+    /// 손상 미디어에서 로드가 반환하지 않는 경우가 있고, 여기는 워커 스레드라 그 하나가 잡을 세운다.
+    static let assetLoadTimeoutSeconds: Double = 5
+
     static let oggDecodeTimeBudget: TimeInterval = {
         if let s = ProcessInfo.processInfo.environment["WAPLE_DEEP_OGG_BUDGET"],
            let v = Double(s), v >= 0 { return v }
@@ -694,7 +698,16 @@ enum DeepScan {
             return false
         }
         let ext = URL(fileURLWithPath: file).pathExtension.lowercased()
-        let url = folder.appendingPathComponent(file)
+        // F840-sweep: 형제 `scanWeb`(:741,744)은 `WallpaperPathSecurity.containedFileURL` 로 realpath
+        // 재검증을 하는데 여기만 `appendingPathComponent` 로 그대로 열었다. `..`·절대경로는 파스 단계
+        // (`ProjectJSONParser.swift:42`)에서 이미 막히므로 남는 것은 **패키지 안 심링크**뿐이고,
+        // `WapleCompat` 은 반출 경로 없는 CLI 라 귀결은 좁다 — 그래도 형제와 규약을 맞춘다.
+        // 검증 실패는 "알 수 없는 컨테이너" 로 집계한다(스캐너 판정과 같은 방향).
+        guard let url = WallpaperPathSecurity.containedFileURL(file, root: folder) else {
+            agg.sync { agg.videoTotal += 1; agg.videoUnknownContainer += 1
+                       agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file) (경로 봉쇄)") }
+            return false
+        }
         if VideoRenderer.nativeVideoExtensions.contains(ext) {
             // header-only probe: isPlayable/트랙 목록은 컨테이너 헤더만 읽는다(파일 전체 X).
             // F525: deprecated 동기 API(isPlayable/tracks(withMediaType:)) → load(_:) 계열로 국소 교체
@@ -710,7 +723,13 @@ enum DeepScan {
                 playable.value = ok && hasVideo
                 sem.signal()
             }
-            sem.wait()
+            // F840-sweep: 무한 대기 금지. 형제 3곳(SceneVideoLayer:109,209 · FFmpegConverter:156)은
+            // 전부 타임아웃을 쓰는데 여기만 남아 있었다. 이 호출은 concurrentPerform 워커 안이라
+            // 하나가 걸리면 그 워커 슬롯이 영구히 죽고, CLI 스캔 잡 전체가 끝나지 않는다.
+            // 손상 mp4 의 AVAsset 로드는 실제로 반환하지 않을 수 있다 — 그게 이 스캐너의 입력이다.
+            if sem.wait(timeout: .now() + Self.assetLoadTimeoutSeconds) != .success {
+                playable.value = false   // 시간 초과 = 재생 불가로 집계(스캐너 판정과 같은 방향)
+            }
             agg.sync {
                 agg.videoTotal += 1
                 if playable.value { agg.videoNativePlayable += 1 } else { agg.videoNativeUnplayable += 1; agg.addSample2(&agg.videoFailSamples, "\(project.id)/\(file)") }

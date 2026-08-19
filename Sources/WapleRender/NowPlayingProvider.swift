@@ -120,8 +120,16 @@ public final class AppleScriptNowPlayingProvider: NowPlayingProvider {
             finished.signal()
         }
         guard finished.wait(timeout: .now() + timeout) == .success else {
-            p.terminate()
-            _ = finished.wait(timeout: .now() + 0.5)
+            // F840-sweep: SIGTERM 만 보내고 끝내면 무시하는 자식이 좀비로 남고 대기 스레드·FD 가
+            // 함께 샌다. 형제 3곳(ZipImporter:69 · SteamCmdDownloader:203 · FFmpegConverter:206)은
+            // 전부 에스컬레이션을 하는데 여기만 없었다.
+            // 주의: "osascript 가 SIGTERM 을 무시한다" 는 **미입증**이다 — 이건 그 전제가 아니라
+            // 형제와 같은 방어를 갖추는 것이다. 정상 종료하면 아래 kill 은 실행되지 않는다.
+            p.terminate()   // SIGTERM
+            if finished.wait(timeout: .now() + 0.5) == .timedOut {
+                kill(p.processIdentifier, SIGKILL)
+                p.waitUntilExit()   // SIGKILL 수거 확정(좀비 방지)
+            }
             return nil
         }
         guard p.terminationStatus == 0 else { return nil }

@@ -82,8 +82,15 @@ def validate_doc(d, path):
     elif d["weVersion"] != specfmt.WE_VERSION:
         errs.append(f"{p}: weVersion 이 {d['weVersion']!r} — {specfmt.WE_VERSION!r} 이어야 한다")
 
-    if not d.get("generatedBy"):
+    gen = d.get("generatedBy")
+    if not gen:
         errs.append(f"{p}: generatedBy 가 없다 — 재현 방법을 알 수 없다")
+    elif gen.endswith(".py") and not os.path.exists(os.path.join(REPO_ROOT, gen)):
+        # evidence 의 ref 는 :127-128 에서 os.path.exists 로 검사하는데 generatedBy 는 "비어있지
+        # 않음" 만 봤다 — 강도 비대칭이다. 스크립트 이름이 바뀌거나 지워지면 그 문서는 재생성
+        # 방법을 잃는데 아무도 울지 않았다. `.py` 로 끝나는 것만 본다: 손 작성 문서는
+        # "손 작성 — …" 처럼 경로가 아닌 설명을 싣는 것이 이 리포의 관례다(spec/engine/deviations.json).
+        errs.append(f"{p}: generatedBy 가 가리키는 스크립트가 없다 — {gen}")
 
     entries = d.get("entries")
     if not isinstance(entries, list):

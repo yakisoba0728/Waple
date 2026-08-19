@@ -19,8 +19,13 @@ on:
         type: boolean
         default: false
 
-# PR 이 열린 브랜치는 push 와 pull_request 두 이벤트가 모두 온다. head_ref(=PR 소스 브랜치)를
-# 우선 키로 쓰면 둘이 같은 그룹에 묶여 나중 것이 앞의 것을 취소한다 — 한 브랜치 상태당 실행 1회.
+# 같은 브랜치를 연달아 푸시하면 앞 실행을 취소한다 — 한 브랜치 상태당 실행 1회.
+#
+# [주석 정정 2026-08-19] 종전 주석은 "push 와 pull_request 가 같은 그룹에 묶인다" 고 적었는데
+# **그렇지 않다**: `head_ref` 는 pull_request 계열에서만 채워지므로 push 는 `refs/heads/<br>`,
+# PR 은 `<br>` 로 **다른 그룹**이 된다. 이 리포는 PR 을 쓰지 않아(전체 82런 중 pull_request 0건)
+# 실제 비용은 0 이지만, 주석이 하는 주장은 사실이 아니었다. PR 을 쓰기 시작하면 같은 커밋이
+# 두 번 돈다 — 그때는 키를 `github.event.pull_request.head.sha || github.sha` 꼴로 바꿔야 한다.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
