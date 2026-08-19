@@ -637,6 +637,11 @@ public extension SceneLight3D {
     ///   tube(kind 4)는 axisCone.xyz 가 forward 가 아니라 **세그먼트 단점 B**(WE g_LTube_OriginB —
     ///   genericimage3.frag:115/157 PointSegmentDelta 소비, cone 미사용이라 동 슬롯 재활용).
     struct ForwardUniforms: Equatable {
+        /// 2D 포워드 라이팅 슬롯 수. **QuadShaders.f_lit 의 루프 상한 · SceneRenderer 의
+        /// lightPositions/lightColorRadius/lightAxisCone/lightKindCone 배열 길이와 같은 값이어야 한다.**
+        /// F660 이 3D 레인을 8(Scene3DLighting.maximumLights)로 올릴 때 2D 레인만 4 로 남아 있었다 —
+        /// 같은 씬에서 5번째 라이트부터 2D 라이팅 레이어에만 안 잡혔다. 8 로 맞춘다.
+        public static let slotCount = 8
         public var positions: [SIMD4<Float>]   // xyz=world, w=finite-light exponent
         public var colorRadius: [SIMD4<Float>] // rgb=color×intensity, w=radius
         public var ambientTerm: SIMD3<Float>
@@ -645,11 +650,33 @@ public extension SceneLight3D {
         public var kindCone: [SIMD4<Float>]    // x=kind(0/1/2/4), y=spot cone inner cos
         public init(positions: [SIMD4<Float>], colorRadius: [SIMD4<Float>],
                     ambientTerm: SIMD3<Float>, count: Int,
+                    // 기본값은 **4 그대로** 둔다(구형 호출부 소스/값 호환 — SceneForwardLightKindTests 가
+                    // 이 길이를 단언한다). 실제 생산자 forwardUniforms 는 네 배열 모두 slotCount 로 만들고,
+                    // 아래 count 클램프가 짧은 배열을 그 길이로 잘라 주므로 범위 밖 인덱싱은 생기지 않는다.
                     axisCone: [SIMD4<Float>] = [SIMD4<Float>](repeating: .zero, count: 4),
                     kindCone: [SIMD4<Float>] = [SIMD4<Float>](repeating: .zero, count: 4)) {
-            self.positions = positions; self.colorRadius = colorRadius
-            self.ambientTerm = ambientTerm; self.count = count
-            self.axisCone = axisCone; self.kindCone = kindCone
+            // 공개 이니셜라이저는 호출자가 만든 배열을 그대로 받는데 종전엔 **아무 검증이 없었다**.
+            // ① count 가 배열 길이와 독립이라 소비처(ScenePBRLighting.evaluateLighting 의
+            //    `for i in 0..<min(count, …)` → positions[i]/colorRadius[i]/kindCone[i])가
+            //    범위 밖을 읽고 트랩한다.
+            // ② kindCone[i].x 가 NaN 이면 같은 자리의 `Int(kindCone[i].x + 0.5)` 가 트랩한다
+            //    (Swift 의 Int(Float) 는 NaN/무한/범위 밖 입력에서 크래시 — 클램프가 아니다).
+            // 그래서 count 를 **네 배열의 실제 길이**로 클램프하고 성분의 비유한 값을 0 으로 눕힌다.
+            // 배열 길이 자체는 건드리지 않는다 — 기본값(.zero × 4) 계약과 기존 호출부 보존.
+            func finite(_ v: [SIMD4<Float>]) -> [SIMD4<Float>] {
+                v.map { s in
+                    SIMD4<Float>(s.x.isFinite ? s.x : 0, s.y.isFinite ? s.y : 0,
+                                 s.z.isFinite ? s.z : 0, s.w.isFinite ? s.w : 0)
+                }
+            }
+            let capacity = min(min(positions.count, colorRadius.count),
+                               min(axisCone.count, kindCone.count))
+            self.positions = finite(positions); self.colorRadius = finite(colorRadius)
+            self.ambientTerm = SIMD3<Float>(ambientTerm.x.isFinite ? ambientTerm.x : 0,
+                                            ambientTerm.y.isFinite ? ambientTerm.y : 0,
+                                            ambientTerm.z.isFinite ? ambientTerm.z : 0)
+            self.count = max(0, min(count, capacity))
+            self.axisCone = finite(axisCone); self.kindCone = finite(kindCone)
         }
     }
 
@@ -689,13 +716,21 @@ public extension SceneLight3D {
         return (max(cosInnerRaw, cosOuter + 1e-4), cosOuter)
     }
 
-    /// 라이트 배열 → 포워드 유니폼. 4개 초과 시 앞 4개(현행 근사 — WE 오브젝트별 relevance 선택은 미구현).
+    /// 라이트 배열 → 포워드 유니폼. slotCount(8) 초과 시 앞 8개(현행 근사 — WE 오브젝트별 relevance
+    /// 선택은 미구현). 종전 상한은 4 였다(F660 의 3D 8-라이트 상향이 2D 레인에 도달하지 않았다).
+    ///
+    /// `skylight` 는 **여전히 미배선**이다(의도적, 이번 라운드 범위 밖). 3D 는 반구 그라디언트로
+    /// `mix(skylight, ambient, dot(N, +Y)*0.5+0.5)` 를 쓰지만(Mesh3DShaders), 2D f_lit 의 앰비언트는
+    /// genericimage4 규약대로 flat 이고 N 이 항상 +Z 라 반구 항이 상수로 접힌다 — 즉 skylight 를 넣으려면
+    /// 수식 자체(그리고 유니폼 슬롯)를 새로 정해야 하고, 그건 전 라이팅 레이어의 픽셀을 바꾸는 변경이라
+    /// 근거 없이 할 수 없다. 파라미터는 3D 팩과 호출 형태를 맞추기 위해 유지한다.
     static func forwardUniforms(_ lights: [SceneLight3D], ambient: Vec3, skylight _: Vec3) -> ForwardUniforms {
-        var pos = [SIMD4<Float>](repeating: .zero, count: 4)
-        var cr = [SIMD4<Float>](repeating: .zero, count: 4)
-        var ac = [SIMD4<Float>](repeating: .zero, count: 4)
-        var kc = [SIMD4<Float>](repeating: .zero, count: 4)
-        let used = lights.prefix(4)
+        let n = ForwardUniforms.slotCount
+        var pos = [SIMD4<Float>](repeating: .zero, count: n)
+        var cr = [SIMD4<Float>](repeating: .zero, count: n)
+        var ac = [SIMD4<Float>](repeating: .zero, count: n)
+        var kc = [SIMD4<Float>](repeating: .zero, count: n)
+        let used = lights.prefix(n)
         for (i, l) in used.enumerated() {
             pos[i] = SIMD4(l.origin.x, l.origin.y, l.origin.z, l.exponent)
             cr[i] = SIMD4(l.color.x * l.intensity, l.color.y * l.intensity, l.color.z * l.intensity, l.radius)
@@ -1169,37 +1204,56 @@ extension SceneDocument {
         var refract = false
         var normalTextureName: String? = nil
         var refractAmount: Float = 0.05
-        if let md = package.data(for: imagePath) ?? assets?(imagePath),
+        // 모델/머티리얼 JSON 재조회(resolveLayerTexture 가 이미 한 번 읽은 것을 다시 읽는다 —
+        // 레이어당 이중 파스지만 구조를 바꾸지 않는다). **소스 집합을 requiredData(:2007) 와 맞춘다**:
+        // package → sharedAssetProbe → assets. 종전 이 자리는 `package.data(for:) ?? assets?(…)` 만
+        // 봤다. 현재 유일한 호출부(parse)가 assets 에 probe 를 감싼 클로저를 넘기고 있어 실동작은 같았지만
+        // (그래서 이 결함은 재현되지 않는다 — 종전 진단을 정정), 두 읽기의 소스 집합이 갈라져 있다는 것
+        // 자체가 위험이다: probe 만 주입하고 assets 를 따로 넘기는 호출자가 생기면 텍스처는 해석되는데
+        // puppet·cropoffset·blend·depth·머티리얼 콤보/상수/텍스처·refract 만 **로그 없이** 사라진다.
+        // 아래 두 실패 경로에 로그를 붙여 그 조용한 유실을 없앤다(resolveLayerTexture 가 이미 성공한
+        // 뒤이므로 이 경고는 정상 입력에선 나오지 않는다 — 나오면 진짜 이상 신호다).
+        func layerJSONData(_ name: String) -> Data? {
+            if let data = package.data(for: name) { return data }
+            if let sharedAssetProbe, case .data(let data) = sharedAssetProbe(name) { return data }
+            return assets?(name)
+        }
+        if let md = layerJSONData(imagePath),
            let mj = (try? JSONSerialization.jsonObject(with: md)) as? [String: Any] {
             puppetPath = mj["puppet"] as? String
             cropOffset = vec2(mj["cropoffset"])
-            if let matPath = mj["material"] as? String,
-               let matD = package.data(for: matPath) ?? assets?(matPath),
-               let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
-               let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any] {
-                let matResult: MaterialPassResult = parseMaterialPassProperties(p0, userProps: userProps)
-                blendMode = matResult.blendMode
-                depthTest = matResult.depthTest
-                depthWrite = matResult.depthWrite
-                alphaWriting = matResult.alphaWriting
-                spritesheetCombo = matResult.spritesheetCombo
-                lightingCombo = matResult.lightingCombo
-                roughness = matResult.roughness
-                metallic = matResult.metallic
-                specularTint = matResult.specularTint
-                materialScripts = matResult.materialScripts
-                materialScriptProps = matResult.materialScriptProps
-                materialShader = matResult.materialShader
-                materialCombos = matResult.materialCombos
-                materialConstants = matResult.materialConstants
-                materialConstantScripts = matResult.materialConstantScripts
-                materialConstantScriptProps = matResult.materialConstantScriptProps
-                materialTextureNames = matResult.materialTextureNames
-                materialUserShaderValues = matResult.materialUserShaderValues
-                refract = matResult.refract
-                normalTextureName = matResult.normalTextureName
-                refractAmount = matResult.refractAmount
+            if let matPath = mj["material"] as? String {
+                if let matD = layerJSONData(matPath),
+                   let matJ = (try? JSONSerialization.jsonObject(with: matD)) as? [String: Any],
+                   let p0 = (matJ["passes"] as? [Any])?.first as? [String: Any] {
+                    let matResult: MaterialPassResult = parseMaterialPassProperties(p0, userProps: userProps)
+                    blendMode = matResult.blendMode
+                    depthTest = matResult.depthTest
+                    depthWrite = matResult.depthWrite
+                    alphaWriting = matResult.alphaWriting
+                    spritesheetCombo = matResult.spritesheetCombo
+                    lightingCombo = matResult.lightingCombo
+                    roughness = matResult.roughness
+                    metallic = matResult.metallic
+                    specularTint = matResult.specularTint
+                    materialScripts = matResult.materialScripts
+                    materialScriptProps = matResult.materialScriptProps
+                    materialShader = matResult.materialShader
+                    materialCombos = matResult.materialCombos
+                    materialConstants = matResult.materialConstants
+                    materialConstantScripts = matResult.materialConstantScripts
+                    materialConstantScriptProps = matResult.materialConstantScriptProps
+                    materialTextureNames = matResult.materialTextureNames
+                    materialUserShaderValues = matResult.materialUserShaderValues
+                    refract = matResult.refract
+                    normalTextureName = matResult.normalTextureName
+                    refractAmount = matResult.refractAmount
+                } else {
+                    WapleLog.warn("[Waple] image layer material properties unavailable: \(matPath) (image=\(imagePath))")
+                }
             }
+        } else {
+            WapleLog.warn("[Waple] image layer model json unavailable for material properties: \(imagePath)")
         }
         var layer = SceneLayer(
             textureEntryName: entryName,
@@ -1507,8 +1561,10 @@ extension SceneDocument {
         // "Limit width/rows" 체크(불리언 리터럴 — 코퍼스 1640건 전수)가 켜진 때만 유효값. maxwidth 는
         // 바인딩 dict({user/script,value} — 실물 32건)가 있어 float() 의 {value} 언랩 경유, 폴백은
         // 에디터 기본(maxwidth 500 — 1468건 / maxrows 1 — 1628건). 부재/미체크 nil = 무제한(무회귀).
-        if (obj["limitwidth"] as? Bool) == true, case let mw = float(obj["maxwidth"]) ?? 500, mw > 0 { t.maxWidth = mw }
-        if (obj["limitrows"] as? Bool) == true, case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
+        // 체크 플래그도 unwrap 경유 — 코퍼스 전수 평문 Bool 이라 무회귀지만, 값(maxwidth/maxrows)만
+        // 바인딩을 읽고 게이트는 못 읽는 비대칭을 없앤다(이 파일의 hdr/bloom/cameraparallax 와 동형).
+        if (unwrap(obj["limitwidth"]) as? Bool) == true, case let mw = float(obj["maxwidth"]) ?? 500, mw > 0 { t.maxWidth = mw }
+        if (unwrap(obj["limitrows"]) as? Bool) == true, case let mr = intVal(obj["maxrows"]) ?? 1, mr > 0 { t.maxRows = mr }
         t.overflowEllipsis = (obj["limituseellipsis"] as? Bool) ?? false
         t.justify = (obj["blockalign"] as? Bool) ?? false
         // 프로퍼티 스크립트(origin/scale/alpha/color/angles, F218): parseLayer(:731-739)와 동형 캡처 —
@@ -1566,7 +1622,7 @@ extension SceneDocument {
             origin: vec3(obj["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
             angles: vec3(obj["angles"]) ?? Vec3(x: 0, y: 0, z: 0),
             scale: vec3(obj["scale"]) ?? Vec3(x: 1, y: 1, z: 1),
-            castShadow: (obj["castshadow"] as? Bool) ?? false,
+            castShadow: (unwrap(obj["castshadow"]) as? Bool) ?? false,   // {user,value} 바인딩도 읽는다(종전 평문 Bool 만 — 바인딩은 전부 false 로 접혔다)
             parent: intVal(obj["parent"]),
             effects: parseEffects(obj["effects"], userProps: userProps),
             order: order)
@@ -1604,11 +1660,11 @@ extension SceneDocument {
             exponent: float(obj["exponent"]) ?? 1,
             innerCone: float(obj["innercone"]) ?? 0,
             outerCone: float(obj["outercone"]) ?? 0,
-            castShadow: (obj["castshadow"] as? Bool) ?? false,
+            castShadow: (unwrap(obj["castshadow"]) as? Bool) ?? false,   // {user,value} 바인딩도 읽는다(종전 평문 Bool 만 — 바인딩은 전부 false 로 접혔다)
             parent: intVal(obj["parent"]),
             order: order,
             cascadeDistances: cascades,
-            castVolumetrics: (obj["castvolumetrics"] as? Bool) ?? false,
+            castVolumetrics: (unwrap(obj["castvolumetrics"]) as? Bool) ?? false,   // castshadow 와 동일 사유
             volumetricsExponent: float(obj["volumetricsexponent"]) ?? 1,
             density: float(obj["density"]) ?? 2,
             // ltube 세그먼트 단점 B(WE g_LTube_OriginB — 키는 wallpaper64.exe 스트링 실측 소문자).
@@ -2528,7 +2584,12 @@ extension SceneDocument {
             result.materialTextureNames = texs.map { $0 as? String }
         }
         // H4: REFRACT 콤보 + 노멀맵(textures[1]) + refractAmount 파싱. 노멀맵 없으면 refract=false.
-        let refractCombo: Bool = ((p0["combos"] as? [String: Any])?["REFRACT"] as? NSNumber)?.intValue == 1
+        // 콤보 값은 이 파일의 intVal(= unwrap + lenientInt)로 읽는다. 종전 `as? NSNumber`.intValue 는
+        // 문자열 저작 `"REFRACT": "1"` 을 nil 로 떨어뜨려 **굴절을 끄는** 방향으로 조용히 틀렸고
+        // ({user,value} 바인딩도 못 읽었다), 이 파일이 그 두 형태를 위해 준비해 둔 헬퍼를 우회했다.
+        var refractComboRaw: Any? = nil
+        if let combos = p0["combos"] as? [String: Any] { refractComboRaw = combos["REFRACT"] }
+        let refractCombo: Bool = intVal(refractComboRaw) == 1
         let normalName: String? = result.materialTextureNames.count > 1 ? result.materialTextureNames[1] : nil
         var refractAmt: Float = float((p0["constantshadervalues"] as? [String: Any])?["ui_editor_properties_refract_amount"]) ?? 0.05
         // usershadervalues 오버라이드(H2 와 동일 규약).

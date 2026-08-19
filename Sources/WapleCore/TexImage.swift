@@ -11,6 +11,8 @@ public struct TexImage {
         public let imageWidth: Int
         public let imageHeight: Int
         public let decompressedSize: Int
+        /// TexImage.payloadRange 와 동일 규약 — 인덱스 공간은 `TexImage.parse(_:)` 에 넘긴 Data 다
+        /// (`data.subdata(in: mip.payloadRange)` 가 슬라이스에서도 성립).
         public let payloadRange: Range<Int>
         public let lz4: Bool
 
@@ -111,6 +113,14 @@ public struct TexImage {
     /// TexHeader flags@22(RePKG TexFlags 확정): bit0 NoInterpolation, bit1 ClampUVs, bit2 IsGif, bit5 IsVideoTexture.
     public var flags: Int = 0
     public let payload: PayloadKind
+    /// 페이로드 바이트 범위 — **인덱스 공간은 `parse(_:)` 에 넘긴 `Data` 그 자체**다.
+    /// 즉 `data.subdata(in: tex.payloadRange)` 가 어떤 Data(슬라이스 포함)에서도 성립한다.
+    /// 종전에는 parse 가 `[UInt8](data)` 로 복사한 0-베이스 배열 인덱스를 그대로 실어 보냈고,
+    /// 소비처(TexDecoder / VideoTextureExtractor)는 원본 Data 에 subdata 를 걸었다 — 지금까지
+    /// 안 터진 이유는 `ScenePackage.data(for:)` 가 우연히 startIndex 0 인 새 Data 를 돌려주기
+    /// 때문뿐이고, 슬라이스가 한 번이라도 들어오면 곧바로 트랩이었다. ScenePackage.parse(:38)의
+    /// `let base = data.startIndex` 규약을 그대로 따라 **파스 시점에 절대 인덱스로 만든다**
+    /// (0-베이스 Data 에서는 값이 종전과 동일 — 무회귀).
     public let payloadRange: Range<Int>
     public let mip: CompressedMip?
     /// 모든 image 의 mip0(다중 image = 아틀라스 페이지, frame.imageId 가 페이지 인덱스). 단일 image 면 [mip].
@@ -175,6 +185,9 @@ public struct TexImage {
     }
 
     public static func parse(_ data: Data) -> TexImage? {
+        // 헤더 판독은 0-베이스 복사본 b 로 하되, **밖으로 나가는 범위는 전부 base 를 더해**
+        // 원본 Data 의 인덱스 공간으로 돌려준다(payloadRange 필드 주석 참조).
+        let base = data.startIndex
         let b = [UInt8](data)
         guard b.count > 42, b[0..<8].elementsEqual(Array("TEXV0005".utf8)) else { return nil }
         func i32(_ o: Int) -> Int? { readU32LE(b, at: o).map { Int($0) } }
@@ -208,7 +221,7 @@ public struct TexImage {
         //    payloadRange 오정렬 없음).
         //    [정정 2026-08-01] 종전엔 이 35 를 "코퍼스" 라고 적었다. assets 한정 수치이고 워크샵
         //    scene.pkg 를 합친 전수는 796개다(그중 701개가 mipCount>1). 아래 mipChain 전달 참조.
-        let container = parseMip(b, imgW: imgW, imgH: imgH, format: format)
+        let container = parseMip(b, imgW: imgW, imgH: imgH, format: format, base: base)
         if let (mips, imageFormat, _, chain) = container {
             let mip = mips[0]
             switch imageFormat {
@@ -228,9 +241,9 @@ public struct TexImage {
         //    바이트를 그대로 ImageIO 에 넘겼다(실측 2026-07-09: embedded-jpeg 버킷 0/8 전멸 — assets
         //    sharp_halo(fmt0)/hose_4_bright(fmt8)/circle_flame(fmt9) 및 pkg 4종, 전부 isLZ4=1 imageFormat=-1).
         if container == nil {
-            if let p = findSig(b, [0x89, 0x50, 0x4E, 0x47], limit: 512) { return make(.png, p..<b.count, nil) }
-            if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, p..<b.count, nil) }
-            if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (p - 4)..<b.count, nil) }
+            if let p = findSig(b, [0x89, 0x50, 0x4E, 0x47], limit: 512) { return make(.png, (base + p)..<(base + b.count), nil) }
+            if let p = findSig(b, [0xFF, 0xD8, 0xFF], limit: 512) { return make(.jpeg, (base + p)..<(base + b.count), nil) }
+            if let p = findSig(b, Array("ftyp".utf8), limit: 512), p >= 4 { return make(.video, (base + p - 4)..<(base + b.count), nil) }
         }
 
         // 3) mip 컨테이너 format-based 디코드: RGBA(fmt0) | DXT5(fmt4) | DXT1(fmt7) | R8(fmt9).
@@ -250,8 +263,8 @@ public struct TexImage {
         // 4) 비압축 raw RGBA(드묾).
         // F433: 픽셀은 42B TEXV 헤더(TEXV0005\0+TEXI0001\0+6×i32) 뒤에서 시작 — 종전 0..<b.count 는
         // 헤더를 픽셀로 디코드해 42B(4의 배수 아님) 시프트로 채널 정렬이 깨졌다(TexDecoder.rawRGBA8888).
-        if format == 0 { return make(.rawRGBA8888, 42..<b.count, nil) }
-        return make(.unknown, 0..<b.count, nil)
+        if format == 0 { return make(.rawRGBA8888, (base + 42)..<(base + b.count), nil) }
+        return make(.unknown, base..<(base + b.count), nil)
     }
 
     /// "TEXB000N\0" 컨테이너 파스. 모든 image 의 **mip0** 을 순차 수집한다(다중 image = 스프라이트시트
@@ -264,7 +277,7 @@ public struct TexImage {
     /// mipChain: **단일 image** 일 때 image 0 의 전체 레벨도 수집(레벨 L 의 image dims = imgW/imgH >> L,
     /// 최소 1 — 레벨 레코드의 w/h 는 alloc dims 라 orig 는 축소식에서 온다). 다중 image 는 페이지 스택 경로가
     /// 레이아웃을 바꾸므로 [](무회귀). 어느 레벨이든 파스 실패 시 체인 폐기(mip0 경로 그대로 — 종전과 동일).
-    private static func parseMip(_ b: [UInt8], imgW: Int, imgH: Int, format: Int) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant], mipChain: [CompressedMip])? {
+    private static func parseMip(_ b: [UInt8], imgW: Int, imgH: Int, format: Int, base: Int) -> (mips: [CompressedMip], imageFormat: Int, variants: [Variant], mipChain: [CompressedMip])? {
         guard let ti = indexOf(b, Array("TEXB".utf8)), ti + 9 <= b.count else { return nil }
         let version = Int(String(bytes: b[ti + 4..<ti + 8], encoding: .ascii) ?? "") ?? 0
         guard version >= 1, version <= 4 else { return nil }
@@ -289,7 +302,7 @@ public struct TexImage {
             // dec 는 공격자 제어 필드. 단일 mip 의 정당한 한계(512MB)를 넘으면 거부해 ~4GB 할당 DoS 차단.
             guard dec > 0, dec <= 512 << 20 else { return nil }
             let mip = CompressedMip(decodeWidth: w, decodeHeight: h, imageWidth: origW, imageHeight: origH,
-                                    decompressedSize: dec, payloadRange: q..<(q + comp), lz4: isLZ4 != 0)
+                                    decompressedSize: dec, payloadRange: (base + q)..<(base + q + comp), lz4: isLZ4 != 0)
             return (mip, q + comp)
         }
         var p = ti + 9
@@ -329,7 +342,7 @@ public struct TexImage {
         var variants: [Variant] = []
         if version >= 4, imageCount == 1, !chain.isEmpty {
             variants = parseVariantSection(b, from: p, chain: chain, format: format,
-                                           imgW: imgW, imgH: imgH, i32: i32)
+                                           imgW: imgW, imgH: imgH, i32: i32, base: base)
         }
         // 다중 image 는 페이지 스택(stackedAtlas)이 레이아웃을 바꾸므로 체인 미적용 — 소비처 가드와 일치.
         if imageCount != 1 { mipChain = [] }
@@ -366,7 +379,7 @@ public struct TexImage {
     private static func parseVariantSection(_ b: [UInt8], from start: Int,
                                             chain: [(idx: Int, json: String)],
                                             format: Int, imgW: Int, imgH: Int,
-                                            i32: (Int) -> Int?) -> [Variant] {
+                                            i32: (Int) -> Int?, base: Int) -> [Variant] {
         var q = start
         guard let sImageCount = i32(q), sImageCount >= 1, sImageCount <= 1024,
               let sVariantCount = i32(q + 4), sVariantCount == chain.count else { return [] }
@@ -381,7 +394,7 @@ public struct TexImage {
             let dec = mipByteSize(format: format, w: w, h: h)
             guard dec > 0, dec <= 512 << 20 else { return [] }
             byIdx[idx] = CompressedMip(decodeWidth: w, decodeHeight: h, imageWidth: imgW, imageHeight: imgH,
-                                       decompressedSize: dec, payloadRange: q..<(q + comp), lz4: comp != dec)
+                                       decompressedSize: dec, payloadRange: (base + q)..<(base + q + comp), lz4: comp != dec)
             q += comp
         }
         var out: [Variant] = []

@@ -9,9 +9,13 @@ public enum GLSLTypeAdapter {
         public var functions: [String: Int]   // 함수 이름 → 반환 크기
         public var functionParams: [String: [Int]]  // 호출 인자 절단용(0=불투명)
         public var intVars: Set<String>       // int/uint 로 알려진 이름(헬퍼 파라미터 등) — min/max 모호성 해소용
+        /// 소스에 선언된 struct 의 멤버 이름 전체. `.a`/`.st`/`.xy`/`.rgba` 처럼 **스위즐 글자로만**
+        /// 이루어진 필드 이름을 스위즐로 오독하지 않기 위한 화이트리스트(F612 재발 차단 — 아래 사용처 참조).
+        public var structFields: Set<String>
         public init(vars: [String: Int], functions: [String: Int] = [:], functionParams: [String: [Int]] = [:],
-                    intVars: Set<String> = []) {
+                    intVars: Set<String> = [], structFields: Set<String> = []) {
             self.vars = vars; self.functions = functions; self.functionParams = functionParams; self.intVars = intVars
+            self.structFields = structFields
         }
     }
 
@@ -235,7 +239,12 @@ public enum GLSLTypeAdapter {
         var lvalSize = p.env.vars[name] ?? 0
         if look < p.toks.count, p.toks[look].text == "." {
             let swz = look + 1 < p.toks.count ? p.toks[look + 1].text : ""
-            if swz.allSatisfy({ "xyzwrgbastpq".contains($0) }) {
+            // F612 재발 지점. 스위즐 글자로만 이루어진 **struct 필드 이름**(a / st / xy / rgba …)이
+            // 스위즐로 오독돼 `g.a = someVec3` 가 `g.a = (someVec3).x` 로 조용히 잘렸다(값이 틀린다).
+            // 베이스 크기를 아는 경우(진짜 벡터 변수)는 종전대로 스위즐이고, **크기 미상(0)인데 알려진
+            // struct 필드 이름**일 때만 스위즐 해석을 포기한다 — 비스위즐 멤버와 동일 경로(무개입 통과).
+            let isStructField = lvalSize == 0 && p.env.structFields.contains(swz)
+            if !isStructField, swz.allSatisfy({ "xyzwrgbastpq".contains($0) }) {
                 lvalSize = swz.count
                 look += 2
             } else { return false }
@@ -391,7 +400,10 @@ public enum GLSLTypeAdapter {
                 let dotTok = p.advance()
                 guard p.pos < p.toks.count else { base.text += dotTok.full; break }
                 let member = p.advance()
-                if member.text.allSatisfy({ "xyzwrgbastpq".contains($0) }) {
+                // assignment(:238)와 동일 사유(F612 재발): 베이스 크기 미상 + 알려진 struct 필드 이름이면
+                // 스위즐이 아니라 멤버 접근이다(size 0 = 불투명 → 무개입).
+                let isStructField = base.size == 0 && p.env.structFields.contains(member.text)
+                if !isStructField, member.text.allSatisfy({ "xyzwrgbastpq".contains($0) }) {
                     // 스위즐 체인 초과(실물 water_caustics `.xy.zw`): 직전 스위즐을 대체.
                     if let pre = preSwizzle, base.size > 0, maxComponent(member.text) >= base.size {
                         base = Node(text: pre.text + dotTok.full + member.full, size: min(member.text.count, 4))

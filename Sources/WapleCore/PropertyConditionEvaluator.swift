@@ -4,7 +4,11 @@ public enum PropertyConditionEvaluator {
     public static func isVisible(_ property: WallpaperProperty, in properties: [WallpaperProperty]) -> Bool {
         guard let condition = property.condition?.trimmingCharacters(in: .whitespacesAndNewlines),
               !condition.isEmpty else { return true }
-        let values = Dictionary(uniqueKeysWithValues: properties.map { ($0.key, $0.value) })
+        // 중복 키는 **뒤가 이긴다**(uniquingKeysWith). properties 는 공개 API 가 받는 호출자 배열이라
+        // 같은 key 가 두 번 들어올 수 있고, 종전 `uniqueKeysWithValues` 는 그 입력에서 그대로 트랩했다
+        // (파서 버그가 아니라 입력 데이터로 프로세스가 죽는 경로). 뒤가 이기는 선택은 WE 가 나중 선언을
+        // 유효 선언으로 쓰는 것과 같은 방향이다.
+        let values = Dictionary(properties.map { ($0.key, $0.value) }, uniquingKeysWith: { _, later in later })
         return evaluate(condition, values: values) ?? true
     }
 

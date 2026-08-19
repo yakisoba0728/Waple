@@ -114,32 +114,47 @@ public struct PropertyAnimation: Equatable {
     public static func firedMarkers(events: [AnimationMarker], length: Float, mode: String,
                                     prevF: Float, curF: Float) -> [String] {
         guard curF > prevF, !events.isEmpty else { return [] }
-        var hits: [(t: Float, i: Int, name: String)] = []
+        // 위상 누적은 **Double** 로 한다(공개 시그니처는 Float 유지 — 호출부가 Float 를 넘긴다).
+        // 종전 구현은 이 산술을 전부 Float 로 했는데, Float32 는 가수 24비트라 t 가 2^24 를 넘으면
+        // ulp(t) > period 가 되어 `t += period` 가 **무연산**이 된다. 이 루프의 유일한 탈출 조건이
+        // `t <= curF` 라서 렌더 스레드가 영원히 돈다 — 수치 확인: 30fps·period == 1 프레임이면
+        // curF ≈ 2^24 = 가동 6.47일, period == 8 이면 ~52일. 아래 `((lo - p) / period)` 의
+        // `.rounded(.down) + 1` 역시 2^24 위에서 +1 이 흡수돼 같은 지점에서 무너진다.
+        var hits: [(t: Double, i: Int, name: String)] = []
         if (mode == "loop" || mode == "mirror"), length > 0 {
-            let period = mode == "loop" ? length : 2 * length
-            let lo = max(prevF, curF - period)  // ponytail: 큰 틱 갭은 마지막 한 주기만 — WE 실측 불가, 폭주 방지 우선
+            let len = Double(length)
+            let period = mode == "loop" ? len : 2 * len
+            let cur = Double(curF)
+            let lo = max(Double(prevF), cur - period)  // ponytail: 큰 틱 갭은 마지막 한 주기만 — WE 실측 불가, 폭주 방지 우선
             for (i, e) in events.enumerated() {
-                var phases: [Float]
+                var phases: [Double]
                 if mode == "loop" {
-                    var p = e.frame.truncatingRemainder(dividingBy: period)
+                    var p = Double(e.frame).truncatingRemainder(dividingBy: period)
                     if p < 0 { p += period }
                     phases = [p]
                 } else {
-                    let m = min(max(e.frame, 0), length)
-                    phases = (m == 0 || m == length) ? [m] : [m, 2 * length - m]
+                    let m = min(max(Double(e.frame), 0), len)
+                    phases = (m == 0 || m == len) ? [m] : [m, 2 * len - m]
                 }
                 for p in phases {
                     // 첫 히트 t = p + k·period > lo 부터 curF 이하 전부.
                     var t = p + max(((lo - p) / period).rounded(.down) + 1, 0) * period
-                    while t <= curF {
+                    // 2차 방어선(하드 상한). lo = max(prevF, curF - period) 라 스캔 구간 길이는
+                    // **최대 한 주기**이고 히트 간격이 정확히 period 이므로, 위상당 히트는 구조적으로
+                    // 1회(경계 부동소수 오차로 2회)를 넘을 수 없다. Double 전환으로 무한루프 자체는
+                    // 사라졌지만, 문서화된 "폭주 방지" 의도를 코드로 못박아 period 가 비정상적으로
+                    // 작아지는 어떤 경로에서도 이 루프가 프레임을 잡아먹지 못하게 한다.
+                    var iter = 0
+                    while t <= cur && iter < 4 {
                         if t > lo { hits.append((t, i, e.name)) }
                         t += period
+                        iter += 1
                     }
                 }
             }
         } else {  // single/clamp(+길이 0 안전): 단조 통과 1회
             for (i, e) in events.enumerated() where prevF < e.frame && e.frame <= curF {
-                hits.append((e.frame, i, e.name))
+                hits.append((Double(e.frame), i, e.name))
             }
         }
         return hits.sorted { $0.t == $1.t ? $0.i < $1.i : $0.t < $1.t }.map { $0.name }

@@ -147,7 +147,10 @@ public extension SceneLight3D {
         specularTint: SIMD3<Float> = SIMD3(repeating: 1)
     ) -> SIMD3<Float> {
         var result = uniforms.ambientTerm * albedo
-        for i in 0..<min(uniforms.count, 4) {
+        // 상한은 ForwardUniforms.slotCount(2D 레인 슬롯 수) — 종전 리터럴 4 는 F660 이후 3D 와 어긋난
+        // 2D 상한을 그대로 박아 둔 값이었다. init 이 count 를 네 배열의 실제 길이로 클램프하므로
+        // 이 min 은 구형 호출부(짧은 배열 + 기본값)까지 포함해 범위 안을 보장한다.
+        for i in 0..<min(uniforms.count, ForwardUniforms.slotCount) {
             let position = uniforms.positions[i]
             let colorRadius = uniforms.colorRadius[i]
             if Int(uniforms.kindCone[i].x + 0.5) == 4 {

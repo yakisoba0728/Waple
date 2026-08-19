@@ -202,7 +202,12 @@ public struct PuppetModel: Equatable {
         // 스켈레톤(있으면): "MDLS0001" 섹션. 실패는 본 없이 반환(정지 메시 렌더는 가능).
         if o + 8 <= bytes.count, String(bytes: bytes[o..<o+8], encoding: .utf8) == "MDLS0001" {
             o += 8 + 1  // magic + lead u8(0)
-            guard let _ = u32(o), let boneCount = u32(o + 4) else { return model }
+            // Model3D.swift:569 와 동일한 본 수 상한(100k). 손상 헤더의 거대 boneCount 가 그대로 루프
+            // 상한이 되면 readCString/u32 실패로 빠져나올 때까지 헛돈다 — 상한 초과는 본 없이 반환
+            // (정지 메시 렌더 가능; 아래 개별 실패 경로와 같은 정책).
+            // 참고: WE 엔진 자체는 본 128개에서 하드 실패한다(RE 분석). 그 의미론을 여기 들이지 않고
+            // Model3D 와의 정합만 맞춘다 — 새 한계를 발명하지 않는다.
+            guard let _ = u32(o), let boneCount = u32(o + 4), boneCount < 100_000 else { return model }
             o += 8
             var bones: [Bone] = []
             for _ in 0..<boneCount {
