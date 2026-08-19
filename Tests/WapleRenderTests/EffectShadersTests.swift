@@ -149,14 +149,24 @@ final class EffectShadersTests: XCTestCase {
     }
 
     /// F268/F269: WE waterwaves.vert:48 rotateVec2((0,1), direction) — 기준벡터 (0,1). direction=0(기본)
-    /// 이면 dir=(0,1)(세로), 90°면 dir=(1,0)(가로). 구 코드는 기준벡터 (1,0) 이라 상시 90° 어긋났었다.
+    /// 이면 dir=(0,1)(세로). 구 코드는 기준벡터 (1,0) 이라 상시 90° 어긋났었다.
+    ///
+    /// G-B4-02: 저장 단위는 **라디안**이다(`rotateVec2` 가 인자를 cos/sin 에 그대로 넣고,
+    /// 어노테이션이 `"range":[0,6.28]` + `"default":3.14159265358` + `"conversion":"rad2deg"`).
+    /// 아래 두 번째 단언이 도(度) 변환 재유입을 막는 음성 가드다 — 90 을 넣었을 때 90**도**가
+    /// 아니라 90**라디안**으로 읽혀야 한다.
     func testWaterwavesDirectionVectorMatchesWERotateVec2Basis() {
         let p0 = EffectShaders.params(for: "waterwaves", constants: [:])
         XCTAssertEqual(p0?[0] ?? .nan, 0, accuracy: 1e-6, "dir.x = -sin(0)")
         XCTAssertEqual(p0?[1] ?? .nan, 1, accuracy: 1e-6, "dir.y = cos(0)")
+        // UI 의 90° 는 씬에 π/2 로 저장된다 → dir = (-1, 0)(가로).
+        let pHalfPi = EffectShaders.params(for: "waterwaves", constants: ["direction": [.pi / 2]])
+        XCTAssertEqual(pHalfPi?[0] ?? .nan, -1, accuracy: 1e-4, "dir.x = -sin(π/2)")
+        XCTAssertEqual(pHalfPi?[1] ?? .nan, 0, accuracy: 1e-4, "dir.y = cos(π/2)")
+        // 음성 가드: 90 은 90도가 아니라 90 라디안이다.
         let p90 = EffectShaders.params(for: "waterwaves", constants: ["direction": [90]])
-        XCTAssertEqual(p90?[0] ?? .nan, -1, accuracy: 1e-4, "dir.x = -sin(90°)")
-        XCTAssertEqual(p90?[1] ?? .nan, 0, accuracy: 1e-4, "dir.y = cos(90°)")
+        XCTAssertEqual(p90?[0] ?? .nan, -sin(Float(90)), accuracy: 1e-4, "90 은 라디안으로 읽힌다")
+        XCTAssertEqual(p90?[1] ?? .nan, cos(Float(90)), accuracy: 1e-4, "90 은 라디안으로 읽힌다")
     }
     func testSourcesExist() {
         for n in ["waterwaves", "scroll", "opacity", "tint", "waterripple", "shake", "pulse"] {
