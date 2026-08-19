@@ -1,0 +1,109 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_we_binaries_fingerprint.py",
+ "entries": [
+  {
+   "id": "binary.fingerprints",
+   "value": {
+    "wallpaper64.exe": {
+     "sha256": "40e2ce021e9352324fadb3b8f72b8ba2a7ee95b71cc571d5b9f84be75cd993b0",
+     "fileBytes": 5360112,
+     "eLfanew": 64,
+     "timeDateStamp": 1782743820,
+     "imageBase": "0x140000000",
+     "pdataFunctions": 14792
+    },
+    "scenescript64.dll": {
+     "sha256": "58039ef912fcd51cd833540476e3798268158a06f63003fe94bff1b1cbeaad08",
+     "fileBytes": 28730352,
+     "eLfanew": 64,
+     "timeDateStamp": 1782743810,
+     "imageBase": "0x180000000",
+     "pdataFunctions": 57733
+    },
+    "mediaextensions64.dll": {
+     "sha256": "898ffaa06ac56f46b7ac7e182fc0b6c750fc585f8554606713e0468977e0dbc3",
+     "fileBytes": 3484144,
+     "eLfanew": 64,
+     "timeDateStamp": 1782743876,
+     "imageBase": "0x180000000",
+     "pdataFunctions": 7865
+    },
+    "wallpaperui.exe": {
+     "sha256": "dab38bfc017dd5fd4947a09706d23f27833870d1bbb87485677a3e67d1d55791",
+     "fileBytes": 12742640,
+     "eLfanew": 64,
+     "timeDateStamp": 1782743835,
+     "imageBase": "0x140000000",
+     "pdataFunctions": 28717
+    },
+    "resourcecompiler64.exe": {
+     "sha256": "09957ab6cfdf206a0825ffc8c3306e2e11473b1d6136523fa689a707766ee00d",
+     "fileBytes": 6752240,
+     "eLfanew": 64,
+     "timeDateStamp": 1782743827,
+     "imageBase": "0x140000000",
+     "pdataFunctions": 12487
+    },
+    "webwallpaper64.exe": {
+     "sha256": "51173dab085628159b1af7d9b745c15768497d738c7bab7b72d667a35b4f6d9d",
+     "fileBytes": 1337840,
+     "eLfanew": 64,
+     "timeDateStamp": 1782743810,
+     "imageBase": "0x140000000",
+     "pdataFunctions": 4379
+    },
+    "resourceutil64.dll": {
+     "sha256": "153cb1e273984b5c7a77b10d62089d50fcde3e187787d839918b59a81c8bfc24",
+     "fileBytes": 1322480,
+     "eLfanew": 64,
+     "timeDateStamp": 1782743803,
+     "imageBase": "0x180000000",
+     "pdataFunctions": 4019
+    },
+    "cloneextensions64.dll": {
+     "sha256": "69871bed52dc5af429fdedd04dad5d75d3b5c75944b41e03c0c59c18d7afc3c8",
+     "fileBytes": 657392,
+     "eLfanew": 64,
+     "timeDateStamp": 1782743793,
+     "imageBase": "0x180000000",
+     "pdataFunctions": 2075
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "WE 2.8.42 설치본(wallpaper64.exe + bin/)",
+     "note": "sha256 · fileBytes · PE TimeDateStamp · .pdata 함수 수"
+    }
+   ]
+  },
+  {
+   "id": "binary.fingerprints.why",
+   "value": {
+    "reason": "spec 정본이 WE 바이너리를 273회 인용하는데 지문은 wallpaper64.exe 하나뿐이었다. 근거가 사는 분석 리포가 삭제되면 나머지 7종은 확정 등급인데 대조 수단이 사라진다.",
+    "citations": {
+     "wallpaper64.exe": 189,
+     "scenescript64.dll": 31,
+     "mediaextensions64.dll": 14,
+     "wallpaperui.exe": 13,
+     "resourcecompiler64.exe": 12,
+     "webwallpaper64.exe": 6,
+     "resourceutil64.dll": 4,
+     "cloneextensions64.dll": 4
+    },
+    "validatorBlindSpot": "validate.py 의 근거 실재 검사는 리포 밖 경로를 제외한다(머신마다 다르므로 정당한 설계) — 그래서 이 부류를 자동으로는 못 잡는다.",
+    "notCommitted": "바이너리 자체는 커밋하지 않는다(독점 소프트웨어). 지문만 남긴다."
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "WE 2.8.42 설치본(wallpaper64.exe + bin/)",
+     "note": "sha256 · fileBytes · PE TimeDateStamp · .pdata 함수 수"
+    }
+   ]
+  }
+ ]
+}
