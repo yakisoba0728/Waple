@@ -241,6 +241,12 @@ jobs:
 
       # 실패 원인부터 먼저 뽑는다 — 종전 패턴("failed" 포함)은 정상 로그의 "load failed"·"save failed"
       # 진단문에 파묻혀 실제 실패 단언이 head -50 밖으로 밀려났다(런 30541571683 에서 실측).
+      # debug 구성에서만 뜬다. 이건 **구조적 위험이 아니라 검증된 선택**이다:
+      # 기준선은 한 벌이어야 하는데(두 구성이 각자 뜨면 어느 쪽이 정본인지 사라진다),
+      # debug 로 뜬 그 한 벌을 **release 레인이 매 실행 검증한다** — 위 `Test` 스텝은 두 구성
+      # 모두에서 `SyntheticPixelGoldenTests` 를 돌리고, 기준선이 구성에 의존했다면 release 가
+      # 어긋나 실패한다. 즉 "debug 전용 캡처" 의 위험은 이미 상시 게이트로 덮여 있다.
+      # (2026-08-19 스윕 §3-19 판정 — 근거 없는 구조적 우려로 남아 있던 항목이다.)
       - name: Upload synthetic golden baseline
         if: always() && inputs.golden_bootstrap && matrix.configuration == 'debug'
         uses: actions/upload-artifact@v4

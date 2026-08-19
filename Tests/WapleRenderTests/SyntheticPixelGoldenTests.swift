@@ -74,9 +74,16 @@ final class SyntheticPixelGoldenTests: XCTestCase {
             // difference(18) — 흰 vs 흰 = 검정. 일반 합성이면 흰색이 남아 갈린다.
             overlayCase(name: "blend-difference", mode: 18, alpha: 1,
                         overlayTex: solidTex(255, 255, 255)),
-            // 세로 그라디언트 — 텍스처 샘플링·보간이 픽셀에 남는 유일한 케이스.
+            // 세로 그라디언트 — 텍스처 샘플링·보간이 픽셀에 남는 케이스.
             overlayCase(name: "gradient-vertical", mode: 0, alpha: 1,
                         overlayTex: verticalGradientTex(top: (255, 32, 32), bottom: (32, 32, 255))),
+            // 가로 그라디언트 — **좌우 미러링을 잡는 유일한 케이스**.
+            // [2026-08-19] 종전 4종은 단색 셋 + 세로 그라디언트 하나라 x 축이 뒤집혀도
+            // 픽셀이 그대로였다(단색은 대칭, 세로 그라디언트는 x 에 불변). uv.x 부호나
+            // 정점 winding 이 뒤집히는 회귀가 이 세트를 그냥 통과했다는 뜻이다.
+            // 헬퍼는 이미 있었다(`TestSupport.swift:89`) — 골든 세트만 안 쓰고 있었다.
+            overlayCase(name: "gradient-horizontal", mode: 0, alpha: 1,
+                        overlayTex: horizontalGradientTex(left: (255, 32, 32), right: (32, 32, 255))),
         ]
     }
 
