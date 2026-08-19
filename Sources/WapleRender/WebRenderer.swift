@@ -137,6 +137,12 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
             )
             let effective = WallpaperProperties.applying(overrides: mergedOverrides, to: props)
             userPropertiesJSON = WallpaperProperties.weUserPropertiesJSON(effective)
+            // `uniqueKeysWithValues` 가 여기서는 안전하다 — 키가 구조적으로 유일하다:
+            // `WallpaperProperties.parse`(:56-61)가 project.json 의 **JSON 객체**를 순회해 만들고
+            // (`for (key, raw) in generalProperties`), `applying(overrides:to:)`(:146-153)는 `.map` 이라
+            // 키를 1:1 보존한다. 형제 `PropertyConditionEvaluator.swift:12` 가 `uniquingKeysWith` 를
+            // 쓰는 것은 그쪽이 **공개 API 로 임의 배열을 받기** 때문이고, 이 자리와는 입력이 다르다.
+            // 2026-08-19 스윕에서 확인 — 같아 보이지만 같은 결함이 아니다.
             userPropertiesByKey = Dictionary(uniqueKeysWithValues: effective.map { ($0.key, $0) })
             // 절대경로 허용목록은 effective 에 실제 반영된 병합 오버라이드 기준 — 유저 직접 선택 외에
             // 프리셋 리소스 해석(resolvingPresetResources, 프리셋 폴더 봉쇄 검증 완료)의 절대경로도 포함.

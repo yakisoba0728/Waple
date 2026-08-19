@@ -160,6 +160,9 @@ public enum GLSLTranslator {
         let vUniforms = parseUniforms(vsrc), fUniforms = parseUniforms(fsrc)
         let vVaryings = parseVaryings(vsrc)
         let varyings = parseVaryings(vsrc + "\n" + fsrc)   // 합집합
+        // `uniqueKeysWithValues` 가 여기서는 안전하다 — `parseVaryings`(:1128-1146)가 `seen` Set 으로
+        // **이미 중복 이름을 제거**한다(같은 이름이 다시 오면 타입만 큰 쪽으로 갱신). 셰이더 소스가
+        // 신뢰 경계 밖이라 의심스러워 보이지만 실제로는 도달 불가다. 2026-08-19 스윕에서 확인.
         let vVaryingTypes = Dictionary(uniqueKeysWithValues: vVaryings.map { ($0.name, $0.type) })
         let allUniforms = mergeUniforms(vUniforms + fUniforms)
 
