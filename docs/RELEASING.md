@@ -58,9 +58,13 @@ WAPLE_VERSION=1.2.3 WAPLE_BUILD=45 WAPLE_SIGN_IDENTITY="Developer ID Application
 
 패키징은 두 게이트를 통과해야 DMG 를 만든다. 둘 다 실제 사고에서 나왔다.
 
-1. **리소스 번들 동봉 확인** — `.build/<config>/*.bundle` 을 전부 `Contents/Resources/` 에 넣고,
-   하나라도 없으면 실패한다. SwiftPM 의 `Bundle.module` 은 못 찾으면 경고가 아니라
-   **fatalError** 라, 빠뜨리면 앱이 실행 즉시 죽는다.
+1. **WEAssets 동봉 확인** — `Waple_WapleRender.bundle` 안의 `WEAssets` 폴더를 앱
+   `Contents/Resources/` 에 넣고, `WEAssets/shaders/common.h` 가 없으면 실패한다
+   (`scripts/package-app.sh` 의 `for cand in …` 및 그 아래 존재 검사).
+   [정정 2026-08-19] 종전 서술은 "`.build/<config>/*.bundle` 을 **전부** 넣고 하나라도
+   없으면 실패" 였는데 `b901326` 이후 그렇지 않다 — 번들을 통째로 넣지 않고 WEAssets
+   폴더만 꺼내 넣는다(스크립트 주석에 이유가 있다). `Bundle.module` 이 못 찾으면
+   fatalError 라는 사고 경위 자체는 여전히 유효하고, 그래서 검사가 남아 있다.
 2. **실행 스모크** — 패키징된 앱을 6초 띄워 살아 있는지 본다. GUI 세션이 없는 환경에서는
    `WAPLE_SKIP_SMOKE=1` 로 끌 수 있다(끄면 ①만 남는다).
 
