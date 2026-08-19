@@ -51,6 +51,11 @@ import simd
 ///
 /// S3-mdl(2026-07-27) 디컴파일 대조: wallpaper64.exe MDL 디코더 `FUN_140261950`(RVA 0x260950,
 /// analysis/decompiled/all/…FUN_140261950.c) 바이트리더 트레이스(3302695207 人物_puppet.mdl 실물 대조)로
+/// ⚠️ **이 이름은 Ghidra 주소공간이다 — 원본 바이너리에서는 `0x140261880`**(−0xD0).
+/// Ghidra 가 매핑한 것이 rich header 주입본이라 디컴파일 산출물의 주소가 전부 208바이트 밀려 있다.
+/// 원본 .pdata 14,792개 함수 시작 대조로 확인했다. `spec/engine/decompilation-provenance.json` 참조 —
+/// 인용 39개 중 27개는 보정이 필요 없고 이것을 포함한 3개만 밀려 있다. 발견 자체는 실물
+/// 바이트 트레이스로 확인된 것이므로 결론은 유효하다. 밀린 것은 **찾아가는 주소뿐**이다.
 /// 헤더 3필드가 **정확히 offset 9 부터 시작하는 단일 u32 formatFlag**(문서 corpus_scan/mdl-format.md 의
 /// "0x08 오프셋 lo/hi u16 쌍, hi=0x8000" 주장은 매직 cstring 리더가 byte8 의 NUL(=formatFlag 하위바이트
 /// 우연 일치)을 종단문자로 소비해 이후 리드가 1바이트 밀리는 것을 못 잡은 오프바이원 — 우리 구현이 이미
@@ -312,6 +317,7 @@ public struct Model3D: Equatable {
     private enum VertexChannel { case position, normal, tangent, boneIndices, weights, uv, skip }
 
     /// 정점 레이아웃 테이블(wallpaper64.exe .rdata 원본 덤프로 확정 — FUN_1400d8060.c:81-96 의
+    /// ⚠️ 파일명은 Ghidra 주소공간 — 원본에서는 `0x1400d7f90`(−0xD0, 위 MDL 디코더 주석과 같은 사유).
     /// (마스크,기여) 26엔트리 누산 루프와 동일 데이터: stride = set bit 기여 합산, 채널 오프셋은
     /// **테이블 인덱스 오름차순** 누적(비트 값 순이 아님 — idx5 0x800000 이 idx9 0x20 보다 앞).
     /// 검산(전부 일치): 0x0f→48, 0x0f|skinMask→80, 0x09|skin→52, Kirby 0x00800021→44(pos@0,
