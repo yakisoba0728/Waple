@@ -6,8 +6,16 @@ import WapleRender
 /// 설정 창 상태 미러 + 배선. 저장은 기존 전역 스토어를 직접 읽고 쓰되,
 /// 적용 side-effect(리마운트·타이머·복원·saver 설치)는 전부 AppDelegate 주입 클로저로 위임한다
 /// (LibraryViewModel.on* 전례 — 뷰가 AppDelegate 내부에 직접 손대지 않는다).
-/// 비-@MainActor: 동기 전용이고 nonisolated AppDelegate 가 소유·구성한다(LibraryViewModel 과 동일 규약).
+/// 비-@MainActor: 동기 전용이다 — 만들고, 읽고, 배선하는 자리가 전부 이미 메인 액터라
+/// (AppDelegate·SettingsView) 표기가 없어도 오프메인 접근 경로가 생기지 않는다.
 /// 오프메인 콜백이 있는 Workshop/Discover VM 과 달리 @MainActor 불필요.
+///
+/// 종전 이 줄은 "nonisolated AppDelegate 가 소유·구성한다(LibraryViewModel 과 동일 규약)" 였다.
+/// 2026-08-19 엄격 동시성 도입에서 **앞쪽 전제가 바뀌었다** — AppDelegate 는 이제 `@MainActor` 다
+/// (LibraryViewModel 은 테스트 타깃 사정으로 아직 `@unchecked Sendable` — 그쪽 주석 참조).
+/// 여기만 표기를 안 붙이는 것은 잔재가 아니라 판단이다: 이 타입에는 큐를 넘는 경로가 하나도 없어
+/// (DispatchQueue 사용 0) 표기가 잡아 줄 것이 없고, 붙이면 비격리 `SettingsViewModelTests` 가
+/// 컴파일되지 않는다.
 final class SettingsViewModel: ObservableObject {
     @Published var fitMode: FitMode = SceneRenderSettings.fitMode
     @Published var maxFPS: SceneFPSCap = SceneRenderSettings.maxFPS

@@ -219,7 +219,11 @@ enum ProfilePipeline {
         let is3D = mdoc.camera3D != nil && !mdoc.objects3D.isEmpty
         let effects = mdoc.layers.reduce(0) { $0 + $1.effects.count }
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: SnapshotPipeline.thumbW, height: SnapshotPipeline.thumbH))
+        // 메인 액터 전용 API. 이 CLI 는 파이프라인을 main.swift 최상위(메인 스레드)에서 동기로만
+        // 돌린다(이 파일에 디스패치 없음) — SnapshotPipeline.captureFrame 과 같은 근거.
+        let container = MainActor.assumeIsolated {
+            NSView(frame: NSRect(x: 0, y: 0, width: SnapshotPipeline.thumbW, height: SnapshotPipeline.thumbH))
+        }
         let r = SceneRenderer()
         r.nowPlayingProvider = SnapshotPipeline.StoppedNowPlaying()
 

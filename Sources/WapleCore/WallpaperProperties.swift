@@ -1,6 +1,6 @@
 import Foundation
 
-public enum PropertyValue: Equatable, Hashable {
+public enum PropertyValue: Equatable, Hashable, Sendable {   // 페이로드 String/Bool/Double — 값 타입
     case string(String)
     case bool(Bool)
     case number(Double)

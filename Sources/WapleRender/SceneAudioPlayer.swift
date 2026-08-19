@@ -1,4 +1,7 @@
-import AVFoundation
+// @preconcurrency: 컴파일러 자체 fix-it(`:1:1 add '@preconcurrency' … from module 'AVFAudio'`).
+// AVAudioPlayer 는 Sendable 이 아닌데 delegate 콜백이 메인으로 홉하면서 플레이어 인스턴스를 넘긴다 —
+// 동시성 감사 이전 API 라서 나는 진단이고, 실제 직렬화는 아래 Playlist 주석의 "메인 전용" 규약이 한다.
+@preconcurrency import AVFoundation
 import WapleCore
 
 /// 씬 sound 레이어 재생기. pkg 에서 mp3/wav 데이터를 추출해 AVAudioPlayer 로 재생한다.
@@ -135,7 +138,10 @@ public final class SceneAudioPlayer {
 /// AVAudioPlayer delegate 콜백 스레드는 문서상 미보장 — didFinishPlaying 은 메인으로 홉해
 /// 상태(player/index/paused)를 메인 전용으로 직렬화(mount/teardown 도 메인 — 락 불요).
 /// internal 인 이유: F552 stale 콜백 회귀 테스트가 직접 구동한다.
-final class Playlist: NSObject, AVAudioPlayerDelegate {
+/// @unchecked Sendable 의 근거는 바로 위 문단이다 — 상태(player/index/paused/generation 등)는
+/// **메인 전용**이고, 유일한 비메인 진입인 delegate 콜백은 첫 줄에서 메인으로 홉한다(락 불요).
+/// 표기를 붙이는 이유는 그 메인 홉 클로저가 self 를 캡처하기 때문이다(엄격 동시성 진단 :237/:252).
+final class Playlist: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
     private let entries: [String]
     private let mode: String
     private let package: ScenePackage
@@ -231,6 +237,12 @@ final class Playlist: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    /// AVAudioPlayerDelegate 의 이 요구사항은 **optional @objc** 라 런타임 respondsToSelector: 로 조회된다.
+    /// 셀렉터를 명시로 고정하는 이유는 WebRenderer.swift 의 didFinish 주석에 적힌 사고와 같다 — 엄격
+    /// 동시성/언어 모드 전환으로 witness 매칭이 깨지면 암묵 @objc 노출이 사라지고, 곡이 끝나도 다음 곡이
+    /// 시작되지 않는 **무음 실패**가 된다(에러도 로그도 없다). 유닛 테스트는 이 메서드를 직접 호출하므로
+    /// 후킹 여부를 잡지 못한다 — 그래서 코드로 고정한다.
+    @objc(audioPlayerDidFinishPlaying:successfully:)
     func audioPlayerDidFinishPlaying(_ p: AVAudioPlayer, successfully flag: Bool) {
         // 콜백 스레드 미보장(Apple 문서) — 상태 갱신은 메인으로 홉(비메인이면 pause/teardown 과 경합).
         if !Thread.isMainThread {

@@ -11,7 +11,10 @@ import AppKit
 // 지목한 것도 그리드·디스플레이의 로컬 썸네일 두 벌이지 이것이 아니다.
 
 enum WorkshopPreviewCache {
-    static let cache = NSCache<NSURL, NSImage>()
+    /// `nonisolated(unsafe)` 근거: `NSCache` 는 자체 락으로 스레드 안전(Apple 문서 보증)이고
+    /// 참조는 `let` 이라 재대입이 없다. 컴파일러가 그 락을 볼 수 없을 뿐이다
+    /// (`PreviewImageCache`·`AnimatedImageCache` 와 같은 근거).
+    nonisolated(unsafe) static let cache = NSCache<NSURL, NSImage>()
 }
 
 struct WorkshopPreview: View {

@@ -28,7 +28,10 @@ enum SnapshotPipeline {
     /// 캐논(매니페스트 entry/self-check/해시 대상) 캡처 시각 — captureTimes 에 captureT 가 포함되면 그것,
     /// 아니면(명시적으로 6.0 을 뺀 진단 실행) 첫 값으로 폴백. 기본 경로(오버라이드 없음)에선 항상 captureT.
     static let primaryCaptureTime: Float = captureTimes.contains(captureT) ? captureT : (captureTimes.first ?? captureT)
-    static let fitMode: FitMode = .fill
+    /// 저장이 아니라 **계산** 프로퍼티다. `FitMode` 는 WapleRender 의 public enum 이라 자동
+    /// `Sendable` 추론을 못 받고, `static let` 이면 "비-Sendable 타입의 전역 가변 상태" 경고가
+    /// 붙는다(엄격 동시성). 값이 상수 하나뿐이라 매번 만들어도 되고 그러면 공유 상태 자체가 없다.
+    static var fitMode: FitMode { .fill }
     /// 벽시계 텍스트(시계/날짜 레이어)가 재캡처마다 동일 픽셀이 되도록 JS Date 무인자/now 를 핀하는 고정
     /// epoch(ms) — 임의 상수(2024-01-01 12:00:00 UTC = KST 21:00:00). 변경 시 시계/날짜 씬 베이스라인
     /// 재생성 필요. S4①(2026-07-27): getHours() 등 로컬 getter 는 TextScriptEngine.dateOverrideJS 가
@@ -94,7 +97,13 @@ enum SnapshotPipeline {
         }
         let r = SceneRenderer()
         r.nowPlayingProvider = StoppedNowPlaying()
-        try r.mount(in: NSView(frame: NSRect(x: 0, y: 0, width: thumbW, height: thumbH)), project: project)
+        // `NSView.init(frame:)` 은 SDK 가 메인 액터 전용으로 선언한 API 다. 이 CLI 는 파이프라인
+        // 전체를 `main.swift` 최상위(= 메인 스레드)에서 **동기**로 실행한다 — 이 파일에도
+        // ProfilePipeline 에도 디스패치가 하나도 없고, 병렬을 쓰는 것은 DeepScan 뿐이다.
+        // 그래서 `assumeIsolated` 는 참인 단언이고, 나중에 누가 이 경로를 오프메인으로 옮기면
+        // 조용히 어긋나는 대신 즉시 트랩된다.
+        let container = MainActor.assumeIsolated { NSView(frame: NSRect(x: 0, y: 0, width: thumbW, height: thumbH)) }
+        try r.mount(in: container, project: project)
         r.pause()                    // 라이브 입력(오디오 캡처·시차) 정지 → 결정성
         r.setSpectrum(.silent)       // 오디오-반응 효과를 무신호로 고정
         let urls = r.captureFrames(width: thumbW, height: thumbH, times: captureTimes, toDir: tmp)

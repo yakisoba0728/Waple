@@ -99,11 +99,20 @@ public enum BaseAssetsSettings {
     }
 
     /// 자동 탐지 채택 1회 로그(F471) — 무관 폴터 채택 시 사용자가 원인을 추적할 수 있게.
-    private static var loggedAutoDetectedPaths: Set<String> = []
+    ///
+    /// [2026-08-19] 락을 씌운다(엄격 동시성 진단이 가리킨 곳). searchRoots 는 마운트 경로에서 불리고
+    /// (SceneRenderer.mount), 다중 모니터 동시 마운트처럼 호출 스레드가 갈릴 수 있다 — Set 은 값
+    /// 타입이라 동시 변형은 중복 로그가 아니라 **자료구조 손상/크래시**가 될 수 있다. 프로세스당
+    /// 사실상 1회 도는 경로라 락 비용은 무의미하고, "1회 로그" 라는 원래 의도도 이제 정확해진다.
+    /// (nonisolated(unsafe) 로 표기만 하고 넘어가지 않은 이유 — 여기엔 실제 경합 여지가 있다.)
+    private static let logLock = NSLock()
+    nonisolated(unsafe) private static var loggedAutoDetectedPaths: Set<String> = []
     private static func logAutoDetectedOnce(_ url: URL) {
         let path = url.path
-        guard !loggedAutoDetectedPaths.contains(path) else { return }
-        loggedAutoDetectedPaths.insert(path)
+        logLock.lock()
+        let inserted = loggedAutoDetectedPaths.insert(path).inserted
+        logLock.unlock()
+        guard inserted else { return }
         NSLog("%@", "[Waple] base assets auto-detected: \(path) (설정 메뉴 지정이 항상 우선)")
     }
 }

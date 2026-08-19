@@ -57,7 +57,10 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     /// 동시에 진행 가능한 재귀 디렉터리 열거 수(randomFile + fetchall 공용). 초과 요청은 빈 응답.
     private static let maxInFlightDirectoryWalks = 2
     /// 열거 1회가 방문할 엔트리 수 상한 — 사용자가 홈 디렉터리를 고른 경우의 폭주도 여기서 끊긴다.
-    private static let maxEnumeratedEntries = 20_000
+    /// nonisolated: 이 클래스는 @MainActor 프로토콜 적합으로 멤버 전체가 메인 액터로 추론되고, 그러면
+    /// **static let 도 격리된다**(AppDelegate:430 의 `SettingsView.minHeight` 진단이 같은 사례). 아래
+    /// regularFiles 는 백그라운드 큐 전용(F573)이라 이 상수를 격리 밖에서 읽어야 한다.
+    nonisolated private static let maxEnumeratedEntries = 20_000
     /// 브리지 문자열 인자(name/requestId) 길이 상한(바이트). 초과 메시지는 폐기.
     private static let maxBridgeStringBytes = 1024
     /// 진행 중인 재귀 열거 수. 메인 큐에서만 읽고 쓴다(브리지 메시지·didFinish·완료 콜백 전부 메인).
@@ -205,6 +208,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     }
 
     /// 조작 창 닫힘 — 12Hz 미러 타이머 정지(teardown 까지 상주하던 낭비 제거). 창은 보존(재오픈 재사용).
+    /// NSWindowDelegate 도 optional @objc 요구사항이라 셀렉터를 고정한다(아래 WKNavigationDelegate 주석 참조).
+    @objc(windowWillClose:)
     public func windowWillClose(_ notification: Notification) {
         guard let win = notification.object as? NSWindow, win === interactionWindow else { return }
         (win.contentView as? WebInputProxyView)?.stop()
@@ -250,6 +255,31 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         }
     }
 
+    // MARK: - WKNavigationDelegate — @objc 셀렉터 고정(아래 주석의 사고 이력을 읽고 지울 것)
+    //
+    // [2026-08-19] **이 파일의 델리게이트 메서드는 셀렉터를 명시로 고정한다.** 근거(추정 아님, CI 실측):
+    // `-strict-concurrency=complete` 만 추가한 커밋 ead3d1d(CI run 32214982769)에서 소스 변경이 하나도
+    // 없는 WebRendererSecurityTests 두 건이 debug·release 양쪽에서 실패했다 —
+    //   · testWebRendererBlocksExternalTopFrameNavigation: web.url.host 가 "evil"(차단 실패, 커밋됨)
+    //   · testWebRendererBlocksSubframeNavigationToDisallowedHost: iframe href 읽기 nil(교차출처 = 커밋됨)
+    // 둘 다 "decisionHandler(.cancel) 이 아예 호출되지 않았다"는 뜻이다. 정책 코드 자체는 무변경이다.
+    //
+    // WKNavigationDelegate 의 요구사항은 전부 **optional @objc** 라 런타임에 respondsToSelector: 로
+    // 조회된다. 구현이 요구사항의 witness 자격을 잃으면 암묵 @objc 노출과 함께 **셀렉터가 사라지고**,
+    // WebKit 은 그냥 "구현 안 함"으로 보고 기본값(.allow)으로 진행한다 — 컴파일 에러도, 런타임 로그도
+    // 없이 **보안 게이트가 조용히 꺼진다**. 최신 SDK 의 decisionHandler 블록에는 동시성 어노테이션이
+    // 붙어 있어 엄격 동시성이 켜지면 우리 쪽 `(WKNavigationActionPolicy) -> Void` 와의 불일치가 더 이상
+    // 관용되지 않는 것으로 보인다(툴체인이 없어 진단 로그로 최종 확인은 못 했다).
+    //
+    // 같은 런에서 **블록 인자가 없는** didFinish/didCommit 은 정상 동작했다(WebPropertyDeliveryTests 통과
+    // = didFinish 가 __wapleApplyProps 를 실제로 호출했다). 즉 관측된 위험은 완료 핸들러(블록) 인자를
+    // 가진 optional 델리게이트 메서드에 국한된다. 그래도 나머지도 같이 고정한다 — 언어 모드를 .v6 로
+    // 올릴 때 관용 폭이 또 줄어들 수 있고, 이 실패 양식은 **테스트가 있어야만** 보이기 때문이다.
+    //
+    // 셀렉터를 명시하면 witness 매칭 성공 여부와 무관하게 ObjC 진입점이 보장된다. 반대로 witness 가
+    // 여전히 성립하는 메서드는 셀렉터가 틀리면 컴파일 에러가 나므로(요구사항 셀렉터와 불일치) 오타는
+    // 조용히 지나가지 않는다. **이 어노테이션을 지우려면 위 두 테스트를 반드시 돌려라.**
+    @objc(webView:didFinishNavigation:)
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard Self.isAllowedTopFrameURL(webView.url) else { return }
         synchronizeEffectivePause(forceJavaScript: isEffectivelyPaused)
@@ -270,6 +300,7 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
     /// 스크립트가 실행돼 리스너 등록 메시지가 리셋 뒤에 도착하고(didFinish 리셋은 등록을 지움),
     /// (2) 프래그먼트/pushState 같은 동일 문서 납비게이션은 JS 월드가 유지되며 didCommit 이
     /// 발생하지 않는다(리셋하면 살아 있는 문서의 등록이 고립된다).
+    @objc(webView:didCommitNavigation:)
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard Self.isAllowedTopFrameURL(webView.url) else { return }
         // 소비자가 있을 때만 동기화 — 미등록 문서(초기 로드 등)에서의 무조건 동기화는
@@ -283,6 +314,9 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         }
     }
 
+    /// 톱/서브프레임 내비게이션 게이트. **셀렉터 고정 필수** — 위 didFinish 주석의 CI 실측 참조
+    /// (이 메서드가 후킹되지 않으면 WebKit 이 기본값 .allow 로 진행해 게이트가 무음 무력화된다).
+    @objc(webView:decidePolicyForNavigationAction:decisionHandler:)
     public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.targetFrame?.isMainFrame != false {
@@ -418,8 +452,11 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         inFlightDirectoryWalks += 1
         // F573: 재귀 열거+stat 은 파일 수만큼 I/O — 메인 프리즈 방지를 위해 백그라운드에서 해석 후
         // 메인으로 복귀해 전달(teardown 후면 webView 가 nil 이라 evaluateJavaScript 가 no-op).
+        // 캡처는 불변 스냅샷으로 넘긴다 — @Sendable 클로저가 가변 var 를 참조하면 Swift 6 에선 에러다.
+        // 값 타입 배열이라 복사는 참조 하나(의미 변화 없음).
+        let snapshot = targets
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let resolved: [(String, [String])] = targets.map { target in
+            let resolved: [(String, [String])] = snapshot.map { target in
                 let files = self?.regularFiles(in: target.directoryURL)
                     .map { $0.resolvingSymlinksInPath().path } ?? []
                 return (target.key, files)
@@ -444,12 +481,16 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         return directoryURL
     }
 
-    private func randomFilePath(in directoryURL: URL) -> String? {
+    /// nonisolated: F573 계약대로 **백그라운드 큐에서 호출된다**. 이 클래스는 WKNavigationDelegate
+    /// 등 @MainActor 프로토콜 적합으로 멤버 전체가 메인 액터로 추론되는데, 이 셋은 인스턴스 상태를
+    /// 하나도 읽지 않고 FileManager 만 만지므로 격리에서 명시적으로 빼낸다(= 진단이 가리키던
+    /// "메인 액터 메서드를 백그라운드에서 호출" 이 실제로 안전하다는 근거를 코드에 적는 것).
+    nonisolated private func randomFilePath(in directoryURL: URL) -> String? {
         regularFiles(in: directoryURL).randomElement()?.resolvingSymlinksInPath().path
     }
 
     /// F573: 재귀 열거+파일별 stat — 메인 스레드 동기 호출 금지(백그라운드 큐 전용).
-    private func regularFiles(in directoryURL: URL) -> [URL] {
+    nonisolated private func regularFiles(in directoryURL: URL) -> [URL] {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]
         guard let enumerator = FileManager.default.enumerator(
             at: directoryURL,
@@ -493,7 +534,8 @@ public final class WebRenderer: NSObject, WallpaperRenderer, WKNavigationDelegat
         return WallpaperPathSecurity.contains(realURL, in: realRoot)
     }
 
-    private func isRegularFile(_ url: URL, containedIn root: URL?) -> Bool {
+    /// nonisolated: regularFiles(백그라운드)가 엔트리마다 호출한다 — 인스턴스 상태 무접근(위 주석 참조).
+    nonisolated private func isRegularFile(_ url: URL, containedIn root: URL?) -> Bool {
         var isDirectory = ObjCBool(false)
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return false }

@@ -1,11 +1,20 @@
 import Foundation
-import WebKit
+// @preconcurrency: 컴파일러 자체 fix-it(`:2:1 add '@preconcurrency' … from module 'WebKit'`).
+// `any WKURLSchemeTask` 는 Sendable 이 아닌데 io 큐 클로저가 태스크를 잡는다 — 이건 WebKit 이
+// 동시성 감사를 받기 전 API 라서 나는 진단이고, 실제 직렬화는 우리 쪽 activeTasks/NSLock 이 한다
+// (stop 이후 호출 금지 계약을 isTaskLive/withLiveTask 가 지킨다 — F575→F590 이력 참조).
+@preconcurrency import WebKit
 import UniformTypeIdentifiers
 import WapleCore
 
 public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
-    public static let scheme = "waple-asset"
-    public static let host = "wallpaper"
+    // nonisolated: WKURLSchemeHandler 가 @MainActor 프로토콜이라 이 클래스는 멤버 전체가 메인 액터로
+    // **추론**되지만, 이 타입의 실제 설계는 그 반대다 — 요청 처리는 ioQueue(동시 큐)에서 돌고 상태는
+    // NSLock 으로 지킨다(아래 activeTasks). 그래서 io 큐에서 읽는 순수 상수·순수 함수는 격리에서
+    // 명시적으로 빼낸다. 이게 없으면 "메인 액터 프로퍼티를 Sendable 클로저에서 참조" 진단이 뜨는데,
+    // 그건 여기선 실제 위험이 아니라 추론이 틀렸다는 신호다(값은 불변, 함수는 인스턴스 상태 무접근).
+    nonisolated public static let scheme = "waple-asset"
+    nonisolated public static let host = "wallpaper"
 
     private let root: URL
     private let ioQueue = DispatchQueue(label: "waple.scheme.io", qos: .userInitiated, attributes: .concurrent)
@@ -59,7 +68,8 @@ public final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
     }()
 
     /// 요청 경로를 루트 하위 파일 URL 로 안전하게 변환. 루트를 벗어나면 nil.
-    public static func fileURL(forRequestPath path: String, root: URL) -> URL? {
+    /// nonisolated: io 큐에서 호출되는 순수 함수(인스턴스 상태 무접근) — 위 scheme/host 주석 참조.
+    nonisolated public static func fileURL(forRequestPath path: String, root: URL) -> URL? {
         let root = root.standardizedFileURL
         let rel = path.hasPrefix("/") ? String(path.dropFirst()) : path
         if rel.isEmpty { return root }

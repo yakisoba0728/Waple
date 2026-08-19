@@ -10,7 +10,11 @@ import SwiftUI
 /// 그대로 뒀다** — `AppUIFixRegressionTests` 가 이름으로 참조하는 동결 파일이라, 이름을 바꾸면
 /// 그건 리팩토링이 아니라 회귀 테스트 수정이 된다.
 enum PreviewImageCache {
-    private static let cache = NSCache<NSURL, NSImage>()
+    /// `nonisolated(unsafe)` 근거: `NSCache` 는 **자체 락으로 스레드 안전**이라고 Apple 이 문서로
+    /// 보증한다 — 아래 `load` 가 오프메인(`Task.detached`)에서 넣고 메인에서 꺼내는 것이 바로 그
+    /// 보증에 기대는 사용이다. 컴파일러는 그 락을 볼 수 없어 "비-Sendable 타입의 전역 가변 상태"
+    /// 로 표시할 뿐이고, 참조 자체는 `let` 이라 재대입도 없다.
+    nonisolated(unsafe) private static let cache = NSCache<NSURL, NSImage>()
 
     /// 캐시 히트만 동기 반환(디스크 읽기 없음 — body 평가 중 호출 안전).
     static func cached(_ url: URL) -> NSImage? { cache.object(forKey: url as NSURL) }

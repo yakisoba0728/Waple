@@ -1,7 +1,20 @@
 import Foundation
 import WapleCore
 
-public final class LibraryStore {
+/// `@unchecked Sendable` 근거 — 이 클래스가 지키는 두 규율을 타입에 적어 둔 것이다.
+///
+/// 1) **가변 상태(`entries`/`selectedId`/library.json 쓰기)는 메인 스레드 전용이다.** 임포트
+///    경로(`LibraryViewModel.importParent/importZip/importVideoFile`)가 무거운 I/O 를 백그라운드
+///    큐에서 돌리면서도 스토어 등록만은 반드시 `DispatchQueue.main.async` 홉 안에서 하는 것이
+///    그 규율이고, 각 함수의 주석("스토어 변경 메인 한정 규약 유지")이 근거다.
+/// 2) **백그라운드에서 불리는 두 메서드는 인스턴스 상태를 아예 건드리지 않는다** —
+///    `scanImportableFolders`(FileManager 순회)와 `extractZipToTemp`(ditto 해제)는 `self` 의
+///    저장 프로퍼티를 읽지도 쓰지도 않는다. 즉 큐를 넘어가는 것은 참조뿐이고 그 참조로 하는 일이
+///    순수하다.
+///
+/// 컴파일러는 (1)도 (2)도 볼 수 없다. 규율이 깨지는 순간(백그라운드에서 `entries` 를 만지는 코드가
+/// 새로 생기면) 이 표기는 거짓이 되므로, 새 메서드를 백그라운드에서 부르기 전에 위 둘을 확인할 것.
+public final class LibraryStore: @unchecked Sendable {
     private let baseDirectory: URL
     private let indexURL: URL
     public private(set) var entries: [LibraryEntry] = []
