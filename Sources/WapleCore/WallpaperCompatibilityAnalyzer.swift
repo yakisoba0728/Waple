@@ -541,19 +541,51 @@ public enum WallpaperCompatibilityAnalyzer {
     private static func analyzeSceneFeatures(project: WallpaperProject,
                                              folderURL: URL,
                                              issues: inout [WallpaperCompatibilityIssue]) -> [String] {
-        guard project.type == .scene,
-              let packageURL = scenePackageURL(in: folderURL) else { return [] }
+        guard project.type == .scene else { return [] }
+        // G-E3-01/02 의 **잔여분** — 이 스캐너만 렌더러와 다른 규약을 쓰고 있었다. 이 스캐너의 계약은
+        // "이슈 없음 = 렌더 가능" 이므로, 렌더러와 규약이 갈리는 순간 그 보장이 거짓이 된다.
+        //
+        // ① **마운트 형태.** 렌더러는 `.pkg` 가 없으면 폴더를 그대로 마운트한다(SceneRenderer.swift:1228
+        //    `ScenePackage.fromDirectory`). 여기는 `.pkg` 가 없으면 `return []` 로 조용히 빠져나갔다 —
+        //    즉 **언팩 씬 프로젝트를 한 건도 검사하지 못했다.** 실측(WE 2.8.42 설치본): 씬 프로젝트
+        //    188개가 전부 언팩이고 `.pkg` 는 0개다. 이 스캐너의 씬 분석은 설치본 전건에 대해
+        //    "피처 0개·이슈 0개" 를 냈다 — 이슈가 없으니 계약을 어긴 것처럼 안 보이지만, 실제로는
+        //    **아무것도 안 본 것**이라 그 침묵에 아무 보장이 없다.
+        //
+        // ② **씬 문서 이름.** `project.json` 의 `"file"` 이 정한다(SceneDocument.swift:940 —
+        //    렌더러가 `project.fileName` 을 그대로 넘긴다, SceneRenderer.swift:1246). 여기만
+        //    `scene.json`/`gifscene.json` 을 하드코딩해, 이름이 다른 씬을 "SceneDocument 를 만들 수
+        //    없다" 는 `.error` 로 단정할 수 있었다.
+        //
+        // 둘은 **묶여 있다**: ①만 고치면 이름이 다른 씬들이 비로소 이 경로에 도달해 ②의 거짓 치명
+        // 이슈를 정통으로 맞는다. 설치본 실측으로 그 4건이 실재한다 — `ricepod.json`
+        // `fantasticcar.json` `techno.json` `audiophile.json`(뒤 둘은 `type` 자체를 생략해서
+        // `ProjectJSONParser` 의 확장자 추론으로 `.scene` 이 된다). 그래서 한 커밋에서 같이 고친다.
         let package: ScenePackage
-        do {
-            package = try ScenePackage.parse(Data(contentsOf: packageURL))
-        } catch {
-            issues.append(WallpaperCompatibilityIssue(
-                severity: .error,
-                code: .missingScenePackage,
-                message: "Scene package exists but could not be parsed by Waple: \(error)",
-                projectID: project.id,
-                relativePath: packageURL.lastPathComponent
-            ))
+        let sourcePath: String
+        if let packageURL = scenePackageURL(in: folderURL) {
+            sourcePath = packageURL.lastPathComponent
+            do {
+                package = try ScenePackage.parse(Data(contentsOf: packageURL))
+            } catch {
+                issues.append(WallpaperCompatibilityIssue(
+                    severity: .error,
+                    code: .missingScenePackage,
+                    message: "Scene package exists but could not be parsed by Waple: \(error)",
+                    projectID: project.id,
+                    relativePath: sourcePath
+                ))
+                return []
+            }
+        } else if let folderPackage = ScenePackage.fromDirectory(folderURL) {
+            // 폴더 백엔드는 지연 읽기라 큰 프로젝트도 통째로 메모리에 올리지 않는다
+            // (ScenePackage.fromDirectory 주석). 렌더러와 같은 진입점을 쓴다.
+            sourcePath = project.fileName ?? "scene.json"
+            package = folderPackage
+        } else {
+            // 렌더러도 이 경우 `assetMissing` 으로 실패한다(SceneRenderer.swift:1229) — 다만 폴더에
+            // project.json 이라도 있으면 `fromDirectory` 는 nil 이 아니므로 여기 오는 것은 읽을 파일이
+            // 하나도 없는 폴더뿐이다. 종전과 같이 조용히 통과시킨다(다른 게이트가 잡는 영역).
             return []
         }
         var features: Set<String> = ["scenePackage"]
@@ -568,8 +600,20 @@ public enum WallpaperCompatibilityAnalyzer {
             features.insert("sceneSound")
         }
 
-        guard let sceneData = package.data(for: "scene.json") ?? package.data(for: "gifscene.json"),
+        // 후보 순서를 `SceneDocument.parse` 의 `sceneCandidates` 와 **글자 그대로 같게** 둔다.
+        // 둘이 갈리는 순간 위 ②가 그대로 재발한다.
+        let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }
+        guard let sceneData = sceneCandidates.compactMap({ package.data(for: $0) }).first,
               let scene = try? JSONSerialization.jsonObject(with: sceneData) as? [String: Any] else {
+            let candidateList = sceneCandidates.joined(separator: ", ")
+            // 같은 프로젝트에 대해 `analyzeTypeAndFiles` 가 이미 같은 코드의 치명 이슈를 냈다면 중복
+            // 보고하지 않는다. 그쪽(:314)은 **선언된 메인 파일이 디스크에 있는가**를 보고, 여기는
+            // **그 파일이 패키지 조회로 잡히고 유효한 JSON 인가**를 본다 — 파일이 아예 없는 경우에만
+            // 두 판정이 겹친다(실측: 언팩 브랜치를 켜기 전에는 겹칠 일이 없어 안 드러났다).
+            // 겹칠 때 남길 것은 먼저 나온 쪽이다(더 구체적인 relativePath 를 들고 있다).
+            guard !issues.contains(where: { $0.projectID == project.id && $0.code == .missingScenePackage }) else {
+                return Array(features)
+            }
             // F236: 패키지 자체는 유효하게 파싱됐지만 scene.json/gifscene.json 이 없거나(또는 JSON으로
             // 해석 불가) 실려 있지 않은 경우 — 위 catch(패키지 파싱 자체 실패)와 대칭으로 이슈를 남긴다.
             // SceneDocument 를 구성할 방법이 없어 실제로는 렌더 불가할 개연성이 높은데, 종전엔 이슈
@@ -577,9 +621,9 @@ public enum WallpaperCompatibilityAnalyzer {
             issues.append(WallpaperCompatibilityIssue(
                 severity: .error,
                 code: .missingScenePackage,
-                message: "Scene package parsed but contains no scene.json/gifscene.json (or it is not valid JSON) — Waple cannot build a SceneDocument from it.",
+                message: "Scene package parsed but contains none of \(candidateList) (or it is not valid JSON) — Waple cannot build a SceneDocument from it.",
                 projectID: project.id,
-                relativePath: packageURL.lastPathComponent
+                relativePath: sourcePath
             ))
             return Array(features)
         }
