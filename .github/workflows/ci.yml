@@ -128,24 +128,6 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           echo "</details>" >> "$GITHUB_STEP_SUMMARY"
 
-      # release 실패는 잡을 빨갛게 만들지 않는다(픽셀 분기가 정당한 실패를 낳는다).
-      # 그래도 **조용히 지나가서는 안 된다** — 실행 페이지 상단에 경고로 띄우고 요약에도 남긴다.
-      # 이게 없으면 초록 실행의 로그를 여는 사람이 없어 레인이 사실상 무의미해진다.
-      - name: Flag release-only failure
-        if: matrix.configuration == 'release' && steps.test.outcome == 'failure'
-        run: |
-          echo "::warning title=release 레인 테스트 실패::debug 는 통과했는데 release 가 실패했다 — 최적화 의존 결함(부동소수 재결합·경계 조건)일 수 있다. 이 잡은 설계상 초록으로 남는다."
-          {
-            echo "### ⚠️ release 전용 실패"
-            echo ""
-            echo "debug 레인과 달리 release 레인에서 테스트가 실패했다. 이 잡은 설계상 초록이지만"
-            echo "(두 구성은 픽셀이 갈린다) **최적화 의존 결함일 가능성**이 있으므로 확인이 필요하다."
-            echo ""
-            echo '```'
-            grep -E "error:|XCTAssert.*failed|failed \\(" test-output.log 2>/dev/null | head -25 || echo "(test-output.log 없음)"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
       # release 빌드 로그도 올린다 — 이 레인의 존재 이유가 최적화 의존 결함인데
       # 종전엔 debug 것만 올라와 정작 필요한 쪽 로그가 없었다.
       - name: Upload build log
@@ -224,6 +206,32 @@ jobs:
       # 오판했다 — `--parallel` 은 전부 통과하면 XCTest 의 `Executed N tests` 줄을 안 찍는데
       # 그걸 "필터가 0건 매치" 로 읽어 통과한 클래스를 실패로 보고했다. 이 리포가 반복해서
       # 당한 "검사하는 척하는 검사" 를 내가 그대로 만든 셈이라, 기계가 읽는 형식으로 바꾼다.
+      # release 실패는 잡을 빨갛게 만들지 않는다(픽셀 분기가 정당한 실패를 낳는다).
+      # 그래도 **조용히 지나가서는 안 된다** — 실행 페이지 상단에 경고로 띄우고 요약에도 남긴다.
+      # 이게 없으면 초록 실행의 로그를 여는 사람이 없어 레인이 사실상 무의미해진다.
+      #
+      # [2026-08-20] **이 스텝은 반드시 `Test` 뒤에 있어야 한다.** 종전엔 `Test`(id: test)보다
+      # 위(빌드 직후)에 있었는데, GitHub Actions 의 `steps` 컨텍스트는 **이미 실행된 스텝만**
+      # 담는다. 그래서 `steps.test.outcome` 이 항상 null 이고 `null == 'failure'` 는 항상
+      # false — 도입 이후 모든 실행에서 `skipped` 였다(실측: run 32313417567 의 debug·release
+      # 양쪽 스텝 6번이 skipped). 참조하는 `test-output.log` 도 `Test` 가 tee 로 만드는 파일이라
+      # 그 자리에선 존재할 수조차 없었다. "조용한 게이트를 실제 게이트로 만든다" 던 스텝이
+      # 정작 자기가 조용한 게이트였다.
+      - name: Flag release-only failure
+        if: matrix.configuration == 'release' && steps.test.outcome == 'failure'
+        run: |
+          echo "::warning title=release 레인 테스트 실패::debug 는 통과했는데 release 가 실패했다 — 최적화 의존 결함(부동소수 재결합·경계 조건)일 수 있다. 이 잡은 설계상 초록으로 남는다."
+          {
+            echo "### ⚠️ release 전용 실패"
+            echo ""
+            echo "debug 레인과 달리 release 레인에서 테스트가 실패했다. 이 잡은 설계상 초록이지만"
+            echo "(두 구성은 픽셀이 갈린다) **최적화 의존 결함일 가능성**이 있으므로 확인이 필요하다."
+            echo ""
+            echo '```'
+            grep -E "error:|XCTAssert.*failed|failed \\(" test-output.log 2>/dev/null | head -25 || echo "(test-output.log 없음)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Parallel isolation gate
         if: matrix.configuration == 'debug'
         run: |
@@ -232,22 +240,41 @@ jobs:
           for cls in SceneRenderSettingsTests SceneCompositeConventionTests; do
             for i in 1 2 3; do
               xml="parallel-$cls-$i.xml"
+              log="parallel-$cls-$i.log"
               swift test -c debug --parallel --num-workers 6 --filter "$cls" \
-                --xunit-output "$xml" >/dev/null 2>&1 || true
-              python3 - "$xml" "$cls" "$i" <<'PYEOF' || fail=1
-          import sys, xml.etree.ElementTree as ET
-          path, cls, run = sys.argv[1], sys.argv[2], sys.argv[3]
+                --xunit-output "$xml" > "$log" 2>&1 || true
+              python3 - "$xml" "$log" "$cls" "$i" <<'PYEOF' || fail=1
+          import re, sys, xml.etree.ElementTree as ET
+          path, logpath, cls, run = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
           try:
               root = ET.parse(path).getroot()
           except Exception as e:
               print(f"::error::{cls} #{run}: xunit XML 을 못 읽었다 ({e}) — 테스트가 아예 안 돌았다")
               raise SystemExit(1)
-          suites = root.iter("testsuite")
           tests = fails = errors = 0
-          for s in suites:
+          for s in root.iter("testsuite"):
               tests += int(s.get("tests", 0)); fails += int(s.get("failures", 0)); errors += int(s.get("errors", 0))
           if tests == 0:
               print(f"::error::{cls} #{run}: 실행된 테스트 0건 — 필터가 못 잡았다(게이트가 도장이 된다)")
+              raise SystemExit(1)
+          # [2026-08-20] **스킵을 통과로 세면 안 된다.** SwiftPM 의 XUnitGenerator 는
+          # tests 에 스킵을 포함하고 `<skipped/>` 를 쓰지 않으며 errors 는 "0" 하드코딩이다 —
+          # 즉 XML 만 봐서는 스킵을 구분할 수 없다. 그런데 대상 클래스는 전원 Metal 가드
+          # (SceneCompositeConventionTests 는 func test 16 / XCTSkip 16)라, GPU 없는 러너에서
+          # 16건 전부 스킵돼도 종전 판정은 "16건 통과" 를 **적극적으로 거짓 출력**했다.
+          # 이 게이트의 초록이 AGENTS.md 의 `--parallel` 허용 근거이므로 그건 도장이다.
+          # 그래서 실행 로그에서 스킵을 직접 센다(census 스텝과 같은 신호). 스킵이 하나라도
+          # 있으면 이 게이트는 **아무것도 증명하지 못한 것**이므로 통과시키지 않는다.
+          try:
+              logtext = open(logpath, encoding="utf-8", errors="replace").read()
+          except OSError as e:
+              print(f"::error::{cls} #{run}: 실행 로그를 못 읽었다 ({e}) — 스킵 여부를 판정할 수 없다")
+              raise SystemExit(1)
+          skipped = len(re.findall(r"' skipped \(", logtext))
+          if skipped:
+              print(f"::error::{cls} #{run}: {tests}건 중 {skipped}건이 **스킵**됐다 — "
+                    f"이 게이트는 공유 자원 격리를 증명하지 못했다(GPU 부재 러너로 보인다). "
+                    f"스킵을 통과로 세지 않는다.")
               raise SystemExit(1)
           if fails or errors:
               print(f"::error::{cls} #{run}: {tests}건 중 실패 {fails} 오류 {errors} — 공유 자원이 남아 있다")
@@ -255,7 +282,7 @@ jobs:
                   if list(tc):
                       print(f"    ✗ {tc.get('classname')}.{tc.get('name')}")
               raise SystemExit(1)
-          print(f"  {cls} #{run}: {tests}건 통과")
+          print(f"  {cls} #{run}: {tests}건 실행·통과(스킵 0)")
           PYEOF
             done
           done

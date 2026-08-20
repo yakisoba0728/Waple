@@ -82,6 +82,14 @@ def extract_kernel():
         raise SystemExit(f"[measure_oracle_gate] {COMPARE_SWIFT}: runCompare 의 종료코드 반환을 "
                          f"못 찾았다")
 
+    # 판정 커널 본문 — `goldenVerdict` 는 Snapshot.swift 의 자유 함수다.
+    vi = snap.find("public func goldenVerdict(")
+    if vi < 0:
+        raise SystemExit(f"[measure_oracle_gate] {SNAPSHOT_SWIFT}: goldenVerdict 를 못 찾았다 — "
+                         f"판정 커널이 또 이사했으면 이 추출기를 함께 고쳐라")
+    vend = snap.find("\n}", vi)
+    verdict = snap[vi:vend if vend > 0 else len(snap)]
+
     def thr(name):
         m = need(rf"static let {name} = DiffThreshold\(meanAbsDiff: ([\d.]+), "
                  rf"fracExceeding: ([\d.]+)\)", snap, SNAPSHOT_SWIFT, f"DiffThreshold.{name}")
@@ -96,19 +104,29 @@ def extract_kernel():
             r"([\d.]+) \* Double\(rgba\[i\]\) \+ ([\d.]+) \* Double\(rgba\[i \+ 1\]\) \+ "
             r"([\d.]+) \* Double\(rgba\[i \+ 2\]\)", snap, SNAPSHOT_SWIFT,
             "meanLuma 가중치").groups()],
-        "relTol": float(need(r"static let relativeTolerance: Double = ([\d.]+)", cmp_,
-                             COMPARE_SWIFT, "relativeTolerance").group(1)),
-        "identicalOn": need(r"let identical = m\.(\w+) == 0", body, COMPARE_SWIFT,
+        # [2026-08-20] 판정 커널은 `851c213` 에서 **Snapshot.swift 로 이사했다**
+        # (`goldenVerdict` — WapleCompat 비교기와 WapleSnapshotTests 가 같은 코드를 쓰게 하려고).
+        # 이 스크립트는 모듈 이름만 갱신하고 심볼은 그대로 둬서 HEAD 에서 하드 실패했고,
+        # 그 결과 `spec/golden/gate-analysis.json` 이 **재생성 불가 고아**가 돼 있었다.
+        # 이제 커널은 verdict 본문에서, 실행부(썸네일 가드·종료코드)는 runCompare 에서 뽑는다.
+        "relTol": float(need(r"public let goldenRelativeTolerance: Double = ([\d.]+)", snap,
+                             SNAPSHOT_SWIFT, "goldenRelativeTolerance").group(1)),
+        "identicalOn": need(r"let identical = m\.(\w+) == 0", verdict, SNAPSHOT_SWIFT,
                             "① 즉시 통과 판정").group(1),
-        "lumaFloor": float(need(r"max\(entry\.meanLuma, ([\d.]+)\)", body, COMPARE_SWIFT,
-                                "② relDiff 분모 클램프").group(1)),
+        "lumaFloor": float(need(r"public let goldenDarkLumaFloor: Double = ([\d.]+)", snap,
+                                SNAPSHOT_SWIFT, "② relDiff 분모 클램프(goldenDarkLumaFloor)").group(1)),
     }
-    sl = need(r"let structureLoss = entry\.meanLuma < ([\d.]+)\s*\n\s*"
-              r"&& m\.meanAbsDiff > entry\.meanLuma \* 255\.0 \* ([\d.]+)", body,
-              COMPARE_SWIFT, "③ structureLoss")
-    k["structureCutoff"], k["structureFactor"] = float(sl.group(1)), float(sl.group(2))
-    k["passExpr"] = " ".join(need(r"let pass = (identical.*?)\n\s*rows\.append", body,
-                                  COMPARE_SWIFT, "pass 식", re.S).group(1).split())
+    # ③ structureLoss — 컷오프가 리터럴이 아니라 **명명 상수**(goldenDarkLumaFloor)로 바뀌었다.
+    #    상수 이름을 그대로 잡고, 값은 위에서 이미 뽑은 lumaFloor 와 동일함을 단언한다.
+    sl = need(r"let structureLoss = baselineMeanLuma < (\w+)\s*\n\s*"
+              r"&& m\.meanAbsDiff > baselineMeanLuma \* 255\.0 \* ([\d.]+)", verdict,
+              SNAPSHOT_SWIFT, "③ structureLoss")
+    if sl.group(1) != "goldenDarkLumaFloor":
+        raise SystemExit(f"[measure_oracle_gate] structureLoss 컷오프가 {sl.group(1)!r} 로 바뀌었다 — "
+                         f"lumaFloor 와 같은 상수라는 전제가 깨졌으니 추출기를 고쳐라")
+    k["structureCutoff"], k["structureFactor"] = k["lumaFloor"], float(sl.group(2))
+    k["passExpr"] = " ".join(need(r"let pass = (identical.*?)\n\s*return GoldenVerdict", verdict,
+                                  SNAPSHOT_SWIFT, "pass 식", re.S).group(1).split())
 
     # SnapshotEntry 가 기록하는 필드 전부 vs runCompare 가 실제로 읽는 필드.
     decl = need(r"public struct SnapshotEntry[^{]*\{(.*?)public init", snap,
@@ -121,9 +139,10 @@ def extract_kernel():
         "runCompare": lineno(cmp_, "static func runCompare(", COMPARE_SWIFT),
         "strict": lineno(snap, "static let strict = DiffThreshold", SNAPSHOT_SWIFT),
         "lax": lineno(snap, "static let lax = DiffThreshold", SNAPSHOT_SWIFT),
-        "relTol": lineno(cmp_, "static let relativeTolerance", COMPARE_SWIFT),
-        "thrSelect": lineno(cmp_, "let thr: DiffThreshold = entry.deterministic", COMPARE_SWIFT),
-        "pass": lineno(cmp_, "let pass = identical", COMPARE_SWIFT),
+        "relTol": lineno(snap, "public let goldenRelativeTolerance", SNAPSHOT_SWIFT),
+        "thrSelect": lineno(snap, "let threshold: DiffThreshold = deterministic", SNAPSHOT_SWIFT),
+        "pass": lineno(snap, "let pass = identical", SNAPSHOT_SWIFT),
+        "goldenVerdict": lineno(snap, "public func goldenVerdict(", SNAPSHOT_SWIFT),
         "thumbGuard": lineno(cmp_, "guard baseline.thumbWidth == thumbW", COMPARE_SWIFT),
         "exit": lineno(cmp_, "return regressed ? 1 : 0", COMPARE_SWIFT),
     }
