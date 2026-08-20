@@ -2069,10 +2069,27 @@ extension SceneRenderer {
                 // 투명 검정으로 지워진다. 저작이 지정한 clear RGBA 도 생성 프레임 이후 다시는
                 // 안 보이게 된다. 풀 타깃과 dst 는 남의 내용을 물고 오므로 `.clear` 를 유지한다.
                 let targetIsUnique = pass.target.map { $0 < fboSpecs.count && fboSpecs[$0].unique } ?? false
+                // D4/F6: **풀 타깃의 클리어 색도 저작이 선언한 `clear` RGBA 다.** 종전엔 투명 검정
+                // 고정이라, 파서가 읽어 둔 `FBOSpec.clearColor` 가 non-unique 경로에서는 단 한 번도
+                // 쓰이지 않았다 — 유일한 소비처인 `uniqueStore.pendingClear` 에 `spec.unique` 분기에서만
+                // 인덱스가 들어가기 때문이다(바로 위 할당 루프). 풀 텍스처는 프레임마다 남(다른 이펙트·
+                // 다른 프레임)의 내용을 물고 오므로, 이 `.clear` 가 원본의 "획득 시 1회 클리어" 자리를
+                // 대신한다(풀 타깃은 매 프레임 재획득이라 둘이 일치한다).
+                //
+                // 무회귀 근거: `clear` 미선언이면 (0,0,0,0) 이라 종전과 비트 동일이고, 타깃 없는 패스
+                // (효과 출력=dst)도 선언이 있을 수 없어 (0,0,0,0) 이다. unique 타깃은 `.load` 라 이 색을
+                // 애초에 읽지 않는다(위 "생성 1회" 규약 불변). 동봉 자산의 `clear` 보유 fbo 선언 12건은
+                // 전건 unique 라(EffectFBOFormatTests 가 고정) 실측 동작 변화 0 — non-unique fbo 에
+                // `clear` 를 선언한 워크샵 이펙트에서만 달라진다.
+                var targetClear = SIMD4<Float>(0, 0, 0, 0)
+                if let ti = pass.target, ti < fboSpecs.count, let c = fboSpecs[ti].clearColor { targetClear = c }
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
                 rpd.colorAttachments[0].loadAction = targetIsUnique ? .load : .clear
-                rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                rpd.colorAttachments[0].clearColor = MTLClearColor(red: Double(targetClear.x),
+                                                                   green: Double(targetClear.y),
+                                                                   blue: Double(targetClear.z),
+                                                                   alpha: Double(targetClear.w))
                 guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
                 enc.setRenderPipelineState(pass.pipeline)
                 // 변환본 규약: 인터리브드 쿼드 buffer(4), p buffer(0)·EngineU buffer(1) 는 vert+frag 양쪽.
