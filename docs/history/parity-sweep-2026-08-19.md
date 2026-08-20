@@ -175,7 +175,7 @@ E2 가 WE 오디오 파이프라인을 전부 복원했다. **현행 게인이 �
 | " | `waple.gap.fboFormatDropped` 의 "영향(추정)" | 포맷 enum 표 + HDR 분기 |
 | " | `waple.gap.bindPrevAlias` **재작성** | `"previous"` 리터럴 부재 → "fbos[] 밖은 전부 −1" |
 | `engine/composite-refs.json` | `suffixHypothesis` **확정·기각** | `"a"` 는 고정 리터럴, `_b` 생성기 부재 |
-| `engine/hdr-bloom.json` | `upsampleWeightUnknown` 삭제 | `uniform-feed.json` 과 모순이었고 후자가 맞았다 |
+| `engine/hdr-bloom.json` | ~~`upsampleWeightUnknown` 삭제~~ → **[2026-08-20] 이행(방식 변경)**: 삭제 대신 **묘비로 보존**하고 `engine.bloom.hdr.upsampleWeight`(확정)를 신설했다. 삭제하면 근거 축소 가드를 `allow_shrink` 로 뚫어야 하고 그러면 이 파일의 가드가 영구히 꺼진다(원격 스위치) — 게다가 두 곳이 그 id 를 인용한다. | `uniform-feed.json` 과 모순이었고 후자가 맞았다 |
 | `engine/render-pass.json` | `conditions` 비트 의미 정정 | bit0 은 리플렉션이 **아니라** 포맷 선택 + UV V 반전 |
 | `engine/mul-convention.json` | `mul.eulerOrder` 신설 | `glm::qua(vec3)` 항별 일치 |
 | `formats/tex-deep.json` | `flags.bits` 에 **bit4 누락** | 코퍼스가 `projects/` 를 제외해서 안 보였다(10건) |

@@ -223,18 +223,37 @@ def build():
             },
         }, "확정", [shader_ev, mat_ev, code_ev]),
 
-        specfmt.entry("engine.bloom.hdr.upsampleWeightUnknown", {
-            "question": "WE 셰이더 문면대로면 업샘플 가중이 **평균 x g_BloomScatter** 인데, "
-                        "저작값 scatter=1.619 를 그대로 넣으면 레벨마다 곱해져 발산한다.",
-            "measured": "그대로 구현해 전 코퍼스를 뜨니 3589454154 의 meanLuma 가 "
-                        "0.0913 → 0.4198(4.6배)로 화면이 백화됐다. 9씬 중 5씬이 2배 이상 밝아졌다.",
-            "whatWeDo": "탭 모양만 WE 로 맞추고 **가중은 종전 캘리브(0.25 x scatter)를 유지**한다. "
-                        "이 값은 발산하지 않고 A/B 에서 에너지 보존이 확인된다.",
-            "openQuestion": "저작 bloomhdrscatter(1.619)가 셰이더 g_BloomScatter 로 그대로 가는지, "
-                            "엔진이 레벨 수로 정규화하는지 미확인. 셰이더 주석의 material 기본값은 1 이다.",
-            "howToClose": "wallpaper64.exe 에서 scatter 머티리얼 프로퍼티를 셰이더 상수로 넘기는 지점을 "
-                          "찾거나(정적 분석), 윈도우에서 같은 씬을 캡처해 헤일로 감쇠율을 재면 된다.",
-        }, "추정", [shader_ev, mat_ev, code_ev]),
+        # [2026-08-20] 이 두 항목은 **한 쌍**이다.
+        # `...Unknown`(추정)은 "저작 scatter 가 셰이더로 그대로 가는지 미확인" 을 미해결로 들고 있었는데,
+        # ① 동봉 셰이더 원문의 어노테이션이 material 이름을 직접 적고 ② 같은 정본 uniform-feed.json 이
+        # 확정 등급으로 답을 갖고 ③ 출하 코드가 이미 확정 쪽을 따랐다 — **정본만 낡아 모순을 배포**했다.
+        #
+        # 지우지 않고 묘비로 남기는 이유: 근거 축소 가드가 항목·키 소멸을 잡는데 이 하나를 통과시키려면
+        # allow_shrink 를 켜야 하고, 그러면 이 파일의 가드가 영구히 꺼진다(= 원격 스위치). 그리고
+        # HDRBloomPyramidPass.swift · parity-sweep 문서가 이 id 를 인용한다. 원문 키도 그대로 보존한다.
+        specfmt.entry("engine.bloom.hdr.upsampleWeightUnknown",
+                      {
+                          "question": "WE 셰이더 문면대로면 업샘플 가중이 **평균 x g_BloomScatter** 인데, 저작값 scatter=1.619 를 그대로 넣으면 레벨마다 곱해져 발산한다.",
+                          "measured": "그대로 구현해 전 코퍼스를 뜨니 3589454154 의 meanLuma 가 0.0913 → 0.4198(4.6배)로 화면이 백화됐다. 9씬 중 5씬이 2배 이상 밝아졌다.",
+                          "whatWeDo": "탭 모양만 WE 로 맞추고 **가중은 종전 캘리브(0.25 x scatter)를 유지**한다. 이 값은 발산하지 않고 A/B 에서 에너지 보존이 확인된다.",
+                          "openQuestion": "저작 bloomhdrscatter(1.619)가 셰이더 g_BloomScatter 로 그대로 가는지, 엔진이 레벨 수로 정규화하는지 미확인. 셰이더 주석의 material 기본값은 1 이다.",
+                          "howToClose": "wallpaper64.exe 에서 scatter 머티리얼 프로퍼티를 셰이더 상수로 넘기는 지점을 찾거나(정적 분석), 윈도우에서 같은 씬을 캡처해 헤일로 감쇠율을 재면 된다.",
+                          "closed": "**[2026-08-20] 이 미해결은 닫혔다** → engine.bloom.hdr.upsampleWeight 참조. 위 question/openQuestion/howToClose 는 당시 서술을 지우지 않고 남긴 것이다.",
+                          "whyItWasWrong": "미확인이 아니었다. ① 동봉 셰이더 원문의 어노테이션이 material 이름을 직접 적고 있었다(함정 ⑦: x86 전에 GLSL 을 먼저 봤어야 했다). ② 같은 정본 uniform-feed.json 이 **확정** 등급으로 답을 갖고 있었다. ③ 출하 코드는 이미 확정 쪽을 따랐다. 정본만 낡아 모순을 배포하고 있었다.",
+                          "whyKeptAsTombstone": "id 를 지우지 않는 이유 둘. ① 근거 축소 가드가 항목·키 소멸을 잡는데 이 하나를 통과시키려면 allow_shrink 를 켜야 하고 그러면 이 파일의 가드가 영구히 꺼진다 — 이 리포가 반복해서 잡아낸 '원격 스위치' 부류다. ② Sources/WapleRender/HDRBloomPyramidPass.swift 와 docs/history/parity-sweep-2026-08-19.md 가 이 id 를 인용한다.",
+                      },
+                      "확정", [shader_ev, mat_ev, code_ev]),
+
+        specfmt.entry("engine.bloom.hdr.upsampleWeight",
+                      {
+                          "resolved": "업샘플 머티리얼의 `scatter` 파라미터에는 저작 `bloomhdrscatter` 가 **변형 없이** 실린다. 셰이더의 `0.25` 는 4탭 평균이지 가중이 아니다 — 둘은 애초에 경쟁 후보가 아니었다.",
+                          "shaderText": "assets/shaders/hdr_downsample.frag:61 `uniform float g_BloomScatter; // {\"material\":\"scatter\",\"default\":1}` · 본문 `albedo *= 0.25 * g_BloomScatter` (albedo 는 4탭 **합**)",
+                          "engineFeed": "0x14017f807 `movss xmm6,[rbx+0x3d0]`(저작값 적재) → 중간 변형 없이 `setMaterialParam(mat,\"scatter\",xmm6,1)` 2회: 0x14017f967 · 0x14017f988. 대상 [rsi+0x31a0] · [rsi+0x31a8] = hdr_upsample 계열 2개. 0x14017f854 `movaps xmm0,xmm6` 는 정규화의 powf 입력이라 xmm6 를 바꾸지 않는다.",
+                          "whyNoDivergence": "추출 강도를 `bloomhdrstrength / (bloomhdrscatter^(max(N,2)-2) + 1)` 로 나누는 정규화(0x14017f85e powf → 0x14017f86b +1.0 → 0x14017f88f divss)와 **한 쌍**이라 scatter^k 누적이 상쇄된다. 종전 백화(3589454154 meanLuma 0.0913 → 0.4198)는 가중만 옮기고 이 나눗셈을 안 옮겨서 난 것이지 가중이 틀려서가 아니었다.",
+                          "crossCheck": "spec/engine/uniform-feed.json — engine.uniformFeed.hdrBloom.materialParams(확정)",
+                          "supersedes": "engine.bloom.hdr.upsampleWeightUnknown",
+                      },
+                      "확정", [shader_ev, mat_ev, code_ev]),
     ]
 
 
@@ -255,7 +274,7 @@ def main():
     print()
     ab = v["engine.bloom.hdr.filterShapeDeviations"]["abResult"]
     print(f"  A/B: {ab['changedScenes']}씬 변화 · luma {ab['lumaRatioRange']} · maxMeanΔ {ab['maxMeanAbsDiff']}")
-    print(f"  미해결: {v['engine.bloom.hdr.upsampleWeightUnknown']['openQuestion']}")
+    print(f"  업샘플 가중(확정): {v['engine.bloom.hdr.upsampleWeight']['resolved']}")
     print(f"\n기록: {OUT}")
 
 
