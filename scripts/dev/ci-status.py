@@ -31,6 +31,7 @@ import urllib.error
 import urllib.request
 
 API = "https://api.github.com"
+a_repo = [None]   # main() 이 채운다(종료 코드 판정이 repo 를 알아야 한다)
 MARK = {"success": "OK ", "failure": "FAIL", "cancelled": "CANC", "skipped": "SKIP",
         "timed_out": "TIME", "startup_failure": "BOOM", None: "... "}
 
@@ -77,6 +78,14 @@ def api(path, raw=False):
         print("HTTP %d: %s" % (e.code, detail), file=sys.stderr)
         raise SystemExit(1)
     return body if raw else json.loads(body)
+
+
+def head_sha():
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
+        return out.stdout.strip()
+    except Exception:
+        return None
 
 
 def current_branch():
@@ -218,6 +227,7 @@ def main():
     ap.add_argument("--interval", type=int, default=30)
     ap.add_argument("--timeout", type=int, default=1800)
     a = ap.parse_args()
+    a_repo[0] = a.repo
     branch = a.branch or current_branch()
 
     if a.log is not None:
@@ -236,13 +246,33 @@ def main():
         time.sleep(a.interval)
 
     if (a.jobs or a.tests) and runs:
-        failed = next((r for r in runs if r.get("conclusion") == "failure"), runs[0])
-        show_jobs(a.repo, failed["id"], tests=a.tests)
+        # 실패가 있으면 그것을, 없으면 **CI 실행**을 보여준다 — 기본값이 runs[0](대개 spec)이면
+        # 잡 상세가 파이썬 게이트 한 줄뿐이라 쓸모가 없다.
+        target = (next((r for r in runs if r.get("conclusion") == "failure"), None)
+                  or next((r for r in runs if r["name"] == "CI"), None)
+                  or runs[0])
+        show_jobs(a.repo, target["id"], tests=a.tests)
 
     if not runs:
         return 0
-    head = runs[0]["head_sha"]
+    # **로컬 HEAD 를 기준으로 판정한다.** 목록의 맨 위(runs[0])를 쓰면 푸시 직후 새 실행이
+    # 아직 안 뜬 창에서 **직전 커밋의 결과**를 보고 "끝났다" 고 답한다 — 대기 루프가
+    # 그 자리에서 빠져나온다(실제로 당했다). HEAD 의 실행이 하나도 없으면 "진행 중"(2)이다.
+    local = head_sha()
+    if local and not any(r["head_sha"] == local for r in runs):
+        # 단, 문서 전용 커밋은 CI 가 영영 안 뜬다 — 그 경우 spec 만 보고 판정한다.
+        by_sha = api("repos/%s/actions/runs?head_sha=%s&per_page=20" % (a_repo[0], local))
+        mine = by_sha.get("workflow_runs", [])
+        if not mine:
+            print("     %s: 아직 실행이 뜨지 않았다(진행 중으로 본다)" % local[:7])
+            return 2
+        runs = mine
+        head = local
+    else:
+        head = local or runs[0]["head_sha"]
     same = [r for r in runs if r["head_sha"] == head]
+    if not same:
+        return 2
     if any(r["status"] != "completed" for r in same):
         return 2
     return 0 if all(r.get("conclusion") == "success" for r in same) else 1
