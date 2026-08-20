@@ -467,6 +467,11 @@ public final class TextScriptEngine {
     /// 이 엔진의 스크립트가 본 `thisLayer` 객체 — layerPlaying 이 여기서 __waplePlaying 을 읽는다.
     /// 공유 컨텍스트는 IIFE 가 되돌려주는 값, 단독 컨텍스트는 전역 thisLayer.
     private var thisLayerValue: JSValue?
+    /// G-C4-01: 이 엔진의 스크립트가 본 `thisObject` 객체(= 바인딩된 프로퍼티의 소유 객체).
+    /// owner == .layer 면 thisLayerValue 와 같은 객체다.
+    private var thisObjectValue: JSValue?
+    /// G-C4-01: 이 스크립트가 바인딩된 프로퍼티의 소유 객체 종류. 호출자(빌더)만이 알 수 있다.
+    private let owner: ScriptOwner
     /// Generic event hooks only. Lifecycle functions have dedicated storage and gates.
     private var hookFns: [String: JSValue] = [:]
 
@@ -507,10 +512,60 @@ public final class TextScriptEngine {
                           forKeyedSubscript: "__scriptPropOverrides" as NSString)
     }
 
-    public init?(script: String, scriptPropsJSON: String? = nil) {
+    /// G-C4-01: WE `thisObject` = **스크립트가 바인딩된 프로퍼티의 소유 객체**다.
+    ///
+    /// 근거 3종이 모두 같은 것을 가리킨다:
+    ///  · d.ts(lib.sceneScript.d.ts:1257-1261) — `interface IThisPropertyObjectBase extends IObject`
+    ///    의 문서 주석이 그대로 "The object this property is bound to". `thisLayer: ILayer`(:2123)
+    ///    와는 별개 선언이다.
+    ///  · 실물 스크립트 — dino_run 은 이펙트 `visible` 에 붙은 스크립트에서 `thisObject.getMaterial(0)`
+    ///    (=IEffect), razer_vortex 는 패스 상수 `colormode` 에 붙은 스크립트에서 `thisObject.colormode`
+    ///    (=IMaterial), shimmering_particles 는 `general.bloomstrength` 에서 `thisObject.bloomstrength`
+    ///    (=씬 설정)를 쓴다. 셋 다 thisLayer 로는 성립하지 않는다.
+    ///  · 바이너리 — scenescript64.dll 은 thisObject/thisLayer 를 **서로 다른 두 스택**에서 꺼낸다
+    ///    (getter 0x1816467c0 → 엔진+0x4b0 deque, 0x1816468c0 → 엔진+0x4d8 deque). 스크립트 진입부
+    ///    0x18164fed5 / 0x18165019f 가 각각 **다른 인자**를 두 스택에 push 한다 — 같은 객체였다면
+    ///    스택도 push 도 하나였을 것이다.
+    ///
+    /// 종전 Waple 은 무조건 `thisObject = thisLayer` 라, 레이어 프로퍼티 스크립트(대다수)만 우연히
+    /// 맞았고 나머지는 조용히 남의 객체에 쓰거나 TypeError 로 훅 전체가 죽었다.
+    public enum ScriptOwner {
+        /// 레이어/텍스트 프로퍼티에 바인딩 — WE 에서도 thisObject === thisLayer(종전 동작 그대로).
+        case layer
+        /// 이펙트(`objects[].effects[].<prop>`)에 바인딩 — IEffect. materials[i] = i 번째 패스의
+        /// authored 상수(씨앗). 이펙트 visible 스크립트는 패스 셰이더 번역보다 먼저 로드되므로
+        /// 셰이더 기본값은 씨앗에 없다 — 통째 대입(실물이 쓰는 형태)은 정확하고, 미씨앗 상수를
+        /// 읽고-고쳐-쓰는 스크립트만 undefined 를 본다(도달 0건, 종전엔 TypeError 였다).
+        case effect(materials: [[String: [Float]]])
+        /// 패스/머티리얼 상수(`constantshadervalues.<key>`)에 바인딩 — IMaterial(상수명이 곧 프로퍼티).
+        case material(constants: [String: [Float]])
+    }
+
+    /// `thisObject` 로 바인딩할 JS 식. `.layer` 는 종전과 **문자 그대로 동일**한 `thisLayer` 별칭이다.
+    private static func thisObjectExpression(_ owner: ScriptOwner) -> String {
+        switch owner {
+        case .layer:
+            return "thisLayer"
+        case .effect(let materials):
+            return "__wapleEffectObject([" + materials.map(materialSeedJSON).joined(separator: ",") + "])"
+        case .material(let constants):
+            return "__wapleMaterialObject(\(materialSeedJSON(constants)))"
+        }
+    }
+
+    /// { 상수명: [성분…] } → JS 객체 리터럴. 키 정렬은 결정성(캡처 재현) 목적.
+    private static func materialSeedJSON(_ seed: [String: [Float]]) -> String {
+        let body = seed.keys.sorted().map { key in
+            "\(javascriptStringLiteral(key)):[" + (seed[key] ?? []).map(jsNumber).joined(separator: ",") + "]"
+        }.joined(separator: ",")
+        return "{" + body + "}"
+    }
+
+    public init?(script: String, scriptPropsJSON: String? = nil, owner: ScriptOwner = .layer) {
         guard Self.passesPracticalSafetyChecks(script) else { return nil }
         guard let ctx = JSContext() else { return nil }
         context = ctx
+        self.owner = owner
         var hadException = false
         ctx.exceptionHandler = { _, ex in
             NSLog("%@", "[Waple] text script exception: \(ex?.toString() ?? "?")")
@@ -522,6 +577,12 @@ public final class TextScriptEngine {
         if Self.isScreensaver { ctx.evaluateScript("__setScreensaver(true);") }  // 기본 false = 미주입 = 무변화
         Self.injectScriptPropOverrides(ctx, json: scriptPropsJSON)
         scriptPropOverridesSnapshot = Self.currentScriptPropOverrides(ctx)   // F475
+        // G-C4-01: 심의 전역 기본값이 이미 thisObject === thisLayer 라, .layer 는 아무것도 하지 않는다
+        // (= 종전 경로는 평가되는 문자열까지 동일 — 무회귀). 그 외 소유자만 덮어쓴다.
+        switch owner {
+        case .layer: break
+        default: ctx.evaluateScript("thisObject = \(Self.thisObjectExpression(owner));")
+        }
         let cleaned = Self.stripModuleSyntax(script)
         ctx.evaluateScript(cleaned)
         guard !hadException,
@@ -536,6 +597,7 @@ public final class TextScriptEngine {
         }
         // 단독 컨텍스트는 심의 전역 thisLayer 가 곧 이 엔진 전용(컨텍스트가 엔진당 1개라 공유 없음).
         thisLayerValue = ctx.objectForKeyedSubscript("thisLayer")
+        thisObjectValue = ctx.objectForKeyedSubscript("thisObject")
     }
 
     /// 씬 공유 컨텍스트 모드: 스크립트를 IIFE 로 감싸 평가(전역 오염/update 이름충돌 방지)하고
@@ -549,10 +611,11 @@ public final class TextScriptEngine {
     /// 전용 thisLayer 심을 새로 만든다(__wapleDetachedLayer 주석 참조). 기본 false = 종전 경로.
     public init?(script: String, scene: SceneScriptContext, currentLayerName: String? = nil,
                  currentLayerIndex: Int? = nil, scriptPropsJSON: String? = nil,
-                 detachedLayer: Bool = false) {
+                 detachedLayer: Bool = false, owner: ScriptOwner = .layer) {
         guard Self.passesPracticalSafetyChecks(script) else { return nil }
         let ctx = scene.context
         context = ctx
+        self.owner = owner
         var hadException = false
         // 공유 컨텍스트의 기존 핸들러(SceneScriptContext 로깅)를 저장 후 복원 — 로드용 핸들러가
         // 컨텍스트에 잔류해 이후 무관한 평가의 예외를 오귀속하지 않도록. (defer 는 로컬 ctx 사용 —
@@ -575,14 +638,20 @@ public final class TextScriptEngine {
         // __wapleThisLayerOut: 스크립트가 **실제로 본** thisLayer 를 되돌려받는다(스크립트가 지역
         // thisLayer 를 재대입해도 원본을 잃지 않게 인자를 그대로 내보낸다). layerPlaying 이 이 객체의
         // __waplePlaying 을 읽는다.
+        // G-C4-01: thisObject 는 thisLayer 의 별칭이 아니라 **바인딩 소유자**다(ScriptOwner 주석).
+        // .layer 면 objectExpr == "thisLayer" 라 종전 문자열과 동일하다(무회귀).
+        // __wapleThisObjectOut 은 __wapleThisLayerOut 과 같은 이유로 내보낸다 — 스크립트가 지역
+        // thisObject 를 재대입해도 boundObjectMaterialWrites 가 원본을 되읽을 수 있게.
+        let objectExpr = Self.thisObjectExpression(owner)
         let wrapped = """
         (function(__wapleThisLayer){
         var __wapleGlobal = Function('return this')();
         var thisLayer = __wapleThisLayer || __wapleGlobal.thisLayer;
         var __wapleBoundLayer = thisLayer;
-        var thisObject = thisLayer;
+        var thisObject = \(objectExpr);
+        var __wapleBoundObject = thisObject;
         \(cleaned)
-        ;return { \(exports), __wapleThisLayerOut: __wapleBoundLayer };
+        ;return { \(exports), __wapleThisLayerOut: __wapleBoundLayer, __wapleThisObjectOut: __wapleBoundObject };
         })(\(layerExpr))
         """
         Self.injectScriptPropOverrides(context, json: scriptPropsJSON)
@@ -601,6 +670,8 @@ public final class TextScriptEngine {
             }
             let bound = out.objectForKeyedSubscript("__wapleThisLayerOut")
             thisLayerValue = (bound?.isObject == true) ? bound : nil
+            let boundObject = out.objectForKeyedSubscript("__wapleThisObjectOut")
+            thisObjectValue = (boundObject?.isObject == true) ? boundObject : nil
         } else {
             updateFn = nil
             initFn = nil
@@ -618,6 +689,29 @@ public final class TextScriptEngine {
     public var layerPlaying: Bool? {
         guard let v = thisLayerValue?.objectForKeyedSubscript("__waplePlaying"), v.isBoolean else { return nil }
         return v.toBool()
+    }
+
+    /// G-C4-01: 스크립트가 `thisObject` 에 남긴 셰이더 상수 쓰기(로드 top-level + applyUserProperties
+    /// + init 까지의 결과). 원소 인덱스 = `IEffect.getMaterial(i)` 의 i(= effect.json raw 패스 인덱스);
+    /// thisObject 가 머티리얼 하나면 원소 1개짜리 배열이다.
+    /// owner == .layer(레이어 프로퍼티 스크립트 — 전체의 대다수)는 항상 빈 배열 → 호출자 무영향.
+    /// per-frame `update` 안의 thisObject 쓰기는 아직 소비하지 않는다(로드 시점 1회 — 실물 5건은
+    /// 전부 applyUserProperties 다). 프레임마다 JSON 왕복을 넣지 않기 위한 의도적 한계다.
+    public var boundObjectMaterialWrites: [[String: [Float]]] {
+        if case .layer = owner { return [] }
+        guard let obj = thisObjectValue, obj.isObject,
+              let reader = context.objectForKeyedSubscript("__wapleMaterialWrites"),
+              let json = reader.call(withArguments: [obj])?.toString(),
+              let data = json.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data, options: []),
+              let raw = parsed as? [[String: Any]]
+        else { return [] }
+        return raw.map { entry in
+            entry.compactMapValues { value -> [Float]? in
+                guard let numbers = value as? [NSNumber] else { return nil }
+                return numbers.map { Float(truncating: $0) }
+            }
+        }
     }
 
     /// export 된 이벤트 훅 이름들(update 제외). 비어 있으면 이벤트 배달 대상 아님.
@@ -2237,6 +2331,75 @@ public final class TextScriptEngine {
         }
         if (typeof name !== 'string' || name.length === 0) { return thisLayer; }
         return thisScene.getLayer(name);
+    }
+    // G-C4-01: thisObject(= 바인딩된 프로퍼티의 소유 객체) 심. 레이어가 아닌 소유자일 때만 쓰인다 —
+    // TextScriptEngine.ScriptOwner 주석에 근거(d.ts IThisPropertyObjectBase / 실물 5건 / DLL 이중 스택).
+    // IMaterial: 셰이더 상수 이름이 곧 프로퍼티다. 씨앗 { 상수명: [성분…] } 의 성분 1개는 Number,
+    // 2·3개는 Vec2/Vec3 — WE 가 스크립트에 주는 형태와 같다.
+    function __wapleMaterialSeedValue(a) {
+        if (!a || !a.length) { return 0; }
+        if (a.length === 1) { return a[0]; }
+        if (a.length === 2) { return new Vec2(a[0], a[1]); }
+        return new Vec3(a[0], a[1], a[2]);
+    }
+    function __wapleMaterialObject(seed) {
+        var m = {
+            getAnimation: function() { return __makeTextureAnimation(); },   // IMaterial extends IObject
+            setMaterialProperty: function(k, v) { m[String(k)] = v; return m; },
+            executeMaterialFunction: function() { return m; }
+        };
+        if (seed) {
+            for (var k in seed) {
+                if (Object.prototype.hasOwnProperty.call(seed, k)) { m[k] = __wapleMaterialSeedValue(seed[k]); }
+            }
+        }
+        return m;
+    }
+    // IEffect: getMaterial(i) = 이 이펙트의 i 번째 패스 머티리얼(실측 dino_run godrays —
+    // effect.json passes[0]=downsample(raythreshold), passes[1]=cast(rayintensity)).
+    // 씨앗이 모자라도(패스 번역 전 로드) 늘려 주므로 종전의 TypeError 가 재발하지 않는다.
+    function __wapleEffectObject(seeds) {
+        var mats = [];
+        var n = (seeds && seeds.length) ? seeds.length : 0;
+        for (var i = 0; i < n; i += 1) { mats.push(__wapleMaterialObject(seeds[i])); }
+        var e = {
+            visible: true,
+            __wapleMaterials: mats,
+            getAnimation: function() { return __makeTextureAnimation(); },
+            getMaterialCount: function() { return mats.length; },
+            getMaterial: function(i) {
+                var k = (typeof i === 'number' && i >= 0) ? Math.floor(i) : 0;
+                while (mats.length <= k) { mats.push(__wapleMaterialObject(null)); }
+                return mats[k];
+            },
+            setMaterialProperty: function(k, v) {
+                for (var j = 0; j < mats.length; j += 1) { mats[j][String(k)] = v; }
+                return e;
+            },
+            executeMaterialFunction: function() { return e; }
+        };
+        return e;
+    }
+    // 네이티브 되읽기(TextScriptEngine.boundObjectMaterialWrites): 머티리얼이면 [자기 자신],
+    // 이펙트면 머티리얼 배열을 인덱스 순서로. 각 원소는 { 상수명: [성분…] } — 함수/비수치는 건너뛴다.
+    function __wapleMaterialWrites(obj) {
+        var mats = (obj && obj.__wapleMaterials) ? obj.__wapleMaterials : [obj];
+        var out = [];
+        for (var i = 0; i < mats.length; i += 1) {
+            var m = mats[i] || {}, o = {};
+            for (var k in m) {
+                if (!Object.prototype.hasOwnProperty.call(m, k)) { continue; }
+                if (k.indexOf('__waple') === 0) { continue; }
+                var v = m[k];
+                if (typeof v === 'number') { o[k] = [v]; }
+                else if (typeof v === 'boolean') { o[k] = [v ? 1 : 0]; }
+                else if (v && typeof v === 'object' && typeof v.x === 'number' && typeof v.y === 'number') {
+                    o[k] = (typeof v.z === 'number') ? [v.x, v.y, v.z] : [v.x, v.y];
+                }
+            }
+            out.push(o);
+        }
+        return JSON.stringify(out);
     }
     var shared = { camera: thisScene.getCameraTransforms(), miTextContainerScale: new Vec2(1, 1) };
     // F701(S-7): localStorage 전역 실심 — WE 계약 get/set/delete/clear + LOCATION_GLOBAL/SCREEN 상수

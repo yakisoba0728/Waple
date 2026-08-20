@@ -188,16 +188,20 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// detachedLayer: 파티클처럼 thisScene.layers 에 실물이 없는 오브젝트 — 엔진 전용 thisLayer 심을
     /// 준다(TextScriptEngine.__wapleDetachedLayer 주석). 종전엔 그런 스크립트의 thisLayer 가 전역
     /// 기본값(layers[0])이어서 play/pause 상태가 남의 레이어와 뒤섞였다.
+    /// G-C4-01: owner = 이 스크립트가 바인딩된 프로퍼티의 **소유 객체**(WE `thisObject`).
+    /// 기본 .layer 는 종전과 동일하게 thisObject === thisLayer — 레이어/텍스트 프로퍼티 스크립트는
+    /// 그게 WE 계약이므로 전 호출부가 무수정으로 남는다. 이펙트/패스 상수 빌더만 실소유자를 준다.
     func makeScriptEngine(_ src: String, layerName: String? = nil, currentLayerIndex: Int? = nil,
-                          scriptPropsJSON: String? = nil, detachedLayer: Bool = false) -> TextScriptEngine? {
+                          scriptPropsJSON: String? = nil, detachedLayer: Bool = false,
+                          owner: TextScriptEngine.ScriptOwner = .layer) -> TextScriptEngine? {
         // 오디오 소비 스크립트 게이팅: 참조가 보이면 hasAudio 승격 → mount 말미의 provider 기동
         // (기존엔 셰이더 오디오 효과만 켰다). 모든 스크립트 로드는 mount 의 기동 검사보다 앞선다.
         if !hasAudio, Self.scriptWantsAudio(src) { hasAudio = true }
         let engine = sceneScript.map { TextScriptEngine(script: src, scene: $0, currentLayerName: layerName,
                                                         currentLayerIndex: currentLayerIndex,
                                                         scriptPropsJSON: scriptPropsJSON,
-                                                        detachedLayer: detachedLayer) }
-            ?? TextScriptEngine(script: src, scriptPropsJSON: scriptPropsJSON)
+                                                        detachedLayer: detachedLayer, owner: owner) }
+            ?? TextScriptEngine(script: src, scriptPropsJSON: scriptPropsJSON, owner: owner)
         guard let engine else { return nil }
 
         // Constructor evaluation is complete here. Every engine gets apply exactly once; only init-only
