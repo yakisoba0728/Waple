@@ -885,6 +885,11 @@ public struct ParticleSimulator {
         // ring **[힘 수식 추정 · 게이트는 실측]**: `flags & 4` 가 없으면 파서가 nil 을 주므로
         // 여기 오지 않는다(런타임 `test byte [r14+0x110],4` @0x1402434eb). 동봉 코퍼스의
         // vortex_v2 5건은 전부 bit2 가 없어 이 경로에 **한 번도 들어오지 않는다**.
+        //
+        // 순서도 다르다: 실물은 ring 항을 centerforce 와 **같은 radialScale 에 합쳐** 예측 반경
+        // `radial′` 에 한 번 곱한다. 여기서는 위 `delta` 를 먼저 더한 뒤 현재 `n` 에 따로 적용한다.
+        // flags 6(둘 다 켬)에서 값이 갈리는데, 그런 인스턴스가 동봉에 없어 수식 확정과 함께
+        // 미룬다 — 고칠 때 이 두 항을 한 벡터로 합치는 것부터 해야 한다.
         if let ring = v.ring, ring.pullForce != 0 {
             let delta = dist - ring.radius
             let halfW = max(0, ring.width) * 0.5
