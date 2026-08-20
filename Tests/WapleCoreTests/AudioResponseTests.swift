@@ -110,4 +110,40 @@ final class AudioResponseTests: XCTestCase {
                                       bounds: SIMD2(0, 1), power: 1, multiply: 1)
         XCTAssertEqual(r, 0, accuracy: 1e-5, "역전 범위는 루프 0회 — 응답 없음")
     }
+
+    // MARK: - 축약 방식은 경로마다 다르다
+
+    /// 셰이더 경로는 **구간평균**(`pulse.vert` 의 `/= (max−min+1)`)이고, CPU 파티클/이미터
+    /// 경로는 **구간 MAX** 다 — 실물 `0x14022a8a0` 이 구간을 돌며 `comiss`/`movaps` 로 러닝
+    /// MAX 를 잡고(모드 3 은 레인마다 `L[i]+R[i]`, 0x14022a903–0x14022a90e) **나눗셈이 없다**.
+    /// 모드 3 만 마지막에 ×0.5(`mulss xmm3, [0x1404926c0]` @0x14022a97c).
+    ///
+    /// 종전엔 파티클 경로도 셰이더 규약을 그대로 재사용했다. 베이스만 뜬 스펙트럼에서
+    /// WE 1.0 vs Waple 0.0 으로 갈린다 — 좁은 피크가 있을 때만 드러나는 부류다.
+    func testPeakReductionIsNotAverage() {
+        var bass = [Float](repeating: 0, count: 16)
+        bass[0] = 1.0; bass[1] = 0.15; bass[2] = 0.05
+        func resp(_ r: AudioResponse.Reduction, mode: Int = 1) -> Float {
+            AudioResponse.compute(left: bass, right: bass, mode: mode, freqMin: 0, freqMax: 15,
+                                  bounds: SIMD2(0.8, 1.0), power: 2, multiply: 1, reduction: r)
+        }
+        // peak = 1.0 → t = (1.0−0.8)/0.2 = 1 → smoothstep 1 → pow 1 → 1.0
+        XCTAssertEqual(resp(.peak), 1, accuracy: 1e-5, "구간 MAX 는 베이스 피크를 그대로 본다")
+        // average = (1.0+0.15+0.05)/16 = 0.075 → t < 0 → 0
+        XCTAssertEqual(resp(.average), 0, accuracy: 1e-5, "구간평균은 같은 스펙트럼에서 0 이다")
+        // 모드 3 은 L+R 을 접고 ×0.5 하므로 좌우가 같으면 모드 1 과 같은 값이 나온다.
+        XCTAssertEqual(resp(.peak, mode: 3), resp(.peak, mode: 1), accuracy: 1e-5,
+                       "모드 3 의 ×0.5 는 L+R 을 다시 접는 것 — 좌우 동일 신호면 모드 1 과 같다")
+    }
+
+    /// 평탄한 스펙트럼에서는 두 축약이 같아야 한다 — 갈리는 것은 좁은 피크일 때뿐이라는 뜻이다.
+    /// (이게 성립하지 않으면 위 테스트가 잡은 것이 축약 차이가 아니라 다른 회귀다.)
+    func testFlatSpectrumAgreesBetweenReductions() {
+        let flat = [Float](repeating: 0.9, count: 16)
+        func resp(_ r: AudioResponse.Reduction) -> Float {
+            AudioResponse.compute(left: flat, right: flat, mode: 1, freqMin: 0, freqMax: 15,
+                                  bounds: SIMD2(0.8, 1.0), power: 2, multiply: 1, reduction: r)
+        }
+        XCTAssertEqual(resp(.peak), resp(.average), accuracy: 1e-4)
+    }
 }

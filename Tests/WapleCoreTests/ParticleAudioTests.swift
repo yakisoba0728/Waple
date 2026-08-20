@@ -25,14 +25,24 @@ final class ParticleAudioTests: XCTestCase {
         XCTAssertEqual(a0.freqEnd, 10)
         XCTAssertEqual(a0.exponent, 5)
         XCTAssertEqual(a0.freqStart, 0)          // 부재 기본
-        XCTAssertEqual(a0.bounds.x, 0.8, accuracy: 1e-6)  // bounds 부재 기본 [0.8,1.0](@0x48e1b8, 귀속 추정)
+        // bounds 부재 기본 [0.8,1.0] — 문자열 `"0.8 1.0"`@0x14048f3b8(RVA 0x48f3b8, len 7, 태그 4),
+        // 주입 0x1401c1ffc. 종전 인용 `@0x48e1b8` 은 파일 오프셋이었고(RVA 는 +0x1200),
+        // "귀속 추정" 표기도 과소였다 — 태그·길이·주입 지점으로 확정된다.
+        XCTAssertEqual(a0.bounds.x, 0.8, accuracy: 1e-6)
         XCTAssertEqual(a0.bounds.y, 1)
+        // exponent 부재 기본은 **2.0** 이다(`movabs rcx, 0x4000000000000000` @0x1401c1f77).
+        // 종전 1 은 셰이더 경로에서 유추한 값이었다 — 파티클 경로는 자체 주입기를 가진다.
 
         let a1 = try XCTUnwrap(def.emitterAudio[1])
         XCTAssertEqual(a1.mode, 3)
         XCTAssertEqual(a1.bounds.x, 0.5)         // "0.5 1" 파스
         XCTAssertEqual(a1.bounds.y, 1)
-        XCTAssertEqual(a1.freqEnd, 15)           // 부재 기본
+        // **[2026-08-20 정정] freqEnd 부재 기본은 15 가 아니라 1 이다** —
+        // `mov r8d, 1` @0x1401c212e → `H_INT` @0x1401c213e. 15 는 23.4Hz–14.7kHz 를 한 덩어리로
+        // 뭉개고, 1 은 23.4–187.5Hz 두 밴드만 고른다. 저역 반응이 통째로 달라진다.
+        XCTAssertEqual(a1.freqEnd, 1)
+        XCTAssertEqual(a1.exponent, 2, "0x1401c1f77 — 종전 1 은 셰이더 경로 유추였다")
+        XCTAssertEqual(a1.freqStart, 0, "0x1401c20eb — 이건 종전 값이 맞았다")
     }
 
     /// mode 0(off, 실측 5건) 및 audioprocessing 전부 부재 → nil(무반응 = 기존 rate).
