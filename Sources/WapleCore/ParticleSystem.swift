@@ -80,9 +80,18 @@ public func sheetFrameIndex(sequence: Float, frameCount: Int, mirror: Bool) -> I
     return s % frameCount
 }
 
-/// vortex_v2 ring 키(ringradius/ringpulldistance/ringpullforce/ringwidth @0x48e8a8–0x48e8e0).
-/// [추정] 링 근사: 회전면 반경 dist 가 링 대역(|dist−radius| ≤ width/2) 밖이고 pullDistance 이내이면
-/// 링 원주를 향한 반경 방향 인력(pullForce)을 가한다(대역 안·범위 밖은 묵영향).
+/// vortex_v2 ring 키. **[2026-08-20 주소 정정]** 종전 주석의 `@0x48e8a8–0x48e8e0` 은 틀렸다 —
+/// 그 자리는 `fogstartdensity`/`camerafade` 류의 카메라·포그 키다. 실측 RVA 는
+/// ringradius 0x48faa8 · ringpulldistance 0x48fab8 · ringpullforce 0x48fad0 · ringwidth 0x48fae0.
+/// (같은 주석 블록의 다른 주소들도 같은 폭으로 어긋나 있었다 — 아래 `case vortex` 참조.)
+///
+/// **WE 는 이 네 키를 vortex_v2 에서 무조건 주입한다** — 직교/원근 두 분기 어디로 가든 주입은
+/// 일어나고 값만 갈린다(0x1401bf632 `test sil,sil` → ortho 300/50/10/50, 원근 1.0/0.25/0.05/0.2).
+/// 따라서 "키가 하나도 없으면 링이 없다"는 상태는 WE 에 대응물이 없다.
+///
+/// 다만 **힘의 형태는 아직 측정된 것이 아니다.** 아래 [추정] 은 유지한다: 회전면 반경 dist 가
+/// 링 대역(|dist−radius| ≤ width/2) 밖이고 pullDistance 이내이면 링 원주를 향한 반경 방향
+/// 인력(pullForce)을 가한다. 상수는 실측이고 수식은 추정이라는 뜻이다 — 둘을 섞어 읽지 마라.
 public struct VortexRing: Equatable {
     public let radius: Float
     public let pullDistance: Float
@@ -110,15 +119,36 @@ public enum ParticleOperator: Equatable {
                         phaseMin: Float = 0, phaseMax: Float = 0)
     case oscillatePosition(frequencyMin: Float, frequencyMax: Float, scaleMin: Float, scaleMax: Float,
                            phaseMin: Float, phaseMax: Float, mask: Vec3)
-    /// 컨트롤포인트로의 인력/척력. 실물키: scale(가속, 음수=척력), threshold(근접 반경), origin(대상, 헤드리스=기본 0).
-    /// deleteThreshold = 실물키 deletethreshold(@0x48e788): threshold 이내 근접 파티클 삭제(기본 false =
-    /// 기존 min(1,threshold/dist) 감쇠 추정 경로 무회귀).
+    /// 컨트롤포인트로의 인력/척력. 주입기 0x1401bdee0..0x1401be293(5조각), 게이트 `stricmp`@0x1401cc9da.
+    ///
+    /// **[2026-08-20 키 이름 정정]** 대상 좌표의 실물 키는 `origin` 이 아니라 **`offset`** 이다.
+    /// "origin" 문자열의 lea 참조 14곳 중 이 원소의 주입기·핸들러 구간에 있는 것은 **하나도 없고**,
+    /// "offset" 은 주입기(0x1401bdefa·0x1401bdf4b)와 핸들러(0x1401cca18) 양쪽에 있다.
+    /// 동봉 자산은 `origin: "0 0 0"` 을 즐겨 적지만 WE 는 그걸 읽지 않는다 — 실코퍼스에서는
+    /// 양쪽 다 (0,0,0) 이라 관측 차이가 없다. 그래도 키를 맞춰 둔다(비영 `offset` 자산에서 갈린다).
+    ///
+    /// **[2026-08-20 미해결]** `deleteThreshold` 를 Bool 로 두고 있으나 실물은 **실수 거리**다:
+    /// 주입이 jsoncpp type tag 3(`mov byte [rbp-0x50],3` @0x1401be1a9, `cvtps2pd` @0x1401be1ca)이고
+    /// 읽기도 `asFloat`(0x1401ccbaa) 직후 **`mulss xmm6,xmm6`**(0x1401ccbef)로 제곱해 레코드에 넣는다.
+    /// 부재 기본은 ortho **15.0** / 원근 0.5 — 동봉 35인스턴스가 **전건 이 키를 생략**하므로
+    /// 기본값이 항상 발화하는 자리다. 다만 그 제곱값이 어느 방향 비교에 쓰이는지, `flags`(기본 **2**,
+    /// 유일하게 magic_vortex_orb 만 `0` 으로 끈다)가 게이트인지가 아직 미측정이라 **타입을 바꾸지
+    /// 않았다**. 측정 없이 Bool→Float 로 바꾸면 전 인스턴스에서 파티클을 지우기 시작한다.
     case controlPointAttract(scale: Float, threshold: Float, target: Vec3, deleteThreshold: Bool = false)
     /// 축 기준 소용돌이. 실물키: axis, distanceinner/outer, speedinner/outer, offset(중심).
-    /// 확장 키: centerforce(@0x48e7c8, 축 중심을 향한 반경 인력 — 의미 명확, 구현),
-    /// variablestrength/reductioninner/reductionouter(@0x48e7e0–0x48e840 — 의미 부호화 불가,
-    /// 파스·보존 전용), ring(vortex_v2 의 ringradius/ringpulldistance/ringpullforce/ringwidth
-    /// @0x48e8a8–0x48e8e0 — [추정] 링 대역 인력 근사, 부재 시 기존 경로).
+    /// 확장 키. **[2026-08-20 주소 정정]** 이 블록의 RVA 가 전부 계통적으로 어긋나 있었다
+    /// (0x48e7c8 은 `"olor"` 중간, 0x48e7e0 은 `fogdistancestart`). 실측:
+    /// centerforce 0x48f9f8 · variablestrength 0x48fa08 · reductioninner 0x48fa40 ·
+    /// reductionouter 0x48f9c8 · ring 0x48faa8/0x48fab8/0x48fad0/0x48fae0.
+    ///
+    /// centerforce 는 축 중심을 향한 반경 인력(의미 명확, 구현). **참조가 전 바이너리에 단 2곳**
+    /// — vortex_v2 주입기(lea @0x1401bf5f5)와 vortex_v2 핸들러(@0x1401ce07a)뿐이라 자매
+    /// `vortex` 와는 무관하다.
+    ///
+    /// variablestrength/reductioninner/reductionouter 는 **여기 소유가 아니다**:
+    /// variablestrength 는 maintaindistancetocontrolpoint 계열, reduction* 는
+    /// reducemovementnearcontrolpoint 계열만 참조한다. 두 vortex 어느 쪽도 읽지 않는다 —
+    /// 파스·보존 전용으로 남기되 기본값을 심으면 안 된다.
     case vortex(axis: Vec3, distanceInner: Float, distanceOuter: Float,
                 speedInner: Float, speedOuter: Float, offset: Vec3,
                 centerForce: Float = 0, variableStrength: Float = 0,
@@ -810,45 +840,71 @@ public struct ParticleSystemDef: Equatable {
                                               phaseMin: injected(o, "phasemin", 0), phaseMax: injected(o, "phasemax", 2 * .pi),
                                               mask: injectedVec3(o, "mask", Vec3(x: 1, y: 1, z: 0))))
             case "controlpointattract":
-                // CP 지정(범위 내) 시 CP offset 이 target, 미지정 시 origin 유지(무회귀).
+                // CP 지정(범위 내) 시 CP offset 이 target, 미지정 시 offset 유지.
+                //
+                // 실물은 부재 시 `controlpoint = 0` 을 심고(int 헬퍼 @0x1401be1fd) 읽는 쪽은
+                // `asInt` 후 **부호 없는** `cmp eax,7 / jae`(0x1401ccc65·0x1401cccca)로 가른다.
+                // Waple 의 `cpid < 8` 은 7을 통과시키고 실물은 7에서 갈라지므로 규약이 다르다.
+                // 부재 시 CP0 바인딩도 아직 넣지 않았다 — 동봉 6인스턴스의 대상이 원점에서
+                // 씬의 CP0 으로 옮겨 가는 변경이라, 런타임 측정 없이 바꾸지 않는다.
                 if let cpid = pint(o["controlpoint"]), cpid >= 0, cpid < 8 {
                     attractCPIds.append((op: ops.count, cp: cpid))
                 }
-                ops.append(.controlPointAttract(scale: pfloat(o["scale"]) ?? 0,
-                                                threshold: pfloat(o["threshold"]) ?? 0,
-                                                target: pvec3(o["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                                deleteThreshold: (pint(o["deletethreshold"]) ?? 0) != 0))
+                ops.append(.controlPointAttract(
+                    scale: injected(o, "scale", 512),          // 0x140492934 (원근 20.0 @0x14049288c)
+                    threshold: injected(o, "threshold", 512),  // 0x140492934 (원근 5.0 @0x140492858)
+                    // 실물 키는 `offset` 이다 — 위 enum 주석 참조. 부재 기본 "0 0 0"(플래그 무관).
+                    target: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    deleteThreshold: (pint(o["deletethreshold"]) ?? 0) != 0))
             case "vortex":
-                ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),
-                                   distanceInner: pfloat(o["distanceinner"]) ?? 0,
-                                   distanceOuter: pfloat(o["distanceouter"]) ?? 0,
-                                   speedInner: pfloat(o["speedinner"]) ?? 0,
-                                   speedOuter: pfloat(o["speedouter"]) ?? 0,
-                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
+                // 주입기 0x1401bef00 .. 0x1401bf2c6 (`.pdata` 3조각 — 언와인드 체인으로 병합해야
+                // 한다. 조각 하나만 읽으면 `speedinner` 의 상수가 **3번째 조각 첫 명령**
+                // 0x1401bf22e 라 통째로 안 보인다). 게이트 `stricmp`@0x1401cd8a9 → "vortex",
+                // 주입기 호출 @0x1401cd8e1.
+                //
+                // 종전 `?? 0` 은 소용돌이를 **아예 안 돌게** 만들었다: dOut(0) > dIn(0) 이 거짓 →
+                // 보간 t = 0 → speed = sIn = 0 → 접선 가속이 0 이다. 실코퍼스 9건 중
+                // distance* 부재 2건 · speedinner 부재 1건이 그 상태였다.
+                ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),   // "0 0 1", 플래그 무관
+                                   // 아래 셋만 ortho/원근 조건부다(`test sil` → 0x14010daa0 이 읽는
+                                   // `[scene+0x118]` bit10 = general.orthogonalprojection).
+                                   distanceInner: injected(o, "distanceinner", 500),   // 0x1401bf0e3 (원근 1.0)
+                                   distanceOuter: injected(o, "distanceouter", 650),   // 0x1401bf1ad (원근 2.0)
+                                   speedInner: injected(o, "speedinner", 2500),        // 0x1401bf22e (원근 1.0)
+                                   speedOuter: injected(o, "speedouter", 0),           // 0x1401bf24f xorps, 플래그 무관
+                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),  // "0 0 0", 플래그 무관
+                                   // `centerforce` 문자열은 이 주입기에도 이 핸들러에도 **없다**
+                                   // (전 바이너리 참조 2곳이 전부 vortex_v2 쪽). `?? 0` 이 옳다.
                                    centerForce: pfloat(o["centerforce"]) ?? 0,
                                    variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
                                    reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
                                    reductionOuter: pfloat(o["reductionouter"]) ?? 0))      // 보존 전용(의미 보류)
                 vortexAudio.append(AudioProcessing.parse(o))
             case "vortex_v2":
-                // F631: 실측 2인스턴스(3585875739)는 ring 키 없이 표준 vortex 파라미터(distanceinner/
-                // outer·speedinner)만 — 표준 vortex 로 근사 매핑(종전 default 드롭 → 소용돌이 복원).
-                // axis/offset 부재 = vortex 기본과 동일, speedouter 부재 = speedinner 승계.
-                let sIn = pfloat(o["speedinner"]) ?? 0
-                // ring 키(@0x48e8a8–0x48e8e0)는 하나라도 있을 때만 조립(부재 시 nil → 기존 경로).
-                let ring: VortexRing? = {
-                    let r = pfloat(o["ringradius"]), pd = pfloat(o["ringpulldistance"])
-                    let pf = pfloat(o["ringpullforce"]), w = pfloat(o["ringwidth"])
-                    guard r != nil || pd != nil || pf != nil || w != nil else { return nil }
-                    return VortexRing(radius: r ?? 0, pullDistance: pd ?? 0,
-                                      pullForce: pf ?? 0, width: w ?? 0)
-                }()
-                ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),
-                                   distanceInner: pfloat(o["distanceinner"]) ?? 0,
-                                   distanceOuter: pfloat(o["distanceouter"]) ?? 0,
-                                   speedInner: sIn,
-                                   speedOuter: pfloat(o["speedouter"]) ?? sIn,
-                                   offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
+                // 주입기 0x1401bf2d0 .. 0x1401bf6f8 (`.pdata` 3조각). **진입점 주의**: `centerforce`
+                // 주입 호출부 0x1401bf5ff 이 속한 조각의 시작(0x1401bf3c8)은 진입점이 아니다 —
+                // 그 조각만 읽으면 수치 주입 12개 중 11개를 놓친다. 게이트 `stricmp`@0x1401cde40.
+                //
+                // [2026-08-20 정정] 종전 주석의 "speedouter 부재 = speedinner 승계" 는 틀렸다.
+                // 주입기는 0x1401bf5e0 에서 `xorps xmm2,xmm2` 로 **0.0** 을 심고 플래그와도
+                // 무관하다(자매 vortex 의 0x1401bf24f 도 동일). 승계 규칙은 WE 에 없다.
+                //
+                // [2026-08-20 정정] `offset` 은 vortex_v2 에 **없다**. "offset" 문자열을 lea 로
+                // 집는 곳이 전 바이너리에 10군데인데, vortex_v2 주입기 구간과 그 핸들러
+                // (0x1401cde7e..0x1401ce3f0) 안에는 하나도 없다 — 자매 `vortex` 쪽
+                // (0x1401bef1a·0x1401bef69, 핸들러 0x1401cd8e6)에만 있다. JSON 에 적어도 WE 는
+                // 무시하므로 여기서도 무시한다(실코퍼스 5건 전부 부재라 관측 무영향).
+                //
+                // ring 4키는 **무조건 주입된다** — 0x1401bf632 의 `test sil,sil` 은 "주입 여부"가
+                // 아니라 "어떤 값이냐"만 가른다(ortho 300/50/10/50 · 원근 1.0/0.25/0.05/0.2).
+                // 종전의 "키가 하나라도 있을 때만 조립, 없으면 nil" 은 WE 에 대응물이 없다.
+                // **상수는 실측이지만 링의 힘 수식은 여전히 추정이다** — VortexRing 주석 참조.
+                ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),  // "0 0 1", 플래그 무관
+                                   distanceInner: injected(o, "distanceinner", 500),  // 0x1401bf3df (원근 1.0)
+                                   distanceOuter: injected(o, "distanceouter", 650),  // 0x1401bf4a4 (원근 2.0)
+                                   speedInner: injected(o, "speedinner", 2500),       // 0x1401bf56e (원근 1.0)
+                                   speedOuter: injected(o, "speedouter", 0),          // 0x1401bf5e0 xorps, 플래그 무관
+                                   offset: Vec3(x: 0, y: 0, z: 0),                    // WE 는 읽지 않는다(위 참조)
                                    // vortex_v2 **만** centerforce 를 심는다(0x1401bf5ff, 플래그 무관 1.0).
                                    // 자매 `vortex`(주입기 0x1401bef00)는 centerforce 문자열조차 없으므로
                                    // 그쪽 `?? 0` 은 옳다 — 두 원소를 같이 고치면 안 된다.
@@ -856,7 +912,11 @@ public struct ParticleSystemDef: Equatable {
                                    variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
                                    reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
                                    reductionOuter: pfloat(o["reductionouter"]) ?? 0,       // 보존 전용(의미 보류)
-                                   ring: ring))
+                                   ring: VortexRing(
+                                       radius: injected(o, "ringradius", 300),             // 0x1401bf637 (원근 1.0)
+                                       pullDistance: injected(o, "ringpulldistance", 50),  // 0x1401bf644 (원근 0.25)
+                                       pullForce: injected(o, "ringpullforce", 10),        // 0x1401bf65e (원근 0.05)
+                                       width: injected(o, "ringwidth", 50))))              // xmm6 @0x1401bf6b5 (원근 0.2)
                 vortexAudio.append(AudioProcessing.parse(o))
             case "turbulence":
                 // **[2026-08-20 정정] 종전 상수는 추정이었고, 진짜 주입기는 0x1401beb80 이다.**
