@@ -172,12 +172,21 @@ public enum ParticleOperator: Equatable {
     /// (외부 분기가 `입자 수 == 0` 하나뿐이라 퇴화 가드가 아예 없다).
     ///
     /// `s` 는 0x140241992 의 `ucomiss` 분기다:
-    ///   · variablestrength ≠ 0 → `clamp01(variablestrength · dt)`  (0x1401d8df0 = clamp01)
-    ///   · variablestrength = 0 → VM 의 2번째 인자 `dt · min(1, 0.025/dt)^0.7`
-    ///     (0x140237724–0x14023774f). dt ≤ 0.025(= 40fps 이상)면 그냥 `dt` 다 — 즉 **매우 느린
-    ///     수렴**이지 즉시 스냅이 아니다.
+    ///   · variablestrength ≠ 0 → `clamp01(variablestrength · dt)`
+    ///     (0x1402419a0 `mulss xmm0, [rbp+0x2008]` = arg2 = **생 dt**, 0x1401d8df0 = clamp01)
+    ///   · variablestrength = 0 → **상수 1.0** — 반지름 `distance` 구면으로의 즉시 투영이다.
+    ///
+    /// **[2026-08-20 정정]** 종전엔 후자를 "VM 의 2번째 인자 `dt·min(1,0.025/dt)^0.7`
+    /// (0x140237724–0x14023774f) — 매우 느린 수렴이지 즉시 스냅이 아니다" 라고 적었다. 틀렸다.
+    /// 같을 때 실행하는 것은 `movaps xmm11, xmm2`(base 0x14024199a · ext 0x140241cef)이고, 그
+    /// `xmm2` 는 핸들러 인자가 아니라 **op 디스패치 프리앰블이 opcode 마다 새로 심는 스칼라
+    /// 상수 1.0** 이다(`movss xmm2, [0x140492704]` @0x14023fd77 → `jmp rax` @0x14023fdc7 까지
+    /// 재대입 없음). 호출부에서 xmm2 레지스터가 3번째 인자 dtScaled 를 나르는 것과 혼동한
+    /// 것이다 — dtScaled 는 프리앰블이 `[rbp+0x5f0]`/xmm8 에 따로 보관한다.
+    /// 이름 그대로 `variablestrength` 를 적어야 비로소 "가변(연성)" 수렴이 된다.
     case maintainDistanceToControlPoint(distance: Float, variableStrength: Float, target: Vec3)
-    /// 무리 행동(분리·정렬·응집). 주입기 0x1401bf700, 게이트 `stricmp`@0x1401c9?, VM opcode 0x11 →
+    /// 무리 행동(분리·정렬·응집). 주입기 0x1401bf700, 게이트 `stricmp`@0x1401ce402
+    /// (문자열 `"boids"`@0x14048ff7c — 전 바이너리 lea 참조 1곳 0x1401ce3fb), VM opcode 0x11 →
     /// 핸들러 **0x140244121**. 컨트롤포인트를 전혀 참조하지 않는 순수 입자간 상호작용이다.
     ///
     /// 실측 구조(0x140244121–0x14024421e 앞머리 + 0x140244304– 내부 루프):
@@ -797,7 +806,12 @@ public struct ParticleSystemDef: Equatable {
                 inits.append(.lifetimeRandom(min: injected(i, "min", 0), max: injected(i, "max", 1),
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "sizerandom":
-                inits.append(.sizeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
+                // 주입기 0x1401b9e70(게이트 `stricmp` "sizerandom"). 둘 다 ortho/원근 조건부다:
+                //   min: `test dl,dl` → ortho **5.0**(0x140492858) / 원근 0.001(0x140492608) @0x1401b9e96
+                //   max: `test sil,sil` → ortho **50.0**(0x1404928cc) / 원근 1.0(0x140492704) @0x1401b9f6a
+                // 종전 1/1 은 "중립값" 추정이었다 — 어느 분기에도 없는 값이다. 동봉 287 인스턴스가
+                // 전건 min·max 를 명시하므로 관측 회귀는 0이고, 키를 뺀 씬에서만 갈린다.
+                inits.append(.sizeRandom(min: injected(i, "min", 5), max: injected(i, "max", 50),
                                          exponent: pexponent(i["exponent"]) ?? 1))
             case "colorrandom":
             // colorrandom 주입기 0x1401ba110: min = "0 0 0"(0x1401ba16e), max = "255 255 255"
@@ -819,8 +833,14 @@ public struct ParticleSystemDef: Equatable {
                 inits.append(.alphaRandom(min: injected(i, "min", 0.05), max: injected(i, "max", 1),
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "velocityrandom":
-                inits.append(.velocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
+                // 주입기 0x1401bac50(게이트 `stricmp` "velocityrandom"). 둘 다 문자열 주입이고
+                // ortho/원근 조건부다(`test bl,bl` → `cmovne`):
+                //   min: ortho **"-32 -32 0"**(0x14048f660) / 원근 "-1 -1 -1"(0x14048f670) @0x1401bac6d
+                //   max: ortho **"32 32 0"**(0x14048f680) / 원근 "1 1 1"(0x14048f4ec)   @0x1401bac93
+                // 종전 (0,0,0)/(0,0,0) 은 어느 분기에도 없는 값이라 "속도 없음" 을 만들었다.
+                // 동봉 120 인스턴스가 전건 min·max 를 명시하므로 관측 회귀는 0이다.
+                inits.append(.velocityRandom(min: injectedVec3(i, "min", Vec3(x: -32, y: -32, z: 0)),
+                                             max: injectedVec3(i, "max", Vec3(x: 32, y: 32, z: 0)),
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "rotationrandom":
                 inits.append(.rotationRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),

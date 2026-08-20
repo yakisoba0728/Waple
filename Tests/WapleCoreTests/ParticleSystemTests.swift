@@ -583,10 +583,16 @@ final class ParticleSystemTests: XCTestCase {
     }
 
     /// 이니셜라이저 기본값도 같은 주입기 규약이다 — "중립값" 유추가 아니다.
+    ///
+    /// **[2026-08-20] 커버리지 확장.** 종전엔 여덟 종 중 넷만 봤고, 빠진 둘이 실제로 틀려 있었다:
+    /// `sizerandom` 1/1 → ortho 5.0/50.0, `velocityrandom` (0,0,0)/(0,0,0) → ortho
+    /// "-32 -32 0"/"32 32 0". 둘 다 어느 분기에도 없는 "중립값" 유추였고, `injected()` 를 거치지
+    /// 않아 이 테스트의 그물 밖에 있었다. 여덟 종을 전부 본다.
     func testInitializerDefaultsComeFromInjectorConstants() {
         let d = ParticleSystemDef.parse(json("""
         {"initializer":[{"name":"angularvelocityrandom"},{"name":"alpharandom"},
-                        {"name":"colorrandom"},{"name":"lifetimerandom"}],"maxcount":10}
+                        {"name":"colorrandom"},{"name":"lifetimerandom"},
+                        {"name":"sizerandom"},{"name":"velocityrandom"}],"maxcount":10}
         """), material: nil)
         guard case let .angularVelocityRandom(amin, amax, _) = d.initializers[0] else { return XCTFail("no angularvelocityrandom") }
         XCTAssertEqual(amin, Vec3(x: 0, y: 0, z: -5), "주입기 0x1401bba1e — 종전 (0,0,0) 은 회전이 아예 없다")
@@ -600,6 +606,14 @@ final class ParticleSystemTests: XCTestCase {
         guard case let .lifetimeRandom(lmin, lmax, _) = d.initializers[3] else { return XCTFail("no lifetimerandom") }
         XCTAssertEqual(lmin, 0, "주입기 0x1401b9c40 은 min 에 상수를 심지 않는다 = 0")
         XCTAssertEqual(lmax, 1)
+        // 주입기 0x1401b9e70 — `test dl,dl`/`test sil,sil` 로 ortho 를 고른다.
+        guard case let .sizeRandom(smin, smax, _) = d.initializers[4] else { return XCTFail("no sizerandom") }
+        XCTAssertEqual(smin, 5, "0x1401b9e96 ortho 5.0(0x140492858) — 원근은 0.001. 1 은 어느 쪽도 아니다")
+        XCTAssertEqual(smax, 50, "0x1401b9f6a ortho 50.0(0x1404928cc) — 원근은 1.0")
+        // 주입기 0x1401bac50 — 문자열 주입 + `cmovne`.
+        guard case let .velocityRandom(vmin, vmax, _) = d.initializers[5] else { return XCTFail("no velocityrandom") }
+        XCTAssertEqual(vmin, Vec3(x: -32, y: -32, z: 0), "0x1401bac6d ortho \"-32 -32 0\" — 원근은 \"-1 -1 -1\"")
+        XCTAssertEqual(vmax, Vec3(x: 32, y: 32, z: 0), "0x1401bac93 ortho \"32 32 0\" — 원근은 \"1 1 1\"")
     }
 
     /// **주입은 "키 부재" 에만 일어난다 — "키는 있는데 못 읽음" 은 주입 대상이 아니다.**
