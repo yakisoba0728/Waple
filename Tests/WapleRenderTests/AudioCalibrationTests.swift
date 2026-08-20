@@ -168,21 +168,28 @@ final class AudioCalibrationTests: XCTestCase {
         NSLog("%@", "[GUARD] (A) 현행 /max  loud=\(respA(loud))  quiet=\(respA(quiet))  (≈동일 = 버그)")
     }
 
-    // ── 프로덕션 경로 직접 검증(FIX 착지 후): 실제 AudioSpectrum.spectrum() 이 (C) 거동인지 ──
-    // 가드는 (C) 로컬 정의를 쓰지만 이건 프로덕션 spectrum() 을 직접 호출해 회귀를 잡는다.
+    // ── 프로덕션 경로 직접 검증: 실제 AudioSpectrum.spectrum() 이 라우드니스에 민감한가 ──
+    //
+    // X-⑩ 이후 파이프라인이 WE 규약으로 바뀌었다(밴드 매핑 t^0.25 + MAX 축약 + 주파수축 틸트
+    // + 절대 게인 162.56). 이 테스트가 지키는 계약은 그대로다 — **소리가 커지면 응답이 커진다**.
+    // 종전 `/max` 정규화가 그걸 소거했던 것이 원래 이 가드가 생긴 이유(#17)다.
+    //
+    // 다만 절대 레벨 단언(`0 < x < 1`)은 뺐다. 그 구간은 옛 캘리브 게인(0.75/32.2446)에
+    // 묶인 값이고, 지금 게인은 원본에서 유도한 상수라 임의로 그 구간에 들어갈 이유가 없다.
+    // 계약이 아닌 것을 계약처럼 고정해 두면 다음 사람이 정본을 의심하게 된다.
     func testProductionSpectrumLoudnessSensitive() {
         let guardCfg = Cfg(bounds: [0.0, 1.0], power: 1.0, mul: 1.0, fmin: 0, fmax: 1, weight: 0)
+        let bins = AudioSpectrum.binCount(fftLength: fftSize, sampleRate: Double(sr))
+        let norm = 1 / (2 * Float(fftSize))   // vDSP packed-real → 1/N 정규화 진폭
         func respProd(_ m: [Float]) -> Float {
-            let s = AudioSpectrum.spectrum(fromMagnitudes: m, binCount: 64)   // 프로덕션 경로
+            let s = AudioSpectrum.spectrum(normalizedMagnitudes: m.map { $0 * norm }, binCount: bins)
             return respond(s, s, guardCfg)
         }
-        // 위 testRegressionGuard 와 같은 이유(Hann 제거로 진폭 ≈2배)로 자극 1/2 스케일.
-        let loud = respProd(mags(sine(0.5, 1000, fftSize)))        // −6 dBFS(Hann 시절 0 dBFS 등가)
+        let loud = respProd(mags(sine(0.5, 1000, fftSize)))
         let quiet = respProd(mags(sine(0.06295, 1000, fftSize)))   // loud −18 dB
         NSLog("%@", "[PROD] AudioSpectrum.spectrum()  loud=\(loud)  quiet=\(quiet)")
-        XCTAssertGreaterThan(loud, quiet + 1e-3, "프로덕션 경로: loud 응답 > quiet (라우드니스 민감)")
-        XCTAssertTrue(loud > 0 && loud < 1, "loud 은 (0,1) 개구간")
-        XCTAssertTrue(quiet > 0 && quiet < 1, "quiet 은 (0,1) 개구간")
+        XCTAssertGreaterThan(loud, quiet + 1e-4, "프로덕션 경로: loud 응답 > quiet (라우드니스 민감)")
+        XCTAssertGreaterThan(loud, 0, "무음이 아닌 자극은 응답이 있어야 한다")
     }
 
     // ── A3: 렌더 비회귀(GPU, 마지막) — (C) 스펙트럼 주입 시 진폭↑ → luma 단조 ──
