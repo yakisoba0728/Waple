@@ -689,9 +689,13 @@ public struct ParticleSimulator {
     /// F624: 오퍼레이터 부착 오디오반응 배수(vortex 속도). nil/무신호 = 1(× 1.0 은 IEEE 정확 → 비트동일).
     private func audioResponseScale(_ ap: AudioProcessing?) -> Float {
         guard let ap, let audio = currentAudio, !audio.isSilent else { return 1 }
+        // **파티클/이미터 경로는 구간 MAX 다** — 셰이더의 구간평균이 아니다(AudioResponse.Reduction).
+        // 실물 0x14022a8a0 이 러닝 MAX 를 잡고 나눗셈을 하지 않는다. 종전엔 셰이더 규약을
+        // 그대로 재사용해, 베이스만 뜬 스펙트럼에서 WE 1.0 vs Waple 0.0 으로 갈렸다.
         return AudioResponse.compute(left: audio.left, right: audio.right, mode: ap.mode,
                                      freqMin: ap.freqStart, freqMax: ap.freqEnd,
-                                     bounds: ap.bounds, power: ap.exponent, multiply: 1)
+                                     bounds: ap.bounds, power: ap.exponent, multiply: 1,
+                                     reduction: .peak)
     }
 
     // MARK: - 스폰

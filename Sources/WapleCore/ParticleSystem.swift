@@ -646,8 +646,12 @@ public struct ParticleInstanceOverride: Equatable {
 
 // MARK: - 오디오반응 (실측 audioprocessing* — 이미터/이니셜라이저/오퍼레이터 부착, 본 구현은 이미터 rate 스코프)
 
-/// 이미터 오디오반응 파라미터(WE audioprocessing*). 소비는 `AudioResponse.compute`(shake/pulse.vert 1:1):
-/// 구간평균([freqStart,freqEnd]) → smoothstep(bounds) → pow(exponent) → saturate → ×1 = rate 배수(0..1).
+/// 이미터·오퍼레이터 오디오반응 파라미터(WE audioprocessing*).
+///
+/// 축약은 **경로마다 다르다.** 셰이더 경로는 구간평균(`pulse.vert` 원문의 `/= (max−min+1)`)이고,
+/// CPU 파티클 경로는 구간 **MAX** 다(실물 0x14022a8a0 이 러닝 MAX 를 잡고 나눗셈이 없다 —
+/// `AudioResponse.Reduction` 참조). 그 뒤는 같다:
+/// smoothstep(bounds) → pow(exponent) → saturate → ×1 = rate 배수(0..1).
 /// mode 1..3(L/R/Both평균)만 활성 — 0/부재는 nil(무반응, 기존 rate 유지 → 무음 폴백의 근거).
 public struct AudioProcessing: Equatable {
     public let mode: Int
@@ -661,17 +665,28 @@ public struct AudioProcessing: Equatable {
     }
 
     /// 이미터/오퍼레이터 json 의 audioprocessing* 키 → AudioProcessing. mode 1..3 아니면 nil.
-    /// 기본값은 셰이더 오디오 경로(SceneRendererResources.audioParams)와 정합: freqStart 0·freqEnd 15·exponent 1.
-    /// bounds 부재 → [0.8,1.0](wallpaper64.exe 스트링 "0.8 1.0" @0x48e1b8; 키 귀속은 인접 추정 —
-    /// "audioprocessingbounds" @0x48e220 과 같은 audioprocessing* 스트링 클러스터 내).
+    ///
+    /// **[2026-08-20] 기본값을 셰이더 경로에서 유추하지 않는다.** 종전엔 "셰이더 오디오 경로
+    /// (SceneRendererResources.audioParams)와 정합" 이라며 freqEnd 15 · exponent 1 을 썼는데,
+    /// 파티클 경로는 자체 주입기(0x1401c1e20)를 가지고 값이 다르다. 실측은 아래 각 자리에.
+    /// bounds 문자열 `"0.8 1.0"` 의 RVA 는 0x48f3b8 이다 — 종전 `@0x48e1b8` 은 파일 오프셋이고
+    /// (+0x1200), "귀속 추정" 표기도 과소였다(태그 4 · len 7 로 확정된다).
     static func parse(_ o: [String: Any]) -> AudioProcessing? {
         guard let mode = strictInt(o["audioprocessingmode"]), mode >= 1, mode <= 3 else { return nil }
         return AudioProcessing(
             mode: mode,
-            freqStart: strictFloat(o["audioprocessingfrequencystart"]) ?? 0,
-            freqEnd: strictFloat(o["audioprocessingfrequencyend"]) ?? 15,
-            bounds: bounds2(o["audioprocessingbounds"]) ?? SIMD2(0.8, 1.0),  // 귀속 추정(위 doc 참조)
-            exponent: strictFloat(o["audioprocessingexponent"]) ?? 1)
+            // 부재 기본값은 전부 주입기 0x1401c1e20 실측이다. 종전엔 freqEnd 15 · exponent 1 로
+            // **셰이더 오디오 경로에서 유추**했는데, 파티클 경로는 자체 기본값 집합을 가진다.
+            freqStart: strictFloat(o["audioprocessingfrequencystart"]) ?? 0,   // 0x1401c20eb, 값 0
+            // **[2026-08-20 정정] 15 가 아니라 1 이다** — `mov r8d, 1` @0x1401c212e → `H_INT`
+            // @0x1401c213e. 15 는 23.4Hz–14.7kHz 를 한 덩어리로 뭉개고, 1 은 23.4–187.5Hz
+            // 두 밴드만 고른다. 저역 반응이 통째로 달라진다.
+            freqEnd: strictFloat(o["audioprocessingfrequencyend"]) ?? 1,
+            // 문자열 `"0.8 1.0"`@0x14048f3b8(len 7), 태그 4 — 종전 "귀속 추정" 표기는 과소였다.
+            bounds: bounds2(o["audioprocessingbounds"]) ?? SIMD2(0.8, 1.0),
+            // **[2026-08-20 정정] 1 이 아니라 2.0 이다** — `movabs rcx, 0x4000000000000000`
+            // @0x1401c1f77 → `mov [rax], rcx` @0x1401c1f81 (태그 3 = double).
+            exponent: strictFloat(o["audioprocessingexponent"]) ?? 2)
     }
 }
 
