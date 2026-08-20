@@ -506,6 +506,42 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(pf0, 1)
     }
 
+    /// **위상은 [0, 2π) 로 흩어진다 — 전 파티클 동위상이 아니다.**
+    /// 세 오퍼레이터 전부 `phasemax = 6.2831855` 를 주입한다(0x1401bd8de · 0x1401bdbe3 ·
+    /// 0x1401bdecd, 전부 실수 주입 헬퍼 0x1401d7d30 경유). 종전 기본 0 은 위상 폭이 0 이라
+    /// 모든 파티클이 같은 순간에 같은 값으로 흔들렸다 — 눈에 보이는 차이다.
+    /// (`reducemovementnearcontrolpoint` 만 phasemax 0 을 주입한다 — 0x1401beeed.)
+    func testOscillatePhaseSpreadsOverFullTurnByDefault() {
+        let d = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"oscillatesize"},{"name":"oscillatealpha"},{"name":"oscillateposition"}],"maxcount":10}
+        """), material: nil)
+        guard case let .oscillateSize(_, _, _, _, spmin, spmax) = d.operators[0] else { return XCTFail("no size") }
+        XCTAssertEqual(spmin, 0); XCTAssertEqual(spmax, 2 * .pi, accuracy: 1e-5)
+        guard case let .oscillateAlpha(_, _, _, _, apmin, apmax) = d.operators[1] else { return XCTFail("no alpha") }
+        XCTAssertEqual(apmin, 0); XCTAssertEqual(apmax, 2 * .pi, accuracy: 1e-5)
+        guard case let .oscillatePosition(_, _, _, psmax, ppmin, ppmax, pmask) = d.operators[2] else {
+            return XCTFail("no position")
+        }
+        XCTAssertEqual(ppmin, 0); XCTAssertEqual(ppmax, 2 * .pi, accuracy: 1e-5)
+        // 같은 원소의 나머지 둘도 함께 못 박는다 — 셋 다 같은 주입기에서 나온다.
+        XCTAssertEqual(psmax, 0.5, "0x1401bd8a3 — 종전 `?? scalemin` 승계가 아니다")
+        XCTAssertEqual(pmask, Vec3(x: 1, y: 1, z: 0), "주입 문자열 \"1 1 0\" @0x14048f488 — (1,1,1) 아님")
+    }
+
+    /// 주기 방출 다섯 키도 **주입 대상**이다(이미터 주입기 진입 0x1401b8df0 의 꼬리
+    /// 0x1401b907d-0x1401b90f5). 직전 커밋이 "주입 없음(전부 0)" 이라고 정반대로 적었던 자리다 —
+    /// 고정 바이트 창으로 디스어셈블해 체인된 `.pdata` 조각에서 꼬리를 놓친 것이 원인이었다.
+    func testPeriodicDefaultsComeFromInjectorNotZero() {
+        let d = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":0,"maxtoemitperperiod":6}],
+         "renderer":[{"name":"sprite"}],"maxcount":10}
+        """), material: nil)
+        let pe = d.emitterPeriodic.first ?? nil
+        XCTAssertEqual(pe?.durationMin, 2, "0x1401b907d"); XCTAssertEqual(pe?.durationMax, 3, "0x1401b9094")
+        XCTAssertEqual(pe?.delayMin, 1, "0x1401b90ab"); XCTAssertEqual(pe?.delayMax, 2, "0x1401b90c2")
+        XCTAssertEqual(pe?.maxPerPeriod, 6)
+    }
+
     /// 이니셜라이저 기본값도 같은 주입기 규약이다 — "중립값" 유추가 아니다.
     func testInitializerDefaultsComeFromInjectorConstants() {
         let d = ParticleSystemDef.parse(json("""

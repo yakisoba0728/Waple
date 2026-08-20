@@ -756,17 +756,24 @@ public struct ParticleSystemDef: Equatable {
                 let fmin = injected(o, "frequencymin", 1)
                 ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 10),
                                            scaleMin: smin, scaleMax: injected(o, "scalemax", 1),
-                                           phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
+                                           phaseMin: injected(o, "phasemin", 0), phaseMax: injected(o, "phasemax", 2 * .pi)))
             case "oscillateposition":
                 // 주입기 0x1401bd5d0: frequencymin = 1.0(0x1401bd716) · frequencymax = **5.0**
                 // (0x1401bd7cc). 자매 alpha/size 는 10.0 인데 **여기만 5.0** 이다 — 승계였다면
                 // 절대 나오지 않을 값이라, 이 하나가 "고정 상수" 해석의 반증 가능한 증거다.
                 let smin = pfloat(o["scalemin"]) ?? 0
                 let fmin = injected(o, "frequencymin", 1)
+                // scalemax 는 **오브젝트 플래그 조건부**다(0x1401bd894 `test r14b,r14b` →
+                // 세워졌으면 10.0(0x1401bd899), 아니면 **0.5**(0x1401bd8a3)). r14b 는 이 주입기의
+                // 두 번째 인자로 호출부가 파티클 시스템 오브젝트의 비트에서 뽑는다.
+                // 두 트리의 파티클 시스템 최상위 `flags` 실측값은 {0,1,2,3,4,6,8,9,248} 뿐이라
+                // **bit10(0x400)이 세워진 자산이 하나도 없다** — 실측 동작은 0.5 다. 10.0 분기의
+                // 조건 출처는 아직 못 박지 않았으므로 0.5 로 두고 기록만 남긴다.
+                // 종전 `?? smin` 승계는 어느 쪽도 아니었다.
                 ops.append(.oscillatePosition(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 5),
-                                              scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin,
-                                              phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0,
-                                              mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1)))
+                                              scaleMin: smin, scaleMax: injected(o, "scalemax", 0.5),
+                                              phaseMin: injected(o, "phasemin", 0), phaseMax: injected(o, "phasemax", 2 * .pi),
+                                              mask: injectedVec3(o, "mask", Vec3(x: 1, y: 1, z: 0))))
             case "controlpointattract":
                 // CP 지정(범위 내) 시 CP offset 이 target, 미지정 시 origin 유지(무회귀).
                 if let cpid = pint(o["controlpoint"]), cpid >= 0, cpid < 8 {
@@ -831,7 +838,7 @@ public struct ParticleSystemDef: Equatable {
                 let fmin = injected(o, "frequencymin", 1)
                 ops.append(.oscillateSize(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 10),
                                           scaleMin: smin, scaleMax: injected(o, "scalemax", 1.2),
-                                          phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
+                                          phaseMin: injected(o, "phasemin", 0), phaseMax: injected(o, "phasemax", 2 * .pi)))
             case "alphachange":
                 ops.append(.alphaChange(startTime: pfloat(o["starttime"]) ?? 0,
                                         endTime: pfloat(o["endtime"]) ?? 1,
@@ -911,20 +918,33 @@ public struct ParticleSystemDef: Equatable {
         ///   `[+0x18] = minss([+0x1c], [+0x18])` · `[+0x20] = minss([+0x24], [+0x20])`
         /// max 는 건드리지 않는다 — 즉 min > max 면 min 이 내려가고 범위가 [max, max] 가 된다.
         ///
-        /// 부재 키는 **0** 이다(주기 키에는 기본값 주입이 없다 — 주입기 0x1401b8e09 는 rate/duration
-        /// 만 다룬다). 종전 `?? 1`(duration)·`?? min 승계`는 중립값 추정이었다.
+        /// **부재 기본값은 0 이 아니다** — 다섯 키 전부 주입 대상이다. 이미터 기본값 주입기
+        /// (진입 **0x1401b8df0**)의 꼬리 0x1401b907d-0x1401b90f5 가 심는다:
+        ///     minperiodicduration = 2.0(0x1401b907d)   maxperiodicduration = 3.0(0x1401b9094)
+        ///     minperiodicdelay    = 1.0(0x1401b90ab)   maxperiodicdelay    = 2.0(0x1401b90c2)
+        ///     maxtoemitperperiod  = 0  (정수 헬퍼 0x1401d7be0 으로 tail-jmp)
+        /// 실수 주입은 공용 헬퍼 0x1401d7d30 이 한다 — `strlen` → `find`(0x140087490) →
+        /// `test rax,rax` / `jne`(있으면 건너뜀) → `cvtss2sd` → 저장. 여기도 **부재일 때만**이다.
+        ///
+        /// **[정정 2026-08-20] 이 자리를 한 번 틀렸다.** 직전 커밋은 "주기 키에는 기본값 주입이
+        /// 없다(= 전부 0)" 고 적었는데 정반대다. 원인은 디스어셈블 방법이었다 — 주입기를
+        /// 0x1401b8e09 부터 **고정 바이트 창**으로 읽었는데 그 주소는 함수 진입이 아니라 체인된
+        /// `.pdata` 조각의 경계였고, 창이 `instantaneous` 블록에서 끊겨 주기 꼬리를 통째로 놓쳤다.
+        /// 교훈: 함수 경계는 `.pdata` 로 잡되 **체인된 조각을 병합**해야 한다. 고정 창은 안 된다.
         ///
         /// 실물 도달 0: 주기 키를 쓰는 이미터 5개(thunderbolt ×2, thunderbolt_beam_child ×2,
-        /// water_droplets_periodic)가 **전건 min 을 명시**하고 **전건 min ≤ max** 라, 이 정정은
-        /// 동봉 동작을 바꾸지 않는다. 워크샵 자산의 역범위만 잡는다.
+        /// water_droplets_periodic)가 네 min/max 를 **전건 명시**하고 전건 min ≤ max 다.
+        /// 워크샵 자산이 max 를 생략하면 직전 코드는 창 길이가 0 으로 붕괴해 방출이 죽었다.
         func parsePeriodic(_ e: [String: Any]) -> PeriodicEmission? {
             let dMin = pfloat(e["minperiodicduration"]), dMax = pfloat(e["maxperiodicduration"])
             let pMin = pfloat(e["minperiodicdelay"]), pMax = pfloat(e["maxperiodicdelay"])
             let quota = pint(e["maxtoemitperperiod"])
             guard dMin != nil || dMax != nil || pMin != nil || pMax != nil || quota != nil else { return nil }
-            let dHi = dMax ?? 0, pHi = pMax ?? 0
-            return PeriodicEmission(durationMin: Swift.min(dMin ?? 0, dHi), durationMax: dHi,
-                                    delayMin: Swift.min(pMin ?? 0, pHi), delayMax: pHi,
+            let dLo = injected(e, "minperiodicduration", 2), dHi = injected(e, "maxperiodicduration", 3)
+            let pLo = injected(e, "minperiodicdelay", 1), pHi = injected(e, "maxperiodicdelay", 2)
+            // 꼬리 클램프(0x1401c1deb-0x1401c1e0c): min 만 max 로 내린다. max 는 안 건드린다.
+            return PeriodicEmission(durationMin: Swift.min(dLo, dHi), durationMax: dHi,
+                                    delayMin: Swift.min(pLo, pHi), delayMax: pHi,
                                     maxPerPeriod: max(0, quota ?? 0))
         }
         // **[2026-08-20] `rate` 부재 기본값은 0 이 아니라 10.0 이다.** 이미터 기본값 주입기
