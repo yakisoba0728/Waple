@@ -195,7 +195,10 @@ final class EffectScopedLookupOrderTests: XCTestCase {
         try XCTSkipUnless(FileManager.default.fileExists(atPath: bundledLocal.path))
 
         let renderer = makeRenderer()
-        let empty = try makePackage([])
+        // 빈 배열을 넘기면 안 된다 — `ScenePackage.fromDirectory` 는 엔트리가 0개면 nil 이다
+        // (`ScenePackage.swift` 의 `guard !entries.isEmpty`). 조회 대상과 무관한 파일을 하나 넣어
+        // "pkg 는 존재하되 이 셰이더는 없다" 상태를 만든다.
+        let empty = try makePackage([("scene.json", Data("{}".utf8))])
         let got = renderer.effectScopedData("shaders/effects/opacity.frag",
                                             root: "effects/opacity", package: empty)
         // 동봉 파일 바이트와 직접 비교하지 **않는다**. `assetBaseRoots` 의 첫 루트는 사용자 WE

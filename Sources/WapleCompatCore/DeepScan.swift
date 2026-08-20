@@ -149,10 +149,39 @@ struct PkgAssets {
         return nil
     }
 
+    /// 이펙트-로컬 자산 루트 우선 조회 — 렌더러 `SceneRenderer.effectScopedData` 와 **동형**이어야 한다.
+    /// 스톡 이펙트 46/46 이 자기 `shaders/`·`materials/` 를 갖고 팩 루트엔 `shaders/effects/` 가 아예
+    /// 없으므로, 스코프를 안 하면 스캐너는 렌더러가 실제로 번역하는 46종을 전부 "셰이더 없음" 으로
+    /// 보고한다. 순서도 같다 — pkg 가 베이스를 **항상** 이기고, 각 출처 안에서만 로컬이 앞선다.
+    func scopedData(_ name: String, root: String?) -> Data? {
+        let scoped: String? = (root?.isEmpty == false) ? "\(root!)/\(name)" : nil
+        if let s = scoped, let d = pkgData(s) { return d }
+        if let d = pkgData(name) { return d }
+        if let s = scoped, let u = baseAssetURL(s), let d = try? Data(contentsOf: u) { return d }
+        if let u = baseAssetURL(name) { return try? Data(contentsOf: u) }
+        return nil
+    }
+
+    /// `SceneRenderer.effectLocalRoot` 와 동형(백슬래시 정규화 포함).
+    static func effectLocalRoot(_ eff: SceneEffect) -> String? {
+        if !eff.file.isEmpty {
+            let normalized = eff.file.replacingOccurrences(of: "\\", with: "/")
+            guard let slash = normalized.lastIndex(of: "/") else { return nil }
+            let dir = String(normalized[normalized.startIndex..<slash])
+            return dir.isEmpty ? nil : dir
+        }
+        return eff.name.isEmpty ? nil : "effects/\(eff.name)"
+    }
+
     // #include resolver: pkg shaders/<h> -> pkg <h> -> base-assets -> builtin (mirrors buildTranslatedEffect).
-    func include(_ header: String) -> String? {
+    func include(_ header: String) -> String? { scopedInclude(header, root: nil) }
+
+    /// 렌더러의 include 클로저와 동형 — 이펙트-로컬 루트를 먼저 본다.
+    /// 동봉 팩에 이펙트-로컬 `.h` 는 0개라 지금은 결과가 같지만, 스캐너가 렌더러와 **다른 규약**으로
+    /// 도는 것 자체가 오라클을 못 믿게 만든다.
+    func scopedInclude(_ header: String, root: String?) -> String? {
         for cand in ["shaders/\(header)", header] {
-            if let d = assetData(cand), let s = String(data: d, encoding: .utf8) { return s }
+            if let d = scopedData(cand, root: root), let s = String(data: d, encoding: .utf8) { return s }
         }
         return BuiltinShaderIncludes.lookup(header)
     }
@@ -481,25 +510,29 @@ public enum DeepScan {
                 continue
             }
             let manifest = loadManifest(eff, res: res)
-            // G-B2-06 (렌더러와 동형): 씬 패스 배열은 셰이더 패스만 담는다 — command 패스를 세면
-            // 그 뒤가 한 칸씩 밀린다. 스캐너가 렌더러와 다른 콤보를 보고하지 않도록 같이 고친다.
-            var scenePassCursor = 0
+            let effectRoot = PkgAssets.effectLocalRoot(eff)
+            // **G-B2-06 정정(2026-08-20).** 종전 주석은 "씬 패스 배열은 셰이더 패스만 담는다" 였고
+            // 그에 맞춰 셰이더 패스만 세는 커서를 뒀다. 원본 파서를 뜯어 보니 반대다 — 씬 오버라이드는
+            // 매니페스트 `passes[]` 의 **원본 배열 인덱스**로 정렬되고 명령 패스도 슬롯을 하나 쓴다
+            // (`0x1401e7a6e` 의 `mov edx, ebx`, 루프 증가는 `0x1401e814e` 하나뿐).
+            // 렌더러는 `SceneRenderer.sceneOverride(forRawPassIndex:in:)` 로 고쳤다. 스캐너가 안 따라오면
+            // **렌더러가 실제로 컴파일하는 것과 다른 셰이더를 검사하는 오라클**이 된다.
             for (i, mp) in manifest.passes.enumerated() {
                 if mp.command == "copy" || mp.command == "swap" { continue }   // shader-less command pass
-                let meta = resolveShaderMeta(mp, eff: eff, res: res)
-                guard let vData = res.assetData("shaders/\(meta.base).vert"),
-                      let fData = res.assetData("shaders/\(meta.base).frag"),
+                let meta = resolveShaderMeta(mp, eff: eff, res: res, root: effectRoot)
+                guard let vData = res.scopedData("shaders/\(meta.base).vert", root: effectRoot),
+                      let fData = res.scopedData("shaders/\(meta.base).frag", root: effectRoot),
                       let vert = String(data: vData, encoding: .utf8),
                       let frag = String(data: fData, encoding: .utf8) else {
                     agg.sync { agg.effectShaderMissing += 1 }
                     continue
                 }
-                let scenePass = scenePassCursor < eff.passList.count ? eff.passList[scenePassCursor] : SceneEffectPass()
-                scenePassCursor += 1
+                let scenePass = i < eff.passList.count ? eff.passList[i] : SceneEffectPass()
                 let combos = resolveCombos(frag: frag, scenePass: scenePass, matCombos: meta.matCombos, matTextures: meta.matTextures)
                 let provenance = "\(projectID)/\(eff.name)#\(i) [\(meta.base)]"
                 agg.sync { agg.translateAttempt += 1 }
-                if let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: res.include) {
+                if let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos,
+                                                    include: { res.scopedInclude($0, root: effectRoot) }) {
                     agg.sync {
                         agg.translateOK += 1
                         if agg.mslJobs[t.msl] == nil { agg.mslJobs[t.msl] = provenance }
@@ -517,13 +550,14 @@ public enum DeepScan {
         return EffectManifest(passes: [.init(material: nil, shader: nil, target: nil, binds: [])], fbos: [])
     }
 
-    static func resolveShaderMeta(_ mp: EffectManifest.Pass, eff: SceneEffect, res: PkgAssets)
+    static func resolveShaderMeta(_ mp: EffectManifest.Pass, eff: SceneEffect, res: PkgAssets,
+                                  root: String? = nil)
         -> (base: String, matCombos: [String: Int], matTextures: [String?]) {
         var shaderName = mp.shader
         var matCombos: [String: Int] = [:]
         var matTextures: [String?] = []
         if shaderName == nil, let matPath = mp.material,
-           let mData = res.assetData(matPath),
+           let mData = res.scopedData(matPath, root: root),
            let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any],
            let mp0 = (mjson["passes"] as? [Any])?.first as? [String: Any] {
             shaderName = mp0["shader"] as? String
