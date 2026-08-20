@@ -75,6 +75,20 @@ jobs:
       - name: Swift enum pattern arity
         run: python3 scripts/spec/check_swift_enum_patterns.py
 
+      # JS 심이 동봉 `baseclasses.js` 와 공존 가능한지 본다.
+      #
+      # baseclasses 는 Vec2/Vec3/Vec4/Mat3/Mat4/MediaPlaybackEvent 를 `class` 로 선언한다
+      # = 전역 **렉시컬** 바인딩이다. 심이 같은 이름을 `function` 으로 선언하면 같은 컨텍스트에서
+      # 공존할 수 없고, 어느 쪽을 먼저 평가하든 **두 번째 스크립트가 통째로** SyntaxError 로 죽는다
+      # — 한 문장이 아니라 그 컨텍스트의 씬 스크립트가 전부 함께 사라진다.
+      #
+      # 심 리터럴을 Swift 에서 그대로 뽑아 node vm 에 넣고, ① 심 단독 ② baseclasses+심 양쪽에서
+      # Waple 소유 표면(shared.camera · createScriptProperties 의 무-_config · MediaPlaybackEvent
+      # 필드)이 유지되는지와 ③ 조합에서 WE 의 Vec4/Mat3/Mat4 가 도달하는지를 본다.
+      # 음성 대조: 심을 옛 형태로 되돌린 사본이 실제로 SyntaxError 를 내는지 매 실행 확인한다.
+      - name: JS shim / baseclasses coexistence
+        run: python3 scripts/spec/check_js_shim_baseclasses.py
+
       # 동봉 이펙트가 참조하는 텍스처가 **실제로 해석되는지** 본다.
       #
       # 스톡 3종(refraction·waterflow·waterripple)이 자기 노멀맵/위상맵을 못 찾아 흰색 1×1
