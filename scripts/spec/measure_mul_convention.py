@@ -313,6 +313,60 @@ def scan_corpus():
             "nonEngineMatrixMulShaderFiles": reach_files}
 
 
+MUL_MATVEC_RE = re.compile(
+    r'rewriteCall\(s,\s*"mul"\)[\s\S]{0,400}?\\\(args\[1\]\)\s*\*\s*\\\(args\[0\]\)')
+MUL_VECMAT_RE = re.compile(
+    r'rewriteCall\(s,\s*"mul"\)[\s\S]{0,400}?\\\(args\[0\]\)\s*\*\s*\\\(args\[1\]\)')
+
+
+def detect_mul_order(translator: str) -> bool:
+    """번역기가 `mul(a,b)` 를 `(b * a)` 로 내는지 판정한다. True = (b*a) = 행렬·벡터.
+
+    **양성/음성 대조가 있는 이유.** 종전 판정은 기준점의 *한 줄 삼항식*을 리터럴로 매칭했다:
+
+        'rewriteCall(s, "mul") { args in args.count == 2 ? "(\\(args[1]) * \\(args[0]))"'
+
+    그 코드가 `guard … / return` 다중행으로 리팩터되면서(GLSLTranslator.swift:1517-1520)
+    매칭이 죽었는데, **동작은 하나도 안 바뀌었다**. 그런데 판정은 `in` 이 False 면 조용히
+    `(a * b)` 를 내고 스크립트는 exit 0 으로 완주했다 — 즉 다음 사람이 재생성하면 오류 하나
+    없이 확정 값이 **정반대로 뒤집힌 채** 커밋된다. 실제로 2026-08-20 재생성에서 그 일이 났다.
+
+    그래서 두 순서를 **각각** 찾고, 정확히 하나만 잡힐 때만 판정한다. 둘 다 못 잡거나 둘 다
+    잡히면 그건 "코드가 바뀌었다" 가 아니라 "**이 판정식이 낡았다**" 는 신호이므로 하드 실패한다.
+    조용히 틀린 값을 내는 것보다 재생성이 멈추는 편이 낫다.
+    """
+    matvec = bool(MUL_MATVEC_RE.search(translator))
+    vecmat = bool(MUL_VECMAT_RE.search(translator))
+    if matvec == vecmat:
+        raise SystemExit(
+            "[measure_mul_convention] mul 인자 순서를 판정할 수 없다"
+            f" (matvec={matvec}, vecmat={vecmat}).\n"
+            f"  {TRANSLATOR} 의 `rewriteCall(s, \"mul\")` 방출식이 바뀌었으면"
+            " 이 스크립트의 MUL_MATVEC_RE / MUL_VECMAT_RE 를 함께 고쳐라.\n"
+            "  (조용히 반대 값을 확정으로 커밋하지 않으려고 일부러 여기서 멈춘다.)")
+    return matvec
+
+
+def carry_forward(entry_id: str):
+    """코퍼스가 없어 재측정 못 하는 항목을 **기존 산출물에서 그대로 이어받는다**.
+
+    종전엔 코퍼스가 없으면 경고 한 줄 찍고 항목을 통째로 뺐다. 그러면 코퍼스 없는 환경에서
+    한 번 재생성하는 것만으로 169패키지를 실측한 근거가 **소리 없이 사라진다**(2026-08-20
+    재생성에서 mul.reach 30줄이 그렇게 날아갔다). 측정할 수 없다는 것은 근거가 틀렸다는
+    뜻이 아니므로, 있으면 이어받고 없으면 그때만 뺀다.
+    """
+    if not os.path.isfile(OUT):
+        return None
+    try:
+        doc = json.load(open(OUT, encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for e in doc.get("entries", []):
+        if e.get("id") == entry_id:
+            return e
+    return None
+
+
 def main():
     for p in (PERSPECTIVE_H, LIGHTSHAFTS_VERT, LIGHTSHAFTS_FRAG, TRANSLATOR):
         if not os.path.isfile(p):
@@ -321,7 +375,7 @@ def main():
     defaults = annotation_defaults(vert, ["g_Point0", "g_Point1", "g_Point2", "g_Point3"])
     identity = corner_identity([defaults[f"g_Point{i}"] for i in range(4)])
     translator = open(TRANSLATOR, encoding="utf-8").read()
-    emits_matvec = 'rewriteCall(s, "mul") { args in args.count == 2 ? "(\\(args[1]) * \\(args[0]))"' in translator
+    emits_matvec = detect_mul_order(translator)
 
     S = specfmt.ev("script", "scripts/spec/measure_mul_convention.py")
     entries = [
@@ -361,7 +415,13 @@ def main():
              specfmt.ev("shader", f"lightshafts.frag mask 체인 재현 (sha256_16 {sha16(LIGHTSHAFTS_FRAG)}), 65² 격자"),
              S]))
     else:
-        print(f"  ⚠️ 코퍼스 없음({CORPUS}) — mul.reach 항목을 뺀다", file=sys.stderr)
+        prior = carry_forward("mul.reach")
+        if prior is not None:
+            entries.append(prior)
+            print(f"  ⚠️ 코퍼스 없음({CORPUS}) — mul.reach 는 기존 산출물에서 이어받는다(근거 보존)",
+                  file=sys.stderr)
+        else:
+            print(f"  ⚠️ 코퍼스 없음({CORPUS}) — mul.reach 항목이 아직 없어 뺀다", file=sys.stderr)
 
     specfmt.dump(specfmt.doc("scripts/spec/measure_mul_convention.py", entries), OUT)
     print(f"mul 규약 → {os.path.relpath(OUT, REPO)}")

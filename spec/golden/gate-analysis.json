@@ -30,13 +30,13 @@
     "source": "두 목록 모두 소스에서 추출한다 — SnapshotEntry 선언과 runCompare 본문의 entry.<field> 참조. 하드코딩하지 않는다.",
     "correction": "[2026-08-16] 이 항목은 readBySnapshotCompare 를 ['deterministic'] 로 박아 두고 있었다. 6e2e713 이 meanLuma 를 판정에 넣은 **다음 날** 재생성됐는데도 그 문장이 그대로 나왔다.",
     "hashIsStillUnread": "'픽셀 동일' 즉시 통과는 hash 가 아니라 m.maxAbsDiff == 0 으로 한다. diff 를 계산한 뒤에 보므로 diff 비용은 그대로다. 다만 지배적 비용은 캡처라서 이득의 상한이 작다.",
-    "widthHeightAreGuardedElsewhere": "width/height 는 entry 단위로 안 읽고 매니페스트 단위 가드가 대신 본다 — Sources/WapleCompat/SnapshotCompare.swift:30 가 썸네일 크기 불일치를 exit 2 로 막는다."
+    "widthHeightAreGuardedElsewhere": "width/height 는 entry 단위로 안 읽고 매니페스트 단위 가드가 대신 본다 — Sources/WapleCompatCore/SnapshotCompare.swift:30 가 썸네일 크기 불일치를 exit 2 로 막는다."
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "file",
-     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:22-144",
+     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:22-151",
      "note": "runCompare 본문 — 여기의 entry.<field> 참조를 센다"
     },
     {
@@ -64,7 +64,7 @@
     },
     "unit": "0..255 절대값",
     "perPixelThreshold": 16,
-    "thresholdSelection": "Sources/WapleCompat/SnapshotCompare.swift:85 — 결정 씬 strict, 비결정 씬 lax",
+    "thresholdSelection": "Sources/WapleCompatCore/SnapshotCompare.swift:204 — 결정 씬 strict, 비결정 씬 lax",
     "relative": {
      "tolerance": 0.05,
      "denominator": "max(entry.meanLuma, 0.02) * 255",
@@ -75,19 +75,19 @@
      "factor": 0.5,
      "why": "기준선 meanLuma < 0.02 구간은 절대·상대 둘 다 둔하다(분모 클램프가 걸린다). '구조가 사라졌는가' 로 본다."
     },
-    "passExpression": "identical || (passes(m, thr) && relDiff <= Self.relativeTolerance && !structureLoss)",
+    "passExpression": "identical || (passes(m, threshold) && relDiff <= goldenRelativeTolerance && !structureLoss)",
     "history": "[2026-08-16] 이 항목은 결함으로 '상대(대비 정규화) 지표가 없다' 를 적고 있었다. 6e2e713(2026-08-01)이 relDiff·structureLoss 를 넣어 그 결함을 닫았고, 그 뒤로 이 문장이 낡아 있었다. 값은 이제 소스에서 뽑는다."
    },
    "status": "확정",
    "evidence": [
     {
      "kind": "file",
-     "ref": "Sources/WapleSnapshot/Snapshot.swift:113-115",
+     "ref": "Sources/WapleSnapshot/Snapshot.swift:115-117",
      "note": "strict/lax 임계 출처"
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:98",
+     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:205",
      "note": "판정식 원문"
     },
     {
@@ -175,7 +175,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:98",
+     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:205",
      "note": "판정식 원문"
     },
     {
@@ -201,7 +201,7 @@
      "0": "회귀 없음",
      "1": "결정 씬 FAIL 또는 렌더→무픽셀 회귀",
      "2": "환경 오류(베이스라인/코퍼스 부재, 썸네일 크기 불일치, compared=0)",
-     "source": "Sources/WapleCompat/SnapshotCompare.swift:144"
+     "source": "Sources/WapleCompatCore/SnapshotCompare.swift:151"
     },
     "whyNotCI": {
      "decisive": "CI 러너에 코퍼스가 없다. 워크샵 pkg 는 커밋 대상이 아니고, 코퍼스가 없으면 --compare 는 베이스라인 entry 를 전부 skip 해 exit 2 를 낼 뿐 아무것도 검증하지 않는다.",
@@ -327,7 +327,7 @@
     "consequence": "**같은 세션 안에서 뜬 A/B 대조는 신뢰할 수 있다.** 커밋된 기준선처럼 세션을 건너뛴 대조에만 29종이 잡음으로 섞인다 — 그 29종은 고정 가족이고 id 목록이 oracle.nondet.unstableSet 에 있다.",
     "reopened3696323523": "'기대 집합 밖 1종' 을 '비결정' 으로 닫았던 것은 이제 근거가 있다 — 이 씬은 불안정 29종 안에 있고 네 세션에서 네 값이 나온다.",
     "thresholdMisclassification": {
-     "code": "SnapshotCompare.swift:85 — `entry.deterministic ? .strict : .lax`",
+     "code": "SnapshotCompare.swift:204 — `entry.deterministic ? .strict : .lax`",
      "designIsCorrect": "결정적 씬에 strict, 비결정 씬에 lax 는 **의도대로 맞다**. 극성을 뒤집으면 안 된다.",
      "actualDefect": "그 29종이 deterministic=true 로 **잘못 분류**되는 바람에 비결정 씬인데 strict 로 샌다. 고칠 곳은 임계 선택줄이 아니라 분류(셀프체크)다.",
      "correctionNote": "[정정 2026-08-01] 이 항목은 처음에 '방향이 반대다' 라고 적혀 있었다. 틀렸다 — 그대로 믿고 그 줄을 뒤집으면 정상 동작을 깨뜨린다."
@@ -346,7 +346,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:85",
+     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:204",
      "note": "deterministic 으로 임계 선택"
     },
     {
