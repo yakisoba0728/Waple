@@ -1137,14 +1137,15 @@ public struct ParticleSimulator {
         case .subtract: v = 1 - v01
         case .square: v = v01 * v01
         }
-        // 4) blend 창(수명 비율) [추정]: in 램프업 × out 램프다운. 전부 0(부재)이면 가중 1.
-        var w: Float = 1
-        if spec.blendInEnd > spec.blendInStart {
-            w *= max(0, min(1, (n - spec.blendInStart) / (spec.blendInEnd - spec.blendInStart)))
-        }
-        if spec.blendOutEnd > spec.blendOutStart {
-            w *= 1 - max(0, min(1, (n - spec.blendOutStart) / (spec.blendOutEnd - spec.blendOutStart)))
-        }
+        // 4) blend 창(수명 비율). **[2026-08-20 실측으로 교체]** 종전 구현의 결함 셋:
+        //  ① `blendoutstart`/`blendoutend` 기본이 0 이었다(실물 1.0/1.0). 가드 덕에 우연히
+        //     같은 결과였지만, `blendoutstart` 만 명시한 자산에서 갈렸다.
+        //  ② `blendinend <= blendinstart` 를 통째로 건너뛰었다. 실물은
+        //     `inStart = min(bis, bie − 1e-4)` 로 클램프해 **하드 스텝**이 된다 —
+        //     동봉 `thunderbolt_child_spawner` 의 `capvelocity` 0.2/0.2 가 정확히 그 경우다.
+        //  ③ 활성화 게이트(0.01/0.99)가 없었다. 실물은 탈락하면 가중 코드를 아예 안 돈다.
+        // 유도·게이트·런타임 수식은 `BlendWindow` 주석에 적었다.
+        let w = spec.blendWindow.weight(lifeFraction: n)
         let mn = s3(spec.outMin), mx = s3(spec.outMax)
         return (mn + (mx - mn) * v, w)
     }
