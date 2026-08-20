@@ -204,12 +204,53 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(b[0].pos.x, 20, accuracy: 0.01)   // 적분엔 매 스텝 +10
     }
 
+    /// 페이드 창의 **활성화 게이트와 퇴화 구간**을 못박는다(G-C2-03).
+    /// 종전 구현엔 게이트가 없었고 `blendinend <= blendinstart` 를 통째로 건너뛰었다.
+    func testBlendWindowGateAndDegenerateRamp() {
+        // 기본값 0/0/1/1 → 첫 조건 `(bie > 0.01 || bos < 0.99)` 에서 탈락 → 가중 없음(w ≡ 1).
+        let dflt = BlendWindow(inStart: 0, inEnd: 0, outStart: 1, outEnd: 1)
+        XCTAssertFalse(dflt.active, "0x1401c2deb–0x1401c2e33 게이트")
+        XCTAssertEqual(dflt.weight(lifeFraction: 0), 1)
+        XCTAssertEqual(dflt.weight(lifeFraction: 0.5), 1)
+        XCTAssertEqual(dflt.weight(lifeFraction: 1), 1)
+
+        // 동봉 `thunderbolt_child_spawner` 의 capvelocity: blendin 0.2/0.2 = 퇴화 구간.
+        // 실물은 `inStart = min(0.2, 0.2 − 1e-4)` 로 클램프해 **하드 스텝**을 만든다.
+        // 종전 구현은 `bie > bis` 가 거짓이라 in 램프를 통째로 건너뛰어 w ≡ 1 이었다.
+        let step = BlendWindow(inStart: 0.2, inEnd: 0.2, outStart: 1, outEnd: 1)
+        XCTAssertTrue(step.active, "bie 0.2 > 0.01 이고 bos − bie = 0.8 > 0.01")
+        XCTAssertEqual(step.weight(lifeFraction: 0.1), 0, accuracy: 1e-5, "스텝 이전은 0")
+        XCTAssertEqual(step.weight(lifeFraction: 0.3), 1, accuracy: 1e-5, "스텝 이후는 1")
+
+        // 세 번째 파라미터는 outStart 가 아니라 **outEnd** 다 — 여기를 틀리면 페이드아웃이 뒤집힌다.
+        let fade = BlendWindow(inStart: 0, inEnd: 0, outStart: 0.5, outEnd: 1)
+        XCTAssertTrue(fade.active, "bos 0.5 < 0.99")
+        XCTAssertEqual(fade.weight(lifeFraction: 0.5), 1, accuracy: 1e-4, "페이드아웃 시작점")
+        XCTAssertEqual(fade.weight(lifeFraction: 0.75), 0.5, accuracy: 1e-4, "절반")
+        XCTAssertEqual(fade.weight(lifeFraction: 1.0), 0, accuracy: 1e-4, "끝점")
+    }
+
+    /// 파스 기본값이 0/0/**1**/**1** 인지 — 종전엔 넷 다 0 이었다.
+    func testRemapBlendDefaultsAreZeroZeroOneOne() {
+        let d = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"remapvalue","output":"multiplysize"}],"maxcount":10}
+        """), material: nil)
+        guard case let .remapValueEx(spec) = d.operators[0] else { return XCTFail("no remapvalue") }
+        XCTAssertEqual(spec.blendInStart, 0); XCTAssertEqual(spec.blendInEnd, 0)
+        XCTAssertEqual(spec.blendOutStart, 1, "0x1401c2c26 movabs 1.0")
+        XCTAssertEqual(spec.blendOutEnd, 1, "0x140492778 f64 1.0")
+        XCTAssertFalse(spec.blendWindow.active, "기본값은 게이트를 통과하지 않는다")
+    }
+
     func testRemapValueEx_blendWindowScalesEffect() {
         // multiplysize min==max=2, blendin 0→0.5: n=0.25 → w=0.5 → factor 1.5; n=0.5 → w=1 → factor 2.
         let spec = RemapSpec(verb: .multiplySize, input: .lifetimeFraction, operation: .remap,
                              transform: nil, octaves: 3, inputScale: 1,
                              outMin: Vec3(x: 2, y: 2, z: 2), outMax: Vec3(x: 2, y: 2, z: 2),
-                             blendInStart: 0, blendInEnd: 0.5, blendOutStart: 0, blendOutEnd: 0,
+                             // **[2026-08-20]** out 쪽 기본은 0 이 아니라 **1.0** 이다. 0/0 으로 두면
+                             // 실물에선 `outEnd = 0 + 1e-4` 라 수명 거의 전체가 페이드아웃 뒤가 되어
+                             // w 가 항상 0 이 된다 — 종전 기본값이 만든 비현실적 픽스처였다.
+                             blendInStart: 0, blendInEnd: 0.5, blendOutStart: 1, blendOutEnd: 1,
                              inputCP0: 0, inputCP1: 1, outputCP0: 0, outputCP1: 1, component: 0)
         var sim = ParticleSimulator(def: makeDef(lifetime: 1, operators: [.remapValueEx(spec: spec)]), seed: 24)
         let a = sim.step(0.25)                   // n 0.25 → w 0.5 → size 4×1.5

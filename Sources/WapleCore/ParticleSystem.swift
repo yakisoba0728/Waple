@@ -296,6 +296,64 @@ public enum RemapTransform: String, Equatable {
 
 /// remapvalue 확장 스펙(엔진 어휘 전종 파스). 의미 구현 가능한 것만 시뮬레이터가 소비하고
 /// 나머지(outputcontrolpoint0/1, multiply/average operation)는 보존 전용.
+/// 오퍼레이터 페이드 창(G-C2-03). 공용 파서 **0x1401c2a40 .. 0x1401c2e4e**(`.pdata` 5조각)가
+/// 네 키를 읽어 파라미터 넷을 굽고, 런타임 **0x14022a530**(`.pdata` 엔트리 없는 리프, SSE packed)
+/// 가 그것으로 수명 비율 `f = age/lifetime` 에 대한 가중치를 낸다.
+///
+/// 키와 부재 기본값(전부 플래그 무관, ortho/원근 분기 없음):
+/// `blendinstart` 0 · `blendinend` 0 · `blendoutstart` **1.0**(movabs @0x1401c2c26) ·
+/// `blendoutend` **1.0**(f64 @0x140492778, 로드 @0x1401c2cd3).
+///
+/// 유도(0x1401c2d80–0x1401c2e04), `eps = 1e-4`(@0x1404925fc):
+/// ```
+///   inStart = min(blendinstart, blendinend − eps)      ; 0x1401c2d9f–0x1401c2da8
+///   outEnd  = max(blendoutend,  blendoutstart + eps)   ; 0x1401c2dae–0x1401c2db7
+///   P0 = inStart · P1 = rcp(blendinend − inStart) · P2 = outEnd · P3 = rcp(outEnd − blendoutstart)
+/// ```
+/// 런타임: `w = clamp01((f − P0)·P1) · clamp01((P2 − f)·P3)`.
+/// **세 번째 파라미터는 outStart 가 아니라 outEnd 다** — 이 자리를 틀리면 페이드아웃이 뒤집힌다.
+///
+/// 활성화 게이트(0x1401c2deb–0x1401c2e33). 통과할 때만 레코드의 opcode 를 base → ext 로
+/// 승격하고, 아니면 가중 코드가 **아예 실행되지 않는다**(w ≡ 1):
+/// ```
+///   (blendinend > 0.01 || blendoutstart < 0.99)
+///   && (blendoutstart − blendinend > 0.01 || inDur > 0.01 || outDur > 0.01)
+/// ```
+/// 기본값 0/0/1/1 은 첫 조건에서 탈락한다.
+///
+/// 적용은 오퍼레이터마다 필드별 `new = old + w·(unweighted − old)` 다. 스케일 계수 자리에서는
+/// `s = 1 + w·(s₀ − 1)` 로 보이지만 그건 같은 lerp 의 특수형이다.
+public struct BlendWindow: Equatable {
+    public let inStart: Float
+    public let invInDur: Float
+    public let outEnd: Float
+    public let invOutDur: Float
+    /// 게이트를 통과했는가. false 면 가중치는 항상 1 이다.
+    public let active: Bool
+
+    public init(inStart bis: Float, inEnd bie: Float, outStart bos: Float, outEnd boe: Float) {
+        let eps: Float = 1e-4
+        let start = min(bis, bie - eps)
+        let end = max(boe, bos + eps)
+        let inDur = bie - start
+        let outDur = end - bos
+        inStart = start
+        outEnd = end
+        invInDur = 1 / inDur
+        invOutDur = 1 / outDur
+        active = (bie > 0.01 || bos < 0.99)
+            && (bos - bie > 0.01 || inDur > 0.01 || outDur > 0.01)
+    }
+
+    /// `f` = 파티클 수명 비율(age/lifetime). 실물은 `rcpps` 근사라 비트동일 재현은 불가능하다.
+    public func weight(lifeFraction f: Float) -> Float {
+        guard active else { return 1 }
+        let a = max(0, min(1, (f - inStart) * invInDur))
+        let b = max(0, min(1, (outEnd - f) * invOutDur))
+        return a * b
+    }
+}
+
 public struct RemapSpec: Equatable {
     public let verb: RemapVerb
     /// nil = input 키 부재 → 레거시 동형 노이즈 입력((remapPhase+age)·K·inputScale).
@@ -306,8 +364,9 @@ public struct RemapSpec: Equatable {
     public let inputScale: Float              // transforminputscale (기본 1)
     public let outMin: Vec3                   // outputrangemin (스칼라 브로드캐스트)
     public let outMax: Vec3                   // outputrangemax
-    /// blendinstart/end · blendoutstart/end (@0x48e650–0x48e680): 수명 비율 창에서 효과 가중
-    /// 0→1(in)/1→0(out) 램프 [추정]. 전부 0(부재)이면 가중 1(무창).
+    /// blendinstart/end · blendoutstart/end. 실물 RVA 는 **0x48f850/0x48f860/0x48f870/0x48f880**
+    /// (종전 주석의 0x48e650–0x48e680 은 어긋난 주소다). 부재 기본은 0/0/**1**/**1** 이고
+    /// 유도·게이트는 `BlendWindow` 주석 참조 — 종전의 "전부 0 이면 무창" 은 기본값부터 틀렸다.
     public let blendInStart: Float
     public let blendInEnd: Float
     public let blendOutStart: Float
@@ -317,6 +376,11 @@ public struct RemapSpec: Equatable {
     public let outputCP0: Int                 // outputcontrolpoint0/1 — 파스·보존 전용(소비처 보류)
     public let outputCP1: Int
     public let component: Int                 // component: 0=x/1=y/2=z (기본 0)
+    /// 네 키에서 유도한 페이드 창. 게이트 판정까지 포함한다.
+    public var blendWindow: BlendWindow {
+        BlendWindow(inStart: blendInStart, inEnd: blendInEnd,
+                    outStart: blendOutStart, outEnd: blendOutEnd)
+    }
     public init(verb: RemapVerb, input: RemapInput?, operation: RemapOperation,
                 transform: RemapTransform?, octaves: Int, inputScale: Float,
                 outMin: Vec3, outMax: Vec3,
@@ -1065,8 +1129,9 @@ public struct ParticleSystemDef: Equatable {
                         outMax: pvec3OrScalar(o["outputrangemax"]) ?? Vec3(x: 1, y: 1, z: 1),
                         blendInStart: pfloat(o["blendinstart"]) ?? 0,
                         blendInEnd: pfloat(o["blendinend"]) ?? 0,
-                        blendOutStart: pfloat(o["blendoutstart"]) ?? 0,
-                        blendOutEnd: pfloat(o["blendoutend"]) ?? 0,
+                        // 부재 기본은 0 이 아니라 **1.0** 이다(0x1401c2c26 movabs / 0x1401c2cd3).
+                        blendOutStart: pfloat(o["blendoutstart"]) ?? 1,
+                        blendOutEnd: pfloat(o["blendoutend"]) ?? 1,
                         inputCP0: pint(o["inputcontrolpoint0"]) ?? 0,
                         inputCP1: pint(o["inputcontrolpoint1"]) ?? 1,
                         outputCP0: pint(o["outputcontrolpoint0"]) ?? 0,
