@@ -161,8 +161,12 @@ final class AudioCalibrationTests: XCTestCase {
         let rc = (respC(loud), respC(quiet))
         NSLog("%@", "[GUARD] (C) 목표경로  loud=\(rc.0)  quiet=\(rc.1)")
         XCTAssertGreaterThan(rc.0, rc.1 + 1e-3, "loud 응답 > quiet (라우드니스 민감)")
-        XCTAssertTrue(rc.0 > 0 && rc.0 < 1, "loud 은 (0,1) 개구간")
-        XCTAssertTrue(rc.1 > 0 && rc.1 < 1, "quiet 은 (0,1) 개구간")
+        // **절대 레벨 단언은 뺐다(2026-08-20).** `respond` 가 지나는 `AudioSpectrum16.downsample16` 이
+        // 평균에서 **MAX** 로 바뀌었다(원본 `maxss` 실측). 같은 자극에서 값이 커져 loud 가 포화(=1)한다.
+        // 그건 회귀가 아니라 정정이다 — 이 가드가 지키는 계약은 "소리가 커지면 응답이 커진다"(#17)이고
+        // 그건 위 줄이 본다. (0,1) 개구간은 옛 축약·옛 게인에 묶인 값이라 계약이 아니었다.
+        XCTAssertGreaterThan(rc.1, 0, "quiet 도 응답은 있어야 한다")
+        XCTAssertLessThanOrEqual(rc.0, 1, "smoothstep·saturate 상한")
         // 현행 /max(A) 거동 문서화: 동일 형상 사인이라 loud≈quiet (라우드니스 소실 = FIX 필요 근거).
         func respA(_ m: [Float]) -> Float { let (l, r) = candidates[0].xf(m, m); return respond(l, r, guardCfg) }
         NSLog("%@", "[GUARD] (A) 현행 /max  loud=\(respA(loud))  quiet=\(respA(quiet))  (≈동일 = 버그)")
