@@ -1386,6 +1386,24 @@ public final class TextScriptEngine {
     /// createScriptProperties 빌더 + 엔진 API no-op Proxy 심(SceneScriptContext 와 공유).
     static let shims = """
     'use strict';
+    // G-C4-03: 동봉 `scripts/jsclasses/baseclasses.js`(WE 원본 벡터/행렬 클래스)와의 **이름 충돌 차단**.
+    //
+    // baseclasses 는 Vec2/Vec3/Vec4/Mat3/Mat4/MediaPlaybackEvent 를 `class` 로 선언한다 = 전역
+    // **렉시컬** 바인딩이다. 같은 JSContext 에서 `function Vec3(){}`(= var 선언)과 공존할 수 없고,
+    // 어느 쪽을 먼저 평가하든 **두 번째 스크립트가 통째로** 죽는다
+    // (`SyntaxError: Identifier 'Vec3' has already been declared` — GlobalDeclarationInstantiation
+    // 이 lexNames↔varNames 를 양방향으로 막는다. 실측: 순서 무관 동일).
+    //
+    // 그래서 심의 구현은 `__WapleVec2/__WapleVec3` 라는 비충돌 이름으로 선언하고, 공개 이름은
+    // **아무도 그 이름을 잡지 않았을 때만** 전역 프로퍼티로 심는다. 렉시컬 바인딩은 전역
+    // 프로퍼티보다 항상 먼저 해석되므로, baseclasses 를 로드한 컨텍스트에서는 자동으로 WE 원본이
+    // 이긴다. baseclasses 미로드(= 현재)면 조건이 항상 참이라 **관측 동작이 종전과 완전히 같다**.
+    var __wapleGlobalScope = Function('return this')();
+    if (typeof Vec3 === 'undefined') { __wapleGlobalScope.Vec3 = __WapleVec3; }
+    if (typeof Vec2 === 'undefined') { __wapleGlobalScope.Vec2 = __WapleVec2; }
+    // 선언명이 별칭이라 `Vec3.name` 이 바뀐다. Function.name 은 configurable 이라 되돌린다.
+    Object.defineProperty(__WapleVec3, 'name', { value: 'Vec3' });
+    Object.defineProperty(__WapleVec2, 'name', { value: 'Vec2' });
     // 프로퍼티 스크립트 사용자 오버라이드(저장 scriptproperties). 엔진 로드 시 JSON 을 주입 → 소스
     // `addColor({value:new Vec3(1,1,1)})` 등의 기본값을 대체. 미주입(null)이면 소스 기본값 유지(무회귀).
     var __scriptPropOverrides = null;
@@ -1450,7 +1468,7 @@ public final class TextScriptEngine {
     __audioBuffer.average = __audioBuffer.average64;   // engine.audio.average 직접 접근용(res 미지정=64), average64 별칭
     // 프로젝션(캔버스) 크기 — thisScene.size/screenSize/resolution·engine.canvasSize 가 이 한 인스턴스를
     // 공유(별칭). __setCanvasSize 는 제자리 갱신이라 스크립트가 보관한 참조도 함께 갱신된다.
-    // (Vec2/__num 은 함수 선언 호이스팅으로 이 시점 사용 가능.)
+    // (__num 은 함수 선언 호이스팅, Vec2 는 위 G-C4-03 블록이 이미 심어 뒀다.)
     var __canvasSize = new Vec2(1920, 1080);
     function __setCanvasSize(w, h) {
         __canvasSize.x = __num(w, 1920);
@@ -1601,7 +1619,7 @@ public final class TextScriptEngine {
     //    전부 이 형태라 이게 없으면 x 에 문자열이 박혀 이후 산술이 NaN 으로 전파된다.
     //  · **스칼라 브로드캐스트**: `new Vec3(0.5)` = (0.5,0.5,0.5). 종전은 (0.5,0,0) 이라
     //    `thisLayer.scale = new Vec3(s)` 가 레이어를 **소멸**시켰다(y·z 가 0).
-    function Vec3(x, y, z) {
+    function __WapleVec3(x, y, z) {
         if (typeof x === 'string') { var t = __wapleSplitNums(x); x = t[0]; y = t[1]; z = t[2]; }
         if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; this.z = x.z || 0; return; }
         this.x = Number(x) || 0;
@@ -1609,52 +1627,52 @@ public final class TextScriptEngine {
         this.z = (typeof z === 'number' && !isNaN(z)) ? z : this.x;
     }
     /// WE baseclasses.js 는 `"x y z"` 를 낸다 — 문자열 비교/로그가 "[object Object]" 가 되지 않게.
-    Vec3.prototype.toString = function () { return this.x + ' ' + this.y + ' ' + this.z; };
-    Vec3.prototype.add = function (o) { return (typeof o === 'number') ? new Vec3(this.x + o, this.y + o, this.z + o) : new Vec3(this.x + o.x, this.y + o.y, this.z + o.z); };
-    Vec3.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec3(this.x - o, this.y - o, this.z - o) : new Vec3(this.x - o.x, this.y - o.y, this.z - o.z); };
-    Vec3.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec3(this.x * o, this.y * o, this.z * o) : new Vec3(this.x * o.x, this.y * o.y, this.z * o.z); };
-    Vec3.prototype.divide = function (o) { return (typeof o === 'number') ? new Vec3(this.x / o, this.y / o, this.z / o) : new Vec3(this.x / o.x, this.y / o.y, this.z / o.z); };
-    Vec3.prototype.mix = function (o, t) {
+    __WapleVec3.prototype.toString = function () { return this.x + ' ' + this.y + ' ' + this.z; };
+    __WapleVec3.prototype.add = function (o) { return (typeof o === 'number') ? new Vec3(this.x + o, this.y + o, this.z + o) : new Vec3(this.x + o.x, this.y + o.y, this.z + o.z); };
+    __WapleVec3.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec3(this.x - o, this.y - o, this.z - o) : new Vec3(this.x - o.x, this.y - o.y, this.z - o.z); };
+    __WapleVec3.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec3(this.x * o, this.y * o, this.z * o) : new Vec3(this.x * o.x, this.y * o.y, this.z * o.z); };
+    __WapleVec3.prototype.divide = function (o) { return (typeof o === 'number') ? new Vec3(this.x / o, this.y / o, this.z / o) : new Vec3(this.x / o.x, this.y / o.y, this.z / o.z); };
+    __WapleVec3.prototype.mix = function (o, t) {
         t = Number(t) || 0;
         return new Vec3(this.x + ((o.x || 0) - this.x) * t,
                         this.y + ((o.y || 0) - this.y) * t,
                         this.z + ((o.z || 0) - this.z) * t);
     };
-    Vec3.prototype.copy = function () { return new Vec3(this.x, this.y, this.z); };
-    Vec3.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); };
+    __WapleVec3.prototype.copy = function () { return new Vec3(this.x, this.y, this.z); };
+    __WapleVec3.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y + this.z * this.z); };
     // F705(S-41): d.ts Vec3 표면 보강 — 기존 add~length 뿐이라 reflect/normalize 호출이 TypeError 로 update 사망
     // (실물 2955378002 바운스: reflect 82회/10씬, normalize 3씬). add 등과 동일하게 새 Vec3 반환(비파괴) 규약.
-    Vec3.prototype.normalize = function () {
+    __WapleVec3.prototype.normalize = function () {
         var l = this.length();
         return l > 0 ? new Vec3(this.x / l, this.y / l, this.z / l) : new Vec3(0, 0, 0);
     };
-    Vec3.prototype.reflect = function (n) {   // 법선 n 에 대한 반사: v − 2·dot(v,n)·n (n 정규화 가정 — three.js 동일)
+    __WapleVec3.prototype.reflect = function (n) {   // 법선 n 에 대한 반사: v − 2·dot(v,n)·n (n 정규화 가정 — three.js 동일)
         n = n || { x: 0, y: 0, z: 0 };
         var d = 2 * (this.x * (n.x || 0) + this.y * (n.y || 0) + this.z * (n.z || 0));
         return new Vec3(this.x - d * (n.x || 0), this.y - d * (n.y || 0), this.z - d * (n.z || 0));
     };
-    function Vec2(x, y) {
+    function __WapleVec2(x, y) {
         if (typeof x === 'string') { var t2 = __wapleSplitNums(x); x = t2[0]; y = t2[1]; }
         if (typeof x === 'object' && x) { this.x = x.x || 0; this.y = x.y || 0; return; }
         this.x = Number(x) || 0;
         this.y = (typeof y === 'number' && !isNaN(y)) ? y : this.x;
     }
-    Vec2.prototype.toString = function () { return this.x + ' ' + this.y; };
-    Vec2.prototype.add = function (o) { return (typeof o === 'number') ? new Vec2(this.x + o, this.y + o) : new Vec2(this.x + o.x, this.y + o.y); };
-    Vec2.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec2(this.x - o, this.y - o) : new Vec2(this.x - o.x, this.y - o.y); };
-    Vec2.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec2(this.x * o, this.y * o) : new Vec2(this.x * o.x, this.y * o.y); };
-    Vec2.prototype.divide = function (o) { return (typeof o === 'number') ? new Vec2(this.x / o, this.y / o) : new Vec2(this.x / o.x, this.y / o.y); };
-    Vec2.prototype.mix = function (o, t) {
+    __WapleVec2.prototype.toString = function () { return this.x + ' ' + this.y; };
+    __WapleVec2.prototype.add = function (o) { return (typeof o === 'number') ? new Vec2(this.x + o, this.y + o) : new Vec2(this.x + o.x, this.y + o.y); };
+    __WapleVec2.prototype.subtract = function (o) { return (typeof o === 'number') ? new Vec2(this.x - o, this.y - o) : new Vec2(this.x - o.x, this.y - o.y); };
+    __WapleVec2.prototype.multiply = function (o) { return (typeof o === 'number') ? new Vec2(this.x * o, this.y * o) : new Vec2(this.x * o.x, this.y * o.y); };
+    __WapleVec2.prototype.divide = function (o) { return (typeof o === 'number') ? new Vec2(this.x / o, this.y / o) : new Vec2(this.x / o.x, this.y / o.y); };
+    __WapleVec2.prototype.mix = function (o, t) {
         t = Number(t) || 0;
         return new Vec2(this.x + ((o.x || 0) - this.x) * t,
                         this.y + ((o.y || 0) - this.y) * t);
     };
-    Vec2.prototype.copy = function () { return new Vec2(this.x, this.y); };
-    Vec2.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y); };
+    __WapleVec2.prototype.copy = function () { return new Vec2(this.x, this.y); };
+    __WapleVec2.prototype.length = function () { return Math.sqrt(this.x * this.x + this.y * this.y); };
     // G③: Vec3.prototype.normalize(F705) 와 동일 보강 — Vec2 에는 없어 커서 추종 스크립트의
     // `.subtract(...).normalize()` 체인이 TypeError 로 매프레임 update 사망(실물 3477054430 등
     // WEMath 기반 회전 스크립트). add~length 와 동일한 새 Vec2 반환(비파괴) 규약.
-    Vec2.prototype.normalize = function () {
+    __WapleVec2.prototype.normalize = function () {
         var l = this.length();
         return l > 0 ? new Vec2(this.x / l, this.y / l) : new Vec2(0, 0);
     };
@@ -1725,10 +1743,18 @@ public final class TextScriptEngine {
             if (p) { for (k in p) { this[k] = p[k]; } }
         };
     }
-    var MediaPlaybackEvent = __mediaEvent({ state: 0 });
-    MediaPlaybackEvent.PLAYBACK_STOPPED = 0;
-    MediaPlaybackEvent.PLAYBACK_PLAYING = 1;
-    MediaPlaybackEvent.PLAYBACK_PAUSED = 2;
+    var __WapleMediaPlaybackEvent = __mediaEvent({ state: 0 });
+    __WapleMediaPlaybackEvent.PLAYBACK_STOPPED = 0;
+    __WapleMediaPlaybackEvent.PLAYBACK_PLAYING = 1;
+    __WapleMediaPlaybackEvent.PLAYBACK_PAUSED = 2;
+    // baseclasses 의 `class MediaPlaybackEvent` 는 **필드를 받지 않는다**(정적 상수 3개뿐) —
+    // WE 는 네이티브가 객체를 만들어 필드를 심으므로 생성자가 필요 없었다. Waple 은 이 이벤트를
+    // JS 에서 만든다(SceneRenderer 의 `new MediaPlaybackEvent({ state: n })`) — WE 클래스를 쓰면
+    // state 가 통째로 사라진다. 그래서 **이 하나만 심이 이겨야 한다.** `class` 선언 바인딩은
+    // `let` 과 같은 가변 바인딩이라 재대입이 되지만, 미선언 상태의 대입은 strict 라
+    // ReferenceError 다 — 그래서 typeof 로 갈라야 한다.
+    if (typeof MediaPlaybackEvent === 'undefined') { __wapleGlobalScope.MediaPlaybackEvent = __WapleMediaPlaybackEvent; }
+    else { MediaPlaybackEvent = __WapleMediaPlaybackEvent; }
     var MediaPropertiesEvent = __mediaEvent({ title: '', artist: '', subTitle: '', albumTitle: '',
                                               albumArtist: '', genres: '', contentType: '' });
     var MediaTimelineEvent = __mediaEvent({ position: 0, duration: 0 });
