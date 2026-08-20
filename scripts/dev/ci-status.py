@@ -123,6 +123,7 @@ def show_runs(repo, branch, limit):
     print("== %s @ %s ==" % (repo, branch))
     if not runs:
         print("  (실행 없음)")
+        HIDDEN["no_runs"] = True
     seen_workflows = {}
     for r in runs:
         c = r.get("conclusion")
@@ -151,6 +152,10 @@ def show_runs(repo, branch, limit):
             print("     %s: CI 없음 — 문서 전용이라 paths-ignore 로 **정상 스킵**(spec 은 돌았다)" % sha[:7])
         elif verdict is False:
             print("     %s: ⚠ CI 없음인데 코드 변경이 있다 — 트리거를 확인할 것" % sha[:7])
+            # 로컬 HEAD 에 대해서만 종료코드로 올린다. 창 안의 옛 SHA 까지 실패로 치면
+            # 이미 지나간 이력 때문에 영영 붉어져 아무도 안 보게 된다.
+            if sha == head_sha():
+                HIDDEN["ci_missing_for_head"] = True
         else:
             print("     %s: CI 없음 — 사유 판정 불가(아직 큐잉 중일 수 있다)" % sha[:7])
     return runs
@@ -178,6 +183,15 @@ def test_tally(repo, job_id):
     return (int(last.group(1)), int(last.group(2) or 0), int(last.group(3)))
 
 
+# 화면에는 찍히지만 종료코드에는 안 실리던 것들을 여기 모은다.
+#
+# **[2026-08-20]** 이 도구가 막겠다고 명시한 사고(`branches: [main]` 로 8커밋 무검증)와,
+# 이 도구가 유일하게 드러내는 사고(release 레인 `continue-on-error` 가 가리는 테스트 실패)가
+# 둘 다 **기계적으로는 초록**이었다. `until python3 scripts/dev/ci-status.py; do …; done` 이
+# 그 자리에서 성공으로 빠져나온다 — 사람이 화면을 읽을 때만 보이는 경고는 게이트가 아니다.
+HIDDEN = {"test_failures": 0, "ci_missing_for_head": False, "no_runs": False}
+
+
 def show_jobs(repo, run_id, tests=False):
     d = api("repos/%s/actions/runs/%s/jobs?per_page=30" % (repo, run_id))
     print("\n== run %s ==" % run_id)
@@ -189,6 +203,8 @@ def show_jobs(repo, run_id, tests=False):
             if t:
                 executed, skipped, failures = t
                 note = "실행 %d · 스킵 %d · 실패 %d" % (executed, skipped, failures)
+                if failures:
+                    HIDDEN["test_failures"] += failures
                 if failures and c == "success":
                     note += "  ← 잡은 success 인데 테스트는 실패(continue-on-error)"
                 line += "\n       %s" % note
@@ -275,8 +291,10 @@ def main():
             if pick:
                 show_jobs(a.repo, pick["id"], tests=a.tests)
 
-    if not runs:
-        return 0
+    if HIDDEN["no_runs"] or not runs:
+        # 브랜치에 실행이 하나도 없다 = 검증 0. 종전엔 0(성공)이었다.
+        print("\n[ci-status] 이 브랜치에 워크플로 실행이 없다 — 검증된 것이 없다")
+        return 1
     # **로컬 HEAD 를 기준으로 판정한다.** 목록의 맨 위(runs[0])를 쓰면 푸시 직후 새 실행이
     # 아직 안 뜬 창에서 **직전 커밋의 결과**를 보고 "끝났다" 고 답한다 — 대기 루프가
     # 그 자리에서 빠져나온다(실제로 당했다). HEAD 의 실행이 하나도 없으면 "진행 중"(2)이다.
@@ -297,7 +315,18 @@ def main():
         return 2
     if any(r["status"] != "completed" for r in same):
         return 2
-    return 0 if all(r.get("conclusion") == "success" for r in same) else 1
+    if any(r.get("conclusion") != "success" for r in same):
+        return 1
+    if HIDDEN["ci_missing_for_head"]:
+        print("\n[ci-status] HEAD 에 코드 변경이 있는데 CI 실행이 없다 — 검증 0")
+        return 1
+    if HIDDEN["test_failures"]:
+        # release 레인은 `continue-on-error` 라 잡이 success 로 끝나면서 테스트는 실패한다.
+        # `--tests` 로 그 사실을 화면에 찍어 놓고 종료코드는 0 이면 아무도 못 막는다.
+        print("\n[ci-status] 잡 결론은 success 인데 테스트 실패 %d건 — continue-on-error 가 가린 것이다"
+              % HIDDEN["test_failures"])
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
