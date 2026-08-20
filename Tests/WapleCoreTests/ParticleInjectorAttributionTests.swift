@@ -93,8 +93,8 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         let d = ParticleSystemDef.parse(json("""
         {"operator":[{"name":"vortex"},{"name":"vortex_v2"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, cfV1, _, _, _, _) = d.operators[0] else { return XCTFail("no vortex") }
-        guard case let .vortex(_, _, _, _, _, _, cfV2, _, _, _, _) = d.operators[1] else { return XCTFail("no vortex_v2") }
+        guard case let .vortex(_, _, _, _, _, _, cfV1, _, _, _, _, _) = d.operators[0] else { return XCTFail("no vortex") }
+        guard case let .vortex(_, _, _, _, _, _, cfV2, _, _, _, _, _) = d.operators[1] else { return XCTFail("no vortex_v2") }
         XCTAssertEqual(cfV1, 0, "vortex 주입기 0x1401bef00 은 centerforce 를 안 심는다")
         XCTAssertEqual(cfV2, 1, "vortex_v2 주입기 0x1401bf5ff 이 1.0 을 심는다")
     }
@@ -141,7 +141,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     /// **3번째 조각의 첫 명령**(0x1401bf22e)이라 조각 하나만 읽으면 통째로 안 보인다.
     func testVortexDistanceAndSpeedDefaults() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"vortex"}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(axis, dIn, dOut, sIn, sOut, offset, cf, _, _, _, ring) = d.operators[0] else {
+        guard case let .vortex(axis, dIn, dOut, sIn, sOut, offset, cf, _, _, _, ring, _) = d.operators[0] else {
             return XCTFail("no vortex")
         }
         XCTAssertEqual(dIn, 500, "0x1401bf0e3 (원근 1.0)")
@@ -158,7 +158,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testVortexExplicitZeroIsNotOverwritten() {
         let d = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex","distanceinner":0,"speedinner":0}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, dIn, _, sIn, _, _, _, _, _, _, _) = d.operators[0] else { return XCTFail("no vortex") }
+        guard case let .vortex(_, dIn, _, sIn, _, _, _, _, _, _, _, _) = d.operators[0] else { return XCTFail("no vortex") }
         XCTAssertEqual(dIn, 0, "키가 있으면 `find` 가 비-null → 주입 없음")
         XCTAssertEqual(sIn, 0)
     }
@@ -168,7 +168,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testVortexV2SpeedOuterDoesNotInheritSpeedInner() {
         let d = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex_v2","speedinner":700}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, sIn, sOut, _, _, _, _, _, _) = d.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, sIn, sOut, _, _, _, _, _, _, _) = d.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(sIn, 700)
         XCTAssertEqual(sOut, 0, "승계면 700 이었을 것 — WE 에 승계 규칙은 없다")
     }
@@ -178,36 +178,93 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testVortexV2IgnoresOffsetKey() {
         let d = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex_v2","offset":"100 200 300"}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _) = d.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _, _) = d.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(offset, Vec3(x: 0, y: 0, z: 0), "WE 가 무시하는 키다 — 자매 vortex 에만 있다")
         // 반대로 자매 `vortex` 는 읽어야 한다(주입기 0x1401bef1a, 핸들러 0x1401cd8e6).
         let v1 = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex","offset":"100 200 300"}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, o1, _, _, _, _, _) = v1.operators[0] else { return XCTFail("no vortex") }
+        guard case let .vortex(_, _, _, _, _, o1, _, _, _, _, _, _) = v1.operators[0] else { return XCTFail("no vortex") }
         XCTAssertEqual(o1, Vec3(x: 100, y: 200, z: 300), "이쪽은 실제 키다")
     }
 
-    /// ring 4키는 **무조건 주입된다** — 0x1401bf632 의 `test sil,sil` 은 "주입 여부"가 아니라
-    /// "어떤 값이냐"만 가른다(ortho 300/50/10/50 · 원근 1.0/0.25/0.05/0.2).
-    /// 종전의 "키가 하나도 없으면 ring = nil" 은 WE 에 대응물이 없는 상태였다.
-    func testVortexV2RingIsAlwaysInjected() {
-        let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"vortex_v2"}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ring) = d.operators[0] else { return XCTFail("no v2") }
-        XCTAssertEqual(ring, VortexRing(radius: 300, pullDistance: 50, pullForce: 10, width: 50),
+    /// **주입과 소비는 다르다.** 주입기는 ring 4키를 무조건 JSON 에 심지만, 힘으로 쓰이려면
+    /// `flags & 4` 를 지나야 한다 — 런타임이 `test byte [r14+0x110], 4`(0x1402434eb)로 보고
+    /// 비면 `je 0x1402437f8`(0x14024356f)로 **비-ring 루프**로 간다.
+    /// 동봉 vortex_v2 5건의 flags 는 3·2·2·2·부재로 **어느 것도 bit2 를 갖지 않는다** —
+    /// 즉 실코퍼스에서 링은 한 번도 켜지지 않는다. `magic_vortex_orb` 는 ring 키를 적어 두고도
+    /// flags 가 2라 꺼져 있다.
+    func testVortexV2RingRequiresFlagsBit2() {
+        let off = ParticleSystemDef.parse(json(#"{"operator":[{"name":"vortex_v2"}],"maxcount":10}"#), material: nil)
+        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ring0, _) = off.operators[0] else { return XCTFail("no v2") }
+        XCTAssertNil(ring0, "flags 기본 0 → ring 모드 아님")
+
+        // 키를 다 적어도 flags 가 없으면 여전히 꺼져 있다(magic_vortex_orb 의 실제 형태).
+        let keysOnly = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"vortex_v2","ringradius":120,"ringpulldistance":9,"ringwidth":8,"flags":2}],
+         "maxcount":10}
+        """), material: nil)
+        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ringK, _) = keysOnly.operators[0] else { return XCTFail("no v2") }
+        XCTAssertNil(ringK, "flags 2 는 centerforce 게이트지 ring 게이트가 아니다")
+
+        let on = ParticleSystemDef.parse(json(
+            #"{"operator":[{"name":"vortex_v2","flags":4}],"maxcount":10}"#), material: nil)
+        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ring1, _) = on.operators[0] else { return XCTFail("no v2") }
+        XCTAssertEqual(ring1, VortexRing(radius: 300, pullDistance: 50, pullForce: 10, width: 50),
                        "0x1401bf637 / 0x1401bf644 / 0x1401bf65e / xmm6@0x1401bf6b5 (ortho 분기)")
     }
 
-    /// 부분 지정도 나머지가 주입된다 — 실코퍼스의 vortex_v2 3건이 정확히 이 형태다
-    /// (radius/pulldistance/width 는 적고 `ringpullforce` 만 생략).
+    /// ring 모드에서 부분 지정이면 나머지가 주입된다.
     func testVortexV2RingPartialKeysStillInjectTheRest() {
         let d = ParticleSystemDef.parse(json("""
-        {"operator":[{"name":"vortex_v2","ringradius":120,"ringwidth":8}],"maxcount":10}
+        {"operator":[{"name":"vortex_v2","flags":4,"ringradius":120,"ringwidth":8}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ring) = d.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ring, _) = d.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(ring?.radius, 120)
         XCTAssertEqual(ring?.width, 8)
         XCTAssertEqual(ring?.pullDistance, 50, "부재 → 주입")
-        XCTAssertEqual(ring?.pullForce, 10, "부재 → 주입. 종전엔 0 이라 링이 통째로 불활성이었다")
+        XCTAssertEqual(ring?.pullForce, 10, "부재 → 주입")
+    }
+
+    /// `centerforce` 는 `flags & 2` 게이트를 지나야 파스된다 — 비면 핸들러가 0x1401ce0b0 에서
+    /// `xorps xmm9,xmm9` 로 0 을 굽는다(`test r14b,2` / `je` @0x1401ce074).
+    /// 동봉 5건 중 `magic_vortex_0` 만 flags 가 없어 이 경로다.
+    func testVortexV2CenterForceRequiresFlagsBit1() {
+        let off = ParticleSystemDef.parse(json(
+            #"{"operator":[{"name":"vortex_v2","centerforce":0.7}],"maxcount":10}"#), material: nil)
+        guard case let .vortex(_, _, _, _, _, _, cf0, _, _, _, _, _) = off.operators[0] else { return XCTFail("no v2") }
+        XCTAssertEqual(cf0, 0, "flags 에 bit1 이 없으면 명시값조차 무시된다")
+
+        let on = ParticleSystemDef.parse(json(
+            #"{"operator":[{"name":"vortex_v2","flags":2}],"maxcount":10}"#), material: nil)
+        guard case let .vortex(_, _, _, _, _, _, cf1, _, _, _, _, _) = on.operators[0] else { return XCTFail("no v2") }
+        XCTAssertEqual(cf1, 1, "게이트를 지나면 주입 상수 1.0(0x1401bf5ff)")
+    }
+
+    /// `flags` 는 파스·보존만 하는 값이 아니라 시뮬 동작을 가르므로 파스돼야 한다.
+    func testVortexFlagsAreParsed() {
+        let d = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"vortex","flags":1},{"name":"vortex_v2","flags":3}],"maxcount":10}
+        """), material: nil)
+        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, _, f1) = d.operators[0] else { return XCTFail("no v1") }
+        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, _, f2) = d.operators[1] else { return XCTFail("no v2") }
+        XCTAssertEqual(f1, 1, "동봉 exampleturbolence3d·dna 가 쓰는 값")
+        XCTAssertEqual(f2, 3, "동봉 vortex_v2 프리뷰가 쓰는 값 = bit0|bit1")
+    }
+
+    // MARK: - maintaindistancetocontrolpoint (신규 구현)
+
+    /// 종전엔 통째로 드롭되던 원소다. 주입 기본 `distance` 200(ortho, 0x1401be2bc) ·
+    /// `variablestrength` 0 · `controlpoint` 0. 유일한 실사용처(Magic "Vortex orb")는
+    /// `{"variablestrength": 5}` 만 적어 `distance` 200 이 그대로 발화한다.
+    func testMaintainDistanceToControlPointDefaults() {
+        let d = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"maintaindistancetocontrolpoint","variablestrength":5}],"maxcount":10}
+        """), material: nil)
+        guard case let .maintainDistanceToControlPoint(distance, vs, _) = d.operators[0] else {
+            return XCTFail("maintaindistancetocontrolpoint 가 파스되지 않는다 — 종전엔 드롭됐다")
+        }
+        XCTAssertEqual(distance, 200, "0x1401be2bc (원근 1.0 @0x1401be2c6)")
+        XCTAssertEqual(vs, 5)
     }
 
     // MARK: - controlpointattract (키 이름 정정)

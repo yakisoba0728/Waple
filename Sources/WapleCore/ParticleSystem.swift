@@ -135,6 +135,26 @@ public enum ParticleOperator: Equatable {
     /// 유일하게 magic_vortex_orb 만 `0` 으로 끈다)가 게이트인지가 아직 미측정이라 **타입을 바꾸지
     /// 않았다**. 측정 없이 Bool→Float 로 바꾸면 전 인스턴스에서 파티클을 지우기 시작한다.
     case controlPointAttract(scale: Float, threshold: Float, target: Vec3, deleteThreshold: Bool = false)
+    /// 컨트롤포인트 중심의 반지름 `distance` 구면으로 **위치를 투영**한다(속도는 안 건드린다).
+    /// 주입기 0x1401be2a0..0x1401be5d0(5조각), 게이트 `stricmp`@0x1401ccdcc, VM opcode 0x0b,
+    /// 런타임 핸들러 0x14024197a. 레코드: distance @+0x10 · variablestrength @+0x14 ·
+    /// controlpoint @+0x60(stride 0xd0, 배열 `[sys+0x400]`).
+    ///
+    /// 실측 루프(0x140241bd0..0x140241cbc, 4-wide SIMD)를 그대로 옮기면:
+    ///     p  = pos + O ;  d = p − C
+    ///     k  = (distance / |M·d| − 1) · s
+    ///     pos' = p + k·d                       // 0x140241c96·0x140241c9e·0x140241caa 에 저장
+    /// `M`/`O` 는 CP 의 변환 행렬·원점 합성인데, 유일한 실사용처(Magic "Vortex orb")의 CP0 이
+    /// `{"id": 0}` = 시스템 원점이라 M = I · O = 0 으로 축약된다. 그래서 **G-C2-02(CP 전면 지원)
+    /// 없이도 원본과 같아진다** — 종전 "CP 지원 없으면 어차피 no-op" 판단은 이 원소엔 거짓이다
+    /// (외부 분기가 `입자 수 == 0` 하나뿐이라 퇴화 가드가 아예 없다).
+    ///
+    /// `s` 는 0x140241992 의 `ucomiss` 분기다:
+    ///   · variablestrength ≠ 0 → `clamp01(variablestrength · dt)`  (0x1401d8df0 = clamp01)
+    ///   · variablestrength = 0 → VM 의 2번째 인자 `dt · min(1, 0.025/dt)^0.7`
+    ///     (0x140237724–0x14023774f). dt ≤ 0.025(= 40fps 이상)면 그냥 `dt` 다 — 즉 **매우 느린
+    ///     수렴**이지 즉시 스냅이 아니다.
+    case maintainDistanceToControlPoint(distance: Float, variableStrength: Float, target: Vec3)
     /// 축 기준 소용돌이. 실물키: axis, distanceinner/outer, speedinner/outer, offset(중심).
     /// 확장 키. **[2026-08-20 주소 정정]** 이 블록의 RVA 가 전부 계통적으로 어긋나 있었다
     /// (0x48e7c8 은 `"olor"` 중간, 0x48e7e0 은 `fogdistancestart`). 실측:
@@ -149,10 +169,18 @@ public enum ParticleOperator: Equatable {
     /// variablestrength 는 maintaindistancetocontrolpoint 계열, reduction* 는
     /// reducemovementnearcontrolpoint 계열만 참조한다. 두 vortex 어느 쪽도 읽지 않는다 —
     /// 파스·보존 전용으로 남기되 기본값을 심으면 안 된다.
+    /// `flags` 는 파스만 하는 값이 아니라 **동작을 가르는 게이트**다(실측):
+    ///   · bit0 — 축 성분 제거(축 투영). **비면 `radial = d` 3D 전체**를 쓴다.
+    ///     런타임이 `andps xmm2, mask`(0x140243316)로 `proj` 를 통째로 0 으로 만든다.
+    ///   · bit1 — vortex_v2 의 `centerforce` 파스 게이트(`test r14b,2` / `je` @0x1401ce074).
+    ///   · bit2 — vortex_v2 의 ring 모드(`test byte [r14+0x110],4` @0x1402434eb).
+    /// 기본 0 이라 셋 다 꺼져 있다. 동봉 실코퍼스: vortex 는 1·1·부재×5, vortex_v2 는
+    /// 3·2·2·2·부재 — **bit2 를 가진 인스턴스가 하나도 없다**.
     case vortex(axis: Vec3, distanceInner: Float, distanceOuter: Float,
                 speedInner: Float, speedOuter: Float, offset: Vec3,
                 centerForce: Float = 0, variableStrength: Float = 0,
-                reductionInner: Float = 0, reductionOuter: Float = 0, ring: VortexRing? = nil)
+                reductionInner: Float = 0, reductionOuter: Float = 0, ring: VortexRing? = nil,
+                flags: Int = 0)
     /// 결정적 노이즈 흐름장 난류. 실물키(정찰 55인스턴스): speedmin/speedmax(파티클별 속도 범위),
     /// scale(공간 주파수), timescale(시간 진화 속도), mask(축별 게이트 "x y z"),
     /// phasemin/phasemax(파티클별 위상 오프셋). 노이즈장 속도로 위치를 이류(advection)한다(vel 미누적 → 유계).
@@ -856,6 +884,15 @@ public struct ParticleSystemDef: Equatable {
                     // 실물 키는 `offset` 이다 — 위 enum 주석 참조. 부재 기본 "0 0 0"(플래그 무관).
                     target: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
                     deleteThreshold: (pint(o["deletethreshold"]) ?? 0) != 0))
+            case "maintaindistancetocontrolpoint":
+                // WE 는 `controlpoint` 부재 시 0 을 심는다(int 헬퍼 @0x1401be1fd 계열) — 실사용
+                // 인스턴스(magic_vortex_orb)가 정확히 그 경우다. 이 원소는 지금까지 통째로
+                // 드롭돼 있었으므로 CP0 바인딩에 회귀 위험이 없다.
+                attractCPIds.append((op: ops.count, cp: min(max(pint(o["controlpoint"]) ?? 0, 0), 7)))
+                ops.append(.maintainDistanceToControlPoint(
+                    distance: injected(o, "distance", 200),          // 0x1401be2bc (원근 1.0 @0x1401be2c6)
+                    variableStrength: injected(o, "variablestrength", 0),  // 0x1401be4d9, 플래그 무관
+                    target: Vec3(x: 0, y: 0, z: 0)))                 // 아래 CP 재베이크에서 채운다
             case "vortex":
                 // 주입기 0x1401bef00 .. 0x1401bf2c6 (`.pdata` 3조각 — 언와인드 체인으로 병합해야
                 // 한다. 조각 하나만 읽으면 `speedinner` 의 상수가 **3번째 조각 첫 명령**
@@ -878,7 +915,8 @@ public struct ParticleSystemDef: Equatable {
                                    centerForce: pfloat(o["centerforce"]) ?? 0,
                                    variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
                                    reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
-                                   reductionOuter: pfloat(o["reductionouter"]) ?? 0))      // 보존 전용(의미 보류)
+                                   reductionOuter: pfloat(o["reductionouter"]) ?? 0,      // 보존 전용(의미 보류)
+                                   flags: pint(o["flags"]) ?? 0))
                 vortexAudio.append(AudioProcessing.parse(o))
             case "vortex_v2":
                 // 주입기 0x1401bf2d0 .. 0x1401bf6f8 (`.pdata` 3조각). **진입점 주의**: `centerforce`
@@ -895,10 +933,23 @@ public struct ParticleSystemDef: Equatable {
                 // (0x1401bef1a·0x1401bef69, 핸들러 0x1401cd8e6)에만 있다. JSON 에 적어도 WE 는
                 // 무시하므로 여기서도 무시한다(실코퍼스 5건 전부 부재라 관측 무영향).
                 //
-                // ring 4키는 **무조건 주입된다** — 0x1401bf632 의 `test sil,sil` 은 "주입 여부"가
-                // 아니라 "어떤 값이냐"만 가른다(ortho 300/50/10/50 · 원근 1.0/0.25/0.05/0.2).
-                // 종전의 "키가 하나라도 있을 때만 조립, 없으면 nil" 은 WE 에 대응물이 없다.
+                // **[2026-08-20 재정정 — 주입과 소비는 다르다]** ring 4키는 주입기에서 무조건
+                // 주입되지만(0x1401bf632 의 `test sil,sil` 은 "어떤 값이냐"만 가른다), **소비는
+                // `flags & 4` 게이트를 지나야 한다**: 런타임이 `test byte [r14+0x110], 4`
+                // (0x1402434eb) 로 보고 비면 `je 0x1402437f8`(0x14024356f)로 **비-ring 루프**로
+                // 간다. 즉 주입 상수는 JSON 에 실리지만 힘으로는 쓰이지 않는다.
+                //
+                // 이 구분을 놓쳐 직전 커밋에서 ring 을 항상 켰다 — 동봉 vortex_v2 5건의 flags 는
+                // 3·2·2·2·부재로 **어느 것도 bit2(=4)를 갖지 않으므로 실코퍼스에서 ring 은 한 번도
+                // 켜지지 않는다**. `magic_vortex_orb` 는 ring 키를 적어 두고도 flags 가 2라 꺼져 있다.
+                //
                 // **상수는 실측이지만 링의 힘 수식은 여전히 추정이다** — VortexRing 주석 참조.
+                let v2Flags = pint(o["flags"]) ?? 0
+                let v2Ring: VortexRing? = (v2Flags & 4) == 0 ? nil : VortexRing(
+                    radius: injected(o, "ringradius", 300),             // 0x1401bf637 (원근 1.0)
+                    pullDistance: injected(o, "ringpulldistance", 50),  // 0x1401bf644 (원근 0.25)
+                    pullForce: injected(o, "ringpullforce", 10),        // 0x1401bf65e (원근 0.05)
+                    width: injected(o, "ringwidth", 50))                // xmm6 @0x1401bf6b5 (원근 0.2)
                 ops.append(.vortex(axis: pvec3(o["axis"]) ?? Vec3(x: 0, y: 0, z: 1),  // "0 0 1", 플래그 무관
                                    distanceInner: injected(o, "distanceinner", 500),  // 0x1401bf3df (원근 1.0)
                                    distanceOuter: injected(o, "distanceouter", 650),  // 0x1401bf4a4 (원근 2.0)
@@ -908,15 +959,13 @@ public struct ParticleSystemDef: Equatable {
                                    // vortex_v2 **만** centerforce 를 심는다(0x1401bf5ff, 플래그 무관 1.0).
                                    // 자매 `vortex`(주입기 0x1401bef00)는 centerforce 문자열조차 없으므로
                                    // 그쪽 `?? 0` 은 옳다 — 두 원소를 같이 고치면 안 된다.
-                                   centerForce: injected(o, "centerforce", 1),
+                                   // `flags & 2` 일 때만 읽는다 — 아니면 핸들러가 0x1401ce0b0 에서
+                                   // `xorps xmm9,xmm9` 로 0 을 굽는다(`test r14b,2` / `je` @0x1401ce074).
+                                   centerForce: (v2Flags & 2) != 0 ? injected(o, "centerforce", 1) : 0,
                                    variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
                                    reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
                                    reductionOuter: pfloat(o["reductionouter"]) ?? 0,       // 보존 전용(의미 보류)
-                                   ring: VortexRing(
-                                       radius: injected(o, "ringradius", 300),             // 0x1401bf637 (원근 1.0)
-                                       pullDistance: injected(o, "ringpulldistance", 50),  // 0x1401bf644 (원근 0.25)
-                                       pullForce: injected(o, "ringpullforce", 10),        // 0x1401bf65e (원근 0.05)
-                                       width: injected(o, "ringwidth", 50))))              // xmm6 @0x1401bf6b5 (원근 0.2)
+                                   ring: v2Ring, flags: v2Flags))
                 vortexAudio.append(AudioProcessing.parse(o))
             case "turbulence":
                 // **[2026-08-20 정정] 종전 상수는 추정이었고, 진짜 주입기는 0x1401beb80 이다.**
@@ -1325,6 +1374,9 @@ public struct ParticleSystemDef: Equatable {
             case let .controlPointAttract(scale, threshold, _, deleteThreshold):
                 ops[i] = .controlPointAttract(scale: scale, threshold: threshold,
                                               target: controlPoints[cpid], deleteThreshold: deleteThreshold)
+            case let .maintainDistanceToControlPoint(distance, vs, _):
+                ops[i] = .maintainDistanceToControlPoint(distance: distance, variableStrength: vs,
+                                                         target: controlPoints[cpid])
             case let .reduceMovementNearControlPoint(dIn, dOut, rIn, rOut, _):
                 // attract 와 같은 자리에서 CP 를 굽는다(인스턴스 오버라이드 반영 후).
                 ops[i] = .reduceMovementNearControlPoint(distanceInner: dIn, distanceOuter: dOut,
