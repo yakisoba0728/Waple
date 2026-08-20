@@ -316,21 +316,48 @@ final class ParticleSimulatorTests: XCTestCase {
         }
     }
 
+    /// **[2026-08-20 픽스처 정정]** 종전엔 `threshold: 0` 이었는데 실물은 그 경우
+    /// `dist < threshold` 가 거짓이라 **아무 힘도 주지 않는다**. 종전 코드의
+    /// `threshold > 0 ? min(1, threshold/dist) : 1` 이 0 을 "감쇠 없음(=1)" 으로 해석해
+    /// 우연히 통과하던 자리다. 주입 기본값과 같은 512 로 바꿨다.
     func testControlPointAttractPullsTowardTarget() {
-        // 대상=원점, 파티클을 +x 로 스폰(velocityrandom 로 이동해 원점에서 멀어짐) 대신
-        // 원점에서 velocity 0, scale>0 인력 → 원점에 붙어 있으면 힘 0. 오프셋 스폰이 필요하므로
-        // box origin 을 x=100 에 두고 대상=0(기본) → -x 로 당겨져야.
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 100, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 100, max: 100)],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
-                        .controlPointAttract(scale: 1000, threshold: 0, target: Vec3(x: 0, y: 0, z: 0))],
+                        .controlPointAttract(scale: 1000, threshold: 512, target: Vec3(x: 0, y: 0, z: 0))],
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 1)
         var last: [Particle] = []
         for _ in 0..<10 { last = sim.step(0.05) }
         XCTAssertLessThan(last[0].vel.x, 0)       // 원점(-x) 방향으로 가속
         XCTAssertLessThan(last[0].pos.x, 100)     // 실제로 원점 쪽으로 이동
+    }
+
+    /// 감쇠 곡선의 **모양**을 못박는다. 실물은 `(1 − dist/threshold)·scale·dt` 로 dist→0 에서
+    /// 최대, threshold 에서 0, 그 밖은 하드 컷오프다(0x1402418ce–0x1402418d8, 0x1402418c2).
+    /// 종전의 `min(1, threshold/dist)` 는 정반대 모양이었다 — threshold 안쪽 전부 포화이고
+    /// 밖에서는 1/r 로 무한히 이어졌다. **부호만 보는 단언으로는 그 역전을 못 잡는다.**
+    func testControlPointAttractAttenuationIsLinearRampNotSaturating() {
+        func firstStepVelX(atX x: Float, threshold: Float) -> Float {
+            let def = ParticleSystemDef(
+                emitters: [.box(origin: Vec3(x: x, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0),
+                                rate: 1000, burst: 0)],
+                initializers: [.lifetimeRandom(min: 100, max: 100)],
+                operators: [.controlPointAttract(scale: 1000, threshold: threshold,
+                                                 target: Vec3(x: 0, y: 0, z: 0))],
+                renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+            var sim = ParticleSimulator(def: def, seed: 1)
+            return sim.step(0.05)[0].vel.x
+        }
+        // dist 25, threshold 100 → (1 − 0.25)·1000·0.05 = 37.5, 원점 쪽이므로 −37.5
+        XCTAssertEqual(firstStepVelX(atX: 25, threshold: 100), -37.5, accuracy: 0.01)
+        // dist 75 → (1 − 0.75)·1000·0.05 = 12.5. **포화 모델이면 25 일 때와 같았을** 자리다.
+        XCTAssertEqual(firstStepVelX(atX: 75, threshold: 100), -12.5, accuracy: 0.01)
+        // threshold 밖은 정확히 0 — 종전 모델은 여기서도 계속 당겼다.
+        XCTAssertEqual(firstStepVelX(atX: 150, threshold: 100), 0, accuracy: 1e-5)
+        // threshold 0 은 "감쇠 없음" 이 아니라 **무동작**이다.
+        XCTAssertEqual(firstStepVelX(atX: 25, threshold: 0), 0, accuracy: 1e-5)
     }
 
     func testControlPointAttractRepelsWithNegativeScale() {

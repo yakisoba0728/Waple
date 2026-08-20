@@ -276,7 +276,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         let d = ParticleSystemDef.parse(json("""
         {"operator":[{"name":"controlpointattract","offset":"10 20 30","origin":"99 99 99"}],"maxcount":10}
         """), material: nil)
-        guard case let .controlPointAttract(_, _, target, _) = d.operators[0] else { return XCTFail("no cpa") }
+        guard case let .controlPointAttract(_, _, target, _, _) = d.operators[0] else { return XCTFail("no cpa") }
         XCTAssertEqual(target, Vec3(x: 10, y: 20, z: 30), "`origin` 을 읽으면 (99,99,99) 가 나온다")
     }
 
@@ -285,13 +285,13 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testControlPointAttractScaleAndThresholdDefaults() {
         let d = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"controlpointattract"}],"maxcount":10}"#), material: nil)
-        guard case let .controlPointAttract(scale, threshold, _, _) = d.operators[0] else { return XCTFail("no cpa") }
+        guard case let .controlPointAttract(scale, threshold, _, _, _) = d.operators[0] else { return XCTFail("no cpa") }
         XCTAssertEqual(scale, 512, "0x140492934")
         XCTAssertEqual(threshold, 512, "0x140492934")
         // 명시된 0 은 유지된다 — 동봉 magic_focus.json 이 `scale: 0` 을 쓴다.
         let z = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"controlpointattract","scale":0}],"maxcount":10}"#), material: nil)
-        guard case let .controlPointAttract(s0, _, _, _) = z.operators[0] else { return XCTFail("no cpa") }
+        guard case let .controlPointAttract(s0, _, _, _, _) = z.operators[0] else { return XCTFail("no cpa") }
         XCTAssertEqual(s0, 0, "키가 있으면 주입되지 않는다")
     }
 }

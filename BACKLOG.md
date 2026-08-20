@@ -209,12 +209,33 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   런타임 가중치 함수는 `0x14022a530..0x14022a576`(`.pdata` 엔트리 없는 리프, SSE packed
   4-wide). 파스는 공용 헬퍼 `0x1401c2a40..0x1401c2e4e`(5조각) 한 곳이 전담한다.
 
-  **대상 오퍼레이터는 11종이다** — 공용 파서 호출부 11곳을 각각 지배하는 직전 게이트로
-  기계적으로 귀속했다: `angularmovement`, `oscillateposition`, `oscillatealpha`,
-  `oscillatesize`, `maintaindistancetocontrolpoint`, `maintaindistancebetweencontrolpoints`,
-  `reducemovementnearcontrolpoint`, `vortex_v2`, `capvelocity`, `remapvalue`,
-  `inheritvaluefromevent`. **`controlpointattract` 와 `turbulence` 는 대상이 아니다** —
-  둘 다 JSON 에 블렌드 키를 적은 실자산이 있지만(각 1건·4건) WE 는 읽지 않는다.
+  **대상 오퍼레이터는 13종이다.** *(2026-08-20 재정정 — 아래 경위)*
+  `angularmovement`(op 0x1c) · `oscillateposition`(0x1d) · `oscillatealpha`(0x1e) ·
+  `oscillatesize`(0x1f) · **`controlpointattract`(0x20)** · `maintaindistancetocontrolpoint`(0x21) ·
+  `maintaindistancebetweencontrolpoints`(0x22) · `reducemovementnearcontrolpoint`(0x23) ·
+  **`turbulence`(0x24)** · `vortex_v2`(0x25) · `capvelocity`(0x26) · `remapvalue`(0x27) ·
+  `inheritvaluefromevent`(0x28).
+
+  **경위(방법론 교훈).** 처음엔 공용 파서 `0x1401c2a40` 의 **호출부 11곳**을 세고 각각을
+  "직전 게이트" 로 귀속해 11종이라고 적었다. 그게 틀렸다 — 두 원소(`controlpointattract`,
+  `turbulence`)는 자기 꼬리에서 `mov r9d, <opcode>` 뒤 **`jmp` 로 다른 원소의 호출부에 뛰어든다**
+  (예: `0x1401ccdaf: mov r9d, 0x20` → `jmp 0x1401cc436` → `0x1401cc43c: call 0x1401c2a40`).
+  호출부만 세면 그 둘이 사라지고, "직전 게이트" 는 뛰어든 자리의 이웃을 가리킨다.
+
+  옳은 세는 법은 **`mov r9d, imm` 전수**다 — 그 레지스터는 공용 파서에 넘길 ext opcode 전용이고,
+  파서 마지막 줄 `0x1401c2e33: mov byte [r15], r14b` 가 그 값을 레코드의 opcode 바이트로 찍는다.
+  13곳이 나오고 opcode 가 0x1c..0x28 로 연속이며, 점프테이블 `0x14024bb58` 의 `table[op-1]` 이
+  각각 실제 핸들러를 가리킨다. **"호출부를 센다" 가 아니라 "인자를 싣는 곳을 센다" 가 맞다.**
+
+  파생 정정: 실도달도 다시 세야 한다. `turbulence` 4건과 `controlpointattract` 1건이 대상에
+  들어오므로 앞서 "WE 가 무시한다" 고 적은 것은 취소한다.
+
+  **base ↔ ext opcode 쌍.** 레코드 할당기가 먼저 **잠정** opcode 를 찍고(예 `controlpointattract`
+  0x0a @0x1401d8b3a, `maintaindistancetocontrolpoint` 0x0b), 게이트를 통과할 때만 공용 파서가
+  ext 로 덮어쓴다. 그래서 같은 원소에 핸들러가 **둘** 있다:
+  0x0a→0x140241554 / 0x20→0x14024172d, 0x0b→0x14024197a / 0x21→0x140241ccf.
+  두 핸들러는 블렌드 가중 곱 하나만 다르다(앞머리 명령이 동일). 한쪽만 보고 "다른 원소" 라고
+  판단하면 안 된다.
 
   키는 `blendinstart`/`blendinend`/`blendoutstart`/`blendoutend`, 기본 **0/0/1/1**
   (ortho 분기 없음 — 단일 상수). 유도:
@@ -229,8 +250,9 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   inDur > 0.01 || outDur > 0.01)` 일 때만 base opcode 를 ext opcode 로 승격한다.
   기본값 0/0/1/1 이면 첫 조건에서 탈락 → 가중 코드가 아예 안 돈다.
 
-  실도달(미러 제거, 게이트 통과 기준): `capvelocity` 3 · `oscillatealpha` 2 ·
-  `oscillateposition` 2 · `remapvalue` 2 = **9건**. 전부 Lightning/Fireworks 프리셋이다.
+  실도달(미러 제거, 게이트 통과 기준): `turbulence` 4 · `capvelocity` 3 · `oscillatealpha` 2 ·
+  `oscillateposition` 2 · `remapvalue` 2 = **13건**(+ `controlpointattract` 1건은 보유하되
+  게이트 탈락). 주 소비자는 **Lightning 프리셋**이다.
 
   **Waple 현황은 "전혀 미구현" 이 아니라 1/11 부분 구현이다** — `RemapSpec` 에만 필드가 있고
   `remapvalue` 에서만 파싱·소비한다. 그 구현의 결함 3건: ① `blendoutstart`/`blendoutend`

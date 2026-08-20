@@ -134,7 +134,15 @@ public enum ParticleOperator: Equatable {
     /// 기본값이 항상 발화하는 자리다. 다만 그 제곱값이 어느 방향 비교에 쓰이는지, `flags`(기본 **2**,
     /// 유일하게 magic_vortex_orb 만 `0` 으로 끈다)가 게이트인지가 아직 미측정이라 **타입을 바꾸지
     /// 않았다**. 측정 없이 Bool→Float 로 바꾸면 전 인스턴스에서 파티클을 지우기 시작한다.
-    case controlPointAttract(scale: Float, threshold: Float, target: Vec3, deleteThreshold: Bool = false)
+    /// `flags` 기본은 **2**(주입기 0x1401be245 `mov qword [rbp-0x58], 2`). 비트는 핸들러가
+    /// 딱 두 곳에서만 읽는다:
+    ///   · bit0(1) — **근접 삭제 활성화**(0x14024193d). 기본값 2 에는 없으므로 **기본은 꺼짐**.
+    ///   · bit1(2) — **오버슛 클램프**(0x140241750 → 0x1402418dc–0x1402418e4):
+    ///     `if (dist < step) step = dist` — 이번 스텝의 속도 증분을 CP 까지의 거리로 상한.
+    /// 동봉 35인스턴스 중 `flags` 를 적는 것은 `magic_vortex_orb`(0) 하나뿐이고, 그것이 끄는 건
+    /// **오버슛 클램프 하나**다(bit0 은 기본값에서도 이미 꺼져 있다).
+    case controlPointAttract(scale: Float, threshold: Float, target: Vec3, deleteThreshold: Bool = false,
+                             flags: Int = 2)
     /// 컨트롤포인트 중심의 반지름 `distance` 구면으로 **위치를 투영**한다(속도는 안 건드린다).
     /// 주입기 0x1401be2a0..0x1401be5d0(5조각), 게이트 `stricmp`@0x1401ccdcc, VM opcode 0x0b,
     /// 런타임 핸들러 0x14024197a. 레코드: distance @+0x10 · variablestrength @+0x14 ·
@@ -883,7 +891,8 @@ public struct ParticleSystemDef: Equatable {
                     threshold: injected(o, "threshold", 512),  // 0x140492934 (원근 5.0 @0x140492858)
                     // 실물 키는 `offset` 이다 — 위 enum 주석 참조. 부재 기본 "0 0 0"(플래그 무관).
                     target: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    deleteThreshold: (pint(o["deletethreshold"]) ?? 0) != 0))
+                    deleteThreshold: (pint(o["deletethreshold"]) ?? 0) != 0,
+                    flags: pint(o["flags"]) ?? 2))   // 0x1401be245 — 주입 기본 2
             case "maintaindistancetocontrolpoint":
                 // WE 는 `controlpoint` 부재 시 0 을 심는다(int 헬퍼 @0x1401be1fd 계열) — 실사용
                 // 인스턴스(magic_vortex_orb)가 정확히 그 경우다. 이 원소는 지금까지 통째로
@@ -1371,9 +1380,10 @@ public struct ParticleSystemDef: Equatable {
         }
         for (i, cpid) in attractCPIds {
             switch ops[i] {
-            case let .controlPointAttract(scale, threshold, _, deleteThreshold):
+            case let .controlPointAttract(scale, threshold, _, deleteThreshold, flags):
                 ops[i] = .controlPointAttract(scale: scale, threshold: threshold,
-                                              target: controlPoints[cpid], deleteThreshold: deleteThreshold)
+                                              target: controlPoints[cpid],
+                                              deleteThreshold: deleteThreshold, flags: flags)
             case let .maintainDistanceToControlPoint(distance, vs, _):
                 ops[i] = .maintainDistanceToControlPoint(distance: distance, variableStrength: vs,
                                                          target: controlPoints[cpid])
