@@ -438,30 +438,71 @@ final class ParticleExtendedKeysTests: XCTestCase {
 
     // MARK: - 5. rope/ropetrail 렌더러 키(모델 노출 전용 — 렌더 소비 보류)
 
+    /// 네 키는 **실수량이 아니라 불리언 체크박스**다(주입 태그 5, 소비는 비트 세팅). 동봉 자산도
+    /// 전건 JSON 리터럴이다 — `uvscrolling: true` 8건 · `uvsmoothing: false` 12건 ·
+    /// `fadealpha: true` 4건. 종전엔 `Float?` 라 `strictFloat(true)` 의 1.0 이 들어앉아
+    /// "페이드량 1.0" 처럼 보였다.
+    ///
+    /// **렌더러마다 읽는 키가 다르다** — 각 키 문자열의 lea 를 세 핸들러 구간으로 갈라 확인했다:
+    /// rope = subdivision·uvscale·uvscrolling·**uvsmoothing**, ropetrail = length·segments·
+    /// subdivision·uvscale·uvscrolling·**fadealpha·fadesize**. 종전엔 여섯 키를 두 렌더러에
+    /// 뭉뚱그려 읽었다.
     func testRopeRenderOptionsParse() {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":1}],
-         "renderer":[{"name":"ropetrail","length":2,"fadealpha":0.5,"fadesize":0.2,"uvscale":2,
-                      "uvscrolling":1.5,"uvsmoothing":1,"segments":8}],
+         "renderer":[{"name":"ropetrail","length":2,"fadealpha":true,"fadesize":true,"uvscale":2,
+                      "uvscrolling":true,"segments":8}],
          "maxcount":10}
         """), material: nil)
         let opts = def.ropeOptions
-        XCTAssertEqual(opts?.fadeAlpha, 0.5)
-        XCTAssertEqual(opts?.fadeSize, 0.2)
+        XCTAssertEqual(opts?.fadeAlpha, true)
+        XCTAssertEqual(opts?.fadeSize, true)
         XCTAssertEqual(opts?.uvScale, 2)
-        XCTAssertEqual(opts?.uvScrolling, 1.5)
-        XCTAssertEqual(opts?.uvSmoothing, true)
+        XCTAssertEqual(opts?.uvScrolling, true)
         XCTAssertEqual(opts?.segments, 8)
 
-        // 키 부재 rope → nil(기본값 미확정 — 보존 전용). sprite 는 대상 아님.
+        // 부재는 "값 없음" 이 아니라 **엔진 기본값**이다 — 주입기가 심는다.
+        // rope: uvsmoothing **true**(태그 5 값 1 @0x1401c0dd3) · uvscrolling false · uvscale 1.
         let bare = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"rope","subdivision":4}],"maxcount":10}
         """), material: nil)
-        XCTAssertNil(bare.ropeOptions)
+        XCTAssertEqual(bare.ropeOptions?.uvSmoothing, true, "동봉 rope 부재 13/25 건이 이 값을 탄다")
+        XCTAssertEqual(bare.ropeOptions?.uvScrolling, false)
+        XCTAssertEqual(bare.ropeOptions?.uvScale, 1)
+        // ropetrail: segments **4**(0x1401c119c, clamp [2,32]) · fade* false · uvscale 1.
+        let bareTrail = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"ropetrail"}],"maxcount":10}
+        """), material: nil)
+        XCTAssertEqual(bareTrail.ropeOptions?.segments, 4, "동봉 ropetrail 부재 14/18 건")
+        XCTAssertEqual(bareTrail.ropeOptions?.fadeAlpha, false)
+        XCTAssertEqual(bareTrail.ropeOptions?.fadeSize, false)
+        // sprite/spritetrail 은 이 키들의 대상이 아니다.
         let sprite = ParticleSystemDef.parse(json("""
-        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite","fadealpha":0.5}],"maxcount":10}
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite","fadealpha":true}],"maxcount":10}
         """), material: nil)
         XCTAssertNil(sprite.ropeOptions)
+    }
+
+    /// 렌더러 부재 기본값은 주입기 실측이다 — 종전엔 넷 다 0 이었다.
+    ///   · spritetrail length 0.05(0x1401c0b55) · maxlength 10.0(0x1401c0c13) · minlength **미주입**
+    ///   · rope subdivision 4(0x1401c0d00, clamp [0,32])
+    ///   · ropetrail length 1.0(0x1401c10da, 하한 `maxss 0.001`) · subdivision 1(0x1401c128a)
+    func testRendererDefaultsComeFromInjectorConstants() {
+        func renderer(_ name: String) -> RendererKind {
+            ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"\(name)"}],"maxcount":10}
+            """), material: nil).renderer
+        }
+        guard case let .spriteTrail(maxLength, length, minLength) = renderer("spritetrail") else {
+            return XCTFail("no spritetrail")
+        }
+        XCTAssertEqual(length, 0.05, accuracy: 1e-6, "0x1401c0b55 — 종전 0 은 신장을 항등으로 죽였다")
+        XCTAssertEqual(maxLength, 10, accuracy: 1e-6, "0x1401c0c13")
+        XCTAssertEqual(minLength, 0, "주입기에 minlength lea 가 없다 — 부재는 하한 없음")
+        XCTAssertEqual(renderer("rope"), .rope(subdivision: 4), "0x1401c0d00")
+        guard case let .ropeTrail(rtLength, rtSub) = renderer("ropetrail") else { return XCTFail("no ropetrail") }
+        XCTAssertEqual(rtLength, 1, accuracy: 1e-6, "0x1401c10da")
+        XCTAssertEqual(rtSub, 1, "0x1401c128a")
     }
 
     // MARK: - 6. positionoffsetrandom + 파스 전용 이니셜라이저
