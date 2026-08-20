@@ -185,8 +185,7 @@ public struct ParticleSimulator {
                 mdist.append((distance, vs, s3(target)))
             case let .boids(sepThr, nbrThr, maxSpeed, sepF, aliF, cohF, flags):
                 boids.append((sepThr, nbrThr, maxSpeed, sepF, aliF, cohF, flags))
-            case let .vortex(axis, dIn, dOut, sIn, sOut, offset, centerForce, _, _, _, ring, flags):
-                // variablestrength/reductioninner/reductionouter(위치인자 7–9)는 파스·보존 전용 — 소비 안 함.
+            case let .vortex(axis, dIn, dOut, sIn, sOut, offset, centerForce, ring, flags):
                 vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset), centerForce, ring, flags))
             case let .turbulence(smin, smax, scale, timeScale, mask, pmin, pmax):
                 turb.append((smin, smax, scale, timeScale, s3(mask), pmin, pmax, bw))
@@ -204,10 +203,24 @@ public struct ParticleSimulator {
             case let .capVelocity(maxSpeed):
                 caps.append((maxSpeed, bw))
             case let .reduceMovementNearControlPoint(dIn, dOut, rIn, rOut, target):
-                // 실물 ctor 0x1401cd38d: distanceouter == distanceinner 이면 역폭에 −0.0 을 심어
-                // t 를 항상 0 으로 죽인다(rcpps 대신 상수). 0x1401cd3b9: reductionouter ==
-                // reductioninner 이면 델타에 0 이 아니라 **1.0** 을 심는다 — 재현 대상 기벽이다.
-                let invRange: Float = dOut == dIn ? -0.0 : 1 / (dOut - dIn)
+                // 실물 ctor 0x1401cd38d: distanceouter == distanceinner 이면 `rcpps` 대신
+                // **xmm15** 를 역폭에 심는다(0x1401cd3a7 `movaps xmm0, xmm15`). 0x1401cd3b9:
+                // reductionouter == reductioninner 이면 델타에 0 이 아니라 **1.0** 을 심는다.
+                //
+                // **그 xmm15 는 −0.0 이 아니라 (1,1,1,1) 이다.** 오퍼레이터 루프 프리헤더
+                // 0x1401cb184 가 `movdqa xmm15, [0x140492e30]`(=1,1,1,1)을 심고 백에지
+                // (0x1401cc476 → 0x1401cb1a0)가 그 값을 유지한다. 같은 함수 앞쪽 **이미터**
+                // 구간의 `movss xmm15, [0x140492ff0]`(=−0.0, 0x1401c5bac)은 프리헤더가 덮어써
+                // 죽고, `movaps xmm15, [rsp+0x2230]`(0x1401cc4a0)은 **루프가 끝난 뒤**의 복원이다
+                // (0x1401c552b 의 프롤로그 저장과 짝). 자매 원소 vortex 의 같은 분기
+                // (0x1401cdcd1)도 같은 xmm15 를 읽고 그쪽은 이미 1.0 로 고쳐져 있다 — 한
+                // 레지스터를 두 원소가 달리 읽을 수는 없다.
+                //
+                // 그래서 퇴화 폭은 "t 를 0 으로 죽인다" 가 아니라 **inner 에서 시작하는 폭 1
+                // 램프**다. −0.0 이면 거리와 무관하게 redIn 이 걸리는데, 실물은 inner+1 밖에서
+                // redOut 으로 넘어간다. `testReduceMovementDegenerateRangeIsUnitWidthRamp` 가
+                // 세 지점(안쪽·중간·바깥)으로 그 차이를 못박는다.
+                let invRange: Float = dOut == dIn ? 1 : 1 / (dOut - dIn)
                 let redDelta: Float = rOut == rIn ? 1 : (rOut - rIn)
                 rmv.append((s3(target), dIn, invRange, rIn, redDelta))
             }

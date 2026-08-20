@@ -93,8 +93,8 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         let d = ParticleSystemDef.parse(json("""
         {"operator":[{"name":"vortex","flags":2},{"name":"vortex_v2","flags":2}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, cfV1, _, _, _, _, _) = d.operators[0] else { return XCTFail("no vortex") }
-        guard case let .vortex(_, _, _, _, _, _, cfV2, _, _, _, _, _) = d.operators[1] else { return XCTFail("no vortex_v2") }
+        guard case let .vortex(_, _, _, _, _, _, cfV1, _, _) = d.operators[0] else { return XCTFail("no vortex") }
+        guard case let .vortex(_, _, _, _, _, _, cfV2, _, _) = d.operators[1] else { return XCTFail("no vortex_v2") }
         // 두 원소에 **같은 flags 2** 를 준다 — 게이트가 열려 있는데도 v1 이 0 이어야 한다는 게
         // 이 테스트의 요지다(주입기에 문자열조차 없다). 게이트 자체는
         // `testVortexV2CenterForceRequiresFlagsBit1` 이 따로 본다.
@@ -145,7 +145,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     /// **3번째 조각의 첫 명령**(0x1401bf22e)이라 조각 하나만 읽으면 통째로 안 보인다.
     func testVortexDistanceAndSpeedDefaults() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"vortex"}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(axis, dIn, dOut, sIn, sOut, offset, cf, _, _, _, ring, _) = d.operators[0] else {
+        guard case let .vortex(axis, dIn, dOut, sIn, sOut, offset, cf, ring, _) = d.operators[0] else {
             return XCTFail("no vortex")
         }
         XCTAssertEqual(dIn, 500, "0x1401bf0e3 (원근 1.0)")
@@ -162,7 +162,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testVortexExplicitZeroIsNotOverwritten() {
         let d = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex","distanceinner":0,"speedinner":0}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, dIn, _, sIn, _, _, _, _, _, _, _, _) = d.operators[0] else { return XCTFail("no vortex") }
+        guard case let .vortex(_, dIn, _, sIn, _, _, _, _, _) = d.operators[0] else { return XCTFail("no vortex") }
         XCTAssertEqual(dIn, 0, "키가 있으면 `find` 가 비-null → 주입 없음")
         XCTAssertEqual(sIn, 0)
     }
@@ -172,7 +172,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testVortexV2SpeedOuterDoesNotInheritSpeedInner() {
         let d = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex_v2","speedinner":700}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, sIn, sOut, _, _, _, _, _, _, _) = d.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, sIn, sOut, _, _, _, _) = d.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(sIn, 700)
         XCTAssertEqual(sOut, 0, "승계면 700 이었을 것 — WE 에 승계 규칙은 없다")
     }
@@ -182,12 +182,12 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testVortexV2IgnoresOffsetKey() {
         let d = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex_v2","offset":"100 200 300"}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _, _) = d.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, offset, _, _, _) = d.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(offset, Vec3(x: 0, y: 0, z: 0), "WE 가 무시하는 키다 — 자매 vortex 에만 있다")
         // 반대로 자매 `vortex` 는 읽어야 한다(주입기 0x1401bef1a, 핸들러 0x1401cd8e6).
         let v1 = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex","offset":"100 200 300"}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, o1, _, _, _, _, _, _) = v1.operators[0] else { return XCTFail("no vortex") }
+        guard case let .vortex(_, _, _, _, _, o1, _, _, _) = v1.operators[0] else { return XCTFail("no vortex") }
         XCTAssertEqual(o1, Vec3(x: 100, y: 200, z: 300), "이쪽은 실제 키다")
     }
 
@@ -199,7 +199,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     /// flags 가 2라 꺼져 있다.
     func testVortexV2RingRequiresFlagsBit2() {
         let off = ParticleSystemDef.parse(json(#"{"operator":[{"name":"vortex_v2"}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ring0, _) = off.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, _, _, ring0, _) = off.operators[0] else { return XCTFail("no v2") }
         XCTAssertNil(ring0, "flags 기본 0 → ring 모드 아님")
 
         // 키를 다 적어도 flags 가 없으면 여전히 꺼져 있다(magic_vortex_orb 의 실제 형태).
@@ -207,12 +207,12 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         {"operator":[{"name":"vortex_v2","ringradius":120,"ringpulldistance":9,"ringwidth":8,"flags":2}],
          "maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ringK, _) = keysOnly.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, _, _, ringK, _) = keysOnly.operators[0] else { return XCTFail("no v2") }
         XCTAssertNil(ringK, "flags 2 는 centerforce 게이트지 ring 게이트가 아니다")
 
         let on = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex_v2","flags":4}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ring1, _) = on.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, _, _, ring1, _) = on.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(ring1, VortexRing(radius: 300, pullDistance: 50, pullForce: 10, width: 50),
                        "0x1401bf637 / 0x1401bf644 / 0x1401bf65e / xmm6@0x1401bf6b5 (ortho 분기)")
     }
@@ -222,7 +222,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         let d = ParticleSystemDef.parse(json("""
         {"operator":[{"name":"vortex_v2","flags":4,"ringradius":120,"ringwidth":8}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, ring, _) = d.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, _, _, ring, _) = d.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(ring?.radius, 120)
         XCTAssertEqual(ring?.width, 8)
         XCTAssertEqual(ring?.pullDistance, 50, "부재 → 주입")
@@ -235,12 +235,12 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testVortexV2CenterForceRequiresFlagsBit1() {
         let off = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex_v2","centerforce":0.7}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, cf0, _, _, _, _, _) = off.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, _, cf0, _, _) = off.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(cf0, 0, "flags 에 bit1 이 없으면 명시값조차 무시된다")
 
         let on = ParticleSystemDef.parse(json(
             #"{"operator":[{"name":"vortex_v2","flags":2}],"maxcount":10}"#), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, cf1, _, _, _, _, _) = on.operators[0] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, _, cf1, _, _) = on.operators[0] else { return XCTFail("no v2") }
         XCTAssertEqual(cf1, 1, "게이트를 지나면 주입 상수 1.0(0x1401bf5ff)")
     }
 
@@ -249,8 +249,8 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         let d = ParticleSystemDef.parse(json("""
         {"operator":[{"name":"vortex","flags":1},{"name":"vortex_v2","flags":3}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, _, f1) = d.operators[0] else { return XCTFail("no v1") }
-        guard case let .vortex(_, _, _, _, _, _, _, _, _, _, _, f2) = d.operators[1] else { return XCTFail("no v2") }
+        guard case let .vortex(_, _, _, _, _, _, _, _, f1) = d.operators[0] else { return XCTFail("no v1") }
+        guard case let .vortex(_, _, _, _, _, _, _, _, f2) = d.operators[1] else { return XCTFail("no v2") }
         XCTAssertEqual(f1, 1, "동봉 exampleturbolence3d·dna 가 쓰는 값")
         XCTAssertEqual(f2, 3, "동봉 vortex_v2 프리뷰가 쓰는 값 = bit0|bit1")
     }
@@ -339,7 +339,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         {"controlpoint":[{"id":0,"offset":"10 0 0"},{"id":2,"offset":"0 40 0"}],
          "operator":[{"name":"vortex","controlpoint":2,"offset":"1 2 3"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _, _) = d.operators[0] else {
+        guard case let .vortex(_, _, _, _, _, offset, _, _, _) = d.operators[0] else {
             return XCTFail("no vortex")
         }
         XCTAssertEqual(offset, Vec3(x: 1, y: 42, z: 3), "CP2(0,40,0) + offset(1,2,3)")
@@ -351,7 +351,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         {"controlpoint":[{"id":1,"offset":"0 0 7"}],
          "operator":[{"name":"vortex_v2","controlpoint":1,"offset":"99 99 99"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _, _) = d.operators[0] else {
+        guard case let .vortex(_, _, _, _, _, offset, _, _, _) = d.operators[0] else {
             return XCTFail("no v2")
         }
         XCTAssertEqual(offset, Vec3(x: 0, y: 0, z: 7), "offset 은 무시되고 CP1 만 남아야 한다")
@@ -363,7 +363,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         {"controlpoint":[{"id":0,"offset":"5 5 0"}],
          "operator":[{"name":"vortex"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _, _) = d.operators[0] else {
+        guard case let .vortex(_, _, _, _, _, offset, _, _, _) = d.operators[0] else {
             return XCTFail("no vortex")
         }
         XCTAssertEqual(offset, Vec3(x: 5, y: 5, z: 0))
