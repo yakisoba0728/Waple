@@ -58,8 +58,21 @@ public enum Initializer: Equatable {
     /// [보존/추측] velocityRandom 과 동형 성분별 독립 t.
     case positionOffsetRandom(offsetMin: Vec3, offsetMax: Vec3)
     /// 파스·보존 전용(이벤트 시스템 연동 보류 — 시뮬레이터 무시, RNG 드로 0).
-    /// 실물 inheritcontrolpointvelocity: CP 속도 상속 [추정].
-    case inheritControlPointVelocity(controlPoint: Int, scale: Float)
+    /// 실물 inheritcontrolpointvelocity. 주입기 0x1401bad80..0x1401bb00e, 게이트 `stricmp`@0x1401c8586,
+    /// 이니셜라이저 VM opcode 8 → 핸들러 0x14023bc32(오퍼레이터 VM 과 **다른** 인터프리터
+    /// 0x14023b340, 점프테이블 0x14023fa78, 스폰 시 1회 실행).
+    ///
+    /// **[2026-08-20 키 정정]** `scale` 은 이 원소의 키가 **아니다** — 주입기에도 핸들러에도
+    /// "scale" 문자열 참조가 없다(유령 필드였다). 실물 키는 `min`(0.1, movabs 0x3fb99999a0000000
+    /// @0x1401bade5) · `max`(0.2, 0x3fc99999a0000000 @0x1401baea3) · `controlpoint`(0)뿐이고,
+    /// 파스가 `min` 과 **`max − min`** 을 각각 레코드 +0x04/+0x08 에 저장한다(0x1401c865d `subss`).
+    ///
+    /// 의미: **CP 속도 벡터에 곱하는 균일 난수 스칼라 배율의 범위**(3성분 공통).
+    ///   `v = (CP.pos − CP.prevPos) / [ctx+0x150]` ; `s = min + U[0,1)·(max − min)` ; `vel += M₃ₓ₃·(s·v)`
+    /// RNG 는 **드로 1회**(0x14023bd06 → 0x1401f87a0, `(r>>8)/2^24`) — 구현하면 이후 이니셜라이저의
+    /// RNG 시퀀스가 밀리므로 시뮬 착지는 별도 라운드로 미룬다. `controlpoint` 클램프는 없다
+    /// (대신 CP 배열 크기를 인덱스에 맞춰 키운다 — controlpointattract 의 `>=7u → 7` 과 다르다).
+    case inheritControlPointVelocity(controlPoint: Int, min: Float, max: Float)
     /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 inheritinitialvaluefromevent / inheritvaluefromevent.
     case inheritValueFromEvent(name: String, valueName: String?)
     /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 remapinitialvalue — 출력 리맵 스펙 미확정.
@@ -785,8 +798,10 @@ public struct ParticleSystemDef: Equatable {
                                                    offsetMax: pvec3(i["offsetmax"]) ?? Vec3(x: 0, y: 0, z: 0)))
             case "inheritcontrolpointvelocity":
                 // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
-                inits.append(.inheritControlPointVelocity(controlPoint: pint(i["controlpoint"]) ?? 0,
-                                                          scale: pfloat(i["scale"]) ?? 1))
+                inits.append(.inheritControlPointVelocity(
+                    controlPoint: pint(i["controlpoint"]) ?? 0,
+                    min: injected(i, "min", 0.1),      // 0x1401bade5 (플래그 무관)
+                    max: injected(i, "max", 0.2)))     // 0x1401baea3 (플래그 무관)
             case "inheritinitialvaluefromevent", "inheritvaluefromevent":
                 // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
                 inits.append(.inheritValueFromEvent(name: i["name"] as? String ?? "",
