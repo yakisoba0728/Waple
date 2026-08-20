@@ -349,18 +349,49 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertFalse(last[0].pos.x.isNaN)
     }
 
+    /// **[2026-08-20 계약 정정 2건]**
+    ///
+    /// ① **회전 방향.** 실물 접선은 `cross(n, axis)`(0x14024338d/0x14024339f/0x1402433a2)이지
+    /// `cross(axis, radial)` 이 아니다. 종전 주석의 "cross(z, +x) = +y" 는 피연산자 순서를
+    /// 뒤집은 것이고, 실물은 `x̂ × ẑ = −ŷ` 다. Waple 이 반대로 돌고 있었다.
+    ///
+    /// ② **픽스처.** 종전엔 `distanceInner = distanceOuter = 0` 으로 두고 "램프 없음 → speedInner
+    /// 사용" 을 기대했는데, 실물은 그 경우 invRange 를 0 이 아니라 **1.0** 으로 굽는다(폭 1 램프).
+    /// 그러면 dist = 50 에서 t = 1 → speed = speedOuter = 0 이 되어 아무 일도 안 일어난다.
+    /// 그래서 dOut 을 100 으로 벌려 t = 0.5, speed = 100 이 되게 했다.
     func testVortexAddsTangentialVelocity() {
-        // z축 소용돌이, 중심=원점, x=50 에 스폰(반경 50). speedInner=200 → +y 접선(axis×radial).
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 50, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 100, max: 100)],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
-                        .vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 0,
+                        .vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 100,
                                 speedInner: 200, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))],
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 1)
         let a = sim.step(0.05)
-        XCTAssertGreaterThan(a[0].vel.y, 0)  // cross(z, +x) = +y → 접선 속도 +y
+        XCTAssertLessThan(a[0].vel.y, 0, "x̂ × ẑ = −ŷ — 양수면 회전이 거꾸로다")
+        XCTAssertEqual(a[0].vel.y, -5, accuracy: 0.01, "speed 100 × dt 0.05")
+    }
+
+    /// `distanceInner == distanceOuter` 는 "램프 없음" 이 아니라 **폭 1 램프**다(invRange = 1.0).
+    /// 굽는 시점의 `dIn==dOut ? 1.0 : rcpps(dOut−dIn)` 분기를 못박는다 — 종전 코드는 이 경우와
+    /// `dOut < dIn` 을 모두 t = 0(= speedInner 고정)으로 접었다.
+    func testVortexDegenerateRangeIsUnitWidthRampNotDisabled() {
+        func velY(atX x: Float) -> Float {
+            let def = ParticleSystemDef(
+                emitters: [.box(origin: Vec3(x: x, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0),
+                                rate: 1000, burst: 0)],
+                initializers: [.lifetimeRandom(min: 100, max: 100)],
+                operators: [.vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 0,
+                                    speedInner: 200, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))],
+                renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+            var sim = ParticleSimulator(def: def, seed: 1)
+            return sim.step(0.05)[0].vel.y
+        }
+        // dist 0.5 → t = 0.5 → speed = 100 → vel.y = −5
+        XCTAssertEqual(velY(atX: 0.5), -5, accuracy: 0.01)
+        // dist 50 → t 가 1 로 클램프 → speed = speedOuter = 0. 종전 규약이면 200 이 나왔을 자리다.
+        XCTAssertEqual(velY(atX: 50), 0, accuracy: 0.001, "폭 1 램프를 넘으면 speedOuter 다")
     }
 
     // MARK: - angularmovement drag (F188, movement 의 선형 drag 와 대칭)

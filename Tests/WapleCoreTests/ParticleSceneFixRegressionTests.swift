@@ -388,7 +388,10 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
         }
         XCTAssertEqual(axis, Vec3(x: 0, y: 0, z: 1))
         XCTAssertEqual(dIn, 487); XCTAssertEqual(dOut, 625)
-        XCTAssertEqual(sIn, 172); XCTAssertEqual(sOut, 172)   // speedouter 부재 = speedinner 승계
+        XCTAssertEqual(sIn, 172)
+        // **[2026-08-20 계약 정정]** 승계 규칙은 WE 에 없다 — 주입기 0x1401bf5e0 이 `xorps` 로
+        // 0.0 을 심는다(자매 vortex 의 0x1401bf24f 도 동일). 종전 172 단언이 틀린 계약이었다.
+        XCTAssertEqual(sOut, 0, "speedouter 부재 → 0.0")
         XCTAssertEqual(def.vortexAudio.count, 1)
         XCTAssertNotNil(def.vortexAudio[0])
         // 드롭되지 않고 실제 회전력을 가한다(속도 0 출발 → vortex 가 속도를 부여)

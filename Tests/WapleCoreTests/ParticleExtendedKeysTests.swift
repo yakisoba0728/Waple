@@ -4,7 +4,9 @@ import simd
 
 /// 파티클 확장 키(wallpaper64.exe 스트링 테이블 정본 대조 갭):
 /// periodic 방출(@0x48e1c0–0x48e2b8), remapvalue 전어휘(@0x490c78–0x490eb0),
-/// controlpointattract deletethreshold(@0x48e788), vortex 확장/vortex_v2 ring(@0x48e7c8–0x48e8e0),
+/// controlpointattract deletethreshold(RVA **0x48f988**), vortex 확장/vortex_v2 ring
+/// (centerforce **0x48f9f8** · ring **0x48faa8/0x48fab8/0x48fad0/0x48fae0**),
+/// — [2026-08-20] 종전 주소(0x48e788·0x48e7c8–0x48e8e0)는 전부 포그·카메라 키를 가리켰다.
 /// rope/ropetrail 렌더러 키(@0x48e9b0–0x48ea18), positionoffsetrandom(@0x48e380/398),
 /// hsvcolorrandom huesteps/노이즈 3종(@0x48e3c0–0x48e3e0).
 /// 시뮬 의미론은 WE 에디터 어휘 규약에 따른 [추정] — 각 테스트는 파스(키/기본값) + 행동을 단언한다.
@@ -269,14 +271,19 @@ final class ParticleExtendedKeysTests: XCTestCase {
     func testVortexV2RingParse() {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":1}],
-         "operator":[{"name":"vortex_v2","speedinner":30,"ringradius":120,"ringpulldistance":300,
-                      "ringpullforce":80,"ringwidth":24}],
+         "operator":[{"name":"vortex_v2","speedinner":30,"flags":4,"ringradius":120,
+                      "ringpulldistance":300,"ringpullforce":80,"ringwidth":24}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """), material: nil)
         guard case let .vortex(_, _, _, sIn, sOut, _, _, _, _, _, ring, _) = def.operators.first else {
             return XCTFail("vortex_v2 가 vortex 매핑되어야 한다")
         }
-        XCTAssertEqual(sIn, 30); XCTAssertEqual(sOut, 30)   // speedouter 부재 = inner 승계(F631)
+        XCTAssertEqual(sIn, 30)
+        // **[2026-08-20 계약 정정]** 종전엔 `sOut == sIn`(승계)을 단언했는데 WE 에 그 규칙이 없다 —
+        // 주입기가 0x1401bf5e0 `xorps xmm2,xmm2` 로 0.0 을 심고 플래그와도 무관하다.
+        XCTAssertEqual(sOut, 0, "speedouter 부재 → 승계가 아니라 0.0")
+        // ring 은 `flags & 4` 없이는 만들어지지 않는다(런타임 `test byte [r14+0x110],4` @0x1402434eb).
+        // 그래서 픽스처에 flags:4 를 명시했다.
         XCTAssertEqual(ring, VortexRing(radius: 120, pullDistance: 300, pullForce: 80, width: 24))
     }
 
