@@ -823,13 +823,35 @@ public struct ParticleSimulator {
         //  ② **정규화하지 않는다** — flags bit0 이 없으면 |n × a| = sinθ 라 축에 가까운 파티클일수록
         //     느리게 돈다. 종전엔 normalizeSafe 로 그 감쇠를 지웠다.
         let tangent = simd_cross(n, axisN)
-        vel += tangent * (speed * audioScale) * dt
-        // centerforce **[모델 미확정 — 상수와 게이트만 실측]**: 지금 코드는 "축을 향한 등가속
-        // 인력" 인데 실측 런타임은 `vel += (dist/dist′ − 1)·(centerforce/dt)·radial′`
-        // (dist′ = |radial(pos + vel·dt)|) 형태로 **차원이 다르다**(dt 가 상쇄되는 무차원
-        // 감쇠로 보인다). 그 유도를 아직 바이트로 재검증하지 못해 모델은 그대로 두고, 실측이
-        // 끝난 **게이트만** 반영했다 — `flags & 2` 가 없으면 파스 단계에서 0 이라 여기 안 온다.
-        if v.centerForce != 0 { vel -= n * (v.centerForce * dt) }
+
+        // centerforce **[2026-08-20 모델 정정]**. 종전은 "축을 향한 등가속 인력"
+        // (`vel -= n·(cf·dt)`)이었는데 실측은 형태도 차원도 다르다:
+        // ```
+        //   cfOverDt   = centerforce / dt                       ; 0x14024345c divps · 0x14024346b
+        //   radial′    = radial(pos + vel·dt)                   ; proj 는 현재 값을 재사용
+        //   radialScale= (dist / |radial′| − 1) · cfOverDt       ; 0x140243961–0x140243988
+        //   vel       += tangent·speed + radial′·radialScale    ; 0x14024398f–0x1402439a3
+        // ```
+        // `dist/dist′ − 1 ≈ −v_r·dt/dist` 이므로 `Δv ≈ −centerforce · v_r · n` —
+        // **dt 가 상쇄되는 무차원 반경속도 감쇠**(매 스텝 `v_radial *= 1 − cf`)이지 힘이 아니다.
+        // 기본 1.0 은 "반경 속도를 완전히 죽여 궤도 반경을 고정" 이라는 뜻이고, 정지한 파티클
+        // (v = 0 → dist′ = dist)에는 **아무 작용도 하지 않는다**. 종전 모델은 cf 1.0 에서
+        // 초당 1단위 가속으로 중심으로 무너뜨렸다 — 부호 규약도 "중심을 향한 인력" 이 아니라
+        // 멀어지는 중이면 안쪽, 다가오는 중이면 바깥쪽이다.
+        //
+        // 예측 반경은 **이 오퍼레이터의 접선 가산 이전 속도**로 만든다 — 실물은 루프 앞머리에서
+        // 속도를 한 번 읽고 두 기여를 함께 더한다(0x1402439a0 `addps xmm1, xmm5`).
+        // 그래서 여기서도 tangent 를 먼저 더하지 않고 마지막에 함께 더한다.
+        var delta = tangent * (speed * audioScale) * dt
+        if v.centerForce != 0, dt > 0 {
+            let relP = (pos + vel * dt) - v.offset
+            let radialP = relP - axisN * proj
+            let distP = simd_length(radialP)
+            if distP > 1e-6 {
+                delta += radialP * ((dist / distP - 1) * v.centerForce / dt)
+            }
+        }
+        vel += delta
         // ring **[힘 수식 추정 · 게이트는 실측]**: `flags & 4` 가 없으면 파서가 nil 을 주므로
         // 여기 오지 않는다(런타임 `test byte [r14+0x110],4` @0x1402434eb). 동봉 코퍼스의
         // vortex_v2 5건은 전부 bit2 가 없어 이 경로에 **한 번도 들어오지 않는다**.

@@ -287,19 +287,42 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(ring, VortexRing(radius: 120, pullDistance: 300, pullForce: 80, width: 24))
     }
 
-    func testVortexCenterForcePullsTowardAxis() {
-        // 축 z, 중심 원점, 접선 속도 0, centerforce 100 — (100,0,0) 파티클은 −x(축 방향)로 가속.
-        let op = ParticleOperator.vortex(axis: Vec3(x: 0, y: 0, z: 1),
-                                         distanceInner: 0, distanceOuter: 0,
-                                         speedInner: 0, speedOuter: 0,
-                                         offset: Vec3(x: 0, y: 0, z: 0), centerForce: 100)
-        let def = makeDef(emitters: [.box(origin: Vec3(x: 100, y: 0, z: 0),
-                                          distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 0, burst: 1)],
-                          maxCount: 4, operators: [op])
-        var sim = ParticleSimulator(def: def, seed: 41)
-        let a = sim.step(0.1)
-        XCTAssertEqual(a[0].vel.x, -10, accuracy: 0.001)   // centerForce·dt
-        XCTAssertEqual(a[0].pos.x, 99, accuracy: 0.01)     // 축을 향해 이동
+    /// **[2026-08-20 계약 전면 교체]** `centerforce` 는 "축을 향한 등가속 인력" 이 아니다.
+    /// 실측(0x14024345c–0x140243988)은
+    ///   `vel += radial(pos + vel·dt) · ((dist/|radial′| − 1) · centerforce/dt)`
+    /// 로, `dist/dist′ − 1 ≈ −v_r·dt/dist` 이므로 **`Δv ≈ −centerforce · v_r · n`** —
+    /// dt 가 상쇄되는 무차원 **반경속도 감쇠**다(매 스텝 `v_radial *= 1 − cf`).
+    ///
+    /// 종전 테스트는 정지한 파티클이 `−centerforce·dt` 로 가속된다고 단언했는데, 실물은
+    /// 정지 입자(v = 0 → dist′ = dist)에 **아무 작용도 하지 않는다**. 그 단언이 통과하던 것은
+    /// 구현과 테스트가 같은 오해를 공유했기 때문이다.
+    func testVortexCenterForceDampsRadialVelocityNotAConstantPull() {
+        func run(cf: Float, radialSpeed: Float) -> Float {
+            let op = ParticleOperator.vortex(axis: Vec3(x: 0, y: 0, z: 1),
+                                             distanceInner: 0, distanceOuter: 0,
+                                             speedInner: 0, speedOuter: 0,
+                                             offset: Vec3(x: 0, y: 0, z: 0), centerForce: cf)
+            let def = makeDef(emitters: [.box(origin: Vec3(x: 100, y: 0, z: 0),
+                                              distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 0, burst: 1)],
+                              initializers: [.velocityRandom(min: Vec3(x: radialSpeed, y: 0, z: 0),
+                                                             max: Vec3(x: radialSpeed, y: 0, z: 0))],
+                              maxCount: 4, operators: [op])
+            var sim = ParticleSimulator(def: def, seed: 41)
+            return sim.step(0.1)[0].vel.x
+        }
+        // 정지 입자: 실물은 무작용. 종전 모델이면 −cf·dt = −10 이 나왔을 자리다.
+        XCTAssertEqual(run(cf: 100, radialSpeed: 0), 0, accuracy: 1e-4,
+                       "정지 입자에는 아무 작용도 하지 않는다")
+        // 바깥으로 +50 으로 움직이는 입자에 cf = 1 → 반경 속도가 거의 완전히 죽는다.
+        let damped = run(cf: 1, radialSpeed: 50)
+        XCTAssertLessThan(damped, 50, "반경 속도가 줄어야 한다")
+        // 손계산: dist 100, dist′ = |100 + 50·0.1| = 105 → (100/105 − 1)·1/0.1 = −0.47619,
+        // delta = 105·(−0.47619) = −50 → vel 50 − 50 = **정확히 0**.
+        XCTAssertEqual(damped, 0, accuracy: 0.01, "cf = 1 은 반경 속도를 통째로 죽인다(궤도 반경 고정)")
+        // cf = 0.5 면 절반만 죽는다 — 감쇠 계수라는 것을 못박는다(등가속이면 cf 에 비례해 커진다).
+        let half = run(cf: 0.5, radialSpeed: 50)
+        // 같은 계산에 cf 0.5 → delta = −25 → vel 25. **cf 에 선형**이라는 게 감쇠 계수의 표식이다.
+        XCTAssertEqual(half, 25, accuracy: 0.01, "cf 는 감쇠 비율이지 가속 크기가 아니다")
     }
 
     func testVortexRingPullsIntoBandAndLeavesBandAlone() {
