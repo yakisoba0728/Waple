@@ -85,7 +85,7 @@ def resolve(root, effect, name, allow_source_form=True):
 
 def texture_refs(root):
     """(effect, material 상대경로, 텍스처 이름) 목록. preview 트리는 제외."""
-    out = []
+    out, parse_failures = [], []
     for m in sorted((root / 'effects').glob('*/**/*.json')):
         rel = m.relative_to(root).as_posix()
         if rel.endswith('/effect.json'):
@@ -95,6 +95,9 @@ def texture_refs(root):
             continue
         doc = relaxed_json(m.read_text(encoding='utf-8', errors='replace'))
         if not isinstance(doc, dict):
+            # **파스 실패를 조용히 넘기지 않는다.** 종전엔 `continue` 라, 머티리얼 JSON 셋을
+            # 전부 깨뜨리면 `참조 0건 전건 해석` 으로 초록이 됐다.
+            parse_failures.append(rel)
             continue
         effect = rel.split('effects/', 1)[1].split('/', 1)[0]
         for p in doc.get('passes') or []:
@@ -103,16 +106,54 @@ def texture_refs(root):
             for t in p.get('textures') or []:
                 if isinstance(t, str) and t:
                     out.append((effect, rel, t))
-    return out
+    return out, parse_failures
+
+
+# **[2026-08-20] 파일 존재만 보면 이 검사의 존재 이유를 놓친다.**
+# 이 게이트가 막겠다는 결과는 "흰색 1×1 폴백으로 조용히 틀린 그림" 인데, **0바이트 PNG** 나
+# 텍스트 쓰레기도 `is_file()` 을 통과해 `참조 N건 전건 해석` 으로 초록이었다. 실측으로
+# 확인한 통과 사례: `refractnormal.png` 를 0바이트로 만들어도, 텍스트로 채워도 rc=0.
+# 내용을 최소한으로 본다 — PNG 는 시그니처 + IHDR 폭·높이 ≥ 1, `.tex` 는 매직.
+# 참조 수 하한 — 현재 실측치에서 내려가면 근거가 사라진 것이다.
+MIN_REFS = 3
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
+
+def payload_problem(path):
+    """해석된 파일이 실제로 텍스처인가. 문제가 있으면 사유 문자열, 없으면 None."""
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        return "읽을 수 없다(%s)" % e
+    if not raw:
+        return "0바이트"
+    if path.suffix.lower() == ".png":
+        if not raw.startswith(PNG_SIG):
+            return "PNG 시그니처가 없다"
+        if len(raw) < 24 or raw[12:16] != b"IHDR":
+            return "IHDR 청크가 없다"
+        w = int.from_bytes(raw[16:20], "big")
+        h = int.from_bytes(raw[20:24], "big")
+        if w < 1 or h < 1:
+            return "IHDR 크기가 %dx%d" % (w, h)
+    elif path.suffix.lower() == ".tex":
+        if not raw.startswith(b"TEX"):
+            return "TEX 매직이 없다"
+    return None
 
 
 def check(root, allow_source_form=True):
-    bad = []
-    refs = texture_refs(root)
+    bad, broken = [], []
+    refs, parse_failures = texture_refs(root)
     for effect, mat, name in refs:
-        if resolve(root, effect, name, allow_source_form) is None:
+        got = resolve(root, effect, name, allow_source_form)
+        if got is None:
             bad.append((effect, mat, name))
-    return refs, bad
+            continue
+        why = payload_problem(root / got)
+        if why:
+            broken.append((mat, name, got, why))
+    return refs, bad, broken, parse_failures
 
 
 def selftest():
@@ -122,11 +163,30 @@ def selftest():
         mat.mkdir(parents=True)
         (mat.parent / 'fake.json').write_text(
             '{"passes":[{"textures":["effects/fakenormal"],}]}\n', encoding='utf-8')
-        (mat / 'fakenormal.png').write_bytes(b'\x89PNG')
-        _, bad = check(root, allow_source_form=False)
+        png = PNG_SIG + b'\x00\x00\x00\x0dIHDR' + (4).to_bytes(4, 'big') + (4).to_bytes(4, 'big')
+        (mat / 'fakenormal.png').write_bytes(png)
+        _, bad, broken, pf = check(root, allow_source_form=False)
         assert len(bad) == 1, '소스 폼을 끄면 잡혀야 한다: %r' % (bad,)
-        _, bad = check(root, allow_source_form=True)
-        assert not bad, '소스 폼을 켜면 안 잡혀야 한다: %r' % (bad,)
+        _, bad, broken, pf = check(root, allow_source_form=True)
+        assert not bad and not broken and not pf, '정상 픽스처는 통과해야 한다: %r %r %r' % (bad, broken, pf)
+
+        # **[2026-08-20] 내용 검사 음성 대조 — 종전엔 셋 다 통과했다.**
+        (mat / 'fakenormal.png').write_bytes(b'')
+        _, _, broken, _ = check(root)
+        assert len(broken) == 1 and '0바이트' in broken[0][3], '0바이트 PNG 를 잡아야 한다: %r' % (broken,)
+        (mat / 'fakenormal.png').write_bytes(b'not a png at all, just text')
+        _, _, broken, _ = check(root)
+        assert len(broken) == 1 and '시그니처' in broken[0][3], 'PNG 아닌 바이트를 잡아야 한다: %r' % (broken,)
+        (mat / 'fakenormal.png').write_bytes(PNG_SIG + b'\x00\x00\x00\x0dIHDR' + b'\x00' * 8)
+        _, _, broken, _ = check(root)
+        assert len(broken) == 1 and '0x0' in broken[0][3], 'IHDR 0x0 을 잡아야 한다: %r' % (broken,)
+        (mat / 'fakenormal.png').write_bytes(png)
+
+        # 머티리얼 JSON 파스 실패를 조용히 넘기지 않는가 — 종전엔 `참조 0건 전건 해석` 이었다.
+        (mat.parent / 'fake.json').write_text('{ this is not json', encoding='utf-8')
+        refs, _, _, pf = check(root)
+        assert pf and not refs, '파스 실패를 보고해야 한다: %r %r' % (pf, refs)
+
         # 관용 JSON 이 실제로 동작하는지(위 픽스처의 트레일링 콤마가 근거다)
         assert relaxed_json('{"a":1,} // x') == {'a': 1}
     print('selftest: OK')
@@ -140,16 +200,28 @@ def main():
     if not ASSETS.is_dir():
         print('[effect-texture] %s 가 없다 — 검사 생략' % ASSETS, file=sys.stderr)
         return 0
-    refs, bad = check(ASSETS)
+    refs, bad, broken, parse_failures = check(ASSETS)
+    for rel in parse_failures:
+        print('%s: 머티리얼 JSON 이 파스되지 않는다 — 이 파일의 텍스처 참조는 검사되지 않았다' % rel)
+    for mat, name, got, why in broken:
+        print('%s: 텍스처 `%s` 가 %s 로 해석되지만 내용이 텍스처가 아니다 — %s' % (mat, name, got, why))
     for effect, mat, name in bad:
         print('%s: 텍스처 `%s` 가 어디서도 해석되지 않는다 — 흰색 1×1 폴백이 된다' % (mat, name))
         print('    시도: %s' % ', '.join(candidates(name)))
         print('    시도: %s' % ', '.join('effects/%s/%s' % (effect, c) for c in candidates(name)))
-    if bad:
-        print('\n이펙트 텍스처 미해석 %d건. 흰색 폴백은 **조용히** 틀린 그림을 만든다 '
-              '(노멀맵 자리의 (1,1,1) 언팩 = 상시 대각 변위).' % len(bad), file=sys.stderr)
+    if bad or broken or parse_failures:
+        print('\n이펙트 텍스처 문제 %d건(미해석 %d · 내용불량 %d · 파스실패 %d). 흰색 폴백은 '
+              '**조용히** 틀린 그림을 만든다(노멀맵 자리의 (1,1,1) 언팩 = 상시 대각 변위).'
+              % (len(bad) + len(broken) + len(parse_failures), len(bad), len(broken),
+                 len(parse_failures)), file=sys.stderr)
         return 1
-    print('이펙트 텍스처 해석: 참조 %d건 전건 해석' % len(refs))
+    # **참조 수 하한.** 종전엔 머티리얼을 전부 깨뜨리면 `참조 0건 전건 해석` 으로 초록이었다.
+    # 근거가 사라지는 것과 근거가 통과하는 것은 다르다.
+    if len(refs) < MIN_REFS:
+        print('\n이펙트 텍스처 참조가 %d건뿐이다(기준선 %d) — 근거가 사라졌다. 자산이 줄었으면 '
+              'MIN_REFS 를 사유와 함께 내릴 것.' % (len(refs), MIN_REFS), file=sys.stderr)
+        return 1
+    print('이펙트 텍스처 해석: 참조 %d건 전건 해석(내용 검사 포함)' % len(refs))
     return 0
 
 
