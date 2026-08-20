@@ -616,7 +616,19 @@ extension SceneRenderer {
         // `effects/<name>/effect.json` 을 실으면 그대로 도달한다. 이 줄은 loadEffectManifest 바로
         // 다음이라 셰이더 해석보다 **먼저** 터졌다. 동봉 자산 101개 전수 파스에서 중복은 0건 —
         // 정상 자산은 영향 없고, 저작 오류·악의 입력만 여기로 온다.
-        let fboIndex = Dictionary(manifest.fbos.enumerated().map { ($1.name, $0) },
+        // X-⑪(G-A5-07/G-B2-05): `conditions` 가 거짓인 FBO 는 **아예 만들지 않는다**.
+        // 참조는 전부 이름 기반이고 이름→인덱스 변환이 이 필터 **뒤에** 일어나므로 벡터가 압축돼도
+        // 어긋나지 않는다. 좌변은 이펙트 인스턴스 레벨 combos 다(패스 레벨과 다른 것 — SceneEffect
+        // 주석 참조). 동봉 자산 기준으로 `fluidsimulation` 의 `_rt_SmokeNormal`(LIGHTING==1)이
+        // 여기서 빠지고, 그것을 쓰는 패스·바인드가 **같은 조건**이라 함께 사라진다.
+        let instanceCombos = eff.instanceCombos
+        let liveFbos = manifest.fbos.filter {
+            EffectManifest.evaluate($0.conditions, combos: instanceCombos)
+        }
+        if liveFbos.count != manifest.fbos.count {
+            NSLog("%@", "[Waple] conditions: \(eff.name) 의 fbo \(manifest.fbos.count - liveFbos.count)개 비활성")
+        }
+        let fboIndex = Dictionary(liveFbos.enumerated().map { ($1.name, $0) },
                                   uniquingKeysWith: { _, later in later })
         // X-⑧: fbo 인덱스별 Metal 포맷. 패스 파이프라인의 컬러 어태치먼트 포맷은 **그 패스가
         // 쓰는 타깃의 포맷과 일치해야 한다**(불일치 = Metal 파이프라인 생성 실패/미정의).
@@ -624,7 +636,7 @@ extension SceneRenderer {
         // pooledOffscreen(bgra:false) = rgba8Unorm 고정이다.
         // `hdrActive` 는 마운트에서 이미 확정이다(`SceneRenderer.mount` 가 sceneIsHDR/sceneQuality 를
         // 잡은 뒤 buildLayers 를 부른다) — 빌드 시점 1 회 해석으로 충분하고 프레임마다 흔들리지 않는다.
-        let fboFormats = manifest.fbos.map { SceneRenderer.metalFormat($0.format, hdr: hdrActive) }
+        let fboFormats = liveFbos.map { SceneRenderer.metalFormat($0.format, hdr: hdrActive) }
         let outputFormat = MTLPixelFormat.rgba8Unorm
         func targetFormat(_ name: String?) -> MTLPixelFormat {
             guard let n = name, let i = fboIndex[n] else { return outputFormat }
@@ -657,6 +669,12 @@ extension SceneRenderer {
         // `passes[2]` 를 받는다 — 어느 쪽이든 오버라이드가 없어 동봉 자산에서는 결과가 같지만,
         // 명령 패스가 중간에 있는 워크샵 자산에서는 상수·텍스처가 통째로 한 칸씩 밀린다.
         for (i, mp) in manifest.passes.enumerated() {
+            // X-⑪: 조건이 거짓이면 이 패스를 통째로 건너뛴다. `i` 는 `enumerated()` 라
+            // 씬 오버라이드 인덱스 정렬이 자동으로 보존된다 — 원본도 인덱스만 올리고 continue 한다.
+            guard EffectManifest.evaluate(mp.conditions, combos: instanceCombos) else {
+                NSLog("%@", "[Waple] conditions: \(eff.name) 패스 \(i) 비활성")
+                continue
+            }
             if mp.command == "copy" {
                 guard let copy = makeCopyPass(mp, effName: eff.name, fboIndex: fboIndex,
                                               lw: lw, lh: lh, device: device,
@@ -696,10 +714,11 @@ extension SceneRenderer {
             let (material, passScripts, passAnimations) = buildPassMaterial(t, scenePass: scenePass)
             guard let plan = buildPassBindings(mp, effName: eff.name, translation: t, scenePass: scenePass,
                                                matTextures: meta.matTextures, manifest: manifest,
-                                               fboIndex: fboIndex, lw: lw, lh: lh,
+                                               fbos: liveFbos, fboIndex: fboIndex, lw: lw, lh: lh,
                                                package: package, device: device,
                                                compositeImageTextures: compositeImageTextures,
-                                               baseNoInterp: baseNoInterp, root: effectRoot) else { return nil }
+                                               baseNoInterp: baseNoInterp, root: effectRoot,
+                                               instanceCombos: instanceCombos) else { return nil }
             if t.usesAudio { anyAudio = true }
             if plan.target == nil, combos["DIRECTDRAW"] == 1 { outputPremultiplied = true }
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
@@ -711,14 +730,14 @@ extension SceneRenderer {
         // 출력(타깃 없는 패스)이 하나도 없으면 화면에 아무것도 못 쓴다 → 폴백.
         guard passes.contains(where: { $0.target == nil }) else { return nil }
         if anyAudio { hasAudio = true }
-        NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (passes=\(passes.count) fbos=\(manifest.fbos.count) audio=\(anyAudio))")
+        NSLog("%@", "[Waple] effect via GLSL→MSL translator: \(eff.name) (passes=\(passes.count)/\(manifest.passes.count) fbos=\(liveFbos.count)/\(manifest.fbos.count) audio=\(anyAudio))")
         // DIRECTDRAW 체인 결과는 premultiplied — 합성서(f_main)가 알파를 한 번 더 곱하지 않도록 표시한다.
         // 코퍼스 전수(460 pkg)에서 DIRECTDRAW 는 lightshafts 41패스/23씬이 전부이고, 전건이
         // ① 이미지 없는 shape:quad 오브젝트의 ② 유일한 이펙트의 ③ 유일한(=출력) 패스이며
         // ④ colorBlendMode=0 ⑤ 비-`_rt_` ⑥ 2D 오르토 씬(camera3D 없음)이다. 그래서 소비처는
         // encodeLayer 의 f_main 분기 하나로 충분하다 — f_compose/f_blend/f_lit/3D 빌보드 경로에는
         // 대응 변형을 두지 않았다(도달 0건). 도달이 생기면 그 경로는 종전 동작으로 남는다(무크래시).
-        let specs = manifest.fbos.enumerated().map { i, f in
+        let specs = liveFbos.enumerated().map { i, f in
             FBOSpec(scale: f.scale, fixedWidth: f.fixedWidth, fixedHeight: f.fixedHeight,
                     pixelFormat: fboFormats[i], unique: f.unique, clearColor: f.clearColor)
         }
@@ -898,15 +917,22 @@ extension SceneRenderer {
     /// (gaussian 등이 g_Scale/…Resolution.z 로 텍셀 오프셋 계산; 역수면 오프셋 폭주 → 화면 백화).
     private func buildPassBindings(_ mp: EffectManifest.Pass, effName: String, translation t: TranslatedShader,
                                    scenePass: SceneEffectPass, matTextures: [String?],
-                                   manifest: EffectManifest, fboIndex: [String: Int],
+                                   manifest: EffectManifest, fbos: [EffectManifest.FBO], fboIndex: [String: Int],
                                    lw: Float, lh: Float, package: ScenePackage, device: MTLDevice,
                                    compositeImageTextures: [Int: String] = [:],
-                                   baseNoInterp: Bool = false, root: String? = nil)
+                                   baseNoInterp: Bool = false, root: String? = nil,
+                                   instanceCombos: [String: Int] = [:])
         -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)],
             texWrap: [Float], texFilter: [Float], target: Int?, fullFrameSlots: [Int],
             mediaArtworkSlots: [(slot: Int, previous: Bool)])? {
         var binds: [(slot: Int, source: Int)] = []
         for b in mp.binds {
+            // X-⑪: bind 조건이 거짓이면 **그 슬롯만 언바인드**되고 패스는 정상 실행된다.
+            // 슬롯 번호가 JSON 에 명시돼 있으므로 다른 바인드의 슬롯이 밀리지 않는다.
+            guard EffectManifest.evaluate(b.conditions, combos: instanceCombos) else {
+                NSLog("%@", "[Waple] conditions: \(effName) bind 슬롯 \(b.index) 비활성")
+                continue
+            }
             // 신뢰불가 effect.json index — Metal frag 텍스처 인자테이블 상한(macOS 128) 밖이면
             // setFragmentTexture assertion 크래시. 미지 바인드와 동일하게 효과 전체 폴백.
             guard (0..<128).contains(b.index) else {
@@ -933,7 +959,7 @@ extension SceneRenderer {
         // (콘텐츠 경계 밖 랩은 아티팩트, W4a 실측). aux(실 자산) 슬롯은 아래에서 TexImage.clampUVs 로 채운다.
         var texWrap = [Float](repeating: 0, count: 8)
         for (slot, source) in binds where slot < 8 && source >= 0 {
-            let fbo = manifest.fbos[source]
+            let fbo = fbos[source]
             // X-①: fixedWidth/fixedHeight(fit·width/height) 가 있으면 dst 비례(scale) 대신 절대 크기.
             if let fw = fbo.fixedWidth, let fh = fbo.fixedHeight {
                 texRes[slot] = SIMD4(Float(fw), Float(fh), Float(fw), Float(fh))
@@ -945,7 +971,7 @@ extension SceneRenderer {
         for slot in bindSlots where slot < 8 { texWrap[slot] = 1 }
         // X-①: `uvs:"repeat"` FBO(실물 glitter `_rt_GlitterTiles` 타일 아틀라스)를 소스로 삼는 bind 슬롯은
         // 위의 기본 clamp 를 repeat 로 재정의.
-        for (slot, source) in binds where slot < 8 && source >= 0 && manifest.fbos[source].uvsRepeat {
+        for (slot, source) in binds where slot < 8 && source >= 0 && fbos[source].uvsRepeat {
             texWrap[slot] = 0
         }
         // 감사 V07: 슬롯별 샘플 필터(1=nearest/0=linear — TexImage.noInterpolation, WE tex Flags bit0).

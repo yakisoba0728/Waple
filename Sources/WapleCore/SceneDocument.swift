@@ -34,6 +34,10 @@ public struct SceneEffect: Equatable {
     public let combos: [String: Int]
     /// AUDIOPROCESSING 콤보(0=off,1=L,2=R,3=L+R). 오디오-반응 효과 식별.
     public var audioMode: Int { combos["AUDIOPROCESSING"] ?? 0 }
+    /// X-⑪: 이펙트 **인스턴스** 레벨 `combos`(씬의 `objects[].effects[i].combos`).
+    /// 위 `combos`(= `passes[0].combos`)와 **다른 것**이다. `conditions` 평가의 좌변이 이쪽이며,
+    /// 동봉 씬에는 0건이라 실측상 항상 비어 있다(그래서 조건이 전부 false 로 떨어진다 — 원본 동작).
+    public var instanceCombos: [String: Int] = [:]
     /// 전체 패스 사용자 데이터(멀티패스 효과용; [0]은 기존 constants/textureNames/combos 와 동일).
     public var passList: [SceneEffectPass] = []
     /// 초기 가시성(스크립트 있으면 정적 false 도 보존 — 오브젝트 레벨 initialVisible 게이트와 동일 규약).
@@ -2411,6 +2415,14 @@ extension SceneDocument {
             var eff = SceneEffect(name: name, constants: p0.constants, textureNames: p0.textureNames,
                                   combos: p0.combos, file: file)
             eff.passList = passList
+            // X-⑪: `conditions` 의 좌변은 **이펙트 인스턴스 레벨 `combos`** 다 — 패스 레벨과 다른 것이다
+            // (원본 `0x1401e7319` 가 `effects[i]["combos"]` 를 이펙트당 1회 읽어 세 평가 지점이 공유한다).
+            // 동봉 씬 57개에서 이 키는 **0건**이고 combos 60건은 전부 패스 레벨이다. 그래서 실측상
+            // 좌변은 항상 부재=0 이고, `fluidsimulation` 의 `LIGHTING==1`·`RENDERING==3` 은 전부 false 다.
+            // 즉 충실한 구현은 유체의 조명/노멀 패스를 **끄는** 방향이다 — 그게 원본 동작이다.
+            if let ic = e["combos"] as? [String: Any] {
+                for (k, v) in ic { if let i = intVal(v) { eff.instanceCombos[k] = i } }
+            }
             eff.initialVisible = effInitialVisible
             eff.visibleScript = effVisibleScript
             eff.visibleScriptProps = effVisibleScriptProps
