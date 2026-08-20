@@ -1556,7 +1556,12 @@ extension SceneRenderer {
         return AudioParams(
             mode: mode,
             freqMin: c["frequencymin"]?.first ?? 0,
-            freqMax: c["frequencymax"]?.first ?? 15,
+            // **WE 선언 기본값은 1 이다** — `effects/pulse/shaders/effects/pulse.vert` 의
+            // `g_AudioFrequencyMax` 어노테이션이 `"default":1`(range [0,15]). 종전 15 는 전 대역을
+            // 고르는 값이라, 비선형 밴드 매핑이 들어온 지금은 23.4–187.5 Hz 여야 할 대역이
+            // 23.4–14671.9 Hz 로 벌어진다. 씬 상수는 constantshadervalues 에서만 채워지고 셰이더
+            // 선언 기본값은 파스하지 않으므로 이 폴백이 곧 실효 기본값이다.
+            freqMax: c["frequencymax"]?.first ?? 1,
             bounds: SIMD2<Float>(bounds.count > 0 ? bounds[0] : 0.5, bounds.count > 1 ? bounds[1] : 1.0),
             power: c["audioexponent"]?.first ?? 1,
             multiply: c["audioamount"]?.first ?? 1)

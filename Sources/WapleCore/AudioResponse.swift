@@ -12,28 +12,42 @@ public enum AudioResponse {
                                bounds: SIMD2<Float>, power: Float, multiply: Float) -> Float {
         guard mode >= 1, mode <= 3 else { return 0 }
         let count = (mode == 2) ? right.count : left.count
-        // 범위를 유효 빈으로 클램프해 denom 이 실제 합산 빈 수와 일치하도록 한다(범위 밖 빈으로 평균 희석 방지).
+        // **분모는 실제 합산 빈 수가 아니라 `(max − min + 1)`(모드 3 은 ×2) 이다.**
+        // 종전엔 "mode 3 비대칭(right < left)에서 응답이 절반으로 희석된다" 는 이유로 실제 항 수
+        // (`terms`)를 썼는데, 그건 **일어나지 않는 경우를 고치려다 실재하는 규약을 깬 것**이었다 —
+        // `AudioSpectrum16` 은 항상 16/16 을 내므로 비대칭은 프로덕션에 없다. 동봉 셰이더 원문이
+        // 명시적이다(`effects/pulse/shaders/effects/pulse.vert`):
+        //
+        //     audioResponse /= (g_AudioFrequencyMax - g_AudioFrequencyMin + 1.0);        // 모드 1·2
+        //     audioResponse /= (g_AudioFrequencyMax - g_AudioFrequencyMin + 1.0) * 2.0;  // 모드 3
+        //
+        // 그리고 그 분모는 **원시 float** 이지 클램프된 빈 인덱스가 아니다. 코퍼스 실측 차이:
+        // `0.5..5` 는 우리 12 vs WE 11(응답 8.3% 과소), `0..0.25` 는 우리 2 vs WE 2.5(25% 과대).
+        //
+        // 같은 셰이더에서 `audioFrequencyEnd = max(min, max)` 는 **계산만 하고 루프가 쓰지 않는
+        // 죽은 변수**다. 종전 구현은 그걸 살려 `hi = max(bin(min), bin(max))` 로 썼는데, 그러면
+        // `freqMin > freqMax` 일 때 WE 는 루프가 0회라 응답 0 인데 우리는 min 쪽 빈을 읽어 0 이
+        // 아닌 값을 낸다. 루프 상한은 `freqMax` 하나다.
+        //
         // Int 변환은 Float 도메인에서 [-1, count] 클램프 후 — 1e19 같은 유한 거대값 변환 트랩 방지(감사 V05).
-        // -1 하한이라 전음수 범위는 여전히 빈 구간(hi < lo)으로 떨어져 기존 의미 보존.
-        let fcount = Float(count)
         // NaN 은 Swift min/max 를 통과해 Int() 변환 트랩 — 비유한 입력은 0번 빈 기본값(감사 V06).
-        // (±무한은 기존처럼 [-1, count] 클램프에 태운다 — 무한 입력 동작 무회귀.)
+        let fcount = Float(count)
         func bin(_ x: Float) -> Int { x.isNaN ? 0 : Int(min(max(x, -1), fcount)) }
         let lo = max(0, bin(freqMin))
-        let hi = min(count - 1, max(bin(freqMin), bin(freqMax)))
+        let hi = min(count - 1, bin(freqMax))
         var sum: Float = 0
-        var terms = 0
         if lo <= hi {
             for a in lo...hi {
-                // hi 는 기준 채널(count) 크기로 클램프됨 — left 는 mode 1/3 모두 기준 채널이라 추가 가드 불필요.
-                // right 는 mode 3 에서 비대칭 입력(right < left)이 가능해 가드 유지.
-                if mode == 1 || mode == 3 { sum += left[a]; terms += 1 }
-                if mode == 2 || mode == 3, a < right.count { sum += right[a]; terms += 1 }
+                if mode == 1 || mode == 3 { sum += left[a] }
+                // 인덱스 가드는 남긴다 — 배열 길이가 갈리면 WE 는 UB, 우리는 트랩이라 더 나쁘다.
+                if mode == 2 || mode == 3, a < right.count { sum += right[a] }
             }
         }
-        // denom = 실제 합산 빈 수 — mode 3 비대칭(right < left)에서 종전 (hi-lo+1)×2 는 응답을 절반으로 희석(감사 V06).
-        let denom = Float(terms)
-        var resp = denom > 0 ? sum / denom : 0
+        // 원시 float 분모. 0 이나 비유한이면 나눗셈을 하지 않는다(WE 는 그 자리에서 inf/NaN 을
+        // 만들고 saturate 로 뭉개지만, 우리는 그 전에 0 으로 떨어뜨린다 — 관측 결과는 같다).
+        let rawDenom = (freqMax - freqMin + 1) * (mode == 3 ? 2 : 1)
+        var resp = (rawDenom.isFinite && rawDenom != 0) ? sum / rawDenom : 0
+        if !resp.isFinite { resp = 0 }
         resp = smoothstep(bounds.x, bounds.y, resp)
         resp = saturate(powf(max(0, resp), power)) * multiply
         return resp

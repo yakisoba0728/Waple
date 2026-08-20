@@ -2324,7 +2324,13 @@ extension SceneDocument {
             let name = parts.count >= 2 ? String(parts[parts.count - 2]) : file
             // 전체 패스 사용자 데이터 파스(멀티패스 effect.json passes[] 와 인덱스 정렬).
             var passList: [SceneEffectPass] = []
-            for case let passDict as [String: Any] in (e["passes"] as? [Any] ?? []) {
+            // **자리를 보존한다.** `for case let passDict as [String: Any]` 는 객체가 아닌 원소를
+            // 조용히 건너뛰어 뒤 패스를 한 칸씩 당긴다. 그런데 렌더러는 이 배열을 매니페스트의
+            // **원본 인덱스**로 조회하므로(`sceneOverride(forRawPassIndex:)`), 한 칸이라도 밀리면
+            // 상수·텍스처·콤보가 통째로 다른 패스에 붙는다. 원본(JsonCpp)은 위치 기반이라
+            // null 원소도 자리를 지킨다.
+            for element in (e["passes"] as? [Any] ?? []) {
+                let passDict = (element as? [String: Any]) ?? [:]
                 var p = SceneEffectPass()
                 if let cb = passDict["combos"] as? [String: Any] {
                     for (k, v) in cb {
