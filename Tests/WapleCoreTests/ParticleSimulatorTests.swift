@@ -531,16 +531,36 @@ final class ParticleSimulatorTests: XCTestCase {
     }
 
     func testTurbulenceBoundedBySpeed() {
-        // 이류는 vel 에 누적하지 않음 → 총 변위 ≤ speed·√3·T. 폭주/NaN 없음(유계성 증명).
+        // 난류는 **속도**에 누적한다(실물 0x140242d3a–0x140242d54 가 `[sys+0x2c8/0x2d0/0x2d8]` 에
+        // `addps`). 그래서 종전의 `disp ≤ speed·√3·T` 는 더 이상 성립하지 않는다 — 그건 위치
+        // 이류의 상한이었다. 속도 누적의 참 상한은 |noise| ≤ 1 에서 바로 나온다:
+        //     |v(t)| ≤ speed·√3·t   ⇒   |Δp| ≤ ∫|v| ≤ speed·√3·T²/2
+        // 이 테스트가 지키는 것은 여전히 같은 성질(폭주/NaN 없음)이고, 상한만 옳은 것으로 바꿨다.
         let speed: Float = 300, T: Float = 5.0
         var sim = ParticleSimulator(def: turbDef(speedMin: speed, speedMax: speed, timeScale: 200), seed: 3)
         var last: [Particle] = []
         let steps = 150
         for _ in 0..<steps { last = sim.step(T / Float(steps)) }
         let disp = simd_length(last[0].pos - SIMD3<Float>(25, 25, 0))
-        XCTAssertLessThanOrEqual(disp, speed * sqrtf(3) * T * 1.01)
+        XCTAssertLessThanOrEqual(disp, speed * sqrtf(3) * T * T / 2 * 1.01)
         XCTAssertFalse(last[0].pos.x.isNaN)
         XCTAssertFalse(last[0].pos.y.isNaN)
+    }
+
+    /// 위치 이류와 속도 누적을 **결정적으로** 가르는 회귀.
+    ///
+    /// 이 정의에는 중력도 drag 도 velocityRandom 도 없다 — 즉 난류를 빼면 `vel` 을 건드리는 것이
+    /// 하나도 없다. 그래서 판정이 깔끔하다: 위치에 이류하던 종전 구현에서 `vel` 은 **정확히 0**이고,
+    /// 속도에 누적하는 실물 방식에서는 0이 아니다(실물 0x140242d3a–0x140242d54 가
+    /// `[sys+0x2c8/0x2d0/0x2d8]` 에 `addps`+`movups`).
+    ///
+    /// 변위 크기로 재려 하면 안 된다 — 노이즈장이 시간에 따라 변하고 가속이 위치를 되먹이므로
+    /// 단일 실현의 변위는 카오스적이라 T 에 대해 단조롭지 않다(실측으로 확인했다).
+    func testTurbulenceAccumulatesIntoVelocityNotPosition() {
+        var sim = ParticleSimulator(def: turbDef(speedMin: 200, speedMax: 200, timeScale: 5), seed: 11)
+        var last: [Particle] = []
+        for _ in 0..<120 { last = sim.step(1.0 / 60.0) }
+        XCTAssertGreaterThan(simd_length(last[0].vel), 1.0, "난류가 속도에 누적되지 않았다")
     }
 
     func testTurbulenceSpeedScalesDisplacement() {

@@ -507,30 +507,34 @@ public struct ParticleSimulator {
         } else {
             particles[k].pos += (particles[k].vel + remapAddVel) * speedFactor * dt
         }
-        // 난류. **[2026-08-20 — 확인된 발산] 실물은 위치가 아니라 속도에 더한다** —
-        // 핸들러가 위치 배열(`[sys+0x2b0/0x2b8/0x2c0]`, 0x1402429dd–)은 노이즈 좌표용으로만 읽고
-        // 꼬리(0x140242d3a–0x140242d54)에서 **속도 배열**(`[sys+0x2c8/0x2d0/0x2d8]`,
-        // 0x1402429f7–0x140242a05)에 `addps` 로 누적한다. 여기 이류는 그 발산이다.
-        // 배수 사슬이 절반만 추적돼 있어(ParticleOperator.turbulence 주석) 아직 안 옮겼다 —
-        // 속도 누적은 매 프레임 쌓이므로 배수를 틀리면 발산한다.
+        // 난류 — **속도에 누적한다.** 종전에는 위치에 이류시켰다(아래 ①). 그 차이는 양적이 아니라
+        // 정성적이다: 이류는 `|변위| ≤ speed·dt` 로 프레임마다 유계라 수명이 아무리 길어도 변위가
+        // `speed·lifetime` 을 못 넘지만, 속도 누적은 랜덤워크(`≈ speed·dt·√n`)라 변위가 **초선형**으로
+        // 자란다. 수명이 긴 시스템일수록 격차가 커진다.
         //
-        // 현행(이류)의 성질: vel 에 누적하지 않으므로 |변위| ≤ turbSpeed·dt 로 유계(속도 상한
-        // 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
+        // ① 실물 핸들러는 위치 배열(0x1402429dd–0x1402429eb, `rcx/rdx/r8`)을 노이즈 좌표용으로만 읽고,
+        //    꼬리 0x140242d3a–0x140242d54 에서 **속도 배열**(0x1402429f7–0x140242a05, `r15/r12/r13`)에
+        //    `addps`+`movups` 한다. 이 저장소에서 직접 확인했다.
+        // ② 종전 주석이 "배수 사슬이 절반만 추적돼 있어 아직 안 옮겼다" 를 이유로 미뤄 뒀는데,
+        //    그 사슬을 전부 닫았다 — `turbulenceAcceleration` 주석의 ②~⑤ 참조. dt 는 정확히 한 번,
+        //    선형으로만 들어간다(실물은 `dtScaled`; ≥40fps 에서 `dt` 와 같으므로 여기선 `dt`).
+        // ③ 속도 상한은 걸지 않는다. 실물도 `capvelocity` 오퍼레이터가 있을 때만 건다.
+        //
         // F628: 전 turbulence 오퍼레이터 누적 — 첫 번째는 turbSpeed/turbPhase(기존 비트동일),
         // 2번째 이후는 turbExtra(다중 오퍼레이터 시스템만 신규 드로).
         if !turbulences.isEmpty {
             let nTurb = lifeFraction(particles[k])
             if particles[k].turbSpeed > 0 {
-                let v = turbulenceVelocity(turbulences[0], pos: particles[k].pos, speed: particles[k].turbSpeed,
-                                           phase: particles[k].turbPhase, time: time)
+                let a = turbulenceAcceleration(turbulences[0], pos: particles[k].pos, speed: particles[k].turbSpeed,
+                                               phase: particles[k].turbPhase, time: time)
                 // 가산 델타 자리의 가중은 그대로 곱이다(`old + w·delta`).
-                particles[k].pos += v * (dt * turbulences[0].blend.weight(lifeFraction: nTurb))
+                particles[k].vel += a * (dt * turbulences[0].blend.weight(lifeFraction: nTurb))
             }
             for (ti, extra) in particles[k].turbExtra.enumerated() where extra.speed > 0 {
                 guard ti + 1 < turbulences.count else { break }
-                let v = turbulenceVelocity(turbulences[ti + 1], pos: particles[k].pos, speed: extra.speed,
-                                           phase: extra.phase, time: time)
-                particles[k].pos += v * (dt * turbulences[ti + 1].blend.weight(lifeFraction: nTurb))
+                let a = turbulenceAcceleration(turbulences[ti + 1], pos: particles[k].pos, speed: extra.speed,
+                                               phase: extra.phase, time: time)
+                particles[k].vel += a * (dt * turbulences[ti + 1].blend.weight(lifeFraction: nTurb))
             }
         }
         // maintaindistancetocontrolpoint: CP 중심 반지름 `distance` 구면으로 위치를 당긴다.
@@ -775,11 +779,14 @@ public struct ParticleSimulator {
         }
         if let t = turbulences.first {
             p.turbSpeed = rng.range(t.smin, t.smax)
-            p.turbPhase = rng.range(t.pmin, t.pmax)
+            // 실물 위상은 `r·(pmax − pmin)` 이다 — `pmin` 을 더하지 않는다(0x140242a70 에 `mulps` 만
+            // 있고 `pmin`(레코드 +0x70)을 읽는 명령이 핸들러에 없다). `range(0, Δ)` 로 쓰면 드로 수와
+            // 소비 순서가 그대로라 다른 오퍼레이터의 난수열이 밀리지 않는다.
+            p.turbPhase = rng.range(0, t.pmax - t.pmin)
             // F628: 2번째 이후 오퍼레이터도 스폰 샘플(단일 오퍼레이터 시스템은 드로 0 → 비트동일).
             for extra in turbulences.dropFirst() {
                 p.turbExtra.append((speed: rng.range(extra.smin, extra.smax),
-                                    phase: rng.range(extra.pmin, extra.pmax)))
+                                    phase: rng.range(0, extra.pmax - extra.pmin)))
             }
         }
         if !remaps.isEmpty { p.remapPhase = rng.range(0, 100) }
@@ -1328,24 +1335,46 @@ public struct ParticleSimulator {
 
     // MARK: - 난류 흐름장
 
-    /// timescale(1..1000) → 노이즈 시간좌표 스케일. 중간값(~50)에서 ~0.5 cycle/s 의 부드러운 흐름이
-    /// 되도록 잡은 상수(bit-exact 아님 — 결정성/유계성/자연스러움만 요구). timeScale 부재(0)면 정적장.
-    private static let turbTimeK: Float = 0.01
-
-    /// 노이즈 흐름장 속도([-speed, +speed]^3, mask 게이트). pos·scale 로 공간 주파수, time·timeScale 로
-    /// 시간 진화, phase 로 파티클별 위상 오프셋을 준다. 세 성분은 큰 오프셋으로 탈상관한 값노이즈.
-    private func turbulenceVelocity(_ t: (smin: Float, smax: Float, scale: Float, timeScale: Float,
-                                         mask: SIMD3<Float>, pmin: Float, pmax: Float,
-                                         blend: BlendWindow),
-                                    pos: SIMD3<Float>, speed: Float, phase: Float, time: Float) -> SIMD3<Float> {
-        let base = pos * t.scale + SIMD3(phase, phase, phase)
-        let tw = time * t.timeScale * Self.turbTimeK
-        let timeVec = SIMD3<Float>(tw * 0.7, tw * 1.3, tw)
-        // 성분별 탈상관 오프셋(임의 큰 상수).
-        let vx = valueNoise3(base + timeVec)
-        let vy = valueNoise3(base + timeVec + SIMD3(19.3, 71.7, 5.1))
-        let vz = valueNoise3(base + timeVec + SIMD3(53.2, 11.9, 97.4))
-        return SIMD3(vx * t.mask.x, vy * t.mask.y, vz * t.mask.z) * speed
+    /// 난류 **가속도**(속도에 더할 값). 실물 핸들러 0x14024295a–0x140242d5a 를 그대로 옮긴 것 —
+    /// 아래 다섯 가지를 전부 이 저장소에서 직접 디스어셈블해 확인했다.
+    ///
+    /// ① **누적 대상은 속도다.** 프리헤더가 위치 배열 `[sys+0x2b0/0x2b8/0x2c0]` 을 `rcx/rdx/r8` 로
+    ///    (0x1402429dd–0x1402429eb), 속도 배열 `[sys+0x2c8/0x2d0/0x2d8]` 을 `r15/r12/r13` 으로
+    ///    (0x1402429f7–0x140242a05) 잡는다. 꼬리(0x140242d3a–0x140242d54)의 `addps`+`movups` 대상은
+    ///    **`r15/r12/r13`** — 위치는 노이즈 좌표를 만드는 데만 읽는다.
+    /// ② **위상은 스칼라 하나**이고 세 축이 공유한다. `xmm6 = r·(pmax−pmin)`(0x140242a70) 에
+    ///    `xmm14`(= t·timescale)를 더한다(0x140242a81). **`pmin` 은 더하지 않는다** — 실물이 아예
+    ///    안 읽는다(레코드 +0x70 에 심기는 하지만 핸들러가 참조하지 않는다).
+    /// ③ **좌표는 `(pos + 위상) · scale`** 이다. 위상을 먼저 더하고(0x140242a93/97/9c) 그 뒤에
+    ///    세 성분 모두 같은 `xmm12`(= scale, 0x1402429f2)를 곱한다(0x140242aa1/a5/a9). 종전 구현은
+    ///    `pos·scale + 위상` 이라 위상이 scale 을 안 받았고, 시간항에 임의 상수 `turbTimeK = 0.01` 과
+    ///    축별 배분 `(0.7, 1.3, 1.0)` 을 얹고 있었다 — 실물엔 둘 다 없다. `scale ≠ 0.01` 인 씬에서
+    ///    시간 진화 속도가 그만큼 틀렸다는 뜻이다.
+    /// ④ **세 성분은 같은 좌표 삼중항의 순환치환**으로 탈상관한다(가산 오프셋 없음). mask=7 분기의
+    ///    호출 셋(0x140242c73/c86/c7e, 0x140242ca5/cbc/cb8, 0x140242ce6/cea)과 결과 적재
+    ///    (0x140242caa→xmm9→velX, 0x140242cd3→xmm10→velY, 0x140242cf9→xmm0→velZ)를 맞춰 보면
+    ///        aX = N(cz, cx, cy) · aY = N(cy, cz, cx) · aZ = N(cx, cy, cz)
+    ///    종전의 큰 상수 오프셋 `(19.3,71.7,5.1)`/`(53.2,11.9,97.4)` 은 근거 없는 임의값이었다.
+    /// ⑤ **배수 사슬에 숨은 항이 없다.** `mask ⊙ dtScaled` 는 루프 밖에서 한 번 굳히고
+    ///    (0x1402429cf/0x140242a14/0x140242a37 → `[rbp+0x70]`/`[rbp]`/`[rbp+0x10]`), 노이즈에 곱한 뒤
+    ///    (0x140242cfc/d0f/d18) 마지막에 speed(`xmm11`)를 곱한다(0x140242d2e/32/36). 전부 스칼라 곱이라
+    ///    순서는 산술적으로 무관하다 — 중요한 것은 dt 가 **정확히 한 번, 선형으로만** 들어간다는 것.
+    ///
+    /// 노이즈 커널 자체는 여전히 다르다(실물은 Gustavson 3D 심플렉스 ×32 @0x1400fd010, 여기는 값노이즈).
+    /// 커널 교체는 별건이다 — 이 함수가 고치는 것은 **좌표·배수·누적 대상**이고, 그 셋이 궤적의
+    /// 정성적 성질(유계 이류 → 랜덤워크)을 결정한다.
+    private func turbulenceAcceleration(_ t: (smin: Float, smax: Float, scale: Float, timeScale: Float,
+                                              mask: SIMD3<Float>, pmin: Float, pmax: Float,
+                                              blend: BlendWindow),
+                                        pos: SIMD3<Float>, speed: Float, phase: Float, time: Float) -> SIMD3<Float> {
+        // ②③: ph 는 세 축 공통 스칼라, 좌표는 (pos + ph)·scale.
+        let ph = phase + time * t.timeScale
+        let c = (pos + SIMD3(repeating: ph)) * t.scale
+        // ④: 같은 삼중항의 순환치환 3회.
+        let ax = valueNoise3(SIMD3(c.z, c.x, c.y))
+        let ay = valueNoise3(SIMD3(c.y, c.z, c.x))
+        let az = valueNoise3(SIMD3(c.x, c.y, c.z))
+        return SIMD3(ax * t.mask.x, ay * t.mask.y, az * t.mask.z) * speed
     }
 
     // MARK: - 헬퍼
