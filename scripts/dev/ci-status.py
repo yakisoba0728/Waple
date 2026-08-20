@@ -221,6 +221,11 @@ def main():
     ap.add_argument("--jobs", action="store_true", help="실패(없으면 최신) 실행의 잡/실패 스텝")
     ap.add_argument("--tests", action="store_true",
                     help="--jobs 에 잡별 테스트 집계를 붙인다(release 의 숨은 실패를 드러낸다)")
+    ap.add_argument("--sha", default=None,
+                    help="이 커밋의 실행을 본다(앞 7자 이상). 새 푸시가 목록을 밀어낸 뒤에도 "
+                         "과거 실패를 열어볼 수 있다 — 없으면 실패→CI→맨위 순으로 고른다")
+    ap.add_argument("--run", type=int, default=None, metavar="RUN_ID",
+                    help="실행 ID 를 직접 지목한다(--sha 보다 우선)")
     ap.add_argument("--log", type=int, default=None, metavar="JOB_ID")
     ap.add_argument("--keep", type=int, default=40, help="--log 가 남길 줄 수")
     ap.add_argument("--watch", action="store_true", help="완료까지 폴링")
@@ -245,13 +250,30 @@ def main():
         print("  ... %d개 진행 중, %ds 후 재확인" % (len(pending), a.interval), flush=True)
         time.sleep(a.interval)
 
-    if (a.jobs or a.tests) and runs:
-        # 실패가 있으면 그것을, 없으면 **CI 실행**을 보여준다 — 기본값이 runs[0](대개 spec)이면
-        # 잡 상세가 파이썬 게이트 한 줄뿐이라 쓸모가 없다.
-        target = (next((r for r in runs if r.get("conclusion") == "failure"), None)
-                  or next((r for r in runs if r["name"] == "CI"), None)
-                  or runs[0])
-        show_jobs(a.repo, target["id"], tests=a.tests)
+    if (a.jobs or a.tests) and (runs or a.run):
+        # 지목이 있으면 그것을, 없으면 실패 → CI → 맨 위 순으로 고른다. 기본값이 runs[0]
+        # (대개 spec)이면 잡 상세가 파이썬 게이트 한 줄뿐이라 쓸모가 없다.
+        #
+        # --sha/--run 이 필요한 이유: 새 커밋을 밀면 그 실행이 목록 맨 위로 와서 "실패가 있으면
+        # 그것" 규칙이 **진행 중인 새 실행**에 가려진다. 방금 무엇이 깨졌는지 보려던 참에
+        # 정확히 못 보게 되는 자리다(실제로 겪었다).
+        if a.run:
+            show_jobs(a.repo, a.run, tests=a.tests)
+        else:
+            pick = None
+            if a.sha:
+                pick = next((r for r in runs if r["head_sha"].startswith(a.sha)
+                             and r["name"] == "CI"), None) \
+                    or next((r for r in runs if r["head_sha"].startswith(a.sha)), None)
+                if pick is None:
+                    print("  --sha %s 에 해당하는 실행이 최근 %d건 안에 없다 — --limit 을 키워라"
+                          % (a.sha, a.limit))
+            if pick is None and not a.sha:
+                pick = (next((r for r in runs if r.get("conclusion") == "failure"), None)
+                        or next((r for r in runs if r["name"] == "CI"), None)
+                        or runs[0])
+            if pick:
+                show_jobs(a.repo, pick["id"], tests=a.tests)
 
     if not runs:
         return 0
