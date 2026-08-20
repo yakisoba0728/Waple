@@ -241,7 +241,22 @@ public enum ParticleOperator: Equatable {
                 centerForce: Float = 0, ring: VortexRing? = nil, flags: Int = 0)
     /// 결정적 노이즈 흐름장 난류. 실물키(정찰 55인스턴스): speedmin/speedmax(파티클별 속도 범위),
     /// scale(공간 주파수), timescale(시간 진화 속도), mask(축별 게이트 "x y z"),
-    /// phasemin/phasemax(파티클별 위상 오프셋). 노이즈장 속도로 위치를 이류(advection)한다(vel 미누적 → 유계).
+    /// phasemin/phasemax(파티클별 위상 오프셋).
+    ///
+    /// **[2026-08-20 — 확인된 발산, 아직 안 고침] 실물은 위치가 아니라 속도에 더한다.**
+    /// 핸들러 프리앰블이 잡는 포인터가 그것을 못박는다(0x1402429dd–0x140242a05):
+    ///   `rcx/rdx/r8  = [sys+0x2b0/0x2b8/0x2c0]` = **위치** — 노이즈 좌표를 만드는 데만 읽는다
+    ///   `r15/r12/r13 = [sys+0x2c8/0x2d0/0x2d8]` = **속도** — 꼬리에서 여기에 누적한다
+    /// 꼬리 0x140242d3a–0x140242d54: `addps xmm, [r15+rdi*4]` → `movups [r15+rdi*4], xmm` ×3.
+    /// 즉 난류는 **가속(force)** 이고, 저작 순서상 movement 의 적분 뒤에 실리므로 다음 프레임
+    /// 변위에 나타나며 뒤따르는 `reducemovementnearcontrolpoint` 의 감쇠를 그대로 받는다.
+    ///
+    /// Waple 은 `pos += v·dt`(위치 이류)로 구현하고 종전 주석은 "vel 미누적 → 유계" 라고
+    /// **정반대**를 적고 있었다. 배수 사슬은 절반만 추적했다 — `xmm11 = 파티클별난수 ×
+    /// (speed × audioResponse)`(0x140242a60·0x140242a75, 오디오는 0x14022a8a0 = 구간 MAX)까지는
+    /// 확실하고, dtScaled(진입 시 xmm8, 0x1402429cb)가 어디서 곱해지는지는 미확정이다.
+    /// **속도 누적은 매 프레임 쌓이므로 배수를 틀리면 발산한다** — 배수까지 확정되고 화면을
+    /// 볼 수 있는 라운드에서 함께 고친다(fixplan §4). 지금은 거짓 주석만 걷어낸다.
     /// 부재 기본값은 주입기 0x1401beb80 에서 온다 — timescale 은 **0(정적장)이 아니다**
     /// (직교 20.0 / 원근 1.0). 파스 지점 주석 참조.
     case turbulence(speedMin: Float, speedMax: Float, scale: Float, timeScale: Float,

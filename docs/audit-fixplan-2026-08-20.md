@@ -99,16 +99,19 @@ Mac 세션 몫이다.
 
 ### 2-A. 바이트로 확정됐고 도달이 있는 것
 
+**B2·B3·B4·B6·B7·B8 은 착지했다**(각 행의 `[착지]`). 남은 것은 B1(골든 재베이스라인과
+묶여야 함)과 B5(비트 의미 미측정)뿐이다.
+
 | # | 항목 | 실측 | 비용 |
 |---|---|---|---|
 | B1 | `positionoffsetrandom` 이 **layerimage 의 키**(`offsetmin`/`offsetmax`)로 파스된다 — 실물 키는 `directions`·`sign`·`scale`·`distance`·`timescale`·`octaves` | 동봉 5/5 인스턴스가 `distance`/`scale`/`timescale` 만 쓴다 → **전건 무동작 오프셋**이면서 RNG 를 3회 소모해 난수열까지 민다 | 중 — RNG 시퀀스가 바뀌므로 **골든 재베이스라인과 반드시 묶어야** 한다 |
-| B2 | `audioprocessingexponent` 기본 1 → **2.0**, `audioprocessingfrequencyend` 기본 15 → **1** | 주입기 0x1401c1e20 | 소 |
-| B3 | 파티클 오디오 축약이 **MAX** 인데 Waple 은 평균(`sum/(fmax−fmin+1)`) | 셰이더 경로(`CreateAudioResponse`)는 평균이 맞고 **파티클 경로만** MAX | 소 — 두 경로를 갈라야 한다 |
-| B4 | 컨트롤포인트가 `id` 로 인덱싱된다 | 실물은 `for i in 0..<8` **배열 위치**가 슬롯이고 `"id"` 를 읽지 않는다. 동봉은 전건 `id == index` 라 도달 0이지만, `id` 없는 CP 를 Waple 은 통째로 버린다 | 소 |
+| B2 | `audioprocessingexponent` 기본 1 → **2.0**, `audioprocessingfrequencyend` 기본 15 → **1** | 주입기 0x1401c1e20 | 소 · **[착지]** |
+| B3 | 파티클 오디오 축약이 **MAX** 인데 Waple 은 평균(`sum/(fmax−fmin+1)`) | 셰이더 경로(`CreateAudioResponse`)는 평균이 맞고 **파티클 경로만** MAX | 소 — 두 경로를 갈라야 한다 · **[착지]** |
+| B4 | 컨트롤포인트가 `id` 로 인덱싱된다 | 실물은 `for i in 0..<8` **배열 위치**가 슬롯이고 `"id"` 를 읽지 않는다. 동봉은 전건 `id == index` 라 도달 0이지만, `id` 없는 CP 를 Waple 은 통째로 버린다 | 소 · **[착지]** |
 | B5 | `controlpoint[].flags`(비-0 41건) · `parentcontrolpoint`(17건) 미파스 | 주입·저장은 확정. **비트 의미는 미측정** — 파스·보존까지만 | 소 |
-| B6 | `maxcount` 부재 기본 100 | 실물은 주입기가 없고 `isNumeric` 실패 시 **0** | 소(도달 0) |
-| B7 | 자식 `maxcount` 부재 기본 `trigger == .always ? 1 : 루트값` | 실물은 상수 **10**(0x1401c16f5). 동봉 자식 선언의 72%가 생략 | 소 |
-| B8 | `renderer` 키 부재 → `.unsupported("none")` | 실물은 `isArray` 실패 시 `{name:"sprite"}` 를 **주입**한다. 빈 배열 `[]` 은 isArray 를 통과해 렌더러 0개 — 두 경우가 다르다 | 소 |
+| B6 | `maxcount` 부재 기본 100 | 실물은 주입기가 없고 `isNumeric` 실패 시 **0** | 소(도달 0) · **[착지]** |
+| B7 | 자식 `maxcount` 부재 기본 `trigger == .always ? 1 : 루트값` | 실물은 상수 **10**(0x1401c16f5). 동봉 자식 선언의 72%가 생략 | 소 · **[착지]** |
+| B8 | `renderer` 키 부재 → `.unsupported("none")` | 실물은 `isArray` 실패 시 `{name:"sprite"}` 를 **주입**한다. 빈 배열 `[]` 은 isArray 를 통과해 렌더러 0개 — 두 경우가 다르다 | 소 · **[착지]** |
 
 ### 2-B. 인용 규약 — `.rdata` 파일 오프셋을 RVA 로 적은 곳
 
@@ -124,21 +127,31 @@ Mac 세션 몫이다.
 - `AudioSpectrum.swift` 55/60/65 — 필드 오프셋이 8 작다(+0xEC/+0xF0/+0xF4/+0xF8)
 - `Model3D.swift:58` RVA 오기
 
-**처방은 개별 정정이 아니라 게이트다.** `@0x4[89]XXXX` 형태의 인용을 뽑아 그 VA 의 C 문자열이
-실제로 주석이 말하는 키와 일치하는지 검사하는 관문을 두면 이 부류가 다시 생기지 않는다.
-(그 검사는 바이너리를 요구하므로 CI 에서는 스킵하고 로컬 도구로 두는 편이 현실적이다.)
+**[착지] 처방은 개별 정정이 아니라 게이트다.** `scripts/dev/check-rdata-citations.py` 가
+각 `@0x4XXXXX` 인용에 대해 직접 해석과 `+0x1200` 해석의 C 문자열을 둘 다 읽어 주변 산문과
+대조한다. 바이너리를 요구하므로 CI 게이트가 아니라 로컬 도구이고, `WE_BINARY` 가 없으면
+검사하지 않았다는 사실을 화면에 찍는다.
+
+그 도구로 재보니 위 목록은 부분집합이었다 — **Sources/Tests 의 32건이 전건 오프셋**이었다.
+전부 +0x1200 로 옮기고 옮긴 뒤 각 주소가 정말 그 키를 가리키는지 다시 읽어 확인했다(19건은
+주변 산문에 키 이름이 그대로 있어 자동 확인, 나머지는 `직접=` 열로 육안 확인). 두 건은
+오프셋 오류에 더해 주소까지 어긋나 있었다(`minperiodicdelay`/`maxperiodicdelay` — 물음표가
+붙은 추정에 클러스터 주소를 갖다 붙인 것, 실측 @0x48f3f0 / @0x48f408).
 
 ### 2-C. 관문 자체의 구멍 (감사가 게이트를 겨눈 결과)
 
+**C1·C2·C3·C4·C6·C7 착지.** 남은 것은 C5(`check_effect_texture_resolution` 의 0바이트 PNG
+통과)와 C8(`measure_mdl_deep`/`measure_render_pass` 의 자기 입력 가드)다.
+
 | # | 게이트 | 구멍 | 처방 |
 |---|---|---|---|
-| C1 | `specfmt.dump` 축소 가드 | **부분 축소를 전건 통과**시킨다: dict 는 `for k in old if k in new` 라 사라진 키를 순회조차 않고, list 는 `zip` 이라 꼬리를 안 보고, 타입 변경(list→int, int→null)은 `isinstance` 쌍에 안 걸린다. 커밋된 정본을 40KB→8KB 로 깎아도 통과한다 | 키 소멸·길이 축소·타입 변경을 축소로 판정. `shrink_report` 는 `entries` 부재를 `[]` 가 아니라 **거부**. 양성 대조에 그 세 형태 추가(없으면 이 수정도 다시 썩는다) |
-| C2 | `check_spec_shrink_guard.py` | 양성 대조 7건이 전부 `→0`/`→빔` 모양이라 C1 의 사각을 **인증**한다. 관문 우회 탐지도 리터럴 `json.dump(` 하나뿐이라 `Path(p).write_text(json.dumps(...))` 가 샌다 | 위와 짝. 우회 탐지는 `ast` 로 |
-| C3 | `check_int_narrowing.py` | GUARDS 를 **줄 전체**에서 찾아 같은 줄 주석에 가드 이름만 있으면 면제된다. R4 는 총수라 정직한 수정으로 카운트를 낮춘 뒤 위험한 좁힘을 끼워 넣을 수 있다 | 주석 제거 후 **호출 단위**로 판정, R4 를 파일별 딕셔너리로 |
-| C4 | `check_swift_enum_patterns.py` | 이름 중복 제외가 **원격 스위치**다 — 아무 데나 `enum __Decoy { case translated(a: Int) }` 를 두면 그 위반이 사라진다. 지금도 `velocity`/`speed` 2종이 제외돼 있고 그 이름을 쓰는 패턴이 6곳 | 케이스 키를 `타입명.케이스명` 으로 정규화, 제외 목록을 기준선으로 고정 |
+| C1 | `specfmt.dump` 축소 가드 | **부분 축소를 전건 통과**시킨다: dict 는 `for k in old if k in new` 라 사라진 키를 순회조차 않고, list 는 `zip` 이라 꼬리를 안 보고, 타입 변경(list→int, int→null)은 `isinstance` 쌍에 안 걸린다. 커밋된 정본을 40KB→8KB 로 깎아도 통과한다 | 키 소멸·**형 변경**을 축소로 판정(길이 축소는 갭 목록이 줄어드는 정상 동작이라 일부러 제외). `shrink_report` 는 `entries` 부재를 `[]` 가 아니라 **거부**. 양성 대조에 그 세 형태 추가(없으면 이 수정도 다시 썩는다) · **[착지]** |
+| C2 | `check_spec_shrink_guard.py` | 양성 대조 7건이 전부 `→0`/`→빔` 모양이라 C1 의 사각을 **인증**한다. 관문 우회 탐지도 리터럴 `json.dump(` 하나뿐이라 `Path(p).write_text(json.dumps(...))` 가 샌다 | 부분 축소 5종을 양성 대조에, 실사 대조에 두 건 추가. 우회 탐지에 `write_text(json.dumps` · `.write(json.dumps` · 공백 낀 `json.dump (` 추가 · **[일부 착지]** — `ast` 기반은 아니다 |
+| C3 | `check_int_narrowing.py` | GUARDS 를 **줄 전체**에서 찾아 같은 줄 주석에 가드 이름만 있으면 면제된다. R4 는 총수라 정직한 수정으로 카운트를 낮춘 뒤 위험한 좁힘을 끼워 넣을 수 있다 | 줄 끝 주석을 잘라내고(문자열 안 `//` 는 보존) R1 을 방향 무관으로 · **[일부 착지]** — 호출 단위 판정과 R4 파일별 딕셔너리는 안 했다(기준선 343 불변 확인) |
+| C4 | `check_swift_enum_patterns.py` | 이름 중복 제외가 **원격 스위치**다 — 아무 데나 `enum __Decoy { case translated(a: Int) }` 를 두면 그 위반이 사라진다. 지금도 `velocity`/`speed` 2종이 제외돼 있고 그 이름을 쓰는 패턴이 6곳 | 제외된 이름을 화면에 찍고 기준선 `{velocity, speed}` 로 고정(늘면 실패) · **[일부 착지]** — `타입명.케이스명` 정규화는 안 했다. 그 둘의 사각지대는 그대로 남아 있다 |
 | C5 | `check_effect_texture_resolution.py` | **0바이트 PNG 가 통과**하고, 머티리얼 JSON 파스 실패는 조용히 스킵되며, 참조 수 하한이 없어 세 파일을 다 깨면 `참조 0건 전건 해석` rc=0 | 파스 실패를 실패로, 참조 수 하한, PNG 시그니처+IHDR 확인 |
-| C6 | `validate.py` | 근거 ref 의 **줄 번호를 검증하지 않는다** — 153줄 파일에 `:204` 를 달아도 오류 0. `entries: []` 도 통과 | 줄 번호가 파일 길이를 넘으면 실패, 문서별 `entries` 최소 개수 기준선 |
-| C7 | `ci-status.py` | `⚠ CI 없음인데 코드 변경`·`실행 없음`·release 레인 숨은 테스트 실패가 전부 **rc=0** 이라 `until` 관용구가 그 자리에서 성공으로 빠진다 | 그 셋을 rc=1 로, `--tests` 일 때 테스트 실패를 rc 에 반영 |
+| C6 | `validate.py` | 근거 ref 의 **줄 번호를 검증하지 않는다** — 153줄 파일에 `:204` 를 달아도 오류 0. `entries: []` 도 통과 | 줄 번호가 파일 길이를 넘으면 오류(+ 유닛 2건) · **[일부 착지]** — 문서별 `entries` 최소 개수 기준선은 안 했다(`entries: []` 는 축소 가드가 막는다) |
+| C7 | `ci-status.py` | `⚠ CI 없음인데 코드 변경`·`실행 없음`·release 레인 숨은 테스트 실패가 전부 **rc=0** 이라 `until` 관용구가 그 자리에서 성공으로 빠진다 | 그 셋을 rc=1 로, `--tests` 일 때 테스트 실패를 rc 에 반영 · **[착지]** |
 | C8 | `measure_mdl_deep.py`·`measure_render_pass.py` | 자기 입력 가드가 없어 부분 입력에서 **끝까지 돌아 쓰기까지 간다** — 유일한 방어선이 C1 의 축소 가드다 | 다른 11개처럼 입력 도수 검사 추가 |
 
 ### 2-D. 생성기 자체의 버그 (재실행해도 그대로 재생산된다)
@@ -171,8 +184,18 @@ Mac 세션 몫이다.
 아래는 **근거가 제시됐으나 이 문서를 쓰는 시점에 내가 바이트로 되짚지 않은** 것들이다.
 착수 전에 §0 의 교훈(지배 관계 확인)을 적용해 각각 재확인해야 한다.
 
-- **turbulence 가 위치가 아니라 속도에 더한다**(꼬리 저장이 `[sys+0x2c8/0x2d0/0x2d8]`).
-  사실이면 파이프라인 위치까지 바뀌는 큰 변경이다. 도달 4건(thunderbolt 계열).
+- **turbulence 가 위치가 아니라 속도에 더한다** — **재확인 완료(2026-08-20).** 핸들러
+  프리앰블이 `rcx/rdx/r8 = [sys+0x2b0/0x2b8/0x2c0]`(위치, 노이즈 좌표용 읽기 전용)과
+  `r15/r12/r13 = [sys+0x2c8/0x2d0/0x2d8]`(속도)을 각각 잡고(0x1402429dd–0x140242a05),
+  꼬리 0x140242d3a–0x140242d54 가 **속도 쪽에만** `addps` → `movups` 한다. Waple 의 위치
+  이류는 발산이 맞다.
+  **아직 안 고쳤다 — 배수 사슬이 절반만 추적됐기 때문이다.**
+  `xmm11 = 파티클별난수 × (speed × audioResponse)`(0x140242a60·0x140242a75, 오디오는
+  0x14022a8a0 = 구간 MAX)까지는 확실하고, 진입 시 xmm8 로 들어온 dtScaled 가 어디서
+  곱해지는지가 미확정이다. 속도 누적은 매 프레임 쌓이므로 배수를 틀리면 발산한다 —
+  배수 확정 + 화면 확인이 가능한 라운드에서 함께 옮긴다. 거짓 주석(`vel 미누적 → 유계`)은
+  양쪽(`ParticleOperator.turbulence` · `ParticleSimulator` 적용부)에서 걷어냈다.
+  도달 22 인스턴스(활성 페이드 창 4건 포함, thunderbolt 계열).
 - **oscillateposition 이 절대 오프셋이 아니라 프레임별 증분**(`sin θ − sin θ'` 을 위치 배열에
   누적). 가중이 변하는 구간에서 갈린다.
 - **오실레이터 위상식** — 실물 인자가 `(phase + age초)·freq` 이고 파티클별 난수 **하나**가
