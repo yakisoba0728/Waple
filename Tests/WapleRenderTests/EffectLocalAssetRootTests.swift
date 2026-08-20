@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 @testable import WapleCore
 @testable import WapleRender
 
@@ -151,5 +152,85 @@ final class ScenePassOverrideIndexTests: XCTestCase {
             XCTAssertTrue(SceneRenderer.sceneOverride(forRawPassIndex: i, in: scene).constants.isEmpty,
                           "후행 swap 패스는 범위 밖 — 오버라이드 없음")
         }
+    }
+}
+
+/// X-⑨ 조회 **순서** 회귀 가드. 이 순서를 한 번 틀렸고 CI 가 잡았다.
+///
+/// 처음 구현은 `quietAssetData("<root>/<name>")` → `quietAssetData("<name>")` 였다. 그런데
+/// `quietAssetData` 자체가 **pkg → 베이스 자산** 순으로 훑기 때문에, 첫 조회가 pkg 에서
+/// 빗나가면 곧장 베이스의 `<root>/<name>` 을 집어 **pkg 의 `<name>` 을 영원히 가린다.**
+///
+/// 실제 증상: 워크샵 pkg 가 자기 `shaders/effects/opacity.frag` 를 실었는데 동봉 스톡
+/// opacity 셰이더가 이겼다(`SceneTranslatedEffectRenderTests.testShippedGLSLWinsOverHandPort`
+/// 가 빨갛게 잡았다 — 씬이 빨강을 그려야 하는데 흰색이 나왔다).
+///
+/// 올바른 순서는 넷이다:
+///   ① pkg `<root>/<name>`  ② pkg `<name>`  ③ base `<root>/<name>`  ④ base `<name>`
+/// 씬이 실어 보낸 자산을 번들 자산이 덮는 일은 어떤 경우에도 없어야 한다.
+final class EffectScopedLookupOrderTests: XCTestCase {
+
+    /// pkg 가 팩 루트 경로로만 자산을 실었고 베이스에는 **이펙트-로컬 경로로** 같은 이름이
+    /// 있을 때, pkg 것이 이겨야 한다. 이게 깨지면 워크샵 커스텀 셰이더가 통째로 무시된다.
+    func testPackageRootBeatsBundledEffectLocalPath() throws {
+        // 동봉 팩에 실제로 존재하는 이펙트-로컬 셰이더를 고른다(스톡 opacity).
+        let dir = try XCTUnwrap(BaseAssetsSettings.bundledAssetsDirectory)
+        let bundledLocal = dir.appendingPathComponent("effects/opacity/shaders/effects/opacity.frag")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: bundledLocal.path),
+                          "동봉 스톡 opacity 의 로컬 셰이더가 없다 — 이 대조의 전제가 바뀌었다")
+
+        let renderer = makeRenderer()
+        let marker = Data("// PKG-WINS-MARKER\n".utf8)
+        let pkg = try makePackage([("shaders/effects/opacity.frag", marker)])
+        let got = renderer.effectScopedData("shaders/effects/opacity.frag",
+                                            root: "effects/opacity", package: pkg)
+        XCTAssertEqual(got, marker,
+                       "pkg 가 팩 루트에 실은 셰이더가 동봉 이펙트-로컬 셰이더에 가려졌다")
+    }
+
+    /// pkg 가 아무것도 안 실었으면 베이스로 내려가고, 거기서는 이펙트-로컬이 팩 루트보다 앞선다.
+    func testFallsBackToBundledAndPrefersLocalRootThere() throws {
+        let dir = try XCTUnwrap(BaseAssetsSettings.bundledAssetsDirectory)
+        let bundledLocal = dir.appendingPathComponent("effects/opacity/shaders/effects/opacity.frag")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: bundledLocal.path))
+
+        let renderer = makeRenderer()
+        let empty = try makePackage([])
+        let got = renderer.effectScopedData("shaders/effects/opacity.frag",
+                                            root: "effects/opacity", package: empty)
+        XCTAssertEqual(got, try Data(contentsOf: bundledLocal),
+                       "pkg 가 비면 동봉 이펙트-로컬 셰이더로 내려가야 한다")
+    }
+
+    /// root 가 nil 이면 종전 경로 그대로(무회귀).
+    func testNilRootBehavesLikePlainLookup() throws {
+        let renderer = makeRenderer()
+        let marker = Data("// ROOTLESS\n".utf8)
+        let pkg = try makePackage([("shaders/effects/opacity.frag", marker)])
+        XCTAssertEqual(renderer.effectScopedData("shaders/effects/opacity.frag", root: nil, package: pkg),
+                       marker)
+        XCTAssertEqual(renderer.effectScopedData("shaders/effects/opacity.frag", root: "", package: pkg),
+                       marker, "빈 문자열 루트도 nil 과 같게 다뤄야 한다")
+    }
+
+    /// `assetBaseRoots` 는 `mount` 가 심는다 — 마운트 없이 조회만 시험하므로 직접 채운다.
+    /// 안 채우면 베이스 폴백이 통째로 죽어서 "pkg 가 이겼다" 가 거짓 통과가 된다.
+    private func makeRenderer() -> SceneRenderer {
+        let r = SceneRenderer()
+        r.assetBaseRoots = SceneRenderer.resolvedAssetBaseRoots()
+        return r
+    }
+
+    private func makePackage(_ files: [(String, Data)]) throws -> ScenePackage {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("waple_scoped_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        for (name, data) in files {
+            let url = dir.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try data.write(to: url)
+        }
+        return try XCTUnwrap(ScenePackage.fromDirectory(dir))
     }
 }

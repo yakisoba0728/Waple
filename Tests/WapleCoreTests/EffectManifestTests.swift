@@ -98,7 +98,7 @@ final class EffectManifestTests: XCTestCase {
     func testHugeFBOScaleDefaultsInsteadOfTrapping() throws {
         let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","scale":1e300,"format":"rgba8888"}]}"#
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
-        XCTAssertEqual(m.fbos, [EffectManifest.FBO(name: "_rt", scale: 1)])
+        XCTAssertEqual(m.fbos, [EffectManifest.FBO(name: "_rt", scale: 1, format: .rgba8888)])
     }
 
     /// X-①: 실물 cursorripple `_rt_EightBuffer1/2` {fit:512} — 정사각 고정 크기(scale 무관).

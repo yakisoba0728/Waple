@@ -1078,8 +1078,41 @@ extension SceneRenderer {
     /// 셰이더를 싣는 형태)는 무회귀다. 로컬 루트에 자산이 있으면 그건 저작자가 그 이펙트용으로
     /// 실은 것이므로 우선하는 게 맞다(자기 `common.h` 를 싣는 경우 포함).
     func effectScopedData(_ name: String, root: String?, package: ScenePackage) -> Data? {
-        if let r = root, !r.isEmpty, let d = quietAssetData("\(r)/\(name)", package: package) { return d }
-        return quietAssetData(name, package: package)
+        let scoped: String? = (root?.isEmpty == false) ? "\(root!)/\(name)" : nil
+        // **조회 순서가 이 함수의 전부다.** 씬 pkg 가 베이스 자산을 **항상** 이기고,
+        // 각 출처 안에서만 이펙트-로컬 루트가 팩 루트보다 앞선다.
+        //
+        //   ① pkg  : <root>/<name>      ② pkg  : <name>
+        //   ③ base : <root>/<name>      ④ base : <name>
+        //
+        // 처음엔 `quietAssetData(<root>/<name>)` → `quietAssetData(<name>)` 로 썼는데 **틀렸다.**
+        // `quietAssetData` 자체가 pkg→base 순으로 훑기 때문에, ①이 pkg 에서 빗나가면 곧장 base 의
+        // ③을 집어 pkg 의 ②를 영원히 가린다. 실제로 그 순간 워크샵 pkg 가 자기 `shaders/effects/
+        // opacity.frag` 를 실어도 **동봉 스톡 opacity 셰이더가 이겼다**(회귀 테스트
+        // `testShippedGLSLWinsOverHandPort` 가 이걸 잡았다). 씬이 실어 보낸 자산을 번들 자산이
+        // 덮는 것은 어떤 경우에도 옳지 않다.
+        if let s = scoped, let d = packageData(s, package: package) { return d }
+        if let d = packageData(name, package: package) { return d }
+        if let s = scoped, let d = baseAssetData(s) { return d }
+        return baseAssetData(name)
+    }
+
+    /// `quietAssetData` 의 **베이스 루트 부분만** — pkg 조회는 하지 않는다.
+    /// `effectScopedData` 가 pkg/base 우선순위를 직접 엮으려면 두 단계가 분리돼 있어야 한다.
+    func baseAssetData(_ name: String) -> Data? {
+        // 다중 루트(사용자 설치본 → 동봉본). `.rejected` 는 즉시 nil — 경로 이탈을 다음 루트로
+        // 흘려보내면 거기서 성공할 수 있다(probeAssetData·sharedAssetProbe 와 같은 규약).
+        for base in assetBaseRoots {
+            switch baseAssetURLProbe(for: name, root: base) {
+            case .url(let url):
+                if let d = try? Data(contentsOf: url) { return d }
+            case .rejected:
+                return nil
+            case .missing:
+                break
+            }
+        }
+        return nil
     }
 
     /// 이펙트가 자기 자산을 두는 루트 = `effect.json` 이 있는 디렉터리.
@@ -1095,19 +1128,7 @@ extension SceneRenderer {
 
     func quietAssetData(_ name: String, package: ScenePackage) -> Data? {
         if let d = packageData(name, package: package) { return d }
-        // 다중 루트(사용자 설치본 → 동봉본). `.rejected` 는 즉시 nil — 경로 이탈을 다음 루트로
-        // 흘려보내면 거기서 성공할 수 있다(probeAssetData·sharedAssetProbe 와 같은 규약).
-        for base in assetBaseRoots {
-            switch baseAssetURLProbe(for: name, root: base) {
-            case .url(let url):
-                if let d = try? Data(contentsOf: url) { return d }
-            case .rejected:
-                return nil
-            case .missing:
-                break
-            }
-        }
-        return nil
+        return baseAssetData(name)
     }
 
     /// pkg 전용 에셋 조회(베이스 팩 폴터 없음) — 커스텀 셰이더 소스처럼 씬 번들만 인정해야 하는 프로브용.
