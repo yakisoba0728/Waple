@@ -49,12 +49,12 @@ public enum Initializer: Equatable {
                         hueSteps: Int = 0, hueNoise: Float = 0, satNoise: Float = 0, valNoise: Float = 0)
     // hueSteps = 실물키 huesteps(코퍼스 실측 2/4, 이산 색상환 스텝 수 — [추정] 구간 등분 인덱스 선택,
     // 0=연속 랜덤 레거시). hueNoise/satNoise/valNoise = 실물키 huenoise/saturationnoise/valuenoise
-    // (@0x48e3c0–0x48e3e0 — [추정] 스폰 위치 값노이즈로 채널 t 산출, 0=부재 시 레거시 rng 드로
+    // (@0x48f5c0–0x48e3e0 — [추정] 스폰 위치 값노이즈로 채널 t 산출, 0=부재 시 레거시 rng 드로
     // — 무키 씬 비트동일).
     /// 스프라이트시트 프레임 선택(스폰 시 확정). between=false: CP0 기준 각도 → 시퀀스,
     /// true: CP0→CP1 구간 투영 → 시퀀스. count=시퀀스 길이(시트 프레임 수와 다를 수 있음 — mirror 폴드).
     case mapSequence(count: Float, mirror: Bool, between: Bool)
-    /// 스폰 위치 오프셋 랜덤(실물키 positionoffsetrandom 의 offsetmin/offsetmax @0x48e380/398).
+    /// 스폰 위치 오프셋 랜덤(실물키 positionoffsetrandom 의 offsetmin/offsetmax @0x48f580/398).
     /// [보존/추측] velocityRandom 과 동형 성분별 독립 t.
     case positionOffsetRandom(offsetMin: Vec3, offsetMax: Vec3)
     /// 파스·보존 전용(이벤트 시스템 연동 보류 — 시뮬레이터 무시, RNG 드로 0).
@@ -93,7 +93,7 @@ public func sheetFrameIndex(sequence: Float, frameCount: Int, mirror: Bool) -> I
     return s % frameCount
 }
 
-/// vortex_v2 ring 키. **[2026-08-20 주소 정정]** 종전 주석의 `@0x48e8a8–0x48e8e0` 은 틀렸다 —
+/// vortex_v2 ring 키. **[2026-08-20 주소 정정]** 종전 주석의 `@0x48faa8–0x48e8e0` 은 틀렸다 —
 /// 그 자리는 `fogstartdensity`/`camerafade` 류의 카메라·포그 키다. 실측 RVA 는
 /// ringradius 0x48faa8 · ringpulldistance 0x48fab8 · ringpullforce 0x48fad0 · ringwidth 0x48fae0.
 /// (같은 주석 블록의 다른 주소들도 같은 폭으로 어긋나 있었다 — 아래 `case vortex` 참조.)
@@ -281,7 +281,7 @@ public enum RemapOutput: Equatable {
     case speed(min: Float, max: Float)
 }
 
-/// remapvalue 출력 동사(wallpaper64.exe 스트링 @0x490dd0–0x490eb0). set*=덮어쓰기, add*=가산
+/// remapvalue 출력 동사(wallpaper64.exe 스트링 @0x491fd0–0x490eb0). set*=덮어쓰기, add*=가산
 /// ([추정] rotation/angularvelocity 는 프레임 독립을 위해 dt 곱 가산율), multiply*=곱.
 /// opacity/color/size 는 표시 파생(display 단계) 적용, velocity/speed/rotation/angularvelocity 는
 /// 스텝 적분 단계 적용. 레거시 문자열 매핑: "velocity"→setVelocity, "speed"→multiplySpeed.
@@ -301,7 +301,7 @@ public enum RemapVerb: String, Equatable {
     case addAngularVelocity = "addangularvelocity"
 }
 
-/// remapvalue 입력 소스(wallpaper64.exe 스트링 @0x490c78–0x490d60). [추정] 시계열 류(layertime/
+/// remapvalue 입력 소스(wallpaper64.exe 스트링 @0x491e78–0x490d60). [추정] 시계열 류(layertime/
 /// runtime/timeofday)는 헤드리스 결정성 우선으로 시뮬 누적시간 근사. directiontocontrolpoint 는
 /// component 키로 성분 선택(기본 x).
 public enum RemapInput: String, Equatable {
@@ -326,7 +326,7 @@ public enum RemapOperation: String, Equatable {
 }
 
 /// remapvalue transformfunction(엔진 어휘). [추정] simplexnoise 는 코퍼스에 심플렉스 구현이 없어
-/// 단일 옥타브 값노이즈 근사. fbmnoise 는 transformoctaves(@0x48e6d8, 기본 3) 옥타브 합성.
+/// 단일 옥타브 값노이즈 근사. fbmnoise 는 transformoctaves(@0x48f8d8, 기본 3) 옥타브 합성.
 public enum RemapTransform: String, Equatable {
     case triangle, simplexnoise, fbmnoise
 }
@@ -685,7 +685,7 @@ public struct AudioProcessing: Equatable {
     /// **[2026-08-20] 기본값을 셰이더 경로에서 유추하지 않는다.** 종전엔 "셰이더 오디오 경로
     /// (SceneRendererResources.audioParams)와 정합" 이라며 freqEnd 15 · exponent 1 을 썼는데,
     /// 파티클 경로는 자체 주입기(0x1401c1e20)를 가지고 값이 다르다. 실측은 아래 각 자리에.
-    /// bounds 문자열 `"0.8 1.0"` 의 RVA 는 0x48f3b8 이다 — 종전 `@0x48e1b8` 은 파일 오프셋이고
+    /// bounds 문자열 `"0.8 1.0"` 의 RVA 는 0x48f3b8 이다 — 종전 `@0x48f3b8` 은 파일 오프셋이고
     /// (+0x1200), "귀속 추정" 표기도 과소였다(태그 4 · len 7 로 확정된다).
     static func parse(_ o: [String: Any]) -> AudioProcessing? {
         guard let mode = strictInt(o["audioprocessingmode"]), mode >= 1, mode <= 3 else { return nil }
@@ -716,7 +716,7 @@ private func bounds2(_ v: Any?) -> SIMD2<Float>? {
 
 /// rope/ropetrail 렌더러 확장 키. 파스·모델 노출 전용 — 렌더 소비는 WapleRender 배선 보류.
 ///
-/// **[2026-08-20 전면 정정]** 종전 주석의 스트링 클러스터 `@0x48e9b0–0x48ea18` 은 파일
+/// **[2026-08-20 전면 정정]** 종전 주석의 스트링 클러스터 `@0x48fbb0–0x48ea18` 은 파일
 /// 오프셋이었다(RVA 는 +0x1200 = `0x48fbb0–0x48fc18`; `0x48e9b0` 을 RVA 로 읽으면
 /// `"winddirection"` 에 착지한다). 타입·기본값·귀속도 셋 다 틀려 있었다.
 ///
@@ -757,9 +757,10 @@ public struct RopeRenderOptions: Equatable {
 
 // MARK: - 주기(periodic) 방출
 
-/// 이미터 주기 방출(wallpaper64.exe 스트링: minperiodicduration @0x48e1c0, maxperiodicduration
-/// @0x48e1d8, minperiodicdelay @0x48e228?, maxperiodicdelay, maxtoemitperperiod @0x48e2b8 —
-/// 0x48e1c0–0x48e2b8 클러스터). [추정] 의미론(WE 에디터 어휘 규약): ON 윈도우(duration 구간 랜덤)
+/// 이미터 주기 방출. RVA 는 전부 실측이다(종전엔 파일 오프셋을 RVA 로 적어 +0x1200 어긋났고,
+/// delay 둘은 물음표가 붙은 추정이었다 — `scripts/dev/check-rdata-citations.py` 참조):
+/// minperiodicduration @0x48f3c0 · maxperiodicduration @0x48f3d8 · minperiodicdelay @0x48f3f0 ·
+/// maxperiodicdelay @0x48f408 · maxtoemitperperiod @0x48f4b8 (0x48f3c0–0x48f4b8 클러스터). [추정] 의미론(WE 에디터 어휘 규약): ON 윈도우(duration 구간 랜덤)
 /// 동안 rate/burst 방출(창당 maxtoemitperperiod 상한, 0=무상한) → OFF 딜레이(delay 구간 랜덤) → 반복.
 /// rate==0 && burst==0 이면 창 내에 maxtoemitperperiod 를 균등 분배(암시 rate = quota/duration).
 /// 키 부재 이미터(nil)는 기존 방출 경로(RNG 드로 순서 포함)와 비트동일.
@@ -827,7 +828,7 @@ public struct ParticleSystemDef: Equatable {
     public var orientation: ParticleOrientation = .screen
     /// F630: mapsequencearoundcontrolpoint "axis"(회전 평면 선택, 기본 z축=XY 평면 레거시).
     public var mapSequenceAxis: Vec3? = nil
-    /// rope/ropetrail 렌더러 확장 키(@0x48e9b0–0x48ea18) — 모델 노출 전용(렌더 소비 보류).
+    /// rope/ropetrail 렌더러 확장 키(@0x48fbb0–0x48ea18) — 모델 노출 전용(렌더 소비 보류).
     public var ropeOptions: RopeRenderOptions? = nil
 
     public init(emitters: [Emitter], initializers: [Initializer], operators: [ParticleOperator],
@@ -1367,7 +1368,7 @@ public struct ParticleSystemDef: Equatable {
         // F620/F627: speedmin/speedmax·box distancemin 도 emitters 와 병렬로 함께 append.
         var emitterSpeed: [SIMD2<Float>] = []
         var boxDistanceMin: [Vec3?] = []
-        // 주기 방출(minperiodicduration…maxtoemitperperiod @0x48e1c0–0x48e2b8)도 emitters 와 병렬.
+        // 주기 방출(minperiodicduration…maxtoemitperperiod @0x48f3c0–0x48e2b8)도 emitters 와 병렬.
         var emitterPeriodic: [PeriodicEmission?] = []
         /// **[2026-08-20] "[추정]" 을 뗀다 — 이미터 base 파서(0x1401c1c70)를 끝까지 읽었다.**
         ///

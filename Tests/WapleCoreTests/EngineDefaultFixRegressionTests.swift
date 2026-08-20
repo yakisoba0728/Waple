@@ -2,7 +2,7 @@ import XCTest
 @testable import WapleCore
 
 /// WE 2.8.42 대조 확정 발산 수정 회귀 — 라이트 감쇠 HLSL lane(CPU 오라클) + 파티클 디폴트 3종.
-/// 근거: WE 는 #define HLSL 1 로 크로스컴파일(wallpaper64.exe 스트링 @0x485698)되므로 실행 수식은
+/// 근거: WE 는 #define HLSL 1 로 크로스컴파일(wallpaper64.exe 스트링 @0x486898)되므로 실행 수식은
 /// HLSL lane `pow(falloff + 1.17549435e-38, exponent)`(common_pbr_2.h:265-266); 파티클 디폴트는
 /// wallpaper64.exe 스트링 테이블.
 final class EngineDefaultFixRegressionTests: XCTestCase {
@@ -38,8 +38,8 @@ final class EngineDefaultFixRegressionTests: XCTestCase {
 
     // MARK: - 파티클 디폴트 3종 (키 부재 시 파싱 결과)
 
-    /// sphererandom directions 부재 기본 (1,1,0) — wallpaper64.exe 스트링 "1 1 0" @0x48e288
-    /// ("directions" 키 @0x48e290 에 바로 인접).
+    /// sphererandom directions 부재 기본 (1,1,0) — wallpaper64.exe 스트링 "1 1 0" @0x48f488
+    /// ("directions" 키 @0x48f490 에 바로 인접).
     func testSphereEmitterDirectionsDefaultIsXYPlane() throws {
         let def = ParticleSystemDef.parse(
             json(#"{"emitter":[{"name":"sphererandom","rate":1}],"renderer":[{"name":"sprite"}],"maxcount":10}"#),
@@ -52,7 +52,7 @@ final class EngineDefaultFixRegressionTests: XCTestCase {
         XCTAssertEqual(directions.z, 0, accuracy: 1e-6, "엔진 디폴트는 XY 평면 방출(1,1,0)")
     }
 
-    /// rotationrandom max 부재 기본 (0,0,2π) — wallpaper64.exe 스트링 "0 0 6.28318530717" @0x48e498
+    /// rotationrandom max 부재 기본 (0,0,2π) — wallpaper64.exe 스트링 "0 0 6.28318530717" @0x48f698
     /// (키 귀속은 인접 추정).
     func testRotationRandomDefaultMaxIsFullTurnZ() throws {
         let def = ParticleSystemDef.parse(
@@ -69,7 +69,7 @@ final class EngineDefaultFixRegressionTests: XCTestCase {
         XCTAssertEqual(max.z, 6.28318530717, accuracy: 1e-5, "z 회전만 풀턴(2π) 랜덤이 엔진 디폴트")
     }
 
-    /// audioprocessingbounds 부재 기본 [0.8,1.0] — wallpaper64.exe 스트링 "0.8 1.0" @0x48e1b8
+    /// audioprocessingbounds 부재 기본 [0.8,1.0] — wallpaper64.exe 스트링 "0.8 1.0" @0x48f3b8
     /// (audioprocessing* 스트링 클러스터 내; 키 귀속은 인접 추정).
     func testAudioProcessingBoundsDefault() throws {
         let def = ParticleSystemDef.parse(

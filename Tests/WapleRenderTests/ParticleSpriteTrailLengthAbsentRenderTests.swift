@@ -150,15 +150,16 @@ final class ParticleSpriteTrailLengthAbsentRenderTests: XCTestCase {
     /// `minlength` 를 저작한 씬(rainfall.json 의 `minlength: 5`)이 바로 저속 납작해짐을 막는
     /// 장치다 — 그 키가 왜 존재하는지도 이 계약이 설명한다.
     func testLengthAbsentStretchFollowsShaderClamp() throws {
-        func span(_ speed: Float) throws -> Float? {
+        func span(_ speed: Float) throws -> Int? {
             try renderHalfSpan(keys: SpriteTrailKeys(length: nil, minLength: nil, maxLength: 6),
                                sizePx: 100, speedPxPerSec: speed)
         }
         guard let slow = try span(10), let fast = try span(800) else { throw XCTSkip("no Metal device") }
-        XCTAssertEqual(slow, 25, accuracy: 6,
-                       "speed 10 → clamp(0.5,0,6)=0.5 → 100·0.5·0.5 = 25px — 실측 \(slow)px")
-        XCTAssertEqual(fast, 300, accuracy: 12,
-                       "speed 800 → maxlength 6 포화 → 100·0.5·6 = 300px — 실측 \(fast)px")
+        // 반폭은 픽셀 정수라 accuracy 오버로드가 없다 — 범위로 못박는다(래스터 경계 ±몇 px).
+        XCTAssertTrue((19...31).contains(slow),
+                      "speed 10 → clamp(0.5,0,6)=0.5 → 100·0.5·0.5 = 25px — 실측 \(slow)px")
+        XCTAssertTrue((288...312).contains(fast),
+                      "speed 800 → maxlength 6 포화 → 100·0.5·6 = 300px — 실측 \(fast)px")
         // 신장이 speed 에 **의존한다**는 것 자체를 못박는다. H3 는 정확히 이 의존성을 없앴다.
         XCTAssertNotEqual(slow, fast,
                           "length 부재에도 신장은 speed 의존이다 — slow=\(slow)px fast=\(fast)px")

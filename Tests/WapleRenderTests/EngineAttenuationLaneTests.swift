@@ -6,7 +6,7 @@ import Metal
 /// CPU 오라클(ScenePBRLighting) 측은 WapleCoreTests/EngineDefaultFixRegressionTests 가 커버.
 final class EngineAttenuationLaneTests: XCTestCase {
 
-    // MARK: - 감쇠 HLSL lane (WE 는 #define HLSL 1 크로스컴파일 — wallpaper64.exe 스트링 @0x485698)
+    // MARK: - 감쇠 HLSL lane (WE 는 #define HLSL 1 크로스컴파일 — wallpaper64.exe 스트링 @0x486898)
 
     /// Mesh3DShaders: pow(falloff + 1.17549435e-38, exponent), 반경 컷오프 없음(common_pbr_2.h:265-266).
     func testMesh3DFalloffUsesHLSLLaneNoRadiusCutoff() {

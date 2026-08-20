@@ -3,12 +3,12 @@ import simd
 @testable import WapleCore
 
 /// 파티클 확장 키(wallpaper64.exe 스트링 테이블 정본 대조 갭):
-/// periodic 방출(@0x48e1c0–0x48e2b8), remapvalue 전어휘(@0x490c78–0x490eb0),
+/// periodic 방출(@0x48f3c0–0x48e2b8), remapvalue 전어휘(@0x491e78–0x490eb0),
 /// controlpointattract deletethreshold(RVA **0x48f988**), vortex 확장/vortex_v2 ring
 /// (centerforce **0x48f9f8** · ring **0x48faa8/0x48fab8/0x48fad0/0x48fae0**),
 /// — [2026-08-20] 종전 주소(0x48e788·0x48e7c8–0x48e8e0)는 전부 포그·카메라 키를 가리켰다.
-/// rope/ropetrail 렌더러 키(@0x48e9b0–0x48ea18), positionoffsetrandom(@0x48e380/398),
-/// hsvcolorrandom huesteps/노이즈 3종(@0x48e3c0–0x48e3e0).
+/// rope/ropetrail 렌더러 키(@0x48fbb0–0x48ea18), positionoffsetrandom(@0x48f580/398),
+/// hsvcolorrandom huesteps/노이즈 3종(@0x48f5c0–0x48e3e0).
 /// 시뮬 의미론은 WE 에디터 어휘 규약에 따른 [추정] — 각 테스트는 파스(키/기본값) + 행동을 단언한다.
 final class ParticleExtendedKeysTests: XCTestCase {
 

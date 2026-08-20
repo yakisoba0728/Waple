@@ -148,7 +148,7 @@ enum Mesh3DShaders {
     inline float finiteLightFalloff(float distance, float radius, float exponent) {
         if (radius <= 0.0) return 0.0;
         float falloff = clamp(1.0 - distance / radius, 0.0, 1.0);
-        // WE 2.8.42 HLSL lane(#define HLSL 1 크로스컴파일 — wallpaper64.exe 스트링 @0x485698):
+        // WE 2.8.42 HLSL lane(#define HLSL 1 크로스컴파일 — wallpaper64.exe 스트링 @0x486898):
         // pow(falloff + 1.17549435e-38, exponent), 반경 컷오프 없음. exponent=0 이면 pow(x,0)=1
         // 이라 반경 무관 전역 무감쇠가 엔진 동작(구 GLSL lane 의 hard zero 는 오이식).
         return pow(falloff + 1.17549435e-38, exponent);
