@@ -882,10 +882,22 @@ public struct PeriodicEmission: Equatable {
 
 // MARK: - 시스템 정의
 
+/// 오퍼레이터 → CP 인덱스 바인딩. `controlpointattract`/`vortex`/`maintaindistancetocontrolpoint`/
+/// `reducemovementnearcontrolpoint` 의 target 은 파스 때 CP 좌표로 **베이크**되는데, 자식 시스템의
+/// CP 가 `flags & 4` 로 부모 CP 에 부착되면 그 베이크를 **다시** 해야 한다. 그러려면 "어느
+/// 오퍼레이터가 어느 CP 를 봤는지" 를 남겨 둬야 한다.
+public struct ControlPointBinding: Equatable {
+    public let op: Int
+    public let cp: Int
+    public init(op: Int, cp: Int) { self.op = op; self.cp = cp }
+}
+
 public struct ParticleSystemDef: Equatable {
     public let emitters: [Emitter]
     public let initializers: [Initializer]
-    public let operators: [ParticleOperator]
+    /// `var` 인 이유: 자식 CP 가 `flags & 4` 로 부모 CP 에 부착되면 CP 를 베이크해 간 오퍼레이터
+    /// target 을 **재베이크**해야 한다(`controlPointBindings` 주석).
+    public var operators: [ParticleOperator]
     public let renderer: RendererKind
     public let maxCount: Int
     public let startTime: Float
@@ -893,6 +905,22 @@ public struct ParticleSystemDef: Equatable {
     public let children: [ChildLink]
     /// 컨트롤포인트 오프셋(id 0..7, 시스템 로컬 좌표). mapsequence/트리거류가 참조.
     public var controlPoints: [Vec3] = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
+    /// `controlpoint[].flags`. 실물 CP 구조체 `+0xc0`(런타임) / 디스크립터 `+0xa4`(파스).
+    /// 마스터 디스패치 0x14022e3e0 이 비트로 갈라진다 — 이 저장소에서 직접 확인한 것:
+    ///   `bt edx, 0x10` @0x14022e468 → **bit16**: 이 CP 는 엔진 갱신을 통째로 건너뛴다(remap 출력 대상)
+    ///   `test dl, 1`  @0x14022e472 → **bit0**: CP 를 마우스 포인터 위치로 구동
+    ///   `test dl, 4`  @0x14022e66e → **bit2**: CP 를 **부모 파티클 시스템**의 CP 에 부착
+    ///   `test dl, 8`  @0x14022e6b3 → **bit3**: bit2 의 하위 수정자(부모 행렬을 그대로 복사)
+    /// Waple 이 소비하는 것은 **bit2 뿐**이다 — bit0 은 헤드리스에 커서가 없고, bit3·bit16 은 동봉
+    /// 코퍼스 도달 0 이며, bit4(0x10)는 실물 런타임이 아예 읽지 않는다(동봉 관측 10건, 소비 지점 0).
+    public var controlPointFlags: [Int] = Array(repeating: 0, count: 8)
+    /// `controlpoint[].parentcontrolpoint`. **`flags & 4` 일 때만** 소비된다(0x14022e684).
+    /// 가리키는 것은 자기 배열이 아니라 **부모 시스템의 CP 배열**이다 — 실물이 부모 포인터
+    /// `[r14+0x10]` 를 잡고(0x14022e677) 그 `+0x44`(부모 CP 개수)로 경계검사한 뒤
+    /// `[r8+0x400] + idx*0xd0` 로 부모 CP 를 집는다(0x14022e695–0x14022e6a1). 자기참조가 아니다.
+    public var controlPointParent: [Int] = Array(repeating: 0, count: 8)
+    /// CP 좌표를 베이크해 간 오퍼레이터들 — 부모 CP 부착 후 재베이크에 쓴다.
+    public var controlPointBindings: [ControlPointBinding] = []
     /// 이미터별 오디오반응(emitters 와 병렬; nil=무반응). 비어 있으면 전 이미터 무반응(기존 def·테스트 호환).
     public var emitterAudio: [AudioProcessing?] = []
     /// F620: 이미터별 speedmin/speedmax(emitters 와 병렬) — 방출 방향을 따르는 초기속도
@@ -1805,16 +1833,77 @@ public struct ParticleSystemDef: Equatable {
         // 0x1401d0561·0x1401d0573 — 뒤 둘은 uint 주입기 0x1401d8280, 기본 0). Waple 은 아직
         // offset 만 소비한다 — 나머지 셋은 **의미 미측정**이라 파스도 하지 않는다(유령 필드를
         // 만드느니 안 읽는 편이 낫다. `spec` 과 fixplan §2-A B5 에 남겨 뒀다).
+        var controlPointFlags = Array(repeating: 0, count: 8)
+        var controlPointParent = Array(repeating: 0, count: 8)
         for (slot, element) in (json["controlpoint"] as? [Any] ?? []).enumerated() where slot < 8 {
             guard let cp = element as? [String: Any] else { continue }   // 비-오브젝트는 그 자리를 비운다
             if let off = pvec3(cp["offset"]) { controlPoints[slot] = off }
+            // 둘 다 uint 주입기(0x1401d8280)로 기본 0 — 부재는 "값 없음" 이 아니라 0 이다.
+            controlPointFlags[slot] = pint(cp["flags"]) ?? 0
+            controlPointParent[slot] = pint(cp["parentcontrolpoint"]) ?? 0
         }
         // 인스턴스 CP 오버라이드(절대 대체)는 attract target 재베이크 **전에** — 재베이크 후면 attract 가
         // 프리셋 CP 를 계속 본다(실측: CP 오버라이드 51오브젝트 중 22가 attract 보유).
         if let ov = instanceOverride {
             for (id, off) in ov.controlPoints where id >= 0 && id < 8 { controlPoints[id] = off }
         }
-        for (i, cpid) in attractCPIds {
+        let cpBindings = attractCPIds.map { ControlPointBinding(op: $0.op, cp: $0.cp) }
+        Self.bakeControlPointTargets(&ops, bindings: cpBindings, controlPoints: controlPoints)
+        // `flags & 4` 인 **자식** CP 를 부모 CP 로 갈아끼우고 그 자식의 target 을 재베이크한다.
+        // 실물은 매 프레임 4×4 를 합성하지만 Waple 의 CP 는 정적이라 로드 시 1회로 족하다.
+        // 순서가 중요하다 — 부모의 `controlPoints` 가 인스턴스 오버라이드까지 반영해 확정된 **뒤**여야
+        // 자식이 최종값을 본다(바로 위 오버라이드 블록과 같은 이유).
+        children = children.map { link in
+            var childDef = link.def
+            var changed = false
+            for i in 0..<min(8, childDef.controlPointFlags.count)
+            where childDef.controlPointFlags[i] & 4 != 0 {
+                let parentIdx = childDef.controlPointParent[i]
+                // 실물 경계검사 `cmp [r8+0x44], eax; jbe` @0x14022e68b — 범위 밖이면 부착하지 않는다.
+                guard parentIdx >= 0, parentIdx < controlPoints.count else { continue }
+                childDef.controlPoints[i] = controlPoints[parentIdx]
+                changed = true
+            }
+            guard changed else { return link }
+            Self.bakeControlPointTargets(&childDef.operators, bindings: childDef.controlPointBindings,
+                                         controlPoints: childDef.controlPoints)
+            return ChildLink(def: childDef, trigger: link.trigger, maxInstances: link.maxInstances,
+                             probability: link.probability, origin: link.origin)
+        }
+
+        var def = ParticleSystemDef(
+            emitters: emitters, initializers: inits, operators: ops, renderer: renderer,
+            maxCount: maxCount, startTime: pfloat(json["starttime"]) ?? 0, material: material,
+            children: children)
+        def.controlPoints = controlPoints
+        // 인스턴스 오버라이드는 emitters 를 .map(순서/개수 보존)만 하므로 emitterAudio 병렬성 유지.
+        def.emitterAudio = emitterAudio
+        def.emitterSpeed = emitterSpeed
+        def.boxDistanceMin = boxDistanceMin
+        def.emitterPeriodic = emitterPeriodic
+        def.vortexAudio = vortexAudio
+        def.operatorBlends = operatorBlends
+        def.flags = pint(json["flags"]) ?? 0                                        // F623
+        // F622: animationmode("sequence"/"randomframe")·sequencemultiplier(배속, 기본 1).
+        def.animationMode = (json["animationmode"] as? String).flatMap { ParticleAnimationMode(rawValue: $0) }
+        def.sequenceMultiplier = pfloat(json["sequencemultiplier"]) ?? 1
+        def.orientation = orientation
+        def.mapSequenceAxis = mapSeqAxis
+        def.ropeOptions = ropeOpts
+        def.controlPointFlags = controlPointFlags
+        def.controlPointParent = controlPointParent
+        def.controlPointBindings = cpBindings
+        return def
+    }
+
+    /// CP 좌표를 오퍼레이터 target 으로 굽는다. 파스 시 1회, 그리고 자식이 `flags & 4` 로 부모 CP 를
+    /// 물려받았을 때 1회 더 — 그래서 함수로 뺐다.
+    private static func bakeControlPointTargets(_ ops: inout [ParticleOperator],
+                                                bindings: [ControlPointBinding],
+                                                controlPoints: [Vec3]) {
+        for b in bindings {
+            let (i, cpid) = (b.op, b.cp)
+            guard i < ops.count, cpid >= 0, cpid < controlPoints.count else { continue }
             switch ops[i] {
             case let .controlPointAttract(scale, threshold, _, deleteThreshold, flags):
                 ops[i] = .controlPointAttract(scale: scale, threshold: threshold,
@@ -1839,27 +1928,6 @@ public struct ParticleSystemDef: Equatable {
                 break
             }
         }
-
-        var def = ParticleSystemDef(
-            emitters: emitters, initializers: inits, operators: ops, renderer: renderer,
-            maxCount: maxCount, startTime: pfloat(json["starttime"]) ?? 0, material: material,
-            children: children)
-        def.controlPoints = controlPoints
-        // 인스턴스 오버라이드는 emitters 를 .map(순서/개수 보존)만 하므로 emitterAudio 병렬성 유지.
-        def.emitterAudio = emitterAudio
-        def.emitterSpeed = emitterSpeed
-        def.boxDistanceMin = boxDistanceMin
-        def.emitterPeriodic = emitterPeriodic
-        def.vortexAudio = vortexAudio
-        def.operatorBlends = operatorBlends
-        def.flags = pint(json["flags"]) ?? 0                                        // F623
-        // F622: animationmode("sequence"/"randomframe")·sequencemultiplier(배속, 기본 1).
-        def.animationMode = (json["animationmode"] as? String).flatMap { ParticleAnimationMode(rawValue: $0) }
-        def.sequenceMultiplier = pfloat(json["sequencemultiplier"]) ?? 1
-        def.orientation = orientation
-        def.mapSequenceAxis = mapSeqAxis
-        def.ropeOptions = ropeOpts
-        return def
     }
 }
 
