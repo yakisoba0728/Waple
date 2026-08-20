@@ -1120,6 +1120,13 @@ public struct ParticleSimulator {
                     var sepCnt: Float = 0, nCnt: Float = 0
                     let pi = particles[i].pos, vi = particles[i].vel
                     for j in 0..<count where j != i {
+                        // 실물은 이웃 후보를 **생존 마스크로 거른다**: `mov rsi,[rbp+0x50]`(lifetime
+                        // 배열, 0x1402442cd) → `movups xmm0,[rsi+r8*4]` → `cmpneqps xmm0, 0`
+                        // (0x1402442f4) → `[rbp+0x1e0]` 에 담아 **분리 마스크와 이웃 마스크 양쪽에**
+                        // AND 한다(0x1402443e0 · 0x140244401). Waple 은 배열을 압축해서 대부분
+                        // 무해하지만, `lifetimerandom(min:0,max:0)` 로 lifetime 0 인 입자가
+                        // 한 스텝 존재할 수 있고 그때 실물과 갈린다.
+                        guard particles[j].lifetime != 0 else { continue }
                         let d = pi - particles[j].pos
                         let l2 = simd_length_squared(d)
                         guard l2 != 0 else { continue }   // 실물 `cmpneqps xmm2, 0` — 자기 자신 제외

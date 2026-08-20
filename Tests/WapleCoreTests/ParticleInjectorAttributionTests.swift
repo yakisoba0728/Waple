@@ -442,4 +442,28 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         XCTAssertGreaterThan(velX(sepThr: 1000), 0, "임계 안 — 서로 밀어낸다")
         XCTAssertEqual(velX(sepThr: 0.001), 0, accuracy: 1e-5, "임계 밖 — 무작용")
     }
+
+    /// 실물은 이웃 후보를 **`lifetime != 0` 마스크로 거른다**(0x1402442cd → 0x1402442f4 →
+    /// `[rbp+0x1e0]`, 0x1402443e0·0x140244401 에서 분리·이웃 마스크 양쪽에 AND).
+    /// Waple 은 배열을 압축하지만 `lifetimerandom(min:0,max:0)` 이면 lifetime 0 인 입자가
+    /// 한 스텝 존재한다 — 그때 그 입자가 이웃 계산에 끼면 실물과 갈린다.
+    func testBoidsIgnoresZeroLifetimeNeighbors() {
+        func velX(neighborLifetime: Float) -> Float {
+            // 입자 둘: 하나는 정상 수명, 하나는 지정 수명. 응집만 켜서 이웃이 끌어당기는지 본다.
+            let def = ParticleSystemDef(
+                emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 10, y: 0, z: 0),
+                                rate: 0, burst: 2)],
+                initializers: [.lifetimeRandom(min: neighborLifetime, max: neighborLifetime)],
+                operators: [.boids(separationThreshold: 0, neighborThreshold: 1000, maxSpeed: 500,
+                                   separationFactor: 0, alignmentFactor: 0, cohesionFactor: 10, flags: 0)],
+                renderer: .sprite, maxCount: 4, startTime: 0, material: nil)
+            var sim = ParticleSimulator(def: def, seed: 5)
+            let a = sim.step(0.1)
+            guard a.count == 2 else { return .nan }
+            return abs(a[0].vel.x) + abs(a[1].vel.x)
+        }
+        XCTAssertGreaterThan(velX(neighborLifetime: 100), 0.01, "정상 수명이면 서로 당긴다")
+        XCTAssertEqual(velX(neighborLifetime: 0), 0, accuracy: 1e-5,
+                       "lifetime 0 은 이웃으로 세지 않는다 — 마스크가 없으면 여기서 당긴다")
+    }
 }
