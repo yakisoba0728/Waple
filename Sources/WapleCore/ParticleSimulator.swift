@@ -64,7 +64,8 @@ public struct ParticleSimulator {
     private let remaps: [CachedRemap]
     /// remapValueEx 중 표시 파생(opacity/color/size) 동사 보유 — display() 조기 우회 게이트.
     private let hasDisplayRemaps: Bool
-    private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>, delete: Bool)]
+    private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>,
+                              delete: Bool, flags: Int)]
     /// maintaindistancetocontrolpoint — CP 중심 반지름 `distance` 구면으로 **위치를 투영**한다.
     private let maintainDists: [(distance: Float, variableStrength: Float, target: SIMD3<Float>)]
     private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
@@ -138,7 +139,7 @@ public struct ParticleSimulator {
         var af: (Float, Float)? = nil
         var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
         var oa: (Float, Float, Float, Float, Float, Float)? = nil
-        var attr: [(Float, Float, SIMD3<Float>, Bool)] = []
+        var attr: [(Float, Float, SIMD3<Float>, Bool, Int)] = []
         var mdist: [(Float, Float, SIMD3<Float>)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?, Int)] = []
         // F628: 전 turbulence 오퍼레이터 누적(종전 first-wins 드롭 — 3000562427 의 지배 성분 손실).
@@ -161,8 +162,8 @@ public struct ParticleSimulator {
                 if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
             case let .oscillateAlpha(fmin, fmax, smin, smax, pmin, pmax):
                 if oa == nil { oa = (fmin, fmax, smin, smax, pmin, pmax) }
-            case let .controlPointAttract(scale, threshold, target, deleteThreshold):
-                attr.append((scale, threshold, s3(target), deleteThreshold))
+            case let .controlPointAttract(scale, threshold, target, deleteThreshold, flags):
+                attr.append((scale, threshold, s3(target), deleteThreshold, flags))
             case let .maintainDistanceToControlPoint(distance, vs, target):
                 mdist.append((distance, vs, s3(target)))
             case let .vortex(axis, dIn, dOut, sIn, sOut, offset, centerForce, _, _, _, ring, flags):
@@ -199,7 +200,7 @@ public struct ParticleSimulator {
         alphaFade = af.map { (fin: $0.0, fout: $0.1) }
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
-        attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2, delete: $0.3) }
+        attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2, delete: $0.3, flags: $0.4) }
         maintainDists = mdist.map { (distance: $0.0, variableStrength: $0.1, target: $0.2) }
         vortices = vort.indices.map { (axis: vort[$0].0, dIn: vort[$0].1, dOut: vort[$0].2,
                                         sIn: vort[$0].3, sOut: vort[$0].4, offset: vort[$0].5,
@@ -723,15 +724,39 @@ public struct ParticleSimulator {
     /// 감쇠 = min(1, threshold/dist) → 근접 시 최대, 멀수록 1/r 로 약화(폭주 억제). |scale|=px/s^2.
     /// delete=true(deletethreshold @0x48e788)이면 threshold 이내 근접 파티클을 삭제(true 반환) —
     /// 엔진 어휘상 근접 삭제가 정본, 영구 잔류+감쇠 추정은 키 부재 씬의 폴터로만 유지(무회귀).
-    private func applyAttract(_ a: (scale: Float, threshold: Float, target: SIMD3<Float>, delete: Bool),
+    /// controlpointattract. 실물 VM base 핸들러 op 0x0a @0x140241554 / 가중 변형 op 0x20
+    /// @0x14024172d 를 1:1 로 옮긴 것 — 두 핸들러는 블렌드 가중 곱 하나만 다르다.
+    /// ```
+    ///   accel  = dt · scale                    ; 0x140241738 (mulps xmm8, [r14+0x40])
+    ///   invThr = rcpps(threshold)              ; 0x14024173d
+    ///   dist   = sqrtps(|d|²)                  ; 0x1402418b0  (rsqrt 이 아니라 진짜 sqrt)
+    ///   inRange= (FLT_MIN < dist) && (dist < threshold)   ; 0x1402418b8 · 0x1402418c2
+    ///   step   = (1 − dist·invThr) · accel     ; 0x1402418ce–0x1402418d8
+    ///   if (flags&2 && dist < step) step = dist            ; 0x1402418dc–0x1402418e4
+    ///   step  *= w                             ; 0x1402418e9 (블렌드 창, 기본 w ≡ 1)
+    ///   if (inRange) vel −= (d/dist)·step      ; 0x1402418f0–0x140241929
+    /// ```
+    /// **[2026-08-20 수식 정정]** 종전의 `min(1, threshold/dist)` 는 모양이 반대였다:
+    ///  · 사거리 — 종전은 무한(threshold 밖에서도 1/r 로 계속 당김), 실물은 **하드 컷오프**
+    ///  · 근접부 — 종전은 threshold 안쪽 전부 1.0 포화, 실물은 dist→0 에서 1, threshold 에서 **0**
+    /// 즉 `threshold` 는 "포화 반경" 이 아니라 **작용 반경 겸 선형 감쇠 스케일**이다.
+    private func applyAttract(_ a: (scale: Float, threshold: Float, target: SIMD3<Float>,
+                                    delete: Bool, flags: Int),
                               to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) -> Bool {
         let d = a.target - pos
         let dist = simd_length(d)
-        if a.delete, a.threshold > 0, dist < a.threshold { return true }
-        guard dist > 1e-4 else { return false }
-        let dir = d / dist
-        let atten: Float = a.threshold > 0 ? min(1, a.threshold / dist) : 1
-        vel += dir * (a.scale * atten) * dt
+        // **[미구현 — 실물과 다르다]** 실물의 삭제는 (a) `flags & 1` 게이트(0x14024193d)를 지나고
+        // (b) 점–점이 아니라 **직전 위치→현재 위치 선분과 CP 의 최단거리 제곱**을
+        // `deletethreshold²` 와 비교하며(0x14022a2e7) (c) `age = lifetime` 대입으로 표현돼
+        // 다음 틱에 죽는다. 여기 셋 다 없다. 다만 flags 기본 2 에는 bit0 이 없고 동봉 35인스턴스가
+        // `deletethreshold` 를 전건 생략하므로 **실코퍼스에서는 양쪽 다 무동작**이다.
+        // 게이트만 먼저 맞춰 둔다 — 키만 보고 삭제하던 종전 경로가 더 위험하다.
+        if a.delete, (a.flags & 1) != 0, a.threshold > 0, dist < a.threshold { return true }
+        guard dist > 1e-4, a.threshold > 0, dist < a.threshold else { return false }
+        var step = (1 - dist / a.threshold) * a.scale * dt
+        // flags bit1 = 오버슛 클램프. 기본값 2 에 들어 있으므로 **기본은 켜져 있다**.
+        if (a.flags & 2) != 0, dist < step { step = dist }
+        vel += (d / dist) * step
         return false
     }
 

@@ -209,7 +209,8 @@ final class SceneParticleModelFixRegressionTests: XCTestCase {
         let def = def0(operators: [
             .remapValue(output: .velocity(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 0, y: 0, z: 0)),
                         fbm: false, inputScale: 1),
-            .controlPointAttract(scale: 1000, threshold: 0, target: Vec3(x: 100, y: 0, z: 0)),
+            // threshold 0 은 실물에서 **무동작**이다(`dist < threshold` 가 거짓) — 주입 기본 512 로.
+            .controlPointAttract(scale: 1000, threshold: 512, target: Vec3(x: 100, y: 0, z: 0)),
         ], maxCount: 1)
         var sim = ParticleSimulator(def: def, seed: 1)
         let s = sim.step(0.1)
