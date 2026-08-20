@@ -37,21 +37,18 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(p?.delayMin, 2); XCTAssertEqual(p?.delayMax, 4)
         XCTAssertEqual(p?.maxPerPeriod, 7)
 
-        // **[2026-08-20 정정] `maxtoemitperperiod` 단독이면 duration 은 1/1 이 아니라 0/0 이다.**
-        // 종전 1/1 은 "중립값" 추정이었다. 주기 5키에는 기본값 주입이 **없다** — 주입기
-        // 0x1401b8e09 는 rate/duration(이미터 레벨) 만 다루고, 이미터 base 파서 0x1401c1c70 은
-        // 주기 키를 부재 기본 "" → asFloat → 0 으로 읽는다.
-        //
-        // 0/0 이 무한루프를 만들지 않는 것은 확인했다 — `ParticleSimulator.stepPeriodicEmission`
-        // 의 페이즈 전이 루프가 정확히 이 경우를 위해 홉 상한 16 을 둔다.
-        // 실물 도달 0: 주기 키를 쓰는 이미터 5건이 전건 duration 을 명시한다.
+        // **[2026-08-20 정정] `maxtoemitperperiod` 단독이면 duration 2/3 · delay 1/2 다.**
+        // 종전 1/1·0/0 은 "중립값" 추정이었고, 그 사이에 내가 "주입 없음(전부 0)" 으로 한 번 더
+        // 틀렸다. 다섯 키 전부 주입 대상이다 — 이미터 주입기 진입 0x1401b8df0 의 꼬리
+        // 0x1401b907d-0x1401b90f5 가 2.0/3.0/1.0/2.0 을 심고 maxtoemitperperiod 는 정수 0 이다.
+        // 실물 도달 0: 주기 키를 쓰는 이미터 5건이 네 min/max 를 전건 명시한다.
         let partial = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"sphererandom","rate":1,"maxtoemitperperiod":6}],
          "renderer":[{"name":"sprite"}],"maxcount":100}
         """), material: nil)
         let q = partial.emitterPeriodic[0]
-        XCTAssertEqual(q?.durationMin, 0); XCTAssertEqual(q?.durationMax, 0)
-        XCTAssertEqual(q?.delayMin, 0); XCTAssertEqual(q?.delayMax, 0)
+        XCTAssertEqual(q?.durationMin, 2); XCTAssertEqual(q?.durationMax, 3)
+        XCTAssertEqual(q?.delayMin, 1); XCTAssertEqual(q?.delayMax, 2)
         XCTAssertEqual(q?.maxPerPeriod, 6)
 
         // 키 전부 부재 → nil(기존 방출 경로 비트동일).
