@@ -582,7 +582,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                                        "mediaThumbnailChanged", "mediaTimelineChanged", "mediaStatusChanged"]
         func effectsWantArtwork(_ effects: [EffectGPU]) -> Bool {
             effects.contains { eff in
-                guard case .translated(let passes, _) = eff.bind else { return false }
+                guard case .translated(let passes, _, _) = eff.bind else { return false }
                 return passes.contains { !$0.mediaArtworkSlots.isEmpty }
             }
         }
