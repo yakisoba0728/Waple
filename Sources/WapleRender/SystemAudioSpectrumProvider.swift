@@ -24,7 +24,20 @@ protocol AudioSpectrumProviding: AnyObject {
 public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding, @unchecked Sendable {
     public var onFrame: (([Float]) -> Void)?
 
-    private let fftSize = 1024
+    /// X-⑩(G-E2-01~04): 1024 → 2048.
+    ///
+    /// 원본은 `N = int(max(rate/44100, 1) · 1920)` 이고 그 설계 의도가 **빈 폭을 항상 ≈22.97 Hz
+    /// 로 고정**하는 것이다(N 은 레이트에 비례, 소비 빈 수 B 는 640 고정). 그 N 은 2의 거듭제곱이
+    /// 아니고(48 kHz 에서는 2089, 소수) vDSP 는 임의 길이 실수 FFT 를 못 하므로 길이를 그대로
+    /// 못 맞춘다. 대신 **빈 폭을 원본에 최대한 가깝게** 만든다 — 44.1 kHz 에서 2048 은 21.53 Hz 로
+    /// 원본의 0.94배다(종전 1024 는 43.07 Hz 로 1.88배였다). 밴드 경계는 정규화 좌표로 계산하고
+    /// 소비 빈 수를 원본과 같은 상한 주파수에 맞춰 잡으므로(AudioSpectrum.binCount), 남는 오차는
+    /// 밴드당 1e-4 수준이다.
+    private let fftSize = 2048
+    /// 캡처 구성 샘플레이트(`SCStreamConfiguration.sampleRate = 48000`, 아래 startCapture).
+    /// 빈 폭 = 48000/2048 = 23.4375 Hz — 원본의 22.96875 Hz 대비 **1.02배**다.
+    /// 소비 빈 수를 원본과 같은 상한(≈14677 Hz)에 맞춰 잡으므로 밴드 경계가 그만큼만 흔들린다.
+    static let captureSampleRate: Double = 48000
     private let log2n: vDSP_Length
     // create_fftsetup 실패(극히 드묾) 시 nil — 강제 언랩 대신 무음 폴백. let 이라 lock 없이 안전.
     private let fftSetup: FFTSetup?
@@ -39,7 +52,10 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
         log2n = vDSP_Length(round(log2(Double(fftSize))))
         let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
         fftSetup = setup
-        accumulator = AudioWindowAccumulator(windowSize: fftSize)
+        // X-⑩: 창은 FFT 길이가 아니라 **원본의 창 규약** `N − N/3` 이다(0x1400d1491-0x1400d14a0).
+        // 나머지 1/3 은 제로패딩이고 오버랩은 없다(FFT 직후 카운터를 0 으로 리셋).
+        // 종전엔 창 = FFT 길이라 패딩이 0 이었다 — 응답 지연이 1.5배였고 격자 보간도 없었다.
+        accumulator = AudioWindowAccumulator(windowSize: AudioSpectrum.windowLength(fftLength: fftSize))
         super.init()
         if setup == nil {
             NSLog("%@", "[Waple] FFT setup 생성 실패 — 오디오 스펙트럼은 무음으로 폴백")
@@ -95,7 +111,8 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
         guard let setup = fftSetup else { feedZeros(); return }
         guard let out = Self.analyzeWindow(l: l, r: r, fftSize: fftSize, log2n: log2n, setup: setup,
                                            threshold: AudioInputSettings.threshold,
-                                           volume: AudioInputSettings.volume) else {
+                                           volume: AudioInputSettings.volume,
+                                           sampleRate: Self.captureSampleRate) else {
             feedZeros()
             return
         }
@@ -107,11 +124,19 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     /// — 1.0 곱은 IEEE 상 정확히 항등이라 기본값 무회귀. WE 포맷: 128(64L + 64R) 채널별 FFT.
     static func analyzeWindow(l: [Float], r: [Float], fftSize: Int,
                               log2n: vDSP_Length, setup: FFTSetup,
-                              threshold: Float, volume: Float) -> [Float]? {
+                              threshold: Float, volume: Float,
+                              sampleRate: Double = AudioSpectrum.referenceRate) -> [Float]? {
         guard !isSilenced(peak: windowPeak(l, r), threshold: threshold) else { return nil }
-        let lBins = AudioSpectrum.spectrum(fromMagnitudes: magnitudes(from: l, fftSize: fftSize, log2n: log2n, setup: setup), binCount: 64)
-        let rBins = AudioSpectrum.spectrum(fromMagnitudes: magnitudes(from: r, fftSize: fftSize, log2n: log2n, setup: setup), binCount: 64)
-        return Array((lBins + rBins).prefix(128)).map { $0 * volume }
+        // X-⑩: `AudioSpectrum.spectrum` 은 **1/N 정규화 진폭**(|DFT|/N)을 받는다. vDSP 의
+        // packed-real 출력은 수학적 DFT 의 2배라 나눗수가 2N 이다. 이 규약을 안 맞추면
+        // 원본에서 유도한 절대 게인 162.56 이 의미를 잃는다.
+        let norm = 1 / (2 * Float(max(1, fftSize)))
+        let bins = AudioSpectrum.binCount(fftLength: fftSize, sampleRate: sampleRate)
+        func bands(_ ch: [Float]) -> [Float] {
+            let raw = magnitudes(from: ch, fftSize: fftSize, log2n: log2n, setup: setup)
+            return AudioSpectrum.spectrum(normalizedMagnitudes: raw.map { $0 * norm }, binCount: bins)
+        }
+        return Array((bands(l) + bands(r)).prefix(128)).map { $0 * volume }
     }
 
     /// 창 피크(채널 합산). 엔진은 raw 샘플의 부호 있는 최댓값을 0 바닥으로 잰다
@@ -391,7 +416,7 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
             config.capturesAudio = true
-            config.sampleRate = 48000
+            config.sampleRate = Int(Self.captureSampleRate)   // 스펙트럼 빈 폭 산출과 단일 소스
             config.channelCount = 2
             // 최소 비디오 캡처 비용(오디오만 쓰지만 SCStream 은 비디오 구성 요구)
             config.width = 2
