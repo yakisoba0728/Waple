@@ -24,27 +24,77 @@ public struct EffectManifest: Equatable {
     }
 
     public struct FBO: Equatable {
-        /// X-⑧(G-A5-06/G-B2-02): `fbos[].format` — 렌더 타깃 픽셀 포맷. 동봉 자산 실측으로
-        /// **fbo 선언 55/55 전건이 이 키를 갖고, 그중 27건이 rgba8 이 아니다**. 종전엔 키 자체를
-        /// 파스하지 않아 전부 rgba8Unorm 으로 할당됐다 — `fluidsimulation` 의 속도장(rg1616f)·
-        /// 압력장(r16f)은 부호와 1.0 초과를 모두 잃어(unorm 은 [0,1] 클램프 + 8비트 양자화)
-        /// **원리적으로 못 돈다**. glitter 타일 아틀라스(r8)는 채널 3개를 낭비한다.
+        /// X-⑧(G-A5-06/G-B2-02): `fbos[].format` — 렌더 타깃 픽셀 포맷.
         ///
-        /// 관측된 문자열은 5종뿐이다: `rgba8888`(28) · `rgba_backbuffer`(13) · `r16f`(8) ·
-        /// `rg1616f`(4) · `r8`(2). 미지 문자열은 nil 로 두고 소비처가 기본값(rgba8)을 쓴다 —
-        /// 미지 bind/target 을 이펙트 드롭이 아니라 폴백으로 처리한 G-A5-04 와 같은 정책이다.
+        /// 동봉 자산 실측으로 **fbo 선언 55/55 전건이 이 키를 갖고, 그중 27건이 rgba8 이 아니다**.
+        /// 종전엔 키 자체를 파스하지 않아 전부 rgba8Unorm 으로 할당됐다 — `fluidsimulation` 의
+        /// 속도장(rg1616f)·압력장(r16f)은 부호와 1.0 초과를 모두 잃어(unorm 은 [0,1] 클램프 +
+        /// 8비트 양자화) **원리적으로 못 돈다**. glitter 타일 아틀라스(r8)는 채널 3개를 낭비한다.
+        ///
+        /// **표는 원본 `wallpaper64.exe` 에서 그대로 떴다.** `0x1401e53a0` 은 데이터 테이블이 아니라
+        /// FNV-1a 해시맵을 magic-static 으로 만드는 **함수**이고(소멸자 루프 `mov ebx, 0x13` =
+        /// 19회, 엔트리 stride 0x28), initializer_list 크기 760 = 19 × 40 으로 개수가 확정된다.
+        /// 동봉 자산에 나오는 5종만 넣으면 워크샵 저작이 쓰는 나머지를 조용히 rgba8 로 떨어뜨리므로
+        /// **19종 전부** 싣는다. enum 값은 원본 값 그대로다(3·5·16·22~27 은 문자열 이름이 없는
+        /// 내부 depth/R32F 값이라 여기 없다).
+        ///
+        /// 이름으로 추론하면 틀리는 것이 둘 있다 — `rgb565` 와 `rgba8888s` 는 이름과 달리 실제
+        /// DXGI 가 **R8G8B8A8_UNORM** 이다(B5G6R5 도 SNORM 도 아니다). 그래서 GPU 포맷 해석은
+        /// 이름이 아니라 `0x1400d2a20` 의 28-way 점프 테이블(enum → DXGI 상수)에서 가져왔다.
+        ///
+        /// **sRGB 경로는 어디에도 없다** — 28개 arm 중 `_SRGB` DXGI 값(29/72/75/78/99)이 0건이다.
+        /// 즉 `rgba8888` 은 `.rgba8Unorm_srgb` 가 아니라 선형 `.rgba8Unorm` 이다.
+        ///
+        /// 미지 문자열은 **에러가 아니라 rgba8888 폴백**이다(`0x1401e546a` 가 miss 시 0 반환).
+        /// 여기서는 nil 로 두고 소비처가 같은 폴백을 한다.
         public enum Format: String, Equatable, CaseIterable {
-            /// 8비트 UNORM 4채널. 동봉 자산 최다(28/55).
+            /// enum 0 · DXGI 28 R8G8B8A8_UNORM(선형). 동봉 자산 최다(28/55).
             case rgba8888
-            /// **고정 포맷이 아니다** — 현재 백버퍼 포맷을 따라간다(HDR 이면 float, 아니면 8비트).
-            /// 소비처에서 씬의 HDR 여부로 해석하며, 이 enum 자체는 "백버퍼를 따르라" 는 지시만 담는다.
-            case rgbaBackbuffer = "rgba_backbuffer"
-            /// 16비트 float 1채널(압력·발산·컬 같은 부호 있는 스칼라장).
-            case r16f
-            /// 16비트 float 2채널(속도장 — 부호 필수).
-            case rg1616f
-            /// 8비트 UNORM 1채널(glitter 타일 마스크).
+            /// enum 1 · DXGI 28 — 24비트 포맷이 없어 RGBA8 로 승격된다.
+            case rgb888
+            /// enum 8 · DXGI 49 R8G8_UNORM.
+            case rg88
+            /// enum 9 · DXGI 61 R8_UNORM. glitter 타일 마스크.
             case r8
+            /// enum 2 · **DXGI 28** — 이름과 달리 B5G6R5(85)가 아니라 RGBA8 로 떨어진다.
+            case rgb565
+            /// enum 12 · DXGI 98 BC7_UNORM — 블록압축이라 렌더 타깃이 될 수 없다(소비처 주석 참조).
+            case bc7
+            /// enum 4 · DXGI 77 BC3_UNORM.
+            case dxt5
+            /// enum 6 · DXGI 74 BC2_UNORM.
+            case dxt3
+            /// enum 7 · DXGI 71 BC1_UNORM.
+            case dxt1
+            /// enum 14 · DXGI 10 R16G16B16A16_FLOAT.
+            case rgba16161616f
+            /// enum 15 · DXGI 10 — RGB→RGBA 승격.
+            case rgb161616f
+            /// enum 10 · DXGI 34 R16G16_FLOAT. 유체 속도장(부호 필수).
+            case rg1616f
+            /// enum 11 · DXGI 54 R16_FLOAT. 유체 압력/발산/컬.
+            case r16f
+            /// enum 17 · DXGI 11 R16G16B16A16_UNORM.
+            case rgba16161616
+            /// enum 18 · DXGI 11 — RGB→RGBA 승격.
+            case rgb161616
+            /// enum 19 · DXGI 13 R16G16B16A16_SNORM. **철자 주의: 대문자 S**(원본 .rdata 확인).
+            case rgba16161616S = "rgba16161616S"
+            /// enum 20 · DXGI 13 — RGB→RGBA 승격. **대문자 S**.
+            case rgb161616S = "rgb161616S"
+            /// enum 21 · **DXGI 28** — 이름과 달리 SNORM(31)이 아니라 UNORM 이다. **소문자 s**.
+            case rgba8888s = "rgba8888s"
+            /// enum 13 · DXGI 24 R10G10B10A2_UNORM.
+            case rgba1010102
+
+            /// 해시맵에 **없는** 두 문자열. 파서가 맵 조회 전에 `strcmp` 로 선처리해서
+            /// 백버퍼 포맷으로 치환한다(`0x1401e7562` / `0x1401e759e`):
+            ///   `rgba_backbuffer` → HDR ? enum 14(rgba16161616f) : enum 0(rgba8888)
+            ///   `rgb_backbuffer`  → HDR ? enum 15(rgb161616f)   : enum 1(rgb888)
+            /// 최종 DXGI 는 두 쌍이 각각 같다(10 / 28). 고정 포맷이 아니므로 별도 case 로 둔다 —
+            /// 소비처가 씬의 HDR 여부로 해석한다.
+            case rgbaBackbuffer = "rgba_backbuffer"
+            case rgbBackbuffer = "rgb_backbuffer"
         }
 
         public let name: String
@@ -175,7 +225,12 @@ public struct EffectManifest: Equatable {
         let maxFBOs = 64
         for f in (obj["fbos"] as? [[String: Any]]) ?? [] {
             guard fbos.count < maxFBOs else { break }
-            guard let name = f["name"] as? String else { continue }
+            // X-⑧: 원본은 `name` **또는** `format` 이 없거나 문자열이 아니면 그 FBO 선언을 통째로
+            // 버린다(`0x1401e7440`/`0x1401e744f` → `jne 0x1401e7964`, 벡터에 push 안 함).
+            // 종전엔 name 만 봤다. 동봉 자산은 55/55 가 둘 다 가지므로 실측 도달은 0 이고,
+            // 이름 키로 인덱스를 만드는 소비처는 빠진 선언을 미지 이름 폴백(G-A5-04)으로
+            // 흡수한다 — 즉 원본과 같아지면서 이펙트가 통째로 죽지는 않는다.
+            guard let name = f["name"] as? String, f["format"] is String else { continue }
             let scale = safeInt(f["scale"]) ?? 1
             // X-①: 8192 클램프 — 신뢰불가 effect.json 정수가 makeTexture 에 그대로 흘러가 과대 할당/
             // 실패를 유발하지 않도록(B1 8192 가드와 동일 원칙). 0 이하는 무시(scale 기반 폴백 유지).
@@ -188,7 +243,8 @@ public struct EffectManifest: Equatable {
             if let w = clampedFixed(f["width"]) { fixedW = w }
             if let h = clampedFixed(f["height"]) { fixedH = h }
             let uvsRepeat = (f["uvs"] as? String) == "repeat"
-            // X-⑧: 미지 포맷 문자열은 nil — 이펙트를 드롭하지 않고 소비처 기본값(rgba8)으로 간다.
+            // X-⑧: 문자열은 있으나 **표에 없는** 값이면 nil — 원본이 해시맵 miss 에서 0(rgba8888)을
+            // 돌려주는 것(`0x1401e546a`)과 같게, 소비처가 rgba8 로 폴백한다.
             let format = (f["format"] as? String).flatMap { FBO.Format(rawValue: $0) }
             let unique = (f["unique"] as? Bool) ?? false
             fbos.append(FBO(name: name, scale: Swift.max(1, scale), fixedWidth: fixedW, fixedHeight: fixedH,
@@ -199,26 +255,34 @@ public struct EffectManifest: Equatable {
         return EffectManifest(passes: passes, fbos: fbos, replacementKey: replacementKey)
     }
 
-    /// X-⑧: `clear` 값 파스. 동봉 자산은 전건 공백 구분 4수 문자열(`"0 0 0 0"`)이지만,
-    /// WE 의 색 값 표기는 성분 수가 흔들리므로(레이어 `color` 는 3수) 1~4수를 모두 받는다:
-    /// 1수 = 그레이스케일 브로드캐스트(알파 1), 3수 = RGB(알파 1), 4수 = RGBA.
-    /// 유한하지 않은 수(nan/inf)가 하나라도 있으면 **전체를 무시**한다 — 클리어 색은
-    /// MTLClearColor 로 직행하므로 신뢰불가 입력이 드라이버까지 가면 안 된다.
+    /// X-⑧: `clear` 값 파스 — **원본 파서(`0x1401e7629`-`0x1401e7777`) 그대로**.
+    ///
+    /// 처음엔 "WE 의 색 표기는 성분 수가 흔들린다"고 보고 1/3/4 성분을 다 받게 썼는데,
+    /// 원본을 뜯어 보니 그렇지 않았다. 실제 동작은 셋 다 종전 추측과 다르다:
+    ///
+    /// ① **구분자는 스페이스(0x20)뿐이다.** 파서가 `cmp byte ptr [rdi], 0x20` 만 반복한다 —
+    ///    콤마도 탭도 구분자가 아니다. 종전 구현은 콤마·탭까지 받아 원본보다 관대했다.
+    /// ② **정확히 4성분이어야 한다.** 성분이 모자라면 파싱이 `0x1401e777b` 로 빠져
+    ///    **clear 비트 자체가 서지 않는다**(즉 `"0 0"` 은 클리어 안 함). 종전 구현은 3성분을
+    ///    RGB+알파1 로, 1성분을 그레이스케일로 받아들여 원본에 없는 동작을 지어냈다.
+    /// ③ **빈 문자열은 (0,0,0,0) 으로 클리어한다.** `0x1401e7641` 이 4성분을 전부 0 으로 채우고
+    ///    그대로 clear 비트를 세운다. 종전 구현은 nil(=클리어 안 함)이었다 — 정반대다.
+    ///
+    /// 성분 순서가 RGBA 인 근거는 클리어 호출부다(`0x1401eba68`-`0x1401eba7f`):
+    /// `xmm1=[+0x14]` `xmm2=[+0x18]` `xmm3=[+0x1c]`, 5번째 인자 `[+0x20]` 순으로 넘긴다.
+    ///
+    /// 비유한값(nan/inf) 거부는 원본에 없는 우리 쪽 방어다 — 이 값은 MTLClearColor 로 직행하므로
+    /// 신뢰불가 입력이 드라이버까지 가면 안 된다. 원본은 `strtod` 결과를 그대로 쓴다.
     static func parseClearColor(_ v: Any?) -> SIMD4<Float>? {
         guard let s = v as? String else { return nil }
-        // compactMap 이 아니라 map+검사인 이유: 숫자가 아닌 토큰을 **조용히 버리면** `"0 0 0 x"` 가
-        // 3수(RGB)로 읽혀 알파가 1 로 날조된다. 하나라도 못 읽으면 전체를 무시한다.
-        let tokens = s.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "," })
+        if s.isEmpty { return SIMD4(0, 0, 0, 0) }
+        let tokens = s.split(separator: " ", omittingEmptySubsequences: true)
+        guard tokens.count == 4 else { return nil }
         let parsed = tokens.map { Float($0) }
         guard !parsed.contains(where: { $0 == nil }) else { return nil }
         let parts = parsed.map { $0! }
         guard parts.allSatisfy({ $0.isFinite }) else { return nil }
-        switch parts.count {
-        case 1: return SIMD4(parts[0], parts[0], parts[0], 1)
-        case 3: return SIMD4(parts[0], parts[1], parts[2], 1)
-        case 4: return SIMD4(parts[0], parts[1], parts[2], parts[3])
-        default: return nil
-        }
+        return SIMD4(parts[0], parts[1], parts[2], parts[3])
     }
 
     private static func safeInt(_ v: Any?) -> Int? {
