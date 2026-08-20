@@ -71,6 +71,11 @@ public struct ParticleSimulator {
                               delete: Bool, flags: Int)]
     /// maintaindistancetocontrolpoint — CP 중심 반지름 `distance` 구면으로 **위치를 투영**한다.
     private let maintainDists: [(distance: Float, variableStrength: Float, target: SIMD3<Float>)]
+    /// maintaindistancebetweencontrolpoints — 두 CP 를 잇는 선분의 **축 성분만** [0, L] 로 가둔다
+    /// (수직 성분은 그대로). 인덱스로 들고 있다가 적용 시 `def.controlPoints` 를 본다 — 형제
+    /// `maintainDists` 가 파스 때 베이크한 것과 다른 이유는, 이쪽은 **두 점의 차**가 필요해서
+    /// 한쪽만 베이크해 둘 수 없기 때문이다.
+    private let mdistBetween: [(start: Int, end: Int)]
     /// boids — 순수 입자간 상호작용(CP 무관). 전 파티클을 동시에 봐야 해서 per-particle 루프가
     /// 아니라 **별도 선행 패스**로 돈다.
     private let boidsOps: [(sepThr: Float, nbrThr: Float, maxSpeed: Float,
@@ -156,6 +161,7 @@ public struct ParticleSimulator {
         var oaBlend = BlendWindow.identity
         var attr: [(Float, Float, SIMD3<Float>, Bool, Int)] = []
         var mdist: [(Float, Float, SIMD3<Float>)] = []
+        var mdistBtw: [(Int, Int)] = []
         var boids: [(Float, Float, Float, Float, Float, Float, Int)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?, Int)] = []
         // F628: 전 turbulence 오퍼레이터 누적(종전 first-wins 드롭 — 3000562427 의 지배 성분 손실).
@@ -223,6 +229,8 @@ public struct ParticleSimulator {
                 let invRange: Float = dOut == dIn ? 1 : 1 / (dOut - dIn)
                 let redDelta: Float = rOut == rIn ? 1 : (rOut - rIn)
                 rmv.append((s3(target), dIn, invRange, rIn, redDelta))
+            case let .maintainDistanceBetweenControlPoints(st, en):
+                mdistBtw.append((st, en))
             case .inheritValueFromEvent:
                 // 이벤트 값 채널 미구현 — 파스·보존까지만. 형제 이니셜라이저
                 // `.inheritInitialValueFromEvent` 도 아래 apply 스위치에서 같은 이유로 무시한다.
@@ -232,6 +240,7 @@ public struct ParticleSimulator {
                 break
             }
         }
+        mdistBetween = mdistBtw.map { (start: $0.0, end: $0.1) }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
         angulars = ang.map { (force: $0.0, drag: $0.1) }
         sizeChanges = sc
@@ -579,6 +588,29 @@ public struct ParticleSimulator {
                     : 1
                 particles[k].pos += d * ((m.distance / len - 1) * s)
             }
+        }
+        // maintaindistancebetweencontrolpoints: 두 CP 를 잇는 선분의 **축 성분만** [0, L] 로 가둔다.
+        // 실물 핸들러 0x140242058 은 일반형으로
+        //     p′ = A + s·û + perp     (p = Ap + t·ûp + perp, s = clamp01(t/|Dp|)·|D|)
+        // 를 계산한다 — 즉 이전 프레임 선분 기준으로 분해해 현재 선분에 재매핑하고, 수직 성분은
+        // 월드축 그대로 보존한다(회전시키지 않는다). Waple 의 CP 는 정적이라 A ≡ Ap · B ≡ Bp 이고,
+        // 그러면 û ≡ ûp · L ≡ Lp 이므로 일반형이 아래 축약형으로 붕괴한다:
+        //     t = dot(p − A, û);  p += (clamp(t, 0, L) − t)·û
+        // **CP 가 움직이게 되면 일반형으로 되돌려야 한다.**
+        //
+        // 속도는 건드리지 않는다 — 실물도 위치 배열(0x2b0/0x2b8/0x2c0)에만 쓴다.
+        for m in mdistBetween {
+            guard m.start < def.controlPoints.count, m.end < def.controlPoints.count else { continue }
+            let a = s3(def.controlPoints[m.start])
+            let d = s3(def.controlPoints[m.end]) - a
+            let l2 = simd_length_squared(d)
+            // 실물 게이트: |D|² 가 2⁻⁴⁶(≈1.42e-14) 이하면 스킵(0x1402421ff·0x14024220c).
+            // 동봉 `thunderbolt_beam_child` 가 CP0 ≡ CP1 ≡ 원점이라 정확히 이 경로로 빠진다.
+            guard l2 > 1.4210854715202004e-14 else { continue }
+            let len = l2.squareRoot()
+            let u = d / len
+            let t = simd_dot(particles[k].pos - a, u)
+            particles[k].pos += (min(max(t, 0), len) - t) * u
         }
         // F431/F439: 선형 movement(위 280-283행)와 동형 — force/drag 는 전 오퍼레이터에 누적하고
         // rotation 적분은 스텝당 1회. 종전엔 루프 안에서 적분해 angularmovement N개면 N회 중복
