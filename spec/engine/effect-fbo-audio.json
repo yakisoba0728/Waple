@@ -1,0 +1,371 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_effect_fbo_audio.py",
+ "entries": [
+  {
+   "id": "effect.fbo.enumToDXGI",
+   "value": {
+    "0": {
+     "dxgi": 28,
+     "name": "R8G8B8A8_UNORM"
+    },
+    "1": {
+     "dxgi": 28,
+     "name": "R8G8B8A8_UNORM"
+    },
+    "2": {
+     "dxgi": 28,
+     "name": "R8G8B8A8_UNORM"
+    },
+    "3": {
+     "dxgi": 28,
+     "name": "R8G8B8A8_UNORM"
+    },
+    "4": {
+     "dxgi": 77,
+     "name": "BC3_UNORM"
+    },
+    "5": {
+     "dxgi": 28,
+     "name": "R8G8B8A8_UNORM"
+    },
+    "6": {
+     "dxgi": 74,
+     "name": "BC2_UNORM"
+    },
+    "7": {
+     "dxgi": 71,
+     "name": "BC1_UNORM"
+    },
+    "8": {
+     "dxgi": 49,
+     "name": "R8G8_UNORM"
+    },
+    "9": {
+     "dxgi": 61,
+     "name": "R8_UNORM"
+    },
+    "10": {
+     "dxgi": 34,
+     "name": "R16G16_FLOAT"
+    },
+    "11": {
+     "dxgi": 54,
+     "name": "R16_FLOAT"
+    },
+    "12": {
+     "dxgi": 98,
+     "name": "BC7_UNORM"
+    },
+    "13": {
+     "dxgi": 24,
+     "name": "R10G10B10A2_UNORM"
+    },
+    "14": {
+     "dxgi": 10,
+     "name": "R16G16B16A16_FLOAT"
+    },
+    "15": {
+     "dxgi": 10,
+     "name": "R16G16B16A16_FLOAT"
+    },
+    "16": {
+     "dxgi": 41,
+     "name": "R32_FLOAT"
+    },
+    "17": {
+     "dxgi": 11,
+     "name": "R16G16B16A16_UNORM"
+    },
+    "18": {
+     "dxgi": 11,
+     "name": "R16G16B16A16_UNORM"
+    },
+    "19": {
+     "dxgi": 13,
+     "name": "R16G16B16A16_SNORM"
+    },
+    "20": {
+     "dxgi": 13,
+     "name": "R16G16B16A16_SNORM"
+    },
+    "21": {
+     "dxgi": 28,
+     "name": "R8G8B8A8_UNORM"
+    },
+    "22": {
+     "dxgi": 55,
+     "name": "D16_UNORM"
+    },
+    "23": {
+     "dxgi": 39,
+     "name": "R32_TYPELESS"
+    },
+    "24": {
+     "dxgi": 40,
+     "name": "D32_FLOAT"
+    },
+    "25": {
+     "dxgi": 39,
+     "name": "R32_TYPELESS"
+    },
+    "26": {
+     "dxgi": null,
+     "name": null
+    },
+    "27": {
+     "dxgi": null,
+     "name": null
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x1400d2a20 의 28-way 점프 테이블 0x1400d2aa4 — 각 arm 의 `mov eax, imm32` 를 직접 읽는다"
+    },
+    {
+     "kind": "binary",
+     "ref": "sRGB 경로 부재의 근거이기도 하다 — 28개 arm 중 DXGI 29/72/75/78/99(_SRGB) 가 0건"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_effect_fbo_audio.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.fbo.formatStrings",
+   "value": {
+    "rgba8888": "0x140490610",
+    "rgb888": "0x140490608",
+    "rg88": "0x14049061c",
+    "r8": "0x140490604",
+    "rgb565": "0x1404906ac",
+    "bc7": "0x1404906b4",
+    "dxt5": "0x1404906b8",
+    "dxt3": "0x1404906c0",
+    "dxt1": "0x140490678",
+    "rgba16161616f": "0x140490680",
+    "rgb161616f": "0x140490648",
+    "rg1616f": "0x140490658",
+    "r16f": "0x140490660",
+    "rgba16161616": "0x140490668",
+    "rgb161616": "0x140490628",
+    "rgba16161616S": "0x140490690",
+    "rgb161616S": "0x1404906a0",
+    "rgba8888s": "0x140490638",
+    "rgba1010102": "0x1404906e8",
+    "rgba_backbuffer": "0x1404907b8",
+    "rgb_backbuffer": "0x140490778"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": ".rdata 전수 스캔 — 21종 전건 실재(부재 0)"
+    },
+    {
+     "kind": "asset",
+     "ref": "동봉 WEAssets 의 effect.json 128개에서 실제로 쓰이는 것은 5종뿐: rgba8888 28 · rgba_backbuffer 13 · r16f 8 · rg1616f 4 · r8 2 (합 55 = fbo 선언 전건)"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_effect_fbo_audio.py"
+    }
+   ]
+  },
+  {
+   "id": "effect.fbo.nameToEnum",
+   "value": {
+    "rgba8888": 0,
+    "rgb888": 1,
+    "rg88": 8,
+    "r8": 9,
+    "rgb565": 2,
+    "bc7": 12,
+    "dxt5": 4,
+    "dxt3": 6,
+    "dxt1": 7,
+    "rgba16161616f": 14,
+    "rgb161616f": 15,
+    "rg1616f": 10,
+    "r16f": 11,
+    "rgba16161616": 17,
+    "rgb161616": 18,
+    "rgba16161616S": 19,
+    "rgb161616S": 20,
+    "rgba8888s": 21,
+    "rgba1010102": 13
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "0x1401e53a0 이 magic-static 으로 만드는 FNV-1a 해시맵. 엔트리 19개 근거는 소멸자 루프 `mov ebx, 0x13`(=19회)와 initializer_list 크기 760 = 19 × 40"
+    },
+    {
+     "kind": "binary",
+     "ref": "미스 시 0(rgba8888) 폴백 — 알 수 없는 문자열은 에러가 아니다"
+    },
+    {
+     "kind": "doc",
+     "ref": "**이 스크립트는 이 대응을 재현하지 않는다.** 스택 스토어 에뮬레이션이 필요하다. 재현을 두 번 시도해 둘 다 실패했다 — 문자열이 `lea [rip+…]` 로도 코드 내 즉시값으로도 나오지 않는다(MSVC std::string SSO 경로). 그래서 확정이 아니라 보고다."
+    }
+   ]
+  },
+  {
+   "id": "effect.fbo.backbufferAlias",
+   "value": {
+    "rgba_backbuffer": "HDR 이면 enum 14(rgba16161616f), 아니면 enum 0(rgba8888)",
+    "rgb_backbuffer": "HDR 이면 enum 15(rgb161616f), 아니면 enum 1(rgb888)",
+    "note": "해시맵에 없다 — 파서가 조회 **전에** strcmp 로 가로챈다. 최종 DXGI 는 두 쌍이 각각 10 / 28 로 같다"
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "0x1401e7562 strcmp(\"rgba_backbuffer\") · 0x1401e759e strcmp(\"rgb_backbuffer\")"
+    },
+    {
+     "kind": "binary",
+     "ref": "0x1401e7586 `and ecx, 0x2000`(HDR 비트) → 0x1401e7590 `and eax, 0xe`"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_effect_fbo_audio.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.audio.instructionAnchors",
+   "value": {
+    "0x1400d1d04": {
+     "bytes": "f30f5fc8",
+     "meaning": "밴드 축약이 `maxss` — 평균이 아니라 최댓값"
+    },
+    "0x1401e7586": {
+     "bytes": "81e100200000",
+     "meaning": "`and ecx, 0x2000` — 백버퍼 포맷의 HDR 비트 검사"
+    },
+    "0x1401e7590": {
+     "bytes": "83e00e",
+     "meaning": "`and eax, 0xe` — HDR 이면 enum 14(rgba16161616f), 아니면 0"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "각 VA 의 원시 바이트를 직접 대조 — 불일치 시 하드 실패"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_effect_fbo_audio.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.audio.processorConstants",
+   "value": {
+    "exponent": {
+     "value": 0.25,
+     "site": "0x1400c0d59",
+     "why": "AudioProcessor+0xE4 — 밴드 매핑 지수"
+    },
+    "tiltC": {
+     "value": 0.5009999871253967,
+     "site": "0x1400c0d63",
+     "why": "AudioProcessor+0xE8 — 스펙트럴 틸트 상수"
+    },
+    "fftLengthFactor": {
+     "value": 30.0,
+     "site": "0x1400c0d6d",
+     "why": "AudioProcessor+0xEC — FFT 길이 계수"
+    },
+    "binCountFactor": {
+     "value": 10.0,
+     "site": "0x1400c0d77",
+     "why": "AudioProcessor+0xF0 — 사용 빈 개수 계수"
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "0x1400c0c80 생성자의 `mov [reg+off], imm32` 즉시값을 float 로 읽는다"
+    },
+    {
+     "kind": "binary",
+     "ref": "이 네 필드는 생성자 말고는 바이너리 어디에서도 기록되지 않는다 — 씬 프로퍼티 `audioprocessingexponent` 는 프로젝트 JSON 기본값 작성기에만 나오고 이 경로에 도달하지 않는다"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/measure_effect_fbo_audio.py"
+    }
+   ]
+  },
+  {
+   "id": "engine.audio.pipeline",
+   "value": {
+    "fftLength": "N = int(max(rate/44100, 1) × 64 × 30)  — 44.1kHz 에서 1920",
+    "binCount": "B = int(64 × 10) = 640, 샘플레이트 무관 고정",
+    "window": "N − int(N × 10/30), 오버랩 없음, 나머지는 제로패딩 — 1920 → 1280",
+    "design": "N 을 레이트에 비례시키고 B 를 고정해 **빈 폭 ≈22.97 Hz · 상한 ≈14677 Hz** 를 고정한다",
+    "timeWindow": "없음(사각창). 샘플별 곱셈은 상수 127 하나뿐",
+    "bandMapping": "band(i) = min(int(powf((i−1)/(B−1), 0.25) × 64) % 64, prev+1), i = 1..B−1",
+    "oneToOneBands": "하위 29밴드가 빈 1:1 — 별도 선형 구간이 아니라 prev+1 클램프의 결과",
+    "tilt": "w = C − (1−C)·cos(π·t), t = (i−1)/(B−1) — **빈 인덱스**이지 밴드 인덱스가 아니다. 진폭에 sqrt(w)",
+    "tiltRatio": "최저↔최고 감쇠비 sqrt(1.0)/sqrt(0.002) = 22.3608 — 원본은 저역을 깎는다",
+    "reduction": "밴드 내 MAX(평균 아님)",
+    "gain": "162.56 = 127 × 0.001 × 2 × 640, 1/N 정규화 진폭 기준. 축약 뒤 맨 마지막에 일괄",
+    "smoothing": "생산 단계에 없음 — 매 프레임 밴드 배열을 0 으로 시작해 재계산"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "0x1400d02b0 오디오 스레드 본체(7,783 B) 디스어셈블"
+    },
+    {
+     "kind": "binary",
+     "ref": "밴드 매핑 0x1400d1c7a-0x1400d1cc7 · 틸트 0x1400d1cb0-0x1400d1cee · 게인 0x1400d1d2c-0x1400d1d70"
+    },
+    {
+     "kind": "doc",
+     "ref": "상수 넷과 `maxss` 는 위 두 항목에서 확정으로 재현했다. 수식 자체는 명령 흐름 해석이라 이 스크립트가 재현하지 않으므로 보고로 둔다."
+    }
+   ]
+  },
+  {
+   "id": "effect.parser.conventions",
+   "value": {
+    "fboRequiredKeys": "`name` 과 `format` 이 **둘 다 문자열**이어야 한다 — 아니면 그 fbo 선언을 통째로 버린다",
+    "fboFlags": "bit0 = unique(JSON boolean) · bit1 = clear(4성분 파스 성공) · bit2 = uvs == \"repeat\"",
+    "clearFormat": "스페이스(0x20) 구분 **정확히 4성분**. 콤마·탭은 구분자가 아니다. 성분이 모자라면 clear 비트가 안 선다. **빈 문자열은 (0,0,0,0) 으로 클리어**",
+    "clearTiming": "렌더 타깃 획득 경로에서 1회 — 매 프레임이 아니다(프레임 렌더 함수는 flags 를 읽지 않는다)",
+    "uniqueSemantics": "캐시 키가 `<name>_<effectInstanceId>`(치수 접미사 없음) — 인스턴스 전용·프레임 간 지속. 비-unique 는 `<name>_<W>_<H>` 로 이펙트 간 공유(refcount)",
+    "scenePassIndex": "씬의 `effects[].passes[]` 오버라이드는 매니페스트 `passes[]` 의 **원본 배열 인덱스**로 정렬된다 — 명령 패스도 슬롯을 하나 소비하고, 범위 밖은 오류가 아니라 오버라이드 없음",
+    "conditionsOps": "명명 연산자는 ge/gt/le/lt **4종뿐**이고 형태는 {COMBO:{op,value}}. op 가 없거나 미지면 **등호 폴백**(false 고정이 아니다)",
+    "conditionsAccum": "객체 내 키끼리 AND, 배열 원소끼리 AND. 빈 배열·비배열·키 부재는 전부 **true**(fail-open)",
+    "conditionsLHS": "이펙트 **인스턴스** 레벨 `combos`(씬의 objects[].effects[i].combos). 동봉 자산에는 0건이라 실측상 전부 0 이다 — 패스 레벨 combos 와 다른 것이다",
+    "conditionsFalse": "fbo → 생성 안 함(벡터 압축, 참조는 전부 이름 기반이라 안 어긋남) · pass → 통째로 스킵(단 인덱스는 증가) · bind → 그 슬롯만 언바인드(패스는 실행)"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "0x1401e7170 effect.json 파서(6,445 B) 디스어셈블"
+    },
+    {
+     "kind": "binary",
+     "ref": "conditions 평가기 0x1401e63b0(1,478 B) — 반환 TRUE 경로는 0x1401e63d1(비배열)와 0x1401e6412(빈 배열) 둘뿐"
+    },
+    {
+     "kind": "asset",
+     "ref": "동봉 자산 대조: fbo 선언 55/55 가 format 보유 · clear 12건 전건이 동시에 unique · conditions 는 fluidsimulation 2파일에만 8건"
+    }
+   ]
+  }
+ ]
+}
