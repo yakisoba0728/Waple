@@ -196,7 +196,7 @@
     "consumedByWaple": [
      "bit1"
     ],
-    "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2050 — (sys.def.flags & 1)",
+    "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2183 — (sys.def.flags & 1)",
     "notConsumed": [
      "bit2",
      "bit4",
@@ -216,7 +216,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleRender/SceneRenderer3D.swift:2050"
+     "ref": "Sources/WapleRender/SceneRenderer3D.swift:2183"
     },
     {
      "kind": "asset",

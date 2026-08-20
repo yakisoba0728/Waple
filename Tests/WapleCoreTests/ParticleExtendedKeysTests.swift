@@ -3,12 +3,26 @@ import simd
 @testable import WapleCore
 
 /// 파티클 확장 키(wallpaper64.exe 스트링 테이블 정본 대조 갭):
-/// periodic 방출(@0x48f3c0–0x48e2b8), remapvalue 전어휘(@0x491e78–0x490eb0),
+/// periodic 방출(@0x48f3c0–0x48f4b8), remapvalue 전어휘(@0x491e78–0x4920b0 — 입력 소스
+/// 0x491e78–0x491f60 과 출력 동사 0x491fd0–0x4920b0 이 인접),
 /// controlpointattract deletethreshold(RVA **0x48f988**), vortex 확장/vortex_v2 ring
 /// (centerforce **0x48f9f8** · ring **0x48faa8/0x48fab8/0x48fad0/0x48fae0**),
 /// — [2026-08-20] 종전 주소(0x48e788·0x48e7c8–0x48e8e0)는 전부 포그·카메라 키를 가리켰다.
-/// rope/ropetrail 렌더러 키(@0x48fbb0–0x48ea18), positionoffsetrandom(@0x48f580/398),
-/// hsvcolorrandom huesteps/노이즈 3종(@0x48f5c0–0x48e3e0).
+/// rope/ropetrail 렌더러 키(@0x48fbb0–0x48fc18),
+/// hsvcolorrandom huesteps/노이즈 3종(@0x48f5c0–0x48f5e0).
+///
+/// **[2026-08-20 2차 정정 — 범위의 끝이 안 고쳐져 있었다]** 위 네 범위는 `0c54f3b` 의 일괄
+/// 정정이 **시작만** RVA 로 옮기고 끝을 파일 오프셋으로 남겨 둔 것이었다 — 시작 `0x48f3c0`
+/// 에 끝 `0x48e2b8` 이 붙어 **시작 > 끝** 인 성립 불가능한 범위가 됐다(두 주소를 나란히 적으면
+/// 아래 게이트가 이 문장 자체를 위반으로 잡으므로 일부러 떼어 쓴다 — 인용된 옛값과 진짜 인용이
+/// 구별되지 않는 것이 애초에 일괄 정정을 망친 함정이다). 그 검사기가 단일 주소만 보게 돼 있어
+/// 아무도 안 잡았다 —
+/// 이제 `scripts/spec/check_address_ranges.py` 가 이 산술 불변식을 매 푸시 강제한다.
+///
+/// **[2026-08-20 귀속 정정]** 종전에 여기 적혀 있던 `positionoffsetrandom(@0x48f580/398)` 은
+/// 틀렸다. 그 두 주소는 `offsetmin`/`offsetmax` 이고 **`layerimage` 이미터의 키**다(`adf9674`).
+/// `positionoffsetrandom` 의 실제 키는 scale·distance·timescale·directions·sign·octaves 이며
+/// 균일난수 오프셋이 아니라 fBm 노이즈 변위다 — `Initializer.positionOffsetRandom` 주석 참조.
 /// 시뮬 의미론은 WE 에디터 어휘 규약에 따른 [추정] — 각 테스트는 파스(키/기본값) + 행동을 단언한다.
 final class ParticleExtendedKeysTests: XCTestCase {
 
