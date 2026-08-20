@@ -498,8 +498,13 @@ public enum RendererKind: Equatable {
         switch self {
         case let .spriteTrail(maxLength, _, _):
             return clampedRounded(maxLength) ?? 8
-        case let .rope(subdivision):
-            return clampedRounded(Float(subdivision)) ?? 16
+        case .rope:
+            // **[2026-08-20]** 종전엔 `subdivision` 을 샘플 수로 썼다(F629). 그 매핑은 WE 근거가
+            // 없다 — 실물 `subdivision` 은 커브 세분 횟수([0,32] 클램프)이지 히스토리 길이가
+            // 아니다. 이제 주입 기본이 4 로 확정됐으므로 그 값을 그대로 흘리면 부재 11건의
+            // 샘플이 16 → 4 로 **눈에 보이게 줄어든다** — 근거 없는 매핑에 새 정밀도를 얹는 꼴이다.
+            // 리본 지오메트리를 실측할 때까지 대역값 16 을 유지한다.
+            return 16
         case let .ropeTrail(length, subdivision):
             return clampedRounded(length * 30) ?? clampedRounded(Float(subdivision)) ?? 12
         default:
@@ -678,21 +683,45 @@ private func bounds2(_ v: Any?) -> SIMD2<Float>? {
     return SIMD2(parts[0], parts[1])
 }
 
-/// rope/ropetrail 렌더러 확장 키(fadealpha/fadesize/uvscale/uvscrolling/uvsmoothing/segments
-/// — wallpaper64.exe 스트링 @0x48e9b0–0x48ea18). 파스·모델 노출 전용 — 렌더 소비는 WapleRender
-/// 배선 보류. nil = 키 부재(WE 기본값 미확정이라 보존까지만).
+/// rope/ropetrail 렌더러 확장 키. 파스·모델 노출 전용 — 렌더 소비는 WapleRender 배선 보류.
+///
+/// **[2026-08-20 전면 정정]** 종전 주석의 스트링 클러스터 `@0x48e9b0–0x48ea18` 은 파일
+/// 오프셋이었다(RVA 는 +0x1200 = `0x48fbb0–0x48fc18`; `0x48e9b0` 을 RVA 로 읽으면
+/// `"winddirection"` 에 착지한다). 타입·기본값·귀속도 셋 다 틀려 있었다.
+///
+/// **어느 렌더러가 어느 키를 읽는가** — 각 키 문자열의 lea 참조를 세 핸들러 구간
+/// (spritetrail 0x1401cfe16–0x1401cff28 · rope 0x1401cff28–0x1401d00b4 ·
+/// ropetrail 0x1401d00b4–0x1401d02d9)으로 갈라 전수 확인했다:
+///   · spritetrail = length · maxlength · minlength
+///   · rope        = subdivision · uvscale · uvscrolling · **uvsmoothing**
+///   · ropetrail   = length · segments · subdivision · uvscale · uvscrolling · **fadealpha · fadesize**
+/// 교집합은 uvscale·uvscrolling·subdivision 뿐이다. 종전엔 여섯 키를 두 렌더러에 뭉뚱그려
+/// 읽었는데, `uvsmoothing` 은 rope 전용이고 `fade*`/`segments` 는 ropetrail 전용이다.
+///
+/// **타입** — `fadealpha`/`fadesize`/`uvscrolling`/`uvsmoothing` 은 실수량이 아니라 **불리언
+/// 체크박스**다(주입 태그 5, 소비는 비트 세팅). 동봉 자산도 전건 JSON `true`/`false` 리터럴이다
+/// (`uvscrolling: true` 8건 · `uvsmoothing: false` 12건 · `fadealpha: true` 4건). Swift 쪽
+/// `strictFloat(true)` 가 1.0 을 돌려주는 바람에 "페이드량 1.0" 처럼 보였을 뿐이다.
+///
+/// **주입 기본값**(부재 시) — rope 주입기 0x1401c0c90 · ropetrail 0x1401c1070:
+///   · rope.uvsmoothing = **true**  (태그 5, 값 바이트 1 @0x1401c0dd3) ← 부재 13/25 건이 여기 걸린다
+///   · rope.uvscrolling = false     (태그 5, 값 r14b, `xor r14d,r14d` @0x1401c0cc0)
+///   · uvscale          = 1         (rope 0x1401c0fd7 / ropetrail `H_INT` r8d=1 @0x1401c13a3)
+///   · ropetrail.segments = **4**   (`mov qword [rax], 4` @0x1401c119c, 핸들러 clamp [2,32])
+///   · ropetrail.fadealpha/fadesize = false (`H_BOOL` r8d=0 @0x1401c13c5 / 0x1401c13e1)
 public struct RopeRenderOptions: Equatable {
-    public var fadeAlpha: Float? = nil
-    public var fadeSize: Float? = nil
-    public var uvScale: Float? = nil
-    public var uvScrolling: Float? = nil
-    public var uvSmoothing: Bool? = nil
-    public var segments: Int? = nil
+    /// ropetrail 전용 · 불리언.
+    public var fadeAlpha: Bool = false
+    public var fadeSize: Bool = false
+    /// rope·ropetrail 공통. 핸들러는 `asFloat` 후 **역수** `1/uvscale` 을 시스템에 싣고,
+    /// `uvscale == 0` 이면 아무것도 쓰지 않는다(0x1401d0014 · 0x1401d0285). 여기선 원값을 보존한다.
+    public var uvScale: Float = 1
+    public var uvScrolling: Bool = false
+    /// rope 전용 · 불리언 · **부재 기본 true**.
+    public var uvSmoothing: Bool = true
+    /// ropetrail 전용.
+    public var segments: Int = 4
     public init() {}
-    public var isEmpty: Bool {
-        fadeAlpha == nil && fadeSize == nil && uvScale == nil
-            && uvScrolling == nil && uvSmoothing == nil && segments == nil
-    }
 }
 
 // MARK: - 주기(periodic) 방출
@@ -1499,13 +1528,29 @@ public struct ParticleSystemDef: Equatable {
             case "sprite": renderer = .sprite
             case "spritetrail":
                 // F790: minlength 추가 파스(JSON null → pfloat nil → 0 = 클램프 부재).
-                renderer = .spriteTrail(maxLength: pfloat(r0["maxlength"]) ?? 0,
-                                        length: pfloat(r0["length"]) ?? 0,
+                //
+                // **[2026-08-20 기본값 정정]** 주입기 0x1401c0af0 은 `length` 에 0.05
+                // (`movabs rcx, 0x3fa99999a0000000` @0x1401c0b55, 태그 3)를, `maxlength` 에 10.0
+                // (`0x4024000000000000` @0x1401c0c13)을 심는다. `minlength` 는 **주입하지 않는다**
+                // (그 키의 lea 가 주입기 안에 없다) — 부재는 0 = 하한 없음이 맞다.
+                //
+                // 종전 0/0 은 `spriteTrailStretch` 의 `guard length > 0` 폴백을 태워 **부재
+                // 인스턴스의 신장을 항등 1 로** 만들었다. 즉 H3 핫픽스의 전제("length 부재 시엔
+                // 신장 자체가 정의되지 않는다")가 무너진다 — WE 는 부재에도 0.05 를 심으므로
+                // 신장은 언제나 정의된다. 동봉 44건 중 length 부재 13 · maxlength 부재 11 이
+                // 이 경로다: 신장이 1 → `clamp(speed·0.05, minlength, 10)` 으로 바뀐다.
+                // **2D spritetrail 의 그림이 실제로 달라지는 변경이다** — 골든 재검토 대상.
+                renderer = .spriteTrail(maxLength: injected(r0, "maxlength", 10),
+                                        length: injected(r0, "length", 0.05),
                                         minLength: pfloat(r0["minlength"]) ?? 0)
             case "rope":
-                renderer = .rope(subdivision: pint(r0["subdivision"]) ?? 0)
+                // 주입 4(`mov qword [rax], 4` @0x1401c0d00), 핸들러 clamp [0,32](0x1401cffbd).
+                renderer = .rope(subdivision: min(32, max(0, pint(r0["subdivision"]) ?? 4)))
             case "ropetrail":
-                renderer = .ropeTrail(length: pfloat(r0["length"]) ?? 0, subdivision: pint(r0["subdivision"]) ?? 0)
+                // 주입 length 1.0(`0x3ff0000000000000` @0x1401c10da), 핸들러 `maxss 0.001` 하한
+                // (0x1401d0149). subdivision 주입 1(`mov qword [rax], 1` @0x1401c128a), clamp [0,32].
+                renderer = .ropeTrail(length: max(0.001, injected(r0, "length", 1)),
+                                      subdivision: min(32, max(0, pint(r0["subdivision"]) ?? 1)))
             default:
                 renderer = .unsupported(n); WapleLog.warn("[Waple] SP4 unsupported renderer (drawn as sprite): \(n)")
             }
@@ -1515,18 +1560,26 @@ public struct ParticleSystemDef: Equatable {
             case "fixed": orientation = .fixed(axis: pvec3(r0["axis"]) ?? Vec3(x: 0, y: 0, z: 1))
             default: orientation = .screen
             }
-            // rope/ropetrail 확장 키(@0x48e9b0–0x48ea18) — 하나라도 있으면 조립(전부 부재 시 nil,
-            // 모델 노출까지만 — 렌더 소비 보류). uvsmoothing 은 체크박스형(≠0)으로 해석 [추정].
+            // rope/ropetrail 확장 키 — **렌더러마다 읽는 키가 다르다**(RopeRenderOptions 주석의
+            // 핸들러별 lea 전수 참조). 부재 기본값은 주입기 실측이라 이제 "키가 하나도 없으면 nil"
+            // 이 아니라 **항상 주입값으로 채운 옵션**을 싣는다 — 부재는 "값 없음" 이 아니라
+            // "엔진 기본값" 이기 때문이다(rope 의 uvsmoothing 부재 13건이 전부 true 로 간다).
             switch renderer {
-            case .rope, .ropeTrail:
+            case .rope:
                 var opts = RopeRenderOptions()
-                opts.fadeAlpha = pfloat(r0["fadealpha"])
-                opts.fadeSize = pfloat(r0["fadesize"])
-                opts.uvScale = pfloat(r0["uvscale"])
-                opts.uvScrolling = pfloat(r0["uvscrolling"])
-                if let sm = pint(r0["uvsmoothing"]) { opts.uvSmoothing = sm != 0 }
-                opts.segments = pint(r0["segments"])
-                if !opts.isEmpty { ropeOpts = opts }
+                opts.uvScale = injected(r0, "uvscale", 1)              // 0x1401c0fd7
+                opts.uvScrolling = pbool(r0["uvscrolling"]) ?? false   // 태그 5, r14b = 0
+                opts.uvSmoothing = pbool(r0["uvsmoothing"]) ?? true    // 태그 5, 값 1 @0x1401c0dd3
+                ropeOpts = opts
+            case .ropeTrail:
+                var opts = RopeRenderOptions()
+                opts.uvScale = injected(r0, "uvscale", 1)              // H_INT r8d=1 @0x1401c13a3
+                opts.uvScrolling = pbool(r0["uvscrolling"]) ?? false   // 태그 5, bpl = 0 (`xor ebp,ebp`@0x1401c109a)
+                opts.fadeAlpha = pbool(r0["fadealpha"]) ?? false       // H_BOOL r8d=0 @0x1401c13c5
+                opts.fadeSize = pbool(r0["fadesize"]) ?? false         // H_BOOL r8d=0 @0x1401c13e1
+                // 주입 4(0x1401c119c), 핸들러 clamp [2,32](0x1401d0186).
+                opts.segments = min(32, max(2, pint(r0["segments"]) ?? 4))
+                ropeOpts = opts
             default: break
             }
         }
@@ -1695,6 +1748,17 @@ private func pexponent(_ v: Any?) -> Float? {
     return pfloat(v)
 }
 private func pint(_ v: Any?) -> Int? { strictInt(v) }
+/// jsoncpp `asBool`(0x140086300) 대응 — `movzx eax, byte [rcx]` 로 **태그와 무관하게** 값
+/// 워드의 하위 바이트를 본다. 즉 실물은 JSON `true`/`false` 뿐 아니라 숫자 0/비0 도 받는다.
+/// 동봉 자산은 rope/ropetrail 불리언 키를 전건 JSON 리터럴로 적지만(`uvscrolling: true` 8건 ·
+/// `uvsmoothing: false` 12건 · `fadealpha: true` 4건), 워크샵이 `1`/`0` 을 적을 수 있어 둘 다 받는다.
+/// 읽을 수 없는 값(문자열·범위 밖)은 nil 을 돌려 **부재와 구분**한다 — 주입은 부재에만 일어난다.
+private func pbool(_ v: Any?) -> Bool? {
+    if v == nil || v is NSNull { return nil }
+    if let b = v as? Bool { return b }
+    if let i = strictInt(v) { return i != 0 }
+    return nil
+}
 /// 감사 V06: Float→Int 스케일 변환 포화 클램프 — 곱이 Int 범위를 넘는(또는 NaN) 워크샵 입력의
 /// Int() 변환 트랩(SIGTRAP, maxcount 1e9 × override count 1e12 실재현) 방지.
 /// 0 하한은 V02 음수 클램프와 동일 정책, 상한 포화는 sheetFrameIndex(:52)와 동형.
