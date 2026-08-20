@@ -345,6 +345,9 @@ public struct BlendWindow: Equatable {
             && (bos - bie > 0.01 || inDur > 0.01 || outDur > 0.01)
     }
 
+    /// 창 없음(가중치 항상 1). 직접 조립한 def 나 인덱스 밖 접근의 기본값이다.
+    public static let identity = BlendWindow(inStart: 0, inEnd: 0, outStart: 1, outEnd: 1)
+
     /// `f` = 파티클 수명 비율(age/lifetime). 실물은 `rcpps` 근사라 비트동일 재현은 불가능하다.
     public func weight(lifeFraction f: Float) -> Float {
         guard active else { return 1 }
@@ -700,6 +703,10 @@ public struct ParticleSystemDef: Equatable {
     /// F624: vortex 오퍼레이터별 오디오반응(def.operators 중 vortex 출현 순 병렬; nil=묵반응).
     /// WE 문서: vortex 오디오반응은 "particle speed 를 오디오에 연결" → 속도 배수.
     public var vortexAudio: [AudioProcessing?] = []
+    /// G-C2-03 오퍼레이터별 페이드 창(`operators` 와 1:1 병렬). 비어 있으면 창 없음으로 본다
+    /// (직접 조립한 def 의 무회귀 경로). 대상 원소 13종은 `BlendWindow` 주석 참조 —
+    /// **대상이 아닌 원소가 키를 적어도 WE 는 무시하므로** 소비 여부는 시뮬레이터가 가른다.
+    public var operatorBlends: [BlendWindow] = []
     /// 이미터별 주기 방출(emitters 와 병렬; nil=무주기 — 기존 rate/burst 경로 비트동일).
     /// 병렬 배열 관례(emitterAudio/emitterSpeed/boxDistanceMin 동형) — Emitter 케이스 시그니처 무회귀.
     public var emitterPeriodic: [PeriodicEmission?] = []
@@ -887,12 +894,27 @@ public struct ParticleSystemDef: Equatable {
     /// (ops 인덱스, cpid) 만 보관했다가 def 조립 직전에 target 재조립(감사 V04).
     private static func parseOperators(_ jsonArray: [Any]) -> (ops: [ParticleOperator],
                                                                attractCPIds: [(op: Int, cp: Int)],
-                                                               vortexAudio: [AudioProcessing?]) {
+                                                               vortexAudio: [AudioProcessing?],
+                                                               blends: [BlendWindow]) {
         var ops: [ParticleOperator] = []
         var attractCPIds: [(op: Int, cp: Int)] = []
         // F624: vortex 출현 순 병렬 오디오반응(WE: vortex 오디오반응 = particle speed 를 오디오에 연결).
         var vortexAudio: [AudioProcessing?] = []
+        // G-C2-03 페이드 창은 **오퍼레이터마다 enum 연관값을 늘리는 대신 병렬 테이블**로 둔다.
+        // 대상이 13종인데(BlendWindow 주석) 그만큼 case 를 바꾸면 소비처가 전부 어긋나고,
+        // 창의 산술은 원소와 무관하게 동일하다 — 자리를 하나만 두는 편이 옳다.
+        // 인덱스는 `ops` 와 1:1 이다(원소 하나가 ops 를 0개 또는 1개 추가하므로 아래 while 로 맞춘다).
+        var blends: [BlendWindow] = []
         for case let o as [String: Any] in jsonArray {
+            defer {
+                // WE 는 이 네 키를 **공용 파서 하나**(0x1401c2a40)에서만 읽는다. 대상이 아닌 원소가
+                // 키를 적어 놓아도(동봉에 실제로 있다) 무시되므로, 소비 여부는 시뮬레이터가 가른다.
+                let w = BlendWindow(inStart: pfloat(o["blendinstart"]) ?? 0,
+                                    inEnd: pfloat(o["blendinend"]) ?? 0,
+                                    outStart: pfloat(o["blendoutstart"]) ?? 1,
+                                    outEnd: pfloat(o["blendoutend"]) ?? 1)
+                while blends.count < ops.count { blends.append(w) }
+            }
             switch o["name"] as? String {
             case "movement":
                 ops.append(.movement(gravity: pvec3(o["gravity"]) ?? Vec3(x: 0, y: 0, z: 0), drag: pfloat(o["drag"]) ?? 0))
@@ -1173,7 +1195,7 @@ public struct ParticleSystemDef: Equatable {
                 WapleLog.warn("[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
             }
         }
-        return (ops, attractCPIds, vortexAudio)
+        return (ops, attractCPIds, vortexAudio, blends)
     }
 
     /// resolveChild: 자식 json 경로 → def (호출측이 pkg/머티리얼/재귀 리졸브 담당). nil 리졸브 = 링크 드롭+로그.
@@ -1369,7 +1391,7 @@ public struct ParticleSystemDef: Equatable {
             }
         }
 
-        var (ops, attractCPIds, vortexAudio) = Self.parseOperators(json["operator"] as? [Any] ?? [])
+        var (ops, attractCPIds, vortexAudio, operatorBlends) = Self.parseOperators(json["operator"] as? [Any] ?? [])
 
         var renderer: RendererKind = .unsupported("none")
         var orientation: ParticleOrientation = .screen
@@ -1505,6 +1527,7 @@ public struct ParticleSystemDef: Equatable {
         def.boxDistanceMin = boxDistanceMin
         def.emitterPeriodic = emitterPeriodic
         def.vortexAudio = vortexAudio
+        def.operatorBlends = operatorBlends
         def.flags = pint(json["flags"]) ?? 0                                        // F623
         // F622: animationmode("sequence"/"randomframe")·sequencemultiplier(배속, 기본 1).
         def.animationMode = (json["animationmode"] as? String).flatMap { ParticleAnimationMode(rawValue: $0) }

@@ -274,10 +274,15 @@ final class ParticleExtendedKeysTests: XCTestCase {
     func testDeleteThreshold_deletesWithinThreshold_legacyKeepsResiding() {
         let near = Emitter.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 5, y: 0, z: 0),
                                rate: 0, burst: 4)   // 전원 dist ≤ 5 < threshold 10
-        // 키 보유: 근접 전원 삭제.
+        // 키 보유 **+ flags bit0**: 근접 전원 삭제.
+        // **[2026-08-20 계약 정정]** 삭제는 키만으로 켜지지 않는다 — 실물은 `flags & 1`
+        // (0x14024193d)을 지나야 삭제 패스를 돈다. 주입 기본 flags 는 **2** 라 bit0 이 없고,
+        // 동봉 35인스턴스 중 flags 를 적는 것도 `magic_vortex_orb`(0) 하나뿐이라
+        // **실코퍼스에서는 삭제가 한 번도 일어나지 않는다**. 픽스처에 3(=bit0|bit1)을 명시한다.
         var simDel = ParticleSimulator(
             def: makeDef(emitters: [near], operators: [
-                .controlPointAttract(scale: 0, threshold: 10, target: Vec3(x: 0, y: 0, z: 0), deleteThreshold: true)]),
+                .controlPointAttract(scale: 0, threshold: 10, target: Vec3(x: 0, y: 0, z: 0),
+                                     deleteThreshold: true, flags: 3)]),
             seed: 31)
         _ = simDel.step(0.1)
         XCTAssertEqual(simDel.liveCount, 0)
@@ -288,6 +293,38 @@ final class ParticleExtendedKeysTests: XCTestCase {
             seed: 31)
         for _ in 0..<5 { _ = simKeep.step(0.1) }
         XCTAssertEqual(simKeep.liveCount, 4)
+
+        // flags 기본(2)이면 키가 있어도 삭제되지 않는다 — 게이트 자체를 못박는다.
+        var simGated = ParticleSimulator(
+            def: makeDef(emitters: [near], operators: [
+                .controlPointAttract(scale: 0, threshold: 10, target: Vec3(x: 0, y: 0, z: 0),
+                                     deleteThreshold: true)]),
+            seed: 31)
+        for _ in 0..<5 { _ = simGated.step(0.1) }
+        XCTAssertEqual(simGated.liveCount, 4, "flags 기본 2 에는 bit0 이 없다")
+    }
+
+    /// 페이드 창이 **remapvalue 밖의 원소에도** 걸리는지. 대상 13종 중 실코퍼스 도달이 있는
+    /// 넷(turbulence·capvelocity·oscillatealpha·oscillateposition)을 배선했다.
+    /// 여기서는 `capvelocity` 로 확인한다 — 동봉 `thunderbolt_child_spawner` 가 그 경로다.
+    func testBlendWindowAppliesToCapVelocity() {
+        func speedAfter(blendIn: (Float, Float)?) -> Float {
+            let blend = blendIn.map { #""blendinstart":\#($0.0),"blendinend":\#($0.1),"# } ?? ""
+            let d = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1}],
+             "initializer":[{"name":"lifetimerandom","min":1,"max":1},
+                            {"name":"velocityrandom","min":"100 0 0","max":"100 0 0"}],
+             "operator":[{"name":"capvelocity",\(blend)"maxspeed":10}],
+             "renderer":[{"name":"sprite"}],"maxcount":4}
+            """), material: nil)
+            var sim = ParticleSimulator(def: d, seed: 7)
+            return sim.step(0.1)[0].vel.x     // n = 0.1
+        }
+        // 창 없음: 그대로 상한 10 으로 잘린다.
+        XCTAssertEqual(speedAfter(blendIn: nil), 10, accuracy: 0.01)
+        // blendin 0→1: n = 0.1 에서 w = 0.1 → s = 1 + 0.1·(0.1 − 1) = 0.91 → 100·0.91 = 91.
+        // 창이 안 걸리면 10 이 나온다 — 그 차이가 이 테스트의 요지다.
+        XCTAssertEqual(speedAfter(blendIn: (0, 1)), 91, accuracy: 0.5)
     }
 
     // MARK: - 4. vortex 확장 / vortex_v2 ring

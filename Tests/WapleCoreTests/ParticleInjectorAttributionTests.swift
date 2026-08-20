@@ -91,10 +91,13 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     /// 0x1401bef00 에는 그 문자열조차 없다 — 둘을 같이 고치면 vortex 가 회귀한다.
     func testCenterForceDefaultAppliesToVortexV2Only() {
         let d = ParticleSystemDef.parse(json("""
-        {"operator":[{"name":"vortex"},{"name":"vortex_v2"}],"maxcount":10}
+        {"operator":[{"name":"vortex","flags":2},{"name":"vortex_v2","flags":2}],"maxcount":10}
         """), material: nil)
         guard case let .vortex(_, _, _, _, _, _, cfV1, _, _, _, _, _) = d.operators[0] else { return XCTFail("no vortex") }
         guard case let .vortex(_, _, _, _, _, _, cfV2, _, _, _, _, _) = d.operators[1] else { return XCTFail("no vortex_v2") }
+        // 두 원소에 **같은 flags 2** 를 준다 — 게이트가 열려 있는데도 v1 이 0 이어야 한다는 게
+        // 이 테스트의 요지다(주입기에 문자열조차 없다). 게이트 자체는
+        // `testVortexV2CenterForceRequiresFlagsBit1` 이 따로 본다.
         XCTAssertEqual(cfV1, 0, "vortex 주입기 0x1401bef00 은 centerforce 를 안 심는다")
         XCTAssertEqual(cfV2, 1, "vortex_v2 주입기 0x1401bf5ff 이 1.0 을 심는다")
     }
