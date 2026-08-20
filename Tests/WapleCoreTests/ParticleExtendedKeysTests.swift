@@ -256,7 +256,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
                       "reductioninner":10,"reductionouter":20}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, cf, vs, ri, ro, ring) = def.operators.first else {
+        guard case let .vortex(_, _, _, _, _, _, cf, vs, ri, ro, ring, _) = def.operators.first else {
             return XCTFail("vortex 가 파스되어야 한다")
         }
         XCTAssertEqual(cf, 50)
@@ -273,7 +273,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
                       "ringpullforce":80,"ringwidth":24}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, sIn, sOut, _, _, _, _, _, ring) = def.operators.first else {
+        guard case let .vortex(_, _, _, sIn, sOut, _, _, _, _, _, ring, _) = def.operators.first else {
             return XCTFail("vortex_v2 가 vortex 매핑되어야 한다")
         }
         XCTAssertEqual(sIn, 30); XCTAssertEqual(sOut, 30)   // speedouter 부재 = inner 승계(F631)

@@ -65,9 +65,11 @@ public struct ParticleSimulator {
     /// remapValueEx 중 표시 파생(opacity/color/size) 동사 보유 — display() 조기 우회 게이트.
     private let hasDisplayRemaps: Bool
     private let attractors: [(scale: Float, threshold: Float, target: SIMD3<Float>, delete: Bool)]
+    /// maintaindistancetocontrolpoint — CP 중심 반지름 `distance` 구면으로 **위치를 투영**한다.
+    private let maintainDists: [(distance: Float, variableStrength: Float, target: SIMD3<Float>)]
     private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
                             offset: SIMD3<Float>, audio: AudioProcessing?,   // F624: 오디오반응 속도 배수
-                            centerForce: Float, ring: VortexRing?)]
+                            centerForce: Float, ring: VortexRing?, flags: Int)]
     // F628: 난류 흐름장 배열(전 turbulence 오퍼레이터 누적 — 종전 "first wins"는 2번째를 드롭).
     // 파티클별 속도/위상 범위(smin/smax, pmin/pmax)는 스폰 시 뽑아 고정, 나머지는 장 파라미터.
     private let turbulences: [(smin: Float, smax: Float, scale: Float, timeScale: Float,
@@ -137,7 +139,8 @@ public struct ParticleSimulator {
         var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
         var oa: (Float, Float, Float, Float, Float, Float)? = nil
         var attr: [(Float, Float, SIMD3<Float>, Bool)] = []
-        var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?)] = []
+        var mdist: [(Float, Float, SIMD3<Float>)] = []
+        var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?, Int)] = []
         // F628: 전 turbulence 오퍼레이터 누적(종전 first-wins 드롭 — 3000562427 의 지배 성분 손실).
         var turb: [(Float, Float, Float, Float, SIMD3<Float>, Float, Float)] = []
         var osz: (Float, Float, Float, Float, Float, Float)? = nil
@@ -160,9 +163,11 @@ public struct ParticleSimulator {
                 if oa == nil { oa = (fmin, fmax, smin, smax, pmin, pmax) }
             case let .controlPointAttract(scale, threshold, target, deleteThreshold):
                 attr.append((scale, threshold, s3(target), deleteThreshold))
-            case let .vortex(axis, dIn, dOut, sIn, sOut, offset, centerForce, _, _, _, ring):
+            case let .maintainDistanceToControlPoint(distance, vs, target):
+                mdist.append((distance, vs, s3(target)))
+            case let .vortex(axis, dIn, dOut, sIn, sOut, offset, centerForce, _, _, _, ring, flags):
                 // variablestrength/reductioninner/reductionouter(위치인자 7–9)는 파스·보존 전용 — 소비 안 함.
-                vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset), centerForce, ring))
+                vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset), centerForce, ring, flags))
             case let .turbulence(smin, smax, scale, timeScale, mask, pmin, pmax):
                 turb.append((smin, smax, scale, timeScale, s3(mask), pmin, pmax))
             case let .oscillateSize(fmin, fmax, smin, smax, pmin, pmax):
@@ -195,10 +200,11 @@ public struct ParticleSimulator {
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2, delete: $0.3) }
+        maintainDists = mdist.map { (distance: $0.0, variableStrength: $0.1, target: $0.2) }
         vortices = vort.indices.map { (axis: vort[$0].0, dIn: vort[$0].1, dOut: vort[$0].2,
                                         sIn: vort[$0].3, sOut: vort[$0].4, offset: vort[$0].5,
                                         audio: $0 < def.vortexAudio.count ? def.vortexAudio[$0] : nil,
-                                        centerForce: vort[$0].6, ring: vort[$0].7) }   // F624
+                                        centerForce: vort[$0].6, ring: vort[$0].7, flags: vort[$0].8) }   // F624
         turbulences = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
         oscSizeOp = osz.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         alphaChanges = ac
@@ -473,6 +479,28 @@ public struct ParticleSimulator {
                 particles[k].pos += v * dt
             }
         }
+        // maintaindistancetocontrolpoint: CP 중심 반지름 `distance` 구면으로 위치를 당긴다.
+        // 실물 루프 0x140241bd0..0x140241cbc 를 그대로 옮긴 것 —
+        //     d = pos − target ;  k = (distance/|d| − 1)·s ;  pos += k·d
+        // (M = I · O = 0 축약. 유일한 실사용처의 CP0 이 시스템 원점이라 성립 —
+        //  ParticleSystem.MaintainDistance 주석의 근거 참조.)
+        //
+        // **속도는 건드리지 않는다.** 저장은 위치 배열 셋(0x140241c96·c9e·caa)뿐이다.
+        // 실물 오퍼레이터 순서(magic_vortex_orb: movement → alphafade → vortex_v2 →
+        // maintaindistance → controlpointattract)에 맞춰 위치 적분 뒤에 둔다.
+        if !maintainDists.isEmpty {
+            for m in maintainDists {
+                let d = particles[k].pos - m.target
+                let len = simd_length(d)
+                guard len > 1e-6 else { continue }   // 실물은 rsqrtps 근사라 0 에서 발산한다
+                // s: variablestrength ≠ 0 이면 clamp01(vs·dt), 0 이면 VM 2번째 인자
+                // `dt·min(1, 0.025/dt)^0.7`(0x140237724–0x14023774f). dt ≤ 0.025 면 그냥 dt 다.
+                let s = m.variableStrength != 0
+                    ? max(0, min(1, m.variableStrength * dt))
+                    : dt * powf(min(1, 0.025 / max(dt, 1e-6)), 0.7)
+                particles[k].pos += d * ((m.distance / len - 1) * s)
+            }
+        }
         // F431/F439: 선형 movement(위 280-283행)와 동형 — force/drag 는 전 오퍼레이터에 누적하고
         // rotation 적분은 스텝당 1회. 종전엔 루프 안에서 적분해 angularmovement N개면 N회 중복
         // 적분(F439), 0개면 angularvelocityrandom 의 초기 각속도가 영구 사장(F431)됐다.
@@ -736,31 +764,55 @@ public struct ParticleSimulator {
     /// vortex: axis 를 회전축, offset 를 중심으로 하는 소용돌이. 회전면 반경 dist 에 따라
     /// speedInner(distanceInner)→speedOuter(distanceOuter) 보간한 접선 속도를 가속으로 부여.
     /// F624: audioScale = 오디오반응 배수(WE 문서: particle speed 를 오디오에 연결 — 1 이면 무영향).
-    /// centerForce(@0x48e7c8): 축을 향한 반경 인력(−radial 방향, 의미 명확). ring(vortex_v2
-    /// @0x48e8a8–0x48e8e0): [추정] 링 대역 밖 & pullDistance 이내 → 링 원주 방향 반경 인력.
+    /// centerForce(RVA **0x48f9f8** — 종전 주석의 0x48e7c8 은 문자열 `"olor"` 중간을 가리켰다):
+    /// vortex_v2 전용이고 `flags & 1` 이 아니라 **`flags & 2`** 게이트를 지나야 파스된다.
+    /// ring(RVA **0x48faa8/0x48fab8/0x48fad0/0x48fae0** — 종전의 0x48e8a8–0x48e8e0 은 포그 키다):
+    /// vortex_v2 전용, **`flags & 4`** 게이트. 힘 수식은 아래 본문 주석대로 아직 [추정]이다.
     private func applyVortex(_ v: (axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
                                    offset: SIMD3<Float>, audio: AudioProcessing?,
-                                   centerForce: Float, ring: VortexRing?),
+                                   centerForce: Float, ring: VortexRing?, flags: Int),
                              to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float, audioScale: Float) {
-        let axisN = normalizeSafe(v.axis)
-        guard simd_length(axisN) > 1e-6 else { return }
+        // 축은 **파스 시점에** 정규화된다(0x1401cdc16–0x1401cdc58). |axis| ≤ 0.001 이면 스킵이
+        // 아니라 **(0,0,1) 로 대체**한다 — 종전의 `guard … else { return }`(무동작)와 다르다.
+        let axisN = simd_length(v.axis) > 0.001 ? normalizeSafe(v.axis) : SIMD3<Float>(0, 0, 1)
         let rel = pos - v.offset
-        let radial = rel - axisN * simd_dot(rel, axisN)
-        let dist = simd_length(radial)
-        guard dist > 1e-4 else { return }
-        let t: Float = v.dOut > v.dIn ? max(0, min(1, (dist - v.dIn) / (v.dOut - v.dIn))) : 0
+        // **flags bit0 이 없으면 축 성분을 빼지 않는다** — 런타임이 `andps xmm2, mask`(0x140243316)
+        // 로 proj 를 통째로 0 으로 만들어 radial 이 3D 전체가 된다. 기본 flags = 0 이라 이쪽이
+        // 기본 경로다(종전엔 항상 투영했다).
+        let proj = (v.flags & 1) != 0 ? simd_dot(rel, axisN) : 0
+        let radial = rel - axisN * proj
+        let len2 = simd_length_squared(radial)
+        guard len2 > 1e-8 else { return }
+        let dist = sqrt(len2)
+        let n = radial / dist
+        // invRange 는 굽는 시점에 정해진다: `dOut == dIn` 이면 **1.0**(0 이 아니라 폭 1 램프),
+        // `dOut < dIn` 이면 `rcpps` 가 음수를 내 **역램프**가 된다. 종전의 `dOut > dIn ? … : 0`
+        // 은 두 경우를 모두 "램프 없음" 으로 접었다.
+        let invRange: Float = v.dOut == v.dIn ? 1 : 1 / (v.dOut - v.dIn)
+        let t = max(0, min(1, (dist - v.dIn) * invRange))
         let speed = v.sIn + (v.sOut - v.sIn) * t
-        let tangent = normalizeSafe(simd_cross(axisN, radial))
+        // 접선 = `cross(n, axis)`. 두 가지가 종전과 다르다:
+        //  ① **순서** — 실물은 0x14024338d/0x14024339f/0x1402433a2 에서
+        //     (n.y·a.z − n.z·a.y, n.z·a.x − n.x·a.z, n.x·a.y − n.y·a.x) = n × a 를 만든다.
+        //     종전의 `cross(axisN, radial)` = a × r 은 **부호가 반대**라 소용돌이가 거꾸로 돌았다.
+        //  ② **정규화하지 않는다** — flags bit0 이 없으면 |n × a| = sinθ 라 축에 가까운 파티클일수록
+        //     느리게 돈다. 종전엔 normalizeSafe 로 그 감쇠를 지웠다.
+        let tangent = simd_cross(n, axisN)
         vel += tangent * (speed * audioScale) * dt
-        let radialN = radial / dist
-        // centerforce: 축 중심을 향한 반경 인력(음수면 척력 — sign 은 scale 과 같은 규약).
-        if v.centerForce != 0 { vel -= radialN * (v.centerForce * dt) }
-        // ring [추정 근사]: 대역(|dist−radius| ≤ width/2, width 0 이면 원주선) 밖에서만 링을 향해 당김.
+        // centerforce **[모델 미확정 — 상수와 게이트만 실측]**: 지금 코드는 "축을 향한 등가속
+        // 인력" 인데 실측 런타임은 `vel += (dist/dist′ − 1)·(centerforce/dt)·radial′`
+        // (dist′ = |radial(pos + vel·dt)|) 형태로 **차원이 다르다**(dt 가 상쇄되는 무차원
+        // 감쇠로 보인다). 그 유도를 아직 바이트로 재검증하지 못해 모델은 그대로 두고, 실측이
+        // 끝난 **게이트만** 반영했다 — `flags & 2` 가 없으면 파스 단계에서 0 이라 여기 안 온다.
+        if v.centerForce != 0 { vel -= n * (v.centerForce * dt) }
+        // ring **[힘 수식 추정 · 게이트는 실측]**: `flags & 4` 가 없으면 파서가 nil 을 주므로
+        // 여기 오지 않는다(런타임 `test byte [r14+0x110],4` @0x1402434eb). 동봉 코퍼스의
+        // vortex_v2 5건은 전부 bit2 가 없어 이 경로에 **한 번도 들어오지 않는다**.
         if let ring = v.ring, ring.pullForce != 0 {
             let delta = dist - ring.radius
             let halfW = max(0, ring.width) * 0.5
             if abs(delta) > halfW, abs(delta) - halfW <= max(0, ring.pullDistance) {
-                vel -= radialN * (ring.pullForce * dt) * (delta > 0 ? 1 : -1)
+                vel -= n * (ring.pullForce * dt) * (delta > 0 ? 1 : -1)
             }
         }
     }
