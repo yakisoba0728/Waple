@@ -592,28 +592,36 @@ public struct ParticleSystemDef: Equatable {
         for case let i as [String: Any] in jsonArray {
             switch i["name"] as? String {
             case "lifetimerandom":
-                inits.append(.lifetimeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
+            // [2026-08-20] **부재 기본값은 중립값이 아니라 원본 주입기 상수다.** WE 는 원소 팩토리
+            // 직전에 기본값 주입기를 돌린다 — `if (!json.find(k)) json[k] = C;` 꼴이고, 상수 C 는
+            // 코드에만 있어서 자산 통계로는 절대 복원되지 않는다. 아래 값은 전부 그 주입기를
+            // 디스어셈블해 읽은 것이다(주입기 = `Json::Value::find`(0x140087490) 호출 뒤
+            // `test rax,rax` / `jne`(키 있으면 건너뜀) 패턴).
+            // lifetimerandom 주입기 0x1401b9c40: max 만 1.0(0x1401b9d12) 을 심고 min 은 상수를
+            // 심지 않는다 = **0**. 실물 도달 0건이지만 기록을 맞춘다.
+                inits.append(.lifetimeRandom(min: pfloat(i["min"]) ?? 0, max: pfloat(i["max"]) ?? 1,
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "sizerandom":
                 inits.append(.sizeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
                                          exponent: pexponent(i["exponent"]) ?? 1))
             case "colorrandom":
-                inits.append(.colorRandom(min: pvec3(i["min"]) ?? Vec3(x: 255, y: 255, z: 255),
+            // colorrandom 주입기 0x1401ba110: min = "0 0 0"(0x1401ba16e), max = "255 255 255"
+            // (0x1401ba264), exponent = 1.0(0x1401ba332). 종전 min 기본값 (255,255,255)는
+            // "중립값" 추정이었다. 실물 도달 0건(258건 전건 min 명시)이라 동작 변화는 없다.
+                inits.append(.colorRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
                                           max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255),
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "alpharandom":
-                // W2-① 원복: 032b66d(부재 기본값 1→0)를 되돌린다. 같은 파스 스위치의 관례상
-                // 부재 기본값은 항상 "중립값"이다 — colorrandom??(255,255,255)(최대), velocity/
-                // rotationrandom??0. 알파의 중립은 1(불투명)이며 0(완전 투명)이 아니다.
-                // 반증: wind-blur.json {"min":0.8}(max 부재)이 ??0 이면 역전 구간 [0,0.8]이 되어
-                // 저작 의도([0.8,1])와 반대로 감광된다. 3257043844(SakuraFront 단일 파티클계,
-                // min/max 둘 다 부재)는 WE 프리뷰에 꽃잎이 명확히 보이는데 ??0 이면
-                // initialAlpha=0 → alphafade 곱으로 전 파티클이 완전 투명해져 모순.
-                // 032b66d 근거였던 "3416122407 프리뷰에 bokeh 없음"은 무효 — 그 프리뷰엔
-                // fireworks/stars/butterflies/birds/leaves 도 안 보이는데 이는 알파 0이 아니라
-                // 해당 레이어들이 프로퍼티로 꺼져 있다는 증거다. bokeh 백화의 진범은 미구현
-                // overbright(halo_2_* 머티리얼의 overbright:0.25 + additive)였고 W2-②가 해소했다.
-                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
+                // **[2026-08-20 정정] 추론이 아니라 실측이다.** 아래 옛 주석은 "같은 스위치의 관례상
+                // 부재 기본값은 중립값" 이라는 유추로 min 을 1 로 놓았는데, 원본 주입기
+                // 0x1401baa10 이 min = **0.05**(0x1401baa70) · max = 1.0(0x1401baaec) 를 심는다.
+                // 즉 WE 의 중립은 불투명(1)이 아니라 거의 투명(0.05)이다.
+                //
+                // 옛 주석이 든 반증은 여전히 유효하되 결론이 달라진다: `wind-blur.json {"min":0.8}`
+                // 은 min 이 명시돼 있어 영향 없고, min/max 둘 다 부재인 것은 동봉 34건 중 1건뿐이다.
+                // 그 1건이 [0.05,1] 로 바뀐다 — [1,1] 고정보다 원본에 맞다.
+                // (032b66d 의 ??0 은 여전히 틀렸다. 0.05 는 0 이 아니다.)
+                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 0.05, max: pfloat(i["max"]) ?? 1,
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "velocityrandom":
                 inits.append(.velocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -621,13 +629,18 @@ public struct ParticleSystemDef: Equatable {
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "rotationrandom":
                 inits.append(.rotationRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                             // 부재 기본 max (0,0,2π): wallpaper64.exe 스트링
-                                             // "0 0 6.28318530717" @0x48e498(키 귀속은 인접 추정).
+                                             // 부재 기본 max (0,0,2π) — **키 귀속 확정**(2026-08-20).
+                                             // 주입기 0x1401bb390 이 min="0 0 0"(0x1401bb3ee),
+                                             // max="0 0 6.28318530717"(0x1401bb4c0) 를 심는다.
+                                             // 종전 "인접 추정" 은 이제 실측이다.
                                              max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 6.28318530717),
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "angularvelocityrandom":
-                inits.append(.angularVelocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                                    max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 0),
+            // 주입기 0x1401bb9c0: min = "0 0 -5"(0x1401bba1e, 길이 6) · max = "0 0 5"(0x1401bbafe,
+            // 길이 5) · exponent = 1.0(0x1401bbbe0). 종전 (0,0,0)/(0,0,0)은 **회전이 아예 없다**.
+            // 동봉 25건 중 4건이 min·max 를 둘 다 생략한다 — 그 4건이 안 돌고 있었다.
+                inits.append(.angularVelocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: -5),
+                                                    max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 5),
                                                     exponent: pexponent(i["exponent"]) ?? 1))
             case "turbulentvelocityrandom":
                 inits.append(.turbulentVelocityRandom(speedMin: pfloat(i["speedmin"]) ?? 0, speedMax: pfloat(i["speedmax"]) ?? 0,
@@ -701,7 +714,17 @@ public struct ParticleSystemDef: Equatable {
             case "movement":
                 ops.append(.movement(gravity: pvec3(o["gravity"]) ?? Vec3(x: 0, y: 0, z: 0), drag: pfloat(o["drag"]) ?? 0))
             case "alphafade":
-                ops.append(.alphaFade(fadeInTime: pfloat(o["fadeintime"]) ?? 0, fadeOutTime: pfloat(o["fadeouttime"]) ?? 0))
+                // **[2026-08-20] 부재 기본값은 0 이 아니라 0.5 다.** 원본 주입기 0x1401bce50 이
+                // `fadeintime`(0x1401bce63) · `fadeouttime`(0x1401bcf23) 둘 다에
+                // `movabs rbp, 0x3fe0000000000000`(= 0.5, 0x1401bce71) 을 심는다 — `Json::Value::find`
+                // (0x140087490) 가 null 을 낼 때만이다.
+                //
+                // 이게 이번 라운드에서 도달이 가장 큰 자리다: 동봉 `alphafade` 177건 중 **97건이
+                // `fadeouttime` 을 생략**하고 23건이 `fadeintime` 을 생략한다. fadeOut 0 은
+                // `fadeFactor` 에서 페이드를 통째로 끄므로, 그 97건은 수명 끝에 **팝** 하고 사라졌다
+                // — WE 는 수명의 마지막 50% 에 걸쳐 서서히 사라진다.
+                ops.append(.alphaFade(fadeInTime: pfloat(o["fadeintime"]) ?? 0.5,
+                                      fadeOutTime: pfloat(o["fadeouttime"]) ?? 0.5))
             case "sizechange":
                 ops.append(.sizeChange(startTime: pfloat(o["starttime"]) ?? 0,
                                        startValue: pfloat(o["startvalue"]) ?? 1,
@@ -723,15 +746,24 @@ public struct ParticleSystemDef: Equatable {
                 // magic_color_sparkle 등)도 트윙클을 내야 한다(실측: smax 가 smin 을 승계하면 scale
                 // 전체 생략은 진폭 0, scalemin 단독 지정은 진폭이 상수로 죽는다 — WE 데모는 frequency 만
                 // 지정하고도 가시 진동을 낸다).
+                // **[2026-08-20] 주파수 기본값은 승계가 아니라 고정 상수다.** 주입기 0x1401bd910 이
+                // frequencymin = 1.0(0x1401bd979) · frequencymax = **10.0**(0x1401bda2f) ·
+                // scalemax = 1.0(0x1401bdb85, `movsd` @0x140492778) 을 심는다. 즉 fmax 는 fmin 을
+                // 승계하지 않는다 — 위 "역범위 방지" 주석의 승계는 이제 불필요하다(둘 다 상수라
+                // 역범위가 생기지 않는다). frequency 0 은 sin 을 상수로 만들어 연산자를 무력화하므로
+                // 동봉 26건 중 frequencymin 부재 3건·frequencymax 부재 2건이 죽어 있었다.
                 let smin = pfloat(o["scalemin"]) ?? 0
-                let fmin = pfloat(o["frequencymin"]) ?? 0
-                ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? fmin,
+                let fmin = pfloat(o["frequencymin"]) ?? 1
+                ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? 10,
                                            scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? 1,
                                            phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "oscillateposition":
+                // 주입기 0x1401bd5d0: frequencymin = 1.0(0x1401bd716) · frequencymax = **5.0**
+                // (0x1401bd7cc). 자매 alpha/size 는 10.0 인데 **여기만 5.0** 이다 — 승계였다면
+                // 절대 나오지 않을 값이라, 이 하나가 "고정 상수" 해석의 반증 가능한 증거다.
                 let smin = pfloat(o["scalemin"]) ?? 0
-                let fmin = pfloat(o["frequencymin"]) ?? 0
-                ops.append(.oscillatePosition(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? fmin,
+                let fmin = pfloat(o["frequencymin"]) ?? 1
+                ops.append(.oscillatePosition(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? 5,
                                               scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin,
                                               phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0,
                                               mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1)))
@@ -790,10 +822,15 @@ public struct ParticleSystemDef: Equatable {
                                        mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1),
                                        phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "oscillatesize":
-                let smin = pfloat(o["scalemin"]) ?? 1
-                let fmin = pfloat(o["frequencymin"]) ?? 0
-                ops.append(.oscillateSize(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? fmin,
-                                          scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin,
+                // 주입기 0x1401bdbf0: frequencymin = 1.0(0x1401bdc59) · frequencymax = 10.0
+                // (0x1401bdd0f) · scalemin = **0.8**(0x1401bddc5) · scalemax = **1.2**
+                // (0x1401bde6f, `movsd` @0x140492790). 종전 (1, 승계)는 진폭 0(= 무진동)이라
+                // 동봉 5건 중 scalemin 부재 1건·scalemax 부재 1건·frequency 부재 2~3건이 죽어
+                // 있었다. WE 는 크기를 ±20% 로 맥동시킨다.
+                let smin = pfloat(o["scalemin"]) ?? 0.8
+                let fmin = pfloat(o["frequencymin"]) ?? 1
+                ops.append(.oscillateSize(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? 10,
+                                          scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? 1.2,
                                           phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "alphachange":
                 ops.append(.alphaChange(startTime: pfloat(o["starttime"]) ?? 0,
