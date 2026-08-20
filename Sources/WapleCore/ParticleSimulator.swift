@@ -390,7 +390,7 @@ public struct ParticleSimulator {
             }
         }
         // boids 는 전 파티클의 위치·속도를 동시에 봐야 하므로 per-particle 루프 **앞**에서 돈다.
-        if !boidsOps.isEmpty { applyBoids(dt) }
+        if !boidsOps.isEmpty { applyBoids(Self.dtScaled(dt)) }
         // 적분(controlpointattract/vortex 힘 → movement/angularMovement) + 노화.
         for k in particles.indices {
             _integrateParticle(at: k, dt: dt)
@@ -419,6 +419,8 @@ public struct ParticleSimulator {
     /// _step 핫루프에서 호출 — 배열 할당 없음, RNG 드로 없음(결정적 시퀀스 불변).
     @inline(__always)
     private mutating func _integrateParticle(at k: Int, dt: Float) {
+        // 힘·감쇠 계수 전용 포화 dt(`dtScaled` 주석의 7 지점). fps ≥ 40 이면 dt 와 비트동일.
+        let dtS = Self.dtScaled(dt)
         particles[k].age += dt
         // remapvalue: velocity 는 매 스텝 덮어쓰기(작가가 낙하속도를 노이즈로 직접 기술),
         // speed 는 이번 스텝 적분에만 곱하는 비파괴 배수(저장 vel 불변 → 복리 폭주 없음).
@@ -473,10 +475,11 @@ public struct ParticleSimulator {
             // deletethreshold: 어느 attractor 든 근접 삭제 판정 시 true — 전 attractor 는 끝까지
             // 적용(단락 평가 금지 — 호출 생략이 없어야 delete=false 경로 산술이 종전과 동일).
             var attractDelete = false
-            for a in attractors { attractDelete = applyAttract(a, to: &vel, pos: pos, dt: dt) || attractDelete }
+            for a in attractors { attractDelete = applyAttract(a, to: &vel, pos: pos, dtScaled: dtS) || attractDelete }
             for v in vortices {
                 // F624: vortex 오디오반응 = 접선 속도 × 응답 배수(무신호/묵보유 1 → 비트동일).
-                applyVortex(v, to: &vel, pos: pos, dt: dt, audioScale: audioResponseScale(v.audio))
+                applyVortex(v, to: &vel, pos: pos, dt: dt, dtScaled: dtS,
+                            audioScale: audioResponseScale(v.audio))
             }
             particles[k].vel = vel
             // 근접 삭제(deletethreshold 키 보유 attractor 한정): 수명 초과로 마킹 — 아래 컬 경로
@@ -489,7 +492,11 @@ public struct ParticleSimulator {
         }
         for m in movements {
             particles[k].vel += m.gravity * dt
-            if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
+            // 실물 0x14023fe65–0x14023fe6d: drag 는 **dtScaled**(중력은 위에서 생 dt). 클램프는
+            // `min(x, 0x1.fffffep-1)`(상수 0x140492700 = 0.9999998807907104 @0x14023fe48) 이라
+            // 배수가 0 이 아니라 ~1.19e-7 로 바닥친다 — 실질 차이는 없지만 공짜라 맞춰 둔다.
+            // `m.drag > 0` 가드는 유지한다(실물엔 없어 음수 drag 를 증폭하지만 코퍼스 도달 0).
+            if m.drag > 0 { particles[k].vel *= 1 - min(m.drag * dtS, 0.9999998807907104) }
         }
         // G-C2-01: `reducemovementnearcontrolpoint` · `capvelocity` 는 **movement 뒤**다.
         // 동봉 저작 순서가 전건 [movement, …, reducemovement/capvelocity] 이고, 실물 VM 은
@@ -544,13 +551,13 @@ public struct ParticleSimulator {
                 let a = turbulenceAcceleration(turbulences[0], pos: particles[k].pos, speed: particles[k].turbSpeed,
                                                phase: particles[k].turbPhase, time: time)
                 // 가산 델타 자리의 가중은 그대로 곱이다(`old + w·delta`).
-                particles[k].vel += a * (dt * turbulences[0].blend.weight(lifeFraction: nTurb))
+                particles[k].vel += a * (dtS * turbulences[0].blend.weight(lifeFraction: nTurb))
             }
             for (ti, extra) in particles[k].turbExtra.enumerated() where extra.speed > 0 {
                 guard ti + 1 < turbulences.count else { break }
                 let a = turbulenceAcceleration(turbulences[ti + 1], pos: particles[k].pos, speed: extra.speed,
                                                phase: extra.phase, time: time)
-                particles[k].vel += a * (dt * turbulences[ti + 1].blend.weight(lifeFraction: nTurb))
+                particles[k].vel += a * (dtS * turbulences[ti + 1].blend.weight(lifeFraction: nTurb))
             }
         }
         // maintaindistancetocontrolpoint: CP 중심 반지름 `distance` 구면으로 위치를 당긴다.
@@ -619,7 +626,8 @@ public struct ParticleSimulator {
             // 선형 movement(위 280-283행)와 대칭인 drag 감쇠(F188) — drag 미지정(0)이면 종전대로
             // 등가속 무감쇠 누적(무회귀).
             particles[k].angularVel += a.force * dt
-            if a.drag > 0 { particles[k].angularVel *= max(0, 1 - a.drag * dt) }
+            // 실물 0x14023ffce: 회전 적분은 생 dt(0x14023ffc7), drag 만 dtScaled. movement 와 동형.
+            if a.drag > 0 { particles[k].angularVel *= 1 - min(a.drag * dtS, 0.9999998807907104) }
         }
         particles[k].rotation += particles[k].angularVel * dt
         // 트레일 위치 히스토리(dt>0 만 — step(0) 스냅샷 중복 방지). 링버퍼로 trailSamples 유지.
@@ -860,7 +868,7 @@ public struct ParticleSimulator {
     /// 즉 `threshold` 는 "포화 반경" 이 아니라 **작용 반경 겸 선형 감쇠 스케일**이다.
     private func applyAttract(_ a: (scale: Float, threshold: Float, target: SIMD3<Float>,
                                     delete: Bool, flags: Int),
-                              to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) -> Bool {
+                              to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dtScaled: Float) -> Bool {
         let d = a.target - pos
         let dist = simd_length(d)
         // **[미구현 — 실물과 다르다]** 실물의 삭제는 (a) `flags & 1` 게이트(0x14024193d)를 지나고
@@ -872,7 +880,8 @@ public struct ParticleSimulator {
         // 게이트만 먼저 맞춰 둔다 — 키만 보고 삭제하던 종전 경로가 더 위험하다.
         if a.delete, (a.flags & 1) != 0, a.threshold > 0, dist < a.threshold { return true }
         guard dist > 1e-4, a.threshold > 0, dist < a.threshold else { return false }
-        var step = (1 - dist / a.threshold) * a.scale * dt
+        // 실물 0x14024155b–0x14024155f: `movaps xmm10, xmm8`(dtScaled) → `mulps xmm10, [r14+0x40]`(scale).
+        var step = (1 - dist / a.threshold) * a.scale * dtScaled
         // flags bit1 = 오버슛 클램프. 기본값 2 에 들어 있으므로 **기본은 켜져 있다**.
         if (a.flags & 2) != 0, dist < step { step = dist }
         vel += (d / dist) * step
@@ -915,7 +924,8 @@ public struct ParticleSimulator {
     private func applyVortex(_ v: (axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
                                    offset: SIMD3<Float>, audio: AudioProcessing?,
                                    centerForce: Float, ring: VortexRing?, flags: Int),
-                             to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float, audioScale: Float) {
+                             to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float, dtScaled: Float,
+                             audioScale: Float) {
         // 축은 **파스 시점에** 정규화된다(0x1401cdc16–0x1401cdc58). |axis| ≤ 0.001 이면 스킵이
         // 아니라 **(0,0,1) 로 대체**한다 — 종전의 `guard … else { return }`(무동작)와 다르다.
         let axisN = simd_length(v.axis) > 0.001 ? normalizeSafe(v.axis) : SIMD3<Float>(0, 0, 1)
@@ -961,7 +971,10 @@ public struct ParticleSimulator {
         // 예측 반경은 **이 오퍼레이터의 접선 가산 이전 속도**로 만든다 — 실물은 루프 앞머리에서
         // 속도를 한 번 읽고 두 기여를 함께 더한다(0x1402439a0 `addps xmm1, xmm5`).
         // 그래서 여기서도 tangent 를 먼저 더하지 않고 마지막에 함께 더한다.
-        var delta = tangent * (speed * audioScale) * dt
+        // 실물 0x1402432b9/bd(vortex) · 0x140243449/50(vortex_v2): 접선 속도는 **dtScaled**.
+        // 아래 예측 위치(`pos + vel*dt`)와 centerForce 의 `/ dt` 는 **생 dt** 다 —
+        // 실물이 `divps xmm0, [rbp+0xf0]`(= 생 dt 4레인) @0x14024345c 로 나눈다. 섞지 말 것.
+        var delta = tangent * (speed * audioScale) * dtScaled
         if v.centerForce != 0, dt > 0 {
             let relP = (pos + vel * dt) - v.offset
             let radialP = relP - axisN * proj
@@ -1196,7 +1209,7 @@ public struct ParticleSimulator {
     ///     복사본을 쓰면 순서 의존성이 사라져 달라진다.
     ///
     /// 실물은 `rsqrtps` 근사(≤1.5e-3)를 쓰고 여기선 정확한 `sqrt` 를 쓴다 — 비트동일은 불가능하다.
-    private mutating func applyBoids(_ dt: Float) {
+    private mutating func applyBoids(_ dtS: Float) {
         let count = particles.count
         guard count > 0 else { return }
         let n = count / 100 + 1
@@ -1204,9 +1217,10 @@ public struct ParticleSimulator {
         frameCounter &+= 1
         let fn = Float(n)
         for op in boidsOps {
-            let sepF = op.sepF * fn * dt
-            let aliF = op.aliF * fn * dt
-            let cohF = op.cohF * fn * dt
+            // 실물 0x1402441b5·0x1402441d3·0x1402441db: 세 계수 전부 dtScaled 를 곱한다.
+            let sepF = op.sepF * fn * dtS
+            let aliF = op.aliF * fn * dtS
+            let cohF = op.cohF * fn * dtS
             let maxSq = op.maxSpeed * op.maxSpeed
             var g = phase
             while g * 4 < count {
@@ -1381,6 +1395,44 @@ public struct ParticleSimulator {
         let w = spec.blendWindow.weight(lifeFraction: n)
         let mn = s3(spec.outMin), mx = s3(spec.outMax)
         return (mn + (mx - mn) * v, w)
+    }
+
+    // MARK: - dtScaled
+
+    /// 오퍼레이터 VM 의 **3번째 인자**. 호출부 0x140237724–0x14023775f 를 그대로 옮긴 것:
+    ///
+    ///     xmm0 = 0.025 / dt                     0x140237734  (상수 0x140492630 = 0.025f = 1/40)
+    ///     xmm2 = (xmm0 > 1.0) ? 1.0 : xmm0      0x14023773c–0x140237741  = min(1, 0.025/dt)
+    ///     dtScaled = dt · powf(xmm2, 0.7)       0x140237744–0x14023775f  (지수 0x1404926c8 = 0.7f)
+    ///
+    /// 즉 **fps ≥ 40 에서는 생 dt 와 완전히 같고**(배수가 정확히 1.0), 그 아래에서만 연화 포화한다
+    /// (dt=0.1s → 0.0379s). 프레임이 떨어질 때 힘·감쇠가 원본보다 세게 걸리던 것을 막는 장치다.
+    ///
+    /// 어디에 쓰이고 어디에 안 쓰이는지가 핵심이라 함께 적는다 — 이 저장소에서 전부 직접 확인했다:
+    ///
+    ///   dtScaled 를 곱하는 곳(7 오퍼레이터)
+    ///     movement 의 **drag**            0x14023fe65–0x14023fe6d   (중력은 생 dt: 0x14023fe51/56/60)
+    ///     angularmovement 의 **drag**     0x14023ffce               (회전 적분은 생 dt: 0x14023ffc7)
+    ///     controlpointattract 의 scale    0x14024155b–0x14024155f
+    ///     turbulence 의 mask.x/.y/.z      0x1402429cb·0x140242a10·0x140242a33
+    ///     vortex 의 속도 쌍               0x1402432b9·0x1402432bd
+    ///     vortex_v2 의 속도 쌍            0x140243449·0x140243450
+    ///     boids 의 sep/coh/ali 계수       0x1402441b5·0x1402441d3·0x1402441db
+    ///
+    ///   생 dt 를 쓰는 곳(대조군)
+    ///     중력·위치 적분, 회전 적분, oscillateposition 의 직전 프레임 위상,
+    ///     maintaindistancetocontrolpoint 의 variablestrength, reducemovementnearcontrolpoint,
+    ///     vortex_v2 의 **centerforce**(0x14024345c `divps xmm0, [rbp+0xf0]`)와 예측 위치
+    ///
+    /// 즉 규칙은 "운동학은 실시간 dt, **힘·감쇠 계수만** 포화 dt" 다.
+    ///
+    /// 실물엔 하나 더 있다 — `[E+0x148]` 이 1..20 이면 dt·dtScaled 를 반씩 나눠 VM 을 **두 번** 돈다
+    /// (0x140237754–0x140237793). Waple 은 디스플레이 리프레시로 구동돼 해당 없으므로 옮기지 않는다.
+    @inline(__always)
+    static func dtScaled(_ dt: Float) -> Float {
+        // dt ≤ 0.025 이면 0.025/dt ≥ 1 → min = 1 → 1^0.7 = 1 → 생 dt 와 **비트동일**. 무회귀 경로다.
+        guard dt > 0.025 else { return dt }
+        return dt * powf(0.025 / dt, 0.7)
     }
 
     // MARK: - 난류 흐름장
