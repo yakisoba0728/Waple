@@ -488,6 +488,27 @@ final class ParticleSimulatorTests: XCTestCase {
             renderer: .sprite, maxCount: maxCount, startTime: 0, material: nil)
     }
 
+    /// `velocityrandom` 은 이미터 초기속도를 **덮지 않고 더한다**(실물 0x14023bbea–0x14023bbf7 의
+    /// `addss`). 판정을 결정적으로 만들려고 velocityrandom 의 범위를 0 으로 잡았다 — 덮어쓰던
+    /// 종전 구현에서는 vel 이 정확히 0 이 되고, 누적하면 이미터가 준 속도가 그대로 남는다.
+    /// (범위가 0 이라 draw 값도 0 이므로 RNG 소비량과 무관하게 판정이 성립한다.)
+    func testVelocityRandomAddsToEmitterSpeedInsteadOfReplacingIt() {
+        var def = ParticleSystemDef(
+            emitters: [.sphere(origin: Vec3(x: 0, y: 0, z: 0), directions: Vec3(x: 1, y: 0, z: 0),
+                               distanceMin: 0, distanceMax: 0, rate: 1000, burst: 0,
+                               sign: Vec3(x: 1, y: 0, z: 0))],
+            initializers: [.lifetimeRandom(min: 1000, max: 1000),
+                           .velocityRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 0, y: 0, z: 0))],
+            operators: [], renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+        def.emitterSpeed = [SIMD2<Float>(100, 100)]   // y > x 가 아니므로 고정속도(추가 draw 없음)
+
+        var sim = ParticleSimulator(def: def, seed: 5)
+        let last = sim.step(1.0 / 60.0)
+        XCTAssertEqual(last.count, 1)
+        XCTAssertGreaterThan(simd_length(last[0].vel), 1.0,
+                             "velocityrandom 이 이미터 초기속도를 덮어썼다")
+    }
+
     func testTurbulenceMovesStaticParticle() {
         // vel/gravity 0 → turbulence 만이 유일한 이동원(ember 실물 패턴). 위치가 스폰에서 벗어나야.
         var sim = ParticleSimulator(def: turbDef(speedMin: 100, speedMax: 100), seed: 1)

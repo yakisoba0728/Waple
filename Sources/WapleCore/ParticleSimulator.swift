@@ -733,8 +733,9 @@ public struct ParticleSimulator {
             if sg.z != 0 { dir.z = sg.z > 0 ? abs(dir.z) : -abs(dir.z) }
             p.pos = s3(origin) + dir * rng.range(dmin, dmax)
             // F620: 이미터 speedmin/speedmax = 방출 방향(dir) 초기속도(WE 문서: movement 오퍼레이터와
-            // 결합하는 particle speed). velocityrandom 이니셜라이저가 있으면 뒤의 apply 가 덮어쓴다
-            // (기존 조합 순서 유지 — velocityrandom 有 시스템 무회귀).
+            // 결합하는 particle speed). 실물도 이미터가 먼저 속도를 쓰고 그 뒤 스폰 VM 이 돈다 —
+            // 그래서 `velocityrandom` 핸들러가 `addss` 로 **누적**한다(0x14023bbea–0x14023bbf7).
+            // 종전에는 그 이니셜라이저가 여기 초기속도를 덮어썼다(apply 의 velocityRandom 주석 참조).
             let speed = emitterSpeedSample(index)
             if speed != 0 { p.vel = dir * speed }
         case let .box(origin, dmax, _, _):
@@ -984,7 +985,17 @@ public struct ParticleSimulator {
             let x = randomRange(mn.x, mx.x, exponent: exp)
             let y = randomRange(mn.y, mx.y, exponent: exp)
             let z = randomRange(mn.z, mx.z, exponent: exp)
-            p.vel = SIMD3(x, y, z)
+            // **덮어쓰지 않고 더한다.** 실물 핸들러 0x14023bac6 의 꼬리가 그렇게 한다 —
+            // `mov rax, [rdi+0x2c8]`(속도 X 배열) → `addss xmm0, [rax+r12*4]` →
+            // `movss [rax+r12*4], xmm0` (0x14023bbea–0x14023bbf7), Y(0x2d0)·Z(0x2d8)도 동형.
+            // 이미터가 먼저 `p.vel = dir·speed` 를 쓰므로(:739/:755) 덮어쓰면 그 초기속도가 사라진다.
+            // 형제인 `turbulentVelocityRandom`(아래)은 이미 `+=` 였다 — 비일관이 여기서 끝난다.
+            // 종전 주석은 "velocityrandom 이 있으면 뒤의 apply 가 덮어쓴다(기존 조합 순서 유지)" 로
+            // 이 동작을 **의도된 무회귀**라고 적었는데, 그건 실물 확인 전의 보수적 선택이었다.
+            // 도달(동봉 자산 실측): 이미터 speed 가 0이 아니면서 velocityrandom 을 함께 쓰는 시스템
+            // 3파일 / 고유 2건 — `exampleturbolence3d`(sphere −6..−2), `presets/stars/starfield`
+            // (sphere 1.0 고정, 프리뷰 사본 포함 2). speed 기본값이 0 이라(:1445) 나머지는 무영향.
+            p.vel += SIMD3(x, y, z)
         case let .rotationRandom(mn, mx, exp):
             let x = randomRange(mn.x, mx.x, exponent: exp)
             let y = randomRange(mn.y, mx.y, exponent: exp)
