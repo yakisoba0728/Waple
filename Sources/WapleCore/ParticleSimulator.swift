@@ -71,6 +71,12 @@ public struct ParticleSimulator {
                               delete: Bool, flags: Int)]
     /// maintaindistancetocontrolpoint — CP 중심 반지름 `distance` 구면으로 **위치를 투영**한다.
     private let maintainDists: [(distance: Float, variableStrength: Float, target: SIMD3<Float>)]
+    /// boids — 순수 입자간 상호작용(CP 무관). 전 파티클을 동시에 봐야 해서 per-particle 루프가
+    /// 아니라 **별도 선행 패스**로 돈다.
+    private let boidsOps: [(sepThr: Float, nbrThr: Float, maxSpeed: Float,
+                            sepF: Float, aliF: Float, cohF: Float, flags: Int)]
+    /// boids 서브샘플 위상용 프레임 카운터(실물 `[ctx+0x144]`).
+    private var frameCounter: UInt32 = 0
     private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
                             offset: SIMD3<Float>, audio: AudioProcessing?,   // F624: 오디오반응 속도 배수
                             centerForce: Float, ring: VortexRing?, flags: Int)]
@@ -147,6 +153,7 @@ public struct ParticleSimulator {
         var oaBlend = BlendWindow.identity
         var attr: [(Float, Float, SIMD3<Float>, Bool, Int)] = []
         var mdist: [(Float, Float, SIMD3<Float>)] = []
+        var boids: [(Float, Float, Float, Float, Float, Float, Int)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?, Int)] = []
         // F628: 전 turbulence 오퍼레이터 누적(종전 first-wins 드롭 — 3000562427 의 지배 성분 손실).
         var turb: [(Float, Float, Float, Float, SIMD3<Float>, Float, Float, BlendWindow)] = []
@@ -173,6 +180,8 @@ public struct ParticleSimulator {
                 attr.append((scale, threshold, s3(target), deleteThreshold, flags))
             case let .maintainDistanceToControlPoint(distance, vs, target):
                 mdist.append((distance, vs, s3(target)))
+            case let .boids(sepThr, nbrThr, maxSpeed, sepF, aliF, cohF, flags):
+                boids.append((sepThr, nbrThr, maxSpeed, sepF, aliF, cohF, flags))
             case let .vortex(axis, dIn, dOut, sIn, sOut, offset, centerForce, _, _, _, ring, flags):
                 // variablestrength/reductioninner/reductionouter(위치인자 7–9)는 파스·보존 전용 — 소비 안 함.
                 vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset), centerForce, ring, flags))
@@ -211,6 +220,8 @@ public struct ParticleSimulator {
         oscPosBlend = opBlend
         attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2, delete: $0.3, flags: $0.4) }
         maintainDists = mdist.map { (distance: $0.0, variableStrength: $0.1, target: $0.2) }
+        boidsOps = boids.map { (sepThr: $0.0, nbrThr: $0.1, maxSpeed: $0.2,
+                                sepF: $0.3, aliF: $0.4, cohF: $0.5, flags: $0.6) }
         vortices = vort.indices.map { (axis: vort[$0].0, dIn: vort[$0].1, dOut: vort[$0].2,
                                         sIn: vort[$0].3, sOut: vort[$0].4, offset: vort[$0].5,
                                         audio: $0 < def.vortexAudio.count ? def.vortexAudio[$0] : nil,
@@ -346,6 +357,8 @@ public struct ParticleSimulator {
                 }
             }
         }
+        // boids 는 전 파티클의 위치·속도를 동시에 봐야 하므로 per-particle 루프 **앞**에서 돈다.
+        if !boidsOps.isEmpty { applyBoids(dt) }
         // 적분(controlpointattract/vortex 힘 → movement/angularMovement) + 노화.
         for k in particles.indices {
             _integrateParticle(at: k, dt: dt)
@@ -1063,6 +1076,72 @@ public struct ParticleSimulator {
     /// 진동 위치 오프셋(절대식, base pos 불변) — display() 스냅샷과 트레일 히스토리 기록(_step 291행·
     /// spawn 404행)이 동일 공식을 공유한다(F177: 히스토리가 base pos 만 기록하면 spriteTrail/rope
     /// 리본이 oscillateposition 진동을 반영하지 못해 sprite 쿼드[d.pos 사용]와 비대칭이 생긴다).
+    /// boids — 실물 VM op 0x11 @0x140244121 을 그대로 옮긴다.
+    ///
+    /// 스칼라로 옮기면서 지킨 것 둘:
+    ///  ① **서브샘플링**. 실물은 `i = phase·4` 에서 `N·4` 씩 건너뛰므로 **4-입자 그룹 단위**로
+    ///     `g ≡ phase (mod N)` 인 그룹만 갱신한다. `N = count/100 + 1` 이라 100개 미만이면 N = 1
+    ///     (동봉 실사용 2종은 maxcount 16 이라 항상 전수 갱신). 가속 계수에 `N` 을 곱하는 것이
+    ///     그 보상이다.
+    ///  ② **제자리 갱신**. 실물은 j 루프에서 배열을 직접 읽으므로 앞선 i 의 갱신이 뒤에 보인다.
+    ///     복사본을 쓰면 순서 의존성이 사라져 달라진다.
+    ///
+    /// 실물은 `rsqrtps` 근사(≤1.5e-3)를 쓰고 여기선 정확한 `sqrt` 를 쓴다 — 비트동일은 불가능하다.
+    private mutating func applyBoids(_ dt: Float) {
+        let count = particles.count
+        guard count > 0 else { return }
+        let n = count / 100 + 1
+        let phase = Int(frameCounter % UInt32(n))
+        frameCounter &+= 1
+        let fn = Float(n)
+        for op in boidsOps {
+            let sepF = op.sepF * fn * dt
+            let aliF = op.aliF * fn * dt
+            let cohF = op.cohF * fn * dt
+            let maxSq = op.maxSpeed * op.maxSpeed
+            var g = phase
+            while g * 4 < count {
+                for i in (g * 4)..<min(g * 4 + 4, count) {
+                    var sepAcc = SIMD3<Float>(0, 0, 0), velAcc = SIMD3<Float>(0, 0, 0)
+                    var posAcc = SIMD3<Float>(0, 0, 0)
+                    var sepCnt: Float = 0, nCnt: Float = 0
+                    let pi = particles[i].pos, vi = particles[i].vel
+                    for j in 0..<count where j != i {
+                        let d = pi - particles[j].pos
+                        let l2 = simd_length_squared(d)
+                        guard l2 != 0 else { continue }   // 실물 `cmpneqps xmm2, 0` — 자기 자신 제외
+                        let l = l2.squareRoot()
+                        if l < op.sepThr {
+                            sepAcc += d * (op.sepThr / l - 1)   // 0x1402443e7 `subps … 1.0`
+                            sepCnt += 1
+                        }
+                        if l < op.nbrThr {
+                            velAcc += particles[j].vel
+                            posAcc += particles[j].pos
+                            nCnt += 1
+                        }
+                    }
+                    var dv = SIMD3<Float>(0, 0, 0)
+                    if sepCnt > 0 { dv += sepAcc * (sepF / sepCnt) }
+                    if nCnt > 0 {
+                        dv += (velAcc / nCnt - vi) * aliF + (posAcc / nCnt - pi) * cohF
+                    }
+                    var v = vi + dv
+                    // flags bit0 = 속도 상한. **이미 상한보다 빠른 입자는 면제**된다
+                    // (`max(|vel₀|², maxspeed²) < |v|²` 비교) — 단순 클램프가 아니다.
+                    if op.flags & 1 != 0 {
+                        let vSq = simd_length_squared(v)
+                        if max(simd_length_squared(vi), maxSq) < vSq, vSq > 0 {
+                            v *= op.maxSpeed / vSq.squareRoot()
+                        }
+                    }
+                    particles[i].vel = v
+                }
+                g += n
+            }
+        }
+    }
+
     /// 파티클 수명 비율 `f = age/lifetime`. G-C2-03 가중의 입력이며, 사망 판정과 같은 규약으로
     /// lifetime ≤ 0 이면 1 로 본다(display() 의 clamp 와 동형).
     private func lifeFraction(_ p: Particle) -> Float {

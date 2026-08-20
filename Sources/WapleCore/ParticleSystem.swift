@@ -176,6 +176,35 @@ public enum ParticleOperator: Equatable {
     ///     (0x140237724–0x14023774f). dt ≤ 0.025(= 40fps 이상)면 그냥 `dt` 다 — 즉 **매우 느린
     ///     수렴**이지 즉시 스냅이 아니다.
     case maintainDistanceToControlPoint(distance: Float, variableStrength: Float, target: Vec3)
+    /// 무리 행동(분리·정렬·응집). 주입기 0x1401bf700, 게이트 `stricmp`@0x1401c9?, VM opcode 0x11 →
+    /// 핸들러 **0x140244121**. 컨트롤포인트를 전혀 참조하지 않는 순수 입자간 상호작용이다.
+    ///
+    /// 실측 구조(0x140244121–0x14024421e 앞머리 + 0x140244304– 내부 루프):
+    /// ```
+    ///   N     = count/100 + 1              ; magic-div 0x51eb851f, shr 6 → +1 (0x140244153–0x140244167)
+    ///   phase = frameCounter % N           ; [ctx+0x144] (0x140244161, 0x14024416d)
+    ///   sepF  = separationfactor·N·dtScaled ; 0x1402441ab  (아래 둘도 동형)
+    ///   for 4-입자 그룹 g where g ≡ phase (mod N):     ; i = phase·4, step N·4
+    ///     for each j (살아있고 j ≠ i):
+    ///       d = pos[i] − pos[j] ; L = |d|            ; rsqrtps 근사
+    ///       if L < separationthreshold: sepAcc += (separationthreshold/L − 1)·d ; sepCnt++
+    ///       if L < neighborthreshold:   velAcc += vel[j] ; posAcc += pos[j] ; nCnt++
+    ///     dv = (sepCnt ? sepF/sepCnt·sepAcc : 0)
+    ///        + (nCnt ? aliF·(velAcc/nCnt − vel[i]) + cohF·(posAcc/nCnt − pos[i]) : 0)
+    ///     v = vel[i] + dv
+    ///     if (flags & 1) && max(|vel[i]|², maxspeed²) < |v|²: v *= maxspeed/|v|
+    ///     vel[i] = v                       ; 위치는 건드리지 않는다
+    /// ```
+    /// `N` 곱셈은 서브샘플링 보상이다. 분리항이 `maintaindistancetocontrolpoint` 와 **같은
+    /// `(threshold/L − 1)` 형태**를 쓴다.
+    ///
+    /// 부재 기본값(실측): separationthreshold ortho **20**(0x1401bf726) / 원근 0.02 ·
+    /// neighborthreshold **50**(0x1401bf7f5) / 0.2 · maxspeed **500**(0x1401bf8c4) / 1 ·
+    /// separationfactor **15**(f64 @0x140492818, 플래그 무관) · alignmentfactor **1**(0x1401bf9fd) ·
+    /// cohesionfactor **2**(0x1401bfa14) · flags **1**(`mov qword [rbp-0x40], 1` @0x1401bfa69).
+    /// flags bit0 = 속도 상한 활성화 — **기본이 켜져 있다**. 동봉 실사용 2종은 `flags: 0` 으로 끈다.
+    case boids(separationThreshold: Float, neighborThreshold: Float, maxSpeed: Float,
+               separationFactor: Float, alignmentFactor: Float, cohesionFactor: Float, flags: Int)
     /// 축 기준 소용돌이. 실물키: axis, distanceinner/outer, speedinner/outer, offset(중심).
     /// 확장 키. **[2026-08-20 주소 정정]** 이 블록의 RVA 가 전부 계통적으로 어긋나 있었다
     /// (0x48e7c8 은 `"olor"` 중간, 0x48e7e0 은 `fogdistancestart`). 실측:
@@ -994,6 +1023,15 @@ public struct ParticleSystemDef: Equatable {
                     target: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
                     deleteThreshold: (pint(o["deletethreshold"]) ?? 0) != 0,
                     flags: pint(o["flags"]) ?? 2))   // 0x1401be245 — 주입 기본 2
+            case "boids":
+                ops.append(.boids(
+                    separationThreshold: injected(o, "separationthreshold", 20),  // 0x1401bf726 (원근 0.02)
+                    neighborThreshold: injected(o, "neighborthreshold", 50),      // 0x1401bf7f5 (원근 0.2)
+                    maxSpeed: injected(o, "maxspeed", 500),                       // 0x1401bf8c4 (원근 1.0)
+                    separationFactor: injected(o, "separationfactor", 15),        // f64 @0x140492818, 플래그 무관
+                    alignmentFactor: injected(o, "alignmentfactor", 1),           // 0x1401bf9fd
+                    cohesionFactor: injected(o, "cohesionfactor", 2),             // 0x1401bfa14
+                    flags: pint(o["flags"]) ?? 1))                                // 0x1401bfa69 — 기본 1
             case "maintaindistancetocontrolpoint":
                 // WE 는 `controlpoint` 부재 시 0 을 심는다(int 헬퍼 @0x1401be1fd 계열) — 실사용
                 // 인스턴스(magic_vortex_orb)가 정확히 그 경우다. 이 원소는 지금까지 통째로
