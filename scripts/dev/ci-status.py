@@ -88,18 +88,62 @@ def current_branch():
         return "main"
 
 
+# ci.yml 의 paths-ignore. 전 변경이 이 목록에 들면 macOS 잡이 **정상적으로** 안 돈다
+# (spec.yml 은 paths-ignore 가 없어 항상 돈다). 이 목록과 실제 워크플로가 갈리면
+# 아래 판정이 거짓이 되므로, ci.yml 을 고칠 때 여기도 같이 고칠 것.
+DOCS_ONLY = (".md", "LICENSE", "NOTICE", ".gitignore", ".gitattributes")
+
+
+def docs_only_commit(repo, sha):
+    """이 커밋이 문서/무시 경로만 건드렸는가. 판정 불가면 None."""
+    try:
+        d = api("repos/%s/commits/%s" % (repo, sha))
+    except SystemExit:
+        return None
+    files = [f["filename"] for f in d.get("files", [])]
+    if not files:
+        return None
+    def ignored(f):
+        return f.endswith(".md") or f.startswith("docs/") or f in DOCS_ONLY
+    return all(ignored(f) for f in files)
+
+
 def show_runs(repo, branch, limit):
     d = api("repos/%s/actions/runs?branch=%s&per_page=%d" % (repo, branch, limit))
     runs = d.get("workflow_runs", [])
     print("== %s @ %s ==" % (repo, branch))
     if not runs:
         print("  (실행 없음)")
+    seen_workflows = {}
     for r in runs:
         c = r.get("conclusion")
         mark = "... " if r["status"] != "completed" else MARK.get(c, "?   ")
         state = c or r["status"]
         print("[%s] %s  %-5s %-12s run=%s  %sZ"
               % (mark, r["head_sha"][:7], r["name"], state, r["id"], r["created_at"][11:19]))
+        seen_workflows.setdefault(r["head_sha"], set()).add(r["name"])
+    # **CI 가 없는 SHA 를 조용히 넘기지 않는다.** 문서 전용이라 paths-ignore 로 스킵된 것과
+    # 트리거가 깨져 안 돈 것은 화면상 구분이 안 되는데, 후자는 "검증 0" 이라 치명적이다
+    # (ci.yml 주석의 `branches: [main]` 사고가 정확히 그것이었다 — 8커밋을 검증 없이 푸시).
+    for sha, names in seen_workflows.items():
+        if "CI" in names:
+            continue
+        # **페이지 잘림에 속지 않는다.** 위 목록은 최근 N개일 뿐이라, 오래된 SHA 의 CI 실행이
+        # 화면 밖에 있을 수 있다. 그 상태로 경고하면 늑대소년이 된다(실제로 첫 판에 오탐이 났다).
+        # 그 SHA 로 한정해 한 번 더 물어 확인한 뒤에만 판정한다.
+        try:
+            byname = api("repos/%s/actions/runs?head_sha=%s&per_page=20" % (repo, sha))
+            if any(r["name"] == "CI" for r in byname.get("workflow_runs", [])):
+                continue
+        except SystemExit:
+            continue
+        verdict = docs_only_commit(repo, sha)
+        if verdict is True:
+            print("     %s: CI 없음 — 문서 전용이라 paths-ignore 로 **정상 스킵**(spec 은 돌았다)" % sha[:7])
+        elif verdict is False:
+            print("     %s: ⚠ CI 없음인데 코드 변경이 있다 — 트리거를 확인할 것" % sha[:7])
+        else:
+            print("     %s: CI 없음 — 사유 판정 불가(아직 큐잉 중일 수 있다)" % sha[:7])
     return runs
 
 
