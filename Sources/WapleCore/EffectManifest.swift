@@ -202,7 +202,12 @@ public struct EffectManifest: Equatable {
 
     private static func parseStrict(_ data: Data) -> EffectManifest? {
         guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let rawPasses = obj["passes"] as? [[String: Any]], !rawPasses.isEmpty else { return nil }
+              let rawAny = obj["passes"] as? [Any], !rawAny.isEmpty else { return nil }
+        // `as? [[String: Any]]` 로 받으면 **원소 하나가 객체가 아닐 때 배열 전체 캐스트가 실패**해
+        // 매니페스트가 통째로 nil 이 된다 → 관례 1패스 폴백 → 대개 셰이더 부재 → 이펙트 소멸.
+        // 원본은 그 원소의 멤버가 null 일 뿐 이펙트를 버리지 않으므로, 비객체는 빈 패스로 **자리를
+        // 보존**한다(씬 오버라이드가 원본 배열 인덱스 정렬이라 자리 보존이 곧 정합이다).
+        let rawPasses: [[String: Any]] = rawAny.map { ($0 as? [String: Any]) ?? [:] }
         var passes: [Pass] = []
         for p in rawPasses {
             var binds: [Bind] = []
@@ -246,7 +251,11 @@ public struct EffectManifest: Equatable {
             // X-⑧: 문자열은 있으나 **표에 없는** 값이면 nil — 원본이 해시맵 miss 에서 0(rgba8888)을
             // 돌려주는 것(`0x1401e546a`)과 같게, 소비처가 rgba8 로 폴백한다.
             let format = (f["format"] as? String).flatMap { FBO.Format(rawValue: $0) }
-            let unique = (f["unique"] as? Bool) ?? false
+            // 원본은 타입 태그 5(boolean)만 받는다. Swift 의 NSNumber 동적 캐스트는 **0/1 인 숫자도
+            // Bool 로 성공**시키므로(`"unique":1` → true) 그대로 두면 원본보다 관대해진다.
+            // `unique` 는 프레임 간 지속 경로를 켜는 스위치라, 잘못 켜지면 워크샵 이펙트에
+            // 원본에 없는 잔상이 쌓인다.
+            let unique = isJSONBool(f["unique"]) && ((f["unique"] as? Bool) == true)
             fbos.append(FBO(name: name, scale: Swift.max(1, scale), fixedWidth: fixedW, fixedHeight: fixedH,
                             uvsRepeat: uvsRepeat, format: format, unique: unique,
                             clearColor: parseClearColor(f["clear"])))
@@ -285,7 +294,21 @@ public struct EffectManifest: Equatable {
         return SIMD4(parts[0], parts[1], parts[2], parts[3])
     }
 
+    /// JSON 값이 **진짜 boolean** 인가. `JSONSerialization` 은 숫자와 불리언을 모두 `NSNumber` 로
+    /// 주고 Swift 의 동적 캐스트는 둘을 섞어 준다(`1 as? Bool` → true, `true as? Int` → 1).
+    /// 원본 파서는 JsonCpp 타입 태그로 엄격히 가르므로 우리도 갈라야 한다.
+    static func isJSONBool(_ v: Any?) -> Bool {
+        guard let n = v as? NSNumber else { return false }
+        // `objCType` 이 "c"(char) 인 것만 boolean 이다. `CFGetTypeID(n) == CFBooleanGetTypeID()` 가
+        // 더 직설적이지만 CoreFoundation 을 끌어와야 해서 리눅스 타입체크(우리 사전 게이트)가 깨진다.
+        // JSONSerialization 은 Int8 을 만들지 않으므로 "c" 는 boolean 과 1:1 이다.
+        return n.objCType.pointee == 0x63
+    }
+
     private static func safeInt(_ v: Any?) -> Int? {
+        // `true as? Int` 는 1 로 성공한다 — `{"fit":true}` 가 1×1 렌더 타깃을 만든다.
+        // 8192 클램프를 둔 것과 같은 이유(신뢰불가 정수가 makeTexture 로 직행)로 여기서 막는다.
+        if isJSONBool(v) { return nil }
         if let i = v as? Int { return i }
         if let d = v as? Double {
             guard d.isFinite, d >= Double(Int.min), d < Double(Int.max) else { return nil }
