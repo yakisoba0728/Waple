@@ -301,7 +301,14 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
     // MARK: - F628 (S-65): 다중 turbulence 오퍼레이터 누적
 
     /// 실물 3000562427(turbulence 2개 — 지배 성분이 first-wins 로 드롭됐다). 두 번째 오퍼레이터도
-    /// 스폰 샘플·이류에 참여해야 한다.
+    /// 스폰 샘플·누적에 참여해야 한다.
+    ///
+    /// **[2026-08-20] 재는 대상을 위치 → 속도로 바꿨다.** 난류가 위치 이류가 아니라 **속도 누적**
+    /// 이라는 것이 확정됐기 때문이다(핸들러 꼬리 0x140242d3a–0x140242d54 가 `[sys+0x2c8/0x2d0/0x2d8]`
+    /// 에 `addps`). 그래서 한 스텝만 돌리면 위치는 **정확히 스폰 위치 그대로**다 — 위치 적분
+    /// (`pos += vel·dt`)이 난류보다 **먼저** 돌기 때문에 이번 프레임에 실린 속도는 다음 프레임
+    /// 변위에나 나타난다. 이 테스트가 지키려는 것은 "두 번째 오퍼레이터가 드롭되지 않는다" 이지
+    /// "한 스텝 만에 위치가 움직인다" 가 아니므로, 즉시 관측 가능한 속도로 재는 것이 옳다.
     func testF628_MultipleTurbulenceOperatorsAccumulate() {
         func turbOp(_ smin: Float, _ smax: Float) -> ParticleOperator {
             .turbulence(speedMin: smin, speedMax: smax, scale: 0.01, timeScale: 0,
@@ -321,9 +328,14 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
             emitters: def.emitters, initializers: def.initializers, operators: [turbOp(1, 1)],
             renderer: def.renderer, maxCount: def.maxCount, startTime: 0, material: nil), seed: 23)
         let ref = onlyFirst.step(0.1)
-        XCTAssertNotEqual(parts.map { $0.pos }, ref.map { $0.pos }, "두 번째 turbulence 도 이류에 참여해야 한다")
-        let moved = zip(parts, ref).contains { simd_distance($0.pos, $1.pos) > 0.5 }
-        XCTAssertTrue(moved, "지배 성분(속도 200)의 변위가 복원되어야 한다")
+        XCTAssertNotEqual(parts.map { $0.vel }, ref.map { $0.vel }, "두 번째 turbulence 도 누적에 참여해야 한다")
+        // 지배 성분(speed 200)의 기여는 한 스텝(dt=0.1)에서 |Δv| ≤ 200·0.1 = 20 이고, 첫
+        // 오퍼레이터(speed 1)만이면 ≤ 0.1 이다. 0.5 는 그 사이를 넉넉히 가른다.
+        let moved = zip(parts, ref).contains { simd_distance($0.vel, $1.vel) > 0.5 }
+        XCTAssertTrue(moved, "지배 성분(속도 200)의 속도 기여가 복원되어야 한다")
+        // 위치는 이번 프레임에 아직 안 움직인다 — 위 주석의 순서 규약을 함께 못박는다.
+        XCTAssertEqual(parts.map { $0.pos }, ref.map { $0.pos },
+                       "난류는 속도에 실리므로 같은 프레임의 위치는 두 정의에서 같아야 한다")
     }
 
     /// 단일 turbulence 는 종전과 비트동일(스폰 드로 수 불변).
