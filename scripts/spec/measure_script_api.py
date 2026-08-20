@@ -1240,7 +1240,13 @@ def main():
                  encoding="utf-8").read()
     waple_hooks = re.search(r"eventHookNames\s*=\s*\[(.*?)\]", swift, re.S)
     waple_hook_list = re.findall(r'"(\w+)"', waple_hooks.group(1)) if waple_hooks else []
-    loads_baseclasses = bool(re.search(r"baseclasses|jsclasses|jsmodules", swift))
+    # [2026-08-20 정정] 종전엔 소스 전문에서 `baseclasses|jsclasses|jsmodules` 라는 **단어**를
+    # 찾았다. 그 파일에 baseclasses.js 를 언급하는 주석이 생기자마자 이 값이 true 로 뒤집혔는데,
+    # 정작 같은 주석이 "baseclasses 미로드(= 현재)" 라고 적고 있었다 — 정본이 스스로와 모순됐다.
+    # 로드는 **문자열 리터럴로 파일을 지목하는 코드**로만 성립한다. 주석을 걷어내고 본다.
+    code = re.sub(r"/\*.*?\*/", "", swift, flags=re.S)
+    code = re.sub(r"//[^\n]*", "", code)
+    loads_baseclasses = bool(re.search(r'"[^"\n]*(?:baseclasses|jsclasses|jsmodules)[^"\n]*"', code))
 
     def waple_has(name):
         return bool(re.search(r"\b" + re.escape(name) + r"\b", swift))
@@ -1267,11 +1273,16 @@ def main():
          "method": "TextScriptEngine.swift 전문에 대한 식별자 grep 이다. missing = 소스 어디에도 그 "
                    "이름이 없다(강한 주장). 반대로 '있다'는 약한 주장이다 — 올바른 객체에 붙어 "
                    "있는지도, 의미가 맞는지도 보지 않는다. 예: lookAt 은 카메라 심에만 있고 "
-                   "ILayer 에는 없는데 grep 은 '있음'으로 센다",
+                   "ILayer 에는 없는데 grep 은 '있음'으로 센다. 단 벡터 메서드는 "
+                   "`Vec2.prototype.name =` 형태로 정밀하게 보고, loadsBaseclassesJS 는 "
+                   "주석을 걷어낸 뒤 문자열 리터럴만 본다",
          "loadsBaseclassesJS": loads_baseclasses,
-         "shippedButUnused": "Sources/WapleRender/Resources/WEAssets/scripts/ 아래 "
-                             "baseclasses.js·wemath.js·wevector.js·wecolor.js 4개가 WE 설치본과 "
-                             "바이트 동일하게 동봉돼 있으나 Swift 어디에서도 로드하지 않는다",
+         # 하드코딩하면 loadsBaseclassesJS 와 어긋날 수 있다 — 같은 사실을 두 번 적지 않는다.
+         "shippedButUnused": (
+             "Sources/WapleRender/Resources/WEAssets/scripts/ 아래 baseclasses.js·wemath.js·"
+             "wevector.js·wecolor.js 4개가 WE 설치본과 바이트 동일하게 동봉돼 있다. "
+             + ("일부를 로드한다(위 loadsBaseclassesJS 참조)."
+                if loads_baseclasses else "그러나 Swift 어디에서도 로드하지 않는다.")),
          "hooks": {"waple": waple_hook_list,
                    "weTotal": len(HOOK_ORDER),
                    "missing": [h for h in HOOK_ORDER

@@ -5029,9 +5029,9 @@
    "id": "waple.coverage",
    "value": {
     "engine": "JavaScriptCore + 손으로 쓴 shim prelude(TextScriptEngine.swift 내 문자열 리터럴)",
-    "method": "TextScriptEngine.swift 전문에 대한 식별자 grep 이다. missing = 소스 어디에도 그 이름이 없다(강한 주장). 반대로 '있다'는 약한 주장이다 — 올바른 객체에 붙어 있는지도, 의미가 맞는지도 보지 않는다. 예: lookAt 은 카메라 심에만 있고 ILayer 에는 없는데 grep 은 '있음'으로 센다",
+    "method": "TextScriptEngine.swift 전문에 대한 식별자 grep 이다. missing = 소스 어디에도 그 이름이 없다(강한 주장). 반대로 '있다'는 약한 주장이다 — 올바른 객체에 붙어 있는지도, 의미가 맞는지도 보지 않는다. 예: lookAt 은 카메라 심에만 있고 ILayer 에는 없는데 grep 은 '있음'으로 센다. 단 벡터 메서드는 `Vec2.prototype.name =` 형태로 정밀하게 보고, loadsBaseclassesJS 는 주석을 걷어낸 뒤 문자열 리터럴만 본다",
     "loadsBaseclassesJS": false,
-    "shippedButUnused": "Sources/WapleRender/Resources/WEAssets/scripts/ 아래 baseclasses.js·wemath.js·wevector.js·wecolor.js 4개가 WE 설치본과 바이트 동일하게 동봉돼 있으나 Swift 어디에서도 로드하지 않는다",
+    "shippedButUnused": "Sources/WapleRender/Resources/WEAssets/scripts/ 아래 baseclasses.js·wemath.js·wevector.js·wecolor.js 4개가 WE 설치본과 바이트 동일하게 동봉돼 있다. 그러나 Swift 어디에서도 로드하지 않는다.",
     "hooks": {
      "waple": [
       "cursorClick",
@@ -5059,7 +5059,7 @@
     "vectors": {
      "Vec2": {
       "weMethodCount": 35,
-      "wapleMethodCount": 8,
+      "wapleMethodCount": 9,
       "missing": [
        "lengthSqr",
        "distance",
@@ -5086,13 +5086,12 @@
        "mod",
        "step",
        "smoothStep",
-       "toString",
        "toConfigString"
       ]
      },
      "Vec3": {
       "weMethodCount": 35,
-      "wapleMethodCount": 9,
+      "wapleMethodCount": 10,
       "missing": [
        "lengthSqr",
        "distance",
@@ -5118,7 +5117,6 @@
        "mod",
        "step",
        "smoothStep",
-       "toString",
        "toConfigString"
       ]
      },
@@ -5238,10 +5236,6 @@
      "getAttachmentAngles",
      "transformAttachmentToTexture",
      "getEffectCount",
-     "getMaterial",
-     "getMaterialCount",
-     "setMaterialProperty",
-     "executeMaterialFunction",
      "playSingleAnimation",
      "destroyAnimationLayer",
      "getBoneCount",
