@@ -61,6 +61,20 @@ jobs:
       - name: Swift string-literal escapes
         run: python3 scripts/spec/check_swift_escapes.py
 
+      # [2026-08-20] enum 연관값 개수와 패턴 매치가 어긋나는 곳.
+      #
+      # `EffectBind.translated` 에 연관값을 하나 더했을 때 소비처 한 곳이 둘만 바인딩하고
+      # 있었는데, 컴파일러가 이 부류에 진단을 못 만들어서
+      #   SceneRenderer.swift:584:21: error: failed to produce diagnostic for expression
+      # 로만 떴다 — 줄 번호는 맞지만 원인이 안 보인다. 렌더 계층은 Metal/AppKit 의존이라
+      # 리눅스에서 빌드가 안 되고 macOS 왕복이 10분이라, 이 부류는 여기서 끝내는 게 맞다.
+      #
+      # 놓친 경위도 남긴다: 변경 직후 `\.translated(passes` 로 grep 했는데 문제의 자리는
+      # 라벨 없는 **위치 패턴**이라 안 걸렸다. 라벨 형태만 찾는 grep 은 이 부류를 못 잡는다.
+      # 스크립트는 실행 때마다 자기 음성 대조(--selftest)를 먼저 돌린다.
+      - name: Swift enum pattern arity
+        run: python3 scripts/spec/check_swift_enum_patterns.py
+
       # 동봉 에셋이 매니페스트와 어긋나면 실패한다.
       #
       # measure_assets.py 를 돌려 git diff 로 보는 방법은 쓰지 않는다 — 그 스크립트의

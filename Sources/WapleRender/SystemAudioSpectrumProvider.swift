@@ -416,7 +416,8 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
             config.capturesAudio = true
-            config.sampleRate = Int(Self.captureSampleRate)   // 스펙트럼 빈 폭 산출과 단일 소스
+            // 타입 이름을 명시한다 — 이 줄은 `SharedAudioCaptureCore` 안이라 `Self` 가 다른 타입이다.
+            config.sampleRate = Int(SystemAudioSpectrumProvider.captureSampleRate)   // 빈 폭 산출과 단일 소스
             config.channelCount = 2
             // 최소 비디오 캡처 비용(오디오만 쓰지만 SCStream 은 비디오 구성 요구)
             config.width = 2
