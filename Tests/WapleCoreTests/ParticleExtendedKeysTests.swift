@@ -385,13 +385,19 @@ final class ParticleExtendedKeysTests: XCTestCase {
     func testEventLinkedInitializersParseOnly_simIgnores() {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":2}],
-         "initializer":[{"name":"inheritcontrolpointvelocity","controlpoint":3,"scale":0.5},
+         "initializer":[{"name":"inheritcontrolpointvelocity","controlpoint":3,"min":0.5},
                         {"name":"inheritinitialvaluefromevent","value":"size"},
                         {"name":"inheritvaluefromevent"},
                         {"name":"remapinitialvalue","output":"size","min":0,"max":2}],
          "renderer":[{"name":"sprite"}],"maxcount":4}
         """), material: nil)
-        XCTAssertTrue(def.initializers.contains(.inheritControlPointVelocity(controlPoint: 3, scale: 0.5)))
+        // **[2026-08-20 키 정정]** `scale` 은 이 원소의 키가 아니다(유령 필드였다) — 주입기
+        // 0x1401bad80 에도 핸들러 0x14023bc32 에도 "scale" 참조가 없다. 실물은 `min`(0.1)/`max`(0.2)
+        // 로 **CP 속도에 곱할 균일 난수 배율의 범위**를 준다. 픽스처의 `scale` 을 `min` 으로 바꿨고,
+        // `max` 는 생략해 주입 기본 0.2 가 뜨는지 함께 본다.
+        XCTAssertTrue(def.initializers.contains(
+            .inheritControlPointVelocity(controlPoint: 3, min: 0.5, max: 0.2)),
+            "min 0.5 명시 · max 부재 → 주입 0.2 (0x1401baea3)")
         XCTAssertTrue(def.initializers.contains(.inheritValueFromEvent(name: "inheritinitialvaluefromevent",
                                                                        valueName: "size")))
         XCTAssertTrue(def.initializers.contains(.inheritValueFromEvent(name: "inheritvaluefromevent",
