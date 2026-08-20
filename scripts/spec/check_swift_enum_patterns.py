@@ -215,6 +215,31 @@ def main() -> int:
     counts = collect_declarations(texts.values())
     ambiguous = {k for k, v in counts.items() if len(v) != 1}
     arity = {k: next(iter(v)) for k, v in counts.items() if len(v) == 1}
+
+    # **[2026-08-20] 제외 목록은 원격 스위치였다.** 이 검사는 케이스 이름을 타입 없이 모으므로,
+    # 서로 다른 arity 를 가진 동명 케이스가 둘 이상이면 그 이름을 **조용히 검사 대상에서 뺀다**.
+    # 즉 `Sources/` 나 `Tests/` 아무 데나 아래 한 줄을 두면 그 이름의 위반이 전부 사라진다:
+    #
+    #     enum __Decoy { case translated(a: Int) }
+    #
+    # 화면에 찍히던 것은 "이름 중복으로 제외 N종" 이라는 **숫자뿐**이라 무엇이 빠졌는지도
+    # 안 보였다. 이름을 찍고 기준선으로 고정한다 — 새 이름이 목록에 들어오면 실패다.
+    # (줄어드는 것은 통과시킨다. 중복이 해소된 것이니 좋은 방향이다.)
+    #
+    # 지금 빠져 있는 둘은 실재하는 사각지대다: `RemapOutput.velocity/speed`(연관값 2) 대
+    # `CachedRemap.velocity/speed`(4). 둘 다 `ParticleSimulator.swift` ·
+    # `ParticleStageATests.swift` 에서 패턴 매칭된다 — 이 검사가 생긴 계기(연관값 개수 변경)를
+    # 최근 겪은 바로 그 파일이다. 근본 처방은 케이스 키를 `타입명.케이스명` 으로 정규화하는
+    # 것이고, 그 전까지는 목록이 늘지 않는 것만 강제한다.
+    baseline = {'velocity', 'speed'}
+    if ambiguous:
+        print(f'  검사에서 빠진 이름(동명 다른 arity): {", ".join(sorted(ambiguous))}')
+    new_names = ambiguous - baseline
+    if new_names:
+        print(f'\n동명 케이스가 새로 생겨 검사 대상에서 빠진다: {", ".join(sorted(new_names))}\n'
+              f'  이 이름의 arity 위반은 이제 이 검사에 안 잡힌다. 케이스 이름을 바꾸거나,\n'
+              f'  의도한 것이면 baseline 에 사유와 함께 등록하라.', file=sys.stderr)
+        return 1
     total = 0
     for p, text in texts.items():
         for line, name, got, want in scan_patterns(text, arity, str(p)):
