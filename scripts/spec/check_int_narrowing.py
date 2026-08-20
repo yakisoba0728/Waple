@@ -70,7 +70,13 @@ PINS = [
 # ── R4: 가드 없는 좁힘 총수 기준선 ───────────────────────────────────────────
 # [실측 2026-08-19, HEAD e4e0fce + F530-sweep] 아래 수치는 **줄이는 방향으로만** 갱신할 것.
 # 올려야 한다면 왜 그 자리가 안전한지(값 도메인이 이미 제한됨)를 커밋 메시지에 남긴다.
-CENSUS_BASELINE = 342
+#
+# [2026-08-20] 342 → 343. 늘어난 한 자리는 `Model3DFormat.materialCount` 의 `Int(skinCount)` 다.
+# ① 바로 윗줄이 `guard skinCount <= 256` 이라 값 도메인이 코드에 적혀 있고,
+# ② UInt32 → Int 는 64비트에서 **확대 변환**이라 원리적으로 트랩하지 않는다.
+# safeInt 를 태우지 않은 이유: 그 함수는 `Any?` 를 받는 JSON 경계용이고 여기는 이미 UInt32 다 —
+# 태우면 Optional 을 한 겹 더 벗기는 잡음만 는다.
+CENSUS_BASELINE = 343
 
 
 def swift_files():

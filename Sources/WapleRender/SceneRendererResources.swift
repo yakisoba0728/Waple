@@ -243,8 +243,15 @@ extension SceneRenderer {
             // 의미있는 init 반환도 없어 정적 해석이 eff.initialVisible(false)로 폴백 → 구 드롭과 동치.
             var visibleGate: EffectVisibleGate? = nil
             var effectiveInitialVisible = eff.initialVisible
+            // G-C4-01: 이펙트 프로퍼티에 붙은 스크립트의 `thisObject` 는 **그 이펙트**(IEffect)다 —
+            // 실물 dino_run 의 godrays visible 스크립트가 `thisObject.getMaterial(0).raythreshold = …`
+            // 로 패스 머티리얼 상수를 조정한다. 종전엔 thisObject 가 thisLayer(= 레이어 심)라
+            // `getMaterial is not a function` TypeError 로 applyUserProperties 훅 전체가 죽었다.
+            // 되읽은 쓰기는 아래 buildTranslatedEffect → buildPassMaterial 로 넘겨 패스 상수에 싣는다.
+            var effectMaterialWrites: [[String: [Float]]] = []
             if let vs = eff.visibleScript {
-                if let engine = makeScriptEngine(vs, scriptPropsJSON: eff.visibleScriptProps) {
+                if let engine = makeScriptEngine(vs, scriptPropsJSON: eff.visibleScriptProps,
+                                                 owner: .effect(materials: eff.passList.map(\.constants))) {
                     if engine.hasUpdate {
                         visibleGate = EffectVisibleGate(engine: engine, initial: eff.initialVisible)
                         hasAnimations = true  // buildPassMaterial 의 constantshadervalues 애니와 동일 규율
@@ -252,6 +259,8 @@ extension SceneRenderer {
                     } else {
                         effectiveInitialVisible = engine.evaluateBool(current: eff.initialVisible) ?? eff.initialVisible
                     }
+                    // 로드 + applyUserProperties + (update 없으면) init 이 모두 끝난 뒤 되읽는다.
+                    effectMaterialWrites = engine.boundObjectMaterialWrites
                 }
                 // else: 엔진 생성 실패(문법 오류 등) — effectiveInitialVisible 은 정적 초기값 그대로(무회귀).
             }
@@ -265,7 +274,8 @@ extension SceneRenderer {
                                                       compositeImageTextures: compositeImageTextures,
                                                       // 감사 V07: 베이스 NoInterpolation 은 체인 첫 이펙트의
                                                       // previous(=베이스 직결)만 nearest(아래 fbNearest 와 동일 게이트).
-                                                      baseNoInterp: baseNoInterp && effects.isEmpty) {
+                                                      baseNoInterp: baseNoInterp && effects.isEmpty,
+                                                      scriptMaterialWrites: effectMaterialWrites) {
                 translated.visibleGate = visibleGate
                 effects.append(translated)
             } else if var handPort = buildHandPortEffect(eff, package: package, device: device,
@@ -598,11 +608,14 @@ extension SceneRenderer {
     /// 합성(makeCopyPass) ③ 셰이더/머티리얼 메타 해석(resolvePassShaderMeta) ④ 콤보 해석
     /// (resolvePassCombos) ⑤ 머티리얼 상수/스크립트(buildPassMaterial) + 바인드·texRes·aux·target
     /// 플랜(buildPassBindings).
+    /// scriptMaterialWrites(G-C4-01): 이펙트 프로퍼티 스크립트가 `thisObject.getMaterial(i)` 로 쓴
+    /// 상수. 인덱스 = raw 패스 인덱스. 기본 [] = 종전 동작(무회귀).
     func buildTranslatedEffect(_ eff: SceneEffect, package: ScenePackage, device: MTLDevice,
                                texW: Int, texH: Int, compositeImageTextures: [Int: String] = [:],
                                // 감사 V07: 베이스 텍스처 NoInterpolation — previous bind(=효과 입력 src,
                                // 체인 첫 이펙트는 베이스 직결) 슬롯의 texFilter 를 nearest 로.
-                               baseNoInterp: Bool = false) -> EffectGPU? {
+                               baseNoInterp: Bool = false,
+                               scriptMaterialWrites: [[String: [Float]]] = []) -> EffectGPU? {
         // 디버그 바이섹션 스위치: 실물 씬에서 번역 효과만 끄고 A/B 비교(시각 아티팩트 책임 분리).
         if ProcessInfo.processInfo.environment["WAPLE_DISABLE_TRANSLATED"] == "1" { return nil }
         // #include 리졸버: pkg→베이스에셋→내장(확정-의미 서브셋, common_blending.h) 순.
@@ -716,7 +729,9 @@ extension SceneRenderer {
                           + "target=\(mp.target ?? "(output)") format=\(passFormat.rawValue)")
                 return nil
             }
-            let (material, passScripts, passAnimations) = buildPassMaterial(t, scenePass: scenePass)
+            let (material, passScripts, passAnimations) =
+                buildPassMaterial(t, scenePass: scenePass,
+                                  scriptWrites: i < scriptMaterialWrites.count ? scriptMaterialWrites[i] : [:])
             guard let plan = buildPassBindings(mp, effName: eff.name, translation: t, scenePass: scenePass,
                                                matTextures: meta.matTextures, manifest: manifest,
                                                fbos: liveFbos, fboIndex: fboIndex, lw: lw, lh: lh,
@@ -890,22 +905,46 @@ extension SceneRenderer {
 
     /// ⑤a 머티리얼 상수 벡터 + 상수 프로퍼티 스크립트 엔진(시간 함수 → 연속 렌더 필요 마킹) + X-⑦
     /// 상수 키프레임 애니메이션(동일 이유로 연속 렌더 필요).
-    private func buildPassMaterial(_ t: TranslatedShader, scenePass: SceneEffectPass)
+    /// scriptWrites(G-C4-01): 이 패스에 대해 이펙트 스크립트가 thisObject 로 쓴 상수(authored 값을 덮는다).
+    private func buildPassMaterial(_ t: TranslatedShader, scenePass: SceneEffectPass,
+                                   scriptWrites: [String: [Float]] = [:])
         -> (material: [SIMD4<Float>], scripts: [(slot: Int, engine: TextScriptEngine)],
             animations: [(slot: Int, anim: PropertyAnimation)]) {
         let constants = scenePass.constants
-        let material: [SIMD4<Float>] = t.materialParams.map { p in
-            let v = constants[p.sceneKey] ?? p.defaultValue
+        let resolved: (MaterialParam) -> [Float] = { p in
+            scriptWrites[p.sceneKey] ?? constants[p.sceneKey] ?? p.defaultValue
+        }
+        var material: [SIMD4<Float>] = t.materialParams.map { p in
+            let v = resolved(p)
             return SIMD4<Float>(v.count > 0 ? v[0] : 0, v.count > 1 ? v[1] : 0,
                                 v.count > 2 ? v[2] : 0, v.count > 3 ? v[3] : 0)
         }
         var passScripts: [(slot: Int, engine: TextScriptEngine)] = []
         var passAnimations: [(slot: Int, anim: PropertyAnimation)] = []
+        // G-C4-01: 패스 상수에 붙은 스크립트의 `thisObject` 는 **이 패스의 머티리얼**(IMaterial)이다 —
+        // 실물 razer_vortex 3건이 `thisObject.colormode = parseInt(userProperties…)` 로 쓴다. 종전엔
+        // thisObject 가 thisLayer 라 그 값이 남의 레이어 심에 조용히 얹히고 셰이더엔 닿지 않았다.
+        // 씨앗은 슬롯 현재값 **전체** — WE 계약상 스크립트는 자기 상수만이 아니라 머티리얼 전체를 본다.
+        var seed: [String: [Float]] = [:]
+        var slotOfKey: [String: Int] = [:]
+        for (slot, p) in t.materialParams.enumerated() {
+            seed[p.sceneKey] = resolved(p)
+            slotOfKey[p.sceneKey] = slot
+        }
         for (slot, p) in t.materialParams.enumerated() {
             if let src = scenePass.constantScripts[p.sceneKey],
-               let engine = makeScriptEngine(src, scriptPropsJSON: scenePass.constantScriptProps[p.sceneKey]) {
+               let engine = makeScriptEngine(src, scriptPropsJSON: scenePass.constantScriptProps[p.sceneKey],
+                                             owner: .material(constants: seed)) {
                 passScripts.append((slot, engine))
                 if engine.hasUpdate { hasAnimations = true }  // 스크립트 상수는 시간 함수 — 연속 렌더 필요
+                // 값이 씨앗 그대로면 스크립트가 안 쓴 것 — 건너뛴다. update 로만 동작하는 상수 스크립트
+                // (실물 razer_bedroom 무지개 6건)는 여기서 아무 일도 일어나지 않는다(무회귀).
+                for (key, comps) in engine.boundObjectMaterialWrites.first ?? [:] where seed[key] != comps {
+                    guard let target = slotOfKey[key] else { continue }
+                    var v = material[target]
+                    for (c, f) in comps.prefix(4).enumerated() { v[c] = f }
+                    material[target] = v
+                }
             }
             if let anim = scenePass.constantAnimations[p.sceneKey] {
                 passAnimations.append((slot, anim))

@@ -1,7 +1,8 @@
 import Foundation
 import simd
 
-/// WE 3D 모델(MDLV0016/0017/0019/0021/0023) 파서 — 실측 리버스(설계 2026-07-03, 구버전 2026-07-09).
+/// WE 3D 모델(MDLV0004/0014/0016/0017/0019/0021/0023) 파서 — 실측 리버스(설계 2026-07-03,
+/// 구버전 2026-07-09, WE 번들 v0004/v0014 2026-08-20).
 /// 코퍼스: 3737268876(젤다 OoT/MM, 100개), 3706286085(Sonic, 5개), 3662790108(태양계, 69개) — 174개 전수 MDLV0023.
 /// 구버전 퍼펫(전부 *_puppet.mdl): 2885492021(V0016 6개), 3113287126(V0017 2개), 3189665546(V0019 7개) —
 /// 메시 레이아웃은 V0023 과 동일하되 V0016 은 AABB 부재 + 정점 플래그 0x…09(stride 52), 스켈레톤 매직이
@@ -26,10 +27,15 @@ import simd
 ///   확정(교차검증): 174 .mdl 중 33 애니모델 전수 파스 성공(0 실패); 본수==스켈레톤 본수(전수); 키0 로컬≈바인드 로컬은
 ///     캐릭터별로 다름(바인드=T포즈, idle=이완포즈) — skin=world(t)×bindWorld⁻¹ 로 처리(2D 의 t=0 항등 가정 불성립이나 정상).
 ///
+/// 버전 프레이밍(엔진 게이트 — Model3DFormat 참조): AABB v≥17 / per-mesh formatFlag v≥15 /
+/// 메시 트레일러 v≥21 / gateWord v≥4. **v0004·v0014 는 셋 다 없다** — 메시 헤더가
+/// `머티리얼×skinCount | u32 gateWord | u32 정점블롭크기` 로 곧장 이어지고 정점 포맷은
+/// 헤더 오프셋 9 의 formatFlag 를 그대로 쓴다.
+///
 /// 레이아웃(리틀엔디안):
-/// "MDLV0023" | u8 0 | u32 formatFlag | u32(=1, 미상 상수) | u32 meshCount
+/// "MDLV0023" | u8 0 | u32 formatFlag | u32 skinCount | u32 meshCount
 /// 서브메시×meshCount:
-///   cstring 머티리얼 | u32(=0) | AABB(min 3f, max 3f = 24B) | u32 formatFlag | u32 정점블롭크기 |
+///   cstring 머티리얼 ×skinCount | u32(=0) | AABB(min 3f, max 3f = 24B) | u32 formatFlag | u32 정점블롭크기 |
 ///   정점×N | u32 인덱스블롭크기 | u16 트라이앵글 인덱스
 ///   [v≥21 메시 트레일러: u8 gateA[≠0: u32+u32 size+blob] | u8 gateB[≠0: u32 size+blob(16B×N)]
 ///    | (v≥23) u32 모프count+레코드 — 전부 0 이면 v23 은 정확히 6바이트(= 종전 '6×u8 0 구분자').
@@ -95,6 +101,10 @@ public struct Model3D: Equatable {
         // 폭을 타입으로 들고 다니면 GPU 인덱스버퍼 바인딩까지 분기가 번지고, u16 메시가 압도적
         // 다수(실측 969/986)라 그 분기의 이득이 인덱스 메모리 2배보다 작다.
         public let indices: [UInt32]           // 트라이앵글 리스트(count % 3 == 0)
+        /// 이 메시의 머티리얼 **전부**(= 헤더 skinCount 개, 스킨 = 같은 메시의 재질 변형).
+        /// `material` 은 그중 첫 번째다 — 씬의 `"skin": N` 선택은 아직 없다(G-C3-05).
+        /// 실측 분포 {1: 450, 2: 1} — 2인 것은 audiophile grid.mdl 하나뿐이다.
+        public var materials: [String] = []
         /// v≥21 메시 트레일러(게이트A/B 블롭 + v≥23 모프 레코드). 전부 0 인 트레일러(= 종전
         /// '6바이트 구분자')는 nil — 데이터가 있을 때만 채운다. 파스·보존, 렌더 소비는 범위 밖.
         public var trailer: MeshTrailer? = nil
@@ -366,20 +376,25 @@ public struct Model3D: Equatable {
         return l
     }
 
-    /// 수용 버전(전부 실물 바이트 대조 완료 2026-07-09): 0023 정본; 0021 동일 레이아웃(3367988661 전수,
+    /// 수용 버전(전부 실물 바이트 대조 완료): 0023 정본; 0021 동일 레이아웃(3367988661 전수,
     /// 스켈레톤 매직은 MDLS0003 — 본 레코드는 0004 와 바이트 동형, 코퍼스 17퍼펫 matrix size 64 전수);
     /// 0017/0019 는 메시가 0023 과 동일하고 스켈레톤 매직만 MDLS0002(WLOP 2/2, 3189665546 7/7 대조);
     /// 0016 은 메시에 AABB 가 없고 정점 포맷 플래그가 0x…09(normal/tangent 없는 stride 52 = V0013 정점 레이아웃,
     /// 2885492021 6/6 대조 — weights 합 1.0, uv∈[0,1], maxIdx==vCount-1 전수 일치).
-    /// 미목격 버전(0018/0020/0022 등)은 거부 — 추측 파스로 이상 렌더를 만드느니 스킵이 낫다.
-    private static let acceptedMagics: Set<String> = ["MDLV0016", "MDLV0017", "MDLV0019", "MDLV0021", "MDLV0023"]
-
+    ///
+    /// [2026-08-20] **0004/0014 수용**(G-C3-02). WE 2.8.42 설치본 `.mdl` 28개 중 23개(v0004 8 + v0014 15)가
+    /// 이 둘이고, 그동안 매직 화이트리스트에서 통째로 떨어져 기본 3D 프로젝트 9개 중 8개가 모델 0개로
+    /// 그려졌다(techno 만 4개 중 3개가 v0023 이라 부분 생존). 근거 3중:
+    ///   ① 엔진 디스어셈블(0x140261880) — AABB/per-mesh flag/트레일러 게이트를 직접 읽음(Model3DFormat).
+    ///   ② 설치본 28파일 프레이밍 브루트포스 — 파일마다 파스+착지가 성립하는 프레이밍이 정확히 1개.
+    ///   ③ 로제타석 `.obj`↔`.mdl` 16쌍 바이트 대조(v0004 4 · v0014 8 · v0023 4) — `scripts/spec/verify_rosetta.py`.
+    /// 미목격 버전(0015/0018/0020/0022 등)은 계속 거부 — 추측 파스로 이상 렌더를 만드느니 스킵이 낫다.
     public static func parse(_ data: Data) -> Model3D? {
         let bytes = [UInt8](data)
         let magic = String(bytes: bytes[0..<min(8, bytes.count)], encoding: .utf8)
-        guard bytes.count > 21, let magic, acceptedMagics.contains(magic) else { return nil }
-        let version = Int(magic.suffix(4)) ?? 23
-        let hasAABB = version >= 17   // V0016 은 메시 헤더에 AABB 24B 가 없다(실측)
+        guard bytes.count > 21, let magic, let version = Model3DFormat.version(ofMagic: magic) else { return nil }
+        let hasAABB = Model3DFormat.hasAABB(version: version)          // v<17 은 메시 헤더에 AABB 24B 가 없다
+        let hasMeshFlag = Model3DFormat.hasPerMeshFormatFlag(version: version)  // v<15 는 헤더 flag 를 그대로 쓴다
 
         func u32(_ o: Int) -> UInt32? { readU32LE(bytes, at: o) }
         func f32(_ o: Int) -> Float? { u32(o).map { Float(bitPattern: $0) } }
@@ -389,22 +404,38 @@ public struct Model3D: Equatable {
             return r.value
         }
 
-        // 헤더: magic(8) | u8 0 | u32 formatFlag(9) | u32 stringCount(13, 관측 1) | u32 meshCount(17)
-        // stringCount(13) 정정(2026-07-27, S3-mdl 지적 반영): 디컴파일(FUN_140261950:1149-1154,
-        // `param_3[1]` = 이 필드)은 헤더 직후 이 값을 cstring(FUN_14009c5d0) 리드 루프의 상한으로 쓴다
-        // — 이전 주석의 '=1, 값 미사용'은 오도(단순 상수가 아니라 문자열 개수 필드). 단일메시 파일(값=1)
-        // 은 이 문자열 1개가 우리 per-mesh 루프의 material cstring 1회 리드와 바이트가 정확히 겹쳐
-        // 검증됨 — 다만 이 필드가 모델 전체(총) 카운트인지 메시당 반복 카운트인지 자체는 미확정(다중메시
-        // 파일에서 mesh 1..N-1 이 자기 문자열을 어디서 읽는지는 이번 대조로 추적하지 않음; 174/174 로
-        // 통과하므로 어느 해석과도 모순은 없음). 코드 변경 불요.
-        guard let meshCount = u32(17), meshCount > 0, meshCount < 100_000 else { return nil }
+        // 헤더: magic(8) | u8 0 | u32 formatFlag(9) | u32 skinCount(13) | u32 meshCount(17)
+        //
+        // [2026-08-20] 오프셋 13 의 '미확정' 해소. 종전 주석은 이 필드를 stringCount 로 부르면서
+        // "모델 전체 카운트인지 메시당 반복 카운트인지 미확정" 이라 적었는데, 원본 바이너리
+        // 0x140261880 의 실행경로를 따라가면 답이 나온다: cstring 리드 루프
+        // (0x14026193e `cmp dword [r15+8], ebx` … `jb 0x140261944`)가 **메시 루프 안**이다
+        // (메시 루프 head 0x14026192c, back-edge 0x140262327 `jmp 0x14026192c`). 즉 메시마다
+        // 이 개수만큼 머티리얼 cstring 을 읽는다 = skinCount(같은 메시의 재질 변형).
+        // 실물도 같은 말을 한다 — audiophile grid.mdl(v0004, skinCount=2, 176B)과 fantasticcar
+        // grid.mdl(v0014, skinCount=1, 151B)은 gateWord 이후 메시 페이로드가 **바이트 동일**하고,
+        // 크기 차 25B = +26("materials/grid/grid2.json\0") −1(v0014 만 갖는 섹션 종단 NUL)로 정확히
+        // 떨어진다. (정본 spec/formats/mdl-deep.json `format.mdl.header` 는 이 −1 을 빠뜨리고
+        // "25B = cstring 길이" 라고 적었다 — 결론은 같지만 산수는 위가 맞다.)
+        // 종전의 '1개만 읽기'는 skinCount=1 파일에서만 우연히 맞았고 grid.mdl 은 파스에 실패했다.
+        guard let headerFlag = u32(9), let skinCountRaw = u32(13),
+              let materialCount = Model3DFormat.materialCount(skinCount: skinCountRaw),
+              let meshCount = u32(17), meshCount > 0, meshCount < 100_000 else { return nil }
         var o = 21
         var meshes: [Mesh] = []
         meshes.reserveCapacity(Int(meshCount))
 
         for mi in 0..<Int(meshCount) {
-            guard let material = cstring(&o) else { return nil }
-            guard let _ = u32(o) else { return nil }             // u32 flag word(관측 0, Kirby mesh1 은 2) — 아래 프로브 근거 참고
+            // 머티리얼 cstring 을 skinCount 개 읽는다(위 헤더 주석 참조). 렌더는 첫 스킨만 쓰고
+            // 나머지는 `Mesh.materials` 로 보존만 한다 — 씬의 `"skin": N` 선택은 G-C3-05 범위다.
+            var materialList: [String] = []
+            materialList.reserveCapacity(materialCount)
+            for _ in 0..<materialCount {
+                guard let m = cstring(&o) else { return nil }
+                materialList.append(m)
+            }
+            guard let material = materialList.first else { return nil }
+            guard let _ = u32(o) else { return nil }             // u32 gateWord(v≥4, 관측 0, Kirby mesh1 은 2) — 아래 프로브 근거 참고
             o += 4
             // 메시 헤더 프레이밍 프로브: z 뒤에 여분 u32 가 0..2개 올 수 있다(실측: 전 코퍼스 0개,
             // Kirby_puppet mesh1 만 1개(=1)). extra=0 이 기존 경로라 최우선 — vSize/스트라이드 정합
@@ -453,9 +484,21 @@ public struct Model3D: Equatable {
                     }
                     q += 24
                 }
-                guard let flag = u32(q), let vsRaw = u32(q + 4) else { continue }
+                // v≤14 는 메시마다 formatFlag 를 담지 않는다 — 리드 자체가 없고 헤더 오프셋 9 의 값을
+                // 쓴다(엔진 0x140261a19 `cmp edi, 0x0f` / `jl 0x140261a33`, 그 착지점이
+                // `mov [rbp+0xa8], r10d` = 헤더 flag 대입). 앞 메시 값이 눌어붙지도 않는다 —
+                // 메시 루프 진입마다 r10d 를 헤더 값으로 되돌린다(0x140262318 `mov r10d,[rsp+0x60]`).
+                let flag: UInt32
+                if hasMeshFlag {
+                    guard let f = u32(q) else { continue }
+                    flag = f
+                    q += 4
+                } else {
+                    flag = headerFlag
+                }
+                guard let vsRaw = u32(q) else { continue }
                 let vs = Int(vsRaw)
-                guard vs > 0, q + 8 + vs <= bytes.count else { continue }
+                guard vs > 0, q + 4 + vs <= bytes.count else { continue }
                 let skin = (flag & skinMask) != 0
                 var lay = vertexLayout(for: flag)
                 // 폴백 스트라이드는 항별 누적으로 계산한다 — 리터럴+삼항 5항 `+` 체인 한 줄은
@@ -466,7 +509,7 @@ public struct Model3D: Equatable {
                 if skin { fallback += 32 }                                // boneIdx+weights
                 var s = lay?.stride ?? fallback
                 if vs % s != 0 {
-                    guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 8 + vs, vSize: vs),
+                    guard let inferred = inferStride(bytes: bytes, indexBlobAt: q + 4 + vs, vSize: vs),
                           inferred >= 20 else { continue }   // pos(12)+uv(8) 최소
                     s = inferred
                     lay = nil   // 추론 스트라이드는 테이블 산출이 아님 — 채널 오프셋도 꼬리고정 경로로
@@ -474,7 +517,7 @@ public struct Model3D: Equatable {
                 (minx, miny, minz) = (box[0], box[1], box[2])
                 (maxx, maxy, maxz) = (box[3], box[4], box[5])
                 formatFlag = flag; stride = s; vSize = vs; layout = lay
-                o = q + 8
+                o = q + 4
                 framed = true
                 break
             }
@@ -536,7 +579,8 @@ public struct Model3D: Equatable {
 
             meshes.append(Mesh(material: material,
                                boundsMin: SIMD3(minx, miny, minz), boundsMax: SIMD3(maxx, maxy, maxz),
-                               skinned: skinFieldsFit, vertices: vertices, indices: indices))
+                               skinned: skinFieldsFit, vertices: vertices, indices: indices,
+                               materials: materialList))
 
             // 메시 트레일러(v≥21) — 엔진 정본 게이트 구조 정식 파스(디컴파일 FUN_140261950:1214-1457 +
             // 어셈블리 0x140261c3b-0x1402620e3; 실물 418파일 전수 착지 검증 2026-07-28):
@@ -548,7 +592,7 @@ public struct Model3D: Equatable {
             // 실물 v<21 파일은 전부 단일메시라 영향 없음). 마지막 메시 뒤에도 존재(실물 390/390).
             // 구조 불일치(손상) 시: 메시 사이는 종전 +6 폴백(무회귀), 마지막 메시 뒤는 진행
             // 없이 매직 스캔(종전과 동일).
-            if version >= 21 {
+            if Model3DFormat.hasMeshTrailer(version: version) {
                 if let t = parseMeshTrailer(bytes: bytes, at: o, version: version) {
                     o = t.end
                     if !t.trailer.isEmpty { meshes[mi].trailer = t.trailer }
