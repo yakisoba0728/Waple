@@ -177,9 +177,13 @@ final class ParticleChildrenTests: XCTestCase {
         XCTAssertEqual(def.children[2].probability, 0.5)
         XCTAssertEqual(def.children[3].trigger, .spawnBurst)
         XCTAssertEqual(def.children[3].origin, Vec3(x: 10, y: 20, z: 0))
-        // 링크 maxcount 부재: always → 1, 이벤트류 → 부모 maxcount.
-        XCTAssertEqual(def.children[1].maxInstances, 1)
-        XCTAssertEqual(def.children[2].maxInstances, 85)
+        // **[2026-08-20] 링크 `maxcount` 부재 기본은 상수 10 이다.** children 주입기
+        // 0x1401c1430 이 `mov r8d, 0xa`(0x1401c16f5) → `H_INT`(0x1401c1705) 로 심는다 —
+        // 같은 주입기가 origin·angles·scale·probability·type·controlpointstartindex·flags 도
+        // 함께 심는다. 종전 "always → 1, 이벤트류 → 부모 maxcount" 는 근거 없는 유추였고,
+        // 동봉 자식 선언의 72%가 이 키를 생략하므로 `static` 자식이 특히 1 vs 10 으로 갈렸다.
+        XCTAssertEqual(def.children[1].maxInstances, 10, "always 도 10 — 종전엔 1")
+        XCTAssertEqual(def.children[2].maxInstances, 10, "부모 maxcount(85)를 승계하지 않는다")
     }
 
     func testNoChildren_childDisplayOutOfRangeIsEmpty() {
@@ -187,4 +191,5 @@ final class ParticleChildrenTests: XCTestCase {
         _ = sim.step(0.1)
         XCTAssertTrue(sim.childDisplay(0).isEmpty)   // 방어적 — 크래시 금지
     }
+
 }

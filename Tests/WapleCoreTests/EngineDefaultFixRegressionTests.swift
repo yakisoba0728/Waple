@@ -78,8 +78,11 @@ final class EngineDefaultFixRegressionTests: XCTestCase {
         let audio = try XCTUnwrap(def.emitterAudio.first ?? nil)
         XCTAssertEqual(audio.bounds.x, 0.8, accuracy: 1e-6)
         XCTAssertEqual(audio.bounds.y, 1.0, accuracy: 1e-6)
-        XCTAssertEqual(audio.freqStart, 0)   // 기존 디폴트 무회귀
-        XCTAssertEqual(audio.freqEnd, 15)
-        XCTAssertEqual(audio.exponent, 1)
+        XCTAssertEqual(audio.freqStart, 0)   // 0x1401c20eb — 이건 종전 값이 맞았다
+        // **[2026-08-20]** 종전 15/1 은 셰이더 오디오 경로에서 유추한 값이었다. 파티클 경로는
+        // 자체 주입기(0x1401c1e20)를 가진다: `mov r8d, 1` @0x1401c212e → H_INT @0x1401c213e,
+        // `movabs rcx, 0x4000000000000000`(=2.0) @0x1401c1f77.
+        XCTAssertEqual(audio.freqEnd, 1)
+        XCTAssertEqual(audio.exponent, 2)
     }
 }

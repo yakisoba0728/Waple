@@ -58,10 +58,35 @@ Opus 에이전트 20개를 병렬로 굴려 구현·바이너리·원본 프로�
 
 ### 눈에 보이는 변경 — Mac 골든 재검토 필요
 
-A10 의 spritetrail 부분은 **그림이 달라진다.** `length` 0 → 0.05 는
-`spriteTrailStretch` 의 `guard length > 0` 폴백을 더 이상 태우지 않아, 부재 13건의 신장이
-항등 1 → `clamp(speed·0.05, minlength, 10)` 으로 바뀐다(speed 100 → 5×, 200 이상 → 10× 포화).
-H3 핫픽스가 세운 전제 자체가 무너진 것이라 되돌릴 자리는 아니지만, 골든은 사람이 봐야 한다.
+A10 의 spritetrail 부분은 **그림이 달라진다.** 여기서 H3 핫픽스를 되돌렸는데, 근거가 하나 더
+있어서 적어 둔다 — **WE 가 해당 셰이더 원문을 동봉한다**(`assets/shaders/common_particles.h`):
+
+```glsl
+float trailLength = length(localVelocity);
+localVelocity /= trailLength;
+up = localVelocity * max(g_RenderVar0.z, min(trailLength * g_RenderVar0.x, g_RenderVar0.y));
+```
+그리고 `ComputeParticlePosition` 이 두 축 모두에 `positionAndSize.w`(= size)를 곱한다. 비-트레일
+경로에서 `up` 이 단위벡터이므로 **트레일 `up` 의 크기가 곧 size 배수**이고,
+`g_RenderVar0 = (length, maxlength, minlength)` 다. 즉 계약은
+`stretch = max(minlength, min(speed·length, maxlength))` 로 확정된다.
+
+H3 는 `length` 부재를 "신장 미정의" 로 보고 항등 1 을 돌려줬다. 그 전제가 틀렸다(주입기가
+0.05 를 심는다). H3 가 관측한 회귀(rain_on_the_glass 흰 스미어)의 실제 원인은 그 **직전**
+폴백 `mul = 1` → `s = speed`(수백)였고, `s = speed·0.05` 는 그보다 20배 작다 — H3 는 한 번도
+시험되지 않은 값을 두고 반대편 극단으로 넘어간 것이다. 다만 `maxlength = 6` 인 그 프리셋은
+실물에서도 speed 120 부터 포화하므로 **WE 자신이 굵은 스트릭을 그린다**. H3 가 "명백한 회귀" 로
+판정한 비교 대상은 WE 가 아니라 Waple 의 옛 리본 구현이었다.
+
+렌더 회귀 테스트의 실측치가 이 계약을 그대로 확인해 준다 — sizePx 100 · maxlength 6 에서
+speed 10 → 25px(= 100·0.5·0.5), speed 800 → 300px(= 100·0.5·6). 손계산과 일치한다.
+
+**그래도 골든은 사람이 봐야 한다** — 동봉 44건 중 `length` 부재 13 · `maxlength` 부재 11 의
+그림이 바뀐다. 근거가 바이트와 WE 동봉 셰이더 원문 둘이라 관측 판단보다 우선하지만, 화면 확인은
+Mac 세션 몫이다.
+
+**교훈 하나**: WE 는 `assets/shaders/` 에 GLSL 원문을 그대로 동봉한다. 디스어셈블로 못 찾는
+지오메트리·필터 계약이 거기 평문으로 있을 수 있다 — x86 을 파기 전에 셰이더를 먼저 grep 하라.
 
 반대로 rope 의 `trailSampleCount` 는 **일부러 바꾸지 않았다** — `subdivision` 을 히스토리
 샘플 수로 쓰는 매핑(F629)에 WE 근거가 없기 때문이다. 근거 없는 매핑에 새로 확정된
