@@ -1239,6 +1239,33 @@ public enum GLSLTranslator {
         return out
     }
 
+    /// 샘플러 주석의 **포맷 콤보** 표시: `uniform sampler2D g_TextureN; // {..."formatcombo":true...}` → {N}.
+    ///
+    /// `samplerCombos` 의 `"combo"` 와 **다른 어노테이션**이다. 같은 줄에 둘 다 있을 수도, 한쪽만
+    /// 있을 수도 있다 — 실측(동봉 WEAssets = WE 설치본 assets, 17파일 전수):
+    ///
+    ///     formatcombo 슬롯 {1:12, 2:5, 4:5, 8:1} · 그중 `"combo"` 겸비는 슬롯 1 의 11건뿐
+    ///
+    /// 남는 6건(슬롯 1 의 1건 + 슬롯 2·4·8 전부)은 `formatcombo` **단독**이라 `samplerCombos` 로는
+    /// 절대 안 잡힌다. 하필 그 1건이 `effects/refraction/shaders/effects/refract.frag:8` 이다 —
+    /// 이 함수 없이 `samplerCombos` 로 `TEXnFORMAT` 을 심으면 정작 고치려던 자리에서 안 걸린다.
+    public static func formatComboSlots(_ src: String) -> Set<Int> {
+        var out: Set<Int> = []
+        // 판정 규약은 samplerCombos 와 동일 — 선언은 코드부, 어노테이션은 후행 `//` 주석부에서만
+        // 인정하고 블록 주석 속 선언은 제외한다(주석 처리된 죽은 샘플러가 콤보를 켜는 것 방지).
+        for line in stripBlockComments(src).split(whereSeparator: { $0.isNewline }) {
+            guard let commentStart = line.range(of: "//") else { continue }
+            let code = line[..<commentStart.lowerBound]
+            let comment = line[commentStart.upperBound...]
+            guard code.contains("sampler2D"),
+                  let texRange = code.range(of: "g_Texture"),
+                  comment.contains("\"formatcombo\"") else { continue }
+            let digits = code[texRange.upperBound...].prefix(while: { $0.isNumber })
+            if let slot = Int(digits) { out.insert(slot) }
+        }
+        return out
+    }
+
     static func isEngine(_ name: String) -> Bool {
         name == "g_Time" || name == "g_ModelViewProjectionMatrix" || name == "g_PointerPosition"
             || name == "g_TexelSize" || name == "g_TexelSizeHalf"

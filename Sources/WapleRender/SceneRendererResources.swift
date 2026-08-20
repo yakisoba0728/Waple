@@ -716,7 +716,8 @@ extension SceneRenderer {
                   let frag = String(data: fData, encoding: .utf8) else { return nil }
             let scenePass = SceneRenderer.sceneOverride(forRawPassIndex: i, in: eff.passList)
             let combos = resolvePassCombos(vert: vert, frag: frag, scenePass: scenePass,
-                                           matCombos: meta.matCombos, matTextures: meta.matTextures)
+                                           matCombos: meta.matCombos, matTextures: meta.matTextures,
+                                           effectRoot: effectRoot, package: package)
             guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: include) else {
                 NSLog("%@", "[Waple] GLSL translate failed: \(eff.name) pass \(i)")
                 return nil
@@ -868,8 +869,60 @@ extension SceneRenderer {
     /// ④ 콤보 해석. 우선순위: 머티리얼 기본 < scene 패스 지정.
     /// WE 규약: 샘플러 주석의 "combo":"X" 는 그 슬롯에 텍스처가 바인딩되면 자동 활성
     /// (실물 reflection/waterwaves/shake 의 페인트 마스크 — 미적용 시 마스크 무시 = 전화면 적용 사고).
+    /// WE `.tex-json` 의 `format` 문자열 → `.tex` 헤더 format 필드(= `shaders/common_fragment.h` 의
+    /// `FORMAT_*` 값). **동봉 자산에서 짝지어 실측한 표다** — 이름에서 유추하지 않았다.
+    /// 동봉 트리 `*.tex-json` 과 같은 이름의 `*.tex`(매직 `TEXV0005`, format = 오프셋 18 의 u32) 272쌍:
+    ///
+    ///     rgba8888 →0(130쌍) · r8 →9(60) · rg88 →8(50) · rgba8888n →0(19)
+    ///     dxt5n →4(4) · dxt5 →4(4) · rgb888 →**0**(4) · rg88n →8(1)
+    ///
+    /// 두 가지가 이름 기반 유추와 다르다:
+    ///   · `n` 접미(노멀맵 표기)는 코드를 **바꾸지 않는다** — rgba8888n·dxt5n·rg88n 이 각각 베이스와 같다.
+    ///   · `rgb888` 은 `FORMAT_RGB888(1)` 이 아니라 **0(RGBA8888)** 으로 컴파일된다. 24비트 GPU
+    ///     포맷이 없어 리소스컴파일러가 디스크에서 RGBA8 로 편다.
+    ///
+    /// 이 표는 `scripts/spec/check_tex_format_map.py` 가 매 CI 마다 동봉 자산에서 다시 측정해 대조한다.
+    private static let texJSONFormatCodes: [String: Int] = [
+        "rgba8888": 0, "rgba8888n": 0, "rgb888": 0,
+        "dxt5": 4, "dxt5n": 4,
+        "rg88": 8, "rg88n": 8,
+        "r8": 9,
+    ]
+
+    /// `formatcombo` 슬롯의 `TEXnFORMAT` 값 — **컴파일된 `.tex` 가 없어 소스 폼(.png)으로 해석되는
+    /// 텍스처에만** 준다. `.tex` 가 하나라도 잡히면 nil 이다.
+    ///
+    /// 왜 `.tex` 를 일부러 제외하는가. Waple 의 `TexDecoder._decodeMip` 은 GPU 네이티브 포맷을 올리지
+    /// 않고 **전부 CPU 에서 RGBA8 로 편다**. 그때 채널 배치를 이미 WE 셰이더의 *변환 후* 모양으로
+    /// 맞춰 둔다(TexDecoder.swift:228-282):
+    ///
+    ///     r8(9)  → (v,v,v,v)        `ConvertTexture0Format` 의 `vec4(1,1,1,.r)` 과 같은 자리에 값이 온다
+    ///     rg88(8)→ (b0,b0,b0,b1)    `.rrrg` 를 **디코드가 이미 적용**한 모양이다
+    ///
+    /// 그래서 `.tex` 로 온 rg88/r8 에 `TEXnFORMAT` 을 심으면 셰이더가 **변환을 두 번** 건다
+    /// (`ConvertTexture0Format((b0,b0,b0,b1))` → `.rrrg` → `(b0,b0,b0,b0)`, 알파 소실).
+    /// 지금의 "정의 없음 = 0" 이 그 경로에선 **맞는** 값이다.
+    ///
+    /// 소스 폼은 사정이 다르다. `.tex` 가 없으면 Waple 은 짝인 `.png` 를 그대로 디코드하므로 버퍼에
+    /// 진짜 (R,G,B,A) 가 들어온다 — `.tex-json` 이 `rg88*` 이라고 적은 텍스처면 R·G 가 실제로 그 두
+    /// 채널이고, 이때 `DecompressNormal` 의 `rg` 분기가 정확히 맞는다.
+    private func sourceFormTexFormatCode(_ name: String, root: String?, package: ScenePackage) -> Int? {
+        let base = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
+        let texCandidates = SceneRenderer.effectLocalTextureCandidates(base).filter { $0.hasSuffix(".tex") }
+        // 컴파일본이 하나라도 잡히면 위 이유로 손대지 않는다.
+        for c in texCandidates where effectScopedData(c, root: root, package: package) != nil { return nil }
+        for c in texCandidates {
+            guard let d = effectScopedData(String(c.dropLast(4)) + ".tex-json", root: root, package: package),
+                  let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let fmt = obj["format"] as? String else { continue }
+            return Self.texJSONFormatCodes[fmt.lowercased()]
+        }
+        return nil
+    }
+
     private func resolvePassCombos(vert: String, frag: String, scenePass: SceneEffectPass,
-                                   matCombos: [String: Int], matTextures: [String?]) -> [String: Int] {
+                                   matCombos: [String: Int], matTextures: [String?],
+                                   effectRoot: String?, package: ScenePackage) -> [String: Int] {
         // G-A3-1: 저작 콤보 키의 **대소문자가 선언과 다를 수 있다.**
         // 실측(동봉 WEAssets + WE 설치본 씬 전수):
         //  · 셰이더 `[COMBO]` 선언 이름은 **82종 전부 대문자**(소문자·혼합 0종).
@@ -899,6 +952,35 @@ extension SceneRenderer {
             let sceneBound = slot < scenePass.textureNames.count && scenePass.textureNames[slot] != nil
             let matBound = slot < matTextures.count && matTextures[slot] != nil
             if sceneBound || matBound { combos[comboName] = 1 }
+        }
+        // **[2026-08-20] `TEXnFORMAT` 을 심는다 — 종전엔 아무도 정의하지 않아 항상 0 이었다.**
+        //
+        // `common_fragment.h` 의 `DecompressNormal` 은 노멀 언팩을 텍스처 **포맷**으로 가른다:
+        //     #if TEX1FORMAT == FORMAT_RG88   normal.xy = normal.rg * 2 - 1
+        //     #else                           normal.xy = normal.wy * 2 - 1
+        //
+        // 정의가 없으면 전처리기가 0 을 주므로 항상 else 분기다. `effects/refraction` 의 노멀맵은
+        // `.tex` 가 없고 소스 `refractnormal.png` 가 **알파 없는 RGB**(256×256 colorType 2 실측)라
+        // `normal.w` 가 1.0 상수다 → `normal.x = 1·2−1 = 1`, `normal.z = sqrt(saturate(1−1−y²)) = 0`.
+        // 굴절 무늬의 x 성분이 통째로 죽고 전화면 균일 가로 시프트가 된다. 짝인 `.tex-json` 이
+        // `"format":"rg88n"`(→ 코드 8 = FORMAT_RG88)이라 그 값을 심으면 `rg` 분기로 (R,G) 를 읽는다.
+        //
+        // 슬롯 판정은 반드시 `formatComboSlots`(`"formatcombo":true`)여야 한다. `samplerCombos` 의
+        // `"combo"` 로는 **정작 refract.frag:8 이 안 걸린다** — 그 줄엔 `"combo"` 가 없다.
+        //
+        // `code != 0` 으로 거르는 이유: 0 은 미정의와 같은 값이라 심어도 그림이 안 변하는데 콤보 키가
+        // 늘면 파이프라인 변형 캐시 키만 갈라진다. 동봉 전수 기준 실제로 값이 붙는 자리는
+        // refraction 슬롯 1 **한 곳뿐**이다(lightshafts 슬롯 2 의 `gradient_iridescent` 는 rgba8888=0,
+        // waterripple/waterflow 는 `formatcombo` 자체가 없다).
+        for slot in GLSLTranslator.formatComboSlots(frag).sorted() {
+            let key = "TEX\(slot)FORMAT"
+            guard combos[key] == nil else { continue }
+            let bound = (slot < scenePass.textureNames.count ? scenePass.textureNames[slot] : nil)
+                ?? (slot < matTextures.count ? matTextures[slot] : nil)
+            guard let bound, !bound.isEmpty,
+                  let code = sourceFormTexFormatCode(bound, root: effectRoot, package: package),
+                  code != 0 else { continue }
+            combos[key] = code
         }
         return combos
     }

@@ -103,6 +103,19 @@ jobs:
       - name: Effect texture resolution
         run: python3 scripts/spec/check_effect_texture_resolution.py
 
+      # `TEXnFORMAT` 배선이 딛고 선 실측 표 셋(FORMAT_* enum · tex-json↔tex 짝 · Swift 리터럴)이
+      # 어긋나지 않는지 매번 다시 잰다. 이 배선은 "조용히 틀린 그림" 부류다 — 정의가 없으면
+      # 전처리기가 0 을 주고 노멀 언팩이 잘못된 분기를 타는데, 화면엔 "효과가 좀 약하네" 로 보인다.
+      #
+      # 세 실측이 서로 물려 있다: ② 짝 272쌍이 표를 만들고, ① 셰이더 enum 이 그 값의 정의역이며,
+      # ③ Swift 리터럴이 실제로 먹이는 값이다. 셋 중 하나만 바뀌어도 나머지가 근거를 잃는다.
+      # 덤으로 (D) 이름 유추를 배반하는 집합(`rgb888`→0), (E) `.tex` 를 제외하는 규칙의 근거인
+      # TexDecoder 정규화, (F) 슬롯 판정이 `formatcombo` 기준인지, (G) 실제 도달 자산 1건을 고정한다.
+      # F 가 특히 중요하다 — 첫 구현은 `samplerCombos`(`"combo"`)로 슬롯을 골라서 정작 고치려던
+      # refract.frag:8 이 안 걸렸다(그 줄엔 `"combo"` 가 없다). 아무것도 안 하는 수정이었다.
+      - name: TEXnFORMAT map
+        run: python3 scripts/spec/check_tex_format_map.py
+
       # 정본이 **조용히 줄어드는 것**을 막는다.
       #
       # spec/ 아래 정본은 measure_*.py 가 만들고, 그 입력은 WE 설치본과 워크샵 코퍼스다.
