@@ -1647,7 +1647,9 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
 
     /// command=copy 통과 파이프라인 캐시(빌드는 SceneRendererResources.passthroughEffectPipeline).
-    var _passthroughPipeline: MTLRenderPipelineState?
+    /// X-⑧: 통과(copy) 파이프라인 캐시 — **포맷별**. 키는 MTLPixelFormat.rawValue.
+    /// copy 패스의 타깃 fbo 포맷(r16f 등)에 맞춘 파이프라인이 필요해서 단일 캐시를 쪼갰다.
+    var _passthroughPipelines: [UInt: MTLRenderPipelineState] = [:]
 
 
     // 효과 패스용 오프스크린 텍스처 풀: 매 프레임 신규 할당(30fps×효과수) 대신 크기별로 재사용.
@@ -2195,7 +2197,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         scriptParticleEmissionPaused.removeAll()
         loggedDrawFailureKeys.removeAll()
         puppetCascadePhase.removeAll(); puppetCascadeLastTime.removeAll()  // C④: 마운트 재사용 stale 위상 방지
-        additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipeline = nil
+        additivePipeline = nil; translucentPipeline = nil; refractParticlePipeline = nil; _passthroughPipelines = [:]
         refractParticlePipelineAdditive = nil   // C4-(iii)
         additiveNearestPipeline = nil; translucentNearestPipeline = nil  // 감사 V07: nearest 변형 해제
         blendPipeline = nil; composePipeline = nil          // 감사 V06: 해제 누락분(마운트 반복 시 GPU 리소스 누적 방지)
