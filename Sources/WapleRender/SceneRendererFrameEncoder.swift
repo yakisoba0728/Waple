@@ -1978,12 +1978,13 @@ extension SceneRenderer {
             let targetRes = SIMD4<Float>(Float(baseW), Float(baseH), Float(baseW), Float(baseH))
             // X-⑧(G-A5-05/G-B2-03): `unique` FBO 는 풀이 아니라 이펙트 전용 저장소에서 온다.
             // dst 크기가 바뀌면 전부 재생성하고 clear 예약도 되살린다.
-            if uniqueStore.baseWidth != baseW || uniqueStore.baseHeight != baseH {
-                uniqueStore.textures = [MTLTexture?](repeating: nil, count: fboSpecs.count)
-                uniqueStore.baseWidth = baseW
-                uniqueStore.baseHeight = baseH
-                uniqueStore.pendingClear = []
-            }
+            // 종전엔 dst 크기가 바뀌면 **전부** 파기했다. 그건 두 가지로 틀렸다:
+            //   · `fit:`/`width`/`height` 로 절대 크기를 쓰는 fbo 는 dst 와 무관하다. 유체 시뮬의
+            //     속도·압력장이 전부 `fit:256` 인데, 창을 1픽셀만 리사이즈해도 상태가 통째로 날아갔다.
+            //     원본은 unique RT 키에 차원 접미사가 없어 리사이즈로 드롭되지 않는다.
+            //   · 보유 텍스처의 규격을 한 번도 대조하지 않아서, 한 번 어긋나면 baseW/baseH 가
+            //     안 바뀌는 한 영원히 교정되지 않았다.
+            // 인덱스별로 (폭, 높이, 포맷)을 대조해 어긋난 것만 버린다.
             if uniqueStore.textures.count != fboSpecs.count {
                 uniqueStore.textures = [MTLTexture?](repeating: nil, count: fboSpecs.count)
                 uniqueStore.pendingClear = []
@@ -1993,8 +1994,12 @@ extension SceneRenderer {
                 let w = spec.fixedWidth ?? max(1, baseW / spec.scale)
                 let h = spec.fixedHeight ?? max(1, baseH / spec.scale)
                 if spec.unique {
-                    if let held = uniqueStore.textures[i] {
-                        fboTex.append(held)
+                    var held = uniqueStore.textures[i]
+                    if let t = held, t.width != w || t.height != h || t.pixelFormat != spec.pixelFormat {
+                        held = nil          // 규격이 어긋난 보유분은 버리고 다시 만든다
+                    }
+                    if let t = held {
+                        fboTex.append(t)
                     } else {
                         guard let t = makeOffscreenFormatted(w, h, device, format: spec.pixelFormat) else { return false }
                         uniqueStore.textures[i] = t
@@ -2026,23 +2031,47 @@ extension SceneRenderer {
                 // X-②: command:"swap" — 무비용 포인터 교환(draw 없음). 인덱스 유효성만 재확인(빌드 시
                 // fboIndex 로 이미 확정됐지만 fboTex.count 는 fboSpecs.count 와 항상 같아 안전).
                 if let sp = pass.swapPair, sp.source < fboTex.count, sp.target < fboTex.count {
+                    // **규격이 다르면 교환하지 않는다.** 패스 파이프라인의 컬러 어태치먼트 포맷은
+                    // 빌드 시점에 `fboFormats[<매니페스트 인덱스>]` 로 고정되는데, swap 은 그 인덱스가
+                    // 담는 텍스처를 바꾼다. 포맷이나 크기가 다른 둘을 맞바꾸면 **다음 프레임에**
+                    // 파이프라인-어태치먼트 불일치로 Metal 이 거부한다(검증 끄면 미정의).
+                    // 이펙트 전체를 죽이는 대신 이 교환만 버린다.
+                    guard sp.source < fboSpecs.count, sp.target < fboSpecs.count,
+                          fboSpecs[sp.source].pixelFormat == fboSpecs[sp.target].pixelFormat,
+                          fboSpecs[sp.source].scale == fboSpecs[sp.target].scale,
+                          fboSpecs[sp.source].fixedWidth == fboSpecs[sp.target].fixedWidth,
+                          fboSpecs[sp.source].fixedHeight == fboSpecs[sp.target].fixedHeight else {
+                        WapleLog.warn("[Waple] swap 대상의 규격이 달라 건너뛴다(포맷/크기 불일치)")
+                        continue
+                    }
                     fboTex.swapAt(sp.source, sp.target)
                     // X-⑧: 양쪽이 `unique` 면 **저장소에서도** 맞바꾼다 — 그래야 핑퐁이 프레임을 넘는다.
                     // 종전엔 프레임 로컬 배열만 바꿔서, 다음 프레임에 원래 배치로 되돌아갔다(= 유체
                     // 시뮬이 직전 프레임 자기 출력을 못 읽는다). 한쪽만 unique 인 혼합 교환은
                     // 프레임 안에서만 유효하게 두고 저장소는 건드리지 않는다 — 풀 텍스처를 지속
                     // 슬롯에 넣으면 다음 프레임에 남이 그 텍스처를 체크아웃해 간다.
-                    if sp.source < fboSpecs.count, sp.target < fboSpecs.count,
-                       fboSpecs[sp.source].unique, fboSpecs[sp.target].unique,
-                       sp.source < uniqueStore.textures.count, sp.target < uniqueStore.textures.count {
+                    // 저장소 교환은 **플래그가 아니라 동일성**으로 가드한다. 앞선 혼합 교환
+                    // (한쪽만 unique)으로 `fboTex[i]` 가 이미 저장소 텍스처가 아닐 수 있는데,
+                    // 그때도 플래그만 보고 교환하면 저장소 위상만 한 칸 전진해 핑퐁 패리티가
+                    // 프레임마다 어긋난다.
+                    if sp.source < uniqueStore.textures.count, sp.target < uniqueStore.textures.count,
+                       fboTex[sp.target] === uniqueStore.textures[sp.source],
+                       fboTex[sp.source] === uniqueStore.textures[sp.target] {
                         uniqueStore.textures.swapAt(sp.source, sp.target)
                     }
                     continue
                 }
                 let target = pass.target.map { fboTex[$0] } ?? dst
+                // X-⑧: **unique 타깃은 `.load` 다.** 원본은 획득 경로에서 1회만 클리어하고 프레임
+                // 렌더 경로는 플래그를 읽지도 않는다. 동봉 이펙트 셰이더에 `discard` 가 0건이라
+                // 전 픽셀을 덮어써서 지금은 `.clear` 여도 결과가 같지만, `discard` 를 쓰는 워크샵
+                // 이펙트가 누적 버퍼를 타깃으로 잡는 순간 그 영역이 직전 상태 유지가 아니라
+                // 투명 검정으로 지워진다. 저작이 지정한 clear RGBA 도 생성 프레임 이후 다시는
+                // 안 보이게 된다. 풀 타깃과 dst 는 남의 내용을 물고 오므로 `.clear` 를 유지한다.
+                let targetIsUnique = pass.target.map { $0 < fboSpecs.count && fboSpecs[$0].unique } ?? false
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = target
-                rpd.colorAttachments[0].loadAction = .clear
+                rpd.colorAttachments[0].loadAction = targetIsUnique ? .load : .clear
                 rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
                 guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
                 enc.setRenderPipelineState(pass.pipeline)

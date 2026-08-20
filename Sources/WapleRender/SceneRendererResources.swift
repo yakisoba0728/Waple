@@ -85,9 +85,9 @@ extension SceneRenderer {
         /// fboSpecs 인덱스 → 지속 텍스처. `command:"swap"` 은 이 배열의 원소를 맞바꾸므로
         /// 핑퐁이 프레임을 넘어 유지된다(종전엔 프레임 로컬 배열을 바꿔 매 프레임 리셋됐다).
         var textures: [MTLTexture?] = []
-        /// 마지막으로 할당한 dst 크기 — 창 리사이즈 시 전부 재생성(+ clear 재적용)한다.
-        var baseWidth = 0
-        var baseHeight = 0
+        // (종전에 있던 `baseWidth`/`baseHeight` 는 제거했다 — dst 크기 변화로 **전부** 파기하면
+        //  `fit:` 절대 크기 버퍼까지 날아간다. 이제 소비처가 인덱스별로 (폭, 높이, 포맷)을 대조해
+        //  어긋난 것만 버린다.)
         /// 아직 `clearColor` 초기화를 못 받은 인덱스. 생성 직후 1회만 비운다 —
         /// **매 프레임 비우면 누적 자체가 성립하지 않는다**(그게 이 버퍼들의 존재 이유다).
         var pendingClear: Set<Int> = []
@@ -668,9 +668,10 @@ extension SceneRenderer {
             // 포인터 교환. 종전엔 이 분기가 없어 셰이더 패스로 오해석돼(material/shader 부재 →
             // "effects/<name>" 관례 조회 실패) 이펙트 전체가 드롭됐다.
             if mp.command == "swap" {
-                guard let swap = makeSwapPass(mp, effName: eff.name, fboIndex: fboIndex, device: device) else { return nil }
-                passes.append(swap)
-                continue
+                if let swap = makeSwapPass(mp, effName: eff.name, fboIndex: fboIndex, device: device) {
+                    passes.append(swap)
+                }
+                continue    // 못 풀어도 이 패스만 생략 — 인덱스는 enumerated() 라 영향 없다
             }
             let meta = resolvePassShaderMeta(mp, eff: eff, manifest: manifest, package: package, root: effectRoot)
             guard let vData = effectScopedData("shaders/\(meta.base).vert", root: effectRoot, package: package),
@@ -742,10 +743,21 @@ extension SceneRenderer {
     private func makeCopyPass(_ mp: EffectManifest.Pass, effName: String, fboIndex: [String: Int],
                               lw: Float, lh: Float, device: MTLDevice,
                               pixelFormat: MTLPixelFormat = .rgba8Unorm) -> TranslatedPass? {
-        guard let srcName = mp.source, let srcIdx = fboIndex[srcName],
-              let tgtName = mp.target, let tgtIdx = fboIndex[tgtName],
-              let pipe = passthroughEffectPipeline(device: device, pixelFormat: pixelFormat) else {
-            NSLog("%@", "[Waple] unresolved copy pass in \(effName)"); return nil
+        // G-A5-04 정책을 명령 패스에도 적용한다. 종전엔 이름 하나만 못 풀어도 nil 을 돌려줬고,
+        // 호출부가 그걸 그대로 `return nil` 로 흘려 **이펙트가 통째로 사라졌다**. 원본은 target 을
+        // 0xFF(= 효과 출력)로 초기화하고 이름이 맞을 때만 덮어쓰므로 여전히 그린다.
+        // `format` 없는 fbo 를 드롭하는 규약이 들어오면서 이 경로의 도달이 실제로 생겼다 —
+        // motionblur 의 `_rt_FullCompoBuffer1` 에서 format 만 빠져도 이펙트가 레이어에서 증발했다.
+        guard let pipe = passthroughEffectPipeline(device: device, pixelFormat: pixelFormat) else {
+            NSLog("%@", "[Waple] copy pass pipeline 생성 실패: \(effName)"); return nil
+        }
+        let srcIdx = mp.source.flatMap { fboIndex[$0] } ?? -1        // -1 = 효과 입력(previous)
+        let tgtIdx = mp.target.flatMap { fboIndex[$0] }              // nil = 효과 출력
+        if mp.source != nil, srcIdx < 0 {
+            WapleLog.warn("[Waple] copy pass 의 source 를 못 풀었다(\(effName)) — 효과 입력으로 폴백")
+        }
+        if mp.target != nil, tgtIdx == nil {
+            WapleLog.warn("[Waple] copy pass 의 target 을 못 풀었다(\(effName)) — 효과 출력으로 폴백")
         }
         let dims = SIMD4<Float>(lw, lh, lw, lh)
         var wrap = [Float](repeating: 0, count: 8)
@@ -760,12 +772,15 @@ extension SceneRenderer {
     /// X-②: command:"swap"(셰이더 없음) — source/target fbo 이름을 인덱스로 해석해 포인터 교환만
     /// 예약(draw 없음, makeCopyPass 와 동일 미해석 정책 — 실패 시 효과 전체 폴백). pipeline 은
     /// applyEffect 가 swapPair 를 보고 즉시 continue 하므로 실제로 바인드·드로우되지 않는 placeholder.
+    /// 반환 nil 의 의미가 **"이 패스를 생략한다"** 로 바뀌었다(종전: "이펙트 전체 폴백").
+    /// 교환할 대상이 없으면 교환을 안 하면 그만이고, 그것 때문에 이펙트를 죽일 이유가 없다.
     private func makeSwapPass(_ mp: EffectManifest.Pass, effName: String, fboIndex: [String: Int],
                               device: MTLDevice) -> TranslatedPass? {
         guard let srcName = mp.source, let srcIdx = fboIndex[srcName],
               let tgtName = mp.target, let tgtIdx = fboIndex[tgtName],
               let pipe = passthroughEffectPipeline(device: device) else {
-            NSLog("%@", "[Waple] unresolved swap pass in \(effName)"); return nil
+            WapleLog.warn("[Waple] swap pass 의 대상을 못 풀었다(\(effName)) — 이 패스만 생략")
+            return nil
         }
         return TranslatedPass(pipeline: pipe, material: [], aux: [],
                               binds: [], target: nil, usesAudio: false,
@@ -1093,8 +1108,24 @@ extension SceneRenderer {
         // 덮는 것은 어떤 경우에도 옳지 않다.
         if let s = scoped, let d = packageData(s, package: package) { return d }
         if let d = packageData(name, package: package) { return d }
-        if let s = scoped, let d = baseAssetData(s) { return d }
-        return baseAssetData(name)
+        // 베이스 자산은 **루트별로** 훑는다. `baseAssetData(scoped)` 를 전 루트에 대해 먼저 돌리면
+        // 동봉본의 `<root>/<name>` 이 사용자 설치본의 `<name>` 을 이겨서, `assetBaseRoots` 가
+        // 명시한 우선순위(사용자 설치본 → 동봉본)가 뒤집힌다.
+        for base in assetBaseRoots {
+            // 스코프 경로가 `.rejected`(경로 이탈)여도 평문 조회는 막지 않는다 — 루트 문자열이
+            // 이상한 것과 자산 이름이 이상한 것은 다른 문제다.
+            if let s = scoped, case .url(let u) = baseAssetURLProbe(for: s, root: base),
+               let d = try? Data(contentsOf: u) { return d }
+            switch baseAssetURLProbe(for: name, root: base) {
+            case .url(let u):
+                if let d = try? Data(contentsOf: u) { return d }
+            case .rejected:
+                return nil          // 이름 자체가 이탈 — 다음 루트에서 성공하면 안 된다
+            case .missing:
+                break
+            }
+        }
+        return nil
     }
 
     /// `quietAssetData` 의 **베이스 루트 부분만** — pkg 조회는 하지 않는다.
@@ -1119,8 +1150,15 @@ extension SceneRenderer {
     /// `eff.file` 이 명시되면 그 부모, 아니면 관례 `effects/<name>`.
     static func effectLocalRoot(_ eff: SceneEffect) -> String? {
         if !eff.file.isEmpty {
-            guard let slash = eff.file.lastIndex(of: "/") else { return nil }
-            let dir = String(eff.file[eff.file.startIndex..<slash])
+            // **백슬래시를 먼저 정규화한다.** `eff.file` 은 scene.json 원문 그대로이고
+            // (`SceneDocument.parseEffects` 는 정규화하지 않는다), 인접 두 계층은 이미 정규화한다 —
+            // `WallpaperPathSecurity.normalizedRelativePath` 와 `ScenePackage.normalizedLookupKey`
+            // 둘 다 `\` → `/` 치환을 한다. 그래서 `"effects\fluidsimulation\effect.json"` 인 씬은
+            // **매니페스트는 정상 로드되는데 루트만 nil** 이 되어, 18개 셰이더가 전건 팩 루트로
+            // 떨어져 미스 → 이펙트 통째 드롭이라는 최악의 조합이 된다.
+            let normalized = eff.file.replacingOccurrences(of: "\\", with: "/")
+            guard let slash = normalized.lastIndex(of: "/") else { return nil }
+            let dir = String(normalized[normalized.startIndex..<slash])
             return dir.isEmpty ? nil : dir
         }
         return eff.name.isEmpty ? nil : "effects/\(eff.name)"
@@ -1133,11 +1171,12 @@ extension SceneRenderer {
 
     /// pkg 전용 에셋 조회(베이스 팩 폴터 없음) — 커스텀 셰이더 소스처럼 씬 번들만 인정해야 하는 프로브용.
     func packageData(_ name: String, package: ScenePackage) -> Data? {
-        if let d = package.data(for: name) { return d }
-        guard let e = package.entries.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
-            return nil
-        }
-        return package.data(for: e.name)
+        // 종전엔 미스 시 `entries.first(where: caseInsensitiveCompare)` 로 **전량 선형 스캔**을 했다.
+        // 그건 죽은 코드다 — `package.data(for:)` 가 이미 정확 인덱스와 정규화 인덱스(백슬래시
+        // 치환 + 소문자화) 둘을 보고, 정규화가 `caseInsensitiveCompare` 보다 더 관대하다.
+        // 스코프 조회가 들어오면서 이 함수 호출이 **2배**가 됐고(`fluidsimulation` 1빌드에 139회),
+        // `maxEntries` 65,536 이라 악의 pkg 최악이 수백만 비교가 된다.
+        package.data(for: name)
     }
 
     private func baseAssetURL(for name: String, root: URL) -> URL? {
