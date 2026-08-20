@@ -431,10 +431,18 @@ def main():
                    "materialbasedirectory / materialdirectory",
              "대조": {"일치": opt_match, "불일치": len(opt_mismatch),
                       "불일치목록": [{"file": f, "사유": b} for f, b in opt_mismatch]},
-             "주의": "빈 {} json 은 대조에서 제외한다. **이걸 '기본값 = 0x9' 로 읽으면 안 된다** — "
-                     "실물에 {}+0x9(flow/glow)와 {}+0x0f(assets/models/editor/camera, "
-                     "elementpreviews/collisionmodel/sphere)가 둘 다 있다. 빈 json 은 "
-                     "'이 파일이 굽기 옵션을 안 담고 있다' 는 뜻이지 옵션이 기본값이라는 뜻이 아니다"},
+             "주의": "짝 .json 이 **없는** .mdl 은 대조에서 제외한다(위 301행 "
+                     "`if not os.path.exists(jp): continue`). **이걸 '옵션 부재 = 기본값' 으로 "
+                     "읽으면 안 된다** — 설치본 실측(28개 전수, 2026-08-20 재측정): 짝 json 없음 "
+                     "**14**개 / 옵션 있음 14개, **빈 {} 는 0개**. 그 14개의 formatFlag 는 "
+                     "0x9 12개 · 0xf 2개로 **갈린다**(0x9: audiophile flow·glow, ricepod "
+                     "jet·skybox·orbitaleffects, fantasticcar dome·shadow, retro bgfade, "
+                     "dna_fragment bgfade, techno glow·rays·orbitsmall / 0xf: "
+                     "assets/models/editor/camera, particleelementpreviews/collisionmodel/sphere). "
+                     "즉 json 부재는 '이 파일이 굽기 옵션을 안 담고 있다' 는 뜻이지 옵션이 어떤 "
+                     "기본값이라는 뜻이 아니다. **[2026-08-20 정정]** 종전 이 줄은 같은 논증을 "
+                     "'빈 {} json' 으로 적고 네 파일을 그 예로 들었는데, 네 파일 모두 빈 json 이 "
+                     "아니라 json 이 아예 없다. 논증은 그대로 성립하고 분류만 틀렸다"},
             "확정", [ev_rc, specfmt.ev("file", "projects/defaultprojects/*/models/*/*.json",
                                        "설치본 모델 옵션 json ↔ .mdl formatFlag/skinCount 대조")]),
 
@@ -498,11 +506,18 @@ def main():
              "오판시 증상": "u32 블롭을 u16 로 읽으면 상위 워드 0 이 섞여 maxIndex 가 정확히 0xFFFF 로 "
                             "찍히고(실측 17메시 전부) 삼각형이 뒤죽박죽이 된다. 정점 수보다 작으므로 "
                             "'maxIndex < vertexCount' 류의 검사로는 절대 안 걸린다",
+             "경계": f"직접 목격한 vertexCount 경계는 ({idx16_max}, {idx32_min}] 구간이다. 65535 라는 "
+                     f"값 자체는 u16 주소지정 한계에서 온 추론이지 그 경계의 파일을 본 것은 아니다 — "
+                     f"그리고 **그 추론이 규칙이 아니라는 것이 위 '규칙 근거' 로 확정됐다**. 이 줄은 "
+                     f"종전 항목이 스스로 달아 둔 헤지이고, 그 헤지가 옳았다는 기록으로 남긴다",
              "종전 규칙이 맞아 보였던 이유": f"관측 코퍼스에서 두 규칙이 완전히 겹친다 — 정점이 65535 를 "
-                     f"넘는 메시는 내보내기 도구가 gateWord bit0 을 세우기 때문이다. 종전 항목도 "
-                     f"'직접 목격한 경계는 ({idx16_max}, {idx32_min}] 이고 65535 는 u16 주소지정 "
-                     f"한계에서 온 추론' 이라고 스스로 헤지하고 있었다. 갈리는 것은 bit0 이 선 작은 "
-                     f"메시와 비트가 없는 큰 메시뿐이고, 둘 다 코퍼스에 없다"},
+                     f"넘는 메시는 내보내기 도구가 gateWord bit0 을 세우기 때문이다. 갈리는 것은 bit0 이 "
+                     f"선 작은 메시와 비트가 없는 큰 메시뿐이고 둘 다 코퍼스에 없다. 설치본도 45메시 "
+                     f"전건 gateWord 0 / 최대 정점수 10,995 라 같은 답을 낸다. 즉 위 '실측' 은 전부 참이지만 "
+                     f"그건 **상관**이지 규칙이 아니다 — '이 코퍼스에서 성립한다' 와 '엔진이 이렇게 정한다' 는 "
+                     f"다른 명제이고, 후자는 코드를 읽어야만 나온다",
+             "코드 상태": "Sources/WapleCore/Model3D.swift:577 `let iWidth = (gateWord & 1) == 0 ? 2 : 4` "
+                          "— 커밋 0197a2d 로 코드가 먼저 고쳐졌고 이 정본이 뒤늦게 따라왔다"},
             "확정", [ev_bin, ev_corpus]),
 
         specfmt.entry(
