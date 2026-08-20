@@ -507,8 +507,15 @@ public struct ParticleSimulator {
         } else {
             particles[k].pos += (particles[k].vel + remapAddVel) * speedFactor * dt
         }
-        // 난류 이류(advection): 노이즈 흐름장 속도로 위치를 이동. vel 에 누적하지 않으므로
-        // |변위| ≤ turbSpeed·dt 로 유계(속도 상한 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
+        // 난류. **[2026-08-20 — 확인된 발산] 실물은 위치가 아니라 속도에 더한다** —
+        // 핸들러가 위치 배열(`[sys+0x2b0/0x2b8/0x2c0]`, 0x1402429dd–)은 노이즈 좌표용으로만 읽고
+        // 꼬리(0x140242d3a–0x140242d54)에서 **속도 배열**(`[sys+0x2c8/0x2d0/0x2d8]`,
+        // 0x1402429f7–0x140242a05)에 `addps` 로 누적한다. 여기 이류는 그 발산이다.
+        // 배수 사슬이 절반만 추적돼 있어(ParticleOperator.turbulence 주석) 아직 안 옮겼다 —
+        // 속도 누적은 매 프레임 쌓이므로 배수를 틀리면 발산한다.
+        //
+        // 현행(이류)의 성질: vel 에 누적하지 않으므로 |변위| ≤ turbSpeed·dt 로 유계(속도 상한
+        // 불요). movement 후 pos 를 사용해 궤적을 따라 흐른다.
         // F628: 전 turbulence 오퍼레이터 누적 — 첫 번째는 turbSpeed/turbPhase(기존 비트동일),
         // 2번째 이후는 turbExtra(다중 오퍼레이터 시스템만 신규 드로).
         if !turbulences.isEmpty {
