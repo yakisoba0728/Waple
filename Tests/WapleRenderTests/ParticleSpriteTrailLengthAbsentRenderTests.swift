@@ -123,29 +123,45 @@ final class ParticleSpriteTrailLengthAbsentRenderTests: XCTestCase {
         return opaqueHalfSpan(rgba, width: width, height: height, center: 500)
     }
 
-    /// rain_on_the_glass 실물 구성(length 부재, maxlength=6)을 sizePx=100(가상 raindrop), 고속
-    /// (-800px/s) 로 렌더 — 구법(F790 최초 재해석)은 hw=sizePx*0.5*min(speed,maxLength)=100*0.5*6
-    /// =300px(프레임 폭의 60% — 창밖 전체를 가리는 실물 회귀와 동형 스케일). 수정 후엔 length 부재라
-    /// 신장 자체가 항등(1) 이라 hw=sizePx*0.5=50px(원본 크기) 이어야 한다 — speed 를 아무리 올려도
-    /// 불변(포화가 아니라 애초에 신장 미적용).
-    func testLengthAbsentRendersAtOriginalSizeRegardlessOfSpeed() throws {
-        guard let halfSpanSlow = try renderHalfSpan(keys: SpriteTrailKeys(length: nil, minLength: nil, maxLength: 6),
-                                                     sizePx: 100, speedPxPerSec: 10) else {
-            throw XCTSkip("no Metal device")
+    /// rain_on_the_glass 실물 구성(length 부재, maxlength=6)을 sizePx=100, 두 속도로 렌더한다.
+    ///
+    /// **[2026-08-20] H3 를 되돌리고 WE 계약으로 바꾼다.** H3 는 "length 부재 = 무신장" 을
+    /// 단언했는데 전제가 틀렸다 — 주입기 0x1401c0af0 이 부재에도 `length` 0.05(0x1401c0b55)를
+    /// 심으므로 신장은 언제나 정의된다. 그리고 WE 가 셰이더 원문을 동봉한다
+    /// (`assets/shaders/common_particles.h`):
+    ///
+    /// ```glsl
+    /// up = localVelocity * max(g_RenderVar0.z, min(trailLength * g_RenderVar0.x, g_RenderVar0.y));
+    /// // ComputeParticlePosition: positionAndSize.w * up * (uvs.y-0.5) * textureRatio
+    /// ```
+    /// `g_RenderVar0 = (length, maxlength, minlength)` 이고 두 축 모두 size 가 곱해지므로
+    /// **반폭 = sizePx · 0.5 · clamp(speed·length, minlength, maxlength)** 다.
+    ///
+    /// 그래서 기대값이 손계산으로 떨어진다(sizePx 100 · length 0.05 · maxlength 6 · minlength 0):
+    ///   speed  10 → clamp(0.5, 0, 6) = 0.5 → 100·0.5·0.5  =  **25px**  (속도가 낮으면 오히려 납작해진다)
+    ///   speed 800 → clamp(40,  0, 6) = 6   → 100·0.5·6    = **300px**  (maxlength 포화)
+    ///
+    /// H3 가 관측한 흰 스미어의 실제 원인은 그 직전 폴백 `mul = 1` → `s = speed`(수백)였다.
+    /// `s = speed·0.05` 는 그보다 20배 작지만, `maxlength = 6` 인 이 프리셋은 speed 120 부터
+    /// 포화하므로 **실물도 300px 를 그린다** — H3 가 "회귀" 로 판정한 비교 대상은 WE 가 아니라
+    /// Waple 의 옛 리본 구현이었다. 근거가 바이트(주입기)와 WE 동봉 셰이더 원문 둘이므로
+    /// 그 관측 판단보다 우선한다. **골든 재검토 대상이다.**
+    ///
+    /// `minlength` 를 저작한 씬(rainfall.json 의 `minlength: 5`)이 바로 저속 납작해짐을 막는
+    /// 장치다 — 그 키가 왜 존재하는지도 이 계약이 설명한다.
+    func testLengthAbsentStretchFollowsShaderClamp() throws {
+        func span(_ speed: Float) throws -> Float? {
+            try renderHalfSpan(keys: SpriteTrailKeys(length: nil, minLength: nil, maxLength: 6),
+                               sizePx: 100, speedPxPerSec: speed)
         }
-        guard let halfSpanFast = try renderHalfSpan(keys: SpriteTrailKeys(length: nil, minLength: nil, maxLength: 6),
-                                                     sizePx: 100, speedPxPerSec: 800) else {
-            throw XCTSkip("no Metal device")
-        }
-        // 원본 반폭(sizePx*0.5=50px) 근방 — 구법의 포화값(300px) 은 물론, 옛 안전판의 완화 상한(150px)
-        // 보다도 훨씬 작다(신장이 아예 적용되지 않으므로).
-        for (label, halfSpan) in [("speed=10", halfSpanSlow), ("speed=800", halfSpanFast)] {
-            XCTAssertGreaterThanOrEqual(halfSpan, 45, "\(label): 원본 크기보다 작아지면 안 됨 — 실측 \(halfSpan)px")
-            XCTAssertLessThanOrEqual(halfSpan, 65, "\(label): length 부재는 무신장이어야 함(F790 포화 회귀 재발) — 실측 \(halfSpan)px")
-        }
-        // speed 의존성이 완전히 사라졌는지(포화가 아니라 애초에 미적용인지) 직접 대조.
-        XCTAssertEqual(halfSpanSlow, halfSpanFast,
-                       "length 부재 신장은 speed 와 무관해야 함 — slow=\(halfSpanSlow)px fast=\(halfSpanFast)px")
+        guard let slow = try span(10), let fast = try span(800) else { throw XCTSkip("no Metal device") }
+        XCTAssertEqual(slow, 25, accuracy: 6,
+                       "speed 10 → clamp(0.5,0,6)=0.5 → 100·0.5·0.5 = 25px — 실측 \(slow)px")
+        XCTAssertEqual(fast, 300, accuracy: 12,
+                       "speed 800 → maxlength 6 포화 → 100·0.5·6 = 300px — 실측 \(fast)px")
+        // 신장이 speed 에 **의존한다**는 것 자체를 못박는다. H3 는 정확히 이 의존성을 없앴다.
+        XCTAssertNotEqual(slow, fast,
+                          "length 부재에도 신장은 speed 의존이다 — slow=\(slow)px fast=\(fast)px")
     }
 
     /// 대조군: length 가 실제로 저작된 시스템(ember 류)은 population 이 달라 이 수정의 영향을 받지

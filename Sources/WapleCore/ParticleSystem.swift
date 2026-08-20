@@ -512,29 +512,45 @@ public enum RendererKind: Equatable {
         }
     }
 
-    /// F790: WE 공식 문서 확정 — spritetrail 은 히스토리 리본이 아니라 "속도 방향으로 신장된 쿼드":
-    /// 이상 신장 = speed×length, [minlength, maxlength] 클램프, 쿼드 장축 = size×신장(단축 = size
-    /// 무신장). 1/1/1 이면 무신장 회전만(공식 문서의 우주선 예시). minlength 부재 → 0(하한 없음),
-    /// maxlength 부재 → 1(공식 문서의 무신장 중립값).
+    /// spritetrail = "속도 방향으로 신장된 쿼드". **WE 가 셰이더 원문을 동봉한다** —
+    /// `assets/shaders/common_particles.h`:
     ///
-    /// H3(핫픽스, 웨이브 W0b, 3489263099/3465215190 회귀 — F790 재해석 정정): length 는 speed 의
-    /// 유일한 승수라 length 부재 시엔 신장 자체가 정의되지 않는다. 종전엔 이 경우 "곱 항등 1"
-    /// (mul=1 → s=speed) 로 폴백했으나, 씬의 전형적 속도(수백 px/s)가 그대로 [minlength,maxlength]
-    /// 로 밀려 들어가 사실상 항상 maxlength 로 포화된다 — 신장의 speed 의존성 자체가 관측 불가해진다
-    /// (spriteTrailStretch(speed: 10) == spriteTrailStretch(speed: 1000)). rain_on_the_glass(워크샵
-    /// 2446129945, 14+씬 공유)·wind-blur·rainfall·Magic_Vortex·Random_sparks·Particle_flow·yuluj 등
-    /// length 미저작 코퍼스 전건이 동일 증상(구 베이스라인 95fad7a 리본 구현 대비 명백한 회귀 — 3489263099
-    /// 는 창밖 도시가 흰 스미어에 가려짐). length 를 실제로 저작한 씬(ember length=0.007 등)만 저작자가
-    /// 의도한 speed 의존 신장이 성립하므로, length 가 명시된 시스템에만 신장 산정을 적용하고 — 부재
-    /// (≤0)면 신장을 항등(1, 공식 문서의 회전만 케이스)으로 되돌린다. minlength/maxlength 단독 저작은
-    /// speed 승수 없이는 의미가 없어 이 폴백에 포함(코퍼스 123건 전 조합에서 모순 없음).
+    /// ```glsl
+    /// float trailLength = length(localVelocity);
+    /// localVelocity /= trailLength;
+    /// up = localVelocity * max(g_RenderVar0.z, min(trailLength * g_RenderVar0.x, g_RenderVar0.y));
+    /// ```
+    /// 그리고 `ComputeParticlePosition` 이 두 축 모두에 `positionAndSize.w`(= size)를 곱한다:
+    /// ```glsl
+    /// positionAndSize.xyz + (positionAndSize.w * right * (uvs.x-0.5)
+    ///                      - positionAndSize.w * up   * (uvs.y-0.5) * textureRatio)
+    /// ```
+    /// 비-트레일 경로에서 `up` 은 단위벡터이므로, 트레일의 `up` 크기가 곧 **size 배수**다.
+    /// `g_RenderVar0 = (length, maxlength, minlength)` — 클램프 순서가 `max(min, min(·, max))` 라
+    /// `minlength > maxlength` 면 minlength 가 이긴다.
+    ///
+    /// **[2026-08-20] H3 핫픽스를 되돌린다.** H3 는 `length` 부재 시 신장을 항등 1 로 돌렸고
+    /// 근거를 "length 는 speed 의 유일한 승수라 부재 시엔 신장 자체가 정의되지 않는다" 로 적었다.
+    /// 그 전제가 틀렸다 — 주입기 0x1401c0af0 이 부재에도 `length` 에 **0.05**(0x1401c0b55),
+    /// `maxlength` 에 **10.0**(0x1401c0c13)을 심으므로 신장은 언제나 정의된다.
+    ///
+    /// H3 가 관측한 회귀(rain_on_the_glass 흰 스미어)의 실제 원인은 그 직전 폴백
+    /// `mul = 1` → `s = speed`(수백)였다. `s = speed·0.05` 는 그보다 20배 작다 — 즉 H3 는
+    /// **한 번도 시험되지 않은 값**을 두고 반대편 극단(무신장)으로 넘어간 것이다. 다만
+    /// `maxlength = 6` 인 그 프리셋은 실물에서도 speed 120 부터 포화하므로 **WE 자신이 굵은
+    /// 스트릭을 그린다** — H3 가 "명백한 회귀" 로 판정한 비교 대상은 WE 가 아니라 Waple 의 옛
+    /// 리본 구현이었다.
+    ///
+    /// 결과적으로 `length` 부재 13건 · `maxlength` 부재 11건(동봉 44 중)의 **그림이 달라진다** —
+    /// Mac 골든 재검토 대상이다. 근거가 바이트(주입기)와 WE 동봉 셰이더 원문 둘이라, 관측
+    /// 판단(옛 구현과의 비교)보다 우선한다.
     public func spriteTrailStretch(speed: Float) -> Float {
         guard case let .spriteTrail(maxLength, length, minLength) = self else { return 1 }
-        guard length > 0 else { return 1 }
-        var s = speed * length
-        if minLength > 0 { s = max(s, minLength) }
-        s = min(s, maxLength > 0 ? maxLength : 1)
-        return s
+        // 셰이더 원문 그대로: max(minlength, min(speed·length, maxlength)).
+        // 종전엔 `min`/`max` 순서가 반대였고(minlength > maxlength 에서 갈린다),
+        // `maxLength <= 0` 을 1 로 바꿔치는 보정이 있었다 — 실물은 그 값을 그대로 써서
+        // 신장 0(퇴화 쿼드)을 만든다. 동봉 저작값에 0 은 없다(2·3·20·1.5).
+        return max(minLength, min(speed * length, maxLength))
     }
 }
 
@@ -1534,10 +1550,17 @@ public struct ParticleSystemDef: Equatable {
 
         var (ops, attractCPIds, vortexAudio, operatorBlends) = Self.parseOperators(json["operator"] as? [Any] ?? [])
 
-        var renderer: RendererKind = .unsupported("none")
+        // **[2026-08-20] `renderer` 키 부재는 "미지원" 이 아니라 sprite 다.** 파서가
+        // `isArray`(0x1400888a0)에 실패하면 그 자리에서 오브젝트(태그 7)를 만들어
+        // `{name:"sprite"}` 를 **주입한다**(0x1401c58a9–0x1401c58ce).
+        //
+        // **빈 배열 `[]` 은 다르다** — isArray 를 통과하므로 주입이 걸리지 않고 렌더러가 0개로
+        // 남는다. 종전엔 두 경우를 `.unsupported("none")` 하나로 뭉갰다(동봉 부재 6 · 빈 배열 4).
+        let rawRenderer = json["renderer"]
+        var renderer: RendererKind = (rawRenderer as? [Any]) == nil ? .sprite : .unsupported("none")
         var orientation: ParticleOrientation = .screen
         var ropeOpts: RopeRenderOptions? = nil
-        if let r0 = (json["renderer"] as? [Any])?.first as? [String: Any] {
+        if let r0 = (rawRenderer as? [Any])?.first as? [String: Any] {
             let n = r0["name"] as? String ?? "none"
             switch n {
             case "sprite": renderer = .sprite
@@ -1599,8 +1622,15 @@ public struct ParticleSystemDef: Equatable {
             }
         }
 
-        // 음수 maxcount 가 시뮬 버스트 Range 상한으로 흘러 트랩 — 0 하한 클램프(감사 V02).
-        var maxCount = max(0, pint(json["maxcount"]) ?? 100)
+        // **[2026-08-20] 부재 기본 100 은 근거가 없었다 — 실물은 0 이다.** `maxcount` 에는
+        // 주입기가 없고, 파서가 `isNumeric`(0x140088880)에 실패하면 `xor r15d,r15d` →
+        // `mov [r13], eax` 로 **0** 을 심는다(0x1401c5784–0x1401c57a2). 동봉 289 시스템이
+        // 전건 저작하므로 도달은 0이다.
+        //
+        // 0 하한과 65536 상한은 그대로 둔다 — 실물엔 없는 **Waple 의 의도된 가드**다
+        // (음수가 시뮬 버스트 Range 상한으로 흘러 트랩, 감사 V02 / 코퍼스 100000 설정 씬의
+        // CPU 시뮬 과부하, 감사 D-corpus G7).
+        var maxCount = max(0, pint(json["maxcount"]) ?? 0)
         if let m = instanceOverride?.count {
             maxCount = saturatedCount(Float(maxCount) * m)  // 감사 V06: Int 범위 밖 곱 트랩 — 포화 클램프
         }
@@ -1630,7 +1660,11 @@ public struct ParticleSystemDef: Equatable {
                 // 그대로 썼다 — 자식 인스턴스는 스폰된 부모 파티클 하나당 ParticleSimulator 를 통째로
                 // 하나씩 할당하므로(ParticleSimulator:305) 루트 파티클 한 개보다 훨씬 비싼 단위인데
                 // 상한이 없었다. 새 한계를 발명하지 않고 루트와 같은 값을 쓰고, 잘리면 로그를 남긴다.
-                let rawMaxInstances = max(0, pint(c["maxcount"]) ?? (trigger == .always ? 1 : maxCount))
+                // **[2026-08-20] 자식 `maxcount` 부재 기본은 상수 10 이다** — children 주입기
+                // 0x1401c1430 이 `mov r8d, 0xa` → `H_INT` 로 심는다(0x1401c16f5–0x1401c1705).
+                // 종전 `trigger == .always ? 1 : 루트 maxcount` 는 근거 없는 유추였고, 동봉
+                // 자식 선언의 72%가 이 키를 생략한다 — `static` 자식이 특히 1 vs 10 으로 갈렸다.
+                let rawMaxInstances = max(0, pint(c["maxcount"]) ?? 10)
                 let maxInstances = min(65536, rawMaxInstances)
                 if maxInstances != rawMaxInstances {
                     WapleLog.warn("[Waple] particle child maxcount \(rawMaxInstances) → \(maxInstances) 클램프: \(path)")

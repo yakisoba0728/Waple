@@ -214,10 +214,15 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
         XCTAssertEqual(RendererKind.ropeTrail(length: 4, subdivision: 2).trailSampleCount, 120)     // 4초×30
         XCTAssertEqual(RendererKind.ropeTrail(length: 30, subdivision: 0).trailSampleCount, 240)    // 캡
         XCTAssertEqual(RendererKind.ropeTrail(length: 0, subdivision: 5).trailSampleCount, 5)       // subdivision 폴터
-        // F629: rope subdivision 반영(종전 고정 16 — subdivision 100 이 1/6 해상도였다)
-        XCTAssertEqual(RendererKind.rope(subdivision: 100).trailSampleCount, 100)
-        XCTAssertEqual(RendererKind.rope(subdivision: 3).trailSampleCount, 4)                       // 하한 4
-        XCTAssertEqual(RendererKind.rope(subdivision: 0).trailSampleCount, 16)                      // 부재 기본(무회귀)
+        // **[2026-08-20] F629 를 되돌린다 — rope 는 대역값 16 고정이다.**
+        // `subdivision` 을 히스토리 샘플 수로 쓰는 매핑에 WE 근거가 없다. 실물 `subdivision` 은
+        // 커브 세분 횟수([0,32] 클램프, 주입 기본 4 @0x1401c0d00)지 리본 길이가 아니다.
+        // 그 기본값이 확정된 지금 그대로 흘리면 부재 11건의 샘플이 16 → 4 로 **눈에 보이게**
+        // 줄어든다 — 근거 없는 매핑에 새 정밀도를 얹는 꼴이라, 리본 지오메트리를 실측할 때까지
+        // 대역값을 유지한다.
+        XCTAssertEqual(RendererKind.rope(subdivision: 100).trailSampleCount, 16)
+        XCTAssertEqual(RendererKind.rope(subdivision: 3).trailSampleCount, 16)
+        XCTAssertEqual(RendererKind.rope(subdivision: 0).trailSampleCount, 16)
     }
 
     // MARK: - F626 (S-26): 렌더러 orientation 파스

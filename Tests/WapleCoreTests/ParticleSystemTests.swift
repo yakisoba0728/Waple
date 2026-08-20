@@ -229,17 +229,19 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertTrue(rope.renderer.isTrail)
         XCTAssertEqual(rope.renderer.trailSampleCount, 16)
 
+        // `length` 부재는 0 이 아니라 주입 0.05 다(0x1401c0b55).
         let spriteTrail = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"spritetrail","maxlength":20}],"maxcount":24}"#), material: nil)
-        XCTAssertEqual(spriteTrail.renderer, .spriteTrail(maxLength: 20, length: 0, minLength: 0))
+        XCTAssertEqual(spriteTrail.renderer, .spriteTrail(maxLength: 20, length: 0.05, minLength: 0))
         XCTAssertEqual(spriteTrail.renderer.trailSampleCount, 20)
 
         let ropeTrail = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"ropetrail","length":0.4,"subdivision":2}],"maxcount":10}"#), material: nil)
         XCTAssertEqual(ropeTrail.renderer, .ropeTrail(length: 0.4, subdivision: 2))
         XCTAssertEqual(ropeTrail.renderer.trailSampleCount, 12)  // 0.4s × 30fps
 
-        // maxlength 없는 spritetrail → 기본 8샘플. sprite 는 트레일 아님.
+        // maxlength 부재는 0 이 아니라 주입 **10.0**(0x1401c0c13) 이므로 샘플도 10 이다 —
+        // 종전의 `?? 8` 폴백은 maxLength ≤ 0 일 때만 서는데, 그 상태가 이제 안 나온다.
         let bare = ParticleSystemDef.parse(json(#"{"renderer":[{"name":"spritetrail"}],"maxcount":10}"#), material: nil)
-        XCTAssertEqual(bare.renderer.trailSampleCount, 8)
+        XCTAssertEqual(bare.renderer.trailSampleCount, 10)
         XCTAssertFalse(RendererKind.sprite.isTrail)
         XCTAssertEqual(RendererKind.sprite.trailSampleCount, 0)
     }
@@ -431,20 +433,41 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(d.renderer, .unsupported("bogusrenderer"))
     }
 
+    /// **`renderer` 키 부재는 "미지원" 이 아니라 sprite 다.** 파서가 `isArray`(0x1400888a0)에
+    /// 실패하면 그 자리에서 오브젝트(태그 7)를 만들어 `{name:"sprite"}` 를 **주입한다**
+    /// (0x1401c58a9 `jne` → 0x1401c58af `mov edx,7` → 0x1401c58c0 `"sprite"`).
+    ///
+    /// **빈 배열 `[]` 은 다르다** — isArray 를 통과하므로 주입이 걸리지 않고 렌더러가 0개로
+    /// 남는다. 종전엔 둘을 `.unsupported("none")` 하나로 뭉갰다(동봉 부재 6건 · 빈 배열 4건).
+    func testAbsentRendererInjectsSpriteButEmptyArrayDoesNot() {
+        func renderer(_ src: String) -> RendererKind {
+            ParticleSystemDef.parse(json(src), material: nil).renderer
+        }
+        XCTAssertEqual(renderer(#"{"maxcount":10}"#), .sprite, "키 부재 → 주입")
+        XCTAssertEqual(renderer(#"{"renderer":"sprite","maxcount":10}"#), .sprite,
+                       "배열이 아니어도 isArray 실패 → 주입")
+        XCTAssertEqual(renderer(#"{"renderer":[],"maxcount":10}"#), .unsupported("none"),
+                       "빈 배열은 isArray 를 통과한다 — 주입이 안 걸려 렌더러 0개")
+    }
+
     func testHugeNumericParticleValuesDefaultInsteadOfTrapping() {
         let d = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"sphererandom","instantaneous":1e300,"rate":1e300}],
          "renderer":[{"name":"rope","subdivision":1e300}],
          "maxcount":1e300,"starttime":1e300}
         """), material: nil)
-        XCTAssertEqual(d.maxCount, 100)
+        // **[2026-08-20]** 기대값이 실측 기본값으로 바뀌었다. 이 테스트의 요지("거대값은
+        // 트랩 대신 기본값") 는 그대로고, 그 "기본값" 이 무엇인지가 정정된 것이다.
+        //   · maxcount 부재/판독불가 → **0**(주입기 없음, `isNumeric` 실패 시 0 @0x1401c579b)
+        //   · rope.subdivision      → **4**(주입 0x1401c0d00, 핸들러 clamp [0,32])
+        XCTAssertEqual(d.maxCount, 0)
         XCTAssertEqual(d.startTime, 0)
         guard case let .sphere(_, _, _, _, rate, burst, _) = d.emitters.first else {
             return XCTFail("no sphere")
         }
         XCTAssertEqual(rate, 0)
         XCTAssertEqual(burst, 0)
-        XCTAssertEqual(d.renderer, .rope(subdivision: 0))
+        XCTAssertEqual(d.renderer, .rope(subdivision: 4))
     }
 
     func testNegativeMaxCountClampsAndBurstStepNoTrap() {
