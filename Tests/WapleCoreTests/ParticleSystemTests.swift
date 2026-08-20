@@ -202,7 +202,8 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertTrue(d.initializers.contains(.velocityRandom(min: Vec3(x: -10, y: -50, z: 0), max: Vec3(x: -37, y: -90, z: 0))))
         // movement / oscillateposition / alphafade 존재
         XCTAssertTrue(d.operators.contains(.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0)))
-        XCTAssertTrue(d.operators.contains(.alphaFade(fadeInTime: 0.1, fadeOutTime: 0)))
+        // [2026-08-20] fadeouttime 부재 기본값이 0 → **0.5** 로 바뀌었다(원본 주입기 0x1401bce50).
+        XCTAssertTrue(d.operators.contains(.alphaFade(fadeInTime: 0.1, fadeOutTime: 0.5)))
         guard case let .oscillatePosition(fmin, fmax, smin, smax, _, _, mask)? = d.operators.first(where: {
             if case .oscillatePosition = $0 { return true }; return false
         }) else { return XCTFail("no oscillateposition") }
@@ -253,20 +254,32 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertTrue(RendererKind.ropeTrail(length: 0.4, subdivision: 2).isRopeTrail)
     }
 
-    /// C4-(i): alpharandom min/max 부재 → WE 실기본값 0,0(bokeh 백화 원인 — 종전 ??1 은 불투명 고정).
-    /// W2-① 원복: 032b66d(부재 기본값 1→0)를 되돌렸다 — 부재 시 알파는 중립값 1(불투명)이어야
-    /// 한다. min-only(예: wind-blur.json {"min":0.8})가 ??0 이면 역전 구간 [0,0.8]이 되어 저작
-    /// 의도([0.8,1])와 반대가 되고, 양쪽 부재(3257043844 SakuraFront 등)가 ??0 이면 파티클이
-    /// alphafade 곱으로 완전 투명해져 WE 프리뷰(꽃잎 가시)와 모순된다.
-    func testAlphaRandomMissingMinMaxDefaultsToOne() {
+    /// **[2026-08-20] 세 번째이자 마지막 정정 — 이번엔 실측이다.**
+    ///
+    /// 이 값은 두 번 뒤집혔다. C4-(i) 가 1 → 0 으로 바꿨고(bokeh 백화 원인으로 지목), W2-① 이
+    /// 0 → 1 로 되돌렸다("같은 스위치의 관례상 부재 기본값은 중립값"). 둘 다 **자산에서 유추**한
+    /// 것이고 둘 다 틀렸다. 원본은 원소 팩토리 직전에 기본값 주입기를 돌리는데
+    /// (`if (!json.find(k)) json[k] = C;`), `alpharandom` 주입기 0x1401baa10 이
+    /// min = **0.05**(0x1401baa70) · max = 1.0(0x1401baaec) 를 심는다.
+    ///
+    /// 상수는 코드에만 있고 자산에는 절대 나타나지 않는다 — 그래서 자산 통계로는 원리적으로
+    /// 복원할 수 없었고, 두 번의 유추가 모두 빗나간 것이다.
+    ///
+    /// W2-① 이 든 반증들은 여전히 유효하되 이 값과 무관하다: `wind-blur.json {"min":0.8}` 은
+    /// min 이 명시돼 있고, 양쪽 부재는 동봉 34건 중 **1건**뿐이다. 그 1건이 [1,1] 고정에서
+    /// [0.05,1] 범위로 바뀐다.
+    func testAlphaRandomMissingMinMaxUsesInjectorConstants() {
         let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"alpharandom"}]}"#), material: nil)
-        XCTAssertTrue(d.initializers.contains(.alphaRandom(min: 1, max: 1, exponent: 1)))
+        XCTAssertTrue(d.initializers.contains(.alphaRandom(min: 0.05, max: 1, exponent: 1)),
+                      "주입기 0x1401baa10 — 유추한 1,1 도 0,0 도 아니다")
     }
 
-    /// 위 원복이 "알파만" 바뀌고 그 뒤를 잇는 다른 랜덤 이니셜라이저의 RNG 시퀀스는 건드리지
-    /// 않는지 확인 — alpharandom 은 min==max(고정폭)라 부재/명시 1,1 모두 동일하게 드로우를
-    /// 소비한다(스킵 아님). 이후 velocityrandom 결과가 두 케이스에서 동일해야 "값만" 바뀐
-    /// 표적 수정임이 증명된다(RNG 캐스케이드가 있었다면 이후 값이 갈렸을 것).
+    /// 기본값 변경이 "알파만" 바꾸고 그 뒤를 잇는 다른 랜덤 이니셜라이저의 RNG 시퀀스는
+    /// 건드리지 않는지 확인한다. 부재든 명시든 alpharandom 은 **드로우를 한 번 소비**하므로
+    /// (스킵이 아니다) 이후 velocityrandom 결과가 두 케이스에서 같아야 하고, 그래야 "값만"
+    /// 바뀐 표적 수정임이 증명된다 — RNG 캐스케이드가 있었다면 이후 값이 갈렸을 것이다.
+    /// [2026-08-20] 대조군을 새 주입기 상수(0.05, 1)로 맞췄다. 종전 (1,1) 은 고정폭이라
+    /// "드로우를 소비하는가" 를 증명하지 못했다 — 값이 같아 range 호출이 생략돼도 통과했다.
     func testAlphaRandomDefaultChangeDoesNotShiftDownstreamRNG() throws {
         func lastVelocity(alphaJSON: String) throws -> SIMD3<Float> {
             let source = """
@@ -280,10 +293,10 @@ final class ParticleSystemTests: XCTestCase {
             return try XCTUnwrap(simulator.step(0).first).vel
         }
         let omitted = try lastVelocity(alphaJSON: #"{"name":"alpharandom"},"#)
-        let explicitOne = try lastVelocity(alphaJSON: #"{"name":"alpharandom","min":1,"max":1},"#)
-        XCTAssertEqual(omitted.x, explicitOne.x, accuracy: 1e-6)
-        XCTAssertEqual(omitted.y, explicitOne.y, accuracy: 1e-6)
-        XCTAssertEqual(omitted.z, explicitOne.z, accuracy: 1e-6)
+        let explicitDefault = try lastVelocity(alphaJSON: #"{"name":"alpharandom","min":0.05,"max":1},"#)
+        XCTAssertEqual(omitted.x, explicitDefault.x, accuracy: 1e-6)
+        XCTAssertEqual(omitted.y, explicitDefault.y, accuracy: 1e-6)
+        XCTAssertEqual(omitted.z, explicitDefault.z, accuracy: 1e-6)
     }
 
     /// S5④: hsvcolorrandom 전 필드 명시(실물 particleelementpreviews/hsvcolorrandom 예제) 파스.
@@ -450,24 +463,82 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(burst, 0)
     }
 
-    func testOscillateFrequencyMaxDefaultsToFrequencyMin() {
-        // 감사 V03: fmax 부재 시 0 대신 fmin 승계(scaleMax 패턴과 일치) — 역범위 랜덤 방지. 3종 모두.
+    /// **[2026-08-20] 정정: 승계가 아니라 고정 상수다.**
+    ///
+    /// 종전 이 테스트는 "fmax 부재 시 fmin 승계(역범위 랜덤 방지)" 를 계약으로 걸었다. 그건
+    /// 자산 관찰에서 유추한 것이고, 원본은 그렇게 하지 않는다 — 원소 팩토리 직전의 기본값
+    /// 주입기가 `frequencymax` 에 **상수**를 심는다:
+    ///   · oscillatealpha    0x1401bda2f → 10.0
+    ///   · oscillatesize     0x1401bdd0f → 10.0
+    ///   · oscillateposition 0x1401bd7cc → **5.0**
+    ///
+    /// position 만 5.0 인 것이 이 정정의 반증 가능한 증거다 — 승계였다면 세 값이 fmin 을 따라
+    /// 2.5/1.5/3.5 로 갈렸을 것이고, 공통 상수였다면 셋이 같았을 것이다. 둘 다 아니다.
+    /// 역범위 걱정도 사라진다: fmin 기본값도 1.0 상수라 fmin > fmax 가 되려면 저작이 fmin 을
+    /// 명시적으로 크게 적어야 하는데, 그건 원본에서도 같은 결과다.
+    func testOscillateFrequencyMaxUsesInjectedConstantNotFrequencyMin() {
         let d = ParticleSystemDef.parse(json("""
         {"operator":[{"name":"oscillatesize","frequencymin":2.5},
                      {"name":"oscillatealpha","frequencymin":1.5},
                      {"name":"oscillateposition","frequencymin":3.5}],"maxcount":10}
         """), material: nil)
         guard case let .oscillateSize(sf0, sf1, _, _, _, _) = d.operators[0] else { return XCTFail("no oscillatesize") }
-        XCTAssertEqual(sf0, 2.5); XCTAssertEqual(sf1, 2.5)
+        XCTAssertEqual(sf0, 2.5); XCTAssertEqual(sf1, 10, "승계였다면 2.5")
         guard case let .oscillateAlpha(af0, af1, _, _, _, _) = d.operators[1] else { return XCTFail("no oscillatealpha") }
-        XCTAssertEqual(af0, 1.5); XCTAssertEqual(af1, 1.5)
+        XCTAssertEqual(af0, 1.5); XCTAssertEqual(af1, 10, "승계였다면 1.5")
         guard case let .oscillatePosition(pf0, pf1, _, _, _, _, _) = d.operators[2] else { return XCTFail("no oscillateposition") }
-        XCTAssertEqual(pf0, 3.5); XCTAssertEqual(pf1, 3.5)
+        XCTAssertEqual(pf0, 3.5); XCTAssertEqual(pf1, 5, "position 만 5.0 — 승계도 공통상수도 아니다")
+    }
+
+    /// frequency 를 아예 생략하면 셋 다 fmin = 1.0 이다(주입기 0x1401bd979/0x1401bdc59/0x1401bd716).
+    /// 종전 기본 0 은 `sin(2π·0·n + φ)` 를 상수로 만들어 연산자를 **무력화**했다 — 동봉에서
+    /// oscillatealpha 3건 · oscillatesize 2건이 그렇게 죽어 있었다.
+    func testOscillateFrequencyMinDefaultsToOneNotZero() {
+        let d = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"oscillatesize"},{"name":"oscillatealpha"},{"name":"oscillateposition"}],"maxcount":10}
+        """), material: nil)
+        guard case let .oscillateSize(sf0, _, ssmin, ssmax, _, _) = d.operators[0] else { return XCTFail("no oscillatesize") }
+        XCTAssertEqual(sf0, 1)
+        XCTAssertEqual(ssmin, 0.8, "주입기 0x1401bddc5"); XCTAssertEqual(ssmax, 1.2, "주입기 0x1401bde6f — 크기 ±20% 맥동")
+        guard case let .oscillateAlpha(af0, _, _, _, _, _) = d.operators[1] else { return XCTFail("no oscillatealpha") }
+        XCTAssertEqual(af0, 1)
+        guard case let .oscillatePosition(pf0, _, _, _, _, _, _) = d.operators[2] else { return XCTFail("no oscillateposition") }
+        XCTAssertEqual(pf0, 1)
+    }
+
+    /// 이니셜라이저 기본값도 같은 주입기 규약이다 — "중립값" 유추가 아니다.
+    func testInitializerDefaultsComeFromInjectorConstants() {
+        let d = ParticleSystemDef.parse(json("""
+        {"initializer":[{"name":"angularvelocityrandom"},{"name":"alpharandom"},
+                        {"name":"colorrandom"},{"name":"lifetimerandom"}],"maxcount":10}
+        """), material: nil)
+        guard case let .angularVelocityRandom(amin, amax, _) = d.initializers[0] else { return XCTFail("no angularvelocityrandom") }
+        XCTAssertEqual(amin, Vec3(x: 0, y: 0, z: -5), "주입기 0x1401bba1e — 종전 (0,0,0) 은 회전이 아예 없다")
+        XCTAssertEqual(amax, Vec3(x: 0, y: 0, z: 5), "주입기 0x1401bbafe")
+        guard case let .alphaRandom(pmin, pmax, _) = d.initializers[1] else { return XCTFail("no alpharandom") }
+        XCTAssertEqual(pmin, 0.05, "주입기 0x1401baa70 — WE 의 중립은 불투명(1)이 아니다")
+        XCTAssertEqual(pmax, 1)
+        guard case let .colorRandom(cmin, cmax, _) = d.initializers[2] else { return XCTFail("no colorrandom") }
+        XCTAssertEqual(cmin, Vec3(x: 0, y: 0, z: 0), "주입기 0x1401ba16e")
+        XCTAssertEqual(cmax, Vec3(x: 255, y: 255, z: 255))
+        guard case let .lifetimeRandom(lmin, lmax, _) = d.initializers[3] else { return XCTFail("no lifetimerandom") }
+        XCTAssertEqual(lmin, 0, "주입기 0x1401b9c40 은 min 에 상수를 심지 않는다 = 0")
+        XCTAssertEqual(lmax, 1)
+    }
+
+    /// `alphafade` 는 이번 라운드 최고 도달이다 — 동봉 177건 중 97건이 `fadeouttime` 을 생략한다.
+    /// 0 이면 페이드가 통째로 꺼져 수명 끝에 팝 한다. 원본은 0.5(수명의 마지막 절반에 걸쳐 소멸).
+    func testAlphaFadeDefaultsToHalfLifetimeNotZero() {
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"alphafade"}],"maxcount":10}"#), material: nil)
+        XCTAssertTrue(d.operators.contains(.alphaFade(fadeInTime: 0.5, fadeOutTime: 0.5)),
+                      "주입기 0x1401bce50 이 두 키 모두에 0.5(0x1401bce71)를 심는다")
     }
 
     // F189/F190: scalemax 기본이 scalemin 승계(구현)가 아니라 1(비퇴화)이어야 — scale 전체 생략(데모
     // 시나리오)과 scalemin 단독 지정(코퍼스 다수: 0.2×9·0.3×4·0.1×4 등) 양쪽 모두 진폭이 죽지 않아야 한다.
     func testOscillateAlphaScaleMaxDefaultsToOneNotScaleMin() {
+        // [2026-08-20] 이 결론은 살아남았다 — 주입기 0x1401bdb85 가 실제로 scalemax = 1.0 을 심고
+        // scalemin 에는 상수를 심지 않는다(= 0). F189/F190 의 자산 기반 추론이 실측과 일치했다.
         let allOmitted = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","frequencymin":2}]}"#), material: nil)
         guard case let .oscillateAlpha(_, _, smin0, smax0, _, _) = allOmitted.operators[0] else { return XCTFail("no oscillatealpha") }
         XCTAssertEqual(smin0, 0); XCTAssertEqual(smax0, 1, "scale 생략 시 scalemax 는 scalemin(0) 이 아니라 1")
