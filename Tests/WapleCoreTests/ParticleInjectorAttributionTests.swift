@@ -443,27 +443,49 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         XCTAssertEqual(velX(sepThr: 0.001), 0, accuracy: 1e-5, "임계 밖 — 무작용")
     }
 
-    /// 실물은 이웃 후보를 **`lifetime != 0` 마스크로 거른다**(0x1402442cd → 0x1402442f4 →
-    /// `[rbp+0x1e0]`, 0x1402443e0·0x140244401 에서 분리·이웃 마스크 양쪽에 AND).
-    /// Waple 은 배열을 압축하지만 `lifetimerandom(min:0,max:0)` 이면 lifetime 0 인 입자가
-    /// 한 스텝 존재한다 — 그때 그 입자가 이웃 계산에 끼면 실물과 갈린다.
-    func testBoidsIgnoresZeroLifetimeNeighbors() {
-        func velX(neighborLifetime: Float) -> Float {
-            // 입자 둘: 하나는 정상 수명, 하나는 지정 수명. 응집만 켜서 이웃이 끌어당기는지 본다.
-            let def = ParticleSystemDef(
+    /// 실물 boids 는 이웃 후보를 **`lifetime != 0` 마스크로 거른다**(0x1402442cd → 0x1402442f4 →
+    /// `[rbp+0x1e0]`, 0x1402443e0·0x140244401 에서 분리·이웃 마스크 양쪽에 AND). 실물의 입자 배열이
+    /// **고정 슬랩**이고 lifetime 0 이 곧 빈 슬롯이라, 죽은 슬롯을 이웃으로 세지 않겠다는 뜻이다.
+    ///
+    /// Waple 에는 그 마스크가 **필요 없다.** 여기서 못박는 두 성질이 각각 독립으로 그것을 보장한다:
+    /// (a) `lifetimeRandom` 이 `max(0.0001, ·)` 로 바닥을 깐다 — `min:0,max:0` 이라도 lifetime 은 1e-4.
+    /// (b) `particles` 는 매 스텝 `removeAll { age > lifetime }` 으로 압축된다 — 빈 슬롯이 없다.
+    ///
+    /// 2026-08-20 에 `applyBoids` 의 j 루프에 `guard particles[j].lifetime != 0` 을 넣었다가 되돌렸다.
+    /// 근거로 삼은 "`lifetimerandom(min:0,max:0)` 이면 lifetime 0 인 입자가 한 스텝 존재한다" 가
+    /// (a) 때문에 **거짓**이었고, 가드는 한 번도 서지 않은 채 핫루프의 (i,j) 쌍마다 도는 비교만 남았다.
+    /// 둘 중 하나가 깨지면 이 테스트가 먼저 울고, 그때 마스크를 되살리면 된다.
+    func testBoidsNeverSeesZeroLifetimeNeighbor() {
+        func def(cohesion: Float) -> ParticleSystemDef {
+            ParticleSystemDef(
                 emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 10, y: 0, z: 0),
                                 rate: 0, burst: 2)],
-                initializers: [.lifetimeRandom(min: neighborLifetime, max: neighborLifetime)],
+                initializers: [.lifetimeRandom(min: 0, max: 0)],
                 operators: [.boids(separationThreshold: 0, neighborThreshold: 1000, maxSpeed: 500,
-                                   separationFactor: 0, alignmentFactor: 0, cohesionFactor: 10, flags: 0)],
+                                   separationFactor: 0, alignmentFactor: 0, cohesionFactor: cohesion,
+                                   flags: 0)],
                 renderer: .sprite, maxCount: 4, startTime: 0, material: nil)
-            var sim = ParticleSimulator(def: def, seed: 5)
-            let a = sim.step(0.1)
-            guard a.count == 2 else { return .nan }
-            return abs(a[0].vel.x) + abs(a[1].vel.x)
         }
-        XCTAssertGreaterThan(velX(neighborLifetime: 100), 0.01, "정상 수명이면 서로 당긴다")
-        XCTAssertEqual(velX(neighborLifetime: 0), 0, accuracy: 1e-5,
-                       "lifetime 0 은 이웃으로 세지 않는다 — 마스크가 없으면 여기서 당긴다")
+        // (a) 바닥. dt 를 바닥보다 작게 줘 컬 이전 상태를 관측한다 — lifetime 이 0 이면 이 스텝에서
+        //     `age(5e-5) > lifetime(0)` 이 되어 전건 죽으므로, 살아 있다는 것 자체가 바닥의 증거다.
+        var sim = ParticleSimulator(def: def(cohesion: 0), seed: 5)
+        let alive = sim.step(0.00005)
+        XCTAssertEqual(alive.count, 2, "lifetimerandom(0,0) 이어도 바닥 덕에 한 스텝은 산다")
+        for p in alive {
+            XCTAssertEqual(p.lifetime, 0.0001, accuracy: 1e-9,
+                           "lifetime 바닥 = max(0.0001, ·) — 0 이 아니다")
+        }
+        // (b) 압축. 바닥을 넘긴 dt 면 같은 스텝에 전건 사라진다 — 죽은 슬롯이 배열에 남지 않는다.
+        var culled = ParticleSimulator(def: def(cohesion: 0), seed: 5)
+        XCTAssertTrue(culled.step(0.001).isEmpty, "죽은 입자는 슬롯으로 남지 않고 배열에서 빠진다")
+        XCTAssertEqual(culled.liveCount, 0, "압축 후 살아 있는 입자 0")
+        // 따라서 boids 는 lifetime 0 인 이웃을 볼 수 없고, 이웃 계산은 정상적으로 발화한다
+        // (마스크가 잘못 되살아나 1e-4 를 0 으로 접으면 여기서 응집이 죽어 0 이 된다).
+        var pulled = ParticleSimulator(def: def(cohesion: 10), seed: 5)
+        let after = pulled.step(0.00005)
+        XCTAssertEqual(after.count, 2)
+        guard after.count == 2 else { return }
+        XCTAssertGreaterThan(abs(after[0].vel.x) + abs(after[1].vel.x), 0,
+                             "이웃이 살아 있으므로 응집이 실제로 속도를 만든다")
     }
 }

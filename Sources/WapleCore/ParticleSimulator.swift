@@ -781,7 +781,8 @@ public struct ParticleSimulator {
         // **[미구현 — 실물과 다르다]** 실물의 삭제는 (a) `flags & 1` 게이트(0x14024193d)를 지나고
         // (b) 점–점이 아니라 **직전 위치→현재 위치 선분과 CP 의 최단거리 제곱**을
         // `deletethreshold²` 와 비교하며(0x14022a2e7) (c) `age = lifetime` 대입으로 표현돼
-        // 다음 틱에 죽는다. 여기 셋 다 없다. 다만 flags 기본 2 에는 bit0 이 없고 동봉 35인스턴스가
+        // 다음 틱에 죽는다. 여기 셋 다 없다. 다만 flags 기본 2 에는 bit0 이 없고, 동봉
+        // `controlpointattract`(all 34 · unique 29 — `spec/assets/particle-corpus.json`)가
         // `deletethreshold` 를 전건 생략하므로 **실코퍼스에서는 양쪽 다 무동작**이다.
         // 게이트만 먼저 맞춰 둔다 — 키만 보고 삭제하던 종전 경로가 더 위험하다.
         if a.delete, (a.flags & 1) != 0, a.threshold > 0, dist < a.threshold { return true }
@@ -1119,14 +1120,23 @@ public struct ParticleSimulator {
                     var posAcc = SIMD3<Float>(0, 0, 0)
                     var sepCnt: Float = 0, nCnt: Float = 0
                     let pi = particles[i].pos, vi = particles[i].vel
+                    // 실물은 이웃 후보를 **생존 마스크로 거른다**: `mov rsi,[rbp+0x50]`(lifetime 배열,
+                    // 0x1402442cd) → `movups xmm0,[rsi+r8*4]` → `cmpneqps xmm0, 0`(0x1402442f4) →
+                    // `[rbp+0x1e0]` 에 담아 **분리 마스크와 이웃 마스크 양쪽에** AND 한다
+                    // (0x1402443e0 · 0x140244401). 그건 실물의 입자 배열이 **고정 슬랩**이고
+                    // lifetime 0 이 곧 빈 슬롯이기 때문이다 — 죽은 슬롯을 이웃으로 세지 않겠다는 뜻.
+                    //
+                    // **Waple 에 그 마스크를 옮겨 심으면 죽은 코드가 된다.** 이유가 둘이고 둘 다 독립이다:
+                    // (a) `particles` 는 매 스텝 `removeAll { age > lifetime }` 으로 **압축**돼 빈 슬롯이
+                    //     없다 — 실물 마스크가 하려는 일을 자료구조가 이미 한다.
+                    // (b) `lifetimeRandom` 이 `max(0.0001, ·)` 로 **바닥을 깐다**(:923). 그래서
+                    //     `lifetimerandom(min:0,max:0)` 이라도 lifetime 은 0 이 아니라 1e-4 다.
+                    // 2026-08-20 에 `guard particles[j].lifetime != 0` 을 넣었다가 되돌린다 — 실측
+                    // (dt 5e-5, lifetimerandom 0/0)에서 lifetime 이 1e-4 로 나와 가드가 한 번도 서지
+                    // 않았고, 핫루프의 (i,j) 쌍마다 도는 비교만 남았다. 위 두 성질은
+                    // `testBoidsNeverSeesZeroLifetimeNeighbor` 가 못박는다 — 둘 중 하나가 깨지면
+                    // 그 테스트가 먼저 울고, 그때 이 마스크를 되살리면 된다.
                     for j in 0..<count where j != i {
-                        // 실물은 이웃 후보를 **생존 마스크로 거른다**: `mov rsi,[rbp+0x50]`(lifetime
-                        // 배열, 0x1402442cd) → `movups xmm0,[rsi+r8*4]` → `cmpneqps xmm0, 0`
-                        // (0x1402442f4) → `[rbp+0x1e0]` 에 담아 **분리 마스크와 이웃 마스크 양쪽에**
-                        // AND 한다(0x1402443e0 · 0x140244401). Waple 은 배열을 압축해서 대부분
-                        // 무해하지만, `lifetimerandom(min:0,max:0)` 로 lifetime 0 인 입자가
-                        // 한 스텝 존재할 수 있고 그때 실물과 갈린다.
-                        guard particles[j].lifetime != 0 else { continue }
                         let d = pi - particles[j].pos
                         let l2 = simd_length_squared(d)
                         guard l2 != 0 else { continue }   // 실물 `cmpneqps xmm2, 0` — 자기 자신 제외
