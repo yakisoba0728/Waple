@@ -72,6 +72,13 @@ public struct ParticleSimulator {
     // 파티클별 속도/위상 범위(smin/smax, pmin/pmax)는 스폰 시 뽑아 고정, 나머지는 장 파라미터.
     private let turbulences: [(smin: Float, smax: Float, scale: Float, timeScale: Float,
                               mask: SIMD3<Float>, pmin: Float, pmax: Float)]
+    // G-C2-01 `capvelocity`: 속도 크기 상한(오퍼레이터 출현 순). 실물 VM op 0x12 @0x1402446fd.
+    private let velocityCaps: [Float]
+    // G-C2-01 `reducemovementnearcontrolpoint`: CP 근접 감쇠(오퍼레이터 출현 순).
+    // invRange/redDelta 는 실물 ctor(0x1401cd38d–0x1401cd3e7)가 굽는 파생값을 그대로 옮긴 것 —
+    // 퇴화 케이스 대입값(각각 −0.0 / 1.0)까지 원본과 같다.
+    private let reduceMoves: [(target: SIMD3<Float>, distIn: Float, invRange: Float,
+                               redIn: Float, redDelta: Float)]
     // 트레일 히스토리 설정(스프라이트면 0 → 미기록).
     private let trailSamples: Int
     // controlpointattract/vortex 가 있으면 속도 상한(폭주 방지, px/s).
@@ -136,6 +143,8 @@ public struct ParticleSimulator {
         var osz: (Float, Float, Float, Float, Float, Float)? = nil
         var ac: [(st: Float, et: Float, sv: Float, ev: Float)] = []
         var rms: [CachedRemap] = []
+        var caps: [Float] = []
+        var rmv: [(SIMD3<Float>, Float, Float, Float, Float)] = []
         for op in def.operators {
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
@@ -167,6 +176,15 @@ public struct ParticleSimulator {
                 }
             case let .remapValueEx(spec):
                 rms.append(.general(spec))
+            case let .capVelocity(maxSpeed):
+                caps.append(maxSpeed)
+            case let .reduceMovementNearControlPoint(dIn, dOut, rIn, rOut, target):
+                // 실물 ctor 0x1401cd38d: distanceouter == distanceinner 이면 역폭에 −0.0 을 심어
+                // t 를 항상 0 으로 죽인다(rcpps 대신 상수). 0x1401cd3b9: reductionouter ==
+                // reductioninner 이면 델타에 0 이 아니라 **1.0** 을 심는다 — 재현 대상 기벽이다.
+                let invRange: Float = dOut == dIn ? -0.0 : 1 / (dOut - dIn)
+                let redDelta: Float = rOut == rIn ? 1 : (rOut - rIn)
+                rmv.append((s3(target), dIn, invRange, rIn, redDelta))
             }
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
@@ -192,6 +210,8 @@ public struct ParticleSimulator {
             default: return false
             }
         }
+        velocityCaps = caps
+        reduceMoves = rmv.map { (target: $0.0, distIn: $0.1, invRange: $0.2, redIn: $0.3, redDelta: $0.4) }
         trailSamples = def.renderer.trailSampleCount
         speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
         hasEmitterAudio = def.emitterAudio.contains { $0 != nil }
@@ -408,6 +428,26 @@ public struct ParticleSimulator {
         for m in movements {
             particles[k].vel += m.gravity * dt
             if m.drag > 0 { particles[k].vel *= max(0, 1 - m.drag * dt) }
+        }
+        // G-C2-01: `reducemovementnearcontrolpoint` · `capvelocity` 는 **movement 뒤**다.
+        // 동봉 저작 순서가 전건 [movement, …, reducemovement/capvelocity] 이고, 실물 VM 은
+        // 오퍼레이터를 저작 순서대로 돌리며 movement(op 0x01)가 속도 갱신과 위치 적분을 함께 한다.
+        // Waple 은 위치 적분이 이 블록 **뒤**라, 감쇠/클램프가 이번 프레임 변위에 한 프레임 일찍
+        // 반영된다(원본은 다음 프레임). 중력 뒤라는 순서는 원본과 같다 — 힘 단계(attract/vortex)에
+        // 두면 감쇠 후 중력이 다시 실려 "정지"가 성립하지 않는다.
+        if !reduceMoves.isEmpty {
+            let pos = particles[k].pos
+            var vel = particles[k].vel
+            for r in reduceMoves { applyReduceMovement(r, to: &vel, pos: pos, dt: dt) }
+            particles[k].vel = vel
+        }
+        // capvelocity: 방향 보존 스칼라 클램프. 실물 op 0x12 는 `s = min(1, maxspeed/|v|)` 를
+        // 곱하므로 |v| ≤ maxspeed 이면 s=1 로 무동작 — 상한 미도달 파티클은 산술이 종전과 같다.
+        for cap in velocityCaps {
+            let sq = simd_length_squared(particles[k].vel)
+            guard sq > 0 else { continue }
+            let s = min(1, cap / sq.squareRoot())
+            if s < 1 { particles[k].vel *= s }
         }
         // remapValueEx addvelocity: remapAddVel==0 이면 종전 산술 그대로(레거시 비트동일),
         // 아니면 이번 스텝 적분에만 가산(저장 vel 불변 — speed 배수와 같은 비파괴 규약).
@@ -665,6 +705,32 @@ public struct ParticleSimulator {
         let atten: Float = a.threshold > 0 ? min(1, a.threshold / dist) : 1
         vel += dir * (a.scale * atten) * dt
         return false
+    }
+
+    /// G-C2-01 `reducemovementnearcontrolpoint`: CP 로부터의 거리로 감쇠율을 램프해 속도를 줄인다.
+    /// 실물 VM 핸들러 op 0x0d @0x14024268f 를 1:1 로 옮긴 것 —
+    /// ```
+    ///   d   = p − cp                          ; 0x140242711–0x140242730 (subps × 3)
+    ///   len = rsqrtps(|d|²)·|d|²              ; 0x140242749 (≈ sqrt, 12비트 근사)
+    ///   t   = min(1, (len − [+0x50])·[+0x60]) ; 0x140242753–0x14024275d
+    ///   t   = max(0, t)                       ; 0x140242761
+    ///   r   = t·[+0x80] + [+0x70]             ; 0x140242764–0x14024276c
+    ///   r   = min(1, r·dt); r = max(0, r)     ; 0x140242771–0x14024277c ([rbp+0xf0] = 스텝 dt)
+    ///   v  *= (1 − r)                         ; 0x14024277f–0x14024279f
+    /// ```
+    /// `[+0x50]=distanceinner`, `[+0x60]=1/(outer−inner)`, `[+0x70]=reductioninner`,
+    /// `[+0x80]=reductionouter−reductioninner` (ctor 0x1401cd38d–0x1401cd3e7).
+    /// 즉 reduction 은 **초당 감쇠율**이고 dt 를 곱한 뒤 0..1 로 잘려 `v ×= (1−r)` 에 들어간다 —
+    /// thunderbolt 의 reductioninner 1000 은 안쪽에서 사실상 정지(1프레임 내 r→1), 기본값 100 도
+    /// 60fps 에서 r=1.67→1 로 정지다. 바깥(reductionouter 기본 0)에서는 r=0 → 무동작.
+    /// rsqrtps 근사는 재현하지 않고 정확한 sqrt 를 쓴다(상대오차 ≤ 1.5e-3, 램프 클램프 안에서 무의미).
+    private func applyReduceMovement(_ r: (target: SIMD3<Float>, distIn: Float, invRange: Float,
+                                           redIn: Float, redDelta: Float),
+                                     to vel: inout SIMD3<Float>, pos: SIMD3<Float>, dt: Float) {
+        let len = simd_length(pos - r.target)
+        let t = max(0, min(1, (len - r.distIn) * r.invRange))
+        let reduction = max(0, min(1, (r.redIn + t * r.redDelta) * dt))
+        if reduction > 0 { vel *= (1 - reduction) }
     }
 
     /// vortex: axis 를 회전축, offset 를 중심으로 하는 소용돌이. 회전면 반경 dist 에 따라

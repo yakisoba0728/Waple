@@ -79,7 +79,7 @@ E2 가 WE 오디오 파이프라인을 전부 복원했다. **현행 게인이 �
 
 | ID | 갭 | 도달 |
 | --- | --- | --- |
-| G-C2-01 | 오퍼레이터 **12종** 미구현(boids/capvelocity/충돌 5종/컨트롤포인트 3종 등) | **Waple 동봉 프리셋** thunderbolt·dripping_water·magic_vortex_orb 계열 8파일 + 프리뷰 11씬 |
+| G-C2-01 **부분 ✅** | 오퍼레이터 **11종** 미구현 → 9종. `capvelocity`·`reducemovementnearcontrolpoint` 착지 | **정정**: 12종이 아니라 11종이다(`vortex_v2` 는 F631 로 이미 구현돼 있었다 — 12번째 자리는 오퍼레이터 위치의 `inheritvaluefromevent` 로, 같은 이름이 이니셜라이저로는 처리돼 지원되는 것처럼 보인다). 도달도 **프리셋 12파일 · 씬 10개**(트리당)로 8파일/11씬이 아니다. 원장이 이름조차 안 적은 `reducemovementnearcontrolpoint` 가 인스턴스 9건으로 **미구현 중 최다**였다 |
 | G-C2-02 | 컨트롤포인트 바인딩 미소비 — 이미터·vortex 가 원점에 붙음 | 동봉 CP flags 55 / parentcontrolpoint 31 |
 | G-C2-03 | 오퍼레이터 블렌딩(`blendin*`/`blendout*`)이 remapvalue 에만 | 동봉 17 인스턴스 |
 | G-C2-04 | `remapvalue` 가 **없는 키를 읽고**(`component`) 있는 키 5개를 안 읽음 | 동봉 15 |
