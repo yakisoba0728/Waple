@@ -308,19 +308,28 @@ final class ParticleSystemTests: XCTestCase {
     }
 
     /// magic_color_sparkle 실물: saturationmin/valuemin 만 있고 max 부재 → max=min(고정폭) 채택.
-    func testHSVColorRandomMissingMaxDefaultsToMin() {
+    /// **[2026-08-20] 개명·재조준. 이 테스트는 통과하고 있었지만 계약이 거짓이었다.**
+    /// 종전 픽스처가 `saturationmin:1, valuemin:1` 이라 주입 상수 1.0 과 값이 **우연히 일치**해,
+    /// "max 는 min 을 승계한다" 는 틀린 규칙이 통과했다. min 을 1 이 아닌 값으로 바꾸면 갈린다 —
+    /// 승계면 0.2/0.3, 상수면 1.0/1.0 이다. 원본은 후자다(주입기 0x1401ba3e0).
+    func testHSVColorRandomMaxDoesNotInheritMin() {
         let d = ParticleSystemDef.parse(json(
-            #"{"initializer":[{"name":"hsvcolorrandom","huemin":0.49150327,"huemax":0.93267971,"saturationmin":1,"valuemin":1}]}"#
+            #"{"initializer":[{"name":"hsvcolorrandom","huemin":0.49150327,"huemax":0.93267971,"saturationmin":0.2,"valuemin":0.3}]}"#
         ), material: nil)
         XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0.49150327, hueMax: 0.93267971,
-                                                               satMin: 1, satMax: 1, valMin: 1, valMax: 1)))
+                                                              satMin: 0.2, satMax: 1, valMin: 0.3, valMax: 1)),
+                      "승계였다면 satMax 0.2 · valMax 0.3 — 실제 파스: \(d.initializers)")
     }
 
-    /// 필드 완전 부재(실물 inheritinitialvaluefromevent 예제) → 데모 기본값(hue 전스펙트럼, s/v=1)
+    /// **[2026-08-20 정정] "데모 예제 = 기본값" 전제가 반증됐다.**
     /// 채택. 종전엔 case 미인식으로 initializer 자체가 통째 drop 됐다(무색 랜덤 = 백색 고정).
-    func testHSVColorRandomAllFieldsMissingUsesDemoDefaults() {
+    /// 주입기 0x1401ba3e0(게이트 stricmp 0x1401c783a)이 `saturationmin`/`valuemin` 에 **0.5** 를,
+    /// `saturationmax`/`valuemax` 에 1.0 을 심는다. 데모 예제가 s/v=1 을 **명시**하고 있었을 뿐이다.
+    func testHSVColorRandomAllFieldsMissingUsesInjectorDefaults() {
         let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"hsvcolorrandom"}]}"#), material: nil)
-        XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 1, satMax: 1, valMin: 1, valMax: 1)))
+        XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 0.5, satMax: 1,
+                                                              valMin: 0.5, valMax: 1)),
+                      "주입기 0x1401ba3e0 — 실제 파스: \(d.initializers)")
     }
 
     // F188: drag 파싱 — movement 의 선형 drag(:497-498행)와 대칭. 실물 45/47 회귀·2/47 drag 실사용.
@@ -343,15 +352,25 @@ final class ParticleSystemTests: XCTestCase {
     func testParseTurbulence() {
         // 실물 ember 인스턴스(2905844074): mask/phasemax/scale/speedmin/speedmax.
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"id":9,"mask":"1 0 0","name":"turbulence","phasemax":5,"scale":0.002,"speedmax":150,"speedmin":100}],"renderer":[{"name":"sprite"}],"maxcount":40}"#), material: nil)
-        XCTAssertTrue(d.operators.contains(.turbulence(speedMin: 100, speedMax: 150, scale: 0.002, timeScale: 0,
+        // [2026-08-20] 이 픽스처는 `timescale` 을 생략한다 — 부재 기본값이 0 이 아니라 20 이다
+        // (주입기 0x1401beb80 직교 분기). 실물 ember 저작이 timescale 을 안 적었다는 사실은
+        // 그대로고, 그 자리에 원본이 넣는 값이 달랐던 것이다.
+        XCTAssertTrue(d.operators.contains(.turbulence(speedMin: 100, speedMax: 150, scale: 0.002, timeScale: 20,
                                                        mask: Vec3(x: 1, y: 0, z: 0), phaseMin: 0, phaseMax: 5)))
     }
 
+    /// **[2026-08-20 정정] 종전 주석 "speed 0(무동작), timescale 0(정적장)" 은 반증됐다.**
+    /// `turbulence` 주입기는 0x1401beb80 이고(게이트 stricmp 0x1401cd423 → 호출 0x1401cd45c),
+    /// 직교투영 분기에서 speedmin 500 · speedmax 1000 · timescale 20 · mask "1 1 0" 을 심는다.
+    /// 원근 분기는 1.0 / 5.0 / 1.0 / "1 1 1" 이다 — **0 은 어느 쪽도 아니다.**
+    ///
+    /// 종전 코드는 `scale 0.01`(직교 분기와 일치)과 `mask (1,1,1)`(원근 분기와 일치)을 섞어
+    /// 쓰고 있었다 — 자기모순이었다. 직교가 실물 씬의 98.8% 다(아래 분기 주석 참조).
     func testParseTurbulenceDefaults() {
-        // 최소 인스턴스({"name":"turbulence"}): speed 0(무동작), scale 0.01, timescale 0, mask (1,1,1).
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"id":8,"name":"turbulence"}],"renderer":[{"name":"sprite"}],"maxcount":10}"#), material: nil)
-        XCTAssertTrue(d.operators.contains(.turbulence(speedMin: 0, speedMax: 0, scale: 0.01, timeScale: 0,
-                                                       mask: Vec3(x: 1, y: 1, z: 1), phaseMin: 0, phaseMax: 0)))
+        XCTAssertTrue(d.operators.contains(.turbulence(speedMin: 500, speedMax: 1000, scale: 0.01, timeScale: 20,
+                                                       mask: Vec3(x: 1, y: 1, z: 0), phaseMin: 0, phaseMax: 0)),
+                      "주입기 0x1401beb80 직교 분기 — 실제 파스: \(d.operators)")
     }
 
     func testBoxEmitter() {
@@ -524,7 +543,12 @@ final class ParticleSystemTests: XCTestCase {
         }
         XCTAssertEqual(ppmin, 0); XCTAssertEqual(ppmax, 2 * .pi, accuracy: 1e-5)
         // 같은 원소의 나머지 둘도 함께 못 박는다 — 셋 다 같은 주입기에서 나온다.
-        XCTAssertEqual(psmax, 0.5, "0x1401bd8a3 — 종전 `?? scalemin` 승계가 아니다")
+        // **[2026-08-20 재정정]** 이 값은 내가 한 번 0.5 로 잘못 넣었다. 분기 조건이 파티클 json 의
+        // `flags` 키가 아니라 **씬의 직교투영 활성 여부**(엔진 오브젝트 `[+0x118]` bit10)였고,
+        // 그 비트는 `general.orthogonalprojection` 의 auto 또는 width·height 로 세워진다
+        // (0x1401874ec 키 읽기 → 0x14018768a `or [r13+0x118], 0x400`).
+        // 두 트리 실측 **343/347 = 98.8%** 가 SET 이므로 직교 분기가 실측 동작이다 → 10.0.
+        XCTAssertEqual(psmax, 10, "0x1401bd899 직교 분기(원근은 0.5) — `?? scalemin` 승계는 어느 쪽도 아니다")
         XCTAssertEqual(pmask, Vec3(x: 1, y: 1, z: 0), "주입 문자열 \"1 1 0\" @0x14048f488 — (1,1,1) 아님")
     }
 
