@@ -134,11 +134,11 @@ public enum ParticleOperator: Equatable {
                            phaseMin: Float, phaseMax: Float, mask: Vec3)
     /// 컨트롤포인트로의 인력/척력. 주입기 0x1401bdee0..0x1401be293(5조각), 게이트 `stricmp`@0x1401cc9da.
     ///
-    /// **[2026-08-20 키 이름 정정]** 대상 좌표의 실물 키는 `origin` 이 아니라 **`offset`** 이다.
-    /// "origin" 문자열의 lea 참조 14곳 중 이 원소의 주입기·핸들러 구간에 있는 것은 **하나도 없고**,
-    /// "offset" 은 주입기(0x1401bdefa·0x1401bdf4b)와 핸들러(0x1401cca18) 양쪽에 있다.
-    /// 동봉 자산은 `origin: "0 0 0"` 을 즐겨 적지만 WE 는 그걸 읽지 않는다 — 실코퍼스에서는
-    /// 양쪽 다 (0,0,0) 이라 관측 차이가 없다. 그래도 키를 맞춰 둔다(비영 `offset` 자산에서 갈린다).
+    /// **[2026-08-20] 대상은 `origin` 도 `offset` 도 아니라 컨트롤포인트다.**
+    /// "origin" 은 이 원소의 주입기·핸들러 구간에 참조가 아예 없고(유령 키), `offset` 은 파스는
+    /// 되지만 **런타임에서 위치로 쓰이지 않는다** — 핸들러의 유일한 참조가
+    /// `lea r8, [r14+0x10]`(0x14024194e)이고 그건 삭제 함수에 넘기는 베이스 포인터다.
+    /// 실제 대상은 `CP[controlpoint].worldPos`(0x140241769–0x140241794 → 0x140241856 `subps`).
     ///
     /// **[2026-08-20 미해결]** `deleteThreshold` 를 Bool 로 두고 있으나 실물은 **실수 거리**다:
     /// 주입이 jsoncpp type tag 3(`mov byte [rbp-0x50],3` @0x1401be1a9, `cvtps2pd` @0x1401be1ca)이고
@@ -1006,21 +1006,27 @@ public struct ParticleSystemDef: Equatable {
                                               phaseMin: injected(o, "phasemin", 0), phaseMax: injected(o, "phasemax", 2 * .pi),
                                               mask: injectedVec3(o, "mask", Vec3(x: 1, y: 1, z: 0))))
             case "controlpointattract":
-                // CP 지정(범위 내) 시 CP offset 이 target, 미지정 시 offset 유지.
+                // **[2026-08-20] 대상은 항상 컨트롤포인트다.** 런타임 핸들러(0x14024172d)는
+                // `[r14+0xb4]`(cp 인덱스)로 `[sys+0x400]` 배열에서 CP 를 꺼내 그 위치만 쓴다
+                // (0x140241769–0x140241794 복사·splat → 0x140241856 이후 `subps`).
+                // `offset`(레코드 +0x10)은 **위치로 전혀 쓰이지 않는다** — 전 핸들러에서 참조가
+                // `lea r8, [r14+0x10]`(0x14024194e) 한 곳뿐이고, 그건 삭제 함수에 넘기는 베이스
+                // 포인터로 그쪽은 `[r8+0x50]`(= deletethreshold²)만 읽는다.
                 //
-                // 실물은 부재 시 `controlpoint = 0` 을 심고(int 헬퍼 @0x1401be1fd) 읽는 쪽은
-                // `asInt` 후 **부호 없는** `cmp eax,7 / jae`(0x1401ccc65·0x1401cccca)로 가른다.
-                // Waple 의 `cpid < 8` 은 7을 통과시키고 실물은 7에서 갈라지므로 규약이 다르다.
-                // 부재 시 CP0 바인딩도 아직 넣지 않았다 — 동봉 6인스턴스의 대상이 원점에서
-                // 씬의 CP0 으로 옮겨 가는 변경이라, 런타임 측정 없이 바꾸지 않는다.
-                if let cpid = pint(o["controlpoint"]), cpid >= 0, cpid < 8 {
-                    attractCPIds.append((op: ops.count, cp: cpid))
-                }
+                // 그래서 (a) `controlpoint` 부재 시에도 **CP0 을 바인딩**하고(주입 기본 0),
+                // (b) `offset` 을 target 으로 쓰지 않는다. 동봉 35인스턴스 중 cp 미지정 9건은
+                // 전건 CP0 이 원점이라 관측은 안 바뀌지만, CP 를 옮긴 씬에서 갈린다.
+                //
+                // 클램프는 **부호 없는** `cmp eax,7 / jae → mov eax,7`(0x1401ccc65 → 0x1401ccd01)
+                // 이라 음수도 7 로 간다. `cpid < 8` 로 통과시키던 종전 규약과 다르다.
+                let cpaRaw = pint(o["controlpoint"]) ?? 0
+                attractCPIds.append((op: ops.count, cp: (cpaRaw < 0 || cpaRaw >= 7) ? 7 : cpaRaw))
                 ops.append(.controlPointAttract(
                     scale: injected(o, "scale", 512),          // 0x140492934 (원근 20.0 @0x14049288c)
                     threshold: injected(o, "threshold", 512),  // 0x140492934 (원근 5.0 @0x140492858)
-                    // 실물 키는 `offset` 이다 — 위 enum 주석 참조. 부재 기본 "0 0 0"(플래그 무관).
-                    target: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
+                    // 위 주석 참조 — 아래 CP 재베이크가 항상 덮어쓴다. `offset` 은 런타임에서
+                    // 위치로 쓰이지 않으므로 여기서도 읽지 않는다.
+                    target: Vec3(x: 0, y: 0, z: 0),
                     deleteThreshold: (pint(o["deletethreshold"]) ?? 0) != 0,
                     flags: pint(o["flags"]) ?? 2))   // 0x1401be245 — 주입 기본 2
             case "boids":
