@@ -123,6 +123,21 @@ jobs:
       - name: Spec shrink guard
         run: python3 scripts/spec/check_spec_shrink_guard.py
 
+      # 직교투영 분기의 근거 수치를 강제한다.
+      #
+      # 파티클 주입기 아홉 개가 상수를 ortho/원근으로 가르는데, 어느 쪽을 채택하느냐가 곧
+      # 화면이다. 그 선택의 근거가 주석에만 있었더니 **세 숫자로 갈라졌다** —
+      # `343/347 = 98.8%`, `347/355`, 그리고 둘을 섞은 `347/355 = 98.8%`(산술도 틀렸다).
+      # 실제로는 범위가 달랐다: 동봉 트리 단독 169/171 = 98.8%, 두 트리+설치본 projects
+      # 347/355 = 97.7%. 근거를 코드로 옮기지 않으면 이렇게 갈라진다.
+      #
+      # 더 중요한 건 백분율이 아니라 **원근 판정 씬이 조건부 상수 원소를 아예 쓰지 않는다**는
+      # 것이다. 그게 깨지면 그 씬에서 ortho 상수가 틀린 값이 되므로, 검사는 도수와 그 불변식을
+      # 함께 본다. 판정 함수는 실물 게이트(objectValue 태그 7 → bool `auto` → width·height)를
+      # 그대로 옮겼고, 문자열 `"auto"` 나 비-불 `auto` 가 탈락하는지 매 실행 음성 대조한다.
+      - name: Orthogonal projection census
+        run: python3 scripts/spec/check_ortho_projection_census.py
+
       # 동봉 에셋이 매니페스트와 어긋나면 실패한다.
       #
       # measure_assets.py 를 돌려 git diff 로 보는 방법은 쓰지 않는다 — 그 스크립트의
