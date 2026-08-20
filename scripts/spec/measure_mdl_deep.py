@@ -485,16 +485,25 @@ def main():
 
         specfmt.entry(
             "format.mdl.indexWidth",
-            {"규칙": "인덱스 원소 폭은 정점 수가 정한다 — vertexCount <= 65535 면 u16, 넘으면 u32",
+            {"규칙": "인덱스 원소 폭은 **gateWord bit0** 이 정한다 — 폭 = 2 + 2*(gateWord & 1). "
+                     "포맷이 자기기술하며 정점 수는 이 사슬 어디에도 들어가지 않는다",
+             "규칙 근거": ".mdl 전용 GPU 업로드 경로 0x1401d7760(파스 직후 0x1401d5bb1 에서 호출): "
+                          "movzx ecx,byte[rdi+0x18](0x1401d784c) -> and cl,1(0x1401d7853) -> "
+                          "lea r9d,[r10*2+2](0x1401d7870) -> idiv r9d(0x1401d7878). 그 플래그가 "
+                          "인자로 넘어가(0x1401d786b) 소비처 0x14009a98d 에서 test edx,edx -> cmove 로 "
+                          "0x39(R16_UINT) / 0x2a(R32_UINT) 를 고르고 ByteWidth 도 같은 비트로 갈린다",
              "실측": f"u16 메시 {idx16}개(최대 vertexCount {idx16_max}) / "
-                     f"u32 메시 {idx32}개(최소 vertexCount {idx32_min}) — 이 규칙으로 읽으면 "
+                     f"u32 메시 {idx32}개(최소 vertexCount {idx32_min}) — 어느 규칙으로 읽어도 "
                      f"maxIndex == vertexCount-1 이 {maxindex_ok}/{maxindex_total}",
              "오판시 증상": "u32 블롭을 u16 로 읽으면 상위 워드 0 이 섞여 maxIndex 가 정확히 0xFFFF 로 "
                             "찍히고(실측 17메시 전부) 삼각형이 뒤죽박죽이 된다. 정점 수보다 작으므로 "
                             "'maxIndex < vertexCount' 류의 검사로는 절대 안 걸린다",
-             "경계": f"직접 목격한 경계는 ({idx16_max}, {idx32_min}] 구간이다. 65535 라는 값 자체는 "
-                     "u16 주소지정 한계에서 온 추론이지 그 경계의 파일을 본 것은 아니다"},
-            "확정", [ev_corpus]),
+             "종전 규칙이 맞아 보였던 이유": f"관측 코퍼스에서 두 규칙이 완전히 겹친다 — 정점이 65535 를 "
+                     f"넘는 메시는 내보내기 도구가 gateWord bit0 을 세우기 때문이다. 종전 항목도 "
+                     f"'직접 목격한 경계는 ({idx16_max}, {idx32_min}] 이고 65535 는 u16 주소지정 "
+                     f"한계에서 온 추론' 이라고 스스로 헤지하고 있었다. 갈리는 것은 bit0 이 선 작은 "
+                     f"메시와 비트가 없는 큰 메시뿐이고, 둘 다 코퍼스에 없다"},
+            "확정", [ev_bin, ev_corpus]),
 
         specfmt.entry(
             "format.mdl.aabb",

@@ -205,8 +205,17 @@ Mac 세션 몫이다.
   기여하지 않는다는 보고. 사실이면 스텝 순서 전반이 바뀐다.
 - **dtScaled 사용처 7곳**(movement drag · angular drag · attract scale · turbulence · vortex ·
   vortex_v2 · boids)에 Waple 은 생 dt 를 쓴다는 보고. 40fps 이상에서는 동일.
-- **`.mdl` 인덱스 폭이 gateWord bit0 으로 자기기술된다**(`2 + 2·(gate&1)`)는 보고. Waple 은
-  `vCount > 65535 ? 4 : 2`. 설치본은 gateWord 전건 0 이라 이 축을 못 건드린다.
+- **`.mdl` 인덱스 폭이 gateWord bit0 으로 자기기술된다** — **재확인·착지(2026-08-20).**
+  업로드 경로 0x1401d7760 이 `movzx ecx,byte[rdi+0x18]`(0x1401d784c) → `and cl,1` →
+  `lea r9d,[r10*2+2]`(0x1401d7870) → `idiv r9d` 로 폭을 만들고, 소비처 0x14009a98d 가 같은
+  비트로 `0x39(R16_UINT)`/`0x2a(R32_UINT)` 와 ByteWidth 를 고른다. 정점 수는 안 들어간다.
+  Waple 의 `vCount > 65535 ? 4 : 2` 를 `2 + 2·(gateWord & 1)` 로 바꿨다.
+  설치본 28파일 45메시 파스 결과가 **바이트 동일**(gateWord 전건 0 · 최대 정점 10,995)이라
+  회귀 없이 규칙만 옳아졌다. 두 규칙을 가르는 두 케이스(비트 선 작은 메시 / 비트 없는 큰 메시)를
+  `Model3DIndexWidthTests` 에 새로 넣었다.
+  **남은 것**: 정본 `spec/formats/mdl-deep.json` `format.mdl.indexWidth` 의 규칙 문장이 아직
+  옛 것이다. 생성기(`measure_mdl_deep.py`)는 고쳤지만 재생성에 `WE_WORKSHOP` 이 필요해 이
+  컨테이너에서는 못 돌린다 — 코퍼스가 있는 곳에서 재생성할 것.
 - **`.png` 폴백이 `.tex-json` 의 `format` 을 버려 refraction 이 잘못 렌더된다**는 보고
   (`TEXnFORMAT` 콤보 미정의 → `normal.wy` 분기).
 - **`sprite` 오브젝트 타입**(WE 의 9번째 레이어 종류)이 로그도 없이 사라진다는 보고.
