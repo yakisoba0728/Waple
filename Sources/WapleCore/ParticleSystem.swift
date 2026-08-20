@@ -921,6 +921,16 @@ public struct ParticleSystemDef: Equatable {
     /// operator JSON 배열 → (파싱된 오퍼레이터, attract CP 인덱스 쌍, vortex 오디오반응) 조립.
     /// controlpointattract 의 CP id 는 controlpoint 배열이 오퍼레이터보다 뒤에 파스되므로
     /// (ops 인덱스, cpid) 만 보관했다가 def 조립 직전에 target 재조립(감사 V04).
+    /// 컨트롤포인트 인덱스 클램프. WE 는 세 원소에서 **같은 규약**을 쓴다 —
+    /// `ebx = 7; cmp eax, ebx; cmovb ebx, eax` (vortex 0x1401cdc11–0x1401cdc1c ·
+    /// vortex_v2 0x1401ce1b1–0x1401ce1c2) 또는 `cmp eax,7 / jae → mov eax,7`
+    /// (controlpointattract 0x1401ccc65 → 0x1401ccd01 · maintaindistancetocontrolpoint
+    /// 0x1401cce37·0x1401cce9c). 비교가 **부호 없는** `cmovb`/`jae` 라서 음수도 7 로 간다 —
+    /// `min(max(cp,0),7)` 로 두면 음수가 0 이 되어 갈린다.
+    private static func clampControlPoint(_ cp: Int) -> Int {
+        (cp < 0 || cp >= 7) ? 7 : cp
+    }
+
     private static func parseOperators(_ jsonArray: [Any]) -> (ops: [ParticleOperator],
                                                                attractCPIds: [(op: Int, cp: Int)],
                                                                vortexAudio: [AudioProcessing?],
@@ -1019,8 +1029,7 @@ public struct ParticleSystemDef: Equatable {
                 //
                 // 클램프는 **부호 없는** `cmp eax,7 / jae → mov eax,7`(0x1401ccc65 → 0x1401ccd01)
                 // 이라 음수도 7 로 간다. `cpid < 8` 로 통과시키던 종전 규약과 다르다.
-                let cpaRaw = pint(o["controlpoint"]) ?? 0
-                attractCPIds.append((op: ops.count, cp: (cpaRaw < 0 || cpaRaw >= 7) ? 7 : cpaRaw))
+                attractCPIds.append((op: ops.count, cp: clampControlPoint(pint(o["controlpoint"]) ?? 0)))
                 ops.append(.controlPointAttract(
                     scale: injected(o, "scale", 512),          // 0x140492934 (원근 20.0 @0x14049288c)
                     threshold: injected(o, "threshold", 512),  // 0x140492934 (원근 5.0 @0x140492858)
@@ -1042,7 +1051,7 @@ public struct ParticleSystemDef: Equatable {
                 // WE 는 `controlpoint` 부재 시 0 을 심는다(int 헬퍼 @0x1401be1fd 계열) — 실사용
                 // 인스턴스(magic_vortex_orb)가 정확히 그 경우다. 이 원소는 지금까지 통째로
                 // 드롭돼 있었으므로 CP0 바인딩에 회귀 위험이 없다.
-                attractCPIds.append((op: ops.count, cp: min(max(pint(o["controlpoint"]) ?? 0, 0), 7)))
+                attractCPIds.append((op: ops.count, cp: clampControlPoint(pint(o["controlpoint"]) ?? 0)))
                 ops.append(.maintainDistanceToControlPoint(
                     distance: injected(o, "distance", 200),          // 0x1401be2bc (원근 1.0 @0x1401be2c6)
                     variableStrength: injected(o, "variablestrength", 0),  // 0x1401be4d9, 플래그 무관
@@ -1052,7 +1061,7 @@ public struct ParticleSystemDef: Equatable {
                 // `[r14+0xc0]` = cp 인덱스 → stride 0xd0 배열 `[sys+0x400]` → translation 을 splat 한 뒤
                 // `addps` 로 offset 세 성분을 더한다). 아래 CP 재베이크에서 합쳐 굽는다 —
                 // 동봉 9인스턴스는 전건 CP0 = 원점이라 관측은 안 바뀌지만, CP 를 옮긴 씬에서 갈린다.
-                attractCPIds.append((op: ops.count, cp: min(max(pint(o["controlpoint"]) ?? 0, 0), 7)))
+                attractCPIds.append((op: ops.count, cp: clampControlPoint(pint(o["controlpoint"]) ?? 0)))
                 // 주입기 0x1401bef00 .. 0x1401bf2c6 (`.pdata` 3조각 — 언와인드 체인으로 병합해야
                 // 한다. 조각 하나만 읽으면 `speedinner` 의 상수가 **3번째 조각 첫 명령**
                 // 0x1401bf22e 라 통째로 안 보인다). 게이트 `stricmp`@0x1401cd8a9 → "vortex",
@@ -1081,7 +1090,7 @@ public struct ParticleSystemDef: Equatable {
                 // v2 의 중심은 **CP 위치 그대로**다 — v1 과 달리 offset 을 더하지 않는다
                 // (프리앰블에 `addps [r14+0x10..0x30]` 이 없다). v2 는 offset 키 자체를 읽지 않아
                 // 파스가 (0,0,0) 을 넣으므로, 아래 재베이크의 "CP + offset" 이 자동으로 CP 가 된다.
-                attractCPIds.append((op: ops.count, cp: min(max(pint(o["controlpoint"]) ?? 0, 0), 7)))
+                attractCPIds.append((op: ops.count, cp: clampControlPoint(pint(o["controlpoint"]) ?? 0)))
                 // 주입기 0x1401bf2d0 .. 0x1401bf6f8 (`.pdata` 3조각). **진입점 주의**: `centerforce`
                 // 주입 호출부 0x1401bf5ff 이 속한 조각의 시작(0x1401bf3c8)은 진입점이 아니다 —
                 // 그 조각만 읽으면 수치 주입 12개 중 11개를 놓친다. 게이트 `stricmp`@0x1401cde40.
@@ -1222,13 +1231,13 @@ public struct ParticleSystemDef: Equatable {
             case "reducemovementnearcontrolpoint":
                 // G-C2-01. 동봉 9인스턴스(오퍼레이터 미구현 중 최다)로 도달이 가장 크다.
                 // controlpoint 는 주입기 0x1401be834–0x1401be87f 가 **정수 0 을 심으므로**
-                // (타입 태그 1=intValue @0x1401be862, 값 0 @0x1401be87f) 키 부재도 CP0 바인딩이다
-                // — controlpointattract 의 "키 있을 때만" 규약과 다르다.
+                // (타입 태그 1=intValue @0x1401be862, 값 0 @0x1401be87f) 키 부재도 CP0 바인딩이다.
                 // 실제로 thunderbolt.json 은 CP 무명시(→CP0)와 controlpoint:1 을 한 쌍으로 쓴다.
-                // 실물 ctor 0x1401cd2ec/0x1401cd354 는 `cp = min(asUInt(controlpoint), 7)` 로
-                // 잘라 쓰므로 범위 밖도 드롭하지 않고 클램프한다.
-                let cpid = min(max(0, pint(o["controlpoint"]) ?? 0), 7)
-                attractCPIds.append((op: ops.count, cp: cpid))
+                // **[2026-08-20]** 종전 주석의 "controlpointattract 의 '키 있을 때만' 규약과
+                // 다르다" 는 이제 사실이 아니다 — 그쪽도 항상 CP 를 바인딩하도록 고쳤다.
+                // 클램프도 `clampControlPoint` 로 통일한다(0x1401cd2ec·0x1401cd351 의 `cmp eax,7`
+                // 은 부호 없는 비교라 음수도 7 이다 — `min(max(0,cp),7)` 은 0 으로 보냈다).
+                attractCPIds.append((op: ops.count, cp: clampControlPoint(pint(o["controlpoint"]) ?? 0)))
                 ops.append(.reduceMovementNearControlPoint(
                     distanceInner: injected(o, "distanceinner", 100),
                     distanceOuter: injected(o, "distanceouter", 350),
