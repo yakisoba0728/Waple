@@ -812,18 +812,18 @@ public struct ParticleSimulator {
         if let o = oscPosOp {
             p.oscPosFreq = rng.range(o.fmin, o.fmax)
             p.oscPosScale = rng.range(o.smin, o.smax)
-            p.oscPosPhase = rng.range(o.pmin, o.pmax) * 2 * .pi
+            p.oscPosPhase = rng.range(o.pmin, o.pmax)   // 초 단위 — ×2π 금지(oscPositionOffset 주석)
             p.oscPosMask = o.mask
         }
         if let o = oscAlphaOp {
             p.oscAlphaFreq = rng.range(o.fmin, o.fmax)
             // oscPos/oscSize 와 동형 range 샘플(F184) — phasemin/max 부재(기본 0) 시 전 파티클 동위상
             // (fireworks 근동기 의도). 종전엔 항상 rng.nextFloat()*2π 완전 랜덤이라 desync 를 강제했다.
-            p.oscAlphaPhase = rng.range(o.pmin, o.pmax) * 2 * .pi
+            p.oscAlphaPhase = rng.range(o.pmin, o.pmax)   // 초 단위 — ×2π 금지(oscPositionOffset 주석)
         }
         if let o = oscSizeOp {
             p.oscSizeFreq = rng.range(o.fmin, o.fmax)
-            p.oscSizePhase = rng.range(o.pmin, o.pmax) * 2 * .pi
+            p.oscSizePhase = rng.range(o.pmin, o.pmax)   // 초 단위 — ×2π 금지(oscPositionOffset 주석)
         }
         if let t = turbulences.first {
             p.turbSpeed = rng.range(t.smin, t.smax)
@@ -1140,11 +1140,11 @@ public struct ParticleSimulator {
             d.size *= lerp(op.sv, op.ev, changeProgress(n, op.st, op.et))
         }
         if let os = oscSizeOp {
-            // F832: frequency 단위 = "수명당 진동 횟수"(WE 공식 디자이너 문서 operator.html:
-            // "The minimum/maximum number of oscillations per particle lifetime" — oscillate
-            // position/alpha/size 3종 동일 문구) — 종전 age 곱(Hz 해석)은 수명이 긴 파티클에서
-            // 실제보다 빠르게 진동했다. n = age/lifetime(위 :602, clamped).
-            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscSizeFreq * n + p.oscSizePhase))
+            // **[2026-08-20 F832 반증]** frequency 는 rad/s, phase 는 초다 — 근거는
+            // `oscPositionOffset` 주석 참조(핸들러가 age 배열을 위상에 더한 뒤 freq 를 곱하고,
+            // 파스에 2π 곱셈이 없다). 종전의 `2π·f·(age/lifetime)` 해석은 수명이 긴 파티클에서
+            // 사실상 정지하고 짧은 파티클에서 앨리어싱했다.
+            let osc01 = 0.5 * (1 + sin(p.oscSizeFreq * (p.age + p.oscSizePhase)))
             d.size *= lerp(os.smin, os.smax, osc01)
         }
         // color
@@ -1163,8 +1163,8 @@ public struct ParticleSimulator {
             // 자매 oscillateSize(위 sizeOp 분기)와 동형 직접보간 — scaleMin/Max 는 파티클별 랜덤화 없이
             // def 고정값을 그대로 보간 양끝으로 쓴다(F184: 종전 "1 - scale*osc" 감산식은 peak 가 항상 1
             // 로 고정되고 trough 만 scale 로 눌리는 별개 수식이었다).
-            // F832: frequency 단위 = 수명당 진동 횟수(age 가 아니라 n = age/lifetime 곱) — 위 sizeOp 분기 주석 참조.
-            let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * n + p.oscAlphaPhase))
+            // **[2026-08-20 F832 반증]** frequency 는 rad/s, phase 는 초 — 위 sizeOp 분기 주석 참조.
+            let osc01 = 0.5 * (1 + sin(p.oscAlphaFreq * (p.age + p.oscAlphaPhase)))
             var f = lerp(oa.smin, oa.smax, osc01)
             // G-C2-03: 배율 자리의 가중(`f = 1 + w·(f₀ − 1)`). 동봉 `fireworks3hit` 이 이 경로다.
             let w = oscAlphaBlend.weight(lifeFraction: n)
@@ -1287,14 +1287,43 @@ public struct ParticleSimulator {
         p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
     }
 
+    /// **[2026-08-20 F832 반증] `frequency` 는 "수명당 진동 횟수" 가 아니라 rad/s 다.**
+    ///
+    /// 종전 구현은 WE 공식 디자이너 문서(operator.html — "The minimum/maximum number of
+    /// oscillations per particle lifetime")를 근거로 `sin(2π·f·age/lifetime + φ)` 를 썼다.
+    /// 바이너리는 다르게 말한다 — 이 저장소에서 직접 확인한 것:
+    ///
+    ///   · 핸들러가 `age` 배열을 위상에 **더한 뒤** freq 를 곱한다 —
+    ///     `addps xmm7, [r8+rcx*4]`(0x140240f75) → `mulps xmm7, xmm0`(0x140240f7a).
+    ///     그 `r8` 은 `lea r12, [rsi+0x258]`(0x14023fce5)이 잡는 **age 배열(초)** 이고,
+    ///     `lifetime` 배열 `[sys+0x260]` 은 이 수식 어디에도 등장하지 않는다.
+    ///   · 파스 브랜치(0x1401cc655–0x1401cc7a0)에 `frequencymin/max` 를 **2π 로 곱하는 명령이
+    ///     없다** — `subss`(max−min)와 `shufps`(브로드캐스트)뿐이다. 즉 저작값이 그대로 rad/s 다.
+    ///
+    /// 문서가 라벨을 그렇게 설명할 뿐 런타임 단위는 rad/s 라는 뜻이다. 물리적으로도 이쪽이 맞다 —
+    /// 동봉 `thunderbolt` 의 oscillatealpha 는 freq 30..100 인데, rad/s 면 4.8..16 Hz 점멸이고
+    /// "수명당 횟수" 면 수명 0.5s 에서 60..200 Hz 라 60fps 에서 앨리어싱한다.
+    ///
+    /// **위상 `φ` 도 회전수가 아니라 초 단위다** — `age` 와 같은 자리에 더해지므로 라디안 기여분은
+    /// `f·φ` 다. 그래서 스폰에서 ×2π 를 걷어냈다. `phasemax` 기본값이 정확히 2π 인 것은
+    /// "기본 f=1 rad/s 에서 φ 범위가 딱 한 주기" 가 되도록 고른 값이라 이 해석과 정합한다.
+    ///
+    /// 오프셋이 `sin θ` 가 아니라 **`sin θ(t) − sin θ(0)`** 인 이유: 실물은 매 프레임
+    /// `scale·(sin θ(t) − sin θ(t−dt))` 를 위치에 **누적**한다(직전 시점을 만드는
+    /// `subps xmm6, [rbp+0xf0]`(생 dt) @0x140240595, 누적 `addps` @0x140240775). 텔레스코핑하면
+    /// `sin θ(t) − sin θ(0)` 이고, 따라서 **스폰 순간 오프셋이 정확히 0** 이다. 종전 구현은
+    /// 스폰에서 `scale·sin(2πφ)` 만큼 튀었다.
+    ///
+    /// 아직 안 옮긴 것(RNG 재구성이 필요해 별건): 실물은 파티클당 난수 **하나**(`[sys+0x338]`)를
+    /// freq·phase·scale 과 세 형제 오퍼레이터가 **전부 공유**하고, Y축에만 `2π·r` 추가 위상을 준다.
+    /// 여기서는 드로 수를 건드리지 않는 범위만 고친다.
     private func oscPositionOffset(_ p: Particle) -> SIMD3<Float> {
-        guard p.oscPosScale > 0 else { return SIMD3(0, 0, 0) }
-        // F832: frequency 단위 = "수명당 진동 횟수"(WE 공식 디자이너 문서 operator.html — oscillate
-        // position/alpha/size 공통) — 종전 age 곱(Hz 해석)은 수명>1s 파티클에서 과속 진동.
-        // lifetime<=0 방어: n=1(display() :602 의 clamp 와 동일 규약).
+        guard p.oscPosScale != 0 else { return SIMD3(0, 0, 0) }
         let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
+        // θ = f·(age + φ). age·φ 는 초, f 는 rad/s. 2π 를 곱하지 않는다.
+        let theta = p.oscPosFreq * (p.age + p.oscPosPhase)
         // G-C2-03: 위치 오프셋은 가산 델타라 가중을 그대로 곱한다. 동봉 `thunderbolt` 가 이 경로다.
-        let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * n + p.oscPosPhase)
+        let off = p.oscPosScale * (sin(theta) - sin(p.oscPosFreq * p.oscPosPhase))
             * oscPosBlend.weight(lifeFraction: n)
         return p.oscPosMask * off
     }
