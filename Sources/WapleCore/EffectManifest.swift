@@ -22,30 +22,31 @@ public struct EffectManifest: Equatable {
             self.command = command; self.source = source
         }
     }
-    /// X-⑧(G-A5-06/G-B2-02): `fbos[].format` — 렌더 타깃 픽셀 포맷. 동봉 자산 실측으로
-    /// **fbo 선언 55/55 전건이 이 키를 갖고, 그중 27건이 rgba8 이 아니다**. 종전엔 키 자체를
-    /// 파스하지 않아 전부 rgba8Unorm 으로 할당됐다 — `fluidsimulation` 의 속도장(rg1616f)·
-    /// 압력장(r16f)은 부호와 1.0 초과를 모두 잃어(unorm 은 [0,1] 클램프 + 8비트 양자화)
-    /// **원리적으로 못 돈다**. glitter 타일 아틀라스(r8)는 채널 3개를 낭비한다.
-    ///
-    /// 관측된 문자열은 5종뿐이다: `rgba8888`(28) · `rgba_backbuffer`(13) · `r16f`(8) ·
-    /// `rg1616f`(4) · `r8`(2). 미지 문자열은 nil 로 두고 소비처가 기본값(rgba8)을 쓴다 —
-    /// 미지 bind/target 을 이펙트 드롭이 아니라 폴백으로 처리한 G-A5-04 와 같은 정책이다.
-    public enum Format: String, Equatable, CaseIterable {
-        /// 8비트 UNORM 4채널. 동봉 자산 최다(28/55).
-        case rgba8888
-        /// **고정 포맷이 아니다** — 현재 백버퍼 포맷을 따라간다(HDR 이면 float, 아니면 8비트).
-        /// 소비처에서 씬의 HDR 여부로 해석하며, 이 enum 자체는 "백버퍼를 따르라" 는 지시만 담는다.
-        case rgbaBackbuffer = "rgba_backbuffer"
-        /// 16비트 float 1채널(압력·발산·컬 같은 부호 있는 스칼라장).
-        case r16f
-        /// 16비트 float 2채널(속도장 — 부호 필수).
-        case rg1616f
-        /// 8비트 UNORM 1채널(glitter 타일 마스크).
-        case r8
-    }
 
     public struct FBO: Equatable {
+        /// X-⑧(G-A5-06/G-B2-02): `fbos[].format` — 렌더 타깃 픽셀 포맷. 동봉 자산 실측으로
+        /// **fbo 선언 55/55 전건이 이 키를 갖고, 그중 27건이 rgba8 이 아니다**. 종전엔 키 자체를
+        /// 파스하지 않아 전부 rgba8Unorm 으로 할당됐다 — `fluidsimulation` 의 속도장(rg1616f)·
+        /// 압력장(r16f)은 부호와 1.0 초과를 모두 잃어(unorm 은 [0,1] 클램프 + 8비트 양자화)
+        /// **원리적으로 못 돈다**. glitter 타일 아틀라스(r8)는 채널 3개를 낭비한다.
+        ///
+        /// 관측된 문자열은 5종뿐이다: `rgba8888`(28) · `rgba_backbuffer`(13) · `r16f`(8) ·
+        /// `rg1616f`(4) · `r8`(2). 미지 문자열은 nil 로 두고 소비처가 기본값(rgba8)을 쓴다 —
+        /// 미지 bind/target 을 이펙트 드롭이 아니라 폴백으로 처리한 G-A5-04 와 같은 정책이다.
+        public enum Format: String, Equatable, CaseIterable {
+            /// 8비트 UNORM 4채널. 동봉 자산 최다(28/55).
+            case rgba8888
+            /// **고정 포맷이 아니다** — 현재 백버퍼 포맷을 따라간다(HDR 이면 float, 아니면 8비트).
+            /// 소비처에서 씬의 HDR 여부로 해석하며, 이 enum 자체는 "백버퍼를 따르라" 는 지시만 담는다.
+            case rgbaBackbuffer = "rgba_backbuffer"
+            /// 16비트 float 1채널(압력·발산·컬 같은 부호 있는 스칼라장).
+            case r16f
+            /// 16비트 float 2채널(속도장 — 부호 필수).
+            case rg1616f
+            /// 8비트 UNORM 1채널(glitter 타일 마스크).
+            case r8
+        }
+
         public let name: String
         public let scale: Int          // 해상도 나눗수(4 = 1/4) — fixedWidth/fixedHeight 가 있으면 무시.
         /// X-①: `fit`(정사각 고정 크기, 실물 cursorripple `_rt_EightBuffer1/2` fit:512) 또는
