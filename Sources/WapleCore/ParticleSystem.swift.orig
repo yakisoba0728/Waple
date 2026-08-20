@@ -124,10 +124,8 @@ public enum ParticleOperator: Equatable {
                 centerForce: Float = 0, variableStrength: Float = 0,
                 reductionInner: Float = 0, reductionOuter: Float = 0, ring: VortexRing? = nil)
     /// 결정적 노이즈 흐름장 난류. 실물키(정찰 55인스턴스): speedmin/speedmax(파티클별 속도 범위),
-    /// scale(공간 주파수), timescale(시간 진화 속도), mask(축별 게이트 "x y z"),
+    /// scale(공간 주파수, 기본 0.01), timescale(시간 진화 속도, 기본 0=정적장), mask(축별 게이트 "x y z"),
     /// phasemin/phasemax(파티클별 위상 오프셋). 노이즈장 속도로 위치를 이류(advection)한다(vel 미누적 → 유계).
-    /// 부재 기본값은 주입기 0x1401beb80 에서 온다 — timescale 은 **0(정적장)이 아니다**
-    /// (직교 20.0 / 원근 1.0). 파스 지점 주석 참조.
     case turbulence(speedMin: Float, speedMax: Float, scale: Float, timeScale: Float,
                     mask: Vec3, phaseMin: Float, phaseMax: Float)
     /// 크기 진동: size ×= lerp(scaleMin, scaleMax, 0.5(1+sin(2πf·(age/lifetime)+phase))). 파티클별 f/phase 스폰 샘플.
@@ -660,59 +658,38 @@ public struct ParticleSystemDef: Equatable {
                                                     max: injectedVec3(i, "max", Vec3(x: 0, y: 0, z: 5)),
                                                     exponent: pexponent(i["exponent"]) ?? 1))
             case "turbulentvelocityrandom":
-                // 주입기 **0x1401bb030** — 귀속 사슬: `stricmp`@0x1401c874f 'turbulentvelocityrandom'
-                // → 호출부 0x1401c8782. (주의: 바로 앞 0x1401bad80 은 'inheritcontrolpointvelocity'
-                // 의 주입기다. `.pdata` 조각이 연속이라 두 함수를 하나로 병합하면 이 셋이 통째로
-                // 엉뚱한 원소에 붙는다 — 0x1401bad80 은 0x1401bb00c 에서 `ret` 하고 0x1401bb030 이
-                // 새 프롤로그다. 함수 경계는 xref 가 있는 조각 시작으로 잡아야 한다.)
-                //
-                // speedmin/speedmax 는 **직교투영 플래그 의존**(아래 `injected` 주석 참조):
-                // ortho 100/250(0x1401bb056·0x1401bb12a), 원근 0.5/1.0(0x1401bb060·0x1401bb134).
-                // 어느 분기든 0 이 아니다 — 종전 0 은 난류 초기속도를 통째로 껐다.
-                inits.append(.turbulentVelocityRandom(speedMin: injected(i, "speedmin", 100),   // 0x1401bb07b
-                                                      speedMax: injected(i, "speedmax", 250),  // 0x1401bb14d
-                                                      scale: injected(i, "scale", 1),          // 0x1401bb338 (플래그 무관)
-                                                      offset: injected(i, "offset", 0)))       // 0x1401bb34a (플래그 무관)
+                inits.append(.turbulentVelocityRandom(speedMin: pfloat(i["speedmin"]) ?? 0, speedMax: pfloat(i["speedmax"]) ?? 0,
+                                                      scale: pfloat(i["scale"]) ?? 1, offset: pfloat(i["offset"]) ?? 0))
             case "colorlist":
                 // 실물: colors = ["r g b", ...] 0..1 스케일(colorrandom 의 0..255 와 다름 — 실측).
                 let colors = (i["colors"] as? [Any] ?? []).compactMap { pvec3($0) }
                 if !colors.isEmpty { inits.append(.colorList(colors: colors)) }
             case "hsvcolorrandom":
-                // **[2026-08-20 정정] "데모 예제 = 기본값" 추정은 6필드 중 4필드가 틀렸다.**
-                // 주입기 0x1401ba3e0 — 귀속 사슬: `stricmp`(0x1402c10d0) 호출 @0x1401c783a 가
-                // 'hsvcolorrandom' 과 비교 → 같으면 0x1401c786d 에서 이 함수를 부른다. 두 번째 호출부
-                // 0x1401c4b31 은 `memcmp`(0x140420ff0) 호출 @0x1401c4b20 으로 **같은 문자열**을
-                // 비교하는 다른 디스패처라, 두 경로 모두 같은 원소를 가리킨다(귀속 단일).
-                //
-                // WE 의 중립은 "채도·명도 고정 1" 이 아니라 **0.5 에서 1 까지 무작위**다. 그리고
-                // max 는 min 을 **승계하지 않는다** — 둘 다 독립 상수다. saturationmin 만 준
-                // 자산(magic_color_sparkle 류)은 종전 [min,min] 고정이었지만 원본은 [min,1] 이다.
-                let hueMin = injected(i, "huemin", 0)            // 0x1401ba408 (레지스터 0)
-                let hueMax = injected(i, "huemax", 1)            // 0x1401ba4b7
-                let satMin = injected(i, "saturationmin", 0.5)   // 0x1401ba669 → movsd @0x140492758
-                let satMax = injected(i, "saturationmax", 1)     // 0x1401ba6d9 (승계 아님 — 상수)
-                let valMin = injected(i, "valuemin", 0.5)        // 0x1401ba6f0
-                let valMax = injected(i, "valuemax", 1)          // 0x1401ba716 (승계 아님 — 상수)
+                // 실물 예제(particleelementpreviews/hsvcolorrandom) 전 필드 명시값 huemin=0/huemax=1/
+                // saturationmin=max=1/valuemin=max=1 — 필드 완전 부재(inheritinitialvaluefromevent) 시
+                // 이 값들을 기본값으로 채택(전 스펙트럼 hue 랜덤 + 채도·명도 고정 — 데모가 곧 신규노드
+                // 기본값이라는 정황 일치). max 개별 부재는 magic_color_sparkle(saturationmin=1, max 부재)
+                // 관례상 max=min(고정값, 무작위폭 0)로 채운다.
+                let hueMin = pfloat(i["huemin"]) ?? 0
+                let hueMax = pfloat(i["huemax"]) ?? 1
+                let satMin = pfloat(i["saturationmin"]) ?? 1
+                let satMax = pfloat(i["saturationmax"]) ?? satMin
+                let valMin = pfloat(i["valuemin"]) ?? 1
+                let valMax = pfloat(i["valuemax"]) ?? valMin
                 inits.append(.hsvColorRandom(hueMin: hueMin, hueMax: hueMax,
                                              satMin: satMin, satMax: satMax,
                                              valMin: valMin, valMax: valMax,
-                                             // huesteps 부재 기본은 0(연속)이 아니라 **6**(0x1401ba56d,
-                                             // 인라인 tag=int) — 6단 색상환 양자화다.
-                                             hueSteps: max(0, injectedInt(i, "huesteps", 6)),
+                                             hueSteps: max(0, pint(i["huesteps"]) ?? 0),
                                              hueNoise: pfloat(i["huenoise"]) ?? 0,
                                              satNoise: pfloat(i["saturationnoise"]) ?? 0,
                                              valNoise: pfloat(i["valuenoise"]) ?? 0))
             case "mapsequencearoundcontrolpoint":
-                // count 부재 기본은 0(= 시퀀스 없음)이 아니라 **32**(주입기 0x1401bbc90, 인라인
-                // tag=int @0x1401bbcaf). 게이트: `stricmp`@0x1401c993a → 호출부 0x1401c9970.
-                inits.append(.mapSequence(count: injected(i, "count", 32),
+                inits.append(.mapSequence(count: pfloat(i["count"]) ?? 0,
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: false))
                 // F630: "0 1 0" 같은 회전축 — 각도 평면 선택(기본 z축 레거시, 마지막 지정 승).
                 mapSeqAxis = pvec3(i["axis"]) ?? mapSeqAxis
             case "mapsequencebetweencontrolpoints":
-                // count 부재 기본 **32**(주입기 0x1401bc080, 인라인 tag=int @0x1401bc09f).
-                // 게이트: `stricmp`@0x1401ca1e1 → 호출부 0x1401ca214.
-                inits.append(.mapSequence(count: injected(i, "count", 32),
+                inits.append(.mapSequence(count: pfloat(i["count"]) ?? 0,
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: true))
             case "positionoffsetrandom":
                 inits.append(.positionOffsetRandom(offsetMin: pvec3(i["offsetmin"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -801,12 +778,15 @@ public struct ParticleSystemDef: Equatable {
                 // 절대 나오지 않을 값이라, 이 하나가 "고정 상수" 해석의 반증 가능한 증거다.
                 let smin = pfloat(o["scalemin"]) ?? 0
                 let fmin = injected(o, "frequencymin", 1)
-                // **[2026-08-20 정정] 조건의 출처를 박았다 — 실측 동작은 0.5 가 아니라 10.0 이다.**
-                // 종전 주석은 "파티클 시스템 최상위 JSON `flags` 에 bit10 이 없다" 로 0.5 를 골랐는데,
-                // 그 bit10 은 JSON `flags` 가 아니라 **C++ 오브젝트 플래그**다(아래 `injected` 주석).
-                // 동봉 두 트리 scene.json 355개 중 347개(97.7%)가 세운다.
+                // scalemax 는 **오브젝트 플래그 조건부**다(0x1401bd894 `test r14b,r14b` →
+                // 세워졌으면 10.0(0x1401bd899), 아니면 **0.5**(0x1401bd8a3)). r14b 는 이 주입기의
+                // 두 번째 인자로 호출부가 파티클 시스템 오브젝트의 비트에서 뽑는다.
+                // 두 트리의 파티클 시스템 최상위 `flags` 실측값은 {0,1,2,3,4,6,8,9,248} 뿐이라
+                // **bit10(0x400)이 세워진 자산이 하나도 없다** — 실측 동작은 0.5 다. 10.0 분기의
+                // 조건 출처는 아직 못 박지 않았으므로 0.5 로 두고 기록만 남긴다.
+                // 종전 `?? smin` 승계는 어느 쪽도 아니었다.
                 ops.append(.oscillatePosition(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 5),
-                                              scaleMin: smin, scaleMax: injected(o, "scalemax", 10),   // 0x1401bd8b5 (원근 0.5)
+                                              scaleMin: smin, scaleMax: injected(o, "scalemax", 0.5),
                                               phaseMin: injected(o, "phasemin", 0), phaseMax: injected(o, "phasemax", 2 * .pi),
                                               mask: injectedVec3(o, "mask", Vec3(x: 1, y: 1, z: 0))))
             case "controlpointattract":
@@ -849,31 +829,20 @@ public struct ParticleSystemDef: Equatable {
                                    speedInner: sIn,
                                    speedOuter: pfloat(o["speedouter"]) ?? sIn,
                                    offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                   // vortex_v2 **만** centerforce 를 심는다(0x1401bf5ff, 플래그 무관 1.0).
-                                   // 자매 `vortex`(주입기 0x1401bef00)는 centerforce 문자열조차 없으므로
-                                   // 그쪽 `?? 0` 은 옳다 — 두 원소를 같이 고치면 안 된다.
-                                   centerForce: injected(o, "centerforce", 1),
+                                   centerForce: pfloat(o["centerforce"]) ?? 0,
                                    variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
                                    reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
                                    reductionOuter: pfloat(o["reductionouter"]) ?? 0,       // 보존 전용(의미 보류)
                                    ring: ring))
                 vortexAudio.append(AudioProcessing.parse(o))
             case "turbulence":
-                // **[2026-08-20 정정] 종전 상수는 추정이었고, 진짜 주입기는 0x1401beb80 이다.**
-                // 귀속 사슬: `stricmp`(0x1402c10d0) 호출 @0x1401cd423 이 'turbulence' 와 비교 →
-                // 같으면 0x1401cd45c 에서 0x1401beb80 을 부른다. (종전 조사에서 "0x1401bb32x 근처"
-                // 로 본 timescale/scale = 1.0/1.0 은 **turbulentvelocityrandom** 것이다 — 위 참조.)
-                //
-                // scale 0.01 은 우연히 맞았다(ortho 분기). timescale 0 은 **양쪽 분기 어디에도 없다**:
-                // ortho 20.0(0x1401bebb1) · 원근 1.0(xmm7 @0x1401beba5). 정적장이 아니라 시간에 따라
-                // 흐르는 장이다. mask 도 ortho 는 (1,1,0) — 2D 씬에서 z 를 잠근다.
-                ops.append(.turbulence(speedMin: injected(o, "speedmin", 500),      // 0x1401bed85 (원근 1.0)
-                                       speedMax: injected(o, "speedmax", 1000),     // 0x1401bee64 (원근 5.0)
-                                       scale: injected(o, "scale", 0.01),           // 0x1401becc5 (원근 0.5)
-                                       timeScale: injected(o, "timescale", 20),     // 0x1401bebd4 (원근 1.0)
-                                       mask: injectedVec3(o, "mask", Vec3(x: 1, y: 1, z: 0)), // 0x1401bec98 (원근 "1 1 1")
-                                       phaseMin: injected(o, "phasemin", 0),        // 0x1401beec5 (플래그 무관)
-                                       phaseMax: injected(o, "phasemax", 0)))       // 0x1401beeed (플래그 무관)
+                // 실물 기본값: speed 부재 → 0(무동작), scale 부재 → 0.01(공간 변동 확보),
+                // timescale 부재 → 0(정적장, 파티클 이동만으로 흔들림), mask 부재 → (1,1,1).
+                let smin = pfloat(o["speedmin"]) ?? 0
+                ops.append(.turbulence(speedMin: smin, speedMax: pfloat(o["speedmax"]) ?? smin,
+                                       scale: pfloat(o["scale"]) ?? 0.01, timeScale: pfloat(o["timescale"]) ?? 0,
+                                       mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1),
+                                       phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "oscillatesize":
                 // 주입기 0x1401bdbf0: frequencymin = 1.0(0x1401bdc59) · frequencymax = 10.0
                 // (0x1401bdd0f) · scalemin = **0.8**(0x1401bddc5) · scalemax = **1.2**
@@ -892,9 +861,7 @@ public struct ParticleSystemDef: Equatable {
                                         endValue: pfloat(o["endvalue"]) ?? 0))
             case "remapvalue":
                 let fbm = (o["transformfunction"] as? String) == "fbmnoise"
-                // 부재 기본 2.0 — 주입기 0x1401bfbb0(게이트 `stricmp`@0x1401ce667 'remapvalue'
-                // → 호출부 0x1401ce6a0), 실수 주입기 호출 @0x1401bfff3. 플래그 무관.
-                let scale = injected(o, "transforminputscale", 2)
+                let scale = pfloat(o["transforminputscale"]) ?? 1
                 let outputName = (o["output"] as? String)?.lowercased()
                 // 확장 키(엔진 어휘) 존재 여부 — 전부 부재 + 레거시 출력(velocity/speed)이면
                 // 기존 .remapValue 경로(시뮬 비트동일 무회귀).
@@ -1039,15 +1006,10 @@ public struct ParticleSystemDef: Equatable {
             case "sphererandom":
                 emitters.append(.sphere(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    // 부재 기본 (1,1,0) — **인접 추정이 아니라 실측이다**(2026-08-20). 주입기가
-                    // 0x1401b9339 에서 `mov eax, [0x14048f488]` + 0x1401b934c 의 5번째 바이트를
-                    // 복사해 길이 5 문자열 "1 1 0" 을 만든다(find @0x1401b92fd, tag=4).
-                    directions: injectedVec3(e, "directions", Vec3(x: 1, y: 1, z: 0)),
-                    distanceMin: injected(e, "distancemin", 0),    // 0x1401b944a (플래그 무관)
-                    // distancemax 는 직교투영 플래그 의존: ortho **256**(0x1401b9454), 원근 1.0
-                    // (0x1401b945e). 주입기 0x1401b9100, 게이트 `stricmp`@0x1401c5c7c 'sphererandom'
-                    // → 호출부 0x1401c5cb2. 도달 2/542 로 작지만 0 은 어느 분기도 아니다.
-                    distanceMax: injected(e, "distancemax", 256),  // 0x1401b9470
+                    // 부재 기본 (1,1,0): wallpaper64.exe 스트링 "1 1 0" @0x48e288("directions" @0x48e290 에 인접).
+                    directions: pvec3(e["directions"]) ?? Vec3(x: 1, y: 1, z: 0),
+                    distanceMin: pfloat(e["distancemin"]) ?? 0,
+                    distanceMax: pfloat(e["distancemax"]) ?? 0,
                     rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0,
                     sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
@@ -1058,11 +1020,7 @@ public struct ParticleSystemDef: Equatable {
             case "boxrandom":
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    // 부재 기본은 (0,0,0)(= 원점 붕괴)이 아니라 문자열 "1 1 1" 이다 — 문자열 주입기
-                    // 0x1401d7e80 호출 @0x1401b9838(주입기 0x1401b9520, 게이트 `stricmp`@0x1401c6397
-                    // → 호출부 0x1401c63cd). 플래그 무관. 51건 중 4건이 생략한다.
-                    // (`layerimage` 주입기 0x1401b9930 에는 distancemax 가 **없으므로** 그쪽은 안 건드린다.)
-                    distanceMax: injectedVec3OrScalar(e, "distancemax", Vec3(x: 1, y: 1, z: 1)),
+                    distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
                     rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
@@ -1083,10 +1041,7 @@ public struct ParticleSystemDef: Equatable {
                     rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
-                // layerimage 만 speed 기본이 0 이 아니다 — 주입기 0x1401b9930 이 speedmin=0.1
-                // (0x1401b9a5d) · speedmax=0.2(0x1401b9b1b) 를 심는다(둘 다 플래그 무관).
-                // sphererandom/boxrandom 주입기는 둘 다 0.0 이라 위 공용 계산이 그대로 맞다.
-                emitterSpeed.append(SIMD2(injected(e, "speedmin", 0.1), injected(e, "speedmax", 0.2)))
+                emitterSpeed.append(SIMD2(speedMin, speedMax))
                 boxDistanceMin.append(pvec3OrScalar(e["distancemin"]))
                 emitterPeriodic.append(parsePeriodic(e))
             case let other:
@@ -1311,40 +1266,6 @@ private func injected(_ d: [String: Any], _ key: String, _ constant: Float) -> F
 private func injectedVec3(_ d: [String: Any], _ key: String, _ constant: Vec3) -> Vec3 {
     d[key] == nil ? constant : (pvec3(d[key]) ?? Vec3(x: 0, y: 0, z: 0))
 }
-
-/// `injected(_:_:_:)` 의 Int 판. 원본은 실수(0x1401d7d30)·정수(**0x1401d7be0**, 값 태그 1)·
-/// 문자열(0x1401d7e80, 태그 4)·불(0x1401d8120, 태그 5) 네 종류의 주입기를 쓴다.
-private func injectedInt(_ d: [String: Any], _ key: String, _ constant: Int) -> Int {
-    d[key] == nil ? constant : (pint(d[key]) ?? 0)
-}
-
-/// `injectedVec3(_:_:_:)` 의 스칼라 브로드캐스트 허용판 — 값이 **있을 때**의 파싱 경로는
-/// `pvec3OrScalar` 그대로 두고 부재일 때만 상수를 심는다(이미터 `distancemax` 용).
-private func injectedVec3OrScalar(_ d: [String: Any], _ key: String, _ constant: Vec3) -> Vec3 {
-    d[key] == nil ? constant : (pvec3OrScalar(d[key]) ?? Vec3(x: 0, y: 0, z: 0))
-}
-
-/// **직교투영 분기 — 위 주입 상수 중 일부는 씬 단위 플래그에 따라 값이 둘이다.**
-///
-/// 주입기들은 두 번째 인자로 `bool` 을 받는다(호출부가 전부 `movzx edx, byte ptr [rbp+0x2238]`
-/// 로 넘긴다 — 예: 0x1401c5cb2 · 0x1401c8782 · 0x1401cd45c · 0x1401cde79 · 0x1401cc0bd).
-/// 그 바이트는 디스패처(0x1401c5490) 진입 직후 0x1401c5b75 의 접근자 `0x14010daa0` 결과이고,
-/// 접근자는 `[rcx+0x118] >> 10 & 1` 을 읽는다. 그 비트는 0x14018768a 에서
-/// `scene.general.orthogonalprojection`(키 문자열 @0x1401874ec) 이
-/// `auto: true` 이거나 `width`·`height` 가 **둘 다 0 이 아닐 때** 세워진다
-/// (0x140187565 / 0x1401875df → `[+0xe0]` bit3 → `[+0x118]` bit10; 기본은 0x1401872ca 에서 clear).
-///
-/// 즉 **직교(2D 픽셀 좌표) 씬이면 세워진다**. 상수의 성격도 그와 일치한다 —
-/// 세워졌을 때는 픽셀 스케일(속도 100/250, 반경 300, 거리 256), 아니면 단위 스케일(0.5/1.0, 1.0).
-/// `turbulence` 의 mask 가 ortho 에서 (1,1,0) 으로 z 를 잠그는 것이 결정적 방증이다.
-///
-/// 동봉 두 트리의 `scene.json` 355개 중 **347개(97.7%)** 가 이 비트를 세운다
-/// (`orthogonalprojection` 부재 8건만 clear). 그래서 위 상수들은 **ortho 분기**를 채택했고,
-/// 원근 분기 값은 각 자리 주석에 함께 남겼다.
-///
-/// 이 사실은 종전 `oscillateposition.scalemax` 판단(“JSON `flags` 에 bit10 이 없으니 0.5”)을
-/// 뒤집는다 — 그 bit10 은 JSON `flags` 키가 아니라 C++ 오브젝트 플래그였다.
-private enum OrthogonalProjectionBranch {}
 /// JSON false/true는 NSNumber로도 브리지되므로 exponent 숫자 경로에서 명시적으로 배제한다.
 private func pexponent(_ v: Any?) -> Float? {
     if let number = v as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
