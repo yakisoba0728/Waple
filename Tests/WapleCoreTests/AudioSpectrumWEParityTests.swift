@@ -1,0 +1,194 @@
+import XCTest
+@testable import WapleCore
+
+/// X-⑩ (G-E2-01~04): WE 64밴드 오디오 파이프라인 파리티.
+///
+/// 종전 구현은 **네 군데가 전부 달랐다** — 등폭 비닝 + 평균 + 틸트 없음 + 실측 캘리브 게인.
+/// 넷이 한 커밋인 이유: 현행 게인(`0.75/32.2446`)이 나머지 셋의 부재를 흡수하도록 맞춰져
+/// 있어서, 하나만 고치면 레벨이 무너진다.
+///
+/// 아래 기대값은 전부 원본 `wallpaper64.exe` 디스어셈블에서 유도했고, 수치는 독립 계산으로
+/// 교차검증했다(44.1 kHz·N=1920·B=640 기준표).
+final class AudioSpectrumWEParityTests: XCTestCase {
+
+    // MARK: 밴드 매핑 (G-E2-01)
+
+    /// **하위 29밴드가 FFT 빈 1:1** — 이게 이 매핑의 서명이다.
+    /// 선형도 로그도 아니고, 별도의 선형 구간이 있는 것도 아니다. `pow(t, 0.25)` 가 저역에서
+    /// 급격히 커지는 걸 `min(raw, prev+1)` 클램프가 막아서 생기는 결과다.
+    func testLowestTwentyNineBandsMapOneToOneWithBins() {
+        let bandOf = AudioSpectrum.bandOfBin(binCount: AudioSpectrum.referenceBinCount)
+        for i in 1...29 {
+            XCTAssertEqual(bandOf[i], i - 1,
+                           "빈 \(i) 은 밴드 \(i - 1) 이어야 한다(1:1 구간)")
+        }
+        XCTAssertEqual(bandOf[30], 29, "30번째 빈부터 밴드가 빈을 나눠 갖기 시작한다")
+        XCTAssertEqual(bandOf[31], 29, "밴드 29 는 빈 2개(30,31)를 갖는다")
+    }
+
+    /// 64밴드가 **전부** 채워진다. 종전 등폭 비닝의 증상 "상위 22바가 항상 0" 은
+    /// WE 동작이 아니라 우리 쪽 비닝 부작용이었다.
+    func testAllSixtyFourBandsAreReachedAndMonotonic() {
+        let bandOf = AudioSpectrum.bandOfBin(binCount: AudioSpectrum.referenceBinCount)
+        XCTAssertEqual(bandOf.max(), AudioSpectrum.bandCount - 1, "최상위 밴드까지 도달해야 한다")
+        var seen = Set<Int>()
+        var prev = 0
+        for i in 1..<bandOf.count {
+            seen.insert(bandOf[i])
+            XCTAssertGreaterThanOrEqual(bandOf[i], prev, "밴드는 단조 비감소")
+            XCTAssertLessThanOrEqual(bandOf[i], prev + 1, "빈당 최대 1밴드씩만 전진")
+            prev = bandOf[i]
+        }
+        XCTAssertEqual(seen.count, AudioSpectrum.bandCount, "빈 밴드가 하나도 없어야 한다")
+    }
+
+    /// 원본의 상한 주파수 — bin 639 × (44100/1920).
+    func testTopFrequencyMatchesOriginal() {
+        XCTAssertEqual(AudioSpectrum.topFrequency, 14677.03125, accuracy: 1e-6)
+    }
+
+    /// 우리 구성(48 kHz·N=2048)이 원본과 **주파수 축에서** 등가인지.
+    /// 길이는 못 맞추지만(vDSP 가 비-2거듭제곱 실수 FFT 를 못 한다) 이게 실제로 중요한 것이다.
+    func testOurConfigurationReproducesTheOriginalBandStructure() {
+        let n = 2048
+        let rate = 48000.0
+        let B = AudioSpectrum.binCount(fftLength: n, sampleRate: rate)
+        XCTAssertEqual(B, 627, "원본 상한(≈14677 Hz)까지 덮는 빈 수")
+
+        let binWidth = rate / Double(n)
+        XCTAssertEqual(binWidth, 23.4375, accuracy: 1e-9)
+        XCTAssertEqual(binWidth / (AudioSpectrum.referenceRate / Double(AudioSpectrum.referenceFFTLength)),
+                       1.0204, accuracy: 1e-3, "원본 빈 폭 22.96875 Hz 대비 1.02배")
+
+        let bandOf = AudioSpectrum.bandOfBin(binCount: B)
+        // 1:1 구간 길이가 원본과 같아야 한다 — 저역 구조가 보존됐다는 뜻이다.
+        for i in 1...29 { XCTAssertEqual(bandOf[i], i - 1) }
+        XCTAssertEqual(bandOf.max(), 63, "여기서도 64밴드 전부 채워진다")
+        // 상한 주파수 오차 0.05% 미만.
+        let top = Double(B - 1) * binWidth
+        XCTAssertEqual(top / AudioSpectrum.topFrequency, 1.0, accuracy: 5e-4)
+    }
+
+    /// 종전 1024 는 빈 폭이 43.07 Hz 로 원본의 1.88배였다 — 저역 밴드가 통째로 밀린다.
+    /// 이 테스트는 "왜 2048 로 올렸는가" 를 수치로 남긴다.
+    func testOldFFTSizeWouldHaveMissedTheLowBandsByNearlyTwoBins() {
+        let old = 48000.0 / 1024
+        let we = AudioSpectrum.referenceRate / Double(AudioSpectrum.referenceFFTLength)
+        XCTAssertEqual(old / we, 2.0408, accuracy: 1e-3, "종전 빈 폭은 원본의 2.04배였다")
+    }
+
+    // MARK: 틸트 (G-E2-03)
+
+    /// `w = C − (1−C)·cos(π·t)`, 진폭에 `sqrt(w)`.
+    /// **t 는 밴드가 아니라 빈 인덱스의 정규화값이다** — 원장 초안은 밴드로 적었는데 틀렸다.
+    /// 빈이 30~39개 들어가는 상위 밴드에서 값이 크게 갈린다.
+    func testTiltIsSqrtOfHannLikeCurveOverBinIndex() {
+        let B = AudioSpectrum.referenceBinCount
+        let w = AudioSpectrum.tiltAmplitudeWeights(binCount: B)
+        XCTAssertEqual(w[0], 0, "DC 는 안 쓴다")
+        // t=0 → w = C − (1−C) = 2C − 1 = 0.002
+        XCTAssertEqual(w[1], Float(0.002).squareRoot(), accuracy: 1e-5)
+        // t≈1 → w ≈ 1
+        XCTAssertEqual(w[B - 1], 1.0, accuracy: 1e-4)
+        // 중간점 t=0.5 → w = C = 0.501
+        let mid = 1 + (B - 1) / 2
+        XCTAssertEqual(w[mid], Float(AudioSpectrum.tiltC).squareRoot(), accuracy: 2e-3)
+        // 단조 증가.
+        for i in 2..<B { XCTAssertGreaterThanOrEqual(w[i], w[i - 1]) }
+        // 최저↔최고 감쇠비 22.36배. 이게 "베이스만 흔들리던" 증상의 반대편이다 —
+        // 원본은 오히려 저역을 22배 **깎는다**.
+        XCTAssertEqual(w[B - 1] / w[1], 22.3608, accuracy: 1e-3)
+    }
+
+    /// 틸트가 시간영역 창(Hann)이 아니라는 것. 곡선 모양은 Hann 과 같지만 **적용 축이 다르다** —
+    /// 시간영역엔 창이 전혀 없고(사각창), 이 가중치는 FFT 출력 빈에 곱해진다.
+    /// 코드로는 "샘플 배열 길이가 아니라 빈 배열 길이로 만들어진다" 는 사실이 그 증거다.
+    func testTiltLengthFollowsBinCountNotWindowLength() {
+        let n = 2048
+        let B = AudioSpectrum.binCount(fftLength: n, sampleRate: 48000)
+        XCTAssertEqual(AudioSpectrum.tiltAmplitudeWeights(binCount: B).count, B)
+        XCTAssertNotEqual(B, n, "빈 배열은 창 길이와 다르다")
+        XCTAssertNotEqual(B, AudioSpectrum.windowLength(fftLength: n))
+    }
+
+    // MARK: 축약 (G-E2-02)
+
+    /// 밴드 안에서 **MAX**. 평균이면 넓은 밴드(빈 39개)의 피크가 뭉개진다.
+    func testBandReductionTakesMaximumNotMean() {
+        let B = 640
+        var mags = [Float](repeating: 0, count: B)
+        let bandOf = AudioSpectrum.bandOfBin(binCount: B)
+        // 마지막 밴드(빈 39개)에 한 빈만 크게 세운다.
+        let lastBandBins = (1..<B).filter { bandOf[$0] == 63 }
+        XCTAssertGreaterThan(lastBandBins.count, 10, "상위 밴드는 빈이 여러 개다")
+        mags[lastBandBins[lastBandBins.count / 2]] = 1.0
+
+        let out = AudioSpectrum.spectrum(normalizedMagnitudes: mags, binCount: B)
+        let tilt = AudioSpectrum.tiltAmplitudeWeights(binCount: B)
+        let expected = 1.0 * tilt[lastBandBins[lastBandBins.count / 2]] * AudioSpectrum.gain
+        XCTAssertEqual(out[63], expected, accuracy: expected * 1e-4,
+                       "MAX 라면 그 빈 하나가 그대로 밴드값이 된다")
+        // 평균이었다면 1/39 로 줄었을 것 — 그 값과는 확실히 달라야 한다.
+        XCTAssertGreaterThan(out[63], expected * 0.9)
+    }
+
+    // MARK: 게인 (G-E2-04)
+
+    /// `162.56 = 127 × 0.001 × 2 × 640`. 원장 초안의 유도식(`0.001 × 2000000 × 127`)은
+    /// 틀렸다 — `2000000` 은 바이너리에 존재하지 않는다. 결과값만 우연히 맞았다.
+    func testAbsoluteGainMatchesTheDerivedConstant() {
+        XCTAssertEqual(AudioSpectrum.gain, 162.56, accuracy: 1e-4)
+        let derived = Float(127) * 0.001 * 2 * Float(AudioSpectrum.referenceBinCount)
+        XCTAssertEqual(AudioSpectrum.gain, derived, accuracy: 1e-3, "127 × 0.001 × 2 × 640")
+        // 종전 캘리브 게인 대비 배율(vDSP packed-real, N=1024 규약 기준 3.41배)을 기록으로 남긴다.
+        let previousCalibrated: Float = 0.75 / 32.2446
+        let equivalentAtOldN = AudioSpectrum.gain / (2 * 1024)
+        XCTAssertEqual(equivalentAtOldN / previousCalibrated, 3.4125, accuracy: 1e-3)
+    }
+
+    // MARK: 파이프라인 성질
+
+    func testSilenceYieldsZeroBands() {
+        let out = AudioSpectrum.spectrum(normalizedMagnitudes: [Float](repeating: 0, count: 640),
+                                         binCount: 640)
+        XCTAssertEqual(out.count, AudioSpectrum.bandCount)
+        XCTAssertTrue(out.allSatisfy { $0 == 0 })
+    }
+
+    /// 진폭 선형 — 채널별 호출이 L/R 레벨비를 보존해야 한다(#17 회귀 가드).
+    func testScaleLinearAndChannelIndependent() {
+        let base = (0..<640).map { Float($0 + 1) / 640 }
+        let a = AudioSpectrum.spectrum(normalizedMagnitudes: base, binCount: 640)
+        let b = AudioSpectrum.spectrum(normalizedMagnitudes: base.map { $0 * 2 }, binCount: 640)
+        for i in a.indices { XCTAssertEqual(b[i], a[i] * 2, accuracy: max(1e-4, a[i] * 1e-4)) }
+        let quiet = AudioSpectrum.spectrum(normalizedMagnitudes: base.map { $0 * 0.25 }, binCount: 640)
+        XCTAssertEqual((quiet.max() ?? 0) / max(1e-9, a.max() ?? 0), 0.25, accuracy: 1e-3)
+        XCTAssertTrue(a.allSatisfy { $0 >= 0 })
+    }
+
+    /// Inf/NaN 빈은 0 으로 친다 — 원본도 지수 필드를 검사해 power 를 0 으로 만든다(`0x1400d1c62`).
+    func testNonFiniteBinsAreIgnoredRatherThanPoisoningTheBand() {
+        var mags = [Float](repeating: 0.5, count: 640)
+        mags[100] = .infinity
+        mags[200] = .nan
+        let out = AudioSpectrum.spectrum(normalizedMagnitudes: mags, binCount: 640)
+        XCTAssertTrue(out.allSatisfy { $0.isFinite }, "비유한값이 밴드로 새면 안 된다")
+        XCTAssertTrue(out.allSatisfy { $0 > 0 }, "나머지 빈은 정상적으로 밴드를 채운다")
+    }
+
+    /// 창 길이 규약 `N − N/3`, 오버랩 없음. 나머지 1/3 은 제로패딩이다.
+    func testWindowLengthFollowsTheOriginalTwoThirdsRule() {
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 1920), 1280, "원본 44.1 kHz 값")
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 2048), 1366, "우리 구성")
+        XCTAssertEqual(AudioSpectrum.windowLength(fftLength: 1), 1, "퇴화 입력에서도 0 이 아니어야 한다")
+    }
+
+    /// 퇴화 입력 방어.
+    func testDegenerateInputs() {
+        XCTAssertEqual(AudioSpectrum.spectrum(normalizedMagnitudes: []).count, AudioSpectrum.bandCount)
+        XCTAssertEqual(AudioSpectrum.spectrum(normalizedMagnitudes: [1]).count, AudioSpectrum.bandCount)
+        XCTAssertTrue(AudioSpectrum.bandOfBin(binCount: 0).isEmpty)
+        XCTAssertTrue(AudioSpectrum.tiltAmplitudeWeights(binCount: 1).count <= 1)
+        XCTAssertGreaterThanOrEqual(AudioSpectrum.binCount(fftLength: 2048, sampleRate: 0), 2)
+    }
+}
