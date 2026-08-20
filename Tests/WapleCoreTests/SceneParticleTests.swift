@@ -109,7 +109,7 @@ final class SceneParticleTests: XCTestCase {
         let particle = """
         {"emitter":[{"name":"sphererandom","rate":1}],
          "operator":[{"name":"controlpointattract","controlpoint":1,"scale":2,"threshold":10}],
-         "controlpoint":[{"id":1,"offset":"5 5 0"}],
+         "controlpoint":[{},{"offset":"5 5 0"}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """
         let pkg = ScenePackage.assemble([

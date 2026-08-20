@@ -1678,10 +1678,22 @@ public struct ParticleSystemDef: Equatable {
         }
 
         var controlPoints = Array(repeating: Vec3(x: 0, y: 0, z: 0), count: 8)
-        for case let cp as [String: Any] in (json["controlpoint"] as? [Any] ?? []) {
-            if let id = pint(cp["id"]), id >= 0, id < 8, let off = pvec3(cp["offset"]) {
-                controlPoints[id] = off
-            }
+        // **[2026-08-20] 슬롯은 `id` 가 아니라 배열 위치다.** 실물 파서는 고정 8회를 돌며
+        // (`inc r14d` / `cmp r14d, 8` @0x1401d0807–0x1401d080a) `operator[](i)`(0x140086540)로
+        // 원소를 꺼내고, 슬롯 주소를 `shl rdi, 5` + `[rdi + r13 + 0xa4]`(0x1401d0593–0x1401d05ae)
+        // 로 **인덱스 × 32** 에서 만든다. `"id"` 문자열은 이 경로에서 한 번도 참조되지 않는다.
+        // 원소가 오브젝트(태그 7)가 아니면 그 자리를 건너뛴다(`cmp byte [rax+8],7` @0x1401d053e).
+        //
+        // 종전엔 `cp["id"]` 로 슬롯을 골라, **`id` 가 없는 CP 를 통째로 버렸다**. 동봉 코퍼스는
+        // 1816 원소가 전건 `id == 배열인덱스`라 도달이 0이지만 모델이 틀렸다.
+        //
+        // 읽는 키는 offset·angles·flags·parentcontrolpoint 넷이다(0x1401d0552·0x1401d06ce·
+        // 0x1401d0561·0x1401d0573 — 뒤 둘은 uint 주입기 0x1401d8280, 기본 0). Waple 은 아직
+        // offset 만 소비한다 — 나머지 셋은 **의미 미측정**이라 파스도 하지 않는다(유령 필드를
+        // 만드느니 안 읽는 편이 낫다. `spec` 과 fixplan §2-A B5 에 남겨 뒀다).
+        for (slot, element) in (json["controlpoint"] as? [Any] ?? []).enumerated() where slot < 8 {
+            guard let cp = element as? [String: Any] else { continue }   // 비-오브젝트는 그 자리를 비운다
+            if let off = pvec3(cp["offset"]) { controlPoints[slot] = off }
         }
         // 인스턴스 CP 오버라이드(절대 대체)는 attract target 재베이크 **전에** — 재베이크 후면 attract 가
         // 프리셋 CP 를 계속 본다(실측: CP 오버라이드 51오브젝트 중 22가 attract 보유).

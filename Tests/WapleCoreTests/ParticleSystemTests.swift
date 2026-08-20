@@ -752,7 +752,7 @@ final class ParticleSystemTests: XCTestCase {
         // 감사 V04: controlpoint 키(CP id)가 controlpoint 배열의 offset 을 target 으로 소비.
         let d = ParticleSystemDef.parse(json("""
         {"operator":[{"name":"controlpointattract","controlpoint":1,"scale":-750,"threshold":64}],
-         "controlpoint":[{"id":1,"offset":"100 200 0"}],"maxcount":10}
+         "controlpoint":[{},{"offset":"100 200 0"}],"maxcount":10}
         """), material: nil)
         XCTAssertTrue(d.operators.contains(
             .controlPointAttract(scale: -750, threshold: 64, target: Vec3(x: 100, y: 200, z: 0))))
