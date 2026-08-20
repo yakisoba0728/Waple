@@ -285,7 +285,11 @@ def build(r):
             "valueDistribution": {str(k): v for k, v in r["sysFlagsValues"].most_common(12)},
             "scenesPerBit": bits,
             "consumedByWaple": ["bit1"],
-            "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2050 — (sys.def.flags & 1)",
+            # [2026-08-20] :2050 → :2183. 종전 줄번호는 무관한 `MeshUniform` 조립부를 가리켰다
+            # (`mvp: matrix_identity_float4x4, model: …`). `803523d` 가 넣은 줄번호 실재
+            # 검사는 **파일 길이 초과**만 잡으므로 2,288줄 파일의 :2050 은 통과한다 —
+            # 근거가 그럴듯한 다른 줄을 가리키는 부류라 자동 검사에 안 걸린다.
+            "consumeSite": "Sources/WapleRender/SceneRenderer3D.swift:2183 — (sys.def.flags & 1)",
             "notConsumed": ["bit2", "bit4", "그 외 상위 비트"],
             "impact": f"bit4 는 {bits.get('4', 0)}씬이 저작하는데 파스만 되고 화면에 안 쓰인다. "
                       f"bit2 는 {bits.get('2', 0)}씬.",
