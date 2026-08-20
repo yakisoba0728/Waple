@@ -540,11 +540,25 @@ public struct ParticleSimulator {
                 let d = particles[k].pos - m.target
                 let len = simd_length(d)
                 guard len > 1e-6 else { continue }   // 실물은 rsqrtps 근사라 0 에서 발산한다
-                // s: variablestrength ≠ 0 이면 clamp01(vs·dt), 0 이면 VM 2번째 인자
-                // `dt·min(1, 0.025/dt)^0.7`(0x140237724–0x14023774f). dt ≤ 0.025 면 그냥 dt 다.
+                // s: `variablestrength ≠ 0` 이면 `clamp01(vs·dt)`(0x1402419a0 `mulss xmm0,
+                // [rbp+0x2008]`= arg2 = 생 dt → 0x1401d8df0 = min(1,max(0,x))), **0 이면 상수 1.0**
+                // — 즉 반지름 `distance` 구면으로의 즉시 투영(하드 제약)이다.
+                //
+                // 종전엔 이 자리를 "VM 2번째 인자 dt·min(1,0.025/dt)^0.7" 로 적었다. 틀렸다.
+                // 분기가 같을 때 실행하는 것은 `movaps xmm11, xmm2`(base 0x14024199a ·
+                // ext 0x140241cef)인데, 그 `xmm2` 는 핸들러 인자가 아니라 **op 디스패치
+                // 프리앰블이 opcode 마다 새로 심는 스칼라 상수 1.0** 이다
+                // (`movss xmm2, [0x140492704]` @0x14023fd77, 그 뒤 `jmp rax` @0x14023fdc7 까지
+                // 재대입 없음 — 두 핸들러의 진입~분기 사이에도 xmm2 기입이 없다).
+                // `shufps xmm11,xmm11,0` 로 4레인에 편다. 호출부에서 xmm2 레지스터가 3번째 인자
+                // dtScaled 를 나르는 것과 혼동한 것이다 — dtScaled 는 프리앰블이 [rbp+0x5f0]/xmm8
+                // 로 따로 보관하고, xmm2 는 프리앰블 스크래치다.
+                //
+                // 도달: 동봉 `maintaindistancetocontrolpoint` 3건이 전부 `variablestrength: 5`라
+                // vs≠0 분기만 탄다 — 관측 회귀는 없고 키를 뺀 씬에서 갈린다.
                 let s = m.variableStrength != 0
                     ? max(0, min(1, m.variableStrength * dt))
-                    : dt * powf(min(1, 0.025 / max(dt, 1e-6)), 0.7)
+                    : 1
                 particles[k].pos += d * ((m.distance / len - 1) * s)
             }
         }

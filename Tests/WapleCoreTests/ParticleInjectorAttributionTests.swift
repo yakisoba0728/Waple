@@ -271,6 +271,36 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         XCTAssertEqual(vs, 5)
     }
 
+    /// `variablestrength` 가 **0 이면 즉시 스냅**이다 — 0x140241992 의 `ucomiss` 가 같으면
+    /// `movaps xmm11, xmm2`(base 0x14024199a · ext 0x140241cef)를 타는데, 그 `xmm2` 는 핸들러
+    /// 인자가 아니라 **op 디스패치 프리앰블이 opcode 마다 새로 심는 스칼라 상수 1.0**
+    /// (`movss xmm2, [0x140492704]` @0x14023fd77 → `jmp rax` @0x14023fdc7 까지 재대입 없음,
+    /// 두 핸들러의 진입~분기 사이에도 xmm2 기입 없음)이다. `shufps xmm11,xmm11,0` 로 편다.
+    ///
+    /// 종전엔 이 자리를 "VM 2번째 인자 dt·min(1,0.025/dt)^0.7 → 매우 느린 수렴" 으로 적었다.
+    /// 호출부에서 xmm2 레지스터가 3번째 인자 dtScaled 를 나른다는 사실과, 그 값이 핸들러 진입
+    /// 시점의 xmm2 라는 가정이 겹친 오해다 — dtScaled 는 프리앰블이 `[rbp+0x5f0]`/xmm8 에 따로
+    /// 보관한다. 두 모델은 60fps 에서 60배 차이가 난다(스냅 50 vs 99.17).
+    ///
+    /// 동봉 3건이 전부 `variablestrength: 5` 라 관측 회귀는 없다 — 키를 뺀 씬에서 갈린다.
+    func testMaintainDistanceZeroVariableStrengthSnapsImmediately() {
+        func posX(vs: Float) -> Float {
+            let def = ParticleSystemDef(
+                emitters: [.box(origin: Vec3(x: 100, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0),
+                                rate: 0, burst: 1)],
+                initializers: [.lifetimeRandom(min: 100, max: 100)],
+                operators: [.maintainDistanceToControlPoint(distance: 50, variableStrength: vs,
+                                                            target: Vec3(x: 0, y: 0, z: 0))],
+                renderer: .sprite, maxCount: 4, startTime: 0, material: nil)
+            var sim = ParticleSimulator(def: def, seed: 7)
+            return sim.step(1.0 / 60).first?.pos.x ?? .nan
+        }
+        // s = 1 → k = (50/100 − 1)·1 = −0.5 → 100 − 50 = 50. 종전 모델(s ≈ dt)이면 99.17 이다.
+        XCTAssertEqual(posX(vs: 0), 50, accuracy: 1e-3, "vs = 0 은 반지름 구면으로 즉시 투영한다")
+        // 대조군: vs = 5 → s = clamp01(5/60) = 0.08333 → 100 − 4.1667.
+        XCTAssertEqual(posX(vs: 5), 95.8333, accuracy: 1e-3, "vs ≠ 0 은 clamp01(vs·dt) 로 연성 수렴")
+    }
+
     // MARK: - controlpointattract (키 이름 정정)
 
     /// **대상은 `origin` 도 `offset` 도 아니라 컨트롤포인트다.** 런타임 핸들러에서 `offset`
