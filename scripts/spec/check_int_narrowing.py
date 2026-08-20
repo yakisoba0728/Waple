@@ -80,7 +80,13 @@ PINS = [
 # ② UInt32 → Int 는 64비트에서 **확대 변환**이라 원리적으로 트랩하지 않는다.
 # safeInt 를 태우지 않은 이유: 그 함수는 `Any?` 를 받는 JSON 경계용이고 여기는 이미 UInt32 다 —
 # 태우면 Optional 을 한 겹 더 벗기는 잡음만 는다.
-CENSUS_BASELINE = 343
+#
+# [2026-08-20] 343 → 344. 늘어난 한 자리는 `GLSLTranslator.formatComboSlots` 의 `Int(digits)` 로,
+# 바로 옆 `samplerCombos` 가 같은 자리에서 쓰는 것과 **글자 그대로 같은 변환**이다(그쪽은 이미
+# 기준선에 들어 있다). ① `digits` 는 `prefix(while: { $0.isNumber })` 결과라 숫자만이고,
+# ② `Int(String)` 은 실패 가능 이니셜라이저라 넘치면 트랩이 아니라 nil 이며 `if let` 으로 받는다.
+# 즉 좁힘이 아니라 파싱이다 — 센서스 패턴이 구분하지 못할 뿐이다.
+CENSUS_BASELINE = 344
 
 
 def swift_files():

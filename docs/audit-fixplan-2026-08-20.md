@@ -225,6 +225,71 @@ Mac 세션 몫이다.
 
 ---
 
+## 4-bis. 내가 쓴 수정이 거짓이었던 자리 — `TEXnFORMAT`
+
+이 라운드에서 **내가 작성한 미커밋 변경 하나가 두 겹으로 거짓**이었다. 감사가 겨눠야 하는 것이
+남의 코드만이 아니라는 실례라 기록해 둔다.
+
+거짓 ①: **주석은 맞는 규칙, 코드는 다른 규칙.** 주석에 "`"formatcombo":true` 가 붙은 슬롯이
+그 값을 받는다" 라고 적어 놓고, 코드는 `samplerCombos`(= `"combo"` 어노테이션)를 돌았다.
+실측: 동봉 17파일의 `formatcombo` 슬롯은 {1:12, 2:5, 4:5, 8:1} 이고 `"combo"` 를 겸한 것은
+슬롯 1 의 11건뿐이다. 정작 고치려던 `effects/refraction/shaders/effects/refract.frag:8` 에는
+`"combo"` 가 없다 — **한 번도 안 걸리는 수정**이었다. `parse` 도 통과하고 CI 도 초록이었을 것이다.
+
+거짓 ②: **전제가 틀렸다.** "`.tex` 헤더의 format 을 그대로 `TEXnFORMAT` 에 심으면 된다" 고 봤는데,
+`TexDecoder._decodeMip`(TexDecoder.swift:228-282)은 GPU 네이티브 포맷을 올리지 않고 전부 CPU 에서
+RGBA8 로 펴면서 **채널 배치를 이미 WE 셰이더의 변환 *후* 모양으로 맞춰 둔다**:
+
+    r8(9)   → (v,v,v,v)        `ConvertTexture0Format` 의 `vec4(1,1,1,.r)` 자리에 값이 온다
+    rg88(8) → (b0,b0,b0,b1)    `.rrrg` 를 **디코드가 이미 적용**한 모양
+
+그래서 `.tex` 로 온 rg88/r8 에 코드를 심으면 셰이더가 변환을 **두 번** 건다
+(`.rrrg` 재적용 → `(b0,b0,b0,b0)`, 알파 소실). **지금의 "정의 없음 = 0" 이 그 경로에선 맞는 값**이다.
+
+착지한 것: 슬롯 판정을 `GLSLTranslator.formatComboSlots`(신규)로 바꾸고, 값은 **컴파일된 `.tex` 가
+없어 소스 폼(.png)으로 해석되는 텍스처에만** 준다(`sourceFormTexFormatCode`). 코드 0 은 미정의와
+같은 값이라 아예 심지 않는다 — 파이프라인 변형 캐시 키가 안 갈린다.
+
+도달(실측, 동봉 전수): **`effects/refraction` 슬롯 1 한 곳**. lightshafts 슬롯 2 의
+`gradient_iridescent` 는 rgba8888=0 이라 무변화, waterripple/waterflow 는 `formatcombo` 자체가 없고
+노멀맵을 `.xyz*2-1` 로 직접 읽어 오늘도 정확하다. 게이트 `check_tex_format_map.py` 의 G 항목이
+이 집합을 못박는다.
+
+게이트: `scripts/spec/check_tex_format_map.py` — ①`FORMAT_*` enum ②`tex-json`↔`tex` 272쌍
+③Swift 리터럴의 삼자 정합 + D 이름유추 배반집합(`rgb888`→0) + E 디코더 정규화 존치
++ F 슬롯 판정 기준 + G 도달 집합.
+
+### 남은 것 (측정은 끝났고 처방이 없다)
+
+· **rg88 `.tex` 노멀맵의 x/y 뒤바뀜.** Waple 의 `(b0,b0,b0,b1)` 배치에서 `wy` 분기는 (b1,b0) 을
+  읽는다 — WE 네이티브 `rg` 분기의 (b0,b1) 과 **전치**다. 어느 `TEXnFORMAT` 값으로도 못 고친다
+  (`rg` 는 (b0,b0) 로 더 나쁘다). 실측 도달: 동봉 0건 · `defaultprojects` 0건(거기 노멀맵 10건은
+  전부 DXT5). `smoke2normal.tex`(format 8) 는 어느 머티리얼도 안 묶는다. 다만
+  `shaders/declarations.json:87-92` 가 노멀맵 임포트 **에디터 기본값**을 `rg88n` 으로 두므로
+  워크샵 노출은 **미측정**이다. 손대는 순간 파티클/마스크 경로가 같이 흔들리므로 처방 전에
+  워크샵 코퍼스 측정이 먼저다.
+· **손번역 MSL 경로는 이미 맞다.** `mf_normal`/`mf_refract`/`pf_refract`/`f_refract` 는
+  `normalMapFormatCode`(SceneRendererResources.swift:1768)로 3분기를 명시 구현하고 있고,
+  `(b0,b0,b0,b1)` 전제에서 채널 대수가 WE 와 일치한다. 이번 수정은 **번역 GLSL 이펙트 패스**
+  경로만 건드린다 — 겹치지 않는다.
+· **`genericimage4.frag:112`** 는 노멀을 `.xy*2-1` 로 분기 없이 읽는다(어노테이션은 `rg88`).
+  Waple 배치에선 (b0,b0) 이라 y 가 소실된다. 동봉·기본프로젝트 도달 0건, 워크샵 미측정.
+
+## 4-ter. 이번 라운드 에이전트 보고 — 재확인 결과
+
+· **`sprite` 오브젝트 종류 — 참, 도달 1건.** WE 오브젝트 팩토리(`0x14018ff60`)의 9번째 분기가
+  맞고(`0x1401902d7`, 전용 `0x270` 클래스), Waple 의 `SceneDocument.swift:1068-1075` 에는 `else`
+  가 없어 **조용히 버린다**. 실측 도달: 설치본 `ricepod.json` 의 `sun` **1건**, 동봉 0건.
+  (다른 2건은 `"sprite": null` 이라 WE 도 Waple 도 똑같이 거른다.) 심각도 낮음 — 로그부터.
+· **JS shim 적재 순서 — 절반 거짓.** WE 의 실제 순서가 `baseclasses.js` **마지막**인 것은 맞다
+  (`0x18164a3c4`, 그 뒤 사이트들이 `_Vec2.._Mat4` 를 회수하므로 인과로도 확정). 그러나
+  **Waple 은 `baseclasses.js` 를 아예 적재하지 않는다** — `Sources/` 어디에도 로더가 없고 리소스로만
+  동봉된다. 두 시나리오 모두 오늘은 도달 불가다. 게다가 `shared.camera` 는 방향이 반대였다:
+  WE 의 `shared` 는 `baseclasses.js:1457` 의 `{}` 라 **"잃는 쪽"이 곧 WE 동작**이고, Waple 의
+  `TextScriptEngine.swift:2413` 씨앗이 이탈이다. 도달: 동봉 171씬 0건 · 설치본 184씬 0건.
+  로더를 언젠가 배선한다면 그때는 shim 을 **먼저** 올려야 한다(`createScriptProperties` 의
+  `_config` 키 회귀 + 상태 없는 `MediaPlaybackEvent` 를 피하려면 — WE 순서와 의도적으로 다르다).
+
 ## 5. 방법론 — 이번 라운드가 다시 확인한 함정
 
 1. **`.pdata` 조각 ≠ 함수.** 인접 병합은 과병합한다. `UNW_FLAG_CHAININFO` 로 primary 에 귀속하라.
