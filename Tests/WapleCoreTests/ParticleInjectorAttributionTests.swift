@@ -373,7 +373,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     /// 동봉 14인스턴스는 전건 CP 가 원점이라 관측이 안 바뀌지만, CP 를 옮긴 씬에서 갈린다.
     func testVortexCenterComesFromControlPointPlusOffset() {
         let d = ParticleSystemDef.parse(json("""
-        {"controlpoint":[{"id":0,"offset":"10 0 0"},{"id":2,"offset":"0 40 0"}],
+        {"controlpoint":[{"offset":"10 0 0"},{},{"offset":"0 40 0"}],
          "operator":[{"name":"vortex","controlpoint":2,"offset":"1 2 3"}],"maxcount":10}
         """), material: nil)
         guard case let .vortex(_, _, _, _, _, offset, _, _, _) = d.operators[0] else {
@@ -385,7 +385,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     /// vortex_v2 는 **CP 위치 그대로**다 — offset 키를 읽지 않으므로 CP 만 남는다.
     func testVortexV2CenterIsControlPointOnly() {
         let d = ParticleSystemDef.parse(json("""
-        {"controlpoint":[{"id":1,"offset":"0 0 7"}],
+        {"controlpoint":[{},{"offset":"0 0 7"}],
          "operator":[{"name":"vortex_v2","controlpoint":1,"offset":"99 99 99"}],"maxcount":10}
         """), material: nil)
         guard case let .vortex(_, _, _, _, _, offset, _, _, _) = d.operators[0] else {
