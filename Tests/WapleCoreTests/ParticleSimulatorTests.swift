@@ -279,7 +279,8 @@ final class ParticleSimulatorTests: XCTestCase {
     func testTrailHistoryReflectsOscillatePositionOffset() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
-            // F832: freq 단위 = 수명당 진동 횟수 — lifetime 2, 30스텝(age1)이면 n 0..0.5 로 반주기 커버.
+            // freq 는 rad/s 다(F832 반증 — OscillateFrequencyUnitTests 참조). f=1 이면 30스텝
+            // (age 0..1s)에서 θ 가 0..1 rad 을 훑어 y 오프셋이 0..42 로 벌어진다.
             initializers: [.lifetimeRandom(min: 2, max: 2),
                            .velocityRandom(min: Vec3(x: 0, y: 0, z: 0), max: Vec3(x: 0, y: 0, z: 0))],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
@@ -297,23 +298,29 @@ final class ParticleSimulatorTests: XCTestCase {
         XCTAssertEqual(p.history.last!.y, p.pos.y, accuracy: 1e-3)
     }
 
-    func testTrailHistorySpawnSeedIncludesOscillatePositionPhaseOffset() {
-        // freq=0 → sin(phase) 만 남아 age 에 무관하게 상수 — 스폰 시드(age=0)와 스텝 기록 양쪽이
-        // 동일하게 위상 오프셋을 반영하는지 age 타이밍 없이 격리 검증.
+    /// **[2026-08-20 F832 반증에 맞춰 전제 교체]** 종전 이 테스트는 `freq=0` 으로 두고
+    /// "`sin(phase)` 만 남아 상수 오프셋" 이 스폰 시드와 스텝 기록 양쪽에 실리는지 봤다. 그 전제가
+    /// 죽었다 — 실물 오프셋은 `scale·(sin θ(t) − sin θ(0))` 이라 **스폰에서 정확히 0** 이고,
+    /// `freq=0` 이면 θ 가 상수라 오프셋이 항상 0 이다(위상이 무엇이든).
+    ///
+    /// 지키려던 성질(F177: 스폰 시드와 스텝 기록이 **같은 규약**으로 오프셋을 반영한다)은 그대로
+    /// 유효하므로, 판정만 "둘 다 오프셋 0" 과 "이후 샘플은 진동을 따라간다" 로 바꾼다.
+    func testTrailHistorySpawnSeedUsesSameOscillateConventionAsSteps() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
             initializers: [.lifetimeRandom(min: 100, max: 100)],
-            operators: [.oscillatePosition(frequencyMin: 0, frequencyMax: 0, scaleMin: 20, scaleMax: 20,
-                                           phaseMin: 0.25, phaseMax: 0.25, mask: Vec3(x: 0, y: 1, z: 0))],
+            operators: [.oscillatePosition(frequencyMin: 1, frequencyMax: 1, scaleMin: 20, scaleMax: 20,
+                                           phaseMin: .pi / 2, phaseMax: .pi / 2, mask: Vec3(x: 0, y: 1, z: 0))],
             renderer: .rope(subdivision: 0), maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 1)
-        let ps = sim.step(1.0 / 30.0)
-        let p = ps[0]
+        var p = sim.step(1.0 / 30.0)[0]
         XCTAssertEqual(p.history.count, 2, "스폰 시드 + 1스텝 기록")
-        for sample in p.history {
-            // scale 20 × sin(0.25·2π)=sin(π/2)=1 → offset 20.
-            XCTAssertEqual(sample.y, 20, accuracy: 0.5, "스폰 시드/스텝 기록 모두 위상 오프셋 반영(F177)")
-        }
+        // 위상이 0 이 아닌데도 스폰 시드는 0 — 텔레스코핑의 직접 증거다.
+        XCTAssertEqual(p.history[0].y, 0, accuracy: 1e-4, "스폰 시드 오프셋은 0")
+        XCTAssertEqual(p.history.last!.y, p.pos.y, accuracy: 1e-3, "마지막 기록은 스냅샷과 일치")
+        // 충분히 흐른 뒤에는 실제로 흔들린다(단언이 공허해지지 않게).
+        for _ in 0..<60 { p = sim.step(1.0 / 30.0)[0] }
+        XCTAssertGreaterThan(abs(p.pos.y), 5, "이후에는 진동이 보여야 한다")
     }
 
     /// **[2026-08-20 픽스처 정정]** 종전엔 `threshold: 0` 이었는데 실물은 그 경우
@@ -696,13 +703,14 @@ final class ParticleSimulatorTests: XCTestCase {
     func testOscillateAlphaLerpsBetweenScaleMinAndMax() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
-            initializers: [.lifetimeRandom(min: 2, max: 2), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            initializers: [.lifetimeRandom(min: 20, max: 20), .alphaRandom(min: 1, max: 1, exponent: 1)],
             operators: [.oscillateAlpha(frequencyMin: 1, frequencyMax: 1, scaleMin: 0.2, scaleMax: 0.9)],
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 3)
         var minA: Float = 1, maxA: Float = 0
-        // F832: freq 1 = 수명당 1주기 — lifetime 2, 1.5s(n 0..0.75, phase 0)면 peak(n=0.25)/trough(n=0.75) 커버.
-        for _ in 0..<150 {
+        // freq 는 rad/s 다(F832 반증). f=1 이면 마루가 age=π/2≈1.57s, 골이 3π/2≈4.71s 이므로
+        // 극값을 둘 다 훑으려면 6s 가 필요하다(종전 1.5s 는 마루 직전까지밖에 못 갔다).
+        for _ in 0..<600 {
             let ps = sim.step(0.01)
             if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
         }
@@ -715,12 +723,12 @@ final class ParticleSimulatorTests: XCTestCase {
     func testOscillateAlphaScaleOmittedDefaultsStillOscillate() {
         let def = ParticleSystemDef(
             emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
-            initializers: [.lifetimeRandom(min: 2, max: 2), .alphaRandom(min: 1, max: 1, exponent: 1)],
+            initializers: [.lifetimeRandom(min: 20, max: 20), .alphaRandom(min: 1, max: 1, exponent: 1)],
             operators: [.oscillateAlpha(frequencyMin: 1, frequencyMax: 1, scaleMin: 0, scaleMax: 1)],
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 4)
         var minA: Float = 1, maxA: Float = 0
-        for _ in 0..<150 {   // F832: lifetime 2·freq 1 — n 0..0.75 스윕으로 극값 커버(상기 동일)
+        for _ in 0..<600 {   // 6s 스윕 — 마루 π/2·골 3π/2 를 모두 지난다(상기 동일)
             let ps = sim.step(0.01)
             if let a = ps.first?.alpha { minA = min(minA, a); maxA = max(maxA, a) }
         }

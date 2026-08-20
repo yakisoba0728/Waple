@@ -26,14 +26,15 @@ final class ParticleStageATests: XCTestCase {
     // MARK: - oscillatesize
 
     func testOscillateSize_peaksAndTroughs() {
-        // F832: freq 단위 = 수명당 진동 횟수 — freq 1, lifetime 4 → age1(n=0.25) peak, age3(n=0.75) trough.
+        // freq 는 **rad/s** 다(F832 반증 — OscillateFrequencyUnitTests 참조). f=1 이면 마루가
+        // age=π/2, 골이 age=3π/2 다. 종전엔 "수명당 횟수" 로 보고 lifetime 4 · age 1·3 을 썼는데,
+        // 그 시각은 새 규약에서 아무 극값도 아니다(θ=1 rad → factor 1.42).
         let op = ParticleOperator.oscillateSize(frequencyMin: 1, frequencyMax: 1,
                                                 scaleMin: 0.5, scaleMax: 1.5, phaseMin: 0, phaseMax: 0)
-        var sim = ParticleSimulator(def: makeDef(lifetime: 4, operators: [op]), seed: 11)
-        let a = sim.step(1.0)   // n=0.25: sin(π/2)=1 → factor=1.5
+        var sim = ParticleSimulator(def: makeDef(lifetime: 20, operators: [op]), seed: 11)
+        let a = sim.step(.pi / 2)   // sin(π/2)=1 → factor=1.5
         XCTAssertEqual(a[0].size, 7.5, accuracy: 0.01)
-        _ = sim.step(1.0)
-        let c = sim.step(1.0)   // n=0.75: sin(3π/2)=-1 → factor=0.5
+        let c = sim.step(.pi)       // age=3π/2 → sin=−1 → factor=0.5
         XCTAssertEqual(c[0].size, 2.5, accuracy: 0.01)
     }
 
