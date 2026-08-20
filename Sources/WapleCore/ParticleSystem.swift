@@ -143,7 +143,7 @@ public enum ParticleOperator: Equatable {
     /// **[2026-08-20 미해결]** `deleteThreshold` 를 Bool 로 두고 있으나 실물은 **실수 거리**다:
     /// 주입이 jsoncpp type tag 3(`mov byte [rbp-0x50],3` @0x1401be1a9, `cvtps2pd` @0x1401be1ca)이고
     /// 읽기도 `asFloat`(0x1401ccbaa) 직후 **`mulss xmm6,xmm6`**(0x1401ccbef)로 제곱해 레코드에 넣는다.
-    /// 부재 기본은 ortho **15.0** / 원근 0.5 — 동봉 35인스턴스가 **전건 이 키를 생략**하므로
+    /// 부재 기본은 ortho **15.0** / 원근 0.5 — 동봉 `controlpointattract`(all 34 · unique 29)가 **전건 이 키를 생략**하므로
     /// 기본값이 항상 발화하는 자리다. 다만 그 제곱값이 어느 방향 비교에 쓰이는지, `flags`(기본 **2**,
     /// 유일하게 magic_vortex_orb 만 `0` 으로 끈다)가 게이트인지가 아직 미측정이라 **타입을 바꾸지
     /// 않았다**. 측정 없이 Bool→Float 로 바꾸면 전 인스턴스에서 파티클을 지우기 시작한다.
@@ -152,7 +152,8 @@ public enum ParticleOperator: Equatable {
     ///   · bit0(1) — **근접 삭제 활성화**(0x14024193d). 기본값 2 에는 없으므로 **기본은 꺼짐**.
     ///   · bit1(2) — **오버슛 클램프**(0x140241750 → 0x1402418dc–0x1402418e4):
     ///     `if (dist < step) step = dist` — 이번 스텝의 속도 증분을 CP 까지의 거리로 상한.
-    /// 동봉 35인스턴스 중 `flags` 를 적는 것은 `magic_vortex_orb`(0) 하나뿐이고, 그것이 끄는 건
+    /// 동봉 `controlpointattract`(all 34 · unique 29) 중 `flags` 를 적는 것은
+    /// `magic_vortex_orb`(0) 하나뿐이고, 그것이 끄는 건
     /// **오버슛 클램프 하나**다(bit0 은 기본값에서도 이미 꺼져 있다).
     case controlPointAttract(scale: Float, threshold: Float, target: Vec3, deleteThreshold: Bool = false,
                              flags: Int = 2)
@@ -814,7 +815,7 @@ public struct ParticleSystemDef: Equatable {
                 // 즉 WE 의 중립은 불투명(1)이 아니라 거의 투명(0.05)이다.
                 //
                 // 옛 주석이 든 반증은 여전히 유효하되 결론이 달라진다: `wind-blur.json {"min":0.8}`
-                // 은 min 이 명시돼 있어 영향 없고, min/max 둘 다 부재인 것은 동봉 34건 중 1건뿐이다.
+                // 은 min 이 명시돼 있어 영향 없고, min/max 둘 다 부재인 것은 동봉 `alpharandom`(all 53 · unique 35) 중 **1건**뿐이다.
                 // 그 1건이 [0.05,1] 로 바뀐다 — [1,1] 고정보다 원본에 맞다.
                 // (032b66d 의 ??0 은 여전히 틀렸다. 0.05 는 0 이 아니다.)
                 inits.append(.alphaRandom(min: injected(i, "min", 0.05), max: injected(i, "max", 1),
@@ -834,7 +835,8 @@ public struct ParticleSystemDef: Equatable {
             case "angularvelocityrandom":
             // 주입기 0x1401bb9c0: min = "0 0 -5"(0x1401bba1e, 길이 6) · max = "0 0 5"(0x1401bbafe,
             // 길이 5) · exponent = 1.0(0x1401bbbe0). 종전 (0,0,0)/(0,0,0)은 **회전이 아예 없다**.
-            // 동봉 25건 중 4건이 min·max 를 둘 다 생략한다 — 그 4건이 안 돌고 있었다.
+            // 동봉 `angularvelocityrandom`(all 46 · unique 26) 중 min·max 를 둘 다 생략한 것이
+            // **all 8 · unique 4** — 그것들이 안 돌고 있었다.
                 inits.append(.angularVelocityRandom(min: injectedVec3(i, "min", Vec3(x: 0, y: 0, z: -5)),
                                                     max: injectedVec3(i, "max", Vec3(x: 0, y: 0, z: 5)),
                                                     exponent: pexponent(i["exponent"]) ?? 1))
@@ -927,6 +929,13 @@ public struct ParticleSystemDef: Equatable {
     /// (controlpointattract 0x1401ccc65 → 0x1401ccd01 · maintaindistancetocontrolpoint
     /// 0x1401cce37·0x1401cce9c). 비교가 **부호 없는** `cmovb`/`jae` 라서 음수도 7 로 간다 —
     /// `min(max(cp,0),7)` 로 두면 음수가 0 이 되어 갈린다.
+    /// **도수 인용 규약.** 아래 주석들이 "동봉 N건" 을 인용할 때는 반드시 범위를 밝힌다 —
+    /// `all`(파일 전수, 프리뷰 사본 포함) 또는 `unique`(파일 내용 sha256 중복 제거).
+    /// 동봉 트리에는 프리셋 원본과 **바이트 동일한 프리뷰 사본**이 섞여 있어 그냥 세면 거의
+    /// 두 배가 된다. 범위 없이 쓴 숫자들이 실제로 서로 어긋났다(`controlpointattract` 를
+    /// "35인스턴스" 라고 적었는데 all 34 · unique 29 로 **어느 쪽도 아니었다**).
+    /// 정본은 `spec/assets/particle-corpus.json`(생성기 `measure_particle_corpus.py`)이고
+    /// `check_particle_corpus_census.py` 가 자산과의 일치를 CI 에서 강제한다.
     private static func clampControlPoint(_ cp: Int) -> Int {
         (cp < 0 || cp >= 7) ? 7 : cp
     }
@@ -963,10 +972,20 @@ public struct ParticleSystemDef: Equatable {
                 // `movabs rbp, 0x3fe0000000000000`(= 0.5, 0x1401bce71) 을 심는다 — `Json::Value::find`
                 // (0x140087490) 가 null 을 낼 때만이다.
                 //
-                // 이게 이번 라운드에서 도달이 가장 큰 자리다: 동봉 `alphafade` 177건 중 **97건이
-                // `fadeouttime` 을 생략**하고 23건이 `fadeintime` 을 생략한다. fadeOut 0 은
-                // `fadeFactor` 에서 페이드를 통째로 끄므로, 그 97건은 수명 끝에 **팝** 하고 사라졌다
-                // — WE 는 수명의 마지막 50% 에 걸쳐 서서히 사라진다.
+                // 상수 확인(재검증 2026-08-20): `movabs rbp, 0x3fe0000000000000`(0x1401bce71)
+                // = f64 **0.5** 하나를 `fadeintime`·`fadeouttime` **양쪽에 재사용**한다.
+                // 각 키 앞의 `find` → `test rax,rax` → `jne` 가 키가 있으면 주입을 건너뛴다.
+                //
+                // 이게 이번 라운드에서 도달이 가장 큰 자리다. **[2026-08-20 범위 명시]** 종전
+                // "177건 중 97건" 은 범위 표기가 없었다 — 동봉 트리를 **내용 해시로 중복 제거**한
+                // 값이다(프리뷰 사본이 원본과 바이트 동일이라 그렇게 세지 않으면 두 배로 뛴다).
+                // 실측을 다시 하면:
+                //   · 동봉 트리 전체(사본 포함)   250건 — fadeouttime 부재 138 · fadeintime 부재 29
+                //   · 내용 해시 중복 제거          178건 — fadeouttime 부재  94 · fadeintime 부재 20
+                // 어느 범위로 보든 **fadeouttime 부재가 절반을 넘는다**는 것이 요지다.
+                //
+                // fadeOut 0 은 `fadeFactor` 에서 페이드를 통째로 끄므로, 그 인스턴스들은 수명
+                // 끝에 **팝** 하고 사라졌다 — WE 는 수명의 마지막 50% 에 걸쳐 서서히 사라진다.
                 ops.append(.alphaFade(fadeInTime: injected(o, "fadeintime", 0.5),
                                       fadeOutTime: injected(o, "fadeouttime", 0.5)))
             case "sizechange":
@@ -995,7 +1014,8 @@ public struct ParticleSystemDef: Equatable {
                 // scalemax = 1.0(0x1401bdb85, `movsd` @0x140492778) 을 심는다. 즉 fmax 는 fmin 을
                 // 승계하지 않는다 — 위 "역범위 방지" 주석의 승계는 이제 불필요하다(둘 다 상수라
                 // 역범위가 생기지 않는다). frequency 0 은 sin 을 상수로 만들어 연산자를 무력화하므로
-                // 동봉 26건 중 frequencymin 부재 3건·frequencymax 부재 2건이 죽어 있었다.
+                // 동봉 `oscillatealpha`(all 36 · unique 24) 중 frequencymin 부재 all 6·unique 3,
+                // frequencymax 부재 all 4·unique 2 가 죽어 있었다.
                 let smin = pfloat(o["scalemin"]) ?? 0
                 let fmin = injected(o, "frequencymin", 1)
                 ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 10),
@@ -1024,7 +1044,7 @@ public struct ParticleSystemDef: Equatable {
                 // 포인터로 그쪽은 `[r8+0x50]`(= deletethreshold²)만 읽는다.
                 //
                 // 그래서 (a) `controlpoint` 부재 시에도 **CP0 을 바인딩**하고(주입 기본 0),
-                // (b) `offset` 을 target 으로 쓰지 않는다. 동봉 35인스턴스 중 cp 미지정 9건은
+                // (b) `offset` 을 target 으로 쓰지 않는다. 동봉 `controlpointattract`(all 34 · unique 29) 중 cp 미지정 all 9·unique 8 은
                 // 전건 CP0 이 원점이라 관측은 안 바뀌지만, CP 를 옮긴 씬에서 갈린다.
                 //
                 // 클램프는 **부호 없는** `cmp eax,7 / jae → mov eax,7`(0x1401ccc65 → 0x1401ccd01)
@@ -1060,7 +1080,7 @@ public struct ParticleSystemDef: Equatable {
                 // 중심은 `offset` 이 아니라 **CP 위치 + offset** 이다(실측 0x1402431be–0x14024322c:
                 // `[r14+0xc0]` = cp 인덱스 → stride 0xd0 배열 `[sys+0x400]` → translation 을 splat 한 뒤
                 // `addps` 로 offset 세 성분을 더한다). 아래 CP 재베이크에서 합쳐 굽는다 —
-                // 동봉 9인스턴스는 전건 CP0 = 원점이라 관측은 안 바뀌지만, CP 를 옮긴 씬에서 갈린다.
+                // 동봉 `vortex`(all 9 · unique 7)는 전건 CP0 = 원점이라 관측은 안 바뀌지만, CP 를 옮긴 씬에서 갈린다.
                 attractCPIds.append((op: ops.count, cp: clampControlPoint(pint(o["controlpoint"]) ?? 0)))
                 // 주입기 0x1401bef00 .. 0x1401bf2c6 (`.pdata` 3조각 — 언와인드 체인으로 병합해야
                 // 한다. 조각 하나만 읽으면 `speedinner` 의 상수가 **3번째 조각 첫 명령**
@@ -1159,7 +1179,8 @@ public struct ParticleSystemDef: Equatable {
                 // 주입기 0x1401bdbf0: frequencymin = 1.0(0x1401bdc59) · frequencymax = 10.0
                 // (0x1401bdd0f) · scalemin = **0.8**(0x1401bddc5) · scalemax = **1.2**
                 // (0x1401bde6f, `movsd` @0x140492790). 종전 (1, 승계)는 진폭 0(= 무진동)이라
-                // 동봉 5건 중 scalemin 부재 1건·scalemax 부재 1건·frequency 부재 2~3건이 죽어
+                // 동봉 `oscillatesize`(all 8 · unique 5) 중 scalemin 부재 all 2·unique 1,
+                // scalemax 부재 all 2·unique 1 이 죽어
                 // 있었다. WE 는 크기를 ±20% 로 맥동시킨다.
                 let smin = injected(o, "scalemin", 0.8)
                 let fmin = injected(o, "frequencymin", 1)
@@ -1218,10 +1239,10 @@ public struct ParticleSystemDef: Equatable {
                 }
             case "capvelocity":
                 // G-C2-01. 주입기 0x1401bfab0 이 `maxspeed` 부재에 100 을 심는다(2D 경로 상수
-                // 0x1404928f8; 월드 단위 경로는 1.0). 동봉 3인스턴스는 전건 maxspeed 명시라
+                // 0x1404928f8; 월드 단위 경로는 1.0). 동봉 `capvelocity`(all 3 · unique 3)는 전건 maxspeed 명시라
                 // 이 기본값이 실제로 도달하진 않지만 기록을 원본에 맞춘다.
                 //
-                // blendinstart/blendinend(동봉 3건 전건 보유)는 **여기서 소비하지 않는다** — 실물은
+                // blendinstart/blendinend(동봉 `capvelocity` 3건 전건 보유)는 **여기서 소비하지 않는다** — 실물은
                 // 블렌드 창이 유의미할 때만 opcode 를 0x12→0x26 으로 올려 가중 핸들러
                 // (0x140244790)를 타고, 그 가중치는 `w=clamp01((f−inStart)·invIn)·clamp01((outStart−f)·invOut)`
                 // (0x14022a530) 로 `s = 1 + w·(s₀−1)` 를 만든다. 오퍼레이터 공통 블렌딩은 G-C2-03 의

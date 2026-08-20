@@ -1,0 +1,498 @@
+{
+ "weVersion": "2.8.42",
+ "generatedBy": "scripts/spec/measure_particle_corpus.py",
+ "note": "주석에 도수를 쓸 때는 반드시 all/unique 중 어느 범위인지 밝히고 이 정본을 근거로 삼을 것. 범위 없는 숫자가 서로 어긋난 사고가 실제로 있었다.",
+ "entries": [
+  {
+   "id": "particleCorpus.operator",
+   "value": {
+    "alphafade": {
+     "instances": {
+      "all": 250,
+      "unique": 178
+     },
+     "keyAbsent": {
+      "fadeintime": {
+       "all": 29,
+       "unique": 20
+      },
+      "fadeouttime": {
+       "all": 138,
+       "unique": 94
+      }
+     }
+    },
+    "boids": {
+     "instances": {
+      "all": 5,
+      "unique": 3
+     },
+     "keyAbsent": {
+      "separationthreshold": {
+       "all": 5,
+       "unique": 3
+      },
+      "maxspeed": {
+       "all": 5,
+       "unique": 3
+      },
+      "flags": {
+       "all": 1,
+       "unique": 1
+      }
+     }
+    },
+    "capvelocity": {
+     "instances": {
+      "all": 3,
+      "unique": 3
+     },
+     "keyAbsent": {
+      "maxspeed": {
+       "all": 0,
+       "unique": 0
+      },
+      "blendinstart": {
+       "all": 0,
+       "unique": 0
+      },
+      "blendinend": {
+       "all": 0,
+       "unique": 0
+      }
+     }
+    },
+    "controlpointattract": {
+     "instances": {
+      "all": 34,
+      "unique": 29
+     },
+     "keyAbsent": {
+      "controlpoint": {
+       "all": 9,
+       "unique": 8
+      },
+      "flags": {
+       "all": 33,
+       "unique": 28
+      },
+      "deletethreshold": {
+       "all": 34,
+       "unique": 29
+      },
+      "threshold": {
+       "all": 2,
+       "unique": 1
+      },
+      "scale": {
+       "all": 0,
+       "unique": 0
+      }
+     }
+    },
+    "maintaindistancetocontrolpoint": {
+     "instances": {
+      "all": 3,
+      "unique": 3
+     },
+     "keyAbsent": {
+      "distance": {
+       "all": 3,
+       "unique": 3
+      },
+      "variablestrength": {
+       "all": 0,
+       "unique": 0
+      },
+      "controlpoint": {
+       "all": 3,
+       "unique": 3
+      }
+     }
+    },
+    "oscillatealpha": {
+     "instances": {
+      "all": 36,
+      "unique": 24
+     },
+     "keyAbsent": {
+      "frequencymin": {
+       "all": 6,
+       "unique": 3
+      },
+      "frequencymax": {
+       "all": 4,
+       "unique": 2
+      },
+      "scalemin": {
+       "all": 3,
+       "unique": 2
+      },
+      "scalemax": {
+       "all": 34,
+       "unique": 22
+      }
+     }
+    },
+    "oscillateposition": {
+     "instances": {
+      "all": 17,
+      "unique": 15
+     },
+     "keyAbsent": {
+      "scalemin": {
+       "all": 2,
+       "unique": 2
+      },
+      "scalemax": {
+       "all": 2,
+       "unique": 1
+      },
+      "mask": {
+       "all": 9,
+       "unique": 8
+      }
+     }
+    },
+    "oscillatesize": {
+     "instances": {
+      "all": 8,
+      "unique": 5
+     },
+     "keyAbsent": {
+      "frequencymin": {
+       "all": 4,
+       "unique": 2
+      },
+      "frequencymax": {
+       "all": 5,
+       "unique": 3
+      },
+      "scalemin": {
+       "all": 2,
+       "unique": 1
+      },
+      "scalemax": {
+       "all": 2,
+       "unique": 1
+      }
+     }
+    },
+    "reducemovementnearcontrolpoint": {
+     "instances": {
+      "all": 9,
+      "unique": 9
+     },
+     "keyAbsent": {
+      "distanceinner": {
+       "all": 0,
+       "unique": 0
+      },
+      "distanceouter": {
+       "all": 0,
+       "unique": 0
+      },
+      "controlpoint": {
+       "all": 4,
+       "unique": 4
+      }
+     }
+    },
+    "remapvalue": {
+     "instances": {
+      "all": 12,
+      "unique": 10
+     },
+     "keyAbsent": {
+      "blendinstart": {
+       "all": 10,
+       "unique": 8
+      },
+      "blendoutstart": {
+       "all": 12,
+       "unique": 10
+      }
+     }
+    },
+    "turbulence": {
+     "instances": {
+      "all": 22,
+      "unique": 18
+     },
+     "keyAbsent": {
+      "scale": {
+       "all": 9,
+       "unique": 8
+      },
+      "timescale": {
+       "all": 9,
+       "unique": 6
+      },
+      "mask": {
+       "all": 13,
+       "unique": 11
+      },
+      "speedmin": {
+       "all": 4,
+       "unique": 2
+      },
+      "speedmax": {
+       "all": 1,
+       "unique": 1
+      }
+     }
+    },
+    "vortex": {
+     "instances": {
+      "all": 9,
+      "unique": 7
+     },
+     "keyAbsent": {
+      "distanceinner": {
+       "all": 2,
+       "unique": 2
+      },
+      "distanceouter": {
+       "all": 2,
+       "unique": 2
+      },
+      "speedinner": {
+       "all": 1,
+       "unique": 1
+      },
+      "speedouter": {
+       "all": 4,
+       "unique": 3
+      },
+      "axis": {
+       "all": 6,
+       "unique": 5
+      },
+      "flags": {
+       "all": 6,
+       "unique": 5
+      }
+     }
+    },
+    "vortex_v2": {
+     "instances": {
+      "all": 5,
+      "unique": 5
+     },
+     "keyAbsent": {
+      "ringradius": {
+       "all": 3,
+       "unique": 3
+      },
+      "ringpullforce": {
+       "all": 5,
+       "unique": 5
+      },
+      "centerforce": {
+       "all": 5,
+       "unique": 5
+      },
+      "flags": {
+       "all": 1,
+       "unique": 1
+      },
+      "speedouter": {
+       "all": 1,
+       "unique": 1
+      }
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/**/*.json",
+     "note": "all = 파일 전수(프리뷰 사본 포함) · unique = 파일 내용 sha256 중복 제거"
+    }
+   ]
+  },
+  {
+   "id": "particleCorpus.initializer",
+   "value": {
+    "alpharandom": {
+     "instances": {
+      "all": 53,
+      "unique": 35
+     },
+     "keyAbsent": {
+      "min": {
+       "all": 1,
+       "unique": 1
+      },
+      "max": {
+       "all": 1,
+       "unique": 1
+      }
+     }
+    },
+    "angularvelocityrandom": {
+     "instances": {
+      "all": 46,
+      "unique": 26
+     },
+     "keyAbsent": {
+      "min": {
+       "all": 8,
+       "unique": 4
+      },
+      "max": {
+       "all": 8,
+       "unique": 4
+      }
+     }
+    },
+    "hsvcolorrandom": {
+     "instances": {
+      "all": 5,
+      "unique": 4
+     },
+     "keyAbsent": {
+      "saturationmin": {
+       "all": 2,
+       "unique": 2
+      },
+      "saturationmax": {
+       "all": 4,
+       "unique": 3
+      },
+      "huesteps": {
+       "all": 3,
+       "unique": 2
+      }
+     }
+    },
+    "inheritcontrolpointvelocity": {
+     "instances": {
+      "all": 1,
+      "unique": 1
+     },
+     "keyAbsent": {
+      "min": {
+       "all": 0,
+       "unique": 0
+      },
+      "max": {
+       "all": 0,
+       "unique": 0
+      },
+      "controlpoint": {
+       "all": 0,
+       "unique": 0
+      }
+     }
+    },
+    "lifetimerandom": {
+     "instances": {
+      "all": 289,
+      "unique": 209
+     },
+     "keyAbsent": {
+      "min": {
+       "all": 0,
+       "unique": 0
+      },
+      "max": {
+       "all": 0,
+       "unique": 0
+      }
+     }
+    },
+    "turbulentvelocityrandom": {
+     "instances": {
+      "all": 49,
+      "unique": 31
+     },
+     "keyAbsent": {
+      "speedmin": {
+       "all": 11,
+       "unique": 7
+      },
+      "speedmax": {
+       "all": 9,
+       "unique": 5
+      },
+      "scale": {
+       "all": 1,
+       "unique": 1
+      }
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/**/*.json",
+     "note": "all = 파일 전수(프리뷰 사본 포함) · unique = 파일 내용 sha256 중복 제거"
+    }
+   ]
+  },
+  {
+   "id": "particleCorpus.emitter",
+   "value": {
+    "boxrandom": {
+     "instances": {
+      "all": 25,
+      "unique": 19
+     },
+     "keyAbsent": {
+      "distancemax": {
+       "all": 2,
+       "unique": 2
+      },
+      "rate": {
+       "all": 2,
+       "unique": 2
+      }
+     }
+    },
+    "layerimage": {
+     "instances": {
+      "all": 1,
+      "unique": 1
+     },
+     "keyAbsent": {
+      "speed": {
+       "all": 1,
+       "unique": 1
+      },
+      "rate": {
+       "all": 0,
+       "unique": 0
+      }
+     }
+    },
+    "sphererandom": {
+     "instances": {
+      "all": 268,
+      "unique": 192
+     },
+     "keyAbsent": {
+      "distancemax": {
+       "all": 1,
+       "unique": 1
+      },
+      "rate": {
+       "all": 2,
+       "unique": 1
+      }
+     }
+    }
+   },
+   "status": "확정",
+   "evidence": [
+    {
+     "kind": "asset",
+     "ref": "Sources/WapleRender/Resources/WEAssets/**/*.json",
+     "note": "all = 파일 전수(프리뷰 사본 포함) · unique = 파일 내용 sha256 중복 제거"
+    }
+   ]
+  }
+ ]
+}
