@@ -19,11 +19,21 @@ public struct EffectManifest: Equatable {
     ///    `RENDERING` 은 0/1/2/3 옵션 콤보라, `>=` 였다면 1·2 에서도 켜졌을 것이다.
     /// ② **명명 연산자는 `ge`/`gt`/`le`/`lt` 4종뿐이고, 미지·부재 op 는 false 고정이 아니라
     ///    등호 폴백**이다(`0x1401e67b7`). 문자열 길이가 정확히 2 가 아니면 비교 자체를 시도하지 않는다.
-    /// ③ **fail-open 이다.** 배열이 아니거나(`0x1401e63d1`) 빈 배열이면(`0x1401e6412`) **true**.
-    ///    키 부재도 true. 객체가 아닌 배열 원소는 결과에 영향을 주지 않고 무시된다.
+    /// ③ **fail-open 이다.** 배열이 아니면 true(`0x1401e63d1` 의 `cmp byte [rcx+8], 6` + `jne`).
+    ///    빈 배열도 true — 다만 그건 전용 검사가 아니라 **루프 종료 분기**(`0x1401e6412`)와
+    ///    같은 명령이다(begin==end 면 한 바퀴도 안 돌고 그대로 true 로 나간다). 키 부재도 true.
+    ///    객체가 아닌 배열 원소는 `0x1401e641c` 에서 이터레이터 증가로 직행해 누산기 검사
+    ///    (`0x1401e68e3`)를 아예 건너뛴다 — 그래서 결과에 영향을 못 준다.
     ///
-    /// 누산은 전부 AND — 객체 안의 키끼리도, 배열 원소끼리도. OR 는 어디에도 없다.
-    /// 좌변(콤보 값)이 없으면 **0** 이다(`0x1401e6546` 의 `xor r14d, r14d`).
+    /// 누산은 전부 AND — 객체 안의 키끼리도, 배열 원소끼리도. OR 는 어디에도 없다
+    /// (누산 6지점이 전건 `cmov`-to-zero: `0x1401e66e2`/`6725`/`6768`/`67a8`/`67c3`/`68ca`).
+    ///
+    /// **좌우가 비대칭이다** — 이게 마지막 함정이다.
+    ///   · 우변(조건 값)이 string/bool/array/null 이면 조건을 **통째로 건너뛴다**
+    ///     (`0x1401e65fe` `cmp eax, 7` + `jne 0x1401e6808` = 누산기 무변경 재적재).
+    ///   · 좌변(콤보 값)이 같은 타입이면 건너뛰지 않고 **0 으로 읽힌다**
+    ///     (`0x1401e6546` 의 `xor r14d, r14d` 가 끝까지 안 덮인다). 키 부재도 같은 자리로 온다.
+    /// 즉 `{"combos": {"A": "1"}}` 의 좌변은 1 이 아니라 **0** 이다. `comboValue(_:)` 참조.
     public struct Condition: Equatable {
         public enum Op: Equatable {
             case eq          // 맨몸 값, 또는 미지/부재 op 의 폴백
@@ -45,6 +55,22 @@ public struct EffectManifest: Equatable {
             case .lt: return lhs < value
             }
         }
+    }
+
+    /// X-⑪ 좌변 리더 — `conditions` 가 읽는 **콤보 값**의 타입 규약.
+    ///
+    /// 씬의 다른 정수 필드는 `lenientInt` 로 관대하게 읽는다(실물 씬이 `id`/`parent` 를 `"35"`
+    /// 문자열로 싣는 사례가 있어서). **여기서는 그러면 안 된다.** 원본의 좌변 적재
+    /// (`0x1401e6555`-`0x1401e65ac`)는 태그 1/2/3(int/uint/real)만 받고, 나머지는 `0x1401e6546`
+    /// 의 `xor r14d, r14d` 를 그대로 남긴다 — 즉 **0** 이다. `"1"` 도, `true` 도 0 이다.
+    ///
+    /// 관대하게 읽으면 `{"combos": {"LIGHTING": "1"}}` 에서 우리만 조건이 켜진다.
+    /// 이 맵은 오직 `conditions` 의 좌변으로만 쓰이므로 여기서 규약을 좁히는 게 안전하다.
+    public static func comboValue(_ v: Any?) -> Int? {
+        if isJSONBool(v) { return nil }          // 태그 5 — 좌변에서 0(= 키 부재와 동치)
+        if let i = v as? Int { return i }        // 태그 1/2
+        if let d = v as? Double { return safeInt(d) }   // 태그 3 — cvttsd2si(0 방향 절삭)
+        return nil                               // 태그 0/4/6/7 → 0
     }
 
     /// `conditions` 한 벌. nil = 키 부재/비배열 → 항상 true.
@@ -366,7 +392,12 @@ public struct EffectManifest: Equatable {
         if let i = spec as? Int { return Condition(combo: combo, op: .eq, value: i) }
         if let d = spec as? Double, let i = safeInt(d) { return Condition(combo: combo, op: .eq, value: i) }
         guard let obj = spec as? [String: Any] else { return nil }   // string/bool/array/null → 무시
-        // `value` 가 숫자가 아니면 0. 원본은 `asInt()` 를 부르되 타입 태그 1/2/3 이 아니면 0 을 쓴다.
+        // `value` 가 숫자가 아니면 0. **원본은 `asInt()` 를 부르지 않는다** — 호출 직전에 타입 태그를
+        // 인라인으로 걸러(`0x1401e6682`-`0x1401e668e`: `dec eax` + `cmp eax, 2` + `jbe`) 1/2/3 만
+        // `asInt`(`0x140085ee0`)로 보내고 나머지는 `xor r12d, r12d` 로 0 을 쓴다. 이 구분이 실제
+        // 동작을 가른다: 진짜 `asInt` 는 bool 에 **1** 을 돌려주고(`0x140085f03`) string/array/object
+        // 에는 `int3` 로 죽는다(`0x140085f32`). 그래서 "asInt 가 0 을 준다" 로 옮겨 적으면
+        // `{"op":"ge","value":true}` 가 0 이 아니라 1 이 되어 갈린다.
         var rhs = 0
         let rawValue = obj["value"]
         if !isJSONBool(rawValue) {
