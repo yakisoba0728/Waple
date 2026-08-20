@@ -335,7 +335,9 @@ def main():
     sh_sites, ci_sites, callers = call_sites()
     lumas = sorted(e["meanLuma"] for e in entries)
     ev_base = specfmt.ev("file", manifest_rel, f"커밋된 기준선 {len(entries)}종의 썸네일·meanLuma")
-    ev_cmp = specfmt.ev("file", f"{COMPARE_SWIFT}:{k['lines']['pass']}", "판정식 원문")
+    # **[2026-08-20]** 줄 번호는 `snap`(Snapshot.swift)에서 뽑는데 파일명은 COMPARE_SWIFT 를
+    # 붙이고 있었다 — SnapshotCompare.swift 는 153줄이라 확정 근거가 **없는 줄**을 가리켰다.
+    ev_cmp = specfmt.ev("file", f"{SNAPSHOT_SWIFT}:{k['lines']['pass']}", "판정식 원문")
     ev_thr = specfmt.ev("file", f"{SNAPSHOT_SWIFT}:{k['lines']['strict']}-{k['lines']['lax']}",
                         "strict/lax 임계 출처")
     ev_self = specfmt.ev("script", "scripts/spec/measure_oracle_gate.py",
@@ -368,7 +370,7 @@ def main():
             "lax": k["lax"],
             "unit": "0..255 절대값",
             "perPixelThreshold": k["perPixelThreshold"],
-            "thresholdSelection": f"{COMPARE_SWIFT}:{k['lines']['thrSelect']} — "
+            "thresholdSelection": f"{SNAPSHOT_SWIFT}:{k['lines']['thrSelect']} — "
                                   "결정 씬 strict, 비결정 씬 lax",
             "relative": {
                 "tolerance": k["relTol"],
@@ -584,7 +586,7 @@ def main():
             "reopened3696323523": "'기대 집합 밖 1종' 을 '비결정' 으로 닫았던 것은 이제 근거가 있다 — "
                                   "이 씬은 불안정 29종 안에 있고 네 세션에서 네 값이 나온다.",
             "thresholdMisclassification": {
-                "code": f"SnapshotCompare.swift:{k['lines']['thrSelect']} — "
+                "code": f"Snapshot.swift:{k['lines']['thrSelect']} — "
                         "`entry.deterministic ? .strict : .lax`",
                 "designIsCorrect": "결정적 씬에 strict, 비결정 씬에 lax 는 **의도대로 맞다**. "
                                    "극성을 뒤집으면 안 된다.",
@@ -611,7 +613,7 @@ def main():
             "crossRef": "oracle.nondet.axisIsCrossSession",
         }, "확정", [specfmt.ev("file", "Sources/WapleCompatCore/SnapshotPipeline.swift:187-198",
                                "2차 캡처가 같은 프로세스"),
-                    specfmt.ev("file", f"{COMPARE_SWIFT}:{k['lines']['thrSelect']}",
+                    specfmt.ev("file", f"{SNAPSHOT_SWIFT}:{k['lines']['thrSelect']}",
                                "deterministic 으로 임계 선택"),
                     specfmt.ev("script", "scripts/spec/measure_nondeterminism.py",
                                "커밋된 세션 매니페스트 8개로 29종을 재계산한다"),

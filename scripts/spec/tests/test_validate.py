@@ -248,6 +248,39 @@ class TestGeneratedByExists(unittest.TestCase):
         self.assertTrue(any("generatedBy 가 없다" in e for e in errs), errs)
 
 
+class TestRefLineNumbers(unittest.TestCase):
+    """근거 ref 의 줄 인용이 그 파일에 실재하는가.
+
+    2026-08-20 에 실제로 터진 부류다 — `measure_oracle_gate.py` 가 줄 번호는
+    `Snapshot.swift`(209줄)에서 뽑고 파일명은 `SnapshotCompare.swift`(153줄)를 붙여,
+    **확정 등급 항목 셋이 없는 줄을 가리켰다**. 종전 검사기는 `:숫자` 를 잘라내고 파일
+    존재만 봤기 때문에 오류 0 으로 통과했다.
+    """
+
+    def test_extracts_max_line_from_every_citation_form(self):
+        self.assertEqual(validate.ref_max_line("Sources/a.swift:12"), 12)
+        self.assertEqual(validate.ref_max_line("Sources/a.swift:12-34"), 34)
+        self.assertEqual(validate.ref_max_line("Sources/a.h:114,115,119"), 119)
+        self.assertEqual(validate.ref_max_line("Sources/a.swift:1254-1257,"), 1257)
+        self.assertIsNone(validate.ref_max_line("Sources/a.swift"))
+        self.assertIsNone(validate.ref_max_line(None))
+
+    def test_line_past_end_of_file_is_an_error(self):
+        # validate.py 자신을 대상으로 삼는다 — 파일 길이를 계산해 확실히 넘는 줄을 만든다.
+        rel = "scripts/spec/validate.py"
+        with open(os.path.join(validate.REPO_ROOT, rel), "rb") as fh:
+            total = sum(1 for _ in fh)
+        bad = doc()
+        bad["entries"][0]["evidence"] = [{"kind": "file", "ref": f"{rel}:{total + 1}"}]
+        errs = validate.validate_doc(bad, "t.json")
+        self.assertTrue(any("없는 줄을 가리킨다" in e for e in errs), errs)
+
+        good = doc()
+        good["entries"][0]["evidence"] = [{"kind": "file", "ref": f"{rel}:{total}"}]
+        self.assertEqual(
+            [e for e in validate.validate_doc(good, "t.json") if "없는 줄" in e], [])
+
+
 class TestSpecfmt(unittest.TestCase):
     def test_entry_builds_expected_shape(self):
         e = specfmt.entry("a.b", 3, "확정", [{"kind": "corpus", "ref": "r"}])
