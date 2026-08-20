@@ -38,7 +38,7 @@
     {
      "kind": "asset",
      "ref": "WEAssets 머티리얼 JSON 639건 전수",
-     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다(material-schema material.jsonDialect.strictFailures 31건)"
+     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다 — 실측(범위 라벨 필수): 동봉 assets 전수 `all` **31건** = effects/ 27 + presets/ 4, 내용 sha256 중복제거 `unique` 29건. material-schema 의 `material.jsonDialect.strictFailures` 목록이 담는 것은 그중 **effects/ 27건뿐**이다 — [2026-08-20 정정] 종전 이 주석은 그 목록에 31 을 귀속시켜, 둘 다 맞는 수를 틀린 짝으로 묶고 있었다. presets/ 4건은 Waple 이 preset.json 을 파스하지 않으므로 도달 0."
     },
     {
      "kind": "script",
@@ -112,7 +112,7 @@
     {
      "kind": "asset",
      "ref": "WEAssets 머티리얼 JSON 639건 전수",
-     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다(material-schema material.jsonDialect.strictFailures 31건)"
+     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다 — 실측(범위 라벨 필수): 동봉 assets 전수 `all` **31건** = effects/ 27 + presets/ 4, 내용 sha256 중복제거 `unique` 29건. material-schema 의 `material.jsonDialect.strictFailures` 목록이 담는 것은 그중 **effects/ 27건뿐**이다 — [2026-08-20 정정] 종전 이 주석은 그 목록에 31 을 귀속시켜, 둘 다 맞는 수를 틀린 짝으로 묶고 있었다. presets/ 4건은 Waple 이 preset.json 을 파스하지 않으므로 도달 0."
     },
     {
      "kind": "script",
@@ -525,7 +525,7 @@
     {
      "kind": "asset",
      "ref": "WEAssets 머티리얼 JSON 639건 전수",
-     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다(material-schema material.jsonDialect.strictFailures 31건)"
+     "note": "passes 를 가진 JSON 은 740건이고 그중 101건이 effect.json 이다 — effect 패스는 blending/cullmode/depthtest/depthwrite/alphawriting 를 하나도 갖지 않으므로 도수에는 기여하지 않지만 분모에서는 빼야 한다. 이 모집단은 effects/ + materials/ + presets/ + scenes/ 를 전부 포함한다 — spec/assets/material-schema.json 의 번들 머티리얼 331 은 presets/ 와 scenes/ 를 제외한 수라 분모가 다르다(둘 다 옳고, 세는 대상이 다르다). 엄격 JSON 파서를 쓰므로 // 주석·트레일링 콤마가 있는 파일은 조용히 빠진다 — 실측(범위 라벨 필수): 동봉 assets 전수 `all` **31건** = effects/ 27 + presets/ 4, 내용 sha256 중복제거 `unique` 29건. material-schema 의 `material.jsonDialect.strictFailures` 목록이 담는 것은 그중 **effects/ 27건뿐**이다 — [2026-08-20 정정] 종전 이 주석은 그 목록에 31 을 귀속시켜, 둘 다 맞는 수를 틀린 짝으로 묶고 있었다. presets/ 4건은 Waple 이 preset.json 을 파스하지 않으므로 도달 0."
     },
     {
      "kind": "script",

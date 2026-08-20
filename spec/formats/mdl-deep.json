@@ -226,7 +226,7 @@
      "불일치": 0,
      "불일치목록": []
     },
-    "주의": "빈 {} json 은 대조에서 제외한다. **이걸 '기본값 = 0x9' 로 읽으면 안 된다** — 실물에 {}+0x9(flow/glow)와 {}+0x0f(assets/models/editor/camera, elementpreviews/collisionmodel/sphere)가 둘 다 있다. 빈 json 은 '이 파일이 굽기 옵션을 안 담고 있다' 는 뜻이지 옵션이 기본값이라는 뜻이 아니다"
+    "주의": "짝 `.json` 이 **없는** .mdl 은 대조에서 제외한다(생성기 measure_mdl_deep.py:301 `if not os.path.exists(jp): continue`). **이걸 '옵션 부재 = 기본값' 으로 읽으면 안 된다** — 설치본 실측(28개 전수, 2026-08-20 재측정): 짝 json 없음 **14**개 / 옵션 있음 14개, **빈 `{}` 는 0개**. 그 14개의 formatFlag 는 0x9 12개 · 0xf 2개로 **갈린다**(0x9: audiophile flow·glow, ricepod jet·skybox·orbitaleffects, fantasticcar dome·shadow, retro bgfade, dna_fragment bgfade, techno glow·rays·orbitsmall / 0xf: assets/models/editor/camera, particleelementpreviews/collisionmodel/sphere). 즉 json 부재는 '이 파일이 굽기 옵션을 안 담고 있다' 는 뜻이지 옵션이 어떤 기본값이라는 뜻이 아니다. **[2026-08-20 정정]** 종전 이 줄은 같은 논증을 *'빈 {} json'* 으로 적고 네 파일을 그 예로 들었는데, 네 파일 모두 빈 json 이 아니라 **json 이 아예 없다**. 논증은 그대로 성립하고 분류만 틀렸다."
    },
    "status": "확정",
    "evidence": [
@@ -470,10 +470,13 @@
   {
    "id": "format.mdl.indexWidth",
    "value": {
-    "규칙": "인덱스 원소 폭은 정점 수가 정한다 — vertexCount <= 65535 면 u16, 넘으면 u32",
-    "실측": "u16 메시 969개(최대 vertexCount 64157) / u32 메시 17개(최소 vertexCount 69396) — 이 규칙으로 읽으면 maxIndex == vertexCount-1 이 986/986",
+    "규칙": "인덱스 원소 폭은 **gateWord bit0** 이 정한다 — 폭 = 2 + 2*(gateWord & 1). 포맷이 자기기술하며 정점 수는 이 사슬 어디에도 들어가지 않는다",
+    "규칙 근거": ".mdl 전용 GPU 업로드 경로 0x1401d7760(파스 직후 0x1401d5bb1 에서 호출): movzx ecx,byte[rdi+0x18](0x1401d784c) -> and cl,1(0x1401d7853) -> lea r9d,[r10*2+2](0x1401d7870) -> idiv r9d(0x1401d7878). 그 플래그가 인자로 넘어가(0x1401d786b) 소비처 0x14009a98d 에서 test edx,edx -> cmove 로 0x39(R16_UINT) / 0x2a(R32_UINT) 를 고르고 ByteWidth 도 같은 비트로 갈린다",
+    "실측": "u16 메시 969개(최대 vertexCount 64157) / u32 메시 17개(최소 vertexCount 69396) — 어느 규칙으로 읽어도 maxIndex == vertexCount-1 이 986/986",
     "오판시 증상": "u32 블롭을 u16 로 읽으면 상위 워드 0 이 섞여 maxIndex 가 정확히 0xFFFF 로 찍히고(실측 17메시 전부) 삼각형이 뒤죽박죽이 된다. 정점 수보다 작으므로 'maxIndex < vertexCount' 류의 검사로는 절대 안 걸린다",
-    "경계": "직접 목격한 경계는 (64157, 69396] 구간이다. 65535 라는 값 자체는 u16 주소지정 한계에서 온 추론이지 그 경계의 파일을 본 것은 아니다"
+    "경계": "직접 목격한 vertexCount 경계는 (64157, 69396] 구간이다. 65535 라는 값 자체는 u16 주소지정 한계에서 온 추론이지 그 경계의 파일을 본 것은 아니다 — 그리고 **그 추론이 규칙이 아니라는 것이 위 '규칙 근거' 로 확정됐다**. 이 줄은 종전 항목이 스스로 달아 둔 헤지이고, 그 헤지가 옳았다는 기록으로 남긴다",
+    "종전 규칙이 맞아 보였던 이유": "관측 코퍼스에서 두 규칙이 완전히 겹친다 — 정점이 65535 를 넘는 메시는 내보내기 도구가 gateWord bit0 을 세우기 때문이다. 갈리는 것은 bit0 이 선 작은 메시와 비트가 없는 큰 메시뿐이고 둘 다 코퍼스에 없다. 설치본도 45메시 전건 gateWord 0 / 최대 정점수 10,995 라 같은 답을 낸다. 즉 위 '실측' 은 전부 참이지만 그건 **상관**이지 규칙이 아니다 — '이 코퍼스에서 성립한다' 와 '엔진이 이렇게 정한다' 는 다른 명제이고, 후자는 코드를 읽어야만 나온다",
+    "코드 상태": "Sources/WapleCore/Model3D.swift:577 `let iWidth = (gateWord & 1) == 0 ? 2 : 4` — 커밋 0197a2d 로 코드가 먼저 고쳐졌고 이 정본이 뒤늦게 따라왔다"
    },
    "status": "확정",
    "evidence": [
