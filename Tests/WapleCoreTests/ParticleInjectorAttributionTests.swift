@@ -272,15 +272,45 @@ final class ParticleInjectorAttributionTests: XCTestCase {
 
     // MARK: - controlpointattract (키 이름 정정)
 
-    /// 대상 좌표의 실물 키는 `origin` 이 아니라 **`offset`** 이다. "origin" 의 lea 참조 14곳 중
-    /// 이 원소의 주입기(0x1401bdee0..0x1401be293)·핸들러(0x1401cc9e7..0x1401ccdba)에는 없고,
-    /// "offset" 은 양쪽(0x1401bdefa·0x1401cca18)에 있다.
-    func testControlPointAttractReadsOffsetNotOrigin() {
+    /// **대상은 `origin` 도 `offset` 도 아니라 컨트롤포인트다.** 런타임 핸들러에서 `offset`
+    /// (레코드 +0x10)의 유일한 참조는 `lea r8, [r14+0x10]`(0x14024194e)이고 그건 삭제 함수에
+    /// 넘기는 베이스 포인터다 — 위치로 쓰이는 곳이 없다. 실제 대상은 `CP[controlpoint].worldPos`.
+    func testControlPointAttractTargetComesFromControlPointNotOffsetOrOrigin() {
         let d = ParticleSystemDef.parse(json("""
-        {"operator":[{"name":"controlpointattract","offset":"10 20 30","origin":"99 99 99"}],"maxcount":10}
+        {"controlpoint":[{"id":0,"offset":"1 2 3"},{"id":3,"offset":"70 80 90"}],
+         "operator":[{"name":"controlpointattract","controlpoint":3,
+                      "offset":"10 20 30","origin":"99 99 99"}],"maxcount":10}
         """), material: nil)
         guard case let .controlPointAttract(_, _, target, _, _) = d.operators[0] else { return XCTFail("no cpa") }
-        XCTAssertEqual(target, Vec3(x: 10, y: 20, z: 30), "`origin` 을 읽으면 (99,99,99) 가 나온다")
+        XCTAssertEqual(target, Vec3(x: 70, y: 80, z: 90),
+                       "offset 이면 (10,20,30), origin 이면 (99,99,99) 가 나온다")
+    }
+
+    /// `controlpoint` 부재 → **CP0 바인딩**(주입 기본 0). 동봉 35인스턴스 중 9건이 이 경로인데
+    /// 전건 CP0 이 원점이라 관측은 안 바뀐다 — 그래서 CP0 을 옮긴 픽스처로 본다.
+    func testControlPointAttractWithoutControlPointBindsCP0() {
+        let d = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{"id":0,"offset":"5 -5 0"}],
+         "operator":[{"name":"controlpointattract"}],"maxcount":10}
+        """), material: nil)
+        guard case let .controlPointAttract(_, _, target, _, _) = d.operators[0] else { return XCTFail("no cpa") }
+        XCTAssertEqual(target, Vec3(x: 5, y: -5, z: 0))
+    }
+
+    /// 클램프는 **부호 없는** `cmp eax,7 / jae → mov eax,7`(0x1401ccc65 → 0x1401ccd01)이다.
+    /// 종전 `cpid >= 0, cpid < 8` 은 8 이상을 드롭하고 7 을 통과시켰다 — 둘 다 다르다.
+    func testControlPointAttractControlPointClampIsUnsignedSeven() {
+        func target(cp: Int) -> Vec3 {
+            let d = ParticleSystemDef.parse(json("""
+            {"controlpoint":[{"id":0,"offset":"1 0 0"},{"id":7,"offset":"7 0 0"}],
+             "operator":[{"name":"controlpointattract","controlpoint":\(cp)}],"maxcount":10}
+            """), material: nil)
+            guard case let .controlPointAttract(_, _, t, _, _) = d.operators[0] else { return Vec3(x: -1, y: 0, z: 0) }
+            return t
+        }
+        XCTAssertEqual(target(cp: 7), Vec3(x: 7, y: 0, z: 0))
+        XCTAssertEqual(target(cp: 99), Vec3(x: 7, y: 0, z: 0), "범위 밖은 드롭이 아니라 7 로 클램프")
+        XCTAssertEqual(target(cp: -3), Vec3(x: 7, y: 0, z: 0), "부호 없는 비교라 음수도 7 이다")
     }
 
     /// `scale`/`threshold` 부재 기본은 0 이 아니라 512 다(0x140492934, 원근 20.0/5.0).
