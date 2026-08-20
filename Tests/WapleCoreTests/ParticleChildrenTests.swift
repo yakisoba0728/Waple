@@ -192,4 +192,65 @@ final class ParticleChildrenTests: XCTestCase {
         XCTAssertTrue(sim.childDisplay(0).isEmpty)   // 방어적 — 크래시 금지
     }
 
+
+    /// CP `flags & 4` — 자식 CP 를 **부모 시스템의 `parentcontrolpoint` 번째 CP** 에 부착한다.
+    ///
+    /// 실물 마스터 디스패치 0x14022e3e0: `test dl, 4` @0x14022e66e 로 갈라져, 부모 포인터
+    /// `[r14+0x10]`(0x14022e677)을 잡고 `parentcontrolpoint`(`[cp+0xc4]`, 0x14022e684)를 읽어
+    /// 부모의 CP 개수 `[r8+0x44]` 로 경계검사한 뒤(0x14022e68b) `[r8+0x400] + idx*0xd0` 로 집는다.
+    /// **자기 배열이 아니라 부모 배열**이다.
+    ///
+    /// 도달: 동봉 실자산 `presets/lightning/…/thunderbolt_child_spawner.json` — CP1 이
+    /// `flags=4, parentcontrolpoint=1` 이고 자기 offset 은 `"0 0 0"` 인데, 그 시스템의
+    /// `controlpointattract` 가 CP1 을 겨냥한다. 부모 `thunderbolt` 의 CP1 은 `(0, −450, 0)` 이므로
+    /// 부착 전에는 인력 중심이 **450 단위 어긋난 원점**이었다.
+    func testChildControlPointAttachesToParentWhenFlagBitTwoSet() {
+        let child = """
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+         "controlpoint":[{"id":0,"offset":"0 0 0","flags":0,"parentcontrolpoint":0},
+                         {"id":1,"offset":"0 0 0","flags":4,"parentcontrolpoint":1}],
+         "operator":[{"name":"controlpointattract","controlpoint":1,"scale":200,"threshold":20000}],
+         "maxcount":10}
+        """
+        let parent = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+         "controlpoint":[{"id":0,"offset":"0 0 0"},{"id":1,"offset":"0 -450 0"}],
+         "children":[{"name":"child.json","type":"eventfollow"}],
+         "maxcount":10}
+        """), material: nil) { _ in
+            ParticleSystemDef.parse(json(child), material: nil)
+        }
+
+        XCTAssertEqual(parent.children.count, 1)
+        let c = parent.children[0].def
+        XCTAssertEqual(c.controlPointFlags[1], 4, "flags 를 파스해야 한다")
+        XCTAssertEqual(c.controlPointParent[1], 1, "parentcontrolpoint 를 파스해야 한다")
+        XCTAssertEqual(c.controlPoints[1], Vec3(x: 0, y: -450, z: 0), "부모 CP1 을 물려받아야 한다")
+        // 재베이크까지 되어야 실제 인력 중심이 옮겨진다 — 파스만 하고 끝내면 유령 필드가 된다.
+        var target: Vec3? = nil
+        for op in c.operators { if case let .controlPointAttract(_, _, t, _, _) = op { target = t } }
+        XCTAssertEqual(target, Vec3(x: 0, y: -450, z: 0), "attract target 이 재베이크돼야 한다")
+    }
+
+    /// `flags` 에 bit2 가 없으면 `parentcontrolpoint` 는 **완전히 무시**된다(실물도 그 분기에 못 간다).
+    /// 동봉에도 그런 원소가 많다 — 키 존재 108건 중 실제 소비는 7건뿐이다.
+    func testChildControlPointIgnoresParentIndexWithoutFlagBitTwo() {
+        let child = """
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+         "controlpoint":[{"id":0,"offset":"0 0 0"},{"id":1,"offset":"7 7 7","parentcontrolpoint":1}],
+         "operator":[{"name":"controlpointattract","controlpoint":1,"scale":200,"threshold":20000}],
+         "maxcount":10}
+        """
+        let parent = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+         "controlpoint":[{"id":0,"offset":"0 0 0"},{"id":1,"offset":"0 -450 0"}],
+         "children":[{"name":"child.json"}],"maxcount":10}
+        """), material: nil) { _ in ParticleSystemDef.parse(json(child), material: nil) }
+
+        let c = parent.children[0].def
+        XCTAssertEqual(c.controlPoints[1], Vec3(x: 7, y: 7, z: 7), "bit2 가 없으면 자기 offset 그대로")
+        var target: Vec3? = nil
+        for op in c.operators { if case let .controlPointAttract(_, _, t, _, _) = op { target = t } }
+        XCTAssertEqual(target, Vec3(x: 7, y: 7, z: 7))
+    }
 }
