@@ -304,7 +304,7 @@ final class ParticleSystemTests: XCTestCase {
         let d = ParticleSystemDef.parse(json(
             #"{"initializer":[{"name":"hsvcolorrandom","huemin":0,"huemax":1,"saturationmin":1,"saturationmax":1,"valuemin":1,"valuemax":1}]}"#
         ), material: nil)
-        XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 1, satMax: 1, valMin: 1, valMax: 1)))
+        XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 1, satMax: 1, valMin: 1, valMax: 1, hueSteps: 6)))
     }
 
     /// magic_color_sparkle 실물: saturationmin/valuemin 만 있고 max 부재 → max=min(고정폭) 채택.
@@ -317,7 +317,7 @@ final class ParticleSystemTests: XCTestCase {
             #"{"initializer":[{"name":"hsvcolorrandom","huemin":0.49150327,"huemax":0.93267971,"saturationmin":0.2,"valuemin":0.3}]}"#
         ), material: nil)
         XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0.49150327, hueMax: 0.93267971,
-                                                              satMin: 0.2, satMax: 1, valMin: 0.3, valMax: 1)),
+                                                              satMin: 0.2, satMax: 1, valMin: 0.3, valMax: 1, hueSteps: 6)),
                       "승계였다면 satMax 0.2 · valMax 0.3 — 실제 파스: \(d.initializers)")
     }
 
@@ -328,7 +328,7 @@ final class ParticleSystemTests: XCTestCase {
     func testHSVColorRandomAllFieldsMissingUsesInjectorDefaults() {
         let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"hsvcolorrandom"}]}"#), material: nil)
         XCTAssertTrue(d.initializers.contains(.hsvColorRandom(hueMin: 0, hueMax: 1, satMin: 0.5, satMax: 1,
-                                                              valMin: 0.5, valMax: 1)),
+                                                              valMin: 0.5, valMax: 1, hueSteps: 6)),
                       "주입기 0x1401ba3e0 — 실제 파스: \(d.initializers)")
     }
 

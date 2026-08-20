@@ -1058,11 +1058,17 @@ public struct ParticleSystemDef: Equatable {
             case "boxrandom":
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    // 부재 기본은 (0,0,0)(= 원점 붕괴)이 아니라 문자열 "1 1 1" 이다 — 문자열 주입기
-                    // 0x1401d7e80 호출 @0x1401b9838(주입기 0x1401b9520, 게이트 `stricmp`@0x1401c6397
-                    // → 호출부 0x1401c63cd). 플래그 무관. 51건 중 4건이 생략한다.
+                    // 부재 기본은 (0,0,0)(= 원점 붕괴)이 아니다. 문자열 주입기 0x1401d7e80 호출
+                    // @0x1401b9838(주입기 0x1401b9520, 게이트 `stricmp`@0x1401c6397 → 호출부
+                    // 0x1401c63cd)이 심는데, **플래그 무관이 아니라 조건부**다:
+                    //     0x1401b971b  lea rsi, "1 1 1"          ; 원근 기본
+                    //     0x1401b981d  lea rax, "256 256 0"      ; 직교 기본
+                    //     0x1401b9824  test r15b, r15b / cmovne rsi, rax
+                    // 직교가 실물 씬의 98.8% 이므로 **(256, 256, 0)** 이 실측 동작이다.
+                    // z=0 인 것도 직교 서사와 맞는다(turbulence 의 mask "1 1 0" 과 같은 이유).
+                    // 51건 중 4건이 생략한다.
                     // (`layerimage` 주입기 0x1401b9930 에는 distancemax 가 **없으므로** 그쪽은 안 건드린다.)
-                    distanceMax: injectedVec3OrScalar(e, "distancemax", Vec3(x: 1, y: 1, z: 1)),
+                    distanceMax: injectedVec3OrScalar(e, "distancemax", Vec3(x: 256, y: 256, z: 0)),
                     rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))

@@ -99,8 +99,13 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         XCTAssertEqual(cfV2, 1, "vortex_v2 주입기 0x1401bf5ff 이 1.0 을 심는다")
     }
 
-    /// `distancemax` 를 심는 이미터는 sphererandom(실수 256)과 boxrandom(문자열 "1 1 1")뿐이고,
-    /// `layerimage` 주입기 0x1401b9930 에는 없다 — 셋을 뭉뚱그리면 layerimage 가 회귀한다.
+    /// `distancemax` 를 심는 이미터는 sphererandom 과 boxrandom 뿐이고 `layerimage` 주입기
+    /// 0x1401b9930 에는 없다 — 셋을 뭉뚱그리면 layerimage 가 회귀한다.
+    ///
+    /// **둘 다 직교/원근 조건부고, 실측 동작은 직교(씬의 98.8%)다:**
+    ///   · sphererandom: 256(0x1401b9454) / 1.0(0x1401b945e)
+    ///   · boxrandom:    "256 256 0"(0x1401b981d) / "1 1 1"(0x1401b971b), `cmovne` @0x1401b9831
+    /// boxrandom 의 z=0 은 직교 서사와 맞는다(turbulence 의 mask "1 1 0" 과 같은 이유).
     func testEmitterDistanceMaxDefaultsDifferPerEmitter() {
         let d = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"sphererandom","rate":1},{"name":"boxrandom","rate":1},{"name":"layerimage","rate":1}],
@@ -109,7 +114,8 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         guard case let .sphere(_, _, _, sphereMax, _, _, _) = d.emitters[0] else { return XCTFail("no sphere") }
         XCTAssertEqual(sphereMax, 256, "0x1401b9470 (ortho) — 원근은 1.0, 어느 쪽도 0 이 아니다")
         guard case let .box(_, boxMax, _, _) = d.emitters[1] else { return XCTFail("no box") }
-        XCTAssertEqual(boxMax, Vec3(x: 1, y: 1, z: 1), "0x1401b9838 문자열 주입 \"1 1 1\"")
+        XCTAssertEqual(boxMax, Vec3(x: 256, y: 256, z: 0),
+                       "0x1401b981d 직교 분기 — 원근 \"1 1 1\" 을 고르면 98.8% 의 씬에서 틀린다")
         guard case let .box(_, layerMax, _, _) = d.emitters[2] else { return XCTFail("no layerimage box") }
         XCTAssertEqual(layerMax, Vec3(x: 0, y: 0, z: 0), "layerimage 주입기엔 distancemax 가 **없다**")
         XCTAssertEqual(d.emitterSpeed[2], SIMD2<Float>(0.1, 0.2), "0x1401b9a5d / 0x1401b9b1b — layerimage 만 speed 기본이 0 이 아니다")
