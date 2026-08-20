@@ -507,29 +507,82 @@ final class ParticleExtendedKeysTests: XCTestCase {
 
     // MARK: - 6. positionoffsetrandom + 파스 전용 이니셜라이저
 
-    /// [2026-08-20] 픽스처에 `"distancemax":"0 0 0"` 을 명시했다. 이 테스트가 보는 것은
-    /// `positionoffsetrandom` 의 분포이고 이미터 산포는 잡음인데, `boxrandom.distancemax` 부재
-    /// 기본값이 (0,0,0) → (256,256,0)(직교 분기)으로 바뀌면서 그 잡음이 단언을 덮었다.
-    /// 기대를 바꾼 게 아니라 픽스처가 기본값에 묵시적으로 기대던 것을 드러낸 것이다.
-    func testPositionOffsetRandomParseAndDistribution() {
+    /// `positionoffsetrandom` 은 **fBm 노이즈 변위**다 — 균일난수 오프셋이 아니다.
+    ///
+    /// **[2026-08-20 전면 정정]** 종전 픽스처는 `offsetmin`/`offsetmax` 를 넣고 그 범위 안에
+    /// 분포하는지 봤다. 그 두 키는 이 원소의 것이 **아니라 `layerimage` 이미터**의 것이다 —
+    /// 두 문자열(0x14048f580 / 0x14048f598)을 참조하는 `lea` 중 파서 쪽(0x1401c6ba7 / 0x1401c6cde)이
+    /// 게이트 `stricmp` vs `"layerimage"`(0x1401c6ae4) 뒤 `speedmin`/`speedmax` 와 같은 블록에 있고,
+    /// `positionoffsetrandom` 브랜치(게이트 0x1401c9041)에는 그 `lea` 가 하나도 없다.
+    /// 즉 종전 테스트는 **WE 가 내보내지 않는 JSON 모양**을 회귀로 고정하고 있었다.
+    func testPositionOffsetRandomParsesRealKeysWithInjectedDefaults() {
         let def = ParticleSystemDef.parse(json("""
-        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":32,"distancemax":"0 0 0"}],
-         "initializer":[{"name":"positionoffsetrandom","offsetmin":"0 -2 0","offsetmax":"10 2 0"}],
-         "renderer":[{"name":"sprite"}],"maxcount":32}
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":8,"distancemax":"0 0 0"}],
+         "initializer":[{"name":"lifetimerandom","min":100,"max":100},
+                        {"name":"positionoffsetrandom","distance":100,"scale":0,"timescale":5}],
+         "renderer":[{"name":"sprite"}],"maxcount":8}
         """), material: nil)
+        // 생략한 세 키는 주입 기본값으로 뜬다 — directions "1 1 0"(직교 분기, 0x1401bb672–684),
+        // sign "0 0 0", octaves 부재 0 → [1,8] 클램프로 1.
         XCTAssertTrue(def.initializers.contains(
-            .positionOffsetRandom(offsetMin: Vec3(x: 0, y: -2, z: 0), offsetMax: Vec3(x: 10, y: 2, z: 0))))
-        var sim = ParticleSimulator(def: def, seed: 51)
-        let ps = sim.step(0.1)
-        XCTAssertEqual(ps.count, 32)
-        var minX = Float.greatestFiniteMagnitude, maxX: Float = 0
-        for p in ps {
-            XCTAssertGreaterThanOrEqual(p.pos.x, 0); XCTAssertLessThanOrEqual(p.pos.x, 10)
-            XCTAssertGreaterThanOrEqual(p.pos.y, -2); XCTAssertLessThanOrEqual(p.pos.y, 2)
-            XCTAssertEqual(p.pos.z, 0)
-            minX = min(minX, p.pos.x); maxX = max(maxX, p.pos.x)
+            .positionOffsetRandom(directions: Vec3(x: 1, y: 1, z: 0), sign: Vec3(x: 0, y: 0, z: 0),
+                                  scale: 0, distance: 100, timescale: 5, octaves: 1)),
+            "\(def.initializers)")
+    }
+
+    /// `octaves` 클램프는 **부호 없는** 비교다 — `cmp eax,8 / jae → 8`(0x1401c9387) 이라 음수도 8.
+    func testPositionOffsetRandomOctavesClampIsUnsigned() {
+        func octaves(_ v: String) -> Int? {
+            let d = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+             "initializer":[{"name":"positionoffsetrandom","octaves":\(v)}],"maxcount":4}
+            """), material: nil)
+            for i in d.initializers { if case let .positionOffsetRandom(_, _, _, _, _, o) = i { return o } }
+            return nil
         }
-        XCTAssertGreaterThan(maxX - minX, 1)   // 실제 분포(단일값 아님)
+        XCTAssertEqual(octaves("0"), 1, "부재/0 → 1")
+        XCTAssertEqual(octaves("3"), 3)
+        XCTAssertEqual(octaves("9"), 8, "8 이상은 8")
+        XCTAssertEqual(octaves("-1"), 8, "부호 없는 비교라 음수도 8")
+    }
+
+    /// **RNG 를 한 번도 뽑지 않는다.** 핸들러 0x14023c09a–0x14023c3a1 전 구간에 난수 호출
+    /// (0x1401f87a0)이 없다 — 노이즈 3회(0x14027b170)와 abs 2회(0x1401e2880)뿐이다.
+    /// 종전 구현은 파티클당 3드로를 썼다. 뒤따르는 이니셜라이저의 결과가 **비트동일**한지로 본다.
+    func testPositionOffsetRandomConsumesNoRandomDraws() {
+        func sizes(withElement: Bool) -> [Float] {
+            let inits = withElement
+                ? #"[{"name":"lifetimerandom","min":1,"max":9},{"name":"positionoffsetrandom","distance":100,"timescale":5},{"name":"sizerandom","min":1,"max":9}]"#
+                : #"[{"name":"lifetimerandom","min":1,"max":9},{"name":"sizerandom","min":1,"max":9}]"#
+            let def = ParticleSystemDef.parse(json("""
+            {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":6,"distancemax":"0 0 0"}],
+             "initializer":\(inits),"renderer":[{"name":"sprite"}],"maxcount":6}
+            """), material: nil)
+            var sim = ParticleSimulator(def: def, seed: 11)
+            return sim.step(0.01).map { $0.initialSize }
+        }
+        XCTAssertEqual(sizes(withElement: true), sizes(withElement: false),
+                       "이 원소가 난수를 소비하면 뒤 이니셜라이저 결과가 밀린다")
+    }
+
+    /// 변위가 실제로 생기고, 스폰 **시각**에 따라 달라진다(`timescale` 이 시간항을 돌린다).
+    /// 종전 구현에서는 동봉 5건 전건이 `offsetmin`/`offsetmax` 를 갖지 않아 오프셋이 **정확히 0**
+    /// 이었다 — 즉 이 원소가 시각적으로 통째로 죽어 있었다.
+    func testPositionOffsetRandomDisplacesAndVariesWithSpawnTime() {
+        let def = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","rate":50}],
+         "initializer":[{"name":"lifetimerandom","min":100,"max":100},
+                        {"name":"positionoffsetrandom","distance":100,"scale":0,"timescale":5}],
+         "renderer":[{"name":"sprite"}],"maxcount":40}
+        """), material: nil)
+        var sim = ParticleSimulator(def: def, seed: 7)
+        var last: [Particle] = []
+        for _ in 0..<20 { last = sim.step(0.05) }
+        XCTAssertGreaterThan(last.count, 10)
+        let xs = last.map { $0.pos.x }
+        XCTAssertGreaterThan(xs.map { abs($0) }.max() ?? 0, 1, "변위가 0 이면 안 된다")
+        XCTAssertGreaterThan((xs.max() ?? 0) - (xs.min() ?? 0), 10,
+                             "스폰 시각이 다르면 오프셋도 달라야 한다")
     }
 
     func testEventLinkedInitializersParseOnly_simIgnores() {

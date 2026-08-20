@@ -96,9 +96,38 @@ public enum Initializer: Equatable {
     /// 스프라이트시트 프레임 선택(스폰 시 확정). between=false: CP0 기준 각도 → 시퀀스,
     /// true: CP0→CP1 구간 투영 → 시퀀스. count=시퀀스 길이(시트 프레임 수와 다를 수 있음 — mirror 폴드).
     case mapSequence(count: Float, mirror: Bool, between: Bool)
-    /// 스폰 위치 오프셋 랜덤(실물키 positionoffsetrandom 의 offsetmin/offsetmax @0x48f580/398).
-    /// [보존/추측] velocityRandom 과 동형 성분별 독립 t.
-    case positionOffsetRandom(offsetMin: Vec3, offsetMax: Vec3)
+    /// `positionoffsetrandom` — 이름과 달리 **균일난수 오프셋이 아니라 fBm 노이즈 변위**다.
+    /// 로케일도 그렇게 적는다: "Offsets the position of the particle with fractal brownian motion."
+    ///
+    /// **[2026-08-20 전면 정정]** 종전 시그니처는 `offsetmin`/`offsetmax` 였는데 그 둘은 이 원소의
+    /// 키가 **아니다** — `layerimage` **이미터**의 키다. 이 저장소에서 직접 확인했다:
+    /// 두 문자열(0x14048f580 / 0x14048f598)을 참조하는 `lea` 는 각각 두 곳뿐이고
+    /// (0x1401b9bdf·0x1401c6ba7 / 0x1401b9bf9·0x1401c6cde), 그 중 파서 쪽은 게이트
+    /// `stricmp` vs `"layerimage"`(0x1401c6ae4) 바로 뒤 `speedmin`/`speedmax` 와 같은 블록에 있다.
+    /// `positionoffsetrandom` 브랜치(게이트 0x1401c9041)에는 그 `lea` 가 하나도 없다.
+    /// 그래서 종전 파스는 **동봉 5건 전건에서 nil** 이었고(키가 없으니), 오프셋 0 을 내면서
+    /// 파티클당 RNG 를 3번 낭비했다.
+    ///
+    /// 실제 키는 여섯이고 파스 순서도 이렇다(전부 게이트 뒤 브랜치에서 확인):
+    ///   `scale`      0x1401c9079   asFloat, 부재 0        (공간 주파수)
+    ///   `distance`   0x1401c90a9   asFloat, 부재 0        (변위 크기)
+    ///   `timescale`  0x1401c90de   asFloat, 부재 0        (시간 진행 속도)
+    ///   `directions` 0x1401c9113   "x y z", 주입 기본      (축별 게이트/배수)
+    ///   `sign`       0x1401c9230   "x y z", 주입 기본 "0 0 0"
+    ///   `octaves`    0x1401c9349   asInt,   부재 0 → [1,8] 클램프
+    ///
+    /// `directions` 기본값은 씬 플래그로 갈린다 — 주입기 0x1401bb660 이 `cmovne` 로
+    /// `"1 1 0"`(플래그≠0) / `"1 1 1"`(플래그=0) 을 고른다(0x1401bb672–0x1401bb684).
+    /// **같은 플래그를 쓰는 `distancemax` 주입기**(0x1401b944f: `je` → 1.0, 그 외 → 256.0)와
+    /// 대조하면 **플래그≠0 = 직교(ortho)** 다. Waple 은 다른 자리에서도 일관되게 직교 분기를
+    /// 택하므로(그쪽 256) 여기서도 `"1 1 0"` 을 쓴다. 동봉 5건이 전부 이 키를 생략하므로
+    /// 이 선택이 곧 실효값이다.
+    ///
+    /// **RNG 드로 0.** 핸들러 0x14023c09a–0x14023c3a1 전 구간에 난수 호출(0x1401f87a0)이 없다 —
+    /// 호출은 노이즈 3회(0x14027b170)와 abs 2회(0x1401e2880)뿐이다. 변위는 위치·시간의 결정론적
+    /// 함수다. 종전 3드로를 걷어냈으므로 **이 원소를 쓰는 시스템의 난수열이 이동한다**(동봉 5건).
+    case positionOffsetRandom(directions: Vec3, sign: Vec3, scale: Float,
+                              distance: Float, timescale: Float, octaves: Int)
     /// 파스·보존 전용(이벤트 시스템 연동 보류 — 시뮬레이터 무시, RNG 드로 0).
     /// 실물 inheritcontrolpointvelocity. 주입기 0x1401bad80..0x1401bb00e, 게이트 `stricmp`@0x1401c8586,
     /// 이니셜라이저 VM opcode 8 → 핸들러 0x14023bc32(오퍼레이터 VM 과 **다른** 인터프리터
@@ -1106,8 +1135,18 @@ public struct ParticleSystemDef: Equatable {
                 inits.append(.mapSequence(count: injected(i, "count", 32),
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: true))
             case "positionoffsetrandom":
-                inits.append(.positionOffsetRandom(offsetMin: pvec3(i["offsetmin"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                                   offsetMax: pvec3(i["offsetmax"]) ?? Vec3(x: 0, y: 0, z: 0)))
+                // `octaves` 클램프는 **부호 없는** 비교다 — `cmp eax,8 / jae → 8` 뒤 `cmp eax,1 /
+                // cmovb → 1`(0x1401c9387–0x1401c9399). 음수는 8 로 간다.
+                let rawOctaves = pint(i["octaves"]) ?? 0
+                let octaves = UInt32(bitPattern: Int32(truncatingIfNeeded: rawOctaves)) >= 8
+                    ? 8 : max(1, rawOctaves)
+                inits.append(.positionOffsetRandom(
+                    directions: pvec3(i["directions"]) ?? Vec3(x: 1, y: 1, z: 0),   // 주입 기본(직교 분기)
+                    sign: pvec3(i["sign"]) ?? Vec3(x: 0, y: 0, z: 0),               // 주입 기본 "0 0 0"
+                    scale: pfloat(i["scale"]) ?? 0,        // asFloat(null) = 0 (0x1400862ad)
+                    distance: pfloat(i["distance"]) ?? 0,
+                    timescale: pfloat(i["timescale"]) ?? 0,
+                    octaves: octaves))
             case "inheritcontrolpointvelocity":
                 // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
                 inits.append(.inheritControlPointVelocity(
