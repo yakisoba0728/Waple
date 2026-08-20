@@ -82,7 +82,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         guard case let .oscillatePosition(_, _, _, scaleMax, _, _, _) = d.operators[0] else {
             return XCTFail("no oscillateposition")
         }
-        XCTAssertEqual(scaleMax, 10, "동봉 scene.json 355개 중 347개가 ortho — 원근 분기는 0.5")
+        XCTAssertEqual(scaleMax, 10, "동봉 트리 171개 중 169개가 ortho — 원근 분기는 0.5")
     }
 
     // MARK: - 단일 원소 귀속 (자매 원소로 번지지 않아야)
@@ -105,7 +105,8 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     /// `distancemax` 를 심는 이미터는 sphererandom 과 boxrandom 뿐이고 `layerimage` 주입기
     /// 0x1401b9930 에는 없다 — 셋을 뭉뚱그리면 layerimage 가 회귀한다.
     ///
-    /// **둘 다 직교/원근 조건부고, 실측 동작은 직교(씬의 98.8%)다:**
+    /// **둘 다 직교/원근 조건부고, 실측 동작은 직교다** (동봉 트리 169/171 · 두 트리+설치본
+    /// 347/355. 원근 판정 씬은 조건부 상수 원소를 아예 쓰지 않는다):
     ///   · sphererandom: 256(0x1401b9454) / 1.0(0x1401b945e)
     ///   · boxrandom:    "256 256 0"(0x1401b981d) / "1 1 1"(0x1401b971b), `cmovne` @0x1401b9831
     /// boxrandom 의 z=0 은 직교 서사와 맞는다(turbulence 의 mask "1 1 0" 과 같은 이유).
@@ -118,7 +119,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         XCTAssertEqual(sphereMax, 256, "0x1401b9470 (ortho) — 원근은 1.0, 어느 쪽도 0 이 아니다")
         guard case let .box(_, boxMax, _, _) = d.emitters[1] else { return XCTFail("no box") }
         XCTAssertEqual(boxMax, Vec3(x: 256, y: 256, z: 0),
-                       "0x1401b981d 직교 분기 — 원근 \"1 1 1\" 을 고르면 98.8% 의 씬에서 틀린다")
+                       "0x1401b981d 직교 분기 — 원근 \"1 1 1\" 을 고르면 사실상 전 씬에서 틀린다")
         guard case let .box(_, layerMax, _, _) = d.emitters[2] else { return XCTFail("no layerimage box") }
         XCTAssertEqual(layerMax, Vec3(x: 0, y: 0, z: 0), "layerimage 주입기엔 distancemax 가 **없다**")
         XCTAssertEqual(d.emitterSpeed[2], SIMD2<Float>(0.1, 0.2), "0x1401b9a5d / 0x1401b9b1b — layerimage 만 speed 기본이 0 이 아니다")

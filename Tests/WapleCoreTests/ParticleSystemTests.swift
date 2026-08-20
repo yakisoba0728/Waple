@@ -365,7 +365,8 @@ final class ParticleSystemTests: XCTestCase {
     /// 원근 분기는 1.0 / 5.0 / 1.0 / "1 1 1" 이다 — **0 은 어느 쪽도 아니다.**
     ///
     /// 종전 코드는 `scale 0.01`(직교 분기와 일치)과 `mask (1,1,1)`(원근 분기와 일치)을 섞어
-    /// 쓰고 있었다 — 자기모순이었다. 직교가 실물 씬의 98.8% 다(아래 분기 주석 참조).
+    /// 쓰고 있었다 — 자기모순이었다. 직교가 실물 씬의 대부분이다(동봉 트리 169/171,
+    /// 두 트리+설치본 347/355 — 아래 분기 주석의 범위 표기 참조).
     func testParseTurbulenceDefaults() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"id":8,"name":"turbulence"}],"renderer":[{"name":"sprite"}],"maxcount":10}"#), material: nil)
         XCTAssertTrue(d.operators.contains(.turbulence(speedMin: 500, speedMax: 1000, scale: 0.01, timeScale: 20,
@@ -547,7 +548,22 @@ final class ParticleSystemTests: XCTestCase {
         // `flags` 키가 아니라 **씬의 직교투영 활성 여부**(엔진 오브젝트 `[+0x118]` bit10)였고,
         // 그 비트는 `general.orthogonalprojection` 의 auto 또는 width·height 로 세워진다
         // (0x1401874ec 키 읽기 → 0x14018768a `or [r13+0x118], 0x400`).
-        // 두 트리 실측 **343/347 = 98.8%** 가 SET 이므로 직교 분기가 실측 동작이다 → 10.0.
+        // **[2026-08-20 범위 명시]** 이 자리에 세 숫자가 범위 표기 없이 돌아다녔다.
+        // 게이트를 다시 읽고(0x1401874fe `cmp byte [rax+8], 7` = objectValue →
+        // `auto` 는 0x140187550 `cmp …,5` = booleanValue → 0x140187565 `or …,0x18`,
+        // 아니면 width·height → 0x1401875df `or …,8` → 최종 0x14018768a `or [r13+0x118],0x400`)
+        // 그 규칙 그대로 세니 **범위마다 값이 다르다**:
+        //   · 동봉 트리 단독            ortho 169 / 원근 2 / 171 = **98.8%**
+        //   · 두 트리 + 설치본 projects  ortho 347 / 원근 8 / 355 = **97.7%**
+        // 둘 다 맞는 값이고, 섞어 쓴 `347/355 = 98.8%` 만 틀렸다. (`343/347` 은 어느 범위로도
+        // 재현되지 않았다 — 근거 불명으로 폐기한다.)
+        //
+        // **더 강한 사실**: 원근 판정 씬은 **전부 키 자체가 없는** 씬이고(키를 가진 씬은 전건
+        // ortho), 그중 조건부 상수를 쓰는 오퍼레이터를 가진 것이 **하나도 없다**
+        // (modeleditor·particleeditor3dscale·demon_core·neon_sunset·dna_fragment·arsenal).
+        // 즉 직교 분기 채택은 백분율과 무관하게 **전건 안전**하다.
+        // 이 불변식은 `scripts/spec/check_ortho_projection_census.py` 가 강제한다 —
+        // 주석에만 두면 또 갈라진다.
         XCTAssertEqual(psmax, 10, "0x1401bd899 직교 분기(원근은 0.5) — `?? scalemin` 승계는 어느 쪽도 아니다")
         XCTAssertEqual(pmask, Vec3(x: 1, y: 1, z: 0), "주입 문자열 \"1 1 0\" @0x14048f488 — (1,1,1) 아님")
     }
