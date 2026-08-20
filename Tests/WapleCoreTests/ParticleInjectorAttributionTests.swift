@@ -303,12 +303,19 @@ final class ParticleInjectorAttributionTests: XCTestCase {
 
     // MARK: - controlpointattract (키 이름 정정)
 
+    /// **CP 슬롯은 `id` 가 아니라 배열 위치다.** 실물 파서는 고정 8회를 돌며
+    /// (`inc r14d` / `cmp r14d, 8` @0x1401d0807) `operator[](i)` 로 원소를 꺼내 슬롯 주소를
+    /// `shl rdi, 5` + `[rdi + r13 + 0xa4]` = **인덱스 × 32** 에서 만든다. CP 루프가 lea 로
+    /// 집는 문자열은 `offset`·`angles`·`flags`·`parentcontrolpoint` 넷뿐이고 **`"id"` 는 없다**.
+    /// 그래서 아래 픽스처는 슬롯 3 에 놓기 위해 앞을 빈 오브젝트로 채우고, 그 원소에 일부러
+    /// 엉뚱한 `"id": 99` 를 달아 **id 가 무시된다는 것까지** 함께 못박는다.
+    ///
     /// **대상은 `origin` 도 `offset` 도 아니라 컨트롤포인트다.** 런타임 핸들러에서 `offset`
     /// (레코드 +0x10)의 유일한 참조는 `lea r8, [r14+0x10]`(0x14024194e)이고 그건 삭제 함수에
     /// 넘기는 베이스 포인터다 — 위치로 쓰이는 곳이 없다. 실제 대상은 `CP[controlpoint].worldPos`.
     func testControlPointAttractTargetComesFromControlPointNotOffsetOrOrigin() {
         let d = ParticleSystemDef.parse(json("""
-        {"controlpoint":[{"id":0,"offset":"1 2 3"},{"id":3,"offset":"70 80 90"}],
+        {"controlpoint":[{"offset":"1 2 3"},{},{},{"id":99,"offset":"70 80 90"}],
          "operator":[{"name":"controlpointattract","controlpoint":3,
                       "offset":"10 20 30","origin":"99 99 99"}],"maxcount":10}
         """), material: nil)
@@ -333,7 +340,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testControlPointAttractControlPointClampIsUnsignedSeven() {
         func target(cp: Int) -> Vec3 {
             let d = ParticleSystemDef.parse(json("""
-            {"controlpoint":[{"id":0,"offset":"1 0 0"},{"id":7,"offset":"7 0 0"}],
+            {"controlpoint":[{"offset":"1 0 0"},{},{},{},{},{},{},{"offset":"7 0 0"}],
              "operator":[{"name":"controlpointattract","controlpoint":\(cp)}],"maxcount":10}
             """), material: nil)
             guard case let .controlPointAttract(_, _, t, _, _) = d.operators[0] else { return Vec3(x: -1, y: 0, z: 0) }
