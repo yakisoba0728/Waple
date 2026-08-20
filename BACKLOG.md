@@ -195,6 +195,10 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   "Vortex orb") · `maintaindistancebetweencontrolpoints` 2(Lightning "Thunderbolt").
   **나머지 7종(충돌 6 + `inheritvaluefromevent`)은 도달 0건 — 구현 가치가 없다.**
 
+  **[2026-08-20 착지]** `maintaindistancetocontrolpoint` 와 `boids` 둘 다 구현했다. 남은 것은
+  `maintaindistancebetweencontrolpoints`(CP 지원과 묶어야 함) + 충돌 6종(도달 0, 그중
+  `collisionbox` 는 구현 금지) + `inheritvaluefromevent`(도달 0, 섹션 귀속 오류만 남음)다.
+
   **최우선은 `maintaindistancetocontrolpoint`** — 난이도 최저(위치 투영), 시각 영향 최대
   (지금 Vortex orb 의 구각이 통째로 없다), 선행 과제 불필요. "CP 지원(G-C2-02) 없으면
   어차피 no-op" 이라는 종전 판단은 **이 원소에 대해선 거짓**이다: 외부 분기가 `입자 수 == 0`

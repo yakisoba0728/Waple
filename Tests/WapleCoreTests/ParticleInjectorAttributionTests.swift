@@ -337,4 +337,78 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         }
         XCTAssertEqual(offset, Vec3(x: 5, y: 5, z: 0))
     }
+
+    // MARK: - boids (신규 구현)
+
+    /// 주입 기본 7건. `flags` 는 **1**(속도 상한 ON)이 기본인데 동봉 실사용 2종은 0 으로 끈다.
+    func testBoidsInjectedDefaults() {
+        let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"boids"}],"maxcount":10}"#), material: nil)
+        guard case let .boids(sepThr, nbrThr, maxSpeed, sepF, aliF, cohF, flags) = d.operators[0] else {
+            return XCTFail("boids 가 파스되지 않는다 — 종전엔 드롭됐다")
+        }
+        XCTAssertEqual(sepThr, 20, "0x1401bf726 (원근 0.02)")
+        XCTAssertEqual(nbrThr, 50, "0x1401bf7f5 (원근 0.2)")
+        XCTAssertEqual(maxSpeed, 500, "0x1401bf8c4 (원근 1.0)")
+        XCTAssertEqual(sepF, 15, "f64 @0x140492818, 플래그 무관")
+        XCTAssertEqual(aliF, 1, "0x1401bf9fd")
+        XCTAssertEqual(cohF, 2, "0x1401bfa14")
+        XCTAssertEqual(flags, 1, "`mov qword [rbp-0x40], 1` @0x1401bfa69")
+    }
+
+    /// 동봉 `presets/water/…/dripping_water.json` 의 실제 조합 — 지정한 넷은 그대로,
+    /// 생략한 셋(separationthreshold·maxspeed·… )은 주입값이 뜬다.
+    func testBoidsRealPresetShape() {
+        let d = ParticleSystemDef.parse(json("""
+        {"operator":[{"name":"boids","alignmentfactor":5,"cohesionfactor":5,"flags":0,
+                      "neighborthreshold":150,"separationfactor":0}],"maxcount":16}
+        """), material: nil)
+        guard case let .boids(sepThr, nbrThr, maxSpeed, sepF, aliF, cohF, flags) = d.operators[0] else {
+            return XCTFail("no boids")
+        }
+        XCTAssertEqual(nbrThr, 150); XCTAssertEqual(aliF, 5); XCTAssertEqual(cohF, 5)
+        XCTAssertEqual(sepF, 0, "명시된 0 은 주입되지 않는다")
+        XCTAssertEqual(flags, 0, "속도 상한 OFF")
+        XCTAssertEqual(sepThr, 20, "생략 → 주입")
+        XCTAssertEqual(maxSpeed, 500, "생략 → 주입")
+    }
+
+    /// 응집(cohesion)이 실제로 두 입자를 끌어당기는지 — 분리·정렬을 끄고 응집만 남긴다.
+    func testBoidsCohesionPullsTowardNeighbor() {
+        let def = ParticleSystemDef(
+            emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 10, y: 0, z: 0),
+                            rate: 0, burst: 2)],
+            initializers: [.lifetimeRandom(min: 100, max: 100)],
+            operators: [.boids(separationThreshold: 0, neighborThreshold: 1000, maxSpeed: 500,
+                               separationFactor: 0, alignmentFactor: 0, cohesionFactor: 10, flags: 0)],
+            renderer: .sprite, maxCount: 4, startTime: 0, material: nil)
+        var sim = ParticleSimulator(def: def, seed: 5)
+        let a = sim.step(0.1)
+        XCTAssertEqual(a.count, 2)
+        // 서로를 향해 가속해야 한다: x 가 큰 쪽은 −x, 작은 쪽은 +x.
+        let lo = a.min { $0.pos.x < $1.pos.x }!, hi = a.max { $0.pos.x < $1.pos.x }!
+        // 두 입자가 같은 자리에 뽑히면 실물도 `cmpneqps xmm2, 0` 으로 건너뛰어 단언이 무의미해진다.
+        // 그 경우 조용히 실패하지 않도록 전제를 먼저 말한다.
+        XCTAssertGreaterThan(hi.pos.x - lo.pos.x, 0.01, "두 입자가 겹쳐 뽑혔다 — 시드를 바꿔라")
+        XCTAssertGreaterThan(lo.vel.x, 0, "왼쪽 입자는 오른쪽으로")
+        XCTAssertLessThan(hi.vel.x, 0, "오른쪽 입자는 왼쪽으로")
+    }
+
+    /// 분리(separation)는 `separationthreshold` 안에서만 밀어낸다 — 밖이면 무작용.
+    func testBoidsSeparationOnlyInsideThreshold() {
+        func velX(sepThr: Float) -> Float {
+            let def = ParticleSystemDef(
+                emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 10, y: 0, z: 0),
+                                rate: 0, burst: 2)],
+                initializers: [.lifetimeRandom(min: 100, max: 100)],
+                operators: [.boids(separationThreshold: sepThr, neighborThreshold: 0, maxSpeed: 500,
+                                   separationFactor: 10, alignmentFactor: 0, cohesionFactor: 0, flags: 0)],
+                renderer: .sprite, maxCount: 4, startTime: 0, material: nil)
+            var sim = ParticleSimulator(def: def, seed: 5)
+            let a = sim.step(0.1)
+            return a.max { $0.pos.x < $1.pos.x }!.vel.x
+        }
+        // 분리는 **바깥쪽**으로 민다 — x 가 큰 입자는 +x 로.
+        XCTAssertGreaterThan(velX(sepThr: 1000), 0, "임계 안 — 서로 밀어낸다")
+        XCTAssertEqual(velX(sepThr: 0.001), 0, accuracy: 1e-5, "임계 밖 — 무작용")
+    }
 }
