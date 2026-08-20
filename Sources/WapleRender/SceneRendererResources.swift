@@ -54,10 +54,48 @@ extension SceneRenderer {
     }
     /// X-①: 이름 있는 FBO 1개의 할당 스펙 — scale(dst 비례) 또는 fixedWidth/fixedHeight(절대 픽셀,
     /// 실물 cursorripple fit:512·glitter width/height:256) 중 후자가 있으면 우선.
-    struct FBOSpec { let scale: Int; let fixedWidth: Int?; let fixedHeight: Int? }
+    /// X-⑧: `format`(픽셀 포맷) · `unique`(프레임 간 지속) · `clearColor`(생성 1회 초기화) 추가.
+    struct FBOSpec {
+        let scale: Int
+        let fixedWidth: Int?
+        let fixedHeight: Int?
+        /// 이미 Metal 포맷으로 해석된 값 — `rgba_backbuffer` 의 HDR 분기는 빌드 시점에 끝난다
+        /// (씬의 HDR 여부는 마운트 시 확정이고 프레임마다 바뀌지 않는다).
+        let pixelFormat: MTLPixelFormat
+        let unique: Bool
+        let clearColor: SIMD4<Float>?
+        init(scale: Int, fixedWidth: Int?, fixedHeight: Int?,
+             pixelFormat: MTLPixelFormat = .rgba8Unorm, unique: Bool = false,
+             clearColor: SIMD4<Float>? = nil) {
+            self.scale = scale; self.fixedWidth = fixedWidth; self.fixedHeight = fixedHeight
+            self.pixelFormat = pixelFormat; self.unique = unique; self.clearColor = clearColor
+        }
+    }
+
+    /// X-⑧(G-A5-05/G-B2-03): `unique:true` FBO 의 **프레임 간 지속 저장소**.
+    ///
+    /// 참조형인 이유는 `EffectVisibleGate` 와 같다 — `EffectGPU` 는 배열 안에서 값복사되는
+    /// 구조체라, 상태를 구조체 필드로 들면 프레임마다 복사본이 갈린다. 인스턴스가 상태를 든다.
+    ///
+    /// 왜 풀(pooledOffscreen)로는 안 되나: 풀은 `(포맷, 폭, 높이)` 키의 체크아웃 카운터라
+    /// **같은 이름의 FBO 가 프레임마다 같은 텍스처를 받는다는 보장이 없다**. 이펙트 가시성이
+    /// 토글되거나 레이어 순서가 바뀌면 체크아웃 순서가 밀리고, 유체 시뮬은 직전 프레임의
+    /// 자기 출력을 읽으므로 그 순간 상태가 남의 버퍼로 바뀐다. `unique` 는 그 계약을 깬다.
+    final class UniqueFBOStore {
+        /// fboSpecs 인덱스 → 지속 텍스처. `command:"swap"` 은 이 배열의 원소를 맞바꾸므로
+        /// 핑퐁이 프레임을 넘어 유지된다(종전엔 프레임 로컬 배열을 바꿔 매 프레임 리셋됐다).
+        var textures: [MTLTexture?] = []
+        /// 마지막으로 할당한 dst 크기 — 창 리사이즈 시 전부 재생성(+ clear 재적용)한다.
+        var baseWidth = 0
+        var baseHeight = 0
+        /// 아직 `clearColor` 초기화를 못 받은 인덱스. 생성 직후 1회만 비운다 —
+        /// **매 프레임 비우면 누적 자체가 성립하지 않는다**(그게 이 버퍼들의 존재 이유다).
+        var pendingClear: Set<Int> = []
+    }
+
     enum EffectBind {
         case handPort(params: [Float], aux: [MTLTexture], audio: AudioParams?)
-        case translated(passes: [TranslatedPass], fboSpecs: [FBOSpec])
+        case translated(passes: [TranslatedPass], fboSpecs: [FBOSpec], uniqueStore: UniqueFBOStore)
     }
     /// X-⑥: 이펙트 visible 스크립트 per-frame 게이트 — 참조형이라 EffectGPU 가 배열 안에서 값복사돼도
     /// (레이어/텍스트 propScripts 와 달리 build-once 캐시라 uid 키 dict 대신 인스턴스 자체가 상태를 든다)
@@ -577,6 +615,18 @@ extension SceneRenderer {
         // 정상 자산은 영향 없고, 저작 오류·악의 입력만 여기로 온다.
         let fboIndex = Dictionary(manifest.fbos.enumerated().map { ($1.name, $0) },
                                   uniquingKeysWith: { _, later in later })
+        // X-⑧: fbo 인덱스별 Metal 포맷. 패스 파이프라인의 컬러 어태치먼트 포맷은 **그 패스가
+        // 쓰는 타깃의 포맷과 일치해야 한다**(불일치 = Metal 파이프라인 생성 실패/미정의).
+        // 타깃 없는 패스(효과 출력)는 체인 dst 포맷 — 이 렌더러의 이펙트 체인 dst 는
+        // pooledOffscreen(bgra:false) = rgba8Unorm 고정이다.
+        // `hdrActive` 는 마운트에서 이미 확정이다(`SceneRenderer.mount` 가 sceneIsHDR/sceneQuality 를
+        // 잡은 뒤 buildLayers 를 부른다) — 빌드 시점 1 회 해석으로 충분하고 프레임마다 흔들리지 않는다.
+        let fboFormats = manifest.fbos.map { SceneRenderer.metalFormat($0.format, hdr: hdrActive) }
+        let outputFormat = MTLPixelFormat.rgba8Unorm
+        func targetFormat(_ name: String?) -> MTLPixelFormat {
+            guard let n = name, let i = fboIndex[n] else { return outputFormat }
+            return fboFormats[i]
+        }
         let lw = Float(max(1, texW)), lh = Float(max(1, texH))
         var passes: [TranslatedPass] = []
         var anyAudio = false
@@ -591,7 +641,8 @@ extension SceneRenderer {
         for (i, mp) in manifest.passes.enumerated() {
             if mp.command == "copy" {
                 guard let copy = makeCopyPass(mp, effName: eff.name, fboIndex: fboIndex,
-                                              lw: lw, lh: lh, device: device) else { return nil }
+                                              lw: lw, lh: lh, device: device,
+                                              pixelFormat: targetFormat(mp.target)) else { return nil }
                 passes.append(copy)
                 continue
             }
@@ -616,8 +667,12 @@ extension SceneRenderer {
                 NSLog("%@", "[Waple] GLSL translate failed: \(eff.name) pass \(i)")
                 return nil
             }
-            guard let pipe = translatedPipeline(msl: t.msl, device: device) else {
-                NSLog("%@", "[Waple] translated MSL compile failed: \(eff.name) pass \(i)")
+            let passFormat = targetFormat(mp.target)
+            guard let pipe = translatedPipeline(msl: t.msl, device: device, pixelFormat: passFormat) else {
+                // X-⑧: 포맷을 로그에 넣는다 — 여기서 실패하면 이펙트가 통째로 폴백하는데, 종전 메시지로는
+                // MSL 컴파일 실패인지 어태치먼트 포맷 거부인지 구분이 안 됐다.
+                NSLog("%@", "[Waple] translated MSL compile failed: \(eff.name) pass \(i) "
+                          + "target=\(mp.target ?? "(output)") format=\(passFormat.rawValue)")
                 return nil
             }
             let (material, passScripts, passAnimations) = buildPassMaterial(t, scenePass: scenePass)
@@ -645,10 +700,13 @@ extension SceneRenderer {
         // ④ colorBlendMode=0 ⑤ 비-`_rt_` ⑥ 2D 오르토 씬(camera3D 없음)이다. 그래서 소비처는
         // encodeLayer 의 f_main 분기 하나로 충분하다 — f_compose/f_blend/f_lit/3D 빌보드 경로에는
         // 대응 변형을 두지 않았다(도달 0건). 도달이 생기면 그 경로는 종전 동작으로 남는다(무크래시).
+        let specs = manifest.fbos.enumerated().map { i, f in
+            FBOSpec(scale: f.scale, fixedWidth: f.fixedWidth, fixedHeight: f.fixedHeight,
+                    pixelFormat: fboFormats[i], unique: f.unique, clearColor: f.clearColor)
+        }
         return EffectGPU(pipeline: passes[0].pipeline,
-                         bind: .translated(passes: passes, fboSpecs: manifest.fbos.map {
-                             FBOSpec(scale: $0.scale, fixedWidth: $0.fixedWidth, fixedHeight: $0.fixedHeight)
-                         }),
+                         bind: .translated(passes: passes, fboSpecs: specs,
+                                           uniqueStore: UniqueFBOStore()),
                          outputPremultiplied: outputPremultiplied)
     }
 
@@ -665,10 +723,11 @@ extension SceneRenderer {
     /// 통과(passthrough) 파이프라인으로 합성해 기존 멀티패스 실행 경로를 그대로 재사용(루프 무변경).
     /// 미해석 이름/파이프라인 실패 → nil(효과 전체 폴백).
     private func makeCopyPass(_ mp: EffectManifest.Pass, effName: String, fboIndex: [String: Int],
-                              lw: Float, lh: Float, device: MTLDevice) -> TranslatedPass? {
+                              lw: Float, lh: Float, device: MTLDevice,
+                              pixelFormat: MTLPixelFormat = .rgba8Unorm) -> TranslatedPass? {
         guard let srcName = mp.source, let srcIdx = fboIndex[srcName],
               let tgtName = mp.target, let tgtIdx = fboIndex[tgtName],
-              let pipe = passthroughEffectPipeline(device: device) else {
+              let pipe = passthroughEffectPipeline(device: device, pixelFormat: pixelFormat) else {
             NSLog("%@", "[Waple] unresolved copy pass in \(effName)"); return nil
         }
         let dims = SIMD4<Float>(lw, lh, lw, lh)
@@ -1048,8 +1107,12 @@ extension SceneRenderer {
     /// command=copy 패스용 통과 파이프라인(g_Texture0 을 그대로 target 에 기록). translated 실행 규약과
     /// 동일한 버텍스 디스크립터/버퍼 인덱스를 쓰도록 GLSL 통과 셰이더를 번역해 캐시.
 
-    func passthroughEffectPipeline(device: MTLDevice) -> MTLRenderPipelineState? {
-        if let p = _passthroughPipeline { return p }
+    /// X-⑧: 포맷별로 캐시한다 — copy 패스의 타깃이 r16f 면 통과 파이프라인도 r16f 여야 한다.
+    /// 종전 단일 캐시(`_passthroughPipeline`)는 첫 요청 포맷을 이후 전부에 재사용해서,
+    /// 포맷이 갈리는 순간 조용히 틀린 파이프라인을 돌려줬을 것이다.
+    func passthroughEffectPipeline(device: MTLDevice,
+                                   pixelFormat: MTLPixelFormat = .rgba8Unorm) -> MTLRenderPipelineState? {
+        if let p = _passthroughPipelines[pixelFormat.rawValue] { return p }
         let vert = """
         uniform mat4 g_ModelViewProjectionMatrix;
         attribute vec3 a_Position;
@@ -1063,12 +1126,16 @@ extension SceneRenderer {
         void main() { gl_FragColor = texSample2D(g_Texture0, v_TexCoord); }
         """
         guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: [:]),
-              let p = translatedPipeline(msl: t.msl, device: device) else { return nil }
-        _passthroughPipeline = p
+              let p = translatedPipeline(msl: t.msl, device: device, pixelFormat: pixelFormat) else { return nil }
+        _passthroughPipelines[pixelFormat.rawValue] = p
         return p
     }
 
-    func translatedPipeline(msl: String, device: MTLDevice) -> MTLRenderPipelineState? {
+    /// X-⑧: `pixelFormat` 은 **이 패스가 쓰는 타깃의 실제 포맷**이다. 종전엔 `.rgba8Unorm`
+    /// 하드코딩이라 fbo 포맷을 살리는 순간 타깃-파이프라인 불일치로 Metal 이 거부한다.
+    /// 기본값을 둔 이유는 호출부 중 타깃이 항상 효과 출력(rgba8)인 곳이 있어서다(무회귀).
+    func translatedPipeline(msl: String, device: MTLDevice,
+                            pixelFormat: MTLPixelFormat = .rgba8Unorm) -> MTLRenderPipelineState? {
         let lib: MTLLibrary
         do {
             lib = try WapleProfiler.compile(msl) { try device.makeLibrary(source: msl, options: nil) }
@@ -1086,8 +1153,26 @@ extension SceneRenderer {
         vd.attributes[1].format = .float2; vd.attributes[1].offset = 12; vd.attributes[1].bufferIndex = 4
         vd.layouts[4].stride = 20
         pd.vertexDescriptor = vd
-        pd.colorAttachments[0].pixelFormat = .rgba8Unorm
+        pd.colorAttachments[0].pixelFormat = pixelFormat
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
+    }
+
+    /// X-⑧: effect.json 의 `fbos[].format` 문자열 → Metal 픽셀 포맷.
+    ///
+    /// `rgba_backbuffer` 만 조건부다 — 이름 그대로 "백버퍼와 같은 포맷" 이라 HDR 씬에서는
+    /// float 이 된다. 나머지는 고정이다. 미지/미선언(nil)은 rgba8 — 이펙트를 드롭하지 않는
+    /// 폴백 정책(G-A5-04)과 같다.
+    ///
+    /// 채널 수가 줄어드는 포맷(r16f/rg1616f/r8)에 float4 를 반환하는 프래그먼트가 쓰는 것은
+    /// 정상이다 — 어태치먼트 채널 수를 넘는 성분은 버려진다(GLSL/HLSL 과 동일).
+    static func metalFormat(_ f: EffectManifest.FBO.Format?, hdr: Bool) -> MTLPixelFormat {
+        switch f {
+        case .none, .some(.rgba8888): return .rgba8Unorm
+        case .some(.rgbaBackbuffer): return hdr ? .rgba16Float : .rgba8Unorm
+        case .some(.r16f): return .r16Float
+        case .some(.rg1616f): return .rg16Float
+        case .some(.r8): return .r8Unorm
+        }
     }
 
     /// H1: 레이어 커스텀 셰이더 파이프라인. 정점 디스크립터는 translatedPipeline 과 동일(a_Position float3@0,
@@ -1527,6 +1612,14 @@ extension SceneRenderer {
 
     func makeOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: max(w,1), height: max(h,1), mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]
+        return device.makeTexture(descriptor: d)
+    }
+
+    /// X-⑧: 임의 포맷 오프스크린(effect.json `fbos[].format` 전용). usage 는 다른 팩토리와 동일하게
+    /// renderTarget|shaderRead — fbo 는 항상 타깃이자 다음 패스의 소스다.
+    func makeOffscreenFormatted(_ w: Int, _ h: Int, _ device: MTLDevice, format: MTLPixelFormat) -> MTLTexture? {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: max(w,1), height: max(h,1), mipmapped: false)
         d.usage = [.renderTarget, .shaderRead]
         return device.makeTexture(descriptor: d)
     }

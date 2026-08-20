@@ -298,18 +298,33 @@ extension SceneRenderer {
         poolCheckout.removeAll(keepingCapacity: true)
     }
 
-    func pooledOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice, bgra: Bool = false) -> MTLTexture? {
+    /// X-⑧: `format` 은 bgra/HDR 승격 규칙을 **우회하는 명시 포맷**이다(effect.json `fbos[].format`).
+    /// nil 이면 종전 동작 그대로 — bgra 플래그와 hdrActive 로 결정한다. 풀 키에 포맷을 넣어야
+    /// r16f 요청이 이전에 만들어 둔 rgba8 텍스처를 받아가지 않는다.
+    func pooledOffscreen(_ w: Int, _ h: Int, _ device: MTLDevice, bgra: Bool = false,
+                         format: MTLPixelFormat? = nil) -> MTLTexture? {
         // A2 HDR: bgra 요청(acc·합성 스냅샷)은 HDR 씬에서 float(rgba16Float)로 승격 — runFrameBufferLayer/
         // runBlendModeLayer 본문 무수정으로 스냅샷이 float acc 와 동일 포맷(blit copy 정합)이 되게 한다.
         let hdrBGRA = bgra && hdrActive
-        let key = "\(hdrBGRA ? "h" : (bgra ? "b" : ""))\(max(w,1))x\(max(h,1))"
+        let key: String
+        if let f = format {
+            key = "f\(f.rawValue)_\(max(w,1))x\(max(h,1))"
+        } else {
+            key = "\(hdrBGRA ? "h" : (bgra ? "b" : ""))\(max(w,1))x\(max(h,1))"
+        }
         let idx = poolCheckout[key, default: 0]
         if idx < (texturePool[key]?.count ?? 0) {
             poolCheckout[key] = idx + 1
             return texturePool[key]![idx]
         }
-        guard let t = hdrBGRA ? makeOffscreenHDR(w, h, device)
-                              : (bgra ? makeOffscreenBGRA(w, h, device) : makeOffscreen(w, h, device)) else { return nil }
+        let made: MTLTexture?
+        if let f = format {
+            made = makeOffscreenFormatted(w, h, device, format: f)
+        } else {
+            made = hdrBGRA ? makeOffscreenHDR(w, h, device)
+                           : (bgra ? makeOffscreenBGRA(w, h, device) : makeOffscreen(w, h, device))
+        }
+        guard let t = made else { return nil }
         texturePool[key, default: []].append(t)
         poolCheckout[key] = idx + 1
         return t
@@ -1938,7 +1953,7 @@ extension SceneRenderer {
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             enc.endEncoding()
 
-        case .translated(var passes, let fboSpecs):
+        case .translated(var passes, let fboSpecs, let uniqueStore):
             guard let device else { return false }  // mount 이후 항상 존재 — 강제 언랩 제거(teardown 경합 안전)
             // 디버그: WAPLE_MP_TRUNC=n → 앞 n개 패스만 실행(마지막은 dst 로 강제) — 패스별 이분용.
             // env 는 캐시 스냅샷 경유(매 프레임·패스마다 사전 재구성 회피 — SceneRenderer.environmentSnapshot 주석).
@@ -1961,18 +1976,67 @@ extension SceneRenderer {
             // 근사(4× 과대 오프셋)가 아니라 이 값을 쓴다 — bokeh_blur 12씬 블러 폭은 라이브 A/B
             // 판독 대기(BACKLOG.md 시각 충실도 표).
             let targetRes = SIMD4<Float>(Float(baseW), Float(baseH), Float(baseW), Float(baseH))
+            // X-⑧(G-A5-05/G-B2-03): `unique` FBO 는 풀이 아니라 이펙트 전용 저장소에서 온다.
+            // dst 크기가 바뀌면 전부 재생성하고 clear 예약도 되살린다.
+            if uniqueStore.baseWidth != baseW || uniqueStore.baseHeight != baseH {
+                uniqueStore.textures = [MTLTexture?](repeating: nil, count: fboSpecs.count)
+                uniqueStore.baseWidth = baseW
+                uniqueStore.baseHeight = baseH
+                uniqueStore.pendingClear = []
+            }
+            if uniqueStore.textures.count != fboSpecs.count {
+                uniqueStore.textures = [MTLTexture?](repeating: nil, count: fboSpecs.count)
+                uniqueStore.pendingClear = []
+            }
             var fboTex: [MTLTexture] = []
-            for spec in fboSpecs {
+            for (i, spec) in fboSpecs.enumerated() {
                 let w = spec.fixedWidth ?? max(1, baseW / spec.scale)
                 let h = spec.fixedHeight ?? max(1, baseH / spec.scale)
-                guard let t = pooledOffscreen(w, h, device) else { return false }
-                fboTex.append(t)
+                if spec.unique {
+                    if let held = uniqueStore.textures[i] {
+                        fboTex.append(held)
+                    } else {
+                        guard let t = makeOffscreenFormatted(w, h, device, format: spec.pixelFormat) else { return false }
+                        uniqueStore.textures[i] = t
+                        // 새로 만든 텍스처의 내용은 미정의다. `clear` 가 선언돼 있으면 그 색으로,
+                        // 없으면 투명 검정으로 **1회** 비운다 — 매 프레임이 아니다(누적이 이 버퍼들의
+                        // 존재 이유이고, 매 프레임 비우면 시뮬레이션 상태가 매번 사라진다).
+                        uniqueStore.pendingClear.insert(i)
+                        fboTex.append(t)
+                    }
+                } else {
+                    guard let t = pooledOffscreen(w, h, device, format: spec.pixelFormat) else { return false }
+                    fboTex.append(t)
+                }
             }
+            // 생성 1회 초기화 — 드로우 없는 클리어 전용 렌더 패스.
+            for i in uniqueStore.pendingClear.sorted() where i < fboTex.count {
+                let c = fboSpecs[i].clearColor ?? SIMD4<Float>(0, 0, 0, 0)
+                let rpd = MTLRenderPassDescriptor()
+                rpd.colorAttachments[0].texture = fboTex[i]
+                rpd.colorAttachments[0].loadAction = .clear
+                rpd.colorAttachments[0].storeAction = .store
+                rpd.colorAttachments[0].clearColor = MTLClearColor(red: Double(c.x), green: Double(c.y),
+                                                                   blue: Double(c.z), alpha: Double(c.w))
+                guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return false }
+                enc.endEncoding()
+            }
+            uniqueStore.pendingClear.removeAll()
             for pass in passes {
                 // X-②: command:"swap" — 무비용 포인터 교환(draw 없음). 인덱스 유효성만 재확인(빌드 시
                 // fboIndex 로 이미 확정됐지만 fboTex.count 는 fboSpecs.count 와 항상 같아 안전).
                 if let sp = pass.swapPair, sp.source < fboTex.count, sp.target < fboTex.count {
                     fboTex.swapAt(sp.source, sp.target)
+                    // X-⑧: 양쪽이 `unique` 면 **저장소에서도** 맞바꾼다 — 그래야 핑퐁이 프레임을 넘는다.
+                    // 종전엔 프레임 로컬 배열만 바꿔서, 다음 프레임에 원래 배치로 되돌아갔다(= 유체
+                    // 시뮬이 직전 프레임 자기 출력을 못 읽는다). 한쪽만 unique 인 혼합 교환은
+                    // 프레임 안에서만 유효하게 두고 저장소는 건드리지 않는다 — 풀 텍스처를 지속
+                    // 슬롯에 넣으면 다음 프레임에 남이 그 텍스처를 체크아웃해 간다.
+                    if sp.source < fboSpecs.count, sp.target < fboSpecs.count,
+                       fboSpecs[sp.source].unique, fboSpecs[sp.target].unique,
+                       sp.source < uniqueStore.textures.count, sp.target < uniqueStore.textures.count {
+                        uniqueStore.textures.swapAt(sp.source, sp.target)
+                    }
                     continue
                 }
                 let target = pass.target.map { fboTex[$0] } ?? dst

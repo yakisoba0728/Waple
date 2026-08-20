@@ -141,4 +141,96 @@ final class EffectManifestTests: XCTestCase {
         XCTAssertEqual(m2.fbos[0].fixedWidth, 8192)
         XCTAssertEqual(m2.fbos[0].fixedHeight, 8192)
     }
+
+    // MARK: - X-⑧ fbos[].format / unique / clear (G-A5-05·06 / G-B2-02·03)
+
+    /// 실물 `effects/fluidsimulation/effect.json` 의 fbos 선언 그대로(탭·공백까지 원문 형태).
+    ///
+    /// 이 넷이 **한 커밋에 같이** 가야 하는 이유가 여기 다 있다. 속도장은 `rg1616f`, 압력장은
+    /// `r16f` 다 — 둘 다 **부호와 1.0 초과를 갖는 물리량**이라 종전의 rgba8Unorm([0,1] 클램프 +
+    /// 8비트 양자화)으로는 원리적으로 못 담는다. 그리고 셋 다 `unique` + `clear` 라, 프레임을
+    /// 넘겨 자기 직전 출력을 읽어야 하고 첫 프레임의 시작값이 정의돼 있어야 한다.
+    /// 포맷만 고치고 지속을 안 고치면(또는 반대면) 유체는 여전히 안 돈다.
+    func testFluidSimulationFboDeclarationsParseFormatUniqueAndClear() throws {
+        let json = """
+        {"passes":[{"material":"materials/effects/fluidsimulation/advect.json","target":"_rt_SmokeVelocity2"}],
+         "fbos":[
+          {"name":"_rt_SmokeVelocity1","fit":256,"format":"rg1616f","clear":"0 0 0 0","unique":true},
+          {"name":"_rt_SmokePressure1","fit":256,"format":"r16f","clear":"0 0 0 0","unique":true},
+          {"name":"_rt_SmokeDye1","fit":256,"format":"rgba_backbuffer","clear":"0 0 0 0","unique":true},
+          {"name":"_rt_SmokeCurl","fit":256,"format":"r16f","unique":true}
+         ]}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        let formats: [EffectManifest.FBO.Format] = [.rg1616f, .r16f, .rgbaBackbuffer, .r16f]
+        XCTAssertEqual(m.fbos.compactMap(\.format), formats,
+                       "format 문자열 4종이 전부 해석돼야 한다")
+        XCTAssertEqual(m.fbos.compactMap(\.format).count, m.fbos.count, "미해석(nil)이 하나도 없어야 한다")
+        XCTAssertTrue(m.fbos.allSatisfy(\.unique), "실물 유체 fbo 는 전건 unique 다")
+        XCTAssertEqual(m.fbos.map { $0.clearColor != nil }, [true, true, true, false],
+                       "clear 는 선언된 것만 — `_rt_SmokeCurl` 은 clear 가 없다")
+        XCTAssertEqual(m.fbos[0].clearColor, SIMD4<Float>(0, 0, 0, 0))
+        XCTAssertEqual(m.fbos[0].fixedWidth, 256, "fit 은 종전대로 정사각 고정 크기")
+    }
+
+    /// 실물 `effects/glitter/effect.json` — 단일 채널 아틀라스. `r8` 과 `uvs:"repeat"` 가 공존한다.
+    func testGlitterTileAtlasParsesR8WithRepeatWrap() throws {
+        let json = """
+        {"passes":[{"material":"materials/effects/glitter/tiles.json","target":"_rt_GlitterTiles"}],
+         "fbos":[{"name":"_rt_GlitterTiles","width":256,"height":256,"format":"r8","uvs":"repeat"}]}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        let f = try XCTUnwrap(m.fbos.first)
+        XCTAssertEqual(f.format, .r8)
+        XCTAssertTrue(f.uvsRepeat)
+        XCTAssertFalse(f.unique, "unique 를 안 쓴 fbo 는 종전대로 풀에서 온다")
+        XCTAssertNil(f.clearColor)
+    }
+
+    /// 미지 포맷 문자열은 **이펙트를 드롭하지 않는다** — nil 로 두고 소비처가 rgba8 로 간다.
+    /// 미지 bind/target 을 폴백으로 처리한 G-A5-04 와 같은 정책이다.
+    func testUnknownFormatStringFallsBackToNilRatherThanFailing() throws {
+        let json = """
+        {"passes":[{"material":"materials/effects/a.json"}],
+         "fbos":[{"name":"_rt_A","scale":1,"format":"bc7_srgb_from_the_future"},
+                 {"name":"_rt_B","scale":1}]}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)), "미지 포맷이 파스를 죽이면 안 된다")
+        XCTAssertEqual(m.fbos.count, 2)
+        XCTAssertNil(m.fbos[0].format)
+        XCTAssertNil(m.fbos[1].format, "format 키 부재도 nil")
+    }
+
+    /// `clear` 파스: 성분 수 1/3/4 를 받고, **숫자가 아닌 토큰이 하나라도 있으면 전체를 버린다**.
+    /// compactMap 으로 조용히 버리면 `"0 0 0 x"` 가 3수(RGB)로 읽혀 알파 1 이 날조된다.
+    func testClearColorParsingAcceptsOneThreeFourAndRejectsGarbage() {
+        XCTAssertEqual(EffectManifest.parseClearColor("0 0 0 0"), SIMD4<Float>(0, 0, 0, 0))
+        XCTAssertEqual(EffectManifest.parseClearColor("1 0.5 0.25 0.125"), SIMD4<Float>(1, 0.5, 0.25, 0.125))
+        XCTAssertEqual(EffectManifest.parseClearColor("0.2 0.4 0.6"), SIMD4<Float>(0.2, 0.4, 0.6, 1),
+                       "3수는 RGB — 알파는 1")
+        XCTAssertEqual(EffectManifest.parseClearColor("0.5"), SIMD4<Float>(0.5, 0.5, 0.5, 1),
+                       "1수는 그레이스케일 브로드캐스트")
+        XCTAssertNil(EffectManifest.parseClearColor("0 0 0 x"), "부분 파스를 3수로 오독하면 안 된다")
+        XCTAssertNil(EffectManifest.parseClearColor("0 0"), "2수는 의미가 정의돼 있지 않다")
+        XCTAssertNil(EffectManifest.parseClearColor(""))
+        XCTAssertNil(EffectManifest.parseClearColor(42), "문자열이 아닌 값")
+        // 리터럴 nil 을 Any? 파라미터에 바로 넘기면 오버로드 해석이 흔들려 컴파일이 갈린다 — 명시 변수로 넘긴다.
+        let absent: Any? = nil
+        XCTAssertNil(EffectManifest.parseClearColor(absent))
+        XCTAssertNil(EffectManifest.parseClearColor("nan 0 0 0"), "비유한값은 MTLClearColor 로 못 보낸다")
+        XCTAssertNil(EffectManifest.parseClearColor("inf 0 0 0"))
+    }
+
+    /// 동봉 자산 전수 대조: 이 파서가 **실물에 나오는 포맷 문자열 5종을 전부** 안다.
+    /// 하나라도 nil 로 떨어지면 그 fbo 는 조용히 rgba8 이 되므로, enum 누락을 여기서 잡는다.
+    func testAllFormatStringsObservedInShippedAssetsAreKnown() {
+        // 2026-08-20 실측 빈도: rgba8888 28 · rgba_backbuffer 13 · r16f 8 · rg1616f 4 · r8 2 (합 55 = 전건).
+        let observed = ["rgba8888", "rgba_backbuffer", "r16f", "rg1616f", "r8"]
+        for name in observed {
+            XCTAssertNotNil(EffectManifest.FBO.Format(rawValue: name),
+                            "동봉 자산이 실제로 쓰는 포맷 \(name) 을 enum 이 모른다")
+        }
+        XCTAssertEqual(Set(EffectManifest.FBO.Format.allCases.map(\.rawValue)), Set(observed),
+                       "실물에 없는 포맷을 지어내지도, 있는 걸 빠뜨리지도 않는다")
+    }
 }
