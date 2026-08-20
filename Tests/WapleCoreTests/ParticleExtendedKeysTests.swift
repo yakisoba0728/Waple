@@ -37,13 +37,20 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(p?.delayMin, 2); XCTAssertEqual(p?.delayMax, 4)
         XCTAssertEqual(p?.maxPerPeriod, 7)
 
-        // maxtoemitperperiod 단독 → duration 기본 1/1, delay 0/0(중립), quota 6.
+        // **[2026-08-20 정정] `maxtoemitperperiod` 단독이면 duration 은 1/1 이 아니라 0/0 이다.**
+        // 종전 1/1 은 "중립값" 추정이었다. 주기 5키에는 기본값 주입이 **없다** — 주입기
+        // 0x1401b8e09 는 rate/duration(이미터 레벨) 만 다루고, 이미터 base 파서 0x1401c1c70 은
+        // 주기 키를 부재 기본 "" → asFloat → 0 으로 읽는다.
+        //
+        // 0/0 이 무한루프를 만들지 않는 것은 확인했다 — `ParticleSimulator.stepPeriodicEmission`
+        // 의 페이즈 전이 루프가 정확히 이 경우를 위해 홉 상한 16 을 둔다.
+        // 실물 도달 0: 주기 키를 쓰는 이미터 5건이 전건 duration 을 명시한다.
         let partial = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"sphererandom","rate":1,"maxtoemitperperiod":6}],
          "renderer":[{"name":"sprite"}],"maxcount":100}
         """), material: nil)
         let q = partial.emitterPeriodic[0]
-        XCTAssertEqual(q?.durationMin, 1); XCTAssertEqual(q?.durationMax, 1)
+        XCTAssertEqual(q?.durationMin, 0); XCTAssertEqual(q?.durationMax, 0)
         XCTAssertEqual(q?.delayMin, 0); XCTAssertEqual(q?.delayMax, 0)
         XCTAssertEqual(q?.maxPerPeriod, 6)
 

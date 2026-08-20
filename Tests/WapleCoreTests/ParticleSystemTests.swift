@@ -526,6 +526,31 @@ final class ParticleSystemTests: XCTestCase {
         XCTAssertEqual(lmax, 1)
     }
 
+    /// **주입은 "키 부재" 에만 일어난다 — "키는 있는데 못 읽음" 은 주입 대상이 아니다.**
+    ///
+    /// 이 구분이 없으면 `pfloat(d[k]) ?? C` 가 둘을 뭉뚱그려 **신뢰불가 입력이 오히려 엔진
+    /// 기본값으로 승격**된다. 실제로 그렇게 넣었다가 `1e300` 회귀 테스트가 잡았다 —
+    /// 원본도 `find` 가 노드를 찾으면 주입을 건너뛰고 그 노드의 `asFloat` 결과를 쓴다.
+    func testInjectedDefaultsApplyOnlyToAbsentKeysNotUnreadableOnes() {
+        // rate 는 있지만 Float 범위 밖 → 주입(10) 이 아니라 0
+        let huge = ParticleSystemDef.parse(json(
+            #"{"emitter":[{"name":"boxrandom","rate":1e300}],"renderer":[{"name":"sprite"}],"maxcount":10}"#),
+            material: nil)
+        guard case let .box(_, _, hugeRate, _) = huge.emitters.first else { return XCTFail("no box") }
+        XCTAssertEqual(hugeRate, 0, "키가 있으므로 주입기가 안 돈다")
+
+        // 같은 규약이 연산자·이니셜라이저에도 걸린다.
+        let ops = ParticleSystemDef.parse(json(
+            #"{"operator":[{"name":"alphafade","fadeouttime":1e300}],"maxcount":10}"#), material: nil)
+        guard case let .alphaFade(_, fadeOut) = ops.operators.first else { return XCTFail("no alphafade") }
+        XCTAssertEqual(fadeOut, 0, "0.5 로 승격되면 안 된다")
+
+        let ini = ParticleSystemDef.parse(json(
+            #"{"initializer":[{"name":"alpharandom","min":"nonsense"}],"maxcount":10}"#), material: nil)
+        guard case let .alphaRandom(amin, _, _) = ini.initializers.first else { return XCTFail("no alpharandom") }
+        XCTAssertEqual(amin, 0, "0.05 로 승격되면 안 된다")
+    }
+
     /// 이미터 `rate` 부재 기본값도 주입기 상수다(0x1401b8e09 → 10.0 @0x1401b8e59).
     /// 종전 0 은 연속 방출을 통째로 끈다 — 실물 293건 중 4건이 그 상태였다.
     func testEmitterRateDefaultsToTenNotZero() {

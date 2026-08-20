@@ -125,7 +125,7 @@ def show_log(repo, job_id, keep):
              if any(n in l for n in needles) and "[36;1m" not in l]
     print("\n== job %s 로그 발췌 (%d줄 중 마지막 %d) ==" % (job_id, len(lines), keep))
     for l in lines[-keep:]:
-        print("  " + l[:240])
+        print("  " + l[:700])
 
 
 def main():
