@@ -64,7 +64,7 @@
     },
     "unit": "0..255 절대값",
     "perPixelThreshold": 16,
-    "thresholdSelection": "Sources/WapleCompatCore/SnapshotCompare.swift:204 — 결정 씬 strict, 비결정 씬 lax",
+    "thresholdSelection": "Sources/WapleSnapshot/Snapshot.swift:204 — 결정 씬 strict, 비결정 씬 lax",
     "relative": {
      "tolerance": 0.05,
      "denominator": "max(entry.meanLuma, 0.02) * 255",
@@ -87,7 +87,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:205",
+     "ref": "Sources/WapleSnapshot/Snapshot.swift:205",
      "note": "판정식 원문"
     },
     {
@@ -175,7 +175,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:205",
+     "ref": "Sources/WapleSnapshot/Snapshot.swift:205",
      "note": "판정식 원문"
     },
     {
@@ -327,7 +327,7 @@
     "consequence": "**같은 세션 안에서 뜬 A/B 대조는 신뢰할 수 있다.** 커밋된 기준선처럼 세션을 건너뛴 대조에만 29종이 잡음으로 섞인다 — 그 29종은 고정 가족이고 id 목록이 oracle.nondet.unstableSet 에 있다.",
     "reopened3696323523": "'기대 집합 밖 1종' 을 '비결정' 으로 닫았던 것은 이제 근거가 있다 — 이 씬은 불안정 29종 안에 있고 네 세션에서 네 값이 나온다.",
     "thresholdMisclassification": {
-     "code": "SnapshotCompare.swift:204 — `entry.deterministic ? .strict : .lax`",
+     "code": "Snapshot.swift:204 — `entry.deterministic ? .strict : .lax`",
      "designIsCorrect": "결정적 씬에 strict, 비결정 씬에 lax 는 **의도대로 맞다**. 극성을 뒤집으면 안 된다.",
      "actualDefect": "그 29종이 deterministic=true 로 **잘못 분류**되는 바람에 비결정 씬인데 strict 로 샌다. 고칠 곳은 임계 선택줄이 아니라 분류(셀프체크)다.",
      "correctionNote": "[정정 2026-08-01] 이 항목은 처음에 '방향이 반대다' 라고 적혀 있었다. 틀렸다 — 그대로 믿고 그 줄을 뒤집으면 정상 동작을 깨뜨린다."
@@ -346,7 +346,7 @@
     },
     {
      "kind": "file",
-     "ref": "Sources/WapleCompatCore/SnapshotCompare.swift:204",
+     "ref": "Sources/WapleSnapshot/Snapshot.swift:204",
      "note": "deterministic 으로 임계 선택"
     },
     {

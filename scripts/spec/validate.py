@@ -55,6 +55,21 @@ REF_LINE_SUFFIX = re.compile(r":[\d,\-]+,?$")
 GLOB_CHARS = "*?[{"
 
 
+def ref_max_line(ref):
+    """근거 ref 에 붙은 줄 인용에서 **가장 큰 줄 번호**를 뽑는다. 줄 인용이 없으면 None.
+
+    `f.swift:12` · `f.swift:12-34` · `f.h:114,115,119` · `f.swift:1254-1257,` 전부 받는다.
+    """
+    if not isinstance(ref, str):
+        return None
+    s = ref.replace("\\", "/").strip().split(" ", 1)[0].split("#", 1)[0]
+    m = REF_LINE_SUFFIX.search(s)
+    if not m:
+        return None
+    nums = [int(n) for n in re.findall(r"\d+", m.group(0))]
+    return max(nums) if nums else None
+
+
 def repo_ref_path(ref):
     """근거 ref 에서 검사할 리포 상대 경로를 뽑는다. 리포 밖을 가리키면 None."""
     if not isinstance(ref, str):
@@ -135,6 +150,25 @@ def validate_doc(d, path):
                 if rel is not None and not os.path.exists(os.path.join(REPO_ROOT, rel)):
                     errs.append(f"{where}: evidence[{j}] 의 ref 가 리포에 없다 — {rel!r} "
                                 f"(근거를 따라갈 수 없는 정본이다)")
+                # **[2026-08-20]** 종전엔 `:숫자` 를 잘라내고 **파일 존재만** 봤다. 그래서
+                # 153줄짜리 `SnapshotCompare.swift` 에 `:204` 를 달아도 오류 0 으로 통과했고,
+                # 확정 등급 항목 셋이 없는 줄을 가리키고 있었다(생성기가 줄 번호는 A 파일에서
+                # 뽑고 파일명은 B 를 붙였다). 파일이 존재하는데 그 줄이 없으면 그것도 "근거를
+                # 따라갈 수 없는 정본" 이다 — 오히려 파일이 없는 경우보다 발견이 늦다.
+                elif rel is not None:
+                    line = ref_max_line(x["ref"])
+                    if line is not None:
+                        full = os.path.join(REPO_ROOT, rel)
+                        if os.path.isfile(full):
+                            try:
+                                with open(full, "rb") as fh:
+                                    total = sum(1 for _ in fh)
+                            except OSError:
+                                total = None
+                            if total is not None and line > total:
+                                errs.append(
+                                    f"{where}: evidence[{j}] 의 ref 가 없는 줄을 가리킨다 — "
+                                    f"{rel}:{line} 인데 그 파일은 {total}줄이다")
             kinds.append(x.get("kind"))
 
         if status == "확정" and not any(k in specfmt.REPRODUCIBLE_KINDS for k in kinds):
