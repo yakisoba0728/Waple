@@ -140,6 +140,44 @@ final class EffectConditionsTests: XCTestCase {
                        "RENDERING 은 별개 조건 — 조명만으로는 안 켜진다")
     }
 
+    // MARK: 좌변 리더 — 우변과 규약이 다르다
+
+    /// **좌변(콤보 값)은 태그 1/2/3 만 받는다.** 나머지는 건너뛰는 게 아니라 **0** 이다
+    /// (`0x1401e6546` 의 `xor r14d, r14d` 가 끝까지 안 덮인다).
+    /// 씬의 다른 정수 필드에 쓰는 `lenientInt`(문자열 `"35"` 를 35 로 읽는다)를 여기 쓰면
+    /// `{"combos": {"LIGHTING": "1"}}` 에서 우리만 조건이 켜진다.
+    func testComboValueAcceptsOnlyNumericTags() {
+        func cv(_ json: String) -> Int? {
+            let any = try? JSONSerialization.jsonObject(with: Data("[\(json)]".utf8))
+            return EffectManifest.comboValue((any as? [Any])?.first)
+        }
+        XCTAssertEqual(cv("3"), 3)
+        XCTAssertEqual(cv("-3"), -3)
+        XCTAssertEqual(cv("1.9"), 1, "실수는 0 방향 절삭(cvttsd2si)")
+        XCTAssertEqual(cv("-1.9"), -1, "0 방향 절삭 — 내림이 아니다")
+        XCTAssertNil(cv("\"1\""), "문자열은 1 이 아니라 0 이다 — lenientInt 였다면 1")
+        XCTAssertNil(cv("true"), "bool 은 1 이 아니라 0 이다")
+        XCTAssertNil(cv("false"))
+        XCTAssertNil(cv("null"))
+        XCTAssertNil(cv("[1]"))
+        XCTAssertNil(cv("{\"a\":1}"))
+        XCTAssertNil(EffectManifest.comboValue(nil), "키 부재")
+    }
+
+    /// **좌우 비대칭이 이 규약의 마지막 함정이다.** 같은 문자열이
+    /// 우변에서는 "조건 통째로 스킵"(→ 빈 그룹 → true)이고 좌변에서는 "0" 이다.
+    func testLeftAndRightHandSidesTreatNonNumbersDifferently() {
+        let rhsString = parse(#"[{"A": "1"}]"#)
+        XCTAssertTrue(EffectManifest.evaluate(rhsString, combos: ["A": 1]),
+                      "우변 문자열 = 조건 스킵 → 빈 그룹 → true")
+        XCTAssertTrue(EffectManifest.evaluate(rhsString, combos: ["A": 999]),
+                      "우변이 1 로 읽혔다면 여기서 false 였을 것")
+
+        let zero = parse(#"[{"A": 0}]"#)
+        XCTAssertTrue(EffectManifest.evaluate(zero, combos: [:]), "좌변 부재 = 0 → 0 == 0")
+        XCTAssertFalse(EffectManifest.evaluate(zero, combos: ["A": 1]))
+    }
+
     /// bool 은 조건 값이 될 수 없다 — 원본은 타입 태그로 갈라 무시한다.
     /// (Swift 의 NSNumber 브리징은 `true as? Int` 를 1 로 성공시키므로 명시 방어가 필요하다.)
     func testBooleanValueIsIgnoredNotTreatedAsOne() {

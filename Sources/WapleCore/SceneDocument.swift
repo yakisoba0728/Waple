@@ -2420,8 +2420,11 @@ extension SceneDocument {
             // 동봉 씬 57개에서 이 키는 **0건**이고 combos 60건은 전부 패스 레벨이다. 그래서 실측상
             // 좌변은 항상 부재=0 이고, `fluidsimulation` 의 `LIGHTING==1`·`RENDERING==3` 은 전부 false 다.
             // 즉 충실한 구현은 유체의 조명/노멀 패스를 **끄는** 방향이다 — 그게 원본 동작이다.
+            // 좌변 리더는 `lenientInt` 가 아니라 `EffectManifest.comboValue` 다 — 원본은 태그
+            // 1/2/3 만 받고 `"1"`·`true` 는 0 으로 읽는다(그 함수의 주석 참조). 씬의 다른 정수
+            // 필드에 쓰는 관대한 규약을 여기 그대로 쓰면 우리만 조건이 켜지는 자리가 생긴다.
             if let ic = e["combos"] as? [String: Any] {
-                for (k, v) in ic { if let i = intVal(v) { eff.instanceCombos[k] = i } }
+                for (k, v) in ic { if let i = EffectManifest.comboValue(v) { eff.instanceCombos[k] = i } }
             }
             eff.initialVisible = effInitialVisible
             eff.visibleScript = effVisibleScript
