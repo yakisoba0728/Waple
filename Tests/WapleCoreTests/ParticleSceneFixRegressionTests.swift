@@ -42,7 +42,7 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
         """), material: nil)
         XCTAssertEqual(parsed.emitterSpeed, [SIMD2<Float>(0, 0)])
         let plain = ParticleSystemDef(
-            // directions (1,1,0): 파스 디폴트가 엔진 정본("1 1 0" @0x48e288)으로 변경됨 — 기준 측도 갱신.
+            // directions (1,1,0): 파스 디폴트가 엔진 정본("1 1 0" @0x48f488)으로 변경됨 — 기준 측도 갱신.
             emitters: [.sphere(origin: Vec3(x: 10, y: 20, z: 0), directions: Vec3(x: 1, y: 1, z: 0),
                                distanceMin: 5, distanceMax: 50, rate: 100, burst: 0,
                                sign: Vec3(x: 0, y: 0, z: 0))],
@@ -422,7 +422,7 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
          "renderer":[{"name":"sprite"}],"maxcount":100}
         """), material: nil)
         let plain = ParticleSystemDef(
-            // directions (1,1,0): 파스 디폴트가 엔진 정본("1 1 0" @0x48e288)으로 변경됨 — 동치 가드의 기준 측도 갱신.
+            // directions (1,1,0): 파스 디폴트가 엔진 정본("1 1 0" @0x48f488)으로 변경됨 — 동치 가드의 기준 측도 갱신.
             emitters: [.sphere(origin: Vec3(x: 0, y: 0, z: 0), directions: Vec3(x: 1, y: 1, z: 0),
                                distanceMin: 1, distanceMax: 10, rate: 50, burst: 0,
                                sign: Vec3(x: 0, y: 0, z: 0)),

@@ -126,7 +126,7 @@ enum ScenePBRMath {
 }
 
 public extension SceneLight3D {
-    /// WE 2.8.42 HLSL lane finite-light falloff(#define HLSL 1 크로스컴파일 — wallpaper64.exe @0x485698):
+    /// WE 2.8.42 HLSL lane finite-light falloff(#define HLSL 1 크로스컴파일 — wallpaper64.exe @0x486898):
     /// pow(falloff + 1.17549435e-38, exponent), 반경 컷오프 없음 — exponent=0 이면 반경 무관 1.0(전역 무감쇠).
     /// GPU MSL 2곳(Mesh3DShaders/QuadShaders)과 동일 수식(CPU↔GPU 비트 일치 규약).
     static func finiteLightFalloff(distance: Float, radius: Float, exponent: Float) -> Float {

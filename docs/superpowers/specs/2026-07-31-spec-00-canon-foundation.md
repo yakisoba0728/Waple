@@ -57,7 +57,7 @@ spec/
   "evidence": [
     { "kind": "shader",  "ref": "assets/shaders/genericimage4.frag:140" },
     { "kind": "corpus",  "ref": "ambientcolor 0.3×113 / 0×31 / 1×5 (162 pkg)" },
-    { "kind": "binary",  "ref": "wallpaper64.exe@0x485698" }
+    { "kind": "binary",  "ref": "wallpaper64.exe@0x486898" }
   ]
 }
 ```

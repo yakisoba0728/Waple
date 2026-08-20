@@ -103,7 +103,7 @@ public struct ParticleSimulator {
 
     // MARK: - 주기(periodic) 방출 상태 (키 보유 이미터만 활성 — 묵보유 이미터는 기존 경로 비트동일)
 
-    /// [추정] 주기 컨트롤러 상태(WE 에디터 어휘 규약 — 스트링 @0x48e1c0–0x48e2b8, 시뮬 코드는
+    /// [추정] 주기 컨트롤러 상태(WE 에디터 어휘 규약 — 스트링 @0x48f3c0–0x48e2b8, 시뮬 코드는
     /// 디컴파일 코퍼스 누락). ON 윈도우(duration) 동안 rate/버스트 방출(창당 quota 상한),
     /// 잔여 소진 시 OFF 딜레이(delay) 드로 → 다시 ON 드로 반복. 드로 순서: duration → spawn → delay.
     private struct PeriodicState {
@@ -786,7 +786,7 @@ public struct ParticleSimulator {
 
     /// controlpointattract: 대상(헤드리스=origin, 기본 0)을 향한(scale>0)/반대(scale<0) 가속.
     /// 감쇠 = min(1, threshold/dist) → 근접 시 최대, 멀수록 1/r 로 약화(폭주 억제). |scale|=px/s^2.
-    /// delete=true(deletethreshold @0x48e788)이면 threshold 이내 근접 파티클을 삭제(true 반환) —
+    /// delete=true(deletethreshold @0x48f988)이면 threshold 이내 근접 파티클을 삭제(true 반환) —
     /// 엔진 어휘상 근접 삭제가 정본, 영구 잔류+감쇠 추정은 키 부재 씬의 폴터로만 유지(무회귀).
     /// controlpointattract. 실물 VM base 핸들러 op 0x0a @0x140241554 / 가중 변형 op 0x20
     /// @0x14024172d 를 1:1 로 옮긴 것 — 두 핸들러는 블렌드 가중 곱 하나만 다르다.

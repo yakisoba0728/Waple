@@ -26,7 +26,7 @@ final class ParticleAudioTests: XCTestCase {
         XCTAssertEqual(a0.exponent, 5)
         XCTAssertEqual(a0.freqStart, 0)          // 부재 기본
         // bounds 부재 기본 [0.8,1.0] — 문자열 `"0.8 1.0"`@0x14048f3b8(RVA 0x48f3b8, len 7, 태그 4),
-        // 주입 0x1401c1ffc. 종전 인용 `@0x48e1b8` 은 파일 오프셋이었고(RVA 는 +0x1200),
+        // 주입 0x1401c1ffc. 종전 인용 `@0x48f3b8` 은 파일 오프셋이었고(RVA 는 +0x1200),
         // "귀속 추정" 표기도 과소였다 — 태그·길이·주입 지점으로 확정된다.
         XCTAssertEqual(a0.bounds.x, 0.8, accuracy: 1e-6)
         XCTAssertEqual(a0.bounds.y, 1)
