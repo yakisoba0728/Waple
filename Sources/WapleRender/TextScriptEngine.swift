@@ -1797,13 +1797,22 @@ public final class TextScriptEngine {
                 h /= 6; if (h < 0) { h += 1; }
             }
             return new Vec3(h, mx === 0 ? 0 : d / mx, mx);
-        }
+        },
+        // [2026-08-20] 동봉 `scripts/jsmodules/wecolor.js` 는 **넷**을 export 한다. 심에 둘이
+        // 빠져 있어서 `import { normalizeColor } from 'WEColor'` 가 undefined 로 풀리고,
+        // 호출 순간 TypeError 로 그 훅이 통째로 죽었다(한 문장이 아니라 훅 전체다).
+        // 본문은 그 파일 그대로다 — 추측이 아니라 동봉 자산이 정본이다.
+        normalizeColor: function(c) { return new Vec3(c.x / 255, c.y / 255, c.z / 255); },
+        expandColor: function(c) { return new Vec3(c.x * 255, c.y * 255, c.z * 255); }
     };
     // WEMath 실심(코퍼스 58씬) — 표면은 공개 lib.sceneScript.d.ts 그대로: smoothStep/mix/deg2rad/rad2deg 뿐.
     var __WEMath = {
-        // ponytail: d.ts 문구는 "min..max → [0,1] 재매핑"뿐 — Hermite 인지 선형 클램프인지 미확정.
-        // GLSL/HLSL 동명 내장(셰이더 중심 엔진) 근거로 Hermite 채택; 골든 A/B 가 반박하면
-        // `t * t * (3 - 2 * t)` 를 `t`(선형 램프)로 교체 — 두 형태는 구간 밖 클램프는 동일.
+        // **[2026-08-20] 확정.** 종전 주석은 "Hermite 인지 선형 클램프인지 미확정 — 골든 A/B 가
+        // 반박하면 선형으로 교체" 였다. 동봉 `scripts/jsmodules/wemath.js` 가 정본이고 거기 답이
+        // 있다: `let x = Math.max(0, Math.min(1, (v-min)/(max-min))); return x*x*(3-2*x);`
+        // GLSL 유추로 고른 Hermite 가 맞았다. 골든 A/B 는 이제 불필요하다.
+        // (남는 차이 하나: 원본에는 `min === max` 가드가 없어 0/0 = NaN 이 나온다. 아래 우리
+        //  가드는 **의도한 이탈**이다 — NaN 이 프로퍼티로 흘러 레이어를 지우는 것보다 낫다.)
         smoothStep: function(min, max, value) {
             min = Number(min); max = Number(max); value = Number(value);
             if (min === max) { return value < min ? 0 : 1; }  // 퇴화(0폭 구간): step — 0나눗셈 NaN 누출 방지.
