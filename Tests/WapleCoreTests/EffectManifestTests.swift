@@ -17,7 +17,7 @@ final class EffectManifestTests: XCTestCase {
     func testDuplicateFboNamesArePreservedForConsumers() throws {
         let json = """
         {"passes":[{"material":"materials/effects/a.json","target":"_rt_Dup"}],
-         "fbos":[{"name":"_rt_Dup","scale":1},{"name":"_rt_Dup","scale":4}]}
+         "fbos":[{"name":"_rt_Dup","scale":1,"format":"rgba8888"},{"name":"_rt_Dup","scale":4,"format":"rgba8888"}]}
         """
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
         XCTAssertEqual(m.fbos.count, 2, "파서는 중복을 접지 않는다 — 접으면 소비처가 중복을 못 본다")
@@ -39,7 +39,7 @@ final class EffectManifestTests: XCTestCase {
             "bind":[{"name":"_rt_Q1","index":0},{"name":"previous","index":2}]}],
          "fbos":[
            {"name":"_rt_Q1","scale":4,"format":"rgba8888"},
-           {"name":"_rt_Q2","scale":4}]}
+           {"name":"_rt_Q2","scale":4,"format":"rgba8888"}]}
         """
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
         XCTAssertEqual(m.passes.count, 3)
@@ -69,7 +69,7 @@ final class EffectManifestTests: XCTestCase {
 
     /// 실물 motionblur 의 command=copy 패스(셰이더 없이 source fbo → target fbo 지속).
     func testCopyCommandPass() throws {
-        let json = #"{"passes":[{"material":"m.json","target":"_b2"},{"command":"copy","target":"_b1","source":"_b2"},{"material":"c.json"}],"fbos":[{"name":"_b1","scale":1},{"name":"_b2","scale":1}]}"#
+        let json = #"{"passes":[{"material":"m.json","target":"_b2"},{"command":"copy","target":"_b1","source":"_b2"},{"material":"c.json"}],"fbos":[{"name":"_b1","scale":1,"format":"rgba8888"},{"name":"_b2","scale":1,"format":"rgba8888"}]}"#
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
         XCTAssertEqual(m.passes.count, 3)
         XCTAssertEqual(m.passes[1].command, "copy")
@@ -81,7 +81,7 @@ final class EffectManifestTests: XCTestCase {
 
     /// X-②: 실물 fluidsimulation `{"command":"swap","source":"_rt_SmokeVelocity1","target":"_rt_SmokeVelocity2"}`.
     func testSwapCommandPass() throws {
-        let json = #"{"passes":[{"command":"swap","source":"_rt_V1","target":"_rt_V2"}],"fbos":[{"name":"_rt_V1","scale":1},{"name":"_rt_V2","scale":1}]}"#
+        let json = #"{"passes":[{"command":"swap","source":"_rt_V1","target":"_rt_V2"}],"fbos":[{"name":"_rt_V1","scale":1,"format":"rgba8888"},{"name":"_rt_V2","scale":1,"format":"rgba8888"}]}"#
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
         XCTAssertEqual(m.passes[0].command, "swap")
         XCTAssertEqual(m.passes[0].source, "_rt_V1")
@@ -96,7 +96,7 @@ final class EffectManifestTests: XCTestCase {
     }
 
     func testHugeFBOScaleDefaultsInsteadOfTrapping() throws {
-        let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","scale":1e300}]}"#
+        let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","scale":1e300,"format":"rgba8888"}]}"#
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
         XCTAssertEqual(m.fbos, [EffectManifest.FBO(name: "_rt", scale: 1)])
     }
@@ -121,7 +121,7 @@ final class EffectManifestTests: XCTestCase {
 
     /// scale 만 있으면 fixedWidth/fixedHeight 는 nil(종전 dst 비례 경로 무회귀).
     func testFBOWithoutFitOrSizeStaysScaleBased() throws {
-        let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt_Q","scale":4}]}"#
+        let json = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt_Q","scale":4,"format":"rgba8888"}]}"#
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
         XCTAssertNil(m.fbos[0].fixedWidth)
         XCTAssertNil(m.fbos[0].fixedHeight)
@@ -131,12 +131,12 @@ final class EffectManifestTests: XCTestCase {
     /// X-① 클램프: fit 의 신뢰불가 초대형 값(safeInt 범위 밖)은 scale 과 동일하게 무시(nil) —
     /// 트랩 없이 scale 기반 폴백으로 안전 낙하. 범위 안이지만 과대(>8192)한 값은 8192 로 클램프.
     func testHugeFBOFitDoesNotTrap() throws {
-        let outOfRange = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","fit":1e300}]}"#
+        let outOfRange = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","fit":1e300,"format":"rgba8888"}]}"#
         let m1 = try XCTUnwrap(EffectManifest.parse(Data(outOfRange.utf8)))
         XCTAssertNil(m1.fbos[0].fixedWidth)
         XCTAssertNil(m1.fbos[0].fixedHeight)
 
-        let overCap = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","fit":100000}]}"#
+        let overCap = #"{"passes":[{"shader":"effects/foo"}],"fbos":[{"name":"_rt","fit":100000,"format":"rgba8888"}]}"#
         let m2 = try XCTUnwrap(EffectManifest.parse(Data(overCap.utf8)))
         XCTAssertEqual(m2.fbos[0].fixedWidth, 8192)
         XCTAssertEqual(m2.fbos[0].fixedHeight, 8192)
@@ -187,18 +187,24 @@ final class EffectManifestTests: XCTestCase {
         XCTAssertNil(f.clearColor)
     }
 
-    /// 미지 포맷 문자열은 **이펙트를 드롭하지 않는다** — nil 로 두고 소비처가 rgba8 로 간다.
-    /// 미지 bind/target 을 폴백으로 처리한 G-A5-04 와 같은 정책이다.
-    func testUnknownFormatStringFallsBackToNilRatherThanFailing() throws {
+    /// 두 가지가 **다르다**는 것을 고정한다. 처음 쓸 때 이 둘을 같은 것으로 묶었다가 틀렸다.
+    ///
+    /// ① `format` 이 **문자열인데 표에 없는 값** → 그 fbo 는 살아남고 `format` 만 nil 이다.
+    ///    원본이 해시맵 miss 에서 0(rgba8888)을 돌려주는 것(`0x1401e546a`)과 같게, 소비처가
+    ///    rgba8 로 폴백한다. 미지 bind/target 을 이펙트 드롭이 아니라 폴백으로 처리한
+    ///    G-A5-04 와 같은 정책이다.
+    /// ② `format` 키가 **아예 없다** → 그 fbo 선언을 통째로 버린다(`0x1401e744f`).
+    ///    이건 폴백이 아니라 드롭이다 — 아래 별도 테스트가 본다.
+    func testUnknownFormatStringSurvivesAsNilButMissingKeyDoesNot() throws {
         let json = """
         {"passes":[{"material":"materials/effects/a.json"}],
          "fbos":[{"name":"_rt_A","scale":1,"format":"bc7_srgb_from_the_future"},
                  {"name":"_rt_B","scale":1}]}
         """
         let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)), "미지 포맷이 파스를 죽이면 안 된다")
-        XCTAssertEqual(m.fbos.count, 2)
-        XCTAssertNil(m.fbos[0].format)
-        XCTAssertNil(m.fbos[1].format, "format 키 부재도 nil")
+        XCTAssertEqual(m.fbos.map(\.name), ["_rt_A"],
+                       "미지 문자열은 살아남고, 키 부재는 드롭된다")
+        XCTAssertNil(m.fbos[0].format, "표에 없는 문자열은 nil — 소비처가 rgba8 로 간다")
     }
 
     /// `clear` 파스 — **원본 파서(`0x1401e7629`-`0x1401e7777`)에 맞춘다.**
