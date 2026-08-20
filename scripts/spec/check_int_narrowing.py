@@ -44,7 +44,11 @@ CONV = re.compile(r"\bU?Int(?:8|16|32|64)?\(")
 GUARDS = ("clamping:", "truncatingIfNeeded:", "exactly:", "bitPattern:",
           "littleEndian:", "bigEndian:", "ascii:", "safeInt(", "safeFloatToInt(",
           "sheetFrameIndex(", "blendModeVal(")
-R1 = re.compile(r"as\?\s+(?:Double|Float)\b.*\bU?Int(?:8|16|32|64)?\(")
+# **[2026-08-20] R1 이 방향에 묶여 있었다** — `as? Double` 이 `Int(` **앞에** 올 때만 잡았다.
+# 가장 흔한 형태 `Int(v as? Double ?? 0)` 는 순서가 반대라 R1 을 통과하고 R4(총수)에만 걸렸다.
+# 두 방향을 다 본다.
+R1 = re.compile(r"as\?\s+(?:Double|Float)\b.*\bU?Int(?:8|16|32|64)?\(|"
+                r"\bU?Int(?:8|16|32|64)?\([^)]*\bas\?\s+(?:Double|Float)\b")
 R2 = re.compile(r"as\?\s+(?:Double|Float)\)?\s*\.(?:map|flatMap)\s*\{\s*U?Int(?:8|16|32|64)?\(")
 
 # ── R3: 스윕이 고친 자리의 가드가 살아 있는지 ────────────────────────────────
@@ -86,14 +90,47 @@ def swift_files():
                 yield os.path.join(root, f)
 
 
+def strip_trailing_comment(line):
+    """줄 끝 `//` 주석을 잘라낸다. 문자열 리터럴 안의 `//`(예: URL)는 건드리지 않는다.
+
+    **[2026-08-20] 이게 없어서 가드 판정이 주석으로 뚫렸다.** `GUARDS` 를 **줄 전체**에서
+    찾으므로, 같은 줄 주석에 가드 이름이 들어 있기만 하면 R1 과 인구조사에서 그 줄이 통째로
+    빠졌다:
+
+        let n = Int(obj["x"] as? Double ?? 0)  // clamping: 을 쓸 수 없는 자리다
+        → `[int-narrowing] 통과 — 가드 없는 좁힘 343건` (그 줄은 세지도 않는다)
+
+    같은 원인으로 한 줄에 가드된 좁힘과 가드 없는 좁힘이 섞이면 줄 전체가 면제됐다.
+    """
+    out, i, in_str, n = [], 0, False, len(line)
+    while i < n:
+        c = line[i]
+        if in_str:
+            if c == "\\":
+                out.append(line[i:i + 2]); i += 2; continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "/" and i + 1 < n and line[i + 1] == "/":
+            break
+        out.append(c); i += 1
+    return "".join(out)
+
+
 def code_lines(path):
-    """주석·문자열 리터럴만인 줄은 뺀다(완전한 파싱은 아니다 — 총수 안정성이 목적)."""
+    """주석·문자열 리터럴만인 줄은 뺀다(완전한 파싱은 아니다 — 총수 안정성이 목적).
+
+    줄 끝 주석도 잘라낸다 — 가드 판정이 주석으로 뚫리던 자리다(`strip_trailing_comment`).
+    """
     with open(path, encoding="utf-8") as fh:
         for i, line in enumerate(fh, 1):
             stripped = line.strip()
             if stripped.startswith("//") or stripped.startswith("*"):
                 continue
-            yield i, line
+            code = strip_trailing_comment(line)
+            if code.strip():
+                yield i, code
 
 
 def main():
