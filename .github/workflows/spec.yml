@@ -116,6 +116,18 @@ jobs:
       - name: TEXnFORMAT map
         run: python3 scripts/spec/check_tex_format_map.py
 
+      # 씬을 **어떻게 마운트하는가**가 렌더러와 호환성 스캐너에서 갈려 있었다. 스캐너의 계약은
+      # "이슈 없음 = 렌더 가능" 이라, 규약이 갈리는 순간 그 보장이 양방향으로 거짓이 된다.
+      # 실측(리눅스 드라이버 6케이스, 수정 전): 이름이 관례가 아닌 `.pkg` 씬은 렌더러가 정상으로
+      # 여는데 스캐너가 error/missingScenePackage 로 단정했고(거짓 치명), 문서가 깨진 언팩 씬은
+      # 이슈 없이 통과했다(거짓 통과). 더 큰 쪽은 후자의 원인이다 — 스캐너가 `.pkg` 가 없으면
+      # 그냥 빠져나가서 **언팩 씬을 한 건도 검사하지 않았다.** 동봉 WEAssets 실측으로 그 범위가
+      # 그대로 나온다: 씬 프로젝트 170개가 전부 언팩이고 `.pkg` 는 0개다.
+      # 이 게이트는 두 후보 목록이 글자 그대로 같은지, 스캐너에 언팩 폴백이 살아 있는지,
+      # 렌더러가 `sceneFileName: project.fileName` 을 계속 넘기는지를 본다.
+      - name: Scene mount parity
+        run: python3 scripts/spec/check_scene_mount_parity.py --selftest
+
       # 정본이 **조용히 줄어드는 것**을 막는다.
       #
       # spec/ 아래 정본은 measure_*.py 가 만들고, 그 입력은 WE 설치본과 워크샵 코퍼스다.
