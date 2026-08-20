@@ -37,7 +37,12 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     /// 캡처 구성 샘플레이트(`SCStreamConfiguration.sampleRate = 48000`, 아래 startCapture).
     /// 빈 폭 = 48000/2048 = 23.4375 Hz — 원본의 22.96875 Hz 대비 **1.02배**다.
     /// 소비 빈 수를 원본과 같은 상한(≈14677 Hz)에 맞춰 잡으므로 밴드 경계가 그만큼만 흔들린다.
-    static let captureSampleRate: Double = 48000
+    /// **Int 로 든다.** `SCStreamConfiguration.sampleRate` 가 Int 를 받고, 스펙트럼 쪽은
+    /// `Double(Int)`(절대 트랩하지 않는 확대 변환)로 쓴다 — 반대로 Double 로 들고 `Int(_:)` 로
+    /// 좁히면 그 한 줄이 정수 좁힘 검사(R4)에 걸린다. 상수라 실제 위험은 없지만, 예외를 만들면
+    /// 검사가 무뎌진다.
+    static let captureSampleRateHz: Int = 48000
+    static var captureSampleRate: Double { Double(captureSampleRateHz) }
     private let log2n: vDSP_Length
     // create_fftsetup 실패(극히 드묾) 시 nil — 강제 언랩 대신 무음 폴백. let 이라 lock 없이 안전.
     private let fftSetup: FFTSetup?
@@ -417,7 +422,7 @@ private final class SharedAudioCaptureCore: NSObject, SCStreamOutput, @unchecked
             let config = SCStreamConfiguration()
             config.capturesAudio = true
             // 타입 이름을 명시한다 — 이 줄은 `SharedAudioCaptureCore` 안이라 `Self` 가 다른 타입이다.
-            config.sampleRate = Int(SystemAudioSpectrumProvider.captureSampleRate)   // 빈 폭 산출과 단일 소스
+            config.sampleRate = SystemAudioSpectrumProvider.captureSampleRateHz   // 빈 폭 산출과 단일 소스
             config.channelCount = 2
             // 최소 비디오 캡처 비용(오디오만 쓰지만 SCStream 은 비디오 구성 요구)
             config.width = 2
