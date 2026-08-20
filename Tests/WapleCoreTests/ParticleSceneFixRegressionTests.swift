@@ -15,7 +15,7 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
     /// 종전엔 초기속도 0으로 안 터졌다. speed 가 있으면 스폰 즉시 |vel| ∈ [speedmin, speedmax].
     func testF620_EmitterSpeedGivesInitialVelocity() {
         let def = ParticleSystemDef.parse(json("""
-        {"emitter":[{"name":"sphererandom","distancemin":0,"distancemax":0,"instantaneous":5,
+        {"emitter":[{"name":"sphererandom","rate":0,"distancemin":0,"distancemax":0,"instantaneous":5,
                       "speedmin":100,"speedmax":1500}],
          "initializer":[{"name":"lifetimerandom","min":100,"max":100}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
@@ -60,7 +60,7 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
     /// speedmin 만 있는 실물(lightning2glow 류 — speedmax 부재) → 고정속도(speedmin 승계).
     func testF620_SpeedMinOnlyIsFixedSpeed() {
         let def = ParticleSystemDef.parse(json("""
-        {"emitter":[{"name":"sphererandom","distancemax":0,"instantaneous":3,"speedmin":250,"speedmax":250}],
+        {"emitter":[{"name":"sphererandom","rate":0,"distancemax":0,"instantaneous":3,"speedmin":250,"speedmax":250}],
          "initializer":[{"name":"lifetimerandom","min":100,"max":100}],
          "renderer":[{"name":"sprite"}],"maxcount":5}
         """), material: nil)

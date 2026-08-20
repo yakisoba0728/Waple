@@ -27,7 +27,7 @@ final class ParticleSystemTests: XCTestCase {
         let twoPi = Float.pi * 2
         let pi = Float.pi
         let source = """
-        {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+        {"emitter":[{"name":"boxrandom","rate":0,"origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
          "initializer":[
            {"name":"lifetimerandom","min":10,"max":10},
            {"name":"rotationrandom","min":"\(twoPi) 0 0","max":"\(twoPi) 0 0"},
@@ -87,7 +87,7 @@ final class ParticleSystemTests: XCTestCase {
     private func randomInitializerParticle(exponent: Float?) throws -> Particle {
         let exp = exponent.map { ",\"exponent\":\($0)" } ?? ""
         let source = """
-        {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+        {"emitter":[{"name":"boxrandom","rate":0,"origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
          "initializer":[
            {"name":"lifetimerandom","min":1,"max":2\(exp)},
            {"name":"sizerandom","min":0,"max":1\(exp)},
@@ -175,7 +175,7 @@ final class ParticleSystemTests: XCTestCase {
 
     func testFixedWidthRandomInitializerStillConsumesItsDraw() throws {
         let source = """
-        {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+        {"emitter":[{"name":"boxrandom","rate":0,"origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
          "initializer":[
            {"name":"lifetimerandom","min":5,"max":5,"exponent":2},
            {"name":"sizerandom","min":0,"max":1,"exponent":2}],
@@ -283,7 +283,7 @@ final class ParticleSystemTests: XCTestCase {
     func testAlphaRandomDefaultChangeDoesNotShiftDownstreamRNG() throws {
         func lastVelocity(alphaJSON: String) throws -> SIMD3<Float> {
             let source = """
-            {"emitter":[{"name":"boxrandom","origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
+            {"emitter":[{"name":"boxrandom","rate":0,"origin":"0 0 0","distancemax":"0 0 0","instantaneous":1}],
              "initializer":[\(alphaJSON)
                {"name":"velocityrandom","min":"0 0 0","max":"1 1 1"}],
              "renderer":[{"name":"sprite"}],"maxcount":1}
@@ -430,7 +430,7 @@ final class ParticleSystemTests: XCTestCase {
     func testNegativeMaxCountClampsAndBurstStepNoTrap() {
         // 감사 V02: 음수 maxcount 가 버스트 스폰 Range 상한(0..<음수)으로 흘러 트랩하던 회귀.
         let d = ParticleSystemDef.parse(json(
-            #"{"emitter":[{"name":"sphererandom","instantaneous":10}],"renderer":[{"name":"sprite"}],"maxcount":-1}"#),
+            #"{"emitter":[{"name":"sphererandom","rate":0,"instantaneous":10}],"renderer":[{"name":"sprite"}],"maxcount":-1}"#),
             material: nil)
         XCTAssertEqual(d.maxCount, 0)
         var sim = ParticleSimulator(def: d, seed: 7)
@@ -524,6 +524,45 @@ final class ParticleSystemTests: XCTestCase {
         guard case let .lifetimeRandom(lmin, lmax, _) = d.initializers[3] else { return XCTFail("no lifetimerandom") }
         XCTAssertEqual(lmin, 0, "주입기 0x1401b9c40 은 min 에 상수를 심지 않는다 = 0")
         XCTAssertEqual(lmax, 1)
+    }
+
+    /// 이미터 `rate` 부재 기본값도 주입기 상수다(0x1401b8e09 → 10.0 @0x1401b8e59).
+    /// 종전 0 은 연속 방출을 통째로 끈다 — 실물 293건 중 4건이 그 상태였다.
+    func testEmitterRateDefaultsToTenNotZero() {
+        let d = ParticleSystemDef.parse(json(
+            #"{"emitter":[{"name":"boxrandom","origin":"0 0 0"}],"renderer":[{"name":"sprite"}],"maxcount":10}"#),
+            material: nil)
+        guard case let .box(_, _, rate, _) = d.emitters.first else { return XCTFail("no box") }
+        XCTAssertEqual(rate, 10, "주입기 상수 — 종전 0 은 연속 방출 없음")
+    }
+
+    /// 주기 방출은 **min 을 max 로 클램프**한다(이미터 base 파서 꼬리 0x1401c1deb-0x1401c1e0c:
+    /// `[+0x18] = minss([+0x1c], [+0x18])`, delay 도 동형). max 는 건드리지 않는다.
+    /// 부재 키는 0 이다 — 주기 키에는 기본값 주입이 없다(주입기는 rate/duration 만 다룬다).
+    /// 동봉 도달 0(주기 이미터 5건 전건 min 명시 · 전건 min ≤ max)이라 워크샵 역범위 전용 가드다.
+    func testPeriodicEmissionClampsMinToMax() {
+        let inverted = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":0,"minperiodicduration":5,"maxperiodicduration":2,
+                     "minperiodicdelay":9,"maxperiodicdelay":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":10}
+        """), material: nil)
+        let pe = inverted.emitterPeriodic.first ?? nil
+        XCTAssertNotNil(pe, "주기 키가 있으면 PeriodicEmission 이 조립된다")
+        XCTAssertEqual(pe?.durationMin, 2, "min 이 max 로 내려간다")
+        XCTAssertEqual(pe?.durationMax, 2, "max 는 그대로")
+        XCTAssertEqual(pe?.delayMin, 1)
+        XCTAssertEqual(pe?.delayMax, 1)
+
+        // 정상 범위는 손대지 않는다(실물 water_droplets_periodic 값).
+        let normal = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":0,"minperiodicduration":0.5,"maxperiodicduration":1,
+                     "minperiodicdelay":0.5,"maxperiodicdelay":1}],
+         "renderer":[{"name":"sprite"}],"maxcount":10}
+        """), material: nil)
+        let pn = normal.emitterPeriodic.first ?? nil
+        XCTAssertNotNil(pn)
+        XCTAssertEqual(pn?.durationMin, 0.5); XCTAssertEqual(pn?.durationMax, 1)
+        XCTAssertEqual(pn?.delayMin, 0.5); XCTAssertEqual(pn?.delayMax, 1)
     }
 
     /// `alphafade` 는 이번 라운드 최고 도달이다 — 동봉 177건 중 97건이 `fadeouttime` 을 생략한다.

@@ -348,7 +348,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
 
     func testPositionOffsetRandomParseAndDistribution() {
         let def = ParticleSystemDef.parse(json("""
-        {"emitter":[{"name":"boxrandom","instantaneous":32}],
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":32}],
          "initializer":[{"name":"positionoffsetrandom","offsetmin":"0 -2 0","offsetmax":"10 2 0"}],
          "renderer":[{"name":"sprite"}],"maxcount":32}
         """), material: nil)
@@ -369,7 +369,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
 
     func testEventLinkedInitializersParseOnly_simIgnores() {
         let def = ParticleSystemDef.parse(json("""
-        {"emitter":[{"name":"boxrandom","instantaneous":2}],
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":2}],
          "initializer":[{"name":"inheritcontrolpointvelocity","controlpoint":3,"scale":0.5},
                         {"name":"inheritinitialvaluefromevent","value":"size"},
                         {"name":"inheritvaluefromevent"},
