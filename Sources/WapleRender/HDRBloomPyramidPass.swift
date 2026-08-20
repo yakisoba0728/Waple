@@ -303,12 +303,24 @@ final class HDRBloomPyramidPass: HDRBloomPyramidEncoding {
     /// 머티리얼(hdr_upsample.json)이 blending:additive 라 **더 고운 레벨 위에 가산**된다.
     /// 여기서는 별도 타깃에 쓰므로 base(고운 레벨)를 그대로 읽어 더한다 — 결과 동일.
     ///
-    /// **가중은 종전 캘리브(0.25 x scatter)를 유지한다.** 셰이더 문면(4탭 합 x0.25 x scatter =
-    /// 평균 x scatter)을 그대로 쓰면 scatter=1.619 가 레벨마다 곱해져 발산한다 — 실측에서
-    /// 3589454154 의 luma 가 0.091 → 0.420 으로 화면이 백화됐다. 저작값 1.619 가 셰이더의
-    /// g_BloomScatter 로 그대로 들어가는지(엔진이 변환하는지)가 미확인이라, 확인 전에는
-    /// 발산하지 않는 종전 가중을 유지하고 **탭 모양만** WE 구조로 맞춘다.
-    /// 정본: spec/engine/hdr-bloom.json — engine.bloom.hdr.upsampleWeightUnknown.
+    /// **[2026-08-20] 이 자리의 미해결은 닫혔다.** 종전 주석은 *"저작값 scatter 가 셰이더의
+    /// `g_BloomScatter` 로 그대로 들어가는지 미확인이라 발산하지 않는 종전 가중을 유지한다"* 였는데,
+    /// 셋이 서로 맞물려 답을 준다:
+    ///
+    ///   ① **동봉 셰이더 원문**이 직접 말한다 — `assets/shaders/hdr_downsample.frag:61`
+    ///      `uniform float g_BloomScatter; // {"material":"scatter","default":1}` 이고 본문은
+    ///      `albedo *= 0.25 * g_BloomScatter`(4탭 합 기준). 즉 **0.25 는 4탭 평균**이고 scatter 는
+    ///      그 위에 곱하는 별개 항이다. 둘은 애초에 경쟁 후보가 아니었다.
+    ///   ② **엔진이 무엇을 싣는지**: `0x14017f807` `movss xmm6,[rbx+0x3d0]` 로 저작 `bloomhdrscatter`
+    ///      를 읽어 **변형 없이** `setMaterialParam(mat,"scatter",xmm6,1)` 두 번(`0x14017f967` ·
+    ///      `0x14017f988`, 대상은 `[rsi+0x31a0]`·`[rsi+0x31a8]` = hdr_upsample 계열 2개).
+    ///      중간의 `movaps xmm0,xmm6`(`0x14017f854`)는 아래 ③ 의 `powf` 입력이지 xmm6 를 바꾸지 않는다.
+    ///   ③ **발산이 안 나는 이유**: 위 `normalizedStrength` 가 추출 강도를 `scatter^(max(N,2)−2)+1` 로
+    ///      나눈다. 업샘플의 `scatter^k` 누적과 **한 쌍**이라 서로 상쇄한다. 종전에 백화가 났던 것은
+    ///      가중만 옮기고 이 나눗셈을 안 옮겼기 때문이다 — 가중이 틀렸던 게 아니다.
+    ///
+    /// 그래서 아래는 `weDownsample4`(이미 4탭 평균) × 생 scatter = 셰이더 문면과 **동일**하다.
+    /// 정본: spec/engine/uniform-feed.json — engine.uniformFeed.hdrBloom.materialParams(확정).
     fragment float4 hdrBloomUpsample(BloomVertexOut in [[stage_in]],
                                      texture2d<float> base [[texture(0)]],
                                      texture2d<float> add [[texture(1)]],
