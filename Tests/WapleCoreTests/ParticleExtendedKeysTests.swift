@@ -350,9 +350,13 @@ final class ParticleExtendedKeysTests: XCTestCase {
 
     // MARK: - 6. positionoffsetrandom + 파스 전용 이니셜라이저
 
+    /// [2026-08-20] 픽스처에 `"distancemax":"0 0 0"` 을 명시했다. 이 테스트가 보는 것은
+    /// `positionoffsetrandom` 의 분포이고 이미터 산포는 잡음인데, `boxrandom.distancemax` 부재
+    /// 기본값이 (0,0,0) → (256,256,0)(직교 분기)으로 바뀌면서 그 잡음이 단언을 덮었다.
+    /// 기대를 바꾼 게 아니라 픽스처가 기본값에 묵시적으로 기대던 것을 드러낸 것이다.
     func testPositionOffsetRandomParseAndDistribution() {
         let def = ParticleSystemDef.parse(json("""
-        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":32}],
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":32,"distancemax":"0 0 0"}],
          "initializer":[{"name":"positionoffsetrandom","offsetmin":"0 -2 0","offsetmax":"10 2 0"}],
          "renderer":[{"name":"sprite"}],"maxcount":32}
         """), material: nil)
