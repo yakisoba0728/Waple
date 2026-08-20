@@ -383,7 +383,7 @@ final class ParticleSceneFixRegressionTests: XCTestCase {
                       "audioprocessingmode":3,"audioprocessingbounds":"0.6 1"}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(axis, dIn, dOut, sIn, sOut, _, _, _, _, _, _, _) = def.operators.first else {
+        guard case let .vortex(axis, dIn, dOut, sIn, sOut, _, _, _, _) = def.operators.first else {
             return XCTFail("vortex_v2 가 vortex 로 매핑되어야 한다")
         }
         XCTAssertEqual(axis, Vec3(x: 0, y: 0, z: 1))

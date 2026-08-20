@@ -229,9 +229,7 @@ public enum ParticleOperator: Equatable {
     /// 3·2·2·2·부재 — **bit2 를 가진 인스턴스가 하나도 없다**.
     case vortex(axis: Vec3, distanceInner: Float, distanceOuter: Float,
                 speedInner: Float, speedOuter: Float, offset: Vec3,
-                centerForce: Float = 0, variableStrength: Float = 0,
-                reductionInner: Float = 0, reductionOuter: Float = 0, ring: VortexRing? = nil,
-                flags: Int = 0)
+                centerForce: Float = 0, ring: VortexRing? = nil, flags: Int = 0)
     /// 결정적 노이즈 흐름장 난류. 실물키(정찰 55인스턴스): speedmin/speedmax(파티클별 속도 범위),
     /// scale(공간 주파수), timescale(시간 진화 속도), mask(축별 게이트 "x y z"),
     /// phasemin/phasemax(파티클별 위상 오프셋). 노이즈장 속도로 위치를 이류(advection)한다(vel 미누적 → 유계).
@@ -1098,12 +1096,13 @@ public struct ParticleSystemDef: Equatable {
                                    speedInner: injected(o, "speedinner", 2500),        // 0x1401bf22e (원근 1.0)
                                    speedOuter: injected(o, "speedouter", 0),           // 0x1401bf24f xorps, 플래그 무관
                                    offset: pvec3(o["offset"]) ?? Vec3(x: 0, y: 0, z: 0),  // "0 0 0", 플래그 무관
-                                   // `centerforce` 문자열은 이 주입기에도 이 핸들러에도 **없다**
-                                   // (전 바이너리 참조 2곳이 전부 vortex_v2 쪽). `?? 0` 이 옳다.
-                                   centerForce: pfloat(o["centerforce"]) ?? 0,
-                                   variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
-                                   reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
-                                   reductionOuter: pfloat(o["reductionouter"]) ?? 0,      // 보존 전용(의미 보류)
+                                   // `centerforce` 는 v1 의 키가 **아니다** — "centerforce"@0x14048f9f8
+                                   // 를 집는 lea 가 전 바이너리에 2곳뿐이고 둘 다 v2 다(주입기
+                                   // 0x1401bf5f5 ∈ 0x1401bf2d0, ctor 0x1401ce07a ∈ vortex_v2 구간).
+                                   // 종전엔 주석으로 그렇게 적어 놓고 코드는 키를 **읽었다** —
+                                   // `{"name":"vortex","centerforce":5}` 면 WE 는 무시하는데 Waple 은
+                                   // 반경 감쇠를 걸었다. 상수 0 으로 못박는다.
+                                   centerForce: 0,
                                    flags: pint(o["flags"]) ?? 0))
                 vortexAudio.append(AudioProcessing.parse(o))
             case "vortex_v2":
@@ -1154,9 +1153,12 @@ public struct ParticleSystemDef: Equatable {
                                    // `flags & 2` 일 때만 읽는다 — 아니면 핸들러가 0x1401ce0b0 에서
                                    // `xorps xmm9,xmm9` 로 0 을 굽는다(`test r14b,2` / `je` @0x1401ce074).
                                    centerForce: (v2Flags & 2) != 0 ? injected(o, "centerforce", 1) : 0,
-                                   variableStrength: pfloat(o["variablestrength"]) ?? 0,   // 보존 전용(의미 보류)
-                                   reductionInner: pfloat(o["reductioninner"]) ?? 0,       // 보존 전용(의미 보류)
-                                   reductionOuter: pfloat(o["reductionouter"]) ?? 0,       // 보존 전용(의미 보류)
+                                   // `variablestrength`/`reductioninner`/`reductionouter` 는 v2 의 키도
+                                   // 아니다. 각 문자열의 lea 를 전수로 보면 전자는 주입기 0x1401be2a0 과
+                                   // ctor 0x1401ccf0b(= maintaindistancetocontrolpoint), 후자 둘은 주입기
+                                   // 0x1401be810 과 ctor 0x1401cd252/0x1401cd285
+                                   // (= reducemovementnearcontrolpoint) 에만 있다. 소용돌이 어느 쪽도
+                                   // 읽지 않으므로 "파스·보존" 필드째 들어냈다.
                                    ring: v2Ring, flags: v2Flags))
                 vortexAudio.append(AudioProcessing.parse(o))
             case "turbulence":
@@ -1570,14 +1572,13 @@ public struct ParticleSystemDef: Equatable {
                 ops[i] = .controlPointAttract(scale: scale, threshold: threshold,
                                               target: controlPoints[cpid],
                                               deleteThreshold: deleteThreshold, flags: flags)
-            case let .vortex(axis, dIn, dOut, sIn, sOut, offset, cf, vstr, rIn, rOut, ring, flags):
+            case let .vortex(axis, dIn, dOut, sIn, sOut, offset, cf, ring, flags):
                 ops[i] = .vortex(axis: axis, distanceInner: dIn, distanceOuter: dOut,
                                  speedInner: sIn, speedOuter: sOut,
                                  offset: Vec3(x: controlPoints[cpid].x + offset.x,
                                               y: controlPoints[cpid].y + offset.y,
                                               z: controlPoints[cpid].z + offset.z),
-                                 centerForce: cf, variableStrength: vstr,
-                                 reductionInner: rIn, reductionOuter: rOut, ring: ring, flags: flags)
+                                 centerForce: cf, ring: ring, flags: flags)
             case let .maintainDistanceToControlPoint(distance, vs, _):
                 ops[i] = .maintainDistanceToControlPoint(distance: distance, variableStrength: vs,
                                                          target: controlPoints[cpid])

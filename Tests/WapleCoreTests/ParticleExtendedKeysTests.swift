@@ -329,20 +329,28 @@ final class ParticleExtendedKeysTests: XCTestCase {
 
     // MARK: - 4. vortex 확장 / vortex_v2 ring
 
-    func testVortexExtendedKeysParse() {
+    /// **네 키 모두 `vortex` 의 키가 아니다.** 각 문자열을 집는 `lea` 를 전 바이너리에서 전수로
+    /// 보면: `centerforce`@0x14048f9f8 은 2곳(주입기 0x1401bf5f5 ∈ 0x1401bf2d0 = **vortex_v2**
+    /// 주입기, ctor 0x1401ce07a ∈ vortex_v2 구간) — v1 주입기 0x1401bef00 에도 v1 ctor
+    /// 0x1401cd8e6 에도 없다. `variablestrength`@0x14048fa08 은 주입기 0x1401be2a0 과 ctor
+    /// 0x1401ccf0b, 즉 **maintaindistancetocontrolpoint** 전용이다. `reductioninner`@0x14048fa40 ·
+    /// `reductionouter`@0x14048f9c8 은 주입기 0x1401be810 과 ctor 0x1401cd252/0x1401cd285,
+    /// 즉 **reducemovementnearcontrolpoint** 전용이다.
+    ///
+    /// 종전엔 이 넷을 vortex 가 파스해 보존했고, `centerforce` 는 시뮬레이터가 실제로 **힘으로
+    /// 썼다** — 주석은 "v1 에는 없다" 고 적어 놓고 코드가 키를 읽는 상태였다. 넷 다 들어내고,
+    /// 이 테스트가 "적어도 WE 는 무시한다" 를 못박는다.
+    func testVortexIgnoresKeysThatBelongToOtherElements() {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":1}],
          "operator":[{"name":"vortex","centerforce":50,"variablestrength":2,
                       "reductioninner":10,"reductionouter":20}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, _, _, _, cf, vs, ri, ro, ring, _) = def.operators.first else {
+        guard case let .vortex(_, _, _, _, _, _, cf, ring, _) = def.operators.first else {
             return XCTFail("vortex 가 파스되어야 한다")
         }
-        XCTAssertEqual(cf, 50)
-        XCTAssertEqual(vs, 2)        // 파스·보존(의미 보류)
-        XCTAssertEqual(ri, 10)       // 파스·보존(의미 보류)
-        XCTAssertEqual(ro, 20)       // 파스·보존(의미 보류)
+        XCTAssertEqual(cf, 0, "centerforce 는 vortex_v2 의 키다 — v1 은 적혀 있어도 무시한다")
         XCTAssertNil(ring)
     }
 
@@ -353,7 +361,7 @@ final class ParticleExtendedKeysTests: XCTestCase {
                       "ringpulldistance":300,"ringpullforce":80,"ringwidth":24}],
          "renderer":[{"name":"sprite"}],"maxcount":10}
         """), material: nil)
-        guard case let .vortex(_, _, _, sIn, sOut, _, _, _, _, _, ring, _) = def.operators.first else {
+        guard case let .vortex(_, _, _, sIn, sOut, _, _, ring, _) = def.operators.first else {
             return XCTFail("vortex_v2 가 vortex 매핑되어야 한다")
         }
         XCTAssertEqual(sIn, 30)
