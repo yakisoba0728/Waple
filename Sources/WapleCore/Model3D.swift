@@ -435,7 +435,9 @@ public struct Model3D: Equatable {
                 materialList.append(m)
             }
             guard let material = materialList.first else { return nil }
-            guard let _ = u32(o) else { return nil }             // u32 gateWord(v≥4, 관측 0, Kirby mesh1 은 2) — 아래 프로브 근거 참고
+            // u32 gateWord(v≥4, 설치본 45메시 전건 0, Kirby mesh1 은 2). **버리면 안 된다** —
+            // 인덱스 원소 폭이 이 워드의 bit0 에서 나온다(아래 참조).
+            guard let gateWord = u32(o) else { return nil }
             o += 4
             // 메시 헤더 프레이밍 프로브: z 뒤에 여분 u32 가 0..2개 올 수 있다(실측: 전 코퍼스 0개,
             // Kirby_puppet mesh1 만 1개(=1)). extra=0 이 기존 경로라 최우선 — vSize/스트라이드 정합
@@ -555,7 +557,24 @@ public struct Model3D: Equatable {
             // 통과하고, 인덱스 개수만 2배가 되어 파스가 "성공"한다. 실물 도달은 11파일/17메시이고
             // 대형 메시가 정점 0 을 향한 슬리버 부채꼴로 그려졌다. 골든은 Waple-대-Waple 회귀라
             // 이 클래스를 구조적으로 못 잡는다 — 회귀 핀은 Model3DIndexWidthTests 다.
-            let iWidth = vCount > 65535 ? 4 : 2
+            //
+            // **[2026-08-20] 폭은 정점 수가 정하는 게 아니라 포맷이 자기기술한다.** `.mdl` 전용
+            // GPU 업로드 경로(0x1401d7760, 파스 직후 0x1401d5bb1 에서 호출)가 그렇게 읽는다:
+            //   0x1401d784c `movzx ecx, byte [rdi+0x18]` → 0x1401d7853 `and cl, 1`  = gateWord & 1
+            //   0x1401d7870 `lea r9d, [r10*2 + 2]`                                  = 2 또는 4
+            //   0x1401d7878 `idiv r9d`                                              = 인덱스 개수
+            // 그 플래그가 그대로 인자로 넘어가고(0x1401d786b), 소비처 0x14009a98d 가
+            // `test edx,edx` → `cmove` 로 **0x39(R16_UINT)** 와 **0x2a(R32_UINT)** 를 고르며
+            // ByteWidth 도 `lea ecx,[rsi*4]` / `lea eax,[rsi+rsi]` 로 같은 비트에서 갈린다.
+            // 정점 수는 어디에도 안 들어간다.
+            //
+            // 두 규칙은 **설치본에서 같은 답을 낸다** — 45메시 전건 gateWord 0 이고 최대 정점수가
+            // 10,995 라 `vCount > 65535` 도 항상 거짓이다(파스 결과 바이트 동일 확인). 갈리는 것은
+            // gateWord bit0 이 선 워크샵 `.mdl` 이고, 그때 종전 규칙은 위에 적힌 그 **조용한**
+            // 오작동을 그대로 낸다(maxIndex 가 vCount-1 이라 범위 가드를 통과한다).
+            // `2 + 2*(gate&1)` 를 분기로 쓴다 — `Int(gateWord & 1)` 변환을 피해 정수 좁힘
+            // 인구조사에 잡히지 않게(도메인이 {0,1} 이라 안전하지만, 세지 않는 편이 낫다).
+            let iWidth = (gateWord & 1) == 0 ? 2 : 4
             guard iSize % iWidth == 0, o + iSize <= bytes.count else { return nil }
             var indices: [UInt32] = []
             indices.reserveCapacity(iSize / iWidth)
