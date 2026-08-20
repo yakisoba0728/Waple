@@ -601,9 +601,12 @@ extension SceneRenderer {
         // 디버그 바이섹션 스위치: 실물 씬에서 번역 효과만 끄고 A/B 비교(시각 아티팩트 책임 분리).
         if ProcessInfo.processInfo.environment["WAPLE_DISABLE_TRANSLATED"] == "1" { return nil }
         // #include 리졸버: pkg→베이스에셋→내장(확정-의미 서브셋, common_blending.h) 순.
+        // X-⑨: 이펙트-로컬 루트 우선(effectScopedData 주석 — 스톡 46/46 이 자기 shaders/materials 를 갖는다).
+        let effectRoot = SceneRenderer.effectLocalRoot(eff)
         let include: (String) -> String? = { header in
             for cand in ["shaders/\(header)", header] {
-                if let d = self.quietAssetData(cand, package: package), let s = String(data: d, encoding: .utf8) { return s }
+                if let d = self.effectScopedData(cand, root: effectRoot, package: package),
+                   let s = String(data: d, encoding: .utf8) { return s }
             }
             return BuiltinShaderIncludes.lookup(header)
         }
@@ -654,9 +657,9 @@ extension SceneRenderer {
                 passes.append(swap)
                 continue
             }
-            let meta = resolvePassShaderMeta(mp, eff: eff, manifest: manifest, package: package)
-            guard let vData = quietAssetData("shaders/\(meta.base).vert", package: package),
-                  let fData = quietAssetData("shaders/\(meta.base).frag", package: package),
+            let meta = resolvePassShaderMeta(mp, eff: eff, manifest: manifest, package: package, root: effectRoot)
+            guard let vData = effectScopedData("shaders/\(meta.base).vert", root: effectRoot, package: package),
+                  let fData = effectScopedData("shaders/\(meta.base).frag", root: effectRoot, package: package),
                   let vert = String(data: vData, encoding: .utf8),
                   let frag = String(data: fData, encoding: .utf8) else { return nil }
             let scenePass = scenePassCursor < eff.passList.count ? eff.passList[scenePassCursor] : SceneEffectPass()
@@ -681,7 +684,7 @@ extension SceneRenderer {
                                                fboIndex: fboIndex, lw: lw, lh: lh,
                                                package: package, device: device,
                                                compositeImageTextures: compositeImageTextures,
-                                               baseNoInterp: baseNoInterp) else { return nil }
+                                               baseNoInterp: baseNoInterp, root: effectRoot) else { return nil }
             if t.usesAudio { anyAudio = true }
             if plan.target == nil, combos["DIRECTDRAW"] == 1 { outputPremultiplied = true }
             passes.append(TranslatedPass(pipeline: pipe, material: material, aux: plan.aux,
@@ -760,13 +763,14 @@ extension SceneRenderer {
     /// ③ 셰이더 이름 + 머티리얼 메타(combos/textures) 해석 — 패스에 shader 가 없으면 material JSON
     /// (passes[0])에서, 그마저 없으면 관례 "effects/<name>".
     private func resolvePassShaderMeta(_ mp: EffectManifest.Pass, eff: SceneEffect,
-                                       manifest: EffectManifest, package: ScenePackage)
+                                       manifest: EffectManifest, package: ScenePackage,
+                                       root: String? = nil)
         -> (base: String, matCombos: [String: Int], matTextures: [String?]) {
         var shaderName = mp.shader
         var matCombos: [String: Int] = [:]
         var matTextures: [String?] = []
         if shaderName == nil, let matPath = mp.material,
-           let mData = quietAssetData(matPath, package: package),
+           let mData = effectScopedData(matPath, root: root, package: package),
            let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any],
            let mp0 = (mjson["passes"] as? [Any])?.first as? [String: Any] {
             shaderName = mp0["shader"] as? String
@@ -787,7 +791,7 @@ extension SceneRenderer {
         // 아니면 디렉터리명으로 돌아간다. 폴백은 원래 최후 수단이라 이 한 번의 조회 비용은 무해하다.
         if let shaderName { return (shaderName, matCombos, matTextures) }
         if let key = manifest.replacementKey, key != eff.name,
-           quietAssetData("shaders/effects/\(key).frag", package: package) != nil {
+           effectScopedData("shaders/effects/\(key).frag", root: root, package: package) != nil {
             return ("effects/\(key)", matCombos, matTextures)
         }
         return ("effects/\(eff.name)", matCombos, matTextures)
@@ -868,7 +872,7 @@ extension SceneRenderer {
                                    manifest: EffectManifest, fboIndex: [String: Int],
                                    lw: Float, lh: Float, package: ScenePackage, device: MTLDevice,
                                    compositeImageTextures: [Int: String] = [:],
-                                   baseNoInterp: Bool = false)
+                                   baseNoInterp: Bool = false, root: String? = nil)
         -> (binds: [(slot: Int, source: Int)], texRes: [SIMD4<Float>], aux: [(slot: Int, tex: MTLTexture)],
             texWrap: [Float], texFilter: [Float], target: Int?, fullFrameSlots: [Int],
             mediaArtworkSlots: [(slot: Int, previous: Bool)])? {
@@ -1043,6 +1047,38 @@ extension SceneRenderer {
     }
 
     /// assetData 의 조용한 버전: pkg→베이스에셋 조회하되 미스에 로그 없음(소스 프로브는 미스가 정상).
+    /// X-⑨(G-B2-08/G-B4-01): **이펙트-로컬 자산 루트**를 먼저 보고, 없으면 종전대로 팩 루트로 간다.
+    ///
+    /// 동봉 자산 실측: 스톡 이펙트 `effects/<name>/` **46/46 전건**이 자기 `shaders/` 와
+    /// `materials/` 를 갖는다. 그리고 팩 루트에는 `shaders/effects/` 디렉터리가 **아예 없다**.
+    /// 그런데 매니페스트·머티리얼이 적는 경로는 그 로컬 루트 기준의 상대 경로다:
+    ///
+    ///     effects/fluidsimulation/effect.json  → "material": "materials/effects/fluidsimulation_advection.json"
+    ///     …/materials/effects/fluidsimulation_advection.json → "shader": "effects/fluidsimulation_advection"
+    ///     실물 위치: effects/fluidsimulation/shaders/effects/fluidsimulation_advection.frag
+    ///
+    /// 종전엔 팩 루트에서만 찾아서 이 46종이 **전건 해석 불가**였다(번들에 들어 있는데 사장).
+    /// 포맷/지속을 고쳐도 셰이더 자체를 못 찾으면 유체는 여전히 안 돈다 — 같은 묶음인 이유다.
+    ///
+    /// 루트 우선이 안전한 이유: 폴백이 종전 경로 그대로라 워크샵 pkg(자기 루트 없이 팩 루트에
+    /// 셰이더를 싣는 형태)는 무회귀다. 로컬 루트에 자산이 있으면 그건 저작자가 그 이펙트용으로
+    /// 실은 것이므로 우선하는 게 맞다(자기 `common.h` 를 싣는 경우 포함).
+    func effectScopedData(_ name: String, root: String?, package: ScenePackage) -> Data? {
+        if let r = root, !r.isEmpty, let d = quietAssetData("\(r)/\(name)", package: package) { return d }
+        return quietAssetData(name, package: package)
+    }
+
+    /// 이펙트가 자기 자산을 두는 루트 = `effect.json` 이 있는 디렉터리.
+    /// `eff.file` 이 명시되면 그 부모, 아니면 관례 `effects/<name>`.
+    static func effectLocalRoot(_ eff: SceneEffect) -> String? {
+        if !eff.file.isEmpty {
+            guard let slash = eff.file.lastIndex(of: "/") else { return nil }
+            let dir = String(eff.file[eff.file.startIndex..<slash])
+            return dir.isEmpty ? nil : dir
+        }
+        return eff.name.isEmpty ? nil : "effects/\(eff.name)"
+    }
+
     func quietAssetData(_ name: String, package: ScenePackage) -> Data? {
         if let d = packageData(name, package: package) { return d }
         // 다중 루트(사용자 설치본 → 동봉본). `.rejected` 는 즉시 nil — 경로 이탈을 다음 루트로
