@@ -881,7 +881,12 @@ public struct ParticleSimulator {
             let radialP = relP - axisN * proj
             let distP = simd_length(radialP)
             if distP > 1e-6 {
-                delta += radialP * ((dist / distP - 1) * v.centerForce / dt)
+                // `(dist − distP)/distP` 는 실물의 `dist/distP − 1` 과 대수적으로 같지만
+                // **수치적으로 훨씬 안정하다.** 후자는 두 거리가 가까울 때(= dt 가 작을 때)
+                // 1.0 근처에서 빼기 때문에 float32 해상도(~1e-7)에 먹히는데, 그 결과가 곧바로
+                // `1/dt` 로 증폭된다. 실물은 `rsqrtps` 근사까지 겹쳐 애초에 비트동일이 불가능하니
+                // 여기서는 조건수가 나은 쪽을 쓴다.
+                delta += radialP * ((dist - distP) / distP * v.centerForce / dt)
             }
         }
         vel += delta
@@ -894,10 +899,10 @@ public struct ParticleSimulator {
         // flags 6(둘 다 켬)에서 값이 갈리는데, 그런 인스턴스가 동봉에 없어 수식 확정과 함께
         // 미룬다 — 고칠 때 이 두 항을 한 벡터로 합치는 것부터 해야 한다.
         if let ring = v.ring, ring.pullForce != 0 {
-            let delta = dist - ring.radius
+            let ringDelta = dist - ring.radius          // 위 `delta` 를 가리지 않게 이름을 나눈다
             let halfW = max(0, ring.width) * 0.5
-            if abs(delta) > halfW, abs(delta) - halfW <= max(0, ring.pullDistance) {
-                vel -= n * (ring.pullForce * dt) * (delta > 0 ? 1 : -1)
+            if abs(ringDelta) > halfW, abs(ringDelta) - halfW <= max(0, ring.pullDistance) {
+                vel -= n * (ring.pullForce * dt) * (ringDelta > 0 ? 1 : -1)
             }
         }
     }
