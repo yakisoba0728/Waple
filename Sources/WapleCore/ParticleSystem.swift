@@ -599,7 +599,7 @@ public struct ParticleSystemDef: Equatable {
             // `test rax,rax` / `jne`(키 있으면 건너뜀) 패턴).
             // lifetimerandom 주입기 0x1401b9c40: max 만 1.0(0x1401b9d12) 을 심고 min 은 상수를
             // 심지 않는다 = **0**. 실물 도달 0건이지만 기록을 맞춘다.
-                inits.append(.lifetimeRandom(min: pfloat(i["min"]) ?? 0, max: pfloat(i["max"]) ?? 1,
+                inits.append(.lifetimeRandom(min: injected(i, "min", 0), max: injected(i, "max", 1),
                                              exponent: pexponent(i["exponent"]) ?? 1))
             case "sizerandom":
                 inits.append(.sizeRandom(min: pfloat(i["min"]) ?? 1, max: pfloat(i["max"]) ?? 1,
@@ -608,8 +608,8 @@ public struct ParticleSystemDef: Equatable {
             // colorrandom 주입기 0x1401ba110: min = "0 0 0"(0x1401ba16e), max = "255 255 255"
             // (0x1401ba264), exponent = 1.0(0x1401ba332). 종전 min 기본값 (255,255,255)는
             // "중립값" 추정이었다. 실물 도달 0건(258건 전건 min 명시)이라 동작 변화는 없다.
-                inits.append(.colorRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
-                                          max: pvec3(i["max"]) ?? Vec3(x: 255, y: 255, z: 255),
+                inits.append(.colorRandom(min: injectedVec3(i, "min", Vec3(x: 0, y: 0, z: 0)),
+                                          max: injectedVec3(i, "max", Vec3(x: 255, y: 255, z: 255)),
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "alpharandom":
                 // **[2026-08-20 정정] 추론이 아니라 실측이다.** 아래 옛 주석은 "같은 스위치의 관례상
@@ -621,7 +621,7 @@ public struct ParticleSystemDef: Equatable {
                 // 은 min 이 명시돼 있어 영향 없고, min/max 둘 다 부재인 것은 동봉 34건 중 1건뿐이다.
                 // 그 1건이 [0.05,1] 로 바뀐다 — [1,1] 고정보다 원본에 맞다.
                 // (032b66d 의 ??0 은 여전히 틀렸다. 0.05 는 0 이 아니다.)
-                inits.append(.alphaRandom(min: pfloat(i["min"]) ?? 0.05, max: pfloat(i["max"]) ?? 1,
+                inits.append(.alphaRandom(min: injected(i, "min", 0.05), max: injected(i, "max", 1),
                                           exponent: pexponent(i["exponent"]) ?? 1))
             case "velocityrandom":
                 inits.append(.velocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: 0),
@@ -639,8 +639,8 @@ public struct ParticleSystemDef: Equatable {
             // 주입기 0x1401bb9c0: min = "0 0 -5"(0x1401bba1e, 길이 6) · max = "0 0 5"(0x1401bbafe,
             // 길이 5) · exponent = 1.0(0x1401bbbe0). 종전 (0,0,0)/(0,0,0)은 **회전이 아예 없다**.
             // 동봉 25건 중 4건이 min·max 를 둘 다 생략한다 — 그 4건이 안 돌고 있었다.
-                inits.append(.angularVelocityRandom(min: pvec3(i["min"]) ?? Vec3(x: 0, y: 0, z: -5),
-                                                    max: pvec3(i["max"]) ?? Vec3(x: 0, y: 0, z: 5),
+                inits.append(.angularVelocityRandom(min: injectedVec3(i, "min", Vec3(x: 0, y: 0, z: -5)),
+                                                    max: injectedVec3(i, "max", Vec3(x: 0, y: 0, z: 5)),
                                                     exponent: pexponent(i["exponent"]) ?? 1))
             case "turbulentvelocityrandom":
                 inits.append(.turbulentVelocityRandom(speedMin: pfloat(i["speedmin"]) ?? 0, speedMax: pfloat(i["speedmax"]) ?? 0,
@@ -723,8 +723,8 @@ public struct ParticleSystemDef: Equatable {
                 // `fadeouttime` 을 생략**하고 23건이 `fadeintime` 을 생략한다. fadeOut 0 은
                 // `fadeFactor` 에서 페이드를 통째로 끄므로, 그 97건은 수명 끝에 **팝** 하고 사라졌다
                 // — WE 는 수명의 마지막 50% 에 걸쳐 서서히 사라진다.
-                ops.append(.alphaFade(fadeInTime: pfloat(o["fadeintime"]) ?? 0.5,
-                                      fadeOutTime: pfloat(o["fadeouttime"]) ?? 0.5))
+                ops.append(.alphaFade(fadeInTime: injected(o, "fadeintime", 0.5),
+                                      fadeOutTime: injected(o, "fadeouttime", 0.5)))
             case "sizechange":
                 ops.append(.sizeChange(startTime: pfloat(o["starttime"]) ?? 0,
                                        startValue: pfloat(o["startvalue"]) ?? 1,
@@ -753,17 +753,17 @@ public struct ParticleSystemDef: Equatable {
                 // 역범위가 생기지 않는다). frequency 0 은 sin 을 상수로 만들어 연산자를 무력화하므로
                 // 동봉 26건 중 frequencymin 부재 3건·frequencymax 부재 2건이 죽어 있었다.
                 let smin = pfloat(o["scalemin"]) ?? 0
-                let fmin = pfloat(o["frequencymin"]) ?? 1
-                ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? 10,
-                                           scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? 1,
+                let fmin = injected(o, "frequencymin", 1)
+                ops.append(.oscillateAlpha(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 10),
+                                           scaleMin: smin, scaleMax: injected(o, "scalemax", 1),
                                            phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "oscillateposition":
                 // 주입기 0x1401bd5d0: frequencymin = 1.0(0x1401bd716) · frequencymax = **5.0**
                 // (0x1401bd7cc). 자매 alpha/size 는 10.0 인데 **여기만 5.0** 이다 — 승계였다면
                 // 절대 나오지 않을 값이라, 이 하나가 "고정 상수" 해석의 반증 가능한 증거다.
                 let smin = pfloat(o["scalemin"]) ?? 0
-                let fmin = pfloat(o["frequencymin"]) ?? 1
-                ops.append(.oscillatePosition(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? 5,
+                let fmin = injected(o, "frequencymin", 1)
+                ops.append(.oscillatePosition(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 5),
                                               scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? smin,
                                               phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0,
                                               mask: pvec3(o["mask"]) ?? Vec3(x: 1, y: 1, z: 1)))
@@ -827,10 +827,10 @@ public struct ParticleSystemDef: Equatable {
                 // (0x1401bde6f, `movsd` @0x140492790). 종전 (1, 승계)는 진폭 0(= 무진동)이라
                 // 동봉 5건 중 scalemin 부재 1건·scalemax 부재 1건·frequency 부재 2~3건이 죽어
                 // 있었다. WE 는 크기를 ±20% 로 맥동시킨다.
-                let smin = pfloat(o["scalemin"]) ?? 0.8
-                let fmin = pfloat(o["frequencymin"]) ?? 1
-                ops.append(.oscillateSize(frequencyMin: fmin, frequencyMax: pfloat(o["frequencymax"]) ?? 10,
-                                          scaleMin: smin, scaleMax: pfloat(o["scalemax"]) ?? 1.2,
+                let smin = injected(o, "scalemin", 0.8)
+                let fmin = injected(o, "frequencymin", 1)
+                ops.append(.oscillateSize(frequencyMin: fmin, frequencyMax: injected(o, "frequencymax", 10),
+                                          scaleMin: smin, scaleMax: injected(o, "scalemax", 1.2),
                                           phaseMin: pfloat(o["phasemin"]) ?? 0, phaseMax: pfloat(o["phasemax"]) ?? 0))
             case "alphachange":
                 ops.append(.alphaChange(startTime: pfloat(o["starttime"]) ?? 0,
@@ -947,7 +947,7 @@ public struct ParticleSystemDef: Equatable {
                     directions: pvec3(e["directions"]) ?? Vec3(x: 1, y: 1, z: 0),
                     distanceMin: pfloat(e["distancemin"]) ?? 0,
                     distanceMax: pfloat(e["distancemax"]) ?? 0,
-                    rate: pfloat(e["rate"]) ?? 10,   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 아래 주석 참조.
+                    rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0,
                     sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
                 emitterAudio.append(AudioProcessing.parse(e))
@@ -958,7 +958,7 @@ public struct ParticleSystemDef: Equatable {
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
                     distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    rate: pfloat(e["rate"]) ?? 10,   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 아래 주석 참조.
+                    rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
@@ -975,7 +975,7 @@ public struct ParticleSystemDef: Equatable {
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
                     distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    rate: pfloat(e["rate"]) ?? 10,   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 아래 주석 참조.
+                    rate: injected(e, "rate", 10),   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 위 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
@@ -1178,6 +1178,23 @@ public struct ParticleSystemDef: Equatable {
 // MARK: - 파싱 헬퍼 (공용 JSONNumerics 위임 — 파티클 규약: 문자열 스칼라 거부, 언랩 없음)
 
 private func pfloat(_ v: Any?) -> Float? { strictFloat(v) }
+
+/// **기본값 주입기 규약** — 원본은 원소 팩토리 직전에 `if (!json.find(k)) json[k] = C;` 를 돌린다.
+/// 결정적으로 **키가 없을 때만** 상수를 심는다. 키가 **있는데 값이 못 읽히는 경우**
+/// (`"rate": 1e300` 처럼 Float 범위를 넘는 값)는 주입 대상이 **아니다** — 원본에서도
+/// `find` 가 노드를 찾으므로 주입을 건너뛰고 그 노드의 `asFloat` 결과를 쓴다.
+///
+/// 이 구분이 없으면 `pfloat(d[k]) ?? C` 가 두 경우를 뭉뚱그려, 신뢰불가 입력이 오히려
+/// **엔진 기본값으로 승격**된다. 실제로 그렇게 넣었다가
+/// `testHugeNumericParticleValuesDefaultInsteadOfTrapping`(rate 1e300 → 0 기대)이 잡았다.
+private func injected(_ d: [String: Any], _ key: String, _ constant: Float) -> Float {
+    d[key] == nil ? constant : (pfloat(d[key]) ?? 0)
+}
+
+/// `injected(_:_:_:)` 의 Vec3 판(문자열 `"x y z"` 규약). 부재만 주입, 그 외는 0 벡터.
+private func injectedVec3(_ d: [String: Any], _ key: String, _ constant: Vec3) -> Vec3 {
+    d[key] == nil ? constant : (pvec3(d[key]) ?? Vec3(x: 0, y: 0, z: 0))
+}
 /// JSON false/true는 NSNumber로도 브리지되므로 exponent 숫자 경로에서 명시적으로 배제한다.
 private func pexponent(_ v: Any?) -> Float? {
     if let number = v as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() { return nil }
