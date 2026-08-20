@@ -344,6 +344,25 @@ public enum ParticleOperator: Equatable {
     case reduceMovementNearControlPoint(distanceInner: Float, distanceOuter: Float,
                                         reductionInner: Float, reductionOuter: Float,
                                         target: Vec3)
+    /// `maintaindistancebetweencontrolpoints` — 이름과 달리 **거리 유지가 아니라 위치 보정**이다.
+    /// 로케일도 그렇게 적는다: "Lock the particle position between two control points."
+    ///
+    /// 실물 오퍼레이터 base opcode 12 → 핸들러 0x140242058(테이블 0x14024bb58, 인덱스 = tag−1).
+    /// 게이트 `stricmp`@0x1401ccf82. 이 저장소에서 직접 확인한 것:
+    ///   · 핸들러가 읽고 쓰는 것은 **위치 배열뿐**이다 — `[sys+0x2b0/0x2b8/0x2c0]` 을 rdx/r8/r9 로
+    ///     잡고(0x140242216–0x140242226) 같은 곳에 되쓴다(0x1402422fb·0x14024231e·0x140242323).
+    ///     속도 배열(0x2c8/0x2d0/0x2d8)은 등장하지 않는다.
+    ///   · RNG 호출(0x1401f87a0)이 **없다** → 난수열 무영향(골든 리시드 불필요).
+    ///   · 세그먼트가 퇴화하면 스킵한다 — `comiss` 로 `|D|²`·`|Dp|²` 를 2⁻⁴⁶ 와 비교
+    ///     (0x1402421ff·0x14024220c). 방향은 `rsqrtps`(0x14024222d/31) 근사다.
+    ///   · 축 성분을 `minps`/`maxps` 로 [0,1] 에 가둔다(0x1402422cd/d1) → 세그먼트 밖으로 못 나간다.
+    ///
+    /// 키는 둘뿐이다. 주입기 0x1401be5d0 이 기본값을 심는다 — `controlpointstart` = **0**
+    /// (`mov [rax], r14`, r14=0 @0x1401be5f1), `controlpointend` = **1**(`mov qword [rax],1`
+    /// @0x1401be71a). 파스는 둘 다 `cmp eax,7 / jae → 7` 로 자르는데 **부호 없는 비교**라 음수도
+    /// 7 이 된다(0x1401ccfed · 0x1401cd0c1) — `clampControlPoint` 가 같은 규약이다.
+    /// 블렌드 창이 비자명하면 ext opcode 0x22 로 덮이지만(`mov r9d,0x22`@0x1401cd165) 동봉 도달 0.
+    case maintainDistanceBetweenControlPoints(start: Int, end: Int)
     /// 파스·보존 전용(이벤트 값 채널 미구현). 실물 **`inheritvaluefromevent`** — **오퍼레이터**다.
     /// 종전에는 이 이름이 `Initializer.inheritValueFromEvent` 로 들어가 있어 **도달 불가**였다:
     /// WE 는 이 이름을 `operator[]` 에만 내보내는데 Waple 은 `initializer[]` 에서만 받았고,
@@ -1433,6 +1452,10 @@ public struct ParticleSystemDef: Equatable {
                     reductionInner: injected(o, "reductioninner", 100),
                     reductionOuter: injected(o, "reductionouter", 0),
                     target: Vec3(x: 0, y: 0, z: 0)))
+            case "maintaindistancebetweencontrolpoints":
+                ops.append(.maintainDistanceBetweenControlPoints(
+                    start: clampControlPoint(injectedInt(o, "controlpointstart", 0)),
+                    end: clampControlPoint(injectedInt(o, "controlpointend", 1))))
             case "inheritvaluefromevent":
                 // 이벤트 값 채널 미구현 — 파스·보존까지만(시뮬 무시). 주입 기본은 이니셜라이저
                 // 형제와 다르다: `setcoloropacity`(0x1401c0080 → 테이블 슬롯 4).

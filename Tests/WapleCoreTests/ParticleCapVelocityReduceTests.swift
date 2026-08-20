@@ -166,6 +166,53 @@ final class ParticleCapVelocityReduceTests: XCTestCase {
 
     // MARK: - 아직 드롭되는 나머지(범위 못박기)
 
+    // MARK: - maintaindistancebetweencontrolpoints
+
+    /// 키는 둘뿐이고 주입 기본은 start=0 / end=1 이다(주입기 0x1401be5d0 — `mov [rax], r14`(r14=0)
+    /// @0x1401be5f1 · `mov qword [rax], 1` @0x1401be71a). 클램프는 **부호 없는** `cmp eax,7 / jae`
+    /// 라 음수도 7 이 된다(0x1401ccfed · 0x1401cd0c1).
+    func testMaintainDistanceBetweenControlPointsParsesKeysAndDefaults() {
+        let d0 = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+         "operator":[{"name":"maintaindistancebetweencontrolpoints"}],"maxcount":10}
+        """), material: nil)
+        XCTAssertEqual(d0.operators, [.maintainDistanceBetweenControlPoints(start: 0, end: 1)])
+
+        let d1 = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
+         "operator":[{"name":"maintaindistancebetweencontrolpoints",
+                      "controlpointstart":2,"controlpointend":-1}],"maxcount":10}
+        """), material: nil)
+        XCTAssertEqual(d1.operators, [.maintainDistanceBetweenControlPoints(start: 2, end: 7)],
+                       "음수는 부호 없는 비교로 7 이 된다")
+    }
+
+    /// 기하: 두 CP 를 잇는 선분의 **축 성분만** [0, L] 로 가두고 수직 성분은 보존한다.
+    /// 배치는 동봉 `presets/lightning/…/thunderbolt.json` 실물 그대로 — CP0 (0,0,0), CP1 (0,−450,0).
+    func testMaintainDistanceBetweenControlPointsClampsAlongSegmentOnly() {
+        func run(_ start: SIMD3<Float>, cp1: Vec3) -> SIMD3<Float> {
+            var def = ParticleSystemDef(
+                emitters: [.box(origin: Vec3(x: start.x, y: start.y, z: start.z),
+                                distanceMax: Vec3(x: 0, y: 0, z: 0), rate: 1000, burst: 0)],
+                initializers: [.lifetimeRandom(min: 1000, max: 1000)],
+                operators: [.maintainDistanceBetweenControlPoints(start: 0, end: 1)],
+                renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+            def.controlPoints[0] = Vec3(x: 0, y: 0, z: 0)
+            def.controlPoints[1] = cp1
+            var sim = ParticleSimulator(def: def, seed: 3)
+            return sim.step(1.0 / 60.0)[0].pos
+        }
+        let far = Vec3(x: 0, y: -450, z: 0)
+        XCTAssertEqual(run(SIMD3(0, 100, 0), cp1: far), SIMD3(0, 0, 0), "선분 앞쪽 밖 → 시작점")
+        XCTAssertEqual(run(SIMD3(0, -600, 0), cp1: far), SIMD3(0, -450, 0), "선분 뒤쪽 밖 → 끝점")
+        XCTAssertEqual(run(SIMD3(50, -200, 0), cp1: far), SIMD3(50, -200, 0),
+                       "선분 안이면 수직 오프셋까지 그대로 — 회전시키지 않는다")
+        // 퇴화 선분은 스킵한다(실물 `comiss` vs 2⁻⁴⁶ @0x1402421ff). 동봉
+        // `thunderbolt_beam_child` 가 CP0 ≡ CP1 ≡ 원점이라 정확히 이 경로다.
+        XCTAssertEqual(run(SIMD3(0, 100, 0), cp1: Vec3(x: 0, y: 0, z: 0)), SIMD3(0, 100, 0),
+                       "퇴화 선분은 무변화")
+    }
+
     /// G-C2-01 잔여 9종은 이 커밋에서 손대지 않는다 — 파스가 여전히 드롭(연산자 0개)함을 고정해
     /// 다음 라운드가 이 테스트를 깨며 들어오게 한다.
     func testRemainingUnsupportedOperatorsStillDropped() {
@@ -176,8 +223,8 @@ final class ParticleCapVelocityReduceTests: XCTestCase {
         // 아니라 **잘못된 섹션에 있어서** 드롭됐던 것이다. 이 이름은 오퍼레이터이므로 이제
         // `ParticleOperator.inheritValueFromEvent` 로 보존된다(시뮬은 여전히 무시). 이 테스트와
         // ParticleExtendedKeysTests 가 서로 반대 섹션을 못박고 있었고, 이쪽이 옳았다.
-        for name in ["maintaindistancebetweencontrolpoints",
-                     "collisionplane", "collisionsphere", "collisionbox", "collisionbounds",
+        // **[2026-08-20]** `maintaindistancebetweencontrolpoints` 도 뺐다 — 착지했다(위 두 테스트).
+        for name in ["collisionplane", "collisionsphere", "collisionbox", "collisionbounds",
                      "collisionquad", "collisionmodel"] {
             let d = ParticleSystemDef.parse(json("""
             {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
