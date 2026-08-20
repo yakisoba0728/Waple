@@ -31,16 +31,22 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     /// 아니고(48 kHz 에서는 2089, 소수) vDSP 는 임의 길이 실수 FFT 를 못 하므로 길이를 그대로
     /// 못 맞춘다. 대신 **빈 폭을 원본에 최대한 가깝게** 만든다 — 44.1 kHz 에서 2048 은 21.53 Hz 로
     /// 원본의 0.94배다(종전 1024 는 43.07 Hz 로 1.88배였다). 밴드 경계는 정규화 좌표로 계산하고
-    /// 소비 빈 수를 원본과 같은 상한 주파수에 맞춰 잡으므로(AudioSpectrum.binCount), 남는 오차는
-    /// 밴드당 1e-4 수준이다.
+    /// 소비 빈 수를 원본과 같은 상한 주파수에 맞춰 잡는다(AudioSpectrum.binCount) — 맞는 것은
+    /// **상한**(오차 0.06% 이내)이고 밴드 경계 자체는 격자가 달라 최대 1~2빈 밀린다.
+    /// 수치와 근거는 `AudioSpectrum` 타입 주석 참조.
     private let fftSize = 2048
-    /// 캡처 구성 샘플레이트(`SCStreamConfiguration.sampleRate = 48000`, 아래 startCapture).
-    /// 빈 폭 = 48000/2048 = 23.4375 Hz — 원본의 22.96875 Hz 대비 **1.02배**다.
-    /// 소비 빈 수를 원본과 같은 상한(≈14677 Hz)에 맞춰 잡으므로 밴드 경계가 그만큼만 흔들린다.
+    /// 캡처 **요청** 샘플레이트(`SCStreamConfiguration.sampleRate`, 아래 startCapture).
+    ///
+    /// 요청일 뿐 보장이 아니다 — 실제로 들어온 버퍼의 레이트는 `Self.sampleRate(of:)` 가 포맷
+    /// 기술자에서 읽고, 이 상수는 **그게 없을 때의 폴백**으로만 쓴다. 44.1 kHz 로 오는 장치에서
+    /// 48000 을 가정하면 `AudioSpectrum.binCount` 가 B 를 627 로 잡는데 정답은 683 이라
+    /// 밴드가 통째로 밀린다(경계 이동 실측 최대 2.00빈).
+    ///
+    /// 빈 폭 = 48000/2048 = 23.4375 Hz — 원본의 22.96875 Hz 대비 **1.02배**(44.1 kHz 면 21.53 Hz).
     /// **Int 로 든다.** `SCStreamConfiguration.sampleRate` 가 Int 를 받고, 스펙트럼 쪽은
     /// `Double(Int)`(절대 트랩하지 않는 확대 변환)로 쓴다 — 반대로 Double 로 들고 `Int(_:)` 로
     /// 좁히면 그 한 줄이 정수 좁힘 검사(R4)에 걸린다. 상수라 실제 위험은 없지만, 예외를 만들면
-    /// 검사가 무뎌진다.
+    /// 검사가 무뎌진다. 실측 레이트(`sampleRate(of:)`)도 Double 그대로 흘려 좁히지 않는다.
     static let captureSampleRateHz: Int = 48000
     static var captureSampleRate: Double { Double(captureSampleRateHz) }
     private let log2n: vDSP_Length
@@ -102,22 +108,25 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     func process(sampleBuffer: CMSampleBuffer) {
         guard isRunning() else { return }
         guard let (l, r) = Self.stereoSamples(from: sampleBuffer) else { return }
+        // 주파수 매핑의 진실원은 **이 버퍼의 포맷**이지 구성 요청값이 아니다. 상태로 들지 않고
+        // 인자로 흘린다 — 락이 늘지 않고, 창을 채운 패킷의 레이트가 그 창의 분석에 그대로 따라간다.
+        let rate = Self.sampleRate(of: sampleBuffer) ?? Self.captureSampleRate
         lock.lock()
         let windows = running ? accumulator.append(left: l, right: r) : []
         lock.unlock()
-        for (wl, wr) in windows { analyzeWindow(left: wl, right: wr) }
+        for (wl, wr) in windows { analyzeWindow(left: wl, right: wr, sampleRate: rate) }
     }
 
     /// 창 1개(채널별 fftSize 샘플)를 분석해 onFrame 디스패치. 무음 게이트 통과 창은 0 스펙트럼 공급
     /// (엔진도 무음 시 0 커밋 — FUN_1400d0380:419-424 플래그, :444-445 `func_0x000140421870(*param_1,0,0x200)`).
     /// ⚠️ FUN_1400d0380 은 Ghidra 주소공간 — 원본 바이너리에서는 `0x1400d02b0`(−0xD0).
     /// 사유와 전수 분류는 `spec/engine/decompilation-provenance.json`.
-    private func analyzeWindow(left l: [Float], right r: [Float]) {
+    private func analyzeWindow(left l: [Float], right r: [Float], sampleRate: Double) {
         guard let setup = fftSetup else { feedZeros(); return }
         guard let out = Self.analyzeWindow(l: l, r: r, fftSize: fftSize, log2n: log2n, setup: setup,
                                            threshold: AudioInputSettings.threshold,
                                            volume: AudioInputSettings.volume,
-                                           sampleRate: Self.captureSampleRate) else {
+                                           sampleRate: sampleRate) else {
             feedZeros()
             return
         }
@@ -162,6 +171,24 @@ public final class SystemAudioSpectrumProvider: NSObject, AudioSpectrumProviding
     func feedZeros() {
         let zeros = [Float](repeating: 0, count: 128)
         DispatchQueue.main.async { [weak self] in self?.onFrame?(zeros) }
+    }
+
+    /// 이 버퍼가 **실제로** 들고 온 샘플레이트(CMSampleBuffer → ASBD `mSampleRate`).
+    /// 포맷 기술자가 없거나 값이 비유한/비양수면 nil — 호출자가 요청값(`captureSampleRateHz`)으로 폴백한다.
+    ///
+    /// **창 길이는 다시 계산하지 않아도 된다.** `AudioSpectrum.windowLength(fftLength:)` 는 fftSize
+    /// 하나만 보므로(2048 → 1366) 레이트와 무관하고, 따라서 `accumulator` 를 다시 만들 이유가 없다.
+    /// 레이트에 의존하는 것은 소비 빈 수 B 뿐인데(48 kHz→627, 44.1 kHz→683), 그건 static
+    /// `analyzeWindow` 가 창마다 `AudioSpectrum.binCount(fftLength:sampleRate:)` 로 다시 잡고
+    /// 밴드 표·틸트 표도 `AudioSpectrum.spectrum` 이 그 B 에서 매번 다시 만든다 — 캐시가 없으므로
+    /// 무효화할 것이 없다. (창의 물리 길이는 28.5 ms↔31.0 ms 로 달라지는데, 원본도 레이트마다 N 을
+    /// 비례시켜 29 ms 를 유지하므로 방향이 같다.)
+    static func sampleRate(of sampleBuffer: CMSampleBuffer) -> Double? {
+        guard let format = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format) else { return nil }
+        let rate = asbd.pointee.mSampleRate
+        guard rate.isFinite, rate > 0 else { return nil }
+        return rate
     }
 
     /// 스테레오 채널별 샘플: non-interleaved(버퍼 2개) → 각 버퍼, interleaved(1버퍼 2채널) → 짝/홀 분리,

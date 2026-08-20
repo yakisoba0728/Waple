@@ -298,6 +298,39 @@ extension SceneRenderer {
         poolCheckout.removeAll(keepingCapacity: true)
     }
 
+    /// S5-2: `unique:true` FBO(프레임 간 지속 텍스처)의 **렌더러 전역** 상한.
+    ///
+    /// 왜 상한이 필요한가: 지속 텍스처는 이펙트 인스턴스마다 따로 잡히는데 아무도 세지 않았다.
+    /// **이미 존재하는 클램프만으로** 계산한 한 인스턴스의 최악은 32 GiB 다 —
+    /// fbo 개수 상한 64(`EffectManifest.swift` `maxFBOs`) × 치수 클램프 8192²(같은 파일
+    /// `clampedFixed`) × 이 렌더러가 만들 수 있는 최대 8 B/px = 64 × 512 MiB. 이펙트 인스턴스
+    /// 개수에는 상한이 없으므로 씬 전체로는 그 배수다(코퍼스 실측 평균 39.6 인스턴스/씬).
+    ///
+    /// 1 GiB 인 근거(동봉 자산 실측): `unique` fbo 를 선언하는 스톡 이펙트는 46종 중 **2종뿐**이고
+    /// (motionblur 1개 · fluidsimulation 8개), 5K HDR(5120×2880) 기준 인스턴스당 각각
+    /// 112.5 MiB · 57.25 MiB, 4K LDR 이면 31.6 MiB · 16.8 MiB 다. 동봉 프리뷰 씬은 이펙트
+    /// 인스턴스가 1개라 최악이 112.5 MiB — **9배 여유**이므로 동봉 코퍼스는 이 분기에 닿지 않는다.
+    static let uniqueFBOByteBudget = 1 << 30   // 1 GiB
+
+    /// S5-2: 텍스처 1장의 바이트 수. `makeOffscreenFormatted` 는 `mipmapped: false` 라 레벨 0 뿐이다.
+    /// 표에 없는 포맷은 **8**(이 렌더러의 `metalFormat` 이 만들 수 있는 최대 픽셀 크기)로 친다 —
+    /// 모르는 쪽을 과소평가하면 예산이 뚫리므로 항상 비싼 쪽으로 센다.
+    static func uniqueFBOBytes(width: Int, height: Int, format: MTLPixelFormat) -> Int {
+        let bytesPerPixel: Int
+        switch format {
+        case .r8Unorm:                                  bytesPerPixel = 1
+        case .rg8Unorm, .r16Float:                      bytesPerPixel = 2
+        case .rgba8Unorm, .rg16Float, .rgb10a2Unorm:    bytesPerPixel = 4
+        case .rgba16Float, .rgba16Unorm, .rgba16Snorm:  bytesPerPixel = 8
+        default:                                        bytesPerPixel = 8
+        }
+        return max(1, width) * max(1, height) * bytesPerPixel
+    }
+
+    static func uniqueFBOBytes(_ texture: MTLTexture) -> Int {
+        uniqueFBOBytes(width: texture.width, height: texture.height, format: texture.pixelFormat)
+    }
+
     /// X-⑧: `format` 은 bgra/HDR 승격 규칙을 **우회하는 명시 포맷**이다(effect.json `fbos[].format`).
     /// nil 이면 종전 동작 그대로 — bgra 플래그와 hdrActive 로 결정한다. 풀 키에 포맷을 넣어야
     /// r16f 요청이 이전에 만들어 둔 rgba8 텍스처를 받아가지 않는다.
@@ -1986,6 +2019,8 @@ extension SceneRenderer {
             //     안 바뀌는 한 영원히 교정되지 않았다.
             // 인덱스별로 (폭, 높이, 포맷)을 대조해 어긋난 것만 버린다.
             if uniqueStore.textures.count != fboSpecs.count {
+                // 장부에서 먼저 뺀다 — 아래 대입이 보유분을 통째로 버리기 때문이다.
+                for case let t? in uniqueStore.textures { uniqueFBOBytesInUse -= SceneRenderer.uniqueFBOBytes(t) }
                 uniqueStore.textures = [MTLTexture?](repeating: nil, count: fboSpecs.count)
                 uniqueStore.pendingClear = []
             }
@@ -1996,12 +2031,42 @@ extension SceneRenderer {
                 if spec.unique {
                     var held = uniqueStore.textures[i]
                     if let t = held, t.width != w || t.height != h || t.pixelFormat != spec.pixelFormat {
+                        // 버리는 즉시 장부에서 빼고 슬롯도 비운다 — 아래 재할당이 실패해 return 해도
+                        // "장부 = 살아 있는 보유분의 합" 이 유지되게(그리고 새 것을 만들기 전에
+                        // 옛 것을 놓아 최대 점유가 겹치지 않게).
+                        uniqueFBOBytesInUse -= SceneRenderer.uniqueFBOBytes(t)
+                        uniqueStore.textures[i] = nil
                         held = nil          // 규격이 어긋난 보유분은 버리고 다시 만든다
                     }
                     if let t = held {
                         fboTex.append(t)
                     } else {
+                        let want = SceneRenderer.uniqueFBOBytes(width: w, height: h, format: spec.pixelFormat)
+                        guard uniqueFBOBytesInUse + want <= SceneRenderer.uniqueFBOByteBudget else {
+                            // S5-2 **소프트 페일**: 예산을 넘으면 이펙트를 죽이지도(return false) 않고
+                            // 크래시하지도 않는다. 같은 크기·같은 포맷을 공유 풀에서 받고, 잃는 것은
+                            // **프레임 간 지속**뿐이다(누적/시뮬 상태가 매 프레임 초기화된다).
+                            //
+                            // `fboSpecs[i].unique` 는 여전히 true 라 아래 타깃 로드액션이 `.load` 다.
+                            // 지속이 아니게 된 이상 미정의 내용을 읽으면 안 되므로 **매 프레임**
+                            // pendingClear 에 넣어 결정적으로 비운다(pendingClear 는 클리어 루프
+                            // 직후 removeAll 되므로 매 프레임 다시 넣는 것이 곧 매 프레임 클리어다).
+                            // 저장소에는 넣지 않는다 → swap 의 동치 검사(nil 과 불일치)도 자동으로
+                            // 어긋나 교환이 일어나지 않는다(핑퐁 없이 그리기만 한다).
+                            guard let t = pooledOffscreen(w, h, device, format: spec.pixelFormat) else { return false }
+                            if !uniqueStore.budgetWarned {
+                                uniqueStore.budgetWarned = true
+                                WapleLog.warn("[Waple] unique FBO 예산 초과 — 공유 풀로 폴백(프레임 간 지속 없음): "
+                                    + "\(w)x\(h) fmt=\(spec.pixelFormat.rawValue) "
+                                    + "요청 \(want / 1_048_576) MiB · 사용 중 \(uniqueFBOBytesInUse / 1_048_576) MiB "
+                                    + "/ 예산 \(SceneRenderer.uniqueFBOByteBudget / 1_048_576) MiB")
+                            }
+                            uniqueStore.pendingClear.insert(i)
+                            fboTex.append(t)
+                            continue
+                        }
                         guard let t = makeOffscreenFormatted(w, h, device, format: spec.pixelFormat) else { return false }
+                        uniqueFBOBytesInUse += want
                         uniqueStore.textures[i] = t
                         // 새로 만든 텍스처의 내용은 미정의다. `clear` 가 선언돼 있으면 그 색으로,
                         // 없으면 투명 검정으로 **1회** 비운다 — 매 프레임이 아니다(누적이 이 버퍼들의

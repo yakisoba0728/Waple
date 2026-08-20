@@ -8,7 +8,9 @@ import WapleCore
 // 파티클/텍스트 빌드, 텍스처·파이프라인 팩토리. per-frame 인코딩은 SceneRendererFrameEncoder.swift,
 // 3D 서브시스템은 SceneRenderer3D.swift 참조.
 extension SceneRenderer {
-    private enum BaseAssetURLProbe {
+    /// F4: `SceneRenderer.assetProbeCache` 의 값 타입이라 internal 이어야 한다(저장 프로퍼티는
+    /// 확장에 둘 수 없어 선언이 SceneRenderer.swift 에 있다). 케이스·의미는 종전과 동일.
+    enum BaseAssetURLProbe {
         case url(URL)
         case missing
         case rejected
@@ -91,6 +93,9 @@ extension SceneRenderer {
         /// 아직 `clearColor` 초기화를 못 받은 인덱스. 생성 직후 1회만 비운다 —
         /// **매 프레임 비우면 누적 자체가 성립하지 않는다**(그게 이 버퍼들의 존재 이유다).
         var pendingClear: Set<Int> = []
+        /// S5-2: 예산 초과로 공유 풀 폴백을 택했다는 경고를 **이펙트 인스턴스당 1회만** 낸다.
+        /// 이 경로는 프레임마다 지나가므로 무조건 로그하면 로그가 프레임 예산을 잡아먹는다.
+        var budgetWarned = false
     }
 
     enum EffectBind {
@@ -1018,13 +1023,20 @@ extension SceneRenderer {
                     fullFrameSlots.append(slot)
                 }
             }
-            if let tex = resolveTexture(name, package: package, device: device) {
+            // F1: 이 슬롯 이름은 **이펙트-로컬** 이름이다 — 셋 다(씬 패스 오버라이드 · 머티리얼 json
+            // `textures[]` · 셰이더 샘플러 주석 `"default"`) 이펙트 루트 기준 상대 경로다. 셰이더와
+            // 머티리얼은 이미 `effectScopedData` 로 그 루트를 보는데 텍스처만 전역 조회라 이펙트가
+            // 자기 자산을 못 찾았다. 동봉 자산 실측(2026-08-20): 최상위 이펙트 머티리얼이 참조하는
+            // 텍스처는 전부 3건인데 **3건 전부** 팩 루트에서 미해석 → 흰색 1×1 폴백이었다
+            // (refraction/refractnormal · waterflow/waterflowphase · waterripple/waterripplenormal).
+            // `root` 는 전역 미스 뒤에만 쓰이므로 순수 가산이다.
+            if let tex = resolveTexture(name, package: package, device: device, root: root) {
                 aux.append((slot, tex))
                 if slot < 8 {
                     let w = Float(max(1, tex.width)), h = Float(max(1, tex.height))
                     texRes[slot] = SIMD4(w, h, w, h)
-                    texWrap[slot] = resolveTextureClampUVs(name, package: package) ? 1 : 0
-                    texFilter[slot] = resolveTextureNoInterpolation(name, package: package) ? 1 : 0  // 감사 V07
+                    texWrap[slot] = resolveTextureClampUVs(name, package: package, root: root) ? 1 : 0
+                    texFilter[slot] = resolveTextureNoInterpolation(name, package: package, root: root) ? 1 : 0  // 감사 V07
                 }
             }
         }
@@ -1041,22 +1053,40 @@ extension SceneRenderer {
     /// 조회 — 헤더만 재파스(디코드 없음, 씬 빌드 1 회성이라 무해). 실패/부재는 false(=repeat, WE 기본 어드레싱).
     /// P⑥: internal 로 완화(기존 private) — SceneRenderer3D.buildCustomMeshShader 가 2D buildCustomLayerShader
     /// 와 동형의 aux 텍스처 wrap/filter 산출에 재사용(다른 파일의 같은 타입 extension이라 private 미접근).
-    func resolveTextureClampUVs(_ name: String?, package: ScenePackage) -> Bool {
+    /// F1: `root` 를 주면 전역 미스 뒤에 이펙트-로컬 루트도 본다(기본 nil = 종전 동작 그대로).
+    func resolveTextureClampUVs(_ name: String?, package: ScenePackage, root: String? = nil) -> Bool {
         guard let name else { return false }
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
         for c in candidates {
             if let d = quietAssetData(c, package: package), let tex = TexImage.parse(d) { return tex.clampUVs }
+        }
+        // F1: **전역이 전부 빗나간 뒤에만** 이펙트-로컬을 본다. 소스 폼(.png)은 TEXV0005 헤더가 없어
+        // `TexImage.parse` 가 nil → 루프를 그냥 지나가고 종전대로 false 다. 실측상 그게 맞다 —
+        // 이 3건의 `.tex-json` 은 `{"format","nomip"}` 뿐이라 `clampuvs`/`nointerpolation` 키가 없고,
+        // 그건 WE 기본(repeat/linear)과 같다.
+        if root?.isEmpty == false {
+            for c in SceneRenderer.effectLocalTextureCandidates(candidates) {
+                if let d = effectScopedData(c, root: root, package: package),
+                   let tex = TexImage.parse(d) { return tex.clampUVs }
+            }
         }
         return false
     }
 
     /// 감사 V06: 텍스처 자산의 NoInterpolation 헤더 플래그(TexImage.swift:126, WE tex Flags bit0x1)만 저비용
     /// 조회 — 헤더만 재파스(resolveTextureClampUVs 와 동일 패턴). 실패/부재는 false(=linear, WE 기본 필터).
-    func resolveTextureNoInterpolation(_ name: String?, package: ScenePackage) -> Bool {
+    /// F1: `root` 규약은 `resolveTextureClampUVs` 와 동일(기본 nil = 종전 동작 그대로).
+    func resolveTextureNoInterpolation(_ name: String?, package: ScenePackage, root: String? = nil) -> Bool {
         guard let name else { return false }
         let candidates = name.hasSuffix(".tex") ? [name] : ["materials/\(name).tex", name]
         for c in candidates {
             if let d = quietAssetData(c, package: package), let tex = TexImage.parse(d) { return tex.noInterpolation }
+        }
+        if root?.isEmpty == false {
+            for c in SceneRenderer.effectLocalTextureCandidates(candidates) {
+                if let d = effectScopedData(c, root: root, package: package),
+                   let tex = TexImage.parse(d) { return tex.noInterpolation }
+            }
         }
         return false
     }
@@ -1190,6 +1220,34 @@ extension SceneRenderer {
         return eff.name.isEmpty ? nil : "effects/\(eff.name)"
     }
 
+    /// F1: 이펙트-로컬 폴백 후보 — **전역 후보가 전부 빗나간 뒤에만** 쓴다.
+    /// 입력은 `resolveTexture*` 가 만든 그 후보 목록(`["materials/<name>.tex", <name>]`)이고,
+    /// 여기에 `.tex` 후보마다 **소스 폼**(`.png`)을 뒤에 덧붙인다.
+    ///
+    /// 소스 폼이 필요한 이유(실측 2026-08-20 — 동봉 `Resources/WEAssets` 와 WE 설치본
+    /// `wallpaper_engine/assets` 가 같은 레이아웃):
+    ///
+    ///     effects/refraction/materials/effects/refractnormal.{png,tex-json}   ← 있다
+    ///     effects/refraction/materials/effects/refractnormal.tex              ← **없다**
+    ///     effects/refraction/preview/materials/effects/refractnormal.tex      ← 에디터 프리뷰 전용
+    ///
+    /// 즉 **스코프만 고쳐서는 이 3건이 여전히 안 뜬다** — 종전 진단이 여기서 틀렸다.
+    /// WE 는 `.tex` 가 없으면 그 자리에서 `resourcecompiler64.exe -tex -i "<src>"` 로 컴파일한다
+    /// (원본 문자열 `"resourcecompiler64.exe"` · `".tex-json"` · `" -tex -i \""` ·
+    /// `"Recompiling texture: %S"`). Waple 에는 그 컴파일러가 없으므로 `.png` 를 직접 디코드한다 —
+    /// 프리뷰 `.tex` 페이로드와 소스 `.png` 의 RGBA8 이 **바이트 동일**임을 확인했다
+    /// (waterripplenormal 256×256 = 262,144 B, waterflowphase 32×32 = 4,096 B 전건 일치).
+    ///
+    /// 설치본 `.tex-json` 298건 중 짝 `.tex` 가 없는 것은 26건뿐이고 그중 22건은 에디터 프리뷰
+    /// (`presets/*/preview*`, `.tga`)·1건은 소스조차 없다. **런타임이 실제로 참조하는 것은 이 3건뿐이고
+    /// 셋 다 `.png`** 라 `.png` 만 다룬다.
+    ///
+    /// 프리뷰 `.tex` 로 폴백하지 않는 이유: 페이로드는 실측상 같아도 에디터 전용 관례에 의존하게 되고,
+    /// refraction 은 프리뷰가 `rgba8888` 로 컴파일돼 있어 정본 `.tex-json` 의 `rg88n` 과 어긋난다.
+    static func effectLocalTextureCandidates(_ candidates: [String]) -> [String] {
+        candidates + candidates.filter { $0.hasSuffix(".tex") }.map { String($0.dropLast(4)) + ".png" }
+    }
+
     func quietAssetData(_ name: String, package: ScenePackage) -> Data? {
         if let d = packageData(name, package: package) { return d }
         return baseAssetData(name)
@@ -1210,7 +1268,26 @@ extension SceneRenderer {
         return url
     }
 
+    /// F4: (루트, 이름) 메모를 씌운 프로브. **순수 메모다** — 판정 본체는
+    /// `uncachedBaseAssetURLProbe` 그대로이고, 4단 조회 순서도 호출부의 `.rejected` 즉시-반환
+    /// 규약도 로그도 건드리지 않는다(본체는 로그를 내지 않는다 — 로그는 전부 호출부에 있다).
+    /// 그래서 **어떤 입력에 대해서도** 관측 결과가 캐시 유무와 같다.
+    ///
+    /// 유일한 가정은 "한 번의 씬 빌드가 도는 동안 베이스 루트의 파일시스템은 그대로다" 이고,
+    /// 그건 이미 암묵적으로 깔려 있던 것이다(베이스 루트는 WE 설치본/앱 번들 = 읽기 전용이고,
+    /// 빌드 도중 거기에 쓰는 코드는 없다).
     private func baseAssetURLProbe(for name: String, root: URL) -> BaseAssetURLProbe {
+        // 키에 루트를 넣는다 — 같은 이름이 루트마다 다르게 풀린다(사용자 설치본 vs 동봉본).
+        // `\u{0}` 은 경로에도 자산명에도 올 수 없어(normalizedRelativePath 가 NUL 을 거부한다)
+        // 구분자로 안전하다.
+        let key = "\(root.path)\u{0}\(name)"
+        if let hit = assetProbeCache[key] { return hit }
+        let result = uncachedBaseAssetURLProbe(for: name, root: root)
+        if assetProbeCache.count < SceneRenderer.assetProbeCacheLimit { assetProbeCache[key] = result }
+        return result
+    }
+
+    private func uncachedBaseAssetURLProbe(for name: String, root: URL) -> BaseAssetURLProbe {
         guard let path = WallpaperPathSecurity.normalizedRelativePath(name) else { return .rejected }
         let rootURL = root.standardizedFileURL
         let exactCandidate = rootURL.appendingPathComponent(path).standardizedFileURL
@@ -1454,12 +1531,44 @@ extension SceneRenderer {
     /// (마스크는 흰색=효과 전체 적용으로 정상. 노멀맵은 흰색≠중립 — 언팩 시 (1,1,1)=상시 대각
     /// 변위라 waterripple 은 buildHandPortEffect 에서 중립 (128,128,255)로 별도 처리, F412).
     /// "effects/X"/"masks/X" 같은 상대 이름은 "materials/<name>.tex" 로 해석, raw 이름도 시도.
-    func resolveTexture(_ name: String?, package: ScenePackage, device: MTLDevice) -> MTLTexture? {
-        resolveTextureWithFrames(name, package: package, device: device)?.texture
+    /// F1: `root`(= `SceneRenderer.effectLocalRoot`)를 주면 전역 미스 뒤에 이펙트-로컬 루트도 본다.
+    /// 기본 nil = 종전 동작 그대로(레이어·파티클·3D·손-포팅 호출부는 호출 형태조차 안 바뀐다).
+    func resolveTexture(_ name: String?, package: ScenePackage, device: MTLDevice,
+                        root: String? = nil) -> MTLTexture? {
+        resolveTextureWithFrames(name, package: package, device: device, root: root)?.texture
+    }
+
+    /// `.tex`(TEXV0005) 바이트 → 텍스처 + TEXS 프레임. `resolveTextureWithFrames` 의 `decode:` 본문을
+    /// **그대로** 떼어낸 것(로직·주석 무변경) — F1 의 이펙트-로컬 폴백이 같은 디코드를 재사용해야 해서
+    /// 클로저 밖으로 뺐다. 둘이 갈리면 "루트만 다른데 다르게 디코드되는 텍스처"가 생긴다.
+    private func decodeTexAsset(_ d: Data, device: MTLDevice)
+        -> (texture: MTLTexture, frames: [TexImage.TexFrame])? {
+        guard let tex = TexImage.parse(d) else { return nil }
+        let multipage = tex.imageCount > 1
+        if multipage, !tex.frames.isEmpty,
+           let stacked = stackedAtlas(tex: tex, data: d, device: device) {
+            return stacked
+        }
+        // 단일-이미지 다중프레임 시트는 아틀라스 전체 보존(imgW/imgH 크롭 시 frame≥1 소실 → 흑화).
+        // keepFullAtlas 는 makeImageTexture 가 full decode dims 로 상주(BC 면 네이티브, 비-BC 면 CPU rgba8) —
+        // spriteFrameTexture 가 f_spriteframe 샘플로 프레임을 뽑으므로 아틀라스가 BC 로 상주해도 무방.
+        if let dec = makeImageTexture(tex: tex, data: d, device: device,
+                                      keepFullAtlas: !multipage && tex.frames.count > 1) {
+            let texture = dec.texture
+            // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
+            // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백
+            // (page 0 표시)해 "틀린 애니" 대신 "정지"로 명예로운 실패(advisor). 단일 image 는 frames
+            // 정상(전부 id0, 오프셋 무관). 영향 실측 6씬(3379048027 7페이지/420프레임 sumH 52920,
+            // 3363252053·3448877775 7페이지, 3577990983 5페이지, 3000562427 day/night 3페이지).
+            // ponytail: 진짜 고침 = 페이지별 텍스처 또는 온디맨드 프레임 스트리밍(초대형 시트 ~1.7GB) — 재설계.
+            return (texture, multipage ? [] : tex.frames)
+        }
+        return nil
     }
 
     /// 텍스처 + 스프라이트시트 프레임(TEXS). 파티클이 프레임 UV 서브렉트에 사용(레이어는 texture 만).
-    func resolveTextureWithFrames(_ name: String?, package: ScenePackage, device: MTLDevice)
+    func resolveTextureWithFrames(_ name: String?, package: ScenePackage, device: MTLDevice,
+                                  root: String? = nil)
         -> (texture: MTLTexture, frames: [TexImage.TexFrame])? {
         if let name {
             let candidates = name.hasSuffix(".tex")
@@ -1468,26 +1577,25 @@ extension SceneRenderer {
             if let resolved: (texture: MTLTexture, frames: [TexImage.TexFrame]) = resolveRequiredAsset(
                 candidates,
                 package: package,
-                decode: { d in
-                    guard let tex = TexImage.parse(d) else { return nil }
-                    let multipage = tex.imageCount > 1
-                    if multipage, !tex.frames.isEmpty,
-                       let stacked = stackedAtlas(tex: tex, data: d, device: device) {
-                        return stacked
-                    }
-                    // 단일-이미지 다중프레임 시트는 아틀라스 전체 보존(imgW/imgH 크롭 시 frame≥1 소실 → 흑화).
-                    // keepFullAtlas 는 makeImageTexture 가 full decode dims 로 상주(BC 면 네이티브, 비-BC 면 CPU rgba8) —
-                    // spriteFrameTexture 가 f_spriteframe 샘플로 프레임을 뽑으므로 아틀라스가 BC 로 상주해도 무방.
-                    if let dec = makeImageTexture(tex: tex, data: d, device: device,
-                                                  keepFullAtlas: !multipage && tex.frames.count > 1) {
-                        let texture = dec.texture
-                        // 멀티페이지인데 stackedAtlas 실패(스택 높이>16384 등) → 프레임 좌표가 페이지-상대라 그대로
-                        // 쓰면 imageId≥1 프레임이 page0 좌표를 읽는 **조용한 오프레임**. frames=[] 로 정지 폴백
-                        // (page 0 표시)해 "틀린 애니" 대신 "정지"로 명예로운 실패(advisor). 단일 image 는 frames
-                        // 정상(전부 id0, 오프셋 무관). 영향 실측 6씬(3379048027 7페이지/420프레임 sumH 52920,
-                        // 3363252053·3448877775 7페이지, 3577990983 5페이지, 3000562427 day/night 3페이지).
-                        // ponytail: 진짜 고침 = 페이지별 텍스처 또는 온디맨드 프레임 스트리밍(초대형 시트 ~1.7GB) — 재설계.
-                        return (texture, multipage ? [] : tex.frames)
+                decode: { d in decodeTexAsset(d, device: device) },
+                // F1: `alternate` 는 `resolveRequiredAsset` 이 **candidates 루프를 전부 돈 뒤에만**
+                // 부르는 훅이다. 그래서 오늘 해석되는 자산은 여기까지 내려오지 않는다 — 순수 가산이고,
+                // 겸사겸사 `markMissingRequiredSharedAsset()` 오탐도 막는다.
+                //
+                // 스코프 조회는 `effectScopedData` 를 **그대로** 쓴다(4티어 ①pkg-scoped ②pkg-plain
+                // ③base-scoped ④base-plain). ②·④ 는 위 루프가 이미 빗나간 바로 그 조회라 다시 봐도
+                // 결과가 같고 실질적으로 ①·③ 만 새로 본다 — 그 함수가 지키는 "씬 pkg 가 베이스를
+                // 항상 이긴다" 순서를 재구현 없이 물려받는다.
+                alternate: {
+                    guard root?.isEmpty == false else { return nil }
+                    for c in SceneRenderer.effectLocalTextureCandidates(candidates) {
+                        guard let d = effectScopedData(c, root: root, package: package) else { continue }
+                        if let v = decodeTexAsset(d, device: device) { return v }
+                        // 소스 폼(.png)은 TEXV0005 헤더가 없어 `TexImage.parse` 가 nil — ImageIO 로 직접
+                        // 디코드한다(`decodeArtworkTexture` = bitmapRGBAFile 과 동일 규약, RGBA8 상주).
+                        // 실측 3건 전부 알파 없는 RGB PNG 라 premultipliedLast 는 항등이다.
+                        // 스프라이트 프레임은 `.tex` 의 TEXS 청크에만 있으므로 frames=[](정지).
+                        if let t = decodeArtworkTexture(d, device: device) { return (texture: t, frames: []) }
                     }
                     return nil
                 }
@@ -1501,7 +1609,12 @@ extension SceneRenderer {
             // 실측 사례: `util/clouds_N`(존재하는 것은 clouds_256) 이 조용히 백색이 됐다.
             // 이름이 nil 인 호출(선언만 있고 아무도 바인드하지 않은 샘플러 슬롯 — lightshafts 의 MASK
             // 미사용 g_Texture3 등)은 설계상 placeholder 라 로그하지 않는다.
-            WapleLog.warn("[Waple] texture unresolved → white 1×1 placeholder: \(name) (tried \(candidates.joined(separator: ", ")))")
+            // F1: 스코프 조회가 있었으면 그것도 적는다 — 종전 메시지로는 "이펙트 루트를 봤는데도
+            // 없다"와 "아예 안 봤다"가 구분되지 않아, 이 사고를 로그만 보고는 못 짚었다.
+            let scopedTried = (root?.isEmpty == false)
+                ? " · effect-local root '\(root ?? "")': \(SceneRenderer.effectLocalTextureCandidates(candidates).joined(separator: ", "))"
+                : ""
+            WapleLog.warn("[Waple] texture unresolved → white 1×1 placeholder: \(name) (tried \(candidates.joined(separator: ", "))\(scopedTried))")
         }
         return makeTexture(Data([255, 255, 255, 255]), 1, 1, device).map { ($0, []) }
     }

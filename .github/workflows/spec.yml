@@ -75,6 +75,20 @@ jobs:
       - name: Swift enum pattern arity
         run: python3 scripts/spec/check_swift_enum_patterns.py
 
+      # 동봉 이펙트가 참조하는 텍스처가 **실제로 해석되는지** 본다.
+      #
+      # 스톡 3종(refraction·waterflow·waterripple)이 자기 노멀맵/위상맵을 못 찾아 흰색 1×1
+      # 폴백으로 돌고 있었다. 흰색은 곱셈 항등원이라 "효과가 약한 것" 처럼 보이고, 노멀맵
+      # 자리에서는 (1,1,1) 언팩이 상시 대각 변위가 된다 — **조용히 틀린 그림**이라 눈으로
+      # 잡기 어렵다. 렌더 계층은 리눅스에서 빌드가 안 되지만 이 부류는 순수 파일시스템
+      # 검사라 여기서 끝낼 수 있다.
+      #
+      # 음성 대조(실측): 팩 루트만 보면 3건 미해석, **이펙트-로컬 스코프만 더해도 여전히
+      # 3건**(스코프에는 `.tex` 가 없다), 소스 폼(.png)까지 봐야 0건이 된다. 진단이 "스코프
+      # 문제" 에서 멈췄으면 못 고쳤을 자리다. 스크립트는 실행 때마다 --selftest 를 먼저 돈다.
+      - name: Effect texture resolution
+        run: python3 scripts/spec/check_effect_texture_resolution.py
+
       # 동봉 에셋이 매니페스트와 어긋나면 실패한다.
       #
       # measure_assets.py 를 돌려 git diff 로 보는 방법은 쓰지 않는다 — 그 스크립트의
