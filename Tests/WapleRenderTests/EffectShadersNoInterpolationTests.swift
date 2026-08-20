@@ -183,8 +183,28 @@ final class EffectShadersNoInterpolationTests: XCTestCase {
 
     /// 배선 end-to-end: noInterpolation(flags bit0) 텍스처 레이어는 손-포팅 이펙트에서 nearest 로
     /// 샘플돼야 하고(구현 전 = 항상 선형이라 본 테스트가 RED), 플래그 없는 대조군은 선형 유지여야 한다.
+    ///
+    /// **[2026-08-20] 손-포팅 경로를 명시적으로 켠다.** 이 테스트는 pkg 에 셰이더를 싣지 않고
+    /// `effects/scroll/effect.json` 만 지목한다. 종전엔 팩 루트에 `shaders/effects/scroll.*` 가 없어
+    /// 번역이 실패하고 손-포팅으로 떨어지는 것을 **암묵적으로** 기대했는데, 이펙트-로컬 자산 루트가
+    /// 들어오면서 동봉 스톡 `effects/scroll/shaders/effects/scroll.*` 가 실제로 해석돼 번역 경로가
+    /// 성공한다. 그러면 bind 슬롯 어드레싱이 손-포팅의 repeat 가 아니라 번역 경로의 clamp 가 되어
+    /// 선형 대조군이 `0.7R+0.3B` 대신 순빨강이 된다(랩 텍셀이 사라진다).
+    ///
+    /// 기대값을 clamp 로 바꾸지 않고 스위치를 켜는 이유가 둘이다:
+    ///   ① 이 테스트의 이름과 목적이 **손-포팅 경로 검증**이다. 암묵적 기대를 명시로 바꾸는 게 맞다.
+    ///   ② 이펙트-로컬 루트 이후 손-포팅 **통합** 경로를 지나가는 테스트가 하나도 남지 않는다
+    ///      (`EffectShadersTests` 17건은 `EffectShaders.params/source` 순수 단위 테스트라 배선을
+    ///      안 본다). 그 오라클을 여기서 붙잡아 둔다.
+    ///
+    /// 별건으로 남는 질문: **번역 경로의 `previous` 슬롯이 정말 clamp 인가.** 원본에서 `uvs:"repeat"`
+    /// 는 **이름 있는 FBO** 의 샘플러 플래그(bit2)이고 기본이 clamp 인 것은 확정이지만, 효과 입력
+    /// (`previous`)의 어드레싱은 아직 원본으로 확인하지 않았다. 그때까지 이 자리를 기대값으로 굳히지
+    /// 않는다 — 굳히면 틀린 규약이 계약이 된다.
     func testSceneScrollRespectsNoInterpolationFlag() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
+        setenv("WAPLE_DISABLE_TRANSLATED", "1", 1)
+        defer { unsetenv("WAPLE_DISABLE_TRANSLATED") }
         let (n0, n1) = try renderScrollScene(flags: 0x1, tag: "near")
         XCTAssertLessThan(n0.redComponent, 0.1, "nearest: pixel0 은 순파랑(블렌드 없음)")
         XCTAssertGreaterThan(n0.blueComponent, 0.9)

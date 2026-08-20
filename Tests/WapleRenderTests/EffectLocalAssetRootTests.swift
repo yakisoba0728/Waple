@@ -198,8 +198,15 @@ final class EffectScopedLookupOrderTests: XCTestCase {
         let empty = try makePackage([])
         let got = renderer.effectScopedData("shaders/effects/opacity.frag",
                                             root: "effects/opacity", package: empty)
-        XCTAssertEqual(got, try Data(contentsOf: bundledLocal),
-                       "pkg 가 비면 동봉 이펙트-로컬 셰이더로 내려가야 한다")
+        // 동봉 파일 바이트와 직접 비교하지 **않는다**. `assetBaseRoots` 의 첫 루트는 사용자 WE
+        // 설치본이라(BaseAssetsSettings.searchRoots), 검증용 맥 세션처럼 설치본이 있는 환경에서는
+        // 그쪽 파일이 이겨 바이트가 다를 수 있다 — CI(설치본 없음)에서만 초록인 테스트가 된다.
+        // 계약은 "pkg 가 비면 **이펙트-로컬 경로로** 베이스에서 찾아낸다" 이므로 그것만 본다.
+        XCTAssertNotNil(got, "pkg 가 비면 베이스에서 찾아야 한다")
+        XCTAssertEqual(got, renderer.baseAssetData("effects/opacity/shaders/effects/opacity.frag"),
+                       "이펙트-로컬 경로로 해석돼야 한다(팩 루트 경로가 아니라)")
+        XCTAssertNil(renderer.baseAssetData("shaders/effects/opacity.frag"),
+                     "팩 루트에는 없다 — 그래서 로컬 루트가 필요한 것이다")
     }
 
     /// root 가 nil 이면 종전 경로 그대로(무회귀).

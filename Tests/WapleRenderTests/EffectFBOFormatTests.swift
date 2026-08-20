@@ -67,7 +67,7 @@ final class EffectFBOFormatTests: XCTestCase {
         guard let walker = fm.enumerator(at: dir, includingPropertiesForKeys: nil) else {
             return XCTFail("동봉 팩을 순회할 수 없다")
         }
-        var totalFBOs = 0, withFormat = 0, unknownFormat: [String] = []
+        var totalFBOs = 0, withFormat = 0, rawDeclCount = 0, unknownFormat: [String] = []
         var clearNotUnique: [String] = []
         var formatHistogram: [String: Int] = [:]
         for case let url as URL in walker where url.lastPathComponent == "effect.json" {
@@ -78,6 +78,9 @@ final class EffectFBOFormatTests: XCTestCase {
             let raw = (obj["fbos"] as? [[String: Any]]) ?? []
             // 인덱스가 아니라 **이름**으로 원문과 맞춘다 — 파서는 name 없는 항목을 건너뛰고 64개에서
             // 끊으므로 인덱스 1:1 을 전제하면 언젠가 조용히 어긋난다(동봉 자산엔 중복 이름 0건).
+            // **원문 선언 수를 따로 센다.** 파서가 `format` 없는 선언을 이미 버리므로 `m.fbos` 만
+            // 세면 "전건이 format 을 갖는다" 는 정의상 참이 되어 아무것도 검사하지 못한다(항진식).
+            rawDeclCount += raw.count
             var rawFormatByName: [String: String] = [:]
             for r in raw {
                 if let n = r["name"] as? String, let fmt = r["format"] as? String { rawFormatByName[n] = fmt }
@@ -98,8 +101,9 @@ final class EffectFBOFormatTests: XCTestCase {
         XCTAssertGreaterThan(totalFBOs, 0, "fbo 선언을 하나도 못 읽었다 — 순회가 잘못됐다")
         XCTAssertEqual(unknownFormat, [], "enum 이 모르는 포맷 문자열이 실물에 있다(조용히 rgba8 이 된다)")
         XCTAssertEqual(clearNotUnique, [], "clear 를 가졌는데 unique 가 아닌 fbo — 소비처 전제가 깨진다")
-        XCTAssertEqual(withFormat, totalFBOs,
-                       "종전 관측은 '전건이 format 을 갖는다' 였다(실측 55/55). 자산이 바뀌었으면 관측을 갱신할 것")
+        XCTAssertEqual(withFormat, totalFBOs, "보존된 fbo 는 정의상 전건 format 보유")
+        XCTAssertEqual(totalFBOs, rawDeclCount,
+                       "format 없는 선언이 드롭됐다 — 실측 55/55 관측이 깨졌으니 관측을 갱신할 것")
         // 2026-08-20 실측 분포. 자산 교체로 흔들릴 수 있으니 동등이 아니라 존재만 고정한다.
         for expected in ["rgba8888", "rgba_backbuffer", "r16f", "rg1616f", "r8"] {
             XCTAssertNotNil(formatHistogram[expected], "실물에서 사라진 포맷: \(expected)")
