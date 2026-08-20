@@ -42,6 +42,26 @@ def token():
     return t
 
 
+class _StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
+    """리다이렉트에서 Authorization 헤더를 뗀다.
+
+    잡 로그 엔드포인트는 302 로 Azure Blob 에 넘긴다. urllib 기본 동작은 원 요청 헤더를
+    그대로 들고 따라가는데, Azure 는 GitHub 토큰이 붙은 요청을 401
+    `InvalidAuthenticationInfo` 로 거절한다. 서명이 이미 URL 쿼리에 들어 있으므로
+    헤더는 떼는 게 맞다."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            for h in ("Authorization", "authorization"):
+                new.headers.pop(h, None)
+                new.unredirected_hdrs.pop(h, None)
+        return new
+
+
+_OPENER = urllib.request.build_opener(_StripAuthOnRedirect)
+
+
 def api(path, raw=False):
     req = urllib.request.Request(
         API + "/" + path,
@@ -49,7 +69,7 @@ def api(path, raw=False):
                  "Accept": "application/vnd.github+json",
                  "User-Agent": "waple-ci-status"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with _OPENER.open(req, timeout=60) as r:
             body = r.read()
     except urllib.error.HTTPError as e:
         detail = e.read()[:200].decode("utf-8", "replace")
@@ -98,8 +118,11 @@ def show_log(repo, job_id, keep):
     """잡 로그에서 실패 신호만 — 전문은 수 MB 라 컨텍스트를 먹는다."""
     text = api("repos/%s/actions/jobs/%s/logs" % (repo, job_id), raw=True).decode("utf-8", "replace")
     needles = ("error:", "failed", "FAILED", "XCTAssert", "TEST FAILED",
-               "Executed ", "위반", "실패", "Traceback")
-    lines = [l for l in text.splitlines() if any(n in l for n in needles)]
+               "Executed ", "위반", "실패", "Traceback", "executed=")
+    # 워크플로 **소스**가 그대로 에코되는 줄(`[36;1m` = 명령 에코)은 뺀다 — 스크립트 본문에
+    # "실패"·"Executed" 같은 단어가 들어 있어서, 안 빼면 발췌가 자기 소스로 가득 찬다.
+    lines = [l for l in text.splitlines()
+             if any(n in l for n in needles) and "[36;1m" not in l]
     print("\n== job %s 로그 발췌 (%d줄 중 마지막 %d) ==" % (job_id, len(lines), keep))
     for l in lines[-keep:]:
         print("  " + l[:240])

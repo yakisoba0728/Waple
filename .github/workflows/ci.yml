@@ -312,8 +312,11 @@ jobs:
           echo "- skipped:  \`${SKIPPED}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
-          # [2026-08-19] 트립와이어. 이제 정상 범위를 안다(실측 executed 2300 / skipped 46,
-          # run 32219037798 debug·release 양쪽).
+          # [2026-08-19] 트립와이어. 이제 정상 범위를 안다.
+          # [2026-08-20] 실측 갱신: executed **2369** / skipped 46 / 실패 0
+          # (run 32333680914 debug·release 양쪽, 커밋 c109ac1). 같은 시점의 정적 개수
+          # (`grep -rE '^\s*(public |private |internal )?func test' Tests/ --include=*.swift | wc -l`)도
+          # 정확히 2369 다 — 두 세는 법이 어긋나지 않는다는 것을 실측으로 확인했다.
           #
           # 막으려는 것은 **대량 무음 스킵**이다. XCTSkip("no Metal") 아래 테스트가 561개인데
           # 스킵은 통과로 집계되므로, 러너 이미지가 바뀌거나 GPU 없는 세션에서 돌면 전부
@@ -324,8 +327,8 @@ jobs:
             exit 1
           fi
           # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          if [ "${EXECUTED:-0}" -lt 2366 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 2366 미만. 테스트가 사라졌다."
+          if [ "${EXECUTED:-0}" -lt 2369 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 2369 미만. 테스트가 사라졌다."
             exit 1
           fi
 
