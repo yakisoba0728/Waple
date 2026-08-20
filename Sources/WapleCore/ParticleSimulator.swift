@@ -1125,11 +1125,44 @@ public struct ParticleSimulator {
                 t = (angle + .pi) / (2 * .pi)
             }
             p.frame = t * max(0, count)
-        case let .positionOffsetRandom(mn, mx):
-            // [보존/추측] velocityRandom 과 동형 성분별 독립 t(드로 3).
-            p.pos += SIMD3(randomRange(mn.x, mx.x, exponent: 1),
-                           randomRange(mn.y, mx.y, exponent: 1),
-                           randomRange(mn.z, mx.z, exponent: 1))
+        case let .positionOffsetRandom(directions, sign, scale, distance, timescale, octaves):
+            // fBm 노이즈 변위. **RNG 드로 0** — 실물 핸들러 0x14023c09a 에 난수 호출이 없다
+            // (`Initializer.positionOffsetRandom` 주석의 전수 확인). 종전 3드로를 걷어냈다.
+            //
+            // 옥타브 루프(0x14023c130 / 0x14023c190 / 0x14023c200)는 축마다 돌고, 각 축의 인자
+            // 쌍이 다르다 — 같은 스칼라 셋을 순환치환해 세 축을 탈상관한다. 진폭은 0.5 배씩
+            // (`xmm12` @0x14023c0d4), 주파수는 2 배씩(`addss xmm6,xmm6`), 마지막에 진폭합으로
+            // 나눈다(0x14023c178 등).
+            //
+            // 노이즈 커널 자체는 다르다 — 실물은 Perlin 순열표(0x140484f40)를 쓰는 2인자 노이즈
+            // (0x14027b170)이고 여기는 값노이즈다. 커널 이식은 별건이다.
+            //
+            // **동봉 도달 5건이 전부 `scale` 0(또는 부재)** 이라 공간항이 소거되고 시간항만 남는다
+            // (`thunderbolt`: timescale 5 · distance 100 → 볼트 전체가 시간에 따라 흔들린다).
+            // 종전 구현에서는 그 변위가 통째로 0 이었다.
+            let t = timescale * time
+            func fbm(_ a0: Float, _ a1: Float) -> Float {
+                var amp: Float = 1, freq: Float = 1, sum: Float = 0, norm: Float = 0
+                for _ in 0..<octaves {
+                    sum += valueNoise3(SIMD3(freq * a0, freq * a1, 0)) * amp
+                    norm += amp
+                    amp *= 0.5
+                    freq *= 2
+                }
+                return norm > 0 ? sum / norm : 0
+            }
+            let sx = p.pos.x * scale, sy = p.pos.y * scale, sz = p.pos.z * scale
+            var v = SIMD3<Float>(fbm(sx, t), fbm(t, sy), fbm(sz, -t))
+            v *= SIMD3(directions.x, directions.y, directions.z)
+            // `sign` 이 0 이 아니면 그 축을 **한쪽 부호로 접는다**(0x14023c284~0x14023c318,
+            // 게이트는 `lengthSquared(sign) > FLT_EPSILON` @0x1401c93ac). 동봉 도달 0.
+            let sg = SIMD3<Float>(sign.x, sign.y, sign.z)
+            if simd_length_squared(sg) > Float.ulpOfOne {
+                let a = SIMD3<Float>(abs(sg.x), abs(sg.y), abs(sg.z))
+                let av = SIMD3<Float>(abs(v.x), abs(v.y), abs(v.z))
+                v = v * (SIMD3<Float>(1, 1, 1) - a) + av * sg
+            }
+            p.pos += v * distance
         case .inheritControlPointVelocity, .inheritInitialValueFromEvent, .remapInitialValue:
             break   // 이벤트 시스템 연동 보류 — 시뮬 무시(RNG 드로 0)
         }
