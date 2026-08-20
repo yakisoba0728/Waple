@@ -36,7 +36,9 @@ final class ParticleDtScaledTests: XCTestCase {
 
     /// 단조성 — dt 가 커져도 dtScaled 는 줄지 않는다(포화지 반전이 아니다).
     func testIsMonotonicInDt() {
-        var prev = ParticleSimulator.dtScaled(1.0 / 240)
+        // 0 에서 시작한다 — 종전엔 `dtScaled(1/240)`(=0.004167)으로 초기화해 놓고 루프를
+        // dt=0.002 부터 돌려서, 첫 비교가 곧바로 "역전" 으로 잡혔다(내 테스트 버그였다).
+        var prev: Float = 0
         for i in 1...200 {
             let dt = Float(i) * 0.002
             let s = ParticleSimulator.dtScaled(dt)
