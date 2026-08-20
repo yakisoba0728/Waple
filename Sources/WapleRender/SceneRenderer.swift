@@ -948,6 +948,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     var hasEffects = false
     var hasAudio = false
     var currentSpectrum = AudioSpectrum16.silent
+    /// X-⑩: WE 소비단 스테이지(그룹 정규화 + 스무딩 + MAX 축약). 프레임 간 상태를 든다.
+    var audioProcessor = AudioSpectrumProcessor()
+    /// 오디오 콜백 간격 측정용(소비단 dt). 첫 프레임은 1/30 로 가정한다.
+    var lastAudioFrameUptime: TimeInterval?
     // 고해상 스펙트럼(오디오 바 시각화). provider 프레임(64L+64R)에서 유지, 32빈은 쌍평균 파생.
     var left64 = [Float](repeating: 0, count: 64)
     var right64 = [Float](repeating: 0, count: 64)
@@ -1625,13 +1629,25 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         if hasAudio, container.window != nil {
             let provider = SystemAudioSpectrumProvider()
             provider.onFrame = { [weak self] spec in
-                // spec = 128(64L+64R, 채널별 FFT) — 16빈도 채널 분리 다운샘플.
+                // spec = 128(64L+64R, 채널별 FFT).
                 if spec.count >= 128 {
-                    let l = Array(spec[0..<64]), r = Array(spec[64..<128])
-                    self?.currentSpectrum = AudioSpectrum16(left: AudioSpectrum16.downsample16(l),
-                                                            right: AudioSpectrum16.downsample16(r))
-                    self?.setSpectrum64(left: l, right: r)
-                    self?.sceneScript?.setAudio(left64: l, right64: r)  // 씬 스크립트 engine.audio 실데이터
+                    // X-⑩: **소비단 스테이지를 태운다.** 프로듀서 출력은 절대 스케일이라 그대로 쓰면
+                    // 레벨이 3.5~5배 모자란다 — 원본은 그룹 피크 정규화 + 1-pole 스무딩 + 슬루 제한을
+                    // 거친 값을 셰이더 유니폼에 올린다(`AudioSpectrumProcessor` 주석 참조).
+                    //
+                    // dt 는 **오디오 콜백 간격**으로 잰다. 원본은 렌더 프레임 dt 를 쓰는데, 우리
+                    // 콜백은 렌더 루프 밖(캡처 큐)이라 그 값을 들고 올 수 없다. 공급자가 ~30Hz 로
+                    // 도는 것과 렌더가 보통 60Hz 인 것의 차이는 시상수를 2배 늘리는 정도이고,
+                    // 헤드리스 캡처는 공급자를 아예 안 켜므로 골든 결정성에는 영향이 없다.
+                    guard let renderer = self else { return }
+                    let now = ProcessInfo.processInfo.systemUptime
+                    let elapsed = now - (renderer.lastAudioFrameUptime ?? now - 1.0 / 30)
+                    renderer.lastAudioFrameUptime = now
+                    let out = renderer.audioProcessor.process(raw: spec,
+                                                              dt: Float(min(max(elapsed, 1.0 / 240), 0.1)))
+                    renderer.currentSpectrum = AudioSpectrum16(left: out.left16, right: out.right16)
+                    renderer.setSpectrum64(left: out.left64, right: out.right64)
+                    renderer.sceneScript?.setAudio(left64: out.left64, right64: out.right64)
                 } else {
                     let bins = AudioSpectrum16.downsample16(spec)
                     self?.currentSpectrum = AudioSpectrum16(left: bins, right: bins)
