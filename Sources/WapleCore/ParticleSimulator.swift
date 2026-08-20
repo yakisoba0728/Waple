@@ -54,6 +54,9 @@ public struct ParticleSimulator {
     private let alphaFade: (fin: Float, fout: Float)?
     private let oscPosOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float, mask: SIMD3<Float>)?
     private let oscAlphaOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float)?
+    /// G-C2-03 페이드 창. 오실레이터는 파티클별 위상을 스폰 때 굳히므로 창은 시뮬 쪽에 둔다.
+    private let oscAlphaBlend: BlendWindow
+    private let oscPosBlend: BlendWindow
     private let oscSizeOp: (fmin: Float, fmax: Float, smin: Float, smax: Float, pmin: Float, pmax: Float)?
     private let alphaChanges: [(st: Float, et: Float, sv: Float, ev: Float)]
     private enum CachedRemap {
@@ -74,9 +77,9 @@ public struct ParticleSimulator {
     // F628: 난류 흐름장 배열(전 turbulence 오퍼레이터 누적 — 종전 "first wins"는 2번째를 드롭).
     // 파티클별 속도/위상 범위(smin/smax, pmin/pmax)는 스폰 시 뽑아 고정, 나머지는 장 파라미터.
     private let turbulences: [(smin: Float, smax: Float, scale: Float, timeScale: Float,
-                              mask: SIMD3<Float>, pmin: Float, pmax: Float)]
+                              mask: SIMD3<Float>, pmin: Float, pmax: Float, blend: BlendWindow)]
     // G-C2-01 `capvelocity`: 속도 크기 상한(오퍼레이터 출현 순). 실물 VM op 0x12 @0x1402446fd.
-    private let velocityCaps: [Float]
+    private let velocityCaps: [(maxSpeed: Float, blend: BlendWindow)]
     // G-C2-01 `reducemovementnearcontrolpoint`: CP 근접 감쇠(오퍼레이터 출현 순).
     // invRange/redDelta 는 실물 ctor(0x1401cd38d–0x1401cd3e7)가 굽는 파생값을 그대로 옮긴 것 —
     // 퇴화 케이스 대입값(각각 −0.0 / 1.0)까지 원본과 같다.
@@ -139,17 +142,21 @@ public struct ParticleSimulator {
         var af: (Float, Float)? = nil
         var op_: (Float, Float, Float, Float, Float, Float, SIMD3<Float>)? = nil
         var oa: (Float, Float, Float, Float, Float, Float)? = nil
+        // 오실레이터는 "첫 인스턴스만 채택" 규약이라 창도 그 인스턴스의 것을 함께 굳힌다.
+        var opBlend = BlendWindow.identity
+        var oaBlend = BlendWindow.identity
         var attr: [(Float, Float, SIMD3<Float>, Bool, Int)] = []
         var mdist: [(Float, Float, SIMD3<Float>)] = []
         var vort: [(SIMD3<Float>, Float, Float, Float, Float, SIMD3<Float>, Float, VortexRing?, Int)] = []
         // F628: 전 turbulence 오퍼레이터 누적(종전 first-wins 드롭 — 3000562427 의 지배 성분 손실).
-        var turb: [(Float, Float, Float, Float, SIMD3<Float>, Float, Float)] = []
+        var turb: [(Float, Float, Float, Float, SIMD3<Float>, Float, Float, BlendWindow)] = []
         var osz: (Float, Float, Float, Float, Float, Float)? = nil
         var ac: [(st: Float, et: Float, sv: Float, ev: Float)] = []
         var rms: [CachedRemap] = []
-        var caps: [Float] = []
+        var caps: [(Float, BlendWindow)] = []
         var rmv: [(SIMD3<Float>, Float, Float, Float, Float)] = []
-        for op in def.operators {
+        for (opIdx, op) in def.operators.enumerated() {
+            let bw = opIdx < def.operatorBlends.count ? def.operatorBlends[opIdx] : BlendWindow.identity
             switch op {
             case let .movement(g, drag): mv.append((s3(g), drag))
             case let .angularMovement(f, drag): ang.append((s3(f), drag))
@@ -159,9 +166,9 @@ public struct ParticleSimulator {
                 cc.append((st: st, et: et, sv: s3(sv), ev: s3(ev)))
             case let .alphaFade(fin, fout): if af == nil { af = (fin, fout) }
             case let .oscillatePosition(fmin, fmax, smin, smax, pmin, pmax, mask):
-                if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)) }
+                if op_ == nil { op_ = (fmin, fmax, smin, smax, pmin, pmax, s3(mask)); opBlend = bw }
             case let .oscillateAlpha(fmin, fmax, smin, smax, pmin, pmax):
-                if oa == nil { oa = (fmin, fmax, smin, smax, pmin, pmax) }
+                if oa == nil { oa = (fmin, fmax, smin, smax, pmin, pmax); oaBlend = bw }
             case let .controlPointAttract(scale, threshold, target, deleteThreshold, flags):
                 attr.append((scale, threshold, s3(target), deleteThreshold, flags))
             case let .maintainDistanceToControlPoint(distance, vs, target):
@@ -170,7 +177,7 @@ public struct ParticleSimulator {
                 // variablestrength/reductioninner/reductionouter(위치인자 7–9)는 파스·보존 전용 — 소비 안 함.
                 vort.append((s3(axis), dIn, dOut, sIn, sOut, s3(offset), centerForce, ring, flags))
             case let .turbulence(smin, smax, scale, timeScale, mask, pmin, pmax):
-                turb.append((smin, smax, scale, timeScale, s3(mask), pmin, pmax))
+                turb.append((smin, smax, scale, timeScale, s3(mask), pmin, pmax, bw))
             case let .oscillateSize(fmin, fmax, smin, smax, pmin, pmax):
                 if osz == nil { osz = (fmin, fmax, smin, smax, pmin, pmax) }
             case let .alphaChange(st, et, sv, ev):
@@ -183,7 +190,7 @@ public struct ParticleSimulator {
             case let .remapValueEx(spec):
                 rms.append(.general(spec))
             case let .capVelocity(maxSpeed):
-                caps.append(maxSpeed)
+                caps.append((maxSpeed, bw))
             case let .reduceMovementNearControlPoint(dIn, dOut, rIn, rOut, target):
                 // 실물 ctor 0x1401cd38d: distanceouter == distanceinner 이면 역폭에 −0.0 을 심어
                 // t 를 항상 0 으로 죽인다(rcpps 대신 상수). 0x1401cd3b9: reductionouter ==
@@ -200,13 +207,16 @@ public struct ParticleSimulator {
         alphaFade = af.map { (fin: $0.0, fout: $0.1) }
         oscPosOp = op_.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5, mask: $0.6) }
         oscAlphaOp = oa.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
+        oscAlphaBlend = oaBlend
+        oscPosBlend = opBlend
         attractors = attr.map { (scale: $0.0, threshold: $0.1, target: $0.2, delete: $0.3, flags: $0.4) }
         maintainDists = mdist.map { (distance: $0.0, variableStrength: $0.1, target: $0.2) }
         vortices = vort.indices.map { (axis: vort[$0].0, dIn: vort[$0].1, dOut: vort[$0].2,
                                         sIn: vort[$0].3, sOut: vort[$0].4, offset: vort[$0].5,
                                         audio: $0 < def.vortexAudio.count ? def.vortexAudio[$0] : nil,
                                         centerForce: vort[$0].6, ring: vort[$0].7, flags: vort[$0].8) }   // F624
-        turbulences = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3, mask: $0.4, pmin: $0.5, pmax: $0.6) }
+        turbulences = turb.map { (smin: $0.0, smax: $0.1, scale: $0.2, timeScale: $0.3,
+                                  mask: $0.4, pmin: $0.5, pmax: $0.6, blend: $0.7) }
         oscSizeOp = osz.map { (fmin: $0.0, fmax: $0.1, smin: $0.2, smax: $0.3, pmin: $0.4, pmax: $0.5) }
         alphaChanges = ac
         remaps = rms
@@ -217,7 +227,7 @@ public struct ParticleSimulator {
             default: return false
             }
         }
-        velocityCaps = caps
+        velocityCaps = caps.map { (maxSpeed: $0.0, blend: $0.1) }
         reduceMoves = rmv.map { (target: $0.0, distIn: $0.1, invRange: $0.2, redIn: $0.3, redDelta: $0.4) }
         trailSamples = def.renderer.trailSampleCount
         speedCap = (attr.isEmpty && vort.isEmpty) ? nil : 5000
@@ -453,7 +463,12 @@ public struct ParticleSimulator {
         for cap in velocityCaps {
             let sq = simd_length_squared(particles[k].vel)
             guard sq > 0 else { continue }
-            let s = min(1, cap / sq.squareRoot())
+            var s = min(1, cap.maxSpeed / sq.squareRoot())
+            // G-C2-03: 스케일 계수 자리의 가중은 `s = 1 + w·(s₀ − 1)` — `new = old + w·(unweighted − old)`
+            // 의 특수형이다. 창이 비활성이면 w = 1 이라 산술이 종전과 같다.
+            // 동봉 `thunderbolt_child_spawner` 의 capvelocity(blendin 0.2/0.2)가 이 경로를 탄다.
+            let w = cap.blend.weight(lifeFraction: lifeFraction(particles[k]))
+            if w != 1 { s = 1 + w * (s - 1) }
             if s < 1 { particles[k].vel *= s }
         }
         // remapValueEx addvelocity: remapAddVel==0 이면 종전 산술 그대로(레거시 비트동일),
@@ -468,16 +483,18 @@ public struct ParticleSimulator {
         // F628: 전 turbulence 오퍼레이터 누적 — 첫 번째는 turbSpeed/turbPhase(기존 비트동일),
         // 2번째 이후는 turbExtra(다중 오퍼레이터 시스템만 신규 드로).
         if !turbulences.isEmpty {
+            let nTurb = lifeFraction(particles[k])
             if particles[k].turbSpeed > 0 {
                 let v = turbulenceVelocity(turbulences[0], pos: particles[k].pos, speed: particles[k].turbSpeed,
                                            phase: particles[k].turbPhase, time: time)
-                particles[k].pos += v * dt
+                // 가산 델타 자리의 가중은 그대로 곱이다(`old + w·delta`).
+                particles[k].pos += v * (dt * turbulences[0].blend.weight(lifeFraction: nTurb))
             }
             for (ti, extra) in particles[k].turbExtra.enumerated() where extra.speed > 0 {
                 guard ti + 1 < turbulences.count else { break }
                 let v = turbulenceVelocity(turbulences[ti + 1], pos: particles[k].pos, speed: extra.speed,
                                            phase: extra.phase, time: time)
-                particles[k].pos += v * dt
+                particles[k].pos += v * (dt * turbulences[ti + 1].blend.weight(lifeFraction: nTurb))
             }
         }
         // maintaindistancetocontrolpoint: CP 중심 반지름 `distance` 구면으로 위치를 당긴다.
@@ -1013,7 +1030,11 @@ public struct ParticleSimulator {
             // 로 고정되고 trough 만 scale 로 눌리는 별개 수식이었다).
             // F832: frequency 단위 = 수명당 진동 횟수(age 가 아니라 n = age/lifetime 곱) — 위 sizeOp 분기 주석 참조.
             let osc01 = 0.5 * (1 + sin(2 * .pi * p.oscAlphaFreq * n + p.oscAlphaPhase))
-            a *= lerp(oa.smin, oa.smax, osc01)
+            var f = lerp(oa.smin, oa.smax, osc01)
+            // G-C2-03: 배율 자리의 가중(`f = 1 + w·(f₀ − 1)`). 동봉 `fireworks3hit` 이 이 경로다.
+            let w = oscAlphaBlend.weight(lifeFraction: n)
+            if w != 1 { f = 1 + w * (f - 1) }
+            a *= f
         }
         d.alpha = max(0, min(1, a))
         // remapValueEx 표시 파생 동사(opacity/color/size) — age/time 기반 파생값이라 display 단계에서
@@ -1042,13 +1063,21 @@ public struct ParticleSimulator {
     /// 진동 위치 오프셋(절대식, base pos 불변) — display() 스냅샷과 트레일 히스토리 기록(_step 291행·
     /// spawn 404행)이 동일 공식을 공유한다(F177: 히스토리가 base pos 만 기록하면 spriteTrail/rope
     /// 리본이 oscillateposition 진동을 반영하지 못해 sprite 쿼드[d.pos 사용]와 비대칭이 생긴다).
+    /// 파티클 수명 비율 `f = age/lifetime`. G-C2-03 가중의 입력이며, 사망 판정과 같은 규약으로
+    /// lifetime ≤ 0 이면 1 로 본다(display() 의 clamp 와 동형).
+    private func lifeFraction(_ p: Particle) -> Float {
+        p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
+    }
+
     private func oscPositionOffset(_ p: Particle) -> SIMD3<Float> {
         guard p.oscPosScale > 0 else { return SIMD3(0, 0, 0) }
         // F832: frequency 단위 = "수명당 진동 횟수"(WE 공식 디자이너 문서 operator.html — oscillate
         // position/alpha/size 공통) — 종전 age 곱(Hz 해석)은 수명>1s 파티클에서 과속 진동.
         // lifetime<=0 방어: n=1(display() :602 의 clamp 와 동일 규약).
         let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
+        // G-C2-03: 위치 오프셋은 가산 델타라 가중을 그대로 곱한다. 동봉 `thunderbolt` 가 이 경로다.
         let off = p.oscPosScale * sin(2 * .pi * p.oscPosFreq * n + p.oscPosPhase)
+            * oscPosBlend.weight(lifeFraction: n)
         return p.oscPosMask * off
     }
 
@@ -1159,7 +1188,8 @@ public struct ParticleSimulator {
     /// 노이즈 흐름장 속도([-speed, +speed]^3, mask 게이트). pos·scale 로 공간 주파수, time·timeScale 로
     /// 시간 진화, phase 로 파티클별 위상 오프셋을 준다. 세 성분은 큰 오프셋으로 탈상관한 값노이즈.
     private func turbulenceVelocity(_ t: (smin: Float, smax: Float, scale: Float, timeScale: Float,
-                                         mask: SIMD3<Float>, pmin: Float, pmax: Float),
+                                         mask: SIMD3<Float>, pmin: Float, pmax: Float,
+                                         blend: BlendWindow),
                                     pos: SIMD3<Float>, speed: Float, phase: Float, time: Float) -> SIMD3<Float> {
         let base = pos * t.scale + SIMD3(phase, phase, phase)
         let tw = time * t.timeScale * Self.turbTimeK

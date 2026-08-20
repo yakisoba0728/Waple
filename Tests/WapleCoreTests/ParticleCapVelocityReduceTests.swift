@@ -151,7 +151,10 @@ final class ParticleCapVelocityReduceTests: XCTestCase {
     /// G-C2-01 잔여 9종은 이 커밋에서 손대지 않는다 — 파스가 여전히 드롭(연산자 0개)함을 고정해
     /// 다음 라운드가 이 테스트를 깨며 들어오게 한다.
     func testRemainingUnsupportedOperatorsStillDropped() {
-        for name in ["boids", "maintaindistancetocontrolpoint", "maintaindistancebetweencontrolpoints",
+        // **[2026-08-20]** `maintaindistancetocontrolpoint` 를 목록에서 뺐다 — 이번 라운드에 착지했다.
+        // `collisionbox` 는 남긴다: WE 자신이 no-op 이라(opcode 0x17 핸들러가 VM 의 명령어 전진
+        // 라벨) 구현하면 오히려 원본과 어긋난다.
+        for name in ["boids", "maintaindistancebetweencontrolpoints",
                      "collisionplane", "collisionsphere", "collisionbox", "collisionbounds",
                      "collisionquad", "collisionmodel", "inheritvaluefromevent"] {
             let d = ParticleSystemDef.parse(json("""

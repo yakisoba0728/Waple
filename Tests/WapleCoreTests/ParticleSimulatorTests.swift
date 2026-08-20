@@ -339,25 +339,47 @@ final class ParticleSimulatorTests: XCTestCase {
     /// 종전의 `min(1, threshold/dist)` 는 정반대 모양이었다 — threshold 안쪽 전부 포화이고
     /// 밖에서는 1/r 로 무한히 이어졌다. **부호만 보는 단언으로는 그 역전을 못 잡는다.**
     func testControlPointAttractAttenuationIsLinearRampNotSaturating() {
-        func firstStepVelX(atX x: Float, threshold: Float) -> Float {
+        func firstStepVelX(atX x: Float, threshold: Float, flags: Int = 2) -> Float {
             let def = ParticleSystemDef(
                 emitters: [.box(origin: Vec3(x: x, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0),
                                 rate: 1000, burst: 0)],
                 initializers: [.lifetimeRandom(min: 100, max: 100)],
                 operators: [.controlPointAttract(scale: 1000, threshold: threshold,
-                                                 target: Vec3(x: 0, y: 0, z: 0))],
+                                                 target: Vec3(x: 0, y: 0, z: 0), flags: flags)],
                 renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
             var sim = ParticleSimulator(def: def, seed: 1)
             return sim.step(0.05)[0].vel.x
         }
-        // dist 25, threshold 100 → (1 − 0.25)·1000·0.05 = 37.5, 원점 쪽이므로 −37.5
-        XCTAssertEqual(firstStepVelX(atX: 25, threshold: 100), -37.5, accuracy: 0.01)
-        // dist 75 → (1 − 0.75)·1000·0.05 = 12.5. **포화 모델이면 25 일 때와 같았을** 자리다.
+        // **오버슛 클램프를 피하는 거리에서 본다.** step = (1 − d/100)·50 이므로 d < 33.3 이면
+        // `dist < step` 이 되어 flags bit1(기본 ON)이 step 을 dist 로 잘라, 감쇠 곡선이 가려진다.
+        // dist 40 → (1 − 0.4)·1000·0.05 = 30
+        XCTAssertEqual(firstStepVelX(atX: 40, threshold: 100), -30, accuracy: 0.01)
+        // dist 75 → (1 − 0.75)·1000·0.05 = 12.5. **포화 모델이면 40 일 때와 같았을** 자리다.
         XCTAssertEqual(firstStepVelX(atX: 75, threshold: 100), -12.5, accuracy: 0.01)
         // threshold 밖은 정확히 0 — 종전 모델은 여기서도 계속 당겼다.
         XCTAssertEqual(firstStepVelX(atX: 150, threshold: 100), 0, accuracy: 1e-5)
         // threshold 0 은 "감쇠 없음" 이 아니라 **무동작**이다.
         XCTAssertEqual(firstStepVelX(atX: 25, threshold: 0), 0, accuracy: 1e-5)
+    }
+
+    /// `flags` bit1 = 오버슛 클램프(0x140241750 → 0x1402418dc–0x1402418e4).
+    /// **주입 기본이 2 라 기본으로 켜져 있다** — CI 가 이걸 잡아 줬다(위 테스트의 첫 기대값을
+    /// 클램프를 빼고 계산했다가 −37.5 대신 −25 가 나왔다).
+    func testControlPointAttractOvershootClampIsOnByDefault() {
+        func velX(flags: Int) -> Float {
+            let def = ParticleSystemDef(
+                emitters: [.box(origin: Vec3(x: 25, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0),
+                                rate: 1000, burst: 0)],
+                initializers: [.lifetimeRandom(min: 100, max: 100)],
+                operators: [.controlPointAttract(scale: 1000, threshold: 100,
+                                                 target: Vec3(x: 0, y: 0, z: 0), flags: flags)],
+                renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
+            var sim = ParticleSimulator(def: def, seed: 1)
+            return sim.step(0.05)[0].vel.x
+        }
+        // 미가공 step = (1 − 25/100)·1000·0.05 = 37.5 인데 dist 25 보다 크다 → dist 로 잘린다.
+        XCTAssertEqual(velX(flags: 2), -25, accuracy: 0.01, "기본 flags 2 → 클램프 ON")
+        XCTAssertEqual(velX(flags: 0), -37.5, accuracy: 0.01, "bit1 을 끄면 잘리지 않는다")
     }
 
     func testControlPointAttractRepelsWithNegativeScale() {
