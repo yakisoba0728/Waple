@@ -4,10 +4,71 @@ import Foundation
 /// bind.name "previous" = 효과 입력(레이어 베이스 또는 이전 효과 출력), 그 외 = fbos 의 이름.
 /// target 부재 = 효과 출력에 기록.
 public struct EffectManifest: Equatable {
+    /// X-⑪(G-A5-07/G-B2-05): `conditions` — fbo·pass·bind 를 콤보 값으로 켜고 끄는 게이트.
+    ///
+    /// 형태는 **배열 안의 객체들**이고, 객체의 각 키가 콤보 이름이다:
+    /// ```json
+    ///   "conditions": [ { "LIGHTING": 1 } ]                       // 맨몸 = 등호
+    ///   "conditions": [ { "POINTEMITTER": { "op": "ge", "value": 1 } } ]
+    /// ```
+    ///
+    /// 원본 평가기 `0x1401e63b0`(1,478 B) 실측 규약 — 놀라운 게 셋이다:
+    ///
+    /// ① **맨몸 `{"LIGHTING": 1}` 은 `!=0` 도 `>=` 도 아니라 정확히 `==` 다**
+    ///    (`0x1401e68c3` `cmp edx, r14d` + `0x1401e68ca` `cmove`). 이게 중요한 이유:
+    ///    `RENDERING` 은 0/1/2/3 옵션 콤보라, `>=` 였다면 1·2 에서도 켜졌을 것이다.
+    /// ② **명명 연산자는 `ge`/`gt`/`le`/`lt` 4종뿐이고, 미지·부재 op 는 false 고정이 아니라
+    ///    등호 폴백**이다(`0x1401e67b7`). 문자열 길이가 정확히 2 가 아니면 비교 자체를 시도하지 않는다.
+    /// ③ **fail-open 이다.** 배열이 아니거나(`0x1401e63d1`) 빈 배열이면(`0x1401e6412`) **true**.
+    ///    키 부재도 true. 객체가 아닌 배열 원소는 결과에 영향을 주지 않고 무시된다.
+    ///
+    /// 누산은 전부 AND — 객체 안의 키끼리도, 배열 원소끼리도. OR 는 어디에도 없다.
+    /// 좌변(콤보 값)이 없으면 **0** 이다(`0x1401e6546` 의 `xor r14d, r14d`).
+    public struct Condition: Equatable {
+        public enum Op: Equatable {
+            case eq          // 맨몸 값, 또는 미지/부재 op 의 폴백
+            case ge, gt, le, lt
+        }
+        public let combo: String
+        public let op: Op
+        public let value: Int
+        public init(combo: String, op: Op, value: Int) {
+            self.combo = combo; self.op = op; self.value = value
+        }
+        public func holds(combos: [String: Int]) -> Bool {
+            let lhs = combos[combo] ?? 0
+            switch op {
+            case .eq: return lhs == value
+            case .ge: return lhs >= value
+            case .gt: return lhs > value
+            case .le: return lhs <= value
+            case .lt: return lhs < value
+            }
+        }
+    }
+
+    /// `conditions` 한 벌. nil = 키 부재/비배열 → 항상 true.
+    /// 바깥 배열의 원소끼리도, 안쪽 그룹의 조건끼리도 전부 AND 다.
+    public typealias Conditions = [[Condition]]
+
+    /// 조건 평가. nil·빈 배열·빈 그룹은 전부 true(fail-open).
+    public static func evaluate(_ conditions: Conditions?, combos: [String: Int]) -> Bool {
+        guard let conditions else { return true }
+        for group in conditions {
+            // 원소마다 누산기를 1 로 초기화한다(`0x1401e6426`). 빈 그룹 = true.
+            if !group.allSatisfy({ $0.holds(combos: combos) }) { return false }
+        }
+        return true
+    }
+
     public struct Bind: Equatable {
         public let name: String
         public let index: Int
-        public init(name: String, index: Int) { self.name = name; self.index = index }
+        /// X-⑪: 이 bind 만의 조건. 거짓이면 **그 슬롯만 언바인드**되고 패스는 정상 실행된다.
+        public let conditions: Conditions?
+        public init(name: String, index: Int, conditions: Conditions? = nil) {
+            self.name = name; self.index = index; self.conditions = conditions
+        }
     }
     public struct Pass: Equatable {
         public let material: String?   // materials/....json (일반)
@@ -16,10 +77,13 @@ public struct EffectManifest: Equatable {
         public let binds: [Bind]
         public let command: String?    // "copy" 등 셰이더 없는 명령 패스(실물 motionblur 의 buffer 지속)
         public let source: String?     // command=copy 의 원본 fbo 이름
+        /// X-⑪: 거짓이면 이 패스를 통째로 건너뛴다. **단 씬 오버라이드 인덱스는 그대로 증가한다**
+        /// (원본도 `0x1401e7a04` → `0x1401e814e` 로 인덱스만 올리고 continue 한다).
+        public let conditions: Conditions?
         public init(material: String?, shader: String?, target: String?, binds: [Bind],
-                    command: String? = nil, source: String? = nil) {
+                    command: String? = nil, source: String? = nil, conditions: Conditions? = nil) {
             self.material = material; self.shader = shader; self.target = target; self.binds = binds
-            self.command = command; self.source = source
+            self.command = command; self.source = source; self.conditions = conditions
         }
     }
 
@@ -121,12 +185,17 @@ public struct EffectManifest: Equatable {
         /// X-⑧: `clear` — 생성 시 1회 채울 RGBA. 동봉 자산은 전건 `"0 0 0 0"`(공백 구분 4수).
         /// nil = 미선언. **매 프레임이 아니라 생성 1회**인 이유는 소비처 주석 참조.
         public let clearColor: SIMD4<Float>?
+        /// X-⑪: 거짓이면 이 FBO 를 **아예 만들지 않는다**. 참조는 전부 이름 기반이라 벡터가 압축돼도
+        /// 어긋나지 않는다(실물 `fluidsimulation` 의 `_rt_SmokeNormal` 이 `LIGHTING==1` 조건부이고,
+        /// 그것을 쓰는 패스·바인드가 **같은 조건**이라 함께 사라진다).
+        public let conditions: Conditions?
         public init(name: String, scale: Int, fixedWidth: Int? = nil, fixedHeight: Int? = nil,
                     uvsRepeat: Bool = false, format: Format? = nil, unique: Bool = false,
-                    clearColor: SIMD4<Float>? = nil) {
+                    clearColor: SIMD4<Float>? = nil, conditions: Conditions? = nil) {
             self.name = name; self.scale = scale
             self.fixedWidth = fixedWidth; self.fixedHeight = fixedHeight; self.uvsRepeat = uvsRepeat
             self.format = format; self.unique = unique; self.clearColor = clearColor
+            self.conditions = conditions
         }
     }
 
@@ -213,14 +282,15 @@ public struct EffectManifest: Equatable {
             var binds: [Bind] = []
             for b in (p["bind"] as? [[String: Any]]) ?? [] {
                 guard let name = b["name"] as? String, let idx = safeInt(b["index"]), idx >= 0 else { continue }
-                binds.append(Bind(name: name, index: idx))
+                binds.append(Bind(name: name, index: idx, conditions: parseConditions(b["conditions"])))
             }
             passes.append(Pass(material: p["material"] as? String,
                                shader: p["shader"] as? String,
                                target: p["target"] as? String,
                                binds: binds,
                                command: p["command"] as? String,
-                               source: p["source"] as? String))
+                               source: p["source"] as? String,
+                               conditions: parseConditions(p["conditions"])))
         }
         var fbos: [FBO] = []
         // X-①-sweep: **개수**도 상한을 둔다. 종전엔 치수(8192)만 클램프했는데, 소비처
@@ -258,10 +328,62 @@ public struct EffectManifest: Equatable {
             let unique = isJSONBool(f["unique"]) && ((f["unique"] as? Bool) == true)
             fbos.append(FBO(name: name, scale: Swift.max(1, scale), fixedWidth: fixedW, fixedHeight: fixedH,
                             uvsRepeat: uvsRepeat, format: format, unique: unique,
-                            clearColor: parseClearColor(f["clear"])))
+                            clearColor: parseClearColor(f["clear"]),
+                            conditions: parseConditions(f["conditions"])))
         }
         let replacementKey = (obj["replacementkey"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         return EffectManifest(passes: passes, fbos: fbos, replacementKey: replacementKey)
+    }
+
+    /// X-⑪: `conditions` 파스. 배열이 아니면 **nil**(= 항상 true, fail-open).
+    ///
+    /// 값 타입별 처리가 원본과 같아야 한다:
+    ///   · int/uint  → 등호 비교
+    ///   · real      → **0 방향 절삭 후** 32비트 정수 등호(`cvttsd2si`)
+    ///   · object    → `{op, value}`. `value` 가 int/uint/real 이 아니면 **0**,
+    ///                 `op` 가 문자열이 아니거나 길이 2 가 아니거나 4종에 없으면 **등호 폴백**
+    ///   · 그 외(string/bool/array/null) → **조건 자체를 무시**(누산에 영향 없음)
+    ///
+    /// 마지막 항목이 중요하다 — "무시" 는 false 가 아니다. 그래서 조건을 만들지 않고 건너뛴다.
+    static func parseConditions(_ v: Any?) -> Conditions? {
+        guard let array = v as? [Any] else { return nil }
+        var groups: Conditions = []
+        for element in array {
+            // 객체가 아닌 원소는 빈 그룹 — 결과에 영향을 주지 않는다(원본도 acc 를 안 건드린다).
+            guard let obj = element as? [String: Any] else { groups.append([]); continue }
+            var group: [Condition] = []
+            for (combo, spec) in obj {
+                if let c = parseCondition(combo: combo, spec: spec) { group.append(c) }
+            }
+            groups.append(group)
+        }
+        return groups
+    }
+
+    private static func parseCondition(combo: String, spec: Any) -> Condition? {
+        // bool 이 숫자로 브리징되는 것을 먼저 막는다 — 원본은 타입 태그로 갈라 bool 을 무시한다.
+        if isJSONBool(spec) { return nil }
+        if let i = spec as? Int { return Condition(combo: combo, op: .eq, value: i) }
+        if let d = spec as? Double, let i = safeInt(d) { return Condition(combo: combo, op: .eq, value: i) }
+        guard let obj = spec as? [String: Any] else { return nil }   // string/bool/array/null → 무시
+        // `value` 가 숫자가 아니면 0. 원본은 `asInt()` 를 부르되 타입 태그 1/2/3 이 아니면 0 을 쓴다.
+        var rhs = 0
+        let rawValue = obj["value"]
+        if !isJSONBool(rawValue) {
+            if let i = rawValue as? Int { rhs = i }
+            else if let d = rawValue as? Double, let i = safeInt(d) { rhs = i }
+        }
+        var op: Condition.Op = .eq
+        if let raw = obj["op"] as? String, raw.utf8.count == 2 {
+            switch raw {
+            case "ge": op = .ge
+            case "gt": op = .gt
+            case "le": op = .le
+            case "lt": op = .lt
+            default: op = .eq        // 길이는 2 인데 아는 연산자가 아니면 등호 폴백
+            }
+        }
+        return Condition(combo: combo, op: op, value: rhs)
     }
 
     /// X-⑧: `clear` 값 파스 — **원본 파서(`0x1401e7629`-`0x1401e7777`) 그대로**.
