@@ -80,6 +80,12 @@ public struct ParticleSimulator {
     /// 아니라 **별도 선행 패스**로 돈다.
     private let boidsOps: [(sepThr: Float, nbrThr: Float, maxSpeed: Float,
                             sepF: Float, aliF: Float, cohF: Float, flags: Int)]
+    /// boids 의 `K` 를 정하는 밑값. 실물은 `[sys+0x340]` 을 쓰는데 그것은 **생존 수가 아니라
+    /// 최고수위**다 — 스폰이 `inc [sys+0x344]`(생존 수) 뒤에 `if (slot == [sys+0x340]) [sys+0x340]++`
+    /// 로만 늘리고(0x14023818a–0x14023819d), 사망은 `dec [sys+0x344]` 만 한다(0x140236dbf).
+    /// 즉 단조 증가다. Waple 의 `particles` 는 매 스텝 압축돼 최고수위 정보가 없으므로 따로 든다.
+    /// (실물의 슬롯 할당이 0 부터 첫 빈 자리를 찾는 방식이라 최고수위 = 동시 생존 최대치다.)
+    private var boidsPeak: Int = 0
     /// boids 서브샘플 위상용 프레임 카운터(실물 `[ctx+0x144]` 는 u32).
     /// **Int 로 둔다** — `UInt32(n)` 같은 좁힘을 만들면 `maxcount` 가 신뢰 경계 밖이라
     /// (`{"maxcount": 9e18}` 이면 `n` 이 UInt32 를 넘어) 트랩이 된다. 실물의 2^32 감김과는
@@ -1212,8 +1218,13 @@ public struct ParticleSimulator {
     private mutating func applyBoids(_ dtS: Float) {
         let count = particles.count
         guard count > 0 else { return }
-        let n = count / 100 + 1
+        boidsPeak = max(boidsPeak, count)
+        // 실물 0x140244132–0x140244167: `K = [sys+0x340] / 100 + 1`(0x51eb851f 매직 나눗셈 + `shr 6`).
+        // 밑값이 **최고수위**라는 것이 중요하다 — 버스트 뒤 개체수가 줄어도 K 가 도로 작아지지
+        // 않는다(위 `boidsPeak` 주석).
+        let n = boidsPeak / 100 + 1
         let phase = frameCounter % n          // n ≥ 1 이 위 정의로 보장된다
+        let fc = frameCounter                 // 실물은 i·j 위상에 **같은** 프레임값을 쓴다
         frameCounter &+= 1
         let fn = Float(n)
         for op in boidsOps {
@@ -1224,7 +1235,20 @@ public struct ParticleSimulator {
             let maxSq = op.maxSpeed * op.maxSpeed
             var g = phase
             while g * 4 < count {
-                for i in (g * 4)..<min(g * 4 + 4, count) {
+                let iBase = g * 4
+                // **안쪽 j 루프도 같은 `K·4` 스트라이드로 서브샘플된다** — 시작 위상만 다르다.
+                // 실물: `eax = [ctx+0x144]`(0x14024424d) → `add eax, r12d`(0x140244257, r12d = i)
+                // → `div r8d`(0x14024425e) → `mov r8d, edx`(0x140244269) → `shl r8d, 2`(0x140244273),
+                // 증분은 바깥과 같은 `r15d = K*4`(0x140244515), 종료는 `cmp r8d, r10d`(0x14024451b).
+                //
+                // 설계 의도: i 만 서브샘플하면 프레임당 쌍 수가 `N²/K ≈ 100·N` 으로 **N 에 선형**이지만,
+                // 양쪽을 서브샘플하면 `(N/K)² → 100² = 10,000` 쌍/프레임 **상수**가 된다.
+                // `/100` 이 딱 떨어지는 이유가 그것이다.
+                //
+                // **K == 1 이면(= 최고수위 100 미만) `jStart = 0`, 증분 4 라 전수 스캔과 동일하다** —
+                // 동봉 boids 자산 5건이 전부 이 경우라 관측 회귀가 없다. 발현은 N > 100 부터다.
+                let jStart = ((fc &+ iBase) % n) * 4
+                for i in iBase..<min(iBase + 4, count) {
                     var sepAcc = SIMD3<Float>(0, 0, 0), velAcc = SIMD3<Float>(0, 0, 0)
                     var posAcc = SIMD3<Float>(0, 0, 0)
                     var sepCnt: Float = 0, nCnt: Float = 0
@@ -1245,20 +1269,24 @@ public struct ParticleSimulator {
                     // 않았고, 핫루프의 (i,j) 쌍마다 도는 비교만 남았다. 위 두 성질은
                     // `testBoidsNeverSeesZeroLifetimeNeighbor` 가 못박는다 — 둘 중 하나가 깨지면
                     // 그 테스트가 먼저 울고, 그때 이 마스크를 되살리면 된다.
-                    for j in 0..<count where j != i {
-                        let d = pi - particles[j].pos
-                        let l2 = simd_length_squared(d)
-                        guard l2 != 0 else { continue }   // 실물 `cmpneqps xmm2, 0` — 자기 자신 제외
-                        let l = l2.squareRoot()
-                        if l < op.sepThr {
-                            sepAcc += d * (op.sepThr / l - 1)   // 0x1402443e7 `subps … 1.0`
-                            sepCnt += 1
+                    var jb = jStart
+                    while jb < count {
+                        for j in jb..<min(jb + 4, count) where j != i {
+                            let d = pi - particles[j].pos
+                            let l2 = simd_length_squared(d)
+                            guard l2 != 0 else { continue }   // 실물 `cmpneqps xmm2, 0` — 자기 자신 제외
+                            let l = l2.squareRoot()
+                            if l < op.sepThr {
+                                sepAcc += d * (op.sepThr / l - 1)   // 0x1402443e7 `subps … 1.0`
+                                sepCnt += 1
+                            }
+                            if l < op.nbrThr {
+                                velAcc += particles[j].vel
+                                posAcc += particles[j].pos
+                                nCnt += 1
+                            }
                         }
-                        if l < op.nbrThr {
-                            velAcc += particles[j].vel
-                            posAcc += particles[j].pos
-                            nCnt += 1
-                        }
+                        jb += n * 4
                     }
                     var dv = SIMD3<Float>(0, 0, 0)
                     if sepCnt > 0 { dv += sepAcc * (sepF / sepCnt) }

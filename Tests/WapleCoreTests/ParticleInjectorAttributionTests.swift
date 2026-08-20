@@ -461,6 +461,49 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         XCTAssertLessThan(hi.vel.x, 0, "오른쪽 입자는 왼쪽으로")
     }
 
+    /// boids 서브샘플 계수 `K = 최고수위/100 + 1` 의 **갱신 주기**를 못박는다.
+    ///
+    /// 실물 0x140244132–0x140244167 이 `[sys+0x340]` 을 100 으로 나눠(0x51eb851f 매직) K 를 만들고,
+    /// 바깥 루프를 `i = (frame % K)·4` 에서 `K·4` 씩 건너뛴다. 즉 **한 프레임에 1/K 만 갱신되고
+    /// K 프레임이면 전건이 갱신된다.** 안쪽 j 루프도 같은 스트라이드를 쓰는데(시작 위상만 다르다),
+    /// 그쪽은 공개 API 로 관측할 방법이 없어 여기서는 주기만 본다.
+    ///
+    /// K = 1(최고수위 100 미만)이면 스트라이드가 무해해져 전수 스캔과 **동일**하다 — 동봉 boids
+    /// 자산 5건이 전부 그 경우라 관측 회귀가 없고, 아래 첫 단언이 그것을 지킨다.
+    func testBoidsSubsampleCadenceFollowsPeakDerivedK() {
+        func make(burst: Int, maxCount: Int) -> ParticleSystemDef {
+            ParticleSystemDef(
+                emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0), distanceMax: Vec3(x: 200, y: 200, z: 0),
+                                rate: 0, burst: burst)],
+                initializers: [.lifetimeRandom(min: 100, max: 100)],
+                operators: [.boids(separationThreshold: 0, neighborThreshold: 10000, maxSpeed: 5000,
+                                   separationFactor: 0, alignmentFactor: 0, cohesionFactor: 50, flags: 0)],
+                renderer: .sprite, maxCount: maxCount, startTime: 0, material: nil)
+        }
+        func moved(_ ps: [Particle]) -> Int { ps.filter { $0.vel.x != 0 || $0.vel.y != 0 }.count }
+
+        // K = 1 — 전건이 첫 프레임에 갱신된다(전수 스캔과 동일한 경로).
+        var small = ParticleSimulator(def: make(burst: 2, maxCount: 4), seed: 5)
+        let s1 = small.step(0.1)
+        XCTAssertEqual(s1.count, 2)
+        XCTAssertEqual(moved(s1), 2, "N ≤ 100 이면 K=1 — 한 프레임에 전건 갱신")
+
+        // K = 3 (최고수위 200) — 1프레임 약 1/3, 3프레임에 전건.
+        var big = ParticleSimulator(def: make(burst: 200, maxCount: 200), seed: 5)
+        let b1 = big.step(1.0 / 60.0)
+        XCTAssertEqual(b1.count, 200)
+        XCTAssertLessThan(moved(b1), 100, "K=3 이면 첫 프레임에 3분의 1만 갱신 (실측 68)")
+        XCTAssertGreaterThan(moved(b1), 40, "그렇다고 0 이어서도 안 된다")
+        _ = big.step(1.0 / 60.0)
+        XCTAssertEqual(moved(big.step(1.0 / 60.0)), 200, "K 프레임이면 전건이 한 번씩 갱신된다")
+
+        // K = 2 (최고수위 120) — 1프레임 절반, 2프레임에 전건.
+        var mid = ParticleSimulator(def: make(burst: 120, maxCount: 120), seed: 5)
+        let m1 = mid.step(1.0 / 60.0)
+        XCTAssertEqual(moved(m1), 60, "K=2 → 정확히 절반")
+        XCTAssertEqual(moved(mid.step(1.0 / 60.0)), 120, "2프레임이면 전건")
+    }
+
     /// 분리(separation)는 `separationthreshold` 안에서만 밀어낸다 — 밖이면 무작용.
     func testBoidsSeparationOnlyInsideThreshold() {
         func velX(sepThr: Float) -> Float {
