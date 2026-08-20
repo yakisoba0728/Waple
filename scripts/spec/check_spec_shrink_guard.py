@@ -77,9 +77,9 @@ def doc(entries):
     return {"weVersion": specfmt.WE_VERSION, "generatedBy": "test", "entries": entries}
 
 
-def entry(id, value):
+def entry(id, value, evidence=None):
     return {"id": id, "value": value, "status": "확정",
-            "evidence": [{"kind": "binary", "ref": "test"}]}
+            "evidence": [{"kind": "binary", "ref": "test"}] if evidence is None else evidence}
 
 
 def must_block(tmp, name, before, after):
@@ -122,6 +122,29 @@ def degrade(obj):
     return zero_numbers(obj)
 
 
+def half_keys(d):
+    """측정 dict 가 키 절반을 잃는 부분 축소 — 입력이 반만 있을 때 생성기가 내는 모양."""
+    out = []
+    for e in d.get("entries", []):
+        v = e.get("value")
+        if isinstance(v, dict) and len(v) > 1:
+            keep = list(v)[: len(v) // 2 or 1]
+            v = {k: v[k] for k in keep}
+        out.append({**e, "value": v})
+    return {**d, "entries": out}
+
+
+def nulled(d):
+    """스칼라 측정값이 null 이 되는 부분 축소 — `dict.get()` 이 자연히 내는 모양."""
+    out = []
+    for e in d.get("entries", []):
+        v = e.get("value")
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            v = None
+        out.append({**e, "value": v})
+    return {**d, "entries": out}
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="spec-shrink-")
     try:
@@ -141,6 +164,21 @@ def main():
         must_block(tmp, "nested-deep",
                    doc([entry("a", {"x": {"y": {"z": 5}}})]),
                    doc([entry("a", {"x": {"y": {"z": 0}}})]))
+        # **[2026-08-20] 부분 축소.** 위 일곱은 전부 "→0 / →빔" 모양이다. 그 모양만 대조하면
+        # 가드와 검사가 **같은 사각을 공유**하고, 검사는 그 사각을 초록으로 인증한다.
+        # 실측: 하드닝 전에는 커밋된 `spec/engine/render-pass.json` 을 40KB → 8KB 로 깎아도
+        # 통과했다. 아래 다섯이 그 부류다.
+        must_block(tmp, "key-deleted",                 # dict 가 키를 잃는다(`for k in old if k in new` 구멍)
+                   doc([entry("a", {"x": 1, "y": 2})]), doc([entry("a", {"x": 1})]))
+        must_block(tmp, "num-to-null",                 # `dict.get()` 이 자연히 내는 모양
+                   doc([entry("a", {"n": 451})]), doc([entry("a", {"n": None})]))
+        must_block(tmp, "list-to-num",                 # 형 변경은 어느 isinstance 쌍에도 안 걸렸다
+                   doc([entry("a", {"m": [1, 2, 3]})]), doc([entry("a", {"m": 3})]))
+        must_block(tmp, "num-to-str",
+                   doc([entry("a", {"n": 451})]), doc([entry("a", {"n": "N/A"})]))
+        must_block(tmp, "evidence-shrinks",            # 이름이 "근거가 줄어들지 않는다" 인데 value 만 봤다
+                   doc([entry("a", 1, evidence=[{"kind": "file", "ref": "x"}])]),
+                   doc([entry("a", 1, evidence=0)]))
 
         print("[2] 음성 대조 — 정상 쓰기는 통과해야 한다")
         must_pass(tmp, "unchanged", doc([entry("a", 1)]), doc([entry("a", 1)]))
@@ -195,6 +233,12 @@ def main():
              lambda d: {**d, "entries": [{**e, "value": degrade(e.get("value"))}
                                          for e in d["entries"]]},
              "measure_render_pass: d3d11Slots → 빔"),
+            # **[2026-08-20] 부분 축소 실사.** 위 셋은 전부 "→0 / →빔" 이고, 하드닝 전에는
+            # 아래 둘이 커밋된 정본에서 그대로 통과했다(render-pass 40KB → 8KB).
+            ("spec/engine/render-pass.json", lambda d: half_keys(d),
+             "부분 입력: 측정 dict 가 키 절반을 잃는다"),
+            ("spec/binaries.json", lambda d: nulled(d),
+             "부분 입력: 스칼라가 null 이 된다(dict.get 이 내는 모양)"),
         ]
         for rel, wreck, label in cases:
             src = os.path.join(REPO, rel)
@@ -217,14 +261,19 @@ def main():
             if not path.startswith("measure_") or not path.endswith(".py"):
                 continue
             src = open(os.path.join(HERE, path), encoding="utf-8").read()
-            # `json.dump(` 로 정본 경로에 직접 쓰는 곳이 있으면 가드를 우회한다.
-            # (`json.dumps` 는 문자열이라 무관하고, `--json` 같은 사용자 지정 출력도 정본이 아니다.)
-            for m in re.finditer(r"json\.dump\(", src):
+            # 정본 경로에 직접 쓰는 곳이 있으면 가드를 우회한다.
+            #
+            # **[2026-08-20]** 종전엔 리터럴 `json.dump(` 하나만 봤고, 주석은 "`json.dumps` 는
+            # 문자열이라 무관" 이라 적었다. 그 근거가 틀렸다 —
+            # `Path(p).write_text(json.dumps(obj))` 나 `fh.write(json.dumps(obj))` 는 정본을
+            # 쓰면서 관문을 완전히 우회한다. 공백을 낀 `json.dump (` 도 종전 정규식을 빠져나갔다.
+            for m in re.finditer(r"json\.dump\s*\(|write_text\s*\(\s*json\.dumps|"
+                                 r"\.write\s*\(\s*json\.dumps", src):
                 line = src[:m.start()].count("\n") + 1
                 body = src.splitlines()[line - 1].strip()
                 if (path, line) in RAW_DUMP_ALLOWED:
                     continue
-                fail(f"[우회] {path}:{line} 이 specfmt.dump 없이 json.dump 한다 — {body}\n"
+                fail(f"[우회] {path}:{line} 이 specfmt.dump 없이 정본을 직접 쓴다 — {body}\n"
                      f"        정본이 아니면 RAW_DUMP_ALLOWED 에 사유와 함께 등록하라.")
         if not any(f.startswith("[우회]") for f in FAILS):
             ok("[우회] 모든 생성기가 관문을 지난다")

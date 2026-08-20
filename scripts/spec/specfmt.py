@@ -67,31 +67,73 @@ class SpecShrinkError(RuntimeError):
 #
 # 진짜로 줄여야 할 때(항목 폐기, 코퍼스 축소)는 사람이 명시한다:
 #   dump(..., allow_shrink=True) 또는 환경변수 WAPLE_SPEC_ALLOW_SHRINK=1
+def _kind(v):
+    """축소 판정용 형(型). int/float 은 한 형으로 본다 — 451 → 451.0 은 축소가 아니다."""
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, (int, float)):
+        return "num"
+    if isinstance(v, str):
+        return "str"
+    if isinstance(v, dict):
+        return "dict"
+    if isinstance(v, list):
+        return "list"
+    return "null"                        # None 과 그 밖 전부
+
+
 def _shrinks(old, new, path=""):
-    """old 에 있던 근거가 new 에서 사라진 자리를 모은다. 커진 쪽은 보지 않는다."""
+    """old 에 있던 근거가 new 에서 사라진 자리를 모은다. 커진 쪽은 보지 않는다.
+
+    **[2026-08-20] 부분 축소를 놓치던 구멍 셋을 막았다.** 이 가드의 위협 모델은 스스로
+    "입력이 **아예 없을 때**보다 **부분적으로만 있을 때**가 더 위험하다" 인데, 구현이 잡는
+    것은 "완전히 비었을 때" 뿐이었다:
+
+      · dict — `for k in old: if k in new` 라 **new 에서 사라진 키를 순회조차 않았다**
+      · list — `zip(old, new)` 라 new 가 짧으면 꼬리를 안 봤다(길이 자체는 아래 이유로
+        여전히 세지 않는다 — 갭 목록이 줄어드는 것은 정상이다)
+      · 형 변경 — int→None, list→int, dict→null 은 어느 `isinstance` 쌍에도 안 걸려 `[]` 였다
+        (`dict.get()` 이 자연히 내는 모양이 바로 int→None 이다)
+
+    실측: 커밋된 `spec/engine/render-pass.json` 을 40,064 → 8,191 바이트로 깎아도 통과했다.
+    형 변경을 축소로 세는 것이 세 구멍 중 가장 넓은 자리를 막는다.
+    """
     out = []
-    if isinstance(old, bool) or isinstance(new, bool):
+    ko, kn = _kind(old), _kind(new)
+    if ko == "bool" or kn == "bool":
         return out                       # bool 은 측정량이 아니라 스위치다
-    if isinstance(old, (int, float)) and isinstance(new, (int, float)):
+    if ko != kn:
+        # 형이 바뀌면 값 비교가 성립하지 않는다 — 근거가 다른 것으로 대체된 것이므로 축소로 본다.
+        # (측정량이 진짜로 형을 바꿔야 하면 allow_shrink 로 명시하라.)
+        out.append(f"{path}: {ko} → {kn}")
+        return out
+    if ko == "num":
         if old > 0 and new == 0:
             out.append(f"{path}: {old} → 0")
         return out
-    if isinstance(old, dict) and isinstance(new, dict):
+    if ko == "dict":
         if old and not new:
             out.append(f"{path}: {len(old)}개 키 → 빔")
             return out
+        gone = [k for k in old if k not in new]
+        if gone:
+            shown = ", ".join(map(str, gone[:6])) + (f" 외 {len(gone) - 6}개" if len(gone) > 6 else "")
+            out.append(f"{path}: 키 {len(gone)}개 소멸({shown})")
         for k in old:
             if k in new:
                 out += _shrinks(old[k], new[k], f"{path}.{k}" if path else str(k))
         return out
-    if isinstance(old, list) and isinstance(new, list):
+    if ko == "list":
         if old and not new:
             out.append(f"{path}: {len(old)}개 원소 → 빔")
             return out
+        # 리스트 **길이 축소는 일부러 세지 않는다.** 이 리포에서 리스트는 갭 목록·미해결 목록이
+        # 흔하고, 그게 줄어드는 것이 곧 일이 끝났다는 뜻이다(음성 대조 `gap-list-shrinks-not-empty`).
+        # 부분 입력이 내는 진짜 축소는 키 소멸과 형 변경으로 잡힌다 — 실측으로 확인했다.
         for i, (o, n) in enumerate(zip(old, new)):
             out += _shrinks(o, n, f"{path}[{i}]")
         return out
-    if isinstance(old, str) and isinstance(new, str):
+    if ko == "str":
         if old and not new:
             out.append(f"{path}: 문자열 → 빔")
     return out
@@ -109,8 +151,12 @@ def shrink_report(new_doc, path):
     if not isinstance(old, dict) or not isinstance(new_doc, dict):
         return []
     old_entries, new_entries = old.get("entries"), new_doc.get("entries")
-    if not isinstance(old_entries, list) or not isinstance(new_entries, list):
-        return []
+    if not isinstance(old_entries, list):
+        return []                        # 이전 상태가 정본 형태가 아니면 비교 대상이 없다
+    # **[2026-08-20]** 종전엔 여기서도 `[]` 를 돌려줬다 — 즉 정본을 `{}` 로 통째 덮어써도
+    # 통과했다. 이전이 정본이었는데 새 문서에 entries 가 없다면 그것이야말로 최악의 축소다.
+    if not isinstance(new_entries, list):
+        return [f"entries: {len(old_entries)}개 항목이 있던 자리에 entries 리스트가 없다"]
     out = []
     old_by = {e.get("id"): e for e in old_entries if isinstance(e, dict)}
     new_by = {e.get("id"): e for e in new_entries if isinstance(e, dict)}
@@ -122,6 +168,9 @@ def shrink_report(new_doc, path):
         ne = new_by.get(i)
         if ne is not None:
             out += _shrinks(oe.get("value"), ne.get("value"), str(i))
+            # **[2026-08-20]** 이름이 "근거가 줄어들지 않는다" 인데 종전엔 `value` 만 봤다.
+            # evidence 도 같은 규칙(키 소멸·형 변경·양수→0)으로 본다.
+            out += _shrinks(oe.get("evidence"), ne.get("evidence"), f"{i}.evidence")
     return out
 
 
