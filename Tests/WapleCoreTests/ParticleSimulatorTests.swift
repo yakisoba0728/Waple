@@ -351,17 +351,23 @@ final class ParticleSimulatorTests: XCTestCase {
                 emitters: [.box(origin: Vec3(x: x, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0),
                                 rate: 1000, burst: 0)],
                 initializers: [.lifetimeRandom(min: 100, max: 100)],
-                operators: [.controlPointAttract(scale: 1000, threshold: threshold,
+                operators: [.controlPointAttract(scale: 3000, threshold: threshold,
                                                  target: Vec3(x: 0, y: 0, z: 0), flags: flags)],
                 renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
             var sim = ParticleSimulator(def: def, seed: 1)
-            return sim.step(0.05)[0].vel.x
+            return sim.step(1.0 / 60.0)[0].vel.x
         }
+        // **[2026-08-20 dtScaled]** 스텝을 0.05(20fps)에서 1/60 로 바꾸고 그만큼 계수를 키웠다.
+        // 힘 계수는 이제 생 dt 가 아니라 `dtScaled = dt·min(1, 0.025/dt)^0.7` 를 받는데,
+        // 0.05 는 40fps 아래라 배수 0.6156 이 걸려 이 테스트들이 재려던 **곡선 모양**이 가려진다.
+        // 1/60 은 배수가 정확히 1.0 이라 산술이 그대로 드러난다 — 기대값은 전부 종전과 같다
+        // (1000 × 0.05 = 50 = 3000 / 60).
+
         // **오버슛 클램프를 피하는 거리에서 본다.** step = (1 − d/100)·50 이므로 d < 33.3 이면
         // `dist < step` 이 되어 flags bit1(기본 ON)이 step 을 dist 로 잘라, 감쇠 곡선이 가려진다.
-        // dist 40 → (1 − 0.4)·1000·0.05 = 30
+        // dist 40 → (1 − 0.4)·3000/60 = 30
         XCTAssertEqual(firstStepVelX(atX: 40, threshold: 100), -30, accuracy: 0.01)
-        // dist 75 → (1 − 0.75)·1000·0.05 = 12.5. **포화 모델이면 40 일 때와 같았을** 자리다.
+        // dist 75 → (1 − 0.75)·3000/60 = 12.5. **포화 모델이면 40 일 때와 같았을** 자리다.
         XCTAssertEqual(firstStepVelX(atX: 75, threshold: 100), -12.5, accuracy: 0.01)
         // threshold 밖은 정확히 0 — 종전 모델은 여기서도 계속 당겼다.
         XCTAssertEqual(firstStepVelX(atX: 150, threshold: 100), 0, accuracy: 1e-5)
@@ -378,13 +384,18 @@ final class ParticleSimulatorTests: XCTestCase {
                 emitters: [.box(origin: Vec3(x: 25, y: 0, z: 0), distanceMax: Vec3(x: 0, y: 0, z: 0),
                                 rate: 1000, burst: 0)],
                 initializers: [.lifetimeRandom(min: 100, max: 100)],
-                operators: [.controlPointAttract(scale: 1000, threshold: 100,
+                operators: [.controlPointAttract(scale: 3000, threshold: 100,
                                                  target: Vec3(x: 0, y: 0, z: 0), flags: flags)],
                 renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
             var sim = ParticleSimulator(def: def, seed: 1)
-            return sim.step(0.05)[0].vel.x
+            return sim.step(1.0 / 60.0)[0].vel.x
         }
-        // 미가공 step = (1 − 25/100)·1000·0.05 = 37.5 인데 dist 25 보다 크다 → dist 로 잘린다.
+        // **[2026-08-20 dtScaled]** 스텝을 0.05(20fps)에서 1/60 로 바꾸고 그만큼 계수를 키웠다.
+        // 힘 계수는 이제 생 dt 가 아니라 `dtScaled = dt·min(1, 0.025/dt)^0.7` 를 받는데,
+        // 0.05 는 40fps 아래라 배수 0.6156 이 걸려 이 테스트들이 재려던 **곡선 모양**이 가려진다.
+        // 1/60 은 배수가 정확히 1.0 이라 산술이 그대로 드러난다 — 기대값은 전부 종전과 같다
+        // (1000 × 0.05 = 50 = 3000 / 60).
+        // 미가공 step = (1 − 25/100)·3000/60 = 37.5 인데 dist 25 보다 크다 → dist 로 잘린다.
         XCTAssertEqual(velX(flags: 2), -25, accuracy: 0.01, "기본 flags 2 → 클램프 ON")
         XCTAssertEqual(velX(flags: 0), -37.5, accuracy: 0.01, "bit1 을 끄면 잘리지 않는다")
     }
@@ -421,12 +432,17 @@ final class ParticleSimulatorTests: XCTestCase {
             initializers: [.lifetimeRandom(min: 100, max: 100)],
             operators: [.movement(gravity: Vec3(x: 0, y: 0, z: 0), drag: 0),
                         .vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 100,
-                                speedInner: 200, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))],
+                                speedInner: 600, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))],
             renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
         var sim = ParticleSimulator(def: def, seed: 1)
-        let a = sim.step(0.05)
+        // **[2026-08-20 dtScaled]** 스텝을 0.05(20fps)에서 1/60 로 바꾸고 그만큼 계수를 키웠다.
+        // 힘 계수는 이제 생 dt 가 아니라 `dtScaled = dt·min(1, 0.025/dt)^0.7` 를 받는데,
+        // 0.05 는 40fps 아래라 배수 0.6156 이 걸려 이 테스트들이 재려던 **곡선 모양**이 가려진다.
+        // 1/60 은 배수가 정확히 1.0 이라 산술이 그대로 드러난다 — 기대값은 전부 종전과 같다
+        // (1000 × 0.05 = 50 = 3000 / 60).
+        let a = sim.step(1.0 / 60.0)
         XCTAssertLessThan(a[0].vel.y, 0, "x̂ × ẑ = −ŷ — 양수면 회전이 거꾸로다")
-        XCTAssertEqual(a[0].vel.y, -5, accuracy: 0.01, "speed 100 × dt 0.05")
+        XCTAssertEqual(a[0].vel.y, -5, accuracy: 0.01, "speed 300 × dt 1/60")
     }
 
     /// `distanceInner == distanceOuter` 는 "램프 없음" 이 아니라 **폭 1 램프**다(invRange = 1.0).
@@ -439,12 +455,17 @@ final class ParticleSimulatorTests: XCTestCase {
                                 rate: 1000, burst: 0)],
                 initializers: [.lifetimeRandom(min: 100, max: 100)],
                 operators: [.vortex(axis: Vec3(x: 0, y: 0, z: 1), distanceInner: 0, distanceOuter: 0,
-                                    speedInner: 200, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))],
+                                    speedInner: 600, speedOuter: 0, offset: Vec3(x: 0, y: 0, z: 0))],
                 renderer: .sprite, maxCount: 1, startTime: 0, material: nil)
             var sim = ParticleSimulator(def: def, seed: 1)
-            return sim.step(0.05)[0].vel.y
+            return sim.step(1.0 / 60.0)[0].vel.y
         }
-        // dist 0.5 → t = 0.5 → speed = 100 → vel.y = −5
+        // **[2026-08-20 dtScaled]** 스텝을 0.05(20fps)에서 1/60 로 바꾸고 그만큼 계수를 키웠다.
+        // 힘 계수는 이제 생 dt 가 아니라 `dtScaled = dt·min(1, 0.025/dt)^0.7` 를 받는데,
+        // 0.05 는 40fps 아래라 배수 0.6156 이 걸려 이 테스트들이 재려던 **곡선 모양**이 가려진다.
+        // 1/60 은 배수가 정확히 1.0 이라 산술이 그대로 드러난다 — 기대값은 전부 종전과 같다
+        // (1000 × 0.05 = 50 = 3000 / 60).
+        // dist 0.5 → t = 0.5 → speed = 300 → vel.y = −5
         XCTAssertEqual(velY(atX: 0.5), -5, accuracy: 0.01)
         // dist 50 → t 가 1 로 클램프 → speed = speedOuter = 0. 종전 규약이면 200 이 나왔을 자리다.
         XCTAssertEqual(velY(atX: 50), 0, accuracy: 0.001, "폭 1 램프를 넘으면 speedOuter 다")
