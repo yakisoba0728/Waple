@@ -505,9 +505,9 @@ public struct RopeRenderOptions: Equatable {
 /// 키 부재 이미터(nil)는 기존 방출 경로(RNG 드로 순서 포함)와 비트동일.
 public struct PeriodicEmission: Equatable {
     public let durationMin: Float   // minperiodicduration
-    public let durationMax: Float   // maxperiodicduration (부재 시 min 승계)
+    public let durationMax: Float   // maxperiodicduration (부재 시 0 — 주입 없음)
     public let delayMin: Float      // minperiodicdelay
-    public let delayMax: Float      // maxperiodicdelay (부재 시 min 승계)
+    public let delayMax: Float      // maxperiodicdelay (부재 시 0 — 주입 없음)
     public let maxPerPeriod: Int    // maxtoemitperperiod (0 = 창 내 상한 없음)
     public init(durationMin: Float, durationMax: Float, delayMin: Float, delayMax: Float, maxPerPeriod: Int) {
         self.durationMin = durationMin; self.durationMax = durationMax
@@ -901,19 +901,40 @@ public struct ParticleSystemDef: Equatable {
         var boxDistanceMin: [Vec3?] = []
         // 주기 방출(minperiodicduration…maxtoemitperperiod @0x48e1c0–0x48e2b8)도 emitters 와 병렬.
         var emitterPeriodic: [PeriodicEmission?] = []
-        /// [추정] 주기 키가 하나라도 있으면 PeriodicEmission 조립(부재 채널은 중립 기본값:
-        /// duration 1s, delay 0, max부재→min 승계, quota 0=무상한 — WE 에디터 신규 이미터 기본 정황).
+        /// **[2026-08-20] "[추정]" 을 뗀다 — 이미터 base 파서(0x1401c1c70)를 끝까지 읽었다.**
+        ///
+        /// 다섯 키의 저장 위치와 처리가 전부 확정이다:
+        ///   minperiodicduration → [+0x18](0x1401c1d66)   maxperiodicduration → [+0x1c](0x1401c1dac)
+        ///   minperiodicdelay    → [+0x20](0x1401c1d89)   maxperiodicdelay    → [+0x24](0x1401c1dcf)
+        ///   maxtoemitperperiod  (0x1401c1dd4)
+        /// 그리고 함수 꼬리(0x1401c1deb-0x1401c1e0c)가 **min 을 max 로 클램프**한다:
+        ///   `[+0x18] = minss([+0x1c], [+0x18])` · `[+0x20] = minss([+0x24], [+0x20])`
+        /// max 는 건드리지 않는다 — 즉 min > max 면 min 이 내려가고 범위가 [max, max] 가 된다.
+        ///
+        /// 부재 키는 **0** 이다(주기 키에는 기본값 주입이 없다 — 주입기 0x1401b8e09 는 rate/duration
+        /// 만 다룬다). 종전 `?? 1`(duration)·`?? min 승계`는 중립값 추정이었다.
+        ///
+        /// 실물 도달 0: 주기 키를 쓰는 이미터 5개(thunderbolt ×2, thunderbolt_beam_child ×2,
+        /// water_droplets_periodic)가 **전건 min 을 명시**하고 **전건 min ≤ max** 라, 이 정정은
+        /// 동봉 동작을 바꾸지 않는다. 워크샵 자산의 역범위만 잡는다.
         func parsePeriodic(_ e: [String: Any]) -> PeriodicEmission? {
             let dMin = pfloat(e["minperiodicduration"]), dMax = pfloat(e["maxperiodicduration"])
             let pMin = pfloat(e["minperiodicdelay"]), pMax = pfloat(e["maxperiodicdelay"])
             let quota = pint(e["maxtoemitperperiod"])
             guard dMin != nil || dMax != nil || pMin != nil || pMax != nil || quota != nil else { return nil }
-            let lo = dMin ?? dMax ?? 1
-            let plo = pMin ?? pMax ?? 0
-            return PeriodicEmission(durationMin: lo, durationMax: dMax ?? lo,
-                                    delayMin: plo, delayMax: pMax ?? plo,
+            let dHi = dMax ?? 0, pHi = pMax ?? 0
+            return PeriodicEmission(durationMin: Swift.min(dMin ?? 0, dHi), durationMax: dHi,
+                                    delayMin: Swift.min(pMin ?? 0, pHi), delayMax: pHi,
                                     maxPerPeriod: max(0, quota ?? 0))
         }
+        // **[2026-08-20] `rate` 부재 기본값은 0 이 아니라 10.0 이다.** 이미터 기본값 주입기
+        // 0x1401b8e09 가 `movabs rcx, 0x4024000000000000`(= 10.0, 0x1401b8e59) 을 심는다 —
+        // `Json::Value::find`(0x140087490) 가 null 을 낼 때만이다. 실물 도달은 293건 중 4건
+        // (sphererandom 2 + boxrandom 2)으로 작지만, 그 4건은 종전에 **연속 방출이 없었다**.
+        //
+        // 테스트 픽스처 9곳이 `instantaneous` 만 주고 `rate` 를 생략하고 있었다 — 전부
+        // "버스트 전용" 의도라 `"rate":0` 을 명시해 기본값과 분리했다. 픽스처가 기본값에
+        // 묵시적으로 기대던 것을 드러낸 것이지, 기대를 바꾼 게 아니다.
         for case let e as [String: Any] in (json["emitter"] as? [Any] ?? []) {
             // F620: speedmin 부재 시 0, speedmax 부재 시 speedmin 승계(고정속도) — 부호 있는 초기속도.
             let speedMin = pfloat(e["speedmin"]) ?? 0
@@ -926,7 +947,7 @@ public struct ParticleSystemDef: Equatable {
                     directions: pvec3(e["directions"]) ?? Vec3(x: 1, y: 1, z: 0),
                     distanceMin: pfloat(e["distancemin"]) ?? 0,
                     distanceMax: pfloat(e["distancemax"]) ?? 0,
-                    rate: pfloat(e["rate"]) ?? 0,
+                    rate: pfloat(e["rate"]) ?? 10,   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 아래 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0,
                     sign: pvec3(e["sign"]) ?? Vec3(x: 0, y: 0, z: 0)))
                 emitterAudio.append(AudioProcessing.parse(e))
@@ -937,7 +958,7 @@ public struct ParticleSystemDef: Equatable {
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
                     distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    rate: pfloat(e["rate"]) ?? 0,
+                    rate: pfloat(e["rate"]) ?? 10,   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 아래 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
@@ -954,7 +975,7 @@ public struct ParticleSystemDef: Equatable {
                 emitters.append(.box(
                     origin: pvec3(e["origin"]) ?? Vec3(x: 0, y: 0, z: 0),
                     distanceMax: pvec3OrScalar(e["distancemax"]) ?? Vec3(x: 0, y: 0, z: 0),
-                    rate: pfloat(e["rate"]) ?? 0,
+                    rate: pfloat(e["rate"]) ?? 10,   // 주입기 0x1401b8e09 → 10.0(0x1401b8e59). 아래 주석 참조.
                     burst: pint(e["instantaneous"]) ?? 0))
                 emitterAudio.append(AudioProcessing.parse(e))
                 emitterSpeed.append(SIMD2(speedMin, speedMax))
