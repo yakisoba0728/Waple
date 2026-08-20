@@ -75,8 +75,11 @@ public struct ParticleSimulator {
     /// 아니라 **별도 선행 패스**로 돈다.
     private let boidsOps: [(sepThr: Float, nbrThr: Float, maxSpeed: Float,
                             sepF: Float, aliF: Float, cohF: Float, flags: Int)]
-    /// boids 서브샘플 위상용 프레임 카운터(실물 `[ctx+0x144]`).
-    private var frameCounter: UInt32 = 0
+    /// boids 서브샘플 위상용 프레임 카운터(실물 `[ctx+0x144]` 는 u32).
+    /// **Int 로 둔다** — `UInt32(n)` 같은 좁힘을 만들면 `maxcount` 가 신뢰 경계 밖이라
+    /// (`{"maxcount": 9e18}` 이면 `n` 이 UInt32 를 넘어) 트랩이 된다. 실물의 2^32 감김과는
+    /// 60fps 기준 2.3년 뒤에나 갈리므로 관측 밖이다.
+    private var frameCounter: Int = 0
     private let vortices: [(axis: SIMD3<Float>, dIn: Float, dOut: Float, sIn: Float, sOut: Float,
                             offset: SIMD3<Float>, audio: AudioProcessing?,   // F624: 오디오반응 속도 배수
                             centerForce: Float, ring: VortexRing?, flags: Int)]
@@ -1096,7 +1099,7 @@ public struct ParticleSimulator {
         let count = particles.count
         guard count > 0 else { return }
         let n = count / 100 + 1
-        let phase = Int(frameCounter % UInt32(n))
+        let phase = frameCounter % n          // n ≥ 1 이 위 정의로 보장된다
         frameCounter &+= 1
         let fn = Float(n)
         for op in boidsOps {
