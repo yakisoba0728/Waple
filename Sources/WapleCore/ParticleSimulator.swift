@@ -223,6 +223,13 @@ public struct ParticleSimulator {
                 let invRange: Float = dOut == dIn ? 1 : 1 / (dOut - dIn)
                 let redDelta: Float = rOut == rIn ? 1 : (rOut - rIn)
                 rmv.append((s3(target), dIn, invRange, rIn, redDelta))
+            case .inheritValueFromEvent:
+                // 이벤트 값 채널 미구현 — 파스·보존까지만. 형제 이니셜라이저
+                // `.inheritInitialValueFromEvent` 도 아래 apply 스위치에서 같은 이유로 무시한다.
+                // 종전에는 이 이름이 이니셜라이저 케이스에 있어 **도달조차 못 하고** 오퍼레이터
+                // 파스의 default 에서 경고와 함께 드롭됐다 — 이제 제 자리에서 보존된다.
+                // 착지하려면 부모 이벤트 컨텍스트(부모 파티클 인덱스 + 부모 시스템)가 먼저 필요하다.
+                break
             }
         }
         movements = mv.map { (gravity: $0.0, drag: $0.1) }
@@ -1072,7 +1079,7 @@ public struct ParticleSimulator {
             p.pos += SIMD3(randomRange(mn.x, mx.x, exponent: 1),
                            randomRange(mn.y, mx.y, exponent: 1),
                            randomRange(mn.z, mx.z, exponent: 1))
-        case .inheritControlPointVelocity, .inheritValueFromEvent, .remapInitialValue:
+        case .inheritControlPointVelocity, .inheritInitialValueFromEvent, .remapInitialValue:
             break   // 이벤트 시스템 연동 보류 — 시뮬 무시(RNG 드로 0)
         }
     }

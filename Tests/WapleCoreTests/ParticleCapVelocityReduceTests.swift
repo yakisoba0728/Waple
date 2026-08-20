@@ -172,9 +172,13 @@ final class ParticleCapVelocityReduceTests: XCTestCase {
         // **[2026-08-20]** `maintaindistancetocontrolpoint` 와 `boids` 를 목록에서 뺐다 — 둘 다 착지했다.
         // `collisionbox` 는 남긴다: WE 자신이 no-op 이라(opcode 0x17 핸들러가 VM 의 명령어 전진
         // 라벨) 구현하면 오히려 원본과 어긋난다.
+        // **[2026-08-20 섹션 오귀속 정정]** `inheritvaluefromevent` 도 뺐다 — 드롭이 맞는 동작이
+        // 아니라 **잘못된 섹션에 있어서** 드롭됐던 것이다. 이 이름은 오퍼레이터이므로 이제
+        // `ParticleOperator.inheritValueFromEvent` 로 보존된다(시뮬은 여전히 무시). 이 테스트와
+        // ParticleExtendedKeysTests 가 서로 반대 섹션을 못박고 있었고, 이쪽이 옳았다.
         for name in ["maintaindistancebetweencontrolpoints",
                      "collisionplane", "collisionsphere", "collisionbox", "collisionbounds",
-                     "collisionquad", "collisionmodel", "inheritvaluefromevent"] {
+                     "collisionquad", "collisionmodel"] {
             let d = ParticleSystemDef.parse(json("""
             {"emitter":[{"name":"boxrandom","rate":1}],"renderer":[{"name":"sprite"}],
              "operator":[{"name":"\(name)"}],"maxcount":10}

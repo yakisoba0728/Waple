@@ -536,9 +536,9 @@ final class ParticleExtendedKeysTests: XCTestCase {
         let def = ParticleSystemDef.parse(json("""
         {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":2}],
          "initializer":[{"name":"inheritcontrolpointvelocity","controlpoint":3,"min":0.5},
-                        {"name":"inheritinitialvaluefromevent","value":"size"},
-                        {"name":"inheritvaluefromevent"},
+                        {"name":"inheritinitialvaluefromevent","input":"setsize"},
                         {"name":"remapinitialvalue","output":"size","min":0,"max":2}],
+         "operator":[{"name":"inheritvaluefromevent"}],
          "renderer":[{"name":"sprite"}],"maxcount":4}
         """), material: nil)
         // **[2026-08-20 키 정정]** `scale` 은 이 원소의 키가 아니다(유령 필드였다) — 주입기
@@ -548,10 +548,25 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertTrue(def.initializers.contains(
             .inheritControlPointVelocity(controlPoint: 3, min: 0.5, max: 0.2)),
             "min 0.5 명시 · max 부재 → 주입 0.2 (0x1401baea3)")
-        XCTAssertTrue(def.initializers.contains(.inheritValueFromEvent(name: "inheritinitialvaluefromevent",
-                                                                       valueName: "size")))
-        XCTAssertTrue(def.initializers.contains(.inheritValueFromEvent(name: "inheritvaluefromevent",
-                                                                       valueName: nil)))
+        // **[2026-08-20 섹션 오귀속 정정]** 종전 픽스처는 두 이름을 **둘 다 `initializer[]`** 에
+        // 넣고 둘 다 거기 들어오는지 단언했다 — WE 가 절대 내보내지 않는 JSON 모양을 회귀
+        // 테스트로 고정하고 있었던 것이다. 실물 섹션은 갈린다(자산·로케일·x86 세 갈래 일치):
+        //   inheritinitialvaluefromevent → initializer[]  게이트 stricmp@0x1401cb069
+        //   inheritvaluefromevent        → operator[]     게이트 stricmp@0x1401cf157
+        // 하위 키도 `value` 가 아니라 `input` 이고(0x1401cb09d/0x1401cf192), 주입 기본이 서로
+        // 다르다 — setcolor(슬롯 0) vs setcoloropacity(슬롯 4).
+        XCTAssertTrue(def.initializers.contains(.inheritInitialValueFromEvent(input: .setSize)),
+                      "input:\"setsize\" → .setSize (매퍼 0x1402611f0 테이블 슬롯 8)")
+        XCTAssertTrue(def.operators.contains(.inheritValueFromEvent(input: .setColorOpacity)),
+                      "오퍼레이터이고, input 부재 시 주입 기본은 setcoloropacity (0x1401c0080 → 슬롯 4)")
+        // 반대쪽 섹션에 넣으면 받지 않는다 — WE 가 내보내지 않는 모양이므로 드롭이 옳다.
+        let wrongSection = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":0,"instantaneous":1}],
+         "initializer":[{"name":"inheritvaluefromevent"}],
+         "renderer":[{"name":"sprite"}],"maxcount":1}
+        """), material: nil)
+        XCTAssertTrue(wrongSection.initializers.isEmpty,
+                      "operator 전용 이름을 initializer[] 에서 받으면 오귀속이 되돌아온 것이다")
         XCTAssertTrue(def.initializers.contains(.remapInitialValue(output: "size",
                                                                    min: Vec3(x: 0, y: 0, z: 0),
                                                                    max: Vec3(x: 2, y: 2, z: 2))))

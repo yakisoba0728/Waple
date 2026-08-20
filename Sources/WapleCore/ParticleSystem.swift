@@ -28,6 +28,48 @@ public enum Emitter: Equatable {
     }
 }
 
+/// `inherit*valuefromevent` 의 `input` 열거 — 부모 파티클 이벤트에서 **어떤 채널을 어떻게**
+/// 가져올지 고른다. 이 저장소에서 직접 확인한 것:
+///
+/// - 키 이름은 `value` 가 아니라 **`input`** 이다(`lea rdx, 0x14048f74c "input"`
+///   @0x1401cb09d 이니셜라이저 · @0x1401cf192 오퍼레이터). `"value"` 를 읽는 코드는 없다.
+/// - 문자열→정수 매퍼는 0x1402611f0 이고 테이블은 **0x140484d90**(8바이트 포인터 배열)이다.
+///   슬롯 0..13 이 아래 14값이고, 14번 `none` · 15번 `sine` 부터는 **다른 열거**(파형)다.
+/// - 주입 기본값이 두 원소에서 **서로 다르다**: 이니셜라이저는 `[0x140484d90]` = 슬롯 0 =
+///   `setcolor`(주입기 0x1401bc980), 오퍼레이터는 `[0x140484db0]` = 슬롯 4 =
+///   `setcoloropacity`(주입기 0x1401c0080). 동봉 자산 2건이 둘 다 `input` 을 생략하므로
+///   **이 기본값이 곧 실효값**이다.
+///
+/// 인식 실패는 매퍼가 15를 돌려주고 핸들러의 `cmp eax,0xd / ja` 에 걸려 그 원소가 통째로
+/// no-op 이 된다 — 그래서 `init?` 이 `nil` 을 내고 호출부가 원소별 주입 기본을 적용한다.
+public enum EventValueInput: Int, Equatable {
+    case setColor = 0, multiplyColor, setOpacity, multiplyOpacity
+    case setColorOpacity, multiplyColorOpacity
+    case setVelocity, addVelocity, setSize, multiplySize
+    case setRotation, addRotation, setAngularVelocity, addAngularVelocity
+
+    /// WE 표기(소문자) → 열거. 키 부재이거나 미인식이면 `nil`(호출부가 원소별 주입 기본을 쓴다).
+    public init?(weName: String?) {
+        switch weName?.lowercased() {
+        case "setcolor": self = .setColor
+        case "multiplycolor": self = .multiplyColor
+        case "setopacity": self = .setOpacity
+        case "multiplyopacity": self = .multiplyOpacity
+        case "setcoloropacity": self = .setColorOpacity
+        case "multiplycoloropacity": self = .multiplyColorOpacity
+        case "setvelocity": self = .setVelocity
+        case "addvelocity": self = .addVelocity
+        case "setsize": self = .setSize
+        case "multiplysize": self = .multiplySize
+        case "setrotation": self = .setRotation
+        case "addrotation": self = .addRotation
+        case "setangularvelocity": self = .setAngularVelocity
+        case "addangularvelocity": self = .addAngularVelocity
+        default: return nil
+        }
+    }
+}
+
 public enum Initializer: Equatable {
     case lifetimeRandom(min: Float, max: Float, exponent: Float = 1)
     case sizeRandom(min: Float, max: Float, exponent: Float = 1)
@@ -73,8 +115,15 @@ public enum Initializer: Equatable {
     /// RNG 시퀀스가 밀리므로 시뮬 착지는 별도 라운드로 미룬다. `controlpoint` 클램프는 없다
     /// (대신 CP 배열 크기를 인덱스에 맞춰 키운다 — controlpointattract 의 `>=7u → 7` 과 다르다).
     case inheritControlPointVelocity(controlPoint: Int, min: Float, max: Float)
-    /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 inheritinitialvaluefromevent / inheritvaluefromevent.
-    case inheritValueFromEvent(name: String, valueName: String?)
+    /// 파스·보존 전용(이벤트 값 채널 미구현). 실물 **`inheritinitialvaluefromevent`** —
+    /// 이니셜라이저다. 형제 `inheritvaluefromevent` 는 **오퍼레이터**이므로 `ParticleOperator`
+    /// 쪽에 있다(종전에는 둘을 여기 한 케이스로 뭉쳐 놓아, WE 가 절대 내보내지 않는 JSON 모양을
+    /// 파스하고 있었다). 섹션 근거는 세 갈래가 일치한다:
+    ///   ① 자산 실측 — 동봉/설치본 각 1건이 정확히 `initializer[]` vs `operator[]` 에 있다
+    ///   ② 로케일 키 — `ui_editor_particle_element_initializer_…` vs `…_operator_…`
+    ///   ③ x86 — 이니셜라이저 게이트 `stricmp`@0x1401cb069, 오퍼레이터 게이트 @0x1401cf157
+    /// 주입 기본은 `setcolor`(0x1401bc980 → 테이블 슬롯 0). 실물 도달 1건은 `input` 을 생략한다.
+    case inheritInitialValueFromEvent(input: EventValueInput)
     /// 파스·보존 전용(이벤트 시스템 연동 보류). 실물 remapinitialvalue — 출력 리맵 스펙 미확정.
     case remapInitialValue(output: String?, min: Vec3?, max: Vec3?)
 }
@@ -295,6 +344,18 @@ public enum ParticleOperator: Equatable {
     case reduceMovementNearControlPoint(distanceInner: Float, distanceOuter: Float,
                                         reductionInner: Float, reductionOuter: Float,
                                         target: Vec3)
+    /// 파스·보존 전용(이벤트 값 채널 미구현). 실물 **`inheritvaluefromevent`** — **오퍼레이터**다.
+    /// 종전에는 이 이름이 `Initializer.inheritValueFromEvent` 로 들어가 있어 **도달 불가**였다:
+    /// WE 는 이 이름을 `operator[]` 에만 내보내는데 Waple 은 `initializer[]` 에서만 받았고,
+    /// 그래서 실자산에서는 오퍼레이터 파스의 `default` 로 떨어져 경고와 함께 드롭됐다.
+    ///
+    /// 섹션 근거(세 갈래 일치): ① 자산 실측 — 동봉/설치본 각 1건이 `operator[]` 에 있다
+    /// ② 로케일 키 `ui_editor_particle_element_operator_inheritvaluefromevent`
+    /// ③ x86 게이트 `stricmp`@0x1401cf157(이니셜라이저 게이트 @0x1401cb069 와 다른 루프).
+    ///
+    /// 하위 키는 `input` 하나뿐이고(0x1401cf192), 주입 기본이 형제와 **다르다** —
+    /// `setcoloropacity`(주입기 0x1401c0080 → 테이블 슬롯 4). 이니셜라이저 쪽은 `setcolor`(슬롯 0)다.
+    case inheritValueFromEvent(input: EventValueInput)
 }
 
 public enum RemapOutput: Equatable {
@@ -1006,10 +1067,11 @@ public struct ParticleSystemDef: Equatable {
                     controlPoint: pint(i["controlpoint"]) ?? 0,
                     min: injected(i, "min", 0.1),      // 0x1401bade5 (플래그 무관)
                     max: injected(i, "max", 0.2)))     // 0x1401baea3 (플래그 무관)
-            case "inheritinitialvaluefromevent", "inheritvaluefromevent":
-                // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
-                inits.append(.inheritValueFromEvent(name: i["name"] as? String ?? "",
-                                                    valueName: i["value"] as? String))
+            case "inheritinitialvaluefromevent":
+                // 이벤트 값 채널 미구현 — 파스·보존까지만(시뮬 무시).
+                // 하위 키는 `input` 하나뿐이다(0x1401cb09d). 부재 시 주입 기본 `setcolor`.
+                inits.append(.inheritInitialValueFromEvent(
+                    input: EventValueInput(weName: i["input"] as? String) ?? .setColor))
             case "remapinitialvalue":
                 // 이벤트 시스템 연동 보류 — 파스·보존까지만(시뮬 무시).
                 inits.append(.remapInitialValue(output: i["output"] as? String,
@@ -1371,6 +1433,11 @@ public struct ParticleSystemDef: Equatable {
                     reductionInner: injected(o, "reductioninner", 100),
                     reductionOuter: injected(o, "reductionouter", 0),
                     target: Vec3(x: 0, y: 0, z: 0)))
+            case "inheritvaluefromevent":
+                // 이벤트 값 채널 미구현 — 파스·보존까지만(시뮬 무시). 주입 기본은 이니셜라이저
+                // 형제와 다르다: `setcoloropacity`(0x1401c0080 → 테이블 슬롯 4).
+                ops.append(.inheritValueFromEvent(
+                    input: EventValueInput(weName: o["input"] as? String) ?? .setColorOpacity))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
             }
