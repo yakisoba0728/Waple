@@ -139,6 +139,21 @@ public enum ParticleOperator: Equatable {
     /// remapvalue 확장 파이프라인(엔진 어휘 전종 — input/operation/transform/동사형 출력/blend 창).
     /// 확장 키가 하나라도 있거나 출력이 velocity/speed 외 동사형이면 이 케이스로 파스된다.
     case remapValueEx(spec: RemapSpec)
+    /// `capvelocity` — 속도 크기 상한. 실물 VM 핸들러 op 0x12 @0x1402446fd:
+    /// `s = min(1, maxspeed·rsqrt(|v|²)); v *= s` — 방향 보존 스칼라 클램프다.
+    /// 실물 주입기 0x1401bfab0: `maxspeed` 부재 기본값 = **100**(0x1404928f8, 2D 픽셀 단위 경로)
+    /// / 1.0(0x140492704, 월드 단위 경로). Waple 은 2D 픽셀 경로만 쓰므로 100 을 심는다.
+    case capVelocity(maxSpeed: Float)
+    /// `reducemovementnearcontrolpoint` — CP 근처에서 속도를 감쇠. 실물 VM 핸들러 op 0x0d
+    /// @0x14024268f 를 그대로 옮긴 식(레지스터 주석은 ParticleSimulator.applyReduceMovement 참조):
+    /// `t = clamp01((|p−cp| − distIn)·invRange); r = clamp01((redIn + t·redDelta)·dt); v *= (1 − r)`.
+    /// `invRange`/`redDelta` 는 ctor(0x1401cd38d–0x1401cd3e7)가 미리 계산해 레코드에 굽는 값이고,
+    /// 퇴화 케이스의 대입값(invRange=−0.0, redDelta=1.0)까지 원본과 같게 재현한다.
+    /// 실물 주입기 0x1401be810 부재 기본값: controlpoint=0(정수) · distanceinner=100 · distanceouter=350
+    /// · reductioninner=100(0x140492840, 조건 없는 double) · reductionouter=0.
+    case reduceMovementNearControlPoint(distanceInner: Float, distanceOuter: Float,
+                                        reductionInner: Float, reductionOuter: Float,
+                                        target: Vec3)
 }
 
 public enum RemapOutput: Equatable {
@@ -886,6 +901,34 @@ public struct ParticleSystemDef: Equatable {
                 } else {
                     WapleLog.warn("[Waple] remapvalue unsupported output dropped: \(outputName ?? "nil")")
                 }
+            case "capvelocity":
+                // G-C2-01. 주입기 0x1401bfab0 이 `maxspeed` 부재에 100 을 심는다(2D 경로 상수
+                // 0x1404928f8; 월드 단위 경로는 1.0). 동봉 3인스턴스는 전건 maxspeed 명시라
+                // 이 기본값이 실제로 도달하진 않지만 기록을 원본에 맞춘다.
+                //
+                // blendinstart/blendinend(동봉 3건 전건 보유)는 **여기서 소비하지 않는다** — 실물은
+                // 블렌드 창이 유의미할 때만 opcode 를 0x12→0x26 으로 올려 가중 핸들러
+                // (0x140244790)를 타고, 그 가중치는 `w=clamp01((f−inStart)·invIn)·clamp01((outStart−f)·invOut)`
+                // (0x14022a530) 로 `s = 1 + w·(s₀−1)` 를 만든다. 오퍼레이터 공통 블렌딩은 G-C2-03 의
+                // 몫이라 여기선 무가중(w≡1) 적용이다 — 드롭보다 원본에 가깝고, G-C2-03 이 들어오면
+                // 이 자리만 가중치를 곱하면 된다.
+                ops.append(.capVelocity(maxSpeed: injected(o, "maxspeed", 100)))
+            case "reducemovementnearcontrolpoint":
+                // G-C2-01. 동봉 9인스턴스(오퍼레이터 미구현 중 최다)로 도달이 가장 크다.
+                // controlpoint 는 주입기 0x1401be834–0x1401be87f 가 **정수 0 을 심으므로**
+                // (타입 태그 1=intValue @0x1401be862, 값 0 @0x1401be87f) 키 부재도 CP0 바인딩이다
+                // — controlpointattract 의 "키 있을 때만" 규약과 다르다.
+                // 실제로 thunderbolt.json 은 CP 무명시(→CP0)와 controlpoint:1 을 한 쌍으로 쓴다.
+                // 실물 ctor 0x1401cd2ec/0x1401cd354 는 `cp = min(asUInt(controlpoint), 7)` 로
+                // 잘라 쓰므로 범위 밖도 드롭하지 않고 클램프한다.
+                let cpid = min(max(0, pint(o["controlpoint"]) ?? 0), 7)
+                attractCPIds.append((op: ops.count, cp: cpid))
+                ops.append(.reduceMovementNearControlPoint(
+                    distanceInner: injected(o, "distanceinner", 100),
+                    distanceOuter: injected(o, "distanceouter", 350),
+                    reductionInner: injected(o, "reductioninner", 100),
+                    reductionOuter: injected(o, "reductionouter", 0),
+                    target: Vec3(x: 0, y: 0, z: 0)))
             case let other:
                 WapleLog.warn("[Waple] SP4 unsupported operator dropped: \(other ?? "nil")")
             }
@@ -1167,9 +1210,17 @@ public struct ParticleSystemDef: Equatable {
             for (id, off) in ov.controlPoints where id >= 0 && id < 8 { controlPoints[id] = off }
         }
         for (i, cpid) in attractCPIds {
-            if case let .controlPointAttract(scale, threshold, _, deleteThreshold) = ops[i] {
+            switch ops[i] {
+            case let .controlPointAttract(scale, threshold, _, deleteThreshold):
                 ops[i] = .controlPointAttract(scale: scale, threshold: threshold,
                                               target: controlPoints[cpid], deleteThreshold: deleteThreshold)
+            case let .reduceMovementNearControlPoint(dIn, dOut, rIn, rOut, _):
+                // attract 와 같은 자리에서 CP 를 굽는다(인스턴스 오버라이드 반영 후).
+                ops[i] = .reduceMovementNearControlPoint(distanceInner: dIn, distanceOuter: dOut,
+                                                         reductionInner: rIn, reductionOuter: rOut,
+                                                         target: controlPoints[cpid])
+            default:
+                break
             }
         }
 
