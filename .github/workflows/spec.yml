@@ -103,6 +103,26 @@ jobs:
       - name: Effect texture resolution
         run: python3 scripts/spec/check_effect_texture_resolution.py
 
+      # 정본이 **조용히 줄어드는 것**을 막는다.
+      #
+      # spec/ 아래 정본은 measure_*.py 가 만들고, 그 입력은 WE 설치본과 워크샵 코퍼스다.
+      # 입력이 없으면 대부분 exit(1) 로 막지만 안 막는 것들이 있었고, 그것들은 **입력
+      # 0건에서 측정한 결과를 `확정` 으로 기록하며 성공**했다. 2026-08-20 실측:
+      #   · measure_binaries.py    entries 32 → 0  ("0 항목" 을 찍고도 rc=0, 근거 706줄 삭제)
+      #   · measure_mdl_deep.py    파일수/메시수 451/986 → 0/0, 관측버전 {}
+      #   · measure_render_pass.py d3d11Slots 9개 키 → 빔
+      # 입력이 **아예 없을 때**보다 **부분적으로만 있을 때**가 더 위험하다 — 전자는 파일
+      # 열기에서 죽지만 후자는 끝까지 돌아 성공을 보고한다. "WE_ROOT 가 설정됐는가" 같은
+      # 조건으로는 못 잡는다.
+      #
+      # 가드는 생성기 33개가 전부 지나는 단일 관문 specfmt.dump 에 있다. 이 검사는 그
+      # 가드가 살아 있는지를 본다: 양성 대조(줄어드는 쓰기는 막혀야) · 음성 대조(늘거나
+      # 그대로면 통과해야) · 실사 대조(커밋된 정본에서 위 열화를 재구성해 잡히는지) ·
+      # 관문 우회(생성기가 specfmt.dump 를 건너뛰지 않는지). 쓰기는 전부 임시 디렉터리로
+      # 가므로 이 검사는 리포의 정본을 건드리지 않는다.
+      - name: Spec shrink guard
+        run: python3 scripts/spec/check_spec_shrink_guard.py
+
       # 동봉 에셋이 매니페스트와 어긋나면 실패한다.
       #
       # measure_assets.py 를 돌려 git diff 로 보는 방법은 쓰지 않는다 — 그 스크립트의

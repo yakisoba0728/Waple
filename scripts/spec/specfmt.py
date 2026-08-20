@@ -45,10 +45,102 @@ def load(path):
         return json.load(fh)
 
 
-def dump(obj, path):
+class SpecShrinkError(RuntimeError):
+    """정본을 덮어쓰면 근거가 줄어드는 상황."""
+
+
+# 근거는 조용히 줄어들지 않는다.
+#
+# 생성기 대부분은 입력(설치본·워크샵 코퍼스·바이너리)이 없으면 exit(1) 로 막는다. 그런데
+# 막지 않는 생성기가 둘 있었고, 그것들은 **입력 0건에서 측정한 결과를 `확정` 으로 기록하며
+# 성공했다**. 2026-08-20 실측:
+#   · measure_binaries.py  — entries 32 → 0. "0 항목" 을 찍고도 rc=0, 근거 706줄 삭제
+#   · measure_mdl_deep.py  — entries 는 15 그대로인데 파일수/메시수 451/986 → 0/0,
+#                            관측버전 {} , 근거 ref 가 "전수 451개" → "전수 0개"
+# 30개 생성기에 가드를 하나씩 다는 대신 정본을 쓰는 **단일 관문**에서 막는다. 앞으로 추가될
+# 생성기도 자동으로 보호된다(그게 이 위치를 고른 이유다).
+#
+# 규칙 둘. 둘 다 "있던 근거가 사라지는 것"만 잡고 늘어나는 쪽은 통과시킨다 —
+# 재측정으로 수치가 커지거나 항목이 추가되는 것은 정상이다.
+#   1) entries 의 id 집합에서 **빠지는 id** 가 있으면 거부      (binaries 32→0 을 잡는다)
+#   2) 값이 **양수 → 0** 이거나 **비지 않은 컨테이너 → 빔** 이면 거부  (mdl-deep 을 잡는다)
+#
+# 진짜로 줄여야 할 때(항목 폐기, 코퍼스 축소)는 사람이 명시한다:
+#   dump(..., allow_shrink=True) 또는 환경변수 WAPLE_SPEC_ALLOW_SHRINK=1
+def _shrinks(old, new, path=""):
+    """old 에 있던 근거가 new 에서 사라진 자리를 모은다. 커진 쪽은 보지 않는다."""
+    out = []
+    if isinstance(old, bool) or isinstance(new, bool):
+        return out                       # bool 은 측정량이 아니라 스위치다
+    if isinstance(old, (int, float)) and isinstance(new, (int, float)):
+        if old > 0 and new == 0:
+            out.append(f"{path}: {old} → 0")
+        return out
+    if isinstance(old, dict) and isinstance(new, dict):
+        if old and not new:
+            out.append(f"{path}: {len(old)}개 키 → 빔")
+            return out
+        for k in old:
+            if k in new:
+                out += _shrinks(old[k], new[k], f"{path}.{k}" if path else str(k))
+        return out
+    if isinstance(old, list) and isinstance(new, list):
+        if old and not new:
+            out.append(f"{path}: {len(old)}개 원소 → 빔")
+            return out
+        for i, (o, n) in enumerate(zip(old, new)):
+            out += _shrinks(o, n, f"{path}[{i}]")
+        return out
+    if isinstance(old, str) and isinstance(new, str):
+        if old and not new:
+            out.append(f"{path}: 문자열 → 빔")
+    return out
+
+
+def shrink_report(new_doc, path):
+    """`new_doc` 으로 `path` 를 덮어쓸 때 사라지는 근거를 열거한다.
+
+    파일이 아직 없거나 정본 형태가 아니면 검사할 이전 상태가 없으므로 빈 목록.
+    """
+    try:
+        old = load(path)
+    except (FileNotFoundError, ValueError):
+        return []
+    if not isinstance(old, dict) or not isinstance(new_doc, dict):
+        return []
+    old_entries, new_entries = old.get("entries"), new_doc.get("entries")
+    if not isinstance(old_entries, list) or not isinstance(new_entries, list):
+        return []
+    out = []
+    old_by = {e.get("id"): e for e in old_entries if isinstance(e, dict)}
+    new_by = {e.get("id"): e for e in new_entries if isinstance(e, dict)}
+    gone = sorted(str(i) for i in old_by if i not in new_by)
+    if gone:
+        shown = ", ".join(gone[:8]) + (f" 외 {len(gone) - 8}건" if len(gone) > 8 else "")
+        out.append(f"사라진 항목 {len(gone)}개: {shown}")
+    for i, oe in old_by.items():
+        ne = new_by.get(i)
+        if ne is not None:
+            out += _shrinks(oe.get("value"), ne.get("value"), str(i))
+    return out
+
+
+def dump(obj, path, allow_shrink=False):
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    if not allow_shrink and os.environ.get("WAPLE_SPEC_ALLOW_SHRINK") != "1":
+        problems = shrink_report(obj, path)
+        if problems:
+            head = problems[:20]
+            tail = f"\n  … 외 {len(problems) - 20}건" if len(problems) > 20 else ""
+            raise SpecShrinkError(
+                f"{path}: 근거가 줄어든다 — 입력이 빠진 채로 측정했을 가능성이 높다.\n"
+                + "\n".join("  · " + p for p in head) + tail
+                + "\n  먼저 WE_ROOT / WE_WORKSHOP 이 설정돼 있는지 확인하라."
+                + "\n  정말 줄이는 게 맞으면 dump(..., allow_shrink=True) 또는"
+                  " WAPLE_SPEC_ALLOW_SHRINK=1."
+            )
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(obj, fh, indent=1, ensure_ascii=False, sort_keys=False)
         fh.write("\n")

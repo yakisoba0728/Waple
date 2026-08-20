@@ -339,8 +339,12 @@ def material_sources():
 def texelsize_expressions():
     """g_TexelSize 를 쓰는 내장 셰이더의 오프셋 식을 그대로 뽑는다."""
     out = {}
-    for root, _dirs, files in os.walk(SHADERS):
-        for fn in files:
+    # os.walk 는 파일시스템 순서대로 준다 — 머신이 바뀌면 같은 입력에서도 항목 순서가 달라져
+    # 정본이 +95/-95 로 요동친다(내용은 동일). 그런 diff 가 반복되면 리뷰어가 정본을 안 믿는다.
+    # 재현 스크립트의 출력은 입력이 같으면 바이트가 같아야 하므로 여기서 정렬해 못 박는다.
+    for root, dirs, files in os.walk(SHADERS):
+        dirs.sort()
+        for fn in sorted(files):
             if not fn.endswith((".vert", ".frag")):
                 continue
             path = os.path.join(root, fn)
@@ -357,8 +361,12 @@ def shader_consumers(names):
     out = {n: [] for n in names}
     if not os.path.isdir(SHADERS):
         return out
-    for root, _dirs, files in os.walk(SHADERS):
-        for fn in files:
+    # os.walk 는 파일시스템 순서대로 준다 — 머신이 바뀌면 같은 입력에서도 항목 순서가 달라져
+    # 정본이 +95/-95 로 요동친다(내용은 동일). 그런 diff 가 반복되면 리뷰어가 정본을 안 믿는다.
+    # 재현 스크립트의 출력은 입력이 같으면 바이트가 같아야 하므로 여기서 정렬해 못 박는다.
+    for root, dirs, files in os.walk(SHADERS):
+        dirs.sort()
+        for fn in sorted(files):
             if not fn.endswith((".frag", ".vert", ".geom", ".h")):
                 continue
             path = os.path.join(root, fn)
