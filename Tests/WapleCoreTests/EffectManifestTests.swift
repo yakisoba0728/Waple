@@ -201,24 +201,55 @@ final class EffectManifestTests: XCTestCase {
         XCTAssertNil(m.fbos[1].format, "format 키 부재도 nil")
     }
 
-    /// `clear` 파스: 성분 수 1/3/4 를 받고, **숫자가 아닌 토큰이 하나라도 있으면 전체를 버린다**.
-    /// compactMap 으로 조용히 버리면 `"0 0 0 x"` 가 3수(RGB)로 읽혀 알파 1 이 날조된다.
-    func testClearColorParsingAcceptsOneThreeFourAndRejectsGarbage() {
+    /// `clear` 파스 — **원본 파서(`0x1401e7629`-`0x1401e7777`)에 맞춘다.**
+    ///
+    /// 처음 구현은 1/3/4 성분을 받고 콤마·탭도 구분자로 봤는데, 원본을 뜯어 보니 셋 다 달랐다.
+    /// 이 테스트는 그 정정을 고정한다 — 관대한 쪽이 아니라 **원본과 같은 쪽**이 정답이다.
+    func testClearColorParsingMatchesOriginalParser() {
+        // 정상: 스페이스 구분 4성분.
         XCTAssertEqual(EffectManifest.parseClearColor("0 0 0 0"), SIMD4<Float>(0, 0, 0, 0))
         XCTAssertEqual(EffectManifest.parseClearColor("1 0.5 0.25 0.125"), SIMD4<Float>(1, 0.5, 0.25, 0.125))
-        XCTAssertEqual(EffectManifest.parseClearColor("0.2 0.4 0.6"), SIMD4<Float>(0.2, 0.4, 0.6, 1),
-                       "3수는 RGB — 알파는 1")
-        XCTAssertEqual(EffectManifest.parseClearColor("0.5"), SIMD4<Float>(0.5, 0.5, 0.5, 1),
-                       "1수는 그레이스케일 브로드캐스트")
-        XCTAssertNil(EffectManifest.parseClearColor("0 0 0 x"), "부분 파스를 3수로 오독하면 안 된다")
-        XCTAssertNil(EffectManifest.parseClearColor("0 0"), "2수는 의미가 정의돼 있지 않다")
-        XCTAssertNil(EffectManifest.parseClearColor(""))
-        XCTAssertNil(EffectManifest.parseClearColor(42), "문자열이 아닌 값")
-        // 리터럴 nil 을 Any? 파라미터에 바로 넘기면 오버로드 해석이 흔들려 컴파일이 갈린다 — 명시 변수로 넘긴다.
+        XCTAssertEqual(EffectManifest.parseClearColor("0  0   1 1"), SIMD4<Float>(0, 0, 1, 1),
+                       "연속 스페이스는 빈 토큰을 만들지 않는다")
+
+        // ③ 빈 문자열은 **클리어 안 함이 아니라 (0,0,0,0) 클리어**다(`0x1401e7641`).
+        XCTAssertEqual(EffectManifest.parseClearColor(""), SIMD4<Float>(0, 0, 0, 0),
+                       "원본은 빈 문자열에도 clear 비트를 세우고 4성분을 0 으로 채운다")
+
+        // ② 4성분이 아니면 clear 비트 자체가 안 선다(`0x1401e777b` 로 빠진다).
+        XCTAssertNil(EffectManifest.parseClearColor("0.5"), "1성분 그레이스케일 확장은 원본에 없다")
+        XCTAssertNil(EffectManifest.parseClearColor("0.2 0.4 0.6"), "3성분 RGB+알파1 도 원본에 없다")
+        XCTAssertNil(EffectManifest.parseClearColor("0 0"))
+        XCTAssertNil(EffectManifest.parseClearColor("0 0 0 0 0"), "5성분")
+
+        // ① 구분자는 스페이스뿐 — 콤마/탭은 구분자가 아니다(`cmp byte ptr [rdi], 0x20` 만 있다).
+        XCTAssertNil(EffectManifest.parseClearColor("0,0,0,0"), "콤마 구분은 원본이 안 받는다")
+        XCTAssertNil(EffectManifest.parseClearColor("0\t0\t0\t0"), "탭 구분도 안 받는다")
+
+        // 타입/방어.
+        XCTAssertNil(EffectManifest.parseClearColor("0 0 0 x"))
+        XCTAssertNil(EffectManifest.parseClearColor(42), "문자열이 아닌 값 — 원본도 타입 태그 4(string)만 받는다")
         let absent: Any? = nil
         XCTAssertNil(EffectManifest.parseClearColor(absent))
-        XCTAssertNil(EffectManifest.parseClearColor("nan 0 0 0"), "비유한값은 MTLClearColor 로 못 보낸다")
+        // 비유한값 거부는 원본에 없는 우리 방어다 — MTLClearColor 로 직행하는 값이라 막는다.
+        XCTAssertNil(EffectManifest.parseClearColor("nan 0 0 0"))
         XCTAssertNil(EffectManifest.parseClearColor("inf 0 0 0"))
+    }
+
+    /// 원본은 `name` **또는** `format` 이 없으면 그 fbo 선언을 통째로 버린다
+    /// (`0x1401e7440`/`0x1401e744f` → `jne 0x1401e7964`, 벡터에 push 안 함).
+    /// 참조는 전부 이름 기반이고 이름→인덱스 변환이 루프 **뒤**에 일어나므로, 벡터가 압축돼도
+    /// 어긋나지 않는다 — 우리 소비처도 이름 키 사전이라 같다.
+    func testFboWithoutFormatKeyIsDroppedLikeTheOriginalParser() throws {
+        let json = """
+        {"passes":[{"material":"materials/effects/a.json","target":"_rt_B"}],
+         "fbos":[{"name":"_rt_NoFormat","scale":1},
+                 {"name":"_rt_B","scale":1,"format":"rgba8888"},
+                 {"scale":1,"format":"r8"}]}
+        """
+        let m = try XCTUnwrap(EffectManifest.parse(Data(json.utf8)))
+        XCTAssertEqual(m.fbos.map(\.name), ["_rt_B"],
+                       "format 없는 선언과 name 없는 선언이 둘 다 빠져야 한다")
     }
 
     /// 동봉 자산 전수 대조: 이 파서가 **실물에 나오는 포맷 문자열 5종을 전부** 안다.
@@ -230,7 +261,23 @@ final class EffectManifestTests: XCTestCase {
             XCTAssertNotNil(EffectManifest.FBO.Format(rawValue: name),
                             "동봉 자산이 실제로 쓰는 포맷 \(name) 을 enum 이 모른다")
         }
-        XCTAssertEqual(Set(EffectManifest.FBO.Format.allCases.map(\.rawValue)), Set(observed),
-                       "실물에 없는 포맷을 지어내지도, 있는 걸 빠뜨리지도 않는다")
+        // 표 자체는 동봉 자산이 아니라 **원본 바이너리**에서 왔다. `0x1401e53a0` 이 만드는 해시맵의
+        // 19개 엔트리(소멸자 루프 `mov ebx, 0x13`, initializer_list 760 = 19 × 40) + 파서가 맵 조회
+        // 전에 strcmp 로 가로채는 백버퍼 2종 = 21종. 동봉 5종만 넣으면 워크샵 저작이 쓰는 나머지가
+        // 조용히 rgba8 로 떨어지므로 전부 싣는다.
+        let originalTable = [
+            "rgba8888", "rgb888", "rg88", "r8", "rgb565", "bc7", "dxt5", "dxt3", "dxt1",
+            "rgba16161616f", "rgb161616f", "rg1616f", "r16f", "rgba16161616", "rgb161616",
+            "rgba16161616S", "rgb161616S", "rgba8888s", "rgba1010102",
+            "rgba_backbuffer", "rgb_backbuffer",
+        ]
+        XCTAssertEqual(originalTable.count, 21)
+        XCTAssertEqual(Set(EffectManifest.FBO.Format.allCases.map(\.rawValue)), Set(originalTable),
+                       "원본 표와 정확히 일치해야 한다 — 없는 걸 지어내지도, 있는 걸 빠뜨리지도 않는다")
+        // 철자 함정: 16비트 SNORM 둘은 **대문자 S**, rgba8888s 는 **소문자 s**다(원본 .rdata 실측).
+        XCTAssertNotNil(EffectManifest.FBO.Format(rawValue: "rgba16161616S"))
+        XCTAssertNil(EffectManifest.FBO.Format(rawValue: "rgba16161616s"), "소문자 s 는 다른 문자열이다")
+        XCTAssertNotNil(EffectManifest.FBO.Format(rawValue: "rgba8888s"))
+        XCTAssertNil(EffectManifest.FBO.Format(rawValue: "rgba8888S"))
     }
 }

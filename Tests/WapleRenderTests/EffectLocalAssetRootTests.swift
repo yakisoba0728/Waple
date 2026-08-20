@@ -96,3 +96,60 @@ final class EffectLocalAssetRootTests: XCTestCase {
         }
     }
 }
+
+/// G-B2-06 정정(2026-08-20): 씬의 `effects[].passes[]` 오버라이드는 매니페스트 `passes[]` 의
+/// **원본 배열 인덱스**로 정렬된다 — 명령 패스(`command:"copy"`/`"swap"`)도 슬롯을 하나 쓴다.
+///
+/// 이 리포는 여기서 한 번 틀렸다. "motionblur 는 effect.json 3패스인데 씬 패스는 2개,
+/// fluidsimulation 은 20인데 18개" 라는 **개수 세기**만 보고 "씬은 셰이더 패스만 담는다" 고
+/// 결론내 셰이더 전용 커서를 넣었는데, 원본 파서에는 명령 패스를 건너뛰는 분기 자체가 없다.
+/// 루프 증가점(`0x1401e814e`)으로 가는 분기는 conditions 탈락 하나뿐이고, 씬 조회는
+/// `0x1401e7a6e` 의 `mov edx, ebx` — 같은 원본 인덱스다.
+///
+/// 개수가 안 맞았던 진짜 이유는 **범위 밖 = 오버라이드 없음**이라서다. fluidsimulation 은
+/// 명령 패스가 배열 끝이라 에디터가 후행 빈 원소를 잘라냈고, motionblur 는 중간이라 씬
+/// `passes[1]` 이 빈 `{}` 로 남았다.
+final class ScenePassOverrideIndexTests: XCTestCase {
+
+    private func pass(_ tag: String) -> SceneEffectPass {
+        var p = SceneEffectPass()
+        p.constants[tag] = [1]
+        return p
+    }
+
+    /// motionblur 배치 그대로: 매니페스트 [0]셰이더 [1]copy [2]셰이더, 씬은 2개.
+    /// 셰이더 패스 1(원본 인덱스 2)은 씬 `passes[1]` 이 **아니라** 범위 밖을 받아야 한다.
+    func testCommandPassConsumesASceneSlot() {
+        let scene = [pass("first"), SceneEffectPass()]
+        XCTAssertEqual(SceneRenderer.sceneOverride(forRawPassIndex: 0, in: scene).constants["first"], [1],
+                       "셰이더 패스 0 은 씬 passes[0] 을 받는다")
+        XCTAssertTrue(SceneRenderer.sceneOverride(forRawPassIndex: 1, in: scene).constants.isEmpty,
+                      "copy 패스가 씬 passes[1](빈 객체)을 소비한다")
+        XCTAssertTrue(SceneRenderer.sceneOverride(forRawPassIndex: 2, in: scene).constants.isEmpty,
+                      "셰이더 패스 1 은 원본 인덱스 2 — 범위 밖이라 오버라이드가 없다")
+    }
+
+    /// 범위 밖은 에러도 클램프도 랩어라운드도 아니다. 마지막 원소로 클램프하면 앞 패스의
+    /// 상수가 뒤 패스에 새는데, 그건 원본에 없는 동작이다.
+    func testOutOfRangeYieldsEmptyOverrideNotAClamp() {
+        let scene = [pass("a"), pass("b")]
+        XCTAssertEqual(SceneRenderer.sceneOverride(forRawPassIndex: 1, in: scene).constants["b"], [1])
+        XCTAssertTrue(SceneRenderer.sceneOverride(forRawPassIndex: 2, in: scene).constants.isEmpty)
+        XCTAssertTrue(SceneRenderer.sceneOverride(forRawPassIndex: 99, in: scene).constants.isEmpty)
+        XCTAssertTrue(SceneRenderer.sceneOverride(forRawPassIndex: -1, in: []).constants.isEmpty)
+        XCTAssertTrue(SceneRenderer.sceneOverride(forRawPassIndex: 0, in: []).constants.isEmpty)
+    }
+
+    /// fluidsimulation 배치: 명령 패스가 **끝**이라 원본 인덱스 규약과 셰이더 전용 커서가
+    /// 우연히 같은 답을 낸다 — 이 자산만 보면 규약을 판별할 수 없다는 사실 자체를 고정한다.
+    func testTrailingCommandPassesCannotDiscriminateTheRule() {
+        let scene = (0..<18).map { pass("p\($0)") }
+        for i in 0..<18 {
+            XCTAssertEqual(SceneRenderer.sceneOverride(forRawPassIndex: i, in: scene).constants["p\(i)"], [1])
+        }
+        for i in 18..<20 {
+            XCTAssertTrue(SceneRenderer.sceneOverride(forRawPassIndex: i, in: scene).constants.isEmpty,
+                          "후행 swap 패스는 범위 밖 — 오버라이드 없음")
+        }
+    }
+}

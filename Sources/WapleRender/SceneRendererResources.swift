@@ -635,12 +635,27 @@ extension SceneRenderer {
         var anyAudio = false
         // 출력 패스(target==nil)가 DIRECTDRAW 면 체인 결과가 premultiplied — EffectGPU 로 실어 보낸다.
         var outputPremultiplied = false
-        // G-B2-06: 씬의 `effects[].passes[]` 는 **셰이더 패스만** 담는다(실측: motionblur 는
-        // effect.json 3패스 = 셰이더 2 + copy 1 인데 프리뷰 씬 패스는 2개, fluidsimulation 은
-        // 20 = 18 + swap 2 인데 씬 패스는 18개). 종전엔 매니페스트 인덱스를 그대로 씬 패스
-        // 인덱스로 써서, command 패스가 마지막 셰이더 패스보다 **앞**에 있으면 그 뒤가 전부
-        // 한 칸씩 밀렸다. 셰이더 패스만 세는 커서를 따로 둔다.
-        var scenePassCursor = 0
+        // G-B2-06 **정정(2026-08-20)**: 씬의 `effects[].passes[]` 는 매니페스트 `passes[]` 의
+        // **원본 배열 인덱스**로 정렬된다 — 명령 패스도 슬롯을 하나 소비한다.
+        //
+        // 종전엔 반대로 갔다. "motionblur 는 effect.json 3패스(셰이더 2 + copy 1)인데 씬 패스는
+        // 2개, fluidsimulation 은 20(18 + swap 2)인데 씬 패스는 18개" 라는 **개수 세기**만 보고
+        // 셰이더 패스만 세는 커서를 뒀는데, 원본을 뜯으니 그 추론이 틀렸다.
+        //
+        // 원본 파서(`0x1401e7170`)에는 명령 패스를 조기 continue 시키는 분기가 **없다**.
+        // `material` 이 문자열이 아니면 `jne 0x1401e7b3e` 로 **머티리얼 로드만** 건너뛰고 곧장
+        // command 파싱으로 합류하며, 명령 패스도 정식으로 패스 벡터에 push 된다(stride 0x30).
+        // 루프 증가점 `0x1401e814e`(`inc ebx`) 로 점프하는 명령은 루프 전체에서 단 하나
+        // (`0x1401e7a04` = conditions 탈락)뿐이고 나머지는 전부 fall-through 다. 그리고 씬
+        // 오버라이드는 `0x1401e7a6e` 의 `mov edx, ebx` — **같은 ebx** 로 조회한다.
+        //
+        // 개수가 안 맞았던 진짜 이유: 씬 배열이 짧으면 초과 인덱스는 에러가 아니라 **오버라이드
+        // 없음**이다(JsonCpp non-const `operator[](ArrayIndex)` 가 nullValue 를 삽입해 반환 —
+        // `0x14008672e`). fluidsimulation 은 명령 패스가 배열 **끝**이라 에디터가 후행 빈 원소를
+        // 잘라낸 것이고, motionblur 는 명령 패스가 **중간**이라 씬 `passes[1]` 이 빈 `{}` 로
+        // 남아 있다. 즉 `motionblur_combine`(원본 인덱스 2)은 `passes[1]` 이 아니라 범위 밖인
+        // `passes[2]` 를 받는다 — 어느 쪽이든 오버라이드가 없어 동봉 자산에서는 결과가 같지만,
+        // 명령 패스가 중간에 있는 워크샵 자산에서는 상수·텍스처가 통째로 한 칸씩 밀린다.
         for (i, mp) in manifest.passes.enumerated() {
             if mp.command == "copy" {
                 guard let copy = makeCopyPass(mp, effName: eff.name, fboIndex: fboIndex,
@@ -662,8 +677,7 @@ extension SceneRenderer {
                   let fData = effectScopedData("shaders/\(meta.base).frag", root: effectRoot, package: package),
                   let vert = String(data: vData, encoding: .utf8),
                   let frag = String(data: fData, encoding: .utf8) else { return nil }
-            let scenePass = scenePassCursor < eff.passList.count ? eff.passList[scenePassCursor] : SceneEffectPass()
-            scenePassCursor += 1
+            let scenePass = SceneRenderer.sceneOverride(forRawPassIndex: i, in: eff.passList)
             let combos = resolvePassCombos(vert: vert, frag: frag, scenePass: scenePass,
                                            matCombos: meta.matCombos, matTextures: meta.matTextures)
             guard let t = GLSLTranslator.translate(vertex: vert, fragment: frag, combos: combos, include: include) else {
@@ -1193,21 +1207,51 @@ extension SceneRenderer {
         return try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pd) }
     }
 
-    /// X-⑧: effect.json 의 `fbos[].format` 문자열 → Metal 픽셀 포맷.
+    /// G-B2-06: 매니페스트 `passes[]` 의 **원본 배열 인덱스**로 씬 오버라이드를 고른다.
+    /// 범위 밖은 에러가 아니라 **오버라이드 없음** — 원본은 JsonCpp non-const
+    /// `operator[](ArrayIndex)`(`0x140086540`)라 없는 인덱스에 nullValue 를 넣고 그 참조를
+    /// 돌려준다(`0x14008672e`). 클램프도 랩어라운드도 예외도 없다.
+    /// 규약이 한 줄짜리라 인라인해도 되지만, 이건 한 번 틀렸던 자리라 테스트가 붙도록 뺐다.
+    static func sceneOverride(forRawPassIndex i: Int, in passList: [SceneEffectPass]) -> SceneEffectPass {
+        (i >= 0 && i < passList.count) ? passList[i] : SceneEffectPass()
+    }
+
+    /// X-⑧: effect.json 의 `fbos[].format` → Metal 픽셀 포맷.
     ///
-    /// `rgba_backbuffer` 만 조건부다 — 이름 그대로 "백버퍼와 같은 포맷" 이라 HDR 씬에서는
-    /// float 이 된다. 나머지는 고정이다. 미지/미선언(nil)은 rgba8 — 이펙트를 드롭하지 않는
-    /// 폴백 정책(G-A5-04)과 같다.
+    /// 매핑은 이름이 아니라 **원본의 enum → DXGI 점프 테이블**(`0x1400d2a20`, 28-way)에서 왔다.
+    /// 이름으로 추론하면 둘이 틀린다:
+    ///   `rgb565`    → B5G6R5(85)가 아니라 **DXGI 28 = RGBA8_UNORM**
+    ///   `rgba8888s` → SNORM(31)이 아니라 **DXGI 28 = RGBA8_UNORM**
+    /// 3채널 이름(`rgb*`)은 전부 대응 4채널로 승격된다(24비트 렌더 타깃이 없다).
     ///
-    /// 채널 수가 줄어드는 포맷(r16f/rg1616f/r8)에 float4 를 반환하는 프래그먼트가 쓰는 것은
-    /// 정상이다 — 어태치먼트 채널 수를 넘는 성분은 버려진다(GLSL/HLSL 과 동일).
+    /// **sRGB 는 어디에도 없다** — 28개 arm 중 `_SRGB` DXGI 값이 0건이라 `rgba8888` 은
+    /// `.rgba8Unorm_srgb` 가 아니라 선형 `.rgba8Unorm` 이다.
+    ///
+    /// `rgba_backbuffer`/`rgb_backbuffer` 만 조건부다 — 파서가 해시맵 조회 **전에** strcmp 로
+    /// 가로채 HDR 이면 float enum, 아니면 8비트 enum 으로 치환한다(`0x1401e7562`/`0x1401e759e`).
+    /// 두 쌍의 최종 DXGI 는 각각 같아서(10 / 28) 여기서도 같은 Metal 포맷으로 떨어진다.
+    ///
+    /// 블록압축(`bc7`/`dxt1`/`dxt3`/`dxt5`)은 원본 표에 있지만 **렌더 타깃이 될 수 없다** —
+    /// D3D11 도 Metal 도 압축 포맷에 그리지 못한다. 텍스처 로드 경로와 표를 공유하는 것으로
+    /// 보이며, fbo 로 지정되면 그릴 수 없으므로 rgba8 로 떨어뜨린다(이펙트를 죽이는 대신).
+    /// 동봉 자산의 fbo 55건 중 압축 포맷은 0건이다.
+    ///
+    /// 미지/미선언(nil)은 rgba8 — 원본이 해시맵 miss 에서 0(rgba8888)을 돌려주는 것과 같다.
     static func metalFormat(_ f: EffectManifest.FBO.Format?, hdr: Bool) -> MTLPixelFormat {
+        guard let f else { return .rgba8Unorm }
         switch f {
-        case .none, .some(.rgba8888): return .rgba8Unorm
-        case .some(.rgbaBackbuffer): return hdr ? .rgba16Float : .rgba8Unorm
-        case .some(.r16f): return .r16Float
-        case .some(.rg1616f): return .rg16Float
-        case .some(.r8): return .r8Unorm
+        case .rgba8888, .rgb888, .rgb565, .rgba8888s: return .rgba8Unorm
+        case .rg88:                                   return .rg8Unorm
+        case .r8:                                     return .r8Unorm
+        case .rgba16161616f, .rgb161616f:             return .rgba16Float
+        case .rg1616f:                                return .rg16Float
+        case .r16f:                                   return .r16Float
+        case .rgba16161616, .rgb161616:               return .rgba16Unorm
+        case .rgba16161616S, .rgb161616S:             return .rgba16Snorm
+        case .rgba1010102:                            return .rgb10a2Unorm
+        case .rgbaBackbuffer, .rgbBackbuffer:         return hdr ? .rgba16Float : .rgba8Unorm
+        // 렌더 불가 — 위 주석 참조.
+        case .bc7, .dxt5, .dxt3, .dxt1:               return .rgba8Unorm
         }
     }
 
