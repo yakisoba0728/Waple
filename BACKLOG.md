@@ -74,7 +74,77 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   (a) **alpha/color 프로퍼티 스크립트 미부착** — 실측 3509243656 UI 패널이 dd/yp/num 얽힌 shared 상태머신이라 부착 시 무관 이미지 빌보드(id=449)가 잘못된 타이밍에 오노출되고 캡처 셀프체크가 비결정(frac 0.0176~0.025, 재현 가능)이 됨. 필요 시 캡처-세이프 격리(예: alpha 스크립트 보유 text 는 빌보드 자체를 만들지 않는 draw-gate) 부터 검토.
   (b) **텍스트 '내용' 동적 재래스터 미지원** — F309 프라이밍이 확정한 1회 평가값(controllerOf[uid].last)만 래스터, update() 가 이후 콘텐츠를 바꿔도 화면엔 반영 안 됨(위치/스케일/회전/가시성만 매프레임 애니). 코퍼스 5씬(3470948192·3477054430·3589454154·3662790108·3737268876) A/B 캡처(1920×1080, main-6526db1 대비)로 블라스트 반경 확인 완료 — 3662790108(76텍스트)·3477054430(1)·3737268876(4) 는 byte-identical(새 빌보드가 캡처 시점 비가시), 3589454154·3470948192 는 소폭 개선(정보 텍스트 신규 노출, 왜곡 없음). 상세: [docs/scene-render-audit-2026-07-26.md](docs/history/scene-render-audit-2026-07-26.md) "3D/칸 메라/투영 잔여" 참조.
 - **A4 g_Color1~4 계열** — 그라디언트/파티클 다중색 유니폼(중립값 비단순), exact-name 스코프서 제외됨. 필요시 검토
-- **F4-polish① 텍스트 anchor/padding/backgroundbrightness 렌더 소비** (2026-07-28 파스 착지) — `SceneTextLayer.anchor`/`padding`/`backgroundBrightness` 3필드 파스·보존 완료([SceneDocument.swift](Sources/WapleCore/SceneDocument.swift) parseText). anchor 비-none 70건(코퍼스 1642 오브젝트 중)·padding 전건·backgroundbrightness 1474건은 값이 있지만 opaqueBackground 와 동형으로 **렌더 소비는 아직 없음**(배경박스 최소구현 정책 유지 — outline 만 TextRasterizer 가 그림). 배경박스 자체를 그리는 후속이 착수되면 이 3필드로 앵커 오프셋·패딩 여백·밝기 배율을 함께 적용할 것.
+- **D1 텍스트 outline/spacing 파스-소비 단절** (2026-08-20 발굴) — `SceneDocument` 가
+  `outline`·`outlineColor`·`outlineThickness`·`spacing`(줄간격)을 파스해 `SceneTextLayer`/
+  `SceneLayer` 필드에 담지만 **`WapleCore` 밖에서 아무도 읽지 않는다**. `TextRasterizer.render`
+  는 outline 인자가 없고 줄높이를 `ceil(ascent + descent + leading)` 로 고정한다.
+  실물 도달 0(`grep -rl '"spacing"' --include=scene.json` = 두 트리 0건)이라 잠재 결함이지만,
+  **BACKLOG 가 반대로 적고 있었다**(F4-polish① 정정 참조). 원본은 넷 다 텍스트 프로퍼티
+  등록기(0x140258ca0)에 등재돼 있다 — `spacing` 0x1402594e3 · `outline` 0x1402597d2 ·
+  `outlinethickness` 0x140259957 · `outlinecolor` 0x140259a67.
+
+- **D2 텍스트 프로퍼티 8종 미보유** (2026-08-20 발굴, 도달 0) — 원본 텍스트 등록기
+  0x140258ca0(6,771 B)의 전체 속성 목록 대비 Waple 에 필드조차 없는 것: `msdf`, `blur`,
+  `blursize`, `dropshadow`, `dropshadowsize`, `dropshadowopacity`, `dropshadowcolor`,
+  `dropshadowoffset`. 두 트리 `scene.json` 전수에서 `"dropshadow"` 0건이라 **기록만 한다.**
+  같은 등록기에서 확인된 enum 표: anchor ∈ {none, center, top, topright, right, bottomright,
+  bottom, bottomleft, left, topleft} · depthtest ∈ {disabled, enabled} ·
+  horizontalalign ∈ {left, center, right} · verticalalign ∈ {center, top, bottom}.
+  부수 관측: 바이너리에 FreeType 이 들어 있다(`autofitter`/`pshinter`/`truetype`/`kerning`/
+  `type42`) — WE 는 DirectWrite 가 아니라 FreeType 으로 래스터한다. CoreText 메트릭을
+  정밀히 맞추려는 시도가 나오면 이걸 먼저 봐야 한다.
+
+- **D3 `GLSLTranslator.isEngine` 미등재 엔진 유니폼** (2026-08-20 발굴, **오늘 도달 0 · 계획된
+  작업을 막는다**) — 주석 없는(=엔진) 유니폼 중 `isEngine` 이 인식하지 못하는 것:
+  `g_EyePosition`(동봉 셰이더 12) · `g_Bones`(9) · `g_Texture3MipMapInfo`(8) ·
+  `g_MorphOffsets`/`g_MorphWeights`(7) · `g_Texture0Rotation`/`g_Texture0Translation`(6) ·
+  `g_ViewUp`/`g_ViewRight`(4) · `g_BonesAlpha`(4) · `g_HDRParams`(2) · `g_Orientation{Up,Right,
+  Forward}`(1) · `g_Fog*`(1). 미등재는 머티리얼 파라미터로 강등돼 **0 을 먹는다**(
+  `engineNeutralDefault` 가 1 을 주는 것은 g_Alpha/g_UserAlpha/g_Brightness/g_Color/g_Color4/
+  g_TextureReductionScale/g_LightAmbientColor 뿐) — `g_TexelSize` 사고와 같은 부류다.
+
+  **오늘 도달이 0인 이유**: `buildCustomLayerShader` 는 씬 **패키지**의 `.vert`/`.frag` 만
+  받고, 베이스 자산의 `generic*`/`genericimage*` 는 그 경로를 타지 않는다.
+
+  **그래서 왜 시급한가**: `g_Texture0Rotation`/`g_Texture0Translation` 은 스프라이트시트 UV
+  서브렉트다(`genericimage.vert` · `passthrough.vert`). 그리고 `g_EyePosition` 은
+  `generic{,2,3,4}.vert` 의 시선 벡터 — **`WAPLE_BUILTIN_MESH_SHADERS` 를 켜는 순간 도달한다**
+  (3470948192 백화 대응으로 계획돼 있다). 등재만 하면 오분류는 막지만 값은 여전히 0 이라
+  UV 가 (0,0) 으로 붕괴하고 시점이 원점에 박힌다. **이름 등재와 실값 피드를 한 커밋에서
+  같이 해야 하고, 그 전에는 그 플래그를 켜면 안 된다.** 이 항목이 그 전제조건이다.
+
+- **D4 모델 json `nopadding`/`instanced` · `general.perspectiveoverridefov` 사문화**
+  (2026-08-20 발굴) — 모델 json 파서 0x1401fac66 의 키 집합은
+  `material, width, height, fullscreen, nopadding, autosize, passthrough, solidlayer,
+  projectlayer, instanced` 인데 Waple 은 `nopadding`·`instanced` 를 안 읽는다.
+  `nopadding` 실물 4건(전부 `autosize:true` 와 짝). 그리고 `general.perspectiveoverridefov`
+  는 파스만 하고 **아무도 읽지 않는다** — 소비처가 `perspectiveFov: 95` 리터럴이다.
+  저작값이 95.0 ×71 · 90.76 ×6 이라 오늘은 무해하지만 필드가 거짓말을 하고 있다.
+
+- **D5 이미터 `flags`/`duration`/`delay` 미파스** (2026-08-20 발굴) — 이미터 base 파서
+  0x1401c1c70 이 `duration`→[+4]·[+0xc], `delay`→[+8]·[+0x10], `flags`→[+0x3c] 를 읽는다
+  (쌍은 카운트다운 상태 = 유한 방출창과 시작 지연). 실물: `flags` 19건(값 2×13 · 4×6) ·
+  `duration≠0` 2건 · `delay` 2건. duration/delay 는 파서가 아니라 **시뮬레이터** 작업이고,
+  `flags` 는 비트 의미가 미확정이다(구체 ctor 0x1401c61ed 가 `or [rsi+0x3c], 1` 로 bit0 을
+  엔진이 세우므로 저작값 2/4 는 별개 비트).
+
+- **D6 `instanceoverride.controlpointangle0..7` 드롭** (2026-08-20 발굴, **주석의 근거가
+  반증됐다**) — `SceneDocument.parseEffects` 인접 주석이 "controlpointangleN 은 실코퍼스 전건
+  0 — 스킵" 이라고 적었는데, 동봉 자산에 **비영이 3건**이고 그중 하나는 60프레임 키프레임
+  애니메이션이다: `previewvortexorb` 가 `controlpointangle1 = "0 0 -0.52360"` ·
+  `controlpointangle2 = "0 0 0.52360"`(∓30°), `previewdrippingwater` 가 `controlpointangle1` 에
+  c1 이 −0.628 → −6.971 rad 로 도는 애니메이션(fps 20, loop)을 싣는다. 원본 등록기
+  0x14024d940 의 속성 집합에도 `controlpoint0..7` 과 나란히 `controlpointangle0..7` 이 있다
+  — 에디터 부산물이 아니라 1급 채널이다. 착지 전에 "각도가 오프셋과 어떻게 합성되는가" 를
+  정해야 해서 설계 결정이 선행한다.
+
+- **D7 `WEColor` 심 누락 2종** — ~~`normalizeColor`/`expandColor` 부재로 `import` 가
+  undefined 를 주고 호출 순간 TypeError 로 훅 전체 사망~~ **해소(2026-08-20)**. 동봉
+  `scripts/jsmodules/wecolor.js` 본문 그대로 심었다. 같은 라운드에 `WEMath.smoothStep` 의
+  "Hermite 인지 선형인지 미확정" 주석도 해소했다 — 동봉 `wemath.js` 가
+  `x*x*(3-2*x)` 로 못박는다(GLSL 유추가 맞았다).
+
+- **F4-polish① 텍스트 anchor/padding/backgroundbrightness 렌더 소비** (2026-07-28 파스 착지) — `SceneTextLayer.anchor`/`padding`/`backgroundBrightness` 3필드 파스·보존 완료([SceneDocument.swift](Sources/WapleCore/SceneDocument.swift) parseText). anchor 비-none 70건(코퍼스 1642 오브젝트 중)·padding 전건·backgroundbrightness 1474건은 값이 있지만 opaqueBackground 와 동형으로 **렌더 소비는 아직 없음**(배경박스 최소구현 정책 유지). **[2026-08-20 정정] 종전 여기에 "outline 만 TextRasterizer 가 그림" 이라고 적혀 있었는데 사실이 아니다** — `Sources/WapleRender/TextRasterizer.swift` 에 `outline` 문자열이 **0건**이고 `render(...)` 는 outline 인자를 받지도 않는다. `SceneDocument` 가 `outline`/`outlineColor`/`outlineThickness`/`spacing` 을 파스해 필드에 담지만 소비처가 없다 — 아래 D1 참조. 배경박스 자체를 그리는 후속이 착수되면 이 3필드로 앵커 오프셋·패딩 여백·밝기 배율을 함께 적용할 것.
 - **F4-polish② Forward+ 라이팅 유니폼 인덱스 배열 피드** (2026-07-28 인식-전용 착지) — `g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`/`g_LFeature_Shadow*` 를 `GLSLTranslator.isEngine` 에 등재해 머티리얼 오분류(g_TexelSize 동형 사고)만 차단([GLSLTranslator.swift](Sources/WapleCore/GLSLTranslator.swift) isEngine/engineReplacement). WE 실선언은 배열(`g_LPoint_Color[LIGHTS_POINT]`)·사용부는 `[l].rgb` 인덱스 접근인데, 이번 등재의 대체값(0 벡터/항등)은 비-배열 스칼라라 인덱스 구독엔 컴파일 안전하지 않음 — 로컬 코퍼스 460씬이 `LIGHTS_POINT/SPOT/TUBE/DIRECTIONAL` 콤보를 전혀 참조하지 않아(`ShaderPreprocessor.swift:38-40`) 이 블록이 항상 전처리로 제거되므로 오늘 시점 도달 0건. 콤보 지원이 실제로 켜지는 씬이 나타나면 인덱스 가능한 constant 배열 피드로 교체할 것(네이티브 Scene3DLighting 은 이미 구현돼 있어 스코프는 커스텀 셰이더 경로 한정).
 
 ## 잠재 결함
