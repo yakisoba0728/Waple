@@ -80,11 +80,16 @@ public enum AudioSpectrum {
     /// 반환값 B 에 대해 소비 구간은 `1 ..< B` 다(bin 0 = DC 는 원본도 안 쓴다 — 루프가 `ebx=1`).
     public static func binCount(fftLength n: Int, sampleRate: Double) -> Int {
         let half = max(1, n / 2)
-        guard sampleRate > 0 else { return min(half, referenceBinCount) }
+        guard n > 0, sampleRate.isFinite, sampleRate > 0 else { return min(half, referenceBinCount) }
         let binWidth = sampleRate / Double(n)
-        guard binWidth > 0 else { return min(half, referenceBinCount) }
-        let needed = Int((topFrequency / binWidth).rounded()) + 1
-        return max(2, min(half, needed))
+        guard binWidth.isFinite, binWidth > 0 else { return min(half, referenceBinCount) }
+        // **정본 가드 `safeInt(_:)` 를 태운다.** `Int(_:)` 는 범위 밖에서 클램프가 아니라 **트랩**이라,
+        // 낮은 sampleRate 나 큰 n 이 들어오면 몫이 Int 범위를 넘고 그 한 줄이 프로세스를 죽인다.
+        // 직접 클램프를 적을 수도 있지만 그러지 않는다 — F530 스윕이 확인한 지배적 실패 방식은
+        // "가드가 없다" 가 아니라 **"가드가 넷인데 아무도 안 거친다"** 였다(JSONNumerics 주석).
+        let raw = (topFrequency / binWidth).rounded()
+        guard let widened = safeInt(raw), widened >= 0 else { return min(half, referenceBinCount) }
+        return max(2, min(half, min(widened, half) + 1))
     }
 
     // MARK: 밴드 매핑
@@ -106,8 +111,13 @@ public enum AudioSpectrum {
         var prev = 0
         for i in 1..<B {
             let t = Float(i - 1) / denom
-            var raw = Int(powf(t, exponent) * Float(bandCount))
-            raw %= bandCount
+            // 기본 지수 0.25 와 t < 1 에서는 곱이 항상 64 미만이라 좁힘이 안전하다. 그래도 정본
+            // 가드를 태우는 이유: `exponent` 가 public 상수라 0 이하로 바뀌면 pow 가 발산하고
+            // `Int(_:)` 는 그때 트랩한다. `safeInt` 는 절삭 후 범위 밖이면 nil 이라, 원본의
+            // 절삭(`cvttss2si`) → 부호 있는 나머지(`and ecx, 0x8000003f`) 순서를 그대로 보존한다.
+            let scaled = powf(t, exponent) * Float(bandCount)
+            guard let truncated = safeInt(Double(scaled)) else { continue }
+            var raw = truncated % bandCount
             if raw < 0 { raw += bandCount }
             let band = min(raw, prev + 1)
             prev = band
