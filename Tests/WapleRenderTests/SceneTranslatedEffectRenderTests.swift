@@ -382,7 +382,7 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
            {"command":"swap","source":"_rt_A","target":"_rt_B"},
            {"material":"materials/effects/swap_read.json",
             "bind":[{"name":"_rt_B","index":0}]}],
-         "fbos":[{"name":"_rt_A","scale":1},{"name":"_rt_B","scale":1}]}
+         "fbos":[{"name":"_rt_A","scale":1,"format":"rgba8888"},{"name":"_rt_B","scale":1,"format":"rgba8888"}]}
         """
         let scene = """
         {"general":{"orthogonalprojection":{"width":1920,"height":1080},"clearcolor":"0 0 0"},
