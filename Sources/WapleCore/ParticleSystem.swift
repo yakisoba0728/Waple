@@ -918,6 +918,11 @@ public struct ParticleSystemDef: Equatable {
                     variableStrength: injected(o, "variablestrength", 0),  // 0x1401be4d9, 플래그 무관
                     target: Vec3(x: 0, y: 0, z: 0)))                 // 아래 CP 재베이크에서 채운다
             case "vortex":
+                // 중심은 `offset` 이 아니라 **CP 위치 + offset** 이다(실측 0x1402431be–0x14024322c:
+                // `[r14+0xc0]` = cp 인덱스 → stride 0xd0 배열 `[sys+0x400]` → translation 을 splat 한 뒤
+                // `addps` 로 offset 세 성분을 더한다). 아래 CP 재베이크에서 합쳐 굽는다 —
+                // 동봉 9인스턴스는 전건 CP0 = 원점이라 관측은 안 바뀌지만, CP 를 옮긴 씬에서 갈린다.
+                attractCPIds.append((op: ops.count, cp: min(max(pint(o["controlpoint"]) ?? 0, 0), 7)))
                 // 주입기 0x1401bef00 .. 0x1401bf2c6 (`.pdata` 3조각 — 언와인드 체인으로 병합해야
                 // 한다. 조각 하나만 읽으면 `speedinner` 의 상수가 **3번째 조각 첫 명령**
                 // 0x1401bf22e 라 통째로 안 보인다). 게이트 `stricmp`@0x1401cd8a9 → "vortex",
@@ -943,6 +948,10 @@ public struct ParticleSystemDef: Equatable {
                                    flags: pint(o["flags"]) ?? 0))
                 vortexAudio.append(AudioProcessing.parse(o))
             case "vortex_v2":
+                // v2 의 중심은 **CP 위치 그대로**다 — v1 과 달리 offset 을 더하지 않는다
+                // (프리앰블에 `addps [r14+0x10..0x30]` 이 없다). v2 는 offset 키 자체를 읽지 않아
+                // 파스가 (0,0,0) 을 넣으므로, 아래 재베이크의 "CP + offset" 이 자동으로 CP 가 된다.
+                attractCPIds.append((op: ops.count, cp: min(max(pint(o["controlpoint"]) ?? 0, 0), 7)))
                 // 주입기 0x1401bf2d0 .. 0x1401bf6f8 (`.pdata` 3조각). **진입점 주의**: `centerforce`
                 // 주입 호출부 0x1401bf5ff 이 속한 조각의 시작(0x1401bf3c8)은 진입점이 아니다 —
                 // 그 조각만 읽으면 수치 주입 12개 중 11개를 놓친다. 게이트 `stricmp`@0x1401cde40.
@@ -1399,6 +1408,14 @@ public struct ParticleSystemDef: Equatable {
                 ops[i] = .controlPointAttract(scale: scale, threshold: threshold,
                                               target: controlPoints[cpid],
                                               deleteThreshold: deleteThreshold, flags: flags)
+            case let .vortex(axis, dIn, dOut, sIn, sOut, offset, cf, vstr, rIn, rOut, ring, flags):
+                ops[i] = .vortex(axis: axis, distanceInner: dIn, distanceOuter: dOut,
+                                 speedInner: sIn, speedOuter: sOut,
+                                 offset: Vec3(x: controlPoints[cpid].x + offset.x,
+                                              y: controlPoints[cpid].y + offset.y,
+                                              z: controlPoints[cpid].z + offset.z),
+                                 centerForce: cf, variableStrength: vstr,
+                                 reductionInner: rIn, reductionOuter: rOut, ring: ring, flags: flags)
             case let .maintainDistanceToControlPoint(distance, vs, _):
                 ops[i] = .maintainDistanceToControlPoint(distance: distance, variableStrength: vs,
                                                          target: controlPoints[cpid])

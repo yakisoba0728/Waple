@@ -294,4 +294,44 @@ final class ParticleInjectorAttributionTests: XCTestCase {
         guard case let .controlPointAttract(s0, _, _, _, _) = z.operators[0] else { return XCTFail("no cpa") }
         XCTAssertEqual(s0, 0, "키가 있으면 주입되지 않는다")
     }
+
+    // MARK: - vortex 중심 = 컨트롤포인트
+
+    /// 소용돌이 중심은 `offset` 이 아니라 **CP 위치 + offset** 이다
+    /// (0x1402431be `[r14+0xc0]` → stride 0xd0 `[sys+0x400]` → 0x140243222–0x14024322c 의 `addps`).
+    /// 동봉 14인스턴스는 전건 CP 가 원점이라 관측이 안 바뀌지만, CP 를 옮긴 씬에서 갈린다.
+    func testVortexCenterComesFromControlPointPlusOffset() {
+        let d = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{"id":0,"offset":"10 0 0"},{"id":2,"offset":"0 40 0"}],
+         "operator":[{"name":"vortex","controlpoint":2,"offset":"1 2 3"}],"maxcount":10}
+        """), material: nil)
+        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _, _) = d.operators[0] else {
+            return XCTFail("no vortex")
+        }
+        XCTAssertEqual(offset, Vec3(x: 1, y: 42, z: 3), "CP2(0,40,0) + offset(1,2,3)")
+    }
+
+    /// vortex_v2 는 **CP 위치 그대로**다 — offset 키를 읽지 않으므로 CP 만 남는다.
+    func testVortexV2CenterIsControlPointOnly() {
+        let d = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{"id":1,"offset":"0 0 7"}],
+         "operator":[{"name":"vortex_v2","controlpoint":1,"offset":"99 99 99"}],"maxcount":10}
+        """), material: nil)
+        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _, _) = d.operators[0] else {
+            return XCTFail("no v2")
+        }
+        XCTAssertEqual(offset, Vec3(x: 0, y: 0, z: 7), "offset 은 무시되고 CP1 만 남아야 한다")
+    }
+
+    /// CP 미지정이면 CP0 이다(주입 기본 0). 동봉 실인스턴스 대부분이 이 경로다.
+    func testVortexWithoutControlPointBindsCP0() {
+        let d = ParticleSystemDef.parse(json("""
+        {"controlpoint":[{"id":0,"offset":"5 5 0"}],
+         "operator":[{"name":"vortex"}],"maxcount":10}
+        """), material: nil)
+        guard case let .vortex(_, _, _, _, _, offset, _, _, _, _, _, _) = d.operators[0] else {
+            return XCTFail("no vortex")
+        }
+        XCTAssertEqual(offset, Vec3(x: 5, y: 5, z: 0))
+    }
 }
