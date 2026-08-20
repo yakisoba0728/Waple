@@ -273,6 +273,18 @@ def material_inputs():
 # ------------------------------------------------------------------ main
 
 def main():
+    # **[2026-08-20] 자기 입력 가드.** `engine.renderPass.d3d11Slots`(확정)가 Windows SDK 의
+    # `d3d11.h` 에 매달려 있어, SDK 없는 환경에서 재생성하면 그 항목이 빈 dict 가 된다.
+    # 종전엔 유일한 방어선이 `specfmt.dump` 의 축소 가드였다 — 그 가드에도 구멍이 있었으니
+    # 방어선이 하나뿐이면 안 된다. 여기서 먼저 멈춘다.
+    if not os.path.isfile(BIN):
+        raise SystemExit(f"[measure_render_pass] 바이너리가 없다: {BIN}")
+    slots_probe, _ = d3d11_slots()
+    if not slots_probe:
+        raise SystemExit(
+            f"[measure_render_pass] Windows SDK 의 d3d11.h 를 못 찾았다: {SDK_GLOB}\n"
+            f"  d3d11Slots 는 그 헤더에서 vtable 순서를 파싱해 얻는 **확정** 항목이라,\n"
+            f"  SDK 없이 재생성하면 그 근거가 빈 dict 로 지워진다. SDK 가 있는 곳에서 돌려라.")
     data = open(BIN, "rb").read()
     base, secs = pe_sections(data)
     _BASE[0] = base

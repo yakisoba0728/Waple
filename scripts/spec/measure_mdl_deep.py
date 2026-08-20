@@ -175,7 +175,23 @@ def channel_probe(data, mesh, tally, sample=256):
 
 
 def main():
+    # **[2026-08-20] 자기 입력 가드.** 종전엔 코퍼스 없이도 끝까지 돌아 파일수/메시수를
+    # 0/0 으로 쓰려 했다 — 유일한 방어선이 `specfmt.dump` 의 축소 가드였다(그 가드에도
+    # 부분 축소 구멍이 있었다). 자매 생성기 11개처럼 입력을 직접 본다.
+    # 이 문서의 도수(파일수·메시수·스킨 분포·gateWord 분포)는 **워크샵 코퍼스**에서 나온다.
+    # 설치본만으로 돌리면 분포에서 키가 통째로 사라진다 — 실측으로 확인했다(축소 가드가
+    # `skinCount: 키 2개 소멸`, `gateWord 값: 키 7개 소멸` 로 잡는다). 축소 가드가 뒤에서
+    # 잡아 주긴 하지만, 그 자리에서 나오는 메시지는 "무엇이 없어서" 인지를 말하지 않는다.
+    if not os.path.isdir(WS):
+        raise SystemExit(
+            f"[measure_mdl_deep] 워크샵 코퍼스가 없다: {WS}\n"
+            f"  WE_WORKSHOP 으로 코퍼스 루트를 지정하라 — 설치본(WE_ROOT={WE})만으로 돌리면\n"
+            f"  스킨/gateWord 분포에서 키가 사라져 근거만 지워진다.")
     files = collect()
+    if not files:
+        raise SystemExit(
+            f"[measure_mdl_deep] 입력 경로는 있는데 `.mdl` 을 하나도 못 찾았다"
+            f"(WE_WORKSHOP={WS} · WE_ROOT={WE}) — 경로가 맞는지 확인하라.")
     versions = collections.Counter()
     landings = collections.Counter()
     stride_by_flag = collections.Counter()
