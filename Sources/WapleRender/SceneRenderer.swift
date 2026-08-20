@@ -974,10 +974,45 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// `searchRoots` 에만 있었고 그건 `SceneDocument.parse(sharedAssetProbe:)` 한 곳에서만 쓰인다
     /// — 즉 문서 파싱은 동봉본을 봤지만 셰이더 해석은 못 봤다. WE 미설치 머신에서 pkg 가 담지 않는
     /// `common_*.h`(코퍼스 전수 0건 동봉)가 조용히 드롭돼 심볼 부재로 컴파일이 깨졌다.
-    var assetBaseRoots: [URL] = []
+    ///
+    /// F4: 이 값이 바뀌면 `assetProbeCache` 를 **반드시 함께** 버려야 한다 — 캐시 키가 (루트, 이름)
+    /// 이라 루트 목록이 바뀌면 판정이 통째로 달라진다. 무효화를 `mount` 의 대입 한 곳에만 두면
+    /// 테스트나 향후 호출부가 직접 대입할 때 조용히 스테일이 되므로, 호출부가 아니라 **상태에** 붙인다.
+    var assetBaseRoots: [URL] = [] {
+        didSet { assetProbeCache.removeAll(keepingCapacity: false) }
+    }
+
+    /// F4: `baseAssetURLProbe` 의 (루트, 이름) → 판정 메모. 수명은 **씬 빌드 1회**다
+    /// (`mount` 가 `assetBaseRoots` 를 심는 순간 위 `didSet` 이 비운다 — 씬 간 누수 없음).
+    ///
+    /// 왜 필요한가: 프로브가 `fileExists` 1회로 끝나는 것은 **히트**일 때뿐이고, 빗나가면 경로
+    /// 성분마다 `contentsOfDirectory` + `resolvingSymlinksInPath` 로 대소문자 무시 탐색을 한다.
+    /// 즉 **미스가 히트보다 비싸다.** 그리고 조회의 절대다수가 미스다 — 4단 순서(pkg scoped →
+    /// pkg plain → base scoped → base plain)의 앞 세 단은 설계상 대부분 빗나가고, `#include` 는
+    /// pkg 가 헤더를 0건 동봉하므로(spec/corpus/workshop-shaders.json `pkgBundlesNoHeaders`)
+    /// 전건 베이스 루트로 떨어지며, 같은 이름이 이펙트 인스턴스마다·번역 패스마다 다시 조회된다.
+    /// 그래서 **미스도 캐시한다** — 그게 비싼 쪽이다.
+    ///
+    /// 격리 요건은 `assetBaseRoots` 와 **동일하다**(새 요건을 만들지 않는다): 둘 다 평범한 인스턴스
+    /// 저장 프로퍼티이고, 읽고 쓰는 코드는 전부 `mount` 한 번의 동기 호출 체인(buildLayers/
+    /// buildParticles/buildTexts/build3D) 안에 있다 — per-frame 경로에는 자산 조회가 없다.
+    var assetProbeCache: [String: BaseAssetURLProbe] = [:]
+
+    /// 악의 pkg 가 수만 개의 서로 다른 이름을 부르는 경우의 상한. 넘으면 **삽입만** 멈춘다 —
+    /// 판정 경로는 그대로라 결과는 캐시 유무와 무관하게 같다.
+    static let assetProbeCacheLimit = 8192
 
     /// mount 가 심는 값과 같은 소스 — 배선이 어긋나지 않게 한 곳에서만 만든다.
     public static func resolvedAssetBaseRoots() -> [URL] { BaseAssetsSettings.searchRoots }
+
+    /// S5-2: `unique:true` FBO 가 붙들고 있는 지속 텍스처의 **렌더러 전역** 합계(바이트).
+    ///
+    /// 장부와 보유분은 항상 같은 줄에서 함께 움직인다 — 갱신 지점은
+    /// `SceneRendererFrameEncoder.applyEffect` 의 fbo 획득 루프 세 곳(개수 불일치 리셋 · 규격
+    /// 불일치 파기 · 신규 할당)과 `teardown`(모든 EffectGPU 보유자 = layers/textLayers/
+    /// meshRenderables/billboards 를 비운 직후 0) 뿐이다. 세다 놓치는 방향은 **과대계상**이라
+    /// 조기 폴백(안전)이 되고, 과소계상이 되는 경로는 없다.
+    var uniqueFBOBytesInUse = 0
 
     public private(set) var hasMissingRequiredSharedAssets = false
 
@@ -2246,6 +2281,10 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         // 풀·캐시는 releasePooledGPUTextures 하나로(texturePool/poolCheckout/reflectionSnapshotPool/
         // blendModeSnapshotTexture/depthTextures/trailAcc) — 함수 주석의 누락 재발 이력 참조.
         releasePooledGPUTextures()
+        // S5-2: 위에서 layers/textLayers/meshRenderables/billboards 를 전부 비웠다 =
+        // 살아 있는 UniqueFBOStore 가 하나도 없다. 장부도 같이 0 으로 돌린다(마운트 재사용 시
+        // 스테일 누적으로 새 씬이 근거 없이 폴백되는 것을 막는다 — mount 는 teardown 을 먼저 부른다).
+        uniqueFBOBytesInUse = 0
         sceneIsHDR = false
         hdrPost = nil
         sceneWantsLDRBloom = false
