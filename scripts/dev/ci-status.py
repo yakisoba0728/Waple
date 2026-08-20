@@ -23,6 +23,7 @@ GitHub MCP 의 `actions_list` 는 워크플로 실행 하나마다 리포지터�
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -102,12 +103,43 @@ def show_runs(repo, branch, limit):
     return runs
 
 
-def show_jobs(repo, run_id):
+TEST_SUMMARY = re.compile(r"Executed (\d+) tests?, with (?:(\d+) tests? skipped and )?(\d+) failures?")
+
+
+def test_tally(repo, job_id):
+    """잡 로그의 마지막 `Executed N tests, ... M failures` 요약.
+
+    왜 필요한가: release 레인은 `continue-on-error` 라 **테스트가 실패해도 잡 결론이
+    success** 다(의도된 보고 전용 — debug 가 차단 게이트다). 잡 결론만 보면 그 실패가
+    보이지 않아, "release 는 통과했는데 debug 만 빨갛다" 는 잘못된 그림이 나온다.
+    실제로 그렇게 두 번 오독했다."""
+    try:
+        text = api("repos/%s/actions/jobs/%s/logs" % (repo, job_id), raw=True).decode("utf-8", "replace")
+    except SystemExit:
+        return None
+    last = None
+    for m in TEST_SUMMARY.finditer(text):
+        last = m
+    if not last:
+        return None
+    return (int(last.group(1)), int(last.group(2) or 0), int(last.group(3)))
+
+
+def show_jobs(repo, run_id, tests=False):
     d = api("repos/%s/actions/runs/%s/jobs?per_page=30" % (repo, run_id))
     print("\n== run %s ==" % run_id)
     for j in d.get("jobs", []):
         c = j.get("conclusion") or j["status"]
-        print("  [%s] %s   job=%s" % (MARK.get(c, c), j["name"], j["id"]))
+        line = "  [%s] %s   job=%s" % (MARK.get(c, c), j["name"], j["id"])
+        if tests and j["status"] == "completed":
+            t = test_tally(repo, j["id"])
+            if t:
+                executed, skipped, failures = t
+                note = "실행 %d · 스킵 %d · 실패 %d" % (executed, skipped, failures)
+                if failures and c == "success":
+                    note += "  ← 잡은 success 인데 테스트는 실패(continue-on-error)"
+                line += "\n       %s" % note
+        print(line)
         for s in j.get("steps", []):
             sc = s.get("conclusion") or s["status"]
             if sc not in ("success", "skipped"):
@@ -134,6 +166,8 @@ def main():
     ap.add_argument("--branch", default=None)
     ap.add_argument("--limit", type=int, default=8)
     ap.add_argument("--jobs", action="store_true", help="실패(없으면 최신) 실행의 잡/실패 스텝")
+    ap.add_argument("--tests", action="store_true",
+                    help="--jobs 에 잡별 테스트 집계를 붙인다(release 의 숨은 실패를 드러낸다)")
     ap.add_argument("--log", type=int, default=None, metavar="JOB_ID")
     ap.add_argument("--keep", type=int, default=40, help="--log 가 남길 줄 수")
     ap.add_argument("--watch", action="store_true", help="완료까지 폴링")
@@ -157,9 +191,9 @@ def main():
         print("  ... %d개 진행 중, %ds 후 재확인" % (len(pending), a.interval), flush=True)
         time.sleep(a.interval)
 
-    if a.jobs and runs:
+    if (a.jobs or a.tests) and runs:
         failed = next((r for r in runs if r.get("conclusion") == "failure"), runs[0])
-        show_jobs(a.repo, failed["id"])
+        show_jobs(a.repo, failed["id"], tests=a.tests)
 
     if not runs:
         return 0

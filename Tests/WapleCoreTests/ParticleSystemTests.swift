@@ -649,17 +649,26 @@ final class ParticleSystemTests: XCTestCase {
     }
 
     // F184: phasemin/phasemax 가 파티클별 위상 range 로 파스돼야(fireworks 5씬 근동기 의도 복원 —
-    // 종전엔 이 키 자체를 읽지 않아 항상 완전 랜덤 위상이었다). 기본은 자매 오퍼레이터와 동형으로 0.
+    // 종전엔 이 키 자체를 읽지 않아 항상 완전 랜덤 위상이었다).
+    // [2026-08-20] "기본은 자매 오퍼레이터와 동형으로 0" 은 틀렸다 — 아래 개명된 테스트 참조.
     func testOscillateAlphaParsesPhaseRange() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","frequencymin":1.5,"phasemin":0,"phasemax":0.1}]}"#), material: nil)
         guard case let .oscillateAlpha(_, _, _, _, pmin, pmax) = d.operators[0] else { return XCTFail("no oscillatealpha") }
         XCTAssertEqual(pmin, 0); XCTAssertEqual(pmax, 0.1)
     }
 
-    func testOscillateAlphaPhaseDefaultsToZero() {
+    /// **[2026-08-20] 개명·정정.** 종전 이름은 `...PhaseDefaultsToZero` 였고 계약도 그랬는데,
+    /// **이름 자체가 틀린 계약**이었다. 주입기가 `phasemax = 6.2831855`(2π)를 심는다
+    /// (oscillatealpha 0x1401bdbe3 — 실수 주입 헬퍼 0x1401d7d30 경유). phasemin 만 0 이다
+    /// (0x1401bdbbd).
+    ///
+    /// 차이는 눈에 보인다: 위상 폭 0 은 **전 파티클 동위상**이라 한 몸처럼 깜빡이고,
+    /// [0, 2π) 는 개별 파티클이 제 위상으로 흔들린다. F184 가 되살리려던 게 바로 그것이다.
+    func testOscillateAlphaPhaseMaxDefaultsToFullTurn() {
         let d = ParticleSystemDef.parse(json(#"{"operator":[{"name":"oscillatealpha","frequencymin":1.5}]}"#), material: nil)
         guard case let .oscillateAlpha(_, _, _, _, pmin, pmax) = d.operators[0] else { return XCTFail("no oscillatealpha") }
-        XCTAssertEqual(pmin, 0); XCTAssertEqual(pmax, 0)
+        XCTAssertEqual(pmin, 0, "phasemin 은 0 — 0x1401bdbbd")
+        XCTAssertEqual(pmax, 2 * .pi, accuracy: 1e-5, "phasemax 는 2π — 0x1401bdbe3")
     }
 
     func testControlPointAttractConsumesControlPointId() {
