@@ -126,8 +126,13 @@ final class AudioInputPipelineTests: XCTestCase {
         defer { vDSP_destroy_fftsetup(setup) }
         let sine = (0..<fftSize).map { Float(sin(2.0 * .pi * 16.0 * Double($0) / Double(fftSize))) }
         let mags = try XCTUnwrap(SystemAudioSpectrumProvider.magnitudes(from: sine, fftSize: fftSize))
-        let manual = Array((AudioSpectrum.spectrum(fromMagnitudes: mags, binCount: 64)
-                            + AudioSpectrum.spectrum(fromMagnitudes: mags, binCount: 64)).prefix(128))
+        // X-⑩: 프로덕션과 같은 정규화 규약으로 재구성한다 — vDSP packed-real 출력은 수학적
+        // DFT 의 2배라 나눗수가 2N 이고, 소비 빈 수는 원본과 같은 상한 주파수까지다.
+        // analyzeWindow 가 sampleRate 를 안 받으면 기본값(원본 기준 44100)을 쓰므로 여기도 같게 둔다.
+        let norm = 1 / (2 * Float(fftSize))
+        let bins = AudioSpectrum.binCount(fftLength: fftSize, sampleRate: AudioSpectrum.referenceRate)
+        let one = AudioSpectrum.spectrum(normalizedMagnitudes: mags.map { $0 * norm }, binCount: bins)
+        let manual = Array((one + one).prefix(128))
         let out = try XCTUnwrap(SystemAudioSpectrumProvider.analyzeWindow(
             l: sine, r: sine, fftSize: fftSize, log2n: log2n, setup: setup, threshold: 0, volume: 1))
         XCTAssertEqual(out, manual)   // ×1.0 은 IEEE 상 정확히 항등
