@@ -94,24 +94,52 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   `type42`) — WE 는 DirectWrite 가 아니라 FreeType 으로 래스터한다. CoreText 메트릭을
   정밀히 맞추려는 시도가 나오면 이걸 먼저 봐야 한다.
 
-- **D3 `GLSLTranslator.isEngine` 미등재 엔진 유니폼** (2026-08-20 발굴, **오늘 도달 0 · 계획된
-  작업을 막는다**) — 주석 없는(=엔진) 유니폼 중 `isEngine` 이 인식하지 못하는 것:
-  `g_EyePosition`(동봉 셰이더 12) · `g_Bones`(9) · `g_Texture3MipMapInfo`(8) ·
-  `g_MorphOffsets`/`g_MorphWeights`(7) · `g_Texture0Rotation`/`g_Texture0Translation`(6) ·
-  `g_ViewUp`/`g_ViewRight`(4) · `g_BonesAlpha`(4) · `g_HDRParams`(2) · `g_Orientation{Up,Right,
-  Forward}`(1) · `g_Fog*`(1). 미등재는 머티리얼 파라미터로 강등돼 **0 을 먹는다**(
-  `engineNeutralDefault` 가 1 을 주는 것은 g_Alpha/g_UserAlpha/g_Brightness/g_Color/g_Color4/
-  g_TextureReductionScale/g_LightAmbientColor 뿐) — `g_TexelSize` 사고와 같은 부류다.
+- **D3 `GLSLTranslator.isEngine` 미등재 엔진 유니폼** (2026-08-20 발굴, **2026-08-20 전면 정정**)
 
-  **오늘 도달이 0인 이유**: `buildCustomLayerShader` 는 씬 **패키지**의 `.vert`/`.frag` 만
-  받고, 베이스 자산의 `generic*`/`genericimage*` 는 그 경로를 타지 않는다.
+  **WE 의 엔진 유니폼은 140개다(확정).** 바이너리에 이름 레지스트리가 통째로 있다:
+  문자열 블록 `0x14048d138–0x14048dd80` 에 144개가 있고 전부 `g_` 접두이며, 그중 4개는
+  cbuffer 블록명(`g_bufStatic`/`g_bufLights`/`g_bufAnimation`/`g_bufDynamic`)이라
+  **유니폼은 140**. 등록 함수 `0x140002860–0x140004321` 이 꼬리에서 `mov r8d, 0x8c`(=140)로
+  개수를 못박는다 — 두 근거가 독립적으로 일치한다. 조회부는 `0x1400db7ad`(FNV-1a),
+  해시맵 전역 `0x1404e8100`, 센티널 `0x8c` = "엔진 유니폼 아님".
 
-  **그래서 왜 시급한가**: `g_Texture0Rotation`/`g_Texture0Translation` 은 스프라이트시트 UV
-  서브렉트다(`genericimage.vert` · `passthrough.vert`). 그리고 `g_EyePosition` 은
-  `generic{,2,3,4}.vert` 의 시선 벡터 — **`WAPLE_BUILTIN_MESH_SHADERS` 를 켜는 순간 도달한다**
-  (3470948192 백화 대응으로 계획돼 있다). 등재만 하면 오분류는 막지만 값은 여전히 0 이라
-  UV 가 (0,0) 으로 붕괴하고 시점이 원점에 박힌다. **이름 등재와 실값 피드를 한 커밋에서
-  같이 해야 하고, 그 전에는 그 플래그를 켜면 안 된다.** 이 항목이 그 전제조건이다.
+  **종전 이 항목이 든 "11개" 는 틀렸다.** 그 숫자는 *온전히 풀어 쓴 이름*만 센 것이라,
+  자기 축약(`g_Orientation{Up,Right,Forward}` = 3, `g_Fog*` = 4)만 전개해도 이미 18이다.
+  같은 기준(코퍼스 도달 ≥ 1 · 샘플러 아님 · `engineNeutralDefault` 없음 · 의도적 제외 아님)을
+  만족하는데 목록에서 빠져 있던 것이 7개 더 있다 — `g_LightsPosition`, `g_LightsColorRadius`,
+  `g_LightsColorPremultiplied`, `g_ViewportViewProjectionMatrices`, `g_MorphBoneRules`,
+  `g_MorphBoneTransform`, `g_BlendMap`. 감쇄: 140 → 73(미인식) → 63(샘플러 10 제외) →
+  34(코퍼스 0건 29 제외) → 30(`engineNeutralDefault` 4 제외) → **25**(`g_RenderVar0..4` 5 제외).
+
+  **"미등재는 0 을 먹는다" 도 일괄로는 틀렸다.** 비배열 벡터만 조용히 0 으로 붕괴한다.
+  배열 12개는 `symbolMap` 치환에 `[idx]` 가 붙어 대개 MSL 컴파일이 실패하고 **스톡 폴백**으로
+  간다(조용히 틀린 그림이 아니라 안전한 실패다). `g_MorphOffsets` 는 선언 자체가 드롭된다.
+
+  **`WAPLE_BUILTIN_MESH_SHADERS` 의 전제조건 서술도 틀렸다.** 화이트리스트는
+  `generic{,2,3,4}` 4종뿐이고(`SceneRenderer3D.swift:1043`), include 체인을 전개하면 그 경로에서
+  실제로 무가드로 도달하는 것은 **셋**뿐이다 — `g_EyePosition`(generic.vert:6),
+  `g_LightsPosition`(generic.vert:7), `g_LightsColorRadius`(generic.frag:4).
+  `g_Texture0Rotation`/`g_Texture0Translation`·`g_ViewUp`/`g_ViewRight`·`g_Orientation*`·
+  `g_HDRParams` 는 이 체인에 **도달하지 않는다**(종전 서술의 "켜는 순간 도달한다" 는 과장이다).
+
+  그리고 유니폼은 **유일한 블로커가 아니다.** `SceneRenderer3D.swift:1039-1042` 가 이미
+  적어 두었듯 4종 전부 `a_Normal` 을 무조건 참조하는데 `GLSLTranslator` 의 VIn 은
+  `a_Position`/`a_TexCoord` 만 지원한다(`GLSLTranslator.swift:1797`) — 오늘은 **네 개가 전부
+  MSL 컴파일에 실패한다**. attribute 화이트리스트 확장이 동등한 선행 블로커인데 종전 D3 는
+  이걸 빠뜨린 채 자기만 "그 전제조건" 이라고 적고 있었다. `generic4` 는 추가로
+  `sampler2DComparison` 이 `GLSLType` 에 없어 선언 9건(그림자 아틀라스 포함)이 드롭된다.
+
+  **값 공급**: `EngineU`(320B, `GLSLTranslator.swift:1808`)에 카메라·라이트·포그·본·모프
+  슬롯이 하나도 없다. 난이도 하 9개(`g_EyePosition`·`g_ViewRight/Up`·`g_Fog*`·
+  `g_Texture3MipMapInfo`·`g_Texture0Rotation/Translation`), 중 9개(배열 피드 구조 확장),
+  상 7개(스키닝/모프/퍼펫 — 값 자체가 없거나 CPU 프리스킨과 충돌).
+
+  **결론(작업 순서)**: ① attribute `a_Normal` 지원 → ② 무가드 3종 등재 + 실값 피드를 한
+  커밋에서 → ③ 그 다음에야 플래그를 켠다. 이름 등재만 하면 오분류는 막지만 값이 0 이라
+  시점이 원점에 박힌다는 종전 지적 자체는 유효하다.
+
+  **오늘 도달이 0인 이유**(종전 서술 유지): `buildCustomLayerShader` 는 씬 **패키지**의
+  `.vert`/`.frag` 만 받고, 베이스 자산의 `generic*`/`genericimage*` 는 그 경로를 타지 않는다.
 
 - **D4 모델 json `nopadding`/`instanced` · `general.perspectiveoverridefov` 사문화**
   (2026-08-20 발굴) — 모델 json 파서 0x1401fac66 의 키 집합은
@@ -143,6 +171,73 @@ macOS 최소 **14** 상향(`sceneBridgingOptions` 요구).
   `scripts/jsmodules/wecolor.js` 본문 그대로 심었다. 같은 라운드에 `WEMath.smoothStep` 의
   "Hermite 인지 선형인지 미확정" 주석도 해소했다 — 동봉 `wemath.js` 가
   `x*x*(3-2*x)` 로 못박는다(GLSL 유추가 맞았다).
+
+- **D8 미구현 파티클 원소 — 목록의 구성이 틀렸다** (2026-08-20 전수 확정)
+
+  WE 의 원소 이름을 `stricmp`(0x1402c10d0) + `memcmp`(0x140420ff0) 게이트로 `.text` 전수
+  스캔하면 **49개**(emitter 3 / initializer 16 / operator 26 / renderer 4)이고 전부 단일
+  디스패처 `0x1401c5490–0x1401d152c` 안에 있다. Waple 과의 차집합은 **operator 9종**:
+  `boids`, `maintaindistancetocontrolpoint`, `maintaindistancebetweencontrolpoints`,
+  그리고 충돌 **6종**(`collisionplane`/`sphere`/`box`/`bounds`/`quad`/`model`).
+
+  종전 기록의 "충돌 5종 + `inheritvaluefromevent`" 는 틀렸다. 충돌은 6종이고
+  `collision`·`collisionterrain` 은 **바이너리에 이름 자체가 없다**. `inheritvaluefromevent` 는
+  차집합에 안 잡히지만(이름은 받는다) **섹션 귀속이 틀렸다** — WE 에선 operator(opcode 0x14,
+  주입기 0x1401c0080)이고 initializer 는 `inheritinitialvaluefromevent`(0x1401bc980)인데
+  Waple 은 둘을 initializer 한 case 에 묶어서, operator 섹션에 오면 `parseOperators` 가 드롭한다.
+
+  **`collisionbox` 는 구현하면 안 된다** — WE 자신이 no-op 다. opcode 0x17 의 핸들러 주소
+  0x140240279 는 VM 의 **명령어 전진 라벨**이라 디스패치하자마자 다음 명령으로 넘어간다.
+
+  실도달(미러 중복 제거, 합성 프리뷰 `scenes/particleelementpreviews/<원소>/` 제외 —
+  WE 가 48개 원소 전부에 하나씩 깔아둔 에디터용이라 세면 전 원소가 "도달 1건" 이 된다):
+  `boids` 2(Water "Dripping water" 계열) · `maintaindistancetocontrolpoint` 1(Magic
+  "Vortex orb") · `maintaindistancebetweencontrolpoints` 2(Lightning "Thunderbolt").
+  **나머지 7종(충돌 6 + `inheritvaluefromevent`)은 도달 0건 — 구현 가치가 없다.**
+
+  **최우선은 `maintaindistancetocontrolpoint`** — 난이도 최저(위치 투영), 시각 영향 최대
+  (지금 Vortex orb 의 구각이 통째로 없다), 선행 과제 불필요. "CP 지원(G-C2-02) 없으면
+  어차피 no-op" 이라는 종전 판단은 **이 원소에 대해선 거짓**이다: 외부 분기가 `입자 수 == 0`
+  하나뿐이라 퇴화 가드가 없고, 유일한 실사용처가 `{"variablestrength": 5}` 만 써서 주입
+  기본값 `distance` 200.0(ortho)이 그대로 발화하며, 그 CP0 이 `{"id": 0}` = 시스템 원점이라
+  **CP0 = 로컬 원점으로 두면 CP 지원 없이도 원본과 같아진다**.
+  (`maintaindistancebetweencontrolpoints` 는 반대로 주장이 참이다 — 두 구간이 퇴화하면
+  0x140242206·0x140242210 이 오퍼레이터를 통째로 건너뛴다. CP 지원과 묶어서 처리할 것.)
+
+- **D9 G-C2-03 오퍼레이터 블렌드 창 — 대상은 11종, 수식 확정** (2026-08-20)
+
+  런타임 가중치 함수는 `0x14022a530..0x14022a576`(`.pdata` 엔트리 없는 리프, SSE packed
+  4-wide). 파스는 공용 헬퍼 `0x1401c2a40..0x1401c2e4e`(5조각) 한 곳이 전담한다.
+
+  **대상 오퍼레이터는 11종이다** — 공용 파서 호출부 11곳을 각각 지배하는 직전 게이트로
+  기계적으로 귀속했다: `angularmovement`, `oscillateposition`, `oscillatealpha`,
+  `oscillatesize`, `maintaindistancetocontrolpoint`, `maintaindistancebetweencontrolpoints`,
+  `reducemovementnearcontrolpoint`, `vortex_v2`, `capvelocity`, `remapvalue`,
+  `inheritvaluefromevent`. **`controlpointattract` 와 `turbulence` 는 대상이 아니다** —
+  둘 다 JSON 에 블렌드 키를 적은 실자산이 있지만(각 1건·4건) WE 는 읽지 않는다.
+
+  키는 `blendinstart`/`blendinend`/`blendoutstart`/`blendoutend`, 기본 **0/0/1/1**
+  (ortho 분기 없음 — 단일 상수). 유도:
+  `inStart = min(bis, bie − 1e-4)` · `outEnd = max(boe, bos + 1e-4)` ·
+  `w = clamp01((f − inStart)/(bie − inStart)) · clamp01((outEnd − f)/(outEnd − bos))`,
+  `f = age[i]/lifetime[i]`(파티클 수명 비율, `rcpps` 근사라 비트동일 재현 불가).
+  적용은 필드별 `new = old + w·(unweighted_new − old)` — 종전 기록의 `s = 1 + w·(s₀−1)` 은
+  스케일 계수 케이스의 특수형일 뿐 일반형은 lerp 다. 세 번째 파라미터도 outStart 가 아니라
+  **outEnd** 다.
+
+  활성화 게이트(0x1401c2deb~): `(bie > 0.01 || bos < 0.99) && (bos − bie > 0.01 ||
+  inDur > 0.01 || outDur > 0.01)` 일 때만 base opcode 를 ext opcode 로 승격한다.
+  기본값 0/0/1/1 이면 첫 조건에서 탈락 → 가중 코드가 아예 안 돈다.
+
+  실도달(미러 제거, 게이트 통과 기준): `capvelocity` 3 · `oscillatealpha` 2 ·
+  `oscillateposition` 2 · `remapvalue` 2 = **9건**. 전부 Lightning/Fireworks 프리셋이다.
+
+  **Waple 현황은 "전혀 미구현" 이 아니라 1/11 부분 구현이다** — `RemapSpec` 에만 필드가 있고
+  `remapvalue` 에서만 파싱·소비한다. 그 구현의 결함 3건: ① `blendoutstart`/`blendoutend`
+  기본이 0 인데 원본은 1.0/1.0(지금은 가드 덕에 우연히 같지만 `blendoutstart` 만 명시하면
+  갈린다) ② `blendinend <= blendinstart` 를 통째로 건너뛰는데 원본은 하드 스텝이 된다
+  (실코퍼스 `thunderbolt_child_spawner` 의 `capvelocity` 0.2/0.2 가 그 케이스) ③ 활성화
+  게이트(0.01/0.99) 미구현.
 
 - **F4-polish① 텍스트 anchor/padding/backgroundbrightness 렌더 소비** (2026-07-28 파스 착지) — `SceneTextLayer.anchor`/`padding`/`backgroundBrightness` 3필드 파스·보존 완료([SceneDocument.swift](Sources/WapleCore/SceneDocument.swift) parseText). anchor 비-none 70건(코퍼스 1642 오브젝트 중)·padding 전건·backgroundbrightness 1474건은 값이 있지만 opaqueBackground 와 동형으로 **렌더 소비는 아직 없음**(배경박스 최소구현 정책 유지). **[2026-08-20 정정] 종전 여기에 "outline 만 TextRasterizer 가 그림" 이라고 적혀 있었는데 사실이 아니다** — `Sources/WapleRender/TextRasterizer.swift` 에 `outline` 문자열이 **0건**이고 `render(...)` 는 outline 인자를 받지도 않는다. `SceneDocument` 가 `outline`/`outlineColor`/`outlineThickness`/`spacing` 을 파스해 필드에 담지만 소비처가 없다 — 아래 D1 참조. 배경박스 자체를 그리는 후속이 착수되면 이 3필드로 앵커 오프셋·패딩 여백·밝기 배율을 함께 적용할 것.
 - **F4-polish② Forward+ 라이팅 유니폼 인덱스 배열 피드** (2026-07-28 인식-전용 착지) — `g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`/`g_LFeature_Shadow*` 를 `GLSLTranslator.isEngine` 에 등재해 머티리얼 오분류(g_TexelSize 동형 사고)만 차단([GLSLTranslator.swift](Sources/WapleCore/GLSLTranslator.swift) isEngine/engineReplacement). WE 실선언은 배열(`g_LPoint_Color[LIGHTS_POINT]`)·사용부는 `[l].rgb` 인덱스 접근인데, 이번 등재의 대체값(0 벡터/항등)은 비-배열 스칼라라 인덱스 구독엔 컴파일 안전하지 않음 — 로컬 코퍼스 460씬이 `LIGHTS_POINT/SPOT/TUBE/DIRECTIONAL` 콤보를 전혀 참조하지 않아(`ShaderPreprocessor.swift:38-40`) 이 블록이 항상 전처리로 제거되므로 오늘 시점 도달 0건. 콤보 지원이 실제로 켜지는 씬이 나타나면 인덱스 가능한 constant 배열 피드로 교체할 것(네이티브 Scene3DLighting 은 이미 구현돼 있어 스코프는 커스텀 셰이더 경로 한정).
