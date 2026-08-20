@@ -2259,7 +2259,17 @@ extension SceneDocument {
     /// scene object "instanceoverride" 블록 → 타입드 오버라이드. 실측 값 형태(코퍼스 127씬/866건):
     /// 숫자 | {user,value}/{animation,value} 바인딩(float()/vec3() 언랩) | "r g b" 문자열(colorn/
     /// controlpointN). 색 배수는 colorn(0..1) × brightness(스칼라) × color(0..255 → /255) 합성.
-    /// id 는 인스턴스 식별자(미적용), controlpointangleN 은 실코퍼스 전건 0 — 스킵. 유효 필드 없으면 nil.
+    /// id 는 인스턴스 식별자(미적용). 유효 필드 없으면 nil.
+    ///
+    /// `controlpointangleN` 은 **여전히 미구현**이지만, 종전 주석의 "실코퍼스 전건 0" 은 동봉 자산
+    /// 기준으로 **거짓**이다(2026-08-20 재측정). 이 키를 가진 오브젝트 6건 중 **2건이 0 이 아니다**:
+    ///   `presets/water/previewdrippingwater/scene.json`  angle1 "0 0 −0.52360" · angle2 "0 0 0.52360"
+    ///   `presets/magic/previewvortexorb/scene.json`      angle1 "2.47837 −0.62832 0.02213"(애니 바인딩)
+    /// 둘 다 `preview*` 씬이라 **non-preview 도달은 0** 이고, WE 는 이 키를 실제로 읽는다
+    /// (문자열 `controlpointangle0..7` @0x140491490+, 프로퍼티 등록 `lea rdx` @0x14024e08e —
+    /// 짝이 되는 `controlpoint0` 은 @0x14024dfb6). 그래서 "도달 0 이라 안 읽는다" 가 아니라
+    /// "**preview 도달 2건, 미구현**" 이 정확한 상태다. Waple 의 CP 모델이 위치만 들고 회전을
+    /// 들지 않으므로 착지하려면 CP 표현부터 넓혀야 한다 — 별건.
     private static func particleInstanceOverride(_ raw: Any?) -> ParticleInstanceOverride? {
         guard let io = raw as? [String: Any], !io.isEmpty else { return nil }
         var ov = ParticleInstanceOverride()
