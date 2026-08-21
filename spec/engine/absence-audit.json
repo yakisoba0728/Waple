@@ -6,7 +6,7 @@
    "id": "absence.audit.result",
    "value": {
     "binariesScanned": 42,
-    "claimsTested": 10,
+    "claimsTested": 11,
     "refutedClaims": [],
     "verdict": "정본의 부재 주장 중 반증된 것 없음"
    },
@@ -55,7 +55,14 @@
     },
     "PKGV": {
      "absentIn": "all",
-     "claim": "Sources/WapleCore/ScenePackage.swift:50-64 가 'PKGV 4자리 = per-file serial' 문서 서술을 반증한다 — 토큰 자체가 없다"
+     "claim": "맨 `PKGV` 4글자 토큰(뒤에 아무것도 안 붙는 형태)은 42종 어디에도 없다 — 'PKGV 4자리 = per-file serial' 이라는 종전 문서 서술의 근거가 되지 못한다. 버전이 붙은 실물 매직은 아래 PKGV0024 항목이 따로 잰다"
+    },
+    "PKGV0024": {
+     "absentIn": [
+      "wallpaper64.exe",
+      "resourcecompiler64.exe"
+     ],
+     "claim": "실물 패키지 매직(버전 붙은 형태). 굽는 쪽인 bin/wallpaperui.exe 에만 있고 런타임·리소스컴파일러에는 없다 — 런타임은 매직을 즉치로 비교한다"
     },
     "WEMath": {
      "absentIn": "all",
@@ -103,6 +110,12 @@
      }
     },
     "nonpoweroftwo": {
+     "wallpaperui.exe": {
+      "ascii": 1,
+      "utf16le": 0
+     }
+    },
+    "PKGV0024": {
      "wallpaperui.exe": {
       "ascii": 1,
       "utf16le": 0

@@ -89,8 +89,24 @@ CLAIMS = {
     },
     "PKGV": {
         "absentIn": "all",
-        "claim": "Sources/WapleCore/ScenePackage.swift:50-64 가 'PKGV 4자리 = per-file serial' "
-                 "문서 서술을 반증한다 — 토큰 자체가 없다",
+        # **[2026-08-21 정정]** 이 주장을 "패키지 매직이 아예 없다" 로 읽으면 **틀린다.**
+        # 이 스캐너는 앞뒤가 인쇄가능 문자면 **부분문자열로 보고 버린다**(`standalone_count`).
+        # 그런데 실물 매직은 `PKGV` 뒤에 버전 4자리가 붙는 `PKGV0024` 형태라 그 규칙에 걸린다 —
+        # `bin/wallpaperui.exe` 에 raw 로 2건 있고(`0xab2876` 은
+        # `checkWallpaperPKGVersions` 의 부분문자열, `0xad0898` 이 진짜 `PKGV0024`),
+        # 이 항목만 보면 "42종 어디에도 없음" 이라 반대로 읽힌다.
+        # 그래서 아래 `PKGV0024` 주장을 따로 세워 **버전 붙은 형태를 직접** 잰다.
+        # 종전 claim 은 `ScenePackage.swift:50-64` 라는 **줄 번호**를 인용했는데 그 줄은 이미 밀렸다.
+        "claim": "맨 `PKGV` 4글자 토큰(뒤에 아무것도 안 붙는 형태)은 42종 어디에도 없다 — "
+                 "'PKGV 4자리 = per-file serial' 이라는 종전 문서 서술의 근거가 되지 못한다. "
+                 "버전이 붙은 실물 매직은 아래 PKGV0024 항목이 따로 잰다",
+    },
+    # 실물 `.pkg` 매직. **런타임(wallpaper64)과 컴파일러에는 없고 에디터에만 있다** 는 것이
+    # 이 항목이 잠그는 사실이다 — `.pkg` 를 **굽는** 쪽은 에디터다.
+    "PKGV0024": {
+        "absentIn": ["wallpaper64.exe", "resourcecompiler64.exe"],
+        "claim": "실물 패키지 매직(버전 붙은 형태). 굽는 쪽인 bin/wallpaperui.exe 에만 있고 "
+                 "런타임·리소스컴파일러에는 없다 — 런타임은 매직을 즉치로 비교한다",
     },
     "WEMath": {"absentIn": "all", "claim": "엔진 수학 라이브러리 이름 후보 — 부재 확인용"},
     "g_Gravity": {

@@ -189,6 +189,17 @@ final class ScenePackageWEParityTests: XCTestCase {
     /// Swift `.lowercased()` 는 유니코드 전체 매핑이라 더 넓게 접는다.
     func testASCIILowercasingDoesNotFoldNonASCII() {
         XCTAssertEqual(ScenePackage.asciiLowercased("Models/Foo.JSON"), "models/foo.json")
+        // **경계 네 개를 값으로 못 박는다** — CRT 의 빠른 경로가 `lea eax,[rcx-0x41] ; cmp eax,0x19 ; ja`
+        // 라 접히는 구간은 `0x41..0x5A`(`'A'..'Z'`) **닫힌 구간**이다. 바깥 이웃 `@`(0x40) ·
+        // `[`(0x5B) 는 그대로여야 한다.
+        // [2026-08-21 신설] 돌연변이 검증에서 상한을 `0x5A`→`0x59` 로 바꿔도 **아무 테스트도 안
+        // 깨졌다**(39건 중 0건 실패). 무효한 돌연변이가 아니라 `'Z'` 를 쓰는 케이스가 없었던 것 —
+        // 즉 테스트가 약했다. 그래서 네 경계를 여기 박는다.
+        XCTAssertEqual(ScenePackage.asciiLowercased("A"), "a", "하한 0x41")
+        XCTAssertEqual(ScenePackage.asciiLowercased("Z"), "z", "상한 0x5A")
+        XCTAssertEqual(ScenePackage.asciiLowercased("@"), "@", "0x40 은 접히지 않는다")
+        XCTAssertEqual(ScenePackage.asciiLowercased("["), "[", "0x5B 은 접히지 않는다")
+        XCTAssertEqual(ScenePackage.asciiLowercased("ABCXYZ[@"), "abcxyz[@")
         // 라틴 확장·키릴·그리스: Swift 는 접고 WE 는 안 접는다.
         XCTAssertEqual(ScenePackage.asciiLowercased("\u{00C0}\u{00C9}"), "\u{00C0}\u{00C9}")
         XCTAssertEqual("\u{00C0}\u{00C9}".lowercased(), "\u{00E0}\u{00E9}")
@@ -284,5 +295,95 @@ final class ScenePackageWEParityTests: XCTestCase {
         XCTAssertEqual(p.data(for: "empty.txt"), Data(),
                        "폴더 백엔드는 크기 게이트를 타지 않는다(엔트리 표가 없는 WE 경로와 동형)")
         XCTAssertEqual(p.data(for: "scene.json"), Data("{}".utf8))
+    }
+
+    // MARK: - §2.1 프레이밍 — 종단 조건과 오프셋 기준을 **값으로** 잠근다
+    //
+    // 아래 넷은 2026-08-21 에 로더(`0x140276700`)를 `.pdata` 함수 시작에서 **선형으로** 다시 떠서
+    // 확정한 사실이다. 문서 §2.1·§2.3 이 산문으로만 적고 있던 것을 테스트로 옮긴다.
+
+    /// **오프셋 기준은 파일 선두가 아니라 데이터 섹션 선두다.** 로더는 TOC 를 다 읽은 뒤
+    /// `0x140276b4d call 0x14004a840`(tellg) 로 현재 위치를 재고,
+    /// `0x140276b63 add dword [rax+0x30], edx` 로 **전 엔트리의 offset 에 그 값을 더한다**.
+    ///
+    /// 손으로 바이트를 짓는 이유: `ScenePackageTests.makePkg` 는 오프셋을 스스로 계산하므로
+    /// 기준이 바뀌어도 자기 자신과는 늘 맞는다. 여기서는 TOC 길이를 **손으로 세어** 못 박는다.
+    func testEntryOffsetsAreRelativeToDataSectionStart() throws {
+        let ver = Array("PKGV0023".utf8)
+        let n0 = Array("a.txt".utf8), n1 = Array("b.txt".utf8)
+        let d0 = Data("AAAA".utf8), d1 = Data("BB".utf8)
+        var out = i32(ver.count) + ver + i32(2)
+        out += i32(n0.count) + n0 + i32(0) + i32(d0.count)
+        out += i32(n1.count) + n1 + i32(d0.count) + i32(d1.count)
+        // 헤더 4+8+4 = 16, 엔트리 둘 (4+5+4+4) × 2 = 34 → 데이터 섹션은 파일 오프셋 50 에서 시작한다.
+        XCTAssertEqual(out.count, 50, "TOC 길이 계산이 바뀌었다 — 아래 단언의 전제가 무너진다")
+        out += [UInt8](d0) + [UInt8](d1)
+
+        let p = try ScenePackage.parse(Data(out))
+        // 표에 적힌 offset 은 **가공하지 않은 원문**이다(데이터 섹션 상대).
+        XCTAssertEqual(p.entries.map(\.offset), [0, 4])
+        // 그런데 실제로 잘라 오는 바이트는 파일 오프셋 50·54 다.
+        XCTAssertEqual(p.data(for: "a.txt"), d0)
+        XCTAssertEqual(p.data(for: "b.txt"), d1)
+        // 기준이 파일 선두였다면 `a.txt`(offset 0, size 4)는 파일 첫 4바이트(= 매직 길이 i32)를
+        // 돌려줬을 것이다. 그렇지 않음을 함께 못 박는다.
+        XCTAssertNotEqual(p.data(for: "a.txt"), Data(out.prefix(4)))
+    }
+
+    /// `entryCount == 0` 은 **빈 패키지로 성공**이다 — `0x140276992 cmp dword [rbp+0x77], r15d` /
+    /// `0x140276996 jle 0x140276b46` 가 엔트리 표를 통째로 건너뛰고 그대로 dataBase 계산으로 간다
+    /// (반환값 레지스터 `esi` 는 `0x140276b6e mov esi, r15d` 로 0 = 성공).
+    func testZeroEntryCountParsesAsEmptyPackage() throws {
+        let p = try ScenePackage.parse(ScenePackageTests.makePkg([]))
+        XCTAssertTrue(p.entries.isEmpty)
+        XCTAssertNil(p.data(for: "scene.json"))
+    }
+
+    /// **의도적 이탈.** 같은 `jle` 가 **음수** entryCount 도 "빈 패키지 성공" 으로 보낸다(부호 있는
+    /// 비교다). Waple 의 `i32` 는 부호 없이 읽어 `0xFFFFFFFF` 를 4,294,967,295 로 만들고
+    /// `count <= maxEntries` 에서 거부한다. 어느 쪽이든 엔트리는 0개고, Waple 은 **에러로 끊는다**.
+    /// 실물 표본에서 음수 count 는 관측되지 않았다(워크샵 161 pkg 파스 오류 0건).
+    func testNegativeEntryCountIsRejectedUnlikeWE() {
+        let ver = Array("PKGV0023".utf8)
+        let out = i32(ver.count) + ver + [0xFF, 0xFF, 0xFF, 0xFF]
+        XCTAssertThrowsError(try ScenePackage.parse(Data(out))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+    }
+
+    /// **의도적 이탈 — 종단 조건.** WE 의 엔트리 루프는 `r12d` 를 0 부터 세어 `entryCount` 까지 도는
+    /// **고정 횟수 루프**다(`0x1402769a0 mov r12d, r15d` … `0x140276b33 inc r12d` /
+    /// `0x140276b3c cmp r12d, dword [rbp+0x77]` / `0x140276b40 jl 0x1402769a3`). "빈 이름이면 끝" 같은
+    /// 센티널이 **없고**, 루프 어디에도 스트림 상태 검사가 없다 — 잘린 파일이면 읽기가 실패한 채로
+    /// 남은 스택 값을 그대로 엔트리로 쌓고 **0(성공)** 을 돌려준다.
+    /// Waple 은 경계를 넘는 순간 `malformed` 로 끊는다. 이 쪽이 엄격하다.
+    func testTruncatedEntryTableIsRejectedUnlikeWE() {
+        let ver = Array("PKGV0023".utf8)
+        let nm = Array("a.txt".utf8)
+        // count=2 라고 선언하고 엔트리 하나 분량만 준다.
+        var out = i32(ver.count) + ver + i32(2)
+        out += i32(nm.count) + nm + i32(0) + i32(1)
+        out += [0x41]
+        XCTAssertThrowsError(try ScenePackage.parse(Data(out))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
+    }
+
+    /// **의도적 이탈 — 상한 위반의 처리.** WE 의 길이 접두 문자열 리더(`0x140060720`)는
+    /// `0x140060752 cmp eax, ebx` / `0x140060754 jbe` 가 **무부호** 비교이고, 초과하면
+    /// `0x140060756`–`0x14006076c` 가 문자열을 **빈 것으로 만들고 그대로 반환**한다 —
+    /// 스트림에서 **한 바이트도 먹지 않는다**. 엔트리 이름의 상한 `0x800`(`0x1402769bb`)도 같은
+    /// 리더가 아니라 호출부에서 같은 모양으로 처리한다(`0x1402769c2`–`0x1402769d6` 가 이름을 빈
+    /// 문자열로 만들고 `0x1402769d6 jmp 0x140276a63` 로 **이름 바이트를 안 먹은 채** offset/size
+    /// 읽기로 간다). 곧 WE 는 그 뒤 파스가 통째로 밀린 채 계속 간다(방어라기보다 버그다).
+    /// Waple 에는 `0x800` 상한 자체가 없고, 선언 길이가 버퍼를 넘는 순간 `malformed` 로 끊는다 —
+    /// 결과적으로 더 엄격하다.
+    func testOversizeEntryNameLengthIsRejectedUnlikeWE() {
+        let ver = Array("PKGV0023".utf8)
+        var out = i32(ver.count) + ver + i32(1)
+        out += i32(0x801) + Array(repeating: UInt8(0x61), count: 8) + i32(0) + i32(0)
+        XCTAssertThrowsError(try ScenePackage.parse(Data(out))) { e in
+            XCTAssertEqual(e as? ScenePackageError, .malformed)
+        }
     }
 }
