@@ -305,11 +305,13 @@ public struct TexImage {
         //    인코딩 파일이며 texFormat 은 무시한다(RePKG TexMipmapFormatGetter 규약). 스캔보다 우선하는 이유:
         //    LZ4 압축 임베디드 이미지는 첫 literal 로 시그니처가 누출돼 아래 512B 스캔이 .png 로 오라우팅한 뒤
         //    압축 바이트를 PNG 로 디코드 실패하기 때문. 실측(2026-07-09): **설치 assets 안의** 임베디드
-        //    35개는 전부 비압축이고 v4 서브레이아웃이 둘 — splash_*(표준 mip → 여기서 .embeddedImage) 와
-        //    lut/*(mip 에 여분 int → parseMip 실패 → 아래 fast-path .png). 둘 다 정상 디코드(어느 쪽도
-        //    payloadRange 오정렬 없음).
+        //    35개는 전부 비압축이다.
         //    [정정 2026-08-01] 종전엔 이 35 를 "코퍼스" 라고 적었다. assets 한정 수치이고 워크샵
         //    scene.pkg 를 합친 전수는 796개다(그중 701개가 mipCount>1). 아래 mipChain 전달 참조.
+        //    [정정 2026-08-21] 종전엔 그 35개 중 lut/* 28개를 "mip 에 여분 int 가 있어 parseMip 실패 →
+        //    아래 fast-path .png" 로 적어 두고 그대로 뒀다. **여분 int 의 정체는 slice3d 의 mip 레코드
+        //    depth 였다**(hasMipDepth). 이제 28개도 여기로 와서 컨테이너를 정상 파스한다 —
+        //    payloadRange 는 폴백 때와 동일해 디코드 픽셀은 무회귀이고, depth/imageCount/체인이 살아난다.
         let container = parseMip(b, imgW: imgW, imgH: imgH, format: format, base: base, hasMipDepth: hasMipDepth)
         if let (mips, imageFormat, _, chain) = container {
             let mip = mips[0]
