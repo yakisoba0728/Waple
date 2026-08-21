@@ -180,8 +180,16 @@ final class SceneDocumentFidelityTests: XCTestCase {
         XCTAssertFalse(t.outline)
         XCTAssertFalse(t.overflowEllipsis)
         XCTAssertFalse(t.justify)
-        XCTAssertNil(t.maxWidth, "limitwidth 가 태그 5 가 아니면 maxwidth 도 안 걸린다")
+        XCTAssertNil(t.maxWidth, "limitwidth 가 태그 5 가 아니면 게이트가 안 열린다")
         XCTAssertNil(t.maxRows)
+        // AV: **게이트만 태그 5 전용이다.** 값 쪽 주입기는 태그 1/2/3(숫자)을 받는다 —
+        // float `0x1401a4b00`(`dec eax; cmp eax,2; ja skip` @`0x1401a4b17`–`0x1401a4b26`) ·
+        // int `0x1401a4930`(`cmp eax,1/2/3` @`0x1401a4953`–`0x1401a4960`). 그러니 `"maxwidth":123`
+        // (태그 1)은 게이트가 닫혀 있어도 멤버 `+0x508` 에 **착지한다**(함정 18: 숫자 태그 게이트는
+        // 값 주입기 쪽에 있고 플래그 게이트와 별개다).
+        XCTAssertFalse(t.limitWidth); XCTAssertFalse(t.limitRows)
+        XCTAssertEqual(t.maxWidthValue, 123, "게이트가 닫혀도 숫자 태그 maxwidth 는 멤버에 남는다")
+        XCTAssertEqual(t.maxRowsValue, 7)
     }
 
     /// `config.*` 는 디스크립터가 아니라 모델 `.json` 파서(`0x1401fac50`–`0x1401fb498`)가

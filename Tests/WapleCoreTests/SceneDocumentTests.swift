@@ -946,6 +946,44 @@ final class SceneDocumentTests: XCTestCase {
         let b = doc.texts[3]
         XCTAssertEqual(b.maxWidth, 260, "바인딩 dict maxwidth 는 {value} 언랩(실물 32건)")
         XCTAssertEqual(b.maxRows, 1, "maxrows 부재 시 실측 기본 1")
+        // AV: 게이트/값 분리 후에도 저장 프로퍼티 넷이 위 유효값과 정합해야 한다.
+        XCTAssertTrue(l.limitWidth); XCTAssertEqual(l.maxWidthValue, 390)
+        XCTAssertTrue(l.limitRows); XCTAssertEqual(l.maxRowsValue, 2)
+        XCTAssertFalse(u.limitWidth); XCTAssertFalse(u.limitRows)
+        XCTAssertFalse(d.limitWidth, "부재 시 게이트 false")
+        XCTAssertEqual(d.maxWidthValue, 500, "부재 시 생성자 기본 500(0x140256c1a)")
+        XCTAssertEqual(d.maxRowsValue, 1, "부재 시 생성자 기본 1(0x140256c2e)")
+    }
+
+    /// AV: **게이트와 값은 실물에서 서로 다른 멤버다.**
+    /// `limitwidth` `0x140258f0d`(대입 `0x140258f1e`) → `+0x594` bit2(주입기 `0x14019bfa0`
+    /// `or ecx,4`) / `maxwidth` `0x14025959e`(대입 `0x1402595af`) → float `+0x508`
+    /// (주입기 `0x1401a4b00`). `limitrows` `0x140258fe6` → `+0x594` bit3(`0x14025aca0` `or ecx,8`)
+    /// / `maxrows` `0x14025965c` → int `+0x510`(주입기 `0x1401a4930`).
+    /// 적용 루프 `0x1401731d0` 은 JSON 키 이름으로 디스크립터를 찾아 그 주입기 하나만 부르므로
+    /// (`0x140173398` `call qword [rax+8]`) **게이트가 꺼져 있어도 저작값이 멤버에 남는다** —
+    /// `thisLayer.maxrows` 는 그 값을 본다. 소비 게이트는 레이아웃 요청 조립에만 있다
+    /// (`0x140257498` `test cl,4` → `0x14025749d` · `0x1402574aa` `test cl,8` → `0x1402574af`).
+    func testTextLimitGateAndValueAreSeparateMembers() throws {
+        let scene = """
+        {"general":{"orthogonalprojection":{"width":100,"height":100}},
+         "objects":[
+           {"text":"A","limitwidth":false,"maxwidth":390.0,"limitrows":false,"maxrows":9,
+            "origin":"0 0 0","visible":true},
+           {"text":"B","limitwidth":true,"maxwidth":0,"limitrows":true,"maxrows":0,
+            "origin":"0 0 0","visible":true}]}
+        """
+        let doc = try SceneDocument.parse(package: try pkg([("scene.json", scene)]))
+        let a = doc.texts[0]
+        XCTAssertEqual(a.maxWidthValue, 390, "limitwidth=false 라도 maxwidth 멤버는 저작값 그대로")
+        XCTAssertEqual(a.maxRowsValue, 9, "limitrows=false 라도 maxrows 멤버는 저작값 그대로")
+        XCTAssertNil(a.maxWidth, "소비 유효값은 게이트가 꺼지면 nil(래스터 무회귀)")
+        XCTAssertNil(a.maxRows)
+        let b = doc.texts[1]
+        XCTAssertTrue(b.limitWidth); XCTAssertTrue(b.limitRows)
+        XCTAssertEqual(b.maxWidthValue, 0); XCTAssertEqual(b.maxRowsValue, 0)
+        XCTAssertNil(b.maxWidth, "0 이하는 종전과 같이 무제한 취급")
+        XCTAssertNil(b.maxRows)
     }
 
     /// 콘텐츠 키가 JSON null(NSNull) 인 오브젝트(실물 21오브젝트) — 트랜스폼-온리 노드로 계층 보존.

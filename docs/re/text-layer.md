@@ -40,6 +40,8 @@
 | 12 | 폴백 폰트 체인 | 고정 8단 테이블 `0x140484c40`(arial → seguiemj → arialuni → segoeui → **fonts/TwemojiMozilla.ttf** → seguisym → msyh → Malgun) | CoreText 캐스케이드에 위임(순서·이모지 페이스가 플랫폼 기본) | §3.3 |
 | 13 | 콤보 조합 | `OUTLINE/BLUR/DROP_SHADOW` 3비트 → 머티리얼 8슬롯 캐시(`0x1401b3d97`) | 콤보 개념 없음 | §6.4 |
 | 14 | `depthtest` enum 값 | `"enabled"` = **0**, `"disabled"` = **1**, 생성자 기본 **0(=enabled)** | `s != "disabled"` → 기본 true — **의미 일치** | §4.4 |
+| 15 | `limit*` 게이트와 `max*` 값 | **서로 다른 멤버**(게이트 `+0x594` bit2/bit3 · 값 `+0x508` float / `+0x510` int)이고 주입기가 키마다 따로 돈다 — `limitrows:false, maxrows:9` 인 오브젝트의 멤버는 **9** 다 | ~~`maxRows: Int?` 하나로 접어 미체크 저작값 소실~~ → **`limitRows`/`maxRowsValue` 로 분리**(2026-08-21 AV). `maxWidth`/`maxRows` 는 계산 프로퍼티라 래스터 소비부 무수정 | §4.2 · §4.3 · §11 G16 |
+| 16 | 커서 히트 상자 | `size` 멤버 `+0x2f0` = **잉크박스 + 2·clamp(padding,512)**(`0x140258900`), 상자 함수는 이미지와 동일(`0x14019dbb0`) | 배선 없음 — `buildPointerTargets` 가 텍스트를 `.geometryUnknown`(전건 배달)로 둔다. 등가값(`GPUText.rasterWidth`/`Height`)은 **이미 있다** | §8b · §11 G17 |
 
 ---
 
@@ -790,9 +792,20 @@ if (layout.minX < 0) padX −= layout.minX
 ```
 
 즉 **패딩은 세 게이트 중 하나가 참일 때만** 효력이 있고, 각 축 **512 상한**이 있다.
-셋 중 확실한 것은 `[this+0x594] & 2` = `opaquebackground` 뿐이다 — `[this+0x320]`(정수)과
-`[this+0x304] & 0x10` 의 의미는 확정 못 했다 **[미해결]**(`+0x304` 는 오브젝트 공통 플래그
-바이트로, `docs/re/scene-object-model.md` §2.1 이 bit6/8/14/15 만 짚어 두었다).
+
+**세 게이트의 정체 — 2026-08-21(클러스터 AV)에 나머지 둘을 확정했다.**
+
+| 게이트 | 뜻 | 쓰기 VA |
+|---|---|---|
+| `[this+0x594] & 2` | `opaquebackground`(bit1) | 주입기(§4.2) |
+| `[this+0x320] > 0` | **이펙트 체인이 실재한다.** 이펙트 빌더 `0x1401e6f50` 이 진입 시 0 으로 깔고(`0x1401e6fef` `mov qword [rsi+0x320], 0`), 이펙트별 패스 집계 `0x1401e7170` 이 `add dword [r8+0x320], eax` 로 누적한다(`0x1401e895b`; `eax = !(bit13 of +0x304) + [pass+0x140]`). 형제 `+0x324` 는 같은 자리에서 패스 수를 센다(`0x1401e8974`) | `0x1401e895b` |
+| `[this+0x304] & 0x10` | **오프스크린 합성이 필요하다.** 같은 빌더가 `0x1401e6fa2` `or dword [rsi+0x304], 0x10` 로 켜고, 조건은 세 갈래다 — `colorBlendMode`(`+0x32c`)가 **0 도 31 도 아니거나**(`0x1401e6f74`–`0x1401e6f81`), `+0x304 & 0x100` 이 켜져 있거나(`0x1401e6f83`), 씬 렌더 설정 `[[this+0xc8]+0x118] & 0x1800000` 이 켜져 있으면(`0x1401e6f96`) | `0x1401e6fa2` |
+
+(`+0x304` 는 오브젝트 공통 플래그 워드다 — 생성자 `0x1401e69ea` 가 `0x8040` 으로 깔고
+`docs/re/scene-object-model.md` §2.1 이 bit6 `copybackground` / bit8 `ledsource` /
+bit14 `nointerpolation` / bit15 `clampuvs` 를 짚어 두었다. **bit4 는 저작 키가 아니라 파생
+플래그**라 등록표에 없다 — 등록표에서 `+0x304` 를 쓰는 넷은 위 네 키뿐이고
+`0x1401eeb8e`·`0x1401eec5d`·`0x1401eed26`·`0x1401eee1a` 에서 확인된다.)
 
 **(b) 배경 쿼드** — `0x140258050`–`0x14025857a`:
 
@@ -811,6 +824,84 @@ if (layout.minX < 0) padX −= layout.minX
 
 배경 머티리얼은 `flat` 셰이더(`assets/materials/fonts/fontbackground.json`)이고 크기는
 잉크 박스 + 패딩이다. **`backgroundbrightness` 는 `backgroundcolor` 에 곱해지는 배수**다.
+
+---
+
+## 8b. 텍스트 오브젝트의 `size` — 커서 히트 상자가 여기 걸려 있다 (2026-08-21, 클러스터 AV)
+
+`docs/re/scene-script-api.md` §9.1 (b) 와 `docs/re/pointer-interaction.md` §7.4 우선순위 2 가
+"실물 텍스트의 히트 상자는 래스터된 픽셀 크기 — [미해결]" 로 남겨 둔 항목이다. **규약은 확정했다.**
+
+### 8b.1 히트 상자는 `size` 멤버 `+0x2f0` 이고, 텍스트도 이미지와 **같은 함수**를 탄다
+
+- 히트 순회(`0x140189fff`–`0x14018a42f`)는 오브젝트마다 타입 가상함수 `[vtbl+0x60]` 을 부른다
+  (`0x14018a041`). **텍스트 오브젝트는 4를 돌려준다** — vtable `0x140491950`(생성자
+  `0x140256af7` `lea rax,[rip+0x23ae52]` → `0x140256b05` `mov [rdi],rax`) 의 슬롯 `+0x60` 이
+  `0x1400fde90` = `mov eax,4; ret` 이다.
+- 순회는 `eax == 1 || eax == 4` 를 같은 레지스터(`rdx`)로 모아(`0x14018a044`–`0x14018a050`)
+  **하나의 상자 함수** `0x14019dbb0` 에 넘긴다(`0x14018a242`). 즉 텍스트와 이미지의 히트 기하는
+  코드가 동일하다.
+- 그 함수가 읽는 크기는 `mov rax, qword [rbx+0x2f0]`(`0x14019dd8a`) — **vec2 하나**를 8바이트로
+  집어 x 를 `xmm11`, y 를 `xmm12` 로 갈라 기저벡터에 곱하고(`0x14019dde3`·`0x14019de31`),
+  `mulps xmm4, (-0.5,-0.5,-0.5,-0.5)`(`0x14019de4b`)로 ±0.5 쿼드를 만든다. `pointer-interaction.md`
+  W-6 의 평행사변형이 이것이고, 이미지 레이어와 **완전히 같은 규약**이다.
+- `+0x2f0` 은 저작 키다 — 공통 레이어 등록자 `0x1401ee520` 의 첫 엔트리 `"size"`
+  (`lea` `0x1401ee5bd` → 대입 `0x1401ee5ce` → `[desc+0x34]=0x2f0` `0x1401ee5da` ·
+  `[desc+0x30]=1`(vec2) `0x1401ee5f0` · 주입기 `0x1401a3fc0`).
+
+### 8b.2 그런데 텍스트는 그 멤버를 **레이아웃 결과로 덮어쓴다**
+
+레이아웃(§5.3)이 끝난 직후 텍스트 빌드가 `call qword [rax+0x110]`(`0x1402575db`)로 가상함수
+슬롯 `+0x110` = **`0x140258900`** 을 부른다. 그 함수 전체가 `+0x2f0` 계산이다:
+
+```
+0x140258906  cmp byte [rcx+0x328], 0        ; 이펙트 빌더 재진입 가드(1 이면 즉시 return)
+0x140258916  rax = [rcx+0x5a8]              ; 레이아웃 결과 객체(§5.3)
+0x140258927  xmm1 = [rax+0x98] - [rax+0x90] ; 잉크박스 maxX - minX
+0x14025892f  xmm2 = [rax+0x9c] - [rax+0x94] ; 잉크박스 maxY - minY
+0x140258949  (레이아웃이 없으면) xmm1 = xmm2 = 2.0
+0x140258954  if ([rcx+0x320] > 0 || [rcx+0x304] & 0x10 || [rcx+0x594] & 2)   ; §8 과 **같은 세 게이트**
+0x140258986      xmm4 = min(padding.x, 512.0); xmm3 = min(padding.y, 512.0)  ; [rcx+0x4e8]/[rcx+0x4ec]
+0x14025896f  else xmm4 = xmm3 = 0
+0x1402589a9  xmm4 += xmm4; xmm3 += xmm3     ; 양쪽에 붙으므로 2배
+0x1402589b9  [rcx+0x2f0] = xmm1 + xmm4      ; size.x
+0x1402589c1  [rcx+0x2f4] = xmm2 + xmm3      ; size.y
+0x1402589f5  call [vtbl+0xb0] (cvttss2si 한 정수 폭/높이로 렌더 타깃 생성) …+0xb8 …+0xc0
+```
+
+**확정**: `size = (잉크박스 폭 + 2·clamp(padding.x,512), 잉크박스 높이 + 2·clamp(padding.y,512))`.
+패딩 항은 §8 과 **같은 세 게이트**(이펙트 있음 / 오프스크린 합성 / `opaquebackground`) 하에서만
+0 이 아니다. 폰트 메트릭 그 자체가 아니라 **워드랩·행제한까지 끝난 실제 잉크 박스**다
+(`+0x90`–`+0x9c` 를 쓰는 곳이 `0x1401b2dec`–`0x1401b2e0c`, 레이아웃 말미다).
+
+즉 이 값은 그리기와 히트가 **같은 수**를 쓴다 — 배경 박스 크기(§8 (b))도 잉크박스+패딩이다.
+
+### 8b.3 `scene.json` 의 `text.size` 는 에디터가 써 넣은 그 값의 스냅샷이다
+
+워크샵 정본 코퍼스는 텍스트 **1,597 / 1,597 전건**이 `size` 를 문자열로 저작한다
+(`spec/corpus/scene-schema.json` `waple.unparsedObjectKeys`, distinct 684, range 2.0–8316.0).
+최빈값이 **`"2.00000 2.00000"` 36건**인 것이 결정적이다 — 2.0 은 §8b.2 의 "레이아웃 결과가 없을 때"
+폴백(`0x140258949`)이고 저작자가 손으로 넣을 값이 아니다. 즉 그 키는 **에디터가 자기 계산 결과를
+직렬화해 둔 것**이고, 런타임은 로드 때 주입했다가 첫 레이아웃에서 **다시 덮어쓴다**.
+
+→ 그래서 정적 텍스트에 한해 `text.size` 는 **WE 자신의 폰트 스택으로 잰 히트 상자**다.
+   스크립트로 텍스트가 바뀌면 낡는다(실물은 매 레이아웃마다 재계산한다).
+
+### 8b.4 Waple 이 이미 갖고 있는 등가물
+
+`TextRasterizer.render` 가 돌려주는 `Raster.width`/`height` 가 §8b.2 의 잉크박스에 대응한다
+(`ceil(줄별 폭 최대) + 2` × `줄높이 × 줄수 + 2`, 워드랩·`maxRows` 잘림 반영 후). 렌더러가 그것을
+`GPUText.rasterWidth`/`rasterHeight` 로 이미 보관하고(`SceneRendererResources.rasterize`),
+그리기 쿼드도 그 값 × `scale` 로 만든다 — 즉 **Waple 안에서 "그린 자리"는 이미 그 상자다.**
+
+**남는 차이(정직하게)**:
+
+| 차이 | 실물 | Waple |
+|---|---|---|
+| 패딩 항 | 게이트 하에서 `+2·clamp(padding,512)` | **0**(래스터에 패딩 개념이 없다). 워크샵 코퍼스 도달: `opaquebackground:true` 4/1,426 · `effects` 저작 450/1,597 · `colorBlendMode` 는 별도 — 즉 **이펙트 있는 텍스트에서 상자가 실물보다 작다** |
+| 메트릭 | FreeType/HarfBuzz, 300 DPI | CoreText 캐스케이드(§G9/G10/G11 의 차이가 그대로 폭·높이에 실린다) |
+| `anchor` | 모델 행렬 평행이동을 화면 가장자리로 스냅(§7.7) | 미구현 — 그리기도 안 하므로 Waple 안에서는 "그린 자리 = 클릭되는 자리"가 유지된다 |
+| 가장자리 여백 | 없음 | `+2 px`(래스터 캔버스 여백) |
 
 ---
 
@@ -968,11 +1059,77 @@ preview 판정은
 | G12 | 폴백 체인 | 없음(CoreText 캐스케이드) | 8단 고정 순서, 인덱스 4(다섯 번째)가 **동봉 `fonts/TwemojiMozilla.ttf`** | 최소한 이모지만이라도 동봉 Twemoji 를 우선 등록하면 WE 와 같은 그림이 된다. `WEAssets/fonts/TwemojiMozilla.ttf` 가 이미 리포에 있다(바이트 동일 확인) |
 | ~~G13~~ **주석 닫힘** | `anchor` 의미 | `SceneDocument.swift` `SceneTextLayer.anchor` 선언부 | **레이어 모델 행렬 전체**에 화면 가장자리 오프셋(가상함수 `0x1402585c0`, vtable `0x140491950` 슬롯 `0x1404919f8`, 평행이동 행 `[rdx+0x30]` 갱신 `0x140258633`) | 주석 정정 + 필요 시 `SceneRendererFrameEncoder` 의 텍스트 트랜스폼에 화면 사각형 기반 오프셋 |
 | G14 | `systemfont_segoe`/`sansserif` | `TextRasterizer.swift:228` 이 둘 다 시스템 UI 폰트로 보냄 | `segoeui.ttf` / `micross.ttf`(Microsoft Sans Serif) | macOS 에 둘 다 없으니 현 동작이 합리적이다. **갭이 아니라 의도적 대체**로 주석에 못박기만 하면 된다 |
+| ~~G16~~ **닫힘** | `limitwidth`/`limitrows` 미체크 시 저작값 소실 | `SceneDocument.swift` `parseText` | 게이트(`+0x594` bit2/bit3)와 값(`+0x508` float / `+0x510` int)이 **서로 다른 멤버**이고 적용 루프(`0x1401731d0`)가 키마다 따로 돌아 게이트와 무관하게 값이 착지한다 | **2026-08-21(AV) 반영** — 저장 프로퍼티 `limitWidth`/`maxWidthValue`/`limitRows`/`maxRowsValue` 넷으로 가르고 `maxWidth`/`maxRows` 는 계산 프로퍼티로 남겼다(래스터·워드랩 소비부 무수정 = 무회귀). 남은 배선은 `SceneRenderer.sceneScriptLayers(from:)` 의 4줄 — `d.limitRows = text.limitRows` / `d.maxRows = text.maxRowsValue` / `d.limitWidth = text.limitWidth` / `d.maxWidth = text.maxWidthValue`(지금은 `text.maxRows != nil` 로 되읽어 미체크 저작값을 못 싣는다) |
+| G17 | **텍스트 오브젝트의 커서 히트 상자가 없다** | `Sources/WapleRender/SceneRenderer.swift` `buildPointerTargets(doc:)` 가 텍스트를 `.geometryUnknown` 으로 떨어뜨린다 | `size` 멤버 `+0x2f0` = 잉크박스 + 2·clamp(padding,512)(§8b), 히트 함수는 이미지와 동일한 `0x14019dbb0` | `GPUText.rasterWidth`/`rasterHeight`(이미 `textLayers` 에 있고 `:1793` 에서 `:1926` 보다 **먼저** 만들어진다)로 쿼드를 만든다. 정확한 패치안은 §8b.4 아래 문단 |
 | G15 | **텍스트 레이어의 `pointsize`/`font` 가 씬 스크립트에 배선되지 않는다** | `Sources/WapleRender/SceneRenderer.swift` `sceneScriptLayers(from:)` 의 `textLayers` 블록 | `ITextLayer.pointsize`/`font`(d.ts:1606·1611)는 디스크립터 실값 | `SceneScriptLayerDescriptor(...)` 에 `pointSize: text.pointSize, font: text.font` 를 넘긴다. 지금은 두 인자를 **아예 안 넘겨서** Swift 기본값(`TextScriptEngine.swift:35` 의 `pointSize: Float = 16`, `font: "systemfont_arial"`)이 그대로 들어가고, 그래서 모든 텍스트 레이어에서 `thisLayer.pointsize` 가 저작값과 무관하게 16 을 돌려준다. 기본 파스값이 32 로 바뀐 지금은 그 16 이 어느 쪽 규약도 아니다. `SceneScriptAPISurfaceTests` 는 디스크립터를 **직접** 만들어 검증하므로 이 배선 누락을 못 잡는다 |
 
 **우선순위 제안**: ~~G1 · G5 · G4~~(기본값 3종 — 2026-08-21 반영) → ~~G7 · G13~~(주석 정정 완료) →
-**G15**(1줄, 실제 스크립트 값이 틀리는 버그) →
+~~G15~~(2026-08-21 클러스터 U 가 배선) → ~~G16~~(2026-08-21 클러스터 AV) →
+**G17**(히트 기하 — 배선하면 텍스트 바인딩 스크립트 타겟팅이 열린다) →
 G6(파스 8키) → G3(spacing 소비) → G9/G10/G11(레이아웃 정합) → G8/G12(렌더 확장).
+
+### 11.1 G17 정확한 패치안 (`SceneRenderer.swift` — 이 레인 소유 밖)
+
+**새 수식을 쓰면 안 된다 — 그리기 경로가 이미 쓰는 세 함수를 그대로 재사용한다.**
+
+1. `textLayers = buildTexts(...)`(`:1793`)가 `buildPointerTargets(doc:)`(`:1926`)보다 **먼저** 돈다.
+2. `GPUText.rasterWidth`/`rasterHeight` 에 스케일 전 글리프 픽셀 크기가 이미 있다
+   (`SceneRendererResources.rasterize`).
+3. `SceneRendererFrameEncoder.textAlignmentString(h:v:)` 가 텍스트의
+   `horizontalAlign`/`verticalAlign` 를 이미지 레이어와 **같은 `alignment` 문자열**로 바꾼다.
+   그 함수 주석이 "`quadVertices`/`alignedCenter` 규약과 정확히 일치" 를 이미 못박아 뒀고,
+   `encodeText` 의 애니 재계산 경로(`:1654`–`:1656`)가 정확히
+   `quadVertices(origin:, size: Vec2(t.rasterWidth, t.rasterHeight), scale:, angleZ:, alignment: align, …)`
+   로 텍스트 쿼드를 만든다. 히트 쿼드도 **같은 인자**를 `layerHitQuad` 에 주면 회전·음수 스케일·
+   앵커까지 자동으로 정합한다(이미지 경로와 두 갈래로 갈리지 않는다).
+
+`buildPointerTargets(doc:)` 의 텍스트 분기(현재 `.geometryUnknown` 으로 떨어지는 자리):
+
+```swift
+// 종전
+guard i >= 0, i < doc.layers.count else {
+    return PointerTarget(engine: pair.engine, scope: .geometryUnknown, parallaxDepth: none)
+}
+
+// 제안 — 텍스트 디스크립터 인덱스는 doc.layers.count + uid(F743/S-34, buildTexts 와 동일 규약)
+guard i >= 0 else { return PointerTarget(engine: pair.engine, scope: .geometryUnknown, parallaxDepth: none) }
+if i >= doc.layers.count {
+    let u = i - doc.layers.count
+    // 래스터가 없으면(빈 텍스트 = 드로우 스킵) 상자를 만들 근거가 없다 → 종전 전건 배달 유지
+    guard u < doc.texts.count, u < textLayers.count,
+          textLayers[u].rasterWidth > 0, textLayers[u].rasterHeight > 0 else {
+        return PointerTarget(engine: pair.engine, scope: .geometryUnknown, parallaxDepth: none)
+    }
+    let t = doc.texts[u], g = textLayers[u]
+    // 히트 순회의 첫 관문은 텍스트도 `solid`(bit13) 다 — `0x14018a02d` 는 타입을 안 가린다
+    guard t.isSolid else {
+        return PointerTarget(engine: pair.engine, scope: .unhittable, parallaxDepth: none)
+    }
+    // AV: 실물은 `size` 멤버 `+0x2f0`(= 잉크박스 + 2·clamp(padding,512), `0x140258900`)을 이미지와
+    // **같은** 상자 함수 `0x14019dbb0` 에 먹인다(`0x14019dd8a` 가 `+0x2f0` 을 읽고 `0x14019de4b`
+    // 가 ±0.5). 텍스트 오브젝트의 타입 가상함수는 4(`0x1400fde90`)이고 순회는 1 과 4 를 같은
+    // 분기로 모은다(`0x14018a044`–`0x14018a050`). Waple 의 등가물이 래스터 픽셀 크기다.
+    let align = Self.textAlignmentString(h: t.horizontalAlign, v: t.verticalAlign)
+    let quad = Self.layerHitQuad(origin: t.origin,
+                                 size: Vec2(x: g.rasterWidth, y: g.rasterHeight),
+                                 scale: t.scale, angleZ: t.angleZ, alignment: align)
+    return PointerTarget(engine: pair.engine, scope: .object(quad), parallaxDepth: t.parallaxDepth)
+}
+```
+
+**넣기 전에 반드시 읽을 것 — 이 상자는 실물보다 작을 수 있다.** §8b.4 의 차이표대로 패딩 항이
+빠져 있고(이펙트가 붙은 텍스트에서 실물은 축당 `+2·padding`, 기본 32 면 `+64 px`),
+CoreText/FreeType 메트릭 차이도 남는다. 좁히는 방향의 변경이므로 **틀리면 그 텍스트에 붙은
+스크립트가 커서 이벤트를 통째로 못 받는다**. 안전판으로 다음 중 하나를 같이 넣는 것을 권한다.
+
+1. 패딩을 상자에만 더한다 — `size += 2 * min(text.padding, 512)` 를 §8 의 세 게이트 중
+   Waple 이 아는 둘(`!t.effects.isEmpty` · `t.opaqueBackground`)로 켠다. 그러면 실물보다
+   **작아지지는** 않는다(세 번째 게이트는 켜지는 쪽으로만 틀린다).
+2. 그리고/또는 상자에 소량의 여유(예: 축당 `+2 px` 래스터 캔버스 여백분)를 남긴다.
+
+`SceneSharedScriptTests:538` 의 `simulateCursorClick(x: 1, y: 1)` 은 이 배선이 들어가는 순간
+**load-bearing 이 된다**(그 스크립트는 텍스트 오브젝트에 붙어 있다) — 같이 고쳐야 한다.
+`pointer-interaction.md` §7.3 ①의 주석이 그 사실을 이미 못박아 두었다.
 
 ---
 
@@ -1007,6 +1164,13 @@ G6(파스 8키) → G3(spacing 소비) → G9/G10/G11(레이아웃 정합) → G
   실물이라는 점만 기억해라.
 * `FontKey+0x18`(해상도 스케일 플래그)를 1 로 넣는 호출자 — 씬 텍스트 레이어는 항상 0 이다.
   UI/에디터 텍스트 경로로 **보이나** 확인 못 했다.
+* **[AV 추가] Waple 의 래스터 상자와 실물 잉크박스의 실제 오차를 못 쟀다.** §8b 는 실물 쪽 식을
+  확정했지만, 같은 문자열·같은 폰트에서 FreeType(300 DPI)과 CoreText 가 내는 폭·높이가 몇 % 나
+  갈리는지는 **이 컨테이너에서 측정할 수 없다**(WE 를 실행할 수 없고, 워크샵 코퍼스도 없다 —
+  공통 브리프 함정 19). `spec/corpus/scene-schema.json` 의 `text.size` 분포(1,597건, range
+  2.0–8316.0)와 우리 래스터 크기를 대조하려면 코퍼스가 있는 환경이 필요하다.
+* **[AV 추가] `[this+0x304] & 0x100` 을 켜는 자리** — §8 표의 오프스크린 합성 게이트 세 갈래 중
+  하나인데, 그 비트를 세우는 코드는 못 찾았다(등록표의 `+0x304` 네 키는 bit6/8/14/15 다).
 * `scene+0x118 & 0x400` 과 `& 0x2000` 의 의미 — 전자는 텍스트/배경의 depth 머티리얼 선택을
   무효화하고(`0x1402582ff`), 후자는 다른 분기를 탄다(`0x1402582a8`). 씬 렌더 모드 플래그로
   보이지만 확정 못 했다.
