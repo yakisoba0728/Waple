@@ -82,8 +82,16 @@
 **[확정] 이 경로는 `angles` 를 쓰지 않는다.** `+0x80/+0x90/+0xa0` 에 항등행렬을 넣고
 `+0xb0..+0xb8` 에만 `offset` 을 넣는다. 디스크립터 슬롯(스트라이드 **0x20**)에서 읽는 것은
 `+0xbc`(flags) · `+0xc0`(parentcontrolpoint) · `+0xc4..+0xcf`(offset) 셋뿐이다.
-**[추정]** 파티클 `.json` 의 `controlpoint[].angles` 는 디스크립터 `+0xd0+32i` 에 파스되어
-있지만(파스 측 슬롯 스트라이드 32 는 기존 문서와 일치), **이 생성자가 그 자리를 읽지 않는다.**
+**[확정, 2026-08-21 재확인]** 파티클 `.json` 의 `controlpoint[].angles` 는 디스크립터
+`+0xd0+32i` 에 **실제로 파스된다** — 파서의 고정 8회 루프(`0x1401d0530`–`0x1401d080e`,
+슬롯 `shl rdi,5`@`0x1401d0593`)가 `flags`→`+0xa4`(`0x1401d05ae`) · `offset`→`+0xac/+0xb0/+0xb4`
+(`0x1401d06ac`/`0x1401d06bc`) · **`angles`→`+0xb8/+0xbc/+0xc0`**(키 `lea`@`0x1401d06ce`,
+스토어 `0x1401d07c9`/`0x1401d07d9`) · `parentcontrolpoint`→`+0xa8`(`0x1401d07ff`) 를 쓴다.
+파서 베이스는 생성자 베이스보다 `0x18` 작을 뿐(파서 `flags` `+0xa4` ↔ 생성자 `+0xbc`)
+**슬롯 내 상대 배치는 동일**하다 — `flags`+0 / `parent`+4 / `offset`+8..+0x10 /
+`angles`+0x14..+0x1c, 합 `0x20` = 스트라이드. `angles` 만 주입기가 없다(부재 시
+`find` 가 널 노드를 주고 그대로 건너뛴다 — `cmp byte [rax+8],4`@`0x1401d06da`).
+**그런데 이 생성자가 그 자리를 읽지 않는다.**
 **[미해결]** 다른 곳에서 그 12바이트를 읽는 지점은 못 찾았다 — 즉 파티클 `.json` 쪽 `angles` 는
 **실효 0** 일 가능성이 높지만 전수 반증은 못 했다. (씬 쪽 `controlpointangleN` 은 §2.2 로
 **확실히 살아 있다** — 그쪽은 다른 함수가 `+0x80..0xaf` 를 직접 쓴다.)
@@ -201,8 +209,12 @@ CP 를 만지는 오퍼레이터는 `controlpointattract`(10) · `maintaindistan
 **호출 규약의 잔재**이고, 실제 소비는 평행이동뿐이다.
 
 > 종전 `particle-operator-vm.md` §7 의 "`0x14024f2d0` = 컨트롤포인트 스냅샷 **44바이트** 복사"
-> 는 오기다. **0x40 = 64바이트**다(`0x14024f2d0`–`0x14024f32b`, dword 16회). 값에는 영향이
-> 없지만 정정해 둔다.
+> 는 오기였다. **0x40 = 64바이트**다 — 함수는 `0x14024f2d0`–`0x14024f331`(`ret`)이고
+> `mov eax,[rdx+N]`/`mov [rcx+N],eax` 를 N = `0x00`..`0x3c` 로 **dword 16회** 돈다
+> (마지막 쌍 `0x14024f328`/`0x14024f32b`, 반환 `mov rax,rcx` @`0x14024f32e`).
+> `.pdata` 항목이 없는 리프라 `primary()`/`merged()` 가 `None` 을 준다 — 호출 대상 주소가
+> 곧 명령 경계라 거기서 선형으로 떴다. 값에는 영향이 없다.
+> **[2026-08-21] 그 문서에서 실제로 정정됐다**(§7 에 근거 블록 추가).
 
 ### 4.2 이니셜라이저 VM — opid 8·13·14·15 [확정]
 
@@ -604,6 +616,41 @@ bit0·bit2·bit3·bit16 뿐이므로 이 10건은 **아무 데도 안 걸린다*
 ---
 
 ## 9. Waple 대조 — 정확한 패치안
+
+> **[2026-08-21 후속 라운드 결과]** 아래 P1~P4 를 **재검증**하고(남의 주석을 베끼지 않고 이
+> 저장소에서 전부 다시 떴다) 안전한 것부터 적용했다. 현재 상태:
+>
+> | | 상태 | 비고 |
+> | --- | --- | --- |
+> | **P4** 문서 정정(44→0x40) | **적용** | `docs/re/particle-operator-vm.md` §7. 함수 `0x14024f2d0`–`0x14024f331`, dword 16회 = 64B 확인 |
+> | **P3** CP 각도 소비처 주석 | **적용** | `ParticleSystem.swift` 두 자리. 소비처 둘을 재확인했고, **파티클 `.json` 쪽 `angles` 는 base 에 안 실린다**는 구분을 명시 |
+> | **P2** `children[].flags` | **파스만 적용**(소비 이월) | `ChildLink.flags` + `feedsControlPoints`. 소비는 CP 정적 베이크 구조 때문에 별도 라운드 |
+> | **P1** `mapsequence` = 위치 | **미적용**(근거는 문서화) | 실측·무회귀 증명은 끝났으나 삭제가 **소유 밖 테스트 파일**을 건드려야 해서 이월 |
+>
+> **P1 무회귀 증명(새로 잰 것).** 동봉 `WEAssets` 와 설치본 두 코퍼스 모두에서
+> `initializer[].name` 이 `mapsequence*` 인 파티클 `.json` 은 **17파일 / 19선언**(between 12 ·
+> around 7)이고, 그 `material` 이 가리키는 텍스처는 다섯 종
+> (`particle/halo` · `particle/halo_2` · `particle/beam/beam_0` · `particle/beam/beam_2` ·
+> `particle/misc/star_0`)뿐이다. 다섯 `.tex` 를 `scripts/spec/measure_tex_deep.parse_tex` 로
+> 열면 **전부 `TEXS` 섹션이 없다**(`texs=None`). Waple 렌더러의 시트 분기는
+> `if !sys.frames.isEmpty` 안에 있고 `frames` 는 `TEXS` 에서만 오므로
+> (`SceneRendererResources.resolveTextureWithFrames`), `p.frame >= 0` 분기
+> (`SceneRendererFrameEncoder.swift:123`/`:264`, **그리고 `SceneRenderer3D.swift:2367` —
+> 종전 경고가 빠뜨린 세 번째 소비처**)는 이 19건에서 **애초에 도달하지 않는다**.
+> 19건 전부 `animationmode` 부재라 `randomframe` 경로와도 겹치지 않는다.
+> 즉 "동봉 19건의 그림이 바뀐다" 는 경고는 **성립하지 않는다**.
+>
+> **그런데도 미적용인 이유**는 다른 데 있다: `p.frame = t·count` 를 걷으면
+> `Tests/WapleCoreTests/TexFramesAndMapSequenceTests.swift` 의 세 테스트가 깨지는데
+> (`testMapSequenceBetween_projectsOntoSegment` 2.0 / `…_clampsOutsideSegment` 0 /
+> `testMapSequenceAround_angleToSequence` 4.0) 그 파일이 이 라운드의 **소유 밖**이다.
+> 소스에는 `[근거없음 — 걷어낼 자리]` 표시만 남겼다(`ParticleSimulator` `case let .mapSequence`).
+>
+> **재검증에서 원문과 어긋난 것은 없었다.** 점프테이블 16개, 썽크 opcode(13→`0x5c`, 14→`0x38`),
+> 두 핸들러의 SoA 슬롯 전수(`+0x268` 0회), CP ctor 가 회전 3행에 항등을 넣는 것,
+> `children[].flags`/`controlpointstartindex` 의 파스·주입 자리 — 전부 그대로 재현됐다.
+> 다만 §4.1 이 "종전 `particle-operator-vm.md` §7 은 오기다" 라고만 적어 둔 것은 이제
+> **그 문서에서 실제로 고쳐졌다**.
 
 아래 파일들은 **이 클러스터의 소유가 아니다**. 고치지 않았다. 넘긴다.
 
