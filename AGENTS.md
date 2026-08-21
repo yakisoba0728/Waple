@@ -54,6 +54,23 @@ swift run Waple                # 메뉴바 앱으로 실행
 
 테스트 수 **2,390** 는 고정 기준값이다. 리팩토링으로 이 숫자가 변하면 무언가 잘못됐다.
 
+### 리눅스에서의 커밋 전 검증
+
+macOS 가 없어도 두 가지를 돌릴 수 있다.
+
+```bash
+scripts/dev/linux-core-tests.sh --filter <TestClass>   # WapleCore 테스트(simd/CF 대역 모듈)
+scripts/dev/linux-render-typecheck.sh                  # WapleRender 타입체크(55파일 중 49)
+```
+
+**`swiftc -parse` 의 rc=0 을 검증 근거로 쓰지 마라 — `-parse` 는 타입체크를 하지 않는다.**
+이 세션에 그 공백에서 macOS CI 가 두 번 깨졌다(`b98db0a` MSL 주석 개행, `bb5f902` 스코프에
+없는 `texW`/`texH`). 두 번째 부류는 이제 `linux-render-typecheck.sh` 가 잡는다 — 커버 범위와
+**잡지 못하는 것 7종**은 `docs/dev/linux-typecheck.md` 에 실측과 함께 적혀 있다.
+
+동시 작업 시에는 두 스크립트 모두 공유 락을 쓴다(4코어/16GB 에서 동시 빌드 2개 이상이면
+OOM 으로 컨테이너가 재시작한다 — 실제로 당했다).
+
 > **[2026-08-20] 2,300 → 2,390 — 이 증가는 정당하다.** 이번 라운드가 오라클을 59개 늘렸다:
 > FBO `format`/`unique`/`clear` 10(`f1ba768`) · 이펙트-로컬 자산 루트 6(`e6cfbfb`) ·
 > FBO 규약 정정 4(`77ec33a`) · 오디오 스펙트럼 파이프라인 14(`a84cc9f`) · 자산 조회 순서 3(`83d110c`) ·
