@@ -1001,9 +1001,22 @@ extension SceneRenderer {
     ///     포맷이 없어 리소스컴파일러가 디스크에서 RGBA8 로 편다.
     ///
     /// 이 표는 `scripts/spec/check_tex_format_map.py` 가 매 CI 마다 동봉 자산에서 다시 측정해 대조한다.
+    ///
+    /// **[2026-08-21] `dxt5n+` 추가.** 종전 표는 동봉 자산만 보고 지었는데, 설치본
+    /// `projects/` 에 `"format": "dxt5n+"` 사이드카가 **6건** 있다(`eagleflag` 1 ·
+    /// `fantasticcar` 4 · `templates/flag` 1). 짝 `.tex` 가 있는 5건을 직접 파싱해
+    /// 헤더 오프셋 18 의 `format` 을 읽으니 **전건 4**(= `dxt5`)였다 — 즉 `+` 접미도
+    /// `n` 접미와 같이 코드를 바꾸지 않는다.
+    ///
+    /// 도달: 이 표가 실제로 쓰이는 것은 **컴파일본이 없는 소스 폼**뿐인데(아래
+    /// `sourceFormTexFormatCode` 가 `.tex` 가 하나라도 잡히면 nil 을 낸다), 그 조건에
+    /// 맞는 `dxt5n+` 은 `projects/templates/flag/materials/flag_normal.tex-json` **1건**이다
+    /// (짝 `flag_normal.png` 만 있고 `.tex` 가 없다). 동봉 자산에는 0건이라 지금 그림은
+    /// 안 바뀌고, 워크샵/설치 템플릿을 열 때만 달라진다 — 종전엔 표에 없어 `nil` 이라
+    /// `TEXnFORMAT` 을 아예 안 심었다.
     private static let texJSONFormatCodes: [String: Int] = [
         "rgba8888": 0, "rgba8888n": 0, "rgb888": 0,
-        "dxt5": 4, "dxt5n": 4,
+        "dxt5": 4, "dxt5n": 4, "dxt5n+": 4,
         "rg88": 8, "rg88n": 8,
         "r8": 9,
     ]
