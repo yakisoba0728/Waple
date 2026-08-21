@@ -227,7 +227,11 @@ final class ShaderPreprocessorRequireTests: XCTestCase {
         XCTAssertNil(ExprEval.evalChecked("A ? 1 : 0", defines: ["A": 1]))
         XCTAssertNil(ExprEval.evalChecked("1 0", defines: [:]), "잔여 토큰")
         XCTAssertNil(ExprEval.evalChecked("1e5", defines: [:]), "수 + 식별자 = 잔여 토큰")
-        XCTAssertNil(ExprEval.evalChecked("1.5", defines: [:]), "`.` 는 모르는 문자로 남긴다([미해결])")
+        // **[2026-08-21 반전]** 종전 이 줄은 `XCTAssertNil(… "1.5" …)` 로 "`.` 는 모르는 문자로
+        // 남긴다([미해결])" 를 잠갔다. 실물은 소수부를 **읽고 버려** 1 을 낸다(0x140167021-
+        // 0x140167046) — 거부가 갈리는 쪽이었다. 수 **밖**의 `.` 는 여전히 미지 문자다.
+        XCTAssertEqual(ExprEval.evalChecked("1.5", defines: [:]), 1)
+        XCTAssertNil(ExprEval.evalChecked(".5", defines: [:]), "수 밖의 `.` 는 그대로 미지 문자")
         XCTAssertNil(ExprEval.evalChecked("A @ 1", defines: ["A": 1]))
         // 파이프라인 레벨: 활성 분기의 미지원 식은 전처리 거부(= 번역 실패 → 폴백).
         XCTAssertNil(ShaderPreprocessor.preprocessStrict("#if A ? 1 : 0\nyes\n#endif", combos: ["A": 1]))
@@ -251,8 +255,10 @@ final class ShaderPreprocessorRequireTests: XCTestCase {
         XCTAssertTrue(r.contains("yes"), r)
         XCTAssertFalse(r.contains("\nno\n"), r)
         XCTAssertTrue(r.contains("int m = 0x0C;"), "본문 치환은 원문 텍스트 그대로: \(r)")
-        // 소수 리터럴 define 은 여전히 거부 대상(위 [미해결]).
-        XCTAssertNil(ShaderPreprocessor.preprocessStrict("#define K 1.5\n#if K\nyes\n#endif", combos: [:]))
+        // **[2026-08-21 반전]** 소수 리터럴 define 도 이제 실물대로 값이다(1.5 → 1).
+        // 종전 이 줄은 `XCTAssertNil(…)` 이었다. 거부로 남는 것은 지수 표기(잔여 토큰)다.
+        XCTAssertNotNil(ShaderPreprocessor.preprocessStrict("#define K 1.5\n#if K\nyes\n#endif", combos: [:]))
+        XCTAssertNil(ShaderPreprocessor.preprocessStrict("#define K 1e5\n#if K\nyes\n#endif", combos: [:]))
     }
 
     /// 워크샵 시나리오 — G2 가 없으면 이 셰이더는 번역 nil 이 되어 이펙트가 통째로 사라진다.
@@ -294,7 +300,7 @@ final class ShaderPreprocessorRequireTests: XCTestCase {
         """
     }
 
-    /// 실물 0x140154599 는 **선언 유무와 무관하게** 콤보 키를 대문자화한다. 위 프래그먼트에는
+    /// 실물 0x140154598 는 **선언 유무와 무관하게** 콤보 키를 대문자화한다. 위 프래그먼트에는
     /// `[COMBO]` 선언이 하나도 없다 — 종전 `resolvePassCombos.canonical()` 의 "선언 집합 안에서만
     /// 접기" 근사가 정확히 못 잡던 형태이고, 저작된 소문자 15종 중 14종이 이 형태다.
     func testLowercaseAuthoredComboKeysReachUppercaseDirectives() throws {
