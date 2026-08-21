@@ -70,7 +70,8 @@
    "value": {
     "결론": "머티리얼 cstring 은 파일 선두의 전역 문자열 표가 아니라 메시 블록마다 skinCount 개씩 온다",
     "근거1": "디컴파일: 메시 do-루프 **안**에서 `if (param_3[1] != 0) do { cstring } while (i < param_3[1])` — param_3[1] 이 헤더 오프셋 13 필드",
-    "근거2": "실물 skinCount=1·meshCount=3/4 파일(orbitaleffects/orbitsmall)이 메시마다 서로 다른 머티리얼을 갖고 전수 착지"
+    "근거2": "실물 skinCount=1·meshCount=3/4 파일(orbitaleffects/orbitsmall)이 메시마다 서로 다른 머티리얼을 갖고 전수 착지",
+    "skinCount == 0": "**0 이면 0개다**(2026-08-21). 리드 루프가 카운터를 0 으로 놓고 0x14026193e cmp dword [r15+8], ebx / 0x140261942 jbe 0x140261979 로 **먼저 재므로** cstring 을 한 개도 안 읽고 gateWord 로 넘어간다([r15+8] 은 0x1402618fb 에서 저장된 skinCount). 종전 Waple 구현은 여기서 1개를 읽어 이후 전 오프셋을 cstring 길이만큼 밀었다 — **실물 미목격이라 무회귀지만 엔진과 다르게 읽는 자리였다**"
    },
    "status": "확정",
    "evidence": [
@@ -89,9 +90,9 @@
   {
    "id": "format.mdl.meshLayout",
    "value": {
-    "공통": "skinCount×cstring material | u32 gateWord | [gateWord&2: u32 extra] | [v>=17: AABB min3f max3f = 24B] | [v>=15: u32 formatFlag] | u32 vertexBytes | 정점 | u32 indexBytes | u16 인덱스 | [v>=21: 메시 트레일러]",
+    "공통": "skinCount×cstring material | u32 gateWord | [gateWord&2: u32 extra] | [v>=17: AABB min3f max3f = 24B] | [v>=15: u32 formatFlag] | u32 vertexBytes | 정점 | u32 indexBytes | 인덱스 | [v>=21: 메시 트레일러]",
     "gateWord": "메시 능력 플래그. bit1(0x2)=여분 u32 1개, bit10/11/12/13 은 MDMP 레코드 구성을 게이팅",
-    "인덱스": "u16 트라이앵글 리스트. 실측 maxIndex == vertexCount-1 이 986/986"
+    "인덱스": "트라이앵글 리스트. **원소 폭 = 2 + 2*(gateWord & 1)** 바이트다(u16 고정이 아니다 — format.mdl.indexWidth 참조). 실측 maxIndex == vertexCount-1 이 986/986"
    },
    "status": "확정",
    "evidence": [
@@ -111,6 +112,7 @@
    "id": "format.mdl.versionGates",
    "value": {
     "AABB": "version >= 17 (디컴파일 `if (iVar11 < 0x11)`)",
+    "섹션루프": "version >= 13 (0x140262382 cmp edi, 0x0d / jl 0x140265a0c). 메시 섹션 뒤 MDLS/MDAT/MDLA/MDMP/MDLE 디스패치 루프 전체를 게이팅한다 — **게이트 경계 13 은 다른 넷 어디와도 다른 값이고, v0004 가 종단 NUL 없이 끝나는 이유가 이것이다**",
     "perMeshFormatFlag": "version >= 15 (디컴파일 `if (0xe < iVar11) goto 읽기`) — v<=14 는 헤더 formatFlag 를 그대로 쓴다",
     "gateWord": "version >= 4 (디컴파일 `if (iVar11 < 4) gate = 0`)",
     "메시트레일러": "version >= 21 (디컴파일 `if (0x14 < iVar11)`)",
@@ -144,19 +146,38 @@
    "id": "format.mdl.formatFlagBits",
    "value": {
     "표": "stride = set bit 의 기여 합, 채널 오프셋은 테이블 인덱스 오름차순 누적",
+    "표 출처": "wallpaper64.exe .rdata 병렬 배열 4개 ×26 — 마스크 0x140484a20 · 바이트크기 0x1404849b0 · 속성이름 0x140484a90 · 디스크립터{nameIdx,typeIdx,semanticIdx,semanticNumber} 0x140482fa0. 스트라이드 누산 루프가 이 표를 그대로 돈다(0x140261a3a-0x140261b2b: SSE 로 idx0..23 을 4개씩 6묶음, 스칼라 꼬리 0x140261b10/0x140261b1a 와 0x140261b25 cmp rax,0x1a → 0x140261b2b mov [rbp+0xac],ecx). 독립 사본이 0x1400ea5b0(스트라이드 전용 헬퍼)에도 있다",
+    "타입": "**전 채널이 32비트 float 다** — BLENDINDICES(idx5)만 uint4. 정규화·팩 포맷이 아예 없고 a_Color 도 u8x4 가 아니라 float4 다",
+    "상위 6비트": "26엔트리 마스크의 합집합이 정확히 하위 26비트(0x03FFFFFF)다. 누산 루프가 idx 26 이상을 아예 안 보므로(0x140261b25 cmp rax,0x1a) 상위 6비트는 스트라이드 기여가 0 이다 — 무시가 곧 엔진 동작이다",
     "비트": {
-     "0x00000001": "POSITION float3 (12B)",
-     "0x00010000": "16B 위치 계열 (0x1 부재 시 이것이 위치)",
-     "0x02000000": "12B 위치 계열",
-     "0x00000002": "NORMAL float3 (12B) — 옵션 json `normals`",
-     "0x00000004": "TANGENT float4 (16B, w=handedness) — 옵션 json `tangentspace`",
-     "0x00800000": "BLENDINDICES uint4 (16B) — 옵션 json `skinning`",
-     "0x01000000": "BLENDWEIGHT float4 (16B) — 옵션 json `skinning`",
-     "0x00000008": "TEXCOORD0 float2 (8B)",
-     "0x00000010": "TEXCOORD0 float3 (12B)",
-     "0x00000020": "TEXCOORD float4 (16B) = UV0 in .xy + UV1 in .zw — 옵션 json `seconduvchannel`",
-     "0x00008000": "float4 채널 (16B) — 의미 미독"
+     "0x00000001": "idx0  a_Position       float3 : POSITION0     (12B)",
+     "0x00010000": "idx1  a_PositionVec4   float4 : POSITION0     (16B) — 0x1 부재 시 이것이 위치. 4번째 성분은 동차좌표 w 가 아니다(아래 항목)",
+     "0x02000000": "idx2  a_PositionC1     float3 : POSITION1     (12B)",
+     "0x00000002": "idx3  a_Normal         float3 : NORMAL0       (12B) — 옵션 json `normals`",
+     "0x00000004": "idx4  a_Tangent4       float4 : TANGENT0      (16B, w=handedness) — 옵션 json `tangentspace`",
+     "0x00800000": "idx5  a_BlendIndices   uint4  : BLENDINDICES0 (16B) — 옵션 json `skinning`",
+     "0x01000000": "idx6  a_BlendWeights   float4 : BLENDWEIGHT0  (16B) — 옵션 json `skinning`",
+     "0x00000008": "idx7  a_TexCoord       float2 : TEXCOORD0     (8B)",
+     "0x00000010": "idx8  a_TexCoordVec3   float3 : TEXCOORD0     (12B) — uv 는 .xy",
+     "0x00000020": "idx9  a_TexCoordVec4   float4 : TEXCOORD0     (16B) — uv0=.xy, uv1=.zw. 옵션 json `seconduvchannel`",
+     "0x00000040": "idx10 a_TexCoordC1     float2 : TEXCOORD1     (8B)",
+     "0x00000080": "idx11 a_TexCoordVec3C1 float3 : TEXCOORD1     (12B)",
+     "0x00000100": "idx12 a_TexCoordVec4C1 float4 : TEXCOORD1     (16B)",
+     "0x00000200": "idx13 a_TexCoordC2     float2 : TEXCOORD2     (8B)",
+     "0x00000400": "idx14 a_TexCoordVec3C2 float3 : TEXCOORD2     (12B)",
+     "0x00000800": "idx15 a_TexCoordVec4C2 float4 : TEXCOORD2     (16B)",
+     "0x00001000": "idx16 a_TexCoordC3     float2 : TEXCOORD3     (8B)",
+     "0x00002000": "idx17 a_TexCoordVec3C3 float3 : TEXCOORD3     (12B)",
+     "0x00004000": "idx18 a_TexCoordVec4C3 float4 : TEXCOORD3     (16B)",
+     "0x00020000": "idx19 a_TexCoordC4     float2 : TEXCOORD4     (8B)",
+     "0x00040000": "idx20 a_TexCoordVec3C4 float3 : TEXCOORD4     (12B)",
+     "0x00080000": "idx21 a_TexCoordVec4C4 float4 : TEXCOORD4     (16B)",
+     "0x00100000": "idx22 a_TexCoordC5     float2 : TEXCOORD5     (8B)",
+     "0x00200000": "idx23 a_TexCoordVec3C5 float3 : TEXCOORD5     (12B)",
+     "0x00400000": "idx24 a_TexCoordVec4C5 float4 : TEXCOORD5     (16B)",
+     "0x00008000": "idx25 a_Color          float4 : COLOR0        (16B) — **표 인덱스 25 = 항상 맨 뒤**라 다른 채널 오프셋을 밀지 않는다. **[2026-08-21 정정]** 종전 이 줄은 '의미 미독 float4' 였다"
     },
+    "TEXCOORD1-5 오독": "이 15비트가 표에 없던 동안 그 비트를 단 플래그는 stride 를 추측으로 메웠고, 그 경로의 꼬리고정 규칙(uv@stride-8)이 **TEXCOORD1 을 uv0 으로** 읽었다. 예: 플래그 0x4f 면 진짜 uv0 은 @40 인데 @48 을 읽는다. maxIndex 가드도 골든도 이 클래스를 구조적으로 못 잡는다 — 회귀 핀은 Tests/WapleCoreTests/Model3DVertexLayoutTests.swift 의 testTexCoord1FlagResolvesUV0AtTableOffset",
     "실측 flag->stride": {
      "0x00000009": {
       "stride": 20,
@@ -207,6 +228,12 @@
      "값 1.0": 3,
      "값 0.0": 1092,
      "결론": "동차좌표 w 가 아니다 — 1.0 은 거의 없고 대부분 0.0 이다. 앞 3성분만 위치로 읽고 4번째는 무시하는 현행 처리가 맞다(4번째의 의미는 미상)"
+    },
+    "0x00000020 의 .zw 가 두 번째 UV 라는 셰이더 측 근거": {
+     "선언": "shaders/generic.vert 이 #if LIGHTMAP 에서 a_TexCoord 를 vec4 로 받는다",
+     "샘플": "shaders/generic.frag 이 texSample2D(g_LightmapMapSampler, v_TexCoord.zw) 로 .zw 만 샘플한다",
+     "설치본 도달": "projects/defaultprojects/arsenal/models/pistols/pistols.mdl 6메시 — 옵션 json \"seconduvchannel\": true, 재질 6개 중 4개가 \"lightmap\": 1",
+     "실측 분리": "uv0 범위 [-3.70, 4.71](타일링) vs uv1 범위 [0.0019, 0.9982](아틀라스) — 서로 다른 UV 집합임이 값으로도 갈린다"
     }
    },
    "status": "확정",
@@ -279,7 +306,8 @@
    "id": "format.mdl.sectionLoop",
    "value": {
     "구조": "메시 섹션 뒤는 `cstring 을 읽어 매직으로 strncmp 디스패치` 하는 do-루프다(디컴파일에서 루프와 5개 분기를 직접 확인)",
-    "종단자": "실측으로 확정된 것은 '메시/섹션 끝 뒤에 단일 0x00 이 온다'(189파일) 뿐이다. 그 0x00 이 '빈 cstring 이라 루프가 끝난다' 는 해석은 루프 구조와 모순이 없을 뿐 종료 조건을 디컴파일에서 짚어 확인한 것은 아니다(추정)",
+    "버전게이트": "**섹션 루프는 v >= 13 에서만 돈다** — 0x140262382 cmp edi, 0x0d / jl 0x140265a0c 로 v<13 이면 루프를 통째로 건너뛴다. 메시 루프가 끝난 직후(0x14026232f)의 모델 AABB 집계 뒤에 온다",
+    "종단자": "**확정(2026-08-21)**. v>=13 경로가 0x1402623d8 에서 섹션 매직을 cstring 으로 읽고 0x1402623ec/0x1402623f4 je 로 **빈 문자열이면 루프를 끝낸다**. 그것이 실물 말미 단일 0x00 의 정체다(189파일). **[2026-08-21 정정]** 종전 이 줄은 같은 결론을 적으면서 '종료 조건을 디컴파일에서 짚어 확인한 것은 아니다(추정)' 로 헤지했다 — 이제 짚었다",
     "디스패치": [
      "MDLS0002/0003/0004",
      "MDLA0003..0006",
@@ -305,7 +333,7 @@
      "MDMP0001": 5
     },
     "실측 섹션 도수의 뜻": "매직마다 `data.find` **1회**다 — 그 매직을 가진 **파일 수**이지 섹션 수가 아니다. 한 파일에 같은 매직이 둘 있어도 1로 센다. (같은 이유로 블롭 한복판의 가짜 매직도 1로 셀 수 있다 — Waple 의 매직 스캔이 실제로 그 오탐에 당한 적이 있다: Tests/WapleCoreTests/Model3DTrailerSkeletonTailTests.swift 의 가짜 MDLA 회귀 테스트.) 섹션 **내용**은 MDMP/MDLA 만 판다",
-    "MDLV0004 예외": "v0004 파일 8개는 종단 NUL 없이 정확히 EOF 에서 끝난다 (리더가 EOF 를 빈 문자열로 보고 루프를 끝내므로 동작은 동일)"
+    "MDLV0004 예외": "v0004 파일 8개는 종단 NUL 없이 정확히 EOF 에서 끝난다. **[2026-08-21 정정]** 종전 사유는 '리더가 EOF 를 빈 문자열로 보고 루프를 끝낸다' 였는데 그게 아니다 — **v0004 는 애초에 섹션 루프에 들어가지 않는다**(위 버전게이트, v>=13). 그래서 쓸 종단자도 없다. **v0004 와 v0014 의 유일한 컨테이너 차이가 이것**이다(다른 게이트 넷 — AABB v>=17 · per-mesh flag v>=15 · 트레일러 v>=21 · 모프 v>=23 — 은 둘 다 미충족이라 갈리지 않는다)"
    },
    "status": "확정",
    "evidence": [
@@ -527,7 +555,13 @@
     ],
     "예외 해석": "예외 3개는 전부 *_puppet.mdl 이다 — 정점 플래그에 스키닝 비트가 없어 '정적' 으로 분류됐을 뿐 스켈레톤을 달고 움직이는 모델이다. 즉 경계는 '스키닝 비트' 가 아니라 '애니메이션 여부' 로 갈리는 것으로 보인다(추정)",
     "스키닝 메시": "193/409 만 일치. 나머지는 크게 벗어난다(최대 편차 3553.6 단위) — 바인드 포즈 정점이 아니라 애니메이션을 포함한 넉넉한 경계로 보인다(미확정)",
-    "결론": "움직이지 않는 메시에 한해 '정점 바운딩 박스' 다. 애니메이션 모델의 산출식은 미상 — 컬링에 쓸 때 바인드 포즈 박스로 대체하면 안 된다(포즈가 박스를 벗어나 잘려 사라진다)"
+    "결론": "움직이지 않는 메시에 한해 '정점 바운딩 박스' 다. 애니메이션 모델의 산출식은 미상 — 컬링에 쓸 때 바인드 포즈 박스로 대체하면 안 된다(포즈가 박스를 벗어나 잘려 사라진다)",
+    "모델 AABB 는 파일에 없다": {
+     "산출": "메시 루프가 끝난 직후 0x14026232f 에서 집계 헬퍼 0x1402617c0 을 부른다 — min 을 +FLT_MAX(0x7f7fffff), max 를 -FLT_MAX(0xff7fffff) 로 놓고(0x1402617c0-0x1402617e3) 원소 0xC8 짜리 메시 벡터를 훑으며 메시 AABB min@+0x20 / max@+0x2c 를 minss/maxss 로 누적한다(0x140261800-0x140261865). 결과는 모델 구조체 +0x1b8(min) / +0x1c4(max)",
+     "폴백 ±131072": "헬퍼는 `comiss` 로 max.x > min.x 인지 보고 al 을 돌려준다(0x140261867/0x14026186a, 메시 0개면 0x14026186e 의 -FLT_MAX 비교). **거짓이면** 호출자가 min 을 0xc8000000(=-131072.0f), max 를 0x48000000(=+131072.0f)로 덮어쓴다(0x140262349 / 0x14026234f / 0x14026235a / 0x140262365 / 0x14026236c / 0x140262377)",
+     "언제 밟히나": "**v<17 은 메시 AABB 자체가 파일에 없다**. 그 경우 메시 AABB 슬롯이 채워지지 않으므로 집계가 퇴화하고 이 ±131072 상자가 그대로 모델 경계가 된다 — v0004(설치본 8) · v0014(설치본 15)가 여기다. 메시가 0개인 파일도 같은 자리로 떨어진다",
+     "함의": "**컬링·프레이밍에 쓰는 모델 경계는 파일이 주는 값이 아니다.** v>=17 은 메시 AABB 의 합집합, v<17 은 상수 상자다. 정점에서 다시 재면 엔진과 다른 답이 된다(더 타이트해져 v<17 모델이 다르게 프레이밍된다)"
+    }
    },
    "status": "확정",
    "evidence": [
