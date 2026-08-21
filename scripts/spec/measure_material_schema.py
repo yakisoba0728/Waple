@@ -866,18 +866,9 @@ def main():
     add(specfmt.entry("waple.gap.fboFormatDropped", {
         "정본": "fbos[].format 은 필수 키다(번들·코퍼스 전건 존재). 7종 — %s"
               % ", ".join(sorted(set(list(e_top["fboFormat"]) + list(e_cor["fboFormat"])))),
-        "Waple": "EffectManifest.FBO 에 format 필드가 없다. FBOSpec 은 {scale, fixedWidth, fixedHeight} 뿐이고 "
-                 "SceneRendererFrameEncoder 가 pooledOffscreen → makeOffscreen 으로 전부 .rgba8Unorm 으로 만든다",
-        "영향(확정)": "half-float 포맷(r16f/rg1616f/rgb161616f)이 8비트 UNORM 으로 붕괴한다 — [0,1] 클램프 + "
-                  "정밀도 손실. fluidsimulation 의 velocity(rg1616f)·pressure/divergence/curl(r16f)은 "
-                  "부호·범위 초과 값을 담아야 하므로 시뮬레이션이 성립하지 않는다. "
-                  "포맷 이름의 f 접미가 float 을 뜻한다는 관례에만 의존한다",
-        "영향(추정)": "rgba_backbuffer 를 '백버퍼와 동일 포맷'으로 읽으면 HDR 씬에서 rgba16Float 를 따라야 하는데 "
-                  "고정 rgba8Unorm 이라 이펙트 체인이 HDR 을 잘라낸다. 다만 rgba_backbuffer 의 의미 자체가 "
-                  "이름에서 추론한 것이라 이 절은 추정이다",
-        "위치": "Sources/WapleCore/EffectManifest.swift:25-39, "
-              "Sources/WapleRender/SceneRendererResources.swift:57,619-621,1422-1425, "
-              "Sources/WapleRender/SceneRendererFrameEncoder.swift:1847-1853",
+        "해소": "`f1ba768`+`77ec33a`. EffectManifest.FBO.Format 이 21종(해시맵 19 + strcmp 백버퍼 별칭 2)을 파스하고 SceneRenderer.metalFormat 이 Metal 픽셀 포맷으로 옮긴다 — rg1616f→.rg16Float, r16f→.r16Float, rgba_backbuffer→HDR 이면 .rgba16Float. 해석은 FBOSpec.pixelFormat 에 담겨 makeOffscreenFormatted 까지 흐른다. 표에 없는 문자열은 에러가 아니라 rgba8 폴백(원본 해시맵 miss 와 동일)",
+        "종전 상태": "EffectManifest.FBO 에 format 필드가 없었고 FBOSpec 은 {scale, fixedWidth, fixedHeight} 뿐이라 전부 .rgba8Unorm 으로 할당됐다 — fluidsimulation 의 velocity(rg1616f)·pressure/divergence/curl(r16f)이 [0,1] 클램프 + 8비트 양자화로 붕괴해 시뮬레이션이 원리적으로 성립하지 않았다",
+        "위치": "Sources/WapleCore/EffectManifest.swift 의 `FBO.Format` 과 `parse` fbos 루프, Sources/WapleRender/SceneRendererResources.swift:58-72(FBOSpec)·1326-1341(metalFormat)·1792-1796(makeOffscreenFormatted)",
     }, "확정", [asset_ev, corpus_ev,
                 specfmt.ev("file", "Sources/WapleRender/SceneRendererResources.swift:1422",
                            "makeOffscreen: pixelFormat: .rgba8Unorm 고정"), script_ev]))
@@ -886,19 +877,16 @@ def main():
         "정본": 'fbos[].clear("0 0 0 0", 번들 12건) 과 fbos[].unique(true, 번들 %d건 / 코퍼스 %d건)'
               % (e_top["fboMisc"]["unique"].get("true", 0) + e_prev["fboMisc"]["unique"].get("true", 0),
                  e_cor["fboMisc"]["unique"].get("true", 0)),
-        "Waple": '"clear"/"unique" 리터럴이 Sources 어디에도 없다. FBO 는 pooledOffscreen 의 (w,h) 키 풀에서 '
-                 "재사용되고 매 패스 loadAction=.clear 로 시작한다",
-        "영향(추정)": "unique 는 '이 fbo 를 공유 풀에서 빼라'(=프레임 간 내용 보존)로 읽힌다. Waple 의 풀은 "
-                  "같은 크기 요청 순서가 프레임마다 같으면 우연히 같은 텍스처를 돌려주지만 보장이 아니다. "
-                  "motionblur 누적 버퍼·fluidsimulation 더블버퍼가 이 우연에 의존한다",
-        "확정된 것": "키가 존재한다는 것과 Waple 이 그 키를 읽지 않는다는 것",
+        "해소": "`f1ba768`+`77ec33a`(경화 `3fb9eb6`). EffectManifest.FBO.unique/clearColor 를 파스한다 — unique 는 원본과 같이 **진짜 boolean 만** 받고(isJSONBool), clear 는 공백 구분 정확히 4성분이다. unique FBO 는 SceneRenderer.UniqueFBOStore 가 이펙트 인스턴스별로 프레임을 넘겨 보유하고, clear 는 pendingClear 로 **생성 직후 1회만** 적용된다(매 프레임이 아니다). command:\"swap\" 은 저장소 배열 원소를 맞바꿔 핑퐁이 프레임을 넘어 유지된다",
+        "종전 상태": "\"clear\"/\"unique\" 리터럴이 Sources 어디에도 없었다. FBO 는 pooledOffscreen 의 (w,h) 키 풀에서 재사용되고 매 패스 loadAction=.clear 로 시작해, motionblur 누적 버퍼·fluidsimulation 더블버퍼가 풀 체크아웃 순서의 우연에 기대고 있었다",
+        "위치": "Sources/WapleCore/EffectManifest.swift 의 `FBO.unique`/`FBO.clearColor` 와 `parseClearColor`, Sources/WapleRender/SceneRendererResources.swift:84-94(UniqueFBOStore)·742, Sources/WapleRender/SceneRendererFrameEncoder.swift:1988-2029·2057-2060",
     }, "확정", [asset_ev, corpus_ev, specfmt.ev("file", "Sources/WapleRender/SceneRendererFrameEncoder.swift:1847"),
                 script_ev]))
 
     add(specfmt.entry("waple.gap.strictJSON", {
         "정본": "WE 의 effect.json 은 // 주석과 트레일링 콤마를 쓴다",
-        "Waple": "EffectManifest.parse 가 JSONSerialization(엄격)을 쓴다 → 파싱 실패 시 nil → "
-                 "loadEffectManifest 가 단일 무-타깃 패스로 폴백해 멀티패스 구조가 통째로 사라진다",
+        "해소": "`fafcd21`. EffectManifest.parse 가 엄격 파스를 **먼저** 시도하고 실패했을 때만 relaxedJSON 으로 재시도한다 — 관용은 줄 주석과 트레일링 콤마 딱 둘이고 문자열 리터럴 안은 이스케이프까지 그대로 둔다. 동봉 effect.json 122개 중 엄격 실패 27개가 전건 복구된다",
+        "종전 상태": "EffectManifest.parse 가 JSONSerialization(엄격)만 써서 파싱 실패 시 nil → loadEffectManifest 가 단일 무-타깃 패스로 폴백해 멀티패스 구조가 통째로 사라졌다",
         "실제 영향 범위": {
             "번들 최상위 effect.json 중 엄격 실패": sorted(
                 x["path"] for x in strict_fail if not is_preview(x["path"])),
@@ -907,7 +895,7 @@ def main():
         },
         "note": "코퍼스 162씬은 참조하는 effect.json 을 전건 pkg 에 동봉한다. 따라서 이 결함은 지금 코퍼스에서는 "
               "발현하지 않는다 — 베이스 에셋 폴백 경로(BaseAssetsSettings)로만 도달하는 잠재 결함이다",
-        "위치": "Sources/WapleCore/EffectManifest.swift:47",
+        "위치": "Sources/WapleCore/EffectManifest.swift 의 `relaxedJSON` 과 `parseStrict`",
     }, "확정", [asset_ev, corpus_ev,
                 specfmt.ev("file", "Sources/WapleCore/EffectManifest.swift:47"), script_ev]))
 
@@ -916,11 +904,9 @@ def main():
               "effects/blur/preview/effects/blur/effect.json (번들 최상위 %d건 / preview %d건 / 코퍼스 %d건)"
               % (e_top["bindClass"].get("prev(축약)", 0), e_prev["bindClass"].get("prev(축약)", 0),
                  e_cor["bindClass"].get("prev(축약)", 0)),
-        "Waple": 'SceneRendererResources.swift:754 이 b.name == "previous" 정확 일치만 본다. '
-                 '"prev" 는 fboIndex 조회로 떨어지고 미해석 → 그 슬롯이 이펙트 입력에 연결되지 않는다',
-        "우선순위": "낮다. preview 트리 1파일뿐이고 코퍼스 참조 0. 별칭 지원 여부 자체가 미확인이므로 "
-                "지금 구현하면 근거 없는 관대함이 된다 — 기록만 남긴다",
-        "위치": "Sources/WapleRender/SceneRendererResources.swift:754",
+        "해소": "`fafcd21`. 규약이 \"previous 라는 이름\"이 아니라 \"**fbos[] 에 없는 이름은 전부 −1**(이펙트 입력)\" 이라는 것이 원본에서 확정됐고(0x1401e7eef 초기화 / 0x1401e7f81 일치 시에만 덮어쓰기, 바이너리에 \"previous\" 리터럴 부재), 구현이 그 규약으로 바뀌었다. \"prev\" 도 특별 취급 없이 같은 자리에 떨어진다 — 남은 \"previous\" 비교는 로그를 생략하는 용도뿐이다",
+        "종전 상태": "b.name == \"previous\" 정확 일치만 보고 나머지 미지 이름은 이펙트를 통째로 드롭했다",
+        "위치": "Sources/WapleRender/SceneRendererResources.swift:949-953",
     }, "확정", [asset_ev, corpus_ev,
                 specfmt.ev("file", "Sources/WapleRender/SceneRendererResources.swift:754"), script_ev]))
 
@@ -942,8 +928,8 @@ def main():
             "conditions(fbo/bind/pass 합)": sum(e_top["conditions"].values()) + sum(e_cor["conditions"].values()),
             "functions": e_top["top"]["functions"] + e_cor["top"]["functions"],
         },
-        "note": "의미가 미확정이라 지금 구현할 수 없다. 다만 '읽지 않는다'는 사실은 확정이고, "
-              "conditions 를 무시하면 조건부 fbo 가 항상 생성돼 콤보 off 상태에서 낭비가 생긴다",
+        "해소": "conditions 는 `4785c0d` 로 닫혔다. EffectManifest.Condition/Conditions/evaluate/parseConditions 가 규약을 그대로 구현한다 — 맨몸 값은 정확히 등호, 명명 연산자는 ge/gt/le/lt 4종뿐이고 미지·부재 op 는 등호 폴백, 누산은 전부 AND, 비배열·빈 배열은 true(fail-open). 좌변은 이펙트 **인스턴스** 레벨 combos(SceneEffect.instanceCombos)다. 소비 3지점 — fbo 는 아예 만들지 않고, pass 는 통째로 건너뛰며(인덱스는 증가), bind 는 그 슬롯만 언바인드된다",
+        "note": "compose·functions 는 의미가 미확정이라 아직 구현할 수 없다. '읽지 않는다'는 사실만 확정이다",
         "갭 아님": "editable / performance / replacementkey 도 Sources 에 없지만 이건 에디터 메타데이터라 "
                 "렌더에 영향이 없다 — 미소비가 정상이다",
     }, "확정", [asset_ev, corpus_ev, specfmt.ev("file", "Sources/**/*.swift"), script_ev]))
