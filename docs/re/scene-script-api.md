@@ -88,6 +88,24 @@
 
 두 이름 다 exe/DLL 어디에도 문자열이 없다 — 즉 선언 파일에만 있는 유령이다.
 
+**[2026-08-21 추가] 결함이 둘이 아니라 넷이다.**
+
+- `ITextLayer.padding`(:1616)이 **`Number` 로 선언돼 있는데 실물은 vec2 다.** 텍스트 디스크립터
+  등록 `0x140259421` 의 타입 태그가 **1**(= vec2)이고 멤버는 `+0x4e8` 이다 — 같은 태그 1 인
+  형제 키는 `spacing`(`0x1402594f4`, `+0x4f8`)과 `dropshadowoffset`(`0x140259d61`, `+0x53c`) 로,
+  둘 다 이름부터 2성분이다. 생성자도 두 성분을 따로 심는다:
+  `0x140256bbf` `mov dword [rdi+0x4e8], 0x42000000` · `0x140256bc9` `mov dword [rdi+0x4ec], 0x42000000`
+  (= **(32.0, 32.0)**). 대조군으로 같은 등록부의 진짜 스칼라 float 키는 태그 **4** 다
+  (`pointsize` `0x140259363`/`+0x4e0` · `maxwidth` `0x1402595af`/`+0x508` ·
+  `outlinethickness` `0x1402599e8`/`+0x520`). 정렬 검증: 태그/오프셋을 생성자 스토어와 3건 대조했다
+  — `pointsize`↔`0x140256bf2`(`mov dword [rdi+0x4e0], 0x42000000` = 32.0) ·
+  `outlinethickness`↔`0x140256c43`(`mov dword [rdi+0x520], 0x40800000` = 4.0) ·
+  `anchor`↔`0x140256c99`(`mov byte [rdi+0x550], al`, `al` 은 `0x140256be6` 의 `xor eax,eax` 이후
+  재대입이 없어 **0** = enum "none"). 세 건이 다 맞으므로 이 덤프는 한 칸 밀리지 않았다.
+- `AnimationEvent`(:1012)는 **선언돼 있는데 이 클래스를 받는 `IComponent` 멤버가 없다.**
+  고아가 아니라 선언 누락이다 — 실물 훅 테이블(§9.2)의 id 6 이 `animationEvent` 이고 그것이
+  이 클래스의 소비자다. 같은 형태로 `CursorEvent.hitBox`(:1045)는 id 7 `cursorHitTest` 의 잔재다.
+
 ### 1.2 빈 인터페이스 셋
 
 `IThisPropertyObjectBase`(:1260) · `IMaterial`(:1268) · `IRenderContext`(:2302) 는 본문이
@@ -810,17 +828,14 @@ shadowLayer = thisScene.createLayer({ …, pointsize: thisLayer.pointsize, font:
   `__layerFromDescriptor` / `__updateSceneLayers` 양쪽에 실었다(마운트와 프레임 말 갱신이
   갈리지 않게 — `layersJSONArray` 주석의 단위 경계와 같은 규율).
 
-**남은 배선(다른 레인 파일 — diff 후보)**: `SceneRenderer.sceneScriptLayers(from:)`
-(`Sources/WapleRender/SceneRenderer.swift:246-257`)의 `doc.texts.map` 에 두 줄:
+**[2026-08-21] 남은 배선은 `8de9dba` 로 들어왔다** — `SceneRenderer.sceneScriptLayers(from:)`
+의 `doc.texts.map` 이 `pointSize: text.pointSize, font: text.font` 를 넘긴다. 그 커밋이
+드러낸 더 큰 사실은 §9 로 옮겨 적었다: **같은 부류(디스크립터에 자리가 없거나 인자를 안 넘겨
+심의 하드코딩 기본값이 저작값 대신 보이는 필드)가 하나가 아니라 전수로 있었다.**
 
-```swift
-                text: text.text,
-+               pointSize: text.pointSize,
-+               font: text.font
-```
-
-이게 붙기 전까지 텍스트 레이어는 기본값 16 / `systemfont_arial` 을 본다(종전의 `undefined`
-보다는 정확하지만 실값은 아니다).
+이 절이 적어 둔 심 기본값 `pointsize 16` 도 그 사이에 낡았다 — `SceneDocument.parseText` 의
+폴백이 WE 생성자(`0x140256bf2` `mov dword [rdi+0x4e0], 0x42000000`)대로 **32** 로 정정되면서
+16 은 어느 쪽 규약도 아니게 됐다. 심 기본값도 32 로 맞췄다(§9.3).
 
 ### 5.2 구현: `IScene.createLayer(설정 객체)` — 동봉 도달 2
 
@@ -952,7 +967,8 @@ if let engine = makeScriptEngine(vs, scriptPropsJSON: eff.visibleScriptProps,
 - 동봉 `presets/clock/preview3dclock` 스크립트 원문을 심 위에서 그대로 `init()` + `update()`
   까지 돌려, 그림자 레이어가 `pointsize 24` · 실제 폰트 경로를 물려받고 매 프레임
   `angles`/`origin`/`text` 가 갱신되는 것을 확인했다.
-- Swift 회귀는 `Tests/WapleRenderTests/SceneScriptAPISurfaceTests.swift` (11건).
+- Swift 회귀는 `Tests/WapleRenderTests/SceneScriptAPISurfaceTests.swift` (**19건** — 2026-08-21에
+  §9 용 6건 추가). 이 타깃은 macOS 전용이라 리눅스 레인에서는 못 돌린다(§9 의 검증 절 참조).
 
 ## 8. 재현
 
@@ -970,3 +986,278 @@ python3 scripts/spec/check_js_shim_baseclasses.py
 이 문서의 등록부 스캔(‌`0x14000F880` 호출 사이트 → 이름/구현 VA 추출, DLL 의
 `FunctionTemplate::New` 썽크 페어링)은 1회용 분석이라 스크립트로 남기지 않았다.
 다시 필요하면 §3.1 · §4 의 패턴 그대로 재현된다.
+
+---
+
+## 9. 디스크립터 배선 전수 감사 (2026-08-21)
+
+`8de9dba` 가 `SceneRenderer.sceneScriptLayers(from:)` 의 텍스트 분기에서 `pointSize`/`font` 를
+**안 넘겨** `thisLayer.pointsize` 가 저작값과 무관하게 늘 16 이던 결함(G15)을 고쳤다. 이 절은
+그 결함이 **한 건이 아니라 부류**임을 전수로 확인한 결과다.
+
+부류의 정의: **씬 문서에는 파스돼 있는데 `SceneScriptLayerDescriptor` 를 못 건너서, JS 심의
+하드코딩 기본값이 저작값 대신 스크립트에 보이는 것.** 화면은 안 바뀌므로 렌더 회귀 테스트로는
+안 잡히고, `SceneScriptAPISurfaceTests` 도 디스크립터를 **직접** 만들어 검증하므로 못 잡는다.
+잡히는 유일한 지점이 이 표다.
+
+### 9.1 전수표
+
+세 열의 뜻:
+- **문서** — `SceneDocument` 에 그 값이 파스돼 있는가.
+- **종전** — 2026-08-21 이전에 JS 가 실제로 보던 값.
+- **도달** — 워크샵 코퍼스(`spec/corpus/scene-schema.json`, **162씬** · 이미지 오브젝트 4,713 ·
+  텍스트 오브젝트 1,597)에서 그 키를 **저작한** 오브젝트 수. "스크립트가 읽는 수"가 아니라
+  "값이 있는데 안 넘어가는 수"다.
+
+#### (a) 이미지 레이어 분기 (`doc.layers.map`)
+
+| 디스크립터 필드 | d.ts | 문서 | 종전 | 도달(워크샵) |
+|---|---|---|---|---|
+| `name` `visible` `alpha` `origin`(xyz) `size` `id` `parentId` `animationLayerCount` | ✓ | ✓ | **실값** | — |
+| `scale` | :2034 | `Vec2` 뿐 | z 를 **1 로 고정** | `scale` 3,055 (성분 분해는 [미해결]) |
+| `angles` | :2029 | `angleZ` 뿐 | x·y 를 **0 으로 고정** | `angles` 3,264 (동봉 171씬 중 x·y≠0 이 1건, 설치본 184씬 중 7건) |
+| `solid` | :2054 | `isSolid`(bit13, ctor 기본 **true**) | `textureEntryName.isEmpty` — **다른 값** | `solid` 149 (그 밖 4,564 는 ctor 기본 true) |
+| **`color`** | :1785 | ✓ | **항상 (1,1,1)** | **1,372 / 110씬** |
+| **`parallaxDepth`** | :2039 | ✓ | **`undefined`**(심에 프로퍼티 자체가 없었다; 등록 `0x1401e0840` 태그 1 = vec2 `+0x170`) | **1,573 / 121씬** |
+| **`alignment`** | :1790 | ✓ | **`undefined`**(동상, 등록 `0x14021114b` 태그 5 `+0x4b1`) | **556 / 64씬** |
+| **`perspective`** | :1565 | ✓ | 항상 `false` | **88 / 28씬** |
+| `brightness` | 선언 없음 | ✓ | 없음 | 248 / 26씬 (d.ts 밖이라 이번 범위 밖) |
+
+#### (b) 텍스트 분기 (`doc.texts.map`)
+
+| 디스크립터 필드 | d.ts | 문서 | 종전 | 도달(워크샵) |
+|---|---|---|---|---|
+| `name` `visible` `alpha` `origin`(xy) `scale` `text` `pointSize` `font` | ✓ | ✓ | **실값** | — |
+| **`id`** | :2138 소비 | ✓ | **항상 0** → `getLayerByID` 로 텍스트를 못 찾고 부모 배선에서도 빠진다 | **1,597 / 123씬 (전건)** |
+| **`parentId`** | :2091 소비 | ✓ | **항상 nil** → `getParent()` 가 언제나 루트 | **1,236 / 88씬** |
+| **`angles`** | :2029 | `angleZ` | **항상 (0,0,0)** | **1,315 / 104씬** |
+| **`origin.z`** | :2024 | `originZ` | **항상 0** | (3D 텍스트 한정 — 워크샵 성분 분해 [미해결]) |
+| **`solid`** | :2054 | `isSolid` | **항상 false** | 52 저작 + 나머지 1,545 는 ctor 기본 true |
+| **`color`** | :1586 | ✓ | **항상 (1,1,1)** | **1,200 / 101씬** |
+| **`horizontalalign`** | :1621 | ✓ | 항상 "center" | **1,597 (전건)** — 값 분포 center 1,334 · left 164 · right 99 |
+| **`verticalalign`** | :1626 | ✓ | 항상 "center" | **1,597 (전건)** |
+| **`anchor`** | :1632 | ✓ | 항상 "none" | **1,429 / 111씬** |
+| **`padding`** | :1616 | `Vec2` | **`0`(Number)** — 형도 값도 틀렸다 | **1,597 (전건)** |
+| **`opaquebackground`** | :1596 | ✓ | 항상 false | **1,426 / 110씬** |
+| **`backgroundcolor`** | :1601 | ✓ | 항상 (0,0,0) | **1,426 / 110씬** |
+| **`limitrows`/`maxrows`** | :1637 :1642 | `maxRows: Int?` | 항상 false / 1 | **1,594 / 121씬** |
+| **`limitwidth`/`maxwidth`** | :1647 :1652 | `maxWidth: Float?` | 항상 false / 500 | **1,594 / 121씬** |
+| `parallaxDepth` | :2039 | **파스 없음** | `undefined` | 956 — `spec/corpus/scene-schema.json` `waple.gapImpact` 가 이미 아는 갭 |
+| `size` | :1560 | 없음 | `(0,0)` 고정 | 실물은 래스터된 텍스트의 픽셀 크기 — **[미해결]** |
+
+굵은 줄이 이번에 확인한 G15 부류다. **이미지 4개 + 텍스트 14개.**
+
+### 9.2 훅 테이블 전수 — `scenescript64.dll` `0x1819a3ee0`
+
+이름 포인터 테이블을 직독하고 소비자를 디스어셈해 **19엔트리**를 확정했다
+(`docs/re/pointer-interaction.md` §5.1 의 독립 재현 — 이름·VA·개수가 전건 일치한다).
+
+소비자 `0x18164bfa0`(primary) 의 루프:
+
+```
+0x18164c59d  xor  r14d, r14d                 ; id = 0
+0x18164c5a0  lea  rax, [rip+0x357939]        ; 0x1819a3ee0 = 이름 포인터 테이블
+0x18164c5a7  mov  r15d, 1                    ; bit = 1
+0x18164c5b0  mov  r8, [rax + r14*8]          ; name = table[id]
+0x18164c5c7  call 0x180029c50                ; v8 Object::Get(module, name)
+0x18164c5fa  call 0x180016480                ; IsFunction()
+0x18164c645  mov  [rcx + r14*8 + 0x40], rax  ; 훅 핸들 캐시
+0x18164c64a  or   [rcx + 0xd8], r15d         ; 존재 비트마스크 |= 1<<id
+0x18164c651  rol  r15d, 1
+0x18164c65e  cmp  r14, 0x13                  ; **19회**
+```
+
+| id | 이름 | 문자열 VA | `d.ts` `IComponent` | Waple 수집 |
+|---:|---|---|:---:|:---:|
+| 0 | `init` | `0x1819a3904` | ✓ | ✓ (lifecycle) |
+| 1 | `update` | `0x1819a390c` | ✓ | ✓ |
+| 2 | `resizeScreen` | `0x1819a3918` | ✓ | **없었음 → 수집 추가**(발화 배선 미완, §9.5) |
+| 3 | `destroy` | `0x1819a3928` | ✓ | **없었음 → 수집 추가**(동상) |
+| 4 | `applyUserProperties` | `0x1819a3930` | ✓ | ✓ (lifecycle) |
+| 5 | `applyGeneralSettings` | `0x1819a3948` | ✓ | **없었음 → 수집 추가**(동상) |
+| 6 | `animationEvent` | `0x1819a3960` | **없음** | ✓ (발화까지 배선됨) |
+| 7 | `cursorHitTest` | `0x1819a3970` | **없음** | **일부러 안 한다** — exe 발화 0곳(죽은 훅) |
+| 8 | `cursorEnter` | `0x1819a3980` | ✓ | ✓ |
+| 9 | `cursorLeave` | `0x1819a3990` | ✓ | ✓ |
+| 10 | `cursorMove` | `0x1819a39a0` | ✓ | ✓ |
+| 11 | `cursorClick` | `0x1819a39b0` | ✓ | ✓ |
+| 12 | `cursorDown` | `0x1819a39c0` | ✓ | ✓ |
+| 13 | `cursorUp` | `0x1819a39d0` | ✓ | ✓ |
+| 14 | `mediaStatusChanged` | `0x1819a39e0` | ✓ | ✓ |
+| 15 | `mediaPlaybackChanged` | `0x1819a39f8` | ✓ | ✓ |
+| 16 | `mediaPropertiesChanged` | `0x1819a3a10` | ✓ | ✓ |
+| 17 | `mediaThumbnailChanged` | `0x1819a3a28` | ✓ | ✓ |
+| 18 | `mediaTimelineChanged` | `0x1819a3a40` | ✓ | ✓ |
+
+인자 형태는 d.ts 선언대로다(`init`/`update` 는 바인드 프로퍼티 값 1개, `resizeScreen(Vec2)`,
+`applyUserProperties(Object)`, `applyGeneralSettings(Object)`, cursor 6종 `(CursorEvent)`,
+media 5종 각자의 이벤트 클래스). d.ts 에 없는 둘의 인자는 d.ts 가 **클래스만** 남겨 뒀다 —
+id 6 은 `AnimationEvent{name, frame}`(:1012), id 7 은 `CursorEvent.hitBox`(:1045).
+
+**도달(코퍼스 3종 전수, `export function <이름>` 실측)**: `update` 26 · `init` 10 ·
+`applyUserProperties` 4 · `cursorDown` 2 · `cursorClick`/`cursorUp`/`cursorMove` 각 1.
+id 2·3·5·7 은 동봉 6 · 설치본 15 · 공식 스니펫 15 어디에도 **0건**이다 — 그래서 발화 배선을
+지금 짓지 않고 수집까지만 했다.
+
+### 9.3 이번에 고친 것 (`TextScriptEngine.swift`)
+
+1. **디스크립터에 자리를 만들었다** — §9.1 굵은 줄 전부(`color` `parallaxDepth` `alignment`
+   `perspective` `horizontalAlign` `verticalAlign` `anchor` `padding` `opaqueBackground`
+   `backgroundColor` `limitRows`/`maxRows` `limitWidth`/`maxWidth`). 이니셜라이저 인자가 아니라
+   기본값 있는 `var` 라, 실값을 아직 안 채우는 호출부는 **문자 그대로 종전과 같은 값**을 본다.
+2. **`layersJSONArray(_:full:)`** — 마운트(`__setSceneLayers`)만 정적 표면을 싣고 프레임 말
+   갱신(`__updateSceneLayers`)은 종전 14키 그대로다. 정적 값은 프레임마다 같으므로 다시 실을
+   이유가 없고, 레이어 수 × 14키의 매 프레임 JSON 직렬화 비용만 는다.
+3. **심 기본값 정정** — `pointsize` 16 → **32**(§5.1), `padding` `0`(Number) → **`Vec2(32,32)`**
+   (§1.1의 태그 1 근거). `createLayer` 설정 키 매핑도 `padding` 을 Number 표에서 Vec2 표로 옮겼다
+   (숫자 하나가 오면 `Vec2` 생성자가 두 성분에 브로드캐스트 — 실물 vec2 주입기의 태그 1/2/3
+   경로와 같은 규약).
+4. **심에 없던 프로퍼티 추가** — `parallaxDepth`(:2039) · `alignment`(:1790). 종전엔 읽으면
+   `undefined` 라 그 값을 쓴 산술이 통째로 NaN 이었다.
+
+### 9.4 §2 코퍼스 재측정 — "호출되는데 심에 없는 것" 둘
+
+§2 의 도달 측정을 재현했다(동봉 6 · 설치본 15 · 공식 스니펫 15 — 종전 수치와 일치).
+그 위에 **공식 스니펫**(`ui/dist/monaco/snippets/`, 편집기가 "Bind SceneScript" 로 그대로
+붙여 넣는 정본 15개)을 다시 훑어 두 건을 찾았다.
+
+- **`IEffectLayer.transformAttachmentToTexture`**(d.ts:1555 · exe `0x1401ed0d0`) — 심에 **없었다**.
+  `script_project_attachment.js` · `script_project_attachment_angle.js` 가
+
+  ```js
+  return thisLayer.transformAttachmentToTexture(thisScene.getLayerByID('{{ID}}'), '{{NAME}}').translation();
+  ```
+
+  로 부른다(스니펫 15개 중 **2건**). 첫 `update` 에서
+  `TypeError: thisLayer.transformAttachmentToTexture is not a function` 이 나고 **그 스크립트가
+  통째로 죽는다**. 부착점 본 트랜스폼은 렌더 경로 소유라 심이 계산할 근거가 없으므로
+  `getEffect`/`getVideoTexture` 와 같은 `__noopProxy` 규약으로 **죽지만 않게** 했다 — 반환
+  프록시의 `.translation()`/`.angle()` 도 프록시라 `floatArray(from:)` 가 `nil`(= 직전 값 유지)로
+  떨어뜨린다. **identity `Mat3` 를 돌려주면 안 된다**: 그러면 origin 이 (0,0) 으로 튀어 오히려
+  회귀다.
+- **`IScene.getLayerByID` 가 문자열을 못 받았다**(d.ts:2138 은 `id: String` 이다). 위 스니펫이
+  `getLayerByID('{{ID}}')` 로 **따옴표 안에** 정수 id 를 심는데 심은 `__wapleId === id` 로
+  비교했다 — number `===` string 이라 **항상 null** 이었다. 문자열화 비교로 고쳤다
+  (`__wapleId` 0 = "id 미지정" 은 매칭에서 제외).
+
+두 건은 §9.1 (b) 의 `id` 미배선과 **겹쳐서** 나쁘다: 문자열 비교를 고쳐도 텍스트 레이어는
+디스크립터가 `id` 를 안 실어 여전히 못 찾는다. 둘 다 필요하다.
+
+### 9.5 넘길 것 — `SceneRenderer.sceneScriptLayers(from:)` (다른 레인 소유)
+
+`Sources/WapleRender/SceneRenderer.swift:230-266`. 위 자리를 실값으로 채우는 패치다.
+**이 패치 없이는 §9.3 의 새 필드가 전부 기본값 그대로다**(그래서 무회귀이고, 그래서 미완이다).
+
+```swift
+        let imageLayers = doc.layers.map { layer -> SceneScriptLayerDescriptor in
+            var d = SceneScriptLayerDescriptor(
+                name: layer.name,
+                visible: layer.initialVisible,
+                alpha: layer.alpha,
+                origin: SIMD3<Float>(layer.origin.x, layer.origin.y, layer.originZ),
+                scale: SIMD3<Float>(layer.scale.x, layer.scale.y, 1),
+                angles: SIMD3<Float>(0, 0, layer.angleZ),
+                size: SIMD2<Float>(layer.size.x, layer.size.y),
+                solid: layer.textureEntryName.isEmpty,
+                id: layer.id, parentId: layer.parent,
+                animationLayerCount: layer.animationLayers.count
+            )
+            // T-G15: 종전엔 자리가 없어 JS 가 심 기본값(흰색 / (1,1) / "center" / false)을 봤다.
+            d.color = SIMD3<Float>(layer.color.x, layer.color.y, layer.color.z)
+            d.parallaxDepth = SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y)
+            d.alignment = layer.alignment
+            d.perspective = layer.perspective
+            return d
+        }
+        let textLayers = doc.texts.map { text -> SceneScriptLayerDescriptor in
+            var d = SceneScriptLayerDescriptor(
+                name: text.name,
+                visible: text.initialVisible,
+                alpha: text.alpha,
+                // T-G15: originZ/angleZ/id/parent 는 텍스트에도 파스돼 있는데 종전엔 안 넘겨
+                // JS 가 0 / 0 / 0 / 루트를 봤다. id 누락은 getLayerByID 와 부모 배선을 동시에 막는다.
+                origin: SIMD3<Float>(text.origin.x, text.origin.y, text.originZ),
+                scale: SIMD3<Float>(text.scale.x, text.scale.y, 1),
+                angles: SIMD3<Float>(0, 0, text.angleZ),
+                size: SIMD2<Float>(0, 0),
+                text: text.text,
+                id: text.id, parentId: text.parent,
+                pointSize: text.pointSize, font: text.font
+            )
+            d.color = SIMD3<Float>(text.color.x, text.color.y, text.color.z)
+            d.horizontalAlign = text.horizontalAlign
+            d.verticalAlign = text.verticalAlign
+            d.anchor = text.anchor
+            d.padding = SIMD2<Float>(text.padding.x, text.padding.y)
+            d.opaqueBackground = text.opaqueBackground
+            d.backgroundColor = SIMD3<Float>(text.backgroundColor.x, text.backgroundColor.y,
+                                             text.backgroundColor.z)
+            // maxRows/maxWidth 는 nil=무제한이라 게이트와 값으로 갈라 싣는다(WE 도 따로 등록한다 —
+            // limitrows 0x140258ff7 · maxrows 0x14025966d).
+            d.limitRows = text.maxRows != nil
+            d.maxRows = text.maxRows ?? 1
+            d.limitWidth = text.maxWidth != nil
+            d.maxWidth = text.maxWidth ?? 500
+            return d
+        }
+```
+
+**따로 판단할 것 — `solid`.** d.ts:2054 의 `ILayer.solid` 는 실물에서 등록 `0x1401e1283`
+(타입 6 = 플래그 비트, 멤버 `+0x120`)이고 `SceneDocument` 는 그것을 `isSolid`(bit13, ctor 기본
+**true**)로 파스한다. 그런데 디스크립터는 이미지 분기에서 `layer.textureEntryName.isEmpty`
+(= "텍스처가 없다")를 싣고 텍스트 분기에서는 아예 안 싣는다. 셋이 서로 다른 값이다.
+`layer.isSolid` / `text.isSolid` 로 바꾸는 것이 실물 규약이지만, **스크립트 도달이 세 코퍼스
+전건 0** 이라 그림이 바뀌는 씬은 확인되지 않는다. 바꾸면 텍스트 1,545개 + 이미지 다수의
+`thisLayer.solid` 가 false→true 로 뒤집히므로, 이 레인에서 단독으로 밀어 넣지 않고 넘긴다.
+
+### 9.6 넘길 것 — `SceneDocument` (다른 레인 소유)
+
+디스크립터가 아니라 **파스**에서 값이 사라지는 것들이라 여기서는 못 고친다.
+
+- `SceneLayer.scale` 이 `Vec2` 라 씬 JSON 의 `scale.z` 가 소실된다(동봉 171씬 중 71 오브젝트,
+  설치본 184씬 중 92 — 전건 균일 3성분 `"s s s"`). JS 는 `thisLayer.scale.z` 를 늘 1 로 본다.
+- `SceneLayer.angleZ`/`SceneTextLayer.angleZ` 뿐이라 `angles.x`/`.y` 가 소실된다(동봉 1 · 설치본 7
+  오브젝트가 x·y≠0). 2D 렌더에는 무영향이지만 JS 표면은 틀린다.
+- `SceneTextLayer` 에 `parallaxDepth` 필드가 없다(워크샵 텍스트 1,597 중 956). 이미
+  `spec/corpus/scene-schema.json` 의 `waple.gapImpact` 가 렌더 갭으로 적어 둔 항목이고,
+  스크립트 표면 갭이기도 하다.
+- `spec/corpus/scene-schema.json` 의 `waple.valueShapeMismatch` 가 아직
+  "`SceneTextLayer.spacing` 은 `Float?`" 라고 적고 있는데 현재 코드는 `Vec2?` 다 — 스펙 덤프가
+  낡았다(재측정 대상).
+
+### 9.7 검증
+
+리눅스 레인에서 끝낼 수 있는 것은 다 끝냈다. macOS 전용은 그렇다고 명시한다.
+
+| 무엇 | 어떻게 | 결과 |
+|---|---|---|
+| 심 JS 문법·`baseclasses.js` 공존 | `python3 scripts/spec/check_js_shim_baseclasses.py` | OK (음성 대조 selftest 포함) |
+| Swift 리터럴 이스케이프 | `python3 scripts/spec/check_swift_escapes.py` | 위반 0 / 셰이더 주석 파손 0 |
+| `Sources/WapleRender/**` 타입체크 | `scripts/dev/linux-render-typecheck.sh` | 커버 51파일 rc=0 |
+| 심 동작(정적 표면·`getLayerByID` 문자열·부착점 스니펫) | 심 리터럴을 뽑아 node `vm` 에서 직접 평가 | 30 프로브 전건 기대값 |
+| 디스크립터 → JSON(`layersJSONArray`) | 소스에서 구조체+함수 **원문을 그대로 뽑아** 리눅스 `swiftc` 로 단독 컴파일 후 실행 | 24 단언 통과 |
+| `Tests/WapleRenderTests/SceneScriptAPISurfaceTests.swift` | **못 돌렸다** — macOS 전용 타깃. `swiftc -parse` 구문 검사만 통과 | **미검증** |
+
+돌연변이 대조(§3.4 규약) 6건, 6건 다 잡혔다: 심 `pointsize` 32→16 · `getLayerByID` 를 `===` 로
+되돌림 · `transformAttachmentToTexture` 제거(→ 스니펫이 `TypeError` 로 죽는 것을 재현) ·
+`layersJSONArray` 의 `full` 게이트 제거 · `padding` 성분 순서 뒤집기 · 디스크립터 `padding`
+기본값 (32,32)→(0,0).
+
+훅 테이블 재현:
+
+```python
+import struct
+# H_pe.PEX: 임의 PE 로더(imagebase/섹션/pdata)
+p = PEX('<WE설치본>/bin/scenescript64.dll')          # imagebase 0x180000000
+o = p.va2off(0x1819a3ee0)
+for i in range(19):                                   # 개수 근거: cmp r14, 0x13 @ 0x18164c65e
+    va = struct.unpack_from('<Q', p.d, o + 8 * i)[0]
+    print(i, hex(va), p.d[p.va2off(va):][:32].split(b'\x00')[0].decode())
+```
+
+텍스트 디스크립터 태그/오프셋(§1.1 의 `padding` 근거)은 등록부 `0x140258ca0`–`0x14025a713` 을
+`0x14000f880`(std::string 대입) 호출 사이트 기준으로 훑어 `[rbx+0x30]`(타입)·`[rbx+0x34]`(멤버
+오프셋)을 읽으면 나온다. **한 칸 밀림 검증은 필수다** — 생성자 스토어 3건(`pointsize`↔`+0x4e0`
+32.0 · `outlinethickness`↔`+0x520` 4.0 · `anchor`↔`+0x550` 0)과 대조해 정렬을 확인했다.
+(`anchor` 스토어는 즉값이 아니라 `al` 이다 — `0x140256be6` 의 `xor eax,eax` 로 0 임을 따로 짚었다.
+남의 주석에 적힌 "`mov byte [rdi+0x550], 0`" 은 그 축약이다.)
