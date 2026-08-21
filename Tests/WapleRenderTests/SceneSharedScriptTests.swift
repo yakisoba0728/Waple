@@ -535,6 +535,13 @@ final class SceneScriptMountLifecycleTests: XCTestCase {
         XCTAssertEqual(renderer.eventEngines.count, 1)
         XCTAssertFalse(renderer.eventEngines.contains { $0 === stale })
 
+        // U-W5b: 커서 훅은 이제 히트한 오브젝트에 바인딩된 스크립트에만 간다(`0x14018a709`–`0x14018a723`).
+        // 이 씬의 스크립트는 **텍스트 오브젝트**에 붙어 있고, 텍스트의 히트 상자는 실물에서 래스터된
+        // 픽셀 크기인데(`docs/re/scene-script-api.md` §9.1 (b) `size` [미해결]) Waple 은 그 값을 모른다.
+        // 그래서 텍스트 소유 대상은 `PointerHit.DeliveryScope.geometryUnknown` = **종전 배달 유지**로
+        // 떨어지고, 좌표 (1,1) 은 여기서 여전히 무의미하다. 이 테스트가 보는 것은 좌표가 아니라
+        // **리마운트 후 새 엔진이 받고 스테일 엔진은 못 받는다**는 것이므로 의도는 그대로다.
+        // 텍스트 히트 기하가 확정되면 이 좌표는 load-bearing 이 된다 — 그때 같이 고쳐야 한다.
         renderer.simulateCursorClick(x: 1, y: 1)
         let newScene = try XCTUnwrap(renderer.sceneScript)
         XCTAssertEqual(

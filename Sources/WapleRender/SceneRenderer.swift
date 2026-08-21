@@ -217,6 +217,13 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                !engine.hookNames.isDisjoint(with: ["cursorEnter", "cursorLeave"]) {
                 hoverEngineLayers.append((engine, layerName))
             }
+            // U-W5b: 나머지 커서 훅 4종도 브로드캐스트가 아니다(§ pointerTargets 주석).
+            // **이름이 아니라 디스크립터 인덱스로 잡는다** — 코퍼스에 무명 오브젝트가 흔하고
+            // (합성 e2e 의 컨트롤 오브젝트도 무명이다) 중복명도 있어서 이름 키는 조용히 빗나간다.
+            // `currentLayerIndex` 는 이미 thisLayer 직결(F743/S-34)에 쓰는 정본 키다.
+            if !engine.hookNames.isDisjoint(with: Self.pointerDispatchHooks) {
+                pointerEngineOwners.append((engine, currentLayerIndex))
+            }
         }
         return engine
     }
@@ -227,15 +234,28 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             || src.contains("registerAudioBuffers") || src.contains("g_AudioSpectrum")
     }
 
+    /// T-G15 배선(2026-08-21, 클러스터 U): `docs/re/scene-script-api.md` §9.1 이 전수로 세어 둔
+    /// "문서에는 파스돼 있는데 디스크립터를 못 건너 JS 심 하드코딩 기본값이 저작값 대신 보이던"
+    /// 필드 18개를 여기서 실값으로 채운다(그리고 §9.6 이 "파스에서 소실" 로 넘겼던 `scale.z` ·
+    /// `angles.x/.y` · 텍스트 `parallaxDepth` 도 — 그 사이에 파스가 닫혀 §9.6 이 낡았다).
+    /// 디스크립터 쪽 자리는 `fdc21e8` 이 이미 만들었고
+    /// (기본값 있는 `var` — 그래서 그 커밋은 무회귀였고, 그래서 미완이었다) 남은 것이 이 대입이다.
+    /// 화면은 안 바뀌므로 렌더 골든으로는 안 잡히고, `SceneScriptAPISurfaceTests` 도 디스크립터를
+    /// **직접** 만들어 검증하므로 못 잡는다 — 잡히는 유일한 지점이 이 함수다.
     static func sceneScriptLayers(from doc: SceneDocument) -> [SceneScriptLayerDescriptor] {
-        let imageLayers = doc.layers.map { layer in
-            SceneScriptLayerDescriptor(
+        let imageLayers = doc.layers.map { layer -> SceneScriptLayerDescriptor in
+            var d = SceneScriptLayerDescriptor(
                 name: layer.name,
                 visible: layer.initialVisible,
                 alpha: layer.alpha,
                 origin: SIMD3<Float>(layer.origin.x, layer.origin.y, layer.originZ),
-                scale: SIMD3<Float>(layer.scale.x, layer.scale.y, 1),
-                angles: SIMD3<Float>(0, 0, layer.angleZ),
+                // T-G15 정정: `scene-script-api.md` §9.6 은 "`SceneLayer.scale` 이 `Vec2` 라 z 가
+                // 소실된다 / `angleZ` 뿐이라 x·y 가 소실된다"고 적었는데 **그 문장은 이제 낡았다** —
+                // 파스가 `scaleZ`/`angleX`/`angleY` 를 따로 보존한다(W-V①). 하드코딩 1 / 0,0 을
+                // 그대로 두면 JS 가 여전히 틀린 값을 본다(코퍼스 scale.z≠1 이 동봉 71 · 설치본 92).
+                // 세 성분 모두 라디안이다(파스가 이미 변환한다 — 선언부 주석).
+                scale: SIMD3<Float>(layer.scale.x, layer.scale.y, layer.scaleZ),
+                angles: SIMD3<Float>(layer.angleX, layer.angleY, layer.angleZ),
                 size: SIMD2<Float>(layer.size.x, layer.size.y),
                 // O-W5: `ILayer.solid` 는 오브젝트 플래그워드 `+0x120` **bit13**(등록 `0x1401e1283`,
                 // ctor 기본 true — `0x1401ddc72` `mov word [r14+0x120], 0x2001`)이고 커서 히트테스트
@@ -246,19 +266,36 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 id: layer.id, parentId: layer.parent,
                 animationLayerCount: layer.animationLayers.count
             )
+            // T-G15(이미지 4): 종전엔 자리가 없어 JS 가 심 기본값 — color 흰색 / parallaxDepth·
+            // alignment 는 프로퍼티 자체가 없어 `undefined`(그 값을 쓴 산술이 통째로 NaN) /
+            // perspective 항상 false — 을 봤다. 워크샵 코퍼스 도달 1,372 · 1,573 · 556 · 88건.
+            d.color = SIMD3<Float>(layer.color.x, layer.color.y, layer.color.z)
+            d.parallaxDepth = SIMD2<Float>(layer.parallaxDepth.x, layer.parallaxDepth.y)
+            d.alignment = layer.alignment
+            d.perspective = layer.perspective
+            return d
         }
-        let textLayers = doc.texts.map { text in
-            SceneScriptLayerDescriptor(
+        let textLayers = doc.texts.map { text -> SceneScriptLayerDescriptor in
+            var d = SceneScriptLayerDescriptor(
                 name: text.name,
                 // F537(F-68): 이미지 레이어(:138)와 동일하게 초기 가시성 존중 — visible 스크립트 바인딩된
                 // 정적 비가시 텍스트의 최초 스크립트 판독(getLayer(name).visible)이 부정확하던 것을 수정.
                 visible: text.initialVisible,
                 alpha: text.alpha,
-                origin: SIMD3<Float>(text.origin.x, text.origin.y, 0),
-                scale: SIMD3<Float>(text.scale.x, text.scale.y, 1),
+                // T-G15: `originZ`/`angleZ` 는 텍스트에도 파스돼 있는데 종전엔 리터럴 0 을 넣어
+                // JS 가 늘 0 을 봤다(angles 도달 1,315). `angles` 는 라디안 — layersJSONArray 가
+                // JS 경계에서 도로 바꾼다(단위 경계 주석 참조).
+                origin: SIMD3<Float>(text.origin.x, text.origin.y, text.originZ),
+                scale: SIMD3<Float>(text.scale.x, text.scale.y, text.scaleZ),
+                angles: SIMD3<Float>(text.angleX, text.angleY, text.angleZ),
                 size: SIMD2<Float>(0, 0),
                 solid: text.isSolid,   // O-W5: 텍스트도 같은 bit13 — 종전엔 인자 누락으로 항상 false 였다
                 text: text.text,
+                // T-G15: `id`/`parent` 누락은 **두 곳을 동시에** 막았다 — `thisScene.getLayerByID`
+                // 가 텍스트를 영영 못 찾고(공식 스니펫 `getLayerByID('{{ID}}')` 경로), 부모 체인
+                // 배선(F711)에서도 텍스트가 통째로 빠져 `getParent()` 가 언제나 루트였다.
+                // 워크샵 1,597 **전건**이 id 를 저작한다(parent 는 1,236).
+                id: text.id, parentId: text.parent,
                 // G15: `ITextLayer.pointsize`/`font`(d.ts:1606·1611)는 디스크립터 실값이어야 한다.
                 // 종전엔 두 인자를 아예 안 넘겨 API 기본값(16 / "systemfont_arial")이 들어갔고,
                 // 그래서 저작값이 무엇이든 `thisLayer.pointsize` 가 16 이었다. 파스 기본값이
@@ -267,6 +304,37 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 // 이 배선 누락을 못 잡는다 — 그래서 여기 주석으로 못박아 둔다.
                 pointSize: text.pointSize, font: text.font
             )
+            // T-G15(텍스트 14): 도달은 §9.1 (b) — color 1,200 · horizontalalign/verticalalign/
+            // padding 각 1,597(전건) · anchor 1,429 · opaquebackground/backgroundcolor 각 1,426 ·
+            // limitrows/limitwidth 쌍 1,594.
+            d.color = SIMD3<Float>(text.color.x, text.color.y, text.color.z)
+            // T-G15 정정: §9.1 (b) 는 텍스트 `parallaxDepth` 를 "파스 없음" 으로 적었는데 **낡았다** —
+            // W-V② 가 공통 오브젝트 디스크립터(`+0x170`, 태그 1 = vec2, 등록 `0x1401e082f`) 근거로
+            // `SceneTextLayer.parallaxDepth` 를 파스한다. 워크샵 텍스트 1,597 중 956 이 저작한다.
+            d.parallaxDepth = SIMD2<Float>(text.parallaxDepth.x, text.parallaxDepth.y)
+            d.horizontalAlign = text.horizontalAlign
+            d.verticalAlign = text.verticalAlign
+            d.anchor = text.anchor
+            d.padding = SIMD2<Float>(text.padding.x, text.padding.y)
+            d.opaqueBackground = text.opaqueBackground
+            d.backgroundColor = SIMD3<Float>(text.backgroundColor.x, text.backgroundColor.y,
+                                             text.backgroundColor.z)
+            // `limitrows`/`maxrows` 는 실물에서 **서로 다른 멤버**다 — 게이트는 플래그워드
+            // `+0x594` bit3(등록 `0x140258ff7`, 타입 6), 값은 int `+0x510`(등록 `0x14025966d`,
+            // 타입 0 = int 주입기 `0x1401a4930` 의 `mov [r14+rbp], eax`). `limitwidth` 는 같은
+            // 워드 bit2(`0x140258f1e`), `maxwidth` 는 float `+0x508`(`0x14025959e`, 타입 4).
+            // `SceneTextLayer` 는 둘을 `Int?`/`Float?` 하나로 접어 놓았으므로 여기서 되풀어야 한다.
+            // nil 일 때 싣는 1 / 500 은 임의값이 아니라 **WE 텍스트 오브젝트 생성자의 멤버 기본값**
+            // 이다 — `0x140256c2e` `mov dword [rdi+0x510], 1` · `0x140256c1a`
+            // `mov dword [rdi+0x508], 0x43fa0000`(= 500.0f).
+            // [미해결] 실물은 `limitrows: false` 라도 저작된 `maxrows` 를 멤버에 그대로 싣는다
+            // (주입기가 게이트와 무관하게 키마다 따로 돈다). Waple 의 파스가 그 값을 접어 버려서
+            // 미체크 시의 저작값은 복원할 수 없다 — `SceneDocument` 쪽 패치가 선행돼야 한다.
+            d.limitRows = text.maxRows != nil
+            d.maxRows = text.maxRows ?? 1
+            d.limitWidth = text.maxWidth != nil
+            d.maxWidth = text.maxWidth ?? 500
+            return d
         }
         return imageLayers + textLayers
     }
@@ -283,19 +351,35 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     }
 
     // ── 씬 이벤트(클릭/미디어) ───────────────────────────────────────────────
-    /// 이벤트 훅을 export 한 스크립트 엔진들(mount 중 수집). 훅 이벤트는 전 엔진 브로드캐스트.
+    /// 이벤트 훅을 export 한 스크립트 엔진들(mount 중 수집). **오브젝트 스코프가 아닌** 훅
+    /// (`media*Changed` 5종 · `animationEvent`)만 여기로 브로드캐스트한다 — 그건 실물도 같다.
     ///
-    /// O-W5b **정정**: 종전 주석은 "WE 규약 — 스크립트가 worldPosition 으로 스스로 히트테스트한다"
-    /// 고 적었는데 **실물은 반대**다. 커서 훅 5종(`cursorEnter`/`Move`/`Click`/`Down`/`Up`)은
+    /// 커서 훅 5종(`cursorEnter`/`Move`/`Click`/`Down`/`Up`)은 **브로드캐스트가 아니다**:
     /// 엔진이 먼저 히트테스트를 하고 **히트한 오브젝트에 바인딩된 스크립트에만** 배달한다 —
     /// `cmp [inst+0x48], r15`(히트 오브젝트) `je` / `cmp [inst+8], 0` `jne skip`
     /// (`0x14018a709`–`0x14018a714`, 5개 훅 전건 동형). 무바인딩(`inst[8] == 0`) 인스턴스만 예외다.
-    /// 여기를 좁히려면 기존 macOS E2E 2건의 계약도 같이 고쳐야 한다 —
-    /// 정확한 패치안은 `docs/re/pointer-interaction.md` §7.3 ①.
-    /// (`media*Changed`/`animationEvent` 는 오브젝트 스코프가 아니므로 브로드캐스트가 맞다.)
+    /// **U(2026-08-21)에 배선했다** — Enter/Leave 는 `hoverTargets`, 나머지 4종은 `pointerTargets`.
     var eventEngines: [TextScriptEngine] = []
     /// cursorEnter/Leave 훅을 export 한 (엔진, 바인드 레이어명) — mount 중 수집, buildHoverTargets 가 쿼드 해석.
     var hoverEngineLayers: [(engine: TextScriptEngine, layerName: String)] = []
+
+    // ── U-W5b: 커서 훅 타겟팅 ────────────────────────────────────────────────
+    /// `dispatchPointerEvent` 를 지나는 커서 훅. cursorEnter/Leave 는 여기 없다 — 그 둘은
+    /// 경계 교차 전용이라 `hoverTargets`(:buildHoverTargets)가 따로 맡는다.
+    static let pointerDispatchHooks: Set<String> = ["cursorMove", "cursorClick", "cursorDown", "cursorUp"]
+    /// 커서 훅을 export 한 (엔진, 소유 오브젝트 디스크립터 인덱스) — mount 중 수집.
+    /// 인덱스 nil = 오브젝트에 안 붙은 스크립트(이펙트 상수/카메라/사운드 볼륨 등) = 실물 `inst[8] == 0`.
+    var pointerEngineOwners: [(engine: TextScriptEngine, descriptorIndex: Int?)] = []
+    /// mount 말미에 해석한 배달 대상. `scope` 판정은 `WapleCore/PointerHit.DeliveryScope`.
+    struct PointerTarget {
+        let engine: TextScriptEngine
+        let scope: PointerHit.DeliveryScope
+        /// `.object` 일 때만 의미 있음 — 히트 판정 직전에 쿼드를 시차만큼 옮긴다(O-W7).
+        let parallaxDepth: Vec2
+    }
+    var pointerTargets: [PointerTarget] = []
+    /// cursorClick 은 **뗄 때** + 누를 때 잡았던 대상에서만(W-9). 홀드 맵은 실물 `scene+0x2c0`.
+    var clickLatch = PointerClickLatch()
     /// 호버 히트테스트 타깃: 엔진 + 레이어 히트 쿼드(씬 픽셀, 회전 포함) + 그 레이어의 시차 깊이
     /// + 현재 내부 여부(경계 넘을 때만 발송).
     struct HoverTarget {
@@ -325,18 +409,63 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 포인터 이벤트 배달(씬 픽셀 좌표, 하단원점/y-up — pointerSceneCoords()→sceneCoords() 경유,
     /// W1-yaxis 정합. 스테일 정정: 종전 "상단 원점" 문구는 구 y-down pxToNDC 체제 잔재였음).
     /// event 필드는 실물 역추출: worldPosition(Vec3 — .x/.subtract 체이닝), button(0=좌).
-    func dispatchPointerEvent(hook: String, x: Float, y: Float) {
+    ///
+    /// U-W5b: **브로드캐스트가 아니라 타겟팅이다.** `pointerTargets` 중 포인터가 실제로 덮는
+    /// 대상에만 배달한다(무바인딩 스크립트와 히트 기하 미확정 대상은 예외 — `DeliveryScope`).
+    /// `only` = cursorClick 전용 제한(홀드 맵을 통과한 대상만) — nil 이면 제한 없음.
+    func dispatchPointerEvent(hook: String, x: Float, y: Float, only: Set<Int>? = nil) {
         // F743(S-31): input.cursorWorldPosition/cursorScreenPosition/cursorLeftDown 폴ling 실데이터화
         // (screen 좌표는 포인터 UV×프로젝션 픽셀 근사 — ponytail: WE screen 기준 실측 부재).
+        // 커서 상태 폴링은 **타겟팅과 무관**하다 — `input.*` 는 오브젝트 스코프가 아니다.
         sceneScript?.setCursorState(worldX: x, worldY: y,
                                     screenX: pointerUV.x * projW, screenY: pointerUV.y * projH,
                                     leftDown: pointerDown)
-        dispatchSceneEvent(hook, eventJS: "({ worldPosition: new Vec3(\(x), \(y), 0), button: 0 })")
+        let p = SIMD2<Float>(x, y)
+        let eventJS = "({ worldPosition: new Vec3(\(x), \(y), 0), button: 0 })"
+        for i in pointerTargets.indices where pointerTargets[i].engine.hookNames.contains(hook) {
+            if let only, !only.contains(i) { continue }
+            guard pointerTargetCovers(i, p) else { continue }
+            pointerTargets[i].engine.callHook(hook, eventJS: eventJS)
+        }
+        mtkView?.needsDisplay = true
     }
 
-    /// cursorClick 시뮬레이션(테스트/헤드리스 e2e 용).
+    /// 대상 `i` 를 포인터가 덮는가 — 히트 판정 직전에 시차 오프셋을 **쿼드 중심**에 더한다(O-W7,
+    /// `0x14019dd79`. 광선이 아니라 쿼드가 움직인다 — 그래서 "그려진 자리 = 클릭되는 자리").
+    func pointerTargetCovers(_ i: Int, _ p: SIMD2<Float>) -> Bool {
+        let t = pointerTargets[i]
+        return PointerHit.delivers(Self.shiftedScope(t.scope, by: hoverParallaxShift(t.parallaxDepth)), to: p)
+    }
+
+    static func shiftedScope(_ scope: PointerHit.DeliveryScope,
+                             by d: SIMD2<Float>) -> PointerHit.DeliveryScope {
+        if case .object(let quad) = scope { return .object(quad.translated(by: d)) }
+        return scope
+    }
+
+    /// 지금 포인터가 덮는 대상 인덱스 전부(훅 보유 여부 **무관**). 실물 홀드 맵은 스크립트가 아니라
+    /// **오브젝트**를 키로 하므로(`0x14018a79b` 이 히트 오브젝트 `r15` 를 넘긴다) 여기서도 훅으로
+    /// 거르지 않는다 — `cursorDown` 을 export 하지 않은 스크립트도 `cursorClick` 은 받는다.
+    func pointerTargetsCovering(_ p: SIMD2<Float>) -> [Int] {
+        pointerTargets.indices.filter { pointerTargetCovers($0, p) }
+    }
+
+    /// cursorClick 시뮬레이션(테스트/헤드리스 e2e 용). **좌표가 대상 오브젝트를 덮어야 발화한다** —
+    /// 실물이 그렇다(U-W5b). 눌림/뗌 왕복은 건너뛰고 클릭 훅만 직접 주입하는 seam 이라
+    /// 홀드 맵(W-9)은 지나지 않는다 — 그 경로는 `deliverGlobalMouse` 가 쓴다.
     public func simulateCursorClick(x: Float, y: Float) {
         dispatchPointerEvent(hook: "cursorClick", x: x, y: y)
+    }
+
+    /// 테스트/진단용: `hook` 을 export 한 스크립트의 **소유 오브젝트 중심**(씬 픽셀, 시차 보정 포함).
+    /// 배달이 타겟팅으로 바뀐 뒤로 e2e 가 클릭 좌표를 하드코딩하면 씬이 바뀔 때 조용히 빗나간다 —
+    /// 좌표를 씬에서 되읽으라고 두는 seam 이다. 소유 오브젝트가 없거나(무바인딩) 기하 미확정이면 nil.
+    public func pointerHookTargetCenter(hook: String) -> SIMD2<Float>? {
+        for t in pointerTargets where t.engine.hookNames.contains(hook) {
+            guard case .object(let quad) = t.scope else { continue }
+            return quad.translated(by: hoverParallaxShift(t.parallaxDepth)).center
+        }
+        return nil
     }
 
     /// 포인터 버튼 상태 주입점(g_PointerState 로 전달 — 시뮬/헤드리스 e2e 용, pointerUV 위치 주입과 대칭).
@@ -379,6 +508,39 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
             quads[pair.layerName].map {
                 HoverTarget(engine: pair.engine, quad: $0.quad, parallaxDepth: $0.depth, inside: false)
             }
+        }
+    }
+
+    /// mount 말미: 수집한 (엔진, 디스크립터 인덱스) → 배달 범위(`PointerHit.DeliveryScope`).
+    ///
+    /// U-W5b(2026-08-21). 인덱스 규약은 `sceneScriptLayers(from:)` 의 배열 순서와 같다 —
+    /// `[0, doc.layers.count)` 가 이미지 오브젝트, 그 뒤가 텍스트 오브젝트.
+    ///
+    /// **범위별 근거**:
+    /// - `nil` 인덱스 → `.unbound`. 이펙트 상수/카메라/사운드 볼륨 스크립트처럼 오브젝트에 안 붙은
+    ///   것들이고, 실물 `inst[8] == 0` 예외와 같은 자리다. 종전과 동일하게 전건 배달된다.
+    /// - 이미지 오브젝트 → `solid`(bit13) 가 꺼졌으면 `.unhittable`(히트 순회의 첫 관문
+    ///   `0x14018a02d` 가 아예 통과시키지 않는다), 켜졌으면 `.object(회전 쿼드)`.
+    ///   쿼드 구성은 호버와 **같은** `layerHitQuad`(정렬 앵커 포함) — 두 경로가 갈리면 안 된다.
+    /// - 텍스트 오브젝트 → `.geometryUnknown`. 실물 텍스트의 히트 상자는 **래스터된 픽셀 크기**인데
+    ///   `SceneTextLayer` 에는 그 값이 없다(`scene-script-api.md` §9.1 (b) `size` [미해결]).
+    ///   추측한 상자로 좁히면 텍스트 바인딩 스크립트가 통째로 죽으므로 종전 배달을 유지한다.
+    func buildPointerTargets(doc: SceneDocument) {
+        pointerTargets = pointerEngineOwners.map { pair -> PointerTarget in
+            let none = Vec2(x: 0, y: 0)
+            guard let i = pair.descriptorIndex else {
+                return PointerTarget(engine: pair.engine, scope: .unbound, parallaxDepth: none)
+            }
+            guard i >= 0, i < doc.layers.count else {
+                return PointerTarget(engine: pair.engine, scope: .geometryUnknown, parallaxDepth: none)
+            }
+            let l = doc.layers[i]
+            guard l.isSolid else {
+                return PointerTarget(engine: pair.engine, scope: .unhittable, parallaxDepth: none)
+            }
+            let quad = Self.layerHitQuad(origin: l.origin, size: l.size, scale: l.scale,
+                                         angleZ: l.angleZ, alignment: l.alignment)
+            return PointerTarget(engine: pair.engine, scope: .object(quad), parallaxDepth: l.parallaxDepth)
         }
     }
 
@@ -625,12 +787,26 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
 
     func deliverGlobalMouse(isDown: Bool) {
         pointerButton.setDown(isDown)  // g_PointerState 라이브 배관(위치 무관 물리 버튼 상태) — 헤드리스는 모니터 미설치라 미도달.
-        guard let p = pointerSceneCoords() else { return }
+        guard let p = pointerSceneCoords() else {
+            // 창 밖(레터박스 포함)에서는 히트 오브젝트가 없다 — 뗌은 클릭이 아니고, 누름도
+            // 직전 눌림을 무효화한다(스테일 홀드 맵이 다음 뗌을 클릭으로 만들면 안 된다).
+            clickLatch.cancel()
+            return
+        }
+        let covering = pointerTargetsCovering(p)
         if isDown {
+            clickLatch.press(covering)
             dispatchPointerEvent(hook: "cursorDown", x: p.x, y: p.y)
-            dispatchPointerEvent(hook: "cursorClick", x: p.x, y: p.y)
         } else {
             dispatchPointerEvent(hook: "cursorUp", x: p.x, y: p.y)
+            // U-W9: `cursorClick` 은 **뗄 때**, 그것도 **누를 때 잡아 둔 오브젝트에서 떼었을 때만**이다
+            // (`0x14018a787` `test dl,dl` → `je 0x14018a7aa` → 홀드 맵 `scene+0x2c0` find,
+            //  end 면 스킵. 통과하면 `0x14018a833` `mov r9d, 0xb` = 훅 인덱스 11).
+            // 종전 Waple 은 누를 때 cursorDown 과 함께 쐈다 — 눌렀다가 밖으로 끌고 나가서 떼도 클릭이었다.
+            let clicked = clickLatch.release(covering)
+            if !clicked.isEmpty {
+                dispatchPointerEvent(hook: "cursorClick", x: p.x, y: p.y, only: Set(clicked))
+            }
         }
     }
 
@@ -1551,6 +1727,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                 if !dupEngines.isEmpty {
                     eventEngines.removeAll { dupEngines.contains(ObjectIdentifier($0)) }
                     hoverEngineLayers.removeAll { dupEngines.contains(ObjectIdentifier($0.engine)) }
+                    pointerEngineOwners.removeAll { dupEngines.contains(ObjectIdentifier($0.engine)) }
                 }
                 eval3DOrder = eval3DOrder.filter { !$0.bb }   // 빌보드 평가 항목 제거(아래서 billboards 를 비움)
                 draw3DOrder = []   // encode3D 는 하이브리드에서 미호출(ortho 메시 패스가 대신 그림)
@@ -1746,6 +1923,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         startClickMonitorIfNeeded()
         hasCursorMoveHook = eventEngines.contains(where: { $0.hookNames.contains("cursorMove") })
         buildHoverTargets(doc: doc)   // cursorEnter/Leave 레이어 히트 쿼드 해석
+        buildPointerTargets(doc: doc) // U-W5b: cursorMove/Click/Down/Up 배달 범위 해석
         if hasCursorMoveHook || !hoverTargets.isEmpty {
             startPointerMonitor()  // 이미 켜져 있으면 no-op(내부 nil 가드)
         }
@@ -1782,12 +1960,21 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
                     let out = renderer.audioProcessor.process(raw: spec,
                                                               dt: Float(min(max(elapsed, 1.0 / 240), 0.1)))
                     renderer.currentSpectrum = AudioSpectrum16(left: out.left16, right: out.right16)
-                    renderer.setSpectrum64(left: out.left64, right: out.right64)
+                    // U/AA: 프로세서가 이미 MAX 로 접어 둔 32밴드를 그대로 싣는다(종전엔 64빈만
+                    // 넘겨 호출부가 쌍평균으로 다시 접었다 — `0x1401128e0` 은 `maxss` 다).
+                    renderer.setSpectrumBands(out)
                     renderer.sceneScript?.setAudio(left64: out.left64, right64: out.right64)
                 } else {
+                    guard let renderer = self else { return }
                     let bins = AudioSpectrum16.downsample16(spec)
-                    self?.currentSpectrum = AudioSpectrum16(left: bins, right: bins)
-                    self?.sceneScript?.setAudio(left64: spec, right64: spec)  // 모노 폴백(64빈 미만은 JS 가 0 채움)
+                    renderer.currentSpectrum = AudioSpectrum16(left: bins, right: bins)
+                    // U/AA: 이 가지는 종전에 32/64 유니폼을 **아예 안 채웠다**(g_AudioSpectrum32/64 가
+                    // 0 으로 남았다). 축약은 여기서도 MAX 다 — `AudioSpectrum16.groupMax`.
+                    let mono64 = AudioSpectrum16.groupMax(spec, binCount: 64)
+                    let mono32 = AudioSpectrum16.groupMax(spec, binCount: 32)
+                    renderer.setSpectrumBands(left64: mono64, right64: mono64,
+                                              left32: mono32, right32: mono32)
+                    renderer.sceneScript?.setAudio(left64: spec, right64: spec)  // 모노 폴백(64빈 미만은 JS 가 0 채움)
                 }
             }
             provider.start()
@@ -2115,12 +2302,43 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
     /// 합성 스펙트럼 주입(헤드리스 검증/테스트용). 라이브에선 provider 가 갱신.
     public func setSpectrum(_ spectrum: AudioSpectrum16) { currentSpectrum = spectrum }
 
-    /// 고해상(64빈/채널) 스펙트럼 주입 — 32빈은 쌍평균 파생(오디오 바 효과용).
+    /// 프로세서 출력 그대로 밴드 유니폼에 싣는다 — **32밴드를 여기서 다시 접지 않는다.**
+    ///
+    /// U/AA(2026-08-21): 종전 `setSpectrum64(left:right:)` 는 64빈만 받아 32빈을 `(a+b)/2` 로
+    /// **재계산**했는데 실물의 축약은 평균이 아니라 **MAX** 다:
+    /// ```
+    /// 0x1401128E0  f3 0f 5f 04 8b   maxss xmm0, [rbx+rcx*4]   ; spec32[j] = MAX(spec64[2j], spec64[2j+1])
+    /// 0x140112B6F  f3 0f 5f 00      maxss xmm0, [rax]         ; spec16[j] = MAX(spec32[2j], spec32[2j+1])
+    /// ```
+    /// (32→16 은 `0x140112c94` 이후 완전 언롤 `maxss` 사슬이라 독립 증거가 하나 더 있다.)
+    /// `AudioSpectrumProcessor.reduce` 는 이미 MAX 로 접은 `spec32` 를 들고 있는데 호출부가 그걸
+    /// 버리고 있었던 것뿐이다 — 접근자가 생겼으니 잘라 쓰기만 한다.
+    /// 좁은 피크(순음 저역)에서 평균은 MAX 의 **정확히 절반**이다.
+    public func setSpectrumBands(_ out: AudioSpectrumProcessor.Output) {
+        setSpectrumBands(left64: out.left64, right64: out.right64,
+                         left32: out.left32, right32: out.right32)
+    }
+
+    /// 밴드 4배열 직접 주입(모노 폴백/테스트 seam). 길이는 잘라내고 0 으로 채운다.
+    public func setSpectrumBands(left64 l64: [Float], right64 r64: [Float],
+                                 left32 l32: [Float], right32 r32: [Float]) {
+        func fit(_ v: [Float], _ n: Int) -> [Float] {
+            Array(v.prefix(n)) + [Float](repeating: 0, count: max(0, n - v.count))
+        }
+        left64 = fit(l64, 64); right64 = fit(r64, 64)
+        left32 = fit(l32, 32); right32 = fit(r32, 32)
+    }
+
+    /// 고해상(64빈/채널) 스펙트럼만 있는 주입 seam(테스트/헤드리스). 32빈은 여기서 파생하되
+    /// **인접 2빈의 MAX** 다 — `0x1401128e0` 의 `maxss`. 종전 `(a+b)/2` 는 근거 없는 추측이었고,
+    /// 좁은 피크에서 값이 절반으로 깎였다. 프로세서 출력이 있으면 `setSpectrumBands(_:)` 를 써라
+    /// (그쪽은 파생조차 하지 않는다 — `reduce` 가 접어 둔 `spec32` 를 그대로 싣는다).
     public func setSpectrum64(left: [Float], right: [Float]) {
-        left64 = Array(left.prefix(64)) + [Float](repeating: 0, count: max(0, 64 - left.count))
-        right64 = Array(right.prefix(64)) + [Float](repeating: 0, count: max(0, 64 - right.count))
-        left32 = (0..<32).map { (left64[$0 * 2] + left64[$0 * 2 + 1]) / 2 }
-        right32 = (0..<32).map { (right64[$0 * 2] + right64[$0 * 2 + 1]) / 2 }
+        let l64 = Array(left.prefix(64)) + [Float](repeating: 0, count: max(0, 64 - left.count))
+        let r64 = Array(right.prefix(64)) + [Float](repeating: 0, count: max(0, 64 - right.count))
+        setSpectrumBands(left64: l64, right64: r64,
+                         left32: (0..<32).map { max(l64[$0 * 2], l64[$0 * 2 + 1]) },
+                         right32: (0..<32).map { max(r64[$0 * 2], r64[$0 * 2 + 1]) })
     }
 
     /// 헤드리스 시각 검증: 레이어(베이스, 효과 제외) + 파티클을 오프스크린에 렌더해 각 time 의 PNG 를 저장.
@@ -2332,6 +2550,7 @@ public final class SceneRenderer: NSObject, WallpaperRenderer, MTKViewDelegate {
         mediaArtworkTexture = nil; mediaPreviousArtworkTexture = nil  // F722: 마운트 재사용 시 이전 씬 아트워크 잔류 방지
         eventEngines = []
         hoverEngineLayers = []; hoverTargets = []
+        pointerEngineOwners = []; pointerTargets = []; clickLatch.cancel()
         animEventTargets = []
         hasCursorMoveHook = false
         audioProvider?.stop(); audioProvider = nil; hasAudio = false; hasEffects = false

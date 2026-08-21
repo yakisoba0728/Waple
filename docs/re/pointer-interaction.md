@@ -36,7 +36,7 @@ renderState 슬롯(`+0x8c`, 유니폼 id 105, y = `1 − pointer.y`, 소비부 c
 | 13 | `config.fullscreen` 모델(`[obj+0x304]` bit1)은 히트테스트를 **건너뛰고 항상 맞는다**. 그때 커서 월드좌표는 `pointer × 표면크기` | 확정 |
 | 14 | 씬스크립트 훅 테이블은 **19개**이고, `lib.sceneScript.d.ts` 에 없는 **`cursorHitTest`(idx 7)** 와 `animationEvent`(idx 6)가 들어 있다 | 확정 · 신규 |
 | 15 | **`cursorHitTest` 는 exe 어디에서도 발화되지 않는다** — 등록만 된 죽은 훅 | 확정 · 신규 |
-| 16 | 커서 훅은 **히트한 오브젝트에 바인딩된 스크립트**(또는 `[inst+8] == 0` 인 스크립트)에만 간다. 전 스크립트 브로드캐스트가 아니다 | 확정 |
+| 16 | 커서 훅은 **히트한 오브젝트에 바인딩된 스크립트**(또는 `[inst+8] == 0` 인 스크립트)에만 간다. 전 스크립트 브로드캐스트가 아니다 | 확정 · **해소**(U, §7.2b) |
 | 17 | WE 는 **`WH_MOUSE_LL` 전역 저수준 마우스 훅**(`SetWindowsHookExW(14, …)` @ `0x140126902`)을 설치해 데스크톱 클릭을 최대 16개 벽지 창에 `PostMessageW(WM_LBUTTONUP)` 로 되쏜다 | 확정 |
 | 18 | `disablepropagation` 의 실물 의미는 **커서 히트 전파 차단**이지 부모 트랜스폼 상속 차단이 아니다 | 확정 · **해소**(`object-propagation.md` §9.1, 클러스터 M) |
 | 19 | 호버 맵과 홀드 맵을 이전 판이 **바꿔** 적었다 — 호버 = `scene+0x280`(버킷 `0x298`/마스크 `0x2b0`), 홀드 = `scene+0x2c0`(`0x2d8`/`0x2f0`). 삽입 호출부 `0x14018a530` / `0x14018a78b` 가 못박는다 | **확정 · 정정(§4.2)** |
@@ -701,12 +701,12 @@ W-5 를 부분적으로 닫았다** — 무엇을 어떻게 고쳤는지는 §7.
 | **W-3** | `g_PointerState.z` | **누른 첫 프레임만 1.0**(핸들러 `0x1400d9e59`, 프레임 꼬리 `0x140181623`–`0x14018162d` → 저장 `0x14018169e`) | **엣지**(`PointerButtonState`, `PointerHit.swift:118-144`; 소비 `SceneRendererFrameEncoder.swift:60`; 꼬리 `SceneRenderer.swift:1978`) | **해소**(O) | `cursorripple`(`× 5.0`)/`fluidsimulation`(게인 1)이 누른 채 있어도 한 프레임만 밀어낸다 |
 | **W-3b** | `g_PointerState.x/.y` | 누름 유지 동안 1.0 | 항상 0 (`GLSLTranslator.swift:1476` 이 `float4(0,0,z,0)` 을 방출) | 확정 · 미해소 · **무해** | 동봉·설치본 셰이더 4파일 전건이 `.z` **만** 읽는다(전수 grep, §2.4). `PointerButtonState.heldValue` 로 값은 준비돼 있다 |
 | **W-4** | `disablepropagation` 의미 | **커서 히트 전파 차단**(`[obj+0x120]` bit14, 유일 소비 `0x14018a877`) | 트랜스폼 가드 제거됨 | **해소**(클러스터 M, `object-propagation.md` §9.1) | 남은 것은 "커서 순회에서 실제로 쓰기" — §7.3 |
-| **W-5** | `solid` 게이트 | 히트테스트 순회의 **첫 관문**(`0x14018a00b` `mov r8d,0x2000` → `0x14018a02d`). ctor 기본 **true** | 파스 기본 true(M) + 호버 타깃 구성이 `l.isSolid` 로 게이트(`SceneRenderer.swift:373`) + 스크립트 `ILayer.solid` 실값 배선(`:244`·`:260`) | **부분 해소**(O) | 종전 `solid: layer.textureEntryName.isEmpty`(근거 없는 추측)를 걷어냈다. 이벤트 **배달 타겟팅**은 아직 브로드캐스트 — W-5b |
-| **W-5b** | 커서 훅 배달 대상 | 히트 오브젝트에 바인딩된 스크립트만(`inst[0x48] == hitObj \|\| inst[8] == 0`, `0x14018a709`·`0x14018a70f`; 5개 훅 전건 동일) | 전 엔진 브로드캐스트(`SceneRenderer.swift:320`) | **확정 · 미해소** | 고치면 기존 macOS E2E 2건이 깨진다(그 테스트가 잘못된 계약을 굳혀 뒀다). 정확한 패치안은 §7.3 |
+| **W-5** | `solid` 게이트 | 히트테스트 순회의 **첫 관문**(`0x14018a00b` `mov r8d,0x2000` → `0x14018a02d`). ctor 기본 **true** | 파스 기본 true(M) + 호버 타깃 구성이 `l.isSolid` 로 게이트 + 스크립트 `ILayer.solid` 실값 배선 + **배달 타겟팅의 `.unhittable` 게이트**(U) | **해소**(O+U) | 종전 `solid: layer.textureEntryName.isEmpty`(근거 없는 추측)를 걷어냈다. 남은 것은 히트 순회 자체(스크립트 없는 오브젝트) — 실물은 유저 숏컷용으로 돌린다 |
+| **W-5b** | 커서 훅 배달 대상 | 히트 오브젝트에 바인딩된 스크립트만(`inst[0x48] == hitObj \|\| inst[8] == 0`, `0x14018a709`·`0x14018a70f`; 5개 훅 전건 동일) | **타겟팅**(`pointerTargets` + `PointerHit.DeliveryScope`) | **해소**(U, 2026-08-21) | §7.2b. 텍스트 오브젝트는 히트 기하 미확정이라 `.geometryUnknown` = 종전 배달 유지 |
 | **W-6** | 히트 판정 도형 | 오브젝트 4×4 를 먹인 **평행사변형**(회전·음수 스케일 존중), `size` ±0.5, 경계 포함, 퇴화 미스 | **동형**(`PointerHit.localUV`, `PointerHit.swift:81`; 쿼드 구성 `SceneRenderer.layerHitQuad`, `:356`) | **해소**(O) | `alignment`(9점 앵커)도 같이 반영했다 — 종전 AABB 는 origin=중심으로 가정했다 |
 | **W-7** | 히트 시 시차 보정 | **쿼드 중심**에 `(origin−focus)·amount·depth` 를 더한다(`0x14018a0b3`–`0x14018a115` → `0x14019dd79`) | 그리기와 **같은 식** `cameraOffset × parallaxDepth` 를 씬 픽셀로 환산해 쿼드를 옮긴다(`SceneRenderer.hoverParallaxShift`, `:411`) | **해소**(O) | 실물의 초점 식 자체(camera-motion W-2/W-4)와 무관하게 "그려진 자리 = 클릭되는 자리" 는 성립한다 |
 | **W-8** | `cursorEnter/Leave` 대상 | **모든 `solid` 오브젝트**가 자동 호버 대상 | 훅을 export 한 엔진의 **바인드 레이어 1개**만(`SceneRenderer.swift:216-219`·`368-383`) | 확정 · 부분 | 실물은 스크립트가 없어도 히트테스트를 돌린다(유저 숏컷용). 스크립트 배달만 보면 근사치는 맞다 |
-| **W-9** | `cursorClick` 타이밍 | **뗄 때**, 같은 오브젝트에서 눌렀을 때만 | **누를 때** `cursorDown` 과 함께(`SceneRenderer.swift:630-631`) | 확정 · 미해소 | 한 줄 이동. 누른 오브젝트를 기억했다가 up 에서 비교 |
+| **W-9** | `cursorClick` 타이밍 | **뗄 때**, 같은 오브젝트에서 눌렀을 때만 | **뗄 때 + 홀드 맵 교집합**(`PointerClickLatch` · `deliverGlobalMouse`) | **해소**(U, 2026-08-21) | 홀드 맵 키는 오브젝트 포인터 대신 배달 대상 인덱스(같은 동치관계). §7.2b |
 | **W-10** | 파티클 CP bit0 | 매 프레임 CP 평행이동을 커서로 교체 | **의도적 미구현**(`ParticleSystem.swift` `controlPointFlags` 주석 `:1520-1528` — "bit0 은 헤드리스에 커서가 없고") + CP 를 로드 시 1회 **베이크**(`bakeControlPointTargets`, `:2632`) | 확정 · 미해소 | 동봉 28파일이 정적 CP 로 돈다 — `examplecursorfollow` 류는 아예 움직이지 않는다. 베이크를 유지하려면 bit0 CP 만 매 프레임 재베이크가 필요하다 |
 | **W-11** | `controlpoint[].flags`/`parentcontrolpoint` 파스 | uint 주입기 기본 0 | 파스함(`ParticleSystem.swift` CP 루프 `:2598` 이하), bit2 만 소비 | 확정 · 부분 | bit0 소비만 추가하면 된다 |
 | **W-12** | `xray` 이펙트 | `g_PointerPosition` + `g_PointerScale` | `g_PointerScale` 은 머티리얼 파라미터로 흐름. 배선 자체는 있음 | 보고 | `shader-uniforms.md:675` 의 "cursorripple·fluidsimulation 만" 문장을 정정 |
@@ -741,37 +741,75 @@ W-5 를 부분적으로 닫았다** — 무엇을 어떻게 고쳤는지는 §7.
 | `Sources/WapleRender/SceneRenderer.swift` | 유니폼 기본 `(0,0)`(`:823`·`:841`) · `pointerButton`(`:845`) · 프레임 꼬리 `endFrame()`(`:1978`) · `layerHitQuad`(`:356`) · `buildHoverTargets` 의 `solid` 게이트(`:373`) · `hoverParallaxShift`(`:411`) · `ILayer.solid` 실값(`:244`·`:260`) |
 | `Sources/WapleRender/SceneRendererFrameEncoder.swift` | `e[22] = pointerButton.clickImpulse`(`:60`) |
 
+### 7.2b W-5b/W-9 를 어떻게 닫았나 (2026-08-21, 클러스터 U)
+
+**규약(이 라운드에 독립 디스어셈 — §5.2 와 전건 일치)**:
+
+```
+0x14018a700  mov  rsi, [rbx+0x10]              ; inst
+0x14018a709  cmp  [rsi+0x48], r15              ; 소유 오브젝트 == 히트 오브젝트?
+0x14018a70d  je   ok
+0x14018a70f  cmp  qword [rsi+8], 0             ; 아니면 무바인딩이어야 한다
+0x14018a714  jne  skip
+0x14018a716  mov  eax, [rsi+0x40]              ; 훅 보유 비트마스크
+0x14018a719  bt   eax, r13d                    ; r13d = (down^1)|0xc  (0x14018a6ef–0x14018a6f8)
+0x14018a71d  jae  skip
+0x14018a71f  cmp  dword [rsi+0x44], 2          ; 인스턴스 상태 = 초기화 완료
+0x14018a723  jne  skip
+```
+
+히트 순회 자체의 첫 관문은 `solid` 다 — `0x14018a00b` `mov r8d, 0x2000` →
+`0x14018a02d` `test word [r15+0x120], r8w` → `je` 로 다음 오브젝트. 순회는 z 역순
+(`0x140189feb` `sub eax, 1` → `0x14018a024`)이고 히트해도 **멈추지 않는다** — 멈추는 조건은
+`disablepropagation`(`0x14018a877` `bt ax, 0xe`) + `visible`(`test al, 1`) + 조상 검사
+(`0x140185010`)다.
+
+`cursorClick`(훅 11 — `0x14018a833` `mov r9d, 0xb`)은 별도 블록이다: `0x14018a787` `test dl, dl`
+→ `je 0x14018a7aa` 로 **뗄 때만** 들어가고, 거기서 홀드 맵 `scene+0x2c0` 을 `find` 해
+(버킷 `+0x2d8`, 마스크 `+0x2f0`, 미발견 시 `cmove rbx, r9` = end @`0x14018a20c`)
+**end 면 스킵**한다(`0x14018a7ae` `cmp [rbp-0x20], rax` → `je`). 누를 때 삽입하는 쪽이
+`0x14018a78b`–`0x14018a7a0`(`0x14018a79b` 이 히트 오브젝트 `r15` 를 넘긴다).
+
+| 파일 | 변경 |
+|---|---|
+| `Sources/WapleCore/PointerHit.swift` | `PointerHit.DeliveryScope`(`unbound`/`object(Quad)`/`unhittable`/`geometryUnknown`) + `delivers(_:to:)` + `PointerClickLatch`(홀드 맵). 전부 순수 — 리눅스 테스트로 덮인다 |
+| `Tests/WapleCoreTests/PointerHitTests.swift` | 배달 범위 6 + 홀드 맵 5 = **11테스트 추가**(클래스 전체 21) |
+| `Sources/WapleRender/SceneRenderer.swift` | `pointerEngineOwners`(수집) · `buildPointerTargets(doc:)`(해석) · `dispatchPointerEvent` 를 타겟 배달로 · `deliverGlobalMouse` 를 W-9 규약으로 · 테스트용 `pointerHookTargetCenter(hook:)` |
+
+**대상 키를 이름이 아니라 디스크립터 인덱스로 잡았다.** 옛 패치안(§7.3 ①)은 `layerName` 을
+쓰라고 했는데 그러면 **무명 오브젝트가 통째로 빠진다**(코퍼스에 흔하고, 합성 e2e 의 컨트롤
+오브젝트도 무명이다). 게다가 `layerName == nil` 을 `inst[8] == 0` 으로 읽으면 "이름 없는
+오브젝트" 가 "바인딩 없는 스크립트" 로 둔갑해 **테스트가 우연히 통과한다** — 즉 그 매핑으로는
+아무것도 좁혀지지 않는다. `makeScriptEngine` 이 이미 받는 `currentLayerIndex`(F743/S-34,
+`thisLayer` 직결 키)가 정확한 키다.
+
+**남은 근사 둘(정직하게)**:
+- **텍스트 오브젝트** — 실물 히트 상자는 래스터된 텍스트 픽셀 크기인데 `SceneTextLayer` 에 그 값이
+  없다(`scene-script-api.md` §9.1 (b) `size` [미해결]). `.geometryUnknown` 으로 두고 **종전 배달을
+  유지**했다. 추측 상자로 좁히면 텍스트 바인딩 스크립트가 통째로 죽는다.
+- **파티클/이펙트/카메라/사운드 볼륨 스크립트** — `currentLayerIndex` 를 안 받으므로 `.unbound`
+  (= 종전 배달). 파티클은 실물에선 오브젝트이므로 이건 실물과 갈리는 근사다. 코퍼스 도달 0.
+
 ### 7.3 넘기는 것(소유 밖 — 클러스터 O 가 손대지 않았다)
 
-**① W-5b 커서 훅 타겟팅.** 실물 규약은 확정됐다(`0x14018a709`–`0x14018a723`, 5개 훅 동일):
+**① W-5b 커서 훅 타겟팅 — 2026-08-21(U)에 닫았다.** 규약과 착지 지점은 §7.2b.
+같이 고친 테스트:
 
-```
-if (inst[0x48] != hitObject && inst[8] != 0) continue;   // 소유 오브젝트 일치 또는 무바인딩
-if (!(inst[0x40] & (1 << hookIdx)))          continue;   // 훅 보유 비트마스크
-if (inst[0x44] != 2)                         continue;
-```
+- `SceneInteractionMediaE2ETests.testSimulatedClickTogglesSyntheticScene` — 컨트롤 오브젝트는
+  `origin "4 4 0" size "2 2"` 그대로 두고 **클릭을 그 위로 옮겼다**. 옛 좌표 `(960,540)` 은
+  **음성 대조**로 남겼다(빗나간 클릭은 아무 일도 하지 않아야 한다). 컨트롤을 전면화하면 그
+  음성 대조를 만들 자리가 없어지므로 그 선택지는 버렸다. 오브젝트에 `name` 이 없는 것도 그대로
+  둬서 이름 키 회귀를 막는 가드로 쓴다.
+- `testRealDayNightToggle3394601417` — 하드코딩 `(960,540)` 은 "컨트롤러 `bt` 가 화면 중앙을
+  덮는다" 는 **검증되지 않은 가정**이었다(배달이 브로드캐스트라 좌표가 아무 의미가 없어서 아무도
+  안 봤다). `pointerHookTargetCenter(hook:)` 로 씬에서 되읽는다 — 소유 오브젝트가 없으면 종전
+  좌표로 폴백한다(그때는 좌표가 무의미하다). **실 패키지가 이 컨테이너에 없어 미검증이다.**
+- `SceneSharedScriptTests:538` `simulateCursorClick(x: 1, y: 1)` — 스크립트가 **텍스트** 오브젝트에
+  붙어 있어 `.geometryUnknown` 으로 떨어진다. 좌표는 여전히 무의미하고 테스트 의도(리마운트 후
+  새 엔진만 받고 스테일 엔진은 못 받는다)도 그대로다. 텍스트 히트 기하가 확정되면 이 좌표가
+  load-bearing 이 된다 — 주석으로 못박아 뒀다.
 
-Waple 패치안(`SceneRenderer.swift` — O 소유이나 **테스트를 같이 못 고쳐서 보류**했다):
-
-1. `makeScriptEngine` 이 `eventEngines.append(engine)` 할 때 `(engine, layerName)` 쌍으로 모은다
-   (지금 `hoverEngineLayers` 가 `cursorEnter/Leave` 에 대해서만 하고 있는 그것).
-2. `dispatchPointerEvent(hook:x:y:)` 를 `dispatchSceneEvent` 브로드캐스트에서 떼고,
-   `layerName == nil`(= `inst[8] == 0`) 이거나 `PointerHit.contains(layerHitQuad(그 레이어), p)`
-   인 엔진에만 배달한다. `solid` 게이트도 같이(`l.isSolid`).
-3. `media*Changed`/`animationEvent` 는 계속 `dispatchSceneEvent` 를 쓴다 — 그건 오브젝트 스코프가
-   아니다.
-
-**같이 고쳐야 하는 테스트**(`Tests/WapleRenderTests/` — O 소유 아님):
-
-- `SceneInteractionMediaE2ETests.testSimulatedClickTogglesSyntheticScene` — 스크립트가 붙은
-  오브젝트가 `origin "4 4 0" size "2 2"` 인데 `simulateCursorClick(x: 960, y: 540)` 을 부른다.
-  **실물이라면 이건 발화하지 않는다.** 컨트롤 레이어를 전면(`origin "960 540 0" size "1920 1080"`)으로
-  키우든지 클릭 좌표를 `(4, 4)` 로 옮겨야 한다.
-- `SceneInteractionMediaE2ETests.testRealDayNightToggle3394601417` — 실 패키지. 클릭 좌표
-  `(960,540)` 이 스크립트 소유 레이어를 실제로 덮는지 확인이 필요하다.
-- `SceneSharedScriptTests` `:538` 의 `simulateCursorClick(x: 1, y: 1)` 도 같은 검토 대상.
-
-**② 전파 차단 순회.** 위 ①이 들어간 뒤라야 의미가 있다. 규약은
+**② 전파 차단 순회.** ①이 들어갔으니 이제 의미가 있다. 규약은
 `object-propagation.md` §10 이 갖고 있다(z-순서 역순 · `solid` 게이트 · 히트 시 발화 ·
 `disablePropagation && visible && 조상 visible` 이면 순회 중단). 동봉 도달 0건이므로 우선순위 최하.
 
@@ -787,12 +825,12 @@ Waple 패치안(`SceneRenderer.swift` — O 소유이나 **테스트를 같이 �
 
 ### 7.4 남은 우선순위
 
-1. **W-5b(커서 훅 타겟팅)** — 규약은 확정. 테스트 계약 정정이 선행돼야 한다.
-2. **W-10(파티클 CP bit0)** — 동봉 28파일. 헤드리스 캡처 결정성과 충돌하므로
+1. ~~**W-5b(커서 훅 타겟팅)**~~ · ~~**W-9(cursorClick 타이밍)**~~ — **2026-08-21(U) 해소**(§7.2b).
+2. **텍스트 오브젝트 히트 기하** — W-5b 의 남은 근사. `SceneTextLayer` 에 래스터 크기가 없어
+   `.geometryUnknown` 으로 열어 뒀다. 렌더러는 래스터 크기를 알고 있으므로(`GPUText` 의 텍스처
+   크기) 그 값을 히트 쿼드로 되먹이는 배선이 다음 단계다.
+3. **W-10(파티클 CP bit0)** — 동봉 28파일. 헤드리스 캡처 결정성과 충돌하므로
    `SceneRenderer.capturePointerUV` 핀과 같은 계약이 필요하다.
-3. **W-9(cursorClick 타이밍)** — 실물은 **뗄 때** + 같은 오브젝트에서 눌렀을 때만
-   (`0x14018a787` `test dl,dl` → `je` 로 클릭 블록 진입, 홀드 맵 조회 `0x14018a7aa`).
-   Waple 은 누를 때 `cursorDown` 과 함께 쏜다. ①과 같은 커밋에서 고치는 게 맞다.
 4. **전파 차단 순회** — 동봉 도달 0.
 
 ---
