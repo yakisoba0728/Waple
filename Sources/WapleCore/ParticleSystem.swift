@@ -106,9 +106,13 @@ public enum Initializer: Equatable {
                    hueNoise: Float = 0, satNoise: Float = 0, valNoise: Float = 0)
     /// S5④: HSV 공간 색 랜덤(magic_color_sparkle 등 프리셋 — 실물 예제 huemin/huemax/saturationmin/max/
     /// valuemin/max, 전부 0..1 스케일). 종전 case 이름 불인식 → 전 initializer drop(무색 랜덤 = 백색 고정).
-    /// h/s/v 는 colorRandom(공유 t, RGB 라인 보간)과 달리 서로 무관한 축이라 velocityRandom 과 같이
-    /// 채널별 독립 t. [보존/추측] "huesteps"(코퍼스 실측 2/4 존재, 이산 색상환 스텝 수)는 미구현 —
-    /// 연속 hue 랜덤으로 근사(전무→근사, 폴백 방향 유지). 반증 시 재검토.
+    ///
+    /// **[정정 2026-08-21] 이 자리에 있던 두 서술이 둘 다 반증됐다.** 종전 주석은 (a) h/s/v 가
+    /// "채널별 독립 t" 이고 (b) `huesteps` 는 "미구현 — 연속 hue 랜덤으로 근사" 라고 적었는데,
+    /// 실물 핸들러(0x14023b74a)를 명령 단위로 옮겨 보니 **hue 는 언제나 이산**이고 연속 hue
+    /// 경로가 아예 없다. `huesteps` 는 구현됐고(`ParticleSimulator` 의 `.hsvColorRandom` 분기 ①),
+    /// sat/value 만 평범한 선형 range 2드로다(②). `huesteps` 를 안 적은 씬은 실물에서 **단일 색**이
+    /// 된다 — 동봉 도달 5건 중 3건(magic_color_sparkle 등)이 그 경우다.
     case hsvColorRandom(hueMin: Float, hueMax: Float, satMin: Float, satMax: Float, valMin: Float, valMax: Float,
                         hueSteps: Int = 0)
     // hueSteps = 실물키 huesteps(@0x48f570, 리더 0x1401c79a5 — 코퍼스 실측 6/12, 이산 색상환 스텝 수).

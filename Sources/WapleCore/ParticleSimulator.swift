@@ -1594,9 +1594,15 @@ public struct ParticleSimulator {
     /// `sin θ(t) − sin θ(0)` 이고, 따라서 **스폰 순간 오프셋이 정확히 0** 이다. 종전 구현은
     /// 스폰에서 `scale·sin(2πφ)` 만큼 튀었다.
     ///
-    /// 아직 안 옮긴 것(RNG 재구성이 필요해 별건): 실물은 파티클당 난수 **하나**(`[sys+0x338]`)를
-    /// freq·phase·scale 과 세 형제 오퍼레이터가 **전부 공유**하고, Y축에만 `2π·r` 추가 위상을 준다.
-    /// 여기서는 드로 수를 건드리지 않는 범위만 고친다.
+    /// **[정정 2026-08-21] 위 문단이 "아직 안 옮겼다" 고 적던 두 가지 중 하나는 이미 옮겼다.**
+    /// 파티클당 난수 **하나**(`[sys+0x338]`)를 freq·phase·scale 과 세 형제 오퍼레이터가 전부
+    /// 공유하는 부분은 `spawn` 의 `p.sharedRandom` 으로 들어와 있다(드로를 1회로 줄이는 변경이라
+    /// RNG 스트림 재구성을 동반했다 — 그 근거는 `Particle.sharedRandom` 과 스폰 블록 주석).
+    ///
+    /// **[미해결] 아직 안 옮긴 것은 Y축 추가 위상뿐이다** — 실물은 Y 성분에만 `2π·r` 을 더 준다.
+    /// 여기 `oscPositionOffset` 은 세 축에 같은 θ 를 쓴다. 옮기려면 축별 θ 가 필요한데 그러면
+    /// `p.oscPosMask` 곱셈 한 번으로 끝나던 자리가 축 분해로 바뀌므로, 도달을 먼저 재고
+    /// 회귀 폭을 확인한 뒤 별건으로 다룬다.
     private func oscPositionOffset(_ p: Particle) -> SIMD3<Float> {
         guard p.oscPosScale != 0 else { return SIMD3(0, 0, 0) }
         let n = p.lifetime > 0 ? min(1, p.age / p.lifetime) : 1
