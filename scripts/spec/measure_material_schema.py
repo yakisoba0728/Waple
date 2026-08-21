@@ -1153,8 +1153,11 @@ def main():
             "코퍼스 pkg 안": 0,
             "코퍼스 씬이 pkg 미동봉 effect.json 을 참조하는 건수": 0,
         },
-        "note": "코퍼스 162씬은 참조하는 effect.json 을 전건 pkg 에 동봉한다. 따라서 이 결함은 지금 코퍼스에서는 "
-              "발현하지 않는다 — 베이스 에셋 폴백 경로(BaseAssetsSettings)로만 도달하는 잠재 결함이다",
+        # **[2026-08-21]** 이 문면은 정본에 사람이 손질해 둔 판을 생성기 쪽으로 되가져온 것이다.
+        # 갭이 `fafcd21` 로 해소됐으므로 시제가 과거다("발현하지 않았다"/"잠재 결함이었다").
+        # 종전엔 정본만 손질돼 있어 **재생성하면 이 정정이 조용히 되돌아가는** 상태였다.
+        "note": "코퍼스 162씬은 참조하는 effect.json 을 전건 pkg 에 동봉한다. 따라서 이 결함은 코퍼스에서는 "
+              "발현하지 않았다 — 베이스 에셋 폴백 경로(BaseAssetsSettings)로만 도달하는 잠재 결함이었다",
         "위치": "Sources/WapleCore/EffectManifest.swift 의 `relaxedJSON` 과 `parseStrict`",
     }, "확정", [asset_ev, corpus_ev,
                 specfmt.ev("file", "Sources/WapleCore/EffectManifest.swift:47"), script_ev]))
@@ -1195,8 +1198,11 @@ def main():
                 "waple.keyLiteralCoverage 와 같은 판정 — '따옴표 리터럴이 있는가' 이지 "
                 "'렌더에 반영되는가' 가 아니다. 종전 값 ['compose','functions'] 은 파스가 "
                 "붙기 전 상태였다",
-        "갭 아님": "editable / performance / replacementkey 도 Sources 에 없지만 이건 에디터 메타데이터라 "
-                "렌더에 영향이 없다 — 미소비가 정상이다",
+        # **[2026-08-21]** 정본에 손질돼 있던 판을 되가져온다 — `replacementkey` 는 이제
+        # `fafcd21` 로 **소비된다**. 종전 생성기 문면은 그것을 "미소비가 정상" 쪽에 묶어 두고
+        # 있어서, 재생성하면 정본의 정정이 조용히 되돌아갔다.
+        "갭 아님": "editable / performance 도 Sources 에 없지만 이건 에디터 메타데이터라 "
+                "렌더에 영향이 없다 — 미소비가 정상이다(replacementkey 는 `fafcd21` 로 소비된다)",
     }, "확정", [asset_ev, corpus_ev, specfmt.ev("file", "Sources/**/*.swift"), script_ev]))
 
     add(specfmt.entry("waple.gap.comboCaseFolding", {
