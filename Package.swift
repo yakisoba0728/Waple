@@ -36,6 +36,14 @@ let package = Package(
         ),
         // Foundation-only 순수 코어(스냅샷 매니페스트/diff) — GPU 무의존, 유닛 검증용
         .target(name: "WapleSnapshot", swiftSettings: strictConcurrency),
+        // [2026-08-21] WE 재생 정책(playbackfocus/…/pausevram)의 순수 모델.
+        //
+        // **의존이 없다.** `WapleCore` 에 붙이면 `import simd` 때문에 리눅스에서 빌드가
+        // 통째로 죽는다(실측: `AudioResponse.swift:2 error: no such module 'simd'`).
+        // 이 타깃은 `import Foundation` 하나만 쓰므로 리눅스 spec 레인에서 초 단위로
+        // 빌드된다 — 정책 판정은 GPU 도 창도 필요 없는 순수 산수라 그게 맞는 자리다.
+        // 앞으로도 여기에 의존을 더하지 마라. 더하는 순간 이 성질이 사라진다.
+        .target(name: "WaplePolicy", swiftSettings: strictConcurrency),
         .executableTarget(
             name: "Waple",
             dependencies: ["WapleCore", "WapleLibrary", "WapleRender"],
@@ -66,6 +74,9 @@ let package = Package(
         // 그다음 테스트로 넓힌다 — 한 번에 켜면 어느 쪽 경고인지 로그에서 뒤섞인다.
         .testTarget(name: "WapleCoreTests", dependencies: ["WapleCore"]),
         .testTarget(name: "WapleSnapshotTests", dependencies: ["WapleSnapshot"]),
+        // WaplePolicy 와 마찬가지로 의존을 하나만 갖는다 — 그래야
+        // `swift build --target WaplePolicyTests` 가 리눅스에서 선다.
+        .testTarget(name: "WaplePolicyTests", dependencies: ["WaplePolicy"]),
         // [2026-08-19] 위 분리로 처음 생긴 타깃 — 종전엔 의존 자체가 불가능했다.
         .testTarget(name: "WapleCompatCoreTests", dependencies: ["WapleCompatCore", "WapleCore", "WapleSnapshot"]),
         .testTarget(name: "WapleLibraryTests", dependencies: ["WapleLibrary", "WapleCore"]),
