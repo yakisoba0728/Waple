@@ -2,7 +2,7 @@
  "weVersion": "2.8.42",
  "generatedBy": "scripts/spec/measure_tex_deep.py",
  "measuredAt": {
-  "corpusTexFiles": 4991,
+  "corpusTexFiles": 5120,
   "texJsonFiles": 388
  },
  "entries": [
@@ -32,7 +32,7 @@
     },
     {
      "kind": "corpus",
-     "ref": "코퍼스 4991/4991 파스 성공, 오류 0종",
+     "ref": "코퍼스 5120/5120 파스 성공, 오류 0종",
      "note": "종전 46B 고정 가정은 flags&0x40 인 28개(LUT)에서 전건 실패했다"
     },
     {
@@ -47,45 +47,49 @@
     "0x1": "nointerpolation — 차분 측정 확정",
     "0x2": "clampuvs — 차분 측정 확정",
     "0x4": "스프라이트시트(gif) — spritesheetsequences 를 주면 켜지고 TEXS 섹션이 붙는다",
-    "0x8": "파일 입력이 **아니다** — 코퍼스 4991개 중 bit3 이 켜진 파일 0개. 엔진 로더가 프레임 수 < 2 일 때 스스로 세우고, -transcode 출력에도 그대로 찍혀 나온다(입력 flags 2 → 출력 10 관측). 리더는 이 비트를 무시해야 한다",
+    "0x8": "파일 입력이 **아니다** — 코퍼스 5120개 중 bit3 이 켜진 파일 0개. 엔진 로더가 프레임 수 < 2 일 때 스스로 세우고, -transcode 출력에도 그대로 찍혀 나온다(입력 flags 2 → 출력 10 관측). 리더는 이 비트를 무시해야 한다",
+    "0x10": "설치 `projects/` 를 코퍼스에 넣고서야 나타난 비트(관측 10건). `.tex-json` 의 `srgb: true` 와 사이드카 짝 358쌍에서 10/10 · 348/348 로 붙는다. **이름과 런타임 소비 여부는 별도 항목 `format.tex.flags.srgbBit` 를 보라** — 그쪽은 확정이 아니다",
     "0x20": "비디오 텍스처(mp4 페이로드). 코퍼스 38개, 전부 TEXB0003",
     "0x40": "3D 슬라이스(volume). 헤더에 i32 texDepth 가 추가된다. slice3d:true 로 재현",
     "0x80000": "alphachannelpriority — 차분 측정 확정(코퍼스 82개)",
     "0x100000/0x200000/0x400000/0x800000": "미상 — 코퍼스 30개, 전부 *_mask_*.tex",
     "observedBitCounts": {
-     "1": 4382,
-     "2": 216,
+     "1": 4437,
+     "2": 225,
+     "0": 86,
      "19": 82,
-     "0": 53,
      "5": 38,
      "6": 28,
      "23": 15,
+     "4": 10,
      "21": 7,
      "20": 6,
      "22": 2
     },
     "observedValues": {
-     "2": 4033,
-     "0": 547,
+     "2": 4047,
+     "0": 619,
      "6": 142,
      "524290": 66,
+     "3": 54,
      "4": 43,
      "34": 38,
-     "3": 31,
+     "7": 29,
      "66": 28,
-     "7": 21,
      "8388610": 14,
      "524292": 10,
+     "18": 10,
      "524288": 6,
      "1048578": 3,
      "3145730": 2,
+     "1": 2,
      "4194306": 1,
      "10485762": 1,
      "2097152": 1,
      "3145728": 1,
      "2097154": 1,
      "6291458": 1,
-     "1": 1
+     "5": 1
     }
    },
    "status": "확정",
@@ -101,11 +105,37 @@
     },
     {
      "kind": "corpus",
-     "ref": "4991개 전수 비트 도수"
+     "ref": "5120개 전수 비트 도수"
     },
     {
      "kind": "script",
      "ref": "scripts/spec/measure_tex_deep.py"
+    }
+   ]
+  },
+  {
+   "id": "format.tex.flags.srgbBit",
+   "value": {
+    "observed": "코퍼스 5120개 중 비트 4(`0x10`)가 선 파일 10개 — 전부 설치 `projects/defaultprojects/razer_bedroom/materials/` 한 프로젝트다. `assets/`·워크샵 코퍼스에는 0건이라 `projects/` 를 넣기 전까지 안 보였다",
+    "sidecarCorrespondence": "`.tex-json` 짝 358쌍(동봉 272 + 설치 projects 86)에서 `srgb: true` 10/10 이 비트를 세우고 `srgb` 부재 348/348 이 안 세운다. check_tex_format_map.py 의 J 게이트가 매 실행 다시 잰다",
+    "nameIsNotConfirmed": "표본 10건이 전부 같은 프로젝트 = 같은 시점 같은 도구로 구운 한 묶음이라 교란 가능하다. 그 10건에만 있는 다른 성질이 원인일 수도 있다. 게다가 현행 resourcecompiler64.exe 의 `.tex-json` 키 표 34개에 `srgb` 가 없다(texJson.keys.deadKeys) — 지금 컴파일러는 이 비트를 만들지 못한다. 차분 컴파일로 재현하지 못한 유일한 비트다",
+    "runtimeConsumption": "wallpaper64.exe `.text`(4,344,320B) 전수 바이트 스캔에서 `test byte ptr [reg+4], 0x10`(f6 /0, disp8=4, imm8=0x10) 0건. 형제 인코딩은 0 이 아니다 — 같은 자리 다른 imm 36건 · 같은 imm 다른 disp8 108건이라 판별력 있는 0 이다. 다만 (a) `mov eax,[reg+4]` 로 먼저 적재한 뒤 `test al, imm` 하는 형태는 이 스캔이 못 잡고 (b) WE 는 여러 바이너리로 나뉜다. 그러므로 **비소비는 정황**이다",
+    "wapleImpact": "Waple 은 이 비트를 무시한다. 그것이 안전한 기본값이다 — 읽기 시작하면 그때부터 WE 와 **다르게** 그리는 쪽이 되고, 지금은 렌더 결과가 이 비트와 무관하다",
+    "doc": "docs/re/tex-format.md §3.1"
+   },
+   "status": "추정",
+   "evidence": [
+    {
+     "kind": "corpus",
+     "ref": "설치 projects 129개 · 사이드카 짝 358쌍 대응 전수"
+    },
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe .text 전수 바이트 스캔 — test byte [reg+4], 0x10 0건"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/check_tex_format_map.py"
     }
    ]
   },
@@ -127,15 +157,15 @@
     "engineNormalizesUV": "엔진은 지오메트리를 저장할 때 그 imageId 의 **mip0 alloc(=패딩) 크기**로 나눠 0..1 UV 로 만든다(x/w, y/h, width/w, widthY/h, heightX/w, height/h). imgW/imgH 가 아니라 decode dims 가 분모다",
     "wapleNote": "Waple TexFrame 은 픽셀 좌표를 그대로 들고 주석에 '좌표는 imgW×imgH 이미지 픽셀 공간' 이라고 적어 뒀다. 엔진 기준 분모는 decode dims 라서 주석이 어긋난다. 다만 실제 소비처(keepFullAtlas 경로)가 decode dims 텍스처를 쓰므로 결과는 일치한다",
     "versionDistribution": {
-     "None": 4775,
-     "TEXS0003": 207,
+     "None": 4895,
+     "TEXS0003": 216,
      "TEXS0002": 9
     },
     "parseEndsExactlyAtEOF": {
-     "True": 216
+     "True": 225
     },
     "noTexsFilesEndAtTexbEnd": {
-     "True": 4767,
+     "True": 4887,
      "False": 8
     },
     "tailIsVariantSection": "TEXS 도 없고 꼬리가 남는 파일은 전부 조건 변형 텍스처다 — variantCount>0 여부 {'True': 8}"
@@ -149,7 +179,7 @@
     },
     {
      "kind": "corpus",
-     "ref": "4991개 전수 — TEXS 를 TEXB 끝에서 이어 읽어 파스 끝이 EOF 와 일치하는지 검사"
+     "ref": "5120개 전수 — TEXS 를 TEXB 끝에서 이어 읽어 파스 끝이 EOF 와 일치하는지 검사"
     },
     {
      "kind": "script",
@@ -243,17 +273,17 @@
      "rgba_backbuffer"
     ],
     "corpusDistribution": {
-     "4": 1796,
-     "0": 1435,
+     "4": 1859,
+     "0": 1501,
      "9": 1333,
      "8": 316,
      "7": 73,
      "6": 38
     },
     "corpusBytesPerPixel": {
-     "(4, 1.0)": 1796,
+     "(4, 1.0)": 1859,
      "(9, 1.0)": 1333,
-     "(0, 4.0)": 559,
+     "(0, 4.0)": 623,
      "(8, 2.0)": 316,
      "(7, 0.5)": 73,
      "(6, 1.0)": 38
@@ -276,7 +306,7 @@
     },
     {
      "kind": "corpus",
-     "ref": "4991개 관측 포맷은 0/4/6/7/8/9 뿐"
+     "ref": "5120개 관측 포맷은 0/4/6/7/8/9 뿐"
     },
     {
      "kind": "script",
@@ -932,7 +962,7 @@
     "entry": "i32 ×3 + NUL 종단 JSON — 그 수만큼 연속한다",
     "corpusDistribution": {
      "0": 2865,
-     "None": 2118,
+     "None": 2247,
      "1": 7,
      "3": 1
     },
@@ -961,35 +991,35 @@
    "value": {
     "texb": {
      "TEXB0004": 2873,
-     "TEXB0003": 2047,
+     "TEXB0003": 2176,
      "TEXB0001": 42,
      "TEXB0002": 29
     },
     "imageFormat": {
-     "-1": 4124,
-     "13": 766,
+     "-1": 4251,
+     "13": 768,
      "None": 71,
      "2": 30
     },
     "imageCount": {
-     "1": 4984,
+     "1": 5113,
      "7": 3,
      "3": 2,
      "2": 1,
      "5": 1
     },
     "mip0ChainLength": {
-     "1": 2443,
-     "5": 766,
-     "4": 750,
+     "1": 2490,
+     "5": 777,
+     "4": 751,
      "3": 546,
-     "8": 118,
-     "2": 111,
-     "9": 102,
-     "7": 83,
-     "10": 41,
-     "6": 30,
-     "11": 1
+     "8": 126,
+     "9": 117,
+     "2": 112,
+     "7": 102,
+     "10": 52,
+     "6": 42,
+     "11": 5
     },
     "depthValues": {
      "32": 28
@@ -1005,7 +1035,7 @@
    "evidence": [
     {
      "kind": "corpus",
-     "ref": "4991개 전수"
+     "ref": "5120개 전수"
     },
     {
      "kind": "binary",
@@ -1318,7 +1348,7 @@
    "evidence": [
     {
      "kind": "file",
-     "ref": ".tex-json 388개 전수 수확(설치 assets + 워크샵)"
+     "ref": ".tex-json 388개 전수 수확(설치 assets/projects + 워크샵)"
     },
     {
      "kind": "binary",

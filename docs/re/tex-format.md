@@ -9,12 +9,19 @@
 > | --- | --- | --- |
 > | **동봉** | `Sources/WapleRender/Resources/WEAssets/` | 311 |
 > | **설치 assets** | `wallpaper_engine/assets/` | 311 — **동봉과 상대경로·SHA1 전건 동일**(2026-08-21 재확인, 차이 0건) |
-> | **설치 projects** | `wallpaper_engine/projects/defaultprojects/` | 129 — 여태 어느 조사도 안 훑었다(§2.4) |
-> | **워크샵 코퍼스** | scene.pkg 162개 + 설치 assets | 4,991 (`spec/formats/tex-deep.json`) |
+> | **설치 projects** | `wallpaper_engine/projects/defaultprojects/` | 129 — 2026-08-21 에 코퍼스로 들어왔다(§2.4) |
+> | **워크샵 코퍼스** | scene.pkg 162개 + 설치 assets + **설치 projects** | **5,120** (`spec/formats/tex-deep.json`) |
 >
-> 즉 "동봉 311" 과 "설치 assets 311" 은 **같은 파일 집합**이고, 워크샵 코퍼스는 설치 assets 를 포함하지만
-> **설치 projects 129 는 어디에도 안 들어 있다**(`measure_tex_deep.iter_tex` 가 `WE/assets` 만 훑는다).
-> 그래서 `.tex` 플래그 비트 0x10 이 이번까지 안 보였다.
+> 즉 "동봉 311" 과 "설치 assets 311" 은 **같은 파일 집합**이고, 워크샵 코퍼스는 그 311 을 포함한다.
+>
+> **[2026-08-21 갱신] 설치 projects 129 가 코퍼스에 들어왔다.** 종전엔 `measure_tex_deep.iter_tex` 가
+> `WE/assets` 만 훑어 이 129건이 **어느 코퍼스에도 없었고**, 그래서 `.tex` 플래그 비트 `0x10` 이
+> 정본의 어느 도수에도 안 나타났다("코퍼스 4,991개 전수 비트 도수" 라는 근거가 실재하는 비트 하나를
+> 못 보고 있었다). 지금은 `iter_tex` 가 `assets/`·`projects/` 를 함께 훑는다 —
+> `corpusTexFiles` **4,991 → 5,120**, `flags.bits.observedBitCounts` 에 `"4": 10`(= 비트 4 = `0x10`)이
+> 새로 생겼다. 형제 측정 `measure_texjson()` 은 처음부터 `projects/` 를 훑고 있었으므로
+> (`texJsonFiles` 388 = 동봉 298 + projects 90) `.tex` 쪽과 `.tex-json` 쪽의 범위가 서로 달랐던
+> 비대칭도 이때 없어졌다.
 
 ## 0. 결론
 
@@ -32,11 +39,11 @@
 
 | 항목 | 판정 |
 | --- | --- |
-| 설치 `projects/defaultprojects` 129건 | **여태 어느 코퍼스에도 안 들어 있던 범위.** 참조 파스 129/129 성공, Waple 도 전부 다루는 조합(§2.4) |
+| 설치 `projects/defaultprojects` 129건 | **여태 어느 코퍼스에도 안 들어 있던 범위.** 참조 파스 129/129 성공, Waple 도 전부 다루는 조합(§2.4). **2026-08-21 에 `iter_tex` 가 훑도록 고쳐 정본 코퍼스에 넣었다**(4,991 → 5,120) |
 | flags 비트 `0x10` | **새 비트.** 설치 projects 10건에만. `.tex-json` 의 `srgb: true` 와 358쌍 기준 10/10·348/348 대응(이름은 추정, 소비 여부는 정황 — §3.1) |
 | **§3 의 "플래그 디스패치" 근거** | **무효였다.** `0x14030358e`–`0x1403035d5` 는 텍스트 셰이핑/스크립트 표(`0x140438050` → 문자열 `0x140436aa0`)를 걷는 코드이고 텍스처와 무관하다. 비트 패턴이 겹친 우연이었다 — §3 정정 박스 |
 | TEXB0004 `variantCount` | **개수 기반이 정답.** Waple 의 패턴 휴리스틱을 개수 기반으로 고쳤다(§1.2) |
-| `TEXV0004` 레거시 컨테이너 | 엔진은 받고 Waple 은 거부한다. 실물 표본 0/4,991 + 0/440 이라 **구현하지 않고 근거만 남겼다**(§7) |
+| `TEXV0004` 레거시 컨테이너 | 엔진은 받고 Waple 은 거부한다. 실물 표본 0/5,120(설치 projects 129 포함) 이라 **구현하지 않고 근거만 남겼다**(§7) |
 | 신뢰 경계(악성 헤더) | 거짓 차원·거짓 depth·거짓 comp/dec·거짓 mipCount/imageCount/frameCount + 전 길이 잘림·헤더 바이트 반전 스윕에서 **트랩 0건**. `Tests/WapleCoreTests/TexHostileInputTests.swift` 가 고정 |
 | TEXS0002 8건의 "원래 속도" | 짝 `.tex-json` 에 `duration/frames` 로 남아 있다(3/8 만 Waple 폴백과 일치). 다만 런타임 근거가 없고 도달 자산이 파티클뿐이라 **관측 차이 없음**(§5) |
 
@@ -232,9 +239,10 @@ mip 레코드의 `isLZ4` 는 1 ×253 · 0 ×58, `mipCount` 는 1 ×131 · 2~10 �
 
 ### 2.4 여태 안 훑던 범위 — 설치 `projects/defaultprojects` 129건
 
-`measure_tex_deep.iter_tex` 는 워크샵 pkg 와 `WE/assets` 만 훑는다. 설치본에는 그 밖에
-`wallpaper_engine/projects/defaultprojects/**` 에 **`.tex` 가 129개** 더 있다(WE 가 기본 제공하는
-완성 씬들이다 — `razer_bedroom` `ricepod` `demon_core` `shimmering_particles` 등). 여기를 처음 전수로 떴다.
+**[2026-08-21 해소]** 종전 `measure_tex_deep.iter_tex` 는 워크샵 pkg 와 `WE/assets` 만 훑었다.
+설치본에는 그 밖에 `wallpaper_engine/projects/defaultprojects/**` 에 **`.tex` 가 129개** 더 있다
+(WE 가 기본 제공하는 완성 씬들이다 — `razer_bedroom` `ricepod` `demon_core` `shimmering_particles` 등).
+여기를 처음 전수로 뜬 것이 아래 표이고, 지금은 `iter_tex` 가 이 범위를 코퍼스에 포함한다.
 
 | 항목 | 설치 projects 129건 |
 | --- | --- |
@@ -257,6 +265,21 @@ mip 레코드의 `isLZ4` 는 1 ×253 · 0 ×58, `mipCount` 는 1 ×131 · 2~10 �
 
 Waple 파스 관점에서 이 129건은 전부 이미 다루는 조합이다(fmt 0/4, TEXB0003, imageFormat −1/13) —
 `0x10` 은 파스에 영향이 없다. 즉 **이 범위에서 새로 깨지는 것은 없다.**
+
+**정본 반영(2026-08-21).** `iter_tex` 가 `assets/` 뒤에 `projects/` 를 이어 훑는다. 순서는
+`assets` **뒤**여야 한다 — `measure_corpus` 의 표본 선택(`picks`)과 `Counter` 삽입순(도수가 같을 때의
+정렬 순서)이 순회 순서에 의존하므로 종전 코퍼스의 상대 순서를 흔들면 안 된다. 실측 반영 결과:
+
+| 정본 값 | 종전 | 지금 |
+| --- | --- | --- |
+| `measuredAt.corpusTexFiles` | 4,991 | **5,120** |
+| `flags.bits.observedBitCounts` | bit0 53 · bit1 4,382 · bit2 216 | bit0 86 · bit1 4,437 · bit2 225 · **bit4 10**(신설) |
+| `container.versionDistribution.texb` | TEXB0003 2,047 | 2,176 |
+| `container.versionDistribution.mip0ChainLength` | 최대 11 ×1 | 최대 11 ×**5** |
+| `texs.versionDistribution` | TEXS0003 207 | 216 |
+| `format.enum.corpusDistribution` | 0 ×1,435 · 4 ×1,796 | 0 ×1,501 · 4 ×1,859 |
+
+`.tex-json` 쪽(`texJsonFiles` 388)은 원래부터 `projects/` 를 포함하고 있었으므로 바뀌지 않았다.
 
 ---
 
@@ -289,7 +312,7 @@ flags 워드가 사는 자리는 확정이다 — tex 디스크립터 **+4**(리
 | --- | --- | --- | --- | --- |
 | `0x1` | NoInterpolation | 차분 컴파일 · 사이드카 11/11 | **미특정** | **소비** — `resolveTextureNoInterpolation` → `texFilter[slot]` |
 | `0x2` | ClampUVs | 차분 컴파일 · 사이드카 243/243 | **미특정** | **소비** — `resolveTextureClampUVs` → `texWrap[slot]` |
-| `0x4` | IsGif(스프라이트시트) | 사이드카 52/52 + TEXS 존재 52/52 | 파일 구조로 자명(TEXS 섹션) | **소비** — TEXS 프레임 경로 |
+| `0x4` | IsGif(스프라이트시트) | `spritesheetsequences` **또는** `imagesequence` 61/61 + TEXS 존재 **440/440**(§4.1) | 파일 구조로 자명(TEXS 섹션) | **소비** — TEXS 프레임 경로 |
 | `0x8` | 저장 mip 1장 | 로더가 세운다(`0x14015e933`) | — | **입력 아님.** Waple 은 무시 — 정확 |
 | `0x10` | sRGB(**추정**) | 사이드카 10/10 · 348/348, 표본 1개 프로젝트 | **미특정** | 무시(§3.1) |
 | `0x20` | IsVideoTexture | 코퍼스 38건 전부 mp4 페이로드 | `0x14015d20f`(TEXB 리더) | **소비** — `.video` 페이로드 |
@@ -340,6 +363,9 @@ flags 워드가 사는 자리는 확정이다 — tex 디스크립터 **+4**(리
 > 문자열이고, `sRGB` 는 PNG `sRGB` 청크 비교(`cmp ecx, 'sRGB'` @파일오프셋 `0xb7c19`)다 — 둘 다 키가 아니다.
 >
 > **판정: 이름은 추정**(강한 상관이지만 표본이 한 프로젝트라 교란 가능).
+> 정본에서도 이 주장은 `flags.bits`(확정) 안에 섞지 않고 **별도 항목
+> `format.tex.flags.srgbBit`(status `추정`)** 으로 뗐다 — 등급이 다른 주장을 확정 항목에 섞으면
+> 항목 전체의 등급이 흐려진다. `flags.bits` 에는 도수(비트4 ×10)와 대응 사실만 남겼다.
 > **"런타임 비소비" 도 확정이 아니라 정황**이다 — `test byte ptr [reg+4], 0x10` 이 `.text` 에 0건이고
 > 현행 컴파일러 키 표에도 없다는 두 정황뿐이고, 위 정정대로 "여섯 비트 디스패치" 근거는 무효다.
 > 어느 쪽이든 **Waple 이 무시하는 현재 동작은 안전하다**: 이 비트를 읽으면 그때부터는 WE 와 다르게
@@ -380,6 +406,36 @@ flags 워드가 사는 자리는 확정이다 — tex 디스크립터 **+4**(리
 | `spritesheetsequences` | `flags & 0x4` + TEXS 섹션 | **52/52** (프레임 수도 52/52 일치) |
 | `nomip: true` | mipCount == 1 | **93/93** |
 | `format` | 헤더 `format` | `check_tex_format_map.py` 가 매 CI 재측정 |
+
+> **⚠️ `spritesheetsequences ↔ 0x4` 는 쌍대응이 아니다**(2026-08-21, 설치 projects 를 붙이고 나서
+> 드러났다). 설치 `projects/defaultprojects/dino_run/materials/` 의 **3건**(`coin_0` `vita_jump_0`
+> `vita_walk_01`)은 `spritesheetsequences` 없이 `imagesequence` + `frameduration` 만 갖고도
+> `flags = 0x7`(0x4 포함)과 **TEXS 섹션**을 얻는다. 즉 왼쪽 항은 `spritesheetsequences` 단독이 아니라
+> **`spritesheetsequences OR imagesequence`** 다. 둘 다 `resourcecompiler64.exe` 의 34개 키 표에 있다(§3.1).
+> 358쌍(동봉 272 + projects 86) 기준으로 이 OR 형태는 **61/61 · 297/297** 로 양방향 일치한다.
+> `flags & 0x4` ⟺ TEXS 섹션 존재 쪽은 더 강해서 `.tex` **440건(동봉 311 + projects 129) 전건** 일치한다.
+
+### 4.1a 이 대응을 이제 CI 가 매번 다시 잰다
+
+종전 `check_tex_format_map.py` 는 `.tex-json`↔헤더 대응 중 **`format` 하나만** 봤고 헤더는
+**오프셋 18 의 u32 하나만** 읽었다. 위 표의 나머지 대응은 **문서에만 있고 아무 게이트도 없었다.**
+2026-08-21 에 셋을 붙였다.
+
+| 게이트 | 무엇을 잠그나 | 현재 실측(동봉만 / +설치 projects) |
+| --- | --- | --- |
+| **H 헤더 프레이밍** | NUL 구분자 둘 · 컨테이너 버전 · `flags` · texW/H · imgW/H · **`flags & 0x40` 조건부 `i32 texDepth`** · **TEXI 버전>0 조건부 `u32 previewColor`** 를 다 센 자리에 `TEXB` 매직이 **정확히 착지**하는지. 조건부 필드를 하나라도 틀리면 착지가 깨진다. `flags & 0x4` ⟺ TEXS 도 함께 본다 | 311/311 · headerLen {46: 283, 50: 28} / 440/440 · {46: 412, 50: 28} |
+| **I `.tex-json` 키 집합** | `MIN_PAIRS`/`MIN_FORMATS` 는 **하한**이라 **새 키가 생기는 것을 못 잡았다.** 관측 키 경로(중첩 포함)가 `KNOWN_TEXJSON_KEYS` 를 벗어나면 실패 | 14종 / 18종, 미등록 0 |
+| **J 키↔flags 비트** | `nointerpolation`↔`0x1` · `clampuvs`↔`0x2` · `srgb`↔`0x10` · `alphachannelpriority`↔`0x80000` · (`spritesheetsequences` **OR** `imagesequence`)↔`0x4` 를 양방향으로 | 아래 |
+
+동봉만: nointerpolation 1/271 · clampuvs 182/90 · sprite 52/220 · alphachannelpriority 82/190 ·
+**srgb 0/272**(동봉에는 `srgb` 사이드카가 하나도 없다 — 판별력 0).
+`WE_ROOT` 를 주면 설치 `projects/` 가 붙어 §3.1 의 358쌍 수치를 그대로 재현한다:
+nointerpolation 34/324 · clampuvs 237/121 · sprite 61/297 · srgb **10/348** · alphachannelpriority 82/276.
+
+> CI 에는 설치본이 없으므로 `srgb` 게이트는 **표본 0 으로 돈다**. 그 사실을 숨기지 않고 note 로 찍는다 —
+> 0/0 은 아무것도 증명하지 않는데 초록으로만 보이면 "동작하는 척하는 도구" 가 된다.
+> ②③(format↔Swift 표)과 D/E/F/G 는 **동봉 전용**으로 남겨 뒀다. 설치 `projects/` 에는 Swift 표에 없는
+> `dxt5n+`(5쌍, 코드 4)가 있어 그대로 섞으면 `Sources/**` 를 고치지 않고는 못 넘는 실패가 난다(§7 넘길 것).
 
 `nonpoweroftwo`(231건) 는 **`wallpaperui.exe`(에디터)에만 토큰이 있다** — 재확인 2026-08-21, 설치본
 바이너리 27개를 ASCII·UTF-16LE 양쪽으로 훑은 결과 `wallpaperui.exe` 2건뿐이고
@@ -529,11 +585,13 @@ WE(와 D3D 규격)는 `((7-i)·a0 + i·a1 + 3) / 7`, 6단은 `+2)/5` 로 **반�
 
 | 항목 | 왜 |
 | --- | --- |
-| raw RGBA 폴백의 헤더 오프셋 42 | 실물 헤더 끝은 46/50 이지만 **이 분기는 실물에서 도달 불가**다(동봉 311/311, 코퍼스 4,680/4,680 이 TEXB 컨테이너를 갖는다). 기존 픽스처가 42 를 못박고 있고 그 테스트 파일은 담당 밖이다 |
+| raw RGBA 폴백의 헤더 오프셋 42 | 실물 헤더 끝은 46/50 이지만 **이 분기는 실물에서 도달 불가**다(동봉 311/311 · 설치 projects 129/129 · 코퍼스 5,120/5,120 이 TEXB 컨테이너를 갖는다. 종전 이 줄과 `spec/formats/tex-deep.json` 의 `transcode.args.goldenOracle` 에 적힌 **4,680** 은 유래를 확인하지 못했다 — 코퍼스 총계 4,991 과도 다르고 재현식도 없다. [미해결]로 남긴다). 기존 픽스처가 42 를 못박고 있고 그 테스트 파일은 담당 밖이다 |
 | BC3 알파 라운딩 | §6.4 — 담당 밖 테스트 기댓값 동반 수정 필요 |
 | ~~`variantCount` 를 `isVideoMp4` 로 보는 모델~~ | **2026-08-21 고쳤다** — §1.2 의 조치 노트 참조 |
 | 3D LUT 슬라이스 샘플링 | `depth` 는 이제 파스한다. 실제 3D 샘플 소비처가 없어 죽은 코드를 만들지 않았다 |
 | `previewColor` 소비 | 렌더 소비처를 못 찾았다(에디터/UI 힌트). 헤더 길이 계산 목적으로만 읽는다 |
-| `TEXV0004` 레거시 컨테이너 | 엔진은 받는다(`0x14015e8c5`, TEXI/TEXB 를 **버전 0** 으로 호출 — previewColor 없음·`imageCount` 필드 없이 1 고정 `0x14015c941`·imageFormat/variantCount 없음). Waple 은 `TEXV0005` 만 받는다. **동봉 311 · 설치 projects 129 · 워크샵 4,991 전건이 0005** 라 실물 표본이 0건이고, 표본 없이 두 번째 레이아웃을 쓰면 검증 불가능한 코드가 된다. 0004 실물이 나오면 추가할 것 |
+| `TEXV0004` 레거시 컨테이너 | 엔진은 받는다(`0x14015e8c5`, TEXI/TEXB 를 **버전 0** 으로 호출 — previewColor 없음·`imageCount` 필드 없이 1 고정 `0x14015c941`·imageFormat/variantCount 없음). Waple 은 `TEXV0005` 만 받는다. **코퍼스 5,120 전건이 0005**(동봉 311 · 설치 projects 129 를 포함한 수치다 — 종전 이 줄은 4,991 을 '워크샵' 으로 라벨했는데 4,991 은 워크샵 pkg + 설치 assets 의 합계였다) 라 실물 표본이 0건이고, 표본 없이 두 번째 레이아웃을 쓰면 검증 불가능한 코드가 된다. 0004 실물이 나오면 추가할 것 |
 | 플래그 `0x10`(sRGB) 소비 | 엔진도 안 읽는다(§3.1). 읽는 쪽을 만들면 **WE 보다 다르게** 그리게 된다 |
 | `TexImage.spriteFrameIndex` 폴백 0.016 | §5 — 사이드카 수치가 후보지만 런타임 근거가 없고, 도달 자산에서 관측 가능한 차이가 없다 |
+| `texJSONFormatCodes` 에 `dxt5n+` 없음 | 설치 `projects/` 에 `"format": "dxt5n+"` 사이드카가 **5쌍** 있고 컴파일된 코드는 전부 **4**(= `dxt5`)다. 정본도 "`+` 접미는 `dxt5n` 과 동일하게 처리된다" 로 적고 있다. 고칠 자리는 `Sources/WapleRender/SceneRendererResources.swift:1005-1009` 의 리터럴에 `"dxt5n+": 4` 를 더하는 것 — `Sources/**` 는 담당 밖이라 손대지 않았고, 그래서 `check_tex_format_map.py` 의 ②③ 는 **동봉 전용**으로 남겼다(§4.1a). 소스 폼(`.tex` 부재)인 `dxt5n+` 은 0건이라 **현재 그림에는 영향 없다** |
+| `RAW_DUMP_ALLOWED` 가 줄 번호로 고정 | `scripts/spec/check_spec_shrink_guard.py:52` 가 `("measure_tex_deep.py", 493)` 로 **줄 번호**를 못박는다. `measure_tex_deep.py` 의 493행 위에 한 줄만 더해도 그 검사가 붉어진다(이번에 실제로 당해서 패치를 줄 수 보존형으로 다시 짰다). 고칠 자리는 그 파일이고 담당 밖이다 — 제안: 줄 번호 대신 **그 줄의 문자열**이나 `# noqa: raw-dump` 마커로 바꿀 것 |
