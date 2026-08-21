@@ -189,18 +189,22 @@ final class WallpaperCompatibilityCorpusAuditTests: XCTestCase {
                 if PropertyConditionEvaluator.canEvaluate(condition) { evaluable += 1 }
                 else { notEvaluable.append("\(folder.lastPathComponent)[\(key)] \(condition)") }
             }
-            // **DeepScan:343 의 술어를 글자 그대로 복제한다.** 그쪽은 `WapleCompatCore`(Metal 의존)라
-            // 리눅스에서 못 돌지만, 술어 자체는 `WapleCore` 함수 둘의 합성이므로 여기서 같은 수치를 낸다.
-            //   `if canEvaluate(c), evaluate(c, values: values) != nil { condOK += 1 }`
+            // **[2026-08-21] 술어를 복제하지 않는다.** `DeepScan.scanProperties` 는 이제
+            // `WallpaperCompatibilityAnalyzer.conditionSupport(_:values:)` 사다리를 부르고, 그 함수는
+            // `WapleCore` 에 있으므로 여기서 **같은 함수**를 부를 수 있다 — 수치가 아니라 함수가
+            // 같아진다. 종전에는 `canEvaluate(c) && evaluate(c, values:) != nil` 을 인라인으로 다시
+            // 적어 **네 번째 사본**이 됐고, 그 주석이 상대를 **줄 번호**(`DeepScan:343`)로 가리켜서
+            // 무관한 편집에 밀리기까지 했다(줄 번호로 건 참조는 조용히 낡는다).
             // values 조립도 DeepScan.scanProperties 와 같다(WallpaperProperties.parse → key→value).
             let parsed = WallpaperProperties.parse(generalProperties: props)
             var values: [String: PropertyValue] = [:]
             for p in parsed { values[p.key] = p.value }
             for p in parsed {
-                guard let c = p.condition, !c.isEmpty else { continue }
-                deepTotal += 1
-                if PropertyConditionEvaluator.canEvaluate(c),
-                   PropertyConditionEvaluator.evaluate(c, values: values) != nil { deepEvaluable += 1 }
+                switch WallpaperCompatibilityAnalyzer.conditionSupport(p.condition, values: values) {
+                case .absent: continue
+                case .evaluated: deepTotal += 1; deepEvaluable += 1
+                case .unsupported, .parsedOnly: deepTotal += 1
+                }
             }
         }
         print("== condition 도달: 총 \(total)건(빈 문자열 포함) · 비어있지 않음 \(nonEmpty)건 · "
