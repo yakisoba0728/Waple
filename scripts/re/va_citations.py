@@ -79,6 +79,13 @@ CORRECTION_MARKER = "[VA-정정]"
 # (바이트 스캐너가 산출한 disp32·변위 필드 위치). 정정 기록과 뜻이 다르므로 마커를 갈라 둔다.
 SCANNER_MARKER = "[VA-스캐너위치]"
 
+# 세 번째 마커. `.text` **안에 박힌 데이터 표**(점프 테이블 · 유니폼 인덱스 표 …)를 가리키는
+# 주소다. 그런 표는 `.pdata` 함수 범위 안에 들어 있어서 "명령 내부" 로 잡히는데, 스캐너 산출
+# 위치와는 뜻이 다르다 — 그건 명령의 한 필드를 가리키고 이건 **애초에 코드가 아닌 바이트**다.
+# 실사례: 유니폼 id → 슬롯 인덱스 표 `0x1400daaac`(바이트가 00 01 02 03 …), 함수 범위는
+# `0x1400da981`-`0x1400dab3c`.
+DATA_TABLE_MARKER = "[VA-데이터표]"
+
 # **바이트 스캐너가 산출한 "필드 위치"** — 명령 주소가 아니다. 정본 JSON 은 줄에 마커를 넣을 수
 # 없으므로 (파일, 키) 로 좁혀 면제한다. 그 뜻은 정본 자신이 `engine.renderPass.addressSemantics`
 # 에 적고 있다. 키 이름만으로 면제하면 다른 정본의 진짜 명령 주소까지 덮으므로 **파일까지** 묶는다.
@@ -246,7 +253,7 @@ def main(argv):
         for line in txt.splitlines():
             stripped = line.strip()
             record = (CORRECTION_MARKER in stripped or SCANNER_MARKER in stripped
-                      or stripped in CORRECTION_LINES)
+                      or DATA_TABLE_MARKER in stripped or stripped in CORRECTION_LINES)
             if not record:
                 kv = KV_LINE.match(stripped)
                 if kv and kv.group(1) in SCANNER_ADDRESS_FIELDS.get(str(f), ()):

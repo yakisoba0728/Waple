@@ -86,7 +86,7 @@ Renderer::frame(renderer, dt)                 0x14017fa70 – 0x1401816cc
 | `+0x130` | `+0x120` | **`g_Alpha`** | 유니폼 ID 0 핸들러 `0x1400d83d7`; camerafade 가 여기에 알파를 쓴다(§4) |
 
 유니폼 점프테이블: 디스패처 `0x1400d8300`.
-인덱스 바이트 표 `0x1400daaac` · 오프셋 표 `0x1400da984` — 데이터다, 명령이 아니다 [VA-스캐너위치]
+인덱스 바이트 표 `0x1400daaac` · 오프셋 표 `0x1400da984` — 데이터다, 명령이 아니다 [VA-데이터표]
 (바이트가 `00 01 02 03 …`). `.pdata` 조각 `0x1400da981`–`0x1400dab3c` 안에 들어 있어 경계 검사에는
 걸리지만 디스어셈 대상이 아니다.
 같은 테이블에서 이번 문서에 필요한 renderState 필드를 전부 뽑았다:
@@ -1148,10 +1148,10 @@ bit3(`orthogonalprojection`) · bit4(auto) · bit7(`camerashake`) · bit8(`camer
 | `0x140227535` | `movsd xmm0, qword ptr [rip + 0x269353]` → `0x140490890` `"perspective"` | 두 번째 레이어 클래스의 SSO 이름 적재. 종전 값은 그 명령의 **disp32 필드 위치**(xref 스캔 산출물을 그대로 적은 것) |
 | `0x1401ee98a` | `cmp rcx, 0x1f` | 부록 A 의 디스어셈 **시작** 주소. 여기서 내려오면 `0x1401ee9a4` 의 `lea "perspective"` → `0x1401ee9bd` 의 `[rbx+0x34] = 0x120` 이 순서대로 보인다 |
 
-같은 스윕에서 남은 이탈 1건은 **정정 대상이 아니다**: `0x1400daaac` [VA-스캐너위치] (유니폼 ID → 인덱스 바이트 표,
+같은 스윕에서 남은 이탈 1건은 **정정 대상이 아니다**: `0x1400daaac` [VA-데이터표] (유니폼 ID → 인덱스 바이트 표,
 §1.1)는 코드가 아니라 `.text` 안에 박힌 **데이터 표**다(바이트가 `00 01 02 03 …`).
 `.pdata` 조각 `0x1400da981`–`0x1400dab3c` 안에 들어 있어 도구가 "명령 내부" 로 분류할 뿐
-디스어셈 대상이 아니다. `[VA-스캐너위치]` 마커로 면제해 뒀다 — 다만 그 마커의 이름과 주석은
+디스어셈 대상이 아니다. **[2026-08-21 갱신]** 전용 마커 `[VA-데이터표]` 가 생겨 그것으로 바꿨다(종전엔 이름과 주석은
 "바이트 스캐너가 산출한 disp32·변위 필드 위치" 를 말하고 있어 **이 사례(함수 범위 안에 박힌
 데이터 표)와 뜻이 정확히 겹치지는 않는다.** 도구 쪽에 범주를 하나 더 두거나 주석을 넓히는 게
 맞다(§7 "넘길 것").
@@ -1178,12 +1178,12 @@ python3 $S/vdis2.py 0x140180c0b 0x140180cc5   # 알파 곡선
 python3 $S/vdis2.py 0x140181bab 0x140181be1   # fade.json 로드
 
 # 5) 유니폼 ID → renderState 오프셋 (g_Time / g_ParallaxPosition 확정)
-#    인덱스 0x1400daaac[uid] → 오프셋테이블 0x1400da984[idx]*4 → 핸들러 VA   [VA-스캐너위치] (둘 다 데이터 표)
+#    인덱스 0x1400daaac[uid] → 오프셋테이블 0x1400da984[idx]*4 → 핸들러 VA   [VA-데이터표] (둘 다 데이터 표)
 python3 - <<'PY'
 import sys,struct;sys.path.insert(0,"/tmp/claude-0/-home-user/abe2d757-2792-5050-8baf-0be7e33c5b76/scratchpad")
 from wpe import pe,DATA
 for uid in (0,3,4,5,104,105,107,108):
-    ci=DATA[pe.va2off(0x1400daaac+uid)]   # [VA-스캐너위치] 데이터 표
+    ci=DATA[pe.va2off(0x1400daaac+uid)]   # [VA-데이터표] 데이터 표
     off=struct.unpack_from('<I',DATA,pe.va2off(0x1400da984+ci*4))[0]
     print(uid, hex(0x140000000+off))
 PY
