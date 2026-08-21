@@ -481,6 +481,7 @@ public struct PlaylistSettings: Equatable, Sendable {
     public var order: PlaylistOrder
     public var mode: PlaylistMode
     /// `+0x3c` bit0. 동영상이 끝날 때 전환한다(그동안 타이머 전환은 보류된다).
+    /// 실제 전진 관문은 `shouldAdvanceOnVideoEnd(...)` — **`mode == timer` 일 때만** 산다.
     public var videoSequence: Bool
     /// `+0x3c` bit1. 일시정지 중에도 타이머를 굴린다.
     public var updateOnPause: Bool
@@ -559,6 +560,44 @@ public struct PlaylistSettings: Equatable, Sendable {
         // 0x140076d7c  cmp eax,4(동영상) / 0x140076d81 test byte [rbx+0x74],1
         if currentIsVideo && videoSequence { return false }
         return true
+    }
+
+    /// 동영상이 **끝났을 때** 다음 벽지로 넘어가야 하는가 (0x140067762–0x14006778f).
+    ///
+    /// 타이머 틱(`shouldTimerAdvance`)이 `videoSequence` 로 **보류한** 전진을 실제로 처리하는
+    /// 반대편이다. 문서 §10 이 "아직 안 본 것" 으로 남겨 뒀던 경로이고, 이번에 디스어셈으로
+    /// 직접 이었다:
+    ///
+    ///   1. 재생이 끝나면 벽지 창이 `PostMessageW(hwnd, WM_USER+0x0A /*0x40A*/, 0, wallpaperId)`
+    ///      를 보낸다(0x14011b116 — wParam 은 `[wallpaper+0x154]`).
+    ///   2. 메인 창 프로시저의 점프테이블(RVA `0x2e690`, 인덱스 `msg-0x402`)이 0x14002dc43 으로
+    ///      보낸다. 재진입 래치 `0x1404dfbb8` 가 서 있으면 로그만 남기고 무시한다
+    ///      (문자열 "Windows reentrancy during WM_USER_VIDEO_ENDED prevented." @0x140474ff8).
+    ///   3. 통과하면 0x140067720 이 모니터 리스트를 훑어 **wParam 과 같은 벽지 id** 를 가지고
+    ///      항목이 비어 있지 않은 모니터를 찾고, 아래 관문을 통과하면 0x1400677fa 에서
+    ///      `sub_140067a00`(다음 벽지 결정)을 부른다.
+    ///
+    /// 관문 원문:
+    /// ```
+    /// 0x140067762  cmp dword [rbx+0x70], 1      ; mode == timer
+    /// 0x140067768  test byte [rbx+0x74], 1      ; videosequence
+    ///     → cl = (둘 다 참)
+    /// 0x140067774  test byte [rbx+0x74], 0x10   ; playintro
+    /// 0x14006777a  cmp byte [rbx+0xe2], 0       ; 인트로 벽지가 지금 걸려 있다
+    ///     → al = (둘 다 참)
+    /// 0x14006778d  or cl, al / jne → 전진
+    /// ```
+    ///
+    /// **`videoSequence` 는 `mode == timer` 밖에서는 죽은 키다.** `daytime`/`dayofweek`/`never`/
+    /// `logon` 에서는 이 비트가 켜져 있어도 동영상 종료가 전진을 만들지 않는다. 파서(§3.1)는
+    /// `videosequence` 를 mode 와 무관하게 읽으므로 설정 파일만 봐서는 이 의존이 안 보인다.
+    ///
+    /// - Parameter introShowing: 모니터 노드의 `[+0xe2]`. `beginfirst` 경로가 첫 항목을 걸 때
+    ///   `playintro` 값을 그대로 심고(0x140067edc, `r13b` 는 0x140067d8b–0x140067d93 의
+    ///   `([settings+0x74] >> 4) & 1`), 그 밖의 전진에서는 0 으로 지운다(0x140067ff2).
+    ///   곧 "지금 화면에 있는 것이 인트로 벽지" 라는 뜻이다.
+    public func shouldAdvanceOnVideoEnd(introShowing: Bool) -> Bool {
+        (mode == .timer && videoSequence) || (playIntro && introShowing)
     }
 }
 

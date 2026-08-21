@@ -173,6 +173,15 @@ public final class VideoRenderer: WallpaperRenderer, @unchecked Sendable {
         case .fill: layer.videoGravity = .resizeAspectFill
         case .stretch: layer.videoGravity = .resize
         }
+        // 레터박스/필러박스 색. WE 는 목적지 사각형을 **항상 창 전체**로 두고 남는 자리를
+        // 경계색으로 칠하는데, 그 색은 하드코딩된 **불투명 검정**이다 — `TransferVideoFrame`
+        // 직전의 MFARGB 구성 0x1400f34f3 `mov word [rsp+0x51], 0` · 0x1400f34fa
+        // `mov byte [rsp+0x50], 0` · 0x1400f34ff `mov byte [rsp+0x53], 0xff`
+        // (BGRA = 00 00 00 FF). `clearcolor`/`schemecolor` 를 쓰지 않는다.
+        // 종전 Waple 은 AVPlayerLayer 에 배경을 안 줘서 상위 뷰 색이 비쳤다
+        // (`docs/re/media-playback.md` §9.2 G3). 웹 폴백은 이미 `background:#000` 이라
+        // 이 한 줄로 두 경로의 레터박스가 같아진다.
+        layer.backgroundColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
         container.wantsLayer = true
         layer.frame = container.bounds
         layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]

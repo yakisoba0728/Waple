@@ -521,6 +521,58 @@ final class PlaylistTransitionTests: XCTestCase {
         }
     }
 
+    // MARK: - 동영상 종료 전진 관문 (0x140067762–0x14006778f)
+
+    /// `videosequence` 는 `mode == timer` 밖에서는 죽은 키다 — 0x140067762 의 `cmp [rbx+0x70],1`.
+    /// 파서는 mode 와 무관하게 이 비트를 읽으므로 설정 파일만 봐서는 이 의존이 안 보인다.
+    func testVideoEndAdvanceNeedsTimerMode() {
+        var settings = PlaylistSettings()
+        settings.videoSequence = true
+        XCTAssertTrue(settings.shouldAdvanceOnVideoEnd(introShowing: false), "timer + videosequence")
+
+        for mode in [PlaylistMode.logon, .daytime, .dayOfWeek, .never] {
+            settings.mode = mode
+            XCTAssertFalse(settings.shouldAdvanceOnVideoEnd(introShowing: false),
+                           "\(mode) 에서는 videosequence 가 동영상 종료 전진을 만들지 않는다")
+        }
+    }
+
+    /// 두 번째 항 — `playintro` 가 켜져 있고 지금 걸린 것이 인트로 벽지면, `videosequence` 가
+    /// 꺼져 있어도(그리고 mode 가 timer 가 아니어도) 종료가 전진을 만든다(0x140067774–0x140067789).
+    func testVideoEndAdvanceIntroPath() {
+        var settings = PlaylistSettings()
+        settings.videoSequence = false
+        settings.playIntro = true
+        XCTAssertFalse(settings.shouldAdvanceOnVideoEnd(introShowing: false),
+                       "인트로가 안 걸려 있으면 playintro 만으로는 안 된다")
+        XCTAssertTrue(settings.shouldAdvanceOnVideoEnd(introShowing: true))
+
+        settings.mode = .never
+        XCTAssertTrue(settings.shouldAdvanceOnVideoEnd(introShowing: true),
+                      "인트로 항은 mode 게이트 밖이다 — `or cl, al` 이 두 항을 대등하게 합친다")
+
+        settings.playIntro = false
+        XCTAssertFalse(settings.shouldAdvanceOnVideoEnd(introShowing: true))
+    }
+
+    /// 타이머 틱과 종료 전진이 정확히 상보적인지 — `videosequence` 가 보류시킨 것을
+    /// 종료 경로가 받는다(0x140076d81 ↔ 0x140067768).
+    func testVideoSequenceHandsTimerAdvanceToVideoEnd() {
+        var settings = PlaylistSettings()
+        settings.delayMinutes = 1
+        settings.videoSequence = true
+        XCTAssertFalse(settings.shouldTimerAdvance(elapsedSeconds: 600, isPaused: false, currentIsVideo: true),
+                       "타이머는 보류한다")
+        XCTAssertTrue(settings.shouldAdvanceOnVideoEnd(introShowing: false),
+                      "그 전진을 종료 경로가 받는다")
+
+        settings.videoSequence = false
+        XCTAssertTrue(settings.shouldTimerAdvance(elapsedSeconds: 600, isPaused: false, currentIsVideo: true),
+                      "끄면 타이머가 동영상도 그냥 넘긴다")
+        XCTAssertFalse(settings.shouldAdvanceOnVideoEnd(introShowing: false),
+                       "그리고 종료 경로는 아무것도 안 한다")
+    }
+
     // MARK: - sorted 커서
 
     func testSortedCursorCycles() {
