@@ -45,6 +45,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SCENE_DOC = ROOT / "Sources/WapleCore/SceneDocument.swift"
 ANALYZER = ROOT / "Sources/WapleCore/WallpaperCompatibilityAnalyzer.swift"
 RENDERER = ROOT / "Sources/WapleRender/SceneRenderer.swift"
+# [2026-08-21] DeepScan 은 종전에 이 게이트의 **시야 밖**이었다. 그 사이 `scanScene` 이
+# `.pkg` 가 없으면 즉시 미지원으로 떨어뜨려 **설치본 씬 188/188 을 전건 오판**하고 있었다
+# (두 트리에 `.pkg` 는 0개이고 렌더러는 그 188건을 정상 마운트한다). 마운트 결정을 세
+# 곳이 각자 하는 한 같은 종류의 어긋남이 또 난다.
+DEEPSCAN = ROOT / "Sources/WapleCompatCore/DeepScan.swift"
 WEASSETS = ROOT / "Sources/WapleRender/Resources/WEAssets"
 
 # 동봉 WEAssets 실측(2026-08-20): 씬 프로젝트 170개 · 전건 언팩 · `.pkg` 0개 · 전건 `scene.json`.
@@ -69,7 +74,7 @@ def candidate_items(text: str, where: str) -> list[str]:
     return [p.strip() for p in m.group("items").split(",") if p.strip()]
 
 
-def check_sources(scene_doc: str, analyzer: str, renderer: str) -> list[str]:
+def check_sources(scene_doc: str, analyzer: str, renderer: str, deepscan: str) -> list[str]:
     doc_items = candidate_items(scene_doc, "SceneDocument.swift")
     ana_items = candidate_items(analyzer, "WallpaperCompatibilityAnalyzer.swift")
 
@@ -92,6 +97,22 @@ def check_sources(scene_doc: str, analyzer: str, renderer: str) -> list[str]:
         fail("SceneRenderer 가 `sceneFileName: project.fileName` 을 넘기지 않는다")
     if "ScenePackage.fromDirectory(project.folderURL)" not in renderer:
         fail("SceneRenderer 에 언팩 마운트 경로가 없다 — 이 게이트의 전제가 무너졌다")
+
+    # ③ **마운트 선택자 단일화.** ①②는 "후보 파일명" 과 "언팩 폴백" 만 봤다. 그런데
+    # 실제로 갈렸던 것은 그 앞 단계 — *pkg 를 열 것인가 폴더를 열 것인가* 였다.
+    # 종전 분석기는 `scene.pkg`/`gifscene.pkg` **이름 존재**로 골라서, ⓐ `file:"techno.json"`
+    # 이 없고 `techno.pkg` 가 있으면 거짓 `missingScenePackage`, ⓑ `Scene.pkg` 대소문자 표기를
+    # 놓치고, ⓒ 잔존 pkg 가 있으면 디스크의 `scene.json` 대신 pkg 를 열어 **다른 씬**을 검사했다.
+    # 렌더러가 쓰는 `ScenePackage.resolveMountSource` 하나로 모으는 것이 유일한 고정점이다.
+    for text, label in ((analyzer, "Analyzer"), (deepscan, "DeepScan")):
+        if "ScenePackage.resolveMountSource(" not in text:
+            fail(f"{label}: 마운트 선택자가 렌더러(`ScenePackage.resolveMountSource`)와 다르다 — "
+                 f"pkg/폴더 판정이 셋으로 갈린다")
+    # ④ DeepScan 도 `project.json` 의 `file` 을 넘겨야 한다. 안 넘기면 관례 이름 두 개로만
+    # 열려 설치본 4건(audiophile · fantasticcar · ricepod · techno)이 조용히 빠진다.
+    if "sceneFileName: project.fileName" not in deepscan:
+        fail("DeepScan 이 `SceneDocument.parse` 에 `sceneFileName` 을 안 넘긴다 — "
+             "관례 이름 폴백으로 떨어져 설치본 4건이 유실된다")
     return doc_items[1:]
 
 
@@ -138,7 +159,8 @@ def survey_bundled(root: Path) -> tuple[int, int, int]:
 def main() -> None:
     tail = check_sources(SCENE_DOC.read_text(encoding="utf-8"),
                          ANALYZER.read_text(encoding="utf-8"),
-                         RENDERER.read_text(encoding="utf-8"))
+                         RENDERER.read_text(encoding="utf-8"),
+                         DEEPSCAN.read_text(encoding="utf-8"))
     print(f"[scene-mount-parity] ① 후보 꼬리 일치 {tail}")
 
     scenes, packed, present = survey_bundled(WEASSETS)
@@ -156,8 +178,11 @@ def main() -> None:
 
 _GOOD_DOC = 'let sceneCandidates: [String] = [sceneFileName, "scene.json", "gifscene.json"].compactMap { $0 }'
 _GOOD_ANA = ('let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }\n'
-             'ScenePackage.fromDirectory(folderURL)\n')
-_GOOD_REN = 'sceneFileName: project.fileName\nScenePackage.fromDirectory(project.folderURL)\n'
+             'ScenePackage.fromDirectory(folderURL)\n'
+             'ScenePackage.resolveMountSource(\n')
+_GOOD_REN = ('sceneFileName: project.fileName\nScenePackage.fromDirectory(project.folderURL)\n'
+             'ScenePackage.resolveMountSource(\n')
+_GOOD_DS = 'ScenePackage.resolveMountSource(\nsceneFileName: project.fileName\n'
 
 
 def _expect_fail(label: str, fn) -> None:
@@ -173,27 +198,43 @@ def _expect_fail(label: str, fn) -> None:
 
 def selftest() -> None:
     # 정상 조합은 통과해야 한다
-    check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN)
+    check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN, _GOOD_DS)
     print("    양성대조 OK: 정상 조합 통과")
 
     _expect_fail("스캐너 후보가 하드코딩으로 되돌아감",
                  lambda: check_sources(_GOOD_DOC,
                                        'let sceneCandidates: [String] = ["scene.json", "gifscene.json"].compactMap { $0 }\n'
-                                       'ScenePackage.fromDirectory(folderURL)\n', _GOOD_REN))
+                                       'ScenePackage.fromDirectory(folderURL)\nScenePackage.resolveMountSource(\n', _GOOD_REN, _GOOD_DS))
     _expect_fail("꼬리가 한쪽만 늘어남",
                  lambda: check_sources(_GOOD_DOC,
                                        'let sceneCandidates: [String] = [project.fileName, "scene.json"].compactMap { $0 }\n'
-                                       'ScenePackage.fromDirectory(folderURL)\n', _GOOD_REN))
+                                       'ScenePackage.fromDirectory(folderURL)\nScenePackage.resolveMountSource(\n', _GOOD_REN, _GOOD_DS))
     _expect_fail("스캐너 언팩 폴백 제거",
                  lambda: check_sources(_GOOD_DOC,
-                                       'let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }\n',
-                                       _GOOD_REN))
+                                       'let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }\n'
+                                       'ScenePackage.resolveMountSource(\n',
+                                       _GOOD_REN, _GOOD_DS))
     _expect_fail("렌더러가 파일명을 안 넘김",
-                 lambda: check_sources(_GOOD_DOC, _GOOD_ANA, 'ScenePackage.fromDirectory(project.folderURL)\n'))
+                 lambda: check_sources(_GOOD_DOC, _GOOD_ANA,
+                                       'ScenePackage.fromDirectory(project.folderURL)\nScenePackage.resolveMountSource(\n',
+                                       _GOOD_DS))
     _expect_fail("렌더러 언팩 경로 제거",
-                 lambda: check_sources(_GOOD_DOC, _GOOD_ANA, 'sceneFileName: project.fileName\n'))
+                 lambda: check_sources(_GOOD_DOC, _GOOD_ANA,
+                                       'sceneFileName: project.fileName\nScenePackage.resolveMountSource(\n',
+                                       _GOOD_DS))
+    _expect_fail("DeepScan 이 렌더러와 다른 마운트 선택자를 쓴다",
+                 lambda: check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN,
+                                       'sceneFileName: project.fileName\n'))
+    _expect_fail("Analyzer 가 렌더러와 다른 마운트 선택자를 쓴다",
+                 lambda: check_sources(_GOOD_DOC,
+                                       'let sceneCandidates: [String] = [project.fileName, "scene.json", "gifscene.json"].compactMap { $0 }\n'
+                                       'ScenePackage.fromDirectory(folderURL)\n',
+                                       _GOOD_REN, _GOOD_DS))
+    _expect_fail("DeepScan 이 sceneFileName 을 안 넘김",
+                 lambda: check_sources(_GOOD_DOC, _GOOD_ANA, _GOOD_REN,
+                                       'ScenePackage.resolveMountSource(\n'))
     _expect_fail("후보 선언 형태 자체가 사라짐",
-                 lambda: check_sources("// nothing here", _GOOD_ANA, _GOOD_REN))
+                 lambda: check_sources("// nothing here", _GOOD_ANA, _GOOD_REN, _GOOD_DS))
 
     with tempfile.TemporaryDirectory() as td:
         empty = Path(td) / "empty"

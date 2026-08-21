@@ -231,10 +231,21 @@ public enum DeepScan {
         // F137: id 멤버십뿐 아니라 각 프로젝트의 실제 type 도 미리 색인 — preset 의존 검증이 "존재하는가"
         // 뿐 아니라 "마운트 가능한 타입인가"(scene/video/web)까지 확인하게 한다(런타임 PresetResolver/
         // RendererFactory 는 application/unknown/preset 의존을 지원 안 함).
+        //
+        // **[3차 웨이브 AB] 색인 키가 폴더명 하나뿐이라 F411 과 같은 거짓 미해소를 냈다.**
+        // 런타임 `PresetResolver` 와 형제 스캐너(`WallpaperCompatibilityAnalyzer.knownProjectIDs`)는
+        // **id ∪ 폴더명** 합집합으로 찾는다 — F194 이후 project id 는 `workshopid ?? 폴더명` 이라
+        // 워크샵에서 받은 폴더는 둘이 다르고, `dependency` 는 workshopid 를 가리킨다. 여기만 폴더명
+        // 으로 찾아서 그런 preset 을 전건 "미해소" 로 셌다. 타입도 `raw["type"]` 원문 대신 파서 결과를
+        // 쓴다 — `type` 생략 시 확장자 추론(G-E3-03)이 실제 마운트 타입을 정하고, 아래 집계
+        // (`projTypeTotal`)도 이미 그 값을 쓰기 때문이다(같은 프로젝트가 두 이름으로 세지던 자리).
+        // 설치본 도달 0건(type:"preset" 이 0건) — 워크샵 코퍼스에서만 움직인다.
         var knownTypes: [String: WallpaperType] = [:]
         for f in folders {
             if let raw = rawJSON(f.appendingPathComponent("project.json")) {
-                knownTypes[f.lastPathComponent] = WallpaperType.from(raw["type"] as? String)
+                let parsed = ProjectJSONParser.parse(json: raw, folderURL: f)
+                knownTypes[f.lastPathComponent] = parsed.type
+                knownTypes[parsed.id] = parsed.type
             }
         }
         if let only { folders = folders.filter { $0.lastPathComponent == only } }
@@ -285,12 +296,10 @@ public enum DeepScan {
             agg.sync { agg.projectJSONTotal += 1; agg.projTypeTotal["invalid", default: 0] += 1 }
             return
         }
-        let project: WallpaperProject
-        do { project = try ProjectJSONParser.parse(data: JSONSerialization.data(withJSONObject: raw), folderURL: folder) }
-        catch {
-            agg.sync { agg.projectJSONTotal += 1; agg.projTypeTotal["invalid", default: 0] += 1 }
-            return
-        }
+        // **[3차 웨이브 AB]** `raw` 는 이미 이 폴더의 project.json 을 파싱한 결과다 — 다시 직렬화해
+        // 다시 파싱하지 않는다(형제 스캐너의 F231 과 같은 정리). 부수 이득: `JSONSerialization.data`
+        // 가 던질 수 있는 유일한 경로(NaN/Inf 같은 비직렬화 값)가 사라져 "invalid" 오분류가 없어진다.
+        let project = ProjectJSONParser.parse(json: raw, folderURL: folder)
         let type = project.type.storageString
         agg.sync { agg.projectJSONTotal += 1; agg.projectJSONOK += 1; agg.projTypeTotal[type, default: 0] += 1 }
 
@@ -355,19 +364,44 @@ public enum DeepScan {
 
     static func scanScene(_ folder: URL, project: WallpaperProject, assetsDir: URL?, agg: DeepAgg) -> Bool {
         agg.sync { agg.sceneAttempt += 1 }
-        guard let pkgURL = firstExisting([folder.appendingPathComponent("scene.pkg"),
-                                          folder.appendingPathComponent("gifscene.pkg")]),
-              // memory-map: a 700MB pkg stays paged instead of resident, so N concurrent scenes don't OOM.
-              let pkgData = try? Data(contentsOf: pkgURL, options: .mappedIfSafe),
-              let package = try? ScenePackage.parse(pkgData) else {
-            return false
+        // **[3차 웨이브 AB] 종전 이 자리는 `scene.pkg`/`gifscene.pkg` 가 없으면 곧장 `false` 였다 —
+        // 즉 언팩 씬을 한 건도 스캔하지 않고 전건 "미지원" 으로 셌다.** WE 2.8.42 설치본 실측:
+        // 씬 프로젝트 **188/188 이 언팩**이고 두 루트 전체에 `.pkg` 가 **0개**다(형제 스캐너의
+        // `WallpaperCompatibilityCorpusAuditTests` 가 그 분포를 고정한다). 그래서 `--deep` 을
+        // 설치본에 겨누면 `projTypeSupported["scene"] = 0` → `--strict` 가 188건을 미지원으로 세는데,
+        // **렌더러는 그 188건을 정상 마운트한다**(SceneRenderer.swift:1485 `ScenePackage.fromDirectory`).
+        // 형제 스캐너는 G-E3-01 에서 이미 고쳤고 여기만 남아 있었다.
+        //
+        // 마운트 **선택자**도 렌더러와 같은 함수를 쓴다(`ScenePackage.resolveMountSource` —
+        // `project.json` 의 `file` 이 단독 결정자, `.pkg` 는 그 파일이 디스크에 없을 때의 폴백).
+        let package: ScenePackage
+        switch ScenePackage.resolveMountSource(folderURL: folder,
+                                               fileName: project.fileName,
+                                               hasDependency: project.dependency != nil) {
+        case .package(let pkgURL):
+            // memory-map: a 700MB pkg stays paged instead of resident, so N concurrent scenes don't OOM.
+            guard let pkgData = try? Data(contentsOf: pkgURL, options: .mappedIfSafe),
+                  let parsed = try? ScenePackage.parse(pkgData) else { return false }
+            package = parsed
+        case .directory:
+            // 폴더 백엔드는 지연 파일 읽기라 큰 프로젝트도 통째로 메모리에 올리지 않는다.
+            guard let folderPackage = ScenePackage.fromDirectory(folder) else { return false }
+            package = folderPackage
         }
         let res = PkgAssets(package: package, assetsDir: assetsDir)
 
         // 1) scene parse (real code path, with base-assets resolution)
+        // **[3차 웨이브 AB]** 씬 문서 이름은 `project.json` 의 `file` 이 정한다 — 렌더러가 넘기는
+        // `sceneFileName:`(SceneRenderer.swift:1500)을 여기서도 넘긴다. 안 넘기면 `scene.json`/
+        // `gifscene.json` 관례로만 폴백해, 설치본의 `ricepod.json` `fantasticcar.json`
+        // `techno.json` `audiophile.json` 4건이 위 언팩 수정 직후 `.noScene` 으로 떨어진다
+        // (형제 스캐너가 G-E3-02 에서 같은 이유로 같이 고친 자리다).
         let doc: SceneDocument
-        do { doc = try SceneDocument.parse(package: package, assets: { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } }) }
-        catch { return false }
+        do {
+            doc = try SceneDocument.parse(package: package,
+                                          assets: { res.baseAssetURL($0).flatMap { try? Data(contentsOf: $0) } },
+                                          sceneFileName: project.fileName)
+        } catch { return false }
         agg.sync {
             agg.sceneParseOK += 1
             agg.layerCount += doc.layers.count
@@ -558,7 +592,7 @@ public enum DeepScan {
         var matTextures: [String?] = []
         if shaderName == nil, let matPath = mp.material,
            let mData = res.scopedData(matPath, root: root),
-           let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any],
+           let mjson = AssetJSON.dictionary(mData),
            let mp0 = (mjson["passes"] as? [Any])?.first as? [String: Any] {
             shaderName = mp0["shader"] as? String
             for (k, v) in (mp0["combos"] as? [String: Any]) ?? [:] {
@@ -639,17 +673,17 @@ public enum DeepScan {
     static func parseParticle(name: String, package: ScenePackage, provenance: String, agg: DeepAgg) -> Bool {
         return autoreleasepool { () -> Bool in
             guard let data = package.data(for: name),
-                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                  let json = AssetJSON.dictionary(data) else {
                 agg.sync { agg.particleFileAttempt += 1; if agg.particleFailSamples.count < 8 { agg.particleFailSamples.append(provenance) } }
                 return false
             }
             var material: ParticleMaterial? = nil
             if let matPath = json["material"] as? String, let mData = package.data(for: matPath),
-               let mjson = (try? JSONSerialization.jsonObject(with: mData)) as? [String: Any] {
+               let mjson = AssetJSON.dictionary(mData) {
                 material = ParticleMaterial.parse(mjson)
             }
             let def = ParticleSystemDef.parse(json, material: material) { childPath in
-                (package.data(for: childPath)).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
+                (package.data(for: childPath)).flatMap { AssetJSON.dictionary($0) }
                     .map { ParticleSystemDef.parse($0, material: nil) }
             }
             // ParticleSystemDef.parse always returns a def; treat "has an emitter or initializer" as a real parse.
@@ -821,9 +855,20 @@ public enum DeepScan {
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
+    /// **[3차 웨이브 AB] 관용 파스 배선.** 종전 이 함수와 머티리얼·파티클 리더 4곳이 맨
+    /// `JSONSerialization` 이었다 — 즉 **스캐너가 렌더러보다 엄격했다**. WE 는 jsoncpp 의
+    /// `allowComments`/`allowTrailingCommas` 를 둘 다 켜고(`0x140091fe2`·`0x1400920b3`) WE 자기
+    /// 자산이 실제로 그 관용에 의존한다: 3,655개 자산 JSON 중 **63개가 JSONC** 이고, 그중
+    /// `defaultprojects/fantasticcar/materials/car/glass.json` 은 **머티리얼**(줄 주석)이다.
+    /// 엄격 파스가 실패하면 그 메시의 `textures`·`blending`·`constantshadervalues` 가 통째로
+    /// 유실되므로, 스캐너는 렌더러가 정상 처리하는 자산을 "실패" 로 셌다.
+    ///
+    /// `check_lenient_json_reach.py` 의 `WIRED` 표에 **이 파일이 없다** — 그 게이트는 코어·렌더의
+    /// 6파일만 세므로 스캐너의 이 공백을 잡지 못했다(그 스크립트는 이 과제 소유가 아니다.
+    /// 항목 추가안은 보고서로 넘긴다).
     static func rawJSON(_ url: URL) -> [String: Any]? {
         guard let d = try? Data(contentsOf: url) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+        return AssetJSON.dictionary(d)
     }
 
     static func firstExisting(_ urls: [URL]) -> URL? {

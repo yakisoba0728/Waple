@@ -316,6 +316,90 @@ final class WallpaperCompatibilityAnalyzerTests: XCTestCase {
         XCTAssertGreaterThan(report.summary.typeCounts["video"] ?? 0, 0)
     }
 
+    /// **[3차 웨이브 AB]** `remoteNetworkReference` 는 "요청을 만드는 자리"의 URL 만 본다.
+    ///
+    /// 종전 규칙(`https?://` 맨 부분일치)은 설치본 191 프로젝트에서 **2건 전건 거짓 양성**이었다:
+    /// GreenSock 라이선스 배너(`corsair_o_tron/js/TweenMax.min.js`)와 XML/SVG 네임스페이스 이름·
+    /// Angular 문서 링크(`corsair_collection/main.*.js`). 아래 음성군이 **그 실물 문자열 그대로**다.
+    func testRemoteRequestURLIgnoresNonRequestOccurrences() {
+        // 음성 — 설치본에서 실제로 오탐을 만들던 형태
+        let negatives = [
+            "/*! VERSION: 2.1.3 * DATE: 2019-05-06 * UPDATES AND DOCS AT: http://greensock.com */",
+            #"var e=t.createElementNS("http://www.w3.org/2000/svg","svg")"#,
+            #"throw new Error("see https://angular.io/docs/ts/latest/api/common/index/NgFor-directive.html")"#,
+            #"{"xmlns":"http://www.w3.org/1999/xhtml"}"#,
+            "// 자세한 내용: https://example.com/readme",
+        ]
+        for n in negatives {
+            XCTAssertNil(WallpaperCompatibilityAnalyzer.remoteRequestURL(in: n), n)
+        }
+
+        // 양성 — 브라우저가 실제로 로드를 시작하는 자리
+        let positives: [(String, String)] = [
+            (#"fetch('https://example.invalid/data.json');"#, "https://example.invalid/data.json"),
+            (#"<script src="https://cdn.example.com/lib.js"></script>"#, "https://cdn.example.com/lib.js"),
+            (#"<link rel="stylesheet" href="https://fonts.example.com/x.css">"#, "https://fonts.example.com/x.css"),
+            (#"img.src = "http://example.com/a.png";"#, "http://example.com/a.png"),
+            (#"new WebSocket("wss://x") ; new EventSource('https://example.com/sse')"#, "https://example.com/sse"),
+            (#"x.open("GET", "https://api.example.com/v1")"#, "https://api.example.com/v1"),
+            (#"import * as m from "https://esm.sh/pkg";"#, "https://esm.sh/pkg"),
+            (#"@font-face { src: url(https://fonts.example.com/f.woff2); }"#, "https://fonts.example.com/f.woff2"),
+            (#"@import "https://example.com/base.css";"#, "https://example.com/base.css"),
+        ]
+        for (source, expected) in positives {
+            XCTAssertEqual(WallpaperCompatibilityAnalyzer.remoteRequestURL(in: source), expected, source)
+        }
+    }
+
+    /// 위 규칙이 **프로젝트 단위 판정**까지 그대로 이어지는지 — 음성 프로젝트는 경고가 없어야 한다.
+    func testLicenseBannerURLDoesNotRaiseRemoteNetworkWarning() throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeProject(
+            id: "banner-only",
+            in: root,
+            json: #"{"type":"web","file":"index.html"}"#,
+            files: [
+                "index.html": #"<script src="js/vendor.js"></script>"#,
+                "js/vendor.js": """
+                /*! TweenMax 2.1.3 — DOCS AT: http://greensock.com */
+                var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                """
+            ]
+        )
+
+        let report = try WallpaperCompatibilityAnalyzer.scan(rootURL: root)
+        XCTAssertFalse(report.containsIssue(.remoteNetworkReference, projectID: "banner-only"))
+        let features = try XCTUnwrap(report.projects.first { $0.id == "banner-only" }?.detectedFeatures)
+        XCTAssertFalse(features.contains("remoteNetwork"), features.description)
+    }
+
+    /// **[3차 웨이브 AB]** `wallpaperPluginListener` — WE 웹 브리지 13종 중 Waple 이 정의하지 않는
+    /// 유일한 이름(근거는 `WallpaperCompatibilityIssueCode.webPluginBridge` 선언부). 설치본 web 2/2
+    /// 도달이라 코퍼스 감사 테스트가 개수를 고정하고, 여기서는 규칙 자체의 양성 대조를 둔다.
+    func testPluginListenerRaisesWebPluginBridgeWarning() throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try writeProject(
+            id: "icue-web",
+            in: root,
+            json: #"{"type":"web","file":"index.html"}"#,
+            files: [
+                "index.html": #"<script src="js/main.js"></script>"#,
+                "js/main.js": "window.wallpaperPluginListener = { onPluginLoaded: function(){} };"
+            ]
+        )
+
+        let report = try WallpaperCompatibilityAnalyzer.scan(rootURL: root)
+        XCTAssertTrue(report.containsIssue(.webPluginBridge, projectID: "icue-web"))
+        let features = try XCTUnwrap(report.projects.first { $0.id == "icue-web" }?.detectedFeatures)
+        XCTAssertTrue(features.contains("pluginBridge"), features.description)
+        // 렌더 자체는 되므로 치명이 아니다.
+        XCTAssertFalse(try XCTUnwrap(report.projects.first { $0.id == "icue-web" }).isBlocked)
+    }
+
     private func makeTempDirectory() throws -> URL {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("WapleCompat-\(UUID().uuidString)", isDirectory: true)

@@ -38,6 +38,16 @@ public enum WallpaperCompatibilityIssueCode: String, Codable, Equatable, CaseIte
     case webAudioListener
     case webMediaIntegration
     case remoteNetworkReference
+    // **[3차 웨이브 AB] 실물 대조로 찾은 거짓 음성.** `bin/webwallpaper64.exe` 의 웹 브리지 표면을
+    // 전수로 뜨면(ASCII `wallpaper[A-Za-z0-9_]{2,60}`) 13종이고 그중 하나가 `wallpaperPluginListener`
+    // (2회)다 — iCUE/Chroma LED 플러그인 채널. Waple 의 `WallpaperBridgeJS.swift` 는 이 이름을
+    // **한 번도 정의하지 않는다**(`grep -rn "PluginListener" Sources/` = 0건). 즉 벽지가 등록해도
+    // 콜백이 영영 안 오고 LED 연동이 조용히 죽는다.
+    // 도달: 설치본 web 프로젝트 **2/2 전건**(`corsair_o_tron/js/main.js` ·
+    // `corsair_collection/main.*.js`) — 이 코퍼스의 웹 벽지가 전부 iCUE 연동물이다. 종전에는
+    // 이 2건에 대해 분석기가 아무 말도 하지 않았다.
+    // 렌더 자체는 되므로 `.error` 가 아니라 `.warning`(형제 `webAudioListener` 와 같은 등급).
+    case webPluginBridge
 }
 
 public struct WallpaperCompatibilityIssue: Codable, Equatable {
@@ -141,6 +151,36 @@ public enum WallpaperCompatibilityAnalyzer {
     /// 지원 속성 타입 단일 소스 — DeepScan 의 known 목록도 이걸 참조(스캐너 간 불일치 방지).
     /// F229: "boo4"/"uwu" 는 AppLogicTests 의 PropertyControl.kind(forType:) 미지 타입 폴백 검증용
     /// 더미 문자열이었다(be10dad 에서 테스트와 동시에 잘못 유입) — 실제 WE 속성 타입이 아니므로 제거.
+    ///
+    /// **[3차 웨이브 AB · 2026-08-21 실물 대조 — 이 집합은 WE 스키마도 Waple 패널도 아니다]**
+    /// WE 가 아는 벽지 유저 프로퍼티 `type` 은 `ui/dist/scripts/scripts.js` 의
+    /// `views/includes/browseruserproperties.html` 템플릿(byte @750151, 길이 7,272)이 분기하는
+    /// **12종**: `bool color combo combolutfilters directory divider file scenetexture slider
+    /// textinput usershortcut volume` + 형제 템플릿 `browseruserpropertiesgroup.html` 의 `group`.
+    /// (형제 파일 `PropertyDecoration.swift:9` 가 같은 오프셋에서 같은 목록을 이미 인용한다.)
+    ///
+    /// 아래 집합과의 차이는 **양방향**이고, 어느 쪽도 근거가 없다:
+    ///   · **WE 에 있는데 여기 없음(3)**: `volume` `combolutfilters` `divider`
+    ///     → 실물이 쓰면 "not editable" 경고가 나간다. 이건 우연히 맞다(`PropertyControl.kind`
+    ///       가 셋 다 `.displayOnly`) — 근거가 아니라 우연이다.
+    ///   · **여기 있는데 WE 스키마에 없음(4)**: `checkbox` `text` `texture` `label`
+    ///     - `checkbox` 는 WE 에서 **템플릿 옵션·플러그인 설정**의 타입이지 벽지 프로퍼티 타입이
+    ///       아니다(`option.type === 'checkbox'`). `WallpaperProperties.parseValue` 가 `bool` 과
+    ///       함께 처리하므로 무해하다.
+    ///     - `texture` 는 WE **씬 에디터 오브젝트 인스펙터**의 타입이다(byte @994481,
+    ///       `ng-switch on="property.type"` — `readonly`/`readonlycolor` 등과 같은 namespace).
+    ///       벽지 `general.properties` 에서는 근거가 없다.
+    ///     - `text` `label` 은 `type==` 비교가 **0건**이다. `text`/`label` 은 프로퍼티의
+    ///       **필드 이름**(라벨 문자열·옵션 라벨)이라 형제 키 혼동으로 보인다. [미해결]
+    ///   · **이름이 뜻과 어긋난다**: 아래 이슈 문구는 "Waple 의 프로퍼티 패널이 편집 못 한다"인데
+    ///     `usershortcut` `group` `text` `label` `texture` 는 이 집합에 있으면서
+    ///     `PropertyControl.kind(forType:)`(`Sources/Waple/AppLogic.swift:365`)가 `.displayOnly` 를
+    ///     준다 — 즉 **경고가 나가야 하는데 안 나간다**.
+    ///
+    /// **집합을 지금 고치지 않는 이유**: 설치본 191 + 동봉 170 프로젝트에 등장하는 타입은
+    /// `color·slider·combo·bool` 넷뿐이라 위 어떤 차이도 **도달 0건**이고(코퍼스 감사 테스트가
+    /// 그 분포를 고정한다), 반대로 `group` 을 미지로 돌리면 워크샵 코퍼스(여기서 측정 불가)에서
+    /// 대량 경고가 난다. 정정안은 보고서로 넘긴다.
     public static let currentPropertyTypes: Set<String> = [
         "bool", "checkbox", "slider", "combo", "color", "textinput", "text",
         "file", "directory", "scenetexture", "texture", "usershortcut", "group", "label",
@@ -309,8 +349,22 @@ public enum WallpaperCompatibilityAnalyzer {
                     projectID: project.id
                 ))
             }
-            let hasScenePackage = FileManager.default.fileExists(atPath: folderURL.appendingPathComponent("scene.pkg").path)
-                || FileManager.default.fileExists(atPath: folderURL.appendingPathComponent("gifscene.pkg").path)
+            // 3차 웨이브 AB: **마운트 결정은 `ScenePackage.resolveMountSource` 하나다.** 종전 이 줄은
+            // `scene.pkg`/`gifscene.pkg` **이름 두 개의 존재**만 봤는데, 렌더러는 2026-08-21 부터
+            // `resolveMountSource`(SceneRenderer.swift:1454)를 쓴다 — `project.json` 의 `file` 이
+            // 단독 결정자이고 `.pkg` 는 그 파일이 디스크에 **없을 때만** 도는 폴백이다. 이 스캐너의
+            // 계약("이슈 없음 = 렌더 가능")은 두 결정이 같을 때만 참이므로 여기도 같은 함수를 부른다.
+            // 종전과 갈리던 자리 3종(전부 렌더러 쪽이 맞다):
+            //   ① `file:"techno.json"` 부재 + `techno.pkg` 존재 → 렌더러는 pkg 를 연다. 종전 스캐너는
+            //      이름이 안 맞아 못 찾고 폴더 마운트로 떨어져 **거짓 missingScenePackage** 를 냈다.
+            //   ② `Scene.pkg` 처럼 대소문자만 다른 표기 → `legacyPackageURL` 은 잡고 종전 스캐너는 놓쳤다.
+            //   ③ `file:"scene.json"` 이 실재하는데 잔존 `scene.pkg` 도 있을 때 → 렌더러는 **폴더**를,
+            //      종전 스캐너는 **pkg** 를 열어 서로 다른 씬을 검사했다.
+            // **코퍼스 도달 0건**: 설치본 191 + 동봉 170 전건에 `.pkg` 가 0개고 `file` 이 전건 실재한다
+            // (WallpaperCompatibilityCorpusAuditTests 가 그 분포를 고정한다). 즉 판정 수치는 안 움직인다.
+            let hasScenePackage: Bool
+            if case .package = sceneMountSource(project, folderURL: folderURL) { hasScenePackage = true }
+            else { hasScenePackage = false }
             if !hasScenePackage, !existingMainFile(project: project, folderURL: folderURL, issues: &issues) {
                 issues.append(WallpaperCompatibilityIssue(
                     severity: .error,
@@ -519,6 +573,11 @@ public enum WallpaperCompatibilityAnalyzer {
             if text.contains("wallpaperRequestRandomFileForProperty") {
                 add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.", path: source.path)
             }
+            // [3차 웨이브 AB] WE 웹 브리지 13종 중 Waple 이 **정의하지 않는** 유일한 이름
+            // (선언부 `webPluginBridge` 주석의 근거 참조). 설치본 web 2/2 도달.
+            if text.contains("wallpaperPluginListener") {
+                add("pluginBridge", .webPluginBridge, .warning, "Web wallpaper registers a Wallpaper Engine plugin listener (iCUE/Chroma LED channel); Waple's WKWebView bridge does not define wallpaperPluginListener, so those callbacks never arrive.", path: source.path)
+            }
             if text.contains("wallpaperRegisterAudioListener") {
                 add("audioListener", .webAudioListener, .warning, "Web wallpaper registers a Wallpaper Engine audio listener; verify Waple's audio bridge coverage for this project.", path: source.path)
             }
@@ -531,8 +590,25 @@ public enum WallpaperCompatibilityAnalyzer {
             if text.range(of: #"file:///"#, options: [.caseInsensitive]) != nil {
                 features.insert("fileURL")
             }
-            if text.range(of: #"https?://"#, options: [.regularExpression, .caseInsensitive]) != nil {
-                add("remoteNetwork", .remoteNetworkReference, .warning, "Web wallpaper references a remote (non-local) URL; Waple's offline WKWebView may block or fail this request.", path: source.path)
+            // **[3차 웨이브 AB] 종전 `https?://` 맨 부분일치는 설치본에서 2/2 전건 거짓 양성이었다.**
+            // 잡힌 두 건은 요청이 아니라 (a) 미니파이 라이브러리의 라이선스 배너(`http://greensock.com`
+            // — `corsair_o_tron/js/TweenMax.min.js`)와 (b) XML/SVG **네임스페이스 이름**·프레임워크
+            // 문서 링크(`http://www.w3.org/2000/svg`, `https://angular.io/docs/...` —
+            // `corsair_collection/main.*.js`)였다. 네임스페이스 URI 는 XML Namespaces 규약상
+            // **가져오지 않는 식별자**이고, 배너·에러메시지 문자열도 마찬가지다. 두 프로젝트를
+            // 실측하면 `corsair_o_tron` 은 `fetch`/`XMLHttpRequest`/`WebSocket`/`EventSource`/
+            // `sendBeacon` 이 **한 건도 없다** — 경고 문구("this request")가 가리키는 요청 자체가 없다.
+            //
+            // 그래서 **요청을 만드는 자리**의 URL 만 본다(아래 `remoteRequestURL`). 도달 실측:
+            // 설치본 191 + 동봉 170 프로젝트에서 2건 → **0건**(제거된 2건이 전부 거짓 양성이고
+            // 참 양성은 0건이었다). 양성 대조는 픽스처의 `fetch('https://example.invalid/...')` 로
+            // 계속 잡힌다(`WallpaperCompatibilityAnalyzerTests.testWebFeatureScanFollowsLocalScripts`).
+            //
+            // **알려진 한계(고치지 않음)**: URL 이 변수를 거치면(`var u = "https://…"; fetch(u)`)
+            // 못 잡는다. 정적 문자열 스캔의 원리적 한계이고, 종전 규칙은 그 대신 모든 문자열을
+            // 잡아 정밀도를 0 으로 만들었다.
+            if let remote = remoteRequestURL(in: text) {
+                add("remoteNetwork", .remoteNetworkReference, .warning, "Web wallpaper issues a request to a remote (non-local) URL (\(remote)); Waple's offline WKWebView may block or fail it.", path: source.path)
             }
         }
         return Array(features)
@@ -561,9 +637,15 @@ public enum WallpaperCompatibilityAnalyzer {
         // 이슈를 정통으로 맞는다. 설치본 실측으로 그 4건이 실재한다 — `ricepod.json`
         // `fantasticcar.json` `techno.json` `audiophile.json`(뒤 둘은 `type` 자체를 생략해서
         // `ProjectJSONParser` 의 확장자 추론으로 `.scene` 이 된다). 그래서 한 커밋에서 같이 고친다.
+        //
+        // ③ **[3차 웨이브 AB]** 마운트 **선택자**도 렌더러와 같아야 한다. 위 ①을 고칠 때는
+        //    `scene.pkg`/`gifscene.pkg` 이름 존재로 골랐는데, 렌더러는 그 뒤(2026-08-21)
+        //    `ScenePackage.resolveMountSource` 로 옮겼다. 갈리는 자리는 `analyzeTypeAndFiles` 의
+        //    같은 주석에 3종으로 적었다. 여기서도 같은 함수를 부른다.
         let package: ScenePackage
         let sourcePath: String
-        if let packageURL = scenePackageURL(in: folderURL) {
+        switch sceneMountSource(project, folderURL: folderURL) {
+        case .package(let packageURL):
             sourcePath = packageURL.lastPathComponent
             do {
                 package = try ScenePackage.parse(Data(contentsOf: packageURL))
@@ -577,16 +659,17 @@ public enum WallpaperCompatibilityAnalyzer {
                 ))
                 return []
             }
-        } else if let folderPackage = ScenePackage.fromDirectory(folderURL) {
+        case .directory:
             // 폴더 백엔드는 지연 읽기라 큰 프로젝트도 통째로 메모리에 올리지 않는다
             // (ScenePackage.fromDirectory 주석). 렌더러와 같은 진입점을 쓴다.
+            guard let folderPackage = ScenePackage.fromDirectory(folderURL) else {
+                // 렌더러도 이 경우 `assetMissing` 으로 실패한다(SceneRenderer.swift:1489) — 다만 폴더에
+                // project.json 이라도 있으면 `fromDirectory` 는 nil 이 아니므로 여기 오는 것은 읽을 파일이
+                // 하나도 없는 폴더뿐이다. 종전과 같이 조용히 통과시킨다(다른 게이트가 잡는 영역).
+                return []
+            }
             sourcePath = project.fileName ?? "scene.json"
             package = folderPackage
-        } else {
-            // 렌더러도 이 경우 `assetMissing` 으로 실패한다(SceneRenderer.swift:1229) — 다만 폴더에
-            // project.json 이라도 있으면 `fromDirectory` 는 nil 이 아니므로 여기 오는 것은 읽을 파일이
-            // 하나도 없는 폴더뿐이다. 종전과 같이 조용히 통과시킨다(다른 게이트가 잡는 영역).
-            return []
         }
         var features: Set<String> = ["scenePackage"]
 
@@ -650,12 +733,13 @@ public enum WallpaperCompatibilityAnalyzer {
         return features
     }
 
-    private static func scenePackageURL(in folderURL: URL) -> URL? {
-        for name in ["scene.pkg", "gifscene.pkg"] {
-            let url = folderURL.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: url.path) { return url }
-        }
-        return nil
+    /// 씬 마운트 결정 — **렌더러와 같은 함수 하나**(`SceneRenderer.swift:1454` 와 동형 호출).
+    /// 인자 셋을 여기서 한 번만 조립해, 두 소비처(`analyzeTypeAndFiles`·`analyzeSceneFeatures`)가
+    /// 서로 다른 결정을 내리는 것을 구조적으로 막는다.
+    private static func sceneMountSource(_ project: WallpaperProject, folderURL: URL) -> SceneMountSource {
+        ScenePackage.resolveMountSource(folderURL: folderURL,
+                                        fileName: project.fileName,
+                                        hasDependency: project.dependency != nil)
     }
 
     private struct WebFeatureSource {
@@ -694,6 +778,37 @@ public enum WallpaperCompatibilityAnalyzer {
         }
 
         return sources
+    }
+
+    /// **요청을 만드는 자리**에 놓인 원격 URL 하나(없으면 nil).
+    ///
+    /// 각 패턴은 "브라우저가 실제로 네트워크 로드를 시작하는 문법"에 대응한다:
+    ///   1. HTML 속성 / JS 프로퍼티 대입 — `<img src=…>` `<link href=…>` `el.src = "…"`
+    ///   2. 요청 API 의 첫 인자 — `fetch(…)` `importScripts(…)` `new Worker(…)` `new WebSocket(…)`
+    ///      `new EventSource(…)` `navigator.sendBeacon(…)` 동적 `import(…)` `require(…)`
+    ///   3. `XMLHttpRequest.open(method, url)` — URL 이 **둘째** 인자다
+    ///   4. ES 모듈 정적 import — `import x from "…"`
+    ///   5. CSS `url(…)` / `@import "…"`
+    /// 반환값은 경고 문구에 그대로 실어, 사람이 오탐 여부를 바로 판별할 수 있게 한다.
+    private static let remoteRequestPatterns: [String] = [
+        #"(?:src|href|srcset|poster|action)\s*=\s*["']?(https?://[^\s"'<>)]+)"#,
+        #"\b(?:fetch|importScripts|Worker|SharedWorker|WebSocket|EventSource|sendBeacon|import|require)\s*\(\s*["'](https?://[^"']+)["']"#,
+        #"\.open\s*\(\s*["'][A-Za-z]+["']\s*,\s*["'](https?://[^"']+)["']"#,
+        #"\bfrom\s+["'](https?://[^"']+)["']"#,
+        #"url\(\s*["']?(https?://[^)"']+)"#,
+        #"@import\s+["'](https?://[^"']+)["']"#,
+    ]
+
+    static func remoteRequestURL(in text: String) -> String? {
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        for pattern in remoteRequestPatterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = regex.firstMatch(in: text, range: range),
+                  match.numberOfRanges > 1,
+                  let hit = Range(match.range(at: 1), in: text) else { continue }
+            return String(text[hit].prefix(120))
+        }
+        return nil
     }
 
     private static func isWebFeatureTextPath(_ path: String) -> Bool {
