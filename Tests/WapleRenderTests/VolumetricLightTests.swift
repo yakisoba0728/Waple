@@ -66,7 +66,7 @@ final class VolumetricLightTests: XCTestCase {
          "general":{"fov":50.0,"clearcolor":"0 0 0"},
          "objects":[{"id":0,"model":"models/missing.mdl"},
                     {"id":1,"light":"point","origin":"0 0 0","angles":"0 0 0","color":"1 1 1","intensity":6,
-                     "innercone":10,"outercone":30,"castvolumetrics":true,"density":0,"volumetricsexponent":1},
+                     "innercone":10,"outercone":30,"castvolumetrics":true,"density":3,"volumetricsexponent":1},
                     {"id":2,"image":"models/offscreen.json","origin":"1000 1000 1000","size":"1 1"}]}
         """
         let files: [(String, Data)] = [
