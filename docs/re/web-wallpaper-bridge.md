@@ -217,7 +217,7 @@ WebGL 확장/텍스처 업로드의 **엔진 차이 보정층이 아니다**. **
 심볼은 전부 브라우저 UI(`wallpaperBrowseInner`, `wallpaperThumbnail` …)다. **정본은
 `webwallpaper64.exe` 의 `OnContextCreated` 와 그 안에서 평가되는 `___STAHP` 문자열이다.**
 
-### 3.1 네이티브 등록 전역 10개 — `OnContextCreated` 0x140013280–0x1400143f7
+### 3.1 네이티브 등록 전역 10개 — `OnContextCreated` 0x140013280–0x140014538
 
 등록 순서 그대로(각각 `CefV8Value::CreateFunction` → `global->SetValue`):
 
@@ -236,6 +236,14 @@ WebGL 확장/텍스처 업로드의 **엔진 차이 보정층이 아니다**. **
 
 같은 함수의 끝(0x140014345 `mov edx, 0x1730` = 5,936바이트, 0x140014390 `CefV8Context::Eval`)에서
 `___STAHP` 스크립트를 **document-start 에 평가**한다.
+
+> **[2026-08-21 정정] 함수 끝은 `0x1400143f7` 이 아니라 `0x140014538` 이다.**
+> `webwallpaper64.exe`(sha256 `51173dab…5b4f6d9d`, 위 표와 동일)의 `.pdata` 에서
+> `0x140013280` 은 **단편 하나짜리 함수 `0x140013280`–`0x140014538`** 이다
+> (`frag`/`primary`/`merged` 셋 다 같은 값). 이전 판의 `0x1400143f7` 은 "등록 10개가 끝나는
+> 자리" 지 함수 경계가 아니다 — 그 뒤로 `___STAHP` 평가 뒷정리와 에필로그가 0x141바이트 더 있다.
+> 위 §3.1 제목의 수치는 고쳤다. **주의: 이 문서의 VA 는 전부 `webwallpaper64.exe` 기준이라
+> `wallpaper64.exe` 의 `.pdata` 로 대조하면 전부 어긋난 것처럼 보인다**(함정 13).
 
 ### 3.2 `___STAHP` 스크립트가 만드는 전역 (문자열 @0x119ca0, 5,936바이트)
 

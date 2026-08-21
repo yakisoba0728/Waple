@@ -13,7 +13,45 @@
   `26f47974bc7672ac048b2c4bf7d61a3d`
   - 측정 중에도 트리가 바뀌었다. 첫 측정(00:35경)에서 미구현이던 `functions` · `action` ·
     `compose` 가 00:53 재측정에서 구현으로 바뀌었다(`WapleCore/EffectManifest.swift`).
-    아래 표는 **00:53 스냅샷 기준**이다.
+    아래 §5 표는 **00:53 스냅샷 기준**이다.
+
+---
+
+## 0. 재측정 — 2026-08-21 09:36 UTC (§5 표 22개 중 **20개가 구현됐다**)
+
+> **§5 의 22개 표는 00:53 스냅샷이다. 그 뒤 여러 커밋이 들어갔다.** 아래가 현재 트리 기준
+> 재판정이다. 판정 방법은 §3(b) 그대로 — `"키"` 형태 따옴표 리터럴이 **주석이 아닌 코드 줄**에
+> 있는지, 대상은 `Sources/**` 의 `.swift`/`.js`/`.h`/`.m`, `Sources/WapleRender/Resources/WEAssets/`
+> 제외. 재현 스크립트는 §부록 B.
+>
+> - 측정 시각 **2026-08-21 09:36 UTC**
+> - `Sources/**/*.swift`(WEAssets 제외) **158개**, 집합 md5 **`0e2c05a3b0487257f52e6d99d6cd206c`**
+>   (재현: `find Sources -name '*.swift' -not -path '*/Resources/WEAssets/*' | sort | xargs md5sum | md5sum`)
+> - 대상 파일(`.swift`/`.js`/`.h`/`.m`) 159개
+>
+> **측정 중에도 트리가 바뀐다 — 실측으로 확인했다.** 이 라운드에는 파티클 키 9개 ·
+> `keepaspect` · `lightconfig` 등을 **다른 작업자가 동시에 구현하고 있었다.**
+> 위 md5 를 09:36 에 뜬 뒤 **16분 안에 두 번 더 바뀌었다** — 09:46
+> `ffcc5716c730ee80dc3349c3e8785452`, 09:52 `8287287fbbf1e67d5f12f649719ca36e`.
+> (세 시점 모두 판정 결과는 위 4개로 같았다.) 그러니 이 절은 "현재 상태" 가 아니라
+> **09:36 md5 시점의 스냅샷**이다. md5 가 다르면 다시 재라 — 판정기는 §부록 B 에 그대로 있고
+> 1초 안에 끝난다.
+>
+> | 구분 | 개수 | 키 |
+> | --- | ---: | --- |
+> | 리터럴 판정 = 구현됨 | **18** | `schemecolor` `duration` `controlpointstartindex` `arcamount` `wraploop` `delay` `inputrangemax` `nopadding` `transparentsorting` `auto` `spritesheetrefreshsync` `cone` `lightconfig` `collisionbehavior` `keepaspect` `inputrangemin` `bouncefactor` `pointshadow` |
+> | 리터럴은 없지만 **동적 구성**(§3(c) 부류) | **2** | `controlpointangle1` `controlpointangle2` — `SceneDocument.swift:2964` 의 `io["controlpointangle\(i)"]`, `i in 0..<8`. `controlpoint1`/`controlpoint2` 와 **같은 오탐군**이다 |
+> | **여전히 미구현** | **2** | `version` · `description` |
+>
+> **남은 2개는 "고쳐야 할 갭" 이 아니다.** §5.2 가 이미 확정해 둔 대로 둘 다 엔진 쪽
+> **리더가 0**이다 — `version` 은 패키지/모듈 매니페스트 기록 경로에만 나오고
+> (`0x140056566`·`0x140040DA0`·`0x14011BB5D`), `description` 은 직렬화 좌변 1곳(`0x140056524`)뿐이다.
+> 즉 **엔진이 안 읽는 키를 Waple 도 안 읽는 것**이라 일치다.
+> `version` 이 `SceneDocument.swift:2798` 에 나오지만 그 줄은 주석이라 판정에 들지 않는다.
+>
+> **결론: 이 문서가 처음 세운 22개 목록은 사실상 소진됐다.** 남은 실질 갭은 **0개**다.
+> 다만 §4 가 밝힌 대로 "동봉 도달 0 이면서 미구현" 인 키는 이 문서의 사정권 밖이고,
+> 그쪽은 형제 문서 [`bundled-key-coverage.md`](bundled-key-coverage.md) 가 총계로 다룬다.
 
 ---
 
@@ -125,6 +163,10 @@ UTF-16 문자열은 Win32 경로·UI·로케일 전용이다. 즉 UTF-16 스캔�
   어느 쪽이든 이 문서의 22 와는 다른 모집단이다.
 
 ## 5. 미구현 키 — 동봉 도달 수 내림차순
+
+> **이 표는 2026-08-21 00:53 UTC 스냅샷이다 — 현재 판정은 §0 을 봐라.** 22개 중 20개가
+> 그 뒤 구현됐다(리터럴 18 + 동적 구성 2). 표를 지우지 않고 남기는 이유는 **동봉 도달 수 ·
+> 값 분포 · 바이너리 귀속** 이 여전히 유효한 측정이기 때문이다. "미구현" 열만 낡았다.
 
 동수일 때는 non-preview 파일 수, 그다음 키 이름 순으로 정렬했다.
 "non-prev" 는 경로에 `preview` 가 없는 파일 수 — 실제 씬에서의 도달을 뜻한다.
@@ -256,6 +298,48 @@ UTF-16 문자열은 Win32 경로·UI·로케일 전용이다. 즉 UTF-16 스캔�
    센다. 고유 키 511, 후보와의 교집합 270.
 3. **소스 대조** — `Sources/**/*.{swift,js,h,m}` 중 `Resources/WEAssets` **제외** 155개 파일에서
    `"키"` 리터럴이 주석이 아닌 줄에 있는지 본다. 미등장 29.
+
+   §0 재측정에 쓴 판정기(그대로 붙여 쓸 수 있다 — `//` 줄 주석 · `///` 문서 주석 ·
+   `/* … */` 블록 주석 · 줄 끝 `//`(따옴표 밖의 것만)을 전부 지우고 남은 코드에서만 찾는다):
+
+   ```python
+   import os, re
+   ROOT = "/home/user/Waple"
+   EXCL = os.path.join(ROOT, "Sources", "WapleRender", "Resources", "WEAssets")
+   files = [os.path.join(dp, f)
+            for dp, _, fn in os.walk(os.path.join(ROOT, "Sources")) if not dp.startswith(EXCL)
+            for f in fn if f.endswith((".swift", ".js", ".h", ".m"))]
+
+   def code_lines(path):
+       out, inblock = [], False
+       for ln, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
+           s = line.strip()
+           if inblock:
+               if "*/" in s: inblock = False; s = s.split("*/", 1)[1]
+               else: continue
+           while "/*" in s:
+               pre, rest = s.split("/*", 1)
+               if "*/" in rest: s = pre + rest.split("*/", 1)[1]
+               else: s = pre; inblock = True; break
+           if s.startswith(("//", "///", "*")): continue
+           q = esc = False; cut = None                       # 따옴표 밖의 `//` 만 자른다
+           for i, ch in enumerate(s):
+               if esc: esc = False; continue
+               if ch == "\\": esc = True; continue
+               if ch == '"': q = not q; continue
+               if not q and ch == "/" and s[i:i+2] == "//": cut = i; break
+           if cut is not None: s = s[:cut]
+           if s: out.append((ln, s))
+       return out
+
+   CACHE = {p: code_lines(p) for p in files}
+   def implemented(key):
+       return [(p, ln, s) for p, L in CACHE.items() for ln, s in L if '"%s"' % key in s]
+   ```
+
+   **이 판정기는 동적 구성을 못 잡는다** — `io["controlpointangle\(i)"]` 같은 보간은
+   리터럴이 없어 "미구현" 으로 나온다. §3(c) 가 그 부류를 손으로 걸러 내는 이유다.
+   그리고 이 판정기는 **리터럴의 존재**만 본다 — 그 값이 실제로 소비되는지는 보지 않는다.
 4. **오탐 제거** — §3(c) 의 7개(동적 보간 2 + `constantshadervalues` 슬롯 5). 최종 22.
 5. **바이너리 귀속** — `scripts/re/xref.py` 로 문자열 VA 와 `lea`/SSO 참조를 잡고
    `.pdata` 로 함수 경계를 잡는다(체인된 조각은 병합해야 한다). 짧은 키·13–15자 키는
