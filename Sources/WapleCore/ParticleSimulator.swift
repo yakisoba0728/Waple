@@ -38,6 +38,42 @@ public struct Particle {
     public init() {}
 }
 
+/// 파티클 시스템이 얹힌 오브젝트의 월드 회전 3×3 — **행우선**(행 r = 오브젝트 월드행렬 r번째 행의 앞 3성분).
+///
+/// 실물은 오브젝트 4×4(행당 4float, 대각이 바이트 0·0x14·0x28·0x3c — 0x14005f680 이 그 배치로 굽는다)에서
+/// 각 행의 앞 3성분만 뽑아 촘촘한 3×3 을 만든다(0x1400dd7d0: rdx 의 0,4,8 / 0x10,0x14,0x18 / 0x20,0x24,0x28
+/// → rcx 의 0..8). 곱셈 0x1401f87e0 은 `out.x = v.x·m0 + v.y·m1 + v.z·m2` 꼴이라 **행과 내적**한다.
+///
+/// D3D 행우선 관례에서 그 행들은 오브젝트 로컬 기저를 월드로 옮긴 벡터(right/up/forward)이므로,
+/// 행과의 내적 = 기저에 대한 투영 = **월드 → 로컬** 변환이다(직교 회전에서 R 의 전치).
+public struct ParticleWorldBasis: Equatable {
+    public var row0: SIMD3<Float>
+    public var row1: SIMD3<Float>
+    public var row2: SIMD3<Float>
+
+    public init(row0: SIMD3<Float>, row1: SIMD3<Float>, row2: SIMD3<Float>) {
+        self.row0 = row0; self.row1 = row1; self.row2 = row2
+    }
+
+    public static let identity = ParticleWorldBasis(row0: SIMD3(1, 0, 0),
+                                                    row1: SIMD3(0, 1, 0),
+                                                    row2: SIMD3(0, 0, 1))
+
+    /// 열우선 4×4 월드행렬의 좌상단 3×3 을 **전치해** 받아들인다 — 열우선 저장에서 열 c 가 곧
+    /// 실물 행우선 행 c 이기 때문이다(둘 다 "로컬 기저의 월드 이미지"라는 같은 것을 가리킨다).
+    /// 인자는 열 벡터 3개(월드행렬 columns.0/1/2 의 xyz).
+    public init(worldColumns c0: SIMD3<Float>, _ c1: SIMD3<Float>, _ c2: SIMD3<Float>) {
+        self.init(row0: c0, row1: c1, row2: c2)
+    }
+
+    /// 실물 0x1401f87e0 과 같은 곱: `out.c = dot(row_c, v)`.
+    public func apply(_ v: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3(row0.x * v.x + row0.y * v.y + row0.z * v.z,
+              row1.x * v.x + row1.y * v.y + row1.z * v.z,
+              row2.x * v.x + row2.y * v.y + row2.z * v.z)
+    }
+}
+
 /// 순수 CPU 파티클 시뮬레이터(Metal/벽시계 無, 시드 결정적).
 public struct ParticleSimulator {
     private let def: ParticleSystemDef
@@ -47,7 +83,20 @@ public struct ParticleSimulator {
     private var time: Float = 0
 
     // 파생 오퍼레이터(스폰 시/표시 시 참조) 캐시.
-    private let movements: [(gravity: SIMD3<Float>, drag: Float)]
+    /// `movement` 오퍼레이터 캐시. `worldGravity` = 오퍼레이터 `flags & 1`(중력이 월드 벡터).
+    private let movements: [(gravity: SIMD3<Float>, drag: Float, worldGravity: Bool)]
+    /// `movements` 와 1:1 — 이번 프레임에 실제로 실을 중력. `worldGravity` 인 항목은
+    /// `worldBasis` 로 월드 → 로컬 변환된 값이 들어간다(변환 없는 항목은 원본 그대로).
+    /// 파티클 루프 안에서 매번 3×3 을 곱지 않도록 `worldBasis` 가 바뀔 때만 다시 굽는다.
+    private var movementGravity: [SIMD3<Float>]
+    /// 시스템 최상위 `flags & 1`(worldspace) — 이미 월드 공간 시뮬이라 중력 변환을 건너뛴다
+    /// (실물 0x14023fde9 `test byte [rsi+0x20], 1` → `jne` 로 회전 블록 스킵).
+    private let simulatesInWorldSpace: Bool
+    /// 이 파티클 시스템이 놓인 오브젝트의 월드 회전(행우선 3×3). 렌더러가 매 프레임/마운트 시 넣는다.
+    /// 기본 항등 = 변환 없음(2D 정사영 경로처럼 회전 개념이 없는 곳은 손대지 않아도 무회귀).
+    public var worldBasis: ParticleWorldBasis = .identity {
+        didSet { if worldBasis != oldValue { bakeMovementGravity() } }
+    }
     private let angulars: [(force: SIMD3<Float>, drag: Float)]
     private let sizeChanges: [(st: Float, et: Float, sv: Float, ev: Float)]
     private let colorChanges: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)]
@@ -155,7 +204,7 @@ public struct ParticleSimulator {
         self.rng = SplitMix64(seed: seed)
         self.acc = Array(repeating: 0, count: def.emitters.count)
 
-        var mv: [(SIMD3<Float>, Float)] = []
+        var mv: [(SIMD3<Float>, Float, Bool)] = []
         var ang: [(SIMD3<Float>, Float)] = []
         var sc: [(st: Float, et: Float, sv: Float, ev: Float)] = []
         var cc: [(st: Float, et: Float, sv: SIMD3<Float>, ev: SIMD3<Float>)] = []
@@ -180,7 +229,7 @@ public struct ParticleSimulator {
         for (opIdx, op) in def.operators.enumerated() {
             let bw = opIdx < def.operatorBlends.count ? def.operatorBlends[opIdx] : BlendWindow.identity
             switch op {
-            case let .movement(g, drag): mv.append((s3(g), drag))
+            case let .movement(g, drag, flags): mv.append((s3(g), drag, flags & 1 != 0))
             case let .angularMovement(f, drag): ang.append((s3(f), drag))
             case let .sizeChange(st, sv, ev, et):
                 sc.append((st: st, et: et, sv: sv, ev: ev))
@@ -247,7 +296,10 @@ public struct ParticleSimulator {
             }
         }
         mdistBetween = mdistBtw.map { (start: $0.0, end: $0.1) }
-        movements = mv.map { (gravity: $0.0, drag: $0.1) }
+        movements = mv.map { (gravity: $0.0, drag: $0.1, worldGravity: $0.2) }
+        // worldBasis 기본이 항등이라 초기 구움은 원본 중력 그대로다(무회귀).
+        movementGravity = mv.map { $0.0 }
+        simulatesInWorldSpace = def.flags & 1 != 0
         angulars = ang.map { (force: $0.0, drag: $0.1) }
         sizeChanges = sc
         colorChanges = cc
@@ -316,6 +368,17 @@ public struct ParticleSimulator {
         return childStates[first].flatMap { $0.sim.descendantDisplay(path: rest) }
     }
 
+    /// `worldBasis` 가 바뀔 때마다 `movementGravity` 를 다시 굽는다.
+    /// 실물 게이트(0x14023fde2 오퍼레이터 flags bit0 AND 0x14023fde9 시스템 worldspace 비트가 꺼짐)를
+    /// 그대로 옮겼다 — 둘 중 하나만 어긋나도 원본 중력이 그대로 실린다.
+    private mutating func bakeMovementGravity() {
+        for i in movements.indices {
+            let m = movements[i]
+            movementGravity[i] = (m.worldGravity && !simulatesInWorldSpace) ? worldBasis.apply(m.gravity)
+                                                                            : m.gravity
+        }
+    }
+
     private mutating func rollProbability(_ p: Float) -> Bool {
         p >= 1 || rng.nextFloat() < p
     }
@@ -324,6 +387,7 @@ public struct ParticleSimulator {
         let mix = UInt64(UInt(bitPattern: uid &* 31 &+ li &+ 1))
         var s = ParticleSimulator(def: link.def, seed: parentSeed &+ 0x9E37_79B9_7F4A_7C15 &* mix)
         s.emitOrigin = origin
+        s.worldBasis = worldBasis   // 자식은 부모와 같은 오브젝트에 얹히므로 기저도 같다
         return ChildInstance(sim: s, parentUID: uid,
                              oneShot: link.trigger == .spawnBurst || link.trigger == .deathBurst)
     }
@@ -496,8 +560,9 @@ public struct ParticleSimulator {
             let sp = simd_length(particles[k].vel)
             if sp > cap { particles[k].vel *= cap / sp }
         }
-        for m in movements {
-            particles[k].vel += m.gravity * dt
+        for (mi, m) in movements.enumerated() {
+            // movementGravity[mi] = worldGravity 면 worldBasis 로 월드→로컬 변환된 중력, 아니면 m.gravity.
+            particles[k].vel += movementGravity[mi] * dt
             // 실물 0x14023fe65–0x14023fe6d: drag 는 **dtScaled**(중력은 위에서 생 dt). 클램프는
             // `min(x, 0x1.fffffep-1)`(상수 0x140492700 = 0.9999998807907104 @0x14023fe48) 이라
             // 배수가 0 이 아니라 ~1.19e-7 로 바닥친다 — 실질 차이는 없지만 공짜라 맞춰 둔다.
