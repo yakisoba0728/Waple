@@ -12,6 +12,13 @@ import Foundation
 /// 못해 본문에 그대로 남긴다(0x14016c1f8 → 0x14016bbb0 의 "미지의 지시문" 경로).
 /// 이 파일은 그 9종을 전부 다룬다(`#require` 는 소비만 — 아래 분기의 [미해결] 참조).
 public enum ShaderPreprocessor {
+    /// 실물이 지시문으로 **인식하는 이름 9종**(디스패처 0x14016b0e0-0x14016c3f8 · 줄 인식 정규식
+    /// `^\s*#\s*([a-z]+)\b\s*(.*)` — 원본 파일오프셋 0x48be48 부근의 키워드 풀과 일치).
+    /// `version`/`extension`/`pragma`/`error`/`line` 은 **여기 없다** — 실물이 못 알아보고 본문에 남긴다.
+    static let engineDirectives: [String] = [
+        "ifndef", "ifdef", "define", "elif", "endif", "else", "undef", "require", "if",
+    ]
+
     /// - combos: scene.json 에서 온 명시적 콤보 값(소스의 [COMBO] 기본값보다 우선).
     /// - include: `#include "name"` → 헤더 소스(없으면 nil → 빈 인라인).
     public static func preprocess(_ source: String, combos: [String: Int],
@@ -117,9 +124,13 @@ public enum ShaderPreprocessor {
     }
 
     /// `// [COMBO] {"combo":"NAME","default":N,...}` → [NAME: N].
-    /// `public` 인 이유: 렌더러(WapleRender)가 **선언된 콤보 이름 집합**을 알아야 씬 저작 키의
-    /// 대소문자를 선언 철자로 정규화할 수 있다(G-A3-1 — `resolvePassCombos`). 반환값은 순수 파스
-    /// 결과라 노출에 위험이 없다.
+    /// **[2026-08-21] `public` 이던 사유는 사라졌다.** 종전 사유는 "렌더러(WapleRender)의
+    /// `resolvePassCombos` 가 선언된 콤보 이름 집합을 알아야 씬 저작 키를 선언 철자로 정규화한다"
+    /// (G-A3-1) 였는데, 그 정규화가 `GLSLTranslator.uppercasedComboKeys`(선언 유무와 무관한 전건
+    /// 대문자화 — 실물 `toupper` 0x14015458c-0x1401545aa 와 같은 계약)로 옮겨가면서 그 호출부가
+    /// 없어졌다. 지금 모듈 밖 호출자는 **테스트뿐**이다(`Sources/WapleRender/**` 의
+    /// `ShaderPreprocessor` 참조 0건, 2026-08-21 실측). `internal` 로 낮춰도 되지만 반환값이
+    /// 순수 파스 결과라 노출에 위험이 없어 그대로 둔다.
     public static func parseComboDefaults(_ source: String) -> [String: Int] {
         var out: [String: Int] = [:]
         // **CRLF 함정 — 반드시 `isNewline` 로 쪼갠다.** Swift 의 `"\r\n"` 은 **단일 grapheme** 이라
@@ -132,7 +143,8 @@ public enum ShaderPreprocessor {
         // 왜 여태 안 터졌나: `preprocessStrict`(:20-22)가 **자기 입력만** CRLF 정규화하고 그 안에서
         // 다시 부르므로 단일 스테이지 기본값은 복구된다. 구멍은 **정규화 밖의 호출부**다 —
         // `GLSLTranslator._translate`(:173)의 교차스테이지 union 과
-        // `WapleRender/SceneRendererResources.swift:948-949`의 `resolvePassCombos` 가 raw 소스를 넘긴다.
+        // `WapleRender/SceneRendererResources.swift` 의 `resolvePassCombos`(선언 :1042 · 호출부 :784,
+        // 2026-08-21 기준 — 이제 `frag` **하나만** 넘긴다)가 raw 소스를 넘긴다.
         // 형제 함수 `GLSLTranslator.samplerCombos`/`formatComboSlots` 는 이미 `isNewline` 로 쪼개고
         // 그 이유를 주석에 적어 두었다 — 그 수정이 이 함수로 전파되지 않았던 것이다.
         for line in source.split(whereSeparator: { $0.isNewline }) {
@@ -205,9 +217,32 @@ public enum ShaderPreprocessor {
             // 지시문 줄 트레일링 주석 제거 — `#if C_TYPE == 4 // 설명` 이 식 평가를 깨면
             // 관용 유지로 모든 분기가 방출된다(실물 frame_builder 의 offset 재정의 원인).
             // `/* */` 도 절단 — 잔존 시 ExprEval 이 `/`·`*` 를 연산자로 토큰화해 오평가(`#if AUDIO /* mic */`).
+            // **[2026-08-21 정정] 실물은 절단이 아니라 "건너뛰고 계속" 이다.** `#if` 식 렉서
+            // (0x140166a90-0x1401670ba)가 `/` 를 보면 `//` 는 줄 끝까지(0x140166b10-0x140166b26),
+            // `/* */` 는 닫는 자리까지(0x140166b28-0x140166b74) 삼키고 **그 뒤부터 다시 렉싱한다.**
+            // 즉 `#if A /* x */ == 1` 을 실물은 `A == 1` 로 보고 우리는 `A` 로 본다 — 값이 갈릴 수 있다.
+            // `//` 는 어차피 줄 끝이라 결과가 같다. 동봉·설치본 자산에서 지시문 줄에 `/*` 가 오는
+            // 경우는 **0건**(실측)이라 지금은 도달 없음. 고치려면 절단이 아니라 "구간 삭제" 여야 한다.
             if t.hasPrefix("#") {
                 if let c = t.range(of: "//") { t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces) }
                 if let c = t.range(of: "/*") { t = String(t[..<c.lowerBound]).trimmingCharacters(in: .whitespaces) }
+                // G4 — `# if COND` 처럼 `#` 와 키워드 사이에 공백이 있어도 실물은 **지시문으로 읽는다**:
+                // 줄 인식 정규식이 `^\s*#\s*([a-z]+)\b\s*(.*)`(원본 파일오프셋 0x48be48, 그 직후에
+                // SHADERVERSION/69/ifndef/ifdef/define/elif/if/endif/else/undef/require 문자열이 이어진다).
+                // 아래 검사는 전부 `hasPrefix("#if ")` 류라 종전에는 이 형태를 **못 알아보고**
+                // 지시문 줄을 본문으로 흘려보냈다 — 짝 `#endif` 만 소비돼 조건부가 어긋난다.
+                // **아는 9종에만** 공백을 접는다. `# version 120` 같은 미지의 지시문은 실물도
+                // 지시문으로 취급하지 않고 본문에 그대로 남기므로(0x14016c1f8 → 0x14016bbb0) 손대면 안 된다.
+                // 동봉·설치본 자산에는 이 형태가 0건이다(실측) — 워크샵 셰이더 대비의 잠복 게이트.
+                if t.dropFirst().first == " " || t.dropFirst().first == "\t" {
+                    let rest = t.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
+                    let isKnown = Self.engineDirectives.contains {
+                        guard rest.hasPrefix($0) else { return false }
+                        guard let n = rest.dropFirst($0.count).first else { return true }
+                        return !(n.isLetter || n.isNumber || n == "_")
+                    }
+                    if isKnown { t = "#" + rest }
+                }
             }
             // `#if(cond)`/`#elif(cond)` — `#if`/`#elif` 뒤 공백 없이 `(` 가 오면 아래 prefix 검사가 놓쳐
             // 지시문이 MSL 에 그대로 방출되고 짝 `#endif` 만 소비돼 미종결 조건부가 된다(실물 halftone).
@@ -227,7 +262,8 @@ public enum ShaderPreprocessor {
                 else if t.hasPrefix("#ifndef ") { cond = !isDefined(token(after: "#ifndef", t)) }
                 else {
                     let expr = String(t.dropFirst(3))
-                    if let v = ExprEval.evalChecked(expr, defines: d, definedNames: definedNames(), suspect: suspectDefines) {
+                    if let v = ExprEval.evalChecked(expr, defines: d, definedNames: definedNames(),
+                                                    suspect: suspectDefines, textDefines: textDefines) {
                         cond = v != 0
                     } else if parentActive {
                         // F610: 미지원 식이지만 단순 #if/#else/#endif 형태에서 양 분기 텍스트가 동일하면
@@ -251,7 +287,8 @@ public enum ShaderPreprocessor {
                 var cond = false
                 if !f.taken {
                     let expr = String(t.dropFirst(5))
-                    if let v = ExprEval.evalChecked(expr, defines: d, definedNames: definedNames(), suspect: suspectDefines) {
+                    if let v = ExprEval.evalChecked(expr, defines: d, definedNames: definedNames(),
+                                                    suspect: suspectDefines, textDefines: textDefines) {
                         cond = v != 0
                     } else if f.parentActive {
                         // F421: #elif 도 동일 — 활성 체인의 미지원 식은 거부.
@@ -637,7 +674,8 @@ enum ExprEval {
     /// 렉서가 모르는 문자(`? : . ; @ …`)·10진으로 못 읽는 수치 define(suspect) 참조·잔여 토큰.
     /// (`% & | ^ ~ << >>`·16진/접미 리터럴은 **더 이상 거부가 아니라 평가**된다 — 실물과 같게.)
     static func evalChecked(_ expr: String, defines: [String: Int], definedNames: Set<String>? = nil,
-                            suspect: Set<String> = []) -> Int? {
+                            suspect: Set<String> = [], textDefines: [String: String] = [:],
+                            macroDepth: Int = 0) -> Int? {
         let lexed = tokenize(expr)
         guard !lexed.unsupported else { return nil }
         let toks = lexed.tokens
@@ -672,7 +710,25 @@ enum ExprEval {
             }
             if let n = Int(t) { return n }
             if suspect.contains(t) { failed = true; return 0 }  // `#define X 1.5` 류 — 10진 평가 불가
-            return defines[t] ?? 0
+            if let v = defines[t] { return v }
+            // G5 — **실물은 `#if` 식 안에서도 매크로를 확장한다.** 확장은 파서가 아니라 **렉서**가 한다:
+            // 식별자를 매크로맵에서 찾으면(0x140166c39-0x140166cb1) 본문 포인터를 스택에 밀고
+            // (0x140166cc1-0x140166db7 `inc dword [rbx+0x40]`) 그 자리에서 **재렉싱**하며, 본문이
+            // 끝나면 팝한다(0x140166ada-0x140166af7 `dec`). 깊이 캡은 **0x63 = 99**
+            // (0x140166cb7 `cmp dword [rbx+0x40], 0x63; jge` → 넘으면 그냥 식별자 토큰(2)).
+            // 그래서 `#define A B` + `#define B 1` 에서 `#if A` 가 실물은 **참**이다.
+            // 종전 Waple 은 정수 값 맵(`d`)만 봐서 이런 이름을 전부 **0** 으로 읽었다.
+            // 여기서 본문을 재귀 평가해 같은 결말로 맞춘다. 본문이 식으로 안 읽히면 **0**
+            // (실물도 미지 식별자를 0 으로 보고 잔여 토큰은 그냥 버린다 — 거부가 아니다).
+            // 동봉·설치본 자산에서 `#if` 가 비-정수 object-like 매크로를 참조하는 경우는 **0건**(실측)
+            // 이라 도달은 워크샵 셰이더뿐이다.
+            if let body = textDefines[t], macroDepth < 99 {
+                var inner = textDefines
+                inner.removeValue(forKey: t)   // 자기 참조(`#define A A`) 무한재귀 차단
+                return evalChecked(body, defines: defines, definedNames: knownNames,
+                                   suspect: suspect, textDefines: inner, macroDepth: macroDepth + 1) ?? 0
+            }
+            return 0
         }
         // 산술은 랩핑(&*, &+, &-) + 나눗셈 트랩 가드 — #if 는 분기 결정만 하면 되므로 근사면 충분하고,
         // 악성 리터럴(`#if 9223372036854775807+1`)의 오버플로 트랩(크래시) 방지가 우선.
