@@ -2069,6 +2069,87 @@ extension SceneRenderer {
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
     }
 
+    /// 파티클 시스템이 얹힌 노드의 월드행렬(부모 체인 · 스케일 포함, 열우선).
+    /// `encode3DParticles` 의 드로우 행렬(`pWorld * modelMatrix(origin3D,angles3D,scale3D)`)과 **같은 식**이다 —
+    /// 시뮬 기저와 드로우 배치가 갈리면 조용히 어긋나므로 한 곳에 둔다. 가시성 판정은 여기서 하지 않는다
+    /// (비가시는 드로우를 막을 뿐 시뮬은 계속 돈다 — 기존 `stepParticleSnapshots` 규약).
+    static func particleWorldMatrix(_ sys: GPUParticleSystem, parentWorld: simd_float4x4) -> simd_float4x4 {
+        parentWorld * Scene3DMath.modelMatrix(origin: sys.origin3D, angles: sys.angles3D, scale: sys.scale3D)
+    }
+
+    /// 이 def(자손 링크 포함) 중 하나라도 `ParticleSimulator.worldBasis` 를 **실제로 소비**하는가.
+    ///
+    /// 소비 조건은 `bakeMovementGravity` 의 게이트 그대로다: `movement` 오퍼레이터 `flags & 1`(월드 중력)
+    /// **이면서** 그 시스템의 최상위 `flags & 1`(worldspace)이 꺼져 있을 것. 실물도 두 비트를 연달아 본다
+    /// (`test byte [r14+0x1c], 1` @0x14023fde2 → `test byte [rsi+0x20], 1` @0x14023fde9 — 둘 중 하나만
+    /// 어긋나도 원본 중력이 그대로 실린다).
+    ///
+    /// 게이트를 통과하지 못하면 **대입 자체를 건너뛴다** — `worldBasis` 는 항등으로 남고 `didSet` 도 안
+    /// 불려 `movementGravity` 재구움조차 없다(비-대상 시스템 산술 비트동일).
+    ///
+    /// 자손까지 보는 이유: `ParticleSimulator.makeInstance` 가 자식 sim 을 만들 때 부모의 `worldBasis` 를
+    /// 복사한다(같은 오브젝트에 얹히므로). 루트가 조건에 안 맞아도 자식이 맞으면 루트에 심어야 전달된다.
+    /// `depth` 는 순환 링크가 없다는 전제의 안전판이다(파스는 트리를 만들지만 방어).
+    static func particleNeedsWorldBasis(_ def: ParticleSystemDef, depth: Int = 0) -> Bool {
+        if def.flags & 1 == 0 {
+            for op in def.operators {
+                if case let .movement(_, _, flags) = op, flags & 1 != 0 { return true }
+            }
+        }
+        guard depth < 8 else { return false }
+        return def.children.contains { particleNeedsWorldBasis($0.def, depth: depth + 1) }
+    }
+
+    /// 루트 sim 에 오브젝트 월드 기저를 먹인다(`docs/re/particle-world-basis.md`).
+    ///
+    /// 실물은 시뮬 VM 의 `movement` 핸들러에서 파티클 시스템이 얹힌 노드의 **월드 4×4**(변환 스택 top,
+    /// `[[psys+0] + 0x30]` — 0x14023fdef–0x14023fdf9)를 통째로 읽어 16바이트 블록 0..2 의 앞 3성분만
+    /// 촘촘한 3×3 으로 복사하고(0x1400dd7d0 — `mov` 9회뿐인 순수 복사, 정규화·역행렬 없음)
+    /// `out.c = dot(row_c, v)`(0x1401f87e0)로 곱한다. 그래서:
+    ///   • **행우선**, 행 c = 로컬 축 c 의 월드 이미지 → Waple 열우선 월드행렬의 **열** c 와 같다.
+    ///   • **스케일 포함**(정규화 코드가 없다 — 회전만 뽑는 경로가 아니다).
+    ///   • **부모 체인 포함**(그 4×4 는 씬그래프 변환 스택의 top: push 가 부모 top 을 복제하고
+    ///     `out = local · parent`(0x14005ecb0)로 눌러 쓴다 — 0x14022efcc–0x14022f02d·0x1402375f5–0x140237667).
+    /// 그래서 여기서도 `m` 을 정규화하지 않고 열을 그대로 넘긴다.
+    ///
+    /// 단 그 합성은 **무조건이 아니다**: 0x14023761b 이 시스템 worldspace 비트를 먼저 보고, 켜져 있으면
+    /// 부모 top 을 합성하지 않고 오브젝트 **로컬** 4×4 를 top 에 통째로 덮어쓴다(0x140237628–0x140237646).
+    /// 우리 게이트는 worldspace 를 배제하므로 이 분기에는 닿지 않는다 — 즉 `worldBasis` 를 먹는 시스템의
+    /// top 은 항상 `parent · local` 전체 체인이다. (worldspace 쪽 드로우 규약은 `particle3DVertices` 소관.)
+    ///
+    /// **행/열 규약을 확정한 근거**(추론이 아니라 관측): 실물이 *같은* 4×4 를 두 조각으로 쪼개는 자리가
+    /// 있다 — 0x140238dd6 이 블록 0..2 를 0x1400dd7d0 으로 기저 3×3 으로 뽑고, 곧바로 0x140238de4 가
+    /// `Matrix::block(3)`(0x14005f600, `m + 16*i`)로 블록 3 을 집어 그 앞 3성분을 **위치**로 읽는다
+    /// (0x140238de9–0x140238df4). 즉 실물 4×4 의 바이트 배치는 `블록0..2 = 기저 | 블록3 = 병진` 이고,
+    /// 이는 Waple `simd_float4x4`(열우선: columns.0..2 = 기저, columns.3 = 병진)와 **바이트 동일**이다.
+    /// 그래서 바이트 {0,4,8}/{0x10,0x14,0x18}/{0x20,0x24,0x28} = `m.columns.0/1/2 .xyz` 로 그대로 대응한다
+    /// (셰이더 `mul` 규약 `spec/engine/mul-convention.json` 은 업로드 측 전치 때문에 근거가 못 된다 —
+    /// 실제로 0x1401928e0 이 백엔드 플래그로 4×4 를 전치해 올린다. CPU 배치만이 증거다).
+    ///
+    /// 소비처가 하나뿐이라는 것도 확인했다 — 0x1401f87e0 의 호출자는 전 바이너리에서 0x14023fe13 **1건**이다.
+    /// 그래서 `worldBasis` 가 `bakeMovementGravity` 말고 다른 데로 새지 않는다.
+    ///
+    /// 비유한 성분(스크립트가 NaN 을 낸 origin/angles/scale)이면 대입을 건너뛴다 — 굽힌 중력이 NaN 이면
+    /// 파티클이 통째로 사라져 "회전 미적용" 보다 훨씬 나쁘게 틀린다. 스케일 0 은 여기 안 걸리고 중력을
+    /// 0 으로 접는데, 실물도 가드가 없어 같은 0 을 내므로 그대로 둔다(의도된 일치).
+    ///
+    /// **동봉 도달 0** — 이 배선으로 화면이 바뀌는 동봉 씬은 없다(측정은 위 md 문서 §4).
+    func applyParticleWorldBasis(rootIdxs: [Int], nodes: [Int: Scene3DMath.Node]) {
+        for i in rootIdxs where Self.particleNeedsWorldBasis(particleSystems[i].def) {
+            var parentWorld = matrix_identity_float4x4
+            if let pid = particleSystems[i].parent3D,
+               let pw = Scene3DMath.worldMatrix(id: pid, nodes: nodes) {
+                parentWorld = pw.matrix
+            }
+            let m = Self.particleWorldMatrix(particleSystems[i], parentWorld: parentWorld)
+            let c0 = SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z)
+            let c1 = SIMD3<Float>(m.columns.1.x, m.columns.1.y, m.columns.1.z)
+            let c2 = SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+            guard [c0, c1, c2].allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }) else { continue }
+            particleSystems[i].sim.worldBasis = ParticleWorldBasis(worldColumns: c0, c1, c2)
+        }
+    }
+
     /// 3D 파티클 시뮬을 진행해 시스템별 스냅샷을 낸다(드로우/Metal 과 분리 — 유닛 테스트·캡처 재현 공용).
     /// - liveDelta 지정(라이브): 클램프된 프레임 dt 로 **이어가기**. draw() 가 dt 를 ≤0.05 로 클램프하므로
     ///   가림/절전 갭 후에도 프레임당 유한 스텝(서브스텝 상한 dtCap)만 밟는다 — time-clock 무제한 캐치업 금지(감사 C1).
@@ -2076,10 +2157,15 @@ extension SceneRenderer {
     ///   리플레이(2D 캡처 입도와 동일 — 방출/이동 반영). captureFrames 가 라이브 sim 을 프레시로 리셋해 재현 보장(I1).
     /// 루트만 스텝, 자식/손자(F178: 임의 깊이)는 루트 sim.descendantDisplay(경로 기반). 밟은 서브스텝
     /// 수를 particle3DLastStepCount 에 기록(테스트 관측).
-    func stepParticleSnapshots(time: Float, liveDelta: Float?) -> [[Particle]] {
+    /// - nodes: 3D 노드 맵(`encode3DParticles` 가 넘기는 `nmap`). `sim.worldBasis` 배선에만 쓴다 —
+    ///   기본 `[:]` 는 3D 노드 계층을 모르는 호출부(유닛 테스트)를 위한 값이고, 그 경우 부모 체인이
+    ///   빠진 로컬 행렬만으로 기저를 만든다(게이트를 통과한 시스템에서만 발생).
+    func stepParticleSnapshots(time: Float, liveDelta: Float?,
+                               nodes: [Int: Scene3DMath.Node] = [:]) -> [[Particle]] {
         let dtCap: Float = 1.0 / 30.0
         var snaps = [[Particle]](repeating: [], count: particleSystems.count)
         let rootIdxs = particleSystems.indices.filter { particleSystems[$0].childOf == nil }
+        applyParticleWorldBasis(rootIdxs: rootIdxs, nodes: nodes)
         // 라이브(liveDelta 지정)=클램프 dt 이어가기(유한), 캡처(nil)=clock→time 리플레이. clock 은 캡처만 전진.
         var acc = max(0, liveDelta ?? (time - particle3DClock))
         // 라이브(liveDelta≠nil)만 오디오반응 주입 — 캡처(nil)는 프레시 sim 무음 재현 → A/B 비트동일.
@@ -2117,7 +2203,9 @@ extension SceneRenderer {
                            fog: Particle3DFogUniform, fogActive: Bool,
                            into enc: MTLRenderCommandEncoder, device: MTLDevice) {
         guard !particleSystems.isEmpty else { return }
-        let snaps = stepParticleSnapshots(time: time, liveDelta: liveDelta)
+        // nmap 을 넘기는 이유: 스텝 직전에 루트 sim 의 worldBasis(오브젝트 월드 기저)를 먹여야
+        // `movement` 의 월드 중력이 로컬로 변환된다. 대상이 아닌 시스템은 대입 자체를 건너뛴다.
+        let snaps = stepParticleSnapshots(time: time, liveDelta: liveDelta, nodes: nmap)
         // ── 드로우(씬 order 오름차순 — 뎁스가 메시 가림 처리, 파티클 간 정렬은 미적용: WE depth-sort 근거 없음). ──
         guard let dstate = meshDepthState(test: true, write: false, device: device) else { return }
         var vp = viewProj
@@ -2135,7 +2223,7 @@ extension SceneRenderer {
                 guard let pw = Scene3DMath.worldMatrix(id: pid, nodes: nmap), pw.visible else { skipParent += 1; continue }
                 pWorld = pw.matrix
             }
-            let m = pWorld * Scene3DMath.modelMatrix(origin: sys.origin3D, angles: sys.angles3D, scale: sys.scale3D)
+            let m = Self.particleWorldMatrix(sys, parentWorld: pWorld)
             let snapshot = snaps[idx]
             guard !snapshot.isEmpty else { skipEmpty += 1; continue }
             drawn += 1
