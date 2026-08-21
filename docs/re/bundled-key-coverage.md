@@ -26,8 +26,38 @@ python3 scripts/re/bundled_key_coverage.py --schema particle --status none
 
 ## 1. 총계
 
-| | |
-| --- | --- |
+> **[2026-08-21 ~13:20 UTC 3차 재측정 — 이 컨테이너에서 실제로 재현했다]**
+>
+> ```
+> $ python3 scripts/re/bundled_key_coverage.py
+> 자산 루트 : Sources/WapleRender/Resources/WEAssets
+> 자산 파일 : 1698개 (.json 만 — .tex/.tex-json 제외)
+> 대조 코퍼스: 코드 469개 · 문서 288개 (WEAssets 자신은 제외)
+> 키 이름   : 320개
+> 파스      : 관대 전처리 31건 · 실패 0건
+> 합계             1698      848      730      111        7
+> 구멍 총계: 118개 키 경로 (없음 7 · 언급만 111)
+> ```
+>
+> | | 09:36 | **~13:20** | 판정 |
+> | --- | ---: | ---: | --- |
+> | 대조 코퍼스 — 코드 / 문서 | 454 / 267 | **469 / 288** | 늘었다(다른 에이전트가 파일을 더했다) |
+> | 파스됨 / 언급만 / 없음 | 730 / 111 / 7 | **730 / 111 / 7** | **완전 일치** |
+> | 구멍 총계(키 경로) | 118 | **118** | **완전 일치** |
+>
+> 스키마별로도 11개 전부 일치했다(material 17/1/0 · particle 156/1/0 · scene 268/40/3 ·
+> project 10/1/0 · effect 41/8/0 · template 2/0/0 · model 7/0/0 · preset 110/15/4 ·
+> zcompat-web 4/0/0 · config 0/3/0 · shaderdecl 115/42/0).
+>
+> **읽는 법 두 가지.** (a) 코퍼스가 15+21 파일 늘었는데 총계가 그대로라는 것은, 새로 든
+> 파일들이 **아직 안 읽는 키를 새로 언급하지도, 읽지도 않았다**는 뜻이다. §7-5 의 "소스가
+> 바뀌면 총계도 변한다" 는 "**반드시** 변한다" 가 아니라 "변할 수 있다" 로 읽어라.
+> (b) **147 은 이 트리에서 재현되지 않는다** — 그건 01:08 시점 소스 트리의 값이고 지금은
+> 그 트리를 복원할 수 없다. 형제 문서 [`unimplemented-json-keys.md`](unimplemented-json-keys.md)
+> `:6`·`:195` 가 같은 판정을 독립적으로 내렸다. **147 을 현재 값처럼 인용하지 마라.**
+> 아래 §1·§3·§4·§5 본문 표는 여전히 01:08 값이므로, 인용할 때는 **반드시 이 상자의 118 을
+> 쓰고 측정 시각을 같이 적어라.**
+
 > **[2026-08-21 09:36 UTC 재측정] 총계가 147 → 118 로 줄었다.** 아래 표의 좌측은 최초 측정
 > (01:08 경), 우측은 **같은 스크립트를 지금 트리에서 다시 돌린 값**이다. 줄어든 원인은 도구가
 > 아니라 **소스가 늘어난 것**이다 — 이 라운드에 파티클·`general`·머티리얼 키가 대거 구현됐다
@@ -435,3 +465,118 @@ GIF·비디오 월페이퍼 경로라 눈에 띄는 자리다.
 6. **`파스됨` 701개는 검증하지 않았다.** 이 도구가 답하는 질문은 "키 문자열이 파서 코드에
    있는가" 하나다. 있는데 잘못 읽는 것은 이 도구의 사정거리 밖이다 — 그건 A/B 스냅샷과
    골든 게이트의 몫이다.
+
+---
+
+## 8. JSONC 인구조사 — 스코프 라벨을 붙인 재측정 (2026-08-21 ~13:20 UTC)
+
+§1 의 "관대 파스 필요 31건" 이 어느 범위의 수인지 이 문서는 여태 흐릿하게 적고 있었다.
+이번에 세 코퍼스를 각각 라벨을 붙여 다시 셌다. **워크샵 코퍼스는 이 컨테이너에 없다** —
+아래에 워크샵 수치는 하나도 없다.
+
+| 스코프 | `.json` | 엄격 파스 OK | **관용 필요** | 관용도 실패 |
+| --- | ---: | ---: | ---: | ---: |
+| 동봉 `Sources/WapleRender/Resources/WEAssets` | 1,698 | 1,667 | **31** | 0 |
+| 설치본 `wallpaper_engine/assets` | 1,698 | 1,667 | **31** | 0 |
+| 설치본 `wallpaper_engine/projects` | 259 | 258 | **1** | 0 |
+| 설치본 `wallpaper_engine/locale` | 75 | 75 | 0 | 0 |
+| 설치본 `wallpaper_engine/ui` | 100 | 99 | 1 | **1** |
+| 설치본 `bin`·`config_backups`·`distribution`·루트 | 11 | 11 | 0 | 0 |
+
+* **동봉 31 · 설치본 32 · 합 63** 이 정확히 재현됐다(설치본 32 = `assets` 31 + `projects` 1).
+  위 표의 "엄격 파스" 는 **파이썬 `json.loads`** 기준이다 — 아래 §8.4 가 왜 그 라벨이 중요한지 적는다.
+* 동봉 트리와 설치본 `assets/` 는 **바이트 동일**이다(`diff -rq` 무출력, rc=0). 그래서 두
+  트리의 31 은 같은 파일들이다 — "동봉+설치본 63" 은 **파일 63개**이지 서로 다른 자산 63종이 아니다.
+* 자주 쓰이는 분모 정리:
+  **3,655** = 동봉 1,698 + 설치본 `assets` 1,698 + 설치본 `projects` 259 (= 벽지 자산만).
+  **2,143** = 설치본 트리 전체(= 위 1,957 + locale 75 + ui 100 + 그 외 11)이고, 동봉본이
+  설치본 `assets/` 와 바이트 동일이므로 **동봉 ∪ 설치본의 서로 다른 파일 수**이기도 하다.
+  **3,841** = 1,698 + 2,143 (단순 합, 중복 포함). 세 수가 다 돌아다니므로 인용할 때 어느
+  것인지 반드시 밝혀라.
+* 설치본 `ui/` 의 1건은 `uicache/browsewallpapers/base/FirstPartySetsPreloaded/2025.7.24.0/sets.json`
+  으로 **관용 파서로도 안 읽힌다**(루트 뒤에 데이터가 더 있는 JSONL). WE UI(Chromium) 캐시라
+  벽지 자산이 아니다 — `scripts/spec/check_lenient_json_reach.py` 가 이미 `ui/` 를 범위에서
+  뺀 것과 같은 판단이다.
+
+### 8.1 무엇이 필요해서 관용을 타는가
+
+| 필요한 관용 | 동봉 | 설치본(assets+projects) | 합 |
+| --- | ---: | ---: | ---: |
+| 줄 주석 `//` | 27 | 28 | **55** |
+| 트레일링 콤마 | 4 | 4 | **8** |
+| 블록 주석 `/* */` | 0 | 0 | **0** |
+| BOM | 0 | 0 | 0 |
+| raw 제어문자 | 0 | 0 | 0 |
+| `NaN`/`Infinity` 리터럴 | 0 | 0 | 0 |
+
+**관용이 필요한 63건은 전건 CRLF 다.** 그래서 `AssetJSON.relaxed` 의 `Character("\r\n") != "\n"`
+버그(2026-08-21 수정)가 이 경로를 **사실상 전부** 무력화하고 있었다.
+
+**중복 키**는 세 자산 코퍼스에 0건이고, 설치본 `locale/ui_en-us.json` 1건에만 있다
+(`ui_editor_bone_constraints_friction` 등 3키). 실물 jsoncpp 는 `rejectDupKeys=false`
+(`0x14009238b`)라 받고 **뒤가 이기며**, Foundation 도 뒤가 이긴다 — 일치한다.
+
+### 8.2 우리 파서가 실물과 같은 것들을 관용하는가
+
+WE 의 `CharReaderBuilder::setDefaults`(`0x140091ef0`–`0x1400924b4`) 12개 설정을 전수한
+결과와 리눅스 Foundation 실측을 대조한 표는 `Sources/WapleCore/AssetJSON.swift` 헤더에 있다.
+요지만 옮기면:
+
+* **관용이 필요한 실제 차이는 주석과 트레일링 콤마 둘뿐**이다.
+* BOM(`skipBom=true`) · 중복 키 승자(`rejectDupKeys=false`) · `NaN`/`Infinity` 거부
+  (`allowSpecialFloats=false`) · 작은따옴표 거부(`allowSingleQuotes=false`) · 숫자 키 거부
+  (`allowNumericKeys=false`)는 **Foundation 이 이미 실물과 같다**.
+* 루트 뒤 잔여 바이트(`failIfExtra=false`)와 스칼라 루트(`strictRoot=false`)는 실물이 더
+  관대하고 우리가 거부한다 — **의도적**이고 코퍼스 도달 0건.
+* 블록 주석은 실물이 받고 우리가 안 받는다 — 도달 0건이라 유보. 뒤집으려면 Swift 와
+  `scripts/spec/check_lenient_json_reach.py` 의 파이썬 모델을 **같이** 고쳐야 한다.
+
+### 8.3 재현 명령
+
+```bash
+python3 scripts/re/bundled_key_coverage.py          # §1 상자의 118
+diff -rq Sources/WapleRender/Resources/WEAssets \
+         /home/user/Waple-wallpaper-source/wallpaper_engine/assets   # 무출력 = 바이트 동일
+for f in scripts/spec/check_*.py; do python3 "$f" || echo "FAIL $f"; done
+```
+
+리눅스 코어 테스트 쪽 정본은 `Tests/WapleCoreTests/AssetJSONLenientTests.swift` 의
+`testBundledJSONCCensusIsExactlyTwentySevenCommentsAndFourTrailingCommas` 다 —
+동봉 트리에 한해 1,698 / 31 / 전건 CRLF / 27+4 를 **테스트로** 못박아 뒀다.
+
+### 8.4 **[2026-08-21 발견] "JSONC 31" 과 "엄격 파스 실패 31" 은 같은 수가 아니다**
+
+이 문서와 `scripts/spec/check_lenient_json_reach.py` · `scripts/re/bundled_key_coverage.py` 의
+"31" 은 전부 **파이썬 `json.loads`** 로 잰 것이다. Swift 쪽에서 같은 인구조사를 돌렸더니
+**27** 이 나왔다 — 리눅스 `swift-corelibs-foundation` 의 `JSONSerialization` 이
+**트레일링 콤마를 그냥 받기 때문**이다(트레일링 콤마만 있는 4건이 엄격 파스를 통과한다:
+`effects/fluidsimulation/effect.json` 과 그 preview 사본 · `presets/water/preset.json` 과
+그 preview 사본).
+
+| 판정자 | 동봉 트리에서 "엄격 파스 실패" |
+| --- | ---: |
+| 파이썬 `json.loads` | **31** |
+| 리눅스 `swift-corelibs-foundation` `JSONSerialization` | **27** |
+| Darwin `NSJSONSerialization` | 31로 추정 — **이 세션에서 macOS 를 돌릴 수단이 없다** |
+
+세 가지 함의:
+
+1. **`AssetJSON` 의 트레일링 콤마 전처리는 리눅스에서는 죽은 코드처럼 보이지만 macOS 에서는
+   아니다(추정).** 리눅스 테스트만 보고 "안 쓰는 경로" 로 판단하고 지우지 마라.
+2. **파이썬 모델이 실물 런타임보다 엄격하다.** `check_lenient_json_reach.py` 는 그래서
+   *더 안전한* 쪽으로 틀린다(도달을 과대평가) — 게이트로서는 문제가 없지만, 그 31을
+   "Swift 런타임이 관용 없이는 못 읽는 파일 수" 로 인용하면 틀린다.
+3. 그래서 `Tests/WapleCoreTests/AssetJSONLenientTests.swift` 의 인구조사 테스트는
+   **문법 스캔**(줄 주석 27 · 트레일링 콤마 4 · 블록 주석 0 · BOM 0 · 전건 CRLF)으로 단정하고,
+   플랫폼 파서 쪽은 `27 ≤ strictFails ≤ 31` 범위로만 잠근다.
+
+### 8.5 **[2026-08-21 발견] 숫자 태그 갈림도 파서마다 다르다**
+
+jsoncpp 는 **문법**으로 정수/실수를 가른다 — `.` 이나 `e` 가 있으면 태그 3(real).
+Foundation 은 **값**으로 가른다 — `5e9` 는 정수값이라 `NSNumber(Int)` 로 온다.
+그래서 `{"width": 5e9}` 는 실물이 태그 3 → `cvttsd2si eax`(32비트 범위 밖) 경로인데
+Waple 은 태그 1 취급이라 하위 32비트(705032704)를 낸다.
+
+코퍼스 도달 **0건**(동봉+설치본 3,655 파일 33,753개 숫자 중 `|x| ≥ 2^31` 실수 0 ·
+Int32 범위 밖 정수 0 — `docs/re/json-number-tags.md` §8.1)이라 고치지 않았다.
+`JSONNumericsTagGateTests.testFoundationSplitsIntAndRealByValueNotBySyntax` 가 값으로 못박아 뒀다.

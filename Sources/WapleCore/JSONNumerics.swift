@@ -10,6 +10,9 @@ import Foundation
 //   - strict*: Double/Int 만(문자열 거부) — 파티클·애니 키프레임 규약.
 //     **불리언은 통과시킨다** — 게이트 없는 자리에서 실물 `asFloat`/`asInt` 가 1/0 을 내기 때문이다.
 //   - lenient*: 문자열 숫자도 허용 — 씬 규약(실물 씬에 "35" 같은 문자열 타입 존재).
+//   - *UInt32: **폭**이 다른 넷째 축이다. `asFloat`/`asInt`/`asInt64` 가 아니라
+//     `asUInt`(`0x140085ee0`)로 읽는 자리가 실물에 많다(게이트 93자리 중 **35자리**) —
+//     그쪽은 하위 32비트로 잘린다. `strictUInt32`(게이트 없음)/`numericUInt32`(게이트 있음).
 //   - {value} 바인딩 언랩은 unwrapValue 로 분리 — 씬 쪽만 경유한다(파티클·애니는 언랩 없음).
 
 /// 바인딩 객체 {"animation":..., "value": X} → X(정적 값), 아니면 원값.
@@ -92,9 +95,17 @@ func lenientInt(_ v: Any?) -> Int? {
 /// `strictFloat` 의 관용은 버그가 아니라 정합이다. 게이트는 자리마다 다르므로 자리별로 고른다.
 ///
 /// 전수(wallpaper64.exe `.text`): `asFloat` 호출 **243** · `asInt` **79** 인데
-/// 게이트는 `call isNumeric` **12** + 인라인 전개(`[reg+8]` 태그 적재 후 `dec;cmp 2`) **78** = **90**
-/// 뿐이고, 그 90 에는 float/int 가 아닌 자리(`asUInt`/`asInt64`)도 섞여 있다.
-/// 즉 숫자 자리의 대다수는 게이트가 없다. 자리별 실측은 `docs/re/json-number-tags.md`.
+/// 게이트는 `call isNumeric` **12** + 인라인 전개(`[reg+8]` 태그 적재 후 `dec;cmp 2`) **81** = **93**
+/// 뿐이고, 그 93 에는 float/int 가 아닌 자리(`asUInt` 35 · `asInt64` 4)도 섞여 있다.
+/// 즉 숫자 자리의 대다수는 게이트가 없다. 자리별 실측(93자리 전건 키 귀속)은
+/// `docs/re/json-number-tags.md` §2.
+///
+/// **[2026-08-21 재전수] 인라인은 78 이 아니라 81 이다.** 종전 스캔이 `dec` 와 `cmp` 사이에
+/// 스필 `mov` 가 끼어든 세 자리를 놓쳤다 — `0x1401a4b17`(부동소수 프로퍼티 바인더,
+/// `cmp` 는 `0x1401a4b23`) · `0x1401fcc5d`(`cmp` `0x1401fcc6c`) · `0x1402230fe`
+/// (`cmp` `0x14022310a`). 뒤 둘은 `find("animation")` 결과를 게이트한다.
+/// 반대로 `asFloat`/`asInt`/`asUInt`/`asInt64`/`asUInt64`/`asDouble`/`asBool` **본체**의
+/// `sub edx,1; je … cmp edx,2` 는 게이트가 아니라 태그 **스위치**다(사이에 `je` 가 있다).
 ///
 /// **판정 방식** — `NSNumber` 면 `objCType`("c" = boolean)이 정본이다.
 /// `JSONSerialization` 은 JSON `true` 를 `__NSCFBoolean` 으로 주는데 그 값은
@@ -115,6 +126,71 @@ func isJSONNumeric(_ v: Any?) -> Bool {
 func numericFloat(_ v: Any?) -> Float? { isJSONNumeric(v) ? strictFloat(v) : nil }
 /// `numericFloat` 의 Int 판.
 func numericInt(_ v: Any?) -> Int? { isJSONNumeric(v) ? strictInt(v) : nil }
+
+// MARK: 폭 축 — jsoncpp `asUInt`(하위 32비트)
+
+/// **왜 넷째 축이 필요한가.** 종전 사다리(`numeric* ⊂ strict* ⊂ lenient*`)는 "관용 폭" 만
+/// 다뤘고 **값의 폭**은 전부 Swift `Int`(64비트)로 뭉쳐 있었다. 그런데 실물의 게이트 93자리를
+/// 전건 귀속해 보면 접근자가 갈린다 — `asFloat` **42** · **`asUInt` 35** · `asInt64` 4 ·
+/// `asInt` 2 · `asBool` 2 · `asString` 1 · 기타 7(2026-08-21 재전수, `docs/re/json-number-tags.md` §2).
+/// 즉 게이트가 붙은 자리의 **38%가 `asUInt`** 인데 Waple 에는 그 폭을 재현하는 헬퍼가 없었다.
+///
+/// `asUInt`(`0x140085ee0`)의 태그별 동작(직접 디스어셈, 함수 `0x140085ee0`–`0x140085f6c`):
+///
+/// | 태그 | 동작 | VA |
+/// | --- | --- | --- |
+/// | 0 null | `xor eax,eax` → 0 | `0x140085f28` |
+/// | **1 int / 2 uint** | `mov eax, dword [rcx]` — 64비트 슬롯의 **하위 32비트**만 | `0x140085f1e` |
+/// | 3 real | `cvttsd2si eax`(**32비트**, 0 방향 절삭) | `0x140085f12` |
+/// | 5 boolean | `cmp byte [rcx],al; setne al` → 0/1 | `0x140085f03`–`0x140085f07` |
+/// | 4/6/7 | `"Value is not convertible to Int."`(`0x140478740`) → abort | `0x140085f32` |
+///
+/// 하위 32비트 절삭은 **음수에서 눈에 보인다**: `order: -2` 는 `0xFFFFFFFE` = 4294967294 가 된다.
+/// 실측 도달 있음 — `설치본 projects/defaultprojects/eagleflag/project.json` 의
+/// `general.properties.flagcolor1.order = -2` · `flagcolor2.order = -1`(그 자리는
+/// `0x140118b85`/`0x140119d00` 에서 게이트 + `asUInt`). 다만 그 키를 읽는 경로가 둘이라
+/// (네이티브 `asUInt` vs 브라우저 UI 의 JS `sort((a,b)=>a.order-b.order)`) 어느 쪽이 화면을
+/// 정하는지는 별건이다 — `WallpaperProperties.swift:138` 이 그 갈림을 이미 적고 있다.
+///
+/// 코퍼스 폭 실측(동봉 WEAssets 1,698 + 설치본 `assets` 1,698 + 설치본 `projects` 259 =
+/// **3,655 파일**, 숫자 리터럴 33,753개): **Int32 범위 밖 정수 0건** · `|x| ≥ 2^31` 실수 **0건** ·
+/// 음수 정수 131건. 즉 절삭이 값을 바꾸는 경우는 **음수뿐**이다.
+
+/// 태그 1/2 경로 — 64비트 정수의 하위 32비트를 부호 없이 재해석한다(`mov eax,[rcx]`).
+func wrapUInt32(_ i: Int) -> Int { Int(UInt32(truncatingIfNeeded: i)) }
+
+/// 태그 3 경로 — `cvttsd2si eax`(0 방향 절삭 후 32비트).
+///
+/// **범위 밖은 nil 로 돌려준다(의도적 하드닝).** x86 은 변환 결과가 32비트에 안 들어가면
+/// (NaN·±Inf 포함) "integer indefinite" `0x80000000` 을 내는데, 그건 MXCSR 의 invalid 마스크에
+/// 달린 값이고 우리가 이 컨테이너에서 실행으로 확인할 수단이 없다(추정). 값을 지어내는 대신
+/// `safeInt`/`safeFloat` 와 같은 규약으로 거절한다 — 코퍼스 도달 **0건**(위 폭 실측).
+func wrapUInt32(_ d: Double) -> Int? {
+    guard d.isFinite else { return nil }
+    let t = d.rounded(.towardZero)
+    guard t >= -2_147_483_648, t <= 2_147_483_647 else { return nil }
+    return Int(UInt32(bitPattern: Int32(t)))
+}
+
+/// 게이트 **없는** `asUInt` 자리 — 불리언을 1/0 으로 받는다(`0x140085f07 setne`).
+/// 예: 씬 `general.alignment.value`(`0x140181fba`) · 씬 `general.lightconfig.*`
+/// (`0x140187775` 이후 — 그 함수의 게이트 3자리는 `refreshdelay`·`orthogonalprojection.width/height`
+/// 뿐이다) · 이펙트 fbo `scale`/`width`/`height`/`fit`.
+func strictUInt32(_ v: Any?) -> Int? {
+    if let i = v as? Int { return wrapUInt32(i) }
+    if let d = v as? Double { return wrapUInt32(d) }
+    return nil
+}
+
+/// 게이트 **있는** `asUInt` 자리 — 태그 1/2/3 만. 관용 폭 순서: `numericUInt32` ⊂ `strictUInt32`.
+/// 예: `general.refreshdelay`(`0x1401874cc`) · `general.orthogonalprojection.width/height`
+/// (`0x140187578`·`0x140187587`) · `general.properties.<name>.order`(`0x140118b85`·`0x140119d00`) ·
+/// 이펙트 `condition.value`(`0x1401e6689`) · 이펙트 `bind[].index`(`0x1401e7ea9`).
+func numericUInt32(_ v: Any?) -> Int? { isJSONNumeric(v) ? strictUInt32(v) : nil }
+
+/// `lenientUInt32` 는 **일부러 없다.** 실물은 태그 4(string)에서 abort 하고, Waple 쪽에도
+/// `asUInt` 자리를 문자열로 읽는 호출부가 하나도 없다(전수 확인). 사다리를 대칭으로 만들려고
+/// 호출부 없는 함수를 늘리지 않는다 — 필요해지는 자리가 생기면 그때 근거와 함께 추가해라.
 
 // MARK: 벡터/리스트
 
