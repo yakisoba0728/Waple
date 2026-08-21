@@ -62,6 +62,27 @@ final class TexBundledCorpusTests: XCTestCase {
         XCTAssertEqual(Set(formats.keys), [0, 4, 8, 9], "동봉 포맷 집합이 바뀌었다: \(formats)")
     }
 
+    /// 헤더 flags 에서 **실제로 켜지는 비트 집합**을 못박는다. Waple 의 flags 주석표(`TexImage.flags`)가
+    /// 딛고 선 근거가 이 도수라서, 자산이 바뀌어 새 비트가 들어오면 그 표부터 다시 봐야 한다.
+    /// 실측(2026-08-21, **동봉 311건** = 설치본 `assets/` 311건과 바이트 동일):
+    ///   0x2 ×218 · 0x80000 ×82 · 0x4 ×52 · 0x40 ×28 · 0x1 ×2 — 그 외 비트는 0건.
+    /// 특히 **0x8 은 파일 입력이 아니다**(로더가 세운다) — 0건이어야 리더가 무시해도 되는 근거가 산다.
+    /// (범위 밖 참고: 설치본 `projects/defaultprojects/` 129건에는 여기 없는 **0x10(sRGB)** 이 10건 있다.
+    ///  런타임 비소비 레거시 비트라 파스에는 영향이 없다 — docs/re/tex-format.md §3 참조.)
+    func testBundledFlagBitsAreTheDocumentedSet() throws {
+        var bitCount: [Int: Int] = [:]
+        for (_, data) in try texFiles() {
+            guard let t = TexImage.parse(data) else { continue }
+            for i in 0..<32 where t.flags & (1 << i) != 0 { bitCount[1 << i, default: 0] += 1 }
+        }
+        XCTAssertEqual(Set(bitCount.keys), [0x1, 0x2, 0x4, 0x40, 0x80000],
+                       "동봉 flags 비트 집합이 바뀌었다: \(bitCount.mapValues { $0 })")
+        XCTAssertNil(bitCount[0x8], "0x8 은 파일 입력이 아니다 — 파일에서 켜져 나오면 모델이 틀린 것")
+        XCTAssertEqual(bitCount[0x40], 28, "slice3d 자산(LUT) 수")
+        XCTAssertEqual(bitCount[0x4], 52, "스프라이트시트 수")
+        XCTAssertEqual(bitCount[0x80000], 82, "alphachannelpriority 수")
+    }
+
     /// mip 페이로드 범위가 **파일 안**이고 서로 겹치지 않으며, 압축 크기가 0 보다 큰지.
     /// 레이아웃을 잘못 읽으면 거의 항상 여기서 먼저 무너진다(다음 레벨 시작이 뒤로 밀린다).
     func testMipChainRangesAreSaneAndOrdered() throws {

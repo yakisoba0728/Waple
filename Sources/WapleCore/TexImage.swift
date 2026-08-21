@@ -123,11 +123,31 @@ public struct TexImage {
     ///   0x4  IsGif(스프라이트시트) — TEXS 섹션이 붙는다. 동봉 52건 = TEXS 파스 52건으로 정확히 일치
     ///   0x8  **파일 입력이 아니다.** 로더 0x14015e90a–0x14015e933 이 mip 체인 길이 < 2 일 때 스스로
     ///        세운다(`or dword ptr [rsi + 4], 8`). 동봉 311건 중 파일에 켜진 것 0건 — 리더는 무시할 것
+    ///   0x10 sRGB(추정) — 동봉 311건·워크샵 코퍼스 4,991건에는 0건이라 종전엔 이 표에 아예 없었다.
+    ///        설치본 `projects/defaultprojects/razer_bedroom/materials/*.tex` 10건에 켜져 있고, 같은
+    ///        10건의 `.tex-json` 만이 `"srgb": true` 를 갖는다(짝 있는 358건 기준 10/10 · 나머지
+    ///        348/348 이 둘 다 꺼짐). **이름은 추정이다** — 표본이 한 프로젝트뿐이라 교란 가능하고,
+    ///        지금 `resourcecompiler64.exe` 의 `.tex-json` 키 표(파일 오프셋 0x584da8~0x584f70, 34개)에
+    ///        `srgb` 가 아예 없다(= 현행 컴파일러는 이 비트를 못 만든다). 파스에는 영향이 없다
     ///   0x20 IsVideoTexture(mp4 페이로드)
     ///   0x40 Slice3D(volume) — 헤더에 i32 texDepth, **mip 레코드에도 i32 depth** 가 추가된다(depth 참조)
-    ///   0x80000 AlphaChannelPriority — **컴파일러 전용**. wallpaper64 의 플래그 디스패치
-    ///        0x14030358e–0x1403035d5 는 0x1/0x2/0x4/0x8/0x20/0x40 여섯 비트만 내부 상태로 옮기고,
-    ///        0x80000·0x100000..0x800000 을 읽는 자리는 바이너리에 없다(주입은 하지만 소비는 안 한다)
+    ///   0x80000 AlphaChannelPriority — 차분 컴파일로 확정된 컴파일러 옵션. 동봉 82건이 켜져 있다
+    ///
+    /// **[정정 2026-08-21] 종전 이 주석은 `0x14030358e–0x1403035d5` 를 "wallpaper64 의 플래그
+    /// 디스패치" 라며 "여섯 비트만 소비" 의 근거로 삼았다. 그 자리는 텍스처와 무관하다** —
+    /// 그 코드가 걷는 표 `0x140438050`(8바이트 레코드, 종단 id 0x159b)의 첫 필드는 문자열 블롭
+    /// `0x140436aa0` 의 오프셋이고, 그 문자열들은 Adlam(U+1E9xx)·아랍·벵골·캐나다 음절문자 목록이다.
+    /// 즉 텍스트 셰이핑/스크립트 표이고, 비트 패턴(1/2/4/8/0x20/0x40)이 겹친 것은 우연이다.
+    /// 진짜 소비처는 **아직 특정하지 못했다**(미해결). 지금 확실한 것만 적으면:
+    ///   · flags 는 tex 디스크립터 +4 에 산다(리더 0x14015c7b1 `or dword ptr [r8+4], eax`,
+    ///     로더 0x14015e933 `or dword ptr [rsi+4], 8`).
+    ///   · 그 오프셋에서 테스트되는 비트는 tex 리더 안에 0x40(0x14015c856·0x14015d374)과
+    ///     0x20(0x14015d20f)뿐이다.
+    ///   · `.text` 전수 바이트 스캔: `test byte ptr [reg+4], 0x10` 0건,
+    ///     `test dword ptr [reg+4], 0x80000` 0건. **단 이 스캔은 레지스터로 먼저 적재한 뒤 검사하는
+    ///     형태를 못 잡으므로 "소비 안 함" 의 증명이 아니다.**
+    /// 0x1/0x2/0x4/0x80000 의 **의미**는 디스어셈블이 아니라 `.tex-json` 차분 컴파일로 확정됐고
+    /// (spec/formats/tex-deep.json `format.tex.flags.bits`), 그 근거는 이 정정과 무관하게 그대로다.
     public var flags: Int = 0
     /// TEXI 헤더 i32 texDepth — **flags & 0x40 일 때만** 파일에 있고(리더 게이트 0x14015c855,
     /// 저장 0x14015c885) 없으면 1. 동봉 `materials/lut/*.tex` 28개가 32×32×32 3D LUT 로 이 필드를 쓴다
@@ -182,8 +202,9 @@ public struct TexImage {
     public var isVideoTexture: Bool { flags & 0x20 != 0 }
     /// 3D 슬라이스 텍스처(flags 0x40). 참이면 `depth` 가 슬라이스 수이고 imgW == texW × depth 다.
     public var isVolume: Bool { flags & 0x40 != 0 }
-    /// AlphaChannelPriority(flags 0x80000). **런타임 비소비 플래그**(위 flags 주석의 디스패치 참조) —
-    /// 인코딩 시 어느 채널을 우선 보존할지의 컴파일러 힌트다. 노출만 하고 렌더는 보지 않는다.
+    /// AlphaChannelPriority(flags 0x80000). 인코딩 시 어느 채널을 우선 보존할지의 컴파일러 옵션
+    /// (`.tex-json` 차분 컴파일로 확정, 동봉 82건). **엔진 런타임이 이 비트를 읽는 자리는 특정하지
+    /// 못했다**(위 flags 주석의 [정정 2026-08-21] 참조) — 노출만 하고 Waple 렌더는 보지 않는다.
     public var alphaChannelPriority: Bool { flags & 0x80000 != 0 }
     /// 스프라이트시트 논리 프레임 크기(TEXS0003 의 gifWidth/gifHeight). v2 이하는 파일에 없어
     /// 헤더 imgW/imgH 가 기본값이다 — TEXS 리더 0x14015e226(v≥3 읽기) / 0x14015e268(v<3 기본).
@@ -253,6 +274,12 @@ public struct TexImage {
         // 원본 Data 의 인덱스 공간으로 돌려준다(payloadRange 필드 주석 참조).
         let base = data.startIndex
         let b = [UInt8](data)
+        // 엔진 로더는 `TEXV0005`(memcmp 0x14015e66e) 외에 **`TEXV0004` 도 받는다**(memcmp 0x14015e8c5).
+        // 그 경로는 섹션 이름 없이 TEXI/TEXB 를 **버전 0** 으로 부르는 다른 레이아웃이다
+        // (`xor ecx, ecx` 0x14015e8dc·0x14015e8f9 → previewColor 없음 · imageCount 필드 없이 1 고정
+        //  0x14015c941 · imageFormat/variantCount 없음). Waple 은 0005 만 받는다 —
+        // 동봉 311/311 · 설치 projects 129/129 · 워크샵 코퍼스 4,991/4,991 이 전부 0005 라 실물 표본이 없고,
+        // 표본 없이 두 번째 레이아웃을 쓰면 검증할 수 없는 코드가 된다. 0004 실물이 나오면 그때 추가할 것.
         guard b.count > 42, b[0..<8].elementsEqual(Array("TEXV0005".utf8)) else { return nil }
         func i32(_ o: Int) -> Int? { readU32LE(b, at: o).map { Int($0) } }
         // 헤더 6필드 경계검사(종전 b.count>42 암묵 의존 제거). 고정 오프셋이라 정상 파일은 항상 성립.
@@ -369,8 +396,9 @@ public struct TexImage {
     /// "TEXB000N\0" 컨테이너 파스. 모든 image 의 **mip0** 을 순차 수집한다(다중 image = 스프라이트시트
     /// 아틀라스 페이지, frame.imageId 가 페이지 인덱스 — RePKG TexToImageConverter.ConvertToGif). 실측
     /// 레이아웃(RePKG TexReader + TEXB0004 hexdump 교차검증, 2026-07-03):
-    ///   i32 imageCount | (v3+) i32 imageFormat(-1=raw) | (v4) i32 isVideoMp4/변형수 |
-    ///   image별: (v4 조건 변형 체인 ×N) i32 mipCount | mip별: i32 w | i32 h | (v2+) i32 isLZ4 | i32 dec | i32 comp | payload
+    ///   i32 imageCount | (v3+) i32 imageFormat(-1=raw) | (v4) i32 variantCount |
+    ///   (v4) 조건 변형 블록 × variantCount: i32 ×3 + NUL 종단 조건 JSON   ← image 루프 **앞**에 한 번
+    ///   image별: i32 mipCount | mip별: i32 w | i32 h | (flags&0x40) i32 depth | (v2+) i32 isLZ4 | i32 dec | i32 comp | payload
     /// (mip0 외 mip 은 크기만큼 스킵). 종전 "compressedSize 가 EOF 에 닿는 int 스캔" 휴리스틱은 다중 mip
     /// 파일(DJK_1.tex mip 9개 등)에서 실패해 3D 모델 텍스처 대부분이 흰색 폴백이었다.
     /// mipChain: **단일 image** 일 때 image 0 의 전체 레벨도 수집(레벨 L 의 image dims = imgW/imgH >> L,
@@ -422,17 +450,32 @@ public struct TexImage {
         guard let imageCount = i32(p), imageCount > 0, imageCount <= 1024 else { return nil }
         p += 4
         if version >= 3 { imageFormat = i32(p) ?? -1; p += 4 }   // imageFormat 직독(RePKG: !=-1 이면 인코딩 파일)
-        if version >= 4 { p += 4 }   // 0004 추가 필드(실측 0/1 = isVideoMp4; 조건 변형 텍스처는 변형 수 1/3)
+        // v4 추가 i32 = **조건 변형 개수**다. 리더가 그 자리에서 읽어(0x14015c9a0) `[rbp-0x78]` 에 넣고
+        // (0x14015c9b8) 블록 루프의 상한으로 쓴다(0x14015d1b3 `inc esi` → 0x14015d1c9 `cmp esi,[rbp-0x78]`
+        // → `jb 0x14015ca00`). 0 이면 0x14015c9d4 `test esi,esi / je 0x14015d1df` 로 image 루프 직행.
+        // [정정 2026-08-21] 종전 주석은 이 필드를 "실측 0/1 = isVideoMp4" 라 적고 값을 버렸다 — **틀렸다**.
+        // 비디오 텍스처는 flags 0x20 이고 코퍼스 38건이 전부 TEXB0003 이라 v4 필드 자체가 없다
+        // (spec/formats/tex-deep.json `format.tex.flags.bits` 0x20). 코퍼스 분포는 0×2865 · 1×7 · 3×1.
+        // 상한 1024 는 엔진 값이 아니라 Waple 자체 방어선이다(손상 입력이 64KB 스캔을 1024번 넘게 돌지 못하게).
+        var variantCount = 0
+        if version >= 4 {
+            guard let n = i32(p), n >= 0, n <= 1024 else { return nil }
+            variantCount = n
+            p += 4
+        }
         var mips: [CompressedMip] = []
         var mipChain: [CompressedMip] = []                 // image 0 전체 레벨(단일 image 일 때만 확정)
-        var chain: [(idx: Int, json: String)] = []   // v4 조건 변형 블록(idx, 조건 JSON) — mipCount 앞 체인
+        // v4 조건 변형 블록 `[i32][i32 idx][i32][json NUL]` × variantCount 는 image 루프 **앞에 한 번** 온다
+        // (리더 0x14015ca2d / 0x14015ca57 / 0x14015ca7c 세 정수 + 0x14015ca93 NUL 스캔). 종전엔 개수를 버리고
+        // `[1][1...64][0]` 패턴 스캔을 image 루프 **안**에서 돌려, 다중 image v4 에서는 image 마다 다시 훑었다.
+        var chain: [(idx: Int, json: String)] = []
+        chain.reserveCapacity(variantCount)
+        for _ in 0..<variantCount {
+            guard let blk = conditionVariantBlock(b, from: p, i32: i32) else { return nil }
+            chain.append((blk.idx, blk.json))
+            p = blk.end
+        }
         for imageIdx in 0..<imageCount {
-            // v4 조건 변형 체인: [i32 1][i32 idx][i32 0][json NUL] × N 이 mipCount 앞에 온다 — idx/JSON 보존.
-            if version >= 4 {
-                while let blk = conditionVariantBlock(b, from: p, i32: i32) {
-                    chain.append((blk.idx, blk.json)); p = blk.end
-                }
-            }
             guard let mipCount = i32(p), mipCount > 0 else { break }
             p += 4
             guard let (mip0, after0) = readMip(p, origW: imgW, origH: imgH) else { break }   // 페이지의 mip0 = 아틀라스 페이지 픽셀
@@ -461,19 +504,27 @@ public struct TexImage {
         return mips.isEmpty ? nil : (mips, imageFormat, variants, mipChain)
     }
 
-    /// TEXB0004 조건 변형 블록 1개: [i32 1][i32 variantIdx][i32 0][condition JSON NUL]. 프로퍼티 값(예
-    /// tuniccolor)으로 텍스처 변형을 고르는 파일 — 조건 블록 N개가 연속한 뒤 기본 mip 테이블, 그 뒤 변형 섹션.
-    /// 실측(2026-07-09, 전 코퍼스 460종 sweep + 8종 디코드 검증): 조건 tex 는 zelda 8개뿐, 전부 이 레이아웃.
-    /// 반환 = (블록 끝(다음 블록 또는 mipCount 위치), idx, condition JSON). 패턴 불일치 시 nil(mip 테이블 직행).
+    /// TEXB0004 조건 변형 블록 1개: `[i32][i32 variantIdx][i32][condition JSON NUL]`. 프로퍼티 값(예
+    /// tuniccolor)으로 텍스처 변형을 고르는 파일 — 조건 블록이 `variantCount` 개 연속한 뒤 기본 mip 테이블,
+    /// 그 뒤 변형 섹션이 온다. 실측(2026-07-09, 전 코퍼스 460종 sweep + 8종 디코드 검증): 조건 tex 는 zelda
+    /// 8개뿐, 전부 이 레이아웃(세 정수는 관측상 `1, idx, 0`).
+    ///
+    /// **엔진은 세 정수의 값을 검사하지 않는다** — 순서대로 읽고(0x14015ca2d · 0x14015ca57 · 0x14015ca7c)
+    /// 곧바로 NUL 종단 문자열을 훑는다(0x14015ca93 `cmp byte ptr [rcx], 0` 루프). 개수는 헤더의
+    /// `variantCount` 가 정한다. 종전에는 개수를 버리고 `첫 정수 == 1 && idx ∈ 1...64 && 셋째 == 0` 이라는
+    /// **패턴**으로 블록을 찾았는데, 그 판정은 (a) 관측 8종의 우연한 값에 기대고 (b) 어긋나면 컨테이너 전체를
+    /// 조용히 잃는다. 지금은 호출자가 개수만큼만 부르므로 값 검사가 필요 없다.
+    ///
+    /// 반환 = (블록 끝 = 다음 블록/mip 테이블 위치, idx, condition JSON). 파일 밖으로 나가거나 64KB 안에
+    /// NUL 이 없으면 nil → 호출자가 컨테이너를 폐기(시그니처 스캔 폴백). JSON 이 문법에 안 맞는 것은 여기서
+    /// 거르지 않는다 — `VariantCondition(json:)` 이 nil 을 내고 그 변형이 영영 매치되지 않을 뿐이라
+    /// 기본 mip 폴백이 그대로 성립한다(엔진과 같은 관대함).
     private static func conditionVariantBlock(_ b: [UInt8], from p: Int, i32: (Int) -> Int?)
         -> (end: Int, idx: Int, json: String)? {
         let maxConditionBytes = 64 * 1024
-        // idx 상한 64: 실제 mip 레코드(w|h|isLZ4|dec)와의 오인 차단 — w==1 && h≤64 && isLZ4==0 && dec 첫바이트
-        // '{' 를 동시에 만족하는 정상 텍스처는 존재 불가(dec=w×h×bpp 조합이 홀수 0x7B 를 만들 수 없음).
-        guard let m1 = i32(p), m1 == 1, let idx = i32(p + 4), (1...64).contains(idx),
-              let z = i32(p + 8), z == 0 else { return nil }
+        guard i32(p) != nil, let idx = i32(p + 4), i32(p + 8) != nil else { return nil }
         let jsonStart = p + 12
-        guard jsonStart < b.count, b[jsonStart] == 0x7B || b[jsonStart] == 0x5B else { return nil } // "{" or "["
+        guard jsonStart < b.count else { return nil }
         let upper = min(b.count, jsonStart + maxConditionBytes)
         var jsonEnd = jsonStart
         while jsonEnd < upper, b[jsonEnd] != 0 {

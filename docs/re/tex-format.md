@@ -3,6 +3,19 @@
 **조사일 2026-08-21 · WE 2.8.42 `wallpaper64.exe` (md5 `438cb215f20a8f6c38f57fbc3d9da588`, imagebase `0x140000000`)**
 **대상: 동봉 자산 `Sources/WapleRender/Resources/WEAssets/` — `.tex` 311개 · `.tex-json` 298개 전건**
 
+> **범위 라벨 규약.** 이 문서의 도수는 넷 중 하나의 범위다. 섞어 읽으면 결론이 뒤집힌다.
+>
+> | 라벨 | 범위 | `.tex` |
+> | --- | --- | --- |
+> | **동봉** | `Sources/WapleRender/Resources/WEAssets/` | 311 |
+> | **설치 assets** | `wallpaper_engine/assets/` | 311 — **동봉과 상대경로·SHA1 전건 동일**(2026-08-21 재확인, 차이 0건) |
+> | **설치 projects** | `wallpaper_engine/projects/defaultprojects/` | 129 — 여태 어느 조사도 안 훑었다(§2.4) |
+> | **워크샵 코퍼스** | scene.pkg 162개 + 설치 assets | 4,991 (`spec/formats/tex-deep.json`) |
+>
+> 즉 "동봉 311" 과 "설치 assets 311" 은 **같은 파일 집합**이고, 워크샵 코퍼스는 설치 assets 를 포함하지만
+> **설치 projects 129 는 어디에도 안 들어 있다**(`measure_tex_deep.iter_tex` 가 `WE/assets` 만 훑는다).
+> 그래서 `.tex` 플래그 비트 0x10 이 이번까지 안 보였다.
+
 ## 0. 결론
 
 | 항목 | 판정 |
@@ -14,6 +27,18 @@
 | `.tex-json` | 런타임 의미가 있는 키는 **전부** 컴파일된 `.tex` 헤더로 들어온다(272쌍 전건 일치). Waple 이 못 읽는 자리는 **소스 폼(.tex 부재) 26건**뿐 |
 | 알파 규약 | **straight(비프리멀티)** — fmt0 반투명 텍스처 108개 중 107개에 `RGB > A` 픽셀이 실재한다. Waple 규약과 일치 |
 | 남은 디코더 갭 | BC3 알파 보간 라운딩 1건(±1). 색(565→8)은 이번에 맞췄다 |
+
+**2026-08-21 2차 대조에서 더 나온 것** (범위 라벨은 아래 표 참조)
+
+| 항목 | 판정 |
+| --- | --- |
+| 설치 `projects/defaultprojects` 129건 | **여태 어느 코퍼스에도 안 들어 있던 범위.** 참조 파스 129/129 성공, Waple 도 전부 다루는 조합(§2.4) |
+| flags 비트 `0x10` | **새 비트.** 설치 projects 10건에만. `.tex-json` 의 `srgb: true` 와 358쌍 기준 10/10·348/348 대응(이름은 추정, 소비 여부는 정황 — §3.1) |
+| **§3 의 "플래그 디스패치" 근거** | **무효였다.** `0x14030358e`–`0x1403035d5` 는 텍스트 셰이핑/스크립트 표(`0x140438050` → 문자열 `0x140436aa0`)를 걷는 코드이고 텍스처와 무관하다. 비트 패턴이 겹친 우연이었다 — §3 정정 박스 |
+| TEXB0004 `variantCount` | **개수 기반이 정답.** Waple 의 패턴 휴리스틱을 개수 기반으로 고쳤다(§1.2) |
+| `TEXV0004` 레거시 컨테이너 | 엔진은 받고 Waple 은 거부한다. 실물 표본 0/4,991 + 0/440 이라 **구현하지 않고 근거만 남겼다**(§7) |
+| 신뢰 경계(악성 헤더) | 거짓 차원·거짓 depth·거짓 comp/dec·거짓 mipCount/imageCount/frameCount + 전 길이 잘림·헤더 바이트 반전 스윕에서 **트랩 0건**. `Tests/WapleCoreTests/TexHostileInputTests.swift` 가 고정 |
+| TEXS0002 8건의 "원래 속도" | 짝 `.tex-json` 에 `duration/frames` 로 남아 있다(3/8 만 Waple 폴백과 일치). 다만 런타임 근거가 없고 도달 자산이 파티클뿐이라 **관측 차이 없음**(§5) |
 
 ---
 
@@ -77,8 +102,23 @@ image × imageCount:
 경계 검사(`0x14015d3a2`–`0x14015d3e8`): `w ≤ 0x2000`, `h ≤ 0x2000`, `depth ≤ 0x80`,
 `w·h·depth·4 ≤ 0xffffffff` 를 어기면 에러 경로(`0x1400986c0`).
 
-`variantCount` 는 **Waple 이 `isVideoMp4` 불리언으로 오해하고 있던 필드**다. 모델은 틀렸지만
-휴리스틱 결과가 코퍼스 전건 같아서(spec `format.tex.texb.variantCount`, 불일치 0건) 이번엔 손대지 않았다.
+`variantCount` 는 **Waple 이 `isVideoMp4` 불리언으로 오해하고 있던 필드**다.
+
+> **[2026-08-21 조치] 개수 기반으로 고쳤다.** 리더가 이 필드를 `[rbp-0x78]` 에 넣고(`0x14015c9b8`)
+> 블록 루프의 상한으로 쓰는 것을 다시 떠서 확인했다 — `0x14015d1b3 inc esi` → `0x14015d1c9
+> cmp esi, [rbp-0x78]` → `jb 0x14015ca00`. 0 이면 `0x14015c9d4 test esi,esi / je 0x14015d1df` 로
+> image 루프 직행. 블록 본문은 `i32 ×3 + NUL 종단 문자열`이고 **엔진은 세 정수의 값을 검사하지 않는다**
+> (`0x14015ca2d`·`0x14015ca57`·`0x14015ca7c` 는 읽어서 저장만 한다).
+>
+> 종전 Waple 은 개수를 버리고 `첫 정수 == 1 && idx ∈ 1…64 && 셋째 == 0` **패턴**으로 블록을 찾았다.
+> 코퍼스 전건에서 결과가 같았던 건(`modelMismatchOnCorpus: 0`) 관측된 zelda 8종이 우연히 그 값이라서다.
+> 패턴이 어긋나는 파일이 오면 그 자리를 mip 테이블로 읽어 **컨테이너를 통째로 잃는다**(= 텍스처가
+> 통째로 안 나온다). 부수적으로 종전 스캔은 image 루프 **안**에 있어 다중 image v4 에서는 image 마다
+> 다시 돌았다 — 엔진은 image 루프 **앞에서 한 번**만 읽는다.
+>
+> 회귀 위험: 코퍼스 분포가 `0×2865 · None×2118 · 1×7 · 3×1` 이고 세 값 모두 개수 해석으로 정상
+> 파스되므로 출력은 종전과 동일하다. 새로 붙인 상한 1024(엔진엔 없다)는 블록마다 최대 64KB 를
+> 훑는 것에 대한 Waple 자체 방어선이다 — `TexHostileInputTests` 가 양쪽 경계를 못박는다.
 
 **절반 해상도 로드 경로**(spec `format.tex.texs.halfScalePath` 가 "재현 조건 미상" 으로 남겨 둔
 자리)의 조건을 이번에 특정했다. TEXB 리더가 받는 **옵션 워드**(스택 인자, 로더가 `[rbp+0x7f]` 에서
@@ -142,7 +182,11 @@ BC7 은 어느 쪽에도 실물이 없어 디코더 필요성이 없다.
 컨테이너 버전: `TEXB0004` 127 · `TEXB0003` 113 · `TEXB0001` 42 · `TEXB0002` 29.
 `TEXS0003` 44 · `TEXS0002` 8 · 없음 259.
 `imageCount` 는 311건 모두 1(다중 페이지 아틀라스는 동봉 자산엔 없다).
-`variantCount` 는 311건 모두 0(조건 변형 텍스처는 워크샵 젤다 8종뿐).
+`variantCount` 는 **필드를 갖는 127건(TEXB0004)이 전부 0** 이고 나머지 184건(TEXB0001~0003)은 필드 자체가 없다
+— 조건 변형 텍스처는 워크샵 젤다 8종뿐이다. (종전 판은 "311건 모두 0" 이라고 적었는데, 필드가 없는 것과
+0인 것을 합쳐 세면 v3→v4 게이트가 검증됐다는 착각이 된다.)
+`headerLen` 은 46 ×283 · 50 ×28(= slice3d 28건) — 42 는 **0건**이다(previewColor 가 항상 붙는다).
+mip 레코드의 `isLZ4` 는 1 ×253 · 0 ×58, `mipCount` 는 1 ×131 · 2~10 ×180.
 
 > `TEXB0001` 이 42건 있는데 **imageCount 필드를 갖는다.** 리더는 `cmp ecx, 1 / jl`(`0x14015c910`) 이라
 > 버전 1 은 필드를 읽는다 — spec `format.tex.container.versionDistribution` 의 산문
@@ -160,9 +204,19 @@ BC7 은 어느 쪽에도 실물이 없어 디코더 필요성이 없다.
 `mip.depth = 32`, `imageCount = 1` 로 읽힌다. `payloadRange` 는 조치 전후 **완전히 동일**해
 디코드 픽셀은 무회귀다.
 
-> ⚠️ **LUT 는 헤더와 실제 PNG 의 축이 다르다.** 헤더는 `imgW = texW × depth`(가로 언롤) 인데
-> 저장된 PNG 는 **32×1024**(세로로 32 슬라이스 적층) 이다 — 28건 전수 동일. 3D LUT 샘플링을
-> 구현할 때 헤더 치수를 믿으면 안 된다.
+> ⚠️ **LUT 는 헤더와 실제 PNG 의 축이 다르다.** 재실측(2026-08-21, 28건 전수 IHDR 직독, 예외 0건):
+>
+> | 자리 | 값 |
+> | --- | --- |
+> | 헤더 `texW×texH` / `depth` | `32×32` / `32` (슬라이스 한 장 + 장수) |
+> | 헤더 `imgW×imgH` | `1024×32` — 슬라이스를 **가로로** 편 규약(`imgW = texW × depth`) |
+> | mip 레코드 `w×h` / `depth` / `isLZ4` | `32×32` / `32` / `0`(PNG 비압축 저장) |
+> | 저장된 PNG IHDR | **`32×1024`**, 8bit truecolor(colortype 2, 알파 없음) — 세로 적층 |
+>
+> 즉 "축이 바뀐" 것이 아니라 **두 레이아웃이 공존한다.** 3D LUT 샘플링을 붙일 때 잘라야 하는 축은
+> **세로**이고 슬라이스 k 는 PNG 의 `y ∈ [k·texH, (k+1)·texH)` 다 — 헤더 치수로 가로를 자르면 전부 틀린다.
+> (raw `imageFormat = -1` volume 텍스처는 어느 코퍼스에도 표본이 **0건**이라 비인코딩 volume 의 슬라이스
+> 순서는 **미확인**이다. 위 규약은 PNG 인코딩 28건 한정 확정.)
 
 ### 2.3 무결성 검증
 
@@ -176,29 +230,120 @@ BC7 은 어느 쪽에도 실물이 없어 디코더 필요성이 없다.
    `fmt0 → w·h·4·depth`, `fmt4 → ceil(w/4)·ceil(h/4)·16·depth`, `fmt8 → w·h·2`, `fmt9 → w·h` 예측치와
    전건 일치. 인코딩 레벨 76개(PNG 72 · JPEG 4)는 전건 시그니처 정상.
 
+### 2.4 여태 안 훑던 범위 — 설치 `projects/defaultprojects` 129건
+
+`measure_tex_deep.iter_tex` 는 워크샵 pkg 와 `WE/assets` 만 훑는다. 설치본에는 그 밖에
+`wallpaper_engine/projects/defaultprojects/**` 에 **`.tex` 가 129개** 더 있다(WE 가 기본 제공하는
+완성 씬들이다 — `razer_bedroom` `ricepod` `demon_core` `shimmering_particles` 등). 여기를 처음 전수로 떴다.
+
+| 항목 | 설치 projects 129건 |
+| --- | --- |
+| 매직 / TEXI | `TEXV0005` 129 · `TEXI0001` 129 · `headerLen` 46 ×129 (slice3d 0건) |
+| 컨테이너 | `TEXB0003` ×129 (0001/0002/0004 **0건**) |
+| format | 0 ×66 · 4 ×63 (8·9·6·7 **0건**) |
+| imageFormat | −1 ×127 · 13(PNG) ×2 |
+| imageCount | 1 ×129 |
+| flags 비트 | `0x2` ×55 · **`0x10` ×10** · `0x4` ×9 · `0x1` ×33 |
+| TEXS | `TEXS0003` ×9 · 없음 120 |
+| mipCount | 1 ×47 · 2~11 ×82 (**11 레벨**이 4건 — 동봉 최대 10보다 깊다) |
+| `imgW ≠ texW` | 37 · `imgH ≠ texH` 36 (npot 크롭) |
+| 파스 | 참조 파서 129/129 성공 · 파스 끝 == EOF **129/129** |
+
+새로 나온 사실은 둘이다.
+
+1. **flags 비트 `0x10` 이 실재한다**(§3). 동봉·워크샵 코퍼스에는 0건이라 지금까지 표에 없던 비트다.
+2. **mip 레벨이 11 까지 간다.** Waple 의 체인 수집엔 상한이 없어 문제 없지만, "최대 10" 을 전제로 한
+   서술이 있다면 틀렸다.
+
+Waple 파스 관점에서 이 129건은 전부 이미 다루는 조합이다(fmt 0/4, TEXB0003, imageFormat −1/13) —
+`0x10` 은 파스에 영향이 없다. 즉 **이 범위에서 새로 깨지는 것은 없다.**
+
 ---
 
 ## 3. 플래그 비트 — 주입과 소비
 
-`wallpaper64.exe` 는 텍스처 플래그를 내부 상태 워드로 옮기는 자리가 하나 있다
-(`0x14030358e`–`0x1403035d5`). 거기서 **읽는 비트는 여섯 개뿐**이다.
+> ### ⚠️ 정정 — 종전 판의 "플래그 디스패치 `0x14030358e`–`0x1403035d5`" 는 **텍스처와 무관하다**
+>
+> 종전 판은 이 문단을 "`wallpaper64.exe` 는 텍스처 플래그를 내부 상태 워드로 옮기는 자리가 하나
+> 있다(`0x14030358e`–`0x1403035d5`), 거기서 읽는 비트는 여섯 개뿐" 으로 열고, 아래 표의 "엔진 소비"
+> 칸을 그 VA 들로 채웠다. **틀렸다.** 2026-08-21 에 직접 다시 떠서 확인한 것:
+>
+> · 그 코드가 걷는 표는 `0x140438050` 이고 8바이트 레코드 `{i32 a, i32 b}` 에 종단값 `a == 0x159b` 다.
+> · `a` 는 문자열 블롭 `0x140436aa0` 의 **오프셋**이다(`movsxd rcx, ecx; add rcx, 0x140436aa0`).
+> · 그 문자열들을 실제로 읽어 보면 Adlam(U+1E9xx)·아랍·벵골·캐나다 음절문자 목록이다 —
+>   **텍스트 셰이핑/스크립트 표**다. 감싸는 함수는 `0x140302bf0`(텍스트 경로).
+> · 즉 `test byte ptr [rbx+4], 1/2/4/0x20/0x40/8` 여섯 줄은 **스크립트 속성 비트**를 상태 워드의
+>   `2/4/8/0x20/0x40/0x10` 으로 재인코딩하는 코드이고, TexFlags 와 비트값이 겹친 것은 우연이다.
+>
+> **텍스처 플래그의 진짜 소비처는 아직 특정하지 못했다(미해결).** 잘못 붙은 근거를 지우고, 남는
+> 사실만 아래에 다시 적는다. 의미(어떤 `.tex-json` 키가 어떤 비트를 켜는가)는 디스어셈블이 아니라
+> **차분 컴파일**로 확정된 것이라(`spec/formats/tex-deep.json` `format.tex.flags.bits`) 이 정정과
+> 무관하게 그대로 유효하다.
 
-| 비트 | 의미 | 엔진 소비 | Waple |
-| --- | --- | --- | --- |
-| `0x1` | NoInterpolation | `0x14030358e` → 상태 `|= 2` | **소비** — `resolveTextureNoInterpolation` → `texFilter[slot]` |
-| `0x2` | ClampUVs | `0x1403035a1` → `|= 4` | **소비** — `resolveTextureClampUVs` → `texWrap[slot]` |
-| `0x4` | IsGif(스프라이트시트) | `0x1403035ae` → `|= 8` | **소비** — TEXS 프레임 경로. 동봉에서 이 비트와 TEXS 존재가 52/52 일치 |
-| `0x8` | 저장 mip 1장 | `0x1403035d5` → `|= 0x10` | **입력 아님**(로더가 세움). Waple 은 무시 — 정확 |
-| `0x20` | IsVideoTexture | `0x1403035bb` → `|= 0x20` | **소비** — `.video` 페이로드 |
-| `0x40` | Slice3D(volume) | `0x1403035c8` → `|= 0x40` | **이번에 파스 추가**(`depth`). 3D 샘플 소비처는 아직 없다 |
-| `0x80000` | AlphaChannelPriority | **없음** | 노출만(`alphaChannelPriority`). 82건이 켜져 있지만 **WE 자신도 런타임에 읽지 않는다** |
-| `0x100000`–`0x800000` | 미상(이펙트 마스크) | **없음** | 동봉 0건 |
+flags 워드가 사는 자리는 확정이다 — tex 디스크립터 **+4**(리더 `0x14015c7b1` `or dword ptr [r8+4], eax`,
+로더 `0x14015e933` `or dword ptr [rsi+4], 8`). 그 오프셋에서 비트를 테스트하는 자리는 tex 리더 안에
+**둘뿐**이다: `0x40`(`0x14015c856` 헤더 depth 게이트 · `0x14015d374` mip depth 게이트)과
+`0x20`(`0x14015d20f`).
 
-즉 `0x80000` 과 상위 니블은 **주입은 되지만 소비는 어디서도 안 되는** 컴파일러 힌트다.
-`test dword ptr [reg+4], 0x80000` 형태의 명령이 바이너리 전체에 존재하지 않는다(전수 스캔).
+| 비트 | 의미 | 의미의 근거 | 엔진 런타임 소비 | Waple |
+| --- | --- | --- | --- | --- |
+| `0x1` | NoInterpolation | 차분 컴파일 · 사이드카 11/11 | **미특정** | **소비** — `resolveTextureNoInterpolation` → `texFilter[slot]` |
+| `0x2` | ClampUVs | 차분 컴파일 · 사이드카 243/243 | **미특정** | **소비** — `resolveTextureClampUVs` → `texWrap[slot]` |
+| `0x4` | IsGif(스프라이트시트) | 사이드카 52/52 + TEXS 존재 52/52 | 파일 구조로 자명(TEXS 섹션) | **소비** — TEXS 프레임 경로 |
+| `0x8` | 저장 mip 1장 | 로더가 세운다(`0x14015e933`) | — | **입력 아님.** Waple 은 무시 — 정확 |
+| `0x10` | sRGB(**추정**) | 사이드카 10/10 · 348/348, 표본 1개 프로젝트 | **미특정** | 무시(§3.1) |
+| `0x20` | IsVideoTexture | 코퍼스 38건 전부 mp4 페이로드 | `0x14015d20f`(TEXB 리더) | **소비** — `.video` 페이로드 |
+| `0x40` | Slice3D(volume) | `slice3d: true` 로 재현 | `0x14015c856` · `0x14015d374`(조건부 필드 게이트) | **파스**(`depth`). 3D 샘플 소비처는 아직 없다 |
+| `0x80000` | AlphaChannelPriority | 차분 컴파일 · 사이드카 82/82 | **미특정** | 노출만(`alphaChannelPriority`) |
+| `0x100000`–`0x800000` | 미상(이펙트 마스크) | 코퍼스 30건 전부 `*_mask_*.tex` | **미특정** | 무시. 동봉 0건 |
+
+`.text` 전수 바이트 스캔(2026-08-21): `test byte ptr [reg+4], 0x10` **0건**,
+`test dword ptr [reg+4], 0x80000` **0건**(`0x80000` 을 보는 명령 2건은 `[rdi+0x20]`·`[rdi+0x4c]` 로
+다른 구조체다). **다만 이 스캔은 `mov eax,[reg+4]` 로 먼저 적재한 뒤 `test al, imm` 하는 형태를
+못 잡으므로 "소비 안 함" 의 증명이 아니다** — 종전 판이 "바이너리 전체에 존재하지 않는다" 로
+단정한 것도 같은 한계를 안 적은 것이다. 지금 말할 수 있는 것은 "그 두 비트를 그 오프셋에서 직접
+테스트하는 명령은 없다" 까지다.
+
+**Waple 에 미치는 영향은 없다.** 0x1/0x2/0x4/0x20/0x40 은 이미 소비하고, 0x8 은 무시가 정답이며,
+0x10·0x80000·상위 니블은 렌더 동작을 바꾸지 않으니 무시가 안전한 기본값이다. 바뀐 것은
+**근거의 등급**(확정 → 미특정)뿐이다.
 
 동봉 311건 flags 도수: `2`×121 · `0x80002`×66 · `4`×40 · `0`×36 · `0x42`×28 · `0x80004`×10 ·
 `0x80000`×6 · `6`×2 · `1`×1 · `3`×1.
+설치 projects 129건 flags 도수: `0`×72 · `3`×23 · `2`×14 · **`0x12`×10** · `7`×8 · `1`×1 · `5`×1.
+
+### 3.1 `0x10` = `srgb` — 근거와 그 한계
+
+`.tex-json` 이 있는 **358쌍**(동봉 272 + 설치 projects 86)에서 키↔비트 대응을 전수로 쟀다.
+정확히 네 쌍이 **양방향 완전 일치**했다(켜진 쪽 전부 일치 + 꺼진 쪽 전부 일치):
+
+| `.tex-json` 키 | flags 비트 | 켜짐 | 꺼짐 |
+| --- | --- | --- | --- |
+| `nointerpolation: true` | `0x1` | 34/34 | 324/324 |
+| `clampuvs: true` | `0x2` | 237/237 | 121/121 |
+| `alphachannelpriority: true` | `0x80000` | 82/82 | 276/276 |
+| **`srgb: true`** | **`0x10`** | **10/10** | **348/348** |
+
+> **한계를 분명히 한다.** `srgb: true` 를 쓰는 `.tex-json` 은 전 코퍼스에서 10개뿐이고
+> **전부 같은 프로젝트**(`projects/defaultprojects/razer_bedroom/materials/`)다. 같은 시점에 같은
+> 도구로 컴파일된 한 묶음이라, 이름 대응은 **교란 가능**하다(그 10건에만 있는 다른 성질이 원인일 수도).
+> 다만 **지금 `resourcecompiler64.exe` 의 `.tex-json` 키 표에는 `srgb` 가 없다** — 표는 파일 오프셋
+> `0x584da8`(`format`)부터 `0x584f70`(`variantcondition`)까지 NUL 로 이어진 34개이고 전체는:
+> `format` `nointerpolation` `clampuvs` `croptoaspectratio` `nomip` `halfmip` `bilateralfilterkernel`
+> `bilateralfilterstrength` `wildcard` `frameduration` `imagesequence` `file` `duration`
+> `spritesheetsequences` `bleedtransparentcolors` `forcerawcompression` `ignoresizefornativecompression`
+> `cropandresize` `cropresizewidth` `cropresizeheight` `alphachannelpriority` `normalmapflipx`
+> `normalmapflipy` `slice3d` `variants` `options` `blend` `variantcondition` `alphablend`
+> `component` `width` `height` `frames` `force`.
+> 즉 **현행 컴파일러는 이 비트를 만들지 못한다** — 옛 버전의 잔재로 보는 것이 자연스럽다.
+> `srgb` 문자열이 `wallpaper64.exe` 에 있긴 하지만 그건 `materials/util/combine_srgb.json` 경로
+> 문자열이고, `sRGB` 는 PNG `sRGB` 청크 비교(`cmp ecx, 'sRGB'` @파일오프셋 `0xb7c19`)다 — 둘 다 키가 아니다.
+>
+> **판정: 이름은 추정**(강한 상관이지만 표본이 한 프로젝트라 교란 가능).
+> **"런타임 비소비" 도 확정이 아니라 정황**이다 — `test byte ptr [reg+4], 0x10` 이 `.text` 에 0건이고
+> 현행 컴파일러 키 표에도 없다는 두 정황뿐이고, 위 정정대로 "여섯 비트 디스패치" 근거는 무효다.
+> 어느 쪽이든 **Waple 이 무시하는 현재 동작은 안전하다**: 이 비트를 읽으면 그때부터는 WE 와 다르게
+> 그리는 쪽이 되고, 지금은 렌더 결과가 이 비트와 무관하다.
 
 ---
 
@@ -236,8 +381,18 @@ BC7 은 어느 쪽에도 실물이 없어 디코더 필요성이 없다.
 | `nomip: true` | mipCount == 1 | **93/93** |
 | `format` | 헤더 `format` | `check_tex_format_map.py` 가 매 CI 재측정 |
 
-`nonpoweroftwo`(231건) 는 세 바이너리 어디에도 토큰이 없다 — 에디터 템플릿 잔재이고 컴파일 무영향.
+`nonpoweroftwo`(231건) 는 **`wallpaperui.exe`(에디터)에만 토큰이 있다** — 재확인 2026-08-21, 설치본
+바이너리 27개를 ASCII·UTF-16LE 양쪽으로 훑은 결과 `wallpaperui.exe` 2건뿐이고
+`wallpaper64.exe`·`resourcecompiler64.exe`·`scenescript64.dll`·`resourceutil64.dll` 에는 없다.
+(종전 판은 "세 바이너리 어디에도 토큰이 없다" 였는데, 에디터를 안 본 결과다. 결론 — 컴파일·런타임
+무영향 — 은 그대로지만 "죽은 키" 가 아니라 **에디터 전용 키**다.)
 `bleedtransparentcolors` · `forcerawcompression` · `halfmip` 은 인코딩 방식만 바꾸고 헤더에 흔적이 없다.
+
+`spritesheetsequences` 의 런타임 미도달도 같은 스윕으로 재확인했다: **`resourcecompiler32/64.exe`
+두 개에만** 있고 `wallpaper64.exe`·`scenescript64.dll`·`resourceutil64.dll`·`wallpaperui.exe` 에는 없다.
+즉 순수 컴파일 입력이고, 그 값은 TEXS 섹션으로 구워져 들어온다(아래 §5) — `.tex-json` 을 런타임에
+읽을 이유가 없다. Waple 도 `.tex-json` 은 **소스 폼(`.tex` 부재) `format` 해석에만** 쓴다
+(`SceneRendererResources.texJSONFormatCodes`, `check_tex_format_map.py` 가 매 CI 재측정).
 
 ### 4.2 Waple 이 못 읽는 키 — 도달 수 순
 
@@ -249,7 +404,7 @@ BC7 은 어느 쪽에도 실물이 없어 디코더 필요성이 없다.
 | --- | --- | --- | --- | --- |
 | `clampuvs: true` | 23 | **1** | `false`(= repeat) | 22건은 에디터 프리뷰 썸네일(`presets/*/preview*/materials/effectpreview`) — 월페이퍼 런타임이 안 그린다. 도달하는 1건은 `scenes/gifs/materials/background` |
 | `nomip: true` | 26 | 26 | 무시 | 소스 폼은 `.png` 1장을 그대로 올려 애초에 저장 mip 이 없다 — 결과 동일 |
-| `nonpoweroftwo: true` | 23 | 1 | 무시 | 데드 키(바이너리 토큰 없음) |
+| `nonpoweroftwo: true` | 23 | 1 | 무시 | 에디터 전용 키(`wallpaperui.exe` 에만 토큰) — 컴파일·런타임 무영향 |
 | `nointerpolation: true` | **1** | **1** | `false`(= linear) | `scenes/gifs/materials/background` — gif 템플릿 배경이 nearest 대신 linear 로 샘플된다 |
 | `format` | 0 | — | **읽는다** | `SceneRendererResources.texJSONFormatCodes`(소스 폼 전용) |
 
@@ -287,6 +442,28 @@ Waple 의 두 소비 경로가 이 0 을 다르게 다루고 있었다.
 > WE 가 이 자리에 쓰는 값은 확정하지 못했다. TEXS 리더가 총 재생길이를 누적만 하고
 > (`0x14015e514`), 그 값을 읽는 소비처를 바이너리에서 특정하지 못했다. 0.016 은 **Waple 내부
 > 일관성**(파티클 경로와 동일)이 근거이고 RE 확정이 아니다.
+
+**[2026-08-21 추가 실측] 그 8건의 "원래 속도" 는 짝 `.tex-json` 에 남아 있다.** 8건 전부
+`spritesheetsequences[0] = {duration: 1, frames: N}` 을 갖고 있어 프레임당 시간이 `1/N` 로 나온다.
+Waple 의 균일 폴백 0.016 과 대조하면:
+
+| 자산 | `frames` | 사이드카가 뜻하는 프레임당 | Waple 폴백 0.016 대비 |
+| --- | --- | --- | --- |
+| `fire1` · `smoke3` · `lightning1` | 64 | 0.015625 | ≈ 일치(2.4% 빠름) |
+| `fire2` · `lightning2` | 32 | 0.03125 | **2× 빠름** |
+| `fire3` | 128 | 0.0078125 | **2× 느림** |
+| `debris1` | 8 | 0.125 | **7.8× 빠름** |
+| `snow` | 4 | 0.25 | **15.6× 빠름** |
+
+즉 3/8 은 우연히 맞고 5/8 은 어긋난다. 그렇다고 사이드카를 런타임에 읽는 것이 **정답이라는 뜻은 아니다** —
+`.tex-json` 은 컴파일 입력이고 그 문자열이 런타임 바이너리에 없다(§4). WE 자신은 그 값을 못 본다.
+
+이 어긋남이 실제로 보이려면 그 8건이 **이미지 레이어 스프라이트시트**로 쓰여야 하는데, 전부
+파티클 텍스처다. 파티클 경로는 TEXS frametime 을 안 쓰고 def 의 `animationmode` 를 쓴다 —
+동봉 `.json` 전수에 `frametime` 키가 **0건**이고 `animationmode` 는 `null` ×106 · `randomframe` ×32 ·
+`sequence` ×4 로 존재한다(Waple 은 `ParticleSystem.animationMode` 로 이미 소비한다).
+**결론: 폴백 0.016 은 지금 도달하는 자산에서 관측 가능한 차이를 만들지 않는다.** 다만
+"WE 가 이 값을 어떻게 정하는가" 는 여전히 미해결이고, 사이드카 수치는 그 답의 **후보**다.
 
 `gifWidth`/`gifHeight` 도 이번에 노출했다(`TEXS0003` 은 파일값, 이하는 헤더 `imgW/imgH` 기본값).
 소비처는 아직 없다 — Waple 은 프레임 렉트에서 크기를 얻는다.
@@ -354,6 +531,9 @@ WE(와 D3D 규격)는 `((7-i)·a0 + i·a1 + 3) / 7`, 6단은 `+2)/5` 로 **반�
 | --- | --- |
 | raw RGBA 폴백의 헤더 오프셋 42 | 실물 헤더 끝은 46/50 이지만 **이 분기는 실물에서 도달 불가**다(동봉 311/311, 코퍼스 4,680/4,680 이 TEXB 컨테이너를 갖는다). 기존 픽스처가 42 를 못박고 있고 그 테스트 파일은 담당 밖이다 |
 | BC3 알파 라운딩 | §6.4 — 담당 밖 테스트 기댓값 동반 수정 필요 |
-| `variantCount` 를 `isVideoMp4` 로 보는 모델 | 모델은 틀렸지만 출력이 코퍼스 전건 동일(spec 확정). 고치면 조건 변형 파스 경로 전체를 다시 재야 한다 |
+| ~~`variantCount` 를 `isVideoMp4` 로 보는 모델~~ | **2026-08-21 고쳤다** — §1.2 의 조치 노트 참조 |
 | 3D LUT 슬라이스 샘플링 | `depth` 는 이제 파스한다. 실제 3D 샘플 소비처가 없어 죽은 코드를 만들지 않았다 |
 | `previewColor` 소비 | 렌더 소비처를 못 찾았다(에디터/UI 힌트). 헤더 길이 계산 목적으로만 읽는다 |
+| `TEXV0004` 레거시 컨테이너 | 엔진은 받는다(`0x14015e8c5`, TEXI/TEXB 를 **버전 0** 으로 호출 — previewColor 없음·`imageCount` 필드 없이 1 고정 `0x14015c941`·imageFormat/variantCount 없음). Waple 은 `TEXV0005` 만 받는다. **동봉 311 · 설치 projects 129 · 워크샵 4,991 전건이 0005** 라 실물 표본이 0건이고, 표본 없이 두 번째 레이아웃을 쓰면 검증 불가능한 코드가 된다. 0004 실물이 나오면 추가할 것 |
+| 플래그 `0x10`(sRGB) 소비 | 엔진도 안 읽는다(§3.1). 읽는 쪽을 만들면 **WE 보다 다르게** 그리게 된다 |
+| `TexImage.spriteFrameIndex` 폴백 0.016 | §5 — 사이드카 수치가 후보지만 런타임 근거가 없고, 도달 자산에서 관측 가능한 차이가 없다 |
