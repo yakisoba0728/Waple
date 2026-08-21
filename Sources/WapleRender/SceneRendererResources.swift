@@ -1214,7 +1214,11 @@ extension SceneRenderer {
             // 베이스는 이 함수의 인자 `lw`/`lh`(= 호출부 `Float(max(1, texW))`, 1214 위 727행) 다.
             // `texW`/`texH` 라는 이름은 이 스코프에 **없다** — 여긴 Metal 전용이라 CI 밖에서는
             // `swiftc -parse` 만 돌아 타입체크가 안 되고, 그래서 990aa2a 가 macOS 빌드를 깼다.
-            if let box = fbo.fittedBox(baseWidth: Int(lw), baseHeight: Int(lh)) {
+            // `Int(exactly:)` 로 받는다 — `Int(Float)` 는 범위를 넘으면 클램프가 아니라 **트랩**이고
+            // (check_int_narrowing 게이트가 이 총수를 감시한다), `lw`/`lh` 는 위 727행에서
+            // `Float(max(1, texW))` 로 만들어진 정수값이라 `exactly:` 는 실측상 항상 성공한다.
+            // 실패(비정수·범위 초과)하면 1 로 떨어져 `fittedBox` 의 `max(4, ·)` 하한이 받는다.
+            if let box = fbo.fittedBox(baseWidth: Int(exactly: lw) ?? 1, baseHeight: Int(exactly: lh) ?? 1) {
                 let fw = Float(box.width), fh = Float(box.height)
                 texRes[slot] = SIMD4(fw, fh, fw, fh)
             } else if let fw = fbo.fixedWidth, let fh = fbo.fixedHeight {

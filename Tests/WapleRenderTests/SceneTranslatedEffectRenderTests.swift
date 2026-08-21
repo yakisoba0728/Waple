@@ -229,10 +229,21 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         XCTAssertLessThan(c.greenComponent, 0.1)
     }
 
-    /// X-①: effect.json fbos[].fit(실물 cursorripple `_rt_EightBuffer1/2` fit:512) 는 dst 비례(scale)가
-    /// 아니라 절대 정사각 크기여야 한다. dst 는 64×36(테스트 캡처 해상도)인데 fbo fit:32 이면 그 fbo 는
-    /// 항상 32×32 — scale 기반으로 잘못 낙하하면(과거: fit 무시 → scale 기본값 1 → dst 크기) 프로브가 실패.
-    func testMultiPassEffectFBOFitIsAbsoluteSize() throws {
+    /// X-① → **W-FIT 로 정정(2026-08-21, `990aa2a`)**: `fit:N` 은 N×N 정사각이 **아니다**.
+    /// "긴 변을 N 에 맞추고 종횡비를 보존하며 확대하지 않는다"(원본 `0x1401eb2cc`–`0x1401eb381`,
+    /// 규약 전문은 `EffectManifest.FBO.fittedBox`). 이 테스트는 종전에 **정사각을 못 박고 있었고**
+    /// 그게 옛(틀린) 규약이었다.
+    ///
+    /// dst 는 64×36(테스트 캡처 해상도)이므로 `fit:32` 는
+    ///   w0,h0 = (64, 36) · 긴 변 = w · fittedMajor = min(32, 64) = 32
+    ///   fittedMinor = trunc(36/64 × 32) = trunc(18.0) = 18
+    /// 즉 **32×18** 이다. 프로브는 x·y 를 따로 본다 — y 까지 32 를 요구하면 정사각 규약으로
+    /// 되돌아간 것이고, 반대로 (64,36)이 나오면 `fit` 이 통째로 무시돼 scale 기본값 1 로
+    /// 낙하한 것이다(옛 회귀). 두 실패를 메시지로 갈라 놓았다.
+    ///
+    /// 프레임 시점의 `g_Texture0Resolution` 은 `runtimeTexRes`(FrameEncoder:69)가 **실제 할당된
+    /// 텍스처 치수**로 덮으므로, 이 프로브는 빌드 시점 `texRes` 가 아니라 **진짜 FBO 크기**를 본다.
+    func testMultiPassEffectFBOFitPreservesAspect() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
         let vert = """
         varying vec2 v_TexCoord;
@@ -249,9 +260,10 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         varying vec2 v_TexCoord;
         uniform sampler2D g_Texture0;
         void main() {
-            float ok = step(31.5, g_Texture0Resolution.x) * step(g_Texture0Resolution.x, 32.5)
-                     * step(31.5, g_Texture0Resolution.y) * step(g_Texture0Resolution.y, 32.5);
-            gl_FragColor = vec4(ok, ok, ok, 1.0);
+            float okx = step(31.5, g_Texture0Resolution.x) * step(g_Texture0Resolution.x, 32.5);
+            float oky = step(17.5, g_Texture0Resolution.y) * step(g_Texture0Resolution.y, 18.5);
+            // r=x 만족, g=y 만족 — 실패했을 때 어느 축이 틀렸는지 픽셀로 읽는다.
+            gl_FragColor = vec4(okx, oky, 0.0, 1.0);
         }
         """
         let effectJSON = """
@@ -290,9 +302,13 @@ final class SceneTranslatedEffectRenderTests: XCTestCase {
         let out = URL(fileURLWithPath: "/tmp/waple_tr_fit")
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         let url = try XCTUnwrap(r.captureFrames(width: 64, height: 36, times: [0.1], toDir: out).first)
-        let luma = avgLuma(url)
-        NSLog("%@", "[Waple] fbo fit:32 resolution-probe luma=\(luma)")
-        XCTAssertGreaterThan(luma, 0.9, "fit:32 는 dst(64x36)와 무관하게 절대 32x32 여야 함(스케일 폴백이면 g_Texture0Resolution 불일치 → 검정)")
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: url)))
+        let c = try XCTUnwrap(rep.colorAt(x: 32, y: 18))
+        NSLog("%@", "[Waple] fbo fit:32 probe r(x축)=\(c.redComponent) g(y축)=\(c.greenComponent)")
+        XCTAssertGreaterThan(c.redComponent, 0.9,
+                             "긴 변이 32 가 아니다 — fit 이 무시돼 scale 폴백(dst 64)으로 떨어졌을 때 나는 모양")
+        XCTAssertGreaterThan(c.greenComponent, 0.9,
+                             "짧은 변이 18 이 아니다 — 정사각(32×32) 옛 규약으로 되돌아갔거나 dst(36)가 그대로 실렸다")
     }
 
     /// X-⑦: constantshadervalues 의 {animation:{...}} 키프레임(55씬/287건) — 종전엔 파스 자체가
