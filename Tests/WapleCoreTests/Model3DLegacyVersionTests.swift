@@ -28,8 +28,11 @@ final class Model3DLegacyVersionTests: XCTestCase {
         XCTAssertNil(Model3DFormat.version(ofMagic: "MDLV0018"))
         XCTAssertNil(Model3DFormat.version(ofMagic: "MDLV0013"))   // 2D 퍼펫은 PuppetModel 담당
         XCTAssertNil(Model3DFormat.version(ofMagic: "MDLVxxxx"))
-        // skinCount → 메시당 머티리얼 개수
-        XCTAssertEqual(Model3DFormat.materialCount(skinCount: 0), 1)
+        // skinCount → 메시당 머티리얼 개수. **0 은 0개다** — 엔진 리드 루프가 카운터를 먼저 재고
+        // (`0x14026193e cmp dword [r15+8], ebx` / `jbe`) 0 이면 cstring 을 한 개도 안 읽는다.
+        // 종전엔 여기서 1을 돌려줘 이후 전 오프셋을 cstring 길이만큼 밀었다(실물 미목격이라 무회귀).
+        XCTAssertEqual(Model3DFormat.materialCount(skinCount: 0), 0)
+        XCTAssertEqual(Model3DFormat.materialCount(skinCount: 1), 1)
         XCTAssertEqual(Model3DFormat.materialCount(skinCount: 2), 2)
         XCTAssertNil(Model3DFormat.materialCount(skinCount: 1 << 20))
     }

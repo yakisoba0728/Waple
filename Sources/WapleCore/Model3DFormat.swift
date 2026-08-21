@@ -56,6 +56,18 @@ public enum Model3DFormat {
     /// 메시 뒤 트레일러(게이트A/B 블롭 + v≥23 모프 레코드)가 있는가.
     public static func hasMeshTrailer(version: Int) -> Bool { version >= 21 }
 
+    /// 메시 전부를 읽은 **뒤** 섹션 루프(MDLS/MDAT/MDLA/MDMP/MDLE)를 도는가 = v ≥ 13.
+    ///
+    ///     0x140262382  cmp edi, 0x0d       → edi = atoi(매직+4) = 버전
+    ///     0x140262385  jl  0x140265a0c     → v < 13 이면 섹션을 **한 바이트도 안 읽고** 끝낸다
+    ///     0x1402623d8  call 0x14009c500    → v ≥ 13: 섹션 매직을 cstring 으로 읽고
+    ///     0x1402623ec  cmp qword [rbp+0x258], 0 / je → **빈 문자열이면 루프 종료**
+    ///
+    /// 마지막 줄이 실물의 파일 말미 단일 NUL 의 정체다 — v0014/0017/0023 설치본 20/20 이 그 NUL 로
+    /// 끝나고, v0004 설치본 8/8 은 마지막 인덱스 바이트가 곧 EOF 다(NUL 없음). 이 차이가 v0004 와
+    /// v0014 의 유일한 컨테이너 차이이기도 하다(둘 다 AABB·per-mesh flag·트레일러가 없다).
+    public static func hasSections(version: Int) -> Bool { version >= 13 }
+
     /// 메시 헤더의 `gateWord` 뒤에 붙는 **여분 u32 개수** — bit1 이 서면 정확히 1개, 아니면 0개.
     /// 브루트포스 탐색이 아니라 **결정론적 분기**다(엔진은 `if` 하나뿐이라 2개 이상은 발생 불가):
     ///
@@ -98,10 +110,16 @@ public enum Model3DFormat {
     public static let maxBoneCount = 128
 
     /// 메시마다 읽는 머티리얼 cstring 개수 = 헤더 오프셋 13 의 skinCount(스킨 = **같은 메시의 재질
-    /// 변형**, 모델 옵션 json 의 `skins` 배열과 1:1). 실측 분포는 {1: 450, 2: 1}.
-    /// 0 은 실물 미목격 — 방어적으로 1 개(종전 동작)로 본다. 폭주값은 nil 로 거부한다.
+    /// 변형**, 모델 옵션 json 의 `skins` 배열과 1:1). 설치본 실측 분포 {1: 27파일, 2: 1파일}
+    /// (audiophile `models/grid/grid.mdl` 만 2 — `materials/grid/grid.json` + `grid2.json`).
+    ///
+    /// **0 이면 0개다**(2026-08-21 정정). 엔진의 리드 루프는 카운터를 0 으로 놓고
+    /// `0x14026193e cmp dword [r15+8], ebx` / `0x140261942 jbe 0x140261979` 로 먼저 재므로
+    /// skinCount==0 이면 cstring 을 **한 개도 안 읽고** gateWord 로 넘어간다(`[r15+8]` 이
+    /// `0x1402618fb` 에서 저장된 skinCount). 종전 구현은 여기서 1개를 읽어 이후 전 오프셋을
+    /// cstring 길이만큼 밀었다 — 실물 미목격이라 회귀는 없지만, 엔진과 다르게 읽는 자리였다.
+    /// 폭주값(>256)은 nil 로 거부한다(엔진은 상한이 없다 — 이쪽은 방어).
     public static func materialCount(skinCount: UInt32) -> Int? {
-        if skinCount == 0 { return 1 }
         guard skinCount <= 256 else { return nil }
         return Int(skinCount)
     }
