@@ -27,12 +27,13 @@ import Foundation
 /// **아래 파서가 실물과 갈리는 지점**(전부 설치본 코퍼스 도달 0 — `condition` 문자열 22건 /
 /// 고유 16종 전수 확인, 아래 §도달 참조. 고치지 않은 이유는 각 항목에 적었다):
 ///
-/// 1. **equality 와 relational 이 한 레벨이고 반복하지 않는다.** `parseComparison` 은 여덟 연산자를
-///    한 묶음으로 보고 **한 번만** 소비한다. 그래서 Angular 가 `(a==b)==c` 로 읽는 `a == b == c`,
-///    `(a>b)==c` 로 읽는 `a > b == c`, `a == (b>c)` 로 읽는 `a == b > c` 를 Waple 은 **파스 실패**
-///    (`nil`)로 흘린다 → `isVisible` 은 관용적으로 **표시**한다. 실패 방향이 "숨김" 이 아니라
-///    "표시" 라 조건식을 못 읽어도 토글이 사라지지는 않는다. 코퍼스 도달 0(비교 연산자가 둘 이상
-///    연쇄하는 조건이 22건 중 0건 — `&&` 로만 이어진다).
+/// 1. ~~equality 와 relational 이 한 레벨~~ → **2026-08-21 클러스터 Q 에서 닫았다.**
+///    `parseEquality`/`parseRelational` 로 갈라 각각 좌결합 반복시킨다. 그래서 `a == b == c` 는
+///    `(a==b)==c`, `a > b == c` 는 `(a>b)==c`, `a == b > c` 는 `a == (b>c)` 로 Angular 와 같이 읽는다.
+///    (종전에는 셋 다 **파스 실패**(`nil`) → `isVisible` 이 관용적으로 **표시**였다.)
+///    이 변경은 **단조 확대**라 종전에 파스되던 식의 결과는 하나도 바뀌지 않는다 —
+///    설치본 조건 22건 / 고유 16종에 비교 연산자 연쇄가 **0건**이므로 그 코퍼스 위에서
+///    `canEvaluate`·`evaluate` 가 한 건도 움직이지 않는다(재측정으로 확인).
 /// 2. **`+ - * / %` 와 단항 `+`/`-` 가 없다.** 토크나이저가 미지 연산자를 만나면 `failed` 로
 ///    전체를 파스 실패시킨다(부분 평가로 엉뚱한 확정을 내는 것보다 안전). 코퍼스 도달 0.
 /// 3. **`==` 와 `===` 를 구분하지 않는다.** `equals()` 가 먼저 `number()` 로 양변을 수치화하므로
@@ -411,30 +412,46 @@ private struct Parser {
     }
 
     private mutating func parseAnd() -> ConditionValue? {
-        guard var lhs = parseComparison() else { return nil }
+        guard var lhs = parseEquality() else { return nil }
         while match(.op("&&")) {
-            guard let rhs = parseComparison() else { return nil }
+            guard let rhs = parseEquality() else { return nil }
             lhs = .bool(lhs.truthy && rhs.truthy)
         }
         return lhs
     }
 
-    /// AngularJS 1.6.10 은 여기를 **두 레벨**로 나누고 각각 좌결합으로 **반복**한다
-    /// (`equality → relational (…)*` @vendor.js byte 167616 · `relational → additive (…)*` @167789).
-    /// 여기는 여덟 연산자를 한 레벨로 묶고 **한 번만** 소비한다 — 연쇄하면 남은 토큰 때문에
-    /// `parser.isAtEnd` 가 거짓이 되어 조건 전체가 파스 실패(`nil`)로 떨어지고, 호출부는
-    /// 관용적으로 **표시**한다. 실물 코퍼스 22건에 비교 연산자 연쇄가 0건이라 도달 0 이다
-    /// (타입 선언 주석 §1). 고치려면 두 레벨로 갈라 while 루프를 씌우면 되지만, 그러면
-    /// `canEvaluate` 가 지금 false 를 돌리는 입력에서 true 로 바뀌어 분석기 경고
-    /// (`WallpaperCompatibilityAnalyzer`)와 `DeepScan` 집계가 함께 움직인다 — 이 레인 밖이다.
-    private mutating func parseComparison() -> ConditionValue? {
-        guard let lhs = parsePrimary() else { return nil }
-        guard case .op(let op)? = peek(), ["==", "===", "!=", "!==", ">", "<", ">=", "<="].contains(op) else {
-            return lhs
+    /// `equality → relational ( ("=="|"!="|"==="|"!==") relational )*` — AngularJS 1.6.10 의
+    /// 사슬 그대로다(`vendor.js` byte @167616, **좌결합 반복**).
+    ///
+    /// 종전 이 자리(`parseComparison`)는 여덟 연산자를 **한 레벨로 묶고 한 번만** 소비해서
+    /// `a == b == c` · `a > b == c` · `a == b > c` 를 전부 파스 실패(`nil`)로 흘렸다(남은 토큰
+    /// 때문에 `parser.isAtEnd` 가 거짓). 2026-08-21 클러스터 Q 에서 두 레벨로 갈랐다 —
+    /// 소비처 영향은 **단조 확대**다(지금 파스되는 식은 전부 그대로 파스된다):
+    /// `WallpaperCompatibilityAnalyzer` 의 `propertyDisplayCondition` 경고는 **줄기만** 하고
+    /// `DeepScan` 의 `conditionsEvaluable` 는 **늘기만** 한다. 설치본 조건 **22건 / 고유 16종**을
+    /// 전수 재측정해 비교 연산자가 둘 이상 연쇄하는 식이 **0건**임을 확인했으므로(전부 `&&`
+    /// 로만 이어진다) 그 코퍼스 위에서 두 소비처의 수치는 **한 건도 움직이지 않는다**.
+    private mutating func parseEquality() -> ConditionValue? {
+        guard var lhs = parseRelational() else { return nil }
+        while case .op(let op)? = peek(), ["==", "===", "!=", "!=="].contains(op) {
+            index += 1
+            guard let rhs = parseRelational() else { return nil }
+            lhs = .bool(compare(lhs, rhs, op: op))
         }
-        index += 1
-        guard let rhs = parsePrimary() else { return nil }
-        return .bool(compare(lhs, rhs, op: op))
+        return lhs
+    }
+
+    /// `relational → additive ( ("<"|">"|"<="|">=") additive )*`(`vendor.js` byte @167789).
+    /// `additive`/`multiplicative`/단항 `+`·`-` 는 여전히 없다(토크나이저가 파스 실패로 돌린다 —
+    /// 타입 선언 주석 §2, 코퍼스 도달 0). 그래서 여기서는 `parsePrimary` 로 내려간다.
+    private mutating func parseRelational() -> ConditionValue? {
+        guard var lhs = parsePrimary() else { return nil }
+        while case .op(let op)? = peek(), [">", "<", ">=", "<="].contains(op) {
+            index += 1
+            guard let rhs = parsePrimary() else { return nil }
+            lhs = .bool(compare(lhs, rhs, op: op))
+        }
+        return lhs
     }
 
     private mutating func parsePrimary() -> ConditionValue? {

@@ -135,27 +135,57 @@ final class PropertyConditionEvaluatorTests: XCTestCase {
     //             → additive(@167960) → multiplicative(@168124) → unary(@168262) → primary
     // UI 가 그 파서를 `$eval` 로 부른다(`scripts.js` @byte 106657 · 375400 · 613938).
     //
-    // 아래 셋은 "지금 이렇게 동작한다" 를 못박는 것이지 "이게 옳다" 가 아니다.
-    // 문법을 Angular 에 맞추면 이 테스트들이 깨져야 한다 — 그때 **의도적으로** 갱신해라.
+    // 아래 둘(§2·§3)은 "지금 이렇게 동작한다" 를 못박는 것이지 "이게 옳다" 가 아니다.
+    // 문법을 Angular 에 맞추면 그 테스트들이 깨져야 한다 — 그때 **의도적으로** 갱신해라.
+    // §1(비교 연산자 레벨·결합)은 2026-08-21 클러스터 Q 에서 **닫았다** — 아래는 그 반대 방향,
+    // 즉 "Angular 와 같아졌다" 를 못박는 테스트다.
 
-    /// §1 — equality/relational 이 한 레벨이고 반복하지 않는다.
-    /// Angular 는 `a == b == c` 를 `(a==b)==c` 로 읽는다. 여기서는 남은 토큰 때문에
-    /// `isAtEnd` 가 거짓이 되어 **파스 실패(nil)** 다 → `isVisible` 은 관용적으로 표시한다.
-    /// 실물 조건 22건에 비교 연산자 연쇄는 0건이다(전부 `&&` 로만 이어진다).
-    func testComparisonChainsAreParseFailuresNotAngularLeftAssociation() {
+    /// §1(닫힘) — `equality`(@vendor.js byte 167616)와 `relational`(@167789)이 **두 레벨**이고
+    /// 각각 **좌결합 반복**이다. 종전 Waple 은 여덟 연산자를 한 레벨로 묶고 한 번만 소비해
+    /// 연쇄를 전부 파스 실패(nil)로 흘렸다.
+    ///
+    /// 세 형태의 Angular 해석과 여기 결과가 일치해야 한다(a=1 · b=1 · c=true):
+    ///   `a == b == c` → `(1==1)==true` → **true**
+    ///   `a > b == c`  → `(1>1)==true`  → **false**
+    ///   `a == b > b`  → `1==(1>1)`     → **false**
+    /// 실물 조건 22건 / 고유 16종에 비교 연산자 연쇄는 **0건**이라(전부 `&&` 로만 이어진다)
+    /// 이 확장은 설치본 코퍼스 위에서 `canEvaluate`·`evaluate` 를 한 건도 움직이지 않는다.
+    func testComparisonChainsFollowAngularTwoLevelLeftAssociation() {
         let values: [String: PropertyValue] = ["a": .number(1), "b": .number(1), "c": .bool(true)]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("a.value == b.value == c.value", values: values),
+                       true, "(a==b)==c — equality 는 좌결합 반복")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("a.value > b.value == c.value", values: values),
+                       false, "(a>b)==c — relational 이 equality 보다 강하게 묶인다")
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("a.value == b.value > b.value", values: values),
+                       false, "a==(b>b) — 우변도 relational 레벨로 내려간다")
         for chain in ["a.value == b.value == c.value",
                       "a.value > b.value == c.value",
                       "a.value == b.value > b.value"] {
-            XCTAssertNil(PropertyConditionEvaluator.evaluate(chain, values: values),
-                         "\(chain): 연쇄는 파스 실패로 흘린다(Angular 는 좌결합 반복)")
-            XCTAssertFalse(PropertyConditionEvaluator.canEvaluate(chain),
-                           "\(chain): 분석기가 '평가 불가' 경고를 내야 한다")
+            XCTAssertTrue(PropertyConditionEvaluator.canEvaluate(chain),
+                          "\(chain): 이제 문법이 인식되므로 분석기 경고가 나가지 않는다")
         }
-        // 실패 방향은 "숨김" 이 아니라 "표시" 다 — 조건을 못 읽어도 토글이 사라지지 않는다.
-        let prop = WallpaperProperty(key: "x", type: "bool", value: .bool(true), order: 0,
-                                     condition: "a.value == b.value == c.value")
-        XCTAssertTrue(PropertyConditionEvaluator.isVisible(prop, in: [prop]))
+        // **좌결합**이지 우결합이 아니다 — 이 값에서만 둘이 갈린다.
+        // 좌: `(1==2)==0` → `false==0` → true · 우: `1==(2==0)` → `1==false` → false.
+        let discriminator: [String: PropertyValue] = ["a": .number(1), "b": .number(2), "c": .number(0)]
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("a.value == b.value == c.value",
+                                                           values: discriminator),
+                       true, "좌결합이면 true — 우결합이면 false 가 나온다")
+        // 연쇄가 아닌 식은 종전 그대로다(단조 확대 — 회귀 없음).
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("a.value == b.value", values: values), true)
+        XCTAssertEqual(PropertyConditionEvaluator.evaluate("a.value > b.value", values: values), false)
+        XCTAssertNil(PropertyConditionEvaluator.evaluate("a.value ==", values: values), "미완성은 여전히 실패")
+        // 표시 판정까지 이어진다.
+        let props = [
+            WallpaperProperty(key: "a", type: "slider", value: .number(1), order: 0, condition: nil),
+            WallpaperProperty(key: "b", type: "slider", value: .number(1), order: 1, condition: nil),
+            WallpaperProperty(key: "c", type: "bool", value: .bool(true), order: 2, condition: nil),
+            WallpaperProperty(key: "x", type: "bool", value: .bool(true), order: 3,
+                              condition: "a.value == b.value == c.value"),
+            WallpaperProperty(key: "y", type: "bool", value: .bool(true), order: 4,
+                              condition: "a.value > b.value == c.value"),
+        ]
+        XCTAssertEqual(PropertyConditionEvaluator.visibleIndices(in: props), [0, 1, 2, 3],
+                       "x 는 (a==b)==c = true 라 표시, y 는 (a>b)==c = false 라 숨김")
     }
 
     /// §2 — 산술 연산자(`+ - * / %`)와 단항 부호가 없다. 토크나이저가 미지 연산자를 만나면

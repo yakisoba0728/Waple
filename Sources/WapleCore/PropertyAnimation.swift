@@ -140,7 +140,9 @@ public struct PropertyAnimation: Equatable {
         var frame = (startPaused ? 0 : t) * fps
         if isSingle || length <= 0 {
             // single: WE 는 time 을 duration 에서 멈추고 flags bit30 을 세운다(VA 0x1401aa177).
-            // length <= 0 은 WE 가 애니 자체를 드롭하는 입력이라(VA 0x1401a8c43) 종전 클램프 유지.
+            // `length <= 0` 은 이제 `parse` 가 nil 로 떨어뜨리므로(VA 0x1401a8c43 — 아래 parse 주석)
+            // **파스 경로에서는 죽은 가지**다. 공개 `init` 으로 직접 조립한 애니만 여기 닿는다 —
+            // `truncatingRemainder(dividingBy: 0)` 가 NaN 을 뱉는 것을 막는 방어선으로 남긴다.
             frame = max(0, min(frame, length))
         } else if isMirror {
             // 왕복: 2L 주기 폴드 — WE 는 방향 비트(bit31)를 토글하는 상태 기계지만(VA 0x1401aa129)
@@ -167,9 +169,29 @@ public struct PropertyAnimation: Equatable {
     ///   VA 0x1401a9cf5 `jg 0x1401a9ec7` → `imul rax,(i-1),0x1c` → `[r10+rax+4]`).
     ///   키프레임 1개짜리 트랙은 두 분기가 같은 값을 준다.
     /// - 키프레임 0개 트랙은 WE 가 **0.0** 을 돌려준다(VA 0x1401a9bfd `cmp [rcx],rax` → `xorps`).
-    ///   Waple 은 `value(component:)` 에서 base 를 유지한다 — c0..c3 누락 채널을 빈 트랙으로
-    ///   자리만 지키는 관용(파스 주석 참조)과 짝이라 여기서 0 을 돌리면 그 관용이 무의미해진다.
-    ///   동봉·설치본 코퍼스 도달 0(트랙 20개 전수가 키프레임 2개).
+    ///   Waple 은 `value(component:)` 에서 base 를 유지한다. **이 갈림은 이 타입 안에서 닫을 수
+    ///   없다**(2026-08-21 클러스터 Q 재평가 — 종전 "누락 채널 관용과 짝" 이라는 근거보다 강한
+    ///   구조적 이유가 있다):
+    ///   * WE 가 실제로 쓰는 규칙은 "빈 트랙 → 0.0" 이 아니라 **트랙 수 == 프로퍼티 성분 수**
+    ///     라는 전부-아니면-전무 게이트다. 등록기가 서술자 태그를 성분 수로 바꿔
+    ///     (1→2 · 2→3 · 3→4 · 그 외 1, 0x140176750–0x140176771) 트랙 수
+    ///     `([r15+0x28]-[r15+0x20])/0x30` 와 `sete`(0x14017679e) 로 비교해 `[anim+0x18]` 에 굽고,
+    ///     per-frame 소비자가 그 바이트가 0 이면 트랙을 **한 번도 평가하지 않는다**
+    ///     (0x14017241f `cmp byte ptr [rbx+0x18], 0` → `je 0x1401726ad`).
+    ///     즉 c0+c2 처럼 채널이 비면 WE 는 "c1 만 잃는" 게 아니라 **애니 전체가 꺼져** 정적
+    ///     `value` 로 떨어진다(캐스케이드 0x1401a56dd 로 트랙 수가 1 이 되고 vec3 성분 수 3 과
+    ///     어긋나기 때문이다).
+    ///   * `PropertyAnimation` 은 프로퍼티의 성분 수를 모른다 — 그건 `origin`(vec3)인지
+    ///     `alpha`(float)인지 아는 `SceneDocument` 의 정보다. 그래서 WE 의 게이트를 여기 옮길 수
+    ///     없고, 게이트 없이 0.0 만 돌리면 **누락 채널이 base 대신 0 으로 눌린다** — 실물이 하지
+    ///     않는 일이다(실물은 그 경우 애니를 끈다).
+    ///   * WE 에서 이 0.0 분기에 실제로 닿는 유일한 입력은 **명시적 빈 배열** `"cN": []` 다
+    ///     (키프레임 파서 0x1401a8ce0 은 빈 배열에서 false 를 돌리지만 호출부가 반환값을 보지
+    ///     않고 그대로 push 한다 — 0x1401a56ec/0x1401a56fc). Waple 은 그 입력에서 트랙을
+    ///     비워 두고, 뒤가 전부 비면 `parse` 가 nil 을 돌려 정적 `value` 로 떨어진다.
+    ///   동봉·설치본 코퍼스 도달 0(트랙 19개 전수가 키프레임 2개, 빈 배열 0건).
+    ///   성분 수 게이트를 정말 옮기려면 `parse` 에 프로퍼티 성분 수를 넘겨야 한다 —
+    ///   docs/re/property-animation.md §6 의 넘길 것 참조.
     private func evaluate(track: [PropertyKeyframe], frame: Float) -> Float {
         if frame <= track[0].frame { return track[0].value }
         guard let last = track.last else { return 0 }
@@ -281,12 +303,13 @@ public struct PropertyAnimation: Equatable {
     /// `particleelementpreviews` 는 `particle` 로 시작한다). `null` 5블록은 preview 4 +
     /// non-preview 1(`presets/magic/preset.json`)이다.
     ///
-    /// **코퍼스 도달과 Waple 파스 도달이 다르다.** `SceneDocument.parseObject` 는 오브젝트 애니를
-    /// `["origin","scale","alpha","angles","color"]` 다섯 키에서만 캡처하고 `instanceoverride`
-    /// 아래 바인딩은 정적 value 만 언랩한다(SceneDocument.swift:1592 / 2497 — 이 레인 밖,
-    /// docs/re/property-animation.md §6.1). 그래서 `true` 2블록 중 **지금 실제로 이 후처리를
-    /// 타는 것은 `/objects/0/origin` 하나**다. 나머지 하나와 `controlpointangle1` 4블록은
-    /// `PropertyAnimation.parse` 에 도달조차 하지 않는다. 도달 0 인 `null` 블록 중
+    /// **코퍼스 도달과 Waple 파스 도달**(2026-08-21 후속 — 클러스터 M 이
+    /// `instanceoverride` 애니 드롭을 고쳤다). `SceneDocument.parseObject` 는 오브젝트 애니를
+    /// `["origin","scale","alpha","angles","color"]` 다섯 키에서만 캡처하지만,
+    /// `instanceoverride` 아래 바인딩은 이제 `SceneParticle.instanceOverrideAnimations` 로
+    /// 보존된다(`SceneDocumentFidelityTests.testInstanceOverrideAnimationBindingIsCaptured`).
+    /// 그래서 `true` 2블록은 **둘 다** 이 후처리를 탄다 — `/objects/0/origin` 과
+    /// `/objects/1/instanceoverride/controlpoint1`. 도달 0 인 `null` 블록 중
     /// `effects/blendgradient/preview/.../constantshadervalues/multiply` 는
     /// `constantAnimations`(SceneDocument.swift:2839) 경로로 도달한다.
     ///
@@ -294,24 +317,24 @@ public struct PropertyAnimation: Equatable {
     /// 미적용이면 타임라인 **후반 절반이 정지**한다. `/objects/1/…/controlpoint1` 의 c1 은
     /// `436.42032 → 145.37645` 라 끝점 복귀 폭이 **291.04387 = 값 범위 전체**,
     /// `/objects/0/origin` 의 c1 은 `0 → -126.1462` 라 126.1462 다.
-    /// **지금 Waple 이 실제로 보는 것은 후자(126.1462)뿐**이다 — 전자는 위 문단대로 파스에 닿지 않는다.
-    /// (전자를 인용하는 테스트가 있는 이유는 그 트랙 모양이 랩 후처리를 가장 크게 드러내기 때문이고,
-    ///  그 테스트는 `PropertyAnimation.parse` 를 직접 부르므로 SceneDocument 의 드롭과 무관하다.)
+    /// **Waple 은 이제 둘 다 본다**(클러스터 M 의 `instanceoverride` 캡처 이후). 전자의
+    /// `436.42032 → 145.37645` 트랙은 `PropertyAnimation` 평가로 실제 재현되는 것이
+    /// 독립 확인됐다(클러스터 M 이 테스트로 잠갔다).
     ///
     /// - Note: WE 는 2번의 "덮기" 경로에서 flags bit0 만 지우고(0x1401a9b66 `and eax, 0xfffffffe`)
     ///   backX/backY 는 남긴다. Waple 의 평가기는 `backEnabled` 를 게이트로 쓰므로 그 잔존값이
     ///   실효하지 않는다 — 동봉 자산 도달 0(wraploop 두 블록 모두 마지막 키프레임이 length 와
     ///   달라 "붙이기" 경로). 그래도 잔존값 자체는 보존한다(엔진과 필드 단위로 일치시켜 두면
     ///   나중에 라운드트립·비교가 생겨도 갈리지 않는다).
-    /// - Note: **[미해결] `length` 가 정수가 아닐 때 끝점 프레임과 루프 주기가 갈린다.**
-    ///   WE 는 `length` 를 `asInt`(0x1401a9815)로 **한 번** i32 화해 끝점 프레임에도 루프 주기에도
-    ///   같은 정수를 쓴다. Waple 은 끝점만 `lengthFrames = length.rounded(.towardZero)` 로 절단하고
-    ///   `PropertyAnimation.length` 는 원래 Float 를 유지한다 — `length: 45.9` 면 끝점은 frame 45
-    ///   인데 loop 랩은 45.9 에서 일어나 45–45.9 구간이 끝점 값에 고정된다. 동봉·설치본 7블록의
-    ///   `length` 는 전수 정수(60×6 · 30×1)라 **도달 0**. 고치지 않은 이유는 `length` 자체를
-    ///   절단하면 wraploop 과 무관한 모든 애니의 loop/mirror 주기가 바뀌어 이 레인의 무회귀
-    ///   예산을 넘기 때문이다. 키프레임 `frame` 도 같은 성격의 미해결이 하나 더 있다 — WE 는
-    ///   `asInt`(0x1401a8fb5) 로 i32 화하는데 Waple 은 Float 로 둔다(코퍼스 frame 전수 정수).
+    /// - Note: **`length` 의 i32 화는 닫혔다**(2026-08-21 클러스터 Q). WE 는 `length` 를
+    ///   `asInt`(0x1401a9815 → 0x140085ee0, 태그 3 은 `cvttsd2si` 0x140085f12 = 0 방향 절단)로
+    ///   **한 번** 정수화하고 그 정수 하나가 끝점 프레임(`[r13+0x48]` → 0x1401a5780)에도
+    ///   루프 주기(`+0x08 = (float)length/fps`, 0x1401a8c37–0x1401a8c46)에도 쓰인다.
+    ///   종전 Waple 은 끝점만 절단하고 `PropertyAnimation.length` 는 Float 를 유지해
+    ///   `length: 45.9` 에서 끝점 45 · 랩 45.9 로 갈렸다 — 이제 `parse` 가 한 번 절단해
+    ///   `length` 자체를 정수로 만든다(도달 0: 코퍼스 `length` 전수 정수 60×6 · 30×1).
+    ///   키프레임 `frame` 도 같은 규약으로 닫았다(`asInt` 0x1401a8fb5 → 파스에서 0 방향 절단).
+    ///   잔여 어긋남: 태그 1/2(int/uint)에서 실물은 `mov eax,[rcx]` 로 하위 32비트만 취한다.
     static func wrapLooped(_ track: [PropertyKeyframe], lengthFrames: Float) -> [PropertyKeyframe] {
         guard track.count > 1, let first = track.first else { return track }
         var out = track
@@ -438,9 +461,11 @@ public struct PropertyAnimation: Equatable {
         // `isJSONBool` 게이트가 없으면 `{"x": true}` 가 핸들 좌표 1.0 이 되어 원본(0)과 갈린다.
         // 이 게이트를 붙이면 갈림이 어떻게 닫히는지는 자리마다 다르다:
         //   · 핸들 `x`/`y`, `events[].frame` → **원본과 정확히 일치**(전자는 0, 후자는 항목 드롭).
-        //   · `value`/`frame`, `options.length`/`fps` → 원본은 각각 "그 키프레임만 건너뜀"·
-        //     "애니 전체 드롭" 이고 Waple 은 "애니 드롭"·"기본값(30 / 마지막 프레임)" 이라 여전히
-        //     다르지만, 적어도 **불리언을 숫자로 읽지는 않는다**(이 파일이 이미 택한 관용 정책과 일관).
+        //   · `value`/`frame` → 이제 **원본과 정확히 일치**한다(그 키프레임만 건너뛴다 —
+        //     2026-08-21 클러스터 Q, 아래 `keyframes` 주석의 `0x1401a9319` 확정).
+        //   · `options.length`/`fps` → 원본은 "애니 전체 드롭" 이고 Waple 은 "기본값
+        //     (30 / 마지막 프레임)" 이라 여전히 다르다(부재 관용과 같은 자리 — 아래 참조).
+        //     적어도 **불리언을 숫자로 읽지는 않는다**(이 파일이 이미 택한 관용 정책과 일관).
         // 동봉·설치본 코퍼스 도달 **0** — 위 여덟 자리의 값 타입 census 가 전건 int/float 이다
         // (`frame` int×38 · `value` int11/float27 · 핸들 `x` int52/float24 · `y` int46/float30 ·
         //  `fps` int×7 · `length` int×7 · `events` 0건). 그래서 코퍼스 위에서 **비트 동일**이다.
@@ -502,10 +527,34 @@ public struct PropertyAnimation: Equatable {
             return EffectManifest.isJSONBool(e) ? ((e as? Bool) == true) : true
         }
         func keyframes(_ arr: Any?) -> [PropertyKeyframe]? {
-            guard let list = arr as? [[String: Any]] else { return nil }
+            // 배열(태그 6)이 아니면 nil — 호출부가 애니 전체를 드롭한다. WE 는 여기서
+            // **캐스케이드로 중단**하지만(0x1401a56dd 등) 결과는 같다: 남은 트랙 수가 프로퍼티
+            // 성분 수와 어긋나 등록기가 애니를 통째로 끈다(아래 `parse` 말미의 §도달 주석).
+            guard let list = arr as? [Any] else { return nil }
             var out: [PropertyKeyframe] = []
-            for k in list {
-                guard let frame = f(k["frame"]), let value = f(k["value"]) else { return nil }
+            for element in list {
+                // **비객체 원소는 그 항목만 건너뛴다.** WE 는 원소마다 `find`(0x1401a8ddb 등)를
+                // 걸고 그 결과 태그로만 판정하므로, 객체가 아닌 원소는 `value`/`frame` 이 태그 0
+                // 으로 잡혀 아래 태그 게이트에서 그대로 탈락한다(= 항목 건너뜀).
+                guard let k = element as? [String: Any] else { continue }
+                // **`value`/`frame` 이 숫자가 아니면 그 키프레임만 건너뛴다** — 실물의 두 태그
+                // 게이트 `dec eax; cmp eax,2; ja`(0x1401a8e7d `value` · 0x1401a8e8e `frame`)의
+                // 분기 타깃 `0x1401a9319` 는 **함수 탈출이 아니라 루프 진행부**다(거기서
+                // `[rbx+0x10]`/`[rbx+8]` 로 red-black 트리 이터레이터를 전진시키고
+                // 0x1401a9356/0x1401a938c 에서 루프 머리 `0x1401a8db6` 로 되돌아간다).
+                // 즉 나머지 키프레임은 정상으로 남고 트랙 자체는 살아 있다. 2026-08-21 클러스터 Q
+                // 재검증에서 확정 — 종전 Waple 은 여기서 `return nil` 로 **애니 전체**를 버렸다.
+                // 같은 규약이 `frame <= 직전 frame` 드롭(0x1401a8fc1 `jle 0x1401a9311`)에도 쓰인다.
+                // (코퍼스 도달 0: `frame` int×38 · `value` int11/float27 — 전건 숫자다.)
+                guard let rawFrame = f(k["frame"]), let value = f(k["value"]) else { continue }
+                // 키프레임 `frame` 은 엔진에서 **i32** 다 — `asInt`(0x1401a8fb5 → 0x140085ee0)가
+                // 태그 3(real)을 `cvttsd2si`(0x140085f12) 로 **0 방향 절단**하고, 저장부가
+                // `mov dword ptr [r14], r12d`(0x1401a9145) 로 구조체 +0x00 에 i32 로 굽는다.
+                // 평가기도 `int frame` 을 받는다(`movsxd rbp, edx` 0x1401a9be3).
+                // 코퍼스 도달 0(frame 전수 int). 잔여 어긋남: 태그 1/2(int/uint)일 때 실물은
+                // `mov eax,[rcx]`(0x140085f1e)로 **하위 32비트만** 취해 2^31 이상에서 감싼다 —
+                // 여기서는 감싸지 않는다.
+                let frame = rawFrame.rounded(.towardZero)
                 // step: 이 키프레임이 오른쪽인 구간을 계단으로(파스 VA 0x1401a8f56–0x1401a8fb2).
                 let step = b(k["step"])
                 // **step 이 서면 WE 는 핸들을 아예 읽지 않는다** — `test sil,sil`(0x1401a8fe8) 이
@@ -539,7 +588,18 @@ public struct PropertyAnimation: Equatable {
             // `cmp eax, [rsp+0xe8]` / `jle`, 초기 비교값 -1 → frame < 0 도 탈락). Waple 은 정렬로
             // 관용한다 — 동봉·설치본 애니 블록 7개는 전수 오름차순이라 도달 0 이고, 정렬 쪽이
             // 어긋난 저작을 조용히 버리는 대신 그리기 때문이다.
-            return out.sorted { $0.frame < $1.frame }
+            //
+            // 정렬은 **안정**이어야 한다. `frame` 을 i32 로 절단하면서 서로 다른 저작 프레임이
+            // 같은 정수로 겹칠 수 있게 됐는데(`10.2`/`10.9` → 둘 다 10), Swift 의 `sorted(by:)`
+            // 는 동률 순서를 보장하지 않는다. 원래 인덱스를 2차 키로 써 동률에서 저작 순서를
+            // 유지한다 — 그래야 "중복 시각은 **마지막 중복**이 왼쪽 끝점" 이라는 평가기 규약
+            // (`evaluate` 주석 · `testTrackBoundaryCases`)이 결정적이 된다.
+            // 실물은 겹친 둘 중 **앞의 것**을 남긴다(뒤가 `jle` 로 탈락) — 여기서는 뒤가 이긴다.
+            // 코퍼스 도달 0(frame 전수 int, 트랙마다 서로 다른 2개).
+            return out.enumerated()
+                .sorted { $0.element.frame == $1.element.frame ? $0.offset < $1.offset
+                                                              : $0.element.frame < $1.element.frame }
+                .map { $0.element }
         }
         var tracks: [[PropertyKeyframe]] = []
         // G-D2-8: 트랙은 **4개**다. WE 의 프로퍼티 바인딩 파서가 `c0`/`c1`/`c2`/`c3` 를 차례로
@@ -551,8 +611,13 @@ public struct PropertyAnimation: Equatable {
             // 누락 성분은 빈 트랙으로 자리 유지(value(component:) 가 위치 인덱싱).
             // WE 는 여기서 **캐스케이드로 중단**한다(VA 0x1401a56dd/0x1401a5701/0x1401a5720/
             // 0x1401a573e: 각 채널이 배열이 아니면 뒤를 통째 버린다) — c0 이 없으면 트랙 0개,
-            // c0+c2 면 c2 유실. Waple 은 자리를 지켜 관용한다: 동봉·설치본 애니 7블록이 전수
-            // c0(+c1+c2) 연속이라 **도달 0** 이고, 비연속 저작에서 조용히 채널을 잃는 쪽이 나쁘다.
+            // c0+c2 면 c2 유실. **그리고 거기서 끝이 아니다**: 트랙 수가 프로퍼티 성분 수와
+            // 어긋나면 등록기가 `[anim+0x18] = 0`(0x1401767a1)을 굽고 per-frame 소비자가
+            // 애니를 통째로 건너뛴다(0x14017241f) — 즉 실물은 "채널 하나 유실" 이 아니라
+            // **애니 전체 무효 → 정적 `value`** 다(자세한 대조는 `evaluate` 주석).
+            // Waple 은 성분 수를 모르므로 그 게이트를 옮길 수 없다. 자리를 지켜 관용한다:
+            // 동봉·설치본 애니 7블록이 전수 c0(+c1+c2) 연속이라 **도달 0** 이고, 비연속 저작에서
+            // 조용히 채널을 잃는 쪽이 나쁘다.
             guard a[key] != nil else { tracks.append([]); continue }
             guard let t = keyframes(a[key]) else { return nil }
             tracks.append(t)
@@ -573,10 +638,51 @@ public struct PropertyAnimation: Equatable {
         }
         // fps / length 는 WE 에서 **필수**다 — 옵션 파서가 둘 다 숫자 타입(1..3)이 아니면 false 를
         // 돌리고(VA 0x1401a9714–0x1401a972d), `fps <= 0` 이나 `length/fps <= 0` 이어도 false 라
-        // (VA 0x1401a8c21 / 0x1401a8c43) 호출부가 **애니 전체를 버린다**(VA 0x1401a56c0 `je`).
-        // Waple 은 30fps · 마지막 키프레임 길이로 기워 넣는다: 동봉·설치본 7블록 전수가 fps·length
-        // 를 모두 적어 도달 0 이고, 부재 시 정지시키는 쪽이 더 나쁜 실패다.
-        let length = f(opts["length"]) ?? (tracks.compactMap { $0.last?.frame }.max() ?? 0)
+        // (VA 0x1401a8c21 / 0x1401a8c43) 호출부가 트랙을 **하나도 파스하지 않고**
+        // (VA 0x1401a56c0 `test al,al` → `je 0x1401a57e1`) 그 결과 애니가 통째로 무효가 된다
+        // (성분 수 게이트 — 아래 ③).
+        // Waple 은 **타입이 어긋나거나 부재일 때만** 30fps · 마지막 키프레임 길이로 기워 넣는다:
+        // 동봉·설치본 7블록 전수가 fps·length 를 모두 적어 도달 0 이고, 부재 시 정지시키는 쪽이
+        // 더 나쁜 실패다. **퇴화 값(`<= 0`)은 아래에서 `nil` 로 떨어뜨린다** — 그건 부재가 아니라
+        // 명시된 "재생 불가" 이고, 실물도 그 값에서 애니를 무효화한다.
+        //
+        // `length` 는 엔진에서 **i32** 다 — 옵션 파서가 `asInt`(0x1401a9815)로 **한 번** 정수화해
+        // (태그 3 은 `cvttsd2si` = 0 방향 절단, 0x140085f12) 그 정수를 `init` 의 `r8d` 로 넘기고
+        // (0x1401a984d), `init` 은 그걸 상태 구조체 `+0x10` 에 그대로 쓰고(0x1401a8c1d)
+        // `(float)length / fps` 를 `+0x08`(초 단위 길이)에 쓴다(0x1401a8c37–0x1401a8c46).
+        // 즉 **끝점 프레임(wraploop `[r13+0x48]`)과 루프/미러 주기(`+0x08`)가 같은 정수**다.
+        // 종전 Waple 은 `wrapLooped` 끝점만 절단하고 `length` 는 Float 로 남겨 `length: 45.9` 에서
+        // 끝점 45 · 랩 주기 45.9 로 갈렸다 — 여기서 한 번 절단해 두 자리를 다시 붙인다.
+        // 코퍼스 도달 0(`length` 전수 정수 60×6 · 30×1).
+        let length = (f(opts["length"])?.rounded(.towardZero))
+            ?? (tracks.compactMap { $0.last?.frame }.max() ?? 0)
+        let fps = f(opts["fps"]) ?? 30
+        // **`fps <= 0` / `length <= 0` 은 애니가 아예 없는 것과 같다**(2026-08-21 클러스터 Q 확정).
+        //   ① `AnimOptions::init`(0x1401a8c10)이 `comiss xmm2(0.0), xmm1(fps)` → `jae 0x1401a8cc4`
+        //      (0x1401a8c21)로 **`fps <= 0`** 에서, 그리고 `comiss xmm2(0.0), xmm0(length/fps)` →
+        //      `jae`(0x1401a8c43)로 **`length/fps <= 0`** 에서 `xor al,al`(0x1401a8cc9)을 돌린다.
+        //      `fps` 는 정확히 0 이든 음수든 **같은 명령 한 자리**에서 걸린다(`0 >= fps`).
+        //      두 번째 검사 시점에는 이미 `fps > 0` 이므로 `length/fps <= 0` ⟺ `length <= 0` 이다.
+        //   ② 호출부는 `test al,al` → `je 0x1401a57e1`(0x1401a56c0)로 **c0..c3 파스 블록 전체를
+        //      건너뛴다** — 트랙 벡터가 비어 있는 채로 남는다.
+        //   ③ 그런데 애니 객체는 **버려지지 않는다** — 실패 경로도 성공 경로와 합류해
+        //      `0x1401a57e9`에서 등록기 `0x140175880` 에 그대로 넘어간다. 애니를 실제로 끄는 것은
+        //      등록기 안의 **성분 수 일치 게이트**다: 프로퍼티 서술자의 태그
+        //      (`[r15+0x10]` → `[rcx]`, 0x140176750)를 성분 수로 바꾸고(1→2 · 2→3 · 3→4 · 그 외 1,
+        //      0x140176755–0x140176771), 트랙 수 `([r15+0x28]-[r15+0x20])/0x30` 와 비교해
+        //      `sete al` → `mov byte ptr [r15+0x18], al`(0x14017679e/0x1401767a1) 을 굽는다.
+        //      per-frame 소비자가 그 바이트를 게이트로 쓴다(`cmp byte ptr [rbx+0x18], 0` →
+        //      `je 0x1401726ad`, 0x14017241f) — 0 이면 트랙을 한 번도 평가하지 않고 넘어가므로
+        //      **바인딩의 정적 `value` 가 그대로 남는다**.
+        //      (종전 문서는 이걸 "호출부가 애니를 통째로 버린다" 고 적었는데, 버리는 게 아니라
+        //       성분 수 0 ≠ 1..4 로 꺼지는 것이다. 관측 결과는 같다.)
+        //   ④ 종전 Waple 은 `"fps": 0` 이면 `frame = t·0 = 0`, `"length": 0` 이면
+        //      `max(0, min(frame, 0))` 로 **첫 키프레임 값에 고착**했다 — 정적 `value` 가 아니다.
+        //      `nil` 을 돌리면 호출부(`SceneDocument.swift:1827` 등)가 `anims[key]` 를 세우지
+        //      않으므로 정적 언랩만 남아 실물과 **정확히 같아진다**.
+        // 도달 0(코퍼스 `fps` = 15/20/30 · `length` = 30/60). `length` 절단과 맞물려
+        // `"length": 0.5` 도 여기서 걸린다 — 실물도 `asInt` 로 0 이 되어 같은 자리에서 걸린다.
+        guard fps > 0, length > 0 else { return nil }
         // wraploop 은 **bool 일 때만** 선다(VA 0x1401a985d `cmp byte ptr [rbx+8], 5` → 0x1401a9881
         // `or dword ptr [r12+0xc], 0x10`) — 실물에 흔한 `"wraploop": null` 은 타입 0 이라 세워지지
         // 않는다(동봉·설치본 7블록 중 5개가 null, 2개가 true).
@@ -595,14 +701,15 @@ public struct PropertyAnimation: Equatable {
         // (scripts.js 오프셋 인용은 이 파일·docs/re/property-animation.md 전부 **문자 오프셋**이다.
         //  파일이 UTF-8 이라 바이트 오프셋과 최대 238 만큼 다르다 — 바이트 1,187,134 / 문자 1,186,896.)
         let wrapLoop = b(opts["wraploop"])
-        // 길이는 엔진에서 i32 다(`asInt` VA 0x1401a9815) — 소수 길이는 0 방향 절단.
-        let lengthFrames = length.rounded(.towardZero)
+        // `length` 는 위에서 이미 i32 화돼 있다(`asInt` VA 0x1401a9815 → 0 방향 절단) — 끝점
+        // 프레임과 루프 주기가 같은 정수를 쓴다. 호출부도 같은 정수를 넘긴다
+        // (`mov ecx, dword ptr [r13+0x48]` 0x1401a5780 = 상태 구조체 `+0x10`).
         if wrapLoop {
-            tracks = tracks.map { wrapLooped($0, lengthFrames: lengthFrames) }
+            tracks = tracks.map { wrapLooped($0, lengthFrames: length) }
         }
         return PropertyAnimation(
             tracks: tracks,
-            fps: f(opts["fps"]) ?? 30,
+            fps: fps,
             length: length,
             // G-D2-6: **부재 기본값은 loop 다.** WE 애니 헤더 초기화가 flags 를 0 으로 두고
             // `"mirror"` 일 때만 `|= 0x1`, `"single"` 일 때만 `|= 0x2` 를 세운다 — 즉 `mode` 가
