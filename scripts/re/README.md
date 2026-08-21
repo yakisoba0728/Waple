@@ -15,10 +15,12 @@ WE 바이너리에서 **문자열·기본값·심볼**을 뽑는 도구다. 이 
 | --- | --- | --- |
 | `xref.py` | 표준 라이브러리만 | 문자열 VA + `lea [rip+d]` 참조 + 포인터 테이블 |
 | `disasm.py` | `capstone` | 주어진 VA 에서 선형 디스어셈 + rip-상대 피연산자 주석 |
+| `playlist_transition.py` | 표준 라이브러리만 | 전환 효과 표(FADEEFFECT) 를 셰이더·UI·로케일 세 출처에서 교차 검증 |
 
 ```bash
 python scripts/re/xref.py flags perspective sphererandom
 python scripts/re/disasm.py 0x1401c55e4 200
+python scripts/re/playlist_transition.py
 ```
 
 ## 알아 둘 것 — 두 번 밟은 함정
