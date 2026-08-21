@@ -14,7 +14,7 @@ func readU32LE(_ bytes: [UInt8], at: Int) -> UInt32? {
     return UInt32(bytes[at]) | (UInt32(bytes[at + 1]) << 8) | (UInt32(bytes[at + 2]) << 16) | (UInt32(bytes[at + 3]) << 24)
 }
 
-/// 리틀엔디안 u16. [at, at+2) 가 버퍼 밖(또는 at<0)이면 nil. C③: MDLA0006 클립 트레일러 id 필드용.
+/// 리틀엔디안 u16. [at, at+2) 가 버퍼 밖(또는 at<0)이면 nil. C③: 메시 트레일러용. (MDLA 클립 id 는 2026-08-21 정정으로 레코드 선두 u64 직독이 됐다.)
 func readU16LE(_ bytes: [UInt8], at: Int) -> UInt16? {
     guard at >= 0, bytes.count - at >= 2 else { return nil }   // 뺄셈 형태 이유는 readU32LE 주석
     return UInt16(bytes[at]) | (UInt16(bytes[at + 1]) << 8)

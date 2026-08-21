@@ -268,15 +268,17 @@ final class Model3DTests: XCTestCase {
 
         let m = try XCTUnwrap(Model3D.parse(d))
         XCTAssertEqual(m.animations.count, 2, "디렉토리 레코드는 클립 목록 미포함(포즈 선택 무회귀)")
+        guard m.animations.count == 2 else { return XCTFail("애니 2개가 파스돼야 한다 — 실제 \(m.animations.count)개") }
         XCTAssertEqual(m.animations[0].events,
                        [AnimationMarker(name: "Look Left", frame: 31), AnimationMarker(name: "Look Right", frame: 10),
                         AnimationMarker(name: "dir_evt", frame: 2)],
                        "본클립 트레일러 이벤트 + 디렉토리('Glance') 이벤트 병합(파일 순서 보존)")
         XCTAssertEqual(m.animations[1].events, [AnimationMarker(name: "点头错帧", frame: 30)],
-                       "마지막 애니 트레일러 + UTF-8 이름")
+                       "마지막 애니 꼬리 + UTF-8 이름")
         // PuppetModel 변환(MDLV0023 컨테이너 퍼펫)에도 이벤트가 이식된다.
         let pm = try XCTUnwrap(PuppetModel.parse(d))
-        XCTAssertEqual(pm.animations[0].events.map(\.name), ["Look Left", "Look Right", "dir_evt"])
+        guard let pa0 = pm.animations.first else { return XCTFail("퍼펫 변환에도 애니가 있어야 한다") }
+        XCTAssertEqual(pa0.events.map(\.name), ["Look Left", "Look Right", "dir_evt"])
     }
 
     /// MDLA0006 애니 파스: 헤더 + 2 애니(리싱크 트레일러 경유) + 본별 키 트랙. 실측 레이아웃.
@@ -335,16 +337,20 @@ final class Model3DTests: XCTestCase {
 
         let m = try XCTUnwrap(Model3D.parse(d))
         XCTAssertTrue(m.hasAnimation)
-        XCTAssertEqual(m.animations.count, 2, "리싱크로 트레일러 넘어 2 애니 파스")
+        XCTAssertEqual(m.animations.count, 2, "리싱크로 꼬리 넘어 2 애니 파스")
+        guard m.animations.count == 2 else { return XCTFail("애니 2개가 파스돼야 한다 — 실제 \(m.animations.count)개") }
         let a0 = m.animations[0]
         XCTAssertEqual(a0.name, "test|idle_bone")
         XCTAssertEqual(a0.mode, "loop")
         XCTAssertEqual(a0.fps, 30)
         XCTAssertEqual(a0.lengthFrames, 1)
         XCTAssertEqual(a0.tracks.count, 2)
-        XCTAssertEqual(a0.tracks[0].count, 2)
+        guard a0.tracks.count == 2, a0.tracks[0].count == 2, a0.tracks[1].count == 2,
+              m.animations[1].tracks.count == 2, m.animations[1].tracks[1].count == 1 else {
+            return XCTFail("본 2개 트랙(키 2/2, 1)이 있어야 한다")
+        }
         XCTAssertEqual(a0.tracks[1][1].angles.z, 1, accuracy: 1e-6)
-        XCTAssertTrue(a0.events.isEmpty, "이벤트 없는 트레일러 → 마커 오검출 없음")
+        XCTAssertTrue(a0.events.isEmpty, "이벤트 없는 꼬리 → 마커 오검출 없음")
         XCTAssertEqual(m.animations[1].name, "test|glance_bone")
         XCTAssertEqual(m.animations[1].mode, "single")
         XCTAssertEqual(m.animations[1].tracks[1][0].scale, SIMD3(2, 2, 2))
@@ -355,10 +361,17 @@ final class Model3DTests: XCTestCase {
         XCTAssertEqual(mats.count, 2)
     }
 
-    /// C③: MDLA0006 클립 id 추출 — 실측 3파일·17클립 전수 교차검증(3384019940 头/3517818807 rwm/
-    /// 3486806915 头): 트레일러가 있는(next 존재) 클립은 트레일러 시작+31 오프셋 u16 이 그 클립의 id,
-    /// 섹션의 마지막 실클립(next 없음)은 트레일러에 id가 없어 헤더 baseId 를 대신 쓴다.
-    func testParsesAnimationClipIdFromTrailerAndBaseIdFallback() throws {
+    /// C③: MDLA0006 클립 id 는 **그 클립 레코드 선두의 u64** 다(0x1402639de → readU64 0x1402616b0,
+    /// 클립 오브젝트 +0x00). 섹션 헤더는 `u32 nextOff | u32 animCount` 둘뿐이고 종전 주석의
+    /// `u32 baseId | u32 0` 이 곧 클립 0 의 그 u64 였다.
+    ///
+    /// > **[툼스톤] 종전 이 테스트가 잠그던 것**: "트레일러가 있는(next 존재) 클립은 트레일러
+    /// > 시작+31 오프셋 u16 이 그 클립의 id, 마지막 실클립은 헤더 baseId". 근거로 "실측 3파일·
+    /// > 17클립 전수 교차검증(3384019940 头/3517818807 rwm/3486806915 头)" 이 붙어 있었고 그
+    /// > 관측은 진짜였다 — 다만 그 자리는 **다음 클립의 u64 id 하위 16비트**였다(게이트가 전부 0 인
+    /// > 파일의 꼬리가 35바이트이고 종전 커서가 마지막 트랙 끝 +4 였다). 즉 종전 구현은 클립 i 에
+    /// > 클립 i+1 의 id 를 붙이고 있었다. 프레이밍 상세는 Model3DMDLAFramingTests.
+    func testParsesAnimationClipIdFromLeadingU64OfEachClipRecord() throws {
         let vSkin = SynthVert(pos: SIMD3(1, 1, 1), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
                               bones: SIMD4(1, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
         let m0 = SynthMesh(material: "materials/a.json", min: SIMD3(0, 0, 0), max: SIMD3(1, 1, 1),
@@ -372,40 +385,37 @@ final class Model3DTests: XCTestCase {
         u(64, into: &d)
         for x: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(x, into: &d) }
         d.append(0)
-        // 헤더: nextOff(미검증)|animCount(불신)|baseId=555|0
+        // 섹션 헤더: nextOff | animCount(불신값 99). 그 다음이 곧 클립 0 의 u64 id 다.
         d.append(Data("MDLA0006".utf8)); d.append(0)
-        u(0, into: &d); u(99, into: &d); u(555, into: &d); u(0, into: &d)
-        func appendKey(_ p: SIMD3<Float>, _ a: SIMD3<Float>, _ s: SIMD3<Float>) {
-            f(p.x, into: &d); f(p.y, into: &d); f(p.z, into: &d)
-            f(a.x, into: &d); f(a.y, into: &d); f(a.z, into: &d)
-            f(s.x, into: &d); f(s.y, into: &d); f(s.z, into: &d)
-        }
-        func appendAnim(_ name: String, _ mode: String, _ fps: Float, _ length: Int) {
+        u(0, into: &d); u(99, into: &d)
+        func appendU64(_ v: UInt64) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func appendClip(_ id: UInt64, _ name: String, _ mode: String, _ fps: Float, _ length: Int) {
+            appendU64(id)
             d.append(Data(name.utf8)); d.append(0)
             d.append(Data(mode.utf8)); d.append(0)
-            f(fps, into: &d); u(UInt32(length), into: &d); u(0, into: &d); u(1, into: &d); u(0, into: &d)
-            u(36, into: &d); appendKey(SIMD3(0, 0, 0), SIMD3(0, 0, 0), SIMD3(1, 1, 1))
-            u(0, into: &d)  // blob2
+            f(fps, into: &d); u(UInt32(length), into: &d); u(0, into: &d); u(1, into: &d)
+            u(0, into: &d)                                  // 본0 trackFlags
+            u(36, into: &d)                                 // 본0 trackBytes
+            for x: Float in [0, 0, 0, 0, 0, 0, 1, 1, 1] { f(x, into: &d) }
+            // 게이트가 전부 0 인 MDLA0006 꼬리 = 35바이트(v3 u32 count 4 | v3 gate 1 | v4 gate 1 |
+            // v5 f32 6개 24 | v6 gate 1 | 이벤트수 u32 4).
+            d.append(Data(repeating: 0, count: 35))
         }
-        // anim0: 39B 트레일러, id=777 을 트레일러 시작+31 오프셋(u16 LE)에 배치(실측 오프셋).
-        appendAnim("clipA", "loop", 30, 1)
-        var trailer0 = [UInt8](repeating: 0, count: 39)
-        trailer0[31] = 0x09; trailer0[32] = 0x03   // 0x0309 = 777 LE
-        d.append(contentsOf: trailer0)
-        // anim1(마지막 실클립): 트레일러 없음(섹션 종료) — id는 baseId(555)로 폴백돼야.
-        appendAnim("clipB", "single", 24, 0)
+        appendClip(555, "clipA", "loop", 30, 1)
+        appendClip(777, "clipB", "single", 24, 0)
 
         let m = try XCTUnwrap(Model3D.parse(d))
-        XCTAssertEqual(m.animations.count, 2)
-        XCTAssertEqual(m.animations[0].name, "clipA")
-        XCTAssertEqual(m.animations[0].id, 777, "트레일러 오프셋+31 u16 이 클립 id 로 추출돼야")
-        XCTAssertEqual(m.animations[1].name, "clipB")
-        XCTAssertEqual(m.animations[1].id, 555, "마지막 실클립은 트레일러에 id가 없어 헤더 baseId 로 폴백돼야")
+        XCTAssertEqual(m.animations.map(\.name), ["clipA", "clipB"])
+        guard m.animations.count == 2 else { return XCTFail("클립 2개가 파스돼야 한다 — 실제 \(m.animations.count)개") }
+        XCTAssertEqual(m.animations[0].id, 555, "클립 i 의 id 는 클립 i 의 선두 u64 다(종전엔 777 이 나왔다)")
+        XCTAssertEqual(m.animations[1].id, 777, "마지막 클립도 자기 선두 u64 다(종전엔 헤더 baseId=555 였다)")
     }
 
-    /// C③: 트레일러가 너무 짧아(실측 마지막 클립 32B 관측) id 필드를 못 읽으면 nil(이름 휴리스틱 폴백
-    /// 유지) — 잘못된 오프셋을 억지로 읽어 그릇된 id 를 만들지 않는다.
-    func testAnimationClipIdNilWhenTrailerTooShortWithNextHeader() throws {
+    /// C③: 종전의 **고정 오프셋**(꼬리 시작 +31 의 u16)은 이제 어디에서도 안 읽힌다. 그 자리에
+    /// 눈에 띄는 값을 심어도 id 에 새어 나오면 안 된다.
+    /// (아래 꼬리는 길이를 39바이트로 늘려 그 자리를 실제 id 와 갈라놓은 **합성** 바이트다 —
+    ///  실물 꼬리 길이 분포는 이 컨테이너에서 잴 수 없다.)
+    func testAnimationClipIdIsNotReadFromTheOldFixedTrailerOffset() throws {
         let vSkin = SynthVert(pos: SIMD3(1, 1, 1), nrm: SIMD3(0, 1, 0), tan: SIMD4(0, 0, 1, -1), uv: SIMD2(1, 1),
                               bones: SIMD4(1, 0, 0, 0), weights: SIMD4(1, 0, 0, 0))
         let m0 = SynthMesh(material: "materials/a.json", min: SIMD3(0, 0, 0), max: SIMD3(1, 1, 1),
@@ -420,24 +430,29 @@ final class Model3DTests: XCTestCase {
         for x: Float in [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] { f(x, into: &d) }
         d.append(0)
         d.append(Data("MDLA0006".utf8)); d.append(0)
-        u(0, into: &d); u(99, into: &d); u(555, into: &d); u(0, into: &d)
-        func appendKey() {
-            for _ in 0..<9 { f(0, into: &d) }
-        }
-        func appendAnim(_ name: String, _ mode: String) {
+        u(0, into: &d); u(99, into: &d)
+        func appendU64(_ v: UInt64) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+        func appendClipBody(_ name: String, _ mode: String) {
             d.append(Data(name.utf8)); d.append(0)
             d.append(Data(mode.utf8)); d.append(0)
-            f(30, into: &d); u(1, into: &d); u(0, into: &d); u(1, into: &d); u(0, into: &d)
-            u(36, into: &d); appendKey()
-            u(0, into: &d)
+            f(30, into: &d); u(1, into: &d); u(0, into: &d); u(1, into: &d)
+            u(0, into: &d); u(36, into: &d)
+            for x: Float in [0, 0, 0, 0, 0, 0, 1, 1, 1] { f(x, into: &d) }
         }
-        appendAnim("clipA", "loop")
-        d.append(contentsOf: [UInt8](repeating: 0, count: 32))  // 32B — offset 31 읽기엔 부족(33B 필요)
-        appendAnim("clipB", "single")
+        appendU64(555); appendClipBody("clipA", "loop")
+        // 39바이트 꼬리. 종전 코드가 읽던 자리(마지막 트랙 끝 +35)에 0xBEEF 를 심는다.
+        var tail = [UInt8](repeating: 0, count: 39)
+        tail[35] = 0xEF; tail[36] = 0xBE
+        d.append(contentsOf: tail)
+        appendU64(777); appendClipBody("clipB", "loop")
+        d.append(Data(repeating: 0, count: 35))
 
         let m = try XCTUnwrap(Model3D.parse(d))
-        XCTAssertEqual(m.animations.count, 2)
-        XCTAssertNil(m.animations[0].id, "트레일러가 짧아 id 를 못 읽으면 nil 이어야(그릇된 값 대신 폴백)")
+        XCTAssertEqual(m.animations.map(\.name), ["clipA", "clipB"])
+        guard m.animations.count == 2 else { return XCTFail("클립 2개가 파스돼야 한다 — 실제 \(m.animations.count)개") }
+        XCTAssertEqual(m.animations[0].id, 555, "종전 코드는 여기서 0xBEEF(48879)를 냈다")
+        XCTAssertNotEqual(m.animations[0].id, 0xBEEF)
+        XCTAssertEqual(m.animations[1].id, 777)
     }
 
     /// C③: Model3DPose.resolveAnimation 도 clipId 가 있으면 이름 휴리스틱보다 우선한다(2D PuppetPose.
@@ -552,8 +567,11 @@ final class Model3DTests: XCTestCase {
             XCTAssertEqual(m.bones.count, 1, "\(magic): MDLS0002 본")
             XCTAssertEqual(m.bones[0].bind.columns.3.x, 5)
             XCTAssertEqual(m.animations.count, 1, "\(magic): \(animMagic) 애니")
-            XCTAssertEqual(m.animations[0].tracks[0].count, 2)
-            XCTAssertEqual(m.animations[0].tracks[0][1].angles.z, 0.5, accuracy: 1e-6)
+            guard let a = m.animations.first, a.tracks.first?.count == 2 else {
+                return XCTFail("\(magic): 본0 트랙 2키가 있어야 한다")
+            }
+            XCTAssertEqual(a.tracks[0].count, 2)
+            XCTAssertEqual(a.tracks[0][1].angles.z, 0.5, accuracy: 1e-6)
             XCTAssertNotNil(PuppetModel.parse(d), "\(magic): 퍼펫 라우팅")
         }
     }
@@ -635,8 +653,9 @@ final class Model3DTests: XCTestCase {
         XCTAssertEqual(m.bones.count, 1)
         XCTAssertEqual(m.bones[0].bind.columns.3.x, -37.03, accuracy: 1e-4)
         XCTAssertEqual(m.animations.count, 1, "MDLA0003 애니")
-        XCTAssertEqual(m.animations[0].name, "动画 1")
-        XCTAssertEqual(m.animations[0].lengthFrames, 150)
+        guard let a0 = m.animations.first else { return XCTFail("MDLA0003 애니가 있어야 한다") }
+        XCTAssertEqual(a0.name, "动画 1")
+        XCTAssertEqual(a0.lengthFrames, 150)
         // 퍼펫 라우팅(렌더 경로): pos/bones/weights/uv 가 그대로 이식
         let pm = try XCTUnwrap(PuppetModel.parse(d), "V0016 퍼펫 라우팅 실패")
         XCTAssertEqual(pm.vertices.count, 3)

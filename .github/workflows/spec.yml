@@ -63,6 +63,9 @@ jobs:
         run: |
           python3 scripts/spec/tests/test_validate.py
           python3 scripts/spec/tests/test_rosetta.py
+          # 2026-08-21: 리포에 있는데 CI 에서 한 번도 안 돌던 자체검사다. MDLA 프레이밍
+          # 픽스처를 바이트로 잠그므로 `measure_mdl_deep.parse_mdla` 회귀를 여기서 잡는다.
+          python3 scripts/spec/tests/test_mdla_framing.py
 
       # 신뢰 경계 밖(.pkg / scene.json / project.json) 숫자의 정수 좁힘이 가드를 건너뛰면 실패한다.
       # Swift 의 Int(Float)·Int32(Int) 는 범위 밖에서 클램프가 아니라 **트랩**이라, 가드 없는
@@ -183,6 +186,13 @@ jobs:
       # 통과" 를 막는다. selftest 를 먼저 돈다.
       - name: Canon regenerability (values)
         run: python3 scripts/spec/check_canon_generator_values.py
+
+      # 정본이 **산문으로 가리키는 다른 항목**이 실재하는지. 형제 게이트 둘 다 못 잡는 구멍이다 —
+      # `check_canon_generator_keys.py` 는 정본에 없는 엔트리 id 를 건너뛰고(`if eid not in lits:
+      # continue`), `validate.py` 는 `crossRef`/`supersedes`/`canonicalIn` 세 키만, 그마저 경고로
+      # 본다. 실제로 `format.mdl.parseCoverage` 가 없는 항목을 참조한 채로 통과하고 있었다.
+      - name: Canon cross-references resolve
+        run: python3 scripts/spec/check_canon_entry_refs.py
 
       # 자산 JSON 관용 파스의 **도달**과 **배선**을 함께 본다.
       #

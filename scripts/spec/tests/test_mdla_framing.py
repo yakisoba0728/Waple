@@ -35,21 +35,37 @@ def skeleton(bone_count, magic=b"MDLS0004"):
     return magic + b"\0" + struct.pack("<II", 0, bone_count)
 
 
-def clip(name, frames, bones, mode="loop", fps=30.0, track_bytes=None, trailer=34):
-    """한 클립의 바이트. `track_bytes` 를 주면 **일부러 어긋난** 값을 넣는다."""
+def clip(name, frames, bones, mode="loop", fps=30.0, track_bytes=None, tail=35,
+         clip_id=100, track_flags=None):
+    """한 클립의 바이트. `track_bytes` 를 주면 **일부러 어긋난** 값을 넣는다.
+
+    엔진 레코드(0x1402639de 이후):
+
+        u64 id | cstring 이름 | cstring 모드 | f32 fps | u32 frameCount | u32 flags
+        | u32 boneCount | 본별(u32 trackFlags | u32 trackBytes | trackBytes) | 꼬리
+
+    `tail` 기본값 35 는 **MDLA0006 에서 게이트가 전부 0 이고 이벤트가 없을 때의 꼬리 길이**다
+    (v>=3 u32 count 4 + v>=3 gate 1 + v>=4 gate 1 + v>=5 f32x6 24 + v>=6 gate 1 +
+    이벤트 u32 count 4). 파서는 그 길이를 계산하지 않고 리싱크로 넘긴다.
+    """
     tb = track_bytes if track_bytes is not None else [KEY * (frames + 1)] * bones
-    b = bytearray(name.encode("utf-8") + b"\0" + mode.encode("utf-8") + b"\0")
-    b += struct.pack("<fIIII", fps, frames, 0, bones, 0)
-    for n in tb:
-        b += struct.pack("<I", n) + b"\0" * n      # 트랙 블롭
-        b += struct.pack("<I", 0)                  # blob2 크기 0
-    b += b"\0" * trailer                           # 가변 트레일러(리싱크 대상)
+    tf = track_flags if track_flags is not None else [0] * len(tb)
+    b = bytearray(struct.pack("<Q", clip_id))
+    b += name.encode("utf-8") + b"\0" + mode.encode("utf-8") + b"\0"
+    b += struct.pack("<fIII", fps, frames, 0, bones)
+    for flags, n in zip(tf, tb):
+        b += struct.pack("<II", flags, n) + b"\0" * n   # trackFlags | trackBytes | 트랙
+    b += b"\0" * tail                                   # 가변 꼬리(리싱크 대상)
     return bytes(b)
 
 
-def section(clips, magic=b"MDLA0006", base_id=100):
-    """`"MDLA000N" | u8 0 | u32 nextOff | u32 animCount | u32 baseId | u32 0` + 클립들."""
-    b = bytearray(magic + b"\0" + struct.pack("<IIII", 0, len(clips), base_id, 0))
+def section(clips, magic=b"MDLA0006"):
+    """`"MDLA000N" | u8 0 | u32 nextOff | u32 animCount` + 클립들(각자 선두에 u64 id).
+
+    종전 이 헬퍼는 헤더에 `u32 baseId | u32 0` 을 더 썼다 — 그 8바이트가 실은 **클립 0 의
+    u64 id** 였다(0x1402639de → readU64 0x1402616b0).
+    """
+    b = bytearray(magic + b"\0" + struct.pack("<II", 0, len(clips)))
     for c in clips:
         b += c
     return bytes(b)
@@ -78,17 +94,37 @@ class MDLATrackFraming(unittest.TestCase):
         self.assertEqual(clips[0]["keysPerTrack"], 11, "키 수는 frameCount + 1 이다")
 
     def test_multiple_clips_via_resync(self):
-        """가변 트레일러(32~39B)를 리싱크로 건너뛰고 다음 클립을 찾는다."""
-        data = model(2, [clip("a", 4, 2, trailer=32),
-                         clip("b", 7, 2, trailer=39, mode="clamp"),
-                         clip("c", 1, 2, trailer=34, mode="single")])
+        """가변 꼬리를 리싱크로 건너뛰고 다음 클립(선두 u64 id 뒤의 이름)을 찾는다."""
+        data = model(2, [clip("a", 4, 2, tail=35, clip_id=100),
+                         clip("b", 7, 2, tail=44, mode="clamp", clip_id=101),
+                         clip("c", 1, 2, tail=35, mode="single", clip_id=102)])
         clips, bad = self.parse(data)
         self.assertEqual(bad, [])
         self.assertEqual([c["name"] for c in clips], ["a", "b", "c"])
         self.assertEqual([c["keysPerTrack"] for c in clips], [5, 8, 2])
 
+    def test_non_zero_track_flags_do_not_desync_the_clip(self):
+        """본 레코드 앞 u32 는 **플래그**이지 뒤따르는 블롭의 크기가 아니다.
+
+        엔진은 그것을 `0x140263aa7 mov r15d,[rsi]` 로 읽어 비트0 만 보고
+        (`0x140263c97 test r15b,1` → `0x140263c9d or [rbp+0xc0],0x80000000`) 키 해석은 안 바꾼다.
+        종전 파서는 (다음 본의) 이 값을 바이트 수로 보고 커서를 밀었으므로 0 이 아닌 순간
+        그 클립부터 전부 어긋났다 — 여기서 본 1·2 에 0 이 아닌 값을 넣어 못박는다.
+        """
+        data = model(3, [clip("flags", frames=2, bones=3,
+                              track_flags=[0, 0xDEADBEEF, 3], clip_id=7)])
+        clips, bad = self.parse(data)
+        self.assertEqual(bad, [], "trackFlags 를 크기로 읽으면 트랙이 잘렸다고 나온다: %r" % bad)
+        self.assertEqual(len(clips), 1)
+        self.assertEqual(clips[0]["bones"], 3)
+        self.assertEqual(clips[0]["keysPerTrack"], 3)
+
     def test_empty_mode_directory_record_is_read(self):
-        """모드가 빈 문자열인 디렉토리 레코드도 트랙 프레이밍은 같다(Model3D.swift:741)."""
+        """모드가 빈 문자열인 디렉토리 레코드도 트랙 프레이밍은 같다.
+
+        (`Model3D.swift` 의 `parseAnimations` 가 `animModes.contains(mode) || mode.isEmpty` 로
+        같은 관용을 건다 — 줄 번호 대신 그 코드를 적는다.)
+        """
         data = model(2, [clip("Glance", 3, 2, mode="")])
         clips, bad = self.parse(data)
         self.assertEqual(bad, [])

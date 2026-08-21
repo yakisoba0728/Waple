@@ -38,6 +38,51 @@
    ]
   },
   {
+   "id": "format.mdl.mdlaTrackFraming",
+   "value": {
+    "불변식": "MDLA 클립의 본 트랙 블롭 `trackBytes` 는 **36 의 배수**이고 `trackBytes / 36 == frameCount + 1` 이다. 엔진은 둘 다 어기면 `int 0x29`(__fastfail) 로 즉시 죽는다 — 즉 **엔진 자신이 강제하는 불변식**이라 실물 파일은 전건 만족해야 한다",
+    "근거 명령열": "wallpaper64.exe 0x140263c5c movsxd r8,[rsp+0x70](trackBytes) · 0x140263c61 movabs rax,0xe38e38e38e38e38f · 0x140263c6b mov ecx,[rbp+0xbc](frameCount) · 0x140263c71 mul r8 · 0x140263c74 shr rdx,5 (= /36) · 0x140263c78 lea rax,[rdx+rdx*8] · 0x140263c7c shl rax,2 (= 몫×36) · 0x140263c80 sub r8,rax (= 나머지) · 0x140263c83 inc ecx (= frameCount+1) · 0x140263c85 cmp rdx,rcx → 0x140263c8c int 0x29 · 0x140263c8e test r8,r8 → 0x140263c95 int 0x29",
+    "키 레이아웃": "36B = pos 3f | 오일러각 3f(라디안) | 스케일 3f",
+    "레코드 프레이밍": "클립 = `u64 id`(0x1402639de → readU64 0x1402616b0) | cstring 이름(0x1402639f8) | cstring 모드(0x140263a11) | f32 fps(0x140263a1b) | u32 frameCount(0x140263a2d) | u32 flags(0x140263a3d) | u32 boneCount(0x140263a4d) | 본별(`u32 trackFlags` 0x140263aa7 | `u32 trackBytes` 0x140263acb | 트랙 0x140263afe) | 꼬리. **trackFlags 는 크기가 아니라 플래그다** — 비트0 은 클립 flags 에 0x80000000 을 세우는 데만 쓰이고(0x140263c97 → 0x140263c9d) 키 해석을 바꾸지 않는다. [2026-08-21 정정] 종전 이 파일과 Model3D.swift 는 헤더를 `… | u32 baseId | u32 0`, 클립을 `… | u32 boneCount | u32 0`, 본을 `u32 트랙크기 | 트랙 | u32 블롭2크기 | 블롭2` 로 적고 있었다. 실물에서 그 값들이 0 이라 위치가 우연히 맞았을 뿐이다",
+    "꼬리 최소 바이트": "MDLA0006 에서 게이트가 전부 0 이고 이벤트가 없으면 클립 꼬리는 **35바이트**다: v>=3 `u32 count`(0x14026468d) 4 + v>=3 `u8 gate`(0x140264838) 1 + v>=4 `u8 gate`(0x140264a1e) 1 + v>=5 `f32 x6`(0x140264d23…) 24 + v>=6 `u8 gate`(0x140264e27) 1 + 이벤트 `u32 count`(0x14026536d) 4. 그 뒤가 곧 다음 클립의 `u64 id` 다(클립 루프 뒤끝 0x14026556b). 그래도 파서가 리싱크를 쓰는 이유는 꼬리 앞쪽 두 트랙 배열(v>=2 0x140263ce7 · 항상 0x140263e7b)의 **개수가 파일이 아니라 스켈레톤 객체**에서 오기 때문이다 — 파일만 보고는 못 센다. 그 둘 중 뒤엣것이 쓰는 스켈레톤 필드 +0x28 은 **MDLS 꼬리 T3 의 레코드 수**다(0x14026285f 가 u32 로 읽고 0x14026286e 가 스켈레톤 +0x28 에 저장한다)",
+    "Waple 격차": "Sources/WapleCore/Model3D.swift 의 parseAnimations 는 `tsRaw % 36 == 0` 만 본다 — `frameCount + 1` 관계는 어디서도 검사하지 않는다. 그래서 프레임 수와 키 수가 어긋난 파일을 조용히 받아들인다",
+    "왜 +1 인가": "[미해결] 마지막 프레임을 닫는 키(루프 복귀 키)로 보이지만 확인하지 못했다. 엔진이 강제한다는 것만 확정이다",
+    "실측": {
+     "MDLA 보유 파일": 0,
+     "클립 전건 통과 파일": 0,
+     "클립 수": 0,
+     "위반": [],
+     "스켈레톤 본수를 못 읽어 건너뛴 파일": [],
+     "매직": {}
+    },
+    "본 수 분포": {},
+    "프레임 수 분포": {},
+    "파일당 클립 수 분포": {},
+    "모드 분포": {},
+    "표본 없음일 때": "설치본만 붙은 환경에서는 MDLA 보유 파일이 0개다(설치본 .mdl 28개 전부 MDLS/MDLA 0건 — 2026-08-21 실측). 그때 위 도수는 전부 비고 위반도 0이다. **0/0 은 불변식을 증명하지 않는다** — 그래서 status 를 표본 유무로 가른다. 합성 픽스처 양성 대조는 scripts/spec/tests/test_mdla_framing.py",
+    "파스 모델 출처": "wallpaper64.exe 2.8.42 의 MDL 디코더(.pdata 조각 6개 병합 0x140261880–0x140265a43)를 조각 시작에서 선형으로 뜬 것. Sources/WapleCore/Model3D.swift parseAnimations 와 같은 모델이고 가변 꼬리는 ≤256B 리싱크로 넘긴다",
+    "코퍼스 미부착 표기": "이 항목이 정본에 처음 들어간 2026-08-21 시점의 컨테이너에는 워크샵 코퍼스가 없었다(measure_mdl_deep.py 는 WE_WORKSHOP 없이는 SystemExit 한다). 그래서 정본의 도수 다섯(실측·본 수 분포·프레임 수 분포·파일당 클립 수 분포·모드 분포)은 **미측정**이고 0/빈 값이다 — 0 은 '없다' 가 아니라 '안 쟀다' 다. 같은 파일의 format.mdl.parseCoverage 는 451파일 환경에서 생성된 값이라 이 항목과 **표본이 다르다**(정본 안의 두 항목이 같은 코퍼스를 말하지 않는다). 코퍼스가 붙은 환경에서 한 번 돌리면 채워진다"
+   },
+   "status": "보고",
+   "evidence": [
+    {
+     "kind": "binary",
+     "ref": "wallpaper64.exe 0x140263c61–0x140263c95",
+     "note": "MDLA 트랙 프레이밍 __fastfail 두 개"
+    },
+    {
+     "kind": "corpus",
+     "ref": "설치본 .mdl 28개 전수 — MDLA 0건",
+     "note": "2026-08-21 설치본 트리 6138파일을 파일 전체 바이트로 재스캔해 확인했다(.pak 446개는 전부 CEF 리소스 팩이라 .mdl 을 담지 않는다). 워크샵 코퍼스가 없어 도수는 미측정 — scripts/spec/measure_mdl_deep.py"
+    },
+    {
+     "kind": "script",
+     "ref": "scripts/spec/tests/test_mdla_framing.py",
+     "note": "합성 픽스처 음성 대조 — 36 배수 위반 · frameCount+1 위반 · 다중 클립 리싱크 · 0 이 아닌 trackFlags"
+    }
+   ]
+  },
+  {
    "id": "format.mdl.header",
    "value": {
     "레이아웃": "cstring magic \"MDLV%04d\" (9B, NUL 포함) | u32 formatFlag | u32 skinCount | u32 meshCount",
