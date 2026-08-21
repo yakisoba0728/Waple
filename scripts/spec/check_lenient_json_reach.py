@@ -50,29 +50,61 @@ WIRED = {"Sources/WapleCore/SceneDocument.swift": 7,
          "Sources/WapleRender/SceneRenderer3D.swift": 2}
 
 
-def relaxed(text: str) -> str:
-    """런타임 `AssetJSON.relaxed` 와 같은 관용: 줄 주석 + 트레일링 콤마 딱 둘."""
-    out, in_str, i = [], False, 0
-    while i < len(text):
-        c = text[i]
+def swift_characters(text: str):
+    """파이썬 코드포인트 문자열을 **Swift `Character`(그래핌 클러스터) 목록**으로 쪼갠다.
+
+    **[2026-08-21] 이 함수가 없어서 이 게이트가 실전 결함을 놓쳤다.** 파이썬 `str` 은
+    코드포인트 단위라 `"\r\n"` 이 두 글자지만, Swift `String` 은 그래핌 클러스터 단위라
+    **한 글자**다. 그래서 `text[i] != "\n"` 이 파이썬 모델에서는 CRLF 에 멈추고 Swift 에서는
+    안 멈춘다 — 모델이 통과시킨 코드가 실물에서는 파일 끝까지 지워 버렸다.
+    동봉 `effects/**/effect.json` 122개가 전건 CRLF 라, 관용이 필요한 자산 31건이 전부
+    이 구멍에 빠져 있었는데 게이트는 초록이었다.
+
+    여기서 재현이 필요한 클러스터링은 CRLF 하나뿐이다(자산에 결합 문자·이모지 ZWJ 가
+    JSON 구조 문자 자리에 올 일이 없다). 과하게 흉내 내지 않고 그 한 규칙만 적용한다 —
+    모델이 실물보다 똑똑해지면 다시 같은 종류의 거짓 초록이 난다.
+    """
+    out, i, n = [], 0, len(text)
+    while i < n:
+        if text[i] == "\r" and i + 1 < n and text[i + 1] == "\n":
+            out.append("\r\n"); i += 2
+        else:
+            out.append(text[i]); i += 1
+    return out
+
+
+# Swift `Character.isNewline` 이 참인 것들(그래핌 단위). JSON 구조 자리에 올 수 있는 것만.
+SWIFT_NEWLINES = {"\n", "\r", "\r\n", "\u000b", "\u000c", "\u0085", "\u2028", "\u2029"}
+
+
+def relaxed(text: str, *, swift_graphemes: bool = False) -> str:
+    """런타임 `AssetJSON.relaxed` 와 같은 관용: 줄 주석 + 트레일링 콤마 딱 둘.
+
+    `swift_graphemes=True` 면 Swift 와 같은 그래핌 단위로 순회한다. 두 모드의 결과가
+    갈리는 입력이 있으면 그건 **파이썬 모델이 실물과 다르다**는 신호다.
+    """
+    units = swift_characters(text) if swift_graphemes else list(text)
+    out, in_str, i, n = [], False, 0, len(units)
+    while i < n:
+        c = units[i]
         if in_str:
             out.append(c)
-            if c == "\\" and i + 1 < len(text):
-                out.append(text[i + 1]); i += 2; continue
+            if c == "\\" and i + 1 < n:
+                out.append(units[i + 1]); i += 2; continue
             if c == '"':
                 in_str = False
             i += 1; continue
         if c == '"':
             in_str = True; out.append(c); i += 1; continue
-        if c == "/" and i + 1 < len(text) and text[i + 1] == "/":
-            while i < len(text) and text[i] != "\n":
+        if c == "/" and i + 1 < n and units[i + 1] == "/":
+            while i < n and units[i] not in SWIFT_NEWLINES:
                 i += 1
             continue
         if c == ",":
             j = i + 1
-            while j < len(text) and text[j] in " \t\r\n":
+            while j < n and (units[j] in (" ", "\t") or units[j] in SWIFT_NEWLINES):
                 j += 1
-            if j < len(text) and text[j] in "]}":
+            if j < n and units[j] in ("]", "}"):
                 i += 1; continue
         out.append(c); i += 1
     return "".join(out)
@@ -95,6 +127,23 @@ def selftest() -> None:
         if got != want:
             print(f"selftest 실패({label}): {got!r} != {want!r}", file=sys.stderr)
             raise SystemExit(2)
+    # CRLF — 두 모드가 **같은 결과**를 내야 한다. 갈리면 파이썬 모델이 실물과 다르다는 뜻이다.
+    crlf_cases = [
+        ('{\r\n"a": 1, // c\r\n"b": 2\r\n}', {"a": 1, "b": 2}, "CRLF 줄 주석"),
+        ('{\r\n"a": [1, 2,\r\n],\r\n}', {"a": [1, 2]}, "CRLF 트레일링 콤마"),
+    ]
+    for src, want, label in crlf_cases:
+        for mode in (False, True):
+            try:
+                got = json.loads(relaxed(src, swift_graphemes=mode))
+            except ValueError as exc:
+                print(f"selftest 실패({label}, swift_graphemes={mode}): {exc}", file=sys.stderr)
+                raise SystemExit(2)
+            if got != want:
+                print(f"selftest 실패({label}, swift_graphemes={mode}): {got!r} != {want!r}",
+                      file=sys.stderr)
+                raise SystemExit(2)
+
     # 관용이 **너무** 관대하면 안 된다 — 블록 주석은 일부러 미지원이다.
     try:
         json.loads(relaxed('{/* c */"a":1}'))
@@ -132,6 +181,8 @@ def main() -> int:
             need.add(rel)
             try:
                 json.loads(relaxed(text))
+                # Swift 그래핌 모드로도 복구돼야 한다 — 실물이 도는 방식이 이쪽이다.
+                json.loads(relaxed(text, swift_graphemes=True))
             except ValueError as exc:
                 unrecoverable.append((rel, str(exc)[:70]))
 

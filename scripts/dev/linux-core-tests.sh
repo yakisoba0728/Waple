@@ -50,4 +50,9 @@ let package = Package(
 PKG
 
 cd "$WORK" || exit 1
+# 동봉 자산 트리 위치를 넘긴다 — 이 임시 패키지는 저장소 **밖**이라 상위 디렉터리 탐색으로는
+# 못 찾는다. 자산 전수 회귀 테스트(AssetJSON/EffectManifest/Model3D)가 이걸 보고 켜진다.
+# 없으면 그 테스트들은 XCTSkip 으로 조용히 빠진다 — 즉 리눅스에서 **조용히 0건을 통과**하던
+# 자리였다(2026-08-21: CRLF 관용 파스 결함을 리눅스가 못 잡은 원인).
+export WAPLE_WE_ASSETS="${WAPLE_WE_ASSETS:-$REPO/Sources/WapleRender/Resources/WEAssets}"
 "$SWIFTC_DIR/swift" test "$@"
