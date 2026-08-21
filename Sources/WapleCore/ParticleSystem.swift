@@ -1199,7 +1199,9 @@ public struct PeriodicEmission: Equatable {
 /// `delay == 0`(2건)은 대기 없음.
 ///
 /// 동봉 도달: `duration` 32건(파일 32) · `delay` 4건(파일 4) — 전건 `emitter[]`.
-/// **파스·보존 전용**이다(시뮬 미배선 — `ParticleSimulator` 방출 게이트 배선은 별도 라운드).
+/// 시뮬 배선 완료 — `ParticleSimulator.windowBlocksEmission(_:)`(게이트 ①②·은퇴)와
+/// `stepEmitterWindows(_:)`(꼬리 카운트다운 ③④)가 소비한다. 전건 `.unbounded` 면 상태 배열을
+/// 아예 비워 종전 경로와 비트동일이다(동봉 30/32 가 그 경로).
 public struct EmitterWindow: Equatable {
     /// ON 창 길이(초). **0 = 무한**(위 ⑤). 음수는 실물에서 즉시 게이트 차단(위 ②).
     public let duration: Float
@@ -1276,7 +1278,8 @@ public struct ParticleSystemDef: Equatable {
     public var emitterPeriodic: [PeriodicEmission?] = []
     /// 이미터별 방출 창(emitters 와 병렬 — `emitterAudio`/`emitterSpeed`/`emitterPeriodic` 동형).
     /// 비어 있으면 창 없음(= 전 이미터 `.unbounded`)으로 본다 — 직접 조립한 def 의 무회귀 경로.
-    /// 유도·소비 근거는 `EmitterWindow` 주석. **현재 파스·보존 전용**(시뮬 미배선).
+    /// 유도·소비 근거는 `EmitterWindow` 주석. 소비처는 `ParticleSimulator` 의 방출 게이트와
+    /// 창 카운트다운 두 곳이다.
     public var emitterWindow: [EmitterWindow] = []
     /// F623: 실물 def "flags" 비트(1=worldspace, 4=perspective z-원근).
     ///

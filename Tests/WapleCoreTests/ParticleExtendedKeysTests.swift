@@ -959,6 +959,139 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertEqual(def.emitterWindow[3], EmitterWindow(duration: 2.5, delay: 0))
     }
 
+    // MARK: - 2b. 이미터 방출 창(emitterWindow) 시뮬 배선
+
+    /// 창 하나짜리 def — 원점 고정 box 이미터(dt 0.25 · rate 4 → 스텝당 정확히 1개).
+    /// `w == nil` 이면 창 축을 아예 비운다(= 종전 경로).
+    private func windowDef(_ w: EmitterWindow?, rate: Float = 4, burst: Int = 0,
+                           lifetime: Float = 1000) -> ParticleSystemDef {
+        var def = makeDef(emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0),
+                                          distanceMax: Vec3(x: 0, y: 0, z: 0),
+                                          rate: rate, burst: burst)],
+                          initializers: [.velocityRandom(min: Vec3(x: -5, y: -5, z: -5),
+                                                         max: Vec3(x: 5, y: 5, z: 5))],
+                          lifetime: lifetime, maxCount: 256)
+        if let w { def.emitterWindow = [w] }
+        return def
+    }
+
+    private func windowTrace(_ def: ParticleSystemDef, steps: Int = 24,
+                             dt: Float = 0.25, seed: UInt64 = 4242) -> [SIMD3<Float>] {
+        var sim = ParticleSimulator(def: def, seed: seed)
+        var out: [SIMD3<Float>] = []
+        for _ in 0..<steps { out.append(contentsOf: sim.step(dt).map { $0.pos }) }
+        return out
+    }
+
+    /// **무회귀가 최우선.** 창 축이 비었을 때(= 직접 조립 def)와 전건 `.unbounded`(0/0)일 때가
+    /// 같은 시드에서 **비트동일**이어야 한다. 위치가 전 스텝 일치한다는 것은 `velocityrandom`
+    /// 드로가 같은 순서로 같은 수만큼 나왔다는 뜻이라 RNG 스트림 불변의 증명이기도 하다.
+    func testEmitterWindow_absentAndUnboundedAreBitIdentical() {
+        let baseline = windowTrace(windowDef(nil))
+        XCTAssertFalse(baseline.isEmpty, "기준선이 비면 비교가 무의미하다")
+        XCTAssertEqual(windowTrace(windowDef(.unbounded)), baseline,
+                       "unbounded(0/0) 창은 종전 방출 경로와 비트동일이어야 한다")
+    }
+
+    /// 무키 씬(동봉 30/32 가 `duration: 0` · `delay` 부재) 비트동일 고정 — 파스된 def 와
+    /// 창 축을 비운 같은 def 의 시뮬 결과가 전 스텝 일치해야 한다.
+    func testEmitterWindow_parsedNoKeySceneIsBitIdentical() {
+        let parsed = ParticleSystemDef.parse(json("""
+        {"emitter":[{"name":"boxrandom","rate":4,"distancemax":"0 0 0","duration":0}],
+         "initializer":[{"name":"lifetimerandom","min":1000,"max":1000},
+                        {"name":"velocityrandom","min":"-5 -5 -5","max":"5 5 5"}],
+         "renderer":[{"name":"sprite"}],"maxcount":256}
+        """), material: nil)
+        XCTAssertEqual(parsed.emitterWindow, [.unbounded], "duration 0 · delay 부재 = 0/0")
+        var stripped = parsed
+        stripped.emitterWindow = []
+        let a = windowTrace(parsed)
+        XCTAssertFalse(a.isEmpty)
+        XCTAssertEqual(a, windowTrace(stripped), "무키 씬은 창 배선 전후가 비트동일")
+    }
+
+    /// 게이트 ①(0x1402379ea `comiss xmm8, [r15+0x18]` → `jb`): delay > 0 인 프레임은 방출 0.
+    /// 카운트다운(0x140238461–0x14023847a)이 방출 판정 **뒤**라, delay 가 0 이 되는 프레임부터 방출된다.
+    func testEmitterWindow_delayBlocksEmission() {
+        var sim = ParticleSimulator(def: windowDef(EmitterWindow(duration: 0, delay: 0.5)), seed: 1)
+        _ = sim.step(0.25)
+        XCTAssertEqual(sim.liveCount, 0, "delay 0.5 → 이 프레임 방출 없음")
+        _ = sim.step(0.25)
+        XCTAssertEqual(sim.liveCount, 0, "delay 잔여 0.25 → 여전히 막힘")
+        _ = sim.step(0.25)
+        XCTAssertEqual(sim.liveCount, 1, "delay 소진 프레임부터 방출")
+        for _ in 0..<8 { _ = sim.step(0.25) }
+        XCTAssertEqual(sim.liveCount, 9, "duration 0 은 무한 — 계속 방출")
+    }
+
+    /// 게이트 ③④(0x140238461–0x14023847a → 0x14023ae24–0x14023ae46): delay 가 duration 앞이다.
+    /// delay 를 깎는 프레임은 duration 을 **안 깎는다** — 0.5s 대기 + 1.0s 창 = 4스텝 방출.
+    func testEmitterWindow_delayRunsBeforeDurationThenRetires() {
+        var sim = ParticleSimulator(def: windowDef(EmitterWindow(duration: 1, delay: 0.5)), seed: 2)
+        for _ in 0..<2 { _ = sim.step(0.25) }
+        XCTAssertEqual(sim.liveCount, 0, "0.5s 대기 동안 방출 0")
+        for _ in 0..<4 { _ = sim.step(0.25) }
+        XCTAssertEqual(sim.liveCount, 4, "duration 이 대기 뒤부터 깎이므로 창은 온전한 1.0s(4스텝)")
+        for _ in 0..<40 { _ = sim.step(0.25) }
+        XCTAssertEqual(sim.liveCount, 4, "duration 소진 → 은퇴, 신규 방출 0")
+    }
+
+    /// 은퇴는 **영구**다(0x14023ae67 `or dword [rcx+0x4c], 0x80000000` → 다음 프레임
+    /// 0x1402379d2–0x1402379db `test ebx,ebx` / `js` 가 방출 블록을 통째로 건너뛴다).
+    /// burst 이미터의 "전멸 시 재버스트" 레거시 경로(_step 의 `wasEmpty` 분기)도 되살아나면 안 된다.
+    func testEmitterWindow_retirementIsPermanentEvenAfterExtinction() {
+        var sim = ParticleSimulator(def: windowDef(EmitterWindow(duration: 0.25, delay: 0),
+                                                   rate: 0, burst: 3, lifetime: 0.6), seed: 3)
+        _ = sim.step(0.25)
+        XCTAssertEqual(sim.liveCount, 3, "창 안에서는 버스트 발화")   // 이 프레임 끝에 duration 소진 → 은퇴
+        _ = sim.step(0.25)
+        XCTAssertEqual(sim.liveCount, 3, "은퇴 뒤 — 기존 파티클만 드레인된다(적분은 계속)")
+        _ = sim.step(0.25)
+        XCTAssertEqual(sim.liveCount, 0, "수명 0.6 초과 → 전멸")
+        for _ in 0..<40 { _ = sim.step(0.25) }
+        XCTAssertEqual(sim.liveCount, 0, "전멸해도 재버스트 없음(은퇴 비트는 영구)")
+    }
+
+    /// 게이트 ⑤(0x14023ae48 `comiss xmm8, [rcx+0x10]` → `jb`): `duration <= 0` 이어도 rate > 0 이면
+    /// 은퇴하지 않는다 — 즉 **`duration == 0` 은 "0초 방출" 이 아니라 무한**이다.
+    /// (0/0 은 창 축을 비운 것과 같아 배선이 통째로 빠지므로, delay 만 실어 상태를 켜 두고 본다.)
+    func testEmitterWindow_zeroDurationIsUnbounded() {
+        var sim = ParticleSimulator(def: windowDef(EmitterWindow(duration: 0, delay: 0.25)), seed: 5)
+        _ = sim.step(0.25)
+        XCTAssertEqual(sim.liveCount, 0, "delay 한 프레임")
+        for _ in 0..<60 { _ = sim.step(0.25) }
+        XCTAssertEqual(sim.liveCount, 60, "duration 0 = 무한 — 15초 내내 방출")
+    }
+
+    /// 게이트 ②(0x140237af1–0x140237afb `movss xmm0,[r15+0x14]` / `comiss xmm0, xmm8` → `jb`):
+    /// duration < 0 이면 방출이 없다. 은퇴 프레임에 못 박히는 `-1.0`(0xbf800000 @0x14023ae3f)이
+    /// 걸리는 자리이고, 저작 음수도 같은 판정으로 **영구 차단**된다.
+    func testEmitterWindow_negativeDurationBlocksForever() {
+        var sim = ParticleSimulator(def: windowDef(EmitterWindow(duration: -1, delay: 0)), seed: 6)
+        for _ in 0..<40 { _ = sim.step(0.25) }
+        XCTAssertEqual(sim.liveCount, 0, "음수 duration 은 영구 차단")
+    }
+
+    /// 동봉 `thunderbolt_beam_child` 모양(delay 0.2 · duration 1 · flags 4 주기 · rate 100 ·
+    /// maxtoemitperperiod 8). 실물은 delay 게이트(0x1402379ea)가 주기 상태기계(0x140237a15)
+    /// **앞**이라 대기 중에는 주기 시계까지 얼어붙는다 — 창이 열리는 프레임에 ON 윈도우가 시작된다.
+    func testEmitterWindow_delayFreezesPeriodicClock() {
+        var def = makeDef(emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0),
+                                          distanceMax: Vec3(x: 0, y: 0, z: 0),
+                                          rate: 100, burst: 0)],
+                          lifetime: 1000, maxCount: 256)
+        def.emitterPeriodic = [PeriodicEmission(durationMin: 1, durationMax: 1,
+                                                delayMin: 9999, delayMax: 9999, maxPerPeriod: 8)]
+        def.emitterWindow = [EmitterWindow(duration: 1, delay: 0.2)]
+        var sim = ParticleSimulator(def: def, seed: 9)
+        for _ in 0..<2 { _ = sim.step(0.1) }
+        XCTAssertEqual(sim.liveCount, 0, "delay 0.2 동안 방출 0 — 주기 시계도 정지")
+        for _ in 0..<10 { _ = sim.step(0.1) }
+        XCTAssertEqual(sim.liveCount, 8, "창(1s) 안에서 quota 8 소진")
+        for _ in 0..<50 { _ = sim.step(0.1) }
+        XCTAssertEqual(sim.liveCount, 8, "duration 소진 → 은퇴, 신규 방출 0")
+    }
+
     /// ③ `initializer[].arcamount` — `mapsequencebetweencontrolpoints` **전용**이다.
     /// between 바인더 0x1401bc080 만 이 키를 심고(H_FLOAT @0x1401bc3dd, 기본 0.3 ← 0x140492694),
     /// around 바인더 0x1401bbc90 에는 아예 없다. 소비는 리더 0x1401ca482 → `[init+0x20]`.
