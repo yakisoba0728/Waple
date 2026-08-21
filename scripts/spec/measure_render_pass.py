@@ -401,7 +401,7 @@ def main():
                                                   "`FF /4`(tail jmp)의 **opcode 바이트 위치**다. "
                                                   "**REX 프리픽스가 붙으면 명령 시작이 한 바이트 앞**이다"
                                                   "(r8–r15 를 쓰는 간접 호출 `41 ff 92 …`). 실측으로 세 자리가 "
-                                                  "그렇다: 0x14009b945 · 0x14009b96a · 0x1400d33fd.",
+                                                  "그렇다: 0x14009b945 · 0x14009b96a · 0x1400d33fd.",  # [VA-스캐너위치]
                        "왜 이대로 두나": "이 스캐너들은 표준 라이브러리만 쓴다 — 디스어셈블러 의존을 "
                                          "만들지 않는 것이 `scripts/re` 의 규약이다. 값 자체는 정확하다"
                                          "(disp32 위치는 disp32 위치다). 정확한 **명령** 주소가 필요하면 "
@@ -571,7 +571,7 @@ def main():
 
         specfmt.entry("engine.renderPass.fullFrameBufferIsSnapshot",
                       {"fact": "_rt_FullFrameBuffer 는 렌더 타깃으로 **바인드되지 않는다**. "
-                               "프레임 함수에서 이 필드(0x3098)가 쓰이는 세 곳(0x140180a82 / 0x140180b9f / "
+                               "프레임 함수에서 이 필드(0x3098)가 쓰이는 세 곳(0x140180a82 / 0x140180b9f / "  # [VA-스캐너위치]
                                "0x140180bdf)은 전부 vtable+0x08 = '현재 프레임버퍼를 이 RT 로 캡처'다. [VA-스캐너위치]",
                        "consequence": "WE 의 후처리는 '스냅샷 → 현재 타깃으로 되그리기'의 반복이다. "
                                       "각 전면 패스 직전에 현재 화면을 _rt_FullFrameBuffer 로 복사하고, "
@@ -633,8 +633,8 @@ def main():
                                "RT vtable+0x20 (=0x1400d3430) — ID3D11DeviceContext::GenerateMips "
                                "(vtable off 0x1b0, 호출 지점 0x1400d344e, tail-jmp 인코딩)"],
                        "cond": "_rt_MipMappedFrameBuffer != 0 && (settings>>7 & 1)",
-                       "sitesInFrameFn": {"branchB(블룸 on)": ["0x140180a8f", "0x140180aa6"],
-                                          "branchA(블룸 off)": ["0x140180b76", "0x140180b8d"]},
+                       "sitesInFrameFn": {"branchB(블룸 on)": ["0x140180a8f", "0x140180aa6"],  # [VA-스캐너위치]
+                                          "branchA(블룸 off)": ["0x140180b76", "0x140180b8d"]},  # [VA-스캐너위치]
                        "creation": "FUN_140181af0, 씬 플래그 bit11 일 때. mipLevels = 1 또는 "
                                    "(품질 비트 set 시) 0xf, format 0x1b, misc 0x10. "
                                    "생성 직후 한 번 바인드해서 흰색(1,1,1,1)으로 클리어한다.",

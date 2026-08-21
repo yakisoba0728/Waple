@@ -204,9 +204,14 @@ def main(argv):
     mixed = {}                                    # 파일 -> 언급한 다른 바이너리
     for f in files:
         txt = f.read_text(encoding="utf-8", errors="replace")
-        others = sorted({b for b in OTHER_BINARIES if b in txt})
-        if others:
-            mixed[str(f)] = others
+        # 언급 **횟수**까지 센다. `wallpaper64.exe 30 / webwallpaper64.exe 1` 처럼 한쪽으로
+        # 쏠린 파일은 그 한 번이 대개 "범위 밖" 주석이라 결과가 오탐이 아니다 — 사람이 그걸
+        # 판단할 수 있게 비율을 보여 준다. 실제로 `spec/engine/render-pass.json` 이 그 경우였고,
+        # 종전엔 그 파일 113건이 통째로 "오탐 가능" 으로 묻혀 있었다.
+        counts = {b: txt.count(b) for b in OTHER_BINARIES if b in txt}
+        if counts:
+            counts["wallpaper64.exe"] = txt.count("wallpaper64.exe") - txt.count("webwallpaper64.exe")
+            mixed[str(f)] = counts
         for line in txt.splitlines():
             stripped = line.strip()
             record = (CORRECTION_MARKER in stripped or SCANNER_MARKER in stripped
@@ -317,7 +322,8 @@ def main(argv):
     if mixed:
         print("[va-citations] **다른 바이너리를 언급하는 파일** — 아래 결과에 오탐이 섞인다:")
         for f, bs in sorted(mixed.items()):
-            print(f"    {f}  ({', '.join(bs)})")
+            detail = " · ".join(f"{k} {v}" for k, v in sorted(bs.items(), key=lambda kv: -kv[1]))
+            print(f"    {f}  ({detail})")
         print()
     print(f"[va-citations] 고유 VA {len(cited)} · 데이터/리프 {len(data_or_leaf)} · "
           f"디스어셈 미도달 {len(unreached)}(함수 안 점프표 등 — 판정 불가) · "

@@ -1128,9 +1128,9 @@ wec_e.value                                    ; 0x140107e28 · 0x1401081bd · 0
 **`checkPositionVisibility()` 가 결정적 반증이다** — 그 함수는 브라우저 스코프에만 있다
 (`scripts.js` char@106119, `ea.checkPositionVisibility = function(){…}`). 엔진에는 없으므로
 엔진은 자기가 쓴 조건조차 평가할 수 없다. 나머지 **읽기 6자리**도 표시 조건식 평가기가 아니다:
-씬 `user` 바인딩 파서 둘(0x1401a4f1b · 0x14017512c), TEXB 변형 조건 둘(0x14015cc13 = 바깥
-`condition` · 0x14015cd74 = 안쪽 `condition`, 형제 `name` 이 0x14015cd61 — `TexImage
-.VariantCondition` 이 파스하는 이중 구조 그대로), 그리고 0x14001f39b · 0x140134c81.
+씬 `user` 바인딩 파서 둘(0x1401a4f1b · 0x14017512c), TEXB 변형 조건 둘(0x14015cc10 = 바깥
+`condition` · 0x14015cd71 = 안쪽 `condition`, 형제 `name` 이 0x14015cd5e — `TexImage
+.VariantCondition` 이 파스하는 이중 구조 그대로), 그리고 0x14001f398 · 0x140134c7e.
 **§7.1 의 "평가는 UI 몫" 을 이걸로 확정한다.**
 
 이 다섯은 `general.properties` 에 실리지 않으므로 Waple 파서 도달은 여전히 0 이다. 다만
@@ -1309,3 +1309,14 @@ general.properties 를 가진 파일 180 / 프로퍼티 241개
 두 키가 실제로 어떻게 화해하는지 확정하지 못했다. Waple 은 `order` 부재를 **맨 뒤 + key 오름차순**
 으로 결정화한다(브라우저의 `NaN` 비교는 V8 TimSort 의 삽입 순서에 의존해 결정적이지 않다).
 설치본에서 `order` 부재는 22건(color 21 · combo 1)이다.
+
+---
+
+> **[2026-08-21 · VA 인용 정정 5건]** `scripts/re/va_citations.py` 전수 대조로 이 문서의 `"condition"`
+> / `"name"` 로드 자리 인용 다섯이 **명령 경계가 아님**을 확인하고 고쳤다. 전부 **xref 바이트 스캔이
+> 준 `disp32` 필드 위치**라 명령보다 정확히 3바이트 뒤였다(방법론 함정 16b).
+> 종전 `0x14001f39b`→`0x14001f398` · `0x140134c81`→`0x140134c7e` · `0x14015cc13`→`0x14015cc10` ·  [VA-정정]
+> `0x14015cd61`→`0x14015cd5e` · `0x14015cd74`→`0x14015cd71`.  [VA-정정]
+> 가리키는 대상은 그대로다 — `0x140474a60`=`"condition"` · `0x1404748b8`=`"name"`.
+> 같은 다섯 인용이 `Sources/WapleCore/PropertyConditionEvaluator.swift` 와 그 테스트에도 있었고
+> 커밋 `a452fc2` 에서 함께 고쳤다.
