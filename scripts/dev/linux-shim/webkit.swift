@@ -24,17 +24,19 @@ import AppKit
 //  · `autoreleasepool` 은 리눅스 Foundation 에 아예 없다(실측: `cannot find 'autoreleasepool' in scope`).
 @_exported import FoundationNetworking
 
-/// 실제(Darwin): `@inlinable public func autoreleasepool<Result>(invoking body: () throws -> Result)
-///                rethrows -> Result` — 리눅스에는 없다. 호출부는 전부 트레일링 클로저라 라벨이 생략된다.
-public func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
-    try body()
-}
+// **[2026-08-21] `autoreleasepool` 은 여기 있으면 안 된다 — `corefoundation.swift` 로 옮겼다.**
+// 여기 두면 WebKit 을 임포트하는 파일만 볼 수 있는데, 실제 사용처 다섯(`WallpaperSchemeHandler` ·
+// `DeepScan` · `SnapshotCompare` · `SnapshotPipeline` · `ProfilePipeline`) 중 WebKit 을
+// 임포트하는 파일은 **하나도 없다**. 다섯의 공통분모는 `WapleCore` 라서 그쪽으로 갔다.
 
 // MARK: - 설정 · 콘텐츠 컨트롤러
 
 /// 실제: `open class WKWebsiteDataStore: NSObject { open class var `default`: WKWebsiteDataStore
 ///        open class func nonPersistent() -> WKWebsiteDataStore }`
 open class WKWebsiteDataStore: NSObject {
+    /// 실제: `open var isPersistent: Bool { get }` — `.nonPersistent()` 는 false 다.
+    /// [2026-08-21] `--tests` 요구 표면(`WebRendererSecurityTests:18` 이 비영속 스토어를 단언한다).
+    public var isPersistent: Bool { true }
     public override init() { super.init() }
     public static func nonPersistent() -> WKWebsiteDataStore { WKWebsiteDataStore() }
     public static let `default` = WKWebsiteDataStore()
@@ -239,10 +241,18 @@ open class WKWebView: NSView {
     public override convenience init() {
         self.init(frame: .zero, configuration: WKWebViewConfiguration())
     }
+    /// `NSView.init(frame:)` 상속분. `_configuration` 이 저장 프로퍼티라 상속만으로는 안 되므로
+    /// 편의 생성자로 같은 자리를 만든다. [2026-08-21] `WebInputProxyViewTests:9` 외.
+    public override convenience init(frame frameRect: CGRect) {
+        self.init(frame: frameRect, configuration: WKWebViewConfiguration())
+    }
     @discardableResult
     open func load(_ request: URLRequest) -> WKNavigation? { nil }
     @discardableResult
     open func loadHTMLString(_ string: String, baseURL: URL?) -> WKNavigation? { nil }
+    /// 실제: `open func stopLoading()`.
+    /// [2026-08-21] `--tests` 요구 표면(`WebHardPauseTests:104`).
+    open func stopLoading() {}
     open func evaluateJavaScript(_ javaScriptString: String,
                                  completionHandler: ((Any?, (any Error)?) -> Void)? = nil) {}
     open func takeSnapshot(with snapshotConfiguration: WKSnapshotConfiguration?,
