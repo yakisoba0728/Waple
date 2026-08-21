@@ -32,7 +32,10 @@ final class ScenePackageTests: XCTestCase {
         let pkg = Self.makePkg([("Models\\Foo.JSON", model)])
         let p = try ScenePackage.parse(pkg)
 
-        XCTAssertEqual(p.data(for: "Models\\Foo.JSON"), model, "exact package path still wins")
+        // [2026-08-21] 종전 이 줄의 근거는 "exact package path still wins" 였다. `.pkg` 백엔드에는
+        // 이제 **접힌 색인 하나뿐**이라(WE 와 같다) 정확 일치도 같은 색인을 지난다 — 엔트리가
+        // 하나뿐이므로 답은 같고, 이 단언이 재는 것은 "원문 철자로도 닿는다" 다.
+        XCTAssertEqual(p.data(for: "Models\\Foo.JSON"), model)
         XCTAssertEqual(p.data(for: "models/foo.json"), model)
         XCTAssertEqual(p.data(for: "models\\foo.json"), model)
     }
@@ -82,12 +85,23 @@ final class ScenePackageTests: XCTestCase {
         XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0024")))
     }
 
-    /// [2026-07-27 정정] "PKGV" 뒤 4자리는 포맷 버전이다(로컬 코퍼스 169개 scene.pkg 매직 도수분포 —
-    /// distinct 14값, 0023×51/0022×47/0021×30/0024×12 … 롱테일 0001·0007·0008·0011·0012 각 1건 —
-    /// 는 전형적 버전 채택 곡선이지 per-file 난수 serial 이 아니다; WE-2.8-deep-KR.md B1 과 일치).
+    /// [2026-07-27 정정] "PKGV" 뒤 4자리는 포맷 버전이다 — 도수 곡선이 전형적 버전 채택 곡선이지
+    /// per-file 난수 serial 이 아니다.
+    ///
+    /// **[2026-08-21 정정 — 인용 수치와 출처가 둘 다 틀렸다]** 종전 이 주석은 "로컬 코퍼스 **169개**,
+    /// 0023×51/0022×47/0021×30/0024×12 … 롱테일 0001 등" 을 적고 근거로 `WE-2.8-deep-KR.md` 를 댔다.
+    /// **그 파일은 이 저장소에도 시스템 어디에도 없고**(find 전역 0건), 정본
+    /// `spec/formats/pkg.json` `format.pkg.magicDistribution` 의 값은 다르다 —
+    /// 0023×50 · 0022×46 · 0021×28 · 0024×13 · 0020×6 · 0018×5 · 0019×5 · 0017×3 ·
+    /// 0002/0007/0008/0011/0012/0016 각 ×1 = **distinct 14종 / 합계 162**(롱테일 최소값은 0001 이
+    /// 아니라 **0002**). 같은 정정이 `ScenePackage.swift` 의 매직 주석에도 적혀 있다 — 두 자리가
+    /// 갈리면 다음 사람이 낡은 쪽을 근거로 삼는다.
+    ///
     /// "0000"·"0100" 을 수락한다고 이 값들이 실존 버전이라는 뜻은 아니다 — RePKG PackageReader.cs 가
     /// 매직을 버전 분기 없이 불투명 문자열로만 읽어 컨테이너 프레이밍이 관측된 모든 버전에서 불변이므로
     /// 파서가 값 범위를 게이트할 이유가 없다는 뜻이다(구조: "PKGV"+4 ASCII 숫자만 검증).
+    /// **엔진은 반대로 `atoi(magic+4) > 24` 를 거부한다**(`0x140276964`) — 그 이탈은
+    /// `ScenePackageWEParityTests.testNoVersionCeilingUnlikeWE` 가 따로 못 박는다.
     func testDoesNotGateOnVersionValue() {
         XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0000")))
         XCTAssertNoThrow(try ScenePackage.parse(Self.makePkg([], version: "PKGV0100")))

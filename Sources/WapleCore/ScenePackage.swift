@@ -20,21 +20,82 @@ public struct ScenePackage {
     public let entries: [Entry]
     private let storage: Storage
     private let entryByName: [String: Entry]
+    /// **WE 의 키와 정확히 같은 색인** — ASCII 소문자화만 한다(역슬래시 치환 없음). last-wins.
+    private let entryByFoldedName: [String: Entry]
+    /// Waple 전용 관용 색인 — 위에 더해 역슬래시→슬래시까지 접는다. WE 에 없다. last-wins.
     private let entryByNormalizedName: [String: Entry]
 
+    /// 조회 색인 둘. **`.blob`(진짜 `.pkg`)은 아래 접힌 색인 하나만 쓴다** — WE 가 그렇다.
+    ///
+    /// **[2026-08-21 철회 — 종전 결론은 first-wins 였다]** 이 자리는 두 색인 모두
+    /// `if index[key] == nil` 로 **선행 엔트리를 유지**했고, `ScenePackageFixRegressionTests` 가
+    /// 그것을 "의도된 디듑" 이라고 못 박아 두었다. **그 서술에는 엔진 근거가 없었다.**
+    /// 로더를 `.pdata` 함수 시작(`0x140276700`)에서 선형으로 다시 떠서 확정한 사실은 정반대다
+    /// (아래 VA 는 전부 이번에 직접 재확인했다 — 남의 주석에서 옮기지 않았다):
+    ///
+    ///   ① 엔트리 이름은 적재 즉시 **제자리에서** ASCII 소문자화된다.
+    ///      `0x140276ac0 movsx ecx, byte [r14]` → `0x140276ac4 call 0x1402bfb1c`(CRT `tolower`)
+    ///      → `0x140276acc mov [r15], al` 이 **같은 버퍼**(`[rbp-0x61]`)에 되쓴다.
+    ///      곧 원래 대소문자는 그 자리에서 **사라진다**.
+    ///   ② 그 접힌 문자열이 그대로 맵 키다 — `0x140276ad8 lea r8, [rbp-0x61]` →
+    ///      `0x140276ae4 call 0x140277890`. 그 함수는 FNV-1a 64
+    ///      (`0x1402778b4 movabs rdi, 0xcbf29ce484222325` · `0x1402778c3 movabs r9, 0x100000001b3`)
+    ///      로 버킷을 잡고, **이미 있으면 기존 노드를 그대로 돌려준다**
+    ///      (`0x1402778ff je` → `0x140277901 mov [r15], rax` · `0x140277907 mov byte [r15+8], 0`
+    ///      = `pair<iterator,bool>.second = false`. 새 키일 때만 `0x140277930 mov ecx, 0x38` 로
+    ///      노드를 할당한다).
+    ///   ③ **호출부가 그 노드에 조건 없이 값을 덮어쓴다** —
+    ///      `0x140276aef mov [rcx+0x30], eax`(offset) · `0x140276af5 mov [rcx+0x34], eax`(size).
+    ///      곧 키가 겹치면 **뒤에 온 엔트리의 offset/size 가 남는다**.
+    ///   ④ 조회(`0x140273f50`)도 요청을 같은 방식으로 접고(`0x140274000`–`0x140274015`)
+    ///      **맵을 한 번만** 찔러 본다(`0x140274077`–`0x1402740ca` 버킷 순회 + `memcmp`).
+    ///      **대소문자를 보존하는 색인은 WE 에 없다.**
+    ///
+    /// ⇒ 접힌 키가 겹칠 때 WE 는 **마지막 엔트리가 이긴다**(last-wins). 종전 Waple 은 반대였고,
+    ///   게다가 정확 일치 색인이 먼저 이겨 **WE 가 구별조차 못 하는 두 엔트리를 갈랐다** —
+    ///   그 자리에서 Waple 은 WE 와 다른 바이트를 렌더에 먹인다(에러가 아니라 조용한 오답).
+    ///
+    /// **도달** — 워크샵 코퍼스 전수 산출물(`Waple-wallpaper-source/corpus_scan/`
+    /// `entry-name-frequency.tsv`: `scene.pkg` 161개 · 엔트리 경로 11,338 종 · 출현 19,777건):
+    ///   · ASCII 폴딩 충돌군 **14군**. 실제 이름 예: `models/Background.json`↔`models/background.json`,
+    ///     `materials/Layer 4.tex`↔`materials/layer 4.tex`, `models/Sky/Sky.mdl`↔`models/sky/sky.mdl`.
+    ///   · 이 산출물은 **경로별 도수만** 담고 pkg 별 동시 보유를 못 본다. 비둘기집으로 강제되는
+    ///     동시 보유는 **0건**(최대 군 합계 6 ≪ 161)이고, 상한은 Σmin(도수) = **16 pkg / 161**(9.9%)다.
+    ///   → 즉 도달은 **0 이 아니라 미측정**이고 구간이 `[0, 16]` 이다. 근거는 코퍼스가 아니라
+    ///     위 ①~④ 의 로더 코드다.
+    ///
+    /// **역슬래시는 WE 의 키에 섞으면 안 된다.** 이 설계의 첫 판은 접힌 색인 하나만 두고 그 키를
+    /// `normalizedLookupKey`(= 역슬래시→슬래시 + ASCII 소문자)로 잡았는데, 그러면 WE 가 **서로
+    /// 다른 키로 보는** `Models\A.JSON` 과 `models/a.json` 이 Waple 에서 한 칸으로 합쳐져
+    /// **뒤엣것이 앞엣것을 지운다** — 종전 코드가 정확히 주던 답(`Models\A.JSON` → 그 엔트리)을
+    /// **뺏는** 새 이탈이다(WE 는 `0x140274000`–`0x140274015` 에서 `tolower` 만 돌리고 구분자를
+    /// 손대지 않는다). 그래서 색인을 둘로 나눈다:
+    ///   · `entryByFoldedName` — **WE 의 키와 동일**(ASCII 소문자화만). 이것이 `.blob` 의 1차 조회다.
+    ///   · `entryByNormalizedName` — 그 위에 역슬래시까지 접은 **Waple 전용 관용 폴백**.
+    /// 이러면 관용 색인은 예전처럼 **히트를 더하기만 하고 뺏지 않는다**(§7.3 의 그 성질이 살아난다).
+    ///
+    /// **`.directory`(언팩 폴더 마운트)에는 last-wins 를 적용하지 않는다.** WE 의 폴더 마운트
+    /// (`0x1402764d0`)는 엔트리 표를 만들지 않고 요청 경로로 파일을 **바로 연다** — 그쪽에서
+    /// WE 와 같은 답을 내는 것은 정확 일치이므로 `entryByName` 을 먼저 본다(§7.5 의 0바이트
+    /// 처리를 백엔드별로 가른 것과 같은 이유다).
     private init(entries: [Entry], storage: Storage) {
         self.entries = entries
         self.storage = storage
         var index: [String: Entry] = [:]
+        var foldedIndex: [String: Entry] = [:]
         var normalizedIndex: [String: Entry] = [:]
+        // 정확 일치 색인은 `.directory` 전용이다. 파일시스템은 같은 이름을 두 번 담지 못하므로
+        // 여기서 first/last 는 관측 불가다 — 종전 규약(선행 유지)을 그대로 둔다.
         for entry in entries where index[entry.name] == nil {
             index[entry.name] = entry
         }
+        // 접힌 색인 = WE 의 맵. **덮어쓴다** (위 ③ `0x140276aef`·`0x140276af5`).
         for entry in entries {
-            let key = Self.normalizedLookupKey(entry.name)
-            if normalizedIndex[key] == nil { normalizedIndex[key] = entry }
+            foldedIndex[Self.asciiLowercased(entry.name)] = entry
+            normalizedIndex[Self.normalizedLookupKey(entry.name)] = entry
         }
         self.entryByName = index
+        self.entryByFoldedName = foldedIndex
         self.entryByNormalizedName = normalizedIndex
     }
 
@@ -143,10 +204,16 @@ public struct ScenePackage {
     }
 
     public func data(for name: String) -> Data? {
-        let e = entryByName[name] ?? entryByNormalizedName[Self.normalizedLookupKey(name)]
-        guard let e else { return nil }
         switch storage {
         case .blob(let blob, let blobBase):
+            // **1차 조회 = WE 와 동일**: 요청을 바이트별 ASCII `tolower` 로만 접어
+            // (`0x140274000`–`0x140274015`) 맵을 한 번 찌른다. 대소문자를 보존하는 색인은
+            // WE 에 **없다**(엔트리 이름 자체가 적재 때 `0x140276ac0`–`0x140276ad6` 에서 제자리
+            // 소문자화된다). 2차는 역슬래시까지 접는 Waple 전용 관용 폴백으로, WE 가 못 찾는
+            // 자리에서만 답을 **더한다**. 근거와 도달은 `init` 주석.
+            guard let e = entryByFoldedName[Self.asciiLowercased(name)]
+                    ?? entryByNormalizedName[Self.normalizedLookupKey(name)]
+            else { return nil }
             // [2026-08-21 — §4.2·§7.5] **`size <= 0` 엔트리는 "없음"과 같다.** VFS 조회
             // (`0x140273f50`)는 해시 히트 직후 `cmp dword [rbx+0x34], 0` / `jle`(`0x14027412a`)
             // 로 크기를 한 번 더 보고, 0 이하면 **못 찾은 것과 같은 자리**(`0x140274161`)로 빠져
@@ -161,12 +228,22 @@ public struct ScenePackage {
             // 표를 만들지 않고 파일을 바로 열므로, 디스크의 진짜 0바이트 파일은 WE 에서도
             // "0바이트로 열림" 이다. 아래 `.directory` 분기가 그대로 읽어 빈 `Data` 를 낸다.
             //
-            // 도달: 0바이트 엔트리를 가진 pkg 는 관측하지 못했다(이 환경 실물 표본 0개). 즉
-            // 이 가드는 무회귀이고, 근거는 코퍼스가 아니라 로더 코드다.
+            // 도달: **워크샵 161 pkg · 19,777 엔트리에 `size == 0` 이 0건**이다(파생 실측 —
+            // `corpus_scan/pkgv_census.py` 가 모든 엔트리에 `detect_type` 을 부르는데, 그 함수는
+            // 빈 blob 을 받으면 mp3 검사의 `head[0]` 에서 `IndexError` 로 죽는다. 센서스가
+            // 예외 없이 끝났고 `parse-errors.tsv` 본문이 0행이므로 빈 엔트리가 없다).
+            // 곧 이 가드는 무회귀이고, 근거는 코퍼스가 아니라 로더 코드다.
             guard e.size > 0 else { return nil }
             let start = blob.startIndex + blobBase + e.offset
             return blob.subdata(in: start ..< start + e.size)
         case .directory(let root):
+            // 폴더 마운트는 **정확 일치가 먼저**다. WE 의 폴더 마운트(`0x1402764d0`)는 엔트리 표를
+            // 만들지 않고 요청 경로로 파일을 바로 열므로, WE 와 같은 답을 내는 것이 정확 일치다.
+            // 접힌 색인은 그 뒤의 Waple 전용 폴백(대소문자·역슬래시 관용)이다.
+            guard let e = entryByName[name]
+                    ?? entryByFoldedName[Self.asciiLowercased(name)]
+                    ?? entryByNormalizedName[Self.normalizedLookupKey(name)]
+            else { return nil }
             // e.name 은 아래 `fromDirectory` 가 루트 상대 경로로만 만든다(심볼릭 링크·상위 경로 배제).
             var url = root
             for component in e.name.split(separator: "/") { url.appendPathComponent(String(component)) }
@@ -184,7 +261,10 @@ public struct ScenePackage {
     ///
     /// Swift `.lowercased()` 는 **유니코드 전체 케이스 매핑**이라 키릴 `И`·그리스 `Σ`·터키
     /// `İ`(→ 2 스칼라로 늘어남)까지 접는다. 그러면 WE 에서 **서로 다른** 두 엔트리가 Waple
-    /// 에서만 같은 정규화 키로 충돌해 먼저 온 것이 이긴다(`init` 의 `normalizedIndex`).
+    /// 에서만 같은 접힌 키로 충돌한다(`init` 의 접힌 색인).
+    /// **[2026-08-21 정정]** 종전 이 문장은 그 충돌에서 "먼저 온 것이 이긴다" 로 끝났다. 지금은
+    /// **뒤에 온 것이 이긴다** — WE 의 삽입이 그렇기 때문이다(`init` 주석 ③ `0x140276aef`).
+    /// 충돌 자체를 만들지 않는 것이 이 함수의 목적이고, 승자 규약은 그 다음 방어선이다.
     ///
     /// 도달 실측 ①(2026-08-21): 두 루트 9,078 파일의 경로 컴포넌트 **3,374 종에 비-ASCII 0건**,
     /// ASCII 폴딩과 유니코드 폴딩이 갈리는 이름 **0건**.
@@ -205,8 +285,13 @@ public struct ScenePackage {
     /// 같은 전수에서 나온 경로 위생 도수(`docs/re/package-format.md` §1.1c): 역슬래시 **0건** · `..` 성분 **0건** ·
     /// 절대경로 **0건** · 선행 `./`·`//`·양끝 공백 **0건** · 최대 깊이 6 · 최대 이름 266 B.
     ///
-    /// - Note: 역슬래시→슬래시 치환은 WE 에 **없다**. 다만 이건 정확 일치(`entryByName`)가
-    ///   먼저 이긴 뒤의 폴백 색인이라 히트만 늘리고 뺏지 않으므로 그대로 둔다(§7.3).
+    /// - Note: 역슬래시→슬래시 치환은 WE 에 **없다**. 그래서 그것을 **WE 의 키에 섞지 않고**
+    ///   별도 색인(`entryByNormalizedName`)으로 떼어 2차 폴백에만 쓴다 — 1차는 이 함수만 쓰는
+    ///   `entryByFoldedName`(= WE 의 키)이다. 그 분리 덕에 치환은 여전히 **히트를 더하기만 하고
+    ///   뺏지 않는다**(**[2026-08-21]** 첫 판은 둘을 합쳐서 실제로 뺏었다 — `init` 주석 참조).
+    ///   실측 보강: 이 치환이 뺏을 수 있는 유일한 경우는 한 pkg 안에 `a\b.tex` 와 `a/b.tex` 가
+    ///   **같이** 있는 것인데, 워크샵 전수 엔트리 경로 11,338 종에 역슬래시가 **0건**이다
+    ///   (`docs/re/package-format.md` §1.1c).
     static func asciiLowercased(_ s: String) -> String {
         String(decoding: s.utf8.map { $0 >= 0x41 && $0 <= 0x5A ? $0 &+ 0x20 : $0 }, as: UTF8.self)
     }
