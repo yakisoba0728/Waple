@@ -68,6 +68,14 @@ final class SceneForwardLightKindTests: XCTestCase {
 
     // MARK: spot cone 코사인
 
+    /// ⚠️ **이 두 테스트는 "현행 2D 포트"를 잠글 뿐 WE 규약이 아니다.**
+    /// 2026-08-21 확정: WE 의 `innercone`/`outercone` 은 축 기준 **반각(도)** 이고 유니폼 패커가
+    /// `cos(도 * π/180)` 을 그대로 싣는다(wallpaper64.exe 0x140192e64–0x140192e86 /
+    /// 0x140192eaa–0x140192ebf, deg2rad 0x140492628). 3D 레인
+    /// `Scene3DLighting.spotConeCosines` 는 그에 맞춰 `* 0.5` 를 제거했지만, 2D 포트
+    /// `SceneDocument.forwardSpotConeCosines` 는 아직 반각 변환(`* 0.5`)을 쓴다 —
+    /// `SceneDocument.swift` 가 다른 레인 소관이라 이번 라운드에서 손대지 않았다.
+    /// 그쪽을 고칠 때 아래 `half` 를 `Float.pi / 180` 으로 바꾸면 된다(같은 커밋에서).
     func testSpotConeHalfAngleCosines() {
         // 실물 3047405322 의 lspot 값(innercone 44.830605 / outercone 67.129997, 전각 도).
         let cone = SceneLight3D.forwardSpotConeCosines(inner: 44.830605, outer: 67.129997)

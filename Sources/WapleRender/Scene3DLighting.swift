@@ -6,9 +6,22 @@ import WapleCore
 /// PBR mask/normal map은 별도 후속 범위이며 여기서는 네이티브 기본값을 보존한다.
 ///
 /// ⚠️ **WE 는 메시 머티리얼 레인이 둘이고 상수 규약이 서로 다르다.**
-/// - PBR 레인(`generic3`/`generic4`, `common_pbr*.h` → `ComputePBRLightShadow*`):
+/// - PBR 레인(`generic3`/`generic4`, `common_pbr*.h`):
 ///   키 `roughness`/`metallic`, 기본 0.7/0. 스페큘러는 GGX 이고 `specular * specularTint` 로
 ///   diffuse 와 **같은 식** 안에서 합산된다(common_pbr_2.h:313/362). 우리 스톡 셰이더가 이식한 레인.
+///   ⚠️ 같은 PBR 레인 안에서도 **감쇠식이 갈린다**(2026-08-21 원문 대조):
+///   · `generic4` = V1. 엔진이 `#require LightingV1`(generic4.frag:75)로 주입하는
+///     `PerformLighting_V1` → `common_pbr_2.h:256 ComputePBRLightShadow`,
+///     `radiance = color * pow(saturate(1 - d/r), exponent)`.
+///   · `generic3` = V0(deprecated). 셰이더 안에 직접 적힌 `PerformLighting_Deprecated`
+///     (generic3.frag:87-166) → `common_pbr.h:40 ComputePBRLight`,
+///     `radiance = lightColor / (d*d)` (common_pbr.h:84) 에 호출부가 `color * radius * radius`
+///     를 실어 보낸다(generic3.frag:132/145/152/160) — 즉 **반경은 컷오프가 아니라 세기 배율**이고
+///     감쇠는 순수 역제곱이다. `SHADERVERSION < 62` 가지(generic3.frag:87-121)는 그 `radius²`
+///     배율조차 없고, spot 은 `spotCookie` 를 계산해 놓고 **쓰지 않는다**(generic3.frag:100-105 —
+///     WE 자신의 버그). 우리 스톡 메시 셰이더는 V1 만 이식했으므로 generic3 머티리얼은 근사다.
+///     도달: 동봉/설치본 모델 머티리얼 중 generic3 은 각 1건, generic4 도 각 1건.
+///     수식은 `SceneWELightMath.deprecatedInverseSquareFalloff` 에 고정해 뒀다.
 /// - 레거시 레인(`generic`/`generic2`, `common_fragment.h:68` → `ComputeLightSpecular`):
 ///   키 `Metal`/`Rough`/`Light`, **셋 다 기본 0**(generic2.frag:6-9). 스페큘러는 GGX 가 아니라
 ///   Blinn 로브 `pow(dot(normalize(V+L),N), specularPower) * specularStrength * lightAttn * color` 를
@@ -137,8 +150,35 @@ struct Scene3DMaterialValues: Equatable {
 }
 
 /// 3D 라이트 종류. rawValue 는 MSL `LightU.shadow.z` 타입 플래그와 동일 규약(0/1/2/4).
-/// tube=4: WE 정본 라이트 4종(point/spot/tube/directional — A2-pbr-lighting.md §4.4) 중 마지막 갭.
+/// tube=4: WE 정본 라이트 4종(lpoint/lspot/ltube/ldirectional) 중 마지막 갭.
 /// 3 을 건너뛰는 것은 기존 0/1/2 비교 경계(kind<0.5/<1.5/<2.5)를 비트동일로 보존하기 위함이다.
+///
+/// ## WE 의 라이트 타입 enum 실측(2026-08-21) — `"point"` 는 **다른 레인이다**
+/// 문자열→enum 표는 0x14025e853–0x14025e9c9 에서 정적 초기화된다(5엔트리, stride 0x28):
+/// `"point"`→**5**, `"lpoint"`→0, `"lspot"`→1, `"ltube"`→2, `"ldirectional"`→3.
+/// 오브젝트 생성자(0x140190486)가 타입 필드 `[obj+0x2c0]` 를 **5 로 초기화**하므로 미지 타입도 5 다.
+///
+/// V1 유니폼 패커(0x140190c80–0x1401964b8)의 분기는 0x1401910f2 에서 `[+0x2c0]` 를 읽어
+/// 0/1/2/3 만 처리하고(각각 `g_LPoint_*`/`g_LSpot_*`/`g_LTube_*`/`g_LDirectional_*`) **5 는 버린다**.
+/// 타입 5 는 대신 0x14025d1f6–0x14025d27d 의 **레거시 4슬롯 경로**로 간다 —
+/// `[obj+0x2c8]`(생성 시 0..3 중 빈 슬롯)를 인덱스로 `(color*intensity, radius)` 를 vec4 배열에,
+/// 위치를 vec3 배열에 싣는다. 그 배열이 `g_LightsColorRadius[4]`/`g_LightsPosition[4]` 이고
+/// 소비 셰이더는 `generic`/`generic2`(common_fragment.h:68 `ComputeLightSpecular` — GGX 가 아니라
+/// Blinn 로브 + `saturate((r-d)/r)²` 감쇠)다. 비활성 슬롯은 색 0·반경 1·위치 (0,100,0) 로 파킹된다
+/// (0x14025cff2–0x14025d01e).
+///
+/// 실물 대조(동봉 172 + 설치본 186 씬 전수): `"lpoint"` 3건은 전부 `general.lightconfig` 를 가진
+/// 씬(modeleditor/collisionmodel)이고, `"point"` 3건은 `version` 키조차 없는 최구 포맷
+/// (`arsenal` 2건 + `demon_core` 1건)이며 lightconfig 가 **없다**. `arsenal` 의 머티리얼은 실제로
+/// `generic` ×6 이다 — 레거시 레인이 맞다는 교차 확인.
+///
+/// **현행 동작(의도적 유지)**: 여기서는 `"point"` 도 `.point`(V1 레인)로 매핑한다. 드롭하면
+/// `arsenal`(ambientcolor 완전 검정)이 새까맣게 렌더되고, Waple 의 메시 셰이더는 레거시 Blinn
+/// 로브를 아예 이식하지 않았으므로 V1 근사가 "빛 없음"보다 낫다. 레거시 레인을 제대로 그리려면
+/// `ComputeLightSpecular` 전체(지수 `(1.01-Rough)*mix(400,250,Metal)`, 세기 `(0.5+Metal*0.5)*(1-Rough*0.9)`,
+/// diffuse `albedo*(saturate(NL)+rim)*attn²` — /π 없음)를 별도 kind 로 이식해야 한다. 별도 작업 단위다.
+/// 수식은 `SceneWELightMath.legacyAttenuation/legacySpecularPower/legacySpecularStrength` 에
+/// 순수 함수로 고정해 뒀다(리눅스 테스트로 값 못박음).
 enum Scene3DLightKind: Float, Equatable {
     case point = 0, directional = 1, spot = 2, tube = 4
     init?(type: String) {
@@ -173,8 +213,24 @@ struct Scene3DResolvedLight: Equatable {
     /// F780(S-47): `cascadedistance0-2`(친 치수 상승 far 경계). 소비는 directional + castShadow 한정
     /// (DirectionalShadowMath.validCascades) — WE 에디터는 라이트 종 무관 기록이라 point/spot 도 파스는 보존.
     var cascadeDistances: SIMD3<Float>? = nil
-    /// tube 세그먼트 단점 B(월드 — WE g_LTube_OriginB). tube 외 kind 는 nil(셰이더가 kind 로 분기).
-    /// 부모-로컬 `originb` 를 부모 체인 행렬로 월드화한 값(resolveLights — origin 과 동일 공간 규약).
+    /// tube 세그먼트 단점 B(월드 — WE `g_LTube_OriginB`). tube 외 kind 는 nil(셰이더가 kind 로 분기).
+    /// 부모-로컬 단점 B 를 부모 체인 행렬로 월드화한 값(resolveLights — origin 과 동일 공간 규약).
+    ///
+    /// ⛔️ **반증(2026-08-21): 입력 키 `originb` 는 WE 에 존재하지 않는다.**
+    /// `SceneDocument.SceneLight3D.originB` 주석은 "키는 wallpaper64.exe 스트링/에디터 키 실측
+    /// 소문자"라고 적었지만, `originb` 는 바이너리 전체에서 **ASCII 0건 / UTF-16 0건**이다.
+    /// 라이트 프로퍼티 등록 테이블(0x14025da80–0x14025e9da)이 등록하는 키는
+    /// light·castshadow·usecookie·castvolumetrics·color·**controlpoint**·intensity·radius·
+    /// exponent·innercone·outercone·density·volumetricsexponent·cascadedistance0/1/2·
+    /// lightsourcesize·visible 뿐이고, 단점 B 로 실리는 것은 `controlpoint`(오프셋 0x2d8, vec3,
+    /// 등록 0x14025e412–0x14025e448, 생성자 기본값 (2,0,0) @0x140190474)다.
+    /// ltube 패커 0x140192aa6 이 `lea rdx, [r14 + 0x2d8]` 로 그 필드를 월드 변환(0x14019d450)에
+    /// 넘겨 `g_LTube_OriginB[i]` 에 싣는다.
+    ///
+    /// 코드는 그대로 둔다: 동봉 172 + 설치본 186 씬 전수에서 `ltube` 라이트 **0건**, `originb`
+    /// 키 **0건**, `controlpoint` 키 **0건**이라 어느 쪽으로 고쳐도 도달이 없고, 파스는
+    /// `SceneDocument.swift` 소관이라 이 레인에서 건드릴 자리가 아니다. 그쪽을 고칠 때
+    /// `obj["originb"]` → `obj["controlpoint"]`(기본 (2,0,0))로 바꾸면 된다.
     var originB: SIMD3<Float>? = nil
 }
 
@@ -211,6 +267,14 @@ enum Scene3DLighting {
     // F660: 4 → 8 상향. WE 는 종류별 배열(lightconfig: 젤다 point:5+directional:1=6슬롯)로 전량 렌더하는데
     // first-4 캡이 3737268876 의 5번째 lpoint(Navi Light)와 ldirectional(태양, castshadow:true)을 드롭했다.
     // 코퍼스 최대 6(젤다) — 8 은 상한 여유 포함. 셰이더 루프 상한(Mesh3DShaders mf_main)도 동일하게 올린다.
+    //
+    // ⚠️ **WE 에는 이런 고정 상한이 아예 없다**(2026-08-21 실측). 라이팅 스니펫 생성기
+    // (0x1401691c0–0x14016b154)가 씬의 `general.lightconfig` 를 콤보 문자열로 받아 `atoi`
+    // (0x1402c82c0)한 값을 **배열 길이로 그대로 찍는다** — `uniform vec4 g_LPoint_Origin[`
+    // (0x14048be50) + 개수 + `];`. 콤보 이름은 LIGHTS_POINT/…/LIGHTS_DIRECTIONAL_SHADOW
+    // (0x140487630–0x140487948), lightconfig 키는 point/pointshadow/spot/spotshadow/spotcookie/
+    // spotshadowcookie/tube/directional/directionalshadow (0x14048e4d8–0x14048e588).
+    // 즉 씬마다 셰이더가 새로 생성돼 라이트 수만큼 루프가 언롤된다. 8 은 **Waple 쪽 캡**이다.
     static let maximumLights = 8
 
     /// lpoint / ldirectional / lspot / ltube 를 월드 공간으로 해석한다. 입력 순서를 보존하고(first-N 정책),
@@ -221,7 +285,8 @@ enum Scene3DLighting {
     /// (`lib.sceneScript.d.ts`) `Mat4.forward() = Blue axis`, `right=Red(+X)`, `up=Green(+Y)`,
     /// `compose = T*R*S`. directional 은 무감쇠(radiance=color×intensity), L=-forward.
     /// spot 섀도우는 스코프 밖(코퍼스 spot 전원 castshadow:false) → castShadow 는 point/directional 만 존중.
-    /// ltube: origin=단점A/originb=단점B(부모-로컬 동일 공간), 무섀도우(WE 정본 — A2-pbr-lighting.md §4.4).
+    /// ltube: origin=단점A / `controlpoint`=단점B(부모-로컬 동일 공간, 위 originB 필드 주석의 반증 참조),
+    /// 무섀도우(WE 정본 — 스니펫 0x14048c9e0 의 shadowFactor 인자가 리터럴 1.0).
     static func resolveLights(_ lights: [SceneLight3D],
                               nodes: [Int: Scene3DMath.Node]) -> [Scene3DResolvedLight] {
         var result: [Scene3DResolvedLight] = []
@@ -274,8 +339,10 @@ enum Scene3DLighting {
                     light.radius),
                 // F661: spot 섀도우만 스코프 밖(코퍼스 spot 전원 castshadow:false). directional 은
                 // 단일 오소 맵 최소 근사 지원(DirectionalShadowMath) — castshadow:true 3씬.
-                // tube 도 섀도우 없음이 정본(WE PerformLighting_V1: tube 는 shadowFactor=1.0 고정 —
-                // A2-pbr-lighting.md §4.4/§4.5 "Tube (섀도우 없음)").
+                // tube 도 섀도우 없음이 정본(WE PerformLighting_V1 조립 스니펫 0x14048c9e0:
+                // tube 분기는 ComputePBRLightShadow 의 마지막 인자 shadowFactor 에 리터럴 1.0 을 넘긴다.
+                // point/spot 은 섀도우 유무로 두 문자열이 따로 있다 — point 0x14048c350(1.0)/0x14048c410
+                // (shadowFactor), spot 0x14048c750(1.0)/0x14048c820(shadowFactor) — 반면 tube 는 1.0 판 하나뿐).
                 castsShadow: kind != .spot && kind != .tube && light.castShadow,
                 kind: kind,
                 forward: forward)
@@ -285,8 +352,10 @@ enum Scene3DLighting {
                 resolved.coneOuterCos = cone.outer
             }
             if kind == .tube {
-                // originb 미저작은 A==B 퇴화 — WE PointSegmentDelta(common_pbr.h:13-14)가 v==0 이면
-                // A-pos 반환이라 point 와 수치 동치(드롭하지 않는다).
+                // 단점 B 미저작은 A==B 퇴화 — WE PointSegmentDelta(common_pbr.h:13-14 = common_pbr_2.h:13-14)가
+                // v==0 이면 A-pos 반환이라 point 와 수치 동치(드롭하지 않는다).
+                // (WE 자신은 여기서 `controlpoint` 기본값 (2,0,0) 을 써서 A 에서 +X 로 2 떨어진 B 가 되므로
+                //  퇴화가 아니다 — 우리 쪽 A==B 폴백은 미파스 상태의 방어값이다. 도달 0건.)
                 let b = light.originB ?? light.origin
                 let wb = parentMatrix * SIMD4(b.x, b.y, b.z, 1)
                 guard wb.x.isFinite, wb.y.isFinite, wb.z.isFinite else { continue }
@@ -301,16 +370,36 @@ enum Scene3DLighting {
         return result
     }
 
-    /// spot innercone/outercone(전각, 도) → 축 기준 half-angle 코사인.
-    /// half-angle 규약(cone/2) 채택: WE 에디터 라벨은 단위 미명시라 표준 전각 해석.
-    // ponytail: half vs full 미확정(코퍼스 spot 은 전부 지오메트리 범위 밖이라 육안 보정 불가).
-    //           full-angle 이면 `* 0.5` 를 제거. 지오메트리 도달 spot 실물 확보 시 3477054430 로 보정.
+    /// spot `innercone`/`outercone`(도) → 축 기준 콘 코사인.
+    ///
+    /// **2026-08-21 확정: 반각이다 — `* 0.5` 는 없다.** 종전 주석의 "ponytail: half vs full 미확정"
+    /// 은 해소됐다. V1 유니폼 패커가 도 값에 deg2rad 만 곱해 `cosf` 에 넣는다:
+    /// - `xmm7 = 0.01745329238474369`(= π/180) 적재 0x1401910bf, 상수 원본 0x140492628
+    /// - inner: 0x140192e64–0x140192e86 `cos(innercone[+0x2f0] * xmm7)` → `g_LSpot_Origin[i].w`
+    /// - outer: 0x140192eaa–0x140192ebf `cos(outercone[+0x2f4] * xmm7)` → `g_LSpot_Direction[i].w`
+    /// 셰이더 소비는 `smoothstep(Direction.w, Origin.w, cosAngle)`(스니펫 0x14048c900)이라
+    /// edge0=cos(outer), edge1=cos(inner) — 아래 반환 순서와 맞는다.
+    /// 즉 scene.json 의 두 값은 **광축에서 잰 반각(도)** 이고, 종전 `* 0.5` 는 콘을 절반으로
+    /// 좁히는 오이식이었다(기본값 20/30 이면 40°/60° 콘이 20°/30° 콘으로 그려졌다).
+    ///
+    /// 반대 방향 증거도 남긴다(반증 아님, 다른 양이다): 0x1401ec338–0x1401ec362 와
+    /// 0x14018b347–0x14018b373 은 같은 두 필드에 0.5 를 곱한다. 전자는 볼류메트릭 **콘 지오메트리**
+    /// 변환(탄젠트 반경) 계산, 후자는 에디터 기즈모 오브젝트의 좌표 인코딩이라 셰이딩 코사인과
+    /// 무관하다. 셰이딩 유니폼으로 실제로 실리는 경로는 위 0x140192e64/0x140192eaa 하나뿐이다.
+    ///
+    /// ⚠️ **동기 필요(이번 레인 밖)**: 같은 변환의 2D 포트
+    /// `SceneDocument.forwardSpotConeCosines`(Sources/WapleCore/SceneDocument.swift)는 아직 `* 0.5`
+    /// 를 곱한다. 그 파일은 다른 레인 소관이라 여기서 건드리지 않았다 — 그쪽에서 `toHalfRadians`
+    /// 를 `Float.pi / 180` 으로 바꾸면 두 레인이 다시 맞는다. 그때 `SceneForwardLightKindTests`
+    /// (`testSpotConeHalfAngleCosines`, `testPackCarriesKindAxisConePerSlot`)의 기대값도 함께 간다.
     static func spotConeCosines(inner: Float, outer: Float) -> (inner: Float, outer: Float) {
         guard outer.isFinite, outer > 0 else { return (1, -1) }  // 콘 데이터 없음 → 반구 그라디언트(셰이더 (cosAngle+1)/2 → 축상 1·수직 0.5·후방 0). 전방향 통과 아님.
-        let toHalfRadians = Float.pi / 180 * 0.5
-        let cosOuter = cos(max(0, outer) * toHalfRadians)
-        let cosInnerRaw = inner.isFinite && inner > 0 ? cos(inner * toHalfRadians) : 1
+        // WE 는 `outercone` 이 90 을 넘어도 그대로 cos 를 취한다(콘이 반구를 넘는다). 클램프하지 않는다.
+        let toRadians = Float.pi / 180
+        let cosOuter = cos(max(0, outer) * toRadians)
+        let cosInnerRaw = inner.isFinite && inner > 0 ? cos(inner * toRadians) : 1
         // inner 는 outer 보다 좁아야(코사인 큼) 스무드스텝이 0→1 로 증가.
+        // WE 는 edge0==edge1 을 막지 않아 그 지점에서 smoothstep 이 미정의다 — 여기서만 1e-4 를 벌린다.
         return (max(cosInnerRaw, cosOuter + 1e-4), cosOuter)
     }
 
