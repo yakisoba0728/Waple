@@ -108,4 +108,46 @@ final class ProjectJSONParserTests: XCTestCase {
             XCTAssertEqual(error as? ProjectParseError, .fileNotFound)
         }
     }
+
+    // MARK: - general.supportsaudioprocessing (CProject::SupportsAudioProcessing 0x14010d100–0x14010d161)
+
+    /// 설치본 실측 3건(`audiophile` / `corsair_o_tron` / `demon_core` 의 project.json)이 쓰는 형태.
+    func testParsesSupportsAudioProcessingTrue() throws {
+        let p = try parse(#"{"type":"scene","file":"scene.json","general":{"supportsaudioprocessing":true}}"#)
+        XCTAssertTrue(p.supportsAudioProcessing)
+    }
+
+    /// 설치본 `techno/techno.json` 이 쓰는 형태(그쪽은 씬 파일이지만 값 모양은 같다).
+    func testParsesSupportsAudioProcessingFalse() throws {
+        let p = try parse(#"{"type":"scene","file":"scene.json","general":{"supportsaudioprocessing":false}}"#)
+        XCTAssertFalse(p.supportsAudioProcessing)
+    }
+
+    /// 키 부재 = false. 0x14010d132 의 find 가 널 Value 를 내고 0x14010d141 의 태그 검사(5)에서
+    /// 걸러진다 — 동봉 자산 170건 전부가 이 경로다.
+    func testSupportsAudioProcessingDefaultsToFalseWhenKeyAbsent() throws {
+        let p = try parse(#"{"type":"scene","file":"scene.json","general":{"properties":{}}}"#)
+        XCTAssertFalse(p.supportsAudioProcessing)
+    }
+
+    /// `general` 블록 자체가 없어도 false — 0x14010d11b 가 objectValue(태그 7) 가 아니면 즉시 false.
+    func testSupportsAudioProcessingDefaultsToFalseWithoutGeneralBlock() throws {
+        let p = try parse(#"{"type":"video","file":"clip.mp4"}"#)
+        XCTAssertFalse(p.supportsAudioProcessing)
+    }
+
+    /// `general` 이 object 가 아닌 경우(0x14010d11b 의 `cmp byte [rax+8], 7` 불일치)도 false.
+    func testSupportsAudioProcessingIgnoresNonObjectGeneral() throws {
+        let p = try parse(#"{"type":"video","file":"clip.mp4","general":"supportsaudioprocessing"}"#)
+        XCTAssertFalse(p.supportsAudioProcessing)
+    }
+
+    /// 0x14010d141 은 jsoncpp booleanValue(태그 5)만 통과시킨다. `1`/`"true"` 는 각각 태그 1/4 라
+    /// 원본에선 false 다 — Foundation 의 `1 as? Bool == true` 브리징에 끌려가면 안 된다.
+    func testSupportsAudioProcessingRejectsNonBooleanTags() throws {
+        for raw in ["1", "0", "\"true\"", "null", "[]", "{}"] {
+            let p = try parse(#"{"type":"scene","file":"s.json","general":{"supportsaudioprocessing":\#(raw)}}"#)
+            XCTAssertFalse(p.supportsAudioProcessing, "비-bool 태그(\(raw))는 원본과 같이 false 여야 한다")
+        }
+    }
 }

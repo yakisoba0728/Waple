@@ -66,8 +66,36 @@ public enum ProjectJSONParser {
             dependency: WallpaperPathSecurity.normalizedPathComponent(obj["dependency"] as? String),
             folderURL: folderURL,
             presetOverrides: presetOverrides,
-            presetFolderURL: type == .preset ? folderURL : nil
+            presetFolderURL: type == .preset ? folderURL : nil,
+            supportsAudioProcessing: parseSupportsAudioProcessing(obj)
         )
+    }
+
+    /// `general.supportsaudioprocessing` — 오디오 반응 지원 선언(bool).
+    ///
+    /// 원본은 `CProject::SupportsAudioProcessing`(0x14010d100–0x14010d161) 한 함수로 읽고,
+    /// 그 결과가 오디오 파이프라인 전체의 마스터 게이트다(WallpaperProject.supportsAudioProcessing
+    /// 주석에 소비처 VA 를 적어 뒀다). 원본 절차를 그대로 옮긴다:
+    ///
+    ///     0x14010d104  add rcx, 0x10            ; project.json 루트
+    ///     0x14010d116  call ...                 ; root["general"]
+    ///     0x14010d11b  cmp byte [rax+8], 7      ; jsoncpp objectValue 가 아니면 → false
+    ///     0x14010d132  call Json::Value::find   ; general["supportsaudioprocessing"]
+    ///     0x14010d141  cmp byte [rax+8], 5      ; jsoncpp booleanValue 가 아니면 → false
+    ///     0x14010d14a  call ...asBool           ; 그제야 값을 쓴다
+    ///
+    /// **타입 엄격성이 요점이다.** 0x14010d141 은 태그 5(booleanValue)만 통과시킨다 — jsoncpp 는
+    /// `1`/`"true"` 를 각각 태그 1/4 로 들고 있으므로 원본에선 둘 다 false 다. Foundation 의
+    /// `JSONSerialization` 은 숫자와 불리언을 똑같이 `NSNumber` 로 주고 `1 as? Bool` 이 true 로
+    /// 성공하므로, 맨 `as? Bool` 로 받으면 `{"supportsaudioprocessing": 1}` 이 원본과 반대로
+    /// 갈린다. `EffectManifest.isJSONBool` 이 이미 이 구분을 하고 있어 그대로 재사용한다.
+    ///
+    /// `general` 이 object 가 아니거나(0x14010d11b) 키가 없으면 false — WE 의 기본값이 false 다.
+    private static func parseSupportsAudioProcessing(_ obj: [String: Any]) -> Bool {
+        guard let general = obj["general"] as? [String: Any] else { return false }
+        let raw = general["supportsaudioprocessing"]
+        guard EffectManifest.isJSONBool(raw) else { return false }
+        return (raw as? NSNumber)?.boolValue ?? false
     }
 
     private static func parsePresetOverrides(_ value: Any?) -> [String: PropertyValue] {
