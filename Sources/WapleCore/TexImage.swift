@@ -29,11 +29,47 @@ public struct TexImage {
         }
     }
 
-    /// 스프라이트시트 프레임(TEXS 섹션). 좌표는 이미지 픽셀 공간(imgW×imgH — 디코더가 패딩 크롭 후와 일치).
+    /// 스프라이트시트 프레임(TEXS 섹션). **좌표는 아틀라스 픽셀 공간이고, 분모는 decode(=alloc) dims 다**
+    /// — imgW×imgH 가 아니다(아래 [정정] 참조). 소비처 `keepFullAtlas` 경로가 decode dims 텍스처를
+    /// 쓰므로 결과는 맞물린다.
     /// 필드 순서(RePKG TexFrameInfoContainerReader 확정): i32 imageId | f32 frametime |
     /// f32 x | f32 y | f32 width | f32 widthY | f32 heightX | f32 height (v1 은 지오메트리 i32).
     /// 회전 프레임(아틀라스 패킹이 스프라이트를 돌려 넣음): Width 또는 Height 가 0 이고 유효 크기는
     /// HeightX/WidthY 에서 온다 — atlas* 프로퍼티가 실제 서브렉트(top-left+extent)와 회전을 도출한다.
+    ///
+    /// **[2026-08-21 정정 — 좌표 공간] 종전 첫 줄은 "이미지 픽셀 공간(imgW×imgH)" 이라 적었다.**
+    /// 엔진 TEXS 리더(0x14015e1d0–0x14015e57b)를 직접 떠서 반증했다. 프레임마다 6개 지오메트리를
+    /// 읽은 뒤 0x14015e498–0x14015e4eb 에서 **그 `imageId` 의 mip0 w/h 로 나눈다**:
+    ///   0x14015e4c1 `mov eax,[rcx]`   → w   (mip0 레코드의 alloc width)
+    ///   0x14015e4ce `mov eax,[rcx+4]` → h
+    ///   divss 로 1·3·5번째를 w 로, 2·4·6번째를 h 로 나눈다(0x14015e4d6/4e7/4eb = w, 4db/4df/4e3 = h)
+    ///   → 즉 (x,width,heightX)/w · (y,widthY,height)/h 이고 결과는 **0..1 UV** 다.
+    /// `imageId` 가 범위 밖이거나 그 image 에 mip 이 없으면 나눗셈을 건너뛴다(0x14015e4b0·0x14015e4bf).
+    /// Waple 은 픽셀 좌표를 그대로 들고 소비처에서 아틀라스 dims 로 나누므로 값은 같다.
+    ///
+    /// **[2026-08-21 실측 — 프레임이 아틀라스 밖으로 나가는 실물이 있다]** 동봉 311건의 시트
+    /// **52건 중 13건**(프레임 62개)이 `y + height > 아틀라스 높이` 다(440건 전체로 넓혀도 시트는
+    /// 61건이고 어긋나는 13건은 그대로 — 설치 `projects/` 쪽 시트 9건은 전부 정상이다). 전부 `assets/materials/particle/**`:
+    /// `leaves1`~`leaves10`(각 30프레임 중 5개) · `bubble1`(5) · `jellyfish1`(36 중 6) ·
+    /// `rosepetals`(5 중 1). 원인은 WE **패커의 float 반올림**이다 — 저장된 셀 폭이 `아틀라스/열수`
+    /// 보다 아주 조금 **크다**(leaves1: 85.334 > 512/6 = 85.3333). 그래서 마지막 열의 적합 판정
+    /// `x + w <= atlasW` 가 `512.004 > 512` 로 실패해 한 열을 통째로 건너뛰고, 밀린 프레임이 바닥을
+    /// 넘는다. 픽셀은 그렇지 않다는 것도 확인했다 — `leaves1` 의 mip0 을 풀어 셀별 평균 알파를 재면
+    /// **6열×5행 30칸이 전부 채워져 있고 행우선으로 매끄러운 사이클**을 이룬다(열 5도 비어 있지 않다).
+    /// 즉 표와 그림이 어긋난 것이고, 어긋남은 WE 가 만들었다.
+    ///
+    /// 런타임에서 WE 가 무엇을 보여주는지는 샘플러 주소 모드가 정한다. 이 13건은 **전부
+    /// `clampuvs` 꺼짐**(flags = 0x4 뿐)이라 REPEAT 이고, 엔진이 좌표를 alloc dims 로 나눈 UV
+    /// 이므로 `v = 512/512 = 1.0` 이 **0.0 으로 감겨** 위쪽 행이 다시 나온다.
+    /// **Waple 은 감지 않고 자른다** — `SceneRendererFrameEncoder.spriteSubrect(:1834)` 가
+    /// `sy = min(ah-1, y)` · `fh = min(ah-sy, h)` 라 그 프레임이 **1픽셀 높이 조각**이 된다.
+    /// 그 파일은 이 과제 소유가 아니라 손대지 않았다(보고서에 패치안). 도달은 작다 — 13건이 전부
+    /// 파티클 자산이고, 파티클 경로는 `spriteSubrect` 가 아니라 자체 UV 계산을 쓴다.
+    ///
+    /// 메모리 레이아웃 주의: 엔진의 **인메모리** 레코드는 (f32 frametime, i32 imageId, 6×f32) = 32 B 로
+    /// **파일과 앞 두 필드의 순서가 뒤집혀 있다**(0x14015e2df `mov [rsp+0x24], r10d`(id) ·
+    /// 0x14015e2fd `movss [rsp+0x20], xmm6`(time), 복사 0x14015e526–0x14015e533).
+    /// 그래서 "TEXS 절반 스케일" 경로가 곱하는 구조체 +8..+0x1f 가 정확히 지오메트리 6개다.
     public struct TexFrame: Equatable {
         public let imageId: Int
         public let time: Float
@@ -122,7 +158,18 @@ public struct TexImage {
     ///   0x2  ClampUVs        — 소비됨(resolveTextureClampUVs)
     ///   0x4  IsGif(스프라이트시트) — TEXS 섹션이 붙는다. 동봉 52건 = TEXS 파스 52건으로 정확히 일치
     ///   0x8  **파일 입력이 아니다.** 로더 0x14015e90a–0x14015e933 이 mip 체인 길이 < 2 일 때 스스로
-    ///        세운다(`or dword ptr [rsi + 4], 8`). 동봉 311건 중 파일에 켜진 것 0건 — 리더는 무시할 것
+    ///        세운다(`or dword ptr [rsi + 4], 8`). 동봉 311건 중 파일에 켜진 것 0건 — 리더는 무시할 것.
+    ///        [2026-08-21 독립 재확인] 섹션 루프 직후의 그 자리를 다시 떠서 확인했다:
+    ///          0x14015e90a  mov  rcx, [r13+0x28]      ; image 0 의 mip 벡터
+    ///          0x14015e90e  cmp  rcx, [r13+0x30]      ; 비었으면 건너뜀
+    ///          0x14015e914  mov  rax, [rcx+8] ; sub rax, [rcx]
+    ///          0x14015e925  sar  rax, 3 ; imul rax, 0xcccccccccccccccd   ; /40 (mip 레코드 = 40 B)
+    ///          0x14015e92d  cmp  rax, 2 ; jae 0x14015e937
+    ///          0x14015e933  or   dword [rsi+4], 8
+    ///        **함의: WE 는 없는 밉을 런타임에 만들지 않는다.** 레벨이 1개뿐이면 "밉 없음" 으로
+    ///        표시할 뿐이다(= 밉 필터링 비활성). 동봉 440건 중 체인 길이 1 이 178건이고, 그중
+    ///        140건은 짝 `.tex-json` 에 `nomip: true` 가 있다(140/140 일치). 곧 밉 부재는 컴파일
+    ///        시점 선택이고 런타임이 메우지 않는다 — Waple 이 GPU 밉 생성을 붙이면 WE 와 갈린다.
     ///   0x10 sRGB(추정) — 동봉 311건·워크샵 코퍼스 4,991건에는 0건이라 종전엔 이 표에 아예 없었다.
     ///        설치본 `projects/defaultprojects/razer_bedroom/materials/*.tex` 10건에 켜져 있고, 같은
     ///        10건의 `.tex-json` 만이 `"srgb": true` 를 갖는다(짝 있는 358건 기준 10/10 · 나머지
@@ -188,6 +235,23 @@ public struct TexImage {
     /// alloc/orig 크롭 규약과 정합. 수집 근거(추론): TEXB 가 전체 체인을 저장(실물 DJK_1.tex 9레벨)하고
     /// WE 렌더러는 축소 시 mip 필터링을 쓰므로, 엔진이 저장 mip 을 파일에 쓰는 실질적 이유는 GPU 업로드
     /// 외에 없음 — 정적 분석상 "거의 확실" 추론이며 RE 대조 확정은 아님(2026-07-28).
+    ///
+    /// **[2026-08-21 실측 — 체인의 두 성질을 갈라 둔다]** 동봉 311 + 설치 `projects/` 129 = 440건
+    /// 전수(체인 총 2,139 레벨, 그중 다레벨 파일 262건 1,961 레벨):
+    ///
+    /// ① **레벨 dims 는 규칙이다 — 예외 0건.** 레벨 L 의 저장(alloc) dims 는 항상 정확히
+    ///    `max(1, allocW0 >> L)` × `max(1, allocH0 >> L)` 다(1,961/1,961). 비-2의거듭제곱
+    ///    자산도 그렇다(예 `glow4` 268×465 → 134×232 → 67×116 → 33×58 = floor 반감).
+    ///    위의 `imgW >> L` 모델이 이 규칙의 image-dims 짝이다.
+    /// ② **체인 길이는 규칙이 아니다 — 자산마다 다르다.** 길이 분포 1×178 · 2×2 · 4×5 · 5×29 ·
+    ///    6×33 · 7×55 · 8×68 · 9×39 · 10×27 · 11×4. alloc dims 가 둘 다 2의 거듭제곱인 다레벨
+    ///    251건만 봐도 `n = log2(min dim)`(= 2×2 에서 끝) 140건, `n = log2(min)-1`(= 4×4 에서 끝)
+    ///    108건, 1×N 까지 가는 것 3건으로 **갈린다**. 최소 밉 크기도 고정이 아니다 — 마지막 레벨의
+    ///    짧은 변 도수: 2×140 · 4×110 · 1×3 · 나머지(3·5·6·7·9·23·33·84) 각 1~2건.
+    ///    즉 밉 개수는 컴파일 시점 옵션(`.tex-json` `nomip`·`halfmip` 등)이 정하며 **파일에서 읽는
+    ///    수밖에 없다.** 참고: `nomip: true` 사이드카 140건은 전건 체인 길이 1 이다(140/140).
+    /// ③ **런타임이 없는 밉을 만들지 않는다** — 로더가 `flags |= 8`(위 `flags` 주석) 로 표시할 뿐이다.
+    ///    Waple 도 `SceneRendererResources.makeTexture` 가 `mipmapped: false` 라 같다(파리티).
     public var mipChain: [CompressedMip] = []
     public var imageCount: Int { max(mips.count, mip == nil ? 0 : 1) }
     /// 스프라이트시트 프레임 목록(TEXS 부재 시 []).
@@ -254,6 +318,31 @@ public struct TexImage {
     /// `max(0.016, ft)`) — 한 자산이 이미지 레이어냐 파티클이냐에 따라 속도가 달라지지 않게 하는 것이
     /// 이 상수의 유일한 근거다. **WE 가 이 자리에 쓰는 값은 RE 로 확정하지 못했다**(TEXS 리더
     /// 0x14015e514 가 총 재생길이를 누적만 하고, 그걸 읽는 소비처를 바이너리에서 특정하지 못함).
+    ///
+    /// **[2026-08-21 실측 — 이 값은 8건 중 5건에서 틀리다. 그래도 여기서는 안 고친다.]**
+    /// TEXS 리더를 다시 떠서 확인한 것: `[rdi]` 는 0x14015e1f8 에서 0 으로 초기화되고
+    /// 0x14015e514 `addss xmm6, [rdi]` 로 프레임 시간을 누적할 뿐, **합이 0 일 때의 폴백 분기가
+    /// 리더에는 없다**. 그래서 파일 밖에서 값을 가져와야 하는 것은 맞다.
+    ///
+    /// 그 "파일 밖" 의 유력 후보는 짝 `.tex-json` 이다. TEXS0002 8건(전부
+    /// `assets/materials/particle/**`)의 사이드카는 **전건 `duration: 1`** 이다:
+    ///   snow 4프레임 → 0.25 · debris1 8 → 0.125 · fire2·lightning2 32 → 0.03125 ·
+    ///   fire1·smoke3·lightning1 64 → 0.015625 · fire3 128 → 0.0078125 (초/프레임)
+    /// 곧 상수 0.016 은 64프레임 **3건**(fire1·smoke3·lightning1)에서만 맞고(오차 2.4%), 나머지
+    /// **5건**은 틀리다 — snow 는 **15.6배 빠르고**, debris1 은 7.8배, fire2·lightning2 는 2배 빠르며,
+    /// fire3 은 2배 느리다. `1.0 / frameCount` 로 두면 8/8 이 정확해진다(전건 `duration: 1` 이므로).
+    ///
+    /// 그런데도 상수를 바꾸지 않는 이유 셋(전부 실측):
+    ///   ① 이 상수의 소비처는 `spriteFrameIndex` **하나뿐**이고, 그걸 부르는 곳은
+    ///      `SceneRendererFrameEncoder.spriteFrameTexture`(이미지 레이어)뿐이다. 위 8건은 전부
+    ///      파티클 자산이라 실제로는 `particleSheetFrameIndex` 의 **별도** `max(0.016, ft)` 를 탄다.
+    ///      여기만 고치면 같은 자산이 레이어냐 파티클이냐에 따라 속도가 갈린다(= 이 상수의 존재 이유를 깬다).
+    ///   ② 두 자리를 함께 고쳐야 하는데 `SceneRendererFrameEncoder.swift` 는 이 과제 소유가 아니다.
+    ///   ③ 도달이 작다 — TEXS0002 는 동봉+설치 440건 중 8건, 워크샵 4,680건 중 1건이다
+    ///      (`spec/formats/tex-deep.json` `format.tex.texs.fieldLayout.versionDistribution`
+    ///       = TEXS0003 216 · TEXS0002 9 · 없음 4,895).
+    /// **넘길 패치안**: `fallbackFrameTime` 을 `1.0 / max(1, frameCount)` 로 바꾸고
+    /// `particleSheetFrameIndex` 의 `max(0.016, ft)` 도 같은 식으로 맞출 것. 근거는 위 8/8 사이드카.
     public static let fallbackFrameTime: Float = 0.016
 
     /// 파일에 실린 frametime 의 총합(비유한/음수는 0 취급) — 0 이면 파일에 속도가 없다는 뜻.
@@ -582,6 +671,24 @@ public struct TexImage {
 
     /// TEXS 스프라이트시트 섹션 파스(파일 꼬리에서 역방향 탐색 — LZ4 페이로드 내 우연 일치 회피).
     /// 이상 감지 시 [] (프레임 없음 = 전체 텍스처 1프레임과 동등).
+    ///
+    /// **엔진은 스캔하지 않는다 — 섹션을 앞에서부터 순차로 읽는다**(루프 0x14015e580–0x14015ea02).
+    /// 섹션마다 NUL 종단 이름을 읽고(0x14015e716/0x14015e725), 길이가 4 를 넘을 때만
+    /// `atoi(name+4)` 로 버전을 뽑은 뒤(0x14015e72a `cmp qword [rbp-0x41], 4` / 0x14015e745),
+    /// 이름을 **앞 4글자만** 비교해 분기한다 — 세 호출 전부 `mov r8d, 4` 다:
+    ///   `"TEXI0001"` 0x14015e75b/0x14015e767 → 0x14015c760
+    ///   `"TEXB0004"` 0x14015e792/0x14015e79e → 0x14015c8d0  (반환 2 면 루프 중단: 0x14015e7cb `cmp eax,2`)
+    ///   `"TEXS0003"` 0x14015e7e6/0x14015e7f2 → 0x14015e1d0
+    /// 곧 **뒤 4자리는 절대 비교되지 않는다.** Waple 이 TEXB 를 1...4, TEXS 를 1...3 으로 좁히는 것은
+    /// 의도적 이탈이다(미관측 레이아웃을 조용히 잘못 읽느니 거부한다).
+    ///
+    /// 역방향 스캔의 오탐 위험 실측(2026-08-21, 동봉 311 + 설치 projects 129 = **440건 전수**):
+    ///   · TEXS 를 가진 61건 전부 **TEXB 마지막 페이로드 끝 바로 다음**에서 시작한다(61/61).
+    ///   · TEXS 가 없는 379건에서 `"TEXS000"` 바이트열이 우연히 나온 파일은 **0건**.
+    ///   · 440/440 이 (TEXB 끝 + TEXS 섹션) == 파일 끝으로 **정확히 착지**한다.
+    /// 즉 이 코퍼스에서 역방향 스캔과 순차 파스는 결과가 같다. **다만 오탐이 불가능하다는 증명은
+    /// 아니다** — 조건 변형(TEXB0004 variantCount>0) 파일은 꼬리가 변형 섹션이라 이 코퍼스에
+    /// 표본이 0건이고(전 440건 variantCount==0), 워크샵 쪽 8건은 여기서 확인할 수 없다.
     private static func parseFrames(_ b: [UInt8]) -> (frames: [TexFrame], version: Int, gifWidth: Int, gifHeight: Int) {
         let none = (frames: [TexFrame](), version: 0, gifWidth: 0, gifHeight: 0)
         let sig = Array("TEXS000".utf8)
@@ -668,6 +775,18 @@ public struct TexImage {
     /// fmt6=DXT3(BC2) 실측(2026-07-06): 태양계 fmt6 16개.
     /// fmt8=RG88: 2B/px (r=루마, g=알파 — 실물 common_fragment.h ConvertTexture0Format .rrrg).
     /// fmt9=R8 실측(2026-07-04): opacity 마스크 w×h 바이트.
+    ///
+    /// **매핑하지 않는 값의 도달은 전부 0 이다**(2026-08-21 확인). WE 의 포맷 enum 은 0~21 이지만
+    /// (`spec/formats/tex-deep.json` `format.tex.format.enum`), 실측 도수는:
+    ///   · 동봉 311 + 설치 `projects/` 129 = **440건**: fmt 0×257 · 4×72 · 9×60 · 8×51 — 그 외 0건
+    ///   · 워크샵 포함 **5,120건**(같은 spec 키 `corpusDistribution`): 4×1859 · 0×1501 · 9×1333 ·
+    ///     8×316 · 7×73 · 6×38 — 그 외 0건
+    /// 곧 **BC7(12)·rgb888(1)·rgb565(2)·ETC(3/5)·부동소수(10/11/14/15)는 실물 0건**이다.
+    /// 특히 `rgb888` 은 사이드카에 적을 수는 있지만 컴파일러가 **헤더 format 0(RGBA8888)으로 접는다**
+    /// (`scripts/spec/check_tex_format_map.py` 의 배반집합 D — 이름 유추가 틀리는 대표 사례).
+    /// 그래서 미매핑 값은 `.unknown` → `TexDecoder.rgba` 가 nil 을 내는 지금 상태가 맞다.
+    /// 새 포맷이 실물로 나타나면 `TexBundledCorpusTests.testAllBundledTexParse` 의
+    /// `Set(formats.keys) == [0,4,8,9]` 가 먼저 깨져 사람이 본다.
     private static func payloadKind(forFormat format: Int) -> PayloadKind {
         switch format {
         case 0: return .lz4RGBA

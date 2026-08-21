@@ -190,6 +190,139 @@ final class TexBundledCorpusTests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(checked, 40, "TEXS0003 시트 표본이 줄었다")
     }
+
+    // MARK: - 2026-08-21 추가: 컨테이너 프레이밍을 **파일 끝으로** 검증한다
+
+    /// **파스가 파일 끝에 정확히 착지하는가.** 조건부 필드(texDepth·previewColor·mip depth)나
+    /// 버전별 필드(isLZ4/dec·imageFormat·variantCount)를 하나라도 잘못 세면 mip 테이블이 밀리는데,
+    /// 밀린 채로도 개별 필드 검사는 통과할 수 있다(값이 그럴듯하면). 착지는 못 속인다.
+    ///
+    /// 규약: 마지막 mip 페이로드 끝 == (TEXS 없으면) 파일 끝, (있으면) 거기서 `"TEXS000"` 이 시작.
+    /// 실측(2026-08-21, 동봉 311 + 설치 `projects/` 129 = 440건 전수): 착지 실패 **0건**,
+    /// TEXS 보유 61건 전부 TEXB 끝에서 시작(61/61), TEXS 없는 379건에 `"TEXS000"` 우연 출현 **0건**.
+    /// 마지막 항목이 곧 `parseFrames` 의 역방향 스캔이 이 코퍼스에서 오탐하지 않는다는 근거다.
+    func testContainerParseLandsExactlyOnEOF() throws {
+        var checkedTail = 0, checkedSheet = 0
+        for (rel, data) in try texFiles() {
+            let t = try XCTUnwrap(TexImage.parse(data), rel)
+            // 동봉 전건이 단일 image + 전 레벨 파스 성공이라 체인이 곧 TEXB 본문이다.
+            let chain = t.mipChain.isEmpty ? (t.mip.map { [$0] } ?? []) : t.mipChain
+            let end = try XCTUnwrap(chain.last?.payloadRange.upperBound, "\(rel) mip 체인 없음")
+            let bytes = [UInt8](data)
+            if t.frames.isEmpty {
+                XCTAssertEqual(end, data.count, "\(rel) TEXB 끝이 파일 끝과 다르다 — 프레이밍 오독")
+                // 역방향 스캔 오탐 후보가 아예 없어야 한다.
+                XCTAssertNil(Self.firstIndex(of: Array("TEXS000".utf8), in: bytes),
+                             "\(rel) TEXS 섹션이 없는데 시그니처 바이트가 있다 — 오탐 위험")
+                checkedTail += 1
+            } else {
+                guard end >= 0, end + 7 <= bytes.count else {
+                    XCTFail("\(rel) TEXB 끝(\(end))이 파일(\(bytes.count)) 밖이다"); continue
+                }
+                XCTAssertEqual(Array(bytes[end..<(end + 7)]), Array("TEXS000".utf8),
+                               "\(rel) TEXS 가 TEXB 바로 뒤에서 시작하지 않는다")
+                checkedSheet += 1
+            }
+        }
+        XCTAssertGreaterThanOrEqual(checkedTail, 259, "TEXS 없는 동봉 표본이 줄었다")
+        XCTAssertGreaterThanOrEqual(checkedSheet, 52, "TEXS 보유 동봉 표본이 줄었다")
+    }
+
+    /// **`decompressedSize` 가 포맷 바이트 모델과 정확히 일치하는가.** `TexImage.mipByteSize` 가
+    /// 딛고 선 `format → bpp` 대응(0=4B/px · 4·6=16B/블록 · 7=8B/블록 · 8=2B/px · 9=1B/px)이
+    /// 어긋나면 조건 변형 mip 의 LZ4 해제 크기가 틀리고, DXT/raw 분기도 같이 틀린다. 실제로
+    /// **fmt9 를 fmt4(DXT5)에 묶어 마스크가 전백이 된 회귀가 있었다** — 그 종류를 여기서 잡는다.
+    ///
+    /// 파일이 `dec` 를 직접 싣는 레벨(TEXB0002+)까지 포함해 전 레벨을 본다. 실측(2026-08-21):
+    /// 440건 2,139 레벨 전부 일치(불일치 0), LZ4 해제 실패 0.
+    func testEveryRawMipDecompressedSizeMatchesFormatModel() throws {
+        var levels = 0
+        for (rel, data) in try texFiles() {
+            let t = try XCTUnwrap(TexImage.parse(data), rel)
+            // 인코딩 페이로드(PNG/JPEG/GIF/MP4)는 픽셀 모델이 없다 — 대상 아님.
+            switch t.payload {
+            case .lz4RGBA, .bc3, .bc2, .bc1, .rg88, .r8: break
+            default: continue
+            }
+            let chain = t.mipChain.isEmpty ? (t.mip.map { [$0] } ?? []) : t.mipChain
+            for (i, m) in chain.enumerated() {
+                let expected = Self.expectedMipBytes(format: t.format, w: m.decodeWidth, h: m.decodeHeight) * m.depth
+                XCTAssertEqual(m.decompressedSize, expected,
+                               "\(rel) level \(i): fmt \(t.format) \(m.decodeWidth)×\(m.decodeHeight)×\(m.depth)")
+                levels += 1
+            }
+        }
+        XCTAssertGreaterThanOrEqual(levels, 1397, "raw mip 레벨 표본이 줄었다")
+    }
+
+    /// **프레임이 아틀라스 밖으로 나가는 실물이 있다 — 그 집합을 못박는다.**
+    /// WE 패커의 float 반올림 때문에 마지막 열이 통째로 빠지고 밀린 프레임이 바닥을 넘는다
+    /// (`TexFrame` 주석의 실측 참조). 이 도수를 고정해 두는 이유 둘:
+    ///   · 파서가 지오메트리 필드 순서를 잘못 읽으면 이 집합이 **조용히 달라진다**(다른 검사는
+    ///     좌표를 안 본다). 여기가 그 그물이다.
+    ///   · 소비처(`SceneRendererFrameEncoder.spriteSubrect`)가 자르기/감기 중 무엇을 하든,
+    ///     **입력이 실제로 범위를 넘는다**는 사실은 여기에 근거로 남아야 한다.
+    /// 실측(2026-08-21, 동봉 311건): 시트 52건 중 **13건 · 프레임 62개**가 `y + h > 아틀라스 높이`.
+    /// x 축으로 넘는 프레임은 **0개**다(패커는 열을 건너뛸 뿐 가로로 넘기지 않는다).
+    func testSomeSheetsHaveFramesOutsideTheAtlas() throws {
+        var offenders: [String: Int] = [:]
+        var xOver = 0, sheets = 0
+        for (rel, data) in try texFiles() {
+            guard let t = TexImage.parse(data), !t.frames.isEmpty, let mip = t.mip else { continue }
+            sheets += 1
+            let aw = Float(mip.decodeWidth), ah = Float(mip.decodeHeight)
+            for f in t.frames {
+                if f.atlasY + f.atlasHeight > ah + 1 { offenders[rel, default: 0] += 1 }
+                if f.atlasX + f.atlasWidth > aw + 1 { xOver += 1 }
+            }
+        }
+        XCTAssertGreaterThanOrEqual(sheets, 52, "동봉 시트 표본이 줄었다")
+        XCTAssertEqual(xOver, 0, "가로로 넘는 프레임이 생겼다 — 지오메트리 필드 순서를 의심할 것")
+        XCTAssertEqual(offenders.count, 13, "세로로 넘는 시트 수가 바뀌었다: \(offenders.keys.sorted())")
+        XCTAssertEqual(offenders.values.reduce(0, +), 62, "넘는 프레임 총수가 바뀌었다: \(offenders)")
+        // 이름까지 고정 — 새 자산이 들어와도 "같은 13건" 인지 사람이 본다.
+        let expected = ["bubble1", "jellyfish1", "leaves1", "leaves10", "leaves2", "leaves3", "leaves4",
+                        "leaves5", "leaves6", "leaves7", "leaves8", "leaves9", "rosepetals"]
+        let stems = offenders.keys.map { rel -> String in
+            let leaf = rel.split(separator: "/").last.map(String.init) ?? rel
+            return leaf.hasSuffix(".tex") ? String(leaf.dropLast(4)) : leaf
+        }.sorted()
+        XCTAssertEqual(stems, expected)
+    }
+
+    /// `TexImage.mipByteSize` 와 **같은 식을 테스트에 다시 적는다** — 프로덕션 함수를 그대로 부르면
+    /// 그 함수가 틀렸을 때 테스트도 같이 틀린다(동어반복). 여기 값은 WE 포맷 enum 정의에서 온다.
+    private static func expectedMipBytes(format: Int, w: Int, h: Int) -> Int {
+        switch format {
+        case 4, 6: return ((w + 3) / 4) * ((h + 3) / 4) * 16   // BC3 / BC2
+        case 7:    return ((w + 3) / 4) * ((h + 3) / 4) * 8    // BC1
+        case 8:    return w * h * 2                            // RG88
+        case 9:    return w * h                                // R8
+        default:   return w * h * 4                            // RGBA8888
+        }
+    }
+
+    /// 무할당 선형 탐색(첫바이트 선비교). `Array(hay[i..<j]) == needle` 은 위치마다 배열을
+    /// 새로 만들어 수 MB 자산에서 테스트가 사실상 멈춘다 — 여기서 그 형태를 쓰지 않는 이유다.
+    private static func firstIndex(of needle: [UInt8], in hay: [UInt8]) -> Int? {
+        guard !needle.isEmpty, hay.count >= needle.count else { return nil }
+        let first = needle[0]
+        let upper = hay.count - needle.count
+        var i = 0
+        while i <= upper {
+            if hay[i] == first {
+                var match = true
+                var j = 1
+                while j < needle.count {
+                    if hay[i + j] != needle[j] { match = false; break }
+                    j += 1
+                }
+                if match { return i }
+            }
+            i += 1
+        }
+        return nil
+    }
 }
 
 /// 조건부 필드 3종을 **합성 픽스처**로 고정한다 — 실물엔 조합이 다 없어서 경계가 안 밟힌다.

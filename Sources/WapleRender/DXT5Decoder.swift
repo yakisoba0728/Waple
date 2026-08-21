@@ -35,19 +35,34 @@ public enum DXT5Decoder {
                 let o = (byi * bx + bxi) * 16
                 // --- alpha (BC4) ---
                 let a0 = Int(src[o]), a1 = Int(src[o + 1])
-                // ⚠️ **미적용 파리티 갭**: WE(그리고 D3D/Metal 하드웨어)는 이 보간을 **반올림**한다 —
-                // `((7-i)*a0 + i*a1 + 3) / 7`, 6단은 `+ 2) / 5`(spec `format.tex.bcDecodeRounding`, 확정).
-                // 아래는 floor 라 알파가 최대 1 낮게 나온다(동봉 BC3 9개 실측: splash_1 11,608B ·
-                // splash_1_normal 48,400B 가 ±1 불일치). 고치려면 `DXT5DecoderTests
-                // .testDecodesEightValueAlphaRamp` 의 기댓값 [218,182,145,109,72,36] 을
-                // [219,182,146,109,73,36] 으로 함께 바꿔야 하는데 그 파일은 이 작업의 담당 범위 밖이라
-                // 손대지 않았다. 색(color565)만 먼저 맞췄다.
+                // BC3(=BC4) 알파 보간은 **반올림**이다 — `((7-i)*a0 + i*a1 + 3) / 7`, 6단은 `+ 2) / 5`.
+                //
+                // [2026-08-21 적용] 종전 이 자리는 floor 였고 주석에 "미적용 파리티 갭" 으로 남아
+                // 있었다(막고 있던 것은 아래 근거 부재가 아니라 기대값을 든 테스트 파일의 소유였다).
+                // 근거 셋이 같은 값을 가리킨다:
+                //   · **WE 자체 디코더** — `spec/formats/tex-deep.json` `format.tex.bcDecodeRounding`
+                //     (status 확정): `we.bc3AlphaLerp8 = ((7-i)*a0 + i*a1 + 3)/7`,
+                //     `we.bc3AlphaLerp6 = ((5-i)*a0 + i*a1 + 2)/5`. 그 규약으로 12/12 표본이
+                //     `resourcecompiler64 -transcode` 출력과 **바이트 동일**이다.
+                //   · **하드웨어** — S3TC/BC3 규격의 알파 보간식이 바로 이 `+3)/7` · `+2)/5` 다.
+                //     즉 Waple 의 `TexDecoder.nativeBC`(Metal 이 디코드) 결과와도 이제 맞물린다.
+                //     종전 floor 는 **WE 와도, 우리 자신의 GPU 경로와도** 어긋나 있었다
+                //     (그래서 `NativeBCUploadTests.testBC3InterpolatedParity` 가 정확 일치가 아니라
+                //      `maxD < 24` 라는 느슨한 상한으로만 재고 있었다 — 이 수정은 그 차이를 줄인다).
+                //   · **도달** — 동봉 BC3(format 4) **9개 전수**의 mip0 을 실제로 풀어(LZ4 해제 후
+                //     블록별 알파 인덱스까지) 두 규칙이 갈리는 픽셀을 세면 **합계 86,809 픽셀**이다
+                //     (전부 ±1): `splash_1_normal` 48,400 · `shower_stream_0_normal` 15,664 ·
+                //     `splash_1` 11,608 · `fern1` 3,169 · `rain_drops_0` 3,105 · `splash_9` 3,069 ·
+                //     `splash_10` 1,794 · `flatnormal`·`sphere` 0(엔드포인트가 같아 보간 슬롯 미사용).
+                //     노멀맵 비중이 큰 것에 주목 — 알파에 채널을 접어 넣는 포맷이라 그렇다.
+                // 색 보간(`lerp3`)은 **floor 가 정본**이라 그대로 둔다(같은 spec 키
+                // `we.colorLerp` = floor, 반올림으로 바꾸면 fmt4 1,261 B · fmt6 71,970 B 어긋난다).
                 var alpha = [Int](repeating: 0, count: 8)
                 alpha[0] = a0; alpha[1] = a1
                 if a0 > a1 {
-                    for i in 1...6 { alpha[i + 1] = ((7 - i) * a0 + i * a1) / 7 }
+                    for i in 1...6 { alpha[i + 1] = ((7 - i) * a0 + i * a1 + 3) / 7 }
                 } else {
-                    for i in 1...4 { alpha[i + 1] = ((5 - i) * a0 + i * a1) / 5 }
+                    for i in 1...4 { alpha[i + 1] = ((5 - i) * a0 + i * a1 + 2) / 5 }
                     alpha[6] = 0; alpha[7] = 255
                 }
                 var abits: UInt64 = 0
