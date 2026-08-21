@@ -23,6 +23,30 @@
 # 사용: scripts/dev/linux-core-tests.sh [swift test 에 넘길 추가 인자...]
 #   예: scripts/dev/linux-core-tests.sh --filter ParticleSimulatorTests
 set -uo pipefail
+
+# ── 공유 락 (2026-08-21) ────────────────────────────────────────────────────
+# 4코어/16GB 컨테이너에서 **동시 swift 빌드 2개는 OOM 으로 컨테이너를 통째로 재시작시킨다**
+# (실제로 당했다 — 에이전트 17개 + 전체 스위트 2개가 동시에 돌다 전멸했다).
+# 종전엔 이 스크립트가 락을 안 잡고 "호출자가 flock 으로 감싼다" 는 관례에만 기댔다.
+# 관례는 지켜지지 않는다 — `linux-render-typecheck.sh` 도 락 경로를 작업 디렉터리에서
+# **유도**하고 있었고, 그래서 디렉터리가 다른 두 실행이 서로 다른 락을 잡아 상호배제가
+# 아예 안 됐다(`/proc/locks` 실측: `/tmp/swift.lock` 과 `<스크래치패드>/swift.lock` 이
+# 동시에 잡혀 있었다). 유도 기본값은 **안전해 보이기만 했다**.
+#
+# 그래서 두 스크립트가 **작업 디렉터리와 무관한 같은 고정 경로**로 수렴하게 한다.
+# 다른 락에 묶으려면 `WAPLE_SWIFT_LOCK` 을 명시해라 — 유도에 기대지 마라.
+LOCK="${WAPLE_SWIFT_LOCK:-${TMPDIR:-/tmp}/waple-swift.lock}"
+if [ "${WAPLE_CORETESTS_LOCKED:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$LOCK")"
+    # 어느 락을 잡는지 매번 찍는다 — 락이 갈리면 조용히 OOM 이 나므로 보이게 둔다.
+    echo "== 락: $LOCK (WAPLE_SWIFT_LOCK 으로 바꾼다)" >&2
+    export WAPLE_CORETESTS_LOCKED=1
+    # `"$@"` 를 여기서 소모하지 않았으므로 그대로 넘긴다 — 인자를 shift 로 먼저 소모한 뒤
+    # `exec flock … "$0" "$@"` 를 하면 **빈 인자**가 넘어가 옵션이 조용히 사라진다
+    # (`linux-render-typecheck.sh` 가 실제로 그 버그를 겪었고 양성 대조로 잡았다).
+    exec flock -w "${WAPLE_SWIFT_LOCK_WAIT:-3600}" "$LOCK" "$0" "$@"
+fi
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SWIFTC_DIR="${WAPLE_SWIFT_BIN:-/opt/swift/usr/bin}"
 WORK="${WAPLE_LINUX_TEST_DIR:-${TMPDIR:-/tmp}/waple-linux-core-tests}"
