@@ -106,6 +106,20 @@ DATA_TABLE_MARKER = "[VA-데이터표]"
 BINARY_ALSO = {
     "spec/assets/misc-schema.json": ("bin/webwallpaper64.exe", "bin/wallpaperui.exe"),
     "scripts/spec/measure_misc_assets.py": ("bin/webwallpaper64.exe", "bin/wallpaperui.exe"),
+    # 패키지 클러스터: **읽는 쪽은 `wallpaper64.exe`, 쓰는 쪽은 `bin/wallpaperui.exe`** 라
+    # 한 파일이 두 이미지를 함께 인용한다(`.pkg` 를 쓰는 코드는 설치본 MZ 156개 중
+    # `wallpaperui.exe` 하나뿐이다 — `docs/re/package-format.md` §10). 기준은 뒤집지 않는다:
+    # 실측으로 base=wallpaper64 는 경계 OK 261, base=wallpaperui 는 236 이라 위 규칙대로
+    # 전자가 기준이고 후자가 면죄다(뒤집으면 `--also` 를 줘도 11건이 남는다).
+    # 반대 방향도 있다: 대부분 웹 이미지인데 **본체 주소 둘**을 함께 인용한다(문면이 줄마다
+    # `wallpaper64.exe` 라고 밝혀 두었고, 실측으로 그 둘은 본체에서 정확히 문서가 적은 명령이다 —
+    # `0x1400d1f52 mov r8d,0x200` · `0x1400d1e21 xor r13d,r13d`).
+    "docs/re/web-wallpaper-bridge.md": ("wallpaper64.exe",),
+    "docs/re/package-format.md": ("bin/wallpaperui.exe",),
+    "spec/formats/pkg.json": ("bin/wallpaperui.exe",),
+    "scripts/spec/measure_corpus.py": ("bin/wallpaperui.exe",),
+    "Sources/WapleCore/ScenePackage.swift": ("bin/wallpaperui.exe",),
+    "Tests/WapleCoreTests/ScenePackageWEParityTests.swift": ("bin/wallpaperui.exe",),
 }
 
 BINARY_ROUTING = {
