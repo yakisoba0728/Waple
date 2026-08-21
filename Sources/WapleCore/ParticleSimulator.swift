@@ -1391,6 +1391,12 @@ public struct ParticleSimulator {
             // TEXS 에서만 온다). 19건 전부 `animationmode` 부재라 randomframe 경로와도 안 겹친다.
             // 근거 전문은 `Initializer.mapSequence` 주석(ParticleSystem.swift).
             //
+            // **[2026-08-21 재측정]** 도달 0 을 다시 확인했다(관용 파서 census + `parse_tex` 양성
+            // 대조 — 같은 트리 `.tex` 311개 중 52개는 TEXS 를 갖는데 이 다섯만 없다).
+            // 실물 산술은 이 파일 끝의 `MapSequenceBetweenSolver` 가 들고 있고 오라클 27건으로
+            // 잠겨 있다 — 다만 **배선하면 화면이 바뀌므로**(동봉 between 12선언 중 8선언이
+            // `flags & 4` 로 크기까지 줄인다) A/B 캡처 전까지 아래 레거시를 그대로 둔다.
+            //
             // 시퀀스 위치 t(0..1) → frame = t·count. 시트 폴드(mirror/loop)는 렌더 시 sheetFrameIndex.
             let t: Float
             if between {
@@ -2132,4 +2138,135 @@ private func fadeFactor(_ n: Float, _ fin: Float, _ fout: Float) -> Float {
     let i = fin > 0 ? max(0, min(1, n / fin)) : 1
     let o = fout > 0 ? max(0, min(1, (1 - n) / fout)) : 1
     return i * o
+}
+
+// MARK: - mapsequencebetweencontrolpoints 산술 (opid 14, 핸들러 0x14023ca93–0x14023ce53)
+
+/// `mapsequencebetweencontrolpoints` 의 **런타임 산술 전문**. 실물 핸들러를 명령 순서 그대로
+/// 옮겼다(이 저장소에서 직접 다시 떴다 — 함정 16).
+///
+/// **왜 시뮬에 배선돼 있지 않은가.** 이 이니셜라이저는 스폰된 파티클을 `CP[start]→CP[end]`
+/// 선분 위로 **옮긴다**. 즉 배선하면 화면이 바뀐다. 이 컨테이너에는 Metal 이 없어 A/B 캡처가
+/// 불가능하고, 동봉·설치 두 코퍼스에서 `between` 선언 **12건 중 8건**이 `flags & 4` 를 세워
+/// 크기까지 `(1−0.9) + 0.9·arc` 로 줄인다(양 끝에서 원래의 10%). 그래서 **산술만 먼저 잠근다** —
+/// 배선은 맥에서 A/B 를 뜬 뒤다(`docs/re/particle-control-points.md` §9).
+///
+/// **누산기 `t` 는 파티클이 아니라 이 이니셜라이저 인스턴스의 상태다.** 실물은 레코드
+/// 페이로드 `+0x04`(`t`) / `+0x00`(`step`)에 들고 스폰마다 갱신한다 — 파티클 위치에서
+/// 유도하는 값이 아니다. 그래서 이 타입이 `mutating` 으로 그 둘을 들고 간다.
+///
+/// ```text
+/// A    = row3(CP[start])                                   0x14023caf1
+/// B    = row3(CP[end])                                     0x14023cb1b
+/// Δ    = B − A                                             0x14023cb32–0x14023cb4b
+/// L    = |Δ|                                               0x14023cb50   (0x14019e890 = length)
+/// Ls   = max(L, FLT_MIN)                                   0x14023cb5d   (상수 0x1404925d0)
+/// d    = Δ / Ls                                            0x14023cb78–0x14023cb93
+/// q    = p − A   (시스템 flags bit0 일 때만)                0x14023cb55 → 0x14019d8f0 @0x14023cba3
+/// perp = q − (q·d)·d                                       0x14023cbdf–0x14023cc2f
+/// s    = boundsMin + t·boundsSpan                          0x14023cc25 + 0x14023cc34
+/// arc  = 1 − powf(|2t − 1|, 2)                             0x14023cc46 (powf 0x14041e350) / 0x14023cc53
+/// flags&1 → perp *= arc                                    0x14023cc58–0x14023cc66
+/// p'   = perp + ((s·d)·Ls + A)                             0x14023cc6b–0x14023cca7
+/// flags&8 → p' += arcDir · ((arc·Ls)·arcAmount)            0x14023ccbd–0x14023cce7 (scale 0x14019d570 / add 0x14019e860)
+/// flags&2 → vel *= arc                                     0x14023cd22–0x14023cd68
+/// flags&4 → size *= (1 − sr) + sr·arc                      0x14023cd6e–0x14023cd9c  (기준 size [rdi+0x278])
+/// t += step                                                0x14023cda2–0x14023cdbe
+/// t > 1  : mirror ? (step = −step; t = 1 − (t − 1)) : t = 0   0x14023cdc6–0x14023cdef
+/// t < 0  : step = −step; t = −t                               0x14023ce16–0x14023ce48
+/// ```
+///
+/// `mirror` 판정이 `cmp dword [r14+0x14], r13d`(`0x14023cdc6`)인데 `r13d` 는 이니셜라이저 VM
+/// 프롤로그의 `xor r13d,r13d`(`0x14023b37e`)로 **0** 이다 — 즉 `mirror != 0` 이면 왕복이다.
+///
+/// **[미해결]** 시스템 flags bit0(`test byte [rdi+0x20],1` @`0x14023cb55`)이 설 때만 `p −= A` 를
+/// 하는 이유. 월드/로컬 구분으로 보이지만 확증이 없다 — 안 설 때 수직 성분의 기준이
+/// **원점을 지나는 축**이 되는 것이 의도인지 확인 못 했다.
+public struct MapSequenceBetweenSolver: Equatable {
+    /// 시퀀스 누산기(레코드 페이로드 `+0x04`). 파스가 **0** 으로 굽는다(`0x1401ca296`).
+    public private(set) var t: Float
+    /// 현재 스텝(레코드 페이로드 `+0x00`). `mirror` 왕복에서 부호가 뒤집힌다.
+    public private(set) var step: Float
+
+    /// 한 파티클에 적용한 결과. 실물이 SoA 에 되쓰는 슬롯과 1:1이다.
+    public struct Output: Equatable {
+        /// 새 위치(`+0x2b0/+0x2b8/+0x2c0`).
+        public var position: SIMD3<Float>
+        /// 새 속도(`+0x2c8/+0x2d0/+0x2d8`). `flags & 2` 가 없으면 입력 그대로.
+        public var velocity: SIMD3<Float>
+        /// 새 **기준** size(`+0x278`). `flags & 4` 가 없으면 입력 그대로.
+        public var baseSize: Float
+        /// `1 − |2t−1|²` — 게이트 판정 전의 원값(테스트/진단용).
+        public var arc: Float
+        /// `boundsMin + t·boundsSpan` — 축 위 매개변수(테스트/진단용).
+        public var s: Float
+    }
+
+    /// 파스가 굽는 초기 상태(`t = 0`, `step = 1/max(count−1, 1e-4)`).
+    public init(spec: MapSequenceBetweenSpec) { self.t = 0; self.step = spec.step }
+    /// 임의 상태에서 재개(테스트·직렬화용).
+    public init(t: Float, step: Float) { self.t = t; self.step = step }
+
+    /// - Parameters:
+    ///   - position: 스폰 직후 파티클 위치.
+    ///   - velocity: 스폰 직후 속도.
+    ///   - baseSize: 기준 size(`[rdi+0x278]`) — 매 프레임 되돌아오지 않는 값이다.
+    ///   - a: `CP[controlpointstart]` 월드 위치.
+    ///   - b: `CP[controlpointend]` 월드 위치.
+    ///   - spec: 페이로드.
+    ///   - systemWorldSpace: 시스템 flags bit0(`[sys+0x20] & 1`).
+    /// - Returns: 되쓸 값들. 호출 뒤 `t`/`step` 이 **전진해 있다**(실물이 레코드를 갱신하는 자리).
+    public mutating func apply(position: SIMD3<Float>,
+                               velocity: SIMD3<Float>,
+                               baseSize: Float,
+                               a: SIMD3<Float>,
+                               b: SIMD3<Float>,
+                               spec: MapSequenceBetweenSpec,
+                               systemWorldSpace: Bool) -> Output {
+        let delta = b - a
+        let l = simd_length(delta)
+        // maxss xmm11, [0x1404925d0] — 상수는 FLT_MIN(1.1754943508222875e-38) = leastNormalMagnitude.
+        let ls = max(l, Float.leastNormalMagnitude)
+        let d = delta / ls
+        // 0x14023cb55: 시스템 flags bit0 일 때만 축 기준점을 A 로 옮긴다.
+        let q = systemWorldSpace ? position - a : position
+        // 내적 결합 순서까지 실물과 같게 둔다 — `(x·dx + y·dy) + z·dz`
+        // (0x14023cbee `addss xmm2,xmm1` → 0x14023cbf2 `addss xmm2,xmm0`).
+        let dot = (q.x * d.x + q.y * d.y) + q.z * d.z
+        let perpRaw = q - dot * d
+        let s = spec.boundsMin + t * spec.boundsSpan
+        // powf(|2t−1|, 2). `2t` 는 `addss xmm0,xmm0`(0x14023cc2b) 이라 `t*2` 가 아니라 `t+t` 다.
+        let arc = 1 - powf(abs((t + t) - 1), 2)
+        let perp = (spec.flags & 1) != 0 ? perpRaw * arc : perpRaw
+        var np = perp + ((s * d) * ls + a)
+        if (spec.flags & 8) != 0 {
+            np += SIMD3(spec.arcDirection.x, spec.arcDirection.y, spec.arcDirection.z)
+                * ((arc * ls) * spec.arcAmount)
+        }
+        let nv = (spec.flags & 2) != 0 ? velocity * arc : velocity
+        let nsz = (spec.flags & 4) != 0
+            ? ((1 - spec.sizeReduction) + spec.sizeReduction * arc) * baseSize
+            : baseSize
+        advance(mirror: spec.mirror)
+        return Output(position: np, velocity: nv, baseSize: nsz, arc: arc, s: s)
+    }
+
+    /// 시퀀스 진행만(0x14023cda2–0x14023ce4e). `apply` 가 꼬리에서 부른다 — 단독 오라클용으로도 공개.
+    public mutating func advance(mirror: Bool) {
+        var nt = step + t                       // 0x14023cdb4 addss xmm1, [r14+8]
+        if nt > 1 {                             // comiss/jbe 0x14023cdba/0x14023cdc4
+            if mirror {                         // cmp [r14+0x14], r13d(=0) / jne 0x14023cdca
+                step = -step                    // xorps xmm2, -0.0  0x14023cde0
+                nt = 1 - (nt - 1)               // 0x14023cddb / 0x14023cdea
+            } else {
+                nt = 0                          // 0x14023cdcc
+            }
+        } else if nt < 0 {                      // comiss xmm0(0), xmm1 / jbe  0x14023ce16/0x14023ce34
+            // `jbe` 는 **비순서(NaN)에서도 잡힌다** — 그래서 `!(0 <= nt)` 가 아니라 `nt < 0` 이다
+            // (NaN 이면 실물은 아무것도 안 하고 `t` 를 NaN 인 채로 둔다).
+            step = -step                        // 0x14023ce3e
+            nt = -nt                            // 0x14023ce3a
+        }
+        t = nt
+    }
 }

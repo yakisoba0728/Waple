@@ -151,17 +151,35 @@ public enum Initializer: Equatable {
     /// (`SceneRendererFrameEncoder.swift:123`/`:264`, `SceneRenderer3D.swift:2367`)는 이 19건에서
     /// **애초에 도달하지 않는다**. `animationmode` 도 19건 전부 부재라 `randomframe` 경로와도
     /// 겹치지 않는다.
-    /// **[미적용 사유]** 그런데 삭제는 `Tests/WapleCoreTests/TexFramesAndMapSequenceTests.swift`
+    /// **[2026-08-21 재측정 — 도달 0 을 다시 확인했다]** 위 판정을 관용 파서로 다시 셌다:
+    /// 동봉 `.json` 1,698 중 `initializer[].name` 이 `mapsequence*` 인 파티클 **17파일 / 19선언**
+    /// (between 12 · around 7), 설치본 2,143 중에서도 **똑같이 17 / 19**. 그 머티리얼 8종이
+    /// 가리키는 텍스처는 위 다섯 종뿐이고, `measure_tex_deep.parse_tex` 로 열면 다섯 다
+    /// `texs = None` 이다. **양성 대조**로 같은 트리의 `.tex` 311개 중 **52개는 TEXS 를 갖고 있다**
+    /// (`particle/fire/fire1..3` `TEXS0002`, `particle/shape/*_sheet` `TEXS0003` 등) — 즉 탐지가
+    /// 도는데 이 다섯만 없는 것이다. 그리고 19선언 전부 `animationmode: null` 이다.
+    /// → **`p.frame >= 0` 분기를 실제로 지나는 mapsequence 자산은 0건이다.**
+    ///
+    /// **[미적용 사유]** 그래도 삭제는 `Tests/WapleCoreTests/TexFramesAndMapSequenceTests.swift`
     /// 의 세 테스트(`testMapSequenceBetween_projectsOntoSegment` 2.0 /
     /// `…_clampsOutsideSegment` 0 / `testMapSequenceAround_angleToSequence` 4.0)를 같이 고쳐야
-    /// 하는데 그 파일은 이 라운드 소유 밖이다 — 그래서 표시만 하고 넘긴다.
+    /// 하는데 그 파일은 이 라운드도 소유 밖이다(이름에 `Particle` 이 없다) — 표시만 하고 넘긴다.
     ///
-    /// **[미배선] 위치 산식 자체는 아직 옮기지 않았다.** 옮기려면 (a) 케이스에
-    /// `bounds`/`controlpointstart`/`controlpointend`/`flags`/`arcdirection`/`sizereductionamount`
-    /// 를 실어야 하는데 그러면 `SceneRendererResources.swift` 의
-    /// `if case .mapSequence(_, true, _)` 패턴이 깨지고(소유 밖), (b) 시퀀스 누산기 `t` 가
-    /// **파티클이 아니라 이니셜라이저 인스턴스의 상태**라 시뮬 쪽에 원소별 슬롯이 필요하며,
-    /// (c) 파티클 위치가 실제로 바뀌므로 그림이 바뀐다(A/B 캡처 필요). 별도 라운드다.
+    /// **[미배선] 위치 산식은 옮겼지만 배선하지 않았다.**
+    ///   · 산술 — `MapSequenceBetweenSolver`(`ParticleSimulator.swift`)가 실물 핸들러
+    ///     `0x14023ca93`–`0x14023ce53` 를 명령 순서대로 들고 있고, 27건 오라클로 잠겨 있다
+    ///     (`Tests/WapleCoreTests/ParticleMapSequenceOracleTests.swift`).
+    ///   · 페이로드 — `MapSequenceBetweenSpec` / `MapSequenceAroundSpec` 이 파스한다
+    ///     (`def.mapSequenceBetween` / `def.mapSequenceAround`, 선언당 하나).
+    ///   · **배선을 안 한 이유는 도달이 아니라 검증이다.** `p.frame` 쪽 도달은 0 이지만
+    ///     위치 대입은 **화면을 실제로 바꾼다** — 동봉 `between` 12선언 중 `flags & 4`(크기 축소)가
+    ///     선 것이 **8선언**이고(`flags` 저작 분포 4×2 · 7×3 · 3×1 · 15×2 · 23×1 · 19×1),
+    ///     `flags & 1`(수직 성분 수렴)은 **10선언**이다. 이 컨테이너에는 Metal 이 없어 A/B 캡처가
+    ///     불가능하므로 맥에서 뜬 뒤로 넘긴다.
+    ///   · 배선 시 케이스 시그니처는 **흔들 필요가 없다** — 페이로드는 def 배열에 있으므로
+    ///     `SceneRendererResources.swift` 의 `if case .mapSequence(_, true, _)` 패턴은 그대로 산다.
+    ///     남는 것은 (a) 이니셜라이저 인스턴스별 `MapSequenceBetweenSolver` 슬롯을 시뮬에 두는 일과
+    ///     (b) `p.frame` 대입 제거(위 [미적용 사유])뿐이다.
     ///
     /// 실물 `arcamount` 는 이 케이스가 아니라 **def 레벨 `mapSequenceArcAmount`** 에 싣는다
     /// (`mapSequenceAxis` 와 같은 관례 — 시뮬레이터의 `case let .mapSequence(count, _, between)`
@@ -1598,6 +1616,154 @@ public struct ControlPointBinding: Equatable {
     public init(op: Int, cp: Int) { self.op = op; self.cp = cp }
 }
 
+/// `mapsequencebetweencontrolpoints`(opid 14) 의 **페이로드 전문**. 레코드 `0x38` / 페이로드 `0x34`
+/// (할당기 썽크 `0x1401d8930` — `mov byte [rdx],0xe` / `mov word [rdx+2],0x38`),
+/// 파스 `0x1401ca1cf`–`0x1401ca628`, 주입기 `0x1401bc080`–`0x1401bc419`.
+///
+/// **[2026-08-21 실측 — 이 저장소에서 직접 다시 떴다]** 파스가 쓰는 페이로드 베이스(`rdi`)는
+/// 핸들러가 읽는 레코드 베이스(`r14`)보다 **4 작다**(썽크가 `lea rax,[rdx+4]` 로 페이로드
+/// 포인터를 돌려주기 때문이다 — `0x1401d88fd` 계열):
+///
+/// | 페이로드 | 내용 | 파스 스토어 | 핸들러 로드 |
+/// | --- | --- | --- | --- |
+/// | `+0x00` | 스텝 `1 / max(count − 1, 1e-4)` | `0x1401ca29d` `divss` → `0x1401ca2af` | `[r14+4]` `0x14023cda2` |
+/// | `+0x04` | 시퀀스 누산기 `t`(초기 **0**) | `0x1401ca296` | `[r14+8]` `0x14023cdb4` |
+/// | `+0x08` | `bounds[0]` | `0x1401ca367` | `[r14+0xc]` `0x14023cc34` |
+/// | `+0x0c` | `bounds[1] − bounds[0]` | `0x1401ca383` | `[r14+0x10]` `0x14023cc25` |
+/// | `+0x10` | `limitbehavior == "mirror"` | `0x1401ca3ca` | `[r14+0x14]` `0x14023cdc6` |
+/// | `+0x14` | `controlpointstart` | `0x1401ca449` | `[r14+0x18]` `0x14023cadb` |
+/// | `+0x18` | `controlpointend` | `0x1401ca456` | `[r14+0x1c]` `0x14023cac1` |
+/// | `+0x1c` | `flags` | `0x1401ca489` | `[r14+0x20]` `0x14023cc4b` |
+/// | `+0x20` | `arcamount` | `0x1401ca4bc` | `[r14+0x24]` `0x14023ccd5` |
+/// | `+0x24..0x2c` | `arcdirection` | `0x1401ca5d0`·`0x1401ca5dc` | `[r14+0x28]` `0x14023ccc5` |
+/// | `+0x30` | `sizereductionamount` | `0x1401ca607` | `[r14+0x34]` `0x14023cd75` |
+///
+/// CP 인덱스 클램프는 `0x1401ca435`–`0x1401ca456` — `cmp r,7` + `cmovb`(**부호 없는** below)라
+/// 음수는 7 이 된다. 그리고 파스 꼬리 `0x1401ca60c`–`0x1401ca628` 이 정의의 CP 개수(`[def+0x2c]`)를
+/// `max(현재, start+1, end+1)` 로 밀어 올린다.
+///
+/// **파스·보존 전용이다 — 시뮬 미배선.** 산술 자체는 `MapSequenceBetweenSolver` 가 들고 있고
+/// 오라클 테스트로 잠겨 있지만, 실제로 위치를 대입하면 **그림이 바뀐다**(동봉 12선언 중
+/// 8선언이 `flags & 4` 로 크기까지 줄인다). A/B 캡처 전까지 배선하지 않는다 —
+/// 근거는 `Initializer.mapSequence` 주석과 `docs/re/particle-control-points.md` §9.
+public struct MapSequenceBetweenSpec: Equatable {
+    /// `count` — 시트 프레임 수가 **아니라** 시퀀스 스텝 수. 주입 기본 **32**
+    /// (`mov qword [rax],0x20` @`0x1401bc0db`, 인라인 int 노드).
+    public var count: Float
+    /// `limitbehavior == "mirror"`. 주입 기본 문자열 **`"repeat"`**(`0x1401bc2b0`–`0x1401bc2ce`,
+    /// 상수 `0x14048f6f8`). 판정은 `0x14000d010`(대소문자 무시 비교) @`0x1401ca3bb`.
+    public var mirror: Bool
+    /// `bounds[0]`. 주입 기본 문자열 **`"0 1"`**(`0x1401bc1d0`–`0x1401bc1ee`, 상수 `0x14048f734`).
+    public var boundsMin: Float
+    /// `bounds[1] − bounds[0]` — 파스가 **차를 굽는다**(`subss` @`0x1401ca37b`).
+    public var boundsSpan: Float
+    /// `controlpointstart`(≤7 클램프). 주입 기본 **0**(int 노드 직접 조립 `0x1401bc35e`–`0x1401bc39f`).
+    public var cpStart: Int
+    /// `controlpointend`(≤7 클램프). 주입 기본 **1**(`mov r8d,1` @`0x1401bc3a4` → `H_INT` @`0x1401bc3b4`).
+    public var cpEnd: Int
+    /// `flags` — bit0 수직성분×arc · bit1 속도×arc · bit2 `sizereductionamount` · bit3 `arcamount`.
+    /// 주입 기본 **0**(`xor r8d,r8d` @`0x1401bc3b9` → `H_INT` @`0x1401bc3c6`).
+    /// **함정 16**: 바로 앞 `mov r8d,1` 은 `controlpointend` 것이다 — 인접 `lea` 로 귀속하면
+    /// 여기 기본이 1 로 잘못 읽힌다.
+    ///
+    /// **[미해결 — 2026-08-21 신규] bit4(`0x10`)는 런타임 핸들러가 안 읽지만 죽은 비트가 아니다.**
+    /// 파스 꼬리 `0x1401ca637 test byte [rdi+0x1c],0x10` 이 서면(그리고 `[def+8] & 0x20` 이
+    /// 안 서면) **두 번째 스트림**(`[rsp+0x30]`, 이니셜라이저 스트림 `[rsp+0x48]` 과 별개)에
+    /// 썽크 `0x1401d8950`(opcode **4**, 레코드 `0x24`)로 레코드를 하나 더 찍는다
+    /// (`0x1401ca653`–`0x1401ca6ba`: `+0x10`=`asFloat(count)` · `+0x14`=**−1.0** ·
+    /// `+0x18`=**`0xd0`** · `+0x1c`=이 페이로드의 버퍼 내 바이트 오프셋). 그 스트림의 VM 을
+    /// 아직 안 짚었으므로 **효과는 미확정**이다. 동봉·설치 도달 **2선언**
+    /// (`presets/lightning/particles/presets/thunderbolt.json` `flags:23` ·
+    /// `…/thunderbolt_beam_child.json` `flags:19` — 둘 다 bit4 포함).
+    public var flags: Int
+    /// `arcamount`. 주입 기본 **0.3**(`movss xmm2,[0x140492694]` @`0x1401bc3cb` → `H_FLOAT` @`0x1401bc3dd`).
+    public var arcAmount: Float
+    /// `arcdirection`. 주입 기본 문자열 **`"0 1 0"`**(`0x1401bc3e2` → `H_STRING` @`0x1401bc3f3`,
+    /// 상수 `0x14048f6d0`). 동봉·설치 저작 **0건**.
+    public var arcDirection: Vec3
+    /// `sizereductionamount`. 주입 기본 **0.9**(`movss xmm2,[0x1404926e8]` @`0x1401bc3f8` →
+    /// `H_FLOAT` @`0x1401bc40a`). 동봉·설치 저작 **0건**.
+    public var sizeReduction: Float
+
+    /// 파스가 페이로드 `+0x00` 에 굽는 초기 스텝. 분모 하한 **1e-4**
+    /// (`0x1404925fc`, 적재 `0x1401c70a1` — 이니셜라이저 루프 진입 **전에** 한 번 잡고
+    /// 루프 전체를 지배한다. 루프 백에지 `0x1401c70c0` 이 `xmm10 = 1.0` 을 매 회 다시 잡는다).
+    /// **`around`(opid 13)와 다르다** — 그쪽은 `−1` 이 없다(`MapSequenceAroundSpec.step`).
+    public var step: Float { 1 / max(count - 1, 1e-4) }
+
+    public init(count: Float, mirror: Bool, boundsMin: Float, boundsSpan: Float,
+                cpStart: Int, cpEnd: Int, flags: Int,
+                arcAmount: Float, arcDirection: Vec3, sizeReduction: Float) {
+        self.count = count; self.mirror = mirror
+        self.boundsMin = boundsMin; self.boundsSpan = boundsSpan
+        self.cpStart = cpStart; self.cpEnd = cpEnd; self.flags = flags
+        self.arcAmount = arcAmount; self.arcDirection = arcDirection
+        self.sizeReduction = sizeReduction
+    }
+}
+
+/// `mapsequencearoundcontrolpoint`(opid 13) 의 페이로드 중 **파스↔핸들러 대응이 확정된 것만**.
+/// 레코드 `0x5c` / 페이로드 `0x58`(썽크 `0x1401d88f0` — `mov byte [rdx],0xd` / `mov word [rdx+2],0x5c`),
+/// 파스 `0x1401c9930`–`0x1401ca1c2`, 주입기 `0x1401bbc90`–`0x1401bc074`.
+///
+/// **[2026-08-21 신규] `docs/re/particle-control-points.md` §11 [미해결] 3 의 절반을 닫는다.**
+/// 종전엔 `speedmin`/`speedmax` 가 "어디로 가는지 미확정" 이었다. 둘 다 **vec3** 이고
+/// 자리·기본값·소비처를 전부 짚었다:
+///   · 파스 — `speedmin` → 페이로드 `+0x10/+0x14/+0x18`(`movsd` @`0x1401c9d82` + `mov` @`0x1401c9d9b`),
+///     `speedmax` → `+0x1c/+0x20/+0x24`(`0x1401c9db5` / `0x1401c9dbd`). 키 `lea` 는
+///     `0x1401c9b69`(min) · `0x1401c9c73`(max), 값은 `0x140085ca0`(asString) 뒤 `strtod` ×3.
+///   · 주입 기본 — **둘 다 `"0 0 0"`**(상수 `0x14048f4d4`; min 조립 `0x1401bbeb3`–`0x1401bbeda`,
+///     max `0x1401bbf7b` `mov edx,5`). 즉 부재면 속도 기여가 0 이다.
+///   · 소비 — 핸들러 `0x14023c4cf` 가 여섯 성분을 **전부** 읽는다:
+///     min `[r14+0x14]`(`0x14023c7d9`) · `[r14+0x18]`(`0x14023c7f9`) · `[r14+0x1c]`(`0x14023c7a0`),
+///     max `[r14+0x20]`(`0x14023c7d3`) · `[r14+0x24]`(`0x14023c7ef`) · `[r14+0x28]`(`0x14023c752`).
+///     사이에 균일난수 `0x1401f87a0` 호출이 정확히 셋(`0x14023c74d`·`0x14023c7c7`·`0x14023c7ea`)
+///     끼어 기저벡터 셋(페이로드 `+0x28`/`+0x34`/`+0x40`, 조립 `0x1401c19e0` @`0x1401c9ed4`)과
+///     섞여 스폰 속도가 된다.
+/// **[미해결]** 그 혼합의 정확한 대수식(축별 결합 순서)은 아직 안 옮겼다 — 추정으로 적지 않는다.
+///
+/// **[미해결 — 2026-08-21 신규] `around` 파스는 `flags` 를 한 번도 읽지 않는다.** 주입기는
+/// `flags` 기본 0 을 DOM 에 심지만(`xor r8d,r8d` @`0x1401bc002` → `H_INT` @`0x1401bc00f`),
+/// `0x1401c9930`–`0x1401ca1c2` 어디에도 `"flags"`(`0x14048f4cc`) `lea` 가 없다. 그런데
+/// `0x1401ca184 test byte [rsi+0x54],1` 이 그 자리를 읽어 두 번째 스트림 레코드
+/// (썽크 `0x1401d8910`, opcode 3, `0x24`)를 찍을지 고른다. **그래서 이 구조체에는 `flags` 를
+/// 싣지 않는다** — 읽히지 않는 값을 필드로 만들면 유령이 된다.
+///
+/// **파스·보존 전용**(시뮬 미배선).
+public struct MapSequenceAroundSpec: Equatable {
+    /// 주입 기본 **32**(`mov qword [rax],0x20` @`0x1401bbceb`).
+    public var count: Float
+    /// `limitbehavior == "mirror"`. 주입 기본 `"repeat"`(`H_STRING` @`0x1401bbfeb`, 상수 `0x14048f6f8`).
+    public var mirror: Bool
+    /// `bounds[0]`. 주입 기본 `"0 1"`(`0x1401bbd93`–`0x1401bbe13`, 상수 `0x14048f734`).
+    public var boundsMin: Float
+    /// `bounds[1] − bounds[0]`.
+    public var boundsSpan: Float
+    /// 주입 기본 `"0 0 0"`(`0x14048f4d4`).
+    public var speedMin: Vec3
+    /// 주입 기본 `"0 0 0"`(`0x14048f4d4`).
+    public var speedMax: Vec3
+    /// `axis` — 주입 기본 **`"0 0 1"`**(`lea r8,[0x14048f6e0]` @`0x1401bbfc4` → `H_STRING` @`0x1401bbfd5`).
+    /// Waple 의 `mapSequenceAxis` z축 레거시 기본과 같은 값이다.
+    public var axis: Vec3
+    /// `controlpoint`(≤7 클램프, `cmovb` @`0x1401c9b72` → `mov [rsi+0x50]` @`0x1401c9b75`).
+    /// 주입 기본 **0**(`xor r8d,r8d` @`0x1401bbff0` → `H_INT` @`0x1401bbffd`).
+    public var controlPoint: Int
+
+    /// **`between` 과 다르다 — `−1` 이 없다.** `around` 는 `asFloat(count)` 를 곧장
+    /// `comiss xmm14`(1e-4) 와 비교하고(`0x1401c99a5`) `1.0 / 그것`을 굽는다(`0x1401c99ef`).
+    /// `between` 은 그 앞에 `subss xmm0, xmm10`(=−1.0) 이 하나 더 있다(`0x1401ca249`).
+    public var step: Float { 1 / max(count, 1e-4) }
+
+    public init(count: Float, mirror: Bool, boundsMin: Float, boundsSpan: Float,
+                speedMin: Vec3, speedMax: Vec3, axis: Vec3, controlPoint: Int) {
+        self.count = count; self.mirror = mirror
+        self.boundsMin = boundsMin; self.boundsSpan = boundsSpan
+        self.speedMin = speedMin; self.speedMax = speedMax
+        self.axis = axis; self.controlPoint = controlPoint
+    }
+}
+
 public struct ParticleSystemDef: Equatable {
     public let emitters: [Emitter]
     public let initializers: [Initializer]
@@ -1728,6 +1894,17 @@ public struct ParticleSystemDef: Equatable {
     /// `mapSequenceAxis` 와 같은 관례다. 유도·소비 근거는 `Initializer.mapSequence` 주석.
     /// **파스·보존 전용**(시뮬 미배선).
     public var mapSequenceArcAmount: Float? = nil
+    /// `mapsequencebetweencontrolpoints` 선언 **하나당 하나**. `mapSequenceAxis`/`mapSequenceArcAmount`
+    /// 가 "마지막이 승" 인 def 레벨 스칼라인 것과 달리 이쪽은 **배열**이다 —
+    /// `controlpointstart`/`controlpointend`/`flags` 는 선언마다 다를 수 있어서 접으면 잃는다.
+    /// (동봉·설치 코퍼스에서 한 파일이 `between` 을 둘 이상 선언하는 경우는 없지만, 구조적으로
+    /// 접을 이유가 없다.) 선언 순서 = JSON `initializer[]` 순서.
+    ///
+    /// **파스·보존 전용**(시뮬 미배선) — `MapSequenceBetweenSpec` 주석 참조.
+    public var mapSequenceBetween: [MapSequenceBetweenSpec] = []
+    /// `mapsequencearoundcontrolpoint` 선언당 하나. 위와 같은 이유로 배열이다.
+    /// **파스·보존 전용** — `MapSequenceAroundSpec` 주석 참조.
+    public var mapSequenceAround: [MapSequenceAroundSpec] = []
     /// rope/ropetrail 렌더러 확장 키(@0x48fbb0–0x48fc18) — 모델 노출 전용(렌더 소비 보류).
     public var ropeOptions: RopeRenderOptions? = nil
 
@@ -1827,11 +2004,16 @@ public struct ParticleSystemDef: Equatable {
     ///      파티클 이니셜라이저 바인더 어디에도 이 문자열 `lea` 가 없다.
     /// 착지 자리는 `WapleCore/PropertyAnimation.swift` 의 options 파스이고 **이 파일 밖**이다.
     private static func parseInitializers(_ jsonArray: [Any])
-        -> (inits: [Initializer], mapSeqAxis: Vec3?, mapSeqArcAmount: Float?) {
+        -> (inits: [Initializer], mapSeqAxis: Vec3?, mapSeqArcAmount: Float?,
+            mapSeqBetween: [MapSequenceBetweenSpec], mapSeqAround: [MapSequenceAroundSpec]) {
         var inits: [Initializer] = []
         var mapSeqAxis: Vec3? = nil   // F630: mapsequencearoundcontrolpoint "axis"
         // `arcamount` 는 between 분기 전용이라 케이스 연관값이 아니라 여기서 걷어 def 에 싣는다.
         var mapSeqArcAmount: Float? = nil
+        // 페이로드 전문(선언당 하나). 케이스 시그니처를 흔들지 않으려고 def 에 싣는다 —
+        // `mapSequenceAxis` 와 같은 관례지만 이쪽은 선언별 값이라 **배열**이다.
+        var mapSeqBetween: [MapSequenceBetweenSpec] = []
+        var mapSeqAround: [MapSequenceAroundSpec] = []
         for case let i as [String: Any] in jsonArray {
             switch i["name"] as? String {
             case "lifetimerandom":
@@ -1969,6 +2151,17 @@ public struct ParticleSystemDef: Equatable {
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: false))
                 // F630: "0 1 0" 같은 회전축 — 각도 평면 선택(기본 z축 레거시, 마지막 지정 승).
                 mapSeqAxis = pvec3(i["axis"]) ?? mapSeqAxis
+                // 페이로드 전문(파스·보존 전용) — 근거는 `MapSequenceAroundSpec` 주석.
+                // `flags` 는 **일부러 안 싣는다**: around 파스는 그 키를 읽지 않는다(미해결).
+                let ab = mapSeqBoundsPair(i["bounds"])
+                mapSeqAround.append(MapSequenceAroundSpec(
+                    count: injected(i, "count", 32),
+                    mirror: (i["limitbehavior"] as? String) == "mirror",
+                    boundsMin: ab.x, boundsSpan: ab.y - ab.x,
+                    speedMin: injectedVec3(i, "speedmin", Vec3(x: 0, y: 0, z: 0)),
+                    speedMax: injectedVec3(i, "speedmax", Vec3(x: 0, y: 0, z: 0)),
+                    axis: injectedVec3(i, "axis", Vec3(x: 0, y: 0, z: 1)),
+                    controlPoint: mapSeqClampCP(i["controlpoint"], injected: 0)))
             case "mapsequencebetweencontrolpoints":
                 // count 부재 기본 **32**(주입기 0x1401bc080, 인라인 tag=int @0x1401bc09f).
                 // 게이트: `stricmp`@0x1401ca1e1 → 호출부 0x1401ca214.
@@ -1977,6 +2170,18 @@ public struct ParticleSystemDef: Equatable {
                 inits.append(.mapSequence(count: injected(i, "count", 32),
                                           mirror: (i["limitbehavior"] as? String) == "mirror", between: true))
                 mapSeqArcAmount = injected(i, "arcamount", 0.3)
+                // 페이로드 전문(파스·보존 전용) — 근거는 `MapSequenceBetweenSpec` 주석.
+                let bb = mapSeqBoundsPair(i["bounds"])
+                mapSeqBetween.append(MapSequenceBetweenSpec(
+                    count: injected(i, "count", 32),
+                    mirror: (i["limitbehavior"] as? String) == "mirror",
+                    boundsMin: bb.x, boundsSpan: bb.y - bb.x,
+                    cpStart: mapSeqClampCP(i["controlpointstart"], injected: 0),
+                    cpEnd: mapSeqClampCP(i["controlpointend"], injected: 1),
+                    flags: injectedInt(i, "flags", 0),
+                    arcAmount: injected(i, "arcamount", 0.3),
+                    arcDirection: injectedVec3(i, "arcdirection", Vec3(x: 0, y: 1, z: 0)),
+                    sizeReduction: injected(i, "sizereductionamount", 0.9)))
             case "positionoffsetrandom":
                 // `octaves` 클램프는 **부호 없는** 비교다 — `cmp eax,8 / jae → 8` 뒤 `cmp eax,1 /
                 // cmovb → 1`(0x1401c9387–0x1401c9399). 음수는 8 로 간다.
@@ -2014,7 +2219,7 @@ public struct ParticleSystemDef: Equatable {
                 WapleLog.warn("[Waple] SP4 unsupported initializer dropped: \(other ?? "nil")")
             }
         }
-        return (inits, mapSeqAxis, mapSeqArcAmount)
+        return (inits, mapSeqAxis, mapSeqArcAmount, mapSeqBetween, mapSeqAround)
     }
 
     /// operator JSON 배열 → (파싱된 오퍼레이터, attract CP 인덱스 쌍, vortex 오디오반응) 조립.
@@ -2576,7 +2781,8 @@ public struct ParticleSystemDef: Equatable {
             }
         }
 
-        var (inits, mapSeqAxis, mapSeqArcAmount) = Self.parseInitializers(json["initializer"] as? [Any] ?? [])
+        var (inits, mapSeqAxis, mapSeqArcAmount, mapSeqBetween, mapSeqAround)
+            = Self.parseInitializers(json["initializer"] as? [Any] ?? [])
 
         // 인스턴스 오버라이드(배수) 적용 — 이미터 rate/버스트, 이니셜라이저 min/max.
         // 배수 대상 이니셜라이저가 프리셋에 없으면 주입(스폰 기본 1 × 배수 = 배수 자체; m==1 은 무의미라
@@ -2890,6 +3096,8 @@ public struct ParticleSystemDef: Equatable {
         def.orientation = orientation
         def.mapSequenceAxis = mapSeqAxis
         def.mapSequenceArcAmount = mapSeqArcAmount
+        def.mapSequenceBetween = mapSeqBetween
+        def.mapSequenceAround = mapSeqAround
         def.ropeOptions = ropeOpts
         def.controlPointFlags = controlPointFlags
         def.controlPointParent = controlPointParent
@@ -3016,6 +3224,34 @@ private func saturatedCount(_ v: Float) -> Int {
     guard p.isFinite else { return 0 }
     return p <= 0 ? 0 : (p >= Float(Int.max) ? Int.max : Int(p))
 }
+/// `mapsequence*` 의 `bounds` — 실물은 `asString`(`0x140085ca0`) 뒤 **`strtod` 2회**로 읽는다
+/// (between `0x1401ca2d0`–`0x1401ca354`, around `0x1401c9a22`–`0x1401c9ab5`).
+/// 스캔 규약이 형제 vec3 파서와 같다: 첫 토큰 → **첫 공백까지 전진 → 공백 스킵** → 둘째 토큰.
+/// 버퍼는 스캔 전에 0 으로 채워지므로(`0x14019e8d0` @`0x1401ca2e3`) **토큰이 하나뿐이면 둘째는 0** 이다.
+/// 오디오의 `bounds2` 가 성분 2개를 요구하는 것과 다르다 — 그래서 이 자리에 따로 둔다.
+///
+/// 주입기 규약(부재에만 상수 주입, 있는데 못 읽히면 0)을 그대로 따른다: 부재 → `"0 1"`,
+/// 문자열이 아니거나 숫자를 하나도 못 뽑으면 `(0, 0)`.
+/// **[미해결]** `strtod` 는 `"abc"` 에도 0 을 돌려주므로 실물은 "못 읽음" 과 "0" 을 구분하지 않는다.
+/// 여기 `(0, 0)` 폴백이 그 자리를 재현하지만, 부분 접두 숫자(`"1abc 2"`)까지는 안 맞춘다 —
+/// 동봉·설치 코퍼스의 `bounds` 저작은 전건 `"0 1"`(2선언)이라 도달이 없다.
+private func mapSeqBoundsPair(_ v: Any?) -> Vec2 {
+    guard v != nil else { return Vec2(x: 0, y: 1) }             // 주입 기본 "0 1"
+    guard let s = v as? String else { return Vec2(x: 0, y: 0) }
+    let f = floatList(s)
+    guard !f.isEmpty else { return Vec2(x: 0, y: 0) }
+    return Vec2(x: f[0], y: f.count >= 2 ? f[1] : 0)
+}
+
+/// `mapsequence*` 의 CP 인덱스 클램프 — `cmp r,7` + `cmovb`(**부호 없는** below)다
+/// (between `0x1401ca435`–`0x1401ca456`, around `0x1401c9b64`–`0x1401c9b75`).
+/// 즉 음수는 거대한 부호 없는 수가 되어 **7 로 접힌다**. 값은 `asInt`(`0x140085f70`) 로 읽으므로
+/// 불리언도 1/0 으로 받는다(함정 18) — `injectedInt` 가 그 규약이다.
+private func mapSeqClampCP(_ v: Any?, injected constant: Int) -> Int {
+    let raw = v == nil ? constant : (pint(v) ?? 0)
+    return UInt32(bitPattern: Int32(truncatingIfNeeded: raw)) < 7 ? raw : 7
+}
+
 private func pvec3(_ v: Any?) -> Vec3? { stringVec3(v) }
 /// `rotationrandom` 전용 — "x y z" 문자열, 또는 **숫자 스칼라를 z 성분에만**(x·y = 0).
 /// 이 자리는 태그 게이트가 실재하므로 숫자 분기는 `numericFloat`(불리언 거부)를 쓴다.
