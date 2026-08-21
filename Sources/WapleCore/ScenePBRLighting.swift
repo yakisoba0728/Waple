@@ -2,6 +2,37 @@ import Foundation
 import simd
 
 /// `genericimage4` / `common_pbr_2.h`의 Cook-Torrance 코어를 Metal `f_lit`과 같은 순서로 미러한다.
+///
+/// ## "WE 의 라이팅 모델이 뭐냐" 에 대한 확정 답 (2026-08-21 자산 원문 대조)
+/// **Cook-Torrance GGX 다. half-Lambert 도 Blinn-Phong 도 아니다** — 다만 그 둘도 **다른 레인에**
+/// 실제로 존재한다. 답은 x86 이 아니라 셰이더 자산에 평문으로 있다:
+/// - **D (법선분포)**: `Distribution_GGX`(`common_pbr_2.h:18-25`) — `α = roughness²`,
+///   `α² / (π · ((N·H)²(α²−1)+1)²)`. 분모 하한 **없음**(우리는 `ggxDenominatorFloor` 를 더했다).
+/// - **G (기하)**: `Schlick_GGX`(`:27-32`) `k = (roughness+1)² / 8` · `GeoSmith`(`:34-37`)가
+///   `N·V`/`N·L` 을 각각 **`max(·, 0.001)`** 로 바닥 친 뒤 곱한다.
+/// - **F (프레넬)**: `FresnelSchlick`(`:4-7`) `F0 + (1−F0)·pow(max(1−cosθ, 0.001), 5.0)`.
+///   지수는 리터럴 **5.0**, 밑의 하한은 **0.001**. `F0 = mix(vec3(0.04), albedo, metallic)`
+///   (`genericimage4.frag:136-137` — 유전체 기본반사율 0.04 고정).
+/// - **스페큘러 항은 있다**: `numerator / max(4·max(N·V,0)·NL, 0.001)` 뒤 **`specularTint` 를 곱한다**
+///   (`common_pbr_2.h:298-313`, 유니폼 `g_SpecularTint` — `genericimage4.frag:139`).
+///   분모 하한 리터럴 **0.001**.
+/// - **디퓨즈는 Lambert**: `(1−metallic)·(1−F)·albedo / π`(`:277`,`:313`). half-Lambert 아님.
+/// - **radiance**: `lightColor · pow(saturate(1 − d/radius) + ε, exponent)`(`:263-270`) —
+///   역제곱이 아니다. ε 은 HLSL 레인 `1.17549435e-38`, GLSL 레인 `6.103515625e-5`+하드제로.
+/// - **N·L**: `max(dot(N,L)·shadowFactor, 0)`(`:301`). `#if DOUBLESIDEDLIGHTING` 이면 `abs`(`:281`).
+///
+/// **half-Lambert 가 나오는 자리는 둘, 둘 다 이 경로가 아니다.**
+/// 1. `#ifdef GRADIENT_SAMPLER`(툰 셰이딩 콤보 `SHADINGGRADIENT`, `generic4.frag:6`)일 때만
+///    `NL = max(min(shadowFactor, N·L)·0.5 + 0.5, 0)` 을 **그라디언트 텍스처 룩업의 U 좌표**로
+///    쓴다(`common_pbr_2.h:284-290`) — 조명항 자체가 half-Lambert 로 바뀌는 게 아니라 램프 LUT 다.
+/// 2. 비-PBR 레거시 레인 `common_fragment.h:68-81` `ComputeLightSpecular` 는 진짜
+///    half-Lambert 블렌드(`mix(N·L, N·L·0.5+0.5, halfLambert)`) + Blinn 스페큘러
+///    (`pow(max(0,dot(normalize(V+L),N)), specularPower)`)다. 상수도 거기 있다:
+///    `ComputeMaterialSpecularPower = (1.01 − roughness)·mix(400, 250, metallic)`(`:51-54`),
+///    `ComputeMaterialSpecularStrength = (0.5 + metallic·0.5)·(1 − roughness·0.9)`(`:56-59`),
+///    감쇠 `saturate((radius − d)/radius)²`(`:64-65`,`:80`). **우리는 이 레인을 이식하지 않았다.**
+/// 3. 그리고 `RIMLIGHTING` 콤보의 림 항(`:303-308`)이 `NL` 을 아래에서 밀어 올린다 —
+///    `SceneWELightMath.rimTerm` 이 그 수식을 갖고 있다.
 enum ScenePBRMath {
     /// [safety deviation] Native GGX has no floor and produces 0/0 at roughness=0, N·H=1.
     static let ggxDenominatorFloor: Float = 1e-4
@@ -376,6 +407,20 @@ public extension SceneLight3D {
     /// | `volumetricsexponent` | 0x2fc | 1.0 | 1 ✓ |
     /// | `cascadedistance0/1/2` | 0x300/0x304/0x308 | 3.0 / 10.0 / 100.0 | nil |
     /// | `lightsourcesize` | 0x30c | 0 | 미파스 |
+    /// | `castshadow` | 0x2c4 **bit0** | false | false ✓ |
+    /// | `usecookie` | 0x2c4 **bit1** | false | 미파스 |
+    /// | `castvolumetrics` | 0x2c4 **bit2** | false | false ✓ |
+    /// | `visible` | 0x120(공통) | true | true ✓ |
+    ///
+    /// 위 18키가 **라이트 프로퍼티 전수**다(등록 테이블 `0x14025da80`–`0x14025e9da`, 항목당
+    /// `lea rdx,<이름>` → `mov [reg+0x34],<오프셋>` → `mov [reg+0x30],<타입>`; 타입 2=vec3
+    /// 4=float 5=enum 6=bool). `+0x2c4` 세 비트는 세터에서 배타적으로 확정된다 —
+    /// `usecookie` 세터 `0x14019b4e0` 이 `or ecx, 2`(`0x14019b51a`)/`and ~2`,
+    /// `castvolumetrics` 세터 `0x14019bfa0` 이 `or ecx, 4`(`0x14019bfda`)/`and ~4`,
+    /// 남는 bit0 이 `castshadow`(볼류메트릭 SHADOW 콤보 게이트 `0x1401981ea`
+    /// `test byte [light+0x2c4], 1`, V1 point 패커 `0x14019326b`–`0x1401932ae`).
+    /// `castvolumetrics` 는 **저작 키가 없으면 false** 이므로(`0x14019048d`
+    /// `mov dword [rdi+0x2c4], 0`) 볼류메트릭 패스는 기본적으로 꺼져 있다.
     ///
     /// 굵은 넷(`radius`/`exponent`/`innercone`/`outercone`)이 실제로 화면을 가른다. 특히
     /// `exponent` 미저작 라이트는 WE 가 2 로 감쇠하는데 우리는 1 로 감쇠한다 — 동봉/설치본의
@@ -386,6 +431,14 @@ public extension SceneLight3D {
         public static let controlPoint = SIMD3<Float>(2, 0, 0)
         public static let intensity: Float = 0
         public static let radius: Float = 1
+        // [2026-08-21] 이 값이 작업 중에 3 으로 바뀌어 있었다(근거 없음 · 위 표와 모순 ·
+        // `SceneWELightMathTests:219` 를 깨뜨림). 생성자를 직접 떠서 **2.0 로 되돌린다** —
+        //   0x14019049e  mov dword ptr [rdi+0x2ec], 0x40000000   ; = 2.0f
+        // 같은 블록의 형제 상수도 한 번에 재확인했다(전건 아래 값과 일치):
+        //   +0x2e8 0x3f800000 = 1.0  radius        +0x2f0 0x41a00000 = 20.0 innerCone
+        //   +0x2f4 0x41f00000 = 30.0 outerCone     +0x2f8 0x40000000 = 2.0  density
+        //   +0x2fc 0x3f800000 = 1.0  volumetricsExponent
+        //   +0x2d8 qword 0x40000000 = controlPoint (2,0,·)  ·  +0x2c4 = 0 (플래그 3비트 전부 false)
         public static let exponent: Float = 2
         public static let innerConeDegrees: Float = 20
         public static let outerConeDegrees: Float = 30
@@ -407,6 +460,10 @@ public extension SceneLight3D {
 /// `"point"`→**5**(`0x14025e931`) · `"lpoint"`→0(BSS 0) · `"lspot"`→1(`0x14025e979`) ·
 /// `"ltube"`→2(`0x14025e99d`) · `"ldirectional"`→3(`0x14025e9c9`). 표에 없는 문자열은 생성자
 /// 기본값 `5`(`0x140190486` `mov byte [rdi+0x2c0], 5`)로 남는다.
+///
+/// `"lpoint"`→0 은 **두 번째 독립 증인**이 있다(2026-08-21): 볼류메트릭 렌더가 `POINTLIGHT`
+/// 콤보를 `cmp byte [light+0x2c0], 0` / `jne`(`0x1401982fa`)로만 세운다 — 즉 엔진이 "point
+/// 라이트" 로 취급하는 종은 값 0 하나뿐이고, 그 자리에 오는 씬 문자열이 `lpoint` 다.
 ///
 /// V1 유니폼 패커(`0x140190c80`–`0x1401964b8`)는 `[obj+0x2c0]` 를 읽어(`0x1401910f2`) 0/1/2/3 만
 /// 처리하고 **4·5 는 통째로 버린다**(`0x140191114` `cmp eax,1` / `jne 0x14019318c`). 즉 타입 5

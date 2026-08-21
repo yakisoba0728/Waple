@@ -217,6 +217,15 @@ vec3 PerformLighting_V1(vec3 worldPos, vec3 color, vec3 normal, vec3 viewVector,
 
 1. **`ambient` 라는 인자 이름은 거짓말이다.** 호출부(`generic4.frag:122`)가 그 자리에 `f0` 를 넘긴다 —
    `ComputePBRLightShadow` 의 `baseReflectance`(프레넬 `F0`)다. 앰비언트는 §2.6 에서 따로 더해진다.
+   그 `f0` 의 정체도 자산에 평문으로 있다 — `genericimage4.frag:136-137`:
+
+   ```glsl
+   vec3 f0 = CAST3(0.04);
+   f0 = mix(f0, color.rgb, metallic);
+   ```
+
+   즉 **유전체 기본반사율 0.04 고정**이고 metallic 로 albedo 쪽으로 보간한다(업계 표준값).
+   Waple `ScenePBRMath.finiteContribution` 의 `0.04*(1-metallic) + albedo*metallic` 과 동일하다.
 2. **`radius` 는 `Color.w`, `exponent` 는 `Origin.w`** 다(spot 만 exponent 가 `g_LSpot_Exponent[i].x`).
    패커도 그렇게 쓴다(§3.3).
 3. **쿠키는 콘을 대체한다.** #3/#4 에는 `smoothstep` 콘 항이 아예 없다 — 쿠키 텍스처가 콘 모양을

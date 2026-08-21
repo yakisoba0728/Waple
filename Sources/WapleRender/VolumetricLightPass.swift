@@ -18,9 +18,13 @@ import WapleCore
 /// - **옮겼다**: 레이마치 자체(샘플 수 규칙·스텝 분할·반경 감쇠·콘 스무드스텝·최종 `×0.1` 스케일).
 ///   픽셀 값을 결정하는 부분은 전부 실물 수식이다.
 /// - **해석해로 대체**: 헐 입·출구 두 뎁스 패스 → **뷰 레이 ↔ 반경 구(球) 교차**. WE 의 헐 메시가
-///   포인트라이트에선 반경 구, 스팟에선 콘이고 프론트 vert 가 xy 를 0.99 배 하며
-///   (`volumetricsfront.vert:13`) 셰이더가 쓰는 반경도 `radius×0.99`(`0x140198760`)라, 구 교차가
-///   포인트라이트에 대해서는 동치다. 스팟 콘 헐은 구로 감싸고 콘 감쇠가 바깥을 0 으로 눌러 근사한다.
+///   포인트라이트에선 반경 구, 스팟에선 콘이고, 셰이더가 쓰는 반경(`VAR_SPOT_PARAMS_RADIUS`)이
+///   `radius × 0.99`(`0x140198760` f32=0.99, 종 무관)라 구 교차가 포인트라이트에 대해서는 동치다.
+///   스팟 콘 헐은 구로 감싸고 콘 감쇠가 바깥을 0 으로 눌러 근사한다.
+///   **[2026-08-21 정정] `volumetricsfront.vert:13` 의 0.99 는 이것과 다른 0.99 다.** 그건 헐 메시
+///   정점의 **xy 만** 줄이고(`a_Position * vec3(0.99, 0.99, 1.0)`) `#if POINTLIGHT` 가지(`:11`)에는
+///   **아예 없다** — 즉 콘 헐 단면을 살짝 좁혀 경계 새는 것을 막는 지오메트리 보정이지,
+///   유니폼 반경 스케일이 아니다. 두 0.99 를 한 근거로 묶어 인용하면 안 된다.
 /// - **남은 구멍(W-17 잔여)**: **씬 뎁스 클립이 없다.** 호출부(`SceneRenderer3D.swift:1466`)의
 ///   `depthTex` 는 `usage=[.renderTarget]`·`storeAction=.dontCare` 라 샘플할 수 없다. 그래서 샤프트가
 ///   아직 지오메트리를 통과한다. 이걸 닫으려면 그 뎁스 텍스처에 `.shaderRead` 를 주고 저장해야 하는데
@@ -41,7 +45,12 @@ struct VolumetricLightParameters: Equatable {
     let color: SIMD3<Float>
     /// `VAR_LIGHT_ORIGIN` = `g_RenderVar2.xyz` (`0x140198797`–`0x1401987a9`, 씬 키 `origin`).
     let position: SIMD3<Float>
-    /// `VAR_SPOT_FORWARD` = `g_RenderVar3.xyz` (`0x140198716`–`0x14019871d`). 라이트 → 바깥 방향.
+    /// `VAR_SPOT_FORWARD` = `g_RenderVar3.xyz` (`0x140198680`–`0x140198687`: `[light+0x320]` →
+    /// 상수블록 `+0xd8`). 라이트 → 바깥 방향.
+    /// **[2026-08-21 정정] 종전 인용 `0x140198716`–`0x14019871d` 는 한 칸 밀린 값이다** — 그 두
+    /// 명령은 `[light+0x310]` 을 `+0xa8`(= `g_RenderVar0` = `VAR_SHADOWMAP_TRANSFORMS`)에 싣는
+    /// 다른 쌍이다. 상수블록은 `+0xa8`부터 stride 0x10 이므로 `+0xd8` 이 `g_RenderVar3` 이고,
+    /// 그 자리에 실리는 것은 `0x140198680`(load `[rsi+0x320]`)/`0x140198687`(store)다.
     let direction: SIMD3<Float>
     /// `VAR_DENSITY` = `g_RenderVar2.w` (`0x1401987b2`, 씬 키 `density`, WE 기본 2.0 `0x1401904bc`).
     /// **순수 배수**다 — 거리 감쇠가 아니다(`volumetricsfront.frag:190`). 0 이면 화면에 아무것도 안 나온다.
@@ -51,13 +60,25 @@ struct VolumetricLightParameters: Equatable {
     let exponent: Float
     /// `VAR_SPOT_PARAMS_INTENSITY` = `g_RenderVar1.w` (`0x140198780`, 씬 키 `intensity`).
     let intensity: Float
-    /// `VAR_SPOT_PARAMS_INNER` = `g_RenderVar1.y`. **코사인**이다 — WE 는 저작 각(도)을
-    /// `cos(deg × π/180)` 로 굽는다(`0x1401986ac` f32=0.0174532924, `0x140198770`).
-    /// 호출부가 `SceneLight3D.forwardSpotConeCosines` 로 이미 코사인화해 넘긴다.
+    /// `VAR_SPOT_PARAMS_INNER` = `g_RenderVar1.y`. **코사인**이다 — WE 는 저작 각(도)에
+    /// deg2rad 만 곱해 `cosf` 에 넣는다: `0x140198724` load `[light+0x2f0]` → `0x14019872c`
+    /// `mulss xmm6`(= `0x140492628` f32=0.0174532924) → `0x140198730` `call 0x14041a2e0`
+    /// → `0x140198770` store `+0xbc`. `0x14041a2e0` 이 `cosf` 라는 근거: 소인수 경로가
+    /// `1.0 - x²·0.5`(상수 `0x140471bb0`=1.0 / `0x140471bc0`=0.5, `0x14041a340`–`0x14041a348`)이고
+    /// 극소 |x| 에서 `1.0`(`0x140471cb8`)을 반환한다.
+    ///
+    /// **⚠️ 즉 `innercone`/`outercone` 은 광축에서 잰 반각(도)이고, `× 0.5` 는 없다.**
+    /// V1 PBR 패커도 같다(`0x140192e64`–`0x140192e86` / `0x140192eaa`–`0x140192ebf`).
+    /// 그런데 **현재 호출부(`SceneRenderer3D.swift:1918`)는 `SceneLight3D.forwardSpotConeCosines`
+    /// 를 쓰고, 그 2D 포트는 아직 `* 0.5` 를 곱한다**(`SceneDocument.swift:962`) — 그래서 지금
+    /// 볼류메트릭 콘은 WE 의 절반 폭으로 그려진다. 같은 모듈에 **정본이 이미 있다**
+    /// (`Scene3DLighting.spotConeCosines` — 같은 변환의 3D 판이고 `* 0.5` 가 이미 지워져 있다).
+    /// 한 줄 교체가 남았고 그 파일은 이번 담당 밖이라 보고서로 넘긴다.
     let innerCone: Float
-    /// `VAR_SPOT_PARAMS_OUTER` = `g_RenderVar1.z` (`0x140198778`). 위와 동일하게 코사인.
+    /// `VAR_SPOT_PARAMS_OUTER` = `g_RenderVar1.z` (`0x140198778`). 위와 동일하게 코사인
+    /// (load `0x140198738` → `mulss` `0x140198740` → `cosf` `0x140198744`).
     /// 콘 데이터가 없는 라이트는 호출부가 `(inner:1, outer:-1)` 을 준다
-    /// (`SceneDocument.swift:734`) — 그게 POINTLIGHT 콤보의 신호다(아래 `isPointLight`).
+    /// (`SceneDocument.swift:961`) — 그게 아래 `isPointLight` 프록시의 신호다.
     let outerCone: Float
     /// `VAR_SPOT_PARAMS_RADIUS` = `g_RenderVar1.x` (`0x140198768`, 씬 키 `radius`).
     /// WE 는 여기에 `radius × 0.99` 를 넣는다(`0x140198760` f32=0.99).
@@ -75,10 +96,18 @@ struct VolumetricLightParameters: Equatable {
     /// `docs/re/volumetric-light.md` §6.1 에 있다.
     var radius: Float = 0
 
-    /// POINTLIGHT 콤보 여부. WE 는 라이트 종(`[light+0x2c0]`, `0x140198568`)으로 가르고
-    /// 그때 `spotCookie = 1.0`(`:137`) · `maxLightScale ×0.5`(`:119`) 로 간다.
-    /// Waple 호출부는 종을 넘기지 않으므로 콘 코사인의 퇴화값으로 판정한다 —
-    /// `forwardSpotConeCosines` 는 콘 없는 라이트에만 `outer = -1` 을 낸다(`SceneDocument.swift:734`).
+    /// POINTLIGHT 콤보 여부. **WE 의 판정은 라이트 종 하나다** — `0x1401982fa`
+    /// `cmp byte [light+0x2c0], 0` / `jne 0x140198445`(콤보 설정 블록을 건너뜀), 콤보 이름
+    /// 문자열 `"POINTLIGHT"` 는 SSO 라 `lea` 가 아니라 `movsd 0x140491a90` + `movzx 0x140491a98`
+    /// 로 온다. `[light+0x2c0]` 은 `"lpoint"`=0 이므로 **POINTLIGHT ⟺ `light == "lpoint"`** 다.
+    /// 그때 셰이더가 `spotCookie = 1.0`(`:137`) · `maxLightScale ×0.5`(`:119`) 로 간다.
+    /// (종전 인용 `0x140198568` 은 명령 경계도 아니다 — `0x140198563 call` 중간이다.)
+    ///
+    /// Waple 호출부는 종을 넘기지 않으므로 콘 코사인의 퇴화값으로 **근사 판정**한다.
+    /// 코퍼스에서는 일치한다(콘을 저작하는 라이트는 `lspot` 5개뿐 — 워크샵 162 씬 실측).
+    /// **다만 정확하지는 않다**: `ldirectional`(종 3)은 콘 미저작이라 여기서 point 로 잡히는데
+    /// WE 는 `#else` 가지(스팟 스무드스텝, 기본 콘 20°/30°)로 간다. 도달 0건이라 화면 영향은
+    /// 없지만 종 문자열을 넘기면 프록시 없이 닫힌다 — 호출부 소관이라 보고서로 넘긴다.
     var isPointLight: Bool { outerCone <= -0.999 }
 }
 
@@ -403,7 +432,8 @@ enum VolumetricMath {
         return t * t * (3 - 2 * t)
     }
 
-    /// `volumetricsfront.vert:13` + `0x140198760` — 셰이더가 받는 헐 반경은 `radius × 0.99`.
+    /// `0x140198760`(f32=0.99) — 셰이더가 받는 `VAR_SPOT_PARAMS_RADIUS` 는 `radius × 0.99` 다
+    /// (종 무관). `volumetricsfront.vert:13` 의 0.99 는 **다른 것**이다(헐 메시 xy, 스팟 가지 전용).
     /// 반경 미저작(0 이하)이면 WE 라이트 생성자 기본값 1.0(`0x140190494`)을 쓴다.
     static func hullRadius(radius: Float) -> Float { (radius > 0 ? radius : 1) * 0.99 }
 
