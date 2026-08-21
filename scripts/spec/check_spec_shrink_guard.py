@@ -42,14 +42,29 @@ sys.path.insert(0, HERE)
 import specfmt  # noqa: E402
 
 # `json.dump` 를 직접 부르지만 **정본이 아닌** 곳. 새로 생기면 검사가 실패하므로
-# 반드시 사람이 보고 등록해야 한다 — 휴리스틱(문자열 포함 검사)으로 걸러내면 진짜 우회를
+# 반드시 사람이 보고 등록해야 한다 — 휴리스틱(문자열 **포함** 검사)으로 걸러내면 진짜 우회를
 # 놓친다. 각 항목은 "무엇을 쓰는가 / 왜 정본이 아닌가"를 적는다.
-RAW_DUMP_ALLOWED = {
+#
+# **[2026-08-21] 열쇠를 줄 번호에서 줄 내용으로 바꿨다.** 종전엔 `(파일, 줄번호)` 였는데
+# 그 줄 **위**에 한 줄만 더해도 이 검사가 붉어진다 — 면제가 밀려난 자리를 가리키게 되고,
+# 진짜 raw dump 는 새 줄 번호로 신고된다. 실제로 당했다: `measure_tex_deep.py` 에
+# 코퍼스 범위를 넓히는 패치를 넣자 이 검사가 실패했고, 패치를 "493행 위 순증 0" 이라는
+# 인위적 제약에 맞춰 다시 짜야 했다(코드 주석을 문서로 밀어내면서). 검사가 잡으라고
+# 만들어진 것(관문 우회)이 아니라 **무관한 편집**을 막고 있었다는 뜻이다.
+#
+# 대신 쓰는 것은 그 줄의 **정확한 전문 일치**(strip 후 `==`)다. 부분 문자열 검사가 아니므로
+# 원래 주석이 경고한 "진짜 우회를 놓친다" 는 그대로 피한다 — 인자 하나만 달라져도 면제가
+# 풀린다. 같은 줄이 파일 안에 여러 번 나오면 전부 면제되지만, 이 두 줄은 각각 1회뿐이고
+# (아래 [4b] 가 매 실행마다 그것을 검사한다) 애초에 같은 문장이 두 번 있으면 둘 다 같은
+# 사유로 면제 대상이다.
+RAW_DUMP_ALLOWED_LINES = {
     # 사용자가 `--json <path>` 로 지정한 임시 산출물. spec/ 아래로 가지 않고
     # 정본 스키마도 아니다(entries 없는 원시 측정 덤프).
-    ("measure_mip_luma.py", 269),
+    ("measure_mip_luma.py",
+     "json.dump(r, fh, ensure_ascii=False, indent=1)"),
     # tex 사이드카를 임시 디렉터리(`tmp`)에 풀어 놓고 되읽는 중간 산출물.
-    ("measure_tex_deep.py", 493),
+    ("measure_tex_deep.py",
+     'json.dump(sidecar, open(os.path.join(tmp, tag + ".tex-json"), "w"))'),
 }
 
 FAILS = []
@@ -256,6 +271,24 @@ def main():
             else:
                 ok(f"[실사] {label} 차단")
 
+        print("[4b] raw-dump 면제 목록이 살아 있는가")
+        # 면제는 **썩는다**. 면제된 줄이 지워지거나 인자가 바뀌면 조용히 아무것도 면제하지
+        # 않는 죽은 항목이 되고, 그 자리에 새로 생긴 진짜 raw dump 를 사람이 "이미 면제된
+        # 자리" 로 착각한다. 그러니 각 항목이 **정확히 1회** 존재하는지 매번 확인한다.
+        # (줄 번호 열쇠는 이걸 못 했다 — 항상 어떤 줄이든 가리키므로 늘 살아 있어 보였다.)
+        for path, want in sorted(RAW_DUMP_ALLOWED_LINES):
+            full = os.path.join(HERE, path)
+            if not os.path.exists(full):
+                fail(f"[면제] {path} 가 없다 — RAW_DUMP_ALLOWED_LINES 에서 지워라")
+                continue
+            hits = sum(1 for ln in open(full, encoding="utf-8").read().splitlines()
+                       if ln.strip() == want)
+            if hits == 1:
+                ok(f"[면제] {path} — 1회")
+            else:
+                fail(f"[면제] {path} 에서 면제 줄이 {hits}회 발견됐다(1회여야 한다): {want}\n"
+                     f"        줄이 바뀌었으면 RAW_DUMP_ALLOWED_LINES 를 그 줄로 갱신하라.")
+
         print("[5] 관문 우회 — 생성기가 specfmt.dump 를 건너뛰지 않는가")
         for path in sorted(os.listdir(HERE)):
             if not path.startswith("measure_") or not path.endswith(".py"):
@@ -271,7 +304,7 @@ def main():
                                  r"\.write\s*\(\s*json\.dumps", src):
                 line = src[:m.start()].count("\n") + 1
                 body = src.splitlines()[line - 1].strip()
-                if (path, line) in RAW_DUMP_ALLOWED:
+                if (path, body) in RAW_DUMP_ALLOWED_LINES:
                     continue
                 fail(f"[우회] {path}:{line} 이 specfmt.dump 없이 정본을 직접 쓴다 — {body}\n"
                      f"        정본이 아니면 RAW_DUMP_ALLOWED 에 사유와 함께 등록하라.")
