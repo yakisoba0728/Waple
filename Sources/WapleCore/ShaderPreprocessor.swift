@@ -114,7 +114,20 @@ public enum ShaderPreprocessor {
     /// 결과라 노출에 위험이 없다.
     public static func parseComboDefaults(_ source: String) -> [String: Int] {
         var out: [String: Int] = [:]
-        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+        // **CRLF 함정 — 반드시 `isNewline` 로 쪼갠다.** Swift 의 `"\r\n"` 은 **단일 grapheme** 이라
+        // `split(separator: "\n")` 에 걸리지 않는다. 동봉 셰이더는 `.vert`/`.frag`/`.h` **498개 전건이
+        // CRLF** 이므로, 종전 구현은 파일 전체를 한 줄로 보고 `guard line.contains("[COMBO]")` 를
+        // 통과한 뒤 **첫 `[COMBO]` 하나만** 돌려주고 있었다(실측: `shaders/fur4.frag` 의 6개 중
+        // `LIGHTING` 만 — FOG/REFLECTION/RIMLIGHTING/SHADINGGRADIENT/INSTANCECOUNT 전부 유실).
+        // `[COMBO]` 가 2개 이상인 동봉 셰이더가 **59개**다.
+        //
+        // 왜 여태 안 터졌나: `preprocessStrict`(:20-22)가 **자기 입력만** CRLF 정규화하고 그 안에서
+        // 다시 부르므로 단일 스테이지 기본값은 복구된다. 구멍은 **정규화 밖의 호출부**다 —
+        // `GLSLTranslator._translate`(:173)의 교차스테이지 union 과
+        // `WapleRender/SceneRendererResources.swift:948-949`의 `resolvePassCombos` 가 raw 소스를 넘긴다.
+        // 형제 함수 `GLSLTranslator.samplerCombos`/`formatComboSlots` 는 이미 `isNewline` 로 쪼개고
+        // 그 이유를 주석에 적어 두었다 — 그 수정이 이 함수로 전파되지 않았던 것이다.
+        for line in source.split(whereSeparator: { $0.isNewline }) {
             guard line.contains("[COMBO]") else { continue }
             guard let combo = jsonString(in: line, key: "combo") else { continue }
             out[combo] = jsonInt(in: line, key: "default") ?? 0
@@ -489,14 +502,19 @@ public enum ShaderPreprocessor {
     /// S2-shaderlab①: WE 바이너리 셰이더 shim 전수 대조 8종 + 로컬 확장 2종 + 샘플러 전달 매크로 4종.
     /// CASTU/CASTI/CASTF 는 스칼라라 MSL 생성자 스펠링 동일 — 별도 치환 불요.
     /// DECLARE_SAMPLER2D_PARAMETER/MAKE_SAMPLER2D_ARGUMENT: 텍스처/샘플러를 Waple MSL 규약에 맞게
-    /// `sampler2D t` / `t` 로 전개(COMPARE 계열은 SampleCmp 미지원 — 사용 시 번역 실패 폴터, 선언만 수용).
+    /// `sampler2D t` / `t` 로 전개.
+    /// [2026-08-21 정정] COMPARE 계열은 종전 `sampler2D t` 로 전개했고 주석은 "SampleCmp 미지원 —
+    /// 사용 시 번역 실패 폴터, 선언만 수용" 이었다. `texSample2DCompare` 재작성이 들어오면서
+    /// 그 전제가 깨진다 — 헬퍼 파라미터가 `texture2d<float>` 로 방출되면 `sample_compare` 가 없어
+    /// 컴파일이 터진다. 비교 샘플러 전용 타입으로 전개해 `depth2d<float>` 파라미터가 되게 한다
+    /// (실물 소비처: `shaders/common_pbr_2.h:75,80-83` 의 PerformShadowMapping 계열).
     private static let builtinCastMacros: [(String, String)] = [
         ("CAST2", "vec2(x)"), ("CAST3", "vec3(x)"), ("CAST4", "vec4(x)"),
         ("CAST2X2", "mat2(x)"), ("CAST3X3", "we_cast3x3(x)"), ("CAST4X4", "mat4(x)"),
         ("CASTI", "int(x)"), ("CASTU", "uint(x)"), ("CASTF", "float(x)"), ("CAST4U", "uint4(x)"),
         ("DECLARE_SAMPLER2D_PARAMETER", "sampler2D x"),
         ("MAKE_SAMPLER2D_ARGUMENT", "x"),
-        ("DECLARE_SAMPLER2D_COMPARE_PARAMETER", "sampler2D x"),
+        ("DECLARE_SAMPLER2D_COMPARE_PARAMETER", "sampler2DComparison x"),
         ("MAKE_SAMPLER2D_COMPARE_ARGUMENT", "x"),
     ]
 }

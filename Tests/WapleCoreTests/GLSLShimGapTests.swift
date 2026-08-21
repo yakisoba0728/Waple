@@ -72,7 +72,10 @@ final class GLSLShimGapTests: XCTestCase {
         // 전개 결과는 Waple 의 텍스처/샘플러 쌍 규약에서 유효한 선언: `sampler2D t` / `t`.
         XCTAssertTrue(pp.contains("vec4 fetch(sampler2D g_Texture0, vec2 uv)"), pp)
         XCTAssertTrue(pp.contains("texSample2D(g_Texture0, uv)"), pp)
-        XCTAssertTrue(pp.contains("vec4 fetchCmp(sampler2D g_Texture1, vec2 uv)"), pp)
+        // [2026-08-21] COMPARE 계열은 `sampler2DComparison` 으로 전개된다(종전 `sampler2D`).
+        // texSample2DCompare 재작성이 들어오면서 헬퍼 파라미터가 `depth2d<float>` 여야
+        // `sample_compare` 가 유효해졌다 — mslType("sampler2DComparison") 참조.
+        XCTAssertTrue(pp.contains("vec4 fetchCmp(sampler2DComparison g_Texture1, vec2 uv)"), pp)
         XCTAssertTrue(pp.contains("texSample2D(g_Texture1, uv)"), pp)
         XCTAssertFalse(pp.contains("DECLARE_SAMPLER2D"))
         XCTAssertFalse(pp.contains("MAKE_SAMPLER2D"))

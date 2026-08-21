@@ -2,6 +2,18 @@ import Foundation
 
 public enum GLSLType: String, Equatable {
     case float, vec2, vec3, vec4, mat2, mat3, mat4, mat4x3, sampler2D
+    /// 비교(섀도우) 샘플러 — `sampler2DComparison`(shader-strings.txt :25)은 HLSL 백엔드에서
+    /// `Texture2D` + `SamplerComparisonState` 쌍으로 선언된다(같은 파일 :32 `SamplerComparisonState:register(s`,
+    /// :34 `SamplerComparisonState `). MSL 대응은 `depth2d<float>` + `sampler_compare`.
+    /// 동봉 실물 선언 9건 — `shaders/generic4.frag:24`, `chroma4.frag:23`, `fur4.frag:23`,
+    /// `foliage4.frag:25`, `genericimage4.frag:9`, `genericparticle.frag:46`,
+    /// `genericropeparticle.frag:40`, `volumetricsfront.frag:11` 여덟과
+    /// `effects/fluidsimulation/shaders/effects/fluidsimulation_combine.frag` 하나
+    /// (전건 `"default":"_rt_shadowAtlas"` 어노테이션).
+    case sampler2DComparison
+    /// 3D 볼륨 텍스처 — `sampler3D`(shader-strings.txt :24, 짝 선언 :29 `Texture3D `). 동봉 실물 1건:
+    /// `shaders/ccsimple.frag:9`(컬러그레이딩 LUT). MSL 대응은 `texture3d<float>`.
+    case sampler3D
 
     /// GLSL(vec2)·HLSL(float2) 타입명 겸용 해석 — WE 방언은 혼용한다(실물 rand_1_05(in float2 uv)).
     public static func from(_ s: String) -> GLSLType? {
@@ -25,7 +37,16 @@ public enum GLSLType: String, Equatable {
         case .vec4: return "float4"; case .mat2: return "float2x2"; case .mat3: return "float3x3"; case .mat4: return "float4x4"
         case .mat4x3: return "float4x3"   // WE shim :46 #define mat4x3 float4x3(MSL float4x3 존재)
         case .sampler2D: return "texture2d<float>"
+        case .sampler2DComparison: return "depth2d<float>"
+        case .sampler3D: return "texture3d<float>"
         }
+    }
+    /// 텍스처 슬롯(`g_TextureN`)으로 등록돼야 하는 샘플러 타입인가 — 머티리얼 파라미터 분류의 여집합.
+    /// 종전엔 `== .sampler2D` 한 곳뿐이라 `sampler2DComparison`/`sampler3D` 선언이 파스에서 통째로
+    /// 탈락했고(GLSLType.from 이 nil), 본문 스캔 폴백이 같은 슬롯을 **texture2d 로** 등록해
+    /// `depth2d`/`texture3d` 로 선언돼야 할 슬롯이 조용히 2D 로 굳었다.
+    var isTextureSampler: Bool {
+        switch self { case .sampler2D, .sampler2DComparison, .sampler3D: return true; default: return false }
     }
     /// float4 슬롯 내 스위즐(파라미터당 float4 패킹).
     var swizzle: String { switch self { case .float: return ".x"; case .vec2: return ".xy"; case .vec3: return ".xyz"; default: return "" } }
@@ -170,15 +191,20 @@ public enum GLSLTranslator {
 
         var textures: [Int] = []
         var textureDefaults: [Int: String] = [:]
+        // 슬롯별 MSL 텍스처 선언 종류. 미등재 슬롯(본문 스캔으로만 발견)은 texture2d<float> 기본.
+        // depth2d/texture3d 는 sample 호출 형태가 다르므로 선언만 바꿔도 안 되고
+        // texSample2DCompare/texSample3D 재작성과 **짝**이다(둘 중 하나만 있으면 컴파일 실패).
+        var textureKinds: [Int: GLSLType] = [:]
         var materials: [MaterialParam] = []
         var usesAudio = false
         for u in allUniforms {
-            if u.type == .sampler2D, let n = textureIndex(u.name) {
+            if u.type.isTextureSampler, let n = textureIndex(u.name) {
                 textures.append(n)
+                if u.type != .sampler2D { textureKinds[n] = u.type }
                 if let def = u.annotationDefaultTexture, !def.isEmpty { textureDefaults[n] = def }
             }
             else if isEngine(u.name) { if u.name.contains("AudioSpectrum") { usesAudio = true } }
-            else if u.type != .sampler2D {
+            else if !u.type.isTextureSampler {
                 let key = u.annotationMaterial ?? defaultKey(u.name)
                 materials.append(MaterialParam(glslName: u.name, type: u.type, sceneKey: key,
                                                defaultValue: u.annotationDefault ?? engineNeutralDefault(u.name, u.type)))
@@ -242,6 +268,17 @@ public enum GLSLTranslator {
         // WE PS_INPUT 의 gl_Position 도 픽셀 좌표(RE: gl_Position 심 — vertex 측 out.gl_Position(:1399)
         // 과는 별개 매핑). frag 본문의 gl_Position 참조를 in.gl_Position 로.
         frag["gl_Position"] = "in.gl_Position"
+        // WE 방언의 정수 빌트인(HLSL SV_ 시맨틱 대응). 원문 선언은 `in uint gl_VertexID;`(실물
+        // `shaders/generic4.vert:44`, `generic3.vert:43`, `shadowcaster.vert:24`) / `varying uint
+        // gl_ViewportIndex;`(`shadowcaster.vert:11`, `shadowcasterfoliage4.vert:13`,
+        // `shadowcasterfur4.vert:11`) 인데, `in ...` 줄은 uniform/varying/attribute 어느 파서에도
+        // 안 잡히고 `varying uint` 은 GLSLType.from("uint")==nil 로 탈락한다 — 즉 **선언은 사라지고
+        // 본문 참조만 남아** MSL 미정의 식별자가 됐다(동봉 실물 전수: VertexID 8 · InstanceID 4 ·
+        // ViewportIndex 3 셰이더).
+        // gl_VertexID/gl_InstanceID 는 MSL 에서 이름 그대로의 함수 파라미터가 되므로 치환이 없고
+        // (assemble 이 [[vertex_id]]/[[instance_id]] 를 붙인다), gl_ViewportIndex 만 Vary 멤버라
+        // out. 접두가 필요하다.
+        vert["gl_ViewportIndex"] = "out.gl_ViewportIndex"
 
         // 함수 파싱은 주석 제거본에서(annotation JSON 중괄호가 balance 를 깨지 않도록).
         var vFns = parseFunctions(vClean, structs: structNames)
@@ -368,7 +405,8 @@ public enum GLSLTranslator {
 
         // 헬퍼 캡처 분석: 본문이 참조하는 컨텍스트 심볼(머티리얼/엔진/varying/attribute/텍스처/오디오/샘플러)을
         // 추가 파라미터로 승격. 호출 그래프 전이 폐쇄(A→B 호출 시 A ⊇ B).
-        let captureOf = computeCaptures(helpers: helpers, materials: materials, varyings: varyings, textures: textures)
+        let captureOf = computeCaptures(helpers: helpers, materials: materials, varyings: varyings,
+                                        textures: textures, textureKinds: textureKinds)
 
         // 헬퍼 방출: 프로토타입 전량 선행(정의 순서 무관 호출 가능) + 정의.
         // 헬퍼 내부의 다른 헬퍼 호출엔 캡처 인자를 원 이름으로 전달(자신의 파라미터로 존재).
@@ -376,7 +414,8 @@ public enum GLSLTranslator {
         var helperDefs: [String] = []
         for h in helpers {
             let caps = captureOf[h.name] ?? []
-            guard let sig = helperSignature(h, captures: caps, materials: materials, structs: structNames) else { continue }  // 미지원 타입 → 스킵
+            guard let sig = helperSignature(h, captures: caps, materials: materials, structs: structNames,
+                                            textureKinds: textureKinds) else { continue }  // 미지원 타입 → 스킵
             var helperEnv = sizeEnv
             for prm in h.params { helperEnv[prm.name] = prm.array ? 0 : (GLSLTypeAdapter.typeSize(prm.type) ?? 0) }
             // int/uint 파라미터명은 어댑터에 int 로 알려 min/max(int,float) 모호성 해소(실물 multistage_wave).
@@ -437,10 +476,17 @@ public enum GLSLTranslator {
         // 스테이지별 오디오 파라미터: 최종 본문에 남은 참조 이름별로 방출(word-정확; 16/32/64 해상도별 버퍼).
         let vertIds = identifiers(in: vertBody)
         let fragIds = identifiers(in: fragBody)
+        // vertex 스테이지 빌트인 사용 여부 — 쓰지 않는 셰이더의 시그니처는 종전 그대로 두기 위해
+        // (무회귀) 참조가 있을 때만 파라미터/Vary 멤버를 붙인다.
+        let vertexBuiltins = VertexBuiltins(vertexID: vertIds.contains("gl_VertexID"),
+                                            instanceID: vertIds.contains("gl_InstanceID"),
+                                            viewportIndex: vertBody.contains("out.gl_ViewportIndex"))
         // 소스 struct 정의: 멤버 타입 리네임(vec2→float2 등) 후 프리앰블 선두에 방출(헬퍼 시그니처가 참조).
         let structBlock = structDefs.map { "struct \($0.name) {" + replaceIdentifiers($0.body, typeAndMacroRenames()) + "};" }
             .joined(separator: "\n")
-        let msl = assemble(varyings: varyings, textures: textures, materialCount: materials.count,
+        let msl = assemble(varyings: varyings, textures: textures, textureKinds: textureKinds,
+                           vertexBuiltins: vertexBuiltins,
+                           materialCount: materials.count,
                            vertAudioNames: audioBufferNames.filter { vertIds.contains($0.name) },
                            fragAudioNames: audioBufferNames.filter { fragIds.contains($0.name) },
                            consts: consts, helperProtos: helperProtos, helperDefs: helperDefs,
@@ -497,6 +543,10 @@ public enum GLSLTranslator {
         case "uvec2": return "uint2"; case "uvec3": return "uint3"; case "uvec4": return "uint4"
         case "ivec2": return "int2"; case "ivec3": return "int3"; case "ivec4": return "int4"
         case "sampler2D", "sampler2DBackBuffer": return "texture2d<float>"   // BackBuffer: WE shim :22
+        // 비교 샘플러/3D 샘플러 헬퍼 파라미터(실물 common_pbr_2.h 의 DECLARE_SAMPLER2D_COMPARE_PARAMETER(shim :61)
+        // 전개형). depth2d 라야 sample_compare 가, texture3d 라야 3성분 sample 이 유효하다.
+        case "sampler2DComparison": return "depth2d<float>"
+        case "sampler3D": return "texture3d<float>"
         default: return structs.contains(glsl) ? glsl : nil
         }
     }
@@ -883,7 +933,8 @@ public enum GLSLTranslator {
         }
         if let (name, args) = wholeCall(s) {
             if let n = GLSLTypeAdapter.typeSize(name), n > 0 { return n }
-            if name == "texSample2D" || name == "texSample2DLod" { return 4 }
+            if name == "texSample2D" || name == "texSample2DLod"
+                || name == "texSample3D" || name == "texSample2DCompare" { return 4 }
             if ["dot", "distance", "length"].contains(name) { return 1 }
             if let r = functionReturns[name] { return r }
             let argSizes = args.map { inferExpressionSize($0, vars: vars, functionReturns: functionReturns) }.filter { $0 > 0 }
@@ -1144,7 +1195,7 @@ public enum GLSLTranslator {
                 out.append(Uniform(type: type, name: name,
                                    annotationMaterial: idx == 0 ? jsonStr(ann, "material") : nil,
                                    annotationDefault: idx == 0 ? jsonFloats(ann, "default") : nil,
-                                   annotationDefaultTexture: idx == 0 && type == .sampler2D ? jsonStr(ann, "default") : nil))
+                                   annotationDefaultTexture: idx == 0 && type.isTextureSampler ? jsonStr(ann, "default") : nil))
             }
         }
         return out
@@ -1571,6 +1622,33 @@ public enum GLSLTranslator {
             let smp = perTextureSampler ? perTextureSamplerExpr(args[0]) : "smp"
             return "\(args[0]).sample(\(smp), we_uv(\(args[1])))"
         }
+        // 2a4) texSample2DCompare(s, u, d) → depth2d 하드웨어 PCF. WE shim :65
+        //      `#define texSample2DCompare(s, u, d) s.SampleCmpLevelZero(s##SamplerComparisonState, u, d)`
+        //      의 MSL 대응이 `sample_compare` 다. LevelZero = mip 0 고정인데
+        //      섀도우 아틀라스는 단일 레벨이라 `mip_filter::none` 로 등가(smpCmp 선언 참조).
+        //      **float4 로 감싸는 이유**: HLSL SampleCmpLevelZero 는 float 를 돌려주고 실물은
+        //      `texSample2DCompare(...).r` 로 받는다(common_pbr_2.h:75). MSL 은 스칼라에 `.r` 이
+        //      없어 그대로 두면 컴파일 실패 — 감싸면 `.r`/무스위즐 양쪽이 성립한다.
+        s = rewriteCall(s, "texSample2DCompare") { args in
+            guard args.count == 3 else { unsupported.append("texSample2DCompare/\(args.count)"); return nil }
+            return "float4(\(args[0]).sample_compare(smpCmp, we_uv(\(args[1])), \(args[2])))"
+        }
+        // 2a5) texSample3D(s, u) → texture3d 샘플(WE shim :67 `#define texSample3D(s, u) s.Sample(s##SamplerState, u)`).
+        //      3D 좌표는 절단하지 않는다(we_uv 는 2성분 전용) — 실물 ccsimple.frag:32,35 가 `albedo.rgb` 를 넘긴다.
+        //      샘플러는 `smp`(clamp) 고정: LUT 은 경계 클램프가 정본이고 eng.texWrap 는 2D 슬롯 규약이다.
+        s = rewriteCall(s, "texSample3D") { args in
+            guard args.count == 2 else { unsupported.append("texSample3D/\(args.count)"); return nil }
+            return "\(args[0]).sample(smp, \(args[1]))"
+        }
+        // 2a6) clip(x) — HLSL 인트린식(WE 방언). x < 0 이면 픽셀 폐기. 실물 소비처:
+        //      `shaders/puppettexturechannels.frag:15`, `shaders/volumetricsfront.frag:67,70`.
+        //      문장 자리에서만 쓰이므로 블록 문장으로 치환한다(뒤따르는 `;` 는 빈 문장 = 합법).
+        //      벡터 인자(HLSL 은 any-성분 음수면 폐기)는 `if (bool2)` 가 되어 **컴파일 실패**한다 —
+        //      동봉 실물은 전건 스칼라라 도달 0건이고, 오역 대신 폴터가 이 리포의 규약이다.
+        s = rewriteCall(s, "clip") { args in
+            guard args.count == 1 else { unsupported.append("clip/\(args.count)"); return nil }
+            return "if ((\(args[0])) < 0.0) { discard_fragment(); }"
+        }
         // 2b) GLSL 2-인자 atan(y,x) → MSL atan2 (1-인자는 유지)
         s = rewriteCall(s, "atan") { args in args.count == 2 ? "atan2(\(args[0]), \(args[1]))" : nil }
         // 2c) radians()/degrees() 는 MSL 미내장(실물 color_grading 의 radians(u_hueShift)) — 상수 곱으로 치환(π/180, 180/π).
@@ -1656,11 +1734,15 @@ public enum GLSLTranslator {
         case texture(Int)                     // g_TextureN
         case audio(String)                    // g_AudioSpectrum16Left/Right
         case sampler                          // texSample2D 사용 시 smp
+        /// texSample2DCompare 사용 시 smpCmp — `compare_func` 가 설정된 샘플러라야 `sample_compare` 가
+        /// 유효하다(일반 `smp` 로는 MSL 컴파일 실패). 값은 Mesh3DShaders.swift:399-403 의 손-포팅과 동일.
+        case samplerCompare
     }
 
     /// 헬퍼별 캡처 목록(결정적 순서) + 호출 그래프 전이 폐쇄.
     static func computeCaptures(helpers: [GLSLFunction], materials: [MaterialParam],
-                                varyings: [(type: GLSLType, name: String)], textures: [Int]) -> [String: [Capture]] {
+                                varyings: [(type: GLSLType, name: String)], textures: [Int],
+                                textureKinds: [Int: GLSLType] = [:]) -> [String: [Capture]] {
         let helperNames = Set(helpers.map { $0.name })
         var refsOf: [String: Set<String>] = [:]
         for h in helpers {
@@ -1717,10 +1799,19 @@ public enum GLSLTranslator {
                       "g_AudioSpectrum32Left", "g_AudioSpectrum32Right",
                       "g_AudioSpectrum64Left", "g_AudioSpectrum64Right"] where refs.contains(n) { caps.append(.audio(n)) }
             // 텍스처 샘플링(자기 파라미터의 sampler2D 포함)엔 공용 샘플러가 필요.
+            // texSample3D 도 같은 `smp`(clamp)를 쓴다 — 3D LUT 은 경계 클램프가 정본(실물 ccsimple).
             if refs.contains("texSample2D") || refs.contains("texSample2DLod") || refs.contains("texSample2DBackBuffer")
-                || h.params.contains(where: { $0.type == "sampler2D" || $0.type == "sampler2DBackBuffer" })
-                || caps.contains(where: { if case .texture = $0 { return true }; return false }) {
+                || refs.contains("texSample3D")
+                || h.params.contains(where: { $0.type == "sampler2D" || $0.type == "sampler2DBackBuffer"
+                                              || $0.type == "sampler3D" })
+                || caps.contains(where: { if case .texture(let n) = $0 { return (textureKinds[n] ?? .sampler2D) != .sampler2DComparison }; return false }) {
                 caps.append(.sampler)
+            }
+            // 비교 샘플링 전용 — `smp` 와 별개 파라미터다(compare_func 유무가 다른 샘플러 객체).
+            if refs.contains("texSample2DCompare")
+                || h.params.contains(where: { $0.type == "sampler2DComparison" })
+                || caps.contains(where: { if case .texture(let n) = $0 { return textureKinds[n] == .sampler2DComparison }; return false }) {
+                caps.append(.samplerCompare)
             }
             out[h.name] = caps
         }
@@ -1742,6 +1833,7 @@ public enum GLSLTranslator {
         case .texture(let n): return "g_Texture\(n)"
         case .audio(let n): return n
         case .sampler: return "smp"
+        case .samplerCompare: return "smpCmp"
         }
     }
 
@@ -1755,10 +1847,12 @@ public enum GLSLTranslator {
         case .texture(let n): return "g_Texture\(n)"
         case .audio(let n): return engineReplacement(n)  // audioL/audioR/audioL32/... 매핑 공유
         case .sampler: return "smp"
+        case .samplerCompare: return "smpCmp"
         }
     }
 
-    private static func captureParamDecl(_ cap: Capture, materials: [MaterialParam]) -> String {
+    private static func captureParamDecl(_ cap: Capture, materials: [MaterialParam],
+                                         textureKinds: [Int: GLSLType] = [:]) -> String {
         switch cap {
         case .material(let i): return "\(materials[i].type.msl) \(materials[i].glslName)"
         case .engine(let n):
@@ -1775,9 +1869,10 @@ public enum GLSLTranslator {
             // 헬퍼의 대입이 유실된다(컴파일 성공·오렌더). 읽기 전용은 기존 값 파라미터 유지.
             return written ? "thread \(t.msl)& \(n)" : "\(t.msl) \(n)"
         case .attribute(let n, let t): return "\(t.msl) \(n)"
-        case .texture(let n): return "texture2d<float> g_Texture\(n)"
+        case .texture(let n): return "\((textureKinds[n] ?? .sampler2D).msl) g_Texture\(n)"
         case .audio(let n): return "constant float* \(n)"
         case .sampler: return "sampler smp"
+        case .samplerCompare: return "sampler smpCmp"
         }
     }
 
@@ -1797,7 +1892,7 @@ public enum GLSLTranslator {
 
     /// 헬퍼 시그니처(MSL): 원 파라미터 + 캡처 파라미터. 미지원 타입 포함 시 nil.
     static func helperSignature(_ h: GLSLFunction, captures: [Capture] = [], materials: [MaterialParam] = [],
-                                structs: Set<String> = []) -> String? {
+                                structs: Set<String> = [], textureKinds: [Int: GLSLType] = [:]) -> String? {
         guard let ret = mslType(h.ret, structs: structs) else { return nil }
         var ps: [String] = []
         for p in h.params {
@@ -1806,11 +1901,20 @@ public enum GLSLTranslator {
             if p.array { ps.append("constant \(t)* \(p.name)") }
             else { ps.append(p.byRef ? "thread \(t)& \(p.name)" : "\(t) \(p.name)") }
         }
-        ps.append(contentsOf: captures.map { captureParamDecl($0, materials: materials) })
+        ps.append(contentsOf: captures.map { captureParamDecl($0, materials: materials, textureKinds: textureKinds) })
         return "inline \(ret) \(h.name)(\(ps.joined(separator: ", ")))"
     }
 
+    /// vertex 스테이지 빌트인 사용 플래그(전부 false 면 방출물이 종전과 바이트 동일).
+    struct VertexBuiltins: Equatable {
+        var vertexID = false        // → `uint gl_VertexID [[vertex_id]]`
+        var instanceID = false      // → `uint gl_InstanceID [[instance_id]]`
+        var viewportIndex = false   // → Vary 의 `uint gl_ViewportIndex [[viewport_array_index]]`
+    }
+
     private static func assemble(varyings: [(type: GLSLType, name: String)], textures: [Int],
+                                 textureKinds: [Int: GLSLType] = [:],
+                                 vertexBuiltins: VertexBuiltins = VertexBuiltins(),
                                  materialCount: Int,
                                  vertAudioNames: [(name: String, buffer: Int)] = [],
                                  fragAudioNames: [(name: String, buffer: Int)] = [],
@@ -1819,6 +1923,9 @@ public enum GLSLTranslator {
                                  vertBody: String, fragBody: String, structs: String = "",
                                  premultiplyOutput: Bool = false) -> String {
         var vary = "struct Vary {\n  float4 gl_Position [[position]];\n"
+        // 레이어드 렌더 타깃 선택자(실물 shadowcaster 계열: 아틀라스 슬라이스를 인스턴스로 고른다).
+        // MSL 은 uint + [[viewport_array_index]] 를 요구한다 — GLSL 원문의 `varying uint` 과 같은 폭.
+        if vertexBuiltins.viewportIndex { vary += "  uint gl_ViewportIndex [[viewport_array_index]];\n" }
         for v in varyings { vary += "  \(v.type.msl) \(v.name);\n" }
         vary += "};\n"
         let vin = "struct VIn { float3 a_Position [[attribute(0)]]; float2 a_TexCoord [[attribute(1)]]; };\n"
@@ -1864,8 +1971,24 @@ public enum GLSLTranslator {
 
         """
 
+        // 비교 샘플러(smpCmp): sampler2DComparison 슬롯이 있을 때만 방출한다 — 미사용 constexpr
+        // 샘플러는 무해하지만 프리앰블 노이즈이고, 이 셰이더가 섀도우 아틀라스를 쓴다는 신호가 된다.
+        // 파라미터는 Mesh3DShaders.swift:399-403 손-포팅과 **동일**해야 한다(두 레인이 같은 아틀라스를
+        // 읽는다): filter::linear = 하드웨어 PCF(WE 샘플러 캐시가 만드는 유일한 비교 필터값
+        // 0x95 = D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR, 원본 `0x140099b67 mov ecx, 0x95`),
+        // compare_func::less_equal = WE 의 GREATER 에 리버스드-Z(common_pbr_2.h `#if REVERSEDEPTH`)를
+        // 되돌린 등가, address 는 WE 가 BORDER 지만 소비처가 uv 를 직접 clamp 하므로 무영향.
+        // mip_filter::none = SampleCmpLevelZero(shim :65) 의 mip 0 고정.
+        let cmpSampler = textureKinds.values.contains(.sampler2DComparison)
+            ? "    constexpr sampler smpCmp(filter::linear, mip_filter::none, address::clamp_to_edge, compare_func::less_equal);\n"
+            : ""
+
         // fragment 텍스처 파라미터
-        var fragTex = textures.map { "texture2d<float> g_Texture\($0) [[texture(\($0))]]" }.joined(separator: ",\n                        ")
+        // 슬롯별 선언 종류: sampler2DComparison → depth2d<float>, sampler3D → texture3d<float>,
+        // 그 외(미등재 포함) → texture2d<float>. `textureKinds` 미등재는 본문 스캔으로만 발견된
+        // 슬롯이라 2D 기본이 맞다(선언이 있으면 파스가 종류를 실었다).
+        var fragTex = textures.map { "\((textureKinds[$0] ?? .sampler2D).msl) g_Texture\($0) [[texture(\($0))]]" }
+            .joined(separator: ",\n                        ")
         if !fragTex.isEmpty { fragTex = ",\n                        " + fragTex }
         func audioDecl(_ names: [(name: String, buffer: Int)], sep: String) -> String {
             names.map { "\(sep)constant float* \($0.name) [[buffer(\($0.buffer))]]" }.joined()
@@ -1904,8 +2027,11 @@ public enum GLSLTranslator {
             }
         }
 
+        // WE `in uint gl_VertexID/gl_InstanceID` → MSL 스테이지 빌트인 파라미터(이름 유지라 본문 치환 불요).
+        let builtinParams = (vertexBuiltins.vertexID ? ", uint gl_VertexID [[vertex_id]]" : "")
+            + (vertexBuiltins.instanceID ? ", uint gl_InstanceID [[instance_id]]" : "")
         let vertSig = """
-        vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(audioParams)) {
+        vertex Vary ev_main(VIn vin [[stage_in]]\(materialCount > 0 ? ", constant float4* p [[buffer(0)]]" : ""), constant EngineU& eng [[buffer(1)]]\(audioParams)\(builtinParams)) {
             Vary out = {};
         \(indent(vertBody))
             return out;
@@ -1923,7 +2049,7 @@ public enum GLSLTranslator {
             // 감사 V07: NoInterpolation(eng.texFilter) 용 nearest 쌍 — 필터만 point, 어드레스 모드 보존.
             constexpr sampler smpNearest(filter::nearest, mip_filter::linear, address::clamp_to_edge);
             constexpr sampler smpRepeatNearest(filter::nearest, mip_filter::linear, address::repeat);
-        \(indent(fragBody))
+        \(cmpSampler)\(indent(fragBody))
         }
         """
         let structBlock = structs.isEmpty ? "" : structs + "\n"
