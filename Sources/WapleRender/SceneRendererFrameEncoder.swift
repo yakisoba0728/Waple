@@ -53,7 +53,11 @@ extension SceneRenderer {
         e[16] = time; e[17] = pointerUV.x; e[18] = pointerUV.y  // timeAndPad = (time, pointerX, pointerY, dt)
         e[19] = frameDT                                          // g_Frametime
         e[20] = pointerUVLast.x; e[21] = pointerUVLast.y         // g_PointerPositionLast
-        e[22] = pointerDown ? 1 : 0                              // g_PointerState.z (클릭 힘) — pad 슬롯 재사용
+        // g_PointerState.z (클릭 임펄스) — pad 슬롯 재사용. O-W3: **홀드가 아니라 엣지**다.
+        // 실물 유니폼 핸들러 `0x1400d9e59`: `z = ((s&1) && !(s&2)) ? 1 : 0`, bit1 은 프레임 꼬리
+        // `0x14018162d` 가 세운다. 종전 `pointerDown ? 1 : 0` 은 누르고 있는 내내 1 이라
+        // cursorripple(`× 5.0`)/fluidsimulation 이 실물보다 훨씬 강하게 계속 밀어냈다.
+        e[22] = pointerButton.clickImpulse
         for n in 0..<8 {
             let r = n < texRes.count ? texRes[n] : SIMD4<Float>(1, 1, 1, 1)
             let o = 24 + n * 4
