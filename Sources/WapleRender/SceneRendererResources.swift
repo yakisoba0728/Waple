@@ -2026,12 +2026,42 @@ extension SceneRenderer {
         return (m, adjusted)
     }
 
+    /// 셰이더 **선언 어노테이션**의 `audiobounds` 기본값 — 이펙트마다 다르다.
+    ///
+    /// 이 경로(`buildHandPortEffect`)는 손포팅 MSL 을 쓰므로 GLSL 어노테이션을 파스하지 않는다.
+    /// 번역 경로는 `MaterialParam.defaultValue`(= `annotationDefault`)가 자동으로 처리하지만,
+    /// 여기서는 폴백 리터럴이 곧 실효 기본값이다. 종전엔 `[0.5, 1.0]` 하나로 박혀 있었는데
+    /// **그건 `pulse` 의 값**이고 `shake` 는 다르다.
+    ///
+    /// 동봉 자산 전수 실측(2026-08-21) — `effects/*/shaders/effects/*.{vert,frag}` 의 `// {…}`
+    /// 어노테이션 중 `"material"` 이 오디오 키인 것을 전부 파스했다. **오디오 어노테이션을 가진
+    /// 이펙트는 둘뿐이다**:
+    ///
+    /// | 이펙트 | audiobounds | frequencymin | frequencymax | audioexponent | audioamount |
+    /// | --- | --- | --- | --- | --- | --- |
+    /// | `pulse` | `"0.5 1.0"` | 0 | 1 | 1.0 | 1 |
+    /// | `shake` | **`"0.0 1.2"`** | 0 | 1 | 1.0 | 1 |
+    ///
+    /// 즉 갈리는 것은 `audiobounds` **하나뿐**이고 나머지 넷은 아래 폴백 리터럴과 이미 일치한다
+    /// (그래서 그쪽은 손대지 않는다 — 우연한 일치가 아니라 실측으로 확인한 일치다).
+    /// 근거: `effects/shake/shaders/effects/shake.vert:29` ·
+    /// `effects/pulse/shaders/effects/pulse.vert:31`(설치본도 바이트 동일).
+    ///
+    /// 표에 없는 이펙트는 `pulse` 값으로 떨어진다 — 새 손포팅 이펙트가 오디오를 쓰기 시작하면
+    /// 그 셰이더의 어노테이션을 재서 여기 추가해라.
+    static func audioBoundsAnnotationDefault(effect name: String) -> [Float] {
+        switch name {
+        case "shake": return [0.0, 1.2]
+        default:      return [0.5, 1.0]
+        }
+    }
+
     /// 효과의 AUDIOPROCESSING 콤보 + 오디오 상수 → AudioParams(없으면 nil). draw 시 audioResponse 계산에 사용.
     func audioParams(for eff: SceneEffect) -> AudioParams? {
         let mode = eff.audioMode
         guard mode >= 1, mode <= 3 else { return nil }
         let c = eff.constants
-        let bounds = c["audiobounds"] ?? [0.5, 1.0]
+        let bounds = c["audiobounds"] ?? Self.audioBoundsAnnotationDefault(effect: eff.name)
         return AudioParams(
             mode: mode,
             freqMin: c["frequencymin"]?.first ?? 0,
