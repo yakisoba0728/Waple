@@ -68,7 +68,8 @@ final class ParticleDtScaledTests: XCTestCase {
         var last: [Particle] = []
         for _ in 0..<120 { last = sim.step(1.0 / 60.0) }
         XCTAssertEqual(last.count, 24)
-        // [2026-08-21] 기준값을 다시 뽑았다. 종전 값(Σ|pos| 1046.868774 · Σ|vel| 205.422028)은
+        // [2026-08-21] 기준값을 두 번 다시 뽑았다(노이즈 커널 교체 → 공유 난수 이식).
+        // 종전 값(Σ|pos| 1046.868774 · Σ|vel| 205.422028)은
         // dtScaled 도입 전 바이너리에서 뽑은 것이었는데, 이 정의가 쓰는 `turbulence` 의 **노이즈
         // 커널이 자작 값노이즈 → 실물 3D 심플렉스 ×32** 로 바뀌면서 그 앵커가 사라졌다.
         // 이 테스트가 지키려던 불변식(60fps 에서 `dtScaled == dt` 라 산술이 그대로)은 여전히
@@ -77,8 +78,8 @@ final class ParticleDtScaledTests: XCTestCase {
         func len(_ v: SIMD3<Float>) -> Float { (v.x * v.x + v.y * v.y + v.z * v.z).squareRoot() }
         let sumPos = last.reduce(Float(0)) { $0 + len($1.pos) }
         let sumVel = last.reduce(Float(0)) { $0 + len($1.vel) }
-        XCTAssertEqual(sumPos, 593.27484, accuracy: 0.01)
-        XCTAssertEqual(sumVel, 243.9239, accuracy: 0.01)
+        XCTAssertEqual(sumPos, 589.2012, accuracy: 0.01)
+        XCTAssertEqual(sumVel, 252.90698, accuracy: 0.01)
 
         // 반대로 10fps 에서는 **갈려야 한다** — 갈리지 않으면 dtScaled 가 어디에도 안 걸린 것이다.
         // 도입 전 같은 정의·같은 시드의 실측값은 Σ|pos|=984.134216 · Σ|vel|=220.649338 이었다.

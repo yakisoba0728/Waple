@@ -106,41 +106,51 @@ final class ParticleSystemTests: XCTestCase {
     func testRandomInitializerExponentDefaultsToLinearSampling() throws {
         let p = try randomInitializerParticle(exponent: nil)
 
-        XCTAssertEqual(p.lifetime, 1.5829303, accuracy: 1e-6)
-        XCTAssertEqual(p.size, 0.45244187, accuracy: 1e-6)
-        XCTAssertEqual(p.color.x, 0.24943149, accuracy: 1e-6)
-        XCTAssertEqual(p.color.y, 0.24943149, accuracy: 1e-6)
-        XCTAssertEqual(p.color.z, 0.24943149, accuracy: 1e-6)
-        XCTAssertEqual(p.alpha, 0.46795297, accuracy: 1e-6)
-        XCTAssertEqual(p.vel.x, 0.32807672, accuracy: 1e-6)
-        XCTAssertEqual(p.vel.y, 0.13425827, accuracy: 1e-6)
-        XCTAssertEqual(p.vel.z, 0.41314137, accuracy: 1e-6)
-        XCTAssertEqual(p.rotation.x, 0.10355991, accuracy: 1e-6)
-        XCTAssertEqual(p.rotation.y, 0.95987403, accuracy: 1e-6)
-        XCTAssertEqual(p.rotation.z, 0.91801953, accuracy: 1e-6)
-        XCTAssertEqual(p.angularVel.x, 0.87133175, accuracy: 1e-6)
-        XCTAssertEqual(p.angularVel.y, 0.86400765, accuracy: 1e-6)
-        XCTAssertEqual(p.angularVel.z, 0.54828739, accuracy: 1e-6)
+        // [2026-08-21] 스폰 VM **서두의 무조건 1드로**(0x14023b372)를 이식하면서 시퀀스가 한 칸씩
+        // 밀렸다. 아래 숫자는 그 자리를 반영해 다시 뽑은 것이고, 이 테스트가 지키려던 성질
+        // (지수 곡선이 시드 샘플을 실제로 굽히고 alpha 를 보존한다 / 고정폭 range 도 드로를 소비한다)
+        // 는 그대로다 — 값들은 Waple 의 SplitMix64 시퀀스 핀이지 WE 실측이 아니다
+        // (WE 는 MT19937 + 벽시계 시드라 실행 간 재현되지 않는다).
+        XCTAssertEqual(p.lifetime, 1.4524419, accuracy: 1e-6)
+        XCTAssertEqual(p.size, 0.24943149, accuracy: 1e-6)
+        XCTAssertEqual(p.color.x, 0.46795297, accuracy: 1e-6)
+        XCTAssertEqual(p.color.y, 0.46795297, accuracy: 1e-6)
+        XCTAssertEqual(p.color.z, 0.46795297, accuracy: 1e-6)
+        XCTAssertEqual(p.alpha, 0.32807672, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.x, 0.13425827, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.y, 0.41314137, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.z, 0.10355991, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.x, 0.95987403, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.y, 0.91801953, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.z, 0.87133175, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.x, 0.86400765, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.y, 0.5482874, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.z, 0.8796137, accuracy: 1e-6)
     }
 
     func testRandomInitializerExponentCurvesSeededSamplingAndPreservesAlpha() throws {
         let p = try randomInitializerParticle(exponent: 2)
 
-        XCTAssertEqual(p.lifetime, 1.3398077, accuracy: 1e-6)
-        XCTAssertEqual(p.size, 0.20470364, accuracy: 1e-6)
-        XCTAssertEqual(p.color.x, 0.06221607, accuracy: 1e-6)
-        XCTAssertEqual(p.color.y, 0.06221607, accuracy: 1e-6)
-        XCTAssertEqual(p.color.z, 0.06221607, accuracy: 1e-6)
-        XCTAssertEqual(p.alpha, 0.21897998, accuracy: 1e-6)
-        XCTAssertEqual(p.vel.x, 0.10763434, accuracy: 1e-6)
-        XCTAssertEqual(p.vel.y, 0.01802528, accuracy: 1e-6)
-        XCTAssertEqual(p.vel.z, 0.17068580, accuracy: 1e-6)
-        XCTAssertEqual(p.rotation.x, 0.01072466, accuracy: 1e-6)
-        XCTAssertEqual(p.rotation.y, 0.92135817, accuracy: 1e-6)
-        XCTAssertEqual(p.rotation.z, 0.84275985, accuracy: 1e-6)
-        XCTAssertEqual(p.angularVel.x, 0.75921905, accuracy: 1e-6)
-        XCTAssertEqual(p.angularVel.y, 0.74650919, accuracy: 1e-6)
-        XCTAssertEqual(p.angularVel.z, 0.30061907, accuracy: 1e-6)
+        // [2026-08-21] 스폰 VM **서두의 무조건 1드로**(0x14023b372)를 이식하면서 시퀀스가 한 칸씩
+        // 밀렸다. 아래 숫자는 그 자리를 반영해 다시 뽑은 것이고, 이 테스트가 지키려던 성질
+        // (지수 곡선이 시드 샘플을 실제로 굽히고 alpha 를 보존한다 / 고정폭 range 도 드로를 소비한다)
+        // 는 그대로다 — 값들은 Waple 의 SplitMix64 시퀀스 핀이지 WE 실측이 아니다
+        // (WE 는 MT19937 + 벽시계 시드라 실행 간 재현되지 않는다).
+        XCTAssertEqual(p.lifetime, 1.2047037, accuracy: 1e-6)
+        XCTAssertEqual(p.size, 0.06221607, accuracy: 1e-6)
+        XCTAssertEqual(p.color.x, 0.21897998, accuracy: 1e-6)
+        XCTAssertEqual(p.color.y, 0.21897998, accuracy: 1e-6)
+        XCTAssertEqual(p.color.z, 0.21897998, accuracy: 1e-6)
+        XCTAssertEqual(p.alpha, 0.107634336, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.x, 0.018025283, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.y, 0.1706858, accuracy: 1e-6)
+        XCTAssertEqual(p.vel.z, 0.010724655, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.x, 0.92135817, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.y, 0.84275985, accuracy: 1e-6)
+        XCTAssertEqual(p.rotation.z, 0.75921905, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.x, 0.7465092, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.y, 0.30061907, accuracy: 1e-6)
+        XCTAssertEqual(p.angularVel.z, 0.77372026, accuracy: 1e-6)
     }
 
     func testRandomInitializerExponentRejectsNonnumericAndNonfiniteValues() {
@@ -185,8 +195,10 @@ final class ParticleSystemTests: XCTestCase {
         var simulator = ParticleSimulator(def: def, seed: 7)
         let p = try XCTUnwrap(simulator.step(0).first)
 
+        // [2026-08-21] 스폰 VM 서두 드로(0x14023b372) 이식으로 한 칸 밀렸다. 이 테스트의 요점은
+        // "min==max 인 range 도 드로를 소비한다" 이고, 그 성질은 그대로다.
         XCTAssertEqual(p.lifetime, 5, accuracy: 1e-6)
-        XCTAssertEqual(p.size, 0.20470364, accuracy: 1e-6)
+        XCTAssertEqual(p.size, 0.06221607, accuracy: 1e-6)
     }
 
     func testParseSnow() {

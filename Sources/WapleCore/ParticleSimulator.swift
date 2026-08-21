@@ -32,6 +32,26 @@ public struct Particle {
     var turbExtra: [(speed: Float, phase: Float)] = []
     // remapvalue 노이즈 입력의 파티클별 위상(탈동기 — 전 파티클 동일 곡선 방지).
     var remapPhase: Float = 0
+    /// **파티클당 공유 난수 [0,1)** — 실물 `[psys+0x338][slot]`.
+    ///
+    /// 스폰 VM 서두(0x14023b340–0x14023b381)가 **조건 없이** 한 번 뽑아 여기 적는다:
+    /// `lea rcx,[rdx+0x20]`(범위 {0,1}) · `add rdx,0x1cd0`(MT19937 상태) · `call 0x1401f87a0`
+    /// · `movss [rax + r12*4], xmm0`. 그 구간에 분기가 하나도 없고 이니셜라이저 디스패치 루프
+    /// (0x14023b5c0)보다 **먼저**다 — 바이트코드 내용과 무관하게 파티클마다 정확히 하나다.
+    /// 기입자는 이 한 줄뿐이다(스폰 VM·시뮬 VM·이미터·에이징 전수 확인 — 나머지는 전부 읽기).
+    ///
+    /// 드로 헬퍼 0x1401f87a0 은 `min + (max−min)·(next()>>8)·2⁻²⁴`
+    /// (`shr eax,8` @0x1401f87c1, 2⁻²⁴ 상수 0x1404925dc)이고 범위가 {0.0, 1.0} 이라 곧 rand01 이다.
+    ///
+    /// 소비처는 시뮬 VM 에서 `[rsi+0x338]` 을 읽는 12곳이다 — oscillateposition(0x1402404c6) ·
+    /// oscillatealpha(0x140240f22) · oscillatesize(0x140241245) · turbulence(0x1402429d6) ·
+    /// remapvalue(0x14024562a · 0x1402457ad) + 그 페이드 창 변종들.
+    ///
+    /// **핵심은 "하나를 공유한다" 는 것이다.** oscillateposition 핸들러가 같은 xmm0(=r)에
+    /// 서로 다른 아핀 셋을 건다(`mulps` 0x1402404fd · 0x140240505 · 0x14024050d + `addps`
+    /// 0x140240512 · 0x140240517 · 0x14024051f) — frequency·phase·scale 이 **전부 같은
+    /// 난수에서 나온다**. Waple 은 종전에 셋을 독립 드로로 뽑아 그 상관을 없앴다.
+    var sharedRandom: Float = 0
     /// 트레일 렌더러용 최근 위치 히스토리(로컬 Y-up). oldest→newest, 마지막=현재 위치.
     /// 스프라이트 렌더러에서는 비어 있다(불필요 복사 회피).
     public var history: [SIMD3<Float>] = []
@@ -879,36 +899,48 @@ public struct ParticleSimulator {
         // 프레임 수로 접는다). mapsequence 이니셜라이저가 있으면 뒤의 apply 가 덮어써 그쪽이 승
         // (cherry_blossoms 류 — 각도→프레임 명시 매핑이 더 구체적).
         if def.animationMode == .randomframe { p.frame = rng.range(0, 4096) }
+        // 스폰 VM 서두의 무조건 1드로(0x14023b372 → 0x14023b381). 이니셜라이저 디스패치
+        // (0x14023b5c0)보다 **먼저**이고 그 사이에 분기가 없다 — `Particle.sharedRandom` 주석 참조.
+        // (`randomframe` 드로가 이 앞에 오는 것은 Waple 관례다 — 실물 대응 위치는 미확인.)
+        p.sharedRandom = rng.nextFloat()
         for ini in def.initializers { apply(ini, to: &p) }
+        // ── 아래 다섯은 **난수를 뽑지 않는다.** 실물은 전부 `sharedRandom` 하나의 아핀이다. ──
+        // 종전에는 파티클당 최대 10회를 더 뽑아 오퍼레이터끼리 상관을 없앴는데, 실물은 같은 r 을
+        // 공유해 **진동 3종·난류·리맵이 서로 상관된다** — 같은 파티클은 셋 다 빠르거나 셋 다 느리다.
+        // 그 상관이 군집의 시각적 결을 만든다(전부 독립이면 결이 뭉개져 균질해진다).
+        let r = p.sharedRandom
         if let o = oscPosOp {
-            p.oscPosFreq = rng.range(o.fmin, o.fmax)
-            p.oscPosScale = rng.range(o.smin, o.smax)
-            p.oscPosPhase = rng.range(o.pmin, o.pmax)   // 초 단위 — ×2π 금지(oscPositionOffset 주석)
+            // `mulps` 0x1402404fd · 0x140240505 · 0x14024050d + `addps` 0x140240512 · 0x140240517 ·
+            // 0x14024051f — 같은 r 에 서로 다른 (base, span) 세 쌍이 걸린다.
+            p.oscPosFreq = lerp(o.fmin, o.fmax, r)
+            p.oscPosScale = lerp(o.smin, o.smax, r)
+            p.oscPosPhase = lerp(o.pmin, o.pmax, r)   // 초 단위 — ×2π 금지(oscPositionOffset 주석)
             p.oscPosMask = o.mask
         }
         if let o = oscAlphaOp {
-            p.oscAlphaFreq = rng.range(o.fmin, o.fmax)
-            // oscPos/oscSize 와 동형 range 샘플(F184) — phasemin/max 부재(기본 0) 시 전 파티클 동위상
-            // (fireworks 근동기 의도). 종전엔 항상 rng.nextFloat()*2π 완전 랜덤이라 desync 를 강제했다.
-            p.oscAlphaPhase = rng.range(o.pmin, o.pmax)   // 초 단위 — ×2π 금지(oscPositionOffset 주석)
+            p.oscAlphaFreq = lerp(o.fmin, o.fmax, r)
+            // phasemin/max 부재(기본 0)면 스팬이 0 이라 전 파티클 동위상 — fireworks 근동기 의도는
+            // 그대로 성립한다(F184 의 성질이 공유 난수에서도 보존된다).
+            p.oscAlphaPhase = lerp(o.pmin, o.pmax, r)
         }
         if let o = oscSizeOp {
-            p.oscSizeFreq = rng.range(o.fmin, o.fmax)
-            p.oscSizePhase = rng.range(o.pmin, o.pmax)   // 초 단위 — ×2π 금지(oscPositionOffset 주석)
+            p.oscSizeFreq = lerp(o.fmin, o.fmax, r)
+            p.oscSizePhase = lerp(o.pmin, o.pmax, r)
         }
         if let t = turbulences.first {
-            p.turbSpeed = rng.range(t.smin, t.smax)
-            // 실물 위상은 `r·(pmax − pmin)` 이다 — `pmin` 을 더하지 않는다(0x140242a70 에 `mulps` 만
-            // 있고 `pmin`(레코드 +0x70)을 읽는 명령이 핸들러에 없다). `range(0, Δ)` 로 쓰면 드로 수와
-            // 소비 순서가 그대로라 다른 오퍼레이터의 난수열이 밀리지 않는다.
-            p.turbPhase = rng.range(0, t.pmax - t.pmin)
-            // F628: 2번째 이후 오퍼레이터도 스폰 샘플(단일 오퍼레이터 시스템은 드로 0 → 비트동일).
+            p.turbSpeed = lerp(t.smin, t.smax, r)
+            // 위상은 `r·(pmax − pmin)` — `pmin` 을 더하지 않는다(0x140242a70 에 `mulps` 만 있고
+            // `pmin`(레코드 +0x70)을 읽는 명령이 핸들러에 없다). 그 `r` 이 곧 이 공유 난수다.
+            p.turbPhase = r * (t.pmax - t.pmin)
+            // 2번째 이후 오퍼레이터도 **같은 r** 을 쓴다 — 핸들러가 파티클별 슬롯 하나만 읽는다.
             for extra in turbulences.dropFirst() {
-                p.turbExtra.append((speed: rng.range(extra.smin, extra.smax),
-                                    phase: rng.range(0, extra.pmax - extra.pmin)))
+                p.turbExtra.append((speed: lerp(extra.smin, extra.smax, r),
+                                    phase: r * (extra.pmax - extra.pmin)))
             }
         }
-        if !remaps.isEmpty { p.remapPhase = rng.range(0, 100) }
+        // remapvalue 도 같은 슬롯을 읽는다(0x14024562a · 0x1402457ad). 스팬 100 은 Waple 관례이고
+        // 실물 아핀 계수는 미확인 — 이번에 바뀐 것은 **난수의 출처**(독립 드로 → 공유 스칼라)다.
+        if !remaps.isEmpty { p.remapPhase = r * 100 }
         // 스폰 위치(+ 위상 오프셋, F177)를 트레일 시작점으로 — oscPos 위상이 0 이 아니면 age=0 에서도
         // 오프셋이 존재해(sin(phase)≠0) base pos 로 시드하면 트레일 시작점이 어긋난다.
         if trailSamples > 0 { p.history = [p.pos + oscPositionOffset(p)] }
