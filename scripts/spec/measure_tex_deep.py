@@ -196,7 +196,33 @@ def iter_tex():
                 for name, off, size in entries:
                     if name.lower().endswith(".tex"):
                         yield (path, name, data[base + off:base + off + size])
-    # [2026-08-21] `projects/` 추가(없는 루트는 walk 가 빈 이터레이터) — 근거 docs/re/tex-format.md §2.4.
+    # **[2026-08-21] 설치본 `projects/` 를 코퍼스에 넣었다.** 종전엔 `assets/` 만 훑어서
+    # `projects/defaultprojects/**` 의 .tex 129개가 통째로 코퍼스 밖이었다. 그 129개에만
+    # flags 비트 **`0x10`** 이 서 있어(10건), "코퍼스 4,991개 전수 비트 도수" 라는 근거가
+    # 실재하는 비트 하나를 못 보고 있었다. 형제 측정 `measure_texjson()` 은 처음부터
+    # `projects/` 를 훑고 있었으므로 `.tex` 쪽과 `.tex-json` 쪽의 **범위가 서로 달랐다** —
+    # 그 비대칭도 여기서 없어진다. 실측: corpusTexFiles 4,991 → 5,120.
+    #
+    # ⚠️ **순회 순서를 뒤집지 마라. `assets` 가 먼저고 `projects` 가 뒤다.**
+    # 이 함수의 산출 순서는 정본의 **값**에 영향을 준다. 두 자리에서 그렇다:
+    #   (1) `measure_corpus()` 의 `picks` — 조건에 맞는 **첫** 표본을 잡아 CLI/오라클 단계로
+    #       넘긴다. 순서가 바뀌면 witness 표본이 통째로 갈리고 오라클 산출물이 바뀐다.
+    #   (2) `measure_corpus()` 가 도수를 `sorted(..., key=lambda x: -x[1])` 로 낼 때 —
+    #       파이썬 정렬은 **안정**이므로 도수가 같은 키끼리는 `Counter` 삽입순(= 최초 등장
+    #       순서 = 이 함수의 산출 순서)이 그대로 남는다. 즉 순회 순서가 곧 동률의 정렬 순서다.
+    #
+    # 그래서 `projects/` 를 **뒤에** 붙여 종전 코퍼스의 상대 순서를 하나도 흔들지 않았다.
+    # 병합 결과 도수가 같아지는 자리가 셋 나왔고 각각 이렇게 판정했다(2026-08-21 실측):
+    #   · `flags` `5`(0x5, 신규) — projects 에만 있으므로 최초 등장이 맨 뒤 → 동률 1인 여섯 키
+    #     뒤에 붙는다. 자동으로 맞는다.
+    #   · `flags` `18`(0x12, 신규) ×10 vs 기존 `524292` ×10 — 같은 이유로 `524292` 가 앞.
+    #   · `flags` `1` 이 1 → 2 가 되어 기존 `3145730` ×2 와 동률. **이건 자명하지 않아서
+    #     따로 쟀다**: `flags==1` 은 설치 assets 에 1건(`materials/models/editor/camera.tex`)
+    #     뿐이고 `3145730` 은 워크샵에만 2건이다. 워크샵이 먼저 순회되므로 `3145730` 이 앞.
+    # 순서를 뒤집으면 이 셋이 전부 반대로 뒤집혀 정본 diff 가 이유 없이 흔들린다.
+    #
+    # 없는 루트는 `os.walk` 가 빈 이터레이터를 낸다(설치본 없는 환경에서 조용히 건너뛴다).
+    # 범위 라벨과 반영 결과 표는 docs/re/tex-format.md §2.4.
     for root in (os.path.join(WE, "assets"), os.path.join(WE, "projects")):
         for dp, _, fn in os.walk(root):
             for f in fn:

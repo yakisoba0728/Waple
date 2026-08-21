@@ -149,7 +149,24 @@ def scan():
 def build(r):
     ws = sorted(p for p in r["encodedPkgs"] if "workshop" in p.replace("\\", "/"))
     loose = sorted(p for p in r["encodedPkgs"] if "workshop" not in p.replace("\\", "/"))
-    scan_ev = specfmt.ev("corpus", f"{r['total']}개 .tex 전수(워크샵 scene.pkg + 설치 assets)",
+    # **[2026-08-21] 범위 라벨 정정.** 이 스크립트는 코퍼스를 스스로 열거하지 않고
+    # `measure_tex_deep.iter_tex()` 를 그대로 쓴다(`scan()` 의 `for src, _name, b in
+    # T.iter_tex():` 한 줄이 이 문서의 코퍼스 전부다). 그 함수가 이날 설치본 `projects/` 를
+    # 훑도록 바뀌면서 이 라벨의 "설치 assets" 가 **실제로 틀린 문장이 됐다** — 이제
+    # `assets/` + `projects/` 다(전수 4,991 → 5,120).
+    #
+    # ⚠️ **`spec/formats/tex-embedded-mips.json` 은 아직 옛 문장("… + 설치 assets", 전수
+    # 4,991)을 6곳에 담고 있다 — 지금 정본과 이 생성기는 갈려 있다.** 일부러 그대로 뒀다:
+    # 이 컨테이너에는 워크샵 코퍼스가 없어 새 값을 **측정할 수 없고**, 측정 못 한 수치를
+    # 손으로 적는 것이 이 리포가 반복해서 당한 실패 양식이기 때문이다. 코퍼스가 있는
+    # 환경에서 한 번 재생성하면 그 자리에서 닫힌다. 그때 들어올 값은 설치 `projects/` 129건을
+    # 이 스크립트로 실측해 미리 재 뒀다 — **전부 증가이고 축소는 없다**(축소 가드 통과):
+    #   total 4,991→5,120 · encodedTotal +2(PNG ×2) · chainLen[7] +1 · levelOK +6 ·
+    #   halvingOK +6 · mip0DimsOK +1 · encodedPkgs +1 · rawPkgs +81 ·
+    #   crosstab (raw/BC,True) +81 / (raw/BC,False) +46 / (PNG,True) +1 / (PNG,False) +1.
+    #   halvingBad · levelBadSig · parseFail 은 0 유지.
+    scan_ev = specfmt.ev("corpus",
+                         f"{r['total']}개 .tex 전수(워크샵 scene.pkg + 설치 assets/projects)",
                          "scripts/spec/measure_embedded_mips.py")
     code_ev = specfmt.ev("file", "Sources/WapleCore/TexImage.swift",
                          "종전 .embeddedImage 분기가 파스한 mipChain 을 버렸다")
@@ -299,7 +316,8 @@ def main():
     print(f"  치수 == 1/2^L: {r['halvingOK']} · 불일치 {r['halvingBad']}")
     print(f"  mip0 치수 == 헤더: {r['mip0DimsOK']} · 불일치 {r['mip0DimsBad']}")
     ws = [p for p in r["encodedPkgs"] if "workshop" in p.replace("\\", "/")]
-    print(f"  영향 범위: 워크샵 씬 {len(ws)}종 + 설치 assets {len(r['encodedPkgs']) - len(ws)}개")
+    print(f"  영향 범위: 워크샵 씬 {len(ws)}종 + 설치 assets/projects "
+          f"{len(r['encodedPkgs']) - len(ws)}개")
 
     specfmt.dump(specfmt.doc("scripts/spec/measure_embedded_mips.py", build(r)), OUT)
     print(f"\n기록: {OUT}")
