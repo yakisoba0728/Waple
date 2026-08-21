@@ -1,14 +1,18 @@
 # 유체 시뮬레이션 이펙트(`effects/fluidsimulation`) 완전 해부
 
 **측정일 2026-08-21 · WE 2.8.42 · `wallpaper64.exe`(imagebase `0x140000000`)**
+**2026-08-21 2차 실측** — 경계조건/샘플러 어드레싱(§2.4·§2.4a) · 반복 9회의 수치적 정체(§2.13) ·
+셰이더 자산 전수(§1.7) · 저작 키 도달(§1.6.1·§1.6.2) · `attachment*` 어노테이션(§1.6.3)을 더했고,
+[미해결] 넷을 닫았다(§9). **§4.5 각주의 "파서 잠재 결함" 기재는 오독이라 철회했다.**
 
 동봉 이펙트 46종(최상위 `effect.json` 기준) 중 **가장 복잡한 하나**를 끝까지 뜯는다.
 이 이펙트만 가진 것이 셋이다 —
 
 * **동봉 `effect.json` 128건 중 유일하게 `functions` 를 갖는다**(전수 실측, preview 사본에도 없다).
 * **`conditions` 를 갖는 유일한 이펙트**다(본체 4건 + preview 사본 4건 = 8건이 코퍼스 전부).
-* **`unique` FBO 8~9장 + `command:"swap"` 2회**로 프레임을 넘겨 상태를 누적하는 유일한 이펙트다
-  (motionblur 가 `unique` 1장으로 두 번째다).
+* **`unique` FBO 8장 + `command:"swap"` 2회**로 프레임을 넘겨 상태를 누적하는 유일한 이펙트다
+  (motionblur 가 `unique` 1장으로 두 번째다. 46종 중 FBO 를 선언하는 것은 9종뿐이고 `swap` 은
+  이것 하나다 — 전수표 §1.7).
 
 목적은 하나다: **Waple 의 이펙트 파이프라인이 오늘 이걸 돌릴 수 있는가.** 결론은 §6.
 
@@ -21,10 +25,12 @@
 
 ---
 
-## 0. 다섯 줄 요약
+## 0. 일곱 줄 요약
 
-1. **패스 20개(드로우 18 + `swap` 2), FBO 9장.** 압력 Jacobi 는 **9회**이고 매니페스트에
-   같은 패스가 9번 복제돼 있다. 핑퐁은 완전 무충돌이다 — 18개 드로우 패스 어디에도
+1. **선언 패스 20개(드로우 18 + `swap` 2), FBO 9장. 출하 콘텐츠에서 실제로 도는 것은 19개**다
+   (`LIGHTING=0` 이라 패스 16 `normal` 이 스킵된다 — §1.5). 드로우 18회가 만드는 구별되는
+   (셰이더, 콤보) 프로그램은 **10개**이고, 압력 Jacobi 는 **9회**로 매니페스트에 같은 패스가
+   9번 복제돼 있다(§1.7). 핑퐁은 완전 무충돌이다 — 18개 드로우 패스 어디에도
    읽는 텍스처와 쓰는 텍스처가 겹치는 자리가 없다.
 2. **`fit` 은 정사각이 아니다.** `0x1401eb2f8`–`0x1401eb37b` 이 **긴 변을 N 에 맞추고 종횡비를
    보존하며 확대는 하지 않는다**. 즉 1920×1080 레이어에서 `fit:256` 은 **256×144** 다.
@@ -49,6 +55,16 @@
    **① `fit` 종횡비(위 2) ② `LIGHTING=1` 에서 `#require LightingV1` 미주입 → 이펙트 통째 폴백
    ③ `g_EffectTextureProjectionMatrixInverse` 항등(회전/부분 레이어에서 커서 임펄스 어긋남)**
    셋이다. ①만 그림이 조용히 틀리고, ②는 시끄럽게 폴백한다.
+6. **압력 반복 9회는 "수렴" 이 아니라 "평활" 이다** (신규, §2.13). 4텍셀 이하 오차는 완전히
+   지우지만 에미터 규모(σ≈13텍셀)의 발산은 **2.6 % 밖에** 못 지운다 — 큰 규모에서 이 흐름은
+   비압축이 아니다. 그리고 §2.7 의 `0.5` 누락은 오타가 아니라 **9회 예산에 맞춘 2배 과이완**이다:
+   반복 9회에서는 셋 중 셋 다 원본이 "고친" 형태를 이기고, 반복을 늘리면 원본은 오히려 발산한다.
+   **반복수와 계수는 한 쌍이다 — 둘 중 하나만 고치지 마라.**
+7. **경계는 축마다 다르다** (신규, §2.4·§2.4a). 속도는 divergence 패스의 `if` 4개로 법선 성분
+   **반사**·접선 성분 **미끄럼**, 염료만 `boundaryMask` 로 **흡수**다. 나머지는 전부 샘플러
+   clamp 에 기댄다 — 그 clamp 가 기본값이라는 것을 `0x1401e78ca`–`0x1401e7915`(파스) ·
+   `0x1401eb976`–`0x1401eb990`(소비) · 엔진 프레임버퍼 5장의 상수 `2`(`0x14017f494` 외 4)로
+   못 박았다. **이 축은 Waple 과 갭이 없다.**
 
 ---
 
@@ -104,8 +120,12 @@
 | 7 | `_rt_SmokeDye2` | `scale:2` | `rgba_backbuffer` | 〃 | `"0 0 0 0"` | ✔ | — | 염료 B |
 | 8 | `_rt_SmokeNormal` | `scale:2` | `rgba8888` | `.rgba8Unorm` | — | **✘** | `[{"LIGHTING":1}]` | 염료 α 로부터의 노멀 |
 
-관측 규칙 셋 —
+관측 규칙 넷 —
 
+* **아홉 장 전건이 샘플러 어드레싱 `clamp` 다** — `uvs` 를 하나도 선언하지 않는다.
+  기구는 §2.4a 에 VA 로 있다(파스 `0x1401e78ca`–`0x1401e7915`, 소비 `0x1401eb976`–`0x1401eb990`).
+  이게 §2.4 의 경계조건이 성립하는 **전제**다: 도메인 밖 이웃 샘플이 가장자리 복제(Neumann)라야
+  divergence 의 반사 `if` 넷이 "고스트 셀만 뒤집는" 국소 수정으로 동작한다.
 * **`clear` 를 가진 6장은 전건 `unique` 다.** 프레임을 넘겨 누적하는 버퍼만 시작값을 정의할 필요가
   있다. `_rt_SmokeDivergence`/`_rt_SmokeCurl` 은 매 프레임 자기 패스가 전면 덮어쓰므로 `clear` 가 없다.
 * **`_rt_SmokeNormal` 만 `unique` 가 아니다.** 프레임 간 지속이 필요 없고(같은 프레임 안에서
@@ -334,6 +354,162 @@ Waple 의 대응값은 빌드 시점 `effW/effH`(레이어 크기, `isFrameBuffe
 > `[0,1000]` 밖이다. 즉 **`range` 는 에디터 슬라이더 전용이고 런타임 클램프가 아니다** —
 > 저작된 `constantshadervalues` 는 그대로 유니폼으로 간다. Waple 도 클램프하지 않는다(정합).
 
+#### 1.6.1 저작 레인은 **선언 없는 패스에도 키를 흩뿌린다** (신규 실측)
+
+preview 씬의 18개 패스 오버라이드를 셰이더 어노테이션과 대조한 전수(재현: 부록 A ⑧):
+
+| 원본 idx | 머티리얼 | 셰이더가 선언한 `material` 키 | 씬이 실은 키 | **그중 미선언** |
+|---:|---|---:|---:|---:|
+| 0 | curl | 0 | 0 | 0 |
+| 1 | vorticity | 41 | 11 | 0 |
+| 2 | divergence | 0 | 0 | 0 |
+| 3 | clear | 1 | 7 | **6** |
+| 4–12 | pressure ×9 | 0 | **0** | 0 |
+| 13 | gradientsubtract | 0 | 0 | 0 |
+| 14 | advection | 39 | 11 | **2** |
+| 15 | advection(DYE) | 39 | 10 | **2** |
+| 16 | normal | 1 | 7 | **6** |
+| 17 | combine | 16 | 10 | **6** |
+| | **합** | | **56** | **22 (39 %)** |
+
+* **압력 9개 패스에는 오버라이드가 하나도 없다.** 반복수 9가 저작 표면에 전혀 노출돼 있지
+  않다는 것의 자산 측 증거다(§2.13).
+* 미선언 22건의 정체는 전부 에미터 키다. `emitterPos0`(advection.frag:28 · vorticity.frag:33) ·
+  `lineEmitterPosA0/B0`(advection.frag:44,45 · vorticity.frag:53,54) ·
+  `lineEmitterSize0`(advection.frag:46 · vorticity.frag:56)은 **그 두 셰이더에만** 있는데 씬은
+  clear·normal·combine 패스에도 실었다. `lineEmitterAngle0`/`lineEmitterSpeed0` 는 한술 더 떠
+  **vorticity.frag:55·57 에만** 있는데(advection.frag 에는 없다) advection 두 패스에도 실려 있다.
+* ⇒ **소비자는 모르는 `constantshadervalues` 키를 조용히 버려야 한다.** 경고를 찍으면
+  이 이펙트 하나에서 프레임마다 22줄이 나온다. WE 자신이 만든 씬이 이러므로 "워크샵이 지저분한
+  것" 이 아니라 **에디터의 정상 동작**이다.
+
+#### 1.6.2 코퍼스 도달 — **이펙트 자신의 preview 뿐이다**
+
+| 범위 | scene.json | `fluidsimulation` 을 마운트하는 씬 |
+|---|---:|---:|
+| 동봉 `WEAssets` | 171 | **1** (`effects/fluidsimulation/preview/scene.json`) |
+| 설치본 `wallpaper_engine` 전체 | 184 | **1** (같은 파일의 설치본 사본) |
+
+이 문서의 모든 "저작된 값" 은 그 한 씬에서 온다. **출하 배경화면 중 이 이펙트를 쓰는 것은
+0건**이고, 그래서 §1.5 의 `conditions` 3건도 §4.4 의 `functions` 도 전부 도달 0 이다.
+
+#### 1.6.3 `attachmentproject` / `attachmentangles` — **[해결 2026-08-21] 에디터 전용, 런타임 소비 0**
+
+종전 §9-6 이 [미해결]로 남긴 항목이다. **종전 기재의 "12건" 도 틀렸다** — 다시 세면:
+
+| 어노테이션 | 건수 | 붙는 자리 | 값의 형태 |
+|---|---:|---|---|
+| `attachmentproject` | **10** | `m_EmitterPos0..3`(4) + `m_LineEmitterPosA/B0..2`(6) | `true`(불리언) |
+| `attachmentangles` | **4** | `m_EmitterPos0..3` 만 | **문자열** `"emitterAngle0".."emitterAngle3"` — 짝이 되는 각도 프로퍼티의 이름이다. 불리언이 아니다 |
+
+둘 다 본체 `vorticity.frag` 에만 있고(다른 17개 셰이더 0건) preview 사본에는 없다.
+선 에미터는 `attachmentangles` 를 안 받는다 — 선분은 두 점으로 방향이 정해지기 때문이다.
+
+**바이너리 전수(설치본 `.exe`/`.dll` 전건, ASCII + UTF-16LE 양쪽):**
+
+| 파일 | `attachmentproject` | `attachmentangles` |
+|---|---:|---:|
+| `bin/wallpaperui.exe`(에디터) | 1 | 1 |
+| `distribution/bin/wallpaperui.exe`(같은 파일 사본) | 1 | 1 |
+| `wallpaper64.exe` · `wallpaper32.exe` · `webwallpaper64.exe` · `edgewallpaper64.exe` · `scenescript{32,64}.dll` · `resourceutil{32,64}.dll` · `mediaextensions*` · `cloneextensions*` · `winrtutil*` · 나머지 전부 | **0** | **0** |
+
+**런타임은 이 키를 읽지 않는다.** 비-바이너리 히트도 둘뿐이다 — 셰이더 자신과
+`ui/dist/scripts/scripts.js`(에디터 UI).
+
+**무엇을 하는 키인지도 그 JS 가 답한다.** `attachmentproject` 가 참이면 그 머티리얼
+프로퍼티의 컨텍스트 메뉴에 `ui_editor_properties_context_menu_bind_attachment_projection`
+버튼(클립 아이콘)이 붙고, 누르면 `getAllAttachments` 로 고른 어태치먼트의 `{{ID}}`/`{{NAME}}`
+을 스니펫에 치환해 **씬 스크립트를 생성해 붙여 준다**. 스니펫은
+`ui/dist/monaco/snippets/script_project_attachment.js` —
+
+```js
+export function update() {
+    return thisLayer.transformAttachmentToTexture(thisScene.getLayerByID('{{ID}}'), '{{NAME}}').translation();
+}
+```
+
+`attachmentangles` 가 있으면 `script_project_attachment_angle.js` 쪽을 쓰고, **그 값(문자열)을
+`{{ANGLE}}` 자리에 그대로 치환한다**(`e.replace("{{ANGLE}}", n.attachmentangles)`) — 그래서
+`m_EmitterPos0` 의 `"emitterAngle0"` 이 스크립트 안의 프로퍼티 이름이 된다:
+
+```js
+export function update() {
+    var mat = thisLayer.transformAttachmentToTexture(thisScene.getLayerByID('{{ID}}'), '{{NAME}}');
+    thisObject['{{ANGLE}}'] = mat.angle();
+    return mat.translation();
+}
+```
+
+생성된 텍스트는 `n.linkScript = e` 로 그 프로퍼티의 **링크 스크립트**가 된다. 즉 이 어노테이션이
+만드는 것은 값이 아니라 **`{animation}`/링크 스크립트 저작물**이고, 런타임은 그 스크립트만 본다.
+
+> **판정**: 이 두 키는 **저작 편의 어노테이션**이다. "에미터를 퍼펫 뼈에 붙인다" 는 기능은
+> 어노테이션이 아니라 그것이 만들어 주는 **스크립트**가 수행하고, 그 스크립트는 씬의 평범한
+> `constantshadervalues` 애니메이션 경로로 흘러간다. **Waple 이 이 키를 파스할 이유는 없다** —
+> 파스해도 소비할 런타임 동작이 없기 때문이다. 진짜 질문은 그 스니펫이 부르는
+> `transformAttachmentToTexture` 가 동작하느냐인데 — 이름 문자열 `0x140490928`(길이 `0x1c`),
+> 등록부 `0x1401ee520`–`0x1401ef118` 안에서 `0x1401ef0a4` 가 이름을, `0x1401ef0ba`/`0x1401ef0c8`
+> 이 네이티브 포인터 **`0x1401ed0d0`**(`0x1401ed0d0`–`0x1401edb1b`)을 심는다(직접 재측).
+> 반환형은 `.d.ts:1555` 기준 `Mat3` 다.
+> **Waple 은 이미 그 자리를 알고 noop 프록시로 막아 뒀다**(`TextScriptEngine.swift` 의 `T-G15`,
+> `__makeLayer`/형제 둘 다). 즉 이 어노테이션이 유도하는 저작 흐름은 Waple 에서
+> "스크립트는 돌지만 에미터가 안 따라간다" 가 된다 — 이 문서의 결손이 아니라
+> `docs/re/scene-script-api.md` 의 결손이고, 도달 자산은 0건이다.
+
+### 1.7 셰이더·머티리얼 자산 전수 — 어느 파일이 어느 단계인가
+
+브리프 질문 4. 동봉본과 설치본은 트리 전체가 **바이트 동일**(`diff -rq` 0건, 65파일).
+`.frag`/`.vert` 는 **본체 18 + preview 사본 18 = 36개**이고, `.h` 는 이 이펙트가 소유하지
+않는다 — 전역 `shaders/` 의 것을 `#include` 한다.
+
+| 단계(패스 idx) | `.frag` | 줄 | `.vert` | 줄 | `#include` / `#require` |
+|---|---|---:|---|---:|---|
+| 0 curl | `..._curl.frag` | 21 | `..._curl.vert` | 21 | — |
+| 1 vorticity(+에미터+커서) | `..._vorticity.frag` | 210 | `..._vorticity.vert` | 101 | frag `common.h` · vert `common_perspective.h` |
+| 2 divergence | `..._divergence.frag` | 26 | `..._divergence.vert` | 23 | — |
+| 3 clear(압력 감쇠) | `..._clear.frag` | **8** | `..._clear.vert` | 15 | — |
+| 4–12 pressure ×9 | `..._pressure.frag` | 24 | `..._pressure.vert` | 23 | — |
+| 13 gradientsubtract | `..._gradientsubtract.frag` | 23 | `..._gradientsubtract.vert` | 23 | — |
+| 14·15 advection(+DYE) | `..._advection.frag` | 191 | `..._advection.vert` | 27 | vert `common_perspective.h` |
+| 16 normal | `..._normal.frag` | 30 | `..._normal.vert` | **10** | — |
+| 17 combine(출력) | `..._combine.frag` | 141 | `..._combine.vert` | 51 | frag `common_blending.h` + `common_pbr_2.h` + **`#require LightingV1`** · vert `common_perspective.h` |
+
+관측 셋 —
+
+* **`divergence.vert` · `pressure.vert` · `gradientsubtract.vert` 는 서로 바이트 동일**하다
+  (sha256 앞 8자리 `2a546c13`, 23줄 588 B ×3). §2.1 이 "같은 네 줄" 이라 부른 것은 실제로는
+  **같은 파일 내용**이다. `curl.vert`(21줄)와 `vorticity.vert`(101줄)는 `a_TexCoord` 를 기점으로
+  쓰는 점만 다르고 이웃 네 줄은 동일하다.
+* **preview 사본과 본체가 다른 파일은 정확히 셋**이다 — `combine.frag`(141↔129줄),
+  `combine.vert`(51↔53줄), `vorticity.frag`(210↔209줄). 나머지 15쌍은 sha 가 같다.
+  `effect.json` 의 `functions` 유무까지 합쳐 **차이는 총 4파일**이다(§1.1 표가 이 넷이다).
+* **드로우 18회가 만드는 구별되는 (셰이더, 콤보) 프로그램은 10개**다 — 압력 9회가 전부 같은
+  프로그램이고, `advection` 만 `DYE` 0/1 로 갈려 하나의 소스에서 둘이 나온다. 머티리얼 파일도
+  10개이고 **전건** `blending:"normal"` · `depthtest/depthwrite:"disabled"` · `cullmode:"nocull"` 이다
+  (10/10 실측).
+
+> 유체 관련 셰이더가 **전역 `shaders/` 에는 한 장도 없다**(전역 137파일 전수 확인).
+> 이름에 `fluid` 가 들어간 유일한 전역 히트는 `shimmer.frag:11` 의 그래디언트 자산명
+> `gradient/gradient_ferro_fluid` 로, 유체 시뮬과 무관하다.
+
+**이펙트 46종 중 격자 솔버는 이것 하나다**(전수 실측). FBO 를 선언하는 이펙트는 9종뿐이고,
+그중 프레임을 넘겨 상태를 들고 있는 것(`unique`)은 둘이다:
+
+| 이펙트 | 패스 | FBO | `unique` | `swap` |
+|---|---:|---:|---:|---:|
+| **fluidsimulation** | **20** | **9** | **8** | **2** |
+| motionblur | 3 | 2 | 1 | 0 |
+| cursorripple | 3 | 2 | 0 | 0 |
+| godrays · shine | 5 | 2 | 0 | 0 |
+| blur · localcontrast | 4 | 2 | 0 | 0 |
+| blurprecise · glitter | 2 | 1 | 0 | 0 |
+| 나머지 37종 | ≤2 | **0** | 0 | 0 |
+
+`watercaustics` · `waterflow` · `waterripple` · `waterwaves` 는 넷 다 **패스 1개 · FBO 0개**다 —
+프레임 간 상태를 담을 곳이 없으므로 솔버가 아니라 절차적 파형이다.
+`cursorripple` 만 2패스 파동 시뮬(`_rt_EightBuffer1/2`, `fit:512`)인데 `unique` 도 `swap` 도
+쓰지 않는다 — 그쪽 규약은 이 문서의 범위 밖이다.
+
 ---
 
 ## 2. 셰이더 전문 — 패스별 수식
@@ -435,8 +611,89 @@ float div = 0.5 * (R - L + T - B);
 
 네 개의 `if` 가 **솔버 전체에서 유일한 명시 경계조건**이다: 도메인 밖 고스트 셀의 법선 속도를
 `-C`(내부값의 반사)로 두어 **벽을 통과하지 못하게** 한다. 조건은 정점보간된 이웃 좌표로
-판정하므로 최외곽 한 줄에서만 발화한다. 다른 패스(curl/Jacobi/gradient/advection)에는
-경계 처리가 없고 클램프 샘플링에 의존한다.
+판정하므로 최외곽 한 줄에서만 발화한다 — 프래그먼트 중심이 `u.x = (i+0.5)/Nx` 이므로
+`vL.x = u.x − 1/Nx < 0` 은 `i = 0` 에서만 참이고(`0.5/Nx < 1/Nx`, `i=1` 이면 `1.5/Nx > 1/Nx`),
+네 면 모두 같다. 다른 패스(curl/Jacobi/gradient/advection)에는 경계 처리가 없고 클램프
+샘플링에 의존한다.
+
+**"반사인가 흡수인가" 에 대한 정확한 답**(브리프 질문 2) — **셋이 섞여 있고, 축마다 다르다.**
+
+| 자리 | 도메인 밖 취급 | 물리적 뜻 |
+|---|---|---|
+| divergence 의 법선 성분 (4면) | `−C` = **반사** | 벽을 통과하는 유량 0. 자유 미끄럼(free-slip)의 압력 소스항 |
+| divergence 의 접선 성분 | 손대지 않음 → 샘플러 clamp = 가장자리 복제 | 벽에서 미끄러진다(no-slip 아님) |
+| Jacobi 압력 (패스 4–12) | clamp = `p_ghost = p_inner` | `∂p/∂n = 0` — free-slip 압력 BC의 표준형. **의도적으로 맞다** |
+| gradientsubtract (패스 13) | clamp | 가장자리 열에서 `∇p_x = p(vR) − p(u)` 라 법선 속도가 **정확히 0 이 되지는 않는다**(반쪽 차분) |
+| 속도 이류 (패스 14) | clamp | 밖으로 역추적되면 **가장자리 속도를 자기복제**한다 = 흡수도 반사도 아님. 벽에 붙은 흐름이 유지된다 |
+| 염료 이류 (패스 15) | `boundaryMask` **경성 절단** = **흡수** | 밖으로 역추적된 염료는 0. 유일하게 명시적으로 버리는 자리(§2.9) |
+
+즉 **속도는 반사(법선)+미끄럼(접선), 염료는 흡수**다. 두 축이 다른 것은 원본 그대로이고
+참조 구현(PavelDoGreat)과도 같다.
+
+**그 `if` 넷이 실제로 얼마나 버는가 — 돌연변이 실측.** §2.13 과 같은 수치 재현에서, 왼쪽 벽
+6텍셀 앞에 벽을 향하는 가우시안 흐름을 놓고 투영(발산 → Jacobi 9 → 경사 제거) 한 번을 돌린 뒤
+**최외곽 열의 법선 속도**(= 벽을 통과하는 유량)를 잰 것:
+
+| | 좌벽 법선속도 `mean(abs(v_x[:,0]))` | 전체 잔존 `mean(abs(div))` |
+|---|---:|---:|
+| 투영 전 | 0.063348 | — |
+| **원본**(반사 `if` 4개) | **0.024691** | 0.000719 |
+| 돌연변이: `if` 넷 제거 | 0.065716 | 0.000464 |
+
+`if` 를 지우면 투영이 벽 유량을 **거의 손대지 못한다**(0.0633 → 0.0657, 오히려 늘었다).
+즉 이 네 줄이 이 솔버의 벽을 만드는 전부다. 흥미로운 부작용도 보인다 — **반사를 켜면 전체
+잔존 발산이 오히려 커진다**(0.000464 → 0.000719). 벽에 일부러 발산 소스를 심어 흐름을
+되밀기 때문이고, "발산을 줄이는 것" 과 "벽을 세우는 것" 이 이 스킴에서 서로 다른 목표라는 뜻이다.
+**이식할 때 `if` 넷을 빼먹으면 연기가 화면 밖으로 새어 나간다** — 그리고 잔차 지표만 보면
+"더 좋아졌다" 고 오판하게 된다.
+
+#### 2.4a 샘플러 어드레싱은 어디서 정해지는가 — **[신규 확정 2026-08-21]**
+
+위 표의 여섯 행 중 넷이 "clamp" 에 기대므로 그게 실제로 clamp 인지 기계로 못 박는다.
+종전 이 문서는 `uvs:"repeat"` 를 안 쓴다는 사실만 적고 기본값을 **근거 없이** clamp 라 불렀다.
+
+**파스** — FBO 레코드의 `uvs` 값은 문자열 `"repeat"` 와만 대조한다(길이 6 `memcmp`):
+
+```
+0x1401e78ca  cmp r8, 6                     ; 길이가 6이 아니면 대조조차 안 한다
+0x1401e78d0  lea rdx, [rip+…] ; 0x14048f6f8 "repeat"
+0x1401e78da  call memcmp
+0x1401e78e3  mov sil, 1                    ; 일치
+0x1401e78f2  xor sil, sil                  ; 불일치 — **다른 문자열은 전부 여기로**
+0x1401e7912  or edi, 4                     ; 일치일 때만 레코드 +0x48 의 bit2
+0x1401e7915  mov dword ptr [rbp+0x48], edi
+```
+
+**소비** — 렌더타깃 생성 인자를 그 bit 하나로 고른다:
+
+```
+0x1401eb976  test byte ptr [r10+0x48], 4   ; r10 = FBO 레코드
+0x1401eb97b  mov eax, ecx                  ; ecx = 0 (여기 도달 시 텍스처 포인터가 null)
+0x1401eb982  mov ecx, 2
+0x1401eb987  cmove eax, ecx                ; ZF(=bit2 없음) → eax = 2
+0x1401eb990  mov dword ptr [rbp-0x38], eax ; createRenderTarget 의 8번째 인자
+0x1401eba0b  call 0x1401aadb0              ; 8번째 인자 = 호출자 [rsp+0x38]
+             ; 피호출자는 그것을 [rsp+0x128] 에서 읽어(0x1401aade9) 다시 [rsp+0x38] 에 얹고
+             ; 0x1401aae12 이 디바이스 [vtbl+0x70] 로 **자리 그대로** 넘긴다
+```
+
+**따라서 `uvs:"repeat"` = 인자 0, 그 외(미선언 포함) = 인자 2.** 이 인자가 "어드레싱" 이고
+2 가 clamp 라는 것의 근거 둘:
+
+1. **엔진 자신의 프레임버퍼 다섯 장이 전건 2 를 넘긴다** — `_rt_<N>FrameBuffer`(`0x14017f494`),
+   `_rt_FullFrameBuffer`(`0x14017f57d`), `_rt_4FrameBuffer`(`0x14017f5cd`),
+   `_rt_8FrameBuffer`(`0x14017f60a`), `_rt_Bloom`(`0x14017f64e`) — 전부 같은 스택 슬롯
+   `[rsp+0x38]` 에 상수 `2`. 블룸/다운샘플 체인이 랩이면 화면 반대편이 가장자리로 새어 들어온다.
+2. **코퍼스에서 `uvs` 를 선언하는 유일한 FBO 가 타일 아틀라스다** — `glitter` 의
+   `_rt_GlitterTiles`(FBO 선언 112건 중 **4건** = 동봉 2 + 설치본 2, 전부 같은 이펙트의
+   본체/preview 사본). 기본이 랩이라면 이 키를 쓸 이유가 없다.
+
+> 부수 확정: `"repeat"` 정확 일치만 본다. `uvs:"clamp"` 같은 형제 값은 **조용히 무시**되고
+> 기본(2)으로 남는다 — 결과가 우연히 같아서 워크샵에서 티가 안 난다.
+> Waple 은 이미 같은 규약이다: bind 슬롯 기본 clamp(`for slot in bindSlots { texWrap[slot] = 1 }`)
+> 위에 `uvsRepeat` FBO 를 소스로 삼는 슬롯만 0 으로 재정의한다
+> (`SceneRendererResources.swift` 의 주석 마커 `X-①`. 이 파일은 이 세션에 여러 클러스터가
+> 동시에 고치고 있어 행번호가 움직이므로 마커로 가리킨다). **이 축은 갭 없음.**
 
 ### 2.5 패스 3 — 압력 감쇠 (`fluidsimulation_clear`)
 
@@ -670,6 +927,81 @@ preview 는 0(정상 알파 lerp)으로 덮는다.
 | 속도 클램프 | `[-1000, 1000]` 텍셀/초 | vorticity.frag:125 |
 | 압력 반복 | **9** (매니페스트 복제) | §2.6 |
 
+### 2.13 반복 9회의 정체 — **수렴이 아니라 평활이다** (신규, 수치 실측)
+
+브리프 질문 1 은 "각 단계가 몇 번 도는지와 그 상수의 출처" 다. 개수는 §1.4·§2.6 에서
+매니페스트 실측으로 닫혔다(9는 **하드코딩된 패스 복제**, 콤보도 저작 키도 아니다).
+남은 것은 "그래서 9회면 압력 방정식이 풀리는가" 인데, **안 풀린다.** 그리고 그게 결함이 아니다.
+
+여기 숫자는 바이너리가 아니라 **§2.2–§2.7 의 확정된 셰이더 식을 그대로 옮긴 수치 실험**이다
+(재현: 부록 A ⑦). 격자 256×144(= 1920×1080 에서의 `fit:256`), 경계는 실물과 동일하게
+divergence 만 반사 `if` 4개, 나머지는 clamp.
+
+**(a) Jacobi 의 모드별 감쇠.** `p ← (L+R+B+T − div)/4` 의 오차 감쇠계수는
+`μ = (cos kx + cos ky)/2` 다. x 방향으로만 변하는 모드(ky=0)에서:
+
+| 오차 파장 | `μ` | `μ⁹`(9회 뒤 남는 비율) |
+|---|---:|---:|
+| 2텍셀(나이퀴스트) | 0.000000 | **0.000000** |
+| 4텍셀 | +0.500000 | **0.001953** |
+| 8텍셀 | +0.853553 | **0.240478** |
+| 그리드폭 N=256 | +0.999849 | **0.998646** |
+| 최장 파장 2N | +0.999962 | **0.999661** |
+
+즉 **9회는 4텍셀 이하를 완전히 지우고 8텍셀을 1/4 로 줄이며, 그보다 큰 규모는 손도 못 댄다.**
+전형적인 다중격자 스무더 1회분이다.
+
+**(b) 투영이 실제로 지우는 발산량.** 셰이더 그대로(§2.4 발산 + 9회 Jacobi + §2.7 경사 제거,
+`0.5` 없음) 돌려 잔존 발산을 잰 것:
+
+| 입력 속도장 | 반복 9(실물) | 참고: 18 | 참고: 50 |
+|---|---:|---:|---:|
+| 에미터 규모(σ=13텍셀 ≈ `emitterSize 0.05`) | **97.40 %** | 94.90 % | 86.72 % |
+| 커서 임펄스 규모(σ=4텍셀 ≈ `cursorinfluence 1`) | **78.08 %** | 63.64 % | 80.46 % |
+| 고주파 백색잡음 | **46.52 %** | 48.09 % | 48.63 % |
+
+**에미터가 만든 큰 규모의 발산은 2.6 % 밖에 안 지워진다.** 다시 말해 이 이펙트의 흐름은
+큰 규모에서 **비압축이 아니다**. 눈에 보이는 "유체다움" 은 압력 투영이 아니라
+**이류(§2.8) + 와도 구속(§2.3)** 이 만든다.
+
+**(c) 왜 `gradientsubtract` 에 `0.5` 가 없는가 — 돌연변이로 확정.** §2.7 은 "참조 구현과 같으니
+고치지 마라" 까지만 말했다. 실제로 넣어 보면:
+
+| 입력 | 반복 | 원본(0.5 없음) | `0.5` 넣은 변종 |
+|---|---:|---:|---:|
+| 에미터 규모 | **9** | **97.40 %** | 98.70 % |
+| 커서 규모 | **9** | **78.08 %** | 89.04 % |
+| 백색잡음 | **9** | **46.52 %** | 64.54 % |
+| 커서 규모 | 500 | 115.69 %(발산) | 18.14 % |
+| 에미터 규모 | 5000 | 115.69 %(발산) | 14.90 % |
+
+**반복 9회에서는 세 경우 전부 원본이 이긴다.** `0.5` 를 넣은 "이론적으로 옳은" 형태는
+반복을 많이 줘야 비로소 유리해지고, 원본은 반복을 늘리면 오히려 **발산한다**(2배 과이완이라
+수렴 반경 밖). 즉 **`0.5` 누락과 반복 9회는 한 쌍으로 튜닝된 값**이다 —
+둘 중 하나만 "고치면" 그림이 나빠진다. 이식자에게 주는 규칙은 하나다:
+**반복수와 계수를 함께 바꾸지 않는 한 어느 쪽도 건드리지 마라.**
+
+**(d) `u_Pressure`(압력 감쇠, §2.5)의 실제 역할.** 전 프레임 압력을 초기추정으로 재활용하는
+따뜻한 시작이다. 매끄러운 발산장에서의 정상상태 **Jacobi 잔차** `|∇²p − div|`(초기 대비.
+(b)의 "잔존 발산" 과는 다른 지표다 — 이쪽은 압력 방정식이 얼마나 풀렸는지만 본다):
+
+| `u_Pressure` | 정상상태 잔차 | 도달 프레임 |
+|---:|---:|---|
+| 0.0 (재활용 없음) | 99.77 % | 즉시 |
+| **0.8 (기본·preview)** | **98.76 %** | ~10 |
+| 0.95 | 94.85 % | ~60 |
+| 1.0 (감쇠 없음) | 22.28 % | ~600(10초) |
+
+**기본값 0.8 에서는 따뜻한 시작이 사실상 아무것도 벌어 주지 않는다**(99.77 → 98.76 %).
+큰 규모 압력을 실제로 누적하려면 `pressure` 를 1.0 에 붙여야 하고, 그러면 반응이 10초 느려진다.
+그래서 UI 슬라이더 `pressure [0,1]` 은 "얼마나 비압축으로 갈 것인가 ↔ 얼마나 빨리 반응할 것인가"
+의 트레이드오프 노브다. 백색잡음처럼 고주파가 실린 장에서는 같은 0.8 이 18.9 % → 7.7 % 로
+**두 배 넘게** 벌어 준다 — 즉 이 노브도 고주파 대역에서만 효과가 있다.
+
+> **경계 — 이 절은 바이너리 실측이 아니다.** (a)–(d) 는 확정된 셰이더 식의 수치 재현이다.
+> 실물 GPU 는 `r16f`(10비트 가수)로 돌므로 아주 작은 잔차 구간에서는 여기 숫자보다 나쁘다.
+> 반올림 영향은 재지 않았다 — [미해결]로 §9 에 남긴다.
+
 ---
 
 ## 3. 핑퐁 규약
@@ -738,12 +1070,41 @@ Waple 은 `makeSwapPass` → `fboTex.swapAt`, `SceneRendererResources.swift:899-
 `dl=1`/`r8d=0`) ④ 타깃 복귀. **`executeMaterialFunction` 의 클리어(§4.2)와 글자 그대로 같은
 5-호출 시퀀스**다.
 
-**클리어 빈도는 [미해결]** — 그 코드는 텍스처 신규 생성(`0x1401eba0b`)과 기존 리사이즈
-(`0x1401eba23`) **양쪽 경로 뒤에** 있고, 이 루틴(`0x1401ea500`)은 vtable 슬롯
-(`0x140490540`)이라 rel32 호출부가 없어 호출 빈도를 못 짚었다. 다만 **매 프레임일 수는 없다**:
-`clear` 를 가진 6장이 전부 속도/압력/염료이고, 매 프레임 0 으로 비우면 이 이펙트는 어떤
-그림도 못 만든다. 그래서 "생성/리사이즈 시 1회" 로 취급하는 Waple 의 현행 규약
-(`SceneRendererFrameEncoder.swift:2069-2075`)이 관측과 모순되지 않는다.
+**클리어 빈도는 여전히 [미해결]이지만, 기구는 좁혔다**(2026-08-21 재측). 종전 서술은
+"생성과 리사이즈 **양쪽 경로 뒤에** 있다" 였는데, 그보다 강하다 — **두 경로가 클리어에서
+합류한다**:
+
+```
+0x1401eb96a  mov rcx, qword ptr [r10]      ; 레코드 +0 = 보유 중인 렌더타깃(있으면 non-null)
+0x1401eb970  jne 0x1401eba1c               ; 이미 있다 → 리사이즈 갈래
+             ...(없을 때)  0x1401eba0b  call 0x1401aadb0   ; 신규 생성
+0x1401eba10  mov rcx, [rbp-0x68]           ; ↘
+0x1401eba1c  mov r8d, [rbp-0x30]           ; (리사이즈 갈래)
+0x1401eba23  call 0x140161f40              ;  RT::resize
+0x1401eba28  mov rcx, [rbp-0x68]           ; ↘
+0x1401eba2c  test byte ptr [rcx+0x48], 2   ; ← 두 갈래가 여기서 만난다. 조건은 clear 비트뿐
+0x1401eba30  je  0x1401ebadf
+```
+
+즉 **이 루틴이 불릴 때마다, 크기가 안 변해도 클리어가 돈다.** "생성 시 1회" 는 기구의 성질이
+아니라 **호출 빈도의 성질**이다. 그래서 질문은 `Effect::acquireRenderTargets`(`0x1401ea500`)의
+호출 빈도 하나로 좁혀진다. 그것은 못 짚었다 — 이 함수는 이펙트 클래스 vtable
+(**베이스 `0x140490488`**, 생성자 `0x1401e698e`·`0x1401e6b52` 가 `lea` 로 싣는다)의
+**슬롯 23 = `+0xB8`** 이고, `call [reg+0xB8]` 사이트 24곳을 전수로 훑었지만 전부 다른 클래스의
+vtable(`[[ctx+0xc8]+0x158]` 매니저 등)이라 이 클래스의 호출부를 특정하지 못했다.
+
+함수적 배제는 그대로 유효하다: `clear` 를 가진 6장이 전부 속도/압력/염료이고 매 프레임 0 이면
+이 이펙트가 어떤 그림도 못 만든다. 그러므로 "생성/리사이즈 시 1회" 로 취급하는 Waple 의 현행 규약
+(`SceneRendererFrameEncoder.swift:2069-2075`)은 관측과 모순되지 않는다.
+
+> **다만 갈라지는 구간이 하나 있다.** WE 는 이 루틴이 불리면 **크기가 그대로여도** 비운다.
+> Waple 은 보유 텍스처의 `(폭, 높이, 포맷)` 이 어긋날 때만 재생성하고 그때만 `pendingClear` 에
+> 넣는다(`SceneRendererFrameEncoder.swift` 의 주석 마커 `X-⑧` 아래 `uniqueStore` 할당 루프 —
+> 이 파일도 동시 편집 중이라 행번호 대신 마커로 가리킨다).
+> `fit:256` 버퍼는 1920×1080 ↔ 2560×1440 에서 **둘 다
+> 256×144** 라 치수가 안 바뀌므로, 창을 그 사이로 리사이즈하면 **WE 는 (호출된다면) 비우고
+> Waple 은 유지한다**. 그림 차이는 "리사이즈 순간 흐름이 리셋되는가" 한 프레임짜리이고,
+> 도달 자산이 0건이라 지금 고칠 것은 아니다 — 위 호출 빈도가 확정되면 그때 판정할 자리다.
 
 ---
 
@@ -868,11 +1229,29 @@ WE 자신은 한 번도 쓰지 않는다. 그래서 이 결함이 지금까지 �
    Waple 은 파스된 실인덱스를 쓰고 `materialFunctionClearTargets(_:table:fboCount:)`
    (`SceneRendererResources.swift:154-163`)가 `0..<fboCount` 로 한 번 더 자르므로 면역이다.
 
-> **[미해결] 파서 쪽 잠재 결함 하나.** 이름 탐색 커서 `esi` 가 `0x1401e85fb` 에서 `r13d` 로
-> **시드**되는데, `r13d` 를 0 으로 되돌리는 `xor r13d, r13d`(`0x1401e87e3`)를 건너뛰는 경로가
-> 하나 있다(`0x1401e85f2` 의 긴-문자열 해제 분기 → `0x1401e87e6`). 커서가 이월되면 배열 뒤쪽
-> 이름이 앞쪽 fbo 를 못 찾아 개수가 줄 수 있다. **이 이펙트에서는 두 목록 모두 인덱스가
-> 오름차순(0,1 / 6,7)이라 어느 쪽이든 n=2 로 같다** — 그래서 그림에는 영향이 없다.
+> **~~[미해결] 파서 쪽 잠재 결함 하나.~~ → [해결 2026-08-21] 결함이 아니다 — 기재를 철회한다.**
+>
+> 종전 이 각주는 이렇게 적었다: 이름 탐색 커서 `esi` 가 `0x1401e85fb` 에서 `r13d` 로 시드되는데
+> `xor r13d, r13d`(`0x1401e87e3`)를 건너뛰는 경로(`0x1401e85f2`)가 있으니 커서가 이월될 수 있다.
+> **다시 떠서 보니 `r13` 은 커서가 아니라 MSVC 가 함수 전체에 걸쳐 쓰는 영(零) 레지스터다.**
+>
+> 증거는 세 갈래를 다 따라가면 나온다:
+>
+> * **함수 앞머리가 r13 을 상수 0 으로 쓴다** — `mov [rbp-0x70], r13d`(`0x1401e850a`) ·
+>   `mov [rbp-0x58], r13`(`0x1401e850e`) · `mov rbx, r13`(`0x1401e8554`) ·
+>   `mov rdi, r13`(`0x1401e8578`). 전부 "0 을 넣는" 자리다.
+> * **탐색 갈래만 r13 을 더럽힌다** — `mov r13, [rbp-0x30]`(`0x1401e85fe`, 임시 문자열 포인터) ·
+>   `mov r13, rax`(`0x1401e87d8`). 그래서 그 갈래 끝에 `xor r13d, r13d`(`0x1401e87e3`)로
+>   **영 레지스터 불변식을 복구**한다. 커서 리셋이 아니다.
+> * **건너뛰는 두 경로는 r13 을 아예 안 건드린다** — `0x1401e85f2`(빈 이름:
+>   `asString`(`0x140085cc0`) 결과 길이 0 → `test r12,r12`/`jne` 가 `0x1401e85b1` 에서 안 갈림) ·
+>   `0x1401e8597`(값 타입이 문자열(4)이 아님). 두 경로 사이 구간(`0x1401e8581`–`0x1401e85f2`)에
+>   r13 을 쓰는 명령은 **읽기 둘뿐**이고 쓰기는 없다.
+>
+> ⇒ `esi` 는 **모든 항목에서 0 으로 시드된다.** 이월은 일어나지 않는다.
+> (종전 기재가 무해했던 이유도 같이 적어 둔다: 이 이펙트의 두 목록은 인덱스가 오름차순이라
+> 이월이 있었더라도 n=2 로 같았을 것이다. 그래서 그림으로는 판별이 안 됐고, 그게 이 오독이
+> 오래 남은 이유다 — **공통 브리프 함정 #16 의 실례**다.)
 
 ### 4.6 Waple 의 현재 선택
 
@@ -1049,6 +1428,8 @@ float amt = smoothstep(size, 0.0, length(delta));      // edge0 > edge1 → 중�
 | 22 | `ddx`/`ddy`/`frac`/`saturate`/`CAST*`/`texSample2D` | HLSL 방언 | 전건 매핑 | 지원 | `GLSLTranslator.swift:1586-1690` |
 | 23 | 조건문(`if (vL.x < 0.0) {...}`) · 다중 varying(vec2/vec3/vec4×3) | — | 본문 통과 + 타입 어댑터 | 지원 | — |
 | 24 | 압력 9회 = 파이프라인 18개 | — | 패스별 `MTLRenderPipelineState` 18개(같은 셰이더 9개는 같은 MSL 이지만 별개 파이프라인) | 지원, 비용 축 | — |
+| 25 | **샘플러 어드레싱(`fbos[].uvs`)** | 기본 인자 `2`(clamp), `uvs:"repeat"` 만 `0`. 파스 `0x1401e78ca`–`0x1401e7915`, 소비 `0x1401eb976`–`0x1401eb990` | bind 슬롯 기본 `texWrap=1`(clamp) + `uvsRepeat` FBO 소스 슬롯만 `0` | **지원 — 갭 없음**(신규 확정 §2.4a). 이 이펙트는 `uvs` 0건이라 아홉 장 전건 clamp 이고, 그게 §2.4 경계조건의 전제다 | `SceneRendererResources.swift` 마커 `X-①` |
+| 26 | **`constantshadervalues` 의 미선언 키** | 매칭 없으면 그냥 안 실린다 | 동일(모르는 키 무시) | **지원** — 그래야 한다. 이 이펙트 preview 씬만으로 56건 중 **22건**이 대상 패스가 선언하지 않은 키다(§1.6.1). 경고를 찍으면 프레임마다 22줄 | — |
 
 ### 6.2 판정 — 이걸 지금 로드하면
 
@@ -1184,28 +1565,51 @@ W1 은 순수 산술이라 리눅스 레인에서 단위 테스트로 닫히고 
 
 ## 9. 확정하지 못한 것
 
-1. **[미해결] `clear` 실행 빈도**(§3.3). 기구는 `0x1401eba2c`–`0x1401ebadf` 로 확정했으나,
-   그 코드를 품은 `0x1401ea500` 이 vtable 슬롯(`0x140490540`)이라 호출 빈도를 못 짚었다.
-   함수적 배제(매 프레임일 수 없다)만 세웠다.
-2. **[미해결] `fit` × `scale` 동시 선언**의 해석. 이 이펙트에 사례가 없고
-   `createRenderTarget`(`0x1401aadb0`)이 `scale` 을 가상호출 `[[dev]+0x70]` 로 넘겨서
-   내부 처리를 못 열었다.
-3. **[미해결] 에디터가 `LIGHTING` 을 `effects[].combos` 에도 쓰는가**(§1.5).
-   출하 씬 184개에 `effects[].combos` 가 0건이라 역산 불가. 안 쓴다면 WE 자신도
-   `LIGHTING=1` 에서 `g_Texture2` 미바인드로 돈다.
-4. **[미해결] `functions` 파서의 탐색 커서 이월**(§4.5 각주). `0x1401e85fb` 가 `esi` 를
-   `r13d` 로 시드하는데 `xor r13d,r13d`(`0x1401e87e3`)를 건너뛰는 경로가 하나 있다.
-   이 이펙트에서는 두 목록 모두 오름차순이라 결과가 같아 판별이 안 된다.
-5. **[미해결] `wallpaperui.exe` 의 `executeMaterialFunction` 용례.** 엔진과 공유하는 스크립트
-   바인딩 등록으로 설명되지만, 에디터 UI 에 "리셋" 버튼이 있는지는 확인하지 않았다
-   (에디터 바이너리는 이 조사 범위 밖).
-6. **[미해결] `attachmentproject` / `attachmentangles` 어노테이션**(본체 vorticity.frag 의
-   `m_EmitterPos*`·`m_LineEmitterPos*` 12건). preview 사본에는 없는 신규 키이고
-   `wallpaper64.exe` 문자열 스캔에서 확인하지 않았다. 퍼펫/어태치먼트에 에미터를 붙이는
-   에디터 기능으로 보이나 런타임 소비 여부 미확정.
-7. **[미해결] 워크샵 코퍼스에서의 실제 사용 분포.** 이 컨테이너에 워크샵 pkg 가 없어
+**아직 열려 있는 것**
+
+1. **[미해결] `Effect::acquireRenderTargets`(`0x1401ea500`)의 호출 빈도**(§3.3).
+   클리어 기구 자체는 이제 완전히 열렸다 — 생성 갈래와 리사이즈 갈래가 `0x1401eba2c` 에서
+   **합류**하므로 이 루틴이 불릴 때마다 `clear` 비트가 선 FBO 는 비워진다. 남은 것은
+   "얼마나 자주 불리는가" 하나다. 이 함수는 이펙트 vtable(베이스 `0x140490488`, 생성자
+   `0x1401e698e`·`0x1401e6b52`)의 **슬롯 23 = `+0xB8`** 이고, 이미지 전체에서
+   `call [reg+0xB8]` 24곳을 훑었지만 전부 다른 클래스의 vtable 이었다.
+   함수적 배제(매 프레임일 수 없다)만 세웠다. **다음 수단**: 이 vtable 을 `[obj]` 에 심는
+   생성자 두 곳에서 객체가 어느 컨테이너에 등록되는지 따라가 그 컨테이너의 순회 지점을 찾는 것.
+2. **[미해결] 에디터가 `LIGHTING` 을 `effects[].combos` 에도 쓰는가**(§1.5).
+   출하 씬 184개에 `effects[].combos` 가 0건이라 역산 불가. 에디터 프런트엔드(`ui/dist`, 1,548
+   파일)의 JS 에서 `combos` 를 쓰는 자리는 `shaderpreset.combos` 하나뿐이라 **거기서도 답이
+   안 나온다** — 이펙트 콤보 저작은 네이티브 `wallpaperui.exe` 안에 있고 그 바이너리는
+   이 조사 범위 밖이다. 안 쓴다면 WE 자신도 `LIGHTING=1` 에서 `g_Texture2` 미바인드로 돈다.
+3. **[미해결] 워크샵 코퍼스에서의 실제 사용 분포.** 이 컨테이너에 워크샵 pkg 가 없어
    `functions`/`executeMaterialFunction`/`effects[].combos` 의 실사용 빈도를 못 쟀다.
    설치본만으로는 "출하 콘텐츠 도달 0" 까지가 한계다.
+4. **[미해결] `r16f`/`rg16f` 반올림이 §2.13 의 수치에 미치는 영향.** 그 절은 float64 로
+   재현한 것이고 실물은 반가수 10비트다. 잔차가 작아지는 구간에서 실물이 더 나쁠 것은
+   확실하나 얼마나인지는 재지 않았다. 압력장이 `r16f` 한 장이라는 점(§1.2)이 실제 수렴
+   한계를 §2.13(b)보다 앞당길 수 있다.
+
+**이번에 닫은 것**(툼스톤 — 종전 항목 번호를 남긴다)
+
+5. ~~[미해결] `fit` × `scale` 동시 선언~~ → **[해결] §1.3.1.** `scale` 은 `fit` 계산에 참여하지
+   않고 렌더타깃 생성자 `0x1400d2c60` 이 나눈다. 최종 = `max(2, W'/scale) × max(2, H'/scale)`.
+   코퍼스 도달 0건(FBO 선언 112건 중 `fit`+`scale` 동시 0건). **이 항목이 §1.3.1 착지 이후에도
+   목록에 남아 있었다 — 그 자체가 기재 오류였고 여기서 정리한다.**
+6. ~~[미해결] `functions` 파서의 탐색 커서 이월~~ → **[해결] §4.5 각주.** 이월은 없다.
+   `r13` 은 커서가 아니라 MSVC 영 레지스터이고, `xor r13d,r13d`(`0x1401e87e3`)를 건너뛰는 두
+   경로(`0x1401e85f2`·`0x1401e8597`)는 r13 을 애초에 더럽히지 않는다. **원래 기재가 오독이었다.**
+7. ~~[미해결] `wallpaperui.exe` 의 `executeMaterialFunction` 용례~~ → **[해결] 버튼은 없다.**
+   에디터 프런트엔드 `ui/` 1,548 파일 전수에서 `executeMaterialFunction` 히트는
+   `monaco/autocomplete/lib.sceneScript.d.ts`(= 저작자용 자동완성 선언) **한 줄뿐**이고,
+   `clearDye`/`clearVelocity` 는 설치본 **전체**에서 `assets/effects/fluidsimulation/effect.json`
+   **한 파일**에만 있다(바이너리 0건, JS 0건). 에디터 UI 는 JS 주도이므로(§1.6.3 의
+   `attachmentproject` 버튼이 그 패턴을 보여 준다) UI 버튼이 있으려면 JS 에 이름이 있어야 한다.
+   없다. **잔여 리스크**: `wallpaperui.exe` 네이티브 안에 문자열 없이 호출하는 경로가 있을
+   가능성은 배제 못 한다 — 그 바이너리 디스어셈은 이 조사 범위 밖이다.
+8. ~~[미해결] `attachmentproject` / `attachmentangles`~~ → **[해결] §1.6.3.** 런타임 바이너리
+   전수 0건, 에디터 `wallpaperui.exe` 만 각 1건. 씬 스크립트 링크 스크립트를 생성해 주는
+   **저작 편의 어노테이션**이고 런타임 소비는 없다. 종전 기재의 건수 "12" 도 정정했다 —
+   `attachmentproject` **10** · `attachmentangles` **4**(그리고 후자는 불리언이 아니라
+   짝 각도 프로퍼티 **이름 문자열**이다).
 
 ---
 
@@ -1282,13 +1686,113 @@ python3 "$SP/vdis2.py" 0x1401e8248 0x1401e88a1   # functions 파서
 python3 "$SP/vdis2.py" 0x1401e7440 0x1401e7969   # fbos[] 필드 파서(fit/scale/clear/unique/uvs)
 python3 "$SP/vdis2.py" 0x1401eb2b0 0x1401eb3a0   # fit 종횡비 계산  ← §1.3 의 핵심
 python3 "$SP/vdis2.py" 0x1401eba14 0x1401ebae0   # clear 실행 5-호출 시퀀스
-python3 "$SP/vdis2.py" 0x1401effc0 0x1401f01b0   # 스크립트 메서드 등록표
+python3 "$SP/vdis2.py" 0x1401efca0 0x1401f01b0   # 스크립트 메서드 등록표(함수 시작 = 0x1401efca0)
 python3 -c "import sys;sys.path.insert(0,'$SP');import wxref;print(wxref.funcs_of(0x1401e63b0))"
-#   → {0x1401e7170: [0x1401e7405, 0x1401e79fe, 0x1401e7ed0]} — conditions 평가 3지점
+#   → {0x1401e7170: [0x1401e7405, 0x1401e79fe, 0x1401e7ed0]} — conditions 평가 3지점.
+#     주의: wxref 가 돌려주는 값은 **rel32 피연산자의 주소**이지 호출 명령의 시작이 아니다.
+#     그래서 이 셋은 명령 경계 대조 대상이 아니다(§부록 A 말미의 대조에서 제외).
+
+# ⑥b 어드레싱(§2.4a) — 파스 · 소비 · 엔진 프레임버퍼의 상수 2
+#    **반드시 함수 시작에서 선형으로 내려온다.** 임의의 중간 주소를 시작으로 주면 vdis2 가
+#    명령 경계를 잃고 쓰레기를 뱉는다(공통 브리프 §1). 원하는 구간은 grep 으로 골라라.
+python3 "$SP/vdis2.py" 0x1401e7170 0x1401e8a9d | sed -n '/1401e78ca/,/1401e7918/p'  # uvs=="repeat" → +0x48 bit2
+python3 "$SP/vdis2.py" 0x1401ea500 0x1401ebbb6 | sed -n '/1401eb96a/,/1401eba30/p'  # bit2 → 인자 0/2 → createRenderTarget
+python3 "$SP/vdis2.py" 0x14017f1b0 0x14017fa6f | grep -n 'rsp + 0x38\], 2\|call 0x1401aadb0'  # 프레임버퍼 5장 전부 2
+python3 "$SP/vdis2.py" 0x1401e7170 0x1401e8a9d | sed -n '/1401e8593/,/1401e8691/p'  # functions 이름 탐색(§4.5 각주)
+
+# ⑥c vtable 슬롯 확인(§3.3 [미해결] 1)  → 베이스 0x140490488, +0xB8 = 0x1401ea500
+python3 - <<'EOF6C'
+import sys,struct; sys.path.insert(0,'$SP')
+from wpe import pe, DATA
+o=pe.va2off(0x140490488)
+for k in range(0x18):
+    print(hex(0x140490488+8*k), hex(struct.unpack_from('<Q',DATA,o+8*k)[0]))
+EOF6C
+
+# ⑦ §2.13 수치 실험 — 셰이더 식 그대로(격자 256×144, divergence 반사 4면, 나머지 clamp).
+#    반복수 n 과 gradientsubtract 계수(1.0 / 0.5)를 바꿔 잔존 발산을 재는 것이 전부다.
+#    스크립트는 세션 스크래치에 두었다(AO_jacobi.py / AO_jacobi2.py / AO_proj2.py).
+#    numpy 만 있으면 §2.13 의 세 표가 그대로 재현된다.
+
+# ⑧ 저작 오버라이드 vs 셰이더 선언(§1.6.1) · 씬 도달(§1.6.2) · 셰이더 전수(§1.7)
+python3 - <<'EOF8'
+import os,json,re,hashlib
+FX='/home/user/Waple/Sources/WapleRender/Resources/WEAssets/effects/fluidsimulation'
+rj=lambda p: json.loads(re.sub(r',(\s*[}\]])',r'\1',open(p,encoding='utf-8').read()))
+eff=rj(f'{FX}/effect.json'); scene=rj(f'{FX}/preview/scene.json')
+sc=[e for o in scene['objects'] for e in (o.get('effects') or []) if 'fluid' in str(e.get('file',''))][0]
+def matkeys(base):
+    ks=set()
+    for ext in ('.frag','.vert'):
+        p=f'{FX}/shaders/{base}{ext}'
+        if os.path.exists(p):
+            ks |= set(re.findall(r'"material"\s*:\s*"([^"]+)"', open(p,encoding='utf-8').read()))
+    return ks
+D=U=0
+for p,sp in zip(eff['passes'], sc['passes']):
+    if 'command' in p: continue
+    sh=rj(f'{FX}/{p["material"]}')['passes'][0]['shader']
+    ks=matkeys(sh); ov=set((sp.get('constantshadervalues') or {}).keys())
+    D+=len(ov&ks); U+=len(ov-ks)
+print('선언된 키 오버라이드', D, '· 미선언', U)      # 기대: 34 / 22
+for t in ('shaders/effects','preview/shaders/effects'):
+    for f in sorted(os.listdir(f'{FX}/{t}')):
+        b=open(f'{FX}/{t}/{f}','rb').read()
+        print(t.split('/')[0], f, len(b.splitlines()), hashlib.sha256(b).hexdigest()[:8])
+EOF8
+#   기대: divergence/pressure/gradientsubtract 의 .vert 가 전부 sha 2a546c13 · 23줄
+#         본체↔preview 가 다른 파일은 combine.frag / combine.vert / vorticity.frag 셋뿐
+
+# ⑨ attachment 어노테이션 · executeMaterialFunction 의 에디터 도달(§1.6.3 · §9-7·8)
+python3 - <<'EOF9'
+import os
+WE='/home/user/Waple-wallpaper-source/wallpaper_engine'
+for dp,_,fs in os.walk(WE):
+    for f in fs:
+        if not f.lower().endswith(('.exe','.dll')): continue
+        d=open(os.path.join(dp,f),'rb').read()
+        for s in ('attachmentproject','attachmentangles'):
+            a,u=d.count(s.encode()), d.count(s.encode('utf-16-le'))
+            if a or u: print(os.path.join(dp,f).replace(WE,''), s, a, u)
+EOF9
+#   기대: bin/wallpaperui.exe 와 그 distribution 사본만, 각 (1, 0). 런타임 바이너리 0건.
+grep -rl 'attachmentproject\|attachmentangles' "$WE" | grep -v '\.exe$'   # JS 1 + frag 1
+grep -rl 'executeMaterialFunction' "$WE/ui"                              # .d.ts 1건뿐
+grep -rl 'clearDye\|clearVelocity' "$WE"                                 # effect.json 1건뿐
 ```
 
 게이트: `python3 scripts/spec/check_address_ranges.py` · `python3 scripts/spec/validate.py`
 (둘 다 이 문서 작성 전후로 오류 0).
+
+**인용 VA 기계 대조(문서 전건).** 이 문서에 적힌 `0x14…` 주소를 전부 뽑아
+`.pdata` 함수 시작에서 **선형으로** 디스어셈해 명령 경계인지 대조했다(뒤로 디스어셈 금지).
+2026-08-21 실행 결과 — 인용 주소 **229개** 중:
+
+* `.text` 안 **174건** → 명령 경계 **173건 OK**. 유일한 비-경계는 `0x1401ebae0` 인데,
+  이건 위 ⑥ 의 `vdis2.py <시작> <끝>` 의 **끝 인자**라 경계일 필요가 없다(시작만 경계여야 한다).
+* `.rdata` 등 `.pdata` 밖 **52건** — 문자열 앵커와 vtable 앵커라 명령 검사 대상이 아니다.
+* 예외 3건(`0x1401e7405` · `0x1401e79fe` · `0x1401e7ed0`)은 `wxref` 가 돌려주는
+  **rel32 피연산자 주소**라 역시 대상이 아니다.
+
+이 대조로 이번 갱신의 초안에서 **비-경계 시작 주소 3건**(`0x1401e78b0` · `0x1401eb960` ·
+`0x14017f480`)과 종전부터 있던 **1건**(`0x1401effc0`)을 잡아 함수 시작으로 바꿨다.
+재현:
+
+```python
+import sys, re, io, contextlib
+sys.path.insert(0, SP)
+from wpe import merged
+from vdis2 import dis
+for va in VAS:                      # 문서에서 뽑은 VA 목록
+    m = merged(va)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out = dis(m[0], m[1])       # ← 반드시 함수 시작부터
+    txt = out if isinstance(out, str) else buf.getvalue()
+    starts = {int(x.group(1), 16) for x in
+              (re.match(r'^(0x[0-9a-f]+)\s+([0-9a-f]+)\s+(.*)$', l) for l in txt.splitlines()) if x}
+    assert va in starts, hex(va)
+```
 
 ## 부록 B — 이 문서가 인용한 함수 범위
 
@@ -1300,8 +1804,12 @@ python3 -c "import sys;sys.path.insert(0,'$SP');import wxref;print(wxref.funcs_o
 | ↳ `functions` 파스 | `0x1401e8248`–`0x1401e88a1` | 키 사전순, action `clear` 고정, 이름→인덱스 선형탐색 `0x1401e8630`–`0x1401e867d` |
 | `Effect::evalConditions` | `0x1401e63b0`–`0x1401e6976` | 맨몸=`==`, `ge/gt/le/lt`, 전부 AND, fail-open |
 | `Effect::acquireRenderTargets` | `0x1401ea500`–`0x1401ebbb6` | `fit` 종횡비 `0x1401eb2cc`–`0x1401eb381` · unique 키 `0x1401eb38c` · 공유 키 `0x1401eb4fa` · 생성/리사이즈 `0x1401eb96a`–`0x1401eba28` · clear `0x1401eba2c`–`0x1401ebadf` |
-| ↳ (호출자, vtable `0x140490538`) | `0x1401ea310`–`0x1401ea4e0` | 대상 크기 질의 → 위 루틴 |
-| `Effect::createRenderTarget` | `0x1401aadb0`–`0x1401ab3d8` | 이름 해시 + 풀 조회 + `[[dev]+0x70]` 생성 |
+| ↳ (호출자, vtable `0x140490538` = 슬롯 22) | `0x1401ea310`–`0x1401ea4fa` | 대상 크기 질의 → 위 루틴. **종전 기재 `–0x1401ea4e0` 은 짧았다** — `.pdata` 조각 3개를 이은 실범위가 `0x1401ea4fa` 다(2026-08-21 재측) |
+| `Effect::createRenderTarget` | `0x1401aadb0`–`0x1401ab40d` | 이름 해시 + 풀 조회 + `[[dev]+0x70]` 생성(`0x1401aae12`, 인자 8개를 그대로 전달). **종전 기재 `–0x1401ab3d8` 은 정상 반환 경로의 끝이고 `.pdata` 실끝은 `0x1401ab40d`**(오류 스로우 꼬리 포함) |
+| `RT::RT`(렌더타깃 생성자) | `0x1400d2c60`–`0x1400d3219` | `scale` 나눗셈 + 하한 2(§1.3.1) |
+| `RT::resize` | `0x140161f40`–`0x140162037` | 기존 텍스처 재치수화(§1.3.1·§3.3) |
+| `Engine::createFrameBuffers`(가칭) | `0x14017f1b0`–`0x14017fa6f` | `_rt_<N>FrameBuffer`·`_rt_FullFrameBuffer`·`_rt_4FrameBuffer`·`_rt_8FrameBuffer`·`_rt_Bloom` 다섯 장을 만든다. **어드레싱 인자가 전건 상수 `2`** — `0x14017f494`·`0x14017f57d`·`0x14017f5cd`·`0x14017f60a`·`0x14017f64e`(§2.4a 근거 1) |
+| jsoncpp `asString` | `0x140085cc0`–`0x140085e58` | `functions` 의 fbo 이름 문자열화(`0x1401e85a5`) |
 | `Effect::executeMaterialFunction` | `0x1401ee3a0`–`0x1401ee51b` | 이름 선형탐색 `0x1401ee3d0`–`0x1401ee40a` · **개수만 뽑는 결함** `0x1401ee411`–`0x1401ee41b` · 클리어 루프 `0x1401ee440`–`0x1401ee4fe` |
 | `Effect::setMaterialProperty` | `0x1401ee1d0`–`0x1401ee3a0` | 형제 스크립트 메서드(이 문서는 등록만 인용) |
 | `Effect::registerScriptAPI` | `0x1401efca0`–`0x1401f01b0` | `visible`/`name`/`getMaterial`/`getMaterialCount`/`setMaterialProperty`/`executeMaterialFunction` |
@@ -1317,4 +1825,17 @@ python3 -c "import sys;sys.path.insert(0,'$SP');import wxref;print(wxref.funcs_o
 `"getMaterialCount"`=`0x1404908c0` · `"setMaterialProperty"`=`0x1404908d8` ·
 `"executeMaterialFunction"`=`0x1404908f0` · `"getMaterial"`=`0x140490948` ·
 `"combos"`=`0x14048b4c4` · `"scale"`=`0x14048f64c` · `"repeat"`=`0x14048f6f8` · `"_"`=`0x14048de40` ·
-`"width"`=`0x140473be8` · `"height"`=`0x140473bf8` · `"name"`=`0x1404748b8` · `"visible"`=`0x1404903a0`.
+`"width"`=`0x140473be8` · `"height"`=`0x140473bf8` · `"name"`=`0x1404748b8` · `"visible"`=`0x1404903a0` ·
+`"_rt_"`=`0x14048dfe8` · `"FrameBuffer"`=`0x14048dff0` · `"_rt_FullFrameBuffer"`=`0x14048b588` ·
+`"_rt_4FrameBuffer"`=`0x14048e058` · `"_rt_8FrameBuffer"`=`0x14048e040` · `"_rt_Bloom"`=`0x14048e030`.
+
+**vtable 앵커.** 이펙트 클래스 vtable 베이스 = **`0x140490488`**(생성자 `0x1401e698e` ·
+`0x1401e6b52` 가 `lea rax, [rip+…]` 로 싣는다 — rip-상대 스캔 실측, 이 두 곳이 전부다).
+슬롯 22(`+0xB0`) = `0x140490538` → `0x1401ea310`, 슬롯 23(`+0xB8`) = `0x140490540` →
+`0x1401ea500`.
+
+이미지 전체 바이트 스캔으로 **`0x1401ea500` 이 박힌 자리는 4곳**이다 — `0x140490540` ·
+`0x140491260` · `0x140491a08` · `0x140491dc8`. 그중 셋(`0x140490540` · `0x140491a08` ·
+`0x140491dc8`)은 바로 앞 칸(`−8`)에 `0x1401ea310` 을 갖는 파생 vtable 이고,
+`0x140491260` 만 슬롯 22 를 다른 함수로 덮었다. **어느 vtable을 통해 오든 오프셋은 `+0xB8` 로
+같다** — 그래서 §3.3 의 호출부 탐색을 `+0xB8` 로 걸었고, 그 24곳이 전부 다른 클래스였다.
