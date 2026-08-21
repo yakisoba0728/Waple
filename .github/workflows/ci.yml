@@ -32,6 +32,25 @@ on:
 # PR 은 `<br>` 로 **다른 그룹**이 된다. 이 리포는 PR 을 쓰지 않아(전체 82런 중 pull_request 0건)
 # 실제 비용은 0 이지만, 주석이 하는 주장은 사실이 아니었다. PR 을 쓰기 시작하면 같은 커밋이
 # 두 번 돈다 — 그때는 키를 `github.event.pull_request.head.sha || github.sha` 꼴로 바꿔야 한다.
+#
+# [2026-08-21] **취소가 얼마나 일어나는지 실측했다 — 그리고 그대로 둔다.**
+# API 최근 400런 기준: `CI` success 103 · failure 42 · **cancelled 78** · in_progress 1,
+# `spec` success 159 · failure 10 · **cancelled 0**, `Release` 7. 이벤트는 push 398 ·
+# workflow_dispatch 2 · **pull_request 0**(위 정정이 인용한 "82런 중 0건" 을 400런으로 갱신).
+#
+# 즉 macOS 잡은 **약 3분의 1이 취소된다**. 이번 세션이 전형적인 사례다 — 오케스트레이터가
+# 클러스터 결과를 연달아 푸시해서 `7a0e962`·`8de9dba`·`e8ae206`·`0c3e18c`·`fd5532b` 다섯 커밋의
+# macOS 런이 죽고 tip(`2642488`)만 끝까지 돌았다.
+#
+# **그래도 `cancel-in-progress: true` 가 맞다.** 취소되는 것은 잡당 ~10분짜리 macOS 러너 두 대이고,
+# 브랜치에 실제로 출하되는 상태는 tip 하나다. 끄면 이번 세션 한 번에 macOS 잡 50개가 더 돈다.
+# 대신 **받아들이는 대가를 명시해 둔다**:
+#   · macOS 파손을 **커밋 단위로 귀속할 수 없다.** 취소된 구간에서 깨졌다면 이분 탐색이 아니라
+#     `workflow_dispatch` 로 그 SHA 를 손으로 돌려야 한다.
+#   · 그래서 **세션을 끝낼 때 tip 이 초록인지 반드시 확인해야 한다** — 중간 취소는 무검증이지
+#     통과가 아니다. `scripts/dev/ci-status.py` 가 `[CANC]` 로 구분해 보여 준다.
+# `spec` 은 이 대가를 치르지 않는다: ubuntu 잡이 ~20초라 다음 푸시 전에 끝나서 실측 취소가
+# **169런 중 0건**이다. 그래서 두 워크플로가 같은 설정을 써도 결과가 다르다.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -181,34 +200,20 @@ jobs:
           set -o pipefail
           swift test --skip-build -c ${{ matrix.configuration }} ${{ matrix.testFlags }} 2>&1 | tee test-output.log
 
-      # [2026-08-19] 병렬 격리 회귀 게이트 — debug 레인에서만.
+      # [2026-08-19] release 전용 실패를 **보이게** 만든다.
       #
-      # `AGENTS.md` 는 오래 "`--parallel` 은 통과/실패 판정에 쓰지 마라 — `SceneRenderSettingsTests`
-      # 와 `SceneCompositeConventionTests` 가 병렬 3/3 실패" 라고 적고 원인을 미확정으로 뒀다.
-      # 원인은 둘 다 **공유 자원**이었다:
-      #   · SceneRenderSettings 가 `UserDefaults.standard`(프로세스가 아니라 **사용자** 단위)를 직접 씀
-      #   · SceneCompositeConventionTests 가 출력만 리터럴 `/tmp/waple_cc_<tag>` 로 씀
-      # 둘 다 고쳤다(주입 저장소 · PID 스코프). 그런데 **고쳤다는 것과 병렬이 통과한다는 것은
-      # 다른 명제**라, 실행으로 확인하지 않으면 다음 사람이 다시 미확정으로 돌려놓는다.
+      # release 실패는 잡을 빨갛게 만들지 않는다(위 `Test` 스텝의 `continue-on-error` — 픽셀 분기가
+      # 정당한 실패를 낳는다). 그래도 **조용히 지나가서는 안 된다** — 실행 페이지 상단에 경고로
+      # 띄우고 요약에도 남긴다. 이게 없으면 초록 실행의 로그를 여는 사람이 없어 레인이 사실상
+      # 무의미해진다.
       #
-      # 세 번 돌린다 — 경합은 한 번으로는 안 잡힌다. 실패하면 원인이 하나 더 남아 있는 것이다.
-      # 전 스위트가 아니라 이 두 클래스만 돌리므로 비용은 수십 초다.
-      # [2026-08-19] 병렬 격리 회귀 게이트 — debug 레인에서만.
-      #
-      # `AGENTS.md` 는 오래 "`--parallel` 은 통과/실패 판정에 쓰지 마라 — 두 클래스가 병렬 3/3 실패"
-      # 를 싣고 원인을 미확정으로 뒀다. 원인은 **둘 다 공유 자원**이었고 서로 달랐다:
-      #   · SceneRenderSettings 가 `UserDefaults.standard`(프로세스가 아니라 **사용자** 단위)를 직접 씀
-      #     → 테스트마다 고유 suite 주입. **이건 실측으로 해소 확인됐다**(이 게이트 1차 실행).
-      #   · SceneCompositeConventionTests 의 두 캡처 테스트가 프로세스 전역 `fitMode` 를 서로 덮음
-      #     → 한 테스트로 합침. 1차 실행에서 회차마다 지는 쪽이 바뀌는 것으로 경합을 확인했다.
-      #
-      # **판정은 로그 문자열이 아니라 `--xunit-output` XML 로 한다.** 1차 판이 로그를 보다가
-      # 오판했다 — `--parallel` 은 전부 통과하면 XCTest 의 `Executed N tests` 줄을 안 찍는데
-      # 그걸 "필터가 0건 매치" 로 읽어 통과한 클래스를 실패로 보고했다. 이 리포가 반복해서
-      # 당한 "검사하는 척하는 검사" 를 내가 그대로 만든 셈이라, 기계가 읽는 형식으로 바꾼다.
-      # release 실패는 잡을 빨갛게 만들지 않는다(픽셀 분기가 정당한 실패를 낳는다).
-      # 그래도 **조용히 지나가서는 안 된다** — 실행 페이지 상단에 경고로 띄우고 요약에도 남긴다.
-      # 이게 없으면 초록 실행의 로그를 여는 사람이 없어 레인이 사실상 무의미해진다.
+      # [주석 정정 2026-08-21] 여기에 **병렬 격리 게이트의 주석 두 벌이 통째로 얹혀 있었다.**
+      # 아래 [2026-08-20] 정정이 `Flag release-only failure` 를 `Test` 뒤로 옮길 때, 원래 이 자리에
+      # 있던 `Parallel isolation gate` 의 주석이 따라가지 못하고 남은 것이다(같은 문단이 조금 다른
+      # 판으로 두 번 연달아 적혀 있었다 — 옮기면서 고쳐 쓴 사본과 원본이 겹쳤다). 그래서
+      # `Parallel isolation gate` 는 **자기 근거가 하나도 안 붙은 채** 돌고 있었고, 이 스텝은
+      # 자기와 무관한 공유 자원 이야기를 머리에 이고 있었다. 각자 자기 스텝으로 돌려놨다.
+      # (이 리포가 반복해서 잡아내는 "주석과 코드가 어긋난 채 초록" 그 자체다.)
       #
       # [2026-08-20] **이 스텝은 반드시 `Test` 뒤에 있어야 한다.** 종전엔 `Test`(id: test)보다
       # 위(빌드 직후)에 있었는데, GitHub Actions 의 `steps` 컨텍스트는 **이미 실행된 스텝만**
@@ -232,6 +237,25 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # [2026-08-19] 병렬 격리 회귀 게이트 — debug 레인에서만.
+      # (이 주석은 2026-08-21 에 위 `Flag release-only failure` 머리에서 되찾아 왔다 — 그쪽 주석 참조.)
+      #
+      # `AGENTS.md` 는 오래 "`--parallel` 은 통과/실패 판정에 쓰지 마라 — 두 클래스가 병렬 3/3 실패"
+      # 를 싣고 원인을 미확정으로 뒀다. 원인은 **둘 다 공유 자원**이었고 서로 달랐다:
+      #   · SceneRenderSettings 가 `UserDefaults.standard`(프로세스가 아니라 **사용자** 단위)를 직접 씀
+      #     → 테스트마다 고유 suite 주입. **이건 실측으로 해소 확인됐다**(이 게이트 1차 실행).
+      #   · SceneCompositeConventionTests 의 두 캡처 테스트가 프로세스 전역 `fitMode` 를 서로 덮음
+      #     → 한 테스트로 합침. 1차 실행에서 회차마다 지는 쪽이 바뀌는 것으로 경합을 확인했다.
+      # 그런데 **고쳤다는 것과 병렬이 통과한다는 것은 다른 명제**라, 실행으로 확인하지 않으면
+      # 다음 사람이 다시 미확정으로 돌려놓는다.
+      #
+      # 세 번 돌린다 — 경합은 한 번으로는 안 잡힌다. 실패하면 원인이 하나 더 남아 있는 것이다.
+      # 전 스위트가 아니라 이 두 클래스만 돌리므로 비용은 수십 초다.
+      #
+      # **판정은 로그 문자열이 아니라 `--xunit-output` XML 로 한다.** 1차 판이 로그를 보다가
+      # 오판했다 — `--parallel` 은 전부 통과하면 XCTest 의 `Executed N tests` 줄을 안 찍는데
+      # 그걸 "필터가 0건 매치" 로 읽어 통과한 클래스를 실패로 보고했다. 이 리포가 반복해서
+      # 당한 "검사하는 척하는 검사" 를 내가 그대로 만든 셈이라, 기계가 읽는 형식으로 바꾼다.
       - name: Parallel isolation gate
         if: matrix.configuration == 'debug'
         run: |
@@ -313,6 +337,38 @@ jobs:
           echo "executed=${EXECUTED} skipped=${SKIPPED}"
 
           # [2026-08-19] 트립와이어. 이제 정상 범위를 안다.
+          # [2026-08-21 네 번째] 실측 갱신: executed **3038** / skipped 47(release)·46(debug) / 실패 0
+          # (run 32473541358 · 커밋 2642488 — **브랜치 tip 자신**이다). 하한을 2877 → 3038.
+          # 정적 개수도 2642488 에서 정확히 3038 이라 두 세는 법이 또 어긋나지 않았다.
+          #
+          # **`Executed` 는 스킵을 포함한다.** 이번 런이 그 증거다 — 두 잡의 skipped 가 47/46 으로
+          # 다른데 `Executed` 는 둘 다 3038 로 같다. 그래서 이 하한은 스킵 수에 흔들리지 않는다
+          # (스킵 쪽은 아래 상한 100 이 따로 본다).
+          #
+          # 그 **±1 스킵 차이의 정체도 확정했다**(두 잡 로그의 `skipped (` 줄 집합 차집합):
+          #   `WapleRenderTests.WebHardPauseTests.testIntervalResumesAtRemainingPhaseThenUsesOriginalPeriod`
+          # 하나뿐이고, release 에서만 스킵됐다. 구성 의존이 아니라 **시간 의존**이다 —
+          # 그 테스트의 `XCTSkipIf` 가 "일시정지 전 경과 ≥ 주기(240ms)" 면 위상 전제가 깨졌다고 보고
+          # 가짜 그린 대신 스킵한다(Tests/WapleRenderTests/WebHardPauseTests.swift:344-348).
+          # 공용 러너 부하에 따라 매 런 ±1 로 흔들리는 것이 정상이다. 하한과는 무관하다.
+          #
+          # +161 의 출처를 **커밋별·파일별로 실측**했다(131feaa ↔ 2642488 정적 개수 차, 합계 정확히 161):
+          #   6feb99a +17(RemapOperationAxesTests 14 · RemapOutputChannelTests 3) ·
+          #   3bc0fab +18(ScenePackageWEParityTests) · ff2d30b +25(SceneDocumentFidelityTests) ·
+          #   1e4660a +17(ShaderPreprocessorRequireTests 16 · GLSLBundledShaderRegressionTests 1) ·
+          #   990aa2a +11(EffectFboFitTests) · 4eb61f1 +10(SceneLightConfigBudgetTests) ·
+          #   7a0e962 +4(WallpaperPropertiesTests) · 8bd2f42 +12(ParticleInputRangeConeTests) ·
+          #   8de9dba +2(SceneDocumentTests) · 1b0d20a +3(EffectFboFitTests 2 · EffectManifestTests 1) ·
+          #   e8ae206 +20(ShaderPreprocessorConformanceTests 13 · GLSLBundledShaderRegressionTests 7) ·
+          #   0c3e18c +13(TexHostileInputTests 12 · TexBundledCorpusTests 1) ·
+          #   2642488 +9(PropertyAnimationOptionsTests 4 · PropertyConditionEvaluatorTests 4 ·
+          #             PropertyAnimationTests 1).
+          # 전부 오라클 추가이고 삭제·통합은 0건이다(파일별 델타에 음수가 없다).
+          #
+          # 여유를 두지 않는 것이 이 리포의 관례다 — `94b0a34` 도 자기 커밋의 정적 개수(2825)와
+          # **정확히 같은 값**을 하한으로 박았다. 여유는 그 뒤 커밋이 쌓아 주는 것이지 미리 주는 게
+          # 아니다(`c0ee3ad`·`fcbb425` 가 벌어진 여유 168·62 를 되감은 이력).
+          #
           # [2026-08-21 세 번째] 실측 갱신: executed **2877** / skipped 47 / 실패 0
           # (run 32454065734 · 커밋 131feaa, debug·release 두 잡이 같은 수). 하한을 2825 → 2877.
           # +52 의 출처(badbe68 ↔ 131feaa 정적 개수 차, 합계가 정확히 52):
@@ -360,8 +416,8 @@ jobs:
             exit 1
           fi
           # 테스트 수는 늘기만 한다(줄면 파일이 빠졌거나 번들이 안 실렸다는 뜻).
-          if [ "${EXECUTED:-0}" -lt 2877 ]; then
-            echo "::error::실행 ${EXECUTED}건 — 하한 2877 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
+          if [ "${EXECUTED:-0}" -lt 3038 ]; then
+            echo "::error::실행 ${EXECUTED}건 — 하한 3038 미만. 테스트가 사라졌거나 스위트가 중간에 죽었다."
             exit 1
           fi
 
