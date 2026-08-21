@@ -1,0 +1,445 @@
+# 머티리얼 / 블렌드 서브시스템 — 동봉 자산 전수 대조
+
+**측정일 2026-08-21 · WE 2.8.42 · wallpaper64.exe SHA256 `40e2ce02…cd993b0` (imagebase 0x140000000)**
+
+동봉 자산(`Sources/WapleRender/Resources/WEAssets/`)의 머티리얼 JSON **전건**과
+`wallpaper64.exe` 의 블렌드 경로를 대조한 결과다. 워크샵 코퍼스는 이 컨테이너에 없으므로
+**코퍼스 수치는 기존 정본을 인용만 하고 새로 측정하지 않았다** — 새로 측정한 것은 전부
+동봉 자산과 바이너리다.
+
+재현:
+
+```bash
+# 키 경로 히스토그램 · 씬 인라인 머티리얼 · blending 도수
+python3 -c "import sys;sys.path.insert(0,'scripts/spec');import measure_material_schema as M,json;\
+print(json.dumps({'h':M.key_path_histogram(),'s':M.scene_inline_materials(),'b':M.blending_census()},ensure_ascii=False,indent=1))"
+
+# 블렌드 디스크립터 기록 자리 · 문자열↔D3D11 완전표
+WE_ROOT=/path/to/wallpaper_engine python3 -c "import sys;sys.path.insert(0,'scripts/spec');import measure_render_state as M,json;\
+pe=M.PE(M.BIN);s,d=M.blend_desc_sites(pe);print(json.dumps({'sites':s,'dropped':d,'table':M.blend_string_table(s),'flags':M.blend_flag_table(s)},ensure_ascii=False,indent=1))"
+```
+
+정본 반영분:
+
+| 정본 | 항목 |
+| --- | --- |
+| `spec/assets/material-schema.json` | `material.keyPathHistogram` · `material.sceneInlineMaterials` · `material.blendingCensus` |
+| `spec/engine/render-state.json` | `renderState.blend.descriptorWriteSites` · `renderState.blend.stringToState` · `renderState.blend.cacheKeyDerivation` · `renderState.blend.notParsedAt1401c2a40` |
+
+---
+
+## 0. 세 줄 요약
+
+1. 동봉 머티리얼 JSON은 **639건 / 고유 키 경로 50개**이고, 그중 정본이 한 번도 세지 않던 키는
+   `passes[].usertextures[].keepaspect` **1건**뿐이다.
+2. 문자열 ↔ D3D11 블렌드 상태 표는 **명령 주소까지 복원**했다(4모드 + 플래그 비트 6개).
+   과제가 지목한 **0x1401c2a40 은 블렌드 파서가 아니다** — 파티클 `blendin*/blendout*` 창 파서다.
+3. Waple 은 `blending` 을 **`additive` 냐 아니냐** 로만 읽는다. `normal`(= 블렌딩 OFF)과
+   `alphatocoverage` 가 `translucent` 로 접힌다.
+
+---
+
+## 1. 동봉 머티리얼 키 경로 히스토그램
+
+모집단은 경로에 `materials` 디렉터리 세그먼트가 있는 `*.json` 전수(= `**/materials/**/*.json`).
+**639건**, 전건 엄격 JSON(관대 파서 불필요), 전건 `passes[0].shader` 보유.
+
+| 트리 | 파일 |
+| --- | --- |
+| `effects/` | 236 |
+| `materials/` | 95 |
+| `presets/` | 249 |
+| `scenes/` | 59 |
+| **합** | **639** |
+
+> `spec/assets/material-schema.json` 의 번들 머티리얼 **331**(= effects/ 236 + materials/ 95)과
+> 분모가 다르다. 그 문서는 `presets/` 와 `scenes/` 를 의도적으로 제외한다.
+> **639** 는 `spec/engine/render-state.json` 의 `assets` 분모와 같은 집합이다.
+
+키 경로 → 도달 파일 수(내림차순, 전 50건):
+
+| 키 경로 | 전체 | effects | materials | presets | scenes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `passes` | 639 | 236 | 95 | 249 | 59 |
+| `passes[].shader` | 639 | 236 | 95 | 249 | 59 |
+| `passes[].depthwrite` | 623 | 236 | 79 | 249 | 59 |
+| `passes[].depthtest` | 621 | 236 | 78 | 248 | 59 |
+| `passes[].cullmode` | 608 | 232 | 69 | 248 | 59 |
+| `passes[].blending` | 602 | 236 | 60 | 249 | 57 |
+| `passes[].textures` | 401 | 54 | 47 | 245 | 55 |
+| `passes[].combos` | 151 | 20 | 28 | 101 | 2 |
+| `passes[].constantshadervalues` | 107 | 6 | 1 | 99 | 1 |
+| `passes[].alphawriting` | 60 | 5 | · | 43 | 12 |
+| `passes[].combos.REFRACT` | 43 | · | · | 43 | · |
+| `passes[].constantshadervalues.ui_editor_properties_overbright` | 33 | 1 | · | 32 | · |
+| `passes[].constantshadervalues.ui_editor_properties_refract_amount` | 29 | · | · | 29 | · |
+| `passes[].combos.VERTICAL` | 16 | 14 | 2 | · | · |
+| `passes[].combos.CUTOUT` | 11 | · | · | 11 | · |
+| `passes[].constantshadervalues.ui_editor_properties_cutout_end` | 9 | · | · | 9 | · |
+| `passes[].constantshadervalues.ui_editor_properties_cutout_opacity` | 9 | · | · | 9 | · |
+| `passes[].constantshadervalues.ui_editor_properties_cutout_start` | 9 | · | · | 9 | · |
+| `passes[].combos.version` | 6 | · | 6 | · | · |
+| `passes[].combos.COLORFONT` | 4 | · | 4 | · | · |
+| `passes[].combos.MSDF` | 4 | · | 4 | · | · |
+| `passes[].constantshadervalues.dissipation` | 4 | 4 | · | · | · |
+| `passes[].combos.DYE` | 2 | 2 | · | · | · |
+| `passes[].combos.LIGHTING` | 2 | · | 1 | · | 1 |
+| `passes[].combos.UPSAMPLE` | 2 | · | 2 | · | · |
+| `passes[].combos.VERSION` | 2 | 1 | 1 | · | · |
+| `passes[].combos.vertexcolor` | 2 | · | 2 | · | · |
+| `passes[].constantshadervalues.roughness` | 2 | · | 1 | · | 1 |
+| `passes[].combos.{BICUBIC,BLOOM,BLUR,CLEARALPHA,COMBINEDBG,DISPLAYHDR,FULLSCREEN,LINEAR,PINCH,REFLECTION,SPIN}` | 각 1 | · | 각 1 | · | · |
+| `passes[].combos.{ENABLEMASK,FOG}` | 각 1 | 각 1 | · | · | · |
+| `passes[].combos.spritesheet` | 1 | · | · | · | 1 |
+| `passes[].constantshadervalues.metallic` | 1 | · | · | · | 1 |
+| `passes[].constantshadervalues.reflectivity` | 1 | · | 1 | · | · |
+| `passes[].culling` | 1 | · | 1 | · | · |
+| `passes[].usershadervalues` / `.schemecolor` | 각 1 | · | 각 1 | · | · |
+| `passes[].usertextures` / `[].name` / `[].keepaspect` | 각 1 | · | · | · | 각 1 |
+
+**씬 안의 인라인 머티리얼은 0건이다.** 동봉 씬 172개 / 오브젝트 203개 전부 `objects[].material`
+키가 부재하고, `passes[0].shader` 를 가진 인라인 딕트도 씬 트리 전체에 없다. 머티리얼은
+`image`/`model`/`particle` 을 거쳐 **경로로만** 참조된다 — 즉 이 서브시스템의 모집단은
+파일 집합으로 닫힌다. (`objects[].effects[].passes[]` 오버라이드 층은 머티리얼이 아니라
+`spec/corpus/scene-schema.json` 소관이다.)
+
+경계 밖 1건: `shaders/declarations.json` 이 에디터 임포트 템플릿으로 `blending:"translucent"`
+를 7번 싣는다. 머티리얼 파일이 아니라 **에디터가 새 머티리얼을 만들 때 쓰는 기본값 표**다.
+
+---
+
+## 2. canon 에 없는 키 (도달 수 순)
+
+`spec/assets/material-schema.json` 원문에 **키 이름이 문자열로 한 번도 등장하지 않는** 키:
+
+| 키 경로 | 도달 | 실물 |
+| --- | ---: | --- |
+| `passes[].usertextures[].keepaspect` | **1** | `scenes/videoplayer/materials/background.json` — `usertextures:[{"name":"videotex","keepaspect":true}]` |
+
+**그게 전부다.** 나머지 49개 키 경로는 전부 정본의 어느 항목엔가 이름이 실려 있다.
+
+`keepaspect` 가 빠진 이유는 결함이 아니라 **모집단 경계**다 — 정본의 `material.userTextures`
+는 `번들 도수 0` / `항목키 name+type`(코퍼스 50건)을 싣는데, 그 "번들" 이 `effects/`+`materials/`
+331건이라 `scenes/` 의 이 1건이 분모 밖이었다. 키 자체는 `spec/assets/misc-schema.json`
+(`keepaspect`, 2001행)과 `spec/engine/media.json`(527행)이 이미 다룬다 — **정본 전체로 보면
+미기록이 아니고, 머티리얼 스키마 문서 안에서만 비어 있었다.**
+
+이번에 추가한 `material.keyPathHistogram` 이 이 경계를 메운다(`정본이 안 싣던 키` 키에 명시).
+
+**정본의 번들 모집단(331) 밖에서만 도달하는 키** — 도달 수 순:
+
+| 키 경로 | 도달 | presets | scenes |
+| --- | ---: | ---: | ---: |
+| `passes[].combos.REFRACT` | 43 | 43 | · |
+| `passes[].constantshadervalues.ui_editor_properties_refract_amount` | 29 | 29 | · |
+| `passes[].combos.CUTOUT` | 11 | 11 | · |
+| `passes[].constantshadervalues.ui_editor_properties_cutout_start` | 9 | 9 | · |
+| `passes[].constantshadervalues.ui_editor_properties_cutout_opacity` | 9 | 9 | · |
+| `passes[].constantshadervalues.ui_editor_properties_cutout_end` | 9 | 9 | · |
+| `passes[].combos.spritesheet` | 1 | · | 1 |
+| `passes[].constantshadervalues.metallic` | 1 | · | 1 |
+| `passes[].usertextures` (+ `[].name`, `[].keepaspect`) | 1 | · | 1 |
+
+이 키들은 전부 **코퍼스 도수로는 정본에 실려 있다**(REFRACT 186, CUTOUT 10, spritesheet 60 …).
+번들 도수만 0으로 보였던 것이다.
+
+**덤으로 잡힌 정본 부패 1건** — `waple.keyLiteralCoverage` 가 `compose:false`,
+`functions:false` 를 싣고 있었는데 지금 소스에는 둘 다 있다
+(`Sources/WapleCore/EffectManifest.swift:376`, `:420`). 확정 등급인데 사실이 아니었다.
+재측정해 `compose/conditions/functions → true`, `미등장 → [culling, editable, performance]` 로
+고쳤고, 짝인 `waple.gap.composeAndConditions.미소비 렌더 키` 도 `[]` 로 맞췄다(둘 다 파스는
+하지만 렌더러가 읽는 자리는 아직 없다는 사실을 note 에 적었다).
+
+---
+
+## 3. 동봉 자산의 `blending` 값 전수
+
+| 값 | 전체 | effects | materials | presets | scenes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `normal` | **205** | 188 | 8 | 4 | 5 |
+| `translucent` | **200** | 47 | 46 | 95 | 12 |
+| `additive` | **197** | 1 | 6 | 150 | 40 |
+| `alphatocoverage` | **0** | · | · | · | · |
+| (키 없음 → 열거값 0 = normal) | 37 | · | 35 | · | 2 |
+
+- **`alphatocoverage` 는 동봉 자산에 한 건도 없다.** 워크샵 코퍼스에만 40건(정본
+  `renderState.authoring.valueDistribution`). 동봉만으로는 이 모드의 회귀를 볼 수 없다.
+- `effect.json` **128개 / 패스 220개는 `blending` 키를 하나도 갖지 않는다.** 이펙트 패스의
+  블렌드 상태는 그 패스가 참조하는 material 이 정한다.
+- 소비처별로 갈라 보면 그림이 달라진다:
+
+| 모집단 | normal | translucent | additive | 키 없음 |
+| --- | ---: | ---: | ---: | ---: |
+| `materials/effects/**` (이펙트 체인 패스 머티리얼) | 196 | 1 | 0 | 0 |
+| 그 외(레이어 · 파티클 · 모델 머티리얼) | 9 | 199 | 197 | 37 |
+
+이펙트 체인 머티리얼은 사실상 전건 `normal` 이고, 레이어/파티클은 사실상 전건
+`translucent`/`additive` 다. 이 분리가 아래 Waple 대조의 핵심이다.
+
+---
+
+## 4. 문자열 ↔ D3D11 블렌드 상태 — 완전 표
+
+### 4.1 문자열 → 열거값 (`FUN_1401577e0`, 등록자)
+
+레코드는 `0x1404e9390` 부터 `0x28` 바이트 간격 4개(std::string 0x20 + 값 1바이트).
+끝 포인터 `0x1404e9430` 이 `0x1404e9340` 에, 시작이 `0x1404e9338` 에 실린다.
+이 배열은 `.data` 의 **런타임 초기화** 영역이라 파일 바이트로는 0이다 — 값은 기록 명령에서만 읽힌다.
+
+| 문자열 | 문자열 VA | `lea` | 값 기록 명령 | 열거값 |
+| --- | --- | --- | --- | ---: |
+| `normal` | `0x140476fd0` | `0x140157d82` | `0x140157d9e` `mov byte [0x1404e93b0], sil` (sil=0 — `0x140157803` `xor esi,esi`) | **0** |
+| `translucent` | `0x14048b500` | `0x140157db2` | `0x140157dd6` `mov byte [0x1404e93d8], 1` | **1** |
+| `additive` | `0x14048b520` | `0x140157dea` | `0x140157e0e` `mov byte [0x1404e9400], 2` | **2** |
+| `alphatocoverage` | `0x14048b510` | `0x140157e22` | `0x140157e4a` `mov byte [0x1404e9428], 3` | **3** |
+
+프로퍼티 키 `"blending"` 은 `0x14048b638`, 등록은 `0x140157897`(`lea rdx`), 프로퍼티 id 는
+`0x1401578b4` `mov dword [rbx+0x34], 0x1f0` = **496**.
+
+역매핑(직렬화)은 `FUN_1401531c0` (`0x1401531c0–0x1401531f2`):
+`0x1401531d2` → `normal`(기본), `0x1401531ea` → `translucent`,
+`0x1401531e2` → `additive`, `0x1401531da` → `alphatocoverage`.
+쓰는 곳은 `0x14020a1f4` `xor ecx,ecx` + `0x14020a1f6 call` → `0x14020a20e` 의 `"blending"` 키.
+
+**기본값**: `blending` 키가 없으면 열거값 **0 = normal**. 블렌드 상태 객체 생성자가
+오브젝트+0x26 을 0으로 두기 때문이다 — `0x140098ed3` `mov byte [rcx+0x26], sil`
+(sil=0 @`0x140098eaf`).
+
+### 4.2 열거값 → `D3D11_BLEND_DESC` (`FUN_140099f60`, `0x140099f60–0x14009a358`)
+
+스택 디스크립터 베이스는 **RSP+0x20**. `0x14009a0b4` `mov r8d, 0x108`(=264=`sizeof(D3D11_BLEND_DESC)`)
++ `0x14009a0be call` 이 그 자리를 0으로 민다. 공통 기본 WriteMask 는
+`0x14009a0c5` `mov byte [rsp+0x44], 7`.
+
+스위치 선택자는 `0x14009a0c3` `mov ecx, esi` · `0x14009a0ca` `and ecx, 7`.
+
+| blending | 열거값 | 분기 | AlphaToCoverage | BlendEnable | SrcBlend | DestBlend | BlendOp | SrcBlendAlpha | DestBlendAlpha | BlendOpAlpha | WriteMask |
+| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: |
+| `normal` | 0 | `0x14009a0cd` | FALSE | FALSE | `ONE`(2) | `ZERO`(1) | `ADD`(1) | `ONE`(2) | `ZERO`(1) | `ADD`(1) | 7 |
+| `translucent` | 1 | `0x14009a0d2` | FALSE | **TRUE** | `SRC_ALPHA`(5) | `INV_SRC_ALPHA`(6) | `ADD`(1) | `SRC_ALPHA`(5) | `INV_SRC_ALPHA`(6) | `ADD`(1) | 7 |
+| `additive` | 2 | `0x14009a0db` | FALSE | **TRUE** | `SRC_ALPHA`(5) | `ONE`(2) | `ADD`(1) | `SRC_ALPHA`(5) | `ONE`(2) | `ADD`(1) | 7 |
+| `alphatocoverage` | 3 | `0x14009a0e4` | **TRUE** | FALSE | `ONE`(2) | `ZERO`(1) | `ADD`(1) | `ONE`(2) | `ZERO`(1) | `ADD`(1) | 7 |
+
+각 필드를 쓰는 **명령 주소**:
+
+| 필드 | normal | translucent | additive | alphatocoverage |
+| --- | --- | --- | --- | --- |
+| `AlphaToCoverageEnable` | memset | memset | memset | **`0x14009a0f2`** |
+| `IndependentBlendEnable` | memset | memset | memset | memset |
+| `RT0.BlendEnable` | memset | `0x14009a32b` | `0x14009a2fe` | memset |
+| `RT0.SrcBlend` | `0x14009a112` | `0x14009a333` | `0x14009a306` | `0x14009a112` |
+| `RT0.DestBlend` | `0x14009a10a` | `0x14009a33b` | `0x14009a30e` | `0x14009a10a` |
+| `RT0.BlendOp` | `0x14009a122` | `0x14009a122` | `0x14009a122` | `0x14009a122` |
+| `RT0.SrcBlendAlpha` | `0x14009a102` | `0x14009a343` | `0x14009a316` | `0x14009a102` |
+| `RT0.DestBlendAlpha` | `0x14009a0fa` | `0x14009a34b` | `0x14009a31e` | `0x14009a0fa` |
+| `RT0.BlendOpAlpha` | `0x14009a11a` | `0x14009a11a` | `0x14009a11a` | `0x14009a11a` |
+| `RT0.RenderTargetWriteMask` | `0x14009a0c5` | `0x14009a0c5` | `0x14009a0c5` | `0x14009a0c5` |
+
+`alphatocoverage` 는 `0x14009a0f2` 에서 AlphaToCoverage 만 켜고 `0x14009a0fa`(normal 블록)로
+흘러든다 — 그래서 나머지가 normal 과 완전히 같다. `translucent`/`additive` 는
+`0x14009a353` / `0x14009a326` 의 `jmp 0x14009a11a` 로 ADD/ADD 합류점에 들어온다.
+
+생성·바인딩:
+
+- `CreateBlendState` — `0x14009a1e1` `call [rax+0xa0]` (desc = RSP+0x20, out = RBP+0x60)
+- 캐시 저장 — `0x14009a1f2` `mov [rax+rsi*8], rdx` (배열 `[rdi+0x140]`, 색인 = 캐시키)
+- 바인딩 — `0x14009a232` `call [rax+0x118]`, BlendFactor=NULL(`0x14009a228` `xor r8d,r8d`),
+  SampleMask=`0xffffffff`(`0x14009a21b`)
+
+### 4.3 캐시 키와 플래그 비트 — 문자열만 보면 놓치는 층
+
+```
+캐시키 = word[obj+0x28] | (word[obj+0x28] 의 bit9 ? byte[obj+0x26] : 4)
+```
+
+| 단계 | 명령 |
+| --- | --- |
+| 상태워드 적재 | `0x140099ff8` `movzx eax, word [rdi+0x28]` |
+| bit9 검사 | `0x140099ffc` `bt ax, 9` |
+| bit9=1 → 머티리얼 열거값 | `0x14009a003` `movzx ecx, byte [rdi+0x26]` |
+| bit9=0 → 4 | `0x14009a009` `mov ecx, 4` |
+| 합성 | `0x14009a015` `or eax, ecx` · `0x14009a024` `mov esi, eax` |
+
+스위치 뒤에 **모든 모드 공통으로** 덧씌워지는 플래그(값은 전부 바이트 실측):
+
+| 비트 | 테스트 | 덮어쓰는 것 | 기록 명령 |
+| --- | --- | --- | --- |
+| `0x80` | `0x14009a12a` | SrcBlend=`ONE`, DestBlend=`INV_SRC_ALPHA`, Src/DestBlendAlpha=`ONE` (프리멀티 오버 + 알파 누적) | `0x14009a12f` `0x14009a137` `0x14009a13f` `0x14009a147` |
+| `0x18` | `0x14009a14f` | WriteMask=0xF(RGBA) | `0x14009a155` |
+| `0x10` | `0x14009a15a` | BlendOpAlpha=`MAX`, Src/DestBlendAlpha=`ONE` | `0x14009a160` `0x14009a168` `0x14009a170` |
+| `0x20` | `0x14009a178` | BlendOp=`MAX`, Src/DestBlendAlpha=`ONE` | `0x14009a17e` `0x14009a186` `0x14009a18e` |
+| `0x40` | `0x14009a196` | BlendOp=`MIN`, Src/DestBlendAlpha=`ONE` | `0x14009a19c` `0x14009a1a4` `0x14009a1ac` |
+| `0x100` | `0x14009a1b4` | SrcBlend=`DEST_COLOR`, Src/DestBlendAlpha=`ONE` | `0x14009a1ba` `0x14009a1c2` `0x14009a1ca` |
+
+**키 4의 정체(종전 정본의 미결 항목)** — `renderState.blend.flagBits.keyValue4` 는 "도달 불가이거나
+플래그가 항상 같이 켜지거나, 어느 쪽인지 모른다" 로 남아 있었다. 명령을 읽으면 절반은 닫힌다:
+키 4는 **bit9 가 꺼져 있을 때의 정적 기본값**이다(`0x14009a009` 가 조건 없이 4를 싣는다).
+그 분기는 `0x14009a0eb` 에서 WriteMask 를 8(ALPHA only)로만 쓰고
+`0x14009a0f0` `jmp 0x14009a12a` 로 스위치 본문을 통째로 건너뛴다 → Src/Dest/Op 는 memset 0.
+그 상태로 `CreateBlendState` 를 부르면 D3D11 이 거절하므로 **반드시 위 플래그 비트와 함께
+쓰인다**(예: `4|0x10|0x20|0x80` 이면 전 필드가 유효값으로 채워진다). 즉 (a) 도달 불가는
+탈락하고 (b) 만 남는다. 어느 패스가 그 조합을 켜는지는 여전히 이 문서의 범위 밖이다.
+
+키 5·6·7 은 `0x14009a0e9` `jne 0x14009a12a` 로 빠져 디스크립터 필드를 하나도 쓰지 않는다.
+상태워드 하위 3비트가 열거값 자리로 예약돼 0이라면 위 식으로 만들어지지 않는 값이다.
+
+### 4.4 blending 은 뎁스스텐실도 고른다
+
+`0x140099f84–0x140099f9f`:
+
+```
+0x140099f84  movzx eax, byte [rcx+0x26]   ; blending 열거값
+0x140099f88  test al, al
+0x140099f8a  je   0x140099f95             ; 0 → rcx = 0
+0x140099f8c  mov  ecx, 1
+0x140099f91  cmp  al, 3
+0x140099f93  jne  0x140099f98             ; 1·2 → rcx = 1
+0x140099f95  mov  rcx, r12                ; 3 → rcx = 0
+0x140099f98  movzx eax, byte [rdi+0x24]   ; depthtest 비트
+0x140099f9c  or   rax, rcx
+0x140099f9f  mov  rdx, [rdi+rax*8+0xc0]   ; 뎁스스텐실 상태 표
+```
+
+즉 **`translucent`/`additive` 는 저작된 `depthwrite` 와 무관하게 뎁스 쓰기가 꺼진다**
+(슬롯 1 = DepthWriteMask ZERO). `normal`/`alphatocoverage` 는 OR 하지 않는다.
+정본 `renderState.depthStencil.table` 의 `select` 규칙이 이 명령이고, Waple 은
+`Sources/WapleRender/SceneRenderer3D.swift:797` 에서 **이미 같은 규칙을 구현한다**.
+
+---
+
+## 5. 0x1401c2a40 은 블렌드 파서가 아니다 — 오식별 정정
+
+과제 전제는 "블렌드 파서 primary 는 0x1401c2a40 근방" 이었다. **아니다.**
+
+`0x1401c2a40–0x1401c2e4e`(`.pdata` 조각 5개 병합)가 찾는 키는
+`blendinstart` / `blendinend` / `blendoutstart` / `blendoutend`
+(문자열 VA `0x14048f850` · `0x14048f860` · `0x14048f870` · `0x14048f880`)이고,
+`0x1401c2d80` 이후 `rcpps` 로 구간 역수 두 개를 만들어 float4 로 splat 한다.
+= **파티클 오퍼레이터의 수명-가중 창(blend window) 파서**다.
+
+유일한 호출부는 `0x1401c5490`(파티클 시스템 JSON 파서 — `emitter`/`initializer`/`operator`/
+`renderer`/`turbulence`/`boids` … 182개 키를 참조한다)에서 **11곳**:
+`0x1401cb884` `0x1401cc43c` `0x1401cc7da` `0x1401cc9be` `0x1401ccf66` `0x1401cd194`
+`0x1401cd407` `0x1401ce3d6` `0x1401ce64b` `0x1401cf11c` `0x1401cf1dc`.
+
+이 저장소는 이미 그렇게 알고 있다 — `Sources/WapleCore/ParticleSystem.swift:509` 의
+`BlendWindow` 주석이 같은 VA(`0x1401c2c26`, `0x1401c2cd3`, `0x1401c2d9f–0x1401c2da8`)를 인용한다.
+동봉 자산에서도 이 키들은 `presets/fireworks/**`, `presets/lightning/**`,
+`scenes/particleelementpreviews/capvelocity/**` 의 **파티클** JSON 에만 나온다.
+
+머티리얼 `blending` 과는 **문자열 접두어가 겹칠 뿐 아무 관계가 없다.** 정본
+`renderState.blend.notParsedAt1401c2a40` 에 이 사실을 못 박아 다음 사람이 같은 곳으로
+끌려가지 않게 했다.
+
+> **방법론 함정 2("한 요소가 기본 opcode + 확장 두 개의 핸들러를 가질 수 있다")도 이 자리엔
+> 해당하지 않는다.** 머티리얼 프로퍼티 등록자(`0x1401578b4`~`0x1401578dc`)는 확실히 프로퍼티당
+> 핸들러 포인터를 4개(`+0x38`/`+0x40`/`+0x48`/`+0x50`) 달지만, `blending` 의 문자열↔열거값 매핑은
+> 그 핸들러가 아니라 위 4.1 의 레코드 배열 하나로 끝난다. 확장 핸들러를 더 찾을 필요가 없다.
+
+---
+
+## 6. Waple 대조 — 어긋난 항목
+
+Waple 이 `blending` 을 읽는 자리는 전부 **`== "additive"` 단일 비교**다:
+
+| 자리 | 코드 |
+| --- | --- |
+| 2D 레이어 | `Sources/WapleRender/SceneRendererResources.swift:488` `blendAdditive: layer.blendMode == "additive"` |
+| 2D 커스텀 셰이더 레이어 | `SceneRendererResources.swift:1617` `let additive = layer.blendMode == "additive"` |
+| 3D 메시 | `Sources/WapleRender/SceneRenderer3D.swift:781-782` `additive = blend == "additive"` |
+| 파티클 | `Sources/WapleCore/ParticleSystem.swift:768` `(p0["blending"] as? String) == "additive" ? .additive : .translucent` |
+
+| # | 항목 | WE(실측) | Waple | 동봉 도달 | 등급 |
+| --- | --- | --- | --- | ---: | --- |
+| **B1** | `blending:"normal"` | BlendEnable **FALSE** — dst.rgb ← src.rgb 덮어쓰기 | 블렌딩 ON(프리멀티 over). `normal` 과 `translucent` 가 **같은 파이프라인**으로 접힌다 | 레이어/파티클/모델 머티리얼 **46건**(명시 9 + 키 부재 37). 그중 실사용 레이어는 `scenes/gifs`·`scenes/videoplayer` 배경 2건(둘 다 불투명 → 화면 영향 0) | 실재하나 동봉 관측 영향 ≈ 0 |
+| **B2** | `blending:"alphatocoverage"` | normal + `AlphaToCoverageEnable=TRUE` | 2D: 미처리(=over). 3D: `alphaCutoff=0.5` discard 근사(`SceneRenderer3D.swift:782`) | 동봉 **0건**, 코퍼스 40건 | 2D 미구현 / 3D 의도적 근사 |
+| **B3** | 이펙트 체인 패스의 material `blending` | 패스 머티리얼이 정한다 | `SceneRendererResources.swift:2019 effectPipeline` 은 블렌드 상태를 **아예 설정하지 않는다**(= 항상 blending OFF = WE `normal`) | `materials/effects/**` 197건 중 196건이 `normal` 이라 일치. 어긋나는 것은 `effects/blur/preview/materials/effects/blur_combine.json`(translucent) **1건** | 구조적 갭, 동봉 도달 1 |
+| **B4** | 파티클 `blending` 도메인 | 4종 | `BlendKind { additive, translucent }` 2종 — `normal`·`alphatocoverage` 가 `translucent` 로 접힌다 | `materials/particle/**` 은 additive 41 / translucent 13 → 동봉 도달 **0** | 도메인 축소, 현 자산 무영향 |
+| **B5** | `RenderTargetWriteMask` | 기본 **7(RGB)** — 머티리얼 드로우는 알파를 안 쓴다 | Metal 기본 `.all`(RGBA), `destinationAlphaBlendFactor` 까지 설정 | 전 머티리얼 드로우 | **수정 후보 아님** — 아래 참조 |
+| **B6** | `alphawriting` | 프로퍼티 497. D3D11 필드로 가는 경로는 정본도 미추적(상태워드 bit3/bit4 가 후보) | `SceneDocument.swift:1327` 에서 파스·보존만, 소비 0 | 동봉 60건(effects 5 · presets 43 · scenes 12) | 양쪽 다 미해결 |
+| **B7** | `translucent` 의 알파 채널 | Src/DestBlendAlpha = `SRC_ALPHA`/`INV_SRC_ALPHA` + WriteMask 7(=알파 미기록) | `ONE`/`INV_SRC_ALPHA` + 알파 기록 | 200건 | RGB 동치, 알파만 갈림(B5 와 같은 뿌리) |
+
+**B5/B7 이 수정 후보가 아닌 이유.** WE 는 스트레이트(비-프리멀티) 알파를 셰이더에서 내고
+블렌드 상태가 `SRC_ALPHA` 를 곱한다(정본 `renderState.alpha.straightNotPremultiplied`).
+Waple 은 셰이더에서 미리 곱하고 `ONE` 을 쓴다 — **RGB 결과는 수식이 같다.** 갈라지는 것은
+알파 채널뿐인데, Waple 은 레이어를 `acc` 텍스처에 쌓고 나중에 합성하므로 **알파를 써야 한다**.
+WriteMask 7 은 WE 의 "중간 acc 가 없다" 는 구조와 한 몸이라 떼어서 옮길 수 없다.
+이건 결함이 아니라 **구조 분기**이고, 정본이 이미 그렇게 기록하고 있다.
+
+**B1 의 성격.** `SceneRenderer.swift:1342-1355` 주석이 이미 "WE 4모드 중 어느 것도 프리멀티
+소스를 옳게 합성하지 못한다" 는 판단과 A/B 실측(3690417937, premult-over 0.917·1.005 vs
+additive 0.912·1.043)을 근거로 프리멀티 오버를 **의도적으로** 고른 상태다.
+다만 그 주석이 다루는 것은 `translucent`/`additive` 이고, **`normal` 을 `translucent` 와
+같은 파이프라인으로 접는 선택은 어디에도 근거가 적혀 있지 않다.**
+알파<1 텍셀을 가진 `normal` 머티리얼이 WE 에서는 배경을 지우고 Waple 에서는 섞인다.
+
+---
+
+## 7. 정확한 diff 후보 (Metal 파이프라인 코드는 이 작업에서 건드리지 않았다)
+
+### D-1 (B1) — `normal` 전용 파이프라인
+
+`Sources/WapleRender/SceneRenderer.swift` — `pipeline`(`v_main`/`f_main`, `att` 기준) 옆에
+`blending OFF` 변형을 하나 더 만들고, `SceneRendererFrameEncoder.swift:1504` 의 파이프라인
+선택 사슬에 `layer.blendMode == "normal"` 분기를 `blendAdditive` 앞에 넣는다.
+
+```
++ // WE: blending "normal" = BlendEnable FALSE (renderState.blend.stringToState @0x14009a0cd)
++ att.isBlendingEnabled = false
++ self.layerOpaquePipeline = try? WapleProfiler.pipe { try device.makeRenderPipelineState(descriptor: pdesc) }
++ att.isBlendingEnabled = true
+```
+
+**권고: 지금은 넣지 마라.** 동봉 자산 관측 영향이 0이고(해당 2건이 불투명),
+`f_main` 이 프리멀티 출력을 내므로 blending OFF 로 바꾸면 `acc` 알파 규약이 함께 깨진다.
+넣으려면 코퍼스 A/B 가 먼저 필요하다 — B1 은 **근거를 남기는 것까지가 이번 몫**이다.
+
+### D-2 (B3) — 이펙트 체인 패스가 material `blending` 을 따르게
+
+`SceneRendererResources.swift:2019 effectPipeline(source:device:)` 에 `blending: String`
+인자를 더하고 `translatedLayerPipeline`(:1563-1583)과 같은 3분기를 쓴다.
+
+```
+- func effectPipeline(source: String, device: MTLDevice) -> MTLRenderPipelineState? {
++ func effectPipeline(source: String, blending: String, device: MTLDevice) -> MTLRenderPipelineState? {
+      ...
+      pd.colorAttachments[0].pixelFormat = .rgba8Unorm
++     if blending != "normal" && blending != "alphatocoverage" {
++         let a = pd.colorAttachments[0]!
++         a.isBlendingEnabled = true
++         a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
++         a.sourceRGBBlendFactor = .one; a.sourceAlphaBlendFactor = .one
++         a.destinationRGBBlendFactor = blending == "additive" ? .one : .oneMinusSourceAlpha
++         a.destinationAlphaBlendFactor = blending == "additive" ? .one : .oneMinusSourceAlpha
++     }
+```
+
+호출부(`:549`)는 `EffectManifest` 가 패스 material 의 `blending` 을 실어 와야 한다 —
+지금은 `shader`/`textures`/`combos` 만 읽는다. **동봉 도달 1건(preview 자산)** 이므로
+우선순위는 낮지만, 코퍼스 이펙트가 `translucent` 패스를 쓰면 바로 드러나는 갭이다.
+
+### D-3 (B4) — 파티클 blending 도메인
+
+`Sources/WapleCore/ParticleSystem.swift:741` `BlendKind` 에 `normal`/`alphaToCoverage` 를
+더할 근거가 **지금은 없다**(동봉 도달 0). `:768` 의 `? .additive : .translucent` 폴백이
+`normal` 을 조용히 삼킨다는 사실만 주석으로 남기는 편을 권한다.
+
+### D-4 (B2) — 2D `alphatocoverage`
+
+3D 는 이미 `alphaCutoff=0.5` discard 근사를 한다(`SceneRenderer3D.swift:782`).
+2D 는 MSAA 가 없어 alpha-to-coverage 자체가 성립하지 않으므로, 같은 근사를
+`f_main` 쪽에 붙이거나 **명시적으로 하지 않기로** 결정하고 기록하는 두 길 중 하나다.
+동봉 0건 / 코퍼스 40건이라 **코퍼스 있는 환경에서 판단할 항목**이다.
+
+---
+
+## 8. 게이트
+
+| 게이트 | 결과 |
+| --- | --- |
+| `python3 scripts/spec/check_canon_generator_keys.py` | **통과** — 대조 291건(종전 284) · 불일치 0 |
+| `python3 scripts/spec/validate.py` | **통과** — 오류 0 · 확정 435/보고 22/추정 13 · 헤지 26(증가 0) |
+| `python3 scripts/spec/check_address_ranges.py` | 통과 — 범위 인용 157건 · 위반 0 |
+| `python3 scripts/spec/check_spec_shrink_guard.py` | 통과 |
+| `python3 scripts/spec/check_stray_artifacts.py` | 통과 |
+| `scripts/dev/linux-core-tests.sh` | **빌드 실패 — 이 작업과 무관한 기존 상태.** `Tests/WapleCoreTests/SimplexNoiseTests.swift:61` 의 `v.map(String.init)` 이 리눅스 시임에서 타입 추론에 실패한다. 이번 변경은 `scripts/spec/*.py` 와 `spec/**/*.json` 뿐이고 Swift 는 한 줄도 건드리지 않았다 |
