@@ -196,6 +196,24 @@ public struct ParticleSimulator {
     }
     private var periodicStates: [PeriodicState]
 
+    // MARK: - 이미터 방출 창 (emitterWindow: delay 대기 → duration 방출 → 은퇴)
+
+    /// 이미터별 방출 창 작업 상태(`def.emitterWindow` 와 1:1). 실물 이미터 레코드의 **작업 칸**
+    /// 대응이다 — `[rec+0x14]`=duration · `[rec+0x18]`=delay · 은퇴 비트 `[rec+0x4c]` bit31.
+    /// (파서 0x1401c1cc7/0x1401c1cf4 가 duration 을, 0x1401c1cfa/0x1401c1cff 가 delay 를
+    ///  작업 칸 + 원본 칸 두 곳에 복사한다. Waple 은 원본 칸을 `def.emitterWindow` 가 들고 있다.)
+    private struct EmitterWindowState {
+        var duration: Float
+        var delay: Float
+        /// 은퇴는 **영구**다 — 실물이 `or dword [rcx+0x4c], 0x80000000`(0x14023ae67)로 부호비트를
+        /// 세우고, 다음 프레임 진입부 0x1402379d2–0x1402379db(`mov ebx,[r15+0x4c]` / `test ebx,ebx`
+        /// / `js`)가 그 비트만 보고 방출 블록을 통째로 건너뛰기 때문이다. 되돌리는 자리는 없다.
+        var retired = false
+    }
+    /// 비어 있으면 **전 이미터 무한** = 종전 방출 경로와 비트동일(게이트·카운트다운 전면 우회).
+    /// `def.emitterWindow` 가 통째로 `.unbounded`(0/0) 일 때도 비운다 — 동봉 32건 중 30건이 그렇다.
+    private var windowStates: [EmitterWindowState]
+
     // MARK: 자식 시스템 상태 (부모 sim 이 링크별 자식 sim 인스턴스를 구동)
 
     private struct ChildInstance {
@@ -358,6 +376,15 @@ public struct ParticleSimulator {
             st.enabled = i < def.emitterPeriodic.count && def.emitterPeriodic[i] != nil
             return st
         }
+        // 방출 창: 전 이미터가 `.unbounded`(0/0) 면 상태를 아예 만들지 않는다 — 그 경우
+        // 게이트도 카운트다운도 통째로 빠져 종전 경로와 **비트동일**이다(무회귀 최우선).
+        // 배열이 짧거나 비면 부족분은 `.unbounded` 로 채운다(직접 조립한 def 호환).
+        let windows = def.emitters.indices.map { i -> EmitterWindow in
+            i < def.emitterWindow.count ? def.emitterWindow[i] : .unbounded
+        }
+        windowStates = windows.allSatisfy { $0 == .unbounded }
+            ? []
+            : windows.map { EmitterWindowState(duration: $0.duration, delay: $0.delay) }
         parentSeed = seed
         childStates = def.children.map { _ in [] }
         childDisplaysCache = def.children.map { _ in [] }
@@ -435,6 +462,10 @@ public struct ParticleSimulator {
             let wasEmpty = particles.isEmpty  // 버스트 재발화 판정은 스텝 진입 시점 기준(다중 이미터 동시 발화)
             for i in def.emitters.indices {
                 let e = def.emitters[i]
+                // 방출 창 게이트 ①·②(+은퇴 비트). 실물은 이 셋을 **주기(flags&4) 상태기계보다
+                // 앞**에서 본다(delay 게이트 0x1402379ea < 주기 분기 0x140237a15) — 그래서 대기
+                // 중에는 주기 시계까지 얼어붙는다. 창이 없으면 `windowStates` 가 비어 상수 false.
+                if windowBlocksEmission(i) { continue }
                 if periodicStates[i].enabled {
                     // 주기 키 보유 이미터: 주기 컨트롤러가 표준 rate/burst 방출을 대체한다
                     // ("전멸 시 재버스트" 추정(아래 레거시 분기)과의 관계 — 주기 키가 있으면 전멸
@@ -464,6 +495,10 @@ public struct ParticleSimulator {
                 if particles.count >= def.maxCount { acc[i] = min(acc[i], 1) }  // 누적 폭주 방지
             }
         }
+        // 창 카운트다운은 방출 가드 **밖**이다 — 실물 레코드 꼬리(0x14023845b–0x14023847a)는
+        // 방출이 게이트에 막힌 프레임에도, 이미 은퇴한 이미터에도 그대로 돈다(막힘 경로가 전부
+        // 0x140237b7e 로 합류해 같은 꼬리에 도달한다). dt==0 스냅샷 재드로는 산술 무동작.
+        stepEmitterWindows(dt)
         // 신규 스폰 → follow/spawnBurst 자식 인스턴스 생성(스폰 위치 기준, 링크 캡/확률).
         if !def.children.isEmpty, particles.count > countBeforeEmission {
             for li in def.children.indices {
@@ -764,6 +799,62 @@ public struct ParticleSimulator {
             insts.removeAll { $0.sim.emissionPaused && $0.sim.liveCount == 0 }
             childStates[li] = insts
             childDisplaysCache[li] = displays
+        }
+    }
+
+    // MARK: - 이미터 방출 창
+
+    /// 이번 프레임 이미터 `i` 의 방출이 창에 막히는가 — 실물 방출 게이트 3종을 그대로 옮긴 것.
+    ///
+    /// 파티클 tick `0x1402378a0`–`0x14023b33d`(`r15` = 이미터 레코드, `xmm8`=0 · `xmm14`=dt):
+    ///   · 은퇴 `0x1402379d2`–`0x1402379db`: `mov ebx,[r15+0x4c]` / `test ebx,ebx` / `js` →
+    ///     은퇴 비트가 서 있으면 방출 블록을 통째로 건너뛴다(영구).
+    ///   · ① `0x1402379ea`: `comiss xmm8, [r15+0x18]` → `jb` — **delay > 0 이면 이번 프레임 방출 없음**.
+    ///   · ② `0x140237af1`–`0x140237afb`: `movss xmm0,[r15+0x14]` / `comiss xmm0, xmm8` → `jb` —
+    ///     **duration < 0 이면 방출 없음**(은퇴 프레임에 못 박히는 `-1.0` 이 여기 걸린다).
+    ///
+    /// `comiss` 는 NaN(unordered)에서 CF=1 이라 ①·② 둘 다 "막힘" 쪽으로 떨어진다.
+    /// `!(x <= 0)` / `!(x >= 0)` 형태가 그 판정과 같다(동봉 도달 0 이지만 공짜라 맞춰 둔다).
+    @inline(__always)
+    private func windowBlocksEmission(_ i: Int) -> Bool {
+        guard i < windowStates.count else { return false }   // 창 없음 = 무한(종전 경로)
+        let w = windowStates[i]
+        return w.retired || !(w.delay <= 0) || !(w.duration >= 0)
+    }
+
+    /// 이미터 레코드 꼬리의 창 카운트다운(실물 `0x14023845b`–`0x14023847a` + `0x14023ae24`–`0x14023ae67`).
+    ///
+    ///   ③ `0x140238461`–`0x14023847a`: `delay > 0` 이면 `delay -= dt` 하고 **거기서 끝**
+    ///      (`jmp 0x14023ae6e` — duration 은 이 프레임에 안 깎는다). 즉 **delay 가 duration 앞**이다.
+    ///   ④ `0x14023ae24`–`0x14023ae46`: `delay <= 0` 이면 `duration > 0` 인 동안 `duration -= dt`.
+    ///      깎은 값이 0 이하가 된 프레임에 `[rcx+0x14] = -1.0f`(`0xbf800000` @0x14023ae3f)로 못 박고
+    ///      `jmp 0x14023ae5b` 로 **⑤ 를 건너뛰어** 무조건 은퇴시킨다(`or [rcx+0x4c],0x80000000`).
+    ///   ⑤ `0x14023ae48`–`0x14023ae59`: 애초에 `duration <= 0` 이던 이미터만 오는 갈래다.
+    ///      `comiss xmm8,[rcx+0x10]`(rate) → `jb` 로 **rate > 0 이면 은퇴하지 않는다** —
+    ///      그래서 **`duration == 0` 은 "0초 방출" 이 아니라 무한**이다.
+    ///
+    /// Waple 은 `duration == 0` 을 **항상 무한**으로 본다(카운트다운 자체를 안 탄다). ⑤ 의 나머지
+    /// 갈래(`rate == 0` 이면 `[rcx+0x48]`=instantaneous 원본과 `[rcx+0x4c]&4`=주기 플래그로 은퇴
+    /// 여부를 가른다)는 **일부러 옮기지 않았다** — 그대로 옮기면 `rate==0 && burst>0` 인 이미터가
+    /// 첫 프레임 끝에 은퇴해 Waple 의 "전멸 시 재버스트" 경로(_step 의 `wasEmpty` 분기)가 죽는다.
+    /// 그 분기는 이 라운드의 대상이 아니고, `.unbounded` 이미터의 무회귀가 우선이다.
+    ///
+    /// NaN 취급도 실물과 같다 — ④ 의 은퇴 판정은 `comiss xmm8, xmm0` / `jb`(= "0 < 새 duration
+    /// 이거나 unordered 면 계속") 이라 `duration <= 0` 일 때만 은퇴한다(NaN 은 계속).
+    private mutating func stepEmitterWindows(_ dt: Float) {
+        guard !windowStates.isEmpty else { return }          // 전 이미터 무한 — 종전 경로 비트동일
+        for i in windowStates.indices {
+            if windowStates[i].retired { continue }
+            if windowStates[i].delay > 0 {                    // ③ delay 우선, duration 은 손대지 않는다
+                windowStates[i].delay -= dt
+                continue
+            }
+            guard windowStates[i].duration > 0 else { continue }   // ⑤ 0 = 무한 · 음수 = 영구 차단
+            windowStates[i].duration -= dt                    // ④
+            if windowStates[i].duration <= 0 {
+                windowStates[i].duration = -1                 // 0xbf800000 @0x14023ae3f
+                windowStates[i].retired = true                // 0x14023ae67 — 영구
+            }
         }
     }
 
