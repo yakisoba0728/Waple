@@ -293,16 +293,22 @@ final class Scene3DLightingTests: XCTestCase {
         XCTAssertEqual(resolved[0].colorRadius.z, 0.75 * 5, accuracy: 1e-5)
     }
 
-    func testSpotConeCosinesMapFullConeAnglesToHalfAngleCosines() {
+    /// 2026-08-21 확정: `innercone`/`outercone` 은 **축 기준 반각(도)** 이다 — 도 값에 π/180 만 곱한다.
+    /// 근거: V1 유니폼 패커 wallpaper64.exe 0x140192e64–0x140192e86(inner → `g_LSpot_Origin[i].w`),
+    /// 0x140192eaa–0x140192ebf(outer → `g_LSpot_Direction[i].w`), deg2rad 상수 0x140492628 을
+    /// 0x1401910bf 에서 xmm7 로 적재. 종전 `* 0.5`(전각 해석)는 콘을 절반으로 좁히는 오이식이었다.
+    func testSpotConeCosinesUseDegreesAsHalfAngleDirectly() {
         let cone = Scene3DLighting.spotConeCosines(inner: 20, outer: 30)
-        // 전각 30°→half 15°, 20°→half 10°.
-        XCTAssertEqual(cone.outer, cos(15 * .pi / 180), accuracy: 1e-5)
-        XCTAssertEqual(cone.inner, cos(10 * .pi / 180), accuracy: 1e-5)
+        // 반각 그대로: outer 30°, inner 20°.
+        XCTAssertEqual(cone.outer, cos(30 * .pi / 180), accuracy: 1e-5)
+        XCTAssertEqual(cone.inner, cos(20 * .pi / 180), accuracy: 1e-5)
         XCTAssertGreaterThan(cone.inner, cone.outer)  // inner 가 좁아 코사인 큼
-        // 축에서 10°(half-inner) 방향은 inner 콘 안 → 완전 조명(코사인 ≥ inner).
-        XCTAssertGreaterThanOrEqual(cos(10 * Float.pi / 180), cone.inner - 1e-6)
-        // 축에서 20°(> half-outer 15°) 방향은 outer 콘 밖 → 무조명(코사인 < outer).
-        XCTAssertLessThan(cos(20 * Float.pi / 180), cone.outer)
+        // 축에서 20°(=inner) 방향은 inner 콘 경계 → 완전 조명(코사인 ≥ inner).
+        XCTAssertGreaterThanOrEqual(cos(20 * Float.pi / 180), cone.inner - 1e-6)
+        // 축에서 40°(> outer 30°) 방향은 outer 콘 밖 → 무조명(코사인 < outer).
+        XCTAssertLessThan(cos(40 * Float.pi / 180), cone.outer)
+        // 종전 전각 해석과 다른 값이라는 것을 명시적으로 잠근다(회귀 시 여기서 먼저 깨진다).
+        XCTAssertNotEqual(cone.outer, cos(15 * Float.pi / 180), accuracy: 0.02)
         // 콘 데이터 없음(0) → (1,-1): 셰이더 (cosAngle+1)/2 반구 그라디언트 폴백 곡선을 이 유닛이 잠금.
         // 콘 게이팅 없는 광역 조명(가장자리 도달)은 픽셀로도 회귀 가드 —
         // Scene3DPBRShadowRenderTests.testSpotWithoutConeDataUsesHemisphereGradientFallback.

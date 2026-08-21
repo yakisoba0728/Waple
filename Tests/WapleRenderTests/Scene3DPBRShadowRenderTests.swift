@@ -179,14 +179,18 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
         return n > 0 ? total / Double(n) : 0
     }
 
-    // WE 콘 시맨틱(half vs full angle)은 확정 아님 — 코퍼스 spot 은 전부 지오메트리 밖이라 육안 보정 불가.
-    // 이 테스트들은 판정이 아니라 **현행 구현을 GPU 픽셀로 잠그는 회귀 가드**다:
+    // WE 콘 시맨틱은 2026-08-21 에 **반각(도)** 으로 확정됐다 — V1 유니폼 패커가 `cos(도 * π/180)` 을
+    // 그대로 싣는다(wallpaper64.exe 0x140192e64–0x140192e86 / 0x140192eaa–0x140192ebf,
+    // deg2rad 0x140492628). Scene3DLighting.spotConeCosines 의 `* 0.5` 를 제거했다.
+    // 이 테스트들은 여전히 판정이 아니라 **현행 구현을 GPU 픽셀로 잠그는 회귀 가드**다:
     //   ① spotPBR 경로가 실제 실행되고(콘 안=밝음), ② 셰이더 콘 수학이 CPU 유닛(spotConeCosines)과
-    //   일치하게 동작(단조 falloff, 콘 밖=0)함을 증명. half/full 최종 판정은 실씬 캡처 대기.
+    //   일치하게 동작(단조 falloff, 콘 밖=0)함을 증명.
     func testSpotConeGatesIlluminationAndFallsOffMonotonically() throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("no Metal") }
-        // innercone=20/outercone=50(전각). 중심행을 중심(축상)→콘 밖으로 스캔.
-        let image = try renderScene(spotScene(inner: 20, outer: 50), material: litMeshMaterial, tag: "spotcone")
+        // innercone=10/outercone=25(**반각** 도). 중심행을 중심(축상)→콘 밖으로 스캔.
+        // 반각 확정 전 이 픽스처는 20/50 이었고 `* 0.5` 를 거쳐 같은 10°/25° 콘이 됐다 —
+        // 저작값을 절반으로 바꿔 **렌더 결과를 비트동일로 보존**한 것이라 아래 실측 수치는 그대로다.
+        let image = try renderScene(spotScene(inner: 10, outer: 25), material: litMeshMaterial, tag: "spotcone")
         // 열 32(축)→56(콘 밖). 실측: 0.643 · 0.583 · 0.390 · 0.125 · 0.031. 인접 gap ≥ 0.06.
         let profile = [32, 42, 46, 50, 56].map { blockLuminance(image, cx: $0, cy: 32) }
         // ① inner 안(축 교점)은 밝음 = spotPBR 경로가 GPU에서 실제 실행.
@@ -210,7 +214,8 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
         // 정확한 반구 곡선(전방향 통과 vs (cosAngle+1)/2)은 이 정면 지오메트리(cosAngle≈0.85~1.0)로는
         // 분리 불가 — 곡선은 Scene3DLightingTests.spotConeCosines 유닛((1,-1) 반환)이 잠금.
         let none = try renderScene(spotScene(inner: 0, outer: 0), material: litMeshMaterial, tag: "spotnone")
-        let coned = try renderScene(spotScene(inner: 20, outer: 50), material: litMeshMaterial, tag: "spotconeref")
+        // (위와 같은 사유로 20/50 → 10/25 — 콘 자체는 동일하다.)
+        let coned = try renderScene(spotScene(inner: 10, outer: 25), material: litMeshMaterial, tag: "spotconeref")
         // 같은 가장자리 픽셀: 콘 데이터 없음=밝음(광역 도달) vs 콘 있음=어두움(콘 밖 게이팅).
         let noneEdge = blockLuminance(none, cx: 62, cy: 32)      // 실측 0.469
         let conedEdge = blockLuminance(coned, cx: 62, cy: 32)    // 실측 0.031(ambient)
@@ -243,9 +248,18 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
     }
 
     // F274(폐기 취소 — 실코퍼스 3706286085 RioSonicLite/SonicBODY 실측 발화): RIMLIGHTING 콤보가 실제로
-    // GPU 파이프라인 끝까지 배선됐는지(콤보 파싱→유니폼→셰이더 샘플)를 픽셀로 증명. NL=max(NL,rimTerm)·
-    // metallic-=saturate(rimTerm) 는 절대 어둡게 만들 수 없다(common_pbr.h:62-67) — on 이 off 보다
-    // 반드시 밝거나 같아야 하고, amount>0·exponent 낮음(그레이징에서도 잘 감쇠 안 됨)이면 반드시 더 밝다.
+    // GPU 파이프라인 끝까지 배선됐는지(콤보 파싱→유니폼→셰이더 샘플)를 픽셀로 증명. RIMLIGHTING 은
+    // 절대 어둡게 만들 수 없으므로 on 이 off 보다 밝거나 같아야 하고, 아래 파라미터에서는 반드시 더 밝다.
+    //
+    // ⚠️ 2026-08-21: 이 씬의 라이트는 **point** 라 V1 레인(`ComputePBRLightShadow`)을 탄다. 그 레인에서
+    // `metallic -= saturate(rimTerm)`(common_pbr_2.h:296)은 **효과가 없다** — `diffuse` 가 이미 :277 에서
+    // 계산돼 있기 때문이다(WE 자신의 데드 연산). 반면 무한광 `ComputePBRLightShadowInfinite` 는 감산 :355
+    // 다음에 diffuse :361 이라 살아 있다. Mesh3DShaders.pbrDirect 가 그 차이를 `rimAdjustsDiffuse` 로
+    // 반영하면서, point 라이트에서 rim 이 밝히는 경로는 `NL = max(NL, rimTerm)` 하나만 남았다.
+    // 그래서 rim 파라미터를 그 항이 확실히 발화하도록 올렸다(amount 4→12, exponent 1.5→1.0):
+    // 평면 중심에서 NV≈0.857 → rimTerm = (1-0.857)^1.0 × 12 × NL(=1) ≈ 1.72 > NL 이라 NL 이 실제로 승격된다.
+    // 종전 값(4 / 1.5)은 rimTerm≈0.22 < NL 이라 NL 승격이 전혀 없었고, on/off 차이가 전부 죽은
+    // metallic 감산에서 나오고 있었다 — 즉 이 테스트는 **WE 에 없는 밝기**를 잠그고 있었다.
     private func rimLitScene() -> String {
         """
         {"camera":{"eye":"3 0 5","center":"0 0 0","up":"0 1 0"},
@@ -263,7 +277,7 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
         #"""
         {"passes":[{"textures":["white"],
           "combos":{"LIGHTING":1,"RIMLIGHTING":\#(rimOn ? 1 : 0)},
-          "constantshadervalues":{"roughness":0.7,"metallic":0,"rimamount":4,"rimexponent":1.5}}]}
+          "constantshadervalues":{"roughness":0.7,"metallic":0,"rimamount":12,"rimexponent":1.0}}]}
         """#
     }
 
@@ -272,9 +286,8 @@ final class Scene3DPBRShadowRenderTests: XCTestCase {
         let off = try renderScene(rimLitScene(), material: rimMaterial(rimOn: false), tag: "rimoff")
         let on = try renderScene(rimLitScene(), material: rimMaterial(rimOn: true), tag: "rimon")
         XCTAssertGreaterThan(averageLuminance(on), averageLuminance(off) + 0.01,
-            "F274: RIMLIGHTING=1(rimamount=4,rimexponent=1.5)은 NL 을 max(NL,rimTerm)으로 부스트하고 " +
-            "metallic 을 깎아 diffuse 를 밝혀야 함(common_pbr.h 이식) — off 대비 더 밝지 않으면 콤보가 " +
-            "파싱만 되고 셰이더까지 안 이어진 것")
+            "F274: RIMLIGHTING=1(rimamount=12,rimexponent=1.0)은 NL 을 max(NL,rimTerm)으로 부스트해야 함 " +
+            "(common_pbr_2.h:292-295) — off 대비 더 밝지 않으면 콤보가 파싱만 되고 셰이더까지 안 이어진 것")
     }
 
     func testRimLightingComboOffMatchesPreExistingMaterialResponse() throws {

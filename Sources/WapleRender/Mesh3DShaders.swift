@@ -148,9 +148,11 @@ enum Mesh3DShaders {
     inline float finiteLightFalloff(float distance, float radius, float exponent) {
         if (radius <= 0.0) return 0.0;
         float falloff = clamp(1.0 - distance / radius, 0.0, 1.0);
-        // WE 2.8.42 HLSL lane(#define HLSL 1 크로스컴파일 — wallpaper64.exe 스트링 @0x486898):
+        // WE 2.8.42 HLSL lane(크로스컴파일 프리앰블 — wallpaper64.exe 0x140486898–0x1404868bb
+        // `"#define HLSL 1\n#define HLSL_SM40 1\n"`): common_pbr_2.h:263-266
         // pow(falloff + 1.17549435e-38, exponent), 반경 컷오프 없음. exponent=0 이면 pow(x,0)=1
         // 이라 반경 무관 전역 무감쇠가 엔진 동작(구 GLSL lane 의 hard zero 는 오이식).
+        // `radius <= 0.0 → 0.0` 은 Waple 가드다(WE 원문엔 없음) — resolveLights 가 이미 걸러 도달 0.
         return pow(falloff + 1.17549435e-38, exponent);
     }
 
@@ -197,12 +199,21 @@ enum Mesh3DShaders {
 
     // Cook–Torrance BRDF × NL (source-confirmed generic4 코어). radiance 는 호출부가 곱한다.
     // NL<=0 이면 최종 *NL 로 0(포인트 조기반환과 수치 동일). point/directional/spot 공유.
-    // F274(RIMLIGHTING/SHADINGGRADIENT — common_pbr.h:53-75 1:1 이식): rim=(g_RimAmount,g_RimExponent,
+    // F274(RIMLIGHTING/SHADINGGRADIENT — common_pbr_2.h:284-311 1:1 이식): rim=(g_RimAmount,g_RimExponent,
     // RIMLIGHTING on/off,SHADINGGRADIENT on/off). lightColorRaw 는 감쇠 적용 "전" 광원색(WE V1 lane 의
     // step(0.001, lightColor.x+y+z) 게이트와 동일 — 감쇠된 radiance 가 아니라 광원 자체의 세기를 본다).
+    //
+    // rimAdjustsDiffuse: **WE 의 두 함수가 여기서 갈린다**(2026-08-21 원문 대조).
+    //   · 유한광 ComputePBRLightShadow  : diffuse 를 :277 에서 계산하고 metallic 감산은 :296 —
+    //                                     **감산이 diffuse 뒤라 아무 효과가 없다**(WE 쪽 데드 연산).
+    //   · 무한광 ComputePBRLightShadowInfinite: metallic 감산이 :355, diffuse 계산이 :361 —
+    //                                     **감산이 diffuse 에 반영된다.**
+    // 그래서 directional 만 true 로 부른다. 종전에는 네 kind 전부 감산을 반영해 RIMLIGHTING 켠
+    // point/spot/tube 의 diffuse 가 WE 보다 밝았다(rimTerm>=0 → adjustedMetallic<=metallic →
+    // (1-metallic) 가 커짐). F0/Fresnel 은 양쪽 다 원래 metallic 으로 계산되므로 무관하다.
     inline float3 pbrDirect(float3 N, float3 V, float3 L, float3 albedo,
                             float roughness, float metallic, float3 specularTint,
-                            float3 lightColorRaw, float4 rim,
+                            float3 lightColorRaw, float4 rim, bool rimAdjustsDiffuse,
                             texture2d<float> gradientTex, sampler gradientSampler) {
         float dNL = dot(N, L);
         float3 H = normalizedOr(V + L, N);
@@ -234,11 +245,19 @@ enum Mesh3DShaders {
             adjustedMetallic -= saturate(rimTerm);
         }
 
-        float3 diffuseWeight = (1.0 - adjustedMetallic) * (1.0 - F);
+        // 위 rimAdjustsDiffuse 주석 참조 — 유한광은 WE 가 diffuse 를 감산 **전에** 계산한다.
+        float diffuseMetallic = rimAdjustsDiffuse ? adjustedMetallic : metallic;
+        float3 diffuseWeight = (1.0 - diffuseMetallic) * (1.0 - F);
         float denominator = max(4.0 * max(dot(N, V), 0.0) * NL, 0.001);
         float3 specular = D * G * F / denominator;
         return (diffuseWeight * albedo / 3.14159265359 + specular * specularTint) * NL;
     }
+
+    // SHADINGGRADIENT(툰) 이 켜지면 dot(N,L)<=0 에서도 **빛이 남는다**: WE 의 NL 은
+    // ramp(max(dNL*0.5+0.5, 0)) 이라 dNL=0 에서 램프 중앙값(≈0.5 지점), dNL<0 에서도 0 이 아니다
+    // (common_pbr_2.h:285-290 / :333-338). 그래서 조기 반환은 툰이 꺼진 경우에만 유효하다.
+    // 종전에는 무조건 반환해 툰 머티리얼의 뒷면 반구를 통째로 잘라 먹었다.
+    inline bool backFacingCull(float dNL, float4 rim) { return rim.w <= 0.5 && dNL <= 0.0; }
 
     inline float3 pointPBR(float3 worldPos, float3 N, float3 V, float3 albedo,
                            float roughness, float metallic, float3 specularTint,
@@ -248,24 +267,31 @@ enum Mesh3DShaders {
         float distance = length(delta);
         if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
         float3 L = delta / distance;
-        if (dot(N, L) <= 0.0) return float3(0.0);
+        if (backFacingCull(dot(N, L), rim)) return float3(0.0);
         float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
                                                light.positionExponent.w);
         float3 radiance = light.colorRadius.xyz * attenuation;
         return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint,
-                         light.colorRadius.xyz, rim, gradientTex, gradientSampler) * radiance;
+                         light.colorRadius.xyz, rim, false, gradientTex, gradientSampler) * radiance;
     }
 
     // 무한거리(directional): 무감쇠 radiance = lightColor. L = -forward(surface→light).
-    // WE common_pbr_2.h::ComputePBRLightShadowInfinite (shadowFactor=1: directional 섀도우 스코프 밖).
+    // WE common_pbr_2.h:317-363 `ComputePBRLightShadowInfinite` — 스니펫 0x14048ce50(shadowFactor 1.0)/
+    // 0x14048cf10(shadowFactor 변수) 두 판이 있고, 우리는 섀도우를 곱셈으로 밖에서 적용한다
+    // (F661/F780 의 directionalShadowVisibility — mf_main 이 `visibility * directionalPBR(...)`).
+    // 그 외부 곱셈이 WE 와 일치하는 근거: 비-그라디언트 경로에서 shadowFactor 는 NDF 와 NL 에만 들어가고
+    // specular 의 분모 NL 과 상쇄되므로 결과가 shadowFactor 에 선형이다(common_pbr_2.h:321/349/357-362).
+    // (분모 하한 0.001 이 물리는 극소 NL 구간에서만 선형성이 깨진다. 그라디언트 경로는
+    //  min(shadowFactor, dNL) 로 램프 좌표에 섞여 비선형 — 그 조합은 아직 근사다.)
+    // 무한광은 metallic 감산이 diffuse 에 **반영된다**(:355 감산 → :361 diffuse) → rimAdjustsDiffuse=true.
     inline float3 directionalPBR(float3 N, float3 V, float3 albedo,
                                  float roughness, float metallic, float3 specularTint,
                                  constant LightU& light, float4 rim,
                                  texture2d<float> gradientTex, sampler gradientSampler) {
         float3 L = normalizedOr(-light.axis.xyz, float3(0.0, 1.0, 0.0));
-        if (dot(N, L) <= 0.0) return float3(0.0);
+        if (backFacingCull(dot(N, L), rim)) return float3(0.0);
         return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint,
-                         light.colorRadius.xyz, rim, gradientTex, gradientSampler) * light.colorRadius.xyz;
+                         light.colorRadius.xyz, rim, true, gradientTex, gradientSampler) * light.colorRadius.xyz;
     }
 
     // spot: point 감쇠 × 콘 스무드스텝(축 forward 기준). 콘 밖은 0.
@@ -277,7 +303,7 @@ enum Mesh3DShaders {
         float distance = length(delta);
         if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
         float3 L = delta / distance;                 // surface→light
-        if (dot(N, L) <= 0.0) return float3(0.0);
+        if (backFacingCull(dot(N, L), rim)) return float3(0.0);
         // 광자 진행 방향 forward vs light→surface(-L) 의 코사인.
         float cosAngle = dot(normalizedOr(light.axis.xyz, float3(0.0, 0.0, 1.0)), -L);
         float cosInner = light.shadow.w;
@@ -288,15 +314,22 @@ enum Mesh3DShaders {
         float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
                                                light.positionExponent.w);
         float3 radiance = light.colorRadius.xyz * attenuation * cone;
+        // RIMLIGHTING 게이트가 보는 광원색은 **콘이 곱해진** 색이다 — WE 는 조립 스니펫
+        // 0x14048c750/0x14048c820 에서 `g_LSpot_Color[i].rgb * spotCookie` 를 lightColor 인자로
+        // 넘기고, 그 인자가 그대로 step(0.001, ΣlightColor) 게이트(common_pbr_2.h:305)에 들어간다.
+        // point/tube/directional 은 감쇠 전 원색이 맞다(스니펫이 곱셈 없이 넘긴다).
         return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint,
-                         light.colorRadius.xyz, rim, gradientTex, gradientSampler) * radiance;
+                         light.colorRadius.xyz * cone, rim, false, gradientTex, gradientSampler) * radiance;
     }
 
-    // tube: 세그먼트 최근접점을 광원점으로 하는 유한광 — WE PerformLighting_V1 tube 분기
-    // (A2-pbr-lighting.md §4.4: lightDelta=PointSegmentDelta(worldPos, OriginA, OriginB),
-    //  ComputePBRLightShadow(..., Color.w=radius, OriginA.w=exponent, shadowFactor=1.0 — tube 무섀도우).
-    // pointPBR 과의 유일한 차이는 델타 산출(세그먼트 최근접점)뿐 — 패킹 규약(OriginA.w=exponent,
-    // Color.w=radius)은 point 와 동형(A2 §4.5 표).
+    // tube: 세그먼트 최근접점을 광원점으로 하는 유한광 — WE PerformLighting_V1 tube 분기.
+    // 엔진 조립 스니펫 원문(2026-08-21 실측):
+    //   0x14048caa0 `vec3 lightDelta = PointSegmentDelta(worldPos, g_LTube_OriginA[i].xyz, g_LTube_OriginB[i].xyz);`
+    //   0x14048c9e0 `light += ComputePBRLightShadow(normal, lightDelta, viewVector, color,
+    //                g_LTube_Color[i].rgb, g_LTube_Color[i].w, g_LTube_OriginA[i].w, ..., 1.0);`
+    // → radius=Color.w, exponent=OriginA.w, shadowFactor=1.0(무섀도우). 유니폼 패커
+    // 0x140192a19–0x140192ab7 이 Color=(color*intensity, radius), OriginA=(worldPos, exponent) 로 싣는다.
+    // pointPBR 과의 유일한 차이는 델타 산출(세그먼트 최근접점)뿐 — 패킹 규약이 point 와 동형이다.
     inline float3 tubePBR(float3 worldPos, float3 N, float3 V, float3 albedo,
                           float roughness, float metallic, float3 specularTint,
                           constant LightU& light, float4 rim,
@@ -305,12 +338,12 @@ enum Mesh3DShaders {
         float distance = length(delta);
         if (distance < 1e-5 || light.colorRadius.w <= 0.0) return float3(0.0);
         float3 L = delta / distance;
-        if (dot(N, L) <= 0.0) return float3(0.0);
+        if (backFacingCull(dot(N, L), rim)) return float3(0.0);
         float attenuation = finiteLightFalloff(distance, light.colorRadius.w,
                                                light.positionExponent.w);
         float3 radiance = light.colorRadius.xyz * attenuation;
         return pbrDirect(N, V, L, albedo, roughness, metallic, specularTint,
-                         light.colorRadius.xyz, rim, gradientTex, gradientSampler) * radiance;
+                         light.colorRadius.xyz, rim, false, gradientTex, gradientSampler) * radiance;
     }
 
     inline int pointShadowFace(float3 delta) {
@@ -342,8 +375,11 @@ enum Mesh3DShaders {
         float2 uv, uvMin, uvMax;
         float referenceDepth;
         if (light.cascades.w > 2.5) {
-            // CSM 선택 — WE 정본(common_pbr_2.h:131-147 CalculateProjectedCoordsCascades +
-            // A2-pbr-lighting.md §4.4 directional mix 체인): 각 캐스케이드 VP 로 투영해 NDC 박스
+            // CSM 선택 — WE 정본(common_pbr_2.h:131-147 CalculateProjectedCoordsCascades + 조립
+            // 스니펫의 directional mix 체인 0x14048cb10/0x14048cb80/0x14048cbf0(p1..p3 투영),
+            // 0x14048cce0/0x14048cc70(uvTransforms mix), 0x14048cdd0/0x14048cd70(좌표 mix),
+            // 0x14048cfd0(`shadowFactor = max(projectedCoords3.w, PerformShadowMapping(...))`)):
+            // 각 캐스케이드 VP 로 투영해 NDC 박스
             // (|xy|<0.99, z 가장자리 이내) 포함 여부로 mix — 종전 radial distance(eye, worldPos)
             // 비교(F780 근사)를 대체한다. 캐스케이드 xy 피팅이 카메라 프러스텀 슬라이스([near,d0]/
             // [d0,d1]/[d1,d2])라 박스 선택은 사실상 뷰 z(far 평면) 기준이며 측면 범위 검사도 겸한다.
@@ -547,11 +583,28 @@ enum Mesh3DShaders {
                                   u.specularTint.xyz, lights[i], u.rim, gradientTex, gradientSampler);
             }
         }
+        // 반구 앰비언트 — WE base/model_vertex_v1.h:207-210 `ApplyAmbientLighting`
+        //   mix(g_LightSkylightColor, g_LightAmbientColor, dot(normal, vec3(0,1,0)) * 0.5 + 0.5)
+        // (generic.vert:77 / generic2.vert:73 / generic3.vert:171 / generic4.vert:168 동일 식).
+        // 인자 순서 그대로다: 법선이 **위**면 `ambientcolor`, **아래**면 `skylightcolor` — 이름 직관과
+        // 반대로 보이지만 원문이 그렇다. WE 는 정점에서 계산해 보간(varying v_LightAmbientColor)하고
+        // 우리는 픽셀에서 푼다(로우폴리 메시에서만 갈리는 보간 차이 — 의도적).
+        // mode 2(=image flat)는 genericimage4 레인이라 평평한 g_LightAmbientColor 만 쓴다.
+        // (아래 mf_normal/mf_skinned* 의 같은 블록도 이 주석을 따른다.)
         float3 ambientColor = frame.ambient.xyz;
         if (mode < 1.5) {
             float hemisphere = clamp(dot(N, float3(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);
             ambientColor = mix(frame.skylight.xyz, frame.ambient.xyz, hemisphere);
         }
+        // WE `CombineLighting(light, ambient)` — generic4.frag:123,132 가 `ambient = v_LightAmbientColor
+        // * albedo.rgb` 를 넘기므로 아래 `ambientColor * albedo + direct` 가 **비HDR 가지 그대로**다
+        // (common_pbr_2.h:372 `return ambient + light`).
+        // ⚠️ 미이식: HDR 가지(common_pbr_2.h:367-370)는 `saturate(ambient + light) + light * overbright`,
+        //    `overbright = saturate(length(light) - 2.0) * 0.5 / max(0.01, length(light))` 로 **다르다**.
+        //    씬 `general.hdr:true` 일 때 엔진이 HDR 콤보를 주입해 그 가지가 켜진다(동봉 172 + 설치본 186
+        //    씬 전수에서 `hdr:true` 4건). 지금은 g_Brightness(applyHDRBrightness)만 이식돼 있고
+        //    saturate/overbright 는 없다 — HDR 씬에서 라이트 길이가 2를 넘는 구간의 롤오프가 WE 와 갈린다.
+        //    수식은 `SceneWELightMath.combineLighting(light:ambient:hdr:)`(WapleCore)에 고정해 뒀다.
         float3 lit = ambientColor * albedo + direct;
         float outAlpha = sampled.a;
         lit = applyHDRBrightness(lit, u);
