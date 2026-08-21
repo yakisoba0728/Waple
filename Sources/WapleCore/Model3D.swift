@@ -158,8 +158,13 @@ public struct Model3D: Equatable {
     }
 
     /// 애니 키(프레임당 1키). 2D PuppetModel.Key 와 동일 포맷: pos + 오일러각(라디안) + scale.
+    /// 키 1개 = **36바이트**이고 트랙 키 수는 `frameCount + 1` 이다 — 리더가 트랙 블롭 크기를
+    /// 36 으로 나누고(`0xE38E38E38E38E38F` / `shr rdx,5` @0x140263c61) 몫이 `frameCount+1` 이
+    /// 아니거나 나머지가 0 이 아니면 `int 0x29`(__fastfail) 로 즉사한다(0x140263c8c/0x140263c95).
     public struct Key: Equatable {
         public let position: SIMD3<Float>
+        /// 오일러 3축 — 파일 바이트 순서(+0x0c,+0x10,+0x14) 그대로이고 의미는 **(X, Y, Z)**,
+        /// 합성은 `Rz(z)·Ry(y)·Rx(x)`. 근거는 `PuppetPose.rotationQuaternion` 단일 소스.
         public let angles: SIMD3<Float>
         public let scale: SIMD3<Float>
         public init(position: SIMD3<Float>, angles: SIMD3<Float>, scale: SIMD3<Float>) {
@@ -170,7 +175,9 @@ public struct Model3D: Equatable {
     /// 애니메이션(MDLA0006 애니 1개). tracks[boneIdx] = 프레임순 키 배열(본수 == 스켈레톤 본수).
     public struct Animation: Equatable {
         public let name: String                // "Link Adult_arm|idle_bone" 등
-        public let mode: String                // loop | single | mirror | clamp
+        /// 재생 모드 문자열. WE 가 실제로 인식하는 값은 `stricmp` 로 "mirror"(0x1401a8c71) /
+        /// "single"(0x1401a8c87) 둘뿐이고 나머지(빈 문자열·"loop"·"clamp" 포함)는 전부 loop 다.
+        public let mode: String
         public let fps: Float
         public let lengthFrames: Int
         public let tracks: [[Key]]             // 본 인덱스별 키(프레임당 1키)
