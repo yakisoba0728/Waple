@@ -58,17 +58,35 @@ VA_EFFECT_PARSER = 0x1401E7170      # effect.json 파서
 VA_AUDIO_THREAD = 0x1400D02B0       # 캡처/FFT 스레드 본체
 VA_AP_CTOR = 0x1400C0C80            # AudioProcessor 를 품는 객체의 생성자
 
+# [2026-08-21 정정] 오프셋이 넷 다 8 작게 적혀 있었다(+0xE4/+0xE8/+0xEC/+0xF0).
+# 실제 저장은 `[rdi+0xEC]`/`+0xF0`/`+0xF4`/`+0xF8` 이고, 생성자 프롤로그의 `mov rdi, rcx`
+# (0x1400C0CA0)로 **rdi 가 곧 this** 라 이 오프셋이 곧 객체 오프셋이다. 아래 BYTE_CHECKS 의
+# 네 항목이 이제 즉시값과 **오프셋 바이트를 함께** 못 박으므로 같은 착오가 다시 안 난다.
 AP_CONSTANTS = [
-    (0x1400C0D59, "exponent", 0.25, "AudioProcessor+0xE4 — 밴드 매핑 지수"),
-    (0x1400C0D63, "tiltC", 0.50099998712539673, "AudioProcessor+0xE8 — 스펙트럴 틸트 상수"),
-    (0x1400C0D6D, "fftLengthFactor", 30.0, "AudioProcessor+0xEC — FFT 길이 계수"),
-    (0x1400C0D77, "binCountFactor", 10.0, "AudioProcessor+0xF0 — 사용 빈 개수 계수"),
+    (0x1400C0D59, "exponent", 0.25, "AudioProcessor+0xEC — 밴드 매핑 지수"),
+    (0x1400C0D63, "tiltC", 0.50099998712539673, "AudioProcessor+0xF0 — 스펙트럴 틸트 상수"),
+    (0x1400C0D6D, "fftLengthFactor", 30.0, "AudioProcessor+0xF4 — FFT 길이 계수"),
+    (0x1400C0D77, "binCountFactor", 10.0, "AudioProcessor+0xF8 — 사용 빈 개수 계수"),
 ]
 
 BYTE_CHECKS = [
     (0x1400D1D04, "f30f5fc8", "밴드 축약이 `maxss` — 평균이 아니라 최댓값"),
     (0x1401E7586, "81e100200000", "`and ecx, 0x2000` — 백버퍼 포맷의 HDR 비트 검사"),
     (0x1401E7590, "83e00e", "`and eax, 0xe` — HDR 이면 enum 14(rgba16161616f), 아니면 0"),
+    # ── 생성자 상수 네 개의 **오프셋까지** 못 박는다(값만 보면 오프셋 오기를 못 잡는다) ──
+    (0x1400C0CA0, "488bf9", "`mov rdi, rcx` — 이 뒤 `[rdi+…]` 오프셋이 곧 객체 오프셋이다"),
+    (0x1400C0D59, "c787ec0000000000803e", "`mov [rdi+0xEC], 0x3E800000` — exponent 0.25"),
+    (0x1400C0D63, "c787f00000008941003f", "`mov [rdi+0xF0], 0x3F004189` — tiltC 0.50099999"),
+    (0x1400C0D6D, "c787f40000000000f041", "`mov [rdi+0xF4], 0x41F00000` — fftLengthFactor 30.0"),
+    (0x1400C0D77, "48c787f800000000002041", "`mov [rdi+0xF8], 0x41200000` — binCountFactor 10.0"),
+    # ── 창 길이: **차를 절삭**한다(몫을 절삭하는 게 아니다) ──
+    (0x1400D1491, "f3450f5ed4", "`divss xmm10, xmm12` — binCountFactor / fftLengthFactor = 10/30"),
+    (0x1400D1496, "f3450f59d3", "`mulss xmm10, xmm11` — (10/30) × N"),
+    (0x1400D149B, "f3450f5cda", "`subss xmm11, xmm10` — N − (10/30)×N, **부동소수 뺄셈이 먼저**"),
+    (0x1400D14A0, "f3410f2cfb", "`cvttss2si edi, xmm11` — 절삭은 **차**에 걸린다: W = int(N − (10/30)N)"),
+    # ── 창 밖 패딩이 0 이 아니다 ──
+    (0x1400D141D, "41c704970000fe42", "`mov [r15+rdx*4], 0x42FE0000` — 패딩 실수부 **127.0**"),
+    (0x1400D1425, "41c7448f040402013c", "`mov [r15+rcx*4+4], 0x3C010204` — 패딩 허수부 **1/127**"),
 ]
 
 FORMAT_STRINGS = [
@@ -267,10 +285,20 @@ def measure(pe):
     # ── 파이프라인 (수식은 보고, 상수는 위에서 확정) ────────────────────────
     entries.append(specfmt.entry(
         "engine.audio.pipeline",
-        {"fftLength": "N = int(max(rate/44100, 1) × 64 × 30)  — 44.1kHz 에서 1920",
+        {"fftLength": "N = int(max(rate/44100, 1) × 64 × 30)  — 44.1kHz 에서 1920, 48kHz 에서 2089. "
+                       "실무 레이트에서 **2의 거듭제곱이 아니다**",
          "binCount": "B = int(64 × 10) = 640, 샘플레이트 무관 고정",
-         "window": "N − int(N × 10/30), 오버랩 없음, 나머지는 제로패딩 — 1920 → 1280",
-         "design": "N 을 레이트에 비례시키고 B 를 고정해 **빈 폭 ≈22.97 Hz · 상한 ≈14677 Hz** 를 고정한다",
+         "window": "W = int(N − (10/30)×N) — **절삭이 차에 걸린다**(몫을 절삭하는 게 아니다). "
+                   "오버랩 없음. 1920 → 1280(두 해석이 같음), 2089 → 1392(다름: 몫 절삭이면 1393). "
+                   "[정정 2026-08-21] 종전 표기 `N − int(N × 10/30)` 은 44.1kHz 에서만 우연히 맞았다",
+         "padding": "**제로패딩이 아니다.** 창 밖 [W,N) 을 실수부 127.0 · 허수부 1/127 로 채운다 "
+                    "(0x1400D141D / 0x1400D1425). 상수항은 bin 0 에만 떨어지므로 소비 빈에서는 "
+                    "0 패딩과 등가다. [정정 2026-08-21] 종전 표기 `나머지는 제로패딩` 은 틀렸다",
+         "design": "N 을 레이트에 비례시키고 B 를 고정해 **44.1kHz 이상에서** 빈 폭 ≈22.97 Hz · "
+                   "상한 ≈14677 Hz 를 고정한다. **44.1kHz 미만에서는 고정되지 않는다** — "
+                   "`max(rate/44100, 1)` 이 1 로 잘려 N=1920 이 되므로 상한이 639 × rate/1920 로 "
+                   "레이트를 따라 내려간다(32kHz → ≈10650 Hz). [정정 2026-08-21] 종전 표기는 "
+                   "상한이 무조건 고정인 것처럼 읽혔다",
          "timeWindow": "없음(사각창). 샘플별 곱셈은 상수 127 하나뿐",
          "bandMapping": "band(i) = min(int(powf((i−1)/(B−1), 0.25) × 64) % 64, prev+1), i = 1..B−1",
          "oneToOneBands": "하위 29밴드가 빈 1:1 — 별도 선형 구간이 아니라 prev+1 클램프의 결과",
@@ -283,9 +311,14 @@ def measure(pe):
         [specfmt.ev("binary", f"{VA_AUDIO_THREAD:#x} 오디오 스레드 본체(7,783 B) 디스어셈블"),
          specfmt.ev("binary", f"밴드 매핑 {0x1400D1C7A:#x}-{0x1400D1CC7:#x} · 틸트 {0x1400D1CB0:#x}-{0x1400D1CEE:#x} · "
                               f"게인 {0x1400D1D2C:#x}-{0x1400D1D70:#x}"),
+         specfmt.ev("binary",
+                    f"창 길이 {0x1400D1491:#x}-{0x1400D14A0:#x}(divss/mulss/subss/cvttss2si) · "
+                    f"패딩 {0x1400D141D:#x}/{0x1400D1425:#x} — 둘 다 위 instructionAnchors 에서 "
+                    f"원시 바이트로 확정 재현한다"),
          specfmt.ev("doc",
-                    "상수 넷과 `maxss` 는 위 두 항목에서 확정으로 재현했다. 수식 자체는 명령 흐름 해석이라 "
-                    "이 스크립트가 재현하지 않으므로 보고로 둔다.")]))
+                    "상수 넷과 `maxss`, 그리고 창 길이·패딩 명령은 위 두 항목에서 확정으로 재현했다. "
+                    "밴드 매핑·틸트·게인 수식은 명령 흐름 해석이라 이 스크립트가 재현하지 않으므로 "
+                    "항목 전체는 보고로 둔다.")]))
 
     # ── 파서 규약 (보고) ────────────────────────────────────────────────────
     entries.append(specfmt.entry(
