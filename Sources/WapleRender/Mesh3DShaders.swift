@@ -149,7 +149,13 @@ enum Mesh3DShaders {
         if (radius <= 0.0) return 0.0;
         float falloff = clamp(1.0 - distance / radius, 0.0, 1.0);
         // WE 2.8.42 HLSL lane(크로스컴파일 프리앰블 — wallpaper64.exe 0x140486898–0x1404868bb
-        // `"#define HLSL 1\n#define HLSL_SM40 1\n"`): common_pbr_2.h:263-266
+        // `"#define HLSL 1\\n#define HLSL_SM40 1\\n"`): common_pbr_2.h:263-266
+        // (위 `\\n` 은 **Swift 이스케이프를 막은 것**이다. `\\` 없이 적으면 이 다중행
+        //  리터럴이 렌더될 때 진짜 줄바꿈이 되어 주석이 세 줄로 쪼개지고, 가운데 줄
+        //  `#define HLSL_SM40 1` 이 **실제 전처리기 지시자**가 되며 마지막 줄이 `"` 로
+        //  시작해 MSL 이 `missing terminating quote character` 로 컴파일에 실패한다.
+        //  실측: 이 한 줄이 mesh 라이브러리 전체를 못 짓게 해 macOS CI 의 3D 렌더
+        //  테스트 수십 건을 한꺼번에 떨어뜨렸다(run 32448054603, program_source:147:1).)
         // pow(falloff + 1.17549435e-38, exponent), 반경 컷오프 없음. exponent=0 이면 pow(x,0)=1
         // 이라 반경 무관 전역 무감쇠가 엔진 동작(구 GLSL lane 의 hard zero 는 오이식).
         // `radius <= 0.0 → 0.0` 은 Waple 가드다(WE 원문엔 없음) — resolveLights 가 이미 걸러 도달 0.
