@@ -720,8 +720,14 @@ final class ParticleExtendedKeysTests: XCTestCase {
         XCTAssertTrue(sawRed && sawCyan)
     }
 
-    func testHsvNoise_deterministicAndSpatiallyVarying() {
-        // huenoise 보유: rng 대신 스폰 위치 노이즈 — 같은 시드/같은 def → 비트동일, 위치 따라 변화.
+    /// **[2026-08-21 전제 정정]** `huenoise`/`saturationnoise`/`valuenoise` 는 `hsvcolorrandom` 의
+    /// 키가 **아니다.** 그 셋을 파스하는 자리(0x1401c7e1e · 0x1401c7e5d)는 `colorlist` 브랜치
+    /// (stricmp @0x1401c7b56) 안이고, `hsvcolorrandom` 핸들러(0x14023b74a)는 그 값을 읽는 명령이
+    /// 하나도 없다. 종전 구현은 남의 키를 여기 붙여 두고 그 값이 있으면 rng 드로를 건너뛰기까지 했다.
+    ///
+    /// 이제 시뮬은 그 값을 무시하므로 `huesteps` 부재 규칙이 그대로 적용돼 **단일 색**이 된다.
+    /// 이 테스트는 그 사실과 결정성을 함께 고정한다(동봉 도달 0건이라 화면 영향은 없다).
+    func testHsvNoise_isNotAnHsvColorRandomKeyAndIsIgnored() {
         func run() -> [SIMD3<Float>] {
             let def = makeDef(emitters: [.box(origin: Vec3(x: 0, y: 0, z: 0),
                                               distanceMax: Vec3(x: 100, y: 100, z: 0), rate: 0, burst: 32)],
@@ -732,8 +738,9 @@ final class ParticleExtendedKeysTests: XCTestCase {
             return sim.step(0.1).map { $0.color }
         }
         let a = run(), b = run()
-        XCTAssertEqual(a, b)                                  // 결정적(위치 노이즈)
-        XCTAssertGreaterThan(Set(a.map { "\($0)" }).count, 1) // 전 파티클 동일색 아님
+        XCTAssertEqual(a, b)                                     // 결정적
+        XCTAssertEqual(Set(a.map { "\($0)" }).count, 1,
+                       "huenoise 는 이 원소의 키가 아니므로 huesteps 부재 규칙대로 단일 색이어야 한다")
     }
 
     // MARK: - 8. 무키 씬 무회귀(비트동일)

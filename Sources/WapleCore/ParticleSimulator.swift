@@ -1169,35 +1169,57 @@ public struct ParticleSimulator {
             let idx = min(colors.count - 1, Int(rng.nextFloat() * Float(colors.count)))
             let c = s3(colors[idx])   // 0..1 스케일(실측 — colorrandom 의 /255 와 다름)
             p.initialColor = c; p.color = c
-        case let .hsvColorRandom(hueMin, hueMax, satMin, satMax, valMin, valMax, hueSteps, hueNoise, satNoise, valNoise):
-            // h/s/v 는 서로 무관한 축 — velocityRandom 과 같이 채널별 독립 t(공유 t 아님).
-            // 노이즈 키(huenoise/saturationnoise/valuenoise) 보유 채널은 rng 드로 대신 스폰 위치 기반
-            // 값노이즈로 t 산출 [추정 — 근처 파티클이 유사 채널값 공유]. 노이즈 채널은 드로 0 — 키 부재
-            // 채널만 레거시 드로를 소비하므로 무키 씬은 드로 3 으로 비트동일.
-            let h: Float
-            if hueNoise != 0 {
-                h = hueMin + (hueMax - hueMin) * 0.5 * (1 + valueNoise3(p.pos * hueNoise + SIMD3<Float>(11.1, 0, 0)))
-            } else if hueSteps > 0 {
-                // huesteps [추정]: [hueMin,hueMax] steps 등분 이산 선택 — 드로 1(레거시와 동일 개수).
-                let k = min(hueSteps - 1, Int(rng.nextFloat() * Float(hueSteps)))
-                h = hueMin + (hueMax - hueMin) * (hueSteps > 1 ? Float(k) / Float(hueSteps - 1) : 0)
-            } else {
-                h = randomRange(hueMin, hueMax, exponent: 1)
-            }
-            let s: Float
-            if satNoise != 0 {
-                s = satMin + (satMax - satMin) * 0.5 * (1 + valueNoise3(p.pos * satNoise + SIMD3<Float>(0, 23.7, 0)))
-            } else {
-                s = randomRange(satMin, satMax, exponent: 1)
-            }
-            let v: Float
-            if valNoise != 0 {
-                v = valMin + (valMax - valMin) * 0.5 * (1 + valueNoise3(p.pos * valNoise + SIMD3<Float>(0, 0, 41.3)))
-            } else {
-                v = randomRange(valMin, valMax, exponent: 1)
-            }
+        case let .hsvColorRandom(hueMin, hueMax, satMin, satMax, valMin, valMax, hueSteps, _, _, _):
+            // **[2026-08-21] 실물 핸들러(0x14023b74a)를 명령 단위로 옮겼다. 종전 구현은 세 군데가 달랐다.**
+            //
+            // ① **hue 는 언제나 이산이다.** 연속 hue 경로가 아예 없다.
+            //      0x14023b74e  call 0x1402c97a0            ← CRT `rand()` (MSVC LCG, MT 스트림과 별개)
+            //      0x14023b76b  divss  xmm1, 32767.0        (0x140492960)
+            //      0x14023b776  mulss  xmm1, float(steps+1)
+            //      0x14023b782  cvttss2si eax, xmm1
+            //      0x14023b786  cmp ebx, eax / cmovg ebx, eax   ← k = min(steps, trunc)
+            //      0x14023b78d  cmovs ebx, 0                    ← k = max(0, k)
+            //      0x14023b79c  mulss xmm7, [r14+8] ; addss [r14+4]  ← hue = hueBase + k·hueStep
+            //    파스(0x1401c7833–0x1401c7aa1)가 `hueBase = huemin`(0x1401c79ac, xmm13 = "huemin"
+            //    @0x1401c789d)과 `hueStep = span / divisor`(0x1401c7a4e → 0x1401c7a52)를 굽는다.
+            //    `divisor` 는 `steps − 1` 인데, `fmodf(span, 1.0)`(0x1401c7a23) 의 절댓값이
+            //    **1/360 미만**(0x140492610)이면 `steps` 로 바뀐다(0x1401c7a42) — hue 가 순환량이라
+            //    양 끝이 겹치는 경우다. `huemin 0 / huemax 1 / huesteps 6` 이면 divisor 6 → 6색.
+            //    steps 가 작아 divisor 가 0 이하면 hueStep 이 0 이라 **hue 가 huemin 으로 고정된다.**
+            //    동봉 도달 5건 중 `huesteps` 를 적은 것은 2건뿐이다 — 나머지 3건
+            //    (magic_color_sparkle 등)은 실물에서 **단일 색**이다.
+            //
+            // ② **saturation/value 는 평범한 선형 range 2드로**다(지수 없음):
+            //      0x14023b7a8  call 0x1401f87a0 → sat = [r14+0x10] + u·[r14+0x14]
+            //      0x14023b7ca  call 0x1401f87a0 → val = [r14+0x18] + u·[r14+0x1c]
+            //
+            // ③ **결과는 대입이 아니라 곱이다.** 0x14023b824 · 0x14023b83f · 0x14023b85a 가
+            //    `mulss` 로 기존 색 배열(+0x318/+0x320/+0x328)에 곱해 되쓴다. 색 기본이 (1,1,1)
+            //    이라 단독일 때는 대입과 같지만, 앞에 colorrandom/colorlist 가 있으면 갈린다.
+            //
+            // ④ **`huenoise`/`saturationnoise`/`valuenoise` 는 이 원소의 키가 아니다.** 그 셋을
+            //    파스하는 자리(0x1401c7e1e · 0x1401c7e5d)는 `colorlist` 브랜치
+            //    (stricmp @0x1401c7b56) 안이다. 종전 구현은 남의 키를 여기 붙여 두고 그 값이
+            //    있으면 드로를 건너뛰기까지 했다. 여기서는 무시한다(동봉 도달 0건).
+            //
+            // 남긴 차이: hue 인덱스를 우리 `rng` 에서 뽑는다. 실물은 CRT `rand()` 를 쓰는데 그건
+            // **스레드별** MSVC LCG(`_getptd()->rand_state` @0x1402c97a9)라 같은 스레드의 다른
+            // 호출부 15곳과 스트림을 공유한다 — 밖에서 재현할 수 없다. 드로 수는 3 으로 종전과 같다.
+            let hueSpan = hueMax - hueMin
+            var divisor = Float(hueSteps) - 1
+            // 순환 경계 보정(0x1401c7a3d–0x1401c7a42): span 이 정수 주기면 양 끝이 겹치므로 +1.
+            if abs(hueSpan.truncatingRemainder(dividingBy: 1)) < 1.0 / 360.0 { divisor += 1 }
+            let hueStep: Float = (hueSteps >= 2 && divisor > 0 && hueSpan != 0) ? hueSpan / divisor : 0
+            // k = clamp(trunc(u·(steps+1)), 0, steps). float 에서 먼저 클램프해 Int() 트랩을 막는다.
+            let levels = Float(max(0, hueSteps)) + 1
+            let kf = min(Float(max(0, hueSteps)), max(0, (rng.nextFloat() * levels).rounded(.towardZero)))
+            let h = hueMin + kf * hueStep
+            let s = satMin + rng.nextFloat() * (satMax - satMin)
+            let v = valMin + rng.nextFloat() * (valMax - valMin)
             let c = hsv2rgb(h: h, s: s, v: v)
-            p.initialColor = c; p.color = c
+            // ③ 곱셈 — 색 기본 (1,1,1) 에서는 대입과 같다.
+            p.color *= c
+            p.initialColor = p.color
         case let .mapSequence(count, _, between):
             // 시퀀스 위치 t(0..1) → frame = t·count. 시트 폴드(mirror/loop)는 렌더 시 sheetFrameIndex.
             let t: Float
