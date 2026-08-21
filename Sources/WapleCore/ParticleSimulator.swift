@@ -1164,12 +1164,17 @@ public struct ParticleSimulator {
         case let .turbulentVelocityRandom(smin, smax, _, _):
             // ponytail: scale/offset 은 파스만(방향 균등 랜덤 근사, 미적용) — 실물 스키마 반례 확보 시 배선
             p.vel += randomUnitVector() * rng.range(smin, smax)
-        case let .colorList(colors):
+        // 형태 맞춤만 — `hueNoise`/`satNoise`/`valNoise`(실물키 huenoise/saturationnoise/valuenoise,
+        // 리더 0x1401c7e1e·0x1401c7e5d·0x1401c7e92, 게이트 `"colorlist"`@0x1401c7b56)는
+        // **파스만 됐고 시뮬 소비는 후속**이다. 종전엔 이 셋이 `hsvcolorrandom` 에 오귀속돼 있었다.
+        case let .colorList(colors, _, _, _):
             guard !colors.isEmpty else { break }
             let idx = min(colors.count - 1, Int(rng.nextFloat() * Float(colors.count)))
             let c = s3(colors[idx])   // 0..1 스케일(실측 — colorrandom 의 /255 와 다름)
             p.initialColor = c; p.color = c
-        case let .hsvColorRandom(hueMin, hueMax, satMin, satMax, valMin, valMax, hueSteps, _, _, _):
+        // 형태 맞춤만 — 뒤에 붙어 있던 `_, _, _`(hue/sat/value 노이즈)는 `colorlist` 로 옮겼다.
+        // 여기서는 어차피 소비하지 않던 자리이므로 동작 변화는 없다.
+        case let .hsvColorRandom(hueMin, hueMax, satMin, satMax, valMin, valMax, hueSteps):
             // **[2026-08-21] 실물 핸들러(0x14023b74a)를 명령 단위로 옮겼다. 종전 구현은 세 군데가 달랐다.**
             //
             // ① **hue 는 언제나 이산이다.** 연속 hue 경로가 아예 없다.

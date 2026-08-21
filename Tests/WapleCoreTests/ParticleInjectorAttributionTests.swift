@@ -53,9 +53,10 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     /// 주입기 0x1401ba3e0, 게이트 `stricmp`@0x1401c783a → 호출부 0x1401c786d.
     func testHSVColorRandomAllFieldsMissingUsesInjectorConstants() {
         let d = ParticleSystemDef.parse(json(#"{"initializer":[{"name":"hsvcolorrandom"}]}"#), material: nil)
+        // [2026-08-21] hueNoise/satNoise/valNoise 인자를 뺐다 — 그 셋은 `colorlist` 의 키다
+        // (리더 0x1401c7e1e·0x1401c7e5d·0x1401c7e92 가 게이트 `"colorlist"`@0x1401c7b56 블록 안).
         XCTAssertTrue(d.initializers.contains(.hsvColorRandom(
-            hueMin: 0, hueMax: 1, satMin: 0.5, satMax: 1, valMin: 0.5, valMax: 1,
-            hueSteps: 6, hueNoise: 0, satNoise: 0, valNoise: 0)),
+            hueMin: 0, hueMax: 1, satMin: 0.5, satMax: 1, valMin: 0.5, valMax: 1, hueSteps: 6)),
             "0x1401ba669(sat 0.5) · 0x1401ba6f0(val 0.5) · 0x1401ba56d(huesteps 6)")
     }
 
@@ -64,7 +65,7 @@ final class ParticleInjectorAttributionTests: XCTestCase {
     func testHSVColorRandomMaxDoesNotInheritMin() {
         let d = ParticleSystemDef.parse(json(
             #"{"initializer":[{"name":"hsvcolorrandom","saturationmin":0.2,"valuemin":0.3}]}"#), material: nil)
-        guard case let .hsvColorRandom(_, _, satMin, satMax, valMin, valMax, _, _, _, _) = d.initializers[0] else {
+        guard case let .hsvColorRandom(_, _, satMin, satMax, valMin, valMax, _) = d.initializers[0] else {
             return XCTFail("no hsvcolorrandom")
         }
         XCTAssertEqual(satMin, 0.2); XCTAssertEqual(satMax, 1, "0x1401ba6d9 — 승계면 0.2 였을 것")
