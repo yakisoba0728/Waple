@@ -749,7 +749,7 @@
   {
    "id": "engine.uniformFeed.unknowns",
    "value": {
-    "g_Daytime": "ID 5. 셰이더 유니폼으로서의 피드는 미확인 — 이름 문자열 \"g_Daytime\"(VA 0x14048d188)의 코드 참조는 레지스트리 1곳뿐이다. 별도로 존재하는 \"daytime\"(VA 0x1404781f0) / \"daytimeend\" (VA 0x140478250)는 delay/sorted/dayofweek/playintro 와 한 블록에 있는 **플레이리스트 시간대 스케줄링 키**라 셰이더와 무관하다 (참조: 0x140075cce, 0x1400761ce).",
+    "g_Daytime": "ID 5. 셰이더 유니폼으로서의 피드는 미확인 — 이름 문자열 \"g_Daytime\"(VA 0x14048d188)의 코드 참조는 레지스트리 1곳뿐이다. 별도로 존재하는 \"daytime\"(VA 0x1404781f0) / \"daytimeend\" (VA 0x140478250)는 delay/sorted/dayofweek/playintro 와 한 블록에 있는 **플레이리스트 시간대 스케줄링 키**라 셰이더와 무관하다 (참조: 0x140075ccb, 0x1400761ce).",
     "g_LayerModelMatrix": "ID 24(0x18). 레이어 모델 행렬. 산출 코드 미확인.",
     "g_EffectTextureProjectionMatrix": "ID 22, Inverse 는 ID 23. 산출 코드 미확인.",
     "g_bufStatic/g_bufLights/g_bufAnimation/g_bufDynamic 멤버 레이아웃": "cbuffer 4개의 존재와 이름 매칭 방식은 확정했지만, 어느 유니폼이 어느 버퍼에 들어가고 바이트 오프셋이 얼마인지는 못 봤다. 오프셋은 GLSL->HLSL 크로스컴파일 결과의 D3D 리플렉션에서 셰이더별로 나오므로 고정 표가 없을 가능성이 높다(FUN_1400dc080 이 매번 리플렉션으로 바인드포인트를 찾는다).",

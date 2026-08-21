@@ -100,7 +100,7 @@ def const_buffers(p):
 
 # ── 2. 유니폼 ID 레지스트리 (정적 이니셜라이저 FUN_140002860) ──────────────
 
-# [2026-08-21 정정] `REG_HI` 가 0x1400042F0 이었는데 함수는 **0x140004321** 까지다
+# [2026-08-21 정정] `REG_HI` 가 0x1400042F0 이었는데 함수는 **0x140004321** 까지다  [VA-정정]
 # (`.pdata` 기준). 49바이트가 잘려 마지막 엔트리 몇 개의 ID 스토어가 스캔 밖이었다.
 REG_LO, REG_HI = 0x140002860, 0x140004321
 ENTRY0, STRIDE, IDOFF = 0x10, 0x28, 0x20
@@ -794,7 +794,7 @@ def main():
                          " 별도로 존재하는 \"daytime\"(VA 0x1404781f0) / \"daytimeend\""
                          " (VA 0x140478250)는 delay/sorted/dayofweek/playintro 와 한 블록에"
                          " 있는 **플레이리스트 시간대 스케줄링 키**라 셰이더와 무관하다"
-                         " (참조: 0x140075cce, 0x1400761ce).",
+                         " (참조: 0x140075ccb, 0x1400761ce).",
             "g_LayerModelMatrix": "ID 24(0x18). 레이어 모델 행렬. 산출 코드 미확인.",
             "g_EffectTextureProjectionMatrix": "ID 22, Inverse 는 ID 23. 산출 코드 미확인.",
             "g_bufStatic/g_bufLights/g_bufAnimation/g_bufDynamic 멤버 레이아웃":

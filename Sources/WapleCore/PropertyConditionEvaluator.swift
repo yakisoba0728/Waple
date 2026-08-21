@@ -86,9 +86,13 @@ import Foundation
 ///  `mov edx,1` → 0x140086ca0 — 이라 **숫자**다. 그래서 `<`·`==` 가 수치 비교다.)
 /// 이미지 전체 disp32 스캔으로 `"condition"` 문자열(0x140474a60) xref 는 **16자리**다:
 /// **쓰기 10**(전부 이 주입기) + **읽기 6** — 씬 `user` 바인딩 파서 둘(0x1401a4f1b `find` ·
-/// 0x14017512c), TEXB 변형 조건 둘(0x14015cc13 = 바깥 `condition` · 0x14015cd74 = 안쪽
-/// `condition`, 형제 `name` 은 0x14015cd61 — `TexImage.VariantCondition` 이 파스하는 바로 그
-/// 이중 구조다), 그리고 0x14001f39b · 0x140134c81.
+/// 0x14017512c), TEXB 변형 조건 둘(0x14015cc10 = 바깥 `condition` · 0x14015cd71 = 안쪽
+/// `condition`, 형제 `name` 은 0x14015cd5e — `TexImage.VariantCondition` 이 파스하는 바로 그
+/// 이중 구조다), 그리고 0x14001f398 · 0x140134c7e.
+/// **[2026-08-21 정정]** 위 다섯 주소는 종전에 `0x14001f39b` · `0x140134c81` · `0x14015cc13` ·  [VA-정정]
+/// `0x14015cd61` · `0x14015cd74` 였다. 전부 **xref 바이트 스캔이 준 `disp32` 필드 위치**이지  [VA-정정]
+/// 명령 주소가 아니다(정확히 3바이트 뒤). `scripts/re/va_citations.py` 전수 대조로 잡았다.
+/// 가리키는 대상은 그대로다 — `0x140474a60`="condition" · `0x1404748b8`="name".
 /// **이 바이너리에 이 식을 평가하는 자리는 없다** — 결정적 반증은 `checkPositionVisibility()` 로,
 /// 그건 브라우저 스코프 함수다(scripts.js char@106119, `evalCondition` 이 쓰는 격리 스코프 `ea`).
 /// 즉 엔진은 조건을 **쓰기만** 하고 평가는 언제나 브라우저가 한다.

@@ -29,7 +29,9 @@ import Foundation
 /// 3. **엔진은 조건을 쓰기만 한다.** `wallpaper64.exe` 의 `"condition"` 문자열
 ///    (0x140474a60) xref **16자리** 중 10 이 내장 프로퍼티 주입기 0x140104b60 의 **쓰기**이고,
 ///    읽는 자리 6 중 어느 것도 표시 조건식 평가기가 아니다(씬 `user` 바인딩 0x1401a4f1b ·
-///    TEXB 변형 0x14015cc13 등 — 전부 **값 동등비교** 문법). 결정적 반증: 주입기가 쓰는 조건
+///    TEXB 변형 0x14015cc10 등 — 전부 **값 동등비교** 문법). 결정적 반증: 주입기가 쓰는 조건
+///    (**[2026-08-21 정정]** `0x14015cc10` 은 종전 `0x14015cc13` 이었다 — xref 스캔이 준  [VA-정정]
+///    `disp32` 위치라 3바이트 밀려 있었다. `scripts/re/va_citations.py` 전수 대조로 잡았다.)
 ///    `alignment.value<2&&checkPositionVisibility()` 의 `checkPositionVisibility` 는
 ///    **브라우저 스코프 함수**다(scripts.js char@106119). 엔진에는 그 함수가 없으므로 엔진은
 ///    이 식을 평가할 수 없다.

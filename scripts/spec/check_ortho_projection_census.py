@@ -13,7 +13,7 @@
 `general.orthogonalprojection` 을 읽어 엔진 오브젝트 `[+0x118]` 의 bit10 을 세운다:
 
 ```
-0x1401874ed  lea rdx, "orthogonalprojection"
+0x1401874ec  lea rdx, "orthogonalprojection"   ; [2026-08-21] 종전 0x1401874ed 은 이 명령의 +1 이었다  [VA-정정]
 0x1401874fe  cmp byte [rax+8], 7      ; jsoncpp 태그 7 = objectValue. 아니면 통째로 건너뜀
 0x140187512  lea rdx, "auto"
 0x140187550  cmp byte [rdi+8], 5      ; 태그 5 = booleanValue
