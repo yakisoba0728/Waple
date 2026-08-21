@@ -32,6 +32,14 @@ open class NSColor: NSObject {
     public static let white = NSColor()
     public override init() { super.init() }
     public var cgColor: CGColor { CGColor(red: 0, green: 0, blue: 0, alpha: 0) }
+    // [2026-08-21] `--tests` 가 요구한 표면. 실제 AppKit 에서 이 네 프로퍼티는 **RGB 색공간일 때만**
+    // 유효하고 그 외에서는 예외를 던진다 — 타입만 맞추는 심이라 그 조건은 재현하지 않는다.
+    // 호출부(`AncestorVisibilityGateRenderTests`)는 `NSBitmapImageRep.colorAt` 이 준 deviceRGB
+    // 색이라 실물에서도 유효하다.
+    public var redComponent: CGFloat { 0 }
+    public var greenComponent: CGFloat { 0 }
+    public var blueComponent: CGFloat { 0 }
+    public var alphaComponent: CGFloat { 0 }
 }
 
 /// 실제: `public struct NSColorSpaceName: RawRepresentable` — `.deviceRGB` 등.
@@ -77,6 +85,13 @@ open class NSBitmapImageRep: NSImageRep {
                  pixelsWide: Int, pixelsHigh: Int, bitsPerSample bps: Int, samplesPerPixel spp: Int,
                  hasAlpha: Bool, isPlanar: Bool, colorSpaceName: NSColorSpaceName,
                  bytesPerRow rBytes: Int, bitsPerPixel pBits: Int) { nil }
+    // [2026-08-21] `--tests` 가 요구한 표면. 실제: `public init?(data: Data)` (NSImageRep 의
+    // 지정 이니셜라이저가 아니라 NSBitmapImageRep 자신의 것이다) 와
+    // `open func colorAt(x: Int, y: Int) -> NSColor?`.
+    public init?(data: Data) { nil }
+    public func colorAt(x: Int, y: Int) -> NSColor? { nil }
+    /// 실제: `open var cgImage: CGImage? { get }`.
+    public var cgImage: CGImage? { nil }
     public var bitmapData: UnsafeMutablePointer<UInt8>? { nil }
     public func representation(using storageType: FileType, properties: [PropertyKey: Any]) -> Data? { nil }
 }

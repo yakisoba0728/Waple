@@ -113,6 +113,104 @@ Foundation 이 CoreFoundation 을 재수출하기 때문이다. 스크립트가 
 실측(2026-08-21): 목록에서 `QuadShaders.swift` 를 빼고 없는 `NotInTree.swift` 를 넣어 돌리니
 양쪽 다 잡고 심 빌드 전에 `exit 1` 했다.
 
+### `--tests` — `Tests/WapleRenderTests/**` 152파일 (2026-08-21 신설)
+
+이 리포에서 **제일 큰 사각지대**였다. `Tests/WapleRenderTests/**` 는 152파일이고 macOS 전용
+타깃이라, 여기서는 `swiftc -parse` 밖에 못 돌렸다. 즉 테스트 파일을 고친 작업은 "구문은 맞다"
+만 확인한 채 푸시됐다. `-parse` 가 아무것도 보장하지 않는다는 것은 이 브랜치가 이미 두 번
+배웠는데(위 `bb5f902`), **테스트 파일은 오히려 더 위험하다** — 소스보다 자주 고쳐지고,
+`@testable import` 로 internal 표면까지 만지며, 깨져도 프로덕션 코드가 아니라서 리뷰가 얕다.
+
+```
+scripts/dev/linux-render-typecheck.sh --tests
+```
+
+소스 55파일 타입체크가 **통과한 뒤에만** 다음 단계로 간다(소스가 깨져 있으면 테스트 오류는
+전부 그 파생이라 노이즈다). 그 다음:
+
+1. `WapleCore` · `WapleSnapshot` · `WapleRender` 를 `-enable-testing` 으로 **모듈 emit**.
+   `-typecheck` 가 아니라 emit 이어야 하는 이유는 `@testable import WapleRender` 가 실제로
+   동작해야 internal 심볼 오타·시그니처 변경까지 잡히기 때문이다.
+2. 테스트 152파일을 한 번에 `-typecheck`.
+
+실측(2026-08-21, 4코어 컨테이너): 소스 타입체크 32초 + **모듈 emit 66초** + 테스트 타입체크.
+소스만 볼 때(약 35초)보다 2~3배 든다 — 그래서 기본값이 아니라 **명시 플래그**다.
+`Tests/**` 를 건드린 작업은 푸시 전에 반드시 이걸 돌려라.
+
+#### 첫 실행이 찾은 것 — 그리고 그게 심 공백이었다는 것
+
+첫 실행(152파일)에서 **1파일 · 오류 16줄**이 났고 전부 **심 공백**이었다:
+
+| 없던 것 | 쓰는 곳 | 처리 |
+|---|---|---|
+| `NSBitmapImageRep.init?(data:)` | `AncestorVisibilityGateRenderTests:48` | `appkit.swift` 에 추가 |
+| `NSBitmapImageRep.colorAt(x:y:)` | 〃 `:49` | 〃 |
+| `NSColor.redComponent`/`greenComponent` | 〃 `:66` 이하 | `blueComponent`/`alphaComponent` 까지 함께 |
+
+**151/152 는 손대지 않고 통과했다** — 즉 심의 표면은 이미 테스트 대부분을 덮고 있었고,
+안 쓰던 도구였을 뿐이다.
+
+> **심 공백과 진짜 오류를 구분하는 법.** 오류가 `linux-shim/` 의 `note:` 를 달고 나오거나
+> 메시지가 `has no member` / `extra argument` / `missing argument` 면 대개 심이 모자란
+> 것이다. 그때는 **테스트가 아니라 `scripts/dev/linux-shim/` 을 고쳐라**(실제 애플 헤더
+> 시그니처를 주석에 적고 본문은 더미로 둔다 — 이 도구는 타입만 본다).
+> 스크립트도 실패 시 이 판별을 자동으로 한 줄 찍는다. 소스 쪽 실패 메시지와 달리
+> **"macOS 에서도 그대로 난다" 고 단정하지 않는다** — 테스트는 애플 API 표면을 훨씬 넓게 쓴다.
+
+#### 서곡 파일 — 애플의 "Clang 모듈 전이 노출" 을 흉내 낸다
+
+두 번째 실행에서 새 오류가 났다:
+
+```
+AudioCalibrationTests.swift:201:15: error: cannot find 'MTLCreateSystemDefaultDevice' in scope
+AudioCalibrationTests.swift:230:25: error: cannot find 'NSView' in scope
+```
+
+그 파일은 `import Metal` 도 `import AppKit` 도 **안 한다**. 그런데 **macOS 에서는 빌드된다**
+(실측: run 32484783071 · 3,140 테스트 0 실패). 스위프트가 임포트한 **Clang 모듈**은 클라이언트
+에게 전이로 보이기 때문이다 — `@testable import WapleRender` 하나로 WapleRender 가 임포트한
+Metal·AppKit 이 따라 들어온다. 이 리포의 심은 전부 **스위프트** 모듈이라 그 전이가 없다.
+
+즉 **심 모델이 실물보다 엄격**해져 잡히는 것이 전부 거짓 양성이 된다. 그래서
+`scripts/dev/linux-shim/zz-test-implicit-imports.swift` 를 테스트 타입체크 단계에만 끼운다
+(`@_exported import` 16종). 서곡은 **소스 타입체크에는 안 들어간다** — 소스 파일들은 각자
+필요한 것을 명시적으로 임포트하고 있고, 거기서는 엄격한 편이 맞다.
+
+> **이 서곡은 모델을 실물보다 관대하게 만든다.** macOS 는 `WapleRender`/`WapleCore` 가 실제로
+> 임포트한 Clang 모듈만 흘리는데 서곡은 심 전부를 흘린다. 지금 두 집합은 거의 같지만
+> (WapleRender 가 16종을 전부 임포트한다) 심이 늘고 WapleRender 의 임포트가 줄면 갈린다.
+> 그때는 **테스트에 `import` 를 되살리는 것이 아니라 서곡 목록을 줄이는 것**이 맞다.
+
+### `--compat` — `Sources/WapleCompatCore/**` + 그 테스트 (2026-08-21 신설)
+
+`Sources/WapleCompatCore/**`(5파일)는 **어떤 리눅스 검증도 못 받고 있었다** — `import Metal`/
+`WapleRender`/`Darwin` 이라 코어 테스트에도, 렌더 커버에도 안 들어간다. 그런데 이 계층에
+`SnapshotPipeline`(골든 썸네일 파이프라인)과 `DeepScan` 이 산다. 조용히 깨지면 골든 게이트가
+통째로 무의미해지는 자리다.
+
+```
+scripts/dev/linux-render-typecheck.sh --compat     # --tests 를 포함한다
+```
+
+`--tests` 가 통과한 뒤 `WapleCompatCore` 를 `-enable-testing` 으로 emit 하고
+`Tests/WapleCompatCoreTests/**` 와 `Tests/WapleSnapshotTests/**` 를 타입체크한다.
+새로 필요했던 심은 `darwin.swift` 하나다(`ProfilePipeline.physFootprint()` 의 mach VM 질의 —
+`task_vm_info_data_t`/`task_info`/`mach_task_self_`/`TASK_VM_INFO`/`KERN_SUCCESS` 등).
+
+> `darwin.swift` 의 `task_vm_info_data_t` 는 호출부가 읽는 `phys_footprint` 한 필드만 둔다.
+> 실물은 30개가 넘으므로 **`MemoryLayout<...>.stride` 가 다르다** — `count` 산술의 정합은
+> 이 심으로 검증되지 않는다. 타입만 맞을 뿐이고, 그 산술은 macOS 실행만이 답한다.
+
+#### 아직 못 하는 것
+
+- `Tests/WapleAppTests/**`(36파일)는 `SwiftUI`·`Combine`·`Security` 심이 없어 커버 밖이다.
+- `Tests/WapleCompatCoreTests/**`·`Tests/WapleSnapshotTests/**` 는 `--compat` 이 덮는다.
+  `Tests/WapleLibraryTests/**`(7파일)·`Tests/WaplePolicyTests/**`(1파일)는 아직이다 —
+  `WapleLibrary`/`WaplePolicy` 모듈을 세우면 붙는다.
+- `Tests/WapleCoreTests/**` 는 여기 대상이 아니다 — `scripts/dev/linux-core-tests.sh` 가
+  **실제로 실행**한다(타입체크보다 강하다).
+- 타입체크는 **실행이 아니다.** 단언이 맞는지, 픽셀이 맞는지는 여전히 macOS CI 가 답한다.
+
 ### 제외 파일과 이유
 
 **없다.** `EXCLUDED` 배열은 빈 채로 남겨 둔다 — 새 프레임워크를 쓰는 파일이 생기면 심을 쓰기
@@ -265,9 +363,25 @@ rc(기본 언어 모드 typecheck)=0    # 0 이면 모드 5 — 도구의 전제
 
 ### 미해결 — 그래서 아직 차단 게이트가 아니다
 
-1. **버전이 다르다.** 이 도구를 검증한 로컬 툴체인은 **6.0.3**, 러너는 **6.3.3** 이다. 심 17종은
-   애플 헤더에서 기계 생성한 것이 아니라 **손으로 적은 것**이라(한계 ②), 새 컴파일러가 진단을
-   추가하면 그대로 빨간불이 된다. **여기서는 잴 수 없다 — 3단계 관측이 그것을 재려고 있는 것이다.**
+1. **버전이 다르다 — 그리고 실제로 갈렸다. [2026-08-21 관측 결과 도착]**
+   로컬 **6.0.3** 은 rc=0 인데 러너 **6.3.3** 은 오류를 하나 낸다. 관측 스텝이 실제로 찍은 줄
+   (`spec` run 32482815811 · job 96772696708 · 커밋 `6064495` · 2026-08-21T12:39:18Z):
+
+   ```
+   Sources/WapleRender/ArtworkColors.swift:35:22: error: the compiler is unable to
+   type-check this expression in reasonable time; try breaking up the expression into
+   distinct sub-expressions
+   ```
+
+   35행은 `let ranked = (0..<4096).filter { … }.sorted { … }.map { SIMD3<Float>(…) }` 한 줄짜리
+   체인이다. **심 문제가 아니라 타입체커 예산 문제**이고, 그래서 심을 고쳐서는 안 닫힌다 —
+   식을 명시 타입으로 쪼개야 한다.
+
+   판정: **게이트 승격은 이것부터 닫아야 한다.** 지금 올리면 첫 실행부터 빨간불이다.
+   다만 이것이 *심이 러너와 어긋난 사례는 아니라는 것*도 같이 확정됐다 — 55파일 중 심 관련
+   진단은 **0건**이었다. 즉 손으로 적은 심 17종은 6.0.3 과 6.3.3 양쪽에서 통했다.
+   (macOS CI 는 같은 커밋에서 초록이다 — Xcode 툴체인은 그 식을 예산 안에 푼다. 즉 이 자리는
+   **툴체인 예산 경계에 걸쳐 있는 코드**이고, 러너가 먼저 넘어졌을 뿐이다.)
 
 해소된 것도 적어 둔다(전에는 이 목록에 있었다):
 
