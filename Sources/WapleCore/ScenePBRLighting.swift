@@ -606,3 +606,344 @@ public struct SceneLightSlotBudget: Equatable {
         return true
     }
 }
+
+// MARK: - 볼류메트릭 라이트(라이트 샤프트) 정본 산술 (2026-08-21 셰이더 원문 전수 대조)
+
+/// WE `shaders/volumetricsfront.frag` 의 **픽셀을 정하는 산술 전부**를 인자만 받는 순수 함수로
+/// 고정한다. 복원 전문은 `docs/re/volumetric-light.md`.
+///
+/// ## 왜 여기(WapleCore)인가 — 2026-08-21 이관
+/// 종전에는 이 enum 이 `Sources/WapleRender/VolumetricLightPass.swift` 안에 있었다. 그 파일은
+/// `import Metal` 이라 **리눅스에서 실행할 수 없다** — `scripts/dev/linux-render-typecheck.sh` 가
+/// `swiftc -typecheck` 는 해 주지만 값을 한 번도 계산하지 않는다. 즉 이식한 수식의 **숫자**를
+/// 잠그는 것은 macOS 전용 `Tests/WapleRenderTests/VolumetricLightTests.swift` 하나뿐이었고,
+/// 리눅스 대조는 "enum 블록만 잘라 따로 컴파일한다" 는 **수동 절차**로만 성립했다
+/// (그 절차의 실행 기록이 `docs/re/volumetric-light.md` §6 이다).
+///
+/// 수동 절차는 회귀를 막지 못한다. 그래서 산술을 여기로 옮기고 `VolumetricMath` 는
+/// `typealias` 로 남겼다 — WapleRender 호출부·macOS 테스트는 그대로 서고, 같은 코드가 이제
+/// `Tests/WapleCoreTests/SceneVolumetricMathTests.swift` 에서 **리눅스 코어 테스트로 실행**된다.
+///
+/// ## `simd` 를 쓰지 않는다
+/// `SIMD3<Float>` 는 표준 라이브러리 타입이지만 `simd_dot`/`simd_length`/`simd_normalize` 는
+/// 애플 모듈이고 리눅스에서는 `linux-shim/` 대역이 붙는다(비트 동일 보장 없음).
+/// 아래 `dot3`/`length3`/`normalize3` 로 직접 적어 **두 플랫폼이 같은 명령 순서**를 밟게 한다.
+///
+/// ## 덮는 범위: 프래그먼트 전체
+/// 감쇠 항만 있던 시절엔 CPU 로 한 픽셀을 풀려면 호출자가 레이 재구성을 직접 다시 적어야 했고,
+/// 그래서 "CPU 1.0 vs GPU 0.2235" 라는 유령 발산이 나왔다(`docs/re/volumetric-light.md` §6.1).
+/// 프래그먼트에 있는 단계는 여기에도 있어야 한다.
+///
+/// ## 도달 (2026-08-21 이 컨테이너 실측)
+/// 게이트 키 `castvolumetrics` 는 **동봉 172 ∪ 설치본 186 = distinct 186 씬에서 0건**이다
+/// (동봉 `Sources/WapleRender/Resources/WEAssets` 172 파일이 설치본 `assets/` 172 와 경로·md5
+/// 전수 동일 — 그래서 합이 358 이 아니라 186 이다). 문자열 자체가 자산 JSON 어디에도 없고
+/// 실행파일(`wallpaper64.exe`·`wallpaper32.exe`·`wallpaperui.exe`)에만 있다. WE 기본값도 false
+/// (`0x14019048d`). 즉 이 산술을 고쳐도 **두 트리의 어떤 씬도 화면이 바뀌지 않는다.**
+/// 워크샵 코퍼스 162 씬에서만 4건/3씬(전부 true, `spec/corpus/scene-schema.json` 인용 —
+/// 그 코퍼스는 이 컨테이너에 없다).
+public enum SceneWEVolumetricMath {
+    /// `volumetricsfront.frag:78-97` — QUALITY 콤보 → 레이마치 샘플 수.
+    /// `SHADOW || COOKIE` 가지가 64/32/24/12(`:79`,`:81`,`:83`,`:85`), 아닌 가지가
+    /// 8/5/3/2(`:89`,`:91`,`:93`,`:95`)다. QUALITY 는 앱 설정 바이트 `[renderCtx+0x1ad]`
+    /// (`0x140198273`)이고 **씬 JSON 키가 아니다** — 저작자가 샘플 수를 지정하는 키는 WE 에 없다.
+    public static func sampleCount(quality: Int, shadowed: Bool) -> Int {
+        if shadowed {
+            switch quality {
+            case 4: return 64
+            case 3: return 32
+            case 2: return 24
+            default: return 12
+            }
+        }
+        switch quality {
+        case 4: return 8
+        case 3: return 5
+        case 2: return 3
+        default: return 2
+        }
+    }
+
+    /// 라이트버퍼(`_rt_volumetricsLightBuffer`/`B`, `_rt_volumetricsSingle`)의 **다운스케일 분모**.
+    /// `0x140196d79`–`0x140196d88`: `edi = (quality >= 3) ? 4 : 8` 이고 그 값이 RT 생성기
+    /// `sub_1401aadb0` 의 4번째 인자로 간다 — 같은 인자가 `_rt_FullFrameBuffer`=1 ·
+    /// `_rt_4FrameBuffer`=4 · `_rt_8FrameBuffer`=8 (`0x14017f585`–`0x14017f63d`)이라 분모가 맞다.
+    /// `_rt_volumetricsBack` 만 1(풀해상도)이다(`0x140196dc4`).
+    ///
+    /// **복원 전용(현 경로 미소비)** — Waple 은 목적지에 풀해상도로 직접 합성한다.
+    /// 라이트버퍼를 실제로 만들 때 이 규칙이 정본이다(AGENTS.md "보존 필드는 데드코드가 아니다").
+    public static func lightBufferDivisor(quality: Int) -> Int { quality >= 3 ? 4 : 8 }
+
+    /// blur3 h/v 체인을 태우는가. `0x140196ea0`–`0x140196ea4` 가 QUALITY≥3 이면
+    /// `_rt_volumetricsLightBufferB` 와 blur 머티리얼 두 장을 **아예 만들지 않고**,
+    /// 리졸브(`0x140198d21`)도 같은 조건으로 blur 두 패스를 건너뛴다.
+    /// 즉 고품질일수록 샘플이 많아 블러가 필요 없다는 설계다.
+    ///
+    /// **복원 전용(현 경로 미소비)** — 위와 같은 이유.
+    public static func blursLightBuffer(quality: Int) -> Bool { quality < 3 }
+
+    /// `blur_k3` 가 쓰는 `blur3` 탭 가중치(`shaders/common_blur.h:25-30`) — (−1, 0, +1) 픽셀.
+    /// **복원 전용(현 경로 미소비)**.
+    public static let blur3Weights: [Float] = [0.25, 0.5, 0.25]
+
+    /// `volumetricsfront.frag:132` — 반경 감쇠. 반경 밖은 **정확히 0**(무한 꼬리 없음).
+    /// 원문: `pow(saturate(1.0 - (length(lightDelta) * invRadius)), VAR_EXPONENT)`.
+    ///
+    /// **역수 곱으로 적는다.** WE 도 `invRadius = 1/R` 을 한 번 잡아(`:116`) 곱하고,
+    /// `VolumetricLightPass.metalSource` 도 `lightCone.z`(=`1/hull`)를 곱한다. 여기서만
+    /// `distance / hullRadius` 로 나누면 마지막 자리가 GPU 와 갈린다 — 값이 눈에 띄게
+    /// 달라지지는 않지만 **두 벌을 비트로 대조할 수 없게 되는 것**이 문제다.
+    public static func radialFalloff(distance: Float, hullRadius: Float, exponent: Float) -> Float {
+        guard hullRadius > 0 else { return 0 }
+        let t = 1 - distance * (1 / hullRadius)
+        let base = t < 0 ? 0 : (t > 1 ? 1 : t)
+        if base <= 0 { return exponent <= 0 ? 1 : 0 }   // pow(0, 0) = 1 — GPU 와 같은 규약
+        return powf(base, exponent)
+    }
+
+    /// `volumetricsfront.frag:140` — `smoothstep(VAR_SPOT_PARAMS_OUTER, VAR_SPOT_PARAMS_INNER, cos)`.
+    /// GLSL/MSL 과 같은 3차 보간이다. 인자 `cos` 는 **뷰 레이가 아니라**
+    /// `dot(normalize(샘플 − 라이트), VAR_SPOT_FORWARD)`(`:139`) — 그게 화면공간 갓레이와
+    /// 볼륨 라이트를 가르는 지점이다.
+    ///
+    /// 호출부는 `inner > outer` 를 보장한다(`SceneDocument.swift` 의 콘 변환기가 `+1e-4` 로
+    /// 벌려 둔다). `SceneWELightMath.spotCone`(메시 라이팅 V1 레인)과 **같은 식이되 퇴화 규약만
+    /// 다르다** — 저쪽은 `span != 0` 만 막고 음수 span 에서 뒤집힌 보간을 계속하는데, 이쪽은
+    /// 이진값으로 접는다. 둘 다 도달 0 인 자리라 값을 맞추지 않고 각자 문서화한다.
+    public static func coneFalloff(cosAngle: Float, innerCos: Float, outerCos: Float) -> Float {
+        let span = innerCos - outerCos
+        guard span > 0 else { return cosAngle >= innerCos ? 1 : 0 }
+        let raw = (cosAngle - outerCos) / span
+        let t = raw < 0 ? 0 : (raw > 1 ? 1 : raw)
+        return t * t * (3 - 2 * t)
+    }
+
+    /// `0x140198760`(f32=0.99) — 셰이더가 받는 `VAR_SPOT_PARAMS_RADIUS` 는 `radius × 0.99` 다
+    /// (종 무관). 반경 미저작(0 이하)이면 WE 라이트 생성자 기본값 1.0(`0x140190494`)을 쓴다.
+    ///
+    /// ⚠️ `volumetricsfront.vert:13` 의 0.99 는 **다른 것**이다 — 헐 메시 정점의 **xy 만** 줄이고
+    /// (`a_Position * vec3(0.99, 0.99, 1.0)`) `#if POINTLIGHT` 가지(`:11`)에는 **아예 없다**.
+    /// 두 0.99 를 한 근거로 묶어 인용하면 안 된다(2026-08-21 셰이더 원문 재확인).
+    public static func hullRadius(radius: Float) -> Float { (radius > 0 ? radius : 1) * 0.99 }
+
+    /// `volumetricsfront.frag:119` vs `:121` — POINTLIGHT 만 `maxLightScale` 이 반이다.
+    public static func pointLightScale(isPoint: Bool) -> Float { isPoint ? 0.5 : 1 }
+
+    /// `volumetricsfront.frag:115-122` — `maxLightScale`. 곱셈 순서까지 `metalSource` 와 같다
+    /// (`intensity × segment × (1/hull) × pointScale`) — `radialFalloff` 와 같은 이유로 역수 곱이다.
+    public static func maxLightScale(intensity: Float, segmentLength: Float,
+                                     hullRadius: Float, isPoint: Bool) -> Float {
+        guard hullRadius > 0 else { return 0 }
+        return intensity * segmentLength * (1 / hullRadius) * pointLightScale(isPoint: isPoint)
+    }
+
+    /// `volumetricsfront.frag:113` — k 번째 샘플이 구간 [0,1] 의 어디에 앉는가.
+    /// 스텝이 `(end-start)/(N+1)` 이고 루프가 **먼저 더한 뒤** 샘플하므로 `(k+1)/(N+1)` 이다
+    /// (0-based k). 끝점을 절대 안 밟는 것이 이 분할의 요점이다.
+    public static func samplePosition(index: Int, count: Int) -> Float {
+        guard count > 0 else { return 0 }
+        return Float(index + 1) / Float(count + 1)
+    }
+
+    /// `volumetricsfront.frag:190` — 최종 스칼라(색 곱하기 전). `0.1` 이 WE 의 고정 스케일이다.
+    /// `VAR_DENSITY` 는 **순수 배수**다(거리 감쇠가 아니다) — 0 이면 WE 도 아무것도 안 그린다.
+    public static func finalScale(density: Float, maxLightScale: Float, meanFactor: Float) -> Float {
+        density * maxLightScale * meanFactor * 0.1
+    }
+
+    // MARK: 프래그먼트 **전체**의 CPU 미러 (`VolumetricLightPass.metalSource` 와 1:1)
+
+    /// `import simd` 없이 쓰는 3벡터 내적. `simd_dot` 은 애플 모듈이라 쓰지 않는다.
+    public static func dot3(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+        a.x * b.x + a.y * b.y + a.z * b.z
+    }
+
+    /// 위와 같은 이유의 길이.
+    public static func length3(_ a: SIMD3<Float>) -> Float { sqrtf(dot3(a, a)) }
+
+    /// 위와 같은 이유의 정규화. 영벡터는 그대로 돌려준다(MSL `normalize` 는 NaN 이지만,
+    /// 호출부가 영벡터를 만들 수 없는 자리라 방어값이 픽셀을 바꾸지 않는다).
+    public static func normalize3(_ a: SIMD3<Float>) -> SIMD3<Float> {
+        let n = length3(a)
+        return n > 0 ? a * (1 / n) : a
+    }
+
+    /// 픽셀 (x, y) 중심의 NDC. `metalSource` 의 `volumetricVertex` uv 규약과 같은 값이다 —
+    /// `uv = ((x+0.5)/W, (y+0.5)/H)`(y 는 **위가 0**), `ndc = (uv.x·2−1, 1−uv.y·2)`.
+    ///
+    /// > **광축 위에 앉는 픽셀은 없다.** 짝수 해상도(64×64 등)의 가장 가운데 픽셀도 반 픽셀
+    /// > (`1/W`) 만큼 비껴 있다. 좁은 콘 + 작은 헐에서는 그 반 픽셀이 픽셀 값을 **몇 배**로
+    /// > 바꾼다(§6.1 의 4.44배). GPU 를 검산할 때 `ndc = (0,0)` 을 쓰면 안 되는 이유다.
+    /// > 광축 레이를 일부러 보고 싶으면 `width: 1, height: 1` 로 부르면 정확히 (0,0)이 나온다.
+    public static func pixelNDC(x: Int, y: Int, width: Int, height: Int) -> (x: Float, y: Float) {
+        guard width > 0, height > 0 else { return (0, 0) }
+        let u = (Float(x) + 0.5) / Float(width)
+        let v = (Float(y) + 0.5) / Float(height)
+        return (u * 2 - 1, 1 - v * 2)
+    }
+
+    /// `metalSource` 의 `dir` 재구성 — `normalize(fwd + right·(ndc.x·tanHalf·aspect) + up·(ndc.y·tanHalf))`.
+    /// `aspect` 가 **x 에만** 붙는 것은 `fov` 가 세로축이기 때문이고, 그 규약은
+    /// `Scene3DMath.perspective`(`x = y / aspect`, `y = 1/tan(fovY/2)`)와 같은 출처다.
+    ///
+    /// WE 자신은 이 자리에서 역투영 행렬을 쓴다(`volumetricsfront.frag:105-111`
+    /// `mul(vec4(screenUVDepth, 1.0), g_EffectModelMatrix)` 후 `w` 나눗셈). 우리는 헐 뎁스
+    /// 두 패스를 갖고 있지 않아 카메라 기저로 레이를 세운다 — 같은 레이를 다른 경로로 만든다.
+    public static func viewRayDirection(ndc: (x: Float, y: Float), fovYDegrees: Float, aspect: Float,
+                                        forward: SIMD3<Float>, right: SIMD3<Float>,
+                                        up: SIMD3<Float>) -> SIMD3<Float> {
+        let tanHalf = tanf(fovYDegrees * Float.pi / 180 * 0.5)
+        return normalize3(forward + right * (ndc.x * tanHalf * aspect) + up * (ndc.y * tanHalf))
+    }
+
+    /// `metalSource` 의 헐 구간 — 뷰 레이 ↔ 반경 구 교차 + 근/원 평면 클램프.
+    /// WE 의 헐 뎁스 2패스(`volumetricsfront.frag:63-74`, `:105-111`)를 해석해로 대체한 자리다.
+    ///
+    /// **`direction` 이 단위벡터라는 가정**으로 `a = dot(d,d) = 1` 을 접은 축약형이다
+    /// (`b = dot(oc,d)`, `c = |oc|² − R²`, `disc = b² − c`). `viewRayDirection` 이 정규화해
+    /// 주므로 성립한다 — 정규화 안 된 방향을 넣으면 조용히 틀린다.
+    ///
+    /// nil = 그 픽셀 기여 0(교차 없음 `disc ≤ 0`, 또는 구간 없음 `exit ≤ enter`).
+    /// MSL 쪽 `return float4(0.0)` 과 같은 뜻이고, 그 자리가 WE `:67`/`:70` 의 `clip()` 이다.
+    ///
+    /// **남은 구멍**: WE 는 `exit` 을 씬 뎁스로 한 번 더 자른다(`:64` `limitDepth` + `:71`
+    /// `min(backDepth, limitDepth)`). 우리는 그 텍스처가 없어 통과한다 — 샤프트가 지오메트리를
+    /// 뚫고 보인다. 설계안은 `docs/re/volumetric-light.md` §7.2.
+    public static func hullSpan(eye: SIMD3<Float>, direction: SIMD3<Float>,
+                                lightPosition: SIMD3<Float>, hullRadius: Float,
+                                nearZ: Float, farZ: Float) -> (enter: Float, exit: Float)? {
+        let oc = eye - lightPosition
+        let b = dot3(oc, direction)
+        let c = dot3(oc, oc) - hullRadius * hullRadius
+        let disc = b * b - c
+        guard disc > 0 else { return nil }
+        let sq = sqrtf(disc)
+        let enter = max(-b - sq, nearZ)
+        let exit = min(-b + sq, farZ)
+        guard exit > enter else { return nil }
+        return (enter, exit)
+    }
+
+    /// `metalSource` 의 `VolumetricUniforms` 와 같은 내용을 CPU 쪽에 담는 입력.
+    /// 필드 이름을 셰이더 슬롯에 맞춰 둬야 대조표(`docs/re/volumetric-light.md` §6.2)를
+    /// 눈으로 따라갈 수 있다.
+    public struct PixelInput {
+        public var eye: SIMD3<Float>
+        public var forward: SIMD3<Float>
+        public var right: SIMD3<Float>
+        public var up: SIMD3<Float>
+        public var fovYDegrees: Float
+        public var aspect: Float
+        public var nearZ: Float
+        public var farZ: Float
+        public var lightPosition: SIMD3<Float>
+        /// `VAR_SPOT_FORWARD` — 라이트 → 바깥. `SceneLight3D.forwardLightAxis` 산출물(단위벡터).
+        public var lightForward: SIMD3<Float>
+        public var density: Float
+        public var exponent: Float
+        public var intensity: Float
+        /// **코사인**이다 — 도(度) 원값이 아니다.
+        public var innerCos: Float
+        public var outerCos: Float
+        /// 씬 저작 `radius`. 0(무저작)이면 `hullRadius(radius:)` 가 WE 기본 1.0 을 대신 쓴다.
+        public var radius: Float
+        /// 기본값을 **두지 않는다** — 여기에 `VolumetricLightPass.marchSampleCount` 를 적으면
+        /// 이 타입이 WapleRender 에 묶인다. 호출부가 그 상수를 그대로 넘기면 된다
+        /// (그게 셰이더가 굽는 값이다).
+        public var sampleCount: Int
+
+        /// 인자 순서·라벨은 `VolumetricLightPass` 시절 메모버와이즈와 **동일**하다.
+        /// (`Tests/WapleRenderTests/VolumetricLightTests.swift` 가 이 시그니처로 부른다 —
+        ///  그 파일은 다른 레인 소관이라 소스 호환을 깨지 않는 것이 이관의 조건이었다.)
+        public init(eye: SIMD3<Float>, forward: SIMD3<Float>, right: SIMD3<Float>, up: SIMD3<Float>,
+                    fovYDegrees: Float, aspect: Float, nearZ: Float, farZ: Float,
+                    lightPosition: SIMD3<Float>, lightForward: SIMD3<Float>,
+                    density: Float, exponent: Float, intensity: Float,
+                    innerCos: Float, outerCos: Float, radius: Float, sampleCount: Int) {
+            self.eye = eye
+            self.forward = forward
+            self.right = right
+            self.up = up
+            self.fovYDegrees = fovYDegrees
+            self.aspect = aspect
+            self.nearZ = nearZ
+            self.farZ = farZ
+            self.lightPosition = lightPosition
+            self.lightForward = lightForward
+            self.density = density
+            self.exponent = exponent
+            self.intensity = intensity
+            self.innerCos = innerCos
+            self.outerCos = outerCos
+            self.radius = radius
+            self.sampleCount = sampleCount
+        }
+
+        /// `VolumetricLightParameters.isPointLight` 와 **같은 판정**(단일 규약).
+        /// WE 의 진짜 판정은 종 하나다(`cmp byte [light+0x2c0], 0` `0x1401982fa` ⟺ `light == "lpoint"`) —
+        /// Waple 호출부가 종을 안 넘겨 콘 코사인 퇴화값으로 근사한다.
+        public var isPoint: Bool { outerCos <= -0.999 }
+    }
+
+    /// `volumetricsfront.frag:128-187` = `metalSource` 의 마치 루프. 반환값은 `shadowFactor / N`.
+    ///
+    /// **닫힌 꼴(`samplePosition`)로 계산하지 않고 `p += step` 으로 누산한다.** WE 도
+    /// (`:130` `worldStart.xyz += worldStep`) MSL 도 누산이고, 누산은 반올림이 쌓인다 —
+    /// N=8 에서 차이는 1e-7 수준이라 그림은 안 바뀌지만, **비트 대조를 하려면 같은 순서로
+    /// 적어야 한다**. `samplePosition` 은 "k번째 샘플이 구간의 어디냐" 를 말하는 해석식으로
+    /// 남기고, 실제 적분 경로는 이쪽이 정본이다.
+    public static func marchMeanFactor(_ i: PixelInput, direction: SIMD3<Float>,
+                                       span: (enter: Float, exit: Float), hullRadius: Float) -> Float {
+        guard i.sampleCount > 0, hullRadius > 0 else { return 0 }
+        let invHull = 1 / hullRadius
+        // `VolumetricLightPass.encode` 가 유니폼에 싣기 전에 하는 클램프를 여기서도 한다 —
+        // 음수 지수는 헐 경계(base=0)에서 +inf 가 되어 그 픽셀이 통째로 하얘진다. GPU 가 절대
+        // 못 보는 값을 CPU 미러만 보면 그것부터가 두 벌이 갈리는 자리다. WE 자신은 클램프하지
+        // 않지만 저작 파스가 무클램프라(`SceneDocument.swift` 의 `volumetricsexponent`) 도달 가능한 입력이다.
+        let exponent = max(0, i.exponent)
+        let segment = span.exit - span.enter
+        let step = direction * (segment / (Float(i.sampleCount) + 1))
+        var p = i.eye + direction * span.enter
+        var shadowFactor: Float = 0
+        for _ in 0..<i.sampleCount {
+            p += step
+            let lightDelta = p - i.lightPosition
+            let dist = length3(lightDelta)
+            // WE `:132` — 반경 밖은 정확히 0. `radialFalloff` 도 같은 역수 곱이다.
+            let t = 1 - dist * invHull
+            let base = t < 0 ? 0 : (t > 1 ? 1 : t)
+            let radiusFalloff: Float = base <= 0 ? (exponent <= 0 ? 1 : 0) : powf(base, exponent)
+            var spotCookie: Float = 1
+            if !i.isPoint {
+                // WE `:139-140` — dot(normalize(라이트→샘플), forward) 에 smoothstep(outer, inner, ·).
+                // 나눗셈 형태까지 MSL 과 같게 적는다(역수 곱으로 바꾸면 마지막 자리가 갈린다).
+                let cosAngle = dot3(lightDelta / max(dist, 1e-6), i.lightForward)
+                spotCookie = coneFalloff(cosAngle: cosAngle, innerCos: i.innerCos, outerCos: i.outerCos)
+            }
+            shadowFactor += radiusFalloff * spotCookie
+        }
+        return shadowFactor * (1 / Float(i.sampleCount))   // WE `:187` — /= sampleCount
+    }
+
+    /// **한 픽셀의 최종 스칼라**(`VAR_COLOR` 를 곱하기 전). `metalSource` 의 `volumetricFragment`
+    /// 를 줄 순서 그대로 옮긴 것이라, 두 벌이 갈리면 이 값이 갈린다 — GPU 없이 CPU 에서
+    /// 같은 픽셀을 풀어 대조하는 것이 이 함수의 유일한 존재 이유다.
+    ///
+    /// 흰 라이트(`color = 1 1 1`)면 이 값이 곧 화면 채널값이고, 목적지가 `bgra8Unorm` 이면
+    /// `round(saturate(v) × 255)` 가 캡처 PNG 의 바이트다(`writeFramePNG` 는 감마를 안 먹인다 —
+    /// `OffscreenCapture.png` 가 `.deviceRGB` 로 원바이트를 그대로 싣는다).
+    public static func pixelValue(_ i: PixelInput, x: Int, y: Int, width: Int, height: Int) -> Float {
+        let hull = hullRadius(radius: i.radius)
+        // `VolumetricLightPass.encode` 의 게이트와 동일.
+        guard hull > 0, i.farZ > i.nearZ, i.nearZ > 0 else { return 0 }
+        let ndc = pixelNDC(x: x, y: y, width: width, height: height)
+        let dir = viewRayDirection(ndc: ndc, fovYDegrees: i.fovYDegrees, aspect: i.aspect,
+                                   forward: i.forward, right: i.right, up: i.up)
+        guard let span = hullSpan(eye: i.eye, direction: dir, lightPosition: i.lightPosition,
+                                  hullRadius: hull, nearZ: i.nearZ, farZ: i.farZ) else { return 0 }
+        let mls = maxLightScale(intensity: i.intensity, segmentLength: span.exit - span.enter,
+                                hullRadius: hull, isPoint: i.isPoint)
+        let mean = marchMeanFactor(i, direction: dir, span: span, hullRadius: hull)
+        return finalScale(density: i.density, maxLightScale: mls, meanFactor: mean)
+    }
+}

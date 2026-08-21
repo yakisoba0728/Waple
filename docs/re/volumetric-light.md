@@ -9,7 +9,8 @@ WE 의 볼류메트릭 라이트를 **셰이더 평문 + `wallpaper64.exe`(image
 - 머티리얼: `wallpaper_engine/assets/materials/util/volumetrics_*.json` (6개)
 - 바이너리: 파이프라인 `0x140196ce0`–`0x1401988d6`, 리졸브 `0x140198d00`–`0x140198e18`,
   라이트 프로퍼티 등록 `0x14025da80`–`0x14025e827`, 라이트 생성자 `0x14018ff60`
-- 코퍼스: 동봉 172 + 설치본 186 = 358 씬 · 워크샵 162 씬은 `spec/corpus/scene-schema.json` 실측치 인용
+- 코퍼스: 동봉 172 ⊂ 설치본 186 = **distinct 186 씬**(겹치는 172 는 md5 까지 같다 — §3.1) ·
+  워크샵 162 씬은 `spec/corpus/scene-schema.json` 실측치 인용
 
 > **방법론 메모.** 이 항목은 x86 을 파기 전에 셰이더를 읽었어야 하는 전형이었다.
 > 샘플 수(12/24/32/64 · 2/3/5/8), 감쇠 곡선, 최종 `×0.1`, 콘 스무드스텝 — **픽셀을 정하는 상수는
@@ -324,31 +325,52 @@ Waple 의 파스 기본값(`SceneDocument.swift:1918`–`1921`)은 `density 2` �
 
 ## 3. 씬 키 전수 조사 — 도달 수
 
-### 3.1 동봉 172 + 설치본 186 = 358 씬 (2026-08-21 실측)
+### 3.1 동봉 172 ⊂ 설치본 186 = **distinct 186 씬** (2026-08-21 재실측)
+
+> **[2026-08-21 정정] 종전 표제 "동봉 172 + 설치본 186 = 358 씬" 은 겹치는 172 를 두 번 셌다.**
+> 동봉 `Sources/WapleRender/Resources/WEAssets/**/*scene*.json` **172 파일**은 설치본
+> `wallpaper_engine/assets/**/*scene*.json` **172 파일**과 **경로 집합이 같고 md5 도 172/172 전부
+> 같다**(재실측 절차는 아래). 설치본이 더 갖는 것은 `projects/` 14 파일(13 × `scene.json` +
+> `projects/templates/gif/gifscene.json`)뿐이므로 **distinct 는 186** 이다. 두 트리를 합쳐 세는
+> 문장을 쓸 때 이 겹침을 빼라(공통 브리프 함정 #6 — 빈도수에는 범위 라벨을 붙여라).
+> 개별 트리 수치 172 / 186 자체는 `*scene*.json` 기준으로 **재현된다**(`scene.json` 만이면
+> 171 / 184 — `gifscene.json` 두 장이 차이다).
 
 전 씬을 재귀 전수 스캔(모든 깊이·모든 키)했다.
 
-| 키 | 358 씬 도달 | 값 |
+| 키 | distinct 186 씬 도달 | 값 |
 | --- | ---: | --- |
 | `castvolumetrics` | **0** | — |
 | `density`(라이트) | 1 | `7.48` |
 | `volumetricsexponent` | 1 | `4.0` |
+| `innercone` / `outercone` | **0** / **0** | — (콘을 저작한 씬이 없다) |
 
 `castvolumetrics` 는 **문자열 자체가 동봉/설치본 자산 JSON 어디에도 없다.** 실행파일
 (`wallpaper64.exe`·`wallpaper32.exe`·`wallpaperui.exe`)에만 있다.
 
-라이트 오브젝트 자체가 희소하다 — 동봉 172 씬에 라이트 3개(2씬), 설치본 186 씬에 6개(4씬).
+라이트 오브젝트 자체가 희소하다 — 동봉 172 씬에 라이트 **3개(2씬)**, 설치본은 그 3개 + `projects/`
+쪽 3개 = **6개(4씬)**. **여섯 개가 전부 point 종**이다(`lpoint` 3 · `point` 3) — 즉 두 트리에는
+`lspot` 라이트가 **한 개도 없고** 콘 키도 0건이다(§4.4-3 콘 반각 문제의 도달이 0 인 근거).
 `density`/`volumetricsexponent` 를 가진 유일한 라이트는
 `scenes/particleelementpreviews/collisionmodel/scene.json` 의 `lpoint`
 (`density 7.48` · `volumetricsexponent 4.0` · `radius 811.69` · `intensity 6.44` · `castshadow true`)
 인데 **`castvolumetrics` 가 없다** → WE 에서도 이 패스는 켜지지 않는다.
 
-재현:
+재현(2026-08-21 이 컨테이너에서 다시 돌린 것):
 
 ```bash
+# (1) 게이트 키 도달 — 두 트리의 **모든 json**을 뒤져도 0건. 히트는 실행파일뿐이다.
 grep -rl castvolumetrics Sources/WapleRender/Resources/WEAssets/ \
-    /home/user/Waple-wallpaper-source/wallpaper_engine/assets/    # 무출력
+    /home/user/Waple-wallpaper-source/wallpaper_engine/     # → *.exe 6개만
+
+# (2) 겹침 확인 — 경로 집합 동일 + md5 172/172 동일
+diff <(cd Sources/WapleRender/Resources/WEAssets && find . -name '*scene*.json' | sort) \
+     <(cd /home/user/Waple-wallpaper-source/wallpaper_engine/assets && find . -name '*scene*.json' | sort)
 ```
+
+**판정에 쓰는 수는 이 0 하나다.** 게이트가 0 이면 두 트리의 어떤 씬도 이 패스를 켜지 않고,
+따라서 §1 의 픽셀 수식(W-18·W-19 포함)을 어떻게 고쳐도 **동봉·설치본 화면은 한 픽셀도 안 바뀐다.**
+바뀔 수 있는 것은 워크샵 씬 3개(§3.2)뿐이고 그 코퍼스는 이 컨테이너에 없다(공통 브리프 함정 #19).
 
 ### 3.2 워크샵 코퍼스 162 씬 (`spec/corpus/scene-schema.json` 인용)
 
@@ -388,9 +410,16 @@ grep -rl castvolumetrics Sources/WapleRender/Resources/WEAssets/ \
 | 씬 뎁스 클립 | `min(backDepth, limitDepth)` | **없음** ← 남은 구멍 |
 | 라이트버퍼 | 1/4·1/8 + blur3 h/v | 없음(목적지에 풀해상도 직접 additive) |
 
-**해석해 대체가 왜 성립하나.** WE 의 헐은 포인트라이트에서 반경 구이고, 셰이더가 쓰는 반경도
-`radius × 0.99` 이며 프론트 vert 가 헐을 `0.99` 배 한다 — 즉 포인트라이트에 대해서는 구 교차가
-헐 뎁스 2패스와 동치다. 스팟 콘 헐은 같은 구로 감싸고 콘 감쇠가 바깥을 0 으로 눌러 근사한다
+**해석해 대체가 왜 성립하나.** WE 의 헐은 포인트라이트에서 반경 구이고, 셰이더가 감쇠에 쓰는
+반경이 `radius × 0.99`(`0x140198760`)라 그 밖은 `radiusFalloff` 가 **정확히 0** 이다 — 즉
+`[0.99R, R]` 구간은 적분에 아무것도 더하지 않으므로, 반경 `0.99R` 구와의 교차가 헐 뎁스 2패스와
+같은 값을 낸다(N 이 유한하므로 리만합 수준의 근사다).
+
+> **⚠️ 두 개의 `0.99` 를 한 근거로 묶지 마라(2026-08-21 셰이더 원문 재확인).**
+> `volumetricsfront.vert:13` 의 `a_Position * vec3(0.99, 0.99, 1.0)` 은 (a) **xy 만** 줄이고
+> (z 는 1.0) (b) `#if POINTLIGHT` 가지(`:11`)에는 **아예 없다** — 콘 헐 단면을 좁혀 경계가 새는
+> 것을 막는 지오메트리 보정이지 유니폼 반경 스케일이 아니다. 위 문단의 근거는 오직
+> `0x140198760` 이 유니폼에 굽는 `radius × 0.99` 다. 스팟 콘 헐은 같은 구로 감싸고 콘 감쇠가 바깥을 0 으로 눌러 근사한다
 (콘 밖 샘플의 `spotCookie` 가 0 이므로 적분에 기여하지 않는다). 근평면 클램프는 WE 의
 `FULLSCREEN` 콤보(카메라가 헐 안 → 근평면에서 시작)와 같은 뜻이다.
 
@@ -433,11 +462,30 @@ grep -rl castvolumetrics Sources/WapleRender/Resources/WEAssets/ \
    let cone = Scene3DLighting.spotConeCosines(inner: light.innerCone, outer: light.outerCone)
    ```
 
-   더 근본적인 수선은 `SceneDocument.forwardSpotConeCosines:962` 의 `* 0.5` 제거인데, 그건 2D
-   포워드 라이팅 전체를 함께 바꾸므로 그 레인이 판단할 일이다(그 경우
-   `SceneForwardLightKindTests.testSpotConeHalfAngleCosines` 와
-   `VolumetricLightTests` 의 `cos5°/cos15°` 기대값 두 곳이 `cos10°/cos30°` 로 함께 간다).
+   더 근본적인 수선은 `SceneDocument.forwardSpotConeCosines` 의 `let toHalfRadians =
+   Float.pi / 180 * 0.5` 를 `let toRadians = Float.pi / 180` 으로 바꾸는 것인데, 그건 2D
+   포워드 라이팅 전체를 함께 바꾸므로 그 레인이 판단할 일이다.
    **두 파일 다 이번 담당 밖이라 손대지 않았다.**
+
+   **[2026-08-21 도달 실측]** 이 결함의 **화면 도달은 동봉·설치본에서 0 이다.**
+   distinct 186 씬의 라이트 6개가 **전부 point 종**이고(`lpoint` 3 · `point` 3) `innercone`/
+   `outercone` 저작이 **0건**이다(§3.1). 볼류메트릭 레인은 point 에서 `spotCookie = 1.0`
+   (`:137`)이라 콘 코사인을 아예 안 본다. 워크샵 코퍼스에서만 `lspot` 5개 / `innercone`
+   5건 2씬이 도달한다(`spec/corpus/scene-schema.json` 인용 — 그 코퍼스는 이 컨테이너에 없다).
+   즉 **급하지 않지만 원리상 틀린 것은 맞다.**
+
+   **함께 움직여야 하는 기대값(근본 수선을 택할 경우).** 세 자리다 —
+   `Tests/WapleCoreTests/SceneForwardLightKindTests.swift` 안에 `let half = Float.pi / 180 * 0.5`
+   가 **두 곳**(`testSpotConeHalfAngleCosines` · `testPackCarriesKindAxisConePerSlot`) 있고,
+   둘 다 `Float.pi / 180` 으로 간다(그 파일 머리말이 "그쪽을 고칠 때 아래 `half` 를
+   `Float.pi / 180` 으로 바꾸면 된다" 고 이미 적어 두었다). 세 번째는
+   `Tests/WapleRenderTests/VolumetricLightTests.swift` 의 `cos5°/cos15°` 기대값 두 개가
+   `cos10°/cos30°` 로 가는 것이고, 같은 파일의 `directionFixtureInput` 픽스처
+   (`innerCos`/`outerCos`)와 `Tests/WapleCoreTests/SceneVolumetricMathTests.swift` 의
+   `fixture(radius:)` 도 같은 값을 쓰므로 **넷이 한 커밋으로 움직여야 한다**.
+   ⚠️ 콘이 넓어지면 픽스처 픽셀값(`0.506209` / `0.047063` / `0.225425` / 비 `4.436`)도 전부
+   바뀐다 — 그 수들은 `cos5°/cos15°` 콘에서 나온 값이다. 호출부 한 줄 교체(위)만 하면
+   볼류메트릭 픽스처만 움직이고 2D 레인은 그대로다.
 
 또한 `Tests/WapleRenderTests/VolumetricLightTests.swift` 의
 `testVolumetricLightDirectionUsesForwardConverterNotRawEulerAngles` 는 종전에 **`density: 0` ·
@@ -485,13 +533,34 @@ grep -rl castvolumetrics Sources/WapleRender/Resources/WEAssets/ \
 
 ---
 
-## 6. 리눅스 단독 대조
+## 6. 리눅스 대조
+
+> **[2026-08-21 갱신] 산술이 `WapleCore` 로 옮겨 갔다 — 아래 "블록만 잘라 컴파일" 절차는 끝났다.**
+> 정본은 이제 `Sources/WapleCore/ScenePBRLighting.swift` 의 **`SceneWEVolumetricMath`** 이고,
+> `VolumetricLightPass.swift` 에는 `typealias VolumetricMath = SceneWEVolumetricMath` 한 줄만
+> 남는다. 그래서 같은 코드가 **리눅스 코어 테스트에서 그냥 실행된다**:
+>
+> ```bash
+> scripts/dev/linux-core-tests.sh --filter SceneVolumetricMathTests   # 19 tests · 실패 0
+> ```
+>
+> **왜 옮겼나.** 종전 구조에서는 이식한 수식의 *숫자*를 잠그는 것이 macOS 전용
+> `Tests/WapleRenderTests/VolumetricLightTests.swift` **하나뿐**이었다. 리눅스에서는
+> `scripts/dev/linux-render-typecheck.sh` 가 `swiftc -typecheck` 만 하고 값을 한 번도 계산하지
+> 않는다. 그 공백을 메우는 것이 아래 절차였는데, **손으로 돌리는 절차는 회귀를 막지 못한다**
+> (돌리지 않으면 그만이다). 옮긴 뒤에는 CI 의 코어 스위트가 매번 값을 계산한다.
+> 이관은 **소스 호환**이다 — `VolumetricMath.pixelValue`/`.PixelInput(...)`/`.pixelNDC` 호출부와
+> macOS 테스트가 한 글자도 안 바뀐다(`linux-render-typecheck.sh --compat` rc=0 으로 확인).
+> `metalSource` 의 MSL 문자열은 **한 줄도 건드리지 않았다** — §6.2 의 GPU 쪽 열이 그대로 유효하다.
+
+### 6.0 종전 절차와 그 실행 기록 (보존)
 
 `VolumetricLightPass.swift` 말미의 `enum VolumetricMath` 는 Metal·simd 를 안 쓰는 **순수 산술**만
-모아 둔 자리다. 그 블록만 잘라 리눅스에서 컴파일·실행하고, 같은 파일이 아닌 **독립 전사본**
+모아 둔 자리였다. 그 블록만 잘라 리눅스에서 컴파일·실행하고, 같은 파일이 아닌 **독립 전사본**
 (`volumetricsfront.frag` 를 줄 단위로 옮긴 참조 구현)과 값을 대조했다.
 
 ```bash
+# [옛 절차 — 이제 `SceneWEVolumetricMath` 가 코어 테스트에서 직접 돈다]
 S=/home/user/Waple/Sources/WapleRender/VolumetricLightPass.swift
 { echo 'import Foundation'; sed -n "/^enum VolumetricMath {/,\$p" "$S"; } > math_only.swift
 swiftc -O math_only.swift main.swift -o volcheck && ./volcheck    # main.swift = 참조 전사 + 대조
@@ -559,6 +628,8 @@ macOS CI 가 아래를 보고했다.
 ### 6.2 같은 식을 두 번 적은 자리 — 전수 대조표
 
 `metalSource`(MSL 문자열)와 `VolumetricMath`(CPU) 가 같은 식을 두 벌 갖는 자리를 전부 세웠다.
+(CPU 쪽 실체는 2026-08-21 이후 `SceneWEVolumetricMath`(WapleCore)이고 `VolumetricMath` 는
+그 `typealias` 다 — 아래 표의 이름은 그대로 읽으면 된다.)
 "갈릴 수 있나" 는 **값이 실제로 달라질 수 있는가**다.
 
 | # | 식 | `volumetricsfront.frag` | `metalSource`(MSL) | `VolumetricMath`(CPU) | 갈릴 수 있나 |
@@ -629,6 +700,46 @@ macOS CI 가 아래를 보고했다.
 대조에서 틀린 곳이 없었고(§6.2), 관측 픽셀이 CPU 예측과 바이트 단위로 맞았다.
 `VolumetricMath` 쪽에서 바꾼 것은 **GPU 와 같은 순서로 적기 위한 정렬 세 곳**뿐이다
 (§6.2 #8·#9 역수 곱, #10 지수 클램프). 값이 눈에 띄게 달라지는 변경은 없다.
+
+### 6.5 이번 라운드가 실제로 한 것 (2026-08-21, 리눅스 컨테이너)
+
+**임무는 "W-18·W-19 를 넣을지 다시 판단" 이었는데, 세어 보니 이미 들어가 있었다.** `7c66d46`
+(그리고 `744b879`·`51472a6`)이 두 수식을 이미 실물로 바꿔 놓았고, 현행 트리의
+`VolumetricLightPass.metalSource` 는 `pow(saturate(1.0 - dist * u.lightCone.z), u.lightParams.y)` ·
+`smoothstep(u.lightCone.x, u.lightParams.w, cosAngle)` 다. 그래서 이번 라운드의 일은
+**넣는 것이 아니라 (a) 근거를 다시 세고 (b) 검증 공백을 닫는 것**이 됐다.
+
+**(a) 셰이더 원문 재확인 — 남의 주석을 베끼지 않았다(공통 브리프 함정 #16).**
+`volumetricsfront.frag` 를 두 트리에서 직접 열어 md5 가 같은 것을 확인하고
+(`22f6d8608151a60e0568c741227e2c03`, 192줄) 아래 줄 번호를 눈으로 다시 떴다.
+**§1 이 인용한 줄은 전부 맞다** — `:113` `(sampleCount + 1.0)` · `:115-122` `maxLightScale`
+(`:119` POINTLIGHT `* 0.5` / `:121` 그 외) · `:128-130` 더한 뒤 샘플 · `:132` 반경 감쇠 ·
+`:139-140` 콘 스무드스텝 · `:187` `/= sampleCount` · `:190` `× 0.1` · `:78-97` QUALITY 콤보.
+**틀린 것 하나**를 잡았다: §4.2 가 해석해의 근거로 인용하던 "프론트 vert 가 헐을 0.99 배 한다"
+는 `#if POINTLIGHT` 가지(`vert:11`)에 **존재하지 않고** `#else` 가지(`vert:13`)에서도 **xy 만**
+줄인다 — 위 §4.2 의 경고 상자로 고쳤다.
+
+**(b) 검증 공백 — 여기가 이번의 실제 산출물이다.**
+산술을 `SceneWEVolumetricMath`(WapleCore)로 옮기고
+`Tests/WapleCoreTests/SceneVolumetricMathTests.swift` 를 새로 뒀다. **오라클 재구현 대조**다 —
+테스트 파일 안의 `Oracle` 은 `volumetricsfront.frag` 를 다시 옮긴 독립 전사본이고, 일부러 다른
+꼴로 적었다: 구 교차를 **축약하지 않은 이차식**(`a·t²+b·t+c`)으로 풀고, 감쇠를 GLSL 원문의
+`invRadius` 꼴로 잡고, `smoothstep` 을 GLSL 명세 정의로 적는다. 이식본이 쓰는 `a=1` 축약형과
+역수 곱을 **공유하지 않으므로** 부호·계수 오류가 값으로 갈린다.
+
+돌연변이 검증(§3.4) 결과 — 4건 주입 / 4건 잡힘:
+
+| # | 주입한 오류 | 결과 |
+| ---: | --- | ---: |
+| 1 | `hullRadius` 의 `× 0.99` → `× 1.00` | 19테스트 중 **85 단언 실패** |
+| 2 | `coneFalloff` 3차 → 선형 램프(`return t`) = **W-18 회귀** | **33 단언 실패** |
+| 3 | 반경 감쇠 → 옛 `exp(−density·d·0.001)` = **W-19 회귀** | **84 단언 실패** |
+| 4 | 구간 분할 `(N+1)` → `N` (`:113` 회귀) | **84 단언 실패** |
+
+**화면 변화 범위: 0.** §3.1 재실측대로 게이트 키 `castvolumetrics` 는 distinct 186 씬에서 0건이고
+Waple 도 같은 게이트를 쓴다(`SceneRenderer3D.swift` 의 `for light in scene3DLights where
+light.castVolumetrics`). 골든도 안 바뀐다 — CI 에서 도는 유일한 픽셀 골든
+`SyntheticPixelGoldenTests` 의 다섯 씬에 볼류메트릭 라이트가 없다.
 
 ---
 
