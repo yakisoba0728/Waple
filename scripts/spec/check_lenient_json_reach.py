@@ -65,7 +65,12 @@ WIRED = {"Sources/WapleCore/SceneDocument.swift": 7,
          # `fantasticcar/materials/car/glass.json` 이 직접 도달)을 스캐너만 "invalid" 로
          # 판정했다. 표에 없으면 이 게이트는 그 파일을 **쳐다보지도 않는다** — 관용 파서가
          # 있어도 리더가 안 부르면 아무 일도 안 일어난다는 게 이 게이트의 전제다.
-         "Sources/WapleCompatCore/DeepScan.swift": 5}
+         "Sources/WapleCompatCore/DeepScan.swift": 5,
+         # [2026-08-21] `SnapshotPipeline.unpackedSceneFolders` 가 `project.json` 을 직접 읽는다
+         # (언팩 코퍼스 폴백). 캡처 대상 열거가 렌더러보다 엄격하면 JSONC `project.json` 을 가진
+         # 씬이 **캡처에서 조용히 빠지고** 골든 매니페스트 엔트리 집합이 줄어든다.
+         # 설치본·동봉 `project.json` 중 JSONC 는 0건이지만 워크샵 코퍼스는 여기서 못 쟀다.
+         "Sources/WapleCompatCore/SnapshotPipeline.swift": 1}
 
 
 def swift_characters(text: str):

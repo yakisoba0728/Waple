@@ -58,16 +58,44 @@ public enum SnapshotPipeline {
     /// F520: DeepScan.projectContainer 와 동일 규칙 — root 가 개발 루트(하위에 backgrounds/ 디렉터리)면
     /// 그 backgrounds 를, backgrounds 디렉터리 자체(또는 단일 씬 폴더)가 직접 지정되면 그대로 쓴다.
     /// 종전엔 무조건 <root>/backgrounds 만 열어서 직접 지정 시 scenes=0 인데도 exit 0 이었다.
+    ///
+    /// **[2026-08-21 클러스터 BE] 그 "동일 규칙" 이 사실이 아니었다.** 형제 규칙의 **첫 분기**가
+    /// 여기 없었다: `<root>/backgrounds/project.json` 이 있으면 `backgrounds` 자체가 프로젝트
+    /// 폴더이므로 컨테이너는 `root` 여야 하는데, 이 사본은 그 경우에도 `backgrounds` 를 골라
+    /// 컨테이너를 한 칸 깊게 잡았다(그러면 그 프로젝트 자신은 후보에서 사라진다).
+    /// 설치본·동봉 도달 0건(두 트리에 `backgrounds` 라는 이름의 프로젝트 폴더가 없다) —
+    /// 그래서 주석과 코드가 갈린 채로 남아 있었다. 이제 **사본을 지우고 형제 함수를 부른다.**
     static func sceneContainer(root: String) -> URL {
-        let r = URL(fileURLWithPath: root)
-        let bg = r.appendingPathComponent("backgrounds", isDirectory: true)
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: bg.path, isDirectory: &isDir), isDir.boolValue {
-            return bg.standardizedFileURL
-        }
-        return r
+        WallpaperCompatibilityAnalyzer.projectContainerURL(for: URL(fileURLWithPath: root))
     }
 
+    /// 캡처 대상 씬 폴더 열거.
+    ///
+    /// **[2026-08-21 클러스터 BE · 알려진 한계를 명시적 폴백으로만 메웠다]**
+    /// 1차 규칙은 종전 그대로 `scene.pkg`/`gifscene.pkg` **파일 존재**다. 이건 렌더러·분석기·
+    /// DeepScan 이 이미 버린 규약이고(마운트 결정자는 `project.json` 의 `file`,
+    /// `ScenePackage.resolveMountSource`), 그래서 **언팩 코퍼스에서는 0개를 준다** —
+    /// WE 2.8.42 설치본 씬 188/188 과 동봉 WEAssets 170/170 이 전부 언팩이라 두 트리 어디에
+    /// 겨눠도 `runCapture` 가 F520 가드로 `exit 2` 였다(조용한 실패는 아니지만 쓸 수는 없었다).
+    ///
+    /// 그런데 이 열거의 결과는 **256×144 골든 매니페스트의 엔트리 집합 그 자체**다
+    /// (`spec/golden/snapshot/baseline-*` 각 170항목). 규칙을 통째로 갈면 실물 개발 코퍼스
+    /// (`~/Downloads/wallpaper_dev` — **이 컨테이너에 없다**)에서 집합이 어떻게 움직이는지
+    /// 재 볼 수단이 없다. 재 보지 않은 재기준선은 이 리포가 금지하는 종류의 변경이다.
+    ///
+    /// 그래서 **pkg 규칙이 0개를 줄 때만** 형제 스캐너와 같은 열거로 폴백한다:
+    ///   · pkg 가 하나라도 있는 코퍼스 → 결과 **바이트 동일**(기준선 무영향, 이것이 이 설계의 요점).
+    ///   · 전건 언팩 코퍼스 → 이제 열거된다(종전 0개).
+    ///   · **섞인 코퍼스는 여전히 pkg 만 준다** — 남은 구멍이고, 메우려면 실물 코퍼스에서
+    ///     집합 델타를 세야 한다. 보고서의 [미해결] 항목.
+    ///
+    /// **도달 실측(과장 금지)**: `projectFolders(in:)` 는 컨테이너 **한 단계 아래**만 본다
+    /// (분석기의 원래 계약). 그래서 폴백이 실제로 살리는 것은 루트를 정확히 겨눴을 때뿐이다 —
+    /// `<설치본>/projects/defaultprojects` **0→16**, `<설치본>/assets/scenes` **0→3**,
+    /// `<동봉>/scenes` **0→3**. 설치본 루트·`assets`·`projects`·동봉 루트를 겨누면 종전처럼
+    /// **0→0** 이다(프로젝트 폴더가 두 단계 아래라 애초에 열거 대상이 아니다).
+    /// 동봉 170건 중 167건은 `effects/<이름>/preview/` 로 세 단계 아래이고, 그건 자산 프리뷰지
+    /// 캡처 대상 벽지가 아니다.
     static func sceneFolders(root: String) -> [URL] {
         let base = sceneContainer(root: root)
         let fm = FileManager.default
@@ -76,8 +104,22 @@ public enum SnapshotPipeline {
                 || fm.fileExists(atPath: u.appendingPathComponent("gifscene.pkg").path)
         }
         if isScene(base) { return [base] }   // 단일 씬 폴더 직접 지정
-        guard let items = try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil) else { return [] }
-        return items.filter(isScene).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let items = (try? fm.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? []
+        let packed = items.filter(isScene).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        if !packed.isEmpty { return packed }
+        return unpackedSceneFolders(container: base)
+    }
+
+    /// 언팩 폴백 — 형제 스캐너와 같은 열거(`project.json` 보유 폴더) 위에서 `ProjectJSONParser`
+    /// 가 `.scene` 으로 판정한 것만. 타입 추론(확장자 폴백 G-E3-03)까지 같은 함수를 타므로
+    /// `type` 을 생략한 설치본 2건(`fantasticcar` `audiophile`)도 씬으로 잡힌다.
+    static func unpackedSceneFolders(container: URL) -> [URL] {
+        let folders = (try? WallpaperCompatibilityAnalyzer.projectFolders(in: container)) ?? []
+        return folders.filter { folder in
+            guard let data = try? Data(contentsOf: folder.appendingPathComponent("project.json")),
+                  let raw = AssetJSON.dictionary(data) else { return false }
+            return ProjectJSONParser.parse(json: raw, folderURL: folder).type == .scene
+        }
     }
 
     // MARK: 단일 캡처(마운트 → 고정조건 렌더 → 256×144 PNG)

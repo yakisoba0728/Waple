@@ -147,6 +147,103 @@ public struct WallpaperCompatibilityReport: Codable, Equatable {
     }
 }
 
+/// **웹 벽지가 건드리는 Wallpaper Engine 브리지 신호 — 탐지 문자열의 단일 소스.**
+///
+/// [2026-08-21 클러스터 BE] 종전에는 같은 마커 문자열이 두 스캐너에 각각 리터럴로 박혀 있었고
+/// 그래서 **개수가 갈렸다**: `WallpaperCompatibilityAnalyzer.analyzeWebFeatures` 는 9종 +
+/// `remoteNetwork`, `DeepScan.scanWeb` 은 `randomFile`·`serviceWorker` **2종뿐**. 즉 같은 웹
+/// 벽지를 두 스캐너에 물리면 서로 다른 얘기를 했고, 어느 쪽이 정본인지 코드에 안 적혀 있었다.
+/// 문자열을 여기 한 벌만 둬서 **개수가 갈릴 자리 자체를 없앤다.**
+///
+/// `rawValue` 는 `WallpaperCompatibilityProjectReport.detectedFeatures` 에 그대로 실리는 값이라
+/// **바꾸면 리포트 스키마가 바뀐다**(하위호환 유지 — 종전 문자열 그대로다).
+///
+/// 근거: `bin/webwallpaper64.exe` 의 웹 브리지 표면을 ASCII `wallpaper[A-Za-z0-9_]{2,60}` 로
+/// 전수하면 13종이다(3차 웨이브 AB 실측). `serviceWorker`/`webGL`/`fileURL` 은 그 13종이 아니라
+/// 브라우저 API 쪽 신호다.
+///
+/// **크롤 범위는 이 타입이 정하지 않는다.** 분석기는 엔트리에서 시작해 최대 64파일/2MB 를 따라가고
+/// (`webFeatureSources`), `DeepScan.scanWeb` 은 엔트리 파일 하나만 읽는다. 그 차이는 남아 있다 —
+/// 여기서 합친 것은 **무엇을 신호로 보는가**이지 **어디를 읽는가**가 아니다.
+public enum WebBridgeSignal: String, CaseIterable, Sendable {
+    case propertyListener
+    case webLifecycle
+    case serviceWorker
+    case randomFile
+    case pluginBridge
+    case audioListener
+    case mediaIntegration
+    case webGL
+    case fileURL
+
+    /// 이 신호가 이 텍스트에 있는가.
+    public func matches(_ text: String) -> Bool {
+        switch self {
+        case .propertyListener:
+            return text.contains("wallpaperPropertyListener")
+        case .webLifecycle:
+            // **[3차 웨이브 AB]** 이 두 이름은 WE 2.8.42 설치본 전 트리(exe·dll·ui·assets·projects)
+            // ASCII·UTF-16LE 전수에서 **0건**이다 — 다른 버전/문서 기반이거나 다른 제품의 API 로
+            // 보인다(추정). 피처 태그일 뿐 이슈를 만들지 않는다.
+            return text.contains("wallpaperWillGoBackground") || text.contains("wallpaperWillGoForeground")
+        case .serviceWorker:
+            return text.range(of: "serviceWorker", options: .caseInsensitive) != nil
+        case .randomFile:
+            return text.contains("wallpaperRequestRandomFileForProperty")
+        case .pluginBridge:
+            return text.contains("wallpaperPluginListener")
+        case .audioListener:
+            return text.contains("wallpaperRegisterAudioListener")
+        case .mediaIntegration:
+            return text.contains("wallpaperRegisterMedia") || text.contains("wallpaperMedia")
+        case .webGL:
+            return text.range(of: #"\bwebgl\b|OES_"#, options: [.regularExpression, .caseInsensitive]) != nil
+        case .fileURL:
+            return text.range(of: #"file:///"#, options: [.caseInsensitive]) != nil
+        }
+    }
+
+    /// 이슈로 승격되는 신호면 그 코드, 태그로만 남는 신호면 nil.
+    /// 승격 기준: **Waple 의 브리지가 그 이름을 정의하지 않거나 동작 파리티가 불확실할 때**만.
+    /// `propertyListener`·`webLifecycle`·`webGL`·`fileURL` 은 지원하거나(브리지 실측) 위험 신호가
+    /// 아니라 태그로만 남는다.
+    public var issueCode: WallpaperCompatibilityIssueCode? {
+        switch self {
+        case .propertyListener, .webLifecycle, .webGL, .fileURL: return nil
+        case .serviceWorker: return .webServiceWorker
+        case .randomFile: return .webRandomFileBridge
+        case .pluginBridge: return .webPluginBridge
+        case .audioListener: return .webAudioListener
+        case .mediaIntegration: return .webMediaIntegration
+        }
+    }
+
+    /// 승격될 때 실리는 문구(태그 전용 신호는 빈 문자열).
+    public var issueMessage: String {
+        switch self {
+        case .propertyListener, .webLifecycle, .webGL, .fileURL:
+            return ""
+        case .serviceWorker:
+            return "Web wallpaper touches the serviceWorker API; Waple's offline WKWebView may not offer full parity for background sync/fetch interception."
+        case .randomFile:
+            return "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity."
+        case .pluginBridge:
+            // [3차 웨이브 AB] WE 웹 브리지 13종 중 Waple 이 **정의하지 않는** 유일한 이름
+            // (`webPluginBridge` 선언부 주석의 근거 참조). 설치본 web 2/2 도달.
+            return "Web wallpaper registers a Wallpaper Engine plugin listener (iCUE/Chroma LED channel); Waple's WKWebView bridge does not define wallpaperPluginListener, so those callbacks never arrive."
+        case .audioListener:
+            return "Web wallpaper registers a Wallpaper Engine audio listener; verify Waple's audio bridge coverage for this project."
+        case .mediaIntegration:
+            return "Web wallpaper uses Wallpaper Engine media integration bridges; coverage may be partial."
+        }
+    }
+
+    /// 텍스트 한 벌에서 켜지는 신호 전부.
+    public static func signals(in text: String) -> Set<WebBridgeSignal> {
+        Set(allCases.filter { $0.matches(text) })
+    }
+}
+
 public enum WallpaperCompatibilityAnalyzer {
     /// 지원 속성 타입 단일 소스 — DeepScan 의 known 목록도 이걸 참조(스캐너 간 불일치 방지).
     /// F229: "boo4"/"uwu" 는 AppLogicTests 의 PropertyControl.kind(forType:) 미지 타입 폴백 검증용
@@ -159,6 +256,39 @@ public enum WallpaperCompatibilityAnalyzer {
     /// textinput usershortcut volume` + 형제 템플릿 `browseruserpropertiesgroup.html` 의 `group`.
     /// (형제 파일 `PropertyDecoration.swift:9` 가 같은 오프셋에서 같은 목록을 이미 인용한다.)
     ///
+    /// **[2026-08-21 정정 · 클러스터 BE 가 설치본 `ui/` 를 독립적으로 다시 떴다]**
+    /// 위 문단은 **12종 목록 자체는 맞지만** 오프셋 라벨과 `group` 의 귀속이 틀렸다. 실측:
+    ///   · 오프셋은 **byte 가 아니라 char** 다. 템플릿 **본문**은 char `[750195, 757420)` =
+    ///     byte `[750374, 757599)`, 길이 **7,225**(그 구간은 전부 ASCII 라 char=byte). 종전의
+    ///     `@750151` 은 `e.put("views/includes/browseruserproperties.html"` 의 **이름 문자열**
+    ///     char 오프셋이고 `길이 7,272` 는 어디서도 나오지 않는 수다(7,232 의 오타로 보인다).
+    ///     `scripts.js` 는 char 1,186,896 / byte 1,187,134 로 둘이 238 만큼 어긋난다.
+    ///   · `browseruserproperties.html` 안의 타입 분기는 **13자리 · 고유 12종**이다.
+    ///     `color` 만 `property.type==='color'`(**삼중 등호**)이고 나머지 11종은 `==` 이며,
+    ///     `volume` 만 두 자리다(`isVolumeEnabled(...)` 유/무로 갈린 두 `ng-if`).
+    ///     `==` 만 찾는 순진한 grep 은 `color` 를 놓쳐 **11종**을 준다 — 그 11이라는 수가
+    ///     이 코드베이스에서 실제로 나돌았다.
+    ///   · **`group` 은 형제 템플릿에 없다.** `browseruserpropertiesgroup.html`(char
+    ///     `[757479, 757963)`, byte `[757658, 758142)`, **484바이트**)에는 `type` 비교가
+    ///     **0건**이고, 그룹 제목 + `#GroupFoldParent` 접힘 컨테이너만 그린다.
+    ///     `group` 을 아는 것은 **JS 컨트롤러**다 — byte @88625 의
+    ///     `"group"===l.type?t.push(n={properties:[],property:l}):n.properties.push(l)` 가
+    ///     정렬된 프로퍼티 목록을 `group` 마다 잘라 구획을 만들고, 그 구획마다
+    ///     `D.all([e("views/includes/browseruserproperties.html"),
+    ///     e("views/includes/browseruserpropertiesgroup.html")])` 로 받아 둔 두 템플릿을
+    ///     각각 인스턴스화한다. 즉 브라우저 패널이 아는 타입은 **템플릿 12 + JS 1 = 13종**이다.
+    ///   · **`divider` 는 이름이 겹친다 — 어느 namespace 인지 반드시 밝힐 것.** `scripts.js`
+    ///     에서 `divider` 를 *타입 값*으로 쓰는 자리는 넷이고 서로 무관하다:
+    ///       ① byte @757526 `views/includes/browseruserproperties.html`
+    ///          `property.type=='divider'` → `<hr class="fullWidth">` — **이 집합이 다루는 것**
+    ///       ② byte @960811 `views/templates/droplist.html`
+    ///          `ng-class="{divider:option.type=='divider',…}"` — 드롭리스트 항목 구분선
+    ///       ③ byte @1022004 `views/templates/propertylist.html` `ng-switch-when="divider"`
+    ///          (`ng-switch on="property.type"` byte @993662·@994748 아래) — 씬 에디터 인스펙터
+    ///       ④ byte @444157 JS 컨텍스트 메뉴 빌더 `divider:function(){…push({type:"divider"})…}`
+    ///          (소비 byte @440490 `case"divider":`) — 우클릭 메뉴 항목
+    ///     ①만 벽지 유저 프로퍼티다. ②③④를 근거로 끌어 쓰면 틀린다.
+    ///
     /// 아래 집합과의 차이는 **양방향**이고, 어느 쪽도 근거가 없다:
     ///   · **WE 에 있는데 여기 없음(3)**: `volume` `combolutfilters` `divider`
     ///     → 실물이 쓰면 "not editable" 경고가 나간다. 이건 우연히 맞다(`PropertyControl.kind`
@@ -170,11 +300,19 @@ public enum WallpaperCompatibilityAnalyzer {
     ///     - `texture` 는 WE **씬 에디터 오브젝트 인스펙터**의 타입이다(byte @994481,
     ///       `ng-switch on="property.type"` — `readonly`/`readonlycolor` 등과 같은 namespace).
     ///       벽지 `general.properties` 에서는 근거가 없다.
+    ///       [2026-08-21 정정] 그 인스펙터는 `views/templates/propertylist.html` 이고 실측
+    ///       오프셋은 `ng-switch on="property.type"` byte @993662·@994748,
+    ///       `property.type === 'texture'` byte @994719, `ng-switch-when="texture"` byte
+    ///       @1007433 이다. 같은 인스펙터(byte 길이 37,577)가 `ng-switch-when` 으로
+    ///       **59자리 · 고유 56종**을 분기한다(`checkbox` `checkboxbit3` `vec2` `vec3` `vec4`
+    ///       `uvec2` `hue` `huesteps` `knob` `particle` `boneweights` `matrixselector` …) —
+    ///       벽지 프로퍼티 12종과는 **집합 크기부터 다른 별개 namespace** 다.
     ///     - `text` `label` 은 `type==` 비교가 **0건**이다. `text`/`label` 은 프로퍼티의
     ///       **필드 이름**(라벨 문자열·옵션 라벨)이라 형제 키 혼동으로 보인다. [미해결]
     ///   · **이름이 뜻과 어긋난다**: 아래 이슈 문구는 "Waple 의 프로퍼티 패널이 편집 못 한다"인데
     ///     `usershortcut` `group` `text` `label` `texture` 는 이 집합에 있으면서
-    ///     `PropertyControl.kind(forType:)`(`Sources/Waple/AppLogic.swift:365`)가 `.displayOnly` 를
+    ///     `PropertyControl.kind(forType:)`(`Sources/Waple/AppLogic.swift` 의
+    ///     `static func kind(forType type: String) -> Kind`)가 `.displayOnly` 를
     ///     준다 — 즉 **경고가 나가야 하는데 안 나간다**.
     ///
     /// **집합을 지금 고치지 않는 이유**: 설치본 191 + 동봉 170 프로젝트에 등장하는 타입은
@@ -185,6 +323,39 @@ public enum WallpaperCompatibilityAnalyzer {
         "bool", "checkbox", "slider", "combo", "color", "textinput", "text",
         "file", "directory", "scenetexture", "texture", "usershortcut", "group", "label",
     ]
+
+    /// **WE 2.8.42 브라우저 벽지 프로퍼티 패널이 실제로 아는 `type` 전수(13종).** 위 정정 문단의
+    /// 실측을 코드로 굳혀 둔다 — 문서만 고치면 다음 세션이 또 다른 수를 적는다.
+    ///
+    /// 출처는 설치본 `ui/dist/scripts/scripts.js` 한 파일이고 두 갈래다:
+    ///   · 템플릿 `views/includes/browseruserproperties.html` 의 `ng-if` 12종
+    ///     (`color` 만 `===`, 나머지는 `==`; `volume` 은 두 자리)
+    ///   · JS 컨트롤러의 `"group"===l.type` 1종(구획 분할 — 템플릿에는 없다)
+    ///
+    /// **이 집합은 판정에 쓰이지 않는다**(경고를 내는 것은 `currentPropertyTypes` 다). 두 집합의
+    /// 차이를 테스트가 못박기 위한 참조값이다 — 차이가 움직이면 그건 근거가 바뀐 것이므로
+    /// 사람이 다시 봐야 한다. 설치본 191 + 동봉 170 프로젝트에 등장하는 타입은
+    /// `color · slider · combo · bool` 넷뿐이라 아래 차이 전부가 **코퍼스 도달 0건**이다.
+    public static let weBrowserPropertyTypes: Set<String> = [
+        // browseruserproperties.html — ng-if 12종
+        "bool", "color", "combo", "combolutfilters", "directory", "divider",
+        "file", "scenetexture", "slider", "textinput", "usershortcut", "volume",
+        // JS 컨트롤러 `"group"===l.type` — 템플릿 분기가 아니다
+        "group",
+    ]
+
+    /// WE 스키마에는 있는데 `currentPropertyTypes` 에는 없는 타입 — 실물이 쓰면
+    /// `unsupportedPropertyType` 경고가 나간다. 실측 3종(`volume` `combolutfilters` `divider`).
+    public static var wePropertyTypesMissingFromWaple: Set<String> {
+        weBrowserPropertyTypes.subtracting(currentPropertyTypes)
+    }
+
+    /// `currentPropertyTypes` 에는 있는데 WE 벽지 프로퍼티 스키마에는 없는 타입 — 경고가
+    /// 나가야 할지 모르는데 안 나간다. 실측 4종(`checkbox` `text` `texture` `label`);
+    /// 각각의 실제 출처는 위 선언 주석 참조(다른 namespace 이거나 근거 0건).
+    public static var waplePropertyTypesNotInWESchema: Set<String> {
+        currentPropertyTypes.subtracting(weBrowserPropertyTypes)
+    }
 
     /// F230: VideoRenderer.nativeVideoExtensions 와 값이 같아야 하는 사본을 따로 두지 않는다 —
     /// WapleCore.VideoFormats 가 단일 소스(위 currentPropertyTypes 와 동일 원칙).
@@ -206,7 +377,23 @@ public enum WallpaperCompatibilityAnalyzer {
         )
     }
 
-    private static func projectContainerURL(for root: URL) -> URL {
+    /// **코퍼스 열거의 단일 소스 ①** — 루트에서 "프로젝트 폴더들이 들어 있는 컨테이너" 를 고른다.
+    ///
+    /// [2026-08-21 클러스터 BE] 종전에는 이 규칙의 **사본이 셋**이었다:
+    /// `WallpaperCompatibilityAnalyzer`(여기) · `DeepScan.projectContainer` ·
+    /// `SnapshotPipeline.sceneContainer`. 앞의 둘은 글자만 다르고 뜻이 같았지만 셋째는
+    /// **첫 분기(`backgrounds/project.json` 존재)를 통째로 빼먹은 채 주석에는
+    /// "DeepScan.projectContainer 와 동일 규칙" 이라고 적혀 있었다.** 즉 그 자리는
+    /// `backgrounds` 라는 이름의 프로젝트 폴더가 있는 루트에서 컨테이너를 한 칸 잘못 골랐다
+    /// (설치본·동봉 도달 0건 — 두 트리에 그런 폴더가 없다. 그래서 아무도 못 봤다).
+    /// 사본이 하나면 다시 갈릴 수 없다 — 세 소비처가 전부 이 함수를 부른다.
+    ///
+    /// 규칙(세 갈래, 순서가 중요하다):
+    ///   ① `<root>/backgrounds/project.json` 이 있으면 `backgrounds` 자체가 **프로젝트 폴더**다
+    ///      → 컨테이너는 `root`.
+    ///   ② `<root>/backgrounds` 가 디렉터리면 WE 개발 루트 배치다 → 컨테이너는 그 디렉터리.
+    ///   ③ 아니면 `root` 그대로(= `backgrounds` 를 직접 지정했거나 단일 프로젝트 폴더).
+    public static func projectContainerURL(for root: URL) -> URL {
         let backgrounds = root.appendingPathComponent("backgrounds", isDirectory: true)
         if FileManager.default.fileExists(atPath: backgrounds.appendingPathComponent("project.json").path) {
             return root
@@ -218,7 +405,14 @@ public enum WallpaperCompatibilityAnalyzer {
         return root
     }
 
-    private static func projectFolders(in container: URL) throws -> [URL] {
+    /// **코퍼스 열거의 단일 소스 ②** — 컨테이너 아래에서 `project.json` 을 가진 폴더 전부(정렬).
+    /// 컨테이너 자신이 `project.json` 을 가지면 `[container]` 하나를 준다(단일 프로젝트 모드).
+    ///
+    /// `throws` 인 이유: 디렉터리를 못 읽는 것(권한·경로 오타)은 **"프로젝트 0개" 와 다른 사건**이다.
+    /// 조용히 `[]` 를 돌려주면 호출측이 "빈 코퍼스" 로 오인하고 성공 종료한다(F150/F151·F520 이
+    /// 반복해서 막은 바로 그 류). 0 개를 `[]` 로 받고 싶은 호출측은 `try?` 로 명시적으로 삼켜라 —
+    /// `DeepScan`/`SnapshotPipeline` 이 그렇게 한다(둘 다 자체 0건 가드를 따로 들고 있다).
+    public static func projectFolders(in container: URL) throws -> [URL] {
         if FileManager.default.fileExists(atPath: container.appendingPathComponent("project.json").path) {
             return [container]
         }
@@ -499,6 +693,43 @@ public enum WallpaperCompatibilityAnalyzer {
         ))
     }
 
+    /// 표시 조건식(`condition`)이 Waple 에서 어디까지 되는지 — **두 스캐너의 단일 소스**.
+    ///
+    /// [2026-08-21 클러스터 BE] 종전에는 같은 사실을 두 갈래로 셌다:
+    ///   · 분석기: `canEvaluate(c)` 하나 — 거짓이면 `propertyDisplayCondition` 경고.
+    ///   · `DeepScan.scanProperties`: `canEvaluate(c) && evaluate(c, values:) != nil` —
+    ///     리포트의 `conditions evaluable` 백분율.
+    /// 두 술어가 **다른 것을 재는데 이름도 주석도 그 차이를 말하지 않았다.** 사다리로 못박는다:
+    /// `none ⊂ unsupported | parsedOnly ⊂ evaluated`.
+    ///
+    /// **빈 조건은 `none` 이다 — WE 규약이다.** 브라우저 템플릿이
+    /// `ng-if="!property.condition || evalCondition(property.condition)"` 라 빈 문자열은 JS 에서
+    /// falsy → `evalCondition` 을 **부르지 않고** 항상 표시한다. Waple 의 평가기도 같은 결과를
+    /// 낸다(`Tokenizer` 가 빈 토큰열이면 `(true, exact)`). 설치본 도달 **1건**
+    /// (`projects/defaultprojects/dino_run` 의 `god_rays`, `type: bool`, `condition: ""`) —
+    /// 종전에도 두 스캐너가 이 1건을 서로 다른 이유로 조용히 통과시켰다(분석기는 평가기가
+    /// true 를 주기 때문에, DeepScan 은 `!c.isEmpty` 로 걸러내기 때문에). 이제 같은 이유다.
+    public enum PropertyConditionSupport: String, Equatable, Sendable {
+        /// 조건 자체가 없다(키 부재 또는 공백뿐) — WE 도 평가하지 않는다.
+        /// (`none` 이 아니라 `absent` 인 이유: `Optional.none` 과 이름이 겹치면 `switch` 에서
+        ///  어느 쪽인지 읽는 사람이 헷갈린다.)
+        case absent
+        /// 파서가 정확히 못 읽는다(미지원 문법, 또는 삼항 근사) → 분석기 경고 대상.
+        case unsupported
+        /// 파스는 정확한데 주어진 값 사전으로는 Bool 이 안 나온다(미정의 키 참조 등).
+        case parsedOnly
+        /// 파스 + 평가 둘 다 된다.
+        case evaluated
+    }
+
+    public static func conditionSupport(_ condition: String?,
+                                        values: [String: PropertyValue]) -> PropertyConditionSupport {
+        guard let condition,
+              !condition.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .absent }
+        guard PropertyConditionEvaluator.canEvaluate(condition) else { return .unsupported }
+        return PropertyConditionEvaluator.evaluate(condition, values: values) == nil ? .parsedOnly : .evaluated
+    }
+
     private static func analyzeProperties(raw: [String: Any],
                                           projectID: String,
                                           issues: inout [WallpaperCompatibilityIssue]) -> [String: Int] {
@@ -518,8 +749,7 @@ public enum WallpaperCompatibilityAnalyzer {
                     propertyKey: key
                 ))
             }
-            if let condition = property["condition"] as? String,
-               !PropertyConditionEvaluator.canEvaluate(condition) {
+            if conditionSupport(property["condition"] as? String, values: [:]) == .unsupported {
                 issues.append(WallpaperCompatibilityIssue(
                     severity: .warning,
                     code: .propertyDisplayCondition,
@@ -556,39 +786,23 @@ public enum WallpaperCompatibilityAnalyzer {
 
         for source in webFeatureSources(entryPath: fileName, folderURL: folderURL) {
             let text = source.text
-            if text.contains("wallpaperPropertyListener") {
-                features.insert("propertyListener")
-            }
-            if text.contains("wallpaperWillGoBackground") || text.contains("wallpaperWillGoForeground") {
-                features.insert("webLifecycle")
-            }
-            // F235: 아래 4건은 종전엔 features.insert 만 하고 issue 로 승격하지 않아 markdown/JSON 요약·
-            // --strict 게이트 어디에도 반영되지 않았다(detectedFeatures 에만 남아 사람이 안 읽는 한
-            // 소실). add(...) 로 최소 .warning 승격 — feature 키 자체는 하위호환을 위해 그대로 둔다.
-            // F424: relativePath 는 엔트리 fileName 이 아니라 실제 탐지 파일(source.path) — include 된
-            // JS 에서 serviceWorker 등을 탐지한 경우에도 종전엔 경고가 항상 index.html 을 가리켰다.
-            if text.range(of: "serviceWorker", options: .caseInsensitive) != nil {
-                add("serviceWorker", .webServiceWorker, .warning, "Web wallpaper touches the serviceWorker API; Waple's offline WKWebView may not offer full parity for background sync/fetch interception.", path: source.path)
-            }
-            if text.contains("wallpaperRequestRandomFileForProperty") {
-                add("randomFile", .webRandomFileBridge, .warning, "Web wallpaper requests random files; returned paths and directory modes need Wallpaper Engine parity.", path: source.path)
-            }
-            // [3차 웨이브 AB] WE 웹 브리지 13종 중 Waple 이 **정의하지 않는** 유일한 이름
-            // (선언부 `webPluginBridge` 주석의 근거 참조). 설치본 web 2/2 도달.
-            if text.contains("wallpaperPluginListener") {
-                add("pluginBridge", .webPluginBridge, .warning, "Web wallpaper registers a Wallpaper Engine plugin listener (iCUE/Chroma LED channel); Waple's WKWebView bridge does not define wallpaperPluginListener, so those callbacks never arrive.", path: source.path)
-            }
-            if text.contains("wallpaperRegisterAudioListener") {
-                add("audioListener", .webAudioListener, .warning, "Web wallpaper registers a Wallpaper Engine audio listener; verify Waple's audio bridge coverage for this project.", path: source.path)
-            }
-            if text.contains("wallpaperRegisterMedia") || text.contains("wallpaperMedia") {
-                add("mediaIntegration", .webMediaIntegration, .warning, "Web wallpaper uses Wallpaper Engine media integration bridges; coverage may be partial.", path: source.path)
-            }
-            if text.range(of: #"\bwebgl\b|OES_"#, options: [.regularExpression, .caseInsensitive]) != nil {
-                features.insert("webGL")
-            }
-            if text.range(of: #"file:///"#, options: [.caseInsensitive]) != nil {
-                features.insert("fileURL")
+            // [2026-08-21 클러스터 BE] **탐지 문자열은 `WebBridgeSignal` 하나가 갖는다.**
+            // 종전에는 같은 마커 문자열이 이 루프와 `DeepScan.scanWeb` 두 곳에 리터럴로 박혀
+            // 있었고 그래서 개수가 갈렸다(여기 10종 · DeepScan 2종). 문구·등급만 여기서 붙인다.
+            // `allCases` 순서 = 선언 순서라 이슈 생성 순서도 결정적이다.
+            let signals = WebBridgeSignal.signals(in: text)
+            for signal in WebBridgeSignal.allCases where signals.contains(signal) {
+                guard let code = signal.issueCode else {
+                    features.insert(signal.rawValue)
+                    continue
+                }
+                // F235: 종전엔 features.insert 만 하고 issue 로 승격하지 않아 markdown/JSON 요약·
+                // --strict 게이트 어디에도 반영되지 않았다(detectedFeatures 에만 남아 사람이 안 읽는 한
+                // 소실). add(...) 로 최소 .warning 승격 — feature 키 자체는 하위호환을 위해 그대로 둔다.
+                // F424: relativePath 는 엔트리 fileName 이 아니라 실제 탐지 파일(source.path) —
+                // include 된 JS 에서 serviceWorker 등을 탐지한 경우에도 종전엔 경고가 항상
+                // index.html 을 가리켰다.
+                add(signal.rawValue, code, .warning, signal.issueMessage, path: source.path)
             }
             // **[3차 웨이브 AB] 종전 `https?://` 맨 부분일치는 설치본에서 2/2 전건 거짓 양성이었다.**
             // 잡힌 두 건은 요청이 아니라 (a) 미니파이 라이브러리의 라이선스 배너(`http://greensock.com`
@@ -607,6 +821,9 @@ public enum WallpaperCompatibilityAnalyzer {
             // **알려진 한계(고치지 않음)**: URL 이 변수를 거치면(`var u = "https://…"; fetch(u)`)
             // 못 잡는다. 정적 문자열 스캔의 원리적 한계이고, 종전 규칙은 그 대신 모든 문자열을
             // 잡아 정밀도를 0 으로 만들었다.
+            //
+            // `WebBridgeSignal` 에 넣지 않은 이유: 이 신호만 **값**(찾은 URL)을 문구에 실어야 해서
+            // Bool 술어로 환원되지 않는다.
             if let remote = remoteRequestURL(in: text) {
                 add("remoteNetwork", .remoteNetworkReference, .warning, "Web wallpaper issues a request to a remote (non-local) URL (\(remote)); Waple's offline WKWebView may block or fail it.", path: source.path)
             }
