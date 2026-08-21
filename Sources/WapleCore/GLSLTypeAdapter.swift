@@ -50,6 +50,17 @@ public enum GLSLTypeAdapter {
                 while i < chars.count, chars[i].isNumber || chars[i] == "." || chars[i] == "e" || chars[i] == "E"
                     || ((chars[i] == "+" || chars[i] == "-") && (t.last == "e" || t.last == "E"))
                     || chars[i] == "f" || chars[i] == "F" { t.append(chars[i]); i += 1 }
+                // GLSL unsigned 리터럴 접미 `u`/`U`(`6u`, `1u`, `12u`). 종전엔 이 글자가 숫자 토큰에
+                // 안 붙어 `6u` 가 [숫자 6][식별자 u] 두 토큰으로 갈렸고, 괄호 안에서 `%` 를 만나면
+                // 파서가 어긋나 **문법이 깨진 MSL** 을 냈다 — 실측: 동봉 `shaders/shadowcaster.vert:56`
+                // `(morphMapOffset * 6u) % 4u` → `(morphMapOffset * 6ufmod(), 4.0)u`
+                // (shadowcaster/shadowcasterfoliage4/shadowcasterfur4 3건, MORPHING_NORMALS=1 분기).
+                // `6units` 같은 식별자 오탐 방지를 위해 **접미 뒤가 식별자 문자가 아닐 때만** 붙인다
+                // (기존 `f`/`F` 는 무조건 소비 — 이 함수의 기존 동작이라 건드리지 않는다).
+                if i < chars.count, chars[i] == "u" || chars[i] == "U",
+                   !(i + 1 < chars.count && (chars[i + 1].isLetter || chars[i + 1].isNumber || chars[i + 1] == "_")) {
+                    t.append(chars[i]); i += 1
+                }
                 out.append(Tok(trivia: trivia, text: t)); continue
             }
             if i + 1 < chars.count, two.contains(String([c, chars[i + 1]])) {
@@ -68,7 +79,8 @@ public enum GLSLTypeAdapter {
         case .some(.vec2): return 2
         case .some(.vec3): return 3
         case .some(.vec4): return 4
-        case .some(.mat2), .some(.mat3), .some(.mat4), .some(.mat4x3), .some(.sampler2D): return 0
+        case .some(.mat2), .some(.mat3), .some(.mat4), .some(.mat4x3): return 0
+        case .some(.sampler2D), .some(.sampler2DComparison), .some(.sampler3D): return 0
         case .none:
             // uint 도 int 와 동일한 스칼라(1) — nil 이면 uint 선언이 statement(:173)에서 선언으로
             // 인식되지 않아 intVars 등록(:195)·min/max 모호성 캐스트가 누락된다.
@@ -347,10 +359,33 @@ public enum GLSLTypeAdapter {
             let size = (lhs.size == 0 || rhs.size == 0) ? 0 : max(lhs.size, rhs.size)
             if opTok.text == "%" {
                 // MSL 의 % 는 정수 전용(실물 Simple_Audio_Bars 의 float %) — 양쪽이 int 확실일 때만 유지.
+                // 단일 피연산자 판정: 정수 리터럴(`4`, `4u`) 또는 알려진 정수 변수.
+                func atomIntish(_ raw: String) -> Bool {
+                    var t = raw.trimmingCharacters(in: .whitespaces)
+                    // GLSL unsigned 리터럴 접미 제거(`12u` → `12`) — 정수 리터럴이므로 `%` 를 유지해야
+                    // 한다. 종전엔 `12u` 가 "숫자 전부" 판정에 걸리지 않아 fmod 로 강등됐다.
+                    if t.count > 1, t.hasSuffix("u") || t.hasSuffix("U") { t = String(t.dropLast()) }
+                    return (!t.isEmpty && t.allSatisfy { $0.isNumber }) || p.intVars.contains(t)
+                }
                 func intish(_ n: Node) -> Bool {
                     let t = n.text.trimmingCharacters(in: .whitespaces)
-                    return t.allSatisfy { $0.isNumber } || p.intVars.contains(t)
-                        || t.hasPrefix("int(") || t.hasPrefix("uint(")   // 명시 캐스트(실물 i % int(4))
+                    if t.hasPrefix("int(") || t.hasPrefix("uint(") { return true }  // 명시 캐스트(실물 i % int(4))
+                    if atomIntish(t) { return true }
+                    // 괄호 산술식도 피연산자가 전부 정수면 정수다 — 실물
+                    // `shaders/shadowcaster.vert:56` 의 `(morphMapOffset * 6u) % 4u` 가 이 형태이고,
+                    // 종전 판정(원자만)은 이걸 놓쳐 uint 식을 `fmod` 로 강등했다.
+                    // 판정은 **보수적**이다: 하나라도 모르면 false → fmod → uint 인자로 MSL 컴파일
+                    // 실패 → 폴백. 이 리포 규약("오역보다 폴터")대로 조용히 틀리지 않는다.
+                    let pieces = t.split(whereSeparator: { "+-*/%() ".contains($0) }).map(String.init)
+                    guard !pieces.isEmpty else { return false }
+                    var i = 0
+                    while i < pieces.count {
+                        // `int(`/`uint(` 캐스트: 이름 다음 조각은 캐스트 인자라 정수성이 강제된다.
+                        if pieces[i] == "int" || pieces[i] == "uint" { i += 2; continue }
+                        guard atomIntish(pieces[i]) else { return false }
+                        i += 1
+                    }
+                    return true
                 }
                 if intish(lhs) && intish(rhs) {
                     lhs = Node(text: lhs.text + opTok.full + rhs.text, size: size)
@@ -529,7 +564,11 @@ public enum GLSLTypeAdapter {
     private static func callSize(_ name: String, argSizes: [Int], env: Env) -> Int {
         if let n = typeSize(name), n > 0 { return n }               // vecN/floatN 생성자
         if name == "texSample2D" || name == "texSample2DLod" || name == "texLoad2D"
-            || name == "texSample2DBackBuffer" { return 4 }   // 텍스처 페치/샘플 계열은 float4(RE shim :66/:70-71)
+            || name == "texSample2DBackBuffer"
+            // texSample3D(shim :68) 는 `s.Sample` = float4, texSample2DCompare(shim :64) 는 HLSL 상
+            // 스칼라지만 번역기가 float4 로 감싸므로(translateBody 2a4) 여기서도 4 다 — 이 값이
+            // `vec3 x = texSample3D(...)`(실물 ccsimple.frag:32) 의 암시적 절단(.xyz)을 만든다.
+            || name == "texSample3D" || name == "texSample2DCompare" { return 4 }
         if name == "cross" { return 3 }
         if scalarFns.contains(name) { return 1 }
         if broadcastFns.contains(name) {
