@@ -160,7 +160,12 @@ final class SceneVolumetricMathTests: XCTestCase {
     /// macOS 렌더 테스트(`VolumetricLightTests.directionFixtureInput`)와 **같은 픽스처**.
     /// 카메라 eye (0,0,10) → 원점 · up (0,1,0) ⇒ fwd (0,0,-1) · right (1,0,0) · camUp (0,1,0).
     /// near/far 는 씬 미저작 기본값(0.1 / 10000), fov 50, 라이트는 원점의 정면 스팟
-    /// (`innercone 10` / `outercone 30` → 현행 2D 포트 변환기가 주는 `cos5°`/`cos15°`).
+    /// (`innercone 10` / `outercone 30` 을 **종전** 변환기(`× 0.5`)가 주던 `cos5°`/`cos15°`.
+    ///  2026-08-21 에 변환기가 `cos10°`/`cos30°` 로 정정됐지만, 이 픽스처는 아래 골든 값과
+    ///  짝이라 **의도적으로 옛 코사인을 리터럴로 고정**한다 — 여기서 재는 것은 콘 규약이
+    ///  아니라 마치 산술이다. 콘 규약을 재는 곳은 `SceneSpotConeTests` 이고,
+    ///  변환기를 실제로 태우는 픽스처는 `Tests/WapleRenderTests/VolumetricLightTests.swift`
+    ///  다(그쪽 골든은 새 콘으로 갱신했다).
     private static func fixture(radius: Float) -> SceneWEVolumetricMath.PixelInput {
         SceneWEVolumetricMath.PixelInput(
             eye: SIMD3(0, 0, 10), forward: SIMD3(0, 0, -1), right: SIMD3(1, 0, 0), up: SIMD3(0, 1, 0),

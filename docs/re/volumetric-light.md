@@ -225,6 +225,13 @@ V1 PBR 패커도 똑같다(`0x140192e64`–`0x140192e86` inner → `g_LSpot_Orig
 `0x140192eaa`–`0x140192ebf` outer → `g_LSpot_Direction[i].w`; 같은 `xmm7` deg2rad,
 적재 `0x1401910bf`). 즉 **볼류메트릭과 PBR 두 레인이 같은 규약**이다.
 
+> **[해소 2026-08-21]** 아래 문단은 **더 이상 사실이 아니다** — 산식을 한 벌로 접었다.
+> `SceneLight3D.forwardSpotConeCosines`(WapleCore)에서 `* 0.5` 를 지워 그것이 리포 단일
+> 정본이 되었고, `Scene3DLighting.spotConeCosines` 는 그 함수로 **위임**한다(3D 레인 값 무변경).
+> 처치를 "호출부 한 줄 교체" 가 아니라 **정본 접기**로 간 이유는, 한쪽만 고치면 같은 종류의
+> 갈림이 또 나기 때문이다. 근거·값 대조·화면 도달은 `docs/re/scene-lighting.md` §10.
+> 아래 문단은 그때의 진단 기록으로 남긴다(줄 번호 인용은 이미 밀려 있다 — 그 자체가 사례다).
+
 **Waple 은 지금 이 자리에서 갈린다.** 호출부 `SceneRenderer3D.swift:1918` 이
 `SceneLight3D.forwardSpotConeCosines`(`SceneDocument.swift:960`)를 쓰는데 그 함수는 아직
 `toHalfRadians = π/180 * 0.5`(`:962`)를 곱한다 — 저작 `innercone 10 / outercone 30` 이
@@ -448,7 +455,9 @@ diff <(cd Sources/WapleRender/Resources/WEAssets && find . -name '*scene*.json' 
    저장한 뒤 `encode` 에 넘기면 `_rt_volumetricsSingle` 과 같은 역할을 해서 샤프트가
    지오메트리에 가려진다. 그전까지는 통과한다. 설계 전문은 **§7.2**.
 
-3. 🔴 **콘 코사인이 반으로 좁다 — 한 줄 패치.** `SceneRenderer3D.swift:1918` 이
+3. ~~🔴 **콘 코사인이 반으로 좁다 — 한 줄 패치.**~~ **[해소 2026-08-21]** 정본을 하나로
+   접어 닫았다(`scene-lighting.md` §10). 아래는 그때의 제안 기록이다.
+   `SceneRenderer3D.swift:1918` 이
 
    ```swift
    let cone = SceneLight3D.forwardSpotConeCosines(inner: light.innerCone, outer: light.outerCone)
@@ -744,6 +753,14 @@ light.castVolumetrics`). 골든도 안 바뀐다 — CI 에서 도는 유일한 
 ---
 
 ## 7. W-17 (깊이 기반 5패스) — 설계안과 A/B 절차 `[미구현·검증 불가]`
+
+> **[2026-08-21] 단계 1(씬 뎁스 클립)은 구현했다.** 아래 "구현하지 않는다" 는 **단계 1 에
+> 한해 무효**다 — 그 단계는 RT 를 새로 짓지 않고 **이미 있는 pooled depth 를 읽기 가능하게
+> 만들어 넘기는 것**이라 구조 변경이 아니다. 나머지 단계(라이트버퍼 RT 세 장 + 파이프라인 넷)는
+> 여전히 미구현이다. 실제 처치와 CPU 미러는 `scene-lighting.md` §10 참조.
+> 그리고 아래 7.2 의 "`depth32Float` 이면 `texture2d<float>` 로 읽는다" 는 **틀렸다** —
+> MSL 에서 `depth32Float` 텍스처는 `depth2d<float>` 여야 한다(그대로 따라 하면 파이프라인
+> 생성이 실패한다).
 
 **이 컨테이너에서는 구현하지 않는다.** 리눅스에 Metal 이 없어 파이프라인·RT·컬링을 한 줄도
 실행 검증할 수 없고, W-17 은 RT 세 장 + 파이프라인 넷을 새로 짓는 구조 변경이다. 검증 없는

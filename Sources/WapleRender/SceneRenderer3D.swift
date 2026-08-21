@@ -1178,15 +1178,25 @@ extension SceneRenderer {
     }
 
     /// 뎁스 텍스처(크기별 캐시). 메시 패스 전용 — 컬러 풀(pooledOffscreen)과 분리.
+    ///
+    /// **W-17 단계 1: `.shaderRead` 를 함께 준다.** 볼류메트릭(갓레이) 패스가 이 텍스처를
+    /// `depth2d<float>` 로 읽어 레이마치 출구를 지오메트리에서 자른다(WE `volumetricsfront.frag:64,71`
+    /// `backDepth = min(backDepth, limitDepth)`). 종전엔 `usage = [.renderTarget]` 뿐이라
+    /// 샘플 자체가 불가능했고 샤프트가 오브젝트를 통과했다.
+    ///
+    /// 사용 플래그는 **무조건** 준다(볼류메트릭 씬 여부와 무관). 프레임마다 바뀌면 텍스처를
+    /// 다시 만들어야 하는데, 이 캐시의 키는 크기뿐이라 플래그 변화를 표현할 수 없다 —
+    /// 조건부로 만들면 "먼저 만들어진 쪽" 이 이기는 조용한 버그가 된다. 실제 비용은
+    /// `.store` 쪽이고 그건 아래 `needsDepthStore` 가 볼류메트릭 씬에서만 켠다.
     func pooledDepth(_ w: Int, _ h: Int, _ device: MTLDevice) -> MTLTexture? {
         let key = "\(max(w, 1))x\(max(h, 1))"
         if let t = depthTextures[key] { return t }
-        // 크기 변경(리사이즈/캡처) 시 이전 크기 evict — 뎁스는 패스 내 일시 자원(storeAction .dontCare)
-        // 이라 프레임 간 내용 지속이 없고, 한 시점엔 한 타깃 크기만 쓴다.
+        // 크기 변경(리사이즈/캡처) 시 이전 크기 evict — 뎁스 내용은 프레임 간 지속되지 않고
+        // (매 패스 loadAction .clear), 한 시점엔 한 타깃 크기만 쓴다.
         depthTextures.removeAll()
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float,
                                                          width: max(w, 1), height: max(h, 1), mipmapped: false)
-        d.usage = [.renderTarget]
+        d.usage = [.renderTarget, .shaderRead]
         d.storageMode = .private
         guard let t = device.makeTexture(descriptor: d) else { return nil }
         depthTextures[key] = t
@@ -1578,9 +1588,16 @@ extension SceneRenderer {
         // H4: refract 메시도 인코더 분할(아래 드로 루프의 H4 분기)이 생기므로 프레임버퍼 빌보드와 같은 이유로
         // 뎁스 .store 게이트에 포함(분할 전 패스가 dontCare 면 재개 패스의 뎁스가 미정의 — F311 주석 참조).
         // M6(⑥): reflect 메시도 동일 이유로 인코더 분할 — 게이트에 포함.
+        // W-17 단계 1: 볼류메트릭(갓레이) 패스는 메시 패스가 **끝난 뒤** 그 뎁스를 샘플해
+        // 레이마치 출구를 자른다 — `.dontCare` 로 두면 그 텍스처 내용이 미정의라 샤프트가
+        // 임의로 잘리거나 통째로 사라진다. 아래 볼류메트릭 루프의 진입 조건과 **같은 식**이어야
+        // 하므로 한 상수로 뽑아 두 자리가 같이 움직이게 한다.
+        let hasVolumetrics = volumetricLightPass != nil
+            && scene3DLights.contains(where: { $0.castVolumetrics })
         let needsDepthStore = billboards.contains { $0.isFrameBuffer }
             || meshRenderables.contains { $0.meshes.contains { $0.refract && $0.refractNormal != nil } }
             || meshRenderables.contains { $0.meshes.contains { $0.reflection } }
+            || hasVolumetrics
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = target
         rpd.colorAttachments[0].loadAction = .clear
@@ -1910,8 +1927,13 @@ extension SceneRenderer {
         enc.endEncoding()
         // H5: 볼륨 라이트 샤프트 — castVolumetrics 라이트를 additive로 합성(3D 씬 렌더 후).
         // P④: 방향은 SceneLight3D.forwardLightAxis(오일러→월드 forward, 2D 포워드 라이팅과 동일 변환기),
-        // 콘은 forwardSpotConeCosines(전각·도 → half-angle 코사인)로 정본 경유 — 셰이더가 코사인 슬롯을
-        // 기대하는데 종전엔 오일러 각·도 원값을 그대로 넘겨 방향/콘 감쇠가 무의미했다.
+        // 콘은 forwardSpotConeCosines(저작 반각·도 → 코사인)로 **리포 단일 정본** 경유 — 셰이더가
+        // 코사인 슬롯을 기대하는데 종전엔 오일러 각·도 원값을 그대로 넘겨 방향/콘 감쇠가 무의미했다.
+        // 그 뒤로도 이 호출부와 3D PBR 레인(Scene3DLighting.resolveLights)이 **서로 다른 콘 변환기**를
+        // 써서 같은 라이트가 포워드와 갓레이에서 폭이 2배 갈렸는데, 지금은 두 이름이 한 구현이다.
+        //
+        // W-17 단계 1: `depthTex` 를 넘긴다 — 위 needsDepthStore(hasVolumetrics 포함)가 이 텍스처를
+        // .store 로 남겨 두므로 내용이 유효하다. 진입 조건은 hasVolumetrics 와 같은 식이어야 한다.
         if let volumetricLightPass {
             for light in scene3DLights where light.castVolumetrics {
                 let axis = SceneLight3D.forwardLightAxis(angles: light.angles)
@@ -1919,6 +1941,7 @@ extension SceneRenderer {
                 let ok = volumetricLightPass.encode(
                     commandBuffer: cb,
                     destination: target,
+                    sceneDepth: depthTex,
                     cameraEye: eye,
                     cameraFwd: fwd,
                     cameraRight: right,
@@ -2306,7 +2329,10 @@ extension SceneRenderer {
         // `ctx+0xAF0` 은 **렌더 패스의 stack0 루트 스냅샷**이다 — 컨텍스트 생성 시 항등(0x14017cbbf–
         // 0x14017cc0a, 세 스택 베이스 ctx+0x2F0/0x4F0/0x6F0 도 같은 자리에서 항등 0x14017d56c–0x14017d60f),
         // 씬 패스 진입 직후 `ctx+0xAF0..0xB2F := *[ctx+0x30]` 로 루트를 떠 두고(0x1401ecd03–0x1401ecd2b,
-        // 패스 변종 0x1402083dd–0x140208405), 패스 종료 시 다시 항등(0x1401ecece–0x1401ecf1c).
+        // 패스 변종 0x1402083dd–0x140208405), 패스 종료 시 다시 항등(0x1401ececb–0x1401ecf20 —
+        // `mov qword ptr [rax + 0xaf0], 0x3f800000` 부터 `mov dword ptr [rax + 0xb2c], 0x3f800000`
+        // 까지, 다음 명령이 0x1401ecf20 `mov rax, [rsi + 0xc8]`. 함수는 0x1401ecb20–0x1401ecfd7).
+        // [VA-정정] 2026-08-21 — 종전 표기 0x1401ecece–0x1401ecf1c 는 양 끝이 다 명령 내부였다(시작 +3 · 끝 +6).
         // 2D 정사영 패스에서 그 루트는 `inverse(씬 루트 4×4)` = **뷰 행렬**임이 보인다(0x1401ecbf8 의
         // vfunc `+0x80` → 0x14005f730 역행렬 → 0x1401ecc30 이 stack0 베이스에 기록; stack1 베이스는 항등,
         // stack2 베이스는 ortho `[vtbl+0x18]` @0x1401eccf9). 3D 패스는 `[scene+0x304] & 2` 로 이 셋업을

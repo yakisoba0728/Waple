@@ -112,11 +112,23 @@ light = PerformLighting_V1(v_WorldPos, albedo.rgb, normal, normalizedViewVector,
 `0x1401691b8`(`"LIGHTING"` @`0x140486930`). 생성기는 **`LIGHTING == 0` 이면 아무것도 안 찍고
 곧바로 반환한다**(`0x14016922a` `je 0x14016b0b2`).
 
-**⛔️ 함수 범위 정정.** `Scene3DLighting.swift:272`(수정 전)의 `0x1401691c0–0x14016b154` 는 오기였다.
-`primary(0x1401691c0)` 실측 = **`0x140169140`–`0x14016b0d4`**(`ret` @`0x14016b0cc`). 바로 뒤
+**⛔️ 함수 범위 정정.** `Scene3DLighting.swift` 의 생성기 범위 주석(수정 전)은 오기였다.
+`merged()`/`primary()` 실측 = **`0x140169140`–`0x14016b0d4`**(`ret` @`0x14016b0cc`). 바로 뒤
 `0x14016b0e0`–`0x14016c3f8` 은 스니펫이 아니라 **전처리기 디렉티브 파서**
 (정규식 `^\s*#\s*([a-z]+)\b\s*(.*)` @`0x14048d048`, `ifdef`/`ifndef`/`else`/`endif`/`require`/`undef`)다.
 HLSL 판 라이트 배열은 또 다른 함수 `0x1400f5cb0`–`0x1400f8520`(§3.4)에 있다.
+
+> **정정 기록 — 옛 인용 세 개** (2026-08-21 재확인). 지우지 않고 남긴다: 무엇이 틀렸는지가 같이
+> 남아야 다음 사람이 다시 베끼지 않는다(방법론 함정 16). 셋 다 `.pdata` 함수 **시작에서 선형으로**
+> 다시 떠서 확인했고, 세 주소 모두 **명령 경계조차 아니다**.
+>
+> | 옛 인용(`[VA-정정]` = `scripts/re/va_citations.py` 면제 마커) | 실제 명령(경계) | 밀림 | 그 주소를 품는 함수(`merged()`) |
+> | --- | --- | --- | --- |
+> | `0x140168000` `[VA-정정]` | `0x140167ffe  mov edi, dword ptr [rbp - 0x5d]` | +2 | `0x140167e10`–`0x140169138` — 생성기 **앞** 함수 |
+> | `0x1401691c0` `[VA-정정]` | `0x1401691bf  call 0x140420ff0` (`memcmp`; 직전 `0x1401691b8 lea rdx, "LIGHTING"`) | +1 | `0x140169140`–`0x14016b0d4` — 생성기 본체 |
+> | `0x14016b154` `[VA-정정]` | `0x14016b151  mov qword ptr [rbp + 0x60], 2` | +3 | `0x14016b0e0`–`0x14016c3f8` — 전처리기 디렉티브 파서 |
+>
+> 검사는 `WE_ROOT=... python3 scripts/re/va_citations.py docs/re/scene-lighting.md` 로 재현된다.
 
 ### 2.2 생성기가 찍는 GLSL 전문 (문자열 원문)
 
@@ -457,7 +469,7 @@ point 섀도우 2, S_proj 슬롯 5(mat4 4 + vec4 1).
 
 deg→rad 상수 `0.01745329238474369` 적재는 `0x1401910bf`(원본 `0x140492628`). **`* 0.5` 는 없다** —
 `innercone`/`outercone` 은 광축 기준 **반각(도)** 이고 셰이더가 `smoothstep(cos(outer), cos(inner), cosθ)`
-로 쓴다. (`Scene3DLighting.spotConeCosines` 주석과 동일 결론.)
+로 쓴다. 재검증 절차와 Waple 쪽 통합은 **§10**.
 
 ### 3.4 HLSL 백엔드 — 같은 배열, 다른 타입
 
@@ -796,12 +808,12 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
 
 ### 7.2 주석 정정 둘
 
-- `Scene3DLighting.swift` 의 생성기 범위 `0x1401691c0–0x14016b154` → **`0x140169140–0x14016b0d4`**
+- `Scene3DLighting.swift` 의 생성기 범위(옛 인용은 **§2.1 정정 표**) → **`0x140169140–0x14016b0d4`**
   (`primary()` 실측). 인접 `0x14016b0e0–0x14016c3f8` 이 전처리기 파서라는 것과 HLSL 판이
   `0x1400f5cb0–0x1400f8520` 이라는 것도 같이 적었다.
-- **`ScenePBRLighting.swift` 의 같은 범위가 `0x140168000–0x14016b154` 로 또 달랐다** — 양쪽 끝이
-  다 틀렸다. `primary(0x140168000)` = `0x140167e10–0x140169138`(앞 함수),
-  `primary(0x14016b154)` = `0x14016b0e0–0x14016c3f8`(뒤 함수). 정정했다.
+- **`ScenePBRLighting.swift` 의 같은 범위가 또 달랐다 — 양쪽 끝이 다 틀렸다**(옛 인용 두 개 모두
+  §2.1 정정 표). 시작은 생성기 **앞** 함수 안(`0x140167e10`–`0x140169138`), 끝은 **뒤** 함수 안
+  (`0x14016b0e0`–`0x14016c3f8`)이었다. 정정했다.
   `scripts/spec/check_address_ranges.py` 는 **시작 < 끝** 만 보므로 이 부류를 못 잡는다(§9-9).
 - `QuadShaders.swift` 의 "슬롯 8" 주석은 WE 실물 규약(니블 상한 15 / 2비트 3 / 배열 길이 = 저작값)을
   이미 담고 있었고, "3D 는 미배선" 문장만 배선 완료로 고쳤다. 2D 레인은 여전히 미배선이다.
@@ -842,7 +854,7 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
 | "`spotcookie` 는 `spot` 과 별개 배열" | 배열은 `g_LSpot_*[LIGHTS_SPOT]` 하나뿐이고 4구간으로 나뉜다(§3.3 커서 4개). |
 | "쿠키 spot 도 innercone/outercone 콘을 쓴다" | 블록 #3/#4 에 `smoothstep` 문자열이 없다. 쿠키가 콘을 **대체**한다. |
 | "tube 는 castshadow 를 존중한다" | tube 블록 문자열이 `0x14048c9e0` 하나뿐이고 마지막 인자가 리터럴 `1.0`. point/spot 은 두 판이 있다. |
-| "생성기는 `0x1401691c0–0x14016b154`" | `primary()` 실측 `0x140169140–0x14016b0d4`. `0x14016b0e0` 부터는 전처리기 디렉티브 파서(`0x14048d048` 정규식). |
+| "생성기는 §2.1 정정 표의 옛 범위" | `primary()` 실측 `0x140169140–0x14016b0d4`. `0x14016b0e0` 부터는 전처리기 디렉티브 파서(`0x14048d048` 정규식). |
 | "`0x14016b0e0–0x14016c3f8` 이 HLSL 판 스니펫" | 그 함수의 문자열은 `ifdef`/`endif`/`require`/`undef` 뿐. HLSL 라이트 배열은 `0x1400f5cb0–0x1400f8520`(`0x1400f7618` 이 `const float4 g_LPoint_Color[` 를 찍는다). |
 | "섀도우 아틀라스는 고정 해상도" | 사각형 패커(`0x140193760`–`0x14019381e`)가 매번 extent 를 계산한다. 고정된 건 타일 한 변 1024(`0x1401964c2`)와 빈 한계 8192(`0x14019371b`). |
 | "`_rt_shadowAtlas` 문자열은 exe 에서 참조되지 않는다" | rip-상대 `lea` 를 바이트 스캔하면 2곳(`0x1400ec5df`, `0x140193893`). 일반 xref 스캔이 놓친 건 선형 디스어셈 desync 탓 — 방법론 함정 #8. |
@@ -875,14 +887,165 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
    특히 **씬별 `lightconfig` 합이 8 을 넘는지**를 못 본다 — 넘는 씬이 있으면 §9-1 이 실제 도달을 갖는다.
 9. **검증 공백 둘.**
    · `scripts/spec/check_address_ranges.py` 는 범위 인용을 **시작 < 끝** 으로만 본다. §7.2 의
-     `0x140168000–0x14016b154` 같은 "양 끝이 다 다른 함수인" 오기는 그 그물을 그냥 통과한다
-     (실제로 통과해 있었다). 바이너리를 읽는 `scripts/dev/check-rdata-citations.py` 쪽을
-     `primary()` 대조까지 확장해야 잡힌다.
-   · `Sources/WapleRender/**` 는 리눅스에서 `swiftc -parse` 밖에 못 돌고 `-parse` 는 타입체크를
-     하지 않는다(`bb5f902`). 다만 `Scene3DLighting.swift`/`Scene3DMath.swift` 는 **Metal 을
-     import 하지 않아** 리눅스 `swiftc -typecheck` 가 실제로 돈다(WapleCore + simd 심 모듈 + `simd_min`/
-     `simd_max` 두 개만 보태면 된다 — 그 둘은 현재 simd 심에 없다). 이번 배선은 그렇게 타입체크했고,
-     나머지 세 파일(`SceneRenderer*.swift`)은 **여전히 macOS CI 가 유일한 판정자**다.
+     "양 끝이 다 다른 함수인" 오기(§2.1 정정 표)는 그 그물을 그냥 통과한다(실제로 통과해 있었다).
+     **[2026-08-21 갱신] 그 구멍은 `scripts/re/va_citations.py` 가 메운다** — 인용 VA 를 `.pdata`
+     함수 시작에서 선형 디스어셈해 **명령 경계인지**까지 본다. 다만 바이너리가 필요해 CI 게이트가
+     아니라 **로컬 도구**이고, 바이너리를 하나만 보므로 다른 실행파일의 VA 는 오탐이다.
+   · **[2026-08-21 갱신] `Sources/WapleRender/**` 는 이제 리눅스에서 진짜 타입체크된다** —
+     `scripts/dev/linux-render-typecheck.sh` 가 심 15종+ 을 세워 `swiftc -typecheck` 를 돌린다
+     (`--tests` 로 테스트 152파일, `--compat` 로 WapleCompatCore 까지). 종전 서술("`-parse` 밖에
+     못 돈다", `bb5f902`)은 그 스크립트 이전의 사실이다. 남는 공백은 **MSL 문자열**이다 —
+     `VolumetricLightPass.metalSource` / `Mesh3DShaders` 의 셰이더 본문은 Swift 문자열이라
+     타입체크를 통과해도 컴파일 여부는 macOS 런타임에서만 드러난다(파이프라인 생성 실패 →
+     그 패스가 통째로 꺼진다). §10.7 의 MSL 변경이 그 공백 위에 있다.
+
+---
+
+## 10. spot 콘 — 두 갈래였던 변환기를 하나로 접었다 (2026-08-21)
+
+### 10.1 증상: 같은 라이트가 레인마다 다른 콘을 가졌다
+
+리포 안에 같은 변환이 **두 벌** 있었다.
+
+| 구현 | 산식 | 소비 레인 |
+| --- | --- | --- |
+| `SceneLight3D.forwardSpotConeCosines` (WapleCore) | `cos(도 × π/180 × 0.5)` | 2D 포워드 팩(`forwardUniforms`) · **볼류메트릭/갓레이 호출부**(`SceneRenderer3D.encode3D`) |
+| `Scene3DLighting.spotConeCosines` (WapleRender) | `cos(도 × π/180)` | 3D PBR 레인(`resolveLights`) |
+
+즉 저작 콘 20°/30° 라이트가 3D 메시 셰이딩에서는 20°/30° 로, 갓레이에서는 **10°/15°** 로
+그려졌다. 두 갈래는 "한쪽만 고치면 다시 갈린다" 는 구조라 산식 자체를 하나로 접는 것이 수선이다.
+
+### 10.2 어느 쪽이 정본인가 — 셰이더가 먼저 답한다
+
+x86 을 뜨기 전에 자산이 절반을 확정한다.
+
+`shaders/genericimage3.frag` — 동봉 `Sources/WapleRender/Resources/WEAssets/shaders/` 사본과
+설치본 `assets/shaders/` 원본이 **바이트 동일**하다(md5 `da6141502d2ab1d7f182f5c6b6f42d0a`;
+아래 인용하는 `volumetricsfront.frag` 도 마찬가지 — md5 `22f6d8608151a60e0568c741227e2c03`):
+
+```glsl
+vec3 lightDelta = g_LSpot_Origin[l].xyz - worldPos;
+float spotCookie = -dot(normalize(lightDelta), g_LSpot_Direction[l].xyz);
+spotCookie = smoothstep(g_LSpot_Direction[l].w, g_LSpot_Origin[l].w, spotCookie);
+```
+
+`lightDelta` 가 표면→라이트이므로 부호를 뒤집은 쪽이 라이트→표면이고, 그 내적은 **광축에서 잰
+각의 코사인**이다. 그러므로 두 `.w` 슬롯은 **반각 코사인**을 받는다. `shaders/volumetricsfront.frag`
+도 같은 꼴이다 — `dot(normalize(lightDelta), VAR_SPOT_FORWARD)` 뒤
+`smoothstep(VAR_SPOT_PARAMS_OUTER, VAR_SPOT_PARAMS_INNER, spotCookie)`.
+
+남는 물음은 하나다: **C++ 이 그 슬롯에 무엇을 굽는가.**
+
+### 10.3 x86 — 두 패커 모두 `cos(도 × π/180)`, `× 0.5` 없음
+
+`.pdata` 함수 시작에서 **선형으로** 내려와 뜬 것이다(역방향 디스어셈 금지).
+
+| 패커 | 함수 범위(`primary`/`merged`) | inner | outer |
+| --- | --- | --- | --- |
+| V1 PBR 유니폼 | `0x140190c80`–`0x1401964b8` | load `0x140192e64` (`[r14+0x2f0]`) · `mulss 0x140192e6d` · `call 0x140192e71` · store `0x140192e86` | load `0x140192eaa` (`[r14+0x2f4]`) · `mulss 0x140192eb3` · `call 0x140192eb7` · store `0x140192ebf` |
+| 볼류메트릭 유니폼 | `0x140196ce0`–`0x1401988d7` | load `0x140198724` (`[rsi+0x2f0]`) · `mulss 0x14019872c` · `call 0x140198730` · store `0x140198770`(`+0xbc`) | load `0x140198738` · `mulss 0x140198740` · `call 0x140198744` · store `0x140198778`(`+0xc0`) |
+
+- 승수 상수: `0x140492628` f32 = `0.01745329238474369` = π/180. **π/360 이 아니다.**
+- 스토어 자리: V1 쪽은 `lea eax,[rbx+3]` 뒤 `movss [rdi+rax*4], xmm0` — vec4 의 `.w` 다
+  (바로 앞 세 스토어가 `[rdi+rbx*4]`/`+4`/`+8` 로 xyz 를 채운다). 즉 `g_LSpot_Origin[i].w` /
+  `g_LSpot_Direction[i].w`. 볼류메트릭 쪽 `+0xbc`/`+0xc0` 은 `g_RenderVar1.y`/`.z` =
+  `VAR_SPOT_PARAMS_INNER`/`_OUTER`.
+
+**레지스터 상수는 지배관계로 판정했다.** V1 패커의 `xmm7` 은 라이트 루프 안에서 여러 번 재정의된다
+(`0x1401913b6`, `0x14019154d`, `0x140191b26`, `0x140191cf8`, `0x140191ece`, `0x14019216f`,
+`0x140192425`, `0x1401926e4` …). 그래서 함수 전체(4199 명령)에 대해 도달정의를 계산했고, 두
+`mulss` 지점에서 도달하는 정의는 **π/180 하나뿐**이었다. 근거는 두 적재가 루프를 감싸는 배치다:
+
+- `0x1401910bf` — 루프 헤더 `0x1401910d0` **직전**(진입 지배).
+- `0x14019317c` — 루프 꼬리, 백에지 `0x1401931a5 jne 0x1401910d0` **직전**(재적재).
+
+볼류메트릭 패커는 `0x1401986ac` 적재가 같은 직선 블록 안이라 지배가 자명하다.
+
+**콜리 `0x14041a2e0` 이 `cosf` 라는 근거** (`sinf` 가 아니라는 것):
+
+- 소인수 경로 `0x14041a360`–`0x14041a3b4` 가 `x²` 만의 다항식이다 — `xmm3 = x·x` 로 시작해
+  마지막까지 `x` 자체를 곱하지 않는다. **짝함수**다.
+- 첫 두 계수가 `0x140471bb0` = `1.0`, `0x140471bc0` = `0.5` — `1 − x²/2 + …`.
+- 극소 |x| 가지(`0x14041a32b`–`0x14041a33f`)가 `x` 가 아니라 `0x140471cb8` = `1.0` 을 반환한다.
+
+### 10.4 반증처럼 보이는 `× 0.5` 는 다른 양이다
+
+같은 두 필드(`+0x2f0`/`+0x2f4`)에 0.5 를 곱하는 자리가 따로 **두 곳** 있다. 직접 떠 보면 둘 다
+결과가 `g_LSpot_*`/`g_RenderVar*` **유니폼으로 가지 않는다** — 그래서 반증이 아니다.
+
+| 자리 | 함수(`merged()`) | 0.5 적재 | 반각이 실리는 곳 |
+| --- | --- | --- | --- |
+| `0x1401ec338`–`0x1401ec362` | `0x1401ebf60`–`0x1401ec71c` | `0x1401ec322` (`0x1404926c0` f32=0.5) | `[rsi+0x344]`/`[rsi+0x34c]`/`[rsi+0x350]`/`[rsi+0x35c]` 벡터와 곱셈 — **지오메트리 구성** |
+| `0x14018b347`–`0x14018b373` | `0x14018b2c0`–`0x14018b532` | `0x14018b31a` (같은 상수) | 공통 오브젝트 슬롯 `[rdi+0x128]`/`[rdi+0x12c]`. 바로 앞 `0x14018b329`/`0x14018b337` 은 같은 두 필드를 `cvttss2si` 로 **정수 절단**해 `[rcx+0x84]`/`[rcx+0x88]` 에 쓴다 |
+
+**두 자리가 각각 정확히 무슨 지오메트리/위젯인지는 확정하지 않았다** `[미해결]` — 이 절에 필요한
+사실은 "셰이딩·볼류메트릭 유니폼 경로가 아니다" 뿐이고, 그건 스토어 목적지만으로 확정된다.
+셰이딩/볼류메트릭 **유니폼**으로 실리는 경로는 §10.3 의 두 곳뿐이다.
+
+### 10.5 값 대조 — 어느 산식이 저작값과 맞는가
+
+동봉 171 + 설치본 184 = **355 `scene.json` 전수에서 `innercone` 0건 · `"lspot"` 0건**이다
+(2026-08-21 재측정: `find … -name scene.json | wc -l` 로 분모를, `grep -rl … --include=*.json` 로
+분자를 셌다. 두 트리 다 `.pkg` 0개라 압축 안에 숨은 씬은 없다). 저작값 표본은
+`spec/corpus/scene-schema.json`(워크샵 162 씬)뿐이고 거기서
+`innercone` 5건/2씬 범위 `[10.63, 20.0]`(distinct 2) · `outercone` 5건/2씬 범위 `[14.28, 30.0]`
+(distinct 2) — 즉 실제 저작 쌍은 **{10.63, 14.28}** 와 **{20.0, 30.0}** 둘이다. 뒤쪽은 WE 라이트
+생성자 기본값과 같은 수다: `0x1401904a8 mov dword [rdi+0x2f0], 0x41a00000`(= 20.0f) ·
+`0x1401904b2 mov dword [rdi+0x2f4], 0x41f00000`(= 30.0f).
+
+⚠️ **바로 뒤에 같은 두 오프셋을 1.0/1.0 로 채우는 형제 블록이 있다**(`0x140190604`/`0x14019060e`,
+`+0x2f8`=5.0 · `+0x2fc`=0). 그건 **다른 객체의 생성자**다 — 라이트라면 `volumetricsexponent`(`+0x2fc`)가
+0 이 되어 반경 감쇠가 `pow(x, 0) = 1` 로 전 구간 상수가 되고, 볼류메트릭 패커가 읽는 `density`
+기본 2.0(`0x1401904bc`)과도 어긋난다. 라이트 생성자는 `+0x2e8`=1.0 · `+0x2ec`=2.0 · `+0x2f0`=20.0 ·
+`+0x2f4`=30.0 · `+0x2f8`=2.0 · `+0x2fc`=1.0 을 **한 블록에서 연속으로** 채우는 앞쪽 블록이다
+(`0x140190494`–`0x1401904c6`). 이런 인접 블록 혼동이 §부록 A 가 경고하는 바로 그 오류형이다.
+
+| 저작 쌍 | 정본 `cos(도)` | 종전 `cos(도 × 0.5)` |
+| --- | --- | --- |
+| 20 / 30 | 0.9396926 / 0.8660254 | 0.9848078 / 0.9659258 |
+| 10.63 / 14.28 | 0.9828389 / 0.9691019 | 0.9957005 / 0.9922454 |
+
+**두 해석이 화면에서 갈리는 지점**: 저작 20°/30° 라이트에서 광축 25° 는 정본으로 부분 조명
+(smoothstep = 0.5700) 인데 종전 해석에서는 컷오프 15° 밖이라 **정확히 0**(완전 암부)이다.
+`SceneSpotConeTests` 가 이 대비를 그대로 단언한다 — 기대값을 `cos(도 × 배율)` 로 다시 적으면
+배율이 회귀해도 같이 움직여 아무것도 잠그지 못하기 때문에, 각도만으로 정해지는 코사인
+(60° → ½, 90° → 0, 120° → −½)과 **거동**으로만 적었다.
+
+### 10.6 Waple 쪽 처치
+
+- 정본을 `SceneLight3D.forwardSpotConeCosines`(WapleCore) **한 벌**로 두고 `* 0.5` 를 지웠다.
+  각도→코사인 자체는 `SceneWELightMath.coneCosine(degrees:)` 를 부른다(§3.3 의 확정 산식).
+- `Scene3DLighting.spotConeCosines` 는 **본문을 버리고 위 함수로 위임**한다. 이름은 3D 레인
+  호출부(`resolveLights`)와 `Scene3DLightingTests` 를 위해 남긴다. 값이 바뀌지 않으므로 3D PBR
+  레인은 무회귀다.
+- 화면이 바뀌는 것은 **콘을 저작한 spot 라이트가 있는 2D 포워드 레인과 갓레이 레인**뿐이다.
+  동봉 171 + 설치본 184 = 355 씬 도달 **0건**(위), 워크샵 코퍼스 162 씬 중 **2씬 5라이트** 도달.
+  `SyntheticPixelGoldenTests` 의 다섯 합성 씬에는 spot 라이트가 없다 — CI 픽셀 골든은 안 움직인다.
+
+### 10.7 W-17 단계 1(볼류메트릭 씬 뎁스 클립)도 같이 닫았다
+
+`volumetric-light.md` §7.2 의 설계 그대로다. 종전엔 `SceneRenderer3D.pooledDepth` 가
+`usage = [.renderTarget]` 만 줘서 뎁스를 **샘플조차 못 했고**, `encode3D` 의 뎁스 첨부는
+`storeAction = needsDepthStore ? .store : .dontCare` 였다. 갓레이는 그 뎁스를 아예 읽지 않았고
+(그래서 "`.dontCare` 를 읽는" 조용한 파손은 없었다) 대신 **샤프트가 지오메트리를 통과**했다.
+
+- `pooledDepth` 에 `.shaderRead` 를 더했다. **무조건** 준다 — 이 캐시의 키는 크기뿐이라
+  조건부 플래그를 표현할 수 없고, 조건부로 만들면 "먼저 만들어진 쪽이 이기는" 조용한 버그가 된다.
+- `needsDepthStore` 에 `hasVolumetrics`(= 패스 존재 ∧ `castVolumetrics` 라이트 존재)를 더했다.
+  타일 메모리 절약을 잃는 것은 볼류메트릭 씬뿐이다.
+- `VolumetricLightPass.encode` 가 `sceneDepth:` 를 받아 `depth2d<float> [[texture(0)]]` 로 바인딩하고,
+  MSL 이 `tExit = min(tExit, limit)` 한 줄을 더한다. 텍스처는 **항상** 바인딩하고 쓸지 말지는
+  `marchParams.z` 플래그로 가른다(선언한 텍스처를 안 바인딩하면 Metal 검증이 잡는다).
+- 뎁스 → 거리 역변환은 `Scene3DMath.perspective`(`zz = far/(near−far)`, Metal NDC z 0..1)의 역이다:
+  `d = near·far / (far − ndc·(far−near))`. 마치는 단위 레이 파라미터 `t` 로 돌므로
+  `t = d / dot(dir, forward)` 로 환산한다.
+- CPU 미러 `SceneWEVolumetricMath` 에 같은 두 함수(`viewDepthDistance`/`sceneDepthRayLimit`)와
+  `hullSpan(sceneLimit:)` · `PixelInput.sceneDepth` 를 넣어 GPU 와 한 벌로 유지했다. 새 인자는
+  전부 **기본값 있는 마지막 인자**라 기존 호출부는 한 글자도 안 바뀐다.
+
+**무회귀 근거**: 지오메트리가 없는 픽셀의 클리어 뎁스 `1.0` 은 `d = far` 로 풀리고 `tExit` 은
+이미 `far` 이하라 `min` 이 무연산이다. 기존 볼류메트릭 골든 픽스처는 전부 그 경우다.
+리눅스 코어 테스트가 `sceneDepth = nil` 과 `sceneDepth = 1` 의 픽셀값이 **비트 동일**임을 단언한다.
 
 ---
 
@@ -891,12 +1054,14 @@ WE 에서도 읽히지 않고, Waple `DirectionalShadowMath.validCascades`(전 �
 ```bash
 cd /tmp/claude-0/-home-user/<session>/scratchpad
 
-# 1) 생성기 함수 범위 — 남의 주석 말고 primary() 로
+# 1) 생성기 함수 범위 — 남의 주석 말고 primary() 로.
+#    함수 **중간** 주소를 넣어도 된다(그게 이 도구의 쓸모다 — §2.1 정정 표의 옛 인용 셋도
+#    이렇게 풀었다). 아래는 두 함수가 서로 다르다는 것을 각자의 시작 주소로 보인다.
 python3 -c "
 import sys; sys.path.insert(0,'.')
 from wpe import primary
-print([hex(x) for x in primary(0x1401691c0)[:2]])   # ['0x140169140', '0x14016b0d4']
-print([hex(x) for x in primary(0x14016b154)[:2]])   # ['0x14016b0e0', '0x14016c3f8']  ← 다른 함수
+print([hex(x) for x in primary(0x140169140)[:2]])   # ['0x140169140', '0x14016b0d4']  생성기 본체
+print([hex(x) for x in primary(0x14016b0e0)[:2]])   # ['0x14016b0e0', '0x14016c3f8']  ← 전처리기 파서
 "
 
 # 2) 생성기가 붙이는 문자열 전문
