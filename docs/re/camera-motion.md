@@ -39,6 +39,19 @@ wallpaper64.exe(imagebase `0x140000000`)에서 **씬 카메라가 매 프레임 
 | 20 | `perspective:true` 실제 씬 도달은 **동봉·설치본 통틀어 1건**(`preview3dclock`)이고 그 `origin.z = 0` 이라 정사영과 픽셀 동일 | 확정 |
 | 21 | shake·parallax **어디에도 난수원이 없다**. `g_Time`·포인터·`dt` 의 결정적 함수라 캡처 결정성(`captureRandomSeed`)에 영향이 없다 | 확정 |
 | 22 | 시차 스무딩은 **1차 저역통과의 지수형이 아니다** — α 가 `dt` 에 선형이라 **프레임률 독립이 아니다**(60Hz vs 120Hz 실측 차 2.8e-5 @delay 0.3, 1초) | 확정 |
+| 23 | `camera.paths` 재생 보간은 **3차 에르미트**다. 이웃 제어점을 구간 끝점으로 클램프해 접선이 양 끝 모두 `0.5·(p1 − p0)` — 닫힌 식은 `p0 + Δ·(−u³ + 1.5u² + 0.5u)` 이고 **스무스스텝이 아니다** | 확정 |
+| 24 | 보간은 eye·center·**up**·zoom 네 축 전부에 걸린다. 한 구간에서 읽는 제어점은 **정확히 둘**(`imul` 이 `idx`·`idx+1` 뿐) | 확정 |
+| 25 | 전진 임계(구간 끝)가 팔마다 다르다 — 보간 `ts[i+1]` · 마지막 붙듦 **`duration − ts[i]`** · 시작 전 **`ts[i] + ts[i+1]`** | 확정 |
+| 26 | 그래서 `duration > ts[last]` 인 경로는 저작 duration 보다 `ts[last]` 만큼 **짧게** 끝난다(설치본 4경로, 전부 `demon_core`: 300→260 · 450→416 · 400→360 · 350→314초) | 확정 |
+| 27 | `duration == ts[last]` 면 마지막 transform 으로 **넘어가지 않고** 곧장 다음 경로다(설치본 21경로 중 16건) | 확정 |
+| 28 | 경로 전환은 transform 인덱스와 경과 시간을 **한 qword 스토어로 함께** 0 으로 민다(`0x140189ad9`). transform 만 넘길 때는 경과 시간을 유지한다(dword 스토어) | 확정 |
+| 29 | **자동회전(autorotate)이 존재하지 않는다.** 저작 JSON·`lib.sceneScript.d.ts`·바이너리 문자열 어디에도 없다. 시간이 미는 유일한 카메라 축은 `camera.paths` 다 | 확정 |
+| 30 | 오브젝트 `parallaxDepth` 기본값은 **(1.0, 1.0)** 이다 — 레이어 생성자 `0x1401ddce1`/`0x1401ddcec` 가 `+0x170`/`+0x174` 에 `0x3f800000` 을 쓴다 (§7 **W-7 해소**) | 확정 |
+| 31 | 같은 생성자가 오브젝트 flags(`+0x120`)를 **`0x2001`** 로 깐다 → `visible` 기본 **true**, `perspective` 기본 **false** | 확정 |
+| 32 | 설치본 경로 코퍼스는 6씬·21경로·41transform 이고 **전 경로가 transform 1~2개**, `timestamp[0] == 0` 전건이다. transform `zoom` 저작은 9/41 인데 경로 씬 6개가 **전부 3D** 라 zoom 은 코퍼스에서 소비되지 않는다 | 확정 |
+| 33 | 시차 오프셋에 **최대치 클램프가 없다**. clamp01 은 포인터 입력과 `g_ParallaxPosition` 출력에만 있고, 레이어 오프셋은 `|origin − focus|` 에 비례해 무한히 커진다 | 확정 |
+| 34 | `scene+0x13c` 를 가리키는 프로퍼티 디스크립터가 **0건**이다(전 함수 스캔에서 `mov [desc+0x34], 0x13c` 0건) → JSON 도달 불가 확정 (§1.2 [미해결] **부분 해소**) | 확정 |
+| 35 | 씬 생성자가 flags 를 **`0x26`** 으로 깐다 → **`camerafade` 기본 true**, `orthogonalprojection`·auto·`camerashake`·`cameraparallax` 기본 false. 같은 두 qword 스토어가 경로 재생 상태 `scene+0xe4/0xe8/0xec` 를 전부 0 으로 만든다 (§8.8) | 확정 |
 
 ---
 
@@ -72,7 +85,10 @@ Renderer::frame(renderer, dt)                 0x14017fa70 – 0x1401816cc
 | `+0x140` | `+0x130` | **`g_Time`**(초) | 유니폼 ID 3 핸들러 `0x1400d8457` 가 `[renderState+0x130]` 을 그대로 복사 |
 | `+0x130` | `+0x120` | **`g_Alpha`** | 유니폼 ID 0 핸들러 `0x1400d83d7`; camerafade 가 여기에 알파를 쓴다(§4) |
 
-유니폼 점프테이블: 인덱스 바이트 `0x1400daaac`, 오프셋 테이블 `0x1400da984`, 디스패처 `0x1400d8300`.
+유니폼 점프테이블: 디스패처 `0x1400d8300`.
+인덱스 바이트 표 `0x1400daaac` · 오프셋 표 `0x1400da984` — 데이터다, 명령이 아니다 [VA-스캐너위치]
+(바이트가 `00 01 02 03 …`). `.pdata` 조각 `0x1400da981`–`0x1400dab3c` 안에 들어 있어 경계 검사에는
+걸리지만 디스어셈 대상이 아니다.
 같은 테이블에서 이번 문서에 필요한 renderState 필드를 전부 뽑았다:
 
 | 유니폼 | ID | renderState 오프셋 | 크기 | 핸들러 VA | 등록 VA |
@@ -127,6 +143,19 @@ Renderer::frame(renderer, dt)                 0x14017fa70 – 0x1401816cc
 `scene+0xf0/0xfc/0x108` 로 그대로 복사하는 것이 위 세 슬롯의 정의를 확정한다
 (`0x14018942e`–`0x14018948a`). 같은 자리에서 `scene+0x13c → scene+0x114`(`0x140189484`–`0x14018948a`)도
 복사되는데, `0x13c` 는 생성자 기본 1.0(`0x140186d51`)이고 **JSON 이 이 슬롯을 쓰는 경로를 못 찾았다 — [미해결]**
+> **[2026-08-21 부분 해소]** "못 찾았다" 가 아니라 **없다**. 전 `.pdata` 함수를 훑어
+> `mov dword ptr [desc+0x34], 0x13c`(프로퍼티 디스크립터의 오프셋 필드) 스토어를 세면 **0건**이다.
+> 대조군으로 같은 스캔이 `0x170`(`parallaxDepth` @`0x1401e0848`) · `0x334`(`cameraparallaxamount`
+> @`0x14019b189`) · `0x338`(`cameraparallaxdelay` @`0x14019b20d`)는 정확히 잡는다.
+> → **`scene+0x13c` 는 어떤 JSON 키로도 쓰이지 않는다**(확정). 코퍼스 실측도 같은 말을 한다 —
+> `camera` 블록이 저작한 키는 동봉·설치본 통틀어 `eye`/`center`/`up`/`paths` 넷뿐이다.
+> 정체는 **`CameraTransforms.zoom`(스크립트 전용 정적 카메라 zoom)** 이 **유력**하다:
+> `scene+0x118`(eye) · `+0x124`(center) · `+0x130`(up) · `+0x13c` 배치가
+> `lib.sceneScript.d.ts:1001-1006` 의 `class CameraTransforms { eye; center; up; zoom }` 와 정확히
+> 같고, `IScene.getCameraTransforms()`/`setCameraTransforms()`(`:2193-2200`)가 그 클래스를 주고받는다.
+> 다만 그 API 구현은 `bin/scenescript64.dll` 에 있고(`wallpaper64.exe` 에는 `getCameraTransforms`
+> 문자열이 **0건**, DLL 에는 있다) 콜백이 vtable 간접이라 바이트로는 못 박았다 — **등급: 유력**.
+
 (`general.zoom` 은 별개 슬롯 `0x154`, 생성자 기본 1.0 @`0x140186d93`). `scene+0x114` 자체의 생성자
 기본값도 1.0 이다(`0x140186d46`).
 
@@ -221,6 +250,26 @@ target += delta                                        ; 0x140199747–0x1401997
 - 즉 **Waple 의 `SimplexNoise` 를 카메라 shake 에 재사용하면 WE 와 달라진다.**
 
 ---
+
+### 2.5 [2026-08-21 정정] `sqrtf` 호출 팔은 도달 불가다
+
+§2.1 은 거칠기 리매핑의 길이를 "`L = sqrtf(...)`" 로 적었다. 실제로 도는 것은 **인라인 `sqrtss`**
+이고 CRT `sqrtf`(`0x14041ad10`) 호출은 도달 불가 분기다:
+
+```
+0x140199691  xorps   xmm0, xmm0
+0x140199698  ucomiss xmm0, xmm2        ; 0  vs  L²
+0x14019969b  ja      0x1401996a8       ; 0 > L² 일 때만 CRT 호출
+0x14019969d  xorps   xmm11, xmm11
+0x1401996a1  sqrtss  xmm11, xmm2       ; ← 실제 경로
+0x1401996a8  movaps  xmm0, xmm2
+0x1401996ab  call    0x14041ad10       ; sqrtf — 도메인 에러 보고용
+```
+
+`L² = x² + y² + z²` 는 음수가 될 수 없으므로(성분이 `sinf`/`cosf` 결과라 NaN 도 아니다)
+`ja` 가 서는 경우가 없다. 결론은 안 바뀐다 — 값은 같다. 다만 "CRT `sqrtf` 를 부른다" 는 서술은
+틀렸다. `cosf`/`sinf`/`powf` 동정(§2.2)은 그대로 유효하다.
+
 
 ## 3. camera parallax
 
@@ -420,6 +469,8 @@ gl_FragColor = vec4(color * 0.7, g_Alpha);
 `[rdx+rcx+0x28]` → `scene[0x114]`(`0x140189a3f`/`0x140189a4e`), `[rdx+r8+0x18]`(`0x140180c4c`).
 경로 끝에서 다음 경로로 넘어가고 마지막이면 0 으로 되감는다(`0x140189acd`–`0x140189b00`).
 
+> **경로 재생 자체(보간 곡선·전진 임계·되감기)는 §8 에서 바이트 단위로 복원했다.**
+
 ---
 
 ## 5. 투영
@@ -514,7 +565,7 @@ if (scene[0xe0] & 8) {                       /* 정사영 */
 
 오브젝트 프로퍼티 디스크립터 등록에서 `"perspective"`(문자열 `0x140490890`, 길이 11 → SSO 라
 `lea` 가 아니라 `movsd`+`mov` 로 온다)는 두 클래스에 붙는다: `0x1401ee9a4`(이미지 계열) ·
-`0x140227539`(다른 레이어 클래스). 등록 직후 `[desc+0x34] = 0x120`(오프셋) · `[desc+0x30] = 6`(타입),
+`0x140227535`(다른 레이어 클래스). 등록 직후 `[desc+0x34] = 0x120`(오프셋) · `[desc+0x30] = 6`(타입),
 핸들러 4종 `0x14019c620`/`0x14019c6f0`/`0x14019c7f0`/`0x14019c830` 이 실린다(`0x1401ee9bd`–`0x1401eea1a`).
 
 > **디스크립터 표 함정 재확인.** 이름 등록 `call 0x14000f880` **뒤**에 오는 `+0x30`/`+0x34` 스토어가
@@ -546,7 +597,7 @@ mov [r14+r15], ecx ; r14 = [desc+4] = 0x120
 
 **renderState+0x118 bit10 = "이 씬은 정사영(2D)"** 이다(이번에 확정):
 `0x14018768a` 가 `scene[0xe0]` bit3(=`orthogonalprojection`)이 설 때만 이 비트를 세우고
-(`0x14018767c`–`0x140187688`), 씬 초기화 `0x1401872cb` 가 지운다. 같은 비트를 보는 다른 소비처가
+(`0x14018767c`–`0x140187688`), 씬 초기화 `0x1401872ca` 가 지운다. 같은 비트를 보는 다른 소비처가
 독립 확증한다 — `0x1402582ff` 는 2D 가 아닐 때 `materials/fonts/fontbackground_depth.json` 을 고르고,
 `0x14018e175` 는 2D 면 z 성분을 0 으로 죽인다.
 
@@ -775,7 +826,7 @@ perspective(0x140490890, 오브젝트 키)  parallaxDepth(0x1404902c8, 오브젝
 | **W-4** | 레이어 오프셋 공식 | `(origin − focus) × amount × parallaxDepth`, z=0 | 전역 `cameraOffset × parallaxDepth`(`SceneRendererFrameEncoder.swift:668-669`), `cameraOffset = mouse × amount × infl × 0.1` | **확정 · 미해소** | `origin` 종속항이 통째로 없다. WE 는 초점에서 먼 레이어일수록 더 움직인다 |
 | **W-5** | 레이어 오프셋 게이트 | `cameraparallax` **&&** 정사영(2D) | 2D 전용(3D 는 채널 없음) | 확정 · 일치 | 조치 불요 |
 | **W-6** | `g_ParallaxPosition` 유니폼 | renderState+0x9c, `clamp01(focus/size)`, 기본 (0.5,0.5) | **미구현**(리포 전체에 문자열 없음) | **확정 · 미해소** | `depthparallax` 이펙트를 구현할 때 필요. 무저작 씬은 `(0.5,0.5)` 로 채워야 셰이더가 중립이 된다 |
-| **W-7** | `parallaxDepth` 기본값 | **[미해결]** — 오브젝트 생성자에서 초기화 지점을 못 찾았다 | `Vec2(1,1)` (`SceneDocument.swift:949,1788`) | [미해결] | 코퍼스 저작 118/123 이 `1 1` 이라 실무상 안전. 확정 전까지 유지 |
+| **W-7** | `parallaxDepth` 기본값 | ~~**[미해결]** — 오브젝트 생성자에서 초기화 지점을 못 찾았다~~ → **`(1.0, 1.0)` 확정** (`0x1401ddce1`/`0x1401ddcec`, §8.6) | `Vec2(1,1)` — `SceneDocument.swift` 의 `public var parallaxDepth: Vec2 = Vec2(x: 1, y: 1)`(세 곳) 과 파스 폴백 `vec2(obj["parallaxDepth"]) ?? Vec2(x: 1, y: 1)` | **해소 · 일치** | 조치 불요. Waple 값이 맞았다. (이번 레인도 처음엔 `.text` **선형** 스윕으로 0건을 받아 같은 결론에 갇힐 뻔했다 — §8.6 방법론 기록 참조) |
 | **F-1** | `camerafade` 의미 | 경로 구간 처음/끝 0.5초를 `schemecolor×0.7` 로 덮음. **경로 없으면 무동작** | "파스만(의미 미확정 — 소비 보류)" (`SceneDocument.swift:1216-1218`) | **확정 · 신규** | 카메라 경로를 구현할 때 함께. 동봉 코퍼스 도달 0건이라 우선순위 낮음 |
 | **F-2** | 씬 시작 페이드인 | **없다** | 없음 | 확정 · 일치 | 조치 불요 |
 | **P-1** | `fov` 단위/축 | 도(확정) / 세로(유력) | 도·세로 (`SceneRenderer3D.swift:1460-1461,1526`) | 확정+유력 · 일치 | 조치 불요 |
@@ -787,6 +838,11 @@ perspective(0x140490890, 오브젝트 키)  parallaxDepth(0x1404902c8, 오브젝
 | **P-7** | 레이어 `perspective` | 2D 전용. view 를 `(W·cx, H·cy, d)` 로 옮기고 proj 를 `PerspectiveFov(pofov, aspect, 5, max(15000,d+1000))` 로 교체. `s(z) = d/(d−z)` | `SceneRendererFrameEncoder.quadVertices` 의 "M4 근사" — `perspectiveFov` 를 리터럴 95 로 받고, 상단 코너 x 만 `1/(1+tan(fov/2)·0.1)` 로 줄이는 **임의 근사**(:622-631). z 를 아예 안 본다 | **확정 · 미해소** | `SceneCameraMath.layerPerspectiveScale(z:orthoHeight:fovDegrees:)` 로 코너를 초점 기준 스케일. 저작 fov 는 리터럴이 아니라 `doc.perspectiveOverrideFov` |
 | **P-8** | `perspective:true` 도달 주장 | 동봉·설치본 실제 씬 **1건**(`preview3dclock`, `origin.z=0`) | `SceneDocument.swift:242-243` "19씬 전부 x/y angles 0" — 범위 라벨 없음, 이 두 코퍼스로 재현 불가 | **미해결(반증 아님)** | 주장에 코퍼스 범위 라벨을 붙이거나 실측으로 교체. 워크샵 코퍼스가 근거라면 그렇게 적어야 한다 |
 | **X-1** | 순수 산술의 자리 | — | shake·parallax 산술이 전부 `WapleRender`(리눅스 실행 검증 불가)에 있었다 | 해소 | **`Sources/WapleCore/SceneCameraMath`** 신설 — shake/초점/α/레이어오프셋/유니폼/레이어원근을 실측 그대로 담고 `SceneGeometryCameraMathTests`(26개)가 닫힌 식으로 잠근다. `ParallaxController.smoothed` 는 α 를 여기로 위임 |
+| **A-1** | 자동회전(autorotate) | **존재하지 않는다**(§8.0 — JSON·`d.ts`·바이너리 키·셰이더 유니폼 전부 0건) | Waple 에도 없다 | 확정 · 일치 | 조치 불요. "카메라가 자동으로 돈다" 는 요구가 오면 `camera.paths` 로 표현해야 한다 |
+| **F-3** | `camera.paths` 재생 | 3차 에르미트, `v = p0 + Δ·(−u³+1.5u²+0.5u)`, eye·center·**up**·zoom 네 축(§8.2) | **미구현.** `SceneDocument.swift` 의 `guard … let camDict = scene["camera"] as? [String: Any]` 블록이 eye/center/up/fov/nearZ/farZ 만 읽고 `paths` 키를 아예 보지 않는다 | **확정 · 미구현** | `WapleCore.CameraMotion.step(paths:state:dt:)` 로 이미 뽑아 뒀다. 남은 것은 ① `camera.paths` 파스 ② `scripts/camera_XX.json` 로드 ③ 렌더 배선. 동봉 도달 0건이라 회귀 위험 0 |
+| **F-4** | 경로 전진 임계 | 팔마다 다르고(`ts[i+1]` / `duration − ts[i]` / `ts[i]+ts[i+1]`), `duration == ts[last]` 면 마지막 transform 을 건너뛴다(§8.3) | 미구현 | 확정 · 미구현 | 이식할 때 "직관적인 `duration`" 으로 고치지 말 것 — §8.4 가 그 부작용을 적어 뒀다 |
+| **P-9** | 오브젝트 flags 기본값 | 생성자가 `+0x120`을 **`0x2001`** 로 깐다 → `visible` true · `perspective` false (§8.6) | `visible` 기본 true · `SceneDocument.swift` 의 `public var perspective: Bool = false` | 확정 · 일치 | 조치 불요. 함정 15 의 근거가 이제 바이트로 있다 |
+| **X-2** | 순수 산술의 자리(시간축) | — | 경로 재생·페이드 곡선·실효 fov/zoom·2D eye 재중심화가 **어디에도 없었다** | 해소 | **`Sources/WapleCore/CameraMotion.swift`** 신설. `SceneCameraMath`(무상태 스칼라)와 축을 나눠, 여기는 **상태가 굴러가는** 것만 담는다. `CameraMotionTests`(15) · `CameraMotionPathTests`(16)가 값으로 잠근다 |
 
 ### 7.1 우선순위
 
@@ -799,6 +855,306 @@ perspective(0x140490890, 오브젝트 키)  parallaxDepth(0x1404902c8, 오브젝
    다만 그래서 회귀 스위트로 검증도 안 된다(설치본 `ricepod` 를 오라클로 써야 한다).
 4. **W-2/W-4(parallax 구조)** — 구조 변경. 동봉 1씬(`depthparallax`)의 `parallaxDepth=0` 때문에
    레이어 채널은 여전히 무영향이라, 실효 이득은 W-6(유니폼)과 함께 갈 때 생긴다.
+5. **[2026-08-21 추가] W-7 은 해소됐다** — `parallaxDepth` 기본값이 `(1.0, 1.0)` 으로 확정됐고
+   Waple 값이 이미 맞다(§8.6). 조치 없음.
+6. **[2026-08-21 추가] F-3/F-4(`camera.paths`)는 새 축이다.** 산술은 이미
+   `WapleCore.CameraMotion` 에 있고 리눅스에서 실행 검증된다. 남은 것은 파스·로드·배선인데
+   **동봉 도달 0건**이라 회귀 위험이 없는 대신 회귀 스위트로 검증도 안 된다 —
+   설치본 `arsenal`/`demon_core` 를 오라클로 써야 한다(C-1 계열과 같은 상황이다).
+   우선순위는 낮다. 다만 §8.4 의 quirk 는 **이식할 때 반드시 같이** 가져가야 한다.
+
+---
+
+## 8. `camera.paths` 재생 — WE 의 **유일한** 자동 카메라 모션 (2026-08-21 신규)
+
+§1.2 가 "경로 C: `camera.paths` 재생 `0x1401894a9` – `0x140189b07`" 이라고 범위만 적어 둔 자리다.
+여기서 그 안을 전부 복원했다. **`Scene::updateCamera` 를 `.pdata` 함수 시작(`0x1401891a0`)에서
+선형으로 내려와** 읽었다(함정 17 — 후보 주소에서 거슬러 올라가면 명령 경계가 밀린다).
+
+### 8.0 먼저: 자동회전(autorotate)은 **없다**
+
+x86 을 뜨기 전에 자산부터 훑었다(함정 7).
+
+| 스캔 | 결과 |
+|---|---|
+| 동봉 1698 JSON · 설치본 2143 JSON 에서 `autorotate`/`rotationspeed`/`orbit`/`spin` | `"Spin"`/`"spin"`/`"SPIN"` 만 (사용자 프로퍼티 라벨·이펙트 이름) — **카메라 키 0건** |
+| `lib.sceneScript.d.ts` 의 `interface ICamera` | `fov`(3D 전용) · `zoom`(2D 전용) **둘뿐** |
+| `lib.sceneScript.d.ts` 의 `class CameraTransforms` | `eye` · `center` · `up` · `zoom` |
+| §6.7 의 바이너리 카메라 키 15개 | 회전·시간 관련 키 없음 |
+| `wallpaper64.exe` 바이트 전수(ASCII + UTF-16LE) | `autorotate` **0건** · `g_Camera` **0건** (대조군: `g_EyePosition` @`0x14048d378` 1건 · `g_ParallaxPosition` @`0x14048dad0` 1건은 잡힌다). `bin/*64.dll` 전량에도 `g_Camera` 0건 |
+| 셰이더 유니폼 전수(`.vert`/`.frag`/`.h`) | 카메라 관련은 `g_EyePosition`(동봉 25 · 설치본 25) · `g_ViewUp`(8 · 8) · `g_ViewRight`(8 · 8) · `g_ParallaxPosition`(7 · 7) · `g_EyeColor`(4 · 4) — **`g_Camera*` 라는 이름의 유니폼은 양쪽 코퍼스·바이너리 어디에도 0건** |
+
+→ **시간이 스스로 미는 카메라 축은 `camera.paths` 하나다.** shake 는 시간의 함수지만 진폭이
+상수라 감쇠도 임펄스 트리거도 없고(§2.3), parallax 는 초점 식에 시간 항이 아예 없다(§3.1).
+
+### 8.1 세 개의 팔 — 그리고 팔마다 다른 "구간 끝"
+
+진입 상태는 셋이다: `scene+0xe4` 경로 인덱스 · `scene+0xe8` transform 인덱스 ·
+`scene+0xec` **현재 경로 안에서의 절대 경과 초**.
+
+```
+rbp   = scene[0x310]                                     ; paths.begin
+rsi   = pathIndex << 5                                   ; path 스트라이드 0x20   0x1401894c5
+rcx   = [rsi+rbp]                                        ; transforms.begin
+count = ([rsi+rbp+8] − rcx) / 0x2c                       ; 0x1401894e4–0x1401894f0 (magic 0x2e8ba2e8ba2e8ba3)
+rdx   = transformIndex * 0x2c                            ; 0x1401894bd
+xmm2  = [rdx+rcx]        = cur.timestamp                 ; 0x1401894eb
+xmm3  = scene[0xec]      = elapsed                       ; 0x1401894b5
+
+0x1401894f4  comiss xmm3, xmm2 / jb  → ① beforeSegment
+0x1401894fd  cmp    r8(idx+1), count / jae → ② holdingLast
+                                       그 외 → ③ interpolating
+```
+
+| 팔 | 조건 | 자세 | **구간 끝**(전진 임계) | 저장 VA |
+|---|---|---|---|---|
+| ① beforeSegment | `elapsed < ts[i]` | `transforms[i]` 스냅 | `ts[i] + (i+1<n ? ts[i+1] : 0)` | `0x1401899f3` `addss` |
+| ② holdingLast | `i+1 ≥ n` | `transforms[i]` 스냅 | **`duration − ts[i]`** | `0x1401899da` `subss` |
+| ③ interpolating | 그 외 | 에르미트(§8.2) | `ts[i+1]` | `0x140189552` |
+
+셋 다 같은 스택 슬롯 `[rsp+0x120]` 에 실리고, 전진 판정이 그 값을 본다(`0x140189a7f`).
+①의 `ts[i] + ts[i+1]` 은 **덧셈이다** — 뺄셈도 아니고 `ts[i+1]` 단독도 아니다. 저작 첫
+timestamp 가 0 이면(설치본 21경로 전건) `ts[i+1]` 과 같아져 정상 동작하고, 0 이 아니면 어긋난다.
+
+스냅 팔은 `movsd`+`mov` 로 **원본 값을 그대로 복사**한다(`0x1401899f7`–`0x140189a3f`):
+`+0x04..0x0c` → eye(`scene+0xf0`) · `+0x10..0x18` → center(`+0xfc`) · `+0x1c..0x24` → up(`+0x108`) ·
+`+0x28` → zoom(`+0x114`). 이것이 §4.5 의 transform 레이아웃을 소비 쪽에서 재확인한다.
+
+### 8.2 보간은 **3차 에르미트**다 — 스무스스텝이 아니다
+
+```
+u = (elapsed − ts[i]) / (ts[i+1] − ts[i])          ; 0x14018950d → 0x140189567 divss
+```
+
+> **코퍼스로는 이 뺄셈이 검증되지 않는다.** 설치본 21경로가 전부 `timestamp[0] == 0` 이라
+> `u = elapsed / (ts1 − ts0)` 로 잘못 써도 같은 값이 나온다. 돌연변이 검증에서 실제로 그
+> 변형이 **31개 테스트를 전부 통과**했다(M9). 코퍼스 픽스처만으로 잠근 자리는 이런 항을
+> 놓친다 — 첫 timestamp 가 0 이 아닌 **합성 경로**를 따로 만들어 잠갔다
+> (`CameraMotionPathTests.testUSubtractsSegmentStart`).
+
+
+기저 조립(`0x140189572`–`0x1401895c5`, 상수 3.0 @`0x140492830` · 1.0 = `xmm15`):
+
+```
+u2 = u·u ; u3 = u2·u ; 3u2 = u2·3.0
+h11 = u3 − u2                       0x140189593
+h01 = 3u2 − 2u3                     0x1401895a1
+h00 = (2u3 − 3u2) + 1               0x1401895a6 → 0x1401895c0
+h10 = (u3 − 2u2) + u                0x1401895b3 → 0x1401895c5
+```
+
+접선은 **양 끝이 같다.** 이웃 제어점을 구간 끝점으로 클램프하기 때문이고, 컴파일러가
+`p − p` 를 **명령으로 남겨서** 그 사실이 그대로 보인다(zoom 성분이 가장 짧아 읽기 쉽다):
+
+```
+0x140189951  xmm0 = cur.zoom (p0)     0x140189957  xmm2 = next.zoom (p1)
+0x140189969  subss xmm3, xmm0         ; (p0 − p0)  ← 이전 제어점 = p0
+0x140189975  subss xmm1, xmm0         ; (p1 − p0)
+0x14018997e  mulss xmm3, 0.5          0x140189989  mulss xmm1, 0.5
+0x14018998d  addss xmm3, xmm1         ; m0 = 0.5(p0−p0) + 0.5(p1−p0)
+0x140189985  subss xmm0, xmm2         ; (p1 − p1)  ← 다음 제어점 = p1
+0x140189991  mulss xmm0, 0.5          0x140189995  addss xmm0, xmm1   ; m1
+```
+
+→ **`m0 = m1 = 0.5·(p1 − p0)`**. 구간 안에서 읽는 제어점은 **정확히 둘**이다 —
+`imul` 이 `idx*0x2c`(`0x1401894bd`)와 `(idx+1)*0x2c`(`0x140189530`) 둘뿐이고, `idx−1`/`idx+2` 를
+만드는 명령이 없다.
+
+누산 순서(x 성분, `0x1401895f2`–`0x140189636`):
+
+```
+acc = m0·h10 ; acc += h00·p0 ; acc += m1·h11 ; acc += h01·p1  →  scene+0xf0
+```
+
+**닫힌 식.** `m0 = m1 = 0.5Δ` 를 대입하면
+
+```
+v(u) = p0 + Δ · f(u),   f(u) = −u³ + 1.5u² + 0.5u,   Δ = p1 − p0
+```
+
+| u | `f(u)` (실물) | 스무스스텝 `3u²−2u³` | 선형 `u` |
+|---:|---:|---:|---:|
+| 0.25 | **0.203125** | 0.15625 | 0.25 |
+| 0.50 | 0.5 | 0.5 | 0.5 |
+| 0.75 | **0.796875** | 0.84375 | 0.75 |
+
+`f′(0) = f′(1) = 0.5` — **양 끝 기울기가 0 이 아니다.** 스무스스텝처럼 끝에서 멈추지 않고
+일정 속도로 들어왔다 나간다. 경로 사이는 C¹ 이 아니라 **구간별 이즈**다.
+
+**네 축 전부에 걸린다.** eye(`0x1401895bc`–`0x1401896d2`) · center(`0x1401896db`–`0x14018980c`) ·
+**up**(`0x140189815`–`0x140189948`) · zoom(`0x140189951`–`0x1401899ac`). up 도 보간되므로
+경로 재생 중에는 **롤이 생긴다** — shake 가 up 을 건드리지 않는 것(§2.3)과 대비된다.
+
+### 8.3 전진과 되감기 — `0x140189a74` – `0x140189b07`
+
+```
+elapsed += dt                                        ; 0x140189a77 (xmm6 = dt) · 0x140189a87 저장
+if (elapsed <= segmentEnd) 끝                        ; 0x140189a8f jbe   ← **같으면 전진하지 않는다**
+if (i+1 < count && duration > ts[i+1])               ; 0x140189ab0 jae · 0x140189abf comiss/jbe
+     scene[0xe8] = i+1                               ; 0x140189ac5  **dword** — elapsed 유지
+else scene[0xe8..0xef] = 0                           ; 0x140189ad9  **qword** — idx·elapsed 동시 0
+     scene[0xe4] = (pathIndex+1 >= pathCount) ? 0 : pathIndex+1   ; 0x140189ad6–0x140189b00 cmovae
+```
+
+`0x140189ad9` 가 qword 스토어라는 것이 실질적인 관측이다 — `0xe8`(transform 인덱스)과
+`0xec`(경과 시간)이 연속이라 **경로 전환 한 번에 둘 다** 0 이 된다. transform 만 넘길 때는
+`0xe8` 만 dword 로 써서 경과 시간이 유지된다. 이 비대칭이 없으면 절대 timestamp 기반 보간이 깨진다.
+
+shake 는 **전진 전에** 얹힌다(`0x140189a6f` → `0x140189a77`). 즉 이번 프레임 자세는 `elapsed`
+기준이고 `dt` 는 다음 프레임분이다.
+
+### 8.4 저작 duration 이 그대로 지켜지지 않는 자리 (엔진 quirk)
+
+②의 구간 끝이 `duration − ts[i]` 라서, 마지막 transform 을 실제로 붙들게 되는 경로는
+**저작 duration 보다 `ts[last]` 만큼 짧게** 끝난다. 조건은 둘 다 서야 한다:
+
+1. `duration > ts[last]` (아니면 ②에 도달하기 전에 다음 경로로 간다 — §8.3 의 `comiss/jbe`)
+2. `ts[last] > 0`
+
+설치본 21경로 중 이 조건에 걸리는 것은 **`demon_core/scripts/camera_00.json` 의 4경로뿐**이다.
+
+| 경로 | duration | `ts[last]` | 실효 재생 |
+|---|---:|---:|---:|
+| demon_core 0 | 300 | 40 | **260** |
+| demon_core 1 | 450 | 34 | **416** |
+| demon_core 2 | 400 | 40 | **360** |
+| demon_core 3 | 350 | 36 | **314** |
+| neon_sunset 0 | 5 | 0 (transform 1개) | 5 (일치) |
+| 나머지 16 | = `ts[last]` | — | 저작값 그대로 |
+
+`demon_core` 는 `camerafade:false` 라 페이드와는 상호작용하지 않는다. 만약 켰다면 페이드아웃
+조건(`duration − elapsed < 0.5`, §4.2)이 `elapsed > 299.5` 인데 경로가 260 에서 끝나므로
+**페이드아웃이 영원히 안 걸렸을** 것이다 — 이 quirk 를 "직관적인 `duration`" 으로 고치면
+그쪽 동작이 같이 바뀐다. 실물을 그대로 이식하는 것이 옳다.
+
+### 8.5 설치본 경로 코퍼스 전수 (동봉 = 0)
+
+`paths` 배열을 가진 JSON 전량(파일명 무관)에서 세었다.
+
+| 항목 | 동봉 `WEAssets/**`(씬 172) | 설치본 `wallpaper_engine/**`(씬 190) |
+|---|---:|---:|
+| `camera.paths` 를 가진 씬 | **0** | 6 |
+| 경로(path) | 0 | 21 |
+| transform | 0 | 41 |
+| transform 개수 분포 | — | `2` × 20 · `1` × 1 |
+| `timestamp[0] == 0` | — | **21/21** |
+| `duration == ts[last]` | — | 16/21 (나머지 5는 `>`; §8.4) |
+| transform 이 `zoom` 을 저작 | — | 9/41 (`ricepod` · `neon_sunset`) |
+| 경로 씬의 투영 | — | **6/6 이 `orthogonalprojection: null` = 3D** |
+
+마지막 줄이 중요하다 — `zoom` 은 정사영 전용이므로(§5.6) **저작된 transform `zoom` 9건은
+코퍼스에서 한 번도 소비되지 않는다.** 그래서 transform 에 `zoom` 키가 없을 때의 파서 기본값은
+코퍼스로는 판별할 수 없다(§8.7).
+
+`camerafade` 실효(§6.4 재측정 일치): `ricepod` `true` · `arsenal`/`fantasticcar` 키 없음(기본 true)
+· `demon_core`/`neon_sunset`/`dna_fragment` `false` → **설치본 6경로 씬 중 3씬**에서만 페이드가 돈다.
+
+### 8.6 `parallaxDepth` 기본값 = (1.0, 1.0) — §7 W-7 **해소**
+
+레이어 생성자(`0x1401ddbb0` – `0x1401de19b`, `.pdata` 5조각)가 멤버를 리터럴로 깐다:
+
+```
+0x1401ddc72  mov word  ptr [r14+0x120], 0x2001     ; flags
+0x1401ddc7c  mov qword ptr [r14+0x124], 0          ; sortorder · origin.x
+0x1401ddc83  mov qword ptr [r14+0x12c], 0          ; origin.y · origin.z
+0x1401ddc8a  mov dword ptr [r14+0x134], 0x3f800000 ; scale.x = 1
+0x1401ddc95  mov dword ptr [r14+0x138], 0x3f800000 ; scale.y = 1
+0x1401ddca0  mov qword ptr [r14+0x13c], 0x3f800000 ; scale.z = 1 · angles.x = 0
+0x1401ddcab  mov qword ptr [r14+0x144], 0          ; angles.y · angles.z
+…
+0x1401ddcd6  mov dword ptr [r14+0x16c], 0x3f800000
+0x1401ddce1  mov dword ptr [r14+0x170], 0x3f800000 ; parallaxDepth.x = 1
+0x1401ddcec  mov dword ptr [r14+0x174], 0x3f800000 ; parallaxDepth.y = 1
+```
+
+같은 클래스인 근거: 오브젝트 디스크립터 표(`0x1401e0530`)가 `origin`→`0x128` · `scale`→`0x134` ·
+`angles`→`0x140` 을 등록하는데, 위 초기화가 그 셋을 정확히 `(0,0,0)`/`(1,1,1)`/`(0,0,0)` 로 깐다.
+그리고 소비 쪽(`0x14018a0ff`/`0x14018a10d`)이 곱하는 슬롯이 바로 `+0x170`/`+0x174` 다.
+
+부수 확정 두 가지:
+
+- **flags 초기값 `0x2001`** → `visible`(bit0) 기본 **true**, `perspective`(bit7) 기본 **false**.
+  함정 15("저장을 건너뛰는 실패 분기는 false 가 아니라 생성자 기본값을 유지한다")가 여기서
+  바이트로 확인된다. bit13(0x2000)의 이름은 **[미해결]**.
+- `parallaxDepth` 디스크립터 재확인 — 이름 `0x1404902c8`("parallaxDepth", 길이 13),
+  `[desc+0x34] = 0x170`(`0x1401e0848`), `[desc+0x30] = 1`(vec2, `0x1401e085a`).
+  바로 뒤 `0x1401e0861` 의 `movsd [rip+…]`(`0x1404902d8`)는 **다음 항목의 SSO 이름**이라
+  현재 항목의 값이 아니다 — 함정 16 의 그 모양이다.
+
+> **방법론 기록.** 처음엔 `.text` 를 **선형으로** 디스어셈해 `[reg+0x170]` 스토어를 찾았고
+> "0건" 이 나왔다. 그건 틀린 답이다 — 섹션 선형 스윕은 데이터/패딩에서 명령 경계가 어긋나
+> 그 뒤 전부를 놓친다. 같은 스캔이 `origin`(`+0x128`)·`scale`(`+0x134`)도 0건을 줬다는 점에서
+> 바로 들통났다. **`.pdata` 함수 시작마다 따로 디스어셈**하면 `+0x170` 을 덮는 스토어가 50건,
+> 그 중 오브젝트 디스크립터 등록 함수(`0x1401e0530`)가 있는 레이어 클래스 대역에 9건이고 위 두 줄이 거기 있다.
+
+### 8.7 이 절이 남기는 `[미해결]`
+
+1. **transform 의 `zoom` 파서 기본값.** 스냅/보간 둘 다 `+0x28` 을 읽지만, JSON 에 `zoom` 이 없을 때
+   파서가 무엇을 넣는지는 확인하지 못했다. 코퍼스로도 판별 불가다 — `zoom` 을 저작한 9 transform 이
+   전부 3D 씬에 있어 소비 자체가 안 된다(§8.5). `scene+0x114` 의 **생성자** 기본은 1.0(`0x140186d46`)
+   이지만 그것은 별개 슬롯이다.
+2. **transform 이 3개 이상인 경로의 중간 전진.** 설치본 21경로가 전부 1~2개라 실물로 관측할 자산이
+   없다. 코드상으로는 §8.3 조건이 매 구간에 그대로 적용된다(중간 `ts[k]` 가 `duration` 을 넘으면
+   거기서 다음 경로로 튄다).
+3. **경로가 하나도 없는 path(빈 `transforms`)**. 실물은 **첫 경로**의 transform 유무만 검사하고
+   (`0x140189261`–`0x140189269`) 나머지 경로는 방어하지 않는다. 그런 자산에서 무엇을 읽는지는
+   확인하지 않았다(Waple 오라클은 `nil` 을 준다 — 의도적 divergence).
+4. ~~`scene+0xe4`/`0xe8`/`0xec` 를 **씬 로드 시** 무엇으로 놓는지.~~ → **§8.8 에서 해소.** 셋 다 0 이다.
+
+---
+
+### 8.8 씬 생성자의 카메라 기본값 (신규 · §8.7-4 해소)
+
+`Scene::Scene`(`0x140186c90` – `0x140188816`, `.pdata` 4조각). 진입에서 `xor r15d, r15d`
+(`0x140186cb4`)로 **r15 = 0** 을 만들어 두고 멤버를 리터럴로 깐다.
+
+```
+0x140186d1f  mov qword ptr [r14+0xe0], 0x26        ; flags = 0x26  **그리고 scene[0xe4] = 0**
+0x140186d3f  mov qword ptr [r14+0xe8], r15         ; scene[0xe8] = 0 **그리고 scene[0xec] = 0**
+0x140186d46  mov dword ptr [r14+0x114], 0x3f800000 ; 런타임 zoom      = 1.0
+0x140186d51  mov dword ptr [r14+0x13c], 0x3f800000 ; camera zoom 슬롯 = 1.0  (§1.2)
+0x140186d5c  mov dword ptr [r14+0x140], 0x42480000 ; fov                    = 50.0
+0x140186d67  mov dword ptr [r14+0x144], 0x42be0000 ; perspectiveoverridefov = 95.0
+0x140186d72  mov dword ptr [r14+0x148], 0x42480000 ; 실효 fov(초기) = 50.0
+0x140186d7d  mov dword ptr [r14+0x14c], 0x3dcccccd ; nearz = 0.1
+0x140186d88  mov dword ptr [r14+0x150], 0x461c4000 ; farz  = 10000.0
+0x140186d93  mov dword ptr [r14+0x154], 0x3f800000 ; general.zoom = 1.0
+```
+
+**경로 재생 상태 셋이 전부 0 에서 시작한다** — 두 qword 스토어가 `0xe0/0xe4` 와 `0xe8/0xec` 를
+쌍으로 덮기 때문이다. §8.3 의 "경로 전환은 qword 하나로 둘을 민다" 와 같은 레이아웃 활용이다.
+
+**flags 초기값 `0x26` = `0b100110`** — bit1 · bit2 · bit5 가 선다. 그중 **bit2 = `camerafade`** 이므로
+**`camerafade` 는 키가 없으면 기본 true** 다(§6.4 가 코퍼스 관찰로 말하던 것을 바이트로 확정).
+bit3(`orthogonalprojection`) · bit4(auto) · bit7(`camerashake`) · bit8(`cameraparallax`)는 전부 0 —
+**기본 false** 다. bit1 · bit5 의 이름은 **[미해결]**.
+
+`nearz`/`farz`/`fov`/`perspectiveoverridefov`/`zoom` 기본값은 §5.1·§7 P-2 가 코퍼스로 말하던 값과
+**전건 일치**한다(0.1 / 10000 / 50 / 95 / 1.0). 이제 근거가 코퍼스가 아니라 생성자 리터럴이다.
+
+---
+
+## 부록 C. VA 인용 정정 기록 (2026-08-21)
+
+`scripts/re/va_citations.py` 전수 대조로 이 문서의 인용 세 건이 **명령 경계가 아니었다**.
+전부 +1~+4 어긋난 것이고, 그 주소에서 선형 디스어셈을 시작하면 없는 명령이 보인다(함정 17).
+직접 다시 떠서 정정했다 — 결론은 하나도 안 바뀐다.
+
+> [VA-정정] 종전 `0x1401872cb` → `0x1401872ca` · 종전 `0x140227539` → `0x140227535` · 종전 `0x1401ee98c` → `0x1401ee98a`
+
+| 정정 | 실제 명령 | 무엇이었나 |
+|---|---|---|
+| `0x1401872ca` | `and dword ptr [r13 + 0x118], 0xfffffbff` | renderState 플래그 bit10(정사영) **해제** — 마스크 `0xfffffbff` 가 그 비트다. §5.7.2 서술 그대로 |
+| `0x140227535` | `movsd xmm0, qword ptr [rip + 0x269353]` → `0x140490890` `"perspective"` | 두 번째 레이어 클래스의 SSO 이름 적재. 종전 값은 그 명령의 **disp32 필드 위치**(xref 스캔 산출물을 그대로 적은 것) |
+| `0x1401ee98a` | `cmp rcx, 0x1f` | 부록 A 의 디스어셈 **시작** 주소. 여기서 내려오면 `0x1401ee9a4` 의 `lea "perspective"` → `0x1401ee9bd` 의 `[rbx+0x34] = 0x120` 이 순서대로 보인다 |
+
+같은 스윕에서 남은 이탈 1건은 **정정 대상이 아니다**: `0x1400daaac` [VA-스캐너위치] (유니폼 ID → 인덱스 바이트 표,
+§1.1)는 코드가 아니라 `.text` 안에 박힌 **데이터 표**다(바이트가 `00 01 02 03 …`).
+`.pdata` 조각 `0x1400da981`–`0x1400dab3c` 안에 들어 있어 도구가 "명령 내부" 로 분류할 뿐
+디스어셈 대상이 아니다. `[VA-스캐너위치]` 마커로 면제해 뒀다 — 다만 그 마커의 이름과 주석은
+"바이트 스캐너가 산출한 disp32·변위 필드 위치" 를 말하고 있어 **이 사례(함수 범위 안에 박힌
+데이터 표)와 뜻이 정확히 겹치지는 않는다.** 도구 쪽에 범주를 하나 더 두거나 주석을 넓히는 게
+맞다(§7 "넘길 것").
 
 ---
 
@@ -822,18 +1178,18 @@ python3 $S/vdis2.py 0x140180c0b 0x140180cc5   # 알파 곡선
 python3 $S/vdis2.py 0x140181bab 0x140181be1   # fade.json 로드
 
 # 5) 유니폼 ID → renderState 오프셋 (g_Time / g_ParallaxPosition 확정)
-#    인덱스 0x1400daaac[uid] → 오프셋테이블 0x1400da984[idx]*4 → 핸들러 VA
+#    인덱스 0x1400daaac[uid] → 오프셋테이블 0x1400da984[idx]*4 → 핸들러 VA   [VA-스캐너위치] (둘 다 데이터 표)
 python3 - <<'PY'
 import sys,struct;sys.path.insert(0,"/tmp/claude-0/-home-user/abe2d757-2792-5050-8baf-0be7e33c5b76/scratchpad")
 from wpe import pe,DATA
 for uid in (0,3,4,5,104,105,107,108):
-    ci=DATA[pe.va2off(0x1400daaac+uid)]
+    ci=DATA[pe.va2off(0x1400daaac+uid)]   # [VA-스캐너위치] 데이터 표
     off=struct.unpack_from('<I',DATA,pe.va2off(0x1400da984+ci*4))[0]
     print(uid, hex(0x140000000+off))
 PY
 
 # 5b) 레이어 perspective — 키→비트, 게이트, 카메라 구성 (§5.7)
-python3 $S/vdis2.py 0x1401ee98c 0x1401eea50   # 디스크립터: 이름 등록 뒤의 +0x34/+0x30 이 그 항목의 것
+python3 $S/vdis2.py 0x1401ee98a 0x1401eea50   # 디스크립터: 이름 등록 뒤의 +0x34/+0x30 이 그 항목의 것
 python3 $S/vdis2.py 0x14019c620 0x14019c680   # 핸들러 안의 btr/bts 7 → bit7 확정
 python3 $S/vdis2.py 0x1401ed259 0x1401ed280   # 게이트: rs[0x118]&0x400(2D) && obj[0x120]&0x80
 python3 $S/vdis2.py 0x140184f00 0x140184ff8   # d = 1/(tan(fov/2)·m11), near 5 / far max(15000,d+1000)
@@ -843,6 +1199,54 @@ python3 $S/vdis2.py 0x140183d57 0x140183de1   # rs[0xf8]/rs[0xfc] = 0.5 − 크�
 # 5c) 레이어 perspective 도달 (오브젝트 키라 general 스캔으로는 안 잡힌다)
 grep -rho '"perspective"[[:space:]]*:[[:space:]]*[a-z]*' --include=*.json \
      /home/user/Waple/Sources/WapleRender/Resources/WEAssets | sort | uniq -c
+
+# 5d) 경로 재생 — 세 팔 · 에르미트 기저 · 접선 · 전진 (§8)
+#     반드시 함수 시작에서 선형으로 내려올 것(함정 17). 중간 주소에서 뜨면 기저 조립이 깨져 보인다.
+python3 -c "import sys;sys.path.insert(0,'$S');from wpe import merged;print([hex(x) for x in merged(0x1401891a0)[:2]])"
+python3 $S/vdis2.py 0x1401891a0 0x140189e08 > /tmp/updcam.asm
+sed -n '/0x1401894a9/,/0x1401899d2/p' /tmp/updcam.asm   # 팔 선택 + 에르미트(zoom 성분이 제일 짧다)
+sed -n '/0x140189951/,/0x1401899ac/p' /tmp/updcam.asm   # 접선: subss xmm3,xmm0 / subss xmm0,xmm2 = (p−p)
+sed -n '/0x140189a74/,/0x140189b07/p' /tmp/updcam.asm   # 전진 · qword 리셋 · 경로 되감기
+
+# 5e) parallaxDepth 기본값 (§8.6) — **.text 선형 스윕은 0건을 준다. .pdata 함수 단위로 떠라.**
+python3 $S/vdis2.py 0x1401ddc60 0x1401ddd40    # 레이어 생성자 리터럴: +0x170/+0x174 = 0x3f800000
+python3 $S/vdis2.py 0x1401e07f0 0x1401e0870    # 디스크립터: 이름 등록 뒤의 +0x34=0x170 / +0x30=1
+
+# 5f) `scene+0x13c` 를 쓰는 JSON 키가 있는가 (§1.2 부분 해소) — 디스크립터 오프셋 필드 전수
+python3 - <<'PY2'
+import sys,struct;sys.path.insert(0,"/tmp/claude-0/-home-user/abe2d757-2792-5050-8baf-0be7e33c5b76/scratchpad")
+from wpe import pe,DATA,frag_of
+for want in (0x13c,0x170,0x334,0x338):
+    pat=struct.pack('<I',want); i=0; hits=[]
+    while True:
+        i=DATA.find(pat,i)
+        if i<0: break
+        if i>=3 and DATA[i-3]==0xC7 and (DATA[i-2]&0xF8)==0x40 and DATA[i-1]==0x34:
+            va=pe.off2va(i-3); f=frag_of(va) if va else None
+            if va: hits.append((hex(va), hex(f[0]) if f else '?'))
+        i+=1
+    print(hex(want), hits)
+PY2
+
+# 5g) 경로 코퍼스 전수 (동봉은 0건 — 설치본만 나온다)
+python3 - <<'PY3'
+import json,glob,os,collections
+root='/home/user/Waple-wallpaper-source/wallpaper_engine'
+rows=[]
+for f in sorted(glob.glob(os.path.join(root,'**','*.json'),recursive=True)):
+    try: d=json.load(open(f,encoding='utf-8-sig'))
+    except Exception: continue
+    if not isinstance(d,dict) or not isinstance(d.get('paths'),list): continue
+    for i,p in enumerate(d['paths']):
+        if not isinstance(p,dict) or 'transforms' not in p: continue
+        ts=[t.get('timestamp') for t in p['transforms']]
+        rows.append((os.path.relpath(f,root),i,p.get('duration'),len(ts),ts))
+print('paths',len(rows),'transforms',sum(r[3] for r in rows))
+print('ts[0]==0 전건?',all(r[4][0]==0 for r in rows))
+print(collections.Counter('eq' if r[2]==r[4][-1] else 'gt' for r in rows))
+for r in rows:
+    if r[2]!=r[4][-1]: print('  duration>ts[last]:',r)
+PY3
 
 # 6) 코퍼스 도달 (파일명을 scene.json 으로 좁히지 말 것 — ricepod.json/fantasticcar.json 누락)
 python3 - <<'PY'
@@ -884,3 +1288,13 @@ PY
 | 레이어 `perspective` 가 z 와 무관한 사다리꼴 왜곡 | 순수 `PerspectiveFov` 교체다. z=0 평면은 정사영과 픽셀 동일이고 왜곡은 전적으로 `s(z)=d/(d−z)` 에서 나온다 |
 | shake/parallax 에 난수원이 있다 | `sinf`/`cosf`/`tanf`/`powf`/`sqrtf` 뿐. 노이즈 테이블 참조도 RNG 호출도 없다(§2.4) |
 | 시차 스무딩이 프레임률 독립 | α 가 `dt` 에 **선형**이다(`0x140189c43` `mulss xmm4, xmm6`). 지수 보정이 없다 |
+| WE 에 자동회전(autorotate) 카메라가 있다 | 동봉 1698 · 설치본 2143 JSON 에 그런 키가 0건이고, `ICamera` 는 `fov`/`zoom` 둘뿐이며, 바이너리가 아는 카메라 키 15개(§6.7)에도 없다(§8.0) |
+| 셰이더가 카메라 모션을 `g_Camera*` 유니폼으로 받는다 | `g_Camera` 문자열이 동봉·설치본 자산과 바이너리 통틀어 **0건**이다. 카메라 관련은 `g_EyePosition`·`g_ViewUp`·`g_ViewRight`·`g_ParallaxPosition`·`g_EyeColor` 뿐이다(§8.0) |
+| 경로 보간이 선형(lerp)이다 | `u²`·`u³` 를 만들고 네 계수를 조립한다(`0x140189572`–`0x1401895c5`). `u=0.25` 에서 실물 `0.203125` ≠ 선형 `0.25` |
+| 경로 보간이 스무스스텝(`3u²−2u³`)이다 | 접선 항 `(h10+h11)·0.5Δ` 가 살아 있어 끝 기울기가 0 이 아니라 0.5 다. `u=0.25` 에서 `0.203125` ≠ `0.15625` |
+| 경로 보간이 카트멀-롬(이웃 4점) | 제어점 주소를 만드는 `imul` 이 `idx`·`idx+1` 둘뿐이다. `idx−1`/`idx+2` 를 만드는 명령이 없고, 대신 `p−p` 뺄셈이 명령으로 남아 있다(§8.2) |
+| 경로가 저작 `duration` 만큼 재생된다 | 마지막 transform 을 붙드는 팔의 구간 끝이 `duration − ts[last]` 다(`0x1401899da`). 설치본 4경로가 실제로 짧게 끝난다(§8.4) |
+| 시차 오프셋에 상한이 있다 | `0x14018a0b3`–`0x14018a115` 에 `minss`/`maxss` 가 없다. clamp01 은 포인터 입력과 `g_ParallaxPosition` 출력에만 있다 |
+| `parallaxDepth` 기본값이 0 이다 | 레이어 생성자가 `+0x170`/`+0x174` 에 `0x3f800000`(=1.0)을 쓴다(`0x1401ddce1`/`0x1401ddcec`) |
+| 오브젝트 `perspective` 기본값이 true 다 | 생성자 flags 초기값이 `0x2001` — bit7 이 0 이다(§8.6) |
+| 카메라 shake 가 CRT `sqrtf` 를 부른다 | 실제 경로는 인라인 `sqrtss`(`0x1401996a1`)다. `sqrtf` 팔은 `0 > L²` 일 때만 가는 도달 불가 분기(§2.5) |
